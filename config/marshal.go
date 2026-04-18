@@ -148,6 +148,18 @@ func (m *Marshaller) marshalLeaf(key string, from reflect.Value, depth int) (err
 		if from.Len() == 0 {
 			return nil
 		}
+		if from.Type().Elem().Kind() == reflect.Slice &&
+			from.Type().Elem() == reflect.TypeOf([]*config_parser.Function{}) {
+			for i := 0; i < from.Len(); i++ {
+				val := from.Index(i).Interface().([]*config_parser.Function)
+				var vals []string
+				for _, f := range val {
+					vals = append(vals, f.String(true, true, false))
+				}
+				m.writeLine(depth, key+":"+strings.Join(vals, "&&"))
+			}
+			return nil
+		}
 		switch from.Index(0).Interface().(type) {
 		case fmt.Stringer, string,
 			uint8, uint16, uint32, uint64,
