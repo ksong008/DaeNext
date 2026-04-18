@@ -162,6 +162,7 @@ func (m *Marshaller) marshalLeaf(key string, from reflect.Value, depth int) (err
 		}
 		switch from.Index(0).Interface().(type) {
 		case fmt.Stringer, string,
+			uint, int,
 			uint8, uint16, uint32, uint64,
 			int8, int16, int32, int64,
 			float32, float64,
@@ -190,6 +191,7 @@ func (m *Marshaller) marshalLeaf(key string, from reflect.Value, depth int) (err
 	default:
 		switch val := from.Interface().(type) {
 		case fmt.Stringer, string,
+			uint, int,
 			uint8, uint16, uint32, uint64,
 			int8, int16, int32, int64,
 			float32, float64,
