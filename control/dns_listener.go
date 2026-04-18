@@ -139,9 +139,7 @@ func (d *DNSListener) Start() error {
 		go func() {
 			d.log.Infof("Starting DNS TCP listener on %s", d.tcpServer.Addr)
 			if err := d.tcpServer.ListenAndServe(); err != nil {
-				if err := d.tcpServer.ListenAndServe(); err != nil {
-					d.log.Errorf("Failed to start DNS TCP listener: %v", err)
-				}
+				d.log.Errorf("Failed to start DNS TCP listener: %v", err)
 			}
 		}()
 	}
@@ -184,32 +182,63 @@ type dnsHandler struct {
 	log        *logrus.Logger
 }
 
+func addrPortFromNetAddr(addr net.Addr) (netip.AddrPort, error) {
+	switch addr := addr.(type) {
+	case *net.UDPAddr:
+		return addrPortFromIPPort(addr.IP, addr.Port, addr.Zone)
+	case *net.TCPAddr:
+		return addrPortFromIPPort(addr.IP, addr.Port, addr.Zone)
+	}
+
+	host, portStr, err := net.SplitHostPort(addr.String())
+	if err != nil {
+		return netip.AddrPort{}, fmt.Errorf("failed to parse address %q: %w", addr.String(), err)
+	}
+	port, err := strconv.Atoi(portStr)
+	if err != nil {
+		return netip.AddrPort{}, fmt.Errorf("failed to parse port %q: %w", portStr, err)
+	}
+	return addrPortFromHostPort(host, port)
+}
+
+func addrPortFromIPPort(ip net.IP, port int, zone string) (netip.AddrPort, error) {
+	if port < 0 || port > 65535 {
+		return netip.AddrPort{}, fmt.Errorf("invalid port: %d", port)
+	}
+	addr, ok := netip.AddrFromSlice(ip)
+	if !ok {
+		return netip.AddrPort{}, fmt.Errorf("failed to parse ip %q", ip.String())
+	}
+	if zone != "" {
+		addr = addr.WithZone(zone)
+	}
+	return netip.AddrPortFrom(addr, uint16(port)), nil
+}
+
+func addrPortFromHostPort(host string, port int) (netip.AddrPort, error) {
+	if port < 0 || port > 65535 {
+		return netip.AddrPort{}, fmt.Errorf("invalid port: %d", port)
+	}
+	addr, err := netip.ParseAddr(host)
+	if err != nil {
+		return netip.AddrPort{}, fmt.Errorf("failed to parse host %q: %w", host, err)
+	}
+	return netip.AddrPortFrom(addr, uint16(port)), nil
+}
+
 // ServeDNS handles DNS requests
 func (h *dnsHandler) ServeDNS(w dnsmessage.ResponseWriter, r *dnsmessage.Msg) {
 	// Create a fake udpRequest to pass to the DNS controller
-	clientAddr := w.RemoteAddr()
-	var clientIPPort netip.AddrPort
-
-	// Parse client address
-	host, portStr, err := net.SplitHostPort(clientAddr.String())
+	clientIPPort, err := addrPortFromNetAddr(w.RemoteAddr())
 	if err != nil {
 		h.log.Errorf("Failed to parse client address: %v", err)
 		return
 	}
-
-	port, err := strconv.Atoi(portStr)
+	localIPPort, err := addrPortFromNetAddr(w.LocalAddr())
 	if err != nil {
-		h.log.Errorf("Failed to parse client port: %v", err)
+		h.log.Errorf("Failed to parse local listener address: %v", err)
 		return
 	}
-
-	clientIP, err := netip.ParseAddr(host)
-	if err != nil {
-		h.log.Errorf("Failed to parse client IP: %v", err)
-		return
-	}
-
-	clientIPPort = netip.AddrPortFrom(clientIP, uint16(port))
 
 	// Create routing result (fake)
 	routingResult := &bpfRoutingResult{
@@ -225,7 +254,7 @@ func (h *dnsHandler) ServeDNS(w dnsmessage.ResponseWriter, r *dnsmessage.Msg) {
 	// Handle the DNS request using the existing DNS controller
 	udpReq := &udpRequest{
 		realSrc:       clientIPPort,
-		realDst:       netip.MustParseAddrPort(h.controller.dnsListener.Addr()),
+		realDst:       localIPPort,
 		src:           clientIPPort,
 		lConn:         nil, // Not used in this context
 		routingResult: routingResult,
