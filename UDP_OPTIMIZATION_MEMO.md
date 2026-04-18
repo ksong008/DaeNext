@@ -276,6 +276,33 @@ Tests added:
 - touch/refresh updates activity
 - pool close closes all entries
 
+### D. `PacketSnifferPool` lifecycle simplification
+
+Files:
+
+- `control/packet_sniffer_pool.go`
+- `control/packet_sniffer_pool_test.go`
+
+Changes:
+
+- Removed per-entry `time.AfterFunc` usage.
+- Added pool-level cleanup janitor with periodic sweep.
+- Added explicit `lastActive` tracking.
+- Added `Touch(now)` and `Expired(now)` helpers.
+- Added idempotent close path.
+- Added `PacketSnifferPool.Close()` to stop cleanup and close remaining sniffers.
+
+Why this helps:
+
+- fewer timers under sniffing-heavy traffic
+- simpler packet sniffer lifecycle
+- lower long-running bookkeeping overhead
+
+Tests added:
+
+- expired sniffers are swept
+- fresh sniffers remain after touch
+
 ## Current Conclusion
 
 Short version:
