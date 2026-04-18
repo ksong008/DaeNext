@@ -7,6 +7,7 @@ package control
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/netip"
 	"sync"
@@ -19,15 +20,18 @@ import (
 	"github.com/daeuniverse/outbound/pool"
 )
 
+const udpEndpointSweepInterval = time.Second
+
 type UdpHandler func(data []byte, from netip.AddrPort) error
 
 type UdpEndpoint struct {
 	conn netproxy.PacketConn
-	// mu protects deadlineTimer
-	mu            sync.Mutex
-	deadlineTimer *time.Timer
+	mu         sync.Mutex
 	handler       UdpHandler
 	NatTimeout    time.Duration
+	lastActive    time.Time
+	onInactive    func()
+	closeOnce     sync.Once
 
 	Dialer   *dialer.Dialer
 	Outbound *outbound.DialerGroup
@@ -40,40 +44,55 @@ type UdpEndpoint struct {
 func (ue *UdpEndpoint) start() {
 	buf := pool.GetFullCap(consts.EthernetMtu)
 	defer pool.Put(buf)
+	defer func() {
+		if ue.onInactive != nil {
+			ue.onInactive()
+		}
+	}()
 	for {
 		n, from, err := ue.conn.ReadFrom(buf[:])
 		if err != nil {
 			break
 		}
-		ue.mu.Lock()
-		ue.deadlineTimer.Reset(ue.NatTimeout)
-		ue.mu.Unlock()
+		ue.Touch(time.Now())
 		if err = ue.handler(buf[:n], from); err != nil {
 			break
 		}
 	}
-	ue.mu.Lock()
-	ue.deadlineTimer.Stop()
-	ue.mu.Unlock()
 }
 
 func (ue *UdpEndpoint) WriteTo(b []byte, addr string) (int, error) {
 	return ue.conn.WriteTo(b, addr)
 }
 
-func (ue *UdpEndpoint) Close() error {
+func (ue *UdpEndpoint) Touch(now time.Time) {
 	ue.mu.Lock()
-	if ue.deadlineTimer != nil {
-		ue.deadlineTimer.Stop()
-	}
+	ue.lastActive = now
 	ue.mu.Unlock()
-	return ue.conn.Close()
+}
+
+func (ue *UdpEndpoint) Expired(now time.Time) bool {
+	ue.mu.Lock()
+	defer ue.mu.Unlock()
+	return !ue.lastActive.Add(ue.NatTimeout).After(now)
+}
+
+func (ue *UdpEndpoint) Close() error {
+	var err error
+	ue.closeOnce.Do(func() {
+		err = ue.conn.Close()
+	})
+	return err
 }
 
 // UdpEndpointPool is a full-cone udp conn pool
 type UdpEndpointPool struct {
 	pool        sync.Map
 	createMuMap sync.Map
+	ctx         context.Context
+	cancel      context.CancelFunc
+	cleanupWg   sync.WaitGroup
+	now         func() time.Time
 }
 type UdpEndpointOptions struct {
 	Handler    UdpHandler
@@ -85,16 +104,71 @@ type UdpEndpointOptions struct {
 var DefaultUdpEndpointPool = NewUdpEndpointPool()
 
 func NewUdpEndpointPool() *UdpEndpointPool {
-	return &UdpEndpointPool{}
+	ctx, cancel := context.WithCancel(context.Background())
+	p := &UdpEndpointPool{
+		ctx:       ctx,
+		cancel:    cancel,
+		cleanupWg: sync.WaitGroup{},
+		now:       time.Now,
+	}
+	p.startCleanup()
+	return p
+}
+
+func (p *UdpEndpointPool) startCleanup() {
+	p.cleanupWg.Add(1)
+	go func() {
+		defer p.cleanupWg.Done()
+		ticker := time.NewTicker(udpEndpointSweepInterval)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-p.ctx.Done():
+				return
+			case <-ticker.C:
+				p.sweepExpiredEndpoints(p.now())
+			}
+		}
+	}()
+}
+
+func (p *UdpEndpointPool) sweepExpiredEndpoints(now time.Time) {
+	p.pool.Range(func(key, value any) bool {
+		ue := value.(*UdpEndpoint)
+		if !ue.Expired(now) {
+			return true
+		}
+		if p.pool.CompareAndDelete(key, ue) {
+			ue.Close()
+		}
+		return true
+	})
+}
+
+func (p *UdpEndpointPool) Close() error {
+	p.cancel()
+	p.cleanupWg.Wait()
+	var errs []error
+	p.pool.Range(func(key, value any) bool {
+		ue := value.(*UdpEndpoint)
+		p.pool.Delete(key)
+		if err := ue.Close(); err != nil {
+			errs = append(errs, err)
+		}
+		return true
+	})
+	return errors.Join(errs...)
 }
 
 func (p *UdpEndpointPool) Remove(lAddr netip.AddrPort, udpEndpoint *UdpEndpoint) (err error) {
-	if ue, ok := p.pool.LoadAndDelete(lAddr); ok {
+	if ue, ok := p.pool.Load(lAddr); ok {
 		if ue != udpEndpoint {
 			udpEndpoint.Close()
 			return fmt.Errorf("target udp endpoint is not in the pool")
 		}
-		ue.(*UdpEndpoint).Close()
+		if p.pool.CompareAndDelete(lAddr, udpEndpoint) {
+			return udpEndpoint.Close()
+		}
 	}
 	return nil
 }
@@ -153,23 +227,19 @@ begin:
 		}
 		ue := &UdpEndpoint{
 			conn:          udpConn.(netproxy.PacketConn),
-			deadlineTimer: nil,
 			handler:       createOption.Handler,
 			NatTimeout:    createOption.NatTimeout,
+			lastActive:    p.now(),
 			Dialer:        dialOption.Dialer,
 			Outbound:      dialOption.Outbound,
 			SniffedDomain: dialOption.SniffedDomain,
 			DialTarget:    dialOption.Target,
 		}
-		ue.deadlineTimer = time.AfterFunc(createOption.NatTimeout, func() {
-			if _ue, ok := p.pool.LoadAndDelete(lAddr); ok {
-				if _ue == ue {
-					ue.Close()
-				} else {
-					// FIXME: ?
-				}
+		ue.onInactive = func() {
+			if p.pool.CompareAndDelete(lAddr, ue) {
+				_ = ue.Close()
 			}
-		})
+		}
 		_ue = ue
 		p.pool.Store(lAddr, ue)
 		// Receive UDP messages.
@@ -177,10 +247,7 @@ begin:
 		isNew = true
 	} else {
 		ue := _ue.(*UdpEndpoint)
-		// Postpone the deadline.
-		ue.mu.Lock()
-		ue.deadlineTimer.Reset(ue.NatTimeout)
-		ue.mu.Unlock()
+		ue.Touch(p.now())
 	}
 	return _ue.(*UdpEndpoint), isNew, nil
 }
