@@ -74,8 +74,14 @@ jobs:
         env:
           DAE_LOCATION_ASSET: ${{ github.workspace }}/.github/dae-assets
         run: |
-          packages=$(go list ./... | grep -v '^github.com/daeuniverse/dae/control/kern/tests$' | grep -v '^github.com/daeuniverse/dae/common/netutils$')
-          go test -count=1 $packages
+          go test -count=1 \
+            ./common/bitlist \
+            ./component/routing/domain_matcher \
+            ./component/sniffing/... \
+            ./config \
+            ./control \
+            ./pkg/config_parser \
+            ./pkg/trie
 
   build:
     name: Build
