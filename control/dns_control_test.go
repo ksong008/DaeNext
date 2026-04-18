@@ -155,6 +155,47 @@ func TestDnsDataWithZeroIDDoesNotMutateInput(t *testing.T) {
 	}
 }
 
+func TestLookupDnsRespCacheUsesPackedResponse(t *testing.T) {
+	controller, err := NewDnsController(nil, &DnsControllerOption{
+		Log: logrus.New(),
+		CacheAccessCallback: func(*DnsCache) error {
+			return nil
+		},
+		CacheRemoveCallback:   func(*DnsCache) error { return nil },
+		NewCache:              func(_ string, answers []dnsmessage.RR, deadline time.Time, originalDeadline time.Time) (*DnsCache, error) { return &DnsCache{Answer: answers, Deadline: deadline, OriginalDeadline: originalDeadline}, nil },
+		BestDialerChooser:     func(*udpRequest, *componentdns.Upstream) (*dialArgument, error) { return nil, nil },
+		TimeoutExceedCallback: func(*dialArgument, error) {},
+	})
+	if err != nil {
+		t.Fatalf("NewDnsController() returned error: %v", err)
+	}
+	defer controller.Close()
+
+	answer := &dnsmessage.A{
+		Hdr: dnsmessage.RR_Header{
+			Name:   dnsmessage.CanonicalName("example.com."),
+			Rrtype: dnsmessage.TypeA,
+			Class:  dnsmessage.ClassINET,
+			Ttl:    0,
+		},
+		A: net.ParseIP("1.1.1.1").To4(),
+	}
+	if err := controller.UpdateDnsCacheTtl("example.com.", dnsmessage.TypeA, []dnsmessage.RR{answer}, 60); err != nil {
+		t.Fatal(err)
+	}
+
+	msg := new(dnsmessage.Msg)
+	msg.SetQuestion("example.com.", dnsmessage.TypeA)
+	msg.Id = 0x4321
+	resp := controller.LookupDnsRespCache_(msg, controller.cacheKey("example.com.", dnsmessage.TypeA), false)
+	if len(resp) < 2 {
+		t.Fatal("expected packed response bytes")
+	}
+	if got := uint16(resp[0])<<8 | uint16(resp[1]); got != msg.Id {
+		t.Fatalf("expected response id %x, got %x", msg.Id, got)
+	}
+}
+
 func TestSweepDnsCacheUsesLatestDeadline(t *testing.T) {
 	removed := 0
 	controller, err := NewDnsController(nil, &DnsControllerOption{

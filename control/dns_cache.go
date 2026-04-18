@@ -6,6 +6,7 @@
 package control
 
 import (
+	"encoding/binary"
 	"net/netip"
 	"time"
 
@@ -18,6 +19,7 @@ type DnsCache struct {
 	Answer           []dnsmessage.RR
 	Deadline         time.Time
 	OriginalDeadline time.Time // This field is not impacted by `fixed_domain_ttl`.
+	PackedResponse   []byte
 }
 
 func (c *DnsCache) FillInto(req *dnsmessage.Msg) {
@@ -26,6 +28,15 @@ func (c *DnsCache) FillInto(req *dnsmessage.Msg) {
 	req.Response = true
 	req.RecursionAvailable = true
 	req.Truncated = false
+}
+
+func (c *DnsCache) FillPackedResponse(msgID uint16) []byte {
+	if len(c.PackedResponse) < 2 {
+		return nil
+	}
+	b := append([]byte(nil), c.PackedResponse...)
+	binary.BigEndian.PutUint16(b[:2], msgID)
+	return b
 }
 
 func (c *DnsCache) IncludeIp(ip netip.Addr) bool {
