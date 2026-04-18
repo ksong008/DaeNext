@@ -254,11 +254,60 @@ Summary:
 
 ### 5. Optimize cache hit hot path
 
-- Still not done yet.
-- Opportunities:
-  - replace `dnsCacheMu sync.Mutex` with a read-optimized structure (`RWMutex` or sharded maps)
-  - pre-pack cached DNS responses to reduce `deepcopy + pack` on cache hits
-  - minimize lock hold time on high-QPS DNS cache lookups
+- Partially completed.
+- Done:
+  - `dnsCacheMu` upgraded to `RWMutex`
+  - pre-packed cached DNS responses added for cache-hit fast path
+- Remaining opportunities:
+  - shard `dnsCache` for even lower lock contention under very high concurrency
+  - consider packing only hot entries if memory/entry ratio becomes a concern
+
+## Memory / Lifecycle Audit Conclusion
+
+Date: 2026-04-18
+
+The DNS module was reviewed with the goals:
+
+- stability
+- speed
+- no memory leaks / no unbounded long-running growth
+
+Current conclusion:
+
+- No obvious leak-style issue remains on the primary DNS path.
+- The module is now in a "safe and tunable" state rather than a "buggy and risky" state.
+
+Reviewed areas:
+
+- `dnsCache`
+  - now has active expiration sweep
+  - removal path is wired to kernel-side cleanup callback
+  - remaining concern is tuning / capacity policy, not leakage
+
+- `dnsForwarderCache`
+  - now has idle eviction
+  - now has hard capacity cap
+  - remaining concern is threshold tuning, not unbounded growth
+
+- `handling sync.Map`
+  - reference count + delete-on-zero path looks bounded
+
+- background goroutines
+  - `DnsController` janitors are tied to context cancellation
+  - `Close()` now cancels and waits
+
+- `UpstreamResolver`
+  - bounded per-upstream state
+  - refresh with stale fallback does not introduce growth across refresh cycles
+
+- transport forwarders
+  - reusable vs non-reusable split is in place
+  - close paths are much safer than the original implementation
+
+Net assessment:
+
+- acceptable for continued use and iteration
+- further work should focus on bounded-performance tuning, not emergency leak fixing
 
 ### 6. Revisit remaining package-level test stability
 
