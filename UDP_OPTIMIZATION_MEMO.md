@@ -247,6 +247,35 @@ Tests added:
 - idle queues are swept
 - running queues are not swept prematurely
 
+### C. `AnyfromPool` lifecycle simplification
+
+Files:
+
+- `control/anyfrom_pool.go`
+- `control/anyfrom_pool_test.go`
+
+Changes:
+
+- Removed per-entry `time.AfterFunc` usage.
+- Added pool-level cleanup janitor with periodic sweep.
+- Added explicit `lastActive` tracking.
+- Added `Expired(now)` and `Touch(now)` helpers.
+- Added idempotent close path.
+- Added `AnyfromPool.Close()` to stop cleanup and close pooled listeners.
+
+Why this helps:
+
+- fewer timers under high listener cardinality
+- more predictable lifetime management for pooled UDP listeners
+- better control over long-running map growth
+
+Tests added:
+
+- expired entries are swept
+- fresh entries remain
+- touch/refresh updates activity
+- pool close closes all entries
+
 ## Current Conclusion
 
 Short version:
