@@ -29,6 +29,9 @@ on:
 
 permissions: read-all
 
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+
 jobs:
   unit:
     name: Unit
@@ -75,7 +78,18 @@ jobs:
           DAE_LOCATION_ASSET: ${{ github.workspace }}/.github/dae-assets
         run: |
           packages=$(go list ./... | grep -v '^github.com/daeuniverse/dae/control/kern/tests$')
-          go test -count=1 $packages
+          failed=""
+          for pkg in $packages; do
+            echo "::group::go test $pkg"
+            if ! go test -count=1 "$pkg"; then
+              failed="$failed $pkg"
+            fi
+            echo "::endgroup::"
+          done
+          if [ -n "$failed" ]; then
+            echo "Failed packages:$failed"
+            exit 1
+          fi
 
   build:
     name: Build
