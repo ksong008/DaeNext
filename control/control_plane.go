@@ -468,6 +468,7 @@ func NewControlPlane(
 	}); err != nil {
 		return nil, err
 	}
+	deferFuncs = append(deferFuncs, plane.dnsController.Close)
 
 	// Create and start DNS listener if configured
 	if dnsConfig.Bind != "" {

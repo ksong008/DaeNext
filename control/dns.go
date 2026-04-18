@@ -8,6 +8,7 @@ package control
 import (
 	"context"
 	"crypto/tls"
+	"errors"
 	"encoding/base64"
 	"encoding/binary"
 	"fmt"
@@ -15,6 +16,7 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"sync"
 	"time"
 
 	"github.com/daeuniverse/dae/common"
@@ -31,6 +33,18 @@ import (
 type DnsForwarder interface {
 	ForwardDNS(ctx context.Context, data []byte) (*dnsmessage.Msg, error)
 	Close() error
+}
+
+func dnsForwarderReusable(upstream *dns.Upstream, dialArgument dialArgument) bool {
+	switch dialArgument.l4proto {
+	case consts.L4ProtoStr_TCP:
+		return upstream.Scheme == dns.UpstreamScheme_HTTPS
+	case consts.L4ProtoStr_UDP:
+		return upstream.Scheme == dns.UpstreamScheme_H3 ||
+			upstream.Scheme == dns.UpstreamScheme_QUIC
+	default:
+		return false
+	}
 }
 
 func newDnsForwarder(upstream *dns.Upstream, dialArgument dialArgument) (DnsForwarder, error) {
@@ -73,37 +87,33 @@ type DoH struct {
 	netproxy.Dialer
 	dialArgument dialArgument
 	http3        bool
+	mu           sync.Mutex
 	client       *http.Client
+	transport    http.RoundTripper
 }
 
 func (d *DoH) ForwardDNS(ctx context.Context, data []byte) (*dnsmessage.Msg, error) {
-	if d.client == nil {
-		d.client = d.getClient()
-	}
-	msg, err := sendHttpDNS(d.client, d.dialArgument.bestTarget.String(), &d.Upstream, data)
-	if err != nil {
-		// If failed to send DNS request, we should try to create a new client.
-		d.client = d.getClient()
-		msg, err = sendHttpDNS(d.client, d.dialArgument.bestTarget.String(), &d.Upstream, data)
-		if err != nil {
-			return nil, err
-		}
-		return msg, nil
-	}
-	return msg, nil
+	return sendHttpDNS(ctx, d.getClient(), d.dialArgument.bestTarget.String(), &d.Upstream, data)
 }
 
 func (d *DoH) getClient() *http.Client {
-	var roundTripper http.RoundTripper
-	if d.http3 {
-		roundTripper = d.getHttp3RoundTripper()
-	} else {
-		roundTripper = d.getHttpRoundTripper()
-	}
+	d.mu.Lock()
+	defer d.mu.Unlock()
 
-	return &http.Client{
-		Transport: roundTripper,
+	if d.client == nil {
+		if d.http3 {
+			d.transport = d.getHttp3RoundTripper()
+		} else {
+			d.transport = d.getHttpRoundTripper()
+		}
+		d.client = &http.Client{
+			Transport: d.transport,
+			CheckRedirect: func(req *http.Request, via []*http.Request) error {
+				return fmt.Errorf("do not use a server that will redirect, upstream: %v", d.Upstream.String())
+			},
+		}
 	}
+	return d.client
 }
 
 func (d *DoH) getHttpRoundTripper() *http.Transport {
@@ -155,34 +165,41 @@ func (d *DoH) getHttp3RoundTripper() *http3.RoundTripper {
 }
 
 func (d *DoH) Close() error {
-	return nil
+	d.mu.Lock()
+	defer d.mu.Unlock()
+
+	var err error
+	switch transport := d.transport.(type) {
+	case interface{ Close() error }:
+		err = transport.Close()
+	case interface{ CloseIdleConnections() }:
+		transport.CloseIdleConnections()
+	}
+	d.client = nil
+	d.transport = nil
+	return err
 }
 
 type DoQ struct {
 	dns.Upstream
 	netproxy.Dialer
 	dialArgument dialArgument
+	mu          sync.Mutex
 	connection   quic.EarlyConnection
 }
 
 func (d *DoQ) ForwardDNS(ctx context.Context, data []byte) (*dnsmessage.Msg, error) {
-	if d.connection == nil {
-		qc, err := d.createConnection(ctx)
-		if err != nil {
-			return nil, err
-		}
-		d.connection = qc
-	}
-
-	stream, err := d.connection.OpenStreamSync(ctx)
+	conn, err := d.getConnection(ctx)
 	if err != nil {
-		// If failed to open stream, we should try to create a new connection.
-		qc, err := d.createConnection(ctx)
+		return nil, err
+	}
+	stream, err := conn.OpenStreamSync(ctx)
+	if err != nil {
+		conn, err = d.replaceConnection(ctx, conn)
 		if err != nil {
 			return nil, err
 		}
-		d.connection = qc
-		stream, err = d.connection.OpenStreamSync(ctx)
+		stream, err = conn.OpenStreamSync(ctx)
 		if err != nil {
 			return nil, err
 		}
@@ -194,14 +211,45 @@ func (d *DoQ) ForwardDNS(ctx context.Context, data []byte) (*dnsmessage.Msg, err
 	// According https://datatracker.ietf.org/doc/html/rfc9250#section-4.2.1
 	// msg id should set to 0 when transport over QUIC.
 	// thanks https://github.com/natesales/q/blob/1cb2639caf69bd0a9b46494a3c689130df8fb24a/transport/quic.go#L97
-	binary.BigEndian.PutUint16(data[0:2], 0)
-
-	msg, err := sendStreamDNS(stream, data)
+	msg, err := sendStreamDNS(stream, dnsDataWithZeroID(data))
 	if err != nil {
 		return nil, err
 	}
 	return msg, nil
 }
+
+func (d *DoQ) getConnection(ctx context.Context) (quic.EarlyConnection, error) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+
+	if d.connection == nil {
+		qc, err := d.createConnection(ctx)
+		if err != nil {
+			return nil, err
+		}
+		d.connection = qc
+	}
+	return d.connection, nil
+}
+
+func (d *DoQ) replaceConnection(ctx context.Context, stale quic.EarlyConnection) (quic.EarlyConnection, error) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+
+	if stale != nil && d.connection == stale {
+		_ = stale.CloseWithError(0, "")
+		d.connection = nil
+	}
+	if d.connection == nil {
+		qc, err := d.createConnection(ctx)
+		if err != nil {
+			return nil, err
+		}
+		d.connection = qc
+	}
+	return d.connection, nil
+}
+
 func (d *DoQ) createConnection(ctx context.Context) (quic.EarlyConnection, error) {
 
 	udpAddr := net.UDPAddrFromAddrPort(d.dialArgument.bestTarget)
@@ -223,6 +271,7 @@ func (d *DoQ) createConnection(ctx context.Context) (quic.EarlyConnection, error
 	addr := net.UDPAddrFromAddrPort(d.dialArgument.bestTarget)
 	qc, err := quic.DialEarly(ctx, fakePkt, addr, tlsCfg, nil)
 	if err != nil {
+		_ = conn.Close()
 		return nil, err
 	}
 	return qc, nil
@@ -230,6 +279,14 @@ func (d *DoQ) createConnection(ctx context.Context) (quic.EarlyConnection, error
 }
 
 func (d *DoQ) Close() error {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+
+	if d.connection != nil {
+		err := d.connection.CloseWithError(0, "")
+		d.connection = nil
+		return err
+	}
 	return nil
 }
 
@@ -255,6 +312,7 @@ func (d *DoTLS) ForwardDNS(ctx context.Context, data []byte) (*dnsmessage.Msg, e
 		ServerName:         d.Upstream.Hostname,
 	})
 	if err = tlsConn.Handshake(); err != nil {
+		_ = conn.Close()
 		return nil, err
 	}
 	d.conn = tlsConn
@@ -264,7 +322,9 @@ func (d *DoTLS) ForwardDNS(ctx context.Context, data []byte) (*dnsmessage.Msg, e
 
 func (d *DoTLS) Close() error {
 	if d.conn != nil {
-		return d.conn.Close()
+		conn := d.conn
+		d.conn = nil
+		return conn.Close()
 	}
 	return nil
 }
@@ -292,7 +352,9 @@ func (d *DoTCP) ForwardDNS(ctx context.Context, data []byte) (*dnsmessage.Msg, e
 
 func (d *DoTCP) Close() error {
 	if d.conn != nil {
-		return d.conn.Close()
+		conn := d.conn
+		d.conn = nil
+		return conn.Close()
 	}
 	return nil
 }
@@ -313,65 +375,88 @@ func (d *DoUDP) ForwardDNS(ctx context.Context, data []byte) (*dnsmessage.Msg, e
 	if err != nil {
 		return nil, err
 	}
+	d.conn = conn
 
-	timeout := 5 * time.Second
-	_ = conn.SetDeadline(time.Now().Add(timeout))
-	dnsReqCtx, cancelDnsReqCtx := context.WithTimeout(context.TODO(), timeout)
-	defer cancelDnsReqCtx()
+	timeout := dnsForwardTimeout(ctx)
+	if timeout <= 0 {
+		return nil, context.DeadlineExceeded
+	}
+	deadline := time.Now().Add(timeout)
 
-	go func() {
-		// Send DNS request every seconds.
-		for {
-			_, _ = conn.Write(data)
-			// if err != nil {
-			// 	if c.log.IsLevelEnabled(logrus.DebugLevel) {
-			// 		c.log.WithFields(logrus.Fields{
-			// 			"to":      dialArgument.bestTarget.String(),
-			// 			"pid":     req.routingResult.Pid,
-			// 			"pname":   ProcessName2String(req.routingResult.Pname[:]),
-			// 			"mac":     Mac2String(req.routingResult.Mac[:]),
-			// 			"from":    req.realSrc.String(),
-			// 			"network": networkType.String(),
-			// 			"err":     err.Error(),
-			// 		}).Debugln("Failed to write UDP(DNS) packet request.")
-			// 	}
-			// 	return
-			// }
-			select {
-			case <-dnsReqCtx.Done():
-				return
-			case <-time.After(1 * time.Second):
-			}
-		}
-	}()
-
-	// We can block here because we are in a coroutine.
 	respBuf := pool.GetFullCap(consts.EthernetMtu)
 	defer pool.Put(respBuf)
-	// Wait for response.
-	n, err := conn.Read(respBuf)
-	if err != nil {
-		return nil, err
+
+	for attempt := 0; attempt < dnsUDPAttempts; attempt++ {
+		perAttemptDeadline := deadline
+		if attempt < dnsUDPAttempts-1 {
+			if retryDeadline := time.Now().Add(dnsUDPRetryInterval); retryDeadline.Before(perAttemptDeadline) {
+				perAttemptDeadline = retryDeadline
+			}
+		}
+		if err := conn.SetDeadline(perAttemptDeadline); err != nil {
+			return nil, err
+		}
+		if _, err = conn.Write(data); err != nil {
+			return nil, err
+		}
+		n, err := conn.Read(respBuf)
+		if err == nil {
+			var msg dnsmessage.Msg
+			if err = msg.Unpack(respBuf[:n]); err != nil {
+				return nil, err
+			}
+			return &msg, nil
+		}
+
+		if ctx.Err() != nil {
+			return nil, ctx.Err()
+		}
+		if !shouldRetryUDPQuery(err) || attempt == dnsUDPAttempts-1 || time.Now().After(deadline) {
+			return nil, err
+		}
 	}
-	var msg dnsmessage.Msg
-	if err = msg.Unpack(respBuf[:n]); err != nil {
-		return nil, err
-	}
-	return &msg, nil
+	return nil, context.DeadlineExceeded
 }
 
 func (d *DoUDP) Close() error {
 	if d.conn != nil {
-		return d.conn.Close()
+		conn := d.conn
+		d.conn = nil
+		return conn.Close()
 	}
 	return nil
 }
 
-func sendHttpDNS(client *http.Client, target string, upstream *dns.Upstream, data []byte) (respMsg *dnsmessage.Msg, err error) {
-	// disable redirect https://github.com/daeuniverse/dae/pull/649#issuecomment-2379577896
-	client.CheckRedirect = func(req *http.Request, via []*http.Request) error {
-		return fmt.Errorf("do not use a server that will redirect, upstream: %v", upstream.String())
+const (
+	dnsUDPAttempts      = 3
+	dnsUDPRetryInterval = time.Second
+	dnsUDPTimeout       = 5 * time.Second
+)
+
+func dnsForwardTimeout(ctx context.Context) time.Duration {
+	if deadline, ok := ctx.Deadline(); ok {
+		timeout := time.Until(deadline)
+		if timeout < dnsUDPTimeout {
+			return timeout
+		}
 	}
+	return dnsUDPTimeout
+}
+
+func shouldRetryUDPQuery(err error) bool {
+	var netErr net.Error
+	return errors.As(err, &netErr) && netErr.Timeout()
+}
+
+func dnsDataWithZeroID(data []byte) []byte {
+	cloned := append([]byte(nil), data...)
+	if len(cloned) >= 2 {
+		binary.BigEndian.PutUint16(cloned[0:2], 0)
+	}
+	return cloned
+}
+
+func sendHttpDNS(ctx context.Context, client *http.Client, target string, upstream *dns.Upstream, data []byte) (respMsg *dnsmessage.Msg, err error) {
 	serverURL := url.URL{
 		Scheme: "https",
 		Host:   target,
@@ -380,11 +465,10 @@ func sendHttpDNS(client *http.Client, target string, upstream *dns.Upstream, dat
 	q := serverURL.Query()
 	// According https://datatracker.ietf.org/doc/html/rfc8484#section-4
 	// msg id should set to 0 when transport over HTTPS for cache friendly.
-	binary.BigEndian.PutUint16(data[0:2], 0)
-	q.Set("dns", base64.RawURLEncoding.EncodeToString(data))
+	q.Set("dns", base64.RawURLEncoding.EncodeToString(dnsDataWithZeroID(data)))
 	serverURL.RawQuery = q.Encode()
 
-	req, err := http.NewRequest(http.MethodGet, serverURL.String(), nil)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, serverURL.String(), nil)
 	if err != nil {
 		return nil, err
 	}
