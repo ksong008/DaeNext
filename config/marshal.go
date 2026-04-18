@@ -219,6 +219,9 @@ func (m *Marshaller) marshalParam(from reflect.Value, depth int) (err error) {
 				for _, r := range rules {
 					m.writeLine(depth, r.String(false, true, true))
 				}
+			case "FilterAnnotation":
+			case "Annotation":
+				// Metadata captured during parsing should not be marshaled back into config.
 			default:
 				return fmt.Errorf("unknown reserved field: %v", structField.Name)
 			}
