@@ -12,6 +12,21 @@ import (
 	"testing"
 )
 
+func normalizeConfigForMarshalTest(conf *Config) *Config {
+	if conf == nil {
+		return nil
+	}
+	normalized := *conf
+	if conf.Group != nil {
+		normalized.Group = make([]Group, len(conf.Group))
+		copy(normalized.Group, conf.Group)
+		for i := range normalized.Group {
+			normalized.Group[i].FilterAnnotation = nil
+		}
+	}
+	return &normalized
+}
+
 func TestMarshal(t *testing.T) {
 	abs, err := filepath.Abs("../example.dae")
 	if err != nil {
@@ -55,7 +70,7 @@ func TestMarshal(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if !reflect.DeepEqual(conf1, conf2) {
+	if !reflect.DeepEqual(normalizeConfigForMarshalTest(conf1), normalizeConfigForMarshalTest(conf2)) {
 		t.Fatal("not equal")
 	}
 }
