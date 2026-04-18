@@ -30,8 +30,8 @@ on:
 permissions: read-all
 
 jobs:
-  core-test:
-    name: Core Test
+  unit:
+    name: Unit
     runs-on: ubuntu-22.04
     timeout-minutes: 30
 
@@ -68,6 +68,40 @@ jobs:
         run: |
           packages=$(go list ./... | grep -v '^github.com/daeuniverse/dae/control/kern/tests$')
           go test -count=1 $packages
+
+  build:
+    name: Build
+    runs-on: ubuntu-22.04
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout codebase
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          submodules: recursive
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: "1.24"
+          cache-dependency-path: |
+            go.mod
+            go.sum
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update -y
+          sudo apt-get install -y clang-15 llvm-15
+
+      - name: Download Go modules
+        run: go mod download
+
+      - name: Generate eBPF artifacts
+        env:
+          CLANG: clang-15
+          STRIP: llvm-strip-15
+        run: make ebpf
 
       - name: Build dae core
         run: |
