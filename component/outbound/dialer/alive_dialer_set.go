@@ -38,7 +38,7 @@ type AliveDialerSet struct {
 
 	aliveChangeCallback func(alive bool)
 
-	mu                      sync.Mutex
+	mu                      sync.RWMutex
 	dialerToIndex           map[*Dialer]int // *Dialer -> index of inorderedAliveDialerSet
 	dialerToLatency         map[*Dialer]time.Duration
 	dialerToLatencyOffset   map[*Dialer]time.Duration
@@ -93,8 +93,8 @@ func NewAliveDialerSet(
 }
 
 func (a *AliveDialerSet) GetRand() *Dialer {
-	a.mu.Lock()
-	defer a.mu.Unlock()
+	a.mu.RLock()
+	defer a.mu.RUnlock()
 	if len(a.inorderedAliveDialerSet) == 0 {
 		return nil
 	}
@@ -108,6 +108,8 @@ func (a *AliveDialerSet) SortingLatency(d *Dialer) time.Duration {
 
 // GetMinLatency acquires correct selectionPolicy.
 func (a *AliveDialerSet) GetMinLatency() (d *Dialer, latency time.Duration) {
+	a.mu.RLock()
+	defer a.mu.RUnlock()
 	return a.minLatency.dialer, a.minLatency.sortingLatency
 }
 
@@ -143,12 +145,12 @@ func (a *AliveDialerSet) printLatencies() {
 // NotifyLatencyChange should be invoked when dialer every time latency and alive state changes.
 func (a *AliveDialerSet) NotifyLatencyChange(dialer *Dialer, alive bool) {
 	a.mu.Lock()
-	defer a.mu.Unlock()
 	var (
 		rawLatency     time.Duration
 		sortingLatency time.Duration
 		hasLatency     bool
 		minPolicy      bool
+		callbackAlive  *bool
 	)
 
 	switch a.selectionPolicy {
@@ -159,7 +161,7 @@ func (a *AliveDialerSet) NotifyLatencyChange(dialer *Dialer, alive bool) {
 		rawLatency, hasLatency = dialer.mustGetCollection(a.CheckTyp).Latencies10.AvgLatency()
 		minPolicy = true
 	case consts.DialerSelectionPolicy_MinMovingAverageLatencies:
-		rawLatency = dialer.mustGetCollection(a.CheckTyp).MovingAverage
+		rawLatency = dialer.mustGetCollection(a.CheckTyp).MovingAverageSnapshot()
 		hasLatency = rawLatency > 0
 		minPolicy = true
 	}
@@ -212,17 +214,19 @@ func (a *AliveDialerSet) NotifyLatencyChange(dialer *Dialer, alive bool) {
 
 	if hasLatency {
 		bakOldBestDialer := a.minLatency.dialer
+		bakOldBestLatency := a.minLatency.sortingLatency
 		// Calc minLatency.
 		a.dialerToLatency[dialer] = rawLatency
 		sortingLatency = a.SortingLatency(dialer)
 		if alive &&
-			sortingLatency <= a.minLatency.sortingLatency && // To avoid arithmetic overflow.
-			sortingLatency <= a.minLatency.sortingLatency-a.tolerance {
+			sortingLatency <= bakOldBestLatency && // To avoid arithmetic overflow.
+			sortingLatency <= bakOldBestLatency-a.tolerance {
 			a.minLatency.sortingLatency = sortingLatency
 			a.minLatency.dialer = dialer
 		} else if a.minLatency.dialer == dialer {
+			bestWorsened := !alive || sortingLatency > bakOldBestLatency
 			a.minLatency.sortingLatency = sortingLatency
-			if !alive || sortingLatency > a.minLatency.sortingLatency {
+			if bestWorsened {
 				// Latency increases.
 				if !alive {
 					a.minLatency.dialer = nil
@@ -239,7 +243,8 @@ func (a *AliveDialerSet) NotifyLatencyChange(dialer *Dialer, alive bool) {
 				var oldDialerName string
 				if bakOldBestDialer == nil {
 					// Not alive -> alive
-					defer a.aliveChangeCallback(true)
+					aliveNow := true
+					callbackAlive = &aliveNow
 					re = ""
 					oldDialerName = "<nil>"
 				} else {
@@ -256,7 +261,8 @@ func (a *AliveDialerSet) NotifyLatencyChange(dialer *Dialer, alive bool) {
 				a.printLatencies()
 			} else {
 				// Alive -> not alive
-				defer a.aliveChangeCallback(false)
+				aliveNow := false
+				callbackAlive = &aliveNow
 				a.log.WithFields(logrus.Fields{
 					"group":   a.dialerGroupName,
 					"network": a.CheckTyp.String(),
@@ -273,6 +279,10 @@ func (a *AliveDialerSet) NotifyLatencyChange(dialer *Dialer, alive bool) {
 				"dialer":  a.minLatency.dialer.property.Name,
 			}).Infof("Group selects dialer")
 		}
+	}
+	a.mu.Unlock()
+	if callbackAlive != nil {
+		a.aliveChangeCallback(*callbackAlive)
 	}
 }
 
