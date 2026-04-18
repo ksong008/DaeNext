@@ -17,7 +17,17 @@ func TestMarshal(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	merger := NewMerger(abs)
+	example, err := os.ReadFile(abs)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tmpDir := t.TempDir()
+	entry := filepath.Join(tmpDir, "example.dae")
+	if err := os.WriteFile(entry, example, 0640); err != nil {
+		t.Fatal(err)
+	}
+
+	merger := NewMerger(entry)
 	sections, _, err := merger.Merge()
 	if err != nil {
 		t.Fatal(err)
@@ -32,10 +42,11 @@ func TestMarshal(t *testing.T) {
 	}
 	t.Log(string(b))
 	// Read it again.
-	if err = os.WriteFile("/tmp/test.dae", b, 0640); err != nil {
+	roundTripPath := filepath.Join(tmpDir, "roundtrip.dae")
+	if err = os.WriteFile(roundTripPath, b, 0640); err != nil {
 		t.Fatal(err)
 	}
-	sections, _, err = NewMerger("/tmp/test.dae").Merge()
+	sections, _, err = NewMerger(roundTripPath).Merge()
 	if err != nil {
 		t.Fatal(err)
 	}
