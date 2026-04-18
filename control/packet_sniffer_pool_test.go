@@ -19,12 +19,14 @@ var testPacketSnifferData = []string{
 }
 
 func TestPacketSniffer_Normal(t *testing.T) {
+	pool := NewPacketSnifferPool()
 	for _, _data := range testPacketSnifferData {
 		data, _ := hex.DecodeString(_data)
-		sniffer, _ := DefaultPacketSnifferSessionMgr.GetOrCreate(PacketSnifferKey{
+		key := PacketSnifferKey{
 			LAddr: netip.MustParseAddrPort("1.1.1.1:1111"),
 			RAddr: netip.MustParseAddrPort("2.2.2.2:2222"),
-		}, nil)
+		}
+		sniffer, _ := pool.GetOrCreate(key, nil)
 		sniffer.AppendData(data)
 		domain, err := sniffer.SniffUdp()
 		if err != nil && !sniffing.IsSniffingError(err) {
@@ -33,7 +35,9 @@ func TestPacketSniffer_Normal(t *testing.T) {
 		if sniffer.NeedMore() {
 			continue
 		}
-		sniffer.Close()
+		if err := pool.Remove(key, sniffer); err != nil {
+			t.Fatal(err)
+		}
 		t.Log(domain)
 		return
 	}
@@ -41,23 +45,30 @@ func TestPacketSniffer_Normal(t *testing.T) {
 }
 
 func TestPacketSniffer_Mismatched(t *testing.T) {
+	pool := NewPacketSnifferPool()
 	dst := netip.MustParseAddrPort("2.2.2.2:2222")
 	for _, _data := range testPacketSnifferData {
 		data, _ := hex.DecodeString(_data)
-		sniffer, _ := DefaultPacketSnifferSessionMgr.GetOrCreate(PacketSnifferKey{
+		key := PacketSnifferKey{
 			LAddr: netip.MustParseAddrPort("1.1.1.1:1111"),
 			RAddr: dst,
-		}, nil)
+		}
+		sniffer, _ := pool.GetOrCreate(key, nil)
 		sniffer.AppendData(data)
 		domain, err := sniffer.SniffUdp()
 		if err != nil && !sniffing.IsSniffingError(err) {
 			t.Fatal(err)
 		}
 		if sniffer.NeedMore() {
+			if err := pool.Remove(key, sniffer); err != nil {
+				t.Fatal(err)
+			}
 			dst = netip.AddrPortFrom(dst.Addr(), dst.Port()+1)
 			continue
 		}
-		sniffer.Close()
+		if err := pool.Remove(key, sniffer); err != nil {
+			t.Fatal(err)
+		}
 		t.Fatal("unexpected found", domain)
 		return
 	}

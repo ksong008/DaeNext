@@ -58,6 +58,12 @@ jobs:
       - name: Download Go modules
         run: go mod download
 
+      - name: Prepare location assets
+        run: |
+          mkdir -p .github/dae-assets
+          curl -L -o .github/dae-assets/geoip.dat https://github.com/v2fly/geoip/releases/latest/download/geoip.dat
+          curl -L -o .github/dae-assets/geosite.dat https://github.com/v2fly/domain-list-community/releases/latest/download/dlc.dat
+
       - name: Generate eBPF artifacts
         env:
           CLANG: clang-15
@@ -65,6 +71,8 @@ jobs:
         run: make ebpf
 
       - name: Run unit tests
+        env:
+          DAE_LOCATION_ASSET: ${{ github.workspace }}/.github/dae-assets
         run: |
           packages=$(go list ./... | grep -v '^github.com/daeuniverse/dae/control/kern/tests$')
           go test -count=1 $packages
@@ -97,6 +105,12 @@ jobs:
       - name: Download Go modules
         run: go mod download
 
+      - name: Prepare location assets
+        run: |
+          mkdir -p .github/dae-assets
+          curl -L -o .github/dae-assets/geoip.dat https://github.com/v2fly/geoip/releases/latest/download/geoip.dat
+          curl -L -o .github/dae-assets/geosite.dat https://github.com/v2fly/domain-list-community/releases/latest/download/dlc.dat
+
       - name: Generate eBPF artifacts
         env:
           CLANG: clang-15
@@ -104,6 +118,8 @@ jobs:
         run: make ebpf
 
       - name: Build dae core
+        env:
+          DAE_LOCATION_ASSET: ${{ github.workspace }}/.github/dae-assets
         run: |
           tags="$(cat .build_tags 2>/dev/null || true)"
           if [ -n "$tags" ]; then
