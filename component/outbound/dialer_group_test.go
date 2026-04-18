@@ -39,6 +39,14 @@ func newDirectDialer(option *dialer.GlobalOption, fullcone bool) *dialer.Dialer 
 	return d
 }
 
+func annotationsFor(dialers []*dialer.Dialer) []*dialer.Annotation {
+	annotations := make([]*dialer.Annotation, len(dialers))
+	for i := range annotations {
+		annotations[i] = &dialer.Annotation{}
+	}
+	return annotations
+}
+
 func TestDialerGroup_Select_Fixed(t *testing.T) {
 	option := &dialer.GlobalOption{
 		Log:               log,
@@ -53,7 +61,7 @@ func TestDialerGroup_Select_Fixed(t *testing.T) {
 		newDirectDialer(option, false),
 	}
 	fixedIndex := 1
-	g := NewDialerGroup(option, "test-group", dialers, []*dialer.Annotation{{}},
+	g := NewDialerGroup(option, "test-group", dialers, annotationsFor(dialers),
 		DialerSelectionPolicy{
 			Policy:     consts.DialerSelectionPolicy_Fixed,
 			FixedIndex: fixedIndex,
@@ -101,7 +109,7 @@ func TestDialerGroup_Select_MinLastLatency(t *testing.T) {
 		newDirectDialer(option, false),
 		newDirectDialer(option, false),
 	}
-	g := NewDialerGroup(option, "test-group", dialers, []*dialer.Annotation{{}},
+	g := NewDialerGroup(option, "test-group", dialers, annotationsFor(dialers),
 		DialerSelectionPolicy{
 			Policy: consts.DialerSelectionPolicy_MinLastLatency,
 		}, func(alive bool, networkType *dialer.NetworkType, isInit bool) {})
@@ -166,7 +174,7 @@ func TestDialerGroup_Select_Random(t *testing.T) {
 		newDirectDialer(option, false),
 		newDirectDialer(option, false),
 	}
-	g := NewDialerGroup(option, "test-group", dialers, []*dialer.Annotation{{}},
+	g := NewDialerGroup(option, "test-group", dialers, annotationsFor(dialers),
 		DialerSelectionPolicy{
 			Policy: consts.DialerSelectionPolicy_Random,
 		}, func(alive bool, networkType *dialer.NetworkType, isInit bool) {})
@@ -206,7 +214,7 @@ func TestDialerGroup_SetAlive(t *testing.T) {
 		newDirectDialer(option, false),
 		newDirectDialer(option, false),
 	}
-	g := NewDialerGroup(option, "test-group", dialers, []*dialer.Annotation{{}},
+	g := NewDialerGroup(option, "test-group", dialers, annotationsFor(dialers),
 		DialerSelectionPolicy{
 			Policy: consts.DialerSelectionPolicy_Random,
 		}, func(alive bool, networkType *dialer.NetworkType, isInit bool) {})
