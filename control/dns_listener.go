@@ -209,6 +209,7 @@ func addrPortFromIPPort(ip net.IP, port int, zone string) (netip.AddrPort, error
 	if !ok {
 		return netip.AddrPort{}, fmt.Errorf("failed to parse ip %q", ip.String())
 	}
+	addr = addr.Unmap()
 	if zone != "" {
 		addr = addr.WithZone(zone)
 	}
