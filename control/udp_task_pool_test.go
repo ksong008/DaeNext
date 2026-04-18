@@ -6,28 +6,90 @@
 package control
 
 import (
+	"sync"
 	"testing"
 	"time"
-
-	"github.com/shirou/gopsutil/v4/cpu"
-	"github.com/stretchr/testify/require"
 )
 
-// Should run successfully in less than 3.2 seconds.
-func TestUdpTaskPool(t *testing.T) {
-	c, err := cpu.Times(false)
-	require.NoError(t, err)
-	t.Log(c)
-	DefaultNatTimeout = 1000 * time.Microsecond
-	for i := 0; i < 100; i++ {
-		DefaultUdpTaskPool.EmitTask("testkey", func() { time.Sleep(100 * time.Microsecond) })
-		time.Sleep(99 * time.Microsecond)
+func TestUdpTaskPoolSerializesTasksPerKey(t *testing.T) {
+	pool := NewUdpTaskPool()
+	defer pool.Close()
+
+	var (
+		mu      sync.Mutex
+		results []int
+		wg      sync.WaitGroup
+	)
+	for i := 0; i < 5; i++ {
+		wg.Add(1)
+		i := i
+		pool.EmitTask("same-key", func() {
+			defer wg.Done()
+			mu.Lock()
+			results = append(results, i)
+			mu.Unlock()
+		})
 	}
-	time.Sleep(1 * time.Second)
-	DefaultUdpTaskPool.EmitTask("testkey", func() { time.Sleep(100 * time.Second) })
-	time.Sleep(2 * time.Second)
-	DefaultUdpTaskPool.EmitTask("testkey", func() { time.Sleep(100 * time.Second) })
-	c, err = cpu.Times(false)
-	require.NoError(t, err)
-	t.Log(c)
+	wg.Wait()
+
+	for i, got := range results {
+		if got != i {
+			t.Fatalf("expected task order %d at index %d, got %d", i, i, got)
+		}
+	}
+}
+
+func TestUdpTaskPoolSweepExpiredQueues(t *testing.T) {
+	pool := NewUdpTaskPool()
+	defer pool.Close()
+
+	now := time.Now()
+	pool.now = func() time.Time { return now }
+
+	pool.EmitTask("idle-key", func() {})
+	time.Sleep(10 * time.Millisecond)
+	if pool.Count() != 1 {
+		t.Fatalf("expected one queue after first task, got %d", pool.Count())
+	}
+
+	pool.mu.Lock()
+	pool.m["idle-key"].agingTime = time.Second
+	pool.m["idle-key"].lastActive = now.Add(-2 * time.Second)
+	pool.mu.Unlock()
+
+	pool.sweepExpiredQueues(now)
+	if pool.Count() != 0 {
+		t.Fatalf("expected expired queue to be swept, got %d queues", pool.Count())
+	}
+}
+
+func TestUdpTaskPoolDoesNotSweepRunningQueue(t *testing.T) {
+	pool := NewUdpTaskPool()
+	defer pool.Close()
+
+	now := time.Now()
+	pool.now = func() time.Time { return now }
+
+	started := make(chan struct{})
+	release := make(chan struct{})
+	done := make(chan struct{})
+	pool.EmitTask("busy-key", func() {
+		close(started)
+		<-release
+		close(done)
+	})
+	<-started
+
+	pool.mu.Lock()
+	pool.m["busy-key"].agingTime = time.Second
+	pool.m["busy-key"].lastActive = now.Add(-2 * time.Second)
+	pool.mu.Unlock()
+
+	pool.sweepExpiredQueues(now)
+	if pool.Count() != 1 {
+		t.Fatalf("expected running queue to remain, got %d queues", pool.Count())
+	}
+
+	close(release)
+	<-done
 }

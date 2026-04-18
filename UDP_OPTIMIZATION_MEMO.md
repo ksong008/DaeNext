@@ -218,6 +218,35 @@ Tests added:
 - inactive callback removes and closes endpoint
 - pool close closes and removes remaining endpoints
 
+### B. `UdpTaskPool` lifecycle simplification
+
+Files:
+
+- `control/udp_task_pool.go`
+- `control/udp_task_pool_test.go`
+
+Changes:
+
+- Removed per-queue `time.AfterFunc` usage.
+- Added pool-level cleanup janitor with periodic sweep.
+- Added explicit queue activity tracking:
+  - `lastActive`
+  - `running`
+- Added `UdpTaskPool.Close()` to stop cleanup and terminate queues.
+- Kept per-key serialization semantics while reducing timer overhead.
+
+Why this helps:
+
+- fewer timers under high key cardinality
+- better separation between “queue ordering” and “queue expiration”
+- more predictable lifecycle management for long-running queues
+
+Tests added:
+
+- same-key tasks run in order
+- idle queues are swept
+- running queues are not swept prematurely
+
 ## Current Conclusion
 
 Short version:
