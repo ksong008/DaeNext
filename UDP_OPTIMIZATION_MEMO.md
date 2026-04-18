@@ -187,6 +187,37 @@ For all UDP work, keep the following rules:
 - Keep hot-path synchronization simple and cheap.
 - Prefer deterministic cleanup and explicit lifecycle ownership.
 
+## Applied Changes
+
+### A. `UdpEndpointPool` lifecycle simplification
+
+Files:
+
+- `control/udp_endpoint_pool.go`
+- `control/udp_endpoint_pool_test.go`
+
+Changes:
+
+- Removed per-endpoint `time.AfterFunc` usage.
+- Added pool-level cleanup janitor with periodic sweep.
+- Moved endpoint expiry to `lastActive + NatTimeout` checks.
+- Added explicit `Touch(now)` and `Expired(now)` helpers on endpoints.
+- Added idempotent endpoint close path via `sync.Once`.
+- Added `onInactive` callback so read loop termination can remove stale endpoints from the pool.
+- Added `UdpEndpointPool.Close()` to stop janitor and close remaining endpoints.
+
+Why this helps:
+
+- significantly fewer timers under large UDP endpoint cardinality
+- simpler endpoint lifecycle ownership
+- clearer long-running memory / timer growth bounds
+
+Tests added:
+
+- sweep removes expired endpoints
+- inactive callback removes and closes endpoint
+- pool close closes and removes remaining endpoints
+
 ## Current Conclusion
 
 Short version:
