@@ -409,9 +409,6 @@ func (c *DnsController) HandleWithResponseWriter_(dnsMessage *dnsmessage.Msg, re
 		return c.handleWithResponseWriter_(dnsMessage, req, true, responseWriter)
 	}
 
-	// Try to make both A and AAAA lookups.
-	dnsMessage2 := deepcopy.Copy(dnsMessage).(*dnsmessage.Msg)
-	dnsMessage2.Id = uint16(fastrand.Intn(math.MaxUint16))
 	var qtype2 uint16
 	switch qtype {
 	case dnsmessage.TypeA:
@@ -421,31 +418,38 @@ func (c *DnsController) HandleWithResponseWriter_(dnsMessage *dnsmessage.Msg, re
 	default:
 		return fmt.Errorf("unexpected qtype path")
 	}
+
+	if c.qtypePrefer == qtype {
+		// Preferred queries should not wait for the opposite qtype. This keeps the
+		// fast path fast and avoids doubling upstream traffic for every A/AAAA lookup.
+		return c.handleWithResponseWriter_(dnsMessage, req, true, responseWriter)
+	}
+
+	// For non-preferred qtypes, issue both queries concurrently:
+	// if the preferred qtype has records we can reject early; otherwise we may
+	// still need the requested qtype response.
+	dnsMessage2 := deepcopy.Copy(dnsMessage).(*dnsmessage.Msg)
+	dnsMessage2.Id = uint16(fastrand.Intn(math.MaxUint16))
 	dnsMessage2.Question[0].Qtype = qtype2
 
-	done := make(chan struct{})
+	preferredErrCh := make(chan error, 1)
+	requestedErrCh := make(chan error, 1)
 	go func() {
-		_ = c.handleWithResponseWriter_(dnsMessage2, req, false, responseWriter)
-		done <- struct{}{}
+		preferredErrCh <- c.handleWithResponseWriter_(dnsMessage2, req, false, nil)
 	}()
-	err = c.handleWithResponseWriter_(dnsMessage, req, false, responseWriter)
-	<-done
-	if err != nil {
-		return err
-	}
+	go func() {
+		requestedErrCh <- c.handleWithResponseWriter_(dnsMessage, req, false, nil)
+	}()
 
-	// Join results and consider whether to response.
-	resp := c.LookupDnsRespCache_(dnsMessage, c.cacheKey(qname, qtype), true)
-	if resp == nil {
-		// resp is not valid.
-		c.log.WithFields(logrus.Fields{
-			"qname": qname,
-		}).Tracef("Reject %v due to resp not valid", qtype)
+	preferredErr := <-preferredErrCh
+	preferredCache := c.LookupDnsRespCache(c.cacheKey(qname, qtype2), true)
+	if preferredCache != nil && preferredCache.IncludeAnyIp() {
 		return c.sendRejectWithResponseWriter_(dnsMessage, req, responseWriter)
 	}
-	// resp is valid.
-	cache2 := c.LookupDnsRespCache(c.cacheKey(qname, qtype2), true)
-	if c.qtypePrefer == qtype || cache2 == nil || !cache2.IncludeAnyIp() {
+
+	requestedErr := <-requestedErrCh
+	resp := c.LookupDnsRespCache_(dnsMessage, c.cacheKey(qname, qtype), true)
+	if resp != nil {
 		if responseWriter != nil {
 			var respMsg dnsmessage.Msg
 			if err = respMsg.Unpack(resp); err != nil {
@@ -454,9 +458,21 @@ func (c *DnsController) HandleWithResponseWriter_(dnsMessage *dnsmessage.Msg, re
 			return responseWriter.WriteMsg(&respMsg)
 		}
 		return sendPkt(c.log, resp, req.realDst, req.realSrc, req.src, req.lConn)
-	} else {
-		return c.sendRejectWithResponseWriter_(dnsMessage, req, responseWriter)
 	}
+
+	if requestedErr != nil && preferredErr != nil {
+		return errors.Join(requestedErr, preferredErr)
+	}
+	if requestedErr != nil {
+		return requestedErr
+	}
+	if preferredErr != nil {
+		return preferredErr
+	}
+	c.log.WithFields(logrus.Fields{
+		"qname": qname,
+	}).Tracef("Reject %v due to resp not valid", qtype)
+	return c.sendRejectWithResponseWriter_(dnsMessage, req, responseWriter)
 }
 
 func (c *DnsController) handle_(

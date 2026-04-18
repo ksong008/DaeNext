@@ -23,12 +23,10 @@ import (
 var ErrBadUpstreamFormat = fmt.Errorf("bad upstream format")
 
 type Dns struct {
-	log              *logrus.Logger
-	upstream         []*UpstreamResolver
-	upstream2IndexMu sync.Mutex
-	upstream2Index   map[*Upstream]int
-	reqMatcher       *RequestMatcher
-	respMatcher      *ResponseMatcher
+	log         *logrus.Logger
+	upstream    []*UpstreamResolver
+	reqMatcher  *RequestMatcher
+	respMatcher *ResponseMatcher
 }
 
 type NewOption struct {
@@ -41,9 +39,6 @@ type NewOption struct {
 func New(dns *config.Dns, opt *NewOption) (s *Dns, err error) {
 	s = &Dns{
 		log: opt.Logger,
-		upstream2Index: map[*Upstream]int{
-			nil: int(consts.DnsRequestOutboundIndex_AsIs),
-		},
 	}
 	// Parse upstream.
 	upstreamName2Id := map[string]uint8{}
@@ -67,15 +62,12 @@ func New(dns *config.Dns, opt *NewOption) (s *Dns, err error) {
 			Network: opt.UpstreamResolverNetwork,
 			FinishInitCallback: func(i int) func(raw *url.URL, upstream *Upstream) (err error) {
 				return func(raw *url.URL, upstream *Upstream) (err error) {
+					upstream.Index = consts.DnsRequestOutboundIndex(i)
 					if opt != nil && opt.UpstreamReadyCallback != nil {
 						if err = opt.UpstreamReadyCallback(upstream); err != nil {
 							return err
 						}
 					}
-
-					s.upstream2IndexMu.Lock()
-					s.upstream2Index[upstream] = i
-					s.upstream2IndexMu.Unlock()
 					return nil
 				}
 			}(i),
@@ -119,7 +111,7 @@ func New(dns *config.Dns, opt *NewOption) (s *Dns, err error) {
 	if err != nil {
 		return nil, fmt.Errorf("failed to build DNS response routing: %w", err)
 	}
-	if len(dns.Upstream) == 0 {
+	if len(dns.Upstream) == 0 && opt != nil && opt.UpstreamReadyCallback != nil {
 		// Immediately ready.
 		go opt.UpstreamReadyCallback(nil)
 	}
@@ -206,10 +198,10 @@ func (s *Dns) ResponseSelect(msg *dnsmessage.Msg, fromUpstream *Upstream) (upstr
 			ips = append(ips, ip)
 		}
 	}
-
-	s.upstream2IndexMu.Lock()
-	from := s.upstream2Index[fromUpstream]
-	s.upstream2IndexMu.Unlock()
+	from := int(consts.DnsRequestOutboundIndex_AsIs)
+	if fromUpstream != nil {
+		from = int(fromUpstream.Index)
+	}
 	// Route.
 	upstreamIndex, err = s.respMatcher.Match(qname, qtype, ips, consts.DnsRequestOutboundIndex(from))
 	if err != nil {

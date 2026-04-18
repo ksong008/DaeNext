@@ -23,6 +23,11 @@ var (
 	ErrFormat = fmt.Errorf("format error")
 )
 
+const (
+	DefaultUpstreamRefreshInterval = 10 * time.Minute
+	DefaultUpstreamRetryInterval   = time.Minute
+)
+
 type UpstreamScheme string
 
 const (
@@ -93,6 +98,7 @@ type Upstream struct {
 	Hostname string
 	Port     uint16
 	Path     string
+	Index    consts.DnsRequestOutboundIndex
 	*netutils.Ip46
 }
 
@@ -157,29 +163,65 @@ type UpstreamResolver struct {
 	Network string
 	// FinishInitCallback may be invoked again if err is not nil
 	FinishInitCallback func(raw *url.URL, upstream *Upstream) (err error)
+	Resolve            func(ctx context.Context, upstream *url.URL, resolverNetwork string) (*Upstream, error)
+	Now                func() time.Time
+	RefreshInterval    time.Duration
+	RetryInterval      time.Duration
 	mu                 sync.Mutex
 	upstream           *Upstream
 	init               bool
+	nextRefresh        time.Time
 }
 
 func (u *UpstreamResolver) GetUpstream() (_ *Upstream, err error) {
 	u.mu.Lock()
 	defer u.mu.Unlock()
-	if !u.init {
-		defer func() {
-			if err == nil {
-				if err = u.FinishInitCallback(u.Raw, u.upstream); err != nil {
-					u.upstream = nil
-					return
-				}
-				u.init = true
+	nowFunc := u.Now
+	if nowFunc == nil {
+		nowFunc = time.Now
+	}
+	refreshInterval := u.RefreshInterval
+	if refreshInterval <= 0 {
+		refreshInterval = DefaultUpstreamRefreshInterval
+	}
+	retryInterval := u.RetryInterval
+	if retryInterval <= 0 {
+		retryInterval = DefaultUpstreamRetryInterval
+	}
+	now := nowFunc()
+	if u.init && now.Before(u.nextRefresh) {
+		return u.upstream, nil
+	}
+
+	resolve := u.Resolve
+	if resolve == nil {
+		resolve = NewUpstream
+	}
+	ctx, cancel := context.WithTimeout(context.TODO(), 10*time.Second)
+	defer cancel()
+
+	oldUpstream := u.upstream
+	newUpstream, resolveErr := resolve(ctx, u.Raw, u.Network)
+	if resolveErr != nil {
+		if oldUpstream != nil {
+			u.nextRefresh = now.Add(retryInterval)
+			return oldUpstream, nil
+		}
+		return nil, fmt.Errorf("failed to init dns upstream: %w", resolveErr)
+	}
+
+	if u.FinishInitCallback != nil {
+		if err = u.FinishInitCallback(u.Raw, newUpstream); err != nil {
+			if oldUpstream != nil {
+				u.nextRefresh = now.Add(retryInterval)
+				return oldUpstream, nil
 			}
-		}()
-		ctx, cancel := context.WithTimeout(context.TODO(), 10*time.Second)
-		defer cancel()
-		if u.upstream, err = NewUpstream(ctx, u.Raw, u.Network); err != nil {
-			return nil, fmt.Errorf("failed to init dns upstream: %w", err)
+			return nil, err
 		}
 	}
+
+	u.upstream = newUpstream
+	u.init = true
+	u.nextRefresh = now.Add(refreshInterval)
 	return u.upstream, nil
 }
