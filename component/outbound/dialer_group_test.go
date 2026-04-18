@@ -244,3 +244,90 @@ func TestDialerGroup_SetAlive(t *testing.T) {
 		t.Fatalf("unexpected total selections: %d", total)
 	}
 }
+
+func TestDialerGroup_Select_ReSelectsWhenCurrentBestWorsens(t *testing.T) {
+	option := &dialer.GlobalOption{
+		Log:               log,
+		TcpCheckOptionRaw: dialer.TcpCheckOptionRaw{Raw: []string{testTcpCheckUrl}},
+		CheckDnsOptionRaw: dialer.CheckDnsOptionRaw{Raw: []string{testUdpCheckDns}},
+		CheckInterval:     15 * time.Second,
+		CheckTolerance:    0,
+	}
+	dialers := []*dialer.Dialer{
+		newDirectDialer(option, false),
+		newDirectDialer(option, false),
+	}
+	g := NewDialerGroup(option, "test-group", dialers, annotationsFor(dialers),
+		DialerSelectionPolicy{
+			Policy: consts.DialerSelectionPolicy_MinLastLatency,
+		}, func(alive bool, networkType *dialer.NetworkType, isInit bool) {})
+
+	g.MustGetAliveDialerSet(TestNetworkType).NotifyLatencyChange(dialers[0], true)
+	g.MustGetAliveDialerSet(TestNetworkType).NotifyLatencyChange(dialers[1], true)
+
+	dialers[0].MustGetLatencies10(TestNetworkType).AppendLatency(100 * time.Millisecond)
+	g.MustGetAliveDialerSet(TestNetworkType).NotifyLatencyChange(dialers[0], true)
+	dialers[1].MustGetLatencies10(TestNetworkType).AppendLatency(200 * time.Millisecond)
+	g.MustGetAliveDialerSet(TestNetworkType).NotifyLatencyChange(dialers[1], true)
+
+	d, _, err := g.Select(TestNetworkType, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if d != dialers[0] {
+		t.Fatalf("expected first dialer before slowdown, got %q", d.Property().Name)
+	}
+
+	dialers[0].MustGetLatencies10(TestNetworkType).AppendLatency(500 * time.Millisecond)
+	g.MustGetAliveDialerSet(TestNetworkType).NotifyLatencyChange(dialers[0], true)
+
+	d, _, err = g.Select(TestNetworkType, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if d != dialers[1] {
+		t.Fatalf("expected second dialer after slowdown, got %q", d.Property().Name)
+	}
+}
+
+func TestDialerGroup_Select_DoesNotMutateNetworkTypeOnFallback(t *testing.T) {
+	option := &dialer.GlobalOption{
+		Log:               log,
+		TcpCheckOptionRaw: dialer.TcpCheckOptionRaw{Raw: []string{testTcpCheckUrl}},
+		CheckDnsOptionRaw: dialer.CheckDnsOptionRaw{Raw: []string{testUdpCheckDns}},
+		CheckInterval:     15 * time.Second,
+	}
+	dialers := []*dialer.Dialer{
+		newDirectDialer(option, false),
+	}
+	g := NewDialerGroup(option, "test-group", dialers, annotationsFor(dialers),
+		DialerSelectionPolicy{
+			Policy: consts.DialerSelectionPolicy_Random,
+		}, func(alive bool, networkType *dialer.NetworkType, isInit bool) {})
+
+	ipv4 := &dialer.NetworkType{
+		L4Proto:   consts.L4ProtoStr_TCP,
+		IpVersion: consts.IpVersionStr_4,
+		IsDns:     false,
+	}
+	ipv6 := &dialer.NetworkType{
+		L4Proto:   consts.L4ProtoStr_TCP,
+		IpVersion: consts.IpVersionStr_6,
+		IsDns:     false,
+	}
+
+	g.MustGetAliveDialerSet(ipv4).NotifyLatencyChange(dialers[0], false)
+	g.MustGetAliveDialerSet(ipv6).NotifyLatencyChange(dialers[0], true)
+
+	networkType := &dialer.NetworkType{
+		L4Proto:   consts.L4ProtoStr_TCP,
+		IpVersion: consts.IpVersionStr_4,
+		IsDns:     false,
+	}
+	if _, _, err := g.Select(networkType, false); err != nil {
+		t.Fatal(err)
+	}
+	if networkType.IpVersion != consts.IpVersionStr_4 {
+		t.Fatalf("expected Select to preserve input ip version, got %v", networkType.IpVersion)
+	}
+}
