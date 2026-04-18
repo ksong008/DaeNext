@@ -32,6 +32,10 @@ import (
 const (
 	MaxDnsLookupDepth  = 3
 	minFirefoxCacheTtl = 120
+	dnsCacheSweepInterval = time.Minute
+	dnsForwarderSweepInterval = 5 * time.Minute
+	dnsForwarderIdleTimeout = 15 * time.Minute
+	dnsForwarderCacheMaxEntries = 128
 )
 
 type IpVersionPrefer int
@@ -77,16 +81,26 @@ type DnsController struct {
 	timeoutExceedCallback func(dialArgument *dialArgument, err error)
 
 	fixedDomainTtl map[string]int
+	now            func() time.Time
+	forwarderFactory func(upstream *dns.Upstream, dialArgument dialArgument) (DnsForwarder, error)
+	ctx            context.Context
+	cancel         context.CancelFunc
+	cleanupWg      sync.WaitGroup
 	// mutex protects the dnsCache.
 	dnsCacheMu          sync.Mutex
 	dnsCache            map[string]*DnsCache
 	dnsForwarderCacheMu sync.Mutex
-	dnsForwarderCache   map[dnsForwarderKey]DnsForwarder
+	dnsForwarderCache   map[dnsForwarderKey]*cachedDnsForwarder
 }
 
 type handlingState struct {
 	mu  sync.Mutex
 	ref uint32
+}
+
+type cachedDnsForwarder struct {
+	forwarder DnsForwarder
+	lastUsed  time.Time
 }
 
 func parseIpVersionPreference(prefer int) (uint16, error) {
@@ -109,7 +123,9 @@ func NewDnsController(routing *dns.Dns, option *DnsControllerOption) (c *DnsCont
 		return nil, err
 	}
 
-	return &DnsController{
+	ctx, cancel := context.WithCancel(context.Background())
+
+	c = &DnsController{
 		routing:     routing,
 		qtypePrefer: prefer,
 
@@ -120,17 +136,123 @@ func NewDnsController(routing *dns.Dns, option *DnsControllerOption) (c *DnsCont
 		bestDialerChooser:     option.BestDialerChooser,
 		timeoutExceedCallback: option.TimeoutExceedCallback,
 
-		fixedDomainTtl:      option.FixedDomainTtl,
-		dnsCacheMu:          sync.Mutex{},
-		dnsCache:            make(map[string]*DnsCache),
-		dnsForwarderCacheMu: sync.Mutex{},
-		dnsForwarderCache:   make(map[dnsForwarderKey]DnsForwarder),
-	}, nil
+		fixedDomainTtl:        option.FixedDomainTtl,
+		now:                   time.Now,
+		forwarderFactory:      newDnsForwarder,
+		ctx:                   ctx,
+		cancel:                cancel,
+		cleanupWg:             sync.WaitGroup{},
+		dnsCacheMu:            sync.Mutex{},
+		dnsCache:              make(map[string]*DnsCache),
+		dnsForwarderCacheMu:   sync.Mutex{},
+		dnsForwarderCache:     make(map[dnsForwarderKey]*cachedDnsForwarder),
+	}
+	c.startBackgroundCleanup()
+	return c, nil
 }
 
 func (c *DnsController) cacheKey(qname string, qtype uint16) string {
 	// To fqdn.
 	return dnsmessage.CanonicalName(qname) + strconv.Itoa(int(qtype))
+}
+
+func (c *DnsController) cacheExpiresAt(cache *DnsCache) time.Time {
+	if cache == nil {
+		return time.Time{}
+	}
+	if cache.Deadline.After(cache.OriginalDeadline) {
+		return cache.Deadline
+	}
+	return cache.OriginalDeadline
+}
+
+func (c *DnsController) startBackgroundCleanup() {
+	c.cleanupWg.Add(2)
+	go func() {
+		defer c.cleanupWg.Done()
+		ticker := time.NewTicker(dnsCacheSweepInterval)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-c.ctx.Done():
+				return
+			case <-ticker.C:
+				c.sweepDnsCache(c.now())
+			}
+		}
+	}()
+	go func() {
+		defer c.cleanupWg.Done()
+		ticker := time.NewTicker(dnsForwarderSweepInterval)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-c.ctx.Done():
+				return
+			case <-ticker.C:
+				c.sweepDnsForwarderCache(c.now(), false)
+			}
+		}
+	}()
+}
+
+func (c *DnsController) sweepDnsCache(now time.Time) {
+	var removed []*DnsCache
+	c.dnsCacheMu.Lock()
+	for key, cache := range c.dnsCache {
+		if c.cacheExpiresAt(cache).After(now) {
+			continue
+		}
+		delete(c.dnsCache, key)
+		removed = append(removed, cache)
+	}
+	c.dnsCacheMu.Unlock()
+	if c.cacheRemoveCallback != nil {
+		for _, cache := range removed {
+			if err := c.cacheRemoveCallback(cache); err != nil {
+				c.log.Warnf("failed to remove expired domain routing cache: %v", err)
+			}
+		}
+	}
+}
+
+func (c *DnsController) sweepDnsForwarderCache(now time.Time, enforceLimit bool) {
+	var forwardersToClose []DnsForwarder
+	c.dnsForwarderCacheMu.Lock()
+	for key, entry := range c.dnsForwarderCache {
+		if entry.lastUsed.Add(dnsForwarderIdleTimeout).After(now) {
+			continue
+		}
+		delete(c.dnsForwarderCache, key)
+		forwardersToClose = append(forwardersToClose, entry.forwarder)
+	}
+	if enforceLimit {
+		for len(c.dnsForwarderCache) >= dnsForwarderCacheMaxEntries {
+			var (
+				oldestKey  dnsForwarderKey
+				oldestSeen bool
+				oldestTime time.Time
+			)
+			for key, entry := range c.dnsForwarderCache {
+				if !oldestSeen || entry.lastUsed.Before(oldestTime) {
+					oldestKey = key
+					oldestTime = entry.lastUsed
+					oldestSeen = true
+				}
+			}
+			if !oldestSeen {
+				break
+			}
+			forwardersToClose = append(forwardersToClose, c.dnsForwarderCache[oldestKey].forwarder)
+			delete(c.dnsForwarderCache, oldestKey)
+		}
+	}
+	c.dnsForwarderCacheMu.Unlock()
+	for _, forwarder := range forwardersToClose {
+		if err := forwarder.Close(); err != nil {
+			c.log.Warnf("failed to close evicted dns forwarder: %v", err)
+		}
+	}
 }
 
 func (c *DnsController) RemoveDnsRespCache(cacheKey string) {
@@ -621,22 +743,38 @@ func (c *DnsController) sendRejectWithResponseWriter_(dnsMessage *dnsmessage.Msg
 
 func (c *DnsController) getDnsForwarder(upstream *dns.Upstream, dialArgument *dialArgument) (forwarder DnsForwarder, reusable bool, err error) {
 	if !dnsForwarderReusable(upstream, *dialArgument) {
-		forwarder, err = newDnsForwarder(upstream, *dialArgument)
+		forwarder, err = c.forwarderFactory(upstream, *dialArgument)
 		return forwarder, false, err
 	}
 
 	key := dnsForwarderKey{upstream: upstream.String(), dialArgument: *dialArgument}
+	now := c.now()
 	c.dnsForwarderCacheMu.Lock()
-	defer c.dnsForwarderCacheMu.Unlock()
-	forwarder, ok := c.dnsForwarderCache[key]
-	if ok {
-		return forwarder, true, nil
+	if entry, ok := c.dnsForwarderCache[key]; ok {
+		entry.lastUsed = now
+		c.dnsForwarderCacheMu.Unlock()
+		return entry.forwarder, true, nil
 	}
-	forwarder, err = newDnsForwarder(upstream, *dialArgument)
+	c.dnsForwarderCacheMu.Unlock()
+
+	c.sweepDnsForwarderCache(now, true)
+
+	c.dnsForwarderCacheMu.Lock()
+	if entry, ok := c.dnsForwarderCache[key]; ok {
+		entry.lastUsed = now
+		c.dnsForwarderCacheMu.Unlock()
+		return entry.forwarder, true, nil
+	}
+	forwarder, err = c.forwarderFactory(upstream, *dialArgument)
 	if err != nil {
+		c.dnsForwarderCacheMu.Unlock()
 		return nil, false, err
 	}
-	c.dnsForwarderCache[key] = forwarder
+	c.dnsForwarderCache[key] = &cachedDnsForwarder{
+		forwarder: forwarder,
+		lastUsed:  now,
+	}
+	c.dnsForwarderCacheMu.Unlock()
 	return forwarder, true, nil
 }
 
@@ -652,14 +790,16 @@ func shouldReportDnsDialFailure(err error) bool {
 }
 
 func (c *DnsController) Close() error {
+	c.cancel()
+	c.cleanupWg.Wait()
 	c.dnsForwarderCacheMu.Lock()
 	forwarders := c.dnsForwarderCache
-	c.dnsForwarderCache = make(map[dnsForwarderKey]DnsForwarder)
+	c.dnsForwarderCache = make(map[dnsForwarderKey]*cachedDnsForwarder)
 	c.dnsForwarderCacheMu.Unlock()
 
 	var errs []error
-	for key, forwarder := range forwarders {
-		if err := forwarder.Close(); err != nil {
+	for key, entry := range forwarders {
+		if err := entry.forwarder.Close(); err != nil {
 			errs = append(errs, fmt.Errorf("close dns forwarder %q: %w", key.upstream, err))
 		}
 	}
