@@ -22,10 +22,15 @@ import (
 	"golang.org/x/sys/unix"
 )
 
+const anyfromSweepInterval = time.Second
+
 type Anyfrom struct {
 	*net.UDPConn
-	deadlineTimer *time.Timer
-	ttl           time.Duration
+	mu       sync.Mutex
+	ttl      time.Duration
+	lastActive time.Time
+	closeOnce sync.Once
+	closeFunc func() error
 	// GSO support is modified from quic-go with many thanks.
 	gso         bool
 	gotGSOError bool
@@ -38,9 +43,28 @@ func (a *Anyfrom) afterWrite(err error) {
 	a.RefreshTtl()
 }
 func (a *Anyfrom) RefreshTtl() {
-	if a.deadlineTimer != nil {
-		a.deadlineTimer.Reset(a.ttl)
+	if a.ttl <= 0 {
+		return
 	}
+	a.mu.Lock()
+	a.lastActive = time.Now()
+	a.mu.Unlock()
+}
+func (a *Anyfrom) Touch(now time.Time) {
+	if a.ttl <= 0 {
+		return
+	}
+	a.mu.Lock()
+	a.lastActive = now
+	a.mu.Unlock()
+}
+func (a *Anyfrom) Expired(now time.Time) bool {
+	if a.ttl <= 0 {
+		return false
+	}
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return !a.lastActive.Add(a.ttl).After(now)
 }
 func (a *Anyfrom) SupportGso(size int) bool {
 	if size > math.MaxUint16 {
@@ -163,15 +187,80 @@ func appendUDPSegmentSizeMsg(b []byte, size uint16) []byte {
 type AnyfromPool struct {
 	pool map[string]*Anyfrom
 	mu   sync.RWMutex
+	ctx context.Context
+	cancel context.CancelFunc
+	cleanupWg sync.WaitGroup
+	now func() time.Time
 }
 
 var DefaultAnyfromPool = NewAnyfromPool()
 
 func NewAnyfromPool() *AnyfromPool {
-	return &AnyfromPool{
+	ctx, cancel := context.WithCancel(context.Background())
+	p := &AnyfromPool{
 		pool: make(map[string]*Anyfrom, 64),
 		mu:   sync.RWMutex{},
+		ctx: ctx,
+		cancel: cancel,
+		now: time.Now,
 	}
+	p.startCleanup()
+	return p
+}
+
+func (p *AnyfromPool) startCleanup() {
+	p.cleanupWg.Add(1)
+	go func() {
+		defer p.cleanupWg.Done()
+		ticker := time.NewTicker(anyfromSweepInterval)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-p.ctx.Done():
+				return
+			case <-ticker.C:
+				p.sweepExpired(p.now())
+			}
+		}
+	}()
+}
+
+func (p *AnyfromPool) Count() int {
+	p.mu.RLock()
+	defer p.mu.RUnlock()
+	return len(p.pool)
+}
+
+func (p *AnyfromPool) sweepExpired(now time.Time) {
+	var expired []*Anyfrom
+	p.mu.Lock()
+	for key, af := range p.pool {
+		if !af.Expired(now) {
+			continue
+		}
+		delete(p.pool, key)
+		expired = append(expired, af)
+	}
+	p.mu.Unlock()
+	for _, af := range expired {
+		_ = af.Close()
+	}
+}
+
+func (p *AnyfromPool) Close() error {
+	p.cancel()
+	p.cleanupWg.Wait()
+	var errs []error
+	p.mu.Lock()
+	all := p.pool
+	p.pool = make(map[string]*Anyfrom, 64)
+	p.mu.Unlock()
+	for _, af := range all {
+		if err := af.Close(); err != nil {
+			errs = append(errs, err)
+		}
+	}
+	return errors.Join(errs...)
 }
 
 func (p *AnyfromPool) GetOrCreate(lAddr string, ttl time.Duration) (conn *Anyfrom, isNew bool, err error) {
@@ -203,23 +292,15 @@ func (p *AnyfromPool) GetOrCreate(lAddr string, ttl time.Duration) (conn *Anyfro
 		}
 		uConn := pc.(*net.UDPConn)
 		af = &Anyfrom{
-			UDPConn:       uConn,
-			deadlineTimer: nil,
-			ttl:           ttl,
-			gotGSOError:   false,
-			gso:           isGSOSupported(uConn),
+			UDPConn:     uConn,
+			ttl:         ttl,
+			lastActive:  p.now(),
+			closeFunc:   uConn.Close,
+			gotGSOError: false,
+			gso:         isGSOSupported(uConn),
 		}
 
 		if ttl > 0 {
-			af.deadlineTimer = time.AfterFunc(ttl, func() {
-				p.mu.Lock()
-				defer p.mu.Unlock()
-				_af := p.pool[lAddr]
-				if _af == af {
-					delete(p.pool, lAddr)
-					af.Close()
-				}
-			})
 			p.pool[lAddr] = af
 		}
 		return af, true, nil
@@ -228,4 +309,18 @@ func (p *AnyfromPool) GetOrCreate(lAddr string, ttl time.Duration) (conn *Anyfro
 		p.mu.RUnlock()
 		return af, false, nil
 	}
+}
+
+func (a *Anyfrom) Close() error {
+	var err error
+	a.closeOnce.Do(func() {
+		if a.closeFunc != nil {
+			err = a.closeFunc()
+			return
+		}
+		if a.UDPConn != nil {
+			err = a.UDPConn.Close()
+		}
+	})
+	return err
 }
