@@ -87,7 +87,7 @@ type DnsController struct {
 	cancel         context.CancelFunc
 	cleanupWg      sync.WaitGroup
 	// mutex protects the dnsCache.
-	dnsCacheMu          sync.Mutex
+	dnsCacheMu          sync.RWMutex
 	dnsCache            map[string]*DnsCache
 	dnsForwarderCacheMu sync.Mutex
 	dnsForwarderCache   map[dnsForwarderKey]*cachedDnsForwarder
@@ -142,7 +142,7 @@ func NewDnsController(routing *dns.Dns, option *DnsControllerOption) (c *DnsCont
 		ctx:                   ctx,
 		cancel:                cancel,
 		cleanupWg:             sync.WaitGroup{},
-		dnsCacheMu:            sync.Mutex{},
+		dnsCacheMu:            sync.RWMutex{},
 		dnsCache:              make(map[string]*DnsCache),
 		dnsForwarderCacheMu:   sync.Mutex{},
 		dnsForwarderCache:     make(map[dnsForwarderKey]*cachedDnsForwarder),
@@ -269,10 +269,10 @@ func (c *DnsController) RemoveDnsRespCache(cacheKey string) {
 	}
 }
 func (c *DnsController) LookupDnsRespCache(cacheKey string, ignoreFixedTtl bool) (cache *DnsCache) {
-	c.dnsCacheMu.Lock()
+	c.dnsCacheMu.RLock()
 	cache, ok := c.dnsCache[cacheKey]
 	if !ok {
-		c.dnsCacheMu.Unlock()
+		c.dnsCacheMu.RUnlock()
 		return nil
 	}
 	var deadline time.Time
@@ -284,6 +284,23 @@ func (c *DnsController) LookupDnsRespCache(cacheKey string, ignoreFixedTtl bool)
 	// We should make sure the cache did not expire, or
 	// return nil and request a new lookup to refresh the cache.
 	if !deadline.After(time.Now()) {
+		c.dnsCacheMu.RUnlock()
+		c.dnsCacheMu.Lock()
+		cache, ok = c.dnsCache[cacheKey]
+		if !ok {
+			c.dnsCacheMu.Unlock()
+			return nil
+		}
+		if c.cacheExpiresAt(cache).After(time.Now()) {
+			c.dnsCacheMu.Unlock()
+			if c.cacheAccessCallback != nil {
+				if err := c.cacheAccessCallback(cache); err != nil {
+					c.log.Warnf("failed to BatchUpdateDomainRouting: %v", err)
+					return nil
+				}
+			}
+			return cache
+		}
 		delete(c.dnsCache, cacheKey)
 		c.dnsCacheMu.Unlock()
 		if c.cacheRemoveCallback != nil {
@@ -293,7 +310,7 @@ func (c *DnsController) LookupDnsRespCache(cacheKey string, ignoreFixedTtl bool)
 		}
 		return nil
 	}
-	c.dnsCacheMu.Unlock()
+	c.dnsCacheMu.RUnlock()
 	if c.cacheAccessCallback != nil {
 		if err := c.cacheAccessCallback(cache); err != nil {
 			c.log.Warnf("failed to BatchUpdateDomainRouting: %v", err)
@@ -307,6 +324,9 @@ func (c *DnsController) LookupDnsRespCache(cacheKey string, ignoreFixedTtl bool)
 func (c *DnsController) LookupDnsRespCache_(msg *dnsmessage.Msg, cacheKey string, ignoreFixedTtl bool) (resp []byte) {
 	cache := c.LookupDnsRespCache(cacheKey, ignoreFixedTtl)
 	if cache != nil {
+		if packed := cache.FillPackedResponse(msg.Id); packed != nil {
+			return packed
+		}
 		cache.FillInto(msg)
 		msg.Compress = true
 		b, err := msg.Pack()
@@ -431,6 +451,8 @@ func (c *DnsController) __updateDnsCacheDeadline(host string, dnsTyp uint16, ans
 		cache.Answer = answers
 		cache.Deadline = deadline
 		cache.OriginalDeadline = originalDeadline
+		cache.PackedResponse = nil
+		c.packCacheResponse(cache, fqdn, dnsTyp)
 		c.dnsCacheMu.Unlock()
 	} else {
 		cache, err = c.newCache(fqdn, answers, deadline, originalDeadline)
@@ -438,6 +460,7 @@ func (c *DnsController) __updateDnsCacheDeadline(host string, dnsTyp uint16, ans
 			c.dnsCacheMu.Unlock()
 			return err
 		}
+		c.packCacheResponse(cache, fqdn, dnsTyp)
 		c.dnsCache[cacheKey] = cache
 		c.dnsCacheMu.Unlock()
 	}
@@ -472,6 +495,24 @@ func (c *DnsController) UpdateDnsCacheTtl(host string, dnsTyp uint16, answers []
 			return originalDeadline, originalDeadline
 		}
 	})
+}
+
+func (c *DnsController) packCacheResponse(cache *DnsCache, qname string, qtype uint16) {
+	if cache == nil || len(cache.Answer) == 0 {
+		cache.PackedResponse = nil
+		return
+	}
+	msg := new(dnsmessage.Msg)
+	msg.SetQuestion(qname, qtype)
+	cache.FillInto(msg)
+	msg.Compress = true
+	packed, err := msg.Pack()
+	if err != nil {
+		c.log.Warnf("failed to pre-pack dns cache response: %v", err)
+		cache.PackedResponse = nil
+		return
+	}
+	cache.PackedResponse = packed
 }
 
 type udpRequest struct {
