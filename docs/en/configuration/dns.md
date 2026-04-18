@@ -80,6 +80,7 @@ dns {
 
     # Bind to local address to listen for DNS queries
     #bind: '127.0.0.1:5353'
+    # When bind is enabled, do not use "asis" in dns.routing.request because the request has already been sent to dae itself.
 
     upstream {
         # Scheme list: tcp, udp, tcp+udp, https, tls, http3, h3, quic, details see above Schema.
