@@ -12,6 +12,7 @@ import (
 )
 
 const UdpTaskQueueLength = 128
+const udpTaskSweepInterval = time.Second
 
 type UdpTask = func()
 
@@ -20,10 +21,13 @@ type UdpTaskQueue struct {
 	key       string
 	p         *UdpTaskPool
 	ch        chan UdpTask
-	timer     *time.Timer
 	agingTime time.Duration
 	ctx       context.Context
+	cancel    context.CancelFunc
 	closed    chan struct{}
+	mu        sync.Mutex
+	lastActive time.Time
+	running   bool
 }
 
 func (q *UdpTaskQueue) convoy() {
@@ -33,10 +37,28 @@ func (q *UdpTaskQueue) convoy() {
 			close(q.closed)
 			return
 		case task := <-q.ch:
+			q.mu.Lock()
+			q.running = true
+			q.mu.Unlock()
 			task()
-			q.timer.Reset(q.agingTime)
+			q.mu.Lock()
+			q.running = false
+			q.lastActive = time.Now()
+			q.mu.Unlock()
 		}
 	}
+}
+
+func (q *UdpTaskQueue) touch(now time.Time) {
+	q.mu.Lock()
+	q.lastActive = now
+	q.mu.Unlock()
+}
+
+func (q *UdpTaskQueue) expired(now time.Time) bool {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	return !q.running && len(q.ch) == 0 && !q.lastActive.Add(q.agingTime).After(now)
 }
 
 type UdpTaskPool struct {
@@ -44,21 +66,93 @@ type UdpTaskPool struct {
 	// mu protects m
 	mu sync.Mutex
 	m  map[string]*UdpTaskQueue
+	ctx context.Context
+	cancel context.CancelFunc
+	cleanupWg sync.WaitGroup
+	now func() time.Time
 }
 
 func NewUdpTaskPool() *UdpTaskPool {
+	ctx, cancel := context.WithCancel(context.Background())
 	p := &UdpTaskPool{
 		queueChPool: sync.Pool{New: func() any {
 			return make(chan UdpTask, UdpTaskQueueLength)
 		}},
 		mu: sync.Mutex{},
 		m:  map[string]*UdpTaskQueue{},
+		ctx: ctx,
+		cancel: cancel,
+		now: time.Now,
 	}
+	p.startCleanup()
 	return p
+}
+
+func (p *UdpTaskPool) startCleanup() {
+	p.cleanupWg.Add(1)
+	go func() {
+		defer p.cleanupWg.Done()
+		ticker := time.NewTicker(udpTaskSweepInterval)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-p.ctx.Done():
+				return
+			case <-ticker.C:
+				p.sweepExpiredQueues(p.now())
+			}
+		}
+	}()
+}
+
+func (p *UdpTaskPool) Count() int {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return len(p.m)
+}
+
+func (p *UdpTaskPool) sweepExpiredQueues(now time.Time) {
+	var expired []*UdpTaskQueue
+	p.mu.Lock()
+	for key, q := range p.m {
+		if !q.expired(now) {
+			continue
+		}
+		delete(p.m, key)
+		expired = append(expired, q)
+	}
+	p.mu.Unlock()
+	for _, q := range expired {
+		q.cancel()
+		<-q.closed
+		if len(q.ch) == 0 {
+			p.queueChPool.Put(q.ch)
+		}
+	}
+}
+
+func (p *UdpTaskPool) Close() {
+	p.cancel()
+	p.cleanupWg.Wait()
+	var queues []*UdpTaskQueue
+	p.mu.Lock()
+	for key, q := range p.m {
+		delete(p.m, key)
+		queues = append(queues, q)
+	}
+	p.mu.Unlock()
+	for _, q := range queues {
+		q.cancel()
+		<-q.closed
+		if len(q.ch) == 0 {
+			p.queueChPool.Put(q.ch)
+		}
+	}
 }
 
 // EmitTask: Make sure packets with the same key (4 tuples) will be sent in order.
 func (p *UdpTaskPool) EmitTask(key string, task UdpTask) {
+	now := p.now()
 	p.mu.Lock()
 	q, ok := p.m[key]
 	if !ok {
@@ -68,25 +162,16 @@ func (p *UdpTaskPool) EmitTask(key string, task UdpTask) {
 			key:       key,
 			p:         p,
 			ch:        ch,
-			timer:     nil,
 			agingTime: DefaultNatTimeout,
 			ctx:       ctx,
+			cancel:    cancel,
 			closed:    make(chan struct{}),
+			lastActive: now,
 		}
-		q.timer = time.AfterFunc(q.agingTime, func() {
-			// if timer executed, there should no task in queue.
-			// q.closed should not blocking things.
-			p.mu.Lock()
-			cancel()
-			delete(p.m, key)
-			p.mu.Unlock()
-			<-q.closed
-			if len(ch) == 0 { // Otherwise let it be GCed
-				p.queueChPool.Put(ch)
-			}
-		})
 		p.m[key] = q
 		go q.convoy()
+	} else {
+		q.touch(now)
 	}
 	p.mu.Unlock()
 	// if task cannot be executed within 180s(DefaultNatTimeout), GC may be triggered, so skip the task when GC occurs
