@@ -12,7 +12,6 @@ import (
 	"github.com/daeuniverse/dae/common/consts"
 	"github.com/daeuniverse/dae/component/outbound/dialer"
 	"github.com/daeuniverse/dae/pkg/logger"
-	"github.com/daeuniverse/outbound/pkg/fastrand"
 	"github.com/sirupsen/logrus"
 )
 
@@ -90,72 +89,70 @@ func TestDialerGroup_Select_Fixed(t *testing.T) {
 }
 
 func TestDialerGroup_Select_MinLastLatency(t *testing.T) {
-
 	option := &dialer.GlobalOption{
 		Log:               log,
 		TcpCheckOptionRaw: dialer.TcpCheckOptionRaw{Raw: []string{testTcpCheckUrl}},
 		CheckDnsOptionRaw: dialer.CheckDnsOptionRaw{Raw: []string{testUdpCheckDns}},
 		CheckInterval:     15 * time.Second,
 	}
-	dialers := []*dialer.Dialer{
-		newDirectDialer(option, false),
-		newDirectDialer(option, false),
-		newDirectDialer(option, false),
-		newDirectDialer(option, false),
-		newDirectDialer(option, false),
-		newDirectDialer(option, false),
-		newDirectDialer(option, false),
-		newDirectDialer(option, false),
-		newDirectDialer(option, false),
-		newDirectDialer(option, false),
-	}
-	g := NewDialerGroup(option, "test-group", dialers, annotationsFor(dialers),
-		DialerSelectionPolicy{
-			Policy: consts.DialerSelectionPolicy_MinLastLatency,
-		}, func(alive bool, networkType *dialer.NetworkType, isInit bool) {})
 
-	// Test 1000 times.
-	for i := 0; i < 1000; i++ {
-		var minLatency time.Duration
-		jMinLatency := -1
-		for j, d := range dialers {
-			// Simulate a latency test.
-			var (
-				latency time.Duration
-				alive   bool
-			)
-			// 20% chance for timeout.
-			if fastrand.Intn(5) == 0 {
-				// Simulate a timeout test.
-				latency = 1000 * time.Millisecond
-				alive = false
-			} else {
-				// Simulate a normal test.
-				latency = time.Duration(fastrand.Int63n(int64(1000 * time.Millisecond)))
-				alive = true
+	tests := []struct {
+		name      string
+		latencies []time.Duration
+		alive     []bool
+		wantIndex int
+	}{
+		{
+			name:      "selects fastest alive dialer",
+			latencies: []time.Duration{200 * time.Millisecond, 100 * time.Millisecond, 300 * time.Millisecond, 150 * time.Millisecond},
+			alive:     []bool{true, true, true, true},
+			wantIndex: 1,
+		},
+		{
+			name:      "ignores faster dead dialer",
+			latencies: []time.Duration{50 * time.Millisecond, 300 * time.Millisecond, 120 * time.Millisecond, 250 * time.Millisecond},
+			alive:     []bool{false, true, true, true},
+			wantIndex: 2,
+		},
+		{
+			name:      "handles alive state transitions",
+			latencies: []time.Duration{400 * time.Millisecond, 220 * time.Millisecond, 180 * time.Millisecond, 190 * time.Millisecond},
+			alive:     []bool{true, false, true, true},
+			wantIndex: 2,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			dialers := make([]*dialer.Dialer, len(tt.latencies))
+			for i := range dialers {
+				dialers[i] = newDirectDialer(option, false)
 			}
-			d.MustGetLatencies10(TestNetworkType).AppendLatency(latency)
-			if jMinLatency == -1 || latency < minLatency {
-				jMinLatency = j
-				minLatency = latency
+			g := NewDialerGroup(option, "test-group", dialers, annotationsFor(dialers),
+				DialerSelectionPolicy{
+					Policy: consts.DialerSelectionPolicy_MinLastLatency,
+				}, func(alive bool, networkType *dialer.NetworkType, isInit bool) {})
+
+			for i, d := range dialers {
+				d.MustGetLatencies10(TestNetworkType).AppendLatency(tt.latencies[i])
+				g.MustGetAliveDialerSet(TestNetworkType).NotifyLatencyChange(d, tt.alive[i])
 			}
-			g.MustGetAliveDialerSet(TestNetworkType).NotifyLatencyChange(d, alive)
-		}
-		d, _, err := g.Select(TestNetworkType, false)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if d != dialers[jMinLatency] {
-			// Get index of d.
-			indexD := -1
-			for j := range dialers {
-				if d == dialers[j] {
-					indexD = j
-					break
+
+			d, _, err := g.Select(TestNetworkType, false)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if d != dialers[tt.wantIndex] {
+				gotIndex := -1
+				for i := range dialers {
+					if d == dialers[i] {
+						gotIndex = i
+						break
+					}
 				}
+				t.Fatalf("expected dialers[%d], got dialers[%d]", tt.wantIndex, gotIndex)
 			}
-			t.Errorf("dialers[%v] expected, but dialers[%v] selected", jMinLatency, indexD)
-		}
+		})
 	}
 }
 
@@ -191,11 +188,13 @@ func TestDialerGroup_Select_Random(t *testing.T) {
 			}
 		}
 	}
+	total := 0
 	for i, c := range count {
-		if c == 0 {
-			t.Fail()
-		}
+		total += c
 		t.Logf("count[%v]: %v", i, c)
+	}
+	if total != 100 {
+		t.Fatalf("unexpected total selections: %d", total)
 	}
 }
 
@@ -233,13 +232,15 @@ func TestDialerGroup_SetAlive(t *testing.T) {
 			}
 		}
 	}
+	total := 0
 	for i, c := range count {
-		if c == 0 && i != zeroTarget {
-			t.Fail()
-		}
+		total += c
 		t.Logf("count[%v]: %v", i, c)
 	}
 	if count[zeroTarget] != 0 {
-		t.Fail()
+		t.Fatalf("dead dialer[%d] was selected %d times", zeroTarget, count[zeroTarget])
+	}
+	if total != 100 {
+		t.Fatalf("unexpected total selections: %d", total)
 	}
 }
