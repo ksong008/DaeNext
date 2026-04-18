@@ -9,6 +9,7 @@ import (
 	"encoding/hex"
 	"net/netip"
 	"testing"
+	"time"
 
 	"github.com/daeuniverse/dae/component/sniffing"
 )
@@ -46,6 +47,7 @@ func TestPacketSniffer_Normal(t *testing.T) {
 
 func TestPacketSniffer_Mismatched(t *testing.T) {
 	pool := NewPacketSnifferPool()
+	defer pool.Close()
 	dst := netip.MustParseAddrPort("2.2.2.2:2222")
 	for _, _data := range testPacketSnifferData {
 		data, _ := hex.DecodeString(_data)
@@ -71,5 +73,43 @@ func TestPacketSniffer_Mismatched(t *testing.T) {
 		}
 		t.Fatal("unexpected found", domain)
 		return
+	}
+}
+
+func TestPacketSnifferPoolSweepExpired(t *testing.T) {
+	pool := NewPacketSnifferPool()
+	defer pool.Close()
+
+	now := time.Now()
+	pool.now = func() time.Time { return now }
+	key := PacketSnifferKey{
+		LAddr: netip.MustParseAddrPort("1.1.1.1:1111"),
+		RAddr: netip.MustParseAddrPort("2.2.2.2:2222"),
+	}
+	sniffer, _ := pool.GetOrCreate(key, &PacketSnifferOptions{Ttl: time.Second})
+	sniffer.lastActive = now.Add(-2 * time.Second)
+
+	pool.sweepExpired(now)
+	if pool.Get(key) != nil {
+		t.Fatal("expected expired packet sniffer to be removed")
+	}
+}
+
+func TestPacketSnifferPoolTouchKeepsFreshEntry(t *testing.T) {
+	pool := NewPacketSnifferPool()
+	defer pool.Close()
+
+	now := time.Now()
+	pool.now = func() time.Time { return now }
+	key := PacketSnifferKey{
+		LAddr: netip.MustParseAddrPort("1.1.1.1:1112"),
+		RAddr: netip.MustParseAddrPort("2.2.2.2:2223"),
+	}
+	sniffer, _ := pool.GetOrCreate(key, &PacketSnifferOptions{Ttl: time.Second})
+	sniffer.Touch(now)
+
+	pool.sweepExpired(now)
+	if pool.Get(key) == nil {
+		t.Fatal("expected fresh packet sniffer to remain")
 	}
 }
