@@ -78,6 +78,7 @@ dns {
 
     # 绑定到本地地址以监听 DNS 查询请求
     #bind: '127.0.0.1:5353'
+    # 启用 bind 后，请不要在 dns.routing.request 中使用 "asis"，因为请求此时已经是发往 dae 自己。
 
     upstream {
         # 支持协议：tcp, udp, tcp+udp, https, tls, http3, h3, quic, 详情见上面的 Schema。

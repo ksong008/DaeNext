@@ -7,6 +7,7 @@ package control
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"math"
 	"net"
@@ -134,17 +135,22 @@ func (c *DnsController) cacheKey(qname string, qtype uint16) string {
 
 func (c *DnsController) RemoveDnsRespCache(cacheKey string) {
 	c.dnsCacheMu.Lock()
-	_, ok := c.dnsCache[cacheKey]
+	cache, ok := c.dnsCache[cacheKey]
 	if ok {
 		delete(c.dnsCache, cacheKey)
 	}
 	c.dnsCacheMu.Unlock()
+	if ok && c.cacheRemoveCallback != nil {
+		if err := c.cacheRemoveCallback(cache); err != nil {
+			c.log.Warnf("failed to remove domain routing cache: %v", err)
+		}
+	}
 }
 func (c *DnsController) LookupDnsRespCache(cacheKey string, ignoreFixedTtl bool) (cache *DnsCache) {
 	c.dnsCacheMu.Lock()
 	cache, ok := c.dnsCache[cacheKey]
-	c.dnsCacheMu.Unlock()
 	if !ok {
+		c.dnsCacheMu.Unlock()
 		return nil
 	}
 	var deadline time.Time
@@ -156,11 +162,21 @@ func (c *DnsController) LookupDnsRespCache(cacheKey string, ignoreFixedTtl bool)
 	// We should make sure the cache did not expire, or
 	// return nil and request a new lookup to refresh the cache.
 	if !deadline.After(time.Now()) {
+		delete(c.dnsCache, cacheKey)
+		c.dnsCacheMu.Unlock()
+		if c.cacheRemoveCallback != nil {
+			if err := c.cacheRemoveCallback(cache); err != nil {
+				c.log.Warnf("failed to remove expired domain routing cache: %v", err)
+			}
+		}
 		return nil
 	}
-	if err := c.cacheAccessCallback(cache); err != nil {
-		c.log.Warnf("failed to BatchUpdateDomainRouting: %v", err)
-		return nil
+	c.dnsCacheMu.Unlock()
+	if c.cacheAccessCallback != nil {
+		if err := c.cacheAccessCallback(cache); err != nil {
+			c.log.Warnf("failed to BatchUpdateDomainRouting: %v", err)
+			return nil
+		}
 	}
 	return cache
 }
@@ -303,8 +319,10 @@ func (c *DnsController) __updateDnsCacheDeadline(host string, dnsTyp uint16, ans
 		c.dnsCache[cacheKey] = cache
 		c.dnsCacheMu.Unlock()
 	}
-	if err = c.cacheAccessCallback(cache); err != nil {
-		return err
+	if c.cacheAccessCallback != nil {
+		if err = c.cacheAccessCallback(cache); err != nil {
+			return err
+		}
 	}
 
 	return nil
@@ -469,6 +487,9 @@ func (c *DnsController) handleWithResponseWriter_(
 	if err != nil {
 		return err
 	}
+	if responseWriter != nil && upstreamIndex == consts.DnsRequestOutboundIndex_AsIs {
+		return fmt.Errorf("dns request routing cannot use %q for locally bound dns listener; configure an explicit upstream instead", consts.DnsRequestOutboundIndex_AsIs.String())
+	}
 
 	cacheKey := c.cacheKey(qname, qtype)
 
@@ -582,6 +603,53 @@ func (c *DnsController) sendRejectWithResponseWriter_(dnsMessage *dnsmessage.Msg
 	return nil
 }
 
+func (c *DnsController) getDnsForwarder(upstream *dns.Upstream, dialArgument *dialArgument) (forwarder DnsForwarder, reusable bool, err error) {
+	if !dnsForwarderReusable(upstream, *dialArgument) {
+		forwarder, err = newDnsForwarder(upstream, *dialArgument)
+		return forwarder, false, err
+	}
+
+	key := dnsForwarderKey{upstream: upstream.String(), dialArgument: *dialArgument}
+	c.dnsForwarderCacheMu.Lock()
+	defer c.dnsForwarderCacheMu.Unlock()
+	forwarder, ok := c.dnsForwarderCache[key]
+	if ok {
+		return forwarder, true, nil
+	}
+	forwarder, err = newDnsForwarder(upstream, *dialArgument)
+	if err != nil {
+		return nil, false, err
+	}
+	c.dnsForwarderCache[key] = forwarder
+	return forwarder, true, nil
+}
+
+func shouldReportDnsDialFailure(err error) bool {
+	if err == nil || errors.Is(err, context.Canceled) {
+		return false
+	}
+	if errors.Is(err, context.DeadlineExceeded) {
+		return true
+	}
+	var netErr net.Error
+	return errors.As(err, &netErr) && netErr.Timeout()
+}
+
+func (c *DnsController) Close() error {
+	c.dnsForwarderCacheMu.Lock()
+	forwarders := c.dnsForwarderCache
+	c.dnsForwarderCache = make(map[dnsForwarderKey]DnsForwarder)
+	c.dnsForwarderCacheMu.Unlock()
+
+	var errs []error
+	for key, forwarder := range forwarders {
+		if err := forwarder.Close(); err != nil {
+			errs = append(errs, fmt.Errorf("close dns forwarder %q: %w", key.upstream, err))
+		}
+	}
+	return errors.Join(errs...)
+}
+
 func (c *DnsController) dialSend(invokingDepth int, req *udpRequest, data []byte, id uint16, upstream *dns.Upstream, needResp bool) (err error) {
 	if invokingDepth >= MaxDnsLookupDepth {
 		return fmt.Errorf("too deep DNS lookup invoking (depth: %v); there may be infinite loop in your DNS response routing", MaxDnsLookupDepth)
@@ -622,45 +690,39 @@ func (c *DnsController) dialSend(invokingDepth int, req *udpRequest, data []byte
 
 	// Dial and send.
 	var respMsg *dnsmessage.Msg
-	// defer in a recursive call will delay Close(), thus we Close() before
-	// the next recursive call. However, a connection cannot be closed twice.
-	// We should set a connClosed flag to avoid it.
-	var connClosed bool
-
 	ctxDial, cancel := context.WithTimeout(context.TODO(), consts.DefaultDialTimeout)
 	defer cancel()
 
-	// get forwarder from cache
-	c.dnsForwarderCacheMu.Lock()
-	forwarder, ok := c.dnsForwarderCache[dnsForwarderKey{upstream: upstream.String(), dialArgument: *dialArgument}]
-	if !ok {
-		forwarder, err = newDnsForwarder(upstream, *dialArgument)
-		if err != nil {
-			c.dnsForwarderCacheMu.Unlock()
-			return err
-		}
-		c.dnsForwarderCache[dnsForwarderKey{upstream: upstream.String(), dialArgument: *dialArgument}] = forwarder
+	forwarder, reusable, err := c.getDnsForwarder(upstream, dialArgument)
+	if err != nil {
+		return err
 	}
-	c.dnsForwarderCacheMu.Unlock()
+	closeForwarder := func() error {
+		if reusable || forwarder == nil {
+			return nil
+		}
+		err := forwarder.Close()
+		forwarder = nil
+		return err
+	}
 
 	defer func() {
-		if !connClosed {
-			forwarder.Close()
+		if closeErr := closeForwarder(); err == nil && closeErr != nil {
+			err = closeErr
 		}
 	}()
 
-	if err != nil {
-		return err
-	}
-
 	respMsg, err = forwarder.ForwardDNS(ctxDial, data)
 	if err != nil {
+		if c.timeoutExceedCallback != nil && shouldReportDnsDialFailure(err) {
+			c.timeoutExceedCallback(dialArgument, err)
+		}
 		return err
 	}
 
-	// Close conn before the recursive call.
-	forwarder.Close()
-	connClosed = true
+	if err := closeForwarder(); err != nil {
+		return err
+	}
 
 	// Route response.
 	upstreamIndex, nextUpstream, err := c.routing.ResponseSelect(respMsg, upstream)
