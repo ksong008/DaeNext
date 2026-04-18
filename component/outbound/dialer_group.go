@@ -228,8 +228,9 @@ func (g *DialerGroup) Select(networkType *dialer.NetworkType, strictIpVersion bo
 	policy := g.selectionPolicy
 	d, latency, err = g._select(networkType, policy)
 	if !strictIpVersion && errors.Is(err, ErrNoAliveDialer) {
-		networkType.IpVersion = (consts.IpVersion_X - networkType.IpVersion.ToIpVersionType()).ToIpVersionStr()
-		return g._select(networkType, policy)
+		fallbackType := *networkType
+		fallbackType.IpVersion = (consts.IpVersion_X - networkType.IpVersion.ToIpVersionType()).ToIpVersionStr()
+		return g._select(&fallbackType, policy)
 	}
 	if err == nil {
 		return d, latency, nil
@@ -262,10 +263,10 @@ func (g *DialerGroup) _select(networkType *dialer.NetworkType, policy *DialerSel
 		return d, 0, nil
 
 	case consts.DialerSelectionPolicy_Fixed:
-		if g.selectionPolicy.FixedIndex < 0 || g.selectionPolicy.FixedIndex >= len(g.Dialers) {
+		if policy.FixedIndex < 0 || policy.FixedIndex >= len(g.Dialers) {
 			return nil, 0, fmt.Errorf("selected dialer index is out of range")
 		}
-		return g.Dialers[g.selectionPolicy.FixedIndex], 0, nil
+		return g.Dialers[policy.FixedIndex], 0, nil
 
 	case consts.DialerSelectionPolicy_MinLastLatency,
 		consts.DialerSelectionPolicy_MinAverage10Latencies,

@@ -6,23 +6,27 @@
 package dialer
 
 import (
-	"container/list"
 	"sync"
 	"time"
 )
 
 type LatenciesN struct {
-	N              int
-	LastNLatencies *list.List
-	SumNLatencies  time.Duration
+	N             int
+	lastNLatencies []time.Duration
+	head          int
+	length        int
+	SumNLatencies time.Duration
 
 	mu sync.Mutex
 }
 
 func NewLatenciesN(n int) *LatenciesN {
+	if n <= 0 {
+		n = 1
+	}
 	return &LatenciesN{
 		N:              n,
-		LastNLatencies: list.New(),
+		lastNLatencies: make([]time.Duration, n),
 		SumNLatencies:  0,
 	}
 }
@@ -34,28 +38,35 @@ func NewLatenciesN(n int) *LatenciesN {
 func (ln *LatenciesN) AppendLatency(l time.Duration) {
 	ln.mu.Lock()
 	defer ln.mu.Unlock()
-	if ln.LastNLatencies.Len() >= ln.N {
-		ln.SumNLatencies -= ln.LastNLatencies.Front().Value.(time.Duration)
-		ln.LastNLatencies.Remove(ln.LastNLatencies.Front())
+	if ln.length < ln.N {
+		index := (ln.head + ln.length) % ln.N
+		ln.lastNLatencies[index] = l
+		ln.length++
+		ln.SumNLatencies += l
+		return
 	}
+
+	ln.SumNLatencies -= ln.lastNLatencies[ln.head]
+	ln.lastNLatencies[ln.head] = l
+	ln.head = (ln.head + 1) % ln.N
 	ln.SumNLatencies += l
-	ln.LastNLatencies.PushBack(l)
 }
 
 func (ln *LatenciesN) LastLatency() (time.Duration, bool) {
 	ln.mu.Lock()
 	defer ln.mu.Unlock()
-	if ln.LastNLatencies.Len() == 0 {
+	if ln.length == 0 {
 		return 0, false
 	}
-	return ln.LastNLatencies.Back().Value.(time.Duration), true
+	index := (ln.head + ln.length - 1) % ln.N
+	return ln.lastNLatencies[index], true
 }
 
 func (ln *LatenciesN) AvgLatency() (time.Duration, bool) {
 	ln.mu.Lock()
 	defer ln.mu.Unlock()
-	if ln.LastNLatencies.Len() == 0 {
+	if ln.length == 0 {
 		return 0, false
 	}
-	return ln.SumNLatencies / time.Duration(ln.LastNLatencies.Len()), true
+	return ln.SumNLatencies / time.Duration(ln.length), true
 }

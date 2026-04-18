@@ -41,6 +41,15 @@ type NetworkType struct {
 	IsDns     bool
 }
 
+type probeRequestContextKey struct{}
+
+type probeRequestConfig struct {
+	ip    netip.Addr
+	port  string
+	soMark uint32
+	mptcp bool
+}
+
 func (t *NetworkType) String() string {
 	if t.IsDns {
 		return t.StringWithoutDns() + "(DNS)"
@@ -59,6 +68,8 @@ type collection struct {
 	Latencies10       *LatenciesN
 	MovingAverage     time.Duration
 	Alive             bool
+
+	mu sync.RWMutex
 }
 
 func newCollection() *collection {
@@ -67,6 +78,18 @@ func newCollection() *collection {
 		Latencies10:       NewLatenciesN(10),
 		Alive:             true,
 	}
+}
+
+func (c *collection) AliveSnapshot() bool {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return c.Alive
+}
+
+func (c *collection) MovingAverageSnapshot() time.Duration {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return c.MovingAverage
 }
 
 func (d *Dialer) mustGetCollection(typ *NetworkType) *collection {
@@ -110,7 +133,7 @@ func (d *Dialer) mustGetCollection(typ *NetworkType) *collection {
 }
 
 func (d *Dialer) MustGetAlive(typ *NetworkType) bool {
-	return d.mustGetCollection(typ).Alive
+	return d.mustGetCollection(typ).AliveSnapshot()
 }
 
 func parseIp46FromList(ip []string) *netutils.Ip46 {
@@ -435,52 +458,90 @@ func (d *Dialer) aliveBackground() {
 		tcp6CheckDnsOpt,
 	}
 
-	ctx, cancel := context.WithCancel(d.ctx)
-	defer cancel()
-	go func() {
-		/// Splice ticker.C to checkCh.
-		// Sleep to avoid avalanche.
-		time.Sleep(time.Duration(fastrand.Int63n(int64(cycle))))
-		d.tickerMu.Lock()
-		d.ticker = time.NewTicker(cycle)
-		d.tickerMu.Unlock()
-		for t := range d.ticker.C {
-			select {
-			case <-ctx.Done():
-				return
-			default:
-				d.checkCh <- t
-			}
-		}
-	}()
-	var unused int
-	for _, opt := range CheckOpts {
-		if len(d.mustGetCollection(opt.networkType).AliveDialerSetSet) == 0 {
-			unused++
-		}
-	}
-	if unused == len(CheckOpts) {
-		d.Log.WithField("dialer", d.Property().Name).
-			WithField("p", unsafe.Pointer(d)).
-			Traceln("cleaned up due to unused")
-		return
-	}
-	var wg sync.WaitGroup
-	for range d.checkCh {
-		for _, opt := range CheckOpts {
-			// No need to test if there is no dialer selection policy using its latency.
-			if len(d.mustGetCollection(opt.networkType).AliveDialerSetSet) == 0 {
-				continue
-			}
+	activeCheckOptions := func() []*CheckOption {
+		d.collectionFineMu.RLock()
+		defer d.collectionFineMu.RUnlock()
 
+		active := make([]*CheckOption, 0, len(CheckOpts))
+		for _, opt := range CheckOpts {
+			if len(d.mustGetCollection(opt.networkType).AliveDialerSetSet) > 0 {
+				active = append(active, opt)
+			}
+		}
+		return active
+	}
+
+	stopTicker := func() {
+		d.tickerMu.Lock()
+		if d.ticker != nil {
+			d.ticker.Stop()
+			d.ticker = nil
+		}
+		d.tickerMu.Unlock()
+	}
+
+	startTicker := func() {
+		if cycle <= 0 {
+			return
+		}
+		d.tickerMu.Lock()
+		if d.ticker == nil {
+			d.ticker = time.NewTicker(cycle)
+		}
+		d.tickerMu.Unlock()
+	}
+
+	runChecks := func(checkOpts []*CheckOption) {
+		var wg sync.WaitGroup
+		for _, opt := range checkOpts {
 			wg.Add(1)
 			go func(opt *CheckOption) {
+				defer wg.Done()
 				_, _ = d.Check(opt)
-				wg.Done()
 			}(opt)
 		}
-		// Wait to block the loop.
 		wg.Wait()
+	}
+
+	initialDelay := time.Duration(0)
+	if cycle > 0 {
+		initialDelay = time.Duration(fastrand.Int63n(int64(cycle)))
+	}
+	initialTimer := time.NewTimer(initialDelay)
+	defer initialTimer.Stop()
+
+	for {
+		var initialC <-chan time.Time
+		if initialTimer != nil {
+			initialC = initialTimer.C
+		}
+		var tickerC <-chan time.Time
+		d.tickerMu.Lock()
+		if d.ticker != nil {
+			tickerC = d.ticker.C
+		}
+		d.tickerMu.Unlock()
+
+		select {
+		case <-d.ctx.Done():
+			stopTicker()
+			return
+		case <-initialC:
+			initialTimer = nil
+		case <-tickerC:
+		case <-d.checkCh:
+		}
+
+		checkOpts := activeCheckOptions()
+		if len(checkOpts) == 0 {
+			stopTicker()
+			d.Log.WithField("dialer", d.Property().Name).
+				WithField("p", unsafe.Pointer(d)).
+				Traceln("health checks idle due to unused dialer sets")
+			continue
+		}
+		startTicker()
+		runChecks(checkOpts)
 	}
 }
 
@@ -511,6 +572,7 @@ func (d *Dialer) RegisterAliveDialerSet(a *AliveDialerSet) {
 	d.collectionFineMu.Lock()
 	d.mustGetCollection(a.CheckTyp).AliveDialerSetSet[a]++
 	d.collectionFineMu.Unlock()
+	d.NotifyCheck()
 }
 
 // UnregisterAliveDialerSet is thread-safe.
@@ -519,12 +581,13 @@ func (d *Dialer) UnregisterAliveDialerSet(a *AliveDialerSet) {
 		return
 	}
 	d.collectionFineMu.Lock()
-	defer d.collectionFineMu.Unlock()
 	setSet := d.mustGetCollection(a.CheckTyp).AliveDialerSetSet
 	setSet[a]--
 	if setSet[a] <= 0 {
 		delete(setSet, a)
 	}
+	d.collectionFineMu.Unlock()
+	d.NotifyCheck()
 }
 
 func (d *Dialer) logUnavailable(
@@ -547,18 +610,21 @@ func (d *Dialer) logUnavailable(
 		}).Debugln("Connectivity Check Failed")
 	}
 	collection.Latencies10.AppendLatency(Timeout)
+	collection.mu.Lock()
 	collection.MovingAverage = (collection.MovingAverage + Timeout) / 2
 	collection.Alive = false
+	collection.mu.Unlock()
 }
 
 func (d *Dialer) informDialerGroupUpdate(collection *collection) {
+	alive := collection.AliveSnapshot()
 	// Inform DialerGroups to update state.
 	// We use lock because AliveDialerSetSet is a reference of that in collection.
-	d.collectionFineMu.Lock()
+	d.collectionFineMu.RLock()
 	for a := range collection.AliveDialerSetSet {
-		a.NotifyLatencyChange(d, collection.Alive)
+		a.NotifyLatencyChange(d, alive)
 	}
-	d.collectionFineMu.Unlock()
+	d.collectionFineMu.RUnlock()
 }
 
 func (d *Dialer) ReportUnavailable(typ *NetworkType, err error) {
@@ -578,15 +644,18 @@ func (d *Dialer) Check(opts *CheckOption) (ok bool, err error) {
 		latency := time.Since(start)
 		collection.Latencies10.AppendLatency(latency)
 		avg, _ := collection.Latencies10.AvgLatency()
+		collection.mu.Lock()
 		collection.MovingAverage = (collection.MovingAverage + latency) / 2
 		collection.Alive = true
+		movingAverage := collection.MovingAverage
+		collection.mu.Unlock()
 
 		d.Log.WithFields(logrus.Fields{
 			"network": opts.networkType.String(),
 			"node":    d.property.Name,
 			"last":    latency.Truncate(time.Millisecond).String(),
 			"avg_10":  avg.Truncate(time.Millisecond),
-			"mov_avg": collection.MovingAverage.Truncate(time.Millisecond),
+			"mov_avg": movingAverage.Truncate(time.Millisecond),
 		}).Debugln("Connectivity Check")
 	} else {
 		d.logUnavailable(collection, opts.networkType, err)
@@ -600,27 +669,17 @@ func (d *Dialer) HttpCheck(ctx context.Context, u *netutils.URL, ip netip.Addr, 
 	if method == "" {
 		method = http.MethodGet
 	}
-	cli := http.Client{
-		Transport: &http.Transport{
-			DialContext: func(ctx context.Context, network, addr string) (c net.Conn, err error) {
-				// Force to dial "ip".
-				conn, err := d.Dialer.DialContext(ctx, common.MagicNetwork("tcp", soMark, mptcp), net.JoinHostPort(ip.String(), u.Port()))
-				if err != nil {
-					return nil, err
-				}
-				return &netproxy.FakeNetConn{
-					Conn:  conn,
-					LAddr: nil,
-					RAddr: nil,
-				}, nil
-			},
-		},
-	}
+	ctx = context.WithValue(ctx, probeRequestContextKey{}, &probeRequestConfig{
+		ip:     ip,
+		port:   u.Port(),
+		soMark: soMark,
+		mptcp:  mptcp,
+	})
 	req, err := http.NewRequestWithContext(ctx, method, u.String(), nil)
 	if err != nil {
 		return false, err
 	}
-	resp, err := cli.Do(req)
+	resp, err := d.probeHTTPClient.Do(req)
 	if err != nil {
 		var netErr net.Error
 		if errors.As(err, &netErr); netErr.Timeout() {
