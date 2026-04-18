@@ -143,6 +143,27 @@ Changes:
   - otherwise use the requested qtype result
 - This reduces unnecessary waiting and cuts duplicate upstream work on the common path.
 
+### E. DNS cache / forwarder cleanup and long-running memory control
+
+Files:
+
+- `control/dns_control.go`
+- `control/dns_control_test.go`
+
+Changes:
+
+- Added background cleanup workers to `DnsController`.
+- Added periodic DNS cache sweeping for expired entries.
+- Expired cache removal now actively calls `cacheRemoveCallback`, which helps keep kernel-side domain routing in sync.
+- Added DNS forwarder cache idle eviction.
+- Added DNS forwarder cache capacity cap and oldest-entry eviction when the cache is full.
+- Added controller lifecycle handling so background cleanup goroutines are stopped on `Close()`.
+- Added tests for:
+  - cache expiry sweep behavior
+  - respecting the latest effective deadline
+  - forwarder idle eviction
+  - forwarder oldest-entry eviction when cache is full
+
 ## Validation Workflow Changes
 
 File:
@@ -193,6 +214,7 @@ Summary:
 - `f627094` Improve daecore unit failure diagnostics
 - `d565dd1` Stabilize outbound dialer group tests
 - `e1f77b0` Refresh DNS upstreams and streamline ip preference
+- `461f66b` Add DNS cache and forwarder cleanup
 
 ## Current Validation Strategy
 
@@ -204,8 +226,10 @@ Summary:
 
 ### 1. Cache eviction / cleanup strategy
 
-- Move beyond “expire then miss”.
-- Add explicit cleanup/tombstone/GC strategy for DNS cache entries and domain-routing sync.
+- Completed in a first useful form.
+- Remaining work:
+  - consider configurable cache size / policy per deployment
+  - consider richer eviction signals beyond idle time and hard cap
 
 ### 2. Make upstream refresh configurable
 
@@ -223,8 +247,19 @@ Summary:
 
 ### 4. Evaluate whether reusable forwarders need bounded cache size
 
-- Current reuse logic is safer than before, but long-lived cache growth should still be watched under many upstream/path combinations.
+- Basic cap + idle eviction has been added.
+- Remaining work:
+  - measure whether the default cap is appropriate
+  - decide whether protocol-specific caps are needed
 
-### 5. Revisit remaining package-level test stability
+### 5. Optimize cache hit hot path
+
+- Still not done yet.
+- Opportunities:
+  - replace `dnsCacheMu sync.Mutex` with a read-optimized structure (`RWMutex` or sharded maps)
+  - pre-pack cached DNS responses to reduce `deepcopy + pack` on cache hits
+  - minimize lock hold time on high-QPS DNS cache lookups
+
+### 6. Revisit remaining package-level test stability
 
 - Keep improving `daecore` until it provides a dependable branch-gating signal for broader changes, not just DNS.
