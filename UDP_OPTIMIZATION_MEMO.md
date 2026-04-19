@@ -303,6 +303,50 @@ Tests added:
 - expired sniffers are swept
 - fresh sniffers remain after touch
 
+### E. Outbound stability PR follow-up
+
+PR:
+
+- `#1 stabilize outbound dialer checks and selection`
+
+Files involved:
+
+- `component/outbound/dialer/alive_dialer_set.go`
+- `component/outbound/dialer/connectivity_check.go`
+- `component/outbound/dialer/dialer.go`
+- `component/outbound/dialer/latencies_n.go`
+- `component/outbound/dialer_group.go`
+- `component/outbound/dialer_group_test.go`
+- `go.mod`
+
+Review summary:
+
+- The overall direction was reasonable and aligned with the post-UDP stabilization goals:
+  - cleaner health-check lifecycle
+  - safer dialer reselection
+  - lower allocation overhead
+  - no new user-facing behavior
+- A concrete build blocker was found during review:
+  - an unused import in `component/outbound/dialer/connectivity_check.go`
+- After removing that import, Linux-targeted package compilation for outbound-related packages was able to proceed again.
+- The branch also needed the corresponding `go.sum` entries for the forked `github.com/ksong008/outbound` replacement.
+
+Follow-up changes applied before merge:
+
+- Removed the unused import in `component/outbound/dialer/connectivity_check.go`.
+- Added the missing `go.sum` entries for the forked outbound dependency.
+- Re-pushed the PR branch after the fix.
+
+Merge result:
+
+- The PR branch was merged into `personal/stable`.
+- Merge tip:
+  - `a7a96d1` `Fix outbound stability PR build blockers`
+
+Tag:
+
+- `outboundmod`
+
 ## Current Conclusion
 
 Short version:
@@ -310,16 +354,17 @@ Short version:
 - UDP is the next most important subsystem after DNS.
 - No confirmed major leak has been proven yet.
 - The design has several structures that can become expensive under scale.
+- The first UDP lifecycle pass is done, and the next adjacent stabilization work has already extended into outbound health-check and selection logic.
 - Follow-up work should focus on lifecycle cost and upper bounds, not on adding new features.
 
 ## Next Step
 
 Recommended immediate next step:
 
-- Perform a dedicated lifecycle audit and optimization pass on `UdpEndpointPool`
+- Keep UDP and outbound behavior under real traffic observation instead of expanding the design surface.
 
-Once that is complete, continue to:
+If follow-up work is needed, prefer:
 
-- `UdpTaskPool`
-- `AnyfromPool`
-- `PacketSnifferPool`
+- validating long-running memory behavior under real workload
+- checking whether outbound health-check changes introduce any selection regressions
+- only then making small, targeted stability fixes
