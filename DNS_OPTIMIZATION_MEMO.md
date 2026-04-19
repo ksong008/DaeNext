@@ -1,7 +1,7 @@
 # DNS Optimization Memo
 
 Date: 2026-04-18
-Branch: `personal/test-dns`
+Branch: `personal/stable`
 
 ## Background
 
