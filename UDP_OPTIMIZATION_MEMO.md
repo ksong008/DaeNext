@@ -1,7 +1,7 @@
 # UDP Optimization Memo
 
 Date: 2026-04-19
-Branch: `personal/test-dns`
+Branch: `personal/stable`
 
 ## Goal
 
