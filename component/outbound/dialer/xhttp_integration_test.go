@@ -24,15 +24,88 @@ import (
 	_ "github.com/daeuniverse/dae/component/outbound"
 	daedialer "github.com/daeuniverse/dae/component/outbound/dialer"
 	"github.com/daeuniverse/dae/config"
+	outboundprotocol "github.com/daeuniverse/outbound/protocol"
 	outbounddirect "github.com/daeuniverse/outbound/protocol/direct"
+	outboundvless "github.com/daeuniverse/outbound/protocol/vless"
+	outboundvmess "github.com/daeuniverse/outbound/protocol/vmess"
 	"github.com/daeuniverse/quic-go"
 	"github.com/daeuniverse/quic-go/http3"
 	"github.com/sirupsen/logrus"
 )
 
 type h3Session struct {
-	reader *io.PipeReader
-	writer *io.PipeWriter
+	uploadReader   *io.PipeReader
+	uploadWriter   *io.PipeWriter
+	downloadReader *io.PipeReader
+	downloadWriter *io.PipeWriter
+	once           sync.Once
+}
+
+type loopConn struct {
+	r *io.PipeReader
+	w *io.PipeWriter
+}
+
+func (c *loopConn) Read(p []byte) (int, error)  { return c.r.Read(p) }
+func (c *loopConn) Write(p []byte) (int, error) { return c.w.Write(p) }
+func (c *loopConn) Close() error {
+	_ = c.r.Close()
+	_ = c.w.Close()
+	return nil
+}
+func (c *loopConn) SetDeadline(time.Time) error      { return nil }
+func (c *loopConn) SetReadDeadline(time.Time) error  { return nil }
+func (c *loopConn) SetWriteDeadline(time.Time) error { return nil }
+
+func newSession(t *testing.T) *h3Session {
+	uploadReader, uploadWriter := io.Pipe()
+	downloadReader, downloadWriter := io.Pipe()
+	s := &h3Session{
+		uploadReader:   uploadReader,
+		uploadWriter:   uploadWriter,
+		downloadReader: downloadReader,
+		downloadWriter: downloadWriter,
+	}
+	s.once.Do(func() {
+		go func() {
+			defer downloadWriter.Close()
+			key, err := outboundvless.Password2Key("uuid")
+			if err != nil {
+				t.Logf("server key error: %v", err)
+				return
+			}
+			conn, err := outboundvless.NewConn(&loopConn{
+				r: uploadReader,
+				w: downloadWriter,
+			}, outboundvless.Metadata{
+				Metadata: outboundvmess.Metadata{
+					Metadata: outboundprotocol.Metadata{
+						IsClient: false,
+					},
+					Network: "tcp",
+				},
+			}, key)
+			if err != nil {
+				t.Logf("server new conn error: %v", err)
+				return
+			}
+			buf := make([]byte, 64*1024)
+			n, err := conn.Read(buf)
+			if err != nil {
+				t.Logf("server read error: %v", err)
+				return
+			}
+			if _, err := conn.IntrinsicConn().Write([]byte{0, 0}); err != nil {
+				t.Logf("server write response header error: %v", err)
+				return
+			}
+			if _, err := conn.Write(buf[:n]); err != nil {
+				t.Logf("server write payload error: %v", err)
+				return
+			}
+		}()
+	})
+	return s
 }
 
 func generateSelfSignedCert(t *testing.T) tls.Certificate {
@@ -86,8 +159,7 @@ func TestNewFromLinkXHTTPH3Auto(t *testing.T) {
 		if sess, ok := sessions[key]; ok {
 			return sess
 		}
-		pr, pw := io.Pipe()
-		sess := &h3Session{reader: pr, writer: pw}
+		sess := newSession(t)
 		sessions[key] = sess
 		return sess
 	}
@@ -103,7 +175,7 @@ func TestNewFromLinkXHTTPH3Auto(t *testing.T) {
 			}
 			buf := make([]byte, 32*1024)
 			for {
-				n, err := sess.reader.Read(buf)
+				n, err := sess.downloadReader.Read(buf)
 				if n > 0 {
 					if _, writeErr := w.Write(buf[:n]); writeErr != nil {
 						return
@@ -117,8 +189,8 @@ func TestNewFromLinkXHTTPH3Auto(t *testing.T) {
 				}
 			}
 		case http.MethodPost:
-			defer sess.writer.Close()
-			if _, err := io.Copy(sess.writer, r.Body); err != nil {
+			defer sess.uploadWriter.Close()
+			if _, err := io.Copy(sess.uploadWriter, r.Body); err != nil {
 				t.Logf("server copy error: %v", err)
 				return
 			}
@@ -171,11 +243,6 @@ func TestNewFromLinkXHTTPH3Auto(t *testing.T) {
 	payload := []byte("hello through dae xhttp h3")
 	if _, err := conn.Write(payload); err != nil {
 		t.Fatalf("write payload: %v", err)
-	}
-	if xc, ok := conn.(interface{ CloseWrite() error }); ok {
-		if err := xc.CloseWrite(); err != nil {
-			t.Fatalf("close write: %v", err)
-		}
 	}
 	buf := make([]byte, len(payload))
 	if _, err := io.ReadFull(conn, buf); err != nil {
