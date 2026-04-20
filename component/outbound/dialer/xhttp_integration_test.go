@@ -172,6 +172,11 @@ func TestNewFromLinkXHTTPH3Auto(t *testing.T) {
 	if _, err := conn.Write(payload); err != nil {
 		t.Fatalf("write payload: %v", err)
 	}
+	if xc, ok := conn.(interface{ CloseWrite() error }); ok {
+		if err := xc.CloseWrite(); err != nil {
+			t.Fatalf("close write: %v", err)
+		}
+	}
 	buf := make([]byte, len(payload))
 	if _, err := io.ReadFull(conn, buf); err != nil {
 		t.Fatalf("read payload: %v", err)
