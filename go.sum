@@ -114,6 +114,8 @@ github.com/ksong008/outbound v0.0.0-20260420130152-ea7b509231d3 h1:m8wRMPcDVYDJ5
 github.com/ksong008/outbound v0.0.0-20260420130152-ea7b509231d3/go.mod h1:fywFXIIfFeyG+oMat6h7MExY99CNtERbhrH0DYSr/6g=
 github.com/ksong008/outbound v0.0.0-20260420130711-9c5b1b8d9c2a h1:95eo1xpxOi8G7mLIFKrZOJZru0E+MWsXT3tK4WPX8NY=
 github.com/ksong008/outbound v0.0.0-20260420130711-9c5b1b8d9c2a/go.mod h1:fywFXIIfFeyG+oMat6h7MExY99CNtERbhrH0DYSr/6g=
+github.com/ksong008/outbound v0.0.0-20260421034542-9f360270ae04 h1:uW4oVYIWe+0l0PF+AdAptQWxSjEX8qgrRJQJSzemVTI=
+github.com/ksong008/outbound v0.0.0-20260421034542-9f360270ae04/go.mod h1:fywFXIIfFeyG+oMat6h7MExY99CNtERbhrH0DYSr/6g=
 github.com/lufia/plan9stats v0.0.0-20211012122336-39d0f177ccd0 h1:6E+4a0GO5zZEnZ81pIr0yLvtUWk2if982qA3F3QD6H4=
 github.com/lufia/plan9stats v0.0.0-20211012122336-39d0f177ccd0/go.mod h1:zJYVVT2jmtg6P3p1VtQj7WsuWi/y4VnjVBn7F8KPB3I=
 github.com/mattn/go-colorable v0.1.13 h1:fFA4WZxdEF4tXPZVKMLwD8oUnCTTo08duU7wxecdEvA=
