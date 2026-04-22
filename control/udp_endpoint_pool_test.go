@@ -102,3 +102,47 @@ func TestUdpEndpointPoolCloseClosesEntries(t *testing.T) {
 		t.Fatalf("expected pool close to close conn once, got %d", conn.closeCount)
 	}
 }
+
+func TestUdpEndpointPoolEvictOldestEndpoint(t *testing.T) {
+	pool := NewUdpEndpointPool()
+	defer pool.Close()
+
+	now := time.Now()
+	pool.now = func() time.Time { return now }
+
+	oldestAddr := netip.MustParseAddrPort("127.0.0.1:20001")
+	oldestConn := &fakePacketConn{}
+	pool.pool.Store(oldestAddr, &UdpEndpoint{
+		conn:       oldestConn,
+		NatTimeout: time.Minute,
+		lastActive: now.Add(-2 * time.Minute),
+	})
+
+	newerAddr := netip.MustParseAddrPort("127.0.0.1:20002")
+	newerConn := &fakePacketConn{}
+	pool.pool.Store(newerAddr, &UdpEndpoint{
+		conn:       newerConn,
+		NatTimeout: time.Minute,
+		lastActive: now.Add(-time.Minute),
+	})
+
+	evicted := pool.evictOldestEndpoint(now)
+	if evicted == nil {
+		t.Fatal("expected an endpoint to be evicted")
+	}
+	if err := evicted.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := pool.Get(oldestAddr); ok {
+		t.Fatal("expected oldest endpoint to be removed")
+	}
+	if _, ok := pool.Get(newerAddr); !ok {
+		t.Fatal("expected newer endpoint to remain")
+	}
+	if oldestConn.closeCount != 1 {
+		t.Fatalf("expected oldest endpoint conn to be closed once, got %d", oldestConn.closeCount)
+	}
+	if newerConn.closeCount != 0 {
+		t.Fatalf("expected newer endpoint conn to remain open, got %d closes", newerConn.closeCount)
+	}
+}

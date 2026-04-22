@@ -113,3 +113,39 @@ func TestPacketSnifferPoolTouchKeepsFreshEntry(t *testing.T) {
 		t.Fatal("expected fresh packet sniffer to remain")
 	}
 }
+
+func TestPacketSnifferPoolEvictsOldest(t *testing.T) {
+	pool := NewPacketSnifferPool()
+	defer pool.Close()
+
+	now := time.Now()
+	pool.now = func() time.Time { return now }
+
+	oldestKey := PacketSnifferKey{
+		LAddr: netip.MustParseAddrPort("1.1.1.1:30001"),
+		RAddr: netip.MustParseAddrPort("2.2.2.2:30001"),
+	}
+	oldest, _ := pool.GetOrCreate(oldestKey, &PacketSnifferOptions{Ttl: time.Minute})
+	oldest.lastActive = now.Add(-2 * time.Minute)
+
+	newerKey := PacketSnifferKey{
+		LAddr: netip.MustParseAddrPort("1.1.1.1:30002"),
+		RAddr: netip.MustParseAddrPort("2.2.2.2:30002"),
+	}
+	newer, _ := pool.GetOrCreate(newerKey, &PacketSnifferOptions{Ttl: time.Minute})
+	newer.lastActive = now.Add(-time.Minute)
+
+	evicted := pool.evictOldest(now)
+	if evicted == nil {
+		t.Fatal("expected a sniffer to be evicted")
+	}
+	if err := evicted.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if pool.Get(oldestKey) != nil {
+		t.Fatal("expected oldest packet sniffer to be removed")
+	}
+	if pool.Get(newerKey) == nil {
+		t.Fatal("expected newer packet sniffer to remain")
+	}
+}
