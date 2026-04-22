@@ -8,7 +8,6 @@ package control
 import (
 	"context"
 	"fmt"
-	"net/netip"
 	"os"
 	"regexp"
 	"sync"
