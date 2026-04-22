@@ -20,7 +20,10 @@ import (
 	"github.com/daeuniverse/outbound/pool"
 )
 
-const udpEndpointSweepInterval = time.Second
+const (
+	udpEndpointSweepInterval = time.Second
+	udpEndpointPoolMaxEntries = 2048
+)
 
 type UdpHandler func(data []byte, from netip.AddrPort) error
 
@@ -145,6 +148,50 @@ func (p *UdpEndpointPool) sweepExpiredEndpoints(now time.Time) {
 	})
 }
 
+func (p *UdpEndpointPool) evictOldestEndpoint(now time.Time) *UdpEndpoint {
+	var (
+		oldestKey  netip.AddrPort
+		oldest     *UdpEndpoint
+		oldestTime time.Time
+		oldestSeen bool
+	)
+
+	p.pool.Range(func(key, value any) bool {
+		addr := key.(netip.AddrPort)
+		ue := value.(*UdpEndpoint)
+		if ue.Expired(now) {
+			if p.pool.CompareAndDelete(addr, ue) {
+				oldest = ue
+				oldestSeen = true
+				return false
+			}
+			return true
+		}
+
+		ue.mu.Lock()
+		lastActive := ue.lastActive
+		ue.mu.Unlock()
+		if !oldestSeen || lastActive.Before(oldestTime) {
+			oldestKey = addr
+			oldest = ue
+			oldestTime = lastActive
+			oldestSeen = true
+		}
+		return true
+	})
+
+	if oldest == nil {
+		return nil
+	}
+	if oldestTime.IsZero() {
+		return oldest
+	}
+	if p.pool.CompareAndDelete(oldestKey, oldest) {
+		return oldest
+	}
+	return nil
+}
+
 func (p *UdpEndpointPool) Close() error {
 	p.cancel()
 	p.cleanupWg.Wait()
@@ -241,6 +288,11 @@ begin:
 			}
 		}
 		_ue = ue
+		if p.Count() >= udpEndpointPoolMaxEntries {
+			if evicted := p.evictOldestEndpoint(p.now()); evicted != nil {
+				_ = evicted.Close()
+			}
+		}
 		p.pool.Store(lAddr, ue)
 		// Receive UDP messages.
 		go ue.start()
