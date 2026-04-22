@@ -6,6 +6,7 @@
 package control
 
 import (
+	"fmt"
 	"testing"
 	"time"
 )
@@ -88,5 +89,39 @@ func TestAnyfromPoolCloseClosesEntries(t *testing.T) {
 	}
 	if pool.Count() != 0 {
 		t.Fatalf("expected pool to be empty after close, got %d entries", pool.Count())
+	}
+}
+
+func TestAnyfromPoolEvictsOldestWhenFull(t *testing.T) {
+	pool := NewAnyfromPool()
+	defer pool.Close()
+
+	now := time.Now()
+	pool.now = func() time.Time { return now }
+
+	closeCount := 0
+	for i := 0; i < anyfromPoolMaxEntries; i++ {
+		pool.pool[fmt.Sprintf("127.0.0.1:%d", 20000+i)] = &Anyfrom{
+			ttl:        time.Minute,
+			lastActive: now.Add(time.Duration(-i) * time.Second),
+			closeFunc: func() error {
+				closeCount++
+				return nil
+			},
+		}
+	}
+
+	evicted := pool.evictOldestLocked(now)
+	if evicted == nil {
+		t.Fatal("expected oldest entry to be evicted")
+	}
+	if pool.Count() != anyfromPoolMaxEntries-1 {
+		t.Fatalf("expected one entry to be evicted, got %d entries", pool.Count())
+	}
+	if err := evicted.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if closeCount != 1 {
+		t.Fatalf("expected evicted entry to close once, got %d", closeCount)
 	}
 }
