@@ -448,9 +448,12 @@ func NewControlPlane(
 			return nil
 		},
 		NewCache: func(fqdn string, answers []dnsmessage.RR, deadline time.Time, originalDeadline time.Time) (cache *DnsCache, err error) {
+			ips, hasAnyIP := summarizeDNSAnswers(answers)
 			return &DnsCache{
 				DomainBitmap:     plane.routingMatcher.domainMatcher.MatchDomainBitmap(fqdn),
 				Answer:           answers,
+				IPs:              ips,
+				HasAnyIP:         hasAnyIP,
 				Deadline:         deadline,
 				OriginalDeadline: originalDeadline,
 			}, nil
