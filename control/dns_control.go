@@ -447,8 +447,11 @@ func (c *DnsController) __updateDnsCacheDeadline(host string, dnsTyp uint16, ans
 	cacheKey := c.cacheKey(fqdn, dnsTyp)
 	c.dnsCacheMu.Lock()
 	cache, ok := c.dnsCache[cacheKey]
+	ips, hasAnyIP := summarizeDNSAnswers(answers)
 	if ok {
 		cache.Answer = answers
+		cache.IPs = ips
+		cache.HasAnyIP = hasAnyIP
 		cache.Deadline = deadline
 		cache.OriginalDeadline = originalDeadline
 		cache.PackedResponse = nil
@@ -513,6 +516,7 @@ func (c *DnsController) packCacheResponse(cache *DnsCache, qname string, qtype u
 		return
 	}
 	cache.PackedResponse = packed
+	cache.Answer = nil
 }
 
 type udpRequest struct {
