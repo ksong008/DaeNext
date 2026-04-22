@@ -22,7 +22,10 @@ import (
 	"golang.org/x/sys/unix"
 )
 
-const anyfromSweepInterval = time.Second
+const (
+	anyfromSweepInterval = time.Second
+	anyfromPoolMaxEntries = 256
+)
 
 type Anyfrom struct {
 	*net.UDPConn
@@ -247,6 +250,38 @@ func (p *AnyfromPool) sweepExpired(now time.Time) {
 	}
 }
 
+func (p *AnyfromPool) evictOldestLocked(now time.Time) *Anyfrom {
+	var (
+		oldestKey  string
+		oldest     *Anyfrom
+		oldestTime time.Time
+		oldestSeen bool
+	)
+
+	for key, af := range p.pool {
+		if af.Expired(now) {
+			delete(p.pool, key)
+			return af
+		}
+
+		af.mu.Lock()
+		lastActive := af.lastActive
+		af.mu.Unlock()
+		if !oldestSeen || lastActive.Before(oldestTime) {
+			oldestKey = key
+			oldest = af
+			oldestTime = lastActive
+			oldestSeen = true
+		}
+	}
+
+	if !oldestSeen {
+		return nil
+	}
+	delete(p.pool, oldestKey)
+	return oldest
+}
+
 func (p *AnyfromPool) Close() error {
 	p.cancel()
 	p.cleanupWg.Wait()
@@ -301,6 +336,11 @@ func (p *AnyfromPool) GetOrCreate(lAddr string, ttl time.Duration) (conn *Anyfro
 		}
 
 		if ttl > 0 {
+			if len(p.pool) >= anyfromPoolMaxEntries {
+				if evicted := p.evictOldestLocked(p.now()); evicted != nil {
+					_ = evicted.Close()
+				}
+			}
 			p.pool[lAddr] = af
 		}
 		return af, true, nil
