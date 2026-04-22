@@ -254,11 +254,11 @@ loop:
 
 			// New control plane.
 			obj := c.EjectBpf()
+			// Do not clone dns cache on reload.
+			// The current reload path does not restore that cloned cache into the
+			// new controller/domain-routing state, so copying it here only adds
+			// reload-time allocations without preserving useful runtime state.
 			var dnsCache map[string]*control.DnsCache
-			if conf.Dns.IpVersionPrefer == newConf.Dns.IpVersionPrefer {
-				// Only keep dns cache when ip version preference not change.
-				dnsCache = c.CloneDnsCache()
-			}
 			// Stop old DNS listener before creating new one to avoid port conflicts
 			if err := c.StopDNSListener(); err != nil {
 				log.Warnf("[Reload] Failed to stop old DNS listener: %v", err)

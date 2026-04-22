@@ -19,7 +19,6 @@ import (
 	"github.com/daeuniverse/dae/common/consts"
 	"github.com/daeuniverse/dae/component"
 	internal "github.com/daeuniverse/dae/pkg/ebpf_internal"
-	dnsmessage "github.com/miekg/dns"
 	"github.com/mohae/deepcopy"
 	"github.com/safchain/ethtool"
 	"github.com/sirupsen/logrus"
@@ -604,24 +603,7 @@ func (c *controlPlaneCore) bindDaens() (err error) {
 // BatchUpdateDomainRouting update bpf map domain_routing. Since one IP may have multiple domains, this function should
 // be invoked every A/AAAA-record lookup.
 func (c *controlPlaneCore) BatchUpdateDomainRouting(cache *DnsCache) error {
-	// Parse ips from DNS resp answers.
-	var ips []netip.Addr
-	for _, ans := range cache.Answer {
-		var (
-			ip netip.Addr
-			ok bool
-		)
-		switch body := ans.(type) {
-		case *dnsmessage.A:
-			ip, ok = netip.AddrFromSlice(body.A)
-		case *dnsmessage.AAAA:
-			ip, ok = netip.AddrFromSlice(body.AAAA)
-		}
-		if !ok || ip.IsUnspecified() {
-			continue
-		}
-		ips = append(ips, ip)
-	}
+	ips := cache.cachedIPs()
 	if len(ips) == 0 {
 		return nil
 	}
@@ -650,24 +632,7 @@ func (c *controlPlaneCore) BatchUpdateDomainRouting(cache *DnsCache) error {
 
 // BatchRemoveDomainRouting remove bpf map domain_routing.
 func (c *controlPlaneCore) BatchRemoveDomainRouting(cache *DnsCache) error {
-	// Parse ips from DNS resp answers.
-	var ips []netip.Addr
-	for _, ans := range cache.Answer {
-		var (
-			ip netip.Addr
-			ok bool
-		)
-		switch body := ans.(type) {
-		case *dnsmessage.A:
-			ip, ok = netip.AddrFromSlice(body.A)
-		case *dnsmessage.AAAA:
-			ip, ok = netip.AddrFromSlice(body.AAAA)
-		}
-		if !ok || ip.IsUnspecified() {
-			continue
-		}
-		ips = append(ips, ip)
-	}
+	ips := cache.cachedIPs()
 	if len(ips) == 0 {
 		return nil
 	}
