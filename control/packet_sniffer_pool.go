@@ -18,6 +18,7 @@ import (
 const (
 	PacketSnifferTtl = 3 * time.Second
 	packetSnifferSweepInterval = time.Second
+	packetSnifferPoolMaxEntries = 1024
 )
 
 type PacketSniffer struct {
@@ -118,6 +119,50 @@ func (p *PacketSnifferPool) sweepExpired(now time.Time) {
 	})
 }
 
+func (p *PacketSnifferPool) evictOldest(now time.Time) *PacketSniffer {
+	var (
+		oldestKey  PacketSnifferKey
+		oldest     *PacketSniffer
+		oldestTime time.Time
+		oldestSeen bool
+	)
+
+	p.pool.Range(func(key, value any) bool {
+		poolKey := key.(PacketSnifferKey)
+		sniffer := value.(*PacketSniffer)
+		if sniffer.Expired(now) {
+			if p.pool.CompareAndDelete(poolKey, sniffer) {
+				oldest = sniffer
+				oldestSeen = true
+				return false
+			}
+			return true
+		}
+
+		sniffer.Mu.Lock()
+		lastActive := sniffer.lastActive
+		sniffer.Mu.Unlock()
+		if !oldestSeen || lastActive.Before(oldestTime) {
+			oldestKey = poolKey
+			oldest = sniffer
+			oldestTime = lastActive
+			oldestSeen = true
+		}
+		return true
+	})
+
+	if oldest == nil {
+		return nil
+	}
+	if oldestTime.IsZero() {
+		return oldest
+	}
+	if p.pool.CompareAndDelete(oldestKey, oldest) {
+		return oldest
+	}
+	return nil
+}
+
 func (p *PacketSnifferPool) Close() error {
 	p.cancel()
 	p.cleanupWg.Wait()
@@ -157,6 +202,11 @@ begin:
 			lastActive: p.now(),
 		}
 		_qs = qs
+		if p.Count() >= packetSnifferPoolMaxEntries {
+			if evicted := p.evictOldest(p.now()); evicted != nil {
+				_ = evicted.Close()
+			}
+		}
 		p.pool.Store(key, qs)
 		// Receive UDP messages.
 		isNew = true
