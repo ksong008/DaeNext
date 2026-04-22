@@ -23,10 +23,14 @@ import (
 
 type fakeDnsForwarder struct {
 	closeCount int
+	err        error
 }
 
 func (f *fakeDnsForwarder) ForwardDNS(context.Context, []byte) (*dnsmessage.Msg, error) {
-	return nil, nil
+	if f.err != nil {
+		return nil, f.err
+	}
+	return &dnsmessage.Msg{}, nil
 }
 
 func (f *fakeDnsForwarder) Close() error {
@@ -325,7 +329,7 @@ func TestGetDnsForwarderEvictsOldestWhenCacheFull(t *testing.T) {
 		}
 	}
 
-	_, reusable, err := controller.getDnsForwarder(&componentdns.Upstream{
+	forwarder, key, entry, reusable, err := controller.getDnsForwarder(&componentdns.Upstream{
 		Scheme:   componentdns.UpstreamScheme_HTTPS,
 		Hostname: "dns.example.com",
 		Port:     443,
@@ -349,5 +353,77 @@ func TestGetDnsForwarderEvictsOldestWhenCacheFull(t *testing.T) {
 	}
 	if len(controller.dnsForwarderCache) != dnsForwarderCacheMaxEntries {
 		t.Fatalf("expected cache size to stay capped at %d, got %d", dnsForwarderCacheMaxEntries, len(controller.dnsForwarderCache))
+	}
+	if releaseErr := controller.releaseDnsForwarder(key, entry, forwarder, reusable, false); releaseErr != nil {
+		t.Fatal(releaseErr)
+	}
+}
+
+func TestReleaseDnsForwarderRemovesFailedReusableEntry(t *testing.T) {
+	controller, err := NewDnsController(nil, &DnsControllerOption{
+		Log:                 logrus.New(),
+		CacheAccessCallback: func(*DnsCache) error { return nil },
+		CacheRemoveCallback: func(*DnsCache) error { return nil },
+		NewCache:            func(_ string, answers []dnsmessage.RR, deadline time.Time, originalDeadline time.Time) (*DnsCache, error) { return &DnsCache{}, nil },
+		BestDialerChooser:   func(*udpRequest, *componentdns.Upstream) (*dialArgument, error) { return nil, nil },
+		TimeoutExceedCallback: func(*dialArgument, error) {},
+	})
+	if err != nil {
+		t.Fatalf("NewDnsController() returned error: %v", err)
+	}
+	defer controller.Close()
+
+	now := time.Now()
+	controller.now = func() time.Time { return now }
+
+	forwarder := &fakeDnsForwarder{}
+	key := dnsForwarderKey{upstream: "https://dns.example.com"}
+	entry := &cachedDnsForwarder{
+		forwarder: forwarder,
+		lastUsed:  now,
+		refs:      1,
+	}
+	controller.dnsForwarderCache[key] = entry
+
+	if err := controller.releaseDnsForwarder(key, entry, forwarder, true, true); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := controller.dnsForwarderCache[key]; ok {
+		t.Fatal("expected failed reusable forwarder to be removed from cache")
+	}
+	if forwarder.closeCount != 1 {
+		t.Fatalf("expected failed reusable forwarder to be closed once, got %d", forwarder.closeCount)
+	}
+}
+
+func TestSweepDnsForwarderCacheKeepsInUseEntry(t *testing.T) {
+	controller, err := NewDnsController(nil, &DnsControllerOption{
+		Log:                 logrus.New(),
+		CacheAccessCallback: func(*DnsCache) error { return nil },
+		CacheRemoveCallback: func(*DnsCache) error { return nil },
+		NewCache:            func(_ string, answers []dnsmessage.RR, deadline time.Time, originalDeadline time.Time) (*DnsCache, error) { return &DnsCache{}, nil },
+		BestDialerChooser:   func(*udpRequest, *componentdns.Upstream) (*dialArgument, error) { return nil, nil },
+		TimeoutExceedCallback: func(*dialArgument, error) {},
+	})
+	if err != nil {
+		t.Fatalf("NewDnsController() returned error: %v", err)
+	}
+	defer controller.Close()
+
+	now := time.Now()
+	inUse := &fakeDnsForwarder{}
+	key := dnsForwarderKey{upstream: "in-use"}
+	controller.dnsForwarderCache[key] = &cachedDnsForwarder{
+		forwarder: inUse,
+		lastUsed:  now.Add(-dnsForwarderIdleTimeout - time.Second),
+		refs:      1,
+	}
+
+	controller.sweepDnsForwarderCache(now, false)
+	if _, ok := controller.dnsForwarderCache[key]; !ok {
+		t.Fatal("expected in-use forwarder to stay cached during sweep")
+	}
+	if inUse.closeCount != 0 {
+		t.Fatalf("expected in-use forwarder to stay open, got %d closes", inUse.closeCount)
 	}
 }
