@@ -101,6 +101,8 @@ type handlingState struct {
 type cachedDnsForwarder struct {
 	forwarder DnsForwarder
 	lastUsed  time.Time
+	refs      int
+	stale     bool
 }
 
 func parseIpVersionPreference(prefer int) (uint16, error) {
@@ -220,10 +222,14 @@ func (c *DnsController) sweepDnsForwarderCache(now time.Time, enforceLimit bool)
 	var forwardersToClose []DnsForwarder
 	c.dnsForwarderCacheMu.Lock()
 	for key, entry := range c.dnsForwarderCache {
+		if entry.refs > 0 {
+			continue
+		}
 		if entry.lastUsed.Add(dnsForwarderIdleTimeout).After(now) {
 			continue
 		}
 		delete(c.dnsForwarderCache, key)
+		entry.stale = true
 		forwardersToClose = append(forwardersToClose, entry.forwarder)
 	}
 	if enforceLimit {
@@ -234,6 +240,9 @@ func (c *DnsController) sweepDnsForwarderCache(now time.Time, enforceLimit bool)
 				oldestTime time.Time
 			)
 			for key, entry := range c.dnsForwarderCache {
+				if entry.refs > 0 {
+					continue
+				}
 				if !oldestSeen || entry.lastUsed.Before(oldestTime) {
 					oldestKey = key
 					oldestTime = entry.lastUsed
@@ -243,6 +252,7 @@ func (c *DnsController) sweepDnsForwarderCache(now time.Time, enforceLimit bool)
 			if !oldestSeen {
 				break
 			}
+			c.dnsForwarderCache[oldestKey].stale = true
 			forwardersToClose = append(forwardersToClose, c.dnsForwarderCache[oldestKey].forwarder)
 			delete(c.dnsForwarderCache, oldestKey)
 		}
@@ -786,41 +796,76 @@ func (c *DnsController) sendRejectWithResponseWriter_(dnsMessage *dnsmessage.Msg
 	return nil
 }
 
-func (c *DnsController) getDnsForwarder(upstream *dns.Upstream, dialArgument *dialArgument) (forwarder DnsForwarder, reusable bool, err error) {
+func (c *DnsController) getDnsForwarder(upstream *dns.Upstream, dialArgument *dialArgument) (forwarder DnsForwarder, key dnsForwarderKey, entry *cachedDnsForwarder, reusable bool, err error) {
 	if !dnsForwarderReusable(upstream, *dialArgument) {
 		forwarder, err = c.forwarderFactory(upstream, *dialArgument)
-		return forwarder, false, err
+		return forwarder, dnsForwarderKey{}, nil, false, err
 	}
 
-	key := dnsForwarderKey{upstream: upstream.String(), dialArgument: *dialArgument}
+	key = dnsForwarderKey{upstream: upstream.String(), dialArgument: *dialArgument}
 	now := c.now()
 	c.dnsForwarderCacheMu.Lock()
-	if entry, ok := c.dnsForwarderCache[key]; ok {
+	if entry, ok := c.dnsForwarderCache[key]; ok && !entry.stale {
 		entry.lastUsed = now
+		entry.refs++
 		c.dnsForwarderCacheMu.Unlock()
-		return entry.forwarder, true, nil
+		return entry.forwarder, key, entry, true, nil
 	}
 	c.dnsForwarderCacheMu.Unlock()
 
 	c.sweepDnsForwarderCache(now, true)
 
 	c.dnsForwarderCacheMu.Lock()
-	if entry, ok := c.dnsForwarderCache[key]; ok {
+	if entry, ok := c.dnsForwarderCache[key]; ok && !entry.stale {
 		entry.lastUsed = now
+		entry.refs++
 		c.dnsForwarderCacheMu.Unlock()
-		return entry.forwarder, true, nil
+		return entry.forwarder, key, entry, true, nil
 	}
 	forwarder, err = c.forwarderFactory(upstream, *dialArgument)
 	if err != nil {
 		c.dnsForwarderCacheMu.Unlock()
-		return nil, false, err
+		return nil, dnsForwarderKey{}, nil, false, err
 	}
-	c.dnsForwarderCache[key] = &cachedDnsForwarder{
+	entry = &cachedDnsForwarder{
 		forwarder: forwarder,
 		lastUsed:  now,
+		refs:      1,
 	}
+	c.dnsForwarderCache[key] = entry
 	c.dnsForwarderCacheMu.Unlock()
-	return forwarder, true, nil
+	return forwarder, key, entry, true, nil
+}
+
+func (c *DnsController) releaseDnsForwarder(key dnsForwarderKey, entry *cachedDnsForwarder, forwarder DnsForwarder, reusable bool, failed bool) error {
+	if !reusable {
+		if forwarder == nil {
+			return nil
+		}
+		return forwarder.Close()
+	}
+	if entry == nil || forwarder == nil {
+		return nil
+	}
+
+	var shouldClose bool
+	c.dnsForwarderCacheMu.Lock()
+	if entry.refs > 0 {
+		entry.refs--
+	}
+	if failed {
+		entry.stale = true
+		if cached, ok := c.dnsForwarderCache[key]; ok && cached == entry {
+			delete(c.dnsForwarderCache, key)
+		}
+	}
+	shouldClose = entry.stale && entry.refs == 0
+	c.dnsForwarderCacheMu.Unlock()
+
+	if shouldClose {
+		return forwarder.Close()
+	}
+	return nil
 }
 
 func shouldReportDnsDialFailure(err error) bool {
@@ -894,22 +939,24 @@ func (c *DnsController) dialSend(invokingDepth int, req *udpRequest, data []byte
 	ctxDial, cancel := context.WithTimeout(context.TODO(), consts.DefaultDialTimeout)
 	defer cancel()
 
-	forwarder, reusable, err := c.getDnsForwarder(upstream, dialArgument)
+	forwarder, forwarderKey, forwarderEntry, reusable, err := c.getDnsForwarder(upstream, dialArgument)
 	if err != nil {
 		return err
 	}
-	closeForwarder := func() error {
-		if reusable || forwarder == nil {
+	releaseForwarder := func(failed bool) error {
+		if forwarder == nil {
 			return nil
 		}
-		err := forwarder.Close()
+		releaseErr := c.releaseDnsForwarder(forwarderKey, forwarderEntry, forwarder, reusable, failed)
 		forwarder = nil
-		return err
+		return releaseErr
 	}
 
 	defer func() {
-		if closeErr := closeForwarder(); err == nil && closeErr != nil {
-			err = closeErr
+		if forwarder != nil {
+			if releaseErr := releaseForwarder(err != nil); err == nil && releaseErr != nil {
+				err = releaseErr
+			}
 		}
 	}()
 
@@ -918,10 +965,6 @@ func (c *DnsController) dialSend(invokingDepth int, req *udpRequest, data []byte
 		if c.timeoutExceedCallback != nil && shouldReportDnsDialFailure(err) {
 			c.timeoutExceedCallback(dialArgument, err)
 		}
-		return err
-	}
-
-	if err := closeForwarder(); err != nil {
 		return err
 	}
 
