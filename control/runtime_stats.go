@@ -9,10 +9,10 @@ import (
 	"math"
 	"os"
 	"runtime"
+	"strconv"
+	"strings"
 	"sync"
 	"time"
-
-	"github.com/shirou/gopsutil/v4/process"
 )
 
 const (
@@ -152,15 +152,19 @@ func (s *runtimeStats) snapshot(activeConnections int, udpSessions int, windowSe
 }
 
 func currentRSSBytes() uint64 {
-	proc, err := process.NewProcess(int32(os.Getpid()))
+	data, err := os.ReadFile("/proc/self/statm")
 	if err != nil {
 		return 0
 	}
-	info, err := proc.MemoryInfo()
+	fields := strings.Fields(string(data))
+	if len(fields) < 2 {
+		return 0
+	}
+	rssPages, err := strconv.ParseUint(fields[1], 10, 64)
 	if err != nil {
 		return 0
 	}
-	return info.RSS
+	return rssPages * uint64(os.Getpagesize())
 }
 
 func (s *runtimeStats) advanceLocked(targetBucketStart time.Time) {
