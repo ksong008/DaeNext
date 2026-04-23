@@ -7,8 +7,12 @@ package control
 
 import (
 	"math"
+	"os"
+	"runtime"
 	"sync"
 	"time"
+
+	"github.com/shirou/gopsutil/v4/process"
 )
 
 const (
@@ -33,6 +37,9 @@ type RuntimeStatsSnapshot struct {
 	DownloadTotal     uint64
 	ActiveConnections int
 	UDPSessions       int
+	RSSBytes          uint64
+	HeapAllocBytes    uint64
+	Goroutines        int
 	Samples           []RuntimeTrafficSample
 }
 
@@ -95,7 +102,6 @@ func (s *runtimeStats) snapshot(activeConnections int, udpSessions int, windowSe
 	}
 
 	s.mu.Lock()
-	defer s.mu.Unlock()
 
 	nowBucketStart := bucketStart(now)
 	s.advanceLocked(nowBucketStart)
@@ -121,17 +127,40 @@ func (s *runtimeStats) snapshot(activeConnections int, udpSessions int, windowSe
 	})
 
 	uploadRate, downloadRate := ratesFromBuckets(buckets, now, runtimeRateWindow)
+	uploadTotal := s.uploadTotal
+	downloadTotal := s.downloadTotal
+	samples := bucketizeRuntimeSamples(samplesFromBuckets(buckets), maxPoints)
+	s.mu.Unlock()
+
+	rssBytes := currentRSSBytes()
+	var memStats runtime.MemStats
+	runtime.ReadMemStats(&memStats)
 
 	return RuntimeStatsSnapshot{
 		UpdatedAt:         now,
 		UploadRate:        uploadRate,
 		DownloadRate:      downloadRate,
-		UploadTotal:       s.uploadTotal,
-		DownloadTotal:     s.downloadTotal,
+		UploadTotal:       uploadTotal,
+		DownloadTotal:     downloadTotal,
 		ActiveConnections: activeConnections,
 		UDPSessions:       udpSessions,
-		Samples:           bucketizeRuntimeSamples(samplesFromBuckets(buckets), maxPoints),
+		RSSBytes:          rssBytes,
+		HeapAllocBytes:    memStats.HeapAlloc,
+		Goroutines:        runtime.NumGoroutine(),
+		Samples:           samples,
 	}
+}
+
+func currentRSSBytes() uint64 {
+	proc, err := process.NewProcess(int32(os.Getpid()))
+	if err != nil {
+		return 0
+	}
+	info, err := proc.MemoryInfo()
+	if err != nil {
+		return 0
+	}
+	return info.RSS
 }
 
 func (s *runtimeStats) advanceLocked(targetBucketStart time.Time) {
