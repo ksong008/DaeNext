@@ -16,6 +16,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"reflect"
 	"runtime"
 	"strconv"
 	"strings"
@@ -254,11 +255,10 @@ loop:
 
 			// New control plane.
 			obj := c.EjectBpf()
-			// Do not clone dns cache on reload.
-			// The current reload path does not restore that cloned cache into the
-			// new controller/domain-routing state, so copying it here only adds
-			// reload-time allocations without preserving useful runtime state.
 			var dnsCache map[string]*control.DnsCache
+			if !isSuspend && reflect.DeepEqual(conf.Dns, newConf.Dns) {
+				dnsCache = c.SnapshotDnsCache()
+			}
 			// Stop old DNS listener before creating new one to avoid port conflicts
 			if err := c.StopDNSListener(); err != nil {
 				log.Warnf("[Reload] Failed to stop old DNS listener: %v", err)
