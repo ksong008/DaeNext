@@ -12,7 +12,6 @@ import (
 	"net"
 	"net/netip"
 	"os"
-	"strconv"
 	"sync"
 	"syscall"
 	"time"
@@ -23,17 +22,17 @@ import (
 )
 
 const (
-	anyfromSweepInterval = time.Second
+	anyfromSweepInterval  = time.Second
 	anyfromPoolMaxEntries = 256
 )
 
 type Anyfrom struct {
 	*net.UDPConn
-	mu       sync.Mutex
-	ttl      time.Duration
+	mu         sync.Mutex
+	ttl        time.Duration
 	lastActive time.Time
-	closeOnce sync.Once
-	closeFunc func() error
+	closeOnce  sync.Once
+	closeFunc  func() error
 	// GSO support is modified from quic-go with many thanks.
 	gso         bool
 	gotGSOError bool
@@ -100,21 +99,21 @@ func (a *Anyfrom) SyscallConn() (syscall.RawConn, error) {
 	return a.UDPConn.SyscallConn()
 }
 func (a *Anyfrom) WriteMsgUDP(b []byte, oob []byte, addr *net.UDPAddr) (n int, oobn int, err error) {
-	defer a.afterWrite(err)
+	defer func() { a.afterWrite(err) }()
 	if a.SupportGso(len(b)) {
 		return a.UDPConn.WriteMsgUDP(b, appendUDPSegmentSizeMsg(oob, uint16(len(b))), addr)
 	}
 	return a.UDPConn.WriteMsgUDP(b, oob, addr)
 }
 func (a *Anyfrom) WriteMsgUDPAddrPort(b []byte, oob []byte, addr netip.AddrPort) (n int, oobn int, err error) {
-	defer a.afterWrite(err)
+	defer func() { a.afterWrite(err) }()
 	if a.SupportGso(len(b)) {
 		return a.UDPConn.WriteMsgUDPAddrPort(b, appendUDPSegmentSizeMsg(oob, uint16(len(b))), addr)
 	}
 	return a.UDPConn.WriteMsgUDPAddrPort(b, oob, addr)
 }
 func (a *Anyfrom) WriteTo(b []byte, addr net.Addr) (n int, err error) {
-	defer a.afterWrite(err)
+	defer func() { a.afterWrite(err) }()
 	if a.SupportGso(len(b)) {
 		n, _, err = a.UDPConn.WriteMsgUDP(b, appendUDPSegmentSizeMsg(nil, uint16(len(b))), addr.(*net.UDPAddr))
 		return n, err
@@ -122,7 +121,7 @@ func (a *Anyfrom) WriteTo(b []byte, addr net.Addr) (n int, err error) {
 	return a.UDPConn.WriteTo(b, addr)
 }
 func (a *Anyfrom) WriteToUDP(b []byte, addr *net.UDPAddr) (n int, err error) {
-	defer a.afterWrite(err)
+	defer func() { a.afterWrite(err) }()
 	if a.SupportGso(len(b)) {
 		n, _, err = a.UDPConn.WriteMsgUDP(b, appendUDPSegmentSizeMsg(nil, uint16(len(b))), addr)
 		return n, err
@@ -130,7 +129,7 @@ func (a *Anyfrom) WriteToUDP(b []byte, addr *net.UDPAddr) (n int, err error) {
 	return a.UDPConn.WriteToUDP(b, addr)
 }
 func (a *Anyfrom) WriteToUDPAddrPort(b []byte, addr netip.AddrPort) (n int, err error) {
-	defer a.afterWrite(err)
+	defer func() { a.afterWrite(err) }()
 	if a.SupportGso(len(b)) {
 		n, _, err = a.UDPConn.WriteMsgUDPAddrPort(b, appendUDPSegmentSizeMsg(nil, uint16(len(b))), addr)
 		return n, err
@@ -140,25 +139,10 @@ func (a *Anyfrom) WriteToUDPAddrPort(b []byte, addr netip.AddrPort) (n int, err 
 
 // isGSOSupported tests if the kernel supports GSO.
 // Sending with GSO might still fail later on, if the interface doesn't support it (see isGSOError).
-func isGSOSupported(uc *net.UDPConn) bool {
+func isGSOSupported(_ *net.UDPConn) bool {
 	// TODO: We disable GSO because we haven't thought through how to design to use larger packets (we assume the max size of packet is 1500).
 	// See https://github.com/daeuniverse/dae/blob/cab1e4290967340923d7d5ca52b80f781711c18e/control/control_plane.go#L721C37-L721C37.
 	return false
-	conn, err := uc.SyscallConn()
-	if err != nil {
-		return false
-	}
-	disabled, err := strconv.ParseBool(os.Getenv("DAE_DISABLE_GSO"))
-	if err == nil && disabled {
-		return false
-	}
-	var serr error
-	if err := conn.Control(func(fd uintptr) {
-		_, serr = unix.GetsockoptInt(int(fd), unix.IPPROTO_UDP, unix.UDP_SEGMENT)
-	}); err != nil {
-		return false
-	}
-	return serr == nil
 }
 func isGSOError(err error) bool {
 	var serr *os.SyscallError
@@ -188,12 +172,12 @@ func appendUDPSegmentSizeMsg(b []byte, size uint16) []byte {
 
 // AnyfromPool is a full-cone udp listener pool
 type AnyfromPool struct {
-	pool map[string]*Anyfrom
-	mu   sync.RWMutex
-	ctx context.Context
-	cancel context.CancelFunc
+	pool      map[string]*Anyfrom
+	mu        sync.RWMutex
+	ctx       context.Context
+	cancel    context.CancelFunc
 	cleanupWg sync.WaitGroup
-	now func() time.Time
+	now       func() time.Time
 }
 
 var DefaultAnyfromPool = NewAnyfromPool()
@@ -201,11 +185,11 @@ var DefaultAnyfromPool = NewAnyfromPool()
 func NewAnyfromPool() *AnyfromPool {
 	ctx, cancel := context.WithCancel(context.Background())
 	p := &AnyfromPool{
-		pool: make(map[string]*Anyfrom, 64),
-		mu:   sync.RWMutex{},
-		ctx: ctx,
+		pool:   make(map[string]*Anyfrom, 64),
+		mu:     sync.RWMutex{},
+		ctx:    ctx,
 		cancel: cancel,
-		now: time.Now,
+		now:    time.Now,
 	}
 	p.startCleanup()
 	return p
@@ -285,6 +269,10 @@ func (p *AnyfromPool) evictOldestLocked(now time.Time) *Anyfrom {
 func (p *AnyfromPool) Close() error {
 	p.cancel()
 	p.cleanupWg.Wait()
+	return p.Flush()
+}
+
+func (p *AnyfromPool) Flush() error {
 	var errs []error
 	p.mu.Lock()
 	all := p.pool

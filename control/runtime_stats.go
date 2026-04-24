@@ -21,6 +21,8 @@ const (
 	defaultRuntimeMaxPoints  = 180
 	runtimeBucketDuration    = 250 * time.Millisecond
 	runtimeRateWindow        = time.Second
+	maxRuntimeHistoryBuckets = int((time.Duration(maxRuntimeHistorySeconds) * time.Second) / runtimeBucketDuration)
+	runtimeHistoryTrimBatch  = 256
 )
 
 type RuntimeTrafficSample struct {
@@ -53,8 +55,8 @@ type runtimeBucket struct {
 type runtimeStats struct {
 	mu sync.Mutex
 
-	currentBucketStart time.Time
-	currentUploadBytes uint64
+	currentBucketStart   time.Time
+	currentUploadBytes   uint64
 	currentDownloadBytes uint64
 
 	uploadTotal   uint64
@@ -183,9 +185,13 @@ func (s *runtimeStats) advanceLocked(targetBucketStart time.Time) {
 			DownloadBytes: s.currentDownloadBytes,
 			Duration:      runtimeBucketDuration,
 		})
-		maxHistoryBuckets := int((time.Duration(maxRuntimeHistorySeconds) * time.Second) / runtimeBucketDuration)
-		if len(s.history) > maxHistoryBuckets {
-			s.history = append([]runtimeBucket(nil), s.history[len(s.history)-maxHistoryBuckets:]...)
+		if len(s.history) > maxRuntimeHistoryBuckets+runtimeHistoryTrimBatch {
+			drop := len(s.history) - maxRuntimeHistoryBuckets
+			copy(s.history, s.history[drop:])
+			for i := maxRuntimeHistoryBuckets; i < len(s.history); i++ {
+				s.history[i] = runtimeBucket{}
+			}
+			s.history = s.history[:maxRuntimeHistoryBuckets]
 		}
 		s.currentBucketStart = s.currentBucketStart.Add(runtimeBucketDuration)
 		s.currentUploadBytes = 0

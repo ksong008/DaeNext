@@ -42,6 +42,22 @@ type sip008Server struct {
 	PluginOpts string `json:"plugin_opts"`
 }
 
+const MaxSubscriptionBytes int64 = 8 << 20
+
+func ReadAllLimited(r io.Reader, maxBytes int64) ([]byte, error) {
+	if maxBytes <= 0 {
+		maxBytes = MaxSubscriptionBytes
+	}
+	b, err := io.ReadAll(io.LimitReader(r, maxBytes+1))
+	if err != nil {
+		return nil, err
+	}
+	if int64(len(b)) > maxBytes {
+		return nil, fmt.Errorf("subscription exceeds %d bytes", maxBytes)
+	}
+	return b, nil
+}
+
 func ResolveSubscriptionAsBase64(log *logrus.Logger, b []byte) (nodes []string) {
 	log.Debugln("Try to resolve as base64")
 
@@ -132,7 +148,7 @@ func ResolveFile(u *url.URL, configDir string) (b []byte, err error) {
 		}
 	}
 
-	b, err = io.ReadAll(fReader)
+	b, err = ReadAllLimited(fReader, MaxSubscriptionBytes)
 	if err != nil {
 		return nil, err
 	}
@@ -195,7 +211,20 @@ func ResolveSubscription(log *logrus.Logger, client *http.Client, configDir stri
 		return "", nil, err
 	}
 	defer resp.Body.Close()
-	b, err = io.ReadAll(resp.Body)
+	if resp.StatusCode != http.StatusOK {
+		if persistToFile {
+			log.Warnln("failed to fetch subscription, try to read from file")
+			u.Host = "persist.d/" + tag + ".sub"
+			u.Path = ""
+			b, err = ResolveFile(u, configDir)
+			if err != nil {
+				return "", nil, err
+			}
+			goto resolve
+		}
+		return "", nil, fmt.Errorf("failed to fetch subscription: %v", resp.Status)
+	}
+	b, err = ReadAllLimited(resp.Body, MaxSubscriptionBytes)
 	if err != nil {
 		return "", nil, err
 	}

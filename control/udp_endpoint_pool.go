@@ -21,20 +21,20 @@ import (
 )
 
 const (
-	udpEndpointSweepInterval = time.Second
+	udpEndpointSweepInterval  = time.Second
 	udpEndpointPoolMaxEntries = 2048
 )
 
 type UdpHandler func(data []byte, from netip.AddrPort) error
 
 type UdpEndpoint struct {
-	conn netproxy.PacketConn
+	conn       netproxy.PacketConn
 	mu         sync.Mutex
-	handler       UdpHandler
-	NatTimeout    time.Duration
-	lastActive    time.Time
-	onInactive    func()
-	closeOnce     sync.Once
+	handler    UdpHandler
+	NatTimeout time.Duration
+	lastActive time.Time
+	onInactive func()
+	closeOnce  sync.Once
 
 	Dialer   *dialer.Dialer
 	Outbound *outbound.DialerGroup
@@ -195,6 +195,10 @@ func (p *UdpEndpointPool) evictOldestEndpoint(now time.Time) *UdpEndpoint {
 func (p *UdpEndpointPool) Close() error {
 	p.cancel()
 	p.cleanupWg.Wait()
+	return p.Flush()
+}
+
+func (p *UdpEndpointPool) Flush() error {
 	var errs []error
 	p.pool.Range(func(key, value any) bool {
 		ue := value.(*UdpEndpoint)
