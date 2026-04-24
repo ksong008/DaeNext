@@ -14,6 +14,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/daeuniverse/dae/common/consts"
 	dnsmessage "github.com/miekg/dns"
@@ -110,38 +111,76 @@ func (d *DNSListener) Start() error {
 		log:        d.log,
 	}
 
-	if d.endpoint.UDP {
-		// create dns servers
-		d.udpServer = &dnsmessage.Server{
-			Addr:    d.Addr(),
-			Net:     "udp",
-			Handler: handler,
-			UDPSize: 65535,
+	startServer := func(server *dnsmessage.Server, started chan struct{}, bindErr error) error {
+		if bindErr != nil {
+			return bindErr
 		}
-
-		// Start UDP server in goroutine
+		server.NotifyStartedFunc = func() {
+			select {
+			case <-started:
+			default:
+				close(started)
+			}
+		}
 		go func() {
-			d.log.Infof("Starting DNS UDP listener on %s", d.udpServer.Addr)
-			if err := d.udpServer.ListenAndServe(); err != nil {
-				d.log.Errorf("Failed to start DNS UDP listener: %v", err)
+			if err := server.ActivateAndServe(); err != nil && !isExpectedDNSListenerClose(err) {
+				d.log.Errorf("DNS %s listener stopped unexpectedly: %v", server.Net, err)
 			}
 		}()
 
+		select {
+		case <-started:
+			return nil
+		case <-time.After(time.Second):
+			return fmt.Errorf("dns %s listener start timeout", server.Net)
+		}
+	}
+
+	if d.endpoint.UDP {
+		pc, err := net.ListenPacket("udp", d.Addr())
+		if err != nil {
+			return fmt.Errorf("listen udp dns: %w", err)
+		}
+		d.udpServer = &dnsmessage.Server{
+			Net:        "udp",
+			PacketConn: pc,
+			Handler:    handler,
+			UDPSize:    65535,
+		}
+		started := make(chan struct{})
+		if err := startServer(d.udpServer, started, nil); err != nil {
+			_ = d.udpServer.PacketConn.Close()
+			d.udpServer = nil
+			return err
+		}
+		d.log.Debugf("Started DNS UDP listener on %s", d.Addr())
 	}
 	// also for tcp server
 	if d.endpoint.TCP {
-		d.tcpServer = &dnsmessage.Server{
-			Addr:    d.Addr(),
-			Net:     "tcp",
-			Handler: handler,
-		}
-		// Start TCP server in goroutine
-		go func() {
-			d.log.Infof("Starting DNS TCP listener on %s", d.tcpServer.Addr)
-			if err := d.tcpServer.ListenAndServe(); err != nil {
-				d.log.Errorf("Failed to start DNS TCP listener: %v", err)
+		ln, err := net.Listen("tcp", d.Addr())
+		if err != nil {
+			if d.udpServer != nil {
+				_ = d.udpServer.Shutdown()
+				d.udpServer = nil
 			}
-		}()
+			return fmt.Errorf("listen tcp dns: %w", err)
+		}
+		d.tcpServer = &dnsmessage.Server{
+			Net:      "tcp",
+			Listener: ln,
+			Handler:  handler,
+		}
+		started := make(chan struct{})
+		if err := startServer(d.tcpServer, started, nil); err != nil {
+			_ = d.tcpServer.Listener.Close()
+			d.tcpServer = nil
+			if d.udpServer != nil {
+				_ = d.udpServer.Shutdown()
+				d.udpServer = nil
+			}
+			return err
+		}
+		d.log.Debugf("Started DNS TCP listener on %s", d.Addr())
 	}
 
 	return nil
@@ -174,6 +213,15 @@ func (d *DNSListener) Stop() error {
 		return fmt.Errorf("failed to stop DNS servers: %v", errors.Join(errs...))
 	}
 	return nil
+}
+
+func isExpectedDNSListenerClose(err error) bool {
+	if err == nil {
+		return true
+	}
+	return strings.Contains(err.Error(), "server not started") ||
+		strings.Contains(err.Error(), "use of closed network connection") ||
+		errors.Is(err, net.ErrClosed)
 }
 
 // dnsHandler implements the dns.Handler interface
