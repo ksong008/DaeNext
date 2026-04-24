@@ -47,8 +47,14 @@ func NewLocationFinder(externDirPath []string) *LocationFinder {
 func (c *LocationFinder) GetLocationAsset(log *logrus.Logger, filename string) (path string, err error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	now := time.Now()
+	for key, item := range c.m {
+		if now.After(item.CacheDeadline) {
+			delete(c.m, key)
+		}
+	}
 	// Search cache.
-	if item, ok := c.m[filename]; ok && time.Now().Before(item.CacheDeadline) {
+	if item, ok := c.m[filename]; ok && now.Before(item.CacheDeadline) {
 		return item.Path, nil
 	}
 	defer func() {
@@ -56,15 +62,8 @@ func (c *LocationFinder) GetLocationAsset(log *logrus.Logger, filename string) (
 			c.m[filename] = CacheItem{
 				Filename:      filename,
 				Path:          path,
-				CacheDeadline: time.Now().Add(CacheTimeout),
+				CacheDeadline: now.Add(CacheTimeout),
 			}
-			time.AfterFunc(CacheTimeout, func() {
-				c.mu.Lock()
-				defer c.mu.Unlock()
-				if item, ok := c.m[filename]; ok && time.Now().After(item.CacheDeadline) {
-					delete(c.m, filename)
-				}
-			})
 		}
 	}()
 

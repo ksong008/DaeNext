@@ -456,6 +456,8 @@ func dnsDataWithZeroID(data []byte) []byte {
 	return cloned
 }
 
+const doHMaxResponseBytes = 64 * 1024
+
 func sendHttpDNS(ctx context.Context, client *http.Client, target string, upstream *dns.Upstream, data []byte) (respMsg *dnsmessage.Msg, err error) {
 	serverURL := url.URL{
 		Scheme: "https",
@@ -479,9 +481,12 @@ func sendHttpDNS(ctx context.Context, client *http.Client, target string, upstre
 		return nil, err
 	}
 	defer resp.Body.Close()
-	buf, err := io.ReadAll(resp.Body)
+	buf, err := io.ReadAll(io.LimitReader(resp.Body, doHMaxResponseBytes+1))
 	if err != nil {
 		return nil, err
+	}
+	if len(buf) > doHMaxResponseBytes {
+		return nil, fmt.Errorf("dns response too large: %d bytes", len(buf))
 	}
 	var msg dnsmessage.Msg
 	if err = msg.Unpack(buf); err != nil {
