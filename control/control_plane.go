@@ -39,6 +39,7 @@ import (
 	"github.com/daeuniverse/outbound/protocol/direct"
 	"github.com/daeuniverse/outbound/transport/grpc"
 	"github.com/daeuniverse/outbound/transport/meek"
+	"github.com/daeuniverse/outbound/transport/xhttp"
 	dnsmessage "github.com/miekg/dns"
 	"github.com/mohae/deepcopy"
 	"github.com/sirupsen/logrus"
@@ -295,9 +296,13 @@ func NewControlPlane(
 	}
 
 	// Filter out groups.
-	// FIXME: Ugly code here: reset grpc and meek clients manually.
+	// Reset transport-level pools so a reload cannot keep old dialers alive.
 	grpc.CleanGlobalClientConnectionCache()
 	meek.CleanGlobalRoundTripperCache()
+	xhttp.CleanGlobalPools()
+	DefaultUdpEndpointPool.Flush()
+	DefaultAnyfromPool.Flush()
+	DefaultPacketSnifferSessionMgr.Flush()
 	dialerSet := outbound.NewDialerSetFromLinks(option, tagToNodeList)
 	deferFuncs = append(deferFuncs, dialerSet.Close)
 	for _, group := range groups {
@@ -803,6 +808,12 @@ func (c *ControlPlane) Serve(readyChan chan<- bool, listener *Listener) (err err
 				}
 				break
 			}
+			select {
+			case <-c.ctx.Done():
+				_ = lconn.Close()
+				return
+			default:
+			}
 			go func(lconn net.Conn) {
 				c.inConnections.Store(lconn, struct{}{})
 				defer c.inConnections.Delete(lconn)
@@ -829,6 +840,11 @@ func (c *ControlPlane) Serve(readyChan chan<- bool, listener *Listener) (err err
 				}
 				break
 			}
+			select {
+			case <-c.ctx.Done():
+				return
+			default:
+			}
 			newBuf := pool.Get(n)
 			copy(newBuf, buf[:n])
 			newOob := pool.Get(oobn)
@@ -840,10 +856,14 @@ func (c *ControlPlane) Serve(readyChan chan<- bool, listener *Listener) (err err
 			DefaultUdpTaskPool.EmitTask(convergeSrc.String(), func() {
 				data := newBuf
 				oob := newOob
-				src := newSrc
-
 				defer data.Put()
 				defer oob.Put()
+				select {
+				case <-c.ctx.Done():
+					return
+				default:
+				}
+				src := newSrc
 				var realDst netip.AddrPort
 				var routingResult *bpfRoutingResult
 				pktDst := RetrieveOriginalDest(oob)
