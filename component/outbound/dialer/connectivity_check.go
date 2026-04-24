@@ -32,6 +32,7 @@ import (
 )
 
 const Timeout = 10 * time.Second
+const httpCheckDebugBodyLimit = 4 * 1024
 
 type NetworkType struct {
 	L4Proto   consts.L4ProtoStr
@@ -689,7 +690,7 @@ func (d *Dialer) HttpCheck(ctx context.Context, u *netutils.URL, ip netip.Addr, 
 	// Judge the status code.
 	if page := path.Base(req.URL.Path); strings.HasPrefix(page, "generate_") {
 		if strconv.Itoa(resp.StatusCode) != strings.TrimPrefix(page, "generate_") {
-			b, _ := io.ReadAll(resp.Body)
+			b, _ := io.ReadAll(io.LimitReader(resp.Body, httpCheckDebugBodyLimit))
 			buf := pool.GetBuffer()
 			defer pool.PutBuffer(buf)
 			_ = resp.Request.Write(buf)
