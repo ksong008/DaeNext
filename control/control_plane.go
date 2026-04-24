@@ -296,13 +296,6 @@ func NewControlPlane(
 	}
 
 	// Filter out groups.
-	// Reset transport-level pools so a reload cannot keep old dialers alive.
-	grpc.CleanGlobalClientConnectionCache()
-	meek.CleanGlobalRoundTripperCache()
-	xhttp.CleanGlobalPools()
-	DefaultUdpEndpointPool.Flush()
-	DefaultAnyfromPool.Flush()
-	DefaultPacketSnifferSessionMgr.Flush()
 	dialerSet := outbound.NewDialerSetFromLinks(option, tagToNodeList)
 	deferFuncs = append(deferFuncs, dialerSet.Close)
 	for _, group := range groups {
@@ -1154,4 +1147,16 @@ func (c *ControlPlane) StopDNSListener() error {
 		return c.dnsListener.Stop()
 	}
 	return nil
+}
+
+// FlushReloadScopedResources clears global transport/session pools that should
+// not survive a successful reload. It is intentionally called by the reload
+// coordinator only after a replacement control plane has been constructed.
+func FlushReloadScopedResources() {
+	grpc.CleanGlobalClientConnectionCache()
+	meek.CleanGlobalRoundTripperCache()
+	xhttp.CleanGlobalPools()
+	_ = DefaultUdpEndpointPool.Flush()
+	_ = DefaultAnyfromPool.Flush()
+	_ = DefaultPacketSnifferSessionMgr.Flush()
 }
