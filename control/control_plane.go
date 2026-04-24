@@ -89,6 +89,8 @@ type ControlPlane struct {
 	mptcp             bool
 }
 
+const controlPlaneServePollInterval = time.Second
+
 func NewControlPlane(
 	log *logrus.Logger,
 	_bpf interface{},
@@ -761,6 +763,8 @@ func (c *ControlPlane) Serve(readyChan chan<- bool, listener *Listener) (err err
 		}
 	}()
 	udpConn := listener.packetConn.(*net.UDPConn)
+	tcpListener, _ := listener.tcpListener.(*net.TCPListener)
+	var serveWg sync.WaitGroup
 	/// Serve.
 	// TCP socket.
 	tcpFile, err := listener.tcpListener.(*net.TCPListener).File()
@@ -787,15 +791,23 @@ func (c *ControlPlane) Serve(readyChan chan<- bool, listener *Listener) (err err
 
 	sentReady = true
 	readyChan <- true
+	serveWg.Add(1)
 	go func() {
+		defer serveWg.Done()
 		for {
 			select {
 			case <-c.ctx.Done():
 				return
 			default:
 			}
+			if tcpListener != nil {
+				_ = tcpListener.SetDeadline(time.Now().Add(controlPlaneServePollInterval))
+			}
 			lconn, err := listener.tcpListener.Accept()
 			if err != nil {
+				if ne, ok := err.(net.Error); ok && ne.Timeout() {
+					continue
+				}
 				if !strings.Contains(err.Error(), "use of closed network connection") {
 					c.log.Errorf("Error when accept: %v", err)
 				}
@@ -816,7 +828,9 @@ func (c *ControlPlane) Serve(readyChan chan<- bool, listener *Listener) (err err
 			}(lconn)
 		}
 	}()
+	serveWg.Add(1)
 	go func() {
+		defer serveWg.Done()
 		buf := pool.GetFullCap(consts.EthernetMtu)
 		var oob [120]byte // Size for original dest
 		defer buf.Put()
@@ -826,8 +840,12 @@ func (c *ControlPlane) Serve(readyChan chan<- bool, listener *Listener) (err err
 				return
 			default:
 			}
+			_ = udpConn.SetReadDeadline(time.Now().Add(controlPlaneServePollInterval))
 			n, oobn, _, src, err := udpConn.ReadMsgUDPAddrPort(buf, oob[:])
 			if err != nil {
+				if ne, ok := err.(net.Error); ok && ne.Timeout() {
+					continue
+				}
 				if !strings.Contains(err.Error(), "use of closed network connection") {
 					c.log.Errorf("ReadFromUDPAddrPort: %v, %v", src.String(), err)
 				}
@@ -878,6 +896,7 @@ func (c *ControlPlane) Serve(readyChan chan<- bool, listener *Listener) (err err
 	}()
 	c.ActivateCheck()
 	<-c.ctx.Done()
+	serveWg.Wait()
 	return nil
 }
 
@@ -1070,6 +1089,7 @@ func (c *ControlPlane) SnapshotNodeLatencies() []NodeLatencySnapshot {
 }
 
 func (c *ControlPlane) Close() (err error) {
+	c.cancel()
 	// Invoke defer funcs in reverse order.
 	for i := len(c.deferFuncs) - 1; i >= 0; i-- {
 		if e := c.deferFuncs[i](); e != nil {
@@ -1081,7 +1101,6 @@ func (c *ControlPlane) Close() (err error) {
 			}
 		}
 	}
-	c.cancel()
 	return c.core.Close()
 }
 
