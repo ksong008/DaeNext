@@ -16,8 +16,8 @@ import (
 )
 
 const (
-	PacketSnifferTtl = 3 * time.Second
-	packetSnifferSweepInterval = time.Second
+	PacketSnifferTtl            = 3 * time.Second
+	packetSnifferSweepInterval  = time.Second
 	packetSnifferPoolMaxEntries = 1024
 )
 
@@ -166,6 +166,10 @@ func (p *PacketSnifferPool) evictOldest(now time.Time) *PacketSniffer {
 func (p *PacketSnifferPool) Close() error {
 	p.cancel()
 	p.cleanupWg.Wait()
+	return p.Flush()
+}
+
+func (p *PacketSnifferPool) Flush() error {
 	p.pool.Range(func(key, value any) bool {
 		sniffer := value.(*PacketSniffer)
 		p.pool.Delete(key)
