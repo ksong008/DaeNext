@@ -487,14 +487,19 @@ func NewControlPlane(
 		}
 	}
 	// Refresh domain routing cache with new routing.
-	// FIXME: We temperarily disable it because we want to make change of DNS section take effects immediately.
-	// TODO: Add change detection.
-	if false && len(dnsCache) > 0 {
+	// Only restore cached DNS records when DNS config itself is unchanged.
+	if _bpf != nil {
+		var key [4]uint32
+		var val bpfDomainRouting
+		iter := core.bpf.DomainRoutingMap.Iterate()
+		for iter.Next(&key, &val) {
+			_ = core.bpf.DomainRoutingMap.Delete(&key)
+		}
+	}
+	if len(dnsCache) > 0 {
 		for cacheKey, cache := range dnsCache {
-			// Also refresh out-dated routing because kernel map items have no expiration.
 			lastDot := strings.LastIndex(cacheKey, ".")
 			if lastDot == -1 || lastDot == len(cacheKey)-1 {
-				// Not a valid key.
 				log.Warnln("Invalid cache key:", cacheKey)
 				continue
 			}
@@ -502,20 +507,18 @@ func NewControlPlane(
 			_typ := cacheKey[lastDot+1:]
 			typ, err := strconv.ParseUint(_typ, 10, 16)
 			if err != nil {
-				// Unexpected.
-				return nil, err
+				log.WithError(err).Warnln("Invalid cache qtype:", cacheKey)
+				continue
 			}
-			_ = plane.dnsController.UpdateDnsCacheDeadline(host, uint16(typ), cache.Answer, cache.Deadline)
-		}
-	} else if _bpf != nil {
-		// Is reloading, and dnsCache == nil.
-		// Remove all map items.
-		// Normally, it is due to the change of ip version preference.
-		var key [4]uint32
-		var val bpfDomainRouting
-		iter := core.bpf.DomainRoutingMap.Iterate()
-		for iter.Next(&key, &val) {
-			_ = core.bpf.DomainRoutingMap.Delete(&key)
+			answers := cache.AnswersForHostQType(host, uint16(typ))
+			if len(answers) == 0 {
+				continue
+			}
+			if err := plane.dnsController.__updateDnsCacheDeadline(host, uint16(typ), answers, func(_ time.Time, _ string) (time.Time, time.Time) {
+				return cache.Deadline, cache.OriginalDeadline
+			}); err != nil {
+				log.WithError(err).Warnf("Failed to restore DNS cache for %s", host)
+			}
 		}
 	}
 
@@ -580,6 +583,17 @@ func (c *ControlPlane) EjectBpf() *bpfObjects {
 
 func (c *ControlPlane) InjectBpf(bpf *bpfObjects) {
 	c.core.InjectBpf(bpf)
+}
+
+func (c *ControlPlane) SnapshotDnsCache() map[string]*DnsCache {
+	c.dnsController.dnsCacheMu.RLock()
+	defer c.dnsController.dnsCacheMu.RUnlock()
+
+	snapshot := make(map[string]*DnsCache, len(c.dnsController.dnsCache))
+	for key, cache := range c.dnsController.dnsCache {
+		snapshot[key] = cache.Clone()
+	}
+	return snapshot
 }
 
 func (c *ControlPlane) dnsUpstreamReadyCallback(dnsUpstream *dns.Upstream) (err error) {
