@@ -137,7 +137,10 @@ func (c *ControlPlane) handlePkt(lConn *net.UDPConn, data []byte, src, pktDst, r
 						for _, d := range toRehandle {
 							dCopy := pool.Get(len(d))
 							copy(dCopy, d)
-							go c.handlePkt(lConn, dCopy, src, pktDst, realDst, routingResult, true)
+							go func(data pool.PB) {
+								defer data.Put()
+								_ = c.handlePkt(lConn, data, src, pktDst, realDst, routingResult, true)
+							}(dCopy)
 						}
 					}
 				}()
