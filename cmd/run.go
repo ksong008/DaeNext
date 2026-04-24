@@ -227,7 +227,7 @@ loop:
 					_ = os.WriteFile(SignalProgressFilePath, append([]byte{consts.ReloadError}, []byte("\n"+err.Error())...), 0644)
 					continue
 				}
-				newConf.Global = deepcopy.Copy(conf.Global).(config.Global)
+				newConf.Global = conf.Global
 				newConf.Global.WanInterface = nil
 				newConf.Global.LanInterface = nil
 				newConf.Global.LogLevel = "warning"
