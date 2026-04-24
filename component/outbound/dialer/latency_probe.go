@@ -21,42 +21,32 @@ type LatencyProbeResult struct {
 	CheckedAt time.Time
 }
 
+const manualProbeTimeout = 4 * time.Second
+
 func (d *Dialer) ProbeLatency() (*LatencyProbeResult, error) {
 	checkOptions := d.latencyProbeCheckOptions()
 	var (
-		bestLatency time.Duration
-		hasLatency  bool
-		lastErr     error
+		lastErr error
 	)
 
 	for _, opt := range checkOptions {
-		ok, err := d.Check(opt)
+		ok, latency, err := d.probeLatencyCheck(opt, manualProbeTimeout)
 		if err != nil {
 			lastErr = err
 		}
 		if !ok {
 			continue
 		}
-
-		latency, hasLastLatency := d.MustGetLatencies10(opt.networkType).LastLatency()
-		if !hasLastLatency {
-			continue
-		}
-		if !hasLatency || latency < bestLatency {
-			bestLatency = latency
-			hasLatency = true
-		}
+		return &LatencyProbeResult{
+			Alive:     true,
+			Latency:   latency,
+			CheckedAt: time.Now(),
+		}, nil
 	}
 
 	result := &LatencyProbeResult{
-		Alive:     hasLatency,
 		CheckedAt: time.Now(),
 	}
-	if hasLatency {
-		result.Latency = bestLatency
-		return result, nil
-	}
-
 	if lastErr != nil {
 		result.Message = lastErr.Error()
 		return result, nil
@@ -64,6 +54,18 @@ func (d *Dialer) ProbeLatency() (*LatencyProbeResult, error) {
 
 	result.Message = "no latency result"
 	return result, nil
+}
+
+func (d *Dialer) probeLatencyCheck(opt *CheckOption, timeout time.Duration) (ok bool, latency time.Duration, err error) {
+	ctx, cancel := context.WithTimeout(context.TODO(), timeout)
+	defer cancel()
+
+	start := time.Now()
+	ok, err = opt.CheckFunc(ctx, opt.networkType)
+	if !ok || err != nil {
+		return ok, 0, err
+	}
+	return true, time.Since(start), nil
 }
 
 func (d *Dialer) latencyProbeCheckOptions() []*CheckOption {
