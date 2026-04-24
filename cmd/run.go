@@ -301,6 +301,7 @@ loop:
 				oldC.AbortConnections()
 			}
 			oldC.Close()
+			control.FlushReloadScopedResources()
 
 			if pprofServer != nil {
 				pprofServer.Shutdown(context.Background())
