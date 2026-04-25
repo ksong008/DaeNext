@@ -13,6 +13,7 @@ import (
 
 const UdpTaskQueueLength = 128
 const udpTaskSweepInterval = time.Second
+const udpTaskPoolMaxQueues = 2048
 
 type UdpTask = func()
 
@@ -70,6 +71,44 @@ type UdpTaskPool struct {
 	cancel context.CancelFunc
 	cleanupWg sync.WaitGroup
 	now func() time.Time
+}
+
+func (p *UdpTaskPool) evictOldestIdleQueueLocked(now time.Time) *UdpTaskQueue {
+	var (
+		oldestKey  string
+		oldest     *UdpTaskQueue
+		oldestTime time.Time
+		oldestSeen bool
+	)
+
+	for key, q := range p.m {
+		q.mu.Lock()
+		running := q.running
+		lastActive := q.lastActive
+		pending := len(q.ch)
+		agingTime := q.agingTime
+		q.mu.Unlock()
+
+		if running || pending > 0 {
+			continue
+		}
+		if !lastActive.Add(agingTime).After(now) {
+			delete(p.m, key)
+			return q
+		}
+		if !oldestSeen || lastActive.Before(oldestTime) {
+			oldestKey = key
+			oldest = q
+			oldestTime = lastActive
+			oldestSeen = true
+		}
+	}
+
+	if !oldestSeen {
+		return nil
+	}
+	delete(p.m, oldestKey)
+	return oldest
 }
 
 func NewUdpTaskPool() *UdpTaskPool {
@@ -153,9 +192,13 @@ func (p *UdpTaskPool) Close() {
 // EmitTask: Make sure packets with the same key (4 tuples) will be sent in order.
 func (p *UdpTaskPool) EmitTask(key string, task UdpTask) {
 	now := p.now()
+	var evicted *UdpTaskQueue
 	p.mu.Lock()
 	q, ok := p.m[key]
 	if !ok {
+		if len(p.m) >= udpTaskPoolMaxQueues {
+			evicted = p.evictOldestIdleQueueLocked(now)
+		}
 		ch := p.queueChPool.Get().(chan UdpTask)
 		ctx, cancel := context.WithCancel(context.Background())
 		q = &UdpTaskQueue{
@@ -174,6 +217,13 @@ func (p *UdpTaskPool) EmitTask(key string, task UdpTask) {
 		q.touch(now)
 	}
 	p.mu.Unlock()
+	if evicted != nil {
+		evicted.cancel()
+		<-evicted.closed
+		if len(evicted.ch) == 0 {
+			p.queueChPool.Put(evicted.ch)
+		}
+	}
 	// if task cannot be executed within 180s(DefaultNatTimeout), GC may be triggered, so skip the task when GC occurs
 	select {
 	case q.ch <- task:
