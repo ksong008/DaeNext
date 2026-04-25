@@ -88,7 +88,7 @@ type ControlPlane struct {
 	mptcp             bool
 }
 
-const controlPlaneServePollInterval = time.Second
+const controlPlaneServePollInterval = 150 * time.Millisecond
 
 func NewControlPlane(
 	log *logrus.Logger,
