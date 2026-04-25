@@ -144,7 +144,7 @@ func Run(log *logrus.Logger, conf *config.Config, externGeoDataDirs []string) (e
 	// Serve tproxy TCP/UDP server util signals.
 	var listener *control.Listener
 	sigs := make(chan os.Signal, 1)
-	signal.Notify(sigs, syscall.SIGINT, syscall.SIGTERM, syscall.SIGHUP, syscall.SIGQUIT, syscall.SIGKILL, syscall.SIGILL, syscall.SIGUSR1, syscall.SIGUSR2)
+	signal.Notify(sigs, syscall.SIGINT, syscall.SIGTERM, syscall.SIGHUP, syscall.SIGQUIT, syscall.SIGILL, syscall.SIGUSR1, syscall.SIGUSR2)
 	go func() {
 		readyChan := make(chan bool, 1)
 		go func() {
@@ -259,11 +259,21 @@ loop:
 			// new controller/domain-routing state, so copying it here only adds
 			// reload-time allocations without preserving useful runtime state.
 			var dnsCache map[string]*control.DnsCache
-			// Stop old DNS listener before creating new one to avoid port conflicts
-			if err := c.StopDNSListener(); err != nil {
-				log.Warnf("[Reload] Failed to stop old DNS listener: %v", err)
+			shouldStopOldDNSListener := strings.TrimSpace(conf.Dns.Bind) != "" &&
+				strings.TrimSpace(newConf.Dns.Bind) != "" &&
+				strings.TrimSpace(conf.Dns.Bind) == strings.TrimSpace(newConf.Dns.Bind)
+			oldDNSListenerStopped := false
+			// Stop old DNS listener only when the new control plane needs the same
+			// bind endpoint; otherwise both listeners can coexist briefly until the
+			// old control plane closes.
+			if shouldStopOldDNSListener {
+				if err := c.StopDNSListener(); err != nil {
+					log.Warnf("[Reload] Failed to stop old DNS listener: %v", err)
+				} else {
+					oldDNSListenerStopped = true
+				}
 			}
-			
+
 			log.Warnln("[Reload] Load new control plane")
 			newC, err := newControlPlane(log, obj, dnsCache, newConf, externGeoDataDirs)
 			if err != nil {
@@ -274,6 +284,13 @@ loop:
 				// Load last config back.
 				newC, err = newControlPlane(log, obj, dnsCache, conf, externGeoDataDirs)
 				if err != nil {
+					if oldDNSListenerStopped {
+						if restartErr := c.StartDNSListener(); restartErr != nil {
+							log.WithError(restartErr).Errorln("[Reload] Failed to restart old DNS listener after rollback failure")
+						} else {
+							log.Warnln("[Reload] Restored old DNS listener after rollback failure")
+						}
+					}
 					sdnotify.Stopping()
 					obj.Close()
 					c.Close()
