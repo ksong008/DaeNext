@@ -24,6 +24,18 @@ type DnsCache struct {
 	PackedResponse   []byte
 }
 
+func (c *DnsCache) Clone() *DnsCache {
+	if c == nil {
+		return nil
+	}
+	clone := *c
+	clone.DomainBitmap = append([]uint32(nil), c.DomainBitmap...)
+	clone.Answer = append([]dnsmessage.RR(nil), c.Answer...)
+	clone.IPs = append([]netip.Addr(nil), c.IPs...)
+	clone.PackedResponse = append([]byte(nil), c.PackedResponse...)
+	return &clone
+}
+
 func summarizeDNSAnswers(answers []dnsmessage.RR) (ips []netip.Addr, hasAnyIP bool) {
 	if len(answers) == 0 {
 		return nil, false
@@ -102,4 +114,40 @@ func (c *DnsCache) IncludeIp(ip netip.Addr) bool {
 
 func (c *DnsCache) IncludeAnyIp() bool {
 	return c.cachedHasAnyIP()
+}
+
+func (c *DnsCache) AnswersForHostQType(host string, dnsTyp uint16) []dnsmessage.RR {
+	fqdn := dnsmessage.CanonicalName(host)
+	answers := make([]dnsmessage.RR, 0, len(c.cachedIPs()))
+	for _, ip := range c.cachedIPs() {
+		switch dnsTyp {
+		case dnsmessage.TypeA:
+			if !(ip.Is4() || ip.Is4In6()) {
+				continue
+			}
+			answers = append(answers, &dnsmessage.A{
+				Hdr: dnsmessage.RR_Header{
+					Name:   fqdn,
+					Rrtype: dnsmessage.TypeA,
+					Class:  dnsmessage.ClassINET,
+					Ttl:    0,
+				},
+				A: ip.Unmap().AsSlice(),
+			})
+		case dnsmessage.TypeAAAA:
+			if !ip.Is6() || ip.Is4In6() {
+				continue
+			}
+			answers = append(answers, &dnsmessage.AAAA{
+				Hdr: dnsmessage.RR_Header{
+					Name:   fqdn,
+					Rrtype: dnsmessage.TypeAAAA,
+					Class:  dnsmessage.ClassINET,
+					Ttl:    0,
+				},
+				AAAA: ip.AsSlice(),
+			})
+		}
+	}
+	return answers
 }
