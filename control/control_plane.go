@@ -93,6 +93,20 @@ const (
 	controlPlaneServeShutdownGraceTime = 2 * time.Second
 )
 
+func updateListenSocketMap(m *ebpf.Map, key any, conn syscall.Conn) error {
+	rawConn, err := conn.SyscallConn()
+	if err != nil {
+		return err
+	}
+	var updateErr error
+	if err = rawConn.Control(func(fd uintptr) {
+		updateErr = m.Update(key, uint64(fd), ebpf.UpdateAny)
+	}); err != nil {
+		return err
+	}
+	return updateErr
+}
+
 func NewControlPlane(
 	log *logrus.Logger,
 	_bpf interface{},
@@ -772,31 +786,23 @@ func (c *ControlPlane) Serve(readyChan chan<- bool, listener *Listener) (err err
 			readyChan <- false
 		}
 	}()
-	udpConn := listener.packetConn.(*net.UDPConn)
-	tcpListener, _ := listener.tcpListener.(*net.TCPListener)
+	udpConn, ok := listener.packetConn.(*net.UDPConn)
+	if !ok {
+		return fmt.Errorf("unexpected UDP packet connection type: %T", listener.packetConn)
+	}
+	tcpListener, ok := listener.tcpListener.(*net.TCPListener)
+	if !ok {
+		return fmt.Errorf("unexpected TCP listener type: %T", listener.tcpListener)
+	}
 	var serveWg sync.WaitGroup
 	/// Serve.
 	// TCP socket.
-	tcpFile, err := listener.tcpListener.(*net.TCPListener).File()
-	if err != nil {
-		return fmt.Errorf("failed to retrieve copy of the underlying TCP connection file")
-	}
-	c.deferFuncs = append(c.deferFuncs, func() error {
-		return tcpFile.Close()
-	})
-	if err := c.core.bpf.ListenSocketMap.Update(consts.ZeroKey, uint64(tcpFile.Fd()), ebpf.UpdateAny); err != nil {
-		return err
+	if err := updateListenSocketMap(c.core.bpf.ListenSocketMap, consts.ZeroKey, tcpListener); err != nil {
+		return fmt.Errorf("update TCP listen socket map: %w", err)
 	}
 	// UDP socket.
-	udpFile, err := udpConn.File()
-	if err != nil {
-		return fmt.Errorf("failed to retrieve copy of the underlying UDP connection file")
-	}
-	c.deferFuncs = append(c.deferFuncs, func() error {
-		return udpFile.Close()
-	})
-	if err := c.core.bpf.ListenSocketMap.Update(consts.OneKey, uint64(udpFile.Fd()), ebpf.UpdateAny); err != nil {
-		return err
+	if err := updateListenSocketMap(c.core.bpf.ListenSocketMap, consts.OneKey, udpConn); err != nil {
+		return fmt.Errorf("update UDP listen socket map: %w", err)
 	}
 
 	sentReady = true
@@ -810,10 +816,8 @@ func (c *ControlPlane) Serve(readyChan chan<- bool, listener *Listener) (err err
 				return
 			default:
 			}
-			if tcpListener != nil {
-				_ = tcpListener.SetDeadline(time.Now().Add(controlPlaneServePollInterval))
-			}
-			lconn, err := listener.tcpListener.Accept()
+			_ = tcpListener.SetDeadline(time.Now().Add(controlPlaneServePollInterval))
+			lconn, err := tcpListener.Accept()
 			if err != nil {
 				if ne, ok := err.(net.Error); ok && ne.Timeout() {
 					continue
