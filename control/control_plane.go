@@ -918,7 +918,7 @@ func (c *ControlPlane) Serve(readyChan chan<- bool, listener *Listener) (err err
 	select {
 	case <-serveDone:
 	case <-time.After(controlPlaneServeShutdownGraceTime):
-		c.log.Warnf("Timed out waiting for listener loops to stop after %s; continuing reload", controlPlaneServeShutdownGraceTime)
+		c.log.Debugf("Timed out waiting for listener loops to stop after %s; continuing reload", controlPlaneServeShutdownGraceTime)
 	}
 	return nil
 }
