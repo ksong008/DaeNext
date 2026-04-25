@@ -88,7 +88,10 @@ type ControlPlane struct {
 	mptcp             bool
 }
 
-const controlPlaneServePollInterval = 150 * time.Millisecond
+const (
+	controlPlaneServePollInterval      = 150 * time.Millisecond
+	controlPlaneServeShutdownGraceTime = 2 * time.Second
+)
 
 func NewControlPlane(
 	log *logrus.Logger,
@@ -903,7 +906,16 @@ func (c *ControlPlane) Serve(readyChan chan<- bool, listener *Listener) (err err
 	}()
 	c.ActivateCheck()
 	<-c.ctx.Done()
-	serveWg.Wait()
+	serveDone := make(chan struct{})
+	go func() {
+		serveWg.Wait()
+		close(serveDone)
+	}()
+	select {
+	case <-serveDone:
+	case <-time.After(controlPlaneServeShutdownGraceTime):
+		c.log.Warnf("Timed out waiting for listener loops to stop after %s; continuing reload", controlPlaneServeShutdownGraceTime)
+	}
 	return nil
 }
 
