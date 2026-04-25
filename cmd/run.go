@@ -234,9 +234,7 @@ loop:
 				newConf.Global.LogLevel = "warning"
 			} else {
 				var includes []string
-				tReadConfig := time.Now()
 				newConf, includes, err = readConfig(cfgFile)
-				log.WithField("duration", time.Since(tReadConfig)).Warnln("[Reload] Read config finished")
 				if err != nil {
 					log.WithFields(logrus.Fields{
 						"err": err,
@@ -269,13 +267,11 @@ loop:
 			// bind endpoint; otherwise both listeners can coexist briefly until the
 			// old control plane closes.
 			if shouldStopOldDNSListener {
-				tStopDNS := time.Now()
 				if err := c.StopDNSListener(); err != nil {
 					log.Warnf("[Reload] Failed to stop old DNS listener: %v", err)
 				} else {
 					oldDNSListenerStopped = true
 				}
-				log.WithField("duration", time.Since(tStopDNS)).Warnln("[Reload] Stop DNS listener finished")
 			}
 
 			log.Warnln("[Reload] Load new control plane")
