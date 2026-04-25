@@ -108,6 +108,8 @@ github.com/ksong008/outbound v0.0.0-20260422120256-2a8dd49a63aa h1:R1/X2NvaF4pif
 github.com/ksong008/outbound v0.0.0-20260422120256-2a8dd49a63aa/go.mod h1:v5qczoC4WfifZ6BEM+JwDOznEVYejA1POwF+Yk2+aeI=
 github.com/ksong008/outbound v0.0.0-20260423125357-6c33c220a28c h1:KjyOdchuZIAaRwLoEUEXtJHnKi6/9+oSYnvkXas978k=
 github.com/ksong008/outbound v0.0.0-20260423125357-6c33c220a28c/go.mod h1:VxDguOAXDOgV216pKp8k075YLXiNtrfYRC0BUgpQN9c=
+github.com/ksong008/outbound v0.0.0-20260425061239-55a98566b304 h1:lijrAouywf7JjgF8lQ6hyS53AmsJF9AkQgk5hH7Syuk=
+github.com/ksong008/outbound v0.0.0-20260425061239-55a98566b304/go.mod h1:VxDguOAXDOgV216pKp8k075YLXiNtrfYRC0BUgpQN9c=
 github.com/ksong008/quic-go v0.0.0-20260419080117-578539b67bcc h1:pb6QJdXsuwG0u4sXhue08BdwqekraQjxeBx4IDvvEq0=
 github.com/ksong008/quic-go v0.0.0-20260419080117-578539b67bcc/go.mod h1:hykVjD1wT/nAFcAkagZpziNAnXLwJOOpn0Ozohtgmsw=
 github.com/mattn/go-colorable v0.1.13 h1:fFA4WZxdEF4tXPZVKMLwD8oUnCTTo08duU7wxecdEvA=
