@@ -16,6 +16,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"reflect"
 	"runtime"
 	"strconv"
 	"strings"
@@ -227,7 +228,7 @@ loop:
 					_ = os.WriteFile(SignalProgressFilePath, append([]byte{consts.ReloadError}, []byte("\n"+err.Error())...), 0644)
 					continue
 				}
-				newConf.Global = deepcopy.Copy(conf.Global).(config.Global)
+				newConf.Global = conf.Global
 				newConf.Global.WanInterface = nil
 				newConf.Global.LanInterface = nil
 				newConf.Global.LogLevel = "warning"
@@ -254,11 +255,10 @@ loop:
 
 			// New control plane.
 			obj := c.EjectBpf()
-			// Do not clone dns cache on reload.
-			// The current reload path does not restore that cloned cache into the
-			// new controller/domain-routing state, so copying it here only adds
-			// reload-time allocations without preserving useful runtime state.
 			var dnsCache map[string]*control.DnsCache
+			if !isSuspend && reflect.DeepEqual(conf.Dns, newConf.Dns) {
+				dnsCache = c.SnapshotDnsCache()
+			}
 			shouldStopOldDNSListener := strings.TrimSpace(conf.Dns.Bind) != "" &&
 				strings.TrimSpace(newConf.Dns.Bind) != "" &&
 				strings.TrimSpace(conf.Dns.Bind) == strings.TrimSpace(newConf.Dns.Bind)
