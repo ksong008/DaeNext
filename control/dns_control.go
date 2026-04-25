@@ -25,7 +25,6 @@ import (
 	"github.com/daeuniverse/dae/component/outbound/dialer"
 	"github.com/daeuniverse/outbound/pkg/fastrand"
 	dnsmessage "github.com/miekg/dns"
-	"github.com/mohae/deepcopy"
 	"github.com/sirupsen/logrus"
 )
 
@@ -605,7 +604,7 @@ func (c *DnsController) HandleWithResponseWriter_(dnsMessage *dnsmessage.Msg, re
 	// For non-preferred qtypes, issue both queries concurrently:
 	// if the preferred qtype has records we can reject early; otherwise we may
 	// still need the requested qtype response.
-	dnsMessage2 := deepcopy.Copy(dnsMessage).(*dnsmessage.Msg)
+	dnsMessage2 := dnsMessage.Copy()
 	dnsMessage2.Id = uint16(fastrand.Intn(math.MaxUint16))
 	dnsMessage2.Question[0].Qtype = qtype2
 

@@ -6,6 +6,8 @@
 package control
 
 import (
+	"context"
+	"strconv"
 	"sync"
 	"testing"
 	"time"
@@ -92,4 +94,54 @@ func TestUdpTaskPoolDoesNotSweepRunningQueue(t *testing.T) {
 
 	close(release)
 	<-done
+}
+
+func TestUdpTaskPoolEvictsOldestIdleQueueWhenFull(t *testing.T) {
+	pool := NewUdpTaskPool()
+	defer pool.Close()
+
+	now := time.Now()
+	pool.now = func() time.Time { return now }
+
+	pool.mu.Lock()
+	for i := 0; i < udpTaskPoolMaxQueues; i++ {
+		key := "idle-" + strconv.Itoa(i)
+		ctx, cancel := context.WithCancel(context.Background())
+		ch := make(chan UdpTask, UdpTaskQueueLength)
+		q := &UdpTaskQueue{
+			key:        key,
+			p:          pool,
+			ch:         ch,
+			agingTime:  time.Minute,
+			ctx:        ctx,
+			cancel:     cancel,
+			closed:     make(chan struct{}),
+			lastActive: now.Add(time.Duration(i-udpTaskPoolMaxQueues) * time.Second),
+		}
+		go q.convoy()
+		pool.m[key] = q
+	}
+	pool.mu.Unlock()
+
+	done := make(chan struct{})
+	pool.EmitTask("fresh-key", func() {
+		close(done)
+	})
+	<-done
+
+	if pool.Count() != udpTaskPoolMaxQueues {
+		t.Fatalf("expected queue count to remain capped at %d, got %d", udpTaskPoolMaxQueues, pool.Count())
+	}
+
+	pool.mu.Lock()
+	_, oldestStillExists := pool.m["idle-0"]
+	_, freshExists := pool.m["fresh-key"]
+	pool.mu.Unlock()
+
+	if oldestStillExists {
+		t.Fatal("expected oldest idle queue to be evicted")
+	}
+	if !freshExists {
+		t.Fatal("expected fresh queue to be created")
+	}
 }
