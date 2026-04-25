@@ -1168,6 +1168,14 @@ func (c *ControlPlane) StopDNSListener() error {
 	return nil
 }
 
+// StartDNSListener restarts the DNS listener if it exists on this control plane.
+func (c *ControlPlane) StartDNSListener() error {
+	if c.dnsListener != nil {
+		return c.dnsListener.Start()
+	}
+	return nil
+}
+
 // FlushReloadScopedResources clears global transport/session pools that should
 // not survive a successful reload. It is intentionally called by the reload
 // coordinator only after a replacement control plane has been constructed.
