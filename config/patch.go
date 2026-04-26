@@ -6,6 +6,7 @@
 package config
 
 import (
+	"fmt"
 	"github.com/daeuniverse/dae/common"
 	"github.com/sirupsen/logrus"
 	"strings"
@@ -53,7 +54,11 @@ func patchMustOutbound(params *Config) error {
 			})
 		}
 	}
-	if f := FunctionOrStringToFunction(params.Routing.Fallback); strings.HasPrefix(f.Name, "must_") {
+	f, err := functionOrStringToFunctionChecked(params.Routing.Fallback)
+	if err != nil {
+		return fmt.Errorf("invalid routing fallback: %w", err)
+	}
+	if strings.HasPrefix(f.Name, "must_") {
 		f.Name = strings.TrimPrefix(f.Name, "must_")
 		f.Params = append(f.Params, &config_parser.Param{
 			Val: "must",
