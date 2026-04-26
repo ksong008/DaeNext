@@ -6,6 +6,7 @@
 package control
 
 import (
+	"context"
 	"fmt"
 	"net"
 	"net/netip"
@@ -61,7 +62,9 @@ func sendPkt(log *logrus.Logger, data []byte, from netip.AddrPort, realTo, to ne
 	return err
 }
 
-func (c *ControlPlane) handlePkt(lConn *net.UDPConn, data []byte, src, pktDst, realDst netip.AddrPort, routingResult *bpfRoutingResult, skipSniffing bool) (err error) {
+func (c *ControlPlane) handlePkt(ctx context.Context, lConn *net.UDPConn, data []byte, src, pktDst, realDst netip.AddrPort, routingResult *bpfRoutingResult, skipSniffing bool) (err error) {
+	reqCtx, cancel := context.WithCancel(contextOrBackground(ctx))
+	defer cancel()
 	var realSrc netip.AddrPort
 	var domain string
 	realSrc = src
@@ -129,7 +132,8 @@ func (c *ControlPlane) handlePkt(lConn *net.UDPConn, data []byte, src, pktDst, r
 			}
 			defer DefaultPacketSnifferSessionMgr.Remove(key, sniffer)
 			// Re-handlePkt after self func.
-			toRehandle := sniffer.Data()[1 : len(sniffer.Data())-1] // Skip the first empty and the last (self).
+			snifferData := sniffer.Data()
+			toRehandle := snifferData[1 : len(snifferData)-1] // Skip the first empty and the last (self).
 			sniffer.Mu.Unlock()
 			if len(toRehandle) > 0 {
 				defer func() {
@@ -137,10 +141,10 @@ func (c *ControlPlane) handlePkt(lConn *net.UDPConn, data []byte, src, pktDst, r
 						for _, d := range toRehandle {
 							dCopy := pool.Get(len(d))
 							copy(dCopy, d)
-							go func(data pool.PB) {
+							go func(parentCtx context.Context, data pool.PB) {
 								defer data.Put()
-								_ = c.handlePkt(lConn, data, src, pktDst, realDst, routingResult, true)
-							}(dCopy)
+								_ = c.handlePkt(parentCtx, lConn, data, src, pktDst, realDst, routingResult, true)
+							}(ctx, dCopy)
 						}
 					}
 				}()
@@ -158,6 +162,7 @@ func (c *ControlPlane) handlePkt(lConn *net.UDPConn, data []byte, src, pktDst, r
 	}
 	if isDns {
 		return c.dnsController.Handle_(dnsMessage, &udpRequest{
+			ctx:           reqCtx,
 			realSrc:       realSrc,
 			realDst:       realDst,
 			src:           src,
@@ -185,7 +190,7 @@ func (c *ControlPlane) handlePkt(lConn *net.UDPConn, data []byte, src, pktDst, r
 		shouldReroute bool
 		dialIp        bool
 	)
-	_, shouldReroute, _ = c.ChooseDialTarget(outboundIndex, realDst, domain)
+	_, shouldReroute, _ = c.ChooseDialTarget(reqCtx, outboundIndex, realDst, domain)
 	// Do not overwrite target.
 	// This fixes a problem that quic connection to google servers.
 	// Reproduce:

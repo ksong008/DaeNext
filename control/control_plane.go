@@ -78,6 +78,7 @@ type ControlPlane struct {
 
 	muRealDomainSet sync.Mutex
 	realDomainSet   *bloom.BloomFilter
+	realDomainCache map[string]realDomainCacheEntry
 
 	wanInterface []string
 	lanInterface []string
@@ -91,7 +92,15 @@ type ControlPlane struct {
 const (
 	controlPlaneServePollInterval      = 150 * time.Millisecond
 	controlPlaneServeShutdownGraceTime = 2 * time.Second
+	realDomainPositiveCacheTtl         = 5 * time.Minute
+	realDomainNegativeCacheTtl         = 30 * time.Second
 )
+
+type realDomainCacheEntry struct {
+	isReal        bool
+	shouldReroute bool
+	expiresAt     time.Time
+}
 
 func updateListenSocketMap(m *ebpf.Map, key any, conn syscall.Conn) error {
 	rawConn, err := conn.SyscallConn()
@@ -417,6 +426,7 @@ func NewControlPlane(
 		ready:             make(chan struct{}),
 		muRealDomainSet:   sync.Mutex{},
 		realDomainSet:     bloom.NewWithEstimates(2048, 0.001),
+		realDomainCache:   make(map[string]realDomainCacheEntry),
 		lanInterface:      global.LanInterface,
 		wanInterface:      global.WanInterface,
 		sniffingTimeout:   sniffingTimeout,
@@ -681,7 +691,43 @@ func (c *ControlPlane) ActivateCheck() {
 	}
 }
 
-func (c *ControlPlane) ChooseDialTarget(outbound consts.OutboundIndex, dst netip.AddrPort, domain string) (dialTarget string, shouldReroute bool, dialIp bool) {
+func contextOrBackground(ctx context.Context) context.Context {
+	if ctx != nil {
+		return ctx
+	}
+	return context.Background()
+}
+
+func (c *ControlPlane) cachedRealDomainVerdict(domain string, now time.Time) (isReal bool, shouldReroute bool, ok bool) {
+	c.muRealDomainSet.Lock()
+	defer c.muRealDomainSet.Unlock()
+
+	entry, ok := c.realDomainCache[domain]
+	if !ok {
+		return false, false, false
+	}
+	if !entry.expiresAt.After(now) {
+		delete(c.realDomainCache, domain)
+		return false, false, false
+	}
+	return entry.isReal, entry.shouldReroute, true
+}
+
+func (c *ControlPlane) rememberRealDomainVerdict(domain string, isReal bool, shouldReroute bool, ttl time.Duration) {
+	c.muRealDomainSet.Lock()
+	defer c.muRealDomainSet.Unlock()
+
+	if isReal {
+		c.realDomainSet.AddString(domain)
+	}
+	c.realDomainCache[domain] = realDomainCacheEntry{
+		isReal:        isReal,
+		shouldReroute: shouldReroute,
+		expiresAt:     time.Now().Add(ttl),
+	}
+}
+
+func (c *ControlPlane) ChooseDialTarget(ctx context.Context, outbound consts.OutboundIndex, dst netip.AddrPort, domain string) (dialTarget string, shouldReroute bool, dialIp bool) {
 	dialMode := consts.DialMode_Ip
 
 	if !outbound.IsReserved() && domain != "" {
@@ -690,6 +736,11 @@ func (c *ControlPlane) ChooseDialTarget(outbound consts.OutboundIndex, dst netip
 			if cache := c.dnsController.LookupDnsRespCache(c.dnsController.cacheKey(domain, common.AddrToDnsType(dst.Addr())), true); cache != nil {
 				// Has A/AAAA records. It is a real domain.
 				dialMode = consts.DialMode_Domain
+			} else if isReal, cachedShouldReroute, ok := c.cachedRealDomainVerdict(domain, time.Now()); ok {
+				if isReal {
+					dialMode = consts.DialMode_Domain
+					shouldReroute = cachedShouldReroute
+				}
 			} else {
 				// Check if the domain is in real-domain set (bloom filter).
 				c.muRealDomainSet.Lock()
@@ -699,10 +750,11 @@ func (c *ControlPlane) ChooseDialTarget(outbound consts.OutboundIndex, dst netip
 
 					// Should use this domain to reroute
 					shouldReroute = true
+					c.rememberRealDomainVerdict(domain, true, true, realDomainPositiveCacheTtl)
 				} else {
 					c.muRealDomainSet.Unlock()
 					// Lookup A/AAAA to make sure it is a real domain.
-					ctx, cancel := context.WithTimeout(context.TODO(), 5*time.Second)
+					ctx, cancel := context.WithTimeout(contextOrBackground(ctx), 5*time.Second)
 					defer cancel()
 					// TODO: use DNS controller and re-route by control plane.
 					systemDns, err := netutils.SystemDns()
@@ -710,14 +762,14 @@ func (c *ControlPlane) ChooseDialTarget(outbound consts.OutboundIndex, dst netip
 						if ip46, _, _ := netutils.ResolveIp46(ctx, direct.SymmetricDirect, systemDns, domain, common.MagicNetwork("udp", c.soMarkFromDae, c.mptcp), true); ip46.Ip4.IsValid() || ip46.Ip6.IsValid() {
 							// Has A/AAAA records. It is a real domain.
 							dialMode = consts.DialMode_Domain
-							// Add it to real-domain set.
-							c.muRealDomainSet.Lock()
-							c.realDomainSet.AddString(domain)
-							c.muRealDomainSet.Unlock()
-
 							// Should use this domain to reroute
 							shouldReroute = true
+							c.rememberRealDomainVerdict(domain, true, true, realDomainPositiveCacheTtl)
+						} else {
+							c.rememberRealDomainVerdict(domain, false, false, realDomainNegativeCacheTtl)
 						}
+					} else {
+						c.rememberRealDomainVerdict(domain, false, false, realDomainNegativeCacheTtl)
 					}
 				}
 
@@ -836,7 +888,7 @@ func (c *ControlPlane) Serve(readyChan chan<- bool, listener *Listener) (err err
 			go func(lconn net.Conn) {
 				c.inConnections.Store(lconn, struct{}{})
 				defer c.inConnections.Delete(lconn)
-				if err := c.handleConn(lconn); err != nil {
+				if err := c.handleConn(c.ctx, lconn); err != nil {
 					c.log.Warnln("handleConn:", err)
 				}
 			}(lconn)
@@ -899,7 +951,7 @@ func (c *ControlPlane) Serve(readyChan chan<- bool, listener *Listener) (err err
 				} else {
 					realDst = pktDst
 				}
-				if e := c.handlePkt(udpConn, data, convergeSrc, common.ConvergeAddrPort(pktDst), common.ConvergeAddrPort(realDst), routingResult, false); e != nil {
+				if e := c.handlePkt(c.ctx, udpConn, data, convergeSrc, common.ConvergeAddrPort(pktDst), common.ConvergeAddrPort(realDst), routingResult, false); e != nil {
 					c.log.Warnln("handlePkt:", e)
 				}
 			})
