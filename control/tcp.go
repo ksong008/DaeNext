@@ -23,8 +23,10 @@ import (
 	"golang.org/x/sys/unix"
 )
 
-func (c *ControlPlane) handleConn(lConn net.Conn) (err error) {
+func (c *ControlPlane) handleConn(ctx context.Context, lConn net.Conn) (err error) {
 	defer lConn.Close()
+	reqCtx, cancel := context.WithCancel(contextOrBackground(ctx))
+	defer cancel()
 
 	// Sniff target domain.
 	sniffer := sniffing.NewConnSniffer(lConn, c.sniffingTimeout)
@@ -47,6 +49,7 @@ func (c *ControlPlane) handleConn(lConn net.Conn) (err error) {
 
 	// Dial and relay.
 	rConn, err := c.RouteDialTcp(&RouteDialParam{
+		Ctx:         reqCtx,
 		Outbound:    consts.OutboundIndex(routingResult.Outbound),
 		Domain:      domain,
 		Mac:         routingResult.Mac,
@@ -78,6 +81,7 @@ func (c *ControlPlane) handleConn(lConn net.Conn) (err error) {
 }
 
 type RouteDialParam struct {
+	Ctx         context.Context
 	Outbound    consts.OutboundIndex
 	Domain      string
 	Mac         [6]uint8
@@ -103,7 +107,7 @@ func (c *ControlPlane) RouteDialTcp(p *RouteDialParam) (conn netproxy.Conn, err 
 	src := p.Src
 	dst := p.Dest
 
-	dialTarget, shouldReroute, dialIp := c.ChooseDialTarget(outboundIndex, dst, domain)
+	dialTarget, shouldReroute, dialIp := c.ChooseDialTarget(p.Ctx, outboundIndex, dst, domain)
 	if shouldReroute {
 		outboundIndex = consts.OutboundControlPlaneRouting
 	}
@@ -123,7 +127,7 @@ func (c *ControlPlane) RouteDialTcp(p *RouteDialParam) (conn netproxy.Conn, err 
 			)
 		}
 		// Reset dialTarget.
-		dialTarget, _, dialIp = c.ChooseDialTarget(outboundIndex, dst, domain)
+		dialTarget, _, dialIp = c.ChooseDialTarget(p.Ctx, outboundIndex, dst, domain)
 	default:
 	}
 	if routingResult.Mark == 0 {
@@ -162,7 +166,7 @@ func (c *ControlPlane) RouteDialTcp(p *RouteDialParam) (conn netproxy.Conn, err 
 			"mac":      Mac2String(routingResult.Mac[:]),
 		}).Infof("%v <-> %v", RefineSourceToShow(src, dst.Addr()), dialTarget)
 	}
-	ctx, cancel := context.WithTimeout(context.TODO(), consts.DefaultDialTimeout)
+	ctx, cancel := context.WithTimeout(contextOrBackground(p.Ctx), consts.DefaultDialTimeout)
 	defer cancel()
 	return d.DialContext(ctx, common.MagicNetwork("tcp", routingResult.Mark, c.mptcp), dialTarget)
 }

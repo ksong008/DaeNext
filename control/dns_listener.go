@@ -6,6 +6,7 @@
 package control
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"net"
@@ -301,7 +302,10 @@ func (h *dnsHandler) ServeDNS(w dnsmessage.ResponseWriter, r *dnsmessage.Msg) {
 	}
 
 	// Handle the DNS request using the existing DNS controller
+	reqCtx, cancel := context.WithCancel(contextOrBackground(h.controller.ctx))
+	defer cancel()
 	udpReq := &udpRequest{
+		ctx:           reqCtx,
 		realSrc:       clientIPPort,
 		realDst:       localIPPort,
 		src:           clientIPPort,

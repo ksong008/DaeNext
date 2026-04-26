@@ -6,6 +6,7 @@
 package control
 
 import (
+	"context"
 	"net"
 	"net/netip"
 	"strings"
@@ -180,6 +181,7 @@ func TestHandleWithResponseWriterRejectsAsIsForLocalListener(t *testing.T) {
 	req.SetQuestion("example.com.", dnsmessage.TypeA)
 
 	err = controller.handleWithResponseWriter_(req, &udpRequest{
+		ctx:     context.Background(),
 		realSrc: netip.MustParseAddrPort("127.0.0.1:43210"),
 		realDst: netip.MustParseAddrPort("127.0.0.1:5353"),
 		src:     netip.MustParseAddrPort("127.0.0.1:43210"),
