@@ -9,9 +9,11 @@ import (
 	"math"
 	"os"
 	"runtime"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -23,6 +25,7 @@ const (
 	runtimeRateWindow        = time.Second
 	maxRuntimeHistoryBuckets = int((time.Duration(maxRuntimeHistorySeconds) * time.Second) / runtimeBucketDuration)
 	runtimeHistoryTrimBatch  = 256
+	runtimeStatsShardCount   = 16
 )
 
 type RuntimeTrafficSample struct {
@@ -32,17 +35,20 @@ type RuntimeTrafficSample struct {
 }
 
 type RuntimeStatsSnapshot struct {
-	UpdatedAt         time.Time
-	UploadRate        uint64
-	DownloadRate      uint64
-	UploadTotal       uint64
-	DownloadTotal     uint64
-	ActiveConnections int
-	UDPSessions       int
-	RSSBytes          uint64
-	HeapAllocBytes    uint64
-	Goroutines        int
-	Samples           []RuntimeTrafficSample
+	UpdatedAt             time.Time
+	UploadRate            uint64
+	DownloadRate          uint64
+	UploadTotal           uint64
+	DownloadTotal         uint64
+	ActiveConnections     int
+	UDPSessions           int
+	UDPTaskQueues         int
+	UDPTaskDropTotal      uint64
+	PacketSnifferSessions int
+	RSSBytes              uint64
+	HeapAllocBytes        uint64
+	Goroutines            int
+	Samples               []RuntimeTrafficSample
 }
 
 type runtimeBucket struct {
@@ -52,7 +58,7 @@ type runtimeBucket struct {
 	Duration      time.Duration
 }
 
-type runtimeStats struct {
+type runtimeStatsShard struct {
 	mu sync.Mutex
 
 	currentBucketStart   time.Time
@@ -64,7 +70,27 @@ type runtimeStats struct {
 	history       []runtimeBucket
 }
 
-var globalRuntimeStats = &runtimeStats{}
+type runtimeStats struct {
+	nextShard uint32
+	shards    []runtimeStatsShard
+}
+
+func newRuntimeStats(shardCount int) *runtimeStats {
+	if shardCount <= 0 {
+		shardCount = 1
+	}
+	return &runtimeStats{
+		shards: make([]runtimeStatsShard, shardCount),
+	}
+}
+
+var globalRuntimeStats = newRuntimeStats(runtimeStatsShardCount)
+
+// runtimeStatsOccupancySnapshot keeps file-level runtime_stats tests buildable
+// while allowing full package builds to sample live control-pool occupancy.
+var runtimeStatsOccupancySnapshot = func() (udpTaskQueues int, udpTaskDropTotal uint64, packetSnifferSessions int) {
+	return 0, 0, 0
+}
 
 func RecordUploadTraffic(n int64) {
 	if n <= 0 {
@@ -81,10 +107,28 @@ func RecordDownloadTraffic(n int64) {
 }
 
 func SnapshotRuntimeStats(activeConnections int, udpSessions int, windowSec int, maxPoints int) RuntimeStatsSnapshot {
-	return globalRuntimeStats.snapshot(activeConnections, udpSessions, windowSec, maxPoints, time.Now())
+	udpTaskQueues, udpTaskDropTotal, packetSnifferSessions := runtimeStatsOccupancySnapshot()
+	return globalRuntimeStats.snapshot(
+		activeConnections,
+		udpSessions,
+		udpTaskQueues,
+		udpTaskDropTotal,
+		packetSnifferSessions,
+		windowSec,
+		maxPoints,
+		time.Now(),
+	)
 }
 
 func (s *runtimeStats) record(upload uint64, download uint64, now time.Time) {
+	if len(s.shards) == 0 {
+		return
+	}
+	idx := int(atomic.AddUint32(&s.nextShard, 1)-1) % len(s.shards)
+	s.shards[idx].record(upload, download, now)
+}
+
+func (s *runtimeStatsShard) record(upload uint64, download uint64, now time.Time) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -95,7 +139,16 @@ func (s *runtimeStats) record(upload uint64, download uint64, now time.Time) {
 	s.downloadTotal += download
 }
 
-func (s *runtimeStats) snapshot(activeConnections int, udpSessions int, windowSec int, maxPoints int, now time.Time) RuntimeStatsSnapshot {
+func (s *runtimeStats) snapshot(
+	activeConnections int,
+	udpSessions int,
+	udpTaskQueues int,
+	udpTaskDropTotal uint64,
+	packetSnifferSessions int,
+	windowSec int,
+	maxPoints int,
+	now time.Time,
+) RuntimeStatsSnapshot {
 	if windowSec <= 0 {
 		windowSec = defaultRuntimeWindowSec
 	}
@@ -103,12 +156,67 @@ func (s *runtimeStats) snapshot(activeConnections int, udpSessions int, windowSe
 		maxPoints = defaultRuntimeMaxPoints
 	}
 
-	s.mu.Lock()
-
 	nowBucketStart := bucketStart(now)
-	s.advanceLocked(nowBucketStart)
-
 	startTime := now.Add(-time.Duration(windowSec) * time.Second)
+	aggregatedBuckets := make(map[int64]runtimeBucket)
+	var uploadTotal uint64
+	var downloadTotal uint64
+	for i := range s.shards {
+		buckets, shardUploadTotal, shardDownloadTotal := s.shards[i].snapshotBuckets(nowBucketStart, startTime, now)
+		uploadTotal += shardUploadTotal
+		downloadTotal += shardDownloadTotal
+		for _, bucket := range buckets {
+			key := bucket.Timestamp.UnixNano()
+			if aggregated, ok := aggregatedBuckets[key]; ok {
+				aggregated.UploadBytes += bucket.UploadBytes
+				aggregated.DownloadBytes += bucket.DownloadBytes
+				if bucket.Duration > aggregated.Duration {
+					aggregated.Duration = bucket.Duration
+				}
+				aggregatedBuckets[key] = aggregated
+				continue
+			}
+			aggregatedBuckets[key] = bucket
+		}
+	}
+	buckets := make([]runtimeBucket, 0, len(aggregatedBuckets))
+	for _, bucket := range aggregatedBuckets {
+		buckets = append(buckets, bucket)
+	}
+	sort.Slice(buckets, func(i, j int) bool {
+		return buckets[i].Timestamp.Before(buckets[j].Timestamp)
+	})
+
+	uploadRate, downloadRate := ratesFromBuckets(buckets, now, runtimeRateWindow)
+	samples := bucketizeRuntimeSamples(samplesFromBuckets(buckets), maxPoints)
+
+	rssBytes := currentRSSBytes()
+	var memStats runtime.MemStats
+	runtime.ReadMemStats(&memStats)
+
+	return RuntimeStatsSnapshot{
+		UpdatedAt:             now,
+		UploadRate:            uploadRate,
+		DownloadRate:          downloadRate,
+		UploadTotal:           uploadTotal,
+		DownloadTotal:         downloadTotal,
+		ActiveConnections:     activeConnections,
+		UDPSessions:           udpSessions,
+		UDPTaskQueues:         udpTaskQueues,
+		UDPTaskDropTotal:      udpTaskDropTotal,
+		PacketSnifferSessions: packetSnifferSessions,
+		RSSBytes:              rssBytes,
+		HeapAllocBytes:        memStats.HeapAlloc,
+		Goroutines:            runtime.NumGoroutine(),
+		Samples:               samples,
+	}
+}
+
+func (s *runtimeStatsShard) snapshotBuckets(nowBucketStart time.Time, startTime time.Time, now time.Time) ([]runtimeBucket, uint64, uint64) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	s.advanceLocked(nowBucketStart)
 
 	buckets := make([]runtimeBucket, 0, len(s.history)+1)
 	for _, bucket := range s.history {
@@ -127,30 +235,7 @@ func (s *runtimeStats) snapshot(activeConnections int, udpSessions int, windowSe
 		DownloadBytes: s.currentDownloadBytes,
 		Duration:      currentDuration,
 	})
-
-	uploadRate, downloadRate := ratesFromBuckets(buckets, now, runtimeRateWindow)
-	uploadTotal := s.uploadTotal
-	downloadTotal := s.downloadTotal
-	samples := bucketizeRuntimeSamples(samplesFromBuckets(buckets), maxPoints)
-	s.mu.Unlock()
-
-	rssBytes := currentRSSBytes()
-	var memStats runtime.MemStats
-	runtime.ReadMemStats(&memStats)
-
-	return RuntimeStatsSnapshot{
-		UpdatedAt:         now,
-		UploadRate:        uploadRate,
-		DownloadRate:      downloadRate,
-		UploadTotal:       uploadTotal,
-		DownloadTotal:     downloadTotal,
-		ActiveConnections: activeConnections,
-		UDPSessions:       udpSessions,
-		RSSBytes:          rssBytes,
-		HeapAllocBytes:    memStats.HeapAlloc,
-		Goroutines:        runtime.NumGoroutine(),
-		Samples:           samples,
-	}
+	return buckets, s.uploadTotal, s.downloadTotal
 }
 
 func currentRSSBytes() uint64 {
@@ -169,7 +254,7 @@ func currentRSSBytes() uint64 {
 	return rssPages * uint64(os.Getpagesize())
 }
 
-func (s *runtimeStats) advanceLocked(targetBucketStart time.Time) {
+func (s *runtimeStatsShard) advanceLocked(targetBucketStart time.Time) {
 	if s.currentBucketStart.IsZero() {
 		s.currentBucketStart = targetBucketStart
 		return
