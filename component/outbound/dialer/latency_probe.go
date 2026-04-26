@@ -22,6 +22,7 @@ type LatencyProbeResult struct {
 }
 
 const manualProbeTimeout = 4 * time.Second
+const manualProbeScopeNote = "TCP-only"
 
 func (d *Dialer) ProbeLatency() (*LatencyProbeResult, error) {
 	checkOptions := d.latencyProbeCheckOptions()
@@ -40,6 +41,7 @@ func (d *Dialer) ProbeLatency() (*LatencyProbeResult, error) {
 		return &LatencyProbeResult{
 			Alive:     true,
 			Latency:   latency,
+			Message:   manualProbeScopeNote,
 			CheckedAt: time.Now(),
 		}, nil
 	}
