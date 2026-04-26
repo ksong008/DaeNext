@@ -17,6 +17,13 @@ var (
 	Version string
 )
 
+func recoveredConfigError(action string, recovered any) error {
+	if err, ok := recovered.(error); ok {
+		return fmt.Errorf("%s: %w", action, err)
+	}
+	return fmt.Errorf("%s: unexpected internal config state: %v", action, recovered)
+}
+
 type Global struct {
 	TproxyPort        uint16 `mapstructure:"tproxy_port" default:"12345"`
 	TproxyPortProtect bool   `mapstructure:"tproxy_port_protect" default:"true"`
@@ -59,21 +66,28 @@ type Utls struct {
 
 type FunctionOrString interface{}
 
-func FunctionOrStringToFunction(fs FunctionOrString) (f *config_parser.Function) {
+func functionOrStringToFunctionChecked(fs FunctionOrString) (*config_parser.Function, error) {
 	switch fs := fs.(type) {
 	case string:
-		return &config_parser.Function{Name: fs}
+		return &config_parser.Function{Name: fs}, nil
 	case *config_parser.Function:
-		return fs
+		return fs, nil
 	case []*config_parser.Function:
 		if len(fs) == 1 {
-			return fs[0]
-		} else {
-			panic(fmt.Sprintf("unknown type of 'fallback' in section routing: %T", fs))
+			return fs[0], nil
 		}
+		return nil, fmt.Errorf("expected exactly 1 fallback function, got %d", len(fs))
 	default:
-		panic(fmt.Sprintf("unknown type of 'fallback' in section routing: %T", fs))
+		return nil, fmt.Errorf("unsupported fallback type %T", fs)
 	}
+}
+
+func FunctionOrStringToFunction(fs FunctionOrString) (f *config_parser.Function) {
+	function, err := functionOrStringToFunctionChecked(fs)
+	if err != nil {
+		panic(err)
+	}
+	return function
 }
 
 type FunctionListOrString interface{}
@@ -142,6 +156,13 @@ type Config struct {
 
 // New params from sections. This func assumes merging (section "include") and deduplication for section names has been executed.
 func New(sections []*config_parser.Section) (conf *Config, err error) {
+	defer func() {
+		if recovered := recover(); recovered != nil {
+			conf = nil
+			err = recoveredConfigError("build config", recovered)
+		}
+	}()
+
 	// Set up name to section for further use.
 	type Section struct {
 		Val    *config_parser.Section

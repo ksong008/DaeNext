@@ -18,6 +18,13 @@ import (
 
 // Marshal assume all tokens should be legal, and does not prevent injection attacks.
 func (c *Config) Marshal(indentSpace int) (b []byte, err error) {
+	defer func() {
+		if recovered := recover(); recovered != nil {
+			b = nil
+			err = recoveredConfigError("marshal config", recovered)
+		}
+	}()
+
 	m := Marshaller{
 		IndentSpace: indentSpace,
 	}
@@ -131,8 +138,6 @@ func (m *Marshaller) MarshalSection(name string, from reflect.Value, depth int) 
 	default:
 		goto unsupported
 	}
-
-	panic("code should not reach here")
 
 unsupported:
 	return fmt.Errorf("unsupported section type %v", from.Type())
