@@ -231,7 +231,7 @@ getNew:
 					break
 				}
 
-				if outboundIndex, routingResult.Mark, _, err = c.Route(realSrc, realDst, domain, consts.L4ProtoType_TCP, routingResult); err != nil {
+				if outboundIndex, routingResult.Mark, _, err = c.Route(realSrc, realDst, domain, consts.L4ProtoType_UDP, routingResult); err != nil {
 					return nil, err
 				}
 				routingResult.Outbound = uint8(outboundIndex)

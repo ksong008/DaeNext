@@ -1,13 +1,14 @@
 /*
 *  SPDX-License-Identifier: AGPL-3.0-only
 *  Copyright (c) 2022-2025, daeuniverse Organization <dae@v2raya.org>
-*/
+ */
 
 package control
 
 import (
 	"context"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -17,18 +18,18 @@ const udpTaskPoolMaxQueues = 2048
 
 type UdpTask = func()
 
-// UdpTaskQueue make sure packets with the same key (4 tuples) will be sent in order.
+// UdpTaskQueue makes sure packets accepted for the same key execute in order.
 type UdpTaskQueue struct {
-	key       string
-	p         *UdpTaskPool
-	ch        chan UdpTask
-	agingTime time.Duration
-	ctx       context.Context
-	cancel    context.CancelFunc
-	closed    chan struct{}
-	mu        sync.Mutex
+	key        string
+	p          *UdpTaskPool
+	ch         chan UdpTask
+	agingTime  time.Duration
+	ctx        context.Context
+	cancel     context.CancelFunc
+	closed     chan struct{}
+	mu         sync.Mutex
 	lastActive time.Time
-	running   bool
+	running    bool
 }
 
 func (q *UdpTaskQueue) convoy() {
@@ -65,12 +66,13 @@ func (q *UdpTaskQueue) expired(now time.Time) bool {
 type UdpTaskPool struct {
 	queueChPool sync.Pool
 	// mu protects m
-	mu sync.Mutex
-	m  map[string]*UdpTaskQueue
-	ctx context.Context
-	cancel context.CancelFunc
-	cleanupWg sync.WaitGroup
-	now func() time.Time
+	mu           sync.Mutex
+	m            map[string]*UdpTaskQueue
+	ctx          context.Context
+	cancel       context.CancelFunc
+	cleanupWg    sync.WaitGroup
+	now          func() time.Time
+	droppedTasks atomic.Uint64
 }
 
 func (p *UdpTaskPool) evictOldestIdleQueueLocked(now time.Time) *UdpTaskQueue {
@@ -150,6 +152,10 @@ func (p *UdpTaskPool) Count() int {
 	return len(p.m)
 }
 
+func (p *UdpTaskPool) DropCount() uint64 {
+	return p.droppedTasks.Load()
+}
+
 func (p *UdpTaskPool) sweepExpiredQueues(now time.Time) {
 	var expired []*UdpTaskQueue
 	p.mu.Lock()
@@ -189,8 +195,9 @@ func (p *UdpTaskPool) Close() {
 	}
 }
 
-// EmitTask: Make sure packets with the same key (4 tuples) will be sent in order.
-func (p *UdpTaskPool) EmitTask(key string, task UdpTask) {
+// EmitTask queues a task for a key without blocking the caller on queue overflow.
+// It returns whether the task was accepted.
+func (p *UdpTaskPool) EmitTask(key string, task UdpTask) bool {
 	now := p.now()
 	var evicted *UdpTaskQueue
 	p.mu.Lock()
@@ -202,13 +209,13 @@ func (p *UdpTaskPool) EmitTask(key string, task UdpTask) {
 		ch := p.queueChPool.Get().(chan UdpTask)
 		ctx, cancel := context.WithCancel(context.Background())
 		q = &UdpTaskQueue{
-			key:       key,
-			p:         p,
-			ch:        ch,
-			agingTime: DefaultNatTimeout,
-			ctx:       ctx,
-			cancel:    cancel,
-			closed:    make(chan struct{}),
+			key:        key,
+			p:          p,
+			ch:         ch,
+			agingTime:  DefaultNatTimeout,
+			ctx:        ctx,
+			cancel:     cancel,
+			closed:     make(chan struct{}),
 			lastActive: now,
 		}
 		p.m[key] = q
@@ -224,10 +231,17 @@ func (p *UdpTaskPool) EmitTask(key string, task UdpTask) {
 			p.queueChPool.Put(evicted.ch)
 		}
 	}
-	// if task cannot be executed within 180s(DefaultNatTimeout), GC may be triggered, so skip the task when GC occurs
+	// If the queue is full, drop the task locally instead of stalling the shared
+	// UDP receive loop. Accepted tasks still preserve per-key order.
 	select {
 	case q.ch <- task:
+		return true
 	case <-q.ctx.Done():
+		p.droppedTasks.Add(1)
+		return false
+	default:
+		p.droppedTasks.Add(1)
+		return false
 	}
 }
 
