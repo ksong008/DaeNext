@@ -26,11 +26,12 @@ type Sniffer struct {
 	dataError error
 
 	// Common
-	sniffed string
-	buf     *bytes.Buffer
-	readMu  sync.Mutex
-	ctx     context.Context
-	cancel  func()
+	sniffed   string
+	buf       *bytes.Buffer
+	readMu    sync.Mutex
+	ctx       context.Context
+	cancel    func()
+	closeOnce sync.Once
 
 	// Packet
 	data         [][]byte
@@ -186,7 +187,11 @@ func (s *Sniffer) AppendData(data []byte) {
 }
 
 func (s *Sniffer) Data() [][]byte {
-	return s.data
+	data := make([][]byte, len(s.data))
+	for i, chunk := range s.data {
+		data[i] = append([]byte(nil), chunk...)
+	}
+	return data
 }
 
 func (s *Sniffer) NeedMore() bool {
@@ -215,13 +220,18 @@ func (s *Sniffer) Read(p []byte) (n int, err error) {
 }
 
 func (s *Sniffer) Close() (err error) {
-	select {
-	case <-s.ctx.Done():
-	default:
-		s.cancel()
-		if s.buf.Len() == 0 {
-			pool.PutBuffer(s.buf)
+	s.closeOnce.Do(func() {
+		select {
+		case <-s.ctx.Done():
+		default:
+			s.cancel()
 		}
-	}
+		if s.buf != nil {
+			s.buf.Reset()
+			pool.PutBuffer(s.buf)
+			s.buf = nil
+		}
+		s.data = nil
+	})
 	return nil
 }
