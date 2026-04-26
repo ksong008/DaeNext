@@ -689,6 +689,9 @@ func (c *DnsController) handleWithResponseWriter_(
 	if upstreamIndex == consts.DnsRequestOutboundIndex_Reject {
 		// Reject with empty answer.
 		c.RemoveDnsRespCache(cacheKey)
+		if !needResp {
+			return nil
+		}
 		return c.sendRejectWithResponseWriter_(dnsMessage, req, responseWriter)
 	}
 
@@ -745,6 +748,68 @@ func (c *DnsController) handleWithResponseWriter_(
 		return fmt.Errorf("pack DNS packet: %w", err)
 	}
 	return c.dialSend(0, req, data, dnsMessage.Id, upstream, needResp)
+}
+
+func (c *DnsController) ResolveIp46(ctx context.Context, req *udpRequest, host string) (ipv46 *netutils.Ip46, err4, err6 error) {
+	fqdn := dnsmessage.CanonicalName(host)
+	ipv46 = &netutils.Ip46{}
+	var ip4, ip6 netip.Addr
+
+	runLookup := func(lookupCtx context.Context, qtype uint16) (netip.Addr, error) {
+		msg := new(dnsmessage.Msg)
+		msg.SetQuestion(fqdn, qtype)
+		reqCopy := *req
+		reqCopy.ctx = lookupCtx
+		if err := c.handleWithResponseWriter_(msg, &reqCopy, false, nil); err != nil {
+			return netip.Addr{}, err
+		}
+		cache := c.LookupDnsRespCache(c.cacheKey(fqdn, qtype), true)
+		if cache == nil {
+			return netip.Addr{}, nil
+		}
+		for _, ip := range cache.cachedIPs() {
+			switch qtype {
+			case dnsmessage.TypeA:
+				if ip.Is4() || ip.Is4In6() {
+					return ip.Unmap(), nil
+				}
+			case dnsmessage.TypeAAAA:
+				if ip.Is6() && !ip.Is4In6() {
+					return ip, nil
+				}
+			}
+		}
+		return netip.Addr{}, nil
+	}
+
+	var wg sync.WaitGroup
+	wg.Add(2)
+	ctx4, cancel4 := context.WithCancel(contextOrBackground(ctx))
+	ctx6, cancel6 := context.WithCancel(contextOrBackground(ctx))
+	go func() {
+		defer wg.Done()
+		defer cancel4()
+		ip, err := runLookup(ctx4, dnsmessage.TypeA)
+		if err != nil && !errors.Is(err, context.Canceled) {
+			err4 = err
+			return
+		}
+		ip4 = ip
+	}()
+	go func() {
+		defer wg.Done()
+		defer cancel6()
+		ip, err := runLookup(ctx6, dnsmessage.TypeAAAA)
+		if err != nil && !errors.Is(err, context.Canceled) {
+			err6 = err
+			return
+		}
+		ip6 = ip
+	}()
+	wg.Wait()
+	ipv46.Ip4 = ip4
+	ipv46.Ip6 = ip6
+	return ipv46, err4, err6
 }
 
 // sendReject_ send empty answer.
