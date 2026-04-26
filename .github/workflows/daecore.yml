@@ -82,7 +82,7 @@ jobs:
           for pkg in $packages; do
             echo "::group::go test $pkg"
             output_file=$(mktemp)
-            if ! go test -count=1 -v "$pkg" 2>&1 | tee "$output_file"; then
+            if ! (set -o pipefail; go test -count=1 -v "$pkg" 2>&1 | tee "$output_file"); then
               failed_tests=$(grep '^--- FAIL:' "$output_file" | sed -E 's/^--- FAIL: ([^ ]+).*/\1/' | tr '\n' ' ' | sed 's/[[:space:]]\\+$//')
               echo "::error title=go test failed::$pkg"
               if [ -n "$failed_tests" ]; then
