@@ -81,10 +81,16 @@ jobs:
           failed=""
           for pkg in $packages; do
             echo "::group::go test $pkg"
-            if ! go test -count=1 "$pkg"; then
+            output_file=$(mktemp)
+            if ! go test -count=1 -v "$pkg" 2>&1 | tee "$output_file"; then
+              failed_tests=$(grep '^--- FAIL:' "$output_file" | sed -E 's/^--- FAIL: ([^ ]+).*/\1/' | tr '\n' ' ' | sed 's/[[:space:]]\\+$//')
               echo "::error title=go test failed::$pkg"
+              if [ -n "$failed_tests" ]; then
+                echo "::error title=go test cases failed::$pkg :: $failed_tests"
+              fi
               failed="$failed $pkg"
             fi
+            rm -f "$output_file"
             echo "::endgroup::"
           done
           if [ -n "$failed" ]; then
