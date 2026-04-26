@@ -82,12 +82,19 @@ jobs:
           for pkg in $packages; do
             echo "::group::go test $pkg"
             if ! go test -count=1 "$pkg"; then
+              echo "::error title=go test failed::$pkg"
               failed="$failed $pkg"
             fi
             echo "::endgroup::"
           done
           if [ -n "$failed" ]; then
             echo "Failed packages:$failed"
+            {
+              echo "## Failed packages"
+              for pkg in $failed; do
+                echo "- \`$pkg\`"
+              done
+            } >> "$GITHUB_STEP_SUMMARY"
             exit 1
           fi
 
