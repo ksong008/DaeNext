@@ -34,6 +34,7 @@ func NewWalker(parser antlr.Parser) *Walker {
 
 type paramParser struct {
 	list []*Param
+	err  error
 }
 
 func getValueFromLiteral(literal *dae_config.LiteralContext) string {
@@ -45,34 +46,55 @@ func getValueFromLiteral(literal *dae_config.LiteralContext) string {
 	return text[1 : len(text)-1]
 }
 
-func (p *paramParser) parseParam(ctx *dae_config.ParameterContext) *Param {
+func (p *paramParser) parseParam(ctx *dae_config.ParameterContext) (*Param, error) {
 	children := ctx.GetChildren()
 	if len(children) == 3 {
 		return &Param{
 			Key: children[0].(*antlr.TerminalNodeImpl).GetText(),
 			Val: getValueFromLiteral(children[2].(*dae_config.LiteralContext)),
-		}
+		}, nil
 	} else if len(children) == 1 {
 		return &Param{
 			Key: "",
 			Val: getValueFromLiteral(children[0].(*dae_config.LiteralContext)),
-		}
+		}, nil
 	}
-	panic("unexpected")
+	return nil, fmt.Errorf("bad parameter expression: %q", ctx.GetText())
 }
+
 func (p *paramParser) parseNonEmptyParamList(ctx *dae_config.NonEmptyParameterListContext) {
+	if p.err != nil {
+		return
+	}
 	children := ctx.GetChildren()
 	if len(children) == 3 {
 		p.parseNonEmptyParamList(children[0].(*dae_config.NonEmptyParameterListContext))
-		p.list = append(p.list, p.parseParam(children[2].(*dae_config.ParameterContext)))
+		if p.err != nil {
+			return
+		}
+		param, err := p.parseParam(children[2].(*dae_config.ParameterContext))
+		if err != nil {
+			p.err = err
+			return
+		}
+		p.list = append(p.list, param)
 	} else if len(children) == 1 {
-		p.list = append(p.list, p.parseParam(children[0].(*dae_config.ParameterContext)))
+		param, err := p.parseParam(children[0].(*dae_config.ParameterContext))
+		if err != nil {
+			p.err = err
+			return
+		}
+		p.list = append(p.list, param)
 	}
 }
 
 func (w *Walker) parseNonEmptyParamList(list *dae_config.NonEmptyParameterListContext) []*Param {
 	paramParser := new(paramParser)
 	paramParser.parseNonEmptyParamList(list)
+	if paramParser.err != nil {
+		w.ReportError(list, ErrorType_Unsupported, paramParser.err.Error())
+		return nil
+	}
 	return paramParser.list
 }
 
@@ -107,6 +129,9 @@ func (w *Walker) parseFunctionPrototype(ctx *dae_config.FunctionPrototypeContext
 	}
 	nonEmptyParamList := children[0].(*dae_config.NonEmptyParameterListContext)
 	params := w.parseNonEmptyParamList(nonEmptyParamList)
+	if params == nil {
+		return nil
+	}
 	f := &Function{
 		Name:   funcName,
 		Not:    not,
@@ -203,6 +228,9 @@ func (w *Walker) parseDeclaration(ctx dae_config.IDeclarationContext) *Param {
 				return nil
 			}
 			param.Annotation = w.parseNonEmptyParamList(children[0].(*dae_config.NonEmptyParameterListContext))
+			if param.Annotation == nil {
+				return nil
+			}
 		}
 	}
 	return param
@@ -256,7 +284,11 @@ func (w *Walker) parseRoutingRule(ctx dae_config.IRoutingRuleContext) *RoutingRu
 	} else if f := outboundExpr.FunctionPrototype(); f != nil {
 		outbound = w.parseFunctionPrototype(f.(*dae_config.FunctionPrototypeContext), nil)
 	} else {
-		panic("unknown outboundExpr")
+		w.ReportError(outboundExpr, ErrorType_Unsupported, "bad outbound expression")
+		return nil
+	}
+	if outbound == nil {
+		return nil
 	}
 	return &RoutingRule{
 		AndFunctions: andFunctions,

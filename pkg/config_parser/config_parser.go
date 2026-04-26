@@ -11,7 +11,21 @@ import (
 	"github.com/daeuniverse/dae-config-dist/go/dae_config"
 )
 
+func recoveredParseError(recovered any) error {
+	if err, ok := recovered.(error); ok {
+		return fmt.Errorf("parse config: %w", err)
+	}
+	return fmt.Errorf("parse config: unexpected internal parser state: %v", recovered)
+}
+
 func Parse(in string) (sections []*Section, err error) {
+	defer func() {
+		if recovered := recover(); recovered != nil {
+			sections = nil
+			err = recoveredParseError(recovered)
+		}
+	}()
+
 	errorListener := NewConsoleErrorListener()
 	lexer := dae_config.Newdae_configLexer(antlr.NewInputStream(in))
 	lexer.RemoveErrorListeners()
