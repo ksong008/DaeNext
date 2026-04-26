@@ -121,10 +121,11 @@ func (p *PacketSnifferPool) sweepExpired(now time.Time) {
 
 func (p *PacketSnifferPool) evictOldest(now time.Time) *PacketSniffer {
 	var (
-		oldestKey  PacketSnifferKey
-		oldest     *PacketSniffer
-		oldestTime time.Time
-		oldestSeen bool
+		oldestKey      PacketSnifferKey
+		oldest         *PacketSniffer
+		oldestTime     time.Time
+		oldestSeen     bool
+		evictedExpired bool
 	)
 
 	p.pool.Range(func(key, value any) bool {
@@ -132,8 +133,11 @@ func (p *PacketSnifferPool) evictOldest(now time.Time) *PacketSniffer {
 		sniffer := value.(*PacketSniffer)
 		if sniffer.Expired(now) {
 			if p.pool.CompareAndDelete(poolKey, sniffer) {
+				oldestKey = poolKey
 				oldest = sniffer
+				oldestTime = time.Time{}
 				oldestSeen = true
+				evictedExpired = true
 				return false
 			}
 			return true
@@ -154,7 +158,7 @@ func (p *PacketSnifferPool) evictOldest(now time.Time) *PacketSniffer {
 	if oldest == nil {
 		return nil
 	}
-	if oldestTime.IsZero() {
+	if evictedExpired {
 		return oldest
 	}
 	if p.pool.CompareAndDelete(oldestKey, oldest) {
