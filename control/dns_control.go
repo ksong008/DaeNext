@@ -29,11 +29,11 @@ import (
 )
 
 const (
-	MaxDnsLookupDepth  = 3
-	minFirefoxCacheTtl = 120
-	dnsCacheSweepInterval = time.Minute
-	dnsForwarderSweepInterval = 5 * time.Minute
-	dnsForwarderIdleTimeout = 15 * time.Minute
+	MaxDnsLookupDepth           = 3
+	minFirefoxCacheTtl          = 120
+	dnsCacheSweepInterval       = time.Minute
+	dnsForwarderSweepInterval   = 5 * time.Minute
+	dnsForwarderIdleTimeout     = 15 * time.Minute
 	dnsForwarderCacheMaxEntries = 128
 )
 
@@ -79,12 +79,12 @@ type DnsController struct {
 	// timeoutExceedCallback is used to report this dialer is broken for the NetworkType
 	timeoutExceedCallback func(dialArgument *dialArgument, err error)
 
-	fixedDomainTtl map[string]int
-	now            func() time.Time
+	fixedDomainTtl   map[string]int
+	now              func() time.Time
 	forwarderFactory func(upstream *dns.Upstream, dialArgument dialArgument) (DnsForwarder, error)
-	ctx            context.Context
-	cancel         context.CancelFunc
-	cleanupWg      sync.WaitGroup
+	ctx              context.Context
+	cancel           context.CancelFunc
+	cleanupWg        sync.WaitGroup
 	// mutex protects the dnsCache.
 	dnsCacheMu          sync.RWMutex
 	dnsCache            map[string]*DnsCache
@@ -137,16 +137,16 @@ func NewDnsController(routing *dns.Dns, option *DnsControllerOption) (c *DnsCont
 		bestDialerChooser:     option.BestDialerChooser,
 		timeoutExceedCallback: option.TimeoutExceedCallback,
 
-		fixedDomainTtl:        option.FixedDomainTtl,
-		now:                   time.Now,
-		forwarderFactory:      newDnsForwarder,
-		ctx:                   ctx,
-		cancel:                cancel,
-		cleanupWg:             sync.WaitGroup{},
-		dnsCacheMu:            sync.RWMutex{},
-		dnsCache:              make(map[string]*DnsCache),
-		dnsForwarderCacheMu:   sync.Mutex{},
-		dnsForwarderCache:     make(map[dnsForwarderKey]*cachedDnsForwarder),
+		fixedDomainTtl:      option.FixedDomainTtl,
+		now:                 time.Now,
+		forwarderFactory:    newDnsForwarder,
+		ctx:                 ctx,
+		cancel:              cancel,
+		cleanupWg:           sync.WaitGroup{},
+		dnsCacheMu:          sync.RWMutex{},
+		dnsCache:            make(map[string]*DnsCache),
+		dnsForwarderCacheMu: sync.Mutex{},
+		dnsForwarderCache:   make(map[dnsForwarderKey]*cachedDnsForwarder),
 	}
 	c.startBackgroundCleanup()
 	return c, nil
@@ -529,6 +529,7 @@ func (c *DnsController) packCacheResponse(cache *DnsCache, qname string, qtype u
 }
 
 type udpRequest struct {
+	ctx           context.Context
 	realSrc       netip.AddrPort
 	realDst       netip.AddrPort
 	src           netip.AddrPort
@@ -935,7 +936,7 @@ func (c *DnsController) dialSend(invokingDepth int, req *udpRequest, data []byte
 
 	// Dial and send.
 	var respMsg *dnsmessage.Msg
-	ctxDial, cancel := context.WithTimeout(context.TODO(), consts.DefaultDialTimeout)
+	ctxDial, cancel := context.WithTimeout(contextOrBackground(req.ctx), consts.DefaultDialTimeout)
 	defer cancel()
 
 	forwarder, forwarderKey, forwarderEntry, reusable, err := c.getDnsForwarder(upstream, dialArgument)

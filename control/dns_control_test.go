@@ -17,6 +17,7 @@ import (
 	"github.com/daeuniverse/dae/common/consts"
 	"github.com/daeuniverse/dae/common/netutils"
 	componentdns "github.com/daeuniverse/dae/component/dns"
+	"github.com/daeuniverse/dae/config"
 	dnsmessage "github.com/miekg/dns"
 	"github.com/sirupsen/logrus"
 )
@@ -35,6 +36,22 @@ func (f *fakeDnsForwarder) ForwardDNS(context.Context, []byte) (*dnsmessage.Msg,
 
 func (f *fakeDnsForwarder) Close() error {
 	f.closeCount++
+	return nil
+}
+
+type blockingDnsForwarder struct {
+	ctxCh chan context.Context
+}
+
+func (f *blockingDnsForwarder) ForwardDNS(ctx context.Context, _ []byte) (*dnsmessage.Msg, error) {
+	if f.ctxCh != nil {
+		f.ctxCh <- ctx
+	}
+	<-ctx.Done()
+	return nil, ctx.Err()
+}
+
+func (f *blockingDnsForwarder) Close() error {
 	return nil
 }
 
@@ -165,8 +182,10 @@ func TestLookupDnsRespCacheUsesPackedResponse(t *testing.T) {
 		CacheAccessCallback: func(*DnsCache) error {
 			return nil
 		},
-		CacheRemoveCallback:   func(*DnsCache) error { return nil },
-		NewCache:              func(_ string, answers []dnsmessage.RR, deadline time.Time, originalDeadline time.Time) (*DnsCache, error) { return &DnsCache{Answer: answers, Deadline: deadline, OriginalDeadline: originalDeadline}, nil },
+		CacheRemoveCallback: func(*DnsCache) error { return nil },
+		NewCache: func(_ string, answers []dnsmessage.RR, deadline time.Time, originalDeadline time.Time) (*DnsCache, error) {
+			return &DnsCache{Answer: answers, Deadline: deadline, OriginalDeadline: originalDeadline}, nil
+		},
 		BestDialerChooser:     func(*udpRequest, *componentdns.Upstream) (*dialArgument, error) { return nil, nil },
 		TimeoutExceedCallback: func(*dialArgument, error) {},
 	})
@@ -256,8 +275,10 @@ func TestSweepDnsForwarderCacheRemovesIdleEntries(t *testing.T) {
 		CacheAccessCallback: func(*DnsCache) error {
 			return nil
 		},
-		CacheRemoveCallback:   func(*DnsCache) error { return nil },
-		NewCache:              func(_ string, answers []dnsmessage.RR, deadline time.Time, originalDeadline time.Time) (*DnsCache, error) { return &DnsCache{}, nil },
+		CacheRemoveCallback: func(*DnsCache) error { return nil },
+		NewCache: func(_ string, answers []dnsmessage.RR, deadline time.Time, originalDeadline time.Time) (*DnsCache, error) {
+			return &DnsCache{}, nil
+		},
 		BestDialerChooser:     func(*udpRequest, *componentdns.Upstream) (*dialArgument, error) { return nil, nil },
 		TimeoutExceedCallback: func(*dialArgument, error) {},
 	})
@@ -299,8 +320,10 @@ func TestGetDnsForwarderEvictsOldestWhenCacheFull(t *testing.T) {
 		CacheAccessCallback: func(*DnsCache) error {
 			return nil
 		},
-		CacheRemoveCallback:   func(*DnsCache) error { return nil },
-		NewCache:              func(_ string, answers []dnsmessage.RR, deadline time.Time, originalDeadline time.Time) (*DnsCache, error) { return &DnsCache{}, nil },
+		CacheRemoveCallback: func(*DnsCache) error { return nil },
+		NewCache: func(_ string, answers []dnsmessage.RR, deadline time.Time, originalDeadline time.Time) (*DnsCache, error) {
+			return &DnsCache{}, nil
+		},
 		BestDialerChooser:     func(*udpRequest, *componentdns.Upstream) (*dialArgument, error) { return nil, nil },
 		TimeoutExceedCallback: func(*dialArgument, error) {},
 	})
@@ -338,8 +361,8 @@ func TestGetDnsForwarderEvictsOldestWhenCacheFull(t *testing.T) {
 			Ip4: netip.MustParseAddr("1.1.1.1"),
 		},
 	}, &dialArgument{
-		l4proto:   consts.L4ProtoStr_TCP,
-		ipversion: consts.IpVersionStr_4,
+		l4proto:    consts.L4ProtoStr_TCP,
+		ipversion:  consts.IpVersionStr_4,
 		bestTarget: netip.MustParseAddrPort("1.1.1.1:443"),
 	})
 	if err != nil {
@@ -364,8 +387,10 @@ func TestReleaseDnsForwarderRemovesFailedReusableEntry(t *testing.T) {
 		Log:                 logrus.New(),
 		CacheAccessCallback: func(*DnsCache) error { return nil },
 		CacheRemoveCallback: func(*DnsCache) error { return nil },
-		NewCache:            func(_ string, answers []dnsmessage.RR, deadline time.Time, originalDeadline time.Time) (*DnsCache, error) { return &DnsCache{}, nil },
-		BestDialerChooser:   func(*udpRequest, *componentdns.Upstream) (*dialArgument, error) { return nil, nil },
+		NewCache: func(_ string, answers []dnsmessage.RR, deadline time.Time, originalDeadline time.Time) (*DnsCache, error) {
+			return &DnsCache{}, nil
+		},
+		BestDialerChooser:     func(*udpRequest, *componentdns.Upstream) (*dialArgument, error) { return nil, nil },
 		TimeoutExceedCallback: func(*dialArgument, error) {},
 	})
 	if err != nil {
@@ -401,8 +426,10 @@ func TestSweepDnsForwarderCacheKeepsInUseEntry(t *testing.T) {
 		Log:                 logrus.New(),
 		CacheAccessCallback: func(*DnsCache) error { return nil },
 		CacheRemoveCallback: func(*DnsCache) error { return nil },
-		NewCache:            func(_ string, answers []dnsmessage.RR, deadline time.Time, originalDeadline time.Time) (*DnsCache, error) { return &DnsCache{}, nil },
-		BestDialerChooser:   func(*udpRequest, *componentdns.Upstream) (*dialArgument, error) { return nil, nil },
+		NewCache: func(_ string, answers []dnsmessage.RR, deadline time.Time, originalDeadline time.Time) (*DnsCache, error) {
+			return &DnsCache{}, nil
+		},
+		BestDialerChooser:     func(*udpRequest, *componentdns.Upstream) (*dialArgument, error) { return nil, nil },
 		TimeoutExceedCallback: func(*dialArgument, error) {},
 	})
 	if err != nil {
@@ -425,5 +452,97 @@ func TestSweepDnsForwarderCacheKeepsInUseEntry(t *testing.T) {
 	}
 	if inUse.closeCount != 0 {
 		t.Fatalf("expected in-use forwarder to stay open, got %d closes", inUse.closeCount)
+	}
+}
+
+func TestDialSendUsesRequestContext(t *testing.T) {
+	routing, err := componentdns.New(&config.Dns{
+		Upstream: []config.KeyableString{
+			"test:udp://1.1.1.1:53",
+		},
+		Routing: config.DnsRouting{
+			Request: config.DnsRequestRouting{
+				Fallback: "test",
+			},
+			Response: config.DnsResponseRouting{
+				Fallback: "accept",
+			},
+		},
+	}, &componentdns.NewOption{
+		Logger: logrus.New(),
+		UpstreamReadyCallback: func(*componentdns.Upstream) error {
+			return nil
+		},
+	})
+	if err != nil {
+		t.Fatalf("failed to build dns routing: %v", err)
+	}
+
+	controller, err := NewDnsController(routing, &DnsControllerOption{
+		Log:                 logrus.New(),
+		CacheAccessCallback: func(*DnsCache) error { return nil },
+		CacheRemoveCallback: func(*DnsCache) error { return nil },
+		NewCache: func(_ string, answers []dnsmessage.RR, deadline time.Time, originalDeadline time.Time) (*DnsCache, error) {
+			return &DnsCache{
+				Answer:           answers,
+				Deadline:         deadline,
+				OriginalDeadline: originalDeadline,
+			}, nil
+		},
+		BestDialerChooser: func(*udpRequest, *componentdns.Upstream) (*dialArgument, error) {
+			return &dialArgument{
+				l4proto:   consts.L4ProtoStr_UDP,
+				ipversion: consts.IpVersionStr_4,
+			}, nil
+		},
+		TimeoutExceedCallback: func(*dialArgument, error) {},
+	})
+	if err != nil {
+		t.Fatalf("NewDnsController() returned error: %v", err)
+	}
+	defer controller.Close()
+
+	ctxCh := make(chan context.Context, 1)
+	controller.forwarderFactory = func(*componentdns.Upstream, dialArgument) (DnsForwarder, error) {
+		return &blockingDnsForwarder{ctxCh: ctxCh}, nil
+	}
+
+	reqCtx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	req := &udpRequest{
+		ctx:           reqCtx,
+		realSrc:       netip.MustParseAddrPort("127.0.0.1:43210"),
+		realDst:       netip.MustParseAddrPort("127.0.0.1:53"),
+		src:           netip.MustParseAddrPort("127.0.0.1:43210"),
+		routingResult: &bpfRoutingResult{},
+	}
+
+	msg := new(dnsmessage.Msg)
+	msg.SetQuestion("example.com.", dnsmessage.TypeA)
+	data, err := msg.Pack()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	err = controller.dialSend(0, req, data, msg.Id, &componentdns.Upstream{
+		Scheme:   componentdns.UpstreamScheme_UDP,
+		Hostname: "1.1.1.1",
+		Port:     53,
+		Ip46: &netutils.Ip46{
+			Ip4: netip.MustParseAddr("1.1.1.1"),
+		},
+	}, false)
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("expected canceled error, got %v", err)
+	}
+
+	select {
+	case forwardCtx := <-ctxCh:
+		if !errors.Is(forwardCtx.Err(), context.Canceled) {
+			t.Fatalf("expected forwarded context to be canceled, got %v", forwardCtx.Err())
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for forwarded context")
 	}
 }
