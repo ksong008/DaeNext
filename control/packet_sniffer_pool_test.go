@@ -116,7 +116,9 @@ func TestPacketSnifferPoolTouchKeepsFreshEntry(t *testing.T) {
 
 func TestPacketSnifferPoolEvictsOldest(t *testing.T) {
 	pool := NewPacketSnifferPool()
-	defer pool.Close()
+	pool.cancel()
+	pool.cleanupWg.Wait()
+	defer pool.Flush()
 
 	now := time.Now()
 	pool.now = func() time.Time { return now }
@@ -133,7 +135,7 @@ func TestPacketSnifferPoolEvictsOldest(t *testing.T) {
 		RAddr: netip.MustParseAddrPort("2.2.2.2:30002"),
 	}
 	newer, _ := pool.GetOrCreate(newerKey, &PacketSnifferOptions{Ttl: time.Minute})
-	newer.lastActive = now.Add(-time.Minute)
+	newer.lastActive = now.Add(-30 * time.Second)
 
 	evicted := pool.evictOldest(now)
 	if evicted == nil {
