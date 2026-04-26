@@ -1,7 +1,7 @@
 /*
 *  SPDX-License-Identifier: AGPL-3.0-only
 *  Copyright (c) 2022-2025, daeuniverse Organization <dae@v2raya.org>
-*/
+ */
 
 package component
 
@@ -61,7 +61,10 @@ func (m *InterfaceManager) monitor(ch <-chan netlink.LinkUpdate, done chan struc
 		case <-m.closed.Done():
 			close(done)
 			return
-		case update := <-ch:
+		case update, ok := <-ch:
+			if !ok {
+				return
+			}
 			ifName := update.Link.Attrs().Name
 
 			switch update.Header.Type {
@@ -73,40 +76,47 @@ func (m *InterfaceManager) monitor(ch <-chan netlink.LinkUpdate, done chan struc
 					continue
 				}
 				m.upLinks[ifName] = true
+				var callbacks []func(netlink.Link)
 				for _, callback := range m.callbacks {
 					matched, err := path.Match(callback.pattern, ifName)
 					if err != nil || !matched {
 						continue
 					}
 					if callback.newCallback != nil {
-						callback.newCallback(update.Link)
+						callbacks = append(callbacks, callback.newCallback)
 					}
 				}
 				m.mu.Unlock()
+				for _, callback := range callbacks {
+					callback(update.Link)
+				}
 
 			case unix.RTM_DELLINK:
 				m.mu.Lock()
 				delete(m.upLinks, ifName)
+				var callbacks []func(netlink.Link)
 				for _, callback := range m.callbacks {
 					matched, err := path.Match(callback.pattern, ifName)
 					if err != nil || !matched {
 						continue
 					}
 					if callback.delCallback != nil {
-						callback.delCallback(update.Link)
+						callbacks = append(callbacks, callback.delCallback)
 					}
 				}
 				m.mu.Unlock()
+				for _, callback := range callbacks {
+					callback(update.Link)
+				}
 			}
 		}
 	}
 }
 
 func (m *InterfaceManager) RegisterWithPattern(pattern string, initCallback func(netlink.Link), newCallback func(netlink.Link), delCallback func(netlink.Link)) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-
 	links, err := netlink.LinkList()
+	var initLinks []netlink.Link
+	m.mu.Lock()
 	if err == nil {
 		for _, link := range links {
 			ifname := link.Attrs().Name
@@ -114,7 +124,7 @@ func (m *InterfaceManager) RegisterWithPattern(pattern string, initCallback func
 				m.upLinks[ifname] = true
 
 				if initCallback != nil {
-					initCallback(link)
+					initLinks = append(initLinks, link)
 				}
 			}
 		}
@@ -127,18 +137,22 @@ func (m *InterfaceManager) RegisterWithPattern(pattern string, initCallback func
 		newCallback: newCallback,
 		delCallback: delCallback,
 	})
+	m.mu.Unlock()
+
+	for _, link := range initLinks {
+		initCallback(link)
+	}
 }
 
 func (m *InterfaceManager) Register(ifname string, initCallback func(netlink.Link), newCallback func(netlink.Link), delCallback func(netlink.Link)) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-
 	link, err := netlink.LinkByName(ifname)
+	var initLink netlink.Link
+	m.mu.Lock()
 	if err == nil {
 		m.upLinks[ifname] = true
 
 		if initCallback != nil {
-			initCallback(link)
+			initLink = link
 		}
 	}
 
@@ -147,6 +161,11 @@ func (m *InterfaceManager) Register(ifname string, initCallback func(netlink.Lin
 		newCallback: newCallback,
 		delCallback: delCallback,
 	})
+	m.mu.Unlock()
+
+	if initLink != nil {
+		initCallback(initLink)
+	}
 }
 
 // Close cancels the context to stop the monitor goroutine
