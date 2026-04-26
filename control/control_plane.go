@@ -930,7 +930,7 @@ func (c *ControlPlane) Serve(readyChan chan<- bool, listener *Listener) (err err
 			convergeSrc := common.ConvergeAddrPort(src)
 			// Debug:
 			// t := time.Now()
-			DefaultUdpTaskPool.EmitTask(convergeSrc.String(), func() {
+			if !DefaultUdpTaskPool.EmitTask(convergeSrc.String(), func() {
 				data := newBuf
 				oob := newOob
 				defer data.Put()
@@ -954,7 +954,10 @@ func (c *ControlPlane) Serve(readyChan chan<- bool, listener *Listener) (err err
 				if e := c.handlePkt(c.ctx, udpConn, data, convergeSrc, common.ConvergeAddrPort(pktDst), common.ConvergeAddrPort(realDst), routingResult, false); e != nil {
 					c.log.Warnln("handlePkt:", e)
 				}
-			})
+			}) {
+				newBuf.Put()
+				newOob.Put()
+			}
 			// if d := time.Since(t); d > 100*time.Millisecond {
 			// 	logrus.Println(d)
 			// }

@@ -112,7 +112,7 @@ func TestUdpTaskPoolEvictsOldestIdleQueueWhenFull(t *testing.T) {
 			key:        key,
 			p:          pool,
 			ch:         ch,
-			agingTime:  time.Minute,
+			agingTime:  24 * time.Hour,
 			ctx:        ctx,
 			cancel:     cancel,
 			closed:     make(chan struct{}),
@@ -144,4 +144,49 @@ func TestUdpTaskPoolEvictsOldestIdleQueueWhenFull(t *testing.T) {
 	if !freshExists {
 		t.Fatal("expected fresh queue to be created")
 	}
+}
+
+func TestUdpTaskPoolDropsWhenQueueIsFullWithoutBlocking(t *testing.T) {
+	pool := NewUdpTaskPool()
+	defer pool.Close()
+
+	started := make(chan struct{})
+	release := make(chan struct{})
+	done := make(chan struct{})
+	if !pool.EmitTask("busy-key", func() {
+		close(started)
+		<-release
+		close(done)
+	}) {
+		t.Fatal("expected first task to be accepted")
+	}
+	<-started
+
+	for i := 0; i < UdpTaskQueueLength; i++ {
+		if !pool.EmitTask("busy-key", func() {}) {
+			t.Fatalf("expected queued task %d to be accepted before overflow", i)
+		}
+	}
+
+	result := make(chan bool, 1)
+	go func() {
+		result <- pool.EmitTask("busy-key", func() {
+			t.Fatal("overflow task should not run")
+		})
+	}()
+
+	select {
+	case queued := <-result:
+		if queued {
+			t.Fatal("expected overflow task to be dropped")
+		}
+	case <-time.After(100 * time.Millisecond):
+		t.Fatal("EmitTask blocked on a full queue")
+	}
+	if drops := pool.DropCount(); drops != 1 {
+		t.Fatalf("expected one dropped task after overflow, got %d", drops)
+	}
+
+	close(release)
+	<-done
 }
