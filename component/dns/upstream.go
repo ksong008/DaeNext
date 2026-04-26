@@ -168,6 +168,8 @@ type UpstreamResolver struct {
 	RefreshInterval    time.Duration
 	RetryInterval      time.Duration
 	mu                 sync.Mutex
+	cond               *sync.Cond
+	refreshing         bool
 	upstream           *Upstream
 	init               bool
 	nextRefresh        time.Time
@@ -175,7 +177,10 @@ type UpstreamResolver struct {
 
 func (u *UpstreamResolver) GetUpstream() (_ *Upstream, err error) {
 	u.mu.Lock()
-	defer u.mu.Unlock()
+	if u.cond == nil {
+		u.cond = sync.NewCond(&u.mu)
+	}
+
 	nowFunc := u.Now
 	if nowFunc == nil {
 		nowFunc = time.Now
@@ -188,40 +193,71 @@ func (u *UpstreamResolver) GetUpstream() (_ *Upstream, err error) {
 	if retryInterval <= 0 {
 		retryInterval = DefaultUpstreamRetryInterval
 	}
-	now := nowFunc()
-	if u.init && now.Before(u.nextRefresh) {
-		return u.upstream, nil
-	}
-
 	resolve := u.Resolve
 	if resolve == nil {
 		resolve = NewUpstream
 	}
-	ctx, cancel := context.WithTimeout(context.TODO(), 10*time.Second)
-	defer cancel()
 
-	oldUpstream := u.upstream
-	newUpstream, resolveErr := resolve(ctx, u.Raw, u.Network)
-	if resolveErr != nil {
-		if oldUpstream != nil {
-			u.nextRefresh = now.Add(retryInterval)
-			return oldUpstream, nil
+	for {
+		now := nowFunc()
+		if u.init && now.Before(u.nextRefresh) {
+			upstream := u.upstream
+			u.mu.Unlock()
+			return upstream, nil
 		}
-		return nil, fmt.Errorf("failed to init dns upstream: %w", resolveErr)
-	}
+		if u.refreshing {
+			u.cond.Wait()
+			continue
+		}
 
-	if u.FinishInitCallback != nil {
-		if err = u.FinishInitCallback(u.Raw, newUpstream); err != nil {
+		u.refreshing = true
+		oldUpstream := u.upstream
+		raw := u.Raw
+		network := u.Network
+		finishInit := u.FinishInitCallback
+		u.mu.Unlock()
+
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		newUpstream, resolveErr := resolve(ctx, raw, network)
+		cancel()
+
+		var callbackErr error
+		if resolveErr == nil && finishInit != nil {
+			callbackErr = finishInit(raw, newUpstream)
+		}
+
+		u.mu.Lock()
+		u.refreshing = false
+		now = nowFunc()
+		switch {
+		case resolveErr != nil:
 			if oldUpstream != nil {
 				u.nextRefresh = now.Add(retryInterval)
+				u.cond.Broadcast()
+				u.mu.Unlock()
 				return oldUpstream, nil
 			}
-			return nil, err
+			u.cond.Broadcast()
+			u.mu.Unlock()
+			return nil, fmt.Errorf("failed to init dns upstream: %w", resolveErr)
+		case callbackErr != nil:
+			if oldUpstream != nil {
+				u.nextRefresh = now.Add(retryInterval)
+				u.cond.Broadcast()
+				u.mu.Unlock()
+				return oldUpstream, nil
+			}
+			u.cond.Broadcast()
+			u.mu.Unlock()
+			return nil, callbackErr
+		default:
+			u.upstream = newUpstream
+			u.init = true
+			u.nextRefresh = now.Add(refreshInterval)
+			u.cond.Broadcast()
+			upstream := u.upstream
+			u.mu.Unlock()
+			return upstream, nil
 		}
 	}
-
-	u.upstream = newUpstream
-	u.init = true
-	u.nextRefresh = now.Add(refreshInterval)
-	return u.upstream, nil
 }
