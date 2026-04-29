@@ -14,6 +14,7 @@ import (
 	"net/netip"
 	"os"
 	"path/filepath"
+	"reflect"
 	"runtime"
 	"strconv"
 	"strings"
@@ -207,11 +208,19 @@ loop:
 
 			obj := current.EjectBpf()
 			var dnsCache map[string]*control.DnsCache
-			if conf.Dns.IpVersionPrefer == newConf.Dns.IpVersionPrefer {
-				dnsCache = current.CloneDnsCache()
+			if reflect.DeepEqual(conf.Dns, newConf.Dns) {
+				dnsCache = current.SnapshotDnsCache()
 			}
-			if err := current.StopDNSListener(); err != nil {
-				log.Warnf("[Reload] Failed to stop old DNS listener: %v", err)
+			shouldStopOldDNSListener := strings.TrimSpace(conf.Dns.Bind) != "" &&
+				strings.TrimSpace(newConf.Dns.Bind) != "" &&
+				strings.TrimSpace(conf.Dns.Bind) == strings.TrimSpace(newConf.Dns.Bind)
+			oldDNSListenerStopped := false
+			if shouldStopOldDNSListener {
+				if err := current.StopDNSListener(); err != nil {
+					log.Warnf("[Reload] Failed to stop old DNS listener: %v", err)
+				} else {
+					oldDNSListenerStopped = true
+				}
 			}
 
 			log.Warnln("[Reload] Load new control plane")
@@ -221,6 +230,13 @@ loop:
 				log.WithField("err", nextErr).Errorln("[Reload] Failed to reload; try to roll back configuration")
 				next, nextErr = e.newControlPlane(log, obj, dnsCache, conf, externGeoDataDirs)
 				if nextErr != nil {
+					if oldDNSListenerStopped {
+						if restartErr := current.StartDNSListener(); restartErr != nil {
+							log.WithError(restartErr).Errorln("[Reload] Failed to restart old DNS listener after rollback failure")
+						} else {
+							log.Warnln("[Reload] Restored old DNS listener after rollback failure")
+						}
+					}
 					obj.Close()
 					current.Close()
 					log.WithField("err", nextErr).Fatalln("[Reload] Failed to roll back configuration")
@@ -244,6 +260,7 @@ loop:
 				old.AbortConnections()
 			}
 			old.Close()
+			control.FlushReloadScopedResources()
 		}
 	}
 
@@ -379,12 +396,12 @@ func (e *Engine) routeAwareDialContext(ctx context.Context, network, addr string
 	return &netproxy.FakeNetConn{Conn: conn, LAddr: nil, RAddr: nil}, nil
 }
 
-func (e *Engine) waitForNetwork(log *logrus.Logger) {
+func (e *Engine) waitForNetwork(log *logrus.Logger, conf *config.Config) {
 	epo := 5 * time.Second
 	client := http.Client{
 		Transport: &http.Transport{
 			DialContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
-				conn, err := direct.SymmetricDirect.DialContext(ctx, "tcp", addr)
+				conn, err := direct.SymmetricDirect.DialContext(ctx, common.MagicNetwork("tcp", conf.Global.SoMarkFromDae, conf.Global.Mptcp), addr)
 				if err != nil {
 					return nil, err
 				}
@@ -439,7 +456,7 @@ func (e *Engine) newControlPlane(log *logrus.Logger, bpf interface{}, dnsCache m
 
 	if !conf.Global.DisableWaitingNetwork && len(conf.Global.WanInterface) > 0 {
 		e.onceWaiting.Do(func() {
-			e.waitForNetwork(log)
+			e.waitForNetwork(log, conf)
 		})
 	}
 
