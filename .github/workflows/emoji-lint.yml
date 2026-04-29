@@ -1,0 +1,23 @@
+name: Emoji Lint
+
+on:
+  pull_request:
+    paths:
+      - "**/*.go"
+      - "**/*.c"
+      - "**/*.h"
+      - "**/*.sh"
+      - "**/*.yml"
+      - "**/*.yaml"
+      - "**/*.json"
+      - "Makefile"
+      - "scripts/check_no_emoji.sh"
+      - ".github/workflows/emoji-lint.yml"
+
+jobs:
+  emoji-lint:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Check for emoji in code
+        run: make emoji-lint

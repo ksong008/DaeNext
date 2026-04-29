@@ -84,6 +84,11 @@ clean-ebpf:
 fmt:
 	go fmt ./...
 
+emoji-lint:
+	./scripts/check_no_emoji.sh
+
+.PHONY: emoji-lint
+
 # $BPF_CLANG is used in go:generate invocations.
 ebpf: export BPF_CLANG := $(CLANG)
 ebpf: export BPF_STRIP_FLAG := $(STRIP_FLAG)
