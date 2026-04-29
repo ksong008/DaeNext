@@ -7,41 +7,28 @@ package cmd
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"math/rand/v2"
-	"net"
 	"net/http"
-	"net/netip"
+	_ "net/http/pprof"
 	"os"
 	"os/signal"
 	"path/filepath"
-	"reflect"
-	"runtime"
 	"strconv"
 	"strings"
 	"syscall"
 	"time"
 
-	"github.com/daeuniverse/outbound/netproxy"
-	"github.com/daeuniverse/outbound/protocol/direct"
-	"gopkg.in/natefinch/lumberjack.v2"
-
-	_ "net/http/pprof"
-
 	"github.com/daeuniverse/dae/cmd/internal"
-	"github.com/daeuniverse/dae/common"
 	"github.com/daeuniverse/dae/common/consts"
-	"github.com/daeuniverse/dae/common/netutils"
-	"github.com/daeuniverse/dae/common/subscription"
 	"github.com/daeuniverse/dae/config"
-	"github.com/daeuniverse/dae/control"
-	"github.com/daeuniverse/dae/pkg/config_parser"
+	daeengine "github.com/daeuniverse/dae/engine"
 	"github.com/daeuniverse/dae/pkg/logger"
 	"github.com/mohae/deepcopy"
 	"github.com/okzk/sdnotify"
 	"github.com/sirupsen/logrus"
 	"github.com/spf13/cobra"
+	"gopkg.in/natefinch/lumberjack.v2"
 )
 
 const (
@@ -89,17 +76,13 @@ var (
 			if disableAuthSudo && os.Geteuid() != 0 {
 				logrus.Fatalln("Auto-sudo is disabled and current user is not root.")
 			}
-			// Require "sudo" if necessary.
 			if !disableAuthSudo {
 				internal.AutoSu()
 			}
 
-			// Read config from --config cfgFile.
-			conf, includes, err := readConfig(cfgFile)
+			conf, includes, err := daeengine.ReadConfigFile(cfgFile)
 			if err != nil {
-				logrus.WithFields(logrus.Fields{
-					"err": err,
-				}).Fatalln("Failed to read config")
+				logrus.WithField("err", err).Fatalln("Failed to read config")
 			}
 
 			var logOpts *lumberjack.Logger
@@ -118,411 +101,119 @@ var (
 			logger.SetLogger(logrus.StandardLogger(), conf.Global.LogLevel, disableTimestamp, logOpts)
 
 			log.Infof("Include config files: [%v]", strings.Join(includes, ", "))
-			if err := Run(log, conf, []string{filepath.Dir(cfgFile)}); err != nil {
-				log.Fatalln(err)
+
+			runtimeEngine := daeengine.New(daeengine.Options{
+				SubscriptionConfigDir: filepath.Dir(cfgFile),
+				CheckNetworkLinks:     CheckNetworkLinks,
+				OnReady: func() {
+					sdnotify.Ready()
+					if !disablePidFile {
+						_ = os.WriteFile(PidFilePath, []byte(strconv.Itoa(os.Getpid())), 0644)
+					}
+					_ = os.WriteFile(SignalProgressFilePath, []byte{consts.ReloadDone}, 0644)
+				},
+			})
+
+			pprofServer := startPprofServer(conf.Global.PprofPort)
+			defer shutdownPprofServer(pprofServer)
+
+			runErrCh := make(chan error, 1)
+			go func() {
+				runErrCh <- runtimeEngine.Run(log, conf, []string{filepath.Dir(cfgFile)}, disableTimestamp, false)
+			}()
+
+			sigs := make(chan os.Signal, 1)
+			signal.Notify(sigs, syscall.SIGINT, syscall.SIGTERM, syscall.SIGHUP, syscall.SIGQUIT, syscall.SIGKILL, syscall.SIGILL, syscall.SIGUSR1, syscall.SIGUSR2)
+			for {
+				select {
+				case err := <-runErrCh:
+					if err != nil {
+						log.Fatalln(err)
+					}
+					return
+				case sig := <-sigs:
+					switch sig {
+					case syscall.SIGUSR2, syscall.SIGUSR1:
+						suspend := sig == syscall.SIGUSR2
+						if suspend {
+							log.Warnln("[Reload] Received suspend signal; prepare to suspend")
+						} else {
+							log.Warnln("[Reload] Received reload signal; prepare to reload")
+						}
+						sdnotify.Reloading()
+						_ = os.WriteFile(SignalProgressFilePath, []byte{consts.ReloadProcessing}, 0644)
+
+						abortConnections := os.Remove(AbortFile) == nil
+						log.Warnln("[Reload] Load new config")
+						newConf := conf
+						if suspend {
+							newConf = daeengine.EmptyConfig()
+							newConf.Global = deepcopy.Copy(conf.Global).(config.Global)
+							newConf.Global.WanInterface = nil
+							newConf.Global.LanInterface = nil
+							newConf.Global.LogLevel = "warning"
+						} else {
+							var nextIncludes []string
+							nextConf, nextIncludes, err := daeengine.ReadConfigFile(cfgFile)
+							if err != nil {
+								log.WithField("err", err).Errorln("[Reload] Failed to reload")
+								sdnotify.Ready()
+								_ = os.WriteFile(SignalProgressFilePath, append([]byte{consts.ReloadError}, []byte("\n"+err.Error())...), 0644)
+								continue
+							}
+							log.Infof("Include config files: [%v]", strings.Join(nextIncludes, ", "))
+							newConf = nextConf
+						}
+
+						if err := runtimeEngine.ReloadWithAbort(newConf, abortConnections); err != nil {
+							sdnotify.Ready()
+							_ = os.WriteFile(SignalProgressFilePath, append([]byte{consts.ReloadError}, []byte("\n"+err.Error())...), 0644)
+							log.WithField("err", err).Errorln("[Reload] Failed to reload")
+							continue
+						}
+
+						conf = newConf
+						sdnotify.Ready()
+						_ = os.WriteFile(SignalProgressFilePath, append([]byte{consts.ReloadDone}, []byte("\nOK")...), 0644)
+						pprofServer = restartPprofServer(pprofServer, conf.Global.PprofPort)
+					case syscall.SIGHUP:
+						continue
+					default:
+						log.Infof("Received signal: %v", sig.String())
+						if err := runtimeEngine.Stop(10 * time.Second); err != nil {
+							log.Errorf("Force exit after shutdown timeout: %v", err)
+						}
+						_ = os.Remove(PidFilePath)
+						return
+					}
+				}
 			}
 		},
 	}
 )
 
-func Run(log *logrus.Logger, conf *config.Config, externGeoDataDirs []string) (err error) {
-	// Remove AbortFile at beginning.
-	_ = os.Remove(AbortFile)
-
-	// New ControlPlane.
-	c, err := newControlPlane(log, nil, nil, conf, externGeoDataDirs)
-	if err != nil {
-		return err
+func startPprofServer(port uint16) *http.Server {
+	if port == 0 {
+		return nil
 	}
-
-	var pprofServer *http.Server
-	if conf.Global.PprofPort != 0 {
-		pprofAddr := fmt.Sprintf("localhost:%d", conf.Global.PprofPort)
-		pprofServer = &http.Server{Addr: pprofAddr, Handler: nil}
-		go pprofServer.ListenAndServe()
+	server := &http.Server{
+		Addr:    fmt.Sprintf("localhost:%d", port),
+		Handler: nil,
 	}
-
-	// Serve tproxy TCP/UDP server util signals.
-	var listener *control.Listener
-	sigs := make(chan os.Signal, 1)
-	signal.Notify(sigs, syscall.SIGINT, syscall.SIGTERM, syscall.SIGHUP, syscall.SIGQUIT, syscall.SIGILL, syscall.SIGUSR1, syscall.SIGUSR2)
-	go func() {
-		readyChan := make(chan bool, 1)
-		go func() {
-			<-readyChan
-			sdnotify.Ready()
-			if !disablePidFile {
-				_ = os.WriteFile(PidFilePath, []byte(strconv.Itoa(os.Getpid())), 0644)
-			}
-			_ = os.WriteFile(SignalProgressFilePath, []byte{consts.ReloadDone}, 0644)
-		}()
-		control.GetDaeNetns().With(func() error {
-			if listener, err = c.ListenAndServe(readyChan, conf.Global.TproxyPort); err != nil {
-				log.Errorln("ListenAndServe:", err)
-			}
-			return err
-		})
-		sigs <- nil
-	}()
-	reloading := false
-	reloadingErr := error(nil)
-	isSuspend := false
-	abortConnections := false
-loop:
-	for sig := range sigs {
-		switch sig {
-		case nil:
-			if reloading {
-				if listener == nil {
-					// Failed to listen. Exit.
-					break loop
-				}
-				// Serve.
-				reloading = false
-				log.Warnln("[Reload] Serve")
-				readyChan := make(chan bool, 1)
-				go func() {
-					if err := c.Serve(readyChan, listener); err != nil {
-						log.Errorln("ListenAndServe:", err)
-					}
-					sigs <- nil
-				}()
-				<-readyChan
-				sdnotify.Ready()
-				if reloadingErr == nil {
-					_ = os.WriteFile(SignalProgressFilePath, append([]byte{consts.ReloadDone}, []byte("\nOK")...), 0644)
-				} else {
-					_ = os.WriteFile(SignalProgressFilePath, append([]byte{consts.ReloadError}, []byte("\n"+reloadingErr.Error())...), 0644)
-				}
-				log.Warnln("[Reload] Finished")
-			} else {
-				// Listening error.
-				break loop
-			}
-		case syscall.SIGUSR2:
-			isSuspend = true
-			fallthrough
-		case syscall.SIGUSR1:
-			// Reload signal.
-			if isSuspend {
-				log.Warnln("[Reload] Received suspend signal; prepare to suspend")
-			} else {
-				log.Warnln("[Reload] Received reload signal; prepare to reload")
-			}
-			sdnotify.Reloading()
-			_ = os.WriteFile(SignalProgressFilePath, []byte{consts.ReloadProcessing}, 0644)
-			reloadingErr = nil
-
-			// Load new config.
-			abortConnections = os.Remove(AbortFile) == nil
-			log.Warnln("[Reload] Load new config")
-			var newConf *config.Config
-			if isSuspend {
-				isSuspend = false
-				newConf, err = emptyConfig()
-				if err != nil {
-					log.WithFields(logrus.Fields{
-						"err": err,
-					}).Errorln("[Reload] Failed to reload")
-					sdnotify.Ready()
-					_ = os.WriteFile(SignalProgressFilePath, append([]byte{consts.ReloadError}, []byte("\n"+err.Error())...), 0644)
-					continue
-				}
-				newConf.Global = conf.Global
-				newConf.Global.WanInterface = nil
-				newConf.Global.LanInterface = nil
-				newConf.Global.LogLevel = "warning"
-			} else {
-				var includes []string
-				newConf, includes, err = readConfig(cfgFile)
-				if err != nil {
-					log.WithFields(logrus.Fields{
-						"err": err,
-					}).Errorln("[Reload] Failed to reload")
-					sdnotify.Ready()
-					_ = os.WriteFile(SignalProgressFilePath, append([]byte{consts.ReloadError}, []byte("\n"+err.Error())...), 0644)
-					continue
-				}
-				log.Infof("Include config files: [%v]", strings.Join(includes, ", "))
-			}
-			// New logger.
-			oldLogOutput := log.Out
-			log = logrus.New()
-			logger.SetLogger(log, newConf.Global.LogLevel, disableTimestamp, nil)
-			logger.SetLogger(logrus.StandardLogger(), newConf.Global.LogLevel, disableTimestamp, nil)
-			log.SetOutput(oldLogOutput) // FIXME: THIS IS A HACK.
-			logrus.SetOutput(oldLogOutput)
-
-			// New control plane.
-			obj := c.EjectBpf()
-			var dnsCache map[string]*control.DnsCache
-			if !isSuspend && reflect.DeepEqual(conf.Dns, newConf.Dns) {
-				dnsCache = c.SnapshotDnsCache()
-			}
-			shouldStopOldDNSListener := strings.TrimSpace(conf.Dns.Bind) != "" &&
-				strings.TrimSpace(newConf.Dns.Bind) != "" &&
-				strings.TrimSpace(conf.Dns.Bind) == strings.TrimSpace(newConf.Dns.Bind)
-			oldDNSListenerStopped := false
-			// Stop old DNS listener only when the new control plane needs the same
-			// bind endpoint; otherwise both listeners can coexist briefly until the
-			// old control plane closes.
-			if shouldStopOldDNSListener {
-				if err := c.StopDNSListener(); err != nil {
-					log.Warnf("[Reload] Failed to stop old DNS listener: %v", err)
-				} else {
-					oldDNSListenerStopped = true
-				}
-			}
-
-			log.Warnln("[Reload] Load new control plane")
-			newC, err := newControlPlane(log, obj, dnsCache, newConf, externGeoDataDirs)
-			if err != nil {
-				reloadingErr = err
-				log.WithFields(logrus.Fields{
-					"err": err,
-				}).Errorln("[Reload] Failed to reload; try to roll back configuration")
-				// Load last config back.
-				newC, err = newControlPlane(log, obj, dnsCache, conf, externGeoDataDirs)
-				if err != nil {
-					if oldDNSListenerStopped {
-						if restartErr := c.StartDNSListener(); restartErr != nil {
-							log.WithError(restartErr).Errorln("[Reload] Failed to restart old DNS listener after rollback failure")
-						} else {
-							log.Warnln("[Reload] Restored old DNS listener after rollback failure")
-						}
-					}
-					sdnotify.Stopping()
-					obj.Close()
-					c.Close()
-					log.WithFields(logrus.Fields{
-						"err": err,
-					}).Fatalln("[Reload] Failed to roll back configuration")
-				}
-				newConf = conf
-				log.Errorln("[Reload] Last reload failed; rolled back configuration")
-			} else {
-				log.Warnln("[Reload] Stopped old control plane")
-			}
-
-			// Inject bpf objects into the new control plane life-cycle.
-			newC.InjectBpf(obj)
-
-			// Prepare new context.
-			oldC := c
-			c = newC
-			conf = newConf
-			reloading = true
-
-			// Ready to close.
-			if abortConnections {
-				oldC.AbortConnections()
-			}
-			oldC.Close()
-			control.FlushReloadScopedResources()
-
-			if pprofServer != nil {
-				pprofServer.Shutdown(context.Background())
-				pprofServer = nil
-			}
-			if newConf.Global.PprofPort != 0 {
-				pprofAddr := fmt.Sprintf("localhost:%d", conf.Global.PprofPort)
-				pprofServer = &http.Server{Addr: pprofAddr, Handler: nil}
-				go pprofServer.ListenAndServe()
-			}
-		case syscall.SIGHUP:
-			// Ignore.
-			continue
-		default:
-			log.Infof("Received signal: %v", sig.String())
-			break loop
-		}
-	}
-	defer os.Remove(PidFilePath)
-	defer control.GetDaeNetns().Close()
-	if e := c.Close(); e != nil {
-		return fmt.Errorf("close control plane: %w", e)
-	}
-	return nil
+	go server.ListenAndServe()
+	return server
 }
 
-func newControlPlane(log *logrus.Logger, bpf interface{}, dnsCache map[string]*control.DnsCache, conf *config.Config, externGeoDataDirs []string) (c *control.ControlPlane, err error) {
-	// Deep copy to prevent modification.
-	conf = deepcopy.Copy(conf).(*config.Config)
-
-	/// Get tag -> nodeList mapping.
-	tagToNodeList := map[string][]string{}
-	if len(conf.Node) > 0 {
-		for _, node := range conf.Node {
-			tagToNodeList[""] = append(tagToNodeList[""], string(node))
-		}
+func shutdownPprofServer(server *http.Server) {
+	if server == nil {
+		return
 	}
-
-	/// Init Direct Dialers.
-	direct.InitDirectDialers(conf.Global.FallbackResolver)
-	netutils.FallbackDns = netip.MustParseAddrPort(conf.Global.FallbackResolver)
-
-	// Resolve subscriptions to nodes.
-	resolvingfailed := false
-	if !conf.Global.DisableWaitingNetwork {
-		epo := 5 * time.Second
-		client := http.Client{
-			Transport: &http.Transport{
-				DialContext: func(ctx context.Context, network, addr string) (c net.Conn, err error) {
-					conn, err := direct.SymmetricDirect.DialContext(ctx, common.MagicNetwork("tcp", conf.Global.SoMarkFromDae, conf.Global.Mptcp), addr)
-					if err != nil {
-						return nil, err
-					}
-					return &netproxy.FakeNetConn{
-						Conn:  conn,
-						LAddr: nil,
-						RAddr: nil,
-					}, nil
-				},
-			},
-			Timeout: epo,
-		}
-		log.Infoln("Waiting for network...")
-		for i := 0; ; i++ {
-			resp, err := client.Get(CheckNetworkLinks[i%len(CheckNetworkLinks)])
-			if err != nil {
-				log.Debugln("CheckNetwork:", err)
-				var neterr net.Error
-				if errors.As(err, &neterr) && neterr.Timeout() {
-					// Do not sleep.
-					continue
-				}
-				time.Sleep(epo)
-				continue
-			}
-			resp.Body.Close()
-			if resp.StatusCode >= 200 && resp.StatusCode < 500 {
-				break
-			}
-			log.Infof("Bad status: %v (%v)", resp.Status, resp.StatusCode)
-			time.Sleep(epo)
-		}
-		log.Infoln("Network online.")
-	}
-	if len(conf.Subscription) > 0 {
-		log.Infoln("Fetching subscriptions...")
-	}
-	client := http.Client{
-		Transport: &http.Transport{
-			DialContext: func(ctx context.Context, network, addr string) (c net.Conn, err error) {
-				conn, err := direct.SymmetricDirect.DialContext(ctx, common.MagicNetwork("tcp", conf.Global.SoMarkFromDae, conf.Global.Mptcp), addr)
-				if err != nil {
-					return nil, err
-				}
-				return &netproxy.FakeNetConn{
-					Conn:  conn,
-					LAddr: nil,
-					RAddr: nil,
-				}, nil
-			},
-		},
-		Timeout: 30 * time.Second,
-	}
-	for _, sub := range conf.Subscription {
-		tag, nodes, err := subscription.ResolveSubscription(log, &client, filepath.Dir(cfgFile), string(sub))
-		if err != nil {
-			log.Warnf(`failed to resolve subscription "%v": %v`, sub, err)
-			resolvingfailed = true
-		}
-		if len(nodes) > 0 {
-			tagToNodeList[tag] = append(tagToNodeList[tag], nodes...)
-		}
-	}
-
-	// Delete all files in persist.d that are not in tagToNodeList
-	files, err := os.ReadDir(filepath.Join(filepath.Dir(cfgFile), "persist.d"))
-	if err != nil && !os.IsNotExist(err) {
-		return nil, err
-	}
-	for _, file := range files {
-		tag := strings.TrimSuffix(file.Name(), ".sub")
-		if _, ok := tagToNodeList[tag]; !ok {
-			err := os.Remove(filepath.Join(filepath.Dir(cfgFile), "persist.d", file.Name()))
-			if err != nil {
-				return nil, err
-			}
-		}
-	}
-
-	if len(tagToNodeList) == 0 {
-		if resolvingfailed {
-			log.Warnln("No node found because all subscription resolving failed.")
-		} else {
-			log.Warnln("No node found.")
-		}
-	}
-
-	if len(conf.Global.LanInterface) == 0 && len(conf.Global.WanInterface) == 0 {
-		log.Warnln("No interface to bind.")
-	}
-
-	if err = preprocessWanInterfaceAuto(conf); err != nil {
-		return nil, err
-	}
-
-	c, err = control.NewControlPlane(
-		log,
-		bpf,
-		dnsCache,
-		tagToNodeList,
-		conf.Group,
-		&conf.Routing,
-		&conf.Global,
-		&conf.Dns,
-		externGeoDataDirs,
-	)
-	if err != nil {
-		return nil, err
-	}
-	// Call GC to release memory.
-	runtime.GC()
-
-	return c, nil
+	_ = server.Shutdown(context.Background())
 }
 
-func preprocessWanInterfaceAuto(params *config.Config) error {
-	// preprocess "auto".
-	ifs := make([]string, 0, len(params.Global.WanInterface)+2)
-	for _, ifname := range params.Global.WanInterface {
-		if ifname == "auto" {
-			defaultIfs, err := common.GetDefaultIfnames()
-			if err != nil {
-				return fmt.Errorf("failed to convert 'auto': %w", err)
-			}
-			ifs = append(ifs, defaultIfs...)
-		} else {
-			ifs = append(ifs, ifname)
-		}
-	}
-	params.Global.WanInterface = common.Deduplicate(ifs)
-	return nil
-}
-
-func readConfig(cfgFile string) (conf *config.Config, includes []string, err error) {
-	merger := config.NewMerger(cfgFile)
-	sections, includes, err := merger.Merge()
-	if err != nil {
-		return nil, nil, err
-	}
-	if conf, err = config.New(sections); err != nil {
-		return nil, nil, err
-	}
-	return conf, includes, nil
-}
-
-func emptyConfig() (conf *config.Config, err error) {
-	sections, err := config_parser.Parse(`global{} routing{}`)
-	if err != nil {
-		return nil, err
-	}
-	if conf, err = config.New(sections); err != nil {
-		return nil, err
-	}
-	return conf, nil
+func restartPprofServer(server *http.Server, port uint16) *http.Server {
+	shutdownPprofServer(server)
+	return startPprofServer(port)
 }
 
 func init() {
