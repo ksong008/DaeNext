@@ -15,6 +15,7 @@ import (
 	"testing"
 
 	"github.com/cilium/ebpf"
+	"github.com/cilium/ebpf/rlimit"
 	"github.com/vishvananda/netlink/nl"
 )
 
@@ -25,6 +26,13 @@ type programSet struct {
 	pktgen *ebpf.Program
 	setup  *ebpf.Program
 	check  *ebpf.Program
+}
+
+func ensureMemlock(t *testing.T) {
+	t.Helper()
+	if err := rlimit.RemoveMemlock(); err != nil {
+		t.Fatalf("RemoveMemlock: %v", err)
+	}
 }
 
 func runBpfProgram(prog *ebpf.Program, data, ctx []byte) (statusCode uint32, dataOut, ctxOut []byte, err error) {
@@ -46,6 +54,7 @@ func runBpfProgram(prog *ebpf.Program, data, ctx []byte) (statusCode uint32, dat
 }
 
 func collectPrograms(t *testing.T) (progset []programSet, err error) {
+	ensureMemlock(t)
 	obj := &bpftestObjects{}
 	pinPath := "/sys/fs/bpf/dae"
 	if err = os.MkdirAll(pinPath, 0755); err != nil && !os.IsExist(err) {
@@ -99,6 +108,7 @@ func collectPrograms(t *testing.T) (progset []programSet, err error) {
 
 func loadPinnedBpftestObjects(t *testing.T, pinPath string) *bpftestObjects {
 	t.Helper()
+	ensureMemlock(t)
 
 	obj := &bpftestObjects{}
 	if err := loadBpftestObjects(obj, &ebpf.CollectionOptions{
