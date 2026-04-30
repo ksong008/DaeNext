@@ -178,11 +178,16 @@ type AnyfromPool struct {
 	cancel    context.CancelFunc
 	cleanupWg sync.WaitGroup
 	now       func() time.Time
+	netns     *DaeNetns
 }
 
 var DefaultAnyfromPool = NewAnyfromPool()
 
 func NewAnyfromPool() *AnyfromPool {
+	return NewAnyfromPoolWithNetns(nil)
+}
+
+func NewAnyfromPoolWithNetns(netns *DaeNetns) *AnyfromPool {
 	ctx, cancel := context.WithCancel(context.Background())
 	p := &AnyfromPool{
 		pool:   make(map[string]*Anyfrom, 64),
@@ -190,9 +195,17 @@ func NewAnyfromPool() *AnyfromPool {
 		ctx:    ctx,
 		cancel: cancel,
 		now:    time.Now,
+		netns:  netns,
 	}
 	p.startCleanup()
 	return p
+}
+
+func (p *AnyfromPool) daeNetns() *DaeNetns {
+	if p.netns != nil {
+		return p.netns
+	}
+	return GetDaeNetns()
 }
 
 func (p *AnyfromPool) startCleanup() {
@@ -303,13 +316,17 @@ func (p *AnyfromPool) GetOrCreate(lAddr string, ttl time.Duration) (conn *Anyfro
 				return dialer.TransparentControl(c)
 			},
 			KeepAlive: 0,
-		}
-		var err error
-		var pc net.PacketConn
-		GetDaeNetns().With(func() error {
-			pc, err = d.ListenPacket(context.Background(), "udp", lAddr)
-			return nil
-		})
+			}
+			var err error
+			var pc net.PacketConn
+			daens := p.daeNetns()
+			if daens == nil {
+				return nil, true, errors.New("dae netns is not initialized")
+			}
+			daens.With(func() error {
+				pc, err = d.ListenPacket(context.Background(), "udp", lAddr)
+				return nil
+			})
 		if err != nil {
 			return nil, true, err
 		}

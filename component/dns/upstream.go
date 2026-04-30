@@ -9,6 +9,7 @@ import (
 	"context"
 	"fmt"
 	"net"
+	"net/netip"
 	"net/url"
 	"strconv"
 	"sync"
@@ -16,6 +17,7 @@ import (
 
 	"github.com/daeuniverse/dae/common/consts"
 	"github.com/daeuniverse/dae/common/netutils"
+	"github.com/daeuniverse/outbound/netproxy"
 	"github.com/daeuniverse/outbound/protocol/direct"
 )
 
@@ -103,14 +105,21 @@ type Upstream struct {
 }
 
 func NewUpstream(ctx context.Context, upstream *url.URL, resolverNetwork string) (up *Upstream, err error) {
+	return NewUpstreamWithResolver(ctx, upstream, resolverNetwork, nil, netip.AddrPort{})
+}
+
+func NewUpstreamWithResolver(ctx context.Context, upstream *url.URL, resolverNetwork string, resolverDialer netproxy.Dialer, resolverDNS netip.AddrPort) (up *Upstream, err error) {
 	scheme, hostname, port, path, err := ParseRawUpstream(upstream)
 	if err != nil {
 		return nil, fmt.Errorf("%w: %v", ErrFormat, err)
 	}
 
-	systemDns, err := netutils.SystemDns()
-	if err != nil {
-		return nil, err
+	systemDns := resolverDNS
+	if !systemDns.IsValid() {
+		systemDns, err = netutils.SystemDns()
+		if err != nil {
+			return nil, err
+		}
 	}
 	defer func() {
 		if err != nil {
@@ -118,7 +127,10 @@ func NewUpstream(ctx context.Context, upstream *url.URL, resolverNetwork string)
 		}
 	}()
 
-	ip46, _, _ := netutils.ResolveIp46(ctx, direct.SymmetricDirect, systemDns, hostname, resolverNetwork, false)
+	if resolverDialer == nil {
+		resolverDialer = direct.SymmetricDirect
+	}
+	ip46, _, _ := netutils.ResolveIp46(ctx, resolverDialer, systemDns, hostname, resolverNetwork, false)
 	if !ip46.Ip4.IsValid() && !ip46.Ip6.IsValid() {
 		return nil, fmt.Errorf("dns_upstream %v has no record", upstream.String())
 	}
