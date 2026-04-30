@@ -220,11 +220,15 @@ func loadBpfObjectsWithConstants(obj interface{}, opts *ebpf.CollectionOptions, 
 
 func fullLoadBpfObjects(
 	log *logrus.Logger,
+	netns *DaeNetns,
 	bpf *bpfObjects,
 	opts *loadBpfOptions,
 ) (err error) {
 retryLoadBpf:
-	netnsID, err := GetDaeNetns().NetnsID()
+	if netns == nil {
+		return fmt.Errorf("dae netns is not initialized")
+	}
+	netnsID, err := netns.NetnsID()
 	if err != nil {
 		return fmt.Errorf("failed to get netns id: %w", err)
 	}
@@ -236,14 +240,14 @@ retryLoadBpf:
 			dae0NetnsId     uint32
 			dae0peerMac     [6]byte
 			padding         [2]byte
-		}{
-			tproxyPort:      uint32(opts.BigEndianTproxyPort),
-			controlPlanePid: uint32(os.Getpid()),
-			dae0Ifindex:     uint32(GetDaeNetns().Dae0().Attrs().Index),
-			dae0NetnsId:     uint32(netnsID),
-			dae0peerMac:     [6]byte(GetDaeNetns().Dae0Peer().Attrs().HardwareAddr),
-		},
-	}
+			}{
+				tproxyPort:      uint32(opts.BigEndianTproxyPort),
+				controlPlanePid: uint32(os.Getpid()),
+				dae0Ifindex:     uint32(netns.Dae0().Attrs().Index),
+				dae0NetnsId:     uint32(netnsID),
+				dae0peerMac:     [6]byte(netns.Dae0Peer().Attrs().HardwareAddr),
+			},
+		}
 	if err = loadBpfObjectsWithConstants(bpf, opts.CollectionOptions, constants); err != nil {
 		if errors.Is(err, ebpf.ErrMapIncompatible) {
 			// Map property is incompatible. Remove the old map and try again.

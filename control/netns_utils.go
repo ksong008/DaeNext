@@ -42,9 +42,13 @@ type DaeNetns struct {
 	hostNs, daeNs  netns.NsHandle
 }
 
+func NewDaeNetns(log *logrus.Logger) *DaeNetns {
+	return &DaeNetns{log: log}
+}
+
 func InitDaeNetns(log *logrus.Logger) {
 	once.Do(func() {
-		daeNetns = &DaeNetns{}
+		daeNetns = NewDaeNetns(log)
 	})
 	daeNetns.log = log
 }
@@ -89,7 +93,7 @@ func (ns *DaeNetns) Close() (err error) {
 }
 
 func (ns *DaeNetns) With(f func() error) (err error) {
-	if err = daeNetns.Setup(); err != nil {
+	if err = ns.Setup(); err != nil {
 		return fmt.Errorf("failed to setup dae netns: %v", err)
 	}
 

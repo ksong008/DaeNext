@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"net"
 	"net/http"
+	"net/netip"
 	"sync"
 	"time"
 	"unsafe"
@@ -55,6 +56,8 @@ type GlobalOption struct {
 	CheckInterval     time.Duration
 	CheckTolerance    time.Duration
 	CheckDnsTcp       bool
+	ResolverDialer    netproxy.Dialer
+	ResolverDNS       netip.AddrPort
 }
 
 type InstanceOption struct {
