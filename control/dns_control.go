@@ -133,9 +133,9 @@ func NewDnsController(routing *dns.Dns, option *DnsControllerOption) (c *DnsCont
 		routing:     routing,
 		qtypePrefer: prefer,
 
-			log:                   option.Log,
-			anyfromPool:           option.AnyfromPool,
-			cacheAccessCallback:   option.CacheAccessCallback,
+		log:                   option.Log,
+		anyfromPool:           option.AnyfromPool,
+		cacheAccessCallback:   option.CacheAccessCallback,
 		cacheRemoveCallback:   option.CacheRemoveCallback,
 		newCache:              option.NewCache,
 		bestDialerChooser:     option.BestDialerChooser,
@@ -681,7 +681,7 @@ func (c *DnsController) HandleWithResponseWriter_(dnsMessage *dnsmessage.Msg, re
 			}
 			return responseWriter.WriteMsg(&respMsg)
 		}
-			return sendPkt(c.anyfromPool, c.log, resp, req.realDst, req.realSrc, req.src, req.lConn)
+		return sendPkt(c.anyfromPool, c.log, resp, req.realDst, req.realSrc, req.src, req.lConn)
 	}
 
 	if requestedErr != nil && preferredErr != nil {
@@ -765,7 +765,7 @@ func (c *DnsController) handleWithResponseWriter_(
 				}
 				return responseWriter.WriteMsg(&respMsg)
 			}
-				if err = sendPkt(c.anyfromPool, c.log, resp, req.realDst, req.realSrc, req.src, req.lConn); err != nil {
+			if err = sendPkt(c.anyfromPool, c.log, resp, req.realDst, req.realSrc, req.src, req.lConn); err != nil {
 				return fmt.Errorf("failed to write cached DNS resp: %w", err)
 			}
 		}
@@ -1008,6 +1008,24 @@ func (c *DnsController) Close() error {
 	return errors.Join(errs...)
 }
 
+func (c *DnsController) CacheStats() (dnsCacheEntries int, dnsForwarderCacheEntries int) {
+	now := c.now()
+	c.dnsCacheMu.Lock()
+	for key, cache := range c.dnsCache {
+		if c.cacheExpiresAt(cache).After(now) {
+			continue
+		}
+		delete(c.dnsCache, key)
+	}
+	dnsCacheEntries = len(c.dnsCache)
+	c.dnsCacheMu.Unlock()
+
+	c.dnsForwarderCacheMu.Lock()
+	dnsForwarderCacheEntries = len(c.dnsForwarderCache)
+	c.dnsForwarderCacheMu.Unlock()
+	return dnsCacheEntries, dnsForwarderCacheEntries
+}
+
 func (c *DnsController) dialSend(invokingDepth int, req *udpRequest, data []byte, id uint16, upstream *dns.Upstream, needResp bool) (err error) {
 	if invokingDepth >= MaxDnsLookupDepth {
 		return fmt.Errorf("too deep DNS lookup invoking (depth: %v); there may be infinite loop in your DNS response routing", MaxDnsLookupDepth)
@@ -1156,7 +1174,7 @@ func (c *DnsController) dialSend(invokingDepth int, req *udpRequest, data []byte
 		if err != nil {
 			return err
 		}
-			if err = sendPkt(c.anyfromPool, c.log, data, req.realDst, req.realSrc, req.src, req.lConn); err != nil {
+		if err = sendPkt(c.anyfromPool, c.log, data, req.realDst, req.realSrc, req.src, req.lConn); err != nil {
 			return err
 		}
 	}

@@ -119,12 +119,52 @@ const (
 	controlPlaneServeShutdownGraceTime = 2 * time.Second
 	realDomainPositiveCacheTtl         = 5 * time.Minute
 	realDomainNegativeCacheTtl         = 30 * time.Second
+	realDomainCacheMaxEntries          = 4096
 )
 
 type realDomainCacheEntry struct {
 	isReal        bool
 	shouldReroute bool
 	expiresAt     time.Time
+}
+
+type CacheStats struct {
+	RealDomainCacheEntries   int    `json:"realDomainCacheEntries"`
+	DnsCacheEntries          int    `json:"dnsCacheEntries"`
+	DnsForwarderCacheEntries int    `json:"dnsForwarderCacheEntries"`
+	UdpEndpointPoolEntries   int    `json:"udpEndpointPoolEntries"`
+	AnyfromPoolEntries       int    `json:"anyfromPoolEntries"`
+	PacketSnifferEntries     int    `json:"packetSnifferEntries"`
+	UdpTaskQueueEntries      int    `json:"udpTaskQueueEntries"`
+	UdpTaskDropTotal         uint64 `json:"udpTaskDropTotal"`
+	ActiveTCPConnections     int    `json:"activeTCPConnections"`
+}
+
+func (c *ControlPlane) pruneRealDomainCacheLocked(now time.Time) {
+	for domain, entry := range c.realDomainCache {
+		if entry.expiresAt.After(now) {
+			continue
+		}
+		delete(c.realDomainCache, domain)
+	}
+	for len(c.realDomainCache) > realDomainCacheMaxEntries {
+		var (
+			oldestDomain   string
+			oldestExpiry   time.Time
+			oldestSelected bool
+		)
+		for domain, entry := range c.realDomainCache {
+			if !oldestSelected || entry.expiresAt.Before(oldestExpiry) {
+				oldestDomain = domain
+				oldestExpiry = entry.expiresAt
+				oldestSelected = true
+			}
+		}
+		if !oldestSelected {
+			break
+		}
+		delete(c.realDomainCache, oldestDomain)
+	}
 }
 
 func updateListenSocketMap(m *ebpf.Map, key any, conn syscall.Conn) error {
@@ -747,13 +787,10 @@ func contextOrBackground(ctx context.Context) context.Context {
 func (c *ControlPlane) cachedRealDomainVerdict(domain string, now time.Time) (isReal bool, shouldReroute bool, ok bool) {
 	c.muRealDomainCache.Lock()
 	defer c.muRealDomainCache.Unlock()
+	c.pruneRealDomainCacheLocked(now)
 
 	entry, ok := c.realDomainCache[domain]
 	if !ok {
-		return false, false, false
-	}
-	if !entry.expiresAt.After(now) {
-		delete(c.realDomainCache, domain)
 		return false, false, false
 	}
 	return entry.isReal, entry.shouldReroute, true
@@ -762,11 +799,13 @@ func (c *ControlPlane) cachedRealDomainVerdict(domain string, now time.Time) (is
 func (c *ControlPlane) rememberRealDomainVerdict(domain string, isReal bool, shouldReroute bool, ttl time.Duration) {
 	c.muRealDomainCache.Lock()
 	defer c.muRealDomainCache.Unlock()
+	c.pruneRealDomainCacheLocked(time.Now())
 	c.realDomainCache[domain] = realDomainCacheEntry{
 		isReal:        isReal,
 		shouldReroute: shouldReroute,
 		expiresAt:     time.Now().Add(ttl),
 	}
+	c.pruneRealDomainCacheLocked(time.Now())
 }
 
 func (c *ControlPlane) ChooseDialTarget(ctx context.Context, src netip.AddrPort, routingResult *bpfRoutingResult, outbound consts.OutboundIndex, dst netip.AddrPort, domain string) (dialTarget string, shouldReroute bool, dialIp bool) {
@@ -1164,6 +1203,31 @@ func (c *ControlPlane) ActiveTCPConnections() (n int) {
 		return true
 	})
 	return n
+}
+
+func (c *ControlPlane) CacheStats() CacheStats {
+	stats := CacheStats{
+		PacketSnifferEntries: DefaultPacketSnifferSessionMgr.Count(),
+		UdpTaskQueueEntries:  DefaultUdpTaskPool.Count(),
+		UdpTaskDropTotal:     DefaultUdpTaskPool.DropCount(),
+		ActiveTCPConnections: c.ActiveTCPConnections(),
+	}
+	if c.udpEndpointPool != nil {
+		stats.UdpEndpointPoolEntries = c.udpEndpointPool.Count()
+	}
+	if c.anyfromPool != nil {
+		stats.AnyfromPoolEntries = c.anyfromPool.Count()
+	}
+	if c.dnsController != nil {
+		dnsCacheEntries, dnsForwarderEntries := c.dnsController.CacheStats()
+		stats.DnsCacheEntries = dnsCacheEntries
+		stats.DnsForwarderCacheEntries = dnsForwarderEntries
+	}
+	c.muRealDomainCache.Lock()
+	c.pruneRealDomainCacheLocked(time.Now())
+	stats.RealDomainCacheEntries = len(c.realDomainCache)
+	c.muRealDomainCache.Unlock()
+	return stats
 }
 
 func (c *ControlPlane) TriggerLatencyChecks() {
