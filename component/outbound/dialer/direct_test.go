@@ -2,9 +2,12 @@ package dialer
 
 import (
 	"context"
+	"reflect"
 	"testing"
 
 	"github.com/daeuniverse/outbound/netproxy"
+	outbounddirect "github.com/daeuniverse/outbound/protocol/direct"
+	"github.com/sirupsen/logrus"
 )
 
 type stubDialer struct{}
@@ -38,5 +41,43 @@ func TestNewDirectDialerPrefersInjectedFullconeResolverDialer(t *testing.T) {
 	}
 	if prop == nil || prop.Name != "direct" {
 		t.Fatalf("expected direct property metadata, got %#v", prop)
+	}
+}
+
+func TestResolverDialerOrDefaultBuildsFallbackWhenGlobalsAreUnset(t *testing.T) {
+	prevSymmetric := outbounddirect.SymmetricDirect
+	prevFullcone := outbounddirect.FullconeDirect
+	outbounddirect.SymmetricDirect = nil
+	outbounddirect.FullconeDirect = nil
+	t.Cleanup(func() {
+		outbounddirect.SymmetricDirect = prevSymmetric
+		outbounddirect.FullconeDirect = prevFullcone
+	})
+
+	if got := resolverDialerOrDefault(nil, false); got == nil {
+		t.Fatal("expected fallback resolver dialer for symmetric mode")
+	}
+	if got := resolverDialerOrDefault(nil, true); got == nil {
+		t.Fatal("expected fallback resolver dialer for fullcone mode")
+	}
+}
+
+func TestNewFromLinkSS2022DoesNotDependOnGlobalDirectDialer(t *testing.T) {
+	prevSymmetric := outbounddirect.SymmetricDirect
+	prevFullcone := outbounddirect.FullconeDirect
+	outbounddirect.SymmetricDirect = nil
+	outbounddirect.FullconeDirect = nil
+	t.Cleanup(func() {
+		outbounddirect.SymmetricDirect = prevSymmetric
+		outbounddirect.FullconeDirect = prevFullcone
+	})
+
+	d, err := NewFromLink(&GlobalOption{Log: logrus.New()}, InstanceOption{}, "ss://2022-blake3-aes-128-gcm:MTIzNDU2Nzg5MDEyMzQ1Ng==@example.com:443#node", "")
+	if err != nil {
+		t.Fatalf("NewFromLink returned error: %v", err)
+	}
+	parentDialer := reflect.ValueOf(d.Dialer).Elem().FieldByName("parentDialer")
+	if !parentDialer.IsValid() || parentDialer.IsNil() {
+		t.Fatal("expected shadowsocks_2022 parent dialer to be initialized")
 	}
 }
