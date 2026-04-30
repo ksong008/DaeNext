@@ -57,6 +57,7 @@ type GlobalOption struct {
 	CheckTolerance    time.Duration
 	CheckDnsTcp       bool
 	ResolverDialer    netproxy.Dialer
+	ResolverFullconeDialer netproxy.Dialer
 	ResolverDNS       netip.AddrPort
 }
 
