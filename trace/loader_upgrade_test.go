@@ -4,9 +4,13 @@ import (
 	"testing"
 
 	"github.com/cilium/ebpf"
+	"github.com/cilium/ebpf/rlimit"
 )
 
 func TestRewriteAndLoadBpf(t *testing.T) {
+	if err := rlimit.RemoveMemlock(); err != nil {
+		t.Fatalf("RemoveMemlock: %v", err)
+	}
 	objs, err := rewriteAndLoadBpf(4, 6, 80, DefaultRingbufSizeBytes())
 	if err != nil {
 		t.Fatalf("rewriteAndLoadBpf: %v", err)
