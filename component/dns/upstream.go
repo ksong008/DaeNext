@@ -128,7 +128,13 @@ func NewUpstreamWithResolver(ctx context.Context, upstream *url.URL, resolverNet
 	}()
 
 	if resolverDialer == nil {
-		resolverDialer = direct.SymmetricDirect
+		fallbackDNS := ""
+		if resolverDNS.IsValid() {
+			fallbackDNS = resolverDNS.String()
+		}
+		resolverDialer = direct.NewDirectDialerLaddr(netip.Addr{}, direct.Option{
+			FallbackDNS: fallbackDNS,
+		})
 	}
 	ip46, _, _ := netutils.ResolveIp46(ctx, resolverDialer, systemDns, hostname, resolverNetwork, false)
 	if !ip46.Ip4.IsValid() && !ip46.Ip6.IsValid() {

@@ -7,15 +7,15 @@ package dialer
 
 import (
 	D "github.com/daeuniverse/outbound/dialer"
-	"github.com/daeuniverse/outbound/protocol/direct"
 )
 
 func NewFromLink(gOption *GlobalOption, iOption InstanceOption, link string, subscriptionTag string) (*Dialer, error) {
-	resolverDialer := direct.SymmetricDirect
-	if gOption != nil && gOption.ResolverDialer != nil {
-		resolverDialer = gOption.ResolverDialer
+	resolverDialer := resolverDialerOrDefault(gOption, false)
+	extraOption := &D.ExtraOption{}
+	if gOption != nil {
+		extraOption = &gOption.ExtraOption
 	}
-	d, _p, err := D.NewNetproxyDialerFromLink(resolverDialer, &gOption.ExtraOption, link)
+	d, _p, err := D.NewNetproxyDialerFromLink(resolverDialer, extraOption, link)
 	if err != nil {
 		return nil, err
 	}

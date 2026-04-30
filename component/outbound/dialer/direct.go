@@ -6,9 +6,37 @@
 package dialer
 
 import (
+	"net/netip"
+
 	D "github.com/daeuniverse/outbound/dialer"
 	"github.com/daeuniverse/outbound/netproxy"
+	"github.com/daeuniverse/outbound/protocol/direct"
 )
+
+func newResolverFallbackDialer(resolverDNS netip.AddrPort, fullcone bool) netproxy.Dialer {
+	fallbackDNS := ""
+	if resolverDNS.IsValid() {
+		fallbackDNS = resolverDNS.String()
+	}
+	return direct.NewDirectDialerLaddr(netip.Addr{}, direct.Option{
+		FullCone:    fullcone,
+		FallbackDNS: fallbackDNS,
+	})
+}
+
+func resolverDialerOrDefault(option *GlobalOption, fullcone bool) netproxy.Dialer {
+	if option == nil {
+		return newResolverFallbackDialer(netip.AddrPort{}, fullcone)
+	}
+	if fullcone {
+		if option.ResolverFullconeDialer != nil {
+			return option.ResolverFullconeDialer
+		}
+	} else if option.ResolverDialer != nil {
+		return option.ResolverDialer
+	}
+	return newResolverFallbackDialer(option.ResolverDNS, fullcone)
+}
 
 func NewDirectDialer(option *GlobalOption, fullcone bool) (netproxy.Dialer, *Property) {
 	property := &Property{
