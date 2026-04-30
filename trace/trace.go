@@ -44,7 +44,7 @@ func init() {
 	}
 }
 
-func StartTrace(ctx context.Context, ipVersion int, l4ProtoNo uint16, port int, dropOnly bool, outputFile string) (err error) {
+func StartTrace(ctx context.Context, ipVersion int, l4ProtoNo uint16, port int, dropOnly bool, outputFile string, ringbufSizeBytes uint32) (err error) {
 	kernelVersion, err := internal.KernelVersion()
 	if err != nil {
 		return fmt.Errorf("failed to get kernel version: %w", err)
@@ -54,7 +54,7 @@ func StartTrace(ctx context.Context, ipVersion int, l4ProtoNo uint16, port int, 
 			kernelVersion.String(),
 			requirement.String())
 	}
-	objs, err := rewriteAndLoadBpf(ipVersion, l4ProtoNo, port)
+	objs, err := rewriteAndLoadBpf(ipVersion, l4ProtoNo, port, ringbufSizeBytes)
 	if err != nil {
 		return
 	}
@@ -87,29 +87,35 @@ func StartTrace(ctx context.Context, ipVersion int, l4ProtoNo uint16, port int, 
 	return
 }
 
-func rewriteAndLoadBpf(ipVersion int, l4ProtoNo uint16, port int) (_ *bpfObjects, err error) {
+func rewriteAndLoadBpf(ipVersion int, l4ProtoNo uint16, port int, ringbufSizeBytes uint32) (_ *bpfObjects, err error) {
 	spec, err := loadBpf()
 	if err != nil {
 		return nil, fmt.Errorf("failed to load BPF: %+v\n", err)
 	}
-	if err := spec.RewriteConstants(map[string]interface{}{
-		"tracing_cfg": struct {
-			port      uint16
-			l4Proto   uint16
-			ipVersion uint8
-			pad       uint8
-		}{
-			port:      Htons(uint16(port)),
-			l4Proto:   uint16(l4ProtoNo),
-			ipVersion: uint8(ipVersion),
-			pad:       0,
-		},
+	if err := spec.Variables["tracing_cfg"].Set(struct {
+		port      uint16
+		l4Proto   uint16
+		ipVersion uint8
+		pad       uint8
+	}{
+		port:      Htons(uint16(port)),
+		l4Proto:   uint16(l4ProtoNo),
+		ipVersion: uint8(ipVersion),
+		pad:       0,
 	}); err != nil {
 		return nil, fmt.Errorf("failed to rewrite constants: %+v\n", err)
 	}
+	eventsSpec, ok := spec.Maps["events"]
+	if !ok {
+		return nil, fmt.Errorf("failed to find BPF map spec: events")
+	}
+	if ringbufSizeBytes == 0 {
+		ringbufSizeBytes = DefaultRingbufSizeBytes()
+	}
+	eventsSpec.MaxEntries = ringbufSizeBytes
 	var opts ebpf.CollectionOptions
 	opts.Programs.LogLevel = ebpf.LogLevelInstruction
-	opts.Programs.LogSize = ebpf.DefaultVerifierLogSize * 100
+	opts.Programs.LogSizeStart = 64 * 1024 * 100
 	objs := bpfObjects{}
 	if err := spec.LoadAndAssign(&objs, &opts); err != nil {
 		var (
@@ -137,9 +143,10 @@ func searchAvailableTargets() (targets map[string]int, kfreeSkbReasons map[uint6
 		return
 	}
 
-	iter := btfSpec.Iterate()
-	for iter.Next() {
-		typ := iter.Type
+	for typ, err := range btfSpec.All() {
+		if err != nil {
+			return nil, nil, fmt.Errorf("failed to iterate kernel BTF: %+v\n", err)
+		}
 		fn, ok := typ.(*btf.Func)
 		if !ok {
 			continue

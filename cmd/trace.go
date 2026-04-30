@@ -20,11 +20,12 @@ import (
 )
 
 var (
-	IPv4, IPv6 bool
-	L4Proto    string
-	Port       int
-	OutputFile string
-	DropOnly   bool
+	IPv4, IPv6       bool
+	L4Proto          string
+	Port             int
+	OutputFile       string
+	DropOnly         bool
+	TraceRingbufSize string
 )
 
 func init() {
@@ -57,10 +58,14 @@ func init() {
 			default:
 				logrus.Fatalf("Unknown L4 protocol: %s\n", L4Proto)
 			}
+			ringbufSizeBytes, err := trace.ParseRingbufSizeBytes(TraceRingbufSize)
+			if err != nil {
+				logrus.Fatalln(err)
+			}
 
 			ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 			defer cancel()
-			if err := trace.StartTrace(ctx, IPVersion, L4ProtoNo, Port, DropOnly, OutputFile); err != nil {
+			if err := trace.StartTrace(ctx, IPVersion, L4ProtoNo, Port, DropOnly, OutputFile, ringbufSizeBytes); err != nil {
 				logrus.Fatalln(err)
 			}
 		},
@@ -72,6 +77,7 @@ func init() {
 	traceCmd.PersistentFlags().IntVarP(&Port, "port", "P", 80, "Port")
 	traceCmd.PersistentFlags().BoolVarP(&DropOnly, "drop-only", "", false, "only trace the dropped package")
 	traceCmd.PersistentFlags().StringVarP(&OutputFile, "output", "o", "/dev/stdout", "Output file")
+	traceCmd.PersistentFlags().StringVar(&TraceRingbufSize, "ringbuf-size", trace.DefaultRingbufSize, "Trace ring buffer size in bytes or binary units like 16MiB, 64MiB, or 256MiB; must be a power of two and at least 4KiB")
 
 	rootCmd.AddCommand(traceCmd)
 }
