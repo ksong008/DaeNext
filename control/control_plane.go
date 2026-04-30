@@ -138,6 +138,7 @@ type CacheStats struct {
 	UdpTaskQueueEntries      int    `json:"udpTaskQueueEntries"`
 	UdpTaskDropTotal         uint64 `json:"udpTaskDropTotal"`
 	ActiveTCPConnections     int    `json:"activeTCPConnections"`
+	BPFMapStats
 }
 
 func (c *ControlPlane) pruneRealDomainCacheLocked(now time.Time) {
@@ -1227,6 +1228,14 @@ func (c *ControlPlane) CacheStats() CacheStats {
 	c.pruneRealDomainCacheLocked(time.Now())
 	stats.RealDomainCacheEntries = len(c.realDomainCache)
 	c.muRealDomainCache.Unlock()
+	if c.core != nil {
+		bpfStats, err := c.core.BPFMapStats()
+		if err != nil {
+			c.log.Debugf("failed to collect BPF map stats: %v", err)
+		} else {
+			stats.BPFMapStats = bpfStats
+		}
+	}
 	return stats
 }
 
