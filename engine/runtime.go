@@ -87,6 +87,8 @@ type Engine struct {
 	netns                 *control.DaeNetns
 	udpEndpointPool       *control.UdpEndpointPool
 	anyfromPool           *control.AnyfromPool
+	fallbackDNS           netip.AddrPort
+	bootstrapDirect       netproxy.Dialer
 }
 
 func New(opts Options) *Engine {
