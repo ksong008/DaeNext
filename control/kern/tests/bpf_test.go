@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
@@ -57,7 +58,7 @@ func collectPrograms(t *testing.T) (progset []programSet, err error) {
 				PinPath: pinPath,
 			},
 			Programs: ebpf.ProgramOptions{
-				LogSize: ebpf.DefaultVerifierLogSize * 10,
+				LogSizeStart: 64 * 1024 * 10,
 			},
 		},
 	); err != nil {
@@ -94,6 +95,23 @@ func collectPrograms(t *testing.T) (progset []programSet, err error) {
 		}
 	}
 	return
+}
+
+func loadPinnedBpftestObjects(t *testing.T, pinPath string) *bpftestObjects {
+	t.Helper()
+
+	obj := &bpftestObjects{}
+	if err := loadBpftestObjects(obj, &ebpf.CollectionOptions{
+		Maps: ebpf.MapOptions{
+			PinPath: pinPath,
+		},
+		Programs: ebpf.ProgramOptions{
+			LogSizeStart: 64 * 1024 * 10,
+		},
+	}); err != nil {
+		t.Fatalf("loadBpftestObjects(%s): %v", pinPath, err)
+	}
+	return obj
 }
 
 func consumeBpfDebugLog(t *testing.T) {
@@ -163,5 +181,60 @@ func Test(t *testing.T) {
 		}
 
 		consumeBpfDebugLog(t)
+	}
+}
+
+func TestPinnedMapReuse(t *testing.T) {
+	pinPath, err := os.MkdirTemp("/sys/fs/bpf", "dae-bpftest-")
+	if err != nil {
+		t.Fatalf("MkdirTemp: %v", err)
+	}
+	defer os.RemoveAll(pinPath)
+
+	first := loadPinnedBpftestObjects(t, pinPath)
+	defer first.Close()
+
+	if _, err := os.Stat(filepath.Join(pinPath, "routing_tuples_map")); err != nil {
+		t.Fatalf("expected pinned routing_tuples_map: %v", err)
+	}
+
+	second := loadPinnedBpftestObjects(t, pinPath)
+	defer second.Close()
+}
+
+func TestPinnedMapIncompatibleError(t *testing.T) {
+	pinPath, err := os.MkdirTemp("/sys/fs/bpf", "dae-bpftest-incompat-")
+	if err != nil {
+		t.Fatalf("MkdirTemp: %v", err)
+	}
+	defer os.RemoveAll(pinPath)
+
+	incompatibleMap, err := ebpf.NewMap(&ebpf.MapSpec{
+		Name:       "routing_tuples_map",
+		Type:       ebpf.Array,
+		KeySize:    4,
+		ValueSize:  4,
+		MaxEntries: 1,
+	})
+	if err != nil {
+		t.Fatalf("NewMap: %v", err)
+	}
+	defer incompatibleMap.Close()
+
+	if err := incompatibleMap.Pin(filepath.Join(pinPath, "routing_tuples_map")); err != nil {
+		t.Fatalf("Pin: %v", err)
+	}
+
+	obj := &bpftestObjects{}
+	err = loadBpftestObjects(obj, &ebpf.CollectionOptions{
+		Maps: ebpf.MapOptions{
+			PinPath: pinPath,
+		},
+		Programs: ebpf.ProgramOptions{
+			LogSizeStart: 64 * 1024 * 10,
+		},
+	})
+	if !errors.Is(err, ebpf.ErrMapIncompatible) {
+		t.Fatalf("expected ErrMapIncompatible, got %v", err)
 	}
 }
