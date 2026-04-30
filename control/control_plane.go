@@ -62,16 +62,15 @@ type RuntimeDeps struct {
 
 func (d RuntimeDeps) withDefaults(log *logrus.Logger) RuntimeDeps {
 	if d.Netns == nil {
-		InitDaeNetns(log)
-		d.Netns = GetDaeNetns()
+		d.Netns = NewDaeNetns(log)
 	} else {
 		d.Netns.log = log
 	}
 	if d.UdpEndpointPool == nil {
-		d.UdpEndpointPool = DefaultUdpEndpointPool
+		d.UdpEndpointPool = NewUdpEndpointPool()
 	}
 	if d.AnyfromPool == nil {
-		d.AnyfromPool = DefaultAnyfromPool
+		d.AnyfromPool = NewAnyfromPoolWithNetns(d.Netns)
 	}
 	return d
 }
