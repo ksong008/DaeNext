@@ -161,7 +161,9 @@ func (p *UdpEndpointPool) evictOldestEndpoint(now time.Time) *UdpEndpoint {
 		ue := value.(*UdpEndpoint)
 		if ue.Expired(now) {
 			if p.pool.CompareAndDelete(addr, ue) {
+				oldestKey = addr
 				oldest = ue
+				oldestTime = time.Time{}
 				oldestSeen = true
 				return false
 			}
