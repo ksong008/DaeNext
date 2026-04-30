@@ -45,12 +45,14 @@ type controlPlaneCore struct {
 	closed context.Context
 	close  context.CancelFunc
 	ifmgr  *component.InterfaceManager
+	netns  *DaeNetns
 }
 
 func newControlPlaneCore(log *logrus.Logger,
 	bpf *bpfObjects,
 	outboundId2Name map[uint8]string,
 	kernelVersion *internal.Version,
+	netns *DaeNetns,
 	isReload bool,
 ) *controlPlaneCore {
 	if isReload {
@@ -75,6 +77,7 @@ func newControlPlaneCore(log *logrus.Logger,
 		ifmgr:           ifmgr,
 		closed:          closed,
 		close:           toClose,
+		netns:           netns,
 	}
 }
 
@@ -523,7 +526,10 @@ func (c *controlPlaneCore) _bindWan(ifname string) error {
 }
 
 func (c *controlPlaneCore) bindDaens() (err error) {
-	daens := GetDaeNetns()
+	daens := c.netns
+	if daens == nil {
+		return fmt.Errorf("dae netns is not initialized")
+	}
 
 	// tproxy_dae0peer_ingress@eth0 at dae netns
 	daens.With(func() error {
