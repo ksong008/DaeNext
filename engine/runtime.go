@@ -23,7 +23,6 @@ import (
 
 	"github.com/daeuniverse/dae/common"
 	"github.com/daeuniverse/dae/common/consts"
-	"github.com/daeuniverse/dae/common/netutils"
 	"github.com/daeuniverse/dae/common/subscription"
 	"github.com/daeuniverse/dae/config"
 	"github.com/daeuniverse/dae/control"
@@ -468,9 +467,6 @@ func (e *Engine) newControlPlane(log *logrus.Logger, bpf interface{}, dnsCache m
 	e.fallbackDNS = netip.MustParseAddrPort(conf.Global.FallbackResolver)
 	e.bootstrapDirect = direct.NewDirectDialerLaddr(netip.Addr{}, direct.Option{FullCone: false, FallbackDNS: conf.Global.FallbackResolver})
 	e.bootstrapDirectFullcone = direct.NewDirectDialerLaddr(netip.Addr{}, direct.Option{FullCone: true, FallbackDNS: conf.Global.FallbackResolver})
-	direct.InitDirectDialers(conf.Global.FallbackResolver)
-	netutils.FallbackDns = e.fallbackDNS
-
 	tagToNodeList := map[string][]string{}
 	if len(conf.Node) > 0 {
 		for _, node := range conf.Node {
