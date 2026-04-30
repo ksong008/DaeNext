@@ -55,7 +55,7 @@ struct tracing_config {
 	u8 ip_vsn;
 };
 
-static volatile const struct tracing_config tracing_cfg;
+volatile const struct tracing_config tracing_cfg;
 
 struct {
 	__uint(type, BPF_MAP_TYPE_HASH);
