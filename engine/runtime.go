@@ -61,6 +61,9 @@ type RuntimeOverview struct {
 	DownloadTotal     uint64
 	ActiveConnections int
 	UDPSessions       int
+	RSSBytes          uint64
+	HeapAllocBytes    uint64
+	Goroutines        int
 	Samples           []RuntimeTrafficSample
 }
 
@@ -368,6 +371,9 @@ func (e *Engine) GetRuntimeOverview(windowSec int, maxPoints int) (*RuntimeOverv
 		DownloadTotal:     snapshot.DownloadTotal,
 		ActiveConnections: snapshot.ActiveConnections,
 		UDPSessions:       snapshot.UDPSessions,
+		RSSBytes:          snapshot.RSSBytes,
+		HeapAllocBytes:    snapshot.HeapAllocBytes,
+		Goroutines:        snapshot.Goroutines,
 		Samples:           samples,
 	}, nil
 }

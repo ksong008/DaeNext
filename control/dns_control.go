@@ -32,6 +32,7 @@ const (
 	MaxDnsLookupDepth           = 3
 	minFirefoxCacheTtl          = 120
 	dnsCacheSweepInterval       = time.Minute
+	dnsCacheMaxEntries          = 4096
 	dnsForwarderSweepInterval   = 5 * time.Minute
 	dnsForwarderIdleTimeout     = 15 * time.Minute
 	dnsForwarderCacheMaxEntries = 128
@@ -218,6 +219,40 @@ func (c *DnsController) sweepDnsCache(now time.Time) {
 			}
 		}
 	}
+}
+
+func (c *DnsController) evictDnsCacheEntriesLocked(now time.Time) []*DnsCache {
+	var removed []*DnsCache
+	for key, cache := range c.dnsCache {
+		if c.cacheExpiresAt(cache).After(now) {
+			continue
+		}
+		delete(c.dnsCache, key)
+		removed = append(removed, cache)
+	}
+	for len(c.dnsCache) >= dnsCacheMaxEntries {
+		var (
+			oldestKey      string
+			oldestCache    *DnsCache
+			oldestDeadline time.Time
+			oldestSeen     bool
+		)
+		for key, cache := range c.dnsCache {
+			deadline := c.cacheExpiresAt(cache)
+			if !oldestSeen || deadline.Before(oldestDeadline) {
+				oldestKey = key
+				oldestCache = cache
+				oldestDeadline = deadline
+				oldestSeen = true
+			}
+		}
+		if !oldestSeen {
+			break
+		}
+		delete(c.dnsCache, oldestKey)
+		removed = append(removed, oldestCache)
+	}
+	return removed
 }
 
 func (c *DnsController) sweepDnsForwarderCache(now time.Time, enforceLimit bool) {
@@ -460,6 +495,7 @@ func (c *DnsController) __updateDnsCacheDeadline(host string, dnsTyp uint16, ans
 	c.dnsCacheMu.Lock()
 	cache, ok := c.dnsCache[cacheKey]
 	ips, hasAnyIP := summarizeDNSAnswers(answers)
+	var removed []*DnsCache
 	if ok {
 		cache.Answer = answers
 		cache.IPs = ips
@@ -470,6 +506,7 @@ func (c *DnsController) __updateDnsCacheDeadline(host string, dnsTyp uint16, ans
 		c.packCacheResponse(cache, fqdn, dnsTyp)
 		c.dnsCacheMu.Unlock()
 	} else {
+		removed = c.evictDnsCacheEntriesLocked(now)
 		cache, err = c.newCache(fqdn, answers, deadline, originalDeadline)
 		if err != nil {
 			c.dnsCacheMu.Unlock()
@@ -478,6 +515,13 @@ func (c *DnsController) __updateDnsCacheDeadline(host string, dnsTyp uint16, ans
 		c.packCacheResponse(cache, fqdn, dnsTyp)
 		c.dnsCache[cacheKey] = cache
 		c.dnsCacheMu.Unlock()
+	}
+	if c.cacheRemoveCallback != nil {
+		for _, removedCache := range removed {
+			if err = c.cacheRemoveCallback(removedCache); err != nil {
+				return err
+			}
+		}
 	}
 	if c.cacheAccessCallback != nil {
 		if err = c.cacheAccessCallback(cache); err != nil {
