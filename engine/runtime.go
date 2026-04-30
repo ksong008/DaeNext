@@ -84,6 +84,9 @@ type Engine struct {
 	checkNetworkLinks     []string
 	onReady               func()
 	httpTransport         *http.Transport
+	netns                 *control.DaeNetns
+	udpEndpointPool       *control.UdpEndpointPool
+	anyfromPool           *control.AnyfromPool
 }
 
 func New(opts Options) *Engine {
@@ -91,11 +94,15 @@ func New(opts Options) *Engine {
 	if len(checkLinks) == 0 {
 		checkLinks = append([]string(nil), defaultCheckNetworkLinks...)
 	}
+	netns := control.NewDaeNetns(nil)
 	e := &Engine{
 		reloadCh:              make(chan *reloadMessage),
 		subscriptionConfigDir: opts.SubscriptionConfigDir,
 		checkNetworkLinks:     checkLinks,
 		onReady:               opts.OnReady,
+		netns:                 netns,
+		udpEndpointPool:       control.NewUdpEndpointPool(),
+		anyfromPool:           control.NewAnyfromPoolWithNetns(netns),
 	}
 	e.httpTransport = &http.Transport{
 		DialContext:           e.routeAwareDialContext,
@@ -119,8 +126,14 @@ func (e *Engine) Run(log *logrus.Logger, conf *config.Config, externGeoDataDirs 
 	defer close(runDone)
 	defer func() {
 		e.setControlPlane(nil)
-		if ns := control.GetDaeNetns(); ns != nil {
+		if ns := e.netns; ns != nil {
 			ns.Close()
+		}
+		if e.udpEndpointPool != nil {
+			_ = e.udpEndpointPool.Flush()
+		}
+		if e.anyfromPool != nil {
+			_ = e.anyfromPool.Flush()
 		}
 	}()
 
@@ -154,10 +167,10 @@ func (e *Engine) Run(log *logrus.Logger, conf *config.Config, externGeoDataDirs 
 				e.onReady()
 			}
 		}()
-		control.GetDaeNetns().With(func() error {
-			if listener, err = current.ListenAndServe(readyChan, conf.Global.TproxyPort); err != nil {
-				log.Errorln("ListenAndServe:", err)
-			}
+			e.netns.With(func() error {
+				if listener, err = current.ListenAndServe(readyChan, conf.Global.TproxyPort); err != nil {
+					log.Errorln("ListenAndServe:", err)
+				}
 			return err
 		})
 		select {
@@ -260,9 +273,9 @@ loop:
 				old.AbortConnections()
 			}
 			old.Close()
-			control.FlushReloadScopedResources()
+				control.FlushReloadScopedResources(e.udpEndpointPool, e.anyfromPool)
+			}
 		}
-	}
 
 	if current != nil {
 		if err := current.Close(); err != nil {
@@ -331,7 +344,11 @@ func (e *Engine) GetRuntimeOverview(windowSec int, maxPoints int) (*RuntimeOverv
 		activeTCPConnections = ctl.ActiveTCPConnections()
 	}
 
-	snapshot := control.SnapshotRuntimeStats(activeTCPConnections, control.DefaultUdpEndpointPool.Count(), windowSec, maxPoints)
+	udpSessions := 0
+	if e.udpEndpointPool != nil {
+		udpSessions = e.udpEndpointPool.Count()
+	}
+	snapshot := control.SnapshotRuntimeStats(activeTCPConnections, udpSessions, windowSec, maxPoints)
 	samples := make([]RuntimeTrafficSample, 0, len(snapshot.Samples))
 	for _, sample := range snapshot.Samples {
 		samples = append(samples, RuntimeTrafficSample{
@@ -398,10 +415,11 @@ func (e *Engine) routeAwareDialContext(ctx context.Context, network, addr string
 
 func (e *Engine) waitForNetwork(log *logrus.Logger, conf *config.Config) {
 	epo := 5 * time.Second
+	bootstrapDirect := e.bootstrapDirect
 	client := http.Client{
 		Transport: &http.Transport{
 			DialContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
-				conn, err := direct.SymmetricDirect.DialContext(ctx, common.MagicNetwork("tcp", conf.Global.SoMarkFromDae, conf.Global.Mptcp), addr)
+				conn, err := bootstrapDirect.DialContext(ctx, common.MagicNetwork("tcp", conf.Global.SoMarkFromDae, conf.Global.Mptcp), addr)
 				if err != nil {
 					return nil, err
 				}
@@ -444,8 +462,10 @@ func (e *Engine) newControlPlane(log *logrus.Logger, bpf interface{}, dnsCache m
 
 	conf = deepcopy.Copy(conf).(*config.Config)
 
+	e.fallbackDNS = netip.MustParseAddrPort(conf.Global.FallbackResolver)
+	e.bootstrapDirect = direct.NewDirectDialerLaddr(netip.Addr{}, direct.Option{FullCone: false, FallbackDNS: conf.Global.FallbackResolver})
 	direct.InitDirectDialers(conf.Global.FallbackResolver)
-	netutils.FallbackDns = netip.MustParseAddrPort(conf.Global.FallbackResolver)
+	netutils.FallbackDns = e.fallbackDNS
 
 	tagToNodeList := map[string][]string{}
 	if len(conf.Node) > 0 {
@@ -469,7 +489,7 @@ func (e *Engine) newControlPlane(log *logrus.Logger, bpf interface{}, dnsCache m
 	client := http.Client{
 		Transport: &http.Transport{
 			DialContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
-				conn, err := direct.SymmetricDirect.DialContext(ctx, common.MagicNetwork("tcp", conf.Global.SoMarkFromDae, conf.Global.Mptcp), addr)
+				conn, err := e.bootstrapDirect.DialContext(ctx, common.MagicNetwork("tcp", conf.Global.SoMarkFromDae, conf.Global.Mptcp), addr)
 				if err != nil {
 					return nil, err
 				}
@@ -526,6 +546,13 @@ func (e *Engine) newControlPlane(log *logrus.Logger, bpf interface{}, dnsCache m
 		log,
 		bpf,
 		dnsCache,
+		control.RuntimeDeps{
+			Netns:           e.netns,
+			UdpEndpointPool: e.udpEndpointPool,
+			AnyfromPool:     e.anyfromPool,
+			ResolverDialer:  e.bootstrapDirect,
+			ResolverDNS:     e.fallbackDNS,
+		},
 		tagToNodeList,
 		conf.Group,
 		&conf.Routing,

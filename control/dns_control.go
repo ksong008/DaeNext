@@ -56,6 +56,7 @@ var (
 
 type DnsControllerOption struct {
 	Log                   *logrus.Logger
+	AnyfromPool           *AnyfromPool
 	CacheAccessCallback   func(cache *DnsCache) (err error)
 	CacheRemoveCallback   func(cache *DnsCache) (err error)
 	NewCache              func(fqdn string, answers []dnsmessage.RR, deadline time.Time, originalDeadline time.Time) (cache *DnsCache, err error)
@@ -72,6 +73,7 @@ type DnsController struct {
 	qtypePrefer uint16
 
 	log                 *logrus.Logger
+	anyfromPool         *AnyfromPool
 	cacheAccessCallback func(cache *DnsCache) (err error)
 	cacheRemoveCallback func(cache *DnsCache) (err error)
 	newCache            func(fqdn string, answers []dnsmessage.RR, deadline time.Time, originalDeadline time.Time) (cache *DnsCache, err error)
@@ -130,8 +132,9 @@ func NewDnsController(routing *dns.Dns, option *DnsControllerOption) (c *DnsCont
 		routing:     routing,
 		qtypePrefer: prefer,
 
-		log:                   option.Log,
-		cacheAccessCallback:   option.CacheAccessCallback,
+			log:                   option.Log,
+			anyfromPool:           option.AnyfromPool,
+			cacheAccessCallback:   option.CacheAccessCallback,
 		cacheRemoveCallback:   option.CacheRemoveCallback,
 		newCache:              option.NewCache,
 		bestDialerChooser:     option.BestDialerChooser,
@@ -634,7 +637,7 @@ func (c *DnsController) HandleWithResponseWriter_(dnsMessage *dnsmessage.Msg, re
 			}
 			return responseWriter.WriteMsg(&respMsg)
 		}
-		return sendPkt(c.log, resp, req.realDst, req.realSrc, req.src, req.lConn)
+			return sendPkt(c.anyfromPool, c.log, resp, req.realDst, req.realSrc, req.src, req.lConn)
 	}
 
 	if requestedErr != nil && preferredErr != nil {
@@ -718,7 +721,7 @@ func (c *DnsController) handleWithResponseWriter_(
 				}
 				return responseWriter.WriteMsg(&respMsg)
 			}
-			if err = sendPkt(c.log, resp, req.realDst, req.realSrc, req.src, req.lConn); err != nil {
+				if err = sendPkt(c.anyfromPool, c.log, resp, req.realDst, req.realSrc, req.src, req.lConn); err != nil {
 				return fmt.Errorf("failed to write cached DNS resp: %w", err)
 			}
 		}
@@ -829,7 +832,7 @@ func (c *DnsController) sendReject_(dnsMessage *dnsmessage.Msg, req *udpRequest)
 	if err != nil {
 		return fmt.Errorf("pack DNS packet: %w", err)
 	}
-	if err = sendPkt(c.log, data, req.realDst, req.realSrc, req.src, req.lConn); err != nil {
+	if err = sendPkt(c.anyfromPool, c.log, data, req.realDst, req.realSrc, req.src, req.lConn); err != nil {
 		return err
 	}
 	return nil
@@ -855,7 +858,7 @@ func (c *DnsController) sendRejectWithResponseWriter_(dnsMessage *dnsmessage.Msg
 	if err != nil {
 		return fmt.Errorf("pack DNS packet: %w", err)
 	}
-	if err = sendPkt(c.log, data, req.realDst, req.realSrc, req.src, req.lConn); err != nil {
+	if err = sendPkt(c.anyfromPool, c.log, data, req.realDst, req.realSrc, req.src, req.lConn); err != nil {
 		return err
 	}
 	return nil
@@ -1109,7 +1112,7 @@ func (c *DnsController) dialSend(invokingDepth int, req *udpRequest, data []byte
 		if err != nil {
 			return err
 		}
-		if err = sendPkt(c.log, data, req.realDst, req.realSrc, req.src, req.lConn); err != nil {
+			if err = sendPkt(c.anyfromPool, c.log, data, req.realDst, req.realSrc, req.src, req.lConn); err != nil {
 			return err
 		}
 	}

@@ -33,6 +33,7 @@ import (
 	"github.com/daeuniverse/dae/config"
 	"github.com/daeuniverse/dae/pkg/config_parser"
 	internal "github.com/daeuniverse/dae/pkg/ebpf_internal"
+	"github.com/daeuniverse/outbound/netproxy"
 	"github.com/daeuniverse/outbound/pool"
 	"github.com/daeuniverse/outbound/transport/grpc"
 	"github.com/daeuniverse/outbound/transport/meek"
@@ -48,6 +49,30 @@ type NodeLatencySnapshot struct {
 	Alive     bool
 	Message   string
 	CheckedAt time.Time
+}
+
+type RuntimeDeps struct {
+	Netns           *DaeNetns
+	UdpEndpointPool *UdpEndpointPool
+	AnyfromPool     *AnyfromPool
+	ResolverDialer  netproxy.Dialer
+	ResolverDNS     netip.AddrPort
+}
+
+func (d RuntimeDeps) withDefaults(log *logrus.Logger) RuntimeDeps {
+	if d.Netns == nil {
+		InitDaeNetns(log)
+		d.Netns = GetDaeNetns()
+	} else {
+		d.Netns.log = log
+	}
+	if d.UdpEndpointPool == nil {
+		d.UdpEndpointPool = DefaultUdpEndpointPool
+	}
+	if d.AnyfromPool == nil {
+		d.AnyfromPool = DefaultAnyfromPool
+	}
+	return d
 }
 
 type ControlPlane struct {
@@ -83,6 +108,10 @@ type ControlPlane struct {
 	tproxyPortProtect bool
 	soMarkFromDae     uint32
 	mptcp             bool
+
+	netns           *DaeNetns
+	udpEndpointPool *UdpEndpointPool
+	anyfromPool     *AnyfromPool
 }
 
 const (
@@ -116,6 +145,7 @@ func NewControlPlane(
 	log *logrus.Logger,
 	_bpf interface{},
 	dnsCache map[string]*DnsCache,
+	runtimeDeps RuntimeDeps,
 	tagToNodeList map[string][]string,
 	groups []config.Group,
 	routingA *config.Routing,
@@ -170,12 +200,12 @@ func NewControlPlane(
 		return nil, fmt.Errorf("rlimit.RemoveMemlock:%v", err)
 	}
 
-	InitDaeNetns(log)
+	runtimeDeps = runtimeDeps.withDefaults(log)
 	if err = InitSysctlManager(log); err != nil {
 		return nil, err
 	}
 
-	if err = GetDaeNetns().Setup(); err != nil {
+	if err = runtimeDeps.Netns.Setup(); err != nil {
 		return nil, fmt.Errorf("failed to setup dae netns: %w", err)
 	}
 	pinPath := filepath.Join(consts.BpfPinRoot, consts.AppName)
@@ -213,13 +243,13 @@ func NewControlPlane(
 		} else {
 			return nil, fmt.Errorf("unexpected bpf type: %T", _bpf)
 		}
-	} else {
-		bpf = new(bpfObjects)
-		if err = fullLoadBpfObjects(log, bpf, &loadBpfOptions{
-			PinPath:             pinPath,
-			BigEndianTproxyPort: uint32(common.Htons(global.TproxyPort)),
-			CollectionOptions:   collectionOpts,
-		}); err != nil {
+		} else {
+			bpf = new(bpfObjects)
+			if err = fullLoadBpfObjects(log, runtimeDeps.Netns, bpf, &loadBpfOptions{
+				PinPath:             pinPath,
+				BigEndianTproxyPort: uint32(common.Htons(global.TproxyPort)),
+				CollectionOptions:   collectionOpts,
+			}); err != nil {
 			if log.Level == logrus.PanicLevel {
 				log.Panicln(err)
 			}
@@ -234,6 +264,7 @@ func NewControlPlane(
 		bpf,
 		outboundId2Name,
 		&kernelVersion,
+		runtimeDeps.Netns,
 		_bpf != nil,
 	)
 	defer func() {
@@ -288,6 +319,12 @@ func NewControlPlane(
 		log.Warnln("AllowInsecure is enabled, but it is not recommended. Please make sure you have to turn it on.")
 	}
 	option := dialer.NewGlobalOption(global, log)
+	option.ResolverDialer = runtimeDeps.ResolverDialer
+	option.ResolverDNS = runtimeDeps.ResolverDNS
+	option.TcpCheckOptionRaw.ResolverDialer = runtimeDeps.ResolverDialer
+	option.TcpCheckOptionRaw.ResolverDNS = runtimeDeps.ResolverDNS
+	option.CheckDnsOptionRaw.ResolverDialer = runtimeDeps.ResolverDialer
+	option.CheckDnsOptionRaw.ResolverDNS = runtimeDeps.ResolverDNS
 
 	// Dial mode.
 	dialMode, err := consts.ParseDialMode(global.DialMode)
@@ -428,6 +465,9 @@ func NewControlPlane(
 		tproxyPortProtect: global.TproxyPortProtect,
 		soMarkFromDae:     global.SoMarkFromDae,
 		mptcp:             global.Mptcp,
+		netns:             runtimeDeps.Netns,
+		udpEndpointPool:   runtimeDeps.UdpEndpointPool,
+		anyfromPool:       runtimeDeps.AnyfromPool,
 	}
 	defer func() {
 		if err != nil {
@@ -441,6 +481,8 @@ func NewControlPlane(
 		LocationFinder:          locationFinder,
 		UpstreamReadyCallback:   plane.dnsUpstreamReadyCallback,
 		UpstreamResolverNetwork: common.MagicNetwork("udp", global.SoMarkFromDae, global.Mptcp),
+		ResolverDialer:          runtimeDeps.ResolverDialer,
+		ResolverDNS:             runtimeDeps.ResolverDNS,
 	})
 	if err != nil {
 		return nil, err
@@ -452,6 +494,7 @@ func NewControlPlane(
 	}
 	if plane.dnsController, err = NewDnsController(dnsUpstream, &DnsControllerOption{
 		Log: log,
+		AnyfromPool: plane.anyfromPool,
 		CacheAccessCallback: func(cache *DnsCache) (err error) {
 			// Write mappings into eBPF map:
 			// IP record (from dns lookup) -> domain routing
@@ -1237,11 +1280,17 @@ func (c *ControlPlane) StartDNSListener() error {
 // FlushReloadScopedResources clears global transport/session pools that should
 // not survive a successful reload. It is intentionally called by the reload
 // coordinator only after a replacement control plane has been constructed.
-func FlushReloadScopedResources() {
+func FlushReloadScopedResources(udpEndpointPool *UdpEndpointPool, anyfromPool *AnyfromPool) {
 	grpc.CleanGlobalClientConnectionCache()
 	meek.CleanGlobalRoundTripperCache()
 	xhttp.CleanGlobalPools()
-	_ = DefaultUdpEndpointPool.Flush()
-	_ = DefaultAnyfromPool.Flush()
+	if udpEndpointPool == nil {
+		udpEndpointPool = DefaultUdpEndpointPool
+	}
+	if anyfromPool == nil {
+		anyfromPool = DefaultAnyfromPool
+	}
+	_ = udpEndpointPool.Flush()
+	_ = anyfromPool.Flush()
 	_ = DefaultPacketSnifferSessionMgr.Flush()
 }

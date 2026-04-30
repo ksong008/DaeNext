@@ -6,6 +6,7 @@
 package dns
 
 import (
+	"context"
 	"fmt"
 	"net/netip"
 	"net/url"
@@ -16,6 +17,7 @@ import (
 	"github.com/daeuniverse/dae/common/consts"
 	"github.com/daeuniverse/dae/component/routing"
 	"github.com/daeuniverse/dae/config"
+	"github.com/daeuniverse/outbound/netproxy"
 	dnsmessage "github.com/miekg/dns"
 	"github.com/sirupsen/logrus"
 )
@@ -34,6 +36,8 @@ type NewOption struct {
 	LocationFinder          *assets.LocationFinder
 	UpstreamReadyCallback   func(dnsUpstream *Upstream) (err error)
 	UpstreamResolverNetwork string
+	ResolverDialer          netproxy.Dialer
+	ResolverDNS             netip.AddrPort
 }
 
 func New(dns *config.Dns, opt *NewOption) (s *Dns, err error) {
@@ -60,6 +64,9 @@ func New(dns *config.Dns, opt *NewOption) (s *Dns, err error) {
 		r := &UpstreamResolver{
 			Raw:     u,
 			Network: opt.UpstreamResolverNetwork,
+			Resolve: func(ctx context.Context, upstream *url.URL, resolverNetwork string) (*Upstream, error) {
+				return NewUpstreamWithResolver(ctx, upstream, resolverNetwork, opt.ResolverDialer, opt.ResolverDNS)
+			},
 			FinishInitCallback: func(i int) func(raw *url.URL, upstream *Upstream) (err error) {
 				return func(raw *url.URL, upstream *Upstream) (err error) {
 					upstream.Index = consts.DnsRequestOutboundIndex(i)

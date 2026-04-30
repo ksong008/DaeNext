@@ -158,12 +158,19 @@ type TcpCheckOption struct {
 }
 
 func ParseTcpCheckOption(ctx context.Context, rawURL []string, method string, resolverNetwork string) (opt *TcpCheckOption, err error) {
+	return ParseTcpCheckOptionWithResolver(ctx, rawURL, method, resolverNetwork, nil, netip.AddrPort{})
+}
+
+func ParseTcpCheckOptionWithResolver(ctx context.Context, rawURL []string, method string, resolverNetwork string, resolverDialer netproxy.Dialer, resolverDNS netip.AddrPort) (opt *TcpCheckOption, err error) {
 	if method == "" {
 		method = http.MethodGet
 	}
-	systemDns, err := netutils.SystemDns()
-	if err != nil {
-		return nil, err
+	systemDns := resolverDNS
+	if !systemDns.IsValid() {
+		systemDns, err = netutils.SystemDns()
+		if err != nil {
+			return nil, err
+		}
 	}
 	defer func() {
 		if err != nil {
@@ -182,7 +189,10 @@ func ParseTcpCheckOption(ctx context.Context, rawURL []string, method string, re
 	if len(rawURL) > 1 {
 		ip46 = parseIp46FromList(rawURL[1:])
 	} else {
-		ip46, _, _ = netutils.ResolveIp46(ctx, direct.SymmetricDirect, systemDns, u.Hostname(), resolverNetwork, false)
+		if resolverDialer == nil {
+			resolverDialer = direct.SymmetricDirect
+		}
+		ip46, _, _ = netutils.ResolveIp46(ctx, resolverDialer, systemDns, u.Hostname(), resolverNetwork, false)
 		if !ip46.Ip4.IsValid() && !ip46.Ip6.IsValid() {
 			return nil, fmt.Errorf("ResolveIp46: no valid ip for %v", u.Hostname())
 		}
@@ -201,9 +211,16 @@ type CheckDnsOption struct {
 }
 
 func ParseCheckDnsOption(ctx context.Context, dnsHostPort []string, resolverNetwork string) (opt *CheckDnsOption, err error) {
-	systemDns, err := netutils.SystemDns()
-	if err != nil {
-		return nil, err
+	return ParseCheckDnsOptionWithResolver(ctx, dnsHostPort, resolverNetwork, nil, netip.AddrPort{})
+}
+
+func ParseCheckDnsOptionWithResolver(ctx context.Context, dnsHostPort []string, resolverNetwork string, resolverDialer netproxy.Dialer, resolverDNS netip.AddrPort) (opt *CheckDnsOption, err error) {
+	systemDns := resolverDNS
+	if !systemDns.IsValid() {
+		systemDns, err = netutils.SystemDns()
+		if err != nil {
+			return nil, err
+		}
 	}
 	defer func() {
 		if err != nil {
@@ -227,7 +244,10 @@ func ParseCheckDnsOption(ctx context.Context, dnsHostPort []string, resolverNetw
 	if len(dnsHostPort) > 1 {
 		ip46 = parseIp46FromList(dnsHostPort[1:])
 	} else {
-		ip46, _, _ = netutils.ResolveIp46(ctx, direct.SymmetricDirect, systemDns, host, resolverNetwork, false)
+		if resolverDialer == nil {
+			resolverDialer = direct.SymmetricDirect
+		}
+		ip46, _, _ = netutils.ResolveIp46(ctx, resolverDialer, systemDns, host, resolverNetwork, false)
 		if !ip46.Ip4.IsValid() && !ip46.Ip6.IsValid() {
 			return nil, fmt.Errorf("ResolveIp46: no valid ip for %v", host)
 		}
@@ -246,6 +266,8 @@ type TcpCheckOptionRaw struct {
 	Raw             []string
 	ResolverNetwork string
 	Method          string
+	ResolverDialer  netproxy.Dialer
+	ResolverDNS     netip.AddrPort
 }
 
 func (c *TcpCheckOptionRaw) Option() (opt *TcpCheckOption, err error) {
@@ -255,7 +277,7 @@ func (c *TcpCheckOptionRaw) Option() (opt *TcpCheckOption, err error) {
 		ctx, cancel := context.WithTimeout(context.TODO(), Timeout)
 		defer cancel()
 		ctx = context.WithValue(ctx, "logger", c.Log)
-		tcpCheckOption, err := ParseTcpCheckOption(ctx, c.Raw, c.Method, c.ResolverNetwork)
+			tcpCheckOption, err := ParseTcpCheckOptionWithResolver(ctx, c.Raw, c.Method, c.ResolverNetwork, c.ResolverDialer, c.ResolverDNS)
 		if err != nil {
 			return nil, fmt.Errorf("failed to parse tcp_check_url: %w", err)
 		}
@@ -270,6 +292,8 @@ type CheckDnsOptionRaw struct {
 	Raw             []string
 	ResolverNetwork string
 	Somark          uint32
+	ResolverDialer  netproxy.Dialer
+	ResolverDNS     netip.AddrPort
 }
 
 func (c *CheckDnsOptionRaw) Option() (opt *CheckDnsOption, err error) {
@@ -278,7 +302,7 @@ func (c *CheckDnsOptionRaw) Option() (opt *CheckDnsOption, err error) {
 	if c.opt == nil {
 		ctx, cancel := context.WithTimeout(context.TODO(), Timeout)
 		defer cancel()
-		udpCheckOption, err := ParseCheckDnsOption(ctx, c.Raw, c.ResolverNetwork)
+			udpCheckOption, err := ParseCheckDnsOptionWithResolver(ctx, c.Raw, c.ResolverNetwork, c.ResolverDialer, c.ResolverDNS)
 		if err != nil {
 			return nil, fmt.Errorf("failed to parse tcp_check_url: %w", err)
 		}

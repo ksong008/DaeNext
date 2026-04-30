@@ -53,8 +53,11 @@ func ChooseNatTimeout(data []byte, sniffDns bool) (dmsg *dnsmessage.Msg, timeout
 }
 
 // sendPkt uses bind first, and fallback to send hdr if addr is in use.
-func sendPkt(log *logrus.Logger, data []byte, from netip.AddrPort, realTo, to netip.AddrPort, lConn *net.UDPConn) (err error) {
-	uConn, _, err := DefaultAnyfromPool.GetOrCreate(from.String(), AnyfromTimeout)
+func sendPkt(anyfromPool *AnyfromPool, log *logrus.Logger, data []byte, from netip.AddrPort, realTo, to netip.AddrPort, lConn *net.UDPConn) (err error) {
+	if anyfromPool == nil {
+		anyfromPool = DefaultAnyfromPool
+	}
+	uConn, _, err := anyfromPool.GetOrCreate(from.String(), AnyfromTimeout)
 	if err != nil {
 		return
 	}
@@ -65,10 +68,14 @@ func sendPkt(log *logrus.Logger, data []byte, from netip.AddrPort, realTo, to ne
 func (c *ControlPlane) handlePkt(ctx context.Context, lConn *net.UDPConn, data []byte, src, pktDst, realDst netip.AddrPort, routingResult *bpfRoutingResult, skipSniffing bool) (err error) {
 	reqCtx, cancel := context.WithCancel(contextOrBackground(ctx))
 	defer cancel()
+	udpEndpointPool := c.udpEndpointPool
+	if udpEndpointPool == nil {
+		udpEndpointPool = DefaultUdpEndpointPool
+	}
 	var realSrc netip.AddrPort
 	var domain string
 	realSrc = src
-	ue, ueExists := DefaultUdpEndpointPool.Get(realSrc)
+	ue, ueExists := udpEndpointPool.Get(realSrc)
 	if ueExists && ue.SniffedDomain != "" {
 		// It is quic ...
 		// Fast path.
@@ -207,11 +214,11 @@ getNew:
 		}).Warnln("Touch max retry limit.")
 		return fmt.Errorf("touch max retry limit")
 	}
-	ue, isNew, err := DefaultUdpEndpointPool.GetOrCreate(realSrc, &UdpEndpointOptions{
+	ue, isNew, err := udpEndpointPool.GetOrCreate(realSrc, &UdpEndpointOptions{
 		// Handler handles response packets and send it to the client.
 		Handler: func(data []byte, from netip.AddrPort) (err error) {
 			// Do not return conn-unrelated err in this func.
-			if err = sendPkt(c.log, data, from, realSrc, src, lConn); err != nil {
+			if err = sendPkt(c.anyfromPool, c.log, data, from, realSrc, src, lConn); err != nil {
 				return err
 			}
 			RecordDownloadTraffic(int64(len(data)))
@@ -286,7 +293,7 @@ getNew:
 				"retry":   retry,
 			}).Debugln("Old udp endpoint was not alive and removed.")
 		}
-		_ = DefaultUdpEndpointPool.Remove(realSrc, ue)
+		_ = udpEndpointPool.Remove(realSrc, ue)
 		retry++
 		goto getNew
 	}
@@ -311,7 +318,7 @@ getNew:
 				"retry":   retry,
 			}).Debugln("Failed to write UDP packet request. Try to remove old UDP endpoint and retry.")
 		}
-		_ = DefaultUdpEndpointPool.Remove(realSrc, ue)
+		_ = udpEndpointPool.Remove(realSrc, ue)
 		retry++
 		goto getNew
 	}
