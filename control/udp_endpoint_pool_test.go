@@ -123,7 +123,7 @@ func TestUdpEndpointPoolEvictOldestEndpoint(t *testing.T) {
 	pool.pool.Store(newerAddr, &UdpEndpoint{
 		conn:       newerConn,
 		NatTimeout: time.Minute,
-		lastActive: now.Add(-time.Minute),
+		lastActive: now.Add(-30 * time.Second),
 	})
 
 	evicted := pool.evictOldestEndpoint(now)
