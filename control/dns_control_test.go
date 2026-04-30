@@ -269,6 +269,51 @@ func TestSweepDnsCacheUsesLatestDeadline(t *testing.T) {
 	}
 }
 
+func TestUpdateDnsCacheEvictsOldestWhenCacheFull(t *testing.T) {
+	controller, err := NewDnsController(nil, &DnsControllerOption{
+		Log: logrus.New(),
+		CacheAccessCallback: func(*DnsCache) error {
+			return nil
+		},
+		CacheRemoveCallback: func(*DnsCache) error { return nil },
+		NewCache: func(_ string, answers []dnsmessage.RR, deadline time.Time, originalDeadline time.Time) (*DnsCache, error) {
+			return &DnsCache{
+				Answer:           answers,
+				Deadline:         deadline,
+				OriginalDeadline: originalDeadline,
+			}, nil
+		},
+		BestDialerChooser:     func(*udpRequest, *componentdns.Upstream) (*dialArgument, error) { return nil, nil },
+		TimeoutExceedCallback: func(*dialArgument, error) {},
+	})
+	if err != nil {
+		t.Fatalf("NewDnsController() returned error: %v", err)
+	}
+	defer controller.Close()
+
+	now := time.Now()
+	for i := 0; i < dnsCacheMaxEntries; i++ {
+		key := controller.cacheKey(fmt.Sprintf("old-%d.example.", i), dnsmessage.TypeA)
+		controller.dnsCache[key] = &DnsCache{
+			Deadline:         now.Add(time.Duration(i+1) * time.Second),
+			OriginalDeadline: now.Add(time.Duration(i+1) * time.Second),
+		}
+	}
+
+	if err := controller.UpdateDnsCacheDeadline("new.example", dnsmessage.TypeA, []dnsmessage.RR{}, now.Add(10*time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+	if len(controller.dnsCache) != dnsCacheMaxEntries {
+		t.Fatalf("expected cache size to stay capped at %d, got %d", dnsCacheMaxEntries, len(controller.dnsCache))
+	}
+	if _, ok := controller.dnsCache[controller.cacheKey("old-0.example.", dnsmessage.TypeA)]; ok {
+		t.Fatal("expected oldest dns cache entry to be evicted")
+	}
+	if _, ok := controller.dnsCache[controller.cacheKey("new.example.", dnsmessage.TypeA)]; !ok {
+		t.Fatal("expected new dns cache entry to be retained")
+	}
+}
+
 func TestSweepDnsForwarderCacheRemovesIdleEntries(t *testing.T) {
 	controller, err := NewDnsController(nil, &DnsControllerOption{
 		Log: logrus.New(),
