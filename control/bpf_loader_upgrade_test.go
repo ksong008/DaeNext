@@ -11,11 +11,19 @@ import (
 	"testing"
 
 	"github.com/cilium/ebpf"
+	"github.com/cilium/ebpf/rlimit"
 	"github.com/daeuniverse/dae/common"
 	"github.com/sirupsen/logrus"
 	"github.com/vishvananda/netlink"
 	"github.com/vishvananda/netns"
 )
+
+func ensureMemlock(t *testing.T) {
+	t.Helper()
+	if err := rlimit.RemoveMemlock(); err != nil {
+		t.Fatalf("RemoveMemlock: %v", err)
+	}
+}
 
 func testLoaderNetns(t *testing.T) *DaeNetns {
 	t.Helper()
@@ -73,6 +81,7 @@ func testLoadBpfObjects(t *testing.T, pinPath string) *bpfObjects {
 }
 
 func TestFullLoadBpfObjectsPinnedReuse(t *testing.T) {
+	ensureMemlock(t)
 	pinPath, err := os.MkdirTemp("/sys/fs/bpf", "dae-loader-")
 	if err != nil {
 		t.Fatalf("MkdirTemp: %v", err)
@@ -91,6 +100,7 @@ func TestFullLoadBpfObjectsPinnedReuse(t *testing.T) {
 }
 
 func TestFullLoadBpfObjectsDeletesIncompatiblePinnedMap(t *testing.T) {
+	ensureMemlock(t)
 	pinPath, err := os.MkdirTemp("/sys/fs/bpf", "dae-loader-incompat-")
 	if err != nil {
 		t.Fatalf("MkdirTemp: %v", err)
