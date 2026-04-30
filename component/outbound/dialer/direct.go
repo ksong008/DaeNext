@@ -11,6 +11,20 @@ import (
 )
 
 func NewDirectDialer(option *GlobalOption, fullcone bool) (netproxy.Dialer, *Property) {
+	if option != nil {
+		if fullcone && option.ResolverFullconeDialer != nil {
+			return option.ResolverFullconeDialer, &Property{
+				SubscriptionTag: "",
+				Link:            "",
+			}
+		}
+		if !fullcone && option.ResolverDialer != nil {
+			return option.ResolverDialer, &Property{
+				SubscriptionTag: "",
+				Link:            "",
+			}
+		}
+	}
 	d, _p := D.NewDirectDialer(&option.ExtraOption, fullcone)
 	return d, &Property{
 		Property:        *_p,

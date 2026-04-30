@@ -56,6 +56,7 @@ type RuntimeDeps struct {
 	UdpEndpointPool *UdpEndpointPool
 	AnyfromPool     *AnyfromPool
 	ResolverDialer  netproxy.Dialer
+	ResolverFullconeDialer netproxy.Dialer
 	ResolverDNS     netip.AddrPort
 }
 
@@ -320,6 +321,7 @@ func NewControlPlane(
 	}
 	option := dialer.NewGlobalOption(global, log)
 	option.ResolverDialer = runtimeDeps.ResolverDialer
+	option.ResolverFullconeDialer = runtimeDeps.ResolverFullconeDialer
 	option.ResolverDNS = runtimeDeps.ResolverDNS
 	option.TcpCheckOptionRaw.ResolverDialer = runtimeDeps.ResolverDialer
 	option.TcpCheckOptionRaw.ResolverDNS = runtimeDeps.ResolverDNS

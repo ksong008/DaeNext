@@ -89,6 +89,7 @@ type Engine struct {
 	anyfromPool           *control.AnyfromPool
 	fallbackDNS           netip.AddrPort
 	bootstrapDirect       netproxy.Dialer
+	bootstrapDirectFullcone netproxy.Dialer
 }
 
 func New(opts Options) *Engine {
@@ -466,6 +467,7 @@ func (e *Engine) newControlPlane(log *logrus.Logger, bpf interface{}, dnsCache m
 
 	e.fallbackDNS = netip.MustParseAddrPort(conf.Global.FallbackResolver)
 	e.bootstrapDirect = direct.NewDirectDialerLaddr(netip.Addr{}, direct.Option{FullCone: false, FallbackDNS: conf.Global.FallbackResolver})
+	e.bootstrapDirectFullcone = direct.NewDirectDialerLaddr(netip.Addr{}, direct.Option{FullCone: true, FallbackDNS: conf.Global.FallbackResolver})
 	direct.InitDirectDialers(conf.Global.FallbackResolver)
 	netutils.FallbackDns = e.fallbackDNS
 
@@ -553,6 +555,7 @@ func (e *Engine) newControlPlane(log *logrus.Logger, bpf interface{}, dnsCache m
 			UdpEndpointPool: e.udpEndpointPool,
 			AnyfromPool:     e.anyfromPool,
 			ResolverDialer:  e.bootstrapDirect,
+			ResolverFullconeDialer: e.bootstrapDirectFullcone,
 			ResolverDNS:     e.fallbackDNS,
 		},
 		tagToNodeList,
