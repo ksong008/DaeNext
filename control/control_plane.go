@@ -52,12 +52,12 @@ type NodeLatencySnapshot struct {
 }
 
 type RuntimeDeps struct {
-	Netns           *DaeNetns
-	UdpEndpointPool *UdpEndpointPool
-	AnyfromPool     *AnyfromPool
-	ResolverDialer  netproxy.Dialer
+	Netns                  *DaeNetns
+	UdpEndpointPool        *UdpEndpointPool
+	AnyfromPool            *AnyfromPool
+	ResolverDialer         netproxy.Dialer
 	ResolverFullconeDialer netproxy.Dialer
-	ResolverDNS     netip.AddrPort
+	ResolverDNS            netip.AddrPort
 }
 
 func (d RuntimeDeps) withDefaults(log *logrus.Logger) RuntimeDeps {
@@ -243,13 +243,13 @@ func NewControlPlane(
 		} else {
 			return nil, fmt.Errorf("unexpected bpf type: %T", _bpf)
 		}
-		} else {
-			bpf = new(bpfObjects)
-			if err = fullLoadBpfObjects(log, runtimeDeps.Netns, bpf, &loadBpfOptions{
-				PinPath:             pinPath,
-				BigEndianTproxyPort: uint32(common.Htons(global.TproxyPort)),
-				CollectionOptions:   collectionOpts,
-			}); err != nil {
+	} else {
+		bpf = new(bpfObjects)
+		if err = fullLoadBpfObjects(log, runtimeDeps.Netns, bpf, &loadBpfOptions{
+			PinPath:             pinPath,
+			BigEndianTproxyPort: uint32(common.Htons(global.TproxyPort)),
+			CollectionOptions:   collectionOpts,
+		}); err != nil {
 			if log.Level == logrus.PanicLevel {
 				log.Panicln(err)
 			}
@@ -381,6 +381,13 @@ func NewControlPlane(
 		groupOption, err := ParseGroupOverrideOption(group, *global, log)
 		finalOption := option
 		if err == nil && groupOption != nil {
+			groupOption.ResolverDialer = option.ResolverDialer
+			groupOption.ResolverFullconeDialer = option.ResolverFullconeDialer
+			groupOption.ResolverDNS = option.ResolverDNS
+			groupOption.TcpCheckOptionRaw.ResolverDialer = option.ResolverDialer
+			groupOption.TcpCheckOptionRaw.ResolverDNS = option.ResolverDNS
+			groupOption.CheckDnsOptionRaw.ResolverDialer = option.ResolverDialer
+			groupOption.CheckDnsOptionRaw.ResolverDNS = option.ResolverDNS
 			newDialers := make([]*dialer.Dialer, 0)
 			for _, d := range dialers {
 				newDialer := d.Clone()
@@ -494,7 +501,7 @@ func NewControlPlane(
 		return nil, err
 	}
 	if plane.dnsController, err = NewDnsController(dnsUpstream, &DnsControllerOption{
-		Log: log,
+		Log:         log,
 		AnyfromPool: plane.anyfromPool,
 		CacheAccessCallback: func(cache *DnsCache) (err error) {
 			// Write mappings into eBPF map:
