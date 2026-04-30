@@ -1,0 +1,18 @@
+name: daenew
+
+on:
+  push:
+    branches:
+      - daenew
+  pull_request:
+    branches:
+      - daenew
+  workflow_dispatch:
+
+concurrency:
+  group: daenew-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  daecore:
+    uses: ./.github/workflows/daecore.yml
