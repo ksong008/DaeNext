@@ -15,7 +15,6 @@ import (
 	"path/filepath"
 	"reflect"
 	"strings"
-	"sync"
 
 	"github.com/cilium/ebpf"
 	"github.com/daeuniverse/dae/common"
@@ -86,78 +85,17 @@ func cidrToBpfLpmKey(prefix netip.Prefix) _bpfLpmKey {
 	}
 }
 
-var (
-	CheckBatchUpdateFeatureOnce sync.Once
-	SimulateBatchUpdate         bool
-	SimulateBatchUpdateLpmTrie  bool
-)
-
 func BpfMapBatchUpdate(m *ebpf.Map, keys interface{}, values interface{}, opts *ebpf.BatchOptions) (n int, err error) {
-	CheckBatchUpdateFeatureOnce.Do(func() {
-		version, e := internal.KernelVersion()
-		if e != nil {
-			SimulateBatchUpdate = true
-			SimulateBatchUpdateLpmTrie = true
-			return
-		}
-		if version.Less(consts.UserspaceBatchUpdateFeatureVersion) {
-			SimulateBatchUpdate = true
-		}
-		if version.Less(consts.UserspaceBatchUpdateLpmTrieFeatureVersion) {
-			SimulateBatchUpdateLpmTrie = true
-		}
-	})
-
-	simulate := SimulateBatchUpdate
-	if m.Type() == ebpf.LPMTrie {
-		simulate = SimulateBatchUpdateLpmTrie
-	}
-
-	if !simulate {
-		// Genuine BpfMapBatchUpdate
-		return m.BatchUpdate(keys, values, opts)
-	}
-
-	// Simulate
-	vKeys := reflect.ValueOf(keys)
-	if vKeys.Kind() != reflect.Slice {
-		return 0, fmt.Errorf("keys must be slice")
-	}
-	vVals := reflect.ValueOf(values)
-	if vVals.Kind() != reflect.Slice {
-		return 0, fmt.Errorf("values must be slice")
-	}
-	length := vKeys.Len()
-	if vVals.Len() != length {
-		return 0, fmt.Errorf("keys and values must have same length")
-	}
-
-	for i := 0; i < length; i++ {
-		vKey := vKeys.Index(i)
-		vVal := vVals.Index(i)
-		if err = m.Update(vKey.Interface(), vVal.Interface(), ebpf.MapUpdateFlags(opts.ElemFlags)); err != nil {
-			return i, err
-		}
-	}
-	return vKeys.Len(), nil
+	return m.BatchUpdate(keys, values, opts)
 }
 
 // BpfMapBatchDelete deletes keys and ignores ErrKeyNotExist.
 func BpfMapBatchDelete(m *ebpf.Map, keys interface{}) (n int, err error) {
-	// Simulate
-	vKeys := reflect.ValueOf(keys)
-	if vKeys.Kind() != reflect.Slice {
-		return 0, fmt.Errorf("keys must be slice")
+	n, err = m.BatchDelete(keys, nil)
+	if errors.Is(err, ebpf.ErrKeyNotExist) {
+		return n, nil
 	}
-	length := vKeys.Len()
-
-	for i := 0; i < length; i++ {
-		vKey := vKeys.Index(i)
-		if err = m.Delete(vKey.Interface()); err != nil && !errors.Is(err, ebpf.ErrKeyNotExist) {
-			return i, err
-		}
-	}
-	return vKeys.Len(), nil
+	return n, err
 }
 
 // detectCgroupPath returns the first-found mount point of type cgroup2
@@ -212,8 +150,14 @@ func loadBpfObjectsWithConstants(obj interface{}, opts *ebpf.CollectionOptions, 
 	if err != nil {
 		return err
 	}
-	if err := spec.RewriteConstants(constants); err != nil {
-		return err
+	for name, value := range constants {
+		variable, ok := spec.Variables[name]
+		if !ok {
+			return fmt.Errorf("variable %q not found in collection spec", name)
+		}
+		if err := variable.Set(value); err != nil {
+			return err
+		}
 	}
 	return spec.LoadAndAssign(obj, opts)
 }
@@ -240,14 +184,14 @@ retryLoadBpf:
 			dae0NetnsId     uint32
 			dae0peerMac     [6]byte
 			padding         [2]byte
-			}{
-				tproxyPort:      uint32(opts.BigEndianTproxyPort),
-				controlPlanePid: uint32(os.Getpid()),
-				dae0Ifindex:     uint32(netns.Dae0().Attrs().Index),
-				dae0NetnsId:     uint32(netnsID),
-				dae0peerMac:     [6]byte(netns.Dae0Peer().Attrs().HardwareAddr),
-			},
-		}
+		}{
+			tproxyPort:      uint32(opts.BigEndianTproxyPort),
+			controlPlanePid: uint32(os.Getpid()),
+			dae0Ifindex:     uint32(netns.Dae0().Attrs().Index),
+			dae0NetnsId:     uint32(netnsID),
+			dae0peerMac:     [6]byte(netns.Dae0Peer().Attrs().HardwareAddr),
+		},
+	}
 	if err = loadBpfObjectsWithConstants(bpf, opts.CollectionOptions, constants); err != nil {
 		if errors.Is(err, ebpf.ErrMapIncompatible) {
 			// Map property is incompatible. Remove the old map and try again.

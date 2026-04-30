@@ -148,13 +148,11 @@ var (
 	BasicFeatureVersion = internal.Version{5, 2, 0}
 	// Deprecated: Ftrace does not support arm64 yet (Linux 6.2).
 	FtraceFeatureVersion                      = internal.Version{5, 5, 0}
-	UserspaceBatchUpdateFeatureVersion        = internal.Version{5, 6, 0}
 	CgSocketCookieFeatureVersion              = internal.Version{5, 7, 0}
 	SkAssignFeatureVersion                    = internal.Version{5, 7, 0}
 	ChecksumFeatureVersion                    = internal.Version{5, 8, 0}
 	ProgTypeSkLookupFeatureVersion            = internal.Version{5, 9, 0}
 	SockmapFeatureVersion                     = internal.Version{5, 10, 0}
-	UserspaceBatchUpdateLpmTrieFeatureVersion = internal.Version{5, 13, 0}
 	BpfTimerFeatureVersion                    = internal.Version{5, 15, 0}
 	HelperBpfGetFuncIpVersionFeatureVersion   = internal.Version{5, 15, 0}
 	BpfLoopFeatureVersion                     = internal.Version{5, 17, 0}

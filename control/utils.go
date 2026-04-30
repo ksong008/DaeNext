@@ -51,12 +51,12 @@ func (c *controlPlaneCore) RetrieveRoutingResult(src, dst netip.AddrPort, l4prot
 	dstIp6 := dst.Addr().As16()
 
 	tuples := &bpfTuplesKey{
-		Sip:     struct{ U6Addr8 [16]uint8 }{U6Addr8: srcIp6},
 		Sport:   common.Htons(src.Port()),
-		Dip:     struct{ U6Addr8 [16]uint8 }{U6Addr8: dstIp6},
 		Dport:   common.Htons(dst.Port()),
 		L4proto: l4proto,
 	}
+	tuples.Sip.U6Addr8 = srcIp6
+	tuples.Dip.U6Addr8 = dstIp6
 
 	var routingResult bpfRoutingResult
 	if err := c.bpf.RoutingTuplesMap.Lookup(tuples, &routingResult); err != nil {
