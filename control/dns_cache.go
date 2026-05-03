@@ -15,6 +15,7 @@ import (
 )
 
 type DnsCache struct {
+	RouteOwnerKey    string
 	DomainBitmap     []uint32
 	Answer           []dnsmessage.RR
 	IPs              []netip.Addr

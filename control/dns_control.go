@@ -582,6 +582,7 @@ func (c *DnsController) __updateDnsCacheDeadline(host string, dnsTyp uint16, ans
 		cache.HasAnyIP = hasAnyIP
 		cache.Deadline = deadline
 		cache.OriginalDeadline = originalDeadline
+		cache.RouteOwnerKey = cacheKey
 		cache.PackedResponse = nil
 		c.packCacheResponse(cache, fqdn, dnsTyp)
 		c.dnsCacheMu.Unlock()
@@ -592,6 +593,7 @@ func (c *DnsController) __updateDnsCacheDeadline(host string, dnsTyp uint16, ans
 			c.dnsCacheMu.Unlock()
 			return err
 		}
+		cache.RouteOwnerKey = cacheKey
 		c.packCacheResponse(cache, fqdn, dnsTyp)
 		c.dnsCache[cacheKey] = cache
 		c.dnsCacheMu.Unlock()
