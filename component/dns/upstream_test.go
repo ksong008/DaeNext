@@ -141,6 +141,7 @@ func TestUpstreamResolverKeepsPreviousUpstreamOnRefreshFailure(t *testing.T) {
 		},
 	}
 
+	before := SnapshotUpstreamResolverStats()
 	first, err := resolver.GetUpstream()
 	if err != nil {
 		t.Fatal(err)
@@ -150,6 +151,7 @@ func TestUpstreamResolverKeepsPreviousUpstreamOnRefreshFailure(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	after := SnapshotUpstreamResolverStats()
 	if resolveCalls != 2 {
 		t.Fatalf("expected two resolve calls, got %d", resolveCalls)
 	}
@@ -158,6 +160,15 @@ func TestUpstreamResolverKeepsPreviousUpstreamOnRefreshFailure(t *testing.T) {
 	}
 	if !resolver.nextRefresh.Equal(now.Add(30 * time.Second)) {
 		t.Fatalf("unexpected retry deadline: %v", resolver.nextRefresh)
+	}
+	if got := after.RefreshSuccessTotal - before.RefreshSuccessTotal; got != 1 {
+		t.Fatalf("expected one refresh success to be recorded, got %d", got)
+	}
+	if got := after.RefreshFailureTotal - before.RefreshFailureTotal; got != 1 {
+		t.Fatalf("expected one refresh failure to be recorded, got %d", got)
+	}
+	if got := after.StaleReuseTotal - before.StaleReuseTotal; got != 1 {
+		t.Fatalf("expected one stale reuse to be recorded, got %d", got)
 	}
 }
 

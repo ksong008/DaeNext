@@ -1,18 +1,20 @@
 /*
 *  SPDX-License-Identifier: AGPL-3.0-only
 *  Copyright (c) 2022-2025, daeuniverse Organization <dae@v2raya.org>
-*/
+ */
 
 package control
 
 import (
+	"bytes"
 	"context"
 	"crypto/tls"
-	"errors"
 	"encoding/base64"
 	"encoding/binary"
+	"errors"
 	"fmt"
 	"io"
+	"mime"
 	"net"
 	"net/http"
 	"net/url"
@@ -184,7 +186,7 @@ type DoQ struct {
 	dns.Upstream
 	netproxy.Dialer
 	dialArgument dialArgument
-	mu          sync.Mutex
+	mu           sync.Mutex
 	connection   quic.EarlyConnection
 }
 
@@ -414,6 +416,7 @@ func (d *DoUDP) ForwardDNS(ctx context.Context, data []byte) (*dnsmessage.Msg, e
 		if !shouldRetryUDPQuery(err) || attempt == dnsUDPAttempts-1 || time.Now().After(deadline) {
 			return nil, err
 		}
+		recordDnsUDPRetry()
 	}
 	return nil, context.DeadlineExceeded
 }
@@ -457,30 +460,77 @@ func dnsDataWithZeroID(data []byte) []byte {
 }
 
 const doHMaxResponseBytes = 64 * 1024
+const doHMediaType = "application/dns-message"
+const doHGetMaxEncodedQueryBytes = 1024
 
-func sendHttpDNS(ctx context.Context, client *http.Client, target string, upstream *dns.Upstream, data []byte) (respMsg *dnsmessage.Msg, err error) {
+func buildDoHRequest(ctx context.Context, target string, upstream *dns.Upstream, data []byte) (*http.Request, error) {
+	requestBody := dnsDataWithZeroID(data)
 	serverURL := url.URL{
 		Scheme: "https",
 		Host:   target,
 		Path:   upstream.Path,
 	}
-	q := serverURL.Query()
-	// According https://datatracker.ietf.org/doc/html/rfc8484#section-4
-	// msg id should set to 0 when transport over HTTPS for cache friendly.
-	q.Set("dns", base64.RawURLEncoding.EncodeToString(dnsDataWithZeroID(data)))
-	serverURL.RawQuery = q.Encode()
+	encoded := base64.RawURLEncoding.EncodeToString(requestBody)
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, serverURL.String(), nil)
+	var (
+		req *http.Request
+		err error
+	)
+	if len(encoded) <= doHGetMaxEncodedQueryBytes {
+		q := serverURL.Query()
+		// According https://datatracker.ietf.org/doc/html/rfc8484#section-4
+		// msg id should set to 0 when transport over HTTPS for cache friendly.
+		q.Set("dns", encoded)
+		serverURL.RawQuery = q.Encode()
+		req, err = http.NewRequestWithContext(ctx, http.MethodGet, serverURL.String(), nil)
+	} else {
+		req, err = http.NewRequestWithContext(ctx, http.MethodPost, serverURL.String(), bytes.NewReader(requestBody))
+		if err == nil {
+			req.Header.Set("Content-Type", doHMediaType)
+		}
+	}
 	if err != nil {
 		return nil, err
 	}
-	req.Header.Set("Accept", "application/dns-message")
+	req.Header.Set("Accept", doHMediaType)
 	req.Host = upstream.Hostname
+	return req, nil
+}
+
+func validateDoHResponse(resp *http.Response) error {
+	if resp.StatusCode != http.StatusOK {
+		recordDoHStatusFailure()
+		return fmt.Errorf("doh server returned status %s", resp.Status)
+	}
+	contentType := resp.Header.Get("Content-Type")
+	if contentType == "" {
+		return nil
+	}
+	mediaType, _, err := mime.ParseMediaType(contentType)
+	if err != nil {
+		recordDoHContentTypeFailure()
+		return fmt.Errorf("invalid doh content-type %q: %w", contentType, err)
+	}
+	if mediaType != doHMediaType {
+		recordDoHContentTypeFailure()
+		return fmt.Errorf("unexpected doh content-type %q", contentType)
+	}
+	return nil
+}
+
+func sendHttpDNS(ctx context.Context, client *http.Client, target string, upstream *dns.Upstream, data []byte) (respMsg *dnsmessage.Msg, err error) {
+	req, err := buildDoHRequest(ctx, target, upstream, data)
+	if err != nil {
+		return nil, err
+	}
 	resp, err := client.Do(req)
 	if err != nil {
 		return nil, err
 	}
 	defer resp.Body.Close()
+	if err := validateDoHResponse(resp); err != nil {
+		return nil, err
+	}
 	buf, err := io.ReadAll(io.LimitReader(resp.Body, doHMaxResponseBytes+1))
 	if err != nil {
 		return nil, err
