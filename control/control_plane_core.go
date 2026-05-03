@@ -34,6 +34,7 @@ type controlPlaneCore struct {
 	log             *logrus.Logger
 	deferFuncs      []func() error
 	bpf             *bpfObjects
+	domainRouting   *domainRoutingTracker
 	outboundId2Name map[uint8]string
 
 	kernelVersion *internal.Version
@@ -69,6 +70,7 @@ func newControlPlaneCore(log *logrus.Logger,
 		log:             log,
 		deferFuncs:      deferFuncs,
 		bpf:             bpf,
+		domainRouting:   newDomainRoutingTracker(),
 		outboundId2Name: outboundId2Name,
 		kernelVersion:   kernelVersion,
 		flip:            coreFlip,
@@ -608,6 +610,14 @@ func (c *controlPlaneCore) bindDaens() (err error) {
 // BatchUpdateDomainRouting update bpf map domain_routing. Since one IP may have multiple domains, this function should
 // be invoked every A/AAAA-record lookup.
 func (c *controlPlaneCore) BatchUpdateDomainRouting(cache *DnsCache) error {
+	if c.domainRouting != nil && cache != nil && cache.RouteOwnerKey != "" {
+		snapshot, err := buildDomainRoutingOwnerSnapshot(cache)
+		if err != nil {
+			return err
+		}
+		return c.domainRouting.syncOwner(c.bpf.DomainRoutingMap, cache.RouteOwnerKey, snapshot)
+	}
+
 	ips := cache.cachedIPs()
 	if len(ips) == 0 {
 		return nil
@@ -637,6 +647,10 @@ func (c *controlPlaneCore) BatchUpdateDomainRouting(cache *DnsCache) error {
 
 // BatchRemoveDomainRouting remove bpf map domain_routing.
 func (c *controlPlaneCore) BatchRemoveDomainRouting(cache *DnsCache) error {
+	if c.domainRouting != nil && cache != nil && cache.RouteOwnerKey != "" {
+		return c.domainRouting.syncOwner(c.bpf.DomainRoutingMap, cache.RouteOwnerKey, domainRoutingOwnerSnapshot{})
+	}
+
 	ips := cache.cachedIPs()
 	if len(ips) == 0 {
 		return nil
