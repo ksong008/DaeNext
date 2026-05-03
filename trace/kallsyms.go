@@ -11,6 +11,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 
 	"github.com/sirupsen/logrus"
 	"golang.org/x/exp/slices"
@@ -25,30 +26,35 @@ type Symbol struct {
 var kallsyms []Symbol
 var kallsymsByName map[string]Symbol = make(map[string]Symbol)
 var kallsymsByAddr map[uint64]Symbol = make(map[uint64]Symbol)
+var readKallsymsOnce sync.Once
 
 func ReadKallsyms() {
-	file, err := os.Open("/proc/kallsyms")
-	if err != nil {
-		logrus.Fatalf("failed to open /proc/kallsyms: %v", err)
-	}
-	scanner := bufio.NewScanner(file)
-	for scanner.Scan() {
-		line := scanner.Text()
-		parts := strings.Fields(line)
-		if len(parts) < 3 {
-			continue
-		}
-		addr, err := strconv.ParseUint(parts[0], 16, 64)
+	readKallsymsOnce.Do(func() {
+		file, err := os.Open("/proc/kallsyms")
 		if err != nil {
-			continue
+			logrus.Fatalf("failed to open /proc/kallsyms: %v", err)
 		}
-		typ, name := parts[1], parts[2]
-		kallsyms = append(kallsyms, Symbol{typ, name, addr})
-		kallsymsByName[name] = Symbol{typ, name, addr}
-		kallsymsByAddr[addr] = Symbol{typ, name, addr}
-	}
-	sort.Slice(kallsyms, func(i, j int) bool {
-		return kallsyms[i].Addr < kallsyms[j].Addr
+		defer file.Close()
+
+		scanner := bufio.NewScanner(file)
+		for scanner.Scan() {
+			line := scanner.Text()
+			parts := strings.Fields(line)
+			if len(parts) < 3 {
+				continue
+			}
+			addr, err := strconv.ParseUint(parts[0], 16, 64)
+			if err != nil {
+				continue
+			}
+			typ, name := parts[1], parts[2]
+			kallsyms = append(kallsyms, Symbol{typ, name, addr})
+			kallsymsByName[name] = Symbol{typ, name, addr}
+			kallsymsByAddr[addr] = Symbol{typ, name, addr}
+		}
+		sort.Slice(kallsyms, func(i, j int) bool {
+			return kallsyms[i].Addr < kallsyms[j].Addr
+		})
 	})
 }
 
