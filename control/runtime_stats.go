@@ -48,7 +48,8 @@ type RuntimeStatsSnapshot struct {
 	RSSBytes              uint64
 	HeapAllocBytes        uint64
 	Goroutines            int
-	Samples               []RuntimeTrafficSample
+	DnsObservabilityStats
+	Samples []RuntimeTrafficSample
 }
 
 type runtimeBucket struct {
@@ -92,6 +93,8 @@ var runtimeStatsOccupancySnapshot = func() (udpTaskQueues int, udpTaskDropTotal 
 	return 0, 0, 0
 }
 
+var runtimeStatsDnsObservabilitySnapshot = snapshotDnsObservabilityStats
+
 func RecordUploadTraffic(n int64) {
 	if n <= 0 {
 		return
@@ -108,7 +111,7 @@ func RecordDownloadTraffic(n int64) {
 
 func SnapshotRuntimeStats(activeConnections int, udpSessions int, windowSec int, maxPoints int) RuntimeStatsSnapshot {
 	udpTaskQueues, udpTaskDropTotal, packetSnifferSessions := runtimeStatsOccupancySnapshot()
-	return globalRuntimeStats.snapshot(
+	snapshot := globalRuntimeStats.snapshot(
 		activeConnections,
 		udpSessions,
 		udpTaskQueues,
@@ -118,6 +121,8 @@ func SnapshotRuntimeStats(activeConnections int, udpSessions int, windowSec int,
 		maxPoints,
 		time.Now(),
 	)
+	snapshot.DnsObservabilityStats = runtimeStatsDnsObservabilitySnapshot()
+	return snapshot
 }
 
 func (s *runtimeStats) record(upload uint64, download uint64, now time.Time) {

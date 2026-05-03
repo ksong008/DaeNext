@@ -41,6 +41,8 @@ var defaultCheckNetworkLinks = []string{
 	"http://www.qualcomm.cn/generate_204",
 }
 
+var snapshotRuntimeStats = control.SnapshotRuntimeStats
+
 type Options struct {
 	SubscriptionConfigDir string
 	CheckNetworkLinks     []string
@@ -64,7 +66,8 @@ type RuntimeOverview struct {
 	RSSBytes          uint64
 	HeapAllocBytes    uint64
 	Goroutines        int
-	Samples           []RuntimeTrafficSample
+	control.DnsObservabilityStats
+	Samples []RuntimeTrafficSample
 }
 
 type reloadMessage struct {
@@ -82,15 +85,15 @@ type Engine struct {
 	reloadCh chan *reloadMessage
 	exitCh   chan struct{}
 
-	subscriptionConfigDir string
-	checkNetworkLinks     []string
-	onReady               func()
-	httpTransport         *http.Transport
-	netns                 *control.DaeNetns
-	udpEndpointPool       *control.UdpEndpointPool
-	anyfromPool           *control.AnyfromPool
-	fallbackDNS           netip.AddrPort
-	bootstrapDirect       netproxy.Dialer
+	subscriptionConfigDir   string
+	checkNetworkLinks       []string
+	onReady                 func()
+	httpTransport           *http.Transport
+	netns                   *control.DaeNetns
+	udpEndpointPool         *control.UdpEndpointPool
+	anyfromPool             *control.AnyfromPool
+	fallbackDNS             netip.AddrPort
+	bootstrapDirect         netproxy.Dialer
 	bootstrapDirectFullcone netproxy.Dialer
 }
 
@@ -172,10 +175,10 @@ func (e *Engine) Run(log *logrus.Logger, conf *config.Config, externGeoDataDirs 
 				e.onReady()
 			}
 		}()
-			e.netns.With(func() error {
-				if listener, err = current.ListenAndServe(readyChan, conf.Global.TproxyPort); err != nil {
-					log.Errorln("ListenAndServe:", err)
-				}
+		e.netns.With(func() error {
+			if listener, err = current.ListenAndServe(readyChan, conf.Global.TproxyPort); err != nil {
+				log.Errorln("ListenAndServe:", err)
+			}
 			return err
 		})
 		select {
@@ -278,9 +281,9 @@ loop:
 				old.AbortConnections()
 			}
 			old.Close()
-				control.FlushReloadScopedResources(e.udpEndpointPool, e.anyfromPool)
-			}
+			control.FlushReloadScopedResources(e.udpEndpointPool, e.anyfromPool)
 		}
+	}
 
 	if current != nil {
 		if err := current.Close(); err != nil {
@@ -353,7 +356,7 @@ func (e *Engine) GetRuntimeOverview(windowSec int, maxPoints int) (*RuntimeOverv
 	if e.udpEndpointPool != nil {
 		udpSessions = e.udpEndpointPool.Count()
 	}
-	snapshot := control.SnapshotRuntimeStats(activeTCPConnections, udpSessions, windowSec, maxPoints)
+	snapshot := snapshotRuntimeStats(activeTCPConnections, udpSessions, windowSec, maxPoints)
 	samples := make([]RuntimeTrafficSample, 0, len(snapshot.Samples))
 	for _, sample := range snapshot.Samples {
 		samples = append(samples, RuntimeTrafficSample{
@@ -364,17 +367,18 @@ func (e *Engine) GetRuntimeOverview(windowSec int, maxPoints int) (*RuntimeOverv
 	}
 
 	return &RuntimeOverview{
-		UpdatedAt:         snapshot.UpdatedAt,
-		UploadRate:        snapshot.UploadRate,
-		DownloadRate:      snapshot.DownloadRate,
-		UploadTotal:       snapshot.UploadTotal,
-		DownloadTotal:     snapshot.DownloadTotal,
-		ActiveConnections: snapshot.ActiveConnections,
-		UDPSessions:       snapshot.UDPSessions,
-		RSSBytes:          snapshot.RSSBytes,
-		HeapAllocBytes:    snapshot.HeapAllocBytes,
-		Goroutines:        snapshot.Goroutines,
-		Samples:           samples,
+		UpdatedAt:             snapshot.UpdatedAt,
+		UploadRate:            snapshot.UploadRate,
+		DownloadRate:          snapshot.DownloadRate,
+		UploadTotal:           snapshot.UploadTotal,
+		DownloadTotal:         snapshot.DownloadTotal,
+		ActiveConnections:     snapshot.ActiveConnections,
+		UDPSessions:           snapshot.UDPSessions,
+		RSSBytes:              snapshot.RSSBytes,
+		HeapAllocBytes:        snapshot.HeapAllocBytes,
+		Goroutines:            snapshot.Goroutines,
+		DnsObservabilityStats: snapshot.DnsObservabilityStats,
+		Samples:               samples,
 	}, nil
 }
 
@@ -553,12 +557,12 @@ func (e *Engine) newControlPlane(log *logrus.Logger, bpf interface{}, dnsCache m
 		bpf,
 		dnsCache,
 		control.RuntimeDeps{
-			Netns:           e.netns,
-			UdpEndpointPool: e.udpEndpointPool,
-			AnyfromPool:     e.anyfromPool,
-			ResolverDialer:  e.bootstrapDirect,
+			Netns:                  e.netns,
+			UdpEndpointPool:        e.udpEndpointPool,
+			AnyfromPool:            e.anyfromPool,
+			ResolverDialer:         e.bootstrapDirect,
 			ResolverFullconeDialer: e.bootstrapDirectFullcone,
-			ResolverDNS:     e.fallbackDNS,
+			ResolverDNS:            e.fallbackDNS,
 		},
 		tagToNodeList,
 		conf.Group,
