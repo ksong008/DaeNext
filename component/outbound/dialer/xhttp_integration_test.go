@@ -15,8 +15,8 @@ import (
 	"net"
 	"net/http"
 	"net/netip"
-	"path"
 	"strconv"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -145,15 +145,26 @@ func generateSelfSignedCert(t *testing.T) tls.Certificate {
 	return cert
 }
 
-func TestNewFromLinkXHTTPH3Auto(t *testing.T) {
+func TestNewFromLinkXHTTPH3StreamUp(t *testing.T) {
 	cert := generateSelfSignedCert(t)
 
 	var (
 		mu       sync.Mutex
 		sessions = make(map[string]*h3Session)
 	)
+	sessionKeyFromPath := func(rawPath string) string {
+		trimmed := strings.Trim(rawPath, "/")
+		if trimmed == "" {
+			return ""
+		}
+		parts := strings.Split(trimmed, "/")
+		if len(parts) >= 3 {
+			return parts[len(parts)-2]
+		}
+		return parts[len(parts)-1]
+	}
 	getSession := func(key string) *h3Session {
-		key = path.Base(key)
+		key = sessionKeyFromPath(key)
 		mu.Lock()
 		defer mu.Unlock()
 		if sess, ok := sessions[key]; ok {
@@ -224,7 +235,7 @@ func TestNewFromLinkXHTTPH3Auto(t *testing.T) {
 
 	outbounddirect.InitDirectDialers("8.8.8.8:53")
 	gOption := daedialer.NewGlobalOption(&config.Global{}, logrus.New())
-	link := "vless://uuid@127.0.0.1:" + strconv.Itoa(ln.Addr().(*net.UDPAddr).Port) + "?type=xhttp&security=tls&host=127.0.0.1&sni=127.0.0.1&allowInsecure=true&alpn=h3&mode=auto#xhttp-h3"
+	link := "vless://uuid@127.0.0.1:" + strconv.Itoa(ln.Addr().(*net.UDPAddr).Port) + "?type=xhttp&security=tls&host=127.0.0.1&sni=127.0.0.1&allowInsecure=true&alpn=h3&mode=stream-up#xhttp-h3-stream-up"
 
 	d, err := daedialer.NewFromLink(gOption, daedialer.InstanceOption{}, link, "")
 	if err != nil {
@@ -243,6 +254,12 @@ func TestNewFromLinkXHTTPH3Auto(t *testing.T) {
 	payload := []byte("hello through dae xhttp h3")
 	if _, err := conn.Write(payload); err != nil {
 		t.Fatalf("write payload: %v", err)
+	}
+	type closeWriter interface{ CloseWrite() error }
+	if cw, ok := conn.(closeWriter); ok {
+		if err := cw.CloseWrite(); err != nil {
+			t.Fatalf("close write: %v", err)
+		}
 	}
 	buf := make([]byte, len(payload))
 	if _, err := io.ReadFull(conn, buf); err != nil {
