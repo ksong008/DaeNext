@@ -7,7 +7,6 @@ toolchain go1.24.3
 require (
 	github.com/adrg/xdg v0.5.0
 	github.com/antlr/antlr4/runtime/Go/antlr/v4 v4.0.0-20230305170008-8188dc5388df
-	github.com/bits-and-blooms/bloom/v3 v3.7.0
 	github.com/cilium/ebpf v0.21.0
 	github.com/daeuniverse/dae-config-dist/go/dae_config v0.0.0-20230604120805-1c27619b592d
 	github.com/daeuniverse/outbound v0.0.0-20250722064253-00c4fbb38759
@@ -65,7 +64,6 @@ require (
 )
 
 require (
-	github.com/bits-and-blooms/bitset v1.13.0 // indirect
 	github.com/dgryski/go-camellia v0.0.0-20191119043421-69a8a13fb23d // indirect
 	github.com/dgryski/go-idea v0.0.0-20170306091226-d2fb45a411fb // indirect
 	github.com/dgryski/go-metro v0.0.0-20211217172704-adc40b04c140 // indirect
@@ -91,7 +89,7 @@ require (
 	google.golang.org/grpc v1.65.0 // indirect
 )
 
-replace github.com/daeuniverse/outbound => github.com/ksong008/outbound v0.0.0-20260425061239-55a98566b304
+replace github.com/daeuniverse/outbound => github.com/ksong008/outbound v0.0.0-20260503103420-1effa08403a3
 
 replace github.com/daeuniverse/quic-go => github.com/ksong008/quic-go v0.0.0-20260419080117-578539b67bcc
 
