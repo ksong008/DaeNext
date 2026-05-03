@@ -43,6 +43,8 @@ var defaultCheckNetworkLinks = []string{
 
 var snapshotRuntimeStats = control.SnapshotRuntimeStats
 
+const subscriptionResolveConcurrency = 6
+
 type Options struct {
 	SubscriptionConfigDir string
 	CheckNetworkLinks     []string
@@ -126,6 +128,7 @@ func New(opts Options) *Engine {
 }
 
 func (e *Engine) Run(log *logrus.Logger, conf *config.Config, externGeoDataDirs []string, disableTimestamp bool, dry bool) (err error) {
+	startupStartedAt := time.Now()
 	e.mu.Lock()
 	e.exitCh = make(chan struct{})
 	e.mu.Unlock()
@@ -159,17 +162,22 @@ func (e *Engine) Run(log *logrus.Logger, conf *config.Config, externGeoDataDirs 
 		return nil
 	}
 
+	controlPlaneStartedAt := time.Now()
 	current, err := e.newControlPlane(log, nil, nil, conf, externGeoDataDirs)
+	logStartupPhase(log, "control-plane.create.total", controlPlaneStartedAt, err)
 	if err != nil {
 		return err
 	}
 	e.setControlPlane(current)
 
 	var listener *control.Listener
+	listenReadyStartedAt := time.Now()
 	go func() {
 		readyChan := make(chan bool, 1)
 		go func() {
 			<-readyChan
+			logStartupPhase(log, "listen.ready", listenReadyStartedAt, nil)
+			logStartupPhase(log, "startup.total", startupStartedAt, nil)
 			log.Infoln("Ready")
 			if e.onReady != nil {
 				e.onReady()
@@ -427,6 +435,7 @@ func (e *Engine) routeAwareDialContext(ctx context.Context, network, addr string
 
 func (e *Engine) waitForNetwork(log *logrus.Logger, conf *config.Config) {
 	epo := 5 * time.Second
+	startedAt := time.Now()
 	bootstrapDirect := e.bootstrapDirect
 	client := http.Client{
 		Transport: &http.Transport{
@@ -445,25 +454,78 @@ func (e *Engine) waitForNetwork(log *logrus.Logger, conf *config.Config) {
 		Timeout: epo,
 	}
 	log.Infoln("Waiting for network...")
-	for i := 0; ; i++ {
-		resp, err := client.Get(e.checkNetworkLinks[i%len(e.checkNetworkLinks)])
-		if err != nil {
-			log.Debugln("CheckNetwork:", err)
-			var neterr net.Error
-			if errors.As(err, &neterr) && neterr.Timeout() {
-				continue
-			}
-			time.Sleep(epo)
-			continue
-		}
-		resp.Body.Close()
-		if resp.StatusCode >= 200 && resp.StatusCode < 500 {
+	attempts := 0
+	for {
+		attempts++
+		success, timedOut := e.checkNetworkLinksOnce(&client, log)
+		if success {
 			break
 		}
-		log.Infof("Bad status: %v (%v)", resp.Status, resp.StatusCode)
+		if timedOut {
+			continue
+		}
 		time.Sleep(epo)
 	}
+	log.WithField("attempts", attempts).Infoln("[Startup] network gate cleared")
+	logStartupPhase(log, "wait-for-network", startedAt, nil)
 	log.Infoln("Network online.")
+}
+
+func (e *Engine) checkNetworkLinksOnce(client *http.Client, log *logrus.Logger) (success bool, timedOut bool) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	type networkCheckResult struct {
+		success  bool
+		timedOut bool
+	}
+
+	results := make(chan networkCheckResult, len(e.checkNetworkLinks))
+	var wg sync.WaitGroup
+	for _, link := range e.checkNetworkLinks {
+		link := link
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			req, err := http.NewRequestWithContext(ctx, http.MethodGet, link, nil)
+			if err != nil {
+				log.Debugln("CheckNetwork:", err)
+				results <- networkCheckResult{}
+				return
+			}
+			resp, err := client.Do(req)
+			if err != nil {
+				log.Debugln("CheckNetwork:", err)
+				var neterr net.Error
+				if errors.As(err, &neterr) && neterr.Timeout() {
+					results <- networkCheckResult{timedOut: true}
+					return
+				}
+				results <- networkCheckResult{}
+				return
+			}
+			resp.Body.Close()
+			if resp.StatusCode >= 200 && resp.StatusCode < 500 {
+				cancel()
+				results <- networkCheckResult{success: true}
+				return
+			}
+			log.Infof("Bad status: %v (%v)", resp.Status, resp.StatusCode)
+			results <- networkCheckResult{}
+		}()
+	}
+
+	for range e.checkNetworkLinks {
+		result := <-results
+		if result.success {
+			success = true
+		}
+		if result.timedOut {
+			timedOut = true
+		}
+	}
+	wg.Wait()
+	return success, timedOut
 }
 
 func (e *Engine) newControlPlane(log *logrus.Logger, bpf interface{}, dnsCache map[string]*control.DnsCache, conf *config.Config, externGeoDataDirs []string) (c *control.ControlPlane, err error) {
@@ -496,6 +558,7 @@ func (e *Engine) newControlPlane(log *logrus.Logger, bpf interface{}, dnsCache m
 		}
 		log.Infoln("Fetching subscriptions...")
 	}
+	subscriptionResolutionStartedAt := time.Now()
 	client := http.Client{
 		Transport: &http.Transport{
 			DialContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
@@ -513,15 +576,55 @@ func (e *Engine) newControlPlane(log *logrus.Logger, bpf interface{}, dnsCache m
 		Timeout: 30 * time.Second,
 	}
 	resolvingFailed := false
-	for _, sub := range conf.Subscription {
-		tag, nodes, err := subscription.ResolveSubscription(log, &client, e.subscriptionConfigDir, string(sub))
-		if err != nil {
-			log.Warnf(`failed to resolve subscription "%v": %v`, sub, err)
-			resolvingFailed = true
+	if len(conf.Subscription) > 0 {
+		type subscriptionResolveResult struct {
+			tag   string
+			nodes []string
+			err   error
+			raw   string
 		}
-		if len(nodes) > 0 {
-			tagToNodeList[tag] = append(tagToNodeList[tag], nodes...)
+
+		results := make([]subscriptionResolveResult, len(conf.Subscription))
+		sem := make(chan struct{}, subscriptionResolveConcurrency)
+		var wg sync.WaitGroup
+		for index, sub := range conf.Subscription {
+			index := index
+			rawSub := string(sub)
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				sem <- struct{}{}
+				defer func() {
+					<-sem
+				}()
+
+				tag, nodes, resolveErr := subscription.ResolveSubscription(log, &client, e.subscriptionConfigDir, rawSub)
+				results[index] = subscriptionResolveResult{
+					tag:   tag,
+					nodes: nodes,
+					err:   resolveErr,
+					raw:   rawSub,
+				}
+			}()
 		}
+		wg.Wait()
+
+		for _, result := range results {
+			if result.err != nil {
+				log.Warnf(`failed to resolve subscription "%v": %v`, result.raw, result.err)
+				resolvingFailed = true
+				continue
+			}
+			if len(result.nodes) > 0 {
+				tagToNodeList[result.tag] = append(tagToNodeList[result.tag], result.nodes...)
+			}
+		}
+	}
+	if len(conf.Subscription) > 0 {
+		log.WithField("subscriptions", len(conf.Subscription)).
+			WithField("resolutionFailed", resolvingFailed).
+			Infoln("[Startup] subscription resolution completed")
+		logStartupPhase(log, "subscription.resolve", subscriptionResolutionStartedAt, nil)
 	}
 	if e.subscriptionConfigDir != "" {
 		files, err := os.ReadDir(filepath.Join(e.subscriptionConfigDir, "persist.d"))
@@ -552,6 +655,7 @@ func (e *Engine) newControlPlane(log *logrus.Logger, bpf interface{}, dnsCache m
 		return nil, err
 	}
 
+	controlPlaneStartedAt := time.Now()
 	c, err = control.NewControlPlane(
 		log,
 		bpf,
@@ -571,10 +675,13 @@ func (e *Engine) newControlPlane(log *logrus.Logger, bpf interface{}, dnsCache m
 		&conf.Dns,
 		externGeoDataDirs,
 	)
+	logStartupPhase(log, "control-plane.core", controlPlaneStartedAt, err)
 	if err != nil {
 		return nil, err
 	}
+	gcStartedAt := time.Now()
 	runtime.GC()
+	logStartupPhase(log, "post-startup.gc", gcStartedAt, nil)
 	return c, nil
 }
 
@@ -597,4 +704,16 @@ func (e *Engine) closeExitCh() {
 		close(e.exitCh)
 		e.exitCh = nil
 	}
+}
+
+func logStartupPhase(log *logrus.Logger, phase string, startedAt time.Time, err error) {
+	if log == nil {
+		return
+	}
+	entry := log.WithField("phase", phase).WithField("elapsed", time.Since(startedAt).String())
+	if err != nil {
+		entry.WithError(err).Warnln("[Startup] phase failed")
+		return
+	}
+	entry.Infoln("[Startup] phase completed")
 }
