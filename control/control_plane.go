@@ -138,6 +138,7 @@ type CacheStats struct {
 	UdpTaskQueueEntries      int    `json:"udpTaskQueueEntries"`
 	UdpTaskDropTotal         uint64 `json:"udpTaskDropTotal"`
 	ActiveTCPConnections     int    `json:"activeTCPConnections"`
+	DnsObservabilityStats
 	BPFMapStats
 }
 
@@ -1224,6 +1225,7 @@ func (c *ControlPlane) CacheStats() CacheStats {
 		stats.DnsCacheEntries = dnsCacheEntries
 		stats.DnsForwarderCacheEntries = dnsForwarderEntries
 	}
+	stats.DnsObservabilityStats = snapshotDnsObservabilityStats()
 	c.muRealDomainCache.Lock()
 	c.pruneRealDomainCacheLocked(time.Now())
 	stats.RealDomainCacheEntries = len(c.realDomainCache)

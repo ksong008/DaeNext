@@ -70,3 +70,53 @@ func TestRuntimeStatsSnapshotIncludesRecordsFromMultipleBuckets(t *testing.T) {
 		t.Fatalf("expected samples from at least two buckets, got %d", len(snapshot.Samples))
 	}
 }
+
+func TestSnapshotRuntimeStatsIncludesDnsObservabilityStats(t *testing.T) {
+	originalHook := runtimeStatsDnsObservabilitySnapshot
+	runtimeStatsDnsObservabilitySnapshot = func() DnsObservabilityStats {
+		return DnsObservabilityStats{
+			DnsCacheHitTotal:                  11,
+			DnsCacheExpiredRemovalTotal:       12,
+			DnsUdpRetryTotal:                  13,
+			DnsTruncatedTcpFallbackTotal:      14,
+			DnsDoHStatusFailureTotal:          15,
+			DnsDoHContentTypeFailureTotal:     16,
+			DnsUpstreamRefreshSuccessTotal:    17,
+			DnsUpstreamRefreshFailureTotal:    18,
+			DnsUpstreamRefreshStaleReuseTotal: 19,
+		}
+	}
+	defer func() {
+		runtimeStatsDnsObservabilitySnapshot = originalHook
+	}()
+
+	snapshot := SnapshotRuntimeStats(1, 2, 30, 180)
+
+	if snapshot.DnsCacheHitTotal != 11 {
+		t.Fatalf("expected dns cache hit total 11, got %d", snapshot.DnsCacheHitTotal)
+	}
+	if snapshot.DnsCacheExpiredRemovalTotal != 12 {
+		t.Fatalf("expected dns cache expired removal total 12, got %d", snapshot.DnsCacheExpiredRemovalTotal)
+	}
+	if snapshot.DnsUdpRetryTotal != 13 {
+		t.Fatalf("expected dns udp retry total 13, got %d", snapshot.DnsUdpRetryTotal)
+	}
+	if snapshot.DnsTruncatedTcpFallbackTotal != 14 {
+		t.Fatalf("expected dns truncated tcp fallback total 14, got %d", snapshot.DnsTruncatedTcpFallbackTotal)
+	}
+	if snapshot.DnsDoHStatusFailureTotal != 15 {
+		t.Fatalf("expected doh status failure total 15, got %d", snapshot.DnsDoHStatusFailureTotal)
+	}
+	if snapshot.DnsDoHContentTypeFailureTotal != 16 {
+		t.Fatalf("expected doh content-type failure total 16, got %d", snapshot.DnsDoHContentTypeFailureTotal)
+	}
+	if snapshot.DnsUpstreamRefreshSuccessTotal != 17 {
+		t.Fatalf("expected upstream refresh success total 17, got %d", snapshot.DnsUpstreamRefreshSuccessTotal)
+	}
+	if snapshot.DnsUpstreamRefreshFailureTotal != 18 {
+		t.Fatalf("expected upstream refresh failure total 18, got %d", snapshot.DnsUpstreamRefreshFailureTotal)
+	}
+	if snapshot.DnsUpstreamRefreshStaleReuseTotal != 19 {
+		t.Fatalf("expected upstream refresh stale reuse total 19, got %d", snapshot.DnsUpstreamRefreshStaleReuseTotal)
+	}
+}
