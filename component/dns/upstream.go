@@ -249,7 +249,9 @@ func (u *UpstreamResolver) GetUpstream() (_ *Upstream, err error) {
 		now = nowFunc()
 		switch {
 		case resolveErr != nil:
+			recordUpstreamResolverRefreshFailure()
 			if oldUpstream != nil {
+				recordUpstreamResolverStaleReuse()
 				u.nextRefresh = now.Add(retryInterval)
 				u.cond.Broadcast()
 				u.mu.Unlock()
@@ -259,7 +261,9 @@ func (u *UpstreamResolver) GetUpstream() (_ *Upstream, err error) {
 			u.mu.Unlock()
 			return nil, fmt.Errorf("failed to init dns upstream: %w", resolveErr)
 		case callbackErr != nil:
+			recordUpstreamResolverRefreshFailure()
 			if oldUpstream != nil {
+				recordUpstreamResolverStaleReuse()
 				u.nextRefresh = now.Add(retryInterval)
 				u.cond.Broadcast()
 				u.mu.Unlock()
@@ -269,6 +273,7 @@ func (u *UpstreamResolver) GetUpstream() (_ *Upstream, err error) {
 			u.mu.Unlock()
 			return nil, callbackErr
 		default:
+			recordUpstreamResolverRefreshSuccess()
 			u.upstream = newUpstream
 			u.init = true
 			u.nextRefresh = now.Add(refreshInterval)

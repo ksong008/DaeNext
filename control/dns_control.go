@@ -30,7 +30,6 @@ import (
 
 const (
 	MaxDnsLookupDepth           = 3
-	minFirefoxCacheTtl          = 120
 	dnsCacheSweepInterval       = time.Minute
 	dnsCacheMaxEntries          = 4096
 	dnsForwarderSweepInterval   = 5 * time.Minute
@@ -212,6 +211,7 @@ func (c *DnsController) sweepDnsCache(now time.Time) {
 		removed = append(removed, cache)
 	}
 	c.dnsCacheMu.Unlock()
+	recordDnsCacheExpiredRemovals(len(removed))
 	if c.cacheRemoveCallback != nil {
 		for _, cache := range removed {
 			if err := c.cacheRemoveCallback(cache); err != nil {
@@ -223,12 +223,14 @@ func (c *DnsController) sweepDnsCache(now time.Time) {
 
 func (c *DnsController) evictDnsCacheEntriesLocked(now time.Time) []*DnsCache {
 	var removed []*DnsCache
+	expiredRemoved := 0
 	for key, cache := range c.dnsCache {
 		if c.cacheExpiresAt(cache).After(now) {
 			continue
 		}
 		delete(c.dnsCache, key)
 		removed = append(removed, cache)
+		expiredRemoved++
 	}
 	for len(c.dnsCache) >= dnsCacheMaxEntries {
 		var (
@@ -252,6 +254,7 @@ func (c *DnsController) evictDnsCacheEntriesLocked(now time.Time) []*DnsCache {
 		delete(c.dnsCache, oldestKey)
 		removed = append(removed, oldestCache)
 	}
+	recordDnsCacheExpiredRemovals(expiredRemoved)
 	return removed
 }
 
@@ -346,10 +349,12 @@ func (c *DnsController) LookupDnsRespCache(cacheKey string, ignoreFixedTtl bool)
 					return nil
 				}
 			}
+			recordDnsCacheHit()
 			return cache
 		}
 		delete(c.dnsCache, cacheKey)
 		c.dnsCacheMu.Unlock()
+		recordDnsCacheExpiredRemovals(1)
 		if c.cacheRemoveCallback != nil {
 			if err := c.cacheRemoveCallback(cache); err != nil {
 				c.log.Warnf("failed to remove expired domain routing cache: %v", err)
@@ -364,6 +369,7 @@ func (c *DnsController) LookupDnsRespCache(cacheKey string, ignoreFixedTtl bool)
 			return nil
 		}
 	}
+	recordDnsCacheHit()
 	return cache
 }
 
@@ -386,6 +392,81 @@ func (c *DnsController) LookupDnsRespCache_(msg *dnsmessage.Msg, cacheKey string
 	return nil
 }
 
+func minDNSAnswerTTL(answers []dnsmessage.RR) (ttl uint32, ok bool) {
+	if len(answers) == 0 {
+		return 0, false
+	}
+	ttl = answers[0].Header().Ttl
+	for i := 1; i < len(answers); i++ {
+		if ansTTL := answers[i].Header().Ttl; ansTTL < ttl {
+			ttl = ansTTL
+		}
+	}
+	return ttl, true
+}
+
+func canonicalDnsQuestionName(name string) string {
+	if name == "" {
+		return ""
+	}
+	return dnsmessage.CanonicalName(name)
+}
+
+func dnsQuestionsEqual(a, b dnsmessage.Question) bool {
+	return canonicalDnsQuestionName(a.Name) == canonicalDnsQuestionName(b.Name) &&
+		a.Qtype == b.Qtype &&
+		a.Qclass == b.Qclass
+}
+
+func formatDnsQuestion(q dnsmessage.Question) string {
+	return fmt.Sprintf("%s %s class=%d", strings.ToLower(canonicalDnsQuestionName(q.Name)), QtypeToString(q.Qtype), q.Qclass)
+}
+
+func validateDnsResponseForRequest(reqMsg *dnsmessage.Msg, respMsg *dnsmessage.Msg, requireMatchingID bool) error {
+	if respMsg == nil {
+		return fmt.Errorf("dns response is nil")
+	}
+	if !respMsg.Response {
+		return fmt.Errorf("dns response expected but dns request received")
+	}
+	if requireMatchingID && respMsg.Id != reqMsg.Id {
+		return fmt.Errorf("dns response id mismatch: got %d want %d", respMsg.Id, reqMsg.Id)
+	}
+	if len(reqMsg.Question) == 0 {
+		return nil
+	}
+	if len(respMsg.Question) == 0 {
+		return fmt.Errorf("dns response missing question")
+	}
+	if len(respMsg.Question) != len(reqMsg.Question) {
+		return fmt.Errorf("dns response question count mismatch: got %d want %d", len(respMsg.Question), len(reqMsg.Question))
+	}
+	for i := range reqMsg.Question {
+		if dnsQuestionsEqual(reqMsg.Question[i], respMsg.Question[i]) {
+			continue
+		}
+		return fmt.Errorf(
+			"dns response question mismatch at index %d: got %s want %s",
+			i,
+			formatDnsQuestion(respMsg.Question[i]),
+			formatDnsQuestion(reqMsg.Question[i]),
+		)
+	}
+	return nil
+}
+
+func shouldValidateDnsResponseID(upstream *dns.Upstream, dialArgument *dialArgument) bool {
+	if upstream == nil || dialArgument == nil {
+		return false
+	}
+	switch upstream.Scheme {
+	case dns.UpstreamScheme_UDP, dns.UpstreamScheme_TCP, dns.UpstreamScheme_TCP_UDP, dns.UpstreamScheme_TLS:
+		return true
+	default:
+		return false
+	}
+}
+
 // NormalizeAndCacheDnsResp_ handle DNS resp in place.
 func (c *DnsController) NormalizeAndCacheDnsResp_(msg *dnsmessage.Msg) (err error) {
 	// Check healthy resp.
@@ -400,17 +481,16 @@ func (c *DnsController) NormalizeAndCacheDnsResp_(msg *dnsmessage.Msg) (err erro
 		return nil
 	}
 
-	// Get TTL.
-	var ttl uint32
-	for i := range msg.Answer {
-		if ttl == 0 {
-			ttl = msg.Answer[i].Header().Ttl
-			break
-		}
+	// Successful empty-answer responses are not cached by default.
+	// They are ambiguous enough that a blanket synthetic TTL is usually
+	// worse than simply re-querying upstream later.
+	if len(msg.Answer) == 0 {
+		return nil
 	}
-	if ttl == 0 {
-		// It seems no answers (NXDomain).
-		ttl = minFirefoxCacheTtl
+
+	ttl, ok := minDNSAnswerTTL(msg.Answer)
+	if !ok {
+		return nil
 	}
 
 	// Check req type.
@@ -488,7 +568,7 @@ func (c *DnsController) __updateDnsCacheDeadline(host string, dnsTyp uint16, ans
 		return nil
 	}
 
-	now := time.Now()
+	now := c.now()
 	deadline, originalDeadline := deadlineFunc(now, host)
 
 	cacheKey := c.cacheKey(fqdn, dnsTyp)
@@ -533,14 +613,7 @@ func (c *DnsController) __updateDnsCacheDeadline(host string, dnsTyp uint16, ans
 }
 
 func (c *DnsController) UpdateDnsCacheDeadline(host string, dnsTyp uint16, answers []dnsmessage.RR, deadline time.Time) (err error) {
-	return c.__updateDnsCacheDeadline(host, dnsTyp, answers, func(now time.Time, host string) (daedline time.Time, originalDeadline time.Time) {
-		if fixedTtl, ok := c.fixedDomainTtl[host]; ok {
-			/// NOTICE: Cannot set TTL accurately.
-			if now.Sub(deadline).Seconds() > float64(fixedTtl) {
-				deadline := now.Add(time.Duration(fixedTtl) * time.Second)
-				return deadline, deadline
-			}
-		}
+	return c.__updateDnsCacheDeadline(host, dnsTyp, answers, func(_ time.Time, _ string) (daedline time.Time, originalDeadline time.Time) {
 		return deadline, deadline
 	})
 }
@@ -991,6 +1064,59 @@ func shouldReportDnsDialFailure(err error) bool {
 	return errors.As(err, &netErr) && netErr.Timeout()
 }
 
+func shouldRetryTruncatedDnsOverTcp(respMsg *dnsmessage.Msg, upstream *dns.Upstream, dialArgument *dialArgument) bool {
+	if respMsg == nil || upstream == nil || dialArgument == nil {
+		return false
+	}
+	if !respMsg.Truncated || dialArgument.l4proto != consts.L4ProtoStr_UDP {
+		return false
+	}
+	return upstream.Scheme == dns.UpstreamScheme_TCP_UDP
+}
+
+func dialArgumentNetworkType(dialArgument *dialArgument) *dialer.NetworkType {
+	return &dialer.NetworkType{
+		L4Proto:   dialArgument.l4proto,
+		IpVersion: dialArgument.ipversion,
+		IsDns:     true,
+	}
+}
+
+func (c *DnsController) forwardDnsUpstream(req *udpRequest, data []byte, upstream *dns.Upstream, dialArgument *dialArgument) (respMsg *dnsmessage.Msg, err error) {
+	ctxDial, cancel := context.WithTimeout(contextOrBackground(req.ctx), consts.DefaultDialTimeout)
+	defer cancel()
+
+	forwarder, forwarderKey, forwarderEntry, reusable, err := c.getDnsForwarder(upstream, dialArgument)
+	if err != nil {
+		return nil, err
+	}
+	releaseForwarder := func(failed bool) error {
+		if forwarder == nil {
+			return nil
+		}
+		releaseErr := c.releaseDnsForwarder(forwarderKey, forwarderEntry, forwarder, reusable, failed)
+		forwarder = nil
+		return releaseErr
+	}
+
+	defer func() {
+		if forwarder != nil {
+			if releaseErr := releaseForwarder(err != nil); err == nil && releaseErr != nil {
+				err = releaseErr
+			}
+		}
+	}()
+
+	respMsg, err = forwarder.ForwardDNS(ctxDial, data)
+	if err != nil {
+		if c.timeoutExceedCallback != nil && shouldReportDnsDialFailure(err) {
+			c.timeoutExceedCallback(dialArgument, err)
+		}
+		return nil, err
+	}
+	return respMsg, nil
+}
+
 func (c *DnsController) Close() error {
 	c.cancel()
 	c.cleanupWg.Wait()
@@ -1010,15 +1136,13 @@ func (c *DnsController) Close() error {
 
 func (c *DnsController) CacheStats() (dnsCacheEntries int, dnsForwarderCacheEntries int) {
 	now := c.now()
-	c.dnsCacheMu.Lock()
-	for key, cache := range c.dnsCache {
+	c.dnsCacheMu.RLock()
+	for _, cache := range c.dnsCache {
 		if c.cacheExpiresAt(cache).After(now) {
-			continue
+			dnsCacheEntries++
 		}
-		delete(c.dnsCache, key)
 	}
-	dnsCacheEntries = len(c.dnsCache)
-	c.dnsCacheMu.Unlock()
+	c.dnsCacheMu.RUnlock()
 
 	c.dnsForwarderCacheMu.Lock()
 	dnsForwarderCacheEntries = len(c.dnsForwarderCache)
@@ -1029,6 +1153,10 @@ func (c *DnsController) CacheStats() (dnsCacheEntries int, dnsForwarderCacheEntr
 func (c *DnsController) dialSend(invokingDepth int, req *udpRequest, data []byte, id uint16, upstream *dns.Upstream, needResp bool) (err error) {
 	if invokingDepth >= MaxDnsLookupDepth {
 		return fmt.Errorf("too deep DNS lookup invoking (depth: %v); there may be infinite loop in your DNS response routing", MaxDnsLookupDepth)
+	}
+	reqMsg := new(dnsmessage.Msg)
+	if err := reqMsg.Unpack(data); err != nil {
+		return fmt.Errorf("failed to unpack DNS request: %w", err)
 	}
 
 	upstreamName := "asis"
@@ -1058,44 +1186,39 @@ func (c *DnsController) dialSend(invokingDepth int, req *udpRequest, data []byte
 		return err
 	}
 
-	networkType := &dialer.NetworkType{
-		L4Proto:   dialArgument.l4proto,
-		IpVersion: dialArgument.ipversion,
-		IsDns:     true,
-	}
+	networkType := dialArgumentNetworkType(dialArgument)
 
 	// Dial and send.
 	var respMsg *dnsmessage.Msg
-	ctxDial, cancel := context.WithTimeout(contextOrBackground(req.ctx), consts.DefaultDialTimeout)
-	defer cancel()
-
-	forwarder, forwarderKey, forwarderEntry, reusable, err := c.getDnsForwarder(upstream, dialArgument)
+	respMsg, err = c.forwardDnsUpstream(req, data, upstream, dialArgument)
 	if err != nil {
 		return err
 	}
-	releaseForwarder := func(failed bool) error {
-		if forwarder == nil {
-			return nil
-		}
-		releaseErr := c.releaseDnsForwarder(forwarderKey, forwarderEntry, forwarder, reusable, failed)
-		forwarder = nil
-		return releaseErr
-	}
-
-	defer func() {
-		if forwarder != nil {
-			if releaseErr := releaseForwarder(err != nil); err == nil && releaseErr != nil {
-				err = releaseErr
-			}
-		}
-	}()
-
-	respMsg, err = forwarder.ForwardDNS(ctxDial, data)
-	if err != nil {
-		if c.timeoutExceedCallback != nil && shouldReportDnsDialFailure(err) {
-			c.timeoutExceedCallback(dialArgument, err)
-		}
+	if err := validateDnsResponseForRequest(reqMsg, respMsg, shouldValidateDnsResponseID(upstream, dialArgument)); err != nil {
 		return err
+	}
+	if shouldRetryTruncatedDnsOverTcp(respMsg, upstream, dialArgument) {
+		recordDnsTruncatedTcpFallback()
+		tcpUpstream := *upstream
+		tcpUpstream.Scheme = dns.UpstreamScheme_TCP
+		if c.log.IsLevelEnabled(logrus.TraceLevel) && len(respMsg.Question) > 0 {
+			c.log.WithFields(logrus.Fields{
+				"question": respMsg.Question,
+				"upstream": upstreamName,
+			}).Traceln("Retry truncated UDP DNS response over TCP")
+		}
+		dialArgument, err = c.bestDialerChooser(req, &tcpUpstream)
+		if err != nil {
+			return err
+		}
+		networkType = dialArgumentNetworkType(dialArgument)
+		respMsg, err = c.forwardDnsUpstream(req, data, upstream, dialArgument)
+		if err != nil {
+			return err
+		}
+		if err := validateDnsResponseForRequest(reqMsg, respMsg, shouldValidateDnsResponseID(&tcpUpstream, dialArgument)); err != nil {
+			return err
+		}
 	}
 
 	// Route response.
