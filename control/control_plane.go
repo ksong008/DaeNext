@@ -44,6 +44,7 @@ import (
 )
 
 type NodeLatencySnapshot struct {
+	Name      string
 	Link      string
 	LatencyMs *int32
 	Alive     bool
@@ -1290,6 +1291,7 @@ func (c *ControlPlane) Close() (err error) {
 
 func bestNodeLatencySnapshotForDialer(d *dialer.Dialer) NodeLatencySnapshot {
 	snapshot := NodeLatencySnapshot{
+		Name:      d.Property().Name,
 		Link:      d.Property().Link,
 		Alive:     false,
 		Message:   "no latency result",

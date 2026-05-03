@@ -80,6 +80,7 @@ var (
 				internal.AutoSu()
 			}
 
+			configLoadStartedAt := time.Now()
 			conf, includes, err := daeengine.ReadConfigFile(cfgFile)
 			if err != nil {
 				logrus.WithField("err", err).Fatalln("Failed to read config")
@@ -100,6 +101,7 @@ var (
 			logger.SetLogger(log, conf.Global.LogLevel, disableTimestamp, logOpts)
 			logger.SetLogger(logrus.StandardLogger(), conf.Global.LogLevel, disableTimestamp, logOpts)
 
+			logStartupPhase(log, "config.load", configLoadStartedAt, nil)
 			log.Infof("Include config files: [%v]", strings.Join(includes, ", "))
 
 			runtimeEngine := daeengine.New(daeengine.Options{
@@ -191,6 +193,18 @@ var (
 		},
 	}
 )
+
+func logStartupPhase(log *logrus.Logger, phase string, startedAt time.Time, err error) {
+	if log == nil {
+		return
+	}
+	entry := log.WithField("phase", phase).WithField("elapsed", time.Since(startedAt).String())
+	if err != nil {
+		entry.WithError(err).Warnln("[Startup] phase failed")
+		return
+	}
+	entry.Infoln("[Startup] phase completed")
+}
 
 func startPprofServer(port uint16) *http.Server {
 	if port == 0 {
