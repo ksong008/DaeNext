@@ -2,11 +2,19 @@ name: Publish Release
 run-name: Publish release ${{ inputs.tag }} by @${{ github.actor }}
 
 on:
+  workflow_call:
+    inputs:
+      tag:
+        type: string
+        required: true
   workflow_dispatch:
     inputs:
       tag:
         type: string
         required: true
+
+permissions:
+  contents: write
 
 jobs:
   build:
@@ -236,3 +244,26 @@ jobs:
         with:
           tag_name: ${{ inputs.tag }}
           files: release/*/*
+
+  mark-latest:
+    needs: [upload-release]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Mark release as latest full release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          TAG: ${{ inputs.tag }}
+        run: |
+          release_id=$(
+            curl -fsSL \
+              -H "Accept: application/vnd.github+json" \
+              -H "Authorization: Bearer $GH_TOKEN" \
+              "https://api.github.com/repos/$REPO/releases/tags/$TAG" | jq -r '.id'
+          )
+
+          curl -fsSL -X PATCH \
+            -H "Accept: application/vnd.github+json" \
+            -H "Authorization: Bearer $GH_TOKEN" \
+            "https://api.github.com/repos/$REPO/releases/$release_id" \
+            -d '{"prerelease":false,"make_latest":"true"}'
