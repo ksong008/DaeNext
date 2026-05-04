@@ -1,0 +1,23 @@
+name: daenew-release
+
+on:
+  push:
+    branches:
+      - daenew
+    paths:
+      - ".github/workflows/daenew-release.yml"
+      - ".github/workflows/prerelease.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: daenew-release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    uses: ./.github/workflows/prerelease.yml
+    with:
+      tag: v2.0-daenew
