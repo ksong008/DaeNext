@@ -55,6 +55,7 @@ type NodeLatencySnapshot struct {
 type RuntimeDeps struct {
 	Netns                  *DaeNetns
 	UdpEndpointPool        *UdpEndpointPool
+	UdpTaskPool            *UdpTaskPool
 	AnyfromPool            *AnyfromPool
 	ResolverDialer         netproxy.Dialer
 	ResolverFullconeDialer netproxy.Dialer
@@ -69,6 +70,9 @@ func (d RuntimeDeps) withDefaults(log *logrus.Logger) RuntimeDeps {
 	}
 	if d.UdpEndpointPool == nil {
 		d.UdpEndpointPool = NewUdpEndpointPool()
+	}
+	if d.UdpTaskPool == nil {
+		d.UdpTaskPool = NewUdpTaskPool()
 	}
 	if d.AnyfromPool == nil {
 		d.AnyfromPool = NewAnyfromPoolWithNetns(d.Netns)
@@ -112,6 +116,7 @@ type ControlPlane struct {
 
 	netns           *DaeNetns
 	udpEndpointPool *UdpEndpointPool
+	udpTaskPool     *UdpTaskPool
 	anyfromPool     *AnyfromPool
 }
 
@@ -518,6 +523,7 @@ func NewControlPlane(
 		mptcp:             global.Mptcp,
 		netns:             runtimeDeps.Netns,
 		udpEndpointPool:   runtimeDeps.UdpEndpointPool,
+		udpTaskPool:       runtimeDeps.UdpTaskPool,
 		anyfromPool:       runtimeDeps.AnyfromPool,
 	}
 	defer func() {
@@ -814,7 +820,9 @@ func (c *ControlPlane) rememberRealDomainVerdict(domain string, isReal bool, sho
 func (c *ControlPlane) ChooseDialTarget(ctx context.Context, src netip.AddrPort, routingResult *bpfRoutingResult, outbound consts.OutboundIndex, dst netip.AddrPort, domain string) (dialTarget string, shouldReroute bool, dialIp bool) {
 	dialMode := consts.DialMode_Ip
 
-	if !outbound.IsReserved() && domain != "" {
+	if domain != "" && dst.Addr().IsUnspecified() {
+		dialMode = consts.DialMode_Domain
+	} else if !outbound.IsReserved() && domain != "" {
 		switch c.dialMode {
 		case consts.DialMode_Domain:
 			if cache := c.dnsController.LookupDnsRespCache(c.dnsController.cacheKey(domain, common.AddrToDnsType(dst.Addr())), true); cache != nil {
@@ -1003,7 +1011,11 @@ func (c *ControlPlane) Serve(readyChan chan<- bool, listener *Listener) (err err
 			convergeSrc := common.ConvergeAddrPort(src)
 			// Debug:
 			// t := time.Now()
-			if !DefaultUdpTaskPool.EmitTask(convergeSrc.String(), func() {
+			udpTaskPool := c.udpTaskPool
+			if udpTaskPool == nil {
+				udpTaskPool = DefaultUdpTaskPool
+			}
+			if !udpTaskPool.EmitTask(convergeSrc.String(), func() {
 				data := newBuf
 				oob := newOob
 				defer data.Put()
@@ -1209,10 +1221,14 @@ func (c *ControlPlane) ActiveTCPConnections() (n int) {
 }
 
 func (c *ControlPlane) CacheStats() CacheStats {
+	udpTaskPool := c.udpTaskPool
+	if udpTaskPool == nil {
+		udpTaskPool = DefaultUdpTaskPool
+	}
 	stats := CacheStats{
 		PacketSnifferEntries: DefaultPacketSnifferSessionMgr.Count(),
-		UdpTaskQueueEntries:  DefaultUdpTaskPool.Count(),
-		UdpTaskDropTotal:     DefaultUdpTaskPool.DropCount(),
+		UdpTaskQueueEntries:  udpTaskPool.Count(),
+		UdpTaskDropTotal:     udpTaskPool.DropCount(),
 		ActiveTCPConnections: c.ActiveTCPConnections(),
 	}
 	if c.udpEndpointPool != nil {
@@ -1365,7 +1381,7 @@ func (c *ControlPlane) StartDNSListener() error {
 // FlushReloadScopedResources clears global transport/session pools that should
 // not survive a successful reload. It is intentionally called by the reload
 // coordinator only after a replacement control plane has been constructed.
-func FlushReloadScopedResources(udpEndpointPool *UdpEndpointPool, anyfromPool *AnyfromPool) {
+func FlushReloadScopedResources(udpEndpointPool *UdpEndpointPool, anyfromPool *AnyfromPool, udpTaskPool *UdpTaskPool) {
 	grpc.CleanGlobalClientConnectionCache()
 	meek.CleanGlobalRoundTripperCache()
 	xhttp.CleanGlobalPools()
@@ -1375,7 +1391,11 @@ func FlushReloadScopedResources(udpEndpointPool *UdpEndpointPool, anyfromPool *A
 	if anyfromPool == nil {
 		anyfromPool = DefaultAnyfromPool
 	}
+	if udpTaskPool == nil {
+		udpTaskPool = DefaultUdpTaskPool
+	}
 	_ = udpEndpointPool.Flush()
 	_ = anyfromPool.Flush()
+	udpTaskPool.Flush()
 	_ = DefaultPacketSnifferSessionMgr.Flush()
 }
