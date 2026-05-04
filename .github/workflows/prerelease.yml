@@ -2,11 +2,19 @@ name: Publish Pre-release
 run-name: Publish prerelease ${{ inputs.tag }} by @${{ github.actor }}
 
 on:
+  workflow_call:
+    inputs:
+      tag:
+        type: string
+        required: true
   workflow_dispatch:
     inputs:
       tag:
         type: string
         required: true
+
+permissions:
+  contents: write
 
 jobs:
   build:
