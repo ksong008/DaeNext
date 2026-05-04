@@ -6,11 +6,77 @@
 package engine
 
 import (
+	"context"
+	"errors"
 	"testing"
 	"time"
 
 	"github.com/daeuniverse/dae/control"
+	"github.com/sirupsen/logrus"
 )
+
+func TestReloadWithContextReturnsWhenRuntimeNotServing(t *testing.T) {
+	e := New(Options{})
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Millisecond)
+	defer cancel()
+
+	err := e.ReloadWithContext(ctx, EmptyConfig())
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("ReloadWithContext() error = %v, want context deadline exceeded", err)
+	}
+}
+
+func TestReloadWithContextDryRuntime(t *testing.T) {
+	e := New(Options{})
+	log := logrus.New()
+	done := make(chan error, 1)
+	go func() {
+		done <- e.Run(log, EmptyConfig(), nil, true, true)
+	}()
+
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	if err := e.ReloadWithContext(ctx, EmptyConfig()); err != nil {
+		t.Fatalf("ReloadWithContext() on dry runtime: %v", err)
+	}
+	if err := e.Stop(time.Second); err != nil {
+		t.Fatalf("Stop() dry runtime: %v", err)
+	}
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("Run() returned error: %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for dry runtime stop")
+	}
+}
+
+func TestRouteAwareDialTargetAvoidsSystemResolutionForDomain(t *testing.T) {
+	domain, dest, err := routeAwareDialTarget("example.com", "443")
+	if err != nil {
+		t.Fatalf("routeAwareDialTarget() error = %v", err)
+	}
+	if domain != "example.com" {
+		t.Fatalf("domain = %q, want example.com", domain)
+	}
+	if !dest.Addr().IsUnspecified() || dest.Port() != 443 {
+		t.Fatalf("dest = %v, want unspecified:443", dest)
+	}
+}
+
+func TestRouteAwareDialTargetKeepsIPLiteral(t *testing.T) {
+	domain, dest, err := routeAwareDialTarget("203.0.113.1", "8443")
+	if err != nil {
+		t.Fatalf("routeAwareDialTarget() error = %v", err)
+	}
+	if domain != "" {
+		t.Fatalf("domain = %q, want empty", domain)
+	}
+	if dest.String() != "203.0.113.1:8443" {
+		t.Fatalf("dest = %v, want 203.0.113.1:8443", dest)
+	}
+}
 
 func TestGetRuntimeOverviewIncludesDnsObservabilityStats(t *testing.T) {
 	originalSnapshotRuntimeStats := snapshotRuntimeStats
@@ -99,5 +165,47 @@ func TestGetRuntimeOverviewIncludesDnsObservabilityStats(t *testing.T) {
 	}
 	if overview.Samples[0].UploadRate != 11 || overview.Samples[0].DownloadRate != 22 {
 		t.Fatalf("unexpected runtime sample: %+v", overview.Samples[0])
+	}
+}
+
+func TestGetRuntimeOverviewUsesScopedUdpTaskPoolTelemetry(t *testing.T) {
+	originalSnapshotRuntimeStats := snapshotRuntimeStats
+	snapshotRuntimeStats = func(activeConnections int, udpSessions int, windowSec int, maxPoints int) control.RuntimeStatsSnapshot {
+		return control.RuntimeStatsSnapshot{
+			UpdatedAt:             time.Unix(1_700_000_400, 0),
+			UDPTaskQueues:         99,
+			UDPTaskDropTotal:      88,
+			PacketSnifferSessions: 77,
+		}
+	}
+	defer func() {
+		snapshotRuntimeStats = originalSnapshotRuntimeStats
+	}()
+
+	pool := control.NewUdpTaskPool()
+	defer pool.Close()
+	started := make(chan struct{})
+	release := make(chan struct{})
+	if !pool.EmitTask("client", func() {
+		close(started)
+		<-release
+	}) {
+		t.Fatal("EmitTask() rejected test task")
+	}
+	<-started
+	defer close(release)
+
+	overview, err := (&Engine{udpTaskPool: pool}).GetRuntimeOverview(60, 16)
+	if err != nil {
+		t.Fatalf("GetRuntimeOverview() returned error: %v", err)
+	}
+	if overview.UDPTaskQueues != 1 {
+		t.Fatalf("UDPTaskQueues = %d, want scoped pool count 1", overview.UDPTaskQueues)
+	}
+	if overview.UDPTaskDropTotal != 0 {
+		t.Fatalf("UDPTaskDropTotal = %d, want scoped pool drop count 0", overview.UDPTaskDropTotal)
+	}
+	if overview.PacketSnifferSessions != 77 {
+		t.Fatalf("PacketSnifferSessions = %d, want snapshot value 77", overview.PacketSnifferSessions)
 	}
 }

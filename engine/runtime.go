@@ -58,16 +58,19 @@ type RuntimeTrafficSample struct {
 }
 
 type RuntimeOverview struct {
-	UpdatedAt         time.Time
-	UploadRate        uint64
-	DownloadRate      uint64
-	UploadTotal       uint64
-	DownloadTotal     uint64
-	ActiveConnections int
-	UDPSessions       int
-	RSSBytes          uint64
-	HeapAllocBytes    uint64
-	Goroutines        int
+	UpdatedAt             time.Time
+	UploadRate            uint64
+	DownloadRate          uint64
+	UploadTotal           uint64
+	DownloadTotal         uint64
+	ActiveConnections     int
+	UDPSessions           int
+	UDPTaskQueues         int
+	UDPTaskDropTotal      uint64
+	PacketSnifferSessions int
+	RSSBytes              uint64
+	HeapAllocBytes        uint64
+	Goroutines            int
 	control.DnsObservabilityStats
 	Samples []RuntimeTrafficSample
 }
@@ -93,6 +96,7 @@ type Engine struct {
 	httpTransport           *http.Transport
 	netns                   *control.DaeNetns
 	udpEndpointPool         *control.UdpEndpointPool
+	udpTaskPool             *control.UdpTaskPool
 	anyfromPool             *control.AnyfromPool
 	fallbackDNS             netip.AddrPort
 	bootstrapDirect         netproxy.Dialer
@@ -112,6 +116,7 @@ func New(opts Options) *Engine {
 		onReady:               opts.OnReady,
 		netns:                 netns,
 		udpEndpointPool:       control.NewUdpEndpointPool(),
+		udpTaskPool:           control.NewUdpTaskPool(),
 		anyfromPool:           control.NewAnyfromPoolWithNetns(netns),
 	}
 	e.httpTransport = &http.Transport{
@@ -142,6 +147,9 @@ func (e *Engine) Run(log *logrus.Logger, conf *config.Config, externGeoDataDirs 
 		}
 		if e.udpEndpointPool != nil {
 			_ = e.udpEndpointPool.Flush()
+		}
+		if e.udpTaskPool != nil {
+			e.udpTaskPool.Flush()
 		}
 		if e.anyfromPool != nil {
 			_ = e.anyfromPool.Flush()
@@ -289,7 +297,7 @@ loop:
 				old.AbortConnections()
 			}
 			old.Close()
-			control.FlushReloadScopedResources(e.udpEndpointPool, e.anyfromPool)
+			control.FlushReloadScopedResources(e.udpEndpointPool, e.anyfromPool, e.udpTaskPool)
 		}
 	}
 
@@ -305,14 +313,35 @@ func (e *Engine) Reload(conf *config.Config) error {
 	return e.ReloadWithAbort(conf, false)
 }
 
+func (e *Engine) ReloadWithContext(ctx context.Context, conf *config.Config) error {
+	return e.ReloadWithAbortContext(ctx, conf, false)
+}
+
 func (e *Engine) ReloadWithAbort(conf *config.Config, abortConnections bool) error {
+	return e.ReloadWithAbortContext(context.Background(), conf, abortConnections)
+}
+
+func (e *Engine) ReloadWithAbortContext(ctx context.Context, conf *config.Config, abortConnections bool) error {
+	if ctx == nil {
+		ctx = context.Background()
+	}
 	ch := make(chan error, 1)
-	e.reloadCh <- &reloadMessage{
+	msg := &reloadMessage{
 		Config:           conf,
 		Callback:         ch,
 		AbortConnections: abortConnections,
 	}
-	return <-ch
+	select {
+	case e.reloadCh <- msg:
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+	select {
+	case err := <-ch:
+		return err
+	case <-ctx.Done():
+		return ctx.Err()
+	}
 }
 
 func (e *Engine) Stop(timeout time.Duration) error {
@@ -365,6 +394,12 @@ func (e *Engine) GetRuntimeOverview(windowSec int, maxPoints int) (*RuntimeOverv
 		udpSessions = e.udpEndpointPool.Count()
 	}
 	snapshot := snapshotRuntimeStats(activeTCPConnections, udpSessions, windowSec, maxPoints)
+	udpTaskQueues := snapshot.UDPTaskQueues
+	udpTaskDropTotal := snapshot.UDPTaskDropTotal
+	if e.udpTaskPool != nil {
+		udpTaskQueues = e.udpTaskPool.Count()
+		udpTaskDropTotal = e.udpTaskPool.DropCount()
+	}
 	samples := make([]RuntimeTrafficSample, 0, len(snapshot.Samples))
 	for _, sample := range snapshot.Samples {
 		samples = append(samples, RuntimeTrafficSample{
@@ -382,6 +417,9 @@ func (e *Engine) GetRuntimeOverview(windowSec int, maxPoints int) (*RuntimeOverv
 		DownloadTotal:         snapshot.DownloadTotal,
 		ActiveConnections:     snapshot.ActiveConnections,
 		UDPSessions:           snapshot.UDPSessions,
+		UDPTaskQueues:         udpTaskQueues,
+		UDPTaskDropTotal:      udpTaskDropTotal,
+		PacketSnifferSessions: snapshot.PacketSnifferSessions,
 		RSSBytes:              snapshot.RSSBytes,
 		HeapAllocBytes:        snapshot.HeapAllocBytes,
 		Goroutines:            snapshot.Goroutines,
@@ -403,14 +441,7 @@ func (e *Engine) routeAwareDialContext(ctx context.Context, network, addr string
 	if err != nil {
 		return nil, err
 	}
-	addrs, err := net.DefaultResolver.LookupNetIP(ctx, "ip", host)
-	if err != nil {
-		return nil, err
-	}
-	if len(addrs) == 0 {
-		return nil, fmt.Errorf("no dns record: %v", host)
-	}
-	port, err := strconv.ParseUint(rawPort, 10, 16)
+	domain, dest, err := routeAwareDialTarget(host, rawPort)
 	if err != nil {
 		return nil, err
 	}
@@ -419,18 +450,33 @@ func (e *Engine) routeAwareDialContext(ctx context.Context, network, addr string
 		return nil, err
 	}
 	conn, err := ctl.RouteDialTcp(&control.RouteDialParam{
+		Ctx:         ctx,
 		Outbound:    consts.OutboundControlPlaneRouting,
-		Domain:      host,
+		Domain:      domain,
 		Mac:         [6]uint8{},
 		ProcessName: [16]uint8{},
 		Src:         netip.MustParseAddrPort("0.0.0.0:0"),
-		Dest:        netip.AddrPortFrom(addrs[0], uint16(port)),
+		Dest:        dest,
 		Mark:        0,
 	})
 	if err != nil {
 		return nil, err
 	}
 	return &netproxy.FakeNetConn{Conn: conn, LAddr: nil, RAddr: nil}, nil
+}
+
+func routeAwareDialTarget(host string, rawPort string) (domain string, dest netip.AddrPort, err error) {
+	if strings.TrimSpace(host) == "" {
+		return "", netip.AddrPort{}, fmt.Errorf("empty host")
+	}
+	port, err := strconv.ParseUint(rawPort, 10, 16)
+	if err != nil {
+		return "", netip.AddrPort{}, err
+	}
+	if addr, err := netip.ParseAddr(host); err == nil {
+		return "", netip.AddrPortFrom(addr, uint16(port)), nil
+	}
+	return host, netip.AddrPortFrom(netip.IPv4Unspecified(), uint16(port)), nil
 }
 
 func (e *Engine) waitForNetwork(log *logrus.Logger, conf *config.Config) {
@@ -663,6 +709,7 @@ func (e *Engine) newControlPlane(log *logrus.Logger, bpf interface{}, dnsCache m
 		control.RuntimeDeps{
 			Netns:                  e.netns,
 			UdpEndpointPool:        e.udpEndpointPool,
+			UdpTaskPool:            e.udpTaskPool,
 			AnyfromPool:            e.anyfromPool,
 			ResolverDialer:         e.bootstrapDirect,
 			ResolverFullconeDialer: e.bootstrapDirectFullcone,
