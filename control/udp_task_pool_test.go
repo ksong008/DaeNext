@@ -190,3 +190,107 @@ func TestUdpTaskPoolDropsWhenQueueIsFullWithoutBlocking(t *testing.T) {
 	close(release)
 	<-done
 }
+
+func TestUdpTaskPoolFlushClearsQueues(t *testing.T) {
+	pool := NewUdpTaskPool()
+	defer pool.Close()
+
+	if ok := pool.EmitTask("client", func() {}); !ok {
+		t.Fatal("EmitTask() rejected initial task")
+	}
+	if pool.Count() == 0 {
+		t.Fatal("expected a queue before flush")
+	}
+	pool.Flush()
+	if got := pool.Count(); got != 0 {
+		t.Fatalf("Count() after Flush() = %d, want 0", got)
+	}
+}
+
+func TestUdpTaskPoolFlushDoesNotBlockBehindRunningTask(t *testing.T) {
+	pool := NewUdpTaskPool()
+	defer pool.Close()
+
+	started := make(chan struct{})
+	releaseOld := make(chan struct{})
+	oldDone := make(chan struct{})
+	if !pool.EmitTask("client", func() {
+		close(started)
+		<-releaseOld
+		close(oldDone)
+	}) {
+		t.Fatal("EmitTask() rejected old task")
+	}
+	<-started
+
+	flushReturned := make(chan struct{})
+	go func() {
+		pool.Flush()
+		close(flushReturned)
+	}()
+	select {
+	case <-flushReturned:
+	case <-time.After(100 * time.Millisecond):
+		t.Fatal("Flush() blocked behind a running task")
+	}
+	if got := pool.Count(); got != 0 {
+		t.Fatalf("Count() after non-blocking Flush() = %d, want 0", got)
+	}
+
+	newDone := make(chan struct{})
+	if !pool.EmitTask("client", func() {
+		close(newDone)
+	}) {
+		t.Fatal("EmitTask() rejected new task after flush")
+	}
+	select {
+	case <-newDone:
+	case <-time.After(100 * time.Millisecond):
+		t.Fatal("new task did not run after flush created a new queue")
+	}
+
+	close(releaseOld)
+	select {
+	case <-oldDone:
+	case <-time.After(100 * time.Millisecond):
+		t.Fatal("old task did not finish after release")
+	}
+}
+
+func TestUdpTaskPoolConcurrentFlushAndEmitStress(t *testing.T) {
+	pool := NewUdpTaskPool()
+	defer pool.Close()
+
+	const emitters = 16
+	const rounds = 256
+	var wg sync.WaitGroup
+	for i := 0; i < emitters; i++ {
+		i := i
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for round := 0; round < rounds; round++ {
+				key := "client-" + strconv.Itoa((i+round)%32)
+				pool.EmitTask(key, func() {})
+				if round%17 == 0 {
+					pool.Flush()
+				}
+			}
+		}()
+	}
+
+	done := make(chan struct{})
+	go func() {
+		wg.Wait()
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("concurrent EmitTask/Flush stress timed out")
+	}
+	pool.Flush()
+	if got := pool.Count(); got != 0 {
+		t.Fatalf("Count() after final Flush() = %d, want 0", got)
+	}
+}
