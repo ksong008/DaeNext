@@ -39,6 +39,12 @@ func (q *UdpTaskQueue) convoy() {
 			close(q.closed)
 			return
 		case task := <-q.ch:
+			select {
+			case <-q.ctx.Done():
+				close(q.closed)
+				return
+			default:
+			}
 			q.mu.Lock()
 			q.running = true
 			q.mu.Unlock()
@@ -119,11 +125,11 @@ func NewUdpTaskPool() *UdpTaskPool {
 		queueChPool: sync.Pool{New: func() any {
 			return make(chan UdpTask, UdpTaskQueueLength)
 		}},
-		mu: sync.Mutex{},
-		m:  map[string]*UdpTaskQueue{},
-		ctx: ctx,
+		mu:     sync.Mutex{},
+		m:      map[string]*UdpTaskQueue{},
+		ctx:    ctx,
 		cancel: cancel,
-		now: time.Now,
+		now:    time.Now,
 	}
 	p.startCleanup()
 	return p
@@ -179,6 +185,14 @@ func (p *UdpTaskPool) sweepExpiredQueues(now time.Time) {
 func (p *UdpTaskPool) Close() {
 	p.cancel()
 	p.cleanupWg.Wait()
+	p.flush(true)
+}
+
+func (p *UdpTaskPool) Flush() {
+	p.flush(false)
+}
+
+func (p *UdpTaskPool) flush(wait bool) {
 	var queues []*UdpTaskQueue
 	p.mu.Lock()
 	for key, q := range p.m {
@@ -188,9 +202,11 @@ func (p *UdpTaskPool) Close() {
 	p.mu.Unlock()
 	for _, q := range queues {
 		q.cancel()
-		<-q.closed
-		if len(q.ch) == 0 {
-			p.queueChPool.Put(q.ch)
+		if wait {
+			<-q.closed
+			if len(q.ch) == 0 {
+				p.queueChPool.Put(q.ch)
+			}
 		}
 	}
 }
