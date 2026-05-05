@@ -8,6 +8,7 @@ package engine
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -49,6 +50,20 @@ func TestReloadWithContextDryRuntime(t *testing.T) {
 		}
 	case <-time.After(time.Second):
 		t.Fatal("timed out waiting for dry runtime stop")
+	}
+}
+
+func TestNewControlPlaneRejectsInvalidFallbackResolver(t *testing.T) {
+	conf := EmptyConfig()
+	conf.Global.FallbackResolver = "bad-resolver"
+	e := New(Options{})
+
+	_, err := e.newControlPlane(logrus.New(), nil, nil, conf, nil)
+	if err == nil {
+		t.Fatal("expected newControlPlane() to reject invalid fallback_resolver")
+	}
+	if !strings.Contains(err.Error(), "invalid global.fallback_resolver") {
+		t.Fatalf("expected fallback_resolver error, got: %v", err)
 	}
 }
 

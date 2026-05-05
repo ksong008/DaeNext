@@ -7,20 +7,29 @@ package config
 
 import (
 	"fmt"
-	"github.com/daeuniverse/dae/common"
-	"github.com/sirupsen/logrus"
+	"net/netip"
 	"strings"
 
+	"github.com/daeuniverse/dae/common"
 	"github.com/daeuniverse/dae/common/consts"
 	"github.com/daeuniverse/dae/pkg/config_parser"
+	"github.com/sirupsen/logrus"
 )
 
 type patch func(params *Config) error
 
 var patches = []patch{
+	patchFallbackResolver,
 	patchTcpCheckHttpMethod,
 	patchEmptyDns,
 	patchMustOutbound,
+}
+
+func patchFallbackResolver(params *Config) error {
+	if _, err := netip.ParseAddrPort(params.Global.FallbackResolver); err != nil {
+		return fmt.Errorf("invalid global.fallback_resolver %q: %w", params.Global.FallbackResolver, err)
+	}
+	return nil
 }
 
 func patchTcpCheckHttpMethod(params *Config) error {

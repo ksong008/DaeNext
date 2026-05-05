@@ -197,9 +197,22 @@ func attachBpfToTargets(objs *bpfObjects, targets map[string]int) (links []link.
 	kp, err := link.Kprobe("kfree_skbmem", objs.KprobeSkbLifetimeTermination, nil)
 	if err != nil {
 		logrus.Warnf("failed to attach kprobe to kfree_skbmem: %+v\n", err)
+	} else {
+		links = append(links, kp)
 	}
+	defer func() {
+		if err != nil {
+			for _, attached := range links {
+				if attached != nil {
+					_ = attached.Close()
+				}
+			}
+			links = nil
+		}
+	}()
 
 	i := 0
+	attachedTargets := 0
 	for fn, pos := range targets {
 		i++
 		fmt.Printf("attaching kprobes: %04d/%04d\r", i, len(targets))
@@ -215,18 +228,21 @@ func attachBpfToTargets(objs *bpfObjects, targets map[string]int) (links []link.
 			kp, err = link.Kprobe(fn, objs.KprobeSkb4, nil)
 		case 5:
 			kp, err = link.Kprobe(fn, objs.KprobeSkb5, nil)
+		default:
+			logrus.Debugf("skip kprobe %s: unsupported skb arg position %d\n", fn, pos)
+			continue
 		}
 		if err != nil {
 			logrus.Debugf("failed to attach kprobe to %s: %+v\n", fn, err)
 			continue
 		}
 		links = append(links, kp)
+		attachedTargets++
 	}
-	if len(links) == 0 {
+	if attachedTargets == 0 {
 		err = fmt.Errorf("failed to attach kprobes to any target")
 	}
-	links = append(links, kp)
-	return links, nil
+	return links, err
 }
 
 func handleEvents(ctx context.Context, objs *bpfObjects, outputFile string, kfreeSkbReasons map[uint64]string, dropOnly bool) (err error) {
@@ -246,30 +262,7 @@ func handleEvents(ctx context.Context, objs *bpfObjects, outputFile string, kfre
 		eventsReader.Close()
 	}()
 
-	type bpfEvent struct {
-		Pc          uint64
-		Skb         uint64
-		SecondParam uint64
-		Mark        uint32
-		Netns       uint32
-		Ifindex     uint32
-		Pid         uint32
-		Ifname      [16]uint8
-		Pname       [32]uint8
-		Saddr       [16]byte
-		Daddr       [16]byte
-		Sport       uint16
-		Dport       uint16
-		L3Proto     uint16
-		L4Proto     uint8
-		TcpFlags    uint8
-		PayloadLen  uint16
-	}
-
-	skb2events := make(map[uint64][]bpfEvent)
-	// a map to save slices of bpfEvent of the Skb
-	skb2symNames := make(map[uint64][]string)
-	// a map to save slices of function name called with the Skb
+	tracker := newSkbTraceTracker()
 	for {
 		rec, err := eventsReader.Read()
 		if err != nil {
@@ -280,27 +273,20 @@ func handleEvents(ctx context.Context, objs *bpfObjects, outputFile string, kfre
 			continue
 		}
 
-		var event bpfEvent
+		var event traceEventRecord
 		if err = binary.Read(bytes.NewBuffer(rec.RawSample), nativeEndian, &event); err != nil {
 			logrus.Debugf("failed to parse ringbuf event: %+v", err)
 			continue
 		}
-		if skb2events[event.Skb] == nil {
-			skb2events[event.Skb] = []bpfEvent{}
-		}
-		skb2events[event.Skb] = append(skb2events[event.Skb], event)
 
 		sym := NearestSymbol(event.Pc)
-		if skb2symNames[event.Skb] == nil {
-			skb2symNames[event.Skb] = []string{}
-		}
-		skb2symNames[event.Skb] = append(skb2symNames[event.Skb], sym.Name)
+		tracker.Add(event, sym.Name)
 		switch sym.Name {
 		case "__kfree_skb", "kfree_skbmem":
 			// most skb end in the call of kfree_skbmem
-			if !dropOnly || slices.Contains(skb2symNames[event.Skb], "kfree_skb_reason") {
+			if !dropOnly || slices.Contains(tracker.SymNames(event.Skb), "kfree_skb_reason") {
 				// trace dropOnly with drop reason or all skb
-				for _, skb_ev := range skb2events[event.Skb] {
+				for _, skb_ev := range tracker.Events(event.Skb) {
 					fmt.Fprintf(writer, "%x mark=%x netns=%010d if=%d(%s) proc=%d(%s) ", skb_ev.Skb, skb_ev.Mark, skb_ev.Netns, skb_ev.Ifindex, TrimNull(string(skb_ev.Ifname[:])), skb_ev.Pid, TrimNull(string(skb_ev.Pname[:])))
 					if event.L3Proto == syscall.ETH_P_IP {
 						fmt.Fprintf(writer, "%s:%d > %s:%d ", net.IP(skb_ev.Saddr[:4]).String(), Ntohs(skb_ev.Sport), net.IP(skb_ev.Daddr[:4]).String(), Ntohs(skb_ev.Dport))
@@ -318,8 +304,7 @@ func handleEvents(ctx context.Context, objs *bpfObjects, outputFile string, kfre
 					}
 					fmt.Fprintf(writer, "\n")
 				}
-				delete(skb2events, event.Skb)
-				delete(skb2symNames, event.Skb)
+				tracker.Delete(event.Skb)
 			}
 		}
 	}

@@ -29,9 +29,11 @@ type Sniffer struct {
 	sniffed   string
 	buf       *bytes.Buffer
 	readMu    sync.Mutex
+	readWg    sync.WaitGroup
 	ctx       context.Context
 	cancel    func()
 	closeOnce sync.Once
+	closed    bool
 
 	// Packet
 	data         [][]byte
@@ -97,6 +99,10 @@ func (s *Sniffer) SniffTcp() (d string, err error) {
 		}
 	}()
 	s.readMu.Lock()
+	if s.closed {
+		s.readMu.Unlock()
+		return "", io.ErrClosedPipe
+	}
 	defer s.readMu.Unlock()
 	var oerr error
 	defer func() {
@@ -106,7 +112,9 @@ func (s *Sniffer) SniffTcp() (d string, err error) {
 	}()
 	for {
 		if s.stream {
+			s.readWg.Add(1)
 			go func() {
+				defer s.readWg.Done()
 				// Read once.
 				_, err := s.buf.ReadFromOnce(s.r)
 				if err != nil {
@@ -161,6 +169,10 @@ func (s *Sniffer) SniffUdp() (d string, err error) {
 		}
 	}()
 	s.readMu.Lock()
+	if s.closed {
+		s.readMu.Unlock()
+		return "", io.ErrClosedPipe
+	}
 	defer s.readMu.Unlock()
 
 	// Always ready.
@@ -226,6 +238,12 @@ func (s *Sniffer) Close() (err error) {
 		default:
 			s.cancel()
 		}
+		s.readMu.Lock()
+		s.closed = true
+		s.readMu.Unlock()
+		s.readWg.Wait()
+		s.readMu.Lock()
+		defer s.readMu.Unlock()
 		if s.buf != nil {
 			s.buf.Reset()
 			pool.PutBuffer(s.buf)

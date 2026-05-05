@@ -8,7 +8,6 @@ package sniffing
 import (
 	"errors"
 	"net"
-	"strings"
 	"time"
 )
 
@@ -30,15 +29,12 @@ func (s *ConnSniffer) Read(p []byte) (n int, err error) {
 }
 
 func (s *ConnSniffer) Close() (err error) {
-	var errs []string
-	if err = s.Sniffer.Close(); err != nil {
-		errs = append(errs, err.Error())
-	}
+	var errs []error
 	if err = s.Conn.Close(); err != nil {
-		errs = append(errs, err.Error())
+		errs = append(errs, err)
 	}
-	if len(errs) > 0 {
-		return errors.New(strings.Join(errs, "; "))
+	if err = s.Sniffer.Close(); err != nil {
+		errs = append(errs, err)
 	}
-	return nil
+	return errors.Join(errs...)
 }
