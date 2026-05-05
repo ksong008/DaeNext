@@ -55,9 +55,12 @@ func TestUdpTaskPoolSweepExpiredQueues(t *testing.T) {
 	}
 
 	pool.mu.Lock()
-	pool.m["idle-key"].agingTime = time.Second
-	pool.m["idle-key"].lastActive = now.Add(-2 * time.Second)
+	q := pool.m["idle-key"]
 	pool.mu.Unlock()
+	q.mu.Lock()
+	q.agingTime = time.Second
+	q.lastActive = now.Add(-2 * time.Second)
+	q.mu.Unlock()
 
 	pool.sweepExpiredQueues(now)
 	if pool.Count() != 0 {
@@ -83,9 +86,12 @@ func TestUdpTaskPoolDoesNotSweepRunningQueue(t *testing.T) {
 	<-started
 
 	pool.mu.Lock()
-	pool.m["busy-key"].agingTime = time.Second
-	pool.m["busy-key"].lastActive = now.Add(-2 * time.Second)
+	q := pool.m["busy-key"]
 	pool.mu.Unlock()
+	q.mu.Lock()
+	q.agingTime = time.Second
+	q.lastActive = now.Add(-2 * time.Second)
+	q.mu.Unlock()
 
 	pool.sweepExpiredQueues(now)
 	if pool.Count() != 1 {
@@ -169,9 +175,10 @@ func TestUdpTaskPoolDropsWhenQueueIsFullWithoutBlocking(t *testing.T) {
 	}
 
 	result := make(chan bool, 1)
+	overflowRan := make(chan struct{}, 1)
 	go func() {
 		result <- pool.EmitTask("busy-key", func() {
-			t.Fatal("overflow task should not run")
+			overflowRan <- struct{}{}
 		})
 	}()
 
@@ -185,6 +192,11 @@ func TestUdpTaskPoolDropsWhenQueueIsFullWithoutBlocking(t *testing.T) {
 	}
 	if drops := pool.DropCount(); drops != 1 {
 		t.Fatalf("expected one dropped task after overflow, got %d", drops)
+	}
+	select {
+	case <-overflowRan:
+		t.Fatal("overflow task should not run")
+	default:
 	}
 
 	close(release)

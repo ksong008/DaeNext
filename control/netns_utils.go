@@ -1,11 +1,12 @@
 /*
 *  SPDX-License-Identifier: AGPL-3.0-only
 *  Copyright (c) 2022-2025, daeuniverse Organization <dae@v2raya.org>
-*/
+ */
 
 package control
 
 import (
+	"errors"
 	"fmt"
 	"net"
 	"os"
@@ -43,7 +44,11 @@ type DaeNetns struct {
 }
 
 func NewDaeNetns(log *logrus.Logger) *DaeNetns {
-	return &DaeNetns{log: log}
+	return &DaeNetns{
+		log:    log,
+		hostNs: netns.None(),
+		daeNs:  netns.None(),
+	}
 }
 
 func InitDaeNetns(log *logrus.Logger) {
@@ -87,9 +92,53 @@ func (ns *DaeNetns) Setup() (err error) {
 }
 
 func (ns *DaeNetns) Close() (err error) {
-	DeleteNamedNetns(NsName)
-	DeleteLink(HostVethName)
-	return
+	return ns.closeWith(DeleteNamedNetns, DeleteLink)
+}
+
+func (ns *DaeNetns) closeWith(deleteNamedNetns func(string) error, deleteLink func(string) error) (err error) {
+	ns.mu.Lock()
+	defer ns.mu.Unlock()
+
+	var errs []error
+	if e := deleteNamedNetns(NsName); e != nil {
+		errs = append(errs, fmt.Errorf("delete named netns %s: %w", NsName, e))
+	}
+	if e := deleteLink(HostVethName); e != nil {
+		errs = append(errs, fmt.Errorf("delete link %s: %w", HostVethName, e))
+	}
+	if e := closeNsHandle("dae", &ns.daeNs); e != nil {
+		errs = append(errs, e)
+	}
+	if e := closeNsHandle("host", &ns.hostNs); e != nil {
+		errs = append(errs, e)
+	}
+
+	ns.dae0 = nil
+	ns.dae0peer = nil
+	ns.setupDone.Store(false)
+	return errors.Join(errs...)
+}
+
+func closeNsHandle(name string, handle *netns.NsHandle) error {
+	if handle == nil {
+		return nil
+	}
+	if *handle == netns.None() {
+		return nil
+	}
+	if *handle == 0 {
+		// A zero-value DaeNetns historically left NsHandle fields at 0; do not close stdin.
+		*handle = netns.None()
+		return nil
+	}
+	if err := handle.Close(); err != nil {
+		if errors.Is(err, unix.EBADF) {
+			*handle = netns.None()
+			return nil
+		}
+		return fmt.Errorf("close %s netns handle: %w", name, err)
+	}
+	return nil
 }
 
 func (ns *DaeNetns) With(f func() error) (err error) {
@@ -400,14 +449,32 @@ func (ns *DaeNetns) setupIPv6Datapath() (err error) {
 
 func DeleteNamedNetns(name string) error {
 	namedPath := path.Join("/run/netns", name)
-	unix.Unmount(namedPath, unix.MNT_DETACH|unix.MNT_FORCE)
-	return os.Remove(namedPath)
+	var errs []error
+	if err := unix.Unmount(namedPath, unix.MNT_DETACH|unix.MNT_FORCE); err != nil &&
+		!errors.Is(err, unix.ENOENT) && !errors.Is(err, unix.EINVAL) {
+		errs = append(errs, fmt.Errorf("unmount %s: %w", namedPath, err))
+	}
+	if err := os.Remove(namedPath); err != nil && !os.IsNotExist(err) {
+		errs = append(errs, fmt.Errorf("remove %s: %w", namedPath, err))
+	}
+	return errors.Join(errs...)
 }
 
 func DeleteLink(name string) error {
 	link, err := netlink.LinkByName(name)
-	if err == nil {
-		return netlink.LinkDel(link)
+	if err != nil {
+		var notFound netlink.LinkNotFoundError
+		if errors.As(err, &notFound) {
+			return nil
+		}
+		return err
 	}
-	return err
+	if err = netlink.LinkDel(link); err != nil {
+		var notFound netlink.LinkNotFoundError
+		if errors.As(err, &notFound) {
+			return nil
+		}
+		return err
+	}
+	return nil
 }

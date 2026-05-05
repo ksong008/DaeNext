@@ -68,6 +68,9 @@ func (o *bpfObjects) newLpmMap(keys []_bpfLpmKey, values []uint32) (m *ebpf.Map,
 	if _, err = BpfMapBatchUpdate(m, keys, values, &ebpf.BatchOptions{
 		ElemFlags: uint64(ebpf.UpdateAny),
 	}); err != nil {
+		if closeErr := m.Close(); closeErr != nil {
+			return nil, errors.Join(err, fmt.Errorf("close lpm map after batch update failure: %w", closeErr))
+		}
 		return nil, err
 	}
 	return m, nil
@@ -85,8 +88,12 @@ func cidrToBpfLpmKey(prefix netip.Prefix) _bpfLpmKey {
 	}
 }
 
-func BpfMapBatchUpdate(m *ebpf.Map, keys interface{}, values interface{}, opts *ebpf.BatchOptions) (n int, err error) {
+var bpfMapBatchUpdate = func(m *ebpf.Map, keys interface{}, values interface{}, opts *ebpf.BatchOptions) (n int, err error) {
 	return m.BatchUpdate(keys, values, opts)
+}
+
+func BpfMapBatchUpdate(m *ebpf.Map, keys interface{}, values interface{}, opts *ebpf.BatchOptions) (n int, err error) {
+	return bpfMapBatchUpdate(m, keys, values, opts)
 }
 
 // BpfMapBatchDelete deletes keys and ignores ErrKeyNotExist.
@@ -201,7 +208,9 @@ retryLoadBpf:
 				return fmt.Errorf("loading objects: bad format: %w", err)
 			}
 			mapName, _, _ := strings.Cut(after, ":")
-			_ = os.Remove(filepath.Join(opts.PinPath, mapName))
+			if removeErr := removePinnedMap(opts.PinPath, mapName); removeErr != nil {
+				return errors.Join(err, removeErr)
+			}
 			log.Infof("Incompatible new map format with existing map %v detected; removed the old one.", mapName)
 			goto retryLoadBpf
 		}
@@ -223,6 +232,14 @@ retryLoadBpf:
 			err = fmt.Errorf(`%w: please re-compile linux kernel with CONFIG_BPF_EVENTS=y and CONFIG_KPROBE_EVENTS=y"`, err)
 		}
 		return err
+	}
+	return nil
+}
+
+func removePinnedMap(pinPath, mapName string) error {
+	mapPath := filepath.Join(pinPath, mapName)
+	if err := os.Remove(mapPath); err != nil {
+		return fmt.Errorf("remove incompatible pinned map %s: %w", mapPath, err)
 	}
 	return nil
 }
