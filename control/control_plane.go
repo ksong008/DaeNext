@@ -407,6 +407,14 @@ func NewControlPlane(
 	// Filter out groups.
 	dialerSet := outbound.NewDialerSetFromLinks(option, tagToNodeList)
 	deferFuncs = append(deferFuncs, dialerSet.Close)
+	defer func() {
+		if err == nil {
+			return
+		}
+		for i := len(deferFuncs) - 1; i >= 0; i-- {
+			err = errors.Join(err, deferFuncs[i]())
+		}
+	}()
 	for _, group := range groups {
 		// Parse policy.
 		policy, err := outbound.NewDialerSelectionPolicyFromGroupParam(&group)
@@ -651,6 +659,7 @@ func NewControlPlane(
 	}
 	go dnsUpstream.InitUpstreams()
 
+	plane.deferFuncs = deferFuncs
 	close(plane.ready)
 	return plane, nil
 }
@@ -1293,16 +1302,12 @@ func (c *ControlPlane) Close() (err error) {
 	c.cancel()
 	// Invoke defer funcs in reverse order.
 	for i := len(c.deferFuncs) - 1; i >= 0; i-- {
-		if e := c.deferFuncs[i](); e != nil {
-			// Combine errors.
-			if err != nil {
-				err = fmt.Errorf("%w; %v", err, e)
-			} else {
-				err = e
-			}
-		}
+		err = errors.Join(err, c.deferFuncs[i]())
 	}
-	return c.core.Close()
+	if c.core != nil {
+		err = errors.Join(err, c.core.Close())
+	}
+	return err
 }
 
 func bestNodeLatencySnapshotForDialer(d *dialer.Dialer) NodeLatencySnapshot {
