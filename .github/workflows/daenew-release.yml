@@ -8,6 +8,21 @@ on:
       - ".github/workflows/daenew-release.yml"
       - ".github/workflows/prerelease.yml"
   workflow_dispatch:
+    inputs:
+      tag:
+        description: Release tag to publish
+        required: true
+        type: string
+      ref:
+        description: Git ref to build from
+        required: false
+        default: daenew
+        type: string
+      make_latest:
+        description: Mark the published release as latest
+        required: false
+        default: false
+        type: boolean
 
 permissions:
   contents: write
@@ -17,7 +32,20 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  publish:
+  publish-rolling:
+    if: github.event_name == 'push'
     uses: ./.github/workflows/release.yml
     with:
       tag: v2.0-daenew
+      ref: refs/heads/daenew
+      update_tag: true
+      make_latest: true
+
+  publish-manual:
+    if: github.event_name == 'workflow_dispatch'
+    uses: ./.github/workflows/release.yml
+    with:
+      tag: ${{ inputs.tag }}
+      ref: ${{ inputs.ref }}
+      update_tag: false
+      make_latest: ${{ inputs.make_latest }}
