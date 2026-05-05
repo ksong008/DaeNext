@@ -36,6 +36,7 @@ type Global struct {
 	UdpCheckDns           []string      `mapstructure:"udp_check_dns" default:"dns.google:53,8.8.8.8,2001:4860:4860::8888"`
 	CheckInterval         time.Duration `mapstructure:"check_interval" default:"30s"`
 	CheckTolerance        time.Duration `mapstructure:"check_tolerance" default:"0"`
+	UdpEndpointPoolSize   int           `mapstructure:"udp_endpoint_pool_size" default:"4096"`
 	LanInterface          []string      `mapstructure:"lan_interface"`
 	WanInterface          []string      `mapstructure:"wan_interface"`
 	AllowInsecure         bool          `mapstructure:"allow_insecure" default:"false"`
