@@ -117,6 +117,25 @@ func ResolveFile(u *url.URL, configDir string) (b []byte, err error) {
 	if err = common.EnsureFileInSubDir(path, configDir); err != nil {
 		return nil, err
 	}
+	return readSubscriptionFile(path)
+}
+
+func persistSubscriptionPath(configDir string, tag string) (string, error) {
+	if tag == "" {
+		return "", fmt.Errorf("subscription tag is required")
+	}
+	if strings.ContainsAny(tag, `/\`) || tag == "." || tag == ".." {
+		return "", fmt.Errorf("subscription tag %q cannot be used as a persist filename", tag)
+	}
+	persistDir := filepath.Join(configDir, "persist.d")
+	path := filepath.Join(persistDir, tag+".sub")
+	if err := common.EnsureFileInSubDir(path, persistDir); err != nil {
+		return "", err
+	}
+	return path, nil
+}
+
+func readSubscriptionFile(path string) (b []byte, err error) {
 	/// Read and resolve.
 	f, err := os.Open(path)
 	if err != nil {
@@ -172,6 +191,7 @@ func ResolveSubscription(log *logrus.Logger, client *http.Client, configDir stri
 	)
 
 	persistToFile := false
+	persistPath := ""
 
 	switch u.Scheme {
 	case "file":
@@ -183,6 +203,10 @@ func ResolveSubscription(log *logrus.Logger, client *http.Client, configDir stri
 	case "http-file", "https-file":
 		if len(tag) == 0 {
 			return "", nil, fmt.Errorf("tag is required for http-file/https-file subscription")
+		}
+		persistPath, err = persistSubscriptionPath(configDir, tag)
+		if err != nil {
+			return "", nil, err
 		}
 		persistToFile = true
 		subscription = strings.Replace(subscription, "-file", "", 1)
@@ -198,9 +222,7 @@ func ResolveSubscription(log *logrus.Logger, client *http.Client, configDir stri
 	if err != nil {
 		if persistToFile {
 			log.Warnln("failed to fetch subscription, try to read from file")
-			u.Host = "persist.d/" + tag + ".sub"
-			u.Path = ""
-			b, err = ResolveFile(u, configDir)
+			b, err = readSubscriptionFile(persistPath)
 
 			if err != nil {
 				return "", nil, err
@@ -214,9 +236,7 @@ func ResolveSubscription(log *logrus.Logger, client *http.Client, configDir stri
 	if resp.StatusCode != http.StatusOK {
 		if persistToFile {
 			log.Warnln("failed to fetch subscription, try to read from file")
-			u.Host = "persist.d/" + tag + ".sub"
-			u.Path = ""
-			b, err = ResolveFile(u, configDir)
+			b, err = readSubscriptionFile(persistPath)
 			if err != nil {
 				return "", nil, err
 			}
@@ -230,16 +250,15 @@ func ResolveSubscription(log *logrus.Logger, client *http.Client, configDir stri
 	}
 
 	if persistToFile {
-		path := filepath.Join(configDir, "persist.d")
-		if _, err := os.Stat(path); os.IsNotExist(err) {
-			err := os.MkdirAll(path, 0700)
+		persistDir := filepath.Dir(persistPath)
+		if _, err := os.Stat(persistDir); os.IsNotExist(err) {
+			err := os.MkdirAll(persistDir, 0700)
 			if err != nil {
 				return "", nil, err
 			}
 		}
 
-		path = filepath.Join(path, tag+".sub")
-		file, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0600)
+		file, err := os.OpenFile(persistPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0600)
 		if err != nil {
 			return "", nil, err
 		}

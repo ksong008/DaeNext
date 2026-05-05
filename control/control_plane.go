@@ -1029,9 +1029,9 @@ func (c *ControlPlane) Serve(readyChan chan<- bool, listener *Listener) (err err
 				var realDst netip.AddrPort
 				var routingResult *bpfRoutingResult
 				pktDst := RetrieveOriginalDest(oob)
-				routingResult, err := c.core.RetrieveRoutingResult(src, pktDst, unix.IPPROTO_UDP)
-				if err != nil {
-					c.log.Warnf("No AddrPort presented: %v", err)
+				routingResult, routeErr := c.core.RetrieveRoutingResult(src, pktDst, unix.IPPROTO_UDP)
+				if routeErr != nil {
+					c.log.Warnf("No AddrPort presented: %v", routeErr)
 					return
 				} else {
 					realDst = pktDst

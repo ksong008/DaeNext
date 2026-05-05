@@ -8,6 +8,7 @@ package control
 import (
 	"context"
 	"errors"
+	"fmt"
 	"math"
 	"net"
 	"net/netip"
@@ -299,6 +300,17 @@ func (p *AnyfromPool) Flush() error {
 	return errors.Join(errs...)
 }
 
+func udpConnFromPacketConn(pc net.PacketConn) (*net.UDPConn, error) {
+	uConn, ok := pc.(*net.UDPConn)
+	if ok {
+		return uConn, nil
+	}
+	if pc != nil {
+		_ = pc.Close()
+	}
+	return nil, fmt.Errorf("expected *net.UDPConn, got %T", pc)
+}
+
 func (p *AnyfromPool) GetOrCreate(lAddr string, ttl time.Duration) (conn *Anyfrom, isNew bool, err error) {
 	p.mu.RLock()
 	af, ok := p.pool[lAddr]
@@ -316,21 +328,23 @@ func (p *AnyfromPool) GetOrCreate(lAddr string, ttl time.Duration) (conn *Anyfro
 				return dialer.TransparentControl(c)
 			},
 			KeepAlive: 0,
-			}
-			var err error
-			var pc net.PacketConn
-			daens := p.daeNetns()
-			if daens == nil {
-				return nil, true, errors.New("dae netns is not initialized")
-			}
-			daens.With(func() error {
-				pc, err = d.ListenPacket(context.Background(), "udp", lAddr)
-				return nil
-			})
+		}
+		var pc net.PacketConn
+		daens := p.daeNetns()
+		if daens == nil {
+			return nil, true, errors.New("dae netns is not initialized")
+		}
+		if err = daens.With(func() error {
+			var listenErr error
+			pc, listenErr = d.ListenPacket(context.Background(), "udp", lAddr)
+			return listenErr
+		}); err != nil {
+			return nil, true, err
+		}
+		uConn, err := udpConnFromPacketConn(pc)
 		if err != nil {
 			return nil, true, err
 		}
-		uConn := pc.(*net.UDPConn)
 		af = &Anyfrom{
 			UDPConn:     uConn,
 			ttl:         ttl,

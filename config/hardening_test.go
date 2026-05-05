@@ -34,6 +34,27 @@ routing {
 	}
 }
 
+func TestNewReturnsErrorForInvalidFallbackResolver(t *testing.T) {
+	sections, err := config_parser.Parse(`
+global {
+	fallback_resolver: bad-resolver
+}
+
+routing {}
+`)
+	if err != nil {
+		t.Fatalf("Parse() returned error: %v", err)
+	}
+
+	conf, err := New(sections)
+	if err == nil {
+		t.Fatalf("expected New() to reject invalid fallback_resolver, got config: %#v", conf)
+	}
+	if !strings.Contains(err.Error(), "invalid global.fallback_resolver") {
+		t.Fatalf("expected fallback_resolver error, got: %v", err)
+	}
+}
+
 func TestSectionParserRejectsUnsupportedPointerTarget(t *testing.T) {
 	var unsupported int
 	err := SectionParser(reflect.ValueOf(&unsupported), &config_parser.Section{Name: "test"})
