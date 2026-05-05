@@ -6,8 +6,12 @@
 package cmd
 
 import (
+	"archive/tar"
 	"bytes"
+	"compress/gzip"
+	"errors"
 	"fmt"
+	"io"
 	"io/ioutil"
 	"os"
 	"os/exec"
@@ -15,7 +19,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/mholt/archiver/v3"
 	"github.com/shirou/gopsutil/v4/net"
 	"github.com/spf13/cobra"
 	"github.com/vishvananda/netlink"
@@ -47,12 +50,66 @@ func dumpNetworkInfo() {
 	dumpIPTables(tempDir)
 
 	tarFile := fmt.Sprintf("dae-sysdump.%d.tar.gz", time.Now().Unix())
-	if err := archiver.Archive([]string{tempDir}, tarFile); err != nil {
+	if err := createSysdumpArchive(tempDir, tarFile); err != nil {
 		fmt.Printf("Failed to create tar archive: %v\n", err)
 		return
 	}
 
 	fmt.Printf("System network information collected and saved to %s\n", tarFile)
+}
+
+func createSysdumpArchive(sourceDir, targetFile string) (err error) {
+	out, err := os.Create(targetFile)
+	if err != nil {
+		return err
+	}
+	defer func() {
+		err = errors.Join(err, out.Close())
+	}()
+
+	gzipWriter := gzip.NewWriter(out)
+	defer func() {
+		err = errors.Join(err, gzipWriter.Close())
+	}()
+
+	tarWriter := tar.NewWriter(gzipWriter)
+	defer func() {
+		err = errors.Join(err, tarWriter.Close())
+	}()
+
+	baseName := filepath.Base(sourceDir)
+	return filepath.Walk(sourceDir, func(path string, info os.FileInfo, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+		if path == sourceDir {
+			return nil
+		}
+		rel, err := filepath.Rel(sourceDir, path)
+		if err != nil {
+			return err
+		}
+		if rel == "." || filepath.IsAbs(rel) || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+			return fmt.Errorf("unsafe sysdump archive path: %s", path)
+		}
+		header, err := tar.FileInfoHeader(info, "")
+		if err != nil {
+			return err
+		}
+		header.Name = filepath.ToSlash(filepath.Join(baseName, rel))
+		if err := tarWriter.WriteHeader(header); err != nil {
+			return err
+		}
+		if !info.Mode().IsRegular() {
+			return nil
+		}
+		in, err := os.Open(path)
+		if err != nil {
+			return err
+		}
+		_, copyErr := io.Copy(tarWriter, in)
+		return errors.Join(copyErr, in.Close())
+	})
 }
 
 // Translate scope enum into semantic words

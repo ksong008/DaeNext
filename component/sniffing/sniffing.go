@@ -17,6 +17,7 @@ var (
 	ErrNotApplicable = fmt.Errorf("%w: not applicable", Error)
 	ErrNeedMore      = fmt.Errorf("%w: need more", Error)
 	ErrNotFound      = fmt.Errorf("%w: not found", Error)
+	ErrDataTooLarge  = fmt.Errorf("%w: packet sniffing data too large", Error)
 )
 
 func IsSniffingError(err error) bool {

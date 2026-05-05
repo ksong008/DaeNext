@@ -6,6 +6,7 @@
 package sniffing
 
 import (
+	"errors"
 	"io"
 	"sync"
 	"testing"
@@ -44,6 +45,22 @@ func TestCloseReturnsBufferEvenWhenUnread(t *testing.T) {
 	}
 	if sniffer.data != nil {
 		t.Fatal("expected Close() to clear retained packet slices")
+	}
+}
+
+func TestPacketSnifferAppendDataCapsBufferedBytes(t *testing.T) {
+	sniffer := NewPacketSniffer(nil, time.Second)
+	sniffer.AppendData(make([]byte, PacketSnifferMaxBufferedBytes+1))
+
+	_, err := sniffer.SniffUdp()
+	if !errors.Is(err, ErrDataTooLarge) {
+		t.Fatalf("SniffUdp() error = %v, want ErrDataTooLarge", err)
+	}
+	if sniffer.NeedMore() {
+		t.Fatal("NeedMore() = true after packet sniffing cap was exceeded")
+	}
+	if sniffer.buf.Len() != 0 {
+		t.Fatalf("buffer length = %d, want 0 after rejecting oversized append", sniffer.buf.Len())
 	}
 }
 

@@ -2,6 +2,7 @@ package control
 
 import (
 	"context"
+	"errors"
 	"net/netip"
 	"testing"
 
@@ -92,5 +93,19 @@ func TestRuntimeDepsWithDefaultsPreservesProvidedInstances(t *testing.T) {
 	}
 	if deps.AnyfromPool != anyfromPool {
 		t.Fatal("expected provided anyfrom pool to be preserved")
+	}
+}
+
+func TestControlPlaneCloseReturnsCleanupErrors(t *testing.T) {
+	expected := errors.New("cleanup failed")
+	plane := &ControlPlane{
+		cancel: func() {},
+		deferFuncs: []func() error{
+			func() error { return expected },
+		},
+	}
+
+	if err := plane.Close(); !errors.Is(err, expected) {
+		t.Fatalf("Close() error = %v, want cleanup error", err)
 	}
 }
