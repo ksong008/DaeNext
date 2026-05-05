@@ -78,6 +78,9 @@ global {
     # Group will switch node only when new_latency <= old_latency - tolerance.
     check_tolerance: 50ms
 
+    # Maximum cached UDP endpoints. Increase it for heavy QUIC, gaming, or P2P workloads.
+    udp_endpoint_pool_size: 4096
+
 
     ##### Connecting options.
 
