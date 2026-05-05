@@ -7,6 +7,7 @@ package cmd
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"math/rand/v2"
 	"net/http"
@@ -214,7 +215,11 @@ func startPprofServer(port uint16) *http.Server {
 		Addr:    fmt.Sprintf("localhost:%d", port),
 		Handler: nil,
 	}
-	go server.ListenAndServe()
+	go func() {
+		if err := server.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+			logrus.WithError(err).Warnln("pprof server stopped")
+		}
+	}()
 	return server
 }
 

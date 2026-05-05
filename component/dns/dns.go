@@ -24,6 +24,8 @@ import (
 
 var ErrBadUpstreamFormat = fmt.Errorf("bad upstream format")
 
+const dnsInitUpstreamConcurrency = 16
+
 type Dns struct {
 	log         *logrus.Logger
 	upstream    []*UpstreamResolver
@@ -82,6 +84,9 @@ func New(dns *config.Dns, opt *NewOption) (s *Dns, err error) {
 			upstream: nil,
 			init:     false,
 		}
+		if _, exists := upstreamName2Id[tag]; exists {
+			return nil, fmt.Errorf("%w: duplicated upstream tag %q", ErrBadUpstreamFormat, tag)
+		}
 		upstreamName2Id[tag] = uint8(len(s.upstream))
 		s.upstream = append(s.upstream, r)
 	}
@@ -136,17 +141,31 @@ func (s *Dns) CheckUpstreamsFormat() error {
 }
 
 func (s *Dns) InitUpstreams() {
-	var wg sync.WaitGroup
-	for _, upstream := range s.upstream {
-		wg.Add(1)
-		go func(upstream *UpstreamResolver) {
-			_, err := upstream.GetUpstream()
-			if err != nil {
-				s.log.WithError(err).Debugln("Dns.GetUpstream")
-			}
-			wg.Done()
-		}(upstream)
+	workerCount := len(s.upstream)
+	if workerCount == 0 {
+		return
 	}
+	if workerCount > dnsInitUpstreamConcurrency {
+		workerCount = dnsInitUpstreamConcurrency
+	}
+	jobs := make(chan *UpstreamResolver)
+	var wg sync.WaitGroup
+	for i := 0; i < workerCount; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for upstream := range jobs {
+				_, err := upstream.GetUpstream()
+				if err != nil {
+					s.log.WithError(err).Debugln("Dns.GetUpstream")
+				}
+			}
+		}()
+	}
+	for _, upstream := range s.upstream {
+		jobs <- upstream
+	}
+	close(jobs)
 	wg.Wait()
 }
 

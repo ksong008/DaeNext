@@ -29,7 +29,6 @@ import (
 	"github.com/daeuniverse/dae/pkg/logger"
 	"github.com/daeuniverse/outbound/netproxy"
 	"github.com/daeuniverse/outbound/protocol/direct"
-	"github.com/mohae/deepcopy"
 	"github.com/sirupsen/logrus"
 )
 
@@ -42,8 +41,18 @@ var defaultCheckNetworkLinks = []string{
 }
 
 var snapshotRuntimeStats = control.SnapshotRuntimeStats
+var postStartupGC = runtime.GC
+var currentHeapAllocBytes = func() uint64 {
+	var memStats runtime.MemStats
+	runtime.ReadMemStats(&memStats)
+	return memStats.HeapAlloc
+}
 
-const subscriptionResolveConcurrency = 6
+const (
+	subscriptionResolveConcurrency = 6
+	postStartupGCMinInterval       = 5 * time.Second
+	postStartupGCHeapGrowthBytes   = 64 << 20
+)
 
 type Options struct {
 	SubscriptionConfigDir string
@@ -79,6 +88,12 @@ type reloadMessage struct {
 	Config           *config.Config
 	Callback         chan<- error
 	AbortConnections bool
+	ServeResult      *serveResult
+}
+
+type serveResult struct {
+	listener *control.Listener
+	err      error
 }
 
 type Engine struct {
@@ -90,17 +105,19 @@ type Engine struct {
 	reloadCh chan *reloadMessage
 	exitCh   chan struct{}
 
-	subscriptionConfigDir   string
-	checkNetworkLinks       []string
-	onReady                 func()
-	httpTransport           *http.Transport
-	netns                   *control.DaeNetns
-	udpEndpointPool         *control.UdpEndpointPool
-	udpTaskPool             *control.UdpTaskPool
-	anyfromPool             *control.AnyfromPool
-	fallbackDNS             netip.AddrPort
-	bootstrapDirect         netproxy.Dialer
-	bootstrapDirectFullcone netproxy.Dialer
+	subscriptionConfigDir    string
+	checkNetworkLinks        []string
+	onReady                  func()
+	httpTransport            *http.Transport
+	netns                    *control.DaeNetns
+	udpEndpointPool          *control.UdpEndpointPool
+	udpTaskPool              *control.UdpTaskPool
+	anyfromPool              *control.AnyfromPool
+	fallbackDNS              netip.AddrPort
+	bootstrapDirect          netproxy.Dialer
+	bootstrapDirectFullcone  netproxy.Dialer
+	lastPostStartupGC        time.Time
+	lastPostStartupHeapAlloc uint64
 }
 
 func New(opts Options) *Engine {
@@ -179,13 +196,23 @@ func (e *Engine) Run(log *logrus.Logger, conf *config.Config, externGeoDataDirs 
 		return err
 	}
 	e.setControlPlane(current)
+	e.maybePostStartupGC(log, true)
 
-	var listener *control.Listener
 	listenReadyStartedAt := time.Now()
-	go func() {
+	sendServeResult := func(result serveResult) {
+		select {
+		case e.reloadCh <- &reloadMessage{ServeResult: &result}:
+		case <-runDone:
+		}
+	}
+	startListenAndServe := func(plane *control.ControlPlane, port uint16, log *logrus.Logger) {
 		readyChan := make(chan bool, 1)
 		go func() {
-			<-readyChan
+			ready := <-readyChan
+			if !ready {
+				logStartupPhase(log, "listen.ready", listenReadyStartedAt, errors.New("listener did not become ready"))
+				return
+			}
 			logStartupPhase(log, "listen.ready", listenReadyStartedAt, nil)
 			logStartupPhase(log, "startup.total", startupStartedAt, nil)
 			log.Infoln("Ready")
@@ -193,48 +220,95 @@ func (e *Engine) Run(log *logrus.Logger, conf *config.Config, externGeoDataDirs 
 				e.onReady()
 			}
 		}()
-		e.netns.With(func() error {
-			if listener, err = current.ListenAndServe(readyChan, conf.Global.TproxyPort); err != nil {
-				log.Errorln("ListenAndServe:", err)
+		go func() {
+			var listener *control.Listener
+			serveErr := e.netns.With(func() error {
+				var err error
+				listener, err = plane.ListenAndServe(readyChan, port)
+				return err
+			})
+			if serveErr != nil {
+				log.Errorln("ListenAndServe:", serveErr)
+				select {
+				case readyChan <- false:
+				default:
+				}
 			}
-			return err
-		})
-		select {
-		case e.reloadCh <- nil:
-		case <-runDone:
-		}
-	}()
+			sendServeResult(serveResult{listener: listener, err: serveErr})
+		}()
+	}
+	startServe := func(plane *control.ControlPlane, listener *control.Listener, log *logrus.Logger) (bool, <-chan error) {
+		readyChan := make(chan bool, 1)
+		serveErrCh := make(chan error, 1)
+		go func() {
+			serveErr := plane.Serve(readyChan, listener)
+			if serveErr != nil {
+				log.Errorln("Serve:", serveErr)
+			}
+			serveErrCh <- serveErr
+			sendServeResult(serveResult{listener: listener, err: serveErr})
+		}()
+		return <-readyChan, serveErrCh
+	}
+	startListenAndServe(current, conf.Global.TproxyPort, log)
 
 	reloading := false
 	var reloadErr error
 	var callback chan<- error
+	var runErr error
 
 loop:
 	for msg := range e.reloadCh {
-		switch msg {
-		case nil:
+		switch {
+		case msg == nil:
 			if reloading {
-				if listener == nil {
+				reloadErr = errors.Join(reloadErr, errors.New("runtime stopped during reload"))
+				if callback != nil {
+					callback <- reloadErr
+				}
+			}
+			break loop
+		case msg.ServeResult != nil:
+			result := msg.ServeResult
+			if reloading {
+				if result.err != nil {
+					reloadErr = errors.Join(reloadErr, fmt.Errorf("previous control plane serve: %w", result.err))
+				}
+				if result.listener == nil {
+					if reloadErr == nil {
+						reloadErr = errors.New("listener unavailable after reload")
+					}
+					if callback != nil {
+						callback <- reloadErr
+					}
+					runErr = reloadErr
 					break loop
 				}
 				reloading = false
 				log.Warnln("[Reload] Serve")
-				readyChan := make(chan bool, 1)
-				go func() {
-					if err := current.Serve(readyChan, listener); err != nil {
-						log.Errorln("ListenAndServe:", err)
+				ready, serveErrCh := startServe(current, result.listener, log)
+				if !ready {
+					serveErr := <-serveErrCh
+					if serveErr == nil {
+						serveErr = errors.New("control plane serve failed before ready")
 					}
-					select {
-					case e.reloadCh <- nil:
-					case <-runDone:
+					reloadErr = errors.Join(reloadErr, fmt.Errorf("reload serve: %w", serveErr))
+					if callback != nil {
+						callback <- reloadErr
 					}
-				}()
-				<-readyChan
+					runErr = reloadErr
+					break loop
+				}
 				log.Warnln("[Reload] Finished")
-				callback <- reloadErr
-			} else {
-				break loop
+				if callback != nil {
+					callback <- reloadErr
+				}
+				continue
 			}
+			if result.err != nil {
+				runErr = fmt.Errorf("control plane serve: %w", result.err)
+			}
+			break loop
 		default:
 			log.Warnln("[Reload] Received reload signal; prepare to reload")
 			newConf := msg.Config
@@ -298,17 +372,22 @@ loop:
 			if msg.AbortConnections {
 				old.AbortConnections()
 			}
-			old.Close()
+			if closeErr := old.Close(); closeErr != nil {
+				log.WithError(closeErr).Warnln("[Reload] Failed to close old control plane")
+				reloadErr = errors.Join(reloadErr, fmt.Errorf("close old control plane: %w", closeErr))
+			}
 			control.FlushReloadScopedResources(e.udpEndpointPool, e.anyfromPool, e.udpTaskPool)
+			old = nil
+			e.maybePostStartupGC(log, false)
 		}
 	}
 
 	if current != nil {
 		if err := current.Close(); err != nil {
-			return fmt.Errorf("close control plane: %w", err)
+			runErr = errors.Join(runErr, fmt.Errorf("close control plane: %w", err))
 		}
 	}
-	return nil
+	return runErr
 }
 
 func (e *Engine) Reload(conf *config.Config) error {
@@ -481,14 +560,14 @@ func routeAwareDialTarget(host string, rawPort string) (domain string, dest neti
 	return host, netip.AddrPortFrom(netip.IPv4Unspecified(), uint16(port)), nil
 }
 
-func (e *Engine) waitForNetwork(log *logrus.Logger, conf *config.Config) {
+func (e *Engine) waitForNetwork(log *logrus.Logger, global *config.Global) {
 	epo := 5 * time.Second
 	startedAt := time.Now()
 	bootstrapDirect := e.bootstrapDirect
 	client := http.Client{
 		Transport: &http.Transport{
 			DialContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
-				conn, err := bootstrapDirect.DialContext(ctx, common.MagicNetwork("tcp", conf.Global.SoMarkFromDae, conf.Global.Mptcp), addr)
+				conn, err := bootstrapDirect.DialContext(ctx, common.MagicNetwork("tcp", global.SoMarkFromDae, global.Mptcp), addr)
 				if err != nil {
 					return nil, err
 				}
@@ -517,6 +596,16 @@ func (e *Engine) waitForNetwork(log *logrus.Logger, conf *config.Config) {
 	log.WithField("attempts", attempts).Infoln("[Startup] network gate cleared")
 	logStartupPhase(log, "wait-for-network", startedAt, nil)
 	log.Infoln("Network online.")
+}
+
+func prepareRuntimeConfigView(conf *config.Config) (global config.Global, routing config.Routing, dns config.Dns, err error) {
+	global = conf.Global
+	global.LanInterface = append([]string(nil), conf.Global.LanInterface...)
+	global.WanInterface = append([]string(nil), conf.Global.WanInterface...)
+	if err = preprocessWanInterfaceAuto(&global); err != nil {
+		return config.Global{}, config.Routing{}, config.Dns{}, err
+	}
+	return global, conf.Routing, conf.Dns, nil
 }
 
 func (e *Engine) checkNetworkLinksOnce(client *http.Client, log *logrus.Logger) (success bool, timedOut bool) {
@@ -582,15 +671,18 @@ func (e *Engine) newControlPlane(log *logrus.Logger, bpf interface{}, dnsCache m
 		log.Debugln(string(bConf))
 	}
 
-	conf = deepcopy.Copy(conf).(*config.Config)
-
-	fallbackDNS, err := netip.ParseAddrPort(conf.Global.FallbackResolver)
+	globalConf, routingConf, dnsConf, err := prepareRuntimeConfigView(conf)
 	if err != nil {
-		return nil, fmt.Errorf("invalid global.fallback_resolver %q: %w", conf.Global.FallbackResolver, err)
+		return nil, err
+	}
+
+	fallbackDNS, err := netip.ParseAddrPort(globalConf.FallbackResolver)
+	if err != nil {
+		return nil, fmt.Errorf("invalid global.fallback_resolver %q: %w", globalConf.FallbackResolver, err)
 	}
 	e.fallbackDNS = fallbackDNS
-	e.bootstrapDirect = direct.NewDirectDialerLaddr(netip.Addr{}, direct.Option{FullCone: false, FallbackDNS: conf.Global.FallbackResolver})
-	e.bootstrapDirectFullcone = direct.NewDirectDialerLaddr(netip.Addr{}, direct.Option{FullCone: true, FallbackDNS: conf.Global.FallbackResolver})
+	e.bootstrapDirect = direct.NewDirectDialerLaddr(netip.Addr{}, direct.Option{FullCone: false, FallbackDNS: globalConf.FallbackResolver})
+	e.bootstrapDirectFullcone = direct.NewDirectDialerLaddr(netip.Addr{}, direct.Option{FullCone: true, FallbackDNS: globalConf.FallbackResolver})
 	tagToNodeList := map[string][]string{}
 	if len(conf.Node) > 0 {
 		for _, node := range conf.Node {
@@ -598,9 +690,9 @@ func (e *Engine) newControlPlane(log *logrus.Logger, bpf interface{}, dnsCache m
 		}
 	}
 
-	if !conf.Global.DisableWaitingNetwork && len(conf.Global.WanInterface) > 0 {
+	if !globalConf.DisableWaitingNetwork && len(globalConf.WanInterface) > 0 {
 		e.onceWaiting.Do(func() {
-			e.waitForNetwork(log, conf)
+			e.waitForNetwork(log, &globalConf)
 		})
 	}
 
@@ -700,11 +792,8 @@ func (e *Engine) newControlPlane(log *logrus.Logger, bpf interface{}, dnsCache m
 			log.Warnln("No node found.")
 		}
 	}
-	if len(conf.Global.LanInterface) == 0 && len(conf.Global.WanInterface) == 0 {
+	if len(globalConf.LanInterface) == 0 && len(globalConf.WanInterface) == 0 {
 		log.Warnln("No interface to bind.")
-	}
-	if err = preprocessWanInterfaceAuto(conf); err != nil {
-		return nil, err
 	}
 
 	controlPlaneStartedAt := time.Now()
@@ -723,19 +812,53 @@ func (e *Engine) newControlPlane(log *logrus.Logger, bpf interface{}, dnsCache m
 		},
 		tagToNodeList,
 		conf.Group,
-		&conf.Routing,
-		&conf.Global,
-		&conf.Dns,
+		&routingConf,
+		&globalConf,
+		&dnsConf,
 		externGeoDataDirs,
 	)
 	logStartupPhase(log, "control-plane.core", controlPlaneStartedAt, err)
 	if err != nil {
 		return nil, err
 	}
-	gcStartedAt := time.Now()
-	runtime.GC()
-	logStartupPhase(log, "post-startup.gc", gcStartedAt, nil)
 	return c, nil
+}
+
+func (e *Engine) maybePostStartupGC(log *logrus.Logger, force bool) {
+	now := time.Now()
+	heapBefore := currentHeapAllocBytes()
+
+	e.mu.Lock()
+	lastGCAt := e.lastPostStartupGC
+	lastHeapAfter := e.lastPostStartupHeapAlloc
+	if !force {
+		if !lastGCAt.IsZero() && now.Sub(lastGCAt) < postStartupGCMinInterval {
+			e.mu.Unlock()
+			return
+		}
+		if lastHeapAfter > 0 &&
+			heapBefore < lastHeapAfter+postStartupGCHeapGrowthBytes &&
+			heapBefore*2 < lastHeapAfter*3 {
+			e.mu.Unlock()
+			return
+		}
+	}
+	e.lastPostStartupGC = now
+	e.mu.Unlock()
+
+	gcStartedAt := time.Now()
+	postStartupGC()
+	heapAfter := currentHeapAllocBytes()
+
+	e.mu.Lock()
+	e.lastPostStartupHeapAlloc = heapAfter
+	e.mu.Unlock()
+
+	log.WithField("heapBefore", heapBefore).
+		WithField("heapAfter", heapAfter).
+		WithField("force", force).
+		Infoln("[Startup] post-startup gc decision")
+	logStartupPhase(log, "post-startup.gc", gcStartedAt, nil)
 }
 
 func (e *Engine) setControlPlane(c *control.ControlPlane) {

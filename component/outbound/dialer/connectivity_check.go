@@ -32,6 +32,9 @@ import (
 
 const Timeout = 10 * time.Second
 const httpCheckDebugBodyLimit = 4 * 1024
+const aliveCheckConcurrencyLimit = 64
+
+var aliveCheckConcurrency = make(chan struct{}, aliveCheckConcurrencyLimit)
 
 type NetworkType struct {
 	L4Proto   consts.L4ProtoStr
@@ -519,6 +522,12 @@ func (d *Dialer) aliveBackground() {
 			wg.Add(1)
 			go func(opt *CheckOption) {
 				defer wg.Done()
+				select {
+				case aliveCheckConcurrency <- struct{}{}:
+					defer func() { <-aliveCheckConcurrency }()
+				case <-d.ctx.Done():
+					return
+				}
 				_, _ = d.Check(opt)
 			}(opt)
 		}

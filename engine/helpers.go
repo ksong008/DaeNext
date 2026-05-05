@@ -112,9 +112,9 @@ func ExportFlatDesc() []*FlatDesc {
 	return exporter.exportStruct("", "", t, config.SectionSummaryDesc, false)
 }
 
-func preprocessWanInterfaceAuto(params *config.Config) error {
-	ifs := make([]string, 0, len(params.Global.WanInterface)+2)
-	for _, ifname := range params.Global.WanInterface {
+func preprocessWanInterfaceAuto(global *config.Global) error {
+	ifs := make([]string, 0, len(global.WanInterface)+2)
+	for _, ifname := range global.WanInterface {
 		if ifname == "auto" {
 			defaultIfs, err := common.GetDefaultIfnames()
 			if err != nil {
@@ -125,7 +125,7 @@ func preprocessWanInterfaceAuto(params *config.Config) error {
 			ifs = append(ifs, ifname)
 		}
 	}
-	params.Global.WanInterface = common.Deduplicate(ifs)
+	global.WanInterface = common.Deduplicate(ifs)
 	return nil
 }
 
