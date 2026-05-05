@@ -27,6 +27,7 @@ concurrency:
 
 jobs:
   publish-manual:
+    secrets: inherit
     uses: ./.github/workflows/release.yml
     with:
       tag: ${{ inputs.tag }}
