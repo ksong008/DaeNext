@@ -250,6 +250,11 @@ func handleEvents(ctx context.Context, objs *bpfObjects, outputFile string, kfre
 	if err != nil {
 		return
 	}
+	defer func() {
+		if closeErr := writer.Close(); closeErr != nil && err == nil {
+			err = closeErr
+		}
+	}()
 
 	eventsReader, err := ringbuf.NewReader(objs.Events)
 	if err != nil {
