@@ -159,8 +159,27 @@ jobs:
 
       - name: Install Dependencies
         run: |
-          sudo apt-get update -y
-          sudo apt-get install -y clang-15 llvm-15
+          set -euo pipefail
+
+          # GitHub runners may ship flaky third-party apt sources like
+          # google-chrome that are unrelated to this build. Keep the install
+          # step pinned to the Ubuntu archives we actually need.
+          sudo rm -f /etc/apt/sources.list.d/google-chrome.list /etc/apt/sources.list.d/google-chrome.sources
+
+          for attempt in 1 2 3; do
+            if sudo apt-get update \
+              -o Acquire::Retries=3 \
+              -o Acquire::http::Timeout=30 \
+              -o Acquire::https::Timeout=30; then
+              break
+            fi
+            if [ "$attempt" -eq 3 ]; then
+              exit 1
+            fi
+            sleep 5
+          done
+
+          sudo apt-get install -y --no-install-recommends clang-15 llvm-15
 
       - name: Get project dependencies
         run: |
