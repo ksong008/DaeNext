@@ -12,7 +12,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/daeuniverse/dae/config"
 	"github.com/daeuniverse/dae/control"
+	"github.com/daeuniverse/dae/pkg/config_parser"
 	"github.com/sirupsen/logrus"
 )
 
@@ -64,6 +66,112 @@ func TestNewControlPlaneRejectsInvalidFallbackResolver(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "invalid global.fallback_resolver") {
 		t.Fatalf("expected fallback_resolver error, got: %v", err)
+	}
+}
+
+func TestMaybePostStartupGCCooldown(t *testing.T) {
+	e := &Engine{}
+	log := logrus.New()
+	calls := 0
+	heapReads := 0
+
+	original := postStartupGC
+	originalHeap := currentHeapAllocBytes
+	postStartupGC = func() { calls++ }
+	currentHeapAllocBytes = func() uint64 {
+		heapReads++
+		switch heapReads {
+		case 1:
+			return 256 << 20
+		case 2:
+			return 96 << 20
+		case 3:
+			return 120 << 20
+		case 4:
+			return 200 << 20
+		case 5:
+			return 110 << 20
+		default:
+			return 110 << 20
+		}
+	}
+	t.Cleanup(func() {
+		postStartupGC = original
+		currentHeapAllocBytes = originalHeap
+	})
+
+	e.maybePostStartupGC(log, true)
+	first := e.lastPostStartupGC
+	if calls != 1 {
+		t.Fatalf("postStartupGC calls = %d, want 1", calls)
+	}
+	if first.IsZero() {
+		t.Fatal("expected first post-startup GC timestamp to be recorded")
+	}
+	if got := e.lastPostStartupHeapAlloc; got != 96<<20 {
+		t.Fatalf("lastPostStartupHeapAlloc = %d, want %d", got, 96<<20)
+	}
+
+	skipAt := time.Now().Add(-postStartupGCMinInterval - time.Second)
+	e.lastPostStartupGC = skipAt
+	e.maybePostStartupGC(log, false)
+	if calls != 1 {
+		t.Fatalf("postStartupGC calls below threshold = %d, want 1", calls)
+	}
+	if !e.lastPostStartupGC.Equal(skipAt) {
+		t.Fatal("expected GC timestamp to stay unchanged below threshold")
+	}
+
+	e.lastPostStartupGC = time.Now().Add(-postStartupGCMinInterval - time.Second)
+	e.maybePostStartupGC(log, false)
+	if calls != 2 {
+		t.Fatalf("postStartupGC calls above threshold = %d, want 2", calls)
+	}
+}
+
+func TestPrepareRuntimeConfigViewDoesNotMutateSource(t *testing.T) {
+	conf := &config.Config{
+		Global: config.Global{
+			LanInterface:     []string{"lan0"},
+			WanInterface:     []string{"wan0"},
+			FallbackResolver: "8.8.8.8:53",
+		},
+		Routing: config.Routing{
+			Rules: []*config_parser.RoutingRule{{}},
+		},
+		Dns: config.Dns{
+			Routing: config.DnsRouting{
+				Request:  config.DnsRequestRouting{Rules: []*config_parser.RoutingRule{{}}},
+				Response: config.DnsResponseRouting{Rules: []*config_parser.RoutingRule{{}}},
+			},
+		},
+	}
+
+	globalConf, routingConf, dnsConf, err := prepareRuntimeConfigView(conf)
+	if err != nil {
+		t.Fatalf("prepareRuntimeConfigView() error = %v", err)
+	}
+
+	globalConf.LanInterface[0] = "mutated-lan"
+	globalConf.WanInterface[0] = "mutated-wan"
+	routingConf.Rules = nil
+	dnsConf.Routing.Request.Rules = nil
+	dnsConf.Routing.Response.Rules = nil
+
+	if got := conf.Global.LanInterface[0]; got != "lan0" {
+		t.Fatalf("source LanInterface = %q, want lan0", got)
+	}
+	if got := conf.Global.WanInterface[0]; got != "wan0" {
+		t.Fatalf("source WanInterface = %q, want wan0", got)
+	}
+	if conf.Routing.Rules == nil {
+		t.Fatal("source routing rules unexpectedly mutated")
+	}
+	if conf.Dns.Routing.Request.Rules == nil {
+		t.Fatal("source dns request rules unexpectedly mutated")
+	}
+	if conf.Dns.Routing.Response.Rules == nil {
+		t.Fatal("source dns response rules unexpectedly mutated")
 	}
 }
 

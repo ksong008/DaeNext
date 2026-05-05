@@ -86,6 +86,7 @@ func (s *SysctlManager) startWatch() {
 					raw, err := os.ReadFile(event.Name)
 					if err != nil {
 						s.log.Errorf("failed to read sysctl file %s: %v", event.Name, err)
+						continue
 					}
 					value := strings.TrimSpace(string(raw))
 					if value != expected {

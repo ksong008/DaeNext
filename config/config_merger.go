@@ -66,6 +66,11 @@ func (m *Merger) readEntry(entry string) (err error) {
 	if err != nil {
 		return fmt.Errorf("failed to read config file %v: %w", entry, err)
 	}
+	defer func() {
+		if closeErr := f.Close(); closeErr != nil && err == nil {
+			err = fmt.Errorf("failed to close config file %v: %w", entry, closeErr)
+		}
+	}()
 	// Check file access.
 	fi, err := f.Stat()
 	if err != nil {

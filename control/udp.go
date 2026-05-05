@@ -140,7 +140,10 @@ func (c *ControlPlane) handlePkt(ctx context.Context, lConn *net.UDPConn, data [
 			defer DefaultPacketSnifferSessionMgr.Remove(key, sniffer)
 			// Re-handlePkt after self func.
 			snifferData := sniffer.Data()
-			toRehandle := snifferData[1 : len(snifferData)-1] // Skip the first empty and the last (self).
+			var toRehandle [][]byte
+			if len(snifferData) > 2 {
+				toRehandle = snifferData[1 : len(snifferData)-1] // Skip the first empty and the last (self).
+			}
 			sniffer.Mu.Unlock()
 			if len(toRehandle) > 0 {
 				defer func() {

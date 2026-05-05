@@ -275,11 +275,13 @@ begin:
 		if err != nil {
 			return nil, true, err
 		}
-		if _, ok = udpConn.(netproxy.PacketConn); !ok {
+		packetConn, ok := udpConn.(netproxy.PacketConn)
+		if !ok {
+			_ = udpConn.Close()
 			return nil, true, fmt.Errorf("protocol does not support udp")
 		}
 		ue := &UdpEndpoint{
-			conn:          udpConn.(netproxy.PacketConn),
+			conn:          packetConn,
 			handler:       createOption.Handler,
 			NatTimeout:    createOption.NatTimeout,
 			lastActive:    p.now(),

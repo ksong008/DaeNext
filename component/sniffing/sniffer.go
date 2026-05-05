@@ -18,6 +18,11 @@ import (
 	"github.com/daeuniverse/outbound/pool/bytes"
 )
 
+const (
+	PacketSnifferMaxBufferedBytes = 64 * 1024
+	PacketSnifferMaxChunks        = 64
+)
+
 type Sniffer struct {
 	// Stream
 	stream    bool
@@ -163,11 +168,6 @@ func (s *Sniffer) SniffUdp() (d string, err error) {
 			s.sniffed = d
 		}
 	}()
-	defer func() {
-		if err == nil {
-			s.sniffed = d
-		}
-	}()
 	s.readMu.Lock()
 	if s.closed {
 		s.readMu.Unlock()
@@ -182,6 +182,9 @@ func (s *Sniffer) SniffUdp() (d string, err error) {
 		close(s.dataReady)
 	}
 
+	if s.dataError != nil {
+		return "", s.dataError
+	}
 	if s.buf.Len() == 0 {
 		return "", ErrNotApplicable
 	}
@@ -193,6 +196,10 @@ func (s *Sniffer) SniffUdp() (d string, err error) {
 
 func (s *Sniffer) AppendData(data []byte) {
 	s.needMore = false
+	if !s.stream && (s.buf.Len()+len(data) > PacketSnifferMaxBufferedBytes || len(s.data) >= PacketSnifferMaxChunks) {
+		s.dataError = ErrDataTooLarge
+		return
+	}
 	ori := s.buf.Len()
 	s.buf.Write(data)
 	s.data = append(s.data, s.buf.Bytes()[ori:])
