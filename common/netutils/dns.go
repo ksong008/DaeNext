@@ -231,7 +231,11 @@ func resolve(ctx context.Context, d netproxy.Dialer, dns netip.AddrPort, host st
 		return nil, err
 	}
 	defer c.Close()
-	_, err = c.Write(b)
+	if magicNetwork.Network == "udp" {
+		_, err = WriteUDPConn(c, dns.String(), b)
+	} else {
+		_, err = c.Write(b)
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -246,7 +250,7 @@ func resolve(ctx context.Context, d netproxy.Dialer, dns netip.AddrPort, host st
 				default:
 					time.Sleep(3 * time.Second)
 				}
-				_, err := c.Write(b)
+				_, err := WriteUDPConn(c, dns.String(), b)
 				if err != nil {
 					ch <- err
 					return
@@ -275,7 +279,7 @@ func resolve(ctx context.Context, d netproxy.Dialer, dns netip.AddrPort, host st
 				return
 			}
 		} else {
-			n, err := c.Read(buf)
+			n, err := ReadUDPConn(c, buf)
 			if err != nil {
 				ch <- err
 				return
