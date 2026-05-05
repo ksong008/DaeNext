@@ -598,6 +598,15 @@ func (e *Engine) waitForNetwork(log *logrus.Logger, global *config.Global) {
 	log.Infoln("Network online.")
 }
 
+func (e *Engine) applyGlobalRuntimeTuning(global *config.Global) {
+	if global == nil {
+		return
+	}
+	if e.udpEndpointPool != nil {
+		e.udpEndpointPool.SetMaxEntries(global.UdpEndpointPoolSize)
+	}
+}
+
 func prepareRuntimeConfigView(conf *config.Config) (global config.Global, routing config.Routing, dns config.Dns, err error) {
 	global = conf.Global
 	global.LanInterface = append([]string(nil), conf.Global.LanInterface...)
@@ -675,6 +684,7 @@ func (e *Engine) newControlPlane(log *logrus.Logger, bpf interface{}, dnsCache m
 	if err != nil {
 		return nil, err
 	}
+	e.applyGlobalRuntimeTuning(&globalConf)
 
 	fallbackDNS, err := netip.ParseAddrPort(globalConf.FallbackResolver)
 	if err != nil {

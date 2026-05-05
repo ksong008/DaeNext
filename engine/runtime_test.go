@@ -175,6 +175,24 @@ func TestPrepareRuntimeConfigViewDoesNotMutateSource(t *testing.T) {
 	}
 }
 
+func TestApplyGlobalRuntimeTuningSetsUdpEndpointPoolSize(t *testing.T) {
+	e := New(Options{})
+	global := &config.Global{
+		UdpEndpointPoolSize: 8192,
+	}
+
+	e.applyGlobalRuntimeTuning(global)
+	if got := e.udpEndpointPool.MaxEntries(); got != 8192 {
+		t.Fatalf("UdpEndpointPool.MaxEntries() = %d, want 8192", got)
+	}
+
+	global.UdpEndpointPoolSize = 0
+	e.applyGlobalRuntimeTuning(global)
+	if got := e.udpEndpointPool.MaxEntries(); got != 4096 {
+		t.Fatalf("UdpEndpointPool.MaxEntries() after zero = %d, want 4096", got)
+	}
+}
+
 func TestRouteAwareDialTargetAvoidsSystemResolutionForDomain(t *testing.T) {
 	domain, dest, err := routeAwareDialTarget("example.com", "443")
 	if err != nil {
