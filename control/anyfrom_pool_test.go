@@ -6,10 +6,59 @@
 package control
 
 import (
+	"errors"
 	"fmt"
+	"net"
 	"testing"
 	"time"
 )
+
+type fakeStdPacketConn struct {
+	closed bool
+}
+
+func (f *fakeStdPacketConn) ReadFrom([]byte) (int, net.Addr, error) {
+	return 0, nil, errors.New("not implemented")
+}
+
+func (f *fakeStdPacketConn) WriteTo([]byte, net.Addr) (int, error) {
+	return 0, errors.New("not implemented")
+}
+
+func (f *fakeStdPacketConn) Close() error {
+	f.closed = true
+	return nil
+}
+
+func (f *fakeStdPacketConn) LocalAddr() net.Addr {
+	return nil
+}
+
+func (f *fakeStdPacketConn) SetDeadline(time.Time) error {
+	return nil
+}
+
+func (f *fakeStdPacketConn) SetReadDeadline(time.Time) error {
+	return nil
+}
+
+func (f *fakeStdPacketConn) SetWriteDeadline(time.Time) error {
+	return nil
+}
+
+func TestUDPConnFromPacketConnRejectsNonUDPConn(t *testing.T) {
+	pc := &fakeStdPacketConn{}
+	conn, err := udpConnFromPacketConn(pc)
+	if err == nil {
+		t.Fatal("expected non-UDP packet conn to be rejected")
+	}
+	if conn != nil {
+		t.Fatalf("conn = %#v, want nil", conn)
+	}
+	if !pc.closed {
+		t.Fatal("expected rejected packet conn to be closed")
+	}
+}
 
 func TestAnyfromPoolSweepExpired(t *testing.T) {
 	pool := NewAnyfromPool()

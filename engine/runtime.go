@@ -143,7 +143,9 @@ func (e *Engine) Run(log *logrus.Logger, conf *config.Config, externGeoDataDirs 
 	defer func() {
 		e.setControlPlane(nil)
 		if ns := e.netns; ns != nil {
-			ns.Close()
+			if closeErr := ns.Close(); closeErr != nil {
+				log.WithError(closeErr).Warnln("Failed to close dae netns")
+			}
 		}
 		if e.udpEndpointPool != nil {
 			_ = e.udpEndpointPool.Flush()
@@ -582,7 +584,11 @@ func (e *Engine) newControlPlane(log *logrus.Logger, bpf interface{}, dnsCache m
 
 	conf = deepcopy.Copy(conf).(*config.Config)
 
-	e.fallbackDNS = netip.MustParseAddrPort(conf.Global.FallbackResolver)
+	fallbackDNS, err := netip.ParseAddrPort(conf.Global.FallbackResolver)
+	if err != nil {
+		return nil, fmt.Errorf("invalid global.fallback_resolver %q: %w", conf.Global.FallbackResolver, err)
+	}
+	e.fallbackDNS = fallbackDNS
 	e.bootstrapDirect = direct.NewDirectDialerLaddr(netip.Addr{}, direct.Option{FullCone: false, FallbackDNS: conf.Global.FallbackResolver})
 	e.bootstrapDirectFullcone = direct.NewDirectDialerLaddr(netip.Addr{}, direct.Option{FullCone: true, FallbackDNS: conf.Global.FallbackResolver})
 	tagToNodeList := map[string][]string{}

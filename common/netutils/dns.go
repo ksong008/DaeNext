@@ -270,15 +270,21 @@ func resolve(ctx context.Context, d netproxy.Dialer, dns netip.AddrPort, host st
 				return
 			}
 			buf = buf[:n]
-		}
-		n, err := c.Read(buf)
-		if err != nil {
-			ch <- err
-			return
+			if _, err := io.ReadFull(c, buf); err != nil {
+				ch <- err
+				return
+			}
+		} else {
+			n, err := c.Read(buf)
+			if err != nil {
+				ch <- err
+				return
+			}
+			buf = buf[:n]
 		}
 		// Resolve DNS response and extract A/AAAA record.
 		var msg dnsmessage.Msg
-		if err = msg.Unpack(buf[:n]); err != nil {
+		if err = msg.Unpack(buf); err != nil {
 			ch <- err
 			return
 		}

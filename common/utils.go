@@ -15,6 +15,7 @@ import (
 	"fmt"
 	"net/netip"
 	"net/url"
+	"os"
 	"path/filepath"
 	"reflect"
 	"strconv"
@@ -346,15 +347,54 @@ func FuzzyDecode(to interface{}, val string) bool {
 }
 
 func EnsureFileInSubDir(filePath string, dir string) (err error) {
-	fileDir := filepath.Dir(filePath)
 	if len(dir) == 0 {
 		return fmt.Errorf("bad dir: %v", dir)
 	}
-	rel, err := filepath.Rel(dir, fileDir)
+	absDir, err := filepath.Abs(dir)
 	if err != nil {
 		return err
 	}
-	if strings.HasPrefix(rel, "..") {
+	absFilePath, err := filepath.Abs(filePath)
+	if err != nil {
+		return err
+	}
+
+	fileDir := filepath.Dir(absFilePath)
+	if err = ensurePathInSubDir(fileDir, absDir); err != nil {
+		return err
+	}
+
+	realDir, err := filepath.EvalSymlinks(absDir)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return err
+	}
+	realFileDir, err := filepath.EvalSymlinks(fileDir)
+	if err != nil {
+		if !os.IsNotExist(err) {
+			return err
+		}
+	} else if err = ensurePathInSubDir(realFileDir, realDir); err != nil {
+		return err
+	}
+	realFilePath, err := filepath.EvalSymlinks(absFilePath)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return err
+	}
+	return ensurePathInSubDir(realFilePath, realDir)
+}
+
+func ensurePathInSubDir(path string, dir string) error {
+	rel, err := filepath.Rel(dir, path)
+	if err != nil {
+		return err
+	}
+	if rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) || filepath.IsAbs(rel) {
 		return fmt.Errorf("file is out of scope: %v", rel)
 	}
 	return nil

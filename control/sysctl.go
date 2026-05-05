@@ -1,11 +1,12 @@
 /*
 *  SPDX-License-Identifier: AGPL-3.0-only
 *  Copyright (c) 2022-2025, daeuniverse Organization <dae@v2raya.org>
-*/
+ */
 
 package control
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"strings"
@@ -24,11 +25,21 @@ type SysctlManager struct {
 	mux          sync.Mutex
 	watcher      *fsnotify.Watcher
 	expectations map[string]string
+	done         chan struct{}
+	closeOnce    sync.Once
 }
 
 func InitSysctlManager(log *logrus.Logger) (err error) {
-	sysctl, err = NewSysctlManager(log)
-	return err
+	manager, err := NewSysctlManager(log)
+	if err != nil {
+		return err
+	}
+	old := sysctl
+	sysctl = manager
+	if old != nil {
+		return old.Close()
+	}
+	return nil
 }
 
 func NewSysctlManager(log *logrus.Logger) (*SysctlManager, error) {
@@ -42,9 +53,21 @@ func NewSysctlManager(log *logrus.Logger) (*SysctlManager, error) {
 		mux:          sync.Mutex{},
 		watcher:      watcher,
 		expectations: map[string]string{},
+		done:         make(chan struct{}),
 	}
-	go manager.startWatch()
+	go func() {
+		defer close(manager.done)
+		manager.startWatch()
+	}()
 	return manager, nil
+}
+
+func (s *SysctlManager) Close() (err error) {
+	s.closeOnce.Do(func() {
+		err = s.watcher.Close()
+		<-s.done
+	})
+	return err
 }
 
 func (s *SysctlManager) startWatch() {
@@ -89,10 +112,16 @@ func (s *SysctlManager) Keyf(format string, a ...any) SysctlKey {
 }
 
 func (k SysctlKey) Get() (value string, err error) {
+	if sysctl == nil {
+		return "", errors.New("sysctl manager is not initialized")
+	}
 	return sysctl.get(string(k))
 }
 
 func (k SysctlKey) Set(value string, watch bool) (err error) {
+	if sysctl == nil {
+		return errors.New("sysctl manager is not initialized")
+	}
 	return sysctl.set(string(k), value, watch)
 }
 
@@ -106,12 +135,28 @@ func (s *SysctlManager) get(path string) (value string, err error) {
 
 func (s *SysctlManager) set(path string, value string, watch bool) (err error) {
 	if watch {
+		if err = s.watcher.Add(path); err != nil {
+			return err
+		}
 		s.mux.Lock()
+		previous, hadPrevious := s.expectations[path]
 		s.expectations[path] = value
 		s.mux.Unlock()
-		if err = s.watcher.Add(path); err != nil {
-			return
-		}
+		defer func() {
+			if err == nil {
+				return
+			}
+			s.mux.Lock()
+			if hadPrevious {
+				s.expectations[path] = previous
+			} else {
+				delete(s.expectations, path)
+			}
+			s.mux.Unlock()
+			if !hadPrevious {
+				_ = s.watcher.Remove(path)
+			}
+		}()
 	}
 	return os.WriteFile(path, []byte(value), 0644)
 }
