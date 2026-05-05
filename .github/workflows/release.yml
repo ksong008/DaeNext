@@ -1,5 +1,5 @@
 name: Publish Release
-run-name: Publish release ${{ inputs.tag }} by @${{ github.actor }}
+run-name: Publish release ${{ inputs.tag }} from ${{ inputs.ref }} by @${{ github.actor }}
 
 on:
   workflow_call:
@@ -7,17 +7,87 @@ on:
       tag:
         type: string
         required: true
+      ref:
+        type: string
+        required: true
+      update_tag:
+        type: boolean
+        required: false
+        default: false
+      make_latest:
+        type: boolean
+        required: false
+        default: true
   workflow_dispatch:
     inputs:
       tag:
         type: string
         required: true
+      ref:
+        type: string
+        required: true
+      update_tag:
+        type: boolean
+        required: false
+        default: false
+      make_latest:
+        type: boolean
+        required: false
+        default: true
 
 permissions:
   contents: write
 
 jobs:
+  prepare-tag:
+    runs-on: ubuntu-latest
+    outputs:
+      source_sha: ${{ steps.prepare.outputs.source_sha }}
+    steps:
+      - name: Checkout source ref
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ref: ${{ inputs.ref }}
+
+      - name: Ensure release tag points at source ref
+        id: prepare
+        env:
+          TAG: ${{ inputs.tag }}
+          SOURCE_REF: ${{ inputs.ref }}
+          UPDATE_TAG: ${{ inputs.update_tag }}
+        run: |
+          set -euo pipefail
+
+          source_sha=$(git rev-parse HEAD)
+          echo "source_sha=$source_sha" >> "$GITHUB_OUTPUT"
+
+          git fetch --tags --force origin
+
+          if git rev-parse -q --verify "refs/tags/$TAG^{}" >/dev/null; then
+            tag_sha=$(git rev-parse "refs/tags/$TAG^{}")
+            if [ "$tag_sha" = "$source_sha" ]; then
+              echo "Tag $TAG already points to $source_sha"
+              exit 0
+            fi
+            if [ "$UPDATE_TAG" != "true" ]; then
+              echo "Tag $TAG points to $tag_sha but source ref $SOURCE_REF resolves to $source_sha" >&2
+              exit 1
+            fi
+            git config user.name "github-actions[bot]"
+            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+            git tag -fa "$TAG" -m "$TAG" "$source_sha"
+            git push origin "refs/tags/$TAG" --force
+            exit 0
+          fi
+
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git tag -a "$TAG" -m "$TAG" "$source_sha"
+          git push origin "refs/tags/$TAG"
+
   build:
+    needs: [prepare-tag]
     strategy:
       matrix:
         goos: [ linux ]
@@ -225,7 +295,7 @@ jobs:
           path: ./bundled/*
 
   upload-release:
-    needs: [build]
+    needs: [prepare-tag, build]
     runs-on: ubuntu-latest
     steps:
       - name: Download all artifacts
@@ -243,27 +313,6 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ inputs.tag }}
+          target_commitish: ${{ needs.prepare-tag.outputs.source_sha }}
+          make_latest: ${{ inputs.make_latest && 'true' || 'false' }}
           files: release/*/*
-
-  mark-latest:
-    needs: [upload-release]
-    runs-on: ubuntu-latest
-    steps:
-      - name: Mark release as latest full release
-        env:
-          GH_TOKEN: ${{ github.token }}
-          REPO: ${{ github.repository }}
-          TAG: ${{ inputs.tag }}
-        run: |
-          release_id=$(
-            curl -fsSL \
-              -H "Accept: application/vnd.github+json" \
-              -H "Authorization: Bearer $GH_TOKEN" \
-              "https://api.github.com/repos/$REPO/releases/tags/$TAG" | jq -r '.id'
-          )
-
-          curl -fsSL -X PATCH \
-            -H "Accept: application/vnd.github+json" \
-            -H "Authorization: Bearer $GH_TOKEN" \
-            "https://api.github.com/repos/$REPO/releases/$release_id" \
-            -d '{"prerelease":false,"make_latest":"true"}'
