@@ -1,12 +1,6 @@
 name: daenew-release
 
 on:
-  push:
-    branches:
-      - daenew
-    paths:
-      - ".github/workflows/daenew-release.yml"
-      - ".github/workflows/prerelease.yml"
   workflow_dispatch:
     inputs:
       tag:
@@ -32,17 +26,7 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  publish-rolling:
-    if: github.event_name == 'push'
-    uses: ./.github/workflows/release.yml
-    with:
-      tag: v2.0-daenew
-      ref: refs/heads/daenew
-      update_tag: true
-      make_latest: true
-
   publish-manual:
-    if: github.event_name == 'workflow_dispatch'
     uses: ./.github/workflows/release.yml
     with:
       tag: ${{ inputs.tag }}
