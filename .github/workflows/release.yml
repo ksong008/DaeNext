@@ -316,3 +316,4 @@ jobs:
           target_commitish: ${{ needs.prepare-tag.outputs.source_sha }}
           make_latest: ${{ inputs.make_latest && 'true' || 'false' }}
           files: release/*/*
+          token: ${{ secrets.GH_TOKEN || github.token }}
