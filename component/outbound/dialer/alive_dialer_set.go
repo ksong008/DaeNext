@@ -27,6 +27,17 @@ type minLatency struct {
 	dialer         *Dialer
 }
 
+func needLatencyState(policy consts.DialerSelectionPolicy) bool {
+	switch policy {
+	case consts.DialerSelectionPolicy_MinLastLatency,
+		consts.DialerSelectionPolicy_MinAverage10Latencies,
+		consts.DialerSelectionPolicy_MinMovingAverageLatencies:
+		return true
+	default:
+		return false
+	}
+}
+
 // AliveDialerSet assumes mapping between index and dialer MUST remain unchanged.
 //
 // It is thread-safe.
@@ -62,10 +73,21 @@ func NewAliveDialerSet(
 	if len(dialers) != len(dialersAnnotations) {
 		panic(fmt.Sprintf("unmatched annotations length: %v dialers and %v annotations", len(dialers), len(dialersAnnotations)))
 	}
-	dialerToLatencyOffset := make(map[*Dialer]time.Duration)
-	for i := range dialers {
-		d, a := dialers[i], dialersAnnotations[i]
-		dialerToLatencyOffset[d] = a.AddLatency
+	latencyState := needLatencyState(selectionPolicy)
+	var dialerToLatency map[*Dialer]time.Duration
+	var dialerToLatencyOffset map[*Dialer]time.Duration
+	if latencyState {
+		dialerToLatency = make(map[*Dialer]time.Duration)
+		for i := range dialers {
+			offset := dialersAnnotations[i].AddLatency
+			if offset == 0 {
+				continue
+			}
+			if dialerToLatencyOffset == nil {
+				dialerToLatencyOffset = make(map[*Dialer]time.Duration)
+			}
+			dialerToLatencyOffset[dialers[i]] = offset
+		}
 	}
 	a := &AliveDialerSet{
 		log:                     log,
@@ -74,7 +96,7 @@ func NewAliveDialerSet(
 		tolerance:               tolerance,
 		aliveChangeCallback:     aliveChangeCallback,
 		dialerToIndex:           make(map[*Dialer]int),
-		dialerToLatency:         make(map[*Dialer]time.Duration),
+		dialerToLatency:         dialerToLatency,
 		dialerToLatencyOffset:   dialerToLatencyOffset,
 		inorderedAliveDialerSet: make([]*Dialer, 0, len(dialers)),
 		selectionPolicy:         selectionPolicy,
@@ -92,6 +114,13 @@ func NewAliveDialerSet(
 	return a
 }
 
+func (a *AliveDialerSet) latencyOffset(d *Dialer) time.Duration {
+	if a.dialerToLatencyOffset == nil {
+		return 0
+	}
+	return a.dialerToLatencyOffset[d]
+}
+
 func (a *AliveDialerSet) GetRand() *Dialer {
 	a.mu.RLock()
 	defer a.mu.RUnlock()
@@ -103,7 +132,7 @@ func (a *AliveDialerSet) GetRand() *Dialer {
 }
 
 func (a *AliveDialerSet) SortingLatency(d *Dialer) time.Duration {
-	return a.dialerToLatency[d] + a.dialerToLatencyOffset[d]
+	return a.dialerToLatency[d] + a.latencyOffset(d)
 }
 
 // GetMinLatency acquires correct selectionPolicy.
@@ -126,7 +155,7 @@ func (a *AliveDialerSet) printLatencies() {
 		if !ok {
 			continue
 		}
-		offset := a.dialerToLatencyOffset[d]
+		offset := a.latencyOffset(d)
 		alive = append(alive, &struct {
 			d *Dialer
 			l time.Duration
@@ -250,8 +279,9 @@ func (a *AliveDialerSet) NotifyLatencyChange(dialer *Dialer, alive bool) {
 				} else {
 					oldDialerName = bakOldBestDialer.property.Name
 				}
+				bestRawLatency := a.dialerToLatency[a.minLatency.dialer]
 				a.log.WithFields(logrus.Fields{
-					string(a.selectionPolicy): latencyString(a.dialerToLatency[a.minLatency.dialer], a.dialerToLatencyOffset[a.minLatency.dialer]),
+					string(a.selectionPolicy): latencyString(bestRawLatency, a.latencyOffset(a.minLatency.dialer)),
 					"_new_dialer":             a.minLatency.dialer.property.Name,
 					"_old_dialer":             oldDialerName,
 					"group":                   a.dialerGroupName,
@@ -287,6 +317,10 @@ func (a *AliveDialerSet) NotifyLatencyChange(dialer *Dialer, alive bool) {
 }
 
 func (a *AliveDialerSet) calcMinLatency() {
+	if a.dialerToLatency == nil {
+		return
+	}
+
 	var minLatency = time.Hour
 	var minDialer *Dialer
 	for _, d := range a.inorderedAliveDialerSet {
