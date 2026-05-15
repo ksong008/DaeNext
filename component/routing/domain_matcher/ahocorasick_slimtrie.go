@@ -93,11 +93,14 @@ nextPattern:
 	}
 }
 func (n *AhocorasickSlimtrie) MatchDomainBitmap(domain string) (bitmap []uint32) {
+	return n.MatchDomainBitmapInto(domain, nil)
+}
+func (n *AhocorasickSlimtrie) MatchDomainBitmapInto(domain string, bitmap []uint32) []uint32 {
 	N := len(n.ac) / 32
 	if len(n.ac)%32 != 0 {
 		N++
 	}
-	bitmap = make([]uint32, N)
+	bitmap = prepareDomainBitmap(bitmap, N)
 	domain = strings.ToLower(strings.TrimSuffix(domain, "."))
 	// Domain should consist of 'a'-'z' and '.' and '-'
 	// NOTE: DO NOT VERIFY THE DOMAIN TO MATCH: https://github.com/daeuniverse/dae/issues/528
@@ -142,6 +145,14 @@ func (n *AhocorasickSlimtrie) MatchDomainBitmap(domain string) (bitmap []uint32)
 			}
 		}
 	}
+	return bitmap
+}
+func prepareDomainBitmap(bitmap []uint32, n int) []uint32 {
+	if cap(bitmap) < n {
+		return make([]uint32, n)
+	}
+	bitmap = bitmap[:n]
+	clear(bitmap)
 	return bitmap
 }
 func ToSuffixTrieString(s string) string {

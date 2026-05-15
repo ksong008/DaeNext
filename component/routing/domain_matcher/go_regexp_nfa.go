@@ -58,11 +58,14 @@ func (n *GoRegexpNfa) AddSet(bitIndex int, patterns []string, typ consts.Routing
 	}
 }
 func (n *GoRegexpNfa) MatchDomainBitmap(domain string) (bitmap []uint32) {
+	return n.MatchDomainBitmapInto(domain, nil)
+}
+func (n *GoRegexpNfa) MatchDomainBitmapInto(domain string, bitmap []uint32) []uint32 {
 	N := len(n.nfa) / 32
 	if len(n.nfa)%32 != 0 {
 		N++
 	}
-	bitmap = make([]uint32, N)
+	bitmap = prepareDomainBitmap(bitmap, N)
 	domain = strings.ToLower(strings.TrimSuffix(domain, "."))
 	for _, i := range n.validIndexes {
 		if n.nfa[i].MatchString(domain) {
