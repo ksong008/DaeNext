@@ -139,23 +139,31 @@ func (c *ControlPlane) handlePkt(ctx context.Context, lConn *net.UDPConn, data [
 			}
 			defer DefaultPacketSnifferSessionMgr.Remove(key, sniffer)
 			// Re-handlePkt after self func.
-			snifferData := sniffer.Data()
-			var toRehandle [][]byte
+			snifferData := sniffer.DataView()
+			var toRehandle []pool.PB
 			if len(snifferData) > 2 {
-				toRehandle = snifferData[1 : len(snifferData)-1] // Skip the first empty and the last (self).
+				// Skip the first empty packet and the last packet handled by this call.
+				toRehandle = make([]pool.PB, 0, len(snifferData)-2)
+				for _, d := range snifferData[1 : len(snifferData)-1] {
+					dCopy := pool.Get(len(d))
+					copy(dCopy, d)
+					toRehandle = append(toRehandle, dCopy)
+				}
 			}
 			sniffer.Mu.Unlock()
 			if len(toRehandle) > 0 {
 				defer func() {
 					if err == nil {
-						for _, d := range toRehandle {
-							dCopy := pool.Get(len(d))
-							copy(dCopy, d)
+						for _, dCopy := range toRehandle {
 							go func(parentCtx context.Context, data pool.PB) {
 								defer data.Put()
 								_ = c.handlePkt(parentCtx, lConn, data, src, pktDst, realDst, routingResult, true)
 							}(ctx, dCopy)
 						}
+						return
+					}
+					for _, dCopy := range toRehandle {
+						dCopy.Put()
 					}
 				}()
 			}
