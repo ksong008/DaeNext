@@ -12,13 +12,13 @@ import (
 	"net/netip"
 
 	"github.com/daeuniverse/dae/common/consts"
-	"github.com/daeuniverse/dae/component/routing"
+	"github.com/daeuniverse/dae/component/routing/domain_matcher"
 	"github.com/daeuniverse/dae/pkg/trie"
 )
 
 type RoutingMatcher struct {
 	lpmMatcher    []*trie.Trie
-	domainMatcher routing.DomainMatcher // All domain matchSets use one DomainMatcher.
+	domainMatcher *domain_matcher.AhocorasickSlimtrie // All domain matchSets use one DomainMatcher.
 
 	matches []bpfMatchSet
 }
@@ -40,14 +40,16 @@ func (m *RoutingMatcher) Match(
 		return 0, 0, false, fmt.Errorf("bad address length")
 	}
 
-	bin128s := make([]string, consts.MatchType_Mac+1)
-	bin128s[consts.MatchType_IpSet] = trie.Prefix2bin128(netip.PrefixFrom(netip.AddrFrom16(*(*[16]byte)(destAddr)), 128))
-	bin128s[consts.MatchType_SourceIpSet] = trie.Prefix2bin128(netip.PrefixFrom(netip.AddrFrom16(*(*[16]byte)(sourceAddr)), 128))
-	bin128s[consts.MatchType_Mac] = trie.Prefix2bin128(netip.PrefixFrom(netip.AddrFrom16(*(*[16]byte)(mac)), 128))
+	bin128s := routingMatchBin128Cache{
+		sourceAddr: sourceAddr,
+		destAddr:   destAddr,
+		mac:        mac,
+	}
 
 	var domainMatchBitmap []uint32
 	if domain != "" {
-		domainMatchBitmap = m.domainMatcher.MatchDomainBitmap(domain)
+		var domainMatchBitmapStack [32]uint32
+		domainMatchBitmap = m.domainMatcher.MatchDomainBitmapInto(domain, domainMatchBitmapStack[:])
 	}
 
 	goodSubrule := false
@@ -60,7 +62,7 @@ func (m *RoutingMatcher) Match(
 		case consts.MatchType_IpSet, consts.MatchType_SourceIpSet, consts.MatchType_Mac:
 			lpmIndex := binary.LittleEndian.Uint32(match.Value[:])
 			m := m.lpmMatcher[lpmIndex]
-			if m.HasPrefix(bin128s[match.Type]) {
+			if m.HasPrefix(bin128s.get(consts.MatchType(match.Type))) {
 				goodSubrule = true
 			}
 		case consts.MatchType_DomainSet:
@@ -136,4 +138,47 @@ func (m *RoutingMatcher) Match(
 		}
 	}
 	return 0, 0, false, fmt.Errorf("no match set hit")
+}
+
+type routingMatchBin128Cache struct {
+	sourceAddr []byte
+	destAddr   []byte
+	mac        []byte
+
+	sourceBin128 string
+	destBin128   string
+	macBin128    string
+
+	sourceReady bool
+	destReady   bool
+	macReady    bool
+}
+
+func (c *routingMatchBin128Cache) get(matchType consts.MatchType) string {
+	switch matchType {
+	case consts.MatchType_IpSet:
+		if !c.destReady {
+			c.destBin128 = routingMatchAddrToBin128(c.destAddr)
+			c.destReady = true
+		}
+		return c.destBin128
+	case consts.MatchType_SourceIpSet:
+		if !c.sourceReady {
+			c.sourceBin128 = routingMatchAddrToBin128(c.sourceAddr)
+			c.sourceReady = true
+		}
+		return c.sourceBin128
+	case consts.MatchType_Mac:
+		if !c.macReady {
+			c.macBin128 = routingMatchAddrToBin128(c.mac)
+			c.macReady = true
+		}
+		return c.macBin128
+	default:
+		return ""
+	}
+}
+
+func routingMatchAddrToBin128(addr []byte) string {
+	return trie.Prefix2bin128(netip.PrefixFrom(netip.AddrFrom16(*(*[16]byte)(addr)), 128))
 }
