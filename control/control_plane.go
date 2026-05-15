@@ -856,9 +856,7 @@ func (c *ControlPlane) ChooseDialTarget(ctx context.Context, src netip.AddrPort,
 				if ip46, _, _ := c.dnsController.ResolveIp46(resolveCtx, req, domain); ip46.Ip4.IsValid() || ip46.Ip6.IsValid() {
 					// Has A/AAAA records. It is a real domain.
 					dialMode = consts.DialMode_Domain
-					// Should use this domain to reroute
-					shouldReroute = true
-					c.rememberRealDomainVerdict(domain, true, true, realDomainPositiveCacheTtl)
+					c.rememberRealDomainVerdict(domain, true, false, realDomainPositiveCacheTtl)
 				} else {
 					c.rememberRealDomainVerdict(domain, false, false, realDomainNegativeCacheTtl)
 				}
