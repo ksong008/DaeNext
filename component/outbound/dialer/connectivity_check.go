@@ -93,22 +93,22 @@ func (c *collection) MovingAverageSnapshot() time.Duration {
 	return c.MovingAverage
 }
 
-func (d *Dialer) mustGetCollection(typ *NetworkType) *collection {
+func collectionIndex(typ *NetworkType) int {
 	if typ.IsDns {
 		switch typ.L4Proto {
 		case consts.L4ProtoStr_TCP:
 			switch typ.IpVersion {
 			case consts.IpVersionStr_4:
-				return d.collections[0]
+				return 0
 			case consts.IpVersionStr_6:
-				return d.collections[1]
+				return 1
 			}
 		case consts.L4ProtoStr_UDP:
 			switch typ.IpVersion {
 			case consts.IpVersionStr_4:
-				return d.collections[2]
+				return 2
 			case consts.IpVersionStr_6:
-				return d.collections[3]
+				return 3
 			}
 		}
 	} else {
@@ -116,25 +116,69 @@ func (d *Dialer) mustGetCollection(typ *NetworkType) *collection {
 		case consts.L4ProtoStr_TCP:
 			switch typ.IpVersion {
 			case consts.IpVersionStr_4:
-				return d.collections[4]
+				return 4
 			case consts.IpVersionStr_6:
-				return d.collections[5]
+				return 5
 			}
 		case consts.L4ProtoStr_UDP:
 			// UDP share the DNS check result.
 			switch typ.IpVersion {
 			case consts.IpVersionStr_4:
-				return d.collections[2]
+				return 2
 			case consts.IpVersionStr_6:
-				return d.collections[3]
+				return 3
 			}
 		}
 	}
 	panic("invalid param")
 }
 
+func (d *Dialer) getCollection(typ *NetworkType) *collection {
+	index := collectionIndex(typ)
+	d.collectionFineMu.RLock()
+	defer d.collectionFineMu.RUnlock()
+	return d.collections[index]
+}
+
+func (d *Dialer) getOrCreateCollection(typ *NetworkType) *collection {
+	index := collectionIndex(typ)
+	d.collectionFineMu.RLock()
+	c := d.collections[index]
+	d.collectionFineMu.RUnlock()
+	if c != nil {
+		return c
+	}
+
+	d.collectionFineMu.Lock()
+	defer d.collectionFineMu.Unlock()
+	c = d.collections[index]
+	if c == nil {
+		c = newCollection()
+		d.collections[index] = c
+	}
+	return c
+}
+
+func (d *Dialer) getOrCreateCollectionLocked(typ *NetworkType) *collection {
+	index := collectionIndex(typ)
+	c := d.collections[index]
+	if c == nil {
+		c = newCollection()
+		d.collections[index] = c
+	}
+	return c
+}
+
+func (d *Dialer) mustGetCollection(typ *NetworkType) *collection {
+	return d.getOrCreateCollection(typ)
+}
+
 func (d *Dialer) MustGetAlive(typ *NetworkType) bool {
-	return d.mustGetCollection(typ).AliveSnapshot()
+	collection := d.getCollection(typ)
+	if collection == nil {
+		return true
+	}
+	return collection.AliveSnapshot()
 }
 
 func parseIp46FromList(ip []string) *netutils.Ip46 {
@@ -489,7 +533,8 @@ func (d *Dialer) aliveBackground() {
 
 		active := make([]*CheckOption, 0, len(CheckOpts))
 		for _, opt := range CheckOpts {
-			if len(d.mustGetCollection(opt.networkType).AliveDialerSetSet) > 0 {
+			collection := d.collections[collectionIndex(opt.networkType)]
+			if collection != nil && len(collection.AliveDialerSetSet) > 0 {
 				active = append(active, opt)
 			}
 		}
@@ -595,13 +640,37 @@ func (d *Dialer) MustGetLatencies10(typ *NetworkType) *LatenciesN {
 	return d.mustGetCollection(typ).Latencies10
 }
 
+func (d *Dialer) LastLatencySnapshot(typ *NetworkType) (latency time.Duration, alive bool, ok bool) {
+	collection := d.getCollection(typ)
+	if collection == nil {
+		return 0, true, false
+	}
+	latency, ok = collection.Latencies10.LastLatency()
+	if !ok {
+		return 0, collection.AliveSnapshot(), false
+	}
+	return latency, collection.AliveSnapshot(), true
+}
+
+func (d *Dialer) HasAliveDialerSets() bool {
+	d.collectionFineMu.RLock()
+	defer d.collectionFineMu.RUnlock()
+
+	for _, collection := range d.collections {
+		if collection != nil && len(collection.AliveDialerSetSet) > 0 {
+			return true
+		}
+	}
+	return false
+}
+
 // RegisterAliveDialerSet is thread-safe.
 func (d *Dialer) RegisterAliveDialerSet(a *AliveDialerSet) {
 	if a == nil {
 		return
 	}
 	d.collectionFineMu.Lock()
-	d.mustGetCollection(a.CheckTyp).AliveDialerSetSet[a]++
+	d.getOrCreateCollectionLocked(a.CheckTyp).AliveDialerSetSet[a]++
 	d.collectionFineMu.Unlock()
 	d.NotifyCheck()
 }
@@ -612,10 +681,13 @@ func (d *Dialer) UnregisterAliveDialerSet(a *AliveDialerSet) {
 		return
 	}
 	d.collectionFineMu.Lock()
-	setSet := d.mustGetCollection(a.CheckTyp).AliveDialerSetSet
-	setSet[a]--
-	if setSet[a] <= 0 {
-		delete(setSet, a)
+	collection := d.collections[collectionIndex(a.CheckTyp)]
+	if collection != nil {
+		setSet := collection.AliveDialerSetSet
+		setSet[a]--
+		if setSet[a] <= 0 {
+			delete(setSet, a)
+		}
 	}
 	d.collectionFineMu.Unlock()
 	d.NotifyCheck()
@@ -710,7 +782,7 @@ func (d *Dialer) HttpCheck(ctx context.Context, u *netutils.URL, ip netip.Addr, 
 	if err != nil {
 		return false, err
 	}
-	resp, err := d.probeHTTPClient.Do(req)
+	resp, err := d.getProbeHTTPClient().Do(req)
 	if err != nil {
 		var netErr net.Error
 		if errors.As(err, &netErr); netErr.Timeout() {
