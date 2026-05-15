@@ -42,6 +42,7 @@ type Dialer struct {
 	ctx      context.Context
 	cancel   context.CancelFunc
 
+	probeHTTPMu        sync.Mutex
 	probeHTTPTransport *http.Transport
 	probeHTTPClient    *http.Client
 
@@ -50,15 +51,15 @@ type Dialer struct {
 
 type GlobalOption struct {
 	D.ExtraOption
-	Log               *logrus.Logger
-	TcpCheckOptionRaw TcpCheckOptionRaw // Lazy parse
-	CheckDnsOptionRaw CheckDnsOptionRaw // Lazy parse
-	CheckInterval     time.Duration
-	CheckTolerance    time.Duration
-	CheckDnsTcp       bool
-	ResolverDialer    netproxy.Dialer
+	Log                    *logrus.Logger
+	TcpCheckOptionRaw      TcpCheckOptionRaw // Lazy parse
+	CheckDnsOptionRaw      CheckDnsOptionRaw // Lazy parse
+	CheckInterval          time.Duration
+	CheckTolerance         time.Duration
+	CheckDnsTcp            bool
+	ResolverDialer         netproxy.Dialer
 	ResolverFullconeDialer netproxy.Dialer
-	ResolverDNS       netip.AddrPort
+	ResolverDNS            netip.AddrPort
 }
 
 type InstanceOption struct {
@@ -97,10 +98,6 @@ func NewGlobalOption(global *config.Global, log *logrus.Logger) *GlobalOption {
 
 // NewDialer is for register in general.
 func NewDialer(dialer netproxy.Dialer, option *GlobalOption, iOption InstanceOption, property *Property) *Dialer {
-	var collections [6]*collection
-	for i := range collections {
-		collections[i] = newCollection()
-	}
 	ctx, cancel := context.WithCancel(context.Background())
 	d := &Dialer{
 		GlobalOption:     option,
@@ -108,12 +105,24 @@ func NewDialer(dialer netproxy.Dialer, option *GlobalOption, iOption InstanceOpt
 		Dialer:           dialer,
 		property:         property,
 		collectionFineMu: sync.RWMutex{},
-		collections:      collections,
 		tickerMu:         sync.Mutex{},
 		ticker:           nil,
 		checkCh:          make(chan time.Time, 1),
 		ctx:              ctx,
 		cancel:           cancel,
+	}
+	option.Log.WithField("dialer", d.Property().Name).
+		WithField("p", unsafe.Pointer(d)).
+		Traceln("NewDialer")
+	return d
+}
+
+func (d *Dialer) getProbeHTTPClient() *http.Client {
+	d.probeHTTPMu.Lock()
+	defer d.probeHTTPMu.Unlock()
+
+	if d.probeHTTPClient != nil {
+		return d.probeHTTPClient
 	}
 	d.probeHTTPTransport = &http.Transport{
 		DisableKeepAlives: true,
@@ -136,10 +145,7 @@ func NewDialer(dialer netproxy.Dialer, option *GlobalOption, iOption InstanceOpt
 	d.probeHTTPClient = &http.Client{
 		Transport: d.probeHTTPTransport,
 	}
-	option.Log.WithField("dialer", d.Property().Name).
-		WithField("p", unsafe.Pointer(d)).
-		Traceln("NewDialer")
-	return d
+	return d.probeHTTPClient
 }
 
 func (d *Dialer) Clone() *Dialer {
@@ -154,9 +160,11 @@ func (d *Dialer) Close() error {
 		d.ticker = nil
 	}
 	d.tickerMu.Unlock()
+	d.probeHTTPMu.Lock()
 	if d.probeHTTPTransport != nil {
 		d.probeHTTPTransport.CloseIdleConnections()
 	}
+	d.probeHTTPMu.Unlock()
 	return nil
 }
 
