@@ -626,31 +626,7 @@ func NewControlPlane(
 			_ = core.bpf.DomainRoutingMap.Delete(&key)
 		}
 	}
-	if len(dnsCache) > 0 {
-		for cacheKey, cache := range dnsCache {
-			lastDot := strings.LastIndex(cacheKey, ".")
-			if lastDot == -1 || lastDot == len(cacheKey)-1 {
-				log.Warnln("Invalid cache key:", cacheKey)
-				continue
-			}
-			host := cacheKey[:lastDot]
-			_typ := cacheKey[lastDot+1:]
-			typ, err := strconv.ParseUint(_typ, 10, 16)
-			if err != nil {
-				log.WithError(err).Warnln("Invalid cache qtype:", cacheKey)
-				continue
-			}
-			answers := cache.AnswersForHostQType(host, uint16(typ))
-			if len(answers) == 0 {
-				continue
-			}
-			if err := plane.dnsController.__updateDnsCacheDeadline(host, uint16(typ), answers, func(_ time.Time, _ string) (time.Time, time.Time) {
-				return cache.Deadline, cache.OriginalDeadline
-			}); err != nil {
-				log.WithError(err).Warnf("Failed to restore DNS cache for %s", host)
-			}
-		}
-	}
+	restoreDnsCacheSnapshot(log, plane.dnsController, dnsCache)
 
 	// Init immediately to avoid DNS leaking in the very beginning because param control_plane_dns_routing will
 	// be set in callback.
@@ -722,7 +698,7 @@ func (c *ControlPlane) SnapshotDnsCache() map[string]*DnsCache {
 
 	snapshot := make(map[string]*DnsCache, len(c.dnsController.dnsCache))
 	for key, cache := range c.dnsController.dnsCache {
-		snapshot[key] = cache.Clone()
+		snapshot[key.String()] = cache.Clone()
 	}
 	return snapshot
 }
