@@ -211,6 +211,13 @@ func (p *UdpTaskPool) flush(wait bool) {
 	}
 }
 
+func (p *UdpTaskPool) recycleQueue(q *UdpTaskQueue) {
+	<-q.closed
+	if len(q.ch) == 0 {
+		p.queueChPool.Put(q.ch)
+	}
+}
+
 // EmitTask queues a task for a key without blocking the caller on queue overflow.
 // It returns whether the task was accepted.
 func (p *UdpTaskPool) EmitTask(key string, task UdpTask) bool {
@@ -221,6 +228,11 @@ func (p *UdpTaskPool) EmitTask(key string, task UdpTask) bool {
 	if !ok {
 		if len(p.m) >= udpTaskPoolMaxQueues {
 			evicted = p.evictOldestIdleQueueLocked(now)
+			if evicted == nil {
+				p.mu.Unlock()
+				p.droppedTasks.Add(1)
+				return false
+			}
 		}
 		ch := p.queueChPool.Get().(chan UdpTask)
 		ctx, cancel := context.WithCancel(context.Background())
@@ -242,10 +254,7 @@ func (p *UdpTaskPool) EmitTask(key string, task UdpTask) bool {
 	p.mu.Unlock()
 	if evicted != nil {
 		evicted.cancel()
-		<-evicted.closed
-		if len(evicted.ch) == 0 {
-			p.queueChPool.Put(evicted.ch)
-		}
+		go p.recycleQueue(evicted)
 	}
 	// If the queue is full, drop the task locally instead of stalling the shared
 	// UDP receive loop. Accepted tasks still preserve per-key order.
