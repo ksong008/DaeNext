@@ -152,6 +152,108 @@ func TestUdpTaskPoolEvictsOldestIdleQueueWhenFull(t *testing.T) {
 	}
 }
 
+func TestUdpTaskPoolEvictionDoesNotWaitForQueueClose(t *testing.T) {
+	pool := NewUdpTaskPool()
+	defer pool.Close()
+
+	now := time.Now()
+	pool.now = func() time.Time { return now }
+
+	var oldest *UdpTaskQueue
+	pool.mu.Lock()
+	for i := 0; i < udpTaskPoolMaxQueues; i++ {
+		key := "idle-" + strconv.Itoa(i)
+		ctx, cancel := context.WithCancel(context.Background())
+		ch := make(chan UdpTask, UdpTaskQueueLength)
+		q := &UdpTaskQueue{
+			key:        key,
+			p:          pool,
+			ch:         ch,
+			agingTime:  24 * time.Hour,
+			ctx:        ctx,
+			cancel:     cancel,
+			closed:     make(chan struct{}),
+			lastActive: now.Add(time.Duration(i-udpTaskPoolMaxQueues) * time.Second),
+		}
+		if i == 0 {
+			oldest = q
+		} else {
+			go q.convoy()
+		}
+		pool.m[key] = q
+	}
+	pool.mu.Unlock()
+
+	freshDone := make(chan struct{})
+	result := make(chan bool, 1)
+	go func() {
+		result <- pool.EmitTask("fresh-key", func() {
+			close(freshDone)
+		})
+	}()
+
+	select {
+	case accepted := <-result:
+		if !accepted {
+			t.Fatal("expected fresh task to be accepted after evicting idle queue")
+		}
+	case <-time.After(100 * time.Millisecond):
+		t.Fatal("EmitTask waited for evicted queue to close")
+	}
+	close(oldest.closed)
+
+	select {
+	case <-freshDone:
+	case <-time.After(100 * time.Millisecond):
+		t.Fatal("fresh task did not run after idle eviction")
+	}
+}
+
+func TestUdpTaskPoolDropsNewKeyWhenFullWithoutIdleQueue(t *testing.T) {
+	pool := NewUdpTaskPool()
+
+	release := make(chan struct{})
+	var releaseOnce sync.Once
+	t.Cleanup(func() {
+		releaseOnce.Do(func() { close(release) })
+		pool.Close()
+	})
+
+	for i := 0; i < udpTaskPoolMaxQueues; i++ {
+		key := "running-" + strconv.Itoa(i)
+		if !pool.EmitTask(key, func() {
+			<-release
+		}) {
+			t.Fatalf("task for %s was rejected before the pool reached capacity", key)
+		}
+	}
+	if got := pool.Count(); got != udpTaskPoolMaxQueues {
+		t.Fatalf("expected queue count to reach cap %d, got %d", udpTaskPoolMaxQueues, got)
+	}
+
+	result := make(chan bool, 1)
+	go func() {
+		result <- pool.EmitTask("overflow-new-key", func() {})
+	}()
+
+	select {
+	case accepted := <-result:
+		if accepted {
+			t.Fatal("expected new key task to be dropped when all capped queues are busy")
+		}
+	case <-time.After(100 * time.Millisecond):
+		t.Fatal("EmitTask blocked when the full pool had no idle queue to evict")
+	}
+	if got := pool.Count(); got != udpTaskPoolMaxQueues {
+		t.Fatalf("queue count exceeded cap: got %d want %d", got, udpTaskPoolMaxQueues)
+	}
+	if drops := pool.DropCount(); drops != 1 {
+		t.Fatalf("expected one dropped task after capped busy-pool overflow, got %d", drops)
+	}
+
+	releaseOnce.Do(func() { close(release) })
+}
+
 func TestUdpTaskPoolDropsWhenQueueIsFullWithoutBlocking(t *testing.T) {
 	pool := NewUdpTaskPool()
 	defer pool.Close()
