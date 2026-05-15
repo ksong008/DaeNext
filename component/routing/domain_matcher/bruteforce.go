@@ -38,12 +38,15 @@ func (n *Bruteforce) AddSet(bitIndex int, patterns []string, typ consts.RoutingD
 	}
 }
 func (n *Bruteforce) MatchDomainBitmap(domain string) (bitmap []uint32) {
+	return n.MatchDomainBitmapInto(domain, nil)
+}
+func (n *Bruteforce) MatchDomainBitmapInto(domain string, bitmap []uint32) []uint32 {
 	N := len(n.simulatedDomainSet) / 32
 	if len(n.simulatedDomainSet)%32 != 0 {
 		N++
 	}
 	domain = strings.ToLower(strings.TrimSuffix(domain, "."))
-	bitmap = make([]uint32, N)
+	bitmap = prepareDomainBitmap(bitmap, N)
 	for _, s := range n.simulatedDomainSet {
 		for _, d := range s.Domains {
 			var hit bool
