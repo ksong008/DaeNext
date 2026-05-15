@@ -89,7 +89,7 @@ type DnsController struct {
 	cleanupWg        sync.WaitGroup
 	// mutex protects the dnsCache.
 	dnsCacheMu          sync.RWMutex
-	dnsCache            map[string]*DnsCache
+	dnsCache            map[dnsCacheKey]*DnsCache
 	dnsForwarderCacheMu sync.Mutex
 	dnsForwarderCache   map[dnsForwarderKey]*cachedDnsForwarder
 }
@@ -147,7 +147,7 @@ func NewDnsController(routing *dns.Dns, option *DnsControllerOption) (c *DnsCont
 		cancel:              cancel,
 		cleanupWg:           sync.WaitGroup{},
 		dnsCacheMu:          sync.RWMutex{},
-		dnsCache:            make(map[string]*DnsCache),
+		dnsCache:            make(map[dnsCacheKey]*DnsCache),
 		dnsForwarderCacheMu: sync.Mutex{},
 		dnsForwarderCache:   make(map[dnsForwarderKey]*cachedDnsForwarder),
 	}
@@ -155,9 +155,56 @@ func NewDnsController(routing *dns.Dns, option *DnsControllerOption) (c *DnsCont
 	return c, nil
 }
 
-func (c *DnsController) cacheKey(qname string, qtype uint16) string {
-	// To fqdn.
-	return dnsmessage.CanonicalName(qname) + strconv.Itoa(int(qtype))
+type dnsCacheKey struct {
+	qname  string
+	qtype  uint16
+	qclass uint16
+}
+
+func (k dnsCacheKey) String() string {
+	return k.qname + "|" + strconv.Itoa(int(k.qtype)) + "|" + strconv.Itoa(int(k.qclass))
+}
+
+func parseDnsCacheKey(raw string) (dnsCacheKey, bool) {
+	lastSep := strings.LastIndex(raw, "|")
+	if lastSep != -1 {
+		beforeClass := raw[:lastSep]
+		classRaw := raw[lastSep+1:]
+		prevSep := strings.LastIndex(beforeClass, "|")
+		if prevSep != -1 {
+			qtype, typeErr := strconv.ParseUint(beforeClass[prevSep+1:], 10, 16)
+			qclass, classErr := strconv.ParseUint(classRaw, 10, 16)
+			if typeErr == nil && classErr == nil {
+				return newDnsCacheKey(beforeClass[:prevSep], uint16(qtype), uint16(qclass)), true
+			}
+		}
+	}
+
+	lastDot := strings.LastIndex(raw, ".")
+	if lastDot == -1 || lastDot == len(raw)-1 {
+		return dnsCacheKey{}, false
+	}
+	qtype, err := strconv.ParseUint(raw[lastDot+1:], 10, 16)
+	if err != nil {
+		return dnsCacheKey{}, false
+	}
+	return newDnsCacheKey(raw[:lastDot], uint16(qtype), dnsmessage.ClassINET), true
+}
+
+func newDnsCacheKey(qname string, qtype uint16, qclass uint16) dnsCacheKey {
+	return dnsCacheKey{
+		qname:  strings.ToLower(dnsmessage.CanonicalName(qname)),
+		qtype:  qtype,
+		qclass: qclass,
+	}
+}
+
+func (c *DnsController) cacheKey(qname string, qtype uint16) dnsCacheKey {
+	return newDnsCacheKey(qname, qtype, dnsmessage.ClassINET)
+}
+
+func (c *DnsController) cacheKeyFromParts(qname string, qtype uint16, qclass uint16) dnsCacheKey {
+	return newDnsCacheKey(qname, qtype, qclass)
 }
 
 func (c *DnsController) cacheExpiresAt(cache *DnsCache) time.Time {
@@ -234,7 +281,7 @@ func (c *DnsController) evictDnsCacheEntriesLocked(now time.Time) []*DnsCache {
 	}
 	for len(c.dnsCache) >= dnsCacheMaxEntries {
 		var (
-			oldestKey      string
+			oldestKey      dnsCacheKey
 			oldestCache    *DnsCache
 			oldestDeadline time.Time
 			oldestSeen     bool
@@ -305,7 +352,7 @@ func (c *DnsController) sweepDnsForwarderCache(now time.Time, enforceLimit bool)
 	}
 }
 
-func (c *DnsController) RemoveDnsRespCache(cacheKey string) {
+func (c *DnsController) RemoveDnsRespCache(cacheKey dnsCacheKey) {
 	c.dnsCacheMu.Lock()
 	cache, ok := c.dnsCache[cacheKey]
 	if ok {
@@ -318,7 +365,7 @@ func (c *DnsController) RemoveDnsRespCache(cacheKey string) {
 		}
 	}
 }
-func (c *DnsController) LookupDnsRespCache(cacheKey string, ignoreFixedTtl bool) (cache *DnsCache) {
+func (c *DnsController) LookupDnsRespCache(cacheKey dnsCacheKey, ignoreFixedTtl bool) (cache *DnsCache) {
 	now := c.now()
 	c.dnsCacheMu.RLock()
 	cache, ok := c.dnsCache[cacheKey]
@@ -385,7 +432,7 @@ func cacheLookupDeadline(cache *DnsCache, ignoreFixedTtl bool) time.Time {
 }
 
 // LookupDnsRespCache_ will modify the msg in place.
-func (c *DnsController) LookupDnsRespCache_(msg *dnsmessage.Msg, cacheKey string, ignoreFixedTtl bool) (resp []byte) {
+func (c *DnsController) LookupDnsRespCache_(msg *dnsmessage.Msg, cacheKey dnsCacheKey, ignoreFixedTtl bool) (resp []byte) {
 	cache := c.LookupDnsRespCache(cacheKey, ignoreFixedTtl)
 	if cache != nil {
 		if packed := cache.FillPackedResponse(msg.Id); packed != nil {
@@ -558,7 +605,7 @@ func (c *DnsController) updateDnsCache(msg *dnsmessage.Msg, ttl uint32, q *dnsme
 		}).Tracef("Update DNS record cache")
 	}
 
-	if err := c.UpdateDnsCacheTtl(q.Name, q.Qtype, msg.Answer, int(ttl)); err != nil {
+	if err := c.updateDnsCacheTtl(q.Name, q.Qtype, q.Qclass, msg.Answer, int(ttl)); err != nil {
 		return err
 	}
 	return nil
@@ -566,7 +613,7 @@ func (c *DnsController) updateDnsCache(msg *dnsmessage.Msg, ttl uint32, q *dnsme
 
 type daedlineFunc func(now time.Time, host string) (deadline time.Time, originalDeadline time.Time)
 
-func (c *DnsController) __updateDnsCacheDeadline(host string, dnsTyp uint16, answers []dnsmessage.RR, deadlineFunc daedlineFunc) (err error) {
+func (c *DnsController) __updateDnsCacheDeadline(host string, dnsTyp uint16, dnsClass uint16, answers []dnsmessage.RR, deadlineFunc daedlineFunc) (err error) {
 	var fqdn string
 	if strings.HasSuffix(host, ".") {
 		fqdn = strings.ToLower(host)
@@ -582,7 +629,7 @@ func (c *DnsController) __updateDnsCacheDeadline(host string, dnsTyp uint16, ans
 	now := c.now()
 	deadline, originalDeadline := deadlineFunc(now, host)
 
-	cacheKey := c.cacheKey(fqdn, dnsTyp)
+	cacheKey := c.cacheKeyFromParts(fqdn, dnsTyp, dnsClass)
 	c.dnsCacheMu.Lock()
 	cache, ok := c.dnsCache[cacheKey]
 	ips, hasAnyIP := summarizeDNSAnswers(answers)
@@ -593,9 +640,9 @@ func (c *DnsController) __updateDnsCacheDeadline(host string, dnsTyp uint16, ans
 		cache.HasAnyIP = hasAnyIP
 		cache.Deadline = deadline
 		cache.OriginalDeadline = originalDeadline
-		cache.RouteOwnerKey = cacheKey
+		cache.RouteOwnerKey = cacheKey.String()
 		cache.PackedResponse = nil
-		c.packCacheResponse(cache, fqdn, dnsTyp)
+		c.packCacheResponse(cache, fqdn, dnsTyp, dnsClass)
 		c.dnsCacheMu.Unlock()
 	} else {
 		removed = c.evictDnsCacheEntriesLocked(now)
@@ -604,8 +651,8 @@ func (c *DnsController) __updateDnsCacheDeadline(host string, dnsTyp uint16, ans
 			c.dnsCacheMu.Unlock()
 			return err
 		}
-		cache.RouteOwnerKey = cacheKey
-		c.packCacheResponse(cache, fqdn, dnsTyp)
+		cache.RouteOwnerKey = cacheKey.String()
+		c.packCacheResponse(cache, fqdn, dnsTyp, dnsClass)
 		c.dnsCache[cacheKey] = cache
 		c.dnsCacheMu.Unlock()
 	}
@@ -626,13 +673,17 @@ func (c *DnsController) __updateDnsCacheDeadline(host string, dnsTyp uint16, ans
 }
 
 func (c *DnsController) UpdateDnsCacheDeadline(host string, dnsTyp uint16, answers []dnsmessage.RR, deadline time.Time) (err error) {
-	return c.__updateDnsCacheDeadline(host, dnsTyp, answers, func(_ time.Time, _ string) (daedline time.Time, originalDeadline time.Time) {
+	return c.__updateDnsCacheDeadline(host, dnsTyp, dnsmessage.ClassINET, answers, func(_ time.Time, _ string) (daedline time.Time, originalDeadline time.Time) {
 		return deadline, deadline
 	})
 }
 
 func (c *DnsController) UpdateDnsCacheTtl(host string, dnsTyp uint16, answers []dnsmessage.RR, ttl int) (err error) {
-	return c.__updateDnsCacheDeadline(host, dnsTyp, answers, func(now time.Time, host string) (daedline time.Time, originalDeadline time.Time) {
+	return c.updateDnsCacheTtl(host, dnsTyp, dnsmessage.ClassINET, answers, ttl)
+}
+
+func (c *DnsController) updateDnsCacheTtl(host string, dnsTyp uint16, dnsClass uint16, answers []dnsmessage.RR, ttl int) (err error) {
+	return c.__updateDnsCacheDeadline(host, dnsTyp, dnsClass, answers, func(now time.Time, host string) (daedline time.Time, originalDeadline time.Time) {
 		originalDeadline = now.Add(time.Duration(ttl) * time.Second)
 		if fixedTtl, ok := c.fixedDomainTtl[host]; ok {
 			return now.Add(time.Duration(fixedTtl) * time.Second), originalDeadline
@@ -642,13 +693,17 @@ func (c *DnsController) UpdateDnsCacheTtl(host string, dnsTyp uint16, answers []
 	})
 }
 
-func (c *DnsController) packCacheResponse(cache *DnsCache, qname string, qtype uint16) {
+func (c *DnsController) packCacheResponse(cache *DnsCache, qname string, qtype uint16, qclass uint16) {
 	if cache == nil || len(cache.Answer) == 0 {
 		cache.PackedResponse = nil
 		return
 	}
 	msg := new(dnsmessage.Msg)
-	msg.SetQuestion(qname, qtype)
+	msg.Question = []dnsmessage.Question{{
+		Name:   dnsmessage.CanonicalName(qname),
+		Qtype:  qtype,
+		Qclass: qclass,
+	}}
 	cache.FillInto(msg)
 	msg.Compress = true
 	packed, err := msg.Pack()
@@ -705,9 +760,11 @@ func (c *DnsController) HandleWithResponseWriter_(dnsMessage *dnsmessage.Msg, re
 	// Prepare qname, qtype.
 	var qname string
 	var qtype uint16
+	var qclass uint16
 	if len(dnsMessage.Question) != 0 {
 		qname = dnsMessage.Question[0].Name
 		qtype = dnsMessage.Question[0].Qtype
+		qclass = dnsMessage.Question[0].Qclass
 	}
 
 	// Check ip version preference and qtype.
@@ -753,13 +810,13 @@ func (c *DnsController) HandleWithResponseWriter_(dnsMessage *dnsmessage.Msg, re
 	}()
 
 	preferredErr := <-preferredErrCh
-	preferredCache := c.LookupDnsRespCache(c.cacheKey(qname, qtype2), true)
+	preferredCache := c.LookupDnsRespCache(c.cacheKeyFromParts(qname, qtype2, qclass), true)
 	if preferredCache != nil && preferredCache.IncludeAnyIp() {
 		return c.sendRejectWithResponseWriter_(dnsMessage, req, responseWriter)
 	}
 
 	requestedErr := <-requestedErrCh
-	resp := c.LookupDnsRespCache_(dnsMessage, c.cacheKey(qname, qtype), true)
+	resp := c.LookupDnsRespCache_(dnsMessage, c.cacheKeyFromParts(qname, qtype, qclass), true)
 	if resp != nil {
 		if responseWriter != nil {
 			var respMsg dnsmessage.Msg
@@ -803,10 +860,12 @@ func (c *DnsController) handleWithResponseWriter_(
 	// Prepare qname, qtype.
 	var qname string
 	var qtype uint16
+	var qclass uint16
 	if len(dnsMessage.Question) != 0 {
 		q := dnsMessage.Question[0]
 		qname = q.Name
 		qtype = q.Qtype
+		qclass = q.Qclass
 	}
 
 	// Route request.
@@ -821,7 +880,7 @@ func (c *DnsController) handleWithResponseWriter_(
 		return fmt.Errorf("dns request routing cannot use %q for locally bound dns listener; configure an explicit upstream instead", consts.DnsRequestOutboundIndex_AsIs.String())
 	}
 
-	cacheKey := c.cacheKey(qname, qtype)
+	cacheKey := c.cacheKeyFromParts(qname, qtype, qclass)
 
 	if upstreamIndex == consts.DnsRequestOutboundIndex_Reject {
 		// Reject with empty answer.

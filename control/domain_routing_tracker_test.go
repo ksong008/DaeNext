@@ -113,6 +113,56 @@ func TestDomainRoutingTrackerMergesSharedIPAcrossOwners(t *testing.T) {
 	}
 }
 
+func TestDomainRoutingTrackerKeepsStructuredOwnersSeparateOnRemove(t *testing.T) {
+	tracker := newDomainRoutingTracker()
+	ip := netip.MustParseAddr("203.0.113.12")
+	ip16 := ip.As16()
+	ipKey := common.Ipv6ByteSliceToUint32Array(ip16[:])
+
+	ownerINET := newDnsCacheKey("owner.example.", dnsmessage.TypeA, dnsmessage.ClassINET).String()
+	ownerClass3 := newDnsCacheKey("owner.example.", dnsmessage.TypeA, 3).String()
+
+	var snapshotINET domainRoutingOwnerSnapshot
+	snapshotINET.bitmap.Bitmap[0] = 0x1
+	snapshotINET.ips = map[[4]uint32]struct{}{ipKey: {}}
+
+	var snapshotClass3 domainRoutingOwnerSnapshot
+	snapshotClass3.bitmap.Bitmap[0] = 0x2
+	snapshotClass3.ips = map[[4]uint32]struct{}{ipKey: {}}
+
+	if err := tracker.syncOwner(nil, ownerINET, snapshotINET); err != nil {
+		t.Fatalf("syncOwner(INET): %v", err)
+	}
+	if err := tracker.syncOwner(nil, ownerClass3, snapshotClass3); err != nil {
+		t.Fatalf("syncOwner(class3): %v", err)
+	}
+
+	state := tracker.ips[ipKey]
+	if state == nil {
+		t.Fatal("expected shared IP state")
+	}
+	if got := state.merged.Bitmap[0]; got != 0x3 {
+		t.Fatalf("merged bitmap = %#x, want %#x", got, uint32(0x3))
+	}
+
+	if err := tracker.syncOwner(nil, ownerINET, domainRoutingOwnerSnapshot{}); err != nil {
+		t.Fatalf("remove INET owner: %v", err)
+	}
+	if _, ok := tracker.owners[ownerINET]; ok {
+		t.Fatal("expected INET owner to be removed")
+	}
+	state = tracker.ips[ipKey]
+	if state == nil {
+		t.Fatal("expected class3 owner to keep shared IP state after INET removal")
+	}
+	if got := state.merged.Bitmap[0]; got != 0x2 {
+		t.Fatalf("bitmap after removing INET owner = %#x, want %#x", got, uint32(0x2))
+	}
+	if _, ok := state.owners[ownerClass3]; !ok {
+		t.Fatal("expected class3 owner to remain after INET owner removal")
+	}
+}
+
 func TestDomainRoutingTrackerReplacesOwnerSnapshotWithoutLeakingRefs(t *testing.T) {
 	domainMap := newDomainRoutingTestMap(t)
 	core := &controlPlaneCore{
@@ -222,7 +272,8 @@ func TestUpdateDnsCacheDeadlineAssignsRouteOwnerKey(t *testing.T) {
 	if cache == nil {
 		t.Fatal("expected dns cache entry")
 	}
-	if cache.RouteOwnerKey != controller.cacheKey("owner.example.", dnsmessage.TypeA) {
-		t.Fatalf("RouteOwnerKey = %q, want %q", cache.RouteOwnerKey, controller.cacheKey("owner.example.", dnsmessage.TypeA))
+	wantOwnerKey := controller.cacheKey("owner.example.", dnsmessage.TypeA).String()
+	if cache.RouteOwnerKey != wantOwnerKey {
+		t.Fatalf("RouteOwnerKey = %q, want %q", cache.RouteOwnerKey, wantOwnerKey)
 	}
 }
