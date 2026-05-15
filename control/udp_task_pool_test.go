@@ -219,9 +219,11 @@ func TestUdpTaskPoolDropsNewKeyWhenFullWithoutIdleQueue(t *testing.T) {
 		pool.Close()
 	})
 
+	started := make(chan struct{}, udpTaskPoolMaxQueues)
 	for i := 0; i < udpTaskPoolMaxQueues; i++ {
 		key := "running-" + strconv.Itoa(i)
 		if !pool.EmitTask(key, func() {
+			started <- struct{}{}
 			<-release
 		}) {
 			t.Fatalf("task for %s was rejected before the pool reached capacity", key)
@@ -229,6 +231,13 @@ func TestUdpTaskPoolDropsNewKeyWhenFullWithoutIdleQueue(t *testing.T) {
 	}
 	if got := pool.Count(); got != udpTaskPoolMaxQueues {
 		t.Fatalf("expected queue count to reach cap %d, got %d", udpTaskPoolMaxQueues, got)
+	}
+	for i := 0; i < udpTaskPoolMaxQueues; i++ {
+		select {
+		case <-started:
+		case <-time.After(time.Second):
+			t.Fatalf("only %d capped queues started running", i)
+		}
 	}
 
 	result := make(chan bool, 1)
