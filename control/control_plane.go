@@ -407,6 +407,10 @@ func NewControlPlane(
 	// Filter out groups.
 	dialerSet := outbound.NewDialerSetFromLinks(option, tagToNodeList)
 	deferFuncs = append(deferFuncs, dialerSet.Close)
+	groupOverrideCloneCache := newGroupOverrideCloneCache(func(d *dialer.Dialer) {
+		deferFuncs = append(deferFuncs, d.Close)
+	})
+	groupOverrideHealthProfileCounts := countGroupOverrideHealthProfiles(groups, *global, option, log)
 	defer func() {
 		if err == nil {
 			return
@@ -437,15 +441,15 @@ func NewControlPlane(
 		groupOption, err := ParseGroupOverrideOption(group, *global, log)
 		finalOption := option
 		if err == nil && groupOption != nil {
-			groupOption.ResolverDialer = option.ResolverDialer
-			groupOption.ResolverFullconeDialer = option.ResolverFullconeDialer
-			groupOption.ResolverDNS = option.ResolverDNS
-			groupOption.TcpCheckOptionRaw.ResolverDialer = option.ResolverDialer
-			groupOption.TcpCheckOptionRaw.ResolverDNS = option.ResolverDNS
-			groupOption.CheckDnsOptionRaw.ResolverDialer = option.ResolverDialer
-			groupOption.CheckDnsOptionRaw.ResolverDNS = option.ResolverDNS
-			newDialers := make([]*dialer.Dialer, 0)
+			inheritGroupOverrideResolverOption(groupOption, option)
+			newDialers := make([]*dialer.Dialer, 0, len(dialers))
+			healthProfile := groupOverrideHealthProfile(groupOption)
+			useCloneCache := groupOverrideHealthProfileCounts[healthProfile] > 1
 			for _, d := range dialers {
+				if useCloneCache {
+					newDialers = append(newDialers, groupOverrideCloneCache.cloneWithProfile(d, groupOption, healthProfile))
+					continue
+				}
 				newDialer := d.Clone()
 				deferFuncs = append(deferFuncs, newDialer.Close)
 				newDialer.GlobalOption = groupOption
