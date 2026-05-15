@@ -109,6 +109,82 @@ func TestRegisterAliveDialerSetCreatesOnlyRegisteredCollection(t *testing.T) {
 	}
 }
 
+func TestAliveDialerSetRandomSkipsLatencyState(t *testing.T) {
+	dialers := []*Dialer{
+		newLazyStateTestDialer(t),
+		newLazyStateTestDialer(t),
+	}
+	for _, d := range dialers {
+		defer d.Close()
+	}
+
+	aliveSet := NewAliveDialerSet(logrus.New(), "test-group", lazyStateTestNetworkType, 0,
+		consts.DialerSelectionPolicy_Random,
+		dialers, lazyStateAnnotations(dialers), func(bool) {}, true)
+
+	if aliveSet.dialerToLatency != nil {
+		t.Fatal("random selection should not allocate latency map")
+	}
+	if aliveSet.dialerToLatencyOffset != nil {
+		t.Fatal("random selection should not allocate latency offset map")
+	}
+	if aliveSet.GetRand() == nil {
+		t.Fatal("random selection should still return an alive dialer")
+	}
+
+	aliveSet.NotifyLatencyChange(dialers[0], false)
+	if got := aliveSet.GetRand(); got != dialers[1] {
+		t.Fatalf("expected only second dialer to remain alive, got %p", got)
+	}
+}
+
+func TestAliveDialerSetLatencyOffsetsAreSparse(t *testing.T) {
+	dialers := []*Dialer{
+		newLazyStateTestDialer(t),
+		newLazyStateTestDialer(t),
+	}
+	for _, d := range dialers {
+		defer d.Close()
+	}
+
+	annotations := []*Annotation{
+		{},
+		{AddLatency: 50 * time.Millisecond},
+	}
+	aliveSet := NewAliveDialerSet(logrus.New(), "test-group", lazyStateTestNetworkType, 0,
+		consts.DialerSelectionPolicy_MinLastLatency,
+		dialers, annotations, func(bool) {}, true)
+
+	if aliveSet.dialerToLatency == nil {
+		t.Fatal("min selection should allocate latency map")
+	}
+	if got := len(aliveSet.dialerToLatencyOffset); got != 1 {
+		t.Fatalf("expected one non-zero latency offset, got %d", got)
+	}
+	if _, ok := aliveSet.dialerToLatencyOffset[dialers[0]]; ok {
+		t.Fatal("zero latency offset should not be stored")
+	}
+	if aliveSet.latencyOffset(dialers[0]) != 0 {
+		t.Fatal("missing latency offset should read as zero")
+	}
+	if aliveSet.latencyOffset(dialers[1]) != 50*time.Millisecond {
+		t.Fatal("non-zero latency offset should be preserved")
+	}
+
+	dialers[0].MustGetLatencies10(lazyStateTestNetworkType).AppendLatency(100 * time.Millisecond)
+	dialers[1].MustGetLatencies10(lazyStateTestNetworkType).AppendLatency(100 * time.Millisecond)
+	aliveSet.NotifyLatencyChange(dialers[0], true)
+	aliveSet.NotifyLatencyChange(dialers[1], true)
+
+	got, latency := aliveSet.GetMinLatency()
+	if got != dialers[0] {
+		t.Fatalf("expected zero-offset dialer to win equal raw latency, got %p", got)
+	}
+	if latency != 100*time.Millisecond {
+		t.Fatalf("expected 100ms sorting latency, got %v", latency)
+	}
+}
+
 func TestAliveDialerSetMinAverage10UsesLatencyRing(t *testing.T) {
 	dialers := []*Dialer{
 		newLazyStateTestDialer(t),
@@ -121,6 +197,12 @@ func TestAliveDialerSetMinAverage10UsesLatencyRing(t *testing.T) {
 	aliveSet := NewAliveDialerSet(logrus.New(), "test-group", lazyStateTestNetworkType, 0,
 		consts.DialerSelectionPolicy_MinAverage10Latencies,
 		dialers, lazyStateAnnotations(dialers), func(bool) {}, true)
+	if aliveSet.dialerToLatency == nil {
+		t.Fatal("min selection should allocate latency map")
+	}
+	if aliveSet.dialerToLatencyOffset != nil {
+		t.Fatal("zero latency offsets should not allocate offset map")
+	}
 
 	for _, latency := range []time.Duration{300 * time.Millisecond, 300 * time.Millisecond, 300 * time.Millisecond} {
 		dialers[0].MustGetLatencies10(lazyStateTestNetworkType).AppendLatency(latency)

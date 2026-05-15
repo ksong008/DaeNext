@@ -1244,8 +1244,13 @@ func (c *ControlPlane) CacheStats() CacheStats {
 }
 
 func (c *ControlPlane) TriggerLatencyChecks() {
+	seenDialers := make(map[*dialer.Dialer]struct{})
 	for _, group := range c.outbounds {
 		for _, d := range group.Dialers {
+			if _, ok := seenDialers[d]; ok {
+				continue
+			}
+			seenDialers[d] = struct{}{}
 			d.NotifyCheck()
 		}
 	}
@@ -1253,8 +1258,14 @@ func (c *ControlPlane) TriggerLatencyChecks() {
 
 func (c *ControlPlane) SnapshotNodeLatencies() []NodeLatencySnapshot {
 	latenciesByLink := make(map[string]NodeLatencySnapshot)
+	seenDialers := make(map[*dialer.Dialer]struct{})
 	for _, group := range c.outbounds {
 		for _, d := range group.Dialers {
+			if _, ok := seenDialers[d]; ok {
+				continue
+			}
+			seenDialers[d] = struct{}{}
+
 			link := d.Property().Link
 			if link == "" {
 				continue
