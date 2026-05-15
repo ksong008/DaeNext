@@ -319,21 +319,17 @@ func (c *DnsController) RemoveDnsRespCache(cacheKey string) {
 	}
 }
 func (c *DnsController) LookupDnsRespCache(cacheKey string, ignoreFixedTtl bool) (cache *DnsCache) {
+	now := c.now()
 	c.dnsCacheMu.RLock()
 	cache, ok := c.dnsCache[cacheKey]
 	if !ok {
 		c.dnsCacheMu.RUnlock()
 		return nil
 	}
-	var deadline time.Time
-	if !ignoreFixedTtl {
-		deadline = cache.Deadline
-	} else {
-		deadline = cache.OriginalDeadline
-	}
+	deadline := cacheLookupDeadline(cache, ignoreFixedTtl)
 	// We should make sure the cache did not expire, or
 	// return nil and request a new lookup to refresh the cache.
-	if !deadline.After(time.Now()) {
+	if !deadline.After(now) {
 		c.dnsCacheMu.RUnlock()
 		c.dnsCacheMu.Lock()
 		cache, ok = c.dnsCache[cacheKey]
@@ -341,7 +337,8 @@ func (c *DnsController) LookupDnsRespCache(cacheKey string, ignoreFixedTtl bool)
 			c.dnsCacheMu.Unlock()
 			return nil
 		}
-		if c.cacheExpiresAt(cache).After(time.Now()) {
+		deadline = cacheLookupDeadline(cache, ignoreFixedTtl)
+		if deadline.After(now) {
 			c.dnsCacheMu.Unlock()
 			if c.cacheAccessCallback != nil {
 				if err := c.cacheAccessCallback(cache); err != nil {
@@ -351,6 +348,10 @@ func (c *DnsController) LookupDnsRespCache(cacheKey string, ignoreFixedTtl bool)
 			}
 			recordDnsCacheHit()
 			return cache
+		}
+		if c.cacheExpiresAt(cache).After(now) {
+			c.dnsCacheMu.Unlock()
+			return nil
 		}
 		delete(c.dnsCache, cacheKey)
 		c.dnsCacheMu.Unlock()
@@ -371,6 +372,16 @@ func (c *DnsController) LookupDnsRespCache(cacheKey string, ignoreFixedTtl bool)
 	}
 	recordDnsCacheHit()
 	return cache
+}
+
+func cacheLookupDeadline(cache *DnsCache, ignoreFixedTtl bool) time.Time {
+	if cache == nil {
+		return time.Time{}
+	}
+	if ignoreFixedTtl {
+		return cache.OriginalDeadline
+	}
+	return cache.Deadline
 }
 
 // LookupDnsRespCache_ will modify the msg in place.
@@ -657,6 +668,7 @@ type udpRequest struct {
 	src           netip.AddrPort
 	lConn         *net.UDPConn
 	routingResult *bpfRoutingResult
+	disallowAsIs  bool
 }
 
 type dialArgument struct {
@@ -802,6 +814,9 @@ func (c *DnsController) handleWithResponseWriter_(
 	if err != nil {
 		return err
 	}
+	if req.disallowAsIs && upstreamIndex == consts.DnsRequestOutboundIndex_AsIs {
+		return fmt.Errorf("dns request routing cannot use %q for synthetic resolver lookup; configure an explicit upstream instead", consts.DnsRequestOutboundIndex_AsIs.String())
+	}
 	if responseWriter != nil && upstreamIndex == consts.DnsRequestOutboundIndex_AsIs {
 		return fmt.Errorf("dns request routing cannot use %q for locally bound dns listener; configure an explicit upstream instead", consts.DnsRequestOutboundIndex_AsIs.String())
 	}
@@ -882,6 +897,7 @@ func (c *DnsController) ResolveIp46(ctx context.Context, req *udpRequest, host s
 		msg.SetQuestion(fqdn, qtype)
 		reqCopy := *req
 		reqCopy.ctx = lookupCtx
+		reqCopy.disallowAsIs = true
 		if err := c.handleWithResponseWriter_(msg, &reqCopy, false, nil); err != nil {
 			return netip.Addr{}, err
 		}

@@ -214,6 +214,108 @@ func TestShouldReportDnsDialFailure(t *testing.T) {
 	}
 }
 
+func TestResolveIp46SyntheticLookupRejectsAsIsOriginalTarget(t *testing.T) {
+	log := logrus.New()
+	log.SetLevel(logrus.ErrorLevel)
+
+	routing, err := componentdns.New(&config.Dns{
+		Routing: config.DnsRouting{
+			Request: config.DnsRequestRouting{
+				Fallback: "asis",
+			},
+			Response: config.DnsResponseRouting{
+				Fallback: "accept",
+			},
+		},
+	}, &componentdns.NewOption{
+		Logger: log,
+		UpstreamReadyCallback: func(*componentdns.Upstream) error {
+			return nil
+		},
+	})
+	if err != nil {
+		t.Fatalf("failed to build dns routing: %v", err)
+	}
+
+	usedOriginalTarget := make(chan struct{}, 2)
+	controller, err := NewDnsController(routing, &DnsControllerOption{
+		Log:                 log,
+		CacheAccessCallback: func(*DnsCache) error { return nil },
+		CacheRemoveCallback: func(*DnsCache) error { return nil },
+		NewCache: func(_ string, answers []dnsmessage.RR, deadline time.Time, originalDeadline time.Time) (*DnsCache, error) {
+			ips, hasAnyIP := summarizeDNSAnswers(answers)
+			return &DnsCache{
+				Answer:           answers,
+				IPs:              ips,
+				HasAnyIP:         hasAnyIP,
+				Deadline:         deadline,
+				OriginalDeadline: originalDeadline,
+			}, nil
+		},
+		BestDialerChooser: func(_ *udpRequest, upstream *componentdns.Upstream) (*dialArgument, error) {
+			if upstream != nil && upstream.Hostname == "93.184.216.34" && upstream.Port == 443 {
+				usedOriginalTarget <- struct{}{}
+			}
+			return &dialArgument{
+				l4proto:   consts.L4ProtoStr_UDP,
+				ipversion: consts.IpVersionStr_4,
+			}, nil
+		},
+		TimeoutExceedCallback: func(*dialArgument, error) {},
+	})
+	if err != nil {
+		t.Fatalf("NewDnsController() returned error: %v", err)
+	}
+	defer controller.Close()
+
+	controller.forwarderFactory = func(_ *componentdns.Upstream, _ dialArgument) (DnsForwarder, error) {
+		return &fakeDnsForwarder{forward: func(_ context.Context, data []byte) (*dnsmessage.Msg, error) {
+			req := new(dnsmessage.Msg)
+			if err := req.Unpack(data); err != nil {
+				return nil, err
+			}
+			resp := new(dnsmessage.Msg)
+			resp.SetReply(req)
+			switch req.Question[0].Qtype {
+			case dnsmessage.TypeA:
+				resp.Answer = []dnsmessage.RR{newTestARecord(req.Question[0].Name, "1.1.1.1")}
+			case dnsmessage.TypeAAAA:
+				resp.Answer = []dnsmessage.RR{&dnsmessage.AAAA{
+					Hdr: dnsmessage.RR_Header{
+						Name:   dnsmessage.CanonicalName(req.Question[0].Name),
+						Rrtype: dnsmessage.TypeAAAA,
+						Class:  dnsmessage.ClassINET,
+						Ttl:    60,
+					},
+					AAAA: net.ParseIP("2001:db8::1").To16(),
+				}}
+			}
+			return resp, nil
+		}}, nil
+	}
+
+	req := &udpRequest{
+		ctx:           context.Background(),
+		realSrc:       netip.MustParseAddrPort("192.0.2.10:43210"),
+		realDst:       netip.MustParseAddrPort("93.184.216.34:443"),
+		src:           netip.MustParseAddrPort("192.0.2.10:43210"),
+		routingResult: &bpfRoutingResult{},
+	}
+
+	ip46, err4, err6 := controller.ResolveIp46(context.Background(), req, "example.com")
+	if ip46.Ip4.IsValid() || ip46.Ip6.IsValid() {
+		t.Fatalf("expected synthetic asis lookup to stay unverified, got ip4=%v ip6=%v", ip46.Ip4, ip46.Ip6)
+	}
+	if err4 == nil && err6 == nil {
+		t.Fatal("expected synthetic asis lookup to return an error")
+	}
+	select {
+	case <-usedOriginalTarget:
+		t.Fatal("synthetic domain verification used the original traffic target as DNS upstream")
+	default:
+	}
+}
+
 func TestLookupDnsRespCacheRemovesExpiredEntry(t *testing.T) {
 	removed := 0
 	controller, err := NewDnsController(nil, &DnsControllerOption{
@@ -724,6 +826,49 @@ func TestUpdateDnsCacheTtlAppliesFixedDomainTTL(t *testing.T) {
 	}
 	if want := now.Add(60 * time.Second); !cache.OriginalDeadline.Equal(want) {
 		t.Fatalf("unexpected original deadline: got %v want %v", cache.OriginalDeadline, want)
+	}
+}
+
+func TestFixedDomainTTLZeroDisablesClientResponseCache(t *testing.T) {
+	controller, err := NewDnsController(nil, &DnsControllerOption{
+		Log:                 logrus.New(),
+		CacheAccessCallback: func(*DnsCache) error { return nil },
+		CacheRemoveCallback: func(*DnsCache) error { return nil },
+		NewCache: func(_ string, answers []dnsmessage.RR, deadline time.Time, originalDeadline time.Time) (*DnsCache, error) {
+			ips, hasAnyIP := summarizeDNSAnswers(answers)
+			return &DnsCache{
+				Answer:           answers,
+				IPs:              ips,
+				HasAnyIP:         hasAnyIP,
+				Deadline:         deadline,
+				OriginalDeadline: originalDeadline,
+			}, nil
+		},
+		BestDialerChooser:     func(*udpRequest, *componentdns.Upstream) (*dialArgument, error) { return nil, nil },
+		TimeoutExceedCallback: func(*dialArgument, error) {},
+		FixedDomainTtl:        map[string]int{"example.com": 0},
+	})
+	if err != nil {
+		t.Fatalf("NewDnsController() returned error: %v", err)
+	}
+	defer controller.Close()
+
+	now := time.Now()
+	controller.now = func() time.Time { return now }
+
+	if err := controller.UpdateDnsCacheTtl("example.com.", dnsmessage.TypeA, []dnsmessage.RR{newTestARecord("example.com.", "1.1.1.1")}, 60); err != nil {
+		t.Fatal(err)
+	}
+
+	cacheKey := controller.cacheKey("example.com.", dnsmessage.TypeA)
+	if cache := controller.LookupDnsRespCache(cacheKey, false); cache != nil {
+		t.Fatal("expected fixed_domain_ttl: 0 to disable client response cache")
+	}
+	if _, ok := controller.dnsCache[cacheKey]; !ok {
+		t.Fatal("expected internal DNS cache entry to remain for routing association")
+	}
+	if cache := controller.LookupDnsRespCache(cacheKey, true); cache == nil {
+		t.Fatal("expected internal lookup to remain available until original upstream TTL")
 	}
 }
 
