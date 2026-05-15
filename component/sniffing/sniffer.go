@@ -213,6 +213,12 @@ func (s *Sniffer) Data() [][]byte {
 	return data
 }
 
+// DataView returns retained packet chunks without copying. Callers must treat
+// the returned slices as read-only and must not use them after AppendData or Close.
+func (s *Sniffer) DataView() [][]byte {
+	return s.data
+}
+
 func (s *Sniffer) NeedMore() bool {
 	return s.needMore
 }

@@ -32,6 +32,24 @@ func TestDataReturnsDetachedCopies(t *testing.T) {
 	}
 }
 
+func TestDataViewReturnsInternalReadOnlyView(t *testing.T) {
+	sniffer := NewPacketSniffer([]byte("hello"), time.Second)
+	defer sniffer.Close()
+
+	view := sniffer.DataView()
+	if len(view) != 1 || string(view[0]) != "hello" {
+		t.Fatalf("unexpected data view: %q", view)
+	}
+	if &view[0][0] != &sniffer.data[0][0] {
+		t.Fatal("expected DataView() to return the retained packet slice without copying")
+	}
+
+	copied := sniffer.Data()
+	if &copied[0][0] == &view[0][0] {
+		t.Fatal("expected Data() to keep returning detached copies")
+	}
+}
+
 func TestCloseReturnsBufferEvenWhenUnread(t *testing.T) {
 	sniffer := NewPacketSniffer([]byte("hello"), time.Second)
 	if err := sniffer.Close(); err != nil {
