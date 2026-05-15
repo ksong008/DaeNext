@@ -766,7 +766,9 @@ func (c *ControlPlane) ActivateCheck() {
 	for _, g := range c.outbounds {
 		for _, d := range g.Dialers {
 			// We only activate check of nodes that have a group.
-			d.ActivateCheck()
+			if d.HasAliveDialerSets() {
+				d.ActivateCheck()
+			}
 		}
 	}
 }
@@ -1308,7 +1310,7 @@ func bestNodeLatencySnapshotForDialer(d *dialer.Dialer) NodeLatencySnapshot {
 
 	var bestLatency time.Duration
 	for _, networkType := range checkTypes {
-		latency, ok := d.MustGetLatencies10(networkType).LastLatency()
+		latency, alive, ok := d.LastLatencySnapshot(networkType)
 		if !ok {
 			continue
 		}
@@ -1316,7 +1318,7 @@ func bestNodeLatencySnapshotForDialer(d *dialer.Dialer) NodeLatencySnapshot {
 			latencyMs := int32(latency.Milliseconds())
 			bestLatency = latency
 			snapshot.LatencyMs = &latencyMs
-			snapshot.Alive = d.MustGetAlive(networkType)
+			snapshot.Alive = alive
 			snapshot.Message = dialer.FormatLatencyMessage(&dialer.LatencyProbeResult{
 				Alive:   snapshot.Alive,
 				Latency: latency,
