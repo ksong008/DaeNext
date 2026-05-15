@@ -56,5 +56,9 @@ func TestAhocorasickSlimtrie(t *testing.T) {
 		if !slices.Equal(bitmap, bitmap2) {
 			t.Fatal(i, sample, bitmap, bitmap2)
 		}
+		reusedBitmap := actrie.MatchDomainBitmapInto(sample, make([]uint32, len(bitmap)))
+		if !slices.Equal(bitmap, reusedBitmap) {
+			t.Fatal(i, sample, bitmap, reusedBitmap)
+		}
 	}
 }
