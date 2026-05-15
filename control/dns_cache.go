@@ -8,6 +8,7 @@ package control
 import (
 	"encoding/binary"
 	"net/netip"
+	"strings"
 	"time"
 
 	dnsmessage "github.com/miekg/dns"
@@ -118,6 +119,25 @@ func (c *DnsCache) IncludeAnyIp() bool {
 }
 
 func (c *DnsCache) AnswersForHostQType(host string, dnsTyp uint16) []dnsmessage.RR {
+	return c.AnswersForHostQTypeClass(host, dnsTyp, dnsmessage.ClassINET)
+}
+
+func (c *DnsCache) answersForQuestion(qname string, qtype uint16, qclass uint16) []dnsmessage.RR {
+	if len(c.PackedResponse) >= 2 {
+		var msg dnsmessage.Msg
+		if err := msg.Unpack(c.PackedResponse); err == nil && len(msg.Question) > 0 && len(msg.Answer) > 0 {
+			q := msg.Question[0]
+			if strings.EqualFold(dnsmessage.CanonicalName(q.Name), dnsmessage.CanonicalName(qname)) &&
+				q.Qtype == qtype &&
+				q.Qclass == qclass {
+				return deepcopy.Copy(msg.Answer).([]dnsmessage.RR)
+			}
+		}
+	}
+	return c.AnswersForHostQTypeClass(qname, qtype, qclass)
+}
+
+func (c *DnsCache) AnswersForHostQTypeClass(host string, dnsTyp uint16, dnsClass uint16) []dnsmessage.RR {
 	fqdn := dnsmessage.CanonicalName(host)
 	answers := make([]dnsmessage.RR, 0, len(c.cachedIPs()))
 	for _, ip := range c.cachedIPs() {
@@ -130,7 +150,7 @@ func (c *DnsCache) AnswersForHostQType(host string, dnsTyp uint16) []dnsmessage.
 				Hdr: dnsmessage.RR_Header{
 					Name:   fqdn,
 					Rrtype: dnsmessage.TypeA,
-					Class:  dnsmessage.ClassINET,
+					Class:  dnsClass,
 					Ttl:    0,
 				},
 				A: ip.Unmap().AsSlice(),
@@ -143,7 +163,7 @@ func (c *DnsCache) AnswersForHostQType(host string, dnsTyp uint16) []dnsmessage.
 				Hdr: dnsmessage.RR_Header{
 					Name:   fqdn,
 					Rrtype: dnsmessage.TypeAAAA,
-					Class:  dnsmessage.ClassINET,
+					Class:  dnsClass,
 					Ttl:    0,
 				},
 				AAAA: ip.AsSlice(),

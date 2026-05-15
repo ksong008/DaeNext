@@ -147,6 +147,116 @@ func newTestARecord(qname, ip string) *dnsmessage.A {
 	}
 }
 
+func TestDnsCacheKeyIncludesQuestionTypeAndClass(t *testing.T) {
+	inetA := newDnsCacheKey("Example.COM", dnsmessage.TypeA, dnsmessage.ClassINET)
+	inetAAAA := newDnsCacheKey("example.com.", dnsmessage.TypeAAAA, dnsmessage.ClassINET)
+	nonINETA := newDnsCacheKey("example.com.", dnsmessage.TypeA, 3)
+
+	if inetA.qname != "example.com." {
+		t.Fatalf("qname = %q, want canonical lowercase fqdn", inetA.qname)
+	}
+	if inetA == inetAAAA {
+		t.Fatal("expected A and AAAA lookups to use different cache keys")
+	}
+	if inetA == nonINETA {
+		t.Fatal("expected different DNS question classes to use different cache keys")
+	}
+
+	parsed, ok := parseDnsCacheKey(inetA.String())
+	if !ok {
+		t.Fatalf("failed to parse structured cache key %q", inetA.String())
+	}
+	if parsed != inetA {
+		t.Fatalf("parsed structured key = %+v, want %+v", parsed, inetA)
+	}
+
+	legacy, ok := parseDnsCacheKey("example.com.1")
+	if !ok {
+		t.Fatal("failed to parse legacy dns cache key")
+	}
+	if legacy != inetA {
+		t.Fatalf("parsed legacy key = %+v, want %+v", legacy, inetA)
+	}
+}
+
+func TestNormalizeAndCacheDnsRespUsesQuestionClassInCacheKey(t *testing.T) {
+	const testClass = uint16(3)
+
+	controller, err := NewDnsController(nil, &DnsControllerOption{
+		Log:                 logrus.New(),
+		CacheAccessCallback: func(*DnsCache) error { return nil },
+		CacheRemoveCallback: func(*DnsCache) error { return nil },
+		NewCache: func(_ string, answers []dnsmessage.RR, deadline time.Time, originalDeadline time.Time) (*DnsCache, error) {
+			ips, hasAnyIP := summarizeDNSAnswers(answers)
+			return &DnsCache{
+				Answer:           answers,
+				IPs:              ips,
+				HasAnyIP:         hasAnyIP,
+				Deadline:         deadline,
+				OriginalDeadline: originalDeadline,
+			}, nil
+		},
+		BestDialerChooser:     func(*udpRequest, *componentdns.Upstream) (*dialArgument, error) { return nil, nil },
+		TimeoutExceedCallback: func(*dialArgument, error) {},
+	})
+	if err != nil {
+		t.Fatalf("NewDnsController() returned error: %v", err)
+	}
+	defer controller.Close()
+
+	now := time.Now()
+	controller.now = func() time.Time { return now }
+
+	msg := new(dnsmessage.Msg)
+	msg.SetQuestion("Example.COM.", dnsmessage.TypeA)
+	msg.Question[0].Qclass = testClass
+	msg.Response = true
+	msg.Answer = []dnsmessage.RR{
+		&dnsmessage.A{
+			Hdr: dnsmessage.RR_Header{
+				Name:   dnsmessage.CanonicalName("example.com."),
+				Rrtype: dnsmessage.TypeA,
+				Class:  testClass,
+				Ttl:    60,
+			},
+			A: net.ParseIP("1.1.1.1").To4(),
+		},
+	}
+
+	if err := controller.NormalizeAndCacheDnsResp_(msg); err != nil {
+		t.Fatal(err)
+	}
+
+	customClassKey := controller.cacheKeyFromParts("example.com.", dnsmessage.TypeA, testClass)
+	if cache := controller.LookupDnsRespCache(customClassKey, false); cache == nil {
+		t.Fatal("expected cache hit for the original question class")
+	}
+	if cache := controller.LookupDnsRespCache(controller.cacheKey("example.com.", dnsmessage.TypeA), false); cache != nil {
+		t.Fatal("expected INET lookup to miss when response was cached for a different question class")
+	}
+
+	req := new(dnsmessage.Msg)
+	req.Question = []dnsmessage.Question{{
+		Name:   dnsmessage.CanonicalName("example.com."),
+		Qtype:  dnsmessage.TypeA,
+		Qclass: testClass,
+	}}
+	resp := controller.LookupDnsRespCache_(req, customClassKey, false)
+	if resp == nil {
+		t.Fatal("expected packed cache response")
+	}
+	var respMsg dnsmessage.Msg
+	if err := respMsg.Unpack(resp); err != nil {
+		t.Fatal(err)
+	}
+	if got := respMsg.Question[0].Qclass; got != testClass {
+		t.Fatalf("response question class = %d, want %d", got, testClass)
+	}
+	if got := respMsg.Answer[0].Header().Class; got != testClass {
+		t.Fatalf("response answer class = %d, want %d", got, testClass)
+	}
+}
+
 func TestDNSForwarderReusable(t *testing.T) {
 	tests := []struct {
 		name     string
