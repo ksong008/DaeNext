@@ -123,11 +123,19 @@ func ProcessNameParserFactory(callback func(f *config_parser.Function, procNames
 
 func parsePrefixes(values []string) (cidrs []netip.Prefix, err error) {
 	for _, value := range values {
-		toParse := value
 		if strings.LastIndexByte(value, '/') == -1 {
-			toParse += "/32"
+			addr, err := netip.ParseAddr(value)
+			if err != nil {
+				return nil, fmt.Errorf("cannot parse %v: %w", value, err)
+			}
+			bits := 128
+			if addr.Is4() {
+				bits = 32
+			}
+			cidrs = append(cidrs, netip.PrefixFrom(addr, bits))
+			continue
 		}
-		prefix, err := netip.ParsePrefix(toParse)
+		prefix, err := netip.ParsePrefix(value)
 		if err != nil {
 			return nil, fmt.Errorf("cannot parse %v: %w", value, err)
 		}

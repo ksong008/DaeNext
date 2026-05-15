@@ -4,9 +4,14 @@ import (
 	"context"
 	"errors"
 	"net/netip"
+	"sync"
 	"testing"
+	"time"
 
 	"github.com/daeuniverse/dae/common/consts"
+	componentdns "github.com/daeuniverse/dae/component/dns"
+	"github.com/daeuniverse/dae/config"
+	dnsmessage "github.com/miekg/dns"
 	"github.com/sirupsen/logrus"
 )
 
@@ -63,6 +68,100 @@ func TestChooseDialTargetUsesDomainForUnspecifiedDest(t *testing.T) {
 	}
 	if dialIP {
 		t.Fatal("dialIP = true, want false for domain-only target")
+	}
+}
+
+func TestChooseDialTargetDomainModeDoesNotRerouteAfterActiveResolve(t *testing.T) {
+	log := logrus.New()
+	log.SetLevel(logrus.ErrorLevel)
+
+	routing, err := componentdns.New(&config.Dns{
+		Upstream: []config.KeyableString{
+			"test:udp://1.1.1.1:53",
+		},
+		Routing: config.DnsRouting{
+			Request: config.DnsRequestRouting{
+				Fallback: "test",
+			},
+			Response: config.DnsResponseRouting{
+				Fallback: "accept",
+			},
+		},
+	}, &componentdns.NewOption{
+		Logger: log,
+		UpstreamReadyCallback: func(*componentdns.Upstream) error {
+			return nil
+		},
+	})
+	if err != nil {
+		t.Fatalf("failed to build dns routing: %v", err)
+	}
+
+	controller, err := NewDnsController(routing, &DnsControllerOption{
+		Log:                 log,
+		CacheAccessCallback: func(*DnsCache) error { return nil },
+		CacheRemoveCallback: func(*DnsCache) error { return nil },
+		NewCache: func(_ string, answers []dnsmessage.RR, deadline time.Time, originalDeadline time.Time) (*DnsCache, error) {
+			ips, hasAnyIP := summarizeDNSAnswers(answers)
+			return &DnsCache{
+				Answer:           answers,
+				IPs:              ips,
+				HasAnyIP:         hasAnyIP,
+				Deadline:         deadline,
+				OriginalDeadline: originalDeadline,
+			}, nil
+		},
+		BestDialerChooser: func(*udpRequest, *componentdns.Upstream) (*dialArgument, error) {
+			return &dialArgument{
+				l4proto:   consts.L4ProtoStr_UDP,
+				ipversion: consts.IpVersionStr_4,
+			}, nil
+		},
+		TimeoutExceedCallback: func(*dialArgument, error) {},
+	})
+	if err != nil {
+		t.Fatalf("NewDnsController() returned error: %v", err)
+	}
+	defer controller.Close()
+
+	controller.forwarderFactory = func(_ *componentdns.Upstream, _ dialArgument) (DnsForwarder, error) {
+		return &fakeDnsForwarder{forward: func(_ context.Context, data []byte) (*dnsmessage.Msg, error) {
+			req := new(dnsmessage.Msg)
+			if err := req.Unpack(data); err != nil {
+				return nil, err
+			}
+			resp := new(dnsmessage.Msg)
+			resp.SetReply(req)
+			if req.Question[0].Qtype == dnsmessage.TypeA {
+				resp.Answer = []dnsmessage.RR{newTestARecord(req.Question[0].Name, "1.1.1.1")}
+			}
+			return resp, nil
+		}}, nil
+	}
+
+	c := &ControlPlane{
+		log:               log,
+		dialMode:          consts.DialMode_Domain,
+		dnsController:     controller,
+		muRealDomainCache: sync.Mutex{},
+		realDomainCache:   make(map[string]realDomainCacheEntry),
+	}
+	target, shouldReroute, dialIP := c.ChooseDialTarget(
+		context.Background(),
+		netip.MustParseAddrPort("192.0.2.10:43210"),
+		&bpfRoutingResult{},
+		consts.OutboundUserDefinedMin,
+		netip.MustParseAddrPort("93.184.216.34:443"),
+		"example.com",
+	)
+	if target != "example.com:443" {
+		t.Fatalf("target = %q, want example.com:443", target)
+	}
+	if shouldReroute {
+		t.Fatal("shouldReroute = true, want false for dial_mode domain")
+	}
+	if dialIP {
+		t.Fatal("dialIP = true, want false after domain rewrite")
 	}
 }
 
