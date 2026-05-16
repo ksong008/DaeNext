@@ -27,11 +27,14 @@ const manualProbeScopeNote = "TCP-only"
 func (d *Dialer) ProbeLatency() (*LatencyProbeResult, error) {
 	checkOptions := d.latencyProbeCheckOptions()
 	var (
-		lastErr error
+		lastErr       error
+		lastCheckedAt time.Time
 	)
 
 	for _, opt := range checkOptions {
 		ok, latency, err := d.probeLatencyCheck(opt, manualProbeTimeout)
+		checkedAt := d.recordProbeLatencyResult(opt, ok, latency, err)
+		lastCheckedAt = checkedAt
 		if err != nil {
 			lastErr = err
 		}
@@ -42,12 +45,15 @@ func (d *Dialer) ProbeLatency() (*LatencyProbeResult, error) {
 			Alive:     true,
 			Latency:   latency,
 			Message:   manualProbeScopeNote,
-			CheckedAt: time.Now(),
+			CheckedAt: checkedAt,
 		}, nil
 	}
 
+	if lastCheckedAt.IsZero() {
+		lastCheckedAt = time.Now()
+	}
 	result := &LatencyProbeResult{
-		CheckedAt: time.Now(),
+		CheckedAt: lastCheckedAt,
 	}
 	if lastErr != nil {
 		result.Message = lastErr.Error()
@@ -56,6 +62,23 @@ func (d *Dialer) ProbeLatency() (*LatencyProbeResult, error) {
 
 	result.Message = "no latency result"
 	return result, nil
+}
+
+func (d *Dialer) recordProbeLatencyResult(opt *CheckOption, ok bool, latency time.Duration, err error) time.Time {
+	collection := d.mustGetCollection(opt.networkType)
+	checkedAt := time.Now()
+	if ok && err == nil {
+		collection.Latencies10.AppendLatency(latency)
+		collection.mu.Lock()
+		collection.MovingAverage = (collection.MovingAverage + latency) / 2
+		collection.Alive = true
+		collection.CheckedAt = checkedAt
+		collection.mu.Unlock()
+	} else {
+		d.logUnavailable(collection, opt.networkType, err, checkedAt)
+	}
+	d.informDialerGroupUpdate(collection)
+	return checkedAt
 }
 
 func (d *Dialer) probeLatencyCheck(opt *CheckOption, timeout time.Duration) (ok bool, latency time.Duration, err error) {
