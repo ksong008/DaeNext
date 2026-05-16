@@ -50,8 +50,8 @@ func TestNewDialerLazilyAllocatesHealthState(t *testing.T) {
 		t.Fatal("new dialer should not have registered alive dialer sets")
 	}
 
-	if latency, alive, ok := d.LastLatencySnapshot(lazyStateTestNetworkType); ok || latency != 0 || !alive {
-		t.Fatalf("unexpected empty latency snapshot: latency=%v alive=%v ok=%v", latency, alive, ok)
+	if latency, alive, checkedAt, ok := d.LastLatencySnapshot(lazyStateTestNetworkType); ok || latency != 0 || !alive || !checkedAt.IsZero() {
+		t.Fatalf("unexpected empty latency snapshot: latency=%v alive=%v checkedAt=%v ok=%v", latency, alive, checkedAt, ok)
 	}
 	if d.collections[collectionIndex(lazyStateTestNetworkType)] != nil {
 		t.Fatal("LastLatencySnapshot should not allocate a collection")

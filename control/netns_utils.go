@@ -90,6 +90,8 @@ func (ns *DaeNetns) LinkMode() string {
 	if ns == nil {
 		return ""
 	}
+	ns.mu.Lock()
+	defer ns.mu.Unlock()
 	return string(ns.linkMode)
 }
 

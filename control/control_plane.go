@@ -1260,6 +1260,64 @@ func (c *ControlPlane) TriggerLatencyChecks() {
 	}
 }
 
+func (c *ControlPlane) ProbeNodeLatencies(links []string) []NodeLatencySnapshot {
+	if len(links) == 0 {
+		return nil
+	}
+
+	requestedLinks := make(map[string]struct{}, len(links))
+	for _, link := range links {
+		if link != "" {
+			requestedLinks[link] = struct{}{}
+		}
+	}
+	if len(requestedLinks) == 0 {
+		return nil
+	}
+
+	latenciesByLink := make(map[string]NodeLatencySnapshot)
+	seenDialers := make(map[*dialer.Dialer]struct{})
+	sem := make(chan struct{}, 8)
+	var mu sync.Mutex
+	var wg sync.WaitGroup
+	for _, group := range c.outbounds {
+		for _, d := range group.Dialers {
+			if _, ok := seenDialers[d]; ok {
+				continue
+			}
+			seenDialers[d] = struct{}{}
+
+			link := d.Property().Link
+			if _, ok := requestedLinks[link]; !ok {
+				continue
+			}
+
+			wg.Add(1)
+			go func(d *dialer.Dialer) {
+				defer wg.Done()
+				sem <- struct{}{}
+				defer func() { <-sem }()
+
+				result, err := d.ProbeLatency()
+				snapshot := nodeLatencySnapshotFromProbe(d, result, err)
+
+				mu.Lock()
+				defer mu.Unlock()
+				if existing, ok := latenciesByLink[snapshot.Link]; !ok || preferNodeLatencySnapshot(snapshot, existing) {
+					latenciesByLink[snapshot.Link] = snapshot
+				}
+			}(d)
+		}
+	}
+	wg.Wait()
+
+	results := make([]NodeLatencySnapshot, 0, len(latenciesByLink))
+	for _, snapshot := range latenciesByLink {
+		results = append(results, snapshot)
+	}
+	return results
+}
+
 func (c *ControlPlane) SnapshotNodeLatencies() []NodeLatencySnapshot {
 	latenciesByLink := make(map[string]NodeLatencySnapshot)
 	seenDialers := make(map[*dialer.Dialer]struct{})
@@ -1325,7 +1383,7 @@ func bestNodeLatencySnapshotForDialer(d *dialer.Dialer) NodeLatencySnapshot {
 
 	var bestLatency time.Duration
 	for _, networkType := range checkTypes {
-		latency, alive, ok := d.LastLatencySnapshot(networkType)
+		latency, alive, checkedAt, ok := d.LastLatencySnapshot(networkType)
 		if !ok {
 			continue
 		}
@@ -1338,10 +1396,35 @@ func bestNodeLatencySnapshotForDialer(d *dialer.Dialer) NodeLatencySnapshot {
 				Alive:   snapshot.Alive,
 				Latency: latency,
 			})
-			snapshot.CheckedAt = time.Now()
+			snapshot.CheckedAt = checkedAt
 		}
 	}
 
+	return snapshot
+}
+
+func nodeLatencySnapshotFromProbe(d *dialer.Dialer, result *dialer.LatencyProbeResult, err error) NodeLatencySnapshot {
+	snapshot := NodeLatencySnapshot{
+		Name:      d.Property().Name,
+		Link:      d.Property().Link,
+		Alive:     false,
+		Message:   "no latency result",
+		CheckedAt: time.Now(),
+	}
+	if err != nil {
+		snapshot.Message = err.Error()
+		return snapshot
+	}
+	if result == nil {
+		return snapshot
+	}
+	snapshot.Alive = result.Alive
+	snapshot.Message = dialer.FormatLatencyMessage(result)
+	snapshot.CheckedAt = result.CheckedAt
+	if result.Alive {
+		latencyMs := int32(result.Latency.Milliseconds())
+		snapshot.LatencyMs = &latencyMs
+	}
 	return snapshot
 }
 

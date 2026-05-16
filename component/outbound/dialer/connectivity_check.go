@@ -69,6 +69,7 @@ type collection struct {
 	Latencies10       *LatenciesN
 	MovingAverage     time.Duration
 	Alive             bool
+	CheckedAt         time.Time
 
 	mu sync.RWMutex
 }
@@ -85,6 +86,12 @@ func (c *collection) AliveSnapshot() bool {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 	return c.Alive
+}
+
+func (c *collection) AliveCheckedAtSnapshot() (bool, time.Time) {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return c.Alive, c.CheckedAt
 }
 
 func (c *collection) MovingAverageSnapshot() time.Duration {
@@ -640,16 +647,17 @@ func (d *Dialer) MustGetLatencies10(typ *NetworkType) *LatenciesN {
 	return d.mustGetCollection(typ).Latencies10
 }
 
-func (d *Dialer) LastLatencySnapshot(typ *NetworkType) (latency time.Duration, alive bool, ok bool) {
+func (d *Dialer) LastLatencySnapshot(typ *NetworkType) (latency time.Duration, alive bool, checkedAt time.Time, ok bool) {
 	collection := d.getCollection(typ)
 	if collection == nil {
-		return 0, true, false
+		return 0, true, time.Time{}, false
 	}
 	latency, ok = collection.Latencies10.LastLatency()
+	alive, checkedAt = collection.AliveCheckedAtSnapshot()
 	if !ok {
-		return 0, collection.AliveSnapshot(), false
+		return 0, alive, checkedAt, false
 	}
-	return latency, collection.AliveSnapshot(), true
+	return latency, alive, checkedAt, true
 }
 
 func (d *Dialer) HasAliveDialerSets() bool {
@@ -697,7 +705,12 @@ func (d *Dialer) logUnavailable(
 	collection *collection,
 	network *NetworkType,
 	err error,
+	checkedAt ...time.Time,
 ) {
+	when := time.Now()
+	if len(checkedAt) > 0 && !checkedAt[0].IsZero() {
+		when = checkedAt[0]
+	}
 	// Append timeout if there is any error or unexpected status code.
 	if err != nil {
 		if strings.HasSuffix(err.Error(), "network is unreachable") {
@@ -716,6 +729,7 @@ func (d *Dialer) logUnavailable(
 	collection.mu.Lock()
 	collection.MovingAverage = (collection.MovingAverage + Timeout) / 2
 	collection.Alive = false
+	collection.CheckedAt = when
 	collection.mu.Unlock()
 }
 
@@ -750,6 +764,7 @@ func (d *Dialer) Check(opts *CheckOption) (ok bool, err error) {
 		collection.mu.Lock()
 		collection.MovingAverage = (collection.MovingAverage + latency) / 2
 		collection.Alive = true
+		collection.CheckedAt = time.Now()
 		movingAverage := collection.MovingAverage
 		collection.mu.Unlock()
 
