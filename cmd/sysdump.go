@@ -247,7 +247,7 @@ func dumpRouting(outputDir string) {
 		}
 
 		if route.Protocol != 0 {
-			routeStr += fmt.Sprintf(" proto %s", protocolToString(route.Protocol))
+			routeStr += fmt.Sprintf(" proto %s", protocolToString(int(route.Protocol)))
 		}
 
 		if route.Type != 0 {
