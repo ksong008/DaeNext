@@ -159,7 +159,7 @@ func (c *controlPlaneCore) linkHdrLen(ifname string) (uint32, error) {
 	return linkHdrLen, nil
 }
 
-func (c *controlPlaneCore) addQdisc(ifname string) error {
+func addClsactQdisc(ifname string) error {
 	link, err := netlink.LinkByName(ifname)
 	if err != nil {
 		return err
@@ -176,6 +176,10 @@ func (c *controlPlaneCore) addQdisc(ifname string) error {
 		return fmt.Errorf("cannot add clsact qdisc: %w", err)
 	}
 	return nil
+}
+
+func (c *controlPlaneCore) addQdisc(ifname string) error {
+	return addClsactQdisc(ifname)
 }
 
 func (c *controlPlaneCore) delQdisc(ifname string) error {

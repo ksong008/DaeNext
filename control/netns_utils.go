@@ -12,6 +12,7 @@ import (
 	"os"
 	"path"
 	"runtime"
+	"strings"
 	"sync"
 	"sync/atomic"
 
@@ -28,9 +29,19 @@ const (
 	NsVethName   = "dae0peer"
 )
 
+type netnsLinkMode string
+
+const (
+	netnsLinkEnv        = "DAE_NETNS_LINK"
+	netnsLinkModeAuto   = netnsLinkMode("auto")
+	netnsLinkModeVeth   = netnsLinkMode("veth")
+	netnsLinkModeNetkit = netnsLinkMode("netkit")
+)
+
 var (
-	daeNetns *DaeNetns
-	once     sync.Once
+	daeNetns       *DaeNetns
+	once           sync.Once
+	netkitProbeSeq atomic.Uint32
 )
 
 type DaeNetns struct {
@@ -41,6 +52,7 @@ type DaeNetns struct {
 
 	dae0, dae0peer netlink.Link
 	hostNs, daeNs  netns.NsHandle
+	linkMode       netnsLinkMode
 }
 
 func NewDaeNetns(log *logrus.Logger) *DaeNetns {
@@ -72,6 +84,13 @@ func (ns *DaeNetns) Dae0() netlink.Link {
 
 func (ns *DaeNetns) Dae0Peer() netlink.Link {
 	return ns.dae0peer
+}
+
+func (ns *DaeNetns) LinkMode() string {
+	if ns == nil {
+		return ""
+	}
+	return string(ns.linkMode)
 }
 
 func (ns *DaeNetns) Setup() (err error) {
@@ -115,6 +134,7 @@ func (ns *DaeNetns) closeWith(deleteNamedNetns func(string) error, deleteLink fu
 
 	ns.dae0 = nil
 	ns.dae0peer = nil
+	ns.linkMode = ""
 	ns.setupDone.Store(false)
 	return errors.Join(errs...)
 }
@@ -171,10 +191,7 @@ func (ns *DaeNetns) setup() (err error) {
 	}
 	defer netns.Set(ns.hostNs)
 
-	if err = ns.setupVeth(); err != nil {
-		return
-	}
-	if err = ns.setupNetns(); err != nil {
+	if err = ns.setupLinkPairAndNetns(); err != nil {
 		return
 	}
 	if err = ns.setupSysctl(); err != nil {
@@ -239,6 +256,7 @@ func (ns *DaeNetns) setupRoutingPolicy() (err error) {
 	ip rule add fwmark 0x8000000/0x8000000 table 2023
 	ip -6 rule add fwmark 0x8000000/0x8000000 table 2023
 	*/
+	tproxyMark := uint32(consts.TproxyMark)
 	rules := []netlink.Rule{{
 		SuppressIfgroup:   -1,
 		SuppressPrefixlen: -1,
@@ -247,8 +265,8 @@ func (ns *DaeNetns) setupRoutingPolicy() (err error) {
 		Flow:              -1,
 		Family:            unix.AF_INET,
 		Table:             table,
-		Mark:              int(consts.TproxyMark),
-		Mask:              int(consts.TproxyMark),
+		Mark:              tproxyMark,
+		Mask:              &tproxyMark,
 	}, {
 		SuppressIfgroup:   -1,
 		SuppressPrefixlen: -1,
@@ -257,8 +275,8 @@ func (ns *DaeNetns) setupRoutingPolicy() (err error) {
 		Flow:              -1,
 		Family:            unix.AF_INET6,
 		Table:             table,
-		Mark:              int(consts.TproxyMark),
-		Mask:              int(consts.TproxyMark),
+		Mark:              tproxyMark,
+		Mask:              &tproxyMark,
 	}}
 
 	for _, rule := range rules {
@@ -273,9 +291,175 @@ func (ns *DaeNetns) setupRoutingPolicy() (err error) {
 	}
 	return nil
 }
+
+func parseNetnsLinkMode(raw string) (netnsLinkMode, error) {
+	mode := strings.ToLower(strings.TrimSpace(raw))
+	if mode == "" {
+		return netnsLinkModeAuto, nil
+	}
+	switch netnsLinkMode(mode) {
+	case netnsLinkModeAuto, netnsLinkModeVeth, netnsLinkModeNetkit:
+		return netnsLinkMode(mode), nil
+	default:
+		return "", fmt.Errorf("invalid %s=%q, want auto, netkit, or veth", netnsLinkEnv, raw)
+	}
+}
+
+func (ns *DaeNetns) setupLinkPairAndNetns() error {
+	mode, err := parseNetnsLinkMode(os.Getenv(netnsLinkEnv))
+	if err != nil {
+		return err
+	}
+	return ns.setupLinkPairAndNetnsWith(mode, ns.probeNetkitSupport, ns.setupNetkitAndNetns, ns.setupVethAndNetns, ns.cleanupFailedLinkSetup)
+}
+
+func (ns *DaeNetns) setupLinkPairAndNetnsWith(
+	mode netnsLinkMode,
+	probeNetkit func() error,
+	setupNetkit func() error,
+	setupVeth func() error,
+	cleanup func(),
+) error {
+	switch mode {
+	case netnsLinkModeVeth:
+		if err := setupVeth(); err != nil {
+			return err
+		}
+		ns.linkMode = netnsLinkModeVeth
+		ns.logNetnsLinkInfo("dae netns link mode: veth")
+		return nil
+	case netnsLinkModeNetkit:
+		if err := probeNetkit(); err != nil {
+			return fmt.Errorf("netkit requested but preflight failed: %w", err)
+		}
+		if err := setupNetkit(); err != nil {
+			if cleanup != nil {
+				cleanup()
+			}
+			return fmt.Errorf("netkit requested but setup failed: %w", err)
+		}
+		ns.linkMode = netnsLinkModeNetkit
+		ns.logNetnsLinkInfo("dae netns link mode: netkit")
+		return nil
+	case netnsLinkModeAuto:
+		var fallbackReason error
+		if err := probeNetkit(); err != nil {
+			fallbackReason = fmt.Errorf("preflight failed: %w", err)
+		} else if err := setupNetkit(); err != nil {
+			fallbackReason = fmt.Errorf("setup failed: %w", err)
+		} else {
+			ns.linkMode = netnsLinkModeNetkit
+			ns.logNetnsLinkInfo("dae netns link mode: netkit")
+			return nil
+		}
+		if cleanup != nil {
+			cleanup()
+		}
+		ns.logNetnsLinkWarnf("dae netns link mode: veth fallback: %v", fallbackReason)
+		if err := setupVeth(); err != nil {
+			return fmt.Errorf("failed to setup veth fallback after netkit failure (%v): %w", fallbackReason, err)
+		}
+		ns.linkMode = netnsLinkModeVeth
+		return nil
+	default:
+		return fmt.Errorf("invalid netns link mode: %q", mode)
+	}
+}
+
+func (ns *DaeNetns) setupVethAndNetns() error {
+	if err := ns.setupVeth(); err != nil {
+		return err
+	}
+	return ns.setupNetns()
+}
+
+func (ns *DaeNetns) setupNetkitAndNetns() error {
+	if err := ns.setupNetkit(); err != nil {
+		return err
+	}
+	return ns.setupNetns()
+}
+
+func (ns *DaeNetns) cleanupFailedLinkSetup() {
+	if ns.hostNs != netns.None() && ns.hostNs != 0 {
+		_ = netns.Set(ns.hostNs)
+	}
+	_ = DeleteNamedNetns(NsName)
+	_ = DeleteLink(HostVethName)
+	_ = DeleteLink(NsVethName)
+	_ = closeNsHandle("dae", &ns.daeNs)
+	ns.dae0 = nil
+	ns.dae0peer = nil
+	ns.linkMode = ""
+}
+
+func (ns *DaeNetns) logNetnsLinkInfo(msg string) {
+	if ns != nil && ns.log != nil {
+		ns.log.Info(msg)
+	}
+}
+
+func (ns *DaeNetns) logNetnsLinkWarnf(format string, args ...any) {
+	if ns != nil && ns.log != nil {
+		ns.log.Warnf(format, args...)
+	}
+}
+
+func nextNetkitProbeNames() (hostName, peerName string) {
+	seq := netkitProbeSeq.Add(1) % 100000
+	pid := os.Getpid() % 10000
+	suffix := fmt.Sprintf("%04d%05d", pid, seq)
+	return "dnkh" + suffix, "dnkp" + suffix
+}
+
+func (ns *DaeNetns) probeNetkitSupport() (err error) {
+	hostName, peerName := nextNetkitProbeNames()
+	defer DeleteLink(hostName)
+	defer DeleteLink(peerName)
+
+	netkit := &netlink.Netkit{
+		LinkAttrs: netlink.LinkAttrs{
+			Name:   hostName,
+			TxQLen: 1000,
+		},
+		Mode:       netlink.NETKIT_MODE_L2,
+		Policy:     netlink.NETKIT_POLICY_FORWARD,
+		PeerPolicy: netlink.NETKIT_POLICY_FORWARD,
+		Scrub:      netlink.NETKIT_SCRUB_NONE,
+		PeerScrub:  netlink.NETKIT_SCRUB_NONE,
+	}
+	netkit.SetPeerAttrs(&netlink.LinkAttrs{Name: peerName})
+	if err = netlink.LinkAdd(netkit); err != nil {
+		return fmt.Errorf("create netkit pair: %w", err)
+	}
+
+	hostLink, err := netlink.LinkByName(hostName)
+	if err != nil {
+		return fmt.Errorf("get netkit primary: %w", err)
+	}
+	peerLink, err := netlink.LinkByName(peerName)
+	if err != nil {
+		return fmt.Errorf("get netkit peer: %w", err)
+	}
+	if err = netlink.LinkSetUp(hostLink); err != nil {
+		return fmt.Errorf("set netkit primary up: %w", err)
+	}
+	if err = netlink.LinkSetUp(peerLink); err != nil {
+		return fmt.Errorf("set netkit peer up: %w", err)
+	}
+	if err = addClsactQdisc(hostName); err != nil {
+		return fmt.Errorf("add clsact to netkit primary: %w", err)
+	}
+	if err = addClsactQdisc(peerName); err != nil {
+		return fmt.Errorf("add clsact to netkit peer: %w", err)
+	}
+	return nil
+}
+
 func (ns *DaeNetns) setupVeth() (err error) {
 	// ip l a dae0 type veth peer name dae0peer
 	DeleteLink(HostVethName)
+	DeleteLink(NsVethName)
 	if err = netlink.LinkAdd(&netlink.Veth{
 		LinkAttrs: netlink.LinkAttrs{
 			Name:   HostVethName,
@@ -296,6 +480,36 @@ func (ns *DaeNetns) setupVeth() (err error) {
 		return fmt.Errorf("failed to set link dae0 up: %v", err)
 	}
 	return
+}
+
+func (ns *DaeNetns) setupNetkit() (err error) {
+	DeleteLink(HostVethName)
+	DeleteLink(NsVethName)
+	netkit := &netlink.Netkit{
+		LinkAttrs: netlink.LinkAttrs{
+			Name:   HostVethName,
+			TxQLen: 1000,
+		},
+		Mode:       netlink.NETKIT_MODE_L2,
+		Policy:     netlink.NETKIT_POLICY_FORWARD,
+		PeerPolicy: netlink.NETKIT_POLICY_FORWARD,
+		Scrub:      netlink.NETKIT_SCRUB_NONE,
+		PeerScrub:  netlink.NETKIT_SCRUB_NONE,
+	}
+	netkit.SetPeerAttrs(&netlink.LinkAttrs{Name: NsVethName})
+	if err = netlink.LinkAdd(netkit); err != nil {
+		return fmt.Errorf("failed to add netkit pair: %v", err)
+	}
+	if ns.dae0, err = netlink.LinkByName(HostVethName); err != nil {
+		return fmt.Errorf("failed to get link dae0: %v", err)
+	}
+	if ns.dae0peer, err = netlink.LinkByName(NsVethName); err != nil {
+		return fmt.Errorf("failed to get link dae0peer: %v", err)
+	}
+	if err = netlink.LinkSetUp(ns.dae0); err != nil {
+		return fmt.Errorf("failed to set netkit link dae0 up: %v", err)
+	}
+	return nil
 }
 
 func (ns *DaeNetns) setupNetns() (err error) {
