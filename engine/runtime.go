@@ -481,6 +481,16 @@ func (e *Engine) ControlPlane() (*control.ControlPlane, error) {
 	return e.controlPlane, nil
 }
 
+func (e *Engine) NetnsLinkMode() string {
+	e.mu.RLock()
+	netns := e.netns
+	e.mu.RUnlock()
+	if netns == nil {
+		return ""
+	}
+	return netns.LinkMode()
+}
+
 func (e *Engine) GetRuntimeOverview(windowSec int, maxPoints int) (*RuntimeOverview, error) {
 	activeTCPConnections := 0
 	ctl, err := e.ControlPlane()
