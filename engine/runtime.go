@@ -116,6 +116,8 @@ type Engine struct {
 	fallbackDNS              netip.AddrPort
 	bootstrapDirect          netproxy.Dialer
 	bootstrapDirectFullcone  netproxy.Dialer
+	logMu                    sync.RWMutex
+	log                      *logrus.Logger
 	lastPostStartupGC        time.Time
 	lastPostStartupHeapAlloc uint64
 }
@@ -149,14 +151,31 @@ func New(opts Options) *Engine {
 	return e
 }
 
+func (e *Engine) SetLogLevel(level logrus.Level) {
+	e.logMu.RLock()
+	log := e.log
+	e.logMu.RUnlock()
+	if log != nil {
+		log.SetLevel(level)
+	}
+}
+
+func (e *Engine) setRuntimeLogger(log *logrus.Logger) {
+	e.logMu.Lock()
+	e.log = log
+	e.logMu.Unlock()
+}
+
 func (e *Engine) Run(log *logrus.Logger, conf *config.Config, externGeoDataDirs []string, disableTimestamp bool, dry bool) (err error) {
 	startupStartedAt := time.Now()
 	e.mu.Lock()
 	e.exitCh = make(chan struct{})
 	e.mu.Unlock()
+	e.setRuntimeLogger(log)
 	runDone := make(chan struct{})
 	defer e.closeExitCh()
 	defer close(runDone)
+	defer e.setRuntimeLogger(nil)
 	defer func() {
 		e.setControlPlane(nil)
 		if ns := e.netns; ns != nil {
@@ -313,11 +332,14 @@ loop:
 			log.Warnln("[Reload] Received reload signal; prepare to reload")
 			newConf := msg.Config
 			oldLogOutput := log.Out
+			oldLogHooks := cloneLogHooks(log.Hooks)
 			log = logrus.New()
+			log.Hooks = oldLogHooks
 			logger.SetLogger(log, newConf.Global.LogLevel, disableTimestamp, nil)
 			logger.SetLogger(logrus.StandardLogger(), newConf.Global.LogLevel, disableTimestamp, nil)
 			log.SetOutput(oldLogOutput)
 			logrus.SetOutput(oldLogOutput)
+			e.setRuntimeLogger(log)
 
 			obj := current.EjectBpf()
 			var dnsCache map[string]*control.DnsCache
@@ -832,6 +854,17 @@ func (e *Engine) newControlPlane(log *logrus.Logger, bpf interface{}, dnsCache m
 		return nil, err
 	}
 	return c, nil
+}
+
+func cloneLogHooks(hooks logrus.LevelHooks) logrus.LevelHooks {
+	if len(hooks) == 0 {
+		return nil
+	}
+	cloned := make(logrus.LevelHooks, len(hooks))
+	for level, levelHooks := range hooks {
+		cloned[level] = append([]logrus.Hook(nil), levelHooks...)
+	}
+	return cloned
 }
 
 func (e *Engine) maybePostStartupGC(log *logrus.Logger, force bool) {
