@@ -3,8 +3,11 @@ package control
 import (
 	"errors"
 	"os"
+	"runtime"
+	"strings"
 	"testing"
 
+	"github.com/sirupsen/logrus"
 	"github.com/vishvananda/netns"
 )
 
@@ -15,6 +18,215 @@ func TestNewDaeNetnsInitializesClosedHandles(t *testing.T) {
 	}
 	if ns.daeNs != netns.None() {
 		t.Fatalf("daeNs = %v, want closed handle", ns.daeNs)
+	}
+}
+
+func TestParseNetnsLinkMode(t *testing.T) {
+	tests := []struct {
+		raw  string
+		want netnsLinkMode
+		ok   bool
+	}{
+		{"", netnsLinkModeAuto, true},
+		{"AUTO", netnsLinkModeAuto, true},
+		{" netkit ", netnsLinkModeNetkit, true},
+		{"veth", netnsLinkModeVeth, true},
+		{"bad", "", false},
+	}
+	for _, tt := range tests {
+		got, err := parseNetnsLinkMode(tt.raw)
+		if tt.ok && err != nil {
+			t.Fatalf("parseNetnsLinkMode(%q) returned error: %v", tt.raw, err)
+		}
+		if !tt.ok && err == nil {
+			t.Fatalf("parseNetnsLinkMode(%q) expected error", tt.raw)
+		}
+		if got != tt.want {
+			t.Fatalf("parseNetnsLinkMode(%q) = %q, want %q", tt.raw, got, tt.want)
+		}
+	}
+}
+
+func TestSetupLinkPairAndNetnsWithAutoUsesNetkitWhenAvailable(t *testing.T) {
+	ns := NewDaeNetns(nil)
+	var calls []string
+	err := ns.setupLinkPairAndNetnsWith(
+		netnsLinkModeAuto,
+		func() error { calls = append(calls, "probe"); return nil },
+		func() error { calls = append(calls, "netkit"); return nil },
+		func() error { calls = append(calls, "veth"); return nil },
+		func() { calls = append(calls, "cleanup") },
+	)
+	if err != nil {
+		t.Fatalf("setupLinkPairAndNetnsWith(auto) returned error: %v", err)
+	}
+	if ns.linkMode != netnsLinkModeNetkit {
+		t.Fatalf("linkMode = %q, want %q", ns.linkMode, netnsLinkModeNetkit)
+	}
+	if got := strings.Join(calls, ","); got != "probe,netkit" {
+		t.Fatalf("calls = %s", got)
+	}
+}
+
+func TestSetupLinkPairAndNetnsWithAutoFallsBackToVeth(t *testing.T) {
+	ns := NewDaeNetns(nil)
+	netkitErr := errors.New("netkit setup failed")
+	var calls []string
+	err := ns.setupLinkPairAndNetnsWith(
+		netnsLinkModeAuto,
+		func() error { calls = append(calls, "probe"); return nil },
+		func() error { calls = append(calls, "netkit"); return netkitErr },
+		func() error { calls = append(calls, "veth"); return nil },
+		func() { calls = append(calls, "cleanup") },
+	)
+	if err != nil {
+		t.Fatalf("setupLinkPairAndNetnsWith(auto) returned error: %v", err)
+	}
+	if ns.linkMode != netnsLinkModeVeth {
+		t.Fatalf("linkMode = %q, want %q", ns.linkMode, netnsLinkModeVeth)
+	}
+	if got := strings.Join(calls, ","); got != "probe,netkit,cleanup,veth" {
+		t.Fatalf("calls = %s", got)
+	}
+}
+
+func TestSetupLinkPairAndNetnsWithForcedNetkitDoesNotFallback(t *testing.T) {
+	ns := NewDaeNetns(nil)
+	probeErr := errors.New("netkit unavailable")
+	var calls []string
+	err := ns.setupLinkPairAndNetnsWith(
+		netnsLinkModeNetkit,
+		func() error { calls = append(calls, "probe"); return probeErr },
+		func() error { calls = append(calls, "netkit"); return nil },
+		func() error { calls = append(calls, "veth"); return nil },
+		func() { calls = append(calls, "cleanup") },
+	)
+	if !errors.Is(err, probeErr) {
+		t.Fatalf("error = %v, want probe error", err)
+	}
+	if ns.linkMode != "" {
+		t.Fatalf("linkMode = %q, want empty after failed forced netkit", ns.linkMode)
+	}
+	if got := strings.Join(calls, ","); got != "probe" {
+		t.Fatalf("calls = %s", got)
+	}
+}
+
+func TestDaeNetnsSetupRealLinkModes(t *testing.T) {
+	if os.Getenv("DAE_TEST_NETNS_SETUP") != "1" {
+		t.Skip("set DAE_TEST_NETNS_SETUP=1 to run real netns setup validation")
+	}
+	if os.Geteuid() != 0 {
+		t.Skip("real netns setup validation requires root")
+	}
+
+	previousSysctl := sysctl
+	manager, err := NewSysctlManager(logrus.New())
+	if err != nil {
+		t.Fatalf("NewSysctlManager(): %v", err)
+	}
+	sysctl = manager
+	t.Cleanup(func() {
+		_ = manager.Close()
+		sysctl = previousSysctl
+	})
+
+	oldEnv, hadEnv := os.LookupEnv(netnsLinkEnv)
+	t.Cleanup(func() {
+		if hadEnv {
+			_ = os.Setenv(netnsLinkEnv, oldEnv)
+		} else {
+			_ = os.Unsetenv(netnsLinkEnv)
+		}
+	})
+
+	tests := []struct {
+		name     string
+		env      string
+		wantMode netnsLinkMode
+	}{
+		{name: "forced-veth", env: string(netnsLinkModeVeth), wantMode: netnsLinkModeVeth},
+		{name: "forced-netkit", env: string(netnsLinkModeNetkit), wantMode: netnsLinkModeNetkit},
+		{name: "auto", env: string(netnsLinkModeAuto), wantMode: ""},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_ = os.Setenv(netnsLinkEnv, tt.env)
+			ns := NewDaeNetns(logrus.New())
+			if err := ns.Setup(); err != nil {
+				t.Fatalf("Setup(%s) returned error: %v", tt.env, err)
+			}
+			defer func() {
+				if err := ns.Close(); err != nil {
+					t.Fatalf("Close(%s): %v", tt.env, err)
+				}
+			}()
+			gotMode := netnsLinkMode(ns.LinkMode())
+			if tt.wantMode != "" && gotMode != tt.wantMode {
+				t.Fatalf("LinkMode() = %q, want %q", gotMode, tt.wantMode)
+			}
+			if gotMode != netnsLinkModeVeth && gotMode != netnsLinkModeNetkit {
+				t.Fatalf("LinkMode() = %q, want veth or netkit", gotMode)
+			}
+			if ns.Dae0() == nil || ns.Dae0Peer() == nil {
+				t.Fatalf("expected dae0 and dae0peer to be initialized")
+			}
+			if ns.Dae0().Type() != string(gotMode) {
+				t.Fatalf("dae0 type = %q, want %q", ns.Dae0().Type(), gotMode)
+			}
+			if ns.Dae0Peer().Type() != string(gotMode) {
+				t.Fatalf("dae0peer type = %q, want %q", ns.Dae0Peer().Type(), gotMode)
+			}
+		})
+	}
+}
+
+func TestDaeNetnsSetupRealFallbackToVethAfterNetkitProbeFailure(t *testing.T) {
+	if os.Getenv("DAE_TEST_NETNS_SETUP") != "1" {
+		t.Skip("set DAE_TEST_NETNS_SETUP=1 to run real netns setup validation")
+	}
+	if os.Geteuid() != 0 {
+		t.Skip("real netns setup validation requires root")
+	}
+
+	runtime.LockOSThread()
+	defer runtime.UnlockOSThread()
+
+	ns := NewDaeNetns(logrus.New())
+	hostNs, err := netns.Get()
+	if err != nil {
+		t.Fatalf("netns.Get(): %v", err)
+	}
+	ns.hostNs = hostNs
+	t.Cleanup(func() {
+		_ = netns.Set(hostNs)
+		if err := ns.Close(); err != nil {
+			t.Fatalf("Close(): %v", err)
+		}
+	})
+
+	probeErr := errors.New("simulated netkit probe failure")
+	err = ns.setupLinkPairAndNetnsWith(
+		netnsLinkModeAuto,
+		func() error { return probeErr },
+		func() error { t.Fatal("netkit setup should not run after probe failure"); return nil },
+		ns.setupVethAndNetns,
+		ns.cleanupFailedLinkSetup,
+	)
+	if err != nil {
+		t.Fatalf("setupLinkPairAndNetnsWith(auto fallback) returned error: %v", err)
+	}
+	if ns.LinkMode() != string(netnsLinkModeVeth) {
+		t.Fatalf("LinkMode() = %q, want %q", ns.LinkMode(), netnsLinkModeVeth)
+	}
+	if ns.Dae0() == nil || ns.Dae0Peer() == nil {
+		t.Fatal("expected dae0 and dae0peer to be initialized")
+	}
+	if ns.Dae0().Type() != string(netnsLinkModeVeth) {
+		t.Fatalf("dae0 type = %q, want veth", ns.Dae0().Type())
+	}
+	if ns.Dae0Peer().Type() != string(netnsLinkModeVeth) {
+		t.Fatalf("dae0peer type = %q, want veth", ns.Dae0Peer().Type())
 	}
 }
 
