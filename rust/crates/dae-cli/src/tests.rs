@@ -410,6 +410,154 @@ fn optin_runner_runtime_commands_match_engine_fixtures() {
     assert!(config_path.exists());
     let validate_written = run_with_args(["validate", "-c", config_path.to_str().unwrap()]);
     assert_eq!(validate_written.exit_code, 0, "{}", validate_written.stdout);
+
+    let host_preflight_fixture = load("engine/runtime_stage22/host_preflight.json");
+    let progress_path = live_plan_root.join("run").join("dae.progress");
+    let pid_path = live_plan_root.join("run").join("dae.pid");
+    let suffix = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .subsec_nanos();
+    let lan_iface = format!("dxl{:010}", suffix);
+    let wan_iface = format!("dxw{:010}", suffix);
+    let netns = format!("dae-stage22-test-{suffix}");
+    let tproxy_port = 39000 + (std::process::id() % 1000);
+    let host_preflight = run_with_args([
+        "runtime",
+        "stage22-host-preflight",
+        "--root",
+        &live_plan_root_string,
+        "--artifact-binary",
+        "/bin/true",
+        "--progress-file",
+        progress_path.to_str().unwrap(),
+        "--pid-file",
+        pid_path.to_str().unwrap(),
+        "--tproxy-port",
+        &tproxy_port.to_string(),
+        "--lan-iface",
+        &lan_iface,
+        "--wan-iface",
+        &wan_iface,
+        "--client-netns",
+        &netns,
+    ]);
+    assert_eq!(host_preflight.exit_code, 0);
+    assert_eq!(host_preflight.stderr, "");
+    let host_preflight_json: Value = serde_json::from_str(&host_preflight.stdout).unwrap();
+    assert_eq!(
+        host_preflight_json["name"].as_str().unwrap(),
+        host_preflight_fixture["name"].as_str().unwrap()
+    );
+    assert_eq!(
+        host_preflight_json["evidence_class"].as_str().unwrap(),
+        host_preflight_fixture["evidence_class"].as_str().unwrap()
+    );
+    assert_eq!(
+        host_preflight_json["default_switch_allowed"]
+            .as_bool()
+            .unwrap(),
+        host_preflight_fixture["default_switch_allowed"]
+            .as_bool()
+            .unwrap()
+    );
+    assert_eq!(
+        host_preflight_json["default_path_mutated"]
+            .as_bool()
+            .unwrap(),
+        host_preflight_fixture["default_path_mutated"]
+            .as_bool()
+            .unwrap()
+    );
+    assert_eq!(
+        host_preflight_json["live_daemon_started"]
+            .as_bool()
+            .unwrap(),
+        host_preflight_fixture["live_daemon_started"]
+            .as_bool()
+            .unwrap()
+    );
+    assert_eq!(
+        host_preflight_json["read_only"].as_bool().unwrap(),
+        host_preflight_fixture["read_only"].as_bool().unwrap()
+    );
+    assert!(
+        host_preflight_json["allowed_to_start_candidate"]
+            .as_bool()
+            .unwrap(),
+        "{}",
+        host_preflight.stdout
+    );
+    assert_eq!(
+        host_preflight_json["production_safety"]["no_daemon_start"]
+            .as_bool()
+            .unwrap(),
+        host_preflight_fixture["production_safety"]["no_daemon_start"]
+            .as_bool()
+            .unwrap()
+    );
+    assert_eq!(
+        host_preflight_json["production_safety"]["fixed_progress_file_checked"]
+            .as_bool()
+            .unwrap(),
+        host_preflight_fixture["production_safety"]["fixed_progress_file_checked"]
+            .as_bool()
+            .unwrap()
+    );
+    let check_names = host_preflight_json["checks"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|value| value["name"].as_str().unwrap())
+        .collect::<Vec<_>>();
+    assert_eq!(
+        check_names,
+        host_preflight_fixture["check_names"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|value| value.as_str().unwrap())
+            .collect::<Vec<_>>()
+    );
+
+    fs::write(&progress_path, "2\nOK").unwrap();
+    let blocked_preflight = run_with_args([
+        "runtime",
+        "stage22-host-preflight",
+        "--root",
+        &live_plan_root_string,
+        "--artifact-binary",
+        "/bin/true",
+        "--progress-file",
+        progress_path.to_str().unwrap(),
+        "--pid-file",
+        pid_path.to_str().unwrap(),
+        "--tproxy-port",
+        &tproxy_port.to_string(),
+        "--lan-iface",
+        &lan_iface,
+        "--wan-iface",
+        &wan_iface,
+        "--client-netns",
+        &netns,
+    ]);
+    assert_eq!(blocked_preflight.exit_code, 0);
+    let blocked_json: Value = serde_json::from_str(&blocked_preflight.stdout).unwrap();
+    assert!(
+        !blocked_json["allowed_to_start_candidate"]
+            .as_bool()
+            .unwrap()
+    );
+    assert!(
+        blocked_json["blockers"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|value| value
+                .as_str()
+                .unwrap()
+                .contains("fixed reload progress file already exists"))
+    );
     let _ = fs::remove_dir_all(live_plan_root);
 }
 

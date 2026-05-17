@@ -11,8 +11,9 @@ const ARTIFACT_BINARY: &str = "/tmp/dae-stage22-live-evidence";
 const TPROXY_PORT: u16 = 12345;
 const SO_MARK: u32 = 1234;
 const MPTCP: bool = true;
-const LAN_IFACE: &str = "dae-stage22-lan0";
-const WAN_IFACE: &str = "dae-stage22-wan0";
+const LAN_IFACE: &str = "daex22lan0";
+const WAN_IFACE: &str = "daex22wan0";
+const CLIENT_IFACE: &str = "daex22cli0";
 const CLIENT_NETNS: &str = "dae-stage22-client";
 const DNS_BIND: &str = "udp://127.0.0.1:1053";
 const DNS_UPSTREAM: &str = "udp://127.0.0.1:10530";
@@ -269,7 +270,7 @@ fn live_plan_commands(layout: &LivePlanLayout) -> Vec<serde_json::Value> {
         json!({
             "name": "setup-veth-netns",
             "status": "planned-not-run",
-            "command": format!("ip netns add {CLIENT_NETNS}; ip link add {LAN_IFACE} type veth peer name dae-stage22-client0; ip link set dae-stage22-client0 netns {CLIENT_NETNS}; ip link add {WAN_IFACE} type dummy"),
+            "command": format!("ip netns add {CLIENT_NETNS}; ip link add {LAN_IFACE} type veth peer name {CLIENT_IFACE}; ip link set {CLIENT_IFACE} netns {CLIENT_NETNS}; ip link add {WAN_IFACE} type dummy"),
             "side_effect": "creates temporary netns and interfaces; must be cleaned before default switch claims"
         }),
         json!({
