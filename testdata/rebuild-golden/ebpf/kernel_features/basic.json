@@ -1,0 +1,87 @@
+{
+  "features": [
+    {
+      "name": "basic",
+      "version": "v5.2",
+      "kernel_code": 328192
+    },
+    {
+      "name": "checksum",
+      "version": "v5.8",
+      "kernel_code": 329728
+    },
+    {
+      "name": "sk_assign",
+      "version": "v5.7",
+      "kernel_code": 329472
+    },
+    {
+      "name": "bpf_timer",
+      "version": "v5.15",
+      "kernel_code": 331520
+    },
+    {
+      "name": "bpf_loop",
+      "version": "v5.17",
+      "kernel_code": 332032
+    }
+  ],
+  "name": "stage7-kernel-feature-gates",
+  "scenarios": [
+    {
+      "allowed": false,
+      "lan_configured": false,
+      "missing": [
+        "basic",
+        "checksum",
+        "bpf_loop"
+      ],
+      "name": "v5.1",
+      "version": "v5.1",
+      "wan_configured": false
+    },
+    {
+      "allowed": false,
+      "lan_configured": false,
+      "missing": [
+        "bpf_loop"
+      ],
+      "name": "v5.8",
+      "version": "v5.8",
+      "wan_configured": false
+    },
+    {
+      "allowed": false,
+      "lan_configured": true,
+      "missing": [
+        "bpf_loop"
+      ],
+      "name": "v5.10-lan",
+      "version": "v5.10",
+      "wan_configured": false
+    },
+    {
+      "allowed": false,
+      "lan_configured": false,
+      "missing": [
+        "bpf_loop"
+      ],
+      "name": "v5.15-wan",
+      "version": "v5.15",
+      "wan_configured": true
+    },
+    {
+      "allowed": true,
+      "lan_configured": true,
+      "missing": null,
+      "name": "v5.17-full",
+      "version": "v5.17",
+      "wan_configured": true
+    }
+  ],
+  "source": [
+    "control/control_plane.go",
+    "common/consts/ebpf.go",
+    "pkg/ebpf_internal/version.go"
+  ]
+}
