@@ -8,6 +8,7 @@ package engine
 import (
 	"context"
 	"crypto/sha256"
+	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -20,6 +21,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/daeuniverse/dae/common"
 	"github.com/daeuniverse/dae/config"
 	"github.com/daeuniverse/dae/control"
 	"github.com/daeuniverse/dae/pkg/config_parser"
@@ -35,6 +37,7 @@ func TestWriteEngineRuntimeGoldenFixtures(t *testing.T) {
 	writeOrCheckEngineGolden(t, "../testdata/rebuild-golden/engine/config_api/empty_parse.json", rebuildGoldenEngineConfigApi(t))
 	writeOrCheckEngineGolden(t, "../testdata/rebuild-golden/engine/config_api/default_path_optin.json", rebuildGoldenEngineConfigDefaultPathOptIn(t))
 	writeOrCheckEngineGolden(t, "../testdata/rebuild-golden/engine/api_only/optin_contract.json", rebuildGoldenEngineAPIOnlyOptInContract(t))
+	writeOrCheckEngineGolden(t, "../testdata/rebuild-golden/engine/userspace_runtime/optin_contract.json", rebuildGoldenEngineUserspaceRuntimeOptInContract())
 	writeOrCheckEngineGolden(t, "../testdata/rebuild-golden/engine/subscription/persist_cleanup.json", rebuildGoldenEngineSubscriptionPersistCleanup(t))
 }
 
@@ -497,6 +500,102 @@ func rebuildGoldenEngineAPIOnlyOptInContract(t *testing.T) any {
 		"cross_repo_boundary": map[string]any{
 			"dae_wing_daed_default_switch": false,
 			"verification_only":            true,
+		},
+	}
+}
+
+func rebuildGoldenEngineUserspaceRuntimeOptInContract() any {
+	encodedMagicNetwork := common.MagicNetwork("tcp", 1234, true)
+	return map[string]any{
+		"name": "engine-userspace-runtime-optin-contract",
+		"source": []string{
+			"engine/userspace_rust_optin.go",
+			"control/tcp.go",
+			"control/udp.go",
+			"control/routing_matcher_userspace.go",
+			"control/dns_control.go",
+			"component/outbound/dialer_group.go",
+			"component/sniffing/sniffing.go",
+			"common/utils.go:MagicNetwork",
+			"rust/crates/dae-cli/src/userspace_runner.rs",
+			"DAEX_RUST_REBUILD_PLAN_2026-05-16.md:stage13",
+		},
+		"notes": "Stage 13 introduces explicit Rust userspace runtime helper entry points for routing, DNS, outbound group selection, sniffing and MagicNetwork while keeping the Go control plane and BPF/tproxy attach default path unchanged.",
+		"opt_in": map[string]any{
+			"enable_env":          rustUserspaceOptInEnv,
+			"helper_env":          rustUserspaceHelperEnv,
+			"helper_default":      rustUserspaceHelperDefault,
+			"disabled_is_go_path": true,
+			"helper_timeout":      rustUserspaceHelperTimeout.String(),
+			"rollback":            "unset DAE_RUST_USERSPACE_OPTIN or restore helper path to Go-only mode",
+		},
+		"default_path": map[string]any{
+			"go_control_plane_default":       true,
+			"rust_userspace_requires_env":    true,
+			"engine_run_unchanged":           true,
+			"control_new_plane_unchanged":    true,
+			"bpf_tproxy_attach_unchanged":    true,
+			"outbound_native_rewrite_defer":  true,
+			"dae_wing_daed_contract_only":    true,
+			"no_silent_kernel_attach_switch": true,
+		},
+		"helper_commands": map[string]any{
+			"route_match": []string{"dae-cli-optin", "userspace", "route-match", "--domain", "<domain>", "--dest", "<ip>", "--port", "<port>"},
+			"dns_cache_key": []string{
+				"dae-cli-optin", "userspace", "dns-cache-key",
+				"--qname", "<qname>", "--qtype", "<qtype>", "--qclass", "<qclass>",
+			},
+			"outbound_select": []string{"dae-cli-optin", "userspace", "outbound-select", "--policy", "min", "--network", "tcp4"},
+			"sniff_tcp":       []string{"dae-cli-optin", "userspace", "sniff-tcp", "--kind", "http"},
+			"magic_network":   []string{"dae-cli-optin", "userspace", "magic-network", "--network", "tcp", "--mark", "1234", "--mptcp", "true"},
+		},
+		"routing": map[string]any{
+			"fixture":                  "routing/userspace/basic_matcher.json",
+			"domain":                   "www.example.com",
+			"dest":                     "203.0.113.42",
+			"dest_port":                443,
+			"want_outbound":            "direct",
+			"shared_match_set_order":   true,
+			"domain_bitmap_index_lock": true,
+			"lpm_index_lock":           true,
+			"must_rules_preserved":     true,
+		},
+		"dns": map[string]any{
+			"fixture":                  "dns/cache_key/basic.json",
+			"qname":                    "Example.COM",
+			"qtype":                    1,
+			"qclass":                   1,
+			"cache_key":                "example.com.|1|1",
+			"udp_53_controller_in_go":  true,
+			"must_rules_dns_exception": true,
+		},
+		"outbound_group": map[string]any{
+			"fixture":                "outbound/group/min_last_latency.json",
+			"policy":                 "min",
+			"network":                "tcp4",
+			"latencies_ms":           []int{200, 100, 300, 150},
+			"alive":                  []bool{true, true, true, true},
+			"selected_index":         1,
+			"selected_latency_ms":    100,
+			"reserved_direct_index":  0,
+			"reserved_block_index":   1,
+			"user_group_start_index": 2,
+		},
+		"sniffing": map[string]any{
+			"fixture":                  "sniffing/basic.json",
+			"http_host_normalized":     "example.com",
+			"tcp_relay_reader_kept":    true,
+			"udp_quic_can_reroute":     true,
+			"udp_quic_target_stays_ip": true,
+		},
+		"magic_network": map[string]any{
+			"network":          "tcp",
+			"mark":             1234,
+			"mptcp":            true,
+			"encoded_b64":      base64.StdEncoding.EncodeToString([]byte(encodedMagicNetwork)),
+			"is_plain":         encodedMagicNetwork == "tcp",
+			"abi_preserved":    true,
+			"active_dial_gate": "stage14",
 		},
 	}
 }

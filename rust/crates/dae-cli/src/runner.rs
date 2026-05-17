@@ -1,6 +1,7 @@
 use dae_engine::parse_config_sections;
 
 use crate::runtime_runner::run_runtime;
+use crate::userspace_runner::run_userspace;
 use crate::{export_outline_json, validate_config_file};
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -55,6 +56,7 @@ where
         Some("export") => run_export(&args[1..], version),
         Some("config") => run_config(&args[1..]),
         Some("runtime") => run_runtime(&args[1..]),
+        Some("userspace") => run_userspace(&args[1..]),
         Some(command) => RunnerOutput::usage(format!("unsupported command: {command}")),
         None => RunnerOutput::usage("missing command"),
     }
