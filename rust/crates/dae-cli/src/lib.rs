@@ -2,6 +2,7 @@ pub(crate) mod active_datapath_runner;
 pub mod completion;
 pub mod error;
 pub mod export;
+pub(crate) mod outbound_runner;
 pub mod progress;
 pub mod runner;
 pub(crate) mod runtime_runner;

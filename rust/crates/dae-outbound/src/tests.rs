@@ -371,6 +371,9 @@ fn direct_link_parser_group_override_and_connectivity_match_golden_fixtures() {
             if let Some(scheme) = case["scheme"].as_str() {
                 assert_eq!(parsed.nodes[0].scheme, scheme);
             }
+            if let Some(adapter_mode) = case["adapter_mode"].as_str() {
+                assert_eq!(parsed.nodes[0].adapter_mode, adapter_mode);
+            }
         }
     }
 
@@ -426,6 +429,111 @@ fn direct_link_parser_group_override_and_connectivity_match_golden_fixtures() {
     );
 }
 
+#[test]
+fn socks5_native_optin_matches_golden_fixture() {
+    let fixture = fixture("outbound/protocol/socks5_native_optin.json");
+
+    assert_eq!(
+        crate::socks5::contract::ADAPTER_MODE,
+        fixture["rust_adapter_mode"].as_str().unwrap()
+    );
+    assert_eq!(
+        crate::socks5::contract::DEFAULT_GO_PATH,
+        fixture["default_go_path"].as_bool().unwrap()
+    );
+    assert_eq!(
+        crate::socks5::contract::PROTOCOL_SCOPE,
+        fixture["protocol_scope"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|value| value.as_str().unwrap())
+            .collect::<Vec<_>>()
+            .as_slice()
+    );
+
+    let link = &fixture["link_parser"];
+    let parsed = parse_link_chain(link["input"].as_str().unwrap()).unwrap();
+    assert_eq!(
+        parsed.plaintext_tag.as_deref(),
+        Some(link["plaintext_tag"].as_str().unwrap())
+    );
+    assert_eq!(parsed.linklike, link["linklike"].as_str().unwrap());
+    assert_eq!(parsed.property_name, link["name"].as_str().unwrap());
+    assert_eq!(parsed.property_protocol, link["protocol"].as_str().unwrap());
+    assert_eq!(parsed.property_address, link["address"].as_str().unwrap());
+    assert_eq!(parsed.nodes[0].adapter_mode, "native-opt-in");
+    assert_eq!(
+        parsed.nodes[1].scheme,
+        link["socks_alias_scheme"].as_str().unwrap()
+    );
+    assert_eq!(
+        parsed.nodes[1].protocol,
+        link["socks_alias_protocol"].as_str().unwrap()
+    );
+
+    for case in fixture["address_codec"].as_array().unwrap() {
+        let addr = crate::socks5::Socks5Address::parse(case["input"].as_str().unwrap()).unwrap();
+        assert_eq!(
+            hex_encode(&addr.encode().unwrap()),
+            case["hex"].as_str().unwrap()
+        );
+        let encoded = hex_decode(case["hex"].as_str().unwrap());
+        let (decoded, consumed) = crate::socks5::Socks5Address::decode(&encoded).unwrap();
+        assert_eq!(consumed, encoded.len());
+        assert_eq!(decoded.authority(), case["string"].as_str().unwrap());
+    }
+
+    let handshake = &fixture["handshake"];
+    assert_eq!(
+        hex_encode(&crate::socks5::handshake::greeting("", "")),
+        handshake["greeting_no_auth_hex"].as_str().unwrap()
+    );
+    assert_eq!(
+        hex_encode(&crate::socks5::handshake::greeting("user", "pass")),
+        handshake["greeting_with_auth_hex"].as_str().unwrap()
+    );
+    assert_eq!(
+        hex_encode(&crate::socks5::handshake::username_password_auth("user", "pass").unwrap()),
+        handshake["username_password_auth_hex"].as_str().unwrap()
+    );
+    assert_eq!(
+        hex_encode(&crate::socks5::handshake::connect_request("example.com:443").unwrap()),
+        handshake["connect_example_com_443_hex"].as_str().unwrap()
+    );
+    assert_eq!(
+        hex_encode(&crate::socks5::handshake::udp_associate_request("0.0.0.0:0").unwrap()),
+        handshake["udp_associate_0_0_0_0_0_hex"].as_str().unwrap()
+    );
+    let reply = crate::socks5::handshake::parse_server_reply(&hex_decode(
+        handshake["success_reply_hex"].as_str().unwrap(),
+    ))
+    .unwrap();
+    assert_eq!(reply.bind.authority(), "127.0.0.1:5300");
+
+    let packet = &fixture["udp_packet"];
+    let wrapped = crate::socks5::udp_packet::wrap_target(
+        packet["target"].as_str().unwrap(),
+        packet["payload_ascii"].as_str().unwrap().as_bytes(),
+    )
+    .unwrap();
+    assert_eq!(
+        hex_encode(&wrapped),
+        packet["write_packet_hex"].as_str().unwrap()
+    );
+    let unwrapped = crate::socks5::udp_packet::unwrap(&wrapped).unwrap();
+    assert_eq!(unwrapped.reserved, [0, 0]);
+    assert_eq!(unwrapped.fragment, 0);
+    assert_eq!(
+        unwrapped.target.authority(),
+        packet["target"].as_str().unwrap()
+    );
+    assert_eq!(
+        String::from_utf8(unwrapped.payload).unwrap(),
+        packet["payload_ascii"].as_str().unwrap()
+    );
+}
+
 fn make_group(count: usize, policy: SelectionPolicy) -> DialerGroup {
     DialerGroup::new(
         "test",
@@ -450,4 +558,36 @@ fn optional_string_vec(value: &Value) -> Option<Vec<String>> {
             .map(|item| item.as_str().unwrap().to_owned())
             .collect()
     })
+}
+
+fn hex_encode(bytes: &[u8]) -> String {
+    const HEX: &[u8; 16] = b"0123456789abcdef";
+    let mut out = String::with_capacity(bytes.len() * 2);
+    for byte in bytes {
+        out.push(HEX[(byte >> 4) as usize] as char);
+        out.push(HEX[(byte & 0x0f) as usize] as char);
+    }
+    out
+}
+
+fn hex_decode(input: &str) -> Vec<u8> {
+    assert_eq!(input.len() % 2, 0);
+    input
+        .as_bytes()
+        .chunks(2)
+        .map(|chunk| {
+            let high = hex_nibble(chunk[0]);
+            let low = hex_nibble(chunk[1]);
+            (high << 4) | low
+        })
+        .collect()
+}
+
+fn hex_nibble(byte: u8) -> u8 {
+    match byte {
+        b'0'..=b'9' => byte - b'0',
+        b'a'..=b'f' => byte - b'a' + 10,
+        b'A'..=b'F' => byte - b'A' + 10,
+        _ => panic!("bad hex byte: {byte}"),
+    }
 }
