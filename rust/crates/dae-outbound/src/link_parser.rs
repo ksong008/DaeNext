@@ -1,4 +1,5 @@
 use crate::error::OutboundError;
+use crate::shadowsocks::ShadowsocksLink;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct LinkNode {
@@ -76,8 +77,7 @@ fn classify_link(scheme: &str, raw: &str) -> (&'static str, bool, &'static str) 
     match scheme {
         "direct" => ("direct", true, "native-boundary"),
         "block" => ("block", true, "native-boundary"),
-        "ss" if raw.contains("2022-blake3-") => ("shadowsocks-2022", true, "bridge-or-stub"),
-        "ss" => ("shadowsocks", true, "bridge-or-stub"),
+        "ss" | "shadowsocks" => (shadowsocks_protocol(raw), true, "native-opt-in"),
         "socks" | "socks5" => ("socks5", true, "native-opt-in"),
         "http" | "https" => (scheme_to_protocol(scheme), true, "native-opt-in"),
         "vmess" | "vless" | "hysteria2" | "tuic" | "juicity" => {
@@ -92,6 +92,7 @@ fn scheme_to_protocol(scheme: &str) -> &'static str {
         "socks" | "socks5" => "socks5",
         "http" => "http",
         "https" => "https",
+        "ss" | "shadowsocks" => "shadowsocks",
         "vmess" => "vmess",
         "vless" => "vless",
         "hysteria2" => "hysteria2",
@@ -118,6 +119,9 @@ fn property_name(raw: &str) -> String {
 }
 
 fn property_address(scheme: &str, raw: &str) -> Option<String> {
+    if matches!(scheme, "ss" | "shadowsocks") {
+        return ShadowsocksLink::parse(raw).ok().map(|link| link.address());
+    }
     if !matches!(scheme, "socks" | "socks5") {
         return None;
     }
@@ -128,4 +132,17 @@ fn property_address(scheme: &str, raw: &str) -> Option<String> {
         .map(|(_, authority)| authority)
         .unwrap_or(authority);
     Some(authority.to_owned())
+}
+
+fn shadowsocks_protocol(raw: &str) -> &'static str {
+    ShadowsocksLink::parse(raw)
+        .ok()
+        .and_then(|link| link.capability_label().ok())
+        .unwrap_or_else(|| {
+            if raw.contains("2022-blake3-") {
+                "shadowsocks-2022"
+            } else {
+                "shadowsocks"
+            }
+        })
 }

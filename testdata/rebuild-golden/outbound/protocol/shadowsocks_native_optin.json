@@ -1,0 +1,325 @@
+{
+  "cipher_dispatch": [
+    {
+      "cipher": "aes-128-gcm",
+      "concrete_dialer_type": "*shadowsocks.Dialer",
+      "export_userinfo_plain": false,
+      "go_protocol_dialer": "shadowsocks",
+      "name": "aead",
+      "property_protocol_stays": "shadowsocks",
+      "rust_capability_label": "shadowsocks"
+    },
+    {
+      "cipher": "2022-blake3-aes-128-gcm",
+      "concrete_dialer_type": "*shadowsocks_2022.Dialer",
+      "export_userinfo_plain": true,
+      "go_protocol_dialer": "shadowsocks_2022",
+      "name": "ss2022-aes128",
+      "property_protocol_stays": "shadowsocks",
+      "rust_capability_label": "shadowsocks-2022"
+    },
+    {
+      "cipher": "2022-blake3-chacha20-poly1305",
+      "concrete_dialer_type": "*shadowsocks_2022.Dialer",
+      "export_userinfo_plain": true,
+      "go_protocol_dialer": "shadowsocks_2022",
+      "name": "ss2022-chacha20",
+      "property_protocol_stays": "shadowsocks",
+      "rust_capability_label": "shadowsocks-2022"
+    },
+    {
+      "cipher": "aes-128-cfb",
+      "concrete_dialer_type": "*shadowsocks_stream.Dialer",
+      "export_userinfo_plain": false,
+      "go_protocol_dialer": "shadowsocks_stream",
+      "name": "stream-legacy",
+      "property_protocol_stays": "shadowsocks",
+      "rust_capability_label": "shadowsocks"
+    }
+  ],
+  "default_go_path": true,
+  "deferred_protocol_scope": [
+    "shadowsocksr",
+    "trojan",
+    "vmess",
+    "vless",
+    "hysteria2",
+    "tuic",
+    "juicity",
+    "anytls",
+    "transport-combos"
+  ],
+  "link_parser": [
+    {
+      "cipher": "aes-128-gcm",
+      "export": "ss://YWVzLTEyOC1nY206cGFzc3dvcmQ@example.com:8388#node",
+      "input": "ss://YWVzLTEyOC1nY206cGFzc3dvcmQ@example.com:8388#node",
+      "name": "sip002-aead-base64-userinfo",
+      "password": "password",
+      "plugin": {
+        "host": "",
+        "name": "",
+        "obfs": "",
+        "path": "",
+        "tls": ""
+      },
+      "port": 8388,
+      "property_address": "example.com:8388",
+      "property_link": "ss://YWVzLTEyOC1nY206cGFzc3dvcmQ@example.com:8388#node",
+      "property_name": "node",
+      "property_protocol": "shadowsocks",
+      "protocol": "shadowsocks",
+      "server": "example.com",
+      "udp": true
+    },
+    {
+      "cipher": "2022-blake3-aes-128-gcm",
+      "export": "ss://2022-blake3-aes-128-gcm:MTIzNDU2Nzg5MDEyMzQ1Ng==@example.com:443#ss2022",
+      "input": "ss://2022-blake3-aes-128-gcm:MTIzNDU2Nzg5MDEyMzQ1Ng==@example.com:443#ss2022",
+      "name": "ss2022-plain-userinfo",
+      "password": "MTIzNDU2Nzg5MDEyMzQ1Ng==",
+      "plugin": {
+        "host": "",
+        "name": "",
+        "obfs": "",
+        "path": "",
+        "tls": ""
+      },
+      "port": 443,
+      "property_address": "example.com:443",
+      "property_link": "ss://2022-blake3-aes-128-gcm:MTIzNDU2Nzg5MDEyMzQ1Ng==@example.com:443#ss2022",
+      "property_name": "ss2022",
+      "property_protocol": "shadowsocks",
+      "protocol": "shadowsocks",
+      "server": "example.com",
+      "udp": true
+    },
+    {
+      "cipher": "2022-blake3-aes-128-gcm",
+      "export": "ss://2022-blake3-aes-128-gcm:MTIzNDU2Nzg5MDEyMzQ1Ng==%3AMTIzNDU2Nzg5MDEyMzQ1Ng==@example.com:443#multi",
+      "input": "ss://2022-blake3-aes-128-gcm:MTIzNDU2Nzg5MDEyMzQ1Ng==%3AMTIzNDU2Nzg5MDEyMzQ1Ng==@example.com:443#multi",
+      "name": "ss2022-multi-psk",
+      "password": "MTIzNDU2Nzg5MDEyMzQ1Ng==:MTIzNDU2Nzg5MDEyMzQ1Ng==",
+      "plugin": {
+        "host": "",
+        "name": "",
+        "obfs": "",
+        "path": "",
+        "tls": ""
+      },
+      "port": 443,
+      "property_address": "example.com:443",
+      "property_link": "ss://2022-blake3-aes-128-gcm:MTIzNDU2Nzg5MDEyMzQ1Ng==%3AMTIzNDU2Nzg5MDEyMzQ1Ng==@example.com:443#multi",
+      "property_name": "multi",
+      "property_protocol": "shadowsocks",
+      "protocol": "shadowsocks",
+      "server": "example.com",
+      "udp": true
+    },
+    {
+      "cipher": "aes-128-gcm",
+      "export": "ss://YWVzLTEyOC1nY206cGFzc3dvcmQ@example.com:8388?plugin=simple-obfs%3Bobfs%3Dhttp%3Bobfs-host%3Dfront.example%3Bobfs-uri%3Dabc%2F#simple",
+      "input": "ss://YWVzLTEyOC1nY206cGFzc3dvcmQ@example.com:8388?plugin=simpleobfs%3Bobfs%3Dhttp%3Bobfs-host%3Dfront.example%3Bobfs-uri%3Dabc#simple",
+      "name": "simple-obfs-plugin",
+      "password": "password",
+      "plugin": {
+        "host": "front.example",
+        "name": "simple-obfs",
+        "obfs": "http",
+        "path": "abc/",
+        "tls": ""
+      },
+      "port": 8388,
+      "property_address": "example.com:8388",
+      "property_link": "ss://YWVzLTEyOC1nY206cGFzc3dvcmQ@example.com:8388?plugin=simpleobfs%3Bobfs%3Dhttp%3Bobfs-host%3Dfront.example%3Bobfs-uri%3Dabc#simple",
+      "property_name": "simple",
+      "property_protocol": "shadowsocks",
+      "protocol": "shadowsocks",
+      "server": "example.com",
+      "udp": false
+    },
+    {
+      "cipher": "aes-128-gcm",
+      "export": "ss://YWVzLTEyOC1nY206cGFzc3dvcmQ@example.com:8388?plugin=v2ray-plugin%3Bobfs-host%3Dfront.example#v2ray",
+      "input": "ss://YWVzLTEyOC1nY206cGFzc3dvcmQ@example.com:8388?plugin=v2ray-plugin%3Btls%3Bhost%3Dfront.example#v2ray",
+      "name": "v2ray-plugin-tls",
+      "password": "password",
+      "plugin": {
+        "host": "front.example",
+        "name": "v2ray-plugin",
+        "obfs": "",
+        "path": "",
+        "tls": "tls"
+      },
+      "port": 8388,
+      "property_address": "example.com:8388",
+      "property_link": "ss://YWVzLTEyOC1nY206cGFzc3dvcmQ@example.com:8388?plugin=v2ray-plugin%3Btls%3Bhost%3Dfront.example#v2ray",
+      "property_name": "v2ray",
+      "property_protocol": "shadowsocks",
+      "protocol": "shadowsocks",
+      "server": "example.com",
+      "udp": false
+    }
+  ],
+  "live_smoke_required": [
+    "local parser smoke for SIP002 AEAD",
+    "local parser smoke for SS2022 single and multi PSK",
+    "local metadata/framing smoke",
+    "local replay filter smoke"
+  ],
+  "metadata": [
+    {
+      "hex": "030b6578616d706c652e636f6d01bb",
+      "hostname": "example.com",
+      "input": "example.com:443",
+      "name": "domain",
+      "port": 443,
+      "type": 3
+    },
+    {
+      "hex": "01010203040035",
+      "hostname": "1.2.3.4",
+      "input": "1.2.3.4:53",
+      "name": "ipv4",
+      "port": 53,
+      "type": 1
+    },
+    {
+      "hex": "0420010db800000000000000000000000120fb",
+      "hostname": "2001:db8::1",
+      "input": "[2001:db8::1]:8443",
+      "name": "ipv6",
+      "port": 8443,
+      "type": 4
+    }
+  ],
+  "name": "stage15-shadowsocks-native-optin",
+  "protocol_scope": [
+    "shadowsocks",
+    "shadowsocks-2022"
+  ],
+  "rust_adapter_mode": "native-opt-in",
+  "sip003": {
+    "default_simple_obfs_host": "cloudflare.com",
+    "path_without_slash_go_behavior": "append-trailing-slash",
+    "simple_obfs_aliases": [
+      "obfs-local",
+      "simpleobfs"
+    ],
+    "transport_native_data_plane_deferred_to_item": 113,
+    "v2ray_plugin_udp_passthrough_layers": [
+      "tls when tls option is present",
+      "ws",
+      "mux"
+    ]
+  },
+  "source": [
+    "DAENEW_RUST_REBUILD_MEMO_2026-05-16.md:12.5",
+    "DAENEW_RUST_REBUILD_MEMO_2026-05-16.md:26.9",
+    "/root/project/outbound/dialer/shadowsocks/shadowsocks.go",
+    "/root/project/outbound/dialer/shadowsocks/shadowsocks_ss2022_test.go",
+    "/root/project/outbound/protocol/shadowsocks/addr.go",
+    "/root/project/outbound/protocol/shadowsocks_2022/dialer.go",
+    "/root/project/outbound/protocol/shadowsocks_2022/tcp_conn.go",
+    "/root/project/outbound/protocol/shadowsocks_2022/udp_conn.go",
+    "/root/project/outbound/protocol/shadowsocks_2022/replay_filter.go"
+  ],
+  "ss2022": {
+    "cipher_conf": [
+      {
+        "cipher": "2022-blake3-aes-128-gcm",
+        "key_len": 16,
+        "nonce_len": 12,
+        "packet_cipher": false,
+        "packet_nonce_len": 0,
+        "salt_len": 16,
+        "tag_len": 16
+      },
+      {
+        "cipher": "2022-blake3-aes-256-gcm",
+        "key_len": 32,
+        "nonce_len": 12,
+        "packet_cipher": false,
+        "packet_nonce_len": 0,
+        "salt_len": 32,
+        "tag_len": 16
+      },
+      {
+        "cipher": "2022-blake3-chacha20-poly1305",
+        "key_len": 32,
+        "nonce_len": 12,
+        "packet_cipher": true,
+        "packet_nonce_len": 24,
+        "salt_len": 32,
+        "tag_len": 16
+      }
+    ],
+    "psk": [
+      {
+        "cipher": "2022-blake3-aes-128-gcm",
+        "expected_key_len": 16,
+        "name": "single-aes128",
+        "password": "MTIzNDU2Nzg5MDEyMzQ1Ng==",
+        "psk_count": 1,
+        "psk_key_lens": [
+          16
+        ],
+        "upsk_index": 0
+      },
+      {
+        "cipher": "2022-blake3-aes-128-gcm",
+        "expected_key_len": 16,
+        "name": "multi-aes128",
+        "password": "MTIzNDU2Nzg5MDEyMzQ1Ng==:MTIzNDU2Nzg5MDEyMzQ1Ng==",
+        "psk_count": 2,
+        "psk_key_lens": [
+          16,
+          16
+        ],
+        "upsk_index": 1
+      },
+      {
+        "cipher": "2022-blake3-chacha20-poly1305",
+        "expected_key_len": 32,
+        "name": "single-chacha20",
+        "password": "MTIzNDU2Nzg5MDEyMzQ1NjEyMzQ1Njc4OTAxMjM0NTY=",
+        "psk_count": 1,
+        "psk_key_lens": [
+          32
+        ],
+        "upsk_index": 0
+      }
+    ],
+    "replay_filter": {
+      "duplicate_packet_accepted": false,
+      "first_packet_accepted": true,
+      "monotonic_accepts": [
+        true,
+        true,
+        true,
+        true,
+        true
+      ],
+      "too_old_packet_accepted": false,
+      "window": 4
+    },
+    "tcp_header": {
+      "address_hex": "030b6578616d706c652e636f6d01bb",
+      "empty_initial_payload_has_padding": true,
+      "fixed_header_len": 11,
+      "header_type_client_stream": 0,
+      "max_padding_len": 900,
+      "target": "example.com:443",
+      "timestamp": 1,
+      "var_header_len_min": 17
+    },
+    "udp_packet_id": {
+      "cipher": "2022-blake3-aes-128-gcm",
+      "first_packet_id": 0,
+      "packet_id_big_endian": true,
+      "replay_window_size": 4096,
+      "separate_header_len": 16,
+      "server_session_retention": "1m0s"
+    }
+  }
+}
