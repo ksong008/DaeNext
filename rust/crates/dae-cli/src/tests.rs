@@ -1,6 +1,9 @@
 use serde_json::Value;
 use std::fs;
+use std::io::{Read, Write};
+use std::net::{TcpListener, TcpStream};
 use std::path::PathBuf;
+use std::thread;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use crate::*;
@@ -374,6 +377,138 @@ fn optin_runner_active_datapath_commands_match_control_fixture() {
     assert!(magic_json["active_path"].as_bool().unwrap());
 }
 
+#[test]
+fn optin_runner_outbound_socks5_commands_match_fixture() {
+    let fixture = load("outbound/protocol/socks5_native_optin.json");
+
+    let contract = run_with_args(["outbound", "socks5", "contract"]);
+    assert_eq!(contract.exit_code, 0);
+    assert_eq!(contract.stderr, "");
+    let contract_json: Value = serde_json::from_str(&contract.stdout).unwrap();
+    assert_eq!(
+        contract_json["name"].as_str().unwrap(),
+        fixture["name"].as_str().unwrap()
+    );
+    assert_eq!(
+        contract_json["rust_adapter_mode"].as_str().unwrap(),
+        fixture["rust_adapter_mode"].as_str().unwrap()
+    );
+    assert!(contract_json["default_go_path"].as_bool().unwrap());
+    assert_eq!(
+        contract_json["link_parser"]["protocol"].as_str().unwrap(),
+        fixture["link_parser"]["protocol"].as_str().unwrap()
+    );
+
+    let domain = fixture["address_codec"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|case| case["name"].as_str().unwrap() == "domain")
+        .unwrap();
+    let codec = run_with_args([
+        "outbound",
+        "socks5",
+        "codec",
+        "--target",
+        domain["input"].as_str().unwrap(),
+    ]);
+    assert_eq!(codec.exit_code, 0);
+    assert_eq!(codec.stderr, "");
+    let codec_json: Value = serde_json::from_str(&codec.stdout).unwrap();
+    assert_eq!(
+        codec_json["encoded_hex"].as_str().unwrap(),
+        domain["hex"].as_str().unwrap()
+    );
+
+    let handshake = &fixture["handshake"];
+    let hs = run_with_args([
+        "outbound",
+        "socks5",
+        "handshake",
+        "--target",
+        "example.com:443",
+        "--username",
+        "user",
+        "--password",
+        "pass",
+    ]);
+    assert_eq!(hs.exit_code, 0);
+    assert_eq!(hs.stderr, "");
+    let hs_json: Value = serde_json::from_str(&hs.stdout).unwrap();
+    assert_eq!(
+        hs_json["greeting_hex"].as_str().unwrap(),
+        handshake["greeting_with_auth_hex"].as_str().unwrap()
+    );
+    assert_eq!(
+        hs_json["auth_hex"].as_str().unwrap(),
+        handshake["username_password_auth_hex"].as_str().unwrap()
+    );
+    assert_eq!(
+        hs_json["request_hex"].as_str().unwrap(),
+        handshake["connect_example_com_443_hex"].as_str().unwrap()
+    );
+
+    let udp = &fixture["udp_packet"];
+    let packet = run_with_args([
+        "outbound",
+        "socks5",
+        "udp-packet",
+        "--target",
+        udp["target"].as_str().unwrap(),
+        "--payload",
+        udp["payload_ascii"].as_str().unwrap(),
+    ]);
+    assert_eq!(packet.exit_code, 0);
+    assert_eq!(packet.stderr, "");
+    let packet_json: Value = serde_json::from_str(&packet.stdout).unwrap();
+    assert_eq!(
+        packet_json["packet_hex"].as_str().unwrap(),
+        udp["write_packet_hex"].as_str().unwrap()
+    );
+
+    let (proxy, handle) = spawn_fake_socks5_server(true, 1);
+    let smoke = run_with_args([
+        "outbound",
+        "socks5",
+        "smoke",
+        "--proxy",
+        &proxy,
+        "--target",
+        "example.com:443",
+        "--username",
+        "user",
+        "--password",
+        "pass",
+    ]);
+    assert_eq!(smoke.exit_code, 0, "{}", smoke.stdout);
+    assert_eq!(smoke.stderr, "");
+    handle.join().unwrap();
+    let smoke_json: Value = serde_json::from_str(&smoke.stdout).unwrap();
+    assert!(smoke_json["ok"].as_bool().unwrap());
+    assert_eq!(smoke_json["method"].as_u64().unwrap(), 2);
+    assert_eq!(smoke_json["bind"].as_str().unwrap(), "127.0.0.1:5300");
+
+    let (proxy, handle) = spawn_fake_socks5_server(false, 3);
+    let udp_smoke = run_with_args([
+        "outbound",
+        "socks5",
+        "smoke",
+        "--proxy",
+        &proxy,
+        "--target",
+        "0.0.0.0:0",
+        "--command",
+        "udp-associate",
+    ]);
+    assert_eq!(udp_smoke.exit_code, 0, "{}", udp_smoke.stdout);
+    assert_eq!(udp_smoke.stderr, "");
+    handle.join().unwrap();
+    let udp_smoke_json: Value = serde_json::from_str(&udp_smoke.stdout).unwrap();
+    assert!(udp_smoke_json["ok"].as_bool().unwrap());
+    assert_eq!(udp_smoke_json["method"].as_u64().unwrap(), 0);
+    assert_eq!(udp_smoke_json["command"].as_str().unwrap(), "udp-associate");
+}
+
 fn assert_commands(got: &[CommandSpec], want: &[Value]) {
     assert_eq!(got.len(), want.len());
     for (got, want) in got.iter().zip(want.iter()) {
@@ -428,4 +563,75 @@ fn write_config(content: &str) -> PathBuf {
         fs::set_permissions(&path, fs::Permissions::from_mode(0o600)).unwrap();
     }
     path
+}
+
+fn spawn_fake_socks5_server(
+    require_auth: bool,
+    expected_cmd: u8,
+) -> (String, thread::JoinHandle<()>) {
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let addr = listener.local_addr().unwrap().to_string();
+    let handle = thread::spawn(move || {
+        let (mut stream, _) = listener.accept().unwrap();
+        let mut head = [0_u8; 2];
+        stream.read_exact(&mut head).unwrap();
+        assert_eq!(head[0], 5);
+        let mut methods = vec![0_u8; head[1] as usize];
+        stream.read_exact(&mut methods).unwrap();
+        let selected = if require_auth { 2 } else { 0 };
+        assert!(methods.contains(&selected));
+        stream.write_all(&[5, selected]).unwrap();
+
+        if require_auth {
+            let mut auth_head = [0_u8; 2];
+            stream.read_exact(&mut auth_head).unwrap();
+            assert_eq!(auth_head, [1, 4]);
+            let mut user = vec![0_u8; auth_head[1] as usize];
+            stream.read_exact(&mut user).unwrap();
+            let mut pass_len = [0_u8; 1];
+            stream.read_exact(&mut pass_len).unwrap();
+            let mut pass = vec![0_u8; pass_len[0] as usize];
+            stream.read_exact(&mut pass).unwrap();
+            assert_eq!(user, b"user");
+            assert_eq!(pass, b"pass");
+            stream.write_all(&[1, 0]).unwrap();
+        }
+
+        let mut request_head = [0_u8; 3];
+        stream.read_exact(&mut request_head).unwrap();
+        assert_eq!(request_head, [5, expected_cmd, 0]);
+        let _ = read_socks5_addr_for_test(&mut stream);
+        stream
+            .write_all(&[5, 0, 0, 1, 127, 0, 0, 1, 0x14, 0xb4])
+            .unwrap();
+    });
+    (addr, handle)
+}
+
+fn read_socks5_addr_for_test(stream: &mut TcpStream) -> Vec<u8> {
+    let mut atyp = [0_u8; 1];
+    stream.read_exact(&mut atyp).unwrap();
+    let mut out = atyp.to_vec();
+    match atyp[0] {
+        1 => {
+            let mut rest = [0_u8; 6];
+            stream.read_exact(&mut rest).unwrap();
+            out.extend_from_slice(&rest);
+        }
+        3 => {
+            let mut len = [0_u8; 1];
+            stream.read_exact(&mut len).unwrap();
+            out.extend_from_slice(&len);
+            let mut rest = vec![0_u8; len[0] as usize + 2];
+            stream.read_exact(&mut rest).unwrap();
+            out.extend_from_slice(&rest);
+        }
+        4 => {
+            let mut rest = [0_u8; 18];
+            stream.read_exact(&mut rest).unwrap();
+            out.extend_from_slice(&rest);
+        }
+        _ => {}
+    }
+    out
 }

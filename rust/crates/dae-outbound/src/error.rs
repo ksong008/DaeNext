@@ -12,6 +12,10 @@ pub enum OutboundError {
     UnknownAnnotation(String),
     BadDuration(String),
     MissingScheme,
+    BadSocks5Address(String),
+    BadSocks5Auth(String),
+    BadSocks5Packet(String),
+    BadSocks5Reply(String),
 }
 
 impl fmt::Display for OutboundError {
@@ -33,6 +37,10 @@ impl fmt::Display for OutboundError {
             Self::UnknownAnnotation(key) => write!(f, "unknown filter annotation: {key}"),
             Self::BadDuration(value) => write!(f, "incorrect latency format: {value}"),
             Self::MissingScheme => f.write_str("missing scheme"),
+            Self::BadSocks5Address(value) => write!(f, "bad socks5 address: {value}"),
+            Self::BadSocks5Auth(value) => write!(f, "bad socks5 auth: {value}"),
+            Self::BadSocks5Packet(value) => write!(f, "bad socks5 packet: {value}"),
+            Self::BadSocks5Reply(value) => write!(f, "bad socks5 reply: {value}"),
         }
     }
 }

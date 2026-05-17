@@ -10,6 +10,7 @@ pub mod group_override;
 pub mod latency;
 pub mod link_parser;
 pub mod policy;
+pub mod socks5;
 pub mod types;
 
 #[cfg(test)]
@@ -27,4 +28,5 @@ pub use group_override::{GroupOverrideCloneCache, HealthProfile, string_slice_pr
 pub use latency::LatenciesN;
 pub use link_parser::{LinkNode, LinkParseResult, parse_link_chain};
 pub use policy::SelectionPolicy;
+pub use socks5::{AddressKind, ServerReply, Socks5Address, Socks5Command, Socks5UdpDatagram};
 pub use types::{IpVersion, L4Proto, NetworkType};
