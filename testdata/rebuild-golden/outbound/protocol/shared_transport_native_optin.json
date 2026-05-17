@@ -1,0 +1,335 @@
+{
+  "default_go_path": true,
+  "grpc_transport": {
+    "backoff_base_ms": 500,
+    "backoff_jitter": 0.2,
+    "backoff_max_seconds": 19,
+    "backoff_multiplier": 1.5,
+    "cache_key_fields": [
+      "address",
+      "serverName",
+      "dialer_identity",
+      "allowInsecure",
+      "somark",
+      "mptcp"
+    ],
+    "clean_cache_hook": "CleanGlobalClientConnectionCache",
+    "global_client_connection_cache": true,
+    "keepalive_seconds": 30,
+    "keepalive_timeout_seconds": 10,
+    "min_connect_timeout_seconds": 5,
+    "mptcp_changes_key": true,
+    "sample_cache_key_a": "addr:443|sni.example|dialer-1|true|\u0000\u0003tcp\u0000\u0000\u0004\ufffd\u0001",
+    "sample_cache_key_b": "addr:443|sni.example|dialer-1|true|\u0000\u0003tcp\u0000\u0000\u0004\ufffd\u0000",
+    "somark_changes_key": true
+  },
+  "httpupgrade_transport": {
+    "bufio_todo_preserved": true,
+    "connection_header": "upgrade",
+    "https_alpn": [
+      "http/1.1"
+    ],
+    "https_wraps_tls": true,
+    "request_method": "GET",
+    "success_status": 101,
+    "udp": "unsupported",
+    "upgrade_header": "websocket"
+  },
+  "live_smoke_required": [
+    "local transport IR contract smoke",
+    "local xHTTP mode/ALPN/path/extra smoke",
+    "local gRPC cache key and MagicNetwork contract smoke"
+  ],
+  "meek_transport": {
+    "backoff": 1.5,
+    "clean_cache_hook": "CleanGlobalRoundTripperCache",
+    "default_alpn": [
+      "h2",
+      "http/1.1"
+    ],
+    "initial_polling_ms": 100,
+    "max_polling_ms": 1000,
+    "max_write": 65536,
+    "min_polling_ms": 10,
+    "tcp_only": true,
+    "url_required": true,
+    "url_scheme_required": "https"
+  },
+  "mux_transport": {
+    "data_plane_deferred": true,
+    "new_conn_wraps_net_conn": true,
+    "request_header_hex": "01020304"
+  },
+  "name": "stage15-shared-transport-native-optin",
+  "protocol_scope": [
+    "transport-combos"
+  ],
+  "reality_transport": {
+    "data_plane_deferred": true,
+    "pbk_decoded_hex": "fbfffefaefeeabcd0123456789abcdeffbfffefaefeeabcd0123456789abcdef",
+    "pbk_input": "-__--u_uq80BI0VniavN7_v__vrv7qvNASNFZ4mrze8",
+    "requires_utls_handshake_state": true,
+    "sid_decoded_hex": "0123456789abcdef",
+    "sid_input": "0123456789abcdef",
+    "sni_nosni": "",
+    "spider_y": [
+      10,
+      20,
+      30,
+      30,
+      40,
+      40,
+      50,
+      50,
+      60,
+      70
+    ],
+    "spx_default": "/",
+    "spx_input": "/?p=10-20\u0026c=30\u0026t=40\u0026i=50\u0026r=60-70",
+    "verify_peer_certificate": true
+  },
+  "rust_adapter_mode": "native-opt-in-contract",
+  "simpleobfs_transport": {
+    "host_key": "host",
+    "path_keys": [
+      "path",
+      "uri"
+    ],
+    "protocol_label": "simpleobfs(http)",
+    "supported": [
+      "http",
+      "tls"
+    ],
+    "tcp_wraps_conn": true,
+    "type_keys": [
+      "type",
+      "obfs"
+    ],
+    "udp_passthrough": true
+  },
+  "source": [
+    "DAENEW_RUST_REBUILD_MEMO_2026-05-16.md:26.7",
+    "DAENEW_RUST_REBUILD_MEMO_2026-05-16.md:26.8",
+    "DAENEW_RUST_REBUILD_MEMO_2026-05-16.md:26.18",
+    "DAENEW_RUST_REBUILD_MEMO_2026-05-16.md:26.20",
+    "DAENEW_RUST_REBUILD_MEMO_2026-05-16.md:26.21",
+    "/root/project/outbound/transport/tls/{dialer.go,tls.go,utls.go,reality.go,fragment.go}",
+    "/root/project/outbound/transport/ws/{ws.go,dialer.go,conn.go}",
+    "/root/project/outbound/transport/grpc/grpc_client.go",
+    "/root/project/outbound/transport/httpupgrade/httpupgrade.go",
+    "/root/project/outbound/transport/meek/{dialer.go,config.go,httprt.go}",
+    "/root/project/outbound/transport/simpleobfs/{simpleobfs.go,http.go,tls.go}",
+    "/root/project/outbound/transport/mux/{mux.go,conn.go}",
+    "/root/project/outbound/transport/xhttp/xhttp.go",
+    "/root/project/outbound/dialer/v2ray/v2ray.go"
+  ],
+  "tls_transport": {
+    "allow_insecure_aliases": [
+      "allowInsecure",
+      "allow_insecure",
+      "allowinsecure",
+      "skipVerify"
+    ],
+    "allow_insecure_samples": [
+      {
+        "key": "allowInsecure",
+        "parsed": true,
+        "value": "1"
+      },
+      {
+        "key": "allow_insecure",
+        "parsed": true,
+        "value": "true"
+      },
+      {
+        "key": "allowinsecure",
+        "parsed": false,
+        "value": "0"
+      },
+      {
+        "key": "skipVerify",
+        "parsed": false,
+        "value": "false"
+      }
+    ],
+    "global_tls_fragment": true,
+    "schemes": [
+      "tls",
+      "utls"
+    ],
+    "tcp_preserves_network": true,
+    "udp_passthrough_key": "passthroughUdp",
+    "udp_passthrough_true": true,
+    "udp_without_passthrough": "unsupported",
+    "utls_imitate_query": "utlsImitate"
+  },
+  "transport_scope": [
+    "tls",
+    "utls",
+    "reality",
+    "ws",
+    "wss",
+    "grpc",
+    "simpleobfs",
+    "httpupgrade",
+    "meek",
+    "mux",
+    "xhttp"
+  ],
+  "ws_transport": {
+    "allow_insecure_aliases": [
+      "allowInsecure",
+      "allow_insecure",
+      "allowinsecure",
+      "skipVerify"
+    ],
+    "passthrough_udp_true": true,
+    "schemes": [
+      "ws",
+      "wss"
+    ],
+    "udp_without_passthrough": "unsupported",
+    "wss_fragment": true,
+    "wss_uses_tls": true
+  },
+  "xhttp_transport": {
+    "alpn_cases": [
+      {
+        "alpn": "h2",
+        "error_contains": "",
+        "name": "h2",
+        "ok": true,
+        "security": "tls",
+        "use_h3": false
+      },
+      {
+        "alpn": "h3",
+        "error_contains": "",
+        "name": "h3",
+        "ok": true,
+        "security": "tls",
+        "use_h3": true
+      },
+      {
+        "alpn": "http/1.1",
+        "error_contains": "",
+        "name": "http1",
+        "ok": true,
+        "security": "tls",
+        "use_h3": false
+      },
+      {
+        "alpn": "hq",
+        "error_contains": "alpn",
+        "name": "bad",
+        "ok": false,
+        "security": "tls",
+        "use_h3": false
+      },
+      {
+        "alpn": "h3",
+        "error_contains": "reality with h3 is not supported",
+        "name": "reality-h3",
+        "ok": false,
+        "security": "reality",
+        "use_h3": false
+      }
+    ],
+    "extra_canonical": "{\"downloadSettings\":{\"address\":\"download.example\",\"network\":\"xhttp\",\"port\":443,\"security\":\"reality\",\"xhttpSettings\":{\"extra\":\"{\\\"xmux\\\":{\\\"maxConnections\\\":\\\"3\\\",\\\"cMaxReuseTimes\\\":\\\"9\\\"}}\",\"host\":\"download.example\",\"path\":\"/download\"}},\"xPaddingBytes\":\"100-200\",\"xmux\":{\"maxConnections\":\"1\"}}",
+    "extra_empty_omitted": true,
+    "extra_raw": "{\"downloadSettings\":{\"address\":\"download.example\",\"port\":443,\"network\":\"xhttp\",\"security\":\"reality\",\"xhttpSettings\":{\"host\":\"download.example\",\"path\":\"/download\",\"extra\":\"{\\\"xmux\\\":{\\\"maxConnections\\\":\\\"3\\\",\\\"cMaxReuseTimes\\\":\\\"9\\\"}}\"}},\"xmux\":{\"maxConnections\":\"1\"},\"xPaddingBytes\":\"100-200\"}",
+    "mode_cases": [
+      {
+        "error_contains": "",
+        "hasDownload": false,
+        "mode": "auto",
+        "name": "auto tls",
+        "normalized": "packet-up",
+        "ok": true,
+        "scheme": "https",
+        "security": "tls"
+      },
+      {
+        "error_contains": "",
+        "hasDownload": false,
+        "mode": "auto",
+        "name": "auto reality",
+        "normalized": "stream-one",
+        "ok": true,
+        "scheme": "https",
+        "security": "reality"
+      },
+      {
+        "error_contains": "",
+        "hasDownload": true,
+        "mode": "auto",
+        "name": "auto reality download",
+        "normalized": "stream-up",
+        "ok": true,
+        "scheme": "https",
+        "security": "reality"
+      },
+      {
+        "error_contains": "auto mode without tls is not supported yet",
+        "hasDownload": false,
+        "mode": "auto",
+        "name": "auto http error",
+        "normalized": "",
+        "ok": false,
+        "scheme": "http",
+        "security": "tls"
+      },
+      {
+        "error_contains": "packet-up without tls is not supported yet",
+        "hasDownload": false,
+        "mode": "packet-up",
+        "name": "packet-up http error",
+        "normalized": "",
+        "ok": false,
+        "scheme": "http",
+        "security": "tls"
+      }
+    ],
+    "packet_max_bytes_default": 1048576,
+    "packet_min_gap_ms_default": 30,
+    "path_cases": [
+      {
+        "input": "xhttp",
+        "path": "/xhttp/",
+        "query": ""
+      },
+      {
+        "input": "/xhttp",
+        "path": "/xhttp/",
+        "query": ""
+      },
+      {
+        "input": "/xhttp/",
+        "path": "/xhttp/",
+        "query": ""
+      },
+      {
+        "input": "/xhttp?ed=2048",
+        "path": "/xhttp/",
+        "query": "ed=2048"
+      },
+      {
+        "input": "xhttp?ed=2048\u0026foo=bar",
+        "path": "/xhttp/",
+        "query": "ed=2048\u0026foo=bar"
+      }
+    ],
+    "placement_defaults": {
+      "seq": "path",
+      "session": "path",
+      "uplink_data": "body"
+    },
+    "true_data_plane_deferred": true,
+    "unsupported_extra_fields": [
+      "noSSEHeader",
+      "scMaxBufferedPosts",
+      "downloadSettings.xhttpSettings.mode",
+      "downloadSettings.xhttpSettings.extra except xmux"
+    ]
+  }
+}
