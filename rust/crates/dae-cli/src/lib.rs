@@ -2,6 +2,7 @@ pub mod completion;
 pub mod error;
 pub mod export;
 pub mod progress;
+pub mod runner;
 pub mod surface;
 pub mod validate;
 
@@ -14,5 +15,6 @@ pub use export::export_outline_json;
 pub use progress::{
     ABORT_FILE, PID_FILE_PATH, ReloadProgress, SIGNAL_PROGRESS_FILE_PATH, parse_progress_content,
 };
+pub use runner::{RunnerOutput, run_with_args, run_with_args_and_version};
 pub use surface::{CliSurface, CommandSpec, cli_surface};
-pub use validate::validate_config_text;
+pub use validate::{validate_config_file, validate_config_text};
