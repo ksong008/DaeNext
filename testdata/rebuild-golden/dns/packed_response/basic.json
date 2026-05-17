@@ -1,0 +1,31 @@
+{
+  "cname_restore": {
+    "alias": "alias.example.",
+    "answer_types": [
+      "CNAME",
+      "A"
+    ],
+    "include_target_ip": true,
+    "packed_hex": "00008100000100020000000005616c696173076578616d706c65000001000105616c696173076578616d706c6500000500010000003c001006746172676574076578616d706c650006746172676574076578616d706c6500000100010000003c0004cb007114",
+    "question_domain_bitmap": [
+      64
+    ],
+    "target": "target.example.",
+    "target_domain_bitmap": [
+      128
+    ],
+    "target_ip": "203.0.113.20"
+  },
+  "name": "dns-packed-response-basic",
+  "notes": "Packed DNS cache responses store zero/old ID and restore caller request ID before returning.",
+  "restore_request_id": {
+    "packed_zero_id_hex": "000081000001000100000000076578616d706c6503636f6d0000010001076578616d706c6503636f6d000001000100000000000401020304",
+    "request_id": 17185,
+    "restored_hex": "432181000001000100000000076578616d706c6503636f6d0000010001076578616d706c6503636f6d000001000100000000000401020304",
+    "restored_prefix": "4321"
+  },
+  "source": [
+    "control/dns_cache.go:FillPackedResponse",
+    "control/dns_cache_restore_test.go:TestRestoreDnsCacheSnapshotPreservesPackedCNAMEAndQuestionDomainBitmap"
+  ]
+}

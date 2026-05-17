@@ -1,0 +1,78 @@
+{
+  "filter_groups": [
+    {
+      "annotation": {
+        "add_latency_ms": 10
+      },
+      "filters": [
+        {
+          "input": "name",
+          "key": "regex",
+          "value": "^(HK|JP)-"
+        },
+        {
+          "input": "subtag",
+          "key": "regex",
+          "value": "premium|game"
+        }
+      ]
+    },
+    {
+      "annotation": {
+        "add_latency_ms": 25
+      },
+      "filters": [
+        {
+          "input": "name",
+          "key": "keyword",
+          "value": "Backup"
+        }
+      ]
+    }
+  ],
+  "match_semantics": "filter groups OR; functions in one group AND; params inside one function OR",
+  "matched": [
+    {
+      "add_latency_ms": 10,
+      "name": "HK-Netflix",
+      "subscription_tag": "premium-sub"
+    },
+    {
+      "add_latency_ms": 10,
+      "name": "JP-Game",
+      "subscription_tag": "game-sub"
+    },
+    {
+      "add_latency_ms": 25,
+      "name": "US-Backup",
+      "subscription_tag": "backup-sub"
+    }
+  ],
+  "name": "outbound-filter-name-and-subscription-tag",
+  "nodes": [
+    {
+      "name": "HK-Netflix",
+      "subscription_tag": "premium-sub"
+    },
+    {
+      "name": "JP-Game",
+      "subscription_tag": "game-sub"
+    },
+    {
+      "name": "SG-Standard",
+      "subscription_tag": "standard-sub"
+    },
+    {
+      "name": "US-Backup",
+      "subscription_tag": "backup-sub"
+    }
+  ],
+  "source": [
+    "component/outbound/filter.go:DialerSet.FilterAndAnnotate",
+    "component/outbound/filter_test.go:TestDialerSetFilterAndAnnotateMatchesCompiledFilters",
+    "component/outbound/dialer/annotation.go:NewAnnotation"
+  ],
+  "unmatched": [
+    "SG-Standard"
+  ]
+}

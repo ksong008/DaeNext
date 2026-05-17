@@ -1,0 +1,29 @@
+{
+  "cases": [
+    {
+      "fixed_index": 1,
+      "select_count": 10,
+      "want_index": 1
+    },
+    {
+      "fixed_index": 0,
+      "select_count": 10,
+      "want_index": 0
+    }
+  ],
+  "dialers": [
+    "dialer0",
+    "dialer1"
+  ],
+  "name": "outbound-group-fixed",
+  "notes": "fixed policy selects by index and does not require alive state.",
+  "policy": {
+    "fixed_index": 1,
+    "name": "fixed"
+  },
+  "requires_alive_state": false,
+  "source": [
+    "component/outbound/dialer_group.go:DialerGroup.Select",
+    "component/outbound/dialer_group_test.go:TestDialerGroup_Select_Fixed"
+  ]
+}

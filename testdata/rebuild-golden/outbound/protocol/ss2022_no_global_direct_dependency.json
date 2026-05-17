@@ -1,0 +1,12 @@
+{
+  "adapter_mode": "bridge-or-stub-until-native-protocol-rewrite",
+  "global_direct_nil": true,
+  "link": "ss://2022-blake3-aes-128-gcm:MTIzNDU2Nzg5MDEyMzQ1Ng==@example.com:443#node",
+  "name": "outbound-protocol-ss2022-no-global-direct-dependency",
+  "new_from_link_ok": true,
+  "parent_dialer_non_nil": true,
+  "source": [
+    "component/outbound/dialer/direct_test.go:TestNewFromLinkSS2022DoesNotDependOnGlobalDirectDialer",
+    "DAENEW_RUST_REBUILD_MEMO_2026-05-16.md:26"
+  ]
+}

@@ -1,0 +1,52 @@
+{
+  "keys": [
+    "moc.cbatnetnoc.",
+    "moc.cbatnetnoc^",
+    "nc.",
+    "nc.ude.ctsu.srorrim.pct_.sptth_"
+  ],
+  "name": "routing-trie-reversed-domain-prefix",
+  "notes": "Domain suffix/full matcher uses reversed strings and HasPrefix semantics.",
+  "queries": [
+    {
+      "hit": true,
+      "query": "nc.tset^"
+    },
+    {
+      "hit": false,
+      "query": "nc^"
+    },
+    {
+      "hit": true,
+      "query": "nc."
+    },
+    {
+      "hit": true,
+      "query": "nc.^"
+    },
+    {
+      "hit": true,
+      "query": "nc._"
+    },
+    {
+      "hit": false,
+      "query": "n"
+    },
+    {
+      "hit": false,
+      "query": "n^"
+    },
+    {
+      "hit": true,
+      "query": "moc.cbatnetnoc^"
+    },
+    {
+      "hit": true,
+      "query": "nc.ude.ctsu.srorrim.pct_.sptth_^"
+    }
+  ],
+  "source": [
+    "pkg/trie/trie.go",
+    "pkg/trie/trie_test.go"
+  ]
+}

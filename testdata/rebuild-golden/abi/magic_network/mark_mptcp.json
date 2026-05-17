@@ -1,0 +1,75 @@
+{
+  "cases": [
+    {
+      "input": {
+        "mark": 0,
+        "mptcp": false,
+        "network": "tcp"
+      },
+      "name": "plain-tcp",
+      "want": {
+        "encoded_hex": "746370",
+        "encoded_printable": "tcp",
+        "parsed": {
+          "mark": 0,
+          "mptcp": false,
+          "network": "tcp"
+        }
+      }
+    },
+    {
+      "input": {
+        "mark": 1280,
+        "mptcp": false,
+        "network": "tcp"
+      },
+      "name": "tcp-mark-only",
+      "want": {
+        "encoded_hex": "00037463700000050000",
+        "parsed": {
+          "mark": 1280,
+          "mptcp": false,
+          "network": "tcp"
+        }
+      }
+    },
+    {
+      "input": {
+        "mark": 0,
+        "mptcp": true,
+        "network": "udp"
+      },
+      "name": "udp-mptcp-only",
+      "want": {
+        "encoded_hex": "00037564700000000001",
+        "parsed": {
+          "mark": 0,
+          "mptcp": true,
+          "network": "udp"
+        }
+      }
+    },
+    {
+      "input": {
+        "mark": 134217728,
+        "mptcp": true,
+        "network": "tcp"
+      },
+      "name": "tcp-mark-and-mptcp",
+      "want": {
+        "encoded_hex": "00037463700800000001",
+        "parsed": {
+          "mark": 134217728,
+          "mptcp": true,
+          "network": "tcp"
+        }
+      }
+    }
+  ],
+  "name": "magic-network-mark-mptcp",
+  "notes": "MagicNetwork is the ABI that carries SO_MARK and MPTCP through outbound/netproxy DialContext network strings.",
+  "source": [
+    "common/utils.go:MagicNetwork",
+    "github.com/daeuniverse/outbound/netproxy.MagicNetwork"
+  ]
+}

@@ -1,0 +1,10 @@
+[package]
+name = "dae-netutil"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dev-dependencies]
+dae-golden.workspace = true
+serde_json.workspace = true

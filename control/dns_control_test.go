@@ -535,6 +535,41 @@ func TestDnsDataWithZeroIDDoesNotMutateInput(t *testing.T) {
 	}
 }
 
+func BenchmarkDnsCacheKey(b *testing.B) {
+	b.ReportAllocs()
+	for i := 0; i < b.N; i++ {
+		key := newDnsCacheKey("Example.COM", dnsmessage.TypeA, dnsmessage.ClassINET)
+		if key.String() != "example.com.|1|1" {
+			b.Fatalf("unexpected dns cache key: %s", key.String())
+		}
+	}
+}
+
+func BenchmarkDnsDataWithZeroID(b *testing.B) {
+	payload := []byte{0x12, 0x34, 0x56, 0x78}
+	b.ReportAllocs()
+	for i := 0; i < b.N; i++ {
+		got := dnsDataWithZeroID(payload)
+		if got[0] != 0 || got[1] != 0 || payload[0] != 0x12 || payload[1] != 0x34 {
+			b.Fatalf("unexpected zero-id payload: got=%v original=%v", got, payload)
+		}
+	}
+}
+
+func BenchmarkValidateDnsResponseForRequest(b *testing.B) {
+	req := new(dnsmessage.Msg)
+	req.Id = 0x1111
+	req.SetQuestion("example.com.", dnsmessage.TypeA)
+	resp := newTestDnsResponse("example.com.", dnsmessage.TypeA, newTestARecord("example.com.", "1.1.1.1"), false)
+	resp.Id = req.Id
+	b.ReportAllocs()
+	for i := 0; i < b.N; i++ {
+		if err := validateDnsResponseForRequest(req, resp, true); err != nil {
+			b.Fatal(err)
+		}
+	}
+}
+
 func TestLookupDnsRespCacheUsesPackedResponse(t *testing.T) {
 	controller, err := NewDnsController(nil, &DnsControllerOption{
 		Log: logrus.New(),

@@ -1,0 +1,31 @@
+[workspace]
+members = [
+    "crates/dae-config",
+    "crates/dae-config-util",
+    "crates/dae-core-types",
+    "crates/dae-dns",
+    "crates/dae-geodata",
+    "crates/dae-golden",
+    "crates/dae-netutil",
+    "crates/dae-outbound",
+    "crates/dae-routing",
+    "crates/dae-sniffing",
+]
+resolver = "3"
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+license = "AGPL-3.0-only"
+repository = "https://github.com/daeuniverse/dae"
+
+[workspace.dependencies]
+base64 = "0.22"
+dae-config-util = { path = "crates/dae-config-util" }
+dae-core-types = { path = "crates/dae-core-types" }
+dae-dns = { path = "crates/dae-dns" }
+dae-golden = { path = "crates/dae-golden" }
+dae-outbound = { path = "crates/dae-outbound" }
+regex = "1"
+serde_json = "1"
+url = "2"

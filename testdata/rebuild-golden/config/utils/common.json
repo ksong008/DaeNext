@@ -1,0 +1,263 @@
+{
+  "collections": {
+    "a_range_u32": [
+      {
+        "n": 0,
+        "want": []
+      },
+      {
+        "n": 4,
+        "want": [
+          0,
+          1,
+          2,
+          3
+        ]
+      }
+    ],
+    "clone_strings": [
+      {
+        "input": [
+          "a",
+          "b"
+        ],
+        "name": "normal",
+        "want": [
+          "a",
+          "b"
+        ]
+      },
+      {
+        "input": null,
+        "name": "nil",
+        "want": []
+      }
+    ],
+    "deduplicate": [
+      {
+        "input": [
+          "a",
+          "b",
+          "a",
+          "c",
+          "b"
+        ],
+        "name": "preserve-first",
+        "want": [
+          "a",
+          "b",
+          "c"
+        ]
+      },
+      {
+        "input": null,
+        "name": "nil",
+        "want": null
+      }
+    ],
+    "string_set": {
+      "input": [
+        "b",
+        "a",
+        "b"
+      ],
+      "keys": [
+        "a",
+        "b"
+      ]
+    }
+  },
+  "hierarchical_map": [
+    {
+      "key": "global.dial_mode",
+      "map": {
+        "global": {
+          "dial_mode": "domain"
+        }
+      },
+      "name": "set-new-path",
+      "ok": true,
+      "value": "domain"
+    },
+    {
+      "key": "global.dial_mode",
+      "map": {
+        "global": {
+          "dial_mode": "domain",
+          "mptcp": true
+        }
+      },
+      "name": "extend-existing-map",
+      "ok": true,
+      "value": "domain"
+    },
+    {
+      "error": "overlay hierarchical key",
+      "key": "global.dial_mode",
+      "name": "existing-non-map-error",
+      "ok": false,
+      "value": "domain"
+    }
+  ],
+  "hierarchical_struct": [
+    {
+      "after": {
+        "global": {
+          "duration": "0s",
+          "labels": null,
+          "mptcp": true,
+          "url": {
+            "empty": false,
+            "url": null
+          }
+        }
+      },
+      "key": "global.mptcp",
+      "name": "set-bool",
+      "ok": true,
+      "value": "yes"
+    },
+    {
+      "after": {
+        "global": {
+          "duration": "1.5s",
+          "labels": null,
+          "mptcp": false,
+          "url": {
+            "empty": false,
+            "url": null
+          }
+        }
+      },
+      "key": "global.duration",
+      "name": "set-duration",
+      "ok": true,
+      "value": "1.5s"
+    },
+    {
+      "after": {
+        "global": {
+          "duration": "0s",
+          "labels": [
+            "a",
+            "b"
+          ],
+          "mptcp": false,
+          "url": {
+            "empty": false,
+            "url": null
+          }
+        }
+      },
+      "key": "global.labels",
+      "name": "set-labels",
+      "ok": true,
+      "value": "a,b"
+    },
+    {
+      "after": {
+        "global": {
+          "duration": "0s",
+          "labels": null,
+          "mptcp": false,
+          "url": {
+            "empty": false,
+            "url": "/relative/path"
+          }
+        }
+      },
+      "key": "global.url",
+      "name": "set-url",
+      "ok": true,
+      "value": "/relative/path"
+    },
+    {
+      "error": "type does not match: type \"bool\" and value \"maybe\"",
+      "key": "global.mptcp",
+      "name": "type-mismatch",
+      "ok": false,
+      "value": "maybe"
+    },
+    {
+      "error": "unexpected key \"global.missing\": \"global\" (struct type) has no member \"missing\"",
+      "key": "global.missing",
+      "name": "missing-child",
+      "ok": false,
+      "value": "1"
+    },
+    {
+      "error": "unexpected key \"json_only\": \"\" (struct type) has no member \"json_only\"",
+      "key": "json_only",
+      "name": "json-tag-ignored",
+      "ok": false,
+      "value": "1"
+    },
+    {
+      "error": "unexpected key \"Global.mptcp\": \"\" (struct type) has no member \"Global\"",
+      "key": "Global.mptcp",
+      "name": "case-sensitive",
+      "ok": false,
+      "value": "1"
+    }
+  ],
+  "http_methods": {
+    "invalid": [
+      "",
+      "get",
+      "connect",
+      "BREW"
+    ],
+    "valid": [
+      "GET",
+      "POST",
+      "PUT",
+      "PATCH",
+      "DELETE",
+      "COPY",
+      "HEAD",
+      "OPTIONS",
+      "LINK",
+      "UNLINK",
+      "PURGE",
+      "LOCK",
+      "UNLOCK",
+      "PROPFIND",
+      "CONNECT",
+      "TRACE"
+    ]
+  },
+  "map_keys": [
+    {
+      "keys_sorted": [
+        "a",
+        "b"
+      ],
+      "name": "string-map",
+      "ok": true,
+      "order": "unordered"
+    },
+    {
+      "error": "MapKeys requires map[string]*",
+      "name": "non-map",
+      "ok": false
+    },
+    {
+      "error": "MapKeys requires map[string]*",
+      "name": "non-string-key",
+      "ok": false
+    }
+  ],
+  "name": "common-utils-basic",
+  "notes": "Rust config utilities must keep remaining pure common/utils behavior compatible before config parser migration.",
+  "source": [
+    "common/utils.go:CloneStrings",
+    "common/utils.go:ARangeU32",
+    "common/utils.go:Deduplicate",
+    "common/utils.go:StringSet",
+    "common/utils.go:MapKeys",
+    "common/utils.go:IsValidHttpMethod",
+    "common/utils.go:SetValueHierarchicalMap",
+    "common/utils.go:SetValueHierarchicalStruct",
+    "common/utils.go:GetValueHierarchicalStruct"
+  ]
+}

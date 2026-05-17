@@ -1,0 +1,46 @@
+{
+  "app_name": "dae",
+  "defaults": {
+    "default_dial_timeout": "8s",
+    "udp_check_lookup_host": "connectivitycheck.gstatic.com."
+  },
+  "dial_modes": {
+    "accepted": [
+      "ip",
+      "domain",
+      "domain+",
+      "domain++"
+    ],
+    "error_format": "unsupported dial mode: \u003cmode\u003e",
+    "rejected_examples": [
+      "",
+      "auto",
+      "DOMAIN",
+      "domain_plus"
+    ]
+  },
+  "dialer_selection_policies": [
+    "random",
+    "fixed",
+    "min_avg10",
+    "min_moving_avg",
+    "min"
+  ],
+  "name": "dial-mode-policy",
+  "network_dimensions": {
+    "ip_version": {
+      "ipv4": "4",
+      "ipv6": "6"
+    },
+    "l4_proto": {
+      "tcp": "tcp",
+      "udp": "udp"
+    }
+  },
+  "notes": "These string values are user-visible config/API compatibility values.",
+  "source": [
+    "common/consts/app.go",
+    "common/consts/control.go",
+    "common/consts/dialer.go"
+  ]
+}
