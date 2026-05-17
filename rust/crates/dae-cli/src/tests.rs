@@ -783,6 +783,142 @@ fn optin_runner_outbound_shadowsocks_commands_match_fixture() {
     assert!(smoke_json["replay_duplicate_rejected"].as_bool().unwrap());
 }
 
+#[test]
+fn optin_runner_outbound_trojan_commands_match_fixture() {
+    let fixture = load("outbound/protocol/trojan_native_optin.json");
+
+    let contract = run_with_args(["outbound", "trojan", "contract"]);
+    assert_eq!(contract.exit_code, 0);
+    assert_eq!(contract.stderr, "");
+    let contract_json: Value = serde_json::from_str(&contract.stdout).unwrap();
+    assert_eq!(
+        contract_json["name"].as_str().unwrap(),
+        fixture["name"].as_str().unwrap()
+    );
+    assert_eq!(
+        contract_json["rust_adapter_mode"].as_str().unwrap(),
+        fixture["rust_adapter_mode"].as_str().unwrap()
+    );
+    assert!(contract_json["default_go_path"].as_bool().unwrap());
+
+    let link_case = fixture["link_parser"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|case| case["name"].as_str().unwrap() == "trojan-type-forces-trojan-go-grpc")
+        .unwrap();
+    let link = run_with_args([
+        "outbound",
+        "trojan",
+        "link",
+        "--link",
+        link_case["input"].as_str().unwrap(),
+    ]);
+    assert_eq!(link.exit_code, 0, "{}", link.stdout);
+    assert_eq!(link.stderr, "");
+    let link_json: Value = serde_json::from_str(&link.stdout).unwrap();
+    assert_eq!(
+        link_json["export"].as_str().unwrap(),
+        link_case["export"].as_str().unwrap()
+    );
+    assert_eq!(
+        link_json["serviceName"].as_str().unwrap(),
+        link_case["serviceName"].as_str().unwrap()
+    );
+    assert_eq!(link_json["protocol"].as_str().unwrap(), "trojan-go");
+
+    let metadata_case = fixture["metadata"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|case| case["name"].as_str().unwrap() == "domain-udp")
+        .unwrap();
+    let metadata = run_with_args([
+        "outbound",
+        "trojan",
+        "metadata",
+        "--network",
+        metadata_case["network"].as_str().unwrap(),
+        "--target",
+        metadata_case["input"].as_str().unwrap(),
+    ]);
+    assert_eq!(metadata.exit_code, 0);
+    assert_eq!(metadata.stderr, "");
+    let metadata_json: Value = serde_json::from_str(&metadata.stdout).unwrap();
+    assert_eq!(
+        metadata_json["hex"].as_str().unwrap(),
+        metadata_case["hex"].as_str().unwrap()
+    );
+    assert_eq!(
+        metadata_json["network_byte"].as_u64().unwrap(),
+        metadata_case["network_byte"].as_u64().unwrap()
+    );
+
+    let tcp_case = &fixture["framing"]["tcp_request_header"];
+    let tcp = run_with_args([
+        "outbound",
+        "trojan",
+        "tcp-header",
+        "--password",
+        fixture["framing"]["password"].as_str().unwrap(),
+        "--network",
+        tcp_case["network"].as_str().unwrap(),
+        "--target",
+        tcp_case["target"].as_str().unwrap(),
+        "--payload",
+        tcp_case["payload_ascii"].as_str().unwrap(),
+    ]);
+    assert_eq!(tcp.exit_code, 0);
+    assert_eq!(tcp.stderr, "");
+    let tcp_json: Value = serde_json::from_str(&tcp.stdout).unwrap();
+    assert_eq!(
+        tcp_json["header_hex"].as_str().unwrap(),
+        tcp_case["header_hex"].as_str().unwrap()
+    );
+
+    let udp_case = &fixture["framing"]["udp_packet"];
+    let udp = run_with_args([
+        "outbound",
+        "trojan",
+        "udp-packet",
+        "--target",
+        udp_case["target"].as_str().unwrap(),
+        "--payload",
+        udp_case["payload_ascii"].as_str().unwrap(),
+    ]);
+    assert_eq!(udp.exit_code, 0);
+    assert_eq!(udp.stderr, "");
+    let udp_json: Value = serde_json::from_str(&udp.stdout).unwrap();
+    assert_eq!(
+        udp_json["packet_hex"].as_str().unwrap(),
+        udp_case["packet_hex"].as_str().unwrap()
+    );
+
+    let smoke = run_with_args([
+        "outbound",
+        "trojan-go",
+        "smoke",
+        "--link",
+        link_case["input"].as_str().unwrap(),
+        "--target",
+        tcp_case["target"].as_str().unwrap(),
+        "--payload",
+        tcp_case["payload_ascii"].as_str().unwrap(),
+    ]);
+    assert_eq!(smoke.exit_code, 0, "{}", smoke.stdout);
+    assert_eq!(smoke.stderr, "");
+    let smoke_json: Value = serde_json::from_str(&smoke.stdout).unwrap();
+    assert!(smoke_json["ok"].as_bool().unwrap());
+    assert_eq!(
+        smoke_json["tcp_header_hex"].as_str().unwrap(),
+        tcp_case["header_hex"].as_str().unwrap()
+    );
+    assert_eq!(
+        smoke_json["udp_packet_hex"].as_str().unwrap(),
+        udp_case["packet_hex"].as_str().unwrap()
+    );
+}
+
 fn assert_commands(got: &[CommandSpec], want: &[Value]) {
     assert_eq!(got.len(), want.len());
     for (got, want) in got.iter().zip(want.iter()) {
