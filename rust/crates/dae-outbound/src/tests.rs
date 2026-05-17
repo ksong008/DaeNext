@@ -1,5 +1,9 @@
 use base64::{Engine as _, engine::general_purpose::STANDARD};
 use serde_json::Value;
+use std::io::{Read, Write};
+use std::net::{TcpListener, TcpStream};
+use std::thread;
+use std::time::Duration;
 
 use crate::*;
 
@@ -2170,6 +2174,92 @@ fn shared_transport_native_optin_matches_golden_fixture() {
     );
 }
 
+#[test]
+fn stage18_socks5_tcp_dataplane_echoes_payload() {
+    let fixture = fixture("outbound/protocol/stage18_first_batch_dataplane.json");
+    let payload = fixture["payload_ascii"].as_str().unwrap().as_bytes();
+    let (proxy, handle) = spawn_socks5_echo_proxy();
+    let report = socks5::tcp_connect_exchange(
+        &proxy,
+        fixture["socks5"]["target"].as_str().unwrap(),
+        fixture["socks5"]["username"].as_str().unwrap(),
+        fixture["socks5"]["password"].as_str().unwrap(),
+        payload,
+        Duration::from_secs(2),
+    )
+    .unwrap();
+    handle.join().unwrap();
+
+    assert!(report.true_dataplane);
+    assert!(report.default_go_path);
+    assert_eq!(report.method, 2);
+    assert_eq!(
+        report.bind,
+        fixture["socks5"]["bind"].as_str().unwrap().to_owned()
+    );
+    assert_eq!(report.echoed_payload, payload);
+}
+
+#[test]
+fn stage18_http_connect_dataplane_echoes_payload() {
+    let fixture = fixture("outbound/protocol/stage18_first_batch_dataplane.json");
+    let payload = fixture["payload_ascii"].as_str().unwrap().as_bytes();
+    let (proxy, handle) = spawn_http_connect_echo_proxy();
+    let mut options =
+        http_proxy::HttpConnectOptions::connect(fixture["http"]["target"].as_str().unwrap());
+    options.username = fixture["http"]["username"].as_str().unwrap().to_owned();
+    options.password = fixture["http"]["password"].as_str().unwrap().to_owned();
+    options.host_override = fixture["http"]["host_override"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let report =
+        http_proxy::connect_exchange(&proxy, &options, payload, Duration::from_secs(2)).unwrap();
+    handle.join().unwrap();
+
+    assert!(report.true_dataplane);
+    assert!(report.default_go_path);
+    assert_eq!(report.status, 200);
+    assert_eq!(report.echoed_payload, payload);
+}
+
+#[test]
+fn stage18_shadowsocks_aead_tcp_dataplane_echoes_payload() {
+    let fixture = fixture("outbound/protocol/stage18_first_batch_dataplane.json");
+    let payload = fixture["payload_ascii"].as_str().unwrap().as_bytes();
+    let cipher = fixture["shadowsocks"]["cipher"].as_str().unwrap();
+    let password = fixture["shadowsocks"]["password"].as_str().unwrap();
+    let client_salt = hex_decode(fixture["shadowsocks"]["client_salt_hex"].as_str().unwrap());
+    let server_salt = hex_decode(fixture["shadowsocks"]["server_salt_hex"].as_str().unwrap());
+    let (server, handle) = spawn_shadowsocks_aead_echo_server(
+        cipher.to_owned(),
+        password.to_owned(),
+        server_salt.clone(),
+    );
+    let report = shadowsocks::tcp_exchange(
+        &server,
+        cipher,
+        password,
+        fixture["shadowsocks"]["target"].as_str().unwrap(),
+        payload,
+        shadowsocks::AeadTcpSalts {
+            client: &client_salt,
+            server: &server_salt,
+        },
+        Duration::from_secs(2),
+    )
+    .unwrap();
+    let accepted_target = handle.join().unwrap();
+
+    assert!(report.true_dataplane);
+    assert!(report.default_go_path);
+    assert_eq!(
+        accepted_target,
+        fixture["shadowsocks"]["target"].as_str().unwrap()
+    );
+    assert_eq!(report.echoed_payload, payload);
+}
+
 fn make_group(count: usize, policy: SelectionPolicy) -> DialerGroup {
     DialerGroup::new(
         "test",
@@ -2181,6 +2271,129 @@ fn make_group(count: usize, policy: SelectionPolicy) -> DialerGroup {
         false,
         0,
     )
+}
+
+fn spawn_socks5_echo_proxy() -> (String, thread::JoinHandle<()>) {
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let addr = listener.local_addr().unwrap().to_string();
+    let handle = thread::spawn(move || {
+        let (mut stream, _) = listener.accept().unwrap();
+        let mut head = [0_u8; 2];
+        stream.read_exact(&mut head).unwrap();
+        assert_eq!(head[0], 5);
+        let mut methods = vec![0_u8; head[1] as usize];
+        stream.read_exact(&mut methods).unwrap();
+        assert!(methods.contains(&2));
+        stream.write_all(&[5, 2]).unwrap();
+
+        let mut auth_head = [0_u8; 2];
+        stream.read_exact(&mut auth_head).unwrap();
+        assert_eq!(auth_head, [1, 4]);
+        let mut user = vec![0_u8; auth_head[1] as usize];
+        stream.read_exact(&mut user).unwrap();
+        let mut pass_len = [0_u8; 1];
+        stream.read_exact(&mut pass_len).unwrap();
+        let mut pass = vec![0_u8; pass_len[0] as usize];
+        stream.read_exact(&mut pass).unwrap();
+        assert_eq!(user, b"user");
+        assert_eq!(pass, b"pass");
+        stream.write_all(&[1, 0]).unwrap();
+
+        let mut request_head = [0_u8; 3];
+        stream.read_exact(&mut request_head).unwrap();
+        assert_eq!(request_head, [5, 1, 0]);
+        let _target = read_socks5_addr_for_test(&mut stream);
+        stream
+            .write_all(&[5, 0, 0, 1, 127, 0, 0, 1, 0x14, 0xb4])
+            .unwrap();
+        echo_one_payload(&mut stream);
+    });
+    (addr, handle)
+}
+
+fn spawn_http_connect_echo_proxy() -> (String, thread::JoinHandle<()>) {
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let addr = listener.local_addr().unwrap().to_string();
+    let handle = thread::spawn(move || {
+        let (mut stream, _) = listener.accept().unwrap();
+        let request = read_http_head_for_test(&mut stream);
+        assert!(request.starts_with("CONNECT front.example HTTP/1.1\r\n"));
+        assert!(request.contains("Proxy-Authorization: Basic dXNlcjpwYXNz\r\n"));
+        stream
+            .write_all(b"HTTP/1.1 200 Connection Established\r\n\r\n")
+            .unwrap();
+        echo_one_payload(&mut stream);
+    });
+    (addr, handle)
+}
+
+fn spawn_shadowsocks_aead_echo_server(
+    cipher: String,
+    password: String,
+    server_salt: Vec<u8>,
+) -> (String, thread::JoinHandle<String>) {
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let addr = listener.local_addr().unwrap().to_string();
+    let handle = thread::spawn(move || {
+        let (mut stream, _) = listener.accept().unwrap();
+        let (target, request_payload) =
+            shadowsocks::read_client_initial_from_stream(&mut stream, &cipher, &password).unwrap();
+        let response =
+            shadowsocks::encode_server_payload(&cipher, &password, &server_salt, &request_payload)
+                .unwrap();
+        stream.write_all(&response).unwrap();
+        target.authority()
+    });
+    (addr, handle)
+}
+
+fn read_socks5_addr_for_test(stream: &mut TcpStream) -> Vec<u8> {
+    let mut atyp = [0_u8; 1];
+    stream.read_exact(&mut atyp).unwrap();
+    let mut out = atyp.to_vec();
+    match atyp[0] {
+        1 => {
+            let mut rest = [0_u8; 6];
+            stream.read_exact(&mut rest).unwrap();
+            out.extend_from_slice(&rest);
+        }
+        3 => {
+            let mut len = [0_u8; 1];
+            stream.read_exact(&mut len).unwrap();
+            out.extend_from_slice(&len);
+            let mut rest = vec![0_u8; len[0] as usize + 2];
+            stream.read_exact(&mut rest).unwrap();
+            out.extend_from_slice(&rest);
+        }
+        4 => {
+            let mut rest = [0_u8; 18];
+            stream.read_exact(&mut rest).unwrap();
+            out.extend_from_slice(&rest);
+        }
+        _ => {}
+    }
+    out
+}
+
+fn read_http_head_for_test(stream: &mut TcpStream) -> String {
+    let mut data = Vec::new();
+    let mut buf = [0_u8; 256];
+    loop {
+        let n = stream.read(&mut buf).unwrap();
+        assert!(n > 0);
+        data.extend_from_slice(&buf[..n]);
+        if data.windows(4).any(|window| window == b"\r\n\r\n") {
+            break;
+        }
+    }
+    String::from_utf8(data).unwrap()
+}
+
+fn echo_one_payload(stream: &mut TcpStream) {
+    let mut payload = [0_u8; 64];
+    let n = stream.read(&mut payload).unwrap();
+    assert!(n > 0);
+    stream.write_all(&payload[..n]).unwrap();
 }
 
 fn fixture(path: &str) -> Value {

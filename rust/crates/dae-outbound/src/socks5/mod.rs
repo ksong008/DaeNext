@@ -1,8 +1,10 @@
 pub mod address;
 pub mod contract;
+pub mod dataplane;
 pub mod handshake;
 pub mod udp_packet;
 
 pub use address::{AddressKind, Socks5Address};
+pub use dataplane::{Socks5TcpExchangeReport, tcp_connect_exchange};
 pub use handshake::{ServerReply, Socks5Command};
 pub use udp_packet::Socks5UdpDatagram;

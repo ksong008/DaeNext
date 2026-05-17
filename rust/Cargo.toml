@@ -28,7 +28,9 @@ license = "AGPL-3.0-only"
 repository = "https://github.com/daeuniverse/dae"
 
 [workspace.dependencies]
+aes-gcm = "0.10"
 base64 = "0.22"
+chacha20poly1305 = "0.10"
 dae-cli = { path = "crates/dae-cli" }
 dae-config-util = { path = "crates/dae-config-util" }
 dae-config = { path = "crates/dae-config" }
@@ -46,6 +48,8 @@ dae-routing = { path = "crates/dae-routing" }
 dae-sniffing = { path = "crates/dae-sniffing" }
 dae-sysdump = { path = "crates/dae-sysdump" }
 dae-trace = { path = "crates/dae-trace" }
+hkdf = "0.12"
+md-5 = "0.10"
 regex = "1"
 serde_json = "1"
 sha1 = "0.10"
