@@ -364,6 +364,71 @@ fn daemon_gray_switch_gate_contract_matches_golden_fixture() {
 }
 
 #[test]
+fn daemon_live_evidence_queue_contract_matches_golden_fixture() {
+    let fixture = load("product/daemon/stage22_live_evidence_queue.json");
+    let contract = daemon_live_evidence_queue_contract();
+    assert_eq!(contract.name, fixture["name"].as_str().unwrap());
+    assert_eq!(contract.stage, fixture["stage"].as_str().unwrap());
+    assert_eq!(contract.prior_gate, fixture["prior_gate"].as_str().unwrap());
+    assert_eq!(
+        contract.evidence_class,
+        fixture["evidence_class"].as_str().unwrap()
+    );
+    assert_eq!(
+        contract.live_evidence_complete,
+        fixture["live_evidence_complete"].as_bool().unwrap()
+    );
+    assert_eq!(
+        contract.default_switch_allowed,
+        fixture["default_switch_allowed"].as_bool().unwrap()
+    );
+    assert_eq!(
+        contract.default_path_mutation_allowed,
+        fixture["default_path_mutation_allowed"].as_bool().unwrap()
+    );
+    assert_eq!(
+        contract.live_daemon_started,
+        fixture["live_daemon_started"].as_bool().unwrap()
+    );
+    assert_eq!(
+        contract.go_default_path_preserved,
+        fixture["go_default_path_preserved"].as_bool().unwrap()
+    );
+    assert_eq!(
+        contract.go_fallback_required,
+        fixture["go_fallback_required"].as_bool().unwrap()
+    );
+    assert_eq!(
+        contract.queue_decision,
+        fixture["queue_decision"].as_str().unwrap()
+    );
+    assert_string_vec(
+        &contract.required_environment,
+        &fixture["required_environment"],
+    );
+
+    let row_fixtures = fixture["queue_rows"].as_array().unwrap();
+    assert_eq!(contract.queue_rows.len(), row_fixtures.len());
+    for (row, row_fixture) in contract.queue_rows.iter().zip(row_fixtures) {
+        assert_eq!(row.area, row_fixture["area"].as_str().unwrap());
+        assert_eq!(row.status, row_fixture["status"].as_str().unwrap());
+        assert_eq!(
+            row.command_or_evidence,
+            row_fixture["command_or_evidence"].as_str().unwrap()
+        );
+        assert_eq!(row.blocker, row_fixture["blocker"].as_str().unwrap());
+        assert_eq!(row.rollback, row_fixture["rollback"].as_str().unwrap());
+    }
+
+    assert_string_vec(&contract.rollback_controls, &fixture["rollback_controls"]);
+    assert_string_vec(
+        &contract.validation_commands,
+        &fixture["validation_commands"],
+    );
+    assert_string_vec(&contract.source, &fixture["source"]);
+}
+
+#[test]
 fn protocol_dataplane_admission_contract_matches_golden_fixture() {
     let fixture = load("product/outbound/protocol_dataplane_admission.json");
     let contract = protocol_dataplane_admission_contract();
