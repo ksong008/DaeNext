@@ -5,6 +5,7 @@ pub mod progress;
 pub mod runner;
 pub(crate) mod runtime_runner;
 pub mod surface;
+pub(crate) mod userspace_runner;
 pub mod validate;
 
 #[cfg(test)]

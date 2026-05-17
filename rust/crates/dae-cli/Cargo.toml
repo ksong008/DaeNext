@@ -8,8 +8,13 @@ repository.workspace = true
 [dependencies]
 dae-config.workspace = true
 dae-core-types.workspace = true
+dae-dns.workspace = true
 dae-engine.workspace = true
+dae-netutil.workspace = true
+dae-outbound.workspace = true
+dae-routing.workspace = true
+dae-sniffing.workspace = true
+serde_json.workspace = true
 
 [dev-dependencies]
 dae-golden.workspace = true
-serde_json.workspace = true

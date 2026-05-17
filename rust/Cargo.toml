@@ -39,8 +39,11 @@ dae-dns = { path = "crates/dae-dns" }
 dae-ebpf-support = { path = "crates/dae-ebpf-support" }
 dae-engine = { path = "crates/dae-engine" }
 dae-golden = { path = "crates/dae-golden" }
+dae-netutil = { path = "crates/dae-netutil" }
 dae-outbound = { path = "crates/dae-outbound" }
 dae-product = { path = "crates/dae-product" }
+dae-routing = { path = "crates/dae-routing" }
+dae-sniffing = { path = "crates/dae-sniffing" }
 dae-sysdump = { path = "crates/dae-sysdump" }
 dae-trace = { path = "crates/dae-trace" }
 regex = "1"
