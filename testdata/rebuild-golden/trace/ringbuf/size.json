@@ -1,0 +1,83 @@
+{
+  "alignment_bytes": 4096,
+  "cases": [
+    {
+      "bytes": 67108864,
+      "input": "",
+      "name": "default_when_empty",
+      "ok": true
+    },
+    {
+      "bytes": 67108864,
+      "input": "64MiB",
+      "name": "parse_mib_suffix",
+      "ok": true
+    },
+    {
+      "bytes": 67108864,
+      "input": "64mb",
+      "name": "parse_mb_suffix",
+      "ok": true
+    },
+    {
+      "bytes": 67108864,
+      "input": "67108864",
+      "name": "parse_bytes",
+      "ok": true
+    },
+    {
+      "bytes": 4096,
+      "input": "4KiB",
+      "name": "parse_kib_minimum",
+      "ok": true
+    },
+    {
+      "error_contains": "ring buffer size \"96MiB\" must be a power of two",
+      "input": "96MiB",
+      "name": "reject_non_power_of_two",
+      "ok": false
+    },
+    {
+      "error_contains": "ring buffer size \"2KiB\" is too small; expect at least 4096 bytes",
+      "input": "2KiB",
+      "name": "reject_below_minimum",
+      "ok": false
+    },
+    {
+      "error_contains": "ring buffer size \"12KiB\" must be a power of two",
+      "input": "12KiB",
+      "name": "reject_unaligned",
+      "ok": false
+    },
+    {
+      "error_contains": "ring buffer size \"8GiB\" exceeds uint32 map limit",
+      "input": "8GiB",
+      "name": "reject_over_uint32",
+      "ok": false
+    },
+    {
+      "error_contains": "ring buffer size \"MiB\" is missing its numeric value",
+      "input": "MiB",
+      "name": "reject_missing_number",
+      "ok": false
+    },
+    {
+      "error_contains": "invalid ring buffer size \"nope\": strconv.ParseUint: parsing \"nope\": invalid syntax",
+      "input": "nope",
+      "name": "reject_invalid_text",
+      "ok": false
+    }
+  ],
+  "default": {
+    "bytes": 67108864,
+    "text": "64MiB"
+  },
+  "max_uint32": true,
+  "min_bytes": 4096,
+  "must_power2": true,
+  "name": "trace-ringbuf-size",
+  "source": [
+    "trace/ringbuf.go",
+    "cmd/trace.go"
+  ]
+}

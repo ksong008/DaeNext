@@ -1,0 +1,19 @@
+{
+  "current_boundary_contains_bridge_or_stub": true,
+  "current_boundary_contains_native_direct_block": true,
+  "minimum_before_replacing_default_path": [
+    "link parser fixture",
+    "protocol handshake fixture",
+    "transport option fixture",
+    "live connectivity smoke test",
+    "Go/Rust benchmark or latency observation"
+  ],
+  "name": "stage8-outbound-native-migration-contract",
+  "not_silent_complete": true,
+  "replacement_rule": "protocols must move one by one from bridge-or-stub to native with fixture and live connectivity evidence",
+  "source": [
+    "testdata/rebuild-golden/outbound/link_parser/compatibility_matrix.json",
+    "testdata/rebuild-golden/outbound/protocol/ss2022_no_global_direct_dependency.json",
+    "DAEX_RUST_REBUILD_PLAN_2026-05-16.md:D-002"
+  ]
+}

@@ -1,0 +1,49 @@
+{
+  "daenew_release": {
+    "default_make_latest_false": true,
+    "default_ref": "daenew",
+    "update_tag_false": true
+  },
+  "friendly_keys": [
+    "linux-386",
+    "linux-amd64v1",
+    "linux-amd64v2",
+    "linux-amd64v3",
+    "linux-arm5",
+    "linux-arm6",
+    "linux-arm64",
+    "linux-arm7",
+    "linux-loong64",
+    "linux-mips",
+    "linux-mips64",
+    "linux-mips64le",
+    "linux-mipsle",
+    "linux-ppc64",
+    "linux-ppc64le",
+    "linux-riscv64",
+    "linux-s390x"
+  ],
+  "name": "stage8-release-workflow-contract",
+  "release": {
+    "build_output_pkgdir": true,
+    "checks_existing_tag_sha": true,
+    "installs_systemd_service": true,
+    "make_latest_input": true,
+    "packages_deb_rpm_pacman": true,
+    "prepare_tag_job": true,
+    "update_tag_gate": true,
+    "uploads_release_assets": true
+  },
+  "seed_build": {
+    "copies_service_example_geodata": true,
+    "smoke_test_amd64_v1": true,
+    "uses_friendly_filenames": true
+  },
+  "source": [
+    ".github/workflows/release.yml",
+    ".github/workflows/daenew-release.yml",
+    ".github/workflows/seed-build.yml",
+    "install/friendly-filenames.json",
+    "DAENEW_RUST_REBUILD_MEMO_2026-05-16.md:17.3-17.6"
+  ]
+}

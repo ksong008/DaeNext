@@ -1,0 +1,40 @@
+{
+  "archive_failure_is_hard_error": true,
+  "collectors": [
+    {
+      "failure": "print error and continue",
+      "name": "routing",
+      "output": "routing.txt"
+    },
+    {
+      "failure": "print error and continue",
+      "name": "interfaces",
+      "output": "interfaces.txt"
+    },
+    {
+      "failure": "print error and continue",
+      "name": "sysctl",
+      "output": "sysctl.txt"
+    },
+    {
+      "failure": "print error and continue",
+      "name": "nftables",
+      "output": "nftables.txt"
+    },
+    {
+      "failure": "print error and continue",
+      "name": "iptables",
+      "output": "iptables.txt"
+    },
+    {
+      "failure": "print error and continue",
+      "name": "ip6tables",
+      "output": "ip6tables.txt"
+    }
+  ],
+  "external_command_missing_rule": "print command error and continue collecting remaining sections",
+  "name": "sysdump-collector-best-effort",
+  "source": [
+    "cmd/sysdump.go"
+  ]
+}
