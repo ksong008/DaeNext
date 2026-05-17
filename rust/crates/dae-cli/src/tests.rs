@@ -253,6 +253,164 @@ fn optin_runner_runtime_commands_match_engine_fixtures() {
             .unwrap()
             .len()
     );
+
+    let live_plan_fixture = load("engine/runtime_stage22/live_plan.json");
+    let live_plan = run_with_args([
+        "runtime",
+        "stage22-live-plan",
+        "--root",
+        live_plan_fixture["root"].as_str().unwrap(),
+    ]);
+    assert_eq!(live_plan.exit_code, 0);
+    assert_eq!(live_plan.stderr, "");
+    let live_plan_json: Value = serde_json::from_str(&live_plan.stdout).unwrap();
+    assert_eq!(
+        live_plan_json["name"].as_str().unwrap(),
+        live_plan_fixture["name"].as_str().unwrap()
+    );
+    assert_eq!(
+        live_plan_json["evidence_class"].as_str().unwrap(),
+        live_plan_fixture["evidence_class"].as_str().unwrap()
+    );
+    assert_eq!(
+        live_plan_json["default_switch_allowed"].as_bool().unwrap(),
+        live_plan_fixture["default_switch_allowed"]
+            .as_bool()
+            .unwrap()
+    );
+    assert_eq!(
+        live_plan_json["default_path_mutated"].as_bool().unwrap(),
+        live_plan_fixture["default_path_mutated"].as_bool().unwrap()
+    );
+    assert_eq!(
+        live_plan_json["live_daemon_started"].as_bool().unwrap(),
+        live_plan_fixture["live_daemon_started"].as_bool().unwrap()
+    );
+    assert_eq!(
+        live_plan_json["write_requested"].as_bool().unwrap(),
+        live_plan_fixture["write_requested"].as_bool().unwrap()
+    );
+    assert_eq!(
+        live_plan_json["config_valid"].as_bool().unwrap(),
+        live_plan_fixture["config_valid"].as_bool().unwrap()
+    );
+    assert_eq!(
+        live_plan_json["paths"]["artifact_binary"].as_str().unwrap(),
+        live_plan_fixture["paths"]["artifact_binary"]
+            .as_str()
+            .unwrap()
+    );
+    assert_eq!(
+        live_plan_json["paths"]["config"].as_str().unwrap(),
+        live_plan_fixture["paths"]["config"].as_str().unwrap()
+    );
+    assert_eq!(
+        live_plan_json["paths"]["go_progress_file_fixed"]
+            .as_str()
+            .unwrap(),
+        live_plan_fixture["paths"]["go_progress_file_fixed"]
+            .as_str()
+            .unwrap()
+    );
+    assert_eq!(
+        live_plan_json["paths"]["go_pid_file_disabled"]
+            .as_bool()
+            .unwrap(),
+        live_plan_fixture["paths"]["go_pid_file_disabled"]
+            .as_bool()
+            .unwrap()
+    );
+    assert_eq!(
+        live_plan_json["minimum_config"]["tproxy_port"]
+            .as_u64()
+            .unwrap(),
+        live_plan_fixture["config"]["tproxy_port"].as_u64().unwrap()
+    );
+    assert_eq!(
+        live_plan_json["minimum_config"]["so_mark_from_dae"]
+            .as_u64()
+            .unwrap(),
+        live_plan_fixture["config"]["so_mark_from_dae"]
+            .as_u64()
+            .unwrap()
+    );
+    assert_eq!(
+        live_plan_json["minimum_config"]["mptcp"].as_bool().unwrap(),
+        live_plan_fixture["config"]["mptcp"].as_bool().unwrap()
+    );
+    assert!(
+        live_plan_json["minimum_config"]["text"]
+            .as_str()
+            .unwrap()
+            .contains("mptcp: true")
+    );
+    assert_eq!(
+        live_plan_json["production_safety"]["no_systemd_mutation"]
+            .as_bool()
+            .unwrap(),
+        live_plan_fixture["production_safety"]["no_systemd_mutation"]
+            .as_bool()
+            .unwrap()
+    );
+    assert_eq!(
+        live_plan_json["production_safety"]["progress_file_fixed_path_blocker"]
+            .as_bool()
+            .unwrap(),
+        live_plan_fixture["production_safety"]["progress_file_fixed_path_blocker"]
+            .as_bool()
+            .unwrap()
+    );
+    let command_names = live_plan_json["commands"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|value| value["name"].as_str().unwrap())
+        .collect::<Vec<_>>();
+    assert!(command_names.contains(&live_plan_fixture["commands"]["validate"].as_str().unwrap()));
+    assert!(command_names.contains(&live_plan_fixture["commands"]["run"].as_str().unwrap()));
+    assert!(command_names.contains(&live_plan_fixture["commands"]["cleanup"].as_str().unwrap()));
+    let traffic_names = live_plan_json["traffic_matrix"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|value| value["name"].as_str().unwrap())
+        .collect::<Vec<_>>();
+    assert_eq!(
+        traffic_names,
+        live_plan_fixture["traffic_matrix"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|value| value.as_str().unwrap())
+            .collect::<Vec<_>>()
+    );
+
+    let live_plan_root = std::env::temp_dir().join(format!(
+        "dae-stage22-live-plan-test-{}-{}",
+        std::process::id(),
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    ));
+    let live_plan_root_string = live_plan_root.to_string_lossy().into_owned();
+    let write_plan = run_with_args([
+        "runtime",
+        "stage22-live-plan",
+        "--root",
+        &live_plan_root_string,
+        "--write",
+    ]);
+    assert_eq!(write_plan.exit_code, 0, "{}", write_plan.stdout);
+    assert_eq!(write_plan.stderr, "");
+    let write_plan_json: Value = serde_json::from_str(&write_plan.stdout).unwrap();
+    assert!(write_plan_json["write_requested"].as_bool().unwrap());
+    assert!(write_plan_json["files_written"].as_array().unwrap().len() >= 2);
+    let config_path = live_plan_root.join("config.dae");
+    assert!(config_path.exists());
+    let validate_written = run_with_args(["validate", "-c", config_path.to_str().unwrap()]);
+    assert_eq!(validate_written.exit_code, 0, "{}", validate_written.stdout);
+    let _ = fs::remove_dir_all(live_plan_root);
 }
 
 #[test]
