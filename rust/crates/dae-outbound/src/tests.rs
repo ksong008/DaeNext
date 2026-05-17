@@ -2260,6 +2260,74 @@ fn stage18_shadowsocks_aead_tcp_dataplane_echoes_payload() {
     assert_eq!(report.echoed_payload, payload);
 }
 
+#[test]
+fn stage20_httpupgrade_dataplane_echoes_payload() {
+    let fixture = fixture("outbound/protocol/stage20_shared_transport_foundation.json");
+    let payload = fixture["payload_ascii"].as_str().unwrap().as_bytes();
+    let (endpoint, handle) = spawn_httpupgrade_echo_server();
+    let options = shared_transport::HttpUpgradeOptions::new(
+        fixture["httpupgrade"]["host"].as_str().unwrap(),
+        fixture["httpupgrade"]["path"].as_str().unwrap(),
+    );
+    let report = shared_transport::http_upgrade_exchange(
+        &endpoint,
+        &options,
+        payload,
+        Duration::from_secs(2),
+    )
+    .unwrap();
+    handle.join().unwrap();
+
+    assert!(report.true_dataplane);
+    assert!(report.default_go_path);
+    assert_eq!(report.transport, "httpupgrade");
+    assert_eq!(report.echoed_payload, payload);
+}
+
+#[test]
+fn stage20_websocket_dataplane_echoes_binary_frame() {
+    let fixture = fixture("outbound/protocol/stage20_shared_transport_foundation.json");
+    let payload = fixture["payload_ascii"].as_str().unwrap().as_bytes();
+    let (endpoint, handle) = spawn_websocket_echo_server();
+    let options = shared_transport::HttpUpgradeOptions::new(
+        fixture["websocket"]["host"].as_str().unwrap(),
+        fixture["websocket"]["path"].as_str().unwrap(),
+    );
+    let report =
+        shared_transport::websocket_exchange(&endpoint, &options, payload, Duration::from_secs(2))
+            .unwrap();
+    handle.join().unwrap();
+
+    assert!(report.true_dataplane);
+    assert!(report.default_go_path);
+    assert_eq!(report.transport, "websocket");
+    assert_eq!(report.echoed_payload, payload);
+}
+
+#[test]
+fn stage20_simpleobfs_http_dataplane_echoes_payload() {
+    let fixture = fixture("outbound/protocol/stage20_shared_transport_foundation.json");
+    let payload = fixture["payload_ascii"].as_str().unwrap().as_bytes();
+    let (endpoint, handle) = spawn_simpleobfs_http_echo_server();
+    let options = shared_transport::SimpleObfsHttpOptions::new(
+        fixture["simpleobfs_http"]["host"].as_str().unwrap(),
+        fixture["simpleobfs_http"]["path"].as_str().unwrap(),
+    );
+    let report = shared_transport::simpleobfs_http_exchange(
+        &endpoint,
+        &options,
+        payload,
+        Duration::from_secs(2),
+    )
+    .unwrap();
+    handle.join().unwrap();
+
+    assert!(report.true_dataplane);
+    assert!(report.default_go_path);
+    assert_eq!(report.transport, "simpleobfs-http");
+    assert_eq!(report.echoed_payload, payload);
+}
+
 fn make_group(count: usize, policy: SelectionPolicy) -> DialerGroup {
     DialerGroup::new(
         "test",
@@ -2347,6 +2415,60 @@ fn spawn_shadowsocks_aead_echo_server(
     (addr, handle)
 }
 
+fn spawn_httpupgrade_echo_server() -> (String, thread::JoinHandle<()>) {
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let addr = listener.local_addr().unwrap().to_string();
+    let handle = thread::spawn(move || {
+        let (mut stream, _) = listener.accept().unwrap();
+        let request = read_http_head_for_test(&mut stream);
+        assert!(request.starts_with("GET /upgrade HTTP/1.1\r\n"));
+        assert!(request.contains("Host: upgrade.example\r\n"));
+        assert!(request.contains("Connection: upgrade\r\n"));
+        assert!(request.contains("Upgrade: websocket\r\n"));
+        stream
+            .write_all(b"HTTP/1.1 101 Switching Protocols\r\nConnection: upgrade\r\nUpgrade: websocket\r\n\r\n")
+            .unwrap();
+        echo_one_payload(&mut stream);
+    });
+    (addr, handle)
+}
+
+fn spawn_websocket_echo_server() -> (String, thread::JoinHandle<()>) {
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let addr = listener.local_addr().unwrap().to_string();
+    let handle = thread::spawn(move || {
+        let (mut stream, _) = listener.accept().unwrap();
+        let request = read_http_head_for_test(&mut stream);
+        assert!(request.starts_with("GET /ws HTTP/1.1\r\n"));
+        assert!(request.contains("Host: ws.example\r\n"));
+        assert!(request.contains("Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n"));
+        stream
+            .write_all(
+                b"HTTP/1.1 101 Switching Protocols\r\nConnection: Upgrade\r\nUpgrade: websocket\r\nSec-WebSocket-Accept: s3pPLMBiTxaQ9kYGzzhZRbK+xOo=\r\n\r\n",
+            )
+            .unwrap();
+        let payload =
+            shared_transport::dataplane::read_websocket_binary_frame(&mut stream).unwrap();
+        let frame = shared_transport::dataplane::websocket_server_binary_frame(&payload).unwrap();
+        stream.write_all(&frame).unwrap();
+    });
+    (addr, handle)
+}
+
+fn spawn_simpleobfs_http_echo_server() -> (String, thread::JoinHandle<()>) {
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let addr = listener.local_addr().unwrap().to_string();
+    let handle = thread::spawn(move || {
+        let (mut stream, _) = listener.accept().unwrap();
+        let (request, leftover) = read_http_head_and_leftover_for_test(&mut stream);
+        assert!(request.starts_with("GET / HTTP/1.1\r\n"));
+        assert!(request.contains("Host: obfs.example\r\n"));
+        assert!(request.contains("User-Agent: curl/7.64.1\r\n"));
+        echo_one_payload_with_leftover(&mut stream, leftover);
+    });
+    (addr, handle)
+}
+
 fn read_socks5_addr_for_test(stream: &mut TcpStream) -> Vec<u8> {
     let mut atyp = [0_u8; 1];
     stream.read_exact(&mut atyp).unwrap();
@@ -2376,17 +2498,33 @@ fn read_socks5_addr_for_test(stream: &mut TcpStream) -> Vec<u8> {
 }
 
 fn read_http_head_for_test(stream: &mut TcpStream) -> String {
+    read_http_head_and_leftover_for_test(stream).0
+}
+
+fn read_http_head_and_leftover_for_test(stream: &mut TcpStream) -> (String, Vec<u8>) {
     let mut data = Vec::new();
     let mut buf = [0_u8; 256];
     loop {
         let n = stream.read(&mut buf).unwrap();
         assert!(n > 0);
         data.extend_from_slice(&buf[..n]);
-        if data.windows(4).any(|window| window == b"\r\n\r\n") {
-            break;
+        if let Some(index) = data.windows(4).position(|window| window == b"\r\n\r\n") {
+            let body_start = index + 4;
+            let leftover = data[body_start..].to_vec();
+            data.truncate(body_start);
+            return (String::from_utf8(data).unwrap(), leftover);
         }
     }
-    String::from_utf8(data).unwrap()
+}
+
+fn echo_one_payload_with_leftover(stream: &mut TcpStream, mut leftover: Vec<u8>) {
+    if leftover.is_empty() {
+        let mut payload = [0_u8; 64];
+        let n = stream.read(&mut payload).unwrap();
+        assert!(n > 0);
+        leftover.extend_from_slice(&payload[..n]);
+    }
+    stream.write_all(&leftover).unwrap();
 }
 
 fn echo_one_payload(stream: &mut TcpStream) {

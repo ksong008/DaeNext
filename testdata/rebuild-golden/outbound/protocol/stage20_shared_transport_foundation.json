@@ -1,0 +1,33 @@
+{
+  "name": "stage20-shared-transport-foundation-loopback",
+  "default_go_path": true,
+  "payload_ascii": "stage20-transport-ping",
+  "httpupgrade": {
+    "host": "upgrade.example",
+    "path": "/upgrade",
+    "success_status": 101,
+    "true_dataplane": true
+  },
+  "websocket": {
+    "host": "ws.example",
+    "path": "/ws",
+    "client_key": "dGhlIHNhbXBsZSBub25jZQ==",
+    "accept_sample": "s3pPLMBiTxaQ9kYGzzhZRbK+xOo=",
+    "opcode": 2,
+    "true_dataplane": true
+  },
+  "simpleobfs_http": {
+    "host": "obfs.example",
+    "path": "/",
+    "user_agent": "curl/7.64.1",
+    "true_dataplane": true
+  },
+  "still_deferred": [
+    "TLS/uTLS/REALITY handshake mutation",
+    "xHTTP H2/H3 pool and stream lifecycle",
+    "gRPC global cache isolation and stream lifecycle",
+    "Meek polling RoundTripper lifecycle",
+    "Mux true multiplexing",
+    "QUIC/H3 shared harness"
+  ]
+}
