@@ -1,0 +1,121 @@
+{
+  "connect": [
+    {
+      "basic_auth_header": "",
+      "host_override": "",
+      "name": "connect-no-auth",
+      "password": "",
+      "path": "/",
+      "request_hex": "434f4e4e454354206578616d706c652e636f6d3a34343320485454502f312e310d0a486f73743a206578616d706c652e636f6d3a3434330d0a557365722d4167656e743a20476f2d687474702d636c69656e742f312e310d0a0d0a",
+      "target": "example.com:443",
+      "transport": false,
+      "username": ""
+    },
+    {
+      "basic_auth_header": "Basic dXNlcjpwYXNz",
+      "host_override": "front.example",
+      "name": "connect-basic-auth-host-override",
+      "password": "pass",
+      "path": "/",
+      "request_hex": "434f4e4e4543542066726f6e742e6578616d706c6520485454502f312e310d0a486f73743a2066726f6e742e6578616d706c650d0a557365722d4167656e743a20476f2d687474702d636c69656e742f312e310d0a50726f78792d417574686f72697a6174696f6e3a2042617369632064584e6c636a707759584e7a0d0a0d0a",
+      "target": "example.com:443",
+      "transport": false,
+      "username": "user"
+    },
+    {
+      "basic_auth_header": "Basic dXNlcjpwYXNz",
+      "host_override": "",
+      "name": "transport-put-path",
+      "password": "pass",
+      "path": "/proxy-path",
+      "request_hex": "50555420687474703a2f2f7777772e6578616d706c652e636f6d2f70726f78792d7061746820485454502f312e310d0a486f73743a207777772e6578616d706c652e636f6d0d0a557365722d4167656e743a20476f2d687474702d636c69656e742f312e310d0a436f6e74656e742d4c656e6774683a20300d0a50726f78792d417574686f72697a6174696f6e3a2042617369632064584e6c636a707759584e7a0d0a0d0a",
+      "target": "example.com:443",
+      "transport": true,
+      "username": "user"
+    }
+  ],
+  "default_go_path": true,
+  "http_request_passthrough": {
+    "input_hex": "474554202f696e6465782e68746d6c20485454502f312e310d0a486f73743a206f726967696e2e6578616d706c650d0a50726f78792d436f6e6e656374696f6e3a206b6565702d616c6976650d0a0d0a",
+    "proxy_connection_removed": true,
+    "request_hex": "47455420687474703a2f2f6f726967696e2e6578616d706c652f696e6465782e68746d6c20485454502f312e310d0a486f73743a206f726967696e2e6578616d706c650d0a557365722d4167656e743a20476f2d687474702d636c69656e742f312e310d0a0d0a",
+    "target": "example.com:80"
+  },
+  "https_flags": {
+    "allow_insecure_aliases": [
+      "allowInsecure",
+      "allow_insecure",
+      "allowinsecure",
+      "skipVerify"
+    ],
+    "alpn_default_query_value": "h2,http/1.1",
+    "default_port": 443,
+    "default_sni": "proxy.example",
+    "explicit_sni": "server.example",
+    "h2_route_context_required": true,
+    "scheme": "https",
+    "tls_implementation_default": "tls",
+    "utls_imitate_passthrough": "chrome"
+  },
+  "link_parser": [
+    {
+      "allowInsecure": false,
+      "export": "http://user:pass@proxy.example:80#node",
+      "input": "http://user:pass@proxy.example#node",
+      "name": "http-default-port",
+      "password": "pass",
+      "port": 80,
+      "protocol": "http",
+      "server": "proxy.example",
+      "sni": "",
+      "username": "user"
+    },
+    {
+      "allowInsecure": true,
+      "export": "https://proxy.example:443?allowInsecure=1\u0026sni=server.example#node",
+      "input": "https://proxy.example?sni=server.example\u0026allow_insecure=true#node",
+      "name": "https-flags",
+      "password": "",
+      "port": 443,
+      "protocol": "https",
+      "server": "proxy.example",
+      "sni": "server.example",
+      "username": ""
+    },
+    {
+      "allowInsecure": true,
+      "export": "https://proxy.example:443?allowInsecure=1#alias",
+      "input": "https://proxy.example:443?skipVerify=1#alias",
+      "name": "https-skip-verify-alias",
+      "password": "",
+      "port": 443,
+      "protocol": "https",
+      "server": "proxy.example",
+      "sni": "",
+      "username": ""
+    }
+  ],
+  "live_smoke_required": [
+    "local fake HTTP proxy CONNECT",
+    "local fake HTTP proxy CONNECT with Basic auth",
+    "local fake HTTP transport PUT request"
+  ],
+  "name": "stage15-http-native-optin",
+  "protocol_scope": [
+    "http",
+    "https"
+  ],
+  "rust_adapter_mode": "native-opt-in",
+  "source": [
+    "DAENEW_RUST_REBUILD_MEMO_2026-05-16.md:26.1",
+    "DAENEW_RUST_REBUILD_MEMO_2026-05-16.md:26.2",
+    "DAENEW_RUST_REBUILD_MEMO_2026-05-16.md:26.3",
+    "DAENEW_RUST_REBUILD_MEMO_2026-05-16.md:26.14",
+    "/root/project/outbound/dialer/http/http.go",
+    "/root/project/outbound/protocol/http/http.go",
+    "/root/project/outbound/protocol/http/conn.go"
+  ],
+  "unsupported": {
+    "udp": "unsupported tunnel type"
+  }
+}

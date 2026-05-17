@@ -534,6 +534,89 @@ fn socks5_native_optin_matches_golden_fixture() {
     );
 }
 
+#[test]
+fn http_native_optin_matches_golden_fixture() {
+    let fixture = fixture("outbound/protocol/http_native_optin.json");
+
+    assert_eq!(
+        crate::http_proxy::contract::ADAPTER_MODE,
+        fixture["rust_adapter_mode"].as_str().unwrap()
+    );
+    assert_eq!(
+        crate::http_proxy::contract::DEFAULT_GO_PATH,
+        fixture["default_go_path"].as_bool().unwrap()
+    );
+    assert_eq!(
+        crate::http_proxy::contract::PROTOCOL_SCOPE,
+        fixture["protocol_scope"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|value| value.as_str().unwrap())
+            .collect::<Vec<_>>()
+            .as_slice()
+    );
+
+    for case in fixture["link_parser"].as_array().unwrap() {
+        let parsed =
+            crate::http_proxy::HttpProxyLink::parse(case["input"].as_str().unwrap()).unwrap();
+        assert_eq!(parsed.server, case["server"].as_str().unwrap());
+        assert_eq!(parsed.port, case["port"].as_u64().unwrap() as u16);
+        assert_eq!(parsed.username, case["username"].as_str().unwrap());
+        assert_eq!(parsed.password, case["password"].as_str().unwrap());
+        assert_eq!(parsed.sni, case["sni"].as_str().unwrap());
+        assert_eq!(parsed.protocol.as_str(), case["protocol"].as_str().unwrap());
+        assert_eq!(
+            parsed.allow_insecure,
+            case["allowInsecure"].as_bool().unwrap()
+        );
+        assert_eq!(parsed.export_url(), case["export"].as_str().unwrap());
+        let parsed_chain = parse_link_chain(case["input"].as_str().unwrap()).unwrap();
+        assert_eq!(parsed_chain.nodes[0].adapter_mode, "native-opt-in");
+    }
+
+    for case in fixture["connect"].as_array().unwrap() {
+        let mut options =
+            crate::http_proxy::HttpConnectOptions::connect(case["target"].as_str().unwrap());
+        options.username = case["username"].as_str().unwrap().to_owned();
+        options.password = case["password"].as_str().unwrap().to_owned();
+        options.host_override = case["host_override"].as_str().unwrap().to_owned();
+        options.transport.enabled = case["transport"].as_bool().unwrap();
+        options.transport.path = case["path"].as_str().unwrap().to_owned();
+        assert_eq!(
+            hex_encode(&crate::http_proxy::request::connect_request(&options)),
+            case["request_hex"].as_str().unwrap(),
+            "{}",
+            case["name"].as_str().unwrap()
+        );
+    }
+
+    let passthrough = &fixture["http_request_passthrough"];
+    assert_eq!(
+        hex_encode(
+            &crate::http_proxy::request::forward_http_request(&hex_decode(
+                passthrough["input_hex"].as_str().unwrap()
+            ))
+            .unwrap()
+        ),
+        passthrough["request_hex"].as_str().unwrap()
+    );
+
+    let flags = &fixture["https_flags"];
+    assert_eq!(
+        crate::http_proxy::contract::HTTPS_DEFAULT_TLS_IMPLEMENTATION,
+        flags["tls_implementation_default"].as_str().unwrap()
+    );
+    assert_eq!(
+        crate::http_proxy::contract::HTTPS_DEFAULT_ALPN_QUERY_VALUE,
+        flags["alpn_default_query_value"].as_str().unwrap()
+    );
+    assert_eq!(
+        crate::http_proxy::contract::HTTPS_H2_ROUTE_CONTEXT_REQUIRED,
+        flags["h2_route_context_required"].as_bool().unwrap()
+    );
+}
+
 fn make_group(count: usize, policy: SelectionPolicy) -> DialerGroup {
     DialerGroup::new(
         "test",
