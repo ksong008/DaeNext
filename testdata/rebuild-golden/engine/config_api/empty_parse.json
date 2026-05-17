@@ -1,0 +1,59 @@
+{
+  "empty_config": {
+    "dns_request_fallback": "asis",
+    "dns_request_rule_count": 0,
+    "dns_response_fallback": "accept",
+    "dns_response_rule_count": 0,
+    "fallback_resolver": "8.8.8.8:53",
+    "group_count": 0,
+    "log_level": "info",
+    "node_count": 0,
+    "routing_fallback": "direct",
+    "routing_rule_count": 0,
+    "subscription_count": 0,
+    "udp_endpoint_pool_size": 4096
+  },
+  "name": "engine-config-api-empty-parse",
+  "notes": "EmptyConfig and ParseConfig preserve section defaults and must_ outbound rewrite semantics for API-only callers.",
+  "parse_config": {
+    "fallback": {
+      "name": "direct",
+      "not": false,
+      "params": [
+        {
+          "key": "",
+          "val": "must"
+        }
+      ]
+    },
+    "first_rule_outbound": {
+      "name": "proxy",
+      "not": false,
+      "params": [
+        {
+          "key": "",
+          "val": "must"
+        }
+      ]
+    },
+    "global_input": "global {\n    log_level: debug\n    udp_endpoint_pool_size: 8192\n}",
+    "log_level": "debug",
+    "necessary_outbounds": [
+      "direct",
+      "proxy",
+      "must_rules"
+    ],
+    "routing_input": "routing {\n    domain(suffix: example.com) -\u003e must_proxy\n    domain(full: force.example.com) -\u003e must_rules\n    fallback: must_direct\n}",
+    "routing_rule_count": 2,
+    "second_rule_outbound": {
+      "name": "must_rules",
+      "not": false,
+      "params": []
+    },
+    "udp_pool_size": 8192
+  },
+  "source": [
+    "engine/helpers.go",
+    "engine/runtime_test.go"
+  ]
+}
