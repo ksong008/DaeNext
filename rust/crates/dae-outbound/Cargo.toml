@@ -6,8 +6,10 @@ license.workspace = true
 repository.workspace = true
 
 [dependencies]
+base64.workspace = true
 dae-core-types.workspace = true
 regex.workspace = true
+url.workspace = true
 
 [dev-dependencies]
 dae-golden.workspace = true

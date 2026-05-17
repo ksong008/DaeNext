@@ -509,6 +509,145 @@ fn optin_runner_outbound_socks5_commands_match_fixture() {
     assert_eq!(udp_smoke_json["command"].as_str().unwrap(), "udp-associate");
 }
 
+#[test]
+fn optin_runner_outbound_http_commands_match_fixture() {
+    let fixture = load("outbound/protocol/http_native_optin.json");
+
+    let contract = run_with_args(["outbound", "http", "contract"]);
+    assert_eq!(contract.exit_code, 0);
+    assert_eq!(contract.stderr, "");
+    let contract_json: Value = serde_json::from_str(&contract.stdout).unwrap();
+    assert_eq!(
+        contract_json["name"].as_str().unwrap(),
+        fixture["name"].as_str().unwrap()
+    );
+    assert_eq!(
+        contract_json["rust_adapter_mode"].as_str().unwrap(),
+        fixture["rust_adapter_mode"].as_str().unwrap()
+    );
+    assert!(contract_json["default_go_path"].as_bool().unwrap());
+
+    let link_case = fixture["link_parser"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|case| case["name"].as_str().unwrap() == "https-flags")
+        .unwrap();
+    let link = run_with_args([
+        "outbound",
+        "http",
+        "link",
+        "--link",
+        link_case["input"].as_str().unwrap(),
+    ]);
+    assert_eq!(link.exit_code, 0);
+    assert_eq!(link.stderr, "");
+    let link_json: Value = serde_json::from_str(&link.stdout).unwrap();
+    assert_eq!(
+        link_json["export"].as_str().unwrap(),
+        link_case["export"].as_str().unwrap()
+    );
+    assert!(link_json["allowInsecure"].as_bool().unwrap());
+
+    let connect_case = fixture["connect"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|case| case["name"].as_str().unwrap() == "connect-basic-auth-host-override")
+        .unwrap();
+    let connect = run_with_args([
+        "outbound",
+        "http",
+        "connect",
+        "--target",
+        connect_case["target"].as_str().unwrap(),
+        "--username",
+        connect_case["username"].as_str().unwrap(),
+        "--password",
+        connect_case["password"].as_str().unwrap(),
+        "--host",
+        connect_case["host_override"].as_str().unwrap(),
+    ]);
+    assert_eq!(connect.exit_code, 0);
+    assert_eq!(connect.stderr, "");
+    let connect_json: Value = serde_json::from_str(&connect.stdout).unwrap();
+    assert_eq!(
+        connect_json["request_hex"].as_str().unwrap(),
+        connect_case["request_hex"].as_str().unwrap()
+    );
+
+    let forward = run_with_args([
+        "outbound",
+        "http",
+        "forward",
+        "--raw-hex",
+        fixture["http_request_passthrough"]["input_hex"]
+            .as_str()
+            .unwrap(),
+    ]);
+    assert_eq!(forward.exit_code, 0);
+    assert_eq!(forward.stderr, "");
+    let forward_json: Value = serde_json::from_str(&forward.stdout).unwrap();
+    assert_eq!(
+        forward_json["request_hex"].as_str().unwrap(),
+        fixture["http_request_passthrough"]["request_hex"]
+            .as_str()
+            .unwrap()
+    );
+
+    let (proxy, handle) =
+        spawn_fake_http_proxy("CONNECT front.example HTTP/1.1", Some("Basic dXNlcjpwYXNz"));
+    let smoke = run_with_args([
+        "outbound",
+        "http",
+        "smoke",
+        "--proxy",
+        &proxy,
+        "--target",
+        "example.com:443",
+        "--username",
+        "user",
+        "--password",
+        "pass",
+        "--host",
+        "front.example",
+    ]);
+    assert_eq!(smoke.exit_code, 0, "{}", smoke.stdout);
+    assert_eq!(smoke.stderr, "");
+    handle.join().unwrap();
+    let smoke_json: Value = serde_json::from_str(&smoke.stdout).unwrap();
+    assert!(smoke_json["ok"].as_bool().unwrap());
+    assert_eq!(smoke_json["status"].as_u64().unwrap(), 200);
+
+    let (proxy, handle) = spawn_fake_http_proxy(
+        "PUT http://www.example.com/proxy-path HTTP/1.1",
+        Some("Basic dXNlcjpwYXNz"),
+    );
+    let transport = run_with_args([
+        "outbound",
+        "http",
+        "smoke",
+        "--proxy",
+        &proxy,
+        "--target",
+        "example.com:443",
+        "--username",
+        "user",
+        "--password",
+        "pass",
+        "--transport",
+        "true",
+        "--path",
+        "/proxy-path",
+    ]);
+    assert_eq!(transport.exit_code, 0, "{}", transport.stdout);
+    assert_eq!(transport.stderr, "");
+    handle.join().unwrap();
+    let transport_json: Value = serde_json::from_str(&transport.stdout).unwrap();
+    assert!(transport_json["ok"].as_bool().unwrap());
+    assert!(transport_json["transport"].as_bool().unwrap());
+}
+
 fn assert_commands(got: &[CommandSpec], want: &[Value]) {
     assert_eq!(got.len(), want.len());
     for (got, want) in got.iter().zip(want.iter()) {
@@ -634,4 +773,35 @@ fn read_socks5_addr_for_test(stream: &mut TcpStream) -> Vec<u8> {
         _ => {}
     }
     out
+}
+
+fn spawn_fake_http_proxy(
+    expected_request_line: &'static str,
+    expected_auth: Option<&'static str>,
+) -> (String, thread::JoinHandle<()>) {
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let addr = listener.local_addr().unwrap().to_string();
+    let handle = thread::spawn(move || {
+        let (mut stream, _) = listener.accept().unwrap();
+        let mut data = Vec::new();
+        let mut buf = [0_u8; 256];
+        loop {
+            let n = stream.read(&mut buf).unwrap();
+            assert!(n > 0);
+            data.extend_from_slice(&buf[..n]);
+            if data.windows(4).any(|window| window == b"\r\n\r\n") {
+                break;
+            }
+        }
+        let request = String::from_utf8(data).unwrap();
+        let mut lines = request.split("\r\n");
+        assert_eq!(lines.next().unwrap(), expected_request_line);
+        if let Some(expected_auth) = expected_auth {
+            assert!(request.contains(&format!("Proxy-Authorization: {expected_auth}\r\n")));
+        }
+        stream
+            .write_all(b"HTTP/1.1 200 Connection Established\r\nContent-Length: 0\r\n\r\n")
+            .unwrap();
+    });
+    (addr, handle)
 }
