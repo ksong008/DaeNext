@@ -8,6 +8,7 @@ pub mod product_chain_admission;
 pub mod protocol_dataplane;
 pub mod release;
 pub mod systemd;
+pub mod true_daemon_admission;
 
 #[cfg(test)]
 mod tests;
@@ -34,3 +35,7 @@ pub use protocol_dataplane::{
 };
 pub use release::{ReleaseWorkflowContract, release_workflow_contract};
 pub use systemd::{SystemdContract, systemd_contract};
+pub use true_daemon_admission::{
+    TrueDefaultDaemonAdmissionContract, TrueDefaultDaemonAdmissionRow,
+    true_default_daemon_admission_contract,
+};
