@@ -1,6 +1,7 @@
 pub mod complex_dataplane;
 pub mod daemon_default;
 pub mod daemon_gray_switch;
+pub mod daemon_live_evidence;
 pub mod integration;
 pub mod outbound_contract;
 pub mod protocol_dataplane;
@@ -16,6 +17,10 @@ pub use complex_dataplane::{
 pub use daemon_default::{DaemonDefaultReadinessContract, daemon_default_readiness_contract};
 pub use daemon_gray_switch::{
     DaemonGraySwitchGateContract, DaemonGraySwitchReadinessRow, daemon_gray_switch_gate_contract,
+};
+pub use daemon_live_evidence::{
+    DaemonLiveEvidenceQueueContract, DaemonLiveEvidenceQueueRow,
+    daemon_live_evidence_queue_contract,
 };
 pub use integration::{DaedDaewingContract, daed_daewing_contract};
 pub use outbound_contract::{OutboundNativeMigrationContract, outbound_native_migration_contract};
