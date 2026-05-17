@@ -791,6 +791,139 @@ fn shadowsocks_native_optin_matches_golden_fixture() {
     );
 }
 
+#[test]
+fn trojan_native_optin_matches_golden_fixture() {
+    let fixture = fixture("outbound/protocol/trojan_native_optin.json");
+
+    assert_eq!(
+        crate::trojan::contract::ADAPTER_MODE,
+        fixture["rust_adapter_mode"].as_str().unwrap()
+    );
+    assert_eq!(
+        crate::trojan::contract::DEFAULT_GO_PATH,
+        fixture["default_go_path"].as_bool().unwrap()
+    );
+    assert_eq!(
+        crate::trojan::contract::PROTOCOL_SCOPE,
+        fixture["protocol_scope"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|value| value.as_str().unwrap())
+            .collect::<Vec<_>>()
+            .as_slice()
+    );
+
+    for case in fixture["link_parser"].as_array().unwrap() {
+        let parsed = crate::trojan::TrojanLink::parse(case["input"].as_str().unwrap()).unwrap();
+        assert_eq!(parsed.server, case["server"].as_str().unwrap());
+        assert_eq!(parsed.port, case["port"].as_u64().unwrap() as u16);
+        assert_eq!(parsed.password, case["password"].as_str().unwrap());
+        assert_eq!(parsed.sni, case["sni"].as_str().unwrap());
+        assert_eq!(parsed.transport_type, case["type"].as_str().unwrap());
+        assert_eq!(parsed.encryption, case["encryption"].as_str().unwrap());
+        assert_eq!(parsed.host, case["host"].as_str().unwrap());
+        assert_eq!(parsed.path, case["path"].as_str().unwrap());
+        assert_eq!(parsed.service_name, case["serviceName"].as_str().unwrap());
+        assert_eq!(
+            parsed.allow_insecure,
+            case["allowInsecure"].as_bool().unwrap()
+        );
+        assert_eq!(parsed.protocol, case["protocol"].as_str().unwrap());
+        assert_eq!(parsed.export_url(), case["export"].as_str().unwrap());
+        let chain = parse_link_chain(case["input"].as_str().unwrap()).unwrap();
+        assert_eq!(chain.nodes[0].adapter_mode, "native-opt-in");
+        assert_eq!(
+            chain.property_address,
+            case["property_address"].as_str().unwrap()
+        );
+        assert_eq!(
+            chain.property_protocol,
+            case["property_protocol"].as_str().unwrap()
+        );
+    }
+
+    for case in fixture["metadata"].as_array().unwrap() {
+        let metadata = crate::trojan::TrojanMetadata::parse(
+            case["network"].as_str().unwrap(),
+            case["input"].as_str().unwrap(),
+        )
+        .unwrap();
+        assert_eq!(
+            metadata.network.byte(),
+            case["network_byte"].as_u64().unwrap() as u8
+        );
+        assert_eq!(
+            metadata.metadata_type_byte(),
+            case["type"].as_u64().unwrap() as u8
+        );
+        assert_eq!(metadata.hostname(), case["hostname"].as_str().unwrap());
+        assert_eq!(metadata.port(), case["port"].as_u64().unwrap() as u16);
+        assert_eq!(
+            metadata.len().unwrap(),
+            case["len"].as_u64().unwrap() as usize
+        );
+        assert_eq!(
+            hex_encode(&metadata.encode().unwrap()),
+            case["hex"].as_str().unwrap()
+        );
+    }
+
+    let framing = &fixture["framing"];
+    assert_eq!(
+        crate::trojan::packet::password_sha224_hex(framing["password"].as_str().unwrap()),
+        framing["password_sha224_hex"].as_str().unwrap()
+    );
+    assert_eq!(
+        hex_encode(crate::trojan::packet::CRLF),
+        framing["crlf_hex"].as_str().unwrap()
+    );
+    let tcp = &framing["tcp_request_header"];
+    assert_eq!(
+        hex_encode(
+            &crate::trojan::packet::tcp_request_header(
+                framing["password"].as_str().unwrap(),
+                tcp["network"].as_str().unwrap(),
+                tcp["target"].as_str().unwrap(),
+                tcp["payload_ascii"].as_str().unwrap().as_bytes(),
+            )
+            .unwrap()
+        ),
+        tcp["header_hex"].as_str().unwrap()
+    );
+    let udp = &framing["udp_packet"];
+    assert_eq!(
+        hex_encode(
+            &crate::trojan::packet::udp_packet(
+                udp["target"].as_str().unwrap(),
+                udp["payload_ascii"].as_str().unwrap().as_bytes(),
+            )
+            .unwrap()
+        ),
+        udp["packet_hex"].as_str().unwrap()
+    );
+
+    let transport = &fixture["transport_contract"];
+    assert_eq!(
+        crate::trojan::contract::DEFAULT_TROJAN_TLS_BEFORE_TROJANC,
+        transport["default_trojan_tls_before_trojanc"]
+            .as_bool()
+            .unwrap()
+    );
+    assert_eq!(
+        crate::trojan::contract::TROJAN_GO_GRPC_CONTAINS_TLS,
+        transport["trojan_go_grpc_contains_tls"].as_bool().unwrap()
+    );
+    assert_eq!(
+        crate::trojan::contract::TROJAN_GO_GRPC_NO_OUTER_TLS,
+        transport["trojan_go_grpc_no_outer_tls"].as_bool().unwrap()
+    );
+    assert_eq!(
+        crate::trojan::contract::TROJAN_GO_SS_INNER_LAYER,
+        transport["trojan_go_ss_inner_layer"].as_bool().unwrap()
+    );
+}
+
 fn make_group(count: usize, policy: SelectionPolicy) -> DialerGroup {
     DialerGroup::new(
         "test",
