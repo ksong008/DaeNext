@@ -229,6 +229,80 @@ fn outbound_native_migration_contract_matches_golden_fixture() {
     );
 }
 
+#[test]
+fn daemon_default_readiness_contract_matches_golden_fixture() {
+    let fixture = load("product/daemon/default_path_readiness.json");
+    let contract = daemon_default_readiness_contract();
+    assert_eq!(contract.name, fixture["name"].as_str().unwrap());
+    assert_eq!(contract.stage, fixture["stage"].as_str().unwrap());
+    assert_eq!(
+        contract.stage16_gate_complete,
+        fixture["stage16_gate_complete"].as_bool().unwrap()
+    );
+    assert_eq!(
+        contract.default_switch_allowed,
+        fixture["default_switch_allowed"].as_bool().unwrap()
+    );
+    assert_eq!(
+        contract.go_default_path_preserved,
+        fixture["go_default_path_preserved"].as_bool().unwrap()
+    );
+    assert_eq!(
+        contract.go_fallback_required,
+        fixture["go_fallback_required"].as_bool().unwrap()
+    );
+    assert_eq!(
+        contract.default_switch_decision,
+        fixture["default_switch_decision"].as_str().unwrap()
+    );
+    assert_eq!(contract.rollback, fixture["rollback"].as_str().unwrap());
+    assert_eq!(
+        contract.optin_surfaces,
+        fixture["optin_surfaces"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|value| value.as_str().unwrap())
+            .collect::<Vec<_>>()
+    );
+    assert_eq!(
+        contract.revalidation_required,
+        fixture["revalidation_required"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|value| value.as_str().unwrap())
+            .collect::<Vec<_>>()
+    );
+    assert_eq!(
+        contract.blockers,
+        fixture["blockers"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|value| value.as_str().unwrap())
+            .collect::<Vec<_>>()
+    );
+    assert_eq!(
+        contract.validation_commands,
+        fixture["validation_commands"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|value| value.as_str().unwrap())
+            .collect::<Vec<_>>()
+    );
+    assert_eq!(
+        contract.source,
+        fixture["source"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|value| value.as_str().unwrap())
+            .collect::<Vec<_>>()
+    );
+}
+
 fn load(path: &str) -> Value {
     dae_golden::load_json(path).unwrap()
 }
