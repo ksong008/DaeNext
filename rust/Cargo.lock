@@ -136,10 +136,12 @@ dependencies = [
 name = "dae-outbound"
 version = "0.1.0"
 dependencies = [
+ "base64",
  "dae-core-types",
  "dae-golden",
  "regex",
  "serde_json",
+ "url",
 ]
 
 [[package]]

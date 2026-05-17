@@ -2,6 +2,7 @@ use std::io::{Read, Write};
 use std::net::TcpStream;
 use std::time::Duration;
 
+use dae_outbound::http_proxy::{self, HttpConnectOptions, HttpProxyLink, request as http_request};
 use dae_outbound::parse_link_chain;
 use dae_outbound::socks5::{self, Socks5Address, handshake, udp_packet};
 use serde_json::json;
@@ -11,11 +12,177 @@ use crate::runner::RunnerOutput;
 pub(crate) fn run_outbound(args: &[String]) -> RunnerOutput {
     match args.first().map(String::as_str) {
         Some("socks5") => run_socks5(&args[1..]),
+        Some("http") => run_http(&args[1..]),
         Some(subcommand) => {
             RunnerOutput::usage(format!("unsupported outbound subcommand: {subcommand}"))
         }
         None => RunnerOutput::usage("missing outbound subcommand"),
     }
+}
+
+fn run_http(args: &[String]) -> RunnerOutput {
+    match args.first().map(String::as_str) {
+        Some("contract") => run_http_contract(),
+        Some("link") => run_http_link(&args[1..]),
+        Some("connect") => run_http_connect(&args[1..]),
+        Some("forward") => run_http_forward(&args[1..]),
+        Some("smoke") => run_http_smoke(&args[1..]),
+        Some(subcommand) => RunnerOutput::usage(format!(
+            "unsupported outbound http subcommand: {subcommand}"
+        )),
+        None => RunnerOutput::usage("missing outbound http subcommand"),
+    }
+}
+
+fn run_http_contract() -> RunnerOutput {
+    RunnerOutput::ok(format!(
+        "{}\n",
+        json!({
+            "name": "stage15-http-native-optin",
+            "default_go_path": http_proxy::contract::DEFAULT_GO_PATH,
+            "rust_adapter_mode": http_proxy::contract::ADAPTER_MODE,
+            "protocol_scope": http_proxy::contract::PROTOCOL_SCOPE,
+            "allow_insecure_aliases": http_proxy::contract::ALLOW_INSECURE_ALIASES,
+            "https": {
+                "default_port": 443,
+                "default_alpn_query_value": http_proxy::contract::HTTPS_DEFAULT_ALPN_QUERY_VALUE,
+                "default_tls_implementation": http_proxy::contract::HTTPS_DEFAULT_TLS_IMPLEMENTATION,
+                "h2_route_context_required": http_proxy::contract::HTTPS_H2_ROUTE_CONTEXT_REQUIRED,
+            },
+            "live_smoke_required": http_proxy::contract::LIVE_SMOKE_REQUIRED,
+        })
+    ))
+}
+
+fn run_http_link(args: &[String]) -> RunnerOutput {
+    let Some(link) = string_arg(args, "--link") else {
+        return RunnerOutput::usage("missing outbound http link --link");
+    };
+    match HttpProxyLink::parse(link) {
+        Ok(parsed) => RunnerOutput::ok(format!(
+            "{}\n",
+            json!({
+                "input": link,
+                "server": parsed.server,
+                "port": parsed.port,
+                "username": parsed.username,
+                "password": parsed.password,
+                "sni": parsed.sni,
+                "effective_sni": parsed.effective_sni(),
+                "protocol": parsed.protocol.as_str(),
+                "allowInsecure": parsed.allow_insecure,
+                "export": parsed.export_url(),
+            })
+        )),
+        Err(err) => RunnerOutput::stdout_error(err.to_string()),
+    }
+}
+
+fn run_http_connect(args: &[String]) -> RunnerOutput {
+    let Some(target) = string_arg(args, "--target") else {
+        return RunnerOutput::usage("missing outbound http connect --target");
+    };
+    let options = http_options_from_args(target, args);
+    RunnerOutput::ok(format!(
+        "{}\n",
+        json!({
+            "target": options.target,
+            "transport": options.transport.enabled,
+            "request_hex": hex_encode(&http_request::connect_request(&options)),
+            "basic_auth_header": http_request::basic_auth_header(&options.username, &options.password),
+        })
+    ))
+}
+
+fn run_http_forward(args: &[String]) -> RunnerOutput {
+    let Some(raw_hex) = string_arg(args, "--raw-hex") else {
+        return RunnerOutput::usage("missing outbound http forward --raw-hex");
+    };
+    let raw = match hex_decode(raw_hex) {
+        Ok(raw) => raw,
+        Err(err) => return RunnerOutput::stdout_error(err),
+    };
+    match http_request::forward_http_request(&raw) {
+        Ok(request) => RunnerOutput::ok(format!(
+            "{}\n",
+            json!({
+                "request_hex": hex_encode(&request),
+                "proxy_connection_removed": true,
+            })
+        )),
+        Err(err) => RunnerOutput::stdout_error(err.to_string()),
+    }
+}
+
+fn run_http_smoke(args: &[String]) -> RunnerOutput {
+    let Some(proxy) = string_arg(args, "--proxy") else {
+        return RunnerOutput::usage("missing outbound http smoke --proxy");
+    };
+    let Some(target) = string_arg(args, "--target") else {
+        return RunnerOutput::usage("missing outbound http smoke --target");
+    };
+    let timeout_ms = match u64_arg(args, "--timeout-ms").unwrap_or(Ok(2000)) {
+        Ok(value) => value,
+        Err(message) => return RunnerOutput::usage(message),
+    };
+    let options = http_options_from_args(target, args);
+    match http_smoke(proxy, &options, Duration::from_millis(timeout_ms)) {
+        Ok(report) => RunnerOutput::ok(format!("{report}\n")),
+        Err(err) => RunnerOutput::stdout_error(err),
+    }
+}
+
+fn http_options_from_args(target: &str, args: &[String]) -> HttpConnectOptions {
+    let mut options = HttpConnectOptions::connect(target);
+    options.username = string_arg(args, "--username").unwrap_or("").to_owned();
+    options.password = string_arg(args, "--password").unwrap_or("").to_owned();
+    options.host_override = string_arg(args, "--host").unwrap_or("").to_owned();
+    options.transport.enabled = bool_arg(args, "--transport").unwrap_or(false);
+    options.transport.path = string_arg(args, "--path").unwrap_or("/").to_owned();
+    options
+}
+
+fn http_smoke(
+    proxy: &str,
+    options: &HttpConnectOptions,
+    timeout: Duration,
+) -> Result<String, String> {
+    let mut stream = TcpStream::connect(proxy).map_err(|err| err.to_string())?;
+    stream
+        .set_read_timeout(Some(timeout))
+        .map_err(|err| err.to_string())?;
+    stream
+        .set_write_timeout(Some(timeout))
+        .map_err(|err| err.to_string())?;
+    let request = http_request::connect_request(options);
+    stream.write_all(&request).map_err(|err| err.to_string())?;
+    let mut response = Vec::new();
+    let mut buf = [0_u8; 512];
+    loop {
+        let n = stream.read(&mut buf).map_err(|err| err.to_string())?;
+        if n == 0 {
+            break;
+        }
+        response.extend_from_slice(&buf[..n]);
+        if response.windows(4).any(|window| window == b"\r\n\r\n") {
+            break;
+        }
+    }
+    let status = http_request::parse_connect_response(&response).map_err(|err| err.to_string())?;
+    if status != 200 {
+        return Err(format!("http proxy status: {status}"));
+    }
+    Ok(format!(
+        "{}",
+        json!({
+            "ok": true,
+            "proxy": proxy,
+            "target": options.target,
+            "transport": options.transport.enabled,
+            "status": status,
+            "request_hex": hex_encode(&request),
+        })
+    ))
 }
 
 fn run_socks5(args: &[String]) -> RunnerOutput {
@@ -92,7 +259,9 @@ fn run_socks5_handshake(args: &[String]) -> RunnerOutput {
         "connect" => handshake::Socks5Command::Connect,
         "udp-associate" => handshake::Socks5Command::UdpAssociate,
         value => {
-            return RunnerOutput::usage(format!("bad outbound socks5 handshake --command: {value}"));
+            return RunnerOutput::usage(format!(
+                "bad outbound socks5 handshake --command: {value}"
+            ));
         }
     };
     let target = match Socks5Address::parse(target) {
@@ -308,6 +477,14 @@ fn u64_arg(args: &[String], name: &str) -> Option<Result<u64, String>> {
     })
 }
 
+fn bool_arg(args: &[String], name: &str) -> Option<bool> {
+    string_arg(args, name).and_then(|value| match value {
+        "1" | "true" | "yes" | "on" => Some(true),
+        "0" | "false" | "no" | "off" => Some(false),
+        _ => None,
+    })
+}
+
 fn hex_encode(bytes: &[u8]) -> String {
     const HEX: &[u8; 16] = b"0123456789abcdef";
     let mut out = String::with_capacity(bytes.len() * 2);
@@ -316,4 +493,24 @@ fn hex_encode(bytes: &[u8]) -> String {
         out.push(HEX[(byte & 0x0f) as usize] as char);
     }
     out
+}
+
+fn hex_decode(input: &str) -> Result<Vec<u8>, String> {
+    if input.len() % 2 != 0 {
+        return Err("odd hex length".to_owned());
+    }
+    input
+        .as_bytes()
+        .chunks(2)
+        .map(|chunk| Ok((hex_nibble(chunk[0])? << 4) | hex_nibble(chunk[1])?))
+        .collect()
+}
+
+fn hex_nibble(byte: u8) -> Result<u8, String> {
+    match byte {
+        b'0'..=b'9' => Ok(byte - b'0'),
+        b'a'..=b'f' => Ok(byte - b'a' + 10),
+        b'A'..=b'F' => Ok(byte - b'A' + 10),
+        _ => Err(format!("bad hex byte: {byte}")),
+    }
 }
