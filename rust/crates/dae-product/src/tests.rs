@@ -617,6 +617,97 @@ fn true_default_daemon_admission_contract_matches_golden_fixture() {
 }
 
 #[test]
+fn true_default_daemon_admission_blocks_default_switch_until_rows_pass() {
+    let contract = true_default_daemon_admission_contract();
+    assert!(contract.gate_complete);
+    assert!(!contract.default_switch_allowed);
+    assert!(!contract.default_path_mutation_allowed);
+    assert!(!contract.product_chain_switch_allowed);
+    assert!(contract.go_default_path_preserved);
+    assert!(contract.go_fallback_required);
+    assert!(contract.stage22_live_evidence_complete);
+    assert!(contract.product_chain_admission_defined);
+    assert!(!contract.true_rust_daemon_binary_exists);
+    assert!(!contract.true_rust_default_daemon_admitted);
+
+    for row in &contract.admission_rows {
+        assert!(
+            row.status.starts_with("blocked"),
+            "{} must remain blocked before true daemon evidence passes",
+            row.area
+        );
+        assert!(
+            !row.required_evidence.is_empty(),
+            "{} lacks evidence",
+            row.area
+        );
+        assert!(
+            !row.current_blocker.is_empty(),
+            "{} lacks blocker",
+            row.area
+        );
+        assert!(
+            !row.next_action.is_empty(),
+            "{} lacks next action",
+            row.area
+        );
+    }
+
+    assert_contains_text(&contract.denied_default_mutations, "dae run default engine");
+    assert_contains_text(
+        &contract.denied_default_mutations,
+        "control.NewControlPlane",
+    );
+    assert_contains_text(&contract.denied_default_mutations, "install/dae.service");
+    assert_contains_text(&contract.denied_default_mutations, "release assets");
+    assert_contains_text(&contract.denied_default_mutations, "dae-wing or daed");
+    assert_contains_text(&contract.denied_default_mutations, "Go outbound");
+}
+
+#[test]
+fn true_default_daemon_admission_covers_all_required_surfaces() {
+    let contract = true_default_daemon_admission_contract();
+    let areas = contract
+        .admission_rows
+        .iter()
+        .map(|row| row.area)
+        .collect::<Vec<_>>();
+    assert_eq!(
+        areas,
+        vec![
+            "binary identity and entrypoint",
+            "config validate and export parity",
+            "startup, pid, progress, and systemd notify",
+            "control-plane lifecycle",
+            "active TCP datapath",
+            "active UDP and DNS datapath",
+            "eBPF and kernel ownership",
+            "reload, suspend, and rollback",
+            "RuntimeOverview and route-aware HTTP",
+            "outbound true dataplane",
+            "matched benchmark parity",
+            "rollback and rollout controls",
+        ]
+    );
+
+    assert_contains_text(
+        &contract.required_benchmarks,
+        "Go default daemon vs true Rust default daemon TCP",
+    );
+    assert_contains_text(
+        &contract.required_benchmarks,
+        "Go default daemon vs true Rust default daemon UDP",
+    );
+    assert_contains_text(&contract.required_benchmarks, "outbound protocol");
+    assert_contains_text(&contract.required_benchmarks, "RSS, CPU");
+    assert_contains_text(&contract.required_benchmarks, "raw logs");
+    assert_contains_text(&contract.required_benchmarks, "rollback result");
+    assert_contains_text(&contract.rollback_controls, "Go-backed dae binary");
+    assert_contains_text(&contract.rollback_controls, "explicit opt-in selector");
+    assert_contains_text(&contract.rollback_controls, "candidate process");
+}
+
+#[test]
 fn protocol_dataplane_admission_contract_matches_golden_fixture() {
     let fixture = load("product/outbound/protocol_dataplane_admission.json");
     let contract = protocol_dataplane_admission_contract();
@@ -748,4 +839,11 @@ fn assert_string_vec(actual: &[&str], fixture: &Value) {
         .map(|value| value.as_str().unwrap())
         .collect::<Vec<_>>();
     assert_eq!(actual, expected.as_slice());
+}
+
+fn assert_contains_text(values: &[&str], needle: &str) {
+    assert!(
+        values.iter().any(|value| value.contains(needle)),
+        "expected one of {values:?} to contain {needle:?}"
+    );
 }
