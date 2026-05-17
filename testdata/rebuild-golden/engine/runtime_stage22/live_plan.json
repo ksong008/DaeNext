@@ -10,12 +10,12 @@
     "disable_waiting_network": true,
     "dns_bind": "udp://127.0.0.1:1053",
     "dns_upstream": "udp://127.0.0.1:10530",
-    "lan_interface": "dae-stage22-lan0",
+    "lan_interface": "daex22lan0",
     "mptcp": true,
     "routing_fallback": "must_direct",
     "so_mark_from_dae": 1234,
     "tproxy_port": 12345,
-    "wan_interface": "dae-stage22-wan0"
+    "wan_interface": "daex22wan0"
   },
   "config_valid": true,
   "default_path_mutated": false,
