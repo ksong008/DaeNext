@@ -62,6 +62,9 @@ func ReadConfigFile(cfgFile string) (conf *config.Config, includes []string, err
 	if conf, err = config.New(sections); err != nil {
 		return nil, nil, err
 	}
+	if err = rustConfigCheckReadFile(cfgFile); err != nil {
+		return nil, nil, err
+	}
 	return conf, includes, nil
 }
 
@@ -87,7 +90,14 @@ func ParseConfig(globalSection *string, dnsSection *string, routingSection *stri
 	if err != nil {
 		return nil, err
 	}
-	return config.New(sections)
+	conf, err := config.New(sections)
+	if err != nil {
+		return nil, err
+	}
+	if err := rustConfigCheckParseConfig(*globalSection, *dnsSection, *routingSection); err != nil {
+		return nil, err
+	}
+	return conf, nil
 }
 
 func NecessaryOutbounds(routing *config.Routing) (outbounds []string) {

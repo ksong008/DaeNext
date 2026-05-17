@@ -7,8 +7,10 @@ package cmd
 
 import (
 	"fmt"
+	"os"
 
 	"github.com/daeuniverse/dae/config"
+	daeengine "github.com/daeuniverse/dae/engine"
 	"github.com/spf13/cobra"
 )
 
@@ -24,6 +26,14 @@ var (
 		Use:   "outline",
 		Short: "To export config structure.",
 		Run: func(cmd *cobra.Command, args []string) {
+			if text, used, err := daeengine.RustConfigOptInExportOutline(Version); used {
+				if err != nil {
+					fmt.Println(err)
+					os.Exit(1)
+				}
+				fmt.Print(text)
+				return
+			}
 			fmt.Println(config.ExportOutlineJson(Version))
 		},
 	}
