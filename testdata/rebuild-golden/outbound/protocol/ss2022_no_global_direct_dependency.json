@@ -1,5 +1,5 @@
 {
-  "adapter_mode": "bridge-or-stub-until-native-protocol-rewrite",
+  "adapter_mode": "native-opt-in",
   "global_direct_nil": true,
   "link": "ss://2022-blake3-aes-128-gcm:MTIzNDU2Nzg5MDEyMzQ1Ng==@example.com:443#node",
   "name": "outbound-protocol-ss2022-no-global-direct-dependency",
