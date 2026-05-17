@@ -1,5 +1,6 @@
 use dae_engine::parse_config_sections;
 
+use crate::runtime_runner::run_runtime;
 use crate::{export_outline_json, validate_config_file};
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -10,7 +11,7 @@ pub struct RunnerOutput {
 }
 
 impl RunnerOutput {
-    fn ok(stdout: String) -> Self {
+    pub(crate) fn ok(stdout: String) -> Self {
         Self {
             exit_code: 0,
             stdout,
@@ -18,7 +19,7 @@ impl RunnerOutput {
         }
     }
 
-    fn stdout_error(message: impl Into<String>) -> Self {
+    pub(crate) fn stdout_error(message: impl Into<String>) -> Self {
         Self {
             exit_code: 1,
             stdout: format!("{}\n", message.into()),
@@ -26,7 +27,7 @@ impl RunnerOutput {
         }
     }
 
-    fn usage(message: impl Into<String>) -> Self {
+    pub(crate) fn usage(message: impl Into<String>) -> Self {
         Self {
             exit_code: 2,
             stdout: String::new(),
@@ -53,6 +54,7 @@ where
         Some("validate") => run_validate(&args[1..]),
         Some("export") => run_export(&args[1..], version),
         Some("config") => run_config(&args[1..]),
+        Some("runtime") => run_runtime(&args[1..]),
         Some(command) => RunnerOutput::usage(format!("unsupported command: {command}")),
         None => RunnerOutput::usage("missing command"),
     }

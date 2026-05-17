@@ -545,6 +545,37 @@ func (e *Engine) HTTPTransport() http.RoundTripper {
 	return e.httpTransport
 }
 
+func (e *Engine) TryHTTPTransport() (http.RoundTripper, bool) {
+	if _, err := e.ControlPlane(); err != nil {
+		return nil, false
+	}
+	return e.HTTPTransport(), true
+}
+
+func (e *Engine) CacheStats() CacheStats {
+	ctl, err := e.ControlPlane()
+	if err != nil {
+		return CacheStats{}
+	}
+	return ctl.CacheStats()
+}
+
+func (e *Engine) TriggerLatencyChecks() {
+	ctl, err := e.ControlPlane()
+	if err != nil {
+		return
+	}
+	ctl.TriggerLatencyChecks()
+}
+
+func (e *Engine) SnapshotNodeLatencies() []NodeLatencySnapshot {
+	ctl, err := e.ControlPlane()
+	if err != nil {
+		return nil
+	}
+	return ctl.SnapshotNodeLatencies()
+}
+
 func (e *Engine) IsControlPlaneNotInit(err error) bool {
 	return errors.Is(err, ErrControlPlaneNotInit)
 }

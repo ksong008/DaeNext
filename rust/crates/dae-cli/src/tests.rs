@@ -144,6 +144,60 @@ fn optin_runner_matches_validate_and_export_fixture() {
     assert_eq!(parse_api.stderr, "");
 }
 
+#[test]
+fn optin_runner_runtime_commands_match_engine_fixtures() {
+    let dry = run_with_args(["runtime", "dry-run-smoke"]);
+    assert_eq!(dry.exit_code, 0);
+    assert_eq!(dry.stdout, "");
+    assert_eq!(dry.stderr, "");
+
+    let target_fixture = load("engine/route_aware/target.json");
+    let route = run_with_args([
+        "runtime",
+        "route-target",
+        "--host",
+        "example.com",
+        "--port",
+        "443",
+    ]);
+    assert_eq!(route.exit_code, 0);
+    assert_eq!(route.stderr, "");
+    let route_json: Value = serde_json::from_str(&route.stdout).unwrap();
+    let domain_case = target_fixture["cases"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|case| case["name"].as_str().unwrap() == "domain")
+        .unwrap();
+    assert_eq!(
+        route_json["domain"].as_str().unwrap(),
+        domain_case["domain"].as_str().unwrap()
+    );
+    assert_eq!(
+        route_json["dest"].as_str().unwrap(),
+        domain_case["dest"].as_str().unwrap()
+    );
+    assert_eq!(
+        route_json["dest_is_unspecified"].as_bool().unwrap(),
+        domain_case["dest_is_unspecified"].as_bool().unwrap()
+    );
+
+    let overview_fixture = load("engine/runtime_overview/basic.json");
+    let overview = run_with_args(["runtime", "overview-basic"]);
+    assert_eq!(overview.exit_code, 0);
+    assert_eq!(overview.stderr, "");
+    let overview_json: Value = serde_json::from_str(&overview.stdout).unwrap();
+    let no_control = &overview_fixture["no_control_plane"];
+    assert_eq!(
+        overview_json["dns_cache_hit_total"].as_u64().unwrap(),
+        no_control["dns_cache_hit_total"].as_u64().unwrap()
+    );
+    assert_eq!(
+        overview_json["samples"][0]["upload_rate"].as_u64().unwrap(),
+        no_control["samples"][0]["upload_rate"].as_u64().unwrap()
+    );
+}
+
 fn assert_commands(got: &[CommandSpec], want: &[Value]) {
     assert_eq!(got.len(), want.len());
     for (got, want) in got.iter().zip(want.iter()) {

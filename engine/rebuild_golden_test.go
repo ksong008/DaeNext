@@ -34,6 +34,7 @@ func TestWriteEngineRuntimeGoldenFixtures(t *testing.T) {
 	writeOrCheckEngineGolden(t, "../testdata/rebuild-golden/engine/runtime_overview/basic.json", rebuildGoldenEngineRuntimeOverview(t))
 	writeOrCheckEngineGolden(t, "../testdata/rebuild-golden/engine/config_api/empty_parse.json", rebuildGoldenEngineConfigApi(t))
 	writeOrCheckEngineGolden(t, "../testdata/rebuild-golden/engine/config_api/default_path_optin.json", rebuildGoldenEngineConfigDefaultPathOptIn(t))
+	writeOrCheckEngineGolden(t, "../testdata/rebuild-golden/engine/api_only/optin_contract.json", rebuildGoldenEngineAPIOnlyOptInContract(t))
 	writeOrCheckEngineGolden(t, "../testdata/rebuild-golden/engine/subscription/persist_cleanup.json", rebuildGoldenEngineSubscriptionPersistCleanup(t))
 }
 
@@ -366,6 +367,136 @@ func rebuildGoldenEngineConfigDefaultPathOptIn(t *testing.T) any {
 			"contains_global":  strings.Contains(outline, `"mapping": "global"`),
 			"contains_routing": strings.Contains(outline, `"mapping": "routing"`),
 			"trailing_newline": true,
+		},
+	}
+}
+
+func rebuildGoldenEngineAPIOnlyOptInContract(t *testing.T) any {
+	domain, dest, err := routeAwareDialTarget("example.com", "443")
+	if err != nil {
+		t.Fatalf("routeAwareDialTarget() error: %v", err)
+	}
+	originalSnapshotRuntimeStats := snapshotRuntimeStats
+	snapshotRuntimeStats = func(activeConnections int, udpSessions int, windowSec int, maxPoints int) control.RuntimeStatsSnapshot {
+		return control.RuntimeStatsSnapshot{
+			UpdatedAt:             time.Unix(1_700_000_300, 0),
+			UploadRate:            10,
+			DownloadRate:          20,
+			UploadTotal:           30,
+			DownloadTotal:         40,
+			ActiveConnections:     activeConnections,
+			UDPSessions:           udpSessions,
+			UDPTaskQueues:         99,
+			UDPTaskDropTotal:      88,
+			PacketSnifferSessions: 77,
+			RSSBytes:              50,
+			HeapAllocBytes:        60,
+			Goroutines:            70,
+			DnsObservabilityStats: control.DnsObservabilityStats{
+				DnsCacheHitTotal:                  101,
+				DnsCacheExpiredRemovalTotal:       102,
+				DnsUdpRetryTotal:                  103,
+				DnsTruncatedTcpFallbackTotal:      104,
+				DnsDoHStatusFailureTotal:          105,
+				DnsDoHContentTypeFailureTotal:     106,
+				DnsUpstreamRefreshSuccessTotal:    107,
+				DnsUpstreamRefreshFailureTotal:    108,
+				DnsUpstreamRefreshStaleReuseTotal: 109,
+			},
+			Samples: []control.RuntimeTrafficSample{
+				{
+					Timestamp:    time.Unix(1_700_000_300, 0),
+					UploadRate:   11,
+					DownloadRate: 22,
+				},
+			},
+		}
+	}
+	defer func() {
+		snapshotRuntimeStats = originalSnapshotRuntimeStats
+	}()
+	overview, err := (&Engine{}).GetRuntimeOverview(45, 90)
+	if err != nil {
+		t.Fatalf("GetRuntimeOverview() error: %v", err)
+	}
+	globalSection := `global {
+    log_level: debug
+}`
+	routingSection := `routing {
+    fallback: must_direct
+}`
+	parsed, err := ParseConfig(&globalSection, nil, &routingSection)
+	if err != nil {
+		t.Fatalf("ParseConfig() error: %v", err)
+	}
+	return map[string]any{
+		"name": "engine-api-only-runtime-optin-contract",
+		"source": []string{
+			"engine/service.go",
+			"engine/runtime.go",
+			"engine/api_rust_optin.go",
+			"rust/crates/dae-cli/src/runtime_runner.rs",
+			"rust/crates/dae-cli/src/runner.rs",
+			"rust/crates/dae-engine/src/runtime.rs",
+			"rust/crates/dae-engine/src/overview.rs",
+			"rust/crates/dae-engine/src/route.rs",
+			"DAEX_RUST_REBUILD_PLAN_2026-05-16.md:stage12",
+		},
+		"notes": "Stage 12 fixes the dae-side API-only/dry runtime contract for downstream dae-wing/daed use while keeping Go daemon and tproxy default paths unchanged.",
+		"service_contract": map[string]any{
+			"default_service_constructor": "NewNativeService",
+			"default_service_reset":       "SetDefault(nil)",
+			"config_interfaces": []string{
+				"ConfigTemplateService",
+				"ConfigParserService",
+				"ConfigService",
+			},
+			"runtime_interfaces": []string{
+				"RuntimeLifecycleService",
+				"RuntimeAccessService",
+				"RuntimeService",
+				"Service",
+			},
+			"dry_reload_restarts_after_stop":         true,
+			"try_http_transport_requires_control":    true,
+			"not_initialized_transport_error":        ErrControlPlaneNotInit.Error(),
+			"runtime_overview_without_control_plane": true,
+		},
+		"rust_opt_in": map[string]any{
+			"enable_env":          rustAPIOnlyOptInEnv,
+			"helper_env":          rustAPIOnlyHelperEnv,
+			"helper_default":      rustAPIOnlyHelperDefault,
+			"disabled_is_go_path": true,
+			"helper_timeout":      rustAPIOnlyHelperTimeout.String(),
+		},
+		"helper_commands": map[string]any{
+			"dry_runtime_smoke": []string{"dae-cli-optin", "runtime", "dry-run-smoke"},
+			"route_target":      []string{"dae-cli-optin", "runtime", "route-target", "--host", "<host>", "--port", "<port>"},
+			"overview_basic":    []string{"dae-cli-optin", "runtime", "overview-basic"},
+		},
+		"dry_runtime": map[string]any{
+			"reload_before_run_error": "context deadline exceeded",
+			"reload_running_is_noop":  true,
+			"stop_exits_loop":         true,
+		},
+		"route_aware_target": map[string]any{
+			"host":                  "example.com",
+			"port":                  "443",
+			"domain":                domain,
+			"dest":                  dest.String(),
+			"dest_is_unspecified":   dest.Addr().IsUnspecified(),
+			"system_dns_resolution": false,
+		},
+		"runtime_overview": projectRuntimeOverview(overview),
+		"config_api": map[string]any{
+			"global_input":        globalSection,
+			"routing_input":       routingSection,
+			"log_level":           parsed.Global.LogLevel,
+			"necessary_outbounds": NecessaryOutbounds(&parsed.Routing),
+		},
+		"cross_repo_boundary": map[string]any{
+			"dae_wing_daed_default_switch": false,
+			"verification_only":            true,
 		},
 	}
 }
