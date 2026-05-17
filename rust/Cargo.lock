@@ -23,8 +23,13 @@ version = "0.1.0"
 dependencies = [
  "dae-config",
  "dae-core-types",
+ "dae-dns",
  "dae-engine",
  "dae-golden",
+ "dae-netutil",
+ "dae-outbound",
+ "dae-routing",
+ "dae-sniffing",
  "serde_json",
 ]
 
