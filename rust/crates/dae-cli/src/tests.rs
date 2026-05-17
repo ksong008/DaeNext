@@ -199,6 +199,60 @@ fn optin_runner_runtime_commands_match_engine_fixtures() {
         overview_json["samples"][0]["upload_rate"].as_u64().unwrap(),
         no_control["samples"][0]["upload_rate"].as_u64().unwrap()
     );
+
+    let stage22_fixture = load("engine/runtime_stage22/smoke_helper.json");
+    let stage22 = run_with_args(["runtime", "stage22-smoke"]);
+    assert_eq!(stage22.exit_code, 0);
+    assert_eq!(stage22.stderr, "");
+    let stage22_json: Value = serde_json::from_str(&stage22.stdout).unwrap();
+    assert_eq!(
+        stage22_json["name"].as_str().unwrap(),
+        stage22_fixture["name"].as_str().unwrap()
+    );
+    assert_eq!(
+        stage22_json["evidence_class"].as_str().unwrap(),
+        stage22_fixture["evidence_class"].as_str().unwrap()
+    );
+    assert_eq!(
+        stage22_json["default_switch_allowed"].as_bool().unwrap(),
+        stage22_fixture["default_switch_allowed"].as_bool().unwrap()
+    );
+    assert_eq!(
+        stage22_json["go_default_path_preserved"].as_bool().unwrap(),
+        stage22_fixture["go_default_path_preserved"]
+            .as_bool()
+            .unwrap()
+    );
+    assert_eq!(
+        stage22_json["default_path_mutated"].as_bool().unwrap(),
+        stage22_fixture["default_path_mutated"].as_bool().unwrap()
+    );
+    assert_eq!(
+        stage22_json["live_daemon_started"].as_bool().unwrap(),
+        stage22_fixture["live_daemon_started"].as_bool().unwrap()
+    );
+    assert_eq!(
+        stage22_json["route_aware"]["dest"].as_str().unwrap(),
+        stage22_fixture["route_aware"]["dest"].as_str().unwrap()
+    );
+    assert_eq!(
+        stage22_json["overview"]["udp_task_queues"]
+            .as_u64()
+            .unwrap(),
+        stage22_fixture["overview"]["udp_task_queues"]
+            .as_u64()
+            .unwrap()
+    );
+    assert_eq!(
+        stage22_json["remaining_runtime_evidence"]
+            .as_array()
+            .unwrap()
+            .len(),
+        stage22_fixture["remaining_runtime_evidence"]
+            .as_array()
+            .unwrap()
+            .len()
+    );
 }
 
 #[test]
