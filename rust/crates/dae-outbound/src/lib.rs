@@ -15,6 +15,7 @@ pub mod latency;
 pub mod link_parser;
 pub mod policy;
 pub mod shadowsocks;
+pub mod shared_transport;
 pub mod socks5;
 pub mod trojan;
 pub mod tuic;
