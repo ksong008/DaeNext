@@ -813,17 +813,8 @@ func (e *Engine) newControlPlane(log *logrus.Logger, bpf interface{}, dnsCache m
 		logStartupPhase(log, "subscription.resolve", subscriptionResolutionStartedAt, nil)
 	}
 	if e.subscriptionConfigDir != "" {
-		files, err := os.ReadDir(filepath.Join(e.subscriptionConfigDir, "persist.d"))
-		if err != nil && !os.IsNotExist(err) {
+		if err := cleanupSubscriptionPersistFiles(e.subscriptionConfigDir, tagToNodeList); err != nil {
 			return nil, err
-		}
-		for _, file := range files {
-			tag := strings.TrimSuffix(file.Name(), ".sub")
-			if _, ok := tagToNodeList[tag]; !ok {
-				if err := os.Remove(filepath.Join(e.subscriptionConfigDir, "persist.d", file.Name())); err != nil {
-					return nil, err
-				}
-			}
 		}
 	}
 
@@ -864,6 +855,25 @@ func (e *Engine) newControlPlane(log *logrus.Logger, bpf interface{}, dnsCache m
 		return nil, err
 	}
 	return c, nil
+}
+
+func cleanupSubscriptionPersistFiles(configDir string, tagToNodeList map[string][]string) error {
+	files, err := os.ReadDir(filepath.Join(configDir, "persist.d"))
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return err
+	}
+	for _, file := range files {
+		tag := strings.TrimSuffix(file.Name(), ".sub")
+		if _, ok := tagToNodeList[tag]; !ok {
+			if err := os.Remove(filepath.Join(configDir, "persist.d", file.Name())); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
 }
 
 func cloneLogHooks(hooks logrus.LevelHooks) logrus.LevelHooks {
