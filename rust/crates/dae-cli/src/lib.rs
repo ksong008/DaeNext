@@ -1,3 +1,4 @@
+pub(crate) mod active_datapath_runner;
 pub mod completion;
 pub mod error;
 pub mod export;
