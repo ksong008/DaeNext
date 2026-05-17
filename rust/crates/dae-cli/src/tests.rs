@@ -297,6 +297,83 @@ fn optin_runner_userspace_commands_match_engine_fixture() {
     assert!(!magic_json["plain"].as_bool().unwrap());
 }
 
+#[test]
+fn optin_runner_active_datapath_commands_match_control_fixture() {
+    let fixture = load("control/active_datapath/optin_contract.json");
+
+    let contract = run_with_args(["active-datapath", "contract"]);
+    assert_eq!(contract.exit_code, 0);
+    assert_eq!(contract.stderr, "");
+    let contract_json: Value = serde_json::from_str(&contract.stdout).unwrap();
+    assert_eq!(
+        contract_json["name"].as_str().unwrap(),
+        fixture["name"].as_str().unwrap()
+    );
+    assert!(contract_json["default_go_attach_path"].as_bool().unwrap());
+    assert_eq!(
+        contract_json["ebpf"]["pinned_reuse_maps"]
+            .as_array()
+            .unwrap()
+            .len(),
+        fixture["ebpf_loader"]["pinned_reuse_maps"]
+            .as_array()
+            .unwrap()
+            .len()
+    );
+    assert_eq!(
+        contract_json["ebpf"]["tproxy_port_big_endian"]
+            .as_u64()
+            .unwrap(),
+        fixture["ebpf_loader"]["tproxy_port_big_endian"]
+            .as_u64()
+            .unwrap()
+    );
+    assert!(
+        contract_json["reload_rollback_injects_old_bpf"]
+            .as_bool()
+            .unwrap()
+    );
+    assert!(
+        contract_json["netns_same_interface_risk"]["tc_act_pipe_required"]
+            .as_bool()
+            .unwrap()
+    );
+
+    let reload = run_with_args(["active-datapath", "reload-ownership"]);
+    assert_eq!(reload.exit_code, 0);
+    assert_eq!(reload.stderr, "");
+    let reload_json: Value = serde_json::from_str(&reload.stdout).unwrap();
+    assert!(
+        reload_json["reload_rollback_injects_old_bpf"]
+            .as_bool()
+            .unwrap()
+    );
+    assert_eq!(reload_json["steps"].as_array().unwrap().len(), 5);
+
+    let magic = run_with_args([
+        "active-datapath",
+        "magic-dial",
+        "--network",
+        "tcp",
+        "--mark",
+        "1234",
+        "--mptcp",
+        "true",
+    ]);
+    assert_eq!(magic.exit_code, 0);
+    assert_eq!(magic.stderr, "");
+    let magic_json: Value = serde_json::from_str(&magic.stdout).unwrap();
+    assert_eq!(
+        magic_json["parsed_mark"].as_u64().unwrap(),
+        fixture["magic_network"]["mark"].as_u64().unwrap()
+    );
+    assert_eq!(
+        magic_json["parsed_mptcp"].as_bool().unwrap(),
+        fixture["magic_network"]["mptcp"].as_bool().unwrap()
+    );
+    assert!(magic_json["active_path"].as_bool().unwrap());
+}
+
 fn assert_commands(got: &[CommandSpec], want: &[Value]) {
     assert_eq!(got.len(), want.len());
     for (got, want) in got.iter().zip(want.iter()) {

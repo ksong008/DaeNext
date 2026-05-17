@@ -240,6 +240,9 @@ func NewControlPlane(
 			kernelVersion.String(),
 			consts.BasicFeatureVersion.String())
 	}
+	if err = rustActiveDatapathOptInPreflight(global); err != nil {
+		return nil, fmt.Errorf("rust active datapath opt-in preflight: %w", err)
+	}
 
 	var deferFuncs []func() error
 
