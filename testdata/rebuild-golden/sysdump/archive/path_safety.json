@@ -1,0 +1,36 @@
+{
+  "base_name": "sysdump-source",
+  "entries": [
+    {
+      "name": "sysdump-source/empty-dir",
+      "regular": false,
+      "typeflag": 53
+    },
+    {
+      "name": "sysdump-source/nested",
+      "regular": false,
+      "typeflag": 53
+    },
+    {
+      "content": "if\n",
+      "name": "sysdump-source/nested/interfaces.txt",
+      "regular": true,
+      "typeflag": 48
+    },
+    {
+      "content": "route\n",
+      "name": "sysdump-source/routing.txt",
+      "regular": true,
+      "typeflag": 48
+    }
+  ],
+  "name": "sysdump-archive-path-safety",
+  "rules": {
+    "non_regular_header_only": true,
+    "slash_separator": true,
+    "uses_relative_paths": true
+  },
+  "source": [
+    "cmd/sysdump.go"
+  ]
+}

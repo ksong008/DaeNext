@@ -1,0 +1,82 @@
+{
+  "build_tag": "trace",
+  "defaults": {
+    "drop_only": false,
+    "ipv4_when_unspecified": true,
+    "l4_proto": "tcp",
+    "output": "/dev/stdout",
+    "port": 80,
+    "ringbuf_size": "64MiB"
+  },
+  "feature_gated": true,
+  "flags": [
+    {
+      "default": false,
+      "name": "ipv4",
+      "shorthand": "4"
+    },
+    {
+      "default": false,
+      "name": "ipv6",
+      "shorthand": "6"
+    },
+    {
+      "default": "tcp",
+      "name": "l4-proto",
+      "shorthand": "p",
+      "values": [
+        "tcp",
+        "udp"
+      ]
+    },
+    {
+      "default": 80,
+      "name": "port",
+      "shorthand": "P"
+    },
+    {
+      "default": false,
+      "name": "drop-only",
+      "shorthand": ""
+    },
+    {
+      "default": "/dev/stdout",
+      "name": "output",
+      "shorthand": "o"
+    },
+    {
+      "default": "64MiB",
+      "name": "ringbuf-size",
+      "shorthand": ""
+    }
+  ],
+  "name": "trace-cli-surface",
+  "output_fields": [
+    "skb",
+    "mark",
+    "netns",
+    "ifindex",
+    "ifname",
+    "pid",
+    "pname",
+    "src",
+    "dst",
+    "tcp_flags",
+    "payload_len",
+    "symbol",
+    "drop_reason"
+  ],
+  "short": "To trace traffic",
+  "source": [
+    "cmd/trace.go",
+    "trace/trace.go",
+    "trace/ringbuf.go",
+    "trace/tracker.go"
+  ],
+  "target_discovery": {
+    "max_skb_arg_position": 5,
+    "requires_attached_target": true,
+    "uses_kernel_btf": true
+  },
+  "use": "trace"
+}

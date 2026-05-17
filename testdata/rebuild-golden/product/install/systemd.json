@@ -1,0 +1,32 @@
+{
+  "name": "stage8-install-systemd-contract",
+  "package_hooks": {
+    "after_install_daemon_reload": true,
+    "after_install_restart_active": true,
+    "after_remove_daemon_reload": true
+  },
+  "rust_parity": {
+    "reload_pid_progress": true,
+    "run_systemd_notify": true,
+    "validate_exec_start_pre": true
+  },
+  "service": {
+    "after": "network-online.target docker.service systemd-sysctl.service",
+    "exec_reload": "/usr/bin/dae reload $MAINPID",
+    "exec_start": "/usr/bin/dae run --disable-timestamp -c /etc/dae/config.dae",
+    "exec_start_pre": "/usr/bin/dae validate -c /etc/dae/config.dae",
+    "limit_nofile": "1048576",
+    "limit_nproc": "512",
+    "restart": "on-abnormal",
+    "timeout_start_sec": "120",
+    "type_notify": true,
+    "user_root": true,
+    "wants": "network-online.target"
+  },
+  "source": [
+    "install/dae.service",
+    "install/package_after_install.sh",
+    "install/package_after_remove.sh",
+    "DAENEW_RUST_REBUILD_MEMO_2026-05-16.md:17.7"
+  ]
+}

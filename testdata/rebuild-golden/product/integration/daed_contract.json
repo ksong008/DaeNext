@@ -1,0 +1,21 @@
+{
+  "cross_repo_write_scope": "not in dae-local phase8 commit; dae-wing/daed must be validated in their repos before product rollout",
+  "local_dae_contract_fixed": true,
+  "name": "stage8-daed-daewing-contract",
+  "required_surfaces": [
+    "RuntimeOverview JSON fields",
+    "reload progress bytes and paths",
+    "validate/export CLI surfaces",
+    "API-only dry runtime reload/stop",
+    "route-aware HTTP target",
+    "node latency snapshots",
+    "DNS observability counters"
+  ],
+  "source": [
+    "testdata/rebuild-golden/engine/runtime_overview/basic.json",
+    "testdata/rebuild-golden/engine/dry_runtime/reload_stop.json",
+    "testdata/rebuild-golden/cli/surface/basic.json",
+    "testdata/rebuild-golden/engine/route_aware/target.json",
+    "DAENEW_RUST_REBUILD_MEMO_2026-05-16.md:29"
+  ]
+}
