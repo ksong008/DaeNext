@@ -1,0 +1,32 @@
+{
+  "name": "stage18-first-batch-true-dataplane-loopback",
+  "default_go_path": true,
+  "payload_ascii": "stage18-ping",
+  "socks5": {
+    "target": "example.com:443",
+    "username": "user",
+    "password": "pass",
+    "bind": "127.0.0.1:5300",
+    "true_dataplane": true
+  },
+  "http": {
+    "target": "example.com:443",
+    "username": "user",
+    "password": "pass",
+    "host_override": "front.example",
+    "true_dataplane": true
+  },
+  "shadowsocks": {
+    "cipher": "aes-128-gcm",
+    "password": "stage18-password",
+    "target": "example.com:443",
+    "client_salt_hex": "000102030405060708090a0b0c0d0e0f",
+    "server_salt_hex": "101112131415161718191a1b1c1d1e1f",
+    "true_dataplane": true
+  },
+  "not_default_switch_evidence": [
+    "loopback true dataplane is not daemon runtime ownership",
+    "Go default outbound path remains active",
+    "active datapath mark/mptcp validation remains required before default switch"
+  ]
+}
