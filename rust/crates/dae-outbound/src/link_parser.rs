@@ -1,5 +1,6 @@
 use crate::error::OutboundError;
 use crate::shadowsocks::ShadowsocksLink;
+use crate::trojan::TrojanLink;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct LinkNode {
@@ -80,6 +81,7 @@ fn classify_link(scheme: &str, raw: &str) -> (&'static str, bool, &'static str) 
         "ss" | "shadowsocks" => (shadowsocks_protocol(raw), true, "native-opt-in"),
         "socks" | "socks5" => ("socks5", true, "native-opt-in"),
         "http" | "https" => (scheme_to_protocol(scheme), true, "native-opt-in"),
+        "trojan" | "trojan-go" => (trojan_protocol(raw), true, "native-opt-in"),
         "vmess" | "vless" | "hysteria2" | "tuic" | "juicity" => {
             (scheme_to_protocol(scheme), true, "bridge-or-stub")
         }
@@ -95,6 +97,8 @@ fn scheme_to_protocol(scheme: &str) -> &'static str {
         "ss" | "shadowsocks" => "shadowsocks",
         "vmess" => "vmess",
         "vless" => "vless",
+        "trojan" => "trojan",
+        "trojan-go" => "trojan-go",
         "hysteria2" => "hysteria2",
         "tuic" => "tuic",
         "juicity" => "juicity",
@@ -122,6 +126,9 @@ fn property_address(scheme: &str, raw: &str) -> Option<String> {
     if matches!(scheme, "ss" | "shadowsocks") {
         return ShadowsocksLink::parse(raw).ok().map(|link| link.address());
     }
+    if matches!(scheme, "trojan" | "trojan-go") {
+        return TrojanLink::parse(raw).ok().map(|link| link.address());
+    }
     if !matches!(scheme, "socks" | "socks5") {
         return None;
     }
@@ -132,6 +139,19 @@ fn property_address(scheme: &str, raw: &str) -> Option<String> {
         .map(|(_, authority)| authority)
         .unwrap_or(authority);
     Some(authority.to_owned())
+}
+
+fn trojan_protocol(raw: &str) -> &'static str {
+    TrojanLink::parse(raw)
+        .ok()
+        .map(|link| {
+            if link.protocol == "trojan-go" {
+                "trojan-go"
+            } else {
+                "trojan"
+            }
+        })
+        .unwrap_or("trojan")
 }
 
 fn shadowsocks_protocol(raw: &str) -> &'static str {
