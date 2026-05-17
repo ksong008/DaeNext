@@ -1,0 +1,58 @@
+{
+  "commands": {
+    "cleanup": "cleanup-temporary-environment",
+    "preflight_status": "already-passed-in-stage22-item165",
+    "run": "run-optin-daemon-candidate",
+    "validate": "validate-generated-config"
+  },
+  "config": {
+    "auto_config_kernel_parameter": false,
+    "disable_waiting_network": true,
+    "dns_bind": "udp://127.0.0.1:1053",
+    "dns_upstream": "udp://127.0.0.1:10530",
+    "lan_interface": "dae-stage22-lan0",
+    "mptcp": true,
+    "routing_fallback": "must_direct",
+    "so_mark_from_dae": 1234,
+    "tproxy_port": 12345,
+    "wan_interface": "dae-stage22-wan0"
+  },
+  "config_valid": true,
+  "default_path_mutated": false,
+  "default_switch_allowed": false,
+  "evidence_class": "isolated-live-plan-helper",
+  "live_daemon_started": false,
+  "name": "stage22-isolated-live-smoke-plan",
+  "paths": {
+    "artifact_binary": "/tmp/dae-stage22-live-evidence",
+    "config": "/tmp/dae-stage22-live/config.dae",
+    "go_pid_file_disabled": true,
+    "go_progress_file_fixed": "/var/run/dae.progress",
+    "helper_pid_file": "/tmp/dae-stage22-live/run/dae-stage22.pid",
+    "log_file": "/tmp/dae-stage22-live/logs/dae.log",
+    "readme": "/tmp/dae-stage22-live/README.stage22-live-smoke.txt",
+    "root": "/tmp/dae-stage22-live"
+  },
+  "production_safety": {
+    "disable_pidfile": true,
+    "logfile_under_root": true,
+    "no_systemd_mutation": true,
+    "progress_file_fixed_path_blocker": true,
+    "requires_exclusive_host_or_progress_override_before_live_run": true,
+    "use_tmp_artifact_binary": true
+  },
+  "remaining_blockers": [
+    "helper only builds an isolated plan and optional files; it does not start a daemon",
+    "Go run path still writes reload progress to /var/run/dae.progress",
+    "veth/netns setup commands are listed but not executed by this helper",
+    "live daemon, active TCP/UDP/DNS traffic, reload rollback, and daemon benchmark remain pending"
+  ],
+  "root": "/tmp/dae-stage22-live",
+  "traffic_matrix": [
+    "tcp-mark-mptcp",
+    "udp-endpoint-pool",
+    "dns-udp-53",
+    "reload-rollback"
+  ],
+  "write_requested": false
+}
