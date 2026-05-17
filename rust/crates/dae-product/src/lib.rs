@@ -4,6 +4,7 @@ pub mod daemon_gray_switch;
 pub mod daemon_live_evidence;
 pub mod integration;
 pub mod outbound_contract;
+pub mod product_chain_admission;
 pub mod protocol_dataplane;
 pub mod release;
 pub mod systemd;
@@ -24,6 +25,9 @@ pub use daemon_live_evidence::{
 };
 pub use integration::{DaedDaewingContract, daed_daewing_contract};
 pub use outbound_contract::{OutboundNativeMigrationContract, outbound_native_migration_contract};
+pub use product_chain_admission::{
+    ProductChainAdmissionContract, ProductChainAdmissionRow, product_chain_admission_contract,
+};
 pub use protocol_dataplane::{
     ProtocolDataplaneAdmissionContract, ProtocolDataplaneAdmissionRow,
     protocol_dataplane_admission_contract,
