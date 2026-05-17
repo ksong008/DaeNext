@@ -119,7 +119,29 @@
     }
   ],
   "export": {
-    "outline_command": "export outline"
+    "outline_command": "export outline",
+    "outline_function": "config.ExportOutlineJson",
+    "outline_summary": {
+      "contains_global": true,
+      "contains_routing": true,
+      "leaf_count": 12,
+      "required": [
+        "global",
+        "routing"
+      ],
+      "section_count": 6,
+      "sections": [
+        "global",
+        "subscription",
+        "node",
+        "group",
+        "routing",
+        "dns"
+      ],
+      "sha256": "eb7eb03feb599807f659873f7d55de3dd1f9514edd54318681a81ebe828cb0dd",
+      "version": "unknown"
+    },
+    "stdout_trailing_newline": true
   },
   "name": "cli-surface-basic",
   "notes": "Rust CLI must preserve command names, visible flags, progress bytes, file paths, validate/export/completion surfaces, and reload/suspend abort path.",
@@ -150,10 +172,31 @@
     "cmd/validate.go",
     "cmd/export.go",
     "cmd/completion.go",
+    "engine/helpers.go",
+    "install/dae.service",
     "common/consts/reload.go"
   ],
   "validate": {
+    "cases": [
+      {
+        "exit_on_error": 1,
+        "include_count": 1,
+        "name": "minimal-valid",
+        "ok": true,
+        "stdout_on_ok": ""
+      },
+      {
+        "error_contains": "no viable alternative at input",
+        "exit_on_error": 1,
+        "name": "syntax-error",
+        "ok": false,
+        "stdout_on_ok": ""
+      }
+    ],
     "does_not_start_runtime": true,
-    "requires_config_message": "Argument \"--config\" or \"-c\" is required but not provided."
+    "read_config_function": "engine.ReadConfigFile",
+    "requires_config_message": "Argument \"--config\" or \"-c\" is required but not provided.",
+    "systemd_exec_start_pre": "/usr/bin/dae validate -c /etc/dae/config.dae",
+    "systemd_uses_validate": true
   }
 }
