@@ -1,6 +1,7 @@
 use dae_engine::parse_config_sections;
 
 use crate::active_datapath_runner::run_active_datapath;
+use crate::outbound_runner::run_outbound;
 use crate::runtime_runner::run_runtime;
 use crate::userspace_runner::run_userspace;
 use crate::{export_outline_json, validate_config_file};
@@ -59,6 +60,7 @@ where
         Some("runtime") => run_runtime(&args[1..]),
         Some("userspace") => run_userspace(&args[1..]),
         Some("active-datapath") => run_active_datapath(&args[1..]),
+        Some("outbound") => run_outbound(&args[1..]),
         Some(command) => RunnerOutput::usage(format!("unsupported command: {command}")),
         None => RunnerOutput::usage("missing command"),
     }

@@ -24,7 +24,7 @@
       "scheme": "ss"
     },
     {
-      "adapter_mode": "bridge-or-stub",
+      "adapter_mode": "native-opt-in",
       "chain_len": 2,
       "link": "socks5://127.0.0.1:1080 -\u003e ss://2022-blake3-aes-128-gcm:MTIzNDU2Nzg5MDEyMzQ1Ng==@example.com:443#node",
       "name": "chain",
@@ -43,7 +43,7 @@
   ],
   "chain_separator": "-\u003e",
   "name": "outbound-link-parser-compatibility-matrix",
-  "notes": "Stage 5 records compatibility and bridge/stub boundaries; full native protocol rewrite remains deferred.",
+  "notes": "Stage 5 recorded compatibility and bridge/stub boundaries; Stage 15 moves socks5 to native opt-in while other protocol rewrites remain deferred.",
   "source": [
     "component/outbound/dialer/register.go",
     "DAENEW_RUST_REBUILD_MEMO_2026-05-16.md:26"
