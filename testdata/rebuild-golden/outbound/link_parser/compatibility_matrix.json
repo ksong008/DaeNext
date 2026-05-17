@@ -1,0 +1,51 @@
+{
+  "cases": [
+    {
+      "adapter_mode": "native-boundary",
+      "link": "direct://",
+      "name": "direct",
+      "ok": true,
+      "scheme": "direct"
+    },
+    {
+      "adapter_mode": "native-boundary",
+      "link": "block://",
+      "name": "block",
+      "ok": true,
+      "scheme": "block"
+    },
+    {
+      "adapter_mode": "bridge-or-stub",
+      "link": "ss://2022-blake3-aes-128-gcm:MTIzNDU2Nzg5MDEyMzQ1Ng==@example.com:443#node",
+      "name": "ss2022",
+      "ok": true,
+      "parent_dialer_non_nil": true,
+      "protocol": "shadowsocks-2022",
+      "scheme": "ss"
+    },
+    {
+      "adapter_mode": "bridge-or-stub",
+      "chain_len": 2,
+      "link": "socks5://127.0.0.1:1080 -\u003e ss://2022-blake3-aes-128-gcm:MTIzNDU2Nzg5MDEyMzQ1Ng==@example.com:443#node",
+      "name": "chain",
+      "ok": true,
+      "schemes": [
+        "socks5",
+        "ss"
+      ]
+    },
+    {
+      "error": "missing scheme",
+      "link": "not-a-link",
+      "name": "bad-link",
+      "ok": false
+    }
+  ],
+  "chain_separator": "-\u003e",
+  "name": "outbound-link-parser-compatibility-matrix",
+  "notes": "Stage 5 records compatibility and bridge/stub boundaries; full native protocol rewrite remains deferred.",
+  "source": [
+    "component/outbound/dialer/register.go",
+    "DAENEW_RUST_REBUILD_MEMO_2026-05-16.md:26"
+  ]
+}

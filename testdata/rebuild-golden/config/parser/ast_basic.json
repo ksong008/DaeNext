@@ -1,0 +1,224 @@
+{
+  "cases": [
+    {
+      "input": "\ninclude {\n    child.dae\n}\n\nglobal {\n    tcp_check_url: 'https://connectivity.example/generate_204',1.1.1.1\n    dial_mode: domain\n}\n\nnode {\n    my_node: 'socks5://127.0.0.1:1080'\n    'https://example.com/no_tag'\n}\n\ngroup {\n    test_group {\n        filter: !name(keyword:'hk', regex:'^HK') \u0026\u0026 subtag(my_sub) [add_latency: -500ms]\n        policy: fixed(0)\n    }\n}\n\nrouting {\n    domain(geosite:cn) -\u003e direct\n    domain(suffix:example.com) -\u003e proxy(mark: 1)\n    fallback: test_group\n}\n",
+      "name": "mixed-sections-params-functions-routing",
+      "ok": true,
+      "sections": [
+        {
+          "name": "include",
+          "items": [
+            {
+              "item_type": "Param",
+              "value_kind": "Param",
+              "param": {
+                "key": "",
+                "val": "child.dae"
+              }
+            }
+          ]
+        },
+        {
+          "name": "global",
+          "items": [
+            {
+              "item_type": "Param",
+              "value_kind": "Param",
+              "param": {
+                "key": "tcp_check_url",
+                "val": "https://connectivity.example/generate_204,1.1.1.1"
+              }
+            },
+            {
+              "item_type": "Param",
+              "value_kind": "Param",
+              "param": {
+                "key": "dial_mode",
+                "val": "domain"
+              }
+            }
+          ]
+        },
+        {
+          "name": "node",
+          "items": [
+            {
+              "item_type": "Param",
+              "value_kind": "Param",
+              "param": {
+                "key": "my_node",
+                "val": "socks5://127.0.0.1:1080"
+              }
+            },
+            {
+              "item_type": "Param",
+              "value_kind": "Param",
+              "param": {
+                "key": "",
+                "val": "https://example.com/no_tag"
+              }
+            }
+          ]
+        },
+        {
+          "name": "group",
+          "items": [
+            {
+              "item_type": "Param",
+              "value_kind": "Section",
+              "section": {
+                "name": "test_group",
+                "items": [
+                  {
+                    "item_type": "Param",
+                    "value_kind": "Param",
+                    "param": {
+                      "key": "filter",
+                      "val": "",
+                      "and_functions": [
+                        {
+                          "name": "name",
+                          "not": true,
+                          "params": [
+                            {
+                              "key": "keyword",
+                              "val": "hk"
+                            },
+                            {
+                              "key": "regex",
+                              "val": "^HK"
+                            }
+                          ]
+                        },
+                        {
+                          "name": "subtag",
+                          "not": false,
+                          "params": [
+                            {
+                              "key": "",
+                              "val": "my_sub"
+                            }
+                          ]
+                        }
+                      ],
+                      "annotation": [
+                        {
+                          "key": "add_latency",
+                          "val": "-500ms"
+                        }
+                      ]
+                    }
+                  },
+                  {
+                    "item_type": "Param",
+                    "value_kind": "Param",
+                    "param": {
+                      "key": "policy",
+                      "val": "",
+                      "and_functions": [
+                        {
+                          "name": "fixed",
+                          "not": false,
+                          "params": [
+                            {
+                              "key": "",
+                              "val": "0"
+                            }
+                          ]
+                        }
+                      ]
+                    }
+                  }
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "routing",
+          "items": [
+            {
+              "item_type": "RoutingRule",
+              "value_kind": "RoutingRule",
+              "routing_rule": {
+                "and_functions": [
+                  {
+                    "name": "domain",
+                    "not": false,
+                    "params": [
+                      {
+                        "key": "geosite",
+                        "val": "cn"
+                      }
+                    ]
+                  }
+                ],
+                "outbound": {
+                  "name": "direct",
+                  "not": false,
+                  "params": []
+                }
+              }
+            },
+            {
+              "item_type": "RoutingRule",
+              "value_kind": "RoutingRule",
+              "routing_rule": {
+                "and_functions": [
+                  {
+                    "name": "domain",
+                    "not": false,
+                    "params": [
+                      {
+                        "key": "suffix",
+                        "val": "example.com"
+                      }
+                    ]
+                  }
+                ],
+                "outbound": {
+                  "name": "proxy",
+                  "not": false,
+                  "params": [
+                    {
+                      "key": "mark",
+                      "val": "1"
+                    }
+                  ]
+                }
+              }
+            },
+            {
+              "item_type": "Param",
+              "value_kind": "Param",
+              "param": {
+                "key": "fallback",
+                "val": "test_group"
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "error": "line 4:16         filter: name()\n                          ^^^^: empty parameter list is not supported.\n",
+      "input": "\ngroup {\n    test_group {\n        filter: name()\n    }\n}\n",
+      "name": "empty-function-parameter-list-error",
+      "ok": false
+    },
+    {
+      "error": "line 4:0 }\n         ^: no viable alternative at input 'global{tproxy_port:}'\n",
+      "input": "\nglobal {\n    tproxy_port:\n}\n",
+      "name": "first-syntax-error",
+      "ok": false
+    }
+  ],
+  "name": "config-parser-ast-basic",
+  "notes": "Deterministic projection of Go config_parser AST. item_type records Item.Type.String(); value_kind records the actual Value type.",
+  "source": [
+    "pkg/config_parser/config_parser.go",
+    "pkg/config_parser/walker.go",
+    "pkg/config_parser/section.go",
+    "pkg/config_parser/error.go"
+  ]
+}

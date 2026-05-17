@@ -1,0 +1,33 @@
+{
+  "cases": [
+    {
+      "moving_avg_ms": [
+        400,
+        120
+      ],
+      "name": "selects-lowest-moving-average",
+      "want_index": 1,
+      "want_latency_ms": 120
+    },
+    {
+      "moving_avg_ms": [
+        400,
+        800
+      ],
+      "name": "current-best-worsens-and-reselects",
+      "want_index": 0,
+      "want_latency_ms": 400
+    }
+  ],
+  "moving_average_first_success_ms": {
+    "input_latency_ms": 100,
+    "notes": "Go collection starts from 0 and updates as (old + latency) / 2.",
+    "stored_ms": 50
+  },
+  "name": "outbound-group-min-moving-avg",
+  "policy": "min_moving_avg",
+  "source": [
+    "component/outbound/dialer/lazy_state_test.go:TestAliveDialerSetMinMovingAverageUsesMovingAverage",
+    "component/outbound/dialer/alive_dialer_set.go:NotifyLatencyChange"
+  ]
+}
