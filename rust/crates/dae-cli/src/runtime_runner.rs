@@ -6,6 +6,7 @@ use dae_engine::{
     DnsObservabilityStats, Engine, EngineOptions, RuntimeOverview, RuntimeStatsSnapshot,
     RuntimeTrafficSample, route_aware_dial_target,
 };
+use serde_json::{Value, json};
 
 use crate::runner::RunnerOutput;
 
@@ -14,6 +15,7 @@ pub(crate) fn run_runtime(args: &[String]) -> RunnerOutput {
         Some("dry-run-smoke") => run_dry_run_smoke(),
         Some("route-target") => run_route_target(&args[1..]),
         Some("overview-basic") => run_overview_basic(),
+        Some("stage22-smoke") => run_stage22_smoke(),
         Some(subcommand) => {
             RunnerOutput::usage(format!("unsupported runtime subcommand: {subcommand}"))
         }
@@ -77,10 +79,57 @@ fn run_route_target(args: &[String]) -> RunnerOutput {
 }
 
 fn run_overview_basic() -> RunnerOutput {
-    RunnerOutput::ok(format!("{}\n", overview_basic_json()))
+    RunnerOutput::ok(format!("{}\n", overview_basic_value()))
 }
 
-fn overview_basic_json() -> String {
+fn run_stage22_smoke() -> RunnerOutput {
+    let dry = run_dry_run_smoke();
+    if dry.exit_code != 0 {
+        return dry;
+    }
+    let target = match route_aware_dial_target("example.com", "443") {
+        Ok(target) => target,
+        Err(err) => return RunnerOutput::stdout_error(err.to_string()),
+    };
+    let overview = overview_basic_value();
+    let smoke = json!({
+        "name": "stage22-runtime-smoke-helper",
+        "evidence_class": "opt-in-helper-smoke",
+        "default_switch_allowed": false,
+        "go_default_path_preserved": true,
+        "go_fallback_required": true,
+        "default_path_mutated": false,
+        "live_daemon_started": false,
+        "dry_runtime_reload_stop": true,
+        "route_aware": {
+            "host": "example.com",
+            "port": "443",
+            "domain": target.domain,
+            "dest": target.dest.to_string(),
+            "dest_is_unspecified": target.dest_is_unspecified(),
+            "system_dns_resolution": false,
+        },
+        "runtime_overview_without_control_plane": true,
+        "overview": {
+            "active_connections": overview["active_connections"],
+            "udp_sessions": overview["udp_sessions"],
+            "udp_task_queues": overview["udp_task_queues"],
+            "udp_task_drop_total": overview["udp_task_drop_total"],
+            "dns_cache_hit_total": overview["dns_cache_hit_total"],
+            "samples": overview["samples"],
+        },
+        "remaining_runtime_evidence": [
+            "daemon live run smoke",
+            "active TCP traffic with mark and mptcp",
+            "active UDP and DNS UDP/53 traffic",
+            "reload success and rollback under injected failure",
+            "daemon runtime Go/Rust benchmark",
+        ],
+    });
+    RunnerOutput::ok(format!("{}\n", smoke))
+}
+
+fn overview_basic_value() -> Value {
     let overview = RuntimeOverview::from_snapshot(
         RuntimeStatsSnapshot {
             updated_at_unix: 1_700_000_300,
@@ -115,69 +164,37 @@ fn overview_basic_json() -> String {
         },
         None,
     );
-    let samples = overview
-        .samples
-        .iter()
-        .map(|sample| {
-            format!(
-                "{{\"timestamp_unix\":{},\"upload_rate\":{},\"download_rate\":{}}}",
-                sample.timestamp_unix, sample.upload_rate, sample.download_rate
-            )
-        })
-        .collect::<Vec<_>>()
-        .join(",");
-    format!(
-        concat!(
-            "{{",
-            "\"updated_at_unix\":{},",
-            "\"upload_rate\":{},",
-            "\"download_rate\":{},",
-            "\"upload_total\":{},",
-            "\"download_total\":{},",
-            "\"active_connections\":{},",
-            "\"udp_sessions\":{},",
-            "\"udp_task_queues\":{},",
-            "\"udp_task_drop_total\":{},",
-            "\"packet_sniffer_sessions\":{},",
-            "\"rss_bytes\":{},",
-            "\"heap_alloc_bytes\":{},",
-            "\"goroutines\":{},",
-            "\"dns_cache_hit_total\":{},",
-            "\"dns_cache_expired_removal_total\":{},",
-            "\"dns_udp_retry_total\":{},",
-            "\"dns_truncated_tcp_fallback_total\":{},",
-            "\"dns_doh_status_failure_total\":{},",
-            "\"dns_doh_content_type_failure_total\":{},",
-            "\"dns_upstream_refresh_success_total\":{},",
-            "\"dns_upstream_refresh_failure_total\":{},",
-            "\"dns_upstream_refresh_stale_reuse_total\":{},",
-            "\"samples\":[{}]",
-            "}}"
-        ),
-        overview.updated_at_unix,
-        overview.upload_rate,
-        overview.download_rate,
-        overview.upload_total,
-        overview.download_total,
-        overview.active_connections,
-        overview.udp_sessions,
-        overview.udp_task_queues,
-        overview.udp_task_drop_total,
-        overview.packet_sniffer_sessions,
-        overview.rss_bytes,
-        overview.heap_alloc_bytes,
-        overview.goroutines,
-        overview.dns.dns_cache_hit_total,
-        overview.dns.dns_cache_expired_removal_total,
-        overview.dns.dns_udp_retry_total,
-        overview.dns.dns_truncated_tcp_fallback_total,
-        overview.dns.dns_doh_status_failure_total,
-        overview.dns.dns_doh_content_type_failure_total,
-        overview.dns.dns_upstream_refresh_success_total,
-        overview.dns.dns_upstream_refresh_failure_total,
-        overview.dns.dns_upstream_refresh_stale_reuse_total,
-        samples
-    )
+    json!({
+        "updated_at_unix": overview.updated_at_unix,
+        "upload_rate": overview.upload_rate,
+        "download_rate": overview.download_rate,
+        "upload_total": overview.upload_total,
+        "download_total": overview.download_total,
+        "active_connections": overview.active_connections,
+        "udp_sessions": overview.udp_sessions,
+        "udp_task_queues": overview.udp_task_queues,
+        "udp_task_drop_total": overview.udp_task_drop_total,
+        "packet_sniffer_sessions": overview.packet_sniffer_sessions,
+        "rss_bytes": overview.rss_bytes,
+        "heap_alloc_bytes": overview.heap_alloc_bytes,
+        "goroutines": overview.goroutines,
+        "dns_cache_hit_total": overview.dns.dns_cache_hit_total,
+        "dns_cache_expired_removal_total": overview.dns.dns_cache_expired_removal_total,
+        "dns_udp_retry_total": overview.dns.dns_udp_retry_total,
+        "dns_truncated_tcp_fallback_total": overview.dns.dns_truncated_tcp_fallback_total,
+        "dns_doh_status_failure_total": overview.dns.dns_doh_status_failure_total,
+        "dns_doh_content_type_failure_total": overview.dns.dns_doh_content_type_failure_total,
+        "dns_upstream_refresh_success_total": overview.dns.dns_upstream_refresh_success_total,
+        "dns_upstream_refresh_failure_total": overview.dns.dns_upstream_refresh_failure_total,
+        "dns_upstream_refresh_stale_reuse_total": overview.dns.dns_upstream_refresh_stale_reuse_total,
+        "samples": overview.samples.iter().map(|sample| {
+            json!({
+                "timestamp_unix": sample.timestamp_unix,
+                "upload_rate": sample.upload_rate,
+                "download_rate": sample.download_rate,
+            })
+        }).collect::<Vec<_>>(),
+    })
 }
 
 fn json_string(value: &str) -> String {
