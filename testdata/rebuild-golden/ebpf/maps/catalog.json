@@ -1,0 +1,132 @@
+{
+  "incompatible_pinned_map_policy": "delete pinned map by parsed map name and retry load once through the same fullLoadBpfObjects path",
+  "maps": [
+    {
+      "flags": 128,
+      "key_size": 4,
+      "max_entries": 1,
+      "name": ".rodata",
+      "pinning": "PinNone",
+      "type": "Array",
+      "value_size": 32
+    },
+    {
+      "flags": 0,
+      "key_size": 8,
+      "max_entries": 65536,
+      "name": "cookie_pid_map",
+      "pinning": "PinByName",
+      "type": "LRUHash",
+      "value_size": 20
+    },
+    {
+      "flags": 0,
+      "key_size": 16,
+      "max_entries": 65536,
+      "name": "domain_routing_map",
+      "pinning": "PinNone",
+      "type": "LRUHash",
+      "value_size": 128
+    },
+    {
+      "flags": 0,
+      "key_size": 40,
+      "max_entries": 65535,
+      "name": "fast_sock",
+      "pinning": "PinNone",
+      "type": "SockHash",
+      "value_size": 8
+    },
+    {
+      "flags": 0,
+      "key_size": 4,
+      "max_entries": 2,
+      "name": "listen_socket_map",
+      "pinning": "PinNone",
+      "type": "SockMap",
+      "value_size": 8
+    },
+    {
+      "flags": 0,
+      "key_size": 4,
+      "max_entries": 1032,
+      "name": "lpm_array_map",
+      "pinning": "PinNone",
+      "type": "ArrayOfMaps",
+      "value_size": 4
+    },
+    {
+      "flags": 0,
+      "key_size": 3,
+      "max_entries": 1024,
+      "name": "outbound_connectivity_map",
+      "pinning": "PinNone",
+      "type": "Hash",
+      "value_size": 4
+    },
+    {
+      "flags": 0,
+      "key_size": 32,
+      "max_entries": 65536,
+      "name": "redirect_track",
+      "pinning": "PinNone",
+      "type": "LRUHash",
+      "value_size": 20
+    },
+    {
+      "flags": 0,
+      "key_size": 4,
+      "max_entries": 1024,
+      "name": "routing_map",
+      "pinning": "PinNone",
+      "type": "Array",
+      "value_size": 24
+    },
+    {
+      "flags": 0,
+      "key_size": 40,
+      "max_entries": 131072,
+      "name": "routing_tuples_map",
+      "pinning": "PinByName",
+      "type": "LRUHash",
+      "value_size": 36
+    },
+    {
+      "flags": 0,
+      "key_size": 4,
+      "max_entries": 8192,
+      "name": "tgid_pname_map",
+      "pinning": "PinByName",
+      "type": "LRUHash",
+      "value_size": 16
+    },
+    {
+      "flags": 0,
+      "key_size": 40,
+      "max_entries": 131072,
+      "name": "udp_conn_state_map",
+      "pinning": "PinNone",
+      "type": "Hash",
+      "value_size": 24
+    },
+    {
+      "flags": 1,
+      "key_size": 20,
+      "max_entries": 2048000,
+      "name": "unused_lpm_type",
+      "pinning": "PinNone",
+      "type": "LPMTrie",
+      "value_size": 4
+    }
+  ],
+  "name": "stage7-bpf-map-catalog",
+  "pinned_reuse": [
+    "cookie_pid_map",
+    "routing_tuples_map",
+    "tgid_pname_map"
+  ],
+  "source": [
+    "control/kern/tproxy.c",
+    "control/bpf_bpfel.go"
+  ]
+}

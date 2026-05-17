@@ -48,9 +48,28 @@ dependencies = [
 ]
 
 [[package]]
+name = "dae-control"
+version = "0.1.0"
+dependencies = [
+ "dae-ebpf-support",
+ "dae-golden",
+ "serde_json",
+]
+
+[[package]]
 name = "dae-core-types"
 version = "0.1.0"
 dependencies = [
+ "dae-golden",
+ "serde_json",
+]
+
+[[package]]
+name = "dae-datapath"
+version = "0.1.0"
+dependencies = [
+ "base64",
+ "dae-ebpf-support",
  "dae-golden",
  "serde_json",
 ]
@@ -63,6 +82,14 @@ dependencies = [
  "dae-golden",
  "serde_json",
  "url",
+]
+
+[[package]]
+name = "dae-ebpf-support"
+version = "0.1.0"
+dependencies = [
+ "dae-golden",
+ "serde_json",
 ]
 
 [[package]]
