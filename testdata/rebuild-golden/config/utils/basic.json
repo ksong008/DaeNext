@@ -1,0 +1,86 @@
+{
+  "base64": {
+    "std": [
+      {
+        "decoded_hex": "6869",
+        "decoded_text": "hi",
+        "input": " aGk ",
+        "name": "trim-and-padding",
+        "ok": true
+      },
+      {
+        "decoded_hex": "6869",
+        "decoded_text": "hi",
+        "input": "aGk",
+        "name": "missing-padding",
+        "ok": true
+      },
+      {
+        "error": "illegal base64 data at input byte 0",
+        "input": "%%%",
+        "name": "invalid-return-original",
+        "ok": false,
+        "return": "%%%"
+      }
+    ],
+    "url": [
+      {
+        "decoded_hex": "6869",
+        "decoded_text": "hi",
+        "input": " aGk ",
+        "name": "trim-and-padding",
+        "ok": true
+      },
+      {
+        "decoded_hex": "6869",
+        "decoded_text": "hi",
+        "input": "aGk",
+        "name": "missing-padding",
+        "ok": true
+      },
+      {
+        "error": "illegal base64 data at input byte 0",
+        "input": "%%%",
+        "name": "invalid-return-original",
+        "ok": false,
+        "return": "%%%"
+      }
+    ]
+  },
+  "name": "config-utils-basic",
+  "notes": "Rust config utilities must keep Go base64 and path-safety compatibility for config parsing and file access.",
+  "path_safety": [
+    {
+      "name": "normal-child-existing",
+      "ok": true
+    },
+    {
+      "name": "dotdot-sibling-name",
+      "ok": true
+    },
+    {
+      "error": "file is out of scope: ..",
+      "name": "lexical-parent-escape",
+      "ok": false
+    },
+    {
+      "name": "missing-child-allowed",
+      "ok": true
+    },
+    {
+      "name": "missing-root-allowed",
+      "ok": true
+    },
+    {
+      "error": "file is out of scope: ../outside",
+      "name": "symlink-dir-escape",
+      "ok": false
+    },
+    {
+      "error": "file is out of scope: ../outside.txt",
+      "name": "symlink-file-escape",
+      "ok": false
+    }
+  ],
+  "source": "common/utils.go:Base64UrlDecode,Base64StdDecode,EnsureFileInSubDir"
+}

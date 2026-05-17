@@ -1,0 +1,48 @@
+{
+  "alive_false_value": 0,
+  "dimensions": [
+    {
+      "ipversion": "4",
+      "l4proto": "tcp",
+      "outbound": 2,
+      "value": 1
+    },
+    {
+      "ipversion": "6",
+      "l4proto": "tcp",
+      "outbound": 2,
+      "value": 1
+    },
+    {
+      "ipversion": "4",
+      "l4proto": "udp",
+      "outbound": 2,
+      "value": 1
+    },
+    {
+      "ipversion": "6",
+      "l4proto": "udp",
+      "outbound": 2,
+      "value": 1
+    }
+  ],
+  "init_callback": {
+    "dryrun": true,
+    "still_writes": true,
+    "value": 1
+  },
+  "key_fields": [
+    "outbound",
+    "l4proto",
+    "ipversion"
+  ],
+  "name": "outbound-connectivity-map-dimensions",
+  "non_init_dryrun": {
+    "writes": false
+  },
+  "source": [
+    "control/control_plane_core.go:outboundAliveChangeCallback",
+    "DAENEW_RUST_REBUILD_MEMO_2026-05-16.md:25.16"
+  ],
+  "udp_53_kernel_exception": true
+}

@@ -10,6 +10,7 @@ dae
 outline.json
 go-mod/
 node_modules/
+rust/target/
 *.log
 .build_tags
 .checkpatch-camelcase.git.

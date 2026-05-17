@@ -1,0 +1,31 @@
+{
+  "fallback": {
+    "collection": "tcp6",
+    "ipversion": "6",
+    "is_dns": false,
+    "l4proto": "tcp"
+  },
+  "input": {
+    "collection": "tcp4",
+    "ipversion": "4",
+    "is_dns": false,
+    "l4proto": "tcp"
+  },
+  "input_after_select": {
+    "collection": "tcp4",
+    "ipversion": "4",
+    "is_dns": false,
+    "l4proto": "tcp"
+  },
+  "ipv4_alive": false,
+  "ipv6_alive": true,
+  "must_not_mutate_arg": true,
+  "name": "outbound-group-ipversion-fallback-no-mutation",
+  "policy": "random",
+  "select_ok": true,
+  "source": [
+    "component/outbound/dialer_group.go:DialerGroup.Select",
+    "component/outbound/dialer_group_test.go:TestDialerGroup_Select_DoesNotMutateNetworkTypeOnFallback"
+  ],
+  "strict_ip_version": false
+}

@@ -1,0 +1,25 @@
+{
+  "cases": [
+    {
+      "dialer0_ms": [
+        300,
+        300,
+        300
+      ],
+      "dialer1_ms": [
+        100,
+        100,
+        100
+      ],
+      "name": "uses-latency-ring-average",
+      "want_index": 1,
+      "want_latency_ms": 100
+    }
+  ],
+  "name": "outbound-group-min-avg10",
+  "policy": "min_avg10",
+  "source": [
+    "component/outbound/dialer_group_test.go:TestDialerGroup_Select_MinAverage10Latencies",
+    "component/outbound/dialer/latencies_n.go"
+  ]
+}

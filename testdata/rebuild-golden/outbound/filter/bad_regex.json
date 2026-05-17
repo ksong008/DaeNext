@@ -1,0 +1,22 @@
+{
+  "bad_regex": "[",
+  "cases": [
+    {
+      "dialer_count": 1,
+      "error_prefix": "bad regexp in filter",
+      "name": "non-empty-dialer-set",
+      "ok": false
+    },
+    {
+      "dialer_count": 0,
+      "name": "empty-dialer-set",
+      "notes": "empty set keeps historical lenient behavior and does not compile filters",
+      "ok": true
+    }
+  ],
+  "name": "outbound-filter-bad-regex",
+  "source": [
+    "component/outbound/filter_test.go:TestDialerSetFilterAndAnnotateBadRegex",
+    "component/outbound/filter_test.go:TestDialerSetFilterAndAnnotateEmptySetDoesNotCompileFilters"
+  ]
+}

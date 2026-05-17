@@ -1,0 +1,16 @@
+[package]
+name = "dae-routing"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+dae-core-types.workspace = true
+regex.workspace = true
+serde_json.workspace = true
+
+[dev-dependencies]
+dae-geodata = { path = "../dae-geodata" }
+dae-golden.workspace = true
+dae-sniffing = { path = "../dae-sniffing" }

@@ -1,0 +1,150 @@
+{
+  "dns_request": {
+    "asis": {
+      "hex": "0xfd",
+      "string": "asis",
+      "value": 253
+    },
+    "example_user_defined": {
+      "string": "\u003cindex: 2\u003e",
+      "value": 2
+    },
+    "logical_and": {
+      "hex": "0xff",
+      "string": "\u003cAND\u003e",
+      "value": 255
+    },
+    "logical_mask": {
+      "hex": "0xfe",
+      "value": 254
+    },
+    "logical_or": {
+      "hex": "0xfe",
+      "string": "\u003cOR\u003e",
+      "value": 254
+    },
+    "reject": {
+      "hex": "0xfc",
+      "string": "reject",
+      "value": 252
+    },
+    "user_defined_max": 251
+  },
+  "dns_response": {
+    "accept": {
+      "hex": "0xfc",
+      "reserved": true,
+      "string": "accept",
+      "value": 252
+    },
+    "example_user_defined": {
+      "reserved": false,
+      "string": "\u003cindex: 2\u003e",
+      "value": 2
+    },
+    "logical_and": {
+      "hex": "0xff",
+      "reserved": true,
+      "string": "\u003cAND\u003e",
+      "value": 255
+    },
+    "logical_mask": {
+      "hex": "0xfe",
+      "value": 254
+    },
+    "logical_or": {
+      "hex": "0xfe",
+      "reserved": true,
+      "string": "\u003cOR\u003e",
+      "value": 254
+    },
+    "reject": {
+      "hex": "0xfd",
+      "reserved": true,
+      "string": "reject",
+      "value": 253
+    },
+    "user_defined_max": 251
+  },
+  "name": "reserved-indices",
+  "notes": "Rust core types must keep these values byte-for-byte compatible with Go daex.",
+  "outbound": {
+    "block": {
+      "reserved": true,
+      "string": "block",
+      "value": 1
+    },
+    "control_plane_routing": {
+      "hex": "0xfd",
+      "reserved": true,
+      "string": "\u003cControl Plane Routing\u003e",
+      "value": 253
+    },
+    "direct": {
+      "reserved": true,
+      "string": "direct",
+      "value": 0
+    },
+    "example_user_defined": {
+      "reserved": false,
+      "string": "\u003cindex: 2\u003e",
+      "value": 2
+    },
+    "logical_and": {
+      "hex": "0xff",
+      "reserved": true,
+      "string": "\u003cAND\u003e",
+      "value": 255
+    },
+    "logical_mask": {
+      "hex": "0xfe",
+      "value": 254
+    },
+    "logical_or": {
+      "hex": "0xfe",
+      "reserved": true,
+      "string": "\u003cOR\u003e",
+      "value": 254
+    },
+    "must_rules": {
+      "hex": "0xfc",
+      "reserved": true,
+      "string": "must_rules",
+      "value": 252
+    },
+    "user_defined_max": 251,
+    "user_defined_min": 2
+  },
+  "reload": {
+    "done": {
+      "byte": 50,
+      "char": "2"
+    },
+    "error": {
+      "byte": 51,
+      "char": "3"
+    },
+    "processing": {
+      "byte": 49,
+      "char": "1"
+    },
+    "send": {
+      "byte": 48,
+      "char": "0"
+    }
+  },
+  "source": [
+    "common/consts/ebpf.go",
+    "common/consts/dns.go",
+    "common/consts/reload.go"
+  ],
+  "tproxy": {
+    "bpf_pin_root": "/sys/fs/bpf",
+    "loopback_ifindex": 1,
+    "mark": 134217728,
+    "mark_hex": "0x08000000",
+    "recognize": 8215,
+    "recognize_hex": "0x2017",
+    "task_comm_len": 16
+  }
+}

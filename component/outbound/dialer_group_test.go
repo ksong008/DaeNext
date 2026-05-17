@@ -156,6 +156,40 @@ func TestDialerGroup_Select_MinLastLatency(t *testing.T) {
 	}
 }
 
+func BenchmarkDialerGroupSelectMinLastLatency(b *testing.B) {
+	option := &dialer.GlobalOption{
+		Log:               log,
+		TcpCheckOptionRaw: dialer.TcpCheckOptionRaw{Raw: []string{testTcpCheckUrl}},
+		CheckDnsOptionRaw: dialer.CheckDnsOptionRaw{Raw: []string{testUdpCheckDns}},
+		CheckInterval:     15 * time.Second,
+	}
+	dialers := make([]*dialer.Dialer, 4)
+	for i := range dialers {
+		dialers[i] = newDirectDialer(option, false)
+	}
+	g := NewDialerGroup(option, "test-group", dialers, annotationsFor(dialers),
+		DialerSelectionPolicy{
+			Policy: consts.DialerSelectionPolicy_MinLastLatency,
+		}, func(alive bool, networkType *dialer.NetworkType, isInit bool) {})
+
+	latencies := []time.Duration{200 * time.Millisecond, 100 * time.Millisecond, 300 * time.Millisecond, 150 * time.Millisecond}
+	for i, d := range dialers {
+		d.MustGetLatencies10(TestNetworkType).AppendLatency(latencies[i])
+		g.MustGetAliveDialerSet(TestNetworkType).NotifyLatencyChange(d, true)
+	}
+
+	b.ReportAllocs()
+	for i := 0; i < b.N; i++ {
+		d, latency, err := g.Select(TestNetworkType, false)
+		if err != nil {
+			b.Fatal(err)
+		}
+		if d != dialers[1] || latency != 100*time.Millisecond {
+			b.Fatalf("unexpected selection: %v %v", d.Property().Name, latency)
+		}
+	}
+}
+
 func TestDialerGroup_Select_MinAverage10Latencies(t *testing.T) {
 	option := &dialer.GlobalOption{
 		Log:               log,
