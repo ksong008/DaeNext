@@ -14,6 +14,8 @@ pub struct ReleaseWorkflowContract {
     pub seed_uses_friendly_filenames: bool,
     pub seed_smoke_test_amd64_v1: bool,
     pub seed_copies_service_example_geodata: bool,
+    pub maps_386_pacman_to_i486: bool,
+    pub package_arch_assignment_shell_safe: bool,
     pub friendly_keys: Vec<&'static str>,
 }
 
@@ -33,6 +35,8 @@ pub fn release_workflow_contract() -> ReleaseWorkflowContract {
         seed_uses_friendly_filenames: true,
         seed_smoke_test_amd64_v1: true,
         seed_copies_service_example_geodata: true,
+        maps_386_pacman_to_i486: true,
+        package_arch_assignment_shell_safe: true,
         friendly_keys: vec![
             "linux-386",
             "linux-amd64v1",
