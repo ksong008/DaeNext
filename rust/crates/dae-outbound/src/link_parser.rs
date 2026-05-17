@@ -79,7 +79,8 @@ fn classify_link(scheme: &str, raw: &str) -> (&'static str, bool, &'static str) 
         "ss" if raw.contains("2022-blake3-") => ("shadowsocks-2022", true, "bridge-or-stub"),
         "ss" => ("shadowsocks", true, "bridge-or-stub"),
         "socks" | "socks5" => ("socks5", true, "native-opt-in"),
-        "http" | "https" | "vmess" | "vless" | "hysteria2" | "tuic" | "juicity" => {
+        "http" | "https" => (scheme_to_protocol(scheme), true, "native-opt-in"),
+        "vmess" | "vless" | "hysteria2" | "tuic" | "juicity" => {
             (scheme_to_protocol(scheme), true, "bridge-or-stub")
         }
         _ => ("unknown", false, "unsupported"),
