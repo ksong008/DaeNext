@@ -1,6 +1,7 @@
 use crate::error::OutboundError;
 use crate::shadowsocks::ShadowsocksLink;
 use crate::trojan::TrojanLink;
+use crate::vless::VLESSLink;
 use crate::vmess::VMessLink;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -84,9 +85,8 @@ fn classify_link(scheme: &str, raw: &str) -> (&'static str, bool, &'static str) 
         "http" | "https" => (scheme_to_protocol(scheme), true, "native-opt-in"),
         "trojan" | "trojan-go" => (trojan_protocol(raw), true, "native-opt-in"),
         "vmess" => ("vmess", true, "native-opt-in"),
-        "vless" | "hysteria2" | "tuic" | "juicity" => {
-            (scheme_to_protocol(scheme), true, "bridge-or-stub")
-        }
+        "vless" => ("vless", true, "native-opt-in"),
+        "hysteria2" | "tuic" | "juicity" => (scheme_to_protocol(scheme), true, "bridge-or-stub"),
         _ => ("unknown", false, "unsupported"),
     }
 }
@@ -139,6 +139,9 @@ fn property_address(scheme: &str, raw: &str) -> Option<String> {
     }
     if scheme == "vmess" {
         return VMessLink::parse(raw).ok().map(|link| link.address());
+    }
+    if scheme == "vless" {
+        return VLESSLink::parse(raw).ok().map(|link| link.address());
     }
     if !matches!(scheme, "socks" | "socks5") {
         return None;
