@@ -11,6 +11,7 @@ pub mod http_proxy;
 pub mod latency;
 pub mod link_parser;
 pub mod policy;
+pub mod shadowsocks;
 pub mod socks5;
 pub mod types;
 
@@ -30,5 +31,8 @@ pub use http_proxy::{HttpConnectOptions, HttpProxyLink, HttpScheme, HttpTranspor
 pub use latency::LatenciesN;
 pub use link_parser::{LinkNode, LinkParseResult, parse_link_chain};
 pub use policy::SelectionPolicy;
+pub use shadowsocks::{
+    CipherFamily, CipherInfo, ShadowsocksLink, ShadowsocksMetadata, Sip003, Sip003Opts,
+};
 pub use socks5::{AddressKind, ServerReply, Socks5Address, Socks5Command, Socks5UdpDatagram};
 pub use types::{IpVersion, L4Proto, NetworkType};
