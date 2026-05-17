@@ -1,0 +1,70 @@
+{
+  "blockers": [
+    "Rust active control plane is still helper/contract based, not a full dae run replacement",
+    "Stage15 shared transport covers contract/IR/helper, not true transport data plane",
+    "REALITY requires uTLS handshake state mutation before default switch",
+    "xHTTP H2/H3 pools and streaming modes require live runtime validation",
+    "gRPC/Meek/Mux require real connection lifecycle validation",
+    "QUIC/H3 protocol data plane remains Go fallback",
+    "AnyTLS session data plane remains Go fallback",
+    "VMess AEAD, VLESS Vision, and Trojan-Go inner transport remain Go fallback",
+    "dae-wing/daed product integration is explicitly deferred"
+  ],
+  "default_switch_allowed": false,
+  "default_switch_decision": "blocked_until_true_rust_dataplane_revalidation_passes",
+  "go_default_path_preserved": true,
+  "go_fallback_required": true,
+  "name": "stage16-daemon-default-readiness",
+  "optin_surfaces": [
+    "DAE_RUST_CONFIG_OPTIN",
+    "DAE_RUST_API_ONLY_OPTIN",
+    "DAE_RUST_USERSPACE_OPTIN",
+    "DAE_RUST_ACTIVE_DATAPATH_OPTIN",
+    "dae-cli-optin outbound"
+  ],
+  "revalidation_required": [
+    "config validate/export default-path helper",
+    "API-only runtime dry-run smoke",
+    "userspace routing DNS outbound sniffing MagicNetwork helper",
+    "active datapath preflight before BPF/tproxy side effects",
+    "outbound native protocol helper matrix",
+    "TLS/uTLS/REALITY active transport",
+    "xHTTP H2/H3 stream and packet modes",
+    "gRPC stream and global cache key isolation",
+    "Meek round tripper polling and cache isolation",
+    "Mux true multiplexing",
+    "QUIC/H3 protocols for Hysteria2 TUIC Juicity",
+    "AnyTLS session multiplexing and packet stream",
+    "VMess AEAD data plane",
+    "VLESS Vision intrinsic TLS/REALITY conn hook",
+    "Trojan-Go shared transport and inner Shadowsocks"
+  ],
+  "rollback": "keep Go default path; unset DAE_RUST_* opt-in envs; restore helper path to Go-only mode",
+  "source": [
+    "DAEX_RUST_REBUILD_PLAN_2026-05-16.md:stage16",
+    "DAEX_RUST_REBUILD_PLAN_2026-05-16.md:stage15-item114",
+    "DAENEW_RUST_REBUILD_MEMO_2026-05-16.md:26",
+    "DAENEW_RUST_REBUILD_MEMO_2026-05-16.md:29",
+    "engine/config_rust_optin.go",
+    "engine/api_rust_optin.go",
+    "engine/userspace_rust_optin.go",
+    "control/rust_active_datapath_optin.go",
+    "rust/crates/dae-cli/src/outbound_runner.rs"
+  ],
+  "stage": "stage16",
+  "stage16_gate_complete": true,
+  "validation_commands": [
+    "cargo test --manifest-path rust/Cargo.toml --workspace",
+    "PATH=/root/.local/go1.25.9/bin:$PATH GOWORK=off go test ./cmd ./engine ./control ./component/outbound ./component/outbound/dialer -count=1",
+    "PATH=/root/.local/go1.25.9/bin:$PATH GOWORK=off go test ./component/outbound -run TestWriteSharedTransportNativeOptInGoldenFixture -count=1",
+    "PATH=/root/.local/go1.25.9/bin:$PATH GOWORK=off go test ./component/outbound -run '^$' -bench 'BenchmarkSharedTransportNativeOptIn' -benchmem -count=1",
+    "cargo build --manifest-path rust/Cargo.toml -p dae-cli --bin dae-cli-optin",
+    "rust/target/debug/dae-cli-optin runtime dry-run-smoke",
+    "rust/target/debug/dae-cli-optin userspace route-match --domain www.example.com --dest 203.0.113.42 --port 443",
+    "rust/target/debug/dae-cli-optin active-datapath preflight --tproxy-port 12345 --so-mark 1234 --mptcp true --lan-count 1 --wan-count 0",
+    "rust/target/debug/dae-cli-optin outbound transport smoke",
+    "make ebpf-test",
+    "make ebpf",
+    "make dae"
+  ]
+}
