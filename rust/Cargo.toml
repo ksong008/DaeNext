@@ -48,5 +48,6 @@ dae-sysdump = { path = "crates/dae-sysdump" }
 dae-trace = { path = "crates/dae-trace" }
 regex = "1"
 serde_json = "1"
+sha1 = "0.10"
 sha2 = "0.10"
 url = "2"
