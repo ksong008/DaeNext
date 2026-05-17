@@ -1,0 +1,18 @@
+{
+  "before_run_reload": {
+    "context_timeout_ms": 10,
+    "error": "context deadline exceeded",
+    "is_deadline": true
+  },
+  "dry_runtime": {
+    "reload_error": "",
+    "run_error": "",
+    "stop_error": ""
+  },
+  "name": "engine-dry-runtime-reload-stop",
+  "notes": "API-only dry runtime accepts reload as a noop once Run is serving, stop exits the loop, and reload before Run waits until context deadline.",
+  "source": [
+    "engine/runtime.go",
+    "engine/runtime_test.go"
+  ]
+}
