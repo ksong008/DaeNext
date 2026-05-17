@@ -1,4 +1,7 @@
 use serde_json::Value;
+use std::fs;
+use std::path::PathBuf;
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use crate::*;
 
@@ -88,6 +91,47 @@ fn validate_and_export_surfaces_are_callable() {
     assert!(outline.contains("\"routing\""));
 }
 
+#[test]
+fn optin_runner_matches_validate_and_export_fixture() {
+    let fixture = load("cli/surface/basic.json");
+    let missing = run_with_args(["validate"]);
+    assert_eq!(missing.exit_code, 1);
+    assert_eq!(
+        missing.stdout.trim_end(),
+        fixture["validate"]["requires_config_message"]
+            .as_str()
+            .unwrap()
+    );
+    assert!(missing.stderr.is_empty());
+
+    let path = write_config("global {}\nrouting {}\n");
+    let validate = run_with_args(["validate", "-c", path.to_str().unwrap()]);
+    assert_eq!(validate.exit_code, 0);
+    assert_eq!(validate.stdout, "");
+    assert_eq!(validate.stderr, "");
+    let _ = fs::remove_file(path);
+
+    let export = run_with_args(["export", "outline"]);
+    assert_eq!(export.exit_code, 0);
+    assert!(export.stdout.ends_with('\n'));
+    assert_eq!(export.stderr, "");
+    let outline: Value = serde_json::from_str(&export.stdout).unwrap();
+    assert_eq!(
+        outline["version"].as_str().unwrap(),
+        fixture["export"]["outline_summary"]["version"]
+            .as_str()
+            .unwrap()
+    );
+    let sections = outline["structure"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|section| section["mapping"].as_str().unwrap())
+        .collect::<Vec<_>>();
+    assert!(sections.contains(&"global"));
+    assert!(sections.contains(&"routing"));
+}
+
 fn assert_commands(got: &[CommandSpec], want: &[Value]) {
     assert_eq!(got.len(), want.len());
     for (got, want) in got.iter().zip(want.iter()) {
@@ -124,4 +168,22 @@ fn assert_commands(got: &[CommandSpec], want: &[Value]) {
 
 fn load(path: &str) -> Value {
     dae_golden::load_json(path).unwrap()
+}
+
+fn write_config(content: &str) -> PathBuf {
+    let nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_nanos();
+    let path = std::env::temp_dir().join(format!(
+        "dae-cli-optin-test-{}-{nanos}.dae",
+        std::process::id()
+    ));
+    fs::write(&path, content).unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o600)).unwrap();
+    }
+    path
 }
