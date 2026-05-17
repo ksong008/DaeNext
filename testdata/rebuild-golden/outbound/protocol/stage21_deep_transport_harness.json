@@ -1,0 +1,92 @@
+{
+  "name": "stage21-shared-transport-deep-harness",
+  "default_go_path": true,
+  "payload_ascii": "stage21-deep-ping",
+  "memo_source": [
+    "DAENEW_RUST_REBUILD_MEMO_2026-05-16.md:26.7",
+    "DAENEW_RUST_REBUILD_MEMO_2026-05-16.md:26.8",
+    "DAENEW_RUST_REBUILD_MEMO_2026-05-16.md:26.18",
+    "DAENEW_RUST_REBUILD_MEMO_2026-05-16.md:26.20",
+    "DAENEW_RUST_REBUILD_MEMO_2026-05-16.md:26.21"
+  ],
+  "reality": {
+    "server_name": "reality.example",
+    "fingerprint": "chrome",
+    "sid_hex": "0123456789abcdef",
+    "pbk_input": "-__--u_uq80BI0VniavN7_v__vrv7qvNASNFZ4mrze8",
+    "pbk_decoded_hex": "fbfffefaefeeabcd0123456789abcdeffbfffefaefeeabcd0123456789abcdef",
+    "spider_x": "/?p=10-20&c=30&t=40&i=50&r=60-70",
+    "unix_seconds": 1715846400,
+    "entropy_hex": "00112233445566778899aabbccddeeff",
+    "session_id_hex": "01080a006645bd000123456789abcdef00112233445566778899aabbccddeeff",
+    "mutation_harness": true,
+    "full_utls_stack": false
+  },
+  "xhttp": {
+    "host": "xhttp.example",
+    "path": "/xhttp?ed=2048",
+    "normalized_path": "/xhttp/",
+    "request_path": "/xhttp/?ed=2048&session=sess-stage21&seq=7",
+    "mode": "packet-up",
+    "security": "tls",
+    "alpn_h2": "h2",
+    "alpn_h3": "h3",
+    "h3_tls_allowed": true,
+    "reality_h3_allowed": false,
+    "session_id": "sess-stage21",
+    "seq": 7,
+    "full_h2_h3_stack": false
+  },
+  "grpc": {
+    "address": "grpc.example:443",
+    "service_name": "GunService",
+    "server_name": "grpc-sni.example",
+    "dialer_id": "dialer-stage21",
+    "allow_insecure": true,
+    "mark": 1234,
+    "mptcp": true,
+    "clean_cache_hook": "CleanGlobalClientConnectionCache",
+    "full_grpc_http2_stack": false
+  },
+  "meek": {
+    "url": "https://front.example/meek",
+    "host": "front.example",
+    "path": "/meek",
+    "session_tag_hex": "00112233445566778899aabbccddeeff",
+    "session_id": "ABEiM0RVZneImaq7zN3u_w",
+    "round_trips": 2,
+    "initial_polling_ms": 100,
+    "max_polling_ms": 1000,
+    "min_polling_ms": 10,
+    "backoff": 1.5,
+    "full_https_round_tripper": false
+  },
+  "mux": {
+    "id_hex": "0000",
+    "host": "127.0.0.1",
+    "port": 0,
+    "network": "tcp",
+    "status_new": 1,
+    "status_keep": 2,
+    "status_end": 3,
+    "option_data": 1,
+    "full_mux_runtime_stack": false
+  },
+  "quic_h3": {
+    "flow_id": 7,
+    "datagram_id": 11,
+    "alpn": "h3",
+    "mark": 1234,
+    "mptcp": false,
+    "udp_datagram_harness": true,
+    "full_quic_h3_stack": false
+  },
+  "fallback_required": [
+    "Go default path remains active",
+    "REALITY/uTLS production handshake still requires full uTLS state mutation",
+    "xHTTP production H2/H3 pools and downloadSettings lifecycle remain gated",
+    "gRPC production HTTP/2 transport remains gated",
+    "Meek production HTTPS RoundTripper remains gated",
+    "QUIC/H3 crypto/datagram stack remains gated"
+  ]
+}
