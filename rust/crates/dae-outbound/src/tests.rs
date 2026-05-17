@@ -1,7 +1,7 @@
 use base64::{Engine as _, engine::general_purpose::STANDARD};
 use serde_json::Value;
 use std::io::{Read, Write};
-use std::net::{TcpListener, TcpStream};
+use std::net::{TcpListener, TcpStream, UdpSocket};
 use std::thread;
 use std::time::Duration;
 
@@ -2328,6 +2328,255 @@ fn stage20_simpleobfs_http_dataplane_echoes_payload() {
     assert_eq!(report.echoed_payload, payload);
 }
 
+#[test]
+fn stage21_reality_mutation_harness_echoes_payload() {
+    let fixture = fixture("outbound/protocol/stage21_deep_transport_harness.json");
+    let payload = fixture["payload_ascii"].as_str().unwrap().as_bytes();
+    let reality = &fixture["reality"];
+    let options = shared_transport::RealityMutationOptions::new(
+        reality["server_name"].as_str().unwrap(),
+        reality["fingerprint"].as_str().unwrap(),
+        reality["sid_hex"].as_str().unwrap(),
+        reality["pbk_input"].as_str().unwrap(),
+        reality["spider_x"].as_str().unwrap(),
+        reality["unix_seconds"].as_u64().unwrap() as u32,
+        reality["entropy_hex"].as_str().unwrap(),
+    )
+    .unwrap();
+    assert_eq!(
+        hex_encode(&options.public_key),
+        reality["pbk_decoded_hex"].as_str().unwrap()
+    );
+    assert_eq!(
+        hex_encode(&shared_transport::reality_session_id(&options)),
+        reality["session_id_hex"].as_str().unwrap()
+    );
+    let (endpoint, handle) =
+        spawn_reality_mutation_echo_server(shared_transport::reality_session_id(&options));
+    let report = shared_transport::reality_mutation_exchange(
+        &endpoint,
+        &options,
+        payload,
+        Duration::from_secs(2),
+    )
+    .unwrap();
+    handle.join().unwrap();
+
+    assert!(report.mutation_harness);
+    assert!(!report.full_utls_stack);
+    assert!(report.default_go_path);
+    assert_eq!(report.transport, "reality-mutation");
+    assert_eq!(
+        report.session_id_hex,
+        reality["session_id_hex"].as_str().unwrap()
+    );
+    assert_eq!(report.echoed_payload, payload);
+}
+
+#[test]
+fn stage21_xhttp_packet_lifecycle_harness_echoes_payload() {
+    let fixture = fixture("outbound/protocol/stage21_deep_transport_harness.json");
+    let payload = fixture["payload_ascii"].as_str().unwrap().as_bytes();
+    let xhttp = &fixture["xhttp"];
+    let options = shared_transport::XHttpLifecycleOptions::new(
+        xhttp["host"].as_str().unwrap(),
+        xhttp["path"].as_str().unwrap(),
+        xhttp["mode"].as_str().unwrap(),
+        xhttp["security"].as_str().unwrap(),
+        xhttp["alpn_h3"].as_str().unwrap(),
+        xhttp["session_id"].as_str().unwrap(),
+        xhttp["seq"].as_u64().unwrap(),
+    )
+    .unwrap();
+    assert_eq!(
+        shared_transport::xhttp_request_path(&options),
+        xhttp["request_path"].as_str().unwrap()
+    );
+    let h3 = shared_transport::ir::validate_xhttp_alpn("tls", xhttp["alpn_h3"].as_str().unwrap());
+    assert_eq!(h3.use_h3, xhttp["h3_tls_allowed"].as_bool().unwrap());
+    let reality_h3 =
+        shared_transport::ir::validate_xhttp_alpn("reality", xhttp["alpn_h3"].as_str().unwrap());
+    assert_eq!(
+        reality_h3.ok,
+        xhttp["reality_h3_allowed"].as_bool().unwrap()
+    );
+
+    let (endpoint, handle) =
+        spawn_xhttp_packet_echo_server(xhttp["request_path"].as_str().unwrap().to_owned());
+    let report = shared_transport::xhttp_packet_exchange(
+        &endpoint,
+        &options,
+        payload,
+        Duration::from_secs(2),
+    )
+    .unwrap();
+    handle.join().unwrap();
+
+    assert!(report.lifecycle_harness);
+    assert!(!report.full_h2_h3_stack);
+    assert!(report.use_h3);
+    assert!(report.default_go_path);
+    assert_eq!(report.transport, "xhttp-packet");
+    assert_eq!(report.echoed_payload, payload);
+}
+
+#[test]
+fn stage21_grpc_cache_and_stream_lifecycle_harness_echoes_payload() {
+    let fixture = fixture("outbound/protocol/stage21_deep_transport_harness.json");
+    let payload = fixture["payload_ascii"].as_str().unwrap().as_bytes();
+    let grpc = &fixture["grpc"];
+    let options = shared_transport::GrpcLifecycleOptions::new(
+        grpc["address"].as_str().unwrap(),
+        grpc["service_name"].as_str().unwrap(),
+        grpc["server_name"].as_str().unwrap(),
+        grpc["dialer_id"].as_str().unwrap(),
+        grpc["allow_insecure"].as_bool().unwrap(),
+        grpc["mark"].as_u64().unwrap() as u32,
+        grpc["mptcp"].as_bool().unwrap(),
+    );
+    let mut cache = shared_transport::GrpcLifecycleCache::default();
+    let first = cache.get_or_insert(&options);
+    let second = cache.get_or_insert(&options);
+    assert!(!first.reused);
+    assert!(second.reused);
+    assert_eq!(second.live_entries, 1);
+    assert_eq!(cache.clean(), 1);
+    assert_eq!(cache.closed_entries(), 1);
+
+    let mut without_mptcp = options.clone();
+    without_mptcp.mptcp = false;
+    assert_ne!(options.cache_key(), without_mptcp.cache_key());
+
+    let (endpoint, handle) = spawn_grpc_hunk_echo_server(grpc["service_name"].as_str().unwrap());
+    let report =
+        shared_transport::grpc_hunk_exchange(&endpoint, &options, payload, Duration::from_secs(2))
+            .unwrap();
+    handle.join().unwrap();
+
+    assert!(report.stream_harness);
+    assert!(!report.full_grpc_http2_stack);
+    assert!(report.default_go_path);
+    assert_eq!(report.transport, "grpc-hunk");
+    assert_eq!(report.service_name, grpc["service_name"].as_str().unwrap());
+    assert_eq!(report.echoed_payload, payload);
+}
+
+#[test]
+fn stage21_meek_polling_roundtripper_harness_echoes_payload() {
+    let fixture = fixture("outbound/protocol/stage21_deep_transport_harness.json");
+    let payload = fixture["payload_ascii"].as_str().unwrap().as_bytes();
+    let meek = &fixture["meek"];
+    let options = shared_transport::MeekRoundTripOptions::from_https_url(
+        meek["url"].as_str().unwrap(),
+        hex_decode(meek["session_tag_hex"].as_str().unwrap()),
+    )
+    .unwrap();
+    assert_eq!(options.host, meek["host"].as_str().unwrap());
+    assert_eq!(options.path, meek["path"].as_str().unwrap());
+    assert_eq!(options.session_id(), meek["session_id"].as_str().unwrap());
+
+    let (endpoint, handle) = spawn_meek_roundtripper_echo_server(
+        meek["path"].as_str().unwrap().to_owned(),
+        meek["session_id"].as_str().unwrap().to_owned(),
+        meek["round_trips"].as_u64().unwrap() as usize,
+    );
+    let empty_poll: &[u8] = b"";
+    let writes = [payload, empty_poll];
+    let report = shared_transport::meek_polling_exchange(
+        &endpoint,
+        &options,
+        &writes,
+        Duration::from_secs(2),
+    )
+    .unwrap();
+    handle.join().unwrap();
+
+    assert!(report.polling_harness);
+    assert!(!report.full_https_round_tripper);
+    assert!(report.default_go_path);
+    assert_eq!(report.transport, "meek-polling");
+    assert_eq!(report.round_trips, 2);
+    assert_eq!(report.echoed_payloads[0], payload);
+    assert_eq!(report.echoed_payloads[1], b"poll-ok");
+}
+
+#[test]
+fn stage21_mux_frame_lifecycle_harness_echoes_payload() {
+    let fixture = fixture("outbound/protocol/stage21_deep_transport_harness.json");
+    let payload = fixture["payload_ascii"].as_str().unwrap().as_bytes();
+    let mux = &fixture["mux"];
+    let id = [0_u8, 0_u8];
+    let options = shared_transport::MuxFrameOptions::new(
+        id,
+        mux["host"].as_str().unwrap(),
+        mux["port"].as_u64().unwrap() as u16,
+        mux["network"].as_str().unwrap(),
+    );
+    assert_eq!(
+        shared_transport::mux::SESSION_STATUS_NEW,
+        mux["status_new"].as_u64().unwrap() as u8
+    );
+    assert_eq!(
+        shared_transport::mux::SESSION_STATUS_KEEP,
+        mux["status_keep"].as_u64().unwrap() as u8
+    );
+    assert_eq!(
+        shared_transport::mux::SESSION_STATUS_END,
+        mux["status_end"].as_u64().unwrap() as u8
+    );
+    assert_eq!(
+        shared_transport::mux::OPTION_DATA,
+        mux["option_data"].as_u64().unwrap() as u8
+    );
+
+    let (endpoint, handle) = spawn_mux_frame_echo_server(id);
+    let report =
+        shared_transport::mux_frame_exchange(&endpoint, &options, payload, Duration::from_secs(2))
+            .unwrap();
+    handle.join().unwrap();
+
+    assert!(report.multiplexing_harness);
+    assert!(!report.full_mux_runtime_stack);
+    assert!(report.default_go_path);
+    assert_eq!(report.transport, "mux-frame");
+    assert_eq!(report.id_hex, mux["id_hex"].as_str().unwrap());
+    assert_eq!(report.echoed_payload, payload);
+}
+
+#[test]
+fn stage21_quic_h3_datagram_harness_echoes_payload() {
+    let fixture = fixture("outbound/protocol/stage21_deep_transport_harness.json");
+    let payload = fixture["payload_ascii"].as_str().unwrap().as_bytes();
+    let quic = &fixture["quic_h3"];
+    let options = shared_transport::QuicH3HarnessOptions::new(
+        quic["flow_id"].as_u64().unwrap() as u32,
+        quic["datagram_id"].as_u64().unwrap() as u32,
+        quic["alpn"].as_str().unwrap(),
+        quic["mark"].as_u64().unwrap() as u32,
+        quic["mptcp"].as_bool().unwrap(),
+    );
+    let packet = shared_transport::quic_h3_datagram_packet(&options, payload).unwrap();
+    let parsed = shared_transport::parse_quic_h3_datagram(&packet).unwrap();
+    assert_eq!(parsed.payload, payload);
+
+    let (endpoint, handle) = spawn_quic_h3_datagram_echo_server();
+    let report = shared_transport::quic_h3_datagram_exchange(
+        &endpoint,
+        &options,
+        payload,
+        Duration::from_secs(2),
+    )
+    .unwrap();
+    handle.join().unwrap();
+
+    assert!(report.udp_datagram_harness);
+    assert!(!report.full_quic_h3_stack);
+    assert!(report.default_go_path);
+    assert_eq!(report.transport, "quic-h3-datagram");
+    assert_eq!(report.alpn, quic["alpn"].as_str().unwrap());
+    assert_eq!(report.echoed_payload, payload);
+}
+
 fn make_group(count: usize, policy: SelectionPolicy) -> DialerGroup {
     DialerGroup::new(
         "test",
@@ -2469,6 +2718,118 @@ fn spawn_simpleobfs_http_echo_server() -> (String, thread::JoinHandle<()>) {
     (addr, handle)
 }
 
+fn spawn_reality_mutation_echo_server(
+    expected_session_id: [u8; 32],
+) -> (String, thread::JoinHandle<()>) {
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let addr = listener.local_addr().unwrap().to_string();
+    let handle = thread::spawn(move || {
+        let (mut stream, _) = listener.accept().unwrap();
+        let message = shared_transport::reality::read_reality_harness_message(&mut stream).unwrap();
+        assert_eq!(message.session_id, expected_session_id);
+        assert_eq!(message.server_name, "reality.example");
+        shared_transport::reality::write_len_payload(&mut stream, &message.payload).unwrap();
+    });
+    (addr, handle)
+}
+
+fn spawn_xhttp_packet_echo_server(expected_path: String) -> (String, thread::JoinHandle<()>) {
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let addr = listener.local_addr().unwrap().to_string();
+    let handle = thread::spawn(move || {
+        let (mut stream, _) = listener.accept().unwrap();
+        let (request, leftover) = read_http_head_and_leftover_for_test(&mut stream);
+        assert!(request.starts_with(&format!("POST {expected_path} HTTP/1.1\r\n")));
+        assert!(request.contains("Host: xhttp.example\r\n"));
+        assert!(request.contains("X-DAE-XHTTP-Mode: packet-up\r\n"));
+        assert!(request.contains("X-DAE-XHTTP-ALPN: h3\r\n"));
+        let body = read_http_body_for_test(&mut stream, &request, leftover);
+        write_http_response_for_test(&mut stream, &body);
+    });
+    (addr, handle)
+}
+
+fn spawn_grpc_hunk_echo_server(expected_service_name: &str) -> (String, thread::JoinHandle<()>) {
+    let expected_service_name = expected_service_name.to_owned();
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let addr = listener.local_addr().unwrap().to_string();
+    let handle = thread::spawn(move || {
+        let (mut stream, _) = listener.accept().unwrap();
+        let (request, leftover) = read_http_head_and_leftover_for_test(&mut stream);
+        assert!(request.starts_with(&format!("POST /{expected_service_name}/Tun HTTP/2\r\n")));
+        assert!(request.contains("content-type: application/grpc\r\n"));
+        let payload = read_grpc_hunk_frame_for_test(&mut stream, leftover);
+        stream
+            .write_all(&shared_transport::grpc_hunk_frame(&payload).unwrap())
+            .unwrap();
+    });
+    (addr, handle)
+}
+
+fn spawn_meek_roundtripper_echo_server(
+    expected_path: String,
+    expected_session_id: String,
+    round_trips: usize,
+) -> (String, thread::JoinHandle<()>) {
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let addr = listener.local_addr().unwrap().to_string();
+    let handle = thread::spawn(move || {
+        for _ in 0..round_trips {
+            let (mut stream, _) = listener.accept().unwrap();
+            let (request, leftover) = read_http_head_and_leftover_for_test(&mut stream);
+            assert!(request.starts_with(&format!("POST {expected_path} HTTP/1.1\r\n")));
+            assert!(request.contains("Host: front.example\r\n"));
+            assert!(request.contains(&format!("X-Session-ID: {expected_session_id}\r\n")));
+            let body = read_http_body_for_test(&mut stream, &request, leftover);
+            if body.is_empty() {
+                write_http_response_for_test(&mut stream, b"poll-ok");
+            } else {
+                write_http_response_for_test(&mut stream, &body);
+            }
+        }
+    });
+    (addr, handle)
+}
+
+fn spawn_mux_frame_echo_server(expected_id: [u8; 2]) -> (String, thread::JoinHandle<()>) {
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let addr = listener.local_addr().unwrap().to_string();
+    let handle = thread::spawn(move || {
+        let (mut stream, _) = listener.accept().unwrap();
+        let new_frame = shared_transport::mux::read_mux_frame(&mut stream).unwrap();
+        assert_eq!(new_frame.id, expected_id);
+        assert_eq!(new_frame.status, shared_transport::mux::SESSION_STATUS_NEW);
+        let data_frame = shared_transport::mux::read_mux_frame(&mut stream).unwrap();
+        assert_eq!(data_frame.id, expected_id);
+        assert_eq!(
+            data_frame.status,
+            shared_transport::mux::SESSION_STATUS_KEEP
+        );
+        assert_eq!(data_frame.option, shared_transport::mux::OPTION_DATA);
+        stream
+            .write_all(&shared_transport::mux_data_frame(expected_id, &data_frame.payload).unwrap())
+            .unwrap();
+        let end_frame = shared_transport::mux::read_mux_frame(&mut stream).unwrap();
+        assert_eq!(end_frame.id, expected_id);
+        assert_eq!(end_frame.status, shared_transport::mux::SESSION_STATUS_END);
+    });
+    (addr, handle)
+}
+
+fn spawn_quic_h3_datagram_echo_server() -> (String, thread::JoinHandle<()>) {
+    let socket = UdpSocket::bind("127.0.0.1:0").unwrap();
+    let addr = socket.local_addr().unwrap().to_string();
+    let handle = thread::spawn(move || {
+        let mut buf = [0_u8; 2048];
+        let (n, peer) = socket.recv_from(&mut buf).unwrap();
+        let parsed = shared_transport::parse_quic_h3_datagram(&buf[..n]).unwrap();
+        assert_eq!(parsed.flow_id, 7);
+        assert_eq!(parsed.datagram_id, 11);
+        socket.send_to(&buf[..n], peer).unwrap();
+    });
+    (addr, handle)
+}
+
 fn read_socks5_addr_for_test(stream: &mut TcpStream) -> Vec<u8> {
     let mut atyp = [0_u8; 1];
     stream.read_exact(&mut atyp).unwrap();
@@ -2515,6 +2876,58 @@ fn read_http_head_and_leftover_for_test(stream: &mut TcpStream) -> (String, Vec<
             return (String::from_utf8(data).unwrap(), leftover);
         }
     }
+}
+
+fn read_http_body_for_test(
+    stream: &mut TcpStream,
+    request: &str,
+    mut leftover: Vec<u8>,
+) -> Vec<u8> {
+    let content_length = content_length_for_test(request);
+    while leftover.len() < content_length {
+        let mut buf = vec![0_u8; content_length - leftover.len()];
+        let n = stream.read(&mut buf).unwrap();
+        assert!(n > 0);
+        leftover.extend_from_slice(&buf[..n]);
+    }
+    leftover.truncate(content_length);
+    leftover
+}
+
+fn write_http_response_for_test(stream: &mut TcpStream, body: &[u8]) {
+    stream
+        .write_all(format!("HTTP/1.1 200 OK\r\nContent-Length: {}\r\n\r\n", body.len()).as_bytes())
+        .unwrap();
+    stream.write_all(body).unwrap();
+}
+
+fn read_grpc_hunk_frame_for_test(stream: &mut TcpStream, mut data: Vec<u8>) -> Vec<u8> {
+    while data.len() < 5 {
+        let mut buf = [0_u8; 64];
+        let n = stream.read(&mut buf).unwrap();
+        assert!(n > 0);
+        data.extend_from_slice(&buf[..n]);
+    }
+    assert_eq!(data[0], 0);
+    let payload_len = u32::from_be_bytes([data[1], data[2], data[3], data[4]]) as usize;
+    while data.len() < 5 + payload_len {
+        let mut buf = vec![0_u8; 5 + payload_len - data.len()];
+        let n = stream.read(&mut buf).unwrap();
+        assert!(n > 0);
+        data.extend_from_slice(&buf[..n]);
+    }
+    data[5..5 + payload_len].to_vec()
+}
+
+fn content_length_for_test(request: &str) -> usize {
+    request
+        .split("\r\n")
+        .find_map(|line| {
+            let (key, value) = line.split_once(':')?;
+            key.eq_ignore_ascii_case("content-length")
+                .then(|| value.trim().parse::<usize>().unwrap())
+        })
+        .unwrap_or(0)
 }
 
 fn echo_one_payload_with_leftover(stream: &mut TcpStream, mut leftover: Vec<u8>) {
