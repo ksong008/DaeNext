@@ -1,0 +1,46 @@
+{
+  "name": "stage7-reload-bpf-ownership",
+  "rule": "fresh core owns bpf.Close until EjectBpf removes it; reload core starts without bpf.Close and toggles coreFlip",
+  "source": [
+    "control/control_plane_core.go",
+    "control/control_plane.go",
+    "engine/runtime.go"
+  ],
+  "steps": [
+    {
+      "bpf_ejected": false,
+      "defer_func_count": 2,
+      "flip": 0,
+      "is_reload": false,
+      "step": "fresh_init"
+    },
+    {
+      "bpf_ejected": true,
+      "defer_func_count": 1,
+      "flip": 0,
+      "is_reload": false,
+      "step": "after_eject"
+    },
+    {
+      "bpf_ejected": false,
+      "defer_func_count": 2,
+      "flip": 0,
+      "is_reload": false,
+      "step": "after_inject"
+    },
+    {
+      "bpf_ejected": false,
+      "defer_func_count": 1,
+      "flip": 1,
+      "is_reload": true,
+      "step": "reload_init"
+    },
+    {
+      "bpf_ejected": true,
+      "defer_func_count": 1,
+      "flip": 1,
+      "is_reload": true,
+      "step": "reload_after_eject"
+    }
+  ]
+}

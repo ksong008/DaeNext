@@ -1,0 +1,46 @@
+{
+  "events": [
+    {
+      "key": {
+        "ipversion": 4,
+        "l4proto": 6,
+        "label": "tcp4",
+        "outbound": 2
+      },
+      "name": "dryrun_init_tcp4_alive",
+      "state_len": 1,
+      "value": 1,
+      "written": true
+    },
+    {
+      "key": {
+        "ipversion": 4,
+        "l4proto": 6,
+        "label": "tcp4",
+        "outbound": 2
+      },
+      "name": "dryrun_runtime_tcp4_dead_skipped",
+      "state_len": 1,
+      "value": 1,
+      "written": false
+    },
+    {
+      "key": {
+        "ipversion": 6,
+        "l4proto": 22,
+        "label": "udp6",
+        "outbound": 3
+      },
+      "name": "ip_mode_runtime_udp6_dead_written",
+      "state_len": 2,
+      "value": 0,
+      "written": true
+    }
+  ],
+  "name": "stage7-outbound-connectivity-dryrun",
+  "rule": "dryrun updates write only during init; ip dial mode updates every runtime alive change",
+  "source": [
+    "control/connectivity.go",
+    "common/consts/dialer.go"
+  ]
+}
