@@ -22,8 +22,11 @@ name = "dae-cli"
 version = "0.1.0"
 dependencies = [
  "dae-config",
+ "dae-control",
  "dae-core-types",
+ "dae-datapath",
  "dae-dns",
+ "dae-ebpf-support",
  "dae-engine",
  "dae-golden",
  "dae-netutil",

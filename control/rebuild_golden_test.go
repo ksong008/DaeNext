@@ -27,6 +27,7 @@ func TestWriteControlDatapathGoldenFixtures(t *testing.T) {
 	writeOrCheckControlGolden(t, "../testdata/rebuild-golden/ebpf/kernel_features/basic.json", rebuildGoldenStage7KernelFeatures())
 	writeOrCheckControlGolden(t, "../testdata/rebuild-golden/control/domain_routing_tracker/basic.json", rebuildGoldenStage7DomainRoutingTracker(t))
 	writeOrCheckControlGolden(t, "../testdata/rebuild-golden/control/reload_bpf_ownership/eject_inject.json", rebuildGoldenStage7ReloadBpfOwnership())
+	writeOrCheckControlGolden(t, "../testdata/rebuild-golden/control/active_datapath/optin_contract.json", rebuildGoldenStage14ActiveDatapathOptInContract())
 	writeOrCheckControlGolden(t, "../testdata/rebuild-golden/control/outbound_connectivity/dryrun.json", rebuildGoldenStage7OutboundConnectivity())
 	writeOrCheckControlGolden(t, "../testdata/rebuild-golden/datapath/udp_pools/basic.json", rebuildGoldenStage7UdpPools())
 	writeOrCheckControlGolden(t, "../testdata/rebuild-golden/datapath/route_loop/basic.json", rebuildGoldenStage7RouteLoop())
@@ -446,6 +447,117 @@ func rebuildGoldenStage7ReloadBpfOwnership() any {
 		},
 		"steps": steps,
 		"rule":  "fresh core owns bpf.Close until EjectBpf removes it; reload core starts without bpf.Close and toggles coreFlip",
+	}
+}
+
+func rebuildGoldenStage14ActiveDatapathOptInContract() any {
+	encodedMagicNetwork := common.MagicNetwork("tcp", 1234, true)
+	return map[string]any{
+		"name": "stage14-active-datapath-optin-contract",
+		"source": []string{
+			"control/rust_active_datapath_optin.go",
+			"control/control_plane.go",
+			"control/control_plane_core.go",
+			"control/netns_utils.go",
+			"control/kern/tproxy.c",
+			"engine/runtime.go",
+			"rust/crates/dae-cli/src/active_datapath_runner.rs",
+			"DAEX_RUST_REBUILD_PLAN_2026-05-16.md:stage14",
+		},
+		"notes": "Stage 14 adds a Rust active-datapath opt-in preflight gate before Go control plane loads eBPF; default Go attach, tproxy and reload behavior stay unchanged unless DAE_RUST_ACTIVE_DATAPATH_OPTIN is explicitly enabled.",
+		"opt_in": map[string]any{
+			"enable_env":          rustActiveDatapathOptInEnv,
+			"helper_env":          rustActiveDatapathHelperEnv,
+			"helper_default":      rustActiveDatapathHelperDefault,
+			"disabled_is_go_path": true,
+			"helper_timeout":      rustActiveDatapathHelperTimeout.String(),
+			"rollback":            "unset DAE_RUST_ACTIVE_DATAPATH_OPTIN before daemon start or reload",
+		},
+		"helper_commands": map[string]any{
+			"preflight": []string{
+				"dae-cli-optin", "active-datapath", "preflight",
+				"--tproxy-port", "12345",
+				"--so-mark", "1234",
+				"--mptcp", "true",
+				"--lan-count", "1",
+				"--wan-count", "0",
+			},
+			"contract":   []string{"dae-cli-optin", "active-datapath", "contract"},
+			"reload":     []string{"dae-cli-optin", "active-datapath", "reload-ownership"},
+			"magic_dial": []string{"dae-cli-optin", "active-datapath", "magic-dial", "--network", "tcp", "--mark", "1234", "--mptcp", "true"},
+		},
+		"active_path_gate": map[string]any{
+			"called_from":             "control.NewControlPlane",
+			"called_before":           "rlimit.RemoveMemlock, netns setup, fullLoadBpfObjects, tc attach, tproxy listeners",
+			"requires_explicit_env":   true,
+			"default_go_attach_path":  true,
+			"helper_failure_aborts":   true,
+			"pre_side_effect_failure": true,
+		},
+		"required_environment": []map[string]any{
+			{"name": "root", "required": true},
+			{"name": "bpffs", "required": true},
+			{"name": "netns_permission", "required": true},
+			{"name": "memlock", "required": true},
+			{"name": "kernel_feature_version", "required": true},
+		},
+		"ebpf_loader": map[string]any{
+			"pin_root":                       consts.BpfPinRoot,
+			"pinned_reuse_maps":              []string{"cookie_pid_map", "routing_tuples_map", "tgid_pname_map"},
+			"incompatible_pinned_map_action": "delete pinned map and retry",
+			"tproxy_port_big_endian":         common.Htons(12345),
+			"listen_socket_map_keys":         []int{0, 1},
+			"map_catalog_fixture":            "ebpf/maps/catalog.json",
+		},
+		"attach_order": []string{
+			"kernel feature gate",
+			"remove memlock",
+			"netns setup",
+			"load or reuse eBPF objects",
+			"bind LAN tc filters",
+			"bind WAN tc/cgroup filters",
+			"bind dae0/dae0peer tc filters",
+			"build routing kernspace/userspace",
+			"create DNS controller",
+			"ListenAndServe writes TCP/UDP sockets into listen_socket_map",
+		},
+		"reload": map[string]any{
+			"fixture":                          "control/reload_bpf_ownership/eject_inject.json",
+			"fresh_owns_bpf_close":             true,
+			"eject_removes_bpf_close":          true,
+			"reload_core_starts_without_close": true,
+			"rollback_injects_old_bpf":         true,
+			"dns_cache_snapshot_required":      true,
+			"listener_reuse_required":          true,
+		},
+		"tcp_udp": map[string]any{
+			"tcp_sniff_before_bpf_result":   true,
+			"tcp_relay_uses_sniffer_reader": true,
+			"tcp_route_dial_can_reroute":    true,
+			"udp_53_dns_controller":         true,
+			"udp_must_rules_bypass_dns":     true,
+			"udp_quic_sniff_can_reroute":    true,
+			"udp_quic_target_stays_ip":      true,
+			"udp_endpoint_pool_fixture":     "datapath/udp_pools/basic.json",
+			"packet_sniffer_pool_required":  true,
+		},
+		"magic_network": map[string]any{
+			"network":        "tcp",
+			"mark":           1234,
+			"mptcp":          true,
+			"encoded_b64":    base64.StdEncoding.EncodeToString([]byte(encodedMagicNetwork)),
+			"is_plain":       encodedMagicNetwork == "tcp",
+			"active_path":    true,
+			"preserve_mark":  true,
+			"preserve_mptcp": true,
+		},
+		"netns_same_interface_risk": map[string]any{
+			"fixture_source":             "DAENEW_RUST_REBUILD_MEMO_2026-05-16.md:34",
+			"lan_wan_same_physical_port": true,
+			"tc_act_pipe_required":       true,
+			"do_not_reorder_tc_filters":  true,
+			"netkit_native_attach_defer": true,
+		},
 	}
 }
 
