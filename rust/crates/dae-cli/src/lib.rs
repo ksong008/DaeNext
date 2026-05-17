@@ -5,6 +5,7 @@ pub mod export;
 pub(crate) mod outbound_runner;
 pub mod progress;
 pub mod runner;
+pub(crate) mod runtime_live_plan;
 pub(crate) mod runtime_runner;
 pub mod surface;
 pub(crate) mod userspace_runner;

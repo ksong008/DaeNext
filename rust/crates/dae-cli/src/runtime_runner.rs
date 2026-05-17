@@ -9,6 +9,7 @@ use dae_engine::{
 use serde_json::{Value, json};
 
 use crate::runner::RunnerOutput;
+use crate::runtime_live_plan::run_stage22_live_plan;
 
 pub(crate) fn run_runtime(args: &[String]) -> RunnerOutput {
     match args.first().map(String::as_str) {
@@ -16,6 +17,7 @@ pub(crate) fn run_runtime(args: &[String]) -> RunnerOutput {
         Some("route-target") => run_route_target(&args[1..]),
         Some("overview-basic") => run_overview_basic(),
         Some("stage22-smoke") => run_stage22_smoke(),
+        Some("stage22-live-plan") => run_stage22_live_plan(&args[1..]),
         Some(subcommand) => {
             RunnerOutput::usage(format!("unsupported runtime subcommand: {subcommand}"))
         }
