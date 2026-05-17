@@ -161,6 +161,18 @@ fn release_workflow_contract_matches_golden_fixture() {
             .unwrap()
     );
     assert_eq!(
+        contract.maps_386_pacman_to_i486,
+        fixture["package_arch"]["maps_386_pacman_to_i486"]
+            .as_bool()
+            .unwrap()
+    );
+    assert_eq!(
+        contract.package_arch_assignment_shell_safe,
+        fixture["package_arch"]["assignment_shell_safe"]
+            .as_bool()
+            .unwrap()
+    );
+    assert_eq!(
         contract.friendly_keys,
         fixture["friendly_keys"]
             .as_array()
@@ -169,6 +181,25 @@ fn release_workflow_contract_matches_golden_fixture() {
             .map(|value| value.as_str().unwrap())
             .collect::<Vec<_>>()
     );
+}
+
+#[test]
+fn release_workflow_package_arch_mapping_is_shell_safe() {
+    let root = dae_golden::repo_root_from_manifest().unwrap();
+    for workflow in [
+        ".github/workflows/release.yml",
+        ".github/workflows/prerelease.yml",
+    ] {
+        let text = std::fs::read_to_string(root.join(workflow)).unwrap();
+        assert!(
+            !text.contains("pkg_arch'i486'"),
+            "{workflow} contains a broken 386 pacman pkg_arch assignment"
+        );
+        assert!(
+            text.contains("'pacman') pkg_arch='i486' ;;"),
+            "{workflow} does not map 386 pacman packages to i486"
+        );
+    }
 }
 
 #[test]
