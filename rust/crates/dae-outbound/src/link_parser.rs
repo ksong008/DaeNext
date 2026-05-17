@@ -1,4 +1,5 @@
 use crate::error::OutboundError;
+use crate::hysteria2::Hysteria2Link;
 use crate::shadowsocks::ShadowsocksLink;
 use crate::trojan::TrojanLink;
 use crate::vless::VLESSLink;
@@ -86,7 +87,8 @@ fn classify_link(scheme: &str, raw: &str) -> (&'static str, bool, &'static str) 
         "trojan" | "trojan-go" => (trojan_protocol(raw), true, "native-opt-in"),
         "vmess" => ("vmess", true, "native-opt-in"),
         "vless" => ("vless", true, "native-opt-in"),
-        "hysteria2" | "tuic" | "juicity" => (scheme_to_protocol(scheme), true, "bridge-or-stub"),
+        "hysteria2" | "hy2" => ("hysteria2", true, "native-opt-in"),
+        "tuic" | "juicity" => (scheme_to_protocol(scheme), true, "bridge-or-stub"),
         _ => ("unknown", false, "unsupported"),
     }
 }
@@ -99,9 +101,9 @@ fn scheme_to_protocol(scheme: &str) -> &'static str {
         "ss" | "shadowsocks" => "shadowsocks",
         "vmess" => "vmess",
         "vless" => "vless",
+        "hysteria2" | "hy2" => "hysteria2",
         "trojan" => "trojan",
         "trojan-go" => "trojan-go",
-        "hysteria2" => "hysteria2",
         "tuic" => "tuic",
         "juicity" => "juicity",
         _ => "unknown",
@@ -142,6 +144,11 @@ fn property_address(scheme: &str, raw: &str) -> Option<String> {
     }
     if scheme == "vless" {
         return VLESSLink::parse(raw).ok().map(|link| link.address());
+    }
+    if matches!(scheme, "hysteria2" | "hy2") {
+        return Hysteria2Link::parse(raw)
+            .ok()
+            .map(|link| link.property_address());
     }
     if !matches!(scheme, "socks" | "socks5") {
         return None;
