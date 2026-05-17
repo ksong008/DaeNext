@@ -135,6 +135,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "dae-product"
+version = "0.1.0"
+dependencies = [
+ "dae-golden",
+ "serde_json",
+]
+
+[[package]]
 name = "dae-routing"
 version = "0.1.0"
 dependencies = [
@@ -151,6 +159,22 @@ name = "dae-sniffing"
 version = "0.1.0"
 dependencies = [
  "dae-config-util",
+ "dae-golden",
+ "serde_json",
+]
+
+[[package]]
+name = "dae-sysdump"
+version = "0.1.0"
+dependencies = [
+ "dae-golden",
+ "serde_json",
+]
+
+[[package]]
+name = "dae-trace"
+version = "0.1.0"
+dependencies = [
  "dae-golden",
  "serde_json",
 ]

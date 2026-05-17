@@ -1,0 +1,104 @@
+{
+  "name": "sysdump-enum-strings",
+  "protocol": [
+    {
+      "string": "babel",
+      "value": 42
+    },
+    {
+      "string": "bgp",
+      "value": 186
+    },
+    {
+      "string": "bird",
+      "value": 12
+    },
+    {
+      "string": "boot",
+      "value": 3
+    },
+    {
+      "string": "dhcp",
+      "value": 16
+    },
+    {
+      "string": "kernel",
+      "value": 2
+    },
+    {
+      "string": "static",
+      "value": 4
+    },
+    {
+      "string": "unspec",
+      "value": 0
+    },
+    {
+      "string": "unknown",
+      "value": 255
+    }
+  ],
+  "route_type": [
+    {
+      "string": "unspec",
+      "value": 0
+    },
+    {
+      "string": "unicast",
+      "value": 1
+    },
+    {
+      "string": "local",
+      "value": 2
+    },
+    {
+      "string": "broadcast",
+      "value": 3
+    },
+    {
+      "string": "blackhole",
+      "value": 6
+    },
+    {
+      "string": "unreachable",
+      "value": 7
+    },
+    {
+      "string": "prohibit",
+      "value": 8
+    },
+    {
+      "string": "unknown",
+      "value": 255
+    }
+  ],
+  "scope": [
+    {
+      "string": "universe",
+      "value": 0
+    },
+    {
+      "string": "site",
+      "value": 200
+    },
+    {
+      "string": "link",
+      "value": 253
+    },
+    {
+      "string": "host",
+      "value": 254
+    },
+    {
+      "string": "nowhere",
+      "value": 255
+    },
+    {
+      "string": "nowhere",
+      "value": 255
+    }
+  ],
+  "source": [
+    "cmd/sysdump.go"
+  ]
+}
