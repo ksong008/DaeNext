@@ -1,5 +1,6 @@
 pub mod alive;
 pub mod annotation;
+pub mod anytls;
 pub mod connectivity;
 pub mod dialer;
 pub mod direct;
@@ -26,6 +27,7 @@ mod tests;
 
 pub use alive::AliveDialerSet;
 pub use annotation::Annotation;
+pub use anytls::AnyTLSLink;
 pub use connectivity::{ConnectivityMap, OutboundConnectivityKey};
 pub use dialer::{Collection, Dialer};
 pub use direct::{DirectOption, ResolverChoice, select_direct_resolver};
