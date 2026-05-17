@@ -24,6 +24,10 @@
     "linux-s390x"
   ],
   "name": "stage8-release-workflow-contract",
+  "package_arch": {
+    "assignment_shell_safe": true,
+    "maps_386_pacman_to_i486": true
+  },
   "release": {
     "build_output_pkgdir": true,
     "checks_existing_tag_sha": true,
