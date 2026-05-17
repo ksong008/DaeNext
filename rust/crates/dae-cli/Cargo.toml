@@ -1,0 +1,15 @@
+[package]
+name = "dae-cli"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+dae-config.workspace = true
+dae-core-types.workspace = true
+dae-engine.workspace = true
+
+[dev-dependencies]
+dae-golden.workspace = true
+serde_json.workspace = true

@@ -1,0 +1,21 @@
+{
+  "active_tags": [
+    "active"
+  ],
+  "concurrency_limit": 6,
+  "input_files": [
+    "active.sub",
+    "stale.sub",
+    "note.txt"
+  ],
+  "missing_dir_error": "",
+  "name": "engine-subscription-persist-cleanup",
+  "notes": "Current daenew cleanup trims a .sub suffix to derive the tag and removes any inactive persist.d entry; missing persist.d is ignored.",
+  "remaining_files": [
+    "active.sub"
+  ],
+  "source": [
+    "engine/runtime.go",
+    "common/subscription/subscription.go"
+  ]
+}

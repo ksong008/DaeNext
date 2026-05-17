@@ -1,9 +1,11 @@
 [workspace]
 members = [
+    "crates/dae-cli",
     "crates/dae-config",
     "crates/dae-config-util",
     "crates/dae-core-types",
     "crates/dae-dns",
+    "crates/dae-engine",
     "crates/dae-geodata",
     "crates/dae-golden",
     "crates/dae-netutil",
@@ -21,9 +23,12 @@ repository = "https://github.com/daeuniverse/dae"
 
 [workspace.dependencies]
 base64 = "0.22"
+dae-cli = { path = "crates/dae-cli" }
 dae-config-util = { path = "crates/dae-config-util" }
+dae-config = { path = "crates/dae-config" }
 dae-core-types = { path = "crates/dae-core-types" }
 dae-dns = { path = "crates/dae-dns" }
+dae-engine = { path = "crates/dae-engine" }
 dae-golden = { path = "crates/dae-golden" }
 dae-outbound = { path = "crates/dae-outbound" }
 regex = "1"
