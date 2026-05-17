@@ -1,0 +1,173 @@
+{
+  "auth_key": {
+    "auth": "auth",
+    "key_len": 32,
+    "sha256_hex": "bdf49c3c3882102fc017ffb661108c63a836d065888a4093994398cc55c2ea2f"
+  },
+  "default_go_path": true,
+  "deferred_protocol_scope": [
+    "transport-combos"
+  ],
+  "insecure_cases": [
+    {
+      "input": "anytls://auth@example.com:443?insecure=1#one",
+      "insecure": true,
+      "name": "one"
+    },
+    {
+      "input": "anytls://auth@example.com:443?insecure=true#true",
+      "insecure": false,
+      "name": "true-string"
+    },
+    {
+      "input": "anytls://auth@example.com:443?insecure=0#zero",
+      "insecure": false,
+      "name": "zero"
+    }
+  ],
+  "link_parser": [
+    {
+      "auth": "auth",
+      "case": "basic-insecure",
+      "host": "example.com:443",
+      "hostname": "example.com",
+      "input": "anytls://auth@example.com:443?insecure=1\u0026sni=sni.example#basic",
+      "insecure": true,
+      "link_preserved": "anytls://auth@example.com:443?insecure=1\u0026sni=sni.example#basic",
+      "name": "basic",
+      "property_address": "example.com:443",
+      "property_link": "anytls://auth@example.com:443?insecure=1\u0026sni=sni.example#basic",
+      "property_name": "basic",
+      "property_protocol": "anytls",
+      "protocol": "anytls",
+      "sni": "sni.example",
+      "tls_server_name": "sni.example"
+    },
+    {
+      "auth": "auth",
+      "case": "peer-overrides-sni-insecure-true-is-false",
+      "host": "example.com:8443",
+      "hostname": "example.com",
+      "input": "anytls://auth@example.com:8443?sni=sni.example\u0026peer=peer.example\u0026insecure=true#peer",
+      "insecure": false,
+      "link_preserved": "anytls://auth@example.com:8443?sni=sni.example\u0026peer=peer.example\u0026insecure=true#peer",
+      "name": "peer",
+      "property_address": "example.com:8443",
+      "property_link": "anytls://auth@example.com:8443?sni=sni.example\u0026peer=peer.example\u0026insecure=true#peer",
+      "property_name": "peer",
+      "property_protocol": "anytls",
+      "protocol": "anytls",
+      "sni": "peer.example",
+      "tls_server_name": "peer.example"
+    },
+    {
+      "auth": "auth",
+      "case": "default-sni-hostname",
+      "host": "example.com:443",
+      "hostname": "example.com",
+      "input": "anytls://auth@example.com:443#default-sni",
+      "insecure": false,
+      "link_preserved": "anytls://auth@example.com:443#default-sni",
+      "name": "default-sni",
+      "property_address": "example.com:443",
+      "property_link": "anytls://auth@example.com:443#default-sni",
+      "property_name": "default-sni",
+      "property_protocol": "anytls",
+      "protocol": "anytls",
+      "sni": "example.com",
+      "tls_server_name": "example.com"
+    }
+  ],
+  "live_smoke_required": [
+    "local parser smoke for AnyTLS",
+    "local auth key / frame contract smoke",
+    "local UDP magic domain / underlay contract smoke"
+  ],
+  "name": "stage15-anytls-native-optin",
+  "packet_stream": {
+    "first_write_hex": "01030b6578616d706c652e636f6d0035000470696e67",
+    "next_write_hex": "000470696e67",
+    "udp_input_target": "example.com:53",
+    "udp_magic_domain": "sp.v2.udp-over-tcp.arpa",
+    "udp_original_packet_addr": "example.com:53",
+    "udp_stream_target": "sp.v2.udp-over-tcp.arpa:53"
+  },
+  "protocol_scope": [
+    "anytls"
+  ],
+  "rust_adapter_mode": "native-opt-in",
+  "session_contract": {
+    "first_handshake": {
+      "auth_key_then_zero_u16_hex": "bdf49c3c3882102fc017ffb661108c63a836d065888a4093994398cc55c2ea2f0000"
+    },
+    "frame": {
+      "cmd_alert": 5,
+      "cmd_fin": 3,
+      "cmd_heart_request": 8,
+      "cmd_heart_response": 9,
+      "cmd_psh": 2,
+      "cmd_server_settings": 10,
+      "cmd_settings": 4,
+      "cmd_syn": 1,
+      "cmd_synack": 7,
+      "cmd_update_padding": 6,
+      "cmd_waste": 0,
+      "header_overhead_size": 7,
+      "psh_addr_frame_hex": "0200000001000f030b6578616d706c652e636f6d01bb",
+      "settings_frame_hex": "0400000001003b763d320a636c69656e743d6461650a70616464696e672d6d64353d3735636666326164383961616466356532353730353965653537316562653131",
+      "syn_frame_hex": "01000000010000"
+    },
+    "idle_session_reuse_map": true,
+    "padding": {
+      "check_mark": -1,
+      "md5": "75cff2ad89aadf5e257059ee571ebe11",
+      "raw": "stop=8\n0=30-30\n1=100-400\n2=400-500,c,500-1000,c,500-1000,c,500-1000,c,500-1000\n3=9-9,500-1000\n4=500-1000\n5=500-1000\n6=500-1000\n7=500-1000",
+      "settings": "v=2\nclient=dae\npadding-md5=75cff2ad89aadf5e257059ee571ebe11",
+      "settings_hex": "763d320a636c69656e743d6461650a70616464696e672d6d64353d3735636666326164383961616466356532353730353965653537316562653131",
+      "stop": 8
+    },
+    "session_counter": true
+  },
+  "source": [
+    "DAENEW_RUST_REBUILD_MEMO_2026-05-16.md:26.17",
+    "/root/project/outbound/dialer/anytls/anytls.go",
+    "/root/project/outbound/protocol/anytls/dialer.go",
+    "/root/project/outbound/protocol/anytls/session.go",
+    "/root/project/outbound/protocol/anytls/stream.go",
+    "/root/project/outbound/protocol/anytls/padding.go",
+    "/root/project/outbound/protocol/anytls/anytls.go"
+  ],
+  "tls_contract": {
+    "empty_sni_server_name": "127.0.0.1",
+    "insecure_only_when": "insecure=1",
+    "peer_overrides_sni": true
+  },
+  "underlay_contract": {
+    "tcp_request": {
+      "input_b64": "AAN0Y3AAAATSAQ==",
+      "input_mark": 1234,
+      "input_mptcp": true,
+      "input_network": "tcp",
+      "same_encoded_value": true,
+      "underlay_b64": "AAN0Y3AAAATSAQ==",
+      "underlay_mark": 1234,
+      "underlay_mptcp": true,
+      "underlay_network": "tcp"
+    },
+    "true_session_data_plane_deferred": 113,
+    "udp_request": {
+      "input_b64": "AAN1ZHAAAATSAQ==",
+      "input_mark": 1234,
+      "input_mptcp": true,
+      "input_network": "udp",
+      "same_encoded_value": false,
+      "underlay_b64": "AAN0Y3AAAATSAQ==",
+      "underlay_mark": 1234,
+      "underlay_mptcp": true,
+      "underlay_network": "tcp"
+    },
+    "underlay_always_tcp": true,
+    "underlay_preserves_mark": true,
+    "underlay_preserves_mptcp": true
+  }
+}
