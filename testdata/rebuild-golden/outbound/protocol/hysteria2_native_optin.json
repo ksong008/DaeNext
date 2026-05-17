@@ -1,0 +1,145 @@
+{
+  "default_go_path": true,
+  "deferred_protocol_scope": [
+    "tuic",
+    "juicity",
+    "anytls",
+    "transport-combos"
+  ],
+  "link_parser": [
+    {
+      "export": "hysteria2://user:pass@127.0.0.1:8443?insecure=1\u0026maxRx=2000\u0026maxTx=1000\u0026pinSHA256=AA%3ABB-cc\u0026sni=sni.example#basic",
+      "input": "hysteria2://user:pass@127.0.0.1:8443?insecure=1\u0026sni=sni.example\u0026pinSHA256=AA:BB-cc\u0026maxTx=1000\u0026maxRx=2000#basic",
+      "insecure": true,
+      "maxRx": 2000,
+      "maxTx": 1000,
+      "name": "basic",
+      "password": "pass",
+      "pinSHA256": "AA:BB-cc",
+      "pinSHA256_normal": "aabbcc",
+      "property_address": "127.0.0.1:8443",
+      "property_link": "hysteria2://user:pass@127.0.0.1:8443?insecure=1\u0026maxRx=2000\u0026maxTx=1000\u0026pinSHA256=AA%3ABB-cc\u0026sni=sni.example#basic",
+      "property_name": "basic",
+      "property_protocol": "hysteria2",
+      "server": "127.0.0.1:8443",
+      "sni": "sni.example",
+      "user": "user"
+    },
+    {
+      "export": "hysteria2://auth@example.com?sni=edge.example#alias",
+      "input": "hy2://auth@example.com?sni=edge.example#alias",
+      "insecure": false,
+      "maxRx": 0,
+      "maxTx": 0,
+      "name": "hy2-alias-default-port",
+      "password": "",
+      "pinSHA256": "",
+      "pinSHA256_normal": "",
+      "property_address": "example.com",
+      "property_link": "hysteria2://auth@example.com?sni=edge.example#alias",
+      "property_name": "alias",
+      "property_protocol": "hysteria2",
+      "server": "example.com",
+      "sni": "edge.example",
+      "user": "auth"
+    },
+    {
+      "export": "hysteria2://user:pass@example.com:443,8443-8445?insecure=1\u0026maxRx=8192\u0026maxTx=4096\u0026pinSHA256=AA-BB%3ACC\u0026sni=hop.example#hop",
+      "input": "hy2://user:pass@example.com:443,8443-8445?insecure=true\u0026sni=hop.example\u0026pinSHA256=AA-BB:CC\u0026maxTx=4096\u0026maxRx=8192#hop",
+      "insecure": true,
+      "maxRx": 8192,
+      "maxTx": 4096,
+      "name": "port-hopping",
+      "password": "pass",
+      "pinSHA256": "AA-BB:CC",
+      "pinSHA256_normal": "aabbcc",
+      "property_address": "example.com:443,8443-8445",
+      "property_link": "hysteria2://user:pass@example.com:443,8443-8445?insecure=1\u0026maxRx=8192\u0026maxTx=4096\u0026pinSHA256=AA-BB%3ACC\u0026sni=hop.example#hop",
+      "property_name": "hop",
+      "property_protocol": "hysteria2",
+      "server": "example.com:443,8443-8445",
+      "sni": "hop.example",
+      "user": "user"
+    },
+    {
+      "export": "hysteria2://user@example.com:443?sni=sni.example#partial",
+      "input": "hysteria2://user@example.com:443?maxTx=1000\u0026sni=sni.example#partial",
+      "insecure": false,
+      "maxRx": 0,
+      "maxTx": 0,
+      "name": "partial-bandwidth-ignored",
+      "password": "",
+      "pinSHA256": "",
+      "pinSHA256_normal": "",
+      "property_address": "example.com:443",
+      "property_link": "hysteria2://user@example.com:443?sni=sni.example#partial",
+      "property_name": "partial",
+      "property_protocol": "hysteria2",
+      "server": "example.com:443",
+      "sni": "sni.example",
+      "user": "user"
+    }
+  ],
+  "live_smoke_required": [
+    "local parser smoke for hysteria2 and hy2",
+    "local pinSHA256 normalize smoke",
+    "local UDP underlay / port hopping contract smoke"
+  ],
+  "name": "stage15-hysteria2-native-optin",
+  "pin_sha256": [
+    {
+      "input": "AA:BB-cc",
+      "normalized": "aabbcc"
+    },
+    {
+      "input": "0011-2233:AAFF",
+      "normalized": "00112233aaff"
+    }
+  ],
+  "protocol_scope": [
+    "hysteria2",
+    "hy2"
+  ],
+  "rust_adapter_mode": "native-opt-in",
+  "server_contract": [
+    {
+      "host": "example.com",
+      "host_port": "example.com:443",
+      "port": "443",
+      "port_hopping": false,
+      "server": "example.com"
+    },
+    {
+      "host": "example.com",
+      "host_port": "example.com:443",
+      "port": "443",
+      "port_hopping": false,
+      "server": "example.com:443"
+    },
+    {
+      "host": "example.com",
+      "host_port": "example.com:443,8443-8445",
+      "port": "443,8443-8445",
+      "port_hopping": true,
+      "server": "example.com:443,8443-8445"
+    }
+  ],
+  "source": [
+    "DAENEW_RUST_REBUILD_MEMO_2026-05-16.md:26.14",
+    "/root/project/outbound/dialer/hysteria2/hysteria2.go",
+    "/root/project/outbound/protocol/hysteria2/dialer.go",
+    "/root/project/outbound/protocol/hysteria2/client/config.go",
+    "/root/project/outbound/protocol/hysteria2/udphop"
+  ],
+  "underlay_contract": {
+    "always_udp_underlay": true,
+    "port_hopping_detects_dash_or_comma": true,
+    "preserve_mark": true,
+    "preserve_mptcp_field_even_for_udp": true,
+    "route_cache_key_is_underlay_network": true,
+    "tcp_target_uses_hysteria2_client": true,
+    "true_quic_data_plane_deferred_item": 113,
+    "udp_hop_interval_from_extra_option": true,
+    "udp_target_uses_hysteria2_client": true
+  }
+}
