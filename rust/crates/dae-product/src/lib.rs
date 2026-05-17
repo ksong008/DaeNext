@@ -7,6 +7,7 @@ pub mod outbound_contract;
 pub mod product_chain_admission;
 pub mod protocol_dataplane;
 pub mod release;
+pub mod stage23_completion;
 pub mod systemd;
 pub mod true_daemon_admission;
 
@@ -34,6 +35,9 @@ pub use protocol_dataplane::{
     protocol_dataplane_admission_contract,
 };
 pub use release::{ReleaseWorkflowContract, release_workflow_contract};
+pub use stage23_completion::{
+    Stage23CompletionContract, Stage23CompletionRow, stage23_completion_contract,
+};
 pub use systemd::{SystemdContract, systemd_contract};
 pub use true_daemon_admission::{
     TrueDefaultDaemonAdmissionContract, TrueDefaultDaemonAdmissionRow,
