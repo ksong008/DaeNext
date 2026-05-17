@@ -1,0 +1,118 @@
+{
+  "config_api": {
+    "global_input": "global {\n    log_level: debug\n}",
+    "log_level": "debug",
+    "necessary_outbounds": [
+      "direct"
+    ],
+    "routing_input": "routing {\n    fallback: must_direct\n}"
+  },
+  "cross_repo_boundary": {
+    "dae_wing_daed_default_switch": false,
+    "verification_only": true
+  },
+  "dry_runtime": {
+    "reload_before_run_error": "context deadline exceeded",
+    "reload_running_is_noop": true,
+    "stop_exits_loop": true
+  },
+  "helper_commands": {
+    "dry_runtime_smoke": [
+      "dae-cli-optin",
+      "runtime",
+      "dry-run-smoke"
+    ],
+    "overview_basic": [
+      "dae-cli-optin",
+      "runtime",
+      "overview-basic"
+    ],
+    "route_target": [
+      "dae-cli-optin",
+      "runtime",
+      "route-target",
+      "--host",
+      "\u003chost\u003e",
+      "--port",
+      "\u003cport\u003e"
+    ]
+  },
+  "name": "engine-api-only-runtime-optin-contract",
+  "notes": "Stage 12 fixes the dae-side API-only/dry runtime contract for downstream dae-wing/daed use while keeping Go daemon and tproxy default paths unchanged.",
+  "route_aware_target": {
+    "dest": "0.0.0.0:443",
+    "dest_is_unspecified": true,
+    "domain": "example.com",
+    "host": "example.com",
+    "port": "443",
+    "system_dns_resolution": false
+  },
+  "runtime_overview": {
+    "active_connections": 0,
+    "dns_cache_expired_removal_total": 102,
+    "dns_cache_hit_total": 101,
+    "dns_doh_content_type_failure_total": 106,
+    "dns_doh_status_failure_total": 105,
+    "dns_truncated_tcp_fallback_total": 104,
+    "dns_udp_retry_total": 103,
+    "dns_upstream_refresh_failure_total": 108,
+    "dns_upstream_refresh_stale_reuse_total": 109,
+    "dns_upstream_refresh_success_total": 107,
+    "download_rate": 20,
+    "download_total": 40,
+    "goroutines": 70,
+    "heap_alloc_bytes": 60,
+    "packet_sniffer_sessions": 77,
+    "rss_bytes": 50,
+    "samples": [
+      {
+        "download_rate": 22,
+        "timestamp_unix": 1700000300,
+        "upload_rate": 11
+      }
+    ],
+    "udp_sessions": 0,
+    "udp_task_drop_total": 88,
+    "udp_task_queues": 99,
+    "updated_at_unix": 1700000300,
+    "upload_rate": 10,
+    "upload_total": 30
+  },
+  "rust_opt_in": {
+    "disabled_is_go_path": true,
+    "enable_env": "DAE_RUST_API_ONLY_OPTIN",
+    "helper_default": "dae-cli-optin",
+    "helper_env": "DAE_RUST_API_ONLY_HELPER",
+    "helper_timeout": "10s"
+  },
+  "service_contract": {
+    "config_interfaces": [
+      "ConfigTemplateService",
+      "ConfigParserService",
+      "ConfigService"
+    ],
+    "default_service_constructor": "NewNativeService",
+    "default_service_reset": "SetDefault(nil)",
+    "dry_reload_restarts_after_stop": true,
+    "not_initialized_transport_error": "control plane doesn't init yet",
+    "runtime_interfaces": [
+      "RuntimeLifecycleService",
+      "RuntimeAccessService",
+      "RuntimeService",
+      "Service"
+    ],
+    "runtime_overview_without_control_plane": true,
+    "try_http_transport_requires_control": true
+  },
+  "source": [
+    "engine/service.go",
+    "engine/runtime.go",
+    "engine/api_rust_optin.go",
+    "rust/crates/dae-cli/src/runtime_runner.rs",
+    "rust/crates/dae-cli/src/runner.rs",
+    "rust/crates/dae-engine/src/runtime.rs",
+    "rust/crates/dae-engine/src/overview.rs",
+    "rust/crates/dae-engine/src/route.rs",
+    "DAEX_RUST_REBUILD_PLAN_2026-05-16.md:stage12"
+  ]
+}
