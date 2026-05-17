@@ -1,0 +1,67 @@
+{
+  "cases": [
+    {
+      "canonical_lowered": "example.com.",
+      "key": {
+        "qclass": 1,
+        "qname": "example.com.",
+        "qtype": 1,
+        "string": "example.com.|1|1"
+      },
+      "legacy": "example.com.1",
+      "legacy_parse": {
+        "qclass": 1,
+        "qname": "example.com.",
+        "qtype": 1,
+        "string": "example.com.|1|1"
+      },
+      "name": "inet-a",
+      "qclass": 1,
+      "qname": "Example.COM",
+      "qtype": 1,
+      "structured": "example.com.|1|1",
+      "structured_parse": {
+        "qclass": 1,
+        "qname": "example.com.",
+        "qtype": 1,
+        "string": "example.com.|1|1"
+      }
+    },
+    {
+      "key": {
+        "qclass": 1,
+        "qname": "example.com.",
+        "qtype": 28,
+        "string": "example.com.|28|1"
+      },
+      "name": "inet-aaaa",
+      "qclass": 1,
+      "qname": "example.com.",
+      "qtype": 28
+    },
+    {
+      "key": {
+        "qclass": 3,
+        "qname": "example.com.",
+        "qtype": 1,
+        "string": "example.com.|1|3"
+      },
+      "name": "class-3-a",
+      "qclass": 3,
+      "qname": "example.com.",
+      "qtype": 1
+    }
+  ],
+  "different": {
+    "a_vs_aaaa": true,
+    "inet_vs_class_3": true,
+    "structured_format": "qname|qtype|qclass"
+  },
+  "name": "dns-cache-key-basic",
+  "notes": "DNS cache key must include canonical lowercase fqdn, qtype and qclass; legacy key keeps INET default.",
+  "source": [
+    "control/dns_control.go:newDnsCacheKey",
+    "control/dns_control.go:parseDnsCacheKey",
+    "control/dns_control_test.go:TestDnsCacheKeyIncludesQuestionTypeAndClass"
+  ]
+}

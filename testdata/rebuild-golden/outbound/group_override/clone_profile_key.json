@@ -1,0 +1,64 @@
+{
+  "different_profiles": [
+    "check_interval",
+    "udp_check_dns",
+    "resolver_dialer_identity",
+    "base_dialer_identity"
+  ],
+  "name": "outbound-group-override-clone-profile-key",
+  "profile_counts": {
+    "profile_count": 2,
+    "shared_count": 2,
+    "unique_count": 1
+  },
+  "same_base_equivalent_profile": {
+    "check_interval_ms": 15000,
+    "check_tolerance_ms": 10,
+    "clone_is_not_base_wrapper": true,
+    "clone_keeps_first_profile": true,
+    "created_clones": 1,
+    "reuse_clone": true,
+    "tcp_check_url": [
+      "https://check.example/generate_204"
+    ],
+    "udp_check_dns": [
+      "8.8.8.8:53"
+    ]
+  },
+  "source": [
+    "control/group_override_clone_cache.go",
+    "control/group_override_clone_cache_test.go"
+  ],
+  "string_slice_profile_key": [
+    {
+      "a": null,
+      "b": [],
+      "name": "nil-vs-empty",
+      "same": false
+    },
+    {
+      "a": [
+        "ab",
+        "c"
+      ],
+      "b": [
+        "a",
+        "bc"
+      ],
+      "name": "value-boundary",
+      "same": false
+    },
+    {
+      "a": [
+        "",
+        "a"
+      ],
+      "b": [
+        "a",
+        ""
+      ],
+      "name": "empty-element-boundary",
+      "same": false
+    }
+  ]
+}

@@ -1,0 +1,31 @@
+{
+  "cases": [
+    {
+      "fallback_possible": true,
+      "fullcone": false,
+      "injected": "ResolverDialer",
+      "name": "symmetric-prefers-resolver-dialer",
+      "property_name": "direct",
+      "selected": "ResolverDialer"
+    },
+    {
+      "fallback_possible": true,
+      "fullcone": true,
+      "injected": "ResolverFullconeDialer",
+      "name": "fullcone-prefers-fullcone-resolver-dialer",
+      "property_name": "direct",
+      "selected": "ResolverFullconeDialer"
+    },
+    {
+      "fullcone_fallback_ok": true,
+      "global_direct_nil": true,
+      "name": "globals-unset-still-builds-fallback",
+      "symmetric_fallback_ok": true
+    }
+  ],
+  "name": "outbound-direct-injected-resolver",
+  "source": [
+    "component/outbound/dialer/direct.go:NewDirectDialer",
+    "component/outbound/dialer/direct_test.go"
+  ]
+}

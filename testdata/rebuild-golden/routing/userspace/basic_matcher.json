@@ -1,0 +1,126 @@
+{
+  "cases": [
+    {
+      "matcher": {
+        "matches": [
+          {
+            "outbound": "direct",
+            "type": "fallback"
+          }
+        ]
+      },
+      "name": "fallback-direct",
+      "queries": [
+        {
+          "dest": "203.0.113.42",
+          "dest_port": 443,
+          "domain": "",
+          "want": "direct"
+        }
+      ]
+    },
+    {
+      "matcher": {
+        "domain_sets": [
+          {
+            "bit": 0,
+            "key": "suffix",
+            "patterns": [
+              "example.com"
+            ]
+          }
+        ],
+        "matches": [
+          {
+            "outbound": "direct",
+            "type": "domain_set"
+          },
+          {
+            "outbound": "block",
+            "type": "fallback"
+          }
+        ]
+      },
+      "name": "domain-suffix-direct-else-block",
+      "queries": [
+        {
+          "dest": "203.0.113.42",
+          "dest_port": 443,
+          "domain": "www.example.com",
+          "want": "direct"
+        },
+        {
+          "dest": "203.0.113.42",
+          "dest_port": 443,
+          "domain": "www.invalid.test",
+          "want": "block"
+        }
+      ]
+    },
+    {
+      "matcher": {
+        "lpm_sets": [
+          {
+            "index": 0,
+            "prefixes": [
+              "203.0.113.0/24"
+            ]
+          }
+        ],
+        "matches": [
+          {
+            "lpm_index": 0,
+            "outbound": "logical_or",
+            "type": "ip_set"
+          },
+          {
+            "outbound": "direct",
+            "port_end": 443,
+            "port_start": 443,
+            "type": "port"
+          },
+          {
+            "outbound": "block",
+            "type": "fallback"
+          }
+        ]
+      },
+      "name": "ip-and-port-or-direct-else-block",
+      "queries": [
+        {
+          "dest": "203.0.113.42",
+          "dest_port": 443,
+          "domain": "",
+          "want": "direct"
+        },
+        {
+          "dest": "198.51.100.42",
+          "dest_port": 8443,
+          "domain": "",
+          "want": "block"
+        }
+      ]
+    }
+  ],
+  "constants": {
+    "match_type": {
+      "domain_set": 0,
+      "fallback": 10,
+      "ip_set": 1,
+      "port": 3
+    },
+    "outbound": {
+      "block": 1,
+      "direct": 0,
+      "logical_and": 255,
+      "logical_or": 254
+    }
+  },
+  "name": "routing-userspace-basic-matcher",
+  "notes": "Projection of userspace matcher fallback/domain/ip+port cases from Go targeted tests.",
+  "source": [
+    "control/routing_matcher_userspace.go",
+    "control/routing_matcher_userspace_test.go",
+    "common/consts/ebpf.go"
+  ]
+}

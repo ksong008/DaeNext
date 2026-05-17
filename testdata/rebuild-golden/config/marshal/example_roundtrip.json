@@ -1,0 +1,356 @@
+{
+  "entries": [
+    "example.dae"
+  ],
+  "input": "example.dae",
+  "marshal": {
+    "indent": 2,
+    "len": 2381,
+    "sha256": "260742073f9581939f0c1303efb4058c522f758380ad6d1872c5231ddca0b92e",
+    "text": "global {\n  tproxy_port:\"12345\"\n  tproxy_port_protect:\"true\"\n  so_mark_from_dae:\"0\"\n  log_level:\"info\"\n  tcp_check_url:\"http://cp.cloudflare.com,1.1.1.1,2606:4700:4700::1111\"\n  tcp_check_http_method:\"HEAD\"\n  udp_check_dns:\"dns.google:53,8.8.8.8,2001:4860:4860::8888\"\n  check_interval:\"30s\"\n  check_tolerance:\"50ms\"\n  udp_endpoint_pool_size:\"4096\"\n  wan_interface:\"auto\"\n  allow_insecure:\"false\"\n  dial_mode:\"domain\"\n  disable_waiting_network:\"false\"\n  enable_local_tcp_fast_redirect:\"false\"\n  auto_config_kernel_parameter:\"true\"\n  auto_config_firewall_rule:\"false\"\n  sniffing_timeout:\"100ms\"\n  tls_implementation:\"tls\"\n  utls_imitate:\"chrome_auto\"\n  tls_fragment:\"false\"\n  tls_fragment_length:\"50-100\"\n  tls_fragment_interval:\"10-20\"\n  pprof_port:\"0\"\n  mptcp:\"false\"\n  fallback_resolver:\"8.8.8.8:53\"\n  bandwidth_max_tx:\"200 mbps\"\n  bandwidth_max_rx:\"1 gbps\"\n  udphop_interval:\"30s\"\n}\nsubscription {\n  my_sub:\"https://www.example.com/subscription/link\"\n  another_sub:\"https://example.com/another_sub\"\n  \"https://example.com/no_tag_link\"\n  \"file://relative/path/to/mysub.sub\"\n  persist_sub:\"https-file://www.example.com/persist_sub/link\"\n}\nnode {\n  \"socks5://localhost:1080\"\n  mylink:\"ss://LINK\"\n  node1:\"vmess://LINK\"\n  node2:\"vless://LINK\"\n  chains:\"tuic://LINK -\u003e vmess://LINK\"\n  hysteria2:\"hysteria2://password@server-ip:port/?sni=domain\"\n}\ngroup {\n  my_group {\n    policy:\"min_moving_avg\"\n    tcp_check_http_method:\"\"\n    check_interval:\"0s\"\n    check_tolerance:\"0s\"\n  }\n  group2 {\n    filter:name(\"HK_node\")\n    filter:name(\"US_node\")\n    policy:\"min_avg10\"\n    tcp_check_http_method:\"\"\n    check_interval:\"0s\"\n    check_tolerance:\"0s\"\n  }\n  steam {\n    filter:subtag(\"my_sub\")\u0026\u0026!name(keyword:\"ExpireAt:\")\n    policy:\"min_moving_avg\"\n    tcp_check_url:\"http://test.steampowered.com\"\n    tcp_check_http_method:\"\"\n    check_interval:\"0s\"\n    check_tolerance:\"0s\"\n  }\n}\nrouting {\n  pname(\"NetworkManager\")-\u003edirect\n  dip(\"224.0.0.0/3\",\"ff00::/8\")-\u003edirect\n  dip(geoip:\"private\")-\u003edirect\n  l4proto(\"udp\")\u0026\u0026dport(\"443\")-\u003eblock\n  dip(geoip:\"cn\")-\u003edirect\n  domain(geosite:\"cn\")-\u003edirect\n  fallback:\"my_group\"\n}\ndns {\n  ipversion_prefer:\"0\"\n  upstream {\n    alidns:\"udp://dns.alidns.com:53\"\n    googledns:\"tcp+udp://dns.google:53\"\n  }\n  routing {\n    request {\n      qname(geosite:\"cn\")-\u003ealidns\n      fallback:\"googledns\"\n    }\n    response {\n      fallback:\"accept\"\n    }\n  }\n  bind:\"\"\n}\n"
+  },
+  "name": "config-marshal-example-roundtrip",
+  "normalized_config": {
+    "global": {
+      "tproxy_port": 12345,
+      "tproxy_port_protect": true,
+      "so_mark_from_dae": 0,
+      "log_level": "info",
+      "tcp_check_url": [
+        "http://cp.cloudflare.com",
+        "1.1.1.1",
+        "2606:4700:4700::1111"
+      ],
+      "tcp_check_http_method": "HEAD",
+      "udp_check_dns": [
+        "dns.google:53",
+        "8.8.8.8",
+        "2001:4860:4860::8888"
+      ],
+      "check_interval": "30s",
+      "check_tolerance": "50ms",
+      "udp_endpoint_pool_size": 4096,
+      "lan_interface": null,
+      "wan_interface": [
+        "auto"
+      ],
+      "allow_insecure": false,
+      "dial_mode": "domain",
+      "disable_waiting_network": false,
+      "enable_local_tcp_fast_redirect": false,
+      "auto_config_kernel_parameter": true,
+      "auto_config_firewall_rule": false,
+      "sniffing_timeout": "100ms",
+      "tls_implementation": "tls",
+      "utls_imitate": "chrome_auto",
+      "tls_fragment": false,
+      "tls_fragment_length": "50-100",
+      "tls_fragment_interval": "10-20",
+      "pprof_port": 0,
+      "mptcp": false,
+      "fallback_resolver": "8.8.8.8:53",
+      "bandwidth_max_tx": "200 mbps",
+      "bandwidth_max_rx": "1 gbps",
+      "udphop_interval": "30s"
+    },
+    "subscription": [
+      "my_sub:https://www.example.com/subscription/link",
+      "another_sub:https://example.com/another_sub",
+      "https://example.com/no_tag_link",
+      "file://relative/path/to/mysub.sub",
+      "persist_sub:https-file://www.example.com/persist_sub/link"
+    ],
+    "node": [
+      "socks5://localhost:1080",
+      "mylink:ss://LINK",
+      "node1:vmess://LINK",
+      "node2:vless://LINK",
+      "chains:tuic://LINK -\u003e vmess://LINK",
+      "hysteria2:hysteria2://password@server-ip:port/?sni=domain"
+    ],
+    "group": [
+      {
+        "name": "my_group",
+        "filter": [],
+        "filter_annotation": [],
+        "policy": {
+          "kind": "string",
+          "string": "min_moving_avg"
+        },
+        "tcp_check_url": null,
+        "tcp_check_http_method": "",
+        "udp_check_dns": null,
+        "check_interval": "0s",
+        "check_tolerance": "0s"
+      },
+      {
+        "name": "group2",
+        "filter": [
+          [
+            {
+              "name": "name",
+              "not": false,
+              "params": [
+                {
+                  "key": "",
+                  "val": "HK_node"
+                }
+              ]
+            }
+          ],
+          [
+            {
+              "name": "name",
+              "not": false,
+              "params": [
+                {
+                  "key": "",
+                  "val": "US_node"
+                }
+              ]
+            }
+          ]
+        ],
+        "filter_annotation": [],
+        "policy": {
+          "kind": "string",
+          "string": "min_avg10"
+        },
+        "tcp_check_url": null,
+        "tcp_check_http_method": "",
+        "udp_check_dns": null,
+        "check_interval": "0s",
+        "check_tolerance": "0s"
+      },
+      {
+        "name": "steam",
+        "filter": [
+          [
+            {
+              "name": "subtag",
+              "not": false,
+              "params": [
+                {
+                  "key": "",
+                  "val": "my_sub"
+                }
+              ]
+            },
+            {
+              "name": "name",
+              "not": true,
+              "params": [
+                {
+                  "key": "keyword",
+                  "val": "ExpireAt:"
+                }
+              ]
+            }
+          ]
+        ],
+        "filter_annotation": [],
+        "policy": {
+          "kind": "string",
+          "string": "min_moving_avg"
+        },
+        "tcp_check_url": [
+          "http://test.steampowered.com"
+        ],
+        "tcp_check_http_method": "",
+        "udp_check_dns": null,
+        "check_interval": "0s",
+        "check_tolerance": "0s"
+      }
+    ],
+    "routing": {
+      "rules": [
+        {
+          "and_functions": [
+            {
+              "name": "pname",
+              "not": false,
+              "params": [
+                {
+                  "key": "",
+                  "val": "NetworkManager"
+                }
+              ]
+            }
+          ],
+          "outbound": {
+            "name": "direct",
+            "not": false,
+            "params": []
+          }
+        },
+        {
+          "and_functions": [
+            {
+              "name": "dip",
+              "not": false,
+              "params": [
+                {
+                  "key": "",
+                  "val": "224.0.0.0/3"
+                },
+                {
+                  "key": "",
+                  "val": "ff00::/8"
+                }
+              ]
+            }
+          ],
+          "outbound": {
+            "name": "direct",
+            "not": false,
+            "params": []
+          }
+        },
+        {
+          "and_functions": [
+            {
+              "name": "dip",
+              "not": false,
+              "params": [
+                {
+                  "key": "geoip",
+                  "val": "private"
+                }
+              ]
+            }
+          ],
+          "outbound": {
+            "name": "direct",
+            "not": false,
+            "params": []
+          }
+        },
+        {
+          "and_functions": [
+            {
+              "name": "l4proto",
+              "not": false,
+              "params": [
+                {
+                  "key": "",
+                  "val": "udp"
+                }
+              ]
+            },
+            {
+              "name": "dport",
+              "not": false,
+              "params": [
+                {
+                  "key": "",
+                  "val": "443"
+                }
+              ]
+            }
+          ],
+          "outbound": {
+            "name": "block",
+            "not": false,
+            "params": []
+          }
+        },
+        {
+          "and_functions": [
+            {
+              "name": "dip",
+              "not": false,
+              "params": [
+                {
+                  "key": "geoip",
+                  "val": "cn"
+                }
+              ]
+            }
+          ],
+          "outbound": {
+            "name": "direct",
+            "not": false,
+            "params": []
+          }
+        },
+        {
+          "and_functions": [
+            {
+              "name": "domain",
+              "not": false,
+              "params": [
+                {
+                  "key": "geosite",
+                  "val": "cn"
+                }
+              ]
+            }
+          ],
+          "outbound": {
+            "name": "direct",
+            "not": false,
+            "params": []
+          }
+        }
+      ],
+      "fallback": {
+        "kind": "string",
+        "string": "my_group"
+      }
+    },
+    "dns": {
+      "ipversion_prefer": 0,
+      "fixed_domain_ttl": [],
+      "upstream": [
+        "alidns:udp://dns.alidns.com:53",
+        "googledns:tcp+udp://dns.google:53"
+      ],
+      "routing": {
+        "request": {
+          "rules": [
+            {
+              "and_functions": [
+                {
+                  "name": "qname",
+                  "not": false,
+                  "params": [
+                    {
+                      "key": "geosite",
+                      "val": "cn"
+                    }
+                  ]
+                }
+              ],
+              "outbound": {
+                "name": "alidns",
+                "not": false,
+                "params": []
+              }
+            }
+          ],
+          "fallback": {
+            "kind": "string",
+            "string": "googledns"
+          }
+        },
+        "response": {
+          "rules": [],
+          "fallback": {
+            "kind": "string",
+            "string": "accept"
+          }
+        }
+      },
+      "bind": ""
+    }
+  },
+  "notes": "Roundtrip equality follows config/marshal_test.go and clears Group.FilterAnnotation before compare because annotations are parse metadata not marshaled output.",
+  "roundtrip": {
+    "equal_after_filter_annotation_clear": true
+  },
+  "source": [
+    "example.dae",
+    "config/marshal.go",
+    "config/marshal_test.go"
+  ]
+}

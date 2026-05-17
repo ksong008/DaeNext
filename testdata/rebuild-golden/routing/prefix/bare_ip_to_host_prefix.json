@@ -1,0 +1,21 @@
+{
+  "cases": [
+    {
+      "inputs": [
+        "192.0.2.1",
+        "2001:db8::1",
+        "2001:db8::/48"
+      ],
+      "want": [
+        "192.0.2.1/32",
+        "2001:db8::1/128",
+        "2001:db8::/48"
+      ]
+    }
+  ],
+  "name": "routing-prefix-bare-ip-to-host-prefix",
+  "notes": "Bare IP values must be converted to host prefixes before routing matcher/trie build.",
+  "source": [
+    "component/routing/function_parser.go"
+  ]
+}

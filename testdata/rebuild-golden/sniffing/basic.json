@@ -1,0 +1,40 @@
+{
+  "cases": [
+    {
+      "domain": "example.com",
+      "error": "",
+      "input_hex": "474554202f7061746820485454502f312e310d0a486f73743a204578616d706c652e434f4d3a3434330d0a557365722d4167656e743a206461650d0a0d0a",
+      "name": "http-host-normalize-and-retain",
+      "ok": true
+    },
+    {
+      "domain": "",
+      "error": "sniffing error: need more: sniffing error: not applicable: context deadline exceeded",
+      "input_hex": "1603010200010001fc0303d90fdf25b0c7a11c3eb968604a065157a149407c139c22ed32f5c6f486ed2c04206c51c32da7f83c3c19766be60d45d264e898c77504e34915c44caa69513c2221003e130213031301c02cc030009fcca9cca8ccaac02bc02f009ec024c028006bc023c0270067c00ac0140039c009c0130033009d009c003d003c0035002f00ff0100017500000013001100000e7777772e676f6f676c652e636f6d000b000403000102000a00160014001d0017001e00190018010001010102010301040010000e000c02683208687474702f312e31001600000017000000310000000d002a0028040305030603080708080809080a080b080408050806040105010601030303010302040205020602002b0009080304030303020301002d00020101003300260024001d00207fe08226bdc4fb1715e477506b6afe8f3abe2d20daa1f8c78c5483f1a90a9b19001500af00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
+      "name": "tls-google-sni",
+      "ok": false
+    },
+    {
+      "copy_detached": true,
+      "data_view": "hello",
+      "input": "hello",
+      "name": "packet-data-detached-copy"
+    },
+    {
+      "append_size": 65537,
+      "error": "sniffing error: packet sniffing data too large",
+      "is_sniff_err": true,
+      "name": "packet-quic-buffer-cap",
+      "need_more": false
+    }
+  ],
+  "name": "sniffing-basic",
+  "notes": "Stage 3 fixture fixes HTTP/TLS sniffing and packet sniffer buffer/cap behavior; QUIC cap is covered without requiring runtime QUIC decryption in Rust.",
+  "source": [
+    "component/sniffing/sniffing.go",
+    "component/sniffing/sniffer.go",
+    "component/sniffing/http.go",
+    "component/sniffing/tls.go",
+    "component/sniffing/quic.go"
+  ]
+}

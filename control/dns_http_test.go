@@ -79,6 +79,24 @@ func TestBuildDoHRequestUsesGetForSmallPayload(t *testing.T) {
 	}
 }
 
+func BenchmarkBuildDoHRequestGet(b *testing.B) {
+	upstream := &componentdns.Upstream{
+		Hostname: "dns.example.com",
+		Path:     "/dns-query",
+	}
+	data := []byte{0x12, 0x34, 0x56, 0x78}
+	b.ReportAllocs()
+	for i := 0; i < b.N; i++ {
+		req, err := buildDoHRequest(context.Background(), "1.1.1.1:443", upstream, data)
+		if err != nil {
+			b.Fatal(err)
+		}
+		if req.Method != http.MethodGet {
+			b.Fatalf("unexpected method: %s", req.Method)
+		}
+	}
+}
+
 func TestBuildDoHRequestUsesPostForLargePayload(t *testing.T) {
 	upstream := &componentdns.Upstream{
 		Hostname: "dns.example.com",
