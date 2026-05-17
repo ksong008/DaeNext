@@ -1,0 +1,124 @@
+{
+  "address_codec": [
+    {
+      "hex": "030b6578616d706c652e636f6d01bb",
+      "hostname": "example.com",
+      "input": "example.com:443",
+      "ip": "invalid IP",
+      "name": "domain",
+      "port": 443,
+      "string": "example.com:443",
+      "type": 3
+    },
+    {
+      "hex": "01010203040035",
+      "hostname": "",
+      "input": "1.2.3.4:53",
+      "ip": "1.2.3.4",
+      "name": "ipv4",
+      "port": 53,
+      "string": "1.2.3.4:53",
+      "type": 1
+    },
+    {
+      "hex": "0420010db800000000000000000000000120fb",
+      "hostname": "",
+      "input": "[2001:db8::1]:8443",
+      "ip": "2001:db8::1",
+      "name": "ipv6",
+      "port": 8443,
+      "string": "[2001:db8::1]:8443",
+      "type": 4
+    }
+  ],
+  "default_go_path": true,
+  "deferred_protocol_scope": [
+    "http",
+    "https",
+    "shadowsocks",
+    "shadowsocks-2022",
+    "trojan",
+    "vmess",
+    "vless",
+    "hysteria2",
+    "tuic",
+    "juicity",
+    "anytls",
+    "transport-combos"
+  ],
+  "handshake": {
+    "auth_none": 0,
+    "auth_password": 2,
+    "connect_example_com_443_hex": "050100030b6578616d706c652e636f6d01bb",
+    "deadline_contract": [
+      "DialContextWithDefaultTimeout applies a non-zero deadline around the SOCKS5 handshake",
+      "deadline is reset to zero after handshake"
+    ],
+    "greeting_long_auth_user_hex": "050100",
+    "greeting_no_auth_hex": "050100",
+    "greeting_with_auth_hex": "05020002",
+    "success_reply_hex": "050000017f00000114b4",
+    "udp_associate_0_0_0_0_0_hex": "05030001000000000000",
+    "username_password_auth_hex": "0104757365720470617373",
+    "version": 5
+  },
+  "link_parser": {
+    "address": "127.0.0.1:1080-\u003e127.0.0.2:1081",
+    "build_order": "right-to-left",
+    "chain_separator": "-\u003e",
+    "input": "manual-name:socks5://user:pass@127.0.0.1:1080#outer -\u003e socks://127.0.0.2:1081#inner",
+    "link": "socks5://user:pass@127.0.0.1:1080#outer -\u003e socks://127.0.0.2:1081#inner",
+    "linklike": "socks5://user:pass@127.0.0.1:1080#outer -\u003e socks://127.0.0.2:1081#inner",
+    "name": "manual-name",
+    "plaintext_tag": "manual-name",
+    "protocol": "socks5-\u003esocks5",
+    "socks_alias_protocol": "socks5",
+    "socks_alias_scheme": "socks"
+  },
+  "live_smoke_required": [
+    "local fake SOCKS5 TCP CONNECT",
+    "local fake SOCKS5 username/password auth",
+    "local fake SOCKS5 UDP packet wrapper"
+  ],
+  "magic_network": [
+    {
+      "encoded_b64": "AAN0Y3AIAAAAAQ==",
+      "is_plain": false,
+      "mark": 134217728,
+      "mptcp": true,
+      "network": "tcp"
+    },
+    {
+      "encoded_b64": "AAN1ZHAAEjRWAA==",
+      "is_plain": false,
+      "mark": 1193046,
+      "mptcp": false,
+      "network": "udp"
+    }
+  ],
+  "name": "stage15-socks5-native-optin",
+  "protocol_scope": [
+    "socks5"
+  ],
+  "rust_adapter_mode": "native-opt-in",
+  "source": [
+    "DAENEW_RUST_REBUILD_MEMO_2026-05-16.md:26.1",
+    "DAENEW_RUST_REBUILD_MEMO_2026-05-16.md:26.3",
+    "DAENEW_RUST_REBUILD_MEMO_2026-05-16.md:26.13",
+    "/root/project/outbound/dialer/socks/socks.go",
+    "/root/project/outbound/protocol/socks5/addr.go",
+    "/root/project/outbound/protocol/socks5/client.go",
+    "/root/project/outbound/protocol/socks5/packet.go"
+  ],
+  "udp_packet": {
+    "control_connection_retained": true,
+    "fragment": 0,
+    "header_reserved": [
+      0,
+      0
+    ],
+    "payload_ascii": "ping",
+    "target": "example.com:443",
+    "write_packet_hex": "000000030b6578616d706c652e636f6d01bb70696e67"
+  }
+}
