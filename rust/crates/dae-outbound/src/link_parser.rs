@@ -1,5 +1,6 @@
 use crate::error::OutboundError;
 use crate::hysteria2::Hysteria2Link;
+use crate::juicity::JuicityLink;
 use crate::shadowsocks::ShadowsocksLink;
 use crate::trojan::TrojanLink;
 use crate::tuic::TuicLink;
@@ -90,7 +91,7 @@ fn classify_link(scheme: &str, raw: &str) -> (&'static str, bool, &'static str) 
         "vless" => ("vless", true, "native-opt-in"),
         "hysteria2" | "hy2" => ("hysteria2", true, "native-opt-in"),
         "tuic" => ("tuic", true, "native-opt-in"),
-        "juicity" => ("juicity", true, "bridge-or-stub"),
+        "juicity" => ("juicity", true, "native-opt-in"),
         _ => ("unknown", false, "unsupported"),
     }
 }
@@ -154,6 +155,9 @@ fn property_address(scheme: &str, raw: &str) -> Option<String> {
     }
     if scheme == "tuic" {
         return TuicLink::parse(raw).ok().map(|link| link.address());
+    }
+    if scheme == "juicity" {
+        return JuicityLink::parse(raw).ok().map(|link| link.address());
     }
     if !matches!(scheme, "socks" | "socks5") {
         return None;
