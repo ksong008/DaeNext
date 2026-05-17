@@ -130,6 +130,18 @@ fn optin_runner_matches_validate_and_export_fixture() {
         .collect::<Vec<_>>();
     assert!(sections.contains(&"global"));
     assert!(sections.contains(&"routing"));
+
+    let parse_api = run_with_args([
+        "config",
+        "parse-api",
+        "--global",
+        "global { log_level: debug }",
+        "--routing",
+        "routing { fallback: must_direct }",
+    ]);
+    assert_eq!(parse_api.exit_code, 0);
+    assert_eq!(parse_api.stdout, "");
+    assert_eq!(parse_api.stderr, "");
 }
 
 fn assert_commands(got: &[CommandSpec], want: &[Value]) {

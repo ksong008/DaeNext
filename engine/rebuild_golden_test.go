@@ -7,6 +7,8 @@ package engine
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"io"
@@ -14,6 +16,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"sort"
+	"strings"
 	"testing"
 	"time"
 
@@ -30,6 +33,7 @@ func TestWriteEngineRuntimeGoldenFixtures(t *testing.T) {
 	writeOrCheckEngineGolden(t, "../testdata/rebuild-golden/engine/route_aware/target.json", rebuildGoldenEngineRouteAwareTarget())
 	writeOrCheckEngineGolden(t, "../testdata/rebuild-golden/engine/runtime_overview/basic.json", rebuildGoldenEngineRuntimeOverview(t))
 	writeOrCheckEngineGolden(t, "../testdata/rebuild-golden/engine/config_api/empty_parse.json", rebuildGoldenEngineConfigApi(t))
+	writeOrCheckEngineGolden(t, "../testdata/rebuild-golden/engine/config_api/default_path_optin.json", rebuildGoldenEngineConfigDefaultPathOptIn(t))
 	writeOrCheckEngineGolden(t, "../testdata/rebuild-golden/engine/subscription/persist_cleanup.json", rebuildGoldenEngineSubscriptionPersistCleanup(t))
 }
 
@@ -290,6 +294,82 @@ func rebuildGoldenEngineConfigApi(t *testing.T) any {
 	}
 }
 
+func rebuildGoldenEngineConfigDefaultPathOptIn(t *testing.T) any {
+	t.Helper()
+	configPath := writeEngineConfig(t, "global {}\nrouting {}\n")
+	conf, includes, err := ReadConfigFile(configPath)
+	if err != nil {
+		t.Fatalf("ReadConfigFile() error: %v", err)
+	}
+	globalSection := `global {
+    log_level: debug
+    udp_endpoint_pool_size: 8192
+}`
+	routingSection := `routing {
+    domain(suffix: example.com) -> must_proxy
+    fallback: must_direct
+}`
+	parsed, err := ParseConfig(&globalSection, nil, &routingSection)
+	if err != nil {
+		t.Fatalf("ParseConfig() error: %v", err)
+	}
+	outline := config.ExportOutlineJson("unknown")
+	sum := sha256.Sum256([]byte(outline))
+	return map[string]any{
+		"name": "engine-config-default-path-optin",
+		"source": []string{
+			"engine/helpers.go",
+			"cmd/validate.go",
+			"cmd/export.go",
+			"rust/crates/dae-cli/src/bin/dae-cli-optin.rs",
+			"rust/crates/dae-cli/src/runner.rs",
+			"DAEX_RUST_REBUILD_PLAN_2026-05-16.md:stage11",
+		},
+		"notes": "Stage 11 adds an opt-in Rust config helper gate around Go default config paths; disabled mode keeps Go behavior unchanged.",
+		"opt_in": map[string]any{
+			"enable_env":          "DAE_RUST_CONFIG_OPTIN",
+			"helper_env":          "DAE_RUST_CONFIG_HELPER",
+			"helper_default":      "dae-cli-optin",
+			"version_env":         "DAE_CLI_VERSION",
+			"disabled_is_go_path": true,
+			"helper_timeout":      "10s",
+		},
+		"helper_commands": map[string]any{
+			"read_config_file": []string{"dae-cli-optin", "validate", "-c", "<config.dae>"},
+			"parse_config": []string{
+				"dae-cli-optin", "config", "parse-api",
+				"--global", "<global-section>",
+				"--dns", "<dns-section>",
+				"--routing", "<routing-section>",
+			},
+			"export_outline": []string{"dae-cli-optin", "export", "outline"},
+		},
+		"read_config_file": map[string]any{
+			"log_level":       conf.Global.LogLevel,
+			"include_count":   len(includes),
+			"routing_rules":   len(conf.Routing.Rules),
+			"node_count":      len(conf.Node),
+			"group_count":     len(conf.Group),
+			"fallback":        config.FunctionOrStringToFunction(conf.Routing.Fallback).Name,
+			"valid_no_stdout": true,
+		},
+		"parse_config": map[string]any{
+			"global_input":        globalSection,
+			"routing_input":       routingSection,
+			"log_level":           parsed.Global.LogLevel,
+			"udp_pool_size":       parsed.Global.UdpEndpointPoolSize,
+			"necessary_outbounds": NecessaryOutbounds(&parsed.Routing),
+		},
+		"export_outline": map[string]any{
+			"version":          "unknown",
+			"sha256":           hex.EncodeToString(sum[:]),
+			"contains_global":  strings.Contains(outline, `"mapping": "global"`),
+			"contains_routing": strings.Contains(outline, `"mapping": "routing"`),
+			"trailing_newline": true,
+		},
+	}
+}
+
 func rebuildGoldenEngineSubscriptionPersistCleanup(t *testing.T) any {
 	configDir := t.TempDir()
 	persistDir := filepath.Join(configDir, "persist.d")
@@ -395,6 +475,15 @@ func errorClass(err error) string {
 	return err.Error()
 }
 
+func writeEngineConfig(t *testing.T, content string) string {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), "config.dae")
+	if err := os.WriteFile(path, []byte(content), 0600); err != nil {
+		t.Fatalf("write engine config fixture: %v", err)
+	}
+	return path
+}
+
 func BenchmarkEngineRouteAwareDialTarget(b *testing.B) {
 	b.ReportAllocs()
 	for i := 0; i < b.N; i++ {
@@ -460,6 +549,23 @@ func BenchmarkEngineParseConfigAPI(b *testing.B) {
 		}
 		if conf.Global.LogLevel != "debug" || len(conf.Routing.Rules) != 1 {
 			b.Fatalf("unexpected parsed config: %+v", conf)
+		}
+	}
+}
+
+func BenchmarkEngineReadConfigFileMinimal(b *testing.B) {
+	path := filepath.Join(b.TempDir(), "config.dae")
+	if err := os.WriteFile(path, []byte("global {}\nrouting {}\n"), 0600); err != nil {
+		b.Fatal(err)
+	}
+	b.ReportAllocs()
+	for i := 0; i < b.N; i++ {
+		conf, includes, err := ReadConfigFile(path)
+		if err != nil {
+			b.Fatal(err)
+		}
+		if conf.Global.LogLevel == "" || len(includes) != 1 {
+			b.Fatalf("unexpected config: %+v includes=%v", conf, includes)
 		}
 	}
 }
