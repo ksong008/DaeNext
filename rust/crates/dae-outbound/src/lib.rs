@@ -15,6 +15,7 @@ pub mod policy;
 pub mod shadowsocks;
 pub mod socks5;
 pub mod trojan;
+pub mod tuic;
 pub mod types;
 pub mod vless;
 pub mod vmess;
@@ -41,6 +42,7 @@ pub use shadowsocks::{
 };
 pub use socks5::{AddressKind, ServerReply, Socks5Address, Socks5Command, Socks5UdpDatagram};
 pub use trojan::{TrojanLink, TrojanMetadata, TrojanNetwork, TrojanTransportType};
+pub use tuic::TuicLink;
 pub use types::{IpVersion, L4Proto, NetworkType};
 pub use vless::VLESSLink;
 pub use vmess::{VMessLink, VMessMetadata, VMessMetadataType, VMessNetwork};
