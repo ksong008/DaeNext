@@ -1,6 +1,7 @@
 use crate::error::OutboundError;
 use crate::shadowsocks::ShadowsocksLink;
 use crate::trojan::TrojanLink;
+use crate::vmess::VMessLink;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct LinkNode {
@@ -31,7 +32,7 @@ pub fn parse_link_chain(link: &str) -> Result<LinkParseResult, OutboundError> {
         let scheme_end = raw.find("://").ok_or(OutboundError::MissingScheme)?;
         let scheme = &raw[..scheme_end];
         let (protocol, parent_dialer_non_nil, adapter_mode) = classify_link(scheme, raw);
-        let property_name = property_name(raw);
+        let property_name = property_name(scheme, raw);
         let property_address = property_address(scheme, raw).unwrap_or_default();
         nodes.push(LinkNode {
             raw: raw.to_owned(),
@@ -82,7 +83,8 @@ fn classify_link(scheme: &str, raw: &str) -> (&'static str, bool, &'static str) 
         "socks" | "socks5" => ("socks5", true, "native-opt-in"),
         "http" | "https" => (scheme_to_protocol(scheme), true, "native-opt-in"),
         "trojan" | "trojan-go" => (trojan_protocol(raw), true, "native-opt-in"),
-        "vmess" | "vless" | "hysteria2" | "tuic" | "juicity" => {
+        "vmess" => ("vmess", true, "native-opt-in"),
+        "vless" | "hysteria2" | "tuic" | "juicity" => {
             (scheme_to_protocol(scheme), true, "bridge-or-stub")
         }
         _ => ("unknown", false, "unsupported"),
@@ -116,7 +118,13 @@ fn split_plaintext_tag(link: &str) -> (Option<String>, &str) {
     (Some(link[..i_colon].to_owned()), &link[i_colon + 1..])
 }
 
-fn property_name(raw: &str) -> String {
+fn property_name(scheme: &str, raw: &str) -> String {
+    if scheme == "vmess" {
+        return VMessLink::parse(raw)
+            .ok()
+            .map(|link| link.ps)
+            .unwrap_or_default();
+    }
     raw.split_once('#')
         .map(|(_, fragment)| fragment.to_owned())
         .unwrap_or_default()
@@ -128,6 +136,9 @@ fn property_address(scheme: &str, raw: &str) -> Option<String> {
     }
     if matches!(scheme, "trojan" | "trojan-go") {
         return TrojanLink::parse(raw).ok().map(|link| link.address());
+    }
+    if scheme == "vmess" {
+        return VMessLink::parse(raw).ok().map(|link| link.address());
     }
     if !matches!(scheme, "socks" | "socks5") {
         return None;
