@@ -1,0 +1,154 @@
+{
+  "active_path_gate": {
+    "called_before": "rlimit.RemoveMemlock, netns setup, fullLoadBpfObjects, tc attach, tproxy listeners",
+    "called_from": "control.NewControlPlane",
+    "default_go_attach_path": true,
+    "helper_failure_aborts": true,
+    "pre_side_effect_failure": true,
+    "requires_explicit_env": true
+  },
+  "attach_order": [
+    "kernel feature gate",
+    "remove memlock",
+    "netns setup",
+    "load or reuse eBPF objects",
+    "bind LAN tc filters",
+    "bind WAN tc/cgroup filters",
+    "bind dae0/dae0peer tc filters",
+    "build routing kernspace/userspace",
+    "create DNS controller",
+    "ListenAndServe writes TCP/UDP sockets into listen_socket_map"
+  ],
+  "ebpf_loader": {
+    "incompatible_pinned_map_action": "delete pinned map and retry",
+    "listen_socket_map_keys": [
+      0,
+      1
+    ],
+    "map_catalog_fixture": "ebpf/maps/catalog.json",
+    "pin_root": "/sys/fs/bpf",
+    "pinned_reuse_maps": [
+      "cookie_pid_map",
+      "routing_tuples_map",
+      "tgid_pname_map"
+    ],
+    "tproxy_port_big_endian": 14640
+  },
+  "helper_commands": {
+    "contract": [
+      "dae-cli-optin",
+      "active-datapath",
+      "contract"
+    ],
+    "magic_dial": [
+      "dae-cli-optin",
+      "active-datapath",
+      "magic-dial",
+      "--network",
+      "tcp",
+      "--mark",
+      "1234",
+      "--mptcp",
+      "true"
+    ],
+    "preflight": [
+      "dae-cli-optin",
+      "active-datapath",
+      "preflight",
+      "--tproxy-port",
+      "12345",
+      "--so-mark",
+      "1234",
+      "--mptcp",
+      "true",
+      "--lan-count",
+      "1",
+      "--wan-count",
+      "0"
+    ],
+    "reload": [
+      "dae-cli-optin",
+      "active-datapath",
+      "reload-ownership"
+    ]
+  },
+  "magic_network": {
+    "active_path": true,
+    "encoded_b64": "AAN0Y3AAAATSAQ==",
+    "is_plain": false,
+    "mark": 1234,
+    "mptcp": true,
+    "network": "tcp",
+    "preserve_mark": true,
+    "preserve_mptcp": true
+  },
+  "name": "stage14-active-datapath-optin-contract",
+  "netns_same_interface_risk": {
+    "do_not_reorder_tc_filters": true,
+    "fixture_source": "DAENEW_RUST_REBUILD_MEMO_2026-05-16.md:34",
+    "lan_wan_same_physical_port": true,
+    "netkit_native_attach_defer": true,
+    "tc_act_pipe_required": true
+  },
+  "notes": "Stage 14 adds a Rust active-datapath opt-in preflight gate before Go control plane loads eBPF; default Go attach, tproxy and reload behavior stay unchanged unless DAE_RUST_ACTIVE_DATAPATH_OPTIN is explicitly enabled.",
+  "opt_in": {
+    "disabled_is_go_path": true,
+    "enable_env": "DAE_RUST_ACTIVE_DATAPATH_OPTIN",
+    "helper_default": "dae-cli-optin",
+    "helper_env": "DAE_RUST_ACTIVE_DATAPATH_HELPER",
+    "helper_timeout": "10s",
+    "rollback": "unset DAE_RUST_ACTIVE_DATAPATH_OPTIN before daemon start or reload"
+  },
+  "reload": {
+    "dns_cache_snapshot_required": true,
+    "eject_removes_bpf_close": true,
+    "fixture": "control/reload_bpf_ownership/eject_inject.json",
+    "fresh_owns_bpf_close": true,
+    "listener_reuse_required": true,
+    "reload_core_starts_without_close": true,
+    "rollback_injects_old_bpf": true
+  },
+  "required_environment": [
+    {
+      "name": "root",
+      "required": true
+    },
+    {
+      "name": "bpffs",
+      "required": true
+    },
+    {
+      "name": "netns_permission",
+      "required": true
+    },
+    {
+      "name": "memlock",
+      "required": true
+    },
+    {
+      "name": "kernel_feature_version",
+      "required": true
+    }
+  ],
+  "source": [
+    "control/rust_active_datapath_optin.go",
+    "control/control_plane.go",
+    "control/control_plane_core.go",
+    "control/netns_utils.go",
+    "control/kern/tproxy.c",
+    "engine/runtime.go",
+    "rust/crates/dae-cli/src/active_datapath_runner.rs",
+    "DAEX_RUST_REBUILD_PLAN_2026-05-16.md:stage14"
+  ],
+  "tcp_udp": {
+    "packet_sniffer_pool_required": true,
+    "tcp_relay_uses_sniffer_reader": true,
+    "tcp_route_dial_can_reroute": true,
+    "tcp_sniff_before_bpf_result": true,
+    "udp_53_dns_controller": true,
+    "udp_endpoint_pool_fixture": "datapath/udp_pools/basic.json",
+    "udp_must_rules_bypass_dns": true,
+    "udp_quic_sniff_can_reroute": true,
+    "udp_quic_target_stays_ip": true
+  }
+}
