@@ -33,6 +33,7 @@ use crate::runtime_stage41_48_gates::{
     run_stage47_outbound_true_dataplane_admission, run_stage48_true_daemon_benchmark_admission,
 };
 use crate::runtime_stage49_gate::run_stage49_production_param_listener_admission;
+use crate::runtime_stage50_tcp_gate::run_stage50_active_tcp_tproxy_ingress_admission;
 
 pub(crate) fn run_runtime(args: &[String]) -> RunnerOutput {
     match args.first().map(String::as_str) {
@@ -98,6 +99,9 @@ pub(crate) fn run_runtime(args: &[String]) -> RunnerOutput {
         }
         Some("stage49-production-param-listener-admission") => {
             run_stage49_production_param_listener_admission(&args[1..])
+        }
+        Some("stage50-active-tcp-tproxy-ingress-admission") => {
+            run_stage50_active_tcp_tproxy_ingress_admission(&args[1..])
         }
         Some(subcommand) => {
             RunnerOutput::usage(format!("unsupported runtime subcommand: {subcommand}"))
