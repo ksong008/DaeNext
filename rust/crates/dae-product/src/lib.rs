@@ -28,6 +28,7 @@ pub mod stage51_active_tcp_relay_gate;
 pub mod stage52_active_tcp_route_table_group_gate;
 pub mod stage53_active_udp_tproxy_endpoint_gate;
 pub mod stage54_active_dns_tproxy_cache_gate;
+pub mod stage55_socks5_outbound_gate;
 pub mod systemd;
 pub mod true_daemon_admission;
 
@@ -132,6 +133,10 @@ pub use stage53_active_udp_tproxy_endpoint_gate::{
 pub use stage54_active_dns_tproxy_cache_gate::{
     Stage54ActiveDnsTproxyCacheGateContract, Stage54ActiveDnsTproxyCacheGateRow,
     stage54_active_dns_tproxy_cache_gate_contract,
+};
+pub use stage55_socks5_outbound_gate::{
+    Stage55Socks5OutboundTrueDataplaneGateContract, Stage55Socks5OutboundTrueDataplaneGateRow,
+    stage55_socks5_outbound_true_dataplane_gate_contract,
 };
 pub use systemd::{SystemdContract, systemd_contract};
 pub use true_daemon_admission::{

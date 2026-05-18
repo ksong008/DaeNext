@@ -40,6 +40,7 @@ use crate::runtime_stage50_tcp_gate::{
     run_stage53_active_udp_tproxy_endpoint_admission,
     run_stage54_active_dns_tproxy_cache_admission,
 };
+use crate::runtime_stage55_outbound_gate::run_stage55_socks5_outbound_true_dataplane_admission;
 
 pub(crate) fn run_runtime(args: &[String]) -> RunnerOutput {
     match args.first().map(String::as_str) {
@@ -120,6 +121,9 @@ pub(crate) fn run_runtime(args: &[String]) -> RunnerOutput {
         }
         Some("stage54-active-dns-tproxy-cache-admission") => {
             run_stage54_active_dns_tproxy_cache_admission(&args[1..])
+        }
+        Some("stage55-socks5-outbound-true-dataplane-admission") => {
+            run_stage55_socks5_outbound_true_dataplane_admission(&args[1..])
         }
         Some(subcommand) => {
             RunnerOutput::usage(format!("unsupported runtime subcommand: {subcommand}"))
