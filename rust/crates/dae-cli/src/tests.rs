@@ -1103,6 +1103,171 @@ fn stage29_host_preflight_matches_golden_fixture() {
 }
 
 #[test]
+fn stage30_attach_cleanup_matches_golden_fixture() {
+    let fixture = load("engine/runtime_stage30/attach_cleanup.json");
+    let cleanup = run_with_args([
+        "runtime",
+        "stage30-attach-cleanup",
+        "--root",
+        fixture["root"].as_str().unwrap(),
+    ]);
+    assert_eq!(cleanup.exit_code, 0, "{}", cleanup.stdout);
+    assert_eq!(cleanup.stderr, "");
+    let cleanup_json: Value = serde_json::from_str(&cleanup.stdout).unwrap();
+    assert_eq!(
+        cleanup_json["name"].as_str().unwrap(),
+        fixture["name"].as_str().unwrap()
+    );
+    assert_eq!(
+        cleanup_json["stage"].as_str().unwrap(),
+        fixture["stage"].as_str().unwrap()
+    );
+    assert_eq!(
+        cleanup_json["evidence_class"].as_str().unwrap(),
+        fixture["evidence_class"].as_str().unwrap()
+    );
+    assert_eq!(
+        cleanup_json["root"].as_str().unwrap(),
+        fixture["root"].as_str().unwrap()
+    );
+    assert!(!cleanup_json["execute_smoke"].as_bool().unwrap());
+    assert!(cleanup_json["read_only"].as_bool().unwrap());
+    assert!(!cleanup_json["blocked"].as_bool().unwrap());
+    assert!(!cleanup_json["smoke_passed"].as_bool().unwrap());
+    assert!(
+        !cleanup_json["live_candidate_run_allowed"]
+            .as_bool()
+            .unwrap()
+    );
+    assert!(
+        !cleanup_json["actual_dae_ebpf_program_attach_executed"]
+            .as_bool()
+            .unwrap()
+    );
+    assert!(
+        !cleanup_json["active_traffic_evidence_recorded"]
+            .as_bool()
+            .unwrap()
+    );
+    assert!(!cleanup_json["default_switch_allowed"].as_bool().unwrap());
+    assert!(!cleanup_json["default_path_mutated"].as_bool().unwrap());
+    assert!(
+        !cleanup_json["product_chain_switch_allowed"]
+            .as_bool()
+            .unwrap()
+    );
+    assert!(
+        !cleanup_json["true_rust_default_daemon_admitted"]
+            .as_bool()
+            .unwrap()
+    );
+    assert!(cleanup_json["go_default_path_preserved"].as_bool().unwrap());
+    assert!(cleanup_json["go_fallback_required"].as_bool().unwrap());
+
+    let checks = cleanup_json["checks"].as_array().unwrap();
+    let fixture_checks = fixture["checks"].as_array().unwrap();
+    assert_eq!(checks.len(), fixture_checks.len());
+    let check_statuses = checks
+        .iter()
+        .map(|value| {
+            (
+                value["name"].as_str().unwrap(),
+                value["status"].as_str().unwrap(),
+            )
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        check_statuses,
+        fixture_checks
+            .iter()
+            .map(|value| (
+                value["name"].as_str().unwrap(),
+                value["status"].as_str().unwrap()
+            ))
+            .collect::<Vec<_>>()
+    );
+    assert!(check_statuses.contains(&("isolated-root-under-tmp", "pass")));
+    assert!(check_statuses.contains(&("root-gate-acknowledged", "pass")));
+    assert!(check_statuses.contains(&("stage29-preflight-report-passed", "pass")));
+
+    assert_eq!(
+        cleanup_json["temporary_resources"]["leftovers_after_cleanup"]
+            .as_array()
+            .unwrap()
+            .len(),
+        0
+    );
+    assert_eq!(
+        cleanup_json["ebpf_contract"]["listen_socket_map_keys"],
+        fixture["ebpf_contract"]["listen_socket_map_keys"]
+    );
+    assert!(
+        cleanup_json["ebpf_contract"]["dae_program_attach_deferred"]
+            .as_bool()
+            .unwrap()
+    );
+    assert!(
+        cleanup_json["production_safety"]["no_sys_fs_bpf_dae_mutation"]
+            .as_bool()
+            .unwrap()
+    );
+    assert_eq!(
+        cleanup_json["remaining_blockers"].as_array().unwrap().len(),
+        fixture["remaining_blockers"].as_array().unwrap().len()
+    );
+}
+
+#[test]
+fn stage30_attach_cleanup_blocks_unsafe_execution() {
+    let blocked = run_with_args([
+        "runtime",
+        "stage30-attach-cleanup",
+        "--root",
+        "/tmp/dae-stage30-candidate",
+        "--execute-smoke",
+    ]);
+    assert_eq!(blocked.exit_code, 1);
+    assert!(
+        blocked
+            .stdout
+            .contains("root-gated smoke requires --ack-root-gate")
+    );
+    assert!(blocked.stderr.is_empty());
+
+    let production_names = run_with_args([
+        "runtime",
+        "stage30-attach-cleanup",
+        "--root",
+        "/tmp/dae-stage30-candidate",
+        "--host-iface",
+        "dae0",
+        "--peer-iface",
+        "dae0peer",
+        "--netns",
+        "daens",
+    ]);
+    assert_eq!(production_names.exit_code, 0);
+    let production_json: Value = serde_json::from_str(&production_names.stdout).unwrap();
+    assert!(production_json["blocked"].as_bool().unwrap());
+    assert!(
+        production_json["blockers"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|value| value
+                .as_str()
+                .unwrap()
+                .contains("production dae0/dae0peer/daens"))
+    );
+    assert!(!production_json["default_path_mutated"].as_bool().unwrap());
+    assert!(
+        !production_json["actual_dae_ebpf_program_attach_executed"]
+            .as_bool()
+            .unwrap()
+    );
+}
+
+#[test]
 fn optin_runner_userspace_commands_match_engine_fixture() {
     let fixture = load("engine/userspace_runtime/optin_contract.json");
 
