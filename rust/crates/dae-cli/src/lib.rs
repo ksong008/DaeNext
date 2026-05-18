@@ -15,6 +15,7 @@ pub(crate) mod runtime_stage30_attach_cleanup;
 pub(crate) mod runtime_stage31_34_gates;
 pub(crate) mod runtime_stage35_36_gates;
 pub(crate) mod runtime_stage37_gate;
+pub(crate) mod runtime_stage38_gate;
 pub mod surface;
 pub(crate) mod userspace_runner;
 pub mod validate;
