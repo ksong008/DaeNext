@@ -211,6 +211,7 @@ name = "dae-ebpf-support"
 version = "0.1.0"
 dependencies = [
  "dae-golden",
+ "libc",
  "serde_json",
 ]
 

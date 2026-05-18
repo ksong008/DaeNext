@@ -6,6 +6,7 @@ license.workspace = true
 repository.workspace = true
 
 [dependencies]
+libc.workspace = true
 
 [dev-dependencies]
 dae-golden.workspace = true
