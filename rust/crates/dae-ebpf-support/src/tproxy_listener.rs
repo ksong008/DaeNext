@@ -1,7 +1,9 @@
+use std::fs::File;
 use std::io;
 use std::mem::size_of;
 use std::net::{TcpListener, UdpSocket};
 use std::os::fd::{AsRawFd, FromRawFd, IntoRawFd, OwnedFd};
+use std::path::PathBuf;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct TproxySocketOptions {
@@ -44,6 +46,73 @@ pub fn open_tproxy_listener_set(port: u16) -> io::Result<TproxyListenerSet> {
         tcp_options,
         udp_options,
     })
+}
+
+pub fn open_tproxy_listener_set_in_netns(
+    netns_name: &str,
+    port: u16,
+) -> io::Result<TproxyListenerSet> {
+    let current = File::open("/proc/self/ns/net")?;
+    let target = open_named_netns(netns_name)?;
+    let guard = NetnsGuard::enter(current, target)?;
+    let result = open_tproxy_listener_set(port);
+    let restore = guard.restore();
+    match (result, restore) {
+        (Ok(listeners), Ok(())) => Ok(listeners),
+        (Err(err), Ok(())) => Err(err),
+        (Ok(_), Err(err)) => Err(err),
+        (Err(err), Err(restore_err)) => Err(io::Error::new(
+            err.kind(),
+            format!("{err}; failed to restore netns: {restore_err}"),
+        )),
+    }
+}
+
+fn open_named_netns(name: &str) -> io::Result<File> {
+    let mut last_err = None;
+    for parent in ["/run/netns", "/var/run/netns"] {
+        match File::open(PathBuf::from(parent).join(name)) {
+            Ok(file) => return Ok(file),
+            Err(err) => last_err = Some(err),
+        }
+    }
+    Err(last_err.unwrap_or_else(|| io::Error::new(io::ErrorKind::NotFound, "netns not found")))
+}
+
+struct NetnsGuard {
+    current: File,
+    restored: bool,
+}
+
+impl NetnsGuard {
+    fn enter(current: File, target: File) -> io::Result<Self> {
+        set_netns(target.as_raw_fd())?;
+        Ok(Self {
+            current,
+            restored: false,
+        })
+    }
+
+    fn restore(mut self) -> io::Result<()> {
+        self.restored = true;
+        set_netns(self.current.as_raw_fd())
+    }
+}
+
+impl Drop for NetnsGuard {
+    fn drop(&mut self) {
+        if !self.restored {
+            let _ = set_netns(self.current.as_raw_fd());
+        }
+    }
+}
+
+fn set_netns(fd: i32) -> io::Result<()> {
+    let status = unsafe { libc::setns(fd, libc::CLONE_NEWNET) };
+    if status < 0 {
+        return Err(io::Error::last_os_error());
+    }
+    Ok(())
 }
 
 fn open_socket(socket_type: libc::c_int) -> io::Result<OwnedFd> {
