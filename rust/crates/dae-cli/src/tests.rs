@@ -1268,6 +1268,124 @@ fn stage30_attach_cleanup_blocks_unsafe_execution() {
 }
 
 #[test]
+fn stage31_to_stage34_runtime_admission_fixtures_match() {
+    for (fixture_path, command) in [
+        (
+            "engine/runtime_stage31/ebpf_attach_admission.json",
+            "stage31-ebpf-attach-admission",
+        ),
+        (
+            "engine/runtime_stage32/active_traffic_admission.json",
+            "stage32-active-traffic-admission",
+        ),
+        (
+            "engine/runtime_stage33/reload_rollback_admission.json",
+            "stage33-reload-rollback-admission",
+        ),
+        (
+            "engine/runtime_stage34/benchmark_admission.json",
+            "stage34-benchmark-admission",
+        ),
+    ] {
+        let fixture = load(fixture_path);
+        let output = run_with_args(["runtime", command]);
+        assert_eq!(output.exit_code, 0, "{}", output.stdout);
+        assert_eq!(output.stderr, "");
+        let json: Value = serde_json::from_str(&output.stdout).unwrap();
+        assert_eq!(
+            json["name"].as_str().unwrap(),
+            fixture["name"].as_str().unwrap()
+        );
+        assert_eq!(
+            json["stage"].as_str().unwrap(),
+            fixture["stage"].as_str().unwrap()
+        );
+        assert_eq!(
+            json["evidence_class"].as_str().unwrap(),
+            fixture["evidence_class"].as_str().unwrap()
+        );
+        assert!(!json["default_switch_allowed"].as_bool().unwrap());
+        assert!(!json["default_path_mutated"].as_bool().unwrap());
+        assert!(!json["product_chain_switch_allowed"].as_bool().unwrap());
+        assert!(!json["true_rust_default_daemon_admitted"].as_bool().unwrap());
+        assert!(json["go_default_path_preserved"].as_bool().unwrap());
+        assert!(json["go_fallback_required"].as_bool().unwrap());
+        assert_eq!(
+            json["remaining_blockers"].as_array().unwrap().len(),
+            fixture["remaining_blockers"].as_array().unwrap().len()
+        );
+    }
+}
+
+#[test]
+fn stage31_to_stage34_runtime_admission_gates_block_defaults() {
+    let stage31_blocked = run_with_args([
+        "runtime",
+        "stage31-ebpf-attach-admission",
+        "--execute-smoke",
+    ]);
+    assert_eq!(stage31_blocked.exit_code, 1);
+    assert!(
+        stage31_blocked
+            .stdout
+            .contains("stage31 root-gated smoke requires --ack-root-gate")
+    );
+
+    let stage32_blocked = run_with_args([
+        "runtime",
+        "stage32-active-traffic-admission",
+        "--execute-smoke",
+    ]);
+    assert_eq!(stage32_blocked.exit_code, 1);
+    assert!(
+        stage32_blocked
+            .stdout
+            .contains("stage32 local traffic smoke requires --ack-traffic-gate")
+    );
+
+    let report_path = std::env::temp_dir().join(format!(
+        "dae-stage31-report-{}-{}.json",
+        std::process::id(),
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    ));
+    fs::write(
+        &report_path,
+        r#"{"filter_cleanup_smoke_passed":true,"blockers":[]}"#,
+    )
+    .unwrap();
+    let stage32 = run_with_args([
+        "runtime",
+        "stage32-active-traffic-admission",
+        "--stage31-report",
+        report_path.to_str().unwrap(),
+        "--execute-smoke",
+        "--ack-traffic-gate",
+    ]);
+    assert_eq!(stage32.exit_code, 0, "{}", stage32.stdout);
+    let stage32_json: Value = serde_json::from_str(&stage32.stdout).unwrap();
+    assert!(
+        stage32_json["local_traffic_harness_passed"]
+            .as_bool()
+            .unwrap()
+    );
+    assert!(
+        stage32_json["local_tcp_udp_harness_executed"]
+            .as_bool()
+            .unwrap()
+    );
+    assert!(
+        !stage32_json["active_tproxy_traffic_executed"]
+            .as_bool()
+            .unwrap()
+    );
+    assert!(!stage32_json["default_switch_allowed"].as_bool().unwrap());
+    let _ = fs::remove_file(report_path);
+}
+
+#[test]
 fn optin_runner_userspace_commands_match_engine_fixture() {
     let fixture = load("engine/userspace_runtime/optin_contract.json");
 

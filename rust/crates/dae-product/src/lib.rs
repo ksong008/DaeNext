@@ -15,6 +15,7 @@ pub mod stage27_candidate_smoke;
 pub mod stage28_live_admission_gate;
 pub mod stage29_host_preflight_gate;
 pub mod stage30_attach_cleanup_gate;
+pub mod stage31_34_admission_gates;
 pub mod systemd;
 pub mod true_daemon_admission;
 
@@ -70,6 +71,9 @@ pub use stage29_host_preflight_gate::{
 pub use stage30_attach_cleanup_gate::{
     Stage30AttachCleanupGateContract, Stage30AttachCleanupGateRow,
     stage30_attach_cleanup_gate_contract,
+};
+pub use stage31_34_admission_gates::{
+    Stage31To34AdmissionContract, Stage31To34AdmissionRow, stage31_34_admission_contract,
 };
 pub use systemd::{SystemdContract, systemd_contract};
 pub use true_daemon_admission::{

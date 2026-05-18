@@ -15,6 +15,10 @@ use crate::runtime_stage26_candidate::run_stage26_candidate_plan;
 use crate::runtime_stage27_candidate::run_stage27_candidate;
 use crate::runtime_stage29_preflight::run_stage29_host_preflight;
 use crate::runtime_stage30_attach_cleanup::run_stage30_attach_cleanup;
+use crate::runtime_stage31_34_gates::{
+    run_stage31_ebpf_attach_admission, run_stage32_active_traffic_admission,
+    run_stage33_reload_rollback_admission, run_stage34_benchmark_admission,
+};
 
 pub(crate) fn run_runtime(args: &[String]) -> RunnerOutput {
     match args.first().map(String::as_str) {
@@ -28,6 +32,14 @@ pub(crate) fn run_runtime(args: &[String]) -> RunnerOutput {
         Some("stage27-run-candidate") => run_stage27_candidate(&args[1..]),
         Some("stage29-host-preflight") => run_stage29_host_preflight(&args[1..]),
         Some("stage30-attach-cleanup") => run_stage30_attach_cleanup(&args[1..]),
+        Some("stage31-ebpf-attach-admission") => run_stage31_ebpf_attach_admission(&args[1..]),
+        Some("stage32-active-traffic-admission") => {
+            run_stage32_active_traffic_admission(&args[1..])
+        }
+        Some("stage33-reload-rollback-admission") => {
+            run_stage33_reload_rollback_admission(&args[1..])
+        }
+        Some("stage34-benchmark-admission") => run_stage34_benchmark_admission(&args[1..]),
         Some(subcommand) => {
             RunnerOutput::usage(format!("unsupported runtime subcommand: {subcommand}"))
         }

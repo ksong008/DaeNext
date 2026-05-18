@@ -1,0 +1,158 @@
+{
+    "active_tproxy_traffic_executed": false,
+    "actual_dae_ebpf_program_attach_executed": false,
+    "daemon_reload_signal_sent": false,
+    "default_path_mutated": false,
+    "default_switch_allowed": false,
+    "dns_cache_model": {
+        "expired_after_deadline": true,
+        "hit_after_snapshot": true,
+        "hit_before_reload": true,
+        "key": "stage33.example.|1|1",
+        "passed": true,
+        "stats": {
+            "expired_removal_total": 1,
+            "hit_total": 2,
+            "remove_callback_total": 1
+        }
+    },
+    "dns_cache_snapshot_model_passed": true,
+    "domain_routing_model": {
+        "after_a": {
+            "ips": [
+                {
+                    "ip": "192.0.2.1",
+                    "merged": [
+                        3,
+                        8
+                    ],
+                    "owners": [
+                        "dns-cache-a"
+                    ],
+                    "present": true
+                },
+                {
+                    "ip": "2001:db8::1",
+                    "merged": [
+                        3,
+                        8
+                    ],
+                    "owners": [
+                        "dns-cache-a"
+                    ],
+                    "present": true
+                }
+            ],
+            "owners": [
+                "dns-cache-a"
+            ],
+            "step": "after-a"
+        },
+        "after_b": {
+            "ips": [
+                {
+                    "ip": "192.0.2.1",
+                    "merged": [
+                        7,
+                        8
+                    ],
+                    "owners": [
+                        "dns-cache-a",
+                        "dns-cache-b"
+                    ],
+                    "present": true
+                },
+                {
+                    "ip": "198.51.100.7",
+                    "merged": [
+                        4
+                    ],
+                    "owners": [
+                        "dns-cache-b"
+                    ],
+                    "present": true
+                },
+                {
+                    "ip": "2001:db8::1",
+                    "merged": [
+                        3,
+                        8
+                    ],
+                    "owners": [
+                        "dns-cache-a"
+                    ],
+                    "present": true
+                }
+            ],
+            "owners": [
+                "dns-cache-a",
+                "dns-cache-b"
+            ],
+            "step": "after-b"
+        },
+        "after_remove_a": {
+            "ips": [
+                {
+                    "ip": "192.0.2.1",
+                    "merged": [
+                        4
+                    ],
+                    "owners": [
+                        "dns-cache-b"
+                    ],
+                    "present": true
+                },
+                {
+                    "ip": "198.51.100.7",
+                    "merged": [
+                        4
+                    ],
+                    "owners": [
+                        "dns-cache-b"
+                    ],
+                    "present": true
+                }
+            ],
+            "owners": [
+                "dns-cache-b"
+            ],
+            "step": "after-remove-a"
+        },
+        "passed": true
+    },
+    "domain_routing_owner_migration_passed": true,
+    "evidence_class": "reload-rollback-dns-cache-domain-routing-model",
+    "go_default_path_preserved": true,
+    "go_fallback_required": true,
+    "live_candidate_run_allowed": false,
+    "name": "stage33-reload-rollback-dns-admission",
+    "product_chain_switch_allowed": false,
+    "reload_model": {
+        "new_reload_after_eject": {
+            "bpf_ejected": true,
+            "defer_func_count": 1,
+            "flip": 1,
+            "is_reload": true
+        },
+        "old_after_eject_inject": {
+            "bpf_ejected": false,
+            "defer_func_count": 2,
+            "flip": 0,
+            "is_reload": false
+        },
+        "passed": true,
+        "rollback_requires_old_bpf_inject": true
+    },
+    "reload_rollback_model_passed": true,
+    "remaining_blockers": [
+        "actual dae eBPF program attach to dae0/dae0peer is not executed",
+        "listen socket map update with TCP/UDP listener fds is not executed",
+        "active tproxy TCP UDP DNS traffic evidence is still missing",
+        "outbound true dataplane admission is still incomplete",
+        "matched Go default daemon vs true Rust candidate benchmark is still missing",
+        "clean dae-wing and daed product-chain recertification is still missing"
+    ],
+    "stage": "stage33",
+    "stage_complete": true,
+    "true_rust_default_daemon_admitted": false
+}
