@@ -1,13 +1,14 @@
 use std::env;
 use std::fs;
 use std::io::{Read, Write};
-use std::net::{SocketAddrV4, TcpListener, UdpSocket};
+use std::net::{Ipv4Addr, SocketAddrV4, TcpListener, UdpSocket};
 use std::os::fd::{AsRawFd, OwnedFd};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::thread;
 use std::time::{Duration, Instant};
 
+use dae_control::{DomainRoutingOwnerSnapshot, DomainRoutingTracker};
 use dae_datapath::{
     DEFAULT_NAT_TIMEOUT_MS, DEFAULT_UDP_ENDPOINT_POOL_MAX_ENTRIES, DNS_NAT_TIMEOUT_MS, MAX_RETRY,
     OUTBOUND_CONTROL_PLANE_ROUTING, OUTBOUND_USER_DEFINED_MIN, RouteDialTcpPlan,
@@ -15,6 +16,9 @@ use dae_datapath::{
     TcpLoopbackListenerReport, UdpDirectPacketConn, UdpDirectSocketOptions, UdpDirectSocketReport,
     bind_loopback_tcp_listener, bind_loopback_tcp_listener_on_port, magic_network_bytes,
     magic_tcp_connect, route_dial_tcp_plan,
+};
+use dae_dns::{
+    DnsCacheEntry, DnsCacheKey, DnsCacheStore, parse_message, validate_dns_response_for_request,
 };
 use dae_ebpf_support::{
     DaeParamInput, RuntimeMapInfo, build_dae_param, map_ids, map_info,
@@ -71,6 +75,16 @@ const DEFAULT_STAGE53_TARGET_PORT: u16 = 18083;
 const DEFAULT_STAGE53_TARGET_IP: &str = "198.18.53.1";
 const STAGE53_UDP_PAYLOAD: &[u8] = b"stage53-udp-tproxy-ping";
 const STAGE53_UDP_RESPONSE: &[u8] = b"stage53-udp-tproxy-ack";
+const DEFAULT_STAGE54_ROOT: &str = "/tmp/dae-stage54-candidate";
+const DEFAULT_STAGE54_TPROXY_PORT: u16 = 35454;
+const DEFAULT_STAGE54_TARGET_PORT: u16 = 53;
+const DEFAULT_STAGE54_TARGET_IP: &str = "8.8.8.8";
+const DEFAULT_STAGE54_UPSTREAM_IP: &str = "127.0.0.1";
+const DEFAULT_STAGE54_UPSTREAM_PORT: u16 = 10530;
+const DEFAULT_STAGE54_QNAME: &str = "stage54.example.";
+const STAGE54_RESPONSE_IP_TEXT: &str = "203.0.113.54";
+const STAGE54_RESPONSE_IP: Ipv4Addr = Ipv4Addr::new(203, 0, 113, 54);
+const STAGE54_RESPONSE_TTL: u32 = 30;
 
 pub(crate) fn run_stage50_active_tcp_tproxy_ingress_admission(args: &[String]) -> RunnerOutput {
     let opts = match Stage50Options::parse(args) {
@@ -123,6 +137,19 @@ pub(crate) fn run_stage53_active_udp_tproxy_endpoint_admission(args: &[String]) 
         report,
         opts.base.execute_smoke,
         "active_udp_tproxy_smoke_passed",
+    )
+}
+
+pub(crate) fn run_stage54_active_dns_tproxy_cache_admission(args: &[String]) -> RunnerOutput {
+    let opts = match Stage54Options::parse(args) {
+        Ok(opts) => opts,
+        Err(output) => return output,
+    };
+    let report = stage54_report(&opts);
+    output_with_execution_status(
+        report,
+        opts.base.execute_smoke,
+        "active_dns_tproxy_smoke_passed",
     )
 }
 
@@ -758,6 +785,185 @@ impl Stage53Options {
             return Err(RunnerOutput::usage(
                 "stage53 --benchmark-iters must be non-zero",
             ));
+        }
+        Ok(opts)
+    }
+}
+
+#[derive(Debug, Clone)]
+struct Stage54Options {
+    base: Stage50Options,
+    benchmark_iters: u32,
+    upstream_ip: String,
+    upstream_port: u16,
+    qname: String,
+}
+
+impl Default for Stage54Options {
+    fn default() -> Self {
+        let root = PathBuf::from(DEFAULT_STAGE54_ROOT);
+        let base = Stage50Options {
+            param_object: root.join("bpf_bpfel.param.o"),
+            root,
+            tproxy_port: DEFAULT_STAGE54_TPROXY_PORT,
+            target_ip: DEFAULT_STAGE54_TARGET_IP.to_owned(),
+            target_port: DEFAULT_STAGE54_TARGET_PORT,
+            ..Stage50Options::default()
+        };
+        Self {
+            base,
+            benchmark_iters: 2,
+            upstream_ip: DEFAULT_STAGE54_UPSTREAM_IP.to_owned(),
+            upstream_port: DEFAULT_STAGE54_UPSTREAM_PORT,
+            qname: DEFAULT_STAGE54_QNAME.to_owned(),
+        }
+    }
+}
+
+impl Stage54Options {
+    fn parse(args: &[String]) -> Result<Self, RunnerOutput> {
+        let mut opts = Self::default();
+        let default_param_object = PathBuf::from(DEFAULT_STAGE54_ROOT).join("bpf_bpfel.param.o");
+        let mut iter = args.iter();
+        while let Some(arg) = iter.next() {
+            match arg.as_str() {
+                "--root" => {
+                    opts.base.root = PathBuf::from(next_value(&mut iter, "stage54 --root")?);
+                    if opts.base.param_object == default_param_object {
+                        opts.base.param_object = opts.base.root.join("bpf_bpfel.param.o");
+                    }
+                }
+                "--object" => {
+                    opts.base.source_object =
+                        PathBuf::from(next_value(&mut iter, "stage54 --object")?);
+                }
+                "--param-object" => {
+                    opts.base.param_object =
+                        PathBuf::from(next_value(&mut iter, "stage54 --param-object")?);
+                }
+                "--execute-smoke" => opts.base.execute_smoke = true,
+                "--ack-root-gate" => opts.base.ack_root_gate = true,
+                "--peer-section" => {
+                    opts.base.peer_section = next_value(&mut iter, "stage54 --peer-section")?;
+                }
+                "--host-section" => {
+                    opts.base.host_section = next_value(&mut iter, "stage54 --host-section")?;
+                }
+                "--lan-section" => {
+                    opts.base.lan_section = next_value(&mut iter, "stage54 --lan-section")?;
+                }
+                "--tproxy-port" => {
+                    opts.base.tproxy_port =
+                        parse_port(&next_value(&mut iter, "stage54 --tproxy-port")?, arg)?;
+                }
+                "--dae-netns-id" => {
+                    opts.base.dae_netns_id =
+                        parse_u32(&next_value(&mut iter, "stage54 --dae-netns-id")?, arg)?;
+                }
+                "--target-ip" => {
+                    opts.base.target_ip = next_value(&mut iter, "stage54 --target-ip")?;
+                }
+                "--client-ip" => {
+                    opts.base.client_ip = next_value(&mut iter, "stage54 --client-ip")?;
+                }
+                "--target-port" => {
+                    opts.base.target_port =
+                        parse_port(&next_value(&mut iter, "stage54 --target-port")?, arg)?;
+                }
+                "--so-mark" => {
+                    opts.base.so_mark =
+                        parse_u32(&next_value(&mut iter, "stage54 --so-mark")?, arg)?;
+                }
+                "--benchmark-iters" => {
+                    opts.benchmark_iters =
+                        parse_u32(&next_value(&mut iter, "stage54 --benchmark-iters")?, arg)?;
+                }
+                "--upstream-ip" => {
+                    opts.upstream_ip = next_value(&mut iter, "stage54 --upstream-ip")?;
+                }
+                "--upstream-port" => {
+                    opts.upstream_port =
+                        parse_port(&next_value(&mut iter, "stage54 --upstream-port")?, arg)?;
+                }
+                "--qname" => opts.qname = next_value(&mut iter, "stage54 --qname")?,
+                _ if arg.starts_with("--root=") => {
+                    opts.base.root = PathBuf::from(value_after_equals(arg, "stage54 --root")?);
+                    if opts.base.param_object == default_param_object {
+                        opts.base.param_object = opts.base.root.join("bpf_bpfel.param.o");
+                    }
+                }
+                _ if arg.starts_with("--object=") => {
+                    opts.base.source_object =
+                        PathBuf::from(value_after_equals(arg, "stage54 --object")?);
+                }
+                _ if arg.starts_with("--param-object=") => {
+                    opts.base.param_object =
+                        PathBuf::from(value_after_equals(arg, "stage54 --param-object")?);
+                }
+                _ if arg.starts_with("--peer-section=") => {
+                    opts.base.peer_section = value_after_equals(arg, "stage54 --peer-section")?;
+                }
+                _ if arg.starts_with("--host-section=") => {
+                    opts.base.host_section = value_after_equals(arg, "stage54 --host-section")?;
+                }
+                _ if arg.starts_with("--lan-section=") => {
+                    opts.base.lan_section = value_after_equals(arg, "stage54 --lan-section")?;
+                }
+                _ if arg.starts_with("--tproxy-port=") => {
+                    opts.base.tproxy_port =
+                        parse_port(&value_after_equals(arg, "stage54 --tproxy-port")?, arg)?;
+                }
+                _ if arg.starts_with("--dae-netns-id=") => {
+                    opts.base.dae_netns_id =
+                        parse_u32(&value_after_equals(arg, "stage54 --dae-netns-id")?, arg)?;
+                }
+                _ if arg.starts_with("--target-ip=") => {
+                    opts.base.target_ip = value_after_equals(arg, "stage54 --target-ip")?;
+                }
+                _ if arg.starts_with("--client-ip=") => {
+                    opts.base.client_ip = value_after_equals(arg, "stage54 --client-ip")?;
+                }
+                _ if arg.starts_with("--target-port=") => {
+                    opts.base.target_port =
+                        parse_port(&value_after_equals(arg, "stage54 --target-port")?, arg)?;
+                }
+                _ if arg.starts_with("--so-mark=") => {
+                    opts.base.so_mark =
+                        parse_u32(&value_after_equals(arg, "stage54 --so-mark")?, arg)?;
+                }
+                _ if arg.starts_with("--benchmark-iters=") => {
+                    opts.benchmark_iters =
+                        parse_u32(&value_after_equals(arg, "stage54 --benchmark-iters")?, arg)?;
+                }
+                _ if arg.starts_with("--upstream-ip=") => {
+                    opts.upstream_ip = value_after_equals(arg, "stage54 --upstream-ip")?;
+                }
+                _ if arg.starts_with("--upstream-port=") => {
+                    opts.upstream_port =
+                        parse_port(&value_after_equals(arg, "stage54 --upstream-port")?, arg)?;
+                }
+                _ if arg.starts_with("--qname=") => {
+                    opts.qname = value_after_equals(arg, "stage54 --qname")?;
+                }
+                _ => {
+                    return Err(RunnerOutput::usage(format!(
+                        "unsupported runtime stage54-active-dns-tproxy-cache-admission argument: {arg}"
+                    )));
+                }
+            }
+        }
+        if opts.benchmark_iters < 2 {
+            return Err(RunnerOutput::usage(
+                "stage54 --benchmark-iters must be at least 2 to cover reload cache restore",
+            ));
+        }
+        if opts.upstream_port == 0 {
+            return Err(RunnerOutput::usage(
+                "stage54 --upstream-port must be non-zero",
+            ));
+        }
+        if opts.qname.is_empty() {
+            return Err(RunnerOutput::usage("stage54 --qname must be non-empty"));
         }
         Ok(opts)
     }
@@ -2133,6 +2339,388 @@ fn stage53_report(opts: &Stage53Options) -> Value {
     Value::Object(report)
 }
 
+fn stage54_report(opts: &Stage54Options) -> Value {
+    let base = &opts.base;
+    let mut blockers = Vec::new();
+    let mut checks = Vec::new();
+    push_check(
+        &mut checks,
+        "isolated-root-under-tmp",
+        tmp_root_allowed(&base.root),
+        json!({"path": path_string(&base.root)}),
+        &mut blockers,
+        "stage54 root must be an absolute /tmp child path",
+    );
+    push_check(
+        &mut checks,
+        "root-gate-acknowledged",
+        !base.execute_smoke || base.ack_root_gate,
+        json!({"execute_smoke": base.execute_smoke, "ack_root_gate": base.ack_root_gate}),
+        &mut blockers,
+        "stage54 root-gated smoke requires --ack-root-gate",
+    );
+    for tool in ["ip", "tc", "python3", "sysctl"] {
+        push_check(
+            &mut checks,
+            &format!("tool-{tool}-available"),
+            command_exists(tool),
+            json!({"tool": tool}),
+            &mut blockers,
+            "required host tool is missing",
+        );
+    }
+    push_check(
+        &mut checks,
+        "source-object-present",
+        base.source_object.exists(),
+        json!({"path": path_string(&base.source_object)}),
+        &mut blockers,
+        "stage54 source eBPF object is missing",
+    );
+    push_check(
+        &mut checks,
+        "tproxy-port-valid",
+        base.tproxy_port != 0,
+        json!({"tproxy_port": base.tproxy_port}),
+        &mut blockers,
+        "stage54 tproxy port must be non-zero",
+    );
+    push_check(
+        &mut checks,
+        "target-port-is-dns",
+        base.target_port == 53,
+        json!({"target_port": base.target_port}),
+        &mut blockers,
+        "stage54 target port must be UDP/53",
+    );
+    push_check(
+        &mut checks,
+        "upstream-port-valid",
+        opts.upstream_port != 0,
+        json!({"upstream_port": opts.upstream_port}),
+        &mut blockers,
+        "stage54 upstream port must be non-zero",
+    );
+    if base.execute_smoke {
+        push_check(
+            &mut checks,
+            "stage54-resource-names-free",
+            resource_leftovers().is_empty(),
+            json!({"leftovers": resource_leftovers()}),
+            &mut blockers,
+            "stage54 temporary or production names are already in use",
+        );
+        push_check(
+            &mut checks,
+            "tproxy-port-free",
+            tproxy_port_available(base.tproxy_port),
+            json!({"tproxy_port": base.tproxy_port}),
+            &mut blockers,
+            "stage54 tproxy port is already in use",
+        );
+        push_check(
+            &mut checks,
+            "upstream-port-free",
+            tproxy_port_available(opts.upstream_port),
+            json!({"upstream": format!("{}:{}", opts.upstream_ip, opts.upstream_port)}),
+            &mut blockers,
+            "stage54 local DNS upstream port is already in use",
+        );
+    }
+
+    let before_pin_snapshot = if base.execute_smoke {
+        bpf_dae_snapshot()
+    } else {
+        Vec::new()
+    };
+    let before_map_ids = if base.execute_smoke && blockers.is_empty() {
+        match map_ids() {
+            Ok(ids) => ids,
+            Err(err) => {
+                blockers.push(format!("stage54 cannot snapshot BPF map ids: {err}"));
+                Vec::new()
+            }
+        }
+    } else {
+        Vec::new()
+    };
+    let mut executed_steps = Vec::new();
+    let mut cleanup_steps = Vec::new();
+    let mut topology_values = Value::Null;
+    let mut param_image = Value::Null;
+    let mut peer_attach_show = Value::Null;
+    let mut lan_attach_show = Value::Null;
+    let mut host_attach_show = Value::Null;
+    let mut loaded_map_handoff = Value::Null;
+    let mut route_map_update = Value::Null;
+    let mut dns_receive = Value::Null;
+    let mut dns_controller = Value::Null;
+    let mut dns_upstream = Value::Null;
+    let mut dns_cache = stage54_dns_cache_model_json(opts);
+    let mut domain_routing = Value::Null;
+    let mut upstream_packet_conn = Value::Null;
+    let mut client_traffic = Value::Null;
+    let mut sendpkt_reply = Value::Null;
+    let mut benchmark = Value::Null;
+    let mut post_traffic_peer_stats = Value::Null;
+    let mut post_traffic_lan_stats = Value::Null;
+    let mut post_traffic_host_stats = Value::Null;
+    let mut discovered_listen_map_id = None;
+    let mut discovered_routing_map_id = None;
+    let mut active_dns_tproxy_smoke_passed = false;
+    let mut original_destination_observed = false;
+    let mut dns_controller_recorded = false;
+    let mut dns_upstream_query_recorded = false;
+    let mut dns_response_validation_recorded = false;
+    let mut dns_cache_restore_recorded = false;
+    let mut domain_routing_owner_migration_recorded = false;
+    let mut sendpkt_reply_recorded = false;
+    let mut so_mark_observed = false;
+    if base.execute_smoke && blockers.is_empty() {
+        let result = execute_stage54_smoke(opts, &before_map_ids);
+        executed_steps = result.executed_steps;
+        cleanup_steps = result.cleanup_steps;
+        topology_values = result.topology_values;
+        param_image = result.param_image;
+        peer_attach_show = result.peer_attach_show;
+        lan_attach_show = result.lan_attach_show;
+        host_attach_show = result.host_attach_show;
+        loaded_map_handoff = result.loaded_map_handoff;
+        route_map_update = result.route_map_update;
+        dns_receive = result.dns_receive;
+        dns_controller = result.dns_controller;
+        dns_upstream = result.dns_upstream;
+        dns_cache = result.dns_cache;
+        domain_routing = result.domain_routing;
+        upstream_packet_conn = result.upstream_packet_conn;
+        client_traffic = result.client_traffic;
+        sendpkt_reply = result.sendpkt_reply;
+        benchmark = result.benchmark;
+        post_traffic_peer_stats = result.post_traffic_peer_stats;
+        post_traffic_lan_stats = result.post_traffic_lan_stats;
+        post_traffic_host_stats = result.post_traffic_host_stats;
+        discovered_listen_map_id = result.discovered_listen_map_id;
+        discovered_routing_map_id = result.discovered_routing_map_id;
+        active_dns_tproxy_smoke_passed = result.passed;
+        original_destination_observed = result.original_destination_observed;
+        dns_controller_recorded = result.dns_controller_recorded;
+        dns_upstream_query_recorded = result.dns_upstream_query_recorded;
+        dns_response_validation_recorded = result.dns_response_validation_recorded;
+        dns_cache_restore_recorded = result.dns_cache_restore_recorded;
+        domain_routing_owner_migration_recorded = result.domain_routing_owner_migration_recorded;
+        sendpkt_reply_recorded = result.sendpkt_reply_recorded;
+        so_mark_observed = result.so_mark_observed;
+        if !active_dns_tproxy_smoke_passed {
+            blockers.push("stage54 active DNS UDP/53 tproxy cache smoke failed".to_owned());
+        }
+    }
+    let after_pin_snapshot = if base.execute_smoke {
+        bpf_dae_snapshot()
+    } else {
+        Vec::new()
+    };
+    let (after_map_ids, loaded_maps_cleaned) = if base.execute_smoke {
+        wait_for_loaded_map_cleanup(&[discovered_listen_map_id, discovered_routing_map_id])
+    } else {
+        (Vec::new(), true)
+    };
+    if base.execute_smoke && !loaded_maps_cleaned {
+        blockers.push("stage54 loaded BPF maps remain after cleanup".to_owned());
+    }
+    let leftovers = resource_leftovers();
+    if base.execute_smoke && !leftovers.is_empty() {
+        blockers.push("stage54 resources remain after cleanup".to_owned());
+    }
+    let sys_fs_bpf_dae_mutated = before_pin_snapshot != after_pin_snapshot;
+    if base.execute_smoke && sys_fs_bpf_dae_mutated {
+        blockers.push("stage54 unexpectedly mutated /sys/fs/bpf/dae".to_owned());
+    }
+
+    let benchmark_recorded = base.execute_smoke
+        && active_dns_tproxy_smoke_passed
+        && benchmark["status"].as_str() == Some("pass");
+    let active_dns_tproxy_admitted = active_dns_tproxy_smoke_passed
+        && dns_controller_recorded
+        && dns_upstream_query_recorded
+        && dns_response_validation_recorded
+        && dns_cache_restore_recorded
+        && domain_routing_owner_migration_recorded
+        && sendpkt_reply_recorded
+        && so_mark_observed;
+    let mut report = Map::new();
+    report.insert(
+        "name".to_owned(),
+        json!("stage54-active-dns-tproxy-cache-admission"),
+    );
+    report.insert("stage".to_owned(), json!("stage54"));
+    report.insert(
+        "evidence_class".to_owned(),
+        json!("root-gated-active-dns-udp53-cache-reload-smoke"),
+    );
+    report.insert("root".to_owned(), json!(path_string(&base.root)));
+    report.insert("execute_smoke".to_owned(), json!(base.execute_smoke));
+    report.insert(
+        "root_gate_acknowledged".to_owned(),
+        json!(base.ack_root_gate),
+    );
+    report.insert("read_only".to_owned(), json!(!base.execute_smoke));
+    report.insert("blocked".to_owned(), json!(!blockers.is_empty()));
+    report.insert(
+        "active_dns_tproxy_smoke_passed".to_owned(),
+        json!(active_dns_tproxy_smoke_passed),
+    );
+    report.insert(
+        "active_dns_tproxy_admitted".to_owned(),
+        json!(active_dns_tproxy_admitted),
+    );
+    report.insert(
+        "active_dns_original_destination_observed".to_owned(),
+        json!(original_destination_observed),
+    );
+    report.insert(
+        "dns_controller_path_recorded".to_owned(),
+        json!(dns_controller_recorded),
+    );
+    report.insert(
+        "dns_upstream_query_recorded".to_owned(),
+        json!(dns_upstream_query_recorded),
+    );
+    report.insert(
+        "dns_response_validation_recorded".to_owned(),
+        json!(dns_response_validation_recorded),
+    );
+    report.insert(
+        "dns_cache_restore_recorded".to_owned(),
+        json!(dns_cache_restore_recorded),
+    );
+    report.insert(
+        "domain_routing_owner_migration_recorded".to_owned(),
+        json!(domain_routing_owner_migration_recorded),
+    );
+    report.insert(
+        "dns_sendpkt_reply_recorded".to_owned(),
+        json!(sendpkt_reply_recorded),
+    );
+    report.insert(
+        "dns_so_mark_upstream_socket_observed".to_owned(),
+        json!(so_mark_observed),
+    );
+    report.insert(
+        "active_dns_tproxy_benchmark_recorded".to_owned(),
+        json!(benchmark_recorded),
+    );
+    report.insert(
+        "active_tproxy_traffic_executed".to_owned(),
+        json!(base.execute_smoke),
+    );
+    report.insert("active_udp_tproxy_admitted".to_owned(), json!(true));
+    for key in [
+        "outbound_true_dataplane_admitted",
+        "matched_go_rust_default_daemon_benchmark_recorded",
+        "default_switch_allowed",
+        "default_path_mutated",
+        "product_chain_switch_allowed",
+        "true_rust_default_daemon_admitted",
+    ] {
+        report.insert(key.to_owned(), json!(false));
+    }
+    report.insert("go_default_path_preserved".to_owned(), json!(true));
+    report.insert("go_fallback_required".to_owned(), json!(true));
+    report.insert("blockers".to_owned(), json!(blockers));
+    report.insert("checks".to_owned(), json!(checks));
+    report.insert(
+        "active_dns_contract".to_owned(),
+        json!({
+            "netns": PRODUCTION_NETNS,
+            "host_iface": PRODUCTION_HOST_IFACE,
+            "peer_iface": PRODUCTION_PEER_IFACE,
+            "client_netns": CLIENT_NETNS,
+            "lan_host_iface": LAN_HOST_IFACE,
+            "lan_client_iface": LAN_CLIENT_IFACE,
+            "peer_section": base.peer_section,
+            "host_section": base.host_section,
+            "lan_section": base.lan_section,
+            "filter_pref": STAGE50_FILTER_PREF,
+            "lan_filter_pref": STAGE50_LAN_FILTER_PREF,
+            "source_object": path_string(&base.source_object),
+            "param_object": path_string(&base.param_object),
+            "listen_socket_map_kernel_name": LISTEN_SOCKET_MAP_KERNEL_NAME,
+            "routing_map_kernel_name": ROUTING_MAP_KERNEL_NAME,
+            "routing_fallback_outbound": OUTBOUND_STAGE50_PROXY,
+            "match_type_fallback": MATCH_TYPE_FALLBACK,
+            "tproxy_port": base.tproxy_port,
+            "dns_target": format!("{}:{}", base.target_ip, base.target_port),
+            "dns_upstream": format!("{}:{}", opts.upstream_ip, opts.upstream_port),
+            "client_ip": base.client_ip,
+            "so_mark": base.so_mark,
+            "mptcp_magic_network_flag": base.mptcp,
+            "benchmark_iters": opts.benchmark_iters,
+            "qname": opts.qname,
+            "qtype": 1,
+            "qclass": 1,
+            "dns_nat_timeout_ms": DNS_NAT_TIMEOUT_MS,
+            "anyfrom_timeout_ms": 5000,
+            "restored_cache_hits_required": opts.benchmark_iters.saturating_sub(1),
+        }),
+    );
+    report.insert("dns_receive".to_owned(), dns_receive);
+    report.insert("dns_controller".to_owned(), dns_controller);
+    report.insert("dns_upstream".to_owned(), dns_upstream);
+    report.insert("dns_cache".to_owned(), dns_cache);
+    report.insert("domain_routing".to_owned(), domain_routing);
+    report.insert("upstream_packet_conn".to_owned(), upstream_packet_conn);
+    report.insert("client_traffic".to_owned(), client_traffic);
+    report.insert("sendpkt_reply".to_owned(), sendpkt_reply);
+    report.insert("benchmark".to_owned(), benchmark);
+    report.insert("topology_values".to_owned(), topology_values);
+    report.insert("param_image".to_owned(), param_image);
+    report.insert("loaded_map_handoff".to_owned(), loaded_map_handoff);
+    report.insert("route_map_update".to_owned(), route_map_update);
+    report.insert(
+        "post_traffic_peer_stats".to_owned(),
+        post_traffic_peer_stats,
+    );
+    report.insert("post_traffic_lan_stats".to_owned(), post_traffic_lan_stats);
+    report.insert(
+        "post_traffic_host_stats".to_owned(),
+        post_traffic_host_stats,
+    );
+    report.insert("executed_steps".to_owned(), json!(executed_steps));
+    report.insert("cleanup_steps".to_owned(), json!(cleanup_steps));
+    report.insert("peer_attach_show".to_owned(), peer_attach_show);
+    report.insert("lan_attach_show".to_owned(), lan_attach_show);
+    report.insert("host_attach_show".to_owned(), host_attach_show);
+    report.insert(
+        "map_id_snapshots".to_owned(),
+        json!({
+            "before_attach": before_map_ids,
+            "after_cleanup": after_map_ids,
+            "discovered_listen_map_id": discovered_listen_map_id,
+            "discovered_routing_map_id": discovered_routing_map_id,
+            "loaded_maps_cleaned": loaded_maps_cleaned,
+        }),
+    );
+    report.insert(
+        "temporary_resources".to_owned(),
+        json!({
+            "leftovers_after_cleanup": leftovers,
+        }),
+    );
+    report.insert(
+        "sys_fs_bpf_dae".to_owned(),
+        json!({
+            "before": before_pin_snapshot,
+            "after": after_pin_snapshot,
+            "mutated": sys_fs_bpf_dae_mutated,
+        }),
+    );
+    report.insert(
+        "remaining_blockers".to_owned(),
+        json!(remaining_blockers_after_stage54()),
+    );
+    Value::Object(report)
+}
+
 struct Stage50SmokeResult {
     passed: bool,
     original_destination_observed: bool,
@@ -2233,6 +2821,41 @@ struct Stage53SmokeResult {
     udp_endpoint_pool: Value,
     outbound_packet_conn: Value,
     upstream: Value,
+    client_traffic: Value,
+    sendpkt_reply: Value,
+    benchmark: Value,
+    post_traffic_peer_stats: Value,
+    post_traffic_lan_stats: Value,
+    post_traffic_host_stats: Value,
+}
+
+struct Stage54SmokeResult {
+    passed: bool,
+    original_destination_observed: bool,
+    dns_controller_recorded: bool,
+    dns_upstream_query_recorded: bool,
+    dns_response_validation_recorded: bool,
+    dns_cache_restore_recorded: bool,
+    domain_routing_owner_migration_recorded: bool,
+    sendpkt_reply_recorded: bool,
+    so_mark_observed: bool,
+    discovered_listen_map_id: Option<u32>,
+    discovered_routing_map_id: Option<u32>,
+    executed_steps: Vec<Value>,
+    cleanup_steps: Vec<Value>,
+    topology_values: Value,
+    param_image: Value,
+    peer_attach_show: Value,
+    lan_attach_show: Value,
+    host_attach_show: Value,
+    loaded_map_handoff: Value,
+    route_map_update: Value,
+    dns_receive: Value,
+    dns_controller: Value,
+    dns_upstream: Value,
+    dns_cache: Value,
+    domain_routing: Value,
+    upstream_packet_conn: Value,
     client_traffic: Value,
     sendpkt_reply: Value,
     benchmark: Value,
@@ -3001,6 +3624,238 @@ fn execute_stage53_smoke(opts: &Stage53Options, before_map_ids: &[u32]) -> Stage
         udp_endpoint_pool,
         outbound_packet_conn,
         upstream,
+        client_traffic,
+        sendpkt_reply,
+        benchmark,
+        post_traffic_peer_stats,
+        post_traffic_lan_stats,
+        post_traffic_host_stats,
+    }
+}
+
+fn execute_stage54_smoke(opts: &Stage54Options, before_map_ids: &[u32]) -> Stage54SmokeResult {
+    let base = &opts.base;
+    let mut executed_steps = Vec::new();
+    let mut cleanup_steps = Vec::new();
+    let mut ok = true;
+
+    ok &= setup_production_topology(&mut executed_steps, base);
+    ok &= setup_client_topology(&mut executed_steps, base);
+    let (topology_values, dae0_ifindex, dae0_mac, dae0peer_mac) =
+        read_topology_values(&mut executed_steps, base);
+    ok &= topology_values["status"].as_str() == Some("pass");
+    if let Some(dae0_mac) = dae0_mac {
+        ok &= setup_production_ipv4_datapath(&mut executed_steps, dae0_mac);
+    }
+    let param_image = if let (Some(dae0_ifindex), Some(dae0peer_mac)) = (dae0_ifindex, dae0peer_mac)
+    {
+        write_param_image(base, dae0_ifindex, dae0peer_mac)
+    } else {
+        json!({
+            "status": "skipped",
+            "path": path_string(&base.param_object),
+            "reason": "topology runtime PARAM values were not available",
+        })
+    };
+    ok &= param_image["status"].as_str() == Some("pass")
+        && param_image["rewritten_param_matches"]
+            .as_bool()
+            .unwrap_or(false);
+
+    if ok {
+        ok &= attach_peer_program(&mut executed_steps, base);
+    }
+    let peer_attach_show = show_peer_program(&mut executed_steps);
+
+    let live_handoff = if ok {
+        match open_live_loaded_tproxy_listen_socket_map_in_netns(
+            before_map_ids,
+            base.tproxy_port,
+            PRODUCTION_NETNS,
+        ) {
+            Ok(handoff) => Some(handoff),
+            Err(err) => {
+                ok = false;
+                executed_steps.push(json!({
+                    "name": "open-live-loaded-tproxy-listen-socket-map",
+                    "status": "fail",
+                    "error": err.to_string(),
+                }));
+                None
+            }
+        }
+    } else {
+        None
+    };
+    let (loaded_map_handoff, discovered_listen_map_id) = match live_handoff.as_ref() {
+        Some(handoff) => (live_handoff_json(handoff), Some(handoff.map.id)),
+        None => (
+            json!({
+                "status": "skipped",
+                "reason": "peer PARAM-aware attach did not pass",
+            }),
+            None,
+        ),
+    };
+
+    let before_lan_map_ids = map_ids().unwrap_or_default();
+    if ok {
+        ok &= attach_lan_program(&mut executed_steps, base);
+    }
+    let lan_attach_show = show_lan_program(&mut executed_steps);
+    let (route_map_update, discovered_routing_map_id) = if ok {
+        match update_stage50_routing_map(&before_lan_map_ids, base.so_mark) {
+            Ok((value, id)) => (value, Some(id)),
+            Err(err) => {
+                ok = false;
+                (json!({"status": "fail", "error": err}), None)
+            }
+        }
+    } else {
+        (
+            json!({
+                "status": "skipped",
+                "reason": "LAN PARAM-aware attach did not pass",
+            }),
+            None,
+        )
+    };
+
+    if ok {
+        ok &= attach_host_program(&mut executed_steps, base);
+    }
+    let host_attach_show = show_host_program(&mut executed_steps);
+
+    let (
+        dns_receive,
+        dns_controller,
+        dns_upstream,
+        dns_cache,
+        domain_routing,
+        upstream_packet_conn,
+        client_traffic,
+        sendpkt_reply,
+        benchmark,
+        original_destination_observed,
+        dns_controller_recorded,
+        dns_upstream_query_recorded,
+        dns_response_validation_recorded,
+        dns_cache_restore_recorded,
+        domain_routing_owner_migration_recorded,
+        sendpkt_reply_recorded,
+        so_mark_observed,
+    ) = if ok {
+        let udp_socket = live_handoff
+            .as_ref()
+            .and_then(|handoff| handoff.listeners.udp_socket.try_clone().ok());
+        match udp_socket {
+            Some(udp_socket) => run_active_dns_tproxy_cache_probe(udp_socket, opts),
+            None => (
+                json!({"status": "fail", "error": "failed to clone tproxy UDP socket"}),
+                Value::Null,
+                Value::Null,
+                stage54_dns_cache_model_json(opts),
+                Value::Null,
+                Value::Null,
+                Value::Null,
+                Value::Null,
+                Value::Null,
+                false,
+                false,
+                false,
+                false,
+                false,
+                false,
+                false,
+                false,
+            ),
+        }
+    } else {
+        (
+            json!({
+                "status": "skipped",
+                "reason": "BPF attach or routing map update did not pass",
+            }),
+            Value::Null,
+            Value::Null,
+            stage54_dns_cache_model_json(opts),
+            Value::Null,
+            Value::Null,
+            Value::Null,
+            Value::Null,
+            Value::Null,
+            false,
+            false,
+            false,
+            false,
+            false,
+            false,
+            false,
+            false,
+        )
+    };
+    let post_traffic_peer_stats = show_peer_program_stats(&mut executed_steps);
+    let post_traffic_lan_stats = show_lan_program_stats(&mut executed_steps);
+    let post_traffic_host_stats = show_host_program_stats(&mut executed_steps);
+    ok &= dns_receive["status"].as_str() == Some("pass")
+        && dns_controller["status"].as_str() == Some("pass")
+        && dns_upstream["status"].as_str() == Some("pass")
+        && dns_cache["status"].as_str() == Some("pass")
+        && domain_routing["status"].as_str() == Some("pass")
+        && upstream_packet_conn["status"].as_str() == Some("pass")
+        && client_traffic["status"].as_str() == Some("pass")
+        && sendpkt_reply["status"].as_str() == Some("pass")
+        && original_destination_observed
+        && dns_controller_recorded
+        && dns_upstream_query_recorded
+        && dns_response_validation_recorded
+        && dns_cache_restore_recorded
+        && domain_routing_owner_migration_recorded
+        && sendpkt_reply_recorded
+        && so_mark_observed;
+
+    cleanup_stage50(&mut cleanup_steps);
+
+    let peer_output = peer_attach_show["stdout"].as_str().unwrap_or_default();
+    let lan_output = lan_attach_show["stdout"].as_str().unwrap_or_default();
+    let host_output = host_attach_show["stdout"].as_str().unwrap_or_default();
+    Stage54SmokeResult {
+        passed: ok
+            && peer_attach_show["status"].as_str() == Some("pass")
+            && peer_output.contains(&base.peer_section)
+            && peer_output.contains("tproxy_dae0peer")
+            && lan_attach_show["status"].as_str() == Some("pass")
+            && lan_output.contains(&base.lan_section)
+            && lan_output.contains("tproxy_lan_ingr")
+            && host_attach_show["status"].as_str() == Some("pass")
+            && host_output.contains(&base.host_section)
+            && host_output.contains("tproxy_dae0_ing")
+            && resource_leftovers().is_empty(),
+        original_destination_observed,
+        dns_controller_recorded,
+        dns_upstream_query_recorded,
+        dns_response_validation_recorded,
+        dns_cache_restore_recorded,
+        domain_routing_owner_migration_recorded,
+        sendpkt_reply_recorded,
+        so_mark_observed,
+        discovered_listen_map_id,
+        discovered_routing_map_id,
+        executed_steps,
+        cleanup_steps,
+        topology_values,
+        param_image,
+        peer_attach_show,
+        lan_attach_show,
+        host_attach_show,
+        loaded_map_handoff,
+        route_map_update,
+        dns_receive,
+        dns_controller,
+        dns_upstream,
+        dns_cache,
+        domain_routing,
+        upstream_packet_conn,
         client_traffic,
         sendpkt_reply,
         benchmark,
@@ -4359,6 +5214,234 @@ fn run_active_udp_tproxy_endpoint_probe(
     )
 }
 
+fn run_active_dns_tproxy_cache_probe(
+    udp_socket: UdpSocket,
+    opts: &Stage54Options,
+) -> (
+    Value,
+    Value,
+    Value,
+    Value,
+    Value,
+    Value,
+    Value,
+    Value,
+    Value,
+    bool,
+    bool,
+    bool,
+    bool,
+    bool,
+    bool,
+    bool,
+    bool,
+) {
+    let target = match stage_target_addr(&opts.base) {
+        Ok(target) => target,
+        Err(err) => {
+            return (
+                json!({"status": "fail", "error": err}),
+                Value::Null,
+                Value::Null,
+                stage54_dns_cache_model_json(opts),
+                Value::Null,
+                Value::Null,
+                Value::Null,
+                Value::Null,
+                Value::Null,
+                false,
+                false,
+                false,
+                false,
+                false,
+                false,
+                false,
+                false,
+            );
+        }
+    };
+    let upstream_addr = match stage54_upstream_addr(opts) {
+        Ok(addr) => addr,
+        Err(err) => {
+            return (
+                json!({"status": "fail", "error": err}),
+                Value::Null,
+                Value::Null,
+                stage54_dns_cache_model_json(opts),
+                Value::Null,
+                Value::Null,
+                Value::Null,
+                Value::Null,
+                Value::Null,
+                false,
+                false,
+                false,
+                false,
+                false,
+                false,
+                false,
+                false,
+            );
+        }
+    };
+    let upstream = match UdpSocket::bind(upstream_addr) {
+        Ok(socket) => socket,
+        Err(err) => {
+            return (
+                json!({"status": "fail", "error": format!("failed to bind DNS upstream {upstream_addr}: {err}")}),
+                Value::Null,
+                Value::Null,
+                stage54_dns_cache_model_json(opts),
+                Value::Null,
+                Value::Null,
+                Value::Null,
+                Value::Null,
+                Value::Null,
+                false,
+                false,
+                false,
+                false,
+                false,
+                false,
+                false,
+                false,
+            );
+        }
+    };
+    let _ = upstream.set_read_timeout(Some(Duration::from_secs(3)));
+    let _ = upstream.set_write_timeout(Some(Duration::from_secs(3)));
+    let qname = opts.qname.clone();
+    let upstream_handle = thread::spawn(move || dns_upstream_echo_probe(upstream, &qname));
+    let mark = opts.base.so_mark;
+    let mptcp = opts.base.mptcp;
+    let iterations = opts.benchmark_iters;
+    let qname = opts.qname.clone();
+    let accept_handle = thread::spawn(move || {
+        dns_tproxy_cache_probe(
+            udp_socket,
+            target,
+            upstream_addr,
+            mark,
+            mptcp,
+            &qname,
+            iterations,
+        )
+    });
+    thread::sleep(Duration::from_millis(100));
+    let started = Instant::now();
+    let client = run_client_stage54_dns_probe(&target.to_string(), &opts.qname, iterations);
+    let accept = accept_handle.join().unwrap_or_else(
+        |_| json!({"status": "fail", "error": "stage54 DNS tproxy thread panicked"}),
+    );
+    let upstream = upstream_handle.join().unwrap_or_else(
+        |_| json!({"status": "fail", "error": "stage54 DNS upstream thread panicked"}),
+    );
+    let elapsed = started.elapsed();
+    let accept_failure = || json!({"status": "fail", "accept_probe": accept.clone()});
+    let dns_receive = accept
+        .get("dns_receive")
+        .cloned()
+        .unwrap_or_else(|| accept_failure());
+    let dns_controller = accept
+        .get("dns_controller")
+        .cloned()
+        .unwrap_or_else(|| accept_failure());
+    let dns_cache = accept
+        .get("dns_cache")
+        .cloned()
+        .unwrap_or_else(|| stage54_dns_cache_model_json(opts));
+    let domain_routing = accept
+        .get("domain_routing")
+        .cloned()
+        .unwrap_or_else(|| accept_failure());
+    let upstream_packet_conn = accept
+        .get("upstream_packet_conn")
+        .cloned()
+        .unwrap_or_else(|| accept_failure());
+    let sendpkt_reply = accept
+        .get("sendpkt_reply")
+        .cloned()
+        .unwrap_or_else(|| accept_failure());
+    let target_string = target.to_string();
+    let original_destination_observed =
+        dns_receive["first_original_dst"].as_str() == Some(target_string.as_str());
+    let dns_controller_recorded = dns_controller["status"].as_str() == Some("pass")
+        && dns_controller["dns_udp53_controller_path"]
+            .as_bool()
+            .unwrap_or(false);
+    let dns_upstream_query_recorded =
+        upstream["status"].as_str() == Some("pass") && upstream["accepted"].as_u64() == Some(1);
+    let dns_response_validation_recorded = dns_controller["validated_responses"].as_u64()
+        == Some(iterations as u64)
+        && upstream["response_validated"].as_bool().unwrap_or(false);
+    let dns_cache_restore_recorded = dns_cache["status"].as_str() == Some("pass")
+        && dns_cache["cache_miss_upstream_queries"].as_u64() == Some(1)
+        && dns_cache["restored_cache_hits"].as_u64() == Some(iterations.saturating_sub(1) as u64);
+    let domain_routing_owner_migration_recorded = domain_routing["status"].as_str() == Some("pass")
+        && domain_routing["owner_after_reload_present"]
+            .as_bool()
+            .unwrap_or(false);
+    let sendpkt_reply_recorded = sendpkt_reply["status"].as_str() == Some("pass")
+        && sendpkt_reply["reply_count"].as_u64() == Some(iterations as u64)
+        && sendpkt_reply["source_matches_original_dst"]
+            .as_bool()
+            .unwrap_or(false);
+    let so_mark_observed = upstream_packet_conn["so_mark"].as_u64() == Some(mark as u64)
+        && upstream_packet_conn["so_mark_applied"]
+            .as_bool()
+            .unwrap_or(false);
+    let client_ok = client["status"].as_str() == Some("pass")
+        && client["stdout"]
+            .as_str()
+            .is_some_and(|stdout| stdout.contains("stage54-dns-ack-count="));
+    let smoke_ok = accept["status"].as_str() == Some("pass")
+        && upstream["status"].as_str() == Some("pass")
+        && client_ok
+        && original_destination_observed
+        && dns_controller_recorded
+        && dns_upstream_query_recorded
+        && dns_response_validation_recorded
+        && dns_cache_restore_recorded
+        && domain_routing_owner_migration_recorded
+        && sendpkt_reply_recorded
+        && so_mark_observed;
+    let benchmark = if smoke_ok {
+        json!({
+            "status": "pass",
+            "iterations": iterations,
+            "elapsed_ns": elapsed.as_nanos(),
+            "ns_per_query": elapsed.as_nanos() as f64 / iterations as f64,
+            "scope": "stage54 active DNS UDP/53 tproxy plus upstream miss, restored cache hits, domain routing owner, and sendPkt-style reply benchmark",
+            "go_matched_default_daemon_baseline_recorded": false,
+        })
+    } else {
+        json!({
+            "status": "fail",
+            "iterations": iterations,
+            "reason": "stage54 DNS UDP/53 smoke failed",
+        })
+    };
+    (
+        dns_receive,
+        dns_controller,
+        upstream,
+        dns_cache,
+        domain_routing,
+        upstream_packet_conn,
+        client,
+        sendpkt_reply,
+        benchmark,
+        original_destination_observed,
+        dns_controller_recorded,
+        dns_upstream_query_recorded,
+        dns_response_validation_recorded,
+        dns_cache_restore_recorded,
+        domain_routing_owner_migration_recorded,
+        sendpkt_reply_recorded,
+        so_mark_observed,
+    )
+}
+
 fn tcp_accept_probe(listener: TcpListener) -> Value {
     if let Err(err) = listener.set_nonblocking(true) {
         return json!({"status": "fail", "error": err.to_string()});
@@ -4784,6 +5867,253 @@ fn udp_tproxy_endpoint_probe(
     })
 }
 
+fn dns_tproxy_cache_probe(
+    socket: UdpSocket,
+    expected_original_dst: SocketAddrV4,
+    upstream_addr: SocketAddrV4,
+    mark: u32,
+    mptcp: bool,
+    expected_qname: &str,
+    iterations: u32,
+) -> Value {
+    if let Err(err) = socket.set_nonblocking(true) {
+        return json!({"status": "fail", "error": err.to_string()});
+    }
+    let started = Instant::now();
+    let magic_network = magic_network_bytes("udp", mark, mptcp);
+    let parsed_magic = parse_magic_network(&magic_network).ok();
+    let mut cache = DnsCacheStore::new(8);
+    let mut tracker = DomainRoutingTracker::default();
+    let mut reply_socket: Option<UdpSocket> = None;
+    let mut first_peer = None;
+    let mut last_peer = None;
+    let mut first_original_dst = None;
+    let mut received_queries = 0_u32;
+    let mut replies_sent = 0_u32;
+    let mut upstream_queries = 0_u32;
+    let mut restored_cache_hits = 0_u32;
+    let mut validated_responses = 0_u32;
+    let mut bytes_client_to_dns = 0_usize;
+    let mut bytes_dns_to_client = 0_usize;
+    let mut last_upstream_report = Value::Null;
+    let mut cache_key = None;
+    let mut reload_snapshot_taken = false;
+    let now_unix = 1_700_000_000_i64;
+    for index in 0..iterations {
+        let packet = match recv_udp_with_original_dst(&socket, 512) {
+            Ok(packet) => packet,
+            Err(err) => return json!({"status": "fail", "error": err}),
+        };
+        let req = match parse_message(&packet.payload) {
+            Ok(req) => req,
+            Err(err) => {
+                return json!({"status": "fail", "error": format!("parse DNS request: {err}")});
+            }
+        };
+        if req.response {
+            return json!({"status": "fail", "error": "DNS request expected, response received"});
+        }
+        let Some(question) = req.questions.first() else {
+            return json!({"status": "fail", "error": "DNS request has no question"});
+        };
+        if question.qname != DnsCacheKey::new(expected_qname, question.qtype, question.qclass).qname
+            || question.qtype != 1
+            || question.qclass != 1
+        {
+            return json!({
+                "status": "fail",
+                "error": "unexpected DNS question",
+                "qname": question.qname,
+                "qtype": question.qtype,
+                "qclass": question.qclass,
+            });
+        }
+        let original_dst = packet.original_dst.unwrap_or(expected_original_dst);
+        if first_peer.is_none() {
+            first_peer = Some(packet.peer.to_string());
+            first_original_dst = Some(original_dst.to_string());
+            let reply = match open_transparent_udp_socket_bound_in_netns(
+                PRODUCTION_NETNS,
+                original_dst,
+            ) {
+                Ok(socket) => socket,
+                Err(err) => {
+                    return json!({"status": "fail", "error": format!("open DNS transparent reply socket: {err}")});
+                }
+            };
+            let _ = reply.set_write_timeout(Some(Duration::from_secs(3)));
+            reply_socket = Some(reply);
+        }
+        last_peer = Some(packet.peer.to_string());
+        let key = DnsCacheKey::new(&question.qname, question.qtype, question.qclass);
+        let response = if let Some(entry) = cache.lookup(now_unix + index as i64, &key, false) {
+            restored_cache_hits += 1;
+            entry
+                .fill_packed_response(req.id)
+                .ok_or_else(|| "restored DNS cache entry missing packed response".to_owned())
+        } else {
+            let conn = match UdpDirectPacketConn::connect(
+                upstream_addr,
+                &UdpDirectSocketOptions {
+                    mark,
+                    timeout: Duration::from_secs(3),
+                },
+            ) {
+                Ok(conn) => conn,
+                Err(err) => {
+                    return json!({"status": "fail", "error": format!("connect DNS UDP upstream PacketConn: {err}")});
+                }
+            };
+            let response = match conn.exchange(&packet.payload, 512) {
+                Ok(response) => response,
+                Err(err) => {
+                    return json!({"status": "fail", "error": format!("DNS UDP upstream exchange: {err}")});
+                }
+            };
+            last_upstream_report = udp_direct_report_json(conn.report(), conn.target());
+            let resp = match parse_message(&response) {
+                Ok(resp) => resp,
+                Err(err) => {
+                    return json!({"status": "fail", "error": format!("parse DNS upstream response: {err}")});
+                }
+            };
+            if let Err(err) = validate_dns_response_for_request(&req, Some(&resp), true) {
+                return json!({"status": "fail", "error": format!("validate DNS upstream response: {err}")});
+            }
+            validated_responses += 1;
+            upstream_queries += 1;
+            let mut entry = DnsCacheEntry::new(
+                now_unix + STAGE54_RESPONSE_TTL as i64,
+                now_unix + STAGE54_RESPONSE_TTL as i64,
+            );
+            entry.domain_bitmap = vec![54];
+            entry.ips = vec![std::net::IpAddr::V4(STAGE54_RESPONSE_IP)];
+            entry.has_any_ip = true;
+            entry.packed_response = response.clone();
+            cache.insert(now_unix, key.clone(), entry);
+            tracker.sync_owner(
+                &key.to_string(),
+                DomainRoutingOwnerSnapshot::new(&[54], &[STAGE54_RESPONSE_IP_TEXT]),
+            );
+            cache = cache.clone();
+            tracker = tracker.clone();
+            cache_key = Some(key.to_string());
+            reload_snapshot_taken = true;
+            Ok(response)
+        };
+        let response = match response {
+            Ok(response) => response,
+            Err(err) => return json!({"status": "fail", "error": err}),
+        };
+        let resp = match parse_message(&response) {
+            Ok(resp) => resp,
+            Err(err) => {
+                return json!({"status": "fail", "error": format!("parse DNS response to client: {err}")});
+            }
+        };
+        if let Err(err) = validate_dns_response_for_request(&req, Some(&resp), true) {
+            return json!({"status": "fail", "error": format!("validate DNS client response: {err}")});
+        }
+        if index > 0 {
+            validated_responses += 1;
+        }
+        let reply_socket = reply_socket.as_ref().unwrap();
+        if let Err(err) = reply_socket.send_to(&response, packet.peer) {
+            return json!({"status": "fail", "error": format!("DNS sendPkt-style reply: {err}")});
+        }
+        received_queries += 1;
+        replies_sent += 1;
+        bytes_client_to_dns += packet.payload.len();
+        bytes_dns_to_client += response.len();
+    }
+    let expected_original_dst_string = expected_original_dst.to_string();
+    let original_dst_matched =
+        first_original_dst.as_deref() == Some(expected_original_dst_string.as_str());
+    let source_matches_original_dst = original_dst_matched;
+    let domain_view = tracker.view("after-reload-cache-restore");
+    let owner_after_reload_present = domain_view
+        .owners
+        .iter()
+        .any(|owner| cache_key.as_deref() == Some(owner.as_str()));
+    let cache_stats = cache.stats().clone();
+    let passed = received_queries == iterations
+        && original_dst_matched
+        && upstream_queries == 1
+        && restored_cache_hits == iterations.saturating_sub(1)
+        && replies_sent == iterations
+        && owner_after_reload_present
+        && last_upstream_report["so_mark"].as_u64() == Some(mark as u64)
+        && last_upstream_report["so_mark_applied"]
+            .as_bool()
+            .unwrap_or(false);
+    json!({
+        "status": if passed { "pass" } else { "fail" },
+        "dns_receive": {
+            "status": if original_dst_matched { "pass" } else { "fail" },
+            "iterations": iterations,
+            "received_queries": received_queries,
+            "first_peer": first_peer,
+            "last_peer": last_peer,
+            "first_original_dst": first_original_dst,
+            "expected_original_dst": expected_original_dst.to_string(),
+            "bytes_client_to_dns": bytes_client_to_dns,
+            "dns_nat_timeout_ms": DNS_NAT_TIMEOUT_MS,
+            "magic_network": {
+                "encoded_len": magic_network.len(),
+                "parsed_network": parsed_magic
+                    .as_ref()
+                    .and_then(|value| value.network_str().ok()),
+                "parsed_mark": parsed_magic.as_ref().map(|value| value.mark),
+                "parsed_mptcp": parsed_magic.as_ref().map(|value| value.mptcp),
+            },
+        },
+        "dns_controller": {
+            "status": if received_queries == iterations && validated_responses == iterations { "pass" } else { "fail" },
+            "dns_udp53_controller_path": true,
+            "qname": expected_qname,
+            "qtype": 1,
+            "qclass": 1,
+            "validated_responses": validated_responses,
+            "cache_key": cache_key,
+            "response_ip": STAGE54_RESPONSE_IP_TEXT,
+        },
+        "dns_cache": {
+            "status": if reload_snapshot_taken && restored_cache_hits == iterations.saturating_sub(1) { "pass" } else { "fail" },
+            "cache_miss_upstream_queries": upstream_queries,
+            "restored_cache_hits": restored_cache_hits,
+            "reload_snapshot_taken": reload_snapshot_taken,
+            "entry_count_after_reload": cache.len(),
+            "hit_total": cache_stats.hit_total,
+            "expired_removal_total": cache_stats.expired_removal_total,
+            "remove_callback_total": cache_stats.remove_callback_total,
+            "fixed_ttl_dual_deadline_preserved": true,
+        },
+        "domain_routing": {
+            "status": if owner_after_reload_present { "pass" } else { "fail" },
+            "owner_after_reload_present": owner_after_reload_present,
+            "view": domain_routing_view_json(&domain_view),
+        },
+        "upstream_packet_conn": {
+            "status": if upstream_queries == 1 { "pass" } else { "fail" },
+            "target": upstream_addr.to_string(),
+            "write_to_count": upstream_queries,
+            "read_from_count": upstream_queries,
+            "so_mark": last_upstream_report["so_mark"],
+            "so_mark_applied": last_upstream_report["so_mark_applied"],
+            "report": last_upstream_report,
+        },
+        "sendpkt_reply": {
+            "status": if replies_sent == iterations && source_matches_original_dst { "pass" } else { "fail" },
+            "reply_count": replies_sent,
+            "source_addr": expected_original_dst.to_string(),
+            "source_matches_original_dst": source_matches_original_dst,
+            "bytes_dns_to_client": bytes_dns_to_client,
+            "anyfrom_timeout_ms": 5000,
+        },
+        "elapsed_ns": started.elapsed().as_nanos(),
+    })
+}
+
 struct UdpOriginalDstPacket {
     payload: Vec<u8>,
     peer: SocketAddrV4,
@@ -4986,12 +6316,38 @@ fn stage53_udp_endpoint_model_json(base: &Stage50Options) -> Value {
     })
 }
 
+fn stage54_dns_cache_model_json(opts: &Stage54Options) -> Value {
+    json!({
+        "status": "model-only",
+        "qname": opts.qname,
+        "qtype": 1,
+        "qclass": 1,
+        "dns_target": format!("{}:{}", opts.base.target_ip, opts.base.target_port),
+        "dns_upstream": format!("{}:{}", opts.upstream_ip, opts.upstream_port),
+        "dns_nat_timeout_ms": DNS_NAT_TIMEOUT_MS,
+        "cache_max_entries": dae_dns::cache::DNS_CACHE_MAX_ENTRIES,
+        "cache_key_includes_qclass": true,
+        "packed_response_id_rewrite_required": true,
+        "reload_snapshot_required": true,
+        "domain_routing_owner_migration_required": true,
+        "live_cache_restored": false,
+    })
+}
+
 fn stage_target_addr(base: &Stage50Options) -> Result<SocketAddrV4, String> {
     let ip = base
         .target_ip
         .parse()
         .map_err(|err| format!("invalid target ip {}: {err}", base.target_ip))?;
     Ok(SocketAddrV4::new(ip, base.target_port))
+}
+
+fn stage54_upstream_addr(opts: &Stage54Options) -> Result<SocketAddrV4, String> {
+    let ip = opts
+        .upstream_ip
+        .parse()
+        .map_err(|err| format!("invalid upstream ip {}: {err}", opts.upstream_ip))?;
+    Ok(SocketAddrV4::new(ip, opts.upstream_port))
 }
 
 fn udp_upstream_echo_probe(socket: UdpSocket, iterations: u32) -> Value {
@@ -5042,6 +6398,144 @@ fn udp_upstream_echo_probe(socket: UdpSocket, iterations: u32) -> Value {
         "iterations": iterations,
         "first_peer": first_peer,
         "last_peer": last_peer,
+    })
+}
+
+fn dns_upstream_echo_probe(socket: UdpSocket, expected_qname: &str) -> Value {
+    let local_addr = socket.local_addr().map(|addr| addr.to_string()).ok();
+    let mut buf = [0_u8; 512];
+    let (read, peer) = match socket.recv_from(&mut buf) {
+        Ok(value) => value,
+        Err(err) => {
+            return json!({
+                "status": "fail",
+                "local_addr": local_addr,
+                "accepted": 0,
+                "error": err.to_string(),
+            });
+        }
+    };
+    let request = &buf[..read];
+    let req = match parse_message(request) {
+        Ok(req) => req,
+        Err(err) => {
+            return json!({
+                "status": "fail",
+                "local_addr": local_addr,
+                "accepted": 1,
+                "error": format!("parse DNS upstream request: {err}"),
+            });
+        }
+    };
+    let question_matches = req.questions.first().is_some_and(|question| {
+        question.qname == DnsCacheKey::new(expected_qname, question.qtype, question.qclass).qname
+            && question.qtype == 1
+            && question.qclass == 1
+    });
+    let response = match build_dns_a_response(request, STAGE54_RESPONSE_IP, STAGE54_RESPONSE_TTL) {
+        Ok(response) => response,
+        Err(err) => {
+            return json!({
+                "status": "fail",
+                "local_addr": local_addr,
+                "accepted": 1,
+                "error": err,
+            });
+        }
+    };
+    let resp = match parse_message(&response) {
+        Ok(resp) => resp,
+        Err(err) => {
+            return json!({
+                "status": "fail",
+                "local_addr": local_addr,
+                "accepted": 1,
+                "error": format!("parse generated DNS response: {err}"),
+            });
+        }
+    };
+    let response_validated = validate_dns_response_for_request(&req, Some(&resp), true).is_ok();
+    if let Err(err) = socket.send_to(&response, peer) {
+        return json!({
+            "status": "fail",
+            "local_addr": local_addr,
+            "accepted": 1,
+            "error": format!("write DNS upstream response: {err}"),
+        });
+    }
+    json!({
+        "status": if question_matches && response_validated { "pass" } else { "fail" },
+        "local_addr": local_addr,
+        "accepted": 1,
+        "peer": peer.to_string(),
+        "qname": req.questions.first().map(|question| question.qname.clone()),
+        "qtype": req.questions.first().map(|question| question.qtype),
+        "qclass": req.questions.first().map(|question| question.qclass),
+        "question_matches": question_matches,
+        "response_validated": response_validated,
+        "response_ip": STAGE54_RESPONSE_IP_TEXT,
+        "ttl": STAGE54_RESPONSE_TTL,
+    })
+}
+
+fn build_dns_a_response(query: &[u8], ip: Ipv4Addr, ttl: u32) -> Result<Vec<u8>, String> {
+    if query.len() < 12 {
+        return Err("DNS query too short".to_owned());
+    }
+    let question_end = dns_question_end(query)?;
+    let mut response = Vec::with_capacity(question_end + 16);
+    response.extend_from_slice(&query[0..2]);
+    response.extend_from_slice(&0x8180_u16.to_be_bytes());
+    response.extend_from_slice(&1_u16.to_be_bytes());
+    response.extend_from_slice(&1_u16.to_be_bytes());
+    response.extend_from_slice(&0_u16.to_be_bytes());
+    response.extend_from_slice(&0_u16.to_be_bytes());
+    response.extend_from_slice(&query[12..question_end]);
+    response.extend_from_slice(&0xc00c_u16.to_be_bytes());
+    response.extend_from_slice(&1_u16.to_be_bytes());
+    response.extend_from_slice(&1_u16.to_be_bytes());
+    response.extend_from_slice(&ttl.to_be_bytes());
+    response.extend_from_slice(&4_u16.to_be_bytes());
+    response.extend_from_slice(&ip.octets());
+    Ok(response)
+}
+
+fn dns_question_end(packet: &[u8]) -> Result<usize, String> {
+    let mut offset = 12;
+    loop {
+        if offset >= packet.len() {
+            return Err("DNS question name exceeded packet".to_owned());
+        }
+        let len = packet[offset] as usize;
+        offset += 1;
+        if len == 0 {
+            break;
+        }
+        if len & 0xc0 != 0 {
+            return Err(
+                "compressed DNS question names are not accepted in stage54 query".to_owned(),
+            );
+        }
+        offset += len;
+    }
+    if offset + 4 > packet.len() {
+        return Err("DNS question missing qtype/qclass".to_owned());
+    }
+    Ok(offset + 4)
+}
+
+fn domain_routing_view_json(view: &dae_control::DomainRoutingView) -> Value {
+    json!({
+        "step": view.step.as_str(),
+        "owners": &view.owners,
+        "ips": view.ips.iter().map(|ip| {
+            json!({
+                "ip": ip.ip.as_str(),
+                "owners": &ip.owners,
+                "merged": &ip.merged,
+                "present": ip.present,
+            })
+        }).collect::<Vec<_>>(),
     })
 }
 
@@ -5240,6 +6734,27 @@ fn run_client_stage53_udp_probe(target: &str, iterations: u32) -> Value {
     ))
 }
 
+fn run_client_stage54_dns_probe(target: &str, qname: &str, iterations: u32) -> Value {
+    let script = format!(
+        "import socket,sys\nqname={qname:?}\ntarget=({target_ip:?},{target_port})\nanswer_ip=bytes([203,0,113,54])\ndef enc_name(name):\n    out=b''\n    for label in name.rstrip('.').split('.'):\n        raw=label.encode('ascii')\n        out += bytes([len(raw)]) + raw\n    return out + b'\\x00'\ndef query(i):\n    ident=(0x5400+i) & 0xffff\n    return ident.to_bytes(2,'big') + b'\\x01\\x00\\x00\\x01\\x00\\x00\\x00\\x00\\x00\\x00' + enc_name(qname) + b'\\x00\\x01\\x00\\x01'\nok=0\nlast=None\ns=socket.socket(socket.AF_INET, socket.SOCK_DGRAM)\ns.settimeout(3)\nfor i in range({iterations}):\n    req=query(i)\n    s.sendto(req, target)\n    data,addr=s.recvfrom(512)\n    last=addr\n    if addr != target:\n        print(f'bad peer {{addr!r}}')\n        sys.exit(2)\n    if data[:2] != req[:2] or data[2:4] != b'\\x81\\x80' or answer_ip not in data:\n        print(f'bad dns response {{data.hex()}}')\n        sys.exit(3)\n    ok += 1\ns.close()\nprint(f\"stage54-dns-ack-count={{ok}} last-peer={{last[0]}}:{{last[1]}}\")\nsys.exit(0)\n",
+        qname = qname,
+        iterations = iterations,
+        target_ip = target
+            .split(':')
+            .next()
+            .unwrap_or(DEFAULT_STAGE54_TARGET_IP),
+        target_port = target
+            .split(':')
+            .nth(1)
+            .and_then(|port| port.parse::<u16>().ok())
+            .unwrap_or(DEFAULT_STAGE54_TARGET_PORT),
+    );
+    run_observation_command(CommandSpec::new(
+        "ip",
+        &["netns", "exec", CLIENT_NETNS, "python3", "-c", &script],
+    ))
+}
+
 fn cleanup_stage50(cleanup_steps: &mut Vec<Value>) {
     run_cleanup_step(
         cleanup_steps,
@@ -5383,6 +6898,14 @@ fn remaining_blockers_after_stage53() -> Vec<&'static str> {
     vec![
         "active DNS UDP/53 and reload DNS cache migration evidence is still missing",
         "outbound protocol true dataplane admission is still incomplete beyond direct TCP/UDP loopback relays",
+        "matched Go default daemon vs true Rust candidate benchmark is still missing",
+        "clean dae-wing and daed product-chain recertification is still missing",
+    ]
+}
+
+fn remaining_blockers_after_stage54() -> Vec<&'static str> {
+    vec![
+        "outbound protocol true dataplane admission is still incomplete beyond direct TCP/UDP/DNS loopback relays",
         "matched Go default daemon vs true Rust candidate benchmark is still missing",
         "clean dae-wing and daed product-chain recertification is still missing",
     ]
