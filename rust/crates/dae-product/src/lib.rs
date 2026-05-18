@@ -26,6 +26,7 @@ pub mod stage49_production_param_listener_gate;
 pub mod stage50_active_tcp_ingress_gate;
 pub mod stage51_active_tcp_relay_gate;
 pub mod stage52_active_tcp_route_table_group_gate;
+pub mod stage53_active_udp_tproxy_endpoint_gate;
 pub mod systemd;
 pub mod true_daemon_admission;
 
@@ -122,6 +123,10 @@ pub use stage51_active_tcp_relay_gate::{
 pub use stage52_active_tcp_route_table_group_gate::{
     Stage52ActiveTcpRouteTableGroupGateContract, Stage52ActiveTcpRouteTableGroupGateRow,
     stage52_active_tcp_route_table_group_gate_contract,
+};
+pub use stage53_active_udp_tproxy_endpoint_gate::{
+    Stage53ActiveUdpTproxyEndpointGateContract, Stage53ActiveUdpTproxyEndpointGateRow,
+    stage53_active_udp_tproxy_endpoint_gate_contract,
 };
 pub use systemd::{SystemdContract, systemd_contract};
 pub use true_daemon_admission::{

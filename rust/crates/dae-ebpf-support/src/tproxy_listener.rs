@@ -1,7 +1,7 @@
 use std::fs::File;
 use std::io;
 use std::mem::size_of;
-use std::net::{TcpListener, UdpSocket};
+use std::net::{Ipv4Addr, SocketAddrV4, TcpListener, UdpSocket};
 use std::os::fd::{AsRawFd, FromRawFd, IntoRawFd, OwnedFd};
 use std::path::PathBuf;
 
@@ -66,6 +66,33 @@ pub fn open_tproxy_listener_set_in_netns(
             format!("{err}; failed to restore netns: {restore_err}"),
         )),
     }
+}
+
+pub fn open_transparent_udp_socket_bound_in_netns(
+    netns_name: &str,
+    addr: SocketAddrV4,
+) -> io::Result<UdpSocket> {
+    let current = File::open("/proc/self/ns/net")?;
+    let target = open_named_netns(netns_name)?;
+    let guard = NetnsGuard::enter(current, target)?;
+    let result = open_transparent_udp_socket_bound(addr);
+    let restore = guard.restore();
+    match (result, restore) {
+        (Ok(socket), Ok(())) => Ok(socket),
+        (Err(err), Ok(())) => Err(err),
+        (Ok(_), Err(err)) => Err(err),
+        (Err(err), Err(restore_err)) => Err(io::Error::new(
+            err.kind(),
+            format!("{err}; failed to restore netns: {restore_err}"),
+        )),
+    }
+}
+
+pub fn open_transparent_udp_socket_bound(addr: SocketAddrV4) -> io::Result<UdpSocket> {
+    let udp_fd = open_socket(libc::SOCK_DGRAM)?;
+    apply_tproxy_control(udp_fd.as_raw_fd())?;
+    bind_ipv4(udp_fd.as_raw_fd(), *addr.ip(), addr.port())?;
+    Ok(unsafe { UdpSocket::from_raw_fd(udp_fd.into_raw_fd()) })
 }
 
 fn open_named_netns(name: &str) -> io::Result<File> {
@@ -135,11 +162,15 @@ fn apply_tproxy_control(fd: i32) -> io::Result<()> {
 }
 
 fn bind_ipv4_any(fd: i32, port: u16) -> io::Result<()> {
+    bind_ipv4(fd, Ipv4Addr::UNSPECIFIED, port)
+}
+
+fn bind_ipv4(fd: i32, ip: Ipv4Addr, port: u16) -> io::Result<()> {
     let addr = libc::sockaddr_in {
         sin_family: libc::AF_INET as libc::sa_family_t,
         sin_port: port.to_be(),
         sin_addr: libc::in_addr {
-            s_addr: u32::from_ne_bytes([0, 0, 0, 0]),
+            s_addr: u32::from_ne_bytes(ip.octets()),
         },
         sin_zero: [0; 8],
     };

@@ -3,6 +3,7 @@ pub mod packet_sniffer;
 pub mod route;
 pub mod tcp_direct;
 pub mod tcp_route_dial;
+pub mod udp_direct;
 pub mod udp_endpoint;
 pub mod udp_task;
 
@@ -22,6 +23,7 @@ pub use tcp_route_dial::{
     OUTBOUND_USER_DEFINED_MAX, OUTBOUND_USER_DEFINED_MIN, RouteDialTcpPlan, RouteDialTcpPlanInput,
     TcpDialMode, choose_dial_target, outbound_is_reserved, route_dial_tcp_plan,
 };
+pub use udp_direct::{UdpDirectPacketConn, UdpDirectSocketOptions, UdpDirectSocketReport};
 pub use udp_endpoint::{
     ANYFROM_TIMEOUT_MS, DEFAULT_NAT_TIMEOUT_MS, DEFAULT_UDP_ENDPOINT_POOL_MAX_ENTRIES,
     DNS_NAT_TIMEOUT_MS, MAX_RETRY, normalize_udp_endpoint_pool_max_entries,
