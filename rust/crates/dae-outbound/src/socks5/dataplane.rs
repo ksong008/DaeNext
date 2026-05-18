@@ -27,7 +27,6 @@ pub fn tcp_connect_exchange(
     payload: &[u8],
     timeout: Duration,
 ) -> Result<Socks5TcpExchangeReport, OutboundError> {
-    let target = Socks5Address::parse(target)?;
     let mut stream =
         TcpStream::connect(proxy).map_err(|err| OutboundError::BadSocks5Reply(err.to_string()))?;
     stream
@@ -37,6 +36,21 @@ pub fn tcp_connect_exchange(
         .set_write_timeout(Some(timeout))
         .map_err(|err| OutboundError::BadSocks5Reply(err.to_string()))?;
 
+    tcp_connect_exchange_over_stream(&mut stream, proxy, target, username, password, payload)
+}
+
+pub fn tcp_connect_exchange_over_stream<S>(
+    stream: &mut S,
+    proxy: &str,
+    target: &str,
+    username: &str,
+    password: &str,
+    payload: &[u8],
+) -> Result<Socks5TcpExchangeReport, OutboundError>
+where
+    S: Read + Write,
+{
+    let target = Socks5Address::parse(target)?;
     let greeting = handshake::greeting(username, password);
     stream
         .write_all(&greeting)
@@ -75,7 +89,7 @@ pub fn tcp_connect_exchange(
         .read_exact(&mut reply_head)
         .map_err(|err| OutboundError::BadSocks5Reply(err.to_string()))?;
     let mut reply_bytes = reply_head.to_vec();
-    reply_bytes.extend(read_socks5_address_bytes(&mut stream)?);
+    reply_bytes.extend(read_socks5_address_bytes(&mut *stream)?);
     let parsed_reply = handshake::parse_server_reply(&reply_bytes)?;
 
     stream
@@ -98,7 +112,7 @@ pub fn tcp_connect_exchange(
     })
 }
 
-fn read_socks5_address_bytes(stream: &mut TcpStream) -> Result<Vec<u8>, OutboundError> {
+fn read_socks5_address_bytes(stream: &mut impl Read) -> Result<Vec<u8>, OutboundError> {
     let mut atyp = [0_u8; 1];
     stream
         .read_exact(&mut atyp)
