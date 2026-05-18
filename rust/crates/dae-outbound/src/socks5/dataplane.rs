@@ -19,6 +19,17 @@ pub struct Socks5TcpExchangeReport {
     pub default_go_path: bool,
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct Socks5UdpAssociateControlReport {
+    pub proxy: String,
+    pub target: String,
+    pub method: u8,
+    pub bind: String,
+    pub control_connection_retained: bool,
+    pub true_dataplane: bool,
+    pub default_go_path: bool,
+}
+
 pub fn tcp_connect_exchange(
     proxy: &str,
     target: &str,
@@ -51,33 +62,7 @@ where
     S: Read + Write,
 {
     let target = Socks5Address::parse(target)?;
-    let greeting = handshake::greeting(username, password);
-    stream
-        .write_all(&greeting)
-        .map_err(|err| OutboundError::BadSocks5Reply(err.to_string()))?;
-
-    let mut method_selection = [0_u8; 2];
-    stream
-        .read_exact(&mut method_selection)
-        .map_err(|err| OutboundError::BadSocks5Reply(err.to_string()))?;
-    let method = handshake::parse_method_selection(&method_selection)?;
-
-    if method == handshake::AUTH_PASSWORD {
-        let auth = handshake::username_password_auth(username, password)?;
-        stream
-            .write_all(&auth)
-            .map_err(|err| OutboundError::BadSocks5Auth(err.to_string()))?;
-        let mut auth_reply = [0_u8; 2];
-        stream
-            .read_exact(&mut auth_reply)
-            .map_err(|err| OutboundError::BadSocks5Auth(err.to_string()))?;
-        if auth_reply[0] != handshake::PASSWORD_AUTH_VERSION || auth_reply[1] != 0 {
-            return Err(OutboundError::BadSocks5Auth(format!(
-                "auth rejected: {:02x?}",
-                auth_reply
-            )));
-        }
-    }
+    let method = authenticate(stream, username, password)?;
 
     let request = handshake::request(Socks5Command::Connect, &target)?;
     stream
@@ -110,6 +95,76 @@ where
         true_dataplane: true,
         default_go_path: true,
     })
+}
+
+pub fn udp_associate_control_over_stream<S>(
+    stream: &mut S,
+    proxy: &str,
+    target: &str,
+    username: &str,
+    password: &str,
+) -> Result<Socks5UdpAssociateControlReport, OutboundError>
+where
+    S: Read + Write,
+{
+    let target = Socks5Address::parse(target)?;
+    let method = authenticate(stream, username, password)?;
+    let request = handshake::request(Socks5Command::UdpAssociate, &target)?;
+    stream
+        .write_all(&request)
+        .map_err(|err| OutboundError::BadSocks5Reply(err.to_string()))?;
+
+    let mut reply_head = [0_u8; 3];
+    stream
+        .read_exact(&mut reply_head)
+        .map_err(|err| OutboundError::BadSocks5Reply(err.to_string()))?;
+    let mut reply_bytes = reply_head.to_vec();
+    reply_bytes.extend(read_socks5_address_bytes(&mut *stream)?);
+    let parsed_reply = handshake::parse_server_reply(&reply_bytes)?;
+
+    Ok(Socks5UdpAssociateControlReport {
+        proxy: proxy.to_owned(),
+        target: target.authority(),
+        method,
+        bind: parsed_reply.bind.authority(),
+        control_connection_retained: true,
+        true_dataplane: true,
+        default_go_path: true,
+    })
+}
+
+fn authenticate<S>(stream: &mut S, username: &str, password: &str) -> Result<u8, OutboundError>
+where
+    S: Read + Write,
+{
+    let greeting = handshake::greeting(username, password);
+    stream
+        .write_all(&greeting)
+        .map_err(|err| OutboundError::BadSocks5Reply(err.to_string()))?;
+
+    let mut method_selection = [0_u8; 2];
+    stream
+        .read_exact(&mut method_selection)
+        .map_err(|err| OutboundError::BadSocks5Reply(err.to_string()))?;
+    let method = handshake::parse_method_selection(&method_selection)?;
+
+    if method == handshake::AUTH_PASSWORD {
+        let auth = handshake::username_password_auth(username, password)?;
+        stream
+            .write_all(&auth)
+            .map_err(|err| OutboundError::BadSocks5Auth(err.to_string()))?;
+        let mut auth_reply = [0_u8; 2];
+        stream
+            .read_exact(&mut auth_reply)
+            .map_err(|err| OutboundError::BadSocks5Auth(err.to_string()))?;
+        if auth_reply[0] != handshake::PASSWORD_AUTH_VERSION || auth_reply[1] != 0 {
+            return Err(OutboundError::BadSocks5Auth(format!(
+                "auth rejected: {:02x?}",
+                auth_reply
+            )));
+        }
+    }
+    Ok(method)
 }
 
 fn read_socks5_address_bytes(stream: &mut impl Read) -> Result<Vec<u8>, OutboundError> {
