@@ -1,0 +1,73 @@
+{
+  "active_tproxy_traffic_executed": false,
+  "carried_blockers": [
+    "production dae0/dae0peer attach path is not executed",
+    "production listen_socket_map update with TCP/UDP listener fds is not executed",
+    "active tproxy TCP UDP DNS traffic evidence is still missing",
+    "outbound true dataplane admission is still incomplete",
+    "matched Go default daemon vs true Rust candidate benchmark is still missing",
+    "clean dae-wing and daed product-chain recertification is still missing"
+  ],
+  "default_path_mutation_allowed": false,
+  "default_switch_allowed": false,
+  "gate_decision": "stages35-36 add real dae eBPF object attach evidence on a temporary interface and a Rust temporary SockMap listener-fd update smoke; they still do not execute production dae0/dae0peer attach, wire the production listen_socket_map, run active tproxy traffic, record a matched Go/Rust daemon benchmark, or admit the true Rust default daemon",
+  "go_default_path_preserved": true,
+  "go_fallback_required": true,
+  "matched_go_rust_default_daemon_benchmark_recorded": false,
+  "name": "stage35-36-real-ebpf-and-listener-fd-admission",
+  "prior_gate": "stage31-34-active-datapath-default-admission-queue",
+  "product_chain_switch_allowed": false,
+  "production_dae0_dae0peer_attach_executed": false,
+  "production_listen_socket_map_fd_update_executed": false,
+  "root_gated_actual_program_attach_recorded": true,
+  "rows": [
+    {
+      "area": "real dae eBPF program attach",
+      "boundary": "temporary-interface attach proves the real object loads, not that production dae0/dae0peer ownership is switched",
+      "evidence": "Stage 35 can attach control/bpf_bpfel.o section tc/dae0_ingress to a temporary interface and delete it without leftovers",
+      "next_action": "wire the real Rust loader and production dae0/dae0peer attach path only after listener handoff admission is ready",
+      "stage": "stage35",
+      "status": "passed-root-gated-smoke"
+    },
+    {
+      "area": "listen socket map fd primitive",
+      "boundary": "temporary SockMap fd update proves the primitive, not production listen_socket_map ownership or live daemon listener handoff",
+      "evidence": "Stage 36 creates a temporary Rust SockMap and updates key 0 and key 1 with live TCP listener and UDP socket fds",
+      "next_action": "bind the production listen_socket_map from the real loaded dae object before active tproxy traffic admission",
+      "stage": "stage36",
+      "status": "passed-root-gated-smoke"
+    }
+  ],
+  "rust_temporary_sockmap_fd_update_recorded": true,
+  "source": [
+    "DAEX_RUST_REBUILD_PLAN_2026-05-16.md:stage35-36-item269",
+    "DAEX_RUST_REBUILD_PLAN_2026-05-16.md:stage31-34-item268",
+    "DAENEW_RUST_REBUILD_MEMO_2026-05-16.md:22.1",
+    "DAENEW_RUST_REBUILD_MEMO_2026-05-16.md:22.2",
+    "DAENEW_RUST_REBUILD_MEMO_2026-05-16.md:22.3",
+    "DAENEW_RUST_REBUILD_MEMO_2026-05-16.md:22.6",
+    "DAENEW_RUST_REBUILD_MEMO_2026-05-16.md:22.8",
+    "DAENEW_RUST_REBUILD_MEMO_2026-05-16.md:22.12",
+    "DAENEW_RUST_REBUILD_MEMO_2026-05-16.md:33.8",
+    "rust/crates/dae-cli/src/runtime_stage35_36_gates.rs",
+    "rust/crates/dae-ebpf-support/src/sockmap.rs",
+    "testdata/rebuild-golden/engine/runtime_stage35/real_ebpf_attach_admission.json",
+    "testdata/rebuild-golden/engine/runtime_stage36/listen_socket_map_admission.json"
+  ],
+  "stage35_complete": true,
+  "stage36_complete": true,
+  "stage_range": "stage35-stage36",
+  "true_rust_default_daemon_admitted": false,
+  "validation_commands": [
+    "python3 -m json.tool testdata/rebuild-golden/engine/runtime_stage35/real_ebpf_attach_admission.json",
+    "python3 -m json.tool testdata/rebuild-golden/engine/runtime_stage36/listen_socket_map_admission.json",
+    "python3 -m json.tool testdata/rebuild-golden/product/daemon/stage35_36_admission_gates.json",
+    "cargo test --manifest-path rust/Cargo.toml -p dae-ebpf-support",
+    "cargo test --manifest-path rust/Cargo.toml -p dae-cli stage35 -- --nocapture",
+    "cargo test --manifest-path rust/Cargo.toml -p dae-cli stage36 -- --nocapture",
+    "cargo test --manifest-path rust/Cargo.toml -p dae-product stage35 -- --nocapture",
+    "cargo run --manifest-path rust/Cargo.toml -p dae-cli --bin dae-cli-optin --quiet -- runtime stage35-real-ebpf-attach-admission --stage31-report /tmp/dae-stage31-ebpf-attach-admission.json --execute-smoke --ack-root-gate",
+    "cargo run --manifest-path rust/Cargo.toml -p dae-cli --bin dae-cli-optin --quiet -- runtime stage36-listen-socket-map-admission --stage35-report /tmp/dae-stage35-real-ebpf-attach-admission.json --execute-smoke --ack-root-gate",
+    "git diff --check"
+  ]
+}

@@ -13,6 +13,7 @@ pub(crate) mod runtime_stage27_candidate;
 pub(crate) mod runtime_stage29_preflight;
 pub(crate) mod runtime_stage30_attach_cleanup;
 pub(crate) mod runtime_stage31_34_gates;
+pub(crate) mod runtime_stage35_36_gates;
 pub mod surface;
 pub(crate) mod userspace_runner;
 pub mod validate;
