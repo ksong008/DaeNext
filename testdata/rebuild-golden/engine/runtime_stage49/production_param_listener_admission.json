@@ -1,0 +1,33 @@
+{
+  "active_dns_tproxy_admitted": false,
+  "active_tcp_tproxy_admitted": false,
+  "active_tproxy_traffic_executed": false,
+  "active_udp_tproxy_admitted": false,
+  "combined_production_param_listener_admitted": false,
+  "combined_production_param_listener_smoke_passed": false,
+  "default_switch_allowed": false,
+  "evidence_class": "root-gated-combined-production-name-param-aware-transparent-listener-smoke",
+  "execute_smoke": false,
+  "go_default_path_preserved": true,
+  "go_fallback_required": true,
+  "matched_go_rust_default_daemon_benchmark_recorded": false,
+  "name": "stage49-production-param-listener-admission",
+  "outbound_true_dataplane_admitted": false,
+  "param_aware_object_load_executed": false,
+  "product_chain_switch_allowed": false,
+  "production_name_dae0_dae0peer_attach_executed": false,
+  "production_param_transparent_listener_handoff_executed": false,
+  "read_only": true,
+  "remaining_blockers": [
+    "active tproxy TCP UDP DNS traffic evidence is still missing",
+    "outbound true dataplane admission is still incomplete",
+    "matched Go default daemon vs true Rust candidate benchmark is still missing",
+    "production default daemon lifecycle is not executed",
+    "clean dae-wing and daed product-chain recertification is still missing"
+  ],
+  "root": "/tmp/dae-stage49-candidate",
+  "root_gate_acknowledged": false,
+  "stage": "stage49",
+  "transparent_listener_socket_options_verified": false,
+  "true_rust_default_daemon_admitted": false
+}
