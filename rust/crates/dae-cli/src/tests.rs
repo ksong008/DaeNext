@@ -954,6 +954,155 @@ fn stage27_run_candidate_matches_golden_fixture() {
 }
 
 #[test]
+fn stage29_host_preflight_matches_golden_fixture() {
+    let fixture = load("engine/runtime_stage29/host_preflight.json");
+    let preflight = run_with_args([
+        "runtime",
+        "stage29-host-preflight",
+        "--root",
+        fixture["root"].as_str().unwrap(),
+    ]);
+    assert_eq!(preflight.exit_code, 0, "{}", preflight.stdout);
+    assert_eq!(preflight.stderr, "");
+    let preflight_json: Value = serde_json::from_str(&preflight.stdout).unwrap();
+    assert_eq!(
+        preflight_json["name"].as_str().unwrap(),
+        fixture["name"].as_str().unwrap()
+    );
+    assert_eq!(
+        preflight_json["stage"].as_str().unwrap(),
+        fixture["stage"].as_str().unwrap()
+    );
+    assert_eq!(
+        preflight_json["evidence_class"].as_str().unwrap(),
+        fixture["evidence_class"].as_str().unwrap()
+    );
+    assert_eq!(
+        preflight_json["root"].as_str().unwrap(),
+        fixture["root"].as_str().unwrap()
+    );
+    assert_eq!(
+        preflight_json["host_probe_executed"].as_bool().unwrap(),
+        fixture["host_probe_executed"].as_bool().unwrap()
+    );
+    assert_eq!(
+        preflight_json["require_existing_config"].as_bool().unwrap(),
+        fixture["require_existing_config"].as_bool().unwrap()
+    );
+    assert!(preflight_json["read_only"].as_bool().unwrap());
+    assert!(!preflight_json["preflight_passed"].as_bool().unwrap());
+    assert!(
+        !preflight_json["live_candidate_run_allowed"]
+            .as_bool()
+            .unwrap()
+    );
+    assert!(!preflight_json["default_switch_allowed"].as_bool().unwrap());
+    assert!(!preflight_json["default_path_mutated"].as_bool().unwrap());
+    assert!(
+        !preflight_json["product_chain_switch_allowed"]
+            .as_bool()
+            .unwrap()
+    );
+    assert!(
+        !preflight_json["true_rust_default_daemon_admitted"]
+            .as_bool()
+            .unwrap()
+    );
+    assert!(
+        preflight_json["go_default_path_preserved"]
+            .as_bool()
+            .unwrap()
+    );
+    assert!(preflight_json["go_fallback_required"].as_bool().unwrap());
+    assert_eq!(preflight_json["blockers"].as_array().unwrap().len(), 0);
+
+    assert_eq!(
+        preflight_json["paths"]["config"].as_str().unwrap(),
+        fixture["paths"]["config"].as_str().unwrap()
+    );
+    assert_eq!(
+        preflight_json["paths"]["progress_file"].as_str().unwrap(),
+        fixture["paths"]["progress_file"].as_str().unwrap()
+    );
+    assert_eq!(
+        preflight_json["paths"]["production_progress_file_checked_when_probe_host"]
+            .as_str()
+            .unwrap(),
+        "/var/run/dae.progress"
+    );
+    assert_eq!(
+        preflight_json["inputs"]["tproxy_port"].as_u64().unwrap(),
+        fixture["inputs"]["tproxy_port"].as_u64().unwrap()
+    );
+    assert!(preflight_json["inputs"]["mptcp"].as_bool().unwrap());
+    assert_eq!(
+        preflight_json["inputs"]["so_mark_from_dae"]
+            .as_u64()
+            .unwrap(),
+        2234
+    );
+
+    let path_checks = preflight_json["path_checks"].as_array().unwrap();
+    let fixture_path_checks = fixture["path_checks"].as_array().unwrap();
+    assert_eq!(path_checks.len(), fixture_path_checks.len());
+    let path_names = path_checks
+        .iter()
+        .map(|value| {
+            (
+                value["name"].as_str().unwrap(),
+                value["status"].as_str().unwrap(),
+            )
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        path_names,
+        fixture_path_checks
+            .iter()
+            .map(|value| (
+                value["name"].as_str().unwrap(),
+                value["status"].as_str().unwrap()
+            ))
+            .collect::<Vec<_>>()
+    );
+    assert!(path_names.contains(&("isolated-root-under-tmp", "pass")));
+    assert!(path_names.contains(&("generated-minimum-config-valid", "pass")));
+    assert!(path_names.contains(&("existing-isolated-config-valid", "not-run")));
+
+    let host_checks = preflight_json["host_checks"].as_array().unwrap();
+    assert_eq!(
+        host_checks.len(),
+        fixture["host_checks"].as_array().unwrap().len()
+    );
+    assert!(
+        host_checks
+            .iter()
+            .all(|value| value["status"].as_str().unwrap() == "not-run")
+    );
+    assert!(
+        preflight_json["production_safety"]["host_probe_requires_explicit_flag"]
+            .as_bool()
+            .unwrap()
+    );
+    assert!(
+        preflight_json["production_safety"]["no_ebpf_attach"]
+            .as_bool()
+            .unwrap()
+    );
+    assert!(
+        preflight_json["production_safety"]["no_netns_mutation"]
+            .as_bool()
+            .unwrap()
+    );
+    assert!(
+        preflight_json["next_if_clear"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|value| value.as_str().unwrap().contains("--probe-host output"))
+    );
+}
+
+#[test]
 fn optin_runner_userspace_commands_match_engine_fixture() {
     let fixture = load("engine/userspace_runtime/optin_contract.json");
 

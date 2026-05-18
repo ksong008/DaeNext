@@ -13,6 +13,7 @@ pub mod stage25_execution_queue;
 pub mod stage26_candidate_contract;
 pub mod stage27_candidate_smoke;
 pub mod stage28_live_admission_gate;
+pub mod stage29_host_preflight_gate;
 pub mod systemd;
 pub mod true_daemon_admission;
 
@@ -60,6 +61,10 @@ pub use stage27_candidate_smoke::{
 pub use stage28_live_admission_gate::{
     Stage28LiveAdmissionGateContract, Stage28LiveAdmissionGateRow,
     stage28_live_admission_gate_contract,
+};
+pub use stage29_host_preflight_gate::{
+    Stage29HostPreflightGateContract, Stage29HostPreflightGateRow,
+    stage29_host_preflight_gate_contract,
 };
 pub use systemd::{SystemdContract, systemd_contract};
 pub use true_daemon_admission::{
