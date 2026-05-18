@@ -1,0 +1,55 @@
+{
+    "benchmark_matrix": [
+        {
+            "command": "DAE_STAGE7_BENCH_ITERS=10000 cargo run --manifest-path rust/Cargo.toml -p dae-datapath --release --example stage7_datapath_bench",
+            "matched_go_baseline": false,
+            "name": "rust-datapath-stage7-micro",
+            "records_magic_network_mark_mptcp": true,
+            "records_udp_trim": true
+        },
+        {
+            "command": "DAE_STAGE7_BENCH_ITERS=10000 cargo run --manifest-path rust/Cargo.toml -p dae-control --release --example stage7_control_bench",
+            "matched_go_baseline": false,
+            "name": "rust-control-stage7-micro",
+            "records_domain_routing_owner_merge": true
+        },
+        {
+            "command": "deferred until true Rust live candidate and active datapath are admitted",
+            "matched_go_baseline": true,
+            "name": "matched-go-default-vs-rust-candidate-daemon",
+            "required_before_default_switch": true
+        }
+    ],
+    "clean_product_chain_recertification_recorded": false,
+    "default_path_mutated": false,
+    "default_switch_allowed": false,
+    "evidence_class": "benchmark-and-product-chain-default-switch-gate",
+    "go_default_path_preserved": true,
+    "go_fallback_required": true,
+    "matched_go_rust_default_daemon_benchmark_recorded": false,
+    "name": "stage34-benchmark-product-chain-admission",
+    "product_chain_requirements": [
+        "clean /root/project/dae-wing recertification",
+        "clean /root/project/daed recertification",
+        "systemd/install/release default path review",
+        "rollback to Go-backed daemon verified"
+    ],
+    "product_chain_switch_allowed": false,
+    "remaining_blockers": [
+        "actual dae eBPF program attach to dae0/dae0peer is not executed",
+        "listen socket map update with TCP/UDP listener fds is not executed",
+        "active tproxy TCP UDP DNS traffic evidence is still missing",
+        "outbound true dataplane admission is still incomplete",
+        "matched Go default daemon vs true Rust candidate benchmark is still missing",
+        "clean dae-wing and daed product-chain recertification is still missing"
+    ],
+    "rust_micro_benchmark_contract": {
+        "domain_routing_owner_merge_required": true,
+        "magic_network_mark_mptcp_required": true,
+        "udp_endpoint_trim_4096": 3892
+    },
+    "rust_micro_benchmarks_recorded": false,
+    "stage": "stage34",
+    "stage_complete": true,
+    "true_rust_default_daemon_admitted": false
+}
