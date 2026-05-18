@@ -4,6 +4,7 @@ pub mod kernel;
 pub mod loader;
 pub mod maps;
 pub mod param;
+pub mod runtime_maps;
 pub mod sockmap;
 
 #[cfg(test)]
@@ -21,4 +22,8 @@ pub use kernel::{FeatureGateReport, Version};
 pub use loader::{PinnedMapAction, pinned_map_action};
 pub use maps::{MapSpec, map_catalog, pinned_reuse_maps};
 pub use param::{DaeParamInput, build_dae_param, htons};
-pub use sockmap::{ListenSocketMapFdSmoke, run_listen_socket_map_fd_smoke};
+pub use runtime_maps::{RuntimeMapInfo, map_ids};
+pub use sockmap::{
+    ListenSocketMapFdSmoke, LoadedListenSocketMapFdSmoke, run_listen_socket_map_fd_smoke,
+    run_loaded_listen_socket_map_fd_smoke,
+};
