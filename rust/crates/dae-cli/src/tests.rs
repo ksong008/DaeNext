@@ -1703,6 +1703,114 @@ fn stage40_runtime_admission_blocks_required_admission() {
 }
 
 #[test]
+fn stage41_to_stage48_runtime_admission_fixtures_match() {
+    for (fixture_path, command) in [
+        (
+            "engine/runtime_stage41/param_object_image_admission.json",
+            "stage41-param-object-image-admission",
+        ),
+        (
+            "engine/runtime_stage42/param_object_load_admission.json",
+            "stage42-param-object-load-admission",
+        ),
+        (
+            "engine/runtime_stage43/production_param_listener_admission.json",
+            "stage43-production-param-listener-admission",
+        ),
+        (
+            "engine/runtime_stage44/active_tcp_tproxy_admission.json",
+            "stage44-active-tcp-tproxy-admission",
+        ),
+        (
+            "engine/runtime_stage45/active_udp_tproxy_admission.json",
+            "stage45-active-udp-tproxy-admission",
+        ),
+        (
+            "engine/runtime_stage46/active_dns_tproxy_admission.json",
+            "stage46-active-dns-tproxy-admission",
+        ),
+        (
+            "engine/runtime_stage47/outbound_true_dataplane_admission.json",
+            "stage47-outbound-true-dataplane-admission",
+        ),
+        (
+            "engine/runtime_stage48/true_daemon_benchmark_admission.json",
+            "stage48-true-daemon-benchmark-admission",
+        ),
+    ] {
+        let fixture = load(fixture_path);
+        let output = run_with_args(["runtime", command]);
+        assert_eq!(output.exit_code, 0, "{}", output.stdout);
+        assert_eq!(output.stderr, "");
+        let json: Value = serde_json::from_str(&output.stdout).unwrap();
+        assert_eq!(
+            json["name"].as_str().unwrap(),
+            fixture["name"].as_str().unwrap()
+        );
+        assert_eq!(
+            json["stage"].as_str().unwrap(),
+            fixture["stage"].as_str().unwrap()
+        );
+        assert_eq!(
+            json["evidence_class"].as_str().unwrap(),
+            fixture["evidence_class"].as_str().unwrap()
+        );
+        assert!(!json["default_switch_allowed"].as_bool().unwrap());
+        assert!(!json["product_chain_switch_allowed"].as_bool().unwrap());
+        assert!(!json["true_rust_default_daemon_admitted"].as_bool().unwrap());
+        assert!(json["go_default_path_preserved"].as_bool().unwrap());
+        assert!(json["go_fallback_required"].as_bool().unwrap());
+        assert_eq!(
+            json["remaining_blockers"].as_array().unwrap().len(),
+            fixture["remaining_blockers"].as_array().unwrap().len()
+        );
+    }
+}
+
+#[test]
+fn stage41_runtime_admission_writes_param_object_when_requested() {
+    let source = dae_golden::repo_root_from_manifest()
+        .unwrap()
+        .join("control/bpf_bpfel.o");
+    let output_path = temp_path("stage41-param-object.o");
+    let output = run_with_args([
+        "runtime",
+        "stage41-param-object-image-admission",
+        "--write-image",
+        "--require-admission",
+        "--object",
+        source.to_str().unwrap(),
+        "--output",
+        output_path.to_str().unwrap(),
+    ]);
+    assert_eq!(output.exit_code, 0, "{}", output.stdout);
+    assert_eq!(output.stderr, "");
+    let json: Value = serde_json::from_str(&output.stdout).unwrap();
+    assert!(json["param_object_image_written"].as_bool().unwrap());
+    assert!(json["param_object_image_admitted"].as_bool().unwrap());
+    assert_eq!(
+        json["rewritten_param"]["tproxy_port"].as_u64().unwrap(),
+        14640
+    );
+    let _ = fs::remove_file(output_path);
+}
+
+#[test]
+fn stage42_runtime_admission_blocks_unsafe_execution() {
+    let blocked = run_with_args([
+        "runtime",
+        "stage42-param-object-load-admission",
+        "--execute-smoke",
+    ]);
+    assert_eq!(blocked.exit_code, 1);
+    assert!(
+        blocked
+            .stdout
+            .contains("stage42 root-gated smoke requires --ack-root-gate")
+    );
+}
+
+#[test]
 fn optin_runner_userspace_commands_match_engine_fixture() {
     let fixture = load("engine/userspace_runtime/optin_contract.json");
 
@@ -3464,6 +3572,17 @@ fn assert_commands(got: &[CommandSpec], want: &[Value]) {
 
 fn load(path: &str) -> Value {
     dae_golden::load_json(path).unwrap()
+}
+
+fn temp_path(name: &str) -> PathBuf {
+    let nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_nanos();
+    std::env::temp_dir().join(format!(
+        "dae-cli-test-{}-{nanos}-{name}",
+        std::process::id()
+    ))
 }
 
 fn write_config(content: &str) -> PathBuf {

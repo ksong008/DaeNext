@@ -1,0 +1,31 @@
+{
+  "active_tproxy_traffic_executed": false,
+  "blocked": false,
+  "default_switch_allowed": false,
+  "evidence_class": "root-gated-param-aware-real-object-tc-load-smoke",
+  "execute_smoke": false,
+  "filter_pref": "49420",
+  "go_default_path_preserved": true,
+  "go_fallback_required": true,
+  "name": "stage42-param-object-load-admission",
+  "param_aware_object_load_admitted": false,
+  "param_object": "/tmp/dae-stage42-candidate/bpf_bpfel.param.o",
+  "param_object_generated": false,
+  "param_object_tc_attach_smoke_passed": false,
+  "product_chain_switch_allowed": false,
+  "read_only": true,
+  "remaining_blockers": [
+    "production-name topology plus transparent listener must be revalidated with the PARAM-aware object",
+    "active tproxy TCP UDP DNS traffic evidence is still missing",
+    "outbound true dataplane admission is still incomplete",
+    "matched Go default daemon vs true Rust candidate benchmark is still missing",
+    "clean dae-wing and daed product-chain recertification is still missing"
+  ],
+  "root": "/tmp/dae-stage42-candidate",
+  "root_gate_acknowledged": false,
+  "section": "tc/dae0_ingress",
+  "source_object": "control/bpf_bpfel.o",
+  "stage": "stage42",
+  "temporary_iface": "dae42p0",
+  "true_rust_default_daemon_admitted": false
+}
