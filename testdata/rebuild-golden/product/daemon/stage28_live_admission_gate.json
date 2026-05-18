@@ -1,0 +1,148 @@
+{
+  "active_datapath_evidence_required": true,
+  "admission_order": [
+    "record host/root/BPF/netns preflight for the exact isolated candidate root",
+    "prove Rust candidate artifact identity and CLI compatibility without changing dae run",
+    "prove control-plane and kernel-owner boundaries before attaching live resources",
+    "run root-gated eBPF/netns/sysctl attach and cleanup smoke",
+    "run active TCP tproxy traffic with MagicNetwork mark and mptcp observations",
+    "run active UDP and DNS UDP/53 traffic with endpoint, cache, and domain map evidence",
+    "complete outbound true dataplane protocol rows before daemon admission",
+    "run reload, suspend, rollback, and cache survival smoke",
+    "run matched Go default daemon vs true Rust candidate benchmark",
+    "recertify dae-wing and daed on a clean product-chain baseline"
+  ],
+  "candidate_dry_smoke_inherited": true,
+  "clean_product_chain_required": true,
+  "default_path_mutation_allowed": false,
+  "default_switch_allowed": false,
+  "denied_default_mutations": [
+    "do not start a live Rust candidate from the Stage 28 gate itself",
+    "do not switch dae run default owner to Rust",
+    "do not mutate /var/run/dae.pid or /var/run/dae.progress from admission planning",
+    "do not mutate install/dae.service ExecStart",
+    "do not mark release assets as Rust-default-daemon-ready",
+    "do not update dae-wing or daed defaults from dae-local evidence alone",
+    "do not remove Go daemon or Go outbound fallback",
+    "do not set true_rust_default_daemon_admitted=true",
+    "do not set final_100_percent_admitted=true"
+  ],
+  "gate_decision": "stage28 refines the true Rust live candidate admission gate after the stage27 dry smoke; it does not start a live daemon or allow any default/product switch until root/BPF/netns, active datapath, outbound protocol, rollback, benchmark, and clean product-chain rows have recorded evidence",
+  "gate_rows": [
+    {
+      "area": "pre-admission host and isolation gate",
+      "blocked_until": "stage27 dry smoke is insufficient because it only proves isolated dry runtime reload and stop",
+      "next_action": "add a host preflight record for the exact candidate root and abort before BPF or netns mutation on any failed row",
+      "required_evidence": "root permission, bpffs, netns permission, memlock, kernel feature version, free tproxy port, no production dae process, and isolated config/pid/progress/log/cache paths are checked immediately before any live candidate",
+      "status": "required-blocking"
+    },
+    {
+      "area": "candidate artifact identity and CLI parity",
+      "blocked_until": "dae-cli-optin remains an opt-in helper and is not admitted as the default dae run owner",
+      "next_action": "keep the artifact behind an explicit runtime selector and compare common CLI failures against the Go baseline",
+      "required_evidence": "a Rust-owned candidate artifact reports version, accepts daemon-compatible run flags, validates config, exports outline, writes isolated pid/progress/log, and preserves an explicit Go fallback selector",
+      "status": "required-blocking"
+    },
+    {
+      "area": "control-plane and kernel owner split",
+      "blocked_until": "stage27 uses dae-engine dry runtime and does not construct NewControlPlane or controlPlaneCore equivalents",
+      "next_action": "implement owner-boundary smoke before attaching live BPF or replacing any Go control-plane owner",
+      "required_evidence": "Rust separates runtime ControlPlane ownership from kernel owner state, transfers BPF ownership on reload, and closes BPF, interface manager, DNS, outbound, and listener resources in the daenew order",
+      "status": "required-blocking"
+    },
+    {
+      "area": "eBPF netns sysctl attach order",
+      "blocked_until": "kernel resource ownership and pinned map reuse have no true Rust live candidate evidence",
+      "next_action": "run root-gated attach and cleanup smoke with explicit stale resource checks before any traffic row",
+      "required_evidence": "Netns.Setup, rlimit, sysctl, BPF load, pinned map handling, LAN/WAN/dae0 attach, listen socket map keys, and tc/cgroup cleanup match daenew under root/BPF/netns gates",
+      "status": "required-blocking"
+    },
+    {
+      "area": "active TCP tproxy datapath",
+      "blocked_until": "stage27 explicitly reports live_tproxy_started=false and live_outbound_started=false",
+      "next_action": "run isolated TCP traffic only after host and kernel gates pass and record packet path, target, mark, mptcp, latency, and rollback",
+      "required_evidence": "live TCP traffic through the Rust candidate covers tproxy accept, eBPF routing result, sniffing, RouteDialTcp reroute, ChooseDialTarget, outbound selection, SO_MARK, and MPTCP MagicNetwork propagation",
+      "status": "required-blocking"
+    },
+    {
+      "area": "active UDP and DNS datapath",
+      "blocked_until": "stage27 does not start DNS listener, UDP endpoint pool, eBPF maps, or live traffic",
+      "next_action": "run UDP, DNS, cache, and endpoint cleanup smoke after TCP path and kernel owner rows have evidence",
+      "required_evidence": "live UDP and DNS UDP/53 through the Rust candidate cover endpoint pool, DNS controller, upstream MagicNetwork, domain_routing_map ownership, DNS cache migration, must-rule UDP/53, and sendPkt reply parity",
+      "status": "required-blocking"
+    },
+    {
+      "area": "outbound true dataplane protocols",
+      "blocked_until": "replace-backed outbound behavior and complex protocol gates are not fully admitted in the Rust candidate",
+      "next_action": "keep outbound protocol admission as an independent blocker and do not infer it from direct/block or dry runtime evidence",
+      "required_evidence": "the candidate uses admitted outbound protocol rows for link parser, chained transports, TLS/REALITY/QUIC families, shared transport cleanup, handshake, live traffic, and protocol-level benchmarks",
+      "status": "required-blocking"
+    },
+    {
+      "area": "reload suspend rollback and cache survival",
+      "blocked_until": "dry reload/stop does not prove live listener, BPF, DNS, or cache rollback semantics",
+      "next_action": "run success reload, invalid-config rollback, repeated reload, suspend, and concurrent reload smoke under the candidate",
+      "required_evidence": "SIGUSR1 reload, SIGUSR2 suspend, abort marker, progress bytes, listener reuse, EjectBpf/InjectBpf rollback, old control-plane survival, DNS same-bind handling, and DNS cache migration match daenew",
+      "status": "required-blocking"
+    },
+    {
+      "area": "matched Go vs Rust default daemon benchmark",
+      "blocked_until": "stage27 Go baseline is validate/export only and is not a matched daemon benchmark",
+      "next_action": "build benchmark harness only after the candidate carries real TCP/UDP/DNS/outbound traffic",
+      "required_evidence": "Go default daemon and true Rust candidate run on the same host, kernel, config, corpus, traffic matrix, and measurement windows with latency, throughput, RSS, CPU, startup, reload, TCP, UDP, DNS, and protocol raw logs",
+      "status": "required-blocking"
+    },
+    {
+      "area": "clean product-chain recertification",
+      "blocked_until": "local cross-repo worktrees are dirty and Stage 27 only produces dae-local dry smoke evidence",
+      "next_action": "recertify product chain after daemon candidate evidence exists and before any product default switch",
+      "required_evidence": "dae-wing, daed wing, and daed Web validate against clean baselines with Rust-backed service APIs, import/export, runtime overview, route-aware HTTP, release labels, and rollback controls",
+      "status": "required-blocking"
+    },
+    {
+      "area": "rollout fallback and denial controls",
+      "blocked_until": "all admission rows pass with recorded validation and benchmark evidence",
+      "next_action": "keep every default mutation denied until this gate is replaced by a passing admission record",
+      "required_evidence": "Go fallback selector, opt-in and opt-out controls, package/systemd rollback, release labeling, config rollback, emergency stop, and downstream product rollback remain documented and smoke-tested",
+      "status": "always-required"
+    }
+  ],
+  "go_default_path_preserved": true,
+  "go_fallback_required": true,
+  "live_admission_gate_defined": true,
+  "live_candidate_run_allowed": false,
+  "matched_default_daemon_benchmark_required": true,
+  "name": "stage28-true-rust-live-candidate-admission-gate",
+  "outbound_true_dataplane_required": true,
+  "prior_gate": "stage27-rust-dry-runtime-candidate-smoke",
+  "product_chain_switch_allowed": false,
+  "root_bpf_netns_gate_required": true,
+  "source": [
+    "DAEX_RUST_REBUILD_PLAN_2026-05-16.md:stage28-item249",
+    "DAEX_RUST_REBUILD_PLAN_2026-05-16.md:stage27-item248",
+    "DAENEW_RUST_REBUILD_MEMO_2026-05-16.md:22.1",
+    "DAENEW_RUST_REBUILD_MEMO_2026-05-16.md:22.2",
+    "DAENEW_RUST_REBUILD_MEMO_2026-05-16.md:22.3",
+    "DAENEW_RUST_REBUILD_MEMO_2026-05-16.md:26.1",
+    "DAENEW_RUST_REBUILD_MEMO_2026-05-16.md:26.2",
+    "DAENEW_RUST_REBUILD_MEMO_2026-05-16.md:26.3",
+    "DAENEW_RUST_REBUILD_MEMO_2026-05-16.md:27.1",
+    "DAENEW_RUST_REBUILD_MEMO_2026-05-16.md:33.8",
+    "DAENEW_RUST_REBUILD_MEMO_2026-05-16.md:33.9",
+    "rust/crates/dae-product/src/stage27_candidate_smoke.rs",
+    "rust/crates/dae-cli/src/runtime_stage27_candidate.rs",
+    "rust/crates/dae-cli/src/runtime_host_preflight.rs",
+    "rust/crates/dae-cli/src/active_datapath_runner.rs",
+    "rust/crates/dae-product/src/true_daemon_admission.rs"
+  ],
+  "stage": "stage28",
+  "stage_complete": true,
+  "true_rust_default_daemon_admitted": false,
+  "validation_commands": [
+    "python3 -m json.tool testdata/rebuild-golden/product/daemon/stage28_live_admission_gate.json",
+    "cargo test --manifest-path rust/Cargo.toml -p dae-product stage28 -- --nocapture",
+    "cargo fmt --manifest-path rust/Cargo.toml --all -- --check",
+    "cargo test --manifest-path rust/Cargo.toml -p dae-product",
+    "git diff --check"
+  ]
+}
