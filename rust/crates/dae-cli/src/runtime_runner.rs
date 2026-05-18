@@ -44,6 +44,7 @@ use crate::runtime_stage55_outbound_gate::run_stage55_socks5_outbound_true_datap
 use crate::runtime_stage56_outbound_gate::run_stage56_socks5_udp_associate_dataplane_admission;
 use crate::runtime_stage57_outbound_gate::run_stage57_http_connect_dataplane_admission;
 use crate::runtime_stage58_outbound_gate::run_stage58_shadowsocks_aead_tcp_dataplane_admission;
+use crate::runtime_stage59_outbound_gate::run_stage59_shadowsocks_aead_udp_dataplane_admission;
 
 pub(crate) fn run_runtime(args: &[String]) -> RunnerOutput {
     match args.first().map(String::as_str) {
@@ -136,6 +137,9 @@ pub(crate) fn run_runtime(args: &[String]) -> RunnerOutput {
         }
         Some("stage58-shadowsocks-aead-tcp-dataplane-admission") => {
             run_stage58_shadowsocks_aead_tcp_dataplane_admission(&args[1..])
+        }
+        Some("stage59-shadowsocks-aead-udp-dataplane-admission") => {
+            run_stage59_shadowsocks_aead_udp_dataplane_admission(&args[1..])
         }
         Some(subcommand) => {
             RunnerOutput::usage(format!("unsupported runtime subcommand: {subcommand}"))
