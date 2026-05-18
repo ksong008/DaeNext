@@ -1790,6 +1790,164 @@ fn stage29_host_preflight_gate_covers_probe_checks() {
 }
 
 #[test]
+fn stage30_attach_cleanup_gate_contract_matches_golden_fixture() {
+    let fixture = load("product/daemon/stage30_attach_cleanup_gate.json");
+    let contract = stage30_attach_cleanup_gate_contract();
+    assert_eq!(contract.name, fixture["name"].as_str().unwrap());
+    assert_eq!(contract.stage, fixture["stage"].as_str().unwrap());
+    assert_eq!(contract.prior_gate, fixture["prior_gate"].as_str().unwrap());
+    assert_eq!(
+        contract.stage_complete,
+        fixture["stage_complete"].as_bool().unwrap()
+    );
+    assert_eq!(
+        contract.attach_cleanup_helper_added,
+        fixture["attach_cleanup_helper_added"].as_bool().unwrap()
+    );
+    assert_eq!(
+        contract.stage29_preflight_required,
+        fixture["stage29_preflight_required"].as_bool().unwrap()
+    );
+    assert_eq!(
+        contract.root_gate_ack_required,
+        fixture["root_gate_ack_required"].as_bool().unwrap()
+    );
+    assert_eq!(
+        contract.execute_smoke_default,
+        fixture["execute_smoke_default"].as_bool().unwrap()
+    );
+    assert_eq!(
+        contract.current_attach_cleanup_smoke_passed,
+        fixture["current_attach_cleanup_smoke_passed"]
+            .as_bool()
+            .unwrap()
+    );
+    assert_eq!(
+        contract.live_candidate_run_allowed,
+        fixture["live_candidate_run_allowed"].as_bool().unwrap()
+    );
+    assert_eq!(
+        contract.actual_dae_ebpf_program_attach_executed,
+        fixture["actual_dae_ebpf_program_attach_executed"]
+            .as_bool()
+            .unwrap()
+    );
+    assert_eq!(
+        contract.active_traffic_evidence_recorded,
+        fixture["active_traffic_evidence_recorded"]
+            .as_bool()
+            .unwrap()
+    );
+    assert_eq!(
+        contract.default_switch_allowed,
+        fixture["default_switch_allowed"].as_bool().unwrap()
+    );
+    assert_eq!(
+        contract.default_path_mutation_allowed,
+        fixture["default_path_mutation_allowed"].as_bool().unwrap()
+    );
+    assert_eq!(
+        contract.product_chain_switch_allowed,
+        fixture["product_chain_switch_allowed"].as_bool().unwrap()
+    );
+    assert_eq!(
+        contract.true_rust_default_daemon_admitted,
+        fixture["true_rust_default_daemon_admitted"]
+            .as_bool()
+            .unwrap()
+    );
+    assert_eq!(
+        contract.go_default_path_preserved,
+        fixture["go_default_path_preserved"].as_bool().unwrap()
+    );
+    assert_eq!(
+        contract.go_fallback_required,
+        fixture["go_fallback_required"].as_bool().unwrap()
+    );
+    assert_eq!(
+        contract.gate_decision,
+        fixture["gate_decision"].as_str().unwrap()
+    );
+
+    let row_fixtures = fixture["smoke_rows"].as_array().unwrap();
+    assert_eq!(contract.smoke_rows.len(), row_fixtures.len());
+    for (row, row_fixture) in contract.smoke_rows.iter().zip(row_fixtures) {
+        assert_eq!(row.area, row_fixture["area"].as_str().unwrap());
+        assert_eq!(row.status, row_fixture["status"].as_str().unwrap());
+        assert_eq!(row.evidence, row_fixture["evidence"].as_str().unwrap());
+        assert_eq!(row.boundary, row_fixture["boundary"].as_str().unwrap());
+        assert_eq!(
+            row.next_action,
+            row_fixture["next_action"].as_str().unwrap()
+        );
+    }
+
+    assert_string_vec(
+        &contract.validation_commands,
+        &fixture["validation_commands"],
+    );
+    assert_string_vec(&contract.carried_blockers, &fixture["carried_blockers"]);
+    assert_string_vec(&contract.source, &fixture["source"]);
+}
+
+#[test]
+fn stage30_attach_cleanup_gate_blocks_live_candidate_and_defaults() {
+    let contract = stage30_attach_cleanup_gate_contract();
+    assert!(contract.stage_complete);
+    assert!(contract.attach_cleanup_helper_added);
+    assert!(contract.stage29_preflight_required);
+    assert!(contract.root_gate_ack_required);
+    assert!(!contract.execute_smoke_default);
+    assert!(contract.current_attach_cleanup_smoke_passed);
+    assert!(!contract.live_candidate_run_allowed);
+    assert!(!contract.actual_dae_ebpf_program_attach_executed);
+    assert!(!contract.active_traffic_evidence_recorded);
+    assert!(!contract.default_switch_allowed);
+    assert!(!contract.default_path_mutation_allowed);
+    assert!(!contract.product_chain_switch_allowed);
+    assert!(!contract.true_rust_default_daemon_admitted);
+    assert!(contract.go_default_path_preserved);
+    assert!(contract.go_fallback_required);
+
+    assert_contains_text(&contract.carried_blockers, "actual dae eBPF program attach");
+    assert_contains_text(&contract.carried_blockers, "listen socket map update");
+    assert_contains_text(&contract.carried_blockers, "active TCP UDP DNS");
+    assert_contains_text(&contract.carried_blockers, "matched Go default daemon");
+    assert_contains_text(
+        &contract.validation_commands,
+        "runtime stage30-attach-cleanup",
+    );
+}
+
+#[test]
+fn stage30_attach_cleanup_gate_covers_smoke_rows() {
+    let contract = stage30_attach_cleanup_gate_contract();
+    let areas = contract
+        .smoke_rows
+        .iter()
+        .map(|row| row.area)
+        .collect::<Vec<_>>();
+    assert_eq!(
+        areas,
+        vec![
+            "stage29 preflight dependency",
+            "root gate acknowledgement",
+            "temporary netns and veth lifecycle",
+            "temporary sysctl and tc cleanup",
+            "eBPF ABI and reload ownership contract",
+            "active traffic and outbound",
+            "default path and product chain",
+        ]
+    );
+
+    assert_contains_text(&contract.source, "runtime_stage30_attach_cleanup.rs");
+    assert_contains_text(&contract.source, "active_datapath_runner.rs");
+    assert_contains_text(&contract.source, "runtime_stage30/attach_cleanup.json");
+    assert_contains_text(&contract.validation_commands, "dae-ebpf-support");
+    assert_contains_text(&contract.validation_commands, "dae-control");
+}
+
+#[test]
 fn protocol_dataplane_admission_contract_matches_golden_fixture() {
     let fixture = load("product/outbound/protocol_dataplane_admission.json");
     let contract = protocol_dataplane_admission_contract();
