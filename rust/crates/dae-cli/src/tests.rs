@@ -1575,6 +1575,67 @@ fn stage38_runtime_admission_blocks_unsafe_execution() {
 }
 
 #[test]
+fn stage39_runtime_admission_fixture_matches() {
+    let fixture = load("engine/runtime_stage39/transparent_listener_admission.json");
+    let output = run_with_args(["runtime", "stage39-transparent-listener-admission"]);
+    assert_eq!(output.exit_code, 0, "{}", output.stdout);
+    assert_eq!(output.stderr, "");
+    let json: Value = serde_json::from_str(&output.stdout).unwrap();
+    assert_eq!(
+        json["name"].as_str().unwrap(),
+        fixture["name"].as_str().unwrap()
+    );
+    assert_eq!(
+        json["stage"].as_str().unwrap(),
+        fixture["stage"].as_str().unwrap()
+    );
+    assert_eq!(
+        json["evidence_class"].as_str().unwrap(),
+        fixture["evidence_class"].as_str().unwrap()
+    );
+    assert_eq!(
+        json["transparent_listener_contract"]["required_socket_options"],
+        fixture["transparent_listener_contract"]["required_socket_options"]
+    );
+    assert!(
+        !json["real_loaded_object_transparent_listener_fd_update_executed"]
+            .as_bool()
+            .unwrap()
+    );
+    assert!(
+        !json["transparent_listener_socket_options_verified"]
+            .as_bool()
+            .unwrap()
+    );
+    assert!(!json["active_tproxy_traffic_executed"].as_bool().unwrap());
+    assert!(!json["default_switch_allowed"].as_bool().unwrap());
+    assert!(!json["default_path_mutated"].as_bool().unwrap());
+    assert!(!json["product_chain_switch_allowed"].as_bool().unwrap());
+    assert!(!json["true_rust_default_daemon_admitted"].as_bool().unwrap());
+    assert!(json["go_default_path_preserved"].as_bool().unwrap());
+    assert!(json["go_fallback_required"].as_bool().unwrap());
+    assert_eq!(
+        json["remaining_blockers"].as_array().unwrap().len(),
+        fixture["remaining_blockers"].as_array().unwrap().len()
+    );
+}
+
+#[test]
+fn stage39_runtime_admission_blocks_unsafe_execution() {
+    let blocked = run_with_args([
+        "runtime",
+        "stage39-transparent-listener-admission",
+        "--execute-smoke",
+    ]);
+    assert_eq!(blocked.exit_code, 1);
+    assert!(
+        blocked
+            .stdout
+            .contains("stage39 root-gated smoke requires --ack-root-gate")
+    );
+}
+
+#[test]
 fn optin_runner_userspace_commands_match_engine_fixture() {
     let fixture = load("engine/userspace_runtime/optin_contract.json");
 
