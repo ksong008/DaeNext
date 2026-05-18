@@ -7,6 +7,7 @@ repository.workspace = true
 
 [dependencies]
 dae-ebpf-support.workspace = true
+libc.workspace = true
 
 [dev-dependencies]
 base64.workspace = true

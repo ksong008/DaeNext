@@ -193,6 +193,7 @@ dependencies = [
  "base64",
  "dae-ebpf-support",
  "dae-golden",
+ "libc",
  "serde_json",
 ]
 
