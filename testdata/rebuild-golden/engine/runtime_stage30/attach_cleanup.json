@@ -1,0 +1,171 @@
+{
+    "active_traffic_evidence_recorded": false,
+    "actual_dae_ebpf_program_attach_executed": false,
+    "attach_order": [
+        "stage29 preflight report must pass",
+        "acknowledge root gate explicitly",
+        "create temporary netns",
+        "create temporary veth pair",
+        "move peer into temporary netns",
+        "bring host and peer links up",
+        "write temporary netns sysctl",
+        "attach clsact qdisc to temporary host link",
+        "remove clsact qdisc",
+        "delete temporary host link",
+        "delete temporary netns",
+        "verify no temporary resource leftovers"
+    ],
+    "blocked": false,
+    "blockers": [],
+    "checks": [
+        {
+            "blocker": null,
+            "detail": {
+                "path": "/tmp/dae-stage30-candidate"
+            },
+            "name": "isolated-root-under-tmp",
+            "status": "pass"
+        },
+        {
+            "blocker": null,
+            "detail": {
+                "ack_root_gate": false,
+                "execute_smoke": false
+            },
+            "name": "root-gate-acknowledged",
+            "status": "pass"
+        },
+        {
+            "blocker": null,
+            "detail": {
+                "host_iface": "dae30h0",
+                "max_linux_ifname_len": 15,
+                "peer_iface": "dae30p0"
+            },
+            "name": "temporary-interface-names-valid",
+            "status": "pass"
+        },
+        {
+            "blocker": null,
+            "detail": {
+                "host_iface": "dae30h0",
+                "netns": "dae-stage30-ns",
+                "peer_iface": "dae30p0"
+            },
+            "name": "temporary-names-not-production",
+            "status": "pass"
+        },
+        {
+            "blocker": null,
+            "detail": {
+                "tool": "ip"
+            },
+            "name": "tool-ip-available",
+            "status": "pass"
+        },
+        {
+            "blocker": null,
+            "detail": {
+                "tool": "tc"
+            },
+            "name": "tool-tc-available",
+            "status": "pass"
+        },
+        {
+            "blocker": null,
+            "detail": {
+                "tool": "sysctl"
+            },
+            "name": "tool-sysctl-available",
+            "status": "pass"
+        },
+        {
+            "blocker": null,
+            "detail": {
+                "blockers": [],
+                "path": null,
+                "preflight_passed": false,
+                "status": "not-provided"
+            },
+            "name": "stage29-preflight-report-passed",
+            "status": "pass"
+        }
+    ],
+    "cleanup_steps": [],
+    "default_path_mutated": false,
+    "default_switch_allowed": false,
+    "ebpf_contract": {
+        "dae_program_attach_deferred": true,
+        "incompatible_pinned_map_action": {
+            "action": "delete_and_retry",
+            "map": "routing_tuples_map"
+        },
+        "listen_socket_map_keys": [
+            0,
+            1
+        ],
+        "map_count": 13,
+        "pinned_reuse_maps": [
+            "cookie_pid_map",
+            "routing_tuples_map",
+            "tgid_pname_map"
+        ],
+        "tproxy_port_big_endian": 14896
+    },
+    "evidence_class": "root-gated-netns-sysctl-tc-attach-cleanup-smoke",
+    "execute_smoke": false,
+    "executed_steps": [],
+    "go_default_path_preserved": true,
+    "go_fallback_required": true,
+    "live_candidate_run_allowed": false,
+    "live_daemon_started": false,
+    "name": "stage30-root-gated-attach-cleanup-smoke",
+    "netns_sysctl_cleanup_executed": false,
+    "preflight_report": {
+        "blockers": [],
+        "path": null,
+        "preflight_passed": false,
+        "status": "not-provided"
+    },
+    "product_chain_switch_allowed": false,
+    "production_safety": {
+        "no_daemon_start": true,
+        "no_daewing_daed_default_mutation": true,
+        "no_install_mutation": true,
+        "no_production_dae0_mutation": true,
+        "no_production_daens_mutation": true,
+        "no_release_label_mutation": true,
+        "no_sys_fs_bpf_dae_mutation": true,
+        "no_systemd_mutation": true,
+        "no_var_run_mutation": true,
+        "uses_temporary_netns": true,
+        "uses_temporary_veth": true
+    },
+    "read_only": true,
+    "reload_ownership_contract": {
+        "dns_cache_snapshot_required": true,
+        "fresh_after_eject_inject_bpf_ejected": false,
+        "reload_after_eject_bpf_ejected": true,
+        "reload_rollback_requires_old_bpf_inject": true
+    },
+    "remaining_blockers": [
+        "actual dae eBPF program attach to dae0/dae0peer is not executed in Stage 30",
+        "listen socket map update with TCP/UDP listener fds is not executed in Stage 30",
+        "active TCP UDP DNS traffic evidence is still missing",
+        "outbound true dataplane admission is still incomplete",
+        "matched Go default daemon vs true Rust candidate benchmark is still missing",
+        "clean dae-wing and daed product-chain recertification is still missing"
+    ],
+    "root": "/tmp/dae-stage30-candidate",
+    "root_gate_acknowledged": false,
+    "smoke_passed": false,
+    "stage": "stage30",
+    "tc_attach_cleanup_executed": false,
+    "temporary_resources": {
+        "host_iface": "dae30h0",
+        "leftovers_after_cleanup": [],
+        "netns": "dae-stage30-ns",
+        "peer_iface": "dae30p0"
+    },
+    "true_rust_default_daemon_admitted": false
+}

@@ -1,0 +1,111 @@
+{
+  "active_traffic_evidence_recorded": false,
+  "actual_dae_ebpf_program_attach_executed": false,
+  "attach_cleanup_helper_added": true,
+  "carried_blockers": [
+    "actual dae eBPF program attach to dae0/dae0peer is not executed in Stage 30",
+    "listen socket map update with TCP/UDP listener fds is not executed in Stage 30",
+    "active TCP UDP DNS traffic evidence is still missing",
+    "outbound true dataplane admission is still incomplete",
+    "matched Go default daemon vs true Rust candidate benchmark is still missing",
+    "clean dae-wing and daed product-chain recertification is still missing"
+  ],
+  "current_attach_cleanup_smoke_passed": true,
+  "default_path_mutation_allowed": false,
+  "default_switch_allowed": false,
+  "execute_smoke_default": false,
+  "gate_decision": "stage30 adds an explicit root-gated attach cleanup helper and records temporary netns, sysctl, and tc clsact cleanup evidence; it does not attach the production dae eBPF programs, start a live candidate, record active traffic, or allow any default/product switch",
+  "go_default_path_preserved": true,
+  "go_fallback_required": true,
+  "live_candidate_run_allowed": false,
+  "name": "stage30-root-gated-attach-cleanup-gate",
+  "prior_gate": "stage29-exact-host-root-bpf-netns-preflight-gate",
+  "product_chain_switch_allowed": false,
+  "root_gate_ack_required": true,
+  "smoke_rows": [
+    {
+      "area": "stage29 preflight dependency",
+      "boundary": "a clear preflight is only a prerequisite and does not allow live candidate execution",
+      "evidence": "Stage 29 --probe-host --require-existing-config output passed with blockers=0 for the exact /tmp candidate root before Stage 30 execution",
+      "next_action": "rerun Stage 29 preflight before every later root-gated attach or traffic smoke",
+      "status": "passed-recorded"
+    },
+    {
+      "area": "root gate acknowledgement",
+      "boundary": "default helper mode is deterministic and read-only",
+      "evidence": "runtime stage30-attach-cleanup requires --execute-smoke plus --ack-root-gate before performing side effects",
+      "next_action": "keep root-gated execution impossible without the explicit acknowledgement flag",
+      "status": "implemented-required"
+    },
+    {
+      "area": "temporary netns and veth lifecycle",
+      "boundary": "the helper refuses production names and does not mutate dae0, dae0peer, or daens",
+      "evidence": "the helper creates a temporary netns and veth pair, moves the peer into the netns, brings host and peer links up, then deletes the host link and netns",
+      "next_action": "reuse the same cleanup discipline before introducing real dae netns resources",
+      "status": "passed-root-gated-smoke"
+    },
+    {
+      "area": "temporary sysctl and tc cleanup",
+      "boundary": "this is not a production dae eBPF program attach and does not update listen_socket_map",
+      "evidence": "the helper writes a temporary netns sysctl and adds/removes a clsact qdisc on the temporary host link",
+      "next_action": "next stage may introduce a root-gated eBPF program attach smoke while preserving the cleanup checks",
+      "status": "passed-root-gated-smoke"
+    },
+    {
+      "area": "eBPF ABI and reload ownership contract",
+      "boundary": "contract evidence does not prove production BPF program attach or active packet routing",
+      "evidence": "Stage 30 output carries map catalog, pinned reuse maps, listen socket map keys 0/1, incompatible pinned map delete-and-retry, and reload BPF eject/inject contract evidence",
+      "next_action": "bind actual dae eBPF program attach to a later root-gated smoke with no stale map/link leftovers",
+      "status": "passed-contract-evidence"
+    },
+    {
+      "area": "active traffic and outbound",
+      "boundary": "no TCP, UDP, DNS, outbound protocol, or listener sockmap traffic is admitted",
+      "evidence": "active_traffic_evidence_recorded=false and actual_dae_ebpf_program_attach_executed=false remain explicit in Stage 30",
+      "next_action": "only after real eBPF attach cleanup passes should active TCP/UDP/DNS smoke be run",
+      "status": "blocked-not-covered"
+    },
+    {
+      "area": "default path and product chain",
+      "boundary": "Stage 30 cannot replace matched benchmark or clean product-chain recertification",
+      "evidence": "live_candidate_run_allowed=false, default_switch_allowed=false, product_chain_switch_allowed=false, true_rust_default_daemon_admitted=false, and go_fallback_required=true",
+      "next_action": "keep all default/product switches denied until the full Stage 28 admission order passes",
+      "status": "blocked-preserved"
+    }
+  ],
+  "source": [
+    "DAEX_RUST_REBUILD_PLAN_2026-05-16.md:stage30-item259",
+    "DAEX_RUST_REBUILD_PLAN_2026-05-16.md:stage29-item258",
+    "DAENEW_RUST_REBUILD_MEMO_2026-05-16.md:22.1",
+    "DAENEW_RUST_REBUILD_MEMO_2026-05-16.md:22.2",
+    "DAENEW_RUST_REBUILD_MEMO_2026-05-16.md:22.3",
+    "DAENEW_RUST_REBUILD_MEMO_2026-05-16.md:22.4",
+    "DAENEW_RUST_REBUILD_MEMO_2026-05-16.md:22.5",
+    "DAENEW_RUST_REBUILD_MEMO_2026-05-16.md:22.6",
+    "DAENEW_RUST_REBUILD_MEMO_2026-05-16.md:22.8",
+    "DAENEW_RUST_REBUILD_MEMO_2026-05-16.md:33.8",
+    "rust/crates/dae-cli/src/runtime_stage30_attach_cleanup.rs",
+    "rust/crates/dae-cli/src/active_datapath_runner.rs",
+    "rust/crates/dae-product/src/stage29_host_preflight_gate.rs",
+    "testdata/rebuild-golden/engine/runtime_stage30/attach_cleanup.json"
+  ],
+  "stage": "stage30",
+  "stage29_preflight_required": true,
+  "stage_complete": true,
+  "true_rust_default_daemon_admitted": false,
+  "validation_commands": [
+    "python3 -m json.tool testdata/rebuild-golden/engine/runtime_stage30/attach_cleanup.json",
+    "python3 -m json.tool testdata/rebuild-golden/product/daemon/stage30_attach_cleanup_gate.json",
+    "cargo test --manifest-path rust/Cargo.toml -p dae-cli stage30 -- --nocapture",
+    "cargo test --manifest-path rust/Cargo.toml -p dae-product stage30 -- --nocapture",
+    "cargo run --manifest-path rust/Cargo.toml -p dae-cli --bin dae-cli-optin --quiet -- runtime stage30-attach-cleanup --root /tmp/dae-stage30-candidate --preflight-report /tmp/dae-stage30-host-preflight.json --execute-smoke --ack-root-gate",
+    "cargo run --manifest-path rust/Cargo.toml -p dae-cli --bin dae-cli-optin --quiet -- active-datapath contract",
+    "cargo run --manifest-path rust/Cargo.toml -p dae-cli --bin dae-cli-optin --quiet -- active-datapath reload-ownership",
+    "cargo fmt --manifest-path rust/Cargo.toml --all -- --check",
+    "cargo test --manifest-path rust/Cargo.toml -p dae-cli",
+    "cargo test --manifest-path rust/Cargo.toml -p dae-product",
+    "cargo test --manifest-path rust/Cargo.toml -p dae-ebpf-support",
+    "cargo test --manifest-path rust/Cargo.toml -p dae-control",
+    "git diff --check"
+  ]
+}
