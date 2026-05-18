@@ -1995,6 +1995,92 @@ fn stage51_runtime_admission_blocks_unsafe_execution() {
 }
 
 #[test]
+fn stage52_runtime_admission_fixture_matches() {
+    let fixture = load("engine/runtime_stage52/active_tcp_route_table_group_admission.json");
+    let output = run_with_args([
+        "runtime",
+        "stage52-active-tcp-route-table-group-relay-admission",
+    ]);
+    assert_eq!(output.exit_code, 0, "{}", output.stdout);
+    assert_eq!(output.stderr, "");
+    let json: Value = serde_json::from_str(&output.stdout).unwrap();
+    assert_eq!(
+        json["name"].as_str().unwrap(),
+        fixture["name"].as_str().unwrap()
+    );
+    assert_eq!(
+        json["stage"].as_str().unwrap(),
+        fixture["stage"].as_str().unwrap()
+    );
+    assert_eq!(
+        json["evidence_class"].as_str().unwrap(),
+        fixture["evidence_class"].as_str().unwrap()
+    );
+    assert!(!json["execute_smoke"].as_bool().unwrap());
+    assert!(json["read_only"].as_bool().unwrap());
+    assert!(
+        json["route_dial_tcp_route_table_recorded"]
+            .as_bool()
+            .unwrap()
+    );
+    assert!(json["choose_dial_target_recorded"].as_bool().unwrap());
+    assert!(json["outbound_group_selection_recorded"].as_bool().unwrap());
+    assert!(
+        json["route_dial_tcp_rust_control_plane_executed"]
+            .as_bool()
+            .unwrap()
+    );
+    assert!(
+        !json["active_tcp_route_table_group_relay_smoke_passed"]
+            .as_bool()
+            .unwrap()
+    );
+    assert!(
+        !json["active_tcp_route_table_group_benchmark_recorded"]
+            .as_bool()
+            .unwrap()
+    );
+    assert_eq!(
+        json["route_dial_plan"]["final_dial_target"]
+            .as_str()
+            .unwrap(),
+        fixture["route_dial_plan"]["final_dial_target"]
+            .as_str()
+            .unwrap()
+    );
+    assert_eq!(
+        json["group_selection"]["selected_dialer"].as_str().unwrap(),
+        fixture["group_selection"]["selected_dialer"]
+            .as_str()
+            .unwrap()
+    );
+    assert!(!json["default_switch_allowed"].as_bool().unwrap());
+    assert!(!json["product_chain_switch_allowed"].as_bool().unwrap());
+    assert!(!json["true_rust_default_daemon_admitted"].as_bool().unwrap());
+    assert!(json["go_default_path_preserved"].as_bool().unwrap());
+    assert!(json["go_fallback_required"].as_bool().unwrap());
+    assert_eq!(
+        json["remaining_blockers"].as_array().unwrap().len(),
+        fixture["remaining_blockers"].as_array().unwrap().len()
+    );
+}
+
+#[test]
+fn stage52_runtime_admission_blocks_unsafe_execution() {
+    let blocked = run_with_args([
+        "runtime",
+        "stage52-active-tcp-route-table-group-relay-admission",
+        "--execute-smoke",
+    ]);
+    assert_eq!(blocked.exit_code, 1);
+    assert!(
+        blocked
+            .stdout
+            .contains("stage52 root-gated smoke requires --ack-root-gate")
+    );
+}
+
+#[test]
 fn optin_runner_userspace_commands_match_engine_fixture() {
     let fixture = load("engine/userspace_runtime/optin_contract.json");
 
