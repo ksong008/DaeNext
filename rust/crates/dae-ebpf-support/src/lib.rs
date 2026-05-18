@@ -44,5 +44,6 @@ pub use sockmap::{
 };
 pub use tproxy_listener::{
     TproxyListenerSet, TproxySocketOptions, open_tproxy_listener_set,
-    open_tproxy_listener_set_in_netns,
+    open_tproxy_listener_set_in_netns, open_transparent_udp_socket_bound,
+    open_transparent_udp_socket_bound_in_netns,
 };

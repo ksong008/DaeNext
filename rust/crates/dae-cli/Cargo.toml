@@ -17,6 +17,7 @@ dae-netutil.workspace = true
 dae-outbound.workspace = true
 dae-routing.workspace = true
 dae-sniffing.workspace = true
+libc.workspace = true
 serde_json.workspace = true
 
 [dev-dependencies]

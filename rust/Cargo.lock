@@ -147,6 +147,7 @@ dependencies = [
  "dae-outbound",
  "dae-routing",
  "dae-sniffing",
+ "libc",
  "serde_json",
 ]
 
