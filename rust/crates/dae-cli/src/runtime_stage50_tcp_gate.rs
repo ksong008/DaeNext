@@ -9,8 +9,10 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use dae_datapath::{
-    TcpDirectDialOptions, TcpDirectDialReport, TcpLoopbackListenerReport,
-    bind_loopback_tcp_listener, magic_network_bytes, magic_tcp_connect,
+    OUTBOUND_CONTROL_PLANE_ROUTING, OUTBOUND_USER_DEFINED_MIN, RouteDialTcpPlan,
+    RouteDialTcpPlanInput, RouteRule, TcpDialMode, TcpDirectDialOptions, TcpDirectDialReport,
+    TcpLoopbackListenerReport, bind_loopback_tcp_listener, bind_loopback_tcp_listener_on_port,
+    magic_network_bytes, magic_tcp_connect, route_dial_tcp_plan,
 };
 use dae_ebpf_support::{
     DaeParamInput, RuntimeMapInfo, build_dae_param, map_ids, map_info,
@@ -18,6 +20,7 @@ use dae_ebpf_support::{
     write_param_aware_object,
 };
 use dae_netutil::parse_magic_network;
+use dae_outbound::{Annotation, Dialer, DialerGroup, NetworkType, SelectionPolicy};
 use serde_json::{Map, Value, json};
 
 use crate::runner::RunnerOutput;
@@ -53,6 +56,13 @@ const DEFAULT_STAGE51_TARGET_PORT: u16 = 18081;
 const DEFAULT_STAGE51_TARGET_IP: &str = "198.18.51.1";
 const STAGE51_TCP_PAYLOAD: &[u8] = b"stage51-tcp-relay-ping";
 const STAGE51_TCP_RESPONSE: &[u8] = b"stage51-tcp-relay-ack";
+const DEFAULT_STAGE52_ROOT: &str = "/tmp/dae-stage52-candidate";
+const DEFAULT_STAGE52_TPROXY_PORT: u16 = 35252;
+const DEFAULT_STAGE52_TARGET_PORT: u16 = 18082;
+const DEFAULT_STAGE52_TARGET_IP: &str = "198.18.52.1";
+const DEFAULT_STAGE52_DOMAIN: &str = "127.0.0.1";
+const STAGE52_TCP_PAYLOAD: &[u8] = b"stage52-route-group-ping";
+const STAGE52_TCP_RESPONSE: &[u8] = b"stage52-route-group-ack";
 
 pub(crate) fn run_stage50_active_tcp_tproxy_ingress_admission(args: &[String]) -> RunnerOutput {
     let opts = match Stage50Options::parse(args) {
@@ -77,6 +87,21 @@ pub(crate) fn run_stage51_active_tcp_route_dial_relay_admission(args: &[String])
         report,
         opts.base.execute_smoke,
         "active_tcp_relay_smoke_passed",
+    )
+}
+
+pub(crate) fn run_stage52_active_tcp_route_table_group_relay_admission(
+    args: &[String],
+) -> RunnerOutput {
+    let opts = match Stage52Options::parse(args) {
+        Ok(opts) => opts,
+        Err(output) => return output,
+    };
+    let report = stage52_report(&opts);
+    output_with_execution_status(
+        report,
+        opts.base.execute_smoke,
+        "active_tcp_route_table_group_relay_smoke_passed",
     )
 }
 
@@ -389,6 +414,182 @@ impl Stage51Options {
             return Err(RunnerOutput::usage(
                 "stage51 --benchmark-iters must be non-zero",
             ));
+        }
+        Ok(opts)
+    }
+}
+
+#[derive(Debug, Clone)]
+struct Stage52Options {
+    base: Stage50Options,
+    upstream_mptcp: bool,
+    benchmark_iters: u32,
+    dial_mode: TcpDialMode,
+    domain: String,
+    domain_is_real: bool,
+}
+
+impl Default for Stage52Options {
+    fn default() -> Self {
+        let root = PathBuf::from(DEFAULT_STAGE52_ROOT);
+        let base = Stage50Options {
+            param_object: root.join("bpf_bpfel.param.o"),
+            root,
+            tproxy_port: DEFAULT_STAGE52_TPROXY_PORT,
+            target_ip: DEFAULT_STAGE52_TARGET_IP.to_owned(),
+            target_port: DEFAULT_STAGE52_TARGET_PORT,
+            ..Stage50Options::default()
+        };
+        Self {
+            base,
+            upstream_mptcp: true,
+            benchmark_iters: 1,
+            dial_mode: TcpDialMode::DomainPlusPlus,
+            domain: DEFAULT_STAGE52_DOMAIN.to_owned(),
+            domain_is_real: true,
+        }
+    }
+}
+
+impl Stage52Options {
+    fn parse(args: &[String]) -> Result<Self, RunnerOutput> {
+        let mut opts = Self::default();
+        let default_param_object = PathBuf::from(DEFAULT_STAGE52_ROOT).join("bpf_bpfel.param.o");
+        let mut iter = args.iter();
+        while let Some(arg) = iter.next() {
+            match arg.as_str() {
+                "--root" => {
+                    opts.base.root = PathBuf::from(next_value(&mut iter, "stage52 --root")?);
+                    if opts.base.param_object == default_param_object {
+                        opts.base.param_object = opts.base.root.join("bpf_bpfel.param.o");
+                    }
+                }
+                "--object" => {
+                    opts.base.source_object =
+                        PathBuf::from(next_value(&mut iter, "stage52 --object")?);
+                }
+                "--param-object" => {
+                    opts.base.param_object =
+                        PathBuf::from(next_value(&mut iter, "stage52 --param-object")?);
+                }
+                "--execute-smoke" => opts.base.execute_smoke = true,
+                "--ack-root-gate" => opts.base.ack_root_gate = true,
+                "--peer-section" => {
+                    opts.base.peer_section = next_value(&mut iter, "stage52 --peer-section")?;
+                }
+                "--host-section" => {
+                    opts.base.host_section = next_value(&mut iter, "stage52 --host-section")?;
+                }
+                "--lan-section" => {
+                    opts.base.lan_section = next_value(&mut iter, "stage52 --lan-section")?;
+                }
+                "--tproxy-port" => {
+                    opts.base.tproxy_port =
+                        parse_port(&next_value(&mut iter, "stage52 --tproxy-port")?, arg)?;
+                }
+                "--dae-netns-id" => {
+                    opts.base.dae_netns_id =
+                        parse_u32(&next_value(&mut iter, "stage52 --dae-netns-id")?, arg)?;
+                }
+                "--target-ip" => {
+                    opts.base.target_ip = next_value(&mut iter, "stage52 --target-ip")?;
+                }
+                "--client-ip" => {
+                    opts.base.client_ip = next_value(&mut iter, "stage52 --client-ip")?;
+                }
+                "--target-port" => {
+                    opts.base.target_port =
+                        parse_port(&next_value(&mut iter, "stage52 --target-port")?, arg)?;
+                }
+                "--so-mark" => {
+                    opts.base.so_mark =
+                        parse_u32(&next_value(&mut iter, "stage52 --so-mark")?, arg)?;
+                }
+                "--mptcp" => opts.base.mptcp = true,
+                "--no-mptcp" => opts.base.mptcp = false,
+                "--upstream-mptcp" => opts.upstream_mptcp = true,
+                "--upstream-plain-tcp" => opts.upstream_mptcp = false,
+                "--benchmark-iters" => {
+                    opts.benchmark_iters =
+                        parse_u32(&next_value(&mut iter, "stage52 --benchmark-iters")?, arg)?;
+                }
+                "--dial-mode" => {
+                    opts.dial_mode =
+                        parse_tcp_dial_mode(&next_value(&mut iter, "stage52 --dial-mode")?)?;
+                }
+                "--domain" => opts.domain = next_value(&mut iter, "stage52 --domain")?,
+                "--domain-real" => opts.domain_is_real = true,
+                "--domain-not-real" => opts.domain_is_real = false,
+                _ if arg.starts_with("--root=") => {
+                    opts.base.root = PathBuf::from(value_after_equals(arg, "stage52 --root")?);
+                    if opts.base.param_object == default_param_object {
+                        opts.base.param_object = opts.base.root.join("bpf_bpfel.param.o");
+                    }
+                }
+                _ if arg.starts_with("--object=") => {
+                    opts.base.source_object =
+                        PathBuf::from(value_after_equals(arg, "stage52 --object")?);
+                }
+                _ if arg.starts_with("--param-object=") => {
+                    opts.base.param_object =
+                        PathBuf::from(value_after_equals(arg, "stage52 --param-object")?);
+                }
+                _ if arg.starts_with("--peer-section=") => {
+                    opts.base.peer_section = value_after_equals(arg, "stage52 --peer-section")?;
+                }
+                _ if arg.starts_with("--host-section=") => {
+                    opts.base.host_section = value_after_equals(arg, "stage52 --host-section")?;
+                }
+                _ if arg.starts_with("--lan-section=") => {
+                    opts.base.lan_section = value_after_equals(arg, "stage52 --lan-section")?;
+                }
+                _ if arg.starts_with("--tproxy-port=") => {
+                    opts.base.tproxy_port =
+                        parse_port(&value_after_equals(arg, "stage52 --tproxy-port")?, arg)?;
+                }
+                _ if arg.starts_with("--dae-netns-id=") => {
+                    opts.base.dae_netns_id =
+                        parse_u32(&value_after_equals(arg, "stage52 --dae-netns-id")?, arg)?;
+                }
+                _ if arg.starts_with("--target-ip=") => {
+                    opts.base.target_ip = value_after_equals(arg, "stage52 --target-ip")?;
+                }
+                _ if arg.starts_with("--client-ip=") => {
+                    opts.base.client_ip = value_after_equals(arg, "stage52 --client-ip")?;
+                }
+                _ if arg.starts_with("--target-port=") => {
+                    opts.base.target_port =
+                        parse_port(&value_after_equals(arg, "stage52 --target-port")?, arg)?;
+                }
+                _ if arg.starts_with("--so-mark=") => {
+                    opts.base.so_mark =
+                        parse_u32(&value_after_equals(arg, "stage52 --so-mark")?, arg)?;
+                }
+                _ if arg.starts_with("--benchmark-iters=") => {
+                    opts.benchmark_iters =
+                        parse_u32(&value_after_equals(arg, "stage52 --benchmark-iters")?, arg)?;
+                }
+                _ if arg.starts_with("--dial-mode=") => {
+                    opts.dial_mode =
+                        parse_tcp_dial_mode(&value_after_equals(arg, "stage52 --dial-mode")?)?;
+                }
+                _ if arg.starts_with("--domain=") => {
+                    opts.domain = value_after_equals(arg, "stage52 --domain")?;
+                }
+                _ => {
+                    return Err(RunnerOutput::usage(format!(
+                        "unsupported runtime stage52-active-tcp-route-table-group-relay-admission argument: {arg}"
+                    )));
+                }
+            }
+        }
+        if opts.benchmark_iters == 0 {
+            return Err(RunnerOutput::usage(
+                "stage52 --benchmark-iters must be non-zero",
+            ));
+        }
+        if opts.domain.is_empty() {
+            return Err(RunnerOutput::usage("stage52 --domain must be non-empty"));
         }
         Ok(opts)
     }
@@ -1032,6 +1233,389 @@ fn stage51_report(opts: &Stage51Options) -> Value {
     Value::Object(report)
 }
 
+fn stage52_report(opts: &Stage52Options) -> Value {
+    let base = &opts.base;
+    let mut blockers = Vec::new();
+    let mut checks = Vec::new();
+    let route_plan = stage52_route_plan(opts);
+    let route_table_recorded = route_plan.userspace_route_executed
+        && route_plan.final_outbound == OUTBOUND_USER_DEFINED_MIN
+        && route_plan.second_choose.is_some();
+    let choose_dial_target_recorded = route_plan.first_choose.should_reroute
+        && route_plan.final_dial_target == format!("{}:{}", opts.domain, base.target_port);
+    let (group_selection_model, group_selection_recorded) =
+        stage52_group_selection_json(&route_plan);
+
+    push_check(
+        &mut checks,
+        "isolated-root-under-tmp",
+        tmp_root_allowed(&base.root),
+        json!({"path": path_string(&base.root)}),
+        &mut blockers,
+        "stage52 root must be an absolute /tmp child path",
+    );
+    push_check(
+        &mut checks,
+        "root-gate-acknowledged",
+        !base.execute_smoke || base.ack_root_gate,
+        json!({"execute_smoke": base.execute_smoke, "ack_root_gate": base.ack_root_gate}),
+        &mut blockers,
+        "stage52 root-gated smoke requires --ack-root-gate",
+    );
+    for tool in ["ip", "tc", "python3", "sysctl"] {
+        push_check(
+            &mut checks,
+            &format!("tool-{tool}-available"),
+            command_exists(tool),
+            json!({"tool": tool}),
+            &mut blockers,
+            "required host tool is missing",
+        );
+    }
+    push_check(
+        &mut checks,
+        "source-object-present",
+        base.source_object.exists(),
+        json!({"path": path_string(&base.source_object)}),
+        &mut blockers,
+        "stage52 source eBPF object is missing",
+    );
+    push_check(
+        &mut checks,
+        "tproxy-port-valid",
+        base.tproxy_port != 0,
+        json!({"tproxy_port": base.tproxy_port}),
+        &mut blockers,
+        "stage52 tproxy port must be non-zero",
+    );
+    push_check(
+        &mut checks,
+        "target-port-valid",
+        base.target_port != 0,
+        json!({"target_port": base.target_port}),
+        &mut blockers,
+        "stage52 target port must be non-zero",
+    );
+    if base.execute_smoke {
+        push_check(
+            &mut checks,
+            "stage52-resource-names-free",
+            resource_leftovers().is_empty(),
+            json!({"leftovers": resource_leftovers()}),
+            &mut blockers,
+            "stage52 temporary or production names are already in use",
+        );
+        push_check(
+            &mut checks,
+            "tproxy-port-free",
+            tproxy_port_available(base.tproxy_port),
+            json!({"tproxy_port": base.tproxy_port}),
+            &mut blockers,
+            "stage52 tproxy port is already in use",
+        );
+        push_check(
+            &mut checks,
+            "route-dial-target-port-free",
+            tproxy_port_available(base.target_port),
+            json!({"target_port": base.target_port, "domain": opts.domain}),
+            &mut blockers,
+            "stage52 route-dial target port is already in use on loopback",
+        );
+    }
+
+    let before_pin_snapshot = if base.execute_smoke {
+        bpf_dae_snapshot()
+    } else {
+        Vec::new()
+    };
+    let before_map_ids = if base.execute_smoke && blockers.is_empty() {
+        match map_ids() {
+            Ok(ids) => ids,
+            Err(err) => {
+                blockers.push(format!("stage52 cannot snapshot BPF map ids: {err}"));
+                Vec::new()
+            }
+        }
+    } else {
+        Vec::new()
+    };
+    let mut executed_steps = Vec::new();
+    let mut cleanup_steps = Vec::new();
+    let mut topology_values = Value::Null;
+    let mut param_image = Value::Null;
+    let mut peer_attach_show = Value::Null;
+    let mut lan_attach_show = Value::Null;
+    let mut host_attach_show = Value::Null;
+    let mut loaded_map_handoff = Value::Null;
+    let mut route_map_update = Value::Null;
+    let mut relay_accept = Value::Null;
+    let mut upstream = Value::Null;
+    let mut client_traffic = Value::Null;
+    let mut outbound_dial = Value::Null;
+    let mut benchmark = Value::Null;
+    let mut smoke_route_plan = route_dial_plan_json(&route_plan);
+    let mut smoke_group_selection = group_selection_model;
+    let mut post_traffic_peer_stats = Value::Null;
+    let mut post_traffic_lan_stats = Value::Null;
+    let mut post_traffic_host_stats = Value::Null;
+    let mut discovered_listen_map_id = None;
+    let mut discovered_routing_map_id = None;
+    let mut active_tcp_route_table_group_relay_smoke_passed = false;
+    let mut original_destination_observed = false;
+    let mut outbound_relay_succeeded = false;
+    let mut so_mark_observed = false;
+    let mut mptcp_observed = false;
+    if base.execute_smoke && blockers.is_empty() {
+        let result = execute_stage52_smoke(opts, &before_map_ids);
+        executed_steps = result.executed_steps;
+        cleanup_steps = result.cleanup_steps;
+        topology_values = result.topology_values;
+        param_image = result.param_image;
+        peer_attach_show = result.peer_attach_show;
+        lan_attach_show = result.lan_attach_show;
+        host_attach_show = result.host_attach_show;
+        loaded_map_handoff = result.loaded_map_handoff;
+        route_map_update = result.route_map_update;
+        relay_accept = result.relay_accept;
+        upstream = result.upstream;
+        client_traffic = result.client_traffic;
+        outbound_dial = result.outbound_dial;
+        benchmark = result.benchmark;
+        smoke_route_plan = result.route_dial_plan;
+        smoke_group_selection = result.group_selection;
+        post_traffic_peer_stats = result.post_traffic_peer_stats;
+        post_traffic_lan_stats = result.post_traffic_lan_stats;
+        post_traffic_host_stats = result.post_traffic_host_stats;
+        discovered_listen_map_id = result.discovered_listen_map_id;
+        discovered_routing_map_id = result.discovered_routing_map_id;
+        active_tcp_route_table_group_relay_smoke_passed = result.passed;
+        original_destination_observed = result.original_destination_observed;
+        outbound_relay_succeeded = result.outbound_relay_succeeded;
+        so_mark_observed = result.so_mark_observed;
+        mptcp_observed = result.mptcp_observed;
+        if !active_tcp_route_table_group_relay_smoke_passed {
+            blockers.push("stage52 active TCP route-table/group relay smoke failed".to_owned());
+        }
+    }
+    let after_pin_snapshot = if base.execute_smoke {
+        bpf_dae_snapshot()
+    } else {
+        Vec::new()
+    };
+    let (after_map_ids, loaded_maps_cleaned) = if base.execute_smoke {
+        wait_for_loaded_map_cleanup(&[discovered_listen_map_id, discovered_routing_map_id])
+    } else {
+        (Vec::new(), true)
+    };
+    if base.execute_smoke && !loaded_maps_cleaned {
+        blockers.push("stage52 loaded BPF maps remain after cleanup".to_owned());
+    }
+    let leftovers = resource_leftovers();
+    if base.execute_smoke && !leftovers.is_empty() {
+        blockers.push("stage52 resources remain after cleanup".to_owned());
+    }
+    let sys_fs_bpf_dae_mutated = before_pin_snapshot != after_pin_snapshot;
+    if base.execute_smoke && sys_fs_bpf_dae_mutated {
+        blockers.push("stage52 unexpectedly mutated /sys/fs/bpf/dae".to_owned());
+    }
+
+    let benchmark_recorded = base.execute_smoke
+        && opts.benchmark_iters > 1
+        && active_tcp_route_table_group_relay_smoke_passed
+        && benchmark["status"].as_str() == Some("pass");
+    let mut report = Map::new();
+    report.insert(
+        "name".to_owned(),
+        json!("stage52-active-tcp-route-table-group-relay-admission"),
+    );
+    report.insert("stage".to_owned(), json!("stage52"));
+    report.insert(
+        "evidence_class".to_owned(),
+        json!("root-gated-active-tcp-route-table-choose-target-group-relay-smoke"),
+    );
+    report.insert("root".to_owned(), json!(path_string(&base.root)));
+    report.insert("execute_smoke".to_owned(), json!(base.execute_smoke));
+    report.insert(
+        "root_gate_acknowledged".to_owned(),
+        json!(base.ack_root_gate),
+    );
+    report.insert("read_only".to_owned(), json!(!base.execute_smoke));
+    report.insert("blocked".to_owned(), json!(!blockers.is_empty()));
+    report.insert(
+        "route_dial_tcp_route_table_recorded".to_owned(),
+        json!(route_table_recorded),
+    );
+    report.insert(
+        "choose_dial_target_recorded".to_owned(),
+        json!(choose_dial_target_recorded),
+    );
+    report.insert(
+        "outbound_group_selection_recorded".to_owned(),
+        json!(group_selection_recorded),
+    );
+    report.insert(
+        "route_dial_tcp_rust_control_plane_executed".to_owned(),
+        json!(route_table_recorded && choose_dial_target_recorded && group_selection_recorded),
+    );
+    report.insert(
+        "active_tcp_route_table_group_relay_smoke_passed".to_owned(),
+        json!(active_tcp_route_table_group_relay_smoke_passed),
+    );
+    report.insert(
+        "active_tcp_tproxy_ingress_admitted".to_owned(),
+        json!(active_tcp_route_table_group_relay_smoke_passed),
+    );
+    report.insert(
+        "active_tcp_syn_reached_transparent_listener".to_owned(),
+        json!(active_tcp_route_table_group_relay_smoke_passed),
+    );
+    report.insert(
+        "original_destination_observed".to_owned(),
+        json!(original_destination_observed),
+    );
+    report.insert(
+        "route_dial_tcp_direct_path_executed".to_owned(),
+        json!(outbound_relay_succeeded),
+    );
+    report.insert(
+        "outbound_relay_recorded".to_owned(),
+        json!(outbound_relay_succeeded),
+    );
+    report.insert(
+        "tcp_reply_path_succeeded".to_owned(),
+        json!(outbound_relay_succeeded),
+    );
+    report.insert(
+        "so_mark_real_outbound_socket_observed".to_owned(),
+        json!(so_mark_observed),
+    );
+    report.insert(
+        "mptcp_real_outbound_socket_observed".to_owned(),
+        json!(mptcp_observed),
+    );
+    report.insert(
+        "so_mark_mptcp_real_outbound_socket_recorded".to_owned(),
+        json!(so_mark_observed && (!base.mptcp || mptcp_observed)),
+    );
+    report.insert(
+        "active_tcp_tproxy_admitted".to_owned(),
+        json!(active_tcp_route_table_group_relay_smoke_passed && outbound_relay_succeeded),
+    );
+    report.insert(
+        "active_tproxy_traffic_executed".to_owned(),
+        json!(base.execute_smoke),
+    );
+    report.insert(
+        "active_tcp_route_table_group_benchmark_recorded".to_owned(),
+        json!(benchmark_recorded),
+    );
+    for key in [
+        "active_udp_tproxy_admitted",
+        "active_dns_tproxy_admitted",
+        "outbound_true_dataplane_admitted",
+        "matched_go_rust_default_daemon_benchmark_recorded",
+        "default_switch_allowed",
+        "default_path_mutated",
+        "product_chain_switch_allowed",
+        "true_rust_default_daemon_admitted",
+    ] {
+        report.insert(key.to_owned(), json!(false));
+    }
+    report.insert("go_default_path_preserved".to_owned(), json!(true));
+    report.insert("go_fallback_required".to_owned(), json!(true));
+    report.insert("blockers".to_owned(), json!(blockers));
+    report.insert("checks".to_owned(), json!(checks));
+    report.insert(
+        "active_tcp_contract".to_owned(),
+        json!({
+            "netns": PRODUCTION_NETNS,
+            "host_iface": PRODUCTION_HOST_IFACE,
+            "peer_iface": PRODUCTION_PEER_IFACE,
+            "client_netns": CLIENT_NETNS,
+            "lan_host_iface": LAN_HOST_IFACE,
+            "lan_client_iface": LAN_CLIENT_IFACE,
+            "peer_section": base.peer_section,
+            "host_section": base.host_section,
+            "lan_section": base.lan_section,
+            "filter_pref": STAGE50_FILTER_PREF,
+            "lan_filter_pref": STAGE50_LAN_FILTER_PREF,
+            "source_object": path_string(&base.source_object),
+            "param_object": path_string(&base.param_object),
+            "listen_socket_map_kernel_name": LISTEN_SOCKET_MAP_KERNEL_NAME,
+            "routing_map_kernel_name": ROUTING_MAP_KERNEL_NAME,
+            "routing_fallback_outbound": OUTBOUND_USER_DEFINED_MIN,
+            "userspace_reroute_initial_outbound": OUTBOUND_CONTROL_PLANE_ROUTING,
+            "match_type_fallback": MATCH_TYPE_FALLBACK,
+            "tproxy_port": base.tproxy_port,
+            "target": format!("{}:{}", base.target_ip, base.target_port),
+            "domain": opts.domain,
+            "dial_mode": opts.dial_mode.as_str(),
+            "lan_gateway_ip": DEFAULT_STAGE50_LAN_GATEWAY_IP,
+            "client_ip": base.client_ip,
+            "so_mark": base.so_mark,
+            "mptcp": base.mptcp,
+            "upstream_mptcp": opts.upstream_mptcp,
+            "benchmark_iters": opts.benchmark_iters,
+            "bounded_to_direct_loopback_upstream": true,
+            "protocol_outbound_true_dataplane_required_later": true,
+        }),
+    );
+    report.insert("route_dial_plan".to_owned(), smoke_route_plan);
+    report.insert("group_selection".to_owned(), smoke_group_selection);
+    report.insert("topology_values".to_owned(), topology_values);
+    report.insert("param_image".to_owned(), param_image);
+    report.insert("loaded_map_handoff".to_owned(), loaded_map_handoff);
+    report.insert("route_map_update".to_owned(), route_map_update);
+    report.insert("relay_accept".to_owned(), relay_accept);
+    report.insert("upstream".to_owned(), upstream);
+    report.insert("client_traffic".to_owned(), client_traffic);
+    report.insert("outbound_dial".to_owned(), outbound_dial);
+    report.insert("benchmark".to_owned(), benchmark);
+    report.insert(
+        "post_traffic_peer_stats".to_owned(),
+        post_traffic_peer_stats,
+    );
+    report.insert("post_traffic_lan_stats".to_owned(), post_traffic_lan_stats);
+    report.insert(
+        "post_traffic_host_stats".to_owned(),
+        post_traffic_host_stats,
+    );
+    report.insert("executed_steps".to_owned(), json!(executed_steps));
+    report.insert("cleanup_steps".to_owned(), json!(cleanup_steps));
+    report.insert("peer_attach_show".to_owned(), peer_attach_show);
+    report.insert("lan_attach_show".to_owned(), lan_attach_show);
+    report.insert("host_attach_show".to_owned(), host_attach_show);
+    report.insert(
+        "map_id_snapshots".to_owned(),
+        json!({
+            "before_attach": before_map_ids,
+            "after_cleanup": after_map_ids,
+            "discovered_listen_map_id": discovered_listen_map_id,
+            "discovered_routing_map_id": discovered_routing_map_id,
+            "loaded_maps_cleaned": loaded_maps_cleaned,
+        }),
+    );
+    report.insert(
+        "temporary_resources".to_owned(),
+        json!({
+            "leftovers_after_cleanup": leftovers,
+        }),
+    );
+    report.insert(
+        "sys_fs_bpf_dae".to_owned(),
+        json!({
+            "before": before_pin_snapshot,
+            "after": after_pin_snapshot,
+            "mutated": sys_fs_bpf_dae_mutated,
+        }),
+    );
+    report.insert(
+        "remaining_blockers".to_owned(),
+        json!(remaining_blockers_after_stage52()),
+    );
+    Value::Object(report)
+}
+
 struct Stage50SmokeResult {
     passed: bool,
     original_destination_observed: bool,
@@ -1071,6 +1655,35 @@ struct Stage51SmokeResult {
     host_attach_show: Value,
     loaded_map_handoff: Value,
     route_map_update: Value,
+    relay_accept: Value,
+    upstream: Value,
+    client_traffic: Value,
+    outbound_dial: Value,
+    benchmark: Value,
+    post_traffic_peer_stats: Value,
+    post_traffic_lan_stats: Value,
+    post_traffic_host_stats: Value,
+}
+
+struct Stage52SmokeResult {
+    passed: bool,
+    original_destination_observed: bool,
+    outbound_relay_succeeded: bool,
+    so_mark_observed: bool,
+    mptcp_observed: bool,
+    discovered_listen_map_id: Option<u32>,
+    discovered_routing_map_id: Option<u32>,
+    executed_steps: Vec<Value>,
+    cleanup_steps: Vec<Value>,
+    topology_values: Value,
+    param_image: Value,
+    peer_attach_show: Value,
+    lan_attach_show: Value,
+    host_attach_show: Value,
+    loaded_map_handoff: Value,
+    route_map_update: Value,
+    route_dial_plan: Value,
+    group_selection: Value,
     relay_accept: Value,
     upstream: Value,
     client_traffic: Value,
@@ -1423,6 +2036,212 @@ fn execute_stage51_smoke(opts: &Stage51Options, before_map_ids: &[u32]) -> Stage
         host_attach_show,
         loaded_map_handoff,
         route_map_update,
+        relay_accept,
+        upstream,
+        client_traffic,
+        outbound_dial,
+        benchmark,
+        post_traffic_peer_stats,
+        post_traffic_lan_stats,
+        post_traffic_host_stats,
+    }
+}
+
+fn execute_stage52_smoke(opts: &Stage52Options, before_map_ids: &[u32]) -> Stage52SmokeResult {
+    let base = &opts.base;
+    let mut executed_steps = Vec::new();
+    let mut cleanup_steps = Vec::new();
+    let mut ok = true;
+
+    ok &= setup_production_topology(&mut executed_steps, base);
+    ok &= setup_client_topology(&mut executed_steps, base);
+    let (topology_values, dae0_ifindex, dae0_mac, dae0peer_mac) =
+        read_topology_values(&mut executed_steps, base);
+    ok &= topology_values["status"].as_str() == Some("pass");
+    if let Some(dae0_mac) = dae0_mac {
+        ok &= setup_production_ipv4_datapath(&mut executed_steps, dae0_mac);
+    }
+    let param_image = if let (Some(dae0_ifindex), Some(dae0peer_mac)) = (dae0_ifindex, dae0peer_mac)
+    {
+        write_param_image(base, dae0_ifindex, dae0peer_mac)
+    } else {
+        json!({
+            "status": "skipped",
+            "path": path_string(&base.param_object),
+            "reason": "topology runtime PARAM values were not available",
+        })
+    };
+    ok &= param_image["status"].as_str() == Some("pass")
+        && param_image["rewritten_param_matches"]
+            .as_bool()
+            .unwrap_or(false);
+
+    if ok {
+        ok &= attach_peer_program(&mut executed_steps, base);
+    }
+    let peer_attach_show = show_peer_program(&mut executed_steps);
+
+    let live_handoff = if ok {
+        match open_live_loaded_tproxy_listen_socket_map_in_netns(
+            before_map_ids,
+            base.tproxy_port,
+            PRODUCTION_NETNS,
+        ) {
+            Ok(handoff) => Some(handoff),
+            Err(err) => {
+                ok = false;
+                executed_steps.push(json!({
+                    "name": "open-live-loaded-tproxy-listen-socket-map",
+                    "status": "fail",
+                    "error": err.to_string(),
+                }));
+                None
+            }
+        }
+    } else {
+        None
+    };
+    let (loaded_map_handoff, discovered_listen_map_id) = match live_handoff.as_ref() {
+        Some(handoff) => (live_handoff_json(handoff), Some(handoff.map.id)),
+        None => (
+            json!({
+                "status": "skipped",
+                "reason": "peer PARAM-aware attach did not pass",
+            }),
+            None,
+        ),
+    };
+
+    let before_lan_map_ids = map_ids().unwrap_or_default();
+    if ok {
+        ok &= attach_lan_program(&mut executed_steps, base);
+    }
+    let lan_attach_show = show_lan_program(&mut executed_steps);
+    let (route_map_update, discovered_routing_map_id) = if ok {
+        match update_stage50_routing_map(&before_lan_map_ids, base.so_mark) {
+            Ok((value, id)) => (value, Some(id)),
+            Err(err) => {
+                ok = false;
+                (json!({"status": "fail", "error": err}), None)
+            }
+        }
+    } else {
+        (
+            json!({
+                "status": "skipped",
+                "reason": "LAN PARAM-aware attach did not pass",
+            }),
+            None,
+        )
+    };
+
+    if ok {
+        ok &= attach_host_program(&mut executed_steps, base);
+    }
+    let host_attach_show = show_host_program(&mut executed_steps);
+
+    let (
+        route_dial_plan,
+        group_selection,
+        relay_accept,
+        upstream,
+        client_traffic,
+        outbound_dial,
+        benchmark,
+        original_destination_observed,
+        outbound_relay_succeeded,
+        so_mark_observed,
+        mptcp_observed,
+    ) = if ok {
+        let listener = live_handoff
+            .as_ref()
+            .and_then(|handoff| handoff.listeners.tcp_listener.try_clone().ok());
+        match listener {
+            Some(listener) => run_active_tcp_route_table_group_relay_probe(listener, opts),
+            None => (
+                route_dial_plan_json(&stage52_route_plan(opts)),
+                json!({"status": "skipped", "reason": "failed to clone tproxy TCP listener"}),
+                json!({"status": "fail", "error": "failed to clone tproxy TCP listener"}),
+                Value::Null,
+                Value::Null,
+                Value::Null,
+                Value::Null,
+                false,
+                false,
+                false,
+                false,
+            ),
+        }
+    } else {
+        (
+            route_dial_plan_json(&stage52_route_plan(opts)),
+            json!({
+                "status": "skipped",
+                "reason": "BPF attach or routing map update did not pass",
+            }),
+            json!({
+                "status": "skipped",
+                "reason": "BPF attach or routing map update did not pass",
+            }),
+            Value::Null,
+            Value::Null,
+            Value::Null,
+            Value::Null,
+            false,
+            false,
+            false,
+            false,
+        )
+    };
+    let post_traffic_peer_stats = show_peer_program_stats(&mut executed_steps);
+    let post_traffic_lan_stats = show_lan_program_stats(&mut executed_steps);
+    let post_traffic_host_stats = show_host_program_stats(&mut executed_steps);
+    ok &= route_dial_plan["userspace_route_executed"]
+        .as_bool()
+        .unwrap_or(false)
+        && group_selection["status"].as_str() == Some("pass")
+        && relay_accept["status"].as_str() == Some("pass")
+        && upstream["status"].as_str() == Some("pass")
+        && client_traffic["status"].as_str() == Some("pass")
+        && outbound_relay_succeeded
+        && original_destination_observed
+        && so_mark_observed
+        && (!base.mptcp || mptcp_observed);
+
+    cleanup_stage50(&mut cleanup_steps);
+
+    let peer_output = peer_attach_show["stdout"].as_str().unwrap_or_default();
+    let lan_output = lan_attach_show["stdout"].as_str().unwrap_or_default();
+    let host_output = host_attach_show["stdout"].as_str().unwrap_or_default();
+    Stage52SmokeResult {
+        passed: ok
+            && peer_attach_show["status"].as_str() == Some("pass")
+            && peer_output.contains(&base.peer_section)
+            && peer_output.contains("tproxy_dae0peer")
+            && lan_attach_show["status"].as_str() == Some("pass")
+            && lan_output.contains(&base.lan_section)
+            && lan_output.contains("tproxy_lan_ingr")
+            && host_attach_show["status"].as_str() == Some("pass")
+            && host_output.contains(&base.host_section)
+            && host_output.contains("tproxy_dae0_ing")
+            && resource_leftovers().is_empty(),
+        original_destination_observed,
+        outbound_relay_succeeded,
+        so_mark_observed,
+        mptcp_observed,
+        discovered_listen_map_id,
+        discovered_routing_map_id,
+        executed_steps,
+        cleanup_steps,
+        topology_values,
+        param_image,
+        peer_attach_show,
+        lan_attach_show,
+        host_attach_show,
+        loaded_map_handoff,
+        route_map_update,
+        route_dial_plan,
+        group_selection,
         relay_accept,
         upstream,
         client_traffic,
@@ -2306,7 +3125,13 @@ fn run_active_tcp_relay_probe(
         }
     };
     let upstream_handle = thread::spawn(move || {
-        upstream_echo_probe(upstream_listener, upstream_listener_report, iterations)
+        upstream_echo_probe(
+            upstream_listener,
+            upstream_listener_report,
+            iterations,
+            STAGE51_TCP_PAYLOAD,
+            STAGE51_TCP_RESPONSE,
+        )
     });
     let relay_target = target.clone();
     let mark = opts.base.so_mark;
@@ -2366,6 +3191,198 @@ fn run_active_tcp_relay_probe(
         })
     };
     (
+        accept,
+        upstream,
+        client,
+        outbound_dial,
+        benchmark,
+        original_destination_observed,
+        outbound_relay_succeeded,
+        so_mark_observed,
+        mptcp_observed,
+    )
+}
+
+fn run_active_tcp_route_table_group_relay_probe(
+    listener: TcpListener,
+    opts: &Stage52Options,
+) -> (
+    Value,
+    Value,
+    Value,
+    Value,
+    Value,
+    Value,
+    Value,
+    bool,
+    bool,
+    bool,
+    bool,
+) {
+    let target = format!("{}:{}", opts.base.target_ip, opts.base.target_port);
+    let iterations = opts.benchmark_iters;
+    let route_plan = stage52_route_plan(opts);
+    let route_plan_json = route_dial_plan_json(&route_plan);
+    let (group_selection, group_selection_ok) = stage52_group_selection_json(&route_plan);
+    let upstream_target = match route_plan.final_dial_target.parse::<std::net::SocketAddr>() {
+        Ok(std::net::SocketAddr::V4(addr)) => addr,
+        Ok(addr) => {
+            return (
+                route_plan_json,
+                group_selection,
+                json!({"status": "fail", "error": format!("stage52 route target is not IPv4: {addr}")}),
+                Value::Null,
+                Value::Null,
+                Value::Null,
+                Value::Null,
+                false,
+                false,
+                false,
+                false,
+            );
+        }
+        Err(err) => {
+            return (
+                route_plan_json,
+                group_selection,
+                json!({"status": "fail", "error": format!("stage52 route target is not a socket address: {err}")}),
+                Value::Null,
+                Value::Null,
+                Value::Null,
+                Value::Null,
+                false,
+                false,
+                false,
+                false,
+            );
+        }
+    };
+    let (upstream_listener, upstream_listener_report) = match bind_loopback_tcp_listener_on_port(
+        opts.base.mptcp && opts.upstream_mptcp,
+        upstream_target.port(),
+    ) {
+        Ok(value) => value,
+        Err(err) => {
+            return (
+                route_plan_json,
+                group_selection,
+                json!({"status": "fail", "error": format!("failed to bind route target upstream listener: {err}")}),
+                Value::Null,
+                Value::Null,
+                Value::Null,
+                Value::Null,
+                false,
+                false,
+                false,
+                false,
+            );
+        }
+    };
+    let upstream_bound_addr = match upstream_listener.local_addr() {
+        Ok(std::net::SocketAddr::V4(addr)) => addr,
+        Ok(addr) => {
+            return (
+                route_plan_json,
+                group_selection,
+                json!({"status": "fail", "error": format!("unexpected upstream address family: {addr}")}),
+                upstream_listener_json(&upstream_listener_report),
+                Value::Null,
+                Value::Null,
+                Value::Null,
+                false,
+                false,
+                false,
+                false,
+            );
+        }
+        Err(err) => {
+            return (
+                route_plan_json,
+                group_selection,
+                json!({"status": "fail", "error": format!("failed to read upstream address: {err}")}),
+                upstream_listener_json(&upstream_listener_report),
+                Value::Null,
+                Value::Null,
+                Value::Null,
+                false,
+                false,
+                false,
+                false,
+            );
+        }
+    };
+    let upstream_handle = thread::spawn(move || {
+        upstream_echo_probe(
+            upstream_listener,
+            upstream_listener_report,
+            iterations,
+            STAGE52_TCP_PAYLOAD,
+            STAGE52_TCP_RESPONSE,
+        )
+    });
+    let relay_target = target.clone();
+    let final_mark = route_plan.final_mark;
+    let mptcp = route_plan.mptcp;
+    let final_dial_target = route_plan.final_dial_target.clone();
+    let accept_handle = thread::spawn(move || {
+        tcp_route_table_group_relay_accept_probe(
+            listener,
+            upstream_bound_addr,
+            &final_dial_target,
+            &relay_target,
+            final_mark,
+            mptcp,
+            iterations,
+        )
+    });
+    thread::sleep(Duration::from_millis(100));
+    let started = Instant::now();
+    let client = run_client_stage52_relay_probe(&target, iterations);
+    let accept = accept_handle.join().unwrap_or_else(
+        |_| json!({"status": "fail", "error": "stage52 relay accept thread panicked"}),
+    );
+    let upstream = upstream_handle
+        .join()
+        .unwrap_or_else(|_| json!({"status": "fail", "error": "stage52 upstream thread panicked"}));
+    let elapsed = started.elapsed();
+    let original_destination_observed =
+        accept["first_local_addr"].as_str() == Some(target.as_str());
+    let outbound_relay_succeeded = group_selection_ok
+        && accept["status"].as_str() == Some("pass")
+        && upstream["status"].as_str() == Some("pass")
+        && client["status"].as_str() == Some("pass")
+        && client["stdout"]
+            .as_str()
+            .is_some_and(|stdout| stdout.contains("stage52-route-group-ack-count="));
+    let outbound_dial = accept["last_outbound_dial"].clone();
+    let so_mark_observed = outbound_dial["so_mark"].as_u64() == Some(final_mark as u64)
+        && outbound_dial["so_mark_applied"].as_bool().unwrap_or(false);
+    let mptcp_observed = !mptcp
+        || outbound_dial["mptcp_protocol_observed"]
+            .as_bool()
+            .unwrap_or(false)
+        || outbound_dial["mptcp_info_available"]
+            .as_bool()
+            .unwrap_or(false);
+    let benchmark = if iterations > 1 && outbound_relay_succeeded {
+        json!({
+            "status": "pass",
+            "iterations": iterations,
+            "elapsed_ns": elapsed.as_nanos(),
+            "ns_per_connection": elapsed.as_nanos() as f64 / iterations as f64,
+            "scope": "stage52 active TCP ingress plus Rust route table, ChooseDialTarget, outbound group selection, and direct loopback relay benchmark",
+            "go_matched_default_daemon_baseline_recorded": false,
+        })
+    } else {
+        json!({
+            "status": if iterations > 1 { "fail" } else { "skipped" },
+            "iterations": iterations,
+            "reason": if iterations > 1 { "stage52 relay smoke failed" } else { "benchmark-iters is 1" },
+        })
+    };
+    (
+        route_plan_json,
+        group_selection,
         accept,
         upstream,
         client,
@@ -2525,6 +3542,120 @@ fn tcp_relay_accept_probe(
     })
 }
 
+fn tcp_route_table_group_relay_accept_probe(
+    listener: TcpListener,
+    upstream_addr: SocketAddrV4,
+    dial_target: &str,
+    original_target: &str,
+    mark: u32,
+    mptcp: bool,
+    iterations: u32,
+) -> Value {
+    if let Err(err) = listener.set_nonblocking(true) {
+        return json!({"status": "fail", "error": err.to_string()});
+    }
+    let started = Instant::now();
+    let magic_network = magic_network_bytes("tcp", mark, mptcp);
+    let parsed_magic = parse_magic_network(&magic_network).ok();
+    let mut first_local_addr = None;
+    let mut first_peer_addr = None;
+    let mut last_outbound_dial = Value::Null;
+    let mut relayed_connections = 0_u32;
+    let mut bytes_client_to_outbound = 0_usize;
+    let mut bytes_outbound_to_client = 0_usize;
+    for _ in 0..iterations {
+        let (mut inbound, peer) = match accept_with_deadline(&listener, Duration::from_secs(4)) {
+            Ok(accepted) => accepted,
+            Err(err) => return json!({"status": "fail", "error": err.to_string()}),
+        };
+        let _ = inbound.set_read_timeout(Some(Duration::from_secs(2)));
+        let _ = inbound.set_write_timeout(Some(Duration::from_secs(2)));
+        let local_addr = inbound.local_addr().map(|addr| addr.to_string()).ok();
+        if first_local_addr.is_none() {
+            first_local_addr = local_addr.clone();
+            first_peer_addr = Some(peer.to_string());
+        }
+        let mut payload = vec![0_u8; STAGE52_TCP_PAYLOAD.len()];
+        if let Err(err) = inbound.read_exact(&mut payload) {
+            return json!({"status": "fail", "error": format!("read inbound payload: {err}")});
+        }
+        if payload != STAGE52_TCP_PAYLOAD {
+            return json!({
+                "status": "fail",
+                "error": "unexpected inbound payload",
+                "payload": String::from_utf8_lossy(&payload).to_string(),
+            });
+        }
+        let mut outbound = match magic_tcp_connect(
+            upstream_addr,
+            &TcpDirectDialOptions {
+                mark,
+                mptcp,
+                timeout: Duration::from_secs(3),
+            },
+        ) {
+            Ok(conn) => conn,
+            Err(err) => return json!({"status": "fail", "error": format!("outbound dial: {err}")}),
+        };
+        if let Err(err) = outbound.stream.write_all(&payload) {
+            return json!({"status": "fail", "error": format!("write outbound payload: {err}")});
+        }
+        let mut response = vec![0_u8; STAGE52_TCP_RESPONSE.len()];
+        if let Err(err) = outbound.stream.read_exact(&mut response) {
+            return json!({"status": "fail", "error": format!("read outbound response: {err}")});
+        }
+        if response != STAGE52_TCP_RESPONSE {
+            return json!({
+                "status": "fail",
+                "error": "unexpected outbound response",
+                "response": String::from_utf8_lossy(&response).to_string(),
+            });
+        }
+        if let Err(err) = inbound.write_all(&response) {
+            return json!({"status": "fail", "error": format!("write client response: {err}")});
+        }
+        bytes_client_to_outbound += payload.len();
+        bytes_outbound_to_client += response.len();
+        relayed_connections += 1;
+        last_outbound_dial = tcp_direct_dial_report_json(&outbound.report);
+    }
+    let passed = relayed_connections == iterations
+        && first_local_addr.as_deref() == Some(original_target)
+        && last_outbound_dial["so_mark"].as_u64() == Some(mark as u64)
+        && last_outbound_dial["so_mark_applied"]
+            .as_bool()
+            .unwrap_or(false)
+        && (!mptcp
+            || last_outbound_dial["mptcp_protocol_observed"]
+                .as_bool()
+                .unwrap_or(false)
+            || last_outbound_dial["mptcp_info_available"]
+                .as_bool()
+                .unwrap_or(false));
+    json!({
+        "status": if passed { "pass" } else { "fail" },
+        "iterations": iterations,
+        "relayed_connections": relayed_connections,
+        "first_peer_addr": first_peer_addr,
+        "first_local_addr": first_local_addr,
+        "dial_target": dial_target,
+        "actual_upstream_addr": upstream_addr.to_string(),
+        "dial_target_used_as_actual_socket_target": dial_target == upstream_addr.to_string(),
+        "bytes_client_to_outbound": bytes_client_to_outbound,
+        "bytes_outbound_to_client": bytes_outbound_to_client,
+        "magic_network": {
+            "encoded_len": magic_network.len(),
+            "parsed_network": parsed_magic
+                .as_ref()
+                .and_then(|value| value.network_str().ok()),
+            "parsed_mark": parsed_magic.as_ref().map(|value| value.mark),
+            "parsed_mptcp": parsed_magic.as_ref().map(|value| value.mptcp),
+        },
+        "last_outbound_dial": last_outbound_dial,
+        "elapsed_ns": started.elapsed().as_nanos(),
+    })
+}
+
 fn accept_with_deadline(
     listener: &TcpListener,
     timeout: Duration,
@@ -2547,6 +3678,8 @@ fn upstream_echo_probe(
     listener: TcpListener,
     report: TcpLoopbackListenerReport,
     iterations: u32,
+    expected_payload: &'static [u8],
+    response_payload: &'static [u8],
 ) -> Value {
     if let Err(err) = listener.set_nonblocking(true) {
         return json!({"status": "fail", "listener": upstream_listener_json(&report), "error": err.to_string()});
@@ -2566,11 +3699,11 @@ fn upstream_echo_probe(
         };
         let _ = conn.set_read_timeout(Some(Duration::from_secs(2)));
         let _ = conn.set_write_timeout(Some(Duration::from_secs(2)));
-        let mut payload = vec![0_u8; STAGE51_TCP_PAYLOAD.len()];
+        let mut payload = vec![0_u8; expected_payload.len()];
         if let Err(err) = conn.read_exact(&mut payload) {
             return json!({"status": "fail", "listener": upstream_listener_json(&report), "accepted": accepted, "error": format!("read payload from {peer}: {err}")});
         }
-        if payload != STAGE51_TCP_PAYLOAD {
+        if payload != expected_payload {
             return json!({
                 "status": "fail",
                 "listener": upstream_listener_json(&report),
@@ -2579,7 +3712,7 @@ fn upstream_echo_probe(
                 "payload": String::from_utf8_lossy(&payload).to_string(),
             });
         }
-        if let Err(err) = conn.write_all(STAGE51_TCP_RESPONSE) {
+        if let Err(err) = conn.write_all(response_payload) {
             return json!({"status": "fail", "listener": upstream_listener_json(&report), "accepted": accepted, "error": format!("write response to {peer}: {err}")});
         }
         accepted += 1;
@@ -2620,6 +3753,125 @@ fn tcp_direct_dial_report_json(report: &TcpDirectDialReport) -> Value {
     })
 }
 
+fn stage52_route_plan(opts: &Stage52Options) -> RouteDialTcpPlan {
+    let destination = std::net::SocketAddr::V4(SocketAddrV4::new(
+        opts.base
+            .target_ip
+            .parse()
+            .unwrap_or_else(|_| DEFAULT_STAGE52_TARGET_IP.parse().unwrap()),
+        opts.base.target_port,
+    ));
+    route_dial_tcp_plan(&RouteDialTcpPlanInput {
+        dial_mode: opts.dial_mode,
+        initial_outbound: OUTBOUND_USER_DEFINED_MIN,
+        destination,
+        domain: opts.domain.clone(),
+        domain_is_real: opts.domain_is_real,
+        initial_mark: 0,
+        so_mark_from_dae: opts.base.so_mark,
+        mptcp: opts.base.mptcp,
+        route_rules: vec![RouteRule {
+            kind: "DomainSet".to_owned(),
+            outbound: OUTBOUND_USER_DEFINED_MIN,
+            mark: opts.base.so_mark,
+            must: false,
+            matched: true,
+        }],
+    })
+}
+
+fn stage52_group_selection_json(plan: &RouteDialTcpPlan) -> (Value, bool) {
+    let network_type = if plan.network_type == "tcp6" {
+        NetworkType::TCP6
+    } else {
+        NetworkType::TCP4
+    };
+    let mut group = DialerGroup::new(
+        "stage52-proxy",
+        vec![
+            Dialer::new("stage52-slow", ""),
+            Dialer::new("stage52-fast", ""),
+        ],
+        vec![Annotation::default(), Annotation::default()],
+        SelectionPolicy::MinLastLatency,
+        false,
+        0,
+    );
+    group.set_last_latency(0, network_type, 80);
+    group.notify_alive(0, network_type, true);
+    group.set_last_latency(1, network_type, 20);
+    group.notify_alive(1, network_type, true);
+    match group.select(network_type, plan.strict_ip_version) {
+        Ok(selected) => {
+            let dialer_name = group.dialers[selected.index].name.clone();
+            let passed = selected.index == 1 && dialer_name == "stage52-fast";
+            (
+                json!({
+                    "status": if passed { "pass" } else { "fail" },
+                    "group": group.name,
+                    "policy": "min",
+                    "network_type": plan.network_type.as_str(),
+                    "strict_ip_version": plan.strict_ip_version,
+                    "candidate_latencies_ms": [80, 20],
+                    "selected_index": selected.index,
+                    "selected_dialer": dialer_name,
+                    "selected_latency_ms": selected.latency_ms,
+                }),
+                passed,
+            )
+        }
+        Err(err) => (
+            json!({
+                "status": "fail",
+                "group": group.name,
+                "policy": "min",
+                "network_type": plan.network_type.as_str(),
+                "strict_ip_version": plan.strict_ip_version,
+                "error": err.to_string(),
+            }),
+            false,
+        ),
+    }
+}
+
+fn route_dial_plan_json(plan: &RouteDialTcpPlan) -> Value {
+    json!({
+        "initial_outbound": plan.initial_outbound,
+        "final_outbound": plan.final_outbound,
+        "userspace_route_executed": plan.userspace_route_executed,
+        "userspace_route_result": plan.userspace_route_result.as_ref().map(|result| json!({
+            "outbound": result.outbound,
+            "mark": result.mark,
+            "must": result.must,
+            "fallback": result.fallback,
+        })),
+        "first_choose": choose_dial_target_json(&plan.first_choose),
+        "second_choose": plan.second_choose.as_ref().map(choose_dial_target_json),
+        "final_dial_target": plan.final_dial_target.as_str(),
+        "strict_ip_version": plan.strict_ip_version,
+        "network_type": plan.network_type.as_str(),
+        "initial_mark": plan.initial_mark,
+        "final_mark": plan.final_mark,
+        "mark_defaulted_from_so_mark": plan.mark_defaulted_from_so_mark,
+        "mptcp": plan.mptcp,
+        "magic_network_len": plan.magic_network.len(),
+    })
+}
+
+fn choose_dial_target_json(decision: &dae_datapath::ChooseDialTargetDecision) -> Value {
+    json!({
+        "requested_mode": decision.requested_mode.as_str(),
+        "effective_mode": decision.effective_mode.as_str(),
+        "outbound": decision.outbound,
+        "destination": decision.destination.to_string(),
+        "domain": decision.domain.as_str(),
+        "domain_is_real": decision.domain_is_real,
+        "dial_target": decision.dial_target.as_str(),
+        "should_reroute": decision.should_reroute,
+        "dial_ip": decision.dial_ip,
+    })
+}
+
 fn run_client_probe(target: &str) -> Value {
     let script = format!(
         "import socket,sys\ns=socket.create_connection(({target_ip:?},{target_port}),3)\ns.settimeout(3)\ns.sendall(b\"stage50-tcp-ping\")\ndata=s.recv(64)\nprint(data.decode('ascii','replace'))\ns.close()\nsys.exit(0 if data == b\"stage50-tcp-ack\" else 2)\n",
@@ -2651,6 +3903,25 @@ fn run_client_relay_probe(target: &str, iterations: u32) -> Value {
             .nth(1)
             .and_then(|port| port.parse::<u16>().ok())
             .unwrap_or(DEFAULT_STAGE51_TARGET_PORT),
+    );
+    run_observation_command(CommandSpec::new(
+        "ip",
+        &["netns", "exec", CLIENT_NETNS, "python3", "-c", &script],
+    ))
+}
+
+fn run_client_stage52_relay_probe(target: &str, iterations: u32) -> Value {
+    let script = format!(
+        "import socket,sys\nok=0\nfor i in range({iterations}):\n    s=socket.create_connection(({target_ip:?},{target_port}),3)\n    s.settimeout(3)\n    s.sendall(b\"stage52-route-group-ping\")\n    data=s.recv(64)\n    s.close()\n    if data != b\"stage52-route-group-ack\":\n        print(data.decode('ascii','replace'))\n        sys.exit(2)\n    ok += 1\nprint(f\"stage52-route-group-ack-count={{ok}}\")\nsys.exit(0)\n",
+        target_ip = target
+            .split(':')
+            .next()
+            .unwrap_or(DEFAULT_STAGE52_TARGET_IP),
+        target_port = target
+            .split(':')
+            .nth(1)
+            .and_then(|port| port.parse::<u16>().ok())
+            .unwrap_or(DEFAULT_STAGE52_TARGET_PORT),
     );
     run_observation_command(CommandSpec::new(
         "ip",
@@ -2782,6 +4053,16 @@ fn remaining_blockers_after_stage51() -> Vec<&'static str> {
         "active UDP tproxy traffic evidence is still missing",
         "active DNS UDP/53 and reload DNS cache migration evidence is still missing",
         "outbound protocol true dataplane admission is still incomplete",
+        "matched Go default daemon vs true Rust candidate benchmark is still missing",
+        "clean dae-wing and daed product-chain recertification is still missing",
+    ]
+}
+
+fn remaining_blockers_after_stage52() -> Vec<&'static str> {
+    vec![
+        "active UDP tproxy traffic evidence is still missing",
+        "active DNS UDP/53 and reload DNS cache migration evidence is still missing",
+        "outbound protocol true dataplane admission is still incomplete beyond the bounded direct loopback group relay",
         "matched Go default daemon vs true Rust candidate benchmark is still missing",
         "clean dae-wing and daed product-chain recertification is still missing",
     ]
@@ -3049,6 +4330,12 @@ fn parse_u32(value: &str, flag: &str) -> Result<u32, RunnerOutput> {
     value
         .parse::<u32>()
         .map_err(|err| RunnerOutput::usage(format!("invalid {flag}: {err}")))
+}
+
+fn parse_tcp_dial_mode(value: &str) -> Result<TcpDialMode, RunnerOutput> {
+    value
+        .parse::<TcpDialMode>()
+        .map_err(|err| RunnerOutput::usage(err))
 }
 
 fn next_value<'a>(
