@@ -1,0 +1,133 @@
+{
+    "active_tproxy_traffic_executed": false,
+    "actual_dae_ebpf_program_attach_executed": false,
+    "attach_show": null,
+    "blocked": false,
+    "blockers": [],
+    "checks": [
+        {
+            "blocker": null,
+            "detail": {
+                "path": "/tmp/dae-stage35-candidate"
+            },
+            "name": "isolated-root-under-tmp",
+            "status": "pass"
+        },
+        {
+            "blocker": null,
+            "detail": {
+                "ack_root_gate": false,
+                "execute_smoke": false
+            },
+            "name": "root-gate-acknowledged",
+            "status": "pass"
+        },
+        {
+            "blocker": null,
+            "detail": {
+                "iface": "dae35d0",
+                "max_linux_ifname_len": 15
+            },
+            "name": "temporary-interface-name-valid",
+            "status": "pass"
+        },
+        {
+            "blocker": null,
+            "detail": {
+                "iface": "dae35d0"
+            },
+            "name": "temporary-interface-not-production",
+            "status": "pass"
+        },
+        {
+            "blocker": null,
+            "detail": {
+                "tool": "ip"
+            },
+            "name": "tool-ip-available",
+            "status": "pass"
+        },
+        {
+            "blocker": null,
+            "detail": {
+                "tool": "tc"
+            },
+            "name": "tool-tc-available",
+            "status": "pass"
+        },
+        {
+            "blocker": null,
+            "detail": {
+                "path": "control/bpf_bpfel.o"
+            },
+            "name": "real-dae-object-present",
+            "status": "pass"
+        },
+        {
+            "blocker": null,
+            "detail": {
+                "blockers": [],
+                "filter_cleanup_smoke_passed": false,
+                "path": null,
+                "status": "not-provided"
+            },
+            "name": "stage31-filter-cleanup-report-passed",
+            "status": "pass"
+        }
+    ],
+    "cleanup_steps": [],
+    "default_path_mutated": false,
+    "default_switch_allowed": false,
+    "evidence_class": "root-gated-real-dae-ebpf-program-attach-smoke",
+    "execute_smoke": false,
+    "executed_steps": [],
+    "go_default_path_preserved": true,
+    "go_fallback_required": true,
+    "listen_socket_map_fd_update_smoke_passed": false,
+    "live_candidate_run_allowed": false,
+    "name": "stage35-real-ebpf-attach-admission",
+    "product_chain_switch_allowed": false,
+    "production_dae0_dae0peer_attach_executed": false,
+    "production_listen_socket_map_fd_update_executed": false,
+    "read_only": true,
+    "real_program_attach_contract": {
+        "filter_pref": "49350",
+        "map_count": 13,
+        "object_path": "control/bpf_bpfel.o",
+        "pinned_reuse_maps": [
+            "cookie_pid_map",
+            "routing_tuples_map",
+            "tgid_pname_map"
+        ],
+        "section": "tc/dae0_ingress",
+        "temporary_iface": "dae35d0"
+    },
+    "real_program_attach_smoke_passed": false,
+    "remaining_blockers": [
+        "production dae0/dae0peer attach path is not executed",
+        "production listen_socket_map update with TCP/UDP listener fds is not executed",
+        "active tproxy TCP UDP DNS traffic evidence is still missing",
+        "outbound true dataplane admission is still incomplete",
+        "matched Go default daemon vs true Rust candidate benchmark is still missing",
+        "clean dae-wing and daed product-chain recertification is still missing"
+    ],
+    "root": "/tmp/dae-stage35-candidate",
+    "root_gate_acknowledged": false,
+    "stage": "stage35",
+    "stage31_report": {
+        "blockers": [],
+        "passed": false,
+        "path": null,
+        "status": "not-provided"
+    },
+    "sys_fs_bpf_dae": {
+        "after": [],
+        "before": [],
+        "mutated": false
+    },
+    "temporary_resources": {
+        "iface": "dae35d0",
+        "leftovers_after_cleanup": []
+    },
+    "true_rust_default_daemon_admitted": false
+}
