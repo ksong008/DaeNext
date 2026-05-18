@@ -1,0 +1,143 @@
+{
+    "active_tproxy_traffic_executed": false,
+    "attach_show": null,
+    "blocked": false,
+    "blockers": [],
+    "checks": [
+        {
+            "blocker": null,
+            "detail": {
+                "path": "/tmp/dae-stage37-candidate"
+            },
+            "name": "isolated-root-under-tmp",
+            "status": "pass"
+        },
+        {
+            "blocker": null,
+            "detail": {
+                "ack_root_gate": false,
+                "execute_smoke": false
+            },
+            "name": "root-gate-acknowledged",
+            "status": "pass"
+        },
+        {
+            "blocker": null,
+            "detail": {
+                "iface": "dae37p0",
+                "max_linux_ifname_len": 15
+            },
+            "name": "temporary-interface-name-valid",
+            "status": "pass"
+        },
+        {
+            "blocker": null,
+            "detail": {
+                "iface": "dae37p0"
+            },
+            "name": "temporary-interface-not-production",
+            "status": "pass"
+        },
+        {
+            "blocker": null,
+            "detail": {
+                "tool": "ip"
+            },
+            "name": "tool-ip-available",
+            "status": "pass"
+        },
+        {
+            "blocker": null,
+            "detail": {
+                "tool": "tc"
+            },
+            "name": "tool-tc-available",
+            "status": "pass"
+        },
+        {
+            "blocker": null,
+            "detail": {
+                "path": "control/bpf_bpfel.o"
+            },
+            "name": "real-dae-object-present",
+            "status": "pass"
+        },
+        {
+            "blocker": null,
+            "detail": {
+                "blockers": [],
+                "listen_socket_map_fd_update_smoke_passed": false,
+                "path": null,
+                "status": "not-provided"
+            },
+            "name": "stage36-temporary-sockmap-report-passed",
+            "status": "pass"
+        }
+    ],
+    "cleanup_steps": [],
+    "default_path_mutated": false,
+    "default_switch_allowed": false,
+    "evidence_class": "root-gated-real-loaded-object-listen-socket-map-handoff-smoke",
+    "execute_smoke": false,
+    "executed_steps": [],
+    "go_default_path_preserved": true,
+    "go_fallback_required": true,
+    "live_candidate_run_allowed": false,
+    "loaded_listen_socket_map_handoff_smoke_passed": false,
+    "loaded_map_handoff": null,
+    "map_id_snapshots": {
+        "after_cleanup": [],
+        "before_attach": [],
+        "discovered_map_id": null,
+        "temporary_loaded_map_cleaned": true
+    },
+    "name": "stage37-loaded-listen-socket-map-admission",
+    "product_chain_switch_allowed": false,
+    "production_dae0_dae0peer_attach_executed": false,
+    "production_listen_socket_map_fd_update_executed": false,
+    "read_only": true,
+    "real_loaded_object_contract": {
+        "expected_key_size": 4,
+        "expected_map_type": "SockMap",
+        "expected_max_entries": 2,
+        "expected_value_size": 8,
+        "filter_pref": "49370",
+        "listen_socket_map_kernel_name": "listen_socket_m",
+        "listener_keys": [
+            0,
+            1
+        ],
+        "object_path": "control/bpf_bpfel.o",
+        "section": "tc/dae0peer_ingress",
+        "temporary_iface": "dae37p0"
+    },
+    "real_loaded_object_listen_socket_map_cleanup_passed": false,
+    "real_loaded_object_listen_socket_map_fd_update_executed": false,
+    "remaining_blockers": [
+        "production dae0/dae0peer attach path is not executed",
+        "production daemon listener handoff on listen_socket_map is not executed",
+        "active tproxy TCP UDP DNS traffic evidence is still missing",
+        "outbound true dataplane admission is still incomplete",
+        "matched Go default daemon vs true Rust candidate benchmark is still missing",
+        "clean dae-wing and daed product-chain recertification is still missing"
+    ],
+    "root": "/tmp/dae-stage37-candidate",
+    "root_gate_acknowledged": false,
+    "stage": "stage37",
+    "stage36_report": {
+        "blockers": [],
+        "passed": false,
+        "path": null,
+        "status": "not-provided"
+    },
+    "sys_fs_bpf_dae": {
+        "after": [],
+        "before": [],
+        "mutated": false
+    },
+    "temporary_resources": {
+        "iface": "dae37p0",
+        "leftovers_after_cleanup": []
+    },
+    "true_rust_default_daemon_admitted": false
+}

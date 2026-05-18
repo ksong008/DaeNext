@@ -22,6 +22,7 @@ use crate::runtime_stage31_34_gates::{
 use crate::runtime_stage35_36_gates::{
     run_stage35_real_ebpf_attach_admission, run_stage36_listen_socket_map_admission,
 };
+use crate::runtime_stage37_gate::run_stage37_loaded_listen_socket_map_admission;
 
 pub(crate) fn run_runtime(args: &[String]) -> RunnerOutput {
     match args.first().map(String::as_str) {
@@ -48,6 +49,9 @@ pub(crate) fn run_runtime(args: &[String]) -> RunnerOutput {
         }
         Some("stage36-listen-socket-map-admission") => {
             run_stage36_listen_socket_map_admission(&args[1..])
+        }
+        Some("stage37-loaded-listen-socket-map-admission") => {
+            run_stage37_loaded_listen_socket_map_admission(&args[1..])
         }
         Some(subcommand) => {
             RunnerOutput::usage(format!("unsupported runtime subcommand: {subcommand}"))
