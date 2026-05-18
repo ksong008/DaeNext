@@ -1,0 +1,24 @@
+{
+  "active_tproxy_traffic_executed": false,
+  "blocked": false,
+  "default_switch_allowed": false,
+  "detail": {
+    "active_tproxy_dns_executed": false,
+    "traffic": "dns-udp53"
+  },
+  "evidence_class": "transparent DNS UDP/53 and reload cache gate",
+  "go_default_path_preserved": true,
+  "go_fallback_required": true,
+  "matched_go_rust_default_daemon_benchmark_recorded": false,
+  "name": "stage46-active-dns-tproxy-admission",
+  "outbound_true_dataplane_admitted": false,
+  "product_chain_switch_allowed": false,
+  "read_only": true,
+  "remaining_blockers": [
+    "transparent DNS UDP/53 traffic is not executed",
+    "reload DNS cache migration live evidence is missing",
+    "domain_routing_map owner migration live evidence is missing"
+  ],
+  "stage": "stage46",
+  "true_rust_default_daemon_admitted": false
+}
