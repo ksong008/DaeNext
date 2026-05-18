@@ -1,0 +1,91 @@
+{
+  "benchmark": {
+    "benchmark_recorded": false,
+    "elapsed_ns": null,
+    "go_baseline_gap": "all outbound protocols, daemon default lifecycle, and product-chain gates are not closed",
+    "go_matched_default_daemon_baseline_recorded": false,
+    "iterations": 1,
+    "ns_per_connect": null,
+    "scope": "HTTP CONNECT plus Basic auth plus payload roundtrip over Rust underlay socket"
+  },
+  "blocked": false,
+  "blockers": [],
+  "default_path_mutation_allowed": false,
+  "default_switch_allowed": false,
+  "evidence_class": "opt-in-protocol-http-connect-true-dataplane-smoke",
+  "execute_smoke": false,
+  "go_default_path_preserved": true,
+  "go_fallback_required": true,
+  "http_connect_contract": {
+    "default_go_path_preserved": true,
+    "expected_status": 200,
+    "host_override": "front.stage57.example:443",
+    "https_proxy_tls_underlay_deferred": "HTTPS proxy requires shared TLS/uTLS/ALPN transport gate",
+    "payload_ascii": "stage57-http-connect-ping",
+    "protocol": "HTTP proxy",
+    "proxy": null,
+    "response_ascii": "stage57-http-connect-ping",
+    "scope": "HTTP CONNECT loopback true dataplane",
+    "target": "stage57.example:443",
+    "udp_unsupported": true,
+    "username_password_auth_required": true
+  },
+  "http_connect_payload_roundtrip_recorded": false,
+  "http_connect_request_observed": false,
+  "http_connect_smoke_passed": false,
+  "http_connect_true_dataplane_admitted": false,
+  "http_proxy_auth_observed": false,
+  "http_proxy_protocol_partial_admitted": false,
+  "https_proxy_tls_underlay_admitted": false,
+  "matched_go_rust_default_daemon_benchmark_recorded": false,
+  "name": "stage57-http-connect-dataplane-admission",
+  "outbound_true_dataplane_admitted": false,
+  "product_chain_switch_allowed": false,
+  "protocol_matrix": {
+    "http_connect_true_dataplane_admitted": false,
+    "https_proxy_tls_underlay_admitted": false,
+    "quic_h3_session_protocols_admitted": false,
+    "shadowsocks_aead_true_dataplane_admitted": false,
+    "socks5_protocol_true_dataplane_admitted": true,
+    "vmess_vless_trojan_shared_transport_admitted": false
+  },
+  "protocol_outbound_partial_admitted": true,
+  "read_only": true,
+  "remaining_blockers": [
+    "HTTPS proxy shared TLS/uTLS/ALPN underlay is still incomplete",
+    "Shadowsocks/SS2022, Trojan, VMess, VLESS, Hysteria2, TUIC, Juicity, AnyTLS, and shared transport true dataplanes are still incomplete",
+    "matched Go default daemon vs true Rust candidate benchmark is still missing",
+    "clean dae-wing and daed product-chain recertification is still missing"
+  ],
+  "server_observation": null,
+  "socks5_protocol_true_dataplane_admitted": true,
+  "source": [
+    "DAEX_RUST_REBUILD_PLAN_2026-05-16.md:stage57-item343",
+    "DAENEW_RUST_REBUILD_MEMO_2026-05-16.md:26.12",
+    "DAENEW_RUST_REBUILD_MEMO_2026-05-16.md:26.2",
+    "DAENEW_RUST_REBUILD_MEMO_2026-05-16.md:26.3",
+    "DAENEW_RUST_REBUILD_MEMO_2026-05-16.md:33.8",
+    "rust/crates/dae-outbound/src/http_proxy/dataplane.rs",
+    "rust/crates/dae-outbound/src/http_proxy/request.rs",
+    "rust/crates/dae-datapath/src/tcp_direct.rs"
+  ],
+  "stage": "stage57",
+  "true_rust_default_daemon_admitted": false,
+  "underlay_socket": {
+    "last_dial_report": null,
+    "listener": null,
+    "mptcp_protocol_observed": false,
+    "mptcp_status_recorded": false,
+    "requested_mark": 1234,
+    "requested_mptcp": true,
+    "so_mark_observed": false
+  },
+  "validation_commands": [
+    "python3 -m json.tool testdata/rebuild-golden/engine/runtime_stage57/http_connect_dataplane_admission.json",
+    "python3 -m json.tool testdata/rebuild-golden/product/daemon/stage57_http_connect_dataplane_gate.json",
+    "cargo test --manifest-path rust/Cargo.toml -p dae-cli stage57 -- --nocapture",
+    "cargo test --manifest-path rust/Cargo.toml -p dae-product stage57 -- --nocapture",
+    "cargo run --manifest-path rust/Cargo.toml -p dae-cli --bin dae-cli-optin --quiet -- runtime stage57-http-connect-dataplane-admission --execute-smoke --ack-root-gate --benchmark-iters 10",
+    "git diff --check"
+  ]
+}
