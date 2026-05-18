@@ -19,6 +19,7 @@ pub mod stage31_34_admission_gates;
 pub mod stage35_36_admission_gates;
 pub mod stage37_loaded_listen_socket_map_gate;
 pub mod stage38_production_dae_attach_gate;
+pub mod stage39_transparent_listener_gate;
 pub mod systemd;
 pub mod true_daemon_admission;
 
@@ -88,6 +89,10 @@ pub use stage37_loaded_listen_socket_map_gate::{
 pub use stage38_production_dae_attach_gate::{
     Stage38ProductionDaeAttachGateContract, Stage38ProductionDaeAttachGateRow,
     stage38_production_dae_attach_gate_contract,
+};
+pub use stage39_transparent_listener_gate::{
+    Stage39TransparentListenerGateContract, Stage39TransparentListenerGateRow,
+    stage39_transparent_listener_gate_contract,
 };
 pub use systemd::{SystemdContract, systemd_contract};
 pub use true_daemon_admission::{
