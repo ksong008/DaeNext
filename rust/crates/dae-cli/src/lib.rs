@@ -10,6 +10,7 @@ pub(crate) mod runtime_live_plan;
 pub(crate) mod runtime_runner;
 pub(crate) mod runtime_stage26_candidate;
 pub(crate) mod runtime_stage27_candidate;
+pub(crate) mod runtime_stage29_preflight;
 pub mod surface;
 pub(crate) mod userspace_runner;
 pub mod validate;
