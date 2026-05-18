@@ -1,0 +1,101 @@
+{
+  "active_tproxy_traffic_executed": false,
+  "actual_dae_ebpf_program_attach_executed": false,
+  "carried_blockers": [
+    "actual dae eBPF program attach to dae0/dae0peer is not executed",
+    "listen socket map update with TCP/UDP listener fds is not executed",
+    "active tproxy TCP UDP DNS traffic evidence is still missing",
+    "outbound true dataplane admission is still incomplete",
+    "matched Go default daemon vs true Rust candidate benchmark is still missing",
+    "clean dae-wing and daed product-chain recertification is still missing"
+  ],
+  "clean_product_chain_recertification_recorded": false,
+  "default_path_mutation_allowed": false,
+  "default_switch_allowed": false,
+  "gate_decision": "stages31-34 complete the next admission queue by adding root-gated no-leftover tc filter cleanup, local traffic harness, reload DNS/domain-routing model evidence, and benchmark/product-chain gates; they still do not attach production dae eBPF programs, execute active tproxy traffic, record a matched Go/Rust daemon benchmark, or admit the true Rust default daemon",
+  "go_default_path_preserved": true,
+  "go_fallback_required": true,
+  "local_traffic_harness_recorded": true,
+  "matched_go_rust_default_daemon_benchmark_recorded": false,
+  "name": "stage31-34-active-datapath-default-admission-queue",
+  "prior_gate": "stage30-root-gated-attach-cleanup-gate",
+  "product_chain_switch_allowed": false,
+  "reload_dns_model_recorded": true,
+  "root_gated_filter_cleanup_recorded": true,
+  "rows": [
+    {
+      "area": "root-gated filter cleanup",
+      "boundary": "this is not a production dae eBPF program attach and does not write /sys/fs/bpf/dae",
+      "evidence": "Stage 31 uses Stage 30 cleanup discipline and can attach/delete a temporary matchall tc filter on temporary veth resources with no leftovers",
+      "next_action": "bind actual dae program attach only after listen_socket_map and pinned map cleanup evidence is ready",
+      "stage": "stage31",
+      "status": "passed-no-leftover-smoke"
+    },
+    {
+      "area": "active traffic harness",
+      "boundary": "local loopback traffic does not prove active tproxy/eBPF TCP UDP DNS datapath",
+      "evidence": "Stage 32 can execute local TCP and UDP echo traffic and carries MagicNetwork mark/mptcp evidence",
+      "next_action": "run active tproxy traffic only after real eBPF attach cleanup is admitted",
+      "stage": "stage32",
+      "status": "passed-local-harness"
+    },
+    {
+      "area": "reload rollback and DNS cache migration",
+      "boundary": "model evidence does not send a daemon reload signal or prove live listener reuse",
+      "evidence": "Stage 33 records BPF eject/inject rollback, domain routing owner merge/remove, and DNS cache snapshot model evidence",
+      "next_action": "combine the reload model with live candidate reload rollback after active datapath admission",
+      "stage": "stage33",
+      "status": "passed-model-evidence"
+    },
+    {
+      "area": "benchmark and product chain",
+      "boundary": "Rust micro benchmarks cannot replace matched Go default daemon versus true Rust candidate benchmark",
+      "evidence": "Stage 34 requires Rust micro benchmarks and keeps matched Go/Rust default daemon benchmark plus clean product-chain recertification as blockers",
+      "next_action": "collect matched daemon benchmark and clean dae-wing/daed recertification before default switch",
+      "stage": "stage34",
+      "status": "blocked-default-switch"
+    }
+  ],
+  "rust_micro_benchmark_required": true,
+  "source": [
+    "DAEX_RUST_REBUILD_PLAN_2026-05-16.md:stage31-34-item264",
+    "DAEX_RUST_REBUILD_PLAN_2026-05-16.md:stage30-item263",
+    "DAENEW_RUST_REBUILD_MEMO_2026-05-16.md:22.1",
+    "DAENEW_RUST_REBUILD_MEMO_2026-05-16.md:22.2",
+    "DAENEW_RUST_REBUILD_MEMO_2026-05-16.md:22.3",
+    "DAENEW_RUST_REBUILD_MEMO_2026-05-16.md:22.4",
+    "DAENEW_RUST_REBUILD_MEMO_2026-05-16.md:22.5",
+    "DAENEW_RUST_REBUILD_MEMO_2026-05-16.md:22.6",
+    "DAENEW_RUST_REBUILD_MEMO_2026-05-16.md:22.8",
+    "DAENEW_RUST_REBUILD_MEMO_2026-05-16.md:22.10",
+    "DAENEW_RUST_REBUILD_MEMO_2026-05-16.md:22.12",
+    "DAENEW_RUST_REBUILD_MEMO_2026-05-16.md:33.8",
+    "rust/crates/dae-cli/src/runtime_stage31_34_gates.rs",
+    "rust/crates/dae-product/src/stage30_attach_cleanup_gate.rs",
+    "testdata/rebuild-golden/engine/runtime_stage31/ebpf_attach_admission.json",
+    "testdata/rebuild-golden/engine/runtime_stage32/active_traffic_admission.json",
+    "testdata/rebuild-golden/engine/runtime_stage33/reload_rollback_admission.json",
+    "testdata/rebuild-golden/engine/runtime_stage34/benchmark_admission.json"
+  ],
+  "stage31_complete": true,
+  "stage32_complete": true,
+  "stage33_complete": true,
+  "stage34_complete": true,
+  "stage_range": "stage31-stage34",
+  "true_rust_default_daemon_admitted": false,
+  "validation_commands": [
+    "python3 -m json.tool testdata/rebuild-golden/engine/runtime_stage31/ebpf_attach_admission.json",
+    "python3 -m json.tool testdata/rebuild-golden/engine/runtime_stage32/active_traffic_admission.json",
+    "python3 -m json.tool testdata/rebuild-golden/engine/runtime_stage33/reload_rollback_admission.json",
+    "python3 -m json.tool testdata/rebuild-golden/engine/runtime_stage34/benchmark_admission.json",
+    "python3 -m json.tool testdata/rebuild-golden/product/daemon/stage31_34_admission_gates.json",
+    "cargo test --manifest-path rust/Cargo.toml -p dae-cli stage3 -- --nocapture",
+    "cargo test --manifest-path rust/Cargo.toml -p dae-product stage3 -- --nocapture",
+    "cargo test --manifest-path rust/Cargo.toml -p dae-control",
+    "cargo test --manifest-path rust/Cargo.toml -p dae-dns",
+    "cargo test --manifest-path rust/Cargo.toml -p dae-datapath",
+    "DAE_STAGE7_BENCH_ITERS=10000 cargo run --manifest-path rust/Cargo.toml -p dae-datapath --release --example stage7_datapath_bench",
+    "DAE_STAGE7_BENCH_ITERS=10000 cargo run --manifest-path rust/Cargo.toml -p dae-control --release --example stage7_control_bench",
+    "git diff --check"
+  ]
+}
