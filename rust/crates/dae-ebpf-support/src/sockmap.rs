@@ -3,10 +3,13 @@ use std::mem::size_of;
 use std::net::{TcpListener, UdpSocket};
 use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
 
+use crate::runtime_maps::{RuntimeMapInfo, map_ids, map_info, open_map_fd};
+
 const BPF_MAP_CREATE: libc::c_uint = 0;
 const BPF_MAP_UPDATE_ELEM: libc::c_uint = 2;
 const BPF_MAP_TYPE_SOCKMAP: u32 = 15;
 const BPF_ANY: u64 = 0;
+const LISTEN_SOCKET_MAP_KERNEL_NAME: &str = "listen_socket_m";
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ListenSocketMapFdSmoke {
@@ -14,6 +17,15 @@ pub struct ListenSocketMapFdSmoke {
     pub key_size: u32,
     pub value_size: u32,
     pub max_entries: u32,
+    pub keys_updated: [u32; 2],
+    pub tcp_listener_fd: i32,
+    pub udp_socket_fd: i32,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct LoadedListenSocketMapFdSmoke {
+    pub map: RuntimeMapInfo,
+    pub new_map_ids: Vec<u32>,
     pub keys_updated: [u32; 2],
     pub tcp_listener_fd: i32,
     pub udp_socket_fd: i32,
@@ -36,6 +48,53 @@ pub fn run_listen_socket_map_fd_smoke() -> io::Result<ListenSocketMapFdSmoke> {
         tcp_listener_fd: tcp_listener.as_raw_fd(),
         udp_socket_fd: udp_socket.as_raw_fd(),
     })
+}
+
+pub fn run_loaded_listen_socket_map_fd_smoke(
+    before_map_ids: &[u32],
+) -> io::Result<LoadedListenSocketMapFdSmoke> {
+    let current_map_ids = map_ids()?;
+    let new_map_ids = current_map_ids
+        .iter()
+        .copied()
+        .filter(|id| !before_map_ids.contains(id))
+        .collect::<Vec<_>>();
+    let mut candidates = Vec::new();
+    for id in &new_map_ids {
+        let fd = open_map_fd(*id)?;
+        let info = map_info(fd.as_raw_fd())?;
+        if listen_socket_map_matches(&info) {
+            candidates.push((fd, info));
+        }
+    }
+    if candidates.len() != 1 {
+        return Err(io::Error::other(format!(
+            "expected exactly one new real listen_socket_map, found {}",
+            candidates.len()
+        )));
+    }
+    let (map_fd, map) = candidates.remove(0);
+    let tcp_listener = TcpListener::bind(("127.0.0.1", 0))?;
+    let udp_socket = UdpSocket::bind(("127.0.0.1", 0))?;
+
+    update_sockmap_fd(map_fd.as_raw_fd(), 0, tcp_listener.as_raw_fd())?;
+    update_sockmap_fd(map_fd.as_raw_fd(), 1, udp_socket.as_raw_fd())?;
+
+    Ok(LoadedListenSocketMapFdSmoke {
+        map,
+        new_map_ids,
+        keys_updated: [0, 1],
+        tcp_listener_fd: tcp_listener.as_raw_fd(),
+        udp_socket_fd: udp_socket.as_raw_fd(),
+    })
+}
+
+fn listen_socket_map_matches(info: &RuntimeMapInfo) -> bool {
+    info.name == LISTEN_SOCKET_MAP_KERNEL_NAME
+        && info.map_type == BPF_MAP_TYPE_SOCKMAP
+        && info.key_size == 4
+        && info.value_size == 8
+        && info.max_entries == 2
 }
 
 fn create_sockmap() -> io::Result<OwnedFd> {
