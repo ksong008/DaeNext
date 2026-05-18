@@ -1,0 +1,74 @@
+{
+  "active_tproxy_traffic_executed": false,
+  "carried_blockers": [
+    "PARAM-aware Rust BPF object loader is not implemented/proven",
+    "direct tc filter obj load cannot rewrite PARAM before BPF load",
+    "active tproxy TCP UDP DNS traffic evidence is still missing",
+    "outbound true dataplane admission is still incomplete",
+    "matched Go default daemon vs true Rust candidate benchmark is still missing",
+    "clean dae-wing and daed product-chain recertification is still missing"
+  ],
+  "default_path_mutation_allowed": false,
+  "default_switch_allowed": false,
+  "direct_tc_object_loader_rejected_for_active_traffic": true,
+  "gate_decision": "stage40 records the PARAM ABI and blocks active tproxy traffic until Rust can set PARAM before loading the real BPF object; direct tc object loading remains rejected for active traffic and the Go default path stays preserved",
+  "go_default_path_preserved": true,
+  "go_fallback_required": true,
+  "matched_go_rust_default_daemon_benchmark_recorded": false,
+  "name": "stage40-param-aware-object-gate",
+  "param_aware_object_load_admitted": false,
+  "param_payload_contract_recorded": true,
+  "param_symbol_contract_recorded": true,
+  "prior_gate": "stage39-transparent-listener-gate",
+  "product_chain_switch_allowed": false,
+  "rows": [
+    {
+      "area": "PARAM object symbol",
+      "boundary": "symbol presence does not prove Rust has rewritten the variable before object load",
+      "evidence": "Stage 40 probes control/bpf_bpfel.o and records that the real object exposes PARAM with the Rust BpfDaeParam ABI size",
+      "next_action": "keep object symbol probing in the admission report when adding the real Rust loader",
+      "status": "recorded"
+    },
+    {
+      "area": "PARAM payload packing",
+      "boundary": "representative payload packing is not a production netns runtime load",
+      "evidence": "Stage 40 records tproxy_port network-order packing plus control_plane_pid, dae0_ifindex, dae_netns_id, dae0peer_mac, and has_bpf_get_current_task requirements",
+      "next_action": "feed real netns-derived values into the Rust loader before tc/cgroup attach",
+      "status": "recorded"
+    },
+    {
+      "area": "loader admission",
+      "boundary": "active TCP UDP DNS traffic must wait for a PARAM-aware Rust object loader",
+      "evidence": "Stage 40 explicitly rejects tc filter obj as an active-traffic loader because it cannot set PARAM before load",
+      "next_action": "implement or bind a Rust loader that can set PARAM and then rerun production-name transparent-listener traffic",
+      "status": "blocked"
+    }
+  ],
+  "rust_param_aware_loader_proven": false,
+  "source": [
+    "DAEX_RUST_REBUILD_PLAN_2026-05-16.md:stage40-item291",
+    "DAEX_RUST_REBUILD_PLAN_2026-05-16.md:stage39-item290",
+    "DAENEW_RUST_REBUILD_MEMO_2026-05-16.md:11.2",
+    "DAENEW_RUST_REBUILD_MEMO_2026-05-16.md:22.3",
+    "DAENEW_RUST_REBUILD_MEMO_2026-05-16.md:22.8",
+    "DAENEW_RUST_REBUILD_MEMO_2026-05-16.md:23.11",
+    "DAENEW_RUST_REBUILD_MEMO_2026-05-16.md:33.8",
+    "control/bpf_utils.go:fullLoadBpfObjects",
+    "control/kern/tproxy.c:struct dae_param",
+    "rust/crates/dae-cli/src/runtime_stage40_gate.rs",
+    "rust/crates/dae-ebpf-support/src/param_loader.rs",
+    "testdata/rebuild-golden/engine/runtime_stage40/param_aware_object_admission.json"
+  ],
+  "stage": "stage40",
+  "stage_complete": true,
+  "true_rust_default_daemon_admitted": false,
+  "validation_commands": [
+    "python3 -m json.tool testdata/rebuild-golden/engine/runtime_stage40/param_aware_object_admission.json",
+    "python3 -m json.tool testdata/rebuild-golden/product/daemon/stage40_param_aware_object_gate.json",
+    "cargo test --manifest-path rust/Cargo.toml -p dae-ebpf-support param -- --nocapture",
+    "cargo test --manifest-path rust/Cargo.toml -p dae-cli stage40 -- --nocapture",
+    "cargo test --manifest-path rust/Cargo.toml -p dae-product stage40 -- --nocapture",
+    "cargo run --manifest-path rust/Cargo.toml -p dae-cli --bin dae-cli-optin --quiet -- runtime stage40-param-aware-object-admission",
+    "git diff --check"
+  ]
+}
