@@ -2261,6 +2261,22 @@ fn stage18_shadowsocks_aead_tcp_dataplane_echoes_payload() {
 }
 
 #[test]
+fn stage59_shadowsocks_aead_udp_packet_wraps_target_and_payload() {
+    let cipher = "aes-128-gcm";
+    let password = "stage59-password";
+    let target = "stage59.example:5353";
+    let payload = b"stage59-shadowsocks-udp-ping";
+    let salt = hex_decode("202122232425262728292a2b2c2d2e2f");
+    let packet = shadowsocks::encode_udp_packet(cipher, password, &salt, target, payload).unwrap();
+    let decoded = shadowsocks::decode_udp_packet(cipher, password, &packet).unwrap();
+
+    assert_eq!(decoded.target, target);
+    assert_eq!(decoded.payload, payload);
+    assert_eq!(decoded.salt_len, salt.len());
+    assert!(decoded.packet_len > payload.len() + salt.len());
+}
+
+#[test]
 fn stage20_httpupgrade_dataplane_echoes_payload() {
     let fixture = fixture("outbound/protocol/stage20_shared_transport_foundation.json");
     let payload = fixture["payload_ascii"].as_str().unwrap().as_bytes();
