@@ -60,9 +60,16 @@ pub struct TcpLoopbackListenerReport {
 pub fn bind_loopback_tcp_listener(
     requested_mptcp: bool,
 ) -> io::Result<(TcpListener, TcpLoopbackListenerReport)> {
+    bind_loopback_tcp_listener_on_port(requested_mptcp, 0)
+}
+
+pub fn bind_loopback_tcp_listener_on_port(
+    requested_mptcp: bool,
+    port: u16,
+) -> io::Result<(TcpListener, TcpLoopbackListenerReport)> {
     let (fd, mptcp_socket_created, fallback_used) = open_tcp_socket(requested_mptcp)?;
     set_reuse_addr(fd.as_raw_fd())?;
-    bind_loopback_any_port(fd.as_raw_fd())?;
+    bind_loopback_port(fd.as_raw_fd(), port)?;
     let listen_status = unsafe { libc::listen(fd.as_raw_fd(), 128) };
     if listen_status < 0 {
         return Err(io::Error::last_os_error());
@@ -174,10 +181,10 @@ fn open_socket(protocol: libc::c_int) -> io::Result<OwnedFd> {
     Ok(unsafe { OwnedFd::from_raw_fd(fd) })
 }
 
-fn bind_loopback_any_port(fd: i32) -> io::Result<()> {
+fn bind_loopback_port(fd: i32, port: u16) -> io::Result<()> {
     let addr = libc::sockaddr_in {
         sin_family: libc::AF_INET as libc::sa_family_t,
-        sin_port: 0_u16.to_be(),
+        sin_port: port.to_be(),
         sin_addr: libc::in_addr {
             s_addr: u32::from_ne_bytes(Ipv4Addr::LOCALHOST.octets()),
         },
