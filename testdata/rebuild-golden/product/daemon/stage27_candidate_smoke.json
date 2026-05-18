@@ -1,0 +1,109 @@
+{
+  "candidate_live_run_class": "dry-runtime-only",
+  "candidate_smoke_implemented": true,
+  "candidate_smoke_passed": true,
+  "carried_blockers": [
+    "true Rust default daemon is not admitted",
+    "candidate is dry-runtime-only and does not own tproxy eBPF DNS outbound or real traffic",
+    "matched Go default daemon vs true Rust default daemon benchmark is not recorded",
+    "outbound true dataplane admission remains incomplete",
+    "clean dae-wing and daed product-chain recertification remains incomplete"
+  ],
+  "default_path_mutation_allowed": false,
+  "default_switch_allowed": false,
+  "go_baseline_recorded": true,
+  "go_baseline_version": "unstable-20260518.r1014.84865b2",
+  "go_default_path_preserved": true,
+  "go_fallback_required": true,
+  "matched_default_daemon_benchmark_recorded": false,
+  "name": "stage27-rust-dry-runtime-candidate-smoke",
+  "prior_gate": "stage26-true-rust-daemon-candidate-contract",
+  "product_chain_switch_allowed": false,
+  "smoke_rows": [
+    {
+      "area": "Go baseline artifact",
+      "boundary": "baseline covers version, validate, and export outline only; it is not a matched Go-vs-Rust default daemon benchmark",
+      "evidence": "/tmp/dae-stage27-go-baseline/dae built from Go-backed make dae and reports unstable-20260518.r1014.84865b2 with go1.25.9 linux/amd64",
+      "next_action": "reuse this baseline shape before any future candidate live traffic or benchmark run",
+      "status": "passed-recorded"
+    },
+    {
+      "area": "Go baseline validate and export",
+      "boundary": "outline/config baseline proves CLI/config compatibility for the smoke corpus, not runtime datapath parity",
+      "evidence": "Go baseline validate passes on /tmp/dae-stage27-candidate/config.dae and export outline emits parseable JSON with version unstable-20260518.r1014.84865b2 and 6 structure entries",
+      "next_action": "extend corpus before default admission to include invalid, permission, include, subscription, geodata, and daemon configs",
+      "status": "passed-recorded"
+    },
+    {
+      "area": "Rust dry-runtime candidate smoke",
+      "boundary": "dry runtime does not start tproxy, eBPF, DNS listener, outbound, subscription fetch, or real traffic",
+      "evidence": "dae-cli-optin runtime stage27-run-candidate validates the isolated config, starts dae-engine dry runtime, reloads, stops, and reports candidate_smoke_passed=true",
+      "next_action": "only after this smoke remains stable, implement a separate opt-in live candidate with explicit progress override and root/BPF gates",
+      "status": "passed-dry-runtime-only"
+    },
+    {
+      "area": "isolated pid progress and log",
+      "boundary": "candidate does not touch /var/run/dae.pid or /var/run/dae.progress",
+      "evidence": "candidate writes pid, progress, and log under /tmp/dae-stage27-candidate; progress_first_byte=2 after reload/stop success",
+      "next_action": "keep isolated pid/progress/log paths mandatory for any future candidate live run",
+      "status": "passed-isolated"
+    },
+    {
+      "area": "default path and product chain",
+      "boundary": "Go-backed dae run, install/dae.service, release labels, dae-wing, and daed defaults remain unchanged",
+      "evidence": "stage27 output keeps default_switch_allowed=false, product_chain_switch_allowed=false, true_rust_default_daemon_admitted=false, and go_fallback_required=true",
+      "next_action": "do not mutate product defaults until true daemon, benchmark, outbound, and clean product-chain rows pass",
+      "status": "blocked-preserved"
+    },
+    {
+      "area": "real datapath admission",
+      "boundary": "no TCP/UDP/DNS/eBPF/outbound production traffic parity is established by this smoke",
+      "evidence": "stage27 explicitly reports live_tproxy_started=false, live_ebpf_started=false, live_outbound_started=false, and live_dns_listener_started=false",
+      "next_action": "implement root/BPF/netns-gated live candidate evidence in a later stage",
+      "status": "blocked-not-covered"
+    },
+    {
+      "area": "matched default daemon benchmark",
+      "boundary": "benchmark blocker remains unchanged and prevents default admission",
+      "evidence": "matched_default_daemon_benchmark_recorded=false; Stage 27 baseline is behavioral and dry-runtime-only",
+      "next_action": "run same-host Go default daemon vs true Rust default daemon benchmark only after a real candidate carries traffic",
+      "status": "blocked-not-recorded"
+    }
+  ],
+  "source": [
+    "DAEX_RUST_REBUILD_PLAN_2026-05-16.md:stage27-items242-244",
+    "DAEX_RUST_REBUILD_PLAN_2026-05-16.md:stage26-item241",
+    "DAENEW_RUST_REBUILD_MEMO_2026-05-16.md:15.1",
+    "DAENEW_RUST_REBUILD_MEMO_2026-05-16.md:15.2",
+    "DAENEW_RUST_REBUILD_MEMO_2026-05-16.md:28.3",
+    "DAENEW_RUST_REBUILD_MEMO_2026-05-16.md:28.4",
+    "DAENEW_RUST_REBUILD_MEMO_2026-05-16.md:29.2",
+    "DAENEW_RUST_REBUILD_MEMO_2026-05-16.md:29.3",
+    "DAENEW_RUST_REBUILD_MEMO_2026-05-16.md:30.2",
+    "DAENEW_RUST_REBUILD_MEMO_2026-05-16.md:30.3",
+    "DAENEW_RUST_REBUILD_MEMO_2026-05-16.md:33.8",
+    "DAENEW_RUST_REBUILD_MEMO_2026-05-16.md:33.9",
+    "rust/crates/dae-cli/src/runtime_stage27_candidate.rs",
+    "rust/crates/dae-product/src/stage26_candidate_contract.rs",
+    "testdata/rebuild-golden/engine/runtime_stage27/run_candidate.json"
+  ],
+  "stage": "stage27",
+  "stage27_decision": "stage27 records a Go-backed CLI baseline and runs an opt-in Rust dry-runtime candidate smoke under /tmp only; it does not admit a true Rust default daemon or mutate default/product paths",
+  "stage_complete": true,
+  "true_rust_default_daemon_admitted": false,
+  "validation_commands": [
+    "PATH=/root/.local/go1.25.9/bin:$PATH GOWORK=off OUTPUT=/tmp/dae-stage27-go-baseline/dae make dae",
+    "/tmp/dae-stage27-go-baseline/dae --version",
+    "/tmp/dae-stage27-go-baseline/dae validate -c /tmp/dae-stage27-candidate/config.dae",
+    "/tmp/dae-stage27-go-baseline/dae export outline",
+    "python3 -m json.tool testdata/rebuild-golden/engine/runtime_stage27/run_candidate.json",
+    "python3 -m json.tool testdata/rebuild-golden/product/daemon/stage27_candidate_smoke.json",
+    "cargo test --manifest-path rust/Cargo.toml -p dae-cli stage27 -- --nocapture",
+    "cargo run --manifest-path rust/Cargo.toml -p dae-cli --bin dae-cli-optin --quiet -- runtime stage27-run-candidate --root /tmp/dae-stage27-candidate --config /tmp/dae-stage27-candidate/config.dae",
+    "cargo test --manifest-path rust/Cargo.toml -p dae-product stage27 -- --nocapture",
+    "cargo fmt --manifest-path rust/Cargo.toml --all -- --check",
+    "cargo test --manifest-path rust/Cargo.toml -p dae-cli",
+    "cargo test --manifest-path rust/Cargo.toml -p dae-product",
+    "git diff --check"
+  ]
+}
