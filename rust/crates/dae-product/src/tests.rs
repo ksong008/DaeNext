@@ -3740,6 +3740,160 @@ fn stage53_active_udp_tproxy_endpoint_gate_covers_rows() {
 }
 
 #[test]
+fn stage54_active_dns_tproxy_cache_gate_contract_matches_golden_fixture() {
+    let fixture = load("product/daemon/stage54_active_dns_tproxy_cache_gate.json");
+    let contract = stage54_active_dns_tproxy_cache_gate_contract();
+    assert_eq!(contract.name, fixture["name"].as_str().unwrap());
+    assert_eq!(contract.stage, fixture["stage"].as_str().unwrap());
+    assert_eq!(contract.prior_gate, fixture["prior_gate"].as_str().unwrap());
+    assert_eq!(
+        contract.stage_complete,
+        fixture["stage_complete"].as_bool().unwrap()
+    );
+    assert_eq!(
+        contract.active_udp_tproxy_admitted,
+        fixture["active_udp_tproxy_admitted"].as_bool().unwrap()
+    );
+    assert_eq!(
+        contract.active_dns_tproxy_admitted,
+        fixture["active_dns_tproxy_admitted"].as_bool().unwrap()
+    );
+    assert_eq!(
+        contract.active_dns_original_destination_recorded,
+        fixture["active_dns_original_destination_recorded"]
+            .as_bool()
+            .unwrap()
+    );
+    assert_eq!(
+        contract.dns_controller_path_recorded,
+        fixture["dns_controller_path_recorded"].as_bool().unwrap()
+    );
+    assert_eq!(
+        contract.dns_upstream_query_recorded,
+        fixture["dns_upstream_query_recorded"].as_bool().unwrap()
+    );
+    assert_eq!(
+        contract.dns_response_validation_recorded,
+        fixture["dns_response_validation_recorded"]
+            .as_bool()
+            .unwrap()
+    );
+    assert_eq!(
+        contract.dns_cache_restore_recorded,
+        fixture["dns_cache_restore_recorded"].as_bool().unwrap()
+    );
+    assert_eq!(
+        contract.domain_routing_owner_migration_recorded,
+        fixture["domain_routing_owner_migration_recorded"]
+            .as_bool()
+            .unwrap()
+    );
+    assert_eq!(
+        contract.dns_sendpkt_reply_recorded,
+        fixture["dns_sendpkt_reply_recorded"].as_bool().unwrap()
+    );
+    assert_eq!(
+        contract.dns_so_mark_upstream_socket_recorded,
+        fixture["dns_so_mark_upstream_socket_recorded"]
+            .as_bool()
+            .unwrap()
+    );
+    assert_eq!(
+        contract.active_dns_tproxy_benchmark_recorded,
+        fixture["active_dns_tproxy_benchmark_recorded"]
+            .as_bool()
+            .unwrap()
+    );
+    assert_eq!(
+        contract.outbound_true_dataplane_admitted,
+        fixture["outbound_true_dataplane_admitted"]
+            .as_bool()
+            .unwrap()
+    );
+    assert_eq!(
+        contract.matched_go_rust_default_daemon_benchmark_recorded,
+        fixture["matched_go_rust_default_daemon_benchmark_recorded"]
+            .as_bool()
+            .unwrap()
+    );
+    assert_eq!(
+        contract.default_switch_allowed,
+        fixture["default_switch_allowed"].as_bool().unwrap()
+    );
+    assert_eq!(
+        contract.product_chain_switch_allowed,
+        fixture["product_chain_switch_allowed"].as_bool().unwrap()
+    );
+    assert_eq!(
+        contract.true_rust_default_daemon_admitted,
+        fixture["true_rust_default_daemon_admitted"]
+            .as_bool()
+            .unwrap()
+    );
+    assert_eq!(
+        contract.go_default_path_preserved,
+        fixture["go_default_path_preserved"].as_bool().unwrap()
+    );
+    assert_eq!(
+        contract.go_fallback_required,
+        fixture["go_fallback_required"].as_bool().unwrap()
+    );
+    assert_eq!(
+        contract.gate_decision,
+        fixture["gate_decision"].as_str().unwrap()
+    );
+    assert_string_vec(&contract.carried_blockers, &fixture["carried_blockers"]);
+}
+
+#[test]
+fn stage54_active_dns_tproxy_cache_gate_blocks_default_admission() {
+    let contract = stage54_active_dns_tproxy_cache_gate_contract();
+    assert!(contract.stage_complete);
+    assert!(contract.active_udp_tproxy_admitted);
+    assert!(contract.active_dns_tproxy_admitted);
+    assert!(contract.active_dns_original_destination_recorded);
+    assert!(contract.dns_controller_path_recorded);
+    assert!(contract.dns_upstream_query_recorded);
+    assert!(contract.dns_response_validation_recorded);
+    assert!(contract.dns_cache_restore_recorded);
+    assert!(contract.domain_routing_owner_migration_recorded);
+    assert!(contract.dns_sendpkt_reply_recorded);
+    assert!(contract.dns_so_mark_upstream_socket_recorded);
+    assert!(contract.active_dns_tproxy_benchmark_recorded);
+    assert!(!contract.outbound_true_dataplane_admitted);
+    assert!(!contract.default_switch_allowed);
+    assert!(!contract.product_chain_switch_allowed);
+    assert!(!contract.true_rust_default_daemon_admitted);
+    assert!(contract.go_default_path_preserved);
+    assert!(contract.go_fallback_required);
+
+    assert_contains_text(&contract.carried_blockers, "protocol true dataplane");
+    assert_contains_text(&contract.carried_blockers, "matched Go default daemon");
+}
+
+#[test]
+fn stage54_active_dns_tproxy_cache_gate_covers_rows() {
+    let contract = stage54_active_dns_tproxy_cache_gate_contract();
+    let areas = contract.rows.iter().map(|row| row.area).collect::<Vec<_>>();
+    assert_eq!(
+        areas,
+        vec![
+            "transparent DNS UDP/53 receive",
+            "DNS upstream and response validation",
+            "reload DNS cache and domain routing owner",
+            "DNS sendPkt reply and benchmark"
+        ]
+    );
+    assert_contains_text(&contract.source, "runtime_stage50_tcp_gate.rs");
+    assert_contains_text(&contract.source, "cache.rs");
+    assert_contains_text(&contract.source, "domain_routing.rs");
+    assert_contains_text(
+        &contract.validation_commands,
+        "stage54-active-dns-tproxy-cache-admission",
+    );
+}
+
+#[test]
 fn protocol_dataplane_admission_contract_matches_golden_fixture() {
     let fixture = load("product/outbound/protocol_dataplane_admission.json");
     let contract = protocol_dataplane_admission_contract();

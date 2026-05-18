@@ -1,0 +1,83 @@
+{
+  "active_dns_original_destination_recorded": true,
+  "active_dns_tproxy_admitted": true,
+  "active_dns_tproxy_benchmark_recorded": true,
+  "active_udp_tproxy_admitted": true,
+  "carried_blockers": [
+    "outbound protocol true dataplane admission is still incomplete beyond direct TCP/UDP/DNS loopback relays",
+    "matched Go default daemon vs true Rust candidate benchmark is still missing",
+    "clean dae-wing and daed product-chain recertification is still missing"
+  ],
+  "default_path_mutation_allowed": false,
+  "default_switch_allowed": false,
+  "dns_cache_restore_recorded": true,
+  "dns_controller_path_recorded": true,
+  "dns_response_validation_recorded": true,
+  "dns_sendpkt_reply_recorded": true,
+  "dns_so_mark_upstream_socket_recorded": true,
+  "dns_upstream_query_recorded": true,
+  "domain_routing_owner_migration_recorded": true,
+  "gate_decision": "stage54 closes the active DNS UDP/53 and reload cache blocker with a root-gated transparent DNS smoke: Rust observes original destination 8.8.8.8:53, validates a DNS controller path, records one upstream miss through a SO_MARKed UDP PacketConn, restores DNS cache for nine cache hits, preserves domain-routing owner state, replies from the original DNS destination, and records a local DNS benchmark; outbound protocol true dataplanes, matched default-daemon benchmarks, and product-chain switching remain blocked",
+  "go_default_path_preserved": true,
+  "go_fallback_required": true,
+  "matched_go_rust_default_daemon_benchmark_recorded": false,
+  "name": "stage54-active-dns-tproxy-cache-gate",
+  "outbound_true_dataplane_admitted": false,
+  "prior_gate": "stage53-active-udp-tproxy-endpoint-gate",
+  "product_chain_switch_allowed": false,
+  "rows": [
+    {
+      "area": "transparent DNS UDP/53 receive",
+      "boundary": "the harness uses a bounded local upstream and does not prove every DNS routing rule or upstream protocol",
+      "evidence": "Stage 54 receives ten DNS UDP/53 queries through LAN ingress and the transparent listener, with first_original_dst=8.8.8.8:53 and DNS NAT timeout 17s",
+      "next_action": "carry DNS behavior into protocol true-dataplane and default-daemon admissions",
+      "status": "passed-root-gated-smoke"
+    },
+    {
+      "area": "DNS upstream and response validation",
+      "boundary": "this proves UDP DNS forwarding, not DoH/DoQ/TLS upstream reuse or tcp+udp truncation fallback",
+      "evidence": "Stage 54 forwards one cache miss to 127.0.0.1:10530 through UDP PacketConn, observes SO_MARK=1234, and validates response question/id before returning it",
+      "next_action": "admit remaining DNS upstream protocols under protocol true-dataplane gates",
+      "status": "passed-root-gated-smoke"
+    },
+    {
+      "area": "reload DNS cache and domain routing owner",
+      "boundary": "the snapshot is a bounded Rust cache/domain-routing model, not a full daemon reload lifecycle",
+      "evidence": "Stage 54 snapshots/restores DNS cache after the first response, serves nine restored-cache hits with packed response ID rewrite, and keeps domain owner stage54.example.|1|1 for 203.0.113.54",
+      "next_action": "include the same cache state in the true Rust default daemon reload benchmark",
+      "status": "passed-root-gated-smoke"
+    },
+    {
+      "area": "DNS sendPkt reply and benchmark",
+      "boundary": "the benchmark is a Rust local DNS path baseline, not a matched Go default daemon vs true Rust default daemon comparison",
+      "evidence": "Stage 54 replies from original source 8.8.8.8:53 for all ten queries and records ns_per_query for the local DNS UDP/53 smoke",
+      "next_action": "close outbound protocol true dataplane and matched default-daemon benchmark blockers",
+      "status": "passed-local-benchmark-with-boundary"
+    }
+  ],
+  "source": [
+    "DAEX_RUST_REBUILD_PLAN_2026-05-16.md:stage54-item328",
+    "DAENEW_RUST_REBUILD_MEMO_2026-05-16.md:5.6",
+    "DAENEW_RUST_REBUILD_MEMO_2026-05-16.md:20.1",
+    "DAENEW_RUST_REBUILD_MEMO_2026-05-16.md:20.2",
+    "DAENEW_RUST_REBUILD_MEMO_2026-05-16.md:20.4",
+    "DAENEW_RUST_REBUILD_MEMO_2026-05-16.md:20.12",
+    "DAENEW_RUST_REBUILD_MEMO_2026-05-16.md:21.7",
+    "DAENEW_RUST_REBUILD_MEMO_2026-05-16.md:33.8",
+    "rust/crates/dae-cli/src/runtime_stage50_tcp_gate.rs",
+    "rust/crates/dae-dns/src/cache.rs",
+    "rust/crates/dae-control/src/domain_routing.rs",
+    "testdata/rebuild-golden/engine/runtime_stage54/active_dns_tproxy_cache_admission.json"
+  ],
+  "stage": "stage54",
+  "stage_complete": true,
+  "true_rust_default_daemon_admitted": false,
+  "validation_commands": [
+    "python3 -m json.tool testdata/rebuild-golden/engine/runtime_stage54/active_dns_tproxy_cache_admission.json",
+    "python3 -m json.tool testdata/rebuild-golden/product/daemon/stage54_active_dns_tproxy_cache_gate.json",
+    "cargo test --manifest-path rust/Cargo.toml -p dae-cli stage54 -- --nocapture",
+    "cargo test --manifest-path rust/Cargo.toml -p dae-product stage54 -- --nocapture",
+    "cargo run --manifest-path rust/Cargo.toml -p dae-cli --bin dae-cli-optin --quiet -- runtime stage54-active-dns-tproxy-cache-admission --execute-smoke --ack-root-gate --benchmark-iters 10",
+    "git diff --check"
+  ]
+}
