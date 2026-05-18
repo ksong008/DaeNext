@@ -32,12 +32,24 @@ pub fn connect_exchange(
         .set_write_timeout(Some(timeout))
         .map_err(|err| OutboundError::BadHttpProxy(err.to_string()))?;
 
+    connect_exchange_over_stream(&mut stream, proxy, options, payload)
+}
+
+pub fn connect_exchange_over_stream<S>(
+    stream: &mut S,
+    proxy: &str,
+    options: &HttpConnectOptions,
+    payload: &[u8],
+) -> Result<HttpConnectExchangeReport, OutboundError>
+where
+    S: Read + Write,
+{
     let connect_request = request::connect_request(options);
     stream
         .write_all(&connect_request)
         .map_err(|err| OutboundError::BadHttpProxy(err.to_string()))?;
 
-    let response = read_http_head(&mut stream)?;
+    let response = read_http_head(stream)?;
     let status = request::parse_connect_response(&response)?;
     if status != 200 {
         return Err(OutboundError::BadHttpProxy(format!(
@@ -64,7 +76,7 @@ pub fn connect_exchange(
     })
 }
 
-fn read_http_head(stream: &mut TcpStream) -> Result<Vec<u8>, OutboundError> {
+fn read_http_head(stream: &mut impl Read) -> Result<Vec<u8>, OutboundError> {
     let mut response = Vec::new();
     let mut buf = [0_u8; 512];
     loop {
