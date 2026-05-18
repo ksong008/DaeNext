@@ -4,7 +4,10 @@ use std::net::{TcpListener, UdpSocket};
 use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
 
 use crate::runtime_maps::{RuntimeMapInfo, map_ids, map_info, open_map_fd};
-use crate::tproxy_listener::{TproxySocketOptions, open_tproxy_listener_set};
+use crate::tproxy_listener::{
+    TproxyListenerSet, TproxySocketOptions, open_tproxy_listener_set,
+    open_tproxy_listener_set_in_netns,
+};
 
 const BPF_MAP_CREATE: libc::c_uint = 0;
 const BPF_MAP_UPDATE_ELEM: libc::c_uint = 2;
@@ -41,6 +44,18 @@ pub struct LoadedTproxyListenSocketMapFdSmoke {
     pub udp_socket_fd: i32,
     pub tcp_options: TproxySocketOptions,
     pub udp_options: TproxySocketOptions,
+}
+
+#[derive(Debug)]
+pub struct LiveLoadedTproxyListenSocketMap {
+    pub map: RuntimeMapInfo,
+    pub new_map_ids: Vec<u32>,
+    pub keys_updated: [u32; 2],
+    pub tcp_listener_fd: i32,
+    pub udp_socket_fd: i32,
+    pub tcp_options: TproxySocketOptions,
+    pub udp_options: TproxySocketOptions,
+    pub listeners: TproxyListenerSet,
 }
 
 pub fn run_listen_socket_map_fd_smoke() -> io::Result<ListenSocketMapFdSmoke> {
@@ -85,20 +100,56 @@ pub fn run_loaded_tproxy_listen_socket_map_fd_smoke(
     before_map_ids: &[u32],
     port: u16,
 ) -> io::Result<LoadedTproxyListenSocketMapFdSmoke> {
+    let live = open_live_loaded_tproxy_listen_socket_map(before_map_ids, port)?;
+    Ok(LoadedTproxyListenSocketMapFdSmoke {
+        map: live.map,
+        new_map_ids: live.new_map_ids,
+        keys_updated: live.keys_updated,
+        tcp_listener_fd: live.tcp_listener_fd,
+        udp_socket_fd: live.udp_socket_fd,
+        tcp_options: live.tcp_options,
+        udp_options: live.udp_options,
+    })
+}
+
+pub fn open_live_loaded_tproxy_listen_socket_map(
+    before_map_ids: &[u32],
+    port: u16,
+) -> io::Result<LiveLoadedTproxyListenSocketMap> {
+    open_live_loaded_tproxy_listen_socket_map_with_listener(before_map_ids, || {
+        open_tproxy_listener_set(port)
+    })
+}
+
+pub fn open_live_loaded_tproxy_listen_socket_map_in_netns(
+    before_map_ids: &[u32],
+    port: u16,
+    netns_name: &str,
+) -> io::Result<LiveLoadedTproxyListenSocketMap> {
+    open_live_loaded_tproxy_listen_socket_map_with_listener(before_map_ids, || {
+        open_tproxy_listener_set_in_netns(netns_name, port)
+    })
+}
+
+fn open_live_loaded_tproxy_listen_socket_map_with_listener(
+    before_map_ids: &[u32],
+    listener_factory: impl FnOnce() -> io::Result<TproxyListenerSet>,
+) -> io::Result<LiveLoadedTproxyListenSocketMap> {
     let (map_fd, map, new_map_ids) = open_new_loaded_listen_socket_map(before_map_ids)?;
-    let listeners = open_tproxy_listener_set(port)?;
+    let listeners = listener_factory()?;
 
     update_sockmap_fd(map_fd.as_raw_fd(), 0, listeners.tcp_listener.as_raw_fd())?;
     update_sockmap_fd(map_fd.as_raw_fd(), 1, listeners.udp_socket.as_raw_fd())?;
 
-    Ok(LoadedTproxyListenSocketMapFdSmoke {
+    Ok(LiveLoadedTproxyListenSocketMap {
         map,
         new_map_ids,
         keys_updated: [0, 1],
         tcp_listener_fd: listeners.tcp_listener.as_raw_fd(),
         udp_socket_fd: listeners.udp_socket.as_raw_fd(),
-        tcp_options: listeners.tcp_options,
-        udp_options: listeners.udp_options,
+        tcp_options: listeners.tcp_options.clone(),
+        udp_options: listeners.udp_options.clone(),
+        listeners,
     })
 }
 
