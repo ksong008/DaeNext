@@ -1,0 +1,132 @@
+{
+  "candidate_live_run_allowed": false,
+  "cli_selector_contract_defined": true,
+  "contract_decision": "stage26 defines the opt-in Rust daemon candidate inventory, selector rules, isolated smoke layout, and Go baseline command queue; it does not implement or start a candidate daemon and keeps all default/product switches blocked",
+  "default_path_mutation_allowed": false,
+  "default_switch_allowed": false,
+  "denied_default_mutations": [
+    "do not alias dae-cli-optin to dae run",
+    "do not switch Makefile dae output to a Rust daemon artifact",
+    "do not mutate install/dae.service ExecStart",
+    "do not mark release assets as Rust-default-daemon-ready",
+    "do not start a live candidate from the plan helper",
+    "do not set true_rust_default_daemon_admitted=true",
+    "do not set final_100_percent_admitted=true"
+  ],
+  "go_baseline_commands": [
+    "PATH=/root/.local/go1.25.9/bin:$PATH GOWORK=off OUTPUT=/tmp/dae-stage26-go-baseline/dae make dae",
+    "/tmp/dae-stage26-go-baseline/dae --version",
+    "/tmp/dae-stage26-go-baseline/dae validate -c /tmp/dae-stage26-candidate/config.dae",
+    "/tmp/dae-stage26-go-baseline/dae export outline"
+  ],
+  "go_baseline_commands_defined": true,
+  "go_default_path_preserved": true,
+  "go_fallback_required": true,
+  "inventory_complete": true,
+  "inventory_rows": [
+    {
+      "area": "dae-cli-optin artifact",
+      "boundary": "dae-cli-optin is not aliased to dae run and is not packaged as the default daemon artifact",
+      "evidence": "rust/crates/dae-cli/src/bin/dae-cli-optin.rs dispatches explicit opt-in helper commands through dae_cli::run_with_args_and_version",
+      "next_action": "keep every candidate run behind an explicit selector and keep Go-backed dae as the default artifact",
+      "status": "present-helper-not-default-daemon"
+    },
+    {
+      "area": "runtime stage26-candidate-plan selector",
+      "boundary": "the helper does not start a daemon; --write only creates files under the requested /tmp root",
+      "evidence": "dae-cli-optin runtime stage26-candidate-plan emits artifact inventory, selector contract, /tmp layout, Go baseline commands, and candidate command queue",
+      "next_action": "use this selector as the contract for the later stage26-run-candidate implementation",
+      "status": "defined-read-only-plan-helper"
+    },
+    {
+      "area": "Go-backed default artifact",
+      "boundary": "Stage 26 cannot mutate package names, systemd ExecStart, release labels, or dae-wing/daed defaults",
+      "evidence": "Makefile dae, release/prerelease workflows, and install/dae.service still target the Go-backed dae run path",
+      "next_action": "capture Go baseline commands before any Rust candidate live run",
+      "status": "preserved"
+    },
+    {
+      "area": "isolated smoke layout",
+      "boundary": "candidate progress override is a required blocker before live run because Go reload progress still defaults to /var/run/dae.progress",
+      "evidence": "candidate plan defines /tmp/dae-stage26-candidate config, run, pid, progress, log, traffic, sockets, assets, and cache paths",
+      "next_action": "implement candidate live smoke only after progress/pid/log/cache paths remain isolated",
+      "status": "defined-not-executed"
+    },
+    {
+      "area": "Go baseline command queue",
+      "boundary": "these commands are a baseline plan, not matched daemon benchmark evidence",
+      "evidence": "candidate plan lists make dae, --version, validate, and export outline commands for /tmp/dae-stage26-go-baseline/dae",
+      "next_action": "run Go baseline before Rust candidate smoke and record outputs in the local plan",
+      "status": "defined-planned-not-run"
+    },
+    {
+      "area": "candidate live run",
+      "boundary": "no Rust daemon process is admitted or started by Stage 26",
+      "evidence": "candidate plan intentionally marks stage26-run-candidate as blocked-unimplemented and candidate_live_run_allowed=false",
+      "next_action": "Stage 27 may implement the opt-in run candidate after selector, layout, and baseline rules are fixed",
+      "status": "blocked-unimplemented"
+    },
+    {
+      "area": "carried admission blockers",
+      "boundary": "Stage 26 cannot set true_rust_default_daemon_admitted or final_100_percent_admitted",
+      "evidence": "outbound true dataplane, matched Go-vs-Rust default daemon benchmark, and clean dae-wing/daed recertification remain required",
+      "next_action": "keep all default mutations denied until the Stage 25 rows pass with recorded evidence",
+      "status": "blocked"
+    }
+  ],
+  "isolated_smoke_layout": [
+    "/tmp/dae-stage26-candidate/config.dae",
+    "/tmp/dae-stage26-candidate/run/dae-stage26.pid",
+    "/tmp/dae-stage26-candidate/run/dae-stage26.progress",
+    "/tmp/dae-stage26-candidate/logs/dae.log",
+    "/tmp/dae-stage26-candidate/traffic",
+    "/tmp/dae-stage26-candidate/sockets",
+    "/tmp/dae-stage26-candidate/assets",
+    "/tmp/dae-stage26-candidate/cache"
+  ],
+  "isolated_smoke_layout_defined": true,
+  "name": "stage26-true-rust-daemon-candidate-contract",
+  "optin_candidate_plan_helper_added": true,
+  "prior_gate": "stage25-true-rust-default-daemon-execution-queue",
+  "product_chain_switch_allowed": false,
+  "selector_rules": [
+    "accepted selector is dae-cli-optin runtime stage26-candidate-plan",
+    "future candidate run selector must be explicit and must include --root under /tmp",
+    "dae run remains Go-backed until true Rust default daemon admission passes",
+    "implicit environment-only default switches are forbidden",
+    "dae-wing and daed defaults cannot change from dae-local evidence alone",
+    "Go fallback selector and artifact must remain available"
+  ],
+  "source": [
+    "DAEX_RUST_REBUILD_PLAN_2026-05-16.md:stage26-item237",
+    "DAEX_RUST_REBUILD_PLAN_2026-05-16.md:stage25-item236",
+    "DAENEW_RUST_REBUILD_MEMO_2026-05-16.md:15.1",
+    "DAENEW_RUST_REBUILD_MEMO_2026-05-16.md:15.2",
+    "DAENEW_RUST_REBUILD_MEMO_2026-05-16.md:28",
+    "DAENEW_RUST_REBUILD_MEMO_2026-05-16.md:29.2",
+    "DAENEW_RUST_REBUILD_MEMO_2026-05-16.md:29.4",
+    "DAENEW_RUST_REBUILD_MEMO_2026-05-16.md:30.1",
+    "DAENEW_RUST_REBUILD_MEMO_2026-05-16.md:30.2",
+    "DAENEW_RUST_REBUILD_MEMO_2026-05-16.md:30.3",
+    "DAENEW_RUST_REBUILD_MEMO_2026-05-16.md:33.8",
+    "DAENEW_RUST_REBUILD_MEMO_2026-05-16.md:33.9",
+    "rust/crates/dae-cli/src/bin/dae-cli-optin.rs",
+    "rust/crates/dae-cli/src/runtime_stage26_candidate.rs",
+    "rust/crates/dae-product/src/stage25_execution_queue.rs",
+    "testdata/rebuild-golden/engine/runtime_stage26/candidate_plan.json"
+  ],
+  "stage": "stage26",
+  "stage_complete": true,
+  "true_rust_default_daemon_admitted": false,
+  "validation_commands": [
+    "python3 -m json.tool testdata/rebuild-golden/engine/runtime_stage26/candidate_plan.json",
+    "python3 -m json.tool testdata/rebuild-golden/product/daemon/stage26_candidate_contract.json",
+    "cargo test --manifest-path rust/Cargo.toml -p dae-cli stage26 -- --nocapture",
+    "cargo run --manifest-path rust/Cargo.toml -p dae-cli --bin dae-cli-optin --quiet -- runtime stage26-candidate-plan --root /tmp/dae-stage26-candidate",
+    "cargo test --manifest-path rust/Cargo.toml -p dae-product stage26 -- --nocapture",
+    "cargo fmt --manifest-path rust/Cargo.toml --all -- --check",
+    "cargo test --manifest-path rust/Cargo.toml -p dae-cli",
+    "cargo test --manifest-path rust/Cargo.toml -p dae-product",
+    "git diff --check"
+  ]
+}

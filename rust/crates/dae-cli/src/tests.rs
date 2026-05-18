@@ -562,6 +562,230 @@ fn optin_runner_runtime_commands_match_engine_fixtures() {
 }
 
 #[test]
+fn stage26_candidate_plan_matches_golden_fixture() {
+    let fixture = load("engine/runtime_stage26/candidate_plan.json");
+    let candidate_plan = run_with_args([
+        "runtime",
+        "stage26-candidate-plan",
+        "--root",
+        fixture["root"].as_str().unwrap(),
+    ]);
+    assert_eq!(candidate_plan.exit_code, 0);
+    assert_eq!(candidate_plan.stderr, "");
+    let plan_json: Value = serde_json::from_str(&candidate_plan.stdout).unwrap();
+    assert_eq!(
+        plan_json["name"].as_str().unwrap(),
+        fixture["name"].as_str().unwrap()
+    );
+    assert_eq!(
+        plan_json["stage"].as_str().unwrap(),
+        fixture["stage"].as_str().unwrap()
+    );
+    assert_eq!(
+        plan_json["evidence_class"].as_str().unwrap(),
+        fixture["evidence_class"].as_str().unwrap()
+    );
+    assert_eq!(
+        plan_json["default_switch_allowed"].as_bool().unwrap(),
+        fixture["default_switch_allowed"].as_bool().unwrap()
+    );
+    assert_eq!(
+        plan_json["default_path_mutated"].as_bool().unwrap(),
+        fixture["default_path_mutated"].as_bool().unwrap()
+    );
+    assert!(!plan_json["candidate_live_run_allowed"].as_bool().unwrap());
+    assert_eq!(
+        plan_json["live_daemon_started"].as_bool().unwrap(),
+        fixture["live_daemon_started"].as_bool().unwrap()
+    );
+    assert_eq!(
+        plan_json["go_default_path_preserved"].as_bool().unwrap(),
+        fixture["go_default_path_preserved"].as_bool().unwrap()
+    );
+    assert_eq!(
+        plan_json["go_fallback_required"].as_bool().unwrap(),
+        fixture["go_fallback_required"].as_bool().unwrap()
+    );
+    assert_eq!(
+        plan_json["write_requested"].as_bool().unwrap(),
+        fixture["write_requested"].as_bool().unwrap()
+    );
+    assert_eq!(
+        plan_json["candidate"]["artifact_binary"].as_str().unwrap(),
+        fixture["candidate"]["artifact_binary"].as_str().unwrap()
+    );
+    assert_eq!(
+        plan_json["candidate"]["current_default_owner"]
+            .as_str()
+            .unwrap(),
+        fixture["candidate"]["current_default_owner"]
+            .as_str()
+            .unwrap()
+    );
+    assert_eq!(
+        plan_json["candidate"]["requires_explicit_selector"]
+            .as_bool()
+            .unwrap(),
+        fixture["candidate"]["requires_explicit_selector"]
+            .as_bool()
+            .unwrap()
+    );
+    assert!(!plan_json["candidate"]["starts_daemon"].as_bool().unwrap());
+    assert_eq!(
+        plan_json["selector_contract"]["accepted_selector"]
+            .as_str()
+            .unwrap(),
+        fixture["selector_contract"]["accepted_selector"]
+            .as_str()
+            .unwrap()
+    );
+    assert!(
+        plan_json["selector_contract"]["default_alias_forbidden"]
+            .as_bool()
+            .unwrap()
+    );
+    assert!(
+        plan_json["selector_contract"]["product_chain_switch_forbidden"]
+            .as_bool()
+            .unwrap()
+    );
+    assert_eq!(
+        plan_json["paths"]["config"].as_str().unwrap(),
+        fixture["paths"]["config"].as_str().unwrap()
+    );
+    assert_eq!(
+        plan_json["paths"]["candidate_progress_file"]
+            .as_str()
+            .unwrap(),
+        fixture["paths"]["candidate_progress_file"]
+            .as_str()
+            .unwrap()
+    );
+    assert_eq!(
+        plan_json["paths"]["go_progress_file_fixed"]
+            .as_str()
+            .unwrap(),
+        fixture["paths"]["go_progress_file_fixed"].as_str().unwrap()
+    );
+    assert_eq!(
+        plan_json["minimum_config"]["tproxy_port"].as_u64().unwrap(),
+        fixture["config"]["tproxy_port"].as_u64().unwrap()
+    );
+    assert_eq!(
+        plan_json["minimum_config"]["so_mark_from_dae"]
+            .as_u64()
+            .unwrap(),
+        fixture["config"]["so_mark_from_dae"].as_u64().unwrap()
+    );
+    assert_eq!(
+        plan_json["minimum_config"]["mptcp"].as_bool().unwrap(),
+        fixture["config"]["mptcp"].as_bool().unwrap()
+    );
+    assert!(
+        plan_json["minimum_config"]["text"]
+            .as_str()
+            .unwrap()
+            .contains("daex26lan0")
+    );
+    assert!(
+        plan_json["production_safety"]["no_systemd_mutation"]
+            .as_bool()
+            .unwrap()
+    );
+    assert!(
+        plan_json["production_safety"]["does_not_start_daemon"]
+            .as_bool()
+            .unwrap()
+    );
+    assert!(
+        plan_json["production_safety"]["requires_progress_override_before_candidate_live_run"]
+            .as_bool()
+            .unwrap()
+    );
+
+    let inventory_names = plan_json["inventory"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|value| value["name"].as_str().unwrap())
+        .collect::<Vec<_>>();
+    assert_eq!(
+        inventory_names,
+        fixture["inventory"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|value| value.as_str().unwrap())
+            .collect::<Vec<_>>()
+    );
+    let go_command_names = plan_json["go_baseline_commands"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|value| value["name"].as_str().unwrap())
+        .collect::<Vec<_>>();
+    assert_eq!(
+        go_command_names,
+        fixture["go_baseline_commands"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|value| value.as_str().unwrap())
+            .collect::<Vec<_>>()
+    );
+    let candidate_commands = plan_json["candidate_commands"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|value| {
+            (
+                value["name"].as_str().unwrap(),
+                value["status"].as_str().unwrap(),
+            )
+        })
+        .collect::<Vec<_>>();
+    assert!(
+        candidate_commands.contains(&(
+            fixture["candidate_commands"]["write_layout"]
+                .as_str()
+                .unwrap(),
+            "ready-with-write-flag",
+        ))
+    );
+    assert!(candidate_commands.contains(&("candidate-run", "blocked-unimplemented")));
+
+    let plan_root = std::env::temp_dir().join(format!(
+        "dae-stage26-candidate-test-{}-{}",
+        std::process::id(),
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    ));
+    let plan_root_string = plan_root.to_string_lossy().into_owned();
+    let write_plan = run_with_args([
+        "runtime",
+        "stage26-candidate-plan",
+        "--root",
+        &plan_root_string,
+        "--artifact-binary",
+        "/bin/true",
+        "--write",
+    ]);
+    assert_eq!(write_plan.exit_code, 0, "{}", write_plan.stdout);
+    assert_eq!(write_plan.stderr, "");
+    let write_plan_json: Value = serde_json::from_str(&write_plan.stdout).unwrap();
+    assert!(write_plan_json["write_requested"].as_bool().unwrap());
+    assert!(write_plan_json["files_written"].as_array().unwrap().len() >= 2);
+    assert!(!write_plan_json["live_daemon_started"].as_bool().unwrap());
+    let config_path = plan_root.join("config.dae");
+    assert!(config_path.exists());
+    let validate_written = run_with_args(["validate", "-c", config_path.to_str().unwrap()]);
+    assert_eq!(validate_written.exit_code, 0, "{}", validate_written.stdout);
+    let _ = fs::remove_dir_all(plan_root);
+}
+
+#[test]
 fn optin_runner_userspace_commands_match_engine_fixture() {
     let fixture = load("engine/userspace_runtime/optin_contract.json");
 
