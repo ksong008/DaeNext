@@ -985,6 +985,173 @@ fn stage24_product_gate_covers_cross_repo_surfaces() {
 }
 
 #[test]
+fn stage25_true_daemon_execution_queue_contract_matches_golden_fixture() {
+    let fixture = load("product/daemon/stage25_true_daemon_execution_queue.json");
+    let contract = stage25_true_daemon_execution_queue_contract();
+    assert_eq!(contract.name, fixture["name"].as_str().unwrap());
+    assert_eq!(contract.stage, fixture["stage"].as_str().unwrap());
+    assert_eq!(contract.prior_gate, fixture["prior_gate"].as_str().unwrap());
+    assert_eq!(
+        contract.queue_complete,
+        fixture["queue_complete"].as_bool().unwrap()
+    );
+    assert_eq!(
+        contract.implementation_ready,
+        fixture["implementation_ready"].as_bool().unwrap()
+    );
+    assert_eq!(
+        contract.default_switch_allowed,
+        fixture["default_switch_allowed"].as_bool().unwrap()
+    );
+    assert_eq!(
+        contract.default_path_mutation_allowed,
+        fixture["default_path_mutation_allowed"].as_bool().unwrap()
+    );
+    assert_eq!(
+        contract.product_chain_switch_allowed,
+        fixture["product_chain_switch_allowed"].as_bool().unwrap()
+    );
+    assert_eq!(
+        contract.true_rust_default_daemon_admitted,
+        fixture["true_rust_default_daemon_admitted"]
+            .as_bool()
+            .unwrap()
+    );
+    assert_eq!(
+        contract.go_default_path_preserved,
+        fixture["go_default_path_preserved"].as_bool().unwrap()
+    );
+    assert_eq!(
+        contract.go_fallback_required,
+        fixture["go_fallback_required"].as_bool().unwrap()
+    );
+    assert_eq!(
+        contract.benchmark_required_before_admission,
+        fixture["benchmark_required_before_admission"]
+            .as_bool()
+            .unwrap()
+    );
+    assert_eq!(
+        contract.outbound_true_dataplane_required,
+        fixture["outbound_true_dataplane_required"]
+            .as_bool()
+            .unwrap()
+    );
+    assert_eq!(
+        contract.clean_product_chain_required,
+        fixture["clean_product_chain_required"].as_bool().unwrap()
+    );
+    assert_eq!(
+        contract.execution_decision,
+        fixture["execution_decision"].as_str().unwrap()
+    );
+
+    let row_fixtures = fixture["queue_rows"].as_array().unwrap();
+    assert_eq!(contract.queue_rows.len(), row_fixtures.len());
+    for (row, row_fixture) in contract.queue_rows.iter().zip(row_fixtures) {
+        assert_eq!(row.area, row_fixture["area"].as_str().unwrap());
+        assert_eq!(row.status, row_fixture["status"].as_str().unwrap());
+        assert_eq!(
+            row.admission_target,
+            row_fixture["admission_target"].as_str().unwrap()
+        );
+        assert_eq!(
+            row.required_evidence,
+            row_fixture["required_evidence"].as_str().unwrap()
+        );
+        assert_eq!(row.blocker, row_fixture["blocker"].as_str().unwrap());
+        assert_eq!(
+            row.next_action,
+            row_fixture["next_action"].as_str().unwrap()
+        );
+    }
+
+    assert_string_vec(
+        &contract.first_execution_order,
+        &fixture["first_execution_order"],
+    );
+    assert_string_vec(
+        &contract.denied_until_admitted,
+        &fixture["denied_until_admitted"],
+    );
+    assert_string_vec(
+        &contract.validation_commands,
+        &fixture["validation_commands"],
+    );
+    assert_string_vec(&contract.source, &fixture["source"]);
+}
+
+#[test]
+fn stage25_true_daemon_execution_queue_keeps_defaults_blocked() {
+    let contract = stage25_true_daemon_execution_queue_contract();
+    assert!(contract.queue_complete);
+    assert!(contract.implementation_ready);
+    assert!(!contract.default_switch_allowed);
+    assert!(!contract.default_path_mutation_allowed);
+    assert!(!contract.product_chain_switch_allowed);
+    assert!(!contract.true_rust_default_daemon_admitted);
+    assert!(contract.go_default_path_preserved);
+    assert!(contract.go_fallback_required);
+    assert!(contract.benchmark_required_before_admission);
+    assert!(contract.outbound_true_dataplane_required);
+    assert!(contract.clean_product_chain_required);
+
+    assert_contains_text(&contract.denied_until_admitted, "dae run default owner");
+    assert_contains_text(&contract.denied_until_admitted, "install/dae.service");
+    assert_contains_text(&contract.denied_until_admitted, "dae-wing or daed defaults");
+    assert_contains_text(
+        &contract.denied_until_admitted,
+        "final_100_percent_admitted",
+    );
+    assert_contains_text(
+        &contract.first_execution_order,
+        "Go default daemon baseline",
+    );
+    assert_contains_text(&contract.first_execution_order, "matched Go-vs-Rust");
+}
+
+#[test]
+fn stage25_true_daemon_execution_queue_covers_admission_order() {
+    let contract = stage25_true_daemon_execution_queue_contract();
+    let areas = contract
+        .queue_rows
+        .iter()
+        .map(|row| row.area)
+        .collect::<Vec<_>>();
+    assert_eq!(
+        areas,
+        vec![
+            "daemon artifact identity and CLI compatibility",
+            "isolated default-entrypoint smoke harness",
+            "config validate and export default corpus",
+            "startup readiness pid progress and systemd notify",
+            "control-plane owner reload suspend rollback",
+            "active TCP tproxy and eBPF path",
+            "active UDP DNS and endpoint pool path",
+            "kernel owner and eBPF resource lifecycle",
+            "outbound true dataplane admission dependency",
+            "matched Go vs Rust default daemon benchmark",
+            "clean product-chain recertification",
+            "rollout fallback and denial controls",
+        ]
+    );
+
+    assert_contains_text(
+        &contract.validation_commands,
+        "stage25_true_daemon_execution_queue.json",
+    );
+    assert_contains_text(&contract.validation_commands, "stage25");
+    assert_contains_text(
+        &contract.source,
+        "DAENEW_RUST_REBUILD_MEMO_2026-05-16.md:30.4",
+    );
+    assert_contains_text(
+        &contract.source,
+        "rust/crates/dae-product/src/stage24_product_gate.rs",
+    );
+}
+
+#[test]
 fn protocol_dataplane_admission_contract_matches_golden_fixture() {
     let fixture = load("product/outbound/protocol_dataplane_admission.json");
     let contract = protocol_dataplane_admission_contract();
