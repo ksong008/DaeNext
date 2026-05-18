@@ -12,6 +12,7 @@ use crate::runner::RunnerOutput;
 use crate::runtime_host_preflight::run_stage22_host_preflight;
 use crate::runtime_live_plan::run_stage22_live_plan;
 use crate::runtime_stage26_candidate::run_stage26_candidate_plan;
+use crate::runtime_stage27_candidate::run_stage27_candidate;
 
 pub(crate) fn run_runtime(args: &[String]) -> RunnerOutput {
     match args.first().map(String::as_str) {
@@ -22,6 +23,7 @@ pub(crate) fn run_runtime(args: &[String]) -> RunnerOutput {
         Some("stage22-host-preflight") => run_stage22_host_preflight(&args[1..]),
         Some("stage22-live-plan") => run_stage22_live_plan(&args[1..]),
         Some("stage26-candidate-plan") => run_stage26_candidate_plan(&args[1..]),
+        Some("stage27-run-candidate") => run_stage27_candidate(&args[1..]),
         Some(subcommand) => {
             RunnerOutput::usage(format!("unsupported runtime subcommand: {subcommand}"))
         }

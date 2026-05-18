@@ -786,6 +786,174 @@ fn stage26_candidate_plan_matches_golden_fixture() {
 }
 
 #[test]
+fn stage27_run_candidate_matches_golden_fixture() {
+    let fixture = load("engine/runtime_stage27/run_candidate.json");
+    let root = PathBuf::from(fixture["root"].as_str().unwrap());
+    let root_string = root.to_string_lossy().into_owned();
+    let _ = fs::remove_dir_all(&root);
+    let plan = run_with_args([
+        "runtime",
+        "stage26-candidate-plan",
+        "--root",
+        &root_string,
+        "--write",
+    ]);
+    assert_eq!(plan.exit_code, 0, "{}", plan.stdout);
+    assert_eq!(plan.stderr, "");
+
+    let candidate = run_with_args(["runtime", "stage27-run-candidate", "--root", &root_string]);
+    assert_eq!(candidate.exit_code, 0, "{}", candidate.stdout);
+    assert_eq!(candidate.stderr, "");
+    let candidate_json: Value = serde_json::from_str(&candidate.stdout).unwrap();
+    assert_eq!(
+        candidate_json["name"].as_str().unwrap(),
+        fixture["name"].as_str().unwrap()
+    );
+    assert_eq!(
+        candidate_json["stage"].as_str().unwrap(),
+        fixture["stage"].as_str().unwrap()
+    );
+    assert_eq!(
+        candidate_json["evidence_class"].as_str().unwrap(),
+        fixture["evidence_class"].as_str().unwrap()
+    );
+    assert_eq!(
+        candidate_json["default_switch_allowed"].as_bool().unwrap(),
+        fixture["default_switch_allowed"].as_bool().unwrap()
+    );
+    assert_eq!(
+        candidate_json["default_path_mutated"].as_bool().unwrap(),
+        fixture["default_path_mutated"].as_bool().unwrap()
+    );
+    assert_eq!(
+        candidate_json["product_chain_switch_allowed"]
+            .as_bool()
+            .unwrap(),
+        fixture["product_chain_switch_allowed"].as_bool().unwrap()
+    );
+    assert_eq!(
+        candidate_json["candidate_live_run_class"].as_str().unwrap(),
+        fixture["candidate_live_run_class"].as_str().unwrap()
+    );
+    assert_eq!(
+        candidate_json["candidate_smoke_passed"].as_bool().unwrap(),
+        fixture["candidate_smoke_passed"].as_bool().unwrap()
+    );
+    assert_eq!(
+        candidate_json["true_rust_default_daemon_admitted"]
+            .as_bool()
+            .unwrap(),
+        fixture["true_rust_default_daemon_admitted"]
+            .as_bool()
+            .unwrap()
+    );
+    assert_eq!(
+        candidate_json["go_default_path_preserved"]
+            .as_bool()
+            .unwrap(),
+        fixture["go_default_path_preserved"].as_bool().unwrap()
+    );
+    assert_eq!(
+        candidate_json["go_fallback_required"].as_bool().unwrap(),
+        fixture["go_fallback_required"].as_bool().unwrap()
+    );
+    assert!(!candidate_json["live_tproxy_started"].as_bool().unwrap());
+    assert!(!candidate_json["live_ebpf_started"].as_bool().unwrap());
+    assert!(!candidate_json["live_outbound_started"].as_bool().unwrap());
+    assert!(
+        !candidate_json["live_dns_listener_started"]
+            .as_bool()
+            .unwrap()
+    );
+
+    assert_eq!(
+        candidate_json["paths"]["config"].as_str().unwrap(),
+        fixture["paths"]["config"].as_str().unwrap()
+    );
+    assert_eq!(
+        candidate_json["paths"]["pid_file"].as_str().unwrap(),
+        fixture["paths"]["pid_file"].as_str().unwrap()
+    );
+    assert_eq!(
+        candidate_json["paths"]["progress_file"].as_str().unwrap(),
+        fixture["paths"]["progress_file"].as_str().unwrap()
+    );
+    assert_eq!(
+        candidate_json["paths"]["log_file"].as_str().unwrap(),
+        fixture["paths"]["log_file"].as_str().unwrap()
+    );
+    assert_eq!(
+        candidate_json["runtime"]["progress_first_byte"]
+            .as_str()
+            .unwrap(),
+        fixture["runtime"]["progress_first_byte"].as_str().unwrap()
+    );
+    assert!(candidate_json["runtime"]["config_valid"].as_bool().unwrap());
+    assert!(
+        candidate_json["runtime"]["pid_file_written"]
+            .as_bool()
+            .unwrap()
+    );
+    assert!(
+        candidate_json["runtime"]["dry_runtime_started"]
+            .as_bool()
+            .unwrap()
+    );
+    assert!(
+        candidate_json["runtime"]["reload_requested"]
+            .as_bool()
+            .unwrap()
+    );
+    assert!(candidate_json["runtime"]["reload_ok"].as_bool().unwrap());
+    assert!(
+        candidate_json["runtime"]["stop_requested"]
+            .as_bool()
+            .unwrap()
+    );
+    assert!(candidate_json["runtime"]["stop_ok"].as_bool().unwrap());
+    assert!(
+        candidate_json["runtime"]["run_thread_ok"]
+            .as_bool()
+            .unwrap()
+    );
+    assert_eq!(
+        candidate_json["runtime"]["timeout_ms"].as_u64().unwrap(),
+        fixture["runtime"]["timeout_ms"].as_u64().unwrap()
+    );
+    assert!(
+        candidate_json["runtime"]["progress_content"]
+            .as_str()
+            .unwrap()
+            .starts_with("2\nstage27 dry runtime candidate done")
+    );
+    assert!(
+        candidate_json["production_safety"]["does_not_touch_var_run_dae_progress"]
+            .as_bool()
+            .unwrap()
+    );
+    assert!(
+        candidate_json["production_safety"]["does_not_touch_var_run_dae_pid"]
+            .as_bool()
+            .unwrap()
+    );
+    assert_eq!(
+        candidate_json["remaining_blockers"]
+            .as_array()
+            .unwrap()
+            .len(),
+        fixture["remaining_blockers"].as_array().unwrap().len()
+    );
+    assert!(root.join("run").join("dae-stage27.pid").exists());
+    assert!(root.join("run").join("dae-stage27.progress").exists());
+    assert!(root.join("logs").join("dae-stage27.log").exists());
+
+    let blocked = run_with_args(["runtime", "stage27-run-candidate", "--root", "/var/tmp/dae"]);
+    assert_eq!(blocked.exit_code, 1);
+    assert!(blocked.stdout.contains("must stay under /tmp"));
+    let _ = fs::remove_dir_all(root);
+}
+
+#[test]
 fn optin_runner_userspace_commands_match_engine_fixture() {
     let fixture = load("engine/userspace_runtime/optin_contract.json");
 

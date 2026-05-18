@@ -1315,6 +1315,147 @@ fn stage26_daemon_candidate_contract_covers_inventory_and_layout() {
 }
 
 #[test]
+fn stage27_candidate_smoke_contract_matches_golden_fixture() {
+    let fixture = load("product/daemon/stage27_candidate_smoke.json");
+    let contract = stage27_candidate_smoke_contract();
+    assert_eq!(contract.name, fixture["name"].as_str().unwrap());
+    assert_eq!(contract.stage, fixture["stage"].as_str().unwrap());
+    assert_eq!(contract.prior_gate, fixture["prior_gate"].as_str().unwrap());
+    assert_eq!(
+        contract.stage_complete,
+        fixture["stage_complete"].as_bool().unwrap()
+    );
+    assert_eq!(
+        contract.go_baseline_recorded,
+        fixture["go_baseline_recorded"].as_bool().unwrap()
+    );
+    assert_eq!(
+        contract.go_baseline_version,
+        fixture["go_baseline_version"].as_str().unwrap()
+    );
+    assert_eq!(
+        contract.candidate_smoke_implemented,
+        fixture["candidate_smoke_implemented"].as_bool().unwrap()
+    );
+    assert_eq!(
+        contract.candidate_smoke_passed,
+        fixture["candidate_smoke_passed"].as_bool().unwrap()
+    );
+    assert_eq!(
+        contract.candidate_live_run_class,
+        fixture["candidate_live_run_class"].as_str().unwrap()
+    );
+    assert_eq!(
+        contract.matched_default_daemon_benchmark_recorded,
+        fixture["matched_default_daemon_benchmark_recorded"]
+            .as_bool()
+            .unwrap()
+    );
+    assert_eq!(
+        contract.default_switch_allowed,
+        fixture["default_switch_allowed"].as_bool().unwrap()
+    );
+    assert_eq!(
+        contract.default_path_mutation_allowed,
+        fixture["default_path_mutation_allowed"].as_bool().unwrap()
+    );
+    assert_eq!(
+        contract.product_chain_switch_allowed,
+        fixture["product_chain_switch_allowed"].as_bool().unwrap()
+    );
+    assert_eq!(
+        contract.true_rust_default_daemon_admitted,
+        fixture["true_rust_default_daemon_admitted"]
+            .as_bool()
+            .unwrap()
+    );
+    assert_eq!(
+        contract.go_default_path_preserved,
+        fixture["go_default_path_preserved"].as_bool().unwrap()
+    );
+    assert_eq!(
+        contract.go_fallback_required,
+        fixture["go_fallback_required"].as_bool().unwrap()
+    );
+    assert_eq!(
+        contract.stage27_decision,
+        fixture["stage27_decision"].as_str().unwrap()
+    );
+
+    let row_fixtures = fixture["smoke_rows"].as_array().unwrap();
+    assert_eq!(contract.smoke_rows.len(), row_fixtures.len());
+    for (row, row_fixture) in contract.smoke_rows.iter().zip(row_fixtures) {
+        assert_eq!(row.area, row_fixture["area"].as_str().unwrap());
+        assert_eq!(row.status, row_fixture["status"].as_str().unwrap());
+        assert_eq!(row.evidence, row_fixture["evidence"].as_str().unwrap());
+        assert_eq!(row.boundary, row_fixture["boundary"].as_str().unwrap());
+        assert_eq!(
+            row.next_action,
+            row_fixture["next_action"].as_str().unwrap()
+        );
+    }
+
+    assert_string_vec(&contract.carried_blockers, &fixture["carried_blockers"]);
+    assert_string_vec(
+        &contract.validation_commands,
+        &fixture["validation_commands"],
+    );
+    assert_string_vec(&contract.source, &fixture["source"]);
+}
+
+#[test]
+fn stage27_candidate_smoke_contract_blocks_default_admission() {
+    let contract = stage27_candidate_smoke_contract();
+    assert!(contract.stage_complete);
+    assert!(contract.go_baseline_recorded);
+    assert!(contract.candidate_smoke_implemented);
+    assert!(contract.candidate_smoke_passed);
+    assert_eq!(contract.candidate_live_run_class, "dry-runtime-only");
+    assert!(!contract.matched_default_daemon_benchmark_recorded);
+    assert!(!contract.default_switch_allowed);
+    assert!(!contract.default_path_mutation_allowed);
+    assert!(!contract.product_chain_switch_allowed);
+    assert!(!contract.true_rust_default_daemon_admitted);
+    assert!(contract.go_default_path_preserved);
+    assert!(contract.go_fallback_required);
+
+    assert_contains_text(&contract.carried_blockers, "dry-runtime-only");
+    assert_contains_text(&contract.carried_blockers, "matched Go default daemon");
+    assert_contains_text(&contract.carried_blockers, "outbound true dataplane");
+    assert_contains_text(&contract.validation_commands, "stage27-run-candidate");
+}
+
+#[test]
+fn stage27_candidate_smoke_contract_covers_go_baseline_and_smoke_rows() {
+    let contract = stage27_candidate_smoke_contract();
+    let areas = contract
+        .smoke_rows
+        .iter()
+        .map(|row| row.area)
+        .collect::<Vec<_>>();
+    assert_eq!(
+        areas,
+        vec![
+            "Go baseline artifact",
+            "Go baseline validate and export",
+            "Rust dry-runtime candidate smoke",
+            "isolated pid progress and log",
+            "default path and product chain",
+            "real datapath admission",
+            "matched default daemon benchmark",
+        ]
+    );
+
+    assert_contains_text(&contract.source, "runtime_stage27_candidate.rs");
+    assert_contains_text(&contract.source, "runtime_stage27/run_candidate.json");
+    assert_contains_text(
+        &contract.validation_commands,
+        "/tmp/dae-stage27-go-baseline/dae",
+    );
+    assert_contains_text(&contract.validation_commands, "cargo test --manifest-path");
+}
+
+#[test]
 fn protocol_dataplane_admission_contract_matches_golden_fixture() {
     let fixture = load("product/outbound/protocol_dataplane_admission.json");
     let contract = protocol_dataplane_admission_contract();
