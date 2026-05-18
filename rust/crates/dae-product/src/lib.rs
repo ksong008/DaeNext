@@ -10,6 +10,7 @@ pub mod release;
 pub mod stage23_completion;
 pub mod stage24_product_gate;
 pub mod stage25_execution_queue;
+pub mod stage26_candidate_contract;
 pub mod systemd;
 pub mod true_daemon_admission;
 
@@ -46,6 +47,10 @@ pub use stage24_product_gate::{
 pub use stage25_execution_queue::{
     Stage25TrueDaemonExecutionQueueContract, Stage25TrueDaemonExecutionQueueRow,
     stage25_true_daemon_execution_queue_contract,
+};
+pub use stage26_candidate_contract::{
+    Stage26DaemonCandidateContract, Stage26DaemonCandidateInventoryRow,
+    stage26_daemon_candidate_contract,
 };
 pub use systemd::{SystemdContract, systemd_contract};
 pub use true_daemon_admission::{
