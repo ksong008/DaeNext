@@ -1,10 +1,13 @@
 use std::io;
 use std::mem::size_of;
+use std::os::fd::RawFd;
 use std::os::fd::{FromRawFd, OwnedFd};
 
+const BPF_MAP_UPDATE_ELEM: libc::c_uint = 2;
 const BPF_MAP_GET_NEXT_ID: libc::c_uint = 12;
 const BPF_MAP_GET_FD_BY_ID: libc::c_uint = 14;
 const BPF_OBJ_GET_INFO_BY_FD: libc::c_uint = 15;
+const BPF_ANY: u64 = 0;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct RuntimeMapInfo {
@@ -46,7 +49,7 @@ pub fn map_ids() -> io::Result<Vec<u32>> {
     Ok(ids)
 }
 
-pub(crate) fn open_map_fd(id: u32) -> io::Result<OwnedFd> {
+pub fn open_map_fd(id: u32) -> io::Result<OwnedFd> {
     let attr = BpfIdAttr {
         start_id: id,
         ..BpfIdAttr::default()
@@ -65,7 +68,7 @@ pub(crate) fn open_map_fd(id: u32) -> io::Result<OwnedFd> {
     Ok(unsafe { OwnedFd::from_raw_fd(fd as i32) })
 }
 
-pub(crate) fn map_info(fd: i32) -> io::Result<RuntimeMapInfo> {
+pub fn map_info(fd: i32) -> io::Result<RuntimeMapInfo> {
     let mut info = BpfMapInfo::default();
     let attr = BpfInfoAttr {
         bpf_fd: fd as u32,
@@ -99,6 +102,28 @@ pub(crate) fn map_info(fd: i32) -> io::Result<RuntimeMapInfo> {
     })
 }
 
+pub fn update_map_elem_bytes(map_fd: RawFd, key: &[u8], value: &[u8]) -> io::Result<()> {
+    let attr = BpfMapUpdateElemAttr {
+        map_fd: map_fd as u32,
+        key: key.as_ptr() as u64,
+        value: value.as_ptr() as u64,
+        flags: BPF_ANY,
+        ..BpfMapUpdateElemAttr::default()
+    };
+    let status = unsafe {
+        libc::syscall(
+            libc::SYS_bpf,
+            BPF_MAP_UPDATE_ELEM,
+            &attr as *const BpfMapUpdateElemAttr,
+            size_of::<BpfMapUpdateElemAttr>(),
+        )
+    };
+    if status < 0 {
+        return Err(io::Error::last_os_error());
+    }
+    Ok(())
+}
+
 #[repr(C)]
 #[derive(Clone, Copy, Debug, Default)]
 struct BpfIdAttr {
@@ -113,6 +138,16 @@ struct BpfInfoAttr {
     bpf_fd: u32,
     info_len: u32,
     info: u64,
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default)]
+struct BpfMapUpdateElemAttr {
+    map_fd: u32,
+    padding: u32,
+    key: u64,
+    value: u64,
+    flags: u64,
 }
 
 #[repr(C, align(8))]

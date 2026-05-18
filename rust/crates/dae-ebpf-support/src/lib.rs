@@ -35,10 +35,14 @@ pub use param_object::{
     param_from_object_bytes, param_to_object_bytes, read_param_from_object,
     write_param_aware_object,
 };
-pub use runtime_maps::{RuntimeMapInfo, map_ids};
+pub use runtime_maps::{RuntimeMapInfo, map_ids, map_info, open_map_fd, update_map_elem_bytes};
 pub use sockmap::{
-    ListenSocketMapFdSmoke, LoadedListenSocketMapFdSmoke, LoadedTproxyListenSocketMapFdSmoke,
-    run_listen_socket_map_fd_smoke, run_loaded_listen_socket_map_fd_smoke,
-    run_loaded_tproxy_listen_socket_map_fd_smoke,
+    ListenSocketMapFdSmoke, LiveLoadedTproxyListenSocketMap, LoadedListenSocketMapFdSmoke,
+    LoadedTproxyListenSocketMapFdSmoke, open_live_loaded_tproxy_listen_socket_map,
+    open_live_loaded_tproxy_listen_socket_map_in_netns, run_listen_socket_map_fd_smoke,
+    run_loaded_listen_socket_map_fd_smoke, run_loaded_tproxy_listen_socket_map_fd_smoke,
 };
-pub use tproxy_listener::{TproxyListenerSet, TproxySocketOptions, open_tproxy_listener_set};
+pub use tproxy_listener::{
+    TproxyListenerSet, TproxySocketOptions, open_tproxy_listener_set,
+    open_tproxy_listener_set_in_netns,
+};

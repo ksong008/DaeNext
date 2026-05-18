@@ -23,6 +23,7 @@ pub mod stage39_transparent_listener_gate;
 pub mod stage40_param_aware_object_gate;
 pub mod stage41_48_admission_gates;
 pub mod stage49_production_param_listener_gate;
+pub mod stage50_active_tcp_ingress_gate;
 pub mod systemd;
 pub mod true_daemon_admission;
 
@@ -107,6 +108,10 @@ pub use stage41_48_admission_gates::{
 pub use stage49_production_param_listener_gate::{
     Stage49ProductionParamListenerGateContract, Stage49ProductionParamListenerGateRow,
     stage49_production_param_listener_gate_contract,
+};
+pub use stage50_active_tcp_ingress_gate::{
+    Stage50ActiveTcpIngressGateContract, Stage50ActiveTcpIngressGateRow,
+    stage50_active_tcp_ingress_gate_contract,
 };
 pub use systemd::{SystemdContract, systemd_contract};
 pub use true_daemon_admission::{
