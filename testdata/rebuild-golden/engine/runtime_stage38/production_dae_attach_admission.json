@@ -1,0 +1,132 @@
+{
+  "active_tproxy_traffic_executed": false,
+  "blocked": false,
+  "blockers": [],
+  "checks": [
+    {
+      "blocker": null,
+      "detail": {
+        "path": "/tmp/dae-stage38-candidate"
+      },
+      "name": "isolated-root-under-tmp",
+      "status": "pass"
+    },
+    {
+      "blocker": null,
+      "detail": {
+        "ack_root_gate": false,
+        "execute_smoke": false
+      },
+      "name": "root-gate-acknowledged",
+      "status": "pass"
+    },
+    {
+      "blocker": null,
+      "detail": {
+        "tool": "ip"
+      },
+      "name": "tool-ip-available",
+      "status": "pass"
+    },
+    {
+      "blocker": null,
+      "detail": {
+        "tool": "tc"
+      },
+      "name": "tool-tc-available",
+      "status": "pass"
+    },
+    {
+      "blocker": null,
+      "detail": {
+        "path": "control/bpf_bpfel.o"
+      },
+      "name": "real-dae-object-present",
+      "status": "pass"
+    },
+    {
+      "blocker": null,
+      "detail": {
+        "blockers": [],
+        "loaded_listen_socket_map_handoff_smoke_passed": false,
+        "path": null,
+        "status": "not-provided"
+      },
+      "name": "stage37-real-loaded-map-report-passed",
+      "status": "pass"
+    }
+  ],
+  "cleanup_steps": [],
+  "default_path_mutated": false,
+  "default_switch_allowed": false,
+  "evidence_class": "root-gated-production-name-dae0-dae0peer-listener-handoff-smoke",
+  "execute_smoke": false,
+  "executed_steps": [],
+  "go_default_path_preserved": true,
+  "go_fallback_required": true,
+  "host_attach_show": null,
+  "live_candidate_run_allowed": false,
+  "loaded_map_handoff": null,
+  "map_id_snapshots": {
+    "after_cleanup": [],
+    "before_attach": [],
+    "discovered_map_id": null,
+    "loaded_map_cleaned": true
+  },
+  "name": "stage38-production-dae-attach-admission",
+  "peer_attach_show": null,
+  "product_chain_switch_allowed": false,
+  "production_dae0_dae0peer_attach_executed": false,
+  "production_default_daemon_attach_executed": false,
+  "production_listen_socket_map_fd_update_executed": false,
+  "production_name_attach_handoff_smoke_passed": false,
+  "production_name_contract": {
+    "expected_key_size": 4,
+    "expected_map_type": "SockMap",
+    "expected_max_entries": 2,
+    "expected_value_size": 8,
+    "filter_pref": "49380",
+    "host_iface": "dae0",
+    "host_section": "tc/dae0_ingress",
+    "listen_socket_map_kernel_name": "listen_socket_m",
+    "listener_keys": [
+      0,
+      1
+    ],
+    "netns": "daens",
+    "object_path": "control/bpf_bpfel.o",
+    "peer_iface": "dae0peer",
+    "peer_section": "tc/dae0peer_ingress"
+  },
+  "production_name_dae0_dae0peer_attach_executed": false,
+  "production_name_listen_socket_map_fd_update_executed": false,
+  "read_only": true,
+  "remaining_blockers": [
+    "production default daemon attach path is not executed",
+    "active tproxy TCP UDP DNS traffic evidence is still missing",
+    "outbound true dataplane admission is still incomplete",
+    "matched Go default daemon vs true Rust candidate benchmark is still missing",
+    "clean dae-wing and daed product-chain recertification is still missing"
+  ],
+  "root": "/tmp/dae-stage38-candidate",
+  "root_gate_acknowledged": false,
+  "stage": "stage38",
+  "stage37_report": {
+    "blockers": [],
+    "passed": false,
+    "path": null,
+    "status": "not-provided"
+  },
+  "sys_fs_bpf_dae": {
+    "after": [],
+    "before": [],
+    "mutated": false
+  },
+  "temporary_production_named_resources": {
+    "host_iface": "dae0",
+    "leftovers_after_cleanup": [],
+    "netns": "daens",
+    "peer_iface": "dae0peer"
+  },
+  "true_rust_default_daemon_admitted": false
+}
