@@ -18,6 +18,7 @@ pub(crate) mod runtime_stage37_gate;
 pub(crate) mod runtime_stage38_gate;
 pub(crate) mod runtime_stage39_gate;
 pub(crate) mod runtime_stage40_gate;
+pub(crate) mod runtime_stage41_48_gates;
 pub mod surface;
 pub(crate) mod userspace_runner;
 pub mod validate;

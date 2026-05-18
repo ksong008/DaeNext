@@ -5,6 +5,7 @@ pub mod loader;
 pub mod maps;
 pub mod param;
 pub mod param_loader;
+pub mod param_object;
 pub mod runtime_maps;
 pub mod sockmap;
 pub mod tproxy_listener;
@@ -28,6 +29,11 @@ pub use param_loader::{
     DAE_PARAM_SYMBOL, DAE_PARAM_SYMBOL_SIZE, DaeParamPayload, DaeParamRequirement,
     build_dae_param_payload, dae_param_requirements, dae_param_runtime_values_present,
     direct_tc_object_loader_rewrites_param, param_aware_load_admitted,
+};
+pub use param_object::{
+    ParamObjectRewriteReport, ParamSymbolLocation, locate_param_symbol_in_object,
+    param_from_object_bytes, param_to_object_bytes, read_param_from_object,
+    write_param_aware_object,
 };
 pub use runtime_maps::{RuntimeMapInfo, map_ids};
 pub use sockmap::{

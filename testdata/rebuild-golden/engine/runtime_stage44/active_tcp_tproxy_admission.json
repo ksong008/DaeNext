@@ -1,0 +1,24 @@
+{
+  "active_tproxy_traffic_executed": false,
+  "blocked": false,
+  "default_switch_allowed": false,
+  "detail": {
+    "active_tproxy_tcp_executed": false,
+    "traffic": "tcp"
+  },
+  "evidence_class": "active TCP tproxy datapath gate",
+  "go_default_path_preserved": true,
+  "go_fallback_required": true,
+  "matched_go_rust_default_daemon_benchmark_recorded": false,
+  "name": "stage44-active-tcp-tproxy-admission",
+  "outbound_true_dataplane_admitted": false,
+  "product_chain_switch_allowed": false,
+  "read_only": true,
+  "remaining_blockers": [
+    "active TCP tproxy traffic is not executed",
+    "RouteDialTcp reroute and outbound relay evidence is missing",
+    "matched TCP latency throughput benchmark is missing"
+  ],
+  "stage": "stage44",
+  "true_rust_default_daemon_admitted": false
+}

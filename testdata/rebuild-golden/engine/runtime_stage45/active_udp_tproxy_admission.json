@@ -1,0 +1,24 @@
+{
+  "active_tproxy_traffic_executed": false,
+  "blocked": false,
+  "default_switch_allowed": false,
+  "detail": {
+    "active_tproxy_udp_executed": false,
+    "traffic": "udp"
+  },
+  "evidence_class": "active UDP tproxy datapath gate",
+  "go_default_path_preserved": true,
+  "go_fallback_required": true,
+  "matched_go_rust_default_daemon_benchmark_recorded": false,
+  "name": "stage45-active-udp-tproxy-admission",
+  "outbound_true_dataplane_admitted": false,
+  "product_chain_switch_allowed": false,
+  "read_only": true,
+  "remaining_blockers": [
+    "active UDP tproxy traffic is not executed",
+    "UDP endpoint pool live evidence is missing",
+    "matched UDP latency loss throughput benchmark is missing"
+  ],
+  "stage": "stage45",
+  "true_rust_default_daemon_admitted": false
+}

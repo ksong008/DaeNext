@@ -1,0 +1,33 @@
+{
+  "active_dns_tproxy_admitted": false,
+  "active_tcp_tproxy_admitted": false,
+  "active_udp_tproxy_admitted": false,
+  "carried_blockers": [
+    "combined production-name PARAM-aware transparent-listener smoke is not executed",
+    "active tproxy TCP UDP DNS traffic evidence is still missing",
+    "outbound true dataplane admission is still incomplete",
+    "matched Go default daemon vs true Rust candidate benchmark is still missing",
+    "clean dae-wing and daed product-chain recertification is still missing"
+  ],
+  "combined_production_param_listener_admitted": false,
+  "default_switch_allowed": false,
+  "gate_decision": "stages41-48 close the PARAM-aware object image and isolated tc load blocker, then split the remaining production topology, active TCP, active UDP, DNS, outbound true dataplane, and matched benchmark requirements into explicit denied gates; default/product switching remains blocked",
+  "go_default_path_preserved": true,
+  "go_fallback_required": true,
+  "matched_go_rust_default_daemon_benchmark_recorded": false,
+  "name": "stage41-48-param-active-datapath-admission-queue",
+  "outbound_true_dataplane_admitted": false,
+  "param_aware_object_load_admitted": true,
+  "param_object_image_admitted": true,
+  "product_chain_switch_allowed": false,
+  "stage41_complete": true,
+  "stage42_complete": true,
+  "stage43_complete": true,
+  "stage44_complete": true,
+  "stage45_complete": true,
+  "stage46_complete": true,
+  "stage47_complete": true,
+  "stage48_complete": true,
+  "stage_range": "stage41-stage48",
+  "true_rust_default_daemon_admitted": false
+}
