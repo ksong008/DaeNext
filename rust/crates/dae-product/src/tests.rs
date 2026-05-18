@@ -845,6 +845,146 @@ fn stage23_completion_gate_covers_required_surfaces() {
 }
 
 #[test]
+fn stage24_product_gate_contract_matches_golden_fixture() {
+    let fixture = load("product/integration/stage24_product_gate.json");
+    let contract = stage24_product_gate_contract();
+    assert_eq!(contract.name, fixture["name"].as_str().unwrap());
+    assert_eq!(contract.stage, fixture["stage"].as_str().unwrap());
+    assert_eq!(
+        contract.stage_complete,
+        fixture["stage_complete"].as_bool().unwrap()
+    );
+    assert_eq!(
+        contract.cross_repo_validation_complete,
+        fixture["cross_repo_validation_complete"].as_bool().unwrap()
+    );
+    assert_eq!(
+        contract.dae_wing_validation_passed,
+        fixture["dae_wing_validation_passed"].as_bool().unwrap()
+    );
+    assert_eq!(
+        contract.daed_wing_validation_passed,
+        fixture["daed_wing_validation_passed"].as_bool().unwrap()
+    );
+    assert_eq!(
+        contract.daed_web_validation_passed,
+        fixture["daed_web_validation_passed"].as_bool().unwrap()
+    );
+    assert_eq!(
+        contract.final_100_percent_admitted,
+        fixture["final_100_percent_admitted"].as_bool().unwrap()
+    );
+    assert_eq!(
+        contract.default_switch_allowed,
+        fixture["default_switch_allowed"].as_bool().unwrap()
+    );
+    assert_eq!(
+        contract.product_chain_switch_allowed,
+        fixture["product_chain_switch_allowed"].as_bool().unwrap()
+    );
+    assert_eq!(
+        contract.true_rust_default_daemon_admitted,
+        fixture["true_rust_default_daemon_admitted"]
+            .as_bool()
+            .unwrap()
+    );
+    assert_eq!(
+        contract.go_default_path_preserved,
+        fixture["go_default_path_preserved"].as_bool().unwrap()
+    );
+    assert_eq!(
+        contract.go_fallback_required,
+        fixture["go_fallback_required"].as_bool().unwrap()
+    );
+    assert_eq!(
+        contract.stage24_decision,
+        fixture["stage24_decision"].as_str().unwrap()
+    );
+
+    let row_fixtures = fixture["product_rows"].as_array().unwrap();
+    assert_eq!(contract.product_rows.len(), row_fixtures.len());
+    for (row, row_fixture) in contract.product_rows.iter().zip(row_fixtures) {
+        assert_eq!(row.area, row_fixture["area"].as_str().unwrap());
+        assert_eq!(row.repo, row_fixture["repo"].as_str().unwrap());
+        assert_eq!(row.status, row_fixture["status"].as_str().unwrap());
+        assert_eq!(row.evidence, row_fixture["evidence"].as_str().unwrap());
+        assert_eq!(row.boundary, row_fixture["boundary"].as_str().unwrap());
+        assert_eq!(
+            row.next_action,
+            row_fixture["next_action"].as_str().unwrap()
+        );
+    }
+
+    assert_string_vec(&contract.carried_blockers, &fixture["carried_blockers"]);
+    assert_string_vec(
+        &contract.validation_commands,
+        &fixture["validation_commands"],
+    );
+    assert_string_vec(&contract.source, &fixture["source"]);
+}
+
+#[test]
+fn stage24_product_gate_blocks_final_default_rollout() {
+    let contract = stage24_product_gate_contract();
+    assert!(contract.stage_complete);
+    assert!(contract.cross_repo_validation_complete);
+    assert!(contract.dae_wing_validation_passed);
+    assert!(contract.daed_wing_validation_passed);
+    assert!(contract.daed_web_validation_passed);
+    assert!(!contract.final_100_percent_admitted);
+    assert!(!contract.default_switch_allowed);
+    assert!(!contract.product_chain_switch_allowed);
+    assert!(!contract.true_rust_default_daemon_admitted);
+    assert!(contract.go_default_path_preserved);
+    assert!(contract.go_fallback_required);
+
+    assert_contains_text(&contract.carried_blockers, "true Rust default daemon");
+    assert_contains_text(
+        &contract.carried_blockers,
+        "Go default daemon vs true Rust default daemon benchmark",
+    );
+    assert_contains_text(&contract.carried_blockers, "outbound protocols");
+    assert_contains_text(&contract.carried_blockers, "temporary modfile");
+    assert_contains_text(&contract.carried_blockers, "dirty wing submodule");
+    assert_contains_text(&contract.carried_blockers, "Node.js");
+}
+
+#[test]
+fn stage24_product_gate_covers_cross_repo_surfaces() {
+    let contract = stage24_product_gate_contract();
+    let areas = contract
+        .product_rows
+        .iter()
+        .map(|row| row.area)
+        .collect::<Vec<_>>();
+    assert_eq!(
+        areas,
+        vec![
+            "dae-wing engine facade and service ports",
+            "dae-wing route-aware subscription and lifecycle",
+            "daed wing runtime API chain",
+            "daed Web runtime and import-export surface",
+            "bundle and dae config file import-export",
+            "true Rust default daemon rollout",
+            "final 100 percent daenew parity",
+        ]
+    );
+
+    assert_contains_text(&contract.validation_commands, "stage24_product_gate");
+    assert_contains_text(&contract.validation_commands, "dae-wing-stage24-go.mod");
+    assert_contains_text(&contract.validation_commands, "pnpm check-types");
+    assert_contains_text(&contract.validation_commands, "pnpm test");
+    assert_contains_text(
+        &contract.source,
+        "/root/project/dae-wing/transport/httpapi/service_port.go",
+    );
+    assert_contains_text(
+        &contract.source,
+        "/root/project/daed/wing/transport/httpapi/openapi.go",
+    );
+}
+
+#[test]
 fn protocol_dataplane_admission_contract_matches_golden_fixture() {
     let fixture = load("product/outbound/protocol_dataplane_admission.json");
     let contract = protocol_dataplane_admission_contract();
