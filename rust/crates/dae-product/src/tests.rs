@@ -3396,6 +3396,153 @@ fn stage51_active_tcp_relay_gate_covers_rows() {
 }
 
 #[test]
+fn stage52_active_tcp_route_table_group_gate_contract_matches_golden_fixture() {
+    let fixture = load("product/daemon/stage52_active_tcp_route_table_group_gate.json");
+    let contract = stage52_active_tcp_route_table_group_gate_contract();
+    assert_eq!(contract.name, fixture["name"].as_str().unwrap());
+    assert_eq!(contract.stage, fixture["stage"].as_str().unwrap());
+    assert_eq!(contract.prior_gate, fixture["prior_gate"].as_str().unwrap());
+    assert_eq!(
+        contract.stage_complete,
+        fixture["stage_complete"].as_bool().unwrap()
+    );
+    assert_eq!(
+        contract.active_tcp_tproxy_ingress_recorded,
+        fixture["active_tcp_tproxy_ingress_recorded"]
+            .as_bool()
+            .unwrap()
+    );
+    assert_eq!(
+        contract.original_destination_recorded,
+        fixture["original_destination_recorded"].as_bool().unwrap()
+    );
+    assert_eq!(
+        contract.route_dial_tcp_route_table_recorded,
+        fixture["route_dial_tcp_route_table_recorded"]
+            .as_bool()
+            .unwrap()
+    );
+    assert_eq!(
+        contract.choose_dial_target_recorded,
+        fixture["choose_dial_target_recorded"].as_bool().unwrap()
+    );
+    assert_eq!(
+        contract.outbound_group_selection_recorded,
+        fixture["outbound_group_selection_recorded"]
+            .as_bool()
+            .unwrap()
+    );
+    assert_eq!(
+        contract.route_dial_tcp_rust_control_plane_recorded,
+        fixture["route_dial_tcp_rust_control_plane_recorded"]
+            .as_bool()
+            .unwrap()
+    );
+    assert_eq!(
+        contract.outbound_relay_recorded,
+        fixture["outbound_relay_recorded"].as_bool().unwrap()
+    );
+    assert_eq!(
+        contract.so_mark_mptcp_real_outbound_socket_recorded,
+        fixture["so_mark_mptcp_real_outbound_socket_recorded"]
+            .as_bool()
+            .unwrap()
+    );
+    assert_eq!(
+        contract.active_tcp_route_table_group_benchmark_recorded,
+        fixture["active_tcp_route_table_group_benchmark_recorded"]
+            .as_bool()
+            .unwrap()
+    );
+    assert_eq!(
+        contract.outbound_true_dataplane_admitted,
+        fixture["outbound_true_dataplane_admitted"]
+            .as_bool()
+            .unwrap()
+    );
+    assert_eq!(
+        contract.matched_go_rust_default_daemon_benchmark_recorded,
+        fixture["matched_go_rust_default_daemon_benchmark_recorded"]
+            .as_bool()
+            .unwrap()
+    );
+    assert_eq!(
+        contract.default_switch_allowed,
+        fixture["default_switch_allowed"].as_bool().unwrap()
+    );
+    assert_eq!(
+        contract.product_chain_switch_allowed,
+        fixture["product_chain_switch_allowed"].as_bool().unwrap()
+    );
+    assert_eq!(
+        contract.true_rust_default_daemon_admitted,
+        fixture["true_rust_default_daemon_admitted"]
+            .as_bool()
+            .unwrap()
+    );
+    assert_eq!(
+        contract.go_default_path_preserved,
+        fixture["go_default_path_preserved"].as_bool().unwrap()
+    );
+    assert_eq!(
+        contract.go_fallback_required,
+        fixture["go_fallback_required"].as_bool().unwrap()
+    );
+    assert_eq!(
+        contract.gate_decision,
+        fixture["gate_decision"].as_str().unwrap()
+    );
+    assert_string_vec(&contract.carried_blockers, &fixture["carried_blockers"]);
+}
+
+#[test]
+fn stage52_active_tcp_route_table_group_gate_blocks_default_admission() {
+    let contract = stage52_active_tcp_route_table_group_gate_contract();
+    assert!(contract.stage_complete);
+    assert!(contract.active_tcp_tproxy_ingress_recorded);
+    assert!(contract.original_destination_recorded);
+    assert!(contract.route_dial_tcp_route_table_recorded);
+    assert!(contract.choose_dial_target_recorded);
+    assert!(contract.outbound_group_selection_recorded);
+    assert!(contract.route_dial_tcp_rust_control_plane_recorded);
+    assert!(contract.outbound_relay_recorded);
+    assert!(contract.so_mark_mptcp_real_outbound_socket_recorded);
+    assert!(contract.active_tcp_route_table_group_benchmark_recorded);
+    assert!(!contract.active_udp_tproxy_admitted);
+    assert!(!contract.active_dns_tproxy_admitted);
+    assert!(!contract.outbound_true_dataplane_admitted);
+    assert!(!contract.default_switch_allowed);
+    assert!(!contract.product_chain_switch_allowed);
+    assert!(!contract.true_rust_default_daemon_admitted);
+    assert!(contract.go_default_path_preserved);
+    assert!(contract.go_fallback_required);
+
+    assert_contains_text(&contract.carried_blockers, "active UDP");
+    assert_contains_text(&contract.carried_blockers, "bounded direct loopback");
+    assert_contains_text(&contract.carried_blockers, "matched Go default daemon");
+}
+
+#[test]
+fn stage52_active_tcp_route_table_group_gate_covers_rows() {
+    let contract = stage52_active_tcp_route_table_group_gate_contract();
+    let areas = contract.rows.iter().map(|row| row.area).collect::<Vec<_>>();
+    assert_eq!(
+        areas,
+        vec![
+            "RouteDialTcp userspace reroute",
+            "outbound group min selection",
+            "route-aware active TCP relay benchmark"
+        ]
+    );
+    assert_contains_text(&contract.source, "runtime_stage50_tcp_gate.rs");
+    assert_contains_text(&contract.source, "tcp_route_dial.rs");
+    assert_contains_text(
+        &contract.validation_commands,
+        "stage52-active-tcp-route-table-group-relay-admission",
+    );
+}
+
+#[test]
 fn protocol_dataplane_admission_contract_matches_golden_fixture() {
     let fixture = load("product/outbound/protocol_dataplane_admission.json");
     let contract = protocol_dataplane_admission_contract();

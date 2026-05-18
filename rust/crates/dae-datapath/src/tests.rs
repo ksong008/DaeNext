@@ -1,7 +1,7 @@
 use base64::Engine;
 use serde_json::Value;
 use std::io::{Read, Write};
-use std::net::{Ipv4Addr, SocketAddrV4};
+use std::net::{Ipv4Addr, SocketAddr, SocketAddrV4};
 use std::thread;
 use std::time::Duration;
 
@@ -51,6 +51,103 @@ fn route_loop_matches_golden_fixture() {
         assert_eq!(got.must, expected["must"].as_bool().unwrap());
         assert_eq!(got.fallback, expected["fallback"].as_bool().unwrap());
     }
+}
+
+#[test]
+fn tcp_route_dial_domain_plus_plus_executes_userspace_reroute() {
+    let destination: SocketAddr = "198.18.52.1:18082".parse().unwrap();
+    let plan = route_dial_tcp_plan(&RouteDialTcpPlanInput {
+        dial_mode: TcpDialMode::DomainPlusPlus,
+        initial_outbound: OUTBOUND_USER_DEFINED_MIN,
+        destination,
+        domain: "127.0.0.1".to_owned(),
+        domain_is_real: true,
+        initial_mark: 0,
+        so_mark_from_dae: 1234,
+        mptcp: true,
+        route_rules: vec![RouteRule {
+            kind: "DomainSet".to_owned(),
+            outbound: OUTBOUND_USER_DEFINED_MIN,
+            mark: 4321,
+            must: false,
+            matched: true,
+        }],
+    });
+
+    assert!(plan.first_choose.should_reroute);
+    assert!(plan.userspace_route_executed);
+    assert_eq!(plan.final_outbound, OUTBOUND_USER_DEFINED_MIN);
+    assert_eq!(plan.final_mark, 4321);
+    assert!(!plan.mark_defaulted_from_so_mark);
+    assert_eq!(plan.final_dial_target, "127.0.0.1:18082");
+    assert!(plan.strict_ip_version);
+    assert_eq!(plan.network_type, "tcp4");
+    assert!(plan.magic_network.starts_with(&[0, 3, b't']));
+}
+
+#[test]
+fn tcp_route_dial_defaults_mark_after_reroute_zero_mark() {
+    let destination: SocketAddr = "198.18.52.1:443".parse().unwrap();
+    let plan = route_dial_tcp_plan(&RouteDialTcpPlanInput {
+        dial_mode: TcpDialMode::DomainPlusPlus,
+        initial_outbound: OUTBOUND_USER_DEFINED_MIN,
+        destination,
+        domain: "example.com".to_owned(),
+        domain_is_real: true,
+        initial_mark: 0,
+        so_mark_from_dae: 1234,
+        mptcp: false,
+        route_rules: vec![RouteRule {
+            kind: "Fallback".to_owned(),
+            outbound: OUTBOUND_USER_DEFINED_MIN,
+            mark: 0,
+            must: false,
+            matched: true,
+        }],
+    });
+
+    assert!(plan.userspace_route_executed);
+    assert_eq!(plan.final_mark, 1234);
+    assert!(plan.mark_defaulted_from_so_mark);
+    assert_eq!(plan.final_dial_target, "example.com:443");
+    assert!(!plan.strict_ip_version);
+    assert_eq!(
+        plan.magic_network.as_slice(),
+        &[0, 3, b't', b'c', b'p', 0, 0, 4, 210, 0]
+    );
+}
+
+#[test]
+fn choose_dial_target_preserves_reserved_outbound_ip_mode() {
+    let destination: SocketAddr = "198.18.52.1:443".parse().unwrap();
+    let decision = choose_dial_target(
+        TcpDialMode::DomainPlus,
+        OUTBOUND_DIRECT,
+        destination,
+        "example.com",
+        true,
+    );
+
+    assert_eq!(decision.effective_mode, TcpDialMode::Ip);
+    assert_eq!(decision.dial_target, "198.18.52.1:443");
+    assert!(decision.dial_ip);
+    assert!(!decision.should_reroute);
+}
+
+#[test]
+fn choose_dial_target_uses_domain_for_unspecified_destination() {
+    let destination: SocketAddr = "0.0.0.0:443".parse().unwrap();
+    let decision = choose_dial_target(
+        TcpDialMode::Ip,
+        OUTBOUND_DIRECT,
+        destination,
+        "[2606:4700:20::681a:d1f]",
+        false,
+    );
+
+    assert_eq!(decision.effective_mode, TcpDialMode::Domain);
+    assert_eq!(decision.dial_target, "[2606:4700:20::681a:d1f]:443");
+    assert!(decision.dial_ip);
 }
 
 #[test]

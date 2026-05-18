@@ -1,0 +1,77 @@
+{
+  "active_dns_tproxy_admitted": false,
+  "active_tcp_route_table_group_benchmark_recorded": true,
+  "active_tcp_tproxy_ingress_recorded": true,
+  "active_udp_tproxy_admitted": false,
+  "carried_blockers": [
+    "active UDP tproxy traffic evidence is still missing",
+    "active DNS UDP/53 and reload DNS cache migration evidence is still missing",
+    "outbound protocol true dataplane admission is still incomplete beyond the bounded direct loopback group relay",
+    "matched Go default daemon vs true Rust candidate benchmark is still missing",
+    "clean dae-wing and daed product-chain recertification is still missing"
+  ],
+  "choose_dial_target_recorded": true,
+  "default_path_mutation_allowed": false,
+  "default_switch_allowed": false,
+  "gate_decision": "stage52 extends stage51 into a route-aware active TCP relay: Rust executes domain++ ChooseDialTarget reroute, userspace route-table selection, outbound group min-policy selection, the real outbound socket, and a local benchmark; it remains bounded to a direct loopback transport and does not admit UDP, DNS, protocol true dataplanes, matched default-daemon benchmarks, or product-chain switching",
+  "go_default_path_preserved": true,
+  "go_fallback_required": true,
+  "matched_go_rust_default_daemon_benchmark_recorded": false,
+  "name": "stage52-active-tcp-route-table-group-gate",
+  "original_destination_recorded": true,
+  "outbound_group_selection_recorded": true,
+  "outbound_relay_recorded": true,
+  "outbound_true_dataplane_admitted": false,
+  "prior_gate": "stage51-active-tcp-relay-gate",
+  "product_chain_switch_allowed": false,
+  "route_dial_tcp_route_table_recorded": true,
+  "route_dial_tcp_rust_control_plane_recorded": true,
+  "rows": [
+    {
+      "area": "RouteDialTcp userspace reroute",
+      "boundary": "the route corpus is bounded and does not yet prove every matcher, must_rules chain, or protocol dialer target",
+      "evidence": "Stage 52 records domain++ first-pass reroute to control-plane routing, userspace DomainSet route selection back to outbound 2, second ChooseDialTarget evaluation, mark propagation, and the final dial target used by the real socket",
+      "next_action": "extend the same path into remaining active traffic and protocol true-dataplane gates",
+      "status": "passed-route-aware-runtime-model-and-root-smoke"
+    },
+    {
+      "area": "outbound group min selection",
+      "boundary": "this proves group-selection semantics for the direct loopback harness, not every protocol transport or health-check lifecycle",
+      "evidence": "Stage 52 builds a two-dialer min-policy group, records TCP4 strict-IP selection, and selects the lower-latency alive dialer before relay",
+      "next_action": "carry group selection through protocol-specific true dataplane admissions",
+      "status": "passed-route-aware-runtime-model-and-root-smoke"
+    },
+    {
+      "area": "route-aware active TCP relay benchmark",
+      "boundary": "the benchmark remains a Rust local route-aware relay baseline, not a matched Go default daemon vs true Rust default daemon benchmark",
+      "evidence": "Stage 52 benchmark mode loops active TCP connections through LAN ingress, transparent accept, route-table reroute, ChooseDialTarget, group selection, real outbound socket, upstream echo, and reply path",
+      "next_action": "close UDP, DNS, protocol true dataplane, and product-chain blockers before matched default-daemon comparison",
+      "status": "passed-local-benchmark-with-boundary"
+    }
+  ],
+  "so_mark_mptcp_real_outbound_socket_recorded": true,
+  "source": [
+    "DAEX_RUST_REBUILD_PLAN_2026-05-16.md:stage52-item314",
+    "DAENEW_RUST_REBUILD_MEMO_2026-05-16.md:5.5",
+    "DAENEW_RUST_REBUILD_MEMO_2026-05-16.md:10.3",
+    "DAENEW_RUST_REBUILD_MEMO_2026-05-16.md:12.7",
+    "DAENEW_RUST_REBUILD_MEMO_2026-05-16.md:21.1",
+    "DAENEW_RUST_REBUILD_MEMO_2026-05-16.md:33.8",
+    "rust/crates/dae-cli/src/runtime_stage50_tcp_gate.rs",
+    "rust/crates/dae-datapath/src/tcp_route_dial.rs",
+    "rust/crates/dae-outbound/src/group.rs",
+    "testdata/rebuild-golden/engine/runtime_stage52/active_tcp_route_table_group_admission.json"
+  ],
+  "stage": "stage52",
+  "stage_complete": true,
+  "true_rust_default_daemon_admitted": false,
+  "validation_commands": [
+    "python3 -m json.tool testdata/rebuild-golden/engine/runtime_stage52/active_tcp_route_table_group_admission.json",
+    "python3 -m json.tool testdata/rebuild-golden/product/daemon/stage52_active_tcp_route_table_group_gate.json",
+    "cargo test --manifest-path rust/Cargo.toml -p dae-datapath tcp_route -- --nocapture",
+    "cargo test --manifest-path rust/Cargo.toml -p dae-cli stage52 -- --nocapture",
+    "cargo test --manifest-path rust/Cargo.toml -p dae-product stage52 -- --nocapture",
+    "cargo run --manifest-path rust/Cargo.toml -p dae-cli --bin dae-cli-optin --quiet -- runtime stage52-active-tcp-route-table-group-relay-admission --execute-smoke --ack-root-gate --benchmark-iters 10",
+    "git diff --check"
+  ]
+}
