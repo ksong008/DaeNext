@@ -31,6 +31,7 @@ pub mod stage54_active_dns_tproxy_cache_gate;
 pub mod stage55_socks5_outbound_gate;
 pub mod stage56_socks5_udp_associate_gate;
 pub mod stage57_http_connect_gate;
+pub mod stage58_shadowsocks_aead_tcp_gate;
 pub mod systemd;
 pub mod true_daemon_admission;
 
@@ -146,6 +147,10 @@ pub use stage56_socks5_udp_associate_gate::{
 };
 pub use stage57_http_connect_gate::{
     Stage57HttpConnectGateContract, Stage57HttpConnectGateRow, stage57_http_connect_gate_contract,
+};
+pub use stage58_shadowsocks_aead_tcp_gate::{
+    Stage58ShadowsocksAeadTcpGateContract, Stage58ShadowsocksAeadTcpGateRow,
+    stage58_shadowsocks_aead_tcp_gate_contract,
 };
 pub use systemd::{SystemdContract, systemd_contract};
 pub use true_daemon_admission::{
