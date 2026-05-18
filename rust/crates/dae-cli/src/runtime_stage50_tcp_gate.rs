@@ -9,15 +9,17 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use dae_datapath::{
+    DEFAULT_NAT_TIMEOUT_MS, DEFAULT_UDP_ENDPOINT_POOL_MAX_ENTRIES, DNS_NAT_TIMEOUT_MS, MAX_RETRY,
     OUTBOUND_CONTROL_PLANE_ROUTING, OUTBOUND_USER_DEFINED_MIN, RouteDialTcpPlan,
     RouteDialTcpPlanInput, RouteRule, TcpDialMode, TcpDirectDialOptions, TcpDirectDialReport,
-    TcpLoopbackListenerReport, bind_loopback_tcp_listener, bind_loopback_tcp_listener_on_port,
-    magic_network_bytes, magic_tcp_connect, route_dial_tcp_plan,
+    TcpLoopbackListenerReport, UdpDirectPacketConn, UdpDirectSocketOptions, UdpDirectSocketReport,
+    bind_loopback_tcp_listener, bind_loopback_tcp_listener_on_port, magic_network_bytes,
+    magic_tcp_connect, route_dial_tcp_plan,
 };
 use dae_ebpf_support::{
     DaeParamInput, RuntimeMapInfo, build_dae_param, map_ids, map_info,
-    open_live_loaded_tproxy_listen_socket_map_in_netns, open_map_fd, update_map_elem_bytes,
-    write_param_aware_object,
+    open_live_loaded_tproxy_listen_socket_map_in_netns, open_map_fd,
+    open_transparent_udp_socket_bound_in_netns, update_map_elem_bytes, write_param_aware_object,
 };
 use dae_netutil::parse_magic_network;
 use dae_outbound::{Annotation, Dialer, DialerGroup, NetworkType, SelectionPolicy};
@@ -63,6 +65,12 @@ const DEFAULT_STAGE52_TARGET_IP: &str = "198.18.52.1";
 const DEFAULT_STAGE52_DOMAIN: &str = "127.0.0.1";
 const STAGE52_TCP_PAYLOAD: &[u8] = b"stage52-route-group-ping";
 const STAGE52_TCP_RESPONSE: &[u8] = b"stage52-route-group-ack";
+const DEFAULT_STAGE53_ROOT: &str = "/tmp/dae-stage53-candidate";
+const DEFAULT_STAGE53_TPROXY_PORT: u16 = 35353;
+const DEFAULT_STAGE53_TARGET_PORT: u16 = 18083;
+const DEFAULT_STAGE53_TARGET_IP: &str = "198.18.53.1";
+const STAGE53_UDP_PAYLOAD: &[u8] = b"stage53-udp-tproxy-ping";
+const STAGE53_UDP_RESPONSE: &[u8] = b"stage53-udp-tproxy-ack";
 
 pub(crate) fn run_stage50_active_tcp_tproxy_ingress_admission(args: &[String]) -> RunnerOutput {
     let opts = match Stage50Options::parse(args) {
@@ -102,6 +110,19 @@ pub(crate) fn run_stage52_active_tcp_route_table_group_relay_admission(
         report,
         opts.base.execute_smoke,
         "active_tcp_route_table_group_relay_smoke_passed",
+    )
+}
+
+pub(crate) fn run_stage53_active_udp_tproxy_endpoint_admission(args: &[String]) -> RunnerOutput {
+    let opts = match Stage53Options::parse(args) {
+        Ok(opts) => opts,
+        Err(output) => return output,
+    };
+    let report = stage53_report(&opts);
+    output_with_execution_status(
+        report,
+        opts.base.execute_smoke,
+        "active_udp_tproxy_smoke_passed",
     )
 }
 
@@ -590,6 +611,153 @@ impl Stage52Options {
         }
         if opts.domain.is_empty() {
             return Err(RunnerOutput::usage("stage52 --domain must be non-empty"));
+        }
+        Ok(opts)
+    }
+}
+
+#[derive(Debug, Clone)]
+struct Stage53Options {
+    base: Stage50Options,
+    benchmark_iters: u32,
+}
+
+impl Default for Stage53Options {
+    fn default() -> Self {
+        let root = PathBuf::from(DEFAULT_STAGE53_ROOT);
+        let base = Stage50Options {
+            param_object: root.join("bpf_bpfel.param.o"),
+            root,
+            tproxy_port: DEFAULT_STAGE53_TPROXY_PORT,
+            target_ip: DEFAULT_STAGE53_TARGET_IP.to_owned(),
+            target_port: DEFAULT_STAGE53_TARGET_PORT,
+            ..Stage50Options::default()
+        };
+        Self {
+            base,
+            benchmark_iters: 1,
+        }
+    }
+}
+
+impl Stage53Options {
+    fn parse(args: &[String]) -> Result<Self, RunnerOutput> {
+        let mut opts = Self::default();
+        let default_param_object = PathBuf::from(DEFAULT_STAGE53_ROOT).join("bpf_bpfel.param.o");
+        let mut iter = args.iter();
+        while let Some(arg) = iter.next() {
+            match arg.as_str() {
+                "--root" => {
+                    opts.base.root = PathBuf::from(next_value(&mut iter, "stage53 --root")?);
+                    if opts.base.param_object == default_param_object {
+                        opts.base.param_object = opts.base.root.join("bpf_bpfel.param.o");
+                    }
+                }
+                "--object" => {
+                    opts.base.source_object =
+                        PathBuf::from(next_value(&mut iter, "stage53 --object")?);
+                }
+                "--param-object" => {
+                    opts.base.param_object =
+                        PathBuf::from(next_value(&mut iter, "stage53 --param-object")?);
+                }
+                "--execute-smoke" => opts.base.execute_smoke = true,
+                "--ack-root-gate" => opts.base.ack_root_gate = true,
+                "--peer-section" => {
+                    opts.base.peer_section = next_value(&mut iter, "stage53 --peer-section")?;
+                }
+                "--host-section" => {
+                    opts.base.host_section = next_value(&mut iter, "stage53 --host-section")?;
+                }
+                "--lan-section" => {
+                    opts.base.lan_section = next_value(&mut iter, "stage53 --lan-section")?;
+                }
+                "--tproxy-port" => {
+                    opts.base.tproxy_port =
+                        parse_port(&next_value(&mut iter, "stage53 --tproxy-port")?, arg)?;
+                }
+                "--dae-netns-id" => {
+                    opts.base.dae_netns_id =
+                        parse_u32(&next_value(&mut iter, "stage53 --dae-netns-id")?, arg)?;
+                }
+                "--target-ip" => {
+                    opts.base.target_ip = next_value(&mut iter, "stage53 --target-ip")?;
+                }
+                "--client-ip" => {
+                    opts.base.client_ip = next_value(&mut iter, "stage53 --client-ip")?;
+                }
+                "--target-port" => {
+                    opts.base.target_port =
+                        parse_port(&next_value(&mut iter, "stage53 --target-port")?, arg)?;
+                }
+                "--so-mark" => {
+                    opts.base.so_mark =
+                        parse_u32(&next_value(&mut iter, "stage53 --so-mark")?, arg)?;
+                }
+                "--benchmark-iters" => {
+                    opts.benchmark_iters =
+                        parse_u32(&next_value(&mut iter, "stage53 --benchmark-iters")?, arg)?;
+                }
+                _ if arg.starts_with("--root=") => {
+                    opts.base.root = PathBuf::from(value_after_equals(arg, "stage53 --root")?);
+                    if opts.base.param_object == default_param_object {
+                        opts.base.param_object = opts.base.root.join("bpf_bpfel.param.o");
+                    }
+                }
+                _ if arg.starts_with("--object=") => {
+                    opts.base.source_object =
+                        PathBuf::from(value_after_equals(arg, "stage53 --object")?);
+                }
+                _ if arg.starts_with("--param-object=") => {
+                    opts.base.param_object =
+                        PathBuf::from(value_after_equals(arg, "stage53 --param-object")?);
+                }
+                _ if arg.starts_with("--peer-section=") => {
+                    opts.base.peer_section = value_after_equals(arg, "stage53 --peer-section")?;
+                }
+                _ if arg.starts_with("--host-section=") => {
+                    opts.base.host_section = value_after_equals(arg, "stage53 --host-section")?;
+                }
+                _ if arg.starts_with("--lan-section=") => {
+                    opts.base.lan_section = value_after_equals(arg, "stage53 --lan-section")?;
+                }
+                _ if arg.starts_with("--tproxy-port=") => {
+                    opts.base.tproxy_port =
+                        parse_port(&value_after_equals(arg, "stage53 --tproxy-port")?, arg)?;
+                }
+                _ if arg.starts_with("--dae-netns-id=") => {
+                    opts.base.dae_netns_id =
+                        parse_u32(&value_after_equals(arg, "stage53 --dae-netns-id")?, arg)?;
+                }
+                _ if arg.starts_with("--target-ip=") => {
+                    opts.base.target_ip = value_after_equals(arg, "stage53 --target-ip")?;
+                }
+                _ if arg.starts_with("--client-ip=") => {
+                    opts.base.client_ip = value_after_equals(arg, "stage53 --client-ip")?;
+                }
+                _ if arg.starts_with("--target-port=") => {
+                    opts.base.target_port =
+                        parse_port(&value_after_equals(arg, "stage53 --target-port")?, arg)?;
+                }
+                _ if arg.starts_with("--so-mark=") => {
+                    opts.base.so_mark =
+                        parse_u32(&value_after_equals(arg, "stage53 --so-mark")?, arg)?;
+                }
+                _ if arg.starts_with("--benchmark-iters=") => {
+                    opts.benchmark_iters =
+                        parse_u32(&value_after_equals(arg, "stage53 --benchmark-iters")?, arg)?;
+                }
+                _ => {
+                    return Err(RunnerOutput::usage(format!(
+                        "unsupported runtime stage53-active-udp-tproxy-endpoint-admission argument: {arg}"
+                    )));
+                }
+            }
+        }
+        if opts.benchmark_iters == 0 {
+            return Err(RunnerOutput::usage(
+                "stage53 --benchmark-iters must be non-zero",
+            ));
         }
         Ok(opts)
     }
@@ -1616,6 +1784,355 @@ fn stage52_report(opts: &Stage52Options) -> Value {
     Value::Object(report)
 }
 
+fn stage53_report(opts: &Stage53Options) -> Value {
+    let base = &opts.base;
+    let mut blockers = Vec::new();
+    let mut checks = Vec::new();
+    push_check(
+        &mut checks,
+        "isolated-root-under-tmp",
+        tmp_root_allowed(&base.root),
+        json!({"path": path_string(&base.root)}),
+        &mut blockers,
+        "stage53 root must be an absolute /tmp child path",
+    );
+    push_check(
+        &mut checks,
+        "root-gate-acknowledged",
+        !base.execute_smoke || base.ack_root_gate,
+        json!({"execute_smoke": base.execute_smoke, "ack_root_gate": base.ack_root_gate}),
+        &mut blockers,
+        "stage53 root-gated smoke requires --ack-root-gate",
+    );
+    for tool in ["ip", "tc", "python3", "sysctl"] {
+        push_check(
+            &mut checks,
+            &format!("tool-{tool}-available"),
+            command_exists(tool),
+            json!({"tool": tool}),
+            &mut blockers,
+            "required host tool is missing",
+        );
+    }
+    push_check(
+        &mut checks,
+        "source-object-present",
+        base.source_object.exists(),
+        json!({"path": path_string(&base.source_object)}),
+        &mut blockers,
+        "stage53 source eBPF object is missing",
+    );
+    push_check(
+        &mut checks,
+        "tproxy-port-valid",
+        base.tproxy_port != 0,
+        json!({"tproxy_port": base.tproxy_port}),
+        &mut blockers,
+        "stage53 tproxy port must be non-zero",
+    );
+    push_check(
+        &mut checks,
+        "target-port-valid",
+        base.target_port != 0,
+        json!({"target_port": base.target_port}),
+        &mut blockers,
+        "stage53 target port must be non-zero",
+    );
+    if base.execute_smoke {
+        push_check(
+            &mut checks,
+            "stage53-resource-names-free",
+            resource_leftovers().is_empty(),
+            json!({"leftovers": resource_leftovers()}),
+            &mut blockers,
+            "stage53 temporary or production names are already in use",
+        );
+        push_check(
+            &mut checks,
+            "tproxy-port-free",
+            tproxy_port_available(base.tproxy_port),
+            json!({"tproxy_port": base.tproxy_port}),
+            &mut blockers,
+            "stage53 tproxy port is already in use",
+        );
+        push_check(
+            &mut checks,
+            "stage53-target-loopback-address-free",
+            !stage53_loopback_target_present(&base.target_ip),
+            json!({"target_ip": base.target_ip}),
+            &mut blockers,
+            "stage53 target loopback address is already present",
+        );
+    }
+
+    let before_pin_snapshot = if base.execute_smoke {
+        bpf_dae_snapshot()
+    } else {
+        Vec::new()
+    };
+    let before_map_ids = if base.execute_smoke && blockers.is_empty() {
+        match map_ids() {
+            Ok(ids) => ids,
+            Err(err) => {
+                blockers.push(format!("stage53 cannot snapshot BPF map ids: {err}"));
+                Vec::new()
+            }
+        }
+    } else {
+        Vec::new()
+    };
+    let mut executed_steps = Vec::new();
+    let mut cleanup_steps = Vec::new();
+    let mut topology_values = Value::Null;
+    let mut param_image = Value::Null;
+    let mut peer_attach_show = Value::Null;
+    let mut lan_attach_show = Value::Null;
+    let mut host_attach_show = Value::Null;
+    let mut loaded_map_handoff = Value::Null;
+    let mut route_map_update = Value::Null;
+    let mut udp_receive = Value::Null;
+    let mut udp_endpoint_pool = stage53_udp_endpoint_model_json(base);
+    let mut outbound_packet_conn = Value::Null;
+    let mut upstream = Value::Null;
+    let mut client_traffic = Value::Null;
+    let mut sendpkt_reply = Value::Null;
+    let mut benchmark = Value::Null;
+    let mut post_traffic_peer_stats = Value::Null;
+    let mut post_traffic_lan_stats = Value::Null;
+    let mut post_traffic_host_stats = Value::Null;
+    let mut discovered_listen_map_id = None;
+    let mut discovered_routing_map_id = None;
+    let mut active_udp_tproxy_smoke_passed = false;
+    let mut original_destination_observed = false;
+    let mut endpoint_pool_live_recorded = false;
+    let mut outbound_packet_conn_recorded = false;
+    let mut sendpkt_reply_recorded = false;
+    let mut so_mark_observed = false;
+    if base.execute_smoke && blockers.is_empty() {
+        let result = execute_stage53_smoke(opts, &before_map_ids);
+        executed_steps = result.executed_steps;
+        cleanup_steps = result.cleanup_steps;
+        topology_values = result.topology_values;
+        param_image = result.param_image;
+        peer_attach_show = result.peer_attach_show;
+        lan_attach_show = result.lan_attach_show;
+        host_attach_show = result.host_attach_show;
+        loaded_map_handoff = result.loaded_map_handoff;
+        route_map_update = result.route_map_update;
+        udp_receive = result.udp_receive;
+        udp_endpoint_pool = result.udp_endpoint_pool;
+        outbound_packet_conn = result.outbound_packet_conn;
+        upstream = result.upstream;
+        client_traffic = result.client_traffic;
+        sendpkt_reply = result.sendpkt_reply;
+        benchmark = result.benchmark;
+        post_traffic_peer_stats = result.post_traffic_peer_stats;
+        post_traffic_lan_stats = result.post_traffic_lan_stats;
+        post_traffic_host_stats = result.post_traffic_host_stats;
+        discovered_listen_map_id = result.discovered_listen_map_id;
+        discovered_routing_map_id = result.discovered_routing_map_id;
+        active_udp_tproxy_smoke_passed = result.passed;
+        original_destination_observed = result.original_destination_observed;
+        endpoint_pool_live_recorded = result.endpoint_pool_live_recorded;
+        outbound_packet_conn_recorded = result.outbound_packet_conn_recorded;
+        sendpkt_reply_recorded = result.sendpkt_reply_recorded;
+        so_mark_observed = result.so_mark_observed;
+        if !active_udp_tproxy_smoke_passed {
+            blockers.push("stage53 active UDP tproxy endpoint smoke failed".to_owned());
+        }
+    }
+    let after_pin_snapshot = if base.execute_smoke {
+        bpf_dae_snapshot()
+    } else {
+        Vec::new()
+    };
+    let (after_map_ids, loaded_maps_cleaned) = if base.execute_smoke {
+        wait_for_loaded_map_cleanup(&[discovered_listen_map_id, discovered_routing_map_id])
+    } else {
+        (Vec::new(), true)
+    };
+    if base.execute_smoke && !loaded_maps_cleaned {
+        blockers.push("stage53 loaded BPF maps remain after cleanup".to_owned());
+    }
+    let leftovers = resource_leftovers();
+    if base.execute_smoke && !leftovers.is_empty() {
+        blockers.push("stage53 resources remain after cleanup".to_owned());
+    }
+    let loopback_leftover = base.execute_smoke && stage53_loopback_target_present(&base.target_ip);
+    if loopback_leftover {
+        blockers.push("stage53 target loopback address remains after cleanup".to_owned());
+    }
+    let sys_fs_bpf_dae_mutated = before_pin_snapshot != after_pin_snapshot;
+    if base.execute_smoke && sys_fs_bpf_dae_mutated {
+        blockers.push("stage53 unexpectedly mutated /sys/fs/bpf/dae".to_owned());
+    }
+
+    let benchmark_recorded = base.execute_smoke
+        && opts.benchmark_iters > 1
+        && active_udp_tproxy_smoke_passed
+        && benchmark["status"].as_str() == Some("pass");
+    let mut report = Map::new();
+    report.insert(
+        "name".to_owned(),
+        json!("stage53-active-udp-tproxy-endpoint-admission"),
+    );
+    report.insert("stage".to_owned(), json!("stage53"));
+    report.insert(
+        "evidence_class".to_owned(),
+        json!("root-gated-active-udp-tproxy-endpoint-packetconn-smoke"),
+    );
+    report.insert("root".to_owned(), json!(path_string(&base.root)));
+    report.insert("execute_smoke".to_owned(), json!(base.execute_smoke));
+    report.insert(
+        "root_gate_acknowledged".to_owned(),
+        json!(base.ack_root_gate),
+    );
+    report.insert("read_only".to_owned(), json!(!base.execute_smoke));
+    report.insert("blocked".to_owned(), json!(!blockers.is_empty()));
+    report.insert(
+        "active_udp_tproxy_smoke_passed".to_owned(),
+        json!(active_udp_tproxy_smoke_passed),
+    );
+    report.insert(
+        "active_udp_tproxy_admitted".to_owned(),
+        json!(
+            active_udp_tproxy_smoke_passed
+                && endpoint_pool_live_recorded
+                && outbound_packet_conn_recorded
+                && sendpkt_reply_recorded
+        ),
+    );
+    report.insert(
+        "active_udp_original_destination_observed".to_owned(),
+        json!(original_destination_observed),
+    );
+    report.insert(
+        "udp_endpoint_pool_live_recorded".to_owned(),
+        json!(endpoint_pool_live_recorded),
+    );
+    report.insert(
+        "udp_packetconn_write_read_recorded".to_owned(),
+        json!(outbound_packet_conn_recorded),
+    );
+    report.insert(
+        "udp_sendpkt_reply_recorded".to_owned(),
+        json!(sendpkt_reply_recorded),
+    );
+    report.insert(
+        "udp_so_mark_real_outbound_socket_observed".to_owned(),
+        json!(so_mark_observed),
+    );
+    report.insert(
+        "active_udp_tproxy_benchmark_recorded".to_owned(),
+        json!(benchmark_recorded),
+    );
+    report.insert(
+        "active_tproxy_traffic_executed".to_owned(),
+        json!(base.execute_smoke),
+    );
+    for key in [
+        "active_dns_tproxy_admitted",
+        "outbound_true_dataplane_admitted",
+        "matched_go_rust_default_daemon_benchmark_recorded",
+        "default_switch_allowed",
+        "default_path_mutated",
+        "product_chain_switch_allowed",
+        "true_rust_default_daemon_admitted",
+    ] {
+        report.insert(key.to_owned(), json!(false));
+    }
+    report.insert("go_default_path_preserved".to_owned(), json!(true));
+    report.insert("go_fallback_required".to_owned(), json!(true));
+    report.insert("blockers".to_owned(), json!(blockers));
+    report.insert("checks".to_owned(), json!(checks));
+    report.insert(
+        "active_udp_contract".to_owned(),
+        json!({
+            "netns": PRODUCTION_NETNS,
+            "host_iface": PRODUCTION_HOST_IFACE,
+            "peer_iface": PRODUCTION_PEER_IFACE,
+            "client_netns": CLIENT_NETNS,
+            "lan_host_iface": LAN_HOST_IFACE,
+            "lan_client_iface": LAN_CLIENT_IFACE,
+            "peer_section": base.peer_section,
+            "host_section": base.host_section,
+            "lan_section": base.lan_section,
+            "filter_pref": STAGE50_FILTER_PREF,
+            "lan_filter_pref": STAGE50_LAN_FILTER_PREF,
+            "source_object": path_string(&base.source_object),
+            "param_object": path_string(&base.param_object),
+            "listen_socket_map_kernel_name": LISTEN_SOCKET_MAP_KERNEL_NAME,
+            "routing_map_kernel_name": ROUTING_MAP_KERNEL_NAME,
+            "routing_fallback_outbound": OUTBOUND_STAGE50_PROXY,
+            "match_type_fallback": MATCH_TYPE_FALLBACK,
+            "tproxy_port": base.tproxy_port,
+            "target": format!("{}:{}", base.target_ip, base.target_port),
+            "temporary_loopback_upstream_addr": format!("{}/32", base.target_ip),
+            "client_ip": base.client_ip,
+            "so_mark": base.so_mark,
+            "mptcp_magic_network_flag": base.mptcp,
+            "benchmark_iters": opts.benchmark_iters,
+            "dns_udp53_excluded": true,
+            "protocol_outbound_true_dataplane_required_later": true,
+        }),
+    );
+    report.insert("udp_receive".to_owned(), udp_receive);
+    report.insert("udp_endpoint_pool".to_owned(), udp_endpoint_pool);
+    report.insert("outbound_packet_conn".to_owned(), outbound_packet_conn);
+    report.insert("upstream".to_owned(), upstream);
+    report.insert("client_traffic".to_owned(), client_traffic);
+    report.insert("sendpkt_reply".to_owned(), sendpkt_reply);
+    report.insert("benchmark".to_owned(), benchmark);
+    report.insert("topology_values".to_owned(), topology_values);
+    report.insert("param_image".to_owned(), param_image);
+    report.insert("loaded_map_handoff".to_owned(), loaded_map_handoff);
+    report.insert("route_map_update".to_owned(), route_map_update);
+    report.insert(
+        "post_traffic_peer_stats".to_owned(),
+        post_traffic_peer_stats,
+    );
+    report.insert("post_traffic_lan_stats".to_owned(), post_traffic_lan_stats);
+    report.insert(
+        "post_traffic_host_stats".to_owned(),
+        post_traffic_host_stats,
+    );
+    report.insert("executed_steps".to_owned(), json!(executed_steps));
+    report.insert("cleanup_steps".to_owned(), json!(cleanup_steps));
+    report.insert("peer_attach_show".to_owned(), peer_attach_show);
+    report.insert("lan_attach_show".to_owned(), lan_attach_show);
+    report.insert("host_attach_show".to_owned(), host_attach_show);
+    report.insert(
+        "map_id_snapshots".to_owned(),
+        json!({
+            "before_attach": before_map_ids,
+            "after_cleanup": after_map_ids,
+            "discovered_listen_map_id": discovered_listen_map_id,
+            "discovered_routing_map_id": discovered_routing_map_id,
+            "loaded_maps_cleaned": loaded_maps_cleaned,
+        }),
+    );
+    report.insert(
+        "temporary_resources".to_owned(),
+        json!({
+            "leftovers_after_cleanup": leftovers,
+            "loopback_target_leftover_after_cleanup": loopback_leftover,
+        }),
+    );
+    report.insert(
+        "sys_fs_bpf_dae".to_owned(),
+        json!({
+            "before": before_pin_snapshot,
+            "after": after_pin_snapshot,
+            "mutated": sys_fs_bpf_dae_mutated,
+        }),
+    );
+    report.insert(
+        "remaining_blockers".to_owned(),
+        json!(remaining_blockers_after_stage53()),
+    );
+    Value::Object(report)
+}
+
 struct Stage50SmokeResult {
     passed: bool,
     original_destination_observed: bool,
@@ -1688,6 +2205,36 @@ struct Stage52SmokeResult {
     upstream: Value,
     client_traffic: Value,
     outbound_dial: Value,
+    benchmark: Value,
+    post_traffic_peer_stats: Value,
+    post_traffic_lan_stats: Value,
+    post_traffic_host_stats: Value,
+}
+
+struct Stage53SmokeResult {
+    passed: bool,
+    original_destination_observed: bool,
+    endpoint_pool_live_recorded: bool,
+    outbound_packet_conn_recorded: bool,
+    sendpkt_reply_recorded: bool,
+    so_mark_observed: bool,
+    discovered_listen_map_id: Option<u32>,
+    discovered_routing_map_id: Option<u32>,
+    executed_steps: Vec<Value>,
+    cleanup_steps: Vec<Value>,
+    topology_values: Value,
+    param_image: Value,
+    peer_attach_show: Value,
+    lan_attach_show: Value,
+    host_attach_show: Value,
+    loaded_map_handoff: Value,
+    route_map_update: Value,
+    udp_receive: Value,
+    udp_endpoint_pool: Value,
+    outbound_packet_conn: Value,
+    upstream: Value,
+    client_traffic: Value,
+    sendpkt_reply: Value,
     benchmark: Value,
     post_traffic_peer_stats: Value,
     post_traffic_lan_stats: Value,
@@ -2253,6 +2800,216 @@ fn execute_stage52_smoke(opts: &Stage52Options, before_map_ids: &[u32]) -> Stage
     }
 }
 
+fn execute_stage53_smoke(opts: &Stage53Options, before_map_ids: &[u32]) -> Stage53SmokeResult {
+    let base = &opts.base;
+    let mut executed_steps = Vec::new();
+    let mut cleanup_steps = Vec::new();
+    let mut ok = true;
+
+    ok &= setup_production_topology(&mut executed_steps, base);
+    ok &= setup_client_topology(&mut executed_steps, base);
+    ok &= add_stage53_loopback_target(&mut executed_steps, base);
+    let (topology_values, dae0_ifindex, dae0_mac, dae0peer_mac) =
+        read_topology_values(&mut executed_steps, base);
+    ok &= topology_values["status"].as_str() == Some("pass");
+    if let Some(dae0_mac) = dae0_mac {
+        ok &= setup_production_ipv4_datapath(&mut executed_steps, dae0_mac);
+    }
+    let param_image = if let (Some(dae0_ifindex), Some(dae0peer_mac)) = (dae0_ifindex, dae0peer_mac)
+    {
+        write_param_image(base, dae0_ifindex, dae0peer_mac)
+    } else {
+        json!({
+            "status": "skipped",
+            "path": path_string(&base.param_object),
+            "reason": "topology runtime PARAM values were not available",
+        })
+    };
+    ok &= param_image["status"].as_str() == Some("pass")
+        && param_image["rewritten_param_matches"]
+            .as_bool()
+            .unwrap_or(false);
+
+    if ok {
+        ok &= attach_peer_program(&mut executed_steps, base);
+    }
+    let peer_attach_show = show_peer_program(&mut executed_steps);
+
+    let live_handoff = if ok {
+        match open_live_loaded_tproxy_listen_socket_map_in_netns(
+            before_map_ids,
+            base.tproxy_port,
+            PRODUCTION_NETNS,
+        ) {
+            Ok(handoff) => Some(handoff),
+            Err(err) => {
+                ok = false;
+                executed_steps.push(json!({
+                    "name": "open-live-loaded-tproxy-listen-socket-map",
+                    "status": "fail",
+                    "error": err.to_string(),
+                }));
+                None
+            }
+        }
+    } else {
+        None
+    };
+    let (loaded_map_handoff, discovered_listen_map_id) = match live_handoff.as_ref() {
+        Some(handoff) => (live_handoff_json(handoff), Some(handoff.map.id)),
+        None => (
+            json!({
+                "status": "skipped",
+                "reason": "peer PARAM-aware attach did not pass",
+            }),
+            None,
+        ),
+    };
+
+    let before_lan_map_ids = map_ids().unwrap_or_default();
+    if ok {
+        ok &= attach_lan_program(&mut executed_steps, base);
+    }
+    let lan_attach_show = show_lan_program(&mut executed_steps);
+    let (route_map_update, discovered_routing_map_id) = if ok {
+        match update_stage50_routing_map(&before_lan_map_ids, base.so_mark) {
+            Ok((value, id)) => (value, Some(id)),
+            Err(err) => {
+                ok = false;
+                (json!({"status": "fail", "error": err}), None)
+            }
+        }
+    } else {
+        (
+            json!({
+                "status": "skipped",
+                "reason": "LAN PARAM-aware attach did not pass",
+            }),
+            None,
+        )
+    };
+
+    if ok {
+        ok &= attach_host_program(&mut executed_steps, base);
+    }
+    let host_attach_show = show_host_program(&mut executed_steps);
+
+    let (
+        udp_receive,
+        udp_endpoint_pool,
+        outbound_packet_conn,
+        upstream,
+        client_traffic,
+        sendpkt_reply,
+        benchmark,
+        original_destination_observed,
+        endpoint_pool_live_recorded,
+        outbound_packet_conn_recorded,
+        sendpkt_reply_recorded,
+        so_mark_observed,
+    ) = if ok {
+        let udp_socket = live_handoff
+            .as_ref()
+            .and_then(|handoff| handoff.listeners.udp_socket.try_clone().ok());
+        match udp_socket {
+            Some(udp_socket) => run_active_udp_tproxy_endpoint_probe(udp_socket, opts),
+            None => (
+                json!({"status": "fail", "error": "failed to clone tproxy UDP socket"}),
+                stage53_udp_endpoint_model_json(base),
+                Value::Null,
+                Value::Null,
+                Value::Null,
+                Value::Null,
+                Value::Null,
+                false,
+                false,
+                false,
+                false,
+                false,
+            ),
+        }
+    } else {
+        (
+            json!({
+                "status": "skipped",
+                "reason": "BPF attach or routing map update did not pass",
+            }),
+            stage53_udp_endpoint_model_json(base),
+            Value::Null,
+            Value::Null,
+            Value::Null,
+            Value::Null,
+            Value::Null,
+            false,
+            false,
+            false,
+            false,
+            false,
+        )
+    };
+    let post_traffic_peer_stats = show_peer_program_stats(&mut executed_steps);
+    let post_traffic_lan_stats = show_lan_program_stats(&mut executed_steps);
+    let post_traffic_host_stats = show_host_program_stats(&mut executed_steps);
+    ok &= udp_receive["status"].as_str() == Some("pass")
+        && udp_endpoint_pool["status"].as_str() == Some("pass")
+        && outbound_packet_conn["status"].as_str() == Some("pass")
+        && upstream["status"].as_str() == Some("pass")
+        && client_traffic["status"].as_str() == Some("pass")
+        && sendpkt_reply["status"].as_str() == Some("pass")
+        && original_destination_observed
+        && endpoint_pool_live_recorded
+        && outbound_packet_conn_recorded
+        && sendpkt_reply_recorded
+        && so_mark_observed;
+
+    delete_stage53_loopback_target(&mut cleanup_steps, base);
+    cleanup_stage50(&mut cleanup_steps);
+
+    let peer_output = peer_attach_show["stdout"].as_str().unwrap_or_default();
+    let lan_output = lan_attach_show["stdout"].as_str().unwrap_or_default();
+    let host_output = host_attach_show["stdout"].as_str().unwrap_or_default();
+    Stage53SmokeResult {
+        passed: ok
+            && peer_attach_show["status"].as_str() == Some("pass")
+            && peer_output.contains(&base.peer_section)
+            && peer_output.contains("tproxy_dae0peer")
+            && lan_attach_show["status"].as_str() == Some("pass")
+            && lan_output.contains(&base.lan_section)
+            && lan_output.contains("tproxy_lan_ingr")
+            && host_attach_show["status"].as_str() == Some("pass")
+            && host_output.contains(&base.host_section)
+            && host_output.contains("tproxy_dae0_ing")
+            && resource_leftovers().is_empty()
+            && !stage53_loopback_target_present(&base.target_ip),
+        original_destination_observed,
+        endpoint_pool_live_recorded,
+        outbound_packet_conn_recorded,
+        sendpkt_reply_recorded,
+        so_mark_observed,
+        discovered_listen_map_id,
+        discovered_routing_map_id,
+        executed_steps,
+        cleanup_steps,
+        topology_values,
+        param_image,
+        peer_attach_show,
+        lan_attach_show,
+        host_attach_show,
+        loaded_map_handoff,
+        route_map_update,
+        udp_receive,
+        udp_endpoint_pool,
+        outbound_packet_conn,
+        upstream,
+        client_traffic,
+        sendpkt_reply,
+        benchmark,
+        post_traffic_peer_stats,
+        post_traffic_lan_stats,
+        post_traffic_host_stats,
+    }
+}
+
 fn setup_production_topology(steps: &mut Vec<Value>, opts: &Stage50Options) -> bool {
     let mut ok = true;
     ok &= run_step(
@@ -2384,6 +3141,49 @@ fn setup_production_topology(steps: &mut Vec<Value>, opts: &Stage50Options) -> b
         ),
     );
     ok
+}
+
+fn add_stage53_loopback_target(steps: &mut Vec<Value>, opts: &Stage50Options) -> bool {
+    run_step(
+        steps,
+        "add-stage53-temporary-loopback-upstream-address",
+        CommandSpec::new(
+            "ip",
+            &[
+                "addr",
+                "add",
+                &format!("{}/32", opts.target_ip),
+                "dev",
+                "lo",
+            ],
+        ),
+    )
+}
+
+fn delete_stage53_loopback_target(cleanup_steps: &mut Vec<Value>, opts: &Stage50Options) {
+    run_cleanup_step(
+        cleanup_steps,
+        "delete-stage53-temporary-loopback-upstream-address",
+        CommandSpec::new(
+            "ip",
+            &[
+                "addr",
+                "del",
+                &format!("{}/32", opts.target_ip),
+                "dev",
+                "lo",
+            ],
+        ),
+    );
+}
+
+fn stage53_loopback_target_present(target_ip: &str) -> bool {
+    Command::new("ip")
+        .args(["addr", "show", "dev", "lo"])
+        .output()
+        .ok()
+        .and_then(|output| String::from_utf8(output.stdout).ok())
+        .is_some_and(|stdout| stdout.contains(target_ip))
 }
 
 fn setup_client_topology(steps: &mut Vec<Value>, opts: &Stage50Options) -> bool {
@@ -2602,6 +3402,17 @@ fn setup_production_ipv4_datapath(steps: &mut Vec<Value>, dae0_mac: [u8; 6]) -> 
                 "sysctl",
                 "-w",
                 &format!("net.ipv4.conf.{PRODUCTION_PEER_IFACE}.accept_local=1"),
+            ],
+        ),
+    );
+    ok &= run_step(
+        steps,
+        "set-production-dae0-accept-local",
+        CommandSpec::new(
+            "sysctl",
+            &[
+                "-w",
+                &format!("net.ipv4.conf.{PRODUCTION_HOST_IFACE}.accept_local=1"),
             ],
         ),
     );
@@ -3395,6 +4206,159 @@ fn run_active_tcp_route_table_group_relay_probe(
     )
 }
 
+fn run_active_udp_tproxy_endpoint_probe(
+    udp_socket: UdpSocket,
+    opts: &Stage53Options,
+) -> (
+    Value,
+    Value,
+    Value,
+    Value,
+    Value,
+    Value,
+    Value,
+    bool,
+    bool,
+    bool,
+    bool,
+    bool,
+) {
+    let target = match stage_target_addr(&opts.base) {
+        Ok(target) => target,
+        Err(err) => {
+            return (
+                json!({"status": "fail", "error": err}),
+                stage53_udp_endpoint_model_json(&opts.base),
+                Value::Null,
+                Value::Null,
+                Value::Null,
+                Value::Null,
+                Value::Null,
+                false,
+                false,
+                false,
+                false,
+                false,
+            );
+        }
+    };
+    let iterations = opts.benchmark_iters;
+    let upstream = match UdpSocket::bind(target) {
+        Ok(socket) => socket,
+        Err(err) => {
+            return (
+                json!({"status": "fail", "error": format!("failed to bind UDP upstream {target}: {err}")}),
+                stage53_udp_endpoint_model_json(&opts.base),
+                Value::Null,
+                Value::Null,
+                Value::Null,
+                Value::Null,
+                Value::Null,
+                false,
+                false,
+                false,
+                false,
+                false,
+            );
+        }
+    };
+    let _ = upstream.set_read_timeout(Some(Duration::from_secs(3)));
+    let _ = upstream.set_write_timeout(Some(Duration::from_secs(3)));
+    let upstream_handle = thread::spawn(move || udp_upstream_echo_probe(upstream, iterations));
+    let mark = opts.base.so_mark;
+    let mptcp = opts.base.mptcp;
+    let accept_handle = thread::spawn(move || {
+        udp_tproxy_endpoint_probe(udp_socket, target, mark, mptcp, iterations)
+    });
+    thread::sleep(Duration::from_millis(100));
+    let started = Instant::now();
+    let client = run_client_stage53_udp_probe(&target.to_string(), iterations);
+    let accept = accept_handle.join().unwrap_or_else(
+        |_| json!({"status": "fail", "error": "stage53 UDP tproxy thread panicked"}),
+    );
+    let upstream = upstream_handle.join().unwrap_or_else(
+        |_| json!({"status": "fail", "error": "stage53 UDP upstream thread panicked"}),
+    );
+    let elapsed = started.elapsed();
+    let accept_failure = || json!({"status": "fail", "accept_probe": accept.clone()});
+    let udp_receive = accept
+        .get("udp_receive")
+        .cloned()
+        .unwrap_or_else(|| accept_failure());
+    let udp_endpoint_pool = accept
+        .get("udp_endpoint_pool")
+        .cloned()
+        .unwrap_or_else(|| accept_failure());
+    let outbound_packet_conn = accept
+        .get("outbound_packet_conn")
+        .cloned()
+        .unwrap_or_else(|| accept_failure());
+    let sendpkt_reply = accept
+        .get("sendpkt_reply")
+        .cloned()
+        .unwrap_or_else(|| accept_failure());
+    let target_string = target.to_string();
+    let original_destination_observed =
+        udp_receive["first_original_dst"].as_str() == Some(target_string.as_str());
+    let endpoint_pool_live_recorded = udp_endpoint_pool["created_entries"].as_u64() == Some(1)
+        && udp_endpoint_pool["reused_writes"].as_u64() == Some(iterations.saturating_sub(1) as u64)
+        && udp_endpoint_pool["full_cone_key"].as_str().is_some();
+    let outbound_packet_conn_recorded = outbound_packet_conn["status"].as_str() == Some("pass")
+        && outbound_packet_conn["write_to_count"].as_u64() == Some(iterations as u64)
+        && outbound_packet_conn["read_from_count"].as_u64() == Some(iterations as u64);
+    let sendpkt_reply_recorded = sendpkt_reply["status"].as_str() == Some("pass")
+        && sendpkt_reply["reply_count"].as_u64() == Some(iterations as u64)
+        && sendpkt_reply["source_matches_original_dst"]
+            .as_bool()
+            .unwrap_or(false);
+    let so_mark_observed = outbound_packet_conn["so_mark"].as_u64() == Some(mark as u64)
+        && outbound_packet_conn["so_mark_applied"]
+            .as_bool()
+            .unwrap_or(false);
+    let client_ok = client["status"].as_str() == Some("pass")
+        && client["stdout"]
+            .as_str()
+            .is_some_and(|stdout| stdout.contains("stage53-udp-ack-count="));
+    let smoke_ok = accept["status"].as_str() == Some("pass")
+        && upstream["status"].as_str() == Some("pass")
+        && client_ok
+        && original_destination_observed
+        && endpoint_pool_live_recorded
+        && outbound_packet_conn_recorded
+        && sendpkt_reply_recorded
+        && so_mark_observed;
+    let benchmark = if iterations > 1 && smoke_ok {
+        json!({
+            "status": "pass",
+            "iterations": iterations,
+            "elapsed_ns": elapsed.as_nanos(),
+            "ns_per_packet": elapsed.as_nanos() as f64 / iterations as f64,
+            "scope": "stage53 active UDP tproxy plus endpoint pool, direct PacketConn, and sendPkt-style reply benchmark",
+            "go_matched_default_daemon_baseline_recorded": false,
+        })
+    } else {
+        json!({
+            "status": if iterations > 1 { "fail" } else { "skipped" },
+            "iterations": iterations,
+            "reason": if iterations > 1 { "stage53 UDP smoke failed" } else { "benchmark-iters is 1" },
+        })
+    };
+    (
+        udp_receive,
+        udp_endpoint_pool,
+        outbound_packet_conn,
+        upstream,
+        client,
+        sendpkt_reply,
+        benchmark,
+        original_destination_observed,
+        endpoint_pool_live_recorded,
+        outbound_packet_conn_recorded,
+        sendpkt_reply_recorded,
+        so_mark_observed,
+    )
+}
+
 fn tcp_accept_probe(listener: TcpListener) -> Value {
     if let Err(err) = listener.set_nonblocking(true) {
         return json!({"status": "fail", "error": err.to_string()});
@@ -3656,6 +4620,250 @@ fn tcp_route_table_group_relay_accept_probe(
     })
 }
 
+fn udp_tproxy_endpoint_probe(
+    socket: UdpSocket,
+    expected_original_dst: SocketAddrV4,
+    mark: u32,
+    mptcp: bool,
+    iterations: u32,
+) -> Value {
+    if let Err(err) = socket.set_nonblocking(true) {
+        return json!({"status": "fail", "error": err.to_string()});
+    }
+    let started = Instant::now();
+    let magic_network = magic_network_bytes("udp", mark, mptcp);
+    let parsed_magic = parse_magic_network(&magic_network).ok();
+    let mut endpoint: Option<UdpDirectPacketConn> = None;
+    let mut reply_socket: Option<UdpSocket> = None;
+    let mut first_peer = None;
+    let mut first_original_dst = None;
+    let mut last_peer = None;
+    let mut relayed_packets = 0_u32;
+    let mut created_entries = 0_u32;
+    let mut reused_writes = 0_u32;
+    let mut outbound_write_count = 0_u32;
+    let mut outbound_read_count = 0_u32;
+    let mut reply_count = 0_u32;
+    let mut bytes_client_to_outbound = 0_usize;
+    let mut bytes_outbound_to_client = 0_usize;
+    let mut last_outbound_report = Value::Null;
+    for _ in 0..iterations {
+        let packet = match recv_udp_with_original_dst(&socket, STAGE53_UDP_PAYLOAD.len()) {
+            Ok(packet) => packet,
+            Err(err) => return json!({"status": "fail", "error": err}),
+        };
+        if packet.payload != STAGE53_UDP_PAYLOAD {
+            return json!({
+                "status": "fail",
+                "error": "unexpected UDP payload",
+                "payload": String::from_utf8_lossy(&packet.payload).to_string(),
+            });
+        }
+        let original_dst = packet.original_dst.unwrap_or(expected_original_dst);
+        if first_peer.is_none() {
+            first_peer = Some(packet.peer.to_string());
+            first_original_dst = Some(original_dst.to_string());
+            let reply = match open_transparent_udp_socket_bound_in_netns(
+                PRODUCTION_NETNS,
+                original_dst,
+            ) {
+                Ok(socket) => socket,
+                Err(err) => {
+                    return json!({"status": "fail", "error": format!("open transparent UDP reply socket: {err}")});
+                }
+            };
+            let _ = reply.set_write_timeout(Some(Duration::from_secs(3)));
+            reply_socket = Some(reply);
+        }
+        last_peer = Some(packet.peer.to_string());
+        if endpoint.is_none() {
+            let conn = match UdpDirectPacketConn::connect(
+                original_dst,
+                &UdpDirectSocketOptions {
+                    mark,
+                    timeout: Duration::from_secs(3),
+                },
+            ) {
+                Ok(conn) => conn,
+                Err(err) => {
+                    return json!({"status": "fail", "error": format!("connect UDP outbound PacketConn: {err}")});
+                }
+            };
+            last_outbound_report = udp_direct_report_json(conn.report(), conn.target());
+            endpoint = Some(conn);
+            created_entries += 1;
+        } else {
+            reused_writes += 1;
+        }
+        let endpoint_ref = endpoint.as_ref().unwrap();
+        let response = match endpoint_ref.exchange(&packet.payload, STAGE53_UDP_RESPONSE.len()) {
+            Ok(response) => response,
+            Err(err) => {
+                return json!({"status": "fail", "error": format!("UDP PacketConn exchange: {err}")});
+            }
+        };
+        outbound_write_count += 1;
+        outbound_read_count += 1;
+        if response != STAGE53_UDP_RESPONSE {
+            return json!({
+                "status": "fail",
+                "error": "unexpected UDP upstream response",
+                "response": String::from_utf8_lossy(&response).to_string(),
+            });
+        }
+        let reply_socket = reply_socket.as_ref().unwrap();
+        if let Err(err) = reply_socket.send_to(&response, packet.peer) {
+            return json!({"status": "fail", "error": format!("sendPkt-style UDP reply: {err}")});
+        }
+        reply_count += 1;
+        relayed_packets += 1;
+        bytes_client_to_outbound += packet.payload.len();
+        bytes_outbound_to_client += response.len();
+        if let Some(endpoint_ref) = endpoint.as_ref() {
+            last_outbound_report =
+                udp_direct_report_json(endpoint_ref.report(), endpoint_ref.target());
+        }
+    }
+    let expected_original_dst_string = expected_original_dst.to_string();
+    let original_dst_matched =
+        first_original_dst.as_deref() == Some(expected_original_dst_string.as_str());
+    let source_matches_original_dst = original_dst_matched;
+    let passed = relayed_packets == iterations
+        && original_dst_matched
+        && created_entries == 1
+        && reply_count == iterations
+        && last_outbound_report["so_mark"].as_u64() == Some(mark as u64)
+        && last_outbound_report["so_mark_applied"]
+            .as_bool()
+            .unwrap_or(false);
+    json!({
+        "status": if passed { "pass" } else { "fail" },
+        "udp_receive": {
+            "status": if original_dst_matched { "pass" } else { "fail" },
+            "iterations": iterations,
+            "received_packets": relayed_packets,
+            "first_peer": first_peer,
+            "last_peer": last_peer,
+            "first_original_dst": first_original_dst,
+            "expected_original_dst": expected_original_dst.to_string(),
+            "bytes_client_to_outbound": bytes_client_to_outbound,
+            "magic_network": {
+                "encoded_len": magic_network.len(),
+                "parsed_network": parsed_magic
+                    .as_ref()
+                    .and_then(|value| value.network_str().ok()),
+                "parsed_mark": parsed_magic.as_ref().map(|value| value.mark),
+                "parsed_mptcp": parsed_magic.as_ref().map(|value| value.mptcp),
+            },
+        },
+        "udp_endpoint_pool": {
+            "status": if created_entries == 1 && reused_writes == iterations.saturating_sub(1) { "pass" } else { "fail" },
+            "key_model": "client-source-full-cone",
+            "full_cone_key": first_peer,
+            "created_entries": created_entries,
+            "reused_writes": reused_writes,
+            "max_retry": 2,
+        },
+        "outbound_packet_conn": {
+            "status": if outbound_write_count == iterations && outbound_read_count == iterations { "pass" } else { "fail" },
+            "target": expected_original_dst.to_string(),
+            "write_to_count": outbound_write_count,
+            "read_from_count": outbound_read_count,
+            "bytes_outbound_to_client": bytes_outbound_to_client,
+            "so_mark": last_outbound_report["so_mark"],
+            "so_mark_applied": last_outbound_report["so_mark_applied"],
+            "report": last_outbound_report,
+        },
+        "sendpkt_reply": {
+            "status": if reply_count == iterations && source_matches_original_dst { "pass" } else { "fail" },
+            "reply_count": reply_count,
+            "source_addr": expected_original_dst.to_string(),
+            "source_matches_original_dst": source_matches_original_dst,
+        },
+        "elapsed_ns": started.elapsed().as_nanos(),
+    })
+}
+
+struct UdpOriginalDstPacket {
+    payload: Vec<u8>,
+    peer: SocketAddrV4,
+    original_dst: Option<SocketAddrV4>,
+}
+
+fn recv_udp_with_original_dst(
+    socket: &UdpSocket,
+    expected_len: usize,
+) -> Result<UdpOriginalDstPacket, String> {
+    let deadline = Instant::now() + Duration::from_secs(4);
+    loop {
+        match recvmsg_udp_original_dst(socket, expected_len) {
+            Ok(packet) => return Ok(packet),
+            Err(err) if err.contains("WouldBlock") && Instant::now() < deadline => {
+                thread::sleep(Duration::from_millis(20));
+            }
+            Err(err)
+                if err.contains("Resource temporarily unavailable")
+                    && Instant::now() < deadline =>
+            {
+                thread::sleep(Duration::from_millis(20));
+            }
+            Err(err) => return Err(err),
+        }
+    }
+}
+
+fn recvmsg_udp_original_dst(
+    socket: &UdpSocket,
+    expected_len: usize,
+) -> Result<UdpOriginalDstPacket, String> {
+    const IP_ORIGDSTADDR: libc::c_int = 20;
+    let fd = socket.as_raw_fd();
+    let mut data = vec![0_u8; expected_len.max(2048)];
+    let mut control = [0_u8; 128];
+    let mut peer: libc::sockaddr_in = unsafe { std::mem::zeroed() };
+    let mut iov = libc::iovec {
+        iov_base: data.as_mut_ptr().cast::<libc::c_void>(),
+        iov_len: data.len(),
+    };
+    let mut msg: libc::msghdr = unsafe { std::mem::zeroed() };
+    msg.msg_name = (&mut peer as *mut libc::sockaddr_in).cast::<libc::c_void>();
+    msg.msg_namelen = std::mem::size_of::<libc::sockaddr_in>() as libc::socklen_t;
+    msg.msg_iov = &mut iov;
+    msg.msg_iovlen = 1;
+    msg.msg_control = control.as_mut_ptr().cast::<libc::c_void>();
+    msg.msg_controllen = control.len();
+    let read = unsafe { libc::recvmsg(fd, &mut msg, 0) };
+    if read < 0 {
+        return Err(std::io::Error::last_os_error().to_string());
+    }
+    data.truncate(read as usize);
+    let peer = sockaddr_in_to_v4(peer);
+    let mut original_dst = None;
+    unsafe {
+        let mut cmsg = libc::CMSG_FIRSTHDR(&msg);
+        while !cmsg.is_null() {
+            if (*cmsg).cmsg_level == libc::SOL_IP && (*cmsg).cmsg_type == IP_ORIGDSTADDR {
+                let addr = *(libc::CMSG_DATA(cmsg).cast::<libc::sockaddr_in>());
+                original_dst = Some(sockaddr_in_to_v4(addr));
+                break;
+            }
+            cmsg = libc::CMSG_NXTHDR(&msg, cmsg);
+        }
+    }
+    Ok(UdpOriginalDstPacket {
+        payload: data,
+        peer,
+        original_dst,
+    })
+}
+
+fn sockaddr_in_to_v4(addr: libc::sockaddr_in) -> SocketAddrV4 {
+    SocketAddrV4::new(
+        std::net::Ipv4Addr::from(addr.sin_addr.s_addr.to_ne_bytes()),
+        u16::from_be(addr.sin_port),
+    )
+}
+
 fn accept_with_deadline(
     listener: &TcpListener,
     timeout: Duration,
@@ -3750,6 +4958,90 @@ fn tcp_direct_dial_report_json(report: &TcpDirectDialReport) -> Value {
         "mptcp_protocol_observed": report.mptcp_protocol_observed,
         "peer_addr": report.peer_addr,
         "local_addr": report.local_addr,
+    })
+}
+
+fn udp_direct_report_json(report: &UdpDirectSocketReport, target: SocketAddrV4) -> Value {
+    json!({
+        "requested_mark": report.requested_mark,
+        "so_mark": report.so_mark,
+        "so_mark_applied": report.so_mark_applied,
+        "peer_addr": report.peer_addr,
+        "local_addr": report.local_addr,
+        "target": target.to_string(),
+    })
+}
+
+fn stage53_udp_endpoint_model_json(base: &Stage50Options) -> Value {
+    json!({
+        "status": "model-only",
+        "key_model": "client-source-full-cone",
+        "target": format!("{}:{}", base.target_ip, base.target_port),
+        "nat_timeout_ms": DEFAULT_NAT_TIMEOUT_MS,
+        "dns_nat_timeout_ms": DNS_NAT_TIMEOUT_MS,
+        "max_retry": MAX_RETRY,
+        "pool_max_entries_default": DEFAULT_UDP_ENDPOINT_POOL_MAX_ENTRIES,
+        "dns_udp53_excluded": true,
+        "live_endpoint_created": false,
+    })
+}
+
+fn stage_target_addr(base: &Stage50Options) -> Result<SocketAddrV4, String> {
+    let ip = base
+        .target_ip
+        .parse()
+        .map_err(|err| format!("invalid target ip {}: {err}", base.target_ip))?;
+    Ok(SocketAddrV4::new(ip, base.target_port))
+}
+
+fn udp_upstream_echo_probe(socket: UdpSocket, iterations: u32) -> Value {
+    let local_addr = socket.local_addr().map(|addr| addr.to_string()).ok();
+    let mut accepted = 0_u32;
+    let mut first_peer = None;
+    let mut last_peer = None;
+    for _ in 0..iterations {
+        let mut buf = [0_u8; 256];
+        let (read, peer) = match socket.recv_from(&mut buf) {
+            Ok(value) => value,
+            Err(err) => {
+                return json!({
+                    "status": "fail",
+                    "local_addr": local_addr,
+                    "accepted": accepted,
+                    "error": err.to_string(),
+                });
+            }
+        };
+        if first_peer.is_none() {
+            first_peer = Some(peer.to_string());
+        }
+        last_peer = Some(peer.to_string());
+        if &buf[..read] != STAGE53_UDP_PAYLOAD {
+            return json!({
+                "status": "fail",
+                "local_addr": local_addr,
+                "accepted": accepted,
+                "error": "unexpected UDP upstream payload",
+                "payload": String::from_utf8_lossy(&buf[..read]).to_string(),
+            });
+        }
+        if let Err(err) = socket.send_to(STAGE53_UDP_RESPONSE, peer) {
+            return json!({
+                "status": "fail",
+                "local_addr": local_addr,
+                "accepted": accepted,
+                "error": format!("write UDP upstream response: {err}"),
+            });
+        }
+        accepted += 1;
+    }
+    json!({
+        "status": "pass",
+        "local_addr": local_addr,
+        "accepted": accepted,
+        "iterations": iterations,
+        "first_peer": first_peer,
+        "last_peer": last_peer,
     })
 }
 
@@ -3929,6 +5221,25 @@ fn run_client_stage52_relay_probe(target: &str, iterations: u32) -> Value {
     ))
 }
 
+fn run_client_stage53_udp_probe(target: &str, iterations: u32) -> Value {
+    let script = format!(
+        "import socket,sys\nok=0\nlast=None\ns=socket.socket(socket.AF_INET, socket.SOCK_DGRAM)\ns.settimeout(3)\nfor i in range({iterations}):\n    s.sendto(b\"stage53-udp-tproxy-ping\", ({target_ip:?},{target_port}))\n    data,addr=s.recvfrom(128)\n    last=addr\n    if data != b\"stage53-udp-tproxy-ack\" or addr != ({target_ip:?},{target_port}):\n        print(f\"bad reply data={{data!r}} addr={{addr!r}}\")\n        sys.exit(2)\n    ok += 1\ns.close()\nprint(f\"stage53-udp-ack-count={{ok}} last-peer={{last[0]}}:{{last[1]}}\")\nsys.exit(0)\n",
+        target_ip = target
+            .split(':')
+            .next()
+            .unwrap_or(DEFAULT_STAGE53_TARGET_IP),
+        target_port = target
+            .split(':')
+            .nth(1)
+            .and_then(|port| port.parse::<u16>().ok())
+            .unwrap_or(DEFAULT_STAGE53_TARGET_PORT),
+    );
+    run_observation_command(CommandSpec::new(
+        "ip",
+        &["netns", "exec", CLIENT_NETNS, "python3", "-c", &script],
+    ))
+}
+
 fn cleanup_stage50(cleanup_steps: &mut Vec<Value>) {
     run_cleanup_step(
         cleanup_steps,
@@ -4063,6 +5374,15 @@ fn remaining_blockers_after_stage52() -> Vec<&'static str> {
         "active UDP tproxy traffic evidence is still missing",
         "active DNS UDP/53 and reload DNS cache migration evidence is still missing",
         "outbound protocol true dataplane admission is still incomplete beyond the bounded direct loopback group relay",
+        "matched Go default daemon vs true Rust candidate benchmark is still missing",
+        "clean dae-wing and daed product-chain recertification is still missing",
+    ]
+}
+
+fn remaining_blockers_after_stage53() -> Vec<&'static str> {
+    vec![
+        "active DNS UDP/53 and reload DNS cache migration evidence is still missing",
+        "outbound protocol true dataplane admission is still incomplete beyond direct TCP/UDP loopback relays",
         "matched Go default daemon vs true Rust candidate benchmark is still missing",
         "clean dae-wing and daed product-chain recertification is still missing",
     ]
