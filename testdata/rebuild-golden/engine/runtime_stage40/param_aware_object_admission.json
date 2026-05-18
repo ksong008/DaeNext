@@ -1,0 +1,184 @@
+{
+  "active_tproxy_traffic_allowed": false,
+  "active_tproxy_traffic_executed": false,
+  "blocked": true,
+  "blockers": [
+    "stage40 PARAM-aware Rust object loader is not implemented/proven"
+  ],
+  "checks": [
+    {
+      "blocker": null,
+      "detail": {
+        "path": "control/bpf_bpfel.o"
+      },
+      "name": "real-dae-object-present",
+      "status": "pass"
+    },
+    {
+      "blocker": null,
+      "detail": {
+        "detail": "362: 0000000000000000    24 OBJECT  GLOBAL DEFAULT    36 PARAM",
+        "found": true,
+        "size": 24,
+        "status": "found",
+        "symbol": "PARAM",
+        "tool": "llvm-readelf"
+      },
+      "name": "object-param-symbol-present",
+      "status": "pass"
+    },
+    {
+      "blocker": null,
+      "detail": {
+        "expected_size": 24,
+        "observed_size": 24,
+        "symbol": "PARAM"
+      },
+      "name": "object-param-symbol-size-matches",
+      "status": "pass"
+    },
+    {
+      "blocker": null,
+      "detail": {
+        "control_plane_pid_nonzero": true,
+        "dae0_ifindex_nonzero": true,
+        "dae0peer_mac_nonzero": true,
+        "dae_netns_id_nonzero": true,
+        "tproxy_port_nonzero": true
+      },
+      "name": "runtime-param-values-present",
+      "status": "pass"
+    },
+    {
+      "blocker": null,
+      "detail": {
+        "reason": "tc filter add obj loads the object but does not set CollectionSpec.Variables[PARAM] before load",
+        "tc_filter_obj_sets_param": false
+      },
+      "name": "direct-tc-object-loader-rejected-for-active-traffic",
+      "status": "pass"
+    },
+    {
+      "blocker": "stage40 PARAM-aware Rust object loader is not implemented/proven",
+      "detail": {
+        "implemented_in_rust": false,
+        "required": "set PARAM before LoadAndAssign/full object load"
+      },
+      "name": "rust-param-aware-loader-proven",
+      "status": "fail"
+    },
+    {
+      "blocker": null,
+      "detail": {
+        "blockers": [],
+        "path": null,
+        "required_for_admission": false,
+        "status": "not-provided",
+        "transparent_listener_handoff_smoke_passed": false
+      },
+      "name": "stage39-transparent-listener-report-passed",
+      "status": "pass"
+    }
+  ],
+  "default_path_mutated": false,
+  "default_switch_allowed": false,
+  "direct_tc_object_loader_rejected_for_active_traffic": true,
+  "evidence_class": "param-aware-real-bpf-object-loader-admission-gate",
+  "go_default_path_preserved": true,
+  "go_fallback_required": true,
+  "live_candidate_run_allowed": false,
+  "name": "stage40-param-aware-object-admission",
+  "object_contract": {
+    "expected_symbol_size": 24,
+    "go_reference": "control/bpf_utils.go:fullLoadBpfObjects",
+    "kernel_reference": "control/kern/tproxy.c:struct dae_param",
+    "object_path": "control/bpf_bpfel.o",
+    "required_loader_sequence": [
+      "setup dae netns",
+      "read dae0 ifindex, dae netns id, and dae0peer MAC",
+      "pack PARAM with network-order tproxy_port",
+      "set CollectionSpec.Variables[PARAM] before object load",
+      "load and assign the BPF object",
+      "attach tc/cgroup programs"
+    ],
+    "required_symbol": "PARAM",
+    "symbol_probe": {
+      "detail": "362: 0000000000000000    24 OBJECT  GLOBAL DEFAULT    36 PARAM",
+      "found": true,
+      "size": 24,
+      "status": "found",
+      "symbol": "PARAM",
+      "tool": "llvm-readelf"
+    }
+  },
+  "param_aware_object_load_admitted": false,
+  "param_aware_object_load_executed": false,
+  "param_payload": {
+    "control_plane_pid": 77,
+    "dae0_ifindex": 8,
+    "dae0peer_mac": "02:00:00:00:00:28",
+    "dae_netns_id": 9,
+    "has_bpf_get_current_task": true,
+    "padding": 0,
+    "runtime_values_present": true,
+    "rust_layout_size": 24,
+    "symbol": "PARAM",
+    "tproxy_port_big_endian": 14640,
+    "tproxy_port_host": 12345,
+    "values_source": "representative-stage40-defaults-or-explicit-cli-args"
+  },
+  "param_requirements": [
+    {
+      "field": "tproxy_port",
+      "requirement": "must be written as network-order u16 widened to u32 before BPF load",
+      "source": "loadBpfOptions.BigEndianTproxyPort"
+    },
+    {
+      "field": "control_plane_pid",
+      "requirement": "must identify the userspace control-plane process before BPF load",
+      "source": "os.Getpid() / Rust daemon pid"
+    },
+    {
+      "field": "dae0_ifindex",
+      "requirement": "must be read after dae netns setup and before tc attach",
+      "source": "netns.Dae0().Attrs().Index"
+    },
+    {
+      "field": "dae_netns_id",
+      "requirement": "must be read from the created dae netns before BPF load",
+      "source": "netns.NetnsID()"
+    },
+    {
+      "field": "dae0peer_mac",
+      "requirement": "must be the six-byte peer MAC used by L2 redirect rewrite",
+      "source": "netns.Dae0Peer().Attrs().HardwareAddr"
+    },
+    {
+      "field": "has_bpf_get_current_task",
+      "requirement": "must reflect both cgroup helper probes before BPF load",
+      "source": "features.HaveProgramHelper(..., bpf_get_current_task)"
+    }
+  ],
+  "product_chain_switch_allowed": false,
+  "production_name_dae0_dae0peer_attach_executed": false,
+  "read_only": true,
+  "real_loaded_object_param_rewrite_executed": false,
+  "remaining_blockers": [
+    "PARAM-aware Rust BPF object loader is not implemented/proven",
+    "direct tc filter obj load cannot rewrite PARAM before BPF load",
+    "active tproxy TCP UDP DNS traffic evidence is still missing",
+    "outbound true dataplane admission is still incomplete",
+    "matched Go default daemon vs true Rust candidate benchmark is still missing",
+    "clean dae-wing and daed product-chain recertification is still missing"
+  ],
+  "rust_param_aware_loader_proven": false,
+  "stage": "stage40",
+  "stage39_report": {
+    "blockers": [],
+    "passed": false,
+    "path": null,
+    "status": "not-provided"
+  },
+  "transparent_listener_handoff_smoke_passed": false,
+  "true_rust_default_daemon_admitted": false
+}

@@ -25,6 +25,7 @@ use crate::runtime_stage35_36_gates::{
 use crate::runtime_stage37_gate::run_stage37_loaded_listen_socket_map_admission;
 use crate::runtime_stage38_gate::run_stage38_production_dae_attach_admission;
 use crate::runtime_stage39_gate::run_stage39_transparent_listener_admission;
+use crate::runtime_stage40_gate::run_stage40_param_aware_object_admission;
 
 pub(crate) fn run_runtime(args: &[String]) -> RunnerOutput {
     match args.first().map(String::as_str) {
@@ -60,6 +61,9 @@ pub(crate) fn run_runtime(args: &[String]) -> RunnerOutput {
         }
         Some("stage39-transparent-listener-admission") => {
             run_stage39_transparent_listener_admission(&args[1..])
+        }
+        Some("stage40-param-aware-object-admission") => {
+            run_stage40_param_aware_object_admission(&args[1..])
         }
         Some(subcommand) => {
             RunnerOutput::usage(format!("unsupported runtime subcommand: {subcommand}"))
