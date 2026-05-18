@@ -9,6 +9,7 @@ pub mod protocol_dataplane;
 pub mod release;
 pub mod stage23_completion;
 pub mod stage24_product_gate;
+pub mod stage25_execution_queue;
 pub mod systemd;
 pub mod true_daemon_admission;
 
@@ -41,6 +42,10 @@ pub use stage23_completion::{
 };
 pub use stage24_product_gate::{
     Stage24ProductGateContract, Stage24ProductGateRow, stage24_product_gate_contract,
+};
+pub use stage25_execution_queue::{
+    Stage25TrueDaemonExecutionQueueContract, Stage25TrueDaemonExecutionQueueRow,
+    stage25_true_daemon_execution_queue_contract,
 };
 pub use systemd::{SystemdContract, systemd_contract};
 pub use true_daemon_admission::{
