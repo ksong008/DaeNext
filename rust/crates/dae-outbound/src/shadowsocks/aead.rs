@@ -83,6 +83,35 @@ pub fn tcp_exchange(
     salts: AeadTcpSalts<'_>,
     timeout: Duration,
 ) -> Result<ShadowsocksAeadTcpExchangeReport, OutboundError> {
+    let mut stream =
+        TcpStream::connect(server).map_err(|err| OutboundError::BadShadowsocks(err.to_string()))?;
+    stream
+        .set_read_timeout(Some(timeout))
+        .map_err(|err| OutboundError::BadShadowsocks(err.to_string()))?;
+    stream
+        .set_write_timeout(Some(timeout))
+        .map_err(|err| OutboundError::BadShadowsocks(err.to_string()))?;
+
+    tcp_exchange_over_stream(
+        &mut stream,
+        server,
+        cipher,
+        password,
+        target,
+        payload,
+        salts,
+    )
+}
+
+pub fn tcp_exchange_over_stream(
+    stream: &mut TcpStream,
+    server: &str,
+    cipher: &str,
+    password: &str,
+    target: &str,
+    payload: &[u8],
+    salts: AeadTcpSalts<'_>,
+) -> Result<ShadowsocksAeadTcpExchangeReport, OutboundError> {
     let spec = cipher_spec(cipher)?;
     validate_salt_len("client", salts.client, spec.salt_len)?;
     validate_salt_len("server", salts.server, spec.salt_len)?;
@@ -92,24 +121,15 @@ pub fn tcp_exchange(
     request_payload.extend_from_slice(payload);
     let request = encode_client_initial(cipher, password, salts.client, &request_payload)?;
 
-    let mut stream =
-        TcpStream::connect(server).map_err(|err| OutboundError::BadShadowsocks(err.to_string()))?;
-    stream
-        .set_read_timeout(Some(timeout))
-        .map_err(|err| OutboundError::BadShadowsocks(err.to_string()))?;
-    stream
-        .set_write_timeout(Some(timeout))
-        .map_err(|err| OutboundError::BadShadowsocks(err.to_string()))?;
     stream
         .write_all(&request)
         .map_err(|err| OutboundError::BadShadowsocks(err.to_string()))?;
-
     let mut server_salt = vec![0_u8; spec.salt_len];
     stream
         .read_exact(&mut server_salt)
         .map_err(|err| OutboundError::BadShadowsocks(err.to_string()))?;
     let mut decoder = AeadStreamCodec::new(cipher, password, &server_salt)?;
-    let echoed_payload = read_encrypted_chunk(&mut stream, &mut decoder)?;
+    let echoed_payload = read_encrypted_chunk(stream, &mut decoder)?;
 
     Ok(ShadowsocksAeadTcpExchangeReport {
         server: server.to_owned(),
