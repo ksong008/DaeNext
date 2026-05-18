@@ -2162,6 +2162,94 @@ fn stage53_runtime_admission_blocks_unsafe_execution() {
 }
 
 #[test]
+fn stage54_runtime_admission_fixture_matches() {
+    let fixture = load("engine/runtime_stage54/active_dns_tproxy_cache_admission.json");
+    let output = run_with_args(["runtime", "stage54-active-dns-tproxy-cache-admission"]);
+    assert_eq!(output.exit_code, 0, "{}", output.stdout);
+    assert_eq!(output.stderr, "");
+    let json: Value = serde_json::from_str(&output.stdout).unwrap();
+    assert_eq!(
+        json["name"].as_str().unwrap(),
+        fixture["name"].as_str().unwrap()
+    );
+    assert_eq!(
+        json["stage"].as_str().unwrap(),
+        fixture["stage"].as_str().unwrap()
+    );
+    assert_eq!(
+        json["evidence_class"].as_str().unwrap(),
+        fixture["evidence_class"].as_str().unwrap()
+    );
+    assert!(!json["execute_smoke"].as_bool().unwrap());
+    assert!(json["read_only"].as_bool().unwrap());
+    assert!(!json["active_dns_tproxy_smoke_passed"].as_bool().unwrap());
+    assert!(!json["active_dns_tproxy_admitted"].as_bool().unwrap());
+    assert!(
+        !json["active_dns_original_destination_observed"]
+            .as_bool()
+            .unwrap()
+    );
+    assert!(!json["dns_controller_path_recorded"].as_bool().unwrap());
+    assert!(!json["dns_upstream_query_recorded"].as_bool().unwrap());
+    assert!(!json["dns_cache_restore_recorded"].as_bool().unwrap());
+    assert!(
+        !json["domain_routing_owner_migration_recorded"]
+            .as_bool()
+            .unwrap()
+    );
+    assert_eq!(
+        json["active_dns_contract"]["dns_target"].as_str().unwrap(),
+        fixture["active_dns_contract"]["dns_target"]
+            .as_str()
+            .unwrap()
+    );
+    assert_eq!(
+        json["active_dns_contract"]["dns_upstream"]
+            .as_str()
+            .unwrap(),
+        fixture["active_dns_contract"]["dns_upstream"]
+            .as_str()
+            .unwrap()
+    );
+    assert!(
+        json["dns_cache"]["cache_key_includes_qclass"]
+            .as_bool()
+            .unwrap()
+    );
+    assert!(
+        json["dns_cache"]["packed_response_id_rewrite_required"]
+            .as_bool()
+            .unwrap()
+    );
+    assert!(json["active_udp_tproxy_admitted"].as_bool().unwrap());
+    assert!(!json["outbound_true_dataplane_admitted"].as_bool().unwrap());
+    assert!(!json["default_switch_allowed"].as_bool().unwrap());
+    assert!(!json["product_chain_switch_allowed"].as_bool().unwrap());
+    assert!(!json["true_rust_default_daemon_admitted"].as_bool().unwrap());
+    assert!(json["go_default_path_preserved"].as_bool().unwrap());
+    assert!(json["go_fallback_required"].as_bool().unwrap());
+    assert_eq!(
+        json["remaining_blockers"].as_array().unwrap().len(),
+        fixture["remaining_blockers"].as_array().unwrap().len()
+    );
+}
+
+#[test]
+fn stage54_runtime_admission_blocks_unsafe_execution() {
+    let blocked = run_with_args([
+        "runtime",
+        "stage54-active-dns-tproxy-cache-admission",
+        "--execute-smoke",
+    ]);
+    assert_eq!(blocked.exit_code, 1);
+    assert!(
+        blocked
+            .stdout
+            .contains("stage54 root-gated smoke requires --ack-root-gate")
+    );
+}
+
+#[test]
 fn optin_runner_userspace_commands_match_engine_fixture() {
     let fixture = load("engine/userspace_runtime/optin_contract.json");
 
