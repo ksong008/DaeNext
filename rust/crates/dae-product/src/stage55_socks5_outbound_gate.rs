@@ -1,0 +1,111 @@
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Stage55Socks5OutboundTrueDataplaneGateContract {
+    pub name: &'static str,
+    pub stage: &'static str,
+    pub prior_gate: &'static str,
+    pub stage_complete: bool,
+    pub socks5_tcp_true_dataplane_admitted: bool,
+    pub socks5_udp_associate_admitted: bool,
+    pub protocol_outbound_partial_admitted: bool,
+    pub outbound_true_dataplane_admitted: bool,
+    pub matched_go_rust_default_daemon_benchmark_recorded: bool,
+    pub default_switch_allowed: bool,
+    pub default_path_mutation_allowed: bool,
+    pub product_chain_switch_allowed: bool,
+    pub true_rust_default_daemon_admitted: bool,
+    pub go_default_path_preserved: bool,
+    pub go_fallback_required: bool,
+    pub gate_decision: &'static str,
+    pub rows: Vec<Stage55Socks5OutboundTrueDataplaneGateRow>,
+    pub validation_commands: Vec<&'static str>,
+    pub carried_blockers: Vec<&'static str>,
+    pub source: Vec<&'static str>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Stage55Socks5OutboundTrueDataplaneGateRow {
+    pub area: &'static str,
+    pub status: &'static str,
+    pub evidence: &'static str,
+    pub boundary: &'static str,
+    pub next_action: &'static str,
+}
+
+pub fn stage55_socks5_outbound_true_dataplane_gate_contract()
+-> Stage55Socks5OutboundTrueDataplaneGateContract {
+    Stage55Socks5OutboundTrueDataplaneGateContract {
+        name: "stage55-socks5-outbound-true-dataplane-gate",
+        stage: "stage55",
+        prior_gate: "stage54-active-dns-tproxy-cache-gate",
+        stage_complete: true,
+        socks5_tcp_true_dataplane_admitted: true,
+        socks5_udp_associate_admitted: false,
+        protocol_outbound_partial_admitted: true,
+        outbound_true_dataplane_admitted: false,
+        matched_go_rust_default_daemon_benchmark_recorded: false,
+        default_switch_allowed: false,
+        default_path_mutation_allowed: false,
+        product_chain_switch_allowed: false,
+        true_rust_default_daemon_admitted: false,
+        go_default_path_preserved: true,
+        go_fallback_required: true,
+        gate_decision: "stage55 admits the first protocol-specific Rust outbound true dataplane row for SOCKS5 TCP CONNECT: the opt-in smoke executes username/password auth, CONNECT target, payload roundtrip, SO_MARKed underlay socket, MPTCP status recording, and a local benchmark; the overall outbound true dataplane, default daemon switch, matched default-daemon benchmark, and product-chain switch remain blocked because UDP associate and the rest of the outbound protocol matrix are incomplete",
+        rows: vec![
+            Stage55Socks5OutboundTrueDataplaneGateRow {
+                area: "SOCKS5 TCP CONNECT protocol data plane",
+                status: "passed-opt-in-root-gated-smoke",
+                evidence: "Stage 55 runs a local SOCKS5 server and Rust client over a real underlay socket, observes username/password auth, CONNECT stage55.example:443, success reply, and post-CONNECT payload echo",
+                boundary: "this is a bounded loopback protocol smoke, not daemon default ownership or a remote proxy compatibility matrix",
+                next_action: "carry this row into runtime group selection and fallback/rollback admission before any default switch",
+            },
+            Stage55Socks5OutboundTrueDataplaneGateRow {
+                area: "MagicNetwork underlay socket evidence",
+                status: "passed-opt-in-root-gated-smoke",
+                evidence: "Stage 55 dials the SOCKS5 server through Rust magic_tcp_connect with SO_MARK=1234 and MPTCP requested, recording socket protocol, mark, and fallback status",
+                boundary: "MPTCP support is kernel dependent; the gate records fallback status instead of silently ignoring it",
+                next_action: "repeat equivalent underlay evidence for HTTP, Shadowsocks, shared transports, and QUIC-family underlays",
+            },
+            Stage55Socks5OutboundTrueDataplaneGateRow {
+                area: "SOCKS5 UDP associate",
+                status: "blocked",
+                evidence: "SOCKS5 TCP CONNECT is admitted, but UDP associate still requires TCP control connection plus UDP PacketConn lifecycle evidence",
+                boundary: "TCP CONNECT success cannot represent UDP associate semantics",
+                next_action: "add a SOCKS5 UDP associate PacketConn admission row before marking SOCKS5 complete",
+            },
+            Stage55Socks5OutboundTrueDataplaneGateRow {
+                area: "overall outbound/default admission",
+                status: "blocked",
+                evidence: "only the SOCKS5 TCP row is admitted; other protocols and shared transports remain incomplete",
+                boundary: "protocol_outbound_partial_admitted=true does not mean outbound_true_dataplane_admitted=true",
+                next_action: "continue protocol rows and matched Go/Rust daemon benchmark after the default candidate is complete",
+            },
+        ],
+        validation_commands: vec![
+            "python3 -m json.tool testdata/rebuild-golden/engine/runtime_stage55/socks5_outbound_true_dataplane_admission.json",
+            "python3 -m json.tool testdata/rebuild-golden/product/daemon/stage55_socks5_outbound_true_dataplane_gate.json",
+            "cargo test --manifest-path rust/Cargo.toml -p dae-cli stage55 -- --nocapture",
+            "cargo test --manifest-path rust/Cargo.toml -p dae-product stage55 -- --nocapture",
+            "cargo run --manifest-path rust/Cargo.toml -p dae-cli --bin dae-cli-optin --quiet -- runtime stage55-socks5-outbound-true-dataplane-admission --execute-smoke --ack-root-gate --benchmark-iters 10",
+            "git diff --check",
+        ],
+        carried_blockers: vec![
+            "SOCKS5 UDP associate true dataplane is still incomplete",
+            "HTTP/HTTPS, Shadowsocks/SS2022, Trojan, VMess, VLESS, Hysteria2, TUIC, Juicity, AnyTLS, and shared transport true dataplanes are still incomplete",
+            "matched Go default daemon vs true Rust candidate benchmark is still missing",
+            "clean dae-wing and daed product-chain recertification is still missing",
+        ],
+        source: vec![
+            "DAEX_RUST_REBUILD_PLAN_2026-05-16.md:stage55-item333",
+            "DAENEW_RUST_REBUILD_MEMO_2026-05-16.md:26",
+            "DAENEW_RUST_REBUILD_MEMO_2026-05-16.md:26.1",
+            "DAENEW_RUST_REBUILD_MEMO_2026-05-16.md:26.2",
+            "DAENEW_RUST_REBUILD_MEMO_2026-05-16.md:26.3",
+            "DAENEW_RUST_REBUILD_MEMO_2026-05-16.md:26.13",
+            "DAENEW_RUST_REBUILD_MEMO_2026-05-16.md:33.8",
+            "rust/crates/dae-cli/src/runtime_stage55_outbound_gate.rs",
+            "rust/crates/dae-outbound/src/socks5/dataplane.rs",
+            "rust/crates/dae-datapath/src/tcp_direct.rs",
+            "testdata/rebuild-golden/engine/runtime_stage55/socks5_outbound_true_dataplane_admission.json",
+        ],
+    }
+}
