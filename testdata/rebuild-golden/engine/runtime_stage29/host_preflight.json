@@ -1,0 +1,280 @@
+{
+  "blockers": [],
+  "default_path_mutated": false,
+  "default_switch_allowed": false,
+  "evidence_class": "read-only-host-root-bpf-netns-preflight",
+  "go_default_path_preserved": true,
+  "go_fallback_required": true,
+  "host_checks": [
+    {
+      "blocker": null,
+      "detail": {
+        "requires_flag": "--probe-host"
+      },
+      "name": "effective-root-permission",
+      "status": "not-run"
+    },
+    {
+      "blocker": null,
+      "detail": {
+        "requires_flag": "--probe-host"
+      },
+      "name": "bpffs-mounted",
+      "status": "not-run"
+    },
+    {
+      "blocker": null,
+      "detail": {
+        "requires_flag": "--probe-host"
+      },
+      "name": "netns-parent-available",
+      "status": "not-run"
+    },
+    {
+      "blocker": null,
+      "detail": {
+        "requires_flag": "--probe-host"
+      },
+      "name": "memlock-nonzero",
+      "status": "not-run"
+    },
+    {
+      "blocker": null,
+      "detail": {
+        "requires_flag": "--probe-host"
+      },
+      "name": "kernel-release-readable",
+      "status": "not-run"
+    },
+    {
+      "blocker": null,
+      "detail": {
+        "requires_flag": "--probe-host"
+      },
+      "name": "artifact-binary-exists",
+      "status": "not-run"
+    },
+    {
+      "blocker": null,
+      "detail": {
+        "requires_flag": "--probe-host"
+      },
+      "name": "production-progress-file-clear",
+      "status": "not-run"
+    },
+    {
+      "blocker": null,
+      "detail": {
+        "requires_flag": "--probe-host"
+      },
+      "name": "production-pid-file-clear",
+      "status": "not-run"
+    },
+    {
+      "blocker": null,
+      "detail": {
+        "requires_flag": "--probe-host"
+      },
+      "name": "no-existing-dae-process",
+      "status": "not-run"
+    },
+    {
+      "blocker": null,
+      "detail": {
+        "requires_flag": "--probe-host"
+      },
+      "name": "tproxy-tcp-port-free",
+      "status": "not-run"
+    },
+    {
+      "blocker": null,
+      "detail": {
+        "requires_flag": "--probe-host"
+      },
+      "name": "tproxy-udp-port-free",
+      "status": "not-run"
+    },
+    {
+      "blocker": null,
+      "detail": {
+        "requires_flag": "--probe-host"
+      },
+      "name": "lan-interface-name-free",
+      "status": "not-run"
+    },
+    {
+      "blocker": null,
+      "detail": {
+        "requires_flag": "--probe-host"
+      },
+      "name": "wan-interface-name-free",
+      "status": "not-run"
+    },
+    {
+      "blocker": null,
+      "detail": {
+        "requires_flag": "--probe-host"
+      },
+      "name": "client-netns-name-free",
+      "status": "not-run"
+    }
+  ],
+  "host_probe_executed": false,
+  "inputs": {
+    "client_netns": "dae-stage29-client",
+    "dns_bind": "udp://127.0.0.1:1153",
+    "dns_upstream": "udp://127.0.0.1:11530",
+    "lan_iface": "daex29lan0",
+    "mptcp": true,
+    "so_mark_from_dae": 2234,
+    "tproxy_port": 12346,
+    "wan_iface": "daex29wan0"
+  },
+  "live_candidate_run_allowed": false,
+  "name": "stage29-host-root-bpf-netns-preflight",
+  "path_checks": [
+    {
+      "blocker": null,
+      "detail": {
+        "path": "/tmp/dae-stage29-candidate"
+      },
+      "name": "isolated-root-under-tmp",
+      "status": "pass"
+    },
+    {
+      "blocker": null,
+      "detail": {
+        "path": "/tmp/dae-stage29-candidate/config.dae",
+        "root": "/tmp/dae-stage29-candidate"
+      },
+      "name": "config-under-root",
+      "status": "pass"
+    },
+    {
+      "blocker": null,
+      "detail": {
+        "path": "/tmp/dae-stage29-candidate/run/dae-stage29.pid",
+        "root": "/tmp/dae-stage29-candidate"
+      },
+      "name": "pid-file-under-root",
+      "status": "pass"
+    },
+    {
+      "blocker": null,
+      "detail": {
+        "path": "/tmp/dae-stage29-candidate/run/dae-stage29.progress",
+        "root": "/tmp/dae-stage29-candidate"
+      },
+      "name": "progress-file-under-root",
+      "status": "pass"
+    },
+    {
+      "blocker": null,
+      "detail": {
+        "path": "/tmp/dae-stage29-candidate/logs/dae-stage29.log",
+        "root": "/tmp/dae-stage29-candidate"
+      },
+      "name": "log-file-under-root",
+      "status": "pass"
+    },
+    {
+      "blocker": null,
+      "detail": {
+        "path": "/tmp/dae-stage29-candidate/run",
+        "root": "/tmp/dae-stage29-candidate"
+      },
+      "name": "run-dir-under-root",
+      "status": "pass"
+    },
+    {
+      "blocker": null,
+      "detail": {
+        "path": "/tmp/dae-stage29-candidate/traffic",
+        "root": "/tmp/dae-stage29-candidate"
+      },
+      "name": "traffic-dir-under-root",
+      "status": "pass"
+    },
+    {
+      "blocker": null,
+      "detail": {
+        "path": "/tmp/dae-stage29-candidate/sockets",
+        "root": "/tmp/dae-stage29-candidate"
+      },
+      "name": "socket-dir-under-root",
+      "status": "pass"
+    },
+    {
+      "blocker": null,
+      "detail": {
+        "path": "/tmp/dae-stage29-candidate/assets",
+        "root": "/tmp/dae-stage29-candidate"
+      },
+      "name": "asset-dir-under-root",
+      "status": "pass"
+    },
+    {
+      "blocker": null,
+      "detail": {
+        "path": "/tmp/dae-stage29-candidate/cache",
+        "root": "/tmp/dae-stage29-candidate"
+      },
+      "name": "cache-dir-under-root",
+      "status": "pass"
+    },
+    {
+      "blocker": null,
+      "detail": {
+        "mptcp": true,
+        "so_mark_from_dae": 2234,
+        "tproxy_port": 12346
+      },
+      "name": "generated-minimum-config-valid",
+      "status": "pass"
+    },
+    {
+      "blocker": null,
+      "detail": {
+        "path": "/tmp/dae-stage29-candidate/config.dae",
+        "requires_flag": "--require-existing-config"
+      },
+      "name": "existing-isolated-config-valid",
+      "status": "not-run"
+    }
+  ],
+  "paths": {
+    "artifact_binary": "rust/target/debug/dae-cli-optin",
+    "asset_dir": "/tmp/dae-stage29-candidate/assets",
+    "cache_dir": "/tmp/dae-stage29-candidate/cache",
+    "config": "/tmp/dae-stage29-candidate/config.dae",
+    "log_file": "/tmp/dae-stage29-candidate/logs/dae-stage29.log",
+    "pid_file": "/tmp/dae-stage29-candidate/run/dae-stage29.pid",
+    "production_pid_file_checked_when_probe_host": "/var/run/dae.pid",
+    "production_progress_file_checked_when_probe_host": "/var/run/dae.progress",
+    "progress_file": "/tmp/dae-stage29-candidate/run/dae-stage29.progress",
+    "root": "/tmp/dae-stage29-candidate",
+    "run_dir": "/tmp/dae-stage29-candidate/run",
+    "socket_dir": "/tmp/dae-stage29-candidate/sockets",
+    "traffic_dir": "/tmp/dae-stage29-candidate/traffic"
+  },
+  "preflight_passed": false,
+  "product_chain_switch_allowed": false,
+  "production_safety": {
+    "host_probe_requires_explicit_flag": true,
+    "no_daewing_daed_default_mutation": true,
+    "no_daemon_start": true,
+    "no_ebpf_attach": true,
+    "no_install_mutation": true,
+    "no_interface_mutation": true,
+    "no_netns_mutation": true,
+    "no_release_label_mutation": true,
+    "no_reload_signal": true,
+    "no_systemd_mutation": true,
+    "no_var_run_mutation": true
+  },
+  "read_only": true,
+  "require_existing_config": false,
+  "root": "/tmp/dae-stage29-candidate",
+  "stage": "stage29",
+  "true_rust_default_daemon_admitted": false
+}
