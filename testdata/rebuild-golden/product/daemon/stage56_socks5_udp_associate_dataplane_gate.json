@@ -1,0 +1,74 @@
+{
+  "carried_blockers": [
+    "HTTP/HTTPS, Shadowsocks/SS2022, Trojan, VMess, VLESS, Hysteria2, TUIC, Juicity, AnyTLS, and shared transport true dataplanes are still incomplete",
+    "matched Go default daemon vs true Rust candidate benchmark is still missing",
+    "clean dae-wing and daed product-chain recertification is still missing"
+  ],
+  "default_path_mutation_allowed": false,
+  "default_switch_allowed": false,
+  "gate_decision": "stage56 completes the SOCKS5 protocol-specific Rust outbound true dataplane row by adding UDP ASSOCIATE: the opt-in smoke keeps the TCP control connection alive, observes username/password auth and UDP ASSOCIATE 0.0.0.0:0, resolves an unspecified bind address to the proxy host, exercises SOCKS5 UDP packet wrap/unwrap through a SO_MARKed UDP socket, and records a local benchmark; the overall outbound true dataplane and default/product switches remain blocked because the rest of the outbound protocol matrix is incomplete",
+  "go_default_path_preserved": true,
+  "go_fallback_required": true,
+  "matched_go_rust_default_daemon_benchmark_recorded": false,
+  "name": "stage56-socks5-udp-associate-dataplane-gate",
+  "outbound_true_dataplane_admitted": false,
+  "prior_gate": "stage55-socks5-outbound-true-dataplane-gate",
+  "product_chain_switch_allowed": false,
+  "protocol_outbound_partial_admitted": true,
+  "rows": [
+    {
+      "area": "SOCKS5 TCP CONNECT carried evidence",
+      "boundary": "carried TCP evidence alone did not cover UDP associate packet semantics",
+      "evidence": "Stage 55 admitted SOCKS5 TCP CONNECT with auth, CONNECT target, payload roundtrip, SO_MARKed TCP underlay, MPTCP status, and benchmark",
+      "next_action": "keep TCP and UDP rows together when evaluating SOCKS5 default readiness",
+      "status": "passed-prior-gate"
+    },
+    {
+      "area": "SOCKS5 UDP ASSOCIATE control connection",
+      "boundary": "the smoke is local loopback and does not represent remote proxy compatibility across all servers",
+      "evidence": "Stage 56 sends UDP ASSOCIATE 0.0.0.0:0 over a Rust TCP control connection, observes username/password auth, receives an unspecified bind reply, resolves it to the proxy host, and keeps the control connection alive during UDP exchange",
+      "next_action": "carry control-connection retention into runtime lifecycle and reload cleanup gates",
+      "status": "passed-opt-in-root-gated-smoke"
+    },
+    {
+      "area": "SOCKS5 UDP PacketConn semantics",
+      "boundary": "UDP does not use MPTCP; the gate records mptcp_not_applicable for the UDP underlay while preserving MPTCP on the TCP control connection",
+      "evidence": "Stage 56 wraps RSV/FRAG/ATYP/DST.ADDR/DST.PORT, sends the packet through a SO_MARKed Rust UDP socket, unwraps the server response, and validates target plus payload roundtrip",
+      "next_action": "repeat equivalent PacketConn evidence for Shadowsocks UDP and QUIC-family protocols",
+      "status": "passed-opt-in-root-gated-smoke"
+    },
+    {
+      "area": "overall outbound/default admission",
+      "boundary": "socks5_protocol_true_dataplane_admitted=true does not mean outbound_true_dataplane_admitted=true",
+      "evidence": "SOCKS5 protocol row is complete, but HTTP/HTTPS, Shadowsocks/SS2022, Trojan, VMess, VLESS, Hysteria2, TUIC, Juicity, AnyTLS, and shared transport rows remain incomplete",
+      "next_action": "continue protocol rows and matched Go/Rust daemon benchmark before reopening default switch",
+      "status": "blocked"
+    }
+  ],
+  "socks5_protocol_true_dataplane_admitted": true,
+  "socks5_tcp_true_dataplane_admitted": true,
+  "socks5_udp_associate_admitted": true,
+  "source": [
+    "DAEX_RUST_REBUILD_PLAN_2026-05-16.md:stage56-item338",
+    "DAENEW_RUST_REBUILD_MEMO_2026-05-16.md:26.13",
+    "DAENEW_RUST_REBUILD_MEMO_2026-05-16.md:26.3",
+    "DAENEW_RUST_REBUILD_MEMO_2026-05-16.md:27.4",
+    "DAENEW_RUST_REBUILD_MEMO_2026-05-16.md:33.8",
+    "rust/crates/dae-cli/src/runtime_stage56_outbound_gate.rs",
+    "rust/crates/dae-outbound/src/socks5/dataplane.rs",
+    "rust/crates/dae-outbound/src/socks5/udp_packet.rs",
+    "rust/crates/dae-datapath/src/udp_direct.rs",
+    "testdata/rebuild-golden/engine/runtime_stage56/socks5_udp_associate_dataplane_admission.json"
+  ],
+  "stage": "stage56",
+  "stage_complete": true,
+  "true_rust_default_daemon_admitted": false,
+  "validation_commands": [
+    "python3 -m json.tool testdata/rebuild-golden/engine/runtime_stage56/socks5_udp_associate_dataplane_admission.json",
+    "python3 -m json.tool testdata/rebuild-golden/product/daemon/stage56_socks5_udp_associate_dataplane_gate.json",
+    "cargo test --manifest-path rust/Cargo.toml -p dae-cli stage56 -- --nocapture",
+    "cargo test --manifest-path rust/Cargo.toml -p dae-product stage56 -- --nocapture",
+    "cargo run --manifest-path rust/Cargo.toml -p dae-cli --bin dae-cli-optin --quiet -- runtime stage56-socks5-udp-associate-dataplane-admission --execute-smoke --ack-root-gate --benchmark-iters 10",
+    "git diff --check"
+  ]
+}
