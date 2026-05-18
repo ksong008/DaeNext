@@ -1,7 +1,7 @@
 use base64::Engine;
 use serde_json::Value;
 use std::io::{Read, Write};
-use std::net::{Ipv4Addr, SocketAddr, SocketAddrV4};
+use std::net::{Ipv4Addr, SocketAddr, SocketAddrV4, UdpSocket};
 use std::thread;
 use std::time::Duration;
 
@@ -254,6 +254,42 @@ fn tcp_direct_connect_records_socket_contract() {
     assert_eq!(conn.report.socket_protocol, libc::IPPROTO_TCP);
     assert!(conn.report.so_mark_applied);
     assert_eq!(conn.report.peer_addr, format!("127.0.0.1:{port}"));
+    handle.join().unwrap();
+}
+
+#[test]
+fn udp_direct_packet_conn_records_socket_contract() {
+    let upstream = UdpSocket::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
+    upstream
+        .set_read_timeout(Some(Duration::from_secs(2)))
+        .unwrap();
+    let upstream_addr = match upstream.local_addr().unwrap() {
+        SocketAddr::V4(addr) => addr,
+        SocketAddr::V6(_) => panic!("unexpected IPv6 upstream"),
+    };
+    let handle = thread::spawn(move || {
+        let mut buf = [0_u8; 64];
+        let (read, peer) = upstream.recv_from(&mut buf).unwrap();
+        assert_eq!(&buf[..read], b"stage53-udp-smoke");
+        upstream.send_to(b"stage53-udp-ack", peer).unwrap();
+    });
+
+    let conn = UdpDirectPacketConn::connect(
+        upstream_addr,
+        &UdpDirectSocketOptions {
+            mark: 0,
+            timeout: Duration::from_secs(2),
+        },
+    )
+    .unwrap();
+    let written = conn.write_to(b"stage53-udp-smoke", upstream_addr).unwrap();
+    assert_eq!(written, b"stage53-udp-smoke".len());
+    let (ack, peer) = conn.read_from(b"stage53-udp-ack".len()).unwrap();
+    assert_eq!(ack, b"stage53-udp-ack");
+    assert_eq!(peer, SocketAddr::V4(upstream_addr));
+    assert_eq!(conn.report().requested_mark, 0);
+    assert!(conn.report().so_mark_applied);
+    assert_eq!(conn.report().peer_addr, upstream_addr.to_string());
     handle.join().unwrap();
 }
 
