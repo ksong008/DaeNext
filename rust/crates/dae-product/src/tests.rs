@@ -1152,6 +1152,169 @@ fn stage25_true_daemon_execution_queue_covers_admission_order() {
 }
 
 #[test]
+fn stage26_daemon_candidate_contract_matches_golden_fixture() {
+    let fixture = load("product/daemon/stage26_candidate_contract.json");
+    let contract = stage26_daemon_candidate_contract();
+    assert_eq!(contract.name, fixture["name"].as_str().unwrap());
+    assert_eq!(contract.stage, fixture["stage"].as_str().unwrap());
+    assert_eq!(contract.prior_gate, fixture["prior_gate"].as_str().unwrap());
+    assert_eq!(
+        contract.stage_complete,
+        fixture["stage_complete"].as_bool().unwrap()
+    );
+    assert_eq!(
+        contract.inventory_complete,
+        fixture["inventory_complete"].as_bool().unwrap()
+    );
+    assert_eq!(
+        contract.cli_selector_contract_defined,
+        fixture["cli_selector_contract_defined"].as_bool().unwrap()
+    );
+    assert_eq!(
+        contract.optin_candidate_plan_helper_added,
+        fixture["optin_candidate_plan_helper_added"]
+            .as_bool()
+            .unwrap()
+    );
+    assert_eq!(
+        contract.isolated_smoke_layout_defined,
+        fixture["isolated_smoke_layout_defined"].as_bool().unwrap()
+    );
+    assert_eq!(
+        contract.go_baseline_commands_defined,
+        fixture["go_baseline_commands_defined"].as_bool().unwrap()
+    );
+    assert_eq!(
+        contract.default_switch_allowed,
+        fixture["default_switch_allowed"].as_bool().unwrap()
+    );
+    assert_eq!(
+        contract.default_path_mutation_allowed,
+        fixture["default_path_mutation_allowed"].as_bool().unwrap()
+    );
+    assert_eq!(
+        contract.product_chain_switch_allowed,
+        fixture["product_chain_switch_allowed"].as_bool().unwrap()
+    );
+    assert_eq!(
+        contract.candidate_live_run_allowed,
+        fixture["candidate_live_run_allowed"].as_bool().unwrap()
+    );
+    assert_eq!(
+        contract.true_rust_default_daemon_admitted,
+        fixture["true_rust_default_daemon_admitted"]
+            .as_bool()
+            .unwrap()
+    );
+    assert_eq!(
+        contract.go_default_path_preserved,
+        fixture["go_default_path_preserved"].as_bool().unwrap()
+    );
+    assert_eq!(
+        contract.go_fallback_required,
+        fixture["go_fallback_required"].as_bool().unwrap()
+    );
+    assert_eq!(
+        contract.contract_decision,
+        fixture["contract_decision"].as_str().unwrap()
+    );
+
+    let row_fixtures = fixture["inventory_rows"].as_array().unwrap();
+    assert_eq!(contract.inventory_rows.len(), row_fixtures.len());
+    for (row, row_fixture) in contract.inventory_rows.iter().zip(row_fixtures) {
+        assert_eq!(row.area, row_fixture["area"].as_str().unwrap());
+        assert_eq!(row.status, row_fixture["status"].as_str().unwrap());
+        assert_eq!(row.evidence, row_fixture["evidence"].as_str().unwrap());
+        assert_eq!(row.boundary, row_fixture["boundary"].as_str().unwrap());
+        assert_eq!(
+            row.next_action,
+            row_fixture["next_action"].as_str().unwrap()
+        );
+    }
+
+    assert_string_vec(&contract.selector_rules, &fixture["selector_rules"]);
+    assert_string_vec(
+        &contract.isolated_smoke_layout,
+        &fixture["isolated_smoke_layout"],
+    );
+    assert_string_vec(
+        &contract.go_baseline_commands,
+        &fixture["go_baseline_commands"],
+    );
+    assert_string_vec(
+        &contract.denied_default_mutations,
+        &fixture["denied_default_mutations"],
+    );
+    assert_string_vec(
+        &contract.validation_commands,
+        &fixture["validation_commands"],
+    );
+    assert_string_vec(&contract.source, &fixture["source"]);
+}
+
+#[test]
+fn stage26_daemon_candidate_contract_blocks_live_and_default_switches() {
+    let contract = stage26_daemon_candidate_contract();
+    assert!(contract.stage_complete);
+    assert!(contract.inventory_complete);
+    assert!(contract.cli_selector_contract_defined);
+    assert!(contract.optin_candidate_plan_helper_added);
+    assert!(contract.isolated_smoke_layout_defined);
+    assert!(contract.go_baseline_commands_defined);
+    assert!(!contract.default_switch_allowed);
+    assert!(!contract.default_path_mutation_allowed);
+    assert!(!contract.product_chain_switch_allowed);
+    assert!(!contract.candidate_live_run_allowed);
+    assert!(!contract.true_rust_default_daemon_admitted);
+    assert!(contract.go_default_path_preserved);
+    assert!(contract.go_fallback_required);
+
+    assert_contains_text(&contract.denied_default_mutations, "dae-cli-optin");
+    assert_contains_text(&contract.denied_default_mutations, "install/dae.service");
+    assert_contains_text(
+        &contract.denied_default_mutations,
+        "true_rust_default_daemon",
+    );
+    assert_contains_text(&contract.denied_default_mutations, "final_100_percent");
+    assert_contains_text(&contract.selector_rules, "dae run remains Go-backed");
+    assert_contains_text(&contract.go_baseline_commands, "make dae");
+}
+
+#[test]
+fn stage26_daemon_candidate_contract_covers_inventory_and_layout() {
+    let contract = stage26_daemon_candidate_contract();
+    let areas = contract
+        .inventory_rows
+        .iter()
+        .map(|row| row.area)
+        .collect::<Vec<_>>();
+    assert_eq!(
+        areas,
+        vec![
+            "dae-cli-optin artifact",
+            "runtime stage26-candidate-plan selector",
+            "Go-backed default artifact",
+            "isolated smoke layout",
+            "Go baseline command queue",
+            "candidate live run",
+            "carried admission blockers",
+        ]
+    );
+
+    assert_contains_text(&contract.isolated_smoke_layout, "dae-stage26.progress");
+    assert_contains_text(&contract.isolated_smoke_layout, "cache");
+    assert_contains_text(&contract.validation_commands, "stage26-candidate-plan");
+    assert_contains_text(
+        &contract.source,
+        "rust/crates/dae-cli/src/runtime_stage26_candidate.rs",
+    );
+    assert_contains_text(
+        &contract.source,
+        "testdata/rebuild-golden/engine/runtime_stage26/candidate_plan.json",
+    );
+}
+
+#[test]
 fn protocol_dataplane_admission_contract_matches_golden_fixture() {
     let fixture = load("product/outbound/protocol_dataplane_admission.json");
     let contract = protocol_dataplane_admission_contract();

@@ -1,0 +1,93 @@
+{
+  "candidate": {
+    "artifact_binary": "rust/target/debug/dae-cli-optin",
+    "current_default_owner": "Go-backed dae run",
+    "requires_explicit_selector": true,
+    "rust_default_daemon_admitted": false,
+    "starts_daemon": false
+  },
+  "candidate_commands": {
+    "candidate_run_status": "blocked-unimplemented",
+    "cleanup": "cleanup-isolated-layout",
+    "write_layout": "write-isolated-layout"
+  },
+  "config": {
+    "auto_config_kernel_parameter": false,
+    "client_interface": "daex26cli0",
+    "client_netns": "dae-stage26-client",
+    "disable_waiting_network": true,
+    "dns_bind": "udp://127.0.0.1:1153",
+    "dns_upstream": "udp://127.0.0.1:11530",
+    "lan_interface": "daex26lan0",
+    "mptcp": true,
+    "routing_fallback": "must_direct",
+    "so_mark_from_dae": 2234,
+    "tproxy_port": 12346,
+    "wan_interface": "daex26wan0"
+  },
+  "config_valid": true,
+  "default_path_mutated": false,
+  "default_switch_allowed": false,
+  "evidence_class": "opt-in-candidate-plan",
+  "go_baseline_commands": [
+    "build-go-default-artifact",
+    "go-version-baseline",
+    "go-validate-baseline",
+    "go-export-outline-baseline"
+  ],
+  "go_default_path_preserved": true,
+  "go_fallback_required": true,
+  "inventory": [
+    "dae-cli-optin",
+    "dae-engine",
+    "dae-control dae-datapath dae-dns",
+    "dae-outbound",
+    "Makefile dae release systemd"
+  ],
+  "live_daemon_started": false,
+  "name": "stage26-true-rust-daemon-candidate-plan",
+  "paths": {
+    "asset_dir": "/tmp/dae-stage26-candidate/assets",
+    "cache_dir": "/tmp/dae-stage26-candidate/cache",
+    "candidate_pid_file": "/tmp/dae-stage26-candidate/run/dae-stage26.pid",
+    "candidate_progress_file": "/tmp/dae-stage26-candidate/run/dae-stage26.progress",
+    "config": "/tmp/dae-stage26-candidate/config.dae",
+    "go_pid_file_default": "/var/run/dae.pid",
+    "go_progress_file_fixed": "/var/run/dae.progress",
+    "log_file": "/tmp/dae-stage26-candidate/logs/dae.log",
+    "readme": "/tmp/dae-stage26-candidate/README.stage26-candidate.txt",
+    "root": "/tmp/dae-stage26-candidate",
+    "run_dir": "/tmp/dae-stage26-candidate/run",
+    "socket_dir": "/tmp/dae-stage26-candidate/sockets",
+    "traffic_dir": "/tmp/dae-stage26-candidate/traffic"
+  },
+  "production_safety": {
+    "does_not_start_daemon": true,
+    "no_daewing_daed_default_mutation": true,
+    "no_install_mutation": true,
+    "no_release_label_mutation": true,
+    "no_systemd_mutation": true,
+    "requires_progress_override_before_candidate_live_run": true,
+    "uses_tmp_root_only": true,
+    "writes_only_when_requested": true
+  },
+  "remaining_blockers": [
+    "this helper records selector and layout only; it does not implement or start a true Rust daemon candidate",
+    "Go dae run still owns the default daemon path",
+    "candidate live run requires a progress file override or exclusive host before it can be admitted",
+    "matched Go-vs-Rust default daemon benchmark is still missing",
+    "outbound true dataplane admission is still incomplete",
+    "dae-wing and daed clean product-chain recertification is still missing"
+  ],
+  "root": "/tmp/dae-stage26-candidate",
+  "selector_contract": {
+    "accepted_selector": "dae-cli-optin runtime stage26-candidate-plan",
+    "default_alias_forbidden": true,
+    "go_fallback_selector_required": true,
+    "implicit_env_switch_forbidden": true,
+    "planned_run_selector": "dae-cli-optin runtime stage26-run-candidate --root <tmp> --artifact-binary <candidate>",
+    "product_chain_switch_forbidden": true
+  },
+  "stage": "stage26",
+  "write_requested": false
+}

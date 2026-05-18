@@ -8,6 +8,7 @@ pub mod runner;
 pub(crate) mod runtime_host_preflight;
 pub(crate) mod runtime_live_plan;
 pub(crate) mod runtime_runner;
+pub(crate) mod runtime_stage26_candidate;
 pub mod surface;
 pub(crate) mod userspace_runner;
 pub mod validate;
