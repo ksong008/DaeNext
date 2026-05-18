@@ -174,6 +174,61 @@ fn dae_param_packs_big_endian_tproxy_port() {
     assert_eq!(param.has_bpf_get_current_task, 1);
 }
 
+#[test]
+fn param_aware_loader_gate_requires_real_loader_and_runtime_values() {
+    let input = DaeParamInput {
+        tproxy_port: 12345,
+        control_plane_pid: 77,
+        dae0_ifindex: 8,
+        dae_netns_id: 9,
+        dae0peer_mac: [1, 2, 3, 4, 5, 6],
+        has_bpf_get_current_task: true,
+    };
+    let payload = build_dae_param_payload(input);
+    assert_eq!(payload.symbol, DAE_PARAM_SYMBOL);
+    assert_eq!(payload.rust_layout_size, size_of::<BpfDaeParam>());
+    assert_eq!(payload.tproxy_port_big_endian, u32::from(12345u16.to_be()));
+    assert!(dae_param_runtime_values_present(&payload));
+    assert!(!direct_tc_object_loader_rewrites_param());
+    assert!(!param_aware_load_admitted(
+        false,
+        true,
+        Some(DAE_PARAM_SYMBOL_SIZE),
+        &payload
+    ));
+    assert!(param_aware_load_admitted(
+        true,
+        true,
+        Some(DAE_PARAM_SYMBOL_SIZE),
+        &payload
+    ));
+
+    let zero_netns = build_dae_param_payload(DaeParamInput {
+        dae_netns_id: 0,
+        ..input
+    });
+    assert!(!dae_param_runtime_values_present(&zero_netns));
+}
+
+#[test]
+fn dae_param_requirements_match_memo_fields() {
+    let fields = dae_param_requirements()
+        .iter()
+        .map(|requirement| requirement.field)
+        .collect::<Vec<_>>();
+    assert_eq!(
+        fields,
+        vec![
+            "tproxy_port",
+            "control_plane_pid",
+            "dae0_ifindex",
+            "dae_netns_id",
+            "dae0peer_mac",
+            "has_bpf_get_current_task",
+        ]
+    );
+}
+
 fn load(path: &str) -> Value {
     dae_golden::load_json(path).unwrap()
 }

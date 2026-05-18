@@ -1636,6 +1636,73 @@ fn stage39_runtime_admission_blocks_unsafe_execution() {
 }
 
 #[test]
+fn stage40_runtime_admission_fixture_matches() {
+    let fixture = load("engine/runtime_stage40/param_aware_object_admission.json");
+    let output = run_with_args(["runtime", "stage40-param-aware-object-admission"]);
+    assert_eq!(output.exit_code, 0, "{}", output.stdout);
+    assert_eq!(output.stderr, "");
+    let json: Value = serde_json::from_str(&output.stdout).unwrap();
+    assert_eq!(
+        json["name"].as_str().unwrap(),
+        fixture["name"].as_str().unwrap()
+    );
+    assert_eq!(
+        json["stage"].as_str().unwrap(),
+        fixture["stage"].as_str().unwrap()
+    );
+    assert_eq!(
+        json["evidence_class"].as_str().unwrap(),
+        fixture["evidence_class"].as_str().unwrap()
+    );
+    assert_eq!(
+        json["object_contract"]["required_symbol"],
+        fixture["object_contract"]["required_symbol"]
+    );
+    assert_eq!(
+        json["object_contract"]["expected_symbol_size"],
+        fixture["object_contract"]["expected_symbol_size"]
+    );
+    assert_eq!(
+        json["param_payload"]["tproxy_port_big_endian"],
+        fixture["param_payload"]["tproxy_port_big_endian"]
+    );
+    assert!(json["blocked"].as_bool().unwrap());
+    assert!(
+        json["direct_tc_object_loader_rejected_for_active_traffic"]
+            .as_bool()
+            .unwrap()
+    );
+    assert!(!json["rust_param_aware_loader_proven"].as_bool().unwrap());
+    assert!(!json["param_aware_object_load_admitted"].as_bool().unwrap());
+    assert!(!json["active_tproxy_traffic_allowed"].as_bool().unwrap());
+    assert!(!json["default_switch_allowed"].as_bool().unwrap());
+    assert!(!json["default_path_mutated"].as_bool().unwrap());
+    assert!(!json["product_chain_switch_allowed"].as_bool().unwrap());
+    assert!(!json["true_rust_default_daemon_admitted"].as_bool().unwrap());
+    assert!(json["go_default_path_preserved"].as_bool().unwrap());
+    assert!(json["go_fallback_required"].as_bool().unwrap());
+    assert_eq!(
+        json["remaining_blockers"].as_array().unwrap().len(),
+        fixture["remaining_blockers"].as_array().unwrap().len()
+    );
+}
+
+#[test]
+fn stage40_runtime_admission_blocks_required_admission() {
+    let blocked = run_with_args([
+        "runtime",
+        "stage40-param-aware-object-admission",
+        "--require-admission",
+    ]);
+    assert_eq!(blocked.exit_code, 1);
+    assert!(
+        blocked
+            .stdout
+            .contains("stage40 PARAM-aware Rust object loader is not implemented/proven")
+    );
+}
+
+#[test]
 fn optin_runner_userspace_commands_match_engine_fixture() {
     let fixture = load("engine/userspace_runtime/optin_contract.json");
 
