@@ -1,5 +1,9 @@
 use base64::Engine;
 use serde_json::Value;
+use std::io::{Read, Write};
+use std::net::{Ipv4Addr, SocketAddrV4};
+use std::thread;
+use std::time::Duration;
 
 use crate::*;
 
@@ -119,6 +123,41 @@ fn udp_task_pool_model_preserves_fifo_and_drops_on_full_queue() {
     }
     assert!(!pool.emit_task("full", 999));
     assert_eq!(pool.dropped(), 1);
+}
+
+#[test]
+fn tcp_direct_connect_records_socket_contract() {
+    let (listener, listener_report) = bind_loopback_tcp_listener(false).unwrap();
+    assert!(!listener_report.requested_mptcp);
+    assert_eq!(listener_report.socket_protocol, libc::IPPROTO_TCP);
+    let port = listener.local_addr().unwrap().port();
+    let handle = thread::spawn(move || {
+        let (mut conn, _) = listener.accept().unwrap();
+        let mut buf = [0_u8; 16];
+        conn.read_exact(&mut buf).unwrap();
+        assert_eq!(&buf, b"stage51-dp-smoke");
+        conn.write_all(b"stage51-dp-ack").unwrap();
+    });
+
+    let mut conn = magic_tcp_connect(
+        SocketAddrV4::new(Ipv4Addr::LOCALHOST, port),
+        &TcpDirectDialOptions {
+            mark: 0,
+            mptcp: false,
+            timeout: Duration::from_secs(2),
+        },
+    )
+    .unwrap();
+    conn.stream.write_all(b"stage51-dp-smoke").unwrap();
+    let mut ack = [0_u8; 14];
+    conn.stream.read_exact(&mut ack).unwrap();
+    assert_eq!(&ack, b"stage51-dp-ack");
+    assert_eq!(conn.report.requested_mark, 0);
+    assert!(!conn.report.requested_mptcp);
+    assert_eq!(conn.report.socket_protocol, libc::IPPROTO_TCP);
+    assert!(conn.report.so_mark_applied);
+    assert_eq!(conn.report.peer_addr, format!("127.0.0.1:{port}"));
+    handle.join().unwrap();
 }
 
 fn load(path: &str) -> Value {
