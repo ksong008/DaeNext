@@ -15,8 +15,8 @@ use sha3::digest::{ExtendableOutput, Update, XofReader};
 
 use crate::error::OutboundError;
 use crate::shared_transport::{
-    DEFAULT_WS_KEY, HttpUpgradeOptions, MuxFrameOptions, WS_MASK_KEY, mux, mux_data_frame,
-    mux_end_frame, mux_new_frame, read_http_head, read_websocket_binary_frame,
+    DEFAULT_WS_KEY, HttpUpgradeOptions, MuxFrameOptions, WS_MASK_KEY, http_upgrade_request, mux,
+    mux_data_frame, mux_end_frame, mux_new_frame, read_http_head, read_websocket_binary_frame,
     validate_http_status, websocket_client_binary_frame, websocket_handshake_request,
 };
 use crate::vmess::uuid::normalize_vmess_uuid;
@@ -153,6 +153,30 @@ pub struct VMessAeadWebSocketExchangeReport {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
+pub struct VMessAeadHttpUpgradeExchangeReport {
+    pub proxy: String,
+    pub target: String,
+    pub httpupgrade_host: String,
+    pub httpupgrade_path: String,
+    pub uuid: String,
+    pub cmd_key_hex: String,
+    pub command: u8,
+    pub security: u8,
+    pub request_header_len: usize,
+    pub request_chunk_len: usize,
+    pub response_header_len: usize,
+    pub response_chunk_len: usize,
+    pub httpupgrade_request_len: usize,
+    pub httpupgrade_response_head_len: usize,
+    pub payload_len: usize,
+    pub echoed_payload: Vec<u8>,
+    pub httpupgrade_handshake_validated: bool,
+    pub httpupgrade_tunnel_validated: bool,
+    pub true_dataplane: bool,
+    pub default_go_path: bool,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct VMessAeadTcpRequest {
     pub version: u8,
     pub uuid: String,
@@ -200,6 +224,12 @@ pub struct VMessAeadMuxRequest {
 pub struct VMessAeadWebSocketRequest {
     pub request: VMessAeadTcpRequest,
     pub websocket_request_frame_len: usize,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct VMessAeadHttpUpgradeRequest {
+    pub request: VMessAeadTcpRequest,
+    pub httpupgrade_tunnel_validated: bool,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -538,6 +568,67 @@ where
     })
 }
 
+pub fn aead_tcp_exchange_over_httpupgrade_stream<S>(
+    stream: &mut S,
+    proxy: &str,
+    uuid: &str,
+    target: &str,
+    httpupgrade_host: &str,
+    httpupgrade_path: &str,
+    payload: &[u8],
+) -> Result<VMessAeadHttpUpgradeExchangeReport, OutboundError>
+where
+    S: Read + Write,
+{
+    let options = HttpUpgradeOptions::new(httpupgrade_host, httpupgrade_path);
+    let upgrade_request = http_upgrade_request(&options);
+    stream
+        .write_all(&upgrade_request)
+        .map_err(|err| OutboundError::BadVmess(err.to_string()))?;
+    let response = read_http_head(stream)?;
+    let httpupgrade_response_head_len = response.len();
+    validate_http_status(&response, 101)?;
+
+    let packet = build_aead_request(uuid, target, VMessNetwork::Tcp, payload)?;
+    stream
+        .write_all(&packet.header)
+        .map_err(|err| OutboundError::BadVmess(err.to_string()))?;
+    stream
+        .write_all(&packet.chunk)
+        .map_err(|err| OutboundError::BadVmess(err.to_string()))?;
+
+    let (response_header_len, echoed_payload, response_chunk_len) =
+        read_aead_response_header_and_chunk(stream, &packet.request)?;
+    if echoed_payload != payload {
+        return Err(OutboundError::BadVmess(
+            "VMess HTTPUpgrade payload response mismatch".to_owned(),
+        ));
+    }
+
+    Ok(VMessAeadHttpUpgradeExchangeReport {
+        proxy: proxy.to_owned(),
+        target: target.to_owned(),
+        httpupgrade_host: options.host,
+        httpupgrade_path: options.path,
+        uuid: normalize_vmess_uuid(uuid),
+        cmd_key_hex: packet.request.cmd_key_hex,
+        command: VMessNetwork::Tcp.byte(),
+        security: VMESS_AEAD_SECURITY_AES_128_GCM,
+        request_header_len: packet.header.len(),
+        request_chunk_len: packet.chunk.len(),
+        response_header_len,
+        response_chunk_len,
+        httpupgrade_request_len: upgrade_request.len(),
+        httpupgrade_response_head_len,
+        payload_len: payload.len(),
+        echoed_payload,
+        httpupgrade_handshake_validated: true,
+        httpupgrade_tunnel_validated: true,
+        true_dataplane: true,
+        default_go_path: true,
+    })
+}
+
 pub fn read_aead_tcp_request_from_stream<S>(
     stream: &mut S,
     uuid: &str,
@@ -645,6 +736,20 @@ where
     Ok(VMessAeadWebSocketRequest {
         request,
         websocket_request_frame_len,
+    })
+}
+
+pub fn read_aead_tcp_request_from_httpupgrade_stream<S>(
+    stream: &mut S,
+    uuid: &str,
+) -> Result<VMessAeadHttpUpgradeRequest, OutboundError>
+where
+    S: Read,
+{
+    let request = read_aead_tcp_request_from_stream(stream, uuid)?;
+    Ok(VMessAeadHttpUpgradeRequest {
+        request,
+        httpupgrade_tunnel_validated: true,
     })
 }
 
