@@ -1,8 +1,12 @@
-use std::io::{Read, Write};
+use std::io::{Cursor, Read, Write};
 use std::net::{Ipv4Addr, Ipv6Addr};
 
 use crate::error::OutboundError;
-use crate::shared_transport::{MuxFrameOptions, mux, mux_data_frame, mux_end_frame, mux_new_frame};
+use crate::shared_transport::{
+    DEFAULT_WS_KEY, HttpUpgradeOptions, MuxFrameOptions, WS_MASK_KEY, mux, mux_data_frame,
+    mux_end_frame, mux_new_frame, read_http_head, read_websocket_binary_frame,
+    validate_http_status, websocket_client_binary_frame, websocket_handshake_request,
+};
 use crate::vmess::{VMessMetadata, VMessNetwork};
 
 use super::packet;
@@ -52,6 +56,26 @@ pub struct VlessMuxExchangeReport {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
+pub struct VlessWebSocketExchangeReport {
+    pub proxy: String,
+    pub target: String,
+    pub ws_host: String,
+    pub ws_path: String,
+    pub key_hex: String,
+    pub command: u8,
+    pub request_header_len: usize,
+    pub response_header_len: usize,
+    pub websocket_request_frame_len: usize,
+    pub websocket_response_frame_len: usize,
+    pub payload_len: usize,
+    pub echoed_payload: Vec<u8>,
+    pub websocket_handshake_validated: bool,
+    pub websocket_binary_frame_validated: bool,
+    pub true_dataplane: bool,
+    pub default_go_path: bool,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct VlessTcpRequest {
     pub version: u8,
     pub key: [u8; 16],
@@ -85,6 +109,12 @@ pub struct VlessMuxRequest {
     pub addons_len: usize,
     pub command: u8,
     pub header_len: usize,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct VlessWebSocketRequest {
+    pub request: VlessTcpRequest,
+    pub websocket_request_frame_len: usize,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -219,6 +249,62 @@ where
     })
 }
 
+pub fn tcp_exchange_over_websocket_stream<S>(
+    stream: &mut S,
+    proxy: &str,
+    key: &[u8; 16],
+    target: &str,
+    ws_host: &str,
+    ws_path: &str,
+    payload: &[u8],
+) -> Result<VlessWebSocketExchangeReport, OutboundError>
+where
+    S: Read + Write,
+{
+    let ws_options = HttpUpgradeOptions::new(ws_host, ws_path);
+    let handshake = websocket_handshake_request(&ws_options, DEFAULT_WS_KEY);
+    stream
+        .write_all(&handshake)
+        .map_err(|err| OutboundError::BadVless(err.to_string()))?;
+    let response = read_http_head(stream)?;
+    validate_http_status(&response, 101)?;
+
+    let request = packet::first_write_bytes(key, "", "tcp", target, false, payload)?;
+    let request_header_len = request.len().saturating_sub(payload.len());
+    let request_frame = websocket_client_binary_frame(&request, WS_MASK_KEY)?;
+    stream
+        .write_all(&request_frame)
+        .map_err(|err| OutboundError::BadVless(err.to_string()))?;
+
+    let response_payload = read_websocket_binary_frame(stream)?;
+    let websocket_response_frame_len = response_payload.len();
+    let (response_header_len, echoed_payload) = decode_response_payload(&response_payload)?;
+    if echoed_payload != payload {
+        return Err(OutboundError::BadVless(
+            "VLESS WebSocket payload response mismatch".to_owned(),
+        ));
+    }
+
+    Ok(VlessWebSocketExchangeReport {
+        proxy: proxy.to_owned(),
+        target: target.to_owned(),
+        ws_host: ws_options.host,
+        ws_path: ws_options.path,
+        key_hex: hex_encode(key),
+        command: VMessNetwork::Tcp.byte(),
+        request_header_len,
+        response_header_len,
+        websocket_request_frame_len: request_frame.len(),
+        websocket_response_frame_len,
+        payload_len: payload.len(),
+        echoed_payload,
+        websocket_handshake_validated: true,
+        websocket_binary_frame_validated: true,
+        true_dataplane: true,
+        default_go_path: true,
+    })
+}
+
 pub fn read_tcp_request_from_stream<S>(
     stream: &mut S,
     payload_len: usize,
@@ -320,6 +406,29 @@ where
     })
 }
 
+pub fn read_tcp_request_from_websocket_stream<S>(
+    stream: &mut S,
+    payload_len: usize,
+) -> Result<VlessWebSocketRequest, OutboundError>
+where
+    S: Read,
+{
+    let payload = read_websocket_binary_frame(stream)?;
+    let websocket_request_frame_len = payload.len();
+    let mut cursor = Cursor::new(payload);
+    let request = read_tcp_request_from_stream(&mut cursor, payload_len)?;
+    if cursor.position() as usize != websocket_request_frame_len {
+        return Err(OutboundError::BadVless(format!(
+            "VLESS WebSocket request has trailing bytes: {}",
+            websocket_request_frame_len - cursor.position() as usize
+        )));
+    }
+    Ok(VlessWebSocketRequest {
+        request,
+        websocket_request_frame_len,
+    })
+}
+
 pub fn response_header_bytes() -> [u8; 2] {
     [VLESS_VERSION, 0]
 }
@@ -336,6 +445,13 @@ pub fn udp_response_packet(payload: &[u8]) -> Result<Vec<u8>, OutboundError> {
     out.extend_from_slice(&(payload.len() as u16).to_be_bytes());
     out.extend_from_slice(payload);
     Ok(out)
+}
+
+pub fn response_payload_bytes(payload: &[u8]) -> Vec<u8> {
+    let mut out = Vec::with_capacity(2 + payload.len());
+    out.extend_from_slice(&response_header_bytes());
+    out.extend_from_slice(payload);
+    out
 }
 
 fn read_request_header(stream: &mut impl Read) -> Result<VlessRequestHeader, OutboundError> {
@@ -382,6 +498,28 @@ fn read_request_header(stream: &mut impl Read) -> Result<VlessRequestHeader, Out
         target,
         header_len: 1 + 16 + 1 + addons_len + 1 + 2 + 1 + addr_len,
     })
+}
+
+fn decode_response_payload(input: &[u8]) -> Result<(usize, Vec<u8>), OutboundError> {
+    if input.len() < 2 {
+        return Err(OutboundError::BadVless(
+            "VLESS response header missing".to_owned(),
+        ));
+    }
+    if input[0] != VLESS_VERSION {
+        return Err(OutboundError::BadVless(format!(
+            "unexpected VLESS response version: {}",
+            input[0]
+        )));
+    }
+    let addons_len = input[1] as usize;
+    let response_header_len = 2 + addons_len;
+    if input.len() < response_header_len {
+        return Err(OutboundError::BadVless(
+            "VLESS response addons truncated".to_owned(),
+        ));
+    }
+    Ok((response_header_len, input[response_header_len..].to_vec()))
 }
 
 fn read_udp_response_payload(stream: &mut impl Read) -> Result<(usize, Vec<u8>), OutboundError> {
