@@ -1,0 +1,90 @@
+{
+    "name": "stage66-vmess-aead-udp-over-tcp-dataplane-gate",
+    "stage": "stage66",
+    "prior_gate": "stage65-vmess-aead-tcp-dataplane-gate",
+    "stage_complete": true,
+    "vmess_aead_tcp_true_dataplane_admitted": true,
+    "vmess_aead_udp_over_tcp_admitted": true,
+    "vmess_protocol_partial_admitted": true,
+    "vmess_protocol_true_dataplane_admitted": false,
+    "vmess_udp_packet_addr_admitted": false,
+    "vmess_mux_admitted": false,
+    "vmess_tls_underlay_admitted": false,
+    "vmess_shared_transport_admitted": false,
+    "ss2022_true_dataplane_admitted": false,
+    "protocol_outbound_partial_admitted": true,
+    "outbound_true_dataplane_admitted": false,
+    "matched_go_rust_default_daemon_benchmark_recorded": false,
+    "default_switch_allowed": false,
+    "default_path_mutation_allowed": false,
+    "product_chain_switch_allowed": false,
+    "true_rust_default_daemon_admitted": false,
+    "go_default_path_preserved": true,
+    "go_fallback_required": true,
+    "gate_decision": "stage66 admits only the VMess AEAD UDP-over-TCP fixed-target Rust true dataplane row: the opt-in smoke validates AEAD UDP command, target 1.2.3.4:53, encrypted packet payload echo, SO_MARKed TCP underlay, MPTCP status, and benchmark; VMess packet-addr, mux, TLS/shared transports, SS2022, and default/product switches remain closed",
+    "rows": [
+        {
+            "area": "Prior VMess AEAD TCP evidence",
+            "status": "passed-prior-gate",
+            "evidence": "Stage 65 VMess AEAD raw TCP header/chunk/response header row is carried",
+            "boundary": "TCP row did not validate UDP command or packet payload semantics",
+            "next_action": "carry TCP and UDP fixed-target rows as partial VMess evidence"
+        },
+        {
+            "area": "VMess AEAD UDP-over-TCP fixed target",
+            "status": "passed-opt-in-root-gated-smoke",
+            "evidence": "Stage 66 writes VMess AEAD network=udp request header, encrypts one UDP packet payload chunk, validates target 1.2.3.4:53, and returns encrypted response header plus packet echo",
+            "boundary": "this covers only fixed target UDP packet stream over TCP and does not cover packet-addr magic domain, mux, TLS, or shared transports",
+            "next_action": "split packet-addr, mux, and shared transport rows before marking VMess complete"
+        },
+        {
+            "area": "VMess packet-addr and mux rows",
+            "status": "blocked",
+            "evidence": "sp.packet-addr.v2fly.arpa and mux lifecycle are not executed by this gate",
+            "boundary": "fixed-target UDP cannot satisfy per-packet target switching or mux session behavior",
+            "next_action": "add packet-addr and mux gates if they are promoted before default switch"
+        },
+        {
+            "area": "VMess transport rows",
+            "status": "blocked",
+            "evidence": "TLS, WS, gRPC, HTTP/H2, HTTPUpgrade, Meek, and xHTTP are not executed by this gate",
+            "boundary": "UDP-over-TCP raw tunnel cannot be treated as VMess shared-transport completion",
+            "next_action": "add transport-specific gates or keep Go fallback"
+        },
+        {
+            "area": "overall outbound/default admission",
+            "status": "blocked",
+            "evidence": "several protocol rows remain incomplete and matched Go default daemon benchmarking is still missing",
+            "boundary": "protocol_outbound_partial_admitted=true does not mean outbound_true_dataplane_admitted=true",
+            "next_action": "continue per-protocol rows and matched Go/Rust daemon benchmark before reopening default switch"
+        }
+    ],
+    "validation_commands": [
+        "python3 -m json.tool testdata/rebuild-golden/engine/runtime_stage66/vmess_aead_udp_over_tcp_dataplane_admission.json",
+        "python3 -m json.tool testdata/rebuild-golden/product/daemon/stage66_vmess_aead_udp_over_tcp_dataplane_gate.json",
+        "cargo test --manifest-path rust/Cargo.toml -p dae-outbound stage66 -- --nocapture",
+        "cargo test --manifest-path rust/Cargo.toml -p dae-cli stage66 -- --nocapture",
+        "cargo test --manifest-path rust/Cargo.toml -p dae-product stage66 -- --nocapture",
+        "cargo run --manifest-path rust/Cargo.toml -p dae-cli --bin dae-cli-optin --quiet -- runtime stage66-vmess-aead-udp-over-tcp-dataplane-admission --execute-smoke --ack-root-gate --benchmark-iters 10",
+        "git diff --check"
+    ],
+    "carried_blockers": [
+        "SS2022 TCP/UDP true dataplane is still incomplete",
+        "Trojan TLS and Trojan-Go shared transport rows are still incomplete",
+        "VLESS TLS/REALITY/XTLS Vision/shared transport/xHTTP xmux rows are still incomplete",
+        "VMess packet-addr/mux/TLS/shared transport rows are still incomplete",
+        "Hysteria2, TUIC, Juicity, AnyTLS, HTTPS proxy, and shared transport true dataplanes are still incomplete",
+        "matched Go default daemon vs true Rust candidate benchmark is still missing",
+        "clean dae-wing and daed product-chain recertification is still missing"
+    ],
+    "source": [
+        "DAEX_RUST_REBUILD_PLAN_2026-05-16.md:stage66",
+        "DAENEW_RUST_REBUILD_MEMO_2026-05-16.md:26.4",
+        "DAENEW_RUST_REBUILD_MEMO_2026-05-16.md:26.5",
+        "DAENEW_RUST_REBUILD_MEMO_2026-05-16.md:26.3",
+        "rust/crates/dae-cli/src/runtime_stage66_outbound_gate.rs",
+        "rust/crates/dae-outbound/src/vmess/dataplane.rs",
+        "rust/crates/dae-datapath/src/tcp_direct.rs",
+        "testdata/rebuild-golden/engine/runtime_stage66/vmess_aead_udp_over_tcp_dataplane_admission.json"
+    ]
+}
