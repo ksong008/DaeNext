@@ -14,7 +14,11 @@ use sha3::Shake128;
 use sha3::digest::{ExtendableOutput, Update, XofReader};
 
 use crate::error::OutboundError;
-use crate::shared_transport::{MuxFrameOptions, mux, mux_data_frame, mux_end_frame, mux_new_frame};
+use crate::shared_transport::{
+    DEFAULT_WS_KEY, HttpUpgradeOptions, MuxFrameOptions, WS_MASK_KEY, mux, mux_data_frame,
+    mux_end_frame, mux_new_frame, read_http_head, read_websocket_binary_frame,
+    validate_http_status, websocket_client_binary_frame, websocket_handshake_request,
+};
 use crate::vmess::uuid::normalize_vmess_uuid;
 
 use super::{
@@ -125,6 +129,30 @@ pub struct VMessAeadMuxExchangeReport {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
+pub struct VMessAeadWebSocketExchangeReport {
+    pub proxy: String,
+    pub target: String,
+    pub ws_host: String,
+    pub ws_path: String,
+    pub uuid: String,
+    pub cmd_key_hex: String,
+    pub command: u8,
+    pub security: u8,
+    pub request_header_len: usize,
+    pub request_chunk_len: usize,
+    pub response_header_len: usize,
+    pub response_chunk_len: usize,
+    pub websocket_request_frame_len: usize,
+    pub websocket_response_frame_len: usize,
+    pub payload_len: usize,
+    pub echoed_payload: Vec<u8>,
+    pub websocket_handshake_validated: bool,
+    pub websocket_binary_frame_validated: bool,
+    pub true_dataplane: bool,
+    pub default_go_path: bool,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct VMessAeadTcpRequest {
     pub version: u8,
     pub uuid: String,
@@ -166,6 +194,12 @@ pub struct VMessAeadMuxRequest {
     pub data_frame: mux::MuxFrame,
     pub end_frame: mux::MuxFrame,
     pub mux_id_hex: String,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct VMessAeadWebSocketRequest {
+    pub request: VMessAeadTcpRequest,
+    pub websocket_request_frame_len: usize,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -434,6 +468,76 @@ where
     })
 }
 
+pub fn aead_tcp_exchange_over_websocket_stream<S>(
+    stream: &mut S,
+    proxy: &str,
+    uuid: &str,
+    target: &str,
+    ws_host: &str,
+    ws_path: &str,
+    payload: &[u8],
+) -> Result<VMessAeadWebSocketExchangeReport, OutboundError>
+where
+    S: Read + Write,
+{
+    let ws_options = HttpUpgradeOptions::new(ws_host, ws_path);
+    let handshake = websocket_handshake_request(&ws_options, DEFAULT_WS_KEY);
+    stream
+        .write_all(&handshake)
+        .map_err(|err| OutboundError::BadVmess(err.to_string()))?;
+    let response = read_http_head(stream)?;
+    validate_http_status(&response, 101)?;
+
+    let packet = build_aead_request(uuid, target, VMessNetwork::Tcp, payload)?;
+    let mut request_payload = Vec::with_capacity(packet.header.len() + packet.chunk.len());
+    request_payload.extend_from_slice(&packet.header);
+    request_payload.extend_from_slice(&packet.chunk);
+    let request_frame = websocket_client_binary_frame(&request_payload, WS_MASK_KEY)?;
+    stream
+        .write_all(&request_frame)
+        .map_err(|err| OutboundError::BadVmess(err.to_string()))?;
+
+    let response_payload = read_websocket_binary_frame(stream)?;
+    let websocket_response_frame_len = response_payload.len();
+    let mut response_cursor = Cursor::new(&response_payload);
+    let (response_header_len, echoed_payload, response_chunk_len) =
+        read_aead_response_header_and_chunk(&mut response_cursor, &packet.request)?;
+    if response_cursor.position() as usize != response_payload.len() {
+        return Err(OutboundError::BadVmess(format!(
+            "VMess WebSocket response has trailing bytes: {}",
+            response_payload.len() - response_cursor.position() as usize
+        )));
+    }
+    if echoed_payload != payload {
+        return Err(OutboundError::BadVmess(
+            "VMess WebSocket payload response mismatch".to_owned(),
+        ));
+    }
+
+    Ok(VMessAeadWebSocketExchangeReport {
+        proxy: proxy.to_owned(),
+        target: target.to_owned(),
+        ws_host: ws_options.host,
+        ws_path: ws_options.path,
+        uuid: normalize_vmess_uuid(uuid),
+        cmd_key_hex: packet.request.cmd_key_hex,
+        command: VMessNetwork::Tcp.byte(),
+        security: VMESS_AEAD_SECURITY_AES_128_GCM,
+        request_header_len: packet.header.len(),
+        request_chunk_len: packet.chunk.len(),
+        response_header_len,
+        response_chunk_len,
+        websocket_request_frame_len: request_frame.len(),
+        websocket_response_frame_len,
+        payload_len: payload.len(),
+        echoed_payload,
+        websocket_handshake_validated: true,
+        websocket_binary_frame_validated: true,
+        true_dataplane: true,
+        default_go_path: true,
+    })
+}
+
 pub fn read_aead_tcp_request_from_stream<S>(
     stream: &mut S,
     uuid: &str,
@@ -518,6 +622,29 @@ where
         new_frame,
         data_frame,
         end_frame,
+    })
+}
+
+pub fn read_aead_tcp_request_from_websocket_stream<S>(
+    stream: &mut S,
+    uuid: &str,
+) -> Result<VMessAeadWebSocketRequest, OutboundError>
+where
+    S: Read,
+{
+    let payload = read_websocket_binary_frame(stream)?;
+    let websocket_request_frame_len = payload.len();
+    let mut cursor = Cursor::new(&payload);
+    let request = read_aead_tcp_request_from_stream(&mut cursor, uuid)?;
+    if cursor.position() as usize != payload.len() {
+        return Err(OutboundError::BadVmess(format!(
+            "VMess WebSocket request has trailing bytes: {}",
+            payload.len() - cursor.position() as usize
+        )));
+    }
+    Ok(VMessAeadWebSocketRequest {
+        request,
+        websocket_request_frame_len,
     })
 }
 

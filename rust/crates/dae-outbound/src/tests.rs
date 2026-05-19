@@ -2645,6 +2645,55 @@ fn stage68_vmess_aead_mux_dataplane_echoes_payload() {
 }
 
 #[test]
+fn stage69_vmess_aead_websocket_dataplane_echoes_payload() {
+    let uuid = "7c12c745-63a5-433d-9e60-022e469b5bd4";
+    let target = "stage69-vmess-ws.example:443";
+    let ws_host = "stage69-vmess-proxy.example";
+    let ws_path = "/dae-vmess-ws";
+    let payload = b"stage69-vmess-ws-ping";
+    let (proxy, handle) = spawn_vmess_aead_websocket_echo_server(
+        uuid.to_owned(),
+        target.to_owned(),
+        ws_host.to_owned(),
+        ws_path.to_owned(),
+    );
+    let report = vmess::aead_tcp_exchange_over_websocket_stream(
+        &mut TcpStream::connect(&proxy).unwrap(),
+        &proxy,
+        uuid,
+        target,
+        ws_host,
+        ws_path,
+        payload,
+    )
+    .unwrap();
+    let accepted = handle.join().unwrap();
+
+    assert!(report.true_dataplane);
+    assert!(report.default_go_path);
+    assert_eq!(report.command, crate::vmess::VMessNetwork::Tcp.byte());
+    assert_eq!(report.security, vmess::VMESS_AEAD_SECURITY_AES_128_GCM);
+    assert_eq!(report.target, target);
+    assert_eq!(report.ws_host, ws_host);
+    assert_eq!(report.ws_path, ws_path);
+    assert_eq!(report.payload_len, payload.len());
+    assert_eq!(report.echoed_payload, payload);
+    assert!(report.websocket_handshake_validated);
+    assert!(report.websocket_binary_frame_validated);
+    assert!(report.websocket_request_frame_len > report.request_header_len);
+    assert!(report.websocket_response_frame_len > report.response_header_len);
+    assert_eq!(accepted.request.version, 1);
+    assert!(accepted.request.eauth_crc_validated);
+    assert_eq!(
+        accepted.request.command,
+        crate::vmess::VMessNetwork::Tcp.byte()
+    );
+    assert_eq!(accepted.request.target, target);
+    assert_eq!(accepted.request.payload, payload);
+    assert!(accepted.websocket_request_frame_len > accepted.request.request_header_len);
+}
+
+#[test]
 fn stage20_httpupgrade_dataplane_echoes_payload() {
     let fixture = fixture("outbound/protocol/stage20_shared_transport_foundation.json");
     let payload = fixture["payload_ascii"].as_str().unwrap().as_bytes();
@@ -3275,6 +3324,45 @@ fn spawn_vmess_aead_mux_echo_server(
         let response =
             shared_transport::mux_data_frame(expected_id, &request.data_frame.payload).unwrap();
         let response = vmess::aead_tcp_response_packet(&request.request, &response).unwrap();
+        stream.write_all(&response).unwrap();
+        request
+    });
+    (addr, handle)
+}
+
+fn spawn_vmess_aead_websocket_echo_server(
+    uuid: String,
+    expected_target: String,
+    expected_host: String,
+    expected_path: String,
+) -> (String, thread::JoinHandle<vmess::VMessAeadWebSocketRequest>) {
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let addr = listener.local_addr().unwrap().to_string();
+    let handle = thread::spawn(move || {
+        let (mut stream, _) = listener.accept().unwrap();
+        let request_head = read_http_head_for_test(&mut stream);
+        assert!(request_head.starts_with(&format!("GET {expected_path} HTTP/1.1\r\n")));
+        assert!(request_head.contains(&format!("Host: {expected_host}\r\n")));
+        assert!(request_head.contains("Upgrade: websocket\r\n"));
+        stream
+            .write_all(
+                format!(
+                    "HTTP/1.1 101 Switching Protocols\r\nConnection: Upgrade\r\nUpgrade: websocket\r\nSec-WebSocket-Accept: {}\r\n\r\n",
+                    shared_transport::WS_ACCEPT_SAMPLE
+                )
+                .as_bytes(),
+            )
+            .unwrap();
+        let request =
+            vmess::read_aead_tcp_request_from_websocket_stream(&mut stream, &uuid).unwrap();
+        assert_eq!(
+            request.request.command,
+            crate::vmess::VMessNetwork::Tcp.byte()
+        );
+        assert_eq!(request.request.target, expected_target);
+        let response =
+            vmess::aead_tcp_response_packet(&request.request, &request.request.payload).unwrap();
+        let response = shared_transport::websocket_server_binary_frame(&response).unwrap();
         stream.write_all(&response).unwrap();
         request
     });
