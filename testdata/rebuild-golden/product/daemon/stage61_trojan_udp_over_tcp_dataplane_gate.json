@@ -1,0 +1,91 @@
+{
+  "carried_blockers": [
+    "SS2022 TCP/UDP true dataplane is still incomplete",
+    "Trojan TLS underlay is still incomplete for default trojan product paths",
+    "Trojan-Go WS/gRPC/HTTPUpgrade shared transport and inner Shadowsocks are still incomplete",
+    "VMess, VLESS, Hysteria2, TUIC, Juicity, AnyTLS, HTTPS proxy, and shared transport true dataplanes are still incomplete",
+    "matched Go default daemon vs true Rust candidate benchmark is still missing",
+    "clean dae-wing and daed product-chain recertification is still missing"
+  ],
+  "default_path_mutation_allowed": false,
+  "default_switch_allowed": false,
+  "gate_decision": "stage61 admits the Trojan UDP-over-TCP PacketConn Rust true dataplane row: the opt-in smoke validates SHA224 password, UDP command byte, session target metadata, UDP packet target metadata, packet length/CRLF framing, payload echo, SO_MARKed TCP underlay, MPTCP status, and benchmark; Trojan TLS, Trojan-Go shared transports, SS2022, and default/product switches remain closed",
+  "go_default_path_preserved": true,
+  "go_fallback_required": true,
+  "http_connect_true_dataplane_admitted": true,
+  "matched_go_rust_default_daemon_benchmark_recorded": false,
+  "name": "stage61-trojan-udp-over-tcp-dataplane-gate",
+  "outbound_true_dataplane_admitted": false,
+  "prior_gate": "stage60-trojan-tcp-dataplane-gate",
+  "product_chain_switch_allowed": false,
+  "protocol_outbound_partial_admitted": true,
+  "rows": [
+    {
+      "area": "trojanc TCP carried evidence",
+      "boundary": "TCP carried evidence did not cover Trojan UDP packet framing over the TCP tunnel",
+      "evidence": "Stage 60 admitted trojanc TCP with password SHA224, TCP command, target metadata, payload echo, SO_MARKed TCP underlay, MPTCP status, and benchmark",
+      "next_action": "carry TCP and UDP-over-TCP rows together when evaluating Trojan inner protocol readiness",
+      "status": "passed-prior-gate"
+    },
+    {
+      "area": "Trojan UDP-over-TCP PacketConn data plane",
+      "boundary": "this covers the inner Trojan UDP packet conn over TCP only; it is not default Trojan TLS or Trojan-Go shared transport",
+      "evidence": "Stage 61 opens a trojanc UDP command over a Rust TCP stream, parses session target stage61-session.example:443, decodes UDP packet target stage61-packet.example:5353, validates length/CRLF framing, and returns a UDP packet payload echo",
+      "next_action": "carry Trojan inner TCP+UDP rows while continuing TLS and Trojan-Go gates",
+      "status": "passed-opt-in-root-gated-smoke"
+    },
+    {
+      "area": "TCP underlay evidence",
+      "boundary": "underlay TCP evidence does not satisfy TLS handshake or product daemon ownership by itself",
+      "evidence": "Stage 61 uses magic_tcp_connect with SO_MARK=1234 and records MPTCP status for the TCP tunnel that carries Trojan UDP packets",
+      "next_action": "repeat equivalent underlay evidence after TLS/shared-transport wrappers are added",
+      "status": "passed-opt-in-root-gated-smoke"
+    },
+    {
+      "area": "Trojan TLS and Trojan-Go remaining layers",
+      "boundary": "trojan_protocol_partial_admitted=true does not mean trojan_protocol_true_dataplane_admitted=true",
+      "evidence": "default Trojan still requires TLS before trojanc; Trojan-Go WS/gRPC/HTTPUpgrade and encryption=ss are not executed by this gate",
+      "next_action": "split TLS underlay, shared transport, and inner Shadowsocks gates",
+      "status": "blocked"
+    },
+    {
+      "area": "overall outbound/default admission",
+      "boundary": "protocol_outbound_partial_admitted=true does not mean outbound_true_dataplane_admitted=true",
+      "evidence": "several protocol rows remain incomplete and matched Go default daemon benchmarking is still missing",
+      "next_action": "continue per-protocol rows and matched Go/Rust daemon benchmark before reopening default switch",
+      "status": "blocked"
+    }
+  ],
+  "shadowsocks_aead_protocol_true_dataplane_admitted": true,
+  "shadowsocks_protocol_true_dataplane_admitted": false,
+  "socks5_protocol_true_dataplane_admitted": true,
+  "source": [
+    "DAEX_RUST_REBUILD_PLAN_2026-05-16.md:stage61",
+    "DAENEW_RUST_REBUILD_MEMO_2026-05-16.md:26.11",
+    "DAENEW_RUST_REBUILD_MEMO_2026-05-16.md:26.3",
+    "rust/crates/dae-cli/src/runtime_stage61_outbound_gate.rs",
+    "rust/crates/dae-outbound/src/trojan/dataplane.rs",
+    "rust/crates/dae-datapath/src/tcp_direct.rs",
+    "testdata/rebuild-golden/engine/runtime_stage61/trojan_udp_over_tcp_dataplane_admission.json"
+  ],
+  "ss2022_true_dataplane_admitted": false,
+  "stage": "stage61",
+  "stage_complete": true,
+  "trojan_go_inner_shadowsocks_admitted": false,
+  "trojan_go_shared_transport_admitted": false,
+  "trojan_protocol_partial_admitted": true,
+  "trojan_protocol_true_dataplane_admitted": false,
+  "trojan_tls_underlay_admitted": false,
+  "trojan_udp_over_tcp_admitted": true,
+  "trojanc_tcp_true_dataplane_admitted": true,
+  "true_rust_default_daemon_admitted": false,
+  "validation_commands": [
+    "python3 -m json.tool testdata/rebuild-golden/engine/runtime_stage61/trojan_udp_over_tcp_dataplane_admission.json",
+    "python3 -m json.tool testdata/rebuild-golden/product/daemon/stage61_trojan_udp_over_tcp_dataplane_gate.json",
+    "cargo test --manifest-path rust/Cargo.toml -p dae-outbound stage61 -- --nocapture",
+    "cargo test --manifest-path rust/Cargo.toml -p dae-cli stage61 -- --nocapture",
+    "cargo test --manifest-path rust/Cargo.toml -p dae-product stage61 -- --nocapture",
+    "cargo run --manifest-path rust/Cargo.toml -p dae-cli --bin dae-cli-optin --quiet -- runtime stage61-trojan-udp-over-tcp-dataplane-admission --execute-smoke --ack-root-gate --benchmark-iters 10",
+    "git diff --check"
+  ]
+}

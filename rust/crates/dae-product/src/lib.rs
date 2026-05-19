@@ -34,6 +34,7 @@ pub mod stage57_http_connect_gate;
 pub mod stage58_shadowsocks_aead_tcp_gate;
 pub mod stage59_shadowsocks_aead_udp_gate;
 pub mod stage60_trojan_tcp_gate;
+pub mod stage61_trojan_udp_over_tcp_gate;
 pub mod systemd;
 pub mod true_daemon_admission;
 
@@ -160,6 +161,10 @@ pub use stage59_shadowsocks_aead_udp_gate::{
 };
 pub use stage60_trojan_tcp_gate::{
     Stage60TrojanTcpGateContract, Stage60TrojanTcpGateRow, stage60_trojan_tcp_gate_contract,
+};
+pub use stage61_trojan_udp_over_tcp_gate::{
+    Stage61TrojanUdpOverTcpGateContract, Stage61TrojanUdpOverTcpGateRow,
+    stage61_trojan_udp_over_tcp_gate_contract,
 };
 pub use systemd::{SystemdContract, systemd_contract};
 pub use true_daemon_admission::{
