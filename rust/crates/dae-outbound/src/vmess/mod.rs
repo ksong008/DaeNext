@@ -5,13 +5,15 @@ pub mod metadata;
 pub mod uuid;
 
 pub use dataplane::{
-    VMESS_AEAD_SECURITY_AES_128_GCM, VMessAeadPacketAddrUdpExchangeReport,
-    VMessAeadPacketAddrUdpRequest, VMessAeadTcpExchangeReport, VMessAeadTcpRequest,
-    VMessAeadUdpOverTcpExchangeReport, VMessAeadUdpOverTcpRequest,
+    VMESS_AEAD_SECURITY_AES_128_GCM, VMessAeadMuxExchangeReport, VMessAeadMuxRequest,
+    VMessAeadPacketAddrUdpExchangeReport, VMessAeadPacketAddrUdpRequest,
+    VMessAeadTcpExchangeReport, VMessAeadTcpRequest, VMessAeadUdpOverTcpExchangeReport,
+    VMessAeadUdpOverTcpRequest, aead_mux_exchange_over_stream,
     aead_packet_addr_udp_exchange_over_stream, aead_tcp_exchange_over_stream,
     aead_tcp_response_packet, aead_udp_over_tcp_exchange_over_stream,
-    read_aead_packet_addr_udp_request_from_stream, read_aead_tcp_request_from_stream,
-    read_aead_udp_over_tcp_request_from_stream, vmess_cmd_key_from_uuid,
+    read_aead_mux_request_from_stream, read_aead_packet_addr_udp_request_from_stream,
+    read_aead_tcp_request_from_stream, read_aead_udp_over_tcp_request_from_stream,
+    vmess_cmd_key_from_uuid,
 };
 pub use link::VMessLink;
 pub use metadata::{

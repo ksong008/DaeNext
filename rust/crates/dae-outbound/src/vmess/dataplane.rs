@@ -1,4 +1,4 @@
-use std::io::{Read, Write};
+use std::io::{Cursor, Read, Write};
 use std::net::{Ipv4Addr, Ipv6Addr};
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -14,6 +14,7 @@ use sha3::Shake128;
 use sha3::digest::{ExtendableOutput, Update, XofReader};
 
 use crate::error::OutboundError;
+use crate::shared_transport::{MuxFrameOptions, mux, mux_data_frame, mux_end_frame, mux_new_frame};
 use crate::vmess::uuid::normalize_vmess_uuid;
 
 use super::{
@@ -101,6 +102,29 @@ pub struct VMessAeadPacketAddrUdpExchangeReport {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
+pub struct VMessAeadMuxExchangeReport {
+    pub proxy: String,
+    pub request_target: String,
+    pub mux_target: String,
+    pub uuid: String,
+    pub cmd_key_hex: String,
+    pub command: u8,
+    pub security: u8,
+    pub mux_id_hex: String,
+    pub request_header_len: usize,
+    pub request_chunk_len: usize,
+    pub response_header_len: usize,
+    pub response_chunk_len: usize,
+    pub payload_len: usize,
+    pub echoed_payload: Vec<u8>,
+    pub new_frame_validated: bool,
+    pub data_frame_validated: bool,
+    pub end_frame_sent: bool,
+    pub true_dataplane: bool,
+    pub default_go_path: bool,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct VMessAeadTcpRequest {
     pub version: u8,
     pub uuid: String,
@@ -136,9 +160,25 @@ pub struct VMessAeadPacketAddrUdpRequest {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
+pub struct VMessAeadMuxRequest {
+    pub request: VMessAeadTcpRequest,
+    pub new_frame: mux::MuxFrame,
+    pub data_frame: mux::MuxFrame,
+    pub end_frame: mux::MuxFrame,
+    pub mux_id_hex: String,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
 struct VMessAeadRequestPacket {
     header: Vec<u8>,
     chunk: Vec<u8>,
+    request: VMessAeadTcpRequest,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct VMessAeadChunkedRequestPacket {
+    header: Vec<u8>,
+    chunks: Vec<Vec<u8>>,
     request: VMessAeadTcpRequest,
 }
 
@@ -320,6 +360,80 @@ where
     })
 }
 
+pub fn aead_mux_exchange_over_stream<S>(
+    stream: &mut S,
+    proxy: &str,
+    uuid: &str,
+    mux_id: [u8; 2],
+    mux_target: &str,
+    network: &str,
+    payload: &[u8],
+) -> Result<VMessAeadMuxExchangeReport, OutboundError>
+where
+    S: Read + Write,
+{
+    let request_target = "0.0.0.0:0";
+    let metadata = VMessMetadata::parse(network, mux_target)?;
+    let options = MuxFrameOptions::new(mux_id, metadata.hostname(), metadata.port(), network);
+    let new_frame = mux_new_frame(&options);
+    let data_frame = mux_data_frame(mux_id, payload)?;
+    let end_frame = mux_end_frame(mux_id);
+    let packet = build_aead_request_chunks(
+        uuid,
+        request_target,
+        VMessNetwork::Mux,
+        &[&new_frame, &data_frame, &end_frame],
+    )?;
+    stream
+        .write_all(&packet.header)
+        .map_err(|err| OutboundError::BadVmess(err.to_string()))?;
+    for chunk in &packet.chunks {
+        stream
+            .write_all(chunk)
+            .map_err(|err| OutboundError::BadVmess(err.to_string()))?;
+    }
+
+    let (response_header_len, response_payload, response_chunk_len) =
+        read_aead_response_header_and_chunk(stream, &packet.request)?;
+    let echoed = read_mux_frame_from_bytes(&response_payload)?;
+    if echoed.id != mux_id
+        || echoed.status != mux::SESSION_STATUS_KEEP
+        || echoed.option != mux::OPTION_DATA
+    {
+        return Err(OutboundError::BadVmess(format!(
+            "VMess mux response frame mismatch: id={:?} status={} option={}",
+            echoed.id, echoed.status, echoed.option
+        )));
+    }
+    if echoed.payload != payload {
+        return Err(OutboundError::BadVmess(
+            "VMess mux payload response mismatch".to_owned(),
+        ));
+    }
+
+    Ok(VMessAeadMuxExchangeReport {
+        proxy: proxy.to_owned(),
+        request_target: request_target.to_owned(),
+        mux_target: mux_target.to_owned(),
+        uuid: normalize_vmess_uuid(uuid),
+        cmd_key_hex: packet.request.cmd_key_hex,
+        command: VMessNetwork::Mux.byte(),
+        security: VMESS_AEAD_SECURITY_AES_128_GCM,
+        mux_id_hex: hex_encode(&mux_id),
+        request_header_len: packet.header.len(),
+        request_chunk_len: packet.request.request_chunk_len,
+        response_header_len,
+        response_chunk_len,
+        payload_len: payload.len(),
+        echoed_payload: echoed.payload,
+        new_frame_validated: true,
+        data_frame_validated: true,
+        end_frame_sent: true,
+        true_dataplane: true,
+        default_go_path: true,
+    })
+}
+
 pub fn read_aead_tcp_request_from_stream<S>(
     stream: &mut S,
     uuid: &str,
@@ -376,10 +490,55 @@ where
     })
 }
 
+pub fn read_aead_mux_request_from_stream<S>(
+    stream: &mut S,
+    uuid: &str,
+) -> Result<VMessAeadMuxRequest, OutboundError>
+where
+    S: Read,
+{
+    let (mut request, mut request_codec) = read_aead_request_header_from_stream(stream, uuid)?;
+    if request.command != VMessNetwork::Mux.byte() {
+        return Err(OutboundError::BadVmess(format!(
+            "unexpected VMess AEAD mux command: {}",
+            request.command
+        )));
+    }
+    let (new_payload, new_chunk_len) = request_codec.open_chunk(stream)?;
+    let (data_payload, data_chunk_len) = request_codec.open_chunk(stream)?;
+    let (end_payload, end_chunk_len) = request_codec.open_chunk(stream)?;
+    let new_frame = read_mux_frame_from_bytes(&new_payload)?;
+    let data_frame = read_mux_frame_from_bytes(&data_payload)?;
+    let end_frame = read_mux_frame_from_bytes(&end_payload)?;
+    request.request_chunk_len = new_chunk_len + data_chunk_len + end_chunk_len;
+    request.payload = [new_payload, data_payload, end_payload].concat();
+    Ok(VMessAeadMuxRequest {
+        mux_id_hex: hex_encode(&new_frame.id),
+        request,
+        new_frame,
+        data_frame,
+        end_frame,
+    })
+}
+
 fn read_aead_request_from_stream<S>(
     stream: &mut S,
     uuid: &str,
 ) -> Result<VMessAeadTcpRequest, OutboundError>
+where
+    S: Read,
+{
+    let (mut request, mut request_codec) = read_aead_request_header_from_stream(stream, uuid)?;
+    let (payload, request_chunk_len) = request_codec.open_chunk(stream)?;
+    request.payload = payload;
+    request.request_chunk_len = request_chunk_len;
+    Ok(request)
+}
+
+fn read_aead_request_header_from_stream<S>(
+    stream: &mut S,
+    uuid: &str,
+) -> Result<(VMessAeadTcpRequest, BodyCodec), OutboundError>
 where
     S: Read,
 {
@@ -459,31 +618,33 @@ where
     }
 
     let parsed = parse_instruction(&instruction)?;
-    let mut request_codec = BodyCodec::new(
+    let request_codec = BodyCodec::new(
         parsed.request_body_key,
         parsed.request_body_iv,
         parsed.request_options,
     )?;
-    let (payload, request_chunk_len) = request_codec.open_chunk(stream)?;
-    Ok(VMessAeadTcpRequest {
-        version: parsed.version,
-        uuid: normalized_uuid,
-        cmd_key_hex: hex_encode(&cmd_key),
-        eauth_crc_validated,
-        eauth_timestamp,
-        request_options: parsed.request_options,
-        security: parsed.security,
-        command: parsed.command,
-        target: parsed.target,
-        payload,
-        request_header_len: 16 + 26 + encrypted_instruction.len(),
-        request_chunk_len,
-        response_auth: parsed.response_auth,
-        request_body_iv: parsed.request_body_iv,
-        request_body_key: parsed.request_body_key,
-        response_body_iv: parsed.response_body_iv,
-        response_body_key: parsed.response_body_key,
-    })
+    Ok((
+        VMessAeadTcpRequest {
+            version: parsed.version,
+            uuid: normalized_uuid,
+            cmd_key_hex: hex_encode(&cmd_key),
+            eauth_crc_validated,
+            eauth_timestamp,
+            request_options: parsed.request_options,
+            security: parsed.security,
+            command: parsed.command,
+            target: parsed.target,
+            payload: Vec::new(),
+            request_header_len: 16 + 26 + encrypted_instruction.len(),
+            request_chunk_len: 0,
+            response_auth: parsed.response_auth,
+            request_body_iv: parsed.request_body_iv,
+            request_body_key: parsed.request_body_key,
+            response_body_iv: parsed.response_body_iv,
+            response_body_key: parsed.response_body_key,
+        },
+        request_codec,
+    ))
 }
 
 pub fn aead_tcp_response_packet(
@@ -506,6 +667,25 @@ fn build_aead_request(
     network: VMessNetwork,
     payload: &[u8],
 ) -> Result<VMessAeadRequestPacket, OutboundError> {
+    let packet = build_aead_request_chunks(uuid, target, network, &[payload])?;
+    let chunk = packet
+        .chunks
+        .into_iter()
+        .next()
+        .ok_or_else(|| OutboundError::BadVmess("missing VMess request chunk".to_owned()))?;
+    Ok(VMessAeadRequestPacket {
+        header: packet.header,
+        chunk,
+        request: packet.request,
+    })
+}
+
+fn build_aead_request_chunks(
+    uuid: &str,
+    target: &str,
+    network: VMessNetwork,
+    payloads: &[&[u8]],
+) -> Result<VMessAeadChunkedRequestPacket, OutboundError> {
     let material = VMessAeadMaterial::default();
     let normalized_uuid = normalize_vmess_uuid(uuid);
     let cmd_key = vmess_cmd_key_from_uuid(&normalized_uuid)?;
@@ -523,7 +703,15 @@ fn build_aead_request(
         parsed.request_body_iv,
         parsed.request_options,
     )?;
-    let chunk = codec.seal_chunk(payload)?;
+    let mut chunks = Vec::with_capacity(payloads.len());
+    let mut request_chunk_len = 0_usize;
+    let mut payload = Vec::new();
+    for item in payloads {
+        let chunk = codec.seal_chunk(item)?;
+        request_chunk_len += chunk.len();
+        payload.extend_from_slice(item);
+        chunks.push(chunk);
+    }
     let request = VMessAeadTcpRequest {
         version: parsed.version,
         uuid: normalized_uuid,
@@ -534,20 +722,32 @@ fn build_aead_request(
         security: parsed.security,
         command: parsed.command,
         target: parsed.target,
-        payload: payload.to_vec(),
+        payload,
         request_header_len: header.len(),
-        request_chunk_len: chunk.len(),
+        request_chunk_len,
         response_auth: parsed.response_auth,
         request_body_iv: parsed.request_body_iv,
         request_body_key: parsed.request_body_key,
         response_body_iv: parsed.response_body_iv,
         response_body_key: parsed.response_body_key,
     };
-    Ok(VMessAeadRequestPacket {
+    Ok(VMessAeadChunkedRequestPacket {
         header,
-        chunk,
+        chunks,
         request,
     })
+}
+
+fn read_mux_frame_from_bytes(input: &[u8]) -> Result<mux::MuxFrame, OutboundError> {
+    let mut cursor = Cursor::new(input);
+    let frame = mux::read_mux_frame(&mut cursor)?;
+    if cursor.position() as usize != input.len() {
+        return Err(OutboundError::BadVmess(format!(
+            "VMess mux frame has trailing bytes: {}",
+            input.len() - cursor.position() as usize
+        )));
+    }
+    Ok(frame)
 }
 
 fn request_instruction(
