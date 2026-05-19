@@ -2,6 +2,7 @@ use std::io::{Cursor, Read, Write};
 use std::net::{Ipv4Addr, Ipv6Addr};
 
 use crate::error::OutboundError;
+use crate::http_proxy::{HttpConnectOptions, request as http_proxy_request};
 use crate::shared_transport::{
     DEFAULT_WS_KEY, GrpcLifecycleOptions, HttpUpgradeOptions, MeekRoundTripOptions,
     MuxFrameOptions, WS_MASK_KEY, grpc_hunk_frame, grpc_stream_preface, http_upgrade_request,
@@ -145,6 +146,26 @@ pub struct VlessMeekPollingExchangeReport {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
+pub struct VlessHttpTransportExchangeReport {
+    pub proxy: String,
+    pub target: String,
+    pub http_transport_host: String,
+    pub http_transport_path: String,
+    pub key_hex: String,
+    pub command: u8,
+    pub request_header_len: usize,
+    pub response_header_len: usize,
+    pub http_transport_request_len: usize,
+    pub http_transport_response_head_len: usize,
+    pub payload_len: usize,
+    pub echoed_payload: Vec<u8>,
+    pub http_transport_put_validated: bool,
+    pub full_http2_stack: bool,
+    pub true_dataplane: bool,
+    pub default_go_path: bool,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct VlessTcpRequest {
     pub version: u8,
     pub key: [u8; 16],
@@ -197,6 +218,16 @@ pub struct VlessMeekPollingRequest {
     pub request: VlessTcpRequest,
     pub meek_request_body_len: usize,
     pub meek_session_id_validated: bool,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct VlessHttpTransportRequestHead {
+    pub method: String,
+    pub request_uri: String,
+    pub host: String,
+    pub path: String,
+    pub request_head_len: usize,
+    pub transport_enabled: bool,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -551,6 +582,69 @@ where
     })
 }
 
+pub fn tcp_exchange_over_http_transport_stream<S>(
+    stream: &mut S,
+    proxy: &str,
+    key: &[u8; 16],
+    target: &str,
+    http_options: &HttpConnectOptions,
+    payload: &[u8],
+) -> Result<VlessHttpTransportExchangeReport, OutboundError>
+where
+    S: Read + Write,
+{
+    if !http_options.transport.enabled {
+        return Err(OutboundError::BadVless(
+            "VLESS HTTP transport requires HttpConnectOptions.transport.enabled=true".to_owned(),
+        ));
+    }
+    let transport_request = http_proxy_request::connect_request(http_options);
+    stream
+        .write_all(&transport_request)
+        .map_err(|err| OutboundError::BadVless(err.to_string()))?;
+    let response = read_http_head(stream)?;
+    let http_transport_response_head_len = response.len();
+    let status = http_proxy_request::parse_connect_response(&response)?;
+    if status != 200 {
+        return Err(OutboundError::BadVless(format!(
+            "VLESS HTTP transport status: {status}"
+        )));
+    }
+
+    let request = packet::first_write_bytes(key, "", "tcp", target, false, payload)?;
+    let request_header_len = request.len().saturating_sub(payload.len());
+    stream
+        .write_all(&request)
+        .map_err(|err| OutboundError::BadVless(err.to_string()))?;
+
+    let (response_header_len, echoed_payload) =
+        read_tcp_response_payload_from_stream(stream, payload.len())?;
+    if echoed_payload != payload {
+        return Err(OutboundError::BadVless(
+            "VLESS HTTP transport payload response mismatch".to_owned(),
+        ));
+    }
+
+    Ok(VlessHttpTransportExchangeReport {
+        proxy: proxy.to_owned(),
+        target: target.to_owned(),
+        http_transport_host: http_transport_host(http_options),
+        http_transport_path: http_transport_path(http_options),
+        key_hex: hex_encode(key),
+        command: VMessNetwork::Tcp.byte(),
+        request_header_len,
+        response_header_len,
+        http_transport_request_len: transport_request.len(),
+        http_transport_response_head_len,
+        payload_len: payload.len(),
+        echoed_payload,
+        http_transport_put_validated: true,
+        full_http2_stack: false,
+        true_dataplane: true,
+        default_go_path: true,
+    })
+}
+
 pub fn read_tcp_request_from_stream<S>(
     stream: &mut S,
     payload_len: usize,
@@ -723,6 +817,22 @@ where
     })
 }
 
+pub fn read_http_transport_request_head_from_stream<S>(
+    stream: &mut S,
+    http_options: &HttpConnectOptions,
+) -> Result<VlessHttpTransportRequestHead, OutboundError>
+where
+    S: Read,
+{
+    if !http_options.transport.enabled {
+        return Err(OutboundError::BadVless(
+            "VLESS HTTP transport request requires transport.enabled=true".to_owned(),
+        ));
+    }
+    let request_head = read_http_head(stream)?;
+    validate_http_transport_request_head(&request_head, http_options)
+}
+
 pub fn response_header_bytes() -> [u8; 2] {
     [VLESS_VERSION, 0]
 }
@@ -818,6 +928,59 @@ fn validate_meek_request_head(
     Ok(())
 }
 
+fn validate_http_transport_request_head(
+    request_head: &[u8],
+    http_options: &HttpConnectOptions,
+) -> Result<VlessHttpTransportRequestHead, OutboundError> {
+    let text = std::str::from_utf8(request_head)
+        .map_err(|err| OutboundError::BadSharedTransport(err.to_string()))?;
+    let mut lines = text.split("\r\n");
+    let request_line = lines.next().ok_or_else(|| {
+        OutboundError::BadSharedTransport("empty http transport request".to_owned())
+    })?;
+    let mut parts = request_line.split_whitespace();
+    let method = parts.next().unwrap_or_default();
+    let request_uri = parts.next().unwrap_or_default();
+    let version = parts.next().unwrap_or_default();
+    if method != "PUT" || version != "HTTP/1.1" {
+        return Err(OutboundError::BadSharedTransport(format!(
+            "unexpected http transport request line: {request_line}"
+        )));
+    }
+    let host = http_transport_host(http_options);
+    let path = http_transport_path(http_options);
+    let want_uri = format!("http://{host}{path}");
+    if request_uri != want_uri {
+        return Err(OutboundError::BadSharedTransport(format!(
+            "unexpected http transport uri: {request_uri}"
+        )));
+    }
+    let got_host = http_header_value(text, "host").ok_or_else(|| {
+        OutboundError::BadSharedTransport("missing http transport Host header".to_owned())
+    })?;
+    if got_host != host {
+        return Err(OutboundError::BadSharedTransport(format!(
+            "unexpected http transport Host header: {got_host}"
+        )));
+    }
+    let content_length = http_header_value(text, "content-length").ok_or_else(|| {
+        OutboundError::BadSharedTransport("missing http transport Content-Length header".to_owned())
+    })?;
+    if content_length != "0" {
+        return Err(OutboundError::BadSharedTransport(format!(
+            "unexpected http transport Content-Length: {content_length}"
+        )));
+    }
+    Ok(VlessHttpTransportRequestHead {
+        method: method.to_owned(),
+        request_uri: request_uri.to_owned(),
+        host,
+        path,
+        request_head_len: request_head.len(),
+        transport_enabled: true,
+    })
+}
+
 fn read_request_header(stream: &mut impl Read) -> Result<VlessRequestHeader, OutboundError> {
     let mut version = [0_u8; 1];
     read_exact(stream, &mut version, "vless version")?;
@@ -905,6 +1068,22 @@ fn http_header_value<'a>(head: &'a str, key: &str) -> Option<&'a str> {
         }
     }
     None
+}
+
+fn http_transport_host(options: &HttpConnectOptions) -> String {
+    if options.host_override.is_empty() {
+        "www.example.com".to_owned()
+    } else {
+        options.host_override.clone()
+    }
+}
+
+fn http_transport_path(options: &HttpConnectOptions) -> String {
+    if options.transport.path.is_empty() {
+        "/".to_owned()
+    } else {
+        options.transport.path.clone()
+    }
 }
 
 fn read_udp_response_payload(stream: &mut impl Read) -> Result<(usize, Vec<u8>), OutboundError> {
