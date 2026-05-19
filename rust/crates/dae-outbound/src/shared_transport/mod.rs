@@ -6,6 +6,7 @@ pub mod meek;
 pub mod mux;
 pub mod quic_h3;
 pub mod reality;
+pub mod tls;
 pub mod xhttp;
 
 pub use dataplane::{
@@ -33,6 +34,11 @@ pub use quic_h3::{
 pub use reality::{
     RealityMutationOptions, RealityMutationReport, reality_mutation_exchange,
     reality_mutation_report, reality_session_id,
+};
+pub use tls::{
+    DEFAULT_TLS_ALPN, DEFAULT_TLS_SERVER_NAME, TlsLoopbackMaterial, TlsServerObservation,
+    TlsUnderlayOptions, TlsUnderlayReport, tls_client_echo_exchange, tls_loopback_material,
+    tls_server_echo,
 };
 pub use xhttp::{
     XHttpLifecycleOptions, XHttpLifecycleReport, XHttpXmuxOptions, xhttp_packet_exchange,

@@ -21,6 +21,7 @@ mod runtime_admission_41_54;
 mod runtime_candidate_preflight;
 mod runtime_command_inventory;
 mod runtime_protocol_55_61;
+mod runtime_shared_tls_stage81;
 mod runtime_vless_core;
 mod runtime_vless_shared_transport;
 mod runtime_vless_xhttp_xmux_stage80;
