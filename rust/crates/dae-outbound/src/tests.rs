@@ -2584,6 +2584,67 @@ fn stage67_vmess_packet_addr_udp_dataplane_echoes_payload() {
 }
 
 #[test]
+fn stage68_vmess_aead_mux_dataplane_echoes_payload() {
+    let uuid = "7c12c745-63a5-433d-9e60-022e469b5bd4";
+    let target = "stage68-vmess-mux.example:443";
+    let payload = b"stage68-vmess-mux-ping";
+    let mux_id = [0x68, 0x01];
+    let (proxy, handle) =
+        spawn_vmess_aead_mux_echo_server(uuid.to_owned(), mux_id, target.to_owned());
+    let report = vmess::aead_mux_exchange_over_stream(
+        &mut TcpStream::connect(&proxy).unwrap(),
+        &proxy,
+        uuid,
+        mux_id,
+        target,
+        "tcp",
+        payload,
+    )
+    .unwrap();
+    let accepted = handle.join().unwrap();
+
+    assert!(report.true_dataplane);
+    assert!(report.default_go_path);
+    assert_eq!(report.command, crate::vmess::VMessNetwork::Mux.byte());
+    assert_eq!(report.security, vmess::VMESS_AEAD_SECURITY_AES_128_GCM);
+    assert_eq!(report.request_target, "0.0.0.0:0");
+    assert_eq!(report.mux_target, target);
+    assert_eq!(report.mux_id_hex, "6801");
+    assert_eq!(report.payload_len, payload.len());
+    assert_eq!(report.echoed_payload, payload);
+    assert!(report.new_frame_validated);
+    assert!(report.data_frame_validated);
+    assert!(report.end_frame_sent);
+    assert_eq!(accepted.request.version, 1);
+    assert!(accepted.request.eauth_crc_validated);
+    assert_eq!(
+        accepted.request.command,
+        crate::vmess::VMessNetwork::Mux.byte()
+    );
+    assert_eq!(accepted.request.target, "0.0.0.0:0");
+    assert_eq!(accepted.new_frame.id, mux_id);
+    assert_eq!(
+        accepted.new_frame.status,
+        shared_transport::mux::SESSION_STATUS_NEW
+    );
+    assert_eq!(accepted.data_frame.id, mux_id);
+    assert_eq!(
+        accepted.data_frame.status,
+        shared_transport::mux::SESSION_STATUS_KEEP
+    );
+    assert_eq!(
+        accepted.data_frame.option,
+        shared_transport::mux::OPTION_DATA
+    );
+    assert_eq!(accepted.data_frame.payload, payload);
+    assert_eq!(accepted.end_frame.id, mux_id);
+    assert_eq!(
+        accepted.end_frame.status,
+        shared_transport::mux::SESSION_STATUS_END
+    );
+}
+
+#[test]
 fn stage20_httpupgrade_dataplane_echoes_payload() {
     let fixture = fixture("outbound/protocol/stage20_shared_transport_foundation.json");
     let payload = fixture["payload_ascii"].as_str().unwrap().as_bytes();
@@ -3170,6 +3231,50 @@ fn spawn_vmess_packet_addr_udp_echo_server(
         );
         let response =
             vmess::aead_tcp_response_packet(&request.request, &request.request.payload).unwrap();
+        stream.write_all(&response).unwrap();
+        request
+    });
+    (addr, handle)
+}
+
+fn spawn_vmess_aead_mux_echo_server(
+    uuid: String,
+    expected_id: [u8; 2],
+    expected_target: String,
+) -> (String, thread::JoinHandle<vmess::VMessAeadMuxRequest>) {
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let addr = listener.local_addr().unwrap().to_string();
+    let handle = thread::spawn(move || {
+        let (mut stream, _) = listener.accept().unwrap();
+        let request = vmess::read_aead_mux_request_from_stream(&mut stream, &uuid).unwrap();
+        assert_eq!(
+            request.request.command,
+            crate::vmess::VMessNetwork::Mux.byte()
+        );
+        assert_eq!(request.request.target, "0.0.0.0:0");
+        assert_eq!(request.new_frame.id, expected_id);
+        let (host, port) = expected_target.rsplit_once(':').unwrap();
+        let options = shared_transport::MuxFrameOptions::new(
+            expected_id,
+            host,
+            port.parse::<u16>().unwrap(),
+            "tcp",
+        );
+        let expected_new = shared_transport::mux_new_frame(&options);
+        assert_eq!(request.new_frame.metadata, expected_new[2..]);
+        assert_eq!(request.data_frame.id, expected_id);
+        assert_eq!(
+            request.data_frame.option,
+            shared_transport::mux::OPTION_DATA
+        );
+        assert_eq!(request.end_frame.id, expected_id);
+        assert_eq!(
+            request.end_frame.status,
+            shared_transport::mux::SESSION_STATUS_END
+        );
+        let response =
+            shared_transport::mux_data_frame(expected_id, &request.data_frame.payload).unwrap();
+        let response = vmess::aead_tcp_response_packet(&request.request, &response).unwrap();
         stream.write_all(&response).unwrap();
         request
     });
