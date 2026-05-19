@@ -2311,6 +2311,41 @@ fn stage60_trojanc_tcp_dataplane_echoes_payload() {
 }
 
 #[test]
+fn stage61_trojan_udp_over_tcp_dataplane_echoes_packet_payload() {
+    let password = "stage61-password";
+    let session_target = "stage61-session.example:443";
+    let packet_target = "stage61-packet.example:5353";
+    let payload = b"stage61-trojan-udp-over-tcp-ping";
+    let (proxy, handle) = spawn_trojan_udp_over_tcp_echo_server(password.to_owned(), payload.len());
+    let report = trojan::udp_over_tcp_exchange_over_stream(
+        &mut TcpStream::connect(&proxy).unwrap(),
+        &proxy,
+        password,
+        session_target,
+        packet_target,
+        payload,
+    )
+    .unwrap();
+    let (accepted_header, accepted_packet) = handle.join().unwrap();
+
+    assert!(report.true_dataplane);
+    assert!(report.default_go_path);
+    assert_eq!(report.command, trojan::TrojanNetwork::Udp.byte());
+    assert_eq!(
+        report.password_sha224_hex,
+        trojan::packet::password_sha224_hex(password)
+    );
+    assert_eq!(report.session_target, session_target);
+    assert_eq!(report.packet_target, packet_target);
+    assert_eq!(report.echoed_payload, payload);
+    assert!(report.packet_len > payload.len());
+    assert_eq!(accepted_header.command, trojan::TrojanNetwork::Udp.byte());
+    assert_eq!(accepted_header.target, session_target);
+    assert_eq!(accepted_packet.target, packet_target);
+    assert_eq!(accepted_packet.payload, payload);
+}
+
+#[test]
 fn stage20_httpupgrade_dataplane_echoes_payload() {
     let fixture = fixture("outbound/protocol/stage20_shared_transport_foundation.json");
     let payload = fixture["payload_ascii"].as_str().unwrap().as_bytes();
@@ -2729,6 +2764,32 @@ fn spawn_trojanc_tcp_echo_server(
         );
         stream.write_all(&request.payload).unwrap();
         request
+    });
+    (addr, handle)
+}
+
+fn spawn_trojan_udp_over_tcp_echo_server(
+    password: String,
+    payload_len: usize,
+) -> (
+    String,
+    thread::JoinHandle<(trojan::TrojanRequestHeader, trojan::TrojanUdpPacket)>,
+) {
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let addr = listener.local_addr().unwrap().to_string();
+    let handle = thread::spawn(move || {
+        let (mut stream, _) = listener.accept().unwrap();
+        let header = trojan::read_request_header_from_stream(&mut stream).unwrap();
+        assert_eq!(
+            header.password_sha224_hex,
+            trojan::packet::password_sha224_hex(&password)
+        );
+        assert_eq!(header.command, trojan::TrojanNetwork::Udp.byte());
+        let packet = trojan::read_udp_packet_from_stream(&mut stream).unwrap();
+        assert_eq!(packet.payload_len, payload_len);
+        let response = trojan::packet::udp_packet(&packet.target, &packet.payload).unwrap();
+        stream.write_all(&response).unwrap();
+        (header, packet)
     });
     (addr, handle)
 }
