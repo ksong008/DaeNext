@@ -3,10 +3,11 @@ use std::net::{Ipv4Addr, Ipv6Addr};
 
 use crate::error::OutboundError;
 use crate::shared_transport::{
-    DEFAULT_WS_KEY, GrpcLifecycleOptions, HttpUpgradeOptions, MuxFrameOptions, WS_MASK_KEY,
-    grpc_hunk_frame, grpc_stream_preface, http_upgrade_request, mux, mux_data_frame, mux_end_frame,
-    mux_new_frame, read_grpc_hunk_frame, read_http_head, read_websocket_binary_frame,
-    validate_http_status, websocket_client_binary_frame, websocket_handshake_request,
+    DEFAULT_WS_KEY, GrpcLifecycleOptions, HttpUpgradeOptions, MeekRoundTripOptions,
+    MuxFrameOptions, WS_MASK_KEY, grpc_hunk_frame, grpc_stream_preface, http_upgrade_request,
+    meek_http_request, mux, mux_data_frame, mux_end_frame, mux_new_frame, read_grpc_hunk_frame,
+    read_http_head, read_websocket_binary_frame, validate_http_status,
+    websocket_client_binary_frame, websocket_handshake_request,
 };
 use crate::vmess::{VMessMetadata, VMessNetwork};
 
@@ -119,6 +120,31 @@ pub struct VlessGrpcHunkExchangeReport {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
+pub struct VlessMeekPollingExchangeReport {
+    pub proxy: String,
+    pub target: String,
+    pub meek_url: String,
+    pub meek_host: String,
+    pub meek_path: String,
+    pub meek_session_id: String,
+    pub key_hex: String,
+    pub command: u8,
+    pub request_header_len: usize,
+    pub response_header_len: usize,
+    pub meek_request_len: usize,
+    pub meek_request_body_len: usize,
+    pub meek_response_head_len: usize,
+    pub meek_response_body_len: usize,
+    pub payload_len: usize,
+    pub echoed_payload: Vec<u8>,
+    pub meek_polling_validated: bool,
+    pub meek_session_id_validated: bool,
+    pub full_https_round_tripper: bool,
+    pub true_dataplane: bool,
+    pub default_go_path: bool,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct VlessTcpRequest {
     pub version: u8,
     pub key: [u8; 16],
@@ -164,6 +190,13 @@ pub struct VlessWebSocketRequest {
 pub struct VlessGrpcHunkRequest {
     pub request: VlessTcpRequest,
     pub grpc_request_hunk_len: usize,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct VlessMeekPollingRequest {
+    pub request: VlessTcpRequest,
+    pub meek_request_body_len: usize,
+    pub meek_session_id_validated: bool,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -466,6 +499,58 @@ where
     })
 }
 
+pub fn tcp_exchange_over_meek_polling_stream<S>(
+    stream: &mut S,
+    proxy: &str,
+    key: &[u8; 16],
+    target: &str,
+    meek_options: &MeekRoundTripOptions,
+    payload: &[u8],
+) -> Result<VlessMeekPollingExchangeReport, OutboundError>
+where
+    S: Read + Write,
+{
+    let request = packet::first_write_bytes(key, "", "tcp", target, false, payload)?;
+    let request_header_len = request.len().saturating_sub(payload.len());
+    let meek_request = meek_http_request(meek_options, &request);
+    stream
+        .write_all(&meek_request)
+        .map_err(|err| OutboundError::BadVless(err.to_string()))?;
+
+    let (response_head, response_payload) = read_http_message(stream, "meek response")?;
+    validate_http_status(&response_head, 200)?;
+    let (response_header_len, echoed_payload) = decode_response_payload(&response_payload)?;
+    if echoed_payload != payload {
+        return Err(OutboundError::BadVless(
+            "VLESS Meek polling payload response mismatch".to_owned(),
+        ));
+    }
+
+    Ok(VlessMeekPollingExchangeReport {
+        proxy: proxy.to_owned(),
+        target: target.to_owned(),
+        meek_url: meek_options.url.clone(),
+        meek_host: meek_options.host.clone(),
+        meek_path: meek_options.path.clone(),
+        meek_session_id: meek_options.session_id(),
+        key_hex: hex_encode(key),
+        command: VMessNetwork::Tcp.byte(),
+        request_header_len,
+        response_header_len,
+        meek_request_len: meek_request.len(),
+        meek_request_body_len: request.len(),
+        meek_response_head_len: response_head.len(),
+        meek_response_body_len: response_payload.len(),
+        payload_len: payload.len(),
+        echoed_payload,
+        meek_polling_validated: true,
+        meek_session_id_validated: true,
+        full_https_round_tripper: false,
+        true_dataplane: true,
+        default_go_path: true,
+    })
+}
+
 pub fn read_tcp_request_from_stream<S>(
     stream: &mut S,
     payload_len: usize,
@@ -613,6 +698,31 @@ where
     })
 }
 
+pub fn read_tcp_request_from_meek_polling_stream<S>(
+    stream: &mut S,
+    payload_len: usize,
+    meek_options: &MeekRoundTripOptions,
+) -> Result<VlessMeekPollingRequest, OutboundError>
+where
+    S: Read,
+{
+    let (request_head, payload) = read_http_message(stream, "meek request")?;
+    validate_meek_request_head(&request_head, meek_options)?;
+    let mut cursor = Cursor::new(&payload);
+    let request = read_tcp_request_from_stream(&mut cursor, payload_len)?;
+    if cursor.position() as usize != payload.len() {
+        return Err(OutboundError::BadVless(format!(
+            "VLESS Meek polling request has trailing bytes: {}",
+            payload.len() - cursor.position() as usize
+        )));
+    }
+    Ok(VlessMeekPollingRequest {
+        request,
+        meek_request_body_len: payload.len(),
+        meek_session_id_validated: true,
+    })
+}
+
 pub fn response_header_bytes() -> [u8; 2] {
     [VLESS_VERSION, 0]
 }
@@ -636,6 +746,76 @@ pub fn response_payload_bytes(payload: &[u8]) -> Vec<u8> {
     out.extend_from_slice(&response_header_bytes());
     out.extend_from_slice(payload);
     out
+}
+
+fn read_http_message<S: Read>(
+    stream: &mut S,
+    context: &str,
+) -> Result<(Vec<u8>, Vec<u8>), OutboundError> {
+    let head_with_leftover = read_http_head(stream)?;
+    let Some(index) = head_with_leftover
+        .windows(4)
+        .position(|window| window == b"\r\n\r\n")
+    else {
+        return Err(OutboundError::BadSharedTransport(format!(
+            "incomplete {context} header"
+        )));
+    };
+    let body_start = index + 4;
+    let head = head_with_leftover[..body_start].to_vec();
+    let mut body = head_with_leftover[body_start..].to_vec();
+    let content_length = http_content_length(&head)?;
+    while body.len() < content_length {
+        let mut buf = vec![0_u8; content_length - body.len()];
+        let n = stream
+            .read(&mut buf)
+            .map_err(|err| OutboundError::BadSharedTransport(err.to_string()))?;
+        if n == 0 {
+            break;
+        }
+        body.extend_from_slice(&buf[..n]);
+    }
+    if body.len() < content_length {
+        return Err(OutboundError::BadSharedTransport(format!(
+            "incomplete {context} body"
+        )));
+    }
+    body.truncate(content_length);
+    Ok((head, body))
+}
+
+fn validate_meek_request_head(
+    request_head: &[u8],
+    meek_options: &MeekRoundTripOptions,
+) -> Result<(), OutboundError> {
+    let text = std::str::from_utf8(request_head)
+        .map_err(|err| OutboundError::BadSharedTransport(err.to_string()))?;
+    let mut lines = text.split("\r\n");
+    let request_line = lines
+        .next()
+        .ok_or_else(|| OutboundError::BadSharedTransport("empty meek request".to_owned()))?;
+    let want = format!("POST {} HTTP/1.1", meek_options.path);
+    if request_line != want {
+        return Err(OutboundError::BadSharedTransport(format!(
+            "unexpected meek request line: {request_line}"
+        )));
+    }
+    let host = http_header_value(text, "host")
+        .ok_or_else(|| OutboundError::BadSharedTransport("missing meek Host header".to_owned()))?;
+    if host != meek_options.host {
+        return Err(OutboundError::BadSharedTransport(format!(
+            "unexpected meek Host header: {host}"
+        )));
+    }
+    let session = http_header_value(text, "x-session-id").ok_or_else(|| {
+        OutboundError::BadSharedTransport("missing meek X-Session-ID header".to_owned())
+    })?;
+    if session != meek_options.session_id() {
+        return Err(OutboundError::BadSharedTransport(format!(
+            "unexpected meek X-Session-ID header: {session}"
+        )));
+    }
+    Ok(())
 }
 
 fn read_request_header(stream: &mut impl Read) -> Result<VlessRequestHeader, OutboundError> {
@@ -704,6 +884,27 @@ fn decode_response_payload(input: &[u8]) -> Result<(usize, Vec<u8>), OutboundErr
         ));
     }
     Ok((response_header_len, input[response_header_len..].to_vec()))
+}
+
+fn http_content_length(head: &[u8]) -> Result<usize, OutboundError> {
+    let text = std::str::from_utf8(head)
+        .map_err(|err| OutboundError::BadSharedTransport(err.to_string()))?;
+    http_header_value(text, "content-length")
+        .unwrap_or("0")
+        .parse::<usize>()
+        .map_err(|err| OutboundError::BadSharedTransport(err.to_string()))
+}
+
+fn http_header_value<'a>(head: &'a str, key: &str) -> Option<&'a str> {
+    for line in head.split("\r\n") {
+        let Some((got_key, value)) = line.split_once(':') else {
+            continue;
+        };
+        if got_key.eq_ignore_ascii_case(key) {
+            return Some(value.trim());
+        }
+    }
+    None
 }
 
 fn read_udp_response_payload(stream: &mut impl Read) -> Result<(usize, Vec<u8>), OutboundError> {

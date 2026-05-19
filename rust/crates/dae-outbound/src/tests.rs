@@ -2611,6 +2611,69 @@ fn stage76_vless_grpc_hunk_dataplane_echoes_payload() {
 }
 
 #[test]
+fn stage77_vless_meek_polling_dataplane_echoes_payload() {
+    let key = vless::password_to_key("7c12c745-63a5-433d-9e60-022e469b5bd4").unwrap();
+    let target = "stage77-vless-meek.example:443";
+    let meek_options = shared_transport::MeekRoundTripOptions::from_https_url(
+        "https://front.example/dae-stage77-meek",
+        b"dae-stage77-meek".to_vec(),
+    )
+    .unwrap();
+    let payload = b"stage77-vless-meek-ping";
+    let (proxy, handle) = spawn_vless_meek_polling_echo_server(
+        key,
+        target.to_owned(),
+        meek_options.clone(),
+        payload.len(),
+    );
+    let report = vless::tcp_exchange_over_meek_polling_stream(
+        &mut TcpStream::connect(&proxy).unwrap(),
+        &proxy,
+        &key,
+        target,
+        &meek_options,
+        payload,
+    )
+    .unwrap();
+    let accepted = handle.join().unwrap();
+
+    assert!(report.true_dataplane);
+    assert!(report.default_go_path);
+    assert_eq!(report.command, crate::vmess::VMessNetwork::Tcp.byte());
+    assert_eq!(report.target, target);
+    assert_eq!(report.meek_url, meek_options.url);
+    assert_eq!(report.meek_host, meek_options.host);
+    assert_eq!(report.meek_path, meek_options.path);
+    assert_eq!(report.meek_session_id, meek_options.session_id());
+    assert_eq!(report.payload_len, payload.len());
+    assert_eq!(report.response_header_len, 2);
+    assert_eq!(report.echoed_payload, payload);
+    assert!(report.meek_polling_validated);
+    assert!(report.meek_session_id_validated);
+    assert!(!report.full_https_round_tripper);
+    assert!(report.meek_request_len > report.meek_request_body_len);
+    assert!(report.meek_response_head_len > 0);
+    assert_eq!(
+        report.meek_response_body_len,
+        report.response_header_len + payload.len()
+    );
+    assert_eq!(accepted.request.version, vless::VLESS_VERSION);
+    assert_eq!(accepted.request.key, key);
+    assert_eq!(accepted.request.addons_len, 0);
+    assert_eq!(
+        accepted.request.command,
+        crate::vmess::VMessNetwork::Tcp.byte()
+    );
+    assert_eq!(accepted.request.target, target);
+    assert_eq!(accepted.request.payload, payload);
+    assert!(accepted.meek_session_id_validated);
+    assert_eq!(
+        accepted.meek_request_body_len,
+        accepted.request.header_len + payload.len()
+    );
+}
+
+#[test]
 fn stage65_vmess_aead_tcp_dataplane_echoes_payload() {
     let uuid = "7c12c745-63a5-433d-9e60-022e469b5bd4";
     let target = "stage65-vmess.example:443";
@@ -3703,6 +3766,40 @@ fn spawn_vless_grpc_hunk_echo_server(
         assert_eq!(request.request.target, expected_target);
         let response = vless::response_payload_bytes(&request.request.payload);
         let response = shared_transport::grpc_hunk_frame(&response).unwrap();
+        stream.write_all(&response).unwrap();
+        request
+    });
+    (addr, handle)
+}
+
+fn spawn_vless_meek_polling_echo_server(
+    expected_key: [u8; 16],
+    expected_target: String,
+    meek_options: shared_transport::MeekRoundTripOptions,
+    payload_len: usize,
+) -> (String, thread::JoinHandle<vless::VlessMeekPollingRequest>) {
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let addr = listener.local_addr().unwrap().to_string();
+    let handle = thread::spawn(move || {
+        let (mut stream, _) = listener.accept().unwrap();
+        let request = vless::read_tcp_request_from_meek_polling_stream(
+            &mut stream,
+            payload_len,
+            &meek_options,
+        )
+        .unwrap();
+        assert_eq!(request.request.key, expected_key);
+        assert_eq!(
+            request.request.command,
+            crate::vmess::VMessNetwork::Tcp.byte()
+        );
+        assert_eq!(request.request.target, expected_target);
+        let response = vless::response_payload_bytes(&request.request.payload);
+        let response_head = format!(
+            "HTTP/1.1 200 OK\r\nContent-Length: {}\r\n\r\n",
+            response.len()
+        );
+        stream.write_all(response_head.as_bytes()).unwrap();
         stream.write_all(&response).unwrap();
         request
     });
