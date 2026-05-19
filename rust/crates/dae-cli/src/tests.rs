@@ -23,6 +23,7 @@ mod runtime_command_inventory;
 mod runtime_protocol_55_61;
 mod runtime_vless_core;
 mod runtime_vless_shared_transport;
+mod runtime_vless_xhttp_xmux_stage80;
 mod runtime_vmess_core_65_68;
 mod runtime_vmess_shared_transport_69_73;
 mod userspace_active_datapath;

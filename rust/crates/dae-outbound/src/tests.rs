@@ -13,6 +13,7 @@ use helpers::*;
 mod dataplane_base;
 mod dataplane_trojan;
 mod dataplane_vless;
+mod dataplane_vless_stage80;
 mod dataplane_vmess;
 mod group_policy;
 mod protocol_modern;
