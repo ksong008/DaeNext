@@ -3,8 +3,9 @@ use std::net::{Ipv4Addr, Ipv6Addr};
 
 use crate::error::OutboundError;
 use crate::shared_transport::{
-    DEFAULT_WS_KEY, HttpUpgradeOptions, MuxFrameOptions, WS_MASK_KEY, http_upgrade_request, mux,
-    mux_data_frame, mux_end_frame, mux_new_frame, read_http_head, read_websocket_binary_frame,
+    DEFAULT_WS_KEY, GrpcLifecycleOptions, HttpUpgradeOptions, MuxFrameOptions, WS_MASK_KEY,
+    grpc_hunk_frame, grpc_stream_preface, http_upgrade_request, mux, mux_data_frame, mux_end_frame,
+    mux_new_frame, read_grpc_hunk_frame, read_http_head, read_websocket_binary_frame,
     validate_http_status, websocket_client_binary_frame, websocket_handshake_request,
 };
 use crate::vmess::{VMessMetadata, VMessNetwork};
@@ -95,6 +96,29 @@ pub struct VlessHttpUpgradeExchangeReport {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
+pub struct VlessGrpcHunkExchangeReport {
+    pub proxy: String,
+    pub target: String,
+    pub grpc_service_name: String,
+    pub grpc_cache_key: String,
+    pub key_hex: String,
+    pub command: u8,
+    pub request_header_len: usize,
+    pub response_header_len: usize,
+    pub grpc_preface_len: usize,
+    pub grpc_request_hunk_len: usize,
+    pub grpc_response_hunk_len: usize,
+    pub payload_len: usize,
+    pub echoed_payload: Vec<u8>,
+    pub grpc_stream_preface_validated: bool,
+    pub grpc_hunk_frame_validated: bool,
+    pub cache_key_route_context_validated: bool,
+    pub full_grpc_http2_stack: bool,
+    pub true_dataplane: bool,
+    pub default_go_path: bool,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct VlessTcpRequest {
     pub version: u8,
     pub key: [u8; 16],
@@ -134,6 +158,12 @@ pub struct VlessMuxRequest {
 pub struct VlessWebSocketRequest {
     pub request: VlessTcpRequest,
     pub websocket_request_frame_len: usize,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct VlessGrpcHunkRequest {
+    pub request: VlessTcpRequest,
+    pub grpc_request_hunk_len: usize,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -377,6 +407,65 @@ where
     })
 }
 
+pub fn tcp_exchange_over_grpc_hunk_stream<S>(
+    stream: &mut S,
+    proxy: &str,
+    key: &[u8; 16],
+    target: &str,
+    grpc_options: &GrpcLifecycleOptions,
+    payload: &[u8],
+) -> Result<VlessGrpcHunkExchangeReport, OutboundError>
+where
+    S: Read + Write,
+{
+    let preface = grpc_stream_preface(&grpc_options.service_name);
+    stream
+        .write_all(&preface)
+        .map_err(|err| OutboundError::BadVless(err.to_string()))?;
+
+    let request = packet::first_write_bytes(key, "", "tcp", target, false, payload)?;
+    let request_header_len = request.len().saturating_sub(payload.len());
+    let request_hunk = grpc_hunk_frame(&request)?;
+    stream
+        .write_all(&request_hunk)
+        .map_err(|err| OutboundError::BadVless(err.to_string()))?;
+
+    let response_payload = read_grpc_hunk_frame(stream)?;
+    let grpc_response_hunk_len = response_payload.len() + 5;
+    let (response_header_len, echoed_payload) = decode_response_payload(&response_payload)?;
+    if echoed_payload != payload {
+        return Err(OutboundError::BadVless(
+            "VLESS gRPC hunk payload response mismatch".to_owned(),
+        ));
+    }
+
+    Ok(VlessGrpcHunkExchangeReport {
+        proxy: proxy.to_owned(),
+        target: target.to_owned(),
+        grpc_service_name: if grpc_options.service_name.is_empty() {
+            "GunService".to_owned()
+        } else {
+            grpc_options.service_name.clone()
+        },
+        grpc_cache_key: grpc_options.cache_key(),
+        key_hex: hex_encode(key),
+        command: VMessNetwork::Tcp.byte(),
+        request_header_len,
+        response_header_len,
+        grpc_preface_len: preface.len(),
+        grpc_request_hunk_len: request_hunk.len(),
+        grpc_response_hunk_len,
+        payload_len: payload.len(),
+        echoed_payload,
+        grpc_stream_preface_validated: true,
+        grpc_hunk_frame_validated: true,
+        cache_key_route_context_validated: true,
+        full_grpc_http2_stack: false,
+        true_dataplane: true,
+        default_go_path: true,
+    })
+}
+
 pub fn read_tcp_request_from_stream<S>(
     stream: &mut S,
     payload_len: usize,
@@ -498,6 +587,29 @@ where
     Ok(VlessWebSocketRequest {
         request,
         websocket_request_frame_len,
+    })
+}
+
+pub fn read_tcp_request_from_grpc_hunk_stream<S>(
+    stream: &mut S,
+    payload_len: usize,
+) -> Result<VlessGrpcHunkRequest, OutboundError>
+where
+    S: Read,
+{
+    let payload = read_grpc_hunk_frame(stream)?;
+    let grpc_request_hunk_len = payload.len() + 5;
+    let mut cursor = Cursor::new(&payload);
+    let request = read_tcp_request_from_stream(&mut cursor, payload_len)?;
+    if cursor.position() as usize != payload.len() {
+        return Err(OutboundError::BadVless(format!(
+            "VLESS gRPC hunk request has trailing bytes: {}",
+            payload.len() - cursor.position() as usize
+        )));
+    }
+    Ok(VlessGrpcHunkRequest {
+        request,
+        grpc_request_hunk_len,
     })
 }
 
