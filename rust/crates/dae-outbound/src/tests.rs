@@ -2674,6 +2674,64 @@ fn stage77_vless_meek_polling_dataplane_echoes_payload() {
 }
 
 #[test]
+fn stage78_vless_http_transport_put_dataplane_echoes_payload() {
+    let key = vless::password_to_key("7c12c745-63a5-433d-9e60-022e469b5bd4").unwrap();
+    let target = "stage78-vless-http-target.example:443";
+    let payload = b"stage78-vless-http-put-ping";
+    let mut options =
+        crate::http_proxy::HttpConnectOptions::connect("stage78-vless-http-proxy.example:443");
+    options.host_override = "stage78-vless-http.example".to_owned();
+    options.transport.enabled = true;
+    options.transport.path = "/dae-stage78-http".to_owned();
+    let (proxy, handle) = spawn_vless_http_transport_echo_server(
+        key,
+        target.to_owned(),
+        options.clone(),
+        payload.len(),
+    );
+
+    let report = vless::tcp_exchange_over_http_transport_stream(
+        &mut TcpStream::connect(&proxy).unwrap(),
+        &proxy,
+        &key,
+        target,
+        &options,
+        payload,
+    )
+    .unwrap();
+    let (head, accepted) = handle.join().unwrap();
+
+    assert!(report.true_dataplane);
+    assert!(report.default_go_path);
+    assert!(!report.full_http2_stack);
+    assert_eq!(report.command, crate::vmess::VMessNetwork::Tcp.byte());
+    assert_eq!(report.target, target);
+    assert_eq!(report.http_transport_host, "stage78-vless-http.example");
+    assert_eq!(report.http_transport_path, "/dae-stage78-http");
+    assert_eq!(report.payload_len, payload.len());
+    assert_eq!(report.response_header_len, 2);
+    assert_eq!(report.echoed_payload, payload);
+    assert!(report.http_transport_put_validated);
+    assert_eq!(report.request_header_len, accepted.header_len);
+    assert_eq!(report.http_transport_request_len, head.request_head_len);
+    assert!(report.http_transport_request_len > report.request_header_len);
+    assert!(report.http_transport_response_head_len > 0);
+    assert_eq!(head.method, "PUT");
+    assert_eq!(
+        head.request_uri,
+        "http://stage78-vless-http.example/dae-stage78-http"
+    );
+    assert_eq!(head.host, "stage78-vless-http.example");
+    assert!(head.transport_enabled);
+    assert_eq!(accepted.version, vless::VLESS_VERSION);
+    assert_eq!(accepted.key, key);
+    assert_eq!(accepted.addons_len, 0);
+    assert_eq!(accepted.command, crate::vmess::VMessNetwork::Tcp.byte());
+    assert_eq!(accepted.target, target);
+    assert_eq!(accepted.payload, payload);
+}
+
+#[test]
 fn stage65_vmess_aead_tcp_dataplane_echoes_payload() {
     let uuid = "7c12c745-63a5-433d-9e60-022e469b5bd4";
     let target = "stage65-vmess.example:443";
@@ -4087,6 +4145,37 @@ fn spawn_vmess_aead_http_transport_echo_server(
         assert_eq!(request.command, crate::vmess::VMessNetwork::Tcp.byte());
         assert_eq!(request.target, expected_target);
         let response = vmess::aead_tcp_response_packet(&request, &request.payload).unwrap();
+        stream.write_all(&response).unwrap();
+        (head, request)
+    });
+    (addr, handle)
+}
+
+fn spawn_vless_http_transport_echo_server(
+    expected_key: [u8; 16],
+    expected_target: String,
+    options: crate::http_proxy::HttpConnectOptions,
+    expected_payload_len: usize,
+) -> (
+    String,
+    thread::JoinHandle<(vless::VlessHttpTransportRequestHead, vless::VlessTcpRequest)>,
+) {
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let addr = listener.local_addr().unwrap().to_string();
+    let handle = thread::spawn(move || {
+        let (mut stream, _) = listener.accept().unwrap();
+        let head =
+            vless::read_http_transport_request_head_from_stream(&mut stream, &options).unwrap();
+        stream
+            .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 0\r\n\r\n")
+            .unwrap();
+        let request =
+            vless::read_tcp_request_from_stream(&mut stream, expected_payload_len).unwrap();
+        assert_eq!(request.key, expected_key);
+        assert_eq!(request.addons_len, 0);
+        assert_eq!(request.command, crate::vmess::VMessNetwork::Tcp.byte());
+        assert_eq!(request.target, expected_target);
+        let response = vless::response_payload_bytes(&request.payload);
         stream.write_all(&response).unwrap();
         (head, request)
     });
