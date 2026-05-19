@@ -5,10 +5,11 @@ use crate::error::OutboundError;
 use crate::http_proxy::{HttpConnectOptions, request as http_proxy_request};
 use crate::shared_transport::{
     DEFAULT_WS_KEY, GrpcLifecycleOptions, HttpUpgradeOptions, MeekRoundTripOptions,
-    MuxFrameOptions, WS_MASK_KEY, grpc_hunk_frame, grpc_stream_preface, http_upgrade_request,
-    meek_http_request, mux, mux_data_frame, mux_end_frame, mux_new_frame, read_grpc_hunk_frame,
-    read_http_head, read_websocket_binary_frame, validate_http_status,
-    websocket_client_binary_frame, websocket_handshake_request,
+    MuxFrameOptions, WS_MASK_KEY, XHttpLifecycleOptions, grpc_hunk_frame, grpc_stream_preface,
+    http_upgrade_request, meek_http_request, mux, mux_data_frame, mux_end_frame, mux_new_frame,
+    read_grpc_hunk_frame, read_http_head, read_websocket_binary_frame, validate_http_status,
+    websocket_client_binary_frame, websocket_handshake_request, xhttp_packet_request,
+    xhttp_request_path,
 };
 use crate::vmess::{VMessMetadata, VMessNetwork};
 
@@ -166,6 +167,32 @@ pub struct VlessHttpTransportExchangeReport {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
+pub struct VlessXHttpPacketExchangeReport {
+    pub proxy: String,
+    pub target: String,
+    pub xhttp_host: String,
+    pub xhttp_path: String,
+    pub xhttp_request_path: String,
+    pub xhttp_mode: String,
+    pub xhttp_alpn: String,
+    pub key_hex: String,
+    pub command: u8,
+    pub request_header_len: usize,
+    pub response_header_len: usize,
+    pub xhttp_request_len: usize,
+    pub xhttp_request_body_len: usize,
+    pub xhttp_response_head_len: usize,
+    pub xhttp_response_body_len: usize,
+    pub payload_len: usize,
+    pub echoed_payload: Vec<u8>,
+    pub xhttp_packet_up_validated: bool,
+    pub xhttp_xmux_enabled: bool,
+    pub full_h2_h3_stack: bool,
+    pub true_dataplane: bool,
+    pub default_go_path: bool,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct VlessTcpRequest {
     pub version: u8,
     pub key: [u8; 16],
@@ -228,6 +255,14 @@ pub struct VlessHttpTransportRequestHead {
     pub path: String,
     pub request_head_len: usize,
     pub transport_enabled: bool,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct VlessXHttpPacketRequest {
+    pub request: VlessTcpRequest,
+    pub xhttp_request_body_len: usize,
+    pub xhttp_request_path: String,
+    pub xhttp_packet_up_validated: bool,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -645,6 +680,68 @@ where
     })
 }
 
+pub fn tcp_exchange_over_xhttp_packet_stream<S>(
+    stream: &mut S,
+    proxy: &str,
+    key: &[u8; 16],
+    target: &str,
+    xhttp_options: &XHttpLifecycleOptions,
+    payload: &[u8],
+) -> Result<VlessXHttpPacketExchangeReport, OutboundError>
+where
+    S: Read + Write,
+{
+    if xhttp_options.mode != "packet-up" {
+        return Err(OutboundError::BadVless(format!(
+            "VLESS xHTTP packet exchange requires packet-up mode, got {}",
+            xhttp_options.mode
+        )));
+    }
+    let request = packet::first_write_bytes(key, "", "tcp", target, false, payload)?;
+    let request_header_len = request.len().saturating_sub(payload.len());
+    let xhttp_request = xhttp_packet_request(xhttp_options, &request);
+    stream
+        .write_all(&xhttp_request)
+        .map_err(|err| OutboundError::BadVless(err.to_string()))?;
+
+    let (response_head, response_payload) = read_http_message(stream, "xhttp response")?;
+    validate_http_status(&response_head, 200)?;
+    let (response_header_len, echoed_payload) = decode_response_payload(&response_payload)?;
+    if echoed_payload != payload {
+        return Err(OutboundError::BadVless(
+            "VLESS xHTTP packet payload response mismatch".to_owned(),
+        ));
+    }
+
+    Ok(VlessXHttpPacketExchangeReport {
+        proxy: proxy.to_owned(),
+        target: target.to_owned(),
+        xhttp_host: xhttp_options.host.clone(),
+        xhttp_path: crate::shared_transport::ir::normalize_xhttp_path_and_query(
+            &xhttp_options.path,
+        )
+        .path,
+        xhttp_request_path: xhttp_request_path(xhttp_options),
+        xhttp_mode: xhttp_options.mode.clone(),
+        xhttp_alpn: xhttp_options.alpn.clone(),
+        key_hex: hex_encode(key),
+        command: VMessNetwork::Tcp.byte(),
+        request_header_len,
+        response_header_len,
+        xhttp_request_len: xhttp_request.len(),
+        xhttp_request_body_len: request.len(),
+        xhttp_response_head_len: response_head.len(),
+        xhttp_response_body_len: response_payload.len(),
+        payload_len: payload.len(),
+        echoed_payload,
+        xhttp_packet_up_validated: true,
+        xhttp_xmux_enabled: false,
+        full_h2_h3_stack: false,
+        true_dataplane: true,
+        default_go_path: true,
+    })
+}
+
 pub fn read_tcp_request_from_stream<S>(
     stream: &mut S,
     payload_len: usize,
@@ -833,6 +930,33 @@ where
     validate_http_transport_request_head(&request_head, http_options)
 }
 
+pub fn read_tcp_request_from_xhttp_packet_stream<S>(
+    stream: &mut S,
+    payload_len: usize,
+    xhttp_options: &XHttpLifecycleOptions,
+) -> Result<VlessXHttpPacketRequest, OutboundError>
+where
+    S: Read,
+{
+    let (request_head, payload) = read_http_message(stream, "xhttp request")?;
+    let request_path =
+        validate_xhttp_packet_request_head(&request_head, payload.len(), xhttp_options)?;
+    let mut cursor = Cursor::new(&payload);
+    let request = read_tcp_request_from_stream(&mut cursor, payload_len)?;
+    if cursor.position() as usize != payload.len() {
+        return Err(OutboundError::BadVless(format!(
+            "VLESS xHTTP packet request has trailing bytes: {}",
+            payload.len() - cursor.position() as usize
+        )));
+    }
+    Ok(VlessXHttpPacketRequest {
+        request,
+        xhttp_request_body_len: payload.len(),
+        xhttp_request_path: request_path,
+        xhttp_packet_up_validated: true,
+    })
+}
+
 pub fn response_header_bytes() -> [u8; 2] {
     [VLESS_VERSION, 0]
 }
@@ -979,6 +1103,56 @@ fn validate_http_transport_request_head(
         request_head_len: request_head.len(),
         transport_enabled: true,
     })
+}
+
+fn validate_xhttp_packet_request_head(
+    request_head: &[u8],
+    body_len: usize,
+    xhttp_options: &XHttpLifecycleOptions,
+) -> Result<String, OutboundError> {
+    let text = std::str::from_utf8(request_head)
+        .map_err(|err| OutboundError::BadSharedTransport(err.to_string()))?;
+    let mut lines = text.split("\r\n");
+    let request_line = lines
+        .next()
+        .ok_or_else(|| OutboundError::BadSharedTransport("empty xhttp request".to_owned()))?;
+    let request_path = xhttp_request_path(xhttp_options);
+    let want = format!("POST {request_path} HTTP/1.1");
+    if request_line != want {
+        return Err(OutboundError::BadSharedTransport(format!(
+            "unexpected xhttp request line: {request_line}"
+        )));
+    }
+    let host = http_header_value(text, "host")
+        .ok_or_else(|| OutboundError::BadSharedTransport("missing xhttp Host header".to_owned()))?;
+    if host != xhttp_options.host {
+        return Err(OutboundError::BadSharedTransport(format!(
+            "unexpected xhttp Host header: {host}"
+        )));
+    }
+    let mode = http_header_value(text, "x-dae-xhttp-mode")
+        .ok_or_else(|| OutboundError::BadSharedTransport("missing xhttp mode header".to_owned()))?;
+    if mode != xhttp_options.mode {
+        return Err(OutboundError::BadSharedTransport(format!(
+            "unexpected xhttp mode header: {mode}"
+        )));
+    }
+    let alpn = http_header_value(text, "x-dae-xhttp-alpn")
+        .ok_or_else(|| OutboundError::BadSharedTransport("missing xhttp alpn header".to_owned()))?;
+    if alpn != xhttp_options.alpn {
+        return Err(OutboundError::BadSharedTransport(format!(
+            "unexpected xhttp alpn header: {alpn}"
+        )));
+    }
+    let content_length = http_header_value(text, "content-length").ok_or_else(|| {
+        OutboundError::BadSharedTransport("missing xhttp Content-Length header".to_owned())
+    })?;
+    if content_length != body_len.to_string() {
+        return Err(OutboundError::BadSharedTransport(format!(
+            "unexpected xhttp Content-Length: {content_length}"
+        )));
+    }
+    Ok(request_path)
 }
 
 fn read_request_header(stream: &mut impl Read) -> Result<VlessRequestHeader, OutboundError> {
