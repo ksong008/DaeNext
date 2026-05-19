@@ -56,4 +56,11 @@ pub use vless::{
     VLESSLink, VlessMuxExchangeReport, VlessMuxRequest, VlessTcpExchangeReport, VlessTcpRequest,
     VlessUdpOverTcpExchangeReport, VlessUdpRequest,
 };
-pub use vmess::{VMessLink, VMessMetadata, VMessMetadataType, VMessNetwork};
+pub use vmess::{
+    VMessLink, VMessMetadata, VMessMetadataType, VMessNetwork,
+    dataplane::{
+        VMESS_AEAD_SECURITY_AES_128_GCM, VMessAeadTcpExchangeReport, VMessAeadTcpRequest,
+        aead_tcp_exchange_over_stream, aead_tcp_response_packet, read_aead_tcp_request_from_stream,
+        vmess_cmd_key_from_uuid,
+    },
+};
