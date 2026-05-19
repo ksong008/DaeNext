@@ -58,6 +58,25 @@ pub struct VMessAeadTcpExchangeReport {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
+pub struct VMessAeadUdpOverTcpExchangeReport {
+    pub proxy: String,
+    pub target: String,
+    pub uuid: String,
+    pub cmd_key_hex: String,
+    pub command: u8,
+    pub security: u8,
+    pub request_header_len: usize,
+    pub request_chunk_len: usize,
+    pub response_header_len: usize,
+    pub response_chunk_len: usize,
+    pub payload_len: usize,
+    pub packet_len: usize,
+    pub echoed_payload: Vec<u8>,
+    pub true_dataplane: bool,
+    pub default_go_path: bool,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct VMessAeadTcpRequest {
     pub version: u8,
     pub uuid: String,
@@ -76,6 +95,12 @@ pub struct VMessAeadTcpRequest {
     pub request_body_key: [u8; 16],
     pub response_body_iv: [u8; 16],
     pub response_body_key: [u8; 16],
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct VMessAeadUdpOverTcpRequest {
+    pub request: VMessAeadTcpRequest,
+    pub packet_len: usize,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -128,7 +153,7 @@ pub fn aead_tcp_exchange_over_stream<S>(
 where
     S: Read + Write,
 {
-    let packet = build_aead_tcp_request(uuid, target, payload)?;
+    let packet = build_aead_request(uuid, target, VMessNetwork::Tcp, payload)?;
     stream
         .write_all(&packet.header)
         .map_err(|err| OutboundError::BadVmess(err.to_string()))?;
@@ -162,7 +187,90 @@ where
     })
 }
 
+pub fn aead_udp_over_tcp_exchange_over_stream<S>(
+    stream: &mut S,
+    proxy: &str,
+    uuid: &str,
+    target: &str,
+    payload: &[u8],
+) -> Result<VMessAeadUdpOverTcpExchangeReport, OutboundError>
+where
+    S: Read + Write,
+{
+    let packet = build_aead_request(uuid, target, VMessNetwork::Udp, payload)?;
+    stream
+        .write_all(&packet.header)
+        .map_err(|err| OutboundError::BadVmess(err.to_string()))?;
+    stream
+        .write_all(&packet.chunk)
+        .map_err(|err| OutboundError::BadVmess(err.to_string()))?;
+
+    let (response_header_len, echoed_payload, response_chunk_len) =
+        read_aead_response_header_and_chunk(stream, &packet.request)?;
+    if echoed_payload != payload {
+        return Err(OutboundError::BadVmess(
+            "VMess AEAD UDP-over-TCP payload response mismatch".to_owned(),
+        ));
+    }
+
+    Ok(VMessAeadUdpOverTcpExchangeReport {
+        proxy: proxy.to_owned(),
+        target: target.to_owned(),
+        uuid: normalize_vmess_uuid(uuid),
+        cmd_key_hex: packet.request.cmd_key_hex,
+        command: VMessNetwork::Udp.byte(),
+        security: VMESS_AEAD_SECURITY_AES_128_GCM,
+        request_header_len: packet.header.len(),
+        request_chunk_len: packet.chunk.len(),
+        response_header_len,
+        response_chunk_len,
+        payload_len: payload.len(),
+        packet_len: payload.len(),
+        echoed_payload,
+        true_dataplane: true,
+        default_go_path: true,
+    })
+}
+
 pub fn read_aead_tcp_request_from_stream<S>(
+    stream: &mut S,
+    uuid: &str,
+) -> Result<VMessAeadTcpRequest, OutboundError>
+where
+    S: Read,
+{
+    let request = read_aead_request_from_stream(stream, uuid)?;
+    if request.command != VMessNetwork::Tcp.byte() {
+        return Err(OutboundError::BadVmess(format!(
+            "unexpected VMess AEAD TCP command: {}",
+            request.command
+        )));
+    }
+    Ok(request)
+}
+
+pub fn read_aead_udp_over_tcp_request_from_stream<S>(
+    stream: &mut S,
+    uuid: &str,
+) -> Result<VMessAeadUdpOverTcpRequest, OutboundError>
+where
+    S: Read,
+{
+    let request = read_aead_request_from_stream(stream, uuid)?;
+    if request.command != VMessNetwork::Udp.byte() {
+        return Err(OutboundError::BadVmess(format!(
+            "unexpected VMess AEAD UDP command: {}",
+            request.command
+        )));
+    }
+    let packet_len = request.payload.len();
+    Ok(VMessAeadUdpOverTcpRequest {
+        request,
+        packet_len,
+    })
+}
+
+fn read_aead_request_from_stream<S>(
     stream: &mut S,
     uuid: &str,
 ) -> Result<VMessAeadTcpRequest, OutboundError>
@@ -286,16 +394,17 @@ pub fn aead_tcp_response_packet(
     Ok(response)
 }
 
-fn build_aead_tcp_request(
+fn build_aead_request(
     uuid: &str,
     target: &str,
+    network: VMessNetwork,
     payload: &[u8],
 ) -> Result<VMessAeadRequestPacket, OutboundError> {
     let material = VMessAeadMaterial::default();
     let normalized_uuid = normalize_vmess_uuid(uuid);
     let cmd_key = vmess_cmd_key_from_uuid(&normalized_uuid)?;
     let eauth_id = put_eauth_id(&cmd_key, unix_timestamp_now()?, material.eauth_random)?;
-    let instruction = request_instruction(&material, target)?;
+    let instruction = request_instruction(&material, target, network)?;
     let header = encrypt_request_header(
         &cmd_key,
         &eauth_id,
@@ -338,8 +447,9 @@ fn build_aead_tcp_request(
 fn request_instruction(
     material: &VMessAeadMaterial,
     target: &str,
+    network: VMessNetwork,
 ) -> Result<Vec<u8>, OutboundError> {
-    let metadata = VMessMetadata::parse("tcp", target)?;
+    let metadata = VMessMetadata::parse(network.as_str(), target)?;
     let addr = metadata.encode_addr()?;
     let header_padding_len = 0_usize;
     let mut out = vec![0_u8; 45 + addr.len() + header_padding_len];
@@ -350,7 +460,7 @@ fn request_instruction(
     out[34] = REQUEST_OPTIONS;
     out[35] = ((header_padding_len as u8) << 4) | VMESS_AEAD_SECURITY_AES_128_GCM;
     out[36] = 0;
-    out[37] = VMessNetwork::Tcp.byte();
+    out[37] = network.byte();
     out[38..40].copy_from_slice(&metadata.port().to_be_bytes());
     out[40] = metadata.metadata_type().byte();
     out[41..41 + addr.len()].copy_from_slice(&addr);
