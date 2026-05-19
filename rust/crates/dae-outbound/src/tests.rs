@@ -2732,6 +2732,85 @@ fn stage78_vless_http_transport_put_dataplane_echoes_payload() {
 }
 
 #[test]
+fn stage79_vless_xhttp_packet_dataplane_echoes_payload() {
+    let key = vless::password_to_key("7c12c745-63a5-433d-9e60-022e469b5bd4").unwrap();
+    let target = "stage79-vless-xhttp-target.example:443";
+    let payload = b"stage79-vless-xhttp-ping";
+    let options = shared_transport::XHttpLifecycleOptions::new(
+        "stage79-vless-xhttp.example",
+        "/dae-stage79-xhttp",
+        "packet-up",
+        "tls",
+        "h2",
+        "dae-stage79-xhttp",
+        79,
+    )
+    .unwrap();
+    let (proxy, handle) = spawn_vless_xhttp_packet_echo_server(
+        key,
+        target.to_owned(),
+        options.clone(),
+        payload.len(),
+    );
+
+    let report = vless::tcp_exchange_over_xhttp_packet_stream(
+        &mut TcpStream::connect(&proxy).unwrap(),
+        &proxy,
+        &key,
+        target,
+        &options,
+        payload,
+    )
+    .unwrap();
+    let accepted = handle.join().unwrap();
+
+    assert!(report.true_dataplane);
+    assert!(report.default_go_path);
+    assert!(!report.full_h2_h3_stack);
+    assert!(!report.xhttp_xmux_enabled);
+    assert_eq!(report.command, crate::vmess::VMessNetwork::Tcp.byte());
+    assert_eq!(report.target, target);
+    assert_eq!(report.xhttp_host, "stage79-vless-xhttp.example");
+    assert_eq!(report.xhttp_path, "/dae-stage79-xhttp/");
+    assert_eq!(
+        report.xhttp_request_path,
+        "/dae-stage79-xhttp/?session=dae-stage79-xhttp&seq=79"
+    );
+    assert_eq!(report.xhttp_mode, "packet-up");
+    assert_eq!(report.xhttp_alpn, "h2");
+    assert_eq!(report.payload_len, payload.len());
+    assert_eq!(report.response_header_len, 2);
+    assert_eq!(report.echoed_payload, payload);
+    assert!(report.xhttp_packet_up_validated);
+    assert_eq!(
+        report.xhttp_request_body_len,
+        report.request_header_len + payload.len()
+    );
+    assert_eq!(
+        report.xhttp_response_body_len,
+        report.response_header_len + payload.len()
+    );
+    assert_eq!(accepted.request.version, vless::VLESS_VERSION);
+    assert_eq!(accepted.request.key, key);
+    assert_eq!(accepted.request.addons_len, 0);
+    assert_eq!(
+        accepted.request.command,
+        crate::vmess::VMessNetwork::Tcp.byte()
+    );
+    assert_eq!(accepted.request.target, target);
+    assert_eq!(accepted.request.payload, payload);
+    assert!(accepted.xhttp_packet_up_validated);
+    assert_eq!(
+        accepted.xhttp_request_body_len,
+        accepted.request.header_len + payload.len()
+    );
+    assert_eq!(
+        accepted.xhttp_request_path,
+        "/dae-stage79-xhttp/?session=dae-stage79-xhttp&seq=79"
+    );
+}
+
+#[test]
 fn stage65_vmess_aead_tcp_dataplane_echoes_payload() {
     let uuid = "7c12c745-63a5-433d-9e60-022e469b5bd4";
     let target = "stage65-vmess.example:443";
@@ -4178,6 +4257,45 @@ fn spawn_vless_http_transport_echo_server(
         let response = vless::response_payload_bytes(&request.payload);
         stream.write_all(&response).unwrap();
         (head, request)
+    });
+    (addr, handle)
+}
+
+fn spawn_vless_xhttp_packet_echo_server(
+    expected_key: [u8; 16],
+    expected_target: String,
+    options: shared_transport::XHttpLifecycleOptions,
+    expected_payload_len: usize,
+) -> (String, thread::JoinHandle<vless::VlessXHttpPacketRequest>) {
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let addr = listener.local_addr().unwrap().to_string();
+    let handle = thread::spawn(move || {
+        let (mut stream, _) = listener.accept().unwrap();
+        let request = vless::read_tcp_request_from_xhttp_packet_stream(
+            &mut stream,
+            expected_payload_len,
+            &options,
+        )
+        .unwrap();
+        assert_eq!(request.request.key, expected_key);
+        assert_eq!(request.request.addons_len, 0);
+        assert_eq!(
+            request.request.command,
+            crate::vmess::VMessNetwork::Tcp.byte()
+        );
+        assert_eq!(request.request.target, expected_target);
+        let response = vless::response_payload_bytes(&request.request.payload);
+        stream
+            .write_all(
+                format!(
+                    "HTTP/1.1 200 OK\r\nContent-Length: {}\r\n\r\n",
+                    response.len()
+                )
+                .as_bytes(),
+            )
+            .unwrap();
+        stream.write_all(&response).unwrap();
+        request
     });
     (addr, handle)
 }
