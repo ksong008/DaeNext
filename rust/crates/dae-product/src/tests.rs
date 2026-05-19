@@ -5769,6 +5769,151 @@ fn stage69_vmess_websocket_gate_blocks_default_admission() {
 }
 
 #[test]
+fn stage70_vmess_httpupgrade_gate_matches_golden_fixture() {
+    let fixture = load("product/daemon/stage70_vmess_httpupgrade_dataplane_gate.json");
+    let contract = stage70_vmess_httpupgrade_gate_contract();
+
+    assert_eq!(contract.name, fixture["name"].as_str().unwrap());
+    assert_eq!(contract.stage, fixture["stage"].as_str().unwrap());
+    assert_eq!(contract.prior_gate, fixture["prior_gate"].as_str().unwrap());
+    assert_eq!(
+        contract.stage_complete,
+        fixture["stage_complete"].as_bool().unwrap()
+    );
+    assert_eq!(
+        contract.vmess_aead_tcp_true_dataplane_admitted,
+        fixture["vmess_aead_tcp_true_dataplane_admitted"]
+            .as_bool()
+            .unwrap()
+    );
+    assert_eq!(
+        contract.vmess_aead_udp_over_tcp_admitted,
+        fixture["vmess_aead_udp_over_tcp_admitted"]
+            .as_bool()
+            .unwrap()
+    );
+    assert_eq!(
+        contract.vmess_udp_packet_addr_admitted,
+        fixture["vmess_udp_packet_addr_admitted"].as_bool().unwrap()
+    );
+    assert_eq!(
+        contract.vmess_mux_admitted,
+        fixture["vmess_mux_admitted"].as_bool().unwrap()
+    );
+    assert_eq!(
+        contract.vmess_websocket_admitted,
+        fixture["vmess_websocket_admitted"].as_bool().unwrap()
+    );
+    assert_eq!(
+        contract.vmess_httpupgrade_admitted,
+        fixture["vmess_httpupgrade_admitted"].as_bool().unwrap()
+    );
+    assert_eq!(
+        contract.vmess_shared_transport_partial_admitted,
+        fixture["vmess_shared_transport_partial_admitted"]
+            .as_bool()
+            .unwrap()
+    );
+    assert_eq!(
+        contract.vmess_protocol_partial_admitted,
+        fixture["vmess_protocol_partial_admitted"]
+            .as_bool()
+            .unwrap()
+    );
+    assert_eq!(
+        contract.vmess_protocol_true_dataplane_admitted,
+        fixture["vmess_protocol_true_dataplane_admitted"]
+            .as_bool()
+            .unwrap()
+    );
+    assert_eq!(
+        contract.vmess_tls_underlay_admitted,
+        fixture["vmess_tls_underlay_admitted"].as_bool().unwrap()
+    );
+    assert_eq!(
+        contract.vmess_shared_transport_admitted,
+        fixture["vmess_shared_transport_admitted"]
+            .as_bool()
+            .unwrap()
+    );
+    assert_eq!(
+        contract.outbound_true_dataplane_admitted,
+        fixture["outbound_true_dataplane_admitted"]
+            .as_bool()
+            .unwrap()
+    );
+    assert_eq!(
+        contract.default_switch_allowed,
+        fixture["default_switch_allowed"].as_bool().unwrap()
+    );
+    assert_eq!(
+        contract.product_chain_switch_allowed,
+        fixture["product_chain_switch_allowed"].as_bool().unwrap()
+    );
+    assert_eq!(
+        contract.true_rust_default_daemon_admitted,
+        fixture["true_rust_default_daemon_admitted"]
+            .as_bool()
+            .unwrap()
+    );
+    assert_eq!(
+        contract.go_default_path_preserved,
+        fixture["go_default_path_preserved"].as_bool().unwrap()
+    );
+    assert_eq!(
+        contract.go_fallback_required,
+        fixture["go_fallback_required"].as_bool().unwrap()
+    );
+    assert_eq!(
+        contract.gate_decision,
+        fixture["gate_decision"].as_str().unwrap()
+    );
+    assert_string_vec(&contract.carried_blockers, &fixture["carried_blockers"]);
+}
+
+#[test]
+fn stage70_vmess_httpupgrade_gate_blocks_default_admission() {
+    let contract = stage70_vmess_httpupgrade_gate_contract();
+    assert!(contract.stage_complete);
+    assert!(contract.vmess_aead_tcp_true_dataplane_admitted);
+    assert!(contract.vmess_aead_udp_over_tcp_admitted);
+    assert!(contract.vmess_udp_packet_addr_admitted);
+    assert!(contract.vmess_mux_admitted);
+    assert!(contract.vmess_websocket_admitted);
+    assert!(contract.vmess_httpupgrade_admitted);
+    assert!(contract.vmess_shared_transport_partial_admitted);
+    assert!(contract.vmess_protocol_partial_admitted);
+    assert!(!contract.vmess_protocol_true_dataplane_admitted);
+    assert!(!contract.vmess_tls_underlay_admitted);
+    assert!(!contract.vmess_shared_transport_admitted);
+    assert!(!contract.ss2022_true_dataplane_admitted);
+    assert!(!contract.outbound_true_dataplane_admitted);
+    assert!(!contract.default_switch_allowed);
+    assert!(!contract.product_chain_switch_allowed);
+    assert!(!contract.true_rust_default_daemon_admitted);
+    assert!(contract.go_default_path_preserved);
+    assert!(contract.go_fallback_required);
+
+    let areas = contract.rows.iter().map(|row| row.area).collect::<Vec<_>>();
+    assert_eq!(
+        areas,
+        vec![
+            "Prior VMess AEAD and WebSocket evidence",
+            "VMess HTTPUpgrade data plane",
+            "VMess TLS and HTTPS HTTPUpgrade",
+            "VMess remaining shared transports",
+            "overall outbound/default admission"
+        ]
+    );
+    assert_contains_text(&contract.carried_blockers, "VMess HTTPS HTTPUpgrade");
+    assert_contains_text(&contract.carried_blockers, "SS2022");
+    assert_contains_text(
+        &contract.validation_commands,
+        "stage70-vmess-httpupgrade-dataplane-admission",
+    );
+}
+
+#[test]
 fn protocol_dataplane_admission_contract_matches_golden_fixture() {
     let fixture = load("product/outbound/protocol_dataplane_admission.json");
     let contract = protocol_dataplane_admission_contract();

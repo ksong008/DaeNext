@@ -43,6 +43,7 @@ pub mod stage66_vmess_aead_udp_over_tcp_gate;
 pub mod stage67_vmess_packet_addr_udp_gate;
 pub mod stage68_vmess_mux_gate;
 pub mod stage69_vmess_websocket_gate;
+pub mod stage70_vmess_httpupgrade_gate;
 pub mod systemd;
 pub mod true_daemon_admission;
 
@@ -202,6 +203,10 @@ pub use stage68_vmess_mux_gate::{
 pub use stage69_vmess_websocket_gate::{
     Stage69VMessWebSocketGateContract, Stage69VMessWebSocketGateRow,
     stage69_vmess_websocket_gate_contract,
+};
+pub use stage70_vmess_httpupgrade_gate::{
+    Stage70VMessHttpUpgradeGateContract, Stage70VMessHttpUpgradeGateRow,
+    stage70_vmess_httpupgrade_gate_contract,
 };
 pub use systemd::{SystemdContract, systemd_contract};
 pub use true_daemon_admission::{
