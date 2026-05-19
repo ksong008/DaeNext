@@ -171,7 +171,7 @@ pub fn websocket_server_binary_frame(payload: &[u8]) -> Result<Vec<u8>, Outbound
     websocket_frame(payload, false, [0, 0, 0, 0])
 }
 
-pub fn read_websocket_binary_frame(stream: &mut TcpStream) -> Result<Vec<u8>, OutboundError> {
+pub fn read_websocket_binary_frame(stream: &mut impl Read) -> Result<Vec<u8>, OutboundError> {
     let mut head = [0_u8; 2];
     stream
         .read_exact(&mut head)
@@ -256,7 +256,7 @@ fn set_timeout(stream: &mut TcpStream, timeout: Duration) -> Result<(), Outbound
         .map_err(|err| OutboundError::BadSharedTransport(err.to_string()))
 }
 
-fn read_http_head(stream: &mut TcpStream) -> Result<Vec<u8>, OutboundError> {
+pub fn read_http_head(stream: &mut impl Read) -> Result<Vec<u8>, OutboundError> {
     let mut response = Vec::new();
     let mut buf = [0_u8; 256];
     loop {
@@ -281,7 +281,7 @@ fn read_http_head(stream: &mut TcpStream) -> Result<Vec<u8>, OutboundError> {
     ))
 }
 
-fn validate_http_status(response: &[u8], want: u16) -> Result<(), OutboundError> {
+pub fn validate_http_status(response: &[u8], want: u16) -> Result<(), OutboundError> {
     let text = std::str::from_utf8(response)
         .map_err(|err| OutboundError::BadSharedTransport(err.to_string()))?;
     let line = text
