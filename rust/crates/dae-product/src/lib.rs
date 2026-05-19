@@ -52,6 +52,7 @@ pub mod stage75_vless_httpupgrade_gate;
 pub mod stage76_vless_grpc_hunk_gate;
 pub mod stage77_vless_meek_polling_gate;
 pub mod stage78_vless_http_transport_gate;
+pub mod stage79_vless_xhttp_packet_gate;
 pub mod systemd;
 pub mod true_daemon_admission;
 
@@ -247,6 +248,10 @@ pub use stage77_vless_meek_polling_gate::{
 pub use stage78_vless_http_transport_gate::{
     Stage78VlessHttpTransportGateContract, Stage78VlessHttpTransportGateRow,
     stage78_vless_http_transport_gate_contract,
+};
+pub use stage79_vless_xhttp_packet_gate::{
+    Stage79VlessXHttpPacketGateContract, Stage79VlessXHttpPacketGateRow,
+    stage79_vless_xhttp_packet_gate_contract,
 };
 pub use systemd::{SystemdContract, systemd_contract};
 pub use true_daemon_admission::{
