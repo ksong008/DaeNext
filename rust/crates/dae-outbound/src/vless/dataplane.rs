@@ -2,7 +2,8 @@ use std::io::{Read, Write};
 use std::net::{Ipv4Addr, Ipv6Addr};
 
 use crate::error::OutboundError;
-use crate::vmess::VMessNetwork;
+use crate::shared_transport::{MuxFrameOptions, mux, mux_data_frame, mux_end_frame, mux_new_frame};
+use crate::vmess::{VMessMetadata, VMessNetwork};
 
 use super::packet;
 
@@ -35,6 +36,22 @@ pub struct VlessUdpOverTcpExchangeReport {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
+pub struct VlessMuxExchangeReport {
+    pub proxy: String,
+    pub target: String,
+    pub key_hex: String,
+    pub command: u8,
+    pub mux_id_hex: String,
+    pub payload_len: usize,
+    pub echoed_payload: Vec<u8>,
+    pub new_frame_validated: bool,
+    pub data_frame_validated: bool,
+    pub end_frame_sent: bool,
+    pub true_dataplane: bool,
+    pub default_go_path: bool,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct VlessTcpRequest {
     pub version: u8,
     pub key: [u8; 16],
@@ -58,6 +75,16 @@ pub struct VlessUdpRequest {
     pub payload: Vec<u8>,
     pub header_len: usize,
     pub packet_len: usize,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct VlessMuxRequest {
+    pub version: u8,
+    pub key: [u8; 16],
+    pub key_hex: String,
+    pub addons_len: usize,
+    pub command: u8,
+    pub header_len: usize,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -141,6 +168,57 @@ where
     })
 }
 
+pub fn mux_exchange_over_stream<S>(
+    stream: &mut S,
+    proxy: &str,
+    key: &[u8; 16],
+    mux_id: [u8; 2],
+    target: &str,
+    network: &str,
+    payload: &[u8],
+) -> Result<VlessMuxExchangeReport, OutboundError>
+where
+    S: Read + Write,
+{
+    let header = packet::request_header(key, "", "tcp", "0.0.0.0:0", true, &[])?;
+    let metadata = VMessMetadata::parse(network, target)?;
+    let options = MuxFrameOptions::new(mux_id, metadata.hostname(), metadata.port(), network);
+    stream
+        .write_all(&header)
+        .map_err(|err| OutboundError::BadVless(err.to_string()))?;
+    stream
+        .write_all(&mux_new_frame(&options))
+        .map_err(|err| OutboundError::BadVless(err.to_string()))?;
+    stream
+        .write_all(&mux_data_frame(mux_id, payload)?)
+        .map_err(|err| OutboundError::BadVless(err.to_string()))?;
+
+    let echoed = mux::read_mux_frame(stream)?;
+    stream
+        .write_all(&mux_end_frame(mux_id))
+        .map_err(|err| OutboundError::BadVless(err.to_string()))?;
+    if echoed.payload != payload {
+        return Err(OutboundError::BadVless(
+            "VLESS mux payload response mismatch".to_owned(),
+        ));
+    }
+
+    Ok(VlessMuxExchangeReport {
+        proxy: proxy.to_owned(),
+        target: target.to_owned(),
+        key_hex: hex_encode(key),
+        command: VMessNetwork::Mux.byte(),
+        mux_id_hex: hex_encode(&mux_id),
+        payload_len: payload.len(),
+        echoed_payload: echoed.payload,
+        new_frame_validated: true,
+        data_frame_validated: true,
+        end_frame_sent: true,
+        true_dataplane: true,
+        default_go_path: true,
+    })
+}
+
 pub fn read_tcp_request_from_stream<S>(
     stream: &mut S,
     payload_len: usize,
@@ -198,6 +276,47 @@ where
         payload,
         header_len: header.header_len,
         packet_len: 2 + payload_len,
+    })
+}
+
+pub fn read_mux_request_from_stream<S>(stream: &mut S) -> Result<VlessMuxRequest, OutboundError>
+where
+    S: Read,
+{
+    let mut version = [0_u8; 1];
+    read_exact(stream, &mut version, "vless mux version")?;
+    if version[0] != VLESS_VERSION {
+        return Err(OutboundError::BadVless(format!(
+            "unexpected VLESS mux version: {}",
+            version[0]
+        )));
+    }
+
+    let mut key = [0_u8; 16];
+    read_exact(stream, &mut key, "vless mux key")?;
+
+    let mut addons_len = [0_u8; 1];
+    read_exact(stream, &mut addons_len, "vless mux addons length")?;
+    let addons_len = addons_len[0] as usize;
+    let mut addons = vec![0_u8; addons_len];
+    read_exact(stream, &mut addons, "vless mux addons")?;
+
+    let mut command = [0_u8; 1];
+    read_exact(stream, &mut command, "vless mux command")?;
+    if command[0] != VMessNetwork::Mux.byte() {
+        return Err(OutboundError::BadVless(format!(
+            "unexpected VLESS mux command: {}",
+            command[0]
+        )));
+    }
+
+    Ok(VlessMuxRequest {
+        version: version[0],
+        key,
+        key_hex: hex_encode(&key),
+        addons_len,
+        command: command[0],
+        header_len: 1 + 16 + 1 + addons_len + 1,
     })
 }
 

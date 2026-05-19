@@ -2409,6 +2409,51 @@ fn stage63_vless_udp_over_tcp_dataplane_echoes_payload() {
 }
 
 #[test]
+fn stage64_vless_mux_dataplane_echoes_payload() {
+    let key = vless::password_to_key("7c12c745-63a5-433d-9e60-022e469b5bd4").unwrap();
+    let target = "stage64-mux.example:443";
+    let payload = b"stage64-vless-mux-ping";
+    let mux_id = [0x64, 0x01];
+    let (proxy, handle) = spawn_vless_mux_echo_server(key, mux_id, target.to_owned());
+    let report = vless::mux_exchange_over_stream(
+        &mut TcpStream::connect(&proxy).unwrap(),
+        &proxy,
+        &key,
+        mux_id,
+        target,
+        "tcp",
+        payload,
+    )
+    .unwrap();
+    let (request, new_frame, data_frame, end_frame) = handle.join().unwrap();
+
+    assert!(report.true_dataplane);
+    assert!(report.default_go_path);
+    assert_eq!(report.command, crate::vmess::VMessNetwork::Mux.byte());
+    assert_eq!(report.target, target);
+    assert_eq!(report.payload_len, payload.len());
+    assert_eq!(report.echoed_payload, payload);
+    assert!(report.new_frame_validated);
+    assert!(report.data_frame_validated);
+    assert!(report.end_frame_sent);
+    assert_eq!(request.version, vless::VLESS_VERSION);
+    assert_eq!(request.key, key);
+    assert_eq!(request.addons_len, 0);
+    assert_eq!(request.command, crate::vmess::VMessNetwork::Mux.byte());
+    assert_eq!(new_frame.id, mux_id);
+    assert_eq!(new_frame.status, shared_transport::mux::SESSION_STATUS_NEW);
+    assert_eq!(data_frame.id, mux_id);
+    assert_eq!(
+        data_frame.status,
+        shared_transport::mux::SESSION_STATUS_KEEP
+    );
+    assert_eq!(data_frame.option, shared_transport::mux::OPTION_DATA);
+    assert_eq!(data_frame.payload, payload);
+    assert_eq!(end_frame.id, mux_id);
+    assert_eq!(end_frame.status, shared_transport::mux::SESSION_STATUS_END);
+}
+
+#[test]
 fn stage20_httpupgrade_dataplane_echoes_payload() {
     let fixture = fixture("outbound/protocol/stage20_shared_transport_foundation.json");
     let payload = fixture["payload_ascii"].as_str().unwrap().as_bytes();
@@ -2887,6 +2932,48 @@ fn spawn_vless_udp_over_tcp_echo_server(
         let response = vless::udp_response_packet(&request.payload).unwrap();
         stream.write_all(&response).unwrap();
         request
+    });
+    (addr, handle)
+}
+
+fn spawn_vless_mux_echo_server(
+    expected_key: [u8; 16],
+    expected_id: [u8; 2],
+    expected_target: String,
+) -> (
+    String,
+    thread::JoinHandle<(
+        vless::VlessMuxRequest,
+        shared_transport::mux::MuxFrame,
+        shared_transport::mux::MuxFrame,
+        shared_transport::mux::MuxFrame,
+    )>,
+) {
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let addr = listener.local_addr().unwrap().to_string();
+    let handle = thread::spawn(move || {
+        let (mut stream, _) = listener.accept().unwrap();
+        let request = vless::read_mux_request_from_stream(&mut stream).unwrap();
+        assert_eq!(request.key, expected_key);
+        assert_eq!(request.command, crate::vmess::VMessNetwork::Mux.byte());
+        let (host, port) = expected_target.rsplit_once(':').unwrap();
+        let options = shared_transport::MuxFrameOptions::new(
+            expected_id,
+            host,
+            port.parse::<u16>().unwrap(),
+            "tcp",
+        );
+        let new_frame = shared_transport::mux::read_mux_frame(&mut stream).unwrap();
+        let expected_new = shared_transport::mux_new_frame(&options);
+        assert_eq!(new_frame.metadata, expected_new[2..]);
+        let data_frame = shared_transport::mux::read_mux_frame(&mut stream).unwrap();
+        assert_eq!(data_frame.id, expected_id);
+        assert_eq!(data_frame.option, shared_transport::mux::OPTION_DATA);
+        stream
+            .write_all(&shared_transport::mux_data_frame(expected_id, &data_frame.payload).unwrap())
+            .unwrap();
+        let end_frame = shared_transport::mux::read_mux_frame(&mut stream).unwrap();
+        (request, new_frame, data_frame, end_frame)
     });
     (addr, handle)
 }
