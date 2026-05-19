@@ -2375,6 +2375,40 @@ fn stage62_vless_tcp_dataplane_echoes_payload() {
 }
 
 #[test]
+fn stage63_vless_udp_over_tcp_dataplane_echoes_payload() {
+    let key = vless::password_to_key("7c12c745-63a5-433d-9e60-022e469b5bd4").unwrap();
+    let target = "1.2.3.4:53";
+    let payload = b"stage63-vless-udp-ping";
+    let (proxy, handle) = spawn_vless_udp_over_tcp_echo_server(key);
+    let report = vless::udp_over_tcp_exchange_over_stream(
+        &mut TcpStream::connect(&proxy).unwrap(),
+        &proxy,
+        &key,
+        target,
+        payload,
+    )
+    .unwrap();
+    let accepted = handle.join().unwrap();
+
+    assert!(report.true_dataplane);
+    assert!(report.default_go_path);
+    assert_eq!(report.command, crate::vmess::VMessNetwork::Udp.byte());
+    assert_eq!(report.target, target);
+    assert_eq!(report.payload_len, payload.len());
+    assert_eq!(report.packet_len, 2 + payload.len());
+    assert_eq!(report.response_header_len, 2);
+    assert_eq!(report.echoed_payload, payload);
+    assert_eq!(accepted.version, vless::VLESS_VERSION);
+    assert_eq!(accepted.key, key);
+    assert_eq!(accepted.addons_len, 0);
+    assert_eq!(accepted.command, crate::vmess::VMessNetwork::Udp.byte());
+    assert_eq!(accepted.target, target);
+    assert_eq!(accepted.payload_len, payload.len());
+    assert_eq!(accepted.packet_len, 2 + payload.len());
+    assert_eq!(accepted.payload, payload);
+}
+
+#[test]
 fn stage20_httpupgrade_dataplane_echoes_payload() {
     let fixture = fixture("outbound/protocol/stage20_shared_transport_foundation.json");
     let payload = fixture["payload_ascii"].as_str().unwrap().as_bytes();
@@ -2835,6 +2869,23 @@ fn spawn_vless_tcp_echo_server(
         assert_eq!(request.key, expected_key);
         assert_eq!(request.command, crate::vmess::VMessNetwork::Tcp.byte());
         stream.write_all(&request.payload).unwrap();
+        request
+    });
+    (addr, handle)
+}
+
+fn spawn_vless_udp_over_tcp_echo_server(
+    expected_key: [u8; 16],
+) -> (String, thread::JoinHandle<vless::VlessUdpRequest>) {
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let addr = listener.local_addr().unwrap().to_string();
+    let handle = thread::spawn(move || {
+        let (mut stream, _) = listener.accept().unwrap();
+        let request = vless::read_udp_request_from_stream(&mut stream).unwrap();
+        assert_eq!(request.key, expected_key);
+        assert_eq!(request.command, crate::vmess::VMessNetwork::Udp.byte());
+        let response = vless::udp_response_packet(&request.payload).unwrap();
+        stream.write_all(&response).unwrap();
         request
     });
     (addr, handle)
