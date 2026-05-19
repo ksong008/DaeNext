@@ -46,7 +46,10 @@ pub use shadowsocks::{
     CipherFamily, CipherInfo, ShadowsocksLink, ShadowsocksMetadata, Sip003, Sip003Opts,
 };
 pub use socks5::{AddressKind, ServerReply, Socks5Address, Socks5Command, Socks5UdpDatagram};
-pub use trojan::{TrojanLink, TrojanMetadata, TrojanNetwork, TrojanTransportType};
+pub use trojan::{
+    TrojanLink, TrojanMetadata, TrojanNetwork, TrojanTcpExchangeReport, TrojanTcpRequest,
+    TrojanTransportType,
+};
 pub use tuic::TuicLink;
 pub use types::{IpVersion, L4Proto, NetworkType};
 pub use vless::VLESSLink;
