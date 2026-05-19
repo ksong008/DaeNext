@@ -17,7 +17,7 @@ pub use dataplane::{
 };
 pub use grpc::{
     GrpcCacheReport, GrpcLifecycleCache, GrpcLifecycleOptions, GrpcLifecycleReport,
-    grpc_hunk_exchange, grpc_hunk_frame, grpc_stream_preface,
+    grpc_hunk_exchange, grpc_hunk_frame, grpc_stream_preface, read_grpc_hunk_frame,
 };
 pub use meek::{
     MeekRoundTripOptions, MeekRoundTripReport, meek_http_request, meek_polling_exchange,
