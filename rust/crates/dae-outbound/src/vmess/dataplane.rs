@@ -15,10 +15,11 @@ use sha3::digest::{ExtendableOutput, Update, XofReader};
 
 use crate::error::OutboundError;
 use crate::shared_transport::{
-    DEFAULT_WS_KEY, GrpcLifecycleOptions, HttpUpgradeOptions, MuxFrameOptions, WS_MASK_KEY,
-    grpc_hunk_frame, grpc_stream_preface, http_upgrade_request, mux, mux_data_frame, mux_end_frame,
-    mux_new_frame, read_grpc_hunk_frame, read_http_head, read_websocket_binary_frame,
-    validate_http_status, websocket_client_binary_frame, websocket_handshake_request,
+    DEFAULT_WS_KEY, GrpcLifecycleOptions, HttpUpgradeOptions, MeekRoundTripOptions,
+    MuxFrameOptions, WS_MASK_KEY, grpc_hunk_frame, grpc_stream_preface, http_upgrade_request,
+    meek_http_request, mux, mux_data_frame, mux_end_frame, mux_new_frame, read_grpc_hunk_frame,
+    read_http_head, read_websocket_binary_frame, validate_http_status,
+    websocket_client_binary_frame, websocket_handshake_request,
 };
 use crate::vmess::uuid::normalize_vmess_uuid;
 
@@ -205,6 +206,34 @@ pub struct VMessAeadGrpcHunkExchangeReport {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
+pub struct VMessAeadMeekPollingExchangeReport {
+    pub proxy: String,
+    pub target: String,
+    pub meek_url: String,
+    pub meek_host: String,
+    pub meek_path: String,
+    pub meek_session_id: String,
+    pub uuid: String,
+    pub cmd_key_hex: String,
+    pub command: u8,
+    pub security: u8,
+    pub request_header_len: usize,
+    pub request_chunk_len: usize,
+    pub response_header_len: usize,
+    pub response_chunk_len: usize,
+    pub meek_request_len: usize,
+    pub meek_request_body_len: usize,
+    pub meek_response_head_len: usize,
+    pub meek_response_body_len: usize,
+    pub payload_len: usize,
+    pub echoed_payload: Vec<u8>,
+    pub meek_polling_validated: bool,
+    pub full_https_round_tripper: bool,
+    pub true_dataplane: bool,
+    pub default_go_path: bool,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct VMessAeadTcpRequest {
     pub version: u8,
     pub uuid: String,
@@ -264,6 +293,13 @@ pub struct VMessAeadHttpUpgradeRequest {
 pub struct VMessAeadGrpcHunkRequest {
     pub request: VMessAeadTcpRequest,
     pub grpc_request_hunk_len: usize,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct VMessAeadMeekPollingRequest {
+    pub request: VMessAeadTcpRequest,
+    pub meek_request_body_len: usize,
+    pub meek_session_id_validated: bool,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -736,6 +772,71 @@ where
     })
 }
 
+pub fn aead_tcp_exchange_over_meek_polling_stream<S>(
+    stream: &mut S,
+    proxy: &str,
+    uuid: &str,
+    target: &str,
+    meek_options: &MeekRoundTripOptions,
+    payload: &[u8],
+) -> Result<VMessAeadMeekPollingExchangeReport, OutboundError>
+where
+    S: Read + Write,
+{
+    let packet = build_aead_request(uuid, target, VMessNetwork::Tcp, payload)?;
+    let mut request_payload = Vec::with_capacity(packet.header.len() + packet.chunk.len());
+    request_payload.extend_from_slice(&packet.header);
+    request_payload.extend_from_slice(&packet.chunk);
+    let meek_request = meek_http_request(meek_options, &request_payload);
+    stream
+        .write_all(&meek_request)
+        .map_err(|err| OutboundError::BadVmess(err.to_string()))?;
+
+    let (response_head, response_payload) = read_http_message(stream, "meek response")?;
+    validate_http_status(&response_head, 200)?;
+    let mut response_cursor = Cursor::new(&response_payload);
+    let (response_header_len, echoed_payload, response_chunk_len) =
+        read_aead_response_header_and_chunk(&mut response_cursor, &packet.request)?;
+    if response_cursor.position() as usize != response_payload.len() {
+        return Err(OutboundError::BadVmess(format!(
+            "VMess Meek polling response has trailing bytes: {}",
+            response_payload.len() - response_cursor.position() as usize
+        )));
+    }
+    if echoed_payload != payload {
+        return Err(OutboundError::BadVmess(
+            "VMess Meek polling payload response mismatch".to_owned(),
+        ));
+    }
+
+    Ok(VMessAeadMeekPollingExchangeReport {
+        proxy: proxy.to_owned(),
+        target: target.to_owned(),
+        meek_url: meek_options.url.clone(),
+        meek_host: meek_options.host.clone(),
+        meek_path: meek_options.path.clone(),
+        meek_session_id: meek_options.session_id(),
+        uuid: normalize_vmess_uuid(uuid),
+        cmd_key_hex: packet.request.cmd_key_hex,
+        command: VMessNetwork::Tcp.byte(),
+        security: VMESS_AEAD_SECURITY_AES_128_GCM,
+        request_header_len: packet.header.len(),
+        request_chunk_len: packet.chunk.len(),
+        response_header_len,
+        response_chunk_len,
+        meek_request_len: meek_request.len(),
+        meek_request_body_len: request_payload.len(),
+        meek_response_head_len: response_head.len(),
+        meek_response_body_len: response_payload.len(),
+        payload_len: payload.len(),
+        echoed_payload,
+        meek_polling_validated: true,
+        full_https_round_tripper: false,
+        true_dataplane: true,
+        default_go_path: true,
+    })
+}
+
 pub fn read_aead_tcp_request_from_stream<S>(
     stream: &mut S,
     uuid: &str,
@@ -883,6 +984,31 @@ where
     })
 }
 
+pub fn read_aead_tcp_request_from_meek_polling_stream<S>(
+    stream: &mut S,
+    uuid: &str,
+    meek_options: &MeekRoundTripOptions,
+) -> Result<VMessAeadMeekPollingRequest, OutboundError>
+where
+    S: Read,
+{
+    let (request_head, payload) = read_http_message(stream, "meek request")?;
+    validate_meek_request_head(&request_head, meek_options)?;
+    let mut cursor = Cursor::new(&payload);
+    let request = read_aead_tcp_request_from_stream(&mut cursor, uuid)?;
+    if cursor.position() as usize != payload.len() {
+        return Err(OutboundError::BadVmess(format!(
+            "VMess Meek polling request has trailing bytes: {}",
+            payload.len() - cursor.position() as usize
+        )));
+    }
+    Ok(VMessAeadMeekPollingRequest {
+        request,
+        meek_request_body_len: payload.len(),
+        meek_session_id_validated: true,
+    })
+}
+
 fn read_aead_request_from_stream<S>(
     stream: &mut S,
     uuid: &str,
@@ -1021,6 +1147,97 @@ pub fn aead_tcp_response_packet(
     )?;
     response.extend_from_slice(&codec.seal_chunk(payload)?);
     Ok(response)
+}
+
+fn read_http_message<S: Read>(
+    stream: &mut S,
+    context: &str,
+) -> Result<(Vec<u8>, Vec<u8>), OutboundError> {
+    let head_with_leftover = read_http_head(stream)?;
+    let Some(index) = head_with_leftover
+        .windows(4)
+        .position(|window| window == b"\r\n\r\n")
+    else {
+        return Err(OutboundError::BadSharedTransport(format!(
+            "incomplete {context} header"
+        )));
+    };
+    let body_start = index + 4;
+    let head = head_with_leftover[..body_start].to_vec();
+    let mut body = head_with_leftover[body_start..].to_vec();
+    let content_length = http_content_length(&head)?;
+    while body.len() < content_length {
+        let mut buf = vec![0_u8; content_length - body.len()];
+        let n = stream
+            .read(&mut buf)
+            .map_err(|err| OutboundError::BadSharedTransport(err.to_string()))?;
+        if n == 0 {
+            break;
+        }
+        body.extend_from_slice(&buf[..n]);
+    }
+    if body.len() < content_length {
+        return Err(OutboundError::BadSharedTransport(format!(
+            "incomplete {context} body"
+        )));
+    }
+    body.truncate(content_length);
+    Ok((head, body))
+}
+
+fn validate_meek_request_head(
+    request_head: &[u8],
+    meek_options: &MeekRoundTripOptions,
+) -> Result<(), OutboundError> {
+    let text = std::str::from_utf8(request_head)
+        .map_err(|err| OutboundError::BadSharedTransport(err.to_string()))?;
+    let mut lines = text.split("\r\n");
+    let request_line = lines
+        .next()
+        .ok_or_else(|| OutboundError::BadSharedTransport("empty meek request".to_owned()))?;
+    let want = format!("POST {} HTTP/1.1", meek_options.path);
+    if request_line != want {
+        return Err(OutboundError::BadSharedTransport(format!(
+            "unexpected meek request line: {request_line}"
+        )));
+    }
+    let host = http_header_value(text, "host")
+        .ok_or_else(|| OutboundError::BadSharedTransport("missing meek Host header".to_owned()))?;
+    if host != meek_options.host {
+        return Err(OutboundError::BadSharedTransport(format!(
+            "unexpected meek Host header: {host}"
+        )));
+    }
+    let session = http_header_value(text, "x-session-id").ok_or_else(|| {
+        OutboundError::BadSharedTransport("missing meek X-Session-ID header".to_owned())
+    })?;
+    if session != meek_options.session_id() {
+        return Err(OutboundError::BadSharedTransport(format!(
+            "unexpected meek X-Session-ID header: {session}"
+        )));
+    }
+    Ok(())
+}
+
+fn http_content_length(head: &[u8]) -> Result<usize, OutboundError> {
+    let text = std::str::from_utf8(head)
+        .map_err(|err| OutboundError::BadSharedTransport(err.to_string()))?;
+    http_header_value(text, "content-length")
+        .unwrap_or("0")
+        .parse::<usize>()
+        .map_err(|err| OutboundError::BadSharedTransport(err.to_string()))
+}
+
+fn http_header_value<'a>(head: &'a str, key: &str) -> Option<&'a str> {
+    for line in head.split("\r\n") {
+        let Some((got_key, value)) = line.split_once(':') else {
+            continue;
+        };
+        if got_key.eq_ignore_ascii_case(key) {
+            return Some(value.trim());
+        }
+    }
+    None
 }
 
 fn build_aead_request(

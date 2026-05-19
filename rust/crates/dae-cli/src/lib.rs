@@ -38,6 +38,7 @@ pub(crate) mod runtime_stage68_outbound_gate;
 pub(crate) mod runtime_stage69_outbound_gate;
 pub(crate) mod runtime_stage70_outbound_gate;
 pub(crate) mod runtime_stage71_outbound_gate;
+pub(crate) mod runtime_stage72_outbound_gate;
 pub mod surface;
 pub(crate) mod userspace_runner;
 pub mod validate;
