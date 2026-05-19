@@ -27,6 +27,11 @@ pub const ALLOW_INSECURE_ALIASES: &[&str] = &[
     "skipVerify",
 ];
 pub const TLS_SCHEMES: &[&str] = &["tls", "utls"];
+pub const TLS_MIN_VERSION: &str = "TLS1.3";
+pub const TLS_DEFAULT_ALPN: &[&str] = &["h2", "http/1.1"];
+pub const RUSTLS_SHARED_UNDERLAY_TRUE_DATAPLANE: bool = true;
+pub const UTLS_FINGERPRINT_DATA_PLANE_DEFERRED: bool = true;
+pub const TLS_FRAGMENT_DATA_PLANE_DEFERRED: bool = true;
 pub const WS_SCHEMES: &[&str] = &["ws", "wss"];
 pub const GLOBAL_TLS_FRAGMENT: bool = true;
 pub const UDP_PASSTHROUGH_KEY: &str = "passthroughUdp";
