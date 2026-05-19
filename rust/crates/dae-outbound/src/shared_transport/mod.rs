@@ -9,9 +9,11 @@ pub mod reality;
 pub mod xhttp;
 
 pub use dataplane::{
-    HttpUpgradeOptions, SharedTransportLoopbackReport, SimpleObfsHttpOptions,
-    http_upgrade_exchange, http_upgrade_request, simpleobfs_http_exchange, simpleobfs_http_request,
-    websocket_client_binary_frame, websocket_exchange, websocket_handshake_request,
+    DEFAULT_WS_KEY, HttpUpgradeOptions, SharedTransportLoopbackReport, SimpleObfsHttpOptions,
+    WS_ACCEPT_SAMPLE, WS_MASK_KEY, http_upgrade_exchange, http_upgrade_request, read_http_head,
+    read_websocket_binary_frame, simpleobfs_http_exchange, simpleobfs_http_request,
+    validate_http_status, websocket_client_binary_frame, websocket_exchange,
+    websocket_handshake_request, websocket_server_binary_frame,
 };
 pub use grpc::{
     GrpcCacheReport, GrpcLifecycleCache, GrpcLifecycleOptions, GrpcLifecycleReport,
