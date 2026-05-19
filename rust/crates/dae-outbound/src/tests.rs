@@ -2532,6 +2532,58 @@ fn stage66_vmess_aead_udp_over_tcp_dataplane_echoes_payload() {
 }
 
 #[test]
+fn stage67_vmess_packet_addr_udp_dataplane_echoes_payload() {
+    let uuid = "7c12c745-63a5-433d-9e60-022e469b5bd4";
+    let packet_target = "1.2.3.4:53";
+    let payload = b"stage67-vmess-packet-addr-ping";
+    let (proxy, handle) = spawn_vmess_packet_addr_udp_echo_server(uuid.to_owned());
+    let report = vmess::aead_packet_addr_udp_exchange_over_stream(
+        &mut TcpStream::connect(&proxy).unwrap(),
+        &proxy,
+        uuid,
+        packet_target,
+        payload,
+    )
+    .unwrap();
+    let accepted = handle.join().unwrap();
+
+    assert!(report.true_dataplane);
+    assert!(report.default_go_path);
+    assert_eq!(report.command, crate::vmess::VMessNetwork::Udp.byte());
+    assert_eq!(report.security, vmess::VMESS_AEAD_SECURITY_AES_128_GCM);
+    assert_eq!(
+        report.request_target,
+        format!("{}:53", vmess::VMESS_PACKET_ADDR_MAGIC_ADDRESS)
+    );
+    assert_eq!(report.packet_target, packet_target);
+    assert_eq!(report.payload_len, payload.len());
+    assert_eq!(report.packet_addr_len, 7);
+    assert_eq!(report.packet_len, payload.len() + 7);
+    assert_eq!(report.echoed_payload, payload);
+    assert!(report.request_header_len > 58);
+    assert!(report.request_chunk_len > payload.len() + 7 + 16);
+    assert_eq!(report.response_header_len, 38);
+    assert!(report.response_chunk_len > payload.len() + 7 + 16);
+    assert_eq!(accepted.request.version, 1);
+    assert!(accepted.request.eauth_crc_validated);
+    assert_eq!(
+        accepted.request.security,
+        vmess::VMESS_AEAD_SECURITY_AES_128_GCM
+    );
+    assert_eq!(
+        accepted.request.command,
+        crate::vmess::VMessNetwork::Udp.byte()
+    );
+    assert_eq!(
+        accepted.request.target,
+        format!("{}:53", vmess::VMESS_PACKET_ADDR_MAGIC_ADDRESS)
+    );
+    assert_eq!(accepted.packet_target, packet_target);
+    assert_eq!(accepted.packet_addr_len, 7);
+    assert_eq!(accepted.packet_payload, payload);
+}
+
+#[test]
 fn stage20_httpupgrade_dataplane_echoes_payload() {
     let fixture = fixture("outbound/protocol/stage20_shared_transport_foundation.json");
     let payload = fixture["payload_ascii"].as_str().unwrap().as_bytes();
@@ -3087,6 +3139,34 @@ fn spawn_vmess_aead_udp_over_tcp_echo_server(
         assert_eq!(
             request.request.command,
             crate::vmess::VMessNetwork::Udp.byte()
+        );
+        let response =
+            vmess::aead_tcp_response_packet(&request.request, &request.request.payload).unwrap();
+        stream.write_all(&response).unwrap();
+        request
+    });
+    (addr, handle)
+}
+
+fn spawn_vmess_packet_addr_udp_echo_server(
+    uuid: String,
+) -> (
+    String,
+    thread::JoinHandle<vmess::VMessAeadPacketAddrUdpRequest>,
+) {
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let addr = listener.local_addr().unwrap().to_string();
+    let handle = thread::spawn(move || {
+        let (mut stream, _) = listener.accept().unwrap();
+        let request =
+            vmess::read_aead_packet_addr_udp_request_from_stream(&mut stream, &uuid).unwrap();
+        assert_eq!(
+            request.request.command,
+            crate::vmess::VMessNetwork::Udp.byte()
+        );
+        assert_eq!(
+            request.request.target,
+            format!("{}:53", vmess::VMESS_PACKET_ADDR_MAGIC_ADDRESS)
         );
         let response =
             vmess::aead_tcp_response_packet(&request.request, &request.request.payload).unwrap();
