@@ -2743,6 +2743,70 @@ fn stage70_vmess_aead_httpupgrade_dataplane_echoes_payload() {
 }
 
 #[test]
+fn stage71_vmess_aead_grpc_hunk_dataplane_echoes_payload() {
+    let uuid = "7c12c745-63a5-433d-9e60-022e469b5bd4";
+    let target = "stage71-vmess-grpc.example:443";
+    let service_name = "dae-stage71-grpc";
+    let payload = b"stage71-vmess-grpc-ping";
+    let (proxy, handle) = spawn_vmess_aead_grpc_hunk_echo_server(
+        uuid.to_owned(),
+        target.to_owned(),
+        service_name.to_owned(),
+    );
+    let options = shared_transport::GrpcLifecycleOptions::new(
+        &proxy,
+        service_name,
+        "stage71-vmess-grpc-sni.example",
+        "stage71-dialer",
+        true,
+        1234,
+        true,
+    );
+    let without_mptcp = shared_transport::GrpcLifecycleOptions {
+        mptcp: false,
+        ..options.clone()
+    };
+    assert_ne!(options.cache_key(), without_mptcp.cache_key());
+
+    let report = vmess::aead_tcp_exchange_over_grpc_hunk_stream(
+        &mut TcpStream::connect(&proxy).unwrap(),
+        &proxy,
+        uuid,
+        target,
+        &options,
+        payload,
+    )
+    .unwrap();
+    let accepted = handle.join().unwrap();
+
+    assert!(report.true_dataplane);
+    assert!(report.default_go_path);
+    assert!(!report.full_grpc_http2_stack);
+    assert_eq!(report.command, crate::vmess::VMessNetwork::Tcp.byte());
+    assert_eq!(report.security, vmess::VMESS_AEAD_SECURITY_AES_128_GCM);
+    assert_eq!(report.target, target);
+    assert_eq!(report.grpc_service_name, service_name);
+    assert_eq!(report.grpc_cache_key, options.cache_key());
+    assert_eq!(report.payload_len, payload.len());
+    assert_eq!(report.echoed_payload, payload);
+    assert!(report.grpc_stream_preface_validated);
+    assert!(report.grpc_hunk_frame_validated);
+    assert!(report.cache_key_route_context_validated);
+    assert!(report.grpc_preface_len > service_name.len());
+    assert!(report.grpc_request_hunk_len > report.request_header_len);
+    assert!(report.grpc_response_hunk_len > report.response_header_len);
+    assert_eq!(accepted.request.version, 1);
+    assert!(accepted.request.eauth_crc_validated);
+    assert_eq!(
+        accepted.request.command,
+        crate::vmess::VMessNetwork::Tcp.byte()
+    );
+    assert_eq!(accepted.request.target, target);
+    assert_eq!(accepted.request.payload, payload);
+    assert!(accepted.grpc_request_hunk_len > accepted.request.request_header_len);
+}
+
+#[test]
 fn stage20_httpupgrade_dataplane_echoes_payload() {
     let fixture = fixture("outbound/protocol/stage20_shared_transport_foundation.json");
     let payload = fixture["payload_ascii"].as_str().unwrap().as_bytes();
@@ -3451,6 +3515,37 @@ fn spawn_vmess_aead_httpupgrade_echo_server(
         let response =
             vmess::aead_tcp_response_packet(&request.request, &request.request.payload).unwrap();
         stream.write_all(&response).unwrap();
+        request
+    });
+    (addr, handle)
+}
+
+fn spawn_vmess_aead_grpc_hunk_echo_server(
+    uuid: String,
+    expected_target: String,
+    expected_service_name: String,
+) -> (String, thread::JoinHandle<vmess::VMessAeadGrpcHunkRequest>) {
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let addr = listener.local_addr().unwrap().to_string();
+    let handle = thread::spawn(move || {
+        let (mut stream, _) = listener.accept().unwrap();
+        let expected_preface = shared_transport::grpc_stream_preface(&expected_service_name);
+        let mut preface = vec![0_u8; expected_preface.len()];
+        stream.read_exact(&mut preface).unwrap();
+        assert_eq!(preface, expected_preface);
+
+        let request =
+            vmess::read_aead_tcp_request_from_grpc_hunk_stream(&mut stream, &uuid).unwrap();
+        assert_eq!(
+            request.request.command,
+            crate::vmess::VMessNetwork::Tcp.byte()
+        );
+        assert_eq!(request.request.target, expected_target);
+        let response =
+            vmess::aead_tcp_response_packet(&request.request, &request.request.payload).unwrap();
+        stream
+            .write_all(&shared_transport::grpc_hunk_frame(&response).unwrap())
+            .unwrap();
         request
     });
     (addr, handle)

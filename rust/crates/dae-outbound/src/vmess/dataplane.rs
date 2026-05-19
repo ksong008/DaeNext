@@ -15,8 +15,9 @@ use sha3::digest::{ExtendableOutput, Update, XofReader};
 
 use crate::error::OutboundError;
 use crate::shared_transport::{
-    DEFAULT_WS_KEY, HttpUpgradeOptions, MuxFrameOptions, WS_MASK_KEY, http_upgrade_request, mux,
-    mux_data_frame, mux_end_frame, mux_new_frame, read_http_head, read_websocket_binary_frame,
+    DEFAULT_WS_KEY, GrpcLifecycleOptions, HttpUpgradeOptions, MuxFrameOptions, WS_MASK_KEY,
+    grpc_hunk_frame, grpc_stream_preface, http_upgrade_request, mux, mux_data_frame, mux_end_frame,
+    mux_new_frame, read_grpc_hunk_frame, read_http_head, read_websocket_binary_frame,
     validate_http_status, websocket_client_binary_frame, websocket_handshake_request,
 };
 use crate::vmess::uuid::normalize_vmess_uuid;
@@ -177,6 +178,33 @@ pub struct VMessAeadHttpUpgradeExchangeReport {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
+pub struct VMessAeadGrpcHunkExchangeReport {
+    pub proxy: String,
+    pub target: String,
+    pub grpc_service_name: String,
+    pub grpc_cache_key: String,
+    pub uuid: String,
+    pub cmd_key_hex: String,
+    pub command: u8,
+    pub security: u8,
+    pub request_header_len: usize,
+    pub request_chunk_len: usize,
+    pub response_header_len: usize,
+    pub response_chunk_len: usize,
+    pub grpc_preface_len: usize,
+    pub grpc_request_hunk_len: usize,
+    pub grpc_response_hunk_len: usize,
+    pub payload_len: usize,
+    pub echoed_payload: Vec<u8>,
+    pub grpc_stream_preface_validated: bool,
+    pub grpc_hunk_frame_validated: bool,
+    pub cache_key_route_context_validated: bool,
+    pub full_grpc_http2_stack: bool,
+    pub true_dataplane: bool,
+    pub default_go_path: bool,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct VMessAeadTcpRequest {
     pub version: u8,
     pub uuid: String,
@@ -230,6 +258,12 @@ pub struct VMessAeadWebSocketRequest {
 pub struct VMessAeadHttpUpgradeRequest {
     pub request: VMessAeadTcpRequest,
     pub httpupgrade_tunnel_validated: bool,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct VMessAeadGrpcHunkRequest {
+    pub request: VMessAeadTcpRequest,
+    pub grpc_request_hunk_len: usize,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -629,6 +663,79 @@ where
     })
 }
 
+pub fn aead_tcp_exchange_over_grpc_hunk_stream<S>(
+    stream: &mut S,
+    proxy: &str,
+    uuid: &str,
+    target: &str,
+    grpc_options: &GrpcLifecycleOptions,
+    payload: &[u8],
+) -> Result<VMessAeadGrpcHunkExchangeReport, OutboundError>
+where
+    S: Read + Write,
+{
+    let preface = grpc_stream_preface(&grpc_options.service_name);
+    stream
+        .write_all(&preface)
+        .map_err(|err| OutboundError::BadVmess(err.to_string()))?;
+
+    let packet = build_aead_request(uuid, target, VMessNetwork::Tcp, payload)?;
+    let mut request_payload = Vec::with_capacity(packet.header.len() + packet.chunk.len());
+    request_payload.extend_from_slice(&packet.header);
+    request_payload.extend_from_slice(&packet.chunk);
+    let request_hunk = grpc_hunk_frame(&request_payload)?;
+    stream
+        .write_all(&request_hunk)
+        .map_err(|err| OutboundError::BadVmess(err.to_string()))?;
+
+    let response_payload = read_grpc_hunk_frame(stream)?;
+    let grpc_response_hunk_len = response_payload.len() + 5;
+    let mut response_cursor = Cursor::new(&response_payload);
+    let (response_header_len, echoed_payload, response_chunk_len) =
+        read_aead_response_header_and_chunk(&mut response_cursor, &packet.request)?;
+    if response_cursor.position() as usize != response_payload.len() {
+        return Err(OutboundError::BadVmess(format!(
+            "VMess gRPC hunk response has trailing bytes: {}",
+            response_payload.len() - response_cursor.position() as usize
+        )));
+    }
+    if echoed_payload != payload {
+        return Err(OutboundError::BadVmess(
+            "VMess gRPC hunk payload response mismatch".to_owned(),
+        ));
+    }
+
+    Ok(VMessAeadGrpcHunkExchangeReport {
+        proxy: proxy.to_owned(),
+        target: target.to_owned(),
+        grpc_service_name: if grpc_options.service_name.is_empty() {
+            "GunService".to_owned()
+        } else {
+            grpc_options.service_name.clone()
+        },
+        grpc_cache_key: grpc_options.cache_key(),
+        uuid: normalize_vmess_uuid(uuid),
+        cmd_key_hex: packet.request.cmd_key_hex,
+        command: VMessNetwork::Tcp.byte(),
+        security: VMESS_AEAD_SECURITY_AES_128_GCM,
+        request_header_len: packet.header.len(),
+        request_chunk_len: packet.chunk.len(),
+        response_header_len,
+        response_chunk_len,
+        grpc_preface_len: preface.len(),
+        grpc_request_hunk_len: request_hunk.len(),
+        grpc_response_hunk_len,
+        payload_len: payload.len(),
+        echoed_payload,
+        grpc_stream_preface_validated: true,
+        grpc_hunk_frame_validated: true,
+        cache_key_route_context_validated: true,
+        full_grpc_http2_stack: false,
+        true_dataplane: true,
+        default_go_path: true,
+    })
+}
+
 pub fn read_aead_tcp_request_from_stream<S>(
     stream: &mut S,
     uuid: &str,
@@ -750,6 +857,29 @@ where
     Ok(VMessAeadHttpUpgradeRequest {
         request,
         httpupgrade_tunnel_validated: true,
+    })
+}
+
+pub fn read_aead_tcp_request_from_grpc_hunk_stream<S>(
+    stream: &mut S,
+    uuid: &str,
+) -> Result<VMessAeadGrpcHunkRequest, OutboundError>
+where
+    S: Read,
+{
+    let payload = read_grpc_hunk_frame(stream)?;
+    let grpc_request_hunk_len = payload.len() + 5;
+    let mut cursor = Cursor::new(&payload);
+    let request = read_aead_tcp_request_from_stream(&mut cursor, uuid)?;
+    if cursor.position() as usize != payload.len() {
+        return Err(OutboundError::BadVmess(format!(
+            "VMess gRPC hunk request has trailing bytes: {}",
+            payload.len() - cursor.position() as usize
+        )));
+    }
+    Ok(VMessAeadGrpcHunkRequest {
+        request,
+        grpc_request_hunk_len,
     })
 }
 

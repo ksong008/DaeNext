@@ -130,7 +130,7 @@ pub fn grpc_hunk_frame(payload: &[u8]) -> Result<Vec<u8>, OutboundError> {
     Ok(frame)
 }
 
-pub fn read_grpc_hunk_frame(stream: &mut TcpStream) -> Result<Vec<u8>, OutboundError> {
+pub fn read_grpc_hunk_frame(stream: &mut impl Read) -> Result<Vec<u8>, OutboundError> {
     let mut head = [0_u8; 5];
     stream
         .read_exact(&mut head)
