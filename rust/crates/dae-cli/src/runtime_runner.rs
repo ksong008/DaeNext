@@ -66,6 +66,7 @@ use crate::runtime_stage77_outbound_gate::run_stage77_vless_meek_polling_datapla
 use crate::runtime_stage78_outbound_gate::run_stage78_vless_http_transport_dataplane_admission;
 use crate::runtime_stage79_outbound_gate::run_stage79_vless_xhttp_packet_dataplane_admission;
 use crate::runtime_stage80_outbound_gate::run_stage80_vless_xhttp_xmux_dataplane_admission;
+use crate::runtime_stage81_shared_tls_gate::run_stage81_shared_tls_underlay_dataplane_admission;
 
 pub(crate) fn run_runtime(args: &[String]) -> RunnerOutput {
     match args.first().map(String::as_str) {
@@ -224,6 +225,9 @@ pub(crate) fn run_runtime(args: &[String]) -> RunnerOutput {
         }
         Some("stage80-vless-xhttp-xmux-dataplane-admission") => {
             run_stage80_vless_xhttp_xmux_dataplane_admission(&args[1..])
+        }
+        Some("stage81-shared-tls-underlay-dataplane-admission") => {
+            run_stage81_shared_tls_underlay_dataplane_admission(&args[1..])
         }
         Some(subcommand) => {
             RunnerOutput::usage(format!("unsupported runtime subcommand: {subcommand}"))
