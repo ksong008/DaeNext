@@ -2807,6 +2807,71 @@ fn stage71_vmess_aead_grpc_hunk_dataplane_echoes_payload() {
 }
 
 #[test]
+fn stage72_vmess_aead_meek_polling_dataplane_echoes_payload() {
+    let uuid = "7c12c745-63a5-433d-9e60-022e469b5bd4";
+    let target = "stage72-vmess-meek.example:443";
+    let meek_url = "https://front.example/dae-stage72-meek";
+    let payload = b"stage72-vmess-meek-ping";
+    let options = shared_transport::MeekRoundTripOptions::from_https_url(
+        meek_url,
+        b"dae-stage72-meek".to_vec(),
+    )
+    .unwrap();
+    let (proxy, handle) = spawn_vmess_aead_meek_polling_echo_server(
+        uuid.to_owned(),
+        target.to_owned(),
+        options.clone(),
+    );
+
+    let report = vmess::aead_tcp_exchange_over_meek_polling_stream(
+        &mut TcpStream::connect(&proxy).unwrap(),
+        &proxy,
+        uuid,
+        target,
+        &options,
+        payload,
+    )
+    .unwrap();
+    let accepted = handle.join().unwrap();
+
+    assert!(report.true_dataplane);
+    assert!(report.default_go_path);
+    assert!(!report.full_https_round_tripper);
+    assert_eq!(report.command, crate::vmess::VMessNetwork::Tcp.byte());
+    assert_eq!(report.security, vmess::VMESS_AEAD_SECURITY_AES_128_GCM);
+    assert_eq!(report.target, target);
+    assert_eq!(report.meek_url, meek_url);
+    assert_eq!(report.meek_host, "front.example");
+    assert_eq!(report.meek_path, "/dae-stage72-meek");
+    assert_eq!(report.meek_session_id, options.session_id());
+    assert_eq!(report.payload_len, payload.len());
+    assert_eq!(report.echoed_payload, payload);
+    assert!(report.meek_polling_validated);
+    assert!(report.meek_request_len > report.meek_request_body_len);
+    assert_eq!(
+        report.meek_request_body_len,
+        report.request_header_len + report.request_chunk_len
+    );
+    assert_eq!(
+        report.meek_response_body_len,
+        report.response_header_len + report.response_chunk_len
+    );
+    assert_eq!(accepted.request.version, 1);
+    assert!(accepted.request.eauth_crc_validated);
+    assert_eq!(
+        accepted.request.command,
+        crate::vmess::VMessNetwork::Tcp.byte()
+    );
+    assert_eq!(accepted.request.target, target);
+    assert_eq!(accepted.request.payload, payload);
+    assert!(accepted.meek_session_id_validated);
+    assert_eq!(
+        accepted.meek_request_body_len,
+        accepted.request.request_header_len + accepted.request.request_chunk_len
+    );
+}
+
+#[test]
 fn stage20_httpupgrade_dataplane_echoes_payload() {
     let fixture = fixture("outbound/protocol/stage20_shared_transport_foundation.json");
     let payload = fixture["payload_ascii"].as_str().unwrap().as_bytes();
@@ -3546,6 +3611,43 @@ fn spawn_vmess_aead_grpc_hunk_echo_server(
         stream
             .write_all(&shared_transport::grpc_hunk_frame(&response).unwrap())
             .unwrap();
+        request
+    });
+    (addr, handle)
+}
+
+fn spawn_vmess_aead_meek_polling_echo_server(
+    uuid: String,
+    expected_target: String,
+    options: shared_transport::MeekRoundTripOptions,
+) -> (
+    String,
+    thread::JoinHandle<vmess::VMessAeadMeekPollingRequest>,
+) {
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let addr = listener.local_addr().unwrap().to_string();
+    let handle = thread::spawn(move || {
+        let (mut stream, _) = listener.accept().unwrap();
+        let request =
+            vmess::read_aead_tcp_request_from_meek_polling_stream(&mut stream, &uuid, &options)
+                .unwrap();
+        assert_eq!(
+            request.request.command,
+            crate::vmess::VMessNetwork::Tcp.byte()
+        );
+        assert_eq!(request.request.target, expected_target);
+        let response =
+            vmess::aead_tcp_response_packet(&request.request, &request.request.payload).unwrap();
+        stream
+            .write_all(
+                format!(
+                    "HTTP/1.1 200 OK\r\nContent-Length: {}\r\n\r\n",
+                    response.len()
+                )
+                .as_bytes(),
+            )
+            .unwrap();
+        stream.write_all(&response).unwrap();
         request
     });
     (addr, handle)
