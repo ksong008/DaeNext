@@ -52,5 +52,8 @@ pub use trojan::{
 };
 pub use tuic::TuicLink;
 pub use types::{IpVersion, L4Proto, NetworkType};
-pub use vless::{VLESSLink, VlessTcpExchangeReport, VlessTcpRequest};
+pub use vless::{
+    VLESSLink, VlessTcpExchangeReport, VlessTcpRequest, VlessUdpOverTcpExchangeReport,
+    VlessUdpRequest,
+};
 pub use vmess::{VMessLink, VMessMetadata, VMessMetadataType, VMessNetwork};
