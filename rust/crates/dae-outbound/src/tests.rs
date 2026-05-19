@@ -2346,6 +2346,35 @@ fn stage61_trojan_udp_over_tcp_dataplane_echoes_packet_payload() {
 }
 
 #[test]
+fn stage62_vless_tcp_dataplane_echoes_payload() {
+    let key = vless::password_to_key("7c12c745-63a5-433d-9e60-022e469b5bd4").unwrap();
+    let target = "stage62-vless.example:443";
+    let payload = b"stage62-vless-tcp-ping";
+    let (proxy, handle) = spawn_vless_tcp_echo_server(key, payload.len());
+    let report = vless::tcp_exchange_over_stream(
+        &mut TcpStream::connect(&proxy).unwrap(),
+        &proxy,
+        &key,
+        target,
+        payload,
+    )
+    .unwrap();
+    let accepted = handle.join().unwrap();
+
+    assert!(report.true_dataplane);
+    assert!(report.default_go_path);
+    assert_eq!(report.command, crate::vmess::VMessNetwork::Tcp.byte());
+    assert_eq!(report.target, target);
+    assert_eq!(report.echoed_payload, payload);
+    assert_eq!(accepted.version, vless::VLESS_VERSION);
+    assert_eq!(accepted.key, key);
+    assert_eq!(accepted.addons_len, 0);
+    assert_eq!(accepted.command, crate::vmess::VMessNetwork::Tcp.byte());
+    assert_eq!(accepted.target, target);
+    assert_eq!(accepted.payload, payload);
+}
+
+#[test]
 fn stage20_httpupgrade_dataplane_echoes_payload() {
     let fixture = fixture("outbound/protocol/stage20_shared_transport_foundation.json");
     let payload = fixture["payload_ascii"].as_str().unwrap().as_bytes();
@@ -2790,6 +2819,23 @@ fn spawn_trojan_udp_over_tcp_echo_server(
         let response = trojan::packet::udp_packet(&packet.target, &packet.payload).unwrap();
         stream.write_all(&response).unwrap();
         (header, packet)
+    });
+    (addr, handle)
+}
+
+fn spawn_vless_tcp_echo_server(
+    expected_key: [u8; 16],
+    payload_len: usize,
+) -> (String, thread::JoinHandle<vless::VlessTcpRequest>) {
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let addr = listener.local_addr().unwrap().to_string();
+    let handle = thread::spawn(move || {
+        let (mut stream, _) = listener.accept().unwrap();
+        let request = vless::read_tcp_request_from_stream(&mut stream, payload_len).unwrap();
+        assert_eq!(request.key, expected_key);
+        assert_eq!(request.command, crate::vmess::VMessNetwork::Tcp.byte());
+        stream.write_all(&request.payload).unwrap();
+        request
     });
     (addr, handle)
 }
