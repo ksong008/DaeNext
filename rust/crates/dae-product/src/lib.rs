@@ -38,6 +38,7 @@ pub mod stage61_trojan_udp_over_tcp_gate;
 pub mod stage62_vless_tcp_gate;
 pub mod stage63_vless_udp_over_tcp_gate;
 pub mod stage64_vless_mux_gate;
+pub mod stage65_vmess_aead_tcp_gate;
 pub mod systemd;
 pub mod true_daemon_admission;
 
@@ -178,6 +179,10 @@ pub use stage63_vless_udp_over_tcp_gate::{
 };
 pub use stage64_vless_mux_gate::{
     Stage64VlessMuxGateContract, Stage64VlessMuxGateRow, stage64_vless_mux_gate_contract,
+};
+pub use stage65_vmess_aead_tcp_gate::{
+    Stage65VMessAeadTcpGateContract, Stage65VMessAeadTcpGateRow,
+    stage65_vmess_aead_tcp_gate_contract,
 };
 pub use systemd::{SystemdContract, systemd_contract};
 pub use true_daemon_admission::{
