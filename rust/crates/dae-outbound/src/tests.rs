@@ -22,3 +22,4 @@ mod protocol_socks_http;
 mod protocol_vmess_vless;
 mod shared_transport_contract;
 mod shared_transport_dataplane;
+mod shared_transport_tls_stage81;
