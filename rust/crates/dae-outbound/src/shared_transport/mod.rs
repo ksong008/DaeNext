@@ -35,6 +35,6 @@ pub use reality::{
     reality_mutation_report, reality_session_id,
 };
 pub use xhttp::{
-    XHttpLifecycleOptions, XHttpLifecycleReport, xhttp_packet_exchange, xhttp_packet_request,
-    xhttp_request_path,
+    XHttpLifecycleOptions, XHttpLifecycleReport, XHttpXmuxOptions, xhttp_packet_exchange,
+    xhttp_packet_request, xhttp_request_path,
 };
