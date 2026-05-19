@@ -2277,6 +2277,40 @@ fn stage59_shadowsocks_aead_udp_packet_wraps_target_and_payload() {
 }
 
 #[test]
+fn stage60_trojanc_tcp_dataplane_echoes_payload() {
+    let password = "stage60-password";
+    let target = "stage60.example:443";
+    let payload = b"stage60-trojanc-tcp-ping";
+    let (proxy, handle) = spawn_trojanc_tcp_echo_server(password.to_owned(), payload.len());
+    let report = trojan::tcp_exchange_over_stream(
+        &mut TcpStream::connect(&proxy).unwrap(),
+        &proxy,
+        password,
+        target,
+        payload,
+    )
+    .unwrap();
+    let accepted = handle.join().unwrap();
+
+    assert!(report.true_dataplane);
+    assert!(report.default_go_path);
+    assert_eq!(report.command, trojan::TrojanNetwork::Tcp.byte());
+    assert_eq!(
+        report.password_sha224_hex,
+        trojan::packet::password_sha224_hex(password)
+    );
+    assert_eq!(report.target, target);
+    assert_eq!(report.echoed_payload, payload);
+    assert_eq!(
+        accepted.password_sha224_hex,
+        trojan::packet::password_sha224_hex(password)
+    );
+    assert_eq!(accepted.command, trojan::TrojanNetwork::Tcp.byte());
+    assert_eq!(accepted.target, target);
+    assert_eq!(accepted.payload, payload);
+}
+
+#[test]
 fn stage20_httpupgrade_dataplane_echoes_payload() {
     let fixture = fixture("outbound/protocol/stage20_shared_transport_foundation.json");
     let payload = fixture["payload_ascii"].as_str().unwrap().as_bytes();
@@ -2676,6 +2710,25 @@ fn spawn_shadowsocks_aead_echo_server(
                 .unwrap();
         stream.write_all(&response).unwrap();
         target.authority()
+    });
+    (addr, handle)
+}
+
+fn spawn_trojanc_tcp_echo_server(
+    password: String,
+    payload_len: usize,
+) -> (String, thread::JoinHandle<trojan::TrojanTcpRequest>) {
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let addr = listener.local_addr().unwrap().to_string();
+    let handle = thread::spawn(move || {
+        let (mut stream, _) = listener.accept().unwrap();
+        let request = trojan::read_tcp_request_from_stream(&mut stream, payload_len).unwrap();
+        assert_eq!(
+            request.password_sha224_hex,
+            trojan::packet::password_sha224_hex(&password)
+        );
+        stream.write_all(&request.payload).unwrap();
+        request
     });
     (addr, handle)
 }
