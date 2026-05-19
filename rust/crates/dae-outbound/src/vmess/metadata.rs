@@ -3,6 +3,8 @@ use std::net::{Ipv4Addr, Ipv6Addr};
 use crate::error::OutboundError;
 use crate::socks5::Socks5Address;
 
+pub const VMESS_PACKET_ADDR_MAGIC_ADDRESS: &str = "sp.packet-addr.v2fly.arpa";
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum VMessNetwork {
     Tcp,
@@ -137,6 +139,59 @@ pub fn put_packet_addr(addr: &str) -> Result<Vec<u8>, OutboundError> {
         }
     }
     Ok(out)
+}
+
+pub fn packet_addr_magic_target(packet_target: &str) -> Result<String, OutboundError> {
+    let parsed = Socks5Address::parse(packet_target)?;
+    match parsed {
+        Socks5Address::Ipv4 { port, .. } | Socks5Address::Ipv6 { port, .. } => {
+            Ok(format!("{VMESS_PACKET_ADDR_MAGIC_ADDRESS}:{port}"))
+        }
+        Socks5Address::Domain { hostname, .. } => Err(OutboundError::BadVmess(format!(
+            "vmess packet addr requires IP address: {hostname}"
+        ))),
+    }
+}
+
+pub fn put_packet_addr_payload(addr: &str, payload: &[u8]) -> Result<Vec<u8>, OutboundError> {
+    let mut out = put_packet_addr(addr)?;
+    out.extend_from_slice(payload);
+    Ok(out)
+}
+
+pub fn parse_packet_addr_payload(input: &[u8]) -> Result<(String, usize, Vec<u8>), OutboundError> {
+    let Some((&addr_type, rest)) = input.split_first() else {
+        return Err(OutboundError::BadVmess(
+            "vmess packet addr payload is empty".to_owned(),
+        ));
+    };
+    match addr_type {
+        1 => {
+            if rest.len() < 6 {
+                return Err(OutboundError::BadVmess(
+                    "vmess packet addr ipv4 payload too short".to_owned(),
+                ));
+            }
+            let addr = Ipv4Addr::new(rest[0], rest[1], rest[2], rest[3]);
+            let port = u16::from_be_bytes([rest[4], rest[5]]);
+            Ok((format!("{addr}:{port}"), 7, rest[6..].to_vec()))
+        }
+        2 => {
+            if rest.len() < 18 {
+                return Err(OutboundError::BadVmess(
+                    "vmess packet addr ipv6 payload too short".to_owned(),
+                ));
+            }
+            let mut octets = [0_u8; 16];
+            octets.copy_from_slice(&rest[..16]);
+            let addr = Ipv6Addr::from(octets);
+            let port = u16::from_be_bytes([rest[16], rest[17]]);
+            Ok((format!("[{addr}]:{port}"), 19, rest[18..].to_vec()))
+        }
+        _ => Err(OutboundError::BadVmess(format!(
+            "invalid vmess packet addr type: {addr_type}"
+        ))),
+    }
 }
 
 pub fn packet_addr_type(input: &[u8]) -> VMessMetadataType {
