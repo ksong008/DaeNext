@@ -1,0 +1,94 @@
+{
+  "carried_blockers": [
+    "SS2022 TCP/UDP true dataplane is still incomplete",
+    "Trojan TLS and Trojan-Go shared transport rows are still incomplete",
+    "VLESS TLS/REALITY/XTLS Vision/shared transport/mux rows are still incomplete",
+    "VMess, Hysteria2, TUIC, Juicity, AnyTLS, HTTPS proxy, and shared transport true dataplanes are still incomplete",
+    "matched Go default daemon vs true Rust candidate benchmark is still missing",
+    "clean dae-wing and daed product-chain recertification is still missing"
+  ],
+  "default_path_mutation_allowed": false,
+  "default_switch_allowed": false,
+  "gate_decision": "stage63 admits the non-Vision non-mux VLESS UDP-over-TCP Rust true dataplane row: the opt-in smoke validates VLESS version, UUID key, empty addons, UDP command, target metadata 1.2.3.4:53, request length prefix, response header, payload echo, SO_MARKed TCP underlay, MPTCP status, and benchmark; VLESS TLS, REALITY, XTLS Vision, shared transports, mux, SS2022, and default/product switches remain closed",
+  "go_default_path_preserved": true,
+  "go_fallback_required": true,
+  "matched_go_rust_default_daemon_benchmark_recorded": false,
+  "name": "stage63-vless-udp-over-tcp-dataplane-gate",
+  "outbound_true_dataplane_admitted": false,
+  "prior_gate": "stage62-vless-tcp-dataplane-gate",
+  "product_chain_switch_allowed": false,
+  "protocol_outbound_partial_admitted": true,
+  "rows": [
+    {
+      "area": "Prior protocol carried evidence",
+      "boundary": "carried raw TCP evidence does not satisfy VLESS UDP, TLS, REALITY, Vision, shared transport, or mux rows",
+      "evidence": "SOCKS5, HTTP CONNECT, ordinary Shadowsocks AEAD TCP+UDP, trojanc TCP, Trojan UDP-over-TCP, and VLESS raw TCP rows are carried from previous gates",
+      "next_action": "keep prior rows as prerequisites while continuing VLESS and VMess gates",
+      "status": "passed-prior-gates"
+    },
+    {
+      "area": "VLESS UDP-over-TCP data plane",
+      "boundary": "this covers only security=none/type=tcp/headerType=none/flow empty/network=udp over TCP and does not cover Vision UDP, mux, TLS, REALITY, or shared transports",
+      "evidence": "Stage 63 writes a VLESS UDP-over-TCP first write with version 0, UUID key, empty addons, UDP command, target 1.2.3.4:53, 2-byte request length prefix, VLESS response header, payload echo, SO_MARK=1234, MPTCP status, and benchmark",
+      "next_action": "carry UDP-over-TCP as partial VLESS evidence and continue VLESS transport/security gates",
+      "status": "passed-opt-in-root-gated-smoke"
+    },
+    {
+      "area": "VLESS TLS, REALITY, and XTLS Vision",
+      "boundary": "vless_protocol_partial_admitted=true does not mean vless_protocol_true_dataplane_admitted=true",
+      "evidence": "TLS/uTLS/REALITY and Vision require dedicated shared transport and TLS state evidence; UDP-over-TCP does not exercise those hooks",
+      "next_action": "split TLS underlay, REALITY, and Vision gates before marking VLESS complete",
+      "status": "blocked"
+    },
+    {
+      "area": "VLESS shared transport and mux",
+      "boundary": "UDP-over-TCP payload echo cannot satisfy transport-specific behavior",
+      "evidence": "ws/grpc/http/httpupgrade/meek/xhttp and mux rows are not executed by this gate",
+      "next_action": "add shared transport and mux gates",
+      "status": "blocked"
+    },
+    {
+      "area": "overall outbound/default admission",
+      "boundary": "protocol_outbound_partial_admitted=true does not mean outbound_true_dataplane_admitted=true",
+      "evidence": "several protocol rows remain incomplete and matched Go default daemon benchmarking is still missing",
+      "next_action": "continue per-protocol rows and matched Go/Rust daemon benchmark before reopening default switch",
+      "status": "blocked"
+    }
+  ],
+  "source": [
+    "DAEX_RUST_REBUILD_PLAN_2026-05-16.md:stage63",
+    "DAENEW_RUST_REBUILD_MEMO_2026-05-16.md:26.4",
+    "DAENEW_RUST_REBUILD_MEMO_2026-05-16.md:26.5",
+    "DAENEW_RUST_REBUILD_MEMO_2026-05-16.md:26.6",
+    "DAENEW_RUST_REBUILD_MEMO_2026-05-16.md:26.7",
+    "DAENEW_RUST_REBUILD_MEMO_2026-05-16.md:26.3",
+    "rust/crates/dae-cli/src/runtime_stage63_outbound_gate.rs",
+    "rust/crates/dae-outbound/src/vless/dataplane.rs",
+    "rust/crates/dae-datapath/src/tcp_direct.rs",
+    "testdata/rebuild-golden/engine/runtime_stage63/vless_udp_over_tcp_dataplane_admission.json"
+  ],
+  "ss2022_true_dataplane_admitted": false,
+  "stage": "stage63",
+  "stage_complete": true,
+  "trojan_udp_over_tcp_admitted": true,
+  "trojanc_tcp_true_dataplane_admitted": true,
+  "true_rust_default_daemon_admitted": false,
+  "validation_commands": [
+    "python3 -m json.tool testdata/rebuild-golden/engine/runtime_stage63/vless_udp_over_tcp_dataplane_admission.json",
+    "python3 -m json.tool testdata/rebuild-golden/product/daemon/stage63_vless_udp_over_tcp_dataplane_gate.json",
+    "cargo test --manifest-path rust/Cargo.toml -p dae-outbound stage63 -- --nocapture",
+    "cargo test --manifest-path rust/Cargo.toml -p dae-cli stage63 -- --nocapture",
+    "cargo test --manifest-path rust/Cargo.toml -p dae-product stage63 -- --nocapture",
+    "cargo run --manifest-path rust/Cargo.toml -p dae-cli --bin dae-cli-optin --quiet -- runtime stage63-vless-udp-over-tcp-dataplane-admission --execute-smoke --ack-root-gate --benchmark-iters 10",
+    "git diff --check"
+  ],
+  "vless_mux_admitted": false,
+  "vless_protocol_partial_admitted": true,
+  "vless_protocol_true_dataplane_admitted": false,
+  "vless_reality_admitted": false,
+  "vless_shared_transport_admitted": false,
+  "vless_tcp_raw_true_dataplane_admitted": true,
+  "vless_tls_underlay_admitted": false,
+  "vless_udp_over_tcp_admitted": true,
+  "vless_xtls_vision_admitted": false
+}
