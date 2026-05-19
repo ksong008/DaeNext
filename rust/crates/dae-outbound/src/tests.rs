@@ -2551,6 +2551,66 @@ fn stage75_vless_httpupgrade_dataplane_echoes_payload() {
 }
 
 #[test]
+fn stage76_vless_grpc_hunk_dataplane_echoes_payload() {
+    let key = vless::password_to_key("7c12c745-63a5-433d-9e60-022e469b5bd4").unwrap();
+    let target = "stage76-vless-grpc.example:443";
+    let grpc_service_name = "dae-stage76-grpc";
+    let payload = b"stage76-vless-grpc-ping";
+    let (proxy, handle) = spawn_vless_grpc_hunk_echo_server(
+        key,
+        target.to_owned(),
+        grpc_service_name.to_owned(),
+        payload.len(),
+    );
+    let grpc_options = shared_transport::GrpcLifecycleOptions::new(
+        &proxy,
+        grpc_service_name,
+        "stage76-vless-grpc-sni.example",
+        "stage76-vless-grpc-dialer",
+        true,
+        1234,
+        true,
+    );
+    let report = vless::tcp_exchange_over_grpc_hunk_stream(
+        &mut TcpStream::connect(&proxy).unwrap(),
+        &proxy,
+        &key,
+        target,
+        &grpc_options,
+        payload,
+    )
+    .unwrap();
+    let accepted = handle.join().unwrap();
+
+    assert!(report.true_dataplane);
+    assert!(report.default_go_path);
+    assert_eq!(report.command, crate::vmess::VMessNetwork::Tcp.byte());
+    assert_eq!(report.target, target);
+    assert_eq!(report.grpc_service_name, grpc_service_name);
+    assert_eq!(report.grpc_cache_key, grpc_options.cache_key());
+    assert_eq!(report.payload_len, payload.len());
+    assert_eq!(report.response_header_len, 2);
+    assert_eq!(report.echoed_payload, payload);
+    assert!(report.grpc_stream_preface_validated);
+    assert!(report.grpc_hunk_frame_validated);
+    assert!(report.cache_key_route_context_validated);
+    assert!(!report.full_grpc_http2_stack);
+    assert!(report.grpc_preface_len > grpc_service_name.len());
+    assert!(report.grpc_request_hunk_len > report.request_header_len);
+    assert!(report.grpc_response_hunk_len > report.response_header_len);
+    assert_eq!(accepted.request.version, vless::VLESS_VERSION);
+    assert_eq!(accepted.request.key, key);
+    assert_eq!(accepted.request.addons_len, 0);
+    assert_eq!(
+        accepted.request.command,
+        crate::vmess::VMessNetwork::Tcp.byte()
+    );
+    assert_eq!(accepted.request.target, target);
+    assert_eq!(accepted.request.payload, payload);
+    assert!(accepted.grpc_request_hunk_len > accepted.request.header_len);
+}
+
+#[test]
 fn stage65_vmess_aead_tcp_dataplane_echoes_payload() {
     let uuid = "7c12c745-63a5-433d-9e60-022e469b5bd4";
     let target = "stage65-vmess.example:443";
@@ -3613,6 +3673,36 @@ fn spawn_vless_httpupgrade_echo_server(
         assert_eq!(request.command, crate::vmess::VMessNetwork::Tcp.byte());
         assert_eq!(request.target, expected_target);
         let response = vless::response_payload_bytes(&request.payload);
+        stream.write_all(&response).unwrap();
+        request
+    });
+    (addr, handle)
+}
+
+fn spawn_vless_grpc_hunk_echo_server(
+    expected_key: [u8; 16],
+    expected_target: String,
+    expected_service_name: String,
+    payload_len: usize,
+) -> (String, thread::JoinHandle<vless::VlessGrpcHunkRequest>) {
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let addr = listener.local_addr().unwrap().to_string();
+    let handle = thread::spawn(move || {
+        let (mut stream, _) = listener.accept().unwrap();
+        let expected_preface = shared_transport::grpc_stream_preface(&expected_service_name);
+        let mut preface = vec![0_u8; expected_preface.len()];
+        stream.read_exact(&mut preface).unwrap();
+        assert_eq!(preface, expected_preface);
+        let request =
+            vless::read_tcp_request_from_grpc_hunk_stream(&mut stream, payload_len).unwrap();
+        assert_eq!(request.request.key, expected_key);
+        assert_eq!(
+            request.request.command,
+            crate::vmess::VMessNetwork::Tcp.byte()
+        );
+        assert_eq!(request.request.target, expected_target);
+        let response = vless::response_payload_bytes(&request.request.payload);
+        let response = shared_transport::grpc_hunk_frame(&response).unwrap();
         stream.write_all(&response).unwrap();
         request
     });
