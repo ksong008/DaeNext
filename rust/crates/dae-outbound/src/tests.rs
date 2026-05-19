@@ -2505,6 +2505,52 @@ fn stage74_vless_websocket_dataplane_echoes_payload() {
 }
 
 #[test]
+fn stage75_vless_httpupgrade_dataplane_echoes_payload() {
+    let key = vless::password_to_key("7c12c745-63a5-433d-9e60-022e469b5bd4").unwrap();
+    let target = "stage75-vless-httpupgrade.example:443";
+    let httpupgrade_host = "stage75-vless-upgrade.example";
+    let httpupgrade_path = "/dae-vless-httpupgrade";
+    let payload = b"stage75-vless-httpupgrade-ping";
+    let (proxy, handle) = spawn_vless_httpupgrade_echo_server(
+        key,
+        target.to_owned(),
+        httpupgrade_host.to_owned(),
+        httpupgrade_path.to_owned(),
+        payload.len(),
+    );
+    let report = vless::tcp_exchange_over_httpupgrade_stream(
+        &mut TcpStream::connect(&proxy).unwrap(),
+        &proxy,
+        &key,
+        target,
+        httpupgrade_host,
+        httpupgrade_path,
+        payload,
+    )
+    .unwrap();
+    let accepted = handle.join().unwrap();
+
+    assert!(report.true_dataplane);
+    assert!(report.default_go_path);
+    assert_eq!(report.command, crate::vmess::VMessNetwork::Tcp.byte());
+    assert_eq!(report.target, target);
+    assert_eq!(report.httpupgrade_host, httpupgrade_host);
+    assert_eq!(report.httpupgrade_path, httpupgrade_path);
+    assert_eq!(report.payload_len, payload.len());
+    assert_eq!(report.response_header_len, 2);
+    assert_eq!(report.echoed_payload, payload);
+    assert!(report.httpupgrade_handshake_validated);
+    assert!(report.httpupgrade_request_len > httpupgrade_path.len());
+    assert!(report.httpupgrade_response_head_len > 0);
+    assert_eq!(accepted.version, vless::VLESS_VERSION);
+    assert_eq!(accepted.key, key);
+    assert_eq!(accepted.addons_len, 0);
+    assert_eq!(accepted.command, crate::vmess::VMessNetwork::Tcp.byte());
+    assert_eq!(accepted.target, target);
+    assert_eq!(accepted.payload, payload);
+}
+
+#[test]
 fn stage65_vmess_aead_tcp_dataplane_echoes_payload() {
     let uuid = "7c12c745-63a5-433d-9e60-022e469b5bd4";
     let target = "stage65-vmess.example:443";
@@ -3535,6 +3581,38 @@ fn spawn_vless_websocket_echo_server(
         assert_eq!(request.request.target, expected_target);
         let response = vless::response_payload_bytes(&request.request.payload);
         let response = shared_transport::websocket_server_binary_frame(&response).unwrap();
+        stream.write_all(&response).unwrap();
+        request
+    });
+    (addr, handle)
+}
+
+fn spawn_vless_httpupgrade_echo_server(
+    expected_key: [u8; 16],
+    expected_target: String,
+    expected_host: String,
+    expected_path: String,
+    payload_len: usize,
+) -> (String, thread::JoinHandle<vless::VlessTcpRequest>) {
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let addr = listener.local_addr().unwrap().to_string();
+    let handle = thread::spawn(move || {
+        let (mut stream, _) = listener.accept().unwrap();
+        let request_head = read_http_head_for_test(&mut stream);
+        assert!(request_head.starts_with(&format!("GET {expected_path} HTTP/1.1\r\n")));
+        assert!(request_head.contains(&format!("Host: {expected_host}\r\n")));
+        assert!(request_head.contains("Connection: upgrade\r\n"));
+        assert!(request_head.contains("Upgrade: websocket\r\n"));
+        stream
+            .write_all(
+                b"HTTP/1.1 101 Switching Protocols\r\nConnection: upgrade\r\nUpgrade: websocket\r\n\r\n",
+            )
+            .unwrap();
+        let request = vless::read_tcp_request_from_stream(&mut stream, payload_len).unwrap();
+        assert_eq!(request.key, expected_key);
+        assert_eq!(request.command, crate::vmess::VMessNetwork::Tcp.byte());
+        assert_eq!(request.target, expected_target);
+        let response = vless::response_payload_bytes(&request.payload);
         stream.write_all(&response).unwrap();
         request
     });

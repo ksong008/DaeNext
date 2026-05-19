@@ -60,6 +60,7 @@ use crate::runtime_stage71_outbound_gate::run_stage71_vmess_grpc_hunk_dataplane_
 use crate::runtime_stage72_outbound_gate::run_stage72_vmess_meek_polling_dataplane_admission;
 use crate::runtime_stage73_outbound_gate::run_stage73_vmess_http_transport_dataplane_admission;
 use crate::runtime_stage74_outbound_gate::run_stage74_vless_websocket_dataplane_admission;
+use crate::runtime_stage75_outbound_gate::run_stage75_vless_httpupgrade_dataplane_admission;
 
 pub(crate) fn run_runtime(args: &[String]) -> RunnerOutput {
     match args.first().map(String::as_str) {
@@ -200,6 +201,9 @@ pub(crate) fn run_runtime(args: &[String]) -> RunnerOutput {
         }
         Some("stage74-vless-websocket-dataplane-admission") => {
             run_stage74_vless_websocket_dataplane_admission(&args[1..])
+        }
+        Some("stage75-vless-httpupgrade-dataplane-admission") => {
+            run_stage75_vless_httpupgrade_dataplane_admission(&args[1..])
         }
         Some(subcommand) => {
             RunnerOutput::usage(format!("unsupported runtime subcommand: {subcommand}"))

@@ -3,8 +3,8 @@ use std::net::{Ipv4Addr, Ipv6Addr};
 
 use crate::error::OutboundError;
 use crate::shared_transport::{
-    DEFAULT_WS_KEY, HttpUpgradeOptions, MuxFrameOptions, WS_MASK_KEY, mux, mux_data_frame,
-    mux_end_frame, mux_new_frame, read_http_head, read_websocket_binary_frame,
+    DEFAULT_WS_KEY, HttpUpgradeOptions, MuxFrameOptions, WS_MASK_KEY, http_upgrade_request, mux,
+    mux_data_frame, mux_end_frame, mux_new_frame, read_http_head, read_websocket_binary_frame,
     validate_http_status, websocket_client_binary_frame, websocket_handshake_request,
 };
 use crate::vmess::{VMessMetadata, VMessNetwork};
@@ -71,6 +71,25 @@ pub struct VlessWebSocketExchangeReport {
     pub echoed_payload: Vec<u8>,
     pub websocket_handshake_validated: bool,
     pub websocket_binary_frame_validated: bool,
+    pub true_dataplane: bool,
+    pub default_go_path: bool,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct VlessHttpUpgradeExchangeReport {
+    pub proxy: String,
+    pub target: String,
+    pub httpupgrade_host: String,
+    pub httpupgrade_path: String,
+    pub key_hex: String,
+    pub command: u8,
+    pub request_header_len: usize,
+    pub response_header_len: usize,
+    pub httpupgrade_request_len: usize,
+    pub httpupgrade_response_head_len: usize,
+    pub payload_len: usize,
+    pub echoed_payload: Vec<u8>,
+    pub httpupgrade_handshake_validated: bool,
     pub true_dataplane: bool,
     pub default_go_path: bool,
 }
@@ -300,6 +319,59 @@ where
         echoed_payload,
         websocket_handshake_validated: true,
         websocket_binary_frame_validated: true,
+        true_dataplane: true,
+        default_go_path: true,
+    })
+}
+
+pub fn tcp_exchange_over_httpupgrade_stream<S>(
+    stream: &mut S,
+    proxy: &str,
+    key: &[u8; 16],
+    target: &str,
+    httpupgrade_host: &str,
+    httpupgrade_path: &str,
+    payload: &[u8],
+) -> Result<VlessHttpUpgradeExchangeReport, OutboundError>
+where
+    S: Read + Write,
+{
+    let httpupgrade_options = HttpUpgradeOptions::new(httpupgrade_host, httpupgrade_path);
+    let upgrade_request = http_upgrade_request(&httpupgrade_options);
+    stream
+        .write_all(&upgrade_request)
+        .map_err(|err| OutboundError::BadVless(err.to_string()))?;
+    let response = read_http_head(stream)?;
+    validate_http_status(&response, 101)?;
+
+    let request = packet::first_write_bytes(key, "", "tcp", target, false, payload)?;
+    let request_header_len = request.len().saturating_sub(payload.len());
+    stream
+        .write_all(&request)
+        .map_err(|err| OutboundError::BadVless(err.to_string()))?;
+
+    let (response_header_len, echoed_payload) =
+        read_tcp_response_payload_from_stream(stream, payload.len())?;
+    if echoed_payload != payload {
+        return Err(OutboundError::BadVless(
+            "VLESS HTTPUpgrade payload response mismatch".to_owned(),
+        ));
+    }
+
+    Ok(VlessHttpUpgradeExchangeReport {
+        proxy: proxy.to_owned(),
+        target: target.to_owned(),
+        httpupgrade_host: httpupgrade_options.host,
+        httpupgrade_path: httpupgrade_options.path,
+        key_hex: hex_encode(key),
+        command: VMessNetwork::Tcp.byte(),
+        request_header_len,
+        response_header_len,
+        httpupgrade_request_len: upgrade_request.len(),
+        httpupgrade_response_head_len: response.len(),
+        payload_len: payload.len(),
+        echoed_payload,
+        httpupgrade_handshake_validated: true,
         true_dataplane: true,
         default_go_path: true,
     })
@@ -542,6 +614,29 @@ fn read_udp_response_payload(stream: &mut impl Read) -> Result<(usize, Vec<u8>),
     let payload_len = u16::from_be_bytes(length) as usize;
     let mut payload = vec![0_u8; payload_len];
     read_exact(stream, &mut payload, "vless udp response payload")?;
+    Ok((2 + addons_len, payload))
+}
+
+fn read_tcp_response_payload_from_stream(
+    stream: &mut impl Read,
+    payload_len: usize,
+) -> Result<(usize, Vec<u8>), OutboundError> {
+    let mut version = [0_u8; 1];
+    read_exact(stream, &mut version, "vless response version")?;
+    if version[0] != VLESS_VERSION {
+        return Err(OutboundError::BadVless(format!(
+            "unexpected VLESS response version: {}",
+            version[0]
+        )));
+    }
+    let mut addons_len = [0_u8; 1];
+    read_exact(stream, &mut addons_len, "vless response addons length")?;
+    let addons_len = addons_len[0] as usize;
+    let mut addons = vec![0_u8; addons_len];
+    read_exact(stream, &mut addons, "vless response addons")?;
+
+    let mut payload = vec![0_u8; payload_len];
+    read_exact(stream, &mut payload, "vless response payload")?;
     Ok((2 + addons_len, payload))
 }
 
