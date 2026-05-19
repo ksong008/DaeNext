@@ -105,7 +105,7 @@ pub fn mux_end_frame(id: [u8; 2]) -> Vec<u8> {
     frame
 }
 
-pub fn read_mux_frame(stream: &mut TcpStream) -> Result<MuxFrame, OutboundError> {
+pub fn read_mux_frame(stream: &mut impl Read) -> Result<MuxFrame, OutboundError> {
     loop {
         let mut len = [0_u8; 2];
         stream
