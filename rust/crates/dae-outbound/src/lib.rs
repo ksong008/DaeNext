@@ -48,7 +48,7 @@ pub use shadowsocks::{
 pub use socks5::{AddressKind, ServerReply, Socks5Address, Socks5Command, Socks5UdpDatagram};
 pub use trojan::{
     TrojanLink, TrojanMetadata, TrojanNetwork, TrojanTcpExchangeReport, TrojanTcpRequest,
-    TrojanTransportType,
+    TrojanTransportType, TrojanUdpOverTcpExchangeReport, TrojanUdpPacket,
 };
 pub use tuic::TuicLink;
 pub use types::{IpVersion, L4Proto, NetworkType};
