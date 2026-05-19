@@ -51,6 +51,7 @@ use crate::runtime_stage62_outbound_gate::run_stage62_vless_tcp_dataplane_admiss
 use crate::runtime_stage63_outbound_gate::run_stage63_vless_udp_over_tcp_dataplane_admission;
 use crate::runtime_stage64_outbound_gate::run_stage64_vless_mux_dataplane_admission;
 use crate::runtime_stage65_outbound_gate::run_stage65_vmess_aead_tcp_dataplane_admission;
+use crate::runtime_stage66_outbound_gate::run_stage66_vmess_aead_udp_over_tcp_dataplane_admission;
 
 pub(crate) fn run_runtime(args: &[String]) -> RunnerOutput {
     match args.first().map(String::as_str) {
@@ -164,6 +165,9 @@ pub(crate) fn run_runtime(args: &[String]) -> RunnerOutput {
         }
         Some("stage65-vmess-aead-tcp-dataplane-admission") => {
             run_stage65_vmess_aead_tcp_dataplane_admission(&args[1..])
+        }
+        Some("stage66-vmess-aead-udp-over-tcp-dataplane-admission") => {
+            run_stage66_vmess_aead_udp_over_tcp_dataplane_admission(&args[1..])
         }
         Some(subcommand) => {
             RunnerOutput::usage(format!("unsupported runtime subcommand: {subcommand}"))
