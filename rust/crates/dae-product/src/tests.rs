@@ -18,6 +18,7 @@ mod protocol_trojan;
 mod protocol_vless;
 mod protocol_vless_transport_74_76;
 mod protocol_vless_transport_77_79;
+mod protocol_vless_transport_80;
 mod protocol_vmess_core_65_68;
 mod protocol_vmess_shared_69_73;
 mod true_default_daemon;

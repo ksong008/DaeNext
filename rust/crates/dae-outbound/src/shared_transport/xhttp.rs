@@ -6,6 +6,12 @@ use crate::error::OutboundError;
 use crate::shared_transport::ir;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
+pub struct XHttpXmuxOptions {
+    pub max_connections: u32,
+    pub c_max_reuse_times: u32,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct XHttpLifecycleOptions {
     pub host: String,
     pub path: String,
@@ -14,6 +20,7 @@ pub struct XHttpLifecycleOptions {
     pub alpn: String,
     pub session_id: String,
     pub seq: u64,
+    pub xmux: Option<XHttpXmuxOptions>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -64,6 +71,31 @@ impl XHttpLifecycleOptions {
             alpn,
             session_id: session_id.into(),
             seq,
+            xmux: None,
+        })
+    }
+
+    pub fn with_xmux(mut self, xmux: XHttpXmuxOptions) -> Self {
+        self.xmux = Some(xmux);
+        self
+    }
+}
+
+impl XHttpXmuxOptions {
+    pub fn new(max_connections: u32, c_max_reuse_times: u32) -> Result<Self, OutboundError> {
+        if max_connections == 0 {
+            return Err(OutboundError::BadSharedTransport(
+                "xhttp xmux maxConnections must be greater than zero".to_owned(),
+            ));
+        }
+        if c_max_reuse_times == 0 {
+            return Err(OutboundError::BadSharedTransport(
+                "xhttp xmux cMaxReuseTimes must be greater than zero".to_owned(),
+            ));
+        }
+        Ok(Self {
+            max_connections,
+            c_max_reuse_times,
         })
     }
 }
