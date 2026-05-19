@@ -482,7 +482,7 @@ where
         payload_len: payload.len(),
         echoed_payload,
         xhttp_packet_up_validated: true,
-        xhttp_xmux_enabled: false,
+        xhttp_xmux_enabled: xhttp_options.xmux.is_some(),
         full_h2_h3_stack: false,
         true_dataplane: true,
         default_go_path: true,
