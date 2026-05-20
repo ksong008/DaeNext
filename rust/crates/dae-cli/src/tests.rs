@@ -23,6 +23,7 @@ mod runtime_command_inventory;
 mod runtime_https_proxy_stage82;
 mod runtime_protocol_55_61;
 mod runtime_shared_tls_stage81;
+mod runtime_ss2022_multi_psk_stage89;
 mod runtime_ss2022_tcp_stage88;
 mod runtime_trojan_go_grpc_stage86;
 mod runtime_trojan_go_httpupgrade_stage85;

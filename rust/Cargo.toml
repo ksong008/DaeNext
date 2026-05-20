@@ -28,6 +28,7 @@ license = "AGPL-3.0-only"
 repository = "https://github.com/daeuniverse/dae"
 
 [workspace.dependencies]
+aes = "0.8"
 aes-gcm = "0.10"
 base64 = "0.22"
 blake3 = "1"
