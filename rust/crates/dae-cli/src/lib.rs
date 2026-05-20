@@ -61,6 +61,7 @@ pub(crate) mod runtime_stage91_ss2022_protocol_gate;
 pub(crate) mod runtime_stage92_sip003_simple_obfs_http_gate;
 pub(crate) mod runtime_stage93_sip003_simple_obfs_tls_gate;
 pub(crate) mod runtime_stage94_sip003_v2ray_plugin_gate;
+pub(crate) mod runtime_stage95_shadowsocksr_gate;
 pub mod surface;
 pub(crate) mod userspace_runner;
 pub mod validate;
