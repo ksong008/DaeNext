@@ -199,6 +199,16 @@ pub fn read_client_initial_from_stream(
     Ok((target, plain[consumed..].to_vec()))
 }
 
+pub fn read_encrypted_chunk_from_stream<S>(
+    stream: &mut S,
+    decoder: &mut AeadStreamCodec,
+) -> Result<Vec<u8>, OutboundError>
+where
+    S: Read,
+{
+    read_encrypted_chunk(stream, decoder)
+}
+
 pub fn encode_server_payload(
     cipher: &str,
     password: &str,
@@ -348,10 +358,13 @@ impl AeadStreamCodec {
     }
 }
 
-fn read_encrypted_chunk(
-    stream: &mut TcpStream,
+fn read_encrypted_chunk<S>(
+    stream: &mut S,
     decoder: &mut AeadStreamCodec,
-) -> Result<Vec<u8>, OutboundError> {
+) -> Result<Vec<u8>, OutboundError>
+where
+    S: Read,
+{
     let mut encrypted_len = [0_u8; 2 + TAG_LEN];
     stream
         .read_exact(&mut encrypted_len)

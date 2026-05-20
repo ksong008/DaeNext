@@ -18,6 +18,7 @@ mod protocol_socks_http_shadowsocks;
 mod protocol_trojan;
 mod protocol_trojan_go_grpc_86;
 mod protocol_trojan_go_httpupgrade_85;
+mod protocol_trojan_go_inner_shadowsocks_87;
 mod protocol_trojan_go_wss_84;
 mod protocol_trojan_tls_83;
 mod protocol_vless;

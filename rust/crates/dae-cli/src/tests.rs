@@ -25,6 +25,7 @@ mod runtime_protocol_55_61;
 mod runtime_shared_tls_stage81;
 mod runtime_trojan_go_grpc_stage86;
 mod runtime_trojan_go_httpupgrade_stage85;
+mod runtime_trojan_go_inner_shadowsocks_stage87;
 mod runtime_trojan_go_wss_stage84;
 mod runtime_trojan_tls_stage83;
 mod runtime_vless_core;
