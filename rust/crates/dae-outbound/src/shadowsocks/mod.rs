@@ -3,6 +3,7 @@ pub mod cipher;
 pub mod contract;
 pub mod link;
 pub mod metadata;
+pub mod sip003_dataplane;
 pub mod ss2022;
 pub mod ss2022_tcp_dataplane;
 pub mod ss2022_udp_dataplane;
@@ -17,6 +18,12 @@ pub use aead::{
 pub use cipher::{CipherFamily, CipherInfo, classify_cipher};
 pub use link::{ShadowsocksLink, Sip003, Sip003Opts};
 pub use metadata::{MetadataType, ShadowsocksMetadata};
+pub use sip003_dataplane::{
+    Sip003SimpleObfsHttpExchangeReport, Sip003SimpleObfsHttpOptions, Sip003SimpleObfsHttpRequest,
+    decode_simple_obfs_http_shadowsocks_request, encode_simple_obfs_http_shadowsocks_response,
+    read_simple_obfs_http_request, simple_obfs_http_request_with_body,
+    simple_obfs_http_shadowsocks_aead_exchange_over_stream,
+};
 pub use ss2022_tcp_dataplane::{
     Ss2022TcpClientRequest, Ss2022TcpExchangeReport, Ss2022TcpSalts, decode_client_request,
     encode_client_initial as encode_ss2022_tcp_client_initial,
