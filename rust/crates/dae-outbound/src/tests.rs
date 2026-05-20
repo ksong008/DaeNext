@@ -11,6 +11,7 @@ mod helpers;
 use helpers::*;
 
 mod dataplane_base;
+mod dataplane_http_stage82;
 mod dataplane_trojan;
 mod dataplane_vless;
 mod dataplane_vless_stage80;
