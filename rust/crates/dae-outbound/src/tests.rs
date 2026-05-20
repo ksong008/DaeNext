@@ -26,6 +26,7 @@ mod dataplane_trojan_stage85;
 mod dataplane_trojan_stage86;
 mod dataplane_trojan_stage87;
 mod dataplane_trojan_stage97;
+mod dataplane_trojan_stage98;
 mod dataplane_vless;
 mod dataplane_vless_stage80;
 mod dataplane_vmess;

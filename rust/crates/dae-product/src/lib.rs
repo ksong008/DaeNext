@@ -71,6 +71,7 @@ pub mod stage94_sip003_v2ray_plugin_gate;
 pub mod stage95_shadowsocksr_gate;
 pub mod stage96_protocol_matrix_gate;
 pub mod stage97_trojan_go_grpc_http2_gate;
+pub mod stage98_trojan_go_grpc_cache_gate;
 pub mod systemd;
 pub mod true_daemon_admission;
 
@@ -337,6 +338,10 @@ pub use stage96_protocol_matrix_gate::{
 pub use stage97_trojan_go_grpc_http2_gate::{
     Stage97TrojanGoGrpcHttp2GateContract, Stage97TrojanGoGrpcHttp2GateRow,
     stage97_trojan_go_grpc_http2_gate_contract,
+};
+pub use stage98_trojan_go_grpc_cache_gate::{
+    Stage98TrojanGoGrpcCacheGateContract, Stage98TrojanGoGrpcCacheGateRow,
+    stage98_trojan_go_grpc_cache_gate_contract,
 };
 pub use systemd::{SystemdContract, systemd_contract};
 pub use true_daemon_admission::{

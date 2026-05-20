@@ -110,7 +110,7 @@
         "full_grpc_http2_stack": false,
         "grpc_address": "stage71-vmess-grpc-proxy.example:443",
         "grpc_allow_insecure": true,
-        "grpc_cache_key": "stage71-vmess-grpc-proxy.example:443|stage71-vmess-grpc-sni.example|stage71-vmess-grpc-dialer|true|\u0000\u0003tcp\u0000\u0000\u0004\ufffd\u0001",
+        "grpc_cache_key": "stage71-vmess-grpc-proxy.example:443|stage71-vmess-grpc-sni.example|stage71-vmess-grpc-dialer|true|magic:AAN0Y3AAAATSAQ",
         "grpc_cache_key_route_context_validated": false,
         "grpc_dialer_id": "stage71-vmess-grpc-dialer",
         "grpc_hunk_tunnel_validated": false,
