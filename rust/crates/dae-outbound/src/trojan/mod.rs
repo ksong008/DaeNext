@@ -1,5 +1,6 @@
 pub mod contract;
 pub mod dataplane;
+pub mod grpc_dataplane;
 pub mod httpupgrade_tls_dataplane;
 pub mod link;
 pub mod metadata;
@@ -12,6 +13,11 @@ pub use dataplane::{
     TrojanUdpPacket, decode_udp_packet, read_request_header_from_stream,
     read_tcp_request_from_stream, read_udp_packet_from_stream, tcp_exchange_over_stream,
     udp_over_tcp_exchange_over_stream,
+};
+pub use grpc_dataplane::{
+    TROJAN_GO_GRPC_DEFAULT_SERVICE_NAME, TrojanGoGrpcRequest, TrojanGoGrpcTcpExchangeReport,
+    read_tcp_request_from_grpc_hunk_stream, tcp_exchange_over_grpc_hunk_stream,
+    trojan_go_grpc_service_name,
 };
 pub use httpupgrade_tls_dataplane::{
     TrojanGoHttpUpgradeTcpExchangeReport, tcp_exchange_over_httpupgrade_tls_stream,
