@@ -30,6 +30,7 @@ repository = "https://github.com/daeuniverse/dae"
 [workspace.dependencies]
 aes-gcm = "0.10"
 base64 = "0.22"
+blake3 = "1"
 chacha20poly1305 = "0.10"
 dae-cli = { path = "crates/dae-cli" }
 dae-config-util = { path = "crates/dae-config-util" }
