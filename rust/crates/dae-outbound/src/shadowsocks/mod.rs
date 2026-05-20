@@ -9,6 +9,8 @@ pub mod sip003_v2ray_plugin_dataplane;
 pub mod ss2022;
 pub mod ss2022_tcp_dataplane;
 pub mod ss2022_udp_dataplane;
+pub mod ssr_dataplane;
+pub mod ssr_link;
 
 pub use aead::{
     AeadCipherSpec, AeadStreamCodec, AeadTcpSalts, ShadowsocksAeadTcpExchangeReport,
@@ -55,3 +57,9 @@ pub use ss2022_udp_dataplane::{
     encode_server_packet as encode_ss2022_udp_server_packet,
     unix_timestamp_now as ss2022_udp_unix_timestamp_now,
 };
+pub use ssr_dataplane::{
+    ShadowsocksRThreeLayerExchangeReport, ShadowsocksRThreeLayerOptions,
+    ShadowsocksRThreeLayerRequest, encode_shadowsocksr_http_simple_response,
+    read_shadowsocksr_http_simple_request, shadowsocksr_three_layer_tcp_exchange_over_stream,
+};
+pub use ssr_link::ShadowsocksRLink;

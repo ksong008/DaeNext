@@ -80,6 +80,7 @@ use crate::runtime_stage91_ss2022_protocol_gate::run_stage91_ss2022_protocol_adm
 use crate::runtime_stage92_sip003_simple_obfs_http_gate::run_stage92_sip003_simple_obfs_http_dataplane_admission;
 use crate::runtime_stage93_sip003_simple_obfs_tls_gate::run_stage93_sip003_simple_obfs_tls_dataplane_admission;
 use crate::runtime_stage94_sip003_v2ray_plugin_gate::run_stage94_sip003_v2ray_plugin_dataplane_admission;
+use crate::runtime_stage95_shadowsocksr_gate::run_stage95_shadowsocksr_three_layer_dataplane_admission;
 
 pub(crate) fn run_runtime(args: &[String]) -> RunnerOutput {
     match args.first().map(String::as_str) {
@@ -280,6 +281,9 @@ pub(crate) fn run_runtime(args: &[String]) -> RunnerOutput {
         }
         Some("stage94-sip003-v2ray-plugin-dataplane-admission") => {
             run_stage94_sip003_v2ray_plugin_dataplane_admission(&args[1..])
+        }
+        Some("stage95-shadowsocksr-three-layer-dataplane-admission") => {
+            run_stage95_shadowsocksr_three_layer_dataplane_admission(&args[1..])
         }
         Some(subcommand) => {
             RunnerOutput::usage(format!("unsupported runtime subcommand: {subcommand}"))
