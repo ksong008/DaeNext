@@ -22,6 +22,7 @@ mod runtime_candidate_preflight;
 mod runtime_command_inventory;
 mod runtime_https_proxy_stage82;
 mod runtime_protocol_55_61;
+mod runtime_protocol_matrix_stage96;
 mod runtime_shadowsocksr_stage95;
 mod runtime_shared_tls_stage81;
 mod runtime_sip003_simple_obfs_http_stage92;
