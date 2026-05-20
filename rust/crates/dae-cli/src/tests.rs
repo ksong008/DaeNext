@@ -18,6 +18,7 @@ mod outbound_socks_http;
 mod outbound_vmess_vless;
 mod runtime_admission_31_40;
 mod runtime_admission_41_54;
+mod runtime_anytls_session_stage104;
 mod runtime_candidate_preflight;
 mod runtime_command_inventory;
 mod runtime_https_proxy_stage82;
