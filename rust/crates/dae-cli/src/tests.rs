@@ -23,6 +23,7 @@ mod runtime_command_inventory;
 mod runtime_https_proxy_stage82;
 mod runtime_protocol_55_61;
 mod runtime_shared_tls_stage81;
+mod runtime_trojan_tls_stage83;
 mod runtime_vless_core;
 mod runtime_vless_shared_transport;
 mod runtime_vless_xhttp_xmux_stage80;
