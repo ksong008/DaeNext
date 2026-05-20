@@ -73,6 +73,7 @@ use crate::runtime_stage84_trojan_go_wss_gate::run_stage84_trojan_go_wss_datapla
 use crate::runtime_stage85_trojan_go_httpupgrade_gate::run_stage85_trojan_go_httpupgrade_dataplane_admission;
 use crate::runtime_stage86_trojan_go_grpc_gate::run_stage86_trojan_go_grpc_dataplane_admission;
 use crate::runtime_stage87_trojan_go_inner_shadowsocks_gate::run_stage87_trojan_go_inner_shadowsocks_dataplane_admission;
+use crate::runtime_stage88_ss2022_tcp_gate::run_stage88_ss2022_tcp_dataplane_admission;
 
 pub(crate) fn run_runtime(args: &[String]) -> RunnerOutput {
     match args.first().map(String::as_str) {
@@ -252,6 +253,9 @@ pub(crate) fn run_runtime(args: &[String]) -> RunnerOutput {
         }
         Some("stage87-trojan-go-inner-shadowsocks-dataplane-admission") => {
             run_stage87_trojan_go_inner_shadowsocks_dataplane_admission(&args[1..])
+        }
+        Some("stage88-ss2022-tcp-dataplane-admission") => {
+            run_stage88_ss2022_tcp_dataplane_admission(&args[1..])
         }
         Some(subcommand) => {
             RunnerOutput::usage(format!("unsupported runtime subcommand: {subcommand}"))
