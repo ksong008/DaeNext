@@ -52,3 +52,4 @@ mod protocol_vmess_shared_69_73;
 mod quic_h3_family_stage108;
 mod shared_transport_tls_81;
 mod true_default_daemon;
+mod tuic_full_quic_stage111;
