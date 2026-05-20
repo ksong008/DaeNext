@@ -65,6 +65,7 @@ pub(crate) mod runtime_stage95_shadowsocksr_gate;
 pub(crate) mod runtime_stage96_protocol_matrix_gate;
 pub(crate) mod runtime_stage97_trojan_go_grpc_http2_gate;
 pub(crate) mod runtime_stage98_trojan_go_grpc_cache_gate;
+pub(crate) mod runtime_stage99_trojan_go_recertification_gate;
 pub mod surface;
 pub(crate) mod userspace_runner;
 pub mod validate;

@@ -1,0 +1,89 @@
+{
+  "name": "stage99-trojan-go-shared-transport-recertification-gate",
+  "stage": "stage99",
+  "prior_gate": "stage98-trojan-go-grpc-cache-cancellation-gate",
+  "stage_complete": true,
+  "trojan_go_wss_admitted": true,
+  "trojan_go_httpupgrade_admitted": true,
+  "trojan_go_grpc_hunk_admitted": true,
+  "trojan_go_inner_shadowsocks_admitted": true,
+  "trojan_go_grpc_http2_tls_lifecycle_admitted": true,
+  "trojan_go_grpc_cache_cleanup_admitted": true,
+  "trojan_go_grpc_cancellation_stress_admitted": true,
+  "trojan_go_shared_transport_partial_admitted": true,
+  "trojan_go_shared_transport_admitted": false,
+  "shared_transport_true_dataplane_admitted": false,
+  "protocol_outbound_partial_admitted": true,
+  "outbound_true_dataplane_admitted": false,
+  "matched_go_rust_default_daemon_benchmark_recorded": false,
+  "default_switch_allowed": false,
+  "default_path_mutation_allowed": false,
+  "product_chain_switch_allowed": false,
+  "true_rust_default_daemon_admitted": false,
+  "go_default_path_preserved": true,
+  "go_fallback_required": true,
+  "gate_decision": "stage99 recertifies Trojan-Go after Stage 98: WSS, HTTPUpgrade, gRPC hunk, inner Shadowsocks, gRPC HTTP/2/TLS lifecycle, cache cleanup, and cancellation stress are admitted as opt-in sub-rows; full Trojan-Go shared transport remains blocked until uTLS fingerprint, REALITY handshake mutation, TLS fragment, and cross-combination recertification are complete; outbound default and product switches remain closed",
+  "rows": [
+    {
+      "area": "Trojan-Go admitted sub-rows",
+      "status": "passed-recertified",
+      "evidence": "Stages 84, 85, 86, 87, 97, and 98 cover WSS, HTTPUpgrade, gRPC hunk, inner Shadowsocks, HTTP/2/TLS lifecycle, cache cleanup, and cancellation stress",
+      "boundary": "sub-row admission is not full shared transport admission",
+      "next_action": "carry partial admission while keeping full shared transport closed"
+    },
+    {
+      "area": "TLS mutation rows",
+      "status": "blocked",
+      "evidence": "memo 26.18 and 26.21 still require uTLS, REALITY, and TLS fragment parity for TLS-bearing shared transports",
+      "boundary": "rustls ALPN h2 evidence does not prove uTLS fingerprint, REALITY handshake mutation, or TLS fragment behavior",
+      "next_action": "split uTLS, REALITY, and TLS fragment into dedicated gates"
+    },
+    {
+      "area": "cross-combination recertification",
+      "status": "blocked",
+      "evidence": "completed rows were admitted independently and need matrix recertification before full shared transport can open",
+      "boundary": "Trojan-Go full shared transport remains false",
+      "next_action": "build a combination matrix for ws/grpc/httpupgrade/inner-ss/cache/TLS mutation rows"
+    },
+    {
+      "area": "overall outbound/default admission",
+      "status": "blocked",
+      "evidence": "VMess/VLESS full shared transport, QUIC/H3/session protocols, matched default daemon benchmark, and product-chain recertification remain open",
+      "boundary": "protocol_outbound_partial_admitted=true does not mean outbound_true_dataplane_admitted=true",
+      "next_action": "continue remaining protocol gates before reopening defaults"
+    }
+  ],
+  "benchmark_carry_forward": [
+    "Stage 86 Trojan-Go gRPC hunk: 4628029.0 ns/op",
+    "Stage 87 Trojan-Go inner Shadowsocks: 4816909.1 ns/op",
+    "Stage 97 Trojan-Go gRPC HTTP/2/TLS lifecycle: 48361973.9 ns/op",
+    "Stage 98 Trojan-Go gRPC cache/cancellation stress: 11798.743 ns/op"
+  ],
+  "validation_commands": [
+    "python3 -m json.tool testdata/rebuild-golden/engine/runtime_stage99/trojan_go_shared_transport_recertification.json",
+    "python3 -m json.tool testdata/rebuild-golden/product/daemon/stage99_trojan_go_shared_transport_recertification_gate.json",
+    "cargo test --manifest-path rust/Cargo.toml -p dae-cli stage99 -- --nocapture",
+    "cargo test --manifest-path rust/Cargo.toml -p dae-product stage99 -- --nocapture",
+    "cargo test --manifest-path rust/Cargo.toml -p dae-cli -p dae-product",
+    "cargo fmt --manifest-path rust/Cargo.toml --all -- --check",
+    "git diff --check"
+  ],
+  "carried_blockers": [
+    "Trojan-Go uTLS fingerprint row is still incomplete",
+    "Trojan-Go REALITY handshake mutation row is still incomplete",
+    "Trojan-Go TLS fragment row is still incomplete",
+    "Trojan-Go cross-combination recertification is still incomplete",
+    "VLESS and VMess TLS/WSS/gRPC/Meek/xHTTP full shared transport rows remain protocol-specific blockers",
+    "Hysteria2, TUIC, Juicity, AnyTLS, REALITY, Vision, and QUIC/H3 true dataplanes are still incomplete",
+    "matched Go default daemon vs true Rust candidate benchmark is still missing",
+    "clean dae-wing and daed product-chain recertification is still missing"
+  ],
+  "source": [
+    "DAEX_RUST_REBUILD_PLAN_2026-05-16.md:stage99",
+    "DAENEW_RUST_REBUILD_MEMO_2026-05-16.md:26.11",
+    "DAENEW_RUST_REBUILD_MEMO_2026-05-16.md:26.18",
+    "DAENEW_RUST_REBUILD_MEMO_2026-05-16.md:26.21",
+    "rust/crates/dae-cli/src/runtime_stage99_trojan_go_recertification_gate.rs",
+    "testdata/rebuild-golden/engine/runtime_stage99/trojan_go_shared_transport_recertification.json"
+  ]
+}
