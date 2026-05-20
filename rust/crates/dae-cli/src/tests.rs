@@ -39,6 +39,7 @@ mod runtime_trojan_go_httpupgrade_stage85;
 mod runtime_trojan_go_inner_shadowsocks_stage87;
 mod runtime_trojan_go_recertification_stage99;
 mod runtime_trojan_go_tls_fragment_stage100;
+mod runtime_trojan_go_utls_fingerprint_stage101;
 mod runtime_trojan_go_wss_stage84;
 mod runtime_trojan_tls_stage83;
 mod runtime_vless_core;
