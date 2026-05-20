@@ -52,6 +52,7 @@ pub(crate) mod runtime_stage82_https_proxy_gate;
 pub(crate) mod runtime_stage83_trojan_tls_gate;
 pub(crate) mod runtime_stage84_trojan_go_wss_gate;
 pub(crate) mod runtime_stage85_trojan_go_httpupgrade_gate;
+pub(crate) mod runtime_stage86_trojan_go_grpc_gate;
 pub mod surface;
 pub(crate) mod userspace_runner;
 pub mod validate;
