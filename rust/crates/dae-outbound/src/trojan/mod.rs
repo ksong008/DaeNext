@@ -9,6 +9,7 @@ pub mod metadata;
 pub mod packet;
 pub mod tls_dataplane;
 pub mod websocket_tls_dataplane;
+pub mod wss_inner_shadowsocks_dataplane;
 
 pub use dataplane::{
     TrojanRequestHeader, TrojanTcpExchangeReport, TrojanTcpRequest, TrojanUdpOverTcpExchangeReport,
@@ -40,4 +41,10 @@ pub use tls_dataplane::{TrojanTlsTcpExchangeReport, tcp_exchange_over_tls_stream
 pub use websocket_tls_dataplane::{
     TrojanGoWssTcpExchangeReport, TrojanWebSocketRequest, read_tcp_request_from_websocket_stream,
     tcp_exchange_over_wss_stream,
+};
+pub use wss_inner_shadowsocks_dataplane::{
+    TrojanGoWssInnerShadowsocksTcpExchangeReport,
+    read_inner_shadowsocks_trojan_request_from_websocket_stream,
+    tcp_exchange_over_wss_inner_shadowsocks_stream, trojan_go_wss_inner_shadowsocks_request_frame,
+    trojan_go_wss_inner_shadowsocks_response_frame,
 };
