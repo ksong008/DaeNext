@@ -68,6 +68,7 @@ use crate::runtime_stage79_outbound_gate::run_stage79_vless_xhttp_packet_datapla
 use crate::runtime_stage80_outbound_gate::run_stage80_vless_xhttp_xmux_dataplane_admission;
 use crate::runtime_stage81_shared_tls_gate::run_stage81_shared_tls_underlay_dataplane_admission;
 use crate::runtime_stage82_https_proxy_gate::run_stage82_https_proxy_tls_dataplane_admission;
+use crate::runtime_stage83_trojan_tls_gate::run_stage83_trojan_tls_dataplane_admission;
 
 pub(crate) fn run_runtime(args: &[String]) -> RunnerOutput {
     match args.first().map(String::as_str) {
@@ -232,6 +233,9 @@ pub(crate) fn run_runtime(args: &[String]) -> RunnerOutput {
         }
         Some("stage82-https-proxy-tls-dataplane-admission") => {
             run_stage82_https_proxy_tls_dataplane_admission(&args[1..])
+        }
+        Some("stage83-trojan-tls-dataplane-admission") => {
+            run_stage83_trojan_tls_dataplane_admission(&args[1..])
         }
         Some(subcommand) => {
             RunnerOutput::usage(format!("unsupported runtime subcommand: {subcommand}"))
