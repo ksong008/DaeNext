@@ -1,0 +1,91 @@
+{
+  "name": "stage97-trojan-go-grpc-http2-tls-lifecycle-gate",
+  "stage": "stage97",
+  "prior_gate": "stage96-protocol-matrix-recertification-gate",
+  "stage_complete": true,
+  "socks5_protocol_true_dataplane_admitted": true,
+  "http_connect_true_dataplane_admitted": true,
+  "https_proxy_true_dataplane_admitted": true,
+  "shadowsocks_protocol_true_dataplane_admitted": true,
+  "trojan_protocol_true_dataplane_admitted": true,
+  "trojan_go_wss_admitted": true,
+  "trojan_go_httpupgrade_admitted": true,
+  "trojan_go_grpc_hunk_admitted": true,
+  "trojan_go_inner_shadowsocks_admitted": true,
+  "trojan_go_grpc_http2_tls_lifecycle_admitted": true,
+  "trojan_go_shared_transport_partial_admitted": true,
+  "trojan_go_shared_transport_admitted": false,
+  "shared_transport_true_dataplane_admitted": false,
+  "protocol_outbound_partial_admitted": true,
+  "outbound_true_dataplane_admitted": false,
+  "matched_go_rust_default_daemon_benchmark_recorded": false,
+  "default_switch_allowed": false,
+  "default_path_mutation_allowed": false,
+  "product_chain_switch_allowed": false,
+  "true_rust_default_daemon_admitted": false,
+  "go_default_path_preserved": true,
+  "go_fallback_required": true,
+  "gate_decision": "stage97 admits only the Trojan-Go gRPC HTTP/2/TLS lifecycle sub-row by validating Rust SO_MARK/MPTCP TCP underlay, rustls TLS with ALPN h2 inside the gRPC dialer, HTTP/2 client preface/settings/headers/data, gRPC Hunk payload, raw trojanc SHA224 password, TCP command, target metadata, payload roundtrip, serviceName fallback, cache-key route context including SO_MARK/MPTCP, and benchmark; Trojan-Go full shared transport, outbound default, and product switches remain closed until cancellation stress, global cache cleanup, uTLS/REALITY/TLS fragment, and cross-combination recertification are complete",
+  "rows": [
+    {
+      "area": "Prior protocol matrix evidence",
+      "status": "passed-carried-evidence",
+      "evidence": "Stage 96 carries SOCKS5, HTTP/HTTPS proxy, Shadowsocks family, standard Trojan, and partial Trojan-Go evidence into protocol_outbound_partial_admitted",
+      "boundary": "carried matrix evidence does not admit full Trojan-Go shared transport",
+      "next_action": "preserve admitted rows while validating gRPC HTTP/2/TLS lifecycle separately"
+    },
+    {
+      "area": "Trojan-Go gRPC HTTP/2/TLS lifecycle",
+      "status": "passed-opt-in-root-gated-smoke",
+      "evidence": "Stage 97 validates SO_MARK/MPTCP TCP underlay, rustls TLS SNI with ALPN h2 inside gRPC, HTTP/2 client preface/settings/headers/data frames, gRPC Hunk payload, raw trojanc SHA224 password, TCP command, target stage97-trojan-go-grpc-http2.example:443, GunService fallback, cache key with SO_MARK/MPTCP, payload echo, and benchmark",
+      "boundary": "this admits only the gRPC HTTP/2/TLS lifecycle sub-row, not cancellation/cache stress or all transport combinations",
+      "next_action": "carry trojan_go_grpc_http2_tls_lifecycle_admitted=true and keep Trojan-Go full shared transport blocked"
+    },
+    {
+      "area": "Trojan-Go lifecycle blockers",
+      "status": "blocked",
+      "evidence": "memo 26.18 and 26.21 require global gRPC ClientConn cache key/cleanup parity and warn that somark/mptcp cannot be lost",
+      "boundary": "HTTP/2/TLS lifecycle success does not prove cancellation stress, cache cleanup, uTLS, REALITY, TLS fragment, or cross-combination behavior",
+      "next_action": "split cache cleanup/cancellation stress and shared TLS mutation rows into later gates"
+    },
+    {
+      "area": "overall outbound/default admission",
+      "status": "blocked",
+      "evidence": "VMess/VLESS full shared transport rows, QUIC/H3/session protocols, matched Go/Rust default daemon benchmark, and product-chain recertification remain open",
+      "boundary": "protocol_outbound_partial_admitted=true does not mean outbound_true_dataplane_admitted=true",
+      "next_action": "continue per-protocol gates before reopening defaults"
+    }
+  ],
+  "validation_commands": [
+    "python3 -m json.tool testdata/rebuild-golden/engine/runtime_stage97/trojan_go_grpc_http2_tls_lifecycle_admission.json",
+    "python3 -m json.tool testdata/rebuild-golden/product/daemon/stage97_trojan_go_grpc_http2_tls_lifecycle_gate.json",
+    "cargo test --manifest-path rust/Cargo.toml -p dae-outbound stage97 -- --nocapture",
+    "cargo test --manifest-path rust/Cargo.toml -p dae-cli stage97 -- --nocapture",
+    "cargo test --manifest-path rust/Cargo.toml -p dae-product stage97 -- --nocapture",
+    "cargo run --manifest-path rust/Cargo.toml -p dae-cli --bin dae-cli-optin --quiet -- runtime stage97-trojan-go-grpc-http2-tls-lifecycle-admission --execute-smoke --ack-root-gate --benchmark-iters 10",
+    "cargo test --manifest-path rust/Cargo.toml -p dae-outbound -p dae-cli -p dae-product",
+    "cargo fmt --manifest-path rust/Cargo.toml --all -- --check",
+    "git diff --check"
+  ],
+  "carried_blockers": [
+    "Trojan-Go cancellation stress and global gRPC ClientConn cache cleanup are still incomplete",
+    "Trojan-Go uTLS fingerprint, REALITY, TLS fragment, and cross-combination recertification are still deferred",
+    "VLESS and VMess TLS/WSS/gRPC/Meek/xHTTP full shared transport rows remain protocol-specific blockers",
+    "Hysteria2, TUIC, Juicity, AnyTLS, REALITY, Vision, and QUIC/H3 true dataplanes are still incomplete",
+    "matched Go default daemon vs true Rust candidate benchmark is still missing",
+    "clean dae-wing and daed product-chain recertification is still missing"
+  ],
+  "source": [
+    "DAEX_RUST_REBUILD_PLAN_2026-05-16.md:stage97",
+    "DAENEW_RUST_REBUILD_MEMO_2026-05-16.md:26.11",
+    "DAENEW_RUST_REBUILD_MEMO_2026-05-16.md:26.18",
+    "DAENEW_RUST_REBUILD_MEMO_2026-05-16.md:26.21",
+    "/root/project/outbound/dialer/trojan/trojan.go",
+    "/root/project/outbound/transport/grpc/grpc_client.go",
+    "rust/crates/dae-cli/src/runtime_stage97_trojan_go_grpc_http2_gate.rs",
+    "rust/crates/dae-outbound/src/trojan/grpc_http2_dataplane.rs",
+    "rust/crates/dae-outbound/src/shared_transport/grpc_http2.rs",
+    "rust/crates/dae-outbound/src/shared_transport/tls.rs",
+    "testdata/rebuild-golden/engine/runtime_stage97/trojan_go_grpc_http2_tls_lifecycle_admission.json"
+  ]
+}

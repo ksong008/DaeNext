@@ -1,6 +1,7 @@
 pub mod contract;
 pub mod dataplane;
 pub mod grpc;
+pub mod grpc_http2;
 pub mod ir;
 pub mod meek;
 pub mod mux;
@@ -19,6 +20,13 @@ pub use dataplane::{
 pub use grpc::{
     GrpcCacheReport, GrpcLifecycleCache, GrpcLifecycleOptions, GrpcLifecycleReport,
     grpc_hunk_exchange, grpc_hunk_frame, grpc_stream_preface, read_grpc_hunk_frame,
+};
+pub use grpc_http2::{
+    GrpcHttp2FrameReport, GrpcHttp2LifecycleOptions, GrpcHttp2Request, HTTP2_CLIENT_PREFACE,
+    HTTP2_FLAG_ACK, HTTP2_FLAG_END_HEADERS, HTTP2_FRAME_DATA, HTTP2_FRAME_HEADERS,
+    HTTP2_FRAME_SETTINGS, grpc_hunk_http2_data, http2_frame, read_grpc_http2_request,
+    read_grpc_http2_response, read_http2_frame, write_grpc_http2_request,
+    write_grpc_http2_response,
 };
 pub use meek::{
     MeekRoundTripOptions, MeekRoundTripReport, meek_http_request, meek_polling_exchange,
