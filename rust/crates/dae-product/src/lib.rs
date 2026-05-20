@@ -56,6 +56,7 @@ pub mod stage79_vless_xhttp_packet_gate;
 pub mod stage80_vless_xhttp_xmux_gate;
 pub mod stage81_shared_tls_underlay_gate;
 pub mod stage82_https_proxy_tls_gate;
+pub mod stage83_trojan_tls_gate;
 pub mod systemd;
 pub mod true_daemon_admission;
 
@@ -267,6 +268,9 @@ pub use stage81_shared_tls_underlay_gate::{
 pub use stage82_https_proxy_tls_gate::{
     Stage82HttpsProxyTlsGateContract, Stage82HttpsProxyTlsGateRow,
     stage82_https_proxy_tls_gate_contract,
+};
+pub use stage83_trojan_tls_gate::{
+    Stage83TrojanTlsGateContract, Stage83TrojanTlsGateRow, stage83_trojan_tls_gate_contract,
 };
 pub use systemd::{SystemdContract, systemd_contract};
 pub use true_daemon_admission::{
