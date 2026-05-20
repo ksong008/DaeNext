@@ -26,6 +26,7 @@ mod protocol_ss2022_protocol_91;
 mod protocol_ss2022_tcp_88;
 mod protocol_ss2022_udp_90;
 mod protocol_trojan;
+mod protocol_trojan_go_combination_103;
 mod protocol_trojan_go_grpc_86;
 mod protocol_trojan_go_grpc_cache_98;
 mod protocol_trojan_go_grpc_http2_97;
