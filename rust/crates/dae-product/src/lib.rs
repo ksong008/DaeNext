@@ -63,6 +63,7 @@ pub mod stage86_trojan_go_grpc_gate;
 pub mod stage87_trojan_go_inner_shadowsocks_gate;
 pub mod stage88_ss2022_tcp_gate;
 pub mod stage89_ss2022_multi_psk_gate;
+pub mod stage90_ss2022_udp_gate;
 pub mod systemd;
 pub mod true_daemon_admission;
 
@@ -299,6 +300,9 @@ pub use stage88_ss2022_tcp_gate::{
 pub use stage89_ss2022_multi_psk_gate::{
     Stage89Ss2022MultiPskGateContract, Stage89Ss2022MultiPskGateRow,
     stage89_ss2022_multi_psk_gate_contract,
+};
+pub use stage90_ss2022_udp_gate::{
+    Stage90Ss2022UdpGateContract, Stage90Ss2022UdpGateRow, stage90_ss2022_udp_gate_contract,
 };
 pub use systemd::{SystemdContract, systemd_contract};
 pub use true_daemon_admission::{
