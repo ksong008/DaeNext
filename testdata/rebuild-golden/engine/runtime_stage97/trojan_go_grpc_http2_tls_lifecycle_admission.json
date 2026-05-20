@@ -74,7 +74,7 @@
         "global_cache_cleanup_deferred": true,
         "grpc_address": "stage97-trojan-go-grpc-http2-proxy.example:443",
         "grpc_allow_insecure": true,
-        "grpc_cache_key": "stage97-trojan-go-grpc-http2-proxy.example:443|stage97-trojan-go-grpc-http2-sni.example|stage97-trojan-go-grpc-http2-dialer|true|\u0000\u0003tcp\u0000\u0000\u0004\ufffd\u0001",
+        "grpc_cache_key": "stage97-trojan-go-grpc-http2-proxy.example:443|stage97-trojan-go-grpc-http2-sni.example|stage97-trojan-go-grpc-http2-dialer|true|magic:AAN0Y3AAAATSAQ",
         "grpc_cache_key_route_context_validated": false,
         "grpc_contains_tls_boundary": true,
         "grpc_dialer_id": "stage97-trojan-go-grpc-http2-dialer",

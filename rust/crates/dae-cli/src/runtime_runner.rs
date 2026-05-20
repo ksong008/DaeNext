@@ -83,6 +83,7 @@ use crate::runtime_stage94_sip003_v2ray_plugin_gate::run_stage94_sip003_v2ray_pl
 use crate::runtime_stage95_shadowsocksr_gate::run_stage95_shadowsocksr_three_layer_dataplane_admission;
 use crate::runtime_stage96_protocol_matrix_gate::run_stage96_protocol_matrix_recertification;
 use crate::runtime_stage97_trojan_go_grpc_http2_gate::run_stage97_trojan_go_grpc_http2_tls_lifecycle_admission;
+use crate::runtime_stage98_trojan_go_grpc_cache_gate::run_stage98_trojan_go_grpc_cache_cancellation_admission;
 
 pub(crate) fn run_runtime(args: &[String]) -> RunnerOutput {
     match args.first().map(String::as_str) {
@@ -292,6 +293,9 @@ pub(crate) fn run_runtime(args: &[String]) -> RunnerOutput {
         }
         Some("stage97-trojan-go-grpc-http2-tls-lifecycle-admission") => {
             run_stage97_trojan_go_grpc_http2_tls_lifecycle_admission(&args[1..])
+        }
+        Some("stage98-trojan-go-grpc-cache-cancellation-admission") => {
+            run_stage98_trojan_go_grpc_cache_cancellation_admission(&args[1..])
         }
         Some(subcommand) => {
             RunnerOutput::usage(format!("unsupported runtime subcommand: {subcommand}"))

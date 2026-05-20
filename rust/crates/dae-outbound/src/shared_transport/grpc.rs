@@ -103,6 +103,10 @@ impl GrpcLifecycleCache {
     pub fn closed_entries(&self) -> usize {
         self.closed_entries
     }
+
+    pub fn live_entries(&self) -> usize {
+        self.entries.len()
+    }
 }
 
 pub fn grpc_stream_preface(service_name: &str) -> Vec<u8> {

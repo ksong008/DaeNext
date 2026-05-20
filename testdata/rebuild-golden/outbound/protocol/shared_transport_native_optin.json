@@ -19,8 +19,8 @@
     "keepalive_timeout_seconds": 10,
     "min_connect_timeout_seconds": 5,
     "mptcp_changes_key": true,
-    "sample_cache_key_a": "addr:443|sni.example|dialer-1|true|\u0000\u0003tcp\u0000\u0000\u0004\ufffd\u0001",
-    "sample_cache_key_b": "addr:443|sni.example|dialer-1|true|\u0000\u0003tcp\u0000\u0000\u0004\ufffd\u0000",
+    "sample_cache_key_a": "addr:443|sni.example|dialer-1|true|magic:AAN0Y3AAAATSAQ",
+    "sample_cache_key_b": "addr:443|sni.example|dialer-1|true|magic:AAN0Y3AAAATSAA",
     "somark_changes_key": true
   },
   "httpupgrade_transport": {
