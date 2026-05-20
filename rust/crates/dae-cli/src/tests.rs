@@ -25,6 +25,7 @@ mod runtime_protocol_55_61;
 mod runtime_shared_tls_stage81;
 mod runtime_sip003_simple_obfs_http_stage92;
 mod runtime_sip003_simple_obfs_tls_stage93;
+mod runtime_sip003_v2ray_plugin_stage94;
 mod runtime_ss2022_multi_psk_stage89;
 mod runtime_ss2022_protocol_stage91;
 mod runtime_ss2022_tcp_stage88;
