@@ -1,6 +1,7 @@
 pub mod contract;
 pub mod dataplane;
 pub mod grpc_dataplane;
+pub mod grpc_http2_dataplane;
 pub mod httpupgrade_tls_dataplane;
 pub mod inner_shadowsocks_dataplane;
 pub mod link;
@@ -19,6 +20,11 @@ pub use grpc_dataplane::{
     TROJAN_GO_GRPC_DEFAULT_SERVICE_NAME, TrojanGoGrpcRequest, TrojanGoGrpcTcpExchangeReport,
     read_tcp_request_from_grpc_hunk_stream, tcp_exchange_over_grpc_hunk_stream,
     trojan_go_grpc_service_name,
+};
+pub use grpc_http2_dataplane::{
+    TrojanGoGrpcHttp2Request, TrojanGoGrpcHttp2TlsExchangeReport,
+    read_tcp_request_from_grpc_http2_stream, tcp_exchange_over_grpc_http2_stream,
+    write_grpc_http2_hunk_response,
 };
 pub use httpupgrade_tls_dataplane::{
     TrojanGoHttpUpgradeTcpExchangeReport, tcp_exchange_over_httpupgrade_tls_stream,
