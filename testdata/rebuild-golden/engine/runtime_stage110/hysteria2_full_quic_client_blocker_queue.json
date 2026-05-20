@@ -1,0 +1,130 @@
+{
+  "anytls_true_dataplane_admitted": true,
+  "benchmark_carry_forward": {
+    "new_network_benchmark_recorded": false,
+    "reason": "Stage 110 is a read-only Hysteria2 full QUIC client blocker queue and carries Stage109 UDP underlay benchmark data",
+    "stage109_ns_per_hysteria2_udp_underlay_exchange": 23710.7
+  },
+  "blocked": true,
+  "blockers": [
+    "Hysteria2 full QUIC handshake is not implemented in Rust",
+    "Hysteria2 stream mux and packet/datagram behavior are not implemented in Rust",
+    "Hysteria2 port hopping scheduler over QUIC is not implemented in Rust",
+    "external outbound/quic-go remains required"
+  ],
+  "default_path_mutation_allowed": false,
+  "default_switch_allowed": false,
+  "evidence_class": "read-only-hysteria2-full-quic-client-blocker-queue-after-udp-underlay",
+  "execute_smoke": false,
+  "external_outbound_required": true,
+  "external_quic_go_required": true,
+  "go_default_path_preserved": true,
+  "go_fallback_required": true,
+  "hysteria2_full_quic_handshake_admitted": false,
+  "hysteria2_full_quic_stack_observed": false,
+  "hysteria2_native_optin_contract_admitted": true,
+  "hysteria2_packet_datagram_admitted": false,
+  "hysteria2_pin_sha256_raw_cert_hash_admitted": true,
+  "hysteria2_port_hopping_contract_admitted": true,
+  "hysteria2_port_hopping_scheduler_admitted": false,
+  "hysteria2_stream_mux_admitted": false,
+  "hysteria2_tcp_target_over_quic_admitted": false,
+  "hysteria2_true_quic_dataplane_admitted": false,
+  "hysteria2_udp_target_over_quic_admitted": false,
+  "hysteria2_udp_underlay_admitted": true,
+  "matched_go_rust_default_daemon_benchmark_recorded": false,
+  "name": "stage110-hysteria2-full-quic-client-blocker-queue",
+  "outbound_quic_go_dependency_preserved": true,
+  "outbound_true_dataplane_admitted": false,
+  "product_chain_switch_allowed": false,
+  "protocol_matrix": {
+    "anytls_true_dataplane_admitted": true,
+    "hysteria2_native_optin_contract_admitted": true,
+    "hysteria2_true_quic_dataplane_admitted": false,
+    "hysteria2_udp_underlay_admitted": true,
+    "juicity_true_quic_h3_dataplane_admitted": false,
+    "outbound_true_dataplane_admitted": false,
+    "protocol_outbound_partial_admitted": true,
+    "quic_h3_family_true_dataplane_admitted": false,
+    "tuic_true_quic_dataplane_admitted": false
+  },
+  "protocol_outbound_partial_admitted": true,
+  "queue_rows": [
+    {
+      "admitted": true,
+      "area": "carried Hysteria2 underlay",
+      "boundary": "local UDP underlay evidence is not a full Hysteria2 QUIC client dataplane",
+      "evidence": "Stage109 admitted local UDP underlay smoke with SO_MARK observation, MPTCP-field preservation, port hopping detection, and raw cert pinSHA256 hash parity",
+      "source_stage": "stage109",
+      "status": "passed-carried-evidence"
+    },
+    {
+      "admitted": false,
+      "area": "QUIC handshake and TLS verification",
+      "boundary": "pinSHA256 contract from Stage109 must be wired into real QUIC TLS verification before admission",
+      "evidence": "Rust side has no Hysteria2 QUIC handshake, ALPN/TLS lifecycle, or raw cert pinSHA256 verification inside a real QUIC connection",
+      "source_stage": "stage110",
+      "status": "blocked"
+    },
+    {
+      "admitted": false,
+      "area": "stream mux and target relay",
+      "boundary": "shared UDP datagram harness does not prove Hysteria2 stream mux, packet framing, or target semantics",
+      "evidence": "TCP target and UDP target must both be carried by the Hysteria2 client over QUIC stream/datagram behavior",
+      "source_stage": "stage110",
+      "status": "blocked"
+    },
+    {
+      "admitted": false,
+      "area": "port hopping scheduler",
+      "boundary": "port hopping detection alone does not admit scheduler parity",
+      "evidence": "Stage109 preserved port hopping strings and detection, but no Rust scheduler rotates QUIC UDP underlay endpoints by UDPHopInterval",
+      "source_stage": "stage110",
+      "status": "blocked"
+    },
+    {
+      "admitted": false,
+      "area": "outbound/default/product",
+      "boundary": "hysteria2_udp_underlay_admitted=true does not admit outbound_true_dataplane_admitted=true",
+      "evidence": "Hysteria2 full client, TUIC/Juicity, outbound registry/group/health, matched default daemon benchmark, and product-chain recertification remain open",
+      "source_stage": "stage110",
+      "status": "blocked"
+    }
+  ],
+  "quic_h3_family_native_optin_contract_admitted": true,
+  "quic_h3_family_true_dataplane_admitted": false,
+  "read_only": true,
+  "remaining_blockers": [
+    "Hysteria2 full QUIC handshake and TLS raw cert pinSHA256 verification inside real QUIC",
+    "Hysteria2 stream mux and TCP target over QUIC behavior",
+    "Hysteria2 UDP packet/datagram target over QUIC behavior",
+    "Hysteria2 port hopping scheduler driven by UDPHopInterval",
+    "TUIC and Juicity true QUIC/H3 dataplanes",
+    "outbound registry/dialer group/health policy parity while preserving direct/block indices and NewDialerSetFromLinks semantics",
+    "matched Go default daemon vs true Rust candidate benchmark",
+    "clean dae-wing and daed product-chain recertification"
+  ],
+  "source": [
+    "DAEX_RUST_REBUILD_PLAN_2026-05-16.md:stage110",
+    "DAENEW_RUST_REBUILD_MEMO_2026-05-16.md:12.6",
+    "DAENEW_RUST_REBUILD_MEMO_2026-05-16.md:25.1",
+    "DAENEW_RUST_REBUILD_MEMO_2026-05-16.md:25.2",
+    "DAENEW_RUST_REBUILD_MEMO_2026-05-16.md:26.14",
+    "DAENEW_RUST_REBUILD_MEMO_2026-05-16.md:26.20",
+    "DAENEW_RUST_REBUILD_MEMO_2026-05-16.md:26.21",
+    "rust/crates/dae-outbound/src/hysteria2/underlay.rs",
+    "rust/crates/dae-cli/src/runtime_stage110_hysteria2_full_quic_queue_gate.rs"
+  ],
+  "stage": "stage110",
+  "true_rust_default_daemon_admitted": false,
+  "validation_commands": [
+    "python3 -m json.tool testdata/rebuild-golden/engine/runtime_stage110/hysteria2_full_quic_client_blocker_queue.json",
+    "python3 -m json.tool testdata/rebuild-golden/product/daemon/stage110_hysteria2_full_quic_client_blocker_queue_gate.json",
+    "cargo run --manifest-path rust/Cargo.toml -p dae-cli --bin dae-cli-optin --quiet -- runtime stage110-hysteria2-full-quic-client-blocker-queue",
+    "cargo test --manifest-path rust/Cargo.toml -p dae-cli stage110 -- --nocapture",
+    "cargo test --manifest-path rust/Cargo.toml -p dae-product stage110 -- --nocapture",
+    "cargo test --manifest-path rust/Cargo.toml -p dae-cli -p dae-product",
+    "cargo fmt --manifest-path rust/Cargo.toml --all -- --check",
+    "git diff --check"
+  ]
+}
