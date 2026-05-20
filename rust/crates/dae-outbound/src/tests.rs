@@ -23,6 +23,7 @@ mod dataplane_trojan;
 mod dataplane_trojan_stage100;
 mod dataplane_trojan_stage101;
 mod dataplane_trojan_stage102;
+mod dataplane_trojan_stage103;
 mod dataplane_trojan_stage83;
 mod dataplane_trojan_stage84;
 mod dataplane_trojan_stage85;
