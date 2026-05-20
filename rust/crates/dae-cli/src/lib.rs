@@ -9,6 +9,7 @@ pub(crate) mod runtime_host_preflight;
 pub(crate) mod runtime_live_plan;
 pub(crate) mod runtime_runner;
 pub(crate) mod runtime_stage100_trojan_go_tls_fragment_gate;
+pub(crate) mod runtime_stage101_trojan_go_utls_fingerprint_gate;
 pub(crate) mod runtime_stage26_candidate;
 pub(crate) mod runtime_stage27_candidate;
 pub(crate) mod runtime_stage29_preflight;
