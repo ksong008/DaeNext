@@ -78,6 +78,7 @@ use crate::runtime_stage89_ss2022_multi_psk_gate::run_stage89_ss2022_multi_psk_d
 use crate::runtime_stage90_ss2022_udp_gate::run_stage90_ss2022_udp_dataplane_admission;
 use crate::runtime_stage91_ss2022_protocol_gate::run_stage91_ss2022_protocol_admission;
 use crate::runtime_stage92_sip003_simple_obfs_http_gate::run_stage92_sip003_simple_obfs_http_dataplane_admission;
+use crate::runtime_stage93_sip003_simple_obfs_tls_gate::run_stage93_sip003_simple_obfs_tls_dataplane_admission;
 
 pub(crate) fn run_runtime(args: &[String]) -> RunnerOutput {
     match args.first().map(String::as_str) {
@@ -272,6 +273,9 @@ pub(crate) fn run_runtime(args: &[String]) -> RunnerOutput {
         }
         Some("stage92-sip003-simple-obfs-http-dataplane-admission") => {
             run_stage92_sip003_simple_obfs_http_dataplane_admission(&args[1..])
+        }
+        Some("stage93-sip003-simple-obfs-tls-dataplane-admission") => {
+            run_stage93_sip003_simple_obfs_tls_dataplane_admission(&args[1..])
         }
         Some(subcommand) => {
             RunnerOutput::usage(format!("unsupported runtime subcommand: {subcommand}"))
