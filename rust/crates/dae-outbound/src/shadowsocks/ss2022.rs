@@ -213,7 +213,7 @@ impl SlidingWindowFilter {
         }
         if packet_id > self.latest {
             self.latest = packet_id;
-            let cutoff = self.latest - self.window_size;
+            let cutoff = self.latest.saturating_sub(self.window_size);
             self.seen.retain(|seen_id| *seen_id > cutoff);
         }
         self.seen.push(packet_id);

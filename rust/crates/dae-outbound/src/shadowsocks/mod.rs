@@ -5,6 +5,7 @@ pub mod link;
 pub mod metadata;
 pub mod ss2022;
 pub mod ss2022_tcp_dataplane;
+pub mod ss2022_udp_dataplane;
 
 pub use aead::{
     AeadCipherSpec, AeadStreamCodec, AeadTcpSalts, ShadowsocksAeadTcpExchangeReport,
@@ -27,4 +28,10 @@ pub use ss2022_tcp_dataplane::{
     tcp_exchange as ss2022_tcp_exchange,
     tcp_exchange_over_stream as ss2022_tcp_exchange_over_stream,
     tcp_multi_psk_exchange_over_stream as ss2022_tcp_multi_psk_exchange_over_stream,
+};
+pub use ss2022_udp_dataplane::{
+    Ss2022UdpCodec, Ss2022UdpDecodedPacket, Ss2022UdpEncodedPacket, Ss2022UdpReplayTracker,
+    decode_client_packet as decode_ss2022_udp_client_packet,
+    encode_server_packet as encode_ss2022_udp_server_packet,
+    unix_timestamp_now as ss2022_udp_unix_timestamp_now,
 };
