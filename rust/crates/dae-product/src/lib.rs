@@ -55,6 +55,7 @@ pub mod stage78_vless_http_transport_gate;
 pub mod stage79_vless_xhttp_packet_gate;
 pub mod stage80_vless_xhttp_xmux_gate;
 pub mod stage81_shared_tls_underlay_gate;
+pub mod stage82_https_proxy_tls_gate;
 pub mod systemd;
 pub mod true_daemon_admission;
 
@@ -262,6 +263,10 @@ pub use stage80_vless_xhttp_xmux_gate::{
 pub use stage81_shared_tls_underlay_gate::{
     Stage81SharedTlsUnderlayGateContract, Stage81SharedTlsUnderlayGateRow,
     stage81_shared_tls_underlay_gate_contract,
+};
+pub use stage82_https_proxy_tls_gate::{
+    Stage82HttpsProxyTlsGateContract, Stage82HttpsProxyTlsGateRow,
+    stage82_https_proxy_tls_gate_contract,
 };
 pub use systemd::{SystemdContract, systemd_contract};
 pub use true_daemon_admission::{
