@@ -13,6 +13,7 @@ mod daemon_stage37_40;
 mod daemon_stage41_49;
 mod daemon_stage50_54;
 mod product_protocol_matrix;
+mod protocol_https_proxy_82;
 mod protocol_socks_http_shadowsocks;
 mod protocol_trojan;
 mod protocol_vless;

@@ -191,6 +191,7 @@ dependencies = [
  "dae-routing",
  "dae-sniffing",
  "libc",
+ "rustls",
  "serde_json",
 ]
 
