@@ -68,6 +68,7 @@ pub mod stage91_ss2022_protocol_gate;
 pub mod stage92_sip003_simple_obfs_http_gate;
 pub mod stage93_sip003_simple_obfs_tls_gate;
 pub mod stage94_sip003_v2ray_plugin_gate;
+pub mod stage95_shadowsocksr_gate;
 pub mod systemd;
 pub mod true_daemon_admission;
 
@@ -323,6 +324,9 @@ pub use stage93_sip003_simple_obfs_tls_gate::{
 pub use stage94_sip003_v2ray_plugin_gate::{
     Stage94Sip003V2rayPluginGateContract, Stage94Sip003V2rayPluginGateRow,
     stage94_sip003_v2ray_plugin_gate_contract,
+};
+pub use stage95_shadowsocksr_gate::{
+    Stage95ShadowsocksRGateContract, Stage95ShadowsocksRGateRow, stage95_shadowsocksr_gate_contract,
 };
 pub use systemd::{SystemdContract, systemd_contract};
 pub use true_daemon_admission::{
