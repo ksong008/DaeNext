@@ -7,6 +7,7 @@ pub mod outbound_contract;
 pub mod product_chain_admission;
 pub mod protocol_dataplane;
 pub mod release;
+pub mod stage100_trojan_go_tls_fragment_gate;
 pub mod stage23_completion;
 pub mod stage24_product_gate;
 pub mod stage25_execution_queue;
@@ -347,6 +348,10 @@ pub use stage98_trojan_go_grpc_cache_gate::{
 pub use stage99_trojan_go_recertification_gate::{
     Stage99TrojanGoRecertificationGateContract, Stage99TrojanGoRecertificationGateRow,
     stage99_trojan_go_recertification_gate_contract,
+};
+pub use stage100_trojan_go_tls_fragment_gate::{
+    Stage100TrojanGoTlsFragmentGateContract, Stage100TrojanGoTlsFragmentGateRow,
+    stage100_trojan_go_tls_fragment_gate_contract,
 };
 pub use systemd::{SystemdContract, systemd_contract};
 pub use true_daemon_admission::{

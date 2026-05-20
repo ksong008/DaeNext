@@ -9,6 +9,7 @@ pub mod mux;
 pub mod quic_h3;
 pub mod reality;
 pub mod tls;
+pub mod tls_fragment;
 pub mod xhttp;
 
 pub use dataplane::{
@@ -52,6 +53,12 @@ pub use tls::{
     DEFAULT_TLS_ALPN, DEFAULT_TLS_SERVER_NAME, TlsLoopbackMaterial, TlsServerObservation,
     TlsUnderlayOptions, TlsUnderlayReport, tls_client_echo_exchange, tls_loopback_material,
     tls_server_echo,
+};
+pub use tls_fragment::{
+    SharedTlsFragmentStats, TLS_HANDSHAKE_CONTENT_TYPE, TLS_RECORD_HEADER_LEN, TlsFragmentOptions,
+    TlsFragmentStats, TlsFragmentWrite, TlsFragmentWriteReport, TlsFragmentingStream,
+    fragment_tls_write, new_tls_fragment_stats, parse_tls_fragment_range,
+    snapshot_tls_fragment_stats,
 };
 pub use xhttp::{
     XHttpLifecycleOptions, XHttpLifecycleReport, XHttpXmuxOptions, xhttp_packet_exchange,

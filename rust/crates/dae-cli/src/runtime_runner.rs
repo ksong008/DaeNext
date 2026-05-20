@@ -85,6 +85,7 @@ use crate::runtime_stage96_protocol_matrix_gate::run_stage96_protocol_matrix_rec
 use crate::runtime_stage97_trojan_go_grpc_http2_gate::run_stage97_trojan_go_grpc_http2_tls_lifecycle_admission;
 use crate::runtime_stage98_trojan_go_grpc_cache_gate::run_stage98_trojan_go_grpc_cache_cancellation_admission;
 use crate::runtime_stage99_trojan_go_recertification_gate::run_stage99_trojan_go_shared_transport_recertification;
+use crate::runtime_stage100_trojan_go_tls_fragment_gate::run_stage100_trojan_go_tls_fragment_admission;
 
 pub(crate) fn run_runtime(args: &[String]) -> RunnerOutput {
     match args.first().map(String::as_str) {
@@ -300,6 +301,9 @@ pub(crate) fn run_runtime(args: &[String]) -> RunnerOutput {
         }
         Some("stage99-trojan-go-shared-transport-recertification") => {
             run_stage99_trojan_go_shared_transport_recertification(&args[1..])
+        }
+        Some("stage100-trojan-go-tls-fragment-admission") => {
+            run_stage100_trojan_go_tls_fragment_admission(&args[1..])
         }
         Some(subcommand) => {
             RunnerOutput::usage(format!("unsupported runtime subcommand: {subcommand}"))
