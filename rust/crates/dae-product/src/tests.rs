@@ -32,6 +32,7 @@ mod protocol_trojan_go_httpupgrade_85;
 mod protocol_trojan_go_inner_shadowsocks_87;
 mod protocol_trojan_go_recertification_99;
 mod protocol_trojan_go_tls_fragment_100;
+mod protocol_trojan_go_utls_fingerprint_101;
 mod protocol_trojan_go_wss_84;
 mod protocol_trojan_tls_83;
 mod protocol_vless;
