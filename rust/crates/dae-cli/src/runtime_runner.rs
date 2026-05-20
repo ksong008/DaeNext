@@ -87,6 +87,7 @@ use crate::runtime_stage98_trojan_go_grpc_cache_gate::run_stage98_trojan_go_grpc
 use crate::runtime_stage99_trojan_go_recertification_gate::run_stage99_trojan_go_shared_transport_recertification;
 use crate::runtime_stage100_trojan_go_tls_fragment_gate::run_stage100_trojan_go_tls_fragment_admission;
 use crate::runtime_stage101_trojan_go_utls_fingerprint_gate::run_stage101_trojan_go_utls_fingerprint_readiness;
+use crate::runtime_stage102_reality_session_mutation_gate::run_stage102_reality_session_id_mutation_readiness;
 
 pub(crate) fn run_runtime(args: &[String]) -> RunnerOutput {
     match args.first().map(String::as_str) {
@@ -308,6 +309,9 @@ pub(crate) fn run_runtime(args: &[String]) -> RunnerOutput {
         }
         Some("stage101-trojan-go-utls-fingerprint-readiness") => {
             run_stage101_trojan_go_utls_fingerprint_readiness(&args[1..])
+        }
+        Some("stage102-reality-session-id-mutation-readiness") => {
+            run_stage102_reality_session_id_mutation_readiness(&args[1..])
         }
         Some(subcommand) => {
             RunnerOutput::usage(format!("unsupported runtime subcommand: {subcommand}"))

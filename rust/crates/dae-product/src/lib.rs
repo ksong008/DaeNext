@@ -9,6 +9,7 @@ pub mod protocol_dataplane;
 pub mod release;
 pub mod stage100_trojan_go_tls_fragment_gate;
 pub mod stage101_trojan_go_utls_fingerprint_gate;
+pub mod stage102_reality_session_mutation_gate;
 pub mod stage23_completion;
 pub mod stage24_product_gate;
 pub mod stage25_execution_queue;
@@ -357,6 +358,10 @@ pub use stage100_trojan_go_tls_fragment_gate::{
 pub use stage101_trojan_go_utls_fingerprint_gate::{
     Stage101TrojanGoUtlsFingerprintGateContract, Stage101TrojanGoUtlsFingerprintGateRow,
     stage101_trojan_go_utls_fingerprint_gate_contract,
+};
+pub use stage102_reality_session_mutation_gate::{
+    Stage102RealitySessionMutationGateContract, Stage102RealitySessionMutationGateRow,
+    stage102_reality_session_mutation_gate_contract,
 };
 pub use systemd::{SystemdContract, systemd_contract};
 pub use true_daemon_admission::{
