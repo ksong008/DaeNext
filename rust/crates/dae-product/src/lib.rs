@@ -59,6 +59,7 @@ pub mod stage82_https_proxy_tls_gate;
 pub mod stage83_trojan_tls_gate;
 pub mod stage84_trojan_go_wss_gate;
 pub mod stage85_trojan_go_httpupgrade_gate;
+pub mod stage86_trojan_go_grpc_gate;
 pub mod systemd;
 pub mod true_daemon_admission;
 
@@ -280,6 +281,10 @@ pub use stage84_trojan_go_wss_gate::{
 pub use stage85_trojan_go_httpupgrade_gate::{
     Stage85TrojanGoHttpUpgradeGateContract, Stage85TrojanGoHttpUpgradeGateRow,
     stage85_trojan_go_httpupgrade_gate_contract,
+};
+pub use stage86_trojan_go_grpc_gate::{
+    Stage86TrojanGoGrpcGateContract, Stage86TrojanGoGrpcGateRow,
+    stage86_trojan_go_grpc_gate_contract,
 };
 pub use systemd::{SystemdContract, systemd_contract};
 pub use true_daemon_admission::{
