@@ -15,6 +15,7 @@ mod daemon_stage50_54;
 mod product_protocol_matrix;
 mod protocol_https_proxy_82;
 mod protocol_sip003_simple_obfs_http_92;
+mod protocol_sip003_simple_obfs_tls_93;
 mod protocol_socks_http_shadowsocks;
 mod protocol_ss2022_multi_psk_89;
 mod protocol_ss2022_protocol_91;
