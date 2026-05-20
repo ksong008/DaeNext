@@ -19,8 +19,12 @@ pub use metadata::{MetadataType, ShadowsocksMetadata};
 pub use ss2022_tcp_dataplane::{
     Ss2022TcpClientRequest, Ss2022TcpExchangeReport, Ss2022TcpSalts, decode_client_request,
     encode_client_initial as encode_ss2022_tcp_client_initial,
+    encode_multi_psk_client_initial as encode_ss2022_tcp_multi_psk_client_initial,
+    encode_multi_psk_server_response as encode_ss2022_tcp_multi_psk_server_response,
     encode_server_response as encode_ss2022_tcp_server_response,
     read_client_request_from_stream as read_ss2022_tcp_client_request_from_stream,
+    read_multi_psk_client_request_from_stream as read_ss2022_tcp_multi_psk_client_request_from_stream,
     tcp_exchange as ss2022_tcp_exchange,
     tcp_exchange_over_stream as ss2022_tcp_exchange_over_stream,
+    tcp_multi_psk_exchange_over_stream as ss2022_tcp_multi_psk_exchange_over_stream,
 };

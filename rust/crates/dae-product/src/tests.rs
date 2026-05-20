@@ -15,6 +15,7 @@ mod daemon_stage50_54;
 mod product_protocol_matrix;
 mod protocol_https_proxy_82;
 mod protocol_socks_http_shadowsocks;
+mod protocol_ss2022_multi_psk_89;
 mod protocol_ss2022_tcp_88;
 mod protocol_trojan;
 mod protocol_trojan_go_grpc_86;
