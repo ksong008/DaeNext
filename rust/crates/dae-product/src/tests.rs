@@ -47,5 +47,6 @@ mod protocol_vless_transport_77_79;
 mod protocol_vless_transport_80;
 mod protocol_vmess_core_65_68;
 mod protocol_vmess_shared_69_73;
+mod quic_h3_family_stage108;
 mod shared_transport_tls_81;
 mod true_default_daemon;
