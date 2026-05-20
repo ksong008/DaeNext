@@ -63,6 +63,7 @@ pub(crate) mod runtime_stage93_sip003_simple_obfs_tls_gate;
 pub(crate) mod runtime_stage94_sip003_v2ray_plugin_gate;
 pub(crate) mod runtime_stage95_shadowsocksr_gate;
 pub(crate) mod runtime_stage96_protocol_matrix_gate;
+pub(crate) mod runtime_stage97_trojan_go_grpc_http2_gate;
 pub mod surface;
 pub(crate) mod userspace_runner;
 pub mod validate;
