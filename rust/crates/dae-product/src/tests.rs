@@ -5,6 +5,7 @@ use crate::*;
 mod helpers;
 use helpers::*;
 
+mod anytls_session_reuse_stage106;
 mod anytls_session_stage104;
 mod anytls_udp_packet_stage105;
 mod base_contracts;

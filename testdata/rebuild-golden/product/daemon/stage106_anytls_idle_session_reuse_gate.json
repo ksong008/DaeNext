@@ -1,0 +1,79 @@
+{
+  "name": "stage106-anytls-idle-session-reuse-gate",
+  "stage": "stage106",
+  "prior_gate": "stage105-anytls-udp-packet-stream-gate",
+  "stage_complete": true,
+  "anytls_native_optin_contract_admitted": true,
+  "anytls_session_frame_true_dataplane_admitted": true,
+  "anytls_udp_packet_stream_true_dataplane_admitted": true,
+  "anytls_idle_session_reuse_true_dataplane_admitted": true,
+  "anytls_true_dataplane_admitted": false,
+  "quic_h3_family_true_dataplane_admitted": false,
+  "protocol_outbound_partial_admitted": true,
+  "outbound_true_dataplane_admitted": false,
+  "matched_go_rust_default_daemon_benchmark_recorded": false,
+  "default_switch_allowed": false,
+  "product_chain_switch_allowed": false,
+  "go_default_path_preserved": true,
+  "go_fallback_required": true,
+  "gate_decision": "stage106 admits only the AnyTLS idle-session reuse/lifecycle sub-row: Rust proves one SO_MARK/MPTCP TCP underlay, one rustls TLS/auth handshake, two sequential logical streams with sid 1 then sid 2, payload roundtrips, and FIN lifecycle on the same session; full AnyTLS protocol-wide admission, QUIC family protocols, outbound default, and product-chain switches remain closed",
+  "rows": [
+    {
+      "area": "AnyTLS carried session prerequisites",
+      "status": "passed-carried-evidence",
+      "evidence": "Stage104 proved session/frame first flight and Stage105 proved UDP packet stream over the AnyTLS session",
+      "boundary": "carried evidence does not by itself prove idle reuse after stream close",
+      "next_action": "run the dedicated Stage106 lifecycle smoke"
+    },
+    {
+      "area": "AnyTLS idle session reuse",
+      "status": "passed",
+      "evidence": "runtime stage106 smoke uses one TCP/TLS/auth session and then opens sid 1 and sid 2 sequentially after FIN, matching getSession idle map reuse semantics",
+      "boundary": "this admits the session reuse sub-row only inside the opt-in gate",
+      "next_action": "add a final AnyTLS protocol-wide recertification row before flipping anytls_true_dataplane_admitted"
+    },
+    {
+      "area": "AnyTLS stream lifecycle",
+      "status": "passed",
+      "evidence": "runtime stage106 smoke validates Settings/SYN/PSH target/PSH payload/SYNACK/PSH echo/FIN for both logical streams on the same underlay connection",
+      "boundary": "stream lifecycle admission does not admit daemon default or product-chain switches",
+      "next_action": "record matched default daemon benchmark only after all protocol rows are closed"
+    },
+    {
+      "area": "overall outbound/default admission",
+      "status": "blocked",
+      "evidence": "AnyTLS protocol-wide recertification, Hysteria2/TUIC/Juicity QUIC family, matched default daemon benchmark, and product-chain recertification remain open",
+      "boundary": "protocol_outbound_partial_admitted=true does not mean outbound_true_dataplane_admitted=true",
+      "next_action": "continue remaining protocol gates before reopening defaults"
+    }
+  ],
+  "validation_commands": [
+    "python3 -m json.tool testdata/rebuild-golden/engine/runtime_stage106/anytls_idle_session_reuse_admission.json",
+    "python3 -m json.tool testdata/rebuild-golden/product/daemon/stage106_anytls_idle_session_reuse_gate.json",
+    "cargo test --manifest-path rust/Cargo.toml -p dae-outbound stage106 -- --nocapture",
+    "cargo test --manifest-path rust/Cargo.toml -p dae-cli stage106 -- --nocapture",
+    "cargo test --manifest-path rust/Cargo.toml -p dae-product stage106 -- --nocapture",
+    "cargo run --manifest-path rust/Cargo.toml -p dae-cli --bin dae-cli-optin --quiet -- runtime stage106-anytls-idle-session-reuse-admission --execute-smoke --ack-root-gate --benchmark-iters 10",
+    "cargo test --manifest-path rust/Cargo.toml -p dae-outbound -p dae-cli -p dae-product",
+    "cargo fmt --manifest-path rust/Cargo.toml --all -- --check",
+    "git diff --check"
+  ],
+  "remaining_blockers": [
+    "Full AnyTLS protocol-wide admission needs a final recertification row after session reuse",
+    "Hysteria2, TUIC, and Juicity QUIC family true dataplanes remain external/outbound-quic-go blockers",
+    "VLESS and VMess TLS/WSS/gRPC/Meek/xHTTP full shared transport rows remain protocol-specific blockers",
+    "matched Go default daemon vs true Rust candidate benchmark is still missing",
+    "clean dae-wing and daed product-chain recertification is still missing"
+  ],
+  "source": [
+    "DAEX_RUST_REBUILD_PLAN_2026-05-16.md:stage106",
+    "DAENEW_RUST_REBUILD_MEMO_2026-05-16.md:26.17",
+    "DAENEW_RUST_REBUILD_MEMO_2026-05-16.md:26.20",
+    "DAENEW_RUST_REBUILD_MEMO_2026-05-16.md:26.21",
+    "/root/project/outbound/protocol/anytls/dialer.go",
+    "/root/project/outbound/protocol/anytls/session.go",
+    "/root/project/outbound/protocol/anytls/stream.go",
+    "rust/crates/dae-outbound/src/anytls/session_reuse_dataplane.rs",
+    "testdata/rebuild-golden/engine/runtime_stage106/anytls_idle_session_reuse_admission.json"
+  ]
+}
