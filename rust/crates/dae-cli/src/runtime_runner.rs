@@ -93,6 +93,7 @@ use crate::runtime_stage104_anytls_session_gate::run_stage104_anytls_session_fra
 use crate::runtime_stage105_anytls_udp_packet_gate::run_stage105_anytls_udp_packet_stream_admission;
 use crate::runtime_stage106_anytls_session_reuse_gate::run_stage106_anytls_idle_session_reuse_admission;
 use crate::runtime_stage107_anytls_recertification_gate::run_stage107_anytls_protocol_wide_recertification;
+use crate::runtime_stage108_quic_h3_family_queue_gate::run_stage108_quic_h3_family_blocker_queue;
 
 pub(crate) fn run_runtime(args: &[String]) -> RunnerOutput {
     match args.first().map(String::as_str) {
@@ -332,6 +333,9 @@ pub(crate) fn run_runtime(args: &[String]) -> RunnerOutput {
         }
         Some("stage107-anytls-protocol-wide-recertification") => {
             run_stage107_anytls_protocol_wide_recertification(&args[1..])
+        }
+        Some("stage108-quic-h3-family-blocker-queue") => {
+            run_stage108_quic_h3_family_blocker_queue(&args[1..])
         }
         Some(subcommand) => {
             RunnerOutput::usage(format!("unsupported runtime subcommand: {subcommand}"))
