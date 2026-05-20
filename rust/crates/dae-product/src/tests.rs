@@ -16,6 +16,7 @@ mod product_protocol_matrix;
 mod protocol_https_proxy_82;
 mod protocol_socks_http_shadowsocks;
 mod protocol_trojan;
+mod protocol_trojan_go_httpupgrade_85;
 mod protocol_trojan_go_wss_84;
 mod protocol_trojan_tls_83;
 mod protocol_vless;
