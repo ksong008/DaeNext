@@ -1,0 +1,94 @@
+{
+  "name": "stage109-hysteria2-udp-underlay-gate",
+  "stage": "stage109",
+  "prior_gate": "stage108-quic-h3-family-blocker-queue-gate",
+  "stage_complete": true,
+  "hysteria2_native_optin_contract_admitted": true,
+  "hysteria2_port_hopping_contract_admitted": true,
+  "hysteria2_pin_sha256_raw_cert_hash_admitted": true,
+  "hysteria2_udp_underlay_admitted": true,
+  "hysteria2_full_quic_stack_observed": false,
+  "hysteria2_true_quic_dataplane_admitted": false,
+  "quic_h3_family_native_optin_contract_admitted": true,
+  "quic_h3_family_true_dataplane_admitted": false,
+  "anytls_true_dataplane_admitted": true,
+  "protocol_outbound_partial_admitted": true,
+  "outbound_true_dataplane_admitted": false,
+  "matched_go_rust_default_daemon_benchmark_recorded": false,
+  "default_switch_allowed": false,
+  "default_path_mutation_allowed": false,
+  "product_chain_switch_allowed": false,
+  "true_rust_default_daemon_admitted": false,
+  "outbound_quic_go_dependency_preserved": true,
+  "external_outbound_required": true,
+  "external_quic_go_required": true,
+  "go_default_path_preserved": true,
+  "go_fallback_required": true,
+  "gate_decision": "stage109 admits only the Hysteria2 UDP underlay readiness row after root-gated local UDP smoke and benchmark: port hopping detection, pinSHA256 raw certificate hash, SO_MARK underlay observation, and MPTCP-field preservation are covered, but the full QUIC/Hysteria2 client dataplane remains external/outbound-quic-go and default/product switches remain closed",
+  "rows": [
+    {
+      "area": "Hysteria2 port hopping",
+      "status": "admitted-underlay-contract",
+      "evidence": "server port strings containing comma or dash remain strings and are classified as port hopping instead of being parsed as a single u16",
+      "boundary": "this does not implement the Hysteria2 port hopping scheduler over QUIC",
+      "next_action": "build real Hysteria2 QUIC client scheduler before true QUIC admission"
+    },
+    {
+      "area": "Hysteria2 pinSHA256",
+      "status": "admitted-underlay-contract",
+      "evidence": "configured pin normalizes by lowercasing and removing ':'/'-' before matching raw certificate SHA256 hex",
+      "boundary": "this is raw single-cert hash parity, not Juicity pinned cert-chain semantics",
+      "next_action": "carry the raw cert hash check into the real QUIC TLS verification path"
+    },
+    {
+      "area": "Hysteria2 UDP underlay smoke",
+      "status": "admitted-local-underlay-smoke",
+      "evidence": "Stage109 root-gated smoke exercised a local UDP datagram echo with SO_MARK observation and benchmark data",
+      "boundary": "the local datagram harness is not a full QUIC handshake, stream mux, congestion, or Hysteria2 client dataplane",
+      "next_action": "replace the harness with a true Hysteria2 QUIC loopback before opening hysteria2_true_quic_dataplane_admitted"
+    },
+    {
+      "area": "outbound/default/product",
+      "status": "blocked",
+      "evidence": "Stage109 keeps /root/project/outbound and /root/project/quic-go as required dependencies and keeps Go default path preserved",
+      "boundary": "hysteria2_udp_underlay_admitted=true does not admit quic_h3_family_true_dataplane_admitted or outbound_true_dataplane_admitted",
+      "next_action": "continue Hysteria2 full QUIC client gates, then TUIC/Juicity gates, before outbound-wide recertification"
+    }
+  ],
+  "benchmark": [
+    "Stage 109 records root-gated local UDP underlay smoke benchmark data in the local plan",
+    "Benchmark scope is local UDP datagram echo with Hysteria2 underlay contract checks, not a full QUIC/Hysteria2 dataplane",
+    "Matched Go default-daemon baseline is still missing"
+  ],
+  "validation_commands": [
+    "python3 -m json.tool testdata/rebuild-golden/engine/runtime_stage109/hysteria2_udp_underlay_admission.json",
+    "python3 -m json.tool testdata/rebuild-golden/product/daemon/stage109_hysteria2_udp_underlay_gate.json",
+    "cargo test --manifest-path rust/Cargo.toml -p dae-outbound stage109 -- --nocapture",
+    "cargo run --manifest-path rust/Cargo.toml -p dae-cli --bin dae-cli-optin --quiet -- runtime stage109-hysteria2-udp-underlay-admission",
+    "cargo run --manifest-path rust/Cargo.toml -p dae-cli --bin dae-cli-optin --quiet -- runtime stage109-hysteria2-udp-underlay-admission --execute-smoke --ack-root-gate --benchmark-iters 10",
+    "cargo test --manifest-path rust/Cargo.toml -p dae-cli stage109 -- --nocapture",
+    "cargo test --manifest-path rust/Cargo.toml -p dae-product stage109 -- --nocapture",
+    "cargo test --manifest-path rust/Cargo.toml -p dae-outbound -p dae-cli -p dae-product",
+    "cargo fmt --manifest-path rust/Cargo.toml --all -- --check",
+    "git diff --check"
+  ],
+  "remaining_blockers": [
+    "Hysteria2 full QUIC handshake, stream multiplexing, congestion, and port hopping scheduler are not implemented in Rust",
+    "Hysteria2 TCP target and UDP target still need true client behavior over QUIC streams/datagrams",
+    "TUIC and Juicity true QUIC/H3 dataplanes remain external/outbound-quic-go blockers",
+    "outbound registry/dialer group/health policy parity while preserving direct/block indices and NewDialerSetFromLinks semantics",
+    "matched Go default daemon vs true Rust candidate benchmark",
+    "clean dae-wing and daed product-chain recertification"
+  ],
+  "source": [
+    "DAEX_RUST_REBUILD_PLAN_2026-05-16.md:stage109",
+    "DAENEW_RUST_REBUILD_MEMO_2026-05-16.md:12.6",
+    "DAENEW_RUST_REBUILD_MEMO_2026-05-16.md:25.1",
+    "DAENEW_RUST_REBUILD_MEMO_2026-05-16.md:25.2",
+    "DAENEW_RUST_REBUILD_MEMO_2026-05-16.md:26.14",
+    "DAENEW_RUST_REBUILD_MEMO_2026-05-16.md:26.20",
+    "DAENEW_RUST_REBUILD_MEMO_2026-05-16.md:26.21",
+    "rust/crates/dae-outbound/src/hysteria2/underlay.rs",
+    "rust/crates/dae-cli/src/runtime_stage109_hysteria2_underlay_gate/"
+  ]
+}

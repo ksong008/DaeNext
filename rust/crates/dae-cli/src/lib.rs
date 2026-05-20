@@ -17,6 +17,7 @@ pub(crate) mod runtime_stage105_anytls_udp_packet_gate;
 pub(crate) mod runtime_stage106_anytls_session_reuse_gate;
 pub(crate) mod runtime_stage107_anytls_recertification_gate;
 pub(crate) mod runtime_stage108_quic_h3_family_queue_gate;
+pub(crate) mod runtime_stage109_hysteria2_underlay_gate;
 pub(crate) mod runtime_stage26_candidate;
 pub(crate) mod runtime_stage27_candidate;
 pub(crate) mod runtime_stage29_preflight;
