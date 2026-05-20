@@ -76,6 +76,7 @@ use crate::runtime_stage87_trojan_go_inner_shadowsocks_gate::run_stage87_trojan_
 use crate::runtime_stage88_ss2022_tcp_gate::run_stage88_ss2022_tcp_dataplane_admission;
 use crate::runtime_stage89_ss2022_multi_psk_gate::run_stage89_ss2022_multi_psk_dataplane_admission;
 use crate::runtime_stage90_ss2022_udp_gate::run_stage90_ss2022_udp_dataplane_admission;
+use crate::runtime_stage91_ss2022_protocol_gate::run_stage91_ss2022_protocol_admission;
 
 pub(crate) fn run_runtime(args: &[String]) -> RunnerOutput {
     match args.first().map(String::as_str) {
@@ -264,6 +265,9 @@ pub(crate) fn run_runtime(args: &[String]) -> RunnerOutput {
         }
         Some("stage90-ss2022-udp-replay-dataplane-admission") => {
             run_stage90_ss2022_udp_dataplane_admission(&args[1..])
+        }
+        Some("stage91-ss2022-protocol-wide-admission") => {
+            run_stage91_ss2022_protocol_admission(&args[1..])
         }
         Some(subcommand) => {
             RunnerOutput::usage(format!("unsupported runtime subcommand: {subcommand}"))
