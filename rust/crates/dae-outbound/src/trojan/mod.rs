@@ -2,6 +2,7 @@ pub mod contract;
 pub mod dataplane;
 pub mod grpc_dataplane;
 pub mod httpupgrade_tls_dataplane;
+pub mod inner_shadowsocks_dataplane;
 pub mod link;
 pub mod metadata;
 pub mod packet;
@@ -21,6 +22,11 @@ pub use grpc_dataplane::{
 };
 pub use httpupgrade_tls_dataplane::{
     TrojanGoHttpUpgradeTcpExchangeReport, tcp_exchange_over_httpupgrade_tls_stream,
+};
+pub use inner_shadowsocks_dataplane::{
+    TrojanGoInnerShadowsocksRequest, TrojanGoInnerShadowsocksTcpExchangeReport,
+    encode_inner_shadowsocks_response, read_inner_shadowsocks_trojan_request_from_stream,
+    tcp_exchange_over_inner_shadowsocks_stream,
 };
 pub use link::{TrojanLink, TrojanTransportType};
 pub use metadata::{TrojanMetadata, TrojanNetwork};
