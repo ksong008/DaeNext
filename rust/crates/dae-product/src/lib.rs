@@ -15,6 +15,7 @@ pub mod stage104_anytls_session_gate;
 pub mod stage105_anytls_udp_packet_gate;
 pub mod stage106_anytls_session_reuse_gate;
 pub mod stage107_anytls_recertification_gate;
+pub mod stage108_quic_h3_family_queue_gate;
 pub mod stage23_completion;
 pub mod stage24_product_gate;
 pub mod stage25_execution_queue;
@@ -387,6 +388,10 @@ pub use stage106_anytls_session_reuse_gate::{
 pub use stage107_anytls_recertification_gate::{
     Stage107AnyTlsRecertificationGateContract, Stage107AnyTlsRecertificationGateRow,
     stage107_anytls_recertification_gate_contract,
+};
+pub use stage108_quic_h3_family_queue_gate::{
+    Stage108QuicH3FamilyQueueGateContract, Stage108QuicH3FamilyQueueGateRow,
+    stage108_quic_h3_family_queue_gate_contract,
 };
 pub use systemd::{SystemdContract, systemd_contract};
 pub use true_daemon_admission::{
