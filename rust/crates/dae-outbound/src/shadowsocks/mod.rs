@@ -4,6 +4,7 @@ pub mod contract;
 pub mod link;
 pub mod metadata;
 pub mod ss2022;
+pub mod ss2022_tcp_dataplane;
 
 pub use aead::{
     AeadCipherSpec, AeadStreamCodec, AeadTcpSalts, ShadowsocksAeadTcpExchangeReport,
@@ -15,3 +16,11 @@ pub use aead::{
 pub use cipher::{CipherFamily, CipherInfo, classify_cipher};
 pub use link::{ShadowsocksLink, Sip003, Sip003Opts};
 pub use metadata::{MetadataType, ShadowsocksMetadata};
+pub use ss2022_tcp_dataplane::{
+    Ss2022TcpClientRequest, Ss2022TcpExchangeReport, Ss2022TcpSalts, decode_client_request,
+    encode_client_initial as encode_ss2022_tcp_client_initial,
+    encode_server_response as encode_ss2022_tcp_server_response,
+    read_client_request_from_stream as read_ss2022_tcp_client_request_from_stream,
+    tcp_exchange as ss2022_tcp_exchange,
+    tcp_exchange_over_stream as ss2022_tcp_exchange_over_stream,
+};
