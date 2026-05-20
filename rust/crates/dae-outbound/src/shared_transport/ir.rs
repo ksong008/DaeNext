@@ -83,10 +83,10 @@ pub fn grpc_cache_key(
     mptcp: bool,
 ) -> String {
     let magic = magic_network_encode("tcp", mark, mptcp);
+    let magic = general_purpose::URL_SAFE_NO_PAD.encode(magic);
     format!(
-        "{address}|{server_name}|{dialer_id}|{}|{}",
+        "{address}|{server_name}|{dialer_id}|{}|magic:{magic}",
         if allow_insecure { "true" } else { "false" },
-        String::from_utf8_lossy(&magic)
     )
 }
 
