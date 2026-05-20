@@ -10,6 +10,7 @@ pub mod quic_h3;
 pub mod reality;
 pub mod tls;
 pub mod tls_fragment;
+pub mod utls_fingerprint;
 pub mod xhttp;
 
 pub use dataplane::{
@@ -59,6 +60,10 @@ pub use tls_fragment::{
     TlsFragmentStats, TlsFragmentWrite, TlsFragmentWriteReport, TlsFragmentingStream,
     fragment_tls_write, new_tls_fragment_stats, parse_tls_fragment_range,
     snapshot_tls_fragment_stats,
+};
+pub use utls_fingerprint::{
+    SUPPORTED_UTLS_FINGERPRINTS, U_TLS_WIRE_STACK_DEFERRED, UtlsFingerprint,
+    resolve_utls_client_hello_id, supported_utls_fingerprint_count, utls_fingerprint_names,
 };
 pub use xhttp::{
     XHttpLifecycleOptions, XHttpLifecycleReport, XHttpXmuxOptions, xhttp_packet_exchange,
