@@ -1,0 +1,93 @@
+{
+  "name": "stage107-anytls-protocol-wide-recertification-gate",
+  "stage": "stage107",
+  "prior_gate": "stage106-anytls-idle-session-reuse-gate",
+  "stage_complete": true,
+  "anytls_native_optin_contract_admitted": true,
+  "anytls_session_frame_true_dataplane_admitted": true,
+  "anytls_udp_packet_stream_true_dataplane_admitted": true,
+  "anytls_idle_session_reuse_true_dataplane_admitted": true,
+  "anytls_true_dataplane_admitted": true,
+  "quic_h3_family_true_dataplane_admitted": false,
+  "protocol_outbound_partial_admitted": true,
+  "outbound_true_dataplane_admitted": false,
+  "matched_go_rust_default_daemon_benchmark_recorded": false,
+  "default_switch_allowed": false,
+  "default_path_mutation_allowed": false,
+  "product_chain_switch_allowed": false,
+  "true_rust_default_daemon_admitted": false,
+  "go_default_path_preserved": true,
+  "go_fallback_required": true,
+  "gate_decision": "stage107 recertifies AnyTLS protocol-wide opt-in after Stage104 session/frame, Stage105 UDP packet stream, and Stage106 idle-session reuse/lifecycle all passed true dataplane gates; anytls_true_dataplane_admitted=true is now allowed, while QUIC/H3 family protocols, outbound default, matched default-daemon benchmark, and product-chain switches remain closed",
+  "rows": [
+    {
+      "area": "AnyTLS session/frame first flight",
+      "status": "passed-carried-evidence",
+      "evidence": "Stage104 runtime smoke proved rustls TLS, password sha256 auth first write, Settings/SYN/PSH target, SYNACK, and PSH payload echo over SO_MARK/MPTCP TCP underlay",
+      "boundary": "carried Stage104 evidence admits only the AnyTLS session/frame sub-row",
+      "next_action": "carry as a required predicate for protocol-wide AnyTLS admission"
+    },
+    {
+      "area": "AnyTLS UDP packet stream",
+      "status": "passed-carried-evidence",
+      "evidence": "Stage105 runtime smoke proved UDP stream target rewrite to sp.v2.udp-over-tcp.arpa, first packet target+payload framing, subsequent length+payload framing, and packet response roundtrip",
+      "boundary": "carried Stage105 evidence admits only UDP packet stream over AnyTLS session",
+      "next_action": "carry as a required predicate for protocol-wide AnyTLS admission"
+    },
+    {
+      "area": "AnyTLS idle session reuse and lifecycle",
+      "status": "passed-carried-evidence",
+      "evidence": "Stage106 runtime smoke proved one TCP/TLS/auth physical session carrying sid 1 and sid 2 logical streams with FIN lifecycle and payload echo",
+      "boundary": "carried Stage106 evidence admits idle reuse/lifecycle but not outbound default switches",
+      "next_action": "carry as the final required predicate for protocol-wide AnyTLS admission"
+    },
+    {
+      "area": "AnyTLS protocol-wide opt-in",
+      "status": "passed-recertified-after-stage106",
+      "evidence": "Stage107 requires all three AnyTLS true dataplane sub-rows to be true before setting anytls_true_dataplane_admitted=true",
+      "boundary": "AnyTLS protocol-wide opt-in admission still preserves Go default outbound path and product-chain closures",
+      "next_action": "carry AnyTLS into the next broader protocol matrix without opening defaults"
+    },
+    {
+      "area": "overall outbound/default admission",
+      "status": "blocked",
+      "evidence": "QUIC/H3 family protocols, matched default daemon benchmark, outbound-wide recertification, and clean product-chain recertification remain open",
+      "boundary": "anytls_true_dataplane_admitted=true does not mean outbound_true_dataplane_admitted=true",
+      "next_action": "continue remaining protocol family gates before reopening defaults"
+    }
+  ],
+  "benchmark_carry_forward": [
+    "Stage 104 AnyTLS session/frame: 52199940.3 ns/op",
+    "Stage 105 AnyTLS UDP packet stream: 49463396.7 ns/op",
+    "Stage 106 AnyTLS idle session reuse: 136887911.4 ns/op",
+    "Stage 107 records no new network benchmark because it is a read-only recertification gate"
+  ],
+  "validation_commands": [
+    "python3 -m json.tool testdata/rebuild-golden/engine/runtime_stage107/anytls_protocol_wide_recertification.json",
+    "python3 -m json.tool testdata/rebuild-golden/product/daemon/stage107_anytls_protocol_wide_recertification_gate.json",
+    "cargo run --manifest-path rust/Cargo.toml -p dae-cli --bin dae-cli-optin --quiet -- runtime stage107-anytls-protocol-wide-recertification",
+    "cargo test --manifest-path rust/Cargo.toml -p dae-cli stage107 -- --nocapture",
+    "cargo test --manifest-path rust/Cargo.toml -p dae-product stage107 -- --nocapture",
+    "cargo test --manifest-path rust/Cargo.toml -p dae-outbound -p dae-cli -p dae-product",
+    "cargo fmt --manifest-path rust/Cargo.toml --all -- --check",
+    "git diff --check"
+  ],
+  "remaining_blockers": [
+    "Hysteria2, TUIC, and Juicity QUIC family true dataplanes remain external/outbound-quic-go blockers",
+    "VLESS and VMess TLS/WSS/gRPC/Meek/xHTTP full shared transport rows remain protocol-specific blockers",
+    "Trojan-Go full uTLS wire-level and REALITY/uTLS full handshake rows remain protocol-specific blockers",
+    "matched Go default daemon vs true Rust candidate benchmark is still missing",
+    "outbound-wide protocol matrix recertification after remaining protocol families is still missing",
+    "clean dae-wing and daed product-chain recertification is still missing"
+  ],
+  "source": [
+    "DAEX_RUST_REBUILD_PLAN_2026-05-16.md:stage107",
+    "DAENEW_RUST_REBUILD_MEMO_2026-05-16.md:26.17",
+    "DAENEW_RUST_REBUILD_MEMO_2026-05-16.md:26.20",
+    "DAENEW_RUST_REBUILD_MEMO_2026-05-16.md:26.21",
+    "testdata/rebuild-golden/engine/runtime_stage104/anytls_session_frame_admission.json",
+    "testdata/rebuild-golden/engine/runtime_stage105/anytls_udp_packet_stream_admission.json",
+    "testdata/rebuild-golden/engine/runtime_stage106/anytls_idle_session_reuse_admission.json",
+    "rust/crates/dae-cli/src/runtime_stage107_anytls_recertification_gate.rs"
+  ]
+}
