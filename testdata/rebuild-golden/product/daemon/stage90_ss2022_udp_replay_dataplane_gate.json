@@ -1,0 +1,92 @@
+{
+  "carried_blockers": [
+    "SS2022 protocol-wide admission still needs a follow-up gate after TCP, identity, and UDP evidence are carried together",
+    "SIP003 plugin and ShadowsocksR layered transport remain separate blockers",
+    "Trojan-Go full shared transport remains blocked until transport combinations and full grpc-go HTTP/2/TLS lifecycle are recertified together",
+    "uTLS fingerprint, REALITY, and TLS fragmentation are still deferred",
+    "Hysteria2, TUIC, Juicity, AnyTLS, REALITY, Vision, and QUIC/H3 true dataplanes are still incomplete",
+    "matched Go default daemon vs true Rust candidate benchmark is still missing",
+    "clean dae-wing and daed product-chain recertification is still missing"
+  ],
+  "default_path_mutation_allowed": false,
+  "default_switch_allowed": false,
+  "gate_decision": "stage90 admits only the SS2022 UDP/replay Rust true dataplane row by validating AES separate-header, multi-PSK UDP identity header, uPSK session AEAD, Chacha XChaCha20-Poly1305 merged header, first packet id, server client-session binding, duplicate replay rejection, too-old replay rejection, SO_MARK UDP observation, and benchmark; SS2022 protocol-wide admission, SIP003 plugins, ShadowsocksR, full shared transport, outbound default, and product switches remain closed",
+  "go_default_path_preserved": true,
+  "go_fallback_required": true,
+  "matched_go_rust_default_daemon_benchmark_recorded": false,
+  "name": "stage90-ss2022-udp-replay-dataplane-gate",
+  "outbound_true_dataplane_admitted": false,
+  "prior_gate": "stage89-ss2022-multi-psk-tcp-dataplane-gate",
+  "product_chain_switch_allowed": false,
+  "protocol_outbound_partial_admitted": true,
+  "rows": [
+    {
+      "area": "SS2022 TCP carried evidence",
+      "boundary": "TCP evidence does not exercise UDP packet headers, packet ciphers, or replay windows",
+      "evidence": "Stage 88 admitted SS2022 TCP single-PSK and Stage 89 admitted SS2022 TCP multi-PSK identity headers with request salt echo, payload roundtrip, SO_MARK/MPTCP, and benchmark",
+      "next_action": "carry ss2022_tcp_true_dataplane_admitted=true and ss2022_multi_psk_identity_header_dataplane_admitted=true while validating UDP/replay",
+      "status": "passed-prior-gate"
+    },
+    {
+      "area": "SS2022 UDP AES separate-header",
+      "boundary": "this row only admits the AES separate-header UDP branch",
+      "evidence": "Stage 90 validates 2022-blake3-aes-128-gcm UDP separate header, packet id 0, AES block header, one 16-byte UDP identity header, uPSK session AEAD, client/server packet message, target stage90-ss2022-udp.example:5353, response target 8.8.8.8:53, payload echo, SO_MARK, and benchmark",
+      "next_action": "carry ss2022_udp_aes_separate_header_admitted=true into the SS2022 protocol-wide gate",
+      "status": "passed-opt-in-root-gated-smoke"
+    },
+    {
+      "area": "SS2022 UDP Chacha merged-header and replay",
+      "boundary": "this admits SS2022 UDP/replay only; it does not admit SIP003 plugin UDP passthrough or ShadowsocksR",
+      "evidence": "Stage 90 validates 2022-blake3-chacha20-poly1305 UDP packet cipher with 24-byte XChaCha nonce, merged session/packet header, server client-session binding, duplicate replay rejection, too-old replay rejection, SO_MARK, and benchmark",
+      "next_action": "add a follow-up SS2022 protocol-wide gate, then continue SIP003 and SSR rows separately",
+      "status": "passed-opt-in-root-gated-smoke"
+    },
+    {
+      "area": "overall outbound/default admission",
+      "boundary": "protocol_outbound_partial_admitted=true does not mean outbound_true_dataplane_admitted=true",
+      "evidence": "Remaining protocol rows, matched Go/Rust default daemon benchmark, and product-chain recertification are still incomplete",
+      "next_action": "continue per-protocol gates before reopening defaults",
+      "status": "blocked"
+    }
+  ],
+  "shared_transport_true_dataplane_admitted": false,
+  "shadowsocks_aead_protocol_true_dataplane_admitted": true,
+  "shadowsocks_protocol_partial_admitted": true,
+  "shadowsocks_protocol_true_dataplane_admitted": false,
+  "source": [
+    "DAEX_RUST_REBUILD_PLAN_2026-05-16.md:stage90",
+    "DAENEW_RUST_REBUILD_MEMO_2026-05-16.md:26.9",
+    "/root/project/outbound/protocol/shadowsocks_2022/udp_conn.go",
+    "/root/project/outbound/protocol/shadowsocks_2022/udp_conn_test.go",
+    "/root/project/outbound/protocol/shadowsocks_2022/encrypt.go",
+    "rust/crates/dae-cli/src/runtime_stage90_ss2022_udp_gate.rs",
+    "rust/crates/dae-outbound/src/shadowsocks/ss2022.rs",
+    "rust/crates/dae-outbound/src/shadowsocks/ss2022_udp_dataplane.rs",
+    "rust/crates/dae-datapath/src/udp_direct.rs",
+    "testdata/rebuild-golden/engine/runtime_stage90/ss2022_udp_replay_dataplane_admission.json"
+  ],
+  "ss2022_multi_psk_identity_header_dataplane_admitted": true,
+  "ss2022_tcp_true_dataplane_admitted": true,
+  "ss2022_true_dataplane_admitted": false,
+  "ss2022_udp_aes_separate_header_admitted": true,
+  "ss2022_udp_chacha_merged_header_admitted": true,
+  "ss2022_udp_replay_filter_admitted": true,
+  "ss2022_udp_true_dataplane_admitted": true,
+  "stage": "stage90",
+  "stage_complete": true,
+  "trojan_go_shared_transport_admitted": false,
+  "trojan_go_shared_transport_partial_admitted": true,
+  "trojan_protocol_true_dataplane_admitted": true,
+  "true_rust_default_daemon_admitted": false,
+  "validation_commands": [
+    "python3 -m json.tool testdata/rebuild-golden/engine/runtime_stage90/ss2022_udp_replay_dataplane_admission.json",
+    "python3 -m json.tool testdata/rebuild-golden/product/daemon/stage90_ss2022_udp_replay_dataplane_gate.json",
+    "cargo test --manifest-path rust/Cargo.toml -p dae-outbound stage90 -- --nocapture",
+    "cargo test --manifest-path rust/Cargo.toml -p dae-cli stage90 -- --nocapture",
+    "cargo test --manifest-path rust/Cargo.toml -p dae-product stage90 -- --nocapture",
+    "cargo run --manifest-path rust/Cargo.toml -p dae-cli --bin dae-cli-optin --quiet -- runtime stage90-ss2022-udp-replay-dataplane-admission --execute-smoke --ack-root-gate --benchmark-iters 10",
+    "cargo test --manifest-path rust/Cargo.toml -p dae-outbound -p dae-cli -p dae-product",
+    "cargo fmt --all --check",
+    "git diff --check"
+  ]
+}
