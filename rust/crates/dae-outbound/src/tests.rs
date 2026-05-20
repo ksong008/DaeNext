@@ -12,6 +12,7 @@ use helpers::*;
 
 mod dataplane_anytls_stage104;
 mod dataplane_anytls_stage105;
+mod dataplane_anytls_stage106;
 mod dataplane_base;
 mod dataplane_http_stage82;
 mod dataplane_shadowsocks_stage88;
