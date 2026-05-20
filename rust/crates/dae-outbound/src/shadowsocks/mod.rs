@@ -4,6 +4,7 @@ pub mod contract;
 pub mod link;
 pub mod metadata;
 pub mod sip003_dataplane;
+pub mod sip003_tls_dataplane;
 pub mod ss2022;
 pub mod ss2022_tcp_dataplane;
 pub mod ss2022_udp_dataplane;
@@ -23,6 +24,12 @@ pub use sip003_dataplane::{
     decode_simple_obfs_http_shadowsocks_request, encode_simple_obfs_http_shadowsocks_response,
     read_simple_obfs_http_request, simple_obfs_http_request_with_body,
     simple_obfs_http_shadowsocks_aead_exchange_over_stream,
+};
+pub use sip003_tls_dataplane::{
+    Sip003SimpleObfsTlsExchangeReport, Sip003SimpleObfsTlsOptions, Sip003SimpleObfsTlsRequest,
+    decode_simple_obfs_tls_shadowsocks_request, encode_simple_obfs_tls_shadowsocks_response,
+    read_simple_obfs_tls_client_hello, simple_obfs_tls_client_hello_with_body,
+    simple_obfs_tls_shadowsocks_aead_exchange_over_stream,
 };
 pub use ss2022_tcp_dataplane::{
     Ss2022TcpClientRequest, Ss2022TcpExchangeReport, Ss2022TcpSalts, decode_client_request,

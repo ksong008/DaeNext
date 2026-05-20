@@ -16,6 +16,7 @@ mod dataplane_shadowsocks_stage88;
 mod dataplane_shadowsocks_stage89;
 mod dataplane_shadowsocks_stage90;
 mod dataplane_shadowsocks_stage92;
+mod dataplane_shadowsocks_stage93;
 mod dataplane_trojan;
 mod dataplane_trojan_stage83;
 mod dataplane_trojan_stage84;

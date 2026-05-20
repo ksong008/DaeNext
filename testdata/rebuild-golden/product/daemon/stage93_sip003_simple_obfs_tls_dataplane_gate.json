@@ -1,0 +1,88 @@
+{
+  "carried_blockers": [
+    "SIP003 v2ray-plugin TLS/WS/mux chain remains a separate transport/dataplane blocker",
+    "ShadowsocksR layered transport remains a separate blocker",
+    "Shadowsocks family protocol-wide admission remains closed until SIP003 v2ray-plugin and SSR are recertified",
+    "Trojan-Go full shared transport remains blocked until transport combinations and full grpc-go HTTP/2/TLS lifecycle are recertified together",
+    "uTLS fingerprint, REALITY, and TLS fragmentation are still deferred",
+    "Hysteria2, TUIC, Juicity, AnyTLS, REALITY, Vision, and QUIC/H3 true dataplanes are still incomplete",
+    "matched Go default daemon vs true Rust candidate benchmark is still missing",
+    "clean dae-wing and daed product-chain recertification is still missing"
+  ],
+  "default_path_mutation_allowed": false,
+  "default_switch_allowed": false,
+  "gate_decision": "stage93 admits only the SIP003 simple-obfs TLS Rust opt-in dataplane by validating ClientHello/session-ticket obfs framing, SNI, ordinary Shadowsocks AEAD TCP salt/HKDF/chunk encryption, target metadata, payload echo, SO_MARK/MPTCP underlay, and benchmark; v2ray-plugin TLS/WS/mux, ShadowsocksR, Shadowsocks family protocol-wide admission, outbound default, and product switches remain closed",
+  "go_default_path_preserved": true,
+  "go_fallback_required": true,
+  "matched_go_rust_default_daemon_benchmark_recorded": false,
+  "name": "stage93-sip003-simple-obfs-tls-dataplane-gate",
+  "outbound_true_dataplane_admitted": false,
+  "prior_gate": "stage92-sip003-simple-obfs-http-dataplane-gate",
+  "product_chain_switch_allowed": false,
+  "protocol_outbound_partial_admitted": true,
+  "rows": [
+    {
+      "area": "SIP003 simple-obfs HTTP carried evidence",
+      "boundary": "HTTP obfs is separate from TLS obfs",
+      "evidence": "Stage 92 validated simple-obfs HTTP first request/response framing with inner Shadowsocks AEAD TCP target/payload roundtrip, SO_MARK/MPTCP, and benchmark",
+      "next_action": "carry sip003_simple_obfs_http_admitted=true while validating TLS obfs",
+      "status": "passed-carried-evidence"
+    },
+    {
+      "area": "SIP003 simple-obfs TLS",
+      "boundary": "this row admits only simple-obfs obfs=tls over TCP; it does not admit v2ray-plugin",
+      "evidence": "Stage 93 validates simple-obfs TLS ClientHello, session ticket carrying Shadowsocks AEAD TCP client initial, SNI tls-front.example, target stage93-sip003-simple-obfs-tls.example:8443, payload echo, SO_MARK/MPTCP, and benchmark",
+      "next_action": "carry sip003_simple_obfs_tls_admitted=true and continue v2ray-plugin",
+      "status": "passed-opt-in-root-gated-smoke"
+    },
+    {
+      "area": "remaining SIP003 plugin rows",
+      "boundary": "sip003_plugin_transport_admitted remains false until v2ray-plugin passes",
+      "evidence": "v2ray-plugin TLS/WS/mux dataplane is still incomplete",
+      "next_action": "continue v2ray-plugin TLS/WS/mux",
+      "status": "blocked"
+    },
+    {
+      "area": "Shadowsocks family and default admission",
+      "boundary": "simple-obfs HTTP+TLS admitted does not mean shadowsocks_protocol_true_dataplane_admitted=true or outbound_true_dataplane_admitted=true",
+      "evidence": "ShadowsocksR, matched Go/Rust default daemon benchmark, and product-chain recertification are still incomplete",
+      "next_action": "continue v2ray-plugin and SSR before reopening defaults",
+      "status": "blocked"
+    }
+  ],
+  "shadowsocks_aead_protocol_true_dataplane_admitted": true,
+  "shadowsocks_protocol_partial_admitted": true,
+  "shadowsocks_protocol_true_dataplane_admitted": false,
+  "shadowsocksr_true_dataplane_admitted": false,
+  "shared_transport_true_dataplane_admitted": false,
+  "sip003_plugin_transport_admitted": false,
+  "sip003_simple_obfs_http_admitted": true,
+  "sip003_simple_obfs_tls_admitted": true,
+  "sip003_v2ray_plugin_admitted": false,
+  "source": [
+    "DAEX_RUST_REBUILD_PLAN_2026-05-16.md:stage93",
+    "DAENEW_RUST_REBUILD_MEMO_2026-05-16.md:26.9",
+    "/root/project/outbound/dialer/shadowsocks/shadowsocks.go",
+    "/root/project/outbound/transport/simpleobfs/tls.go",
+    "rust/crates/dae-outbound/src/shadowsocks/sip003_tls_dataplane.rs",
+    "rust/crates/dae-cli/src/runtime_stage93_sip003_simple_obfs_tls_gate.rs",
+    "testdata/rebuild-golden/engine/runtime_stage93/sip003_simple_obfs_tls_dataplane_admission.json"
+  ],
+  "ss2022_true_dataplane_admitted": true,
+  "stage": "stage93",
+  "stage_complete": true,
+  "trojan_go_shared_transport_admitted": false,
+  "trojan_go_shared_transport_partial_admitted": true,
+  "true_rust_default_daemon_admitted": false,
+  "validation_commands": [
+    "python3 -m json.tool testdata/rebuild-golden/engine/runtime_stage93/sip003_simple_obfs_tls_dataplane_admission.json",
+    "python3 -m json.tool testdata/rebuild-golden/product/daemon/stage93_sip003_simple_obfs_tls_dataplane_gate.json",
+    "cargo test --manifest-path rust/Cargo.toml -p dae-outbound stage93 -- --nocapture",
+    "cargo test --manifest-path rust/Cargo.toml -p dae-cli stage93 -- --nocapture",
+    "cargo test --manifest-path rust/Cargo.toml -p dae-product stage93 -- --nocapture",
+    "cargo run --manifest-path rust/Cargo.toml -p dae-cli --bin dae-cli-optin --quiet -- runtime stage93-sip003-simple-obfs-tls-dataplane-admission --execute-smoke --ack-root-gate --benchmark-iters 10",
+    "cargo test --manifest-path rust/Cargo.toml -p dae-outbound -p dae-cli -p dae-product",
+    "cargo fmt --all --check",
+    "git diff --check"
+  ]
+}
