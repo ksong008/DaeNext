@@ -15,6 +15,7 @@ mod daemon_stage50_54;
 mod product_protocol_matrix;
 mod protocol_https_proxy_82;
 mod protocol_matrix_96;
+mod protocol_reality_session_mutation_102;
 mod protocol_shadowsocksr_95;
 mod protocol_sip003_simple_obfs_http_92;
 mod protocol_sip003_simple_obfs_tls_93;
