@@ -2,7 +2,9 @@ use std::io::{Read, Write};
 use std::net::TcpStream;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-use aes_gcm::aead::{Aead, KeyInit};
+use aes::cipher::{BlockEncrypt, KeyInit as BlockKeyInit};
+use aes::{Aes128, Aes256};
+use aes_gcm::aead::Aead;
 use aes_gcm::{Aes128Gcm, Aes256Gcm};
 use chacha20poly1305::ChaCha20Poly1305;
 
@@ -39,6 +41,9 @@ pub struct Ss2022TcpExchangeReport {
     pub variable_header_len: usize,
     pub target_metadata_len: usize,
     pub request_salt_echo_validated: bool,
+    pub identity_header_count: usize,
+    pub identity_header_bytes_len: usize,
+    pub identity_header_validated: bool,
     pub payload_len: usize,
     pub echoed_payload: Vec<u8>,
     pub multi_psk_identity_header_dataplane_admitted: bool,
@@ -59,6 +64,9 @@ pub struct Ss2022TcpClientRequest {
     pub variable_header_len: usize,
     pub target_metadata_len: usize,
     pub padding_len: usize,
+    pub identity_header_count: usize,
+    pub identity_header_bytes_len: usize,
+    pub identity_header_validated: bool,
     pub payload: Vec<u8>,
 }
 
@@ -143,9 +151,83 @@ where
         variable_header_len,
         target_metadata_len,
         request_salt_echo_validated: response.request_salt_echo_validated,
+        identity_header_count: 0,
+        identity_header_bytes_len: 0,
+        identity_header_validated: true,
         payload_len: payload.len(),
         echoed_payload: response.payload,
         multi_psk_identity_header_dataplane_admitted: false,
+        ss2022_udp_true_dataplane_admitted: false,
+        true_dataplane: true,
+        default_go_path: true,
+    })
+}
+
+pub fn tcp_multi_psk_exchange_over_stream<S>(
+    stream: &mut S,
+    server: &str,
+    cipher: &str,
+    password: &str,
+    target: &str,
+    payload: &[u8],
+    salts: Ss2022TcpSalts<'_>,
+) -> Result<Ss2022TcpExchangeReport, OutboundError>
+where
+    S: Read + Write,
+{
+    let conf = require_cipher_conf(cipher)?;
+    validate_salt_len("client", salts.client, conf.salt_len)?;
+    validate_salt_len("server", salts.server, conf.salt_len)?;
+    let psk_list = parse_psk_list(password, conf.key_len)?;
+    if psk_list.len() < 2 {
+        return Err(OutboundError::BadShadowsocks(
+            "Stage 89 SS2022 TCP multi-PSK dataplane requires at least two PSKs".to_owned(),
+        ));
+    }
+    let upsk = psk_list.last().expect("validated psk list");
+    let target_addr = Socks5Address::parse(target)?;
+    let target_metadata_len = target_addr.encode()?.len();
+    let initial_payload_len = payload
+        .len()
+        .min(TCP_CHUNK_MAX_LEN.saturating_sub(target_metadata_len + 2));
+    let variable_header_len =
+        target_metadata_len + 2 + if payload.is_empty() { 1 } else { 0 } + initial_payload_len;
+    let identity_header_count = psk_list.len() - 1;
+    let request = encode_client_initial_with_psks(
+        &conf,
+        &psk_list,
+        salts.client,
+        &target_addr,
+        payload,
+        unix_timestamp_now(),
+    )?;
+
+    stream
+        .write_all(&request)
+        .map_err(|err| OutboundError::BadShadowsocks(err.to_string()))?;
+    let response = read_server_stream(stream, &conf, upsk, salts.client)?;
+
+    Ok(Ss2022TcpExchangeReport {
+        server: server.to_owned(),
+        target: target_addr.authority(),
+        cipher: conf.cipher.to_owned(),
+        psk_count: psk_list.len(),
+        upsk_index: psk_list.len() - 1,
+        key_len: conf.key_len,
+        client_salt_len: salts.client.len(),
+        server_salt_len: response.server_salt_len,
+        request_header_type: HEADER_TYPE_CLIENT_STREAM,
+        response_header_type: response.response_header_type,
+        fixed_header_len: 11,
+        variable_header_len,
+        target_metadata_len,
+        request_salt_echo_validated: response.request_salt_echo_validated,
+        identity_header_count,
+        identity_header_bytes_len: identity_header_count * 16,
+        identity_header_validated: true,
+        payload_len: payload.len(),
+        echoed_payload: response.payload,
+        multi_psk_identity_header_dataplane_admitted: true,
         ss2022_udp_true_dataplane_admitted: false,
         true_dataplane: true,
         default_go_path: true,
@@ -167,6 +249,26 @@ pub fn encode_client_initial(
     encode_client_initial_with_timestamp(&conf, &psk, salt, &target_addr, payload, timestamp)
 }
 
+pub fn encode_multi_psk_client_initial(
+    cipher: &str,
+    password: &str,
+    salt: &[u8],
+    target: &str,
+    payload: &[u8],
+    timestamp: u64,
+) -> Result<Vec<u8>, OutboundError> {
+    let conf = require_cipher_conf(cipher)?;
+    validate_salt_len("client", salt, conf.salt_len)?;
+    let psk_list = parse_psk_list(password, conf.key_len)?;
+    if psk_list.len() < 2 {
+        return Err(OutboundError::BadShadowsocks(
+            "SS2022 multi-PSK client initial requires at least two PSKs".to_owned(),
+        ));
+    }
+    let target_addr = Socks5Address::parse(target)?;
+    encode_client_initial_with_psks(&conf, &psk_list, salt, &target_addr, payload, timestamp)
+}
+
 pub fn read_client_request_from_stream<S>(
     stream: &mut S,
     cipher: &str,
@@ -183,6 +285,35 @@ where
         .read_exact(&mut request_salt)
         .map_err(|err| OutboundError::BadShadowsocks(err.to_string()))?;
     decode_client_request_after_salt(stream, &conf, &psk, &request_salt, expected_payload_len)
+}
+
+pub fn read_multi_psk_client_request_from_stream<S>(
+    stream: &mut S,
+    cipher: &str,
+    password: &str,
+    expected_payload_len: usize,
+) -> Result<Ss2022TcpClientRequest, OutboundError>
+where
+    S: Read,
+{
+    let conf = require_cipher_conf(cipher)?;
+    let psk_list = parse_psk_list(password, conf.key_len)?;
+    if psk_list.len() < 2 {
+        return Err(OutboundError::BadShadowsocks(
+            "SS2022 multi-PSK request reader requires at least two PSKs".to_owned(),
+        ));
+    }
+    let mut request_salt = vec![0_u8; conf.salt_len];
+    stream
+        .read_exact(&mut request_salt)
+        .map_err(|err| OutboundError::BadShadowsocks(err.to_string()))?;
+    decode_client_request_after_salt_with_psks(
+        stream,
+        &conf,
+        &psk_list,
+        &request_salt,
+        expected_payload_len,
+    )
 }
 
 pub fn encode_server_response(
@@ -202,18 +333,28 @@ pub fn encode_server_response(
         ));
     }
     let psk = parse_single_psk(password, conf.key_len)?;
-    let mut codec = Ss2022StreamCodec::new(&conf, &psk, server_salt)?;
-    let mut header = Vec::with_capacity(11 + request_salt.len());
-    header.push(HEADER_TYPE_SERVER_STREAM);
-    header.extend_from_slice(&timestamp.to_be_bytes());
-    header.extend_from_slice(request_salt);
-    header.extend_from_slice(&(payload.len() as u16).to_be_bytes());
+    encode_server_response_with_psk(&conf, &psk, server_salt, request_salt, payload, timestamp)
+}
 
-    let mut out = Vec::with_capacity(server_salt.len() + header.len() + payload.len() + 32);
-    out.extend_from_slice(server_salt);
-    out.extend_from_slice(&codec.encrypt_next(&header)?);
-    out.extend_from_slice(&codec.encrypt_next(payload)?);
-    Ok(out)
+pub fn encode_multi_psk_server_response(
+    cipher: &str,
+    password: &str,
+    server_salt: &[u8],
+    request_salt: &[u8],
+    payload: &[u8],
+    timestamp: u64,
+) -> Result<Vec<u8>, OutboundError> {
+    let conf = require_cipher_conf(cipher)?;
+    validate_salt_len("server", server_salt, conf.salt_len)?;
+    validate_salt_len("request", request_salt, conf.salt_len)?;
+    if payload.is_empty() {
+        return Err(OutboundError::BadShadowsocks(
+            "SS2022 server stream payload cannot be empty".to_owned(),
+        ));
+    }
+    let psk_list = parse_psk_list(password, conf.key_len)?;
+    let upsk = psk_list.last().expect("validated psk list");
+    encode_server_response_with_psk(&conf, upsk, server_salt, request_salt, payload, timestamp)
 }
 
 pub fn decode_client_request(
@@ -247,6 +388,20 @@ fn encode_client_initial_with_timestamp(
     payload: &[u8],
     timestamp: u64,
 ) -> Result<Vec<u8>, OutboundError> {
+    encode_client_initial_with_psks(conf, &[psk.to_vec()], salt, target, payload, timestamp)
+}
+
+fn encode_client_initial_with_psks(
+    conf: &CipherConf2022,
+    psk_list: &[Vec<u8>],
+    salt: &[u8],
+    target: &Socks5Address,
+    payload: &[u8],
+    timestamp: u64,
+) -> Result<Vec<u8>, OutboundError> {
+    let upsk = psk_list.last().ok_or_else(|| {
+        OutboundError::BadShadowsocks("SS2022 PSK list cannot be empty".to_owned())
+    })?;
     let mut var_header = target.encode()?;
     let padding_len = if payload.is_empty() { 1 } else { 0 };
     var_header.extend_from_slice(&(padding_len as u16).to_be_bytes());
@@ -269,9 +424,11 @@ fn encode_client_initial_with_timestamp(
     fixed_header.extend_from_slice(&timestamp.to_be_bytes());
     fixed_header.extend_from_slice(&(var_header.len() as u16).to_be_bytes());
 
-    let mut codec = Ss2022StreamCodec::new(conf, psk, salt)?;
+    let identity_headers = encode_identity_headers(conf, psk_list, salt)?;
+    let mut codec = Ss2022StreamCodec::new(conf, upsk, salt)?;
     let mut out = Vec::with_capacity(salt.len() + fixed_header.len() + var_header.len() + 32);
     out.extend_from_slice(salt);
+    out.extend_from_slice(&identity_headers);
     out.extend_from_slice(&codec.encrypt_next(&fixed_header)?);
     out.extend_from_slice(&codec.encrypt_next(&var_header)?);
     for chunk in payload[initial_payload_len..].chunks(TCP_CHUNK_MAX_LEN) {
@@ -291,7 +448,30 @@ fn decode_client_request_after_salt<S>(
 where
     S: Read,
 {
-    let mut codec = Ss2022StreamCodec::new(conf, psk, request_salt)?;
+    decode_client_request_after_salt_with_psks(
+        stream,
+        conf,
+        &[psk.to_vec()],
+        request_salt,
+        expected_payload_len,
+    )
+}
+
+fn decode_client_request_after_salt_with_psks<S>(
+    stream: &mut S,
+    conf: &CipherConf2022,
+    psk_list: &[Vec<u8>],
+    request_salt: &[u8],
+    expected_payload_len: usize,
+) -> Result<Ss2022TcpClientRequest, OutboundError>
+where
+    S: Read,
+{
+    let upsk = psk_list.last().ok_or_else(|| {
+        OutboundError::BadShadowsocks("SS2022 PSK list cannot be empty".to_owned())
+    })?;
+    let identity = read_and_validate_identity_headers(stream, conf, psk_list, request_salt)?;
+    let mut codec = Ss2022StreamCodec::new(conf, upsk, request_salt)?;
     let fixed_header = read_encrypted_exact(stream, &mut codec, 11)?;
     if fixed_header.len() != 11 {
         return Err(OutboundError::BadShadowsocks(
@@ -345,14 +525,17 @@ where
     Ok(Ss2022TcpClientRequest {
         target: target.authority(),
         request_salt_len: request_salt.len(),
-        psk_count: 1,
-        upsk_index: 0,
+        psk_count: psk_list.len(),
+        upsk_index: psk_list.len() - 1,
         request_header_type,
         timestamp,
         fixed_header_len: fixed_header.len(),
         variable_header_len: var_header_len,
         target_metadata_len: consumed,
         padding_len,
+        identity_header_count: identity.count,
+        identity_header_bytes_len: identity.bytes_len,
+        identity_header_validated: identity.validated,
         payload,
     })
 }
@@ -418,6 +601,128 @@ where
         .read_exact(&mut encrypted)
         .map_err(|err| OutboundError::BadShadowsocks(err.to_string()))?;
     codec.decrypt_next(&encrypted)
+}
+
+fn encode_server_response_with_psk(
+    conf: &CipherConf2022,
+    psk: &[u8],
+    server_salt: &[u8],
+    request_salt: &[u8],
+    payload: &[u8],
+    timestamp: u64,
+) -> Result<Vec<u8>, OutboundError> {
+    let mut codec = Ss2022StreamCodec::new(conf, psk, server_salt)?;
+    let mut header = Vec::with_capacity(11 + request_salt.len());
+    header.push(HEADER_TYPE_SERVER_STREAM);
+    header.extend_from_slice(&timestamp.to_be_bytes());
+    header.extend_from_slice(request_salt);
+    header.extend_from_slice(&(payload.len() as u16).to_be_bytes());
+
+    let mut out = Vec::with_capacity(server_salt.len() + header.len() + payload.len() + 32);
+    out.extend_from_slice(server_salt);
+    out.extend_from_slice(&codec.encrypt_next(&header)?);
+    out.extend_from_slice(&codec.encrypt_next(payload)?);
+    Ok(out)
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct IdentityHeaderValidation {
+    count: usize,
+    bytes_len: usize,
+    validated: bool,
+}
+
+fn encode_identity_headers(
+    conf: &CipherConf2022,
+    psk_list: &[Vec<u8>],
+    salt: &[u8],
+) -> Result<Vec<u8>, OutboundError> {
+    if psk_list.len() <= 1 {
+        return Ok(Vec::new());
+    }
+    let mut out = Vec::with_capacity((psk_list.len() - 1) * 16);
+    for window in psk_list.windows(2) {
+        out.extend_from_slice(&encode_identity_header(conf, &window[0], &window[1], salt)?);
+    }
+    Ok(out)
+}
+
+fn read_and_validate_identity_headers<S>(
+    stream: &mut S,
+    conf: &CipherConf2022,
+    psk_list: &[Vec<u8>],
+    salt: &[u8],
+) -> Result<IdentityHeaderValidation, OutboundError>
+where
+    S: Read,
+{
+    if psk_list.len() <= 1 {
+        return Ok(IdentityHeaderValidation {
+            count: 0,
+            bytes_len: 0,
+            validated: true,
+        });
+    }
+    let mut count = 0;
+    for window in psk_list.windows(2) {
+        let expected = encode_identity_header(conf, &window[0], &window[1], salt)?;
+        let mut observed = [0_u8; 16];
+        stream
+            .read_exact(&mut observed)
+            .map_err(|err| OutboundError::BadShadowsocks(err.to_string()))?;
+        if observed != expected {
+            return Err(OutboundError::BadShadowsocks(
+                "SS2022 identity header mismatch".to_owned(),
+            ));
+        }
+        count += 1;
+    }
+    Ok(IdentityHeaderValidation {
+        count,
+        bytes_len: count * 16,
+        validated: true,
+    })
+}
+
+fn encode_identity_header(
+    conf: &CipherConf2022,
+    current_psk: &[u8],
+    next_psk: &[u8],
+    salt: &[u8],
+) -> Result<[u8; 16], OutboundError> {
+    let identity_subkey = derive_subkey(current_psk, salt, conf.key_len, IDENTITY_SUBKEY_CONTEXT);
+    let mut next_hash = [0_u8; 64];
+    let mut hasher = blake3::Hasher::new();
+    hasher.update(next_psk);
+    hasher.finalize_xof().fill(&mut next_hash);
+    encrypt_aes_block(&identity_subkey, &next_hash[..16])
+}
+
+fn encrypt_aes_block(key: &[u8], plaintext: &[u8]) -> Result<[u8; 16], OutboundError> {
+    let mut block = aes::cipher::generic_array::GenericArray::clone_from_slice(plaintext);
+    match key.len() {
+        16 => {
+            let cipher = Aes128::new_from_slice(key).map_err(|_| {
+                OutboundError::BadShadowsocks("bad SS2022 aes-128 identity key".to_owned())
+            })?;
+            cipher.encrypt_block(&mut block);
+        }
+        32 => {
+            let cipher = Aes256::new_from_slice(key).map_err(|_| {
+                OutboundError::BadShadowsocks("bad SS2022 aes-256 identity key".to_owned())
+            })?;
+            cipher.encrypt_block(&mut block);
+        }
+        _ => {
+            return Err(OutboundError::BadShadowsocks(format!(
+                "unsupported SS2022 identity key length: {}",
+                key.len()
+            )));
+        }
+    }
+    let mut out = [0_u8; 16];
+    out.copy_from_slice(&block);
+    Ok(out)
 }
 
 struct Ss2022StreamCodec {
@@ -522,6 +827,15 @@ fn parse_single_psk(password: &str, key_len: usize) -> Result<Vec<u8>, OutboundE
         ));
     }
     validate_base64_psk(parts[0], key_len)
+}
+
+fn parse_psk_list(password: &str, key_len: usize) -> Result<Vec<Vec<u8>>, OutboundError> {
+    let parts = password.split(':').collect::<Vec<_>>();
+    let mut psk_list = Vec::with_capacity(parts.len());
+    for part in parts {
+        psk_list.push(validate_base64_psk(part, key_len)?);
+    }
+    Ok(psk_list)
 }
 
 fn derive_subkey(psk: &[u8], salt: &[u8], key_len: usize, context: &str) -> Vec<u8> {
