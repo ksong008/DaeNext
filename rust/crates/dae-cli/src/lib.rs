@@ -59,6 +59,7 @@ pub(crate) mod runtime_stage89_ss2022_multi_psk_gate;
 pub(crate) mod runtime_stage90_ss2022_udp_gate;
 pub(crate) mod runtime_stage91_ss2022_protocol_gate;
 pub(crate) mod runtime_stage92_sip003_simple_obfs_http_gate;
+pub(crate) mod runtime_stage93_sip003_simple_obfs_tls_gate;
 pub mod surface;
 pub(crate) mod userspace_runner;
 pub mod validate;
