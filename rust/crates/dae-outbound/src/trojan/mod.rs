@@ -4,6 +4,7 @@ pub mod link;
 pub mod metadata;
 pub mod packet;
 pub mod tls_dataplane;
+pub mod websocket_tls_dataplane;
 
 pub use dataplane::{
     TrojanRequestHeader, TrojanTcpExchangeReport, TrojanTcpRequest, TrojanUdpOverTcpExchangeReport,
@@ -14,3 +15,7 @@ pub use dataplane::{
 pub use link::{TrojanLink, TrojanTransportType};
 pub use metadata::{TrojanMetadata, TrojanNetwork};
 pub use tls_dataplane::{TrojanTlsTcpExchangeReport, tcp_exchange_over_tls_stream};
+pub use websocket_tls_dataplane::{
+    TrojanGoWssTcpExchangeReport, TrojanWebSocketRequest, read_tcp_request_from_websocket_stream,
+    tcp_exchange_over_wss_stream,
+};

@@ -50,6 +50,7 @@ pub(crate) mod runtime_stage80_outbound_gate;
 pub(crate) mod runtime_stage81_shared_tls_gate;
 pub(crate) mod runtime_stage82_https_proxy_gate;
 pub(crate) mod runtime_stage83_trojan_tls_gate;
+pub(crate) mod runtime_stage84_trojan_go_wss_gate;
 pub mod surface;
 pub(crate) mod userspace_runner;
 pub mod validate;
