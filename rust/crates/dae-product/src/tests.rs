@@ -30,6 +30,7 @@ mod protocol_trojan_go_grpc_cache_98;
 mod protocol_trojan_go_grpc_http2_97;
 mod protocol_trojan_go_httpupgrade_85;
 mod protocol_trojan_go_inner_shadowsocks_87;
+mod protocol_trojan_go_recertification_99;
 mod protocol_trojan_go_wss_84;
 mod protocol_trojan_tls_83;
 mod protocol_vless;
