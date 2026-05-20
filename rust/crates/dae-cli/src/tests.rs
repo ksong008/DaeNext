@@ -32,6 +32,7 @@ mod runtime_ss2022_multi_psk_stage89;
 mod runtime_ss2022_protocol_stage91;
 mod runtime_ss2022_tcp_stage88;
 mod runtime_ss2022_udp_stage90;
+mod runtime_trojan_go_grpc_cache_stage98;
 mod runtime_trojan_go_grpc_http2_stage97;
 mod runtime_trojan_go_grpc_stage86;
 mod runtime_trojan_go_httpupgrade_stage85;
