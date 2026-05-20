@@ -5,6 +5,7 @@ use crate::*;
 mod helpers;
 use helpers::*;
 
+mod anytls_session_stage104;
 mod base_contracts;
 mod daemon_stage23_27;
 mod daemon_stage28_30;

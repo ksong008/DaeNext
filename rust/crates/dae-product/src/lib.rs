@@ -11,6 +11,7 @@ pub mod stage100_trojan_go_tls_fragment_gate;
 pub mod stage101_trojan_go_utls_fingerprint_gate;
 pub mod stage102_reality_session_mutation_gate;
 pub mod stage103_trojan_go_combination_gate;
+pub mod stage104_anytls_session_gate;
 pub mod stage23_completion;
 pub mod stage24_product_gate;
 pub mod stage25_execution_queue;
@@ -367,6 +368,10 @@ pub use stage102_reality_session_mutation_gate::{
 pub use stage103_trojan_go_combination_gate::{
     Stage103TrojanGoCombinationGateContract, Stage103TrojanGoCombinationGateRow,
     stage103_trojan_go_combination_gate_contract,
+};
+pub use stage104_anytls_session_gate::{
+    Stage104AnyTlsSessionGateContract, Stage104AnyTlsSessionGateRow,
+    stage104_anytls_session_gate_contract,
 };
 pub use systemd::{SystemdContract, systemd_contract};
 pub use true_daemon_admission::{
