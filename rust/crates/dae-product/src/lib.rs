@@ -13,6 +13,7 @@ pub mod stage102_reality_session_mutation_gate;
 pub mod stage103_trojan_go_combination_gate;
 pub mod stage104_anytls_session_gate;
 pub mod stage105_anytls_udp_packet_gate;
+pub mod stage106_anytls_session_reuse_gate;
 pub mod stage23_completion;
 pub mod stage24_product_gate;
 pub mod stage25_execution_queue;
@@ -377,6 +378,10 @@ pub use stage104_anytls_session_gate::{
 pub use stage105_anytls_udp_packet_gate::{
     Stage105AnyTlsUdpPacketGateContract, Stage105AnyTlsUdpPacketGateRow,
     stage105_anytls_udp_packet_gate_contract,
+};
+pub use stage106_anytls_session_reuse_gate::{
+    Stage106AnyTlsSessionReuseGateContract, Stage106AnyTlsSessionReuseGateRow,
+    stage106_anytls_session_reuse_gate_contract,
 };
 pub use systemd::{SystemdContract, systemd_contract};
 pub use true_daemon_admission::{
