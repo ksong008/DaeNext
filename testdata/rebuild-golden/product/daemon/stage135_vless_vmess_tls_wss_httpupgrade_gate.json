@@ -1,0 +1,87 @@
+{
+  "name": "stage135-vless-vmess-tls-wss-httpupgrade-gate",
+  "stage": "stage135",
+  "prior_gate": "stage134-vless-vmess-grpc-http2-lifecycle-gate",
+  "stage_complete": true,
+  "vless_grpc_http2_lifecycle_admitted": true,
+  "vmess_grpc_http2_lifecycle_admitted": true,
+  "vless_wss_tls_lifecycle_admitted": true,
+  "vmess_wss_tls_lifecycle_admitted": true,
+  "vless_https_httpupgrade_tls_lifecycle_admitted": true,
+  "vmess_https_httpupgrade_tls_lifecycle_admitted": true,
+  "vless_utls_fingerprint_wire_admitted": false,
+  "vmess_utls_fingerprint_wire_admitted": false,
+  "vless_reality_full_handshake_admitted": false,
+  "vless_vision_tls_reality_admitted": false,
+  "vless_xhttp_h2_h3_lifecycle_admitted": false,
+  "vmess_xhttp_h2_lifecycle_admitted": false,
+  "vless_protocol_true_dataplane_admitted": false,
+  "vmess_protocol_true_dataplane_admitted": false,
+  "shared_transport_true_dataplane_admitted": false,
+  "outbound_true_dataplane_admitted": false,
+  "matched_go_rust_default_daemon_benchmark_recorded": false,
+  "default_switch_allowed": false,
+  "default_path_mutation_allowed": false,
+  "product_chain_switch_allowed": false,
+  "true_rust_default_daemon_admitted": false,
+  "gate_decision": "stage135 admits only VLESS/VMess rustls WSS and HTTPS HTTPUpgrade lifecycle sub-rows; uTLS fingerprint wire parity, REALITY, XTLS Vision, xHTTP H2/H3, VLESS/VMess protocol-wide admission, shared transport, outbound default, matched benchmark, and product switches remain closed",
+  "rows": [
+    {
+      "area": "VLESS rustls WSS and HTTPS HTTPUpgrade",
+      "status": "passed-root-gated-smoke",
+      "evidence": "Stage135 validates rustls TLS handshake with ALPN http/1.1, WebSocket upgrade, HTTPS HTTPUpgrade 101, VLESS TCP request/response, SO_MARK, MPTCP status, and benchmark",
+      "boundary": "does not admit VLESS uTLS fingerprint, REALITY, XTLS Vision, xHTTP H2/H3, or protocol-wide VLESS",
+      "next_action": "carry VLESS TLS transport subrows into later residual recertification"
+    },
+    {
+      "area": "VMess rustls WSS and HTTPS HTTPUpgrade",
+      "status": "passed-root-gated-smoke",
+      "evidence": "Stage135 validates rustls TLS handshake with ALPN http/1.1, WebSocket upgrade, HTTPS HTTPUpgrade 101, VMess AEAD TCP request/response, SO_MARK, MPTCP status, and benchmark",
+      "boundary": "does not admit VMess uTLS full-combination, xHTTP/H2, or protocol-wide VMess; VMess REALITY remains unsupported",
+      "next_action": "carry VMess TLS transport subrows into later residual recertification"
+    },
+    {
+      "area": "overall shared/outbound/default admission",
+      "status": "blocked",
+      "evidence": "VLESS/VMess uTLS/REALITY/Vision/xHTTP residuals, Trojan-Go shared transport residuals, matched Go/Rust default benchmark, and product-chain gates remain incomplete",
+      "boundary": "shared_transport_true_dataplane, outbound_true_dataplane, default_switch_allowed, and product_chain_switch_allowed stay false",
+      "next_action": "continue VLESS/VMess residual transport stages before protocol-wide recertification"
+    }
+  ],
+  "benchmark_record": [
+    "Stage135 records a root-gated local rustls WSS and HTTPS HTTPUpgrade benchmark for VLESS and VMess",
+    "The benchmark includes SO_MARK/MPTCP TCP underlay observation",
+    "The benchmark is not a matched Go default daemon baseline",
+    "matched_go_rust_default_daemon_benchmark_recorded remains false"
+  ],
+  "validation_commands": [
+    "python3 -m json.tool testdata/rebuild-golden/engine/runtime_stage135/vless_vmess_tls_wss_httpupgrade_admission.json",
+    "python3 -m json.tool testdata/rebuild-golden/product/daemon/stage135_vless_vmess_tls_wss_httpupgrade_gate.json",
+    "cargo test --manifest-path rust/Cargo.toml -p dae-outbound stage135 -- --nocapture",
+    "cargo run --manifest-path rust/Cargo.toml -p dae-cli --bin dae-cli-optin --quiet -- runtime stage135-vless-vmess-tls-wss-httpupgrade-admission",
+    "cargo run --manifest-path rust/Cargo.toml -p dae-cli --bin dae-cli-optin --quiet -- runtime stage135-vless-vmess-tls-wss-httpupgrade-admission --execute-smoke --ack-root-gate --benchmark-iters 2",
+    "cargo test --manifest-path rust/Cargo.toml -p dae-cli stage135 -- --nocapture",
+    "cargo test --manifest-path rust/Cargo.toml -p dae-product stage135 -- --nocapture",
+    "cargo test --manifest-path rust/Cargo.toml -p dae-cli stage134 -- --nocapture",
+    "cargo test --manifest-path rust/Cargo.toml -p dae-outbound -p dae-cli -p dae-product -q",
+    "cargo fmt --manifest-path rust/Cargo.toml --all -- --check",
+    "git diff --check"
+  ],
+  "remaining_blockers": [
+    "VLESS uTLS fingerprint, REALITY full handshake, XTLS Vision, and xHTTP H2/H3 lifecycle remain separate blockers",
+    "VMess uTLS/WSS full-combination and xHTTP/H2 protocol-wide recertification remain separate blockers",
+    "Trojan-Go full shared transport remains blocked",
+    "shared_transport_true_dataplane and outbound_true_dataplane remain closed until all protocol rows close",
+    "matched Go default daemon vs true Rust candidate benchmark remains missing",
+    "default daemon and product-chain switches remain closed"
+  ],
+  "source": [
+    "DAEX_RUST_REBUILD_PLAN_2026-05-16.md:stage135",
+    "DAENEW_RUST_REBUILD_MEMO_2026-05-16.md:26.5",
+    "DAENEW_RUST_REBUILD_MEMO_2026-05-16.md:26.7",
+    "rust/crates/dae-cli/src/runtime_stage135_vless_vmess_tls_gate",
+    "rust/crates/dae-outbound/src/vless/dataplane/tls_transports.rs",
+    "rust/crates/dae-outbound/src/vmess/dataplane/tls_transports.rs",
+    "testdata/rebuild-golden/engine/runtime_stage135/vless_vmess_tls_wss_httpupgrade_admission.json"
+  ]
+}
