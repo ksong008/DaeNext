@@ -1,0 +1,98 @@
+{
+  "name": "stage134-vless-vmess-grpc-http2-lifecycle-gate",
+  "stage": "stage134",
+  "prior_gate": "stage133-outbound-true-dataplane-readiness-gate",
+  "stage_complete": true,
+  "vless_protocol_partial_admitted": true,
+  "vmess_protocol_partial_admitted": true,
+  "vless_grpc_http2_lifecycle_admitted": true,
+  "vmess_grpc_http2_lifecycle_admitted": true,
+  "vless_tls_utls_reality_vision_admitted": false,
+  "vmess_tls_utls_wss_admitted": false,
+  "vless_xhttp_h2_h3_lifecycle_admitted": false,
+  "vmess_xhttp_h2_lifecycle_admitted": false,
+  "vless_protocol_true_dataplane_admitted": false,
+  "vmess_protocol_true_dataplane_admitted": false,
+  "trojan_go_shared_transport_admitted": false,
+  "shared_transport_true_dataplane_admitted": false,
+  "outbound_true_dataplane_admitted": false,
+  "matched_go_rust_default_daemon_benchmark_recorded": false,
+  "default_switch_allowed": false,
+  "default_path_mutation_allowed": false,
+  "product_chain_switch_allowed": false,
+  "true_rust_default_daemon_admitted": false,
+  "outbound_quic_go_dependency_preserved": true,
+  "external_outbound_required": true,
+  "external_quic_go_required": true,
+  "go_default_path_preserved": true,
+  "go_fallback_required": true,
+  "gate_decision": "stage134 admits only the VLESS and VMess gRPC HTTP/2 lifecycle sub-rows by validating HTTP/2 client preface, SETTINGS, HEADERS, DATA, response SETTINGS ACK, response HEADERS, response DATA, gRPC Hunk framing, VLESS TCP request/response, VMess AEAD TCP request/response, serviceName fallback, and gRPC cache-key route context; TLS/uTLS/REALITY, VLESS Vision, xHTTP H2/H3, protocol-wide VLESS/VMess, shared transport, outbound default, and product switches remain closed",
+  "rows": [
+    {
+      "area": "prior VLESS and VMess partial rows",
+      "status": "passed-carried-evidence",
+      "evidence": "Stage62-80 carry raw TCP, UDP-over-TCP, mux, WebSocket, HTTPUpgrade, gRPC hunk, Meek polling, HTTP transport, and xHTTP packet-up partial evidence",
+      "boundary": "carried evidence does not prove full gRPC HTTP/2 lifecycle, TLS/uTLS/REALITY, Vision, xHTTP H2/H3, or protocol-wide completion",
+      "next_action": "preserve partial rows while admitting the gRPC HTTP/2 lifecycle sub-rows"
+    },
+    {
+      "area": "VLESS gRPC HTTP/2 lifecycle",
+      "status": "passed-local-smoke",
+      "evidence": "Stage134 validates HTTP/2 preface/settings/headers/data and response settings-ack/headers/data carrying gRPC Hunk carrying VLESS TCP request/response bytes with GunService fallback and cache-key route context",
+      "boundary": "this does not admit VLESS TLS/uTLS/REALITY, XTLS Vision, xHTTP H2/H3, or protocol-wide VLESS",
+      "next_action": "carry vless_grpc_http2_lifecycle_admitted=true into later VLESS residual recertification"
+    },
+    {
+      "area": "VMess gRPC HTTP/2 lifecycle",
+      "status": "passed-local-smoke",
+      "evidence": "Stage134 validates HTTP/2 lifecycle carrying gRPC Hunk carrying VMess AEAD TCP header/chunk and AEAD response packet with AES-128-GCM security and cache-key route context",
+      "boundary": "this does not admit VMess TLS/uTLS, WSS, xHTTP/H2, or protocol-wide VMess",
+      "next_action": "carry vmess_grpc_http2_lifecycle_admitted=true into later VMess residual recertification"
+    },
+    {
+      "area": "overall outbound/default admission",
+      "status": "blocked",
+      "evidence": "VLESS/VMess protocol-wide residuals, Trojan-Go shared transport residuals, matched Go/Rust default benchmark, and product-chain gates remain incomplete",
+      "boundary": "shared_transport_true_dataplane, outbound_true_dataplane, default_switch_allowed, and product_chain_switch_allowed stay false",
+      "next_action": "continue VLESS/VMess TLS/uTLS/REALITY/xHTTP residual stages before outbound-wide recertification"
+    }
+  ],
+  "benchmark_record": [
+    "Stage134 records a local UnixStream loopback benchmark for VLESS and VMess gRPC HTTP/2 lifecycle smoke",
+    "The benchmark covers HTTP/2 frame lifecycle plus gRPC Hunk plus protocol request/response bytes",
+    "The benchmark is not a matched Go default daemon baseline",
+    "matched_go_rust_default_daemon_benchmark_recorded remains false"
+  ],
+  "validation_commands": [
+    "python3 -m json.tool testdata/rebuild-golden/engine/runtime_stage134/vless_vmess_grpc_http2_lifecycle_admission.json",
+    "python3 -m json.tool testdata/rebuild-golden/product/daemon/stage134_vless_vmess_grpc_http2_lifecycle_gate.json",
+    "cargo test --manifest-path rust/Cargo.toml -p dae-outbound stage134 -- --nocapture",
+    "cargo run --manifest-path rust/Cargo.toml -p dae-cli --bin dae-cli-optin --quiet -- runtime stage134-vless-vmess-grpc-http2-lifecycle-admission",
+    "cargo run --manifest-path rust/Cargo.toml -p dae-cli --bin dae-cli-optin --quiet -- runtime stage134-vless-vmess-grpc-http2-lifecycle-admission --execute-smoke --benchmark-iters 3",
+    "cargo test --manifest-path rust/Cargo.toml -p dae-cli stage134 -- --nocapture",
+    "cargo test --manifest-path rust/Cargo.toml -p dae-product stage134 -- --nocapture",
+    "cargo test --manifest-path rust/Cargo.toml -p dae-cli stage133 -- --nocapture",
+    "cargo test --manifest-path rust/Cargo.toml -p dae-outbound -p dae-cli -p dae-product -q",
+    "cargo fmt --manifest-path rust/Cargo.toml --all -- --check",
+    "git diff --check"
+  ],
+  "remaining_blockers": [
+    "VLESS TLS/uTLS/REALITY/XTLS Vision and xHTTP H2/H3 lifecycle remain separate blockers",
+    "VMess TLS/uTLS/WSS/xHTTP/H2 and protocol-wide recertification remain separate blockers",
+    "Trojan-Go uTLS wire-level ClientHello, full REALITY/uTLS handshake, and cross-combination recertification remain blocked",
+    "shared_transport_true_dataplane and outbound_true_dataplane remain closed until all protocol rows close",
+    "matched Go default daemon vs true Rust candidate benchmark remains missing",
+    "default daemon and product-chain switches remain closed"
+  ],
+  "source": [
+    "DAEX_RUST_REBUILD_PLAN_2026-05-16.md:stage134",
+    "DAENEW_RUST_REBUILD_MEMO_2026-05-16.md:26.4",
+    "DAENEW_RUST_REBUILD_MEMO_2026-05-16.md:26.5",
+    "DAENEW_RUST_REBUILD_MEMO_2026-05-16.md:26.7",
+    "DAENEW_RUST_REBUILD_MEMO_2026-05-16.md:26.8",
+    "rust/crates/dae-cli/src/runtime_stage134_vless_vmess_grpc_http2_gate",
+    "rust/crates/dae-outbound/src/vless/dataplane/grpc_http2.rs",
+    "rust/crates/dae-outbound/src/vmess/dataplane/grpc_http2.rs",
+    "testdata/rebuild-golden/engine/runtime_stage134/vless_vmess_grpc_http2_lifecycle_admission.json"
+  ]
+}
