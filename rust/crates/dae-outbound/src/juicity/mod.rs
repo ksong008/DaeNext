@@ -1,3 +1,4 @@
+pub mod auth_stream;
 pub mod certchain;
 pub mod contract;
 pub mod h3_admission;
@@ -5,6 +6,13 @@ pub mod h3_loopback;
 pub mod link;
 pub mod packet;
 
+pub use auth_stream::{
+    JUICITY_AUTHENTICATE_HEADER_LEN, JUICITY_AUTHENTICATE_TOKEN_LEN, JUICITY_AUTHENTICATE_TYPE,
+    JUICITY_AUTHENTICATE_UUID_LEN, JUICITY_AUTHENTICATE_VERSION0, JuicityAuthStreamSmokeReport,
+    JuicityAuthStreamTranscript, JuicityAuthenticateHeader, auth_stream_smoke,
+    build_auth_stream_transcript, build_authenticate_header,
+    build_deterministic_authenticate_header,
+};
 pub use certchain::{
     JuicityCertChainPinCheck, check_pinned_certchain, generate_cert_chain_hash,
     verify_pinned_certchain,
