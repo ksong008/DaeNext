@@ -71,4 +71,5 @@ mod shared_transport_tls_81;
 mod true_default_daemon;
 mod tuic_full_quic_stage111;
 mod tuic_full_quic_stage113;
+mod tuic_true_quic_stage131;
 mod tuic_underlay_stage112;
