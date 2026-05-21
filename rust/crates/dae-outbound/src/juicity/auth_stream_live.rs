@@ -334,7 +334,9 @@ async fn run_live_auth_stream_server(
     })
 }
 
-fn build_live_server_config(server_name: &str) -> Result<quinn::ServerConfig, OutboundError> {
+pub(super) fn build_live_server_config(
+    server_name: &str,
+) -> Result<quinn::ServerConfig, OutboundError> {
     let certified = generate_simple_self_signed(vec![server_name.to_owned()])
         .map_err(|err| bad_live_auth_stream(format!("generate h3 cert: {err}")))?;
     let cert_der = certified.cert.der().clone();
@@ -354,7 +356,7 @@ fn build_live_server_config(server_name: &str) -> Result<quinn::ServerConfig, Ou
     Ok(config)
 }
 
-fn build_live_client_config() -> Result<quinn::ClientConfig, OutboundError> {
+pub(super) fn build_live_client_config() -> Result<quinn::ClientConfig, OutboundError> {
     let mut crypto =
         rustls::ClientConfig::builder_with_protocol_versions(&[&rustls::version::TLS13])
             .dangerous()
@@ -382,7 +384,7 @@ fn transport_config() -> Result<quinn::TransportConfig, OutboundError> {
     Ok(transport)
 }
 
-fn selected_alpn(connection: &quinn::Connection) -> String {
+pub(super) fn selected_alpn(connection: &quinn::Connection) -> String {
     connection
         .handshake_data()
         .and_then(|data| data.downcast::<HandshakeData>().ok())
@@ -391,6 +393,6 @@ fn selected_alpn(connection: &quinn::Connection) -> String {
         .unwrap_or_default()
 }
 
-fn bad_live_auth_stream(message: impl Into<String>) -> OutboundError {
+pub(super) fn bad_live_auth_stream(message: impl Into<String>) -> OutboundError {
     OutboundError::BadJuicity(message.into())
 }
