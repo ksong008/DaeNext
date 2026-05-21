@@ -21,6 +21,7 @@ mod hysteria2_underlay_stage109;
 mod juicity_auth_lifecycle_stage124;
 mod juicity_auth_stream_stage121;
 mod juicity_certchain_stage115;
+mod juicity_client_integration_stage128;
 mod juicity_congestion_stage127;
 mod juicity_h3_dependency_stage116;
 mod juicity_h3_dependency_stage117;

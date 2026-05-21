@@ -1,0 +1,110 @@
+{
+  "name": "stage128-juicity-client-integration-gate",
+  "stage": "stage128",
+  "prior_gate": "stage127-juicity-congestion-gate",
+  "stage_complete": true,
+  "juicity_transport_packet_conn_dataplane_admitted": true,
+  "juicity_stream_packet_conn_dataplane_admitted": true,
+  "juicity_packet_over_stream_admitted": true,
+  "juicity_congestion_behavior_admitted": true,
+  "juicity_client_integration_candidate_admitted": true,
+  "juicity_full_local_client_smoke_admitted": true,
+  "juicity_client_capability_matrix_admitted": true,
+  "juicity_true_quic_h3_dataplane_admitted": false,
+  "hysteria2_true_quic_dataplane_admitted": false,
+  "tuic_true_quic_dataplane_admitted": false,
+  "quic_h3_family_true_dataplane_admitted": false,
+  "anytls_true_dataplane_admitted": true,
+  "protocol_outbound_partial_admitted": true,
+  "outbound_true_dataplane_admitted": false,
+  "matched_go_rust_default_daemon_benchmark_recorded": false,
+  "default_switch_allowed": false,
+  "default_path_mutation_allowed": false,
+  "product_chain_switch_allowed": false,
+  "true_rust_default_daemon_admitted": false,
+  "outbound_quic_go_dependency_preserved": true,
+  "external_outbound_required": true,
+  "external_quic_go_required": true,
+  "go_default_path_preserved": true,
+  "go_fallback_required": true,
+  "alpn_protocol": "h3",
+  "tls13_only_configured": true,
+  "quic_datagram_disabled": true,
+  "keepalive_secs": 5,
+  "handshake_idle_timeout_secs": 8,
+  "default_auth_iterations": 1,
+  "default_transport_iterations": 8,
+  "default_stream_iterations": 2,
+  "default_congestion_iterations": 8,
+  "default_total_exchange_count": 19,
+  "default_max_in_flight_streams": 4,
+  "gate_decision": "stage128 admits a Juicity local client integration candidate by running the Stage124 auth lifecycle, Stage125 TransportPacketConn, Stage126 stream_packet_conn, and Stage127 BBR sustained relay slices as one Rust smoke; true QUIC/H3 outbound registry, default daemon, and product-chain switches remain closed",
+  "rows": [
+    {
+      "area": "local client integration",
+      "status": "admitted-candidate",
+      "evidence": "Stage128 runs auth lifecycle, TransportPacketConn, stream_packet_conn, and BBR sustained relay sequentially through one Rust client integration smoke",
+      "boundary": "this is a local candidate aggregation, not daemon default path admission",
+      "next_action": "wire the admitted slices into a true outbound client path under an explicit admission gate"
+    },
+    {
+      "area": "capability matrix",
+      "status": "admitted-local-matrix",
+      "evidence": "Stage128 preserves TLS1.3, h3 ALPN, QUIC datagram disabled, 5s keepalive, 8s handshake idle timeout, UDP port-0 TransportPacketConn, nonzero UDP stream_packet_conn, and BBR congestion coverage",
+      "boundary": "matrix parity does not include outbound registry/group health policy or product runtime switching",
+      "next_action": "add outbound registry/dialer group/health-policy integration evidence"
+    },
+    {
+      "area": "benchmark",
+      "status": "recorded-local-smoke",
+      "evidence": "Stage128 records local smoke timing over 19 default exchanges: 1 auth lifecycle, 8 TransportPacketConn exchanges, 2 stream_packet_conn exchanges, and 8 congestion exchanges",
+      "boundary": "local smoke timing is not a matched Go default daemon benchmark",
+      "next_action": "record matched Go vs Rust daemon benchmark before any default/product switch"
+    },
+    {
+      "area": "overall Juicity true dataplane",
+      "status": "blocked",
+      "evidence": "outbound registry/dialer group/health-policy integration, matched Go benchmark, and product-chain recertification remain incomplete",
+      "boundary": "juicity_true_quic_h3_dataplane_admitted and outbound_true_dataplane_admitted remain false",
+      "next_action": "build a true Juicity outbound dataplane gate without changing the default path"
+    }
+  ],
+  "benchmark": [
+    "Stage 128 records local Juicity client integration smoke benchmark data in the local plan",
+    "Benchmark scope is one local Rust candidate smoke covering auth lifecycle, TransportPacketConn, stream_packet_conn, and BBR sustained relay",
+    "Matched Go default-daemon baseline is still missing"
+  ],
+  "validation_commands": [
+    "python3 -m json.tool testdata/rebuild-golden/engine/runtime_stage128/juicity_client_integration_admission.json",
+    "python3 -m json.tool testdata/rebuild-golden/product/daemon/stage128_juicity_client_integration_gate.json",
+    "cargo test --manifest-path rust/Cargo.toml -p dae-outbound stage128 -- --nocapture",
+    "cargo run --manifest-path rust/Cargo.toml -p dae-cli --bin dae-cli-optin --quiet -- runtime stage128-juicity-client-integration-admission",
+    "cargo run --manifest-path rust/Cargo.toml -p dae-cli --bin dae-cli-optin --quiet -- runtime stage128-juicity-client-integration-admission --execute-smoke",
+    "cargo test --manifest-path rust/Cargo.toml -p dae-cli stage128 -- --nocapture",
+    "cargo test --manifest-path rust/Cargo.toml -p dae-product stage128 -- --nocapture",
+    "cargo test --manifest-path rust/Cargo.toml -p dae-outbound stage127 -- --nocapture",
+    "cargo test --manifest-path rust/Cargo.toml -p dae-outbound -p dae-cli -p dae-product",
+    "cargo fmt --manifest-path rust/Cargo.toml --all -- --check",
+    "git diff --check"
+  ],
+  "remaining_blockers": [
+    "outbound registry/dialer group/health-policy integration for Juicity true client path",
+    "matched Go default daemon vs true Rust candidate benchmark",
+    "Hysteria2 full QUIC and TUIC true QUIC dataplanes",
+    "clean dae-wing and daed product-chain recertification"
+  ],
+  "source": [
+    "DAEX_RUST_REBUILD_PLAN_2026-05-16.md:stage128",
+    "DAENEW_RUST_REBUILD_MEMO_2026-05-16.md:26.16",
+    "/root/project/outbound/dialer/juicity/juicity.go",
+    "/root/project/outbound/protocol/juicity/dialer.go",
+    "/root/project/outbound/protocol/juicity/client.go",
+    "/root/project/outbound/protocol/juicity/transport_packet_conn.go",
+    "/root/project/outbound/protocol/juicity/stream_conn.go",
+    "/root/project/outbound/protocol/juicity/stream_packet_conn.go",
+    "/root/project/outbound/protocol/tuic/common/congestion.go",
+    "/root/project/outbound/protocol/tuic/congestion/bbr/bbr_sender.go",
+    "rust/crates/dae-outbound/src/juicity/client_integration.rs",
+    "rust/crates/dae-product/src/stage128_juicity_client_integration_gate.rs"
+  ]
+}

@@ -30,6 +30,7 @@ mod runtime_hysteria2_underlay_stage109;
 mod runtime_juicity_auth_lifecycle_stage124;
 mod runtime_juicity_auth_stream_stage121;
 mod runtime_juicity_certchain_stage115;
+mod runtime_juicity_client_integration_stage128;
 mod runtime_juicity_congestion_stage127;
 mod runtime_juicity_h3_dependency_stage116;
 mod runtime_juicity_h3_dependency_stage117;
