@@ -1,4 +1,5 @@
 pub mod auth_stream;
+pub mod auth_stream_ekm;
 pub mod auth_stream_live;
 pub mod certchain;
 pub mod contract;
@@ -13,6 +14,10 @@ pub use auth_stream::{
     JuicityAuthStreamTranscript, JuicityAuthenticateHeader, auth_stream_smoke,
     build_auth_stream_transcript, build_authenticate_header,
     build_deterministic_authenticate_header,
+};
+pub use auth_stream_ekm::{
+    DEFAULT_LIVE_EKM_AUTH_PASSWORD, DEFAULT_LIVE_EKM_AUTH_TARGET, JuicityLiveEkmAuthOptions,
+    JuicityLiveEkmAuthReport, run_live_ekm_auth_smoke,
 };
 pub use auth_stream_live::{
     DEFAULT_LIVE_AUTH_STREAM_TARGET, JuicityLiveAuthStreamOptions, JuicityLiveAuthStreamReport,
