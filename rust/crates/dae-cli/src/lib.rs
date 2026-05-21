@@ -20,6 +20,7 @@ pub(crate) mod runtime_stage108_quic_h3_family_queue_gate;
 pub(crate) mod runtime_stage109_hysteria2_underlay_gate;
 pub(crate) mod runtime_stage110_hysteria2_full_quic_queue_gate;
 pub(crate) mod runtime_stage111_tuic_full_quic_queue_gate;
+pub(crate) mod runtime_stage112_tuic_underlay_gate;
 pub(crate) mod runtime_stage26_candidate;
 pub(crate) mod runtime_stage27_candidate;
 pub(crate) mod runtime_stage29_preflight;
