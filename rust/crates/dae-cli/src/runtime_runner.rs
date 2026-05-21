@@ -114,6 +114,7 @@ use crate::runtime_stage125_juicity_transport_packet_conn_gate::run_stage125_jui
 use crate::runtime_stage126_juicity_stream_packet_conn_gate::run_stage126_juicity_stream_packet_conn_admission;
 use crate::runtime_stage127_juicity_congestion_gate::run_stage127_juicity_congestion_admission;
 use crate::runtime_stage128_juicity_client_integration_gate::run_stage128_juicity_client_integration_admission;
+use crate::runtime_stage129_juicity_outbound_dataplane_gate::run_stage129_juicity_outbound_dataplane_admission;
 
 pub(crate) fn run_runtime(args: &[String]) -> RunnerOutput {
     match args.first().map(String::as_str) {
@@ -416,6 +417,9 @@ pub(crate) fn run_runtime(args: &[String]) -> RunnerOutput {
         }
         Some("stage128-juicity-client-integration-admission") => {
             run_stage128_juicity_client_integration_admission(&args[1..])
+        }
+        Some("stage129-juicity-outbound-dataplane-admission") => {
+            run_stage129_juicity_outbound_dataplane_admission(&args[1..])
         }
         Some(subcommand) => {
             RunnerOutput::usage(format!("unsupported runtime subcommand: {subcommand}"))
