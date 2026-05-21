@@ -101,6 +101,7 @@ use crate::runtime_stage112_tuic_underlay_gate::run_stage112_tuic_udp_underlay_a
 use crate::runtime_stage113_tuic_full_quic_queue_gate::run_stage113_tuic_full_quic_client_blocker_queue;
 use crate::runtime_stage114_juicity_h3_queue_gate::run_stage114_juicity_h3_client_blocker_queue;
 use crate::runtime_stage115_juicity_certchain_gate::run_stage115_juicity_certchain_verifier_admission;
+use crate::runtime_stage116_juicity_h3_dependency_gate::run_stage116_juicity_h3_dependency_readiness;
 
 pub(crate) fn run_runtime(args: &[String]) -> RunnerOutput {
     match args.first().map(String::as_str) {
@@ -364,6 +365,9 @@ pub(crate) fn run_runtime(args: &[String]) -> RunnerOutput {
         }
         Some("stage115-juicity-certchain-verifier-admission") => {
             run_stage115_juicity_certchain_verifier_admission(&args[1..])
+        }
+        Some("stage116-juicity-h3-dependency-readiness") => {
+            run_stage116_juicity_h3_dependency_readiness(&args[1..])
         }
         Some(subcommand) => {
             RunnerOutput::usage(format!("unsupported runtime subcommand: {subcommand}"))

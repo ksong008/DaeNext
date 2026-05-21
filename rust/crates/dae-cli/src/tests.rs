@@ -28,6 +28,7 @@ mod runtime_https_proxy_stage82;
 mod runtime_hysteria2_full_quic_stage110;
 mod runtime_hysteria2_underlay_stage109;
 mod runtime_juicity_certchain_stage115;
+mod runtime_juicity_h3_dependency_stage116;
 mod runtime_juicity_h3_stage114;
 mod runtime_protocol_55_61;
 mod runtime_protocol_matrix_stage96;
