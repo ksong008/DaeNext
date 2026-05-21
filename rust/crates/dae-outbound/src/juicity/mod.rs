@@ -8,6 +8,7 @@ pub mod h3_admission;
 pub mod h3_loopback;
 pub mod link;
 pub mod packet;
+pub mod stream_packet_congestion;
 pub mod stream_packet_conn;
 pub mod transport_packet_conn;
 
@@ -46,6 +47,17 @@ pub use packet::{
     JuicityPacketStateSmokeReport, JuicityStreamPacketFrame, JuicityUdpPacketConnDecision,
     JuicityUdpPacketConnKind, build_dialauth_record_for_port_zero, decode_stream_packet_frame,
     packet_state_smoke, seal_stream_packet_frame, select_udp_packet_conn,
+};
+pub use stream_packet_congestion::{
+    DEFAULT_STREAM_PACKET_CONGESTION_CONTROL, DEFAULT_STREAM_PACKET_CONGESTION_ITERATIONS,
+    DEFAULT_STREAM_PACKET_CONGESTION_MAX_IN_FLIGHT, DEFAULT_STREAM_PACKET_CONGESTION_PAYLOAD_LEN,
+    DEFAULT_STREAM_PACKET_CONGESTION_RESPONSE_LEN,
+    DEFAULT_STREAM_PACKET_CONGESTION_RESPONSE_TARGET, DEFAULT_STREAM_PACKET_CONGESTION_TARGET,
+    GO_BBR_INITIAL_CONGESTION_WINDOW_PACKETS, GO_BBR_INITIAL_PACKET_SIZE_IPV4,
+    GO_JUICITY_CONGESTION_CWND_PARAM, GO_JUICITY_CONGESTION_DEFAULT,
+    JuicityStreamPacketCongestionOptions, JuicityStreamPacketCongestionReport,
+    RUST_BBR_INITIAL_WINDOW_BYTES, default_congestion_payload, normalize_congestion_control,
+    run_stream_packet_congestion_smoke,
 };
 pub use stream_packet_conn::{
     DEFAULT_STREAM_PACKET_CONN_PAYLOAD, DEFAULT_STREAM_PACKET_CONN_RESPONSE,
