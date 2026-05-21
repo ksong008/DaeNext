@@ -17,9 +17,11 @@ use super::packet;
 
 pub const VLESS_VERSION: u8 = 0;
 
+mod grpc_http2;
 mod helpers;
 mod types;
 
+pub use grpc_http2::*;
 use helpers::*;
 pub use types::*;
 

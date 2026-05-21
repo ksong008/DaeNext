@@ -76,6 +76,7 @@ mod runtime_tuic_true_quic_stage131;
 mod runtime_tuic_underlay_stage112;
 mod runtime_vless_core;
 mod runtime_vless_shared_transport;
+mod runtime_vless_vmess_grpc_http2_stage134;
 mod runtime_vless_xhttp_xmux_stage80;
 mod runtime_vmess_core_65_68;
 mod runtime_vmess_shared_transport_69_73;
