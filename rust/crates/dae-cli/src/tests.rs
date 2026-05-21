@@ -47,6 +47,7 @@ mod runtime_juicity_transport_packet_conn_stage125;
 mod runtime_protocol_55_61;
 mod runtime_protocol_matrix_stage96;
 mod runtime_quic_h3_family_stage108;
+mod runtime_quic_h3_family_stage132;
 mod runtime_reality_session_mutation_stage102;
 mod runtime_shadowsocksr_stage95;
 mod runtime_shared_tls_stage81;
