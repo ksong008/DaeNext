@@ -1,0 +1,103 @@
+{
+  "name": "stage132-quic-h3-family-recertification-gate",
+  "stage": "stage132",
+  "prior_gate": "stage131-tuic-true-quic-dataplane-gate",
+  "stage_complete": true,
+  "quic_h3_family_native_optin_contract_admitted": true,
+  "hysteria2_true_quic_dataplane_admitted": true,
+  "tuic_true_quic_dataplane_admitted": true,
+  "tuic_udp_relay_mode_quic_effective_relay_admitted": false,
+  "juicity_true_quic_h3_dataplane_admitted": true,
+  "quic_h3_family_true_dataplane_admitted": true,
+  "anytls_true_dataplane_admitted": true,
+  "protocol_outbound_partial_admitted": true,
+  "outbound_true_dataplane_admitted": false,
+  "matched_go_rust_default_daemon_benchmark_recorded": false,
+  "default_switch_allowed": false,
+  "default_path_mutation_allowed": false,
+  "product_chain_switch_allowed": false,
+  "true_rust_default_daemon_admitted": false,
+  "outbound_quic_go_dependency_preserved": true,
+  "external_outbound_required": true,
+  "external_quic_go_required": true,
+  "go_default_path_preserved": true,
+  "go_fallback_required": true,
+  "default_hysteria2_exchange_count": 6,
+  "default_tuic_exchange_count": 5,
+  "default_juicity_exchange_count": 19,
+  "default_family_exchange_count": 30,
+  "gate_decision": "stage132 admits the QUIC/H3 family true dataplane only as an explicit Rust opt-in recertification gate: Hysteria2 Stage130, TUIC Stage131, and Juicity Stage129 are all present and executable, TUIC udp_relay_mode=quic effective relay remains blocked by daenew parity, and outbound default daemon, matched Go benchmark, default switch, and product-chain switches remain closed",
+  "rows": [
+    {
+      "area": "Hysteria2",
+      "status": "admitted-family-member",
+      "evidence": "Stage130 Hysteria2 true QUIC stream/datagram, raw cert pinSHA256, and port hopping scheduler gate is included in the family recertification",
+      "boundary": "protocol member admission does not mutate daemon default outbound paths",
+      "next_action": "carry Hysteria2 evidence into outbound-wide recertification"
+    },
+    {
+      "area": "TUIC",
+      "status": "admitted-family-member-with-caveat",
+      "evidence": "Stage131 TUIC TLS1.3 QUIC EKM auth stream and native datagram packet relay gate is included",
+      "boundary": "udp_relay_mode=quic effective relay remains false because daenew keeps native mode behind a FIXME",
+      "next_action": "keep the caveat explicit until Go parity changes"
+    },
+    {
+      "area": "Juicity",
+      "status": "admitted-family-member",
+      "evidence": "Stage129 Juicity outbound registry/group/health plus selected local H3 client integration gate is included",
+      "boundary": "family admission does not replace global outbound registry/default daemon recertification",
+      "next_action": "carry Juicity evidence into outbound-wide recertification"
+    },
+    {
+      "area": "family benchmark",
+      "status": "admitted-local-family-smoke",
+      "evidence": "Stage132 executes Hysteria2, TUIC, and Juicity local smokes and records aggregate family exchange counts in the local plan",
+      "boundary": "matched Go default daemon benchmark is still missing",
+      "next_action": "run outbound-wide and matched Go/Rust default daemon gates next"
+    },
+    {
+      "area": "overall outbound/default/product",
+      "status": "blocked",
+      "evidence": "The QUIC/H3 family is complete as an opt-in Rust recertification row, but overall outbound true dataplane, default daemon switch, and product-chain validation remain incomplete",
+      "boundary": "outbound_true_dataplane_admitted and default_switch_allowed remain false",
+      "next_action": "continue with outbound-wide recertification across all protocols"
+    }
+  ],
+  "benchmark": [
+    "Stage 132 records aggregate Hysteria2/TUIC/Juicity local family benchmark data in the local plan",
+    "Benchmark scope is protocol-specific local true QUIC/H3 smokes aggregated under one family gate",
+    "Matched Go default-daemon baseline is still missing"
+  ],
+  "validation_commands": [
+    "python3 -m json.tool testdata/rebuild-golden/engine/runtime_stage132/quic_h3_family_recertification_admission.json",
+    "python3 -m json.tool testdata/rebuild-golden/product/daemon/stage132_quic_h3_family_recertification_gate.json",
+    "cargo run --manifest-path rust/Cargo.toml -p dae-cli --bin dae-cli-optin --quiet -- runtime stage132-quic-h3-family-recertification-admission",
+    "cargo run --manifest-path rust/Cargo.toml -p dae-cli --bin dae-cli-optin --quiet -- runtime stage132-quic-h3-family-recertification-admission --execute-smoke",
+    "cargo test --manifest-path rust/Cargo.toml -p dae-cli stage132 -- --nocapture",
+    "cargo test --manifest-path rust/Cargo.toml -p dae-product stage132 -- --nocapture",
+    "cargo test --manifest-path rust/Cargo.toml -p dae-cli stage131 -- --nocapture",
+    "cargo test --manifest-path rust/Cargo.toml -p dae-outbound -p dae-cli -p dae-product",
+    "cargo fmt --manifest-path rust/Cargo.toml --all -- --check",
+    "git diff --check"
+  ],
+  "remaining_blockers": [
+    "overall outbound true dataplane recertification across all protocols",
+    "matched Go default daemon vs true Rust candidate benchmark",
+    "default daemon switch admission",
+    "clean dae-wing and daed product-chain recertification"
+  ],
+  "source": [
+    "DAEX_RUST_REBUILD_PLAN_2026-05-16.md:stage132",
+    "DAENEW_RUST_REBUILD_MEMO_2026-05-16.md:25.1",
+    "DAENEW_RUST_REBUILD_MEMO_2026-05-16.md:25.2",
+    "DAENEW_RUST_REBUILD_MEMO_2026-05-16.md:25.5-25.10",
+    "DAENEW_RUST_REBUILD_MEMO_2026-05-16.md:26.14",
+    "DAENEW_RUST_REBUILD_MEMO_2026-05-16.md:26.15",
+    "DAENEW_RUST_REBUILD_MEMO_2026-05-16.md:26.16",
+    "DAENEW_RUST_REBUILD_MEMO_2026-05-16.md:26.20",
+    "DAENEW_RUST_REBUILD_MEMO_2026-05-16.md:26.21",
+    "rust/crates/dae-cli/src/runtime_stage132_quic_h3_family_recertification_gate/",
+    "rust/crates/dae-product/src/stage132_quic_h3_family_recertification_gate.rs"
+  ]
+}
