@@ -1,0 +1,114 @@
+{
+    "name": "stage120-juicity-packet-state-gate",
+    "stage": "stage120",
+    "prior_gate": "stage119-juicity-live-certchain-gate",
+    "stage_complete": true,
+    "juicity_h3_handshake_admitted": true,
+    "juicity_tls_certchain_verification_admitted": true,
+    "juicity_pinned_certchain_live_callback_matched": true,
+    "juicity_dialauth_record_protocol_state_admitted": true,
+    "juicity_udp_port_zero_transport_packet_conn_route_admitted": true,
+    "juicity_stream_packet_conn_frame_admitted": true,
+    "juicity_dialauth_over_h3_admitted": false,
+    "juicity_transport_packet_conn_dataplane_admitted": false,
+    "juicity_stream_packet_conn_dataplane_admitted": false,
+    "juicity_packet_over_stream_admitted": false,
+    "juicity_congestion_behavior_admitted": false,
+    "juicity_true_quic_h3_dataplane_admitted": false,
+    "hysteria2_true_quic_dataplane_admitted": false,
+    "tuic_true_quic_dataplane_admitted": false,
+    "quic_h3_family_true_dataplane_admitted": false,
+    "anytls_true_dataplane_admitted": true,
+    "protocol_outbound_partial_admitted": true,
+    "outbound_true_dataplane_admitted": false,
+    "matched_go_rust_default_daemon_benchmark_recorded": false,
+    "default_switch_allowed": false,
+    "default_path_mutation_allowed": false,
+    "product_chain_switch_allowed": false,
+    "true_rust_default_daemon_admitted": false,
+    "outbound_quic_go_dependency_preserved": true,
+    "external_outbound_required": true,
+    "external_quic_go_required": true,
+    "go_default_path_preserved": true,
+    "go_fallback_required": true,
+    "dialauth_iv_len": 32,
+    "dialauth_psk_len": 32,
+    "underlay_auth_channel_capacity": 64,
+    "stream_packet_frame_layout": "metadata + u16 payload length + payload",
+    "gate_decision": "stage120 admits only Juicity packet protocol-state contracts: UDP port 0 routes to DialAuth plus TransportPacketConn, DialAuth records pack IV+PSK+metadata with 32-byte IV/PSK, and nonzero UDP stream_packet_conn frames pack metadata+u16 length+payload; live DialAuth over H3, encrypted TransportPacketConn, stream relay, congestion, outbound/default/product switches remain closed",
+    "rows": [
+        {
+            "area": "UDP port 0 route decision",
+            "status": "admitted-contract",
+            "evidence": "Stage120 selects transport_packet_conn for UDP target port 0 and marks DialAuth plus underlay key as required",
+            "boundary": "route selection does not execute a live H3 auth uni stream or encrypted UDP transport",
+            "next_action": "wire DialAuth record emission into a live H3 auth stream"
+        },
+        {
+            "area": "DialAuth record",
+            "status": "admitted-contract",
+            "evidence": "Stage120 packs DialAuth state as IV + PSK + trojanc metadata, preserving 32-byte IV, 32-byte PSK, IV zero prefix, and UnderlayAuth channel capacity 64",
+            "boundary": "record pack does not admit TransportPacketConn EncryptUDPFromPool or DecryptUDP behavior",
+            "next_action": "connect record emission to H3 auth stream and underlay key construction"
+        },
+        {
+            "area": "nonzero UDP stream_packet_conn frame",
+            "status": "admitted-frame",
+            "evidence": "Stage120 seals and decodes stream packet frames as metadata + u16 payload length + payload, without Trojan UDP CRLF",
+            "boundary": "frame roundtrip is not a live packet-over-stream relay",
+            "next_action": "carry frame into live H3 stream relay tests"
+        },
+        {
+            "area": "transport packet conn dataplane",
+            "status": "blocked",
+            "evidence": "Shadowsocks chacha20-poly1305 encryption/decryption with JuicityReusedInfo is still not wired to a QUIC transport",
+            "boundary": "juicity_transport_packet_conn_dataplane_admitted remains false",
+            "next_action": "add encrypted TransportPacketConn loopback gate for UDP port 0"
+        },
+        {
+            "area": "outbound/default/product",
+            "status": "blocked",
+            "evidence": "Juicity true dataplane, Hysteria2/TUIC true QUIC, outbound registry/group/health, matched default daemon benchmark, and product-chain recertification remain open",
+            "boundary": "packet protocol-state contracts do not admit outbound_true_dataplane_admitted=true",
+            "next_action": "continue Juicity packet relay gates before outbound-wide recertification"
+        }
+    ],
+    "benchmark": [
+        "Stage 120 records local packet-state contract benchmark data in the local plan",
+        "Benchmark scope is DialAuth record pack plus stream_packet_conn frame encode/decode",
+        "Matched Go default-daemon baseline is still missing"
+    ],
+    "validation_commands": [
+        "python3 -m json.tool testdata/rebuild-golden/engine/runtime_stage120/juicity_packet_state_admission.json",
+        "python3 -m json.tool testdata/rebuild-golden/product/daemon/stage120_juicity_packet_state_gate.json",
+        "cargo test --manifest-path rust/Cargo.toml -p dae-outbound stage120 -- --nocapture",
+        "cargo run --manifest-path rust/Cargo.toml -p dae-cli --bin dae-cli-optin --quiet -- runtime stage120-juicity-packet-state-admission",
+        "cargo run --manifest-path rust/Cargo.toml -p dae-cli --bin dae-cli-optin --quiet -- runtime stage120-juicity-packet-state-admission --execute-smoke --benchmark-iters 1000",
+        "cargo test --manifest-path rust/Cargo.toml -p dae-cli stage120 -- --nocapture",
+        "cargo test --manifest-path rust/Cargo.toml -p dae-product stage120 -- --nocapture",
+        "cargo test --manifest-path rust/Cargo.toml -p dae-outbound stage119 -- --nocapture",
+        "cargo test --manifest-path rust/Cargo.toml -p dae-outbound -p dae-cli -p dae-product",
+        "cargo fmt --manifest-path rust/Cargo.toml --all -- --check",
+        "git diff --check"
+    ],
+    "remaining_blockers": [
+        "Juicity DialAuth over the live H3 auth uni stream",
+        "Juicity TransportPacketConn shadowsocks encryption/decryption with JuicityReusedInfo for UDP port 0",
+        "Juicity stream_packet_conn packet-over-stream live relay for nonzero UDP targets",
+        "Juicity congestion behavior and packet relay benchmark",
+        "Hysteria2 full QUIC and TUIC true QUIC dataplanes",
+        "outbound registry/dialer group/health policy parity while preserving direct/block indices and NewDialerSetFromLinks semantics",
+        "matched Go default daemon vs true Rust candidate benchmark",
+        "clean dae-wing and daed product-chain recertification"
+    ],
+    "source": [
+        "DAEX_RUST_REBUILD_PLAN_2026-05-16.md:stage120",
+        "DAENEW_RUST_REBUILD_MEMO_2026-05-16.md:26.16",
+        "/root/project/outbound/protocol/juicity/client.go:DialAuth",
+        "/root/project/outbound/protocol/juicity/dialer.go",
+        "/root/project/outbound/protocol/juicity/stream_packet_conn.go",
+        "/root/project/outbound/protocol/juicity/transport_packet_conn.go",
+        "rust/crates/dae-outbound/src/juicity/packet.rs",
+        "rust/crates/dae-cli/src/runtime_stage120_juicity_packet_state_gate/"
+    ]
+}
