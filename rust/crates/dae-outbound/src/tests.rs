@@ -23,6 +23,7 @@ mod dataplane_juicity_stage119;
 mod dataplane_juicity_stage120;
 mod dataplane_juicity_stage121;
 mod dataplane_juicity_stage122;
+mod dataplane_juicity_stage123;
 mod dataplane_shadowsocks_stage88;
 mod dataplane_shadowsocks_stage89;
 mod dataplane_shadowsocks_stage90;
