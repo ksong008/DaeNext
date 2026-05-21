@@ -17,6 +17,7 @@ mod daemon_stage37_40;
 mod daemon_stage41_49;
 mod daemon_stage50_54;
 mod hysteria2_full_quic_stage110;
+mod hysteria2_true_quic_stage130;
 mod hysteria2_underlay_stage109;
 mod juicity_auth_lifecycle_stage124;
 mod juicity_auth_stream_stage121;

@@ -26,6 +26,7 @@ mod runtime_candidate_preflight;
 mod runtime_command_inventory;
 mod runtime_https_proxy_stage82;
 mod runtime_hysteria2_full_quic_stage110;
+mod runtime_hysteria2_true_quic_stage130;
 mod runtime_hysteria2_underlay_stage109;
 mod runtime_juicity_auth_lifecycle_stage124;
 mod runtime_juicity_auth_stream_stage121;

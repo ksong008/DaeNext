@@ -16,6 +16,7 @@ mod dataplane_anytls_stage106;
 mod dataplane_base;
 mod dataplane_http_stage82;
 mod dataplane_hysteria2_stage109;
+mod dataplane_hysteria2_stage130;
 mod dataplane_juicity_stage115;
 mod dataplane_juicity_stage117;
 mod dataplane_juicity_stage118;
