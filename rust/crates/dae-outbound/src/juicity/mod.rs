@@ -8,6 +8,7 @@ pub mod h3_admission;
 pub mod h3_loopback;
 pub mod link;
 pub mod packet;
+pub mod transport_packet_conn;
 
 pub use auth_lifecycle::{
     DEFAULT_AUTH_LIFECYCLE_RECORD_COUNT, DEFAULT_AUTH_LIFECYCLE_TARGETS,
@@ -44,4 +45,12 @@ pub use packet::{
     JuicityPacketStateSmokeReport, JuicityStreamPacketFrame, JuicityUdpPacketConnDecision,
     JuicityUdpPacketConnKind, build_dialauth_record_for_port_zero, decode_stream_packet_frame,
     packet_state_smoke, seal_stream_packet_frame, select_udp_packet_conn,
+};
+pub use transport_packet_conn::{
+    DEFAULT_TRANSPORT_PACKET_CONN_PAYLOAD, DEFAULT_TRANSPORT_PACKET_CONN_RESPONSE,
+    DEFAULT_TRANSPORT_PACKET_CONN_TARGET, JUICITY_TRANSPORT_PACKET_CONN_CIPHER,
+    JUICITY_TRANSPORT_PACKET_CONN_NONCE_LEN, JUICITY_TRANSPORT_PACKET_CONN_REUSED_INFO_RAW,
+    JUICITY_TRANSPORT_PACKET_CONN_TAG_LEN, JuicityTransportPacketConnOptions,
+    JuicityTransportPacketConnReport, open_transport_packet, run_transport_packet_conn_smoke,
+    seal_transport_packet,
 };
