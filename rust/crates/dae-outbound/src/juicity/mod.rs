@@ -8,6 +8,7 @@ pub mod contract;
 pub mod h3_admission;
 pub mod h3_loopback;
 pub mod link;
+pub mod outbound_dataplane;
 pub mod packet;
 pub mod stream_packet_congestion;
 pub mod stream_packet_conn;
@@ -49,6 +50,13 @@ pub use h3_loopback::{
     JuicityH3LoopbackReport, run_h3_loopback_smoke,
 };
 pub use link::{JuicityLink, JuicityPinDecode, JuicityUnderlayContract};
+pub use outbound_dataplane::{
+    DEFAULT_OUTBOUND_DATAPLANE_ADD_LATENCY_MS, DEFAULT_OUTBOUND_DATAPLANE_ALIVE,
+    DEFAULT_OUTBOUND_DATAPLANE_GROUP_NAME, DEFAULT_OUTBOUND_DATAPLANE_HEALTH_LATENCIES_MS,
+    DEFAULT_OUTBOUND_DATAPLANE_LINKS, DEFAULT_OUTBOUND_DATAPLANE_SUBSCRIPTION_TAG,
+    JuicityOutboundDataplaneOptions, JuicityOutboundDataplaneReport, network_type_label,
+    run_outbound_dataplane_smoke,
+};
 pub use packet::{
     JUICITY_UNDERLAY_AUTH_IV_LEN, JUICITY_UNDERLAY_AUTH_PSK_LEN, JuicityDialAuthRecord,
     JuicityPacketStateSmokeReport, JuicityStreamPacketFrame, JuicityUdpPacketConnDecision,

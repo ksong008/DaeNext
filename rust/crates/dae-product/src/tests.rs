@@ -30,6 +30,7 @@ mod juicity_h3_stage114;
 mod juicity_live_auth_stream_stage122;
 mod juicity_live_certchain_stage119;
 mod juicity_live_ekm_auth_stage123;
+mod juicity_outbound_dataplane_stage129;
 mod juicity_packet_state_stage120;
 mod juicity_stream_packet_conn_stage126;
 mod juicity_transport_packet_conn_stage125;
