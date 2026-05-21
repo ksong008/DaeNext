@@ -1,4 +1,5 @@
 pub mod auth_stream;
+pub mod auth_stream_live;
 pub mod certchain;
 pub mod contract;
 pub mod h3_admission;
@@ -12,6 +13,10 @@ pub use auth_stream::{
     JuicityAuthStreamTranscript, JuicityAuthenticateHeader, auth_stream_smoke,
     build_auth_stream_transcript, build_authenticate_header,
     build_deterministic_authenticate_header,
+};
+pub use auth_stream_live::{
+    DEFAULT_LIVE_AUTH_STREAM_TARGET, JuicityLiveAuthStreamOptions, JuicityLiveAuthStreamReport,
+    run_live_auth_stream_smoke,
 };
 pub use certchain::{
     JuicityCertChainPinCheck, check_pinned_certchain, generate_cert_chain_hash,

@@ -33,6 +33,7 @@ mod runtime_juicity_h3_dependency_stage116;
 mod runtime_juicity_h3_dependency_stage117;
 mod runtime_juicity_h3_loopback_stage118;
 mod runtime_juicity_h3_stage114;
+mod runtime_juicity_live_auth_stream_stage122;
 mod runtime_juicity_live_certchain_stage119;
 mod runtime_juicity_packet_state_stage120;
 mod runtime_protocol_55_61;
