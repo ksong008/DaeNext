@@ -18,6 +18,7 @@ mod daemon_stage41_49;
 mod daemon_stage50_54;
 mod hysteria2_full_quic_stage110;
 mod hysteria2_underlay_stage109;
+mod juicity_h3_stage114;
 mod product_protocol_matrix;
 mod protocol_https_proxy_82;
 mod protocol_matrix_96;
