@@ -39,6 +39,7 @@ pub mod stage128_juicity_client_integration_gate;
 pub mod stage129_juicity_outbound_dataplane_gate;
 pub mod stage130_hysteria2_true_quic_gate;
 pub mod stage131_tuic_true_quic_gate;
+pub mod stage132_quic_h3_family_recertification_gate;
 pub mod stage23_completion;
 pub mod stage24_product_gate;
 pub mod stage25_execution_queue;
@@ -507,6 +508,10 @@ pub use stage130_hysteria2_true_quic_gate::{
 pub use stage131_tuic_true_quic_gate::{
     Stage131TuicTrueQuicGateContract, Stage131TuicTrueQuicGateRow,
     stage131_tuic_true_quic_gate_contract,
+};
+pub use stage132_quic_h3_family_recertification_gate::{
+    Stage132QuicH3FamilyRecertificationGateContract, Stage132QuicH3FamilyRecertificationGateRow,
+    stage132_quic_h3_family_recertification_gate_contract,
 };
 pub use systemd::{SystemdContract, systemd_contract};
 pub use true_daemon_admission::{
