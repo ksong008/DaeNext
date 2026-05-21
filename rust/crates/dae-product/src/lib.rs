@@ -22,6 +22,7 @@ pub mod stage111_tuic_full_quic_queue_gate;
 pub mod stage112_tuic_underlay_gate;
 pub mod stage113_tuic_full_quic_queue_gate;
 pub mod stage114_juicity_h3_queue_gate;
+pub mod stage115_juicity_certchain_gate;
 pub mod stage23_completion;
 pub mod stage24_product_gate;
 pub mod stage25_execution_queue;
@@ -422,6 +423,10 @@ pub use stage113_tuic_full_quic_queue_gate::{
 pub use stage114_juicity_h3_queue_gate::{
     Stage114JuicityH3QueueGateContract, Stage114JuicityH3QueueGateRow,
     stage114_juicity_h3_queue_gate_contract,
+};
+pub use stage115_juicity_certchain_gate::{
+    Stage115JuicityCertchainVerifierGateContract, Stage115JuicityCertchainVerifierGateRow,
+    stage115_juicity_certchain_verifier_gate_contract,
 };
 pub use systemd::{SystemdContract, systemd_contract};
 pub use true_daemon_admission::{
