@@ -54,6 +54,7 @@ mod dataplane_tuic_stage112;
 mod dataplane_tuic_stage131;
 mod dataplane_vless;
 mod dataplane_vless_stage80;
+mod dataplane_vless_vmess_stage134;
 mod dataplane_vmess;
 mod group_policy;
 mod protocol_modern;

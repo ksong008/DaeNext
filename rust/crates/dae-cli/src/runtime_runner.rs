@@ -119,6 +119,7 @@ use crate::runtime_stage130_hysteria2_true_quic_gate::run_stage130_hysteria2_tru
 use crate::runtime_stage131_tuic_true_quic_gate::run_stage131_tuic_true_quic_dataplane_admission;
 use crate::runtime_stage132_quic_h3_family_recertification_gate::run_stage132_quic_h3_family_recertification_admission;
 use crate::runtime_stage133_outbound_true_dataplane_readiness_gate::run_stage133_outbound_true_dataplane_readiness;
+use crate::runtime_stage134_vless_vmess_grpc_http2_gate::run_stage134_vless_vmess_grpc_http2_lifecycle_admission;
 
 pub(crate) fn run_runtime(args: &[String]) -> RunnerOutput {
     match args.first().map(String::as_str) {
@@ -436,6 +437,9 @@ pub(crate) fn run_runtime(args: &[String]) -> RunnerOutput {
         }
         Some("stage133-outbound-true-dataplane-readiness") => {
             run_stage133_outbound_true_dataplane_readiness(&args[1..])
+        }
+        Some("stage134-vless-vmess-grpc-http2-lifecycle-admission") => {
+            run_stage134_vless_vmess_grpc_http2_lifecycle_admission(&args[1..])
         }
         Some(subcommand) => {
             RunnerOutput::usage(format!("unsupported runtime subcommand: {subcommand}"))

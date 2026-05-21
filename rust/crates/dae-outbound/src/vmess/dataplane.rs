@@ -55,6 +55,7 @@ mod build_request;
 mod command_key;
 mod crypto;
 mod exchange;
+mod grpc_http2;
 mod read_request;
 mod response_http;
 mod response_read;
@@ -62,6 +63,7 @@ mod types;
 
 pub use command_key::*;
 pub use exchange::*;
+pub use grpc_http2::*;
 pub use read_request::*;
 pub use response_http::*;
 pub use types::*;
