@@ -37,6 +37,7 @@ pub mod stage126_juicity_stream_packet_conn_gate;
 pub mod stage127_juicity_congestion_gate;
 pub mod stage128_juicity_client_integration_gate;
 pub mod stage129_juicity_outbound_dataplane_gate;
+pub mod stage130_hysteria2_true_quic_gate;
 pub mod stage23_completion;
 pub mod stage24_product_gate;
 pub mod stage25_execution_queue;
@@ -497,6 +498,10 @@ pub use stage128_juicity_client_integration_gate::{
 pub use stage129_juicity_outbound_dataplane_gate::{
     Stage129JuicityOutboundDataplaneGateContract, Stage129JuicityOutboundDataplaneGateRow,
     stage129_juicity_outbound_dataplane_gate_contract,
+};
+pub use stage130_hysteria2_true_quic_gate::{
+    Stage130Hysteria2TrueQuicGateContract, Stage130Hysteria2TrueQuicGateRow,
+    stage130_hysteria2_true_quic_gate_contract,
 };
 pub use systemd::{SystemdContract, systemd_contract};
 pub use true_daemon_admission::{
