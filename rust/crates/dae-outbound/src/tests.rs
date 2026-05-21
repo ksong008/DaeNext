@@ -17,6 +17,7 @@ mod dataplane_base;
 mod dataplane_http_stage82;
 mod dataplane_hysteria2_stage109;
 mod dataplane_juicity_stage115;
+mod dataplane_juicity_stage117;
 mod dataplane_shadowsocks_stage88;
 mod dataplane_shadowsocks_stage89;
 mod dataplane_shadowsocks_stage90;
