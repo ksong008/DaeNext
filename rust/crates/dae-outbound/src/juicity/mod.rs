@@ -3,6 +3,7 @@ pub mod auth_stream;
 pub mod auth_stream_ekm;
 pub mod auth_stream_live;
 pub mod certchain;
+pub mod client_integration;
 pub mod contract;
 pub mod h3_admission;
 pub mod h3_loopback;
@@ -34,6 +35,12 @@ pub use auth_stream_live::{
 pub use certchain::{
     JuicityCertChainPinCheck, check_pinned_certchain, generate_cert_chain_hash,
     verify_pinned_certchain,
+};
+pub use client_integration::{
+    DEFAULT_CLIENT_INTEGRATION_AUTH_ITERATIONS, DEFAULT_CLIENT_INTEGRATION_CONGESTION_ITERATIONS,
+    DEFAULT_CLIENT_INTEGRATION_MAX_IN_FLIGHT, DEFAULT_CLIENT_INTEGRATION_STREAM_ITERATIONS,
+    DEFAULT_CLIENT_INTEGRATION_TRANSPORT_ITERATIONS, JuicityClientIntegrationOptions,
+    JuicityClientIntegrationReport, run_client_integration_smoke,
 };
 pub use h3_admission::{JuicityH3DependencyAdmission, dependency_admission};
 pub use h3_loopback::{
