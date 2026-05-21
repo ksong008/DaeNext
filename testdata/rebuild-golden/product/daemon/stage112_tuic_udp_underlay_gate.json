@@ -1,0 +1,110 @@
+{
+  "anytls_true_dataplane_admitted": true,
+  "benchmark": [
+    "Stage 112 records root-gated local UDP underlay smoke benchmark data in the local plan",
+    "Benchmark scope is local UDP datagram echo with TUIC underlay contract checks, not a full TUIC QUIC dataplane",
+    "Matched Go default-daemon baseline is still missing"
+  ],
+  "default_path_mutation_allowed": false,
+  "default_switch_allowed": false,
+  "external_outbound_required": true,
+  "external_quic_go_required": true,
+  "gate_decision": "stage112 admits only the TUIC UDP underlay socket row after root-gated local UDP smoke and benchmark: TCP-request UDP underlay, SO_MARK observation, and MPTCP-drop contract are covered, but full TUIC QUIC handshake/auth/datagram behavior remains external/outbound-quic-go and default/product switches remain closed",
+  "go_default_path_preserved": true,
+  "go_fallback_required": true,
+  "hysteria2_true_quic_dataplane_admitted": false,
+  "hysteria2_udp_underlay_admitted": true,
+  "juicity_true_quic_h3_dataplane_admitted": false,
+  "matched_go_rust_default_daemon_benchmark_recorded": false,
+  "name": "stage112-tuic-udp-underlay-gate",
+  "outbound_quic_go_dependency_preserved": true,
+  "outbound_true_dataplane_admitted": false,
+  "prior_gate": "stage111-tuic-full-quic-client-blocker-queue-gate",
+  "product_chain_switch_allowed": false,
+  "protocol_outbound_partial_admitted": true,
+  "quic_h3_family_true_dataplane_admitted": false,
+  "remaining_blockers": [
+    "TUIC full QUIC handshake, certificate verification, and auth stream",
+    "TUIC datagram packet relay, congestion behavior, and udp_relay_mode=quic effective relay parity",
+    "Hysteria2 full QUIC and Juicity H3 true dataplanes",
+    "outbound registry/dialer group/health policy parity while preserving direct/block indices and NewDialerSetFromLinks semantics",
+    "matched Go default daemon vs true Rust candidate benchmark",
+    "clean dae-wing and daed product-chain recertification"
+  ],
+  "rows": [
+    {
+      "area": "TUIC TCP request underlay",
+      "boundary": "this does not implement TUIC QUIC handshake or auth stream behavior",
+      "evidence": "TCP request maps to UDP underlay, preserves Mark, and drops MPTCP to match daenew TUIC behavior",
+      "next_action": "build true TUIC QUIC loopback handshake before true dataplane admission",
+      "status": "admitted-underlay-contract"
+    },
+    {
+      "area": "TUIC UDP request underlay",
+      "boundary": "this is underlay contract parity, not TUIC datagram packet relay",
+      "evidence": "UDP request keeps the original network and mark/mptcp encoding contract",
+      "next_action": "add TUIC datagram relay gate after handshake/auth exists",
+      "status": "admitted-underlay-contract"
+    },
+    {
+      "area": "TUIC UDP underlay smoke",
+      "boundary": "the local datagram harness is not a full QUIC handshake, auth stream, congestion, or TUIC client dataplane",
+      "evidence": "Stage112 root-gated smoke exercised a local UDP datagram echo with SO_MARK observation and benchmark data",
+      "next_action": "replace the harness with a true TUIC QUIC loopback before opening tuic_true_quic_dataplane_admitted",
+      "status": "admitted-local-underlay-smoke"
+    },
+    {
+      "area": "udp_relay_mode=quic caveat",
+      "boundary": "Rust must not promote the flag to an effective QUIC relay before Go parity is proven",
+      "evidence": "Stage112 keeps the Stage111 record that udp_relay_mode=quic sets a flag but daenew currently remains effectively native mode",
+      "next_action": "keep effective QUIC relay blocked until daenew parity is explicitly admitted",
+      "status": "blocked-go-parity-caveat-recorded"
+    },
+    {
+      "area": "outbound/default/product",
+      "boundary": "tuic_udp_underlay_socket_admitted=true does not admit quic_h3_family_true_dataplane_admitted or outbound_true_dataplane_admitted",
+      "evidence": "Stage112 keeps /root/project/outbound and /root/project/quic-go as required dependencies and keeps Go default path preserved",
+      "next_action": "continue TUIC full QUIC client gates, then Juicity gates, before outbound-wide recertification",
+      "status": "blocked"
+    }
+  ],
+  "source": [
+    "DAEX_RUST_REBUILD_PLAN_2026-05-16.md:stage112",
+    "DAENEW_RUST_REBUILD_MEMO_2026-05-16.md:12.6",
+    "DAENEW_RUST_REBUILD_MEMO_2026-05-16.md:25.1",
+    "DAENEW_RUST_REBUILD_MEMO_2026-05-16.md:25.2",
+    "DAENEW_RUST_REBUILD_MEMO_2026-05-16.md:26.15",
+    "DAENEW_RUST_REBUILD_MEMO_2026-05-16.md:26.20",
+    "DAENEW_RUST_REBUILD_MEMO_2026-05-16.md:26.21",
+    "rust/crates/dae-outbound/src/tuic/underlay.rs",
+    "rust/crates/dae-cli/src/runtime_stage112_tuic_underlay_gate/"
+  ],
+  "stage": "stage112",
+  "stage_complete": true,
+  "true_rust_default_daemon_admitted": false,
+  "tuic_auth_stream_admitted": false,
+  "tuic_datagram_packet_relay_admitted": false,
+  "tuic_disable_sni_contract_admitted": true,
+  "tuic_full_quic_handshake_admitted": false,
+  "tuic_native_optin_contract_admitted": true,
+  "tuic_so_mark_loopback_observed": true,
+  "tuic_tls13_datagram_config_contract_admitted": true,
+  "tuic_true_quic_dataplane_admitted": false,
+  "tuic_udp_relay_mode_go_parity_caveat_recorded": true,
+  "tuic_udp_relay_mode_quic_effective_relay_admitted": false,
+  "tuic_udp_underlay_socket_admitted": true,
+  "tuic_underlay_contract_admitted": true,
+  "tuic_uuid_password_contract_admitted": true,
+  "validation_commands": [
+    "python3 -m json.tool testdata/rebuild-golden/engine/runtime_stage112/tuic_udp_underlay_admission.json",
+    "python3 -m json.tool testdata/rebuild-golden/product/daemon/stage112_tuic_udp_underlay_gate.json",
+    "cargo test --manifest-path rust/Cargo.toml -p dae-outbound stage112 -- --nocapture",
+    "cargo run --manifest-path rust/Cargo.toml -p dae-cli --bin dae-cli-optin --quiet -- runtime stage112-tuic-udp-underlay-admission",
+    "cargo run --manifest-path rust/Cargo.toml -p dae-cli --bin dae-cli-optin --quiet -- runtime stage112-tuic-udp-underlay-admission --execute-smoke --ack-root-gate --benchmark-iters 10",
+    "cargo test --manifest-path rust/Cargo.toml -p dae-cli stage112 -- --nocapture",
+    "cargo test --manifest-path rust/Cargo.toml -p dae-product stage112 -- --nocapture",
+    "cargo test --manifest-path rust/Cargo.toml -p dae-outbound -p dae-cli -p dae-product",
+    "cargo fmt --manifest-path rust/Cargo.toml --all -- --check",
+    "git diff --check"
+  ]
+}
