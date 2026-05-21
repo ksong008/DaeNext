@@ -32,6 +32,7 @@ pub(crate) mod runtime_stage120_juicity_packet_state_gate;
 pub(crate) mod runtime_stage121_juicity_auth_stream_gate;
 pub(crate) mod runtime_stage122_juicity_live_auth_stream_gate;
 pub(crate) mod runtime_stage123_juicity_live_ekm_auth_gate;
+pub(crate) mod runtime_stage124_juicity_auth_lifecycle_gate;
 pub(crate) mod runtime_stage26_candidate;
 pub(crate) mod runtime_stage27_candidate;
 pub(crate) mod runtime_stage29_preflight;

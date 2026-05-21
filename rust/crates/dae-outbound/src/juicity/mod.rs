@@ -1,3 +1,4 @@
+pub mod auth_lifecycle;
 pub mod auth_stream;
 pub mod auth_stream_ekm;
 pub mod auth_stream_live;
@@ -8,6 +9,10 @@ pub mod h3_loopback;
 pub mod link;
 pub mod packet;
 
+pub use auth_lifecycle::{
+    DEFAULT_AUTH_LIFECYCLE_RECORD_COUNT, DEFAULT_AUTH_LIFECYCLE_TARGETS,
+    JuicityAuthLifecycleOptions, JuicityAuthLifecycleReport, run_auth_lifecycle_smoke,
+};
 pub use auth_stream::{
     JUICITY_AUTHENTICATE_HEADER_LEN, JUICITY_AUTHENTICATE_TOKEN_LEN, JUICITY_AUTHENTICATE_TYPE,
     JUICITY_AUTHENTICATE_UUID_LEN, JUICITY_AUTHENTICATE_VERSION0, JuicityAuthStreamSmokeReport,
