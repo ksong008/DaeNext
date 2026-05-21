@@ -19,10 +19,12 @@ pub const VLESS_VERSION: u8 = 0;
 
 mod grpc_http2;
 mod helpers;
+mod tls_transports;
 mod types;
 
 pub use grpc_http2::*;
 use helpers::*;
+pub use tls_transports::*;
 pub use types::*;
 
 pub fn tcp_exchange_over_stream<S>(

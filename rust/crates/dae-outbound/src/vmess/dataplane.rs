@@ -59,6 +59,7 @@ mod grpc_http2;
 mod read_request;
 mod response_http;
 mod response_read;
+mod tls_transports;
 mod types;
 
 pub use command_key::*;
@@ -66,6 +67,7 @@ pub use exchange::*;
 pub use grpc_http2::*;
 pub use read_request::*;
 pub use response_http::*;
+pub use tls_transports::*;
 pub use types::*;
 
 use body_codec::*;
