@@ -98,6 +98,7 @@ use crate::runtime_stage109_hysteria2_underlay_gate::run_stage109_hysteria2_udp_
 use crate::runtime_stage110_hysteria2_full_quic_queue_gate::run_stage110_hysteria2_full_quic_client_blocker_queue;
 use crate::runtime_stage111_tuic_full_quic_queue_gate::run_stage111_tuic_full_quic_client_blocker_queue;
 use crate::runtime_stage112_tuic_underlay_gate::run_stage112_tuic_udp_underlay_admission;
+use crate::runtime_stage113_tuic_full_quic_queue_gate::run_stage113_tuic_full_quic_client_blocker_queue;
 
 pub(crate) fn run_runtime(args: &[String]) -> RunnerOutput {
     match args.first().map(String::as_str) {
@@ -352,6 +353,9 @@ pub(crate) fn run_runtime(args: &[String]) -> RunnerOutput {
         }
         Some("stage112-tuic-udp-underlay-admission") => {
             run_stage112_tuic_udp_underlay_admission(&args[1..])
+        }
+        Some("stage113-tuic-full-quic-client-blocker-queue") => {
+            run_stage113_tuic_full_quic_client_blocker_queue(&args[1..])
         }
         Some(subcommand) => {
             RunnerOutput::usage(format!("unsupported runtime subcommand: {subcommand}"))

@@ -20,6 +20,7 @@ pub mod stage109_hysteria2_underlay_gate;
 pub mod stage110_hysteria2_full_quic_queue_gate;
 pub mod stage111_tuic_full_quic_queue_gate;
 pub mod stage112_tuic_underlay_gate;
+pub mod stage113_tuic_full_quic_queue_gate;
 pub mod stage23_completion;
 pub mod stage24_product_gate;
 pub mod stage25_execution_queue;
@@ -412,6 +413,10 @@ pub use stage111_tuic_full_quic_queue_gate::{
 pub use stage112_tuic_underlay_gate::{
     Stage112TuicUnderlayGateContract, Stage112TuicUnderlayGateRow,
     stage112_tuic_underlay_gate_contract,
+};
+pub use stage113_tuic_full_quic_queue_gate::{
+    Stage113TuicFullQuicQueueGateContract, Stage113TuicFullQuicQueueGateRow,
+    stage113_tuic_full_quic_queue_gate_contract,
 };
 pub use systemd::{SystemdContract, systemd_contract};
 pub use true_daemon_admission::{
