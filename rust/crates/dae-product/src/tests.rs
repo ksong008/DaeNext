@@ -29,6 +29,7 @@ mod juicity_live_auth_stream_stage122;
 mod juicity_live_certchain_stage119;
 mod juicity_live_ekm_auth_stage123;
 mod juicity_packet_state_stage120;
+mod juicity_transport_packet_conn_stage125;
 mod product_protocol_matrix;
 mod protocol_https_proxy_82;
 mod protocol_matrix_96;
