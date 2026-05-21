@@ -52,6 +52,7 @@ mod runtime_trojan_go_utls_fingerprint_stage101;
 mod runtime_trojan_go_wss_stage84;
 mod runtime_trojan_tls_stage83;
 mod runtime_tuic_full_quic_stage111;
+mod runtime_tuic_full_quic_stage113;
 mod runtime_tuic_underlay_stage112;
 mod runtime_vless_core;
 mod runtime_vless_shared_transport;
