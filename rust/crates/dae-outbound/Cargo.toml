@@ -12,8 +12,11 @@ base64.workspace = true
 blake3.workspace = true
 chacha20poly1305.workspace = true
 dae-core-types.workspace = true
+h3.workspace = true
+h3-quinn.workspace = true
 hkdf.workspace = true
 md-5.workspace = true
+quinn.workspace = true
 rcgen.workspace = true
 regex.workspace = true
 rustls.workspace = true
@@ -21,6 +24,7 @@ serde_json.workspace = true
 sha1.workspace = true
 sha2.workspace = true
 sha3.workspace = true
+tokio.workspace = true
 url.workspace = true
 
 [dev-dependencies]
