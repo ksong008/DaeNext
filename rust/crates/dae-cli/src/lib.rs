@@ -30,6 +30,7 @@ pub(crate) mod runtime_stage118_juicity_h3_loopback_gate;
 pub(crate) mod runtime_stage119_juicity_live_certchain_gate;
 pub(crate) mod runtime_stage120_juicity_packet_state_gate;
 pub(crate) mod runtime_stage121_juicity_auth_stream_gate;
+pub(crate) mod runtime_stage122_juicity_live_auth_stream_gate;
 pub(crate) mod runtime_stage26_candidate;
 pub(crate) mod runtime_stage27_candidate;
 pub(crate) mod runtime_stage29_preflight;
