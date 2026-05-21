@@ -25,6 +25,7 @@ pub mod stage114_juicity_h3_queue_gate;
 pub mod stage115_juicity_certchain_gate;
 pub mod stage116_juicity_h3_dependency_gate;
 pub mod stage117_juicity_h3_dependency_admission_gate;
+pub mod stage118_juicity_h3_loopback_gate;
 pub mod stage23_completion;
 pub mod stage24_product_gate;
 pub mod stage25_execution_queue;
@@ -437,6 +438,10 @@ pub use stage116_juicity_h3_dependency_gate::{
 pub use stage117_juicity_h3_dependency_admission_gate::{
     Stage117JuicityH3DependencyAdmissionGateContract, Stage117JuicityH3DependencyAdmissionGateRow,
     stage117_juicity_h3_dependency_admission_gate_contract,
+};
+pub use stage118_juicity_h3_loopback_gate::{
+    Stage118JuicityH3LoopbackGateContract, Stage118JuicityH3LoopbackGateRow,
+    stage118_juicity_h3_loopback_gate_contract,
 };
 pub use systemd::{SystemdContract, systemd_contract};
 pub use true_daemon_admission::{
