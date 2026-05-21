@@ -39,6 +39,7 @@ mod runtime_juicity_h3_stage114;
 mod runtime_juicity_live_auth_stream_stage122;
 mod runtime_juicity_live_certchain_stage119;
 mod runtime_juicity_live_ekm_auth_stage123;
+mod runtime_juicity_outbound_dataplane_stage129;
 mod runtime_juicity_packet_state_stage120;
 mod runtime_juicity_stream_packet_conn_stage126;
 mod runtime_juicity_transport_packet_conn_stage125;
