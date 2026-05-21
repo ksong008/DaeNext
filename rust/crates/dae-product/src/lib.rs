@@ -31,6 +31,7 @@ pub mod stage120_juicity_packet_state_gate;
 pub mod stage121_juicity_auth_stream_gate;
 pub mod stage122_juicity_live_auth_stream_gate;
 pub mod stage123_juicity_live_ekm_auth_gate;
+pub mod stage124_juicity_auth_lifecycle_gate;
 pub mod stage23_completion;
 pub mod stage24_product_gate;
 pub mod stage25_execution_queue;
@@ -467,6 +468,10 @@ pub use stage122_juicity_live_auth_stream_gate::{
 pub use stage123_juicity_live_ekm_auth_gate::{
     Stage123JuicityLiveEkmAuthGateContract, Stage123JuicityLiveEkmAuthGateRow,
     stage123_juicity_live_ekm_auth_gate_contract,
+};
+pub use stage124_juicity_auth_lifecycle_gate::{
+    Stage124JuicityAuthLifecycleGateContract, Stage124JuicityAuthLifecycleGateRow,
+    stage124_juicity_auth_lifecycle_gate_contract,
 };
 pub use systemd::{SystemdContract, systemd_contract};
 pub use true_daemon_admission::{
