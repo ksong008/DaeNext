@@ -24,6 +24,7 @@ mod juicity_h3_dependency_stage117;
 mod juicity_h3_loopback_stage118;
 mod juicity_h3_stage114;
 mod juicity_live_certchain_stage119;
+mod juicity_packet_state_stage120;
 mod product_protocol_matrix;
 mod protocol_https_proxy_82;
 mod protocol_matrix_96;
