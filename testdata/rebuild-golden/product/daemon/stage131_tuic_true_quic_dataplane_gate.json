@@ -1,0 +1,122 @@
+{
+  "name": "stage131-tuic-true-quic-dataplane-gate",
+  "stage": "stage131",
+  "prior_gate": "stage130-hysteria2-true-quic-dataplane-gate",
+  "stage_complete": true,
+  "tuic_native_optin_contract_admitted": true,
+  "tuic_uuid_password_contract_admitted": true,
+  "tuic_tls13_datagram_config_contract_admitted": true,
+  "tuic_disable_sni_contract_admitted": true,
+  "tuic_udp_relay_mode_go_parity_caveat_recorded": true,
+  "tuic_underlay_contract_admitted": true,
+  "tuic_udp_underlay_socket_admitted": true,
+  "tuic_so_mark_loopback_observed": true,
+  "tuic_full_quic_handshake_admitted": true,
+  "tuic_auth_stream_admitted": true,
+  "tuic_datagram_packet_relay_admitted": true,
+  "tuic_congestion_behavior_admitted": true,
+  "tuic_udp_relay_mode_quic_effective_relay_admitted": false,
+  "tuic_true_quic_dataplane_admitted": true,
+  "hysteria2_true_quic_dataplane_admitted": true,
+  "juicity_true_quic_h3_dataplane_admitted": true,
+  "quic_h3_family_true_dataplane_admitted": false,
+  "anytls_true_dataplane_admitted": true,
+  "protocol_outbound_partial_admitted": true,
+  "outbound_true_dataplane_admitted": false,
+  "matched_go_rust_default_daemon_benchmark_recorded": false,
+  "default_switch_allowed": false,
+  "default_path_mutation_allowed": false,
+  "product_chain_switch_allowed": false,
+  "true_rust_default_daemon_admitted": false,
+  "outbound_quic_go_dependency_preserved": true,
+  "external_outbound_required": true,
+  "external_quic_go_required": true,
+  "go_default_path_preserved": true,
+  "go_fallback_required": true,
+  "server": "stage131.example:443",
+  "default_datagram_iterations": 4,
+  "default_total_exchange_count": 5,
+  "authenticate_frame_len": 50,
+  "packet_frame_len": 56,
+  "gate_decision": "stage131 admits TUIC protocol-specific true QUIC dataplane behind an explicit Rust opt-in gate: Rust validates TUIC UUID/password, TLS1.3 h3 QUIC datagram config, EKM authenticate uni stream, native datagram packet relay, TCP-request UDP underlay, and congestion controller record; udp_relay_mode=quic effective relay, QUIC-family-wide admission, outbound default daemon, matched Go benchmark, and product-chain switches remain closed",
+  "rows": [
+    {
+      "area": "TUIC link, UUID, and TLS config",
+      "status": "admitted-native-opt-in",
+      "evidence": "Stage131 parses tuic:// through the shared link parser, validates UUID user/password, records disable_sni parity, and configures TLS1.3 h3 QUIC datagrams with Go keepalive and idle-timeout constants",
+      "boundary": "this is protocol-specific opt-in evidence and does not mutate daemon default outbound paths",
+      "next_action": "carry the TUIC link and TLS row into the final QUIC family matrix"
+    },
+    {
+      "area": "TUIC EKM auth stream",
+      "status": "admitted-local-true-quic",
+      "evidence": "Stage131 exports QUIC TLS keying material using UUID/password and sends the TUIC authenticate frame over a unidirectional stream",
+      "boundary": "external /root/project/outbound and /root/project/quic-go remain required until overall default daemon and product gates are admitted",
+      "next_action": "use this auth row in the QUIC/H3 family recertification gate"
+    },
+    {
+      "area": "TUIC native datagram packet relay",
+      "status": "admitted-native-datagram",
+      "evidence": "Stage131 sends and receives TUIC packet frames over QUIC datagrams with assoc_id, packet_id, fragment fields, target, and payload match counts recorded in the local plan benchmark",
+      "boundary": "udp_relay_mode=quic effective relay remains blocked because daenew records a FIXME and keeps native mode",
+      "next_action": "keep the effective QUIC relay caveat explicit until Go parity changes"
+    },
+    {
+      "area": "TUIC underlay and congestion",
+      "status": "admitted-contract",
+      "evidence": "Stage131 keeps TCP-request UDP underlay, Mark preservation, MPTCP drop, UDP original-network behavior, and BBR/cwnd record aligned with daenew TUIC",
+      "boundary": "matched Go default daemon benchmark is still missing",
+      "next_action": "include this row in outbound-wide recertification and default daemon admission criteria"
+    },
+    {
+      "area": "overall outbound/default admission",
+      "status": "blocked",
+      "evidence": "QUIC/H3 family recertification, matched Go/Rust daemon benchmark, and dae-wing/daed product-chain validation remain incomplete",
+      "boundary": "outbound_true_dataplane_admitted and default_switch_allowed remain false",
+      "next_action": "run a dedicated QUIC/H3 family gate after Hysteria2, TUIC, and Juicity protocol rows are all present"
+    }
+  ],
+  "benchmark": [
+    "Stage 131 records TUIC local true QUIC auth/datagram benchmark data in the local plan",
+    "Benchmark scope includes TLS1.3 QUIC handshake, EKM auth stream, native datagram packet relay, underlay contract, and congestion controller record",
+    "Matched Go default-daemon baseline is still missing"
+  ],
+  "validation_commands": [
+    "python3 -m json.tool testdata/rebuild-golden/engine/runtime_stage131/tuic_true_quic_dataplane_admission.json",
+    "python3 -m json.tool testdata/rebuild-golden/product/daemon/stage131_tuic_true_quic_dataplane_gate.json",
+    "cargo test --manifest-path rust/Cargo.toml -p dae-outbound stage131 -- --nocapture",
+    "cargo run --manifest-path rust/Cargo.toml -p dae-cli --bin dae-cli-optin --quiet -- runtime stage131-tuic-true-quic-dataplane-admission",
+    "cargo run --manifest-path rust/Cargo.toml -p dae-cli --bin dae-cli-optin --quiet -- runtime stage131-tuic-true-quic-dataplane-admission --execute-smoke",
+    "cargo test --manifest-path rust/Cargo.toml -p dae-cli stage131 -- --nocapture",
+    "cargo test --manifest-path rust/Cargo.toml -p dae-product stage131 -- --nocapture",
+    "cargo test --manifest-path rust/Cargo.toml -p dae-outbound stage130 -- --nocapture",
+    "cargo test --manifest-path rust/Cargo.toml -p dae-outbound -p dae-cli -p dae-product",
+    "cargo fmt --manifest-path rust/Cargo.toml --all -- --check",
+    "git diff --check"
+  ],
+  "remaining_blockers": [
+    "overall QUIC/H3 family recertification after Hysteria2/TUIC/Juicity are all admitted with their caveats",
+    "TUIC udp_relay_mode=quic effective relay remains blocked by daenew parity FIXME",
+    "overall outbound true dataplane recertification across all protocols",
+    "matched Go default daemon vs true Rust candidate benchmark",
+    "clean dae-wing and daed product-chain recertification"
+  ],
+  "source": [
+    "DAEX_RUST_REBUILD_PLAN_2026-05-16.md:stage131",
+    "DAENEW_RUST_REBUILD_MEMO_2026-05-16.md:25.1",
+    "DAENEW_RUST_REBUILD_MEMO_2026-05-16.md:25.2",
+    "DAENEW_RUST_REBUILD_MEMO_2026-05-16.md:25.5-25.10",
+    "DAENEW_RUST_REBUILD_MEMO_2026-05-16.md:26.15",
+    "DAENEW_RUST_REBUILD_MEMO_2026-05-16.md:26.21",
+    "/root/project/outbound/dialer/tuic/tuic.go",
+    "/root/project/outbound/protocol/tuic/client.go",
+    "/root/project/outbound/protocol/tuic/dialer.go",
+    "/root/project/outbound/protocol/tuic/protocol.go",
+    "/root/project/outbound/protocol/tuic/packet.go",
+    "/root/project/outbound/protocol/tuic/common/type.go",
+    "rust/crates/dae-outbound/src/tuic/dataplane.rs",
+    "rust/crates/dae-outbound/src/tuic/quic_loopback.rs",
+    "rust/crates/dae-outbound/src/tuic/wire.rs",
+    "rust/crates/dae-product/src/stage131_tuic_true_quic_gate.rs"
+  ]
+}
