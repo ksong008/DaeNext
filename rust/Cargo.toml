@@ -32,6 +32,7 @@ aes = "0.8"
 aes-gcm = "0.10"
 base64 = "0.22"
 blake3 = "1"
+bytes = "1"
 chacha20poly1305 = "0.10"
 dae-cli = { path = "crates/dae-cli" }
 dae-config-util = { path = "crates/dae-config-util" }
@@ -52,6 +53,7 @@ dae-sysdump = { path = "crates/dae-sysdump" }
 dae-trace = { path = "crates/dae-trace" }
 h3 = "0.0.8"
 h3-quinn = "0.0.10"
+http = "1"
 hkdf = "0.12"
 libc = "0.2"
 md-5 = "0.10"

@@ -21,6 +21,7 @@ mod hysteria2_underlay_stage109;
 mod juicity_certchain_stage115;
 mod juicity_h3_dependency_stage116;
 mod juicity_h3_dependency_stage117;
+mod juicity_h3_loopback_stage118;
 mod juicity_h3_stage114;
 mod product_protocol_matrix;
 mod protocol_https_proxy_82;

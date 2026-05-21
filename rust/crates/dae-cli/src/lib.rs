@@ -26,6 +26,7 @@ pub(crate) mod runtime_stage114_juicity_h3_queue_gate;
 pub(crate) mod runtime_stage115_juicity_certchain_gate;
 pub(crate) mod runtime_stage116_juicity_h3_dependency_gate;
 pub(crate) mod runtime_stage117_juicity_h3_dependency_admission_gate;
+pub(crate) mod runtime_stage118_juicity_h3_loopback_gate;
 pub(crate) mod runtime_stage26_candidate;
 pub(crate) mod runtime_stage27_candidate;
 pub(crate) mod runtime_stage29_preflight;
