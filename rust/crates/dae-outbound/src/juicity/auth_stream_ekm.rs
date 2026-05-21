@@ -287,7 +287,7 @@ async fn run_live_ekm_auth_server(
     })
 }
 
-fn export_juicity_auth_token(
+pub(super) fn export_juicity_auth_token(
     connection: &quinn::Connection,
     uuid: &[u8; 16],
     password: &[u8],

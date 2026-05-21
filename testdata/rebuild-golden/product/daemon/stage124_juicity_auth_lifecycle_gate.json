@@ -1,0 +1,105 @@
+{
+  "name": "stage124-juicity-auth-lifecycle-gate",
+  "stage": "stage124",
+  "prior_gate": "stage123-juicity-live-ekm-auth-gate",
+  "stage_complete": true,
+  "juicity_live_auth_uni_stream_harness_admitted": true,
+  "juicity_auth_token_live_ekm_admitted": true,
+  "juicity_send_authentication_lifecycle_admitted": true,
+  "juicity_underlay_auth_channel_order_admitted": true,
+  "juicity_multiple_dialauth_records_over_auth_stream_admitted": true,
+  "juicity_auth_stream_finish_boundary_admitted": true,
+  "juicity_dialauth_over_h3_admitted": false,
+  "juicity_transport_packet_conn_dataplane_admitted": false,
+  "juicity_stream_packet_conn_dataplane_admitted": false,
+  "juicity_packet_over_stream_admitted": false,
+  "juicity_congestion_behavior_admitted": false,
+  "juicity_true_quic_h3_dataplane_admitted": false,
+  "hysteria2_true_quic_dataplane_admitted": false,
+  "tuic_true_quic_dataplane_admitted": false,
+  "quic_h3_family_true_dataplane_admitted": false,
+  "anytls_true_dataplane_admitted": true,
+  "protocol_outbound_partial_admitted": true,
+  "outbound_true_dataplane_admitted": false,
+  "matched_go_rust_default_daemon_benchmark_recorded": false,
+  "default_switch_allowed": false,
+  "default_path_mutation_allowed": false,
+  "product_chain_switch_allowed": false,
+  "true_rust_default_daemon_admitted": false,
+  "outbound_quic_go_dependency_preserved": true,
+  "external_outbound_required": true,
+  "external_quic_go_required": true,
+  "go_default_path_preserved": true,
+  "go_fallback_required": true,
+  "ekm_label_len": 16,
+  "ekm_token_len": 32,
+  "underlay_auth_channel_capacity": 64,
+  "record_count": 3,
+  "gate_decision": "stage124 admits a local sendAuthentication lifecycle model for Juicity: live EKM Authenticate header first, then bounded UnderlayAuth channel records in FIFO order on the same auth uni stream, with finish/EOF boundary verified; encrypted TransportPacketConn, stream relay, congestion, outbound/default/product switches remain closed",
+  "rows": [
+    {
+      "area": "sendAuthentication lifecycle",
+      "status": "admitted-lifecycle-model",
+      "evidence": "Stage124 writes the live EKM Authenticate header before reading bounded UnderlayAuth records and sending them on the same local h3 auth uni stream",
+      "boundary": "model does not attach to the real outbound client ring or daemon default path",
+      "next_action": "connect the admitted lifecycle to encrypted TransportPacketConn and stream packet relay gates"
+    },
+    {
+      "area": "UnderlayAuth channel",
+      "status": "admitted-fifo-order",
+      "evidence": "Stage124 fixes channel capacity 64 and verifies three DialAuth records are enqueued, received, and observed by the server in order",
+      "boundary": "records are deterministic harness records, not production random IV/PSK underlay keys",
+      "next_action": "add runtime underlay key construction and packet encryption admission"
+    },
+    {
+      "area": "auth stream boundary",
+      "status": "admitted-finish-eof",
+      "evidence": "Stage124 verifies one auth uni stream per exchange, stream finish/ack, and server read_to_end transcript match",
+      "boundary": "context cancellation and production CloseWithError behavior are not default-admitted",
+      "next_action": "cover cancellation/error lifecycle with packet relay admission"
+    },
+    {
+      "area": "packet relay",
+      "status": "blocked",
+      "evidence": "TransportPacketConn encryption and nonzero UDP stream_packet_conn relay are still not executed",
+      "boundary": "juicity_true_quic_h3_dataplane_admitted remains false",
+      "next_action": "add UDP port 0 encrypted packet relay gate and nonzero UDP packet-over-stream gate"
+    }
+  ],
+  "benchmark": [
+    "Stage 124 records local auth lifecycle benchmark data in the local plan",
+    "Benchmark scope is QUIC TLS1.3+h3 ALPN EKM Authenticate header plus bounded UnderlayAuth channel multi-record write/read",
+    "Matched Go default-daemon baseline is still missing"
+  ],
+  "validation_commands": [
+    "python3 -m json.tool testdata/rebuild-golden/engine/runtime_stage124/juicity_auth_lifecycle_admission.json",
+    "python3 -m json.tool testdata/rebuild-golden/product/daemon/stage124_juicity_auth_lifecycle_gate.json",
+    "cargo test --manifest-path rust/Cargo.toml -p dae-outbound stage124 -- --nocapture",
+    "cargo run --manifest-path rust/Cargo.toml -p dae-cli --bin dae-cli-optin --quiet -- runtime stage124-juicity-auth-lifecycle-admission",
+    "cargo run --manifest-path rust/Cargo.toml -p dae-cli --bin dae-cli-optin --quiet -- runtime stage124-juicity-auth-lifecycle-admission --execute-smoke --benchmark-iters 5",
+    "cargo test --manifest-path rust/Cargo.toml -p dae-cli stage124 -- --nocapture",
+    "cargo test --manifest-path rust/Cargo.toml -p dae-product stage124 -- --nocapture",
+    "cargo test --manifest-path rust/Cargo.toml -p dae-outbound stage123 -- --nocapture",
+    "cargo test --manifest-path rust/Cargo.toml -p dae-outbound -p dae-cli -p dae-product",
+    "cargo fmt --manifest-path rust/Cargo.toml --all -- --check",
+    "git diff --check"
+  ],
+  "remaining_blockers": [
+    "Juicity TransportPacketConn shadowsocks encryption/decryption with JuicityReusedInfo for UDP port 0",
+    "Juicity stream_packet_conn packet-over-stream live relay for nonzero UDP targets",
+    "Juicity congestion behavior and packet relay benchmark",
+    "Hysteria2 full QUIC and TUIC true QUIC dataplanes",
+    "outbound registry/dialer group/health policy parity while preserving direct/block indices and NewDialerSetFromLinks semantics",
+    "matched Go default daemon vs true Rust candidate benchmark",
+    "clean dae-wing and daed product-chain recertification"
+  ],
+  "source": [
+    "DAEX_RUST_REBUILD_PLAN_2026-05-16.md:stage124",
+    "DAENEW_RUST_REBUILD_MEMO_2026-05-16.md:26.16",
+    "/root/project/outbound/protocol/juicity/client.go:sendAuthentication",
+    "/root/project/outbound/protocol/juicity/client.go:DialAuth",
+    "/root/project/outbound/protocol/tuic/protocol.go:GenToken",
+    "rust/crates/dae-outbound/src/juicity/auth_lifecycle.rs",
+    "rust/crates/dae-cli/src/runtime_stage124_juicity_auth_lifecycle_gate/"
+  ]
+}
