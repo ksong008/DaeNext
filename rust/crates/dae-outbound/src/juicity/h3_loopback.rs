@@ -3,6 +3,7 @@ use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
+use base64::{Engine as _, engine::general_purpose};
 use bytes::{Buf, Bytes};
 use h3::{client, server};
 use http::{Request, Response, StatusCode};
@@ -14,7 +15,7 @@ use rustls::{DigitallySignedStruct, SignatureScheme};
 
 use crate::error::OutboundError;
 
-use super::generate_cert_chain_hash;
+use super::{generate_cert_chain_hash, verify_pinned_certchain};
 
 pub const DEFAULT_H3_SERVER_NAME: &str = "localhost";
 pub const DEFAULT_H3_ALPN: &str = "h3";
@@ -28,6 +29,7 @@ pub struct JuicityH3LoopbackOptions {
     pub payload: Vec<u8>,
     pub iterations: usize,
     pub timeout: Duration,
+    pub verify_pinned_certchain: bool,
 }
 
 impl Default for JuicityH3LoopbackOptions {
@@ -37,6 +39,7 @@ impl Default for JuicityH3LoopbackOptions {
             payload: DEFAULT_H3_LOOPBACK_PAYLOAD.to_vec(),
             iterations: 1,
             timeout: Duration::from_secs(5),
+            verify_pinned_certchain: false,
         }
     }
 }
@@ -64,6 +67,11 @@ pub struct JuicityH3LoopbackReport {
     pub certificate_chain_der_count: usize,
     pub certificate_chain_hash_hex: String,
     pub verifier_server_name: String,
+    pub live_certchain_pin_format: Option<String>,
+    pub live_certchain_pin_len: usize,
+    pub live_certchain_pin_matched: bool,
+    pub live_certchain_pin_error: Option<String>,
+    pub ns_per_juicity_live_certchain_h3_exchange: Option<f64>,
     pub juicity_h3_handshake_admitted: bool,
     pub juicity_tls_verify_peer_certificate_hook_admitted: bool,
     pub juicity_tls_certchain_verification_admitted: bool,
@@ -79,19 +87,27 @@ struct CertCallbackState {
     cert_count: usize,
     chain_hash_hex: String,
     server_name: String,
+    pin_format: Option<String>,
+    pin_matched: bool,
+    pin_error: Option<String>,
 }
 
 #[derive(Debug)]
 struct RecordingServerCertVerifier {
     provider: Arc<rustls::crypto::CryptoProvider>,
     state: Arc<Mutex<CertCallbackState>>,
+    pinned_certchain_sha256: Option<String>,
 }
 
 impl RecordingServerCertVerifier {
-    fn new(state: Arc<Mutex<CertCallbackState>>) -> Arc<Self> {
+    fn new(
+        state: Arc<Mutex<CertCallbackState>>,
+        pinned_certchain_sha256: Option<String>,
+    ) -> Arc<Self> {
         Arc::new(Self {
             provider: Arc::new(rustls::crypto::aws_lc_rs::default_provider()),
             state,
+            pinned_certchain_sha256,
         })
     }
 }
@@ -109,11 +125,34 @@ impl ServerCertVerifier for RecordingServerCertVerifier {
         raw_certs.push(end_entity.as_ref());
         raw_certs.extend(intermediates.iter().map(|cert| cert.as_ref()));
         let chain_hash = generate_cert_chain_hash(&raw_certs);
+        let pin_check = self
+            .pinned_certchain_sha256
+            .as_deref()
+            .map(|pin| verify_pinned_certchain(&raw_certs, pin));
         if let Ok(mut state) = self.state.lock() {
             state.observed = true;
             state.cert_count = raw_certs.len();
             state.chain_hash_hex = hex_encode(&chain_hash);
             state.server_name = server_name.to_str().into_owned();
+            if let Some(check) = &pin_check {
+                match check {
+                    Ok(check) => {
+                        state.pin_format = Some(check.pin_format.clone());
+                        state.pin_matched = check.matched;
+                        state.pin_error = None;
+                    }
+                    Err(err) => {
+                        state.pin_format = None;
+                        state.pin_matched = false;
+                        state.pin_error = Some(err.to_string());
+                    }
+                }
+            }
+        }
+        if let Some(Err(err)) = pin_check {
+            return Err(rustls::Error::General(format!(
+                "juicity pinned certchain verification failed: {err}"
+            )));
         }
         Ok(ServerCertVerified::assertion())
     }
@@ -182,6 +221,9 @@ async fn run_h3_loopback_smoke_async(
     options: &JuicityH3LoopbackOptions,
 ) -> Result<JuicityH3LoopbackReport, OutboundError> {
     let (server_config, cert_der) = build_server_config(&options.server_name)?;
+    let pinned_certchain_sha256 = options
+        .verify_pinned_certchain
+        .then(|| encode_live_certchain_pin_url_base64(&cert_der));
     let server_endpoint = quinn::Endpoint::server(
         server_config,
         SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0),
@@ -197,7 +239,8 @@ async fn run_h3_loopback_smoke_async(
     });
 
     let verifier_state = Arc::new(Mutex::new(CertCallbackState::default()));
-    let client_config = build_client_config(Arc::clone(&verifier_state))?;
+    let client_config =
+        build_client_config(Arc::clone(&verifier_state), pinned_certchain_sha256.clone())?;
     let mut client_endpoint =
         quinn::Endpoint::client(SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0))
             .map_err(|err| bad_loopback(format!("create client endpoint: {err}")))?;
@@ -273,6 +316,9 @@ async fn run_h3_loopback_smoke_async(
     } else {
         callback.cert_count
     };
+    let live_certchain_requested = pinned_certchain_sha256.is_some();
+    let live_certchain_admitted =
+        live_certchain_requested && callback.observed && callback.pin_matched;
 
     Ok(JuicityH3LoopbackReport {
         server_name: options.server_name.clone(),
@@ -296,9 +342,15 @@ async fn run_h3_loopback_smoke_async(
         certificate_chain_der_count,
         certificate_chain_hash_hex: callback.chain_hash_hex,
         verifier_server_name: callback.server_name,
+        live_certchain_pin_format: callback.pin_format,
+        live_certchain_pin_len: pinned_certchain_sha256.as_deref().map_or(0, str::len),
+        live_certchain_pin_matched: callback.pin_matched,
+        live_certchain_pin_error: callback.pin_error,
+        ns_per_juicity_live_certchain_h3_exchange: live_certchain_requested
+            .then_some(elapsed_ns as f64 / options.iterations as f64),
         juicity_h3_handshake_admitted: h3_request_response_validated && quic_handshake_validated,
         juicity_tls_verify_peer_certificate_hook_admitted: callback.observed,
-        juicity_tls_certchain_verification_admitted: false,
+        juicity_tls_certchain_verification_admitted: live_certchain_admitted,
         juicity_dialauth_over_h3_admitted: false,
         juicity_transport_packet_conn_dataplane_admitted: false,
         juicity_stream_packet_conn_dataplane_admitted: false,
@@ -394,8 +446,9 @@ fn build_server_config(
 
 fn build_client_config(
     verifier_state: Arc<Mutex<CertCallbackState>>,
+    pinned_certchain_sha256: Option<String>,
 ) -> Result<quinn::ClientConfig, OutboundError> {
-    let verifier = RecordingServerCertVerifier::new(verifier_state);
+    let verifier = RecordingServerCertVerifier::new(verifier_state, pinned_certchain_sha256);
     let mut crypto =
         rustls::ClientConfig::builder_with_protocol_versions(&[&rustls::version::TLS13])
             .dangerous()
@@ -408,6 +461,12 @@ fn build_client_config(
     ));
     config.transport_config(Arc::new(transport_config()?));
     Ok(config)
+}
+
+fn encode_live_certchain_pin_url_base64(cert_der: &CertificateDer<'_>) -> String {
+    let raw_certs = [cert_der.as_ref()];
+    let chain_hash = generate_cert_chain_hash(&raw_certs);
+    general_purpose::URL_SAFE.encode(chain_hash)
 }
 
 fn transport_config() -> Result<quinn::TransportConfig, OutboundError> {
