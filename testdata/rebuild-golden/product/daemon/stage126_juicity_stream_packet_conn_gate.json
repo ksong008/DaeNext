@@ -1,0 +1,99 @@
+{
+  "name": "stage126-juicity-stream-packet-conn-gate",
+  "stage": "stage126",
+  "prior_gate": "stage125-juicity-transport-packet-conn-gate",
+  "stage_complete": true,
+  "juicity_send_authentication_lifecycle_admitted": true,
+  "juicity_transport_packet_conn_dataplane_admitted": true,
+  "juicity_stream_packet_conn_live_stream_admitted": true,
+  "juicity_stream_packet_conn_frame_order_admitted": true,
+  "juicity_packet_over_stream_admitted": true,
+  "juicity_stream_packet_conn_dataplane_admitted": true,
+  "juicity_congestion_behavior_admitted": false,
+  "juicity_true_quic_h3_dataplane_admitted": false,
+  "hysteria2_true_quic_dataplane_admitted": false,
+  "tuic_true_quic_dataplane_admitted": false,
+  "quic_h3_family_true_dataplane_admitted": false,
+  "anytls_true_dataplane_admitted": true,
+  "protocol_outbound_partial_admitted": true,
+  "outbound_true_dataplane_admitted": false,
+  "matched_go_rust_default_daemon_benchmark_recorded": false,
+  "default_switch_allowed": false,
+  "default_path_mutation_allowed": false,
+  "product_chain_switch_allowed": false,
+  "true_rust_default_daemon_admitted": false,
+  "outbound_quic_go_dependency_preserved": true,
+  "external_outbound_required": true,
+  "external_quic_go_required": true,
+  "go_default_path_preserved": true,
+  "go_fallback_required": true,
+  "alpn_protocol": "h3",
+  "connection_network_byte": 3,
+  "request_payload_len": 28,
+  "response_payload_len": 28,
+  "gate_decision": "stage126 admits Juicity nonzero UDP stream_packet_conn local live relay: client writes network byte plus initial metadata plus packet frame over a TLS1.3 h3 bidirectional stream, server parses and echoes a packet frame, and both sides validate finish/ack/read boundaries; congestion, full QUIC/H3 integration, outbound/default/product switches remain closed",
+  "rows": [
+    {
+      "area": "stream PacketConn frame",
+      "status": "admitted-frame-order",
+      "evidence": "Stage126 uses metadata + uint16 payload length + payload frames after the stream connection header",
+      "boundary": "this admits nonzero UDP packet-over-stream framing only",
+      "next_action": "carry the frame path into full Juicity client integration after congestion is covered"
+    },
+    {
+      "area": "live QUIC stream relay",
+      "status": "admitted-local-live-stream",
+      "evidence": "Stage126 opens a local QUIC TLS1.3 h3 bidirectional stream, writes the request packet frame, reads the response packet frame, and verifies the echoed target and payload",
+      "boundary": "local loopback does not admit production congestion behavior or outbound registry switching",
+      "next_action": "add sustained congestion and relay benchmark coverage"
+    },
+    {
+      "area": "close boundary",
+      "status": "admitted-finish-ack-read",
+      "evidence": "Stage126 counts client/server finish, ack, accept, read, write, and match events for each iteration",
+      "boundary": "stream close semantics are local admission evidence, not full daemon lifecycle evidence",
+      "next_action": "fold the admitted path into the Juicity true dataplane queue"
+    },
+    {
+      "area": "overall Juicity true dataplane",
+      "status": "blocked",
+      "evidence": "congestion behavior, full QUIC/H3 client integration, and default/product recertification are still incomplete",
+      "boundary": "juicity_true_quic_h3_dataplane_admitted remains false",
+      "next_action": "cover congestion before reopening true Juicity/default switches"
+    }
+  ],
+  "benchmark": [
+    "Stage 126 records local stream_packet_conn live relay benchmark data in the local plan",
+    "Benchmark scope is QUIC TLS1.3 h3 bidirectional stream packet-over-stream request/response exchange",
+    "Matched Go default-daemon baseline is still missing"
+  ],
+  "validation_commands": [
+    "python3 -m json.tool testdata/rebuild-golden/engine/runtime_stage126/juicity_stream_packet_conn_admission.json",
+    "python3 -m json.tool testdata/rebuild-golden/product/daemon/stage126_juicity_stream_packet_conn_gate.json",
+    "cargo test --manifest-path rust/Cargo.toml -p dae-outbound stage126 -- --nocapture",
+    "cargo run --manifest-path rust/Cargo.toml -p dae-cli --bin dae-cli-optin --quiet -- runtime stage126-juicity-stream-packet-conn-admission",
+    "cargo run --manifest-path rust/Cargo.toml -p dae-cli --bin dae-cli-optin --quiet -- runtime stage126-juicity-stream-packet-conn-admission --execute-smoke --benchmark-iters 5",
+    "cargo test --manifest-path rust/Cargo.toml -p dae-cli stage126 -- --nocapture",
+    "cargo test --manifest-path rust/Cargo.toml -p dae-product stage126 -- --nocapture",
+    "cargo test --manifest-path rust/Cargo.toml -p dae-outbound stage125 -- --nocapture",
+    "cargo test --manifest-path rust/Cargo.toml -p dae-outbound -p dae-cli -p dae-product",
+    "cargo fmt --manifest-path rust/Cargo.toml --all -- --check",
+    "git diff --check"
+  ],
+  "remaining_blockers": [
+    "Juicity congestion behavior and packet relay benchmark under sustained load",
+    "full Juicity QUIC/H3 client integration with outbound registry/dialer group/health policy",
+    "Hysteria2 full QUIC and TUIC true QUIC dataplanes",
+    "matched Go default daemon vs true Rust candidate benchmark",
+    "clean dae-wing and daed product-chain recertification"
+  ],
+  "source": [
+    "DAEX_RUST_REBUILD_PLAN_2026-05-16.md:stage126",
+    "DAENEW_RUST_REBUILD_MEMO_2026-05-16.md:26.16",
+    "/root/project/outbound/protocol/juicity/dialer.go:DialContext",
+    "/root/project/outbound/protocol/juicity/stream_conn.go",
+    "/root/project/outbound/protocol/juicity/stream_packet_conn.go",
+    "rust/crates/dae-outbound/src/juicity/stream_packet_conn.rs",
+    "rust/crates/dae-cli/src/runtime_stage126_juicity_stream_packet_conn_gate/"
+  ]
+}
