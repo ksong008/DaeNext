@@ -41,6 +41,7 @@ pub(crate) mod runtime_stage129_juicity_outbound_dataplane_gate;
 pub(crate) mod runtime_stage130_hysteria2_true_quic_gate;
 pub(crate) mod runtime_stage131_tuic_true_quic_gate;
 pub(crate) mod runtime_stage132_quic_h3_family_recertification_gate;
+pub(crate) mod runtime_stage133_outbound_true_dataplane_readiness_gate;
 pub(crate) mod runtime_stage26_candidate;
 pub(crate) mod runtime_stage27_candidate;
 pub(crate) mod runtime_stage29_preflight;
