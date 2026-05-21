@@ -107,6 +107,7 @@ use crate::runtime_stage118_juicity_h3_loopback_gate::run_stage118_juicity_h3_lo
 use crate::runtime_stage119_juicity_live_certchain_gate::run_stage119_juicity_live_certchain_admission;
 use crate::runtime_stage120_juicity_packet_state_gate::run_stage120_juicity_packet_state_admission;
 use crate::runtime_stage121_juicity_auth_stream_gate::run_stage121_juicity_auth_stream_admission;
+use crate::runtime_stage122_juicity_live_auth_stream_gate::run_stage122_juicity_live_auth_stream_admission;
 
 pub(crate) fn run_runtime(args: &[String]) -> RunnerOutput {
     match args.first().map(String::as_str) {
@@ -388,6 +389,9 @@ pub(crate) fn run_runtime(args: &[String]) -> RunnerOutput {
         }
         Some("stage121-juicity-auth-stream-admission") => {
             run_stage121_juicity_auth_stream_admission(&args[1..])
+        }
+        Some("stage122-juicity-live-auth-stream-admission") => {
+            run_stage122_juicity_live_auth_stream_admission(&args[1..])
         }
         Some(subcommand) => {
             RunnerOutput::usage(format!("unsupported runtime subcommand: {subcommand}"))
