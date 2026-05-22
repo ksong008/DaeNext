@@ -1,0 +1,83 @@
+{
+  "name": "stage152-rust-signal-control-plane-smoke-gate",
+  "stage": "stage152",
+  "evidence_class": "rust-daemon-opt-in-signal-control-plane-smoke-gate",
+  "execute_smoke": false,
+  "read_only": true,
+  "blocked": false,
+  "blockers": [],
+  "rust_daemon_identity_scaffolded": true,
+  "rust_daemon_lifecycle_smoke_passed": true,
+  "rust_control_plane_owner_preflight_recorded": true,
+  "signal_control_plane_smoke_harness_available": true,
+  "go_default_path_preserved": true,
+  "go_fallback_required": true,
+  "rust_signal_control_plane_smoke_passed": false,
+  "reload_signal_progress_owner_sequence_validated": false,
+  "suspend_signal_progress_sequence_validated": false,
+  "abort_file_one_shot_consumed": false,
+  "isolated_pid_removed_on_stop": false,
+  "stage151_owner_preflight_reused": false,
+  "isolated_signal_control_plane_paths_validated": false,
+  "production_signal_handler_installed": false,
+  "production_listener_bound": false,
+  "ebpf_attached": false,
+  "production_paths_mutated": false,
+  "rust_default_run_entrypoint_exists": false,
+  "rust_default_control_plane_entrypoint_admitted": false,
+  "benchmark_executable_now": false,
+  "matched_go_rust_default_daemon_benchmark_recorded": false,
+  "true_rust_default_daemon_admitted": false,
+  "default_switch_allowed": false,
+  "default_path_mutation_allowed": false,
+  "product_chain_switch_allowed": false,
+  "signal_scope": [
+    "synthetic SIGUSR1 reload writes ReloadSend, daemon ReloadProcessing, owner preflight, ReloadDone",
+    "synthetic SIGUSR2 suspend writes ReloadProcessing then ReloadDone",
+    "abort marker is consumed once before reload owner sequence",
+    "synthetic SIGTERM removes isolated pid file",
+    "no production signal handler, listener, or eBPF attach"
+  ],
+  "remaining_blockers": [
+    "Stage152 uses synthetic isolated signal flow, not production OS signal handlers",
+    "Rust default run entrypoint remains absent",
+    "production tproxy/eBPF/control-plane traffic is not started",
+    "matched Go/Rust default daemon benchmark remains blocked",
+    "default daemon and product-chain switches remain closed"
+  ],
+  "next_admission_queue": [
+    {
+      "stage": "stage153",
+      "target": "Rust default run entrypoint admission preflight",
+      "required_output": "prove non-default run entrypoint wrapper can compose lifecycle, signal, and owner smoke without mutating Go default path"
+    },
+    {
+      "stage": "stage154",
+      "target": "matched default daemon benchmark execution",
+      "required_output": "run Go and Rust daemon identities on the same corpus only after run entrypoint and control-plane admission pass"
+    }
+  ],
+  "validation_commands": [
+    "cargo run --manifest-path rust/Cargo.toml -p dae-daemon --bin dae-daemon-optin -- stage152-signal-control-plane-smoke --root /tmp/dae-stage152-signal-control-plane-smoke",
+    "python3 -m json.tool testdata/rebuild-golden/engine/runtime_stage152/rust_signal_control_plane_smoke_gate.json",
+    "python3 -m json.tool testdata/rebuild-golden/product/daemon/stage152_rust_signal_control_plane_smoke_gate.json",
+    "cargo run --manifest-path rust/Cargo.toml -p dae-cli --bin dae-cli-optin --quiet -- runtime stage152-rust-signal-control-plane-smoke-gate",
+    "cargo run --manifest-path rust/Cargo.toml -p dae-cli --bin dae-cli-optin --quiet -- runtime stage152-rust-signal-control-plane-smoke-gate --execute-smoke --root /tmp/dae-stage152-cli-signal-control-plane",
+    "cargo test --manifest-path rust/Cargo.toml -p dae-daemon stage152 -- --nocapture",
+    "cargo test --manifest-path rust/Cargo.toml -p dae-cli stage152 -- --nocapture",
+    "cargo test --manifest-path rust/Cargo.toml -p dae-product stage152 -- --nocapture",
+    "cargo test --manifest-path rust/Cargo.toml -p dae-cli stage151 -- --nocapture",
+    "cargo test --manifest-path rust/Cargo.toml -p dae-daemon -p dae-cli -p dae-product -q",
+    "cargo fmt --manifest-path rust/Cargo.toml --all -- --check",
+    "git diff --check"
+  ],
+  "source": [
+    "DAEX_RUST_REBUILD_PLAN_2026-05-16.md:stage152",
+    "DAENEW_RUST_REBUILD_MEMO_2026-05-16.md:15.1",
+    "DAENEW_RUST_REBUILD_MEMO_2026-05-16.md:15.2",
+    "DAENEW_RUST_REBUILD_MEMO_2026-05-16.md:15.4",
+    "DAENEW_RUST_REBUILD_MEMO_2026-05-16.md:15.5",
+    "rust/crates/dae-daemon/src/signal.rs",
+    "rust/crates/dae-daemon/src/control_plane.rs"
+  ]
+}

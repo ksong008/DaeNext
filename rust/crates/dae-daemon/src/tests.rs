@@ -3,6 +3,7 @@ use serde_json::Value;
 use crate::{
     daemon_identity, run_with_args_and_version, stage149_identity_preflight_report,
     stage150_lifecycle_smoke_report, stage151_control_plane_owner_preflight_report,
+    stage152_signal_control_plane_smoke_report,
 };
 
 #[test]
@@ -182,5 +183,71 @@ fn daemon_runner_stage151_control_plane_owner_command_outputs_json() {
             .unwrap()
     );
     assert!(!json["production_listener_bound"].as_bool().unwrap());
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[test]
+fn stage152_signal_control_plane_smoke_uses_isolated_paths() {
+    let root =
+        std::env::temp_dir().join(format!("dae-stage152-daemon-test-{}", std::process::id()));
+    let report = stage152_signal_control_plane_smoke_report(&root).unwrap();
+    assert!(
+        report["rust_signal_control_plane_smoke_passed"]
+            .as_bool()
+            .unwrap()
+    );
+    assert!(
+        report["reload_signal_progress_owner_sequence_validated"]
+            .as_bool()
+            .unwrap()
+    );
+    assert!(
+        report["suspend_signal_progress_sequence_validated"]
+            .as_bool()
+            .unwrap()
+    );
+    assert!(report["abort_file_one_shot_consumed"].as_bool().unwrap());
+    assert!(report["isolated_pid_removed_on_stop"].as_bool().unwrap());
+    assert!(
+        !report["production_signal_handler_installed"]
+            .as_bool()
+            .unwrap()
+    );
+    assert!(!report["production_listener_bound"].as_bool().unwrap());
+    assert!(!report["ebpf_attached"].as_bool().unwrap());
+    assert!(!report["default_switch_allowed"].as_bool().unwrap());
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[test]
+fn daemon_runner_stage152_signal_control_plane_command_outputs_json() {
+    let root =
+        std::env::temp_dir().join(format!("dae-stage152-runner-test-{}", std::process::id()));
+    let output = run_with_args_and_version(
+        [
+            "stage152-signal-control-plane-smoke".to_owned(),
+            "--root".to_owned(),
+            root.display().to_string(),
+        ],
+        "test-version",
+    );
+    assert_eq!(output.exit_code, 0, "{}", output.stderr);
+    assert_eq!(output.stderr, "");
+    let json: Value = serde_json::from_str(&output.stdout).unwrap();
+    assert!(
+        json["rust_signal_control_plane_smoke_passed"]
+            .as_bool()
+            .unwrap()
+    );
+    assert!(
+        json["owner"]["rust_control_plane_owner_smoke_passed"]
+            .as_bool()
+            .unwrap()
+    );
+    assert!(
+        !json["rust_default_control_plane_entrypoint_admitted"]
+            .as_bool()
+            .unwrap()
+    );
     let _ = std::fs::remove_dir_all(root);
 }
