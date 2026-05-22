@@ -79,6 +79,7 @@ pub mod stage168_matched_benchmark_execution_gate;
 pub mod stage169_matched_benchmark_artifact_builder;
 pub mod stage170_matched_benchmark_artifact_writer;
 pub mod stage171_matched_benchmark_metadata_digest;
+pub mod stage172_matched_benchmark_command_capture;
 pub mod stage23_completion;
 pub mod stage24_product_gate;
 pub mod stage25_execution_queue;
@@ -713,6 +714,11 @@ pub use stage170_matched_benchmark_artifact_writer::{
 pub use stage171_matched_benchmark_metadata_digest::{
     Stage171MatchedBenchmarkMetadataDigestContract, Stage171MatchedBenchmarkMetadataDigestRow,
     stage171_matched_benchmark_metadata_digest_contract,
+};
+pub use stage172_matched_benchmark_command_capture::{
+    Stage172MatchedBenchmarkCommandCaptureContract, Stage172MatchedBenchmarkCommandCaptureRow,
+    Stage172MatchedBenchmarkCommandTemplateRow,
+    stage172_matched_benchmark_command_capture_contract,
 };
 pub use systemd::{SystemdContract, systemd_contract};
 pub use true_daemon_admission::{
