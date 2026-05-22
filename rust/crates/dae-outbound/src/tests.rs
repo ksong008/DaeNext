@@ -60,6 +60,7 @@ mod dataplane_vless_vmess_stage136;
 mod dataplane_vless_vmess_stage137;
 mod dataplane_vless_vmess_stage139;
 mod dataplane_vless_vmess_stage140;
+mod dataplane_vless_vmess_stage141;
 mod dataplane_vmess;
 mod group_policy;
 mod protocol_modern;
