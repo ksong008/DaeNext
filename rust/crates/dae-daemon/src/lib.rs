@@ -3,6 +3,7 @@ pub mod identity;
 pub mod lifecycle;
 pub mod preflight;
 pub mod runner;
+pub mod signal;
 pub mod version;
 
 #[cfg(test)]
@@ -22,4 +23,5 @@ pub use lifecycle::{
 };
 pub use preflight::stage149_identity_preflight_report;
 pub use runner::{DaemonOutput, run_with_args_and_version};
+pub use signal::{default_stage152_root, stage152_signal_control_plane_smoke_report};
 pub use version::version_from_env;
