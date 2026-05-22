@@ -72,6 +72,7 @@ pub(crate) mod runtime_stage160_listener_ebpf_harness_gate;
 pub(crate) mod runtime_stage161_temporary_ebpf_map_gate;
 pub(crate) mod runtime_stage162_temporary_ebpf_program_gate;
 pub(crate) mod runtime_stage163_bpf_owner_handoff_queue_gate;
+pub(crate) mod runtime_stage164_bpf_owner_handoff_smoke_gate;
 pub(crate) mod runtime_stage26_candidate;
 pub(crate) mod runtime_stage27_candidate;
 pub(crate) mod runtime_stage29_preflight;
