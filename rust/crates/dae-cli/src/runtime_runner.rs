@@ -171,6 +171,7 @@ use crate::runtime_stage182_production_rust_daemon_admission_preflight::run_stag
 use crate::runtime_stage183_corpus_command_admission_binding::run_stage183_corpus_command_admission_binding;
 use crate::runtime_stage184_same_corpus_daemon_execution_smoke::run_stage184_same_corpus_daemon_execution_smoke;
 use crate::runtime_stage185_production_dataplane_evidence_gate::run_stage185_production_dataplane_evidence_gate;
+use crate::runtime_stage186_reload_runtime_parity_gate::run_stage186_reload_runtime_parity_gate;
 
 pub(crate) fn run_runtime(args: &[String]) -> RunnerOutput {
     match args.first().map(String::as_str) {
@@ -644,6 +645,9 @@ pub(crate) fn run_runtime(args: &[String]) -> RunnerOutput {
         }
         Some("stage185-production-dataplane-listener-tc-ebpf-evidence-gate") => {
             run_stage185_production_dataplane_evidence_gate(&args[1..])
+        }
+        Some("stage186-reload-runtime-parity-evidence-gate") => {
+            run_stage186_reload_runtime_parity_gate(&args[1..])
         }
         Some(subcommand) => {
             RunnerOutput::usage(format!("unsupported runtime subcommand: {subcommand}"))
