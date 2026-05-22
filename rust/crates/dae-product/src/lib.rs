@@ -66,6 +66,7 @@ pub mod stage155_product_chain_blocker_review_gate;
 pub mod stage156_default_run_identity_gate;
 pub mod stage157_control_plane_entrypoint_gate;
 pub mod stage158_matched_benchmark_execution_gate;
+pub mod stage159_listener_ebpf_policy_gate;
 pub mod stage23_completion;
 pub mod stage24_product_gate;
 pub mod stage25_execution_queue;
@@ -646,6 +647,10 @@ pub use stage157_control_plane_entrypoint_gate::{
 pub use stage158_matched_benchmark_execution_gate::{
     Stage158MatchedBenchmarkExecutionGateContract, Stage158MatchedBenchmarkExecutionGateRow,
     stage158_matched_benchmark_execution_gate_contract,
+};
+pub use stage159_listener_ebpf_policy_gate::{
+    Stage159ListenerEbpfPolicyGateContract, Stage159ListenerEbpfPolicyGateRow,
+    stage159_listener_ebpf_policy_gate_contract,
 };
 pub use systemd::{SystemdContract, systemd_contract};
 pub use true_daemon_admission::{
