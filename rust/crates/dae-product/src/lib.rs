@@ -60,6 +60,7 @@ pub mod stage149_daemon_identity_scaffold_gate;
 pub mod stage150_daemon_lifecycle_smoke_gate;
 pub mod stage151_control_plane_owner_preflight_gate;
 pub mod stage152_signal_control_plane_smoke_gate;
+pub mod stage153_run_entrypoint_preflight_gate;
 pub mod stage23_completion;
 pub mod stage24_product_gate;
 pub mod stage25_execution_queue;
@@ -616,6 +617,10 @@ pub use stage151_control_plane_owner_preflight_gate::{
 pub use stage152_signal_control_plane_smoke_gate::{
     Stage152SignalControlPlaneSmokeGateContract, Stage152SignalControlPlaneSmokeGateRow,
     stage152_signal_control_plane_smoke_gate_contract,
+};
+pub use stage153_run_entrypoint_preflight_gate::{
+    Stage153RunEntrypointPreflightGateContract, Stage153RunEntrypointPreflightGateRow,
+    stage153_run_entrypoint_preflight_gate_contract,
 };
 pub use systemd::{SystemdContract, systemd_contract};
 pub use true_daemon_admission::{

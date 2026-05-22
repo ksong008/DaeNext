@@ -3,7 +3,7 @@ use serde_json::Value;
 use crate::{
     daemon_identity, run_with_args_and_version, stage149_identity_preflight_report,
     stage150_lifecycle_smoke_report, stage151_control_plane_owner_preflight_report,
-    stage152_signal_control_plane_smoke_report,
+    stage152_signal_control_plane_smoke_report, stage153_run_entrypoint_preflight_report,
 };
 
 #[test]
@@ -249,5 +249,71 @@ fn daemon_runner_stage152_signal_control_plane_command_outputs_json() {
             .as_bool()
             .unwrap()
     );
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[test]
+fn stage153_run_entrypoint_preflight_composes_prior_smokes() {
+    let root =
+        std::env::temp_dir().join(format!("dae-stage153-daemon-test-{}", std::process::id()));
+    let report = stage153_run_entrypoint_preflight_report(&root).unwrap();
+    assert!(
+        report["non_default_run_entrypoint_wrapper_available"]
+            .as_bool()
+            .unwrap()
+    );
+    assert!(report["run_entrypoint_wrapper_composed"].as_bool().unwrap());
+    assert!(
+        report["run_entrypoint_lifecycle_smoke_reused"]
+            .as_bool()
+            .unwrap()
+    );
+    assert!(
+        report["run_entrypoint_signal_control_plane_smoke_reused"]
+            .as_bool()
+            .unwrap()
+    );
+    assert!(
+        report["go_default_run_command_preserved"]
+            .as_bool()
+            .unwrap()
+    );
+    assert!(!report["production_run_command_replaced"].as_bool().unwrap());
+    assert!(
+        !report["rust_default_run_entrypoint_exists"]
+            .as_bool()
+            .unwrap()
+    );
+    assert!(!report["default_switch_allowed"].as_bool().unwrap());
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[test]
+fn daemon_runner_stage153_run_entrypoint_command_outputs_json() {
+    let root =
+        std::env::temp_dir().join(format!("dae-stage153-runner-test-{}", std::process::id()));
+    let output = run_with_args_and_version(
+        [
+            "stage153-run-entrypoint-preflight".to_owned(),
+            "--root".to_owned(),
+            root.display().to_string(),
+        ],
+        "test-version",
+    );
+    assert_eq!(output.exit_code, 0, "{}", output.stderr);
+    assert_eq!(output.stderr, "");
+    let json: Value = serde_json::from_str(&output.stdout).unwrap();
+    assert!(json["run_entrypoint_wrapper_composed"].as_bool().unwrap());
+    assert!(
+        json["composed_smokes"]["lifecycle"]["rust_daemon_lifecycle_smoke_passed"]
+            .as_bool()
+            .unwrap()
+    );
+    assert!(
+        json["composed_smokes"]["signal_control_plane"]["rust_signal_control_plane_smoke_passed"]
+            .as_bool()
+            .unwrap()
+    );
+    assert!(!json["production_run_command_replaced"].as_bool().unwrap());
     let _ = std::fs::remove_dir_all(root);
 }
