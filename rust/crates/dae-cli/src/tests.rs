@@ -29,6 +29,7 @@ mod runtime_control_plane_owner_stage151;
 mod runtime_daemon_identity_stage148;
 mod runtime_daemon_identity_stage149;
 mod runtime_daemon_lifecycle_stage150;
+mod runtime_default_run_identity_stage156;
 mod runtime_https_proxy_stage82;
 mod runtime_hysteria2_full_quic_stage110;
 mod runtime_hysteria2_true_quic_stage130;
