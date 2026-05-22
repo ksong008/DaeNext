@@ -95,6 +95,7 @@ pub mod stage184_same_corpus_daemon_execution_smoke;
 pub mod stage185_production_dataplane_evidence_gate;
 pub mod stage186_reload_runtime_parity_gate;
 pub mod stage187_matched_benchmark_readiness_gate;
+pub mod stage188_bounded_benchmark_hard_gate_resolution;
 pub mod stage23_completion;
 pub mod stage24_product_gate;
 pub mod stage25_execution_queue;
@@ -804,6 +805,10 @@ pub use stage186_reload_runtime_parity_gate::{
 pub use stage187_matched_benchmark_readiness_gate::{
     Stage187Gate, Stage187MatchedBenchmarkReadinessGateContract, Stage187ReadinessRow,
     stage187_matched_benchmark_readiness_gate_contract,
+};
+pub use stage188_bounded_benchmark_hard_gate_resolution::{
+    Stage188BoundedBenchmarkHardGateResolutionContract, Stage188Gate, Stage188ResolutionRow,
+    stage188_bounded_benchmark_hard_gate_resolution_contract,
 };
 pub use systemd::{SystemdContract, systemd_contract};
 pub use true_daemon_admission::{
