@@ -9,6 +9,7 @@ pub mod mux;
 pub mod quic_h3;
 pub mod reality;
 pub mod reality_aead;
+pub mod reality_utls_synthetic;
 pub mod tls;
 pub mod tls_fragment;
 pub mod utls_fingerprint;
@@ -60,6 +61,10 @@ pub use reality_aead::{
     RealityAeadAlgorithm, RealitySessionIdMutationOptions, RealitySessionIdMutationReport,
     apply_reality_session_id_to_hello_raw, mutate_reality_session_id, reality_auth_key,
     reality_session_id_mutation_report, reality_session_id_plaintext,
+};
+pub use reality_utls_synthetic::{
+    SyntheticRealityUtlsMutationOptions, SyntheticRealityUtlsMutationReport,
+    synthetic_reality_utls_mutation_report,
 };
 pub use tls::{
     DEFAULT_TLS_ALPN, DEFAULT_TLS_SERVER_NAME, TlsLoopbackMaterial, TlsServerObservation,
