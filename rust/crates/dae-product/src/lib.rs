@@ -57,6 +57,7 @@ pub mod stage146_shared_transport_outbound_recertification_gate;
 pub mod stage147_matched_benchmark_readiness_gate;
 pub mod stage148_daemon_identity_preflight_gate;
 pub mod stage149_daemon_identity_scaffold_gate;
+pub mod stage150_daemon_lifecycle_smoke_gate;
 pub mod stage23_completion;
 pub mod stage24_product_gate;
 pub mod stage25_execution_queue;
@@ -601,6 +602,10 @@ pub use stage148_daemon_identity_preflight_gate::{
 pub use stage149_daemon_identity_scaffold_gate::{
     Stage149DaemonIdentityAdmissionQueueRow, Stage149DaemonIdentityScaffoldGateContract,
     Stage149DaemonIdentityScaffoldGateRow, stage149_daemon_identity_scaffold_gate_contract,
+};
+pub use stage150_daemon_lifecycle_smoke_gate::{
+    Stage150DaemonLifecycleSmokeGateContract, Stage150DaemonLifecycleSmokeGateRow,
+    stage150_daemon_lifecycle_smoke_gate_contract,
 };
 pub use systemd::{SystemdContract, systemd_contract};
 pub use true_daemon_admission::{

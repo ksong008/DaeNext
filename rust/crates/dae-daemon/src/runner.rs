@@ -1,4 +1,5 @@
 use crate::identity::daemon_identity;
+use crate::lifecycle::{default_stage150_root, stage150_lifecycle_smoke_report};
 use crate::preflight::stage149_identity_preflight_report;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -38,6 +39,7 @@ pub fn run_with_args_and_version(
         Some("stage149-identity-preflight") if args.len() == 1 => {
             DaemonOutput::ok(format!("{}\n", stage149_identity_preflight_report(version)))
         }
+        Some("stage150-lifecycle-smoke") => run_stage150_lifecycle_smoke_command(&args[1..]),
         Some("identity") | Some("stage149-identity-preflight") => {
             DaemonOutput::usage("unsupported dae-daemon-optin argument")
         }
@@ -45,5 +47,36 @@ pub fn run_with_args_and_version(
             DaemonOutput::usage(format!("unsupported dae-daemon-optin command: {command}"))
         }
         None => DaemonOutput::usage("missing dae-daemon-optin command"),
+    }
+}
+
+fn run_stage150_lifecycle_smoke_command(args: &[String]) -> DaemonOutput {
+    let mut root = default_stage150_root();
+    let mut iter = args.iter();
+    while let Some(arg) = iter.next() {
+        match arg.as_str() {
+            "--root" => {
+                let Some(value) = iter.next() else {
+                    return DaemonOutput::usage("missing stage150 --root value");
+                };
+                root = value.into();
+            }
+            _ if arg.starts_with("--root=") => {
+                root = arg.split_once('=').unwrap().1.into();
+            }
+            _ => {
+                return DaemonOutput::usage(format!(
+                    "unsupported stage150 lifecycle argument: {arg}"
+                ));
+            }
+        }
+    }
+    match stage150_lifecycle_smoke_report(&root) {
+        Ok(report) => DaemonOutput::ok(format!("{report}\n")),
+        Err(err) => DaemonOutput {
+            stdout: String::new(),
+            stderr: format!("{err}\n"),
+            exit_code: 1,
+        },
     }
 }
