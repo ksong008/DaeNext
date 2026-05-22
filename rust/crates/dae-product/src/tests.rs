@@ -38,6 +38,7 @@ mod daemon_matched_benchmark_artifact_stage180;
 mod daemon_matched_benchmark_artifact_stage181;
 mod daemon_matched_benchmark_execution_stage158;
 mod daemon_matched_benchmark_execution_stage168;
+mod daemon_matched_benchmark_readiness_stage187;
 mod daemon_matched_benchmark_stage147;
 mod daemon_product_chain_blocker_stage155;
 mod daemon_production_dataplane_evidence_stage185;
