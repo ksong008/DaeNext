@@ -8,4 +8,5 @@ repository.workspace = true
 [dependencies]
 dae-control.workspace = true
 dae-core-types.workspace = true
+dae-ebpf-support.workspace = true
 serde_json.workspace = true
