@@ -162,6 +162,7 @@ use crate::runtime_stage173_matched_benchmark_command_capture_verifier::run_stag
 use crate::runtime_stage174_matched_benchmark_real_corpus_queue_gate::run_stage174_matched_benchmark_real_corpus_queue_gate;
 use crate::runtime_stage175_matched_benchmark_real_corpus_candidate_materializer::run_stage175_matched_benchmark_real_corpus_candidate_materializer;
 use crate::runtime_stage176_matched_benchmark_real_corpus_candidate_verifier::run_stage176_matched_benchmark_real_corpus_candidate_verifier;
+use crate::runtime_stage177_matched_benchmark_real_corpus_review_queue_gate::run_stage177_matched_benchmark_real_corpus_review_queue_gate;
 
 pub(crate) fn run_runtime(args: &[String]) -> RunnerOutput {
     match args.first().map(String::as_str) {
@@ -608,6 +609,9 @@ pub(crate) fn run_runtime(args: &[String]) -> RunnerOutput {
         }
         Some("stage176-matched-benchmark-real-corpus-candidate-artifact-verifier") => {
             run_stage176_matched_benchmark_real_corpus_candidate_verifier(&args[1..])
+        }
+        Some("stage177-matched-benchmark-real-corpus-review-admission-queue-gate") => {
+            run_stage177_matched_benchmark_real_corpus_review_queue_gate(&args[1..])
         }
         Some(subcommand) => {
             RunnerOutput::usage(format!("unsupported runtime subcommand: {subcommand}"))
