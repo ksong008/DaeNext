@@ -1,0 +1,228 @@
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Stage170MatchedBenchmarkArtifactWriterContract {
+    pub name: &'static str,
+    pub stage: &'static str,
+    pub prior_gate: &'static str,
+    pub stage_complete: bool,
+    pub artifact_writer_dry_run_available: bool,
+    pub stage169_layout_reused: bool,
+    pub explicit_temp_root_required: bool,
+    pub dry_run_artifact_files_written: bool,
+    pub dry_run_manifest_written: bool,
+    pub dry_run_file_count_verified: bool,
+    pub cleanup_boundary_recorded: bool,
+    pub go_default_path_preserved: bool,
+    pub go_fallback_required: bool,
+    pub expected_file_count: usize,
+    pub go_default_daemon_executed: bool,
+    pub rust_optin_daemon_executed: bool,
+    pub production_listener_bound: bool,
+    pub production_tc_attach_smoke_passed: bool,
+    pub ebpf_attached: bool,
+    pub benchmark_executable_now: bool,
+    pub matched_go_rust_default_daemon_benchmark_recorded: bool,
+    pub true_rust_default_daemon_admitted: bool,
+    pub default_switch_allowed: bool,
+    pub default_path_mutation_allowed: bool,
+    pub product_chain_switch_allowed: bool,
+    pub artifact_root_policy: &'static str,
+    pub gate_decision: &'static str,
+    pub rows: Vec<Stage170MatchedBenchmarkArtifactWriterRow>,
+    pub artifact_layout: Vec<Stage170ArtifactWriterLayoutRow>,
+    pub validation_commands: Vec<&'static str>,
+    pub remaining_blockers: Vec<&'static str>,
+    pub source: Vec<&'static str>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Stage170MatchedBenchmarkArtifactWriterRow {
+    pub area: &'static str,
+    pub status: &'static str,
+    pub evidence: &'static str,
+    pub boundary: &'static str,
+    pub closed_flag: &'static str,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Stage170ArtifactWriterLayoutRow {
+    pub path: &'static str,
+    pub owner: &'static str,
+    pub required: bool,
+    pub content: &'static str,
+}
+
+pub fn stage170_matched_benchmark_artifact_writer_contract()
+-> Stage170MatchedBenchmarkArtifactWriterContract {
+    let artifact_layout = stage170_artifact_layout();
+    Stage170MatchedBenchmarkArtifactWriterContract {
+        name: "stage170-matched-benchmark-artifact-writer-dry-run",
+        stage: "stage170",
+        prior_gate: "stage169-matched-benchmark-corpus-artifact-builder",
+        stage_complete: true,
+        artifact_writer_dry_run_available: true,
+        stage169_layout_reused: true,
+        explicit_temp_root_required: true,
+        dry_run_artifact_files_written: true,
+        dry_run_manifest_written: true,
+        dry_run_file_count_verified: true,
+        cleanup_boundary_recorded: true,
+        go_default_path_preserved: true,
+        go_fallback_required: true,
+        expected_file_count: artifact_layout.len(),
+        go_default_daemon_executed: false,
+        rust_optin_daemon_executed: false,
+        production_listener_bound: false,
+        production_tc_attach_smoke_passed: false,
+        ebpf_attached: false,
+        benchmark_executable_now: false,
+        matched_go_rust_default_daemon_benchmark_recorded: false,
+        true_rust_default_daemon_admitted: false,
+        default_switch_allowed: false,
+        default_path_mutation_allowed: false,
+        product_chain_switch_allowed: false,
+        artifact_root_policy: "explicit /tmp/dae-stage170* root only",
+        gate_decision: "stage170 admits only the explicit temporary-root writer dry-run for Stage169 artifact placeholders and manifest/file-count verification; it does not execute Go or Rust daemons, record matched benchmark data, admit true Rust default daemon, or switch default/product paths",
+        rows: vec![
+            Stage170MatchedBenchmarkArtifactWriterRow {
+                area: "writer invocation",
+                status: "explicit-temp-root-only",
+                evidence: "CLI write mode requires --write-dry-run with an absolute /tmp/dae-stage170* root",
+                boundary: "read-only mode writes no files and default/product paths are rejected",
+                closed_flag: "default_path_mutation_allowed=false",
+            },
+            Stage170MatchedBenchmarkArtifactWriterRow {
+                area: "artifact set",
+                status: "dry-run-verified",
+                evidence: "writes the Stage169 14-file placeholder set, manifest, BPF/DNS/runtime placeholders, and cleanup boundary",
+                boundary: "placeholder files are not collected Go/Rust benchmark artifacts",
+                closed_flag: "matched_go_rust_default_daemon_benchmark_recorded=false",
+            },
+            Stage170MatchedBenchmarkArtifactWriterRow {
+                area: "daemon execution",
+                status: "closed-preserved",
+                evidence: "writer mode does not start Go default daemon or Rust opt-in daemon",
+                boundary: "production listener and tc/netns attach stay closed",
+                closed_flag: "benchmark_executable_now=false",
+            },
+        ],
+        artifact_layout,
+        validation_commands: vec![
+            "python3 -m json.tool testdata/rebuild-golden/engine/runtime_stage170/matched_benchmark_artifact_writer_dry_run.json",
+            "python3 -m json.tool testdata/rebuild-golden/product/daemon/stage170_matched_benchmark_artifact_writer_dry_run.json",
+            "cargo run --manifest-path rust/Cargo.toml -p dae-cli --bin dae-cli-optin --quiet -- runtime stage170-matched-benchmark-artifact-writer-dry-run",
+            "cargo run --manifest-path rust/Cargo.toml -p dae-cli --bin dae-cli-optin --quiet -- runtime stage170-matched-benchmark-artifact-writer-dry-run --write-dry-run --root /tmp/dae-stage170-artifact-writer-dry-run",
+            "cargo test --manifest-path rust/Cargo.toml -p dae-cli stage170 -- --nocapture",
+            "cargo test --manifest-path rust/Cargo.toml -p dae-product stage170 -- --nocapture",
+            "cargo test --manifest-path rust/Cargo.toml -p dae-cli stage169 -- --nocapture",
+            "cargo test --manifest-path rust/Cargo.toml -p dae-cli -p dae-product -q",
+            "cargo fmt --manifest-path rust/Cargo.toml --all -- --check",
+            "git diff --check",
+        ],
+        remaining_blockers: vec![
+            "Go default daemon and Rust opt-in daemon have not been run on the same benchmark corpus",
+            "production tc/netns attach remains closed",
+            "matched Go/Rust default daemon benchmark has not executed",
+            "true Rust default daemon admission remains false until matched benchmark data exists",
+            "default daemon and product-chain switches remain closed",
+        ],
+        source: vec![
+            "DAEX_RUST_REBUILD_PLAN_2026-05-16.md:stage170",
+            "DAEX_RUST_REBUILD_PLAN_2026-05-16.md:stage169",
+            "DAENEW_RUST_REBUILD_MEMO_2026-05-16.md:11.1",
+            "DAENEW_RUST_REBUILD_MEMO_2026-05-16.md:11.4",
+            "DAENEW_RUST_REBUILD_MEMO_2026-05-16.md:15.3",
+            "DAENEW_RUST_REBUILD_MEMO_2026-05-16.md:15.4",
+            "DAENEW_RUST_REBUILD_MEMO_2026-05-16.md:15.5",
+            "DAENEW_RUST_REBUILD_MEMO_2026-05-16.md:15.8",
+        ],
+    }
+}
+
+fn stage170_artifact_layout() -> Vec<Stage170ArtifactWriterLayoutRow> {
+    vec![
+        Stage170ArtifactWriterLayoutRow {
+            path: "manifest.json",
+            owner: "shared",
+            required: true,
+            content: "run id, git revisions, config corpus digest, host metadata digest, command plan digest, and admission flags",
+        },
+        Stage170ArtifactWriterLayoutRow {
+            path: "config/corpus.dae",
+            owner: "shared",
+            required: true,
+            content: "exact dae config used by both Go default daemon and Rust opt-in daemon",
+        },
+        Stage170ArtifactWriterLayoutRow {
+            path: "config/outbound-matrix.json",
+            owner: "shared",
+            required: true,
+            content: "admitted outbound protocol matrix and per-protocol fixture references",
+        },
+        Stage170ArtifactWriterLayoutRow {
+            path: "host/metadata.json",
+            owner: "shared",
+            required: true,
+            content: "kernel, bpffs, capabilities, sysctl, network namespace, tc, and clock metadata",
+        },
+        Stage170ArtifactWriterLayoutRow {
+            path: "go/command.log",
+            owner: "go-default-daemon",
+            required: true,
+            content: "raw Go default daemon command, stdout, stderr, exit status, and timestamps",
+        },
+        Stage170ArtifactWriterLayoutRow {
+            path: "rust/command.log",
+            owner: "rust-optin-daemon",
+            required: true,
+            content: "raw Rust opt-in daemon command, stdout, stderr, exit status, and timestamps",
+        },
+        Stage170ArtifactWriterLayoutRow {
+            path: "go/build.json",
+            owner: "go-default-daemon",
+            required: true,
+            content: "Go daemon version, git revision, build tags, and binary digest",
+        },
+        Stage170ArtifactWriterLayoutRow {
+            path: "rust/build.json",
+            owner: "rust-optin-daemon",
+            required: true,
+            content: "Rust daemon version, git revision, feature set, and binary digest",
+        },
+        Stage170ArtifactWriterLayoutRow {
+            path: "go/runtime-samples.jsonl",
+            owner: "go-default-daemon",
+            required: true,
+            content: "RuntimeOverview, RSS, CPU, active TCP connections, UDP sessions, DNS stats, and BPF map stats",
+        },
+        Stage170ArtifactWriterLayoutRow {
+            path: "rust/runtime-samples.jsonl",
+            owner: "rust-optin-daemon",
+            required: true,
+            content: "RuntimeOverview, RSS, CPU, active TCP connections, UDP sessions, DNS stats, and BPF map stats",
+        },
+        Stage170ArtifactWriterLayoutRow {
+            path: "shared/stage167-bounded-summary.json",
+            owner: "shared",
+            required: true,
+            content: "bounded reload-owner/listen_socket_map benchmark summary carried only as input evidence",
+        },
+        Stage170ArtifactWriterLayoutRow {
+            path: "shared/reload-rollback-cleanup.json",
+            owner: "shared",
+            required: true,
+            content: "reload success, invalid config rollback, listener reuse, BPF owner transfer, and scoped cleanup evidence",
+        },
+        Stage170ArtifactWriterLayoutRow {
+            path: "shared/bpf-map-snapshot.json",
+            owner: "shared",
+            required: true,
+            content: "listen_socket_map key 0/1, pinned map compatibility, routing tuple, domain routing, and ownership snapshot requirements",
+        },
+        Stage170ArtifactWriterLayoutRow {
+            path: "shared/dns-cache-snapshot.json",
+            owner: "shared",
+            required: true,
+            content: "DNS cache migration guard, cache hit samples, UDP/53 behavior, and domain routing bitmap ownership evidence",
+        },
+    ]
+}
