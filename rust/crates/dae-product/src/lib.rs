@@ -77,6 +77,7 @@ pub mod stage166_production_equivalent_benchmark_queue_gate;
 pub mod stage167_bounded_benchmark_harness_gate;
 pub mod stage168_matched_benchmark_execution_gate;
 pub mod stage169_matched_benchmark_artifact_builder;
+pub mod stage170_matched_benchmark_artifact_writer;
 pub mod stage23_completion;
 pub mod stage24_product_gate;
 pub mod stage25_execution_queue;
@@ -703,6 +704,10 @@ pub use stage169_matched_benchmark_artifact_builder::{
     Stage169ArtifactLayoutRow, Stage169CommandPlanRow,
     Stage169MatchedBenchmarkArtifactBuilderContract, Stage169MatchedBenchmarkArtifactBuilderRow,
     stage169_matched_benchmark_artifact_builder_contract,
+};
+pub use stage170_matched_benchmark_artifact_writer::{
+    Stage170ArtifactWriterLayoutRow, Stage170MatchedBenchmarkArtifactWriterContract,
+    Stage170MatchedBenchmarkArtifactWriterRow, stage170_matched_benchmark_artifact_writer_contract,
 };
 pub use systemd::{SystemdContract, systemd_contract};
 pub use true_daemon_admission::{

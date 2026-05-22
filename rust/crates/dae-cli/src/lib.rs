@@ -78,6 +78,7 @@ pub(crate) mod runtime_stage166_production_equivalent_benchmark_queue_gate;
 pub(crate) mod runtime_stage167_bounded_benchmark_harness_gate;
 pub(crate) mod runtime_stage168_matched_benchmark_execution_gate;
 pub(crate) mod runtime_stage169_matched_benchmark_artifact_builder;
+pub(crate) mod runtime_stage170_matched_benchmark_artifact_writer;
 pub(crate) mod runtime_stage26_candidate;
 pub(crate) mod runtime_stage27_candidate;
 pub(crate) mod runtime_stage29_preflight;

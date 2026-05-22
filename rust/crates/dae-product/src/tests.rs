@@ -23,6 +23,7 @@ mod daemon_lifecycle_stage150;
 mod daemon_listener_ebpf_policy_stage159;
 mod daemon_listener_ebpf_preflight_stage160;
 mod daemon_matched_benchmark_artifact_stage169;
+mod daemon_matched_benchmark_artifact_stage170;
 mod daemon_matched_benchmark_execution_stage158;
 mod daemon_matched_benchmark_execution_stage168;
 mod daemon_matched_benchmark_stage147;
