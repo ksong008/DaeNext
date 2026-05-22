@@ -11,6 +11,7 @@ mod anytls_session_stage104;
 mod anytls_udp_packet_stage105;
 mod base_contracts;
 mod daemon_identity_stage148;
+mod daemon_identity_stage149;
 mod daemon_matched_benchmark_stage147;
 mod daemon_stage23_27;
 mod daemon_stage28_30;

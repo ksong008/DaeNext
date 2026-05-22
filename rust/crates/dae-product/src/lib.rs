@@ -56,6 +56,7 @@ pub mod stage145_trojan_go_recertification_gate;
 pub mod stage146_shared_transport_outbound_recertification_gate;
 pub mod stage147_matched_benchmark_readiness_gate;
 pub mod stage148_daemon_identity_preflight_gate;
+pub mod stage149_daemon_identity_scaffold_gate;
 pub mod stage23_completion;
 pub mod stage24_product_gate;
 pub mod stage25_execution_queue;
@@ -596,6 +597,10 @@ pub use stage147_matched_benchmark_readiness_gate::{
 pub use stage148_daemon_identity_preflight_gate::{
     Stage148DaemonIdentityAdmissionQueueRow, Stage148DaemonIdentityPreflightGateContract,
     Stage148DaemonIdentityPreflightGateRow, stage148_daemon_identity_preflight_gate_contract,
+};
+pub use stage149_daemon_identity_scaffold_gate::{
+    Stage149DaemonIdentityAdmissionQueueRow, Stage149DaemonIdentityScaffoldGateContract,
+    Stage149DaemonIdentityScaffoldGateRow, stage149_daemon_identity_scaffold_gate_contract,
 };
 pub use systemd::{SystemdContract, systemd_contract};
 pub use true_daemon_admission::{
