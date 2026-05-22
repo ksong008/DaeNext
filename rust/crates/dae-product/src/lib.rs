@@ -48,6 +48,7 @@ pub mod stage137_vless_vmess_xhttp_h3_gate;
 pub mod stage138_vless_vmess_residual_gate;
 pub mod stage139_vless_vmess_utls_wire_gate;
 pub mod stage140_vless_vmess_utls_profile_builder_gate;
+pub mod stage141_vless_reality_synthetic_utls_gate;
 pub mod stage23_completion;
 pub mod stage24_product_gate;
 pub mod stage25_execution_queue;
@@ -553,6 +554,10 @@ pub use stage139_vless_vmess_utls_wire_gate::{
 pub use stage140_vless_vmess_utls_profile_builder_gate::{
     Stage140VlessVmessUtlsProfileBuilderGateContract, Stage140VlessVmessUtlsProfileBuilderGateRow,
     stage140_vless_vmess_utls_profile_builder_gate_contract,
+};
+pub use stage141_vless_reality_synthetic_utls_gate::{
+    Stage141VlessRealitySyntheticUtlsGateContract, Stage141VlessRealitySyntheticUtlsGateRow,
+    stage141_vless_reality_synthetic_utls_gate_contract,
 };
 pub use systemd::{SystemdContract, systemd_contract};
 pub use true_daemon_admission::{

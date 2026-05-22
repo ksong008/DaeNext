@@ -1,0 +1,88 @@
+{
+  "name": "stage141-vless-reality-synthetic-utls-raw-mutation-gate",
+  "stage": "stage141",
+  "prior_gate": "stage140-vless-vmess-utls-profile-builder-gate",
+  "stage_complete": true,
+  "blocked": false,
+  "vless_reality_synthetic_utls_raw_mutation_admitted": true,
+  "vless_reality_full_handshake_admitted": false,
+  "vless_reality_verify_peer_certificate_admitted": false,
+  "vless_reality_spider_fallback_admitted": false,
+  "vless_utls_fingerprint_wire_admitted": false,
+  "vmess_utls_fingerprint_wire_admitted": false,
+  "vless_vision_tls_reality_admitted": false,
+  "vless_protocol_true_dataplane_admitted": false,
+  "vmess_protocol_true_dataplane_admitted": false,
+  "shared_transport_true_dataplane_admitted": false,
+  "outbound_true_dataplane_admitted": false,
+  "default_switch_allowed": false,
+  "product_chain_switch_allowed": false,
+  "fixture_sample_count": 6,
+  "algorithm_count": 2,
+  "mutation_report_count": 12,
+  "profile_preserved_count": 12,
+  "session_id_hello_raw_offset": 39,
+  "session_id_record_offset": 44,
+  "gate_decision": "stage141 admits only synthetic VLESS REALITY uTLS raw mutation: Stage140 synthetic ClientHello handshake raw can receive Stage102 REALITY session-id AEAD mutation at hello.Raw[39:] and still parse back to the same normalized profile for AES-GCM and ChaCha20Poly1305, but full uTLS handshake, VerifyPeerCertificate, spider fallback, Vision, protocol-wide dataplane, default switch, and product-chain switch remain closed",
+  "rows": [
+    {
+      "area": "synthetic REALITY uTLS raw mutation",
+      "status": "passed",
+      "evidence": "dae-outbound stage141 tests apply REALITY session-id mutation to six synthetic ClientHello records across AES-GCM and ChaCha20Poly1305 and preserve normalized profile parsing",
+      "boundary": "raw mutation harness is not a live uTLS handshake and does not verify certificates or spider fallback",
+      "next_action": "connect mutation to a true handshake state or keep Go outbound fallback for REALITY"
+    },
+    {
+      "area": "VerifyPeerCertificate and spider fallback",
+      "status": "blocked",
+      "evidence": "memo 26.7 requires REALITY signature/x509 verification and spider behavior after handshake",
+      "boundary": "synthetic ClientHello raw bytes have no peer certificate chain or HTTP/2 spider path",
+      "next_action": "implement live REALITY handshake verifier or explicitly admit Go fallback for this row"
+    },
+    {
+      "area": "protocol-wide admission",
+      "status": "blocked",
+      "evidence": "uTLS wire fingerprint, full REALITY, Vision, and VMess recertification remain closed",
+      "boundary": "raw mutation alone cannot open VLESS/VMess protocol-wide true dataplane",
+      "next_action": "continue with full handshake/fallback decision before protocol-wide recertification"
+    }
+  ],
+  "benchmark_record": [
+    "Stage141 records synthetic REALITY raw mutation metrics instead of a network benchmark",
+    "fixture_sample_count=6, algorithm_count=2, mutation_report_count=12, profile_preserved_count=12",
+    "session_id_hello_raw_offset=39, session_id_record_offset=44",
+    "matched_go_rust_default_daemon_benchmark_recorded remains false"
+  ],
+  "validation_commands": [
+    "python3 -m json.tool testdata/rebuild-golden/engine/runtime_stage141/vless_reality_synthetic_utls_raw_mutation_gate.json",
+    "python3 -m json.tool testdata/rebuild-golden/product/daemon/stage141_vless_reality_synthetic_utls_raw_mutation_gate.json",
+    "cargo test --manifest-path rust/Cargo.toml -p dae-outbound stage141 -- --nocapture",
+    "cargo run --manifest-path rust/Cargo.toml -p dae-cli --bin dae-cli-optin --quiet -- runtime stage141-vless-reality-synthetic-utls-raw-mutation-gate",
+    "cargo test --manifest-path rust/Cargo.toml -p dae-cli stage141 -- --nocapture",
+    "cargo test --manifest-path rust/Cargo.toml -p dae-product stage141 -- --nocapture",
+    "cargo test --manifest-path rust/Cargo.toml -p dae-outbound stage140 -- --nocapture",
+    "cargo test --manifest-path rust/Cargo.toml -p dae-outbound -p dae-cli -p dae-product -q",
+    "cargo fmt --manifest-path rust/Cargo.toml --all -- --check",
+    "git diff --check"
+  ],
+  "remaining_blockers": [
+    "Synthetic REALITY raw mutation is not a full uTLS handshake implementation",
+    "VLESS REALITY VerifyPeerCertificate and spider fallback are incomplete",
+    "VLESS/VMess uTLS wire-level fingerprint admission remains closed",
+    "VLESS XTLS Vision intrinsic TLS/REALITY conn hook is incomplete",
+    "VMess uTLS full-combination recertification is incomplete",
+    "Trojan-Go full shared transport remains blocked",
+    "shared_transport_true_dataplane and outbound_true_dataplane remain closed until all protocol rows close",
+    "matched Go default daemon vs true Rust candidate benchmark remains missing",
+    "default daemon and product-chain switches remain closed"
+  ],
+  "source": [
+    "DAEX_RUST_REBUILD_PLAN_2026-05-16.md:stage141",
+    "DAENEW_RUST_REBUILD_MEMO_2026-05-16.md:26.7",
+    "/root/project/outbound/transport/tls/reality.go",
+    "rust/crates/dae-outbound/src/shared_transport/reality_aead.rs",
+    "rust/crates/dae-outbound/src/shared_transport/reality_utls_synthetic.rs",
+    "rust/crates/dae-outbound/src/shared_transport/utls_wire_builder.rs",
+    "testdata/rebuild-golden/engine/runtime_stage141/vless_reality_synthetic_utls_raw_mutation_gate.json"
+  ]
+}

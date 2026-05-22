@@ -36,6 +36,7 @@ mod juicity_packet_state_stage120;
 mod juicity_stream_packet_conn_stage126;
 mod juicity_transport_packet_conn_stage125;
 mod outbound_true_dataplane_stage133;
+mod outbound_vless_reality_stage141;
 mod outbound_vless_vmess_grpc_http2_stage134;
 mod outbound_vless_vmess_residual_stage138;
 mod outbound_vless_vmess_tls_stage135;
