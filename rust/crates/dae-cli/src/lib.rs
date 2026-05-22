@@ -59,6 +59,7 @@ pub(crate) mod runtime_stage147_matched_benchmark_readiness_gate;
 pub(crate) mod runtime_stage148_daemon_identity_preflight_gate;
 pub(crate) mod runtime_stage149_daemon_identity_scaffold_gate;
 pub(crate) mod runtime_stage150_daemon_lifecycle_gate;
+pub(crate) mod runtime_stage151_control_plane_owner_gate;
 pub(crate) mod runtime_stage26_candidate;
 pub(crate) mod runtime_stage27_candidate;
 pub(crate) mod runtime_stage29_preflight;

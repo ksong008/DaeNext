@@ -1,6 +1,7 @@
 use crate::identity::daemon_identity;
 use crate::lifecycle::{default_stage150_root, stage150_lifecycle_smoke_report};
 use crate::preflight::stage149_identity_preflight_report;
+use crate::{default_stage151_root, stage151_control_plane_owner_preflight_report};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DaemonOutput {
@@ -40,6 +41,9 @@ pub fn run_with_args_and_version(
             DaemonOutput::ok(format!("{}\n", stage149_identity_preflight_report(version)))
         }
         Some("stage150-lifecycle-smoke") => run_stage150_lifecycle_smoke_command(&args[1..]),
+        Some("stage151-control-plane-owner-preflight") => {
+            run_stage151_control_plane_owner_preflight_command(&args[1..])
+        }
         Some("identity") | Some("stage149-identity-preflight") => {
             DaemonOutput::usage("unsupported dae-daemon-optin argument")
         }
@@ -72,6 +76,37 @@ fn run_stage150_lifecycle_smoke_command(args: &[String]) -> DaemonOutput {
         }
     }
     match stage150_lifecycle_smoke_report(&root) {
+        Ok(report) => DaemonOutput::ok(format!("{report}\n")),
+        Err(err) => DaemonOutput {
+            stdout: String::new(),
+            stderr: format!("{err}\n"),
+            exit_code: 1,
+        },
+    }
+}
+
+fn run_stage151_control_plane_owner_preflight_command(args: &[String]) -> DaemonOutput {
+    let mut root = default_stage151_root();
+    let mut iter = args.iter();
+    while let Some(arg) = iter.next() {
+        match arg.as_str() {
+            "--root" => {
+                let Some(value) = iter.next() else {
+                    return DaemonOutput::usage("missing stage151 --root value");
+                };
+                root = value.into();
+            }
+            _ if arg.starts_with("--root=") => {
+                root = arg.split_once('=').unwrap().1.into();
+            }
+            _ => {
+                return DaemonOutput::usage(format!(
+                    "unsupported stage151 control-plane owner argument: {arg}"
+                ));
+            }
+        }
+    }
+    match stage151_control_plane_owner_preflight_report(&root) {
         Ok(report) => DaemonOutput::ok(format!("{report}\n")),
         Err(err) => DaemonOutput {
             stdout: String::new(),
