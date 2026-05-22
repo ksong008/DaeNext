@@ -72,6 +72,7 @@ pub mod stage161_temporary_ebpf_map_gate;
 pub mod stage162_temporary_ebpf_program_gate;
 pub mod stage163_bpf_owner_handoff_queue_gate;
 pub mod stage164_bpf_owner_handoff_smoke_gate;
+pub mod stage165_daemon_reload_owner_handoff_gate;
 pub mod stage23_completion;
 pub mod stage24_product_gate;
 pub mod stage25_execution_queue;
@@ -676,6 +677,10 @@ pub use stage163_bpf_owner_handoff_queue_gate::{
 pub use stage164_bpf_owner_handoff_smoke_gate::{
     Stage164BpfOwnerHandoffSmokeGateContract, Stage164BpfOwnerHandoffSmokeGateRow,
     stage164_bpf_owner_handoff_smoke_gate_contract,
+};
+pub use stage165_daemon_reload_owner_handoff_gate::{
+    Stage165DaemonReloadOwnerHandoffGateContract, Stage165DaemonReloadOwnerHandoffGateRow,
+    stage165_daemon_reload_owner_handoff_gate_contract,
 };
 pub use systemd::{SystemdContract, systemd_contract};
 pub use true_daemon_admission::{
