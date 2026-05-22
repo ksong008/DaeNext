@@ -1,6 +1,10 @@
 use crate::identity::daemon_identity;
 use crate::lifecycle::{default_stage150_root, stage150_lifecycle_smoke_report};
 use crate::preflight::stage149_identity_preflight_report;
+use crate::{
+    Stage156DefaultRunIdentityOptions, default_stage156_root,
+    stage156_default_run_identity_admission_report,
+};
 use crate::{default_stage151_root, stage151_control_plane_owner_preflight_report};
 use crate::{default_stage152_root, stage152_signal_control_plane_smoke_report};
 use crate::{default_stage153_root, stage153_run_entrypoint_preflight_report};
@@ -52,6 +56,9 @@ pub fn run_with_args_and_version(
         Some("stage153-run-entrypoint-preflight") => {
             run_stage153_run_entrypoint_preflight_command(&args[1..])
         }
+        Some("stage156-default-run-identity-admission") => {
+            run_stage156_default_run_identity_admission_command(&args[1..])
+        }
         Some("identity") | Some("stage149-identity-preflight") => {
             DaemonOutput::usage("unsupported dae-daemon-optin argument")
         }
@@ -59,6 +66,59 @@ pub fn run_with_args_and_version(
             DaemonOutput::usage(format!("unsupported dae-daemon-optin command: {command}"))
         }
         None => DaemonOutput::usage("missing dae-daemon-optin command"),
+    }
+}
+
+fn run_stage156_default_run_identity_admission_command(args: &[String]) -> DaemonOutput {
+    let mut opts = Stage156DefaultRunIdentityOptions::under_root(default_stage156_root());
+    let mut iter = args.iter();
+    while let Some(arg) = iter.next() {
+        match arg.as_str() {
+            "--root" => {
+                let Some(value) = iter.next() else {
+                    return DaemonOutput::usage("missing stage156 --root value");
+                };
+                opts = Stage156DefaultRunIdentityOptions::under_root(value);
+            }
+            _ if arg.starts_with("--root=") => {
+                opts =
+                    Stage156DefaultRunIdentityOptions::under_root(arg.split_once('=').unwrap().1);
+            }
+            "-c" | "--config" => {
+                let Some(value) = iter.next() else {
+                    return DaemonOutput::usage("missing stage156 --config value");
+                };
+                opts.config = value.into();
+            }
+            _ if arg.starts_with("--config=") => {
+                opts.config = arg.split_once('=').unwrap().1.into();
+            }
+            "--logfile" => {
+                let Some(value) = iter.next() else {
+                    return DaemonOutput::usage("missing stage156 --logfile value");
+                };
+                opts.logfile = value.into();
+            }
+            _ if arg.starts_with("--logfile=") => {
+                opts.logfile = arg.split_once('=').unwrap().1.into();
+            }
+            "--disable-timestamp" => opts.disable_timestamp = true,
+            "--disable-pidfile" => opts.disable_pidfile = true,
+            "--disable-sudo" => opts.disable_sudo = true,
+            _ => {
+                return DaemonOutput::usage(format!(
+                    "unsupported stage156 default run identity argument: {arg}"
+                ));
+            }
+        }
+    }
+    match stage156_default_run_identity_admission_report(&opts) {
+        Ok(report) => DaemonOutput::ok(format!("{report}\n")),
+        Err(err) => DaemonOutput {
+            stdout: String::new(),
+            stderr: format!("{err}\n"),
+            exit_code: 1,
+        },
     }
 }
 
