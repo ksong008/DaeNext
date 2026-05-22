@@ -97,6 +97,7 @@ pub(crate) mod runtime_stage185_production_dataplane_evidence_gate;
 pub(crate) mod runtime_stage186_reload_runtime_parity_gate;
 pub(crate) mod runtime_stage187_matched_benchmark_readiness_gate;
 pub(crate) mod runtime_stage188_bounded_benchmark_hard_gate_resolution;
+pub(crate) mod runtime_stage189_production_dataplane_execution_evidence_gate;
 pub(crate) mod runtime_stage26_candidate;
 pub(crate) mod runtime_stage27_candidate;
 pub(crate) mod runtime_stage29_preflight;
