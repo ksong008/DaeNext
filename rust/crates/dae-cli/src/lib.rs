@@ -69,6 +69,7 @@ pub(crate) mod runtime_stage157_control_plane_entrypoint_gate;
 pub(crate) mod runtime_stage158_matched_benchmark_execution_gate;
 pub(crate) mod runtime_stage159_listener_ebpf_policy_gate;
 pub(crate) mod runtime_stage160_listener_ebpf_harness_gate;
+pub(crate) mod runtime_stage161_temporary_ebpf_map_gate;
 pub(crate) mod runtime_stage26_candidate;
 pub(crate) mod runtime_stage27_candidate;
 pub(crate) mod runtime_stage29_preflight;
