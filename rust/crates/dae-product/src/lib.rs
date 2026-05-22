@@ -93,6 +93,7 @@ pub mod stage182_production_rust_daemon_admission_preflight;
 pub mod stage183_corpus_command_admission_binding;
 pub mod stage184_same_corpus_daemon_execution_smoke;
 pub mod stage185_production_dataplane_evidence_gate;
+pub mod stage186_reload_runtime_parity_gate;
 pub mod stage23_completion;
 pub mod stage24_product_gate;
 pub mod stage25_execution_queue;
@@ -794,6 +795,10 @@ pub use stage184_same_corpus_daemon_execution_smoke::{
 pub use stage185_production_dataplane_evidence_gate::{
     Stage185DataplaneEvidenceRow, Stage185Gate, Stage185ProductionDataplaneEvidenceGateContract,
     stage185_production_dataplane_evidence_gate_contract,
+};
+pub use stage186_reload_runtime_parity_gate::{
+    Stage186Gate, Stage186ReloadRuntimeParityGateContract, Stage186ReloadRuntimeParityRow,
+    stage186_reload_runtime_parity_gate_contract,
 };
 pub use systemd::{SystemdContract, systemd_contract};
 pub use true_daemon_admission::{
