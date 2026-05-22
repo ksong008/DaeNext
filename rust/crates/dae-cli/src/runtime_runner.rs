@@ -168,6 +168,7 @@ use crate::runtime_stage179_matched_benchmark_reviewed_corpus_verifier::run_stag
 use crate::runtime_stage180_matched_benchmark_reviewed_corpus_readiness_queue::run_stage180_matched_benchmark_reviewed_corpus_readiness_queue;
 use crate::runtime_stage181_matched_benchmark_reviewed_corpus_runtime_blocker::run_stage181_matched_benchmark_reviewed_corpus_runtime_blocker;
 use crate::runtime_stage182_production_rust_daemon_admission_preflight::run_stage182_production_rust_daemon_admission_preflight;
+use crate::runtime_stage183_corpus_command_admission_binding::run_stage183_corpus_command_admission_binding;
 
 pub(crate) fn run_runtime(args: &[String]) -> RunnerOutput {
     match args.first().map(String::as_str) {
@@ -632,6 +633,9 @@ pub(crate) fn run_runtime(args: &[String]) -> RunnerOutput {
         }
         Some("stage182-production-rust-daemon-admission-preflight") => {
             run_stage182_production_rust_daemon_admission_preflight(&args[1..])
+        }
+        Some("stage183-corpus-command-admission-binding-dry-run") => {
+            run_stage183_corpus_command_admission_binding(&args[1..])
         }
         Some(subcommand) => {
             RunnerOutput::usage(format!("unsupported runtime subcommand: {subcommand}"))
