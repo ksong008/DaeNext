@@ -56,6 +56,7 @@ pub(crate) mod runtime_stage144_vless_vmess_recertification_gate;
 pub(crate) mod runtime_stage145_trojan_go_recertification_gate;
 pub(crate) mod runtime_stage146_shared_transport_outbound_recertification_gate;
 pub(crate) mod runtime_stage147_matched_benchmark_readiness_gate;
+pub(crate) mod runtime_stage148_daemon_identity_preflight_gate;
 pub(crate) mod runtime_stage26_candidate;
 pub(crate) mod runtime_stage27_candidate;
 pub(crate) mod runtime_stage29_preflight;
