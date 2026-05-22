@@ -1,0 +1,98 @@
+{
+  "benchmark_executable_now": false,
+  "blocked": true,
+  "blockers": [
+    "temporary tc/program attach smoke is not executed in Stage161",
+    "production listener binding and eBPF attach remain closed",
+    "matched Go/Rust default daemon benchmark remains blocked",
+    "default daemon and product-chain switches remain closed"
+  ],
+  "bpffs_pin_root_discovery_available": true,
+  "default_path_mutation_allowed": false,
+  "default_switch_allowed": false,
+  "ebpf_attached": false,
+  "evidence_class": "opt-in-temporary-ebpf-map-create-pin-cleanup-preflight-gate",
+  "execute_smoke": false,
+  "go_default_path_preserved": true,
+  "go_fallback_required": true,
+  "isolated_namespace_listener_smoke_passed": false,
+  "matched_go_rust_default_daemon_benchmark_recorded": false,
+  "name": "stage161-temporary-ebpf-map-preflight-gate",
+  "next_admission_queue": [
+    {
+      "required_output": "use temporary program/map paths and cleanup to prove attach/eject behavior without touching production tc hooks",
+      "stage": "stage162",
+      "target": "temporary eBPF program attach preflight"
+    }
+  ],
+  "preflight_rows": [
+    {
+      "area": "BPF map create",
+      "boundary": "does not load a program or attach tc hooks",
+      "closed_flag": "temporary_ebpf_attach_smoke_passed=false",
+      "evidence": "create a temporary Array map through the bpf syscall with key_size=4 value_size=4 max_entries=1",
+      "status": "harness-available-not-executed"
+    },
+    {
+      "area": "BPF map update/lookup",
+      "boundary": "array map roundtrip does not prove dae map schema parity",
+      "closed_flag": "ebpf_attached=false",
+      "evidence": "write key 0 value 161 and read it back from the temporary map",
+      "status": "not-executed"
+    },
+    {
+      "area": "BPF pin/reopen cleanup",
+      "boundary": "temporary bpffs file is not a production pinned dae map",
+      "closed_flag": "benchmark_executable_now=false",
+      "evidence": "pin under discovered bpffs as dae-stage161-* file, reopen with BPF_OBJ_GET, then unlink",
+      "status": "not-executed"
+    },
+    {
+      "area": "default safety",
+      "boundary": "Stage161 is eBPF map syscall preflight only",
+      "closed_flag": "default_switch_allowed=false",
+      "evidence": "no production listener, no tc attach, no default daemon switch, no product-chain switch",
+      "status": "closed-preserved"
+    }
+  ],
+  "prior_gate": "stage160-isolated-listener-ebpf-preflight-harness-gate",
+  "product_chain_switch_allowed": false,
+  "production_listener_bound": false,
+  "read_only": true,
+  "remaining_blockers": [
+    "temporary eBPF program/tc attach smoke remains closed",
+    "production listener binding remains closed",
+    "matched Go/Rust default daemon benchmark has not executed",
+    "true Rust default daemon admission remains false until matched benchmark data exists",
+    "default daemon and product-chain switches remain closed"
+  ],
+  "source": [
+    "DAEX_RUST_REBUILD_PLAN_2026-05-16.md:stage161",
+    "DAEX_RUST_REBUILD_PLAN_2026-05-16.md:stage160",
+    "DAENEW_RUST_REBUILD_MEMO_2026-05-16.md:11.1",
+    "DAENEW_RUST_REBUILD_MEMO_2026-05-16.md:11.2",
+    "DAENEW_RUST_REBUILD_MEMO_2026-05-16.md:15.4",
+    "DAENEW_RUST_REBUILD_MEMO_2026-05-16.md:15.5",
+    "rust/crates/dae-ebpf-support/src/temporary_map.rs"
+  ],
+  "stage": "stage161",
+  "temporary_ebpf_attach_smoke_passed": false,
+  "temporary_ebpf_map_create_smoke_passed": false,
+  "temporary_ebpf_map_preflight_harness_available": true,
+  "temporary_ebpf_map_update_lookup_smoke_passed": false,
+  "temporary_ebpf_pin_cleanup_smoke_passed": false,
+  "temporary_ebpf_pin_reopen_smoke_passed": false,
+  "true_rust_default_daemon_admitted": false,
+  "validation_commands": [
+    "python3 -m json.tool testdata/rebuild-golden/engine/runtime_stage161/temporary_ebpf_map_preflight_gate.json",
+    "python3 -m json.tool testdata/rebuild-golden/product/daemon/stage161_temporary_ebpf_map_preflight_gate.json",
+    "cargo run --manifest-path rust/Cargo.toml -p dae-cli --bin dae-cli-optin --quiet -- runtime stage161-temporary-ebpf-map-preflight-gate",
+    "cargo run --manifest-path rust/Cargo.toml -p dae-cli --bin dae-cli-optin --quiet -- runtime stage161-temporary-ebpf-map-preflight-gate --execute-smoke",
+    "cargo test --manifest-path rust/Cargo.toml -p dae-cli stage161 -- --nocapture",
+    "cargo test --manifest-path rust/Cargo.toml -p dae-product stage161 -- --nocapture",
+    "cargo test --manifest-path rust/Cargo.toml -p dae-cli stage160 -- --nocapture",
+    "cargo test --manifest-path rust/Cargo.toml -p dae-ebpf-support -p dae-cli -p dae-product -q",
+    "cargo fmt --manifest-path rust/Cargo.toml --all -- --check",
+    "git diff --check"
+  ]
+}

@@ -146,6 +146,7 @@ use crate::runtime_stage157_control_plane_entrypoint_gate::run_stage157_control_
 use crate::runtime_stage158_matched_benchmark_execution_gate::run_stage158_matched_benchmark_execution_gate;
 use crate::runtime_stage159_listener_ebpf_policy_gate::run_stage159_listener_ebpf_policy_gate;
 use crate::runtime_stage160_listener_ebpf_harness_gate::run_stage160_listener_ebpf_harness_gate;
+use crate::runtime_stage161_temporary_ebpf_map_gate::run_stage161_temporary_ebpf_map_gate;
 
 pub(crate) fn run_runtime(args: &[String]) -> RunnerOutput {
     match args.first().map(String::as_str) {
@@ -544,6 +545,9 @@ pub(crate) fn run_runtime(args: &[String]) -> RunnerOutput {
         }
         Some("stage160-isolated-listener-ebpf-preflight-harness-gate") => {
             run_stage160_listener_ebpf_harness_gate(&args[1..])
+        }
+        Some("stage161-temporary-ebpf-map-preflight-gate") => {
+            run_stage161_temporary_ebpf_map_gate(&args[1..])
         }
         Some(subcommand) => {
             RunnerOutput::usage(format!("unsupported runtime subcommand: {subcommand}"))
