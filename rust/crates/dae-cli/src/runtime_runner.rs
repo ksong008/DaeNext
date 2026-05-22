@@ -142,6 +142,7 @@ use crate::runtime_stage153_run_entrypoint_gate::run_stage153_run_entrypoint_gat
 use crate::runtime_stage154_benchmark_readiness_refresh_gate::run_stage154_benchmark_readiness_refresh_gate;
 use crate::runtime_stage155_product_chain_blocker_review_gate::run_stage155_product_chain_blocker_review_gate;
 use crate::runtime_stage156_default_run_identity_gate::run_stage156_default_run_identity_gate;
+use crate::runtime_stage157_control_plane_entrypoint_gate::run_stage157_control_plane_entrypoint_gate;
 
 pub(crate) fn run_runtime(args: &[String]) -> RunnerOutput {
     match args.first().map(String::as_str) {
@@ -528,6 +529,9 @@ pub(crate) fn run_runtime(args: &[String]) -> RunnerOutput {
         }
         Some("stage156-rust-default-run-identity-admission-gate") => {
             run_stage156_default_run_identity_gate(&args[1..])
+        }
+        Some("stage157-control-plane-entrypoint-admission-gate") => {
+            run_stage157_control_plane_entrypoint_gate(&args[1..])
         }
         Some(subcommand) => {
             RunnerOutput::usage(format!("unsupported runtime subcommand: {subcommand}"))
