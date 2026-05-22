@@ -79,6 +79,7 @@ mod runtime_matched_benchmark_stage147;
 mod runtime_outbound_true_dataplane_stage133;
 mod runtime_product_chain_blocker_stage155;
 mod runtime_production_dataplane_evidence_stage185;
+mod runtime_production_dataplane_execution_stage189;
 mod runtime_production_equivalent_benchmark_queue_stage166;
 mod runtime_production_rust_daemon_admission_stage182;
 mod runtime_protocol_55_61;
