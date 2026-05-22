@@ -1,4 +1,5 @@
 pub mod control_plane;
+pub mod control_plane_entrypoint;
 pub mod default_run_identity;
 pub mod identity;
 pub mod lifecycle;
@@ -14,6 +15,9 @@ mod tests;
 pub use control_plane::{
     ControlPlaneOwnerPaths, default_stage151_root, run_stage151_control_plane_owner_preflight,
     stage151_control_plane_owner_preflight_report,
+};
+pub use control_plane_entrypoint::{
+    default_stage157_root, stage157_control_plane_entrypoint_admission_report,
 };
 pub use default_run_identity::{
     Stage156DefaultRunIdentityOptions, default_stage156_root,
