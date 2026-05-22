@@ -43,6 +43,7 @@ pub mod stage132_quic_h3_family_recertification_gate;
 pub mod stage133_outbound_true_dataplane_readiness_gate;
 pub mod stage134_vless_vmess_grpc_http2_gate;
 pub mod stage135_vless_vmess_tls_gate;
+pub mod stage136_vless_vmess_xhttp_http2_gate;
 pub mod stage23_completion;
 pub mod stage24_product_gate;
 pub mod stage25_execution_queue;
@@ -528,6 +529,10 @@ pub use stage134_vless_vmess_grpc_http2_gate::{
 pub use stage135_vless_vmess_tls_gate::{
     Stage135VlessVmessTlsGateContract, Stage135VlessVmessTlsGateRow,
     stage135_vless_vmess_tls_gate_contract,
+};
+pub use stage136_vless_vmess_xhttp_http2_gate::{
+    Stage136VlessVmessXHttpHttp2GateContract, Stage136VlessVmessXHttpHttp2GateRow,
+    stage136_vless_vmess_xhttp_http2_gate_contract,
 };
 pub use systemd::{SystemdContract, systemd_contract};
 pub use true_daemon_admission::{

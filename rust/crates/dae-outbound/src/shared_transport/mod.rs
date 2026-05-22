@@ -74,6 +74,8 @@ pub use utls_fingerprint::{
     resolve_utls_client_hello_id, supported_utls_fingerprint_count, utls_fingerprint_names,
 };
 pub use xhttp::{
-    XHttpLifecycleOptions, XHttpLifecycleReport, XHttpXmuxOptions, xhttp_packet_exchange,
+    XHttpHttp2FrameReport, XHttpHttp2Request, XHttpLifecycleOptions, XHttpLifecycleReport,
+    XHttpXmuxOptions, read_xhttp_http2_request, read_xhttp_http2_response,
+    write_xhttp_http2_request, write_xhttp_http2_response, xhttp_packet_exchange,
     xhttp_packet_request, xhttp_request_path,
 };
