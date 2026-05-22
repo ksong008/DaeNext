@@ -1,0 +1,98 @@
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Stage142VlessRealityFallbackGateContract {
+    pub name: &'static str,
+    pub stage: &'static str,
+    pub prior_gate: &'static str,
+    pub stage_complete: bool,
+    pub vless_reality_go_fallback_admitted: bool,
+    pub vless_reality_full_handshake_go_fallback_required: bool,
+    pub vless_reality_full_handshake_admitted: bool,
+    pub vless_reality_verify_peer_certificate_admitted: bool,
+    pub vless_reality_spider_fallback_admitted: bool,
+    pub vless_utls_fingerprint_wire_admitted: bool,
+    pub vless_vision_tls_reality_admitted: bool,
+    pub vless_protocol_true_dataplane_admitted: bool,
+    pub outbound_true_dataplane_admitted: bool,
+    pub default_switch_allowed: bool,
+    pub product_chain_switch_allowed: bool,
+    pub gate_decision: &'static str,
+    pub rows: Vec<Stage142VlessRealityFallbackGateRow>,
+    pub validation_commands: Vec<&'static str>,
+    pub remaining_blockers: Vec<&'static str>,
+    pub source: Vec<&'static str>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Stage142VlessRealityFallbackGateRow {
+    pub area: &'static str,
+    pub status: &'static str,
+    pub evidence: &'static str,
+    pub boundary: &'static str,
+    pub next_action: &'static str,
+}
+
+pub fn stage142_vless_reality_fallback_gate_contract() -> Stage142VlessRealityFallbackGateContract {
+    Stage142VlessRealityFallbackGateContract {
+        name: "stage142-vless-reality-full-handshake-fallback-gate",
+        stage: "stage142",
+        prior_gate: "stage141-vless-reality-synthetic-utls-raw-mutation-gate",
+        stage_complete: true,
+        vless_reality_go_fallback_admitted: true,
+        vless_reality_full_handshake_go_fallback_required: true,
+        vless_reality_full_handshake_admitted: false,
+        vless_reality_verify_peer_certificate_admitted: false,
+        vless_reality_spider_fallback_admitted: false,
+        vless_utls_fingerprint_wire_admitted: false,
+        vless_vision_tls_reality_admitted: false,
+        vless_protocol_true_dataplane_admitted: false,
+        outbound_true_dataplane_admitted: false,
+        default_switch_allowed: false,
+        product_chain_switch_allowed: false,
+        gate_decision: "stage142 admits the Go outbound fallback requirement for VLESS REALITY full handshake: Rust has parser, synthetic profile builder, and synthetic raw mutation evidence, but lacks true uTLS handshake state, VerifyPeerCertificate, and spider fallback, so REALITY full handshake remains on /root/project/outbound and true Rust protocol/default/product switches stay closed",
+        rows: vec![
+            Stage142VlessRealityFallbackGateRow {
+                area: "Go REALITY fallback",
+                status: "admitted-required",
+                evidence: "/root/project/outbound/transport/tls/reality.go remains the complete implementation of uTLS BuildHandshakeState, session-id mutation, VerifyPeerCertificate, and spider fallback",
+                boundary: "fallback admission is not Rust full-handshake admission",
+                next_action: "keep routing REALITY full handshake to Go outbound until a true Rust equivalent exists",
+            },
+            Stage142VlessRealityFallbackGateRow {
+                area: "Rust REALITY harness",
+                status: "partial",
+                evidence: "Stage141 synthetic raw mutation preserves normalized profiles across AES-GCM and ChaCha20Poly1305",
+                boundary: "synthetic raw mutation has no peer certificate verifier or live TLS state machine",
+                next_action: "do not use it to open VLESS protocol-wide true dataplane",
+            },
+        ],
+        validation_commands: vec![
+            "python3 -m json.tool testdata/rebuild-golden/engine/runtime_stage142/vless_reality_full_handshake_fallback_gate.json",
+            "python3 -m json.tool testdata/rebuild-golden/product/daemon/stage142_vless_reality_full_handshake_fallback_gate.json",
+            "cargo run --manifest-path rust/Cargo.toml -p dae-cli --bin dae-cli-optin --quiet -- runtime stage142-vless-reality-full-handshake-fallback-gate",
+            "cargo test --manifest-path rust/Cargo.toml -p dae-cli stage142 -- --nocapture",
+            "cargo test --manifest-path rust/Cargo.toml -p dae-product stage142 -- --nocapture",
+            "cargo test --manifest-path rust/Cargo.toml -p dae-cli stage141 -- --nocapture",
+            "cargo test --manifest-path rust/Cargo.toml -p dae-outbound -p dae-cli -p dae-product -q",
+            "cargo fmt --manifest-path rust/Cargo.toml --all -- --check",
+            "git diff --check",
+        ],
+        remaining_blockers: vec![
+            "true Rust uTLS-compatible full handshake state is incomplete",
+            "VLESS REALITY VerifyPeerCertificate and spider fallback remain on Go outbound",
+            "VLESS/VMess uTLS wire-level fingerprint admission remains closed",
+            "VLESS XTLS Vision intrinsic TLS/REALITY conn hook is incomplete",
+            "VMess uTLS full-combination recertification is incomplete",
+            "Trojan-Go full shared transport remains blocked",
+            "shared_transport_true_dataplane and outbound_true_dataplane remain closed until all protocol rows close",
+            "matched Go default daemon vs true Rust candidate benchmark remains missing",
+            "default daemon and product-chain switches remain closed",
+        ],
+        source: vec![
+            "DAEX_RUST_REBUILD_PLAN_2026-05-16.md:stage142",
+            "DAENEW_RUST_REBUILD_MEMO_2026-05-16.md:26.7",
+            "/root/project/outbound/transport/tls/reality.go",
+            "rust/crates/dae-outbound/src/shared_transport/reality_utls_synthetic.rs",
+            "testdata/rebuild-golden/engine/runtime_stage141/vless_reality_synthetic_utls_raw_mutation_gate.json",
+        ],
+    }
+}
