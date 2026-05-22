@@ -40,6 +40,7 @@ mod daemon_matched_benchmark_execution_stage158;
 mod daemon_matched_benchmark_execution_stage168;
 mod daemon_matched_benchmark_stage147;
 mod daemon_product_chain_blocker_stage155;
+mod daemon_production_dataplane_evidence_stage185;
 mod daemon_production_equivalent_benchmark_queue_stage166;
 mod daemon_production_rust_admission_preflight_stage182;
 mod daemon_reload_owner_handoff_stage165;
