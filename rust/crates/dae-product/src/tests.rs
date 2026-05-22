@@ -48,6 +48,7 @@ mod daemon_production_equivalent_benchmark_queue_stage166;
 mod daemon_production_rust_admission_preflight_stage182;
 mod daemon_reload_owner_handoff_stage165;
 mod daemon_reload_runtime_parity_stage186;
+mod daemon_reload_runtime_parity_stage190;
 mod daemon_run_entrypoint_stage153;
 mod daemon_same_corpus_execution_smoke_stage184;
 mod daemon_signal_control_plane_stage152;
