@@ -78,6 +78,7 @@ mod runtime_vless_core;
 mod runtime_vless_reality_stage141;
 mod runtime_vless_reality_stage142;
 mod runtime_vless_shared_transport;
+mod runtime_vless_vision_stage143;
 mod runtime_vless_vmess_grpc_http2_stage134;
 mod runtime_vless_vmess_residual_stage138;
 mod runtime_vless_vmess_tls_stage135;
