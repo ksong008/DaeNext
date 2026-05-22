@@ -16,6 +16,7 @@ pub fn daemon_identity(version: &str) -> Value {
         "rust_daemon_crate_manifest_exists": true,
         "rust_daemon_optin_binary_exists": true,
         "rust_daemon_identity_command_available": true,
+        "rust_daemon_optin_run_command_available": true,
         "rust_default_run_entrypoint_exists": false,
         "rust_default_control_plane_entrypoint_admitted": false,
         "true_rust_default_daemon_admitted": false,

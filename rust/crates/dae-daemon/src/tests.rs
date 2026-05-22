@@ -1,8 +1,8 @@
 use serde_json::Value;
 
 use crate::{
-    Stage156DefaultRunIdentityOptions, daemon_identity, run_with_args_and_version,
-    stage149_identity_preflight_report, stage150_lifecycle_smoke_report,
+    RunOptions, Stage156DefaultRunIdentityOptions, daemon_identity, run_default_optin_report,
+    run_with_args_and_version, stage149_identity_preflight_report, stage150_lifecycle_smoke_report,
     stage151_control_plane_owner_preflight_report, stage152_signal_control_plane_smoke_report,
     stage153_run_entrypoint_preflight_report, stage156_default_run_identity_admission_report,
     stage157_control_plane_entrypoint_admission_report,
@@ -22,6 +22,11 @@ fn daemon_identity_is_opt_in_and_not_default() {
             .unwrap()
     );
     assert!(report["rust_daemon_optin_binary_exists"].as_bool().unwrap());
+    assert!(
+        report["rust_daemon_optin_run_command_available"]
+            .as_bool()
+            .unwrap()
+    );
     assert!(
         !report["rust_default_run_entrypoint_exists"]
             .as_bool()
@@ -63,14 +68,121 @@ fn daemon_runner_identity_command_outputs_json() {
 }
 
 #[test]
-fn daemon_runner_rejects_default_run_command() {
+fn daemon_runner_run_command_requires_config() {
     let output = run_with_args_and_version(["run"], "test-version");
     assert_eq!(output.exit_code, 2);
-    assert!(
-        output
-            .stderr
-            .contains("unsupported dae-daemon-optin command")
+    assert!(output.stderr.contains("run requires -c/--config"));
+}
+
+#[test]
+fn daemon_runner_run_command_rejects_missing_config_file() {
+    let root = std::env::temp_dir().join(format!("dae-daemon-run-missing-{}", std::process::id()));
+    let output = run_with_args_and_version(
+        [
+            "run".to_owned(),
+            "--config".to_owned(),
+            root.join("missing.dae").display().to_string(),
+            "--root".to_owned(),
+            root.display().to_string(),
+        ],
+        "test-version",
     );
+    assert_eq!(output.exit_code, 1);
+    assert!(output.stderr.contains("run config does not exist"));
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[test]
+fn run_default_optin_report_executes_bounded_lifecycle_and_smokes() {
+    let root =
+        std::env::temp_dir().join(format!("dae-daemon-run-report-test-{}", std::process::id()));
+    let config = root.join("config").join("run.dae");
+    std::fs::create_dir_all(config.parent().unwrap()).unwrap();
+    std::fs::write(
+        &config,
+        "global {\n  log_level: info\n}\n\nrouting {\n  pname(NetworkManager) -> direct\n}\n",
+    )
+    .unwrap();
+    let mut options = RunOptions::under_root(&root, &config);
+    options.disable_timestamp = true;
+    options.disable_sudo = true;
+
+    let report = run_default_optin_report(&options, "test-version").unwrap();
+    assert_eq!(report["name"].as_str().unwrap(), "dae-daemon-optin-run");
+    assert!(report["run_command_supported"].as_bool().unwrap());
+    assert!(report["run_entrypoint_executed"].as_bool().unwrap());
+    assert!(
+        report["rust_default_run_entrypoint_exists"]
+            .as_bool()
+            .unwrap()
+    );
+    assert!(report["config_loaded"].as_bool().unwrap());
+    assert!(report["pid_file_written"].as_bool().unwrap());
+    assert!(
+        report["progress_file_reload_done_written"]
+            .as_bool()
+            .unwrap()
+    );
+    assert!(report["sdnotify_ready_recorded"].as_bool().unwrap());
+    assert!(report["listener_smoke_passed"].as_bool().unwrap());
+    assert!(
+        report["listener"]["tcp_udp_loopback_listener_smoke_passed"]
+            .as_bool()
+            .unwrap()
+    );
+    assert!(
+        report["reload_owner_handoff_smoke_passed"]
+            .as_bool()
+            .unwrap()
+    );
+    assert!(
+        report["reload_owner_handoff"]["listener_reuse_sequence_smoke_passed"]
+            .as_bool()
+            .unwrap()
+    );
+    assert!(!report["production_listener_bound"].as_bool().unwrap());
+    assert!(!report["ebpf_attached"].as_bool().unwrap());
+    assert!(!report["benchmark_executable_now"].as_bool().unwrap());
+    assert!(!report["default_switch_allowed"].as_bool().unwrap());
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[test]
+fn daemon_runner_run_command_outputs_json() {
+    let root =
+        std::env::temp_dir().join(format!("dae-daemon-run-runner-test-{}", std::process::id()));
+    let config = root.join("config").join("run.dae");
+    std::fs::create_dir_all(config.parent().unwrap()).unwrap();
+    std::fs::write(
+        &config,
+        "global {\n  log_level: info\n}\n\nrouting {\n  pname(NetworkManager) -> direct\n}\n",
+    )
+    .unwrap();
+    let output = run_with_args_and_version(
+        [
+            "run".to_owned(),
+            "--config".to_owned(),
+            config.display().to_string(),
+            "--root".to_owned(),
+            root.display().to_string(),
+            "--disable-timestamp".to_owned(),
+            "--disable-sudo".to_owned(),
+            "--exit-after-ready".to_owned(),
+        ],
+        "test-version",
+    );
+    assert_eq!(output.exit_code, 0, "{}", output.stderr);
+    assert_eq!(output.stderr, "");
+    let json: Value = serde_json::from_str(&output.stdout).unwrap();
+    assert!(json["run_command_supported"].as_bool().unwrap());
+    assert!(json["listener_smoke_passed"].as_bool().unwrap());
+    assert!(json["reload_owner_handoff_smoke_passed"].as_bool().unwrap());
+    assert!(
+        !json["matched_go_rust_default_daemon_benchmark_recorded"]
+            .as_bool()
+            .unwrap()
+    );
+    let _ = std::fs::remove_dir_all(root);
 }
 
 #[test]
