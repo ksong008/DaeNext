@@ -1,5 +1,6 @@
 pub mod control_plane;
 pub mod control_plane_entrypoint;
+pub mod default_run;
 pub mod default_run_identity;
 pub mod identity;
 pub mod lifecycle;
@@ -22,6 +23,7 @@ pub use control_plane::{
 pub use control_plane_entrypoint::{
     default_stage157_root, stage157_control_plane_entrypoint_admission_report,
 };
+pub use default_run::{RunOptions, default_run_root, run_default_optin_report};
 pub use default_run_identity::{
     Stage156DefaultRunIdentityOptions, default_stage156_root,
     stage156_default_run_identity_admission_report,
