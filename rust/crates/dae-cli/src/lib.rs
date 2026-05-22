@@ -81,6 +81,7 @@ pub(crate) mod runtime_stage169_matched_benchmark_artifact_builder;
 pub(crate) mod runtime_stage170_matched_benchmark_artifact_writer;
 pub(crate) mod runtime_stage171_matched_benchmark_metadata_digest;
 pub(crate) mod runtime_stage172_matched_benchmark_command_capture;
+pub(crate) mod runtime_stage173_matched_benchmark_command_capture_verifier;
 pub(crate) mod runtime_stage26_candidate;
 pub(crate) mod runtime_stage27_candidate;
 pub(crate) mod runtime_stage29_preflight;
