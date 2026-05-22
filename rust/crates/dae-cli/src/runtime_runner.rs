@@ -175,6 +175,7 @@ use crate::runtime_stage186_reload_runtime_parity_gate::run_stage186_reload_runt
 use crate::runtime_stage187_matched_benchmark_readiness_gate::run_stage187_matched_benchmark_readiness_gate;
 use crate::runtime_stage188_bounded_benchmark_hard_gate_resolution::run_stage188_bounded_benchmark_hard_gate_resolution;
 use crate::runtime_stage189_production_dataplane_execution_evidence_gate::run_stage189_production_dataplane_execution_evidence_gate;
+use crate::runtime_stage190_live_reload_runtime_parity_execution_evidence_gate::run_stage190_live_reload_runtime_parity_execution_evidence_gate;
 
 pub(crate) fn run_runtime(args: &[String]) -> RunnerOutput {
     match args.first().map(String::as_str) {
@@ -660,6 +661,9 @@ pub(crate) fn run_runtime(args: &[String]) -> RunnerOutput {
         }
         Some("stage189-production-dataplane-execution-evidence-gate") => {
             run_stage189_production_dataplane_execution_evidence_gate(&args[1..])
+        }
+        Some("stage190-live-reload-runtime-parity-execution-evidence-gate") => {
+            run_stage190_live_reload_runtime_parity_execution_evidence_gate(&args[1..])
         }
         Some(subcommand) => {
             RunnerOutput::usage(format!("unsupported runtime subcommand: {subcommand}"))
