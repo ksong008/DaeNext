@@ -1,6 +1,7 @@
 use crate::identity::daemon_identity;
 use crate::lifecycle::{default_stage150_root, stage150_lifecycle_smoke_report};
 use crate::preflight::stage149_identity_preflight_report;
+use crate::{RunOptions, default_run_root, run_default_optin_report};
 use crate::{
     Stage156DefaultRunIdentityOptions, default_stage156_root,
     stage156_default_run_identity_admission_report,
@@ -12,6 +13,7 @@ use crate::{default_stage157_root, stage157_control_plane_entrypoint_admission_r
 use crate::{default_stage160_root, stage160_listener_ebpf_preflight_harness_report};
 use crate::{default_stage165_root, stage165_reload_owner_handoff_smoke_report};
 use crate::{default_stage167_root, stage167_reload_owner_benchmark_report};
+use std::path::PathBuf;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DaemonOutput {
@@ -47,6 +49,7 @@ pub fn run_with_args_and_version(
         Some("identity") if args.len() == 1 => {
             DaemonOutput::ok(format!("{}\n", daemon_identity(version)))
         }
+        Some("run") => run_default_optin_command(&args[1..], version),
         Some("stage149-identity-preflight") if args.len() == 1 => {
             DaemonOutput::ok(format!("{}\n", stage149_identity_preflight_report(version)))
         }
@@ -82,6 +85,77 @@ pub fn run_with_args_and_version(
             DaemonOutput::usage(format!("unsupported dae-daemon-optin command: {command}"))
         }
         None => DaemonOutput::usage("missing dae-daemon-optin command"),
+    }
+}
+
+fn run_default_optin_command(args: &[String], version: &str) -> DaemonOutput {
+    let mut root = default_run_root();
+    let mut config: Option<PathBuf> = None;
+    let mut logfile: Option<PathBuf> = None;
+    let mut disable_timestamp = false;
+    let mut disable_pidfile = false;
+    let mut disable_sudo = false;
+    let mut listener_smoke = true;
+    let mut reload_smoke = true;
+    let mut iter = args.iter();
+    while let Some(arg) = iter.next() {
+        match arg.as_str() {
+            "-c" | "--config" => {
+                let Some(value) = iter.next() else {
+                    return DaemonOutput::usage("missing run --config value");
+                };
+                config = Some(value.into());
+            }
+            _ if arg.starts_with("--config=") => {
+                config = arg.split_once('=').map(|(_, value)| value.into());
+            }
+            "--root" => {
+                let Some(value) = iter.next() else {
+                    return DaemonOutput::usage("missing run --root value");
+                };
+                root = value.into();
+            }
+            _ if arg.starts_with("--root=") => {
+                root = arg.split_once('=').unwrap().1.into();
+            }
+            "--logfile" => {
+                let Some(value) = iter.next() else {
+                    return DaemonOutput::usage("missing run --logfile value");
+                };
+                logfile = Some(value.into());
+            }
+            _ if arg.starts_with("--logfile=") => {
+                logfile = arg.split_once('=').map(|(_, value)| value.into());
+            }
+            "--disable-timestamp" => disable_timestamp = true,
+            "--disable-pidfile" => disable_pidfile = true,
+            "--disable-sudo" => disable_sudo = true,
+            "--no-listener-smoke" => listener_smoke = false,
+            "--no-reload-smoke" => reload_smoke = false,
+            "--exit-after-ready" | "--once" => {}
+            _ => return DaemonOutput::usage(format!("unsupported run argument: {arg}")),
+        }
+    }
+    let Some(config) = config else {
+        return DaemonOutput::usage("run requires -c/--config");
+    };
+    let mut options = RunOptions::under_root(root, config);
+    if let Some(logfile) = logfile {
+        options.logfile = logfile;
+    }
+    options.disable_timestamp = disable_timestamp;
+    options.disable_pidfile = disable_pidfile;
+    options.disable_sudo = disable_sudo;
+    options.listener_smoke = listener_smoke;
+    options.reload_smoke = reload_smoke;
+
+    match run_default_optin_report(&options, version) {
+        Ok(report) => DaemonOutput::ok(format!("{report}\n")),
+        Err(err) => DaemonOutput {
+            stdout: String::new(),
+            stderr: format!("{err}\n"),
+            exit_code: 1,
+        },
     }
 }
 
