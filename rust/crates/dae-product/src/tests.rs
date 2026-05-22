@@ -26,6 +26,7 @@ mod daemon_matched_benchmark_artifact_stage169;
 mod daemon_matched_benchmark_artifact_stage170;
 mod daemon_matched_benchmark_artifact_stage171;
 mod daemon_matched_benchmark_artifact_stage172;
+mod daemon_matched_benchmark_artifact_stage173;
 mod daemon_matched_benchmark_execution_stage158;
 mod daemon_matched_benchmark_execution_stage168;
 mod daemon_matched_benchmark_stage147;
