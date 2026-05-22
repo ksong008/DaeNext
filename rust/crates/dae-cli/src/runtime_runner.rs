@@ -137,6 +137,7 @@ use crate::runtime_stage148_daemon_identity_preflight_gate::run_stage148_daemon_
 use crate::runtime_stage149_daemon_identity_scaffold_gate::run_stage149_daemon_identity_scaffold_gate;
 use crate::runtime_stage150_daemon_lifecycle_gate::run_stage150_daemon_lifecycle_gate;
 use crate::runtime_stage151_control_plane_owner_gate::run_stage151_control_plane_owner_gate;
+use crate::runtime_stage152_signal_control_plane_gate::run_stage152_signal_control_plane_gate;
 
 pub(crate) fn run_runtime(args: &[String]) -> RunnerOutput {
     match args.first().map(String::as_str) {
@@ -508,6 +509,9 @@ pub(crate) fn run_runtime(args: &[String]) -> RunnerOutput {
         }
         Some("stage151-rust-control-plane-owner-preflight-gate") => {
             run_stage151_control_plane_owner_gate(&args[1..])
+        }
+        Some("stage152-rust-signal-control-plane-smoke-gate") => {
+            run_stage152_signal_control_plane_gate(&args[1..])
         }
         Some(subcommand) => {
             RunnerOutput::usage(format!("unsupported runtime subcommand: {subcommand}"))
