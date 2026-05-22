@@ -1,3 +1,4 @@
+pub mod control_plane;
 pub mod identity;
 pub mod lifecycle;
 pub mod preflight;
@@ -7,6 +8,10 @@ pub mod version;
 #[cfg(test)]
 mod tests;
 
+pub use control_plane::{
+    ControlPlaneOwnerPaths, default_stage151_root, run_stage151_control_plane_owner_preflight,
+    stage151_control_plane_owner_preflight_report,
+};
 pub use identity::{
     DAEMON_CRATE_NAME, DEFAULT_DAEMON_MANIFEST, GO_DEFAULT_IDENTITY, OPTIN_BINARY_NAME,
     daemon_identity,
