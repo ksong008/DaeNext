@@ -40,6 +40,7 @@ mod outbound_vless_vmess_grpc_http2_stage134;
 mod outbound_vless_vmess_residual_stage138;
 mod outbound_vless_vmess_tls_stage135;
 mod outbound_vless_vmess_utls_stage139;
+mod outbound_vless_vmess_utls_stage140;
 mod outbound_vless_vmess_xhttp_h3_stage137;
 mod outbound_vless_vmess_xhttp_http2_stage136;
 mod product_protocol_matrix;
