@@ -1,0 +1,126 @@
+{
+  "name": "stage193-default-product-switch-hard-gate-closure",
+  "stage": "stage193",
+  "prior_gate": "stage192-default-product-switch-recertification-input-gate",
+  "stage_complete": true,
+  "stage192_required_files": [
+    "manifest.json",
+    "prior/stage191-benchmark-admission-verification.json",
+    "switch/default-daemon-switch-blocker.json",
+    "switch/product-chain-switch-blocker.json",
+    "switch/rollback-recertification-gap.json",
+    "shared/gate-summary.json",
+    "next/stage193-default-product-switch-hard-gate-input.json"
+  ],
+  "stage193_expected_files": [
+    "manifest.json",
+    "prior/stage192-switch-recertification-verification.json",
+    "closure/default-switch-hard-gate-summary.json",
+    "closure/product-chain-hard-gate-summary.json",
+    "closure/benchmark-dataplane-reload-blocker-summary.json",
+    "shared/gate-summary.json",
+    "next/stage194-true-production-execution-implementation-input.json"
+  ],
+  "rows": [
+    {
+      "area": "Stage192 recertification verification",
+      "boundary": "verification is not admission",
+      "closed_flag": "default_switch_allowed=false",
+      "evidence": "Stage193 verifies the explicit Stage192 switch recertification blocker bundle",
+      "status": "requires-explicit-stage193-writer"
+    },
+    {
+      "area": "default switch hard gate",
+      "boundary": "does not switch default path",
+      "closed_flag": "default_switch_allowed=false",
+      "evidence": "Stage193 records default switch hard-closed until production and benchmark evidence exists",
+      "status": "requires-explicit-stage193-writer"
+    },
+    {
+      "area": "product-chain hard gate",
+      "boundary": "does not change product chain",
+      "closed_flag": "product_chain_switch_allowed=false",
+      "evidence": "Stage193 records product-chain switch hard-closed until default/product recertification passes",
+      "status": "requires-explicit-stage193-writer"
+    },
+    {
+      "area": "benchmark/dataplane/reload blocker summary",
+      "boundary": "does not run benchmark",
+      "closed_flag": "benchmark_executable_now=false",
+      "evidence": "Stage193 records that benchmark remains blocked by production dataplane and reload/runtime gaps",
+      "status": "requires-explicit-stage193-writer"
+    },
+    {
+      "area": "next implementation input",
+      "boundary": "does not admit runtime",
+      "closed_flag": "production_dataplane_admitted=false",
+      "evidence": "Stage193 points Stage194 back to true production execution implementation evidence",
+      "status": "requires-explicit-stage193-writer"
+    }
+  ],
+  "gates": [
+    {
+      "gate": "corpus_gate",
+      "opens_after": "Stage183 reviewed corpus binding remains carried through Stage184-193",
+      "status": "prepared_for_daemon_smoke"
+    },
+    {
+      "gate": "rust_production_command_gate",
+      "opens_after": "production-shaped Rust dae run command identity is admitted",
+      "status": "closed"
+    },
+    {
+      "gate": "daemon_execution_gate",
+      "opens_after": "Stage184 same-corpus identity smoke has passed but is not benchmark admission",
+      "status": "identity_smoke_passed"
+    },
+    {
+      "gate": "production_dataplane_gate",
+      "opens_after": "real production listener bind, listen_socket_map key 0/1 write, netns/dae0 setup, tc/eBPF attach, and BPF owner handoff evidence pass",
+      "status": "execution_gap_recorded"
+    },
+    {
+      "gate": "matched_benchmark_gate",
+      "opens_after": "production dataplane and reload/runtime parity pass with a same-corpus Go/Rust default daemon benchmark",
+      "status": "admission_input_blocked"
+    },
+    {
+      "gate": "default_product_switch_gate",
+      "opens_after": "matched benchmark results and default/product recertification pass",
+      "status": "hard_gate_closed"
+    }
+  ],
+  "remaining_blockers": [
+    "production dataplane execution evidence is still missing",
+    "live reload/runtime parity execution evidence is still missing",
+    "matched Go/Rust default daemon benchmark has not executed",
+    "default and product-chain switches remain hard-closed"
+  ],
+  "validation_commands": [
+    "python3 -m json.tool testdata/rebuild-golden/engine/runtime_stage193/default_product_switch_hard_gate_closure.json",
+    "python3 -m json.tool testdata/rebuild-golden/product/daemon/stage193_default_product_switch_hard_gate_closure.json",
+    "cargo run --manifest-path rust/Cargo.toml -p dae-cli --bin dae-cli-optin --quiet -- runtime stage193-default-product-switch-hard-gate-closure",
+    "cargo test --manifest-path rust/Cargo.toml -p dae-cli stage193 -- --nocapture",
+    "cargo test --manifest-path rust/Cargo.toml -p dae-product stage193 -- --nocapture",
+    "cargo test --manifest-path rust/Cargo.toml -p dae-cli -p dae-product -q",
+    "cargo fmt --manifest-path rust/Cargo.toml --all -- --check",
+    "git diff --check"
+  ],
+  "source": [
+    "DAEX_RUST_REBUILD_PLAN_2026-05-16.md:stage193",
+    "DAEX_RUST_REBUILD_PLAN_2026-05-16.md:stage192",
+    "DAEX_RUST_REBUILD_PLAN_2026-05-16.md:stage191",
+    "DAENEW_RUST_REBUILD_MEMO_2026-05-16.md:15.4",
+    "DAENEW_RUST_REBUILD_MEMO_2026-05-16.md:15.5",
+    "DAENEW_RUST_REBUILD_MEMO_2026-05-16.md:15.8"
+  ],
+  "hard_gates_resolved": false,
+  "production_dataplane_admitted": false,
+  "reload_runtime_parity_admitted": false,
+  "benchmark_executable_now": false,
+  "matched_go_rust_default_daemon_benchmark_recorded": false,
+  "true_rust_default_daemon_admitted": false,
+  "default_switch_allowed": false,
+  "default_path_mutation_allowed": false,
+  "product_chain_switch_allowed": false
+}

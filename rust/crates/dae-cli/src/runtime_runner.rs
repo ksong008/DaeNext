@@ -176,6 +176,11 @@ use crate::runtime_stage187_matched_benchmark_readiness_gate::run_stage187_match
 use crate::runtime_stage188_bounded_benchmark_hard_gate_resolution::run_stage188_bounded_benchmark_hard_gate_resolution;
 use crate::runtime_stage189_production_dataplane_execution_evidence_gate::run_stage189_production_dataplane_execution_evidence_gate;
 use crate::runtime_stage190_live_reload_runtime_parity_execution_evidence_gate::run_stage190_live_reload_runtime_parity_execution_evidence_gate;
+use crate::runtime_stage191_193_benchmark_switch_closure_gates::{
+    run_stage191_bounded_same_corpus_benchmark_admission_input_gate,
+    run_stage192_default_product_switch_recertification_input_gate,
+    run_stage193_default_product_switch_hard_gate_closure,
+};
 
 pub(crate) fn run_runtime(args: &[String]) -> RunnerOutput {
     match args.first().map(String::as_str) {
@@ -664,6 +669,15 @@ pub(crate) fn run_runtime(args: &[String]) -> RunnerOutput {
         }
         Some("stage190-live-reload-runtime-parity-execution-evidence-gate") => {
             run_stage190_live_reload_runtime_parity_execution_evidence_gate(&args[1..])
+        }
+        Some("stage191-bounded-same-corpus-benchmark-admission-input-gate") => {
+            run_stage191_bounded_same_corpus_benchmark_admission_input_gate(&args[1..])
+        }
+        Some("stage192-default-product-switch-recertification-input-gate") => {
+            run_stage192_default_product_switch_recertification_input_gate(&args[1..])
+        }
+        Some("stage193-default-product-switch-hard-gate-closure") => {
+            run_stage193_default_product_switch_hard_gate_closure(&args[1..])
         }
         Some(subcommand) => {
             RunnerOutput::usage(format!("unsupported runtime subcommand: {subcommand}"))

@@ -23,6 +23,7 @@ mod runtime_anytls_session_reuse_stage106;
 mod runtime_anytls_session_stage104;
 mod runtime_anytls_udp_packet_stage105;
 mod runtime_benchmark_readiness_stage154;
+mod runtime_benchmark_switch_closure_stage191_193;
 mod runtime_bounded_benchmark_hard_gate_stage188;
 mod runtime_bounded_benchmark_harness_stage167;
 mod runtime_bpf_owner_handoff_stage163;

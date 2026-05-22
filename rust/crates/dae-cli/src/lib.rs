@@ -99,6 +99,7 @@ pub(crate) mod runtime_stage187_matched_benchmark_readiness_gate;
 pub(crate) mod runtime_stage188_bounded_benchmark_hard_gate_resolution;
 pub(crate) mod runtime_stage189_production_dataplane_execution_evidence_gate;
 pub(crate) mod runtime_stage190_live_reload_runtime_parity_execution_evidence_gate;
+pub(crate) mod runtime_stage191_193_benchmark_switch_closure_gates;
 pub(crate) mod runtime_stage26_candidate;
 pub(crate) mod runtime_stage27_candidate;
 pub(crate) mod runtime_stage29_preflight;
