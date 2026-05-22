@@ -31,6 +31,7 @@ mod daemon_stage37_40;
 mod daemon_stage41_49;
 mod daemon_stage50_54;
 mod daemon_temporary_ebpf_map_stage161;
+mod daemon_temporary_ebpf_program_stage162;
 mod hysteria2_full_quic_stage110;
 mod hysteria2_true_quic_stage130;
 mod hysteria2_underlay_stage109;

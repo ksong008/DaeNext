@@ -9,6 +9,7 @@ pub mod param_object;
 pub mod runtime_maps;
 pub mod sockmap;
 pub mod temporary_map;
+pub mod temporary_program;
 pub mod tproxy_listener;
 
 #[cfg(test)]
@@ -45,6 +46,9 @@ pub use sockmap::{
 };
 pub use temporary_map::{
     TemporaryBpfArrayMapSmoke, default_bpffs_mount, run_temporary_array_map_pin_smoke,
+};
+pub use temporary_program::{
+    TemporaryBpfProgramAttachSmoke, run_temporary_socket_filter_attach_smoke,
 };
 pub use tproxy_listener::{
     TproxyListenerSet, TproxySocketOptions, open_tproxy_listener_set,
