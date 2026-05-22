@@ -124,6 +124,7 @@ use crate::runtime_stage135_vless_vmess_tls_gate::run_stage135_vless_vmess_tls_w
 use crate::runtime_stage136_vless_vmess_xhttp_http2_gate::run_stage136_vless_vmess_xhttp_http2_lifecycle_admission;
 use crate::runtime_stage137_vless_vmess_xhttp_h3_gate::run_stage137_vless_vmess_xhttp_h3_lifecycle_admission;
 use crate::runtime_stage138_vless_vmess_residual_gate::run_stage138_vless_vmess_utls_reality_vision_blocker_gate;
+use crate::runtime_stage139_vless_vmess_utls_wire_gate::run_stage139_vless_vmess_utls_wire_baseline_gate;
 
 pub(crate) fn run_runtime(args: &[String]) -> RunnerOutput {
     match args.first().map(String::as_str) {
@@ -456,6 +457,9 @@ pub(crate) fn run_runtime(args: &[String]) -> RunnerOutput {
         }
         Some("stage138-vless-vmess-utls-reality-vision-blocker-gate") => {
             run_stage138_vless_vmess_utls_reality_vision_blocker_gate(&args[1..])
+        }
+        Some("stage139-vless-vmess-utls-wire-baseline-gate") => {
+            run_stage139_vless_vmess_utls_wire_baseline_gate(&args[1..])
         }
         Some(subcommand) => {
             RunnerOutput::usage(format!("unsupported runtime subcommand: {subcommand}"))
