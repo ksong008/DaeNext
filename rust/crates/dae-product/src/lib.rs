@@ -88,6 +88,7 @@ pub mod stage177_matched_benchmark_real_corpus_review_queue_gate;
 pub mod stage178_matched_benchmark_reviewed_corpus_materializer;
 pub mod stage179_matched_benchmark_reviewed_corpus_verifier;
 pub mod stage180_matched_benchmark_reviewed_corpus_readiness_queue;
+pub mod stage181_matched_benchmark_reviewed_corpus_runtime_blocker;
 pub mod stage23_completion;
 pub mod stage24_product_gate;
 pub mod stage25_execution_queue;
@@ -767,6 +768,11 @@ pub use stage180_matched_benchmark_reviewed_corpus_readiness_queue::{
     Stage180MatchedBenchmarkReviewedCorpusReadinessQueueContract,
     Stage180MatchedBenchmarkReviewedCorpusReadinessQueueRow,
     stage180_matched_benchmark_reviewed_corpus_readiness_queue_contract,
+};
+pub use stage181_matched_benchmark_reviewed_corpus_runtime_blocker::{
+    Stage181MatchedBenchmarkReviewedCorpusRuntimeBlockerContract,
+    Stage181MatchedBenchmarkReviewedCorpusRuntimeBlockerGroup,
+    stage181_matched_benchmark_reviewed_corpus_runtime_blocker_contract,
 };
 pub use systemd::{SystemdContract, systemd_contract};
 pub use true_daemon_admission::{

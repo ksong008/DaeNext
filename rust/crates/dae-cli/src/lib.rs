@@ -89,6 +89,7 @@ pub(crate) mod runtime_stage177_matched_benchmark_real_corpus_review_queue_gate;
 pub(crate) mod runtime_stage178_matched_benchmark_reviewed_corpus_materializer;
 pub(crate) mod runtime_stage179_matched_benchmark_reviewed_corpus_verifier;
 pub(crate) mod runtime_stage180_matched_benchmark_reviewed_corpus_readiness_queue;
+pub(crate) mod runtime_stage181_matched_benchmark_reviewed_corpus_runtime_blocker;
 pub(crate) mod runtime_stage26_candidate;
 pub(crate) mod runtime_stage27_candidate;
 pub(crate) mod runtime_stage29_preflight;
