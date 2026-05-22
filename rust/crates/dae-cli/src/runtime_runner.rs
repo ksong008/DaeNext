@@ -152,6 +152,7 @@ use crate::runtime_stage163_bpf_owner_handoff_queue_gate::run_stage163_bpf_owner
 use crate::runtime_stage164_bpf_owner_handoff_smoke_gate::run_stage164_bpf_owner_handoff_smoke_gate;
 use crate::runtime_stage165_daemon_reload_owner_handoff_gate::run_stage165_daemon_reload_owner_handoff_gate;
 use crate::runtime_stage166_production_equivalent_benchmark_queue_gate::run_stage166_production_equivalent_benchmark_queue_gate;
+use crate::runtime_stage167_bounded_benchmark_harness_gate::run_stage167_bounded_benchmark_harness_gate;
 
 pub(crate) fn run_runtime(args: &[String]) -> RunnerOutput {
     match args.first().map(String::as_str) {
@@ -568,6 +569,9 @@ pub(crate) fn run_runtime(args: &[String]) -> RunnerOutput {
         }
         Some("stage166-production-equivalent-listener-ebpf-benchmark-admission-queue-gate") => {
             run_stage166_production_equivalent_benchmark_queue_gate(&args[1..])
+        }
+        Some("stage167-bounded-production-equivalent-listener-ebpf-benchmark-harness-gate") => {
+            run_stage167_bounded_benchmark_harness_gate(&args[1..])
         }
         Some(subcommand) => {
             RunnerOutput::usage(format!("unsupported runtime subcommand: {subcommand}"))
