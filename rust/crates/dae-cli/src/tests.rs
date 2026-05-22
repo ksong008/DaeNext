@@ -73,6 +73,7 @@ mod runtime_matched_benchmark_artifact_stage180;
 mod runtime_matched_benchmark_artifact_stage181;
 mod runtime_matched_benchmark_execution_stage158;
 mod runtime_matched_benchmark_execution_stage168;
+mod runtime_matched_benchmark_readiness_stage187;
 mod runtime_matched_benchmark_stage147;
 mod runtime_outbound_true_dataplane_stage133;
 mod runtime_product_chain_blocker_stage155;
