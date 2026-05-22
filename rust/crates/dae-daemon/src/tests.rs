@@ -5,6 +5,7 @@ use crate::{
     stage149_identity_preflight_report, stage150_lifecycle_smoke_report,
     stage151_control_plane_owner_preflight_report, stage152_signal_control_plane_smoke_report,
     stage153_run_entrypoint_preflight_report, stage156_default_run_identity_admission_report,
+    stage157_control_plane_entrypoint_admission_report,
 };
 
 #[test]
@@ -382,5 +383,67 @@ fn daemon_runner_stage156_default_run_identity_command_outputs_json() {
             .unwrap()
     );
     assert!(!json["production_listener_bound"].as_bool().unwrap());
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[test]
+fn stage157_control_plane_entrypoint_admits_optin_contract_only() {
+    let root =
+        std::env::temp_dir().join(format!("dae-stage157-daemon-test-{}", std::process::id()));
+    let report = stage157_control_plane_entrypoint_admission_report(&root).unwrap();
+    assert!(
+        report["control_plane_entrypoint_optin_admitted"]
+            .as_bool()
+            .unwrap()
+    );
+    assert!(
+        report["rust_default_run_entrypoint_exists"]
+            .as_bool()
+            .unwrap()
+    );
+    assert!(
+        report["rust_default_control_plane_entrypoint_admitted"]
+            .as_bool()
+            .unwrap()
+    );
+    assert!(report["stage156_run_identity_reused"].as_bool().unwrap());
+    assert!(report["stage151_owner_preflight_reused"].as_bool().unwrap());
+    assert!(!report["production_listener_bound"].as_bool().unwrap());
+    assert!(!report["ebpf_attached"].as_bool().unwrap());
+    assert!(!report["benchmark_executable_now"].as_bool().unwrap());
+    assert!(!report["default_switch_allowed"].as_bool().unwrap());
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[test]
+fn daemon_runner_stage157_control_plane_entrypoint_command_outputs_json() {
+    let root =
+        std::env::temp_dir().join(format!("dae-stage157-runner-test-{}", std::process::id()));
+    let output = run_with_args_and_version(
+        [
+            "stage157-control-plane-entrypoint-admission".to_owned(),
+            "--root".to_owned(),
+            root.display().to_string(),
+        ],
+        "test-version",
+    );
+    assert_eq!(output.exit_code, 0, "{}", output.stderr);
+    let json: Value = serde_json::from_str(&output.stdout).unwrap();
+    assert!(
+        json["control_plane_entrypoint_optin_admitted"]
+            .as_bool()
+            .unwrap()
+    );
+    assert!(
+        json["control_plane_owner"]["rust_control_plane_owner_smoke_passed"]
+            .as_bool()
+            .unwrap()
+    );
+    assert!(
+        json["run_identity"]["rust_default_run_identity_optin_admitted"]
+            .as_bool()
+            .unwrap()
+    );
+    assert!(!json["true_rust_default_daemon_admitted"].as_bool().unwrap());
     let _ = std::fs::remove_dir_all(root);
 }

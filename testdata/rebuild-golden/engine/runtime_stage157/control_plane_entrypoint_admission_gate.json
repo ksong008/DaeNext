@@ -1,0 +1,76 @@
+{
+  "benchmark_executable_now": false,
+  "blocked": false,
+  "blockers": [],
+  "bpf_owner_transfer_contract_recorded": false,
+  "control_plane_entrypoint_harness_available": true,
+  "control_plane_entrypoint_optin_admitted": false,
+  "control_plane_reload_owner_sequence_recorded": false,
+  "control_plane_rollback_sequence_recorded": false,
+  "control_plane_startup_sequence_recorded": false,
+  "default_path_mutation_allowed": false,
+  "default_switch_allowed": false,
+  "dns_cache_migration_guard_recorded": false,
+  "ebpf_attached": false,
+  "entrypoint_scope": [
+    "Stage157 composes Stage156 run identity and Stage151 control-plane owner preflight",
+    "listener reuse, BPF ownership transfer, DNS cache guard, rollback, and reload scoped flush are recorded",
+    "production listener binding and eBPF attach remain closed",
+    "matched benchmark and default/product switches remain closed"
+  ],
+  "evidence_class": "rust-daemon-opt-in-control-plane-entrypoint-admission-gate",
+  "execute_smoke": false,
+  "go_default_path_preserved": true,
+  "go_fallback_required": true,
+  "isolated_control_plane_entrypoint_paths_validated": false,
+  "listener_reuse_contract_recorded": false,
+  "matched_go_rust_default_daemon_benchmark_recorded": false,
+  "name": "stage157-control-plane-entrypoint-admission-gate",
+  "next_admission_queue": [
+    {
+      "required_output": "run the same config corpus on Go default daemon and true Rust default daemon before any default/product switch",
+      "stage": "stage158",
+      "target": "matched Go/Rust default daemon benchmark execution"
+    }
+  ],
+  "prior_gate": "stage156-rust-default-run-identity-admission-gate",
+  "product_chain_switch_allowed": false,
+  "production_listener_bound": false,
+  "read_only": true,
+  "reload_scoped_flush_after_current_swap_recorded": false,
+  "remaining_blockers": [
+    "production listener binding and eBPF attach remain closed",
+    "matched Go/Rust default daemon benchmark has not executed",
+    "true Rust default daemon admission remains false until production binding and matched benchmark pass",
+    "default daemon and product-chain switches remain closed"
+  ],
+  "rust_default_control_plane_entrypoint_admitted": false,
+  "rust_default_run_entrypoint_exists": true,
+  "source": [
+    "DAEX_RUST_REBUILD_PLAN_2026-05-16.md:stage157",
+    "DAEX_RUST_REBUILD_PLAN_2026-05-16.md:stage151",
+    "DAEX_RUST_REBUILD_PLAN_2026-05-16.md:stage156",
+    "DAENEW_RUST_REBUILD_MEMO_2026-05-16.md:15.3",
+    "DAENEW_RUST_REBUILD_MEMO_2026-05-16.md:15.4",
+    "DAENEW_RUST_REBUILD_MEMO_2026-05-16.md:15.8",
+    "rust/crates/dae-daemon/src/control_plane_entrypoint.rs"
+  ],
+  "stage": "stage157",
+  "stage151_owner_preflight_reused": false,
+  "stage156_run_identity_reused": false,
+  "true_rust_default_daemon_admitted": false,
+  "validation_commands": [
+    "cargo run --manifest-path rust/Cargo.toml -p dae-daemon --bin dae-daemon-optin -- stage157-control-plane-entrypoint-admission --root /tmp/dae-stage157-control-plane-entrypoint",
+    "python3 -m json.tool testdata/rebuild-golden/engine/runtime_stage157/control_plane_entrypoint_admission_gate.json",
+    "python3 -m json.tool testdata/rebuild-golden/product/daemon/stage157_control_plane_entrypoint_admission_gate.json",
+    "cargo run --manifest-path rust/Cargo.toml -p dae-cli --bin dae-cli-optin --quiet -- runtime stage157-control-plane-entrypoint-admission-gate",
+    "cargo run --manifest-path rust/Cargo.toml -p dae-cli --bin dae-cli-optin --quiet -- runtime stage157-control-plane-entrypoint-admission-gate --execute-smoke --root /tmp/dae-stage157-cli-control-plane-entrypoint",
+    "cargo test --manifest-path rust/Cargo.toml -p dae-daemon stage157 -- --nocapture",
+    "cargo test --manifest-path rust/Cargo.toml -p dae-cli stage157 -- --nocapture",
+    "cargo test --manifest-path rust/Cargo.toml -p dae-product stage157 -- --nocapture",
+    "cargo test --manifest-path rust/Cargo.toml -p dae-cli stage156 -- --nocapture",
+    "cargo test --manifest-path rust/Cargo.toml -p dae-daemon -p dae-cli -p dae-product -q",
+    "cargo fmt --manifest-path rust/Cargo.toml --all -- --check",
+    "git diff --check"
+  ]
+}

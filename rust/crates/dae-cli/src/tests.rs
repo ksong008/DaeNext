@@ -25,6 +25,7 @@ mod runtime_anytls_udp_packet_stage105;
 mod runtime_benchmark_readiness_stage154;
 mod runtime_candidate_preflight;
 mod runtime_command_inventory;
+mod runtime_control_plane_entrypoint_stage157;
 mod runtime_control_plane_owner_stage151;
 mod runtime_daemon_identity_stage148;
 mod runtime_daemon_identity_stage149;

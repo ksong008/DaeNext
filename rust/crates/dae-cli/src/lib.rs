@@ -65,6 +65,7 @@ pub(crate) mod runtime_stage153_run_entrypoint_gate;
 pub(crate) mod runtime_stage154_benchmark_readiness_refresh_gate;
 pub(crate) mod runtime_stage155_product_chain_blocker_review_gate;
 pub(crate) mod runtime_stage156_default_run_identity_gate;
+pub(crate) mod runtime_stage157_control_plane_entrypoint_gate;
 pub(crate) mod runtime_stage26_candidate;
 pub(crate) mod runtime_stage27_candidate;
 pub(crate) mod runtime_stage29_preflight;
