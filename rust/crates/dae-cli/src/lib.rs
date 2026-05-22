@@ -75,6 +75,7 @@ pub(crate) mod runtime_stage163_bpf_owner_handoff_queue_gate;
 pub(crate) mod runtime_stage164_bpf_owner_handoff_smoke_gate;
 pub(crate) mod runtime_stage165_daemon_reload_owner_handoff_gate;
 pub(crate) mod runtime_stage166_production_equivalent_benchmark_queue_gate;
+pub(crate) mod runtime_stage167_bounded_benchmark_harness_gate;
 pub(crate) mod runtime_stage26_candidate;
 pub(crate) mod runtime_stage27_candidate;
 pub(crate) mod runtime_stage29_preflight;

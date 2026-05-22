@@ -5,6 +5,7 @@ pub mod identity;
 pub mod lifecycle;
 pub mod listener_ebpf_preflight;
 pub mod preflight;
+pub mod reload_owner_benchmark;
 pub mod reload_owner_handoff;
 pub mod run_entrypoint;
 pub mod runner;
@@ -37,6 +38,7 @@ pub use listener_ebpf_preflight::{
     default_stage160_root, stage160_listener_ebpf_preflight_harness_report,
 };
 pub use preflight::stage149_identity_preflight_report;
+pub use reload_owner_benchmark::{default_stage167_root, stage167_reload_owner_benchmark_report};
 pub use reload_owner_handoff::{
     ReloadOwnerHandoffPaths, default_stage165_root, stage165_reload_owner_handoff_smoke_report,
 };

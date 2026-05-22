@@ -74,6 +74,7 @@ pub mod stage163_bpf_owner_handoff_queue_gate;
 pub mod stage164_bpf_owner_handoff_smoke_gate;
 pub mod stage165_daemon_reload_owner_handoff_gate;
 pub mod stage166_production_equivalent_benchmark_queue_gate;
+pub mod stage167_bounded_benchmark_harness_gate;
 pub mod stage23_completion;
 pub mod stage24_product_gate;
 pub mod stage25_execution_queue;
@@ -687,6 +688,10 @@ pub use stage166_production_equivalent_benchmark_queue_gate::{
     Stage166ProductionEquivalentBenchmarkQueueGateContract,
     Stage166ProductionEquivalentBenchmarkQueueGateRow,
     stage166_production_equivalent_benchmark_queue_gate_contract,
+};
+pub use stage167_bounded_benchmark_harness_gate::{
+    Stage167BoundedBenchmarkHarnessGateContract, Stage167BoundedBenchmarkHarnessGateRow,
+    stage167_bounded_benchmark_harness_gate_contract,
 };
 pub use systemd::{SystemdContract, systemd_contract};
 pub use true_daemon_admission::{
