@@ -52,6 +52,7 @@ mod runtime_quic_h3_family_stage132;
 mod runtime_reality_session_mutation_stage102;
 mod runtime_shadowsocksr_stage95;
 mod runtime_shared_tls_stage81;
+mod runtime_shared_transport_outbound_stage146;
 mod runtime_sip003_simple_obfs_http_stage92;
 mod runtime_sip003_simple_obfs_tls_stage93;
 mod runtime_sip003_v2ray_plugin_stage94;

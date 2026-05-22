@@ -131,6 +131,7 @@ use crate::runtime_stage142_vless_reality_fallback_gate::run_stage142_vless_real
 use crate::runtime_stage143_vless_vision_fallback_gate::run_stage143_vless_vision_fallback_gate;
 use crate::runtime_stage144_vless_vmess_recertification_gate::run_stage144_vless_vmess_recertification_gate;
 use crate::runtime_stage145_trojan_go_recertification_gate::run_stage145_trojan_go_recertification_gate;
+use crate::runtime_stage146_shared_transport_outbound_recertification_gate::run_stage146_shared_transport_outbound_recertification_gate;
 
 pub(crate) fn run_runtime(args: &[String]) -> RunnerOutput {
     match args.first().map(String::as_str) {
@@ -484,6 +485,9 @@ pub(crate) fn run_runtime(args: &[String]) -> RunnerOutput {
         }
         Some("stage145-trojan-go-fallback-aware-recertification-gate") => {
             run_stage145_trojan_go_recertification_gate(&args[1..])
+        }
+        Some("stage146-shared-transport-outbound-fallback-aware-recertification-gate") => {
+            run_stage146_shared_transport_outbound_recertification_gate(&args[1..])
         }
         Some(subcommand) => {
             RunnerOutput::usage(format!("unsupported runtime subcommand: {subcommand}"))
