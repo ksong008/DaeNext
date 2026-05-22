@@ -45,6 +45,7 @@ pub(crate) mod runtime_stage133_outbound_true_dataplane_readiness_gate;
 pub(crate) mod runtime_stage134_vless_vmess_grpc_http2_gate;
 pub(crate) mod runtime_stage135_vless_vmess_tls_gate;
 pub(crate) mod runtime_stage136_vless_vmess_xhttp_http2_gate;
+pub(crate) mod runtime_stage137_vless_vmess_xhttp_h3_gate;
 pub(crate) mod runtime_stage26_candidate;
 pub(crate) mod runtime_stage27_candidate;
 pub(crate) mod runtime_stage29_preflight;

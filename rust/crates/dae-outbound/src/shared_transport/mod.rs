@@ -13,6 +13,7 @@ pub mod tls;
 pub mod tls_fragment;
 pub mod utls_fingerprint;
 pub mod xhttp;
+pub mod xhttp_h3;
 
 pub use dataplane::{
     DEFAULT_WS_KEY, HttpUpgradeOptions, SharedTransportLoopbackReport, SimpleObfsHttpOptions,
@@ -78,4 +79,8 @@ pub use xhttp::{
     XHttpXmuxOptions, read_xhttp_http2_request, read_xhttp_http2_response,
     write_xhttp_http2_request, write_xhttp_http2_response, xhttp_packet_exchange,
     xhttp_packet_request, xhttp_request_path,
+};
+pub use xhttp_h3::{
+    XHTTP_H3_ALPN, XHTTP_H3_HANDSHAKE_IDLE_TIMEOUT_SECS, XHTTP_H3_KEEPALIVE_SECS,
+    XHttpH3LoopbackOptions, XHttpH3LoopbackReport, xhttp_h3_packet_up_loopback,
 };
