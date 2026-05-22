@@ -41,6 +41,7 @@ mod outbound_vless_reality_stage142;
 mod outbound_vless_vision_stage143;
 mod outbound_vless_vmess_grpc_http2_stage134;
 mod outbound_vless_vmess_residual_stage138;
+mod outbound_vless_vmess_stage144;
 mod outbound_vless_vmess_tls_stage135;
 mod outbound_vless_vmess_utls_stage139;
 mod outbound_vless_vmess_utls_stage140;
