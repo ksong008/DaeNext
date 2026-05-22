@@ -2,7 +2,7 @@ use serde_json::Value;
 
 use crate::{
     daemon_identity, run_with_args_and_version, stage149_identity_preflight_report,
-    stage150_lifecycle_smoke_report,
+    stage150_lifecycle_smoke_report, stage151_control_plane_owner_preflight_report,
 };
 
 #[test]
@@ -111,5 +111,76 @@ fn daemon_runner_stage150_lifecycle_command_outputs_json() {
             .unwrap()
     );
     assert!(!json["production_paths_mutated"].as_bool().unwrap());
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[test]
+fn stage151_control_plane_owner_preflight_uses_isolated_paths() {
+    let root =
+        std::env::temp_dir().join(format!("dae-stage151-daemon-test-{}", std::process::id()));
+    let report = stage151_control_plane_owner_preflight_report(&root).unwrap();
+    assert!(
+        report["rust_control_plane_owner_preflight_recorded"]
+            .as_bool()
+            .unwrap()
+    );
+    assert!(
+        report["control_plane_startup_sequence_recorded"]
+            .as_bool()
+            .unwrap()
+    );
+    assert!(
+        report["control_plane_reload_owner_sequence_recorded"]
+            .as_bool()
+            .unwrap()
+    );
+    assert!(
+        report["control_plane_rollback_sequence_recorded"]
+            .as_bool()
+            .unwrap()
+    );
+    assert!(
+        report["listener_reuse_contract_recorded"]
+            .as_bool()
+            .unwrap()
+    );
+    assert!(
+        report["dns_cache_migration_guard_recorded"]
+            .as_bool()
+            .unwrap()
+    );
+    assert!(!report["production_listener_bound"].as_bool().unwrap());
+    assert!(!report["ebpf_attached"].as_bool().unwrap());
+    assert!(!report["default_switch_allowed"].as_bool().unwrap());
+    assert_eq!(report["reload_core"]["flip"].as_u64().unwrap(), 1);
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[test]
+fn daemon_runner_stage151_control_plane_owner_command_outputs_json() {
+    let root =
+        std::env::temp_dir().join(format!("dae-stage151-runner-test-{}", std::process::id()));
+    let output = run_with_args_and_version(
+        [
+            "stage151-control-plane-owner-preflight".to_owned(),
+            "--root".to_owned(),
+            root.display().to_string(),
+        ],
+        "test-version",
+    );
+    assert_eq!(output.exit_code, 0, "{}", output.stderr);
+    assert_eq!(output.stderr, "");
+    let json: Value = serde_json::from_str(&output.stdout).unwrap();
+    assert!(
+        json["rust_control_plane_owner_smoke_passed"]
+            .as_bool()
+            .unwrap()
+    );
+    assert!(
+        !json["rust_default_control_plane_entrypoint_admitted"]
+            .as_bool()
+            .unwrap()
+    );
+    assert!(!json["production_listener_bound"].as_bool().unwrap());
     let _ = std::fs::remove_dir_all(root);
 }
