@@ -24,6 +24,7 @@ mod daemon_listener_ebpf_preflight_stage160;
 mod daemon_matched_benchmark_execution_stage158;
 mod daemon_matched_benchmark_stage147;
 mod daemon_product_chain_blocker_stage155;
+mod daemon_production_equivalent_benchmark_queue_stage166;
 mod daemon_reload_owner_handoff_stage165;
 mod daemon_run_entrypoint_stage153;
 mod daemon_signal_control_plane_stage152;

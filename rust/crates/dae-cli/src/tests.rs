@@ -60,6 +60,7 @@ mod runtime_matched_benchmark_execution_stage158;
 mod runtime_matched_benchmark_stage147;
 mod runtime_outbound_true_dataplane_stage133;
 mod runtime_product_chain_blocker_stage155;
+mod runtime_production_equivalent_benchmark_queue_stage166;
 mod runtime_protocol_55_61;
 mod runtime_protocol_matrix_stage96;
 mod runtime_quic_h3_family_stage108;
