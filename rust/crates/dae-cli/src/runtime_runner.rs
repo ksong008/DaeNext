@@ -154,6 +154,7 @@ use crate::runtime_stage165_daemon_reload_owner_handoff_gate::run_stage165_daemo
 use crate::runtime_stage166_production_equivalent_benchmark_queue_gate::run_stage166_production_equivalent_benchmark_queue_gate;
 use crate::runtime_stage167_bounded_benchmark_harness_gate::run_stage167_bounded_benchmark_harness_gate;
 use crate::runtime_stage168_matched_benchmark_execution_gate::run_stage168_matched_benchmark_execution_gate;
+use crate::runtime_stage169_matched_benchmark_artifact_builder::run_stage169_matched_benchmark_artifact_builder;
 
 pub(crate) fn run_runtime(args: &[String]) -> RunnerOutput {
     match args.first().map(String::as_str) {
@@ -576,6 +577,9 @@ pub(crate) fn run_runtime(args: &[String]) -> RunnerOutput {
         }
         Some("stage168-matched-default-daemon-benchmark-execution-gate") => {
             run_stage168_matched_benchmark_execution_gate(&args[1..])
+        }
+        Some("stage169-matched-benchmark-corpus-artifact-builder") => {
+            run_stage169_matched_benchmark_artifact_builder(&args[1..])
         }
         Some(subcommand) => {
             RunnerOutput::usage(format!("unsupported runtime subcommand: {subcommand}"))
