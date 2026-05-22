@@ -1,0 +1,78 @@
+{
+  "benchmark_executable_now": false,
+  "blocked": false,
+  "blockers": [],
+  "default_path_mutation_allowed": false,
+  "default_switch_allowed": false,
+  "evidence_class": "rust-daemon-opt-in-lifecycle-smoke-gate",
+  "execute_smoke": false,
+  "go_default_path_preserved": true,
+  "go_fallback_required": true,
+  "isolated_pid_progress_paths_validated": false,
+  "lifecycle_scope": [
+    "isolated pid file",
+    "isolated progress file",
+    "sdnotify READY=1 record",
+    "startup ReloadDone byte",
+    "reload ReloadSend/ReloadProcessing/ReloadDone sequence",
+    "suspend ReloadProcessing/ReloadDone sequence",
+    "no production /var/run mutation"
+  ],
+  "matched_go_rust_default_daemon_benchmark_recorded": false,
+  "name": "stage150-rust-daemon-lifecycle-smoke-gate",
+  "next_admission_queue": [
+    {
+      "required_output": "prove Rust-owned control-plane lifecycle under opt-in test paths",
+      "stage": "stage151",
+      "target": "Rust control-plane owner preflight"
+    },
+    {
+      "required_output": "run Go and Rust daemon identities on the same corpus after lifecycle/control-plane preflight passes",
+      "stage": "stage152",
+      "target": "matched default daemon benchmark execution"
+    }
+  ],
+  "product_chain_switch_allowed": false,
+  "production_paths_mutated": false,
+  "read_only": true,
+  "remaining_blockers": [
+    "Rust default run entrypoint and control-plane ownership are not admitted",
+    "Stage150 lifecycle smoke does not start production tproxy/eBPF/control-plane traffic",
+    "matched benchmark cannot execute until control-plane lifecycle and traffic smoke pass",
+    "default daemon and product-chain switches remain closed"
+  ],
+  "rust_daemon_crate_manifest_exists": true,
+  "rust_daemon_identity_scaffolded": true,
+  "rust_daemon_lifecycle_smoke_harness_available": true,
+  "rust_daemon_lifecycle_smoke_passed": false,
+  "rust_daemon_optin_binary_exists": true,
+  "rust_default_control_plane_entrypoint_admitted": false,
+  "rust_default_run_entrypoint_exists": false,
+  "source": [
+    "DAEX_RUST_REBUILD_PLAN_2026-05-16.md:stage150",
+    "DAENEW_RUST_REBUILD_MEMO_2026-05-16.md:15.1",
+    "DAENEW_RUST_REBUILD_MEMO_2026-05-16.md:15.8",
+    "DAENEW_RUST_REBUILD_MEMO_2026-05-16.md:30.2",
+    "DAENEW_RUST_REBUILD_MEMO_2026-05-16.md:30.3",
+    "rust/crates/dae-daemon/src/lifecycle.rs",
+    "rust/crates/dae-daemon/src/runner.rs"
+  ],
+  "stage": "stage150",
+  "true_rust_default_daemon_admitted": false,
+  "validation_commands": [
+    "cargo run --manifest-path rust/Cargo.toml -p dae-daemon --bin dae-daemon-optin -- stage150-lifecycle-smoke --root /tmp/dae-stage150-daemon-lifecycle-smoke",
+    "cargo test --manifest-path rust/Cargo.toml -p dae-daemon -- --nocapture",
+    "python3 -m json.tool testdata/rebuild-golden/engine/runtime_stage150/rust_daemon_lifecycle_smoke_gate.json",
+    "python3 -m json.tool testdata/rebuild-golden/product/daemon/stage150_rust_daemon_lifecycle_smoke_gate.json",
+    "cargo run --manifest-path rust/Cargo.toml -p dae-cli --bin dae-cli-optin --quiet -- runtime stage150-rust-daemon-lifecycle-smoke-gate",
+    "cargo run --manifest-path rust/Cargo.toml -p dae-cli --bin dae-cli-optin --quiet -- runtime stage150-rust-daemon-lifecycle-smoke-gate --execute-smoke --root /tmp/dae-stage150-cli-lifecycle-smoke",
+    "cargo test --manifest-path rust/Cargo.toml -p dae-cli stage150 -- --nocapture",
+    "cargo test --manifest-path rust/Cargo.toml -p dae-product stage150 -- --nocapture",
+    "cargo test --manifest-path rust/Cargo.toml -p dae-cli stage149 -- --nocapture",
+    "cargo test --manifest-path rust/Cargo.toml -p dae-daemon -p dae-cli -p dae-product -q",
+    "cargo test --manifest-path rust/Cargo.toml -p dae-outbound -p dae-cli -p dae-product -q",
+    "cargo fmt --manifest-path rust/Cargo.toml --all -- --check",
+    "git diff --check"
+  ]
+}
+
