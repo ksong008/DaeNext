@@ -35,6 +35,7 @@ mod juicity_outbound_dataplane_stage129;
 mod juicity_packet_state_stage120;
 mod juicity_stream_packet_conn_stage126;
 mod juicity_transport_packet_conn_stage125;
+mod outbound_shared_transport_stage146;
 mod outbound_trojan_go_stage145;
 mod outbound_true_dataplane_stage133;
 mod outbound_vless_reality_stage141;
