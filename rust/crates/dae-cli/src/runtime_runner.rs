@@ -134,6 +134,7 @@ use crate::runtime_stage145_trojan_go_recertification_gate::run_stage145_trojan_
 use crate::runtime_stage146_shared_transport_outbound_recertification_gate::run_stage146_shared_transport_outbound_recertification_gate;
 use crate::runtime_stage147_matched_benchmark_readiness_gate::run_stage147_matched_benchmark_readiness_gate;
 use crate::runtime_stage148_daemon_identity_preflight_gate::run_stage148_daemon_identity_preflight_gate;
+use crate::runtime_stage149_daemon_identity_scaffold_gate::run_stage149_daemon_identity_scaffold_gate;
 
 pub(crate) fn run_runtime(args: &[String]) -> RunnerOutput {
     match args.first().map(String::as_str) {
@@ -496,6 +497,9 @@ pub(crate) fn run_runtime(args: &[String]) -> RunnerOutput {
         }
         Some("stage148-rust-daemon-identity-preflight-gate") => {
             run_stage148_daemon_identity_preflight_gate(&args[1..])
+        }
+        Some("stage149-rust-daemon-identity-scaffold-gate") => {
+            run_stage149_daemon_identity_scaffold_gate(&args[1..])
         }
         Some(subcommand) => {
             RunnerOutput::usage(format!("unsupported runtime subcommand: {subcommand}"))
