@@ -9,6 +9,7 @@ use crate::{default_stage151_root, stage151_control_plane_owner_preflight_report
 use crate::{default_stage152_root, stage152_signal_control_plane_smoke_report};
 use crate::{default_stage153_root, stage153_run_entrypoint_preflight_report};
 use crate::{default_stage157_root, stage157_control_plane_entrypoint_admission_report};
+use crate::{default_stage160_root, stage160_listener_ebpf_preflight_harness_report};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DaemonOutput {
@@ -63,6 +64,9 @@ pub fn run_with_args_and_version(
         Some("stage157-control-plane-entrypoint-admission") => {
             run_stage157_control_plane_entrypoint_admission_command(&args[1..])
         }
+        Some("stage160-listener-ebpf-preflight-harness") => {
+            run_stage160_listener_ebpf_preflight_harness_command(&args[1..])
+        }
         Some("identity") | Some("stage149-identity-preflight") => {
             DaemonOutput::usage("unsupported dae-daemon-optin argument")
         }
@@ -70,6 +74,37 @@ pub fn run_with_args_and_version(
             DaemonOutput::usage(format!("unsupported dae-daemon-optin command: {command}"))
         }
         None => DaemonOutput::usage("missing dae-daemon-optin command"),
+    }
+}
+
+fn run_stage160_listener_ebpf_preflight_harness_command(args: &[String]) -> DaemonOutput {
+    let mut root = default_stage160_root();
+    let mut iter = args.iter();
+    while let Some(arg) = iter.next() {
+        match arg.as_str() {
+            "--root" => {
+                let Some(value) = iter.next() else {
+                    return DaemonOutput::usage("missing stage160 --root value");
+                };
+                root = value.into();
+            }
+            _ if arg.starts_with("--root=") => {
+                root = arg.split_once('=').unwrap().1.into();
+            }
+            _ => {
+                return DaemonOutput::usage(format!(
+                    "unsupported stage160 listener/eBPF preflight argument: {arg}"
+                ));
+            }
+        }
+    }
+    match stage160_listener_ebpf_preflight_harness_report(&root) {
+        Ok(report) => DaemonOutput::ok(format!("{report}\n")),
+        Err(err) => DaemonOutput {
+            stdout: String::new(),
+            stderr: format!("{err}\n"),
+            exit_code: 1,
+        },
     }
 }
 
