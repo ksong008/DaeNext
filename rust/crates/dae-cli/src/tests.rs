@@ -84,6 +84,7 @@ mod runtime_protocol_matrix_stage96;
 mod runtime_quic_h3_family_stage108;
 mod runtime_quic_h3_family_stage132;
 mod runtime_reality_session_mutation_stage102;
+mod runtime_reload_runtime_parity_stage186;
 mod runtime_run_entrypoint_stage153;
 mod runtime_same_corpus_daemon_execution_stage184;
 mod runtime_shadowsocksr_stage95;
