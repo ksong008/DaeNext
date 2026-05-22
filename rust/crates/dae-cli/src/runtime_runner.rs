@@ -165,6 +165,7 @@ use crate::runtime_stage176_matched_benchmark_real_corpus_candidate_verifier::ru
 use crate::runtime_stage177_matched_benchmark_real_corpus_review_queue_gate::run_stage177_matched_benchmark_real_corpus_review_queue_gate;
 use crate::runtime_stage178_matched_benchmark_reviewed_corpus_materializer::run_stage178_matched_benchmark_reviewed_corpus_materializer;
 use crate::runtime_stage179_matched_benchmark_reviewed_corpus_verifier::run_stage179_matched_benchmark_reviewed_corpus_verifier;
+use crate::runtime_stage180_matched_benchmark_reviewed_corpus_readiness_queue::run_stage180_matched_benchmark_reviewed_corpus_readiness_queue;
 
 pub(crate) fn run_runtime(args: &[String]) -> RunnerOutput {
     match args.first().map(String::as_str) {
@@ -620,6 +621,9 @@ pub(crate) fn run_runtime(args: &[String]) -> RunnerOutput {
         }
         Some("stage179-matched-benchmark-reviewed-corpus-artifact-verifier") => {
             run_stage179_matched_benchmark_reviewed_corpus_verifier(&args[1..])
+        }
+        Some("stage180-matched-benchmark-reviewed-corpus-readiness-admission-queue-gate") => {
+            run_stage180_matched_benchmark_reviewed_corpus_readiness_queue(&args[1..])
         }
         Some(subcommand) => {
             RunnerOutput::usage(format!("unsupported runtime subcommand: {subcommand}"))
