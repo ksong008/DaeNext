@@ -1,0 +1,71 @@
+{
+  "name": "stage154-matched-default-daemon-benchmark-readiness-refresh-gate",
+  "stage": "stage154",
+  "prior_gate": "stage153-rust-run-entrypoint-preflight-gate",
+  "stage_complete": true,
+  "matched_default_daemon_benchmark_plan_recorded": true,
+  "benchmark_corpus_manifest_recorded": true,
+  "benchmark_blocker_queue_recorded": true,
+  "stage153_non_default_wrapper_recorded": true,
+  "benchmark_executable_now": false,
+  "rust_default_run_entrypoint_exists": false,
+  "rust_default_control_plane_entrypoint_admitted": false,
+  "production_listener_bound": false,
+  "ebpf_attached": false,
+  "matched_go_rust_default_daemon_benchmark_recorded": false,
+  "true_rust_default_daemon_admitted": false,
+  "default_switch_allowed": false,
+  "product_chain_switch_allowed": false,
+  "go_default_path_preserved": true,
+  "gate_decision": "stage154 refreshes matched default-daemon benchmark readiness after the Stage153 non-default wrapper: the wrapper improves lifecycle/signal/control-plane evidence but is not a Rust default run identity, so benchmark execution, default daemon admission, default switch, and product switch remain blocked",
+  "rows": [
+    {
+      "area": "Stage153 delta",
+      "status": "recorded",
+      "evidence": "non-default wrapper composes lifecycle and signal/control-plane smokes",
+      "blocker": "wrapper command is not a Rust default daemon run --config identity",
+      "next_action": "keep benchmark blocked until a real Rust default run identity exists"
+    },
+    {
+      "area": "benchmark corpus",
+      "status": "recorded",
+      "evidence": "TCP, UDP, DNS, reload, RuntimeOverview, RSS, CPU, startup, and reload metrics remain required",
+      "blocker": "corpus cannot be run as matched default-daemon benchmark yet",
+      "next_action": "re-run readiness only after default identity and control-plane admission"
+    },
+    {
+      "area": "admission flags",
+      "status": "closed",
+      "evidence": "matched_go_rust_default_daemon_benchmark_recorded remains false",
+      "blocker": "no real matched Go/Rust default daemon data exists",
+      "next_action": "carry blocker into product-chain final blocker review"
+    }
+  ],
+  "validation_commands": [
+    "python3 -m json.tool testdata/rebuild-golden/engine/runtime_stage154/matched_default_daemon_benchmark_readiness_refresh_gate.json",
+    "python3 -m json.tool testdata/rebuild-golden/product/daemon/stage154_matched_default_daemon_benchmark_readiness_refresh_gate.json",
+    "cargo run --manifest-path rust/Cargo.toml -p dae-cli --bin dae-cli-optin --quiet -- runtime stage154-matched-default-daemon-benchmark-readiness-refresh-gate",
+    "cargo test --manifest-path rust/Cargo.toml -p dae-cli stage154 -- --nocapture",
+    "cargo test --manifest-path rust/Cargo.toml -p dae-product stage154 -- --nocapture",
+    "cargo test --manifest-path rust/Cargo.toml -p dae-cli stage153 -- --nocapture",
+    "cargo test --manifest-path rust/Cargo.toml -p dae-outbound -p dae-cli -p dae-product -q",
+    "cargo fmt --manifest-path rust/Cargo.toml --all -- --check",
+    "git diff --check"
+  ],
+  "remaining_blockers": [
+    "Rust default run entrypoint is still absent; Stage153 is opt-in wrapper evidence only",
+    "Rust default control-plane entrypoint is not admitted",
+    "production listener binding and eBPF attach remain closed",
+    "matched benchmark cannot run until Go and Rust default daemon identities execute the same config corpus on the same host",
+    "default daemon and product-chain switches remain closed"
+  ],
+  "source": [
+    "DAEX_RUST_REBUILD_PLAN_2026-05-16.md:stage154",
+    "DAEX_RUST_REBUILD_PLAN_2026-05-16.md:stage147",
+    "DAEX_RUST_REBUILD_PLAN_2026-05-16.md:stage153",
+    "DAENEW_RUST_REBUILD_MEMO_2026-05-16.md:15.1",
+    "DAENEW_RUST_REBUILD_MEMO_2026-05-16.md:15.4",
+    "DAENEW_RUST_REBUILD_MEMO_2026-05-16.md:15.8",
+    "DAENEW_RUST_REBUILD_MEMO_2026-05-16.md:30.4"
+  ]
+}
