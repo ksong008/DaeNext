@@ -173,6 +173,7 @@ use crate::runtime_stage184_same_corpus_daemon_execution_smoke::run_stage184_sam
 use crate::runtime_stage185_production_dataplane_evidence_gate::run_stage185_production_dataplane_evidence_gate;
 use crate::runtime_stage186_reload_runtime_parity_gate::run_stage186_reload_runtime_parity_gate;
 use crate::runtime_stage187_matched_benchmark_readiness_gate::run_stage187_matched_benchmark_readiness_gate;
+use crate::runtime_stage188_bounded_benchmark_hard_gate_resolution::run_stage188_bounded_benchmark_hard_gate_resolution;
 
 pub(crate) fn run_runtime(args: &[String]) -> RunnerOutput {
     match args.first().map(String::as_str) {
@@ -652,6 +653,9 @@ pub(crate) fn run_runtime(args: &[String]) -> RunnerOutput {
         }
         Some("stage187-matched-benchmark-readiness-gate") => {
             run_stage187_matched_benchmark_readiness_gate(&args[1..])
+        }
+        Some("stage188-bounded-benchmark-hard-gate-resolution") => {
+            run_stage188_bounded_benchmark_hard_gate_resolution(&args[1..])
         }
         Some(subcommand) => {
             RunnerOutput::usage(format!("unsupported runtime subcommand: {subcommand}"))
