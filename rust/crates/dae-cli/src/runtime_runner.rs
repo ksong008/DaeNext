@@ -169,6 +169,7 @@ use crate::runtime_stage180_matched_benchmark_reviewed_corpus_readiness_queue::r
 use crate::runtime_stage181_matched_benchmark_reviewed_corpus_runtime_blocker::run_stage181_matched_benchmark_reviewed_corpus_runtime_blocker;
 use crate::runtime_stage182_production_rust_daemon_admission_preflight::run_stage182_production_rust_daemon_admission_preflight;
 use crate::runtime_stage183_corpus_command_admission_binding::run_stage183_corpus_command_admission_binding;
+use crate::runtime_stage184_same_corpus_daemon_execution_smoke::run_stage184_same_corpus_daemon_execution_smoke;
 
 pub(crate) fn run_runtime(args: &[String]) -> RunnerOutput {
     match args.first().map(String::as_str) {
@@ -636,6 +637,9 @@ pub(crate) fn run_runtime(args: &[String]) -> RunnerOutput {
         }
         Some("stage183-corpus-command-admission-binding-dry-run") => {
             run_stage183_corpus_command_admission_binding(&args[1..])
+        }
+        Some("stage184-same-corpus-daemon-execution-smoke") => {
+            run_stage184_same_corpus_daemon_execution_smoke(&args[1..])
         }
         Some(subcommand) => {
             RunnerOutput::usage(format!("unsupported runtime subcommand: {subcommand}"))
