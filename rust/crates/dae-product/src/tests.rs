@@ -15,6 +15,7 @@ mod daemon_identity_stage148;
 mod daemon_identity_stage149;
 mod daemon_lifecycle_stage150;
 mod daemon_matched_benchmark_stage147;
+mod daemon_signal_control_plane_stage152;
 mod daemon_stage23_27;
 mod daemon_stage28_30;
 mod daemon_stage31_36;
