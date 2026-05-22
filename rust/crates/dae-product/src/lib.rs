@@ -90,6 +90,7 @@ pub mod stage179_matched_benchmark_reviewed_corpus_verifier;
 pub mod stage180_matched_benchmark_reviewed_corpus_readiness_queue;
 pub mod stage181_matched_benchmark_reviewed_corpus_runtime_blocker;
 pub mod stage182_production_rust_daemon_admission_preflight;
+pub mod stage183_corpus_command_admission_binding;
 pub mod stage23_completion;
 pub mod stage24_product_gate;
 pub mod stage25_execution_queue;
@@ -779,6 +780,10 @@ pub use stage182_production_rust_daemon_admission_preflight::{
     Stage182ProductionRustDaemonAdmissionPreflightContract,
     Stage182ProductionRustDaemonAdmissionPreflightRow,
     stage182_production_rust_daemon_admission_preflight_contract,
+};
+pub use stage183_corpus_command_admission_binding::{
+    Stage183ClosedGate, Stage183CommandTemplate, Stage183CorpusCommandAdmissionBindingContract,
+    stage183_corpus_command_admission_binding_contract,
 };
 pub use systemd::{SystemdContract, systemd_contract};
 pub use true_daemon_admission::{

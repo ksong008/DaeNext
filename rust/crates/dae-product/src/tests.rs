@@ -16,6 +16,7 @@ mod daemon_bpf_owner_handoff_stage163;
 mod daemon_bpf_owner_handoff_stage164;
 mod daemon_control_plane_entrypoint_stage157;
 mod daemon_control_plane_owner_stage151;
+mod daemon_corpus_command_admission_stage183;
 mod daemon_default_run_identity_stage156;
 mod daemon_identity_stage148;
 mod daemon_identity_stage149;
