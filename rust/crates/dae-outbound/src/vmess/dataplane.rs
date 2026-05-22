@@ -61,6 +61,7 @@ mod response_http;
 mod response_read;
 mod tls_transports;
 mod types;
+mod xhttp_h3;
 mod xhttp_http2;
 
 pub use command_key::*;
@@ -70,6 +71,7 @@ pub use read_request::*;
 pub use response_http::*;
 pub use tls_transports::*;
 pub use types::*;
+pub use xhttp_h3::*;
 pub use xhttp_http2::*;
 
 use body_codec::*;
