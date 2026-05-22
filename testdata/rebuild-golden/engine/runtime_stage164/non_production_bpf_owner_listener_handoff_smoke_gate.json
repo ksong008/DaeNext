@@ -1,0 +1,84 @@
+{
+  "benchmark_executable_now": false,
+  "blocked": true,
+  "blockers": [
+    "production tc/netns attach remains closed",
+    "production listener binding remains closed",
+    "matched Go/Rust default daemon benchmark remains blocked",
+    "default daemon and product-chain switches remain closed"
+  ],
+  "default_path_mutation_allowed": false,
+  "default_switch_allowed": false,
+  "ebpf_attached": false,
+  "evidence_class": "opt-in-non-production-bpf-owner-listen-socket-map-handoff-smoke-gate",
+  "execute_smoke": false,
+  "handoff_rows": [
+    {
+      "area": "listen_socket_map fd handoff",
+      "boundary": "temporary SockMap is not the production dae listen_socket_map",
+      "closed_flag": "production_listener_bound=false",
+      "evidence": "temporary SockMap key 0 receives TCP listener fd and key 1 receives UDP socket fd",
+      "status": "harness-available-not-executed"
+    },
+    {
+      "area": "owner transfer sequence",
+      "boundary": "sequence does not yet run through full daemon reload",
+      "closed_flag": "ebpf_attached=false",
+      "evidence": "old-owner eject, new-owner inject, map handoff before ready, old close, and cleanup are recorded around temporary handles",
+      "status": "not-executed"
+    },
+    {
+      "area": "default safety",
+      "boundary": "Stage164 is non-production handoff smoke only",
+      "closed_flag": "default_switch_allowed=false",
+      "evidence": "no production tproxy listener, no tc/netns attach, no default daemon switch, no product-chain switch",
+      "status": "closed-preserved"
+    }
+  ],
+  "listen_socket_map_key_handoff_smoke_passed": false,
+  "matched_go_rust_default_daemon_benchmark_recorded": false,
+  "name": "stage164-non-production-bpf-owner-listener-handoff-smoke-gate",
+  "next_admission_queue": [
+    {
+      "required_output": "run owner-transfer/listen_socket_map handoff through a reload-shaped daemon harness before production-equivalent benchmark",
+      "stage": "stage165",
+      "target": "full non-production daemon reload owner-transfer smoke"
+    }
+  ],
+  "non_production_owner_handoff_harness_available": true,
+  "non_production_owner_transfer_sequence_smoke_passed": false,
+  "prior_gate": "stage163-bpf-owner-transfer-listener-map-handoff-queue-gate",
+  "product_chain_switch_allowed": false,
+  "production_listener_bound": false,
+  "production_tc_attach_smoke_passed": false,
+  "read_only": true,
+  "remaining_blockers": [
+    "production tc/netns attach remains closed",
+    "production listener binding remains closed",
+    "full daemon reload owner-transfer smoke has not executed",
+    "matched Go/Rust default daemon benchmark has not executed",
+    "default daemon and product-chain switches remain closed"
+  ],
+  "source": [
+    "DAEX_RUST_REBUILD_PLAN_2026-05-16.md:stage164",
+    "DAEX_RUST_REBUILD_PLAN_2026-05-16.md:stage163",
+    "DAENEW_RUST_REBUILD_MEMO_2026-05-16.md:15.4",
+    "DAENEW_RUST_REBUILD_MEMO_2026-05-16.md:15.5",
+    "rust/crates/dae-ebpf-support/src/sockmap.rs"
+  ],
+  "stage": "stage164",
+  "temporary_sockmap_cleanup_smoke_passed": false,
+  "true_rust_default_daemon_admitted": false,
+  "validation_commands": [
+    "python3 -m json.tool testdata/rebuild-golden/engine/runtime_stage164/non_production_bpf_owner_listener_handoff_smoke_gate.json",
+    "python3 -m json.tool testdata/rebuild-golden/product/daemon/stage164_non_production_bpf_owner_listener_handoff_smoke_gate.json",
+    "cargo run --manifest-path rust/Cargo.toml -p dae-cli --bin dae-cli-optin --quiet -- runtime stage164-non-production-bpf-owner-listener-handoff-smoke-gate",
+    "cargo run --manifest-path rust/Cargo.toml -p dae-cli --bin dae-cli-optin --quiet -- runtime stage164-non-production-bpf-owner-listener-handoff-smoke-gate --execute-smoke",
+    "cargo test --manifest-path rust/Cargo.toml -p dae-cli stage164 -- --nocapture",
+    "cargo test --manifest-path rust/Cargo.toml -p dae-product stage164 -- --nocapture",
+    "cargo test --manifest-path rust/Cargo.toml -p dae-cli stage163 -- --nocapture",
+    "cargo test --manifest-path rust/Cargo.toml -p dae-ebpf-support -p dae-cli -p dae-product -q",
+    "cargo fmt --manifest-path rust/Cargo.toml --all -- --check",
+    "git diff --check"
+  ]
+}
