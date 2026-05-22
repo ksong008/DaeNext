@@ -12,6 +12,7 @@ pub mod reality_aead;
 pub mod tls;
 pub mod tls_fragment;
 pub mod utls_fingerprint;
+pub mod utls_wire;
 pub mod xhttp;
 pub mod xhttp_h3;
 
@@ -73,6 +74,9 @@ pub use tls_fragment::{
 pub use utls_fingerprint::{
     SUPPORTED_UTLS_FINGERPRINTS, U_TLS_WIRE_STACK_DEFERRED, UtlsFingerprint,
     resolve_utls_client_hello_id, supported_utls_fingerprint_count, utls_fingerprint_names,
+};
+pub use utls_wire::{
+    UtlsClientHelloProfile, parse_utls_client_hello_record, parse_utls_client_hello_record_hex,
 };
 pub use xhttp::{
     XHttpHttp2FrameReport, XHttpHttp2Request, XHttpLifecycleOptions, XHttpLifecycleReport,
