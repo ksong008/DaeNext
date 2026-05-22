@@ -148,6 +148,7 @@ use crate::runtime_stage159_listener_ebpf_policy_gate::run_stage159_listener_ebp
 use crate::runtime_stage160_listener_ebpf_harness_gate::run_stage160_listener_ebpf_harness_gate;
 use crate::runtime_stage161_temporary_ebpf_map_gate::run_stage161_temporary_ebpf_map_gate;
 use crate::runtime_stage162_temporary_ebpf_program_gate::run_stage162_temporary_ebpf_program_gate;
+use crate::runtime_stage163_bpf_owner_handoff_queue_gate::run_stage163_bpf_owner_handoff_queue_gate;
 
 pub(crate) fn run_runtime(args: &[String]) -> RunnerOutput {
     match args.first().map(String::as_str) {
@@ -552,6 +553,9 @@ pub(crate) fn run_runtime(args: &[String]) -> RunnerOutput {
         }
         Some("stage162-temporary-ebpf-program-attach-preflight-gate") => {
             run_stage162_temporary_ebpf_program_gate(&args[1..])
+        }
+        Some("stage163-bpf-owner-transfer-listener-map-handoff-queue-gate") => {
+            run_stage163_bpf_owner_handoff_queue_gate(&args[1..])
         }
         Some(subcommand) => {
             RunnerOutput::usage(format!("unsupported runtime subcommand: {subcommand}"))

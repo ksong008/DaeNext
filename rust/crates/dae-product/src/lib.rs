@@ -70,6 +70,7 @@ pub mod stage159_listener_ebpf_policy_gate;
 pub mod stage160_listener_ebpf_harness_gate;
 pub mod stage161_temporary_ebpf_map_gate;
 pub mod stage162_temporary_ebpf_program_gate;
+pub mod stage163_bpf_owner_handoff_queue_gate;
 pub mod stage23_completion;
 pub mod stage24_product_gate;
 pub mod stage25_execution_queue;
@@ -666,6 +667,10 @@ pub use stage161_temporary_ebpf_map_gate::{
 pub use stage162_temporary_ebpf_program_gate::{
     Stage162TemporaryEbpfProgramGateContract, Stage162TemporaryEbpfProgramGateRow,
     stage162_temporary_ebpf_program_gate_contract,
+};
+pub use stage163_bpf_owner_handoff_queue_gate::{
+    Stage163BpfOwnerHandoffQueueGateContract, Stage163BpfOwnerHandoffQueueGateRow,
+    stage163_bpf_owner_handoff_queue_gate_contract,
 };
 pub use systemd::{SystemdContract, systemd_contract};
 pub use true_daemon_admission::{
