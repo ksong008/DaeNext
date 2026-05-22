@@ -127,6 +127,7 @@ use crate::runtime_stage138_vless_vmess_residual_gate::run_stage138_vless_vmess_
 use crate::runtime_stage139_vless_vmess_utls_wire_gate::run_stage139_vless_vmess_utls_wire_baseline_gate;
 use crate::runtime_stage140_vless_vmess_utls_profile_builder_gate::run_stage140_vless_vmess_utls_profile_builder_gate;
 use crate::runtime_stage141_vless_reality_synthetic_utls_gate::run_stage141_vless_reality_synthetic_utls_gate;
+use crate::runtime_stage142_vless_reality_fallback_gate::run_stage142_vless_reality_fallback_gate;
 
 pub(crate) fn run_runtime(args: &[String]) -> RunnerOutput {
     match args.first().map(String::as_str) {
@@ -468,6 +469,9 @@ pub(crate) fn run_runtime(args: &[String]) -> RunnerOutput {
         }
         Some("stage141-vless-reality-synthetic-utls-raw-mutation-gate") => {
             run_stage141_vless_reality_synthetic_utls_gate(&args[1..])
+        }
+        Some("stage142-vless-reality-full-handshake-fallback-gate") => {
+            run_stage142_vless_reality_fallback_gate(&args[1..])
         }
         Some(subcommand) => {
             RunnerOutput::usage(format!("unsupported runtime subcommand: {subcommand}"))
