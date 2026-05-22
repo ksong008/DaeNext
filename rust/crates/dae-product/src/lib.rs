@@ -50,6 +50,7 @@ pub mod stage139_vless_vmess_utls_wire_gate;
 pub mod stage140_vless_vmess_utls_profile_builder_gate;
 pub mod stage141_vless_reality_synthetic_utls_gate;
 pub mod stage142_vless_reality_fallback_gate;
+pub mod stage143_vless_vision_fallback_gate;
 pub mod stage23_completion;
 pub mod stage24_product_gate;
 pub mod stage25_execution_queue;
@@ -563,6 +564,10 @@ pub use stage141_vless_reality_synthetic_utls_gate::{
 pub use stage142_vless_reality_fallback_gate::{
     Stage142VlessRealityFallbackGateContract, Stage142VlessRealityFallbackGateRow,
     stage142_vless_reality_fallback_gate_contract,
+};
+pub use stage143_vless_vision_fallback_gate::{
+    Stage143VlessVisionFallbackGateContract, Stage143VlessVisionFallbackGateRow,
+    stage143_vless_vision_fallback_gate_contract,
 };
 pub use systemd::{SystemdContract, systemd_contract};
 pub use true_daemon_admission::{
