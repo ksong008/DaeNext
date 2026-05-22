@@ -62,6 +62,7 @@ pub(crate) mod runtime_stage150_daemon_lifecycle_gate;
 pub(crate) mod runtime_stage151_control_plane_owner_gate;
 pub(crate) mod runtime_stage152_signal_control_plane_gate;
 pub(crate) mod runtime_stage153_run_entrypoint_gate;
+pub(crate) mod runtime_stage154_benchmark_readiness_refresh_gate;
 pub(crate) mod runtime_stage26_candidate;
 pub(crate) mod runtime_stage27_candidate;
 pub(crate) mod runtime_stage29_preflight;
