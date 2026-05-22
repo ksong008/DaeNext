@@ -3,6 +3,7 @@ members = [
     "crates/dae-cli",
     "crates/dae-config",
     "crates/dae-config-util",
+    "crates/dae-daemon",
     "crates/dae-control",
     "crates/dae-core-types",
     "crates/dae-datapath",
@@ -37,6 +38,7 @@ chacha20poly1305 = "0.10"
 dae-cli = { path = "crates/dae-cli" }
 dae-config-util = { path = "crates/dae-config-util" }
 dae-config = { path = "crates/dae-config" }
+dae-daemon = { path = "crates/dae-daemon" }
 dae-control = { path = "crates/dae-control" }
 dae-core-types = { path = "crates/dae-core-types" }
 dae-datapath = { path = "crates/dae-datapath" }
