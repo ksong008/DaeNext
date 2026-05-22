@@ -158,6 +158,7 @@ use crate::runtime_stage169_matched_benchmark_artifact_builder::run_stage169_mat
 use crate::runtime_stage170_matched_benchmark_artifact_writer::run_stage170_matched_benchmark_artifact_writer;
 use crate::runtime_stage171_matched_benchmark_metadata_digest::run_stage171_matched_benchmark_metadata_digest;
 use crate::runtime_stage172_matched_benchmark_command_capture::run_stage172_matched_benchmark_command_capture;
+use crate::runtime_stage173_matched_benchmark_command_capture_verifier::run_stage173_matched_benchmark_command_capture_verifier;
 
 pub(crate) fn run_runtime(args: &[String]) -> RunnerOutput {
     match args.first().map(String::as_str) {
@@ -592,6 +593,9 @@ pub(crate) fn run_runtime(args: &[String]) -> RunnerOutput {
         }
         Some("stage172-matched-benchmark-command-capture-dry-run") => {
             run_stage172_matched_benchmark_command_capture(&args[1..])
+        }
+        Some("stage173-matched-benchmark-command-capture-artifact-verifier") => {
+            run_stage173_matched_benchmark_command_capture_verifier(&args[1..])
         }
         Some(subcommand) => {
             RunnerOutput::usage(format!("unsupported runtime subcommand: {subcommand}"))
