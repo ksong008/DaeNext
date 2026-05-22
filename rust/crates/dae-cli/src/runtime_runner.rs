@@ -160,6 +160,7 @@ use crate::runtime_stage171_matched_benchmark_metadata_digest::run_stage171_matc
 use crate::runtime_stage172_matched_benchmark_command_capture::run_stage172_matched_benchmark_command_capture;
 use crate::runtime_stage173_matched_benchmark_command_capture_verifier::run_stage173_matched_benchmark_command_capture_verifier;
 use crate::runtime_stage174_matched_benchmark_real_corpus_queue_gate::run_stage174_matched_benchmark_real_corpus_queue_gate;
+use crate::runtime_stage175_matched_benchmark_real_corpus_candidate_materializer::run_stage175_matched_benchmark_real_corpus_candidate_materializer;
 
 pub(crate) fn run_runtime(args: &[String]) -> RunnerOutput {
     match args.first().map(String::as_str) {
@@ -600,6 +601,9 @@ pub(crate) fn run_runtime(args: &[String]) -> RunnerOutput {
         }
         Some("stage174-matched-benchmark-real-corpus-materialization-queue-gate") => {
             run_stage174_matched_benchmark_real_corpus_queue_gate(&args[1..])
+        }
+        Some("stage175-matched-benchmark-real-corpus-candidate-materializer-dry-run") => {
+            run_stage175_matched_benchmark_real_corpus_candidate_materializer(&args[1..])
         }
         Some(subcommand) => {
             RunnerOutput::usage(format!("unsupported runtime subcommand: {subcommand}"))
