@@ -11,6 +11,7 @@ mod anytls_session_stage104;
 mod anytls_udp_packet_stage105;
 mod base_contracts;
 mod daemon_benchmark_readiness_stage154;
+mod daemon_benchmark_switch_closure_stage191_193;
 mod daemon_bounded_benchmark_hard_gate_stage188;
 mod daemon_bounded_benchmark_harness_stage167;
 mod daemon_bpf_owner_handoff_stage163;
