@@ -55,6 +55,7 @@ mod runtime_protocol_matrix_stage96;
 mod runtime_quic_h3_family_stage108;
 mod runtime_quic_h3_family_stage132;
 mod runtime_reality_session_mutation_stage102;
+mod runtime_run_entrypoint_stage153;
 mod runtime_shadowsocksr_stage95;
 mod runtime_shared_tls_stage81;
 mod runtime_shared_transport_outbound_stage146;
