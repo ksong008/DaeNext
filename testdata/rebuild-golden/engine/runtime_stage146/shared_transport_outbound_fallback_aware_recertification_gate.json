@@ -1,0 +1,123 @@
+{
+  "benchmark": {
+    "benchmark_recorded": false,
+    "matched_go_rust_default_daemon_benchmark_recorded": false,
+    "network_benchmark_recorded": false,
+    "reason": "Stage146 is a read-only fallback-aware recertification gate; matched Go/Rust default daemon benchmark is still blocked"
+  },
+  "blocked": false,
+  "blockers": [],
+  "default_path_mutation_allowed": false,
+  "default_switch_allowed": false,
+  "evidence_class": "read-only-shared-transport-outbound-fallback-aware-recertification-gate",
+  "execute_smoke": false,
+  "external_outbound_required": true,
+  "external_quic_go_required": true,
+  "fallback_dependency_policy": {
+    "fallback_can_satisfy_recertification": true,
+    "fallback_cannot_satisfy_true_rust_default": true,
+    "go_default_path_preserved": true,
+    "preserve_external_outbound": "/root/project/outbound",
+    "preserve_external_quic_go": "/root/project/quic-go",
+    "rust_default_path_mutation_allowed": false
+  },
+  "fallback_dependency_policy_recorded": true,
+  "go_default_path_preserved": true,
+  "go_fallback_required": true,
+  "matched_go_rust_default_daemon_benchmark_recorded": false,
+  "name": "stage146-shared-transport-outbound-fallback-aware-recertification-gate",
+  "next_admission_queue": [
+    {
+      "required_output": "record a matched Go default daemon vs fallback-aware Rust candidate benchmark without opening default_switch_allowed",
+      "stage": "stage147",
+      "target": "default daemon benchmark readiness"
+    },
+    {
+      "required_output": "carry external outbound/quic-go dependency policy into dae-wing and daed without default mutation",
+      "stage": "stage148",
+      "target": "product-chain fallback-aware admission queue"
+    },
+    {
+      "required_output": "only then reconsider shared_transport_true_dataplane_admitted and outbound_true_dataplane_admitted",
+      "stage": "future-true-rust-dataplane",
+      "target": "replace fallback rows with true Rust implementations"
+    }
+  ],
+  "outbound_fallback_aware_recertified": true,
+  "outbound_quic_go_dependency_preserved": true,
+  "outbound_true_dataplane_admitted": false,
+  "product_chain_switch_allowed": false,
+  "protocol_outbound_partial_admitted": true,
+  "quic_h3_family_true_dataplane_admitted": true,
+  "read_only": true,
+  "recertification_matrix": {
+    "completed_true_dataplane_rows": [
+      "base proxy protocols",
+      "Shadowsocks/SS2022/SIP003/SSR family",
+      "standard Trojan",
+      "AnyTLS",
+      "Hysteria2/TUIC/Juicity QUIC/H3 family"
+    ],
+    "default_switch_allowed": false,
+    "fallback_aware_rows": [
+      "VLESS/VMess shared transport residuals",
+      "Trojan-Go shared transport residuals",
+      "shared_transport/outbound dependency policy"
+    ],
+    "go_fallback_rows": [
+      "VLESS REALITY full handshake",
+      "VLESS Vision intrinsic TLS/REALITY conn",
+      "VLESS/VMess uTLS wire-level ClientHello",
+      "Trojan-Go full shared transport cross-combinations",
+      "Trojan-Go uTLS wire-level ClientHello",
+      "Trojan-Go REALITY/full uTLS mutation"
+    ],
+    "product_switch_allowed": false
+  },
+  "remaining_blockers": [
+    "VLESS and VMess true Rust protocol-wide admission remain closed by uTLS/REALITY/Vision fallback rows",
+    "Trojan-Go true shared transport remains closed by uTLS wire, REALITY/full mutation, and cross-combination fallback rows",
+    "shared_transport_true_dataplane and outbound_true_dataplane remain closed because this stage records fallback-aware policy only",
+    "matched Go default daemon vs true Rust candidate benchmark remains missing",
+    "default daemon and product-chain switches remain closed"
+  ],
+  "shared_transport_fallback_aware_recertified": true,
+  "shared_transport_true_dataplane_admitted": false,
+  "source": [
+    "DAEX_RUST_REBUILD_PLAN_2026-05-16.md:stage146",
+    "DAENEW_RUST_REBUILD_MEMO_2026-05-16.md:26.7",
+    "DAENEW_RUST_REBUILD_MEMO_2026-05-16.md:26.8",
+    "DAENEW_RUST_REBUILD_MEMO_2026-05-16.md:26.11",
+    "DAENEW_RUST_REBUILD_MEMO_2026-05-16.md:26.18",
+    "DAENEW_RUST_REBUILD_MEMO_2026-05-16.md:26.20",
+    "DAENEW_RUST_REBUILD_MEMO_2026-05-16.md:26.21",
+    "testdata/rebuild-golden/engine/runtime_stage132/quic_h3_family_recertification_admission.json",
+    "testdata/rebuild-golden/engine/runtime_stage144/vless_vmess_fallback_aware_recertification_gate.json",
+    "testdata/rebuild-golden/engine/runtime_stage145/trojan_go_fallback_aware_recertification_gate.json"
+  ],
+  "stage": "stage146",
+  "trojan_go_cross_combination_recertified": false,
+  "trojan_go_fallback_aware_recertified": true,
+  "trojan_go_reality_mutation_admitted": false,
+  "trojan_go_shared_transport_admitted": false,
+  "trojan_go_utls_fingerprint_wire_admitted": false,
+  "true_rust_default_daemon_admitted": false,
+  "validation_commands": [
+    "python3 -m json.tool testdata/rebuild-golden/engine/runtime_stage146/shared_transport_outbound_fallback_aware_recertification_gate.json",
+    "python3 -m json.tool testdata/rebuild-golden/product/daemon/stage146_shared_transport_outbound_fallback_aware_recertification_gate.json",
+    "cargo run --manifest-path rust/Cargo.toml -p dae-cli --bin dae-cli-optin --quiet -- runtime stage146-shared-transport-outbound-fallback-aware-recertification-gate",
+    "cargo test --manifest-path rust/Cargo.toml -p dae-cli stage146 -- --nocapture",
+    "cargo test --manifest-path rust/Cargo.toml -p dae-product stage146 -- --nocapture",
+    "cargo test --manifest-path rust/Cargo.toml -p dae-cli stage145 -- --nocapture",
+    "cargo test --manifest-path rust/Cargo.toml -p dae-outbound -p dae-cli -p dae-product -q",
+    "cargo fmt --manifest-path rust/Cargo.toml --all -- --check",
+    "git diff --check"
+  ],
+  "vless_protocol_true_dataplane_admitted": false,
+  "vless_reality_full_handshake_admitted": false,
+  "vless_utls_fingerprint_wire_admitted": false,
+  "vless_vision_tls_reality_admitted": false,
+  "vless_vmess_fallback_aware_recertified": true,
+  "vmess_protocol_true_dataplane_admitted": false,
+  "vmess_utls_fingerprint_wire_admitted": false
+}

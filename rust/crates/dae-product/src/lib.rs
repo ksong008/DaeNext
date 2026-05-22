@@ -53,6 +53,7 @@ pub mod stage142_vless_reality_fallback_gate;
 pub mod stage143_vless_vision_fallback_gate;
 pub mod stage144_vless_vmess_recertification_gate;
 pub mod stage145_trojan_go_recertification_gate;
+pub mod stage146_shared_transport_outbound_recertification_gate;
 pub mod stage23_completion;
 pub mod stage24_product_gate;
 pub mod stage25_execution_queue;
@@ -578,6 +579,12 @@ pub use stage144_vless_vmess_recertification_gate::{
 pub use stage145_trojan_go_recertification_gate::{
     Stage145TrojanGoRecertificationGateContract, Stage145TrojanGoRecertificationGateRow,
     stage145_trojan_go_recertification_gate_contract,
+};
+pub use stage146_shared_transport_outbound_recertification_gate::{
+    Stage146SharedTransportOutboundAdmissionQueueRow,
+    Stage146SharedTransportOutboundRecertificationGateContract,
+    Stage146SharedTransportOutboundRecertificationGateRow,
+    stage146_shared_transport_outbound_recertification_gate_contract,
 };
 pub use systemd::{SystemdContract, systemd_contract};
 pub use true_daemon_admission::{
