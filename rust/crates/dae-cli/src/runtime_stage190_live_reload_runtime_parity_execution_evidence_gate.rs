@@ -258,7 +258,8 @@ fn write_stage190_evidence(root: &str, stage189_root: &str) -> Result<Value, Str
             "reload_runtime_parity_admitted": false,
             "benchmark_executable_now": false,
             "bounded_benchmark_execution_allowed": false,
-            "default_switch_allowed": false
+            "default_switch_allowed": false,
+            "product_chain_switch_allowed": false
         }),
     )?;
 
