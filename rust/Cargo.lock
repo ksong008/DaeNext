@@ -297,6 +297,7 @@ version = "0.1.0"
 dependencies = [
  "dae-control",
  "dae-core-types",
+ "dae-ebpf-support",
  "serde_json",
 ]
 

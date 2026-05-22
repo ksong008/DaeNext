@@ -5,6 +5,7 @@ pub mod identity;
 pub mod lifecycle;
 pub mod listener_ebpf_preflight;
 pub mod preflight;
+pub mod reload_owner_handoff;
 pub mod run_entrypoint;
 pub mod runner;
 pub mod signal;
@@ -36,6 +37,9 @@ pub use listener_ebpf_preflight::{
     default_stage160_root, stage160_listener_ebpf_preflight_harness_report,
 };
 pub use preflight::stage149_identity_preflight_report;
+pub use reload_owner_handoff::{
+    ReloadOwnerHandoffPaths, default_stage165_root, stage165_reload_owner_handoff_smoke_report,
+};
 pub use run_entrypoint::{default_stage153_root, stage153_run_entrypoint_preflight_report};
 pub use runner::{DaemonOutput, run_with_args_and_version};
 pub use signal::{default_stage152_root, stage152_signal_control_plane_smoke_report};
