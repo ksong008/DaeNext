@@ -68,6 +68,7 @@ pub mod stage157_control_plane_entrypoint_gate;
 pub mod stage158_matched_benchmark_execution_gate;
 pub mod stage159_listener_ebpf_policy_gate;
 pub mod stage160_listener_ebpf_harness_gate;
+pub mod stage161_temporary_ebpf_map_gate;
 pub mod stage23_completion;
 pub mod stage24_product_gate;
 pub mod stage25_execution_queue;
@@ -656,6 +657,10 @@ pub use stage159_listener_ebpf_policy_gate::{
 pub use stage160_listener_ebpf_harness_gate::{
     Stage160ListenerEbpfHarnessGateContract, Stage160ListenerEbpfHarnessGateRow,
     stage160_listener_ebpf_harness_gate_contract,
+};
+pub use stage161_temporary_ebpf_map_gate::{
+    Stage161TemporaryEbpfMapGateContract, Stage161TemporaryEbpfMapGateRow,
+    stage161_temporary_ebpf_map_gate_contract,
 };
 pub use systemd::{SystemdContract, systemd_contract};
 pub use true_daemon_admission::{
