@@ -83,6 +83,7 @@ pub mod stage172_matched_benchmark_command_capture;
 pub mod stage173_matched_benchmark_command_capture_verifier;
 pub mod stage174_matched_benchmark_real_corpus_queue_gate;
 pub mod stage175_matched_benchmark_real_corpus_candidate_materializer;
+pub mod stage176_matched_benchmark_real_corpus_candidate_verifier;
 pub mod stage23_completion;
 pub mod stage24_product_gate;
 pub mod stage25_execution_queue;
@@ -737,6 +738,11 @@ pub use stage175_matched_benchmark_real_corpus_candidate_materializer::{
     Stage175MatchedBenchmarkRealCorpusCandidateMaterializerContract,
     Stage175MatchedBenchmarkRealCorpusCandidateMaterializerRow,
     stage175_matched_benchmark_real_corpus_candidate_materializer_contract,
+};
+pub use stage176_matched_benchmark_real_corpus_candidate_verifier::{
+    Stage176MatchedBenchmarkRealCorpusCandidateVerifierContract,
+    Stage176MatchedBenchmarkRealCorpusCandidateVerifierRow,
+    stage176_matched_benchmark_real_corpus_candidate_verifier_contract,
 };
 pub use systemd::{SystemdContract, systemd_contract};
 pub use true_daemon_admission::{
