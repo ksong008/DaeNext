@@ -91,6 +91,7 @@ pub(crate) mod runtime_stage179_matched_benchmark_reviewed_corpus_verifier;
 pub(crate) mod runtime_stage180_matched_benchmark_reviewed_corpus_readiness_queue;
 pub(crate) mod runtime_stage181_matched_benchmark_reviewed_corpus_runtime_blocker;
 pub(crate) mod runtime_stage182_production_rust_daemon_admission_preflight;
+pub(crate) mod runtime_stage183_corpus_command_admission_binding;
 pub(crate) mod runtime_stage26_candidate;
 pub(crate) mod runtime_stage27_candidate;
 pub(crate) mod runtime_stage29_preflight;
