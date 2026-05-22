@@ -52,6 +52,7 @@ pub(crate) mod runtime_stage140_vless_vmess_utls_profile_builder_gate;
 pub(crate) mod runtime_stage141_vless_reality_synthetic_utls_gate;
 pub(crate) mod runtime_stage142_vless_reality_fallback_gate;
 pub(crate) mod runtime_stage143_vless_vision_fallback_gate;
+pub(crate) mod runtime_stage144_vless_vmess_recertification_gate;
 pub(crate) mod runtime_stage26_candidate;
 pub(crate) mod runtime_stage27_candidate;
 pub(crate) mod runtime_stage29_preflight;
