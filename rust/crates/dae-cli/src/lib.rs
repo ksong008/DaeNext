@@ -48,6 +48,7 @@ pub(crate) mod runtime_stage136_vless_vmess_xhttp_http2_gate;
 pub(crate) mod runtime_stage137_vless_vmess_xhttp_h3_gate;
 pub(crate) mod runtime_stage138_vless_vmess_residual_gate;
 pub(crate) mod runtime_stage139_vless_vmess_utls_wire_gate;
+pub(crate) mod runtime_stage140_vless_vmess_utls_profile_builder_gate;
 pub(crate) mod runtime_stage26_candidate;
 pub(crate) mod runtime_stage27_candidate;
 pub(crate) mod runtime_stage29_preflight;
