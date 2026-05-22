@@ -22,6 +22,7 @@ mod runtime_anytls_recertification_stage107;
 mod runtime_anytls_session_reuse_stage106;
 mod runtime_anytls_session_stage104;
 mod runtime_anytls_udp_packet_stage105;
+mod runtime_benchmark_readiness_stage154;
 mod runtime_candidate_preflight;
 mod runtime_command_inventory;
 mod runtime_control_plane_owner_stage151;
