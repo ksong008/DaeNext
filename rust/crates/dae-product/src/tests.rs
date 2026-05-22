@@ -12,6 +12,7 @@ mod anytls_udp_packet_stage105;
 mod base_contracts;
 mod daemon_benchmark_readiness_stage154;
 mod daemon_control_plane_owner_stage151;
+mod daemon_default_run_identity_stage156;
 mod daemon_identity_stage148;
 mod daemon_identity_stage149;
 mod daemon_lifecycle_stage150;

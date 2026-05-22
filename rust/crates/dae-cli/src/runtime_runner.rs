@@ -141,6 +141,7 @@ use crate::runtime_stage152_signal_control_plane_gate::run_stage152_signal_contr
 use crate::runtime_stage153_run_entrypoint_gate::run_stage153_run_entrypoint_gate;
 use crate::runtime_stage154_benchmark_readiness_refresh_gate::run_stage154_benchmark_readiness_refresh_gate;
 use crate::runtime_stage155_product_chain_blocker_review_gate::run_stage155_product_chain_blocker_review_gate;
+use crate::runtime_stage156_default_run_identity_gate::run_stage156_default_run_identity_gate;
 
 pub(crate) fn run_runtime(args: &[String]) -> RunnerOutput {
     match args.first().map(String::as_str) {
@@ -524,6 +525,9 @@ pub(crate) fn run_runtime(args: &[String]) -> RunnerOutput {
         }
         Some("stage155-product-chain-default-switch-blocker-review-gate") => {
             run_stage155_product_chain_blocker_review_gate(&args[1..])
+        }
+        Some("stage156-rust-default-run-identity-admission-gate") => {
+            run_stage156_default_run_identity_gate(&args[1..])
         }
         Some(subcommand) => {
             RunnerOutput::usage(format!("unsupported runtime subcommand: {subcommand}"))

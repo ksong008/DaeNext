@@ -1,0 +1,83 @@
+{
+  "benchmark_executable_now": false,
+  "blocked": false,
+  "blockers": [],
+  "config_corpus_loaded": false,
+  "default_path_mutation_allowed": false,
+  "default_switch_allowed": false,
+  "ebpf_attached": false,
+  "evidence_class": "rust-daemon-opt-in-default-run-identity-admission-gate",
+  "execute_smoke": false,
+  "go_default_path_preserved": true,
+  "go_fallback_required": true,
+  "identity_scope": [
+    "Rust default run identity shape is opt-in only",
+    "run-shaped flags are validated only during execute-smoke",
+    "config corpus is read from an isolated test path",
+    "pid/progress/sdnotify/log files are written only under /tmp/dae-stage156*",
+    "Go default dae run command is preserved"
+  ],
+  "isolated_pid_progress_paths_validated": false,
+  "matched_go_rust_default_daemon_benchmark_recorded": false,
+  "name": "stage156-rust-default-run-identity-admission-gate",
+  "next_admission_queue": [
+    {
+      "required_output": "prove listener reuse, eBPF ownership transfer, DNS cache guard, and rollback semantics before production binding",
+      "stage": "stage157",
+      "target": "production control-plane entrypoint admission"
+    },
+    {
+      "required_output": "run the same config corpus on Go default daemon and true Rust default daemon before any default/product switch",
+      "stage": "stage158",
+      "target": "matched Go/Rust default daemon benchmark execution"
+    }
+  ],
+  "prior_gate": "stage155-product-chain-default-switch-blocker-review-gate",
+  "product_chain_switch_allowed": false,
+  "production_listener_bound": false,
+  "production_pid_progress_paths_mutated": false,
+  "production_run_command_replaced": false,
+  "production_signal_handler_installed": false,
+  "read_only": true,
+  "remaining_blockers": [
+    "Rust default control-plane entrypoint is not admitted",
+    "production listener binding and eBPF attach remain closed",
+    "matched Go/Rust default daemon benchmark has not executed",
+    "true Rust default daemon admission remains false until production control-plane and matched benchmark pass",
+    "default daemon and product-chain switches remain closed"
+  ],
+  "run_identity_config_corpus_validated": false,
+  "run_identity_on_ready_contract_validated": false,
+  "run_shaped_flags_validated": false,
+  "rust_default_control_plane_entrypoint_admitted": false,
+  "rust_default_run_entrypoint_exists": false,
+  "rust_default_run_identity_harness_available": true,
+  "rust_default_run_identity_optin_admitted": false,
+  "source": [
+    "DAEX_RUST_REBUILD_PLAN_2026-05-16.md:stage156",
+    "DAEX_RUST_REBUILD_PLAN_2026-05-16.md:stage153",
+    "DAEX_RUST_REBUILD_PLAN_2026-05-16.md:stage155",
+    "DAENEW_RUST_REBUILD_MEMO_2026-05-16.md:15.1",
+    "DAENEW_RUST_REBUILD_MEMO_2026-05-16.md:15.8",
+    "DAENEW_RUST_REBUILD_MEMO_2026-05-16.md:28.3",
+    "DAENEW_RUST_REBUILD_MEMO_2026-05-16.md:28.4",
+    "rust/crates/dae-daemon/src/default_run_identity.rs"
+  ],
+  "stage": "stage156",
+  "stage153_wrapper_reused": false,
+  "true_rust_default_daemon_admitted": false,
+  "validation_commands": [
+    "cargo run --manifest-path rust/Cargo.toml -p dae-daemon --bin dae-daemon-optin -- stage156-default-run-identity-admission --root /tmp/dae-stage156-default-run-identity",
+    "python3 -m json.tool testdata/rebuild-golden/engine/runtime_stage156/rust_default_run_identity_admission_gate.json",
+    "python3 -m json.tool testdata/rebuild-golden/product/daemon/stage156_rust_default_run_identity_admission_gate.json",
+    "cargo run --manifest-path rust/Cargo.toml -p dae-cli --bin dae-cli-optin --quiet -- runtime stage156-rust-default-run-identity-admission-gate",
+    "cargo run --manifest-path rust/Cargo.toml -p dae-cli --bin dae-cli-optin --quiet -- runtime stage156-rust-default-run-identity-admission-gate --execute-smoke --root /tmp/dae-stage156-cli-default-run-identity",
+    "cargo test --manifest-path rust/Cargo.toml -p dae-daemon stage156 -- --nocapture",
+    "cargo test --manifest-path rust/Cargo.toml -p dae-cli stage156 -- --nocapture",
+    "cargo test --manifest-path rust/Cargo.toml -p dae-product stage156 -- --nocapture",
+    "cargo test --manifest-path rust/Cargo.toml -p dae-cli stage155 -- --nocapture",
+    "cargo test --manifest-path rust/Cargo.toml -p dae-daemon -p dae-cli -p dae-product -q",
+    "cargo fmt --manifest-path rust/Cargo.toml --all -- --check",
+    "git diff --check"
+  ]
+}

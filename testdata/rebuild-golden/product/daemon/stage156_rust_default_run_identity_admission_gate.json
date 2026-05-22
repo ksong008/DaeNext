@@ -1,0 +1,91 @@
+{
+  "benchmark_executable_now": false,
+  "config_corpus_loaded": true,
+  "default_path_mutation_allowed": false,
+  "default_switch_allowed": false,
+  "ebpf_attached": false,
+  "gate_decision": "stage156 admits an opt-in Rust default run identity shape: it accepts run-shaped flags, reads a config corpus, writes isolated pid/progress/sdnotify/log evidence, and reuses Stage153 wrapper evidence, while Go default dae run, production control-plane admission, benchmark execution, default switch, and product-chain switch remain closed",
+  "go_default_path_preserved": true,
+  "go_fallback_required": true,
+  "isolated_pid_progress_paths_validated": true,
+  "matched_go_rust_default_daemon_benchmark_recorded": false,
+  "name": "stage156-rust-default-run-identity-admission-gate",
+  "prior_gate": "stage155-product-chain-default-switch-blocker-review-gate",
+  "product_chain_switch_allowed": false,
+  "production_listener_bound": false,
+  "production_pid_progress_paths_mutated": false,
+  "production_run_command_replaced": false,
+  "production_signal_handler_installed": false,
+  "remaining_blockers": [
+    "Rust default control-plane entrypoint is not admitted",
+    "production listener binding and eBPF attach remain closed",
+    "matched Go/Rust default daemon benchmark has not executed",
+    "true Rust default daemon admission remains false until production control-plane and matched benchmark pass",
+    "default daemon and product-chain switches remain closed"
+  ],
+  "rows": [
+    {
+      "area": "run identity shape",
+      "boundary": "the command is opt-in evidence and does not replace Go dae run",
+      "evidence": "stage156-default-run-identity-admission accepts -c/--config, --logfile, --disable-timestamp, --disable-pidfile, and --disable-sudo",
+      "next_action": "admit production control-plane entrypoint separately",
+      "status": "admitted-opt-in-only"
+    },
+    {
+      "area": "config corpus",
+      "boundary": "config parsing/load evidence is not matched live daemon benchmark evidence",
+      "evidence": "Stage156 reads a non-empty config corpus and records byte/line counts",
+      "next_action": "reuse the corpus in the later matched benchmark only after control-plane admission",
+      "status": "loaded-under-isolated-root"
+    },
+    {
+      "area": "OnReady and files",
+      "boundary": "production /var/run/dae.pid and /var/run/dae.progress are not touched",
+      "evidence": "Stage156 writes isolated pid/progress/sdnotify/log/manifest files under /tmp/dae-stage156*",
+      "next_action": "keep production file mutation closed until default switch is approved",
+      "status": "validated-isolated-paths"
+    },
+    {
+      "area": "default/product switches",
+      "boundary": "true_rust_default_daemon_admitted remains false",
+      "evidence": "Rust run identity exists but production control-plane and matched benchmark are absent",
+      "next_action": "carry blockers into Stage157 production control-plane admission",
+      "status": "closed"
+    }
+  ],
+  "run_identity_config_corpus_validated": true,
+  "run_identity_on_ready_contract_validated": true,
+  "run_shaped_flags_validated": true,
+  "rust_default_control_plane_entrypoint_admitted": false,
+  "rust_default_run_entrypoint_exists": true,
+  "rust_default_run_identity_harness_available": true,
+  "rust_default_run_identity_optin_admitted": true,
+  "source": [
+    "DAEX_RUST_REBUILD_PLAN_2026-05-16.md:stage156",
+    "DAEX_RUST_REBUILD_PLAN_2026-05-16.md:stage153",
+    "DAEX_RUST_REBUILD_PLAN_2026-05-16.md:stage155",
+    "DAENEW_RUST_REBUILD_MEMO_2026-05-16.md:15.1",
+    "DAENEW_RUST_REBUILD_MEMO_2026-05-16.md:15.8",
+    "DAENEW_RUST_REBUILD_MEMO_2026-05-16.md:28.3",
+    "DAENEW_RUST_REBUILD_MEMO_2026-05-16.md:28.4",
+    "rust/crates/dae-daemon/src/default_run_identity.rs"
+  ],
+  "stage": "stage156",
+  "stage153_wrapper_reused": true,
+  "stage_complete": true,
+  "true_rust_default_daemon_admitted": false,
+  "validation_commands": [
+    "cargo run --manifest-path rust/Cargo.toml -p dae-daemon --bin dae-daemon-optin -- stage156-default-run-identity-admission --root /tmp/dae-stage156-default-run-identity",
+    "python3 -m json.tool testdata/rebuild-golden/engine/runtime_stage156/rust_default_run_identity_admission_gate.json",
+    "python3 -m json.tool testdata/rebuild-golden/product/daemon/stage156_rust_default_run_identity_admission_gate.json",
+    "cargo run --manifest-path rust/Cargo.toml -p dae-cli --bin dae-cli-optin --quiet -- runtime stage156-rust-default-run-identity-admission-gate",
+    "cargo run --manifest-path rust/Cargo.toml -p dae-cli --bin dae-cli-optin --quiet -- runtime stage156-rust-default-run-identity-admission-gate --execute-smoke --root /tmp/dae-stage156-cli-default-run-identity",
+    "cargo test --manifest-path rust/Cargo.toml -p dae-daemon stage156 -- --nocapture",
+    "cargo test --manifest-path rust/Cargo.toml -p dae-cli stage156 -- --nocapture",
+    "cargo test --manifest-path rust/Cargo.toml -p dae-product stage156 -- --nocapture",
+    "cargo test --manifest-path rust/Cargo.toml -p dae-cli stage155 -- --nocapture",
+    "cargo test --manifest-path rust/Cargo.toml -p dae-daemon -p dae-cli -p dae-product -q",
+    "cargo fmt --manifest-path rust/Cargo.toml --all -- --check",
+    "git diff --check"
+  ]
+}
