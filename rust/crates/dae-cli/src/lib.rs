@@ -85,6 +85,7 @@ pub(crate) mod runtime_stage173_matched_benchmark_command_capture_verifier;
 pub(crate) mod runtime_stage174_matched_benchmark_real_corpus_queue_gate;
 pub(crate) mod runtime_stage175_matched_benchmark_real_corpus_candidate_materializer;
 pub(crate) mod runtime_stage176_matched_benchmark_real_corpus_candidate_verifier;
+pub(crate) mod runtime_stage177_matched_benchmark_real_corpus_review_queue_gate;
 pub(crate) mod runtime_stage26_candidate;
 pub(crate) mod runtime_stage27_candidate;
 pub(crate) mod runtime_stage29_preflight;
