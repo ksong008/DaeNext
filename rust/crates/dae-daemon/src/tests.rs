@@ -1,6 +1,9 @@
 use serde_json::Value;
 
-use crate::{daemon_identity, run_with_args_and_version, stage149_identity_preflight_report};
+use crate::{
+    daemon_identity, run_with_args_and_version, stage149_identity_preflight_report,
+    stage150_lifecycle_smoke_report,
+};
 
 #[test]
 fn daemon_identity_is_opt_in_and_not_default() {
@@ -64,4 +67,49 @@ fn daemon_runner_rejects_default_run_command() {
             .stderr
             .contains("unsupported dae-daemon-optin command")
     );
+}
+
+#[test]
+fn stage150_lifecycle_smoke_uses_isolated_paths() {
+    let root =
+        std::env::temp_dir().join(format!("dae-stage150-daemon-test-{}", std::process::id()));
+    let report = stage150_lifecycle_smoke_report(&root).unwrap();
+    assert!(
+        report["rust_daemon_lifecycle_smoke_passed"]
+            .as_bool()
+            .unwrap()
+    );
+    assert!(
+        report["isolated_pid_progress_paths_validated"]
+            .as_bool()
+            .unwrap()
+    );
+    assert!(!report["production_paths_mutated"].as_bool().unwrap());
+    assert!(!report["benchmark_executable_now"].as_bool().unwrap());
+    assert!(!report["default_switch_allowed"].as_bool().unwrap());
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[test]
+fn daemon_runner_stage150_lifecycle_command_outputs_json() {
+    let root =
+        std::env::temp_dir().join(format!("dae-stage150-runner-test-{}", std::process::id()));
+    let output = run_with_args_and_version(
+        [
+            "stage150-lifecycle-smoke".to_owned(),
+            "--root".to_owned(),
+            root.display().to_string(),
+        ],
+        "test-version",
+    );
+    assert_eq!(output.exit_code, 0, "{}", output.stderr);
+    assert_eq!(output.stderr, "");
+    let json: Value = serde_json::from_str(&output.stdout).unwrap();
+    assert!(
+        json["rust_daemon_lifecycle_smoke_passed"]
+            .as_bool()
+            .unwrap()
+    );
+    assert!(!json["production_paths_mutated"].as_bool().unwrap());
+    let _ = std::fs::remove_dir_all(root);
 }

@@ -240,6 +240,7 @@ dependencies = [
  "dae-config",
  "dae-control",
  "dae-core-types",
+ "dae-daemon",
  "dae-datapath",
  "dae-dns",
  "dae-ebpf-support",
@@ -294,6 +295,7 @@ dependencies = [
 name = "dae-daemon"
 version = "0.1.0"
 dependencies = [
+ "dae-core-types",
  "serde_json",
 ]
 
