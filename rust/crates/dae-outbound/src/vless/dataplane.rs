@@ -21,12 +21,14 @@ mod grpc_http2;
 mod helpers;
 mod tls_transports;
 mod types;
+mod xhttp_h3;
 mod xhttp_http2;
 
 pub use grpc_http2::*;
 use helpers::*;
 pub use tls_transports::*;
 pub use types::*;
+pub use xhttp_h3::*;
 pub use xhttp_http2::*;
 
 pub fn tcp_exchange_over_stream<S>(

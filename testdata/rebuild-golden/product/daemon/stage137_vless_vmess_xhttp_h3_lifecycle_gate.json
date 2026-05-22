@@ -1,0 +1,94 @@
+{
+  "name": "stage137-vless-vmess-xhttp-h3-lifecycle-gate",
+  "stage": "stage137",
+  "prior_gate": "stage136-vless-vmess-xhttp-http2-lifecycle-gate",
+  "stage_complete": true,
+  "vless_grpc_http2_lifecycle_admitted": true,
+  "vmess_grpc_http2_lifecycle_admitted": true,
+  "vless_wss_tls_lifecycle_admitted": true,
+  "vmess_wss_tls_lifecycle_admitted": true,
+  "vless_https_httpupgrade_tls_lifecycle_admitted": true,
+  "vmess_https_httpupgrade_tls_lifecycle_admitted": true,
+  "vless_xhttp_http2_lifecycle_admitted": true,
+  "vmess_xhttp_http2_lifecycle_admitted": true,
+  "vless_xhttp_h3_lifecycle_admitted": true,
+  "vmess_xhttp_h3_lifecycle_admitted": true,
+  "vless_xhttp_h2_h3_lifecycle_admitted": true,
+  "vmess_xhttp_h2_h3_lifecycle_admitted": true,
+  "vless_utls_fingerprint_wire_admitted": false,
+  "vmess_utls_fingerprint_wire_admitted": false,
+  "vless_reality_full_handshake_admitted": false,
+  "vless_vision_tls_reality_admitted": false,
+  "vless_protocol_true_dataplane_admitted": false,
+  "vmess_protocol_true_dataplane_admitted": false,
+  "shared_transport_true_dataplane_admitted": false,
+  "outbound_true_dataplane_admitted": false,
+  "matched_go_rust_default_daemon_benchmark_recorded": false,
+  "default_switch_allowed": false,
+  "default_path_mutation_allowed": false,
+  "product_chain_switch_allowed": false,
+  "true_rust_default_daemon_admitted": false,
+  "gate_decision": "stage137 admits only VLESS/VMess xHTTP H3 TLS packet-up lifecycle sub-rows and the H2+H3 aggregate; uTLS fingerprint wire parity, REALITY, XTLS Vision, VLESS/VMess protocol-wide admission, shared transport, outbound default, matched benchmark, and product switches remain closed",
+  "rows": [
+    {
+      "area": "VLESS xHTTP H3 TLS packet-up",
+      "status": "passed-local-smoke",
+      "evidence": "Stage137 validates local QUIC/H3/rustls TLS1.3 loopback carrying VLESS TCP request/response bytes, exact ALPN h3, path/session/seq, target, payload roundtrip, H3 status 200, and benchmark",
+      "boundary": "does not admit VLESS uTLS fingerprint, REALITY full handshake, XTLS Vision, downloadSettings, stream-up/stream-one, UDP, or protocol-wide VLESS",
+      "next_action": "carry VLESS xHTTP H3 as a completed subrow and continue uTLS/REALITY/Vision gates separately"
+    },
+    {
+      "area": "VMess xHTTP H3 TLS packet-up",
+      "status": "passed-local-smoke",
+      "evidence": "Stage137 validates local QUIC/H3/rustls TLS1.3 loopback carrying VMess AEAD TCP request/response bytes with command/security/target/payload roundtrip and exact ALPN h3",
+      "boundary": "does not admit VMess uTLS full-combination or protocol-wide VMess; VMess REALITY remains unsupported",
+      "next_action": "carry VMess xHTTP H3 as a completed subrow and continue VMess uTLS/protocol-wide blockers separately"
+    },
+    {
+      "area": "overall shared/outbound/default admission",
+      "status": "blocked",
+      "evidence": "VLESS uTLS/REALITY/Vision residuals, VMess uTLS residuals, Trojan-Go shared transport residuals, matched Go/Rust default benchmark, and product-chain gates remain incomplete",
+      "boundary": "shared_transport_true_dataplane, outbound_true_dataplane, default_switch_allowed, and product_chain_switch_allowed stay false",
+      "next_action": "continue protocol residual stages before protocol-wide recertification"
+    }
+  ],
+  "benchmark_record": [
+    "Stage137 records a local QUIC/H3/rustls TLS1.3 xHTTP packet-up benchmark for VLESS and VMess",
+    "The benchmark includes selected ALPN, certificate DER length, xHTTP request path, H3 status, protocol request/response body lengths, and payload sizes",
+    "The benchmark is not a matched Go default daemon baseline",
+    "matched_go_rust_default_daemon_benchmark_recorded remains false"
+  ],
+  "validation_commands": [
+    "python3 -m json.tool testdata/rebuild-golden/engine/runtime_stage137/vless_vmess_xhttp_h3_lifecycle_admission.json",
+    "python3 -m json.tool testdata/rebuild-golden/product/daemon/stage137_vless_vmess_xhttp_h3_lifecycle_gate.json",
+    "cargo test --manifest-path rust/Cargo.toml -p dae-outbound stage137 -- --nocapture",
+    "cargo run --manifest-path rust/Cargo.toml -p dae-cli --bin dae-cli-optin --quiet -- runtime stage137-vless-vmess-xhttp-h3-lifecycle-admission",
+    "cargo run --manifest-path rust/Cargo.toml -p dae-cli --bin dae-cli-optin --quiet -- runtime stage137-vless-vmess-xhttp-h3-lifecycle-admission --execute-smoke --benchmark-iters 2",
+    "cargo test --manifest-path rust/Cargo.toml -p dae-cli stage137 -- --nocapture",
+    "cargo test --manifest-path rust/Cargo.toml -p dae-product stage137 -- --nocapture",
+    "cargo test --manifest-path rust/Cargo.toml -p dae-cli stage136 -- --nocapture",
+    "cargo test --manifest-path rust/Cargo.toml -p dae-outbound -p dae-cli -p dae-product -q",
+    "cargo fmt --manifest-path rust/Cargo.toml --all -- --check",
+    "git diff --check"
+  ],
+  "remaining_blockers": [
+    "VLESS uTLS fingerprint, REALITY full handshake, XTLS Vision, and protocol-wide recertification remain separate blockers",
+    "VMess uTLS full-combination and protocol-wide recertification remain separate blockers",
+    "Trojan-Go full shared transport remains blocked",
+    "shared_transport_true_dataplane and outbound_true_dataplane remain closed until all protocol rows close",
+    "matched Go default daemon vs true Rust candidate benchmark remains missing",
+    "default daemon and product-chain switches remain closed"
+  ],
+  "source": [
+    "DAEX_RUST_REBUILD_PLAN_2026-05-16.md:stage137",
+    "DAENEW_RUST_REBUILD_MEMO_2026-05-16.md:26.4",
+    "DAENEW_RUST_REBUILD_MEMO_2026-05-16.md:26.5",
+    "DAENEW_RUST_REBUILD_MEMO_2026-05-16.md:26.8",
+    "/root/project/outbound/transport/xhttp/xhttp.go",
+    "rust/crates/dae-cli/src/runtime_stage137_vless_vmess_xhttp_h3_gate",
+    "rust/crates/dae-outbound/src/shared_transport/xhttp_h3.rs",
+    "rust/crates/dae-outbound/src/vless/dataplane/xhttp_h3.rs",
+    "rust/crates/dae-outbound/src/vmess/dataplane/xhttp_h3.rs",
+    "testdata/rebuild-golden/engine/runtime_stage137/vless_vmess_xhttp_h3_lifecycle_admission.json"
+  ]
+}
