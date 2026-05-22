@@ -97,6 +97,7 @@ pub mod stage186_reload_runtime_parity_gate;
 pub mod stage187_matched_benchmark_readiness_gate;
 pub mod stage188_bounded_benchmark_hard_gate_resolution;
 pub mod stage189_production_dataplane_execution_evidence_gate;
+pub mod stage190_live_reload_runtime_parity_execution_evidence_gate;
 pub mod stage23_completion;
 pub mod stage24_product_gate;
 pub mod stage25_execution_queue;
@@ -815,6 +816,11 @@ pub use stage189_production_dataplane_execution_evidence_gate::{
     Stage189DataplaneGapRow, Stage189Gate,
     Stage189ProductionDataplaneExecutionEvidenceGateContract,
     stage189_production_dataplane_execution_evidence_gate_contract,
+};
+pub use stage190_live_reload_runtime_parity_execution_evidence_gate::{
+    Stage190Gate, Stage190LiveReloadRuntimeParityExecutionEvidenceGateContract,
+    Stage190ReloadRuntimeGapRow,
+    stage190_live_reload_runtime_parity_execution_evidence_gate_contract,
 };
 pub use systemd::{SystemdContract, systemd_contract};
 pub use true_daemon_admission::{
