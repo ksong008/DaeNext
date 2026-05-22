@@ -13,6 +13,7 @@ pub mod tls;
 pub mod tls_fragment;
 pub mod utls_fingerprint;
 pub mod utls_wire;
+pub mod utls_wire_builder;
 pub mod xhttp;
 pub mod xhttp_h3;
 
@@ -77,6 +78,9 @@ pub use utls_fingerprint::{
 };
 pub use utls_wire::{
     UtlsClientHelloProfile, parse_utls_client_hello_record, parse_utls_client_hello_record_hex,
+};
+pub use utls_wire_builder::{
+    build_synthetic_utls_client_hello_record, build_synthetic_utls_client_hello_record_hex,
 };
 pub use xhttp::{
     XHttpHttp2FrameReport, XHttpHttp2Request, XHttpLifecycleOptions, XHttpLifecycleReport,
