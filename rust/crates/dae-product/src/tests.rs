@@ -18,6 +18,7 @@ mod daemon_identity_stage148;
 mod daemon_identity_stage149;
 mod daemon_lifecycle_stage150;
 mod daemon_listener_ebpf_policy_stage159;
+mod daemon_listener_ebpf_preflight_stage160;
 mod daemon_matched_benchmark_execution_stage158;
 mod daemon_matched_benchmark_stage147;
 mod daemon_product_chain_blocker_stage155;

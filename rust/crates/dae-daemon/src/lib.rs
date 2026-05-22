@@ -3,6 +3,7 @@ pub mod control_plane_entrypoint;
 pub mod default_run_identity;
 pub mod identity;
 pub mod lifecycle;
+pub mod listener_ebpf_preflight;
 pub mod preflight;
 pub mod run_entrypoint;
 pub mod runner;
@@ -30,6 +31,9 @@ pub use identity::{
 pub use lifecycle::{
     LifecyclePaths, default_stage150_root, run_stage150_lifecycle_smoke,
     stage150_lifecycle_smoke_report,
+};
+pub use listener_ebpf_preflight::{
+    default_stage160_root, stage160_listener_ebpf_preflight_harness_report,
 };
 pub use preflight::stage149_identity_preflight_report;
 pub use run_entrypoint::{default_stage153_root, stage153_run_entrypoint_preflight_report};
