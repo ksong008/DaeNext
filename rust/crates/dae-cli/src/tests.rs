@@ -58,6 +58,7 @@ mod runtime_juicity_transport_packet_conn_stage125;
 mod runtime_listener_ebpf_policy_stage159;
 mod runtime_listener_ebpf_preflight_stage160;
 mod runtime_matched_benchmark_execution_stage158;
+mod runtime_matched_benchmark_execution_stage168;
 mod runtime_matched_benchmark_stage147;
 mod runtime_outbound_true_dataplane_stage133;
 mod runtime_product_chain_blocker_stage155;
