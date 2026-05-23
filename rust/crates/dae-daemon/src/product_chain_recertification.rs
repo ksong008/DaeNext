@@ -12,6 +12,9 @@ pub struct ProductChainRecertificationOptions {
     pub production_run_command_replacement_execute_requested: bool,
     pub production_run_command_replacement_apply_plan_requested: bool,
     pub host_default_path_mutation_allow_requested: bool,
+    pub local_validation_fresh_install_plan_requested: bool,
+    pub local_validation_config_source: Option<PathBuf>,
+    pub local_validation_binary_source: Option<PathBuf>,
     pub dae_repo: PathBuf,
     pub dae_wing_repo: PathBuf,
     pub daed_repo: PathBuf,
@@ -30,6 +33,9 @@ impl Default for ProductChainRecertificationOptions {
             production_run_command_replacement_execute_requested: false,
             production_run_command_replacement_apply_plan_requested: false,
             host_default_path_mutation_allow_requested: false,
+            local_validation_fresh_install_plan_requested: false,
+            local_validation_config_source: None,
+            local_validation_binary_source: None,
             dae_repo: PathBuf::from("/root/project/dae"),
             daed_repo: PathBuf::from("/root/project/daed"),
             dae_wing_repo: PathBuf::from("/root/project/daed/wing"),
@@ -140,6 +146,9 @@ pub fn product_chain_recertification_report(
     let daed2_switch_rehearsal =
         materialize_daed2_product_chain_switch_rehearsal_report(&report, &artifact_dir)?;
     attach_daed2_product_chain_switch_rehearsal(&mut report, daed2_switch_rehearsal);
+    let local_validation_fresh_install_plan =
+        materialize_local_validation_fresh_install_plan(options, &report, &artifact_dir)?;
+    attach_local_validation_fresh_install_plan(&mut report, local_validation_fresh_install_plan);
     let host_write_plan_freeze =
         materialize_production_host_write_plan_freeze_report(&report, &artifact_dir)?;
     attach_production_host_write_plan_freeze(&mut report, host_write_plan_freeze);
@@ -1234,6 +1243,156 @@ fn attach_daed2_product_chain_switch_rehearsal(report: &mut Value, rehearsal: Va
     report_object.insert("daed2_product_chain_switch_rehearsal".to_owned(), rehearsal);
 }
 
+fn materialize_local_validation_fresh_install_plan(
+    options: &ProductChainRecertificationOptions,
+    report: &Value,
+    artifact_dir: &Path,
+) -> Result<Value, String> {
+    let plan_file = artifact_dir.join("local-validation-fresh-install-plan.json");
+    let requested = options.local_validation_fresh_install_plan_requested;
+    let config_source = options.local_validation_config_source.as_deref();
+    let binary_source = options.local_validation_binary_source.as_deref();
+    let service_source = options.service_file.as_path();
+    let host_inventory = &report["production_replacement_readiness"]["host_inventory"];
+    let usr_bin_dae_exists = host_inventory["usr_bin_dae_exists"]
+        .as_bool()
+        .unwrap_or(false);
+    let installed_system_service_exists = host_inventory["installed_system_service_exists"]
+        .as_bool()
+        .unwrap_or(false);
+    let runtime_config_exists = host_inventory["runtime_config_exists"]
+        .as_bool()
+        .unwrap_or(false);
+    let fresh_install_host_state_confirmed =
+        !usr_bin_dae_exists && !installed_system_service_exists && !runtime_config_exists;
+    let config_source_exists = config_source.is_some_and(Path::is_file);
+    let binary_source_exists = binary_source.is_some_and(Path::is_file);
+    let service_source_exists = service_source.is_file();
+    let service_contract_preserved = report["service_contract_preserved"]
+        .as_bool()
+        .unwrap_or(false);
+    let product_chain_clean = report["product_chain_recertification_clean"]
+        .as_bool()
+        .unwrap_or(false);
+    let rehearsal_passed = report["daed2_product_chain_switch_rehearsal_passed"]
+        .as_bool()
+        .unwrap_or(false);
+    let no_host_write_executed = !report["production_run_command_replaced"]
+        .as_bool()
+        .unwrap_or(true);
+
+    let mut blockers = Vec::new();
+    if requested && !fresh_install_host_state_confirmed {
+        blockers.push("local validation fresh install requires an initially uninstalled host");
+    }
+    if requested && !config_source_exists {
+        blockers.push("local validation config source is absent");
+    }
+    if requested && !binary_source_exists {
+        blockers.push("local validation Rust binary source is absent");
+    }
+    if requested && !service_source_exists {
+        blockers.push("local validation service template source is absent");
+    }
+    if requested && !service_contract_preserved {
+        blockers.push("local validation service template does not preserve /usr/bin/dae contract");
+    }
+    if requested && !product_chain_clean {
+        blockers.push("product-chain recertification is not clean");
+    }
+    if requested && !rehearsal_passed {
+        blockers.push("daed2.0 product-chain switch rehearsal is not pass");
+    }
+    if requested && !no_host_write_executed {
+        blockers.push("host write was already executed");
+    }
+    let pass = requested && blockers.is_empty();
+    let plan = json!({
+        "status": if pass { "pass" } else if requested { "blocked" } else { "not-requested" },
+        "pass": pass,
+        "requested": requested,
+        "scope": "local-validation-only",
+        "configuration_class": "example-config-not-production-input",
+        "production_host_write_authorized": false,
+        "actual_host_write_executed": false,
+        "plan_file": path_string(&plan_file),
+        "blockers": blockers,
+        "checks": {
+            "fresh_install_host_state_confirmed": fresh_install_host_state_confirmed,
+            "config_source_exists": config_source_exists,
+            "binary_source_exists": binary_source_exists,
+            "service_source_exists": service_source_exists,
+            "service_contract_preserved": service_contract_preserved,
+            "product_chain_recertification_clean": product_chain_clean,
+            "daed2_product_chain_switch_rehearsal_passed": rehearsal_passed,
+            "no_host_write_executed": no_host_write_executed,
+        },
+        "inputs": {
+            "binary_source": binary_source.map(path_string),
+            "binary_source_exists": binary_source_exists,
+            "service_template_source": path_string(service_source),
+            "service_template_source_exists": service_source_exists,
+            "config_source": config_source.map(path_string),
+            "config_source_exists": config_source_exists,
+            "config_source_usage": "local-validation-only",
+        },
+        "installation_targets": {
+            "binary_target": "/usr/bin/dae",
+            "service_target": "/etc/systemd/system/dae.service",
+            "config_target": "/etc/dae/config.dae",
+            "preserved_external_command_contract": "/usr/bin/dae validate/run/reload",
+        },
+        "execution_checklist": [
+            "require explicit authorization before local validation host write",
+            "copy the frozen Rust binary source only to /usr/bin/dae",
+            "copy install/dae.service only to /etc/systemd/system/dae.service",
+            "copy example.dae only to /etc/dae/config.dae and label it local validation only",
+            "run systemctl actions only within explicit authorization",
+            "run validation and resource cleanup checks immediately"
+        ],
+        "rollback_checklist": [
+            "remove /usr/bin/dae only if created by this local validation installation",
+            "remove /etc/systemd/system/dae.service only if created by this local validation installation",
+            "remove /etc/dae/config.dae only if copied from example.dae by this execution",
+            "run systemctl daemon-reload only if service target was installed and rollback is authorized",
+            "confirm the pre-install absent state is restored",
+            "rerun daed2.0 product-chain validation after rollback"
+        ],
+        "read_only": true,
+        "source": [
+            "DAEX_RUST_REBUILD_PLAN_2026-05-16.md:后续阶段 3 local-validation fresh-install 输入冻结",
+            "DAENEW_RUST_REBUILD_MEMO_2026-05-16.md:default-path-service-runtime-contract"
+        ],
+    });
+    if requested {
+        let encoded = serde_json::to_vec_pretty(&plan).map_err(|err| {
+            format!("failed to encode local validation fresh-install plan: {err}")
+        })?;
+        fs::write(&plan_file, encoded).map_err(|err| {
+            format!(
+                "failed to write local validation fresh-install plan {}: {err}",
+                path_string(&plan_file)
+            )
+        })?;
+    }
+    Ok(plan)
+}
+
+fn attach_local_validation_fresh_install_plan(report: &mut Value, plan: Value) {
+    let Some(report_object) = report.as_object_mut() else {
+        return;
+    };
+    report_object.insert(
+        "local_validation_fresh_install_plan_file".to_owned(),
+        plan["plan_file"].clone(),
+    );
+    report_object.insert(
+        "local_validation_fresh_install_plan_passed".to_owned(),
+        plan["pass"].clone(),
+    );
+    report_object.insert("local_validation_fresh_install_plan".to_owned(), plan);
+}
+
 fn materialize_production_host_write_plan_freeze_report(
     report: &Value,
     artifact_dir: &Path,
@@ -1261,6 +1420,10 @@ fn materialize_production_host_write_plan_freeze_report(
     let runtime_config_exists = host_inventory["runtime_config_exists"]
         .as_bool()
         .unwrap_or(false);
+    let local_validation_fresh_install_plan = &report["local_validation_fresh_install_plan"];
+    let local_validation_fresh_install_plan_passed = local_validation_fresh_install_plan["pass"]
+        .as_bool()
+        .unwrap_or(false);
     let fresh_install_required = !usr_bin_dae_exists && !installed_system_service_exists;
     let operation_mode = if fresh_install_required {
         "fresh-install"
@@ -1278,9 +1441,15 @@ fn materialize_production_host_write_plan_freeze_report(
         blockers.push("host write was already executed");
     }
     if fresh_install_required {
-        blockers.push(
-            "fresh install requires a separately frozen binary, service, config, and removal rollback plan",
-        );
+        if local_validation_fresh_install_plan_passed {
+            blockers.push(
+                "fresh install is frozen for local validation only; production host write requires production configuration and explicit authorization",
+            );
+        } else {
+            blockers.push(
+                "fresh install requires a separately frozen binary, service, config, and removal rollback plan",
+            );
+        }
     } else if !usr_bin_dae_exists {
         blockers.push("installed /usr/bin/dae target is absent for the replacement plan");
     }
@@ -1378,8 +1547,10 @@ fn materialize_production_host_write_plan_freeze_report(
             "installed_usr_bin_dae_exists": usr_bin_dae_exists,
             "installed_system_service_exists": installed_system_service_exists,
             "runtime_config_exists": runtime_config_exists,
+            "local_validation_fresh_install_plan_passed": local_validation_fresh_install_plan_passed,
         },
         "host_inventory": host_inventory.clone(),
+        "local_validation_fresh_install_plan": local_validation_fresh_install_plan.clone(),
         "inputs": {
             "readiness_file": readiness["readiness_file"].clone(),
             "rehearsal_file": rehearsal["rehearsal_file"].clone(),
@@ -1387,6 +1558,7 @@ fn materialize_production_host_write_plan_freeze_report(
             "service_diff_file": readiness["required_artifacts"]["service_diff_file"].clone(),
             "backup_manifest_file": readiness["required_artifacts"]["backup_manifest_file"].clone(),
             "rollback_script": readiness["required_artifacts"]["rollback_script"].clone(),
+            "local_validation_fresh_install_plan_file": local_validation_fresh_install_plan["plan_file"].clone(),
         },
         "frozen_execution_checklist": frozen_execution_checklist,
         "frozen_rollback_checklist": frozen_rollback_checklist,
@@ -2282,6 +2454,9 @@ mod tests {
             production_run_command_replacement_execute_requested: false,
             production_run_command_replacement_apply_plan_requested: false,
             host_default_path_mutation_allow_requested: false,
+            local_validation_fresh_install_plan_requested: false,
+            local_validation_config_source: None,
+            local_validation_binary_source: None,
             dae_repo: fixture.join("dae"),
             dae_wing_repo: fixture.join("dae-wing"),
             daed_repo: fixture.join("daed"),
@@ -3125,6 +3300,110 @@ mod tests {
     }
 
     #[test]
+    fn product_chain_freezes_local_validation_fresh_install_without_production_authorization() {
+        let root = std::env::temp_dir().join(format!(
+            "dae-daemon-product-chain-local-validation-install-{}",
+            std::process::id()
+        ));
+        let artifact_dir = root.join("artifact");
+        let service_file = root.join("install").join("dae.service");
+        let config_source = root.join("example.dae");
+        let binary_source = root.join("dae-daemon-optin");
+        std::fs::create_dir_all(&artifact_dir).unwrap();
+        std::fs::create_dir_all(service_file.parent().unwrap()).unwrap();
+        std::fs::write(
+            &service_file,
+            "ExecStartPre=/usr/bin/dae validate -c /etc/dae/config.dae\nExecStart=/usr/bin/dae run --disable-timestamp -c /etc/dae/config.dae\nExecReload=/usr/bin/dae reload $MAINPID\n",
+        )
+        .unwrap();
+        std::fs::write(&config_source, "global {\n  log_level: info\n}\n").unwrap();
+        std::fs::write(&binary_source, "local-validation-rust-binary").unwrap();
+        let options = ProductChainRecertificationOptions {
+            service_file: service_file.clone(),
+            local_validation_fresh_install_plan_requested: true,
+            local_validation_config_source: Some(config_source.clone()),
+            local_validation_binary_source: Some(binary_source.clone()),
+            ..ProductChainRecertificationOptions::default()
+        };
+        let mut report = json!({
+            "service_contract_preserved": true,
+            "product_chain_recertification_clean": true,
+            "production_run_command_replaced": false,
+            "daed2_product_chain_switch_rehearsal_passed": true,
+            "production_replacement_readiness": {
+                "ready_for_manual_authorization": true,
+                "checks": {
+                    "no_host_write_executed": true
+                },
+                "host_inventory": {
+                    "usr_bin_dae_exists": false,
+                    "usr_local_bin_dae_exists": false,
+                    "installed_system_service_exists": false,
+                    "installed_system_service_files": [],
+                    "runtime_config_file": "/etc/dae/config.dae",
+                    "runtime_config_exists": false
+                },
+                "readiness_file": "/tmp/production-replacement-readiness.json",
+                "required_artifacts": {
+                    "apply_manifest_file": "/tmp/production-run-command-replacement-apply.json",
+                    "service_diff_file": "/tmp/production-run-command-replacement-service.diff",
+                    "backup_manifest_file": "/tmp/backup-manifest.json",
+                    "rollback_script": "/tmp/rollback-production-run-command-replacement.sh"
+                }
+            },
+            "daed2_product_chain_switch_rehearsal": {
+                "pass": true,
+                "actual_host_write_executed": false,
+                "rehearsal_file": "/tmp/daed2-product-chain-switch-rehearsal.json"
+            }
+        });
+
+        let local_plan =
+            materialize_local_validation_fresh_install_plan(&options, &report, &artifact_dir)
+                .unwrap();
+        assert_eq!(local_plan["status"].as_str().unwrap(), "pass");
+        assert!(local_plan["pass"].as_bool().unwrap());
+        assert_eq!(
+            local_plan["scope"].as_str().unwrap(),
+            "local-validation-only"
+        );
+        assert_eq!(
+            local_plan["inputs"]["config_source"].as_str().unwrap(),
+            path_string(&config_source)
+        );
+        assert_eq!(
+            local_plan["installation_targets"]["binary_target"]
+                .as_str()
+                .unwrap(),
+            "/usr/bin/dae"
+        );
+        assert!(
+            !local_plan["production_host_write_authorized"]
+                .as_bool()
+                .unwrap()
+        );
+        assert!(std::path::Path::new(local_plan["plan_file"].as_str().unwrap()).exists());
+        attach_local_validation_fresh_install_plan(&mut report, local_plan);
+
+        let freeze =
+            materialize_production_host_write_plan_freeze_report(&report, &artifact_dir).unwrap();
+        assert!(!freeze["pass"].as_bool().unwrap());
+        assert!(
+            freeze["checks"]["local_validation_fresh_install_plan_passed"]
+                .as_bool()
+                .unwrap()
+        );
+        assert!(
+            freeze["blockers"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|blocker| blocker.as_str().unwrap().contains("local validation only"))
+        );
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
     fn product_chain_recertification_blocks_when_repo_status_is_unavailable() {
         let root = std::env::temp_dir().join(format!(
             "dae-daemon-product-chain-nongit-{}",
@@ -3154,6 +3433,9 @@ mod tests {
             production_run_command_replacement_execute_requested: false,
             production_run_command_replacement_apply_plan_requested: false,
             host_default_path_mutation_allow_requested: false,
+            local_validation_fresh_install_plan_requested: false,
+            local_validation_config_source: None,
+            local_validation_binary_source: None,
             dae_repo: fixture.join("dae"),
             dae_wing_repo: fixture.join("dae-wing"),
             daed_repo: fixture.join("daed"),
