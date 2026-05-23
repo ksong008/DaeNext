@@ -97,8 +97,33 @@ fn run_default_optin_command(args: &[String], version: &str) -> DaemonOutput {
     let mut disable_sudo = false;
     let mut listener_smoke = true;
     let mut reload_smoke = true;
+    let mut production_runtime_owner = false;
+    let mut production_runtime_active_tcp = false;
     let mut production_dataplane_smoke = false;
     let mut ack_root_gate = false;
+    let mut production_runtime_tproxy_port = 12345_u16;
+    let mut production_runtime_dae_netns_id = 49_u32;
+    let mut production_runtime_object: Option<PathBuf> = None;
+    let mut production_runtime_active_tcp_target_ip: Option<String> = None;
+    let mut production_runtime_active_tcp_client_ip: Option<String> = None;
+    let mut production_runtime_active_tcp_target_port: Option<u16> = None;
+    let mut production_runtime_active_tcp_so_mark: Option<u32> = None;
+    let mut production_runtime_active_tcp_mptcp: Option<bool> = None;
+    let mut production_runtime_active_tcp_relay = false;
+    let mut production_runtime_active_tcp_upstream_mptcp: Option<bool> = None;
+    let mut production_runtime_active_tcp_benchmark_iters: Option<u32> = None;
+    let mut production_runtime_active_udp = false;
+    let mut production_runtime_active_udp_target_ip: Option<String> = None;
+    let mut production_runtime_active_udp_target_port: Option<u16> = None;
+    let mut production_runtime_active_udp_benchmark_iters: Option<u32> = None;
+    let mut production_runtime_active_dns = false;
+    let mut production_runtime_active_dns_target_ip: Option<String> = None;
+    let mut production_runtime_active_dns_target_port: Option<u16> = None;
+    let mut production_runtime_active_dns_upstream_ip: Option<String> = None;
+    let mut production_runtime_active_dns_upstream_port: Option<u16> = None;
+    let mut production_runtime_active_dns_qname: Option<String> = None;
+    let mut production_runtime_active_dns_benchmark_iters: Option<u32> = None;
+    let mut production_runtime_reload_parity = false;
     let mut dataplane_benchmark_iters = 5_u32;
     let mut cargo_manifest: Option<PathBuf> = None;
     let mut matched_default_benchmark = false;
@@ -109,6 +134,14 @@ fn run_default_optin_command(args: &[String], version: &str) -> DaemonOutput {
     let mut go_binary: Option<PathBuf> = None;
     let mut rust_binary: Option<PathBuf> = None;
     let mut source_dir: Option<PathBuf> = None;
+    let mut product_chain_recertification = false;
+    let mut product_chain_dae_repo: Option<PathBuf> = None;
+    let mut product_chain_dae_wing_repo: Option<PathBuf> = None;
+    let mut product_chain_daed_repo: Option<PathBuf> = None;
+    let mut product_chain_outbound_repo: Option<PathBuf> = None;
+    let mut product_chain_quic_go_repo: Option<PathBuf> = None;
+    let mut product_chain_service_file: Option<PathBuf> = None;
+    let mut product_chain_go_mod_file: Option<PathBuf> = None;
     let mut iter = args.iter();
     while let Some(arg) = iter.next() {
         match arg.as_str() {
@@ -144,8 +177,374 @@ fn run_default_optin_command(args: &[String], version: &str) -> DaemonOutput {
             "--disable-sudo" => disable_sudo = true,
             "--no-listener-smoke" => listener_smoke = false,
             "--no-reload-smoke" => reload_smoke = false,
+            "--execute-production-runtime-owner" => production_runtime_owner = true,
+            "--execute-production-runtime-active-tcp" => production_runtime_active_tcp = true,
             "--execute-production-dataplane-smoke" => production_dataplane_smoke = true,
             "--ack-root-gate" => ack_root_gate = true,
+            "--production-runtime-tproxy-port" => {
+                let Some(value) = iter.next() else {
+                    return DaemonOutput::usage(
+                        "missing run --production-runtime-tproxy-port value",
+                    );
+                };
+                production_runtime_tproxy_port = match value.parse() {
+                    Ok(value) => value,
+                    Err(_) => {
+                        return DaemonOutput::usage(
+                            "invalid run --production-runtime-tproxy-port value",
+                        );
+                    }
+                };
+            }
+            _ if arg.starts_with("--production-runtime-tproxy-port=") => {
+                production_runtime_tproxy_port = match arg.split_once('=').unwrap().1.parse() {
+                    Ok(value) => value,
+                    Err(_) => {
+                        return DaemonOutput::usage(
+                            "invalid run --production-runtime-tproxy-port value",
+                        );
+                    }
+                };
+            }
+            "--production-runtime-dae-netns-id" => {
+                let Some(value) = iter.next() else {
+                    return DaemonOutput::usage(
+                        "missing run --production-runtime-dae-netns-id value",
+                    );
+                };
+                production_runtime_dae_netns_id = match value.parse() {
+                    Ok(value) => value,
+                    Err(_) => {
+                        return DaemonOutput::usage(
+                            "invalid run --production-runtime-dae-netns-id value",
+                        );
+                    }
+                };
+            }
+            _ if arg.starts_with("--production-runtime-dae-netns-id=") => {
+                production_runtime_dae_netns_id = match arg.split_once('=').unwrap().1.parse() {
+                    Ok(value) => value,
+                    Err(_) => {
+                        return DaemonOutput::usage(
+                            "invalid run --production-runtime-dae-netns-id value",
+                        );
+                    }
+                };
+            }
+            "--production-runtime-object" => {
+                let Some(value) = iter.next() else {
+                    return DaemonOutput::usage("missing run --production-runtime-object value");
+                };
+                production_runtime_object = Some(value.into());
+            }
+            _ if arg.starts_with("--production-runtime-object=") => {
+                production_runtime_object = arg.split_once('=').map(|(_, value)| value.into());
+            }
+            "--production-runtime-active-tcp-target-ip" => {
+                let Some(value) = iter.next() else {
+                    return DaemonOutput::usage(
+                        "missing run --production-runtime-active-tcp-target-ip value",
+                    );
+                };
+                production_runtime_active_tcp_target_ip = Some(value.to_owned());
+            }
+            _ if arg.starts_with("--production-runtime-active-tcp-target-ip=") => {
+                production_runtime_active_tcp_target_ip =
+                    arg.split_once('=').map(|(_, value)| value.to_owned());
+            }
+            "--production-runtime-active-tcp-client-ip" => {
+                let Some(value) = iter.next() else {
+                    return DaemonOutput::usage(
+                        "missing run --production-runtime-active-tcp-client-ip value",
+                    );
+                };
+                production_runtime_active_tcp_client_ip = Some(value.to_owned());
+            }
+            _ if arg.starts_with("--production-runtime-active-tcp-client-ip=") => {
+                production_runtime_active_tcp_client_ip =
+                    arg.split_once('=').map(|(_, value)| value.to_owned());
+            }
+            "--production-runtime-active-tcp-target-port" => {
+                let Some(value) = iter.next() else {
+                    return DaemonOutput::usage(
+                        "missing run --production-runtime-active-tcp-target-port value",
+                    );
+                };
+                production_runtime_active_tcp_target_port = match value.parse() {
+                    Ok(value) => Some(value),
+                    Err(_) => {
+                        return DaemonOutput::usage(
+                            "invalid run --production-runtime-active-tcp-target-port value",
+                        );
+                    }
+                };
+            }
+            _ if arg.starts_with("--production-runtime-active-tcp-target-port=") => {
+                production_runtime_active_tcp_target_port =
+                    match arg.split_once('=').unwrap().1.parse() {
+                        Ok(value) => Some(value),
+                        Err(_) => {
+                            return DaemonOutput::usage(
+                                "invalid run --production-runtime-active-tcp-target-port value",
+                            );
+                        }
+                    };
+            }
+            "--production-runtime-active-tcp-so-mark" => {
+                let Some(value) = iter.next() else {
+                    return DaemonOutput::usage(
+                        "missing run --production-runtime-active-tcp-so-mark value",
+                    );
+                };
+                production_runtime_active_tcp_so_mark = match value.parse() {
+                    Ok(value) => Some(value),
+                    Err(_) => {
+                        return DaemonOutput::usage(
+                            "invalid run --production-runtime-active-tcp-so-mark value",
+                        );
+                    }
+                };
+            }
+            _ if arg.starts_with("--production-runtime-active-tcp-so-mark=") => {
+                production_runtime_active_tcp_so_mark = match arg.split_once('=').unwrap().1.parse()
+                {
+                    Ok(value) => Some(value),
+                    Err(_) => {
+                        return DaemonOutput::usage(
+                            "invalid run --production-runtime-active-tcp-so-mark value",
+                        );
+                    }
+                };
+            }
+            "--production-runtime-active-tcp-mptcp" => {
+                production_runtime_active_tcp_mptcp = Some(true);
+            }
+            "--production-runtime-active-tcp-no-mptcp"
+            | "--no-production-runtime-active-tcp-mptcp" => {
+                production_runtime_active_tcp_mptcp = Some(false);
+            }
+            "--execute-production-runtime-active-tcp-relay" => {
+                production_runtime_active_tcp_relay = true;
+            }
+            "--execute-production-runtime-active-udp" => {
+                production_runtime_active_udp = true;
+            }
+            "--production-runtime-active-udp-target-ip" => {
+                let Some(value) = iter.next() else {
+                    return DaemonOutput::usage(
+                        "missing run --production-runtime-active-udp-target-ip value",
+                    );
+                };
+                production_runtime_active_udp_target_ip = Some(value.to_owned());
+            }
+            _ if arg.starts_with("--production-runtime-active-udp-target-ip=") => {
+                production_runtime_active_udp_target_ip =
+                    arg.split_once('=').map(|(_, value)| value.to_owned());
+            }
+            "--production-runtime-active-udp-target-port" => {
+                let Some(value) = iter.next() else {
+                    return DaemonOutput::usage(
+                        "missing run --production-runtime-active-udp-target-port value",
+                    );
+                };
+                production_runtime_active_udp_target_port = match value.parse() {
+                    Ok(value) => Some(value),
+                    Err(_) => {
+                        return DaemonOutput::usage(
+                            "invalid run --production-runtime-active-udp-target-port value",
+                        );
+                    }
+                };
+            }
+            _ if arg.starts_with("--production-runtime-active-udp-target-port=") => {
+                production_runtime_active_udp_target_port =
+                    match arg.split_once('=').unwrap().1.parse() {
+                        Ok(value) => Some(value),
+                        Err(_) => {
+                            return DaemonOutput::usage(
+                                "invalid run --production-runtime-active-udp-target-port value",
+                            );
+                        }
+                    };
+            }
+            "--production-runtime-active-udp-benchmark-iters" => {
+                let Some(value) = iter.next() else {
+                    return DaemonOutput::usage(
+                        "missing run --production-runtime-active-udp-benchmark-iters value",
+                    );
+                };
+                production_runtime_active_udp_benchmark_iters = match value.parse() {
+                    Ok(value) => Some(value),
+                    Err(_) => {
+                        return DaemonOutput::usage(
+                            "invalid run --production-runtime-active-udp-benchmark-iters value",
+                        );
+                    }
+                };
+            }
+            _ if arg.starts_with("--production-runtime-active-udp-benchmark-iters=") => {
+                production_runtime_active_udp_benchmark_iters =
+                    match arg.split_once('=').unwrap().1.parse() {
+                        Ok(value) => Some(value),
+                        Err(_) => {
+                            return DaemonOutput::usage(
+                                "invalid run --production-runtime-active-udp-benchmark-iters value",
+                            );
+                        }
+                    };
+            }
+            "--execute-production-runtime-active-dns" => {
+                production_runtime_active_dns = true;
+            }
+            "--production-runtime-active-dns-target-ip" => {
+                let Some(value) = iter.next() else {
+                    return DaemonOutput::usage(
+                        "missing run --production-runtime-active-dns-target-ip value",
+                    );
+                };
+                production_runtime_active_dns_target_ip = Some(value.to_owned());
+            }
+            _ if arg.starts_with("--production-runtime-active-dns-target-ip=") => {
+                production_runtime_active_dns_target_ip =
+                    arg.split_once('=').map(|(_, value)| value.to_owned());
+            }
+            "--production-runtime-active-dns-target-port" => {
+                let Some(value) = iter.next() else {
+                    return DaemonOutput::usage(
+                        "missing run --production-runtime-active-dns-target-port value",
+                    );
+                };
+                production_runtime_active_dns_target_port = match value.parse() {
+                    Ok(value) => Some(value),
+                    Err(_) => {
+                        return DaemonOutput::usage(
+                            "invalid run --production-runtime-active-dns-target-port value",
+                        );
+                    }
+                };
+            }
+            _ if arg.starts_with("--production-runtime-active-dns-target-port=") => {
+                production_runtime_active_dns_target_port =
+                    match arg.split_once('=').unwrap().1.parse() {
+                        Ok(value) => Some(value),
+                        Err(_) => {
+                            return DaemonOutput::usage(
+                                "invalid run --production-runtime-active-dns-target-port value",
+                            );
+                        }
+                    };
+            }
+            "--production-runtime-active-dns-upstream-ip" => {
+                let Some(value) = iter.next() else {
+                    return DaemonOutput::usage(
+                        "missing run --production-runtime-active-dns-upstream-ip value",
+                    );
+                };
+                production_runtime_active_dns_upstream_ip = Some(value.to_owned());
+            }
+            _ if arg.starts_with("--production-runtime-active-dns-upstream-ip=") => {
+                production_runtime_active_dns_upstream_ip =
+                    arg.split_once('=').map(|(_, value)| value.to_owned());
+            }
+            "--production-runtime-active-dns-upstream-port" => {
+                let Some(value) = iter.next() else {
+                    return DaemonOutput::usage(
+                        "missing run --production-runtime-active-dns-upstream-port value",
+                    );
+                };
+                production_runtime_active_dns_upstream_port = match value.parse() {
+                    Ok(value) => Some(value),
+                    Err(_) => {
+                        return DaemonOutput::usage(
+                            "invalid run --production-runtime-active-dns-upstream-port value",
+                        );
+                    }
+                };
+            }
+            _ if arg.starts_with("--production-runtime-active-dns-upstream-port=") => {
+                production_runtime_active_dns_upstream_port =
+                    match arg.split_once('=').unwrap().1.parse() {
+                        Ok(value) => Some(value),
+                        Err(_) => {
+                            return DaemonOutput::usage(
+                                "invalid run --production-runtime-active-dns-upstream-port value",
+                            );
+                        }
+                    };
+            }
+            "--production-runtime-active-dns-qname" => {
+                let Some(value) = iter.next() else {
+                    return DaemonOutput::usage(
+                        "missing run --production-runtime-active-dns-qname value",
+                    );
+                };
+                production_runtime_active_dns_qname = Some(value.to_owned());
+            }
+            _ if arg.starts_with("--production-runtime-active-dns-qname=") => {
+                production_runtime_active_dns_qname =
+                    arg.split_once('=').map(|(_, value)| value.to_owned());
+            }
+            "--production-runtime-active-dns-benchmark-iters" => {
+                let Some(value) = iter.next() else {
+                    return DaemonOutput::usage(
+                        "missing run --production-runtime-active-dns-benchmark-iters value",
+                    );
+                };
+                production_runtime_active_dns_benchmark_iters = match value.parse() {
+                    Ok(value) => Some(value),
+                    Err(_) => {
+                        return DaemonOutput::usage(
+                            "invalid run --production-runtime-active-dns-benchmark-iters value",
+                        );
+                    }
+                };
+            }
+            _ if arg.starts_with("--production-runtime-active-dns-benchmark-iters=") => {
+                production_runtime_active_dns_benchmark_iters =
+                    match arg.split_once('=').unwrap().1.parse() {
+                        Ok(value) => Some(value),
+                        Err(_) => {
+                            return DaemonOutput::usage(
+                                "invalid run --production-runtime-active-dns-benchmark-iters value",
+                            );
+                        }
+                    };
+            }
+            "--execute-production-runtime-reload-parity" => {
+                production_runtime_reload_parity = true;
+            }
+            "--production-runtime-active-tcp-upstream-mptcp" => {
+                production_runtime_active_tcp_upstream_mptcp = Some(true);
+            }
+            "--production-runtime-active-tcp-upstream-plain-tcp" => {
+                production_runtime_active_tcp_upstream_mptcp = Some(false);
+            }
+            "--production-runtime-active-tcp-benchmark-iters" => {
+                let Some(value) = iter.next() else {
+                    return DaemonOutput::usage(
+                        "missing run --production-runtime-active-tcp-benchmark-iters value",
+                    );
+                };
+                production_runtime_active_tcp_benchmark_iters = match value.parse() {
+                    Ok(value) => Some(value),
+                    Err(_) => {
+                        return DaemonOutput::usage(
+                            "invalid run --production-runtime-active-tcp-benchmark-iters value",
+                        );
+                    }
+                };
+            }
+            _ if arg.starts_with("--production-runtime-active-tcp-benchmark-iters=") => {
+                production_runtime_active_tcp_benchmark_iters =
+                    match arg.split_once('=').unwrap().1.parse() {
+                        Ok(value) => Some(value),
+                        Err(_) => {
+                            return DaemonOutput::usage(
+                                "invalid run --production-runtime-active-tcp-benchmark-iters value",
+                            );
+                        }
+                    };
+            }
             "--dataplane-benchmark-iters" => {
                 let Some(value) = iter.next() else {
                     return DaemonOutput::usage("missing run --dataplane-benchmark-iters value");
@@ -266,6 +665,72 @@ fn run_default_optin_command(args: &[String], version: &str) -> DaemonOutput {
             _ if arg.starts_with("--source-dir=") => {
                 source_dir = arg.split_once('=').map(|(_, value)| value.into());
             }
+            "--execute-product-chain-recertification" => {
+                product_chain_recertification = true;
+            }
+            "--product-chain-dae-repo" => {
+                let Some(value) = iter.next() else {
+                    return DaemonOutput::usage("missing run --product-chain-dae-repo value");
+                };
+                product_chain_dae_repo = Some(value.into());
+            }
+            _ if arg.starts_with("--product-chain-dae-repo=") => {
+                product_chain_dae_repo = arg.split_once('=').map(|(_, value)| value.into());
+            }
+            "--product-chain-dae-wing-repo" => {
+                let Some(value) = iter.next() else {
+                    return DaemonOutput::usage("missing run --product-chain-dae-wing-repo value");
+                };
+                product_chain_dae_wing_repo = Some(value.into());
+            }
+            _ if arg.starts_with("--product-chain-dae-wing-repo=") => {
+                product_chain_dae_wing_repo = arg.split_once('=').map(|(_, value)| value.into());
+            }
+            "--product-chain-daed-repo" => {
+                let Some(value) = iter.next() else {
+                    return DaemonOutput::usage("missing run --product-chain-daed-repo value");
+                };
+                product_chain_daed_repo = Some(value.into());
+            }
+            _ if arg.starts_with("--product-chain-daed-repo=") => {
+                product_chain_daed_repo = arg.split_once('=').map(|(_, value)| value.into());
+            }
+            "--product-chain-outbound-repo" => {
+                let Some(value) = iter.next() else {
+                    return DaemonOutput::usage("missing run --product-chain-outbound-repo value");
+                };
+                product_chain_outbound_repo = Some(value.into());
+            }
+            _ if arg.starts_with("--product-chain-outbound-repo=") => {
+                product_chain_outbound_repo = arg.split_once('=').map(|(_, value)| value.into());
+            }
+            "--product-chain-quic-go-repo" => {
+                let Some(value) = iter.next() else {
+                    return DaemonOutput::usage("missing run --product-chain-quic-go-repo value");
+                };
+                product_chain_quic_go_repo = Some(value.into());
+            }
+            _ if arg.starts_with("--product-chain-quic-go-repo=") => {
+                product_chain_quic_go_repo = arg.split_once('=').map(|(_, value)| value.into());
+            }
+            "--product-chain-service-file" => {
+                let Some(value) = iter.next() else {
+                    return DaemonOutput::usage("missing run --product-chain-service-file value");
+                };
+                product_chain_service_file = Some(value.into());
+            }
+            _ if arg.starts_with("--product-chain-service-file=") => {
+                product_chain_service_file = arg.split_once('=').map(|(_, value)| value.into());
+            }
+            "--product-chain-go-mod-file" => {
+                let Some(value) = iter.next() else {
+                    return DaemonOutput::usage("missing run --product-chain-go-mod-file value");
+                };
+                product_chain_go_mod_file = Some(value.into());
+            }
+            _ if arg.starts_with("--product-chain-go-mod-file=") => {
+                product_chain_go_mod_file = arg.split_once('=').map(|(_, value)| value.into());
+            }
             "--exit-after-ready" | "--once" => {}
             _ => return DaemonOutput::usage(format!("unsupported run argument: {arg}")),
         }
@@ -282,6 +747,68 @@ fn run_default_optin_command(args: &[String], version: &str) -> DaemonOutput {
     options.disable_sudo = disable_sudo;
     options.listener_smoke = listener_smoke;
     options.reload_smoke = reload_smoke;
+    options.production_runtime_owner.execute = production_runtime_owner;
+    options.production_runtime_owner.ack_root_gate = ack_root_gate;
+    options.production_runtime_owner.tproxy_port = production_runtime_tproxy_port;
+    options.production_runtime_owner.dae_netns_id = production_runtime_dae_netns_id;
+    options.production_runtime_owner.execute_active_tcp = production_runtime_active_tcp;
+    options.production_runtime_owner.execute_active_tcp_relay = production_runtime_active_tcp_relay;
+    options.production_runtime_owner.execute_active_udp = production_runtime_active_udp;
+    options.production_runtime_owner.execute_active_dns = production_runtime_active_dns;
+    options
+        .production_runtime_owner
+        .execute_reload_runtime_parity = production_runtime_reload_parity;
+    if let Some(source_object) = production_runtime_object {
+        options.production_runtime_owner.source_object = source_object;
+    }
+    if let Some(target_ip) = production_runtime_active_tcp_target_ip {
+        options.production_runtime_owner.active_tcp_target_ip = target_ip;
+    }
+    if let Some(client_ip) = production_runtime_active_tcp_client_ip {
+        options.production_runtime_owner.active_tcp_client_ip = client_ip;
+    }
+    if let Some(target_port) = production_runtime_active_tcp_target_port {
+        options.production_runtime_owner.active_tcp_target_port = target_port;
+    }
+    if let Some(so_mark) = production_runtime_active_tcp_so_mark {
+        options.production_runtime_owner.active_tcp_so_mark = so_mark;
+    }
+    if let Some(mptcp) = production_runtime_active_tcp_mptcp {
+        options.production_runtime_owner.active_tcp_mptcp = mptcp;
+    }
+    if let Some(upstream_mptcp) = production_runtime_active_tcp_upstream_mptcp {
+        options.production_runtime_owner.active_tcp_upstream_mptcp = upstream_mptcp;
+    }
+    if let Some(iterations) = production_runtime_active_tcp_benchmark_iters {
+        options.production_runtime_owner.active_tcp_benchmark_iters = iterations;
+    }
+    if let Some(target_ip) = production_runtime_active_udp_target_ip {
+        options.production_runtime_owner.active_udp_target_ip = target_ip;
+    }
+    if let Some(target_port) = production_runtime_active_udp_target_port {
+        options.production_runtime_owner.active_udp_target_port = target_port;
+    }
+    if let Some(iterations) = production_runtime_active_udp_benchmark_iters {
+        options.production_runtime_owner.active_udp_benchmark_iters = iterations;
+    }
+    if let Some(target_ip) = production_runtime_active_dns_target_ip {
+        options.production_runtime_owner.active_dns_target_ip = target_ip;
+    }
+    if let Some(target_port) = production_runtime_active_dns_target_port {
+        options.production_runtime_owner.active_dns_target_port = target_port;
+    }
+    if let Some(upstream_ip) = production_runtime_active_dns_upstream_ip {
+        options.production_runtime_owner.active_dns_upstream_ip = upstream_ip;
+    }
+    if let Some(upstream_port) = production_runtime_active_dns_upstream_port {
+        options.production_runtime_owner.active_dns_upstream_port = upstream_port;
+    }
+    if let Some(qname) = production_runtime_active_dns_qname {
+        options.production_runtime_owner.active_dns_qname = qname;
+    }
+    if let Some(iterations) = production_runtime_active_dns_benchmark_iters {
+        options.production_runtime_owner.active_dns_benchmark_iters = iterations;
+    }
     options.production_dataplane_harness.execute = production_dataplane_smoke;
     options.production_dataplane_harness.ack_root_gate = ack_root_gate;
     options.production_dataplane_harness.benchmark_iters = dataplane_benchmark_iters;
@@ -300,6 +827,28 @@ fn run_default_optin_command(args: &[String], version: &str) -> DaemonOutput {
     options.matched_default_benchmark.rust_binary = rust_binary;
     if let Some(source_dir) = source_dir {
         options.matched_default_benchmark.source_dir = source_dir;
+    }
+    options.product_chain_recertification.execute = product_chain_recertification;
+    if let Some(path) = product_chain_dae_repo {
+        options.product_chain_recertification.dae_repo = path;
+    }
+    if let Some(path) = product_chain_dae_wing_repo {
+        options.product_chain_recertification.dae_wing_repo = path;
+    }
+    if let Some(path) = product_chain_daed_repo {
+        options.product_chain_recertification.daed_repo = path;
+    }
+    if let Some(path) = product_chain_outbound_repo {
+        options.product_chain_recertification.outbound_repo = path;
+    }
+    if let Some(path) = product_chain_quic_go_repo {
+        options.product_chain_recertification.quic_go_repo = path;
+    }
+    if let Some(path) = product_chain_service_file {
+        options.product_chain_recertification.service_file = path;
+    }
+    if let Some(path) = product_chain_go_mod_file {
+        options.product_chain_recertification.go_mod_file = path;
     }
 
     match run_default_optin_report(&options, version) {

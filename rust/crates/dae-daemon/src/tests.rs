@@ -119,6 +119,156 @@ fn daemon_runner_run_command_requires_ack_for_production_dataplane_smoke() {
 }
 
 #[test]
+fn daemon_runner_run_command_requires_ack_for_production_runtime_owner() {
+    let root = std::env::temp_dir().join(format!(
+        "dae-daemon-run-production-runtime-noack-{}",
+        std::process::id()
+    ));
+    let config = root.join("config").join("run.dae");
+    std::fs::create_dir_all(config.parent().unwrap()).unwrap();
+    std::fs::write(&config, "global {\n  log_level: info\n}\n").unwrap();
+    let output = run_with_args_and_version(
+        [
+            "run".to_owned(),
+            "--config".to_owned(),
+            config.display().to_string(),
+            "--root".to_owned(),
+            root.display().to_string(),
+            "--execute-production-runtime-owner".to_owned(),
+            "--exit-after-ready".to_owned(),
+        ],
+        "test-version",
+    );
+    assert_eq!(output.exit_code, 1);
+    assert!(output.stderr.contains("--ack-root-gate"));
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[test]
+fn daemon_runner_run_command_rejects_active_tcp_without_owner() {
+    let root = std::env::temp_dir().join(format!(
+        "dae-daemon-run-active-tcp-without-owner-{}",
+        std::process::id()
+    ));
+    let config = root.join("config").join("run.dae");
+    std::fs::create_dir_all(config.parent().unwrap()).unwrap();
+    std::fs::write(&config, "global {\n  log_level: info\n}\n").unwrap();
+    let output = run_with_args_and_version(
+        [
+            "run".to_owned(),
+            "--config".to_owned(),
+            config.display().to_string(),
+            "--root".to_owned(),
+            root.display().to_string(),
+            "--execute-production-runtime-active-tcp".to_owned(),
+            "--ack-root-gate".to_owned(),
+            "--exit-after-ready".to_owned(),
+        ],
+        "test-version",
+    );
+    assert_eq!(output.exit_code, 1);
+    assert!(output.stderr.contains("--execute-production-runtime-owner"));
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[test]
+fn daemon_runner_run_command_rejects_reload_parity_without_active_tcp() {
+    let root = std::env::temp_dir().join(format!(
+        "dae-daemon-run-reload-parity-without-tcp-{}",
+        std::process::id()
+    ));
+    let config = root.join("config").join("run.dae");
+    std::fs::create_dir_all(config.parent().unwrap()).unwrap();
+    std::fs::write(&config, "global {\n  log_level: info\n}\n").unwrap();
+    let output = run_with_args_and_version(
+        [
+            "run".to_owned(),
+            "--config".to_owned(),
+            config.display().to_string(),
+            "--root".to_owned(),
+            root.display().to_string(),
+            "--execute-production-runtime-owner".to_owned(),
+            "--execute-production-runtime-reload-parity".to_owned(),
+            "--ack-root-gate".to_owned(),
+            "--exit-after-ready".to_owned(),
+        ],
+        "test-version",
+    );
+    assert_eq!(output.exit_code, 1);
+    assert!(
+        output
+            .stderr
+            .contains("--execute-production-runtime-active-tcp")
+    );
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[test]
+fn daemon_runner_run_command_rejects_active_udp_without_active_tcp() {
+    let root = std::env::temp_dir().join(format!(
+        "dae-daemon-run-active-udp-without-tcp-{}",
+        std::process::id()
+    ));
+    let config = root.join("config").join("run.dae");
+    std::fs::create_dir_all(config.parent().unwrap()).unwrap();
+    std::fs::write(&config, "global {\n  log_level: info\n}\n").unwrap();
+    let output = run_with_args_and_version(
+        [
+            "run".to_owned(),
+            "--config".to_owned(),
+            config.display().to_string(),
+            "--root".to_owned(),
+            root.display().to_string(),
+            "--execute-production-runtime-owner".to_owned(),
+            "--execute-production-runtime-active-udp".to_owned(),
+            "--ack-root-gate".to_owned(),
+            "--exit-after-ready".to_owned(),
+        ],
+        "test-version",
+    );
+    assert_eq!(output.exit_code, 1);
+    assert!(
+        output
+            .stderr
+            .contains("--execute-production-runtime-active-tcp")
+    );
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[test]
+fn daemon_runner_run_command_rejects_active_dns_without_active_udp() {
+    let root = std::env::temp_dir().join(format!(
+        "dae-daemon-run-active-dns-without-udp-{}",
+        std::process::id()
+    ));
+    let config = root.join("config").join("run.dae");
+    std::fs::create_dir_all(config.parent().unwrap()).unwrap();
+    std::fs::write(&config, "global {\n  log_level: info\n}\n").unwrap();
+    let output = run_with_args_and_version(
+        [
+            "run".to_owned(),
+            "--config".to_owned(),
+            config.display().to_string(),
+            "--root".to_owned(),
+            root.display().to_string(),
+            "--execute-production-runtime-owner".to_owned(),
+            "--execute-production-runtime-active-tcp".to_owned(),
+            "--execute-production-runtime-active-dns".to_owned(),
+            "--ack-root-gate".to_owned(),
+            "--exit-after-ready".to_owned(),
+        ],
+        "test-version",
+    );
+    assert_eq!(output.exit_code, 1);
+    assert!(
+        output
+            .stderr
+            .contains("--execute-production-runtime-active-udp")
+    );
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[test]
 fn daemon_runner_run_command_requires_ack_for_matched_default_benchmark() {
     let root = std::env::temp_dir().join(format!(
         "dae-daemon-run-matched-benchmark-noack-{}",
@@ -198,6 +348,18 @@ fn run_default_optin_report_executes_bounded_lifecycle_and_smokes() {
             .unwrap()
     );
     assert!(
+        !report["production_runtime_owner_executed"]
+            .as_bool()
+            .unwrap()
+    );
+    assert!(
+        !report["production_reload_runtime_parity_executed"]
+            .as_bool()
+            .unwrap()
+    );
+    assert!(!report["reload_runtime_parity_admitted"].as_bool().unwrap());
+    assert!(!report["production_runtime_owner_passed"].as_bool().unwrap());
+    assert!(
         !report["production_dataplane_harness_passed"]
             .as_bool()
             .unwrap()
@@ -219,7 +381,17 @@ fn run_default_optin_report_executes_bounded_lifecycle_and_smokes() {
         "not-executed"
     );
     assert!(!report["production_listener_bound"].as_bool().unwrap());
+    assert!(
+        !report["production_listener_bound_during_owner_smoke"]
+            .as_bool()
+            .unwrap()
+    );
     assert!(!report["ebpf_attached"].as_bool().unwrap());
+    assert!(
+        !report["ebpf_attached_during_owner_smoke"]
+            .as_bool()
+            .unwrap()
+    );
     assert!(!report["benchmark_executable_now"].as_bool().unwrap());
     assert!(!report["default_switch_allowed"].as_bool().unwrap());
     let _ = std::fs::remove_dir_all(root);
@@ -245,6 +417,22 @@ fn daemon_runner_run_command_outputs_json() {
             root.display().to_string(),
             "--disable-timestamp".to_owned(),
             "--disable-sudo".to_owned(),
+            "--production-runtime-tproxy-port=23456".to_owned(),
+            "--production-runtime-dae-netns-id=123".to_owned(),
+            "--production-runtime-active-tcp-target-ip=198.18.60.1".to_owned(),
+            "--production-runtime-active-tcp-client-ip=10.220.60.2".to_owned(),
+            "--production-runtime-active-tcp-target-port=19090".to_owned(),
+            "--production-runtime-active-tcp-so-mark=4321".to_owned(),
+            "--production-runtime-active-tcp-no-mptcp".to_owned(),
+            "--production-runtime-active-udp-target-ip=198.18.63.1".to_owned(),
+            "--production-runtime-active-udp-target-port=19093".to_owned(),
+            "--production-runtime-active-udp-benchmark-iters=11".to_owned(),
+            "--production-runtime-active-dns-target-ip=9.9.9.9".to_owned(),
+            "--production-runtime-active-dns-target-port=53".to_owned(),
+            "--production-runtime-active-dns-upstream-ip=127.0.0.1".to_owned(),
+            "--production-runtime-active-dns-upstream-port=11530".to_owned(),
+            "--production-runtime-active-dns-qname=runner.example.".to_owned(),
+            "--production-runtime-active-dns-benchmark-iters=13".to_owned(),
             "--dataplane-benchmark-iters=7".to_owned(),
             "--matched-benchmark-iterations=9".to_owned(),
             "--exit-after-ready".to_owned(),
@@ -259,6 +447,104 @@ fn daemon_runner_run_command_outputs_json() {
     assert!(json["reload_owner_handoff_smoke_passed"].as_bool().unwrap());
     assert!(
         !json["matched_go_rust_default_daemon_benchmark_recorded"]
+            .as_bool()
+            .unwrap()
+    );
+    assert_eq!(
+        json["production_runtime_owner"]["contract"]["tproxy_port"]
+            .as_u64()
+            .unwrap(),
+        23456
+    );
+    assert_eq!(
+        json["production_runtime_owner"]["contract"]["dae_netns_id"]
+            .as_u64()
+            .unwrap(),
+        123
+    );
+    assert_eq!(
+        json["production_runtime_owner"]["contract"]["active_tcp"]["target_ip"]
+            .as_str()
+            .unwrap(),
+        "198.18.60.1"
+    );
+    assert_eq!(
+        json["production_runtime_owner"]["contract"]["active_tcp"]["client_ip"]
+            .as_str()
+            .unwrap(),
+        "10.220.60.2"
+    );
+    assert_eq!(
+        json["production_runtime_owner"]["contract"]["active_tcp"]["target_port"]
+            .as_u64()
+            .unwrap(),
+        19090
+    );
+    assert_eq!(
+        json["production_runtime_owner"]["contract"]["active_tcp"]["so_mark"]
+            .as_u64()
+            .unwrap(),
+        4321
+    );
+    assert!(
+        !json["production_runtime_owner"]["contract"]["active_tcp"]["mptcp"]
+            .as_bool()
+            .unwrap()
+    );
+    assert!(
+        !json["production_runtime_active_tcp_executed"]
+            .as_bool()
+            .unwrap()
+    );
+    assert_eq!(
+        json["production_runtime_owner"]["contract"]["active_udp"]["target_ip"]
+            .as_str()
+            .unwrap(),
+        "198.18.63.1"
+    );
+    assert_eq!(
+        json["production_runtime_owner"]["contract"]["active_udp"]["target_port"]
+            .as_u64()
+            .unwrap(),
+        19093
+    );
+    assert_eq!(
+        json["production_runtime_owner"]["contract"]["active_udp"]["benchmark_iters"]
+            .as_u64()
+            .unwrap(),
+        11
+    );
+    assert_eq!(
+        json["production_runtime_owner"]["contract"]["active_dns"]["target_ip"]
+            .as_str()
+            .unwrap(),
+        "9.9.9.9"
+    );
+    assert_eq!(
+        json["production_runtime_owner"]["contract"]["active_dns"]["upstream_port"]
+            .as_u64()
+            .unwrap(),
+        11530
+    );
+    assert_eq!(
+        json["production_runtime_owner"]["contract"]["active_dns"]["qname"]
+            .as_str()
+            .unwrap(),
+        "runner.example."
+    );
+    assert_eq!(
+        json["production_runtime_owner"]["contract"]["active_dns"]["benchmark_iters"]
+            .as_u64()
+            .unwrap(),
+        13
+    );
+    assert!(
+        !json["production_runtime_active_udp_executed"]
+            .as_bool()
+            .unwrap()
+    );
+    assert!(
+        !json["production_runtime_active_dns_executed"]
             .as_bool()
             .unwrap()
     );
@@ -285,6 +571,116 @@ fn daemon_runner_run_command_outputs_json() {
             .unwrap()
     );
     let _ = std::fs::remove_dir_all(root);
+}
+
+#[test]
+fn daemon_runner_run_command_records_product_chain_recertification() {
+    let root = std::env::temp_dir().join(format!(
+        "dae-daemon-run-product-chain-test-{}",
+        std::process::id()
+    ));
+    let fixture = std::env::temp_dir().join(format!(
+        "dae-daemon-product-chain-runner-fixture-{}",
+        std::process::id()
+    ));
+    let config = root.join("config").join("run.dae");
+    std::fs::create_dir_all(config.parent().unwrap()).unwrap();
+    std::fs::create_dir_all(&fixture).unwrap();
+    std::fs::write(
+        &config,
+        "global {\n  log_level: info\n}\n\nrouting {\n  pname(NetworkManager) -> direct\n}\n",
+    )
+    .unwrap();
+    let service = fixture.join("dae.service");
+    let go_mod = fixture.join("go.mod");
+    std::fs::write(
+        &service,
+        "ExecStartPre=/usr/bin/dae validate -c /etc/dae/config.dae\nExecStart=/usr/bin/dae run --disable-timestamp -c /etc/dae/config.dae\nExecReload=/usr/bin/dae reload $MAINPID\n",
+    )
+    .unwrap();
+    std::fs::write(
+        &go_mod,
+        "replace github.com/daeuniverse/outbound => github.com/ksong008/outbound v0.0.0\nreplace github.com/daeuniverse/quic-go => github.com/ksong008/quic-go v0.0.0\n",
+    )
+    .unwrap();
+    for repo in ["dae", "dae-wing", "daed", "outbound", "quic-go"] {
+        let repo_dir = fixture.join(repo);
+        std::fs::create_dir_all(&repo_dir).unwrap();
+        assert!(
+            std::process::Command::new("git")
+                .args(["init", "--quiet"])
+                .current_dir(&repo_dir)
+                .status()
+                .unwrap()
+                .success()
+        );
+    }
+
+    let output = run_with_args_and_version(
+        [
+            "run".to_owned(),
+            "--config".to_owned(),
+            config.display().to_string(),
+            "--root".to_owned(),
+            root.display().to_string(),
+            "--disable-timestamp".to_owned(),
+            "--disable-sudo".to_owned(),
+            "--execute-product-chain-recertification".to_owned(),
+            "--product-chain-dae-repo".to_owned(),
+            fixture.join("dae").display().to_string(),
+            "--product-chain-dae-wing-repo".to_owned(),
+            fixture.join("dae-wing").display().to_string(),
+            "--product-chain-daed-repo".to_owned(),
+            fixture.join("daed").display().to_string(),
+            "--product-chain-outbound-repo".to_owned(),
+            fixture.join("outbound").display().to_string(),
+            "--product-chain-quic-go-repo".to_owned(),
+            fixture.join("quic-go").display().to_string(),
+            "--product-chain-service-file".to_owned(),
+            service.display().to_string(),
+            "--product-chain-go-mod-file".to_owned(),
+            go_mod.display().to_string(),
+            "--exit-after-ready".to_owned(),
+        ],
+        "test-version",
+    );
+    assert_eq!(output.exit_code, 0, "{}", output.stderr);
+    assert_eq!(output.stderr, "");
+    let json: Value = serde_json::from_str(&output.stdout).unwrap();
+    assert!(
+        json["product_chain_recertification_executed"]
+            .as_bool()
+            .unwrap()
+    );
+    assert!(
+        !json["product_chain_recertification_clean"]
+            .as_bool()
+            .unwrap()
+    );
+    assert!(
+        json["product_chain_recertification"]["service_contract_preserved"]
+            .as_bool()
+            .unwrap()
+    );
+    assert!(
+        json["product_chain_recertification"]["outbound_quic_go_dependency_boundary_preserved"]
+            .as_bool()
+            .unwrap()
+    );
+    assert!(
+        json["product_chain_recertification"]["sibling_repo_status_available"]
+            .as_bool()
+            .unwrap()
+    );
+    assert!(
+        !json["product_chain_recertification"]["daed_wing_runtime_control_api_regression_recorded"]
+            .as_bool()
+            .unwrap()
+    );
+    assert!(!json["default_switch_allowed"].as_bool().unwrap());
+    assert!(!json["product_chain_switch_allowed"].as_bool().unwrap());
+    let _ = std::fs::remove_dir_all(root);
+    let _ = std::fs::remove_dir_all(fixture);
 }
 
 #[test]

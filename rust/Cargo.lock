@@ -298,7 +298,12 @@ version = "0.1.0"
 dependencies = [
  "dae-control",
  "dae-core-types",
+ "dae-datapath",
+ "dae-dns",
  "dae-ebpf-support",
+ "dae-engine",
+ "dae-netutil",
+ "libc",
  "serde_json",
 ]
 
