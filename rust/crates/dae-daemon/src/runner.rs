@@ -145,6 +145,7 @@ fn run_default_optin_command(args: &[String], version: &str) -> DaemonOutput {
     let mut request_default_path_mutation = false;
     let mut plan_production_run_command_replacement = false;
     let mut execute_production_run_command_replacement = false;
+    let mut plan_production_run_command_apply = false;
     let mut allow_host_default_path_mutation = false;
     let mut iter = args.iter();
     while let Some(arg) = iter.next() {
@@ -681,6 +682,9 @@ fn run_default_optin_command(args: &[String], version: &str) -> DaemonOutput {
             "--execute-production-run-command-replacement" => {
                 execute_production_run_command_replacement = true;
             }
+            "--plan-production-run-command-apply" => {
+                plan_production_run_command_apply = true;
+            }
             "--allow-host-default-path-mutation" => {
                 allow_host_default_path_mutation = true;
             }
@@ -856,6 +860,10 @@ fn run_default_optin_command(args: &[String], version: &str) -> DaemonOutput {
         .product_chain_recertification
         .production_run_command_replacement_execute_requested =
         execute_production_run_command_replacement;
+    options
+        .product_chain_recertification
+        .production_run_command_replacement_apply_plan_requested =
+        plan_production_run_command_apply;
     options
         .product_chain_recertification
         .host_default_path_mutation_allow_requested = allow_host_default_path_mutation;

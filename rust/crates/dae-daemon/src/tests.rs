@@ -629,6 +629,7 @@ fn daemon_runner_run_command_records_product_chain_recertification() {
             "--request-default-path-mutation".to_owned(),
             "--plan-production-run-command-replacement".to_owned(),
             "--execute-production-run-command-replacement".to_owned(),
+            "--plan-production-run-command-apply".to_owned(),
             "--allow-host-default-path-mutation".to_owned(),
             "--product-chain-dae-repo".to_owned(),
             fixture.join("dae").display().to_string(),
@@ -706,6 +707,30 @@ fn daemon_runner_run_command_records_product_chain_recertification() {
     assert!(
         json["product_chain_recertification"]["production_run_command_replacement_plan"]
             ["execute_requested"]
+            .as_bool()
+            .unwrap()
+    );
+    assert!(
+        json["product_chain_recertification"]["production_run_command_replacement_plan"]
+            ["apply_plan_requested"]
+            .as_bool()
+            .unwrap()
+    );
+    assert!(
+        json["product_chain_recertification"]["production_run_command_replacement_plan"]
+            ["apply_plan"]["requested"]
+            .as_bool()
+            .unwrap()
+    );
+    assert!(
+        !json["product_chain_recertification"]["production_run_command_replacement_plan"]
+            ["apply_plan"]["admitted"]
+            .as_bool()
+            .unwrap()
+    );
+    assert!(
+        !json["product_chain_recertification"]["production_run_command_replacement_plan"]
+            ["apply_plan"]["host_write_allowed"]
             .as_bool()
             .unwrap()
     );
