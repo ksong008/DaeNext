@@ -28,6 +28,8 @@ pub struct RunOptions {
     pub production_dataplane_harness: ProductionDataplaneHarnessOptions,
     pub matched_default_benchmark: MatchedDefaultBenchmarkOptions,
     pub product_chain_recertification: ProductChainRecertificationOptions,
+    pub product_chain_admission_override: Option<ProductChainAdmissionEvidence>,
+    pub product_chain_admission_source: Option<PathBuf>,
 }
 
 impl RunOptions {
@@ -46,6 +48,8 @@ impl RunOptions {
             production_dataplane_harness: ProductionDataplaneHarnessOptions::default(),
             matched_default_benchmark: MatchedDefaultBenchmarkOptions::default(),
             product_chain_recertification: ProductChainRecertificationOptions::default(),
+            product_chain_admission_override: None,
+            product_chain_admission_source: None,
         }
     }
 }
@@ -234,15 +238,19 @@ pub fn run_default_optin_report(options: &RunOptions, version: &str) -> Result<V
     let true_rust_default_daemon_admitted = production_dataplane_admitted
         && reload_runtime_parity_admitted
         && matched_benchmark_recorded;
+    let computed_product_chain_admission = ProductChainAdmissionEvidence {
+        production_dataplane_admitted,
+        reload_runtime_parity_admitted,
+        matched_benchmark_recorded,
+        true_rust_default_daemon_admitted,
+    };
+    let product_chain_admission = options
+        .product_chain_admission_override
+        .unwrap_or(computed_product_chain_admission);
     let product_chain_recertification = product_chain_recertification_report(
         &options.root,
         &options.product_chain_recertification,
-        ProductChainAdmissionEvidence {
-            production_dataplane_admitted,
-            reload_runtime_parity_admitted,
-            matched_benchmark_recorded,
-            true_rust_default_daemon_admitted,
-        },
+        product_chain_admission,
     )?;
     let product_chain_recertification_executed = product_chain_recertification["execute"]
         .as_bool()
@@ -401,6 +409,19 @@ pub fn run_default_optin_report(options: &RunOptions, version: &str) -> Result<V
     report["production_dataplane_harness_passed"] = json!(production_dataplane_harness_passed);
     report["production_dataplane_harness"] = production_dataplane;
     report["matched_default_benchmark"] = matched_benchmark;
+    report["product_chain_admission_evidence_override"] = json!({
+        "used": options.product_chain_admission_override.is_some(),
+        "source": options
+            .product_chain_admission_source
+            .as_ref()
+            .map(|path| path_string(path)),
+        "admission": {
+            "production_dataplane_admitted": product_chain_admission.production_dataplane_admitted,
+            "reload_runtime_parity_admitted": product_chain_admission.reload_runtime_parity_admitted,
+            "matched_go_rust_default_daemon_benchmark_recorded": product_chain_admission.matched_benchmark_recorded,
+            "true_rust_default_daemon_admitted": product_chain_admission.true_rust_default_daemon_admitted,
+        },
+    });
     report["product_chain_recertification_executed"] =
         json!(product_chain_recertification_executed);
     report["product_chain_recertification_clean"] = json!(product_chain_recertification_clean);
@@ -594,6 +615,54 @@ fn write_progress(path: &Path, byte: u8, suffix: &str) -> Result<(), String> {
     let mut content = vec![byte];
     content.extend_from_slice(suffix.as_bytes());
     fs::write(path, content).map_err(|err| format!("failed to write progress file: {err}"))
+}
+
+pub fn product_chain_admission_from_run_report(
+    path: &Path,
+) -> Result<ProductChainAdmissionEvidence, String> {
+    let text = fs::read_to_string(path).map_err(|err| {
+        format!(
+            "failed to read product-chain admission evidence {}: {err}",
+            path_string(path)
+        )
+    })?;
+    let value: Value = serde_json::from_str(&text).map_err(|err| {
+        format!(
+            "failed to parse product-chain admission evidence {}: {err}",
+            path_string(path)
+        )
+    })?;
+    Ok(ProductChainAdmissionEvidence {
+        production_dataplane_admitted: required_bool(
+            &value,
+            "production_dataplane_admitted",
+            path,
+        )?,
+        reload_runtime_parity_admitted: required_bool(
+            &value,
+            "reload_runtime_parity_admitted",
+            path,
+        )?,
+        matched_benchmark_recorded: required_bool(
+            &value,
+            "matched_go_rust_default_daemon_benchmark_recorded",
+            path,
+        )?,
+        true_rust_default_daemon_admitted: required_bool(
+            &value,
+            "true_rust_default_daemon_admitted",
+            path,
+        )?,
+    })
+}
+
+fn required_bool(value: &Value, key: &str, source: &Path) -> Result<bool, String> {
+    value[key].as_bool().ok_or_else(|| {
+        format!(
+            "product-chain admission evidence {} is missing boolean field {key}",
+            path_string(source)
+        )
+    })
 }
 
 fn path_string(path: &Path) -> String {

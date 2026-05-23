@@ -6,7 +6,9 @@ use crate::{
     ReloadOptions, ResidentRunOptions, reload_resident_service, run_resident_service,
     service_contract_capabilities,
 };
-use crate::{RunOptions, default_run_root, run_default_optin_report};
+use crate::{
+    RunOptions, default_run_root, product_chain_admission_from_run_report, run_default_optin_report,
+};
 use crate::{
     Stage156DefaultRunIdentityOptions, default_stage156_root,
     stage156_default_run_identity_admission_report,
@@ -258,6 +260,7 @@ fn run_default_optin_command(args: &[String], version: &str) -> DaemonOutput {
     let mut product_chain_quic_go_repo: Option<PathBuf> = None;
     let mut product_chain_service_file: Option<PathBuf> = None;
     let mut product_chain_go_mod_file: Option<PathBuf> = None;
+    let mut product_chain_admission_evidence: Option<PathBuf> = None;
     let mut request_default_path_mutation = false;
     let mut plan_production_run_command_replacement = false;
     let mut execute_production_run_command_replacement = false;
@@ -830,6 +833,18 @@ fn run_default_optin_command(args: &[String], version: &str) -> DaemonOutput {
             "--execute-product-chain-recertification" => {
                 product_chain_recertification = true;
             }
+            "--product-chain-admission-evidence" => {
+                let Some(value) = iter.next() else {
+                    return DaemonOutput::usage(
+                        "missing run --product-chain-admission-evidence value",
+                    );
+                };
+                product_chain_admission_evidence = Some(value.into());
+            }
+            _ if arg.starts_with("--product-chain-admission-evidence=") => {
+                product_chain_admission_evidence =
+                    arg.split_once('=').map(|(_, value)| value.into());
+            }
             "--request-default-path-mutation" => {
                 request_default_path_mutation = true;
             }
@@ -1110,6 +1125,15 @@ fn run_default_optin_command(args: &[String], version: &str) -> DaemonOutput {
     }
     if let Some(path) = product_chain_go_mod_file {
         options.product_chain_recertification.go_mod_file = path;
+    }
+    if let Some(path) = product_chain_admission_evidence {
+        match product_chain_admission_from_run_report(&path) {
+            Ok(admission) => {
+                options.product_chain_admission_override = Some(admission);
+                options.product_chain_admission_source = Some(path);
+            }
+            Err(err) => return DaemonOutput::error(err),
+        }
     }
 
     match run_default_optin_report(&options, version) {
