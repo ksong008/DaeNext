@@ -258,7 +258,18 @@ fn report_value(
     let sibling_repo_status_available = unavailable_repos.is_empty();
     let clean_product_chain_baseline =
         sibling_repos_present && sibling_repo_status_available && dirty_repos.is_empty();
-    let daed_wing_runtime_control_api_regression_recorded = false;
+    let runtime_control_api_clean_baseline = runtime_control_api_clean_baseline_json(
+        executed,
+        clean_product_chain_baseline,
+        runtime_control_api_source_contract_preserved,
+        admission,
+        service_contract_passed,
+        dependency_boundary_preserved,
+    );
+    let daed_wing_runtime_control_api_regression_recorded =
+        runtime_control_api_clean_baseline["recorded"]
+            .as_bool()
+            .unwrap_or(false);
     let recertification_clean = executed
         && admission.true_rust_default_daemon_admitted
         && service_contract_passed
@@ -313,6 +324,7 @@ fn report_value(
         "sibling_repos_present": sibling_repos_present,
         "sibling_repo_status_available": sibling_repo_status_available,
         "clean_product_chain_baseline": clean_product_chain_baseline,
+        "runtime_control_api_clean_baseline": runtime_control_api_clean_baseline,
         "daed_wing_runtime_control_api_regression_recorded": daed_wing_runtime_control_api_regression_recorded,
         "product_chain_recertification_clean": recertification_clean,
         "default_path_mutation_requested": default_path_mutation_requested,
@@ -330,6 +342,36 @@ fn report_value(
             "DAENEW_RUST_REBUILD_MEMO_2026-05-16.md:26.3",
             "DAENEW_RUST_REBUILD_MEMO_2026-05-16.md:install/dae.service"
         ],
+    })
+}
+
+fn runtime_control_api_clean_baseline_json(
+    executed: bool,
+    clean_product_chain_baseline: bool,
+    runtime_control_api_source_contract_preserved: bool,
+    admission: ProductChainAdmissionEvidence,
+    service_contract_preserved: bool,
+    dependency_boundary_preserved: bool,
+) -> Value {
+    let recorded = executed
+        && clean_product_chain_baseline
+        && runtime_control_api_source_contract_preserved
+        && admission.true_rust_default_daemon_admitted
+        && service_contract_preserved
+        && dependency_boundary_preserved;
+    json!({
+        "status": if recorded { "pass" } else { "fail" },
+        "recorded": recorded,
+        "execute": executed,
+        "clean_product_chain_baseline": clean_product_chain_baseline,
+        "runtime_control_api_source_contract_preserved": runtime_control_api_source_contract_preserved,
+        "true_rust_default_daemon_admitted": admission.true_rust_default_daemon_admitted,
+        "production_dataplane_admitted": admission.production_dataplane_admitted,
+        "reload_runtime_parity_admitted": admission.reload_runtime_parity_admitted,
+        "matched_go_rust_default_daemon_benchmark_recorded": admission.matched_benchmark_recorded,
+        "service_contract_preserved": service_contract_preserved,
+        "outbound_quic_go_dependency_boundary_preserved": dependency_boundary_preserved,
+        "evidence_class": "read-only-daed-wing-daed-runtime-control-api-clean-baseline",
     })
 }
 
@@ -1064,6 +1106,89 @@ mod tests {
                 .unwrap()
         );
         assert!(!report["default_switch_allowed"].as_bool().unwrap());
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn product_chain_clean_baseline_records_runtime_control_api_regression_without_switching_default_path()
+     {
+        let root = std::env::temp_dir().join(format!(
+            "dae-daemon-product-chain-clean-api-baseline-{}",
+            std::process::id()
+        ));
+        let artifact_dir = root.join("artifact");
+        let manifest_file = artifact_dir.join("product-chain-recertification.json");
+        let evidence = ProductChainEvidence {
+            topology: json!({
+                "chain": "daed2.0-web-wing-daecore",
+                "daed2_wing_repo_used": true,
+                "standalone_dae_wing_repo_used": false,
+            }),
+            service: json!({
+                "status": "pass",
+                "service_contract_preserved": true,
+            }),
+            go_mod: json!({
+                "status": "pass",
+                "outbound_quic_go_dependency_boundary_preserved": true,
+            }),
+            repos: Vec::new(),
+            runtime_control_api: json!({
+                "status": "pass",
+                "runtime_control_api_source_contract_preserved": true,
+            }),
+            dirty_repos: Vec::new(),
+            missing_repos: Vec::new(),
+            unavailable_repos: Vec::new(),
+        };
+        let options = ProductChainRecertificationOptions {
+            execute: true,
+            ..ProductChainRecertificationOptions::default()
+        };
+        let report = report_value(
+            &options,
+            &artifact_dir,
+            &manifest_file,
+            ProductChainAdmissionEvidence {
+                true_rust_default_daemon_admitted: true,
+                production_dataplane_admitted: true,
+                reload_runtime_parity_admitted: true,
+                matched_benchmark_recorded: true,
+            },
+            Some(evidence),
+        );
+        assert!(
+            report["runtime_control_api_clean_baseline"]["recorded"]
+                .as_bool()
+                .unwrap()
+        );
+        assert!(
+            report["daed_wing_runtime_control_api_regression_recorded"]
+                .as_bool()
+                .unwrap()
+        );
+        assert!(
+            report["product_chain_recertification_clean"]
+                .as_bool()
+                .unwrap()
+        );
+        assert!(!report["default_path_mutation_allowed"].as_bool().unwrap());
+        assert!(!report["default_switch_allowed"].as_bool().unwrap());
+        assert!(!report["product_chain_switch_allowed"].as_bool().unwrap());
+        assert!(
+            report["remaining_blockers"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|blocker| blocker.as_str().unwrap().contains("default path mutation"))
+        );
+        assert!(
+            !report["remaining_blockers"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|blocker| blocker.as_str().unwrap().contains("runtime/control API"))
+        );
         let _ = std::fs::remove_dir_all(root);
     }
 
