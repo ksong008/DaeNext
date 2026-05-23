@@ -10,6 +10,7 @@ pub struct ProductChainRecertificationOptions {
     pub default_path_mutation_requested: bool,
     pub production_run_command_replacement_dry_run_requested: bool,
     pub production_run_command_replacement_execute_requested: bool,
+    pub host_default_path_mutation_allow_requested: bool,
     pub dae_repo: PathBuf,
     pub dae_wing_repo: PathBuf,
     pub daed_repo: PathBuf,
@@ -26,6 +27,7 @@ impl Default for ProductChainRecertificationOptions {
             default_path_mutation_requested: false,
             production_run_command_replacement_dry_run_requested: false,
             production_run_command_replacement_execute_requested: false,
+            host_default_path_mutation_allow_requested: false,
             dae_repo: PathBuf::from("/root/project/dae"),
             daed_repo: PathBuf::from("/root/project/daed"),
             dae_wing_repo: PathBuf::from("/root/project/daed/wing"),
@@ -371,80 +373,199 @@ fn production_run_command_replacement_plan_json(
     let requested =
         options.production_run_command_replacement_dry_run_requested || execute_requested;
     let go_default_path_preserved = true;
-    let host_mutation_allowed = false;
     let admitted = requested
         && default_path_mutation_allowed
         && service_contract_preserved
         && go_default_path_preserved;
+    let host_mutation_allow_requested = options.host_default_path_mutation_allow_requested;
+    let host_mutation_allowed = host_mutation_allow_requested && admitted;
     let execute_allowed = execute_requested && admitted && host_mutation_allowed;
     let execution_blockers = production_run_command_execution_blockers_json(
         execute_requested,
         admitted,
+        host_mutation_allow_requested,
         host_mutation_allowed,
     );
-    json!({
-        "status": if admitted { "pass" } else if requested { "blocked" } else { "not-requested" },
-        "requested": requested,
-        "dry_run": true,
-        "admitted": admitted,
-        "execute_requested": execute_requested,
-        "execute_allowed": execute_allowed,
-        "execution_blockers": execution_blockers,
-        "default_path_mutation_allowed": default_path_mutation_allowed,
-        "service_contract_preserved": service_contract_preserved,
-        "go_default_path_preserved": go_default_path_preserved,
-        "go_fallback_required": true,
-        "service_file": path_string(&options.service_file),
-        "current_exec_start_pre": "/usr/bin/dae validate -c /etc/dae/config.dae",
-        "current_exec_start": "/usr/bin/dae run --disable-timestamp -c /etc/dae/config.dae",
-        "current_exec_reload": "/usr/bin/dae reload $MAINPID",
-        "target_run_binary": "dae-daemon-optin",
-        "target_exec_start_pre": "dae-daemon-optin validate -c /etc/dae/config.dae",
-        "target_exec_start": "dae-daemon-optin run --disable-timestamp -c /etc/dae/config.dae",
-        "target_exec_reload": "dae-daemon-optin reload $MAINPID",
-        "backup_required": true,
-        "rollback_required": true,
-        "post_replacement_smoke_required": true,
-        "pid_progress_compatibility_required": true,
-        "host_mutation_allowed": host_mutation_allowed,
-        "requires_explicit_execute_flag": "--execute-production-run-command-replacement",
-        "backup_artifact_dir": path_string(&artifact_dir.join("production-run-command-replacement-backup")),
-        "backup_service_file": path_string(&artifact_dir.join("production-run-command-replacement-backup").join("dae.service")),
-        "backup_usr_bin_dae": path_string(&artifact_dir.join("production-run-command-replacement-backup").join("usr-bin-dae")),
-        "rollback_script": path_string(&artifact_dir.join("rollback-production-run-command-replacement.sh")),
-        "rollback_commands": [
+    let backup_artifact_dir = artifact_dir.join("production-run-command-replacement-backup");
+    let mut pre_execution_checks = Map::new();
+    pre_execution_checks.insert(
+        "default_path_mutation_allowed".to_owned(),
+        json!(default_path_mutation_allowed),
+    );
+    pre_execution_checks.insert(
+        "service_contract_preserved".to_owned(),
+        json!(service_contract_preserved),
+    );
+    pre_execution_checks.insert(
+        "go_default_path_preserved".to_owned(),
+        json!(go_default_path_preserved),
+    );
+    pre_execution_checks.insert("backup_required".to_owned(), json!(true));
+    pre_execution_checks.insert("rollback_required".to_owned(), json!(true));
+    pre_execution_checks.insert("post_replacement_smoke_required".to_owned(), json!(true));
+    pre_execution_checks.insert("explicit_execute_flag_required".to_owned(), json!(true));
+    pre_execution_checks.insert(
+        "explicit_host_mutation_allow_flag_required".to_owned(),
+        json!(true),
+    );
+    pre_execution_checks.insert(
+        "host_mutation_allow_requested".to_owned(),
+        json!(host_mutation_allow_requested),
+    );
+    pre_execution_checks.insert(
+        "host_mutation_allowed".to_owned(),
+        json!(host_mutation_allowed),
+    );
+
+    let mut plan = Map::new();
+    plan.insert(
+        "status".to_owned(),
+        json!(if admitted {
+            "pass"
+        } else if requested {
+            "blocked"
+        } else {
+            "not-requested"
+        }),
+    );
+    plan.insert("requested".to_owned(), json!(requested));
+    plan.insert("dry_run".to_owned(), json!(true));
+    plan.insert("admitted".to_owned(), json!(admitted));
+    plan.insert("execute_requested".to_owned(), json!(execute_requested));
+    plan.insert("execute_allowed".to_owned(), json!(execute_allowed));
+    plan.insert("execution_blockers".to_owned(), execution_blockers);
+    plan.insert(
+        "default_path_mutation_allowed".to_owned(),
+        json!(default_path_mutation_allowed),
+    );
+    plan.insert(
+        "service_contract_preserved".to_owned(),
+        json!(service_contract_preserved),
+    );
+    plan.insert(
+        "go_default_path_preserved".to_owned(),
+        json!(go_default_path_preserved),
+    );
+    plan.insert("go_fallback_required".to_owned(), json!(true));
+    plan.insert(
+        "service_file".to_owned(),
+        json!(path_string(&options.service_file)),
+    );
+    plan.insert(
+        "current_exec_start_pre".to_owned(),
+        json!("/usr/bin/dae validate -c /etc/dae/config.dae"),
+    );
+    plan.insert(
+        "current_exec_start".to_owned(),
+        json!("/usr/bin/dae run --disable-timestamp -c /etc/dae/config.dae"),
+    );
+    plan.insert(
+        "current_exec_reload".to_owned(),
+        json!("/usr/bin/dae reload $MAINPID"),
+    );
+    plan.insert("target_run_binary".to_owned(), json!("dae-daemon-optin"));
+    plan.insert(
+        "target_exec_start_pre".to_owned(),
+        json!("dae-daemon-optin validate -c /etc/dae/config.dae"),
+    );
+    plan.insert(
+        "target_exec_start".to_owned(),
+        json!("dae-daemon-optin run --disable-timestamp -c /etc/dae/config.dae"),
+    );
+    plan.insert(
+        "target_exec_reload".to_owned(),
+        json!("dae-daemon-optin reload $MAINPID"),
+    );
+    plan.insert("backup_required".to_owned(), json!(true));
+    plan.insert("rollback_required".to_owned(), json!(true));
+    plan.insert("post_replacement_smoke_required".to_owned(), json!(true));
+    plan.insert(
+        "pid_progress_compatibility_required".to_owned(),
+        json!(true),
+    );
+    plan.insert(
+        "host_mutation_allow_requested".to_owned(),
+        json!(host_mutation_allow_requested),
+    );
+    plan.insert(
+        "host_mutation_allowed".to_owned(),
+        json!(host_mutation_allowed),
+    );
+    plan.insert(
+        "requires_explicit_execute_flag".to_owned(),
+        json!("--execute-production-run-command-replacement"),
+    );
+    plan.insert(
+        "requires_explicit_host_mutation_allow_flag".to_owned(),
+        json!("--allow-host-default-path-mutation"),
+    );
+    plan.insert(
+        "backup_artifact_dir".to_owned(),
+        json!(path_string(&backup_artifact_dir)),
+    );
+    plan.insert(
+        "backup_service_file".to_owned(),
+        json!(path_string(&backup_artifact_dir.join("dae.service"))),
+    );
+    plan.insert(
+        "backup_usr_bin_dae".to_owned(),
+        json!(path_string(&backup_artifact_dir.join("usr-bin-dae"))),
+    );
+    plan.insert(
+        "rollback_script".to_owned(),
+        json!(path_string(
+            &artifact_dir.join("rollback-production-run-command-replacement.sh"),
+        )),
+    );
+    plan.insert(
+        "rollback_commands".to_owned(),
+        json!([
             "restore backup service file if service was changed",
             "restore backup /usr/bin/dae if binary was changed",
             "systemctl daemon-reload",
             "systemctl restart dae.service only after rollback validation is explicit",
-        ],
-        "post_replacement_smoke_commands": [
+        ]),
+    );
+    plan.insert(
+        "post_replacement_smoke_commands".to_owned(),
+        json!([
             "dae-daemon-optin validate -c /etc/dae/config.dae",
             "dae-daemon-optin run --disable-timestamp -c /etc/dae/config.dae --exit-after-ready",
             "dae-daemon-optin reload $MAINPID",
-        ],
-        "service_manager_commands": [
+        ]),
+    );
+    plan.insert(
+        "service_manager_commands".to_owned(),
+        json!([
             "systemctl daemon-reload",
             "systemctl restart dae.service",
             "systemctl status dae.service --no-pager",
-        ],
-        "pre_execution_checks": {
-            "default_path_mutation_allowed": default_path_mutation_allowed,
-            "service_contract_preserved": service_contract_preserved,
-            "go_default_path_preserved": go_default_path_preserved,
-            "backup_required": true,
-            "rollback_required": true,
-            "post_replacement_smoke_required": true,
-            "explicit_execute_flag_required": true,
-            "host_mutation_allowed": host_mutation_allowed,
-        },
-        "actual_mutation_executed": false,
-        "production_run_command_replaced": false,
-        "read_only": true,
-        "installed_usr_bin_dae_exists": Path::new("/usr/bin/dae").exists(),
-        "installed_usr_local_bin_dae_exists": Path::new("/usr/local/bin/dae").exists(),
-        "evidence_class": "read-only-production-run-command-replacement-dry-run-plan",
-    })
+        ]),
+    );
+    plan.insert(
+        "pre_execution_checks".to_owned(),
+        Value::Object(pre_execution_checks),
+    );
+    plan.insert(
+        "host_mutation_execution_mode".to_owned(),
+        json!("read-only-admission-only"),
+    );
+    plan.insert("actual_mutation_executed".to_owned(), json!(false));
+    plan.insert("production_run_command_replaced".to_owned(), json!(false));
+    plan.insert("read_only".to_owned(), json!(true));
+    plan.insert(
+        "installed_usr_bin_dae_exists".to_owned(),
+        json!(Path::new("/usr/bin/dae").exists()),
+    );
+    plan.insert(
+        "installed_usr_local_bin_dae_exists".to_owned(),
+        json!(Path::new("/usr/local/bin/dae").exists()),
+    );
+    plan.insert(
+        "evidence_class".to_owned(),
+        json!("read-only-production-run-command-replacement-dry-run-plan"),
+    );
+    Value::Object(plan)
 }
 
 fn production_run_command_execution_blockers(plan: &Value) -> Vec<String> {
@@ -462,6 +583,7 @@ fn production_run_command_execution_blockers(plan: &Value) -> Vec<String> {
 fn production_run_command_execution_blockers_json(
     execute_requested: bool,
     plan_admitted: bool,
+    host_mutation_allow_requested: bool,
     host_mutation_allowed: bool,
 ) -> Value {
     let mut blockers = Vec::new();
@@ -470,9 +592,13 @@ fn production_run_command_execution_blockers_json(
             "production run command replacement execute requested but dry-run plan is not admitted",
         );
     }
-    if execute_requested && !host_mutation_allowed {
+    if execute_requested && !host_mutation_allow_requested {
         blockers.push(
             "production run command replacement execute requested but host default path mutation is not allowed",
+        );
+    } else if execute_requested && !host_mutation_allowed {
+        blockers.push(
+            "production run command replacement execute requested but host default path mutation is not admitted",
         );
     }
     json!(blockers)
@@ -1198,6 +1324,7 @@ mod tests {
             default_path_mutation_requested: false,
             production_run_command_replacement_dry_run_requested: false,
             production_run_command_replacement_execute_requested: false,
+            host_default_path_mutation_allow_requested: false,
             dae_repo: fixture.join("dae"),
             dae_wing_repo: fixture.join("dae-wing"),
             daed_repo: fixture.join("daed"),
@@ -1380,10 +1507,17 @@ mod tests {
         assert!(plan["backup_required"].as_bool().unwrap());
         assert!(plan["rollback_required"].as_bool().unwrap());
         assert!(plan["post_replacement_smoke_required"].as_bool().unwrap());
+        assert!(!plan["host_mutation_allow_requested"].as_bool().unwrap());
         assert!(!plan["host_mutation_allowed"].as_bool().unwrap());
         assert_eq!(
             plan["requires_explicit_execute_flag"].as_str().unwrap(),
             "--execute-production-run-command-replacement"
+        );
+        assert_eq!(
+            plan["requires_explicit_host_mutation_allow_flag"]
+                .as_str()
+                .unwrap(),
+            "--allow-host-default-path-mutation"
         );
         assert!(
             plan["backup_artifact_dir"]
@@ -1453,6 +1587,7 @@ mod tests {
         let plan = &report["production_run_command_replacement_plan"];
         assert!(plan["execute_requested"].as_bool().unwrap());
         assert!(!plan["execute_allowed"].as_bool().unwrap());
+        assert!(!plan["host_mutation_allow_requested"].as_bool().unwrap());
         assert!(!plan["host_mutation_allowed"].as_bool().unwrap());
         assert!(!plan["actual_mutation_executed"].as_bool().unwrap());
         assert!(!plan["production_run_command_replaced"].as_bool().unwrap());
@@ -1477,6 +1612,55 @@ mod tests {
                     .contains("host default path mutation is not allowed"))
         );
         assert!(!report["production_run_command_replaced"].as_bool().unwrap());
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn product_chain_run_command_replacement_host_mutation_allow_gate_admits_without_writing_host()
+    {
+        let root = std::env::temp_dir().join(format!(
+            "dae-daemon-product-chain-run-command-host-allow-{}",
+            std::process::id()
+        ));
+        let artifact_dir = root.join("artifact");
+        let manifest_file = artifact_dir.join("product-chain-recertification.json");
+        let options = ProductChainRecertificationOptions {
+            execute: true,
+            default_path_mutation_requested: true,
+            production_run_command_replacement_dry_run_requested: true,
+            production_run_command_replacement_execute_requested: true,
+            host_default_path_mutation_allow_requested: true,
+            ..ProductChainRecertificationOptions::default()
+        };
+        let report = report_value(
+            &options,
+            &artifact_dir,
+            &manifest_file,
+            ProductChainAdmissionEvidence {
+                true_rust_default_daemon_admitted: true,
+                production_dataplane_admitted: true,
+                reload_runtime_parity_admitted: true,
+                matched_benchmark_recorded: true,
+            },
+            Some(clean_product_chain_evidence()),
+        );
+        let plan = &report["production_run_command_replacement_plan"];
+        assert!(plan["admitted"].as_bool().unwrap());
+        assert!(plan["execute_requested"].as_bool().unwrap());
+        assert!(plan["execute_allowed"].as_bool().unwrap());
+        assert!(plan["host_mutation_allow_requested"].as_bool().unwrap());
+        assert!(plan["host_mutation_allowed"].as_bool().unwrap());
+        assert_eq!(
+            plan["host_mutation_execution_mode"].as_str().unwrap(),
+            "read-only-admission-only"
+        );
+        assert!(plan["execution_blockers"].as_array().unwrap().is_empty());
+        assert!(report["remaining_blockers"].as_array().unwrap().is_empty());
+        assert!(!plan["actual_mutation_executed"].as_bool().unwrap());
+        assert!(!plan["production_run_command_replaced"].as_bool().unwrap());
+        assert!(!report["production_run_command_replaced"].as_bool().unwrap());
+        assert!(plan["read_only"].as_bool().unwrap());
+        assert!(report["read_only"].as_bool().unwrap());
         let _ = std::fs::remove_dir_all(root);
     }
 
@@ -1508,6 +1692,7 @@ mod tests {
             default_path_mutation_requested: false,
             production_run_command_replacement_dry_run_requested: false,
             production_run_command_replacement_execute_requested: false,
+            host_default_path_mutation_allow_requested: false,
             dae_repo: fixture.join("dae"),
             dae_wing_repo: fixture.join("dae-wing"),
             daed_repo: fixture.join("daed"),
