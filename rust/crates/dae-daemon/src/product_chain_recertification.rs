@@ -8,6 +8,7 @@ use serde_json::{Map, Value, json};
 pub struct ProductChainRecertificationOptions {
     pub execute: bool,
     pub default_path_mutation_requested: bool,
+    pub production_run_command_replacement_dry_run_requested: bool,
     pub dae_repo: PathBuf,
     pub dae_wing_repo: PathBuf,
     pub daed_repo: PathBuf,
@@ -22,6 +23,7 @@ impl Default for ProductChainRecertificationOptions {
         Self {
             execute: false,
             default_path_mutation_requested: false,
+            production_run_command_replacement_dry_run_requested: false,
             dae_repo: PathBuf::from("/root/project/dae"),
             daed_repo: PathBuf::from("/root/project/daed"),
             dae_wing_repo: PathBuf::from("/root/project/daed/wing"),
@@ -280,6 +282,11 @@ fn report_value(
         && daed_wing_runtime_control_api_regression_recorded;
     let default_path_mutation_allowed = recertification_clean && default_path_mutation_requested;
     let product_chain_switch_allowed = default_path_mutation_allowed;
+    let production_run_command_replacement_plan = production_run_command_replacement_plan_json(
+        options,
+        default_path_mutation_allowed,
+        service_contract_passed,
+    );
     let remaining_blockers = remaining_blockers(
         admission,
         &dirty_repos,
@@ -330,6 +337,7 @@ fn report_value(
         "daed_wing_runtime_control_api_regression_recorded": daed_wing_runtime_control_api_regression_recorded,
         "product_chain_recertification_clean": recertification_clean,
         "default_path_mutation_requested": default_path_mutation_requested,
+        "production_run_command_replacement_plan": production_run_command_replacement_plan,
         "production_run_command_replaced": false,
         "go_default_path_preserved": true,
         "go_fallback_required": true,
@@ -344,6 +352,47 @@ fn report_value(
             "DAENEW_RUST_REBUILD_MEMO_2026-05-16.md:26.3",
             "DAENEW_RUST_REBUILD_MEMO_2026-05-16.md:install/dae.service"
         ],
+    })
+}
+
+fn production_run_command_replacement_plan_json(
+    options: &ProductChainRecertificationOptions,
+    default_path_mutation_allowed: bool,
+    service_contract_preserved: bool,
+) -> Value {
+    let requested = options.production_run_command_replacement_dry_run_requested;
+    let go_default_path_preserved = true;
+    let admitted = requested
+        && default_path_mutation_allowed
+        && service_contract_preserved
+        && go_default_path_preserved;
+    json!({
+        "status": if admitted { "pass" } else if requested { "blocked" } else { "not-requested" },
+        "requested": requested,
+        "dry_run": true,
+        "admitted": admitted,
+        "default_path_mutation_allowed": default_path_mutation_allowed,
+        "service_contract_preserved": service_contract_preserved,
+        "go_default_path_preserved": go_default_path_preserved,
+        "go_fallback_required": true,
+        "service_file": path_string(&options.service_file),
+        "current_exec_start_pre": "/usr/bin/dae validate -c /etc/dae/config.dae",
+        "current_exec_start": "/usr/bin/dae run --disable-timestamp -c /etc/dae/config.dae",
+        "current_exec_reload": "/usr/bin/dae reload $MAINPID",
+        "target_run_binary": "dae-daemon-optin",
+        "target_exec_start_pre": "dae-daemon-optin validate -c /etc/dae/config.dae",
+        "target_exec_start": "dae-daemon-optin run --disable-timestamp -c /etc/dae/config.dae",
+        "target_exec_reload": "dae-daemon-optin reload $MAINPID",
+        "backup_required": true,
+        "rollback_required": true,
+        "post_replacement_smoke_required": true,
+        "pid_progress_compatibility_required": true,
+        "actual_mutation_executed": false,
+        "production_run_command_replaced": false,
+        "read_only": true,
+        "installed_usr_bin_dae_exists": Path::new("/usr/bin/dae").exists(),
+        "installed_usr_local_bin_dae_exists": Path::new("/usr/local/bin/dae").exists(),
+        "evidence_class": "read-only-production-run-command-replacement-dry-run-plan",
     })
 }
 
@@ -1065,6 +1114,7 @@ mod tests {
         let options = ProductChainRecertificationOptions {
             execute: true,
             default_path_mutation_requested: false,
+            production_run_command_replacement_dry_run_requested: false,
             dae_repo: fixture.join("dae"),
             dae_wing_repo: fixture.join("dae-wing"),
             daed_repo: fixture.join("daed"),
@@ -1214,6 +1264,48 @@ mod tests {
     }
 
     #[test]
+    fn product_chain_run_command_replacement_plan_is_read_only_and_admitted_after_default_request()
+    {
+        let root = std::env::temp_dir().join(format!(
+            "dae-daemon-product-chain-run-command-plan-{}",
+            std::process::id()
+        ));
+        let artifact_dir = root.join("artifact");
+        let manifest_file = artifact_dir.join("product-chain-recertification.json");
+        let options = ProductChainRecertificationOptions {
+            execute: true,
+            default_path_mutation_requested: true,
+            production_run_command_replacement_dry_run_requested: true,
+            ..ProductChainRecertificationOptions::default()
+        };
+        let report = report_value(
+            &options,
+            &artifact_dir,
+            &manifest_file,
+            ProductChainAdmissionEvidence {
+                true_rust_default_daemon_admitted: true,
+                production_dataplane_admitted: true,
+                reload_runtime_parity_admitted: true,
+                matched_benchmark_recorded: true,
+            },
+            Some(clean_product_chain_evidence()),
+        );
+        let plan = &report["production_run_command_replacement_plan"];
+        assert!(plan["requested"].as_bool().unwrap());
+        assert!(plan["dry_run"].as_bool().unwrap());
+        assert!(plan["admitted"].as_bool().unwrap());
+        assert!(plan["backup_required"].as_bool().unwrap());
+        assert!(plan["rollback_required"].as_bool().unwrap());
+        assert!(plan["post_replacement_smoke_required"].as_bool().unwrap());
+        assert!(!plan["actual_mutation_executed"].as_bool().unwrap());
+        assert!(!plan["production_run_command_replaced"].as_bool().unwrap());
+        assert!(plan["read_only"].as_bool().unwrap());
+        assert!(!report["production_run_command_replaced"].as_bool().unwrap());
+        assert!(report["read_only"].as_bool().unwrap());
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
     fn product_chain_recertification_blocks_when_repo_status_is_unavailable() {
         let root = std::env::temp_dir().join(format!(
             "dae-daemon-product-chain-nongit-{}",
@@ -1239,6 +1331,7 @@ mod tests {
         let options = ProductChainRecertificationOptions {
             execute: true,
             default_path_mutation_requested: false,
+            production_run_command_replacement_dry_run_requested: false,
             dae_repo: fixture.join("dae"),
             dae_wing_repo: fixture.join("dae-wing"),
             daed_repo: fixture.join("daed"),
