@@ -296,6 +296,7 @@ dependencies = [
 name = "dae-daemon"
 version = "0.1.0"
 dependencies = [
+ "dae-config",
  "dae-control",
  "dae-core-types",
  "dae-datapath",

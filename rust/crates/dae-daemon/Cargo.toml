@@ -6,6 +6,7 @@ license.workspace = true
 repository.workspace = true
 
 [dependencies]
+dae-config.workspace = true
 dae-control.workspace = true
 dae-core-types.workspace = true
 dae-datapath.workspace = true
