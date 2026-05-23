@@ -97,6 +97,10 @@ fn run_default_optin_command(args: &[String], version: &str) -> DaemonOutput {
     let mut disable_sudo = false;
     let mut listener_smoke = true;
     let mut reload_smoke = true;
+    let mut production_dataplane_smoke = false;
+    let mut ack_root_gate = false;
+    let mut dataplane_benchmark_iters = 5_u32;
+    let mut cargo_manifest: Option<PathBuf> = None;
     let mut iter = args.iter();
     while let Some(arg) = iter.next() {
         match arg.as_str() {
@@ -132,6 +136,40 @@ fn run_default_optin_command(args: &[String], version: &str) -> DaemonOutput {
             "--disable-sudo" => disable_sudo = true,
             "--no-listener-smoke" => listener_smoke = false,
             "--no-reload-smoke" => reload_smoke = false,
+            "--execute-production-dataplane-smoke" => production_dataplane_smoke = true,
+            "--ack-root-gate" => ack_root_gate = true,
+            "--dataplane-benchmark-iters" => {
+                let Some(value) = iter.next() else {
+                    return DaemonOutput::usage("missing run --dataplane-benchmark-iters value");
+                };
+                dataplane_benchmark_iters = match value.parse() {
+                    Ok(value) => value,
+                    Err(_) => {
+                        return DaemonOutput::usage(
+                            "invalid run --dataplane-benchmark-iters value",
+                        );
+                    }
+                };
+            }
+            _ if arg.starts_with("--dataplane-benchmark-iters=") => {
+                dataplane_benchmark_iters = match arg.split_once('=').unwrap().1.parse() {
+                    Ok(value) => value,
+                    Err(_) => {
+                        return DaemonOutput::usage(
+                            "invalid run --dataplane-benchmark-iters value",
+                        );
+                    }
+                };
+            }
+            "--cargo-manifest" => {
+                let Some(value) = iter.next() else {
+                    return DaemonOutput::usage("missing run --cargo-manifest value");
+                };
+                cargo_manifest = Some(value.into());
+            }
+            _ if arg.starts_with("--cargo-manifest=") => {
+                cargo_manifest = arg.split_once('=').map(|(_, value)| value.into());
+            }
             "--exit-after-ready" | "--once" => {}
             _ => return DaemonOutput::usage(format!("unsupported run argument: {arg}")),
         }
@@ -148,6 +186,12 @@ fn run_default_optin_command(args: &[String], version: &str) -> DaemonOutput {
     options.disable_sudo = disable_sudo;
     options.listener_smoke = listener_smoke;
     options.reload_smoke = reload_smoke;
+    options.production_dataplane_harness.execute = production_dataplane_smoke;
+    options.production_dataplane_harness.ack_root_gate = ack_root_gate;
+    options.production_dataplane_harness.benchmark_iters = dataplane_benchmark_iters;
+    if let Some(cargo_manifest) = cargo_manifest {
+        options.production_dataplane_harness.cargo_manifest = cargo_manifest;
+    }
 
     match run_default_optin_report(&options, version) {
         Ok(report) => DaemonOutput::ok(format!("{report}\n")),
