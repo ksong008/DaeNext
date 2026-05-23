@@ -140,6 +140,9 @@ pub fn product_chain_recertification_report(
     let daed2_switch_rehearsal =
         materialize_daed2_product_chain_switch_rehearsal_report(&report, &artifact_dir)?;
     attach_daed2_product_chain_switch_rehearsal(&mut report, daed2_switch_rehearsal);
+    let host_write_plan_freeze =
+        materialize_production_host_write_plan_freeze_report(&report, &artifact_dir)?;
+    attach_production_host_write_plan_freeze(&mut report, host_write_plan_freeze);
     let encoded = serde_json::to_vec_pretty(&report)
         .map_err(|err| format!("failed to encode product-chain recertification report: {err}"))?;
     fs::write(&manifest_file, encoded).map_err(|err| {
@@ -1212,6 +1215,119 @@ fn attach_daed2_product_chain_switch_rehearsal(report: &mut Value, rehearsal: Va
         rehearsal["pass"].clone(),
     );
     report_object.insert("daed2_product_chain_switch_rehearsal".to_owned(), rehearsal);
+}
+
+fn materialize_production_host_write_plan_freeze_report(
+    report: &Value,
+    artifact_dir: &Path,
+) -> Result<Value, String> {
+    let freeze_file = artifact_dir.join("production-host-write-plan-freeze.json");
+    let readiness = &report["production_replacement_readiness"];
+    let rehearsal = &report["daed2_product_chain_switch_rehearsal"];
+    let readiness_passed = readiness["ready_for_manual_authorization"]
+        .as_bool()
+        .unwrap_or(false);
+    let rehearsal_passed = rehearsal["pass"].as_bool().unwrap_or(false);
+    let no_host_write_executed = readiness["checks"]["no_host_write_executed"]
+        .as_bool()
+        .unwrap_or(false)
+        && !rehearsal["actual_host_write_executed"]
+            .as_bool()
+            .unwrap_or(true);
+    let mut blockers = Vec::new();
+    if !readiness_passed {
+        blockers.push("production replacement readiness is not pass");
+    }
+    if !rehearsal_passed {
+        blockers.push("daed2.0 product-chain switch rehearsal is not pass");
+    }
+    if !no_host_write_executed {
+        blockers.push("host write was already executed");
+    }
+    let pass = blockers.is_empty();
+    let freeze = json!({
+        "status": if pass { "pass" } else { "blocked" },
+        "pass": pass,
+        "frozen": pass,
+        "blockers": blockers,
+        "freeze_file": path_string(&freeze_file),
+        "manual_authorization_required_for_phase4": true,
+        "phase4_must_not_start_without_user_authorization": true,
+        "host_write_allowed": false,
+        "actual_host_write_executed": false,
+        "production_run_command_replaced": false,
+        "checks": {
+            "production_replacement_readiness_passed": readiness_passed,
+            "daed2_product_chain_switch_rehearsal_passed": rehearsal_passed,
+            "no_host_write_executed": no_host_write_executed,
+        },
+        "inputs": {
+            "readiness_file": readiness["readiness_file"].clone(),
+            "rehearsal_file": rehearsal["rehearsal_file"].clone(),
+            "apply_manifest_file": readiness["required_artifacts"]["apply_manifest_file"].clone(),
+            "service_diff_file": readiness["required_artifacts"]["service_diff_file"].clone(),
+            "backup_manifest_file": readiness["required_artifacts"]["backup_manifest_file"].clone(),
+            "rollback_script": readiness["required_artifacts"]["rollback_script"].clone(),
+        },
+        "frozen_execution_checklist": [
+            "confirm user explicitly authorized controlled production host write",
+            "confirm production-host-write-plan-freeze.json status is pass",
+            "confirm production-replacement-readiness.json status is pass",
+            "confirm daed2-product-chain-switch-rehearsal.json status is pass",
+            "confirm service diff is the intended default-path command change",
+            "create real backup before any write",
+            "apply only the frozen service/run-command change",
+            "run post-write validation immediately"
+        ],
+        "frozen_rollback_checklist": [
+            "use the real backup artifact produced during controlled host write",
+            "restore service file if changed",
+            "restore /usr/bin/dae or target binary if changed",
+            "run systemctl daemon-reload only after rollback is explicitly authorized",
+            "restart dae.service only after rollback validation is explicit",
+            "rerun daed2.0 product-chain validation after rollback"
+        ],
+        "frozen_validation_checklist": [
+            "dae-daemon-optin validate -c /etc/dae/config.dae",
+            "dae-daemon-optin run --disable-timestamp -c /etc/dae/config.dae --exit-after-ready",
+            "dae-daemon-optin reload $MAINPID",
+            "active TCP relay smoke and benchmark",
+            "active UDP smoke and benchmark",
+            "active DNS smoke and benchmark",
+            "daed2.0 runtime/control API compatibility check",
+            "matched Go/Rust default daemon benchmark",
+            "resource cleanup check"
+        ],
+        "read_only": true,
+        "source": [
+            "DAEX_RUST_REBUILD_PLAN_2026-05-16.md:后续阶段 3",
+            "DAENEW_RUST_REBUILD_MEMO_2026-05-16.md:default-path-service-runtime-contract"
+        ],
+    });
+    let encoded = serde_json::to_vec_pretty(&freeze)
+        .map_err(|err| format!("failed to encode production host-write plan freeze: {err}"))?;
+    fs::write(&freeze_file, encoded).map_err(|err| {
+        format!(
+            "failed to write production host-write plan freeze {}: {err}",
+            path_string(&freeze_file)
+        )
+    })?;
+    Ok(freeze)
+}
+
+fn attach_production_host_write_plan_freeze(report: &mut Value, freeze: Value) {
+    let Some(report_object) = report.as_object_mut() else {
+        return;
+    };
+    report_object.insert(
+        "production_host_write_plan_freeze_file".to_owned(),
+        freeze["freeze_file"].clone(),
+    );
+    report_object.insert(
+        "production_host_write_plan_freeze_passed".to_owned(),
+        freeze["pass"].clone(),
+    );
+    report_object.insert("production_host_write_plan_freeze".to_owned(), freeze);
 }
 
 fn rollback_script_content(
@@ -2745,6 +2861,92 @@ mod tests {
                 .unwrap()
         );
         assert!(std::path::Path::new(rehearsal["rehearsal_file"].as_str().unwrap()).exists());
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn product_chain_host_write_plan_freeze_requires_phase4_authorization() {
+        let root = std::env::temp_dir().join(format!(
+            "dae-daemon-product-chain-host-write-freeze-{}",
+            std::process::id()
+        ));
+        let artifact_dir = root.join("artifact");
+        let manifest_file = artifact_dir.join("product-chain-recertification.json");
+        let service_file = root.join("dae.service");
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::write(
+            &service_file,
+            "ExecStartPre=/usr/bin/dae validate -c /etc/dae/config.dae\nExecStart=/usr/bin/dae run --disable-timestamp -c /etc/dae/config.dae\nExecReload=/usr/bin/dae reload $MAINPID\n",
+        )
+        .unwrap();
+        let options = ProductChainRecertificationOptions {
+            execute: true,
+            default_path_mutation_requested: true,
+            production_run_command_replacement_dry_run_requested: true,
+            production_run_command_replacement_execute_requested: true,
+            production_run_command_replacement_apply_plan_requested: true,
+            host_default_path_mutation_allow_requested: true,
+            service_file,
+            ..ProductChainRecertificationOptions::default()
+        };
+        let mut report = report_value(
+            &options,
+            &artifact_dir,
+            &manifest_file,
+            ProductChainAdmissionEvidence {
+                true_rust_default_daemon_admitted: true,
+                production_dataplane_admitted: true,
+                reload_runtime_parity_admitted: true,
+                matched_benchmark_recorded: true,
+            },
+            Some(clean_product_chain_evidence()),
+        );
+        let artifacts = materialize_production_run_command_replacement_artifacts(
+            &options,
+            &report,
+            &artifact_dir,
+        )
+        .unwrap();
+        attach_production_run_command_replacement_artifacts(&mut report, artifacts);
+        let readiness =
+            materialize_production_replacement_readiness_report(&report, &artifact_dir).unwrap();
+        attach_production_replacement_readiness(&mut report, readiness);
+        let rehearsal =
+            materialize_daed2_product_chain_switch_rehearsal_report(&report, &artifact_dir)
+                .unwrap();
+        attach_daed2_product_chain_switch_rehearsal(&mut report, rehearsal);
+        let freeze =
+            materialize_production_host_write_plan_freeze_report(&report, &artifact_dir).unwrap();
+        attach_production_host_write_plan_freeze(&mut report, freeze.clone());
+
+        assert_eq!(freeze["status"].as_str().unwrap(), "pass");
+        assert!(freeze["pass"].as_bool().unwrap());
+        assert!(freeze["frozen"].as_bool().unwrap());
+        assert!(
+            freeze["manual_authorization_required_for_phase4"]
+                .as_bool()
+                .unwrap()
+        );
+        assert!(
+            freeze["phase4_must_not_start_without_user_authorization"]
+                .as_bool()
+                .unwrap()
+        );
+        assert!(!freeze["host_write_allowed"].as_bool().unwrap());
+        assert!(!freeze["actual_host_write_executed"].as_bool().unwrap());
+        assert!(!freeze["production_run_command_replaced"].as_bool().unwrap());
+        assert!(
+            !freeze["frozen_execution_checklist"]
+                .as_array()
+                .unwrap()
+                .is_empty()
+        );
+        assert!(
+            report["production_host_write_plan_freeze_passed"]
+                .as_bool()
+                .unwrap()
+        );
+        assert!(std::path::Path::new(freeze["freeze_file"].as_str().unwrap()).exists());
         let _ = std::fs::remove_dir_all(root);
     }
 
