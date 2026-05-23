@@ -21,8 +21,8 @@ impl Default for ProductChainRecertificationOptions {
         Self {
             execute: false,
             dae_repo: PathBuf::from("/root/project/dae"),
-            dae_wing_repo: PathBuf::from("/root/project/dae-wing"),
             daed_repo: PathBuf::from("/root/project/daed"),
+            dae_wing_repo: PathBuf::from("/root/project/daed/wing"),
             outbound_repo: PathBuf::from("/root/project/outbound"),
             quic_go_repo: PathBuf::from("/root/project/quic-go"),
             service_file: PathBuf::from("install/dae.service"),
@@ -37,6 +37,54 @@ pub struct ProductChainAdmissionEvidence {
     pub reload_runtime_parity_admitted: bool,
     pub matched_benchmark_recorded: bool,
     pub true_rust_default_daemon_admitted: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ProductChainTopologyKind {
+    Daed2Wing,
+    StandaloneDaeWing,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ProductChainTopology {
+    kind: ProductChainTopologyKind,
+    dae_core_repo: PathBuf,
+}
+
+impl ProductChainTopology {
+    fn chain_name(&self) -> &'static str {
+        match self.kind {
+            ProductChainTopologyKind::Daed2Wing => "daed2.0-web-wing-daecore",
+            ProductChainTopologyKind::StandaloneDaeWing => "standalone-dae-wing",
+        }
+    }
+
+    fn wing_repo_label(&self) -> &'static str {
+        match self.kind {
+            ProductChainTopologyKind::Daed2Wing => "daed-wing",
+            ProductChainTopologyKind::StandaloneDaeWing => "dae-wing",
+        }
+    }
+
+    fn source_contract_shape(&self) -> &'static str {
+        match self.kind {
+            ProductChainTopologyKind::Daed2Wing => "engine-default-direct",
+            ProductChainTopologyKind::StandaloneDaeWing => "runtime-service-port",
+        }
+    }
+
+    fn as_json(&self, dae_wing_repo: &Path, daed_repo: &Path) -> Value {
+        json!({
+            "chain": self.chain_name(),
+            "daed_repo": path_string(daed_repo),
+            "wing_repo": path_string(dae_wing_repo),
+            "dae_core_repo": path_string(&self.dae_core_repo),
+            "standalone_dae_wing_repo_used": self.kind == ProductChainTopologyKind::StandaloneDaeWing,
+            "daed2_wing_repo_used": self.kind == ProductChainTopologyKind::Daed2Wing,
+            "source_contract_shape": self.source_contract_shape(),
+            "web_api_base_path": "/api",
+        })
+    }
 }
 
 pub fn product_chain_recertification_report(
@@ -83,6 +131,7 @@ pub fn product_chain_recertification_report(
 
 #[derive(Default)]
 struct ProductChainEvidence {
+    topology: Value,
     service: Value,
     go_mod: Value,
     repos: Vec<Value>,
@@ -93,13 +142,17 @@ struct ProductChainEvidence {
 }
 
 fn collect_evidence(options: &ProductChainRecertificationOptions) -> ProductChainEvidence {
+    let topology = product_chain_topology(options);
     let service = service_contract_json(&options.service_file);
-    let go_mod = go_mod_dependency_boundary_json(&options.go_mod_file);
-    let runtime_control_api =
-        runtime_control_api_source_contract_json(&options.dae_wing_repo, &options.daed_repo);
+    let go_mod = go_mod_dependency_boundary_json(options, &topology);
+    let runtime_control_api = runtime_control_api_source_contract_json(
+        &options.dae_wing_repo,
+        &options.daed_repo,
+        &topology,
+    );
     let repo_inputs = [
         ("dae", &options.dae_repo),
-        ("dae-wing", &options.dae_wing_repo),
+        (topology.wing_repo_label(), &options.dae_wing_repo),
         ("daed", &options.daed_repo),
         ("outbound", &options.outbound_repo),
         ("quic-go", &options.quic_go_repo),
@@ -124,6 +177,7 @@ fn collect_evidence(options: &ProductChainRecertificationOptions) -> ProductChai
         repos.push(repo);
     }
     ProductChainEvidence {
+        topology: topology.as_json(&options.dae_wing_repo, &options.daed_repo),
         service,
         go_mod,
         repos,
@@ -131,6 +185,19 @@ fn collect_evidence(options: &ProductChainRecertificationOptions) -> ProductChai
         dirty_repos,
         missing_repos,
         unavailable_repos,
+    }
+}
+
+fn product_chain_topology(options: &ProductChainRecertificationOptions) -> ProductChainTopology {
+    let daed_wing_repo = options.daed_repo.join("wing");
+    let kind = if options.dae_wing_repo == daed_wing_repo {
+        ProductChainTopologyKind::Daed2Wing
+    } else {
+        ProductChainTopologyKind::StandaloneDaeWing
+    };
+    ProductChainTopology {
+        kind,
+        dae_core_repo: options.dae_wing_repo.join("dae-core"),
     }
 }
 
@@ -147,6 +214,12 @@ fn report_value(
         .as_ref()
         .map(|evidence| evidence.service.clone())
         .unwrap_or_else(|| json!({"status": "not-executed"}));
+    let topology = evidence
+        .as_ref()
+        .map(|evidence| evidence.topology.clone())
+        .unwrap_or_else(|| {
+            product_chain_topology(options).as_json(&options.dae_wing_repo, &options.daed_repo)
+        });
     let go_mod = evidence
         .as_ref()
         .map(|evidence| evidence.go_mod.clone())
@@ -225,6 +298,7 @@ fn report_value(
             "service_file": path_string(&options.service_file),
             "go_mod_file": path_string(&options.go_mod_file),
         },
+        "product_chain_topology": topology,
         "service": service,
         "go_mod": go_mod,
         "runtime_control_api_source_contract": runtime_control_api,
@@ -286,31 +360,147 @@ fn service_contract_json(path: &Path) -> Value {
     })
 }
 
-fn go_mod_dependency_boundary_json(path: &Path) -> Value {
+fn go_mod_dependency_boundary_json(
+    options: &ProductChainRecertificationOptions,
+    topology: &ProductChainTopology,
+) -> Value {
+    let root = go_mod_file_dependency_boundary_json(
+        &options.go_mod_file,
+        false,
+        &options.outbound_repo,
+        &options.quic_go_repo,
+    );
+    let root_preserved = root["outbound_quic_go_dependency_boundary_preserved"]
+        .as_bool()
+        .unwrap_or(false);
+    if topology.kind == ProductChainTopologyKind::StandaloneDaeWing {
+        return json!({
+            "status": if root_preserved { "pass" } else { "fail" },
+            "topology": topology.chain_name(),
+            "path": path_string(&options.go_mod_file),
+            "root": root,
+            "outbound_quic_go_dependency_boundary_preserved": root_preserved,
+        });
+    }
+
+    let wing = go_mod_file_dependency_boundary_json(
+        &options.dae_wing_repo.join("go.mod"),
+        true,
+        &options.outbound_repo,
+        &options.quic_go_repo,
+    );
+    let dae_core = go_mod_file_dependency_boundary_json(
+        &topology.dae_core_repo.join("go.mod"),
+        false,
+        &options.outbound_repo,
+        &options.quic_go_repo,
+    );
+    let wing_preserved = wing["outbound_quic_go_dependency_boundary_preserved"]
+        .as_bool()
+        .unwrap_or(false)
+        && wing["dae_core_replace_preserved"]
+            .as_bool()
+            .unwrap_or(false);
+    let dae_core_preserved = dae_core["outbound_quic_go_dependency_boundary_preserved"]
+        .as_bool()
+        .unwrap_or(false);
+    let preserved = root_preserved && wing_preserved && dae_core_preserved;
+    json!({
+        "status": if preserved { "pass" } else { "fail" },
+        "topology": topology.chain_name(),
+        "path": path_string(&options.go_mod_file),
+        "root": root,
+        "wing": wing,
+        "dae_core": dae_core,
+        "outbound_quic_go_dependency_boundary_preserved": preserved,
+    })
+}
+
+fn go_mod_file_dependency_boundary_json(
+    path: &Path,
+    require_dae_core_replace: bool,
+    outbound_repo: &Path,
+    quic_go_repo: &Path,
+) -> Value {
     let Ok(text) = fs::read_to_string(path) else {
         return json!({
             "status": "fail",
             "path": path_string(path),
             "error": "go.mod could not be read",
+            "dae_core_replace_preserved": false,
             "outbound_quic_go_dependency_boundary_preserved": false,
         });
     };
-    let outbound_replace =
-        text.contains("replace github.com/daeuniverse/outbound => github.com/ksong008/outbound");
-    let quic_go_replace =
-        text.contains("replace github.com/daeuniverse/quic-go => github.com/ksong008/quic-go");
+    let dae_core_replace = text.contains("replace github.com/daeuniverse/dae => ./dae-core");
+    let outbound_replace = dependency_replace_target(
+        &text,
+        "github.com/daeuniverse/outbound",
+        "github.com/ksong008/outbound",
+        outbound_repo,
+    );
+    let quic_go_replace = dependency_replace_target(
+        &text,
+        "github.com/daeuniverse/quic-go",
+        "github.com/ksong008/quic-go",
+        quic_go_repo,
+    );
+    let dae_core_replace_preserved = !require_dae_core_replace || dae_core_replace;
+    let preserved =
+        dae_core_replace_preserved && outbound_replace.preserved && quic_go_replace.preserved;
     json!({
-        "status": if outbound_replace && quic_go_replace { "pass" } else { "fail" },
+        "status": if preserved { "pass" } else { "fail" },
         "path": path_string(path),
-        "outbound_replace_preserved": outbound_replace,
-        "quic_go_replace_preserved": quic_go_replace,
+        "dae_core_replace_required": require_dae_core_replace,
+        "dae_core_replace_preserved": dae_core_replace_preserved,
+        "outbound_replace_preserved": outbound_replace.preserved,
+        "outbound_replace_target": outbound_replace.target,
+        "outbound_local_replace_preserved": outbound_replace.local_preserved,
+        "outbound_remote_replace_preserved": outbound_replace.remote_preserved,
+        "quic_go_replace_preserved": quic_go_replace.preserved,
+        "quic_go_replace_target": quic_go_replace.target,
+        "quic_go_local_replace_preserved": quic_go_replace.local_preserved,
+        "quic_go_remote_replace_preserved": quic_go_replace.remote_preserved,
         "outbound_quic_go_still_required": true,
-        "outbound_quic_go_dependency_boundary_preserved": outbound_replace && quic_go_replace,
+        "outbound_quic_go_dependency_boundary_preserved": preserved,
     })
 }
 
-fn runtime_control_api_source_contract_json(dae_wing_repo: &Path, daed_repo: &Path) -> Value {
-    let dae_wing = dae_wing_runtime_control_source_contract_json(dae_wing_repo);
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct DependencyReplaceTarget {
+    preserved: bool,
+    local_preserved: bool,
+    remote_preserved: bool,
+    target: &'static str,
+}
+
+fn dependency_replace_target(
+    text: &str,
+    module: &str,
+    remote_module: &str,
+    local_repo: &Path,
+) -> DependencyReplaceTarget {
+    let remote_preserved = text.contains(&format!("replace {module} => {remote_module}"));
+    let local_preserved =
+        text.contains(&format!("replace {module} => {}", path_string(local_repo)));
+    let target = match (local_preserved, remote_preserved) {
+        (true, _) => "local",
+        (false, true) => "remote",
+        (false, false) => "missing",
+    };
+    DependencyReplaceTarget {
+        preserved: local_preserved || remote_preserved,
+        local_preserved,
+        remote_preserved,
+        target,
+    }
+}
+
+fn runtime_control_api_source_contract_json(
+    dae_wing_repo: &Path,
+    daed_repo: &Path,
+    topology: &ProductChainTopology,
+) -> Value {
+    let dae_wing = dae_wing_runtime_control_source_contract_json(dae_wing_repo, topology);
     let daed = daed_runtime_control_source_contract_json(daed_repo);
     let dae_wing_passed = dae_wing["source_contract_preserved"]
         .as_bool()
@@ -320,6 +510,7 @@ fn runtime_control_api_source_contract_json(dae_wing_repo: &Path, daed_repo: &Pa
         "status": if dae_wing_passed && daed_passed { "pass" } else { "fail" },
         "runtime_control_api_source_contract_recorded": true,
         "runtime_control_api_source_contract_preserved": dae_wing_passed && daed_passed,
+        "product_chain_topology": topology.as_json(dae_wing_repo, daed_repo),
         "dae_wing_runtime_control_api_source_contract_preserved": dae_wing_passed,
         "daed_runtime_control_api_source_contract_preserved": daed_passed,
         "dae_wing": dae_wing,
@@ -327,8 +518,131 @@ fn runtime_control_api_source_contract_json(dae_wing_repo: &Path, daed_repo: &Pa
     })
 }
 
-fn dae_wing_runtime_control_source_contract_json(repo: &Path) -> Value {
-    let files = vec![
+fn dae_wing_runtime_control_source_contract_json(
+    repo: &Path,
+    topology: &ProductChainTopology,
+) -> Value {
+    let files = match topology.kind {
+        ProductChainTopologyKind::Daed2Wing => daed2_wing_runtime_control_source_files(repo),
+        ProductChainTopologyKind::StandaloneDaeWing => {
+            standalone_dae_wing_runtime_control_source_files(repo)
+        }
+    };
+    source_contract_group_json(
+        repo,
+        &format!("{}-runtime-control-api", topology.wing_repo_label()),
+        files,
+    )
+}
+
+fn daed2_wing_runtime_control_source_files(repo: &Path) -> Vec<Value> {
+    vec![
+        source_file_contract_json(
+            repo,
+            "cmd/run.go",
+            &[
+                ("engine_default_run", "engine.Default().Run("),
+                ("restore_running_state", "orchestrator.RestoreRunningState("),
+                ("control_plane_api_mount", "mux.Handle(\"/api/\""),
+                (
+                    "control_plane_api_strip_prefix",
+                    "http.StripPrefix(\"/api\", httpapi.NewHandler())",
+                ),
+                ("runtime_events_api_path", "\"/api/events/runtime\""),
+            ],
+        ),
+        source_file_contract_json(
+            repo,
+            "transport/httpapi/handler.go",
+            &[
+                (
+                    "runtime_overview_endpoint",
+                    "mux.HandleFunc(\"/runtime/overview\"",
+                ),
+                (
+                    "runtime_reload_endpoint",
+                    "mux.HandleFunc(\"/runtime/reload\"",
+                ),
+                ("runtime_stop_endpoint", "mux.HandleFunc(\"/runtime/stop\""),
+                (
+                    "runtime_events_endpoint",
+                    "mux.HandleFunc(\"/events/runtime\"",
+                ),
+                (
+                    "overview_calls_engine_default",
+                    "engine.Default().GetRuntimeOverview(windowSec, maxPoints)",
+                ),
+                (
+                    "reload_calls_orchestrator_run",
+                    "orchestrator.Run(ctx, req.Dry)",
+                ),
+                (
+                    "stop_calls_orchestrator_stop",
+                    "orchestrator.Stop(r.Context(), timeout)",
+                ),
+            ],
+        ),
+        source_file_contract_json(
+            repo,
+            "orchestrator/config_run.go",
+            &[
+                (
+                    "dry_run_reload_with_empty_config",
+                    "engine.Default().ReloadContext(ctx, engine.Default().EmptyConfig())",
+                ),
+                ("parse_config", "engine.Default().ParseConfig("),
+                (
+                    "necessary_outbounds",
+                    "engine.Default().NecessaryOutbounds(",
+                ),
+                (
+                    "real_reload_with_context",
+                    "engine.Default().ReloadContext(ctx, c)",
+                ),
+                ("stop_engine_default", "engine.Default().Stop(timeout)"),
+            ],
+        ),
+        source_file_contract_json(
+            repo,
+            "engine/engine.go",
+            &[
+                ("default_service", "func Default() Service"),
+                (
+                    "reload_context",
+                    "ReloadContext(ctx context.Context, conf *daeConfig.Config) error",
+                ),
+                (
+                    "get_runtime_overview",
+                    "GetRuntimeOverview(windowSec int, maxPoints int)",
+                ),
+                ("dae_engine_wrapper", "daeengine"),
+            ],
+        ),
+        source_file_contract_json(
+            repo,
+            "dae-core/engine/runtime.go",
+            &[
+                ("dae_core_run", "func (e *Engine) Run("),
+                (
+                    "dae_core_reload_with_context",
+                    "func (e *Engine) ReloadWithContext(",
+                ),
+                ("dae_core_stop", "func (e *Engine) Stop("),
+                (
+                    "dae_core_runtime_overview",
+                    "func (e *Engine) GetRuntimeOverview(",
+                ),
+                (
+                    "dae_core_http_transport",
+                    "func (e *Engine) HTTPTransport()",
+                ),
+            ],
+        ),
+    ]
+}
+
+fn standalone_dae_wing_runtime_control_source_files(repo: &Path) -> Vec<Value> {
+    vec![
         source_file_contract_json(
             repo,
             "cmd/run.go",
@@ -407,8 +721,7 @@ fn dae_wing_runtime_control_source_contract_json(repo: &Path) -> Value {
                 ),
             ],
         ),
-    ];
-    source_contract_group_json(repo, "dae-wing-runtime-control-api", files)
+    ]
 }
 
 fn daed_runtime_control_source_contract_json(repo: &Path) -> Value {
@@ -861,7 +1174,11 @@ mod tests {
             "mux.HandleFunc(\"/runtime/overview\"\nmux.HandleFunc(\"/runtime/reload\"\nmux.HandleFunc(\"/events/runtime\"\n",
         );
 
-        let report = runtime_control_api_source_contract_json(&dae_wing, &daed);
+        let topology = ProductChainTopology {
+            kind: ProductChainTopologyKind::StandaloneDaeWing,
+            dae_core_repo: dae_wing.join("dae-core"),
+        };
+        let report = runtime_control_api_source_contract_json(&dae_wing, &daed, &topology);
         assert!(
             report["runtime_control_api_source_contract_recorded"]
                 .as_bool()
@@ -881,6 +1198,167 @@ mod tests {
             report["daed_runtime_control_api_source_contract_preserved"]
                 .as_bool()
                 .unwrap()
+        );
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn runtime_control_api_source_contract_accepts_daed2_wing_shape() {
+        let root = std::env::temp_dir().join(format!(
+            "dae-daemon-product-chain-daed2-contract-{}",
+            std::process::id()
+        ));
+        let daed = root.join("daed");
+        let wing = daed.join("wing");
+        write_fixture_file(
+            &daed.join("apps/web/src/apis/mutation.ts"),
+            "'/runtime/reload'\n'/runtime/stop'\nQUERY_KEY_GENERAL\n",
+        );
+        write_fixture_file(
+            &daed.join("apps/web/src/apis/query.ts"),
+            "'/runtime/overview'\n'/events/runtime'\n'runtime.overview'\n'runtime.overview.delta'\nmergeRuntimeOverviewDelta(previousData, payload, windowSec, maxPoints)\n",
+        );
+        write_fixture_file(
+            &daed.join("apps/web/src/apis/runtime_overview.ts"),
+            "adaptRuntimeOverview\nmergeRuntimeOverviewDelta\ntrimRuntimeOverviewSamples\n",
+        );
+        write_fixture_file(
+            &daed.join("apps/web/src/components/Header.tsx"),
+            "useReloadRuntimeMutation()\nuseStopRuntimeMutation()\nreloadRuntimeMutation.mutate({ dry: false })\n",
+        );
+        write_fixture_file(
+            &daed.join("wing/transport/httpapi/handler.go"),
+            "mux.HandleFunc(\"/runtime/overview\"\nmux.HandleFunc(\"/runtime/reload\"\nmux.HandleFunc(\"/runtime/stop\"\nmux.HandleFunc(\"/events/runtime\"\nengine.Default().GetRuntimeOverview(windowSec, maxPoints)\norchestrator.Run(ctx, req.Dry)\norchestrator.Stop(r.Context(), timeout)\n",
+        );
+        write_fixture_file(
+            &wing.join("cmd/run.go"),
+            "engine.Default().Run(\norchestrator.RestoreRunningState(\nmux.Handle(\"/api/\"\nhttp.StripPrefix(\"/api\", httpapi.NewHandler())\n\"/api/events/runtime\"\n",
+        );
+        write_fixture_file(
+            &wing.join("orchestrator/config_run.go"),
+            "engine.Default().ReloadContext(ctx, engine.Default().EmptyConfig())\nengine.Default().ParseConfig(\nengine.Default().NecessaryOutbounds(\nengine.Default().ReloadContext(ctx, c)\nengine.Default().Stop(timeout)\n",
+        );
+        write_fixture_file(
+            &wing.join("engine/engine.go"),
+            "func Default() Service\nReloadContext(ctx context.Context, conf *daeConfig.Config) error\nGetRuntimeOverview(windowSec int, maxPoints int)\ndaeengine\n",
+        );
+        write_fixture_file(
+            &wing.join("dae-core/engine/runtime.go"),
+            "func (e *Engine) Run(\nfunc (e *Engine) ReloadWithContext(\nfunc (e *Engine) Stop(\nfunc (e *Engine) GetRuntimeOverview(\nfunc (e *Engine) HTTPTransport()\n",
+        );
+        assert!(!wing.join("transport/httpapi/service_port.go").exists());
+
+        let topology = ProductChainTopology {
+            kind: ProductChainTopologyKind::Daed2Wing,
+            dae_core_repo: wing.join("dae-core"),
+        };
+        let report = runtime_control_api_source_contract_json(&wing, &daed, &topology);
+        assert_eq!(
+            report["product_chain_topology"]["chain"].as_str().unwrap(),
+            "daed2.0-web-wing-daecore"
+        );
+        assert!(
+            report["runtime_control_api_source_contract_preserved"]
+                .as_bool()
+                .unwrap()
+        );
+        assert!(
+            report["dae_wing_runtime_control_api_source_contract_preserved"]
+                .as_bool()
+                .unwrap()
+        );
+        assert!(
+            report["daed_runtime_control_api_source_contract_preserved"]
+                .as_bool()
+                .unwrap()
+        );
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn daed2_dependency_boundary_requires_wing_and_dae_core_replaces() {
+        let root = std::env::temp_dir().join(format!(
+            "dae-daemon-product-chain-daed2-boundary-{}",
+            std::process::id()
+        ));
+        let daed = root.join("daed");
+        let wing = daed.join("wing");
+        let dae_go_mod = root.join("dae.go.mod");
+        let outbound = root.join("outbound");
+        let quic_go = root.join("quic-go");
+        write_fixture_file(
+            &dae_go_mod,
+            &format!(
+                "replace github.com/daeuniverse/outbound => {}\nreplace github.com/daeuniverse/quic-go => {}\n",
+                path_string(&outbound),
+                path_string(&quic_go)
+            ),
+        );
+        write_fixture_file(
+            &wing.join("go.mod"),
+            &format!(
+                "replace github.com/daeuniverse/dae => ./dae-core\nreplace github.com/daeuniverse/outbound => {}\nreplace github.com/daeuniverse/quic-go => {}\n",
+                path_string(&outbound),
+                path_string(&quic_go)
+            ),
+        );
+        write_fixture_file(
+            &wing.join("dae-core/go.mod"),
+            &format!(
+                "replace github.com/daeuniverse/outbound => {}\nreplace github.com/daeuniverse/quic-go => {}\n",
+                path_string(&outbound),
+                path_string(&quic_go)
+            ),
+        );
+        let options = ProductChainRecertificationOptions {
+            dae_wing_repo: wing.clone(),
+            daed_repo: daed.clone(),
+            outbound_repo: outbound,
+            quic_go_repo: quic_go,
+            go_mod_file: dae_go_mod,
+            ..ProductChainRecertificationOptions::default()
+        };
+        let topology = product_chain_topology(&options);
+        let report = go_mod_dependency_boundary_json(&options, &topology);
+        assert_eq!(topology.kind, ProductChainTopologyKind::Daed2Wing);
+        assert_eq!(
+            report["topology"].as_str().unwrap(),
+            "daed2.0-web-wing-daecore"
+        );
+        assert!(
+            report["outbound_quic_go_dependency_boundary_preserved"]
+                .as_bool()
+                .unwrap()
+        );
+        assert!(
+            report["wing"]["dae_core_replace_preserved"]
+                .as_bool()
+                .unwrap()
+        );
+        assert_eq!(
+            report["wing"]["outbound_replace_target"].as_str().unwrap(),
+            "local"
+        );
+        assert_eq!(
+            report["wing"]["quic_go_replace_target"].as_str().unwrap(),
+            "local"
+        );
+        assert!(
+            report["dae_core"]["outbound_quic_go_dependency_boundary_preserved"]
+                .as_bool()
+                .unwrap()
+        );
+        assert_eq!(
+            report["dae_core"]["outbound_replace_target"]
+                .as_str()
+                .unwrap(),
+            "local"
+        );
+        assert_eq!(
+            report["dae_core"]["quic_go_replace_target"]
+                .as_str()
+                .unwrap(),
+            "local"
         );
         let _ = std::fs::remove_dir_all(root);
     }
