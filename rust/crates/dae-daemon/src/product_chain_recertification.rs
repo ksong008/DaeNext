@@ -1294,8 +1294,19 @@ fn materialize_local_validation_fresh_install_plan(
     let candidate_validate =
         candidate_validate_report(requested, binary_source, staged_config_source.as_deref());
     let candidate_validate_passed = candidate_validate["passed"].as_bool().unwrap_or(false);
-    let resident_run_service_contract_ready = false;
-    let reload_command_service_contract_ready = false;
+    let candidate_service_contract = candidate_service_contract_report(requested, binary_source);
+    let resident_run_service_contract_ready =
+        candidate_service_contract["resident_run_service_contract_ready"]
+            .as_bool()
+            .unwrap_or(false);
+    let reload_command_service_contract_ready =
+        candidate_service_contract["reload_command_service_contract_ready"]
+            .as_bool()
+            .unwrap_or(false);
+    let resident_production_dataplane_ready =
+        candidate_service_contract["resident_production_dataplane_ready"]
+            .as_bool()
+            .unwrap_or(false);
 
     let mut blockers = Vec::new();
     if requested && !fresh_install_host_state_confirmed {
@@ -1354,8 +1365,10 @@ fn materialize_local_validation_fresh_install_plan(
             "candidate_validate_passed": candidate_validate_passed,
             "resident_run_service_contract_ready": resident_run_service_contract_ready,
             "reload_command_service_contract_ready": reload_command_service_contract_ready,
+            "resident_production_dataplane_ready": resident_production_dataplane_ready,
         },
         "candidate_validate": candidate_validate,
+        "candidate_service_contract": candidate_service_contract,
         "inputs": {
             "binary_source": binary_source.map(path_string),
             "binary_source_exists": binary_source_exists,
@@ -1391,6 +1404,7 @@ fn materialize_local_validation_fresh_install_plan(
             "rerun daed2.0 product-chain validation after rollback"
         ],
         "read_only": true,
+        "boundary": "local-validation service install may exercise resident run and reload; resident production forwarding remains separately gated",
         "source": [
             "DAEX_RUST_REBUILD_PLAN_2026-05-16.md:后续阶段 3 local-validation fresh-install 输入冻结",
             "DAENEW_RUST_REBUILD_MEMO_2026-05-16.md:default-path-service-runtime-contract"
@@ -1493,6 +1507,60 @@ fn candidate_validate_report(
             "exit_code": Value::Null,
             "stdout": "",
             "stderr": err.to_string(),
+        }),
+    }
+}
+
+fn candidate_service_contract_report(requested: bool, binary_source: Option<&Path>) -> Value {
+    let executable = requested && binary_source.is_some_and(Path::is_file);
+    if !executable {
+        return json!({
+            "executed": false,
+            "passed": false,
+            "command": Value::Null,
+            "exit_code": Value::Null,
+            "stdout": "",
+            "stderr": "",
+            "resident_run_service_contract_ready": false,
+            "reload_command_service_contract_ready": false,
+            "resident_production_dataplane_ready": false,
+        });
+    }
+    let binary_source = binary_source.unwrap();
+    let command = vec![path_string(binary_source), "service-contract".to_owned()];
+    match Command::new(binary_source).arg("service-contract").output() {
+        Ok(output) => {
+            let stdout = bounded_command_output(&output.stdout);
+            let capability = serde_json::from_slice::<Value>(&output.stdout).unwrap_or(Value::Null);
+            let resident_run_ready = capability["resident_run_service_contract_ready"]
+                .as_bool()
+                .unwrap_or(false);
+            let reload_ready = capability["reload_command_service_contract_ready"]
+                .as_bool()
+                .unwrap_or(false);
+            json!({
+                "executed": true,
+                "passed": output.status.success() && resident_run_ready && reload_ready,
+                "command": command,
+                "exit_code": output.status.code(),
+                "stdout": stdout,
+                "stderr": bounded_command_output(&output.stderr),
+                "resident_run_service_contract_ready": output.status.success() && resident_run_ready,
+                "reload_command_service_contract_ready": output.status.success() && reload_ready,
+                "resident_production_dataplane_ready": capability["resident_production_dataplane_ready"].as_bool().unwrap_or(false),
+                "capability": capability,
+            })
+        }
+        Err(err) => json!({
+            "executed": true,
+            "passed": false,
+            "command": command,
+            "exit_code": Value::Null,
+            "stdout": "",
+            "stderr": err.to_string(),
+            "resident_run_service_contract_ready": false,
+            "reload_command_service_contract_ready": false,
+            "resident_production_dataplane_ready": false,
         }),
     }
 }

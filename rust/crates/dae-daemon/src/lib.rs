@@ -15,6 +15,7 @@ pub mod reload_owner_benchmark;
 pub mod reload_owner_handoff;
 pub mod run_entrypoint;
 pub mod runner;
+pub mod service_contract;
 pub mod signal;
 pub mod version;
 
@@ -66,5 +67,9 @@ pub use reload_owner_handoff::{
 };
 pub use run_entrypoint::{default_stage153_root, stage153_run_entrypoint_preflight_report};
 pub use runner::{DaemonOutput, run_with_args_and_version};
+pub use service_contract::{
+    ABORT_FILE_PATH, PID_FILE_PATH, PROGRESS_FILE_PATH, ReloadOptions, ResidentRunOptions,
+    reload_resident_service, run_resident_service, service_contract_capabilities,
+};
 pub use signal::{default_stage152_root, stage152_signal_control_plane_smoke_report};
 pub use version::version_from_env;
