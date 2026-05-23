@@ -119,6 +119,32 @@ fn daemon_runner_run_command_requires_ack_for_production_dataplane_smoke() {
 }
 
 #[test]
+fn daemon_runner_run_command_requires_ack_for_matched_default_benchmark() {
+    let root = std::env::temp_dir().join(format!(
+        "dae-daemon-run-matched-benchmark-noack-{}",
+        std::process::id()
+    ));
+    let config = root.join("config").join("run.dae");
+    std::fs::create_dir_all(config.parent().unwrap()).unwrap();
+    std::fs::write(&config, "global {\n  log_level: info\n}\n").unwrap();
+    let output = run_with_args_and_version(
+        [
+            "run".to_owned(),
+            "--config".to_owned(),
+            config.display().to_string(),
+            "--root".to_owned(),
+            root.display().to_string(),
+            "--execute-matched-default-benchmark".to_owned(),
+            "--exit-after-ready".to_owned(),
+        ],
+        "test-version",
+    );
+    assert_eq!(output.exit_code, 1);
+    assert!(output.stderr.contains("--ack-root-gate"));
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[test]
 fn run_default_optin_report_executes_bounded_lifecycle_and_smokes() {
     let root =
         std::env::temp_dir().join(format!("dae-daemon-run-report-test-{}", std::process::id()));
@@ -176,6 +202,16 @@ fn run_default_optin_report_executes_bounded_lifecycle_and_smokes() {
             .as_bool()
             .unwrap()
     );
+    assert!(
+        !report["matched_default_benchmark"]["execute_benchmark"]
+            .as_bool()
+            .unwrap()
+    );
+    assert!(
+        !report["matched_go_rust_default_daemon_benchmark_recorded"]
+            .as_bool()
+            .unwrap()
+    );
     assert_eq!(
         report["production_dataplane_admission_scope"]
             .as_str()
@@ -210,6 +246,7 @@ fn daemon_runner_run_command_outputs_json() {
             "--disable-timestamp".to_owned(),
             "--disable-sudo".to_owned(),
             "--dataplane-benchmark-iters=7".to_owned(),
+            "--matched-benchmark-iterations=9".to_owned(),
             "--exit-after-ready".to_owned(),
         ],
         "test-version",
@@ -233,6 +270,17 @@ fn daemon_runner_run_command_outputs_json() {
     );
     assert!(
         !json["production_dataplane_harness_executed"]
+            .as_bool()
+            .unwrap()
+    );
+    assert_eq!(
+        json["matched_default_benchmark"]["iterations_requested"]
+            .as_u64()
+            .unwrap(),
+        9
+    );
+    assert!(
+        !json["matched_default_benchmark"]["execute_benchmark"]
             .as_bool()
             .unwrap()
     );

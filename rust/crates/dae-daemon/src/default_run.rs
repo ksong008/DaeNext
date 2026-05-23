@@ -1,11 +1,13 @@
 use std::fs;
+use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 
 use dae_core_types::reload::RELOAD_DONE;
 use serde_json::{Value, json};
 
 use crate::{
-    ProductionDataplaneHarnessOptions, production_dataplane_harness_report,
+    MatchedDefaultBenchmarkOptions, ProductionDataplaneHarnessOptions,
+    matched_default_benchmark_report, production_dataplane_harness_report,
     stage160_listener_ebpf_preflight_harness_report, stage165_reload_owner_handoff_smoke_report,
 };
 
@@ -20,6 +22,7 @@ pub struct RunOptions {
     pub listener_smoke: bool,
     pub reload_smoke: bool,
     pub production_dataplane_harness: ProductionDataplaneHarnessOptions,
+    pub matched_default_benchmark: MatchedDefaultBenchmarkOptions,
 }
 
 impl RunOptions {
@@ -35,6 +38,7 @@ impl RunOptions {
             listener_smoke: true,
             reload_smoke: true,
             production_dataplane_harness: ProductionDataplaneHarnessOptions::default(),
+            matched_default_benchmark: MatchedDefaultBenchmarkOptions::default(),
         }
     }
 }
@@ -77,6 +81,7 @@ pub fn run_default_optin_report(options: &RunOptions, version: &str) -> Result<V
 
     let run_dir = options.root.join("run");
     let manifest_file = run_dir.join("dae-daemon-optin-run.json");
+    let run_config_file = run_dir.join("input-config.dae");
     let pid_file = run_dir.join("dae-daemon-optin.pid");
     let progress_file = run_dir.join("dae-daemon-optin.progress");
     let sdnotify_file = run_dir.join("sdnotify.ready");
@@ -95,6 +100,10 @@ pub fn run_default_optin_report(options: &RunOptions, version: &str) -> Result<V
         fs::write(&pid_file, format!("{}\n", std::process::id()))
             .map_err(|err| format!("failed to write run pid file: {err}"))?;
     }
+    fs::write(&run_config_file, &config)
+        .map_err(|err| format!("failed to write run input config copy: {err}"))?;
+    fs::set_permissions(&run_config_file, fs::Permissions::from_mode(0o600))
+        .map_err(|err| format!("failed to chmod run input config copy: {err}"))?;
     write_progress(&progress_file, RELOAD_DONE, "")?;
     fs::write(&sdnotify_file, "READY=1\n")
         .map_err(|err| format!("failed to write run sdnotify ready file: {err}"))?;
@@ -113,6 +122,11 @@ pub fn run_default_optin_report(options: &RunOptions, version: &str) -> Result<V
     };
     let production_dataplane =
         production_dataplane_harness_report(&options.root, &options.production_dataplane_harness)?;
+    let matched_benchmark = matched_default_benchmark_report(
+        &options.root,
+        &run_config_file,
+        &options.matched_default_benchmark,
+    )?;
 
     let listener_smoke_passed = !options.listener_smoke
         || listener["tcp_udp_loopback_listener_smoke_passed"]
@@ -130,17 +144,22 @@ pub fn run_default_optin_report(options: &RunOptions, version: &str) -> Result<V
         production_dataplane["production_dataplane_harness_passed"]
             .as_bool()
             .unwrap_or(false);
+    let matched_benchmark_recorded =
+        matched_benchmark["matched_go_rust_default_daemon_benchmark_recorded"]
+            .as_bool()
+            .unwrap_or(false);
 
     fs::write(
         &options.logfile,
         format!(
-            "dae-daemon-optin run: config={} bytes={} listener_smoke_passed={} reload_smoke_passed={} production_dataplane_harness_executed={} production_dataplane_harness_passed={}\n",
+            "dae-daemon-optin run: config={} bytes={} listener_smoke_passed={} reload_smoke_passed={} production_dataplane_harness_executed={} production_dataplane_harness_passed={} matched_benchmark_recorded={}\n",
             path_string(&options.config),
             config.len(),
             listener_smoke_passed,
             reload_smoke_passed,
             production_dataplane_harness_executed,
-            production_dataplane_harness_passed
+            production_dataplane_harness_passed,
+            matched_benchmark_recorded
         ),
     )
     .map_err(|err| format!("failed to write run log file: {err}"))?;
@@ -152,6 +171,7 @@ pub fn run_default_optin_report(options: &RunOptions, version: &str) -> Result<V
         "root": path_string(&options.root),
         "run_dir": path_string(&run_dir),
         "config_file": path_string(&options.config),
+        "run_config_file": path_string(&run_config_file),
         "config_bytes": config.len(),
         "config_lines": config.lines().count(),
         "log_file": path_string(&options.logfile),
@@ -193,6 +213,7 @@ pub fn run_default_optin_report(options: &RunOptions, version: &str) -> Result<V
     report["production_dataplane_harness_executed"] = json!(production_dataplane_harness_executed);
     report["production_dataplane_harness_passed"] = json!(production_dataplane_harness_passed);
     report["production_dataplane_harness"] = production_dataplane;
+    report["matched_default_benchmark"] = matched_benchmark;
     for key in [
         ("production_run_command_replaced", false),
         ("production_pid_progress_paths_mutated", false),
@@ -203,8 +224,11 @@ pub fn run_default_optin_report(options: &RunOptions, version: &str) -> Result<V
         ("rust_default_control_plane_entrypoint_admitted", false),
         ("production_dataplane_admitted", false),
         ("reload_runtime_parity_admitted", false),
-        ("benchmark_executable_now", false),
-        ("matched_go_rust_default_daemon_benchmark_recorded", false),
+        ("benchmark_executable_now", matched_benchmark_recorded),
+        (
+            "matched_go_rust_default_daemon_benchmark_recorded",
+            matched_benchmark_recorded,
+        ),
         ("true_rust_default_daemon_admitted", false),
         ("default_switch_allowed", false),
         ("default_path_mutation_allowed", false),
@@ -224,8 +248,10 @@ pub fn run_default_optin_report(options: &RunOptions, version: &str) -> Result<V
     let mut remaining_blockers = vec![
         "opt-in run now exists, but it still uses isolated pid/progress paths",
         "reload owner handoff is still non-production until proven against production tc/netns attach",
-        "matched Go/Rust default daemon benchmark remains blocked",
     ];
+    if !matched_benchmark_recorded {
+        remaining_blockers.push("matched Go/Rust default daemon benchmark remains blocked");
+    }
     if production_dataplane_harness_passed {
         remaining_blockers.push(
             "production dataplane evidence is integrated into run, but still harness-only and not default daemon owned",

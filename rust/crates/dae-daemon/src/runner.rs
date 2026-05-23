@@ -101,6 +101,14 @@ fn run_default_optin_command(args: &[String], version: &str) -> DaemonOutput {
     let mut ack_root_gate = false;
     let mut dataplane_benchmark_iters = 5_u32;
     let mut cargo_manifest: Option<PathBuf> = None;
+    let mut matched_default_benchmark = false;
+    let mut matched_benchmark_iterations = 3_u32;
+    let mut matched_ready_timeout_ms = 15_000_u64;
+    let mut go_tool: Option<PathBuf> = None;
+    let mut go_work: Option<PathBuf> = None;
+    let mut go_binary: Option<PathBuf> = None;
+    let mut rust_binary: Option<PathBuf> = None;
+    let mut source_dir: Option<PathBuf> = None;
     let mut iter = args.iter();
     while let Some(arg) = iter.next() {
         match arg.as_str() {
@@ -170,6 +178,94 @@ fn run_default_optin_command(args: &[String], version: &str) -> DaemonOutput {
             _ if arg.starts_with("--cargo-manifest=") => {
                 cargo_manifest = arg.split_once('=').map(|(_, value)| value.into());
             }
+            "--execute-matched-default-benchmark" => matched_default_benchmark = true,
+            "--matched-benchmark-iterations" => {
+                let Some(value) = iter.next() else {
+                    return DaemonOutput::usage("missing run --matched-benchmark-iterations value");
+                };
+                matched_benchmark_iterations = match value.parse() {
+                    Ok(value) => value,
+                    Err(_) => {
+                        return DaemonOutput::usage(
+                            "invalid run --matched-benchmark-iterations value",
+                        );
+                    }
+                };
+            }
+            _ if arg.starts_with("--matched-benchmark-iterations=") => {
+                matched_benchmark_iterations = match arg.split_once('=').unwrap().1.parse() {
+                    Ok(value) => value,
+                    Err(_) => {
+                        return DaemonOutput::usage(
+                            "invalid run --matched-benchmark-iterations value",
+                        );
+                    }
+                };
+            }
+            "--matched-ready-timeout-ms" => {
+                let Some(value) = iter.next() else {
+                    return DaemonOutput::usage("missing run --matched-ready-timeout-ms value");
+                };
+                matched_ready_timeout_ms = match value.parse() {
+                    Ok(value) => value,
+                    Err(_) => {
+                        return DaemonOutput::usage("invalid run --matched-ready-timeout-ms value");
+                    }
+                };
+            }
+            _ if arg.starts_with("--matched-ready-timeout-ms=") => {
+                matched_ready_timeout_ms = match arg.split_once('=').unwrap().1.parse() {
+                    Ok(value) => value,
+                    Err(_) => {
+                        return DaemonOutput::usage("invalid run --matched-ready-timeout-ms value");
+                    }
+                };
+            }
+            "--go-tool" => {
+                let Some(value) = iter.next() else {
+                    return DaemonOutput::usage("missing run --go-tool value");
+                };
+                go_tool = Some(value.into());
+            }
+            _ if arg.starts_with("--go-tool=") => {
+                go_tool = arg.split_once('=').map(|(_, value)| value.into());
+            }
+            "--go-work" => {
+                let Some(value) = iter.next() else {
+                    return DaemonOutput::usage("missing run --go-work value");
+                };
+                go_work = Some(value.into());
+            }
+            _ if arg.starts_with("--go-work=") => {
+                go_work = arg.split_once('=').map(|(_, value)| value.into());
+            }
+            "--go-binary" => {
+                let Some(value) = iter.next() else {
+                    return DaemonOutput::usage("missing run --go-binary value");
+                };
+                go_binary = Some(value.into());
+            }
+            _ if arg.starts_with("--go-binary=") => {
+                go_binary = arg.split_once('=').map(|(_, value)| value.into());
+            }
+            "--rust-binary" => {
+                let Some(value) = iter.next() else {
+                    return DaemonOutput::usage("missing run --rust-binary value");
+                };
+                rust_binary = Some(value.into());
+            }
+            _ if arg.starts_with("--rust-binary=") => {
+                rust_binary = arg.split_once('=').map(|(_, value)| value.into());
+            }
+            "--source-dir" => {
+                let Some(value) = iter.next() else {
+                    return DaemonOutput::usage("missing run --source-dir value");
+                };
+                source_dir = Some(value.into());
+            }
+            _ if arg.starts_with("--source-dir=") => {
+                source_dir = arg.split_once('=').map(|(_, value)| value.into());
+            }
             "--exit-after-ready" | "--once" => {}
             _ => return DaemonOutput::usage(format!("unsupported run argument: {arg}")),
         }
@@ -191,6 +287,19 @@ fn run_default_optin_command(args: &[String], version: &str) -> DaemonOutput {
     options.production_dataplane_harness.benchmark_iters = dataplane_benchmark_iters;
     if let Some(cargo_manifest) = cargo_manifest {
         options.production_dataplane_harness.cargo_manifest = cargo_manifest;
+    }
+    options.matched_default_benchmark.execute = matched_default_benchmark;
+    options.matched_default_benchmark.ack_root_gate = ack_root_gate;
+    options.matched_default_benchmark.iterations = matched_benchmark_iterations;
+    options.matched_default_benchmark.ready_timeout_ms = matched_ready_timeout_ms;
+    if let Some(go_tool) = go_tool {
+        options.matched_default_benchmark.go_tool = go_tool;
+    }
+    options.matched_default_benchmark.go_work = go_work;
+    options.matched_default_benchmark.go_binary = go_binary;
+    options.matched_default_benchmark.rust_binary = rust_binary;
+    if let Some(source_dir) = source_dir {
+        options.matched_default_benchmark.source_dir = source_dir;
     }
 
     match run_default_optin_report(&options, version) {
