@@ -5,6 +5,7 @@ pub mod default_run_identity;
 pub mod identity;
 pub mod lifecycle;
 pub mod listener_ebpf_preflight;
+pub mod matched_default_benchmark;
 pub mod preflight;
 pub mod production_dataplane_harness;
 pub mod reload_owner_benchmark;
@@ -14,6 +15,8 @@ pub mod runner;
 pub mod signal;
 pub mod version;
 
+#[cfg(test)]
+mod matched_default_benchmark_tests;
 #[cfg(test)]
 mod tests;
 
@@ -39,6 +42,9 @@ pub use lifecycle::{
 };
 pub use listener_ebpf_preflight::{
     default_stage160_root, stage160_listener_ebpf_preflight_harness_report,
+};
+pub use matched_default_benchmark::{
+    MatchedDefaultBenchmarkOptions, matched_default_benchmark_report,
 };
 pub use preflight::stage149_identity_preflight_report;
 pub use production_dataplane_harness::{
