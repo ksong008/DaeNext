@@ -134,6 +134,9 @@ pub fn product_chain_recertification_report(
         &mut report,
         production_run_command_artifacts,
     );
+    let production_replacement_readiness =
+        materialize_production_replacement_readiness_report(&report, &artifact_dir)?;
+    attach_production_replacement_readiness(&mut report, production_replacement_readiness);
     let encoded = serde_json::to_vec_pretty(&report)
         .map_err(|err| format!("failed to encode product-chain recertification report: {err}"))?;
     fs::write(&manifest_file, encoded).map_err(|err| {
@@ -901,6 +904,177 @@ fn attach_production_run_command_replacement_artifacts(report: &mut Value, artif
                 }
             }
         }
+    }
+}
+
+fn materialize_production_replacement_readiness_report(
+    report: &Value,
+    artifact_dir: &Path,
+) -> Result<Value, String> {
+    let readiness_file = artifact_dir.join("production-replacement-readiness.json");
+    let plan = &report["production_run_command_replacement_plan"];
+    let apply_plan = &plan["apply_plan"];
+    let artifact_materialization = &plan["artifact_materialization"];
+    let requested = apply_plan["requested"].as_bool().unwrap_or(false);
+    let product_chain_clean = report["product_chain_recertification_clean"]
+        .as_bool()
+        .unwrap_or(false);
+    let replacement_plan_admitted = plan["admitted"].as_bool().unwrap_or(false);
+    let execute_allowed = plan["execute_allowed"].as_bool().unwrap_or(false);
+    let host_mutation_allowed = plan["host_mutation_allowed"].as_bool().unwrap_or(false);
+    let apply_plan_admitted = apply_plan["admitted"].as_bool().unwrap_or(false);
+    let apply_manifest_materialized = apply_plan["apply_manifest_materialized"]
+        .as_bool()
+        .unwrap_or(false);
+    let service_diff_materialized = apply_plan["service_diff_materialized"]
+        .as_bool()
+        .unwrap_or(false);
+    let backup_manifest_materialized = artifact_materialization["backup_manifest_materialized"]
+        .as_bool()
+        .unwrap_or(false);
+    let rollback_script_materialized = artifact_materialization["rollback_script_materialized"]
+        .as_bool()
+        .unwrap_or(false);
+    let go_fallback_required = plan["go_fallback_required"].as_bool().unwrap_or(false);
+    let no_host_write_executed = !plan["actual_mutation_executed"].as_bool().unwrap_or(true)
+        && !apply_plan["actual_host_write_executed"]
+            .as_bool()
+            .unwrap_or(true)
+        && !apply_plan["actual_mutation_executed"]
+            .as_bool()
+            .unwrap_or(true)
+        && !report["production_run_command_replaced"]
+            .as_bool()
+            .unwrap_or(true);
+
+    let mut blockers = Vec::new();
+    if requested && !product_chain_clean {
+        blockers.push("product-chain recertification is not clean");
+    }
+    if requested && !replacement_plan_admitted {
+        blockers.push("production run command replacement plan is not admitted");
+    }
+    if requested && !execute_allowed {
+        blockers.push("production run command replacement execute gate is not allowed");
+    }
+    if requested && !host_mutation_allowed {
+        blockers.push("host mutation allow admission is not present");
+    }
+    if requested && !apply_plan_admitted {
+        blockers.push("production run command apply plan is not admitted");
+    }
+    if requested && !apply_manifest_materialized {
+        blockers.push("production run command apply manifest is not materialized");
+    }
+    if requested && !service_diff_materialized {
+        blockers.push("production run command service diff is not materialized");
+    }
+    if requested && !backup_manifest_materialized {
+        blockers.push("production run command backup manifest is not materialized");
+    }
+    if requested && !rollback_script_materialized {
+        blockers.push("production run command rollback script is not materialized");
+    }
+    if requested && !go_fallback_required {
+        blockers.push("Go fallback requirement is not recorded");
+    }
+    if requested && !no_host_write_executed {
+        blockers.push("host write or production run command replacement was already executed");
+    }
+
+    let ready_for_manual_authorization = requested && blockers.is_empty();
+    let readiness = json!({
+        "status": if ready_for_manual_authorization { "pass" } else if requested { "blocked" } else { "not-requested" },
+        "requested": requested,
+        "ready_for_manual_authorization": ready_for_manual_authorization,
+        "manual_authorization_required": true,
+        "host_write_allowed": false,
+        "host_write_executed": false,
+        "actual_mutation_executed": false,
+        "production_run_command_replaced": false,
+        "readiness_blockers": blockers,
+        "readiness_file": path_string(&readiness_file),
+        "required_artifacts": {
+            "apply_manifest_file": apply_plan["apply_manifest_file"].clone(),
+            "apply_manifest_materialized": apply_manifest_materialized,
+            "service_diff_file": apply_plan["service_diff_file"].clone(),
+            "service_diff_materialized": service_diff_materialized,
+            "backup_manifest_file": artifact_materialization["backup_manifest_file"].clone(),
+            "backup_manifest_materialized": backup_manifest_materialized,
+            "rollback_script": artifact_materialization["rollback_script"].clone(),
+            "rollback_script_materialized": rollback_script_materialized,
+        },
+        "checks": {
+            "product_chain_recertification_clean": product_chain_clean,
+            "replacement_plan_admitted": replacement_plan_admitted,
+            "execute_allowed": execute_allowed,
+            "host_mutation_allowed": host_mutation_allowed,
+            "apply_plan_admitted": apply_plan_admitted,
+            "go_fallback_required": go_fallback_required,
+            "no_host_write_executed": no_host_write_executed,
+            "daed2_product_chain_used": report["product_chain_topology"]["daed2_wing_repo_used"].clone(),
+            "product_chain_switch_allowed": report["product_chain_switch_allowed"].clone(),
+        },
+        "host_inventory": {
+            "usr_bin_dae_exists": Path::new("/usr/bin/dae").exists(),
+            "usr_local_bin_dae_exists": Path::new("/usr/local/bin/dae").exists(),
+            "service_file": report["paths"]["service_file"].clone(),
+        },
+        "manual_authorization_conditions": [
+            "review production-replacement-readiness.json",
+            "review production-run-command-replacement-apply.json",
+            "review production-run-command-replacement-service.diff",
+            "review backup-manifest.json",
+            "review rollback-production-run-command-replacement.sh",
+            "confirm Go fallback and daed2.0 product-chain paths",
+            "explicitly authorize controlled production host write"
+        ],
+        "source": [
+            "DAEX_RUST_REBUILD_PLAN_2026-05-16.md:后续阶段 1",
+            "DAENEW_RUST_REBUILD_MEMO_2026-05-16.md:install/dae.service",
+            "DAENEW_RUST_REBUILD_MEMO_2026-05-16.md:pid-progress-reload-contract"
+        ],
+    });
+    let encoded = serde_json::to_vec_pretty(&readiness).map_err(|err| {
+        format!("failed to encode production replacement readiness report: {err}")
+    })?;
+    fs::write(&readiness_file, encoded).map_err(|err| {
+        format!(
+            "failed to write production replacement readiness report {}: {err}",
+            path_string(&readiness_file)
+        )
+    })?;
+    Ok(readiness)
+}
+
+fn attach_production_replacement_readiness(report: &mut Value, readiness: Value) {
+    let Some(report_object) = report.as_object_mut() else {
+        return;
+    };
+    report_object.insert(
+        "production_replacement_readiness_file".to_owned(),
+        readiness["readiness_file"].clone(),
+    );
+    report_object.insert(
+        "production_replacement_ready_for_manual_authorization".to_owned(),
+        readiness["ready_for_manual_authorization"].clone(),
+    );
+    report_object.insert(
+        "production_replacement_readiness".to_owned(),
+        readiness.clone(),
+    );
+    if let Some(plan) = report_object
+        .get_mut("production_run_command_replacement_plan")
+        .and_then(Value::as_object_mut)
+    {
+        plan.insert(
+            "production_replacement_readiness_file".to_owned(),
+            readiness["readiness_file"].clone(),
+        );
+        plan.insert(
+            "production_replacement_ready_for_manual_authorization".to_owned(),
+            readiness["ready_for_manual_authorization"].clone(),
+        );
     }
 }
 
@@ -2284,6 +2458,87 @@ mod tests {
         let service_diff = std::fs::read_to_string(&service_diff_file).unwrap();
         assert!(service_diff.contains("-ExecStart=/usr/bin/dae run"));
         assert!(service_diff.contains("+ExecStart=dae-daemon-optin run"));
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn product_chain_production_replacement_readiness_report_requires_manual_authorization() {
+        let root = std::env::temp_dir().join(format!(
+            "dae-daemon-product-chain-replacement-readiness-{}",
+            std::process::id()
+        ));
+        let artifact_dir = root.join("artifact");
+        let manifest_file = artifact_dir.join("product-chain-recertification.json");
+        let service_file = root.join("dae.service");
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::write(
+            &service_file,
+            "ExecStartPre=/usr/bin/dae validate -c /etc/dae/config.dae\nExecStart=/usr/bin/dae run --disable-timestamp -c /etc/dae/config.dae\nExecReload=/usr/bin/dae reload $MAINPID\n",
+        )
+        .unwrap();
+        let options = ProductChainRecertificationOptions {
+            execute: true,
+            default_path_mutation_requested: true,
+            production_run_command_replacement_dry_run_requested: true,
+            production_run_command_replacement_execute_requested: true,
+            production_run_command_replacement_apply_plan_requested: true,
+            host_default_path_mutation_allow_requested: true,
+            service_file,
+            ..ProductChainRecertificationOptions::default()
+        };
+        let mut report = report_value(
+            &options,
+            &artifact_dir,
+            &manifest_file,
+            ProductChainAdmissionEvidence {
+                true_rust_default_daemon_admitted: true,
+                production_dataplane_admitted: true,
+                reload_runtime_parity_admitted: true,
+                matched_benchmark_recorded: true,
+            },
+            Some(clean_product_chain_evidence()),
+        );
+        let artifacts = materialize_production_run_command_replacement_artifacts(
+            &options,
+            &report,
+            &artifact_dir,
+        )
+        .unwrap();
+        attach_production_run_command_replacement_artifacts(&mut report, artifacts);
+        let readiness =
+            materialize_production_replacement_readiness_report(&report, &artifact_dir).unwrap();
+        attach_production_replacement_readiness(&mut report, readiness.clone());
+
+        assert_eq!(readiness["status"].as_str().unwrap(), "pass");
+        assert!(
+            readiness["ready_for_manual_authorization"]
+                .as_bool()
+                .unwrap()
+        );
+        assert!(
+            readiness["manual_authorization_required"]
+                .as_bool()
+                .unwrap()
+        );
+        assert!(!readiness["host_write_allowed"].as_bool().unwrap());
+        assert!(!readiness["host_write_executed"].as_bool().unwrap());
+        assert!(
+            !readiness["production_run_command_replaced"]
+                .as_bool()
+                .unwrap()
+        );
+        assert!(
+            readiness["readiness_blockers"]
+                .as_array()
+                .unwrap()
+                .is_empty()
+        );
+        assert!(
+            report["production_replacement_ready_for_manual_authorization"]
+                .as_bool()
+                .unwrap()
+        );
+        assert!(std::path::Path::new(readiness["readiness_file"].as_str().unwrap()).exists());
         let _ = std::fs::remove_dir_all(root);
     }
 
