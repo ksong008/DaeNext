@@ -145,6 +145,7 @@ fn run_default_optin_command(args: &[String], version: &str) -> DaemonOutput {
     let mut request_default_path_mutation = false;
     let mut plan_production_run_command_replacement = false;
     let mut execute_production_run_command_replacement = false;
+    let mut allow_host_default_path_mutation = false;
     let mut iter = args.iter();
     while let Some(arg) = iter.next() {
         match arg.as_str() {
@@ -680,6 +681,9 @@ fn run_default_optin_command(args: &[String], version: &str) -> DaemonOutput {
             "--execute-production-run-command-replacement" => {
                 execute_production_run_command_replacement = true;
             }
+            "--allow-host-default-path-mutation" => {
+                allow_host_default_path_mutation = true;
+            }
             "--product-chain-dae-repo" => {
                 let Some(value) = iter.next() else {
                     return DaemonOutput::usage("missing run --product-chain-dae-repo value");
@@ -852,6 +856,9 @@ fn run_default_optin_command(args: &[String], version: &str) -> DaemonOutput {
         .product_chain_recertification
         .production_run_command_replacement_execute_requested =
         execute_production_run_command_replacement;
+    options
+        .product_chain_recertification
+        .host_default_path_mutation_allow_requested = allow_host_default_path_mutation;
     if let Some(path) = product_chain_dae_repo {
         options.product_chain_recertification.dae_repo = path;
     }
