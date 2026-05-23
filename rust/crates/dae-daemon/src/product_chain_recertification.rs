@@ -119,12 +119,18 @@ pub fn product_chain_recertification_report(
         )
     })?;
     let evidence = collect_evidence(options);
-    let report = report_value(
+    let mut report = report_value(
         options,
         &artifact_dir,
         &manifest_file,
         admission,
         Some(evidence),
+    );
+    let production_run_command_artifacts =
+        materialize_production_run_command_replacement_artifacts(options, &report, &artifact_dir)?;
+    attach_production_run_command_replacement_artifacts(
+        &mut report,
+        production_run_command_artifacts,
     );
     let encoded = serde_json::to_vec_pretty(&report)
         .map_err(|err| format!("failed to encode product-chain recertification report: {err}"))?;
@@ -566,6 +572,188 @@ fn production_run_command_replacement_plan_json(
         json!("read-only-production-run-command-replacement-dry-run-plan"),
     );
     Value::Object(plan)
+}
+
+fn materialize_production_run_command_replacement_artifacts(
+    options: &ProductChainRecertificationOptions,
+    report: &Value,
+    artifact_dir: &Path,
+) -> Result<Value, String> {
+    let plan = &report["production_run_command_replacement_plan"];
+    let requested = plan["requested"].as_bool().unwrap_or(false);
+    if !requested {
+        return Ok(json!({
+            "status": "not-requested",
+            "executed": false,
+            "requested": false,
+        }));
+    }
+
+    let backup_artifact_dir = artifact_dir.join("production-run-command-replacement-backup");
+    let backup_manifest_file = backup_artifact_dir.join("backup-manifest.json");
+    let backup_service_file = backup_artifact_dir.join("dae.service");
+    let backup_usr_bin_dae = backup_artifact_dir.join("usr-bin-dae");
+    let rollback_script = artifact_dir.join("rollback-production-run-command-replacement.sh");
+    fs::create_dir_all(&backup_artifact_dir).map_err(|err| {
+        format!(
+            "failed to create production run command replacement backup dir {}: {err}",
+            path_string(&backup_artifact_dir)
+        )
+    })?;
+
+    let backup_manifest = json!({
+        "status": "pass",
+        "requested": true,
+        "executed": true,
+        "backup_artifact_dir": path_string(&backup_artifact_dir),
+        "backup_manifest_file": path_string(&backup_manifest_file),
+        "service_file": path_string(&options.service_file),
+        "backup_service_file": path_string(&backup_service_file),
+        "usr_bin_dae": {
+            "path": "/usr/bin/dae",
+            "exists": Path::new("/usr/bin/dae").exists(),
+            "backup_file": path_string(&backup_usr_bin_dae),
+            "backup_copy_executed": false,
+        },
+        "usr_local_bin_dae": {
+            "path": "/usr/local/bin/dae",
+            "exists": Path::new("/usr/local/bin/dae").exists(),
+            "backup_file": path_string(&backup_artifact_dir.join("usr-local-bin-dae")),
+            "backup_copy_executed": false,
+        },
+        "backup_copy_executed": false,
+        "actual_host_mutation_executed": false,
+        "production_run_command_replaced": false,
+        "go_fallback_required": true,
+        "read_only": true,
+        "source": [
+            "DAEX_RUST_REBUILD_PLAN_2026-05-16.md:production-run-command-replacement-artifact-materialization",
+            "DAENEW_RUST_REBUILD_MEMO_2026-05-16.md:cmd-run-reload-validate-service-contract"
+        ],
+    });
+    let encoded = serde_json::to_vec_pretty(&backup_manifest)
+        .map_err(|err| format!("failed to encode production run command backup manifest: {err}"))?;
+    fs::write(&backup_manifest_file, encoded).map_err(|err| {
+        format!(
+            "failed to write production run command backup manifest {}: {err}",
+            path_string(&backup_manifest_file)
+        )
+    })?;
+
+    let rollback_script_content = rollback_script_content(
+        &options.service_file,
+        &backup_service_file,
+        &backup_usr_bin_dae,
+        &backup_manifest_file,
+    );
+    fs::write(&rollback_script, rollback_script_content).map_err(|err| {
+        format!(
+            "failed to write production run command rollback script {}: {err}",
+            path_string(&rollback_script)
+        )
+    })?;
+    make_user_executable(&rollback_script)?;
+
+    Ok(json!({
+        "status": "pass",
+        "requested": true,
+        "executed": true,
+        "backup_artifact_dir": path_string(&backup_artifact_dir),
+        "backup_manifest_file": path_string(&backup_manifest_file),
+        "backup_manifest_materialized": backup_manifest_file.exists(),
+        "rollback_script": path_string(&rollback_script),
+        "rollback_script_materialized": rollback_script.exists(),
+        "rollback_requires_env": "DAE_PRODUCTION_ROLLBACK_EXECUTE=1",
+        "backup_copy_executed": false,
+        "actual_host_mutation_executed": false,
+        "production_run_command_replaced": false,
+        "read_only": true,
+    }))
+}
+
+fn attach_production_run_command_replacement_artifacts(report: &mut Value, artifacts: Value) {
+    let Some(plan) = report
+        .get_mut("production_run_command_replacement_plan")
+        .and_then(Value::as_object_mut)
+    else {
+        return;
+    };
+    plan.insert("artifact_materialization".to_owned(), artifacts.clone());
+    for key in [
+        "backup_manifest_file",
+        "backup_manifest_materialized",
+        "rollback_script",
+        "rollback_script_materialized",
+        "backup_copy_executed",
+    ] {
+        if let Some(value) = artifacts.get(key) {
+            plan.insert(key.to_owned(), value.clone());
+        }
+    }
+}
+
+fn rollback_script_content(
+    service_file: &Path,
+    backup_service_file: &Path,
+    backup_usr_bin_dae: &Path,
+    backup_manifest_file: &Path,
+) -> String {
+    format!(
+        r#"#!/bin/sh
+set -eu
+
+if [ "${{DAE_PRODUCTION_ROLLBACK_EXECUTE:-}}" != "1" ]; then
+  echo "rollback artifact generated in read-only admission mode"
+  echo "review backup manifest: {backup_manifest_file}"
+  echo "set DAE_PRODUCTION_ROLLBACK_EXECUTE=1 only after manual approval"
+  exit 2
+fi
+
+if [ -f {backup_service_file} ]; then
+  cp {backup_service_file} {service_file}
+fi
+
+if [ -f {backup_usr_bin_dae} ]; then
+  cp {backup_usr_bin_dae} /usr/bin/dae
+fi
+
+systemctl daemon-reload
+"#,
+        backup_manifest_file = shell_quote_path(backup_manifest_file),
+        backup_service_file = shell_quote_path(backup_service_file),
+        service_file = shell_quote_path(service_file),
+        backup_usr_bin_dae = shell_quote_path(backup_usr_bin_dae),
+    )
+}
+
+fn shell_quote_path(path: &Path) -> String {
+    let raw = path_string(path);
+    format!("'{}'", raw.replace('\'', "'\\''"))
+}
+
+#[cfg(unix)]
+fn make_user_executable(path: &Path) -> Result<(), String> {
+    use std::os::unix::fs::PermissionsExt;
+
+    let metadata = fs::metadata(path).map_err(|err| {
+        format!(
+            "failed to stat production run command artifact {}: {err}",
+            path_string(path)
+        )
+    })?;
+    let mut permissions = metadata.permissions();
+    permissions.set_mode(0o755);
+    fs::set_permissions(path, permissions).map_err(|err| {
+        format!(
+            "failed to chmod production run command artifact {}: {err}",
+            path_string(path)
+        )
+    })
+}
+
+#[cfg(not(unix))]
+fn make_user_executable(_path: &Path) -> Result<(), String> {
+    Ok(())
 }
 
 fn production_run_command_execution_blockers(plan: &Value) -> Vec<String> {
@@ -1661,6 +1849,70 @@ mod tests {
         assert!(!report["production_run_command_replaced"].as_bool().unwrap());
         assert!(plan["read_only"].as_bool().unwrap());
         assert!(report["read_only"].as_bool().unwrap());
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn product_chain_run_command_replacement_materializes_read_only_artifacts() {
+        let root = std::env::temp_dir().join(format!(
+            "dae-daemon-product-chain-run-command-artifacts-{}",
+            std::process::id()
+        ));
+        let artifact_dir = root.join("artifact");
+        let service_file = root.join("dae.service");
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::write(
+            &service_file,
+            "ExecStart=/usr/bin/dae run --disable-timestamp -c /etc/dae/config.dae\n",
+        )
+        .unwrap();
+        let options = ProductChainRecertificationOptions {
+            service_file: service_file.clone(),
+            ..ProductChainRecertificationOptions::default()
+        };
+        let report = json!({
+            "production_run_command_replacement_plan": {
+                "requested": true
+            }
+        });
+        let artifacts = materialize_production_run_command_replacement_artifacts(
+            &options,
+            &report,
+            &artifact_dir,
+        )
+        .unwrap();
+        assert_eq!(artifacts["status"].as_str().unwrap(), "pass");
+        assert!(artifacts["executed"].as_bool().unwrap());
+        assert!(artifacts["backup_manifest_materialized"].as_bool().unwrap());
+        assert!(artifacts["rollback_script_materialized"].as_bool().unwrap());
+        assert!(!artifacts["backup_copy_executed"].as_bool().unwrap());
+        assert!(
+            !artifacts["actual_host_mutation_executed"]
+                .as_bool()
+                .unwrap()
+        );
+
+        let backup_manifest_file = artifact_dir
+            .join("production-run-command-replacement-backup")
+            .join("backup-manifest.json");
+        let rollback_script = artifact_dir.join("rollback-production-run-command-replacement.sh");
+        assert!(backup_manifest_file.exists());
+        assert!(rollback_script.exists());
+        let backup_manifest: Value =
+            serde_json::from_slice(&std::fs::read(&backup_manifest_file).unwrap()).unwrap();
+        assert_eq!(
+            backup_manifest["service_file"].as_str().unwrap(),
+            path_string(&service_file)
+        );
+        assert!(!backup_manifest["backup_copy_executed"].as_bool().unwrap());
+        assert!(
+            !backup_manifest["actual_host_mutation_executed"]
+                .as_bool()
+                .unwrap()
+        );
+        let rollback_text = std::fs::read_to_string(&rollback_script).unwrap();
+        assert!(rollback_text.contains("DAE_PRODUCTION_ROLLBACK_EXECUTE=1"));
+        assert!(rollback_text.contains("read-only admission mode"));
         let _ = std::fs::remove_dir_all(root);
     }
 
