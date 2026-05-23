@@ -251,6 +251,14 @@ pub fn run_default_optin_report(options: &RunOptions, version: &str) -> Result<V
         product_chain_recertification["product_chain_recertification_clean"]
             .as_bool()
             .unwrap_or(false);
+    let default_path_mutation_allowed =
+        product_chain_recertification["default_path_mutation_allowed"]
+            .as_bool()
+            .unwrap_or(false);
+    let product_chain_switch_allowed =
+        product_chain_recertification["product_chain_switch_allowed"]
+            .as_bool()
+            .unwrap_or(false);
 
     fs::write(
         &options.logfile,
@@ -437,9 +445,12 @@ pub fn run_default_optin_report(options: &RunOptions, version: &str) -> Result<V
             "true_rust_default_daemon_admitted",
             true_rust_default_daemon_admitted,
         ),
-        ("default_switch_allowed", false),
-        ("default_path_mutation_allowed", false),
-        ("product_chain_switch_allowed", false),
+        ("default_switch_allowed", default_path_mutation_allowed),
+        (
+            "default_path_mutation_allowed",
+            default_path_mutation_allowed,
+        ),
+        ("product_chain_switch_allowed", product_chain_switch_allowed),
     ] {
         let (name, value) = key;
         report[name] = json!(value);
@@ -479,9 +490,15 @@ pub fn run_default_optin_report(options: &RunOptions, version: &str) -> Result<V
         remaining_blockers.push("matched Go/Rust default daemon benchmark remains blocked");
     }
     if true_rust_default_daemon_admitted {
-        remaining_blockers.push(
+        if product_chain_switch_allowed {
+            remaining_blockers.push(
+                "default path mutation request is admitted by clean product-chain recertification; production run command replacement is still not executed",
+            );
+        } else {
+            remaining_blockers.push(
             "true Rust default daemon admission is recorded for the daemon-owned opt-in path; default/product switch stays closed pending clean production path mutation and dae-wing/daed recertification",
         );
+        }
     } else if production_dataplane_admitted {
         remaining_blockers.push(
             "production active TCP/UDP/DNS dataplane is admitted inside the daemon-owned opt-in run, but reload parity and matched benchmark must both be present before true Rust default daemon admission",
