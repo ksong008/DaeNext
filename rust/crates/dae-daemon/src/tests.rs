@@ -68,6 +68,45 @@ fn daemon_runner_identity_command_outputs_json() {
 }
 
 #[test]
+fn daemon_runner_validate_command_accepts_a_valid_restricted_config() {
+    #[cfg(unix)]
+    use std::os::unix::fs::PermissionsExt;
+
+    let root =
+        std::env::temp_dir().join(format!("dae-daemon-validate-valid-{}", std::process::id()));
+    let config = root.join("example.dae");
+    std::fs::create_dir_all(&root).unwrap();
+    std::fs::write(
+        &config,
+        "global {\n  log_level: info\n}\n\nrouting {\n  pname(NetworkManager) -> direct\n}\n",
+    )
+    .unwrap();
+    #[cfg(unix)]
+    std::fs::set_permissions(&config, std::fs::Permissions::from_mode(0o600)).unwrap();
+
+    let output = run_with_args_and_version(
+        [
+            "validate".to_owned(),
+            "-c".to_owned(),
+            config.display().to_string(),
+        ],
+        "test-version",
+    );
+
+    assert_eq!(output.exit_code, 0, "{}", output.stderr);
+    assert_eq!(output.stdout, "");
+    assert_eq!(output.stderr, "");
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[test]
+fn daemon_runner_validate_command_rejects_missing_config_argument() {
+    let output = run_with_args_and_version(["validate"], "test-version");
+    assert_eq!(output.exit_code, 2);
+    assert!(output.stderr.contains("validate requires -c/--config"));
+}
+
+#[test]
 fn daemon_runner_run_command_requires_config() {
     let output = run_with_args_and_version(["run"], "test-version");
     assert_eq!(output.exit_code, 2);
@@ -604,7 +643,20 @@ fn daemon_runner_run_command_records_product_chain_recertification() {
         "replace github.com/daeuniverse/outbound => github.com/ksong008/outbound v0.0.0\nreplace github.com/daeuniverse/quic-go => github.com/ksong008/quic-go v0.0.0\n",
     )
     .unwrap();
-    std::fs::write(&fresh_install_binary, "local-validation-rust-binary").unwrap();
+    std::fs::write(
+        &fresh_install_binary,
+        "#!/bin/sh\n[ \"$1\" = \"validate\" ] && exit 0\nexit 2\n",
+    )
+    .unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(
+            &fresh_install_binary,
+            std::fs::Permissions::from_mode(0o755),
+        )
+        .unwrap();
+    }
     for repo in ["dae", "dae-wing", "daed", "outbound", "quic-go"] {
         let repo_dir = fixture.join(repo);
         std::fs::create_dir_all(&repo_dir).unwrap();
@@ -781,6 +833,23 @@ fn daemon_runner_run_command_records_product_chain_recertification() {
             .as_str()
             .unwrap(),
         fresh_install_binary.display().to_string()
+    );
+    assert!(
+        !json["product_chain_recertification"]["local_validation_fresh_install_plan"]
+            ["candidate_validate"]["executed"]
+            .as_bool()
+            .unwrap()
+    );
+    assert!(
+        !json["product_chain_recertification"]["local_validation_fresh_install_plan"]["pass"]
+            .as_bool()
+            .unwrap()
+    );
+    assert!(
+        !json["product_chain_recertification"]["local_validation_fresh_install_plan"]["checks"]
+            ["resident_run_service_contract_ready"]
+            .as_bool()
+            .unwrap()
     );
     assert!(!json["default_switch_allowed"].as_bool().unwrap());
     assert!(!json["product_chain_switch_allowed"].as_bool().unwrap());

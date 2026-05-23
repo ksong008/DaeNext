@@ -1,3 +1,4 @@
+pub mod config_validate;
 pub mod control_plane;
 pub mod control_plane_entrypoint;
 pub mod default_run;
