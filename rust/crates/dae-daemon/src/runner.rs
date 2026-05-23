@@ -147,6 +147,8 @@ fn run_default_optin_command(args: &[String], version: &str) -> DaemonOutput {
     let mut execute_production_run_command_replacement = false;
     let mut plan_production_run_command_apply = false;
     let mut allow_host_default_path_mutation = false;
+    let mut plan_local_validation_fresh_install = false;
+    let mut product_chain_fresh_install_binary_source: Option<PathBuf> = None;
     let mut iter = args.iter();
     while let Some(arg) = iter.next() {
         match arg.as_str() {
@@ -688,6 +690,21 @@ fn run_default_optin_command(args: &[String], version: &str) -> DaemonOutput {
             "--allow-host-default-path-mutation" => {
                 allow_host_default_path_mutation = true;
             }
+            "--plan-local-validation-fresh-install" => {
+                plan_local_validation_fresh_install = true;
+            }
+            "--product-chain-fresh-install-binary-source" => {
+                let Some(value) = iter.next() else {
+                    return DaemonOutput::usage(
+                        "missing run --product-chain-fresh-install-binary-source value",
+                    );
+                };
+                product_chain_fresh_install_binary_source = Some(value.into());
+            }
+            _ if arg.starts_with("--product-chain-fresh-install-binary-source=") => {
+                product_chain_fresh_install_binary_source =
+                    arg.split_once('=').map(|(_, value)| value.into());
+            }
             "--product-chain-dae-repo" => {
                 let Some(value) = iter.next() else {
                     return DaemonOutput::usage("missing run --product-chain-dae-repo value");
@@ -867,6 +884,17 @@ fn run_default_optin_command(args: &[String], version: &str) -> DaemonOutput {
     options
         .product_chain_recertification
         .host_default_path_mutation_allow_requested = allow_host_default_path_mutation;
+    options
+        .product_chain_recertification
+        .local_validation_fresh_install_plan_requested = plan_local_validation_fresh_install;
+    if plan_local_validation_fresh_install {
+        options
+            .product_chain_recertification
+            .local_validation_config_source = Some(options.config.clone());
+        options
+            .product_chain_recertification
+            .local_validation_binary_source = product_chain_fresh_install_binary_source;
+    }
     if let Some(path) = product_chain_dae_repo {
         options.product_chain_recertification.dae_repo = path;
     }
