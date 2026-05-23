@@ -7,7 +7,9 @@ pub mod lifecycle;
 pub mod listener_ebpf_preflight;
 pub mod matched_default_benchmark;
 pub mod preflight;
+pub mod product_chain_recertification;
 pub mod production_dataplane_harness;
+pub mod production_runtime_owner;
 pub mod reload_owner_benchmark;
 pub mod reload_owner_handoff;
 pub mod run_entrypoint;
@@ -47,8 +49,15 @@ pub use matched_default_benchmark::{
     MatchedDefaultBenchmarkOptions, matched_default_benchmark_report,
 };
 pub use preflight::stage149_identity_preflight_report;
+pub use product_chain_recertification::{
+    ProductChainAdmissionEvidence, ProductChainRecertificationOptions,
+    product_chain_recertification_report,
+};
 pub use production_dataplane_harness::{
     ProductionDataplaneHarnessOptions, production_dataplane_harness_report,
+};
+pub use production_runtime_owner::{
+    ProductionRuntimeOwnerOptions, production_runtime_owner_report,
 };
 pub use reload_owner_benchmark::{default_stage167_root, stage167_reload_owner_benchmark_report};
 pub use reload_owner_handoff::{
