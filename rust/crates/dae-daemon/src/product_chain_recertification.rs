@@ -10,6 +10,7 @@ pub struct ProductChainRecertificationOptions {
     pub default_path_mutation_requested: bool,
     pub production_run_command_replacement_dry_run_requested: bool,
     pub production_run_command_replacement_execute_requested: bool,
+    pub production_run_command_replacement_apply_plan_requested: bool,
     pub host_default_path_mutation_allow_requested: bool,
     pub dae_repo: PathBuf,
     pub dae_wing_repo: PathBuf,
@@ -27,6 +28,7 @@ impl Default for ProductChainRecertificationOptions {
             default_path_mutation_requested: false,
             production_run_command_replacement_dry_run_requested: false,
             production_run_command_replacement_execute_requested: false,
+            production_run_command_replacement_apply_plan_requested: false,
             host_default_path_mutation_allow_requested: false,
             dae_repo: PathBuf::from("/root/project/dae"),
             daed_repo: PathBuf::from("/root/project/daed"),
@@ -310,6 +312,9 @@ fn report_value(
     remaining_blockers.extend(production_run_command_execution_blockers(
         &production_run_command_replacement_plan,
     ));
+    remaining_blockers.extend(production_run_command_apply_plan_blockers(
+        &production_run_command_replacement_plan,
+    ));
     json!({
         "name": "product-chain-recertification",
         "evidence_class": "read-only-default-path-and-product-chain-recertification",
@@ -376,8 +381,10 @@ fn production_run_command_replacement_plan_json(
     service_contract_preserved: bool,
 ) -> Value {
     let execute_requested = options.production_run_command_replacement_execute_requested;
-    let requested =
-        options.production_run_command_replacement_dry_run_requested || execute_requested;
+    let apply_plan_requested = options.production_run_command_replacement_apply_plan_requested;
+    let requested = options.production_run_command_replacement_dry_run_requested
+        || execute_requested
+        || apply_plan_requested;
     let go_default_path_preserved = true;
     let admitted = requested
         && default_path_mutation_allowed
@@ -386,6 +393,13 @@ fn production_run_command_replacement_plan_json(
     let host_mutation_allow_requested = options.host_default_path_mutation_allow_requested;
     let host_mutation_allowed = host_mutation_allow_requested && admitted;
     let execute_allowed = execute_requested && admitted && host_mutation_allowed;
+    let apply_plan = production_run_command_replacement_apply_plan_json(
+        apply_plan_requested,
+        admitted,
+        execute_requested,
+        host_mutation_allowed,
+        artifact_dir,
+    );
     let execution_blockers = production_run_command_execution_blockers_json(
         execute_requested,
         admitted,
@@ -439,6 +453,10 @@ fn production_run_command_replacement_plan_json(
     plan.insert("admitted".to_owned(), json!(admitted));
     plan.insert("execute_requested".to_owned(), json!(execute_requested));
     plan.insert("execute_allowed".to_owned(), json!(execute_allowed));
+    plan.insert(
+        "apply_plan_requested".to_owned(),
+        json!(apply_plan_requested),
+    );
     plan.insert("execution_blockers".to_owned(), execution_blockers);
     plan.insert(
         "default_path_mutation_allowed".to_owned(),
@@ -552,6 +570,7 @@ fn production_run_command_replacement_plan_json(
         "pre_execution_checks".to_owned(),
         Value::Object(pre_execution_checks),
     );
+    plan.insert("apply_plan".to_owned(), apply_plan);
     plan.insert(
         "host_mutation_execution_mode".to_owned(),
         json!("read-only-admission-only"),
@@ -574,6 +593,51 @@ fn production_run_command_replacement_plan_json(
     Value::Object(plan)
 }
 
+fn production_run_command_replacement_apply_plan_json(
+    requested: bool,
+    replacement_plan_admitted: bool,
+    execute_requested: bool,
+    host_mutation_allowed: bool,
+    artifact_dir: &Path,
+) -> Value {
+    let admitted =
+        requested && replacement_plan_admitted && execute_requested && host_mutation_allowed;
+    let blockers = production_run_command_apply_plan_blockers_json(
+        requested,
+        replacement_plan_admitted,
+        execute_requested,
+        host_mutation_allowed,
+    );
+    let apply_manifest_file = artifact_dir.join("production-run-command-replacement-apply.json");
+    let service_diff_file = artifact_dir.join("production-run-command-replacement-service.diff");
+    json!({
+        "status": if admitted { "pass" } else if requested { "blocked" } else { "not-requested" },
+        "requested": requested,
+        "admitted": admitted,
+        "execution_blockers": blockers,
+        "execution_mode": "read-only-apply-plan",
+        "replacement_plan_admitted": replacement_plan_admitted,
+        "execute_requested": execute_requested,
+        "host_mutation_allowed": host_mutation_allowed,
+        "host_write_allowed": false,
+        "actual_host_write_executed": false,
+        "actual_mutation_executed": false,
+        "production_run_command_replaced": false,
+        "requires_unimplemented_host_write_flag": "--execute-production-run-command-host-write",
+        "apply_manifest_file": path_string(&apply_manifest_file),
+        "apply_manifest_materialized": false,
+        "service_diff_file": path_string(&service_diff_file),
+        "service_diff_materialized": false,
+        "current_exec_start_pre": "/usr/bin/dae validate -c /etc/dae/config.dae",
+        "current_exec_start": "/usr/bin/dae run --disable-timestamp -c /etc/dae/config.dae",
+        "current_exec_reload": "/usr/bin/dae reload $MAINPID",
+        "target_exec_start_pre": "dae-daemon-optin validate -c /etc/dae/config.dae",
+        "target_exec_start": "dae-daemon-optin run --disable-timestamp -c /etc/dae/config.dae",
+        "target_exec_reload": "dae-daemon-optin reload $MAINPID",
+        "read_only": true,
+    })
+}
+
 fn materialize_production_run_command_replacement_artifacts(
     options: &ProductChainRecertificationOptions,
     report: &Value,
@@ -591,6 +655,8 @@ fn materialize_production_run_command_replacement_artifacts(
 
     let backup_artifact_dir = artifact_dir.join("production-run-command-replacement-backup");
     let backup_manifest_file = backup_artifact_dir.join("backup-manifest.json");
+    let apply_manifest_file = artifact_dir.join("production-run-command-replacement-apply.json");
+    let service_diff_file = artifact_dir.join("production-run-command-replacement-service.diff");
     let backup_service_file = backup_artifact_dir.join("dae.service");
     let backup_usr_bin_dae = backup_artifact_dir.join("usr-bin-dae");
     let rollback_script = artifact_dir.join("rollback-production-run-command-replacement.sh");
@@ -654,21 +720,145 @@ fn materialize_production_run_command_replacement_artifacts(
     })?;
     make_user_executable(&rollback_script)?;
 
+    let apply_artifacts = materialize_production_run_command_apply_plan_artifacts(
+        options,
+        plan,
+        &apply_manifest_file,
+        &service_diff_file,
+    )?;
+
+    let mut artifacts = Map::new();
+    artifacts.insert("status".to_owned(), json!("pass"));
+    artifacts.insert("requested".to_owned(), json!(true));
+    artifacts.insert("executed".to_owned(), json!(true));
+    artifacts.insert(
+        "backup_artifact_dir".to_owned(),
+        json!(path_string(&backup_artifact_dir)),
+    );
+    artifacts.insert(
+        "backup_manifest_file".to_owned(),
+        json!(path_string(&backup_manifest_file)),
+    );
+    artifacts.insert(
+        "backup_manifest_materialized".to_owned(),
+        json!(backup_manifest_file.exists()),
+    );
+    artifacts.insert(
+        "rollback_script".to_owned(),
+        json!(path_string(&rollback_script)),
+    );
+    artifacts.insert(
+        "rollback_script_materialized".to_owned(),
+        json!(rollback_script.exists()),
+    );
+    artifacts.insert(
+        "rollback_requires_env".to_owned(),
+        json!("DAE_PRODUCTION_ROLLBACK_EXECUTE=1"),
+    );
+    artifacts.insert("backup_copy_executed".to_owned(), json!(false));
+    artifacts.insert("actual_host_mutation_executed".to_owned(), json!(false));
+    artifacts.insert("production_run_command_replaced".to_owned(), json!(false));
+    artifacts.insert("read_only".to_owned(), json!(true));
+    artifacts.insert("apply_plan_artifacts".to_owned(), apply_artifacts.clone());
+    for key in [
+        "apply_manifest_file",
+        "apply_manifest_materialized",
+        "service_diff_file",
+        "service_diff_materialized",
+    ] {
+        if let Some(value) = apply_artifacts.get(key) {
+            artifacts.insert(key.to_owned(), value.clone());
+        }
+    }
+    Ok(Value::Object(artifacts))
+}
+
+fn materialize_production_run_command_apply_plan_artifacts(
+    options: &ProductChainRecertificationOptions,
+    plan: &Value,
+    apply_manifest_file: &Path,
+    service_diff_file: &Path,
+) -> Result<Value, String> {
+    let apply_plan = &plan["apply_plan"];
+    let requested = apply_plan["requested"].as_bool().unwrap_or(false);
+    if !requested {
+        return Ok(json!({
+            "status": "not-requested",
+            "requested": false,
+            "executed": false,
+            "apply_manifest_materialized": false,
+            "service_diff_materialized": false,
+        }));
+    }
+
+    let diff = production_run_command_service_diff(&options.service_file);
+    fs::write(service_diff_file, diff).map_err(|err| {
+        format!(
+            "failed to write production run command service diff {}: {err}",
+            path_string(service_diff_file)
+        )
+    })?;
+    let apply_manifest = json!({
+        "status": "pass",
+        "requested": true,
+        "executed": true,
+        "admitted": apply_plan["admitted"].as_bool().unwrap_or(false),
+        "execution_blockers": apply_plan["execution_blockers"].clone(),
+        "execution_mode": "read-only-apply-plan",
+        "service_file": path_string(&options.service_file),
+        "service_diff_file": path_string(service_diff_file),
+        "apply_manifest_file": path_string(apply_manifest_file),
+        "current_exec_start_pre": "/usr/bin/dae validate -c /etc/dae/config.dae",
+        "current_exec_start": "/usr/bin/dae run --disable-timestamp -c /etc/dae/config.dae",
+        "current_exec_reload": "/usr/bin/dae reload $MAINPID",
+        "target_exec_start_pre": "dae-daemon-optin validate -c /etc/dae/config.dae",
+        "target_exec_start": "dae-daemon-optin run --disable-timestamp -c /etc/dae/config.dae",
+        "target_exec_reload": "dae-daemon-optin reload $MAINPID",
+        "host_write_allowed": false,
+        "actual_host_write_executed": false,
+        "actual_mutation_executed": false,
+        "production_run_command_replaced": false,
+        "requires_unimplemented_host_write_flag": "--execute-production-run-command-host-write",
+        "post_apply_required_checks": [
+            "dae-daemon-optin validate -c /etc/dae/config.dae",
+            "dae-daemon-optin run --disable-timestamp -c /etc/dae/config.dae --exit-after-ready",
+            "dae-daemon-optin reload $MAINPID",
+            "systemctl daemon-reload",
+            "systemctl restart dae.service",
+            "systemctl status dae.service --no-pager"
+        ],
+        "read_only": true,
+    });
+    let encoded = serde_json::to_vec_pretty(&apply_manifest)
+        .map_err(|err| format!("failed to encode production run command apply manifest: {err}"))?;
+    fs::write(apply_manifest_file, encoded).map_err(|err| {
+        format!(
+            "failed to write production run command apply manifest {}: {err}",
+            path_string(apply_manifest_file)
+        )
+    })?;
+
     Ok(json!({
         "status": "pass",
         "requested": true,
         "executed": true,
-        "backup_artifact_dir": path_string(&backup_artifact_dir),
-        "backup_manifest_file": path_string(&backup_manifest_file),
-        "backup_manifest_materialized": backup_manifest_file.exists(),
-        "rollback_script": path_string(&rollback_script),
-        "rollback_script_materialized": rollback_script.exists(),
-        "rollback_requires_env": "DAE_PRODUCTION_ROLLBACK_EXECUTE=1",
-        "backup_copy_executed": false,
-        "actual_host_mutation_executed": false,
+        "apply_manifest_file": path_string(apply_manifest_file),
+        "apply_manifest_materialized": apply_manifest_file.exists(),
+        "service_diff_file": path_string(service_diff_file),
+        "service_diff_materialized": service_diff_file.exists(),
+        "host_write_allowed": false,
+        "actual_host_write_executed": false,
+        "actual_mutation_executed": false,
         "production_run_command_replaced": false,
         "read_only": true,
     }))
+}
+
+fn production_run_command_service_diff(service_file: &Path) -> String {
+    format!(
+        "--- {service_file}.current\n+++ {service_file}.target\n@@ production run command replacement\n-ExecStartPre=/usr/bin/dae validate -c /etc/dae/config.dae\n+ExecStartPre=dae-daemon-optin validate -c /etc/dae/config.dae\n-ExecStart=/usr/bin/dae run --disable-timestamp -c /etc/dae/config.dae\n+ExecStart=dae-daemon-optin run --disable-timestamp -c /etc/dae/config.dae\n-ExecReload=/usr/bin/dae reload $MAINPID\n+ExecReload=dae-daemon-optin reload $MAINPID\n",
+        service_file = path_string(service_file),
+    )
 }
 
 fn attach_production_run_command_replacement_artifacts(report: &mut Value, artifacts: Value) {
@@ -685,9 +875,31 @@ fn attach_production_run_command_replacement_artifacts(report: &mut Value, artif
         "rollback_script",
         "rollback_script_materialized",
         "backup_copy_executed",
+        "apply_manifest_file",
+        "apply_manifest_materialized",
+        "service_diff_file",
+        "service_diff_materialized",
     ] {
         if let Some(value) = artifacts.get(key) {
             plan.insert(key.to_owned(), value.clone());
+        }
+    }
+    if let Some(apply_artifacts) = artifacts.get("apply_plan_artifacts") {
+        if let Some(apply_plan) = plan.get_mut("apply_plan").and_then(Value::as_object_mut) {
+            apply_plan.insert(
+                "artifact_materialization".to_owned(),
+                apply_artifacts.clone(),
+            );
+            for key in [
+                "apply_manifest_file",
+                "apply_manifest_materialized",
+                "service_diff_file",
+                "service_diff_materialized",
+            ] {
+                if let Some(value) = apply_artifacts.get(key) {
+                    apply_plan.insert(key.to_owned(), value.clone());
+                }
+            }
         }
     }
 }
@@ -787,6 +999,43 @@ fn production_run_command_execution_blockers_json(
     } else if execute_requested && !host_mutation_allowed {
         blockers.push(
             "production run command replacement execute requested but host default path mutation is not admitted",
+        );
+    }
+    json!(blockers)
+}
+
+fn production_run_command_apply_plan_blockers(plan: &Value) -> Vec<String> {
+    plan["apply_plan"]["execution_blockers"]
+        .as_array()
+        .map(|blockers| {
+            blockers
+                .iter()
+                .filter_map(|blocker| blocker.as_str().map(ToOwned::to_owned))
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+fn production_run_command_apply_plan_blockers_json(
+    requested: bool,
+    replacement_plan_admitted: bool,
+    execute_requested: bool,
+    host_mutation_allowed: bool,
+) -> Value {
+    let mut blockers = Vec::new();
+    if requested && !replacement_plan_admitted {
+        blockers.push(
+            "production run command apply plan requested but replacement dry-run plan is not admitted",
+        );
+    }
+    if requested && !execute_requested {
+        blockers.push(
+            "production run command apply plan requested but replacement execute was not requested",
+        );
+    }
+    if requested && !host_mutation_allowed {
+        blockers.push(
+            "production run command apply plan requested but host default path mutation is not admitted",
         );
     }
     json!(blockers)
@@ -1512,6 +1761,7 @@ mod tests {
             default_path_mutation_requested: false,
             production_run_command_replacement_dry_run_requested: false,
             production_run_command_replacement_execute_requested: false,
+            production_run_command_replacement_apply_plan_requested: false,
             host_default_path_mutation_allow_requested: false,
             dae_repo: fixture.join("dae"),
             dae_wing_repo: fixture.join("dae-wing"),
@@ -1853,6 +2103,64 @@ mod tests {
     }
 
     #[test]
+    fn product_chain_run_command_replacement_apply_plan_is_dry_run_only() {
+        let root = std::env::temp_dir().join(format!(
+            "dae-daemon-product-chain-run-command-apply-plan-{}",
+            std::process::id()
+        ));
+        let artifact_dir = root.join("artifact");
+        let manifest_file = artifact_dir.join("product-chain-recertification.json");
+        let options = ProductChainRecertificationOptions {
+            execute: true,
+            default_path_mutation_requested: true,
+            production_run_command_replacement_dry_run_requested: true,
+            production_run_command_replacement_execute_requested: true,
+            production_run_command_replacement_apply_plan_requested: true,
+            host_default_path_mutation_allow_requested: true,
+            ..ProductChainRecertificationOptions::default()
+        };
+        let report = report_value(
+            &options,
+            &artifact_dir,
+            &manifest_file,
+            ProductChainAdmissionEvidence {
+                true_rust_default_daemon_admitted: true,
+                production_dataplane_admitted: true,
+                reload_runtime_parity_admitted: true,
+                matched_benchmark_recorded: true,
+            },
+            Some(clean_product_chain_evidence()),
+        );
+        let plan = &report["production_run_command_replacement_plan"];
+        let apply_plan = &plan["apply_plan"];
+        assert!(plan["admitted"].as_bool().unwrap());
+        assert!(plan["execute_allowed"].as_bool().unwrap());
+        assert!(plan["apply_plan_requested"].as_bool().unwrap());
+        assert!(apply_plan["requested"].as_bool().unwrap());
+        assert!(apply_plan["admitted"].as_bool().unwrap());
+        assert_eq!(
+            apply_plan["execution_mode"].as_str().unwrap(),
+            "read-only-apply-plan"
+        );
+        assert!(!apply_plan["host_write_allowed"].as_bool().unwrap());
+        assert!(!apply_plan["actual_host_write_executed"].as_bool().unwrap());
+        assert!(
+            !apply_plan["production_run_command_replaced"]
+                .as_bool()
+                .unwrap()
+        );
+        assert!(apply_plan["read_only"].as_bool().unwrap());
+        assert!(
+            apply_plan["execution_blockers"]
+                .as_array()
+                .unwrap()
+                .is_empty()
+        );
+        assert!(report["remaining_blockers"].as_array().unwrap().is_empty());
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
     fn product_chain_run_command_replacement_materializes_read_only_artifacts() {
         let root = std::env::temp_dir().join(format!(
             "dae-daemon-product-chain-run-command-artifacts-{}",
@@ -1917,6 +2225,69 @@ mod tests {
     }
 
     #[test]
+    fn product_chain_run_command_replacement_materializes_apply_plan_artifacts() {
+        let root = std::env::temp_dir().join(format!(
+            "dae-daemon-product-chain-run-command-apply-artifacts-{}",
+            std::process::id()
+        ));
+        let artifact_dir = root.join("artifact");
+        let service_file = root.join("dae.service");
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::write(
+            &service_file,
+            "ExecStart=/usr/bin/dae run --disable-timestamp -c /etc/dae/config.dae\n",
+        )
+        .unwrap();
+        let options = ProductChainRecertificationOptions {
+            service_file: service_file.clone(),
+            ..ProductChainRecertificationOptions::default()
+        };
+        let report = json!({
+            "production_run_command_replacement_plan": {
+                "requested": true,
+                "apply_plan": {
+                    "requested": true,
+                    "admitted": true,
+                    "execution_blockers": []
+                }
+            }
+        });
+        let artifacts = materialize_production_run_command_replacement_artifacts(
+            &options,
+            &report,
+            &artifact_dir,
+        )
+        .unwrap();
+        assert!(artifacts["apply_manifest_materialized"].as_bool().unwrap());
+        assert!(artifacts["service_diff_materialized"].as_bool().unwrap());
+        assert!(
+            !artifacts["apply_plan_artifacts"]["host_write_allowed"]
+                .as_bool()
+                .unwrap()
+        );
+
+        let apply_manifest_file =
+            artifact_dir.join("production-run-command-replacement-apply.json");
+        let service_diff_file =
+            artifact_dir.join("production-run-command-replacement-service.diff");
+        assert!(apply_manifest_file.exists());
+        assert!(service_diff_file.exists());
+        let apply_manifest: Value =
+            serde_json::from_slice(&std::fs::read(&apply_manifest_file).unwrap()).unwrap();
+        assert!(apply_manifest["admitted"].as_bool().unwrap());
+        assert!(!apply_manifest["host_write_allowed"].as_bool().unwrap());
+        assert!(
+            !apply_manifest["actual_host_write_executed"]
+                .as_bool()
+                .unwrap()
+        );
+        let service_diff = std::fs::read_to_string(&service_diff_file).unwrap();
+        assert!(service_diff.contains("-ExecStart=/usr/bin/dae run"));
+        assert!(service_diff.contains("+ExecStart=dae-daemon-optin run"));
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
     fn product_chain_recertification_blocks_when_repo_status_is_unavailable() {
         let root = std::env::temp_dir().join(format!(
             "dae-daemon-product-chain-nongit-{}",
@@ -1944,6 +2315,7 @@ mod tests {
             default_path_mutation_requested: false,
             production_run_command_replacement_dry_run_requested: false,
             production_run_command_replacement_execute_requested: false,
+            production_run_command_replacement_apply_plan_requested: false,
             host_default_path_mutation_allow_requested: false,
             dae_repo: fixture.join("dae"),
             dae_wing_repo: fixture.join("dae-wing"),
