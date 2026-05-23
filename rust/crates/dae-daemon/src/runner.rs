@@ -2,6 +2,10 @@ use crate::config_validate::validate_config_file;
 use crate::identity::daemon_identity;
 use crate::lifecycle::{default_stage150_root, stage150_lifecycle_smoke_report};
 use crate::preflight::stage149_identity_preflight_report;
+use crate::{
+    ReloadOptions, ResidentRunOptions, reload_resident_service, run_resident_service,
+    service_contract_capabilities,
+};
 use crate::{RunOptions, default_run_root, run_default_optin_report};
 use crate::{
     Stage156DefaultRunIdentityOptions, default_stage156_root,
@@ -15,6 +19,7 @@ use crate::{default_stage160_root, stage160_listener_ebpf_preflight_harness_repo
 use crate::{default_stage165_root, stage165_reload_owner_handoff_smoke_report};
 use crate::{default_stage167_root, stage167_reload_owner_benchmark_report};
 use std::path::PathBuf;
+use std::time::Duration;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DaemonOutput {
@@ -60,6 +65,10 @@ pub fn run_with_args_and_version(
         }
         Some("validate") => run_validate_command(&args[1..]),
         Some("run") => run_default_optin_command(&args[1..], version),
+        Some("reload") => run_reload_command(&args[1..]),
+        Some("service-contract") if args.len() == 1 => {
+            DaemonOutput::ok(format!("{}\n", service_contract_capabilities(version)))
+        }
         Some("stage149-identity-preflight") if args.len() == 1 => {
             DaemonOutput::ok(format!("{}\n", stage149_identity_preflight_report(version)))
         }
@@ -88,7 +97,7 @@ pub fn run_with_args_and_version(
         Some("stage167-reload-owner-benchmark") => {
             run_stage167_reload_owner_benchmark_command(&args[1..])
         }
-        Some("identity") | Some("stage149-identity-preflight") => {
+        Some("identity") | Some("service-contract") | Some("stage149-identity-preflight") => {
             DaemonOutput::usage("unsupported dae-daemon-optin argument")
         }
         Some(command) => {
@@ -124,10 +133,81 @@ fn run_validate_command(args: &[String]) -> DaemonOutput {
     }
 }
 
+fn run_reload_command(args: &[String]) -> DaemonOutput {
+    let mut options = ReloadOptions::default();
+    let mut iter = args.iter();
+    while let Some(arg) = iter.next() {
+        match arg.as_str() {
+            "-a" | "--abort" => options.abort_connections = true,
+            "--service-pid-file" => {
+                let Some(value) = iter.next() else {
+                    return DaemonOutput::usage("missing reload --service-pid-file value");
+                };
+                options.pid_file = value.into();
+            }
+            _ if arg.starts_with("--service-pid-file=") => {
+                options.pid_file = arg.split_once('=').unwrap().1.into();
+            }
+            "--service-progress-file" => {
+                let Some(value) = iter.next() else {
+                    return DaemonOutput::usage("missing reload --service-progress-file value");
+                };
+                options.progress_file = value.into();
+            }
+            _ if arg.starts_with("--service-progress-file=") => {
+                options.progress_file = arg.split_once('=').unwrap().1.into();
+            }
+            "--service-abort-file" => {
+                let Some(value) = iter.next() else {
+                    return DaemonOutput::usage("missing reload --service-abort-file value");
+                };
+                options.abort_file = value.into();
+            }
+            _ if arg.starts_with("--service-abort-file=") => {
+                options.abort_file = arg.split_once('=').unwrap().1.into();
+            }
+            "--timeout-ms" => {
+                let Some(value) = iter.next() else {
+                    return DaemonOutput::usage("missing reload --timeout-ms value");
+                };
+                options.timeout = match value.parse::<u64>() {
+                    Ok(value) => Some(Duration::from_millis(value)),
+                    Err(_) => return DaemonOutput::usage("invalid reload --timeout-ms value"),
+                };
+            }
+            _ if arg.starts_with("--timeout-ms=") => {
+                options.timeout = match arg.split_once('=').unwrap().1.parse::<u64>() {
+                    Ok(value) => Some(Duration::from_millis(value)),
+                    Err(_) => return DaemonOutput::usage("invalid reload --timeout-ms value"),
+                };
+            }
+            _ if arg.starts_with('-') => {
+                return DaemonOutput::usage(format!("unsupported reload argument: {arg}"));
+            }
+            _ if options.pid.is_none() => {
+                options.pid = match arg.parse::<i32>() {
+                    Ok(value) => Some(value),
+                    Err(_) => return DaemonOutput::usage("invalid reload pid value"),
+                };
+            }
+            _ => return DaemonOutput::usage("reload accepts at most one pid value"),
+        }
+    }
+    match reload_resident_service(&options) {
+        Ok(stdout) => DaemonOutput::ok(stdout),
+        Err(err) => DaemonOutput::error(err),
+    }
+}
+
 fn run_default_optin_command(args: &[String], version: &str) -> DaemonOutput {
     let mut root = default_run_root();
+    let mut root_explicit = false;
     let mut config: Option<PathBuf> = None;
     let mut logfile: Option<PathBuf> = None;
+    let mut service_pid_file: Option<PathBuf> = None;
+    let mut service_progress_file: Option<PathBuf> = None;
+    let mut service_abort_file: Option<PathBuf> = None;
+    let mut service_ready_file: Option<PathBuf> = None;
     let mut disable_timestamp = false;
     let mut disable_pidfile = false;
     let mut disable_sudo = false;
@@ -185,6 +265,7 @@ fn run_default_optin_command(args: &[String], version: &str) -> DaemonOutput {
     let mut allow_host_default_path_mutation = false;
     let mut plan_local_validation_fresh_install = false;
     let mut product_chain_fresh_install_binary_source: Option<PathBuf> = None;
+    let mut exit_after_ready = false;
     let mut iter = args.iter();
     while let Some(arg) = iter.next() {
         match arg.as_str() {
@@ -202,9 +283,11 @@ fn run_default_optin_command(args: &[String], version: &str) -> DaemonOutput {
                     return DaemonOutput::usage("missing run --root value");
                 };
                 root = value.into();
+                root_explicit = true;
             }
             _ if arg.starts_with("--root=") => {
                 root = arg.split_once('=').unwrap().1.into();
+                root_explicit = true;
             }
             "--logfile" => {
                 let Some(value) = iter.next() else {
@@ -214,6 +297,42 @@ fn run_default_optin_command(args: &[String], version: &str) -> DaemonOutput {
             }
             _ if arg.starts_with("--logfile=") => {
                 logfile = arg.split_once('=').map(|(_, value)| value.into());
+            }
+            "--service-pid-file" => {
+                let Some(value) = iter.next() else {
+                    return DaemonOutput::usage("missing run --service-pid-file value");
+                };
+                service_pid_file = Some(value.into());
+            }
+            _ if arg.starts_with("--service-pid-file=") => {
+                service_pid_file = arg.split_once('=').map(|(_, value)| value.into());
+            }
+            "--service-progress-file" => {
+                let Some(value) = iter.next() else {
+                    return DaemonOutput::usage("missing run --service-progress-file value");
+                };
+                service_progress_file = Some(value.into());
+            }
+            _ if arg.starts_with("--service-progress-file=") => {
+                service_progress_file = arg.split_once('=').map(|(_, value)| value.into());
+            }
+            "--service-abort-file" => {
+                let Some(value) = iter.next() else {
+                    return DaemonOutput::usage("missing run --service-abort-file value");
+                };
+                service_abort_file = Some(value.into());
+            }
+            _ if arg.starts_with("--service-abort-file=") => {
+                service_abort_file = arg.split_once('=').map(|(_, value)| value.into());
+            }
+            "--service-ready-file" => {
+                let Some(value) = iter.next() else {
+                    return DaemonOutput::usage("missing run --service-ready-file value");
+                };
+                service_ready_file = Some(value.into());
+            }
+            _ if arg.starts_with("--service-ready-file=") => {
+                service_ready_file = arg.split_once('=').map(|(_, value)| value.into());
             }
             "--disable-timestamp" => disable_timestamp = true,
             "--disable-pidfile" => disable_pidfile = true,
@@ -804,13 +923,53 @@ fn run_default_optin_command(args: &[String], version: &str) -> DaemonOutput {
             _ if arg.starts_with("--product-chain-go-mod-file=") => {
                 product_chain_go_mod_file = arg.split_once('=').map(|(_, value)| value.into());
             }
-            "--exit-after-ready" | "--once" => {}
+            "--exit-after-ready" | "--once" => exit_after_ready = true,
             _ => return DaemonOutput::usage(format!("unsupported run argument: {arg}")),
         }
     }
     let Some(config) = config else {
         return DaemonOutput::usage("run requires -c/--config");
     };
+    let bounded_report_requested = root_explicit
+        || exit_after_ready
+        || !listener_smoke
+        || !reload_smoke
+        || production_runtime_owner
+        || production_runtime_active_tcp
+        || production_runtime_active_tcp_relay
+        || production_runtime_active_udp
+        || production_runtime_active_dns
+        || production_runtime_reload_parity
+        || production_dataplane_smoke
+        || matched_default_benchmark
+        || product_chain_recertification
+        || request_default_path_mutation
+        || plan_production_run_command_replacement
+        || execute_production_run_command_replacement
+        || plan_production_run_command_apply
+        || allow_host_default_path_mutation
+        || plan_local_validation_fresh_install;
+    if !bounded_report_requested {
+        let mut options = ResidentRunOptions::for_config(config);
+        options.logfile = logfile;
+        options.disable_timestamp = disable_timestamp;
+        options.disable_pidfile = disable_pidfile;
+        options.disable_sudo = disable_sudo;
+        if let Some(path) = service_pid_file {
+            options.pid_file = path;
+        }
+        if let Some(path) = service_progress_file {
+            options.progress_file = path;
+        }
+        if let Some(path) = service_abort_file {
+            options.abort_file = path;
+        }
+        options.ready_record_file = service_ready_file;
+        return match run_resident_service(&options) {
+            Ok(()) => DaemonOutput::ok(String::new()),
+            Err(err) => DaemonOutput::error(err),
+        };
+    }
     let mut options = RunOptions::under_root(root, config);
     if let Some(logfile) = logfile {
         options.logfile = logfile;
