@@ -93,6 +93,32 @@ fn daemon_runner_run_command_rejects_missing_config_file() {
 }
 
 #[test]
+fn daemon_runner_run_command_requires_ack_for_production_dataplane_smoke() {
+    let root = std::env::temp_dir().join(format!(
+        "dae-daemon-run-dataplane-noack-{}",
+        std::process::id()
+    ));
+    let config = root.join("config").join("run.dae");
+    std::fs::create_dir_all(config.parent().unwrap()).unwrap();
+    std::fs::write(&config, "global {\n  log_level: info\n}\n").unwrap();
+    let output = run_with_args_and_version(
+        [
+            "run".to_owned(),
+            "--config".to_owned(),
+            config.display().to_string(),
+            "--root".to_owned(),
+            root.display().to_string(),
+            "--execute-production-dataplane-smoke".to_owned(),
+            "--exit-after-ready".to_owned(),
+        ],
+        "test-version",
+    );
+    assert_eq!(output.exit_code, 1);
+    assert!(output.stderr.contains("--ack-root-gate"));
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[test]
 fn run_default_optin_report_executes_bounded_lifecycle_and_smokes() {
     let root =
         std::env::temp_dir().join(format!("dae-daemon-run-report-test-{}", std::process::id()));
@@ -140,6 +166,22 @@ fn run_default_optin_report_executes_bounded_lifecycle_and_smokes() {
             .as_bool()
             .unwrap()
     );
+    assert!(
+        !report["production_dataplane_harness_executed"]
+            .as_bool()
+            .unwrap()
+    );
+    assert!(
+        !report["production_dataplane_harness_passed"]
+            .as_bool()
+            .unwrap()
+    );
+    assert_eq!(
+        report["production_dataplane_admission_scope"]
+            .as_str()
+            .unwrap(),
+        "not-executed"
+    );
     assert!(!report["production_listener_bound"].as_bool().unwrap());
     assert!(!report["ebpf_attached"].as_bool().unwrap());
     assert!(!report["benchmark_executable_now"].as_bool().unwrap());
@@ -167,6 +209,7 @@ fn daemon_runner_run_command_outputs_json() {
             root.display().to_string(),
             "--disable-timestamp".to_owned(),
             "--disable-sudo".to_owned(),
+            "--dataplane-benchmark-iters=7".to_owned(),
             "--exit-after-ready".to_owned(),
         ],
         "test-version",
@@ -179,6 +222,17 @@ fn daemon_runner_run_command_outputs_json() {
     assert!(json["reload_owner_handoff_smoke_passed"].as_bool().unwrap());
     assert!(
         !json["matched_go_rust_default_daemon_benchmark_recorded"]
+            .as_bool()
+            .unwrap()
+    );
+    assert_eq!(
+        json["production_dataplane_harness"]["benchmark_iters"]
+            .as_u64()
+            .unwrap(),
+        7
+    );
+    assert!(
+        !json["production_dataplane_harness_executed"]
             .as_bool()
             .unwrap()
     );
