@@ -593,6 +593,7 @@ fn daemon_runner_run_command_records_product_chain_recertification() {
     .unwrap();
     let service = fixture.join("dae.service");
     let go_mod = fixture.join("go.mod");
+    let fresh_install_binary = fixture.join("dae-daemon-optin");
     std::fs::write(
         &service,
         "ExecStartPre=/usr/bin/dae validate -c /etc/dae/config.dae\nExecStart=/usr/bin/dae run --disable-timestamp -c /etc/dae/config.dae\nExecReload=/usr/bin/dae reload $MAINPID\n",
@@ -603,6 +604,7 @@ fn daemon_runner_run_command_records_product_chain_recertification() {
         "replace github.com/daeuniverse/outbound => github.com/ksong008/outbound v0.0.0\nreplace github.com/daeuniverse/quic-go => github.com/ksong008/quic-go v0.0.0\n",
     )
     .unwrap();
+    std::fs::write(&fresh_install_binary, "local-validation-rust-binary").unwrap();
     for repo in ["dae", "dae-wing", "daed", "outbound", "quic-go"] {
         let repo_dir = fixture.join(repo);
         std::fs::create_dir_all(&repo_dir).unwrap();
@@ -631,6 +633,9 @@ fn daemon_runner_run_command_records_product_chain_recertification() {
             "--execute-production-run-command-replacement".to_owned(),
             "--plan-production-run-command-apply".to_owned(),
             "--allow-host-default-path-mutation".to_owned(),
+            "--plan-local-validation-fresh-install".to_owned(),
+            "--product-chain-fresh-install-binary-source".to_owned(),
+            fresh_install_binary.display().to_string(),
             "--product-chain-dae-repo".to_owned(),
             fixture.join("dae").display().to_string(),
             "--product-chain-dae-wing-repo".to_owned(),
@@ -757,6 +762,25 @@ fn daemon_runner_run_command_records_product_chain_recertification() {
             ["actual_mutation_executed"]
             .as_bool()
             .unwrap()
+    );
+    assert!(
+        json["product_chain_recertification"]["local_validation_fresh_install_plan"]["requested"]
+            .as_bool()
+            .unwrap()
+    );
+    assert_eq!(
+        json["product_chain_recertification"]["local_validation_fresh_install_plan"]["inputs"]
+            ["config_source"]
+            .as_str()
+            .unwrap(),
+        config.display().to_string()
+    );
+    assert_eq!(
+        json["product_chain_recertification"]["local_validation_fresh_install_plan"]["inputs"]
+            ["binary_source"]
+            .as_str()
+            .unwrap(),
+        fresh_install_binary.display().to_string()
     );
     assert!(!json["default_switch_allowed"].as_bool().unwrap());
     assert!(!json["product_chain_switch_allowed"].as_bool().unwrap());
