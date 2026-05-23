@@ -988,6 +988,18 @@ fn materialize_production_replacement_readiness_report(
         blockers.push("host write or production run command replacement was already executed");
     }
 
+    let installed_system_service_files: Vec<String> = [
+        Path::new("/etc/systemd/system/dae.service"),
+        Path::new("/usr/lib/systemd/system/dae.service"),
+        Path::new("/lib/systemd/system/dae.service"),
+    ]
+    .into_iter()
+    .filter(|path| path.exists())
+    .map(path_string)
+    .collect();
+    let installed_system_service_exists = !installed_system_service_files.is_empty();
+    let installed_runtime_config_file = Path::new("/etc/dae/config.dae");
+    let installed_runtime_config_exists = installed_runtime_config_file.exists();
     let ready_for_manual_authorization = requested && blockers.is_empty();
     let readiness = json!({
         "status": if ready_for_manual_authorization { "pass" } else if requested { "blocked" } else { "not-requested" },
@@ -1025,6 +1037,11 @@ fn materialize_production_replacement_readiness_report(
             "usr_bin_dae_exists": Path::new("/usr/bin/dae").exists(),
             "usr_local_bin_dae_exists": Path::new("/usr/local/bin/dae").exists(),
             "service_file": report["paths"]["service_file"].clone(),
+            "repository_service_template_file": report["paths"]["service_file"].clone(),
+            "installed_system_service_exists": installed_system_service_exists,
+            "installed_system_service_files": installed_system_service_files,
+            "runtime_config_file": path_string(installed_runtime_config_file),
+            "runtime_config_exists": installed_runtime_config_exists,
         },
         "manual_authorization_conditions": [
             "review production-replacement-readiness.json",
@@ -1234,6 +1251,22 @@ fn materialize_production_host_write_plan_freeze_report(
         && !rehearsal["actual_host_write_executed"]
             .as_bool()
             .unwrap_or(true);
+    let host_inventory = &readiness["host_inventory"];
+    let usr_bin_dae_exists = host_inventory["usr_bin_dae_exists"]
+        .as_bool()
+        .unwrap_or(false);
+    let installed_system_service_exists = host_inventory["installed_system_service_exists"]
+        .as_bool()
+        .unwrap_or(false);
+    let runtime_config_exists = host_inventory["runtime_config_exists"]
+        .as_bool()
+        .unwrap_or(false);
+    let fresh_install_required = !usr_bin_dae_exists && !installed_system_service_exists;
+    let operation_mode = if fresh_install_required {
+        "fresh-install"
+    } else {
+        "replacement"
+    };
     let mut blockers = Vec::new();
     if !readiness_passed {
         blockers.push("production replacement readiness is not pass");
@@ -1244,32 +1277,32 @@ fn materialize_production_host_write_plan_freeze_report(
     if !no_host_write_executed {
         blockers.push("host write was already executed");
     }
+    if fresh_install_required {
+        blockers.push(
+            "fresh install requires a separately frozen binary, service, config, and removal rollback plan",
+        );
+    } else if !usr_bin_dae_exists {
+        blockers.push("installed /usr/bin/dae target is absent for the replacement plan");
+    }
+    if !installed_system_service_exists {
+        blockers.push("installed dae.service target is absent for the frozen service change");
+    }
+    if !runtime_config_exists {
+        blockers.push("required runtime config /etc/dae/config.dae is absent");
+    }
     let pass = blockers.is_empty();
-    let freeze = json!({
-        "status": if pass { "pass" } else { "blocked" },
-        "pass": pass,
-        "frozen": pass,
-        "blockers": blockers,
-        "freeze_file": path_string(&freeze_file),
-        "manual_authorization_required_for_phase4": true,
-        "phase4_must_not_start_without_user_authorization": true,
-        "host_write_allowed": false,
-        "actual_host_write_executed": false,
-        "production_run_command_replaced": false,
-        "checks": {
-            "production_replacement_readiness_passed": readiness_passed,
-            "daed2_product_chain_switch_rehearsal_passed": rehearsal_passed,
-            "no_host_write_executed": no_host_write_executed,
-        },
-        "inputs": {
-            "readiness_file": readiness["readiness_file"].clone(),
-            "rehearsal_file": rehearsal["rehearsal_file"].clone(),
-            "apply_manifest_file": readiness["required_artifacts"]["apply_manifest_file"].clone(),
-            "service_diff_file": readiness["required_artifacts"]["service_diff_file"].clone(),
-            "backup_manifest_file": readiness["required_artifacts"]["backup_manifest_file"].clone(),
-            "rollback_script": readiness["required_artifacts"]["rollback_script"].clone(),
-        },
-        "frozen_execution_checklist": [
+    let frozen_execution_checklist = if fresh_install_required {
+        json!([
+            "confirm user explicitly authorized controlled production fresh installation",
+            "confirm production-host-write-plan-freeze.json is regenerated as pass before any write",
+            "freeze the production Rust binary source and absolute installed binary target",
+            "freeze the installed dae.service target and materialized /etc/dae/config.dae source",
+            "create a removal rollback manifest that preserves the pre-install absence state",
+            "apply only the frozen binary, service, and config installation targets",
+            "run post-write validation immediately"
+        ])
+    } else {
+        json!([
             "confirm user explicitly authorized controlled production host write",
             "confirm production-host-write-plan-freeze.json status is pass",
             "confirm production-replacement-readiness.json status is pass",
@@ -1278,16 +1311,41 @@ fn materialize_production_host_write_plan_freeze_report(
             "create real backup before any write",
             "apply only the frozen service/run-command change",
             "run post-write validation immediately"
-        ],
-        "frozen_rollback_checklist": [
+        ])
+    };
+    let frozen_rollback_checklist = if fresh_install_required {
+        json!([
+            "use the real installation manifest produced during controlled host write",
+            "remove only newly installed dae.service files if installation fails",
+            "remove only the newly installed default daemon binary if installation fails",
+            "remove only the newly installed runtime config if it was created by this execution",
+            "run systemctl daemon-reload only after rollback is explicitly authorized",
+            "verify that the pre-install absence state and daed2.0 chain are restored"
+        ])
+    } else {
+        json!([
             "use the real backup artifact produced during controlled host write",
             "restore service file if changed",
             "restore /usr/bin/dae or target binary if changed",
             "run systemctl daemon-reload only after rollback is explicitly authorized",
             "restart dae.service only after rollback validation is explicit",
             "rerun daed2.0 product-chain validation after rollback"
-        ],
-        "frozen_validation_checklist": [
+        ])
+    };
+    let frozen_validation_checklist = if fresh_install_required {
+        json!([
+            "validate using the frozen installed daemon target and materialized /etc/dae/config.dae",
+            "run ready using the frozen installed daemon target and materialized /etc/dae/config.dae",
+            "validate reload against the newly installed service process",
+            "active TCP relay smoke and benchmark",
+            "active UDP smoke and benchmark",
+            "active DNS smoke and benchmark",
+            "daed2.0 runtime/control API compatibility check",
+            "matched Go/Rust default daemon benchmark",
+            "resource cleanup check"
+        ])
+    } else {
+        json!([
             "dae-daemon-optin validate -c /etc/dae/config.dae",
             "dae-daemon-optin run --disable-timestamp -c /etc/dae/config.dae --exit-after-ready",
             "dae-daemon-optin reload $MAINPID",
@@ -1297,7 +1355,42 @@ fn materialize_production_host_write_plan_freeze_report(
             "daed2.0 runtime/control API compatibility check",
             "matched Go/Rust default daemon benchmark",
             "resource cleanup check"
-        ],
+        ])
+    };
+    let freeze = json!({
+        "status": if pass { "pass" } else { "blocked" },
+        "pass": pass,
+        "frozen": pass,
+        "blockers": blockers,
+        "freeze_file": path_string(&freeze_file),
+        "operation_mode": operation_mode,
+        "fresh_install_requires_replan": fresh_install_required,
+        "manual_authorization_required_for_phase4": true,
+        "phase4_must_not_start_without_user_authorization": true,
+        "phase4_must_not_start_while_freeze_blocked": true,
+        "host_write_allowed": false,
+        "actual_host_write_executed": false,
+        "production_run_command_replaced": false,
+        "checks": {
+            "production_replacement_readiness_passed": readiness_passed,
+            "daed2_product_chain_switch_rehearsal_passed": rehearsal_passed,
+            "no_host_write_executed": no_host_write_executed,
+            "installed_usr_bin_dae_exists": usr_bin_dae_exists,
+            "installed_system_service_exists": installed_system_service_exists,
+            "runtime_config_exists": runtime_config_exists,
+        },
+        "host_inventory": host_inventory.clone(),
+        "inputs": {
+            "readiness_file": readiness["readiness_file"].clone(),
+            "rehearsal_file": rehearsal["rehearsal_file"].clone(),
+            "apply_manifest_file": readiness["required_artifacts"]["apply_manifest_file"].clone(),
+            "service_diff_file": readiness["required_artifacts"]["service_diff_file"].clone(),
+            "backup_manifest_file": readiness["required_artifacts"]["backup_manifest_file"].clone(),
+            "rollback_script": readiness["required_artifacts"]["rollback_script"].clone(),
+        },
+        "frozen_execution_checklist": frozen_execution_checklist,
+        "frozen_rollback_checklist": frozen_rollback_checklist,
+        "frozen_validation_checklist": frozen_validation_checklist,
         "read_only": true,
         "source": [
             "DAEX_RUST_REBUILD_PLAN_2026-05-16.md:后续阶段 3",
@@ -2915,6 +3008,16 @@ mod tests {
             materialize_daed2_product_chain_switch_rehearsal_report(&report, &artifact_dir)
                 .unwrap();
         attach_daed2_product_chain_switch_rehearsal(&mut report, rehearsal);
+        let host_inventory = report["production_replacement_readiness"]["host_inventory"]
+            .as_object_mut()
+            .unwrap();
+        host_inventory.insert("usr_bin_dae_exists".to_owned(), json!(true));
+        host_inventory.insert("installed_system_service_exists".to_owned(), json!(true));
+        host_inventory.insert("runtime_config_exists".to_owned(), json!(true));
+        host_inventory.insert(
+            "installed_system_service_files".to_owned(),
+            json!(["/etc/systemd/system/dae.service"]),
+        );
         let freeze =
             materialize_production_host_write_plan_freeze_report(&report, &artifact_dir).unwrap();
         attach_production_host_write_plan_freeze(&mut report, freeze.clone());
@@ -2922,6 +3025,8 @@ mod tests {
         assert_eq!(freeze["status"].as_str().unwrap(), "pass");
         assert!(freeze["pass"].as_bool().unwrap());
         assert!(freeze["frozen"].as_bool().unwrap());
+        assert_eq!(freeze["operation_mode"].as_str().unwrap(), "replacement");
+        assert!(!freeze["fresh_install_requires_replan"].as_bool().unwrap());
         assert!(
             freeze["manual_authorization_required_for_phase4"]
                 .as_bool()
@@ -2947,6 +3052,75 @@ mod tests {
                 .unwrap()
         );
         assert!(std::path::Path::new(freeze["freeze_file"].as_str().unwrap()).exists());
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn product_chain_host_write_plan_freeze_blocks_unplanned_fresh_install() {
+        let root = std::env::temp_dir().join(format!(
+            "dae-daemon-product-chain-host-write-fresh-install-{}",
+            std::process::id()
+        ));
+        let artifact_dir = root.join("artifact");
+        std::fs::create_dir_all(&artifact_dir).unwrap();
+        let report = json!({
+            "production_replacement_readiness": {
+                "ready_for_manual_authorization": true,
+                "checks": {
+                    "no_host_write_executed": true
+                },
+                "host_inventory": {
+                    "usr_bin_dae_exists": false,
+                    "usr_local_bin_dae_exists": false,
+                    "installed_system_service_exists": false,
+                    "installed_system_service_files": [],
+                    "runtime_config_file": "/etc/dae/config.dae",
+                    "runtime_config_exists": false
+                },
+                "readiness_file": "/tmp/production-replacement-readiness.json",
+                "required_artifacts": {
+                    "apply_manifest_file": "/tmp/production-run-command-replacement-apply.json",
+                    "service_diff_file": "/tmp/production-run-command-replacement-service.diff",
+                    "backup_manifest_file": "/tmp/backup-manifest.json",
+                    "rollback_script": "/tmp/rollback-production-run-command-replacement.sh"
+                }
+            },
+            "daed2_product_chain_switch_rehearsal": {
+                "pass": true,
+                "actual_host_write_executed": false,
+                "rehearsal_file": "/tmp/daed2-product-chain-switch-rehearsal.json"
+            }
+        });
+
+        let freeze =
+            materialize_production_host_write_plan_freeze_report(&report, &artifact_dir).unwrap();
+
+        assert_eq!(freeze["status"].as_str().unwrap(), "blocked");
+        assert!(!freeze["pass"].as_bool().unwrap());
+        assert!(!freeze["frozen"].as_bool().unwrap());
+        assert_eq!(freeze["operation_mode"].as_str().unwrap(), "fresh-install");
+        assert!(freeze["fresh_install_requires_replan"].as_bool().unwrap());
+        assert!(
+            freeze["blockers"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|blocker| blocker.as_str().unwrap().contains("fresh install"))
+        );
+        assert!(
+            freeze["blockers"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|blocker| blocker.as_str().unwrap().contains("/etc/dae/config.dae"))
+        );
+        assert!(
+            freeze["frozen_execution_checklist"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|step| step.as_str().unwrap().contains("fresh installation"))
+        );
         let _ = std::fs::remove_dir_all(root);
     }
 
