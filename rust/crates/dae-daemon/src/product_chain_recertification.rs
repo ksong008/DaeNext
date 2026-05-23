@@ -1,4 +1,7 @@
 use std::fs;
+use std::io::Write;
+#[cfg(unix)]
+use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
@@ -1280,6 +1283,19 @@ fn materialize_local_validation_fresh_install_plan(
     let no_host_write_executed = !report["production_run_command_replaced"]
         .as_bool()
         .unwrap_or(true);
+    let staged_config_source = if requested && config_source_exists {
+        Some(materialize_local_validation_validate_input(
+            config_source.unwrap(),
+            artifact_dir,
+        )?)
+    } else {
+        None
+    };
+    let candidate_validate =
+        candidate_validate_report(requested, binary_source, staged_config_source.as_deref());
+    let candidate_validate_passed = candidate_validate["passed"].as_bool().unwrap_or(false);
+    let resident_run_service_contract_ready = false;
+    let reload_command_service_contract_ready = false;
 
     let mut blockers = Vec::new();
     if requested && !fresh_install_host_state_confirmed {
@@ -1306,6 +1322,15 @@ fn materialize_local_validation_fresh_install_plan(
     if requested && !no_host_write_executed {
         blockers.push("host write was already executed");
     }
+    if requested && !candidate_validate_passed {
+        blockers.push("local validation Rust binary cannot validate the staged 0600 config input");
+    }
+    if requested && !resident_run_service_contract_ready {
+        blockers.push("resident run service contract is not implemented by dae-daemon-optin");
+    }
+    if requested && !reload_command_service_contract_ready {
+        blockers.push("reload command service contract is not implemented by dae-daemon-optin");
+    }
     let pass = requested && blockers.is_empty();
     let plan = json!({
         "status": if pass { "pass" } else if requested { "blocked" } else { "not-requested" },
@@ -1326,7 +1351,11 @@ fn materialize_local_validation_fresh_install_plan(
             "product_chain_recertification_clean": product_chain_clean,
             "daed2_product_chain_switch_rehearsal_passed": rehearsal_passed,
             "no_host_write_executed": no_host_write_executed,
+            "candidate_validate_passed": candidate_validate_passed,
+            "resident_run_service_contract_ready": resident_run_service_contract_ready,
+            "reload_command_service_contract_ready": reload_command_service_contract_ready,
         },
+        "candidate_validate": candidate_validate,
         "inputs": {
             "binary_source": binary_source.map(path_string),
             "binary_source_exists": binary_source_exists,
@@ -1335,18 +1364,21 @@ fn materialize_local_validation_fresh_install_plan(
             "config_source": config_source.map(path_string),
             "config_source_exists": config_source_exists,
             "config_source_usage": "local-validation-only",
+            "staged_validate_config_source": staged_config_source.as_deref().map(path_string),
+            "staged_validate_config_mode": "0600",
         },
         "installation_targets": {
             "binary_target": "/usr/bin/dae",
             "service_target": "/etc/systemd/system/dae.service",
             "config_target": "/etc/dae/config.dae",
+            "config_target_mode": "0600",
             "preserved_external_command_contract": "/usr/bin/dae validate/run/reload",
         },
         "execution_checklist": [
             "require explicit authorization before local validation host write",
             "copy the frozen Rust binary source only to /usr/bin/dae",
             "copy install/dae.service only to /etc/systemd/system/dae.service",
-            "copy example.dae only to /etc/dae/config.dae and label it local validation only",
+            "install example.dae only to /etc/dae/config.dae with mode 0600 and label it local validation only",
             "run systemctl actions only within explicit authorization",
             "run validation and resource cleanup checks immediately"
         ],
@@ -1376,6 +1408,98 @@ fn materialize_local_validation_fresh_install_plan(
         })?;
     }
     Ok(plan)
+}
+
+fn materialize_local_validation_validate_input(
+    config_source: &Path,
+    artifact_dir: &Path,
+) -> Result<PathBuf, String> {
+    let staged_config = artifact_dir.join("local-validation-validate-input.dae");
+    let content = fs::read(config_source).map_err(|err| {
+        format!(
+            "failed to read local validation config source {}: {err}",
+            path_string(config_source)
+        )
+    })?;
+    let mut options = fs::OpenOptions::new();
+    options.write(true).create(true).truncate(true);
+    #[cfg(unix)]
+    options.mode(0o600);
+    let mut output = options.open(&staged_config).map_err(|err| {
+        format!(
+            "failed to create staged local validation config {}: {err}",
+            path_string(&staged_config)
+        )
+    })?;
+    output.write_all(&content).map_err(|err| {
+        format!(
+            "failed to write staged local validation config {}: {err}",
+            path_string(&staged_config)
+        )
+    })?;
+    #[cfg(unix)]
+    fs::set_permissions(&staged_config, std::fs::Permissions::from_mode(0o600)).map_err(|err| {
+        format!(
+            "failed to restrict staged local validation config {}: {err}",
+            path_string(&staged_config)
+        )
+    })?;
+    Ok(staged_config)
+}
+
+fn candidate_validate_report(
+    requested: bool,
+    binary_source: Option<&Path>,
+    staged_config_source: Option<&Path>,
+) -> Value {
+    let executable = requested
+        && binary_source.is_some_and(Path::is_file)
+        && staged_config_source.is_some_and(Path::is_file);
+    if !executable {
+        return json!({
+            "executed": false,
+            "passed": false,
+            "command": Value::Null,
+            "exit_code": Value::Null,
+            "stdout": "",
+            "stderr": "",
+        });
+    }
+    let binary_source = binary_source.unwrap();
+    let staged_config_source = staged_config_source.unwrap();
+    let command = vec![
+        path_string(binary_source),
+        "validate".to_owned(),
+        "-c".to_owned(),
+        path_string(staged_config_source),
+    ];
+    match Command::new(binary_source)
+        .args(["validate", "-c"])
+        .arg(staged_config_source)
+        .output()
+    {
+        Ok(output) => json!({
+            "executed": true,
+            "passed": output.status.success(),
+            "command": command,
+            "exit_code": output.status.code(),
+            "stdout": bounded_command_output(&output.stdout),
+            "stderr": bounded_command_output(&output.stderr),
+        }),
+        Err(err) => json!({
+            "executed": true,
+            "passed": false,
+            "command": command,
+            "exit_code": Value::Null,
+            "stdout": "",
+            "stderr": err.to_string(),
+        }),
+    }
+}
+
+fn bounded_command_output(bytes: &[u8]) -> String {
+    const MAX_OUTPUT_BYTES: usize = 4000;
+    String::from_utf8_lossy(&bytes[..bytes.len().min(MAX_OUTPUT_BYTES)]).into_owned()
 }
 
 fn attach_local_validation_fresh_install_plan(report: &mut Value, plan: Value) {
@@ -1449,6 +1573,14 @@ fn materialize_production_host_write_plan_freeze_report(
             blockers.push(
                 "fresh install requires a separately frozen binary, service, config, and removal rollback plan",
             );
+            if local_validation_fresh_install_plan["requested"]
+                .as_bool()
+                .unwrap_or(false)
+            {
+                blockers.push(
+                    "local validation fresh-install plan is blocked by candidate service command contract",
+                );
+            }
         }
     } else if !usr_bin_dae_exists {
         blockers.push("installed /usr/bin/dae target is absent for the replacement plan");
@@ -3317,7 +3449,13 @@ mod tests {
         )
         .unwrap();
         std::fs::write(&config_source, "global {\n  log_level: info\n}\n").unwrap();
-        std::fs::write(&binary_source, "local-validation-rust-binary").unwrap();
+        std::fs::write(
+            &binary_source,
+            "#!/bin/sh\n[ \"$1\" = \"validate\" ] && exit 0\nexit 2\n",
+        )
+        .unwrap();
+        #[cfg(unix)]
+        std::fs::set_permissions(&binary_source, std::fs::Permissions::from_mode(0o755)).unwrap();
         let options = ProductChainRecertificationOptions {
             service_file: service_file.clone(),
             local_validation_fresh_install_plan_requested: true,
@@ -3361,8 +3499,8 @@ mod tests {
         let local_plan =
             materialize_local_validation_fresh_install_plan(&options, &report, &artifact_dir)
                 .unwrap();
-        assert_eq!(local_plan["status"].as_str().unwrap(), "pass");
-        assert!(local_plan["pass"].as_bool().unwrap());
+        assert_eq!(local_plan["status"].as_str().unwrap(), "blocked");
+        assert!(!local_plan["pass"].as_bool().unwrap());
         assert_eq!(
             local_plan["scope"].as_str().unwrap(),
             "local-validation-only"
@@ -3382,6 +3520,27 @@ mod tests {
                 .as_bool()
                 .unwrap()
         );
+        assert!(
+            local_plan["candidate_validate"]["passed"]
+                .as_bool()
+                .unwrap()
+        );
+        assert!(
+            !local_plan["checks"]["resident_run_service_contract_ready"]
+                .as_bool()
+                .unwrap()
+        );
+        assert!(
+            !local_plan["checks"]["reload_command_service_contract_ready"]
+                .as_bool()
+                .unwrap()
+        );
+        assert_eq!(
+            local_plan["installation_targets"]["config_target_mode"]
+                .as_str()
+                .unwrap(),
+            "0600"
+        );
         assert!(std::path::Path::new(local_plan["plan_file"].as_str().unwrap()).exists());
         attach_local_validation_fresh_install_plan(&mut report, local_plan);
 
@@ -3389,7 +3548,7 @@ mod tests {
             materialize_production_host_write_plan_freeze_report(&report, &artifact_dir).unwrap();
         assert!(!freeze["pass"].as_bool().unwrap());
         assert!(
-            freeze["checks"]["local_validation_fresh_install_plan_passed"]
+            !freeze["checks"]["local_validation_fresh_install_plan_passed"]
                 .as_bool()
                 .unwrap()
         );
@@ -3398,7 +3557,10 @@ mod tests {
                 .as_array()
                 .unwrap()
                 .iter()
-                .any(|blocker| blocker.as_str().unwrap().contains("local validation only"))
+                .any(|blocker| blocker
+                    .as_str()
+                    .unwrap()
+                    .contains("candidate service command contract"))
         );
         let _ = std::fs::remove_dir_all(root);
     }

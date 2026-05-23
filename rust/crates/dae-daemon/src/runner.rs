@@ -1,3 +1,4 @@
+use crate::config_validate::validate_config_file;
 use crate::identity::daemon_identity;
 use crate::lifecycle::{default_stage150_root, stage150_lifecycle_smoke_report};
 use crate::preflight::stage149_identity_preflight_report;
@@ -38,6 +39,14 @@ impl DaemonOutput {
             exit_code: 2,
         }
     }
+
+    fn error(message: impl Into<String>) -> Self {
+        Self {
+            stdout: String::new(),
+            stderr: format!("{}\n", message.into()),
+            exit_code: 1,
+        }
+    }
 }
 
 pub fn run_with_args_and_version(
@@ -49,6 +58,7 @@ pub fn run_with_args_and_version(
         Some("identity") if args.len() == 1 => {
             DaemonOutput::ok(format!("{}\n", daemon_identity(version)))
         }
+        Some("validate") => run_validate_command(&args[1..]),
         Some("run") => run_default_optin_command(&args[1..], version),
         Some("stage149-identity-preflight") if args.len() == 1 => {
             DaemonOutput::ok(format!("{}\n", stage149_identity_preflight_report(version)))
@@ -85,6 +95,32 @@ pub fn run_with_args_and_version(
             DaemonOutput::usage(format!("unsupported dae-daemon-optin command: {command}"))
         }
         None => DaemonOutput::usage("missing dae-daemon-optin command"),
+    }
+}
+
+fn run_validate_command(args: &[String]) -> DaemonOutput {
+    let mut config: Option<PathBuf> = None;
+    let mut iter = args.iter();
+    while let Some(arg) = iter.next() {
+        match arg.as_str() {
+            "-c" | "--config" => {
+                let Some(value) = iter.next() else {
+                    return DaemonOutput::usage("missing validate --config value");
+                };
+                config = Some(value.into());
+            }
+            _ if arg.starts_with("--config=") => {
+                config = arg.split_once('=').map(|(_, value)| value.into());
+            }
+            _ => return DaemonOutput::usage(format!("unsupported validate argument: {arg}")),
+        }
+    }
+    let Some(config) = config else {
+        return DaemonOutput::usage("validate requires -c/--config");
+    };
+    match validate_config_file(&config) {
+        Ok(_) => DaemonOutput::ok(String::new()),
+        Err(err) => DaemonOutput::error(format!("validate config failed: {err}")),
     }
 }
 
