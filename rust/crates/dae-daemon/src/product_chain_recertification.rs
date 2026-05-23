@@ -284,6 +284,7 @@ fn report_value(
     let product_chain_switch_allowed = default_path_mutation_allowed;
     let production_run_command_replacement_plan = production_run_command_replacement_plan_json(
         options,
+        artifact_dir,
         default_path_mutation_allowed,
         service_contract_passed,
     );
@@ -357,6 +358,7 @@ fn report_value(
 
 fn production_run_command_replacement_plan_json(
     options: &ProductChainRecertificationOptions,
+    artifact_dir: &Path,
     default_path_mutation_allowed: bool,
     service_contract_preserved: bool,
 ) -> Value {
@@ -387,6 +389,38 @@ fn production_run_command_replacement_plan_json(
         "rollback_required": true,
         "post_replacement_smoke_required": true,
         "pid_progress_compatibility_required": true,
+        "host_mutation_allowed": false,
+        "requires_explicit_execute_flag": "--execute-production-run-command-replacement",
+        "backup_artifact_dir": path_string(&artifact_dir.join("production-run-command-replacement-backup")),
+        "backup_service_file": path_string(&artifact_dir.join("production-run-command-replacement-backup").join("dae.service")),
+        "backup_usr_bin_dae": path_string(&artifact_dir.join("production-run-command-replacement-backup").join("usr-bin-dae")),
+        "rollback_script": path_string(&artifact_dir.join("rollback-production-run-command-replacement.sh")),
+        "rollback_commands": [
+            "restore backup service file if service was changed",
+            "restore backup /usr/bin/dae if binary was changed",
+            "systemctl daemon-reload",
+            "systemctl restart dae.service only after rollback validation is explicit",
+        ],
+        "post_replacement_smoke_commands": [
+            "dae-daemon-optin validate -c /etc/dae/config.dae",
+            "dae-daemon-optin run --disable-timestamp -c /etc/dae/config.dae --exit-after-ready",
+            "dae-daemon-optin reload $MAINPID",
+        ],
+        "service_manager_commands": [
+            "systemctl daemon-reload",
+            "systemctl restart dae.service",
+            "systemctl status dae.service --no-pager",
+        ],
+        "pre_execution_checks": {
+            "default_path_mutation_allowed": default_path_mutation_allowed,
+            "service_contract_preserved": service_contract_preserved,
+            "go_default_path_preserved": go_default_path_preserved,
+            "backup_required": true,
+            "rollback_required": true,
+            "post_replacement_smoke_required": true,
+            "explicit_execute_flag_required": true,
+            "host_mutation_allowed": false,
+        },
         "actual_mutation_executed": false,
         "production_run_command_replaced": false,
         "read_only": true,
@@ -1297,6 +1331,41 @@ mod tests {
         assert!(plan["backup_required"].as_bool().unwrap());
         assert!(plan["rollback_required"].as_bool().unwrap());
         assert!(plan["post_replacement_smoke_required"].as_bool().unwrap());
+        assert!(!plan["host_mutation_allowed"].as_bool().unwrap());
+        assert_eq!(
+            plan["requires_explicit_execute_flag"].as_str().unwrap(),
+            "--execute-production-run-command-replacement"
+        );
+        assert!(
+            plan["backup_artifact_dir"]
+                .as_str()
+                .unwrap()
+                .contains("production-run-command-replacement-backup")
+        );
+        assert!(
+            plan["rollback_script"]
+                .as_str()
+                .unwrap()
+                .contains("rollback-production-run-command-replacement.sh")
+        );
+        assert!(!plan["rollback_commands"].as_array().unwrap().is_empty());
+        assert!(
+            !plan["post_replacement_smoke_commands"]
+                .as_array()
+                .unwrap()
+                .is_empty()
+        );
+        assert!(
+            !plan["service_manager_commands"]
+                .as_array()
+                .unwrap()
+                .is_empty()
+        );
+        assert!(
+            !plan["pre_execution_checks"]["host_mutation_allowed"]
+                .as_bool()
+                .unwrap()
+        );
         assert!(!plan["actual_mutation_executed"].as_bool().unwrap());
         assert!(!plan["production_run_command_replaced"].as_bool().unwrap());
         assert!(plan["read_only"].as_bool().unwrap());
