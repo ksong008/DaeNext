@@ -7,6 +7,7 @@ use serde_json::{Map, Value, json};
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ProductChainRecertificationOptions {
     pub execute: bool,
+    pub default_path_mutation_requested: bool,
     pub dae_repo: PathBuf,
     pub dae_wing_repo: PathBuf,
     pub daed_repo: PathBuf,
@@ -20,6 +21,7 @@ impl Default for ProductChainRecertificationOptions {
     fn default() -> Self {
         Self {
             execute: false,
+            default_path_mutation_requested: false,
             dae_repo: PathBuf::from("/root/project/dae"),
             daed_repo: PathBuf::from("/root/project/daed"),
             dae_wing_repo: PathBuf::from("/root/project/daed/wing"),
@@ -209,7 +211,7 @@ fn report_value(
     evidence: Option<ProductChainEvidence>,
 ) -> Value {
     let executed = options.execute;
-    let default_path_mutation_requested = false;
+    let default_path_mutation_requested = options.default_path_mutation_requested;
     let service = evidence
         .as_ref()
         .map(|evidence| evidence.service.clone())
@@ -1062,6 +1064,7 @@ mod tests {
         }
         let options = ProductChainRecertificationOptions {
             execute: true,
+            default_path_mutation_requested: false,
             dae_repo: fixture.join("dae"),
             dae_wing_repo: fixture.join("dae-wing"),
             daed_repo: fixture.join("daed"),
@@ -1118,29 +1121,7 @@ mod tests {
         ));
         let artifact_dir = root.join("artifact");
         let manifest_file = artifact_dir.join("product-chain-recertification.json");
-        let evidence = ProductChainEvidence {
-            topology: json!({
-                "chain": "daed2.0-web-wing-daecore",
-                "daed2_wing_repo_used": true,
-                "standalone_dae_wing_repo_used": false,
-            }),
-            service: json!({
-                "status": "pass",
-                "service_contract_preserved": true,
-            }),
-            go_mod: json!({
-                "status": "pass",
-                "outbound_quic_go_dependency_boundary_preserved": true,
-            }),
-            repos: Vec::new(),
-            runtime_control_api: json!({
-                "status": "pass",
-                "runtime_control_api_source_contract_preserved": true,
-            }),
-            dirty_repos: Vec::new(),
-            missing_repos: Vec::new(),
-            unavailable_repos: Vec::new(),
-        };
+        let evidence = clean_product_chain_evidence();
         let options = ProductChainRecertificationOptions {
             execute: true,
             ..ProductChainRecertificationOptions::default()
@@ -1193,6 +1174,46 @@ mod tests {
     }
 
     #[test]
+    fn product_chain_default_path_mutation_request_allows_switch_without_replacing_run_command() {
+        let root = std::env::temp_dir().join(format!(
+            "dae-daemon-product-chain-default-path-request-{}",
+            std::process::id()
+        ));
+        let artifact_dir = root.join("artifact");
+        let manifest_file = artifact_dir.join("product-chain-recertification.json");
+        let options = ProductChainRecertificationOptions {
+            execute: true,
+            default_path_mutation_requested: true,
+            ..ProductChainRecertificationOptions::default()
+        };
+        let report = report_value(
+            &options,
+            &artifact_dir,
+            &manifest_file,
+            ProductChainAdmissionEvidence {
+                true_rust_default_daemon_admitted: true,
+                production_dataplane_admitted: true,
+                reload_runtime_parity_admitted: true,
+                matched_benchmark_recorded: true,
+            },
+            Some(clean_product_chain_evidence()),
+        );
+        assert!(report["default_path_mutation_requested"].as_bool().unwrap());
+        assert!(report["default_path_mutation_allowed"].as_bool().unwrap());
+        assert!(report["default_switch_allowed"].as_bool().unwrap());
+        assert!(report["product_chain_switch_allowed"].as_bool().unwrap());
+        assert!(
+            report["product_chain_recertification_clean"]
+                .as_bool()
+                .unwrap()
+        );
+        assert!(!report["production_run_command_replaced"].as_bool().unwrap());
+        assert!(report["read_only"].as_bool().unwrap());
+        assert!(report["remaining_blockers"].as_array().unwrap().is_empty());
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
     fn product_chain_recertification_blocks_when_repo_status_is_unavailable() {
         let root = std::env::temp_dir().join(format!(
             "dae-daemon-product-chain-nongit-{}",
@@ -1217,6 +1238,7 @@ mod tests {
         }
         let options = ProductChainRecertificationOptions {
             execute: true,
+            default_path_mutation_requested: false,
             dae_repo: fixture.join("dae"),
             dae_wing_repo: fixture.join("dae-wing"),
             daed_repo: fixture.join("daed"),
@@ -1491,5 +1513,31 @@ mod tests {
     fn write_fixture_file(path: &Path, text: &str) {
         std::fs::create_dir_all(path.parent().unwrap()).unwrap();
         std::fs::write(path, text).unwrap();
+    }
+
+    fn clean_product_chain_evidence() -> ProductChainEvidence {
+        ProductChainEvidence {
+            topology: json!({
+                "chain": "daed2.0-web-wing-daecore",
+                "daed2_wing_repo_used": true,
+                "standalone_dae_wing_repo_used": false,
+            }),
+            service: json!({
+                "status": "pass",
+                "service_contract_preserved": true,
+            }),
+            go_mod: json!({
+                "status": "pass",
+                "outbound_quic_go_dependency_boundary_preserved": true,
+            }),
+            repos: Vec::new(),
+            runtime_control_api: json!({
+                "status": "pass",
+                "runtime_control_api_source_contract_preserved": true,
+            }),
+            dirty_repos: Vec::new(),
+            missing_repos: Vec::new(),
+            unavailable_repos: Vec::new(),
+        }
     }
 }

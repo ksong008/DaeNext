@@ -142,6 +142,7 @@ fn run_default_optin_command(args: &[String], version: &str) -> DaemonOutput {
     let mut product_chain_quic_go_repo: Option<PathBuf> = None;
     let mut product_chain_service_file: Option<PathBuf> = None;
     let mut product_chain_go_mod_file: Option<PathBuf> = None;
+    let mut request_default_path_mutation = false;
     let mut iter = args.iter();
     while let Some(arg) = iter.next() {
         match arg.as_str() {
@@ -668,6 +669,9 @@ fn run_default_optin_command(args: &[String], version: &str) -> DaemonOutput {
             "--execute-product-chain-recertification" => {
                 product_chain_recertification = true;
             }
+            "--request-default-path-mutation" => {
+                request_default_path_mutation = true;
+            }
             "--product-chain-dae-repo" => {
                 let Some(value) = iter.next() else {
                     return DaemonOutput::usage("missing run --product-chain-dae-repo value");
@@ -829,6 +833,9 @@ fn run_default_optin_command(args: &[String], version: &str) -> DaemonOutput {
         options.matched_default_benchmark.source_dir = source_dir;
     }
     options.product_chain_recertification.execute = product_chain_recertification;
+    options
+        .product_chain_recertification
+        .default_path_mutation_requested = request_default_path_mutation;
     if let Some(path) = product_chain_dae_repo {
         options.product_chain_recertification.dae_repo = path;
     }
