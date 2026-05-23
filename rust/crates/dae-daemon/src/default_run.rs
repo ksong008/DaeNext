@@ -5,6 +5,7 @@ use dae_core_types::reload::RELOAD_DONE;
 use serde_json::{Value, json};
 
 use crate::{
+    ProductionDataplaneHarnessOptions, production_dataplane_harness_report,
     stage160_listener_ebpf_preflight_harness_report, stage165_reload_owner_handoff_smoke_report,
 };
 
@@ -18,6 +19,7 @@ pub struct RunOptions {
     pub disable_sudo: bool,
     pub listener_smoke: bool,
     pub reload_smoke: bool,
+    pub production_dataplane_harness: ProductionDataplaneHarnessOptions,
 }
 
 impl RunOptions {
@@ -32,6 +34,7 @@ impl RunOptions {
             disable_sudo: false,
             listener_smoke: true,
             reload_smoke: true,
+            production_dataplane_harness: ProductionDataplaneHarnessOptions::default(),
         }
     }
 }
@@ -108,6 +111,8 @@ pub fn run_default_optin_report(options: &RunOptions, version: &str) -> Result<V
     } else {
         json!({"skipped": true})
     };
+    let production_dataplane =
+        production_dataplane_harness_report(&options.root, &options.production_dataplane_harness)?;
 
     let listener_smoke_passed = !options.listener_smoke
         || listener["tcp_udp_loopback_listener_smoke_passed"]
@@ -117,15 +122,25 @@ pub fn run_default_optin_report(options: &RunOptions, version: &str) -> Result<V
         || reload["non_production_daemon_reload_owner_transfer_smoke_passed"]
             .as_bool()
             .unwrap_or(false);
+    let production_dataplane_harness_executed =
+        production_dataplane["production_dataplane_harness_executed"]
+            .as_bool()
+            .unwrap_or(false);
+    let production_dataplane_harness_passed =
+        production_dataplane["production_dataplane_harness_passed"]
+            .as_bool()
+            .unwrap_or(false);
 
     fs::write(
         &options.logfile,
         format!(
-            "dae-daemon-optin run: config={} bytes={} listener_smoke_passed={} reload_smoke_passed={}\n",
+            "dae-daemon-optin run: config={} bytes={} listener_smoke_passed={} reload_smoke_passed={} production_dataplane_harness_executed={} production_dataplane_harness_passed={}\n",
             path_string(&options.config),
             config.len(),
             listener_smoke_passed,
-            reload_smoke_passed
+            reload_smoke_passed,
+            production_dataplane_harness_executed,
+            production_dataplane_harness_passed
         ),
     )
     .map_err(|err| format!("failed to write run log file: {err}"))?;
@@ -175,6 +190,9 @@ pub fn run_default_optin_report(options: &RunOptions, version: &str) -> Result<V
     report["reload_owner_handoff_smoke_passed"] = json!(reload_smoke_passed);
     report["listener"] = listener;
     report["reload_owner_handoff"] = reload;
+    report["production_dataplane_harness_executed"] = json!(production_dataplane_harness_executed);
+    report["production_dataplane_harness_passed"] = json!(production_dataplane_harness_passed);
+    report["production_dataplane_harness"] = production_dataplane;
     for key in [
         ("production_run_command_replaced", false),
         ("production_pid_progress_paths_mutated", false),
@@ -195,12 +213,29 @@ pub fn run_default_optin_report(options: &RunOptions, version: &str) -> Result<V
         let (name, value) = key;
         report[name] = json!(value);
     }
-    report["remaining_blockers"] = json!([
+    report["production_dataplane_admission_scope"] =
+        json!(if production_dataplane_harness_passed {
+            "run-integrated-harness-only"
+        } else if production_dataplane_harness_executed {
+            "run-integrated-harness-failed"
+        } else {
+            "not-executed"
+        });
+    let mut remaining_blockers = vec![
         "opt-in run now exists, but it still uses isolated pid/progress paths",
-        "production tproxy listener, tc/eBPF attach, and default daemon lifecycle are not yet bound to run",
         "reload owner handoff is still non-production until proven against production tc/netns attach",
-        "matched Go/Rust default daemon benchmark remains blocked"
-    ]);
+        "matched Go/Rust default daemon benchmark remains blocked",
+    ];
+    if production_dataplane_harness_passed {
+        remaining_blockers.push(
+            "production dataplane evidence is integrated into run, but still harness-only and not default daemon owned",
+        );
+    } else {
+        remaining_blockers.push(
+            "production tproxy listener, tc/eBPF attach, and active TCP/UDP/DNS dataplane are not yet proven inside this run",
+        );
+    }
+    report["remaining_blockers"] = json!(remaining_blockers);
 
     let manifest = serde_json::to_vec_pretty(&report)
         .map_err(|err| format!("failed to encode run manifest: {err}"))?;
