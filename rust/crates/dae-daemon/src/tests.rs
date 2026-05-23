@@ -626,6 +626,7 @@ fn daemon_runner_run_command_records_product_chain_recertification() {
             "--disable-timestamp".to_owned(),
             "--disable-sudo".to_owned(),
             "--execute-product-chain-recertification".to_owned(),
+            "--request-default-path-mutation".to_owned(),
             "--product-chain-dae-repo".to_owned(),
             fixture.join("dae").display().to_string(),
             "--product-chain-dae-wing-repo".to_owned(),
@@ -674,6 +675,16 @@ fn daemon_runner_run_command_records_product_chain_recertification() {
     );
     assert!(
         !json["product_chain_recertification"]["daed_wing_runtime_control_api_regression_recorded"]
+            .as_bool()
+            .unwrap()
+    );
+    assert!(
+        json["product_chain_recertification"]["default_path_mutation_requested"]
+            .as_bool()
+            .unwrap()
+    );
+    assert!(
+        !json["product_chain_recertification"]["default_path_mutation_allowed"]
             .as_bool()
             .unwrap()
     );
