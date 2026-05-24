@@ -14,7 +14,7 @@ fn binary() -> &'static str {
 }
 
 #[test]
-fn candidate_reports_resident_service_capabilities_without_claiming_dataplane() {
+fn candidate_reports_resident_service_and_dataplane_capabilities() {
     let output = Command::new(binary())
         .arg("service-contract")
         .output()
@@ -32,7 +32,12 @@ fn candidate_reports_resident_service_capabilities_without_claiming_dataplane() 
             .unwrap()
     );
     assert!(
-        !report["resident_production_dataplane_ready"]
+        report["resident_production_dataplane_ready"]
+            .as_bool()
+            .unwrap()
+    );
+    assert!(
+        report["resident_default_daemon_switch_ready"]
             .as_bool()
             .unwrap()
     );

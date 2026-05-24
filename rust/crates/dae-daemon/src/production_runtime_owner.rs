@@ -10,6 +10,7 @@ mod active_udp;
 mod command;
 mod reload_runtime;
 mod report;
+mod resident;
 mod topology;
 mod udp_io;
 
@@ -37,6 +38,7 @@ use command::{
 };
 use reload_runtime::{ReloadRuntimeEvidence, run_reload_runtime_parity_probe};
 use report::{live_handoff_json, report_value, socket_options_verified};
+pub use resident::{ResidentProductionRuntime, start_resident_production_runtime};
 use topology::{
     attach_host_program, attach_peer_program, cleanup_production_topology, preflight_checks,
     read_topology_values, setup_production_topology, show_host_program, show_peer_program,
