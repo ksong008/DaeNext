@@ -438,6 +438,10 @@ fn resident_default_daemon_switch_gate_json(options: &ProductChainRecertificatio
         candidate_service_contract["resident_production_dataplane_ready"]
             .as_bool()
             .unwrap_or(false);
+    let resident_default_daemon_switch_declared =
+        candidate_service_contract["resident_default_daemon_switch_ready"]
+            .as_bool()
+            .unwrap_or(false);
     let candidate_service_contract_passed = candidate_service_contract["passed"]
         .as_bool()
         .unwrap_or(false);
@@ -445,7 +449,8 @@ fn resident_default_daemon_switch_gate_json(options: &ProductChainRecertificatio
         && candidate_service_contract_passed
         && resident_run_service_contract_ready
         && reload_command_service_contract_ready
-        && resident_production_dataplane_ready;
+        && resident_production_dataplane_ready
+        && resident_default_daemon_switch_declared;
 
     let mut blockers = Vec::new();
     if requested && !binary_source_provided {
@@ -464,6 +469,11 @@ fn resident_default_daemon_switch_gate_json(options: &ProductChainRecertificatio
                 "resident default service path does not admit production dataplane; dae-daemon-optin run -c ... is service-contract-only",
             );
         }
+        if resident_production_dataplane_ready && !resident_default_daemon_switch_declared {
+            blockers.push(
+                "resident default daemon switch readiness is not explicitly declared by service-contract",
+            );
+        }
     }
 
     json!({
@@ -477,6 +487,7 @@ fn resident_default_daemon_switch_gate_json(options: &ProductChainRecertificatio
         "resident_run_service_contract_ready": resident_run_service_contract_ready,
         "reload_command_service_contract_ready": reload_command_service_contract_ready,
         "resident_production_dataplane_ready": resident_production_dataplane_ready,
+        "resident_default_daemon_switch_declared": resident_default_daemon_switch_declared,
         "requires_no_extra_flag_run_path": "dae-daemon-optin run --disable-timestamp -c /etc/dae/config.dae",
         "blockers": blockers,
         "source": [
@@ -1663,10 +1674,15 @@ fn candidate_service_contract_report(requested: bool, binary_source: Option<&Pat
                 capability["resident_production_dataplane_ready"]
                     .as_bool()
                     .unwrap_or(false);
+            let resident_default_daemon_switch_declared =
+                capability["resident_default_daemon_switch_ready"]
+                    .as_bool()
+                    .unwrap_or(false);
             let resident_default_daemon_switch_ready = output.status.success()
                 && resident_run_ready
                 && reload_ready
-                && resident_production_dataplane_ready;
+                && resident_production_dataplane_ready
+                && resident_default_daemon_switch_declared;
             json!({
                 "executed": true,
                 "passed": output.status.success() && resident_run_ready && reload_ready,
@@ -4203,7 +4219,7 @@ mod tests {
                 "#!/bin/sh\n\
                  if [ \"$1\" = \"validate\" ]; then exit 0; fi\n\
                  if [ \"$1\" = \"service-contract\" ]; then\n\
-                   printf '%s\\n' '{{\"resident_run_service_contract_ready\":true,\"reload_command_service_contract_ready\":true,\"resident_production_dataplane_ready\":{resident_dataplane_ready}}}'\n\
+                   printf '%s\\n' '{{\"resident_run_service_contract_ready\":true,\"reload_command_service_contract_ready\":true,\"resident_production_dataplane_ready\":{resident_dataplane_ready},\"resident_default_daemon_switch_ready\":{resident_dataplane_ready}}}'\n\
                    exit 0\n\
                  fi\n\
                  exit 2\n"
