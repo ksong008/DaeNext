@@ -267,6 +267,10 @@ pub fn run_default_optin_report(options: &RunOptions, version: &str) -> Result<V
         product_chain_recertification["product_chain_switch_allowed"]
             .as_bool()
             .unwrap_or(false);
+    let resident_default_daemon_switch_ready =
+        product_chain_recertification["resident_default_daemon_switch_ready"]
+            .as_bool()
+            .unwrap_or(false);
 
     fs::write(
         &options.logfile,
@@ -472,6 +476,10 @@ pub fn run_default_optin_report(options: &RunOptions, version: &str) -> Result<V
             default_path_mutation_allowed,
         ),
         ("product_chain_switch_allowed", product_chain_switch_allowed),
+        (
+            "resident_default_daemon_switch_ready",
+            resident_default_daemon_switch_ready,
+        ),
     ] {
         let (name, value) = key;
         report[name] = json!(value);
@@ -514,6 +522,10 @@ pub fn run_default_optin_report(options: &RunOptions, version: &str) -> Result<V
         if product_chain_switch_allowed {
             remaining_blockers.push(
                 "default path mutation request is admitted by clean product-chain recertification; production run command replacement is still not executed",
+            );
+        } else if !resident_default_daemon_switch_ready {
+            remaining_blockers.push(
+                "resident default service path does not admit production dataplane; dae-daemon-optin run -c ... is still service-contract-only",
             );
         } else {
             remaining_blockers.push(
