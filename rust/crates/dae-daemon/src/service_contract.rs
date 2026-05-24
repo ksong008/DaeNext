@@ -85,6 +85,8 @@ pub fn service_contract_capabilities(version: &str) -> Value {
             "error": (RELOAD_ERROR as char).to_string(),
         },
         "resident_production_dataplane_ready": false,
+        "resident_default_daemon_switch_ready": false,
+        "default_path_switch_blocker": "resident default service path does not admit production dataplane",
         "boundary": "resident run and reload service protocol only; production forwarding remains separately admitted",
     })
 }

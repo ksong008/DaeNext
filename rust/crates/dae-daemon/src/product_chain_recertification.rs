@@ -307,18 +307,27 @@ fn report_value(
         runtime_control_api_clean_baseline["recorded"]
             .as_bool()
             .unwrap_or(false);
+    let resident_default_daemon_switch_gate = resident_default_daemon_switch_gate_json(options);
+    let resident_default_daemon_switch_ready = resident_default_daemon_switch_gate["ready"]
+        .as_bool()
+        .unwrap_or(false);
+    let resident_default_daemon_service_contract =
+        resident_default_daemon_switch_gate["candidate_service_contract"].clone();
     let recertification_clean = executed
         && admission.true_rust_default_daemon_admitted
         && service_contract_passed
         && dependency_boundary_preserved
         && clean_product_chain_baseline
         && daed_wing_runtime_control_api_regression_recorded;
-    let default_path_mutation_allowed = recertification_clean && default_path_mutation_requested;
+    let default_path_mutation_allowed = recertification_clean
+        && default_path_mutation_requested
+        && resident_default_daemon_switch_ready;
     let product_chain_switch_allowed = default_path_mutation_allowed;
     let production_run_command_replacement_plan = production_run_command_replacement_plan_json(
         options,
         artifact_dir,
         default_path_mutation_allowed,
+        resident_default_daemon_switch_ready,
         service_contract_passed,
     );
     let mut remaining_blockers = remaining_blockers(
@@ -330,6 +339,9 @@ fn report_value(
         daed_wing_runtime_control_api_regression_recorded,
         default_path_mutation_requested,
     );
+    remaining_blockers.extend(value_string_array(
+        &resident_default_daemon_switch_gate["blockers"],
+    ));
     remaining_blockers.extend(production_run_command_execution_blockers(
         &production_run_command_replacement_plan,
     ));
@@ -377,6 +389,9 @@ fn report_value(
         "daed_wing_runtime_control_api_regression_recorded": daed_wing_runtime_control_api_regression_recorded,
         "product_chain_recertification_clean": recertification_clean,
         "default_path_mutation_requested": default_path_mutation_requested,
+        "resident_default_daemon_switch_ready": resident_default_daemon_switch_ready,
+        "resident_default_daemon_switch_gate": resident_default_daemon_switch_gate,
+        "resident_default_daemon_service_contract": resident_default_daemon_service_contract,
         "production_run_command_replacement_plan": production_run_command_replacement_plan,
         "production_run_command_replaced": false,
         "go_default_path_preserved": true,
@@ -395,10 +410,82 @@ fn report_value(
     })
 }
 
+fn resident_default_daemon_switch_gate_json(options: &ProductChainRecertificationOptions) -> Value {
+    let requested = options.default_path_mutation_requested
+        || options.production_run_command_replacement_dry_run_requested
+        || options.production_run_command_replacement_execute_requested
+        || options.production_run_command_replacement_apply_plan_requested
+        || options.host_default_path_mutation_allow_requested
+        || options.local_validation_fresh_install_plan_requested;
+    let binary_source = options.local_validation_binary_source.as_deref();
+    let binary_source_provided = binary_source.is_some();
+    let binary_source_exists = binary_source.is_some_and(Path::is_file);
+    let candidate_service_contract = candidate_service_contract_report(requested, binary_source);
+    let resident_run_service_contract_ready =
+        candidate_service_contract["resident_run_service_contract_ready"]
+            .as_bool()
+            .unwrap_or(false);
+    let reload_command_service_contract_ready =
+        candidate_service_contract["reload_command_service_contract_ready"]
+            .as_bool()
+            .unwrap_or(false);
+    let resident_production_dataplane_ready =
+        candidate_service_contract["resident_production_dataplane_ready"]
+            .as_bool()
+            .unwrap_or(false);
+    let candidate_service_contract_passed = candidate_service_contract["passed"]
+        .as_bool()
+        .unwrap_or(false);
+    let ready = requested
+        && candidate_service_contract_passed
+        && resident_run_service_contract_ready
+        && reload_command_service_contract_ready
+        && resident_production_dataplane_ready;
+
+    let mut blockers = Vec::new();
+    if requested && !binary_source_provided {
+        blockers.push("resident default daemon candidate binary source is not provided");
+    } else if requested && !binary_source_exists {
+        blockers.push("resident default daemon candidate binary source is absent");
+    } else if requested {
+        if !resident_run_service_contract_ready {
+            blockers.push("resident run service contract is not implemented by dae-daemon-optin");
+        }
+        if !reload_command_service_contract_ready {
+            blockers.push("reload command service contract is not implemented by dae-daemon-optin");
+        }
+        if !resident_production_dataplane_ready {
+            blockers.push(
+                "resident default service path does not admit production dataplane; dae-daemon-optin run -c ... is service-contract-only",
+            );
+        }
+    }
+
+    json!({
+        "status": if ready { "pass" } else if requested { "blocked" } else { "not-requested" },
+        "requested": requested,
+        "ready": ready,
+        "binary_source": binary_source.map(path_string),
+        "binary_source_provided": binary_source_provided,
+        "binary_source_exists": binary_source_exists,
+        "candidate_service_contract": candidate_service_contract,
+        "resident_run_service_contract_ready": resident_run_service_contract_ready,
+        "reload_command_service_contract_ready": reload_command_service_contract_ready,
+        "resident_production_dataplane_ready": resident_production_dataplane_ready,
+        "requires_no_extra_flag_run_path": "dae-daemon-optin run --disable-timestamp -c /etc/dae/config.dae",
+        "blockers": blockers,
+        "source": [
+            "DAEX_RUST_REBUILD_PLAN_2026-05-16.md:Rust resident default service path",
+            "DAENEW_RUST_REBUILD_MEMO_2026-05-16.md:default-path-service-runtime-contract"
+        ],
+    })
+}
+
 fn production_run_command_replacement_plan_json(
     options: &ProductChainRecertificationOptions,
     artifact_dir: &Path,
     default_path_mutation_allowed: bool,
+    resident_default_daemon_switch_ready: bool,
     service_contract_preserved: bool,
 ) -> Value {
     let execute_requested = options.production_run_command_replacement_execute_requested;
@@ -409,6 +496,7 @@ fn production_run_command_replacement_plan_json(
     let go_default_path_preserved = true;
     let admitted = requested
         && default_path_mutation_allowed
+        && resident_default_daemon_switch_ready
         && service_contract_preserved
         && go_default_path_preserved;
     let host_mutation_allow_requested = options.host_default_path_mutation_allow_requested;
@@ -432,6 +520,10 @@ fn production_run_command_replacement_plan_json(
     pre_execution_checks.insert(
         "default_path_mutation_allowed".to_owned(),
         json!(default_path_mutation_allowed),
+    );
+    pre_execution_checks.insert(
+        "resident_default_daemon_switch_ready".to_owned(),
+        json!(resident_default_daemon_switch_ready),
     );
     pre_execution_checks.insert(
         "service_contract_preserved".to_owned(),
@@ -482,6 +574,10 @@ fn production_run_command_replacement_plan_json(
     plan.insert(
         "default_path_mutation_allowed".to_owned(),
         json!(default_path_mutation_allowed),
+    );
+    plan.insert(
+        "resident_default_daemon_switch_ready".to_owned(),
+        json!(resident_default_daemon_switch_ready),
     );
     plan.insert(
         "service_contract_preserved".to_owned(),
@@ -954,6 +1050,10 @@ fn materialize_production_replacement_readiness_report(
         .as_bool()
         .unwrap_or(false);
     let go_fallback_required = plan["go_fallback_required"].as_bool().unwrap_or(false);
+    let resident_default_daemon_switch_ready = report["resident_default_daemon_switch_ready"]
+        .as_bool()
+        .unwrap_or(false);
+    let resident_default_daemon_switch_gate = &report["resident_default_daemon_switch_gate"];
     let no_host_write_executed = !plan["actual_mutation_executed"].as_bool().unwrap_or(true)
         && !apply_plan["actual_host_write_executed"]
             .as_bool()
@@ -968,6 +1068,9 @@ fn materialize_production_replacement_readiness_report(
     let mut blockers = Vec::new();
     if requested && !product_chain_clean {
         blockers.push("product-chain recertification is not clean");
+    }
+    if requested && !resident_default_daemon_switch_ready {
+        blockers.push("resident default service path does not admit production dataplane");
     }
     if requested && !replacement_plan_admitted {
         blockers.push("production run command replacement plan is not admitted");
@@ -1042,6 +1145,8 @@ fn materialize_production_replacement_readiness_report(
             "apply_plan_admitted": apply_plan_admitted,
             "go_fallback_required": go_fallback_required,
             "no_host_write_executed": no_host_write_executed,
+            "resident_default_daemon_switch_ready": resident_default_daemon_switch_ready,
+            "resident_default_daemon_switch_gate": resident_default_daemon_switch_gate.clone(),
             "daed2_product_chain_used": report["product_chain_topology"]["daed2_wing_repo_used"].clone(),
             "product_chain_switch_allowed": report["product_chain_switch_allowed"].clone(),
         },
@@ -1135,6 +1240,9 @@ fn materialize_daed2_product_chain_switch_rehearsal_report(
     let readiness_passed = readiness["ready_for_manual_authorization"]
         .as_bool()
         .unwrap_or(false);
+    let resident_default_daemon_switch_ready = report["resident_default_daemon_switch_ready"]
+        .as_bool()
+        .unwrap_or(false);
     let apply_manifest_materialized = apply_plan["apply_manifest_materialized"]
         .as_bool()
         .unwrap_or(false);
@@ -1156,6 +1264,9 @@ fn materialize_daed2_product_chain_switch_rehearsal_report(
     }
     if !dependency_boundary_preserved {
         blockers.push("outbound / quic-go dependency boundary is not preserved");
+    }
+    if !resident_default_daemon_switch_ready {
+        blockers.push("resident default service path does not admit production dataplane");
     }
     if !readiness_passed {
         blockers.push("production replacement readiness report is not pass");
@@ -1189,6 +1300,7 @@ fn materialize_daed2_product_chain_switch_rehearsal_report(
             "product_chain_recertification_clean": product_chain_clean,
             "runtime_control_api_source_contract_preserved": runtime_control_api_preserved,
             "outbound_quic_go_dependency_boundary_preserved": dependency_boundary_preserved,
+            "resident_default_daemon_switch_ready": resident_default_daemon_switch_ready,
             "production_replacement_readiness_passed": readiness_passed,
             "apply_manifest_materialized": apply_manifest_materialized,
             "service_diff_materialized": service_diff_materialized,
@@ -1341,6 +1453,9 @@ fn materialize_local_validation_fresh_install_plan(
     }
     if requested && !reload_command_service_contract_ready {
         blockers.push("reload command service contract is not implemented by dae-daemon-optin");
+    }
+    if requested && !resident_production_dataplane_ready {
+        blockers.push("resident default service path does not admit production dataplane");
     }
     let pass = requested && blockers.is_empty();
     let plan = json!({
@@ -1524,6 +1639,7 @@ fn candidate_service_contract_report(requested: bool, binary_source: Option<&Pat
             "resident_run_service_contract_ready": false,
             "reload_command_service_contract_ready": false,
             "resident_production_dataplane_ready": false,
+            "resident_default_daemon_switch_ready": false,
         });
     }
     let binary_source = binary_source.unwrap();
@@ -1538,6 +1654,14 @@ fn candidate_service_contract_report(requested: bool, binary_source: Option<&Pat
             let reload_ready = capability["reload_command_service_contract_ready"]
                 .as_bool()
                 .unwrap_or(false);
+            let resident_production_dataplane_ready =
+                capability["resident_production_dataplane_ready"]
+                    .as_bool()
+                    .unwrap_or(false);
+            let resident_default_daemon_switch_ready = output.status.success()
+                && resident_run_ready
+                && reload_ready
+                && resident_production_dataplane_ready;
             json!({
                 "executed": true,
                 "passed": output.status.success() && resident_run_ready && reload_ready,
@@ -1547,7 +1671,8 @@ fn candidate_service_contract_report(requested: bool, binary_source: Option<&Pat
                 "stderr": bounded_command_output(&output.stderr),
                 "resident_run_service_contract_ready": output.status.success() && resident_run_ready,
                 "reload_command_service_contract_ready": output.status.success() && reload_ready,
-                "resident_production_dataplane_ready": capability["resident_production_dataplane_ready"].as_bool().unwrap_or(false),
+                "resident_production_dataplane_ready": output.status.success() && resident_production_dataplane_ready,
+                "resident_default_daemon_switch_ready": resident_default_daemon_switch_ready,
                 "capability": capability,
             })
         }
@@ -1561,6 +1686,7 @@ fn candidate_service_contract_report(requested: bool, binary_source: Option<&Pat
             "resident_run_service_contract_ready": false,
             "reload_command_service_contract_ready": false,
             "resident_production_dataplane_ready": false,
+            "resident_default_daemon_switch_ready": false,
         }),
     }
 }
@@ -1595,6 +1721,10 @@ fn materialize_production_host_write_plan_freeze_report(
     let readiness_passed = readiness["ready_for_manual_authorization"]
         .as_bool()
         .unwrap_or(false);
+    let resident_default_daemon_switch_ready =
+        readiness["checks"]["resident_default_daemon_switch_ready"]
+            .as_bool()
+            .unwrap_or(false);
     let rehearsal_passed = rehearsal["pass"].as_bool().unwrap_or(false);
     let no_host_write_executed = readiness["checks"]["no_host_write_executed"]
         .as_bool()
@@ -1625,6 +1755,9 @@ fn materialize_production_host_write_plan_freeze_report(
     let mut blockers = Vec::new();
     if !readiness_passed {
         blockers.push("production replacement readiness is not pass");
+    }
+    if !resident_default_daemon_switch_ready {
+        blockers.push("resident default service path does not admit production dataplane");
     }
     if !rehearsal_passed {
         blockers.push("daed2.0 product-chain switch rehearsal is not pass");
@@ -1742,6 +1875,7 @@ fn materialize_production_host_write_plan_freeze_report(
         "production_run_command_replaced": false,
         "checks": {
             "production_replacement_readiness_passed": readiness_passed,
+            "resident_default_daemon_switch_ready": resident_default_daemon_switch_ready,
             "daed2_product_chain_switch_rehearsal_passed": rehearsal_passed,
             "no_host_write_executed": no_host_write_executed,
             "installed_usr_bin_dae_exists": usr_bin_dae_exists,
@@ -2517,6 +2651,18 @@ fn repo_status_json(name: &str, path: &Path) -> Value {
     }
 }
 
+fn value_string_array(value: &Value) -> Vec<String> {
+    value
+        .as_array()
+        .map(|values| {
+            values
+                .iter()
+                .filter_map(|value| value.as_str().map(ToOwned::to_owned))
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
 fn remaining_blockers(
     admission: ProductChainAdmissionEvidence,
     dirty_repos: &[String],
@@ -2773,11 +2919,14 @@ mod tests {
         ));
         let artifact_dir = root.join("artifact");
         let manifest_file = artifact_dir.join("product-chain-recertification.json");
-        let options = ProductChainRecertificationOptions {
-            execute: true,
-            default_path_mutation_requested: true,
-            ..ProductChainRecertificationOptions::default()
-        };
+        let options = resident_ready_product_chain_options(
+            &root,
+            ProductChainRecertificationOptions {
+                execute: true,
+                default_path_mutation_requested: true,
+                ..ProductChainRecertificationOptions::default()
+            },
+        );
         let report = report_value(
             &options,
             &artifact_dir,
@@ -2791,6 +2940,11 @@ mod tests {
             Some(clean_product_chain_evidence()),
         );
         assert!(report["default_path_mutation_requested"].as_bool().unwrap());
+        assert!(
+            report["resident_default_daemon_switch_ready"]
+                .as_bool()
+                .unwrap()
+        );
         assert!(report["default_path_mutation_allowed"].as_bool().unwrap());
         assert!(report["default_switch_allowed"].as_bool().unwrap());
         assert!(report["product_chain_switch_allowed"].as_bool().unwrap());
@@ -2806,6 +2960,77 @@ mod tests {
     }
 
     #[test]
+    fn product_chain_default_path_mutation_blocks_service_contract_only_resident_path() {
+        let root = std::env::temp_dir().join(format!(
+            "dae-daemon-product-chain-resident-service-only-{}",
+            std::process::id()
+        ));
+        let artifact_dir = root.join("artifact");
+        let manifest_file = artifact_dir.join("product-chain-recertification.json");
+        let options = resident_service_only_product_chain_options(
+            &root,
+            ProductChainRecertificationOptions {
+                execute: true,
+                default_path_mutation_requested: true,
+                ..ProductChainRecertificationOptions::default()
+            },
+        );
+        let report = report_value(
+            &options,
+            &artifact_dir,
+            &manifest_file,
+            ProductChainAdmissionEvidence {
+                true_rust_default_daemon_admitted: true,
+                production_dataplane_admitted: true,
+                reload_runtime_parity_admitted: true,
+                matched_benchmark_recorded: true,
+            },
+            Some(clean_product_chain_evidence()),
+        );
+        assert!(
+            report["product_chain_recertification_clean"]
+                .as_bool()
+                .unwrap()
+        );
+        assert!(
+            !report["resident_default_daemon_switch_ready"]
+                .as_bool()
+                .unwrap()
+        );
+        assert!(
+            report["resident_default_daemon_service_contract"]
+                ["resident_run_service_contract_ready"]
+                .as_bool()
+                .unwrap()
+        );
+        assert!(
+            report["resident_default_daemon_service_contract"]
+                ["reload_command_service_contract_ready"]
+                .as_bool()
+                .unwrap()
+        );
+        assert!(
+            !report["resident_default_daemon_service_contract"]
+                ["resident_production_dataplane_ready"]
+                .as_bool()
+                .unwrap()
+        );
+        assert!(!report["default_path_mutation_allowed"].as_bool().unwrap());
+        assert!(!report["product_chain_switch_allowed"].as_bool().unwrap());
+        assert!(
+            report["remaining_blockers"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|blocker| blocker
+                    .as_str()
+                    .unwrap()
+                    .contains("resident default service path does not admit production dataplane"))
+        );
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
     fn product_chain_run_command_replacement_plan_is_read_only_and_admitted_after_default_request()
     {
         let root = std::env::temp_dir().join(format!(
@@ -2814,12 +3039,15 @@ mod tests {
         ));
         let artifact_dir = root.join("artifact");
         let manifest_file = artifact_dir.join("product-chain-recertification.json");
-        let options = ProductChainRecertificationOptions {
-            execute: true,
-            default_path_mutation_requested: true,
-            production_run_command_replacement_dry_run_requested: true,
-            ..ProductChainRecertificationOptions::default()
-        };
+        let options = resident_ready_product_chain_options(
+            &root,
+            ProductChainRecertificationOptions {
+                execute: true,
+                default_path_mutation_requested: true,
+                production_run_command_replacement_dry_run_requested: true,
+                ..ProductChainRecertificationOptions::default()
+            },
+        );
         let report = report_value(
             &options,
             &artifact_dir,
@@ -2897,13 +3125,16 @@ mod tests {
         ));
         let artifact_dir = root.join("artifact");
         let manifest_file = artifact_dir.join("product-chain-recertification.json");
-        let options = ProductChainRecertificationOptions {
-            execute: true,
-            default_path_mutation_requested: true,
-            production_run_command_replacement_dry_run_requested: true,
-            production_run_command_replacement_execute_requested: true,
-            ..ProductChainRecertificationOptions::default()
-        };
+        let options = resident_ready_product_chain_options(
+            &root,
+            ProductChainRecertificationOptions {
+                execute: true,
+                default_path_mutation_requested: true,
+                production_run_command_replacement_dry_run_requested: true,
+                production_run_command_replacement_execute_requested: true,
+                ..ProductChainRecertificationOptions::default()
+            },
+        );
         let report = report_value(
             &options,
             &artifact_dir,
@@ -2956,14 +3187,17 @@ mod tests {
         ));
         let artifact_dir = root.join("artifact");
         let manifest_file = artifact_dir.join("product-chain-recertification.json");
-        let options = ProductChainRecertificationOptions {
-            execute: true,
-            default_path_mutation_requested: true,
-            production_run_command_replacement_dry_run_requested: true,
-            production_run_command_replacement_execute_requested: true,
-            host_default_path_mutation_allow_requested: true,
-            ..ProductChainRecertificationOptions::default()
-        };
+        let options = resident_ready_product_chain_options(
+            &root,
+            ProductChainRecertificationOptions {
+                execute: true,
+                default_path_mutation_requested: true,
+                production_run_command_replacement_dry_run_requested: true,
+                production_run_command_replacement_execute_requested: true,
+                host_default_path_mutation_allow_requested: true,
+                ..ProductChainRecertificationOptions::default()
+            },
+        );
         let report = report_value(
             &options,
             &artifact_dir,
@@ -3004,15 +3238,18 @@ mod tests {
         ));
         let artifact_dir = root.join("artifact");
         let manifest_file = artifact_dir.join("product-chain-recertification.json");
-        let options = ProductChainRecertificationOptions {
-            execute: true,
-            default_path_mutation_requested: true,
-            production_run_command_replacement_dry_run_requested: true,
-            production_run_command_replacement_execute_requested: true,
-            production_run_command_replacement_apply_plan_requested: true,
-            host_default_path_mutation_allow_requested: true,
-            ..ProductChainRecertificationOptions::default()
-        };
+        let options = resident_ready_product_chain_options(
+            &root,
+            ProductChainRecertificationOptions {
+                execute: true,
+                default_path_mutation_requested: true,
+                production_run_command_replacement_dry_run_requested: true,
+                production_run_command_replacement_execute_requested: true,
+                production_run_command_replacement_apply_plan_requested: true,
+                host_default_path_mutation_allow_requested: true,
+                ..ProductChainRecertificationOptions::default()
+            },
+        );
         let report = report_value(
             &options,
             &artifact_dir,
@@ -3196,16 +3433,19 @@ mod tests {
             "ExecStartPre=/usr/bin/dae validate -c /etc/dae/config.dae\nExecStart=/usr/bin/dae run --disable-timestamp -c /etc/dae/config.dae\nExecReload=/usr/bin/dae reload $MAINPID\n",
         )
         .unwrap();
-        let options = ProductChainRecertificationOptions {
-            execute: true,
-            default_path_mutation_requested: true,
-            production_run_command_replacement_dry_run_requested: true,
-            production_run_command_replacement_execute_requested: true,
-            production_run_command_replacement_apply_plan_requested: true,
-            host_default_path_mutation_allow_requested: true,
-            service_file,
-            ..ProductChainRecertificationOptions::default()
-        };
+        let options = resident_ready_product_chain_options(
+            &root,
+            ProductChainRecertificationOptions {
+                execute: true,
+                default_path_mutation_requested: true,
+                production_run_command_replacement_dry_run_requested: true,
+                production_run_command_replacement_execute_requested: true,
+                production_run_command_replacement_apply_plan_requested: true,
+                host_default_path_mutation_allow_requested: true,
+                service_file,
+                ..ProductChainRecertificationOptions::default()
+            },
+        );
         let mut report = report_value(
             &options,
             &artifact_dir,
@@ -3277,16 +3517,19 @@ mod tests {
             "ExecStartPre=/usr/bin/dae validate -c /etc/dae/config.dae\nExecStart=/usr/bin/dae run --disable-timestamp -c /etc/dae/config.dae\nExecReload=/usr/bin/dae reload $MAINPID\n",
         )
         .unwrap();
-        let options = ProductChainRecertificationOptions {
-            execute: true,
-            default_path_mutation_requested: true,
-            production_run_command_replacement_dry_run_requested: true,
-            production_run_command_replacement_execute_requested: true,
-            production_run_command_replacement_apply_plan_requested: true,
-            host_default_path_mutation_allow_requested: true,
-            service_file,
-            ..ProductChainRecertificationOptions::default()
-        };
+        let options = resident_ready_product_chain_options(
+            &root,
+            ProductChainRecertificationOptions {
+                execute: true,
+                default_path_mutation_requested: true,
+                production_run_command_replacement_dry_run_requested: true,
+                production_run_command_replacement_execute_requested: true,
+                production_run_command_replacement_apply_plan_requested: true,
+                host_default_path_mutation_allow_requested: true,
+                service_file,
+                ..ProductChainRecertificationOptions::default()
+            },
+        );
         let mut report = report_value(
             &options,
             &artifact_dir,
@@ -3347,16 +3590,19 @@ mod tests {
             "ExecStartPre=/usr/bin/dae validate -c /etc/dae/config.dae\nExecStart=/usr/bin/dae run --disable-timestamp -c /etc/dae/config.dae\nExecReload=/usr/bin/dae reload $MAINPID\n",
         )
         .unwrap();
-        let options = ProductChainRecertificationOptions {
-            execute: true,
-            default_path_mutation_requested: true,
-            production_run_command_replacement_dry_run_requested: true,
-            production_run_command_replacement_execute_requested: true,
-            production_run_command_replacement_apply_plan_requested: true,
-            host_default_path_mutation_allow_requested: true,
-            service_file,
-            ..ProductChainRecertificationOptions::default()
-        };
+        let options = resident_ready_product_chain_options(
+            &root,
+            ProductChainRecertificationOptions {
+                execute: true,
+                default_path_mutation_requested: true,
+                production_run_command_replacement_dry_run_requested: true,
+                production_run_command_replacement_execute_requested: true,
+                production_run_command_replacement_apply_plan_requested: true,
+                host_default_path_mutation_allow_requested: true,
+                service_file,
+                ..ProductChainRecertificationOptions::default()
+            },
+        );
         let mut report = report_value(
             &options,
             &artifact_dir,
@@ -3940,6 +4186,45 @@ mod tests {
     fn write_fixture_file(path: &Path, text: &str) {
         std::fs::create_dir_all(path.parent().unwrap()).unwrap();
         std::fs::write(path, text).unwrap();
+    }
+
+    fn write_candidate_service_contract(path: &Path, resident_dataplane_ready: bool) {
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(
+            path,
+            format!(
+                "#!/bin/sh\n\
+                 if [ \"$1\" = \"validate\" ]; then exit 0; fi\n\
+                 if [ \"$1\" = \"service-contract\" ]; then\n\
+                   printf '%s\\n' '{{\"resident_run_service_contract_ready\":true,\"reload_command_service_contract_ready\":true,\"resident_production_dataplane_ready\":{resident_dataplane_ready}}}'\n\
+                   exit 0\n\
+                 fi\n\
+                 exit 2\n"
+            ),
+        )
+        .unwrap();
+        #[cfg(unix)]
+        std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o755)).unwrap();
+    }
+
+    fn resident_ready_product_chain_options(
+        root: &Path,
+        mut options: ProductChainRecertificationOptions,
+    ) -> ProductChainRecertificationOptions {
+        let binary = root.join("resident-ready-candidate");
+        write_candidate_service_contract(&binary, true);
+        options.local_validation_binary_source = Some(binary);
+        options
+    }
+
+    fn resident_service_only_product_chain_options(
+        root: &Path,
+        mut options: ProductChainRecertificationOptions,
+    ) -> ProductChainRecertificationOptions {
+        let binary = root.join("resident-service-only-candidate");
+        write_candidate_service_contract(&binary, false);
+        options.local_validation_binary_source = Some(binary);
+        options
     }
 
     fn clean_product_chain_evidence() -> ProductChainEvidence {
