@@ -268,6 +268,7 @@ fn run_default_optin_command(args: &[String], version: &str) -> DaemonOutput {
     let mut allow_host_default_path_mutation = false;
     let mut plan_local_validation_fresh_install = false;
     let mut product_chain_fresh_install_binary_source: Option<PathBuf> = None;
+    let mut product_chain_resident_default_daemon_binary_source: Option<PathBuf> = None;
     let mut exit_after_ready = false;
     let mut iter = args.iter();
     while let Some(arg) = iter.next() {
@@ -875,6 +876,18 @@ fn run_default_optin_command(args: &[String], version: &str) -> DaemonOutput {
                 product_chain_fresh_install_binary_source =
                     arg.split_once('=').map(|(_, value)| value.into());
             }
+            "--product-chain-resident-default-daemon-binary-source" => {
+                let Some(value) = iter.next() else {
+                    return DaemonOutput::usage(
+                        "missing run --product-chain-resident-default-daemon-binary-source value",
+                    );
+                };
+                product_chain_resident_default_daemon_binary_source = Some(value.into());
+            }
+            _ if arg.starts_with("--product-chain-resident-default-daemon-binary-source=") => {
+                product_chain_resident_default_daemon_binary_source =
+                    arg.split_once('=').map(|(_, value)| value.into());
+            }
             "--product-chain-dae-repo" => {
                 let Some(value) = iter.next() else {
                     return DaemonOutput::usage("missing run --product-chain-dae-repo value");
@@ -963,7 +976,8 @@ fn run_default_optin_command(args: &[String], version: &str) -> DaemonOutput {
         || execute_production_run_command_replacement
         || plan_production_run_command_apply
         || allow_host_default_path_mutation
-        || plan_local_validation_fresh_install;
+        || plan_local_validation_fresh_install
+        || product_chain_resident_default_daemon_binary_source.is_some();
     if !bounded_report_requested {
         let mut options = ResidentRunOptions::for_config(config);
         options.logfile = logfile;
@@ -1103,7 +1117,16 @@ fn run_default_optin_command(args: &[String], version: &str) -> DaemonOutput {
             .local_validation_config_source = Some(options.config.clone());
         options
             .product_chain_recertification
-            .local_validation_binary_source = product_chain_fresh_install_binary_source;
+            .local_validation_binary_source = product_chain_fresh_install_binary_source.clone();
+        if product_chain_resident_default_daemon_binary_source.is_none() {
+            product_chain_resident_default_daemon_binary_source =
+                product_chain_fresh_install_binary_source;
+        }
+    }
+    if let Some(path) = product_chain_resident_default_daemon_binary_source {
+        options
+            .product_chain_recertification
+            .resident_default_daemon_binary_source = Some(path);
     }
     if let Some(path) = product_chain_dae_repo {
         options.product_chain_recertification.dae_repo = path;
