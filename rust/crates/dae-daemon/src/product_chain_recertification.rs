@@ -18,6 +18,7 @@ pub struct ProductChainRecertificationOptions {
     pub local_validation_fresh_install_plan_requested: bool,
     pub local_validation_config_source: Option<PathBuf>,
     pub local_validation_binary_source: Option<PathBuf>,
+    pub resident_default_daemon_binary_source: Option<PathBuf>,
     pub dae_repo: PathBuf,
     pub dae_wing_repo: PathBuf,
     pub daed_repo: PathBuf,
@@ -39,6 +40,7 @@ impl Default for ProductChainRecertificationOptions {
             local_validation_fresh_install_plan_requested: false,
             local_validation_config_source: None,
             local_validation_binary_source: None,
+            resident_default_daemon_binary_source: None,
             dae_repo: PathBuf::from("/root/project/dae"),
             daed_repo: PathBuf::from("/root/project/daed"),
             dae_wing_repo: PathBuf::from("/root/project/daed/wing"),
@@ -417,7 +419,10 @@ fn resident_default_daemon_switch_gate_json(options: &ProductChainRecertificatio
         || options.production_run_command_replacement_apply_plan_requested
         || options.host_default_path_mutation_allow_requested
         || options.local_validation_fresh_install_plan_requested;
-    let binary_source = options.local_validation_binary_source.as_deref();
+    let binary_source = options
+        .resident_default_daemon_binary_source
+        .as_deref()
+        .or(options.local_validation_binary_source.as_deref());
     let binary_source_provided = binary_source.is_some();
     let binary_source_exists = binary_source.is_some_and(Path::is_file);
     let candidate_service_contract = candidate_service_contract_report(requested, binary_source);
@@ -2803,6 +2808,7 @@ mod tests {
             local_validation_fresh_install_plan_requested: false,
             local_validation_config_source: None,
             local_validation_binary_source: None,
+            resident_default_daemon_binary_source: None,
             dae_repo: fixture.join("dae"),
             dae_wing_repo: fixture.join("dae-wing"),
             daed_repo: fixture.join("daed"),
@@ -3912,6 +3918,7 @@ mod tests {
             local_validation_fresh_install_plan_requested: false,
             local_validation_config_source: None,
             local_validation_binary_source: None,
+            resident_default_daemon_binary_source: None,
             dae_repo: fixture.join("dae"),
             dae_wing_repo: fixture.join("dae-wing"),
             daed_repo: fixture.join("daed"),
@@ -4213,7 +4220,7 @@ mod tests {
     ) -> ProductChainRecertificationOptions {
         let binary = root.join("resident-ready-candidate");
         write_candidate_service_contract(&binary, true);
-        options.local_validation_binary_source = Some(binary);
+        options.resident_default_daemon_binary_source = Some(binary);
         options
     }
 
@@ -4223,7 +4230,7 @@ mod tests {
     ) -> ProductChainRecertificationOptions {
         let binary = root.join("resident-service-only-candidate");
         write_candidate_service_contract(&binary, false);
-        options.local_validation_binary_source = Some(binary);
+        options.resident_default_daemon_binary_source = Some(binary);
         options
     }
 
