@@ -10,7 +10,8 @@ use std::time::{Duration, Instant};
 use dae_core_types::reload::{RELOAD_DONE, RELOAD_ERROR, RELOAD_PROCESSING, RELOAD_SEND};
 use serde_json::{Value, json};
 
-use crate::config_validate::validate_config_file;
+use crate::config_validate::{load_config_file, validate_config_file};
+use crate::production_runtime_owner::start_resident_production_runtime;
 
 pub const PID_FILE_PATH: &str = "/var/run/dae.pid";
 pub const PROGRESS_FILE_PATH: &str = "/var/run/dae.progress";
@@ -84,10 +85,10 @@ pub fn service_contract_capabilities(version: &str) -> Value {
             "done": (RELOAD_DONE as char).to_string(),
             "error": (RELOAD_ERROR as char).to_string(),
         },
-        "resident_production_dataplane_ready": false,
-        "resident_default_daemon_switch_ready": false,
-        "default_path_switch_blocker": "resident default service path does not admit production dataplane",
-        "boundary": "resident run and reload service protocol only; production forwarding remains separately admitted",
+        "resident_production_dataplane_ready": true,
+        "resident_default_daemon_switch_ready": true,
+        "default_path_switch_blocker": Value::Null,
+        "boundary": "resident run starts and owns production topology, PARAM-aware tc/eBPF attach, and tproxy listener/sockmap handoff; product-chain switch still requires clean admission evidence and explicit host mutation authorization",
     })
 }
 
@@ -95,9 +96,10 @@ pub fn run_resident_service(options: &ResidentRunOptions) -> Result<(), String> 
     if options.disable_sudo && unsafe { libc::geteuid() } != 0 {
         return Err("auto-sudo is disabled and current user is not root".to_owned());
     }
-    validate_config_file(&options.config)
+    let runtime_config = load_config_file(&options.config)
         .map_err(|err| format!("resident run config validation failed: {err}"))?;
     block_service_signals()?;
+    let mut production_runtime = Some(start_resident_production_runtime(&runtime_config)?);
 
     let started = (|| {
         if !options.disable_pidfile {
@@ -112,6 +114,7 @@ pub fn run_resident_service(options: &ResidentRunOptions) -> Result<(), String> 
         Ok::<(), String>(())
     })();
     if let Err(err) = started {
+        production_runtime.take();
         if !options.disable_pidfile {
             let _ = fs::remove_file(&options.pid_file);
         }
@@ -127,6 +130,7 @@ pub fn run_resident_service(options: &ResidentRunOptions) -> Result<(), String> 
             libc::SIGTERM | libc::SIGINT | libc::SIGQUIT => {
                 let _ = notify_systemd("STOPPING=1");
                 let _ = log_event(options, "service stopping");
+                production_runtime.take();
                 if !options.disable_pidfile {
                     let _ = fs::remove_file(&options.pid_file);
                 }
