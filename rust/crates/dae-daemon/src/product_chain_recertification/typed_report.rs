@@ -79,6 +79,7 @@ pub(super) struct ProductChainTypedReportSummary {
     pub(super) dependency_boundary_preserved: bool,
     pub(super) runtime_control_api_source_contract_preserved: bool,
     pub(super) clean_product_chain_baseline: bool,
+    pub(super) product_chain_branch_contract_preserved: bool,
     pub(super) remaining_blocker_count: usize,
 }
 
@@ -112,6 +113,7 @@ impl ProductChainTypedReportSummary {
             "outbound_quic_go_dependency_boundary_preserved": self.dependency_boundary_preserved,
             "runtime_control_api_source_contract_preserved": self.runtime_control_api_source_contract_preserved,
             "clean_product_chain_baseline": self.clean_product_chain_baseline,
+            "product_chain_branch_contract_preserved": self.product_chain_branch_contract_preserved,
             "remaining_blocker_count": self.remaining_blocker_count,
             "stage_report_schema": false,
         })
@@ -154,6 +156,7 @@ pub(super) fn remaining_blockers(
     dirty_repos: &[String],
     missing_repos: &[String],
     unavailable_repos: &[String],
+    branch_mismatched_repos: &[String],
     runtime_control_api_source_contract_preserved: bool,
     daed_wing_runtime_control_api_regression_recorded: bool,
     default_path_mutation_requested: bool,
@@ -184,6 +187,12 @@ pub(super) fn remaining_blockers(
         blockers.push(format!(
             "product-chain sibling repo git status is unavailable: {}",
             unavailable_repos.join(", ")
+        ));
+    }
+    if !branch_mismatched_repos.is_empty() {
+        blockers.push(format!(
+            "product-chain sibling repo branches do not match daed2.0 switch contract: {}",
+            branch_mismatched_repos.join(", ")
         ));
     }
     if !runtime_control_api_source_contract_preserved {
