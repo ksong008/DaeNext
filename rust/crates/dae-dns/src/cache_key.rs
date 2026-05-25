@@ -7,13 +7,26 @@ pub struct DnsCacheKey {
     pub qclass: u16,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct DnsCacheKeyView<'a> {
+    pub qname: &'a str,
+    pub qtype: u16,
+    pub qclass: u16,
+}
+
 impl DnsCacheKey {
     pub fn new(qname: impl AsRef<str>, qtype: u16, qclass: u16) -> Self {
         Self {
-            qname: canonical_name(qname.as_ref()).to_ascii_lowercase(),
+            qname: canonical_name_lowercase(qname.as_ref()),
             qtype,
             qclass,
         }
+    }
+
+    pub fn matches_view(&self, view: DnsCacheKeyView<'_>) -> bool {
+        self.qtype == view.qtype
+            && self.qclass == view.qclass
+            && canonical_name_eq_ignore_ascii_case(&self.qname, view.qname)
     }
 }
 
@@ -32,14 +45,50 @@ pub fn canonical_name(name: &str) -> String {
     }
 }
 
+pub fn canonical_name_lowercase(name: &str) -> String {
+    let trimmed = name.trim();
+    let needs_dot = !trimmed.ends_with('.');
+    if !needs_dot && !trimmed.bytes().any(|byte| byte.is_ascii_uppercase()) {
+        return trimmed.to_owned();
+    }
+    let mut out = String::with_capacity(trimmed.len() + usize::from(needs_dot));
+    for ch in trimmed.chars() {
+        out.push(ch.to_ascii_lowercase());
+    }
+    if needs_dot {
+        out.push('.');
+    }
+    out
+}
+
+pub fn canonical_name_eq_ignore_ascii_case(canonical: &str, candidate: &str) -> bool {
+    let candidate = candidate.trim();
+    if candidate.ends_with('.') {
+        canonical.eq_ignore_ascii_case(candidate)
+    } else {
+        canonical.len() == candidate.len() + 1
+            && canonical.as_bytes().last() == Some(&b'.')
+            && canonical[..candidate.len()].eq_ignore_ascii_case(candidate)
+    }
+}
+
 pub fn parse_dns_cache_key(raw: &str) -> Option<DnsCacheKey> {
+    let view = parse_dns_cache_key_view(raw)?;
+    Some(DnsCacheKey::new(view.qname, view.qtype, view.qclass))
+}
+
+pub fn parse_dns_cache_key_view(raw: &str) -> Option<DnsCacheKeyView<'_>> {
     if let Some(last_sep) = raw.rfind('|') {
         let before_class = &raw[..last_sep];
         let class_raw = &raw[last_sep + 1..];
         if let Some(prev_sep) = before_class.rfind('|') {
             let qtype = before_class[prev_sep + 1..].parse::<u16>().ok()?;
             let qclass = class_raw.parse::<u16>().ok()?;
-            return Some(DnsCacheKey::new(&before_class[..prev_sep], qtype, qclass));
+            return Some(DnsCacheKeyView {
+                qname: &before_class[..prev_sep],
+                qtype,
+                qclass,
+            });
         }
     }
 
@@ -48,7 +97,11 @@ pub fn parse_dns_cache_key(raw: &str) -> Option<DnsCacheKey> {
         return None;
     }
     let qtype = raw[last_dot + 1..].parse::<u16>().ok()?;
-    Some(DnsCacheKey::new(&raw[..last_dot], qtype, 1))
+    Some(DnsCacheKeyView {
+        qname: &raw[..last_dot],
+        qtype,
+        qclass: 1,
+    })
 }
 
 #[cfg(test)]

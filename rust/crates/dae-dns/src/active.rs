@@ -2,7 +2,8 @@ use std::net::Ipv4Addr;
 
 use crate::cache::DNS_CACHE_MAX_ENTRIES;
 use crate::cache_key::DnsCacheKey;
-use crate::message::DnsQuestion;
+use crate::error::DnsError;
+use crate::message::{DnsPacketQuestionView, DnsQuestion};
 
 pub const ACTIVE_DNS_DEFAULT_TARGET_IP: &str = "8.8.8.8";
 pub const ACTIVE_DNS_DEFAULT_TARGET_PORT: u16 = 53;
@@ -42,6 +43,16 @@ pub fn active_dns_question_matches(question: &DnsQuestion, expected_qname: &str)
     question.qname == key.qname
         && question.qtype == ACTIVE_DNS_QTYPE_A
         && question.qclass == ACTIVE_DNS_QCLASS_IN
+}
+
+pub fn active_dns_packet_question_matches(
+    question: &DnsPacketQuestionView<'_>,
+    expected_qname: &str,
+) -> Result<bool, DnsError> {
+    if question.qtype() != ACTIVE_DNS_QTYPE_A || question.qclass() != ACTIVE_DNS_QCLASS_IN {
+        return Ok(false);
+    }
+    question.qname_canonical_eq_ignore_ascii_case(expected_qname)
 }
 
 pub fn build_active_dns_a_response(
@@ -98,10 +109,10 @@ fn dns_question_end(packet: &[u8]) -> Result<usize, String> {
 mod tests {
     use super::{
         ACTIVE_DNS_DEFAULT_QNAME, ACTIVE_DNS_DEFAULT_TARGET_PORT, ACTIVE_DNS_QCLASS_IN,
-        ACTIVE_DNS_QTYPE_A, active_dns_cache_contract, active_dns_question_matches,
-        build_active_dns_a_response,
+        ACTIVE_DNS_QTYPE_A, active_dns_cache_contract, active_dns_packet_question_matches,
+        active_dns_question_matches, build_active_dns_a_response,
     };
-    use crate::{DnsQuestion, parse_message, validate_dns_response_for_request};
+    use crate::{DnsPacketView, DnsQuestion, validate_dns_packet_response_for_request};
     use std::net::Ipv4Addr;
 
     #[test]
@@ -146,11 +157,16 @@ mod tests {
             b'x', b'a', b'm', b'p', b'l', b'e', 0x03, b'c', b'o', b'm', 0x00, 0x00, 0x01, 0x00,
             0x01,
         ];
-        let request = parse_message(&query).unwrap();
+        let request = DnsPacketView::parse(&query).unwrap();
+        let question = request.questions().next().unwrap();
+        assert!(active_dns_packet_question_matches(&question, "example.com").unwrap());
+        assert_eq!(
+            question.qname_to_canonical_string().unwrap(),
+            "example.com."
+        );
         let response =
             build_active_dns_a_response(&query, Ipv4Addr::new(203, 0, 113, 54), 30).unwrap();
         assert_eq!(&response[0..2], &query[0..2]);
-        let parsed = parse_message(&response).unwrap();
-        validate_dns_response_for_request(&request, Some(&parsed), true).unwrap();
+        validate_dns_packet_response_for_request(&query, Some(&response), true).unwrap();
     }
 }

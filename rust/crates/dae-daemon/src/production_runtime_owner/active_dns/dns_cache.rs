@@ -7,7 +7,7 @@ use dae_datapath::{
 };
 use dae_dns::{
     ACTIVE_DNS_QCLASS_IN, ACTIVE_DNS_QTYPE_A, DnsCacheEntry, DnsCacheKey, DnsCacheStore,
-    active_dns_question_matches, parse_message, validate_dns_response_for_request,
+    DnsPacketView, active_dns_packet_question_matches, validate_dns_packet_response_for_request,
 };
 use dae_ebpf_support::open_transparent_udp_socket_bound_in_netns;
 use dae_netutil::parse_magic_network;
@@ -48,31 +48,33 @@ pub(super) fn dns_tproxy_cache_probe(
     let mut last_upstream_report = Value::Null;
     let mut cache_key = None;
     let mut reload_snapshot_taken = false;
+    let mut restored_response = Vec::new();
     let now_unix = 1_700_000_000_i64;
     for index in 0..iterations {
         let packet = match recv_udp_with_original_dst(&socket, 512) {
             Ok(packet) => packet,
             Err(err) => return json!({"status": "fail", "error": err}),
         };
-        let req = match parse_message(&packet.payload) {
+        let req = match DnsPacketView::parse(&packet.payload) {
             Ok(req) => req,
             Err(err) => {
                 return json!({"status": "fail", "error": format!("parse DNS request: {err}")});
             }
         };
-        if req.response {
+        if req.response() {
             return json!({"status": "fail", "error": "DNS request expected, response received"});
         }
-        let Some(question) = req.questions.first() else {
+        let Some(question) = req.questions().next() else {
             return json!({"status": "fail", "error": "DNS request has no question"});
         };
-        if !active_dns_question_matches(question, expected_qname) {
+        if !active_dns_packet_question_matches(&question, expected_qname).unwrap_or(false) {
+            let qname = question.qname_to_canonical_string().ok();
             return json!({
                 "status": "fail",
                 "error": "unexpected DNS question",
-                "qname": question.qname,
-                "qtype": question.qtype,
-                "qclass": question.qclass,
+                "qname": qname,
+                "qtype": question.qtype(),
+                "qclass": question.qclass(),
             });
         }
         let original_dst = packet.original_dst.unwrap_or(expected_original_dst);
@@ -92,13 +94,38 @@ pub(super) fn dns_tproxy_cache_probe(
             reply_socket = Some(reply);
         }
         last_peer = Some(packet.peer.to_string());
-        let key = DnsCacheKey::new(&question.qname, question.qtype, question.qclass);
-        let response = if let Some(entry) = cache.lookup(now_unix + index as i64, &key, false) {
+        let response_owned;
+        let cached_entry = match cache.lookup_packet_question(
+            now_unix + index as i64,
+            &question,
+            false,
+        ) {
+            Ok(entry) => entry,
+            Err(err) => {
+                return json!({"status": "fail", "error": format!("lookup DNS cache by packet question: {err}")});
+            }
+        };
+        let response = if let Some(entry) = cached_entry {
             restored_cache_hits += 1;
-            entry
-                .fill_packed_response(req.id)
-                .ok_or_else(|| "restored DNS cache entry missing packed response".to_owned())
+            if entry
+                .fill_packed_response_into(req.id(), &mut restored_response)
+                .is_none()
+            {
+                return json!({"status": "fail", "error": "restored DNS cache entry missing packed response"});
+            }
+            restored_response.as_slice()
         } else {
+            let qname = match question.qname_to_canonical_string() {
+                Ok(qname) => qname,
+                Err(err) => {
+                    return json!({"status": "fail", "error": format!("parse DNS question: {err}")});
+                }
+            };
+            let key = DnsCacheKey {
+                qname,
+                qtype: question.qtype(),
+                qclass: question.qclass(),
+            };
             let conn = match UdpDirectPacketConn::connect(
                 upstream_addr,
                 &UdpDirectSocketOptions {
@@ -111,20 +138,18 @@ pub(super) fn dns_tproxy_cache_probe(
                     return json!({"status": "fail", "error": format!("connect DNS UDP upstream PacketConn: {err}")});
                 }
             };
-            let response = match conn.exchange(&packet.payload, 512) {
+            response_owned = match conn.exchange(&packet.payload, 512) {
                 Ok(response) => response,
                 Err(err) => {
                     return json!({"status": "fail", "error": format!("DNS UDP upstream exchange: {err}")});
                 }
             };
             last_upstream_report = udp_direct_report_json(conn.report(), conn.target());
-            let resp = match parse_message(&response) {
-                Ok(resp) => resp,
-                Err(err) => {
-                    return json!({"status": "fail", "error": format!("parse DNS upstream response: {err}")});
-                }
-            };
-            if let Err(err) = validate_dns_response_for_request(&req, Some(&resp), true) {
+            if let Err(err) = validate_dns_packet_response_for_request(
+                &packet.payload,
+                Some(response_owned.as_slice()),
+                true,
+            ) {
                 return json!({"status": "fail", "error": format!("validate DNS upstream response: {err}")});
             }
             validated_responses += 1;
@@ -136,7 +161,7 @@ pub(super) fn dns_tproxy_cache_probe(
             entry.domain_bitmap = vec![54];
             entry.ips = vec![std::net::IpAddr::V4(RESPONSE_IP)];
             entry.has_any_ip = true;
-            entry.packed_response = response.clone();
+            entry.packed_response = response_owned.clone();
             cache.insert(now_unix, key.clone(), entry);
             tracker.sync_owner(
                 &key.to_string(),
@@ -146,26 +171,18 @@ pub(super) fn dns_tproxy_cache_probe(
             tracker = tracker.clone();
             cache_key = Some(key.to_string());
             reload_snapshot_taken = true;
-            Ok(response)
+            response_owned.as_slice()
         };
-        let response = match response {
-            Ok(response) => response,
-            Err(err) => return json!({"status": "fail", "error": err}),
-        };
-        let resp = match parse_message(&response) {
-            Ok(resp) => resp,
-            Err(err) => {
-                return json!({"status": "fail", "error": format!("parse DNS response to client: {err}")});
-            }
-        };
-        if let Err(err) = validate_dns_response_for_request(&req, Some(&resp), true) {
+        if let Err(err) =
+            validate_dns_packet_response_for_request(&packet.payload, Some(response), true)
+        {
             return json!({"status": "fail", "error": format!("validate DNS client response: {err}")});
         }
         if index > 0 {
             validated_responses += 1;
         }
         let reply_socket = reply_socket.as_ref().unwrap();
-        if let Err(err) = reply_socket.send_to(&response, packet.peer) {
+        if let Err(err) = reply_socket.send_to(response, packet.peer) {
             return json!({"status": "fail", "error": format!("DNS sendPkt-style reply: {err}")});
         }
         received_queries += 1;

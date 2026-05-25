@@ -1,8 +1,15 @@
-use std::collections::BTreeMap;
 use std::net::IpAddr;
 
-use crate::cache_key::DnsCacheKey;
-use crate::message::{DnsAnswer, restore_packed_response_request_id};
+use crate::cache_key::{DnsCacheKey, DnsCacheKeyView};
+use crate::error::DnsError;
+use crate::message::{
+    DnsAnswer, DnsPacketQuestionView, restore_packed_response_request_id,
+    restore_packed_response_request_id_into,
+};
+
+mod entries;
+
+use entries::DnsCacheEntries;
 
 pub const DNS_CACHE_MAX_ENTRIES: usize = 4096;
 
@@ -45,6 +52,10 @@ impl DnsCacheEntry {
     pub fn fill_packed_response(&self, request_id: u16) -> Option<Vec<u8>> {
         restore_packed_response_request_id(&self.packed_response, request_id)
     }
+
+    pub fn fill_packed_response_into(&self, request_id: u16, out: &mut Vec<u8>) -> Option<()> {
+        restore_packed_response_request_id_into(&self.packed_response, request_id, out)
+    }
 }
 
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
@@ -57,7 +68,7 @@ pub struct DnsCacheStats {
 #[derive(Clone, Debug)]
 pub struct DnsCacheStore {
     capacity: usize,
-    entries: BTreeMap<DnsCacheKey, DnsCacheEntry>,
+    entries: DnsCacheEntries,
     stats: DnsCacheStats,
 }
 
@@ -71,13 +82,26 @@ impl DnsCacheStore {
     pub fn new(capacity: usize) -> Self {
         Self {
             capacity,
-            entries: BTreeMap::new(),
+            entries: DnsCacheEntries::new(capacity),
             stats: DnsCacheStats::default(),
         }
     }
 
     pub fn insert(&mut self, now_unix: i64, key: DnsCacheKey, mut entry: DnsCacheEntry) {
         entry.route_owner_key = key.to_string();
+        self.insert_entry(now_unix, key, entry);
+    }
+
+    pub fn insert_without_route_owner_key(
+        &mut self,
+        now_unix: i64,
+        key: DnsCacheKey,
+        entry: DnsCacheEntry,
+    ) {
+        self.insert_entry(now_unix, key, entry);
+    }
+
+    fn insert_entry(&mut self, now_unix: i64, key: DnsCacheKey, entry: DnsCacheEntry) {
         if !self.entries.contains_key(&key) {
             self.evict_entries(now_unix);
         }
@@ -90,12 +114,27 @@ impl DnsCacheStore {
         key: &DnsCacheKey,
         ignore_fixed_ttl: bool,
     ) -> Option<DnsCacheEntry> {
-        let entry = self.entries.get(key)?;
-        if entry.lookup_deadline(ignore_fixed_ttl) > now_unix {
+        self.lookup_ref(now_unix, key, ignore_fixed_ttl).cloned()
+    }
+
+    pub fn lookup_ref(
+        &mut self,
+        now_unix: i64,
+        key: &DnsCacheKey,
+        ignore_fixed_ttl: bool,
+    ) -> Option<&DnsCacheEntry> {
+        let (lookup_deadline, cache_expires_at) = {
+            let entry = self.entries.get(key)?;
+            (
+                entry.lookup_deadline(ignore_fixed_ttl),
+                entry.cache_expires_at(),
+            )
+        };
+        if lookup_deadline > now_unix {
             self.stats.hit_total += 1;
-            return Some(entry.clone());
+            return self.entries.get(key);
         }
-        if entry.cache_expires_at() > now_unix {
+        if cache_expires_at > now_unix {
             return None;
         }
         self.entries.remove(key);
@@ -104,14 +143,62 @@ impl DnsCacheStore {
         None
     }
 
+    pub fn lookup_view(
+        &mut self,
+        now_unix: i64,
+        key: DnsCacheKeyView<'_>,
+        ignore_fixed_ttl: bool,
+    ) -> Option<&DnsCacheEntry> {
+        let (lookup_deadline, cache_expires_at) = {
+            let entry = self.entries.get_view(key)?;
+            (
+                entry.lookup_deadline(ignore_fixed_ttl),
+                entry.cache_expires_at(),
+            )
+        };
+        if lookup_deadline > now_unix {
+            self.stats.hit_total += 1;
+            return self.entries.get_view(key);
+        }
+        if cache_expires_at > now_unix {
+            return None;
+        }
+        self.entries.remove_view(key);
+        self.stats.expired_removal_total += 1;
+        self.stats.remove_callback_total += 1;
+        None
+    }
+
+    pub fn lookup_packet_question(
+        &mut self,
+        now_unix: i64,
+        question: &DnsPacketQuestionView<'_>,
+        ignore_fixed_ttl: bool,
+    ) -> Result<Option<&DnsCacheEntry>, DnsError> {
+        let (lookup_deadline, cache_expires_at) = {
+            let Some(entry) = self.entries.get_packet_question(question)? else {
+                return Ok(None);
+            };
+            (
+                entry.lookup_deadline(ignore_fixed_ttl),
+                entry.cache_expires_at(),
+            )
+        };
+        if lookup_deadline > now_unix {
+            self.stats.hit_total += 1;
+            return self.entries.get_packet_question(question);
+        }
+        if cache_expires_at > now_unix {
+            return Ok(None);
+        }
+        self.entries.remove_packet_question(question)?;
+        self.stats.expired_removal_total += 1;
+        self.stats.remove_callback_total += 1;
+        Ok(None)
+    }
+
     pub fn sweep(&mut self, now_unix: i64) -> Vec<DnsCacheEntry> {
-        let expired: Vec<DnsCacheKey> = self
-            .entries
-            .iter()
-            .filter_map(|(key, entry)| {
-                (entry.cache_expires_at() <= now_unix).then_some(key.clone())
-            })
-            .collect();
+        let expired = self.entries.expired_keys(now_unix);
         let mut removed = Vec::with_capacity(expired.len());
         for key in expired {
             if let Some(entry) = self.entries.remove(&key) {
@@ -124,10 +211,7 @@ impl DnsCacheStore {
     }
 
     pub fn cache_stats_entries(&self, now_unix: i64) -> usize {
-        self.entries
-            .values()
-            .filter(|entry| entry.cache_expires_at() > now_unix)
-            .count()
+        self.entries.live_count(now_unix)
     }
 
     pub fn len(&self) -> usize {
@@ -147,26 +231,12 @@ impl DnsCacheStore {
     }
 
     fn evict_entries(&mut self, now_unix: i64) {
-        let expired: Vec<DnsCacheKey> = self
-            .entries
-            .iter()
-            .filter_map(|(key, entry)| {
-                (entry.cache_expires_at() <= now_unix).then_some(key.clone())
-            })
-            .collect();
-        for key in expired {
-            self.entries.remove(&key);
-            self.stats.expired_removal_total += 1;
-            self.stats.remove_callback_total += 1;
-        }
+        let expired_count = self.entries.remove_expired(now_unix);
+        self.stats.expired_removal_total += expired_count as u64;
+        self.stats.remove_callback_total += expired_count as u64;
 
         while self.entries.len() >= self.capacity {
-            let Some(oldest_key) = self
-                .entries
-                .iter()
-                .min_by_key(|(_, entry)| entry.cache_expires_at())
-                .map(|(key, _)| key.clone())
-            else {
+            let Some(oldest_key) = self.entries.oldest_key() else {
                 break;
             };
             self.entries.remove(&oldest_key);
@@ -309,5 +379,33 @@ mod tests {
             stats_store.stats().remove_callback_total,
             stats["remove_callback_called"].as_u64().unwrap()
         );
+    }
+
+    #[test]
+    fn packet_question_lookup_and_packed_response_into_match_owned_paths() {
+        let now = 1_700_000_000_i64;
+        let request = [
+            0x12, 0x34, 0x01, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x07, b'E',
+            b'x', b'a', b'm', b'p', b'l', b'e', 0x03, b'C', b'O', b'M', 0x00, 0x00, 0x01, 0x00,
+            0x01,
+        ];
+        let view = crate::message::DnsPacketView::parse(&request).unwrap();
+        let question = view.questions().next().unwrap();
+
+        let mut entry = DnsCacheEntry::new(now + 60, now + 60);
+        entry.packed_response = vec![0, 0, 0x81, 0x80];
+
+        let mut store = DnsCacheStore::new(8);
+        store.insert_without_route_owner_key(now, DnsCacheKey::new("example.com.", 1, 1), entry);
+        let found = store
+            .lookup_packet_question(now, &question, false)
+            .unwrap()
+            .expect("packet question cache hit");
+        let mut restored = Vec::with_capacity(found.packed_response.len());
+        found
+            .fill_packed_response_into(view.id(), &mut restored)
+            .expect("packed response restore into");
+        assert_eq!(restored, vec![0x12, 0x34, 0x81, 0x80]);
+        assert_eq!(store.stats().hit_total, 1);
     }
 }

@@ -103,17 +103,16 @@ pub fn validate_psk_list(cipher: &str, password: &str) -> Result<PskInfo, Outbou
     let conf = cipher_conf(cipher).ok_or_else(|| {
         OutboundError::BadShadowsocks(format!("unsupported shadowsocks 2022 cipher: {cipher}"))
     })?;
-    let parts = password.split(':').collect::<Vec<_>>();
-    let mut lens = Vec::with_capacity(parts.len());
-    for part in &parts {
-        let key = validate_base64_psk(part, conf.key_len)?;
-        lens.push(key.len());
+    let psk_count = password.bytes().filter(|byte| *byte == b':').count() + 1;
+    let mut lens = Vec::with_capacity(psk_count);
+    for part in password.split(':') {
+        lens.push(validate_base64_psk_len(part, conf.key_len)?);
     }
     Ok(PskInfo {
         cipher: cipher.to_owned(),
-        psk_count: parts.len(),
+        psk_count,
         psk_key_lens: lens,
-        upsk_index: parts.len().saturating_sub(1),
+        upsk_index: psk_count.saturating_sub(1),
         expected_key_len: conf.key_len,
     })
 }
@@ -141,6 +140,31 @@ pub fn validate_base64_psk(
         )));
     }
     Ok(psk)
+}
+
+fn validate_base64_psk_len(
+    psk_base64: &str,
+    expected_key_len: usize,
+) -> Result<usize, OutboundError> {
+    if psk_base64.is_empty() {
+        return Err(OutboundError::BadShadowsocks(
+            "PSK cannot be empty for AEAD-2022 methods".to_owned(),
+        ));
+    }
+    let mut decoded = [0_u8; 64];
+    let psk_len = base64::engine::general_purpose::STANDARD
+        .decode_slice(psk_base64, &mut decoded)
+        .map_err(|err| {
+            OutboundError::BadShadowsocks(format!(
+                "PSK must be valid base64 for AEAD-2022 methods: {err}"
+            ))
+        })?;
+    if psk_len != expected_key_len {
+        return Err(OutboundError::BadShadowsocks(format!(
+            "PSK length must be {expected_key_len} bytes for this method, got {psk_len}"
+        )));
+    }
+    Ok(psk_len)
 }
 
 pub fn tcp_header_contract(
