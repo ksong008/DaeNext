@@ -6,7 +6,7 @@ use crate::production_runtime_owner::command::{CommandSpec, run_observation_comm
 
 pub(super) fn run_client_active_udp_probe(target: &str, iterations: u32) -> Value {
     let script = format!(
-        "import socket,sys\nok=0\nlast=None\ns=socket.socket(socket.AF_INET, socket.SOCK_DGRAM)\ns.settimeout(3)\nfor i in range({iterations}):\n    s.sendto(b\"stage53-udp-tproxy-ping\", ({target_ip:?},{target_port}))\n    data,addr=s.recvfrom(128)\n    last=addr\n    if data != b\"stage53-udp-tproxy-ack\" or addr != ({target_ip:?},{target_port}):\n        print(f\"bad reply data={{data!r}} addr={{addr!r}}\")\n        sys.exit(2)\n    ok += 1\ns.close()\nprint(f\"stage53-udp-ack-count={{ok}} last-peer={{last[0]}}:{{last[1]}}\")\nsys.exit(0)\n",
+        "import socket,sys\nok=0\nlast=None\ns=socket.socket(socket.AF_INET, socket.SOCK_DGRAM)\ns.settimeout(3)\nfor i in range({iterations}):\n    s.sendto(b\"active-udp-tproxy-ping\", ({target_ip:?},{target_port}))\n    data,addr=s.recvfrom(128)\n    last=addr\n    if data != b\"active-udp-tproxy-ack\" or addr != ({target_ip:?},{target_port}):\n        print(f\"bad reply data={{data!r}} addr={{addr!r}}\")\n        sys.exit(2)\n    ok += 1\ns.close()\nprint(f\"active-udp-ack-count={{ok}} last-peer={{last[0]}}:{{last[1]}}\")\nsys.exit(0)\n",
         target_ip = target
             .split(':')
             .next()

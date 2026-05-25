@@ -4,24 +4,21 @@ use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
 use serde_json::{Value, json};
 
-use crate::stage165_reload_owner_handoff_smoke_report;
+use crate::reload_owner_handoff_smoke_report;
 
-pub fn default_stage167_root() -> PathBuf {
-    PathBuf::from("/tmp/dae-stage167-reload-owner-benchmark")
+pub fn default_reload_owner_benchmark_root() -> PathBuf {
+    PathBuf::from("/tmp/dae-reload-owner-benchmark")
 }
 
-pub fn stage167_reload_owner_benchmark_report(
-    root: &Path,
-    iterations: u32,
-) -> Result<Value, String> {
+pub fn reload_owner_benchmark_report(root: &Path, iterations: u32) -> Result<Value, String> {
     if iterations == 0 {
-        return Err("stage167 iterations must be greater than zero".to_owned());
+        return Err("reload-owner-benchmark iterations must be greater than zero".to_owned());
     }
-    ensure_safe_stage167_root(root)?;
+    ensure_safe_reload_owner_benchmark_root(root)?;
     if root.exists() {
         fs::remove_dir_all(root).map_err(|err| {
             format!(
-                "failed to remove existing stage167 root {}: {err}",
+                "failed to remove existing reload-owner-benchmark root {}: {err}",
                 path_string(root)
             )
         })?;
@@ -31,14 +28,14 @@ pub fn stage167_reload_owner_benchmark_report(
     let log_file = root.join("log").join("reload-owner-benchmark.log");
     fs::create_dir_all(&run_dir).map_err(|err| {
         format!(
-            "failed to create stage167 run dir {}: {err}",
+            "failed to create reload-owner-benchmark run dir {}: {err}",
             path_string(&run_dir)
         )
     })?;
     if let Some(parent) = log_file.parent() {
         fs::create_dir_all(parent).map_err(|err| {
             format!(
-                "failed to create stage167 log dir {}: {err}",
+                "failed to create reload-owner-benchmark log dir {}: {err}",
                 path_string(parent)
             )
         })?;
@@ -47,7 +44,7 @@ pub fn stage167_reload_owner_benchmark_report(
     let started = Instant::now();
     let run_id = SystemTime::now()
         .duration_since(UNIX_EPOCH)
-        .map_err(|err| format!("failed to create stage167 run id: {err}"))?
+        .map_err(|err| format!("failed to create reload-owner-benchmark run id: {err}"))?
         .as_nanos();
     let mut iteration_reports = Vec::new();
     let mut elapsed_samples = Vec::new();
@@ -58,10 +55,10 @@ pub fn stage167_reload_owner_benchmark_report(
     for index in 0..iterations {
         let iteration = index + 1;
         let iteration_root = PathBuf::from(format!(
-            "/tmp/dae-stage165-stage167-benchmark-{}-{run_id}-{iteration}",
+            "/tmp/dae-reload-owner-handoff-reload-owner-benchmark-benchmark-{}-{run_id}-{iteration}",
             std::process::id(),
         ));
-        let report = stage165_reload_owner_handoff_smoke_report(&iteration_root)?;
+        let report = reload_owner_handoff_smoke_report(&iteration_root)?;
         let passed = report["non_production_daemon_reload_owner_transfer_smoke_passed"]
             .as_bool()
             .unwrap_or(false);
@@ -91,7 +88,7 @@ pub fn stage167_reload_owner_benchmark_report(
             "old_owner_close_smoke_passed": report["old_owner_close_smoke_passed"],
             "reload_scoped_cleanup_smoke_passed": report["reload_scoped_cleanup_smoke_passed"],
             "rollback_blocker_recorded": report["rollback_blocker_recorded"],
-            "stage165_iteration_root_removed": cleanup_removed
+            "reload-owner-handoff_iteration_root_removed": cleanup_removed
         }));
     }
 
@@ -108,8 +105,7 @@ pub fn stage167_reload_owner_benchmark_report(
     let all_iteration_roots_removed = cleanup_count == iterations;
 
     let report = json!({
-        "name": "stage167-bounded-production-equivalent-listener-ebpf-benchmark-harness",
-        "stage": "stage167",
+        "name": "bounded-production-equivalent-listener-ebpf-benchmark-harness",
         "root": path_string(root),
         "run_dir": path_string(&run_dir),
         "state_file": path_string(&state_file),
@@ -145,25 +141,28 @@ pub fn stage167_reload_owner_benchmark_report(
     });
 
     let state = serde_json::to_vec_pretty(&report)
-        .map_err(|err| format!("failed to encode stage167 benchmark state: {err}"))?;
+        .map_err(|err| format!("failed to encode reload-owner-benchmark benchmark state: {err}"))?;
     fs::write(&state_file, state)
-        .map_err(|err| format!("failed to write stage167 benchmark state: {err}"))?;
-    fs::write(&log_file, "stage167 bounded reload owner benchmark\n")
-        .map_err(|err| format!("failed to write stage167 benchmark log: {err}"))?;
+        .map_err(|err| format!("failed to write reload-owner-benchmark benchmark state: {err}"))?;
+    fs::write(
+        &log_file,
+        "reload-owner-benchmark bounded reload owner benchmark\n",
+    )
+    .map_err(|err| format!("failed to write reload-owner-benchmark benchmark log: {err}"))?;
     Ok(report)
 }
 
-fn ensure_safe_stage167_root(root: &Path) -> Result<(), String> {
+fn ensure_safe_reload_owner_benchmark_root(root: &Path) -> Result<(), String> {
     if !root.is_absolute() {
         return Err(format!(
-            "stage167 root must be absolute: {}",
+            "reload-owner-benchmark root must be absolute: {}",
             path_string(root)
         ));
     }
     let root_string = path_string(root);
-    if !root_string.starts_with("/tmp/dae-stage167") {
+    if !root_string.starts_with("/tmp/dae-reload-owner-benchmark") {
         return Err(format!(
-            "stage167 root must be under /tmp/dae-stage167*: {root_string}"
+            "reload-owner-benchmark root must be under /tmp/dae-reload-owner-benchmark*: {root_string}"
         ));
     }
     Ok(())

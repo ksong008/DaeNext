@@ -27,32 +27,32 @@ impl ReloadOwnerHandoffPaths {
     }
 }
 
-pub fn default_stage165_root() -> PathBuf {
-    PathBuf::from("/tmp/dae-stage165-reload-owner-handoff")
+pub fn default_reload_owner_handoff_root() -> PathBuf {
+    PathBuf::from("/tmp/dae-reload-owner-handoff")
 }
 
-pub fn stage165_reload_owner_handoff_smoke_report(root: &Path) -> Result<Value, String> {
+pub fn reload_owner_handoff_smoke_report(root: &Path) -> Result<Value, String> {
     let started = Instant::now();
-    ensure_safe_stage165_root(root)?;
+    ensure_safe_reload_owner_handoff_root(root)?;
     let paths = ReloadOwnerHandoffPaths::under_root(root);
     if paths.root.exists() {
         fs::remove_dir_all(&paths.root).map_err(|err| {
             format!(
-                "failed to remove existing stage165 root {}: {err}",
+                "failed to remove existing reload-owner-handoff root {}: {err}",
                 path_string(&paths.root)
             )
         })?;
     }
     fs::create_dir_all(&paths.run_dir).map_err(|err| {
         format!(
-            "failed to create stage165 run dir {}: {err}",
+            "failed to create reload-owner-handoff run dir {}: {err}",
             path_string(&paths.run_dir)
         )
     })?;
     if let Some(parent) = paths.log_file.parent() {
         fs::create_dir_all(parent).map_err(|err| {
             format!(
-                "failed to create stage165 log dir {}: {err}",
+                "failed to create reload-owner-handoff log dir {}: {err}",
                 path_string(parent)
             )
         })?;
@@ -60,11 +60,11 @@ pub fn stage165_reload_owner_handoff_smoke_report(root: &Path) -> Result<Value, 
 
     fs::write(
         &paths.scoped_resource_file,
-        "stage165 reload scoped resource\n",
+        "reload-owner-handoff reload scoped resource\n",
     )
     .map_err(|err| {
         format!(
-            "failed to create stage165 scoped resource {}: {err}",
+            "failed to create reload-owner-handoff scoped resource {}: {err}",
             path_string(&paths.scoped_resource_file)
         )
     })?;
@@ -91,7 +91,7 @@ pub fn stage165_reload_owner_handoff_smoke_report(root: &Path) -> Result<Value, 
     if paths.scoped_resource_file.exists() {
         fs::remove_file(&paths.scoped_resource_file).map_err(|err| {
             format!(
-                "failed to remove stage165 scoped resource {}: {err}",
+                "failed to remove reload-owner-handoff scoped resource {}: {err}",
                 path_string(&paths.scoped_resource_file)
             )
         })?;
@@ -101,8 +101,7 @@ pub fn stage165_reload_owner_handoff_smoke_report(root: &Path) -> Result<Value, 
     let elapsed_ns = started.elapsed().as_nanos().min(u128::from(u64::MAX)) as u64;
 
     let mut report = json!({
-        "name": "stage165-non-production-daemon-reload-owner-handoff-smoke",
-        "stage": "stage165",
+        "name": "non-production-daemon-reload-owner-handoff-smoke",
         "root": path_string(&paths.root),
         "run_dir": path_string(&paths.run_dir),
         "state_file": path_string(&paths.state_file),
@@ -162,7 +161,7 @@ pub fn stage165_reload_owner_handoff_smoke_report(root: &Path) -> Result<Value, 
         "product_chain_switch_allowed": false
     });
     if let Some(value) = handoff_value {
-        report["stage164_handoff"] = value;
+        report["reload_owner_handoff"] = value;
     }
     if let Some(err) = handoff_error {
         report["smoke_error"] = json!(format!(
@@ -170,30 +169,31 @@ pub fn stage165_reload_owner_handoff_smoke_report(root: &Path) -> Result<Value, 
         ));
     }
 
-    let state = serde_json::to_vec_pretty(&report)
-        .map_err(|err| format!("failed to encode stage165 reload owner state: {err}"))?;
+    let state = serde_json::to_vec_pretty(&report).map_err(|err| {
+        format!("failed to encode reload-owner-handoff reload owner state: {err}")
+    })?;
     fs::write(&paths.state_file, state)
-        .map_err(|err| format!("failed to write stage165 reload owner state: {err}"))?;
+        .map_err(|err| format!("failed to write reload-owner-handoff reload owner state: {err}"))?;
     fs::write(
         &paths.log_file,
-        "stage165 non-production daemon reload owner handoff smoke\n",
+        "reload-owner-handoff non-production daemon reload owner handoff smoke\n",
     )
-    .map_err(|err| format!("failed to write stage165 reload owner log: {err}"))?;
+    .map_err(|err| format!("failed to write reload-owner-handoff reload owner log: {err}"))?;
 
     Ok(report)
 }
 
-fn ensure_safe_stage165_root(root: &Path) -> Result<(), String> {
+fn ensure_safe_reload_owner_handoff_root(root: &Path) -> Result<(), String> {
     if !root.is_absolute() {
         return Err(format!(
-            "stage165 root must be absolute: {}",
+            "reload-owner-handoff root must be absolute: {}",
             path_string(root)
         ));
     }
     let root_string = path_string(root);
-    if !root_string.starts_with("/tmp/dae-stage165") {
+    if !root_string.starts_with("/tmp/dae-reload-owner-handoff") {
         return Err(format!(
-            "stage165 root must be under /tmp/dae-stage165*: {root_string}"
+            "reload-owner-handoff root must be under /tmp/dae-reload-owner-handoff*: {root_string}"
         ));
     }
     Ok(())

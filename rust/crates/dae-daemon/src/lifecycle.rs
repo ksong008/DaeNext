@@ -19,25 +19,24 @@ impl LifecyclePaths {
         let root = root.into();
         let run_dir = root.join("run");
         Self {
-            pid_file: run_dir.join("dae-stage150.pid"),
-            progress_file: run_dir.join("dae-stage150.progress"),
+            pid_file: run_dir.join("dae-lifecycle.pid"),
+            progress_file: run_dir.join("dae-lifecycle.progress"),
             sdnotify_file: run_dir.join("sdnotify.ready"),
-            log_file: root.join("log").join("dae-stage150.log"),
+            log_file: root.join("log").join("dae-lifecycle.log"),
             run_dir,
             root,
         }
     }
 }
 
-pub fn default_stage150_root() -> PathBuf {
-    PathBuf::from("/tmp/dae-stage150-daemon-lifecycle-smoke")
+pub fn default_lifecycle_smoke_root() -> PathBuf {
+    PathBuf::from("/tmp/dae-lifecycle-smoke")
 }
 
-pub fn stage150_lifecycle_smoke_report(root: &Path) -> Result<Value, String> {
-    let paths = run_stage150_lifecycle_smoke(root)?;
+pub fn lifecycle_smoke_report(root: &Path) -> Result<Value, String> {
+    let paths = run_lifecycle_smoke(root)?;
     Ok(json!({
-        "name": "stage150-rust-daemon-lifecycle-smoke",
-        "stage": "stage150",
+        "name": "rust-daemon-lifecycle-smoke",
         "root": path_string(&paths.root),
         "run_dir": path_string(&paths.run_dir),
         "pid_file": path_string(&paths.pid_file),
@@ -73,27 +72,27 @@ pub fn stage150_lifecycle_smoke_report(root: &Path) -> Result<Value, String> {
     }))
 }
 
-pub fn run_stage150_lifecycle_smoke(root: &Path) -> Result<LifecyclePaths, String> {
-    ensure_safe_stage150_root(root)?;
+pub fn run_lifecycle_smoke(root: &Path) -> Result<LifecyclePaths, String> {
+    ensure_safe_lifecycle_smoke_root(root)?;
     let paths = LifecyclePaths::under_root(root);
     if paths.root.exists() {
         fs::remove_dir_all(&paths.root).map_err(|err| {
             format!(
-                "failed to remove existing stage150 root {}: {err}",
+                "failed to remove existing lifecycle-smoke root {}: {err}",
                 path_string(&paths.root)
             )
         })?;
     }
     fs::create_dir_all(&paths.run_dir).map_err(|err| {
         format!(
-            "failed to create stage150 run dir {}: {err}",
+            "failed to create lifecycle-smoke run dir {}: {err}",
             path_string(&paths.run_dir)
         )
     })?;
     if let Some(parent) = paths.log_file.parent() {
         fs::create_dir_all(parent).map_err(|err| {
             format!(
-                "failed to create stage150 log dir {}: {err}",
+                "failed to create lifecycle-smoke log dir {}: {err}",
                 path_string(parent)
             )
         })?;
@@ -105,7 +104,7 @@ pub fn run_stage150_lifecycle_smoke(root: &Path) -> Result<LifecyclePaths, Strin
     assert_progress(&paths.progress_file, RELOAD_DONE)?;
     fs::write(&paths.sdnotify_file, "READY=1\n")
         .map_err(|err| format!("failed to write sdnotify file: {err}"))?;
-    fs::write(&paths.log_file, "stage150 lifecycle smoke\n")
+    fs::write(&paths.log_file, "lifecycle-smoke lifecycle smoke\n")
         .map_err(|err| format!("failed to write log file: {err}"))?;
 
     write_progress(&paths.progress_file, RELOAD_SEND, "")?;
@@ -123,17 +122,17 @@ pub fn run_stage150_lifecycle_smoke(root: &Path) -> Result<LifecyclePaths, Strin
     Ok(paths)
 }
 
-fn ensure_safe_stage150_root(root: &Path) -> Result<(), String> {
+fn ensure_safe_lifecycle_smoke_root(root: &Path) -> Result<(), String> {
     if !root.is_absolute() {
         return Err(format!(
-            "stage150 root must be absolute: {}",
+            "lifecycle-smoke root must be absolute: {}",
             path_string(root)
         ));
     }
     let root_string = path_string(root);
-    if !root_string.starts_with("/tmp/dae-stage150") {
+    if !root_string.starts_with("/tmp/dae-lifecycle-smoke") {
         return Err(format!(
-            "stage150 root must be under /tmp/dae-stage150*: {root_string}"
+            "lifecycle-smoke root must be under /tmp/dae-lifecycle-smoke*: {root_string}"
         ));
     }
     Ok(())
