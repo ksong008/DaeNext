@@ -6,6 +6,7 @@ members = [
     "crates/dae-daemon",
     "crates/dae-control",
     "crates/dae-core-types",
+    "crates/dae-bench",
     "crates/dae-datapath",
     "crates/dae-dns",
     "crates/dae-ebpf-support",
@@ -45,6 +46,7 @@ dae-datapath = { path = "crates/dae-datapath" }
 dae-dns = { path = "crates/dae-dns" }
 dae-ebpf-support = { path = "crates/dae-ebpf-support" }
 dae-engine = { path = "crates/dae-engine" }
+dae-geodata = { path = "crates/dae-geodata" }
 dae-golden = { path = "crates/dae-golden" }
 dae-netutil = { path = "crates/dae-netutil" }
 dae-outbound = { path = "crates/dae-outbound" }

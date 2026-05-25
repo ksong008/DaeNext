@@ -41,7 +41,7 @@ endif
 
 BUILD_ARGS := -trimpath -ldflags "-s -w -X github.com/daeuniverse/dae/cmd.Version=$(VERSION) -X github.com/daeuniverse/dae/common/consts.MaxMatchSetLen_=$(MAX_MATCH_SET_LEN)" $(BUILD_ARGS)
 
-.PHONY: clean-ebpf ebpf dae submodule submodules
+.PHONY: clean-ebpf ebpf dae submodule submodules stage-freeze-check
 
 ## Begin Dae Build
 dae: export GOOS=linux
@@ -83,6 +83,9 @@ clean-ebpf:
 		rm -f control/kern/tests/bpftest_bpf*.o
 fmt:
 	go fmt ./...
+
+stage-freeze-check:
+	python3 tools/check_stage_freeze.py
 
 emoji-lint:
 	./scripts/check_no_emoji.sh

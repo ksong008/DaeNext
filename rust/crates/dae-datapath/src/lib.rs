@@ -1,3 +1,4 @@
+pub mod active;
 pub mod dial;
 pub mod packet_sniffer;
 pub mod route;
@@ -10,6 +11,17 @@ pub mod udp_task;
 #[cfg(test)]
 mod tests;
 
+pub use active::{
+    ACTIVE_TCP_CLIENT_NETNS, ACTIVE_TCP_DEFAULT_CLIENT_IP, ACTIVE_TCP_DEFAULT_MPTCP,
+    ACTIVE_TCP_DEFAULT_SO_MARK, ACTIVE_TCP_DEFAULT_TARGET_IP, ACTIVE_TCP_DEFAULT_TARGET_PORT,
+    ACTIVE_TCP_LAN_CLIENT_IFACE, ACTIVE_TCP_LAN_FILTER_PREF, ACTIVE_TCP_LAN_GATEWAY_IP,
+    ACTIVE_TCP_LAN_HOST_IFACE, ACTIVE_TCP_LAN_SECTION, ACTIVE_TCP_MATCH_TYPE_FALLBACK,
+    ACTIVE_TCP_OUTBOUND_PROXY, ACTIVE_TCP_ROUTING_MAP_KERNEL_NAME, ACTIVE_TCP_ROUTING_MAP_KEY,
+    ACTIVE_TCP_ROUTING_MAP_KEY_SIZE, ACTIVE_TCP_ROUTING_MAP_VALUE_SIZE,
+    ACTIVE_UDP_DEFAULT_TARGET_IP, ACTIVE_UDP_DEFAULT_TARGET_PORT, ActiveTcpRoutingMapContract,
+    ActiveTcpTopologyContract, ActiveUdpEndpointContract, active_tcp_routing_fallback_value,
+    active_tcp_routing_map_contract, active_tcp_topology_contract, active_udp_endpoint_contract,
+};
 pub use dial::{magic_network, magic_network_bytes};
 pub use packet_sniffer::{PACKET_SNIFFER_POOL_MAX_ENTRIES, PACKET_SNIFFER_TTL_MS};
 pub use route::{RouteLoopResult, RouteRule, route_loop};

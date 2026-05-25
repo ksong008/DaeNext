@@ -67,6 +67,19 @@ fn runtime_dependency_plan_keeps_stage7_env_gates() {
     );
 }
 
+#[test]
+fn control_api_typed_report_covers_formal_surfaces_without_stage_schema() {
+    let report = ControlApiTypedReport::formal_runtime_control_api();
+    assert_eq!(report.schema, "control-api-typed-report-v1");
+    assert_eq!(report.status, ControlApiReportStatus::Pass);
+    assert_eq!(report.status.as_str(), "pass");
+    assert!(report.runtime_overview_available);
+    assert!(report.reload_core_state_available);
+    assert!(report.domain_routing_owner_available);
+    assert!(report.runtime_dependency_plan_available);
+    assert!(!report.stage_report_schema);
+}
+
 fn assert_domain_view(got: &DomainRoutingView, expected: &Value) {
     assert_eq!(got.step, expected["step"].as_str().unwrap());
     assert_eq!(got.owners, string_array(&expected["owners"]));

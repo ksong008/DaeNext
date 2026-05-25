@@ -9,12 +9,72 @@ pub struct MapSpec {
     pub pinning: &'static str,
 }
 
+impl MapSpec {
+    pub fn role(self) -> RuntimeMapRole {
+        RuntimeMapRole::for_map_name(self.name)
+    }
+
+    pub fn pinned_by_name(self) -> bool {
+        self.pinning == "PinByName"
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum RuntimeMapRole {
+    ParamRodata,
+    PinnedReuse,
+    SocketHandoff,
+    Routing,
+    Connectivity,
+    Tracking,
+    DomainRouting,
+    UdpState,
+    InnerMapCatalog,
+    Other,
+}
+
+impl RuntimeMapRole {
+    pub const fn for_map_name(name: &str) -> Self {
+        match name.as_bytes() {
+            b".rodata" => Self::ParamRodata,
+            b"cookie_pid_map" | b"routing_tuples_map" | b"tgid_pname_map" => Self::PinnedReuse,
+            b"listen_socket_map" => Self::SocketHandoff,
+            b"routing_map" => Self::Routing,
+            b"outbound_connectivity_map" => Self::Connectivity,
+            b"redirect_track" => Self::Tracking,
+            b"domain_routing_map" => Self::DomainRouting,
+            b"udp_conn_state_map" => Self::UdpState,
+            b"lpm_array_map" | b"unused_lpm_type" => Self::InnerMapCatalog,
+            _ => Self::Other,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct RuntimeMapContract {
+    pub spec: MapSpec,
+    pub role: RuntimeMapRole,
+    pub reusable_pin: bool,
+}
+
 pub fn map_catalog() -> &'static [MapSpec] {
     &MAP_CATALOG
 }
 
 pub fn pinned_reuse_maps() -> &'static [&'static str] {
     &PINNED_REUSE_MAPS
+}
+
+pub fn runtime_map_contract() -> Vec<RuntimeMapContract> {
+    MAP_CATALOG
+        .iter()
+        .copied()
+        .map(|spec| RuntimeMapContract {
+            spec,
+            role: spec.role(),
+            reusable_pin: PINNED_REUSE_MAPS.contains(&spec.name),
+        })
+        .collect()
 }
 
 const PINNED_REUSE_MAPS: [&str; 3] = ["cookie_pid_map", "routing_tuples_map", "tgid_pname_map"];

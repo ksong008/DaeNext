@@ -1,3 +1,4 @@
+use dae_ebpf_support::{TcAttachDirection, TcAttachTarget, TcCommandSpec};
 use serde_json::Value;
 
 use super::super::command::{CommandSpec, run_step};
@@ -9,22 +10,11 @@ pub(in crate::production_runtime_owner) fn cleanup_active_tcp_resources(
     for (name, spec) in [
         (
             "delete-lan-ingress-param-aware-ebpf-program-filter",
-            CommandSpec::new(
-                "tc",
-                [
-                    "filter",
-                    "del",
-                    "dev",
-                    LAN_HOST_IFACE,
-                    "ingress",
-                    "pref",
-                    LAN_FILTER_PREF,
-                ],
-            ),
+            command_spec(lan_attach_target().filter_del_command(LAN_FILTER_PREF)),
         ),
         (
             "delete-lan-host-clsact-qdisc",
-            CommandSpec::new("tc", ["qdisc", "del", "dev", LAN_HOST_IFACE, "clsact"]),
+            command_spec(lan_attach_target().clsact_qdisc_del_command()),
         ),
         (
             "delete-lan-host-link",
@@ -37,4 +27,12 @@ pub(in crate::production_runtime_owner) fn cleanup_active_tcp_resources(
     ] {
         let _ = run_step(cleanup_steps, name, spec);
     }
+}
+
+fn lan_attach_target() -> TcAttachTarget {
+    TcAttachTarget::host(LAN_HOST_IFACE, TcAttachDirection::Ingress)
+}
+
+fn command_spec(command: TcCommandSpec) -> CommandSpec {
+    CommandSpec::new(command.program, command.args)
 }

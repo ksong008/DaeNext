@@ -37,7 +37,7 @@ impl Item {
             }
             Self::Section(section) => {
                 let body = section.to_config_string(compact, quote_val);
-                format!("type: Section\n\t{}", body.replace('\n', "\n\t"))
+                format!("type: Param\n\t{}", body.replace('\n', "\n\t"))
             }
             Self::RoutingRule(rule) => {
                 format!(
@@ -172,6 +172,7 @@ impl Section {
         let mut out = format!("section: {}", self.name);
         for item in &self.items {
             out.push('\n');
+            out.push('\t');
             out.push_str(
                 &item
                     .to_config_string(compact, quote_val)

@@ -120,3 +120,24 @@ pub const CHECKSUM_FEATURE_VERSION: super::kernel::Version = super::kernel::Vers
 pub const SK_ASSIGN_FEATURE_VERSION: super::kernel::Version = super::kernel::Version::new(5, 7, 0);
 pub const BPF_TIMER_FEATURE_VERSION: super::kernel::Version = super::kernel::Version::new(5, 15, 0);
 pub const BPF_LOOP_FEATURE_VERSION: super::kernel::Version = super::kernel::Version::new(5, 17, 0);
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct BpfAbiContract {
+    pub dae_param_size: usize,
+    pub task_comm_len: usize,
+    pub max_match_set_len: usize,
+    pub tproxy_mark: u32,
+    pub link_hdr_len_none: u32,
+    pub link_hdr_len_ethernet: u32,
+}
+
+pub const fn bpf_abi_contract() -> BpfAbiContract {
+    BpfAbiContract {
+        dae_param_size: core::mem::size_of::<BpfDaeParam>(),
+        task_comm_len: TASK_COMM_LEN,
+        max_match_set_len: MAX_MATCH_SET_LEN,
+        tproxy_mark: TPROXY_MARK,
+        link_hdr_len_none: LINK_HDR_LEN_NONE,
+        link_hdr_len_ethernet: LINK_HDR_LEN_ETHERNET,
+    }
+}

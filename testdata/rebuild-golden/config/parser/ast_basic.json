@@ -213,6 +213,712 @@
       "ok": false
     }
   ],
+  "example_dae": {
+    "input": "example.dae",
+    "input_sha256": "4a54441c0a20409e5900361ffaab4b7884ea7624e5281ec34a198a4dcdeafb95",
+    "item_count_recursive": 60,
+    "section_count": 6,
+    "section_string_join_separator": "\n\n",
+    "section_strings": [
+      "section: global\n\ttype: Param\n\t\ttproxy_port: 12345\n\ttype: Param\n\t\ttproxy_port_protect: true\n\ttype: Param\n\t\tpprof_port: 0\n\ttype: Param\n\t\tso_mark_from_dae: 0\n\ttype: Param\n\t\tlog_level: info\n\ttype: Param\n\t\tdisable_waiting_network: false\n\ttype: Param\n\t\twan_interface: auto\n\ttype: Param\n\t\tauto_config_kernel_parameter: true\n\ttype: Param\n\t\ttcp_check_url: http://cp.cloudflare.com,1.1.1.1,2606:4700:4700::1111\n\ttype: Param\n\t\ttcp_check_http_method: HEAD\n\ttype: Param\n\t\tudp_check_dns: dns.google:53,8.8.8.8,2001:4860:4860::8888\n\ttype: Param\n\t\tcheck_interval: 30s\n\ttype: Param\n\t\tcheck_tolerance: 50ms\n\ttype: Param\n\t\tudp_endpoint_pool_size: 4096\n\ttype: Param\n\t\tdial_mode: domain\n\ttype: Param\n\t\tallow_insecure: false\n\ttype: Param\n\t\tsniffing_timeout: 100ms\n\ttype: Param\n\t\ttls_implementation: tls\n\ttype: Param\n\t\tutls_imitate: chrome_auto\n\ttype: Param\n\t\ttls_fragment: false\n\ttype: Param\n\t\ttls_fragment_length: 50-100\n\ttype: Param\n\t\ttls_fragment_interval: 10-20\n\ttype: Param\n\t\tmptcp: false\n\ttype: Param\n\t\tbandwidth_max_tx: 200 mbps\n\ttype: Param\n\t\tbandwidth_max_rx: 1 gbps",
+      "section: subscription\n\ttype: Param\n\t\tmy_sub: https://www.example.com/subscription/link\n\ttype: Param\n\t\tanother_sub: https://example.com/another_sub\n\ttype: Param\n\t\thttps://example.com/no_tag_link\n\ttype: Param\n\t\tfile://relative/path/to/mysub.sub\n\ttype: Param\n\t\tpersist_sub: https-file://www.example.com/persist_sub/link",
+      "section: node\n\ttype: Param\n\t\tsocks5://localhost:1080\n\ttype: Param\n\t\tmylink: ss://LINK\n\ttype: Param\n\t\tnode1: vmess://LINK\n\ttype: Param\n\t\tnode2: vless://LINK\n\ttype: Param\n\t\tchains: tuic://LINK -\u003e vmess://LINK\n\ttype: Param\n\t\thysteria2: hysteria2://password@server-ip:port/?sni=domain",
+      "section: dns\n\ttype: Param\n\t\tsection: upstream\n\t\t\ttype: Param\n\t\t\t\talidns: udp://dns.alidns.com:53\n\t\t\ttype: Param\n\t\t\t\tgoogledns: tcp+udp://dns.google:53\n\ttype: Param\n\t\tsection: routing\n\t\t\ttype: Param\n\t\t\t\tsection: request\n\t\t\t\t\ttype: RoutingRule\n\t\t\t\t\t\tqname(geosite: cn) -\u003e alidns\n\t\t\t\t\ttype: Param\n\t\t\t\t\t\tfallback: googledns",
+      "section: group\n\ttype: Param\n\t\tsection: my_group\n\t\t\ttype: Param\n\t\t\t\tpolicy: min_moving_avg\n\ttype: Param\n\t\tsection: group2\n\t\t\ttype: Param\n\t\t\t\tfilter: name(HK_node)\n\t\t\ttype: Param\n\t\t\t\tfilter: name(US_node)\n\t\t\ttype: Param\n\t\t\t\tpolicy: min_avg10\n\ttype: Param\n\t\tsection: steam\n\t\t\ttype: Param\n\t\t\t\tfilter: subtag(my_sub) \u0026\u0026 !name(keyword: ExpireAt:)\n\t\t\ttype: Param\n\t\t\t\tpolicy: min_moving_avg\n\t\t\ttype: Param\n\t\t\t\ttcp_check_url: http://test.steampowered.com",
+      "section: routing\n\ttype: RoutingRule\n\t\tpname(NetworkManager) -\u003e direct\n\ttype: RoutingRule\n\t\tdip(224.0.0.0/3, ff00::/8) -\u003e direct\n\ttype: RoutingRule\n\t\tdip(geoip: private) -\u003e direct\n\ttype: RoutingRule\n\t\tl4proto(udp) \u0026\u0026 dport(443) -\u003e block\n\ttype: RoutingRule\n\t\tdip(geoip: cn) -\u003e direct\n\ttype: RoutingRule\n\t\tdomain(geosite: cn) -\u003e direct\n\ttype: Param\n\t\tfallback: my_group"
+    ],
+    "section_strings_sha256": "bc2cd616fedb6fb986219a95159eaee6ba6f7d8c6bee48409735a002dc679b3e",
+    "sections": [
+      {
+        "name": "global",
+        "items": [
+          {
+            "item_type": "Param",
+            "value_kind": "Param",
+            "param": {
+              "key": "tproxy_port",
+              "val": "12345"
+            }
+          },
+          {
+            "item_type": "Param",
+            "value_kind": "Param",
+            "param": {
+              "key": "tproxy_port_protect",
+              "val": "true"
+            }
+          },
+          {
+            "item_type": "Param",
+            "value_kind": "Param",
+            "param": {
+              "key": "pprof_port",
+              "val": "0"
+            }
+          },
+          {
+            "item_type": "Param",
+            "value_kind": "Param",
+            "param": {
+              "key": "so_mark_from_dae",
+              "val": "0"
+            }
+          },
+          {
+            "item_type": "Param",
+            "value_kind": "Param",
+            "param": {
+              "key": "log_level",
+              "val": "info"
+            }
+          },
+          {
+            "item_type": "Param",
+            "value_kind": "Param",
+            "param": {
+              "key": "disable_waiting_network",
+              "val": "false"
+            }
+          },
+          {
+            "item_type": "Param",
+            "value_kind": "Param",
+            "param": {
+              "key": "wan_interface",
+              "val": "auto"
+            }
+          },
+          {
+            "item_type": "Param",
+            "value_kind": "Param",
+            "param": {
+              "key": "auto_config_kernel_parameter",
+              "val": "true"
+            }
+          },
+          {
+            "item_type": "Param",
+            "value_kind": "Param",
+            "param": {
+              "key": "tcp_check_url",
+              "val": "http://cp.cloudflare.com,1.1.1.1,2606:4700:4700::1111"
+            }
+          },
+          {
+            "item_type": "Param",
+            "value_kind": "Param",
+            "param": {
+              "key": "tcp_check_http_method",
+              "val": "HEAD"
+            }
+          },
+          {
+            "item_type": "Param",
+            "value_kind": "Param",
+            "param": {
+              "key": "udp_check_dns",
+              "val": "dns.google:53,8.8.8.8,2001:4860:4860::8888"
+            }
+          },
+          {
+            "item_type": "Param",
+            "value_kind": "Param",
+            "param": {
+              "key": "check_interval",
+              "val": "30s"
+            }
+          },
+          {
+            "item_type": "Param",
+            "value_kind": "Param",
+            "param": {
+              "key": "check_tolerance",
+              "val": "50ms"
+            }
+          },
+          {
+            "item_type": "Param",
+            "value_kind": "Param",
+            "param": {
+              "key": "udp_endpoint_pool_size",
+              "val": "4096"
+            }
+          },
+          {
+            "item_type": "Param",
+            "value_kind": "Param",
+            "param": {
+              "key": "dial_mode",
+              "val": "domain"
+            }
+          },
+          {
+            "item_type": "Param",
+            "value_kind": "Param",
+            "param": {
+              "key": "allow_insecure",
+              "val": "false"
+            }
+          },
+          {
+            "item_type": "Param",
+            "value_kind": "Param",
+            "param": {
+              "key": "sniffing_timeout",
+              "val": "100ms"
+            }
+          },
+          {
+            "item_type": "Param",
+            "value_kind": "Param",
+            "param": {
+              "key": "tls_implementation",
+              "val": "tls"
+            }
+          },
+          {
+            "item_type": "Param",
+            "value_kind": "Param",
+            "param": {
+              "key": "utls_imitate",
+              "val": "chrome_auto"
+            }
+          },
+          {
+            "item_type": "Param",
+            "value_kind": "Param",
+            "param": {
+              "key": "tls_fragment",
+              "val": "false"
+            }
+          },
+          {
+            "item_type": "Param",
+            "value_kind": "Param",
+            "param": {
+              "key": "tls_fragment_length",
+              "val": "50-100"
+            }
+          },
+          {
+            "item_type": "Param",
+            "value_kind": "Param",
+            "param": {
+              "key": "tls_fragment_interval",
+              "val": "10-20"
+            }
+          },
+          {
+            "item_type": "Param",
+            "value_kind": "Param",
+            "param": {
+              "key": "mptcp",
+              "val": "false"
+            }
+          },
+          {
+            "item_type": "Param",
+            "value_kind": "Param",
+            "param": {
+              "key": "bandwidth_max_tx",
+              "val": "200 mbps"
+            }
+          },
+          {
+            "item_type": "Param",
+            "value_kind": "Param",
+            "param": {
+              "key": "bandwidth_max_rx",
+              "val": "1 gbps"
+            }
+          }
+        ]
+      },
+      {
+        "name": "subscription",
+        "items": [
+          {
+            "item_type": "Param",
+            "value_kind": "Param",
+            "param": {
+              "key": "my_sub",
+              "val": "https://www.example.com/subscription/link"
+            }
+          },
+          {
+            "item_type": "Param",
+            "value_kind": "Param",
+            "param": {
+              "key": "another_sub",
+              "val": "https://example.com/another_sub"
+            }
+          },
+          {
+            "item_type": "Param",
+            "value_kind": "Param",
+            "param": {
+              "key": "",
+              "val": "https://example.com/no_tag_link"
+            }
+          },
+          {
+            "item_type": "Param",
+            "value_kind": "Param",
+            "param": {
+              "key": "",
+              "val": "file://relative/path/to/mysub.sub"
+            }
+          },
+          {
+            "item_type": "Param",
+            "value_kind": "Param",
+            "param": {
+              "key": "persist_sub",
+              "val": "https-file://www.example.com/persist_sub/link"
+            }
+          }
+        ]
+      },
+      {
+        "name": "node",
+        "items": [
+          {
+            "item_type": "Param",
+            "value_kind": "Param",
+            "param": {
+              "key": "",
+              "val": "socks5://localhost:1080"
+            }
+          },
+          {
+            "item_type": "Param",
+            "value_kind": "Param",
+            "param": {
+              "key": "mylink",
+              "val": "ss://LINK"
+            }
+          },
+          {
+            "item_type": "Param",
+            "value_kind": "Param",
+            "param": {
+              "key": "node1",
+              "val": "vmess://LINK"
+            }
+          },
+          {
+            "item_type": "Param",
+            "value_kind": "Param",
+            "param": {
+              "key": "node2",
+              "val": "vless://LINK"
+            }
+          },
+          {
+            "item_type": "Param",
+            "value_kind": "Param",
+            "param": {
+              "key": "chains",
+              "val": "tuic://LINK -\u003e vmess://LINK"
+            }
+          },
+          {
+            "item_type": "Param",
+            "value_kind": "Param",
+            "param": {
+              "key": "hysteria2",
+              "val": "hysteria2://password@server-ip:port/?sni=domain"
+            }
+          }
+        ]
+      },
+      {
+        "name": "dns",
+        "items": [
+          {
+            "item_type": "Param",
+            "value_kind": "Section",
+            "section": {
+              "name": "upstream",
+              "items": [
+                {
+                  "item_type": "Param",
+                  "value_kind": "Param",
+                  "param": {
+                    "key": "alidns",
+                    "val": "udp://dns.alidns.com:53"
+                  }
+                },
+                {
+                  "item_type": "Param",
+                  "value_kind": "Param",
+                  "param": {
+                    "key": "googledns",
+                    "val": "tcp+udp://dns.google:53"
+                  }
+                }
+              ]
+            }
+          },
+          {
+            "item_type": "Param",
+            "value_kind": "Section",
+            "section": {
+              "name": "routing",
+              "items": [
+                {
+                  "item_type": "Param",
+                  "value_kind": "Section",
+                  "section": {
+                    "name": "request",
+                    "items": [
+                      {
+                        "item_type": "RoutingRule",
+                        "value_kind": "RoutingRule",
+                        "routing_rule": {
+                          "and_functions": [
+                            {
+                              "name": "qname",
+                              "not": false,
+                              "params": [
+                                {
+                                  "key": "geosite",
+                                  "val": "cn"
+                                }
+                              ]
+                            }
+                          ],
+                          "outbound": {
+                            "name": "alidns",
+                            "not": false,
+                            "params": []
+                          }
+                        }
+                      },
+                      {
+                        "item_type": "Param",
+                        "value_kind": "Param",
+                        "param": {
+                          "key": "fallback",
+                          "val": "googledns"
+                        }
+                      }
+                    ]
+                  }
+                }
+              ]
+            }
+          }
+        ]
+      },
+      {
+        "name": "group",
+        "items": [
+          {
+            "item_type": "Param",
+            "value_kind": "Section",
+            "section": {
+              "name": "my_group",
+              "items": [
+                {
+                  "item_type": "Param",
+                  "value_kind": "Param",
+                  "param": {
+                    "key": "policy",
+                    "val": "min_moving_avg"
+                  }
+                }
+              ]
+            }
+          },
+          {
+            "item_type": "Param",
+            "value_kind": "Section",
+            "section": {
+              "name": "group2",
+              "items": [
+                {
+                  "item_type": "Param",
+                  "value_kind": "Param",
+                  "param": {
+                    "key": "filter",
+                    "val": "",
+                    "and_functions": [
+                      {
+                        "name": "name",
+                        "not": false,
+                        "params": [
+                          {
+                            "key": "",
+                            "val": "HK_node"
+                          }
+                        ]
+                      }
+                    ]
+                  }
+                },
+                {
+                  "item_type": "Param",
+                  "value_kind": "Param",
+                  "param": {
+                    "key": "filter",
+                    "val": "",
+                    "and_functions": [
+                      {
+                        "name": "name",
+                        "not": false,
+                        "params": [
+                          {
+                            "key": "",
+                            "val": "US_node"
+                          }
+                        ]
+                      }
+                    ],
+                    "annotation": [
+                      {
+                        "key": "add_latency",
+                        "val": "-500ms"
+                      }
+                    ]
+                  }
+                },
+                {
+                  "item_type": "Param",
+                  "value_kind": "Param",
+                  "param": {
+                    "key": "policy",
+                    "val": "min_avg10"
+                  }
+                }
+              ]
+            }
+          },
+          {
+            "item_type": "Param",
+            "value_kind": "Section",
+            "section": {
+              "name": "steam",
+              "items": [
+                {
+                  "item_type": "Param",
+                  "value_kind": "Param",
+                  "param": {
+                    "key": "filter",
+                    "val": "",
+                    "and_functions": [
+                      {
+                        "name": "subtag",
+                        "not": false,
+                        "params": [
+                          {
+                            "key": "",
+                            "val": "my_sub"
+                          }
+                        ]
+                      },
+                      {
+                        "name": "name",
+                        "not": true,
+                        "params": [
+                          {
+                            "key": "keyword",
+                            "val": "ExpireAt:"
+                          }
+                        ]
+                      }
+                    ]
+                  }
+                },
+                {
+                  "item_type": "Param",
+                  "value_kind": "Param",
+                  "param": {
+                    "key": "policy",
+                    "val": "min_moving_avg"
+                  }
+                },
+                {
+                  "item_type": "Param",
+                  "value_kind": "Param",
+                  "param": {
+                    "key": "tcp_check_url",
+                    "val": "http://test.steampowered.com"
+                  }
+                }
+              ]
+            }
+          }
+        ]
+      },
+      {
+        "name": "routing",
+        "items": [
+          {
+            "item_type": "RoutingRule",
+            "value_kind": "RoutingRule",
+            "routing_rule": {
+              "and_functions": [
+                {
+                  "name": "pname",
+                  "not": false,
+                  "params": [
+                    {
+                      "key": "",
+                      "val": "NetworkManager"
+                    }
+                  ]
+                }
+              ],
+              "outbound": {
+                "name": "direct",
+                "not": false,
+                "params": []
+              }
+            }
+          },
+          {
+            "item_type": "RoutingRule",
+            "value_kind": "RoutingRule",
+            "routing_rule": {
+              "and_functions": [
+                {
+                  "name": "dip",
+                  "not": false,
+                  "params": [
+                    {
+                      "key": "",
+                      "val": "224.0.0.0/3"
+                    },
+                    {
+                      "key": "",
+                      "val": "ff00::/8"
+                    }
+                  ]
+                }
+              ],
+              "outbound": {
+                "name": "direct",
+                "not": false,
+                "params": []
+              }
+            }
+          },
+          {
+            "item_type": "RoutingRule",
+            "value_kind": "RoutingRule",
+            "routing_rule": {
+              "and_functions": [
+                {
+                  "name": "dip",
+                  "not": false,
+                  "params": [
+                    {
+                      "key": "geoip",
+                      "val": "private"
+                    }
+                  ]
+                }
+              ],
+              "outbound": {
+                "name": "direct",
+                "not": false,
+                "params": []
+              }
+            }
+          },
+          {
+            "item_type": "RoutingRule",
+            "value_kind": "RoutingRule",
+            "routing_rule": {
+              "and_functions": [
+                {
+                  "name": "l4proto",
+                  "not": false,
+                  "params": [
+                    {
+                      "key": "",
+                      "val": "udp"
+                    }
+                  ]
+                },
+                {
+                  "name": "dport",
+                  "not": false,
+                  "params": [
+                    {
+                      "key": "",
+                      "val": "443"
+                    }
+                  ]
+                }
+              ],
+              "outbound": {
+                "name": "block",
+                "not": false,
+                "params": []
+              }
+            }
+          },
+          {
+            "item_type": "RoutingRule",
+            "value_kind": "RoutingRule",
+            "routing_rule": {
+              "and_functions": [
+                {
+                  "name": "dip",
+                  "not": false,
+                  "params": [
+                    {
+                      "key": "geoip",
+                      "val": "cn"
+                    }
+                  ]
+                }
+              ],
+              "outbound": {
+                "name": "direct",
+                "not": false,
+                "params": []
+              }
+            }
+          },
+          {
+            "item_type": "RoutingRule",
+            "value_kind": "RoutingRule",
+            "routing_rule": {
+              "and_functions": [
+                {
+                  "name": "domain",
+                  "not": false,
+                  "params": [
+                    {
+                      "key": "geosite",
+                      "val": "cn"
+                    }
+                  ]
+                }
+              ],
+              "outbound": {
+                "name": "direct",
+                "not": false,
+                "params": []
+              }
+            }
+          },
+          {
+            "item_type": "Param",
+            "value_kind": "Param",
+            "param": {
+              "key": "fallback",
+              "val": "my_group"
+            }
+          }
+        ]
+      }
+    ],
+    "sections_projection_sha256": "b7b4d058d9a4c522ce5ef9efbfb1e958b912fa099df0c78852815c7ad3ad102f"
+  },
   "name": "config-parser-ast-basic",
   "notes": "Deterministic projection of Go config_parser AST. item_type records Item.Type.String(); value_kind records the actual Value type.",
   "source": [

@@ -1,5 +1,6 @@
 use std::path::Path;
 
+use dae_ebpf_support::{TcAttachDirection, TcAttachTarget, TcBpfAttachSpec, TcCommandSpec};
 use serde_json::Value;
 
 use super::super::command::{CommandSpec, mac_string, path_string, run_observation_step, run_step};
@@ -340,33 +341,23 @@ pub(in crate::production_runtime_owner) fn attach_lan_program(
     param_object: &Path,
 ) -> bool {
     let param_object = path_string(param_object);
+    let target = lan_attach_target();
+    let attach = TcBpfAttachSpec::new(
+        target.clone(),
+        LAN_FILTER_PREF,
+        param_object,
+        DEFAULT_LAN_SECTION,
+    );
     let mut ok = true;
     ok &= run_step(
         steps,
         "attach-lan-host-clsact-qdisc",
-        CommandSpec::new("tc", ["qdisc", "add", "dev", LAN_HOST_IFACE, "clsact"]),
+        command_spec(target.clsact_qdisc_add_command()),
     );
     ok &= run_step(
         steps,
         "attach-lan-ingress-param-aware-ebpf-program",
-        CommandSpec::new(
-            "tc",
-            [
-                "filter".to_owned(),
-                "add".to_owned(),
-                "dev".to_owned(),
-                LAN_HOST_IFACE.to_owned(),
-                "ingress".to_owned(),
-                "pref".to_owned(),
-                LAN_FILTER_PREF.to_owned(),
-                "bpf".to_owned(),
-                "da".to_owned(),
-                "obj".to_owned(),
-                param_object,
-                "sec".to_owned(),
-                DEFAULT_LAN_SECTION.to_owned(),
-            ],
-        ),
+        command_spec(attach.filter_add_command()),
     );
     let _ = options;
     ok
@@ -376,7 +367,7 @@ pub(in crate::production_runtime_owner) fn show_lan_program(steps: &mut Vec<Valu
     run_observation_step(
         steps,
         "show-lan-ingress-param-aware-ebpf-program-filter",
-        CommandSpec::new("tc", ["filter", "show", "dev", LAN_HOST_IFACE, "ingress"]),
+        command_spec(lan_attach_target().filter_show_command(false)),
     )
 }
 
@@ -386,21 +377,7 @@ pub(in crate::production_runtime_owner) fn show_peer_program_stats(
     run_observation_step(
         steps,
         "show-production-dae0peer-param-aware-ebpf-program-filter-stats",
-        CommandSpec::new(
-            "ip",
-            [
-                "netns",
-                "exec",
-                PRODUCTION_NETNS,
-                "tc",
-                "-s",
-                "filter",
-                "show",
-                "dev",
-                PRODUCTION_PEER_IFACE,
-                "ingress",
-            ],
-        ),
+        command_spec(production_peer_attach_target().filter_show_command(true)),
     )
 }
 
@@ -408,10 +385,7 @@ pub(in crate::production_runtime_owner) fn show_lan_program_stats(steps: &mut Ve
     run_observation_step(
         steps,
         "show-lan-ingress-param-aware-ebpf-program-filter-stats",
-        CommandSpec::new(
-            "tc",
-            ["-s", "filter", "show", "dev", LAN_HOST_IFACE, "ingress"],
-        ),
+        command_spec(lan_attach_target().filter_show_command(true)),
     )
 }
 
@@ -421,16 +395,26 @@ pub(in crate::production_runtime_owner) fn show_host_program_stats(
     run_observation_step(
         steps,
         "show-production-dae0-param-aware-ebpf-program-filter-stats",
-        CommandSpec::new(
-            "tc",
-            [
-                "-s",
-                "filter",
-                "show",
-                "dev",
-                PRODUCTION_HOST_IFACE,
-                "ingress",
-            ],
-        ),
+        command_spec(production_host_attach_target().filter_show_command(true)),
     )
+}
+
+fn lan_attach_target() -> TcAttachTarget {
+    TcAttachTarget::host(LAN_HOST_IFACE, TcAttachDirection::Ingress)
+}
+
+fn production_host_attach_target() -> TcAttachTarget {
+    TcAttachTarget::host(PRODUCTION_HOST_IFACE, TcAttachDirection::Ingress)
+}
+
+fn production_peer_attach_target() -> TcAttachTarget {
+    TcAttachTarget::netns(
+        PRODUCTION_NETNS,
+        PRODUCTION_PEER_IFACE,
+        TcAttachDirection::Ingress,
+    )
+}
+
+fn command_spec(command: TcCommandSpec) -> CommandSpec {
+    CommandSpec::new(command.program, command.args)
 }
