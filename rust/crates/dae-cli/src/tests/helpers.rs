@@ -38,17 +38,6 @@ pub(super) fn load(path: &str) -> Value {
     dae_golden::load_json(path).unwrap()
 }
 
-pub(super) fn temp_path(name: &str) -> PathBuf {
-    let nanos = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap()
-        .as_nanos();
-    std::env::temp_dir().join(format!(
-        "dae-cli-test-{}-{nanos}-{name}",
-        std::process::id()
-    ))
-}
-
 pub(super) fn write_config(content: &str) -> PathBuf {
     let nanos = SystemTime::now()
         .duration_since(UNIX_EPOCH)
