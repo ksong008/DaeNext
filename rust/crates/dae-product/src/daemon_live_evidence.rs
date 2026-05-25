@@ -59,10 +59,10 @@ pub fn daemon_live_evidence_queue_contract() -> DaemonLiveEvidenceQueueContract 
                 rollback: "keep output under /tmp and do not install over the system daemon",
             },
             DaemonLiveEvidenceQueueRow {
-                area: "opt-in runtime helper",
-                status: "passed-dry-helper",
-                command_or_evidence: "cargo run --manifest-path rust/Cargo.toml -p dae-cli --bin dae-cli-optin --quiet -- runtime stage22-smoke",
-                blocker: "none for dry helper evidence; live daemon evidence is tracked by later rows",
+                area: "opt-in formal helper surface",
+                status: "passed-userspace-and-active-helper",
+                command_or_evidence: "cargo run --manifest-path rust/Cargo.toml -p dae-cli --bin dae-cli-optin --quiet -- active-datapath contract",
+                blocker: "none for formal helper evidence; runtime stage helpers were removed during P9 release pruning",
                 rollback: "no production state is mutated by the helper",
             },
             DaemonLiveEvidenceQueueRow {
@@ -161,7 +161,6 @@ pub fn daemon_live_evidence_queue_contract() -> DaemonLiveEvidenceQueueContract 
             "DAENEW_RUST_REBUILD_MEMO_2026-05-16.md:33.7",
             "DAENEW_RUST_REBUILD_MEMO_2026-05-16.md:33.8",
             "rust/crates/dae-product/src/daemon_gray_switch.rs",
-            "rust/crates/dae-cli/src/runtime_runner.rs",
             "rust/crates/dae-cli/src/active_datapath_runner.rs",
             "control/active_magic_network_test.go",
         ],
