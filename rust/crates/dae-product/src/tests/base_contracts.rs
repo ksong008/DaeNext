@@ -334,7 +334,7 @@ fn daemon_default_readiness_contract_matches_golden_fixture() {
 
 #[test]
 fn daemon_gray_switch_gate_contract_matches_golden_fixture() {
-    let fixture = load("product/daemon/stage22_gray_switch_gate.json");
+    let fixture = load("product/daemon/gray_switch_gate.json");
     let contract = daemon_gray_switch_gate_contract();
     assert_eq!(contract.name, fixture["name"].as_str().unwrap());
     assert_eq!(contract.stage, fixture["stage"].as_str().unwrap());
@@ -394,7 +394,7 @@ fn daemon_gray_switch_gate_contract_matches_golden_fixture() {
 
 #[test]
 fn daemon_live_evidence_queue_contract_matches_golden_fixture() {
-    let fixture = load("product/daemon/stage22_live_evidence_queue.json");
+    let fixture = load("product/daemon/live_evidence_queue.json");
     let contract = daemon_live_evidence_queue_contract();
     assert_eq!(contract.name, fixture["name"].as_str().unwrap());
     assert_eq!(contract.stage, fixture["stage"].as_str().unwrap());
@@ -459,7 +459,7 @@ fn daemon_live_evidence_queue_contract_matches_golden_fixture() {
 
 #[test]
 fn product_chain_admission_contract_matches_golden_fixture() {
-    let fixture = load("product/integration/stage23_product_chain_admission.json");
+    let fixture = load("product/integration/product_chain_admission.json");
     let contract = product_chain_admission_contract();
     assert_eq!(contract.name, fixture["name"].as_str().unwrap());
     assert_eq!(contract.stage, fixture["stage"].as_str().unwrap());

@@ -17,22 +17,19 @@
     "stop_exits_loop": true
   },
   "helper_commands": {
-    "dry_runtime_smoke": [
+    "active_datapath_contract": [
       "dae-cli-optin",
-      "runtime",
-      "dry-run-smoke"
+      "active-datapath",
+      "contract"
     ],
-    "overview_basic": [
+    "userspace_route_match": [
       "dae-cli-optin",
-      "runtime",
-      "overview-basic"
-    ],
-    "route_target": [
-      "dae-cli-optin",
-      "runtime",
-      "route-target",
-      "--host",
-      "\u003chost\u003e",
+      "userspace",
+      "route-match",
+      "--domain",
+      "\u003cdomain\u003e",
+      "--dest",
+      "\u003cip\u003e",
       "--port",
       "\u003cport\u003e"
     ]
@@ -108,7 +105,8 @@
     "engine/service.go",
     "engine/runtime.go",
     "engine/api_rust_optin.go",
-    "rust/crates/dae-cli/src/runtime_runner.rs",
+    "rust/crates/dae-cli/src/userspace_runner.rs",
+    "rust/crates/dae-cli/src/active_datapath_runner.rs",
     "rust/crates/dae-cli/src/runner.rs",
     "rust/crates/dae-engine/src/runtime.rs",
     "rust/crates/dae-engine/src/overview.rs",

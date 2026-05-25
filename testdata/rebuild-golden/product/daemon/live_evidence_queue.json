@@ -1,0 +1,137 @@
+{
+  "default_path_mutation_allowed": false,
+  "default_switch_allowed": false,
+  "evidence_class": "recorded-local-live-runtime-evidence",
+  "go_default_path_preserved": true,
+  "go_fallback_required": true,
+  "live_daemon_started": true,
+  "live_evidence_complete": true,
+  "name": "stage22-daemon-live-evidence-queue",
+  "prior_gate": "stage22-daemon-gray-switch-gate",
+  "queue_decision": "stage22 local live evidence recorded through opt-in helpers; keep dae run default on Go until true Rust default daemon and product chain are admitted",
+  "queue_rows": [
+    {
+      "area": "artifact smoke",
+      "blocker": "none for local evidence; final validation still rebuilds the artifact before handoff",
+      "command_or_evidence": "PATH=/root/.local/go1.25.9/bin:$PATH GOWORK=off OUTPUT=/tmp/dae-stage22-live-evidence make dae",
+      "rollback": "keep output under /tmp and do not install over the system daemon",
+      "status": "passed-local-command"
+    },
+  {
+      "area": "opt-in formal helper surface",
+      "blocker": "none for formal helper evidence; runtime stage helpers were removed during P9 release pruning",
+      "command_or_evidence": "cargo run --manifest-path rust/Cargo.toml -p dae-cli --bin dae-cli-optin --quiet -- active-datapath contract",
+      "rollback": "no production state is mutated by the helper",
+      "status": "passed-userspace-and-active-helper"
+    },
+    {
+      "area": "active datapath preflight",
+      "blocker": "none for local host gates; rerun before any new live candidate smoke",
+      "command_or_evidence": "rust/target/debug/dae-cli-optin active-datapath preflight --tproxy-port 12345 --so-mark 1234 --mptcp true --lan-count 1 --wan-count 0",
+      "rollback": "abort before attaching production interfaces or mutating installed daemon state",
+      "status": "passed-local-preflight"
+    },
+    {
+      "area": "active datapath magic dial",
+      "blocker": "none for TCP/UDP/DNS MagicNetwork propagation; live traffic rows provide datapath proof",
+      "command_or_evidence": "rust/target/debug/dae-cli-optin active-datapath magic-dial --network tcp --mark 1234 --mptcp true; go test ./control -run 'TestActive.*MagicNetwork|TestDnsUdpForwarderUsesMagicNetwork' -count=1",
+      "rollback": "return to Go active datapath if mark or mptcp propagation is incomplete",
+      "status": "passed-helper-and-active-control-test"
+    },
+    {
+      "area": "daemon live run smoke",
+      "blocker": "none for local opt-in run; true Rust default daemon is still not admitted",
+      "command_or_evidence": "/tmp/dae-stage22-live/traffic/active-proxy-tcp-20260517-212412 and later live evidence dirs reached Ready with --disable-pidfile and isolated config",
+      "rollback": "kill only the opt-in candidate process and keep Go daemon path available",
+      "status": "passed-local-live-run"
+    },
+    {
+      "area": "active TCP traffic",
+      "blocker": "none for local active TCP evidence; rerun if datapath code changes",
+      "command_or_evidence": "/tmp/dae-stage22-live/traffic/active-proxy-tcp-20260517-212412 plus control MagicNetwork tests",
+      "rollback": "fall back to Go control plane and Go outbound dialer path",
+      "status": "passed-local-live-traffic"
+    },
+    {
+      "area": "active UDP and DNS UDP/53",
+      "blocker": "none for local UDP/DNS evidence; rerun if UDP endpoint or DNS upstream code changes",
+      "command_or_evidence": "/tmp/dae-stage22-live/traffic/active-proxy-udp-20260517-212738 and /tmp/dae-stage22-live/traffic/dns-udp53-host-upstream-20260517-213259 plus control MagicNetwork tests",
+      "rollback": "fall back to Go DNS controller and Go UDP endpoint pool path",
+      "status": "passed-local-live-traffic"
+    },
+    {
+      "area": "reload success and rollback",
+      "blocker": "none for local reload rollback evidence; cmd/reload.go exit 0 on ReloadError remains current daenew behavior",
+      "command_or_evidence": "/tmp/dae-stage22-live/traffic/reload-rollback-invalid-ttl-20260517-214410",
+      "rollback": "restore old control plane ownership and keep old daemon serving",
+      "status": "passed-local-failure-injection"
+    },
+    {
+      "area": "RuntimeOverview live state",
+      "blocker": "none for in-process Engine API evidence; external daemon IPC remains outside this stage",
+      "command_or_evidence": "/tmp/dae-stage22-live/traffic/live-overview-route-20260517-214751",
+      "rollback": "keep daed/WebUI on Go runtime overview until live telemetry matches",
+      "status": "passed-local-live-runtime"
+    },
+    {
+      "area": "route-aware HTTP transport live route",
+      "blocker": "none for live route-aware Engine HTTPTransport evidence",
+      "command_or_evidence": "/tmp/dae-stage22-live/traffic/live-overview-route-20260517-214751 records SOCKS CONNECT target=stage22-route.test:18080",
+      "rollback": "keep API/subscription fetch on Go route-aware transport",
+      "status": "passed-local-live-route"
+    },
+    {
+      "area": "daemon runtime benchmark",
+      "blocker": "not a Go-vs-Rust default daemon benchmark; default switch remains blocked",
+      "command_or_evidence": "/tmp/dae-stage22-live/traffic/daemon-benchmark-20260517-215852 records no-daemon baseline vs opt-in candidate active-proxy path",
+      "rollback": "do not change default path when Rust candidate is slower or incomplete",
+      "status": "passed-local-benchmark-with-boundary"
+    },
+    {
+      "area": "product integration",
+      "blocker": "product chain must not mask daemon parity gaps",
+      "command_or_evidence": "dae-wing and daed integration remains out of scope until daemon live evidence queue is complete",
+      "rollback": "keep daed and dae-wing on the existing Go-backed integration path",
+      "status": "deferred"
+    }
+  ],
+  "required_environment": [
+    "root permission for tproxy and eBPF smoke",
+    "bpffs mounted and writable for loader smoke",
+    "netns permission for control-plane datapath smoke",
+    "memlock limit sufficient for eBPF objects",
+    "kernel features compatible with current daenew eBPF program set",
+    "isolated loopback traffic harness and temporary config directory",
+    "Go toolchain and Go fallback path available",
+    "no production systemd ExecStart mutation"
+  ],
+  "rollback_controls": [
+    "do not switch dae run default engine",
+    "do not replace control.NewControlPlane default path",
+    "do not mutate installed systemd ExecStart",
+    "unset DAE_RUST_* opt-in environment variables",
+    "keep Go outbound dependency as production fallback",
+    "record every live evidence result before changing any gate state"
+  ],
+  "source": [
+    "DAEX_RUST_REBUILD_PLAN_2026-05-16.md:stage22",
+    "DAENEW_RUST_REBUILD_MEMO_2026-05-16.md:21",
+    "DAENEW_RUST_REBUILD_MEMO_2026-05-16.md:26",
+    "DAENEW_RUST_REBUILD_MEMO_2026-05-16.md:29",
+    "DAENEW_RUST_REBUILD_MEMO_2026-05-16.md:33.7",
+    "DAENEW_RUST_REBUILD_MEMO_2026-05-16.md:33.8",
+    "rust/crates/dae-product/src/daemon_gray_switch.rs",
+    "rust/crates/dae-cli/src/active_datapath_runner.rs",
+    "control/active_magic_network_test.go"
+  ],
+  "stage": "stage22",
+  "validation_commands": [
+    "cargo test --manifest-path rust/Cargo.toml -p dae-product daemon_live_evidence_queue_contract_matches_golden_fixture -- --nocapture",
+    "PATH=/root/.local/go1.25.9/bin:$PATH GOWORK=off go test ./control -run 'TestActive.*MagicNetwork|TestDnsUdpForwarderUsesMagicNetwork' -count=1",
+    "cargo fmt --manifest-path rust/Cargo.toml --all -- --check",
+    "cargo test --manifest-path rust/Cargo.toml --workspace",
+    "PATH=/root/.local/go1.25.9/bin:$PATH GOWORK=off go test ./cmd ./engine ./control ./component/outbound ./component/outbound/dialer -count=1",
+    "PATH=/root/.local/go1.25.9/bin:$PATH GOWORK=off OUTPUT=/tmp/dae-stage22-live-evidence make dae",
+    "git diff --check"
+  ]
+}
