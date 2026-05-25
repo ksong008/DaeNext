@@ -1,15 +1,17 @@
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::process::Command;
 
 use serde_json::{Map, Value, json};
+
+use crate::production_runtime_owner::{
+    ProductionRuntimeOwnerOptions, production_runtime_owner_report,
+};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ProductionDataplaneHarnessOptions {
     pub execute: bool,
     pub ack_root_gate: bool,
     pub benchmark_iters: u32,
-    pub cargo_manifest: PathBuf,
 }
 
 impl Default for ProductionDataplaneHarnessOptions {
@@ -18,15 +20,14 @@ impl Default for ProductionDataplaneHarnessOptions {
             execute: false,
             ack_root_gate: false,
             benchmark_iters: 5,
-            cargo_manifest: PathBuf::from("rust/Cargo.toml"),
         }
     }
 }
 
 #[derive(Clone, Copy, Debug)]
-struct StageSpec {
-    stage: &'static str,
-    command: &'static str,
+struct DataplaneAdmissionSpec {
+    check_id: &'static str,
+    profile: &'static str,
     root_prefix: &'static str,
     pass_key: &'static str,
     benchmark_recorded_key: Option<&'static str>,
@@ -45,21 +46,14 @@ pub fn production_dataplane_harness_report(
                 .to_owned(),
         );
     }
-    if options.execute && !options.cargo_manifest.is_file() {
-        return Err(format!(
-            "production dataplane cargo manifest does not exist: {}",
-            path_string(&options.cargo_manifest)
-        ));
-    }
-
     let artifact_dir = run_root.join("run").join("production-dataplane");
-    let stage_plan = stage_specs()
+    let admission_plan = dataplane_admission_specs()
         .into_iter()
         .map(|spec| {
             json!({
-                "stage": spec.stage,
-                "command": spec.command,
-                "root": path_string(&stage_root(spec, run_root)),
+                "check_id": spec.check_id,
+                "profile": spec.profile,
+                "root": path_string(&admission_root(spec, run_root)),
                 "pass_key": spec.pass_key,
                 "benchmark_recorded_key": spec.benchmark_recorded_key,
             })
@@ -70,7 +64,7 @@ pub fn production_dataplane_harness_report(
         return Ok(base_report(
             options,
             &artifact_dir,
-            stage_plan,
+            admission_plan,
             Vec::new(),
             false,
         ));
@@ -83,30 +77,30 @@ pub fn production_dataplane_harness_report(
         )
     })?;
 
-    let mut stages = Vec::new();
-    for spec in stage_specs() {
-        let root = stage_root(spec, run_root);
-        ensure_tmp_stage_root(&root, spec.root_prefix)?;
+    let mut admissions = Vec::new();
+    for spec in dataplane_admission_specs() {
+        let root = admission_root(spec, run_root);
+        ensure_tmp_admission_root(&root, spec.root_prefix)?;
         if root.exists() {
             fs::remove_dir_all(&root).map_err(|err| {
                 format!(
-                    "failed to remove existing production dataplane stage root {}: {err}",
+                    "failed to remove existing production dataplane admission root {}: {err}",
                     path_string(&root)
                 )
             })?;
         }
-        let result = run_stage(spec, &root, options, &artifact_dir)?;
-        stages.push(result);
+        let result = run_admission(spec, &root, options, &artifact_dir)?;
+        admissions.push(result);
     }
 
-    let passed = stages
+    let passed = admissions
         .iter()
-        .all(|stage| stage["passed"].as_bool().unwrap_or(false));
+        .all(|admission| admission["passed"].as_bool().unwrap_or(false));
     Ok(base_report(
         options,
         &artifact_dir,
-        stage_plan,
-        stages,
+        admission_plan,
+        admissions,
         passed,
     ))
 }
@@ -114,23 +108,23 @@ pub fn production_dataplane_harness_report(
 fn base_report(
     options: &ProductionDataplaneHarnessOptions,
     artifact_dir: &Path,
-    stage_plan: Vec<Value>,
-    stages: Vec<Value>,
+    admission_plan: Vec<Value>,
+    admissions: Vec<Value>,
     passed: bool,
 ) -> Value {
-    let stage_pass = |stage_name: &str| -> bool {
-        stages
+    let admission_pass = |check_id: &str| -> bool {
+        admissions
             .iter()
-            .find(|entry| entry["stage"].as_str() == Some(stage_name))
+            .find(|entry| entry["check_id"].as_str() == Some(check_id))
             .and_then(|entry| entry["passed"].as_bool())
             .unwrap_or(false)
     };
-    let stage49_passed = stage_pass("stage49");
-    let stage50_passed = stage_pass("stage50");
-    let stage51_passed = stage_pass("stage51");
-    let stage53_passed = stage_pass("stage53");
-    let stage54_passed = stage_pass("stage54");
-    let benchmark_records = benchmark_records(&stages);
+    let production_param_listener_passed = admission_pass("production-param-listener");
+    let active_tcp_tproxy_ingress_passed = admission_pass("active-tcp-tproxy-ingress");
+    let active_tcp_route_dial_relay_passed = admission_pass("active-tcp-route-dial-relay");
+    let active_udp_tproxy_endpoint_passed = admission_pass("active-udp-tproxy-endpoint");
+    let active_dns_tproxy_cache_passed = admission_pass("active-dns-tproxy-cache");
+    let benchmark_records = benchmark_records(&admissions);
     let mut report = Map::new();
     report.insert(
         "name".to_owned(),
@@ -138,7 +132,7 @@ fn base_report(
     );
     report.insert(
         "evidence_class".to_owned(),
-        json!("run-integrated-root-gated-stage49-stage50-stage51-stage53-stage54-harness"),
+        json!("run-integrated-root-gated-active-dataplane-harness"),
     );
     report.insert("execute_smoke".to_owned(), json!(options.execute));
     report.insert(
@@ -148,13 +142,9 @@ fn base_report(
     report.insert("read_only".to_owned(), json!(!options.execute));
     report.insert("blocked".to_owned(), json!(options.execute && !passed));
     report.insert("artifact_dir".to_owned(), json!(path_string(artifact_dir)));
-    report.insert(
-        "cargo_manifest".to_owned(),
-        json!(path_string(&options.cargo_manifest)),
-    );
     report.insert("benchmark_iters".to_owned(), json!(options.benchmark_iters));
-    report.insert("stage_plan".to_owned(), json!(stage_plan));
-    report.insert("stages".to_owned(), json!(stages));
+    report.insert("admission_plan".to_owned(), json!(admission_plan));
+    report.insert("admissions".to_owned(), json!(admissions));
     report.insert(
         "production_dataplane_harness_integrated_in_run".to_owned(),
         json!(true),
@@ -168,11 +158,26 @@ fn base_report(
         json!(options.execute && passed),
     );
     for (key, value) in [
-        ("stage49_passed", stage49_passed),
-        ("stage50_passed", stage50_passed),
-        ("stage51_passed", stage51_passed),
-        ("stage53_passed", stage53_passed),
-        ("stage54_passed", stage54_passed),
+        (
+            "production_param_listener_passed",
+            production_param_listener_passed,
+        ),
+        (
+            "active_tcp_tproxy_ingress_passed",
+            active_tcp_tproxy_ingress_passed,
+        ),
+        (
+            "active_tcp_route_dial_relay_passed",
+            active_tcp_route_dial_relay_passed,
+        ),
+        (
+            "active_udp_tproxy_endpoint_passed",
+            active_udp_tproxy_endpoint_passed,
+        ),
+        (
+            "active_dns_tproxy_cache_passed",
+            active_dns_tproxy_cache_passed,
+        ),
     ] {
         report.insert(key.to_owned(), json!(value));
     }
@@ -206,7 +211,7 @@ fn base_report(
     report.insert(
         "source".to_owned(),
         json!([
-            "DAEX_RUST_REBUILD_PLAN_2026-05-16.md:stage194-196",
+            "DAEX_RUST_PERFORMANCE_OPTIMIZATION_PLAN_2026-05-24.md:18.1",
             "DAENEW_RUST_REBUILD_MEMO_2026-05-16.md:15.4",
             "DAENEW_RUST_REBUILD_MEMO_2026-05-16.md:15.5",
             "DAENEW_RUST_REBUILD_MEMO_2026-05-16.md:22.2",
@@ -217,63 +222,50 @@ fn base_report(
     Value::Object(report)
 }
 
-fn run_stage(
-    spec: StageSpec,
+fn run_admission(
+    spec: DataplaneAdmissionSpec,
     root: &Path,
     options: &ProductionDataplaneHarnessOptions,
     artifact_dir: &Path,
 ) -> Result<Value, String> {
-    let args = stage_args(spec, root, options);
-    let output = Command::new("cargo").args(&args).output().map_err(|err| {
+    let owner_options = owner_options_for_admission(spec, options);
+    let owner_report = production_runtime_owner_report(root, &owner_options).map_err(|err| {
         format!(
-            "failed to execute production dataplane stage {}: {err}",
-            spec.stage
+            "production dataplane admission {} failed through daemon-owned production runtime owner: {err}",
+            spec.check_id
+        )
+    })?;
+    let owner_report_file = artifact_dir.join(format!("{}.owner-report.json", spec.check_id));
+    let owner_report_encoded = serde_json::to_vec_pretty(&owner_report).map_err(|err| {
+        format!(
+            "failed to encode production dataplane owner report for {}: {err}",
+            spec.check_id
+        )
+    })?;
+    fs::write(&owner_report_file, owner_report_encoded).map_err(|err| {
+        format!(
+            "failed to write production dataplane owner report artifact {}: {err}",
+            path_string(&owner_report_file)
         )
     })?;
 
-    let stdout = String::from_utf8_lossy(&output.stdout).to_string();
-    let stderr = String::from_utf8_lossy(&output.stderr).to_string();
-    let stdout_file = artifact_dir.join(format!("{}.stdout.json", spec.stage));
-    let stderr_file = artifact_dir.join(format!("{}.stderr.log", spec.stage));
-    fs::write(&stdout_file, &stdout).map_err(|err| {
-        format!(
-            "failed to write production dataplane stdout artifact {}: {err}",
-            path_string(&stdout_file)
-        )
-    })?;
-    fs::write(&stderr_file, &stderr).map_err(|err| {
-        format!(
-            "failed to write production dataplane stderr artifact {}: {err}",
-            path_string(&stderr_file)
-        )
-    })?;
-
-    let parsed = parse_json_stdout(&stdout).map_err(|err| {
-        format!(
-            "production dataplane stage {} did not emit parseable JSON: {err}; stdout={}; stderr={}",
-            spec.stage,
-            cap_text(&stdout),
-            cap_text(&stderr)
-        )
-    })?;
-    let blocked = parsed["blocked"].as_bool().unwrap_or(false);
-    let pass_value = parsed[spec.pass_key].as_bool().unwrap_or(false);
-    let passed = output.status.success() && !blocked && pass_value;
+    let blocked = false;
+    let pass_value = owner_report[spec.pass_key].as_bool().unwrap_or(false);
+    let passed = pass_value;
     let benchmark_recorded = spec
         .benchmark_recorded_key
-        .and_then(|key| parsed[key].as_bool())
+        .and_then(|key| owner_report[key].as_bool())
         .unwrap_or(false);
     let benchmark = if benchmark_recorded {
-        parsed["benchmark"].clone()
+        benchmark_value(spec.check_id, &owner_report)
     } else {
         Value::Null
     };
 
     let summary = json!({
-        "stage": spec.stage,
-        "command": spec.command,
+        "check_id": spec.check_id,
+        "profile": spec.profile,
         "root": path_string(root),
-        "exit_code": output.status.code(),
         "passed": passed,
         "blocked": blocked,
         "pass_key": spec.pass_key,
@@ -281,17 +273,16 @@ fn run_stage(
         "benchmark_recorded_key": spec.benchmark_recorded_key,
         "benchmark_recorded": benchmark_recorded,
         "benchmark": benchmark,
-        "stdout_file": path_string(&stdout_file),
-        "stderr_file": path_string(&stderr_file),
-        "blockers": parsed["blockers"].clone(),
-        "cleanup": cleanup_summary(&parsed),
-        "selected_evidence": selected_evidence(spec.stage, &parsed),
+        "owner_report_file": path_string(&owner_report_file),
+        "owner_scope": owner_report["production_runtime_owner_scope"].clone(),
+        "cleanup": cleanup_summary(&owner_report),
+        "selected_evidence": selected_evidence(spec.check_id, &owner_report),
     });
-    let summary_file = artifact_dir.join(format!("{}.summary.json", spec.stage));
+    let summary_file = artifact_dir.join(format!("{}.summary.json", spec.check_id));
     let encoded = serde_json::to_vec_pretty(&summary).map_err(|err| {
         format!(
             "failed to encode production dataplane summary for {}: {err}",
-            spec.stage
+            spec.check_id
         )
     })?;
     fs::write(&summary_file, encoded).map_err(|err| {
@@ -303,83 +294,90 @@ fn run_stage(
 
     if !passed {
         return Err(format!(
-            "production dataplane stage {} failed; summary={}",
-            spec.stage, summary
+            "production dataplane admission {} failed; summary={}",
+            spec.check_id, summary
         ));
     }
     Ok(summary)
 }
 
-fn stage_args(
-    spec: StageSpec,
-    root: &Path,
+fn owner_options_for_admission(
+    spec: DataplaneAdmissionSpec,
     options: &ProductionDataplaneHarnessOptions,
-) -> Vec<String> {
-    let mut args = vec![
-        "run".to_owned(),
-        "--manifest-path".to_owned(),
-        path_string(&options.cargo_manifest),
-        "-p".to_owned(),
-        "dae-cli".to_owned(),
-        "--bin".to_owned(),
-        "dae-cli-optin".to_owned(),
-        "--quiet".to_owned(),
-        "--".to_owned(),
-        "runtime".to_owned(),
-        spec.command.to_owned(),
-        "--execute-smoke".to_owned(),
-        "--ack-root-gate".to_owned(),
-        "--root".to_owned(),
-        path_string(root),
-    ];
-    if spec.benchmark_recorded_key.is_some() {
-        args.push("--benchmark-iters".to_owned());
-        args.push(options.benchmark_iters.to_string());
+) -> ProductionRuntimeOwnerOptions {
+    let mut owner_options = ProductionRuntimeOwnerOptions {
+        execute: true,
+        ack_root_gate: options.ack_root_gate,
+        active_tcp_benchmark_iters: options.benchmark_iters,
+        active_udp_benchmark_iters: options.benchmark_iters,
+        active_dns_benchmark_iters: options.benchmark_iters,
+        ..ProductionRuntimeOwnerOptions::default()
+    };
+
+    match spec.check_id {
+        "production-param-listener" => {}
+        "active-tcp-tproxy-ingress" => {
+            owner_options.execute_active_tcp = true;
+        }
+        "active-tcp-route-dial-relay" => {
+            owner_options.execute_active_tcp = true;
+            owner_options.execute_active_tcp_relay = true;
+        }
+        "active-udp-tproxy-endpoint" => {
+            owner_options.execute_active_tcp = true;
+            owner_options.execute_active_udp = true;
+        }
+        "active-dns-tproxy-cache" => {
+            owner_options.execute_active_tcp = true;
+            owner_options.execute_active_udp = true;
+            owner_options.execute_active_dns = true;
+        }
+        _ => {}
     }
-    args
+    owner_options
 }
 
-fn stage_specs() -> [StageSpec; 5] {
+fn dataplane_admission_specs() -> [DataplaneAdmissionSpec; 5] {
     [
-        StageSpec {
-            stage: "stage49",
-            command: "stage49-production-param-listener-admission",
-            root_prefix: "/tmp/dae-stage49-run",
-            pass_key: "combined_production_param_listener_smoke_passed",
+        DataplaneAdmissionSpec {
+            check_id: "production-param-listener",
+            profile: "daemon-owned-production-param-listener",
+            root_prefix: "/tmp/dae-daemon-production-param-listener",
+            pass_key: "daemon_owned_production_runtime_owner_smoke_passed",
             benchmark_recorded_key: None,
         },
-        StageSpec {
-            stage: "stage50",
-            command: "stage50-active-tcp-tproxy-ingress-admission",
-            root_prefix: "/tmp/dae-stage50-run",
+        DataplaneAdmissionSpec {
+            check_id: "active-tcp-tproxy-ingress",
+            profile: "daemon-owned-active-tcp-tproxy-ingress",
+            root_prefix: "/tmp/dae-daemon-active-tcp-tproxy",
             pass_key: "active_tcp_tproxy_ingress_smoke_passed",
             benchmark_recorded_key: None,
         },
-        StageSpec {
-            stage: "stage51",
-            command: "stage51-active-tcp-route-dial-relay-admission",
-            root_prefix: "/tmp/dae-stage51-run",
+        DataplaneAdmissionSpec {
+            check_id: "active-tcp-route-dial-relay",
+            profile: "daemon-owned-active-tcp-route-dial-relay",
+            root_prefix: "/tmp/dae-daemon-active-tcp-relay",
             pass_key: "active_tcp_relay_smoke_passed",
             benchmark_recorded_key: Some("active_tcp_relay_benchmark_recorded"),
         },
-        StageSpec {
-            stage: "stage53",
-            command: "stage53-active-udp-tproxy-endpoint-admission",
-            root_prefix: "/tmp/dae-stage53-run",
+        DataplaneAdmissionSpec {
+            check_id: "active-udp-tproxy-endpoint",
+            profile: "daemon-owned-active-udp-tproxy-endpoint",
+            root_prefix: "/tmp/dae-daemon-active-udp-tproxy",
             pass_key: "active_udp_tproxy_smoke_passed",
             benchmark_recorded_key: Some("active_udp_tproxy_benchmark_recorded"),
         },
-        StageSpec {
-            stage: "stage54",
-            command: "stage54-active-dns-tproxy-cache-admission",
-            root_prefix: "/tmp/dae-stage54-run",
+        DataplaneAdmissionSpec {
+            check_id: "active-dns-tproxy-cache",
+            profile: "daemon-owned-active-dns-tproxy-cache",
+            root_prefix: "/tmp/dae-daemon-active-dns-tproxy",
             pass_key: "active_dns_tproxy_smoke_passed",
             benchmark_recorded_key: Some("active_dns_tproxy_benchmark_recorded"),
         },
     ]
 }
 
-fn stage_root(spec: StageSpec, run_root: &Path) -> PathBuf {
+fn admission_root(spec: DataplaneAdmissionSpec, run_root: &Path) -> PathBuf {
     let suffix = run_root
         .file_name()
         .and_then(|name| name.to_str())
@@ -389,33 +387,20 @@ fn stage_root(spec: StageSpec, run_root: &Path) -> PathBuf {
     PathBuf::from(format!("{}-{suffix}", spec.root_prefix))
 }
 
-fn ensure_tmp_stage_root(root: &Path, prefix: &str) -> Result<(), String> {
+fn ensure_tmp_admission_root(root: &Path, prefix: &str) -> Result<(), String> {
     if !root.is_absolute() || root.parent() != Some(Path::new("/tmp")) {
         return Err(format!(
-            "production dataplane stage root must be an absolute /tmp child: {}",
+            "production dataplane admission root must be an absolute /tmp child: {}",
             path_string(root)
         ));
     }
     let root = path_string(root);
     if !root.starts_with(prefix) {
         return Err(format!(
-            "production dataplane stage root {root} must start with {prefix}"
+            "production dataplane admission root {root} must start with {prefix}"
         ));
     }
     Ok(())
-}
-
-fn parse_json_stdout(stdout: &str) -> Result<Value, String> {
-    let trimmed = stdout.trim();
-    serde_json::from_str(trimmed).or_else(|first_err| {
-        stdout
-            .lines()
-            .rev()
-            .map(str::trim)
-            .find(|line| line.starts_with('{'))
-            .ok_or_else(|| first_err.to_string())
-            .and_then(|line| serde_json::from_str(line).map_err(|err| err.to_string()))
-    })
 }
 
 fn cleanup_summary(value: &Value) -> Value {
@@ -433,23 +418,23 @@ fn cleanup_summary(value: &Value) -> Value {
     })
 }
 
-fn selected_evidence(stage: &str, value: &Value) -> Value {
-    let keys: &[&str] = match stage {
-        "stage49" => &[
-            "combined_production_param_listener_admitted",
-            "production_name_dae0_dae0peer_attach_executed",
-            "param_aware_object_load_executed",
-            "transparent_listener_socket_options_verified",
-            "production_param_transparent_listener_handoff_executed",
+fn selected_evidence(check_id: &str, value: &Value) -> Value {
+    let keys: &[&str] = match check_id {
+        "production-param-listener" => &[
+            "daemon_owned_production_runtime_owner_smoke_passed",
+            "production_listener_bound_during_owner_smoke",
+            "listen_socket_map_written_during_owner_smoke",
+            "production_tc_attach_smoke_passed",
+            "ebpf_attached_during_owner_smoke",
         ],
-        "stage50" => &[
-            "active_tcp_tproxy_admitted",
+        "active-tcp-tproxy-ingress" => &[
+            "active_tcp_tproxy_admitted_during_owner_smoke",
             "active_tcp_syn_reached_transparent_listener",
-            "original_destination_observed",
-            "tcp_reply_path_succeeded",
-            "active_tproxy_traffic_executed",
+            "active_tcp_original_destination_observed",
+            "active_tcp_reply_path_succeeded",
+            "production_runtime_active_tcp_passed",
         ],
-        "stage51" => &[
+        "active-tcp-route-dial-relay" => &[
             "active_tcp_tproxy_admitted",
             "route_dial_tcp_direct_path_executed",
             "outbound_relay_recorded",
@@ -458,7 +443,7 @@ fn selected_evidence(stage: &str, value: &Value) -> Value {
             "mptcp_real_outbound_socket_observed",
             "active_tcp_relay_benchmark_recorded",
         ],
-        "stage53" => &[
+        "active-udp-tproxy-endpoint" => &[
             "active_udp_tproxy_admitted",
             "active_udp_original_destination_observed",
             "udp_endpoint_pool_live_recorded",
@@ -467,7 +452,7 @@ fn selected_evidence(stage: &str, value: &Value) -> Value {
             "udp_so_mark_real_outbound_socket_observed",
             "active_udp_tproxy_benchmark_recorded",
         ],
-        "stage54" => &[
+        "active-dns-tproxy-cache" => &[
             "active_dns_tproxy_admitted",
             "active_dns_original_destination_observed",
             "dns_controller_path_recorded",
@@ -488,17 +473,27 @@ fn selected_evidence(stage: &str, value: &Value) -> Value {
     Value::Object(selected)
 }
 
-fn benchmark_records(stages: &[Value]) -> Vec<Value> {
-    stages
+fn benchmark_value(check_id: &str, value: &Value) -> Value {
+    match check_id {
+        "active-tcp-route-dial-relay" => value["active_tcp"]["relay_benchmark"].clone(),
+        "active-udp-tproxy-endpoint" => value["active_udp"]["benchmark"].clone(),
+        "active-dns-tproxy-cache" => value["active_dns"]["benchmark"].clone(),
+        _ => Value::Null,
+    }
+}
+
+fn benchmark_records(admissions: &[Value]) -> Vec<Value> {
+    admissions
         .iter()
-        .filter(|stage| {
-            stage["benchmark_recorded"].as_bool().unwrap_or(false) && !stage["benchmark"].is_null()
+        .filter(|admission| {
+            admission["benchmark_recorded"].as_bool().unwrap_or(false)
+                && !admission["benchmark"].is_null()
         })
-        .map(|stage| {
+        .map(|admission| {
             json!({
-                "stage": stage["stage"].clone(),
-                "root": stage["root"].clone(),
-                "benchmark": stage["benchmark"].clone(),
+                "check_id": admission["check_id"].clone(),
+                "root": admission["root"].clone(),
+                "benchmark": admission["benchmark"].clone(),
             })
         })
         .collect()
@@ -515,19 +510,6 @@ fn sanitize_suffix(value: &str) -> String {
             }
         })
         .collect()
-}
-
-fn cap_text(value: &str) -> String {
-    const MAX: usize = 4000;
-    if value.len() <= MAX {
-        return value.to_owned();
-    }
-    let truncated = value.chars().take(MAX).collect::<String>();
-    format!(
-        "{}...[truncated {} bytes]",
-        truncated,
-        value.len().saturating_sub(truncated.len())
-    )
 }
 
 fn path_string(path: &Path) -> String {
@@ -565,8 +547,15 @@ mod tests {
                 .unwrap(),
             "not-executed"
         );
-        assert_eq!(report["stage_plan"].as_array().unwrap().len(), 5);
-        assert!(report["stages"].as_array().unwrap().is_empty());
+        assert_eq!(report["admission_plan"].as_array().unwrap().len(), 5);
+        assert!(
+            report["admission_plan"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .all(|entry| entry["command"].is_null())
+        );
+        assert!(report["admissions"].as_array().unwrap().is_empty());
     }
 
     #[test]
@@ -577,7 +566,6 @@ mod tests {
         ));
         let options = ProductionDataplaneHarnessOptions {
             execute: true,
-            cargo_manifest: PathBuf::from("rust/Cargo.toml"),
             ..ProductionDataplaneHarnessOptions::default()
         };
         let err = production_dataplane_harness_report(&root, &options).unwrap_err();
@@ -596,5 +584,41 @@ mod tests {
         };
         let err = production_dataplane_harness_report(&root, &options).unwrap_err();
         assert!(err.contains("benchmark-iters"));
+    }
+
+    #[test]
+    fn production_dataplane_owner_profiles_match_admissions() {
+        let options = ProductionDataplaneHarnessOptions {
+            ack_root_gate: true,
+            benchmark_iters: 7,
+            ..ProductionDataplaneHarnessOptions::default()
+        };
+        let specs = dataplane_admission_specs();
+
+        let listener = owner_options_for_admission(specs[0], &options);
+        assert!(listener.execute);
+        assert!(listener.ack_root_gate);
+        assert!(!listener.execute_active_tcp);
+
+        let tcp = owner_options_for_admission(specs[1], &options);
+        assert!(tcp.execute_active_tcp);
+        assert!(!tcp.execute_active_tcp_relay);
+
+        let relay = owner_options_for_admission(specs[2], &options);
+        assert!(relay.execute_active_tcp);
+        assert!(relay.execute_active_tcp_relay);
+        assert_eq!(relay.active_tcp_benchmark_iters, 7);
+
+        let udp = owner_options_for_admission(specs[3], &options);
+        assert!(udp.execute_active_tcp);
+        assert!(udp.execute_active_udp);
+        assert!(!udp.execute_active_dns);
+        assert_eq!(udp.active_udp_benchmark_iters, 7);
+
+        let dns = owner_options_for_admission(specs[4], &options);
+        assert!(dns.execute_active_tcp);
+        assert!(dns.execute_active_udp);
+        assert!(dns.execute_active_dns);
+        assert_eq!(dns.active_dns_benchmark_iters, 7);
     }
 }

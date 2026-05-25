@@ -136,7 +136,7 @@ pub(in crate::production_runtime_owner) fn run_active_dns_probe(
     let client_ok = client["status"].as_str() == Some("pass")
         && client["stdout"]
             .as_str()
-            .is_some_and(|stdout| stdout.contains("stage54-dns-ack-count="));
+            .is_some_and(|stdout| stdout.contains("active-dns-ack-count="));
     let smoke_ok = accept["status"].as_str() == Some("pass")
         && upstream["status"].as_str() == Some("pass")
         && client_ok

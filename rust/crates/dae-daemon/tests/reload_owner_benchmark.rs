@@ -1,10 +1,12 @@
 use serde_json::Value;
 
 #[test]
-fn stage167_reload_owner_benchmark_records_bounded_metrics() {
-    let root =
-        std::env::temp_dir().join(format!("dae-stage167-daemon-test-{}", std::process::id()));
-    let report = dae_daemon::stage167_reload_owner_benchmark_report(&root, 2).unwrap();
+fn reload_owner_benchmark_records_bounded_metrics() {
+    let root = std::env::temp_dir().join(format!(
+        "dae-reload-owner-benchmark-daemon-test-{}",
+        std::process::id()
+    ));
+    let report = dae_daemon::reload_owner_benchmark_report(&root, 2).unwrap();
     assert!(
         report["bounded_production_equivalent_benchmark_harness_executed"]
             .as_bool()
@@ -27,12 +29,14 @@ fn stage167_reload_owner_benchmark_records_bounded_metrics() {
 }
 
 #[test]
-fn daemon_runner_stage167_reload_owner_benchmark_command_outputs_json() {
-    let root =
-        std::env::temp_dir().join(format!("dae-stage167-runner-test-{}", std::process::id()));
+fn daemon_runner_reload_owner_benchmark_command_outputs_json() {
+    let root = std::env::temp_dir().join(format!(
+        "dae-reload-owner-benchmark-runner-test-{}",
+        std::process::id()
+    ));
     let output = dae_daemon::run_with_args_and_version(
         [
-            "stage167-reload-owner-benchmark".to_owned(),
+            "reload-owner-benchmark".to_owned(),
             "--root".to_owned(),
             root.display().to_string(),
             "--iterations".to_owned(),

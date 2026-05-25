@@ -1,7 +1,11 @@
 use crate::config_validate::validate_config_file;
 use crate::identity::daemon_identity;
-use crate::lifecycle::{default_stage150_root, stage150_lifecycle_smoke_report};
-use crate::preflight::stage149_identity_preflight_report;
+use crate::lifecycle::{default_lifecycle_smoke_root, lifecycle_smoke_report};
+use crate::preflight::identity_preflight_report;
+use crate::{
+    DefaultRunIdentityAdmissionOptions, default_run_identity_admission_report,
+    default_run_identity_admission_root,
+};
 use crate::{
     ReloadOptions, ResidentRunOptions, reload_resident_service, run_resident_service,
     service_contract_capabilities,
@@ -10,16 +14,14 @@ use crate::{
     RunOptions, default_run_root, product_chain_admission_from_run_report, run_default_optin_report,
 };
 use crate::{
-    Stage156DefaultRunIdentityOptions, default_stage156_root,
-    stage156_default_run_identity_admission_report,
+    control_plane_entrypoint_admission_report, default_control_plane_entrypoint_admission_root,
 };
-use crate::{default_stage151_root, stage151_control_plane_owner_preflight_report};
-use crate::{default_stage152_root, stage152_signal_control_plane_smoke_report};
-use crate::{default_stage153_root, stage153_run_entrypoint_preflight_report};
-use crate::{default_stage157_root, stage157_control_plane_entrypoint_admission_report};
-use crate::{default_stage160_root, stage160_listener_ebpf_preflight_harness_report};
-use crate::{default_stage165_root, stage165_reload_owner_handoff_smoke_report};
-use crate::{default_stage167_root, stage167_reload_owner_benchmark_report};
+use crate::{control_plane_owner_preflight_report, default_control_plane_owner_preflight_root};
+use crate::{default_listener_ebpf_preflight_root, listener_ebpf_preflight_report};
+use crate::{default_reload_owner_benchmark_root, reload_owner_benchmark_report};
+use crate::{default_reload_owner_handoff_root, reload_owner_handoff_smoke_report};
+use crate::{default_run_entrypoint_preflight_root, run_entrypoint_preflight_report};
+use crate::{default_signal_control_plane_smoke_root, signal_control_plane_smoke_report};
 use std::path::PathBuf;
 use std::time::Duration;
 
@@ -71,35 +73,25 @@ pub fn run_with_args_and_version(
         Some("service-contract") if args.len() == 1 => {
             DaemonOutput::ok(format!("{}\n", service_contract_capabilities(version)))
         }
-        Some("stage149-identity-preflight") if args.len() == 1 => {
-            DaemonOutput::ok(format!("{}\n", stage149_identity_preflight_report(version)))
+        Some("identity-preflight") if args.len() == 1 => {
+            DaemonOutput::ok(format!("{}\n", identity_preflight_report(version)))
         }
-        Some("stage150-lifecycle-smoke") => run_stage150_lifecycle_smoke_command(&args[1..]),
-        Some("stage151-control-plane-owner-preflight") => {
-            run_stage151_control_plane_owner_preflight_command(&args[1..])
+        Some("lifecycle-smoke") => run_lifecycle_smoke_command(&args[1..]),
+        Some("control-plane-owner-preflight") => {
+            run_control_plane_owner_preflight_command(&args[1..])
         }
-        Some("stage152-signal-control-plane-smoke") => {
-            run_stage152_signal_control_plane_smoke_command(&args[1..])
+        Some("signal-control-plane-smoke") => run_signal_control_plane_smoke_command(&args[1..]),
+        Some("run-entrypoint-preflight") => run_run_entrypoint_preflight_command(&args[1..]),
+        Some("default-run-identity-admission") => {
+            run_default_run_identity_admission_command(&args[1..])
         }
-        Some("stage153-run-entrypoint-preflight") => {
-            run_stage153_run_entrypoint_preflight_command(&args[1..])
+        Some("control-plane-entrypoint-admission") => {
+            run_control_plane_entrypoint_admission_command(&args[1..])
         }
-        Some("stage156-default-run-identity-admission") => {
-            run_stage156_default_run_identity_admission_command(&args[1..])
-        }
-        Some("stage157-control-plane-entrypoint-admission") => {
-            run_stage157_control_plane_entrypoint_admission_command(&args[1..])
-        }
-        Some("stage160-listener-ebpf-preflight-harness") => {
-            run_stage160_listener_ebpf_preflight_harness_command(&args[1..])
-        }
-        Some("stage165-reload-owner-handoff-smoke") => {
-            run_stage165_reload_owner_handoff_smoke_command(&args[1..])
-        }
-        Some("stage167-reload-owner-benchmark") => {
-            run_stage167_reload_owner_benchmark_command(&args[1..])
-        }
-        Some("identity") | Some("service-contract") | Some("stage149-identity-preflight") => {
+        Some("listener-ebpf-preflight") => run_listener_ebpf_preflight_command(&args[1..]),
+        Some("reload-owner-handoff-smoke") => run_reload_owner_handoff_smoke_command(&args[1..]),
+        Some("reload-owner-benchmark") => run_reload_owner_benchmark_command(&args[1..]),
+        Some("identity") | Some("service-contract") | Some("identity-preflight") => {
             DaemonOutput::usage("unsupported dae-daemon-optin argument")
         }
         Some(command) => {
@@ -243,7 +235,6 @@ fn run_default_optin_command(args: &[String], version: &str) -> DaemonOutput {
     let mut production_runtime_active_dns_benchmark_iters: Option<u32> = None;
     let mut production_runtime_reload_parity = false;
     let mut dataplane_benchmark_iters = 5_u32;
-    let mut cargo_manifest: Option<PathBuf> = None;
     let mut matched_default_benchmark = false;
     let mut matched_benchmark_iterations = 3_u32;
     let mut matched_ready_timeout_ms = 15_000_u64;
@@ -734,15 +725,6 @@ fn run_default_optin_command(args: &[String], version: &str) -> DaemonOutput {
                     }
                 };
             }
-            "--cargo-manifest" => {
-                let Some(value) = iter.next() else {
-                    return DaemonOutput::usage("missing run --cargo-manifest value");
-                };
-                cargo_manifest = Some(value.into());
-            }
-            _ if arg.starts_with("--cargo-manifest=") => {
-                cargo_manifest = arg.split_once('=').map(|(_, value)| value.into());
-            }
             "--execute-matched-default-benchmark" => matched_default_benchmark = true,
             "--matched-benchmark-iterations" => {
                 let Some(value) = iter.next() else {
@@ -1073,9 +1055,6 @@ fn run_default_optin_command(args: &[String], version: &str) -> DaemonOutput {
     options.production_dataplane_harness.execute = production_dataplane_smoke;
     options.production_dataplane_harness.ack_root_gate = ack_root_gate;
     options.production_dataplane_harness.benchmark_iters = dataplane_benchmark_iters;
-    if let Some(cargo_manifest) = cargo_manifest {
-        options.production_dataplane_harness.cargo_manifest = cargo_manifest;
-    }
     options.matched_default_benchmark.execute = matched_default_benchmark;
     options.matched_default_benchmark.ack_root_gate = ack_root_gate;
     options.matched_default_benchmark.iterations = matched_benchmark_iterations;
@@ -1169,15 +1148,15 @@ fn run_default_optin_command(args: &[String], version: &str) -> DaemonOutput {
     }
 }
 
-fn run_stage167_reload_owner_benchmark_command(args: &[String]) -> DaemonOutput {
-    let mut root = default_stage167_root();
+fn run_reload_owner_benchmark_command(args: &[String]) -> DaemonOutput {
+    let mut root = default_reload_owner_benchmark_root();
     let mut iterations = 3_u32;
     let mut iter = args.iter();
     while let Some(arg) = iter.next() {
         match arg.as_str() {
             "--root" => {
                 let Some(value) = iter.next() else {
-                    return DaemonOutput::usage("missing stage167 --root value");
+                    return DaemonOutput::usage("missing reload-owner-benchmark --root value");
                 };
                 root = value.into();
             }
@@ -1186,27 +1165,37 @@ fn run_stage167_reload_owner_benchmark_command(args: &[String]) -> DaemonOutput 
             }
             "--iterations" => {
                 let Some(value) = iter.next() else {
-                    return DaemonOutput::usage("missing stage167 --iterations value");
+                    return DaemonOutput::usage(
+                        "missing reload-owner-benchmark --iterations value",
+                    );
                 };
                 iterations = match value.parse() {
                     Ok(value) => value,
-                    Err(_) => return DaemonOutput::usage("invalid stage167 --iterations value"),
+                    Err(_) => {
+                        return DaemonOutput::usage(
+                            "invalid reload-owner-benchmark --iterations value",
+                        );
+                    }
                 };
             }
             _ if arg.starts_with("--iterations=") => {
                 iterations = match arg.split_once('=').unwrap().1.parse() {
                     Ok(value) => value,
-                    Err(_) => return DaemonOutput::usage("invalid stage167 --iterations value"),
+                    Err(_) => {
+                        return DaemonOutput::usage(
+                            "invalid reload-owner-benchmark --iterations value",
+                        );
+                    }
                 };
             }
             _ => {
                 return DaemonOutput::usage(format!(
-                    "unsupported stage167 reload owner benchmark argument: {arg}"
+                    "unsupported reload-owner-benchmark argument: {arg}"
                 ));
             }
         }
     }
-    match stage167_reload_owner_benchmark_report(&root, iterations) {
+    match reload_owner_benchmark_report(&root, iterations) {
         Ok(report) => DaemonOutput::ok(format!("{report}\n")),
         Err(err) => DaemonOutput {
             stdout: String::new(),
@@ -1216,14 +1205,14 @@ fn run_stage167_reload_owner_benchmark_command(args: &[String]) -> DaemonOutput 
     }
 }
 
-fn run_stage165_reload_owner_handoff_smoke_command(args: &[String]) -> DaemonOutput {
-    let mut root = default_stage165_root();
+fn run_reload_owner_handoff_smoke_command(args: &[String]) -> DaemonOutput {
+    let mut root = default_reload_owner_handoff_root();
     let mut iter = args.iter();
     while let Some(arg) = iter.next() {
         match arg.as_str() {
             "--root" => {
                 let Some(value) = iter.next() else {
-                    return DaemonOutput::usage("missing stage165 --root value");
+                    return DaemonOutput::usage("missing reload-owner-handoff-smoke --root value");
                 };
                 root = value.into();
             }
@@ -1232,12 +1221,12 @@ fn run_stage165_reload_owner_handoff_smoke_command(args: &[String]) -> DaemonOut
             }
             _ => {
                 return DaemonOutput::usage(format!(
-                    "unsupported stage165 reload owner handoff argument: {arg}"
+                    "unsupported reload-owner-handoff-smoke argument: {arg}"
                 ));
             }
         }
     }
-    match stage165_reload_owner_handoff_smoke_report(&root) {
+    match reload_owner_handoff_smoke_report(&root) {
         Ok(report) => DaemonOutput::ok(format!("{report}\n")),
         Err(err) => DaemonOutput {
             stdout: String::new(),
@@ -1247,14 +1236,14 @@ fn run_stage165_reload_owner_handoff_smoke_command(args: &[String]) -> DaemonOut
     }
 }
 
-fn run_stage160_listener_ebpf_preflight_harness_command(args: &[String]) -> DaemonOutput {
-    let mut root = default_stage160_root();
+fn run_listener_ebpf_preflight_command(args: &[String]) -> DaemonOutput {
+    let mut root = default_listener_ebpf_preflight_root();
     let mut iter = args.iter();
     while let Some(arg) = iter.next() {
         match arg.as_str() {
             "--root" => {
                 let Some(value) = iter.next() else {
-                    return DaemonOutput::usage("missing stage160 --root value");
+                    return DaemonOutput::usage("missing listener-ebpf-preflight --root value");
                 };
                 root = value.into();
             }
@@ -1263,12 +1252,12 @@ fn run_stage160_listener_ebpf_preflight_harness_command(args: &[String]) -> Daem
             }
             _ => {
                 return DaemonOutput::usage(format!(
-                    "unsupported stage160 listener/eBPF preflight argument: {arg}"
+                    "unsupported listener-ebpf-preflight argument: {arg}"
                 ));
             }
         }
     }
-    match stage160_listener_ebpf_preflight_harness_report(&root) {
+    match listener_ebpf_preflight_report(&root) {
         Ok(report) => DaemonOutput::ok(format!("{report}\n")),
         Err(err) => DaemonOutput {
             stdout: String::new(),
@@ -1278,14 +1267,16 @@ fn run_stage160_listener_ebpf_preflight_harness_command(args: &[String]) -> Daem
     }
 }
 
-fn run_stage157_control_plane_entrypoint_admission_command(args: &[String]) -> DaemonOutput {
-    let mut root = default_stage157_root();
+fn run_control_plane_entrypoint_admission_command(args: &[String]) -> DaemonOutput {
+    let mut root = default_control_plane_entrypoint_admission_root();
     let mut iter = args.iter();
     while let Some(arg) = iter.next() {
         match arg.as_str() {
             "--root" => {
                 let Some(value) = iter.next() else {
-                    return DaemonOutput::usage("missing stage157 --root value");
+                    return DaemonOutput::usage(
+                        "missing control-plane-entrypoint-admission --root value",
+                    );
                 };
                 root = value.into();
             }
@@ -1294,12 +1285,12 @@ fn run_stage157_control_plane_entrypoint_admission_command(args: &[String]) -> D
             }
             _ => {
                 return DaemonOutput::usage(format!(
-                    "unsupported stage157 control-plane entrypoint argument: {arg}"
+                    "unsupported control-plane-entrypoint-admission argument: {arg}"
                 ));
             }
         }
     }
-    match stage157_control_plane_entrypoint_admission_report(&root) {
+    match control_plane_entrypoint_admission_report(&root) {
         Ok(report) => DaemonOutput::ok(format!("{report}\n")),
         Err(err) => DaemonOutput {
             stdout: String::new(),
@@ -1309,24 +1300,29 @@ fn run_stage157_control_plane_entrypoint_admission_command(args: &[String]) -> D
     }
 }
 
-fn run_stage156_default_run_identity_admission_command(args: &[String]) -> DaemonOutput {
-    let mut opts = Stage156DefaultRunIdentityOptions::under_root(default_stage156_root());
+fn run_default_run_identity_admission_command(args: &[String]) -> DaemonOutput {
+    let mut opts =
+        DefaultRunIdentityAdmissionOptions::under_root(default_run_identity_admission_root());
     let mut iter = args.iter();
     while let Some(arg) = iter.next() {
         match arg.as_str() {
             "--root" => {
                 let Some(value) = iter.next() else {
-                    return DaemonOutput::usage("missing stage156 --root value");
+                    return DaemonOutput::usage(
+                        "missing default-run-identity-admission --root value",
+                    );
                 };
-                opts = Stage156DefaultRunIdentityOptions::under_root(value);
+                opts = DefaultRunIdentityAdmissionOptions::under_root(value);
             }
             _ if arg.starts_with("--root=") => {
                 opts =
-                    Stage156DefaultRunIdentityOptions::under_root(arg.split_once('=').unwrap().1);
+                    DefaultRunIdentityAdmissionOptions::under_root(arg.split_once('=').unwrap().1);
             }
             "-c" | "--config" => {
                 let Some(value) = iter.next() else {
-                    return DaemonOutput::usage("missing stage156 --config value");
+                    return DaemonOutput::usage(
+                        "missing default-run-identity-admission --config value",
+                    );
                 };
                 opts.config = value.into();
             }
@@ -1335,7 +1331,9 @@ fn run_stage156_default_run_identity_admission_command(args: &[String]) -> Daemo
             }
             "--logfile" => {
                 let Some(value) = iter.next() else {
-                    return DaemonOutput::usage("missing stage156 --logfile value");
+                    return DaemonOutput::usage(
+                        "missing default-run-identity-admission --logfile value",
+                    );
                 };
                 opts.logfile = value.into();
             }
@@ -1347,12 +1345,12 @@ fn run_stage156_default_run_identity_admission_command(args: &[String]) -> Daemo
             "--disable-sudo" => opts.disable_sudo = true,
             _ => {
                 return DaemonOutput::usage(format!(
-                    "unsupported stage156 default run identity argument: {arg}"
+                    "unsupported default-run-identity-admission argument: {arg}"
                 ));
             }
         }
     }
-    match stage156_default_run_identity_admission_report(&opts) {
+    match default_run_identity_admission_report(&opts) {
         Ok(report) => DaemonOutput::ok(format!("{report}\n")),
         Err(err) => DaemonOutput {
             stdout: String::new(),
@@ -1362,14 +1360,14 @@ fn run_stage156_default_run_identity_admission_command(args: &[String]) -> Daemo
     }
 }
 
-fn run_stage153_run_entrypoint_preflight_command(args: &[String]) -> DaemonOutput {
-    let mut root = default_stage153_root();
+fn run_run_entrypoint_preflight_command(args: &[String]) -> DaemonOutput {
+    let mut root = default_run_entrypoint_preflight_root();
     let mut iter = args.iter();
     while let Some(arg) = iter.next() {
         match arg.as_str() {
             "--root" => {
                 let Some(value) = iter.next() else {
-                    return DaemonOutput::usage("missing stage153 --root value");
+                    return DaemonOutput::usage("missing run-entrypoint-preflight --root value");
                 };
                 root = value.into();
             }
@@ -1378,12 +1376,12 @@ fn run_stage153_run_entrypoint_preflight_command(args: &[String]) -> DaemonOutpu
             }
             _ => {
                 return DaemonOutput::usage(format!(
-                    "unsupported stage153 run entrypoint argument: {arg}"
+                    "unsupported run-entrypoint-preflight argument: {arg}"
                 ));
             }
         }
     }
-    match stage153_run_entrypoint_preflight_report(&root) {
+    match run_entrypoint_preflight_report(&root) {
         Ok(report) => DaemonOutput::ok(format!("{report}\n")),
         Err(err) => DaemonOutput {
             stdout: String::new(),
@@ -1393,14 +1391,14 @@ fn run_stage153_run_entrypoint_preflight_command(args: &[String]) -> DaemonOutpu
     }
 }
 
-fn run_stage152_signal_control_plane_smoke_command(args: &[String]) -> DaemonOutput {
-    let mut root = default_stage152_root();
+fn run_signal_control_plane_smoke_command(args: &[String]) -> DaemonOutput {
+    let mut root = default_signal_control_plane_smoke_root();
     let mut iter = args.iter();
     while let Some(arg) = iter.next() {
         match arg.as_str() {
             "--root" => {
                 let Some(value) = iter.next() else {
-                    return DaemonOutput::usage("missing stage152 --root value");
+                    return DaemonOutput::usage("missing signal-control-plane-smoke --root value");
                 };
                 root = value.into();
             }
@@ -1409,12 +1407,12 @@ fn run_stage152_signal_control_plane_smoke_command(args: &[String]) -> DaemonOut
             }
             _ => {
                 return DaemonOutput::usage(format!(
-                    "unsupported stage152 signal control-plane argument: {arg}"
+                    "unsupported signal-control-plane-smoke argument: {arg}"
                 ));
             }
         }
     }
-    match stage152_signal_control_plane_smoke_report(&root) {
+    match signal_control_plane_smoke_report(&root) {
         Ok(report) => DaemonOutput::ok(format!("{report}\n")),
         Err(err) => DaemonOutput {
             stdout: String::new(),
@@ -1424,14 +1422,14 @@ fn run_stage152_signal_control_plane_smoke_command(args: &[String]) -> DaemonOut
     }
 }
 
-fn run_stage150_lifecycle_smoke_command(args: &[String]) -> DaemonOutput {
-    let mut root = default_stage150_root();
+fn run_lifecycle_smoke_command(args: &[String]) -> DaemonOutput {
+    let mut root = default_lifecycle_smoke_root();
     let mut iter = args.iter();
     while let Some(arg) = iter.next() {
         match arg.as_str() {
             "--root" => {
                 let Some(value) = iter.next() else {
-                    return DaemonOutput::usage("missing stage150 --root value");
+                    return DaemonOutput::usage("missing lifecycle-smoke --root value");
                 };
                 root = value.into();
             }
@@ -1439,13 +1437,11 @@ fn run_stage150_lifecycle_smoke_command(args: &[String]) -> DaemonOutput {
                 root = arg.split_once('=').unwrap().1.into();
             }
             _ => {
-                return DaemonOutput::usage(format!(
-                    "unsupported stage150 lifecycle argument: {arg}"
-                ));
+                return DaemonOutput::usage(format!("unsupported lifecycle-smoke argument: {arg}"));
             }
         }
     }
-    match stage150_lifecycle_smoke_report(&root) {
+    match lifecycle_smoke_report(&root) {
         Ok(report) => DaemonOutput::ok(format!("{report}\n")),
         Err(err) => DaemonOutput {
             stdout: String::new(),
@@ -1455,14 +1451,16 @@ fn run_stage150_lifecycle_smoke_command(args: &[String]) -> DaemonOutput {
     }
 }
 
-fn run_stage151_control_plane_owner_preflight_command(args: &[String]) -> DaemonOutput {
-    let mut root = default_stage151_root();
+fn run_control_plane_owner_preflight_command(args: &[String]) -> DaemonOutput {
+    let mut root = default_control_plane_owner_preflight_root();
     let mut iter = args.iter();
     while let Some(arg) = iter.next() {
         match arg.as_str() {
             "--root" => {
                 let Some(value) = iter.next() else {
-                    return DaemonOutput::usage("missing stage151 --root value");
+                    return DaemonOutput::usage(
+                        "missing control-plane-owner-preflight --root value",
+                    );
                 };
                 root = value.into();
             }
@@ -1471,12 +1469,12 @@ fn run_stage151_control_plane_owner_preflight_command(args: &[String]) -> Daemon
             }
             _ => {
                 return DaemonOutput::usage(format!(
-                    "unsupported stage151 control-plane owner argument: {arg}"
+                    "unsupported control-plane-owner-preflight argument: {arg}"
                 ));
             }
         }
     }
-    match stage151_control_plane_owner_preflight_report(&root) {
+    match control_plane_owner_preflight_report(&root) {
         Ok(report) => DaemonOutput::ok(format!("{report}\n")),
         Err(err) => DaemonOutput {
             stdout: String::new(),
