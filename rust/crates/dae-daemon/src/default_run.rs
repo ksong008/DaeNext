@@ -8,10 +8,10 @@ use serde_json::{Value, json};
 use crate::{
     MatchedDefaultBenchmarkOptions, ProductChainAdmissionEvidence,
     ProductChainRecertificationOptions, ProductionDataplaneHarnessOptions,
-    ProductionRuntimeOwnerOptions, matched_default_benchmark_report,
-    product_chain_recertification_report, production_dataplane_harness_report,
-    production_runtime_owner_report, stage160_listener_ebpf_preflight_harness_report,
-    stage165_reload_owner_handoff_smoke_report,
+    ProductionRuntimeOwnerOptions, listener_ebpf_preflight_report,
+    matched_default_benchmark_report, product_chain_recertification_report,
+    production_dataplane_harness_report, production_runtime_owner_report,
+    reload_owner_handoff_smoke_report,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -119,15 +119,15 @@ pub fn run_default_optin_report(options: &RunOptions, version: &str) -> Result<V
     fs::write(&sdnotify_file, "READY=1\n")
         .map_err(|err| format!("failed to write run sdnotify ready file: {err}"))?;
 
-    let listener_root = derived_stage_root("/tmp/dae-stage160-run-entrypoint", &options.root);
-    let reload_root = derived_stage_root("/tmp/dae-stage165-run-entrypoint", &options.root);
+    let listener_root = derived_support_root("/tmp/dae-listener-ebpf-preflight-run", &options.root);
+    let reload_root = derived_support_root("/tmp/dae-reload-owner-handoff-run", &options.root);
     let listener = if options.listener_smoke {
-        stage160_listener_ebpf_preflight_harness_report(&listener_root)?
+        listener_ebpf_preflight_report(&listener_root)?
     } else {
         json!({"skipped": true})
     };
     let reload = if options.reload_smoke {
-        stage165_reload_owner_handoff_smoke_report(&reload_root)?
+        reload_owner_handoff_smoke_report(&reload_root)?
     } else {
         json!({"skipped": true})
     };
@@ -615,7 +615,7 @@ fn ensure_safe_output_path(path: &Path, root: &Path, label: &str) -> Result<(), 
     Ok(())
 }
 
-fn derived_stage_root(prefix: &str, root: &Path) -> PathBuf {
+fn derived_support_root(prefix: &str, root: &Path) -> PathBuf {
     let suffix = root
         .file_name()
         .and_then(|name| name.to_str())

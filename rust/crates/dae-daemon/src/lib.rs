@@ -25,34 +25,33 @@ mod matched_default_benchmark_tests;
 mod tests;
 
 pub use control_plane::{
-    ControlPlaneOwnerPaths, default_stage151_root, run_stage151_control_plane_owner_preflight,
-    stage151_control_plane_owner_preflight_report,
+    ControlPlaneOwnerPaths, control_plane_owner_preflight_report,
+    default_control_plane_owner_preflight_root, run_control_plane_owner_preflight,
 };
 pub use control_plane_entrypoint::{
-    default_stage157_root, stage157_control_plane_entrypoint_admission_report,
+    control_plane_entrypoint_admission_report, default_control_plane_entrypoint_admission_root,
 };
 pub use default_run::{
     RunOptions, default_run_root, product_chain_admission_from_run_report, run_default_optin_report,
 };
 pub use default_run_identity::{
-    Stage156DefaultRunIdentityOptions, default_stage156_root,
-    stage156_default_run_identity_admission_report,
+    DefaultRunIdentityAdmissionOptions, default_run_identity_admission_report,
+    default_run_identity_admission_root,
 };
 pub use identity::{
     DAEMON_CRATE_NAME, DEFAULT_DAEMON_MANIFEST, GO_DEFAULT_IDENTITY, OPTIN_BINARY_NAME,
     daemon_identity,
 };
 pub use lifecycle::{
-    LifecyclePaths, default_stage150_root, run_stage150_lifecycle_smoke,
-    stage150_lifecycle_smoke_report,
+    LifecyclePaths, default_lifecycle_smoke_root, lifecycle_smoke_report, run_lifecycle_smoke,
 };
 pub use listener_ebpf_preflight::{
-    default_stage160_root, stage160_listener_ebpf_preflight_harness_report,
+    default_listener_ebpf_preflight_root, listener_ebpf_preflight_report,
 };
 pub use matched_default_benchmark::{
     MatchedDefaultBenchmarkOptions, matched_default_benchmark_report,
 };
-pub use preflight::stage149_identity_preflight_report;
+pub use preflight::identity_preflight_report;
 pub use product_chain_recertification::{
     ProductChainAdmissionEvidence, ProductChainRecertificationOptions,
     product_chain_recertification_report,
@@ -63,15 +62,17 @@ pub use production_dataplane_harness::{
 pub use production_runtime_owner::{
     ProductionRuntimeOwnerOptions, production_runtime_owner_report,
 };
-pub use reload_owner_benchmark::{default_stage167_root, stage167_reload_owner_benchmark_report};
-pub use reload_owner_handoff::{
-    ReloadOwnerHandoffPaths, default_stage165_root, stage165_reload_owner_handoff_smoke_report,
+pub use reload_owner_benchmark::{
+    default_reload_owner_benchmark_root, reload_owner_benchmark_report,
 };
-pub use run_entrypoint::{default_stage153_root, stage153_run_entrypoint_preflight_report};
+pub use reload_owner_handoff::{
+    ReloadOwnerHandoffPaths, default_reload_owner_handoff_root, reload_owner_handoff_smoke_report,
+};
+pub use run_entrypoint::{default_run_entrypoint_preflight_root, run_entrypoint_preflight_report};
 pub use runner::{DaemonOutput, run_with_args_and_version};
 pub use service_contract::{
     ABORT_FILE_PATH, PID_FILE_PATH, PROGRESS_FILE_PATH, ReloadOptions, ResidentRunOptions,
     reload_resident_service, run_resident_service, service_contract_capabilities,
 };
-pub use signal::{default_stage152_root, stage152_signal_control_plane_smoke_report};
+pub use signal::{default_signal_control_plane_smoke_root, signal_control_plane_smoke_report};
 pub use version::version_from_env;

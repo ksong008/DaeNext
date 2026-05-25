@@ -11,7 +11,6 @@ pub fn daemon_identity(version: &str) -> Value {
         "crate": DAEMON_CRATE_NAME,
         "version": version,
         "identity_class": "opt-in-rust-daemon-identity",
-        "stage": "stage149",
         "rust_daemon_identity_scaffolded": true,
         "rust_daemon_crate_manifest_exists": true,
         "rust_daemon_optin_binary_exists": true,

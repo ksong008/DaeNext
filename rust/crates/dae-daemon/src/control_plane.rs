@@ -25,61 +25,61 @@ impl ControlPlaneOwnerPaths {
     }
 }
 
-pub fn default_stage151_root() -> PathBuf {
-    PathBuf::from("/tmp/dae-stage151-control-plane-owner-preflight")
+pub fn default_control_plane_owner_preflight_root() -> PathBuf {
+    PathBuf::from("/tmp/dae-control-plane-owner-preflight")
 }
 
-pub fn stage151_control_plane_owner_preflight_report(root: &Path) -> Result<Value, String> {
-    let paths = run_stage151_control_plane_owner_preflight(root)?;
-    Ok(stage151_report_value(&paths))
+pub fn control_plane_owner_preflight_report(root: &Path) -> Result<Value, String> {
+    let paths = run_control_plane_owner_preflight(root)?;
+    Ok(control_plane_owner_report_value(&paths))
 }
 
-pub fn run_stage151_control_plane_owner_preflight(
-    root: &Path,
-) -> Result<ControlPlaneOwnerPaths, String> {
-    ensure_safe_stage151_root(root)?;
+pub fn run_control_plane_owner_preflight(root: &Path) -> Result<ControlPlaneOwnerPaths, String> {
+    ensure_safe_control_plane_owner_preflight_root(root)?;
     let paths = ControlPlaneOwnerPaths::under_root(root);
     if paths.root.exists() {
         fs::remove_dir_all(&paths.root).map_err(|err| {
             format!(
-                "failed to remove existing stage151 root {}: {err}",
+                "failed to remove existing control-plane-owner root {}: {err}",
                 path_string(&paths.root)
             )
         })?;
     }
     fs::create_dir_all(&paths.run_dir).map_err(|err| {
         format!(
-            "failed to create stage151 run dir {}: {err}",
+            "failed to create control-plane-owner run dir {}: {err}",
             path_string(&paths.run_dir)
         )
     })?;
     if let Some(parent) = paths.log_file.parent() {
         fs::create_dir_all(parent).map_err(|err| {
             format!(
-                "failed to create stage151 log dir {}: {err}",
+                "failed to create control-plane-owner log dir {}: {err}",
                 path_string(parent)
             )
         })?;
     }
 
-    let report = stage151_report_value(&paths);
+    let report = control_plane_owner_report_value(&paths);
     let state = serde_json::to_vec_pretty(&report)
-        .map_err(|err| format!("failed to encode stage151 owner state: {err}"))?;
+        .map_err(|err| format!("failed to encode control-plane-owner owner state: {err}"))?;
     fs::write(&paths.state_file, state)
-        .map_err(|err| format!("failed to write stage151 owner state: {err}"))?;
-    fs::write(&paths.log_file, "stage151 control-plane owner preflight\n")
-        .map_err(|err| format!("failed to write stage151 owner log: {err}"))?;
+        .map_err(|err| format!("failed to write control-plane-owner owner state: {err}"))?;
+    fs::write(
+        &paths.log_file,
+        "control-plane-owner control-plane owner preflight\n",
+    )
+    .map_err(|err| format!("failed to write control-plane-owner owner log: {err}"))?;
 
     Ok(paths)
 }
 
-fn stage151_report_value(paths: &ControlPlaneOwnerPaths) -> Value {
+fn control_plane_owner_report_value(paths: &ControlPlaneOwnerPaths) -> Value {
     let mut core_flip = CoreFlip::default();
     let startup_core = ReloadCoreState::new(false, &mut core_flip);
     let reload_core = ReloadCoreState::new(true, &mut core_flip);
     json!({
-        "name": "stage151-rust-control-plane-owner-preflight",
-        "stage": "stage151",
+        "name": "rust-control-plane-owner-preflight",
         "root": path_string(&paths.root),
         "run_dir": path_string(&paths.run_dir),
         "state_file": path_string(&paths.state_file),
@@ -154,17 +154,17 @@ fn stage151_report_value(paths: &ControlPlaneOwnerPaths) -> Value {
     })
 }
 
-fn ensure_safe_stage151_root(root: &Path) -> Result<(), String> {
+fn ensure_safe_control_plane_owner_preflight_root(root: &Path) -> Result<(), String> {
     if !root.is_absolute() {
         return Err(format!(
-            "stage151 root must be absolute: {}",
+            "control-plane-owner root must be absolute: {}",
             path_string(root)
         ));
     }
     let root_string = path_string(root);
-    if !root_string.starts_with("/tmp/dae-stage151") {
+    if !root_string.starts_with("/tmp/dae-control-plane-owner") {
         return Err(format!(
-            "stage151 root must be under /tmp/dae-stage151*: {root_string}"
+            "control-plane-owner root must be under /tmp/dae-control-plane-owner*: {root_string}"
         ));
     }
     Ok(())

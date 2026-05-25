@@ -8,21 +8,21 @@ use std::time::{Duration, Instant};
 
 use serde_json::{Value, json};
 
-const TCP_PING: &[u8] = b"stage160-tcp-ping";
-const TCP_PONG: &[u8] = b"stage160-tcp-pong";
-const UDP_PING: &[u8] = b"stage160-udp-ping";
-const UDP_PONG: &[u8] = b"stage160-udp-pong";
+const TCP_PING: &[u8] = b"listener-ebpf-preflight-tcp-ping";
+const TCP_PONG: &[u8] = b"listener-ebpf-preflight-tcp-pong";
+const UDP_PING: &[u8] = b"listener-ebpf-preflight-udp-ping";
+const UDP_PONG: &[u8] = b"listener-ebpf-preflight-udp-pong";
 
-pub fn default_stage160_root() -> PathBuf {
-    PathBuf::from("/tmp/dae-stage160-listener-ebpf-preflight")
+pub fn default_listener_ebpf_preflight_root() -> PathBuf {
+    PathBuf::from("/tmp/dae-listener-ebpf-preflight")
 }
 
-pub fn stage160_listener_ebpf_preflight_harness_report(root: &Path) -> Result<Value, String> {
-    ensure_safe_stage160_root(root)?;
+pub fn listener_ebpf_preflight_report(root: &Path) -> Result<Value, String> {
+    ensure_safe_listener_ebpf_preflight_root(root)?;
     if root.exists() {
         fs::remove_dir_all(root).map_err(|err| {
             format!(
-                "failed to remove existing stage160 root {}: {err}",
+                "failed to remove existing listener-ebpf-preflight root {}: {err}",
                 path_string(root)
             )
         })?;
@@ -30,40 +30,42 @@ pub fn stage160_listener_ebpf_preflight_harness_report(root: &Path) -> Result<Va
 
     let run_dir = root.join("run");
     let log_dir = root.join("log");
-    let temporary_pin_dir = root.join("bpf-pins").join("stage160");
-    let manifest_file = run_dir.join("stage160-listener-ebpf-preflight.json");
+    let temporary_pin_dir = root.join("bpf-pins").join("listener-ebpf-preflight");
+    let manifest_file = run_dir.join("listener-ebpf-preflight.json");
     let log_file = log_dir.join("listener-ebpf-preflight.log");
 
     fs::create_dir_all(&run_dir).map_err(|err| {
         format!(
-            "failed to create stage160 run dir {}: {err}",
+            "failed to create listener-ebpf-preflight run dir {}: {err}",
             path_string(&run_dir)
         )
     })?;
     fs::create_dir_all(&log_dir).map_err(|err| {
         format!(
-            "failed to create stage160 log dir {}: {err}",
+            "failed to create listener-ebpf-preflight log dir {}: {err}",
             path_string(&log_dir)
         )
     })?;
     fs::create_dir_all(&temporary_pin_dir).map_err(|err| {
         format!(
-            "failed to create stage160 temporary pin dir {}: {err}",
+            "failed to create listener-ebpf-preflight temporary pin dir {}: {err}",
             path_string(&temporary_pin_dir)
         )
     })?;
     fs::write(
-        temporary_pin_dir.join("stage160.pin"),
-        b"temporary-stage160-pin\n",
+        temporary_pin_dir.join("listener-ebpf-preflight.pin"),
+        b"temporary-listener-ebpf-preflight-pin\n",
     )
-    .map_err(|err| format!("failed to write stage160 temporary pin marker: {err}"))?;
+    .map_err(|err| {
+        format!("failed to write listener-ebpf-preflight temporary pin marker: {err}")
+    })?;
 
     let started = Instant::now();
     let listener = run_loopback_listener_smoke()?;
     let capabilities = capability_preflight();
     fs::remove_dir_all(&temporary_pin_dir).map_err(|err| {
         format!(
-            "failed to clean stage160 temporary pin dir {}: {err}",
+            "failed to clean listener-ebpf-preflight temporary pin dir {}: {err}",
             path_string(&temporary_pin_dir)
         )
     })?;
@@ -71,8 +73,7 @@ pub fn stage160_listener_ebpf_preflight_harness_report(root: &Path) -> Result<Va
     let elapsed_ns = started.elapsed().as_nanos() as u64;
 
     let mut report = json!({
-        "name": "stage160-isolated-listener-ebpf-preflight-harness",
-        "stage": "stage160",
+        "name": "isolated-listener-ebpf-preflight",
         "root": path_string(root),
         "run_dir": path_string(&run_dir),
         "manifest_file": path_string(&manifest_file),
@@ -119,32 +120,33 @@ pub fn stage160_listener_ebpf_preflight_harness_report(root: &Path) -> Result<Va
     );
 
     let manifest = serde_json::to_vec_pretty(&report)
-        .map_err(|err| format!("failed to encode stage160 manifest: {err}"))?;
+        .map_err(|err| format!("failed to encode listener-ebpf-preflight manifest: {err}"))?;
     fs::write(&manifest_file, manifest)
-        .map_err(|err| format!("failed to write stage160 manifest: {err}"))?;
+        .map_err(|err| format!("failed to write listener-ebpf-preflight manifest: {err}"))?;
     fs::write(
         &log_file,
         format!(
-            "stage160 listener/eBPF preflight: tcp_port={} udp_port={} elapsed_ns={elapsed_ns}\n",
+            "listener-ebpf-preflight listener/eBPF preflight: tcp_port={} udp_port={} elapsed_ns={elapsed_ns}\n",
             report["listener"]["tcp_port"].as_u64().unwrap(),
             report["listener"]["udp_port"].as_u64().unwrap()
         ),
     )
-    .map_err(|err| format!("failed to write stage160 log: {err}"))?;
+    .map_err(|err| format!("failed to write listener-ebpf-preflight log: {err}"))?;
     Ok(report)
 }
 
 fn run_loopback_listener_smoke() -> Result<Value, String> {
     let tcp_listener = TcpListener::bind(("127.0.0.1", 0))
-        .map_err(|err| format!("failed to bind stage160 tcp listener: {err}"))?;
-    let tcp_addr = tcp_listener
-        .local_addr()
-        .map_err(|err| format!("failed to read stage160 tcp listener address: {err}"))?;
-    let udp_socket = UdpSocket::bind(("127.0.0.1", tcp_addr.port()))
-        .map_err(|err| format!("failed to bind stage160 udp listener on tcp port: {err}"))?;
-    let udp_addr = udp_socket
-        .local_addr()
-        .map_err(|err| format!("failed to read stage160 udp listener address: {err}"))?;
+        .map_err(|err| format!("failed to bind listener-ebpf-preflight tcp listener: {err}"))?;
+    let tcp_addr = tcp_listener.local_addr().map_err(|err| {
+        format!("failed to read listener-ebpf-preflight tcp listener address: {err}")
+    })?;
+    let udp_socket = UdpSocket::bind(("127.0.0.1", tcp_addr.port())).map_err(|err| {
+        format!("failed to bind listener-ebpf-preflight udp listener on tcp port: {err}")
+    })?;
+    let udp_addr = udp_socket.local_addr().map_err(|err| {
+        format!("failed to read listener-ebpf-preflight udp listener address: {err}")
+    })?;
 
     let (tx, rx) = mpsc::channel();
     let handle = thread::spawn(move || {
@@ -153,50 +155,54 @@ fn run_loopback_listener_smoke() -> Result<Value, String> {
     });
 
     let mut stream = TcpStream::connect(tcp_addr)
-        .map_err(|err| format!("failed to connect stage160 tcp client: {err}"))?;
+        .map_err(|err| format!("failed to connect listener-ebpf-preflight tcp client: {err}"))?;
     stream
         .set_read_timeout(Some(Duration::from_secs(2)))
-        .map_err(|err| format!("failed to set stage160 tcp read timeout: {err}"))?;
+        .map_err(|err| format!("failed to set listener-ebpf-preflight tcp read timeout: {err}"))?;
     stream
         .set_write_timeout(Some(Duration::from_secs(2)))
-        .map_err(|err| format!("failed to set stage160 tcp write timeout: {err}"))?;
+        .map_err(|err| format!("failed to set listener-ebpf-preflight tcp write timeout: {err}"))?;
     stream
         .write_all(TCP_PING)
-        .map_err(|err| format!("failed to write stage160 tcp ping: {err}"))?;
+        .map_err(|err| format!("failed to write listener-ebpf-preflight tcp ping: {err}"))?;
     let mut tcp_buf = vec![0; TCP_PONG.len()];
     stream
         .read_exact(&mut tcp_buf)
-        .map_err(|err| format!("failed to read stage160 tcp pong: {err}"))?;
+        .map_err(|err| format!("failed to read listener-ebpf-preflight tcp pong: {err}"))?;
     let tcp_roundtrip_passed = tcp_buf == TCP_PONG;
-    let tcp_server = rx
-        .recv_timeout(Duration::from_secs(2))
-        .map_err(|err| format!("stage160 tcp accept thread did not finish: {err}"))??;
+    let tcp_server = rx.recv_timeout(Duration::from_secs(2)).map_err(|err| {
+        format!("listener-ebpf-preflight tcp accept thread did not finish: {err}")
+    })??;
     handle
         .join()
-        .map_err(|_| "stage160 tcp accept thread panicked".to_string())?;
+        .map_err(|_| "listener-ebpf-preflight tcp accept thread panicked".to_string())?;
 
     let udp_client = UdpSocket::bind(("127.0.0.1", 0))
-        .map_err(|err| format!("failed to bind stage160 udp client: {err}"))?;
+        .map_err(|err| format!("failed to bind listener-ebpf-preflight udp client: {err}"))?;
     udp_client
         .set_read_timeout(Some(Duration::from_secs(2)))
-        .map_err(|err| format!("failed to set stage160 udp client timeout: {err}"))?;
+        .map_err(|err| {
+            format!("failed to set listener-ebpf-preflight udp client timeout: {err}")
+        })?;
     udp_socket
         .set_read_timeout(Some(Duration::from_secs(2)))
-        .map_err(|err| format!("failed to set stage160 udp listener timeout: {err}"))?;
+        .map_err(|err| {
+            format!("failed to set listener-ebpf-preflight udp listener timeout: {err}")
+        })?;
     udp_client
         .send_to(UDP_PING, udp_addr)
-        .map_err(|err| format!("failed to write stage160 udp ping: {err}"))?;
+        .map_err(|err| format!("failed to write listener-ebpf-preflight udp ping: {err}"))?;
     let mut udp_buf = [0_u8; 64];
     let (udp_read_len, udp_peer) = udp_socket
         .recv_from(&mut udp_buf)
-        .map_err(|err| format!("failed to receive stage160 udp ping: {err}"))?;
+        .map_err(|err| format!("failed to receive listener-ebpf-preflight udp ping: {err}"))?;
     udp_socket
         .send_to(UDP_PONG, udp_peer)
-        .map_err(|err| format!("failed to write stage160 udp pong: {err}"))?;
+        .map_err(|err| format!("failed to write listener-ebpf-preflight udp pong: {err}"))?;
     let mut udp_reply = [0_u8; 64];
     let (udp_reply_len, _) = udp_client
         .recv_from(&mut udp_reply)
-        .map_err(|err| format!("failed to receive stage160 udp pong: {err}"))?;
+        .map_err(|err| format!("failed to receive listener-ebpf-preflight udp pong: {err}"))?;
     let udp_roundtrip_passed =
         &udp_buf[..udp_read_len] == UDP_PING && &udp_reply[..udp_reply_len] == UDP_PONG;
 
@@ -224,19 +230,25 @@ struct TcpServerReport {
 fn accept_one_tcp(listener: TcpListener) -> Result<TcpServerReport, String> {
     let (mut conn, _) = listener
         .accept()
-        .map_err(|err| format!("failed to accept stage160 tcp client: {err}"))?;
+        .map_err(|err| format!("failed to accept listener-ebpf-preflight tcp client: {err}"))?;
     conn.set_read_timeout(Some(Duration::from_secs(2)))
-        .map_err(|err| format!("failed to set stage160 accepted tcp read timeout: {err}"))?;
+        .map_err(|err| {
+            format!("failed to set listener-ebpf-preflight accepted tcp read timeout: {err}")
+        })?;
     conn.set_write_timeout(Some(Duration::from_secs(2)))
-        .map_err(|err| format!("failed to set stage160 accepted tcp write timeout: {err}"))?;
+        .map_err(|err| {
+            format!("failed to set listener-ebpf-preflight accepted tcp write timeout: {err}")
+        })?;
     let mut buf = vec![0; TCP_PING.len()];
-    conn.read_exact(&mut buf)
-        .map_err(|err| format!("failed to read stage160 accepted tcp ping: {err}"))?;
+    conn.read_exact(&mut buf).map_err(|err| {
+        format!("failed to read listener-ebpf-preflight accepted tcp ping: {err}")
+    })?;
     if buf != TCP_PING {
-        return Err("stage160 tcp request payload mismatch".to_string());
+        return Err("listener-ebpf-preflight tcp request payload mismatch".to_string());
     }
-    conn.write_all(TCP_PONG)
-        .map_err(|err| format!("failed to write stage160 accepted tcp pong: {err}"))?;
+    conn.write_all(TCP_PONG).map_err(|err| {
+        format!("failed to write listener-ebpf-preflight accepted tcp pong: {err}")
+    })?;
     Ok(TcpServerReport {
         request_bytes: buf.len(),
     })
@@ -284,17 +296,17 @@ fn proc_mounts_has_bpffs() -> bool {
         })
 }
 
-fn ensure_safe_stage160_root(root: &Path) -> Result<(), String> {
+fn ensure_safe_listener_ebpf_preflight_root(root: &Path) -> Result<(), String> {
     if !root.is_absolute() {
         return Err(format!(
-            "stage160 root must be absolute: {}",
+            "listener-ebpf-preflight root must be absolute: {}",
             path_string(root)
         ));
     }
     let root_string = path_string(root);
-    if !root_string.starts_with("/tmp/dae-stage160") {
+    if !root_string.starts_with("/tmp/dae-listener-ebpf-preflight") {
         return Err(format!(
-            "stage160 root must be under /tmp/dae-stage160*: {root_string}"
+            "listener-ebpf-preflight root must be under /tmp/dae-listener-ebpf-preflight*: {root_string}"
         ));
     }
     Ok(())

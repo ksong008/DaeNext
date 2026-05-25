@@ -4,18 +4,18 @@ use std::path::{Path, PathBuf};
 use dae_core_types::reload::{RELOAD_DONE, RELOAD_PROCESSING, RELOAD_SEND};
 use serde_json::{Value, json};
 
-use crate::stage151_control_plane_owner_preflight_report;
+use crate::control_plane_owner_preflight_report;
 
-pub fn default_stage152_root() -> PathBuf {
-    PathBuf::from("/tmp/dae-stage152-signal-control-plane-smoke")
+pub fn default_signal_control_plane_smoke_root() -> PathBuf {
+    PathBuf::from("/tmp/dae-signal-control-plane-smoke")
 }
 
-pub fn stage152_signal_control_plane_smoke_report(root: &Path) -> Result<Value, String> {
-    ensure_safe_stage152_root(root)?;
+pub fn signal_control_plane_smoke_report(root: &Path) -> Result<Value, String> {
+    ensure_safe_signal_control_plane_smoke_root(root)?;
     if root.exists() {
         fs::remove_dir_all(root).map_err(|err| {
             format!(
-                "failed to remove existing stage152 root {}: {err}",
+                "failed to remove existing signal-control-plane root {}: {err}",
                 path_string(root)
             )
         })?;
@@ -25,37 +25,37 @@ pub fn stage152_signal_control_plane_smoke_report(root: &Path) -> Result<Value, 
     let log_dir = root.join("log");
     fs::create_dir_all(&run_dir).map_err(|err| {
         format!(
-            "failed to create stage152 run dir {}: {err}",
+            "failed to create signal-control-plane run dir {}: {err}",
             path_string(&run_dir)
         )
     })?;
     fs::create_dir_all(&log_dir).map_err(|err| {
         format!(
-            "failed to create stage152 log dir {}: {err}",
+            "failed to create signal-control-plane log dir {}: {err}",
             path_string(&log_dir)
         )
     })?;
 
-    let pid_file = run_dir.join("dae-stage152.pid");
-    let progress_file = run_dir.join("dae-stage152.progress");
-    let abort_file = run_dir.join("dae-stage152.abort");
+    let pid_file = run_dir.join("dae-signal-control-plane.pid");
+    let progress_file = run_dir.join("dae-signal-control-plane.progress");
+    let abort_file = run_dir.join("dae-signal-control-plane.abort");
     let journal_file = run_dir.join("signal-control-plane-journal.json");
     let log_file = log_dir.join("signal-control-plane.log");
-    let owner_root = stage151_owner_root(root);
+    let owner_root = control_plane_owner_root(root);
 
     fs::write(&pid_file, format!("{}\n", std::process::id()))
-        .map_err(|err| format!("failed to write stage152 pid file: {err}"))?;
+        .map_err(|err| format!("failed to write signal-control-plane pid file: {err}"))?;
     write_progress(&progress_file, RELOAD_DONE, "")?;
     assert_progress(&progress_file, RELOAD_DONE)?;
 
     fs::write(&abort_file, "abort\n")
-        .map_err(|err| format!("failed to write stage152 abort file: {err}"))?;
+        .map_err(|err| format!("failed to write signal-control-plane abort file: {err}"))?;
     write_progress(&progress_file, RELOAD_SEND, "")?;
     assert_progress(&progress_file, RELOAD_SEND)?;
     let abort_consumed = consume_abort_file(&abort_file)?;
     write_progress(&progress_file, RELOAD_PROCESSING, "")?;
     assert_progress(&progress_file, RELOAD_PROCESSING)?;
-    let owner = stage151_control_plane_owner_preflight_report(&owner_root)?;
+    let owner = control_plane_owner_preflight_report(&owner_root)?;
     write_progress(&progress_file, RELOAD_DONE, "\nOK")?;
     assert_progress(&progress_file, RELOAD_DONE)?;
 
@@ -65,13 +65,15 @@ pub fn stage152_signal_control_plane_smoke_report(root: &Path) -> Result<Value, 
     assert_progress(&progress_file, RELOAD_DONE)?;
 
     fs::remove_file(&pid_file)
-        .map_err(|err| format!("failed to remove stage152 pid file on stop: {err}"))?;
-    fs::write(&log_file, "stage152 signal control-plane smoke\n")
-        .map_err(|err| format!("failed to write stage152 signal log: {err}"))?;
+        .map_err(|err| format!("failed to remove signal-control-plane pid file on stop: {err}"))?;
+    fs::write(
+        &log_file,
+        "signal-control-plane signal control-plane smoke\n",
+    )
+    .map_err(|err| format!("failed to write signal-control-plane signal log: {err}"))?;
 
     let report = json!({
-        "name": "stage152-rust-signal-control-plane-smoke",
-        "stage": "stage152",
+        "name": "rust-signal-control-plane-smoke",
         "root": path_string(root),
         "run_dir": path_string(&run_dir),
         "pid_file": path_string(&pid_file),
@@ -103,7 +105,7 @@ pub fn stage152_signal_control_plane_smoke_report(root: &Path) -> Result<Value, 
         "rust_signal_control_plane_smoke_passed": true,
         "reload_signal_progress_owner_sequence_validated": true,
         "suspend_signal_progress_sequence_validated": true,
-        "stage151_owner_preflight_reused": true,
+        "control_plane_owner_preflight_reused": true,
         "isolated_signal_control_plane_paths_validated": true,
         "production_signal_handler_installed": false,
         "production_listener_bound": false,
@@ -118,23 +120,23 @@ pub fn stage152_signal_control_plane_smoke_report(root: &Path) -> Result<Value, 
         "product_chain_switch_allowed": false
     });
     let journal = serde_json::to_vec_pretty(&report)
-        .map_err(|err| format!("failed to encode stage152 journal: {err}"))?;
+        .map_err(|err| format!("failed to encode signal-control-plane journal: {err}"))?;
     fs::write(&journal_file, journal)
-        .map_err(|err| format!("failed to write stage152 journal: {err}"))?;
+        .map_err(|err| format!("failed to write signal-control-plane journal: {err}"))?;
     Ok(report)
 }
 
-fn ensure_safe_stage152_root(root: &Path) -> Result<(), String> {
+fn ensure_safe_signal_control_plane_smoke_root(root: &Path) -> Result<(), String> {
     if !root.is_absolute() {
         return Err(format!(
-            "stage152 root must be absolute: {}",
+            "signal-control-plane root must be absolute: {}",
             path_string(root)
         ));
     }
     let root_string = path_string(root);
-    if !root_string.starts_with("/tmp/dae-stage152") {
+    if !root_string.starts_with("/tmp/dae-signal-control-plane") {
         return Err(format!(
-            "stage152 root must be under /tmp/dae-stage152*: {root_string}"
+            "signal-control-plane root must be under /tmp/dae-signal-control-plane*: {root_string}"
         ));
     }
     Ok(())
@@ -144,16 +146,17 @@ fn consume_abort_file(path: &Path) -> Result<bool, String> {
     if !path.exists() {
         return Ok(false);
     }
-    fs::remove_file(path).map_err(|err| format!("failed to consume stage152 abort file: {err}"))?;
+    fs::remove_file(path)
+        .map_err(|err| format!("failed to consume signal-control-plane abort file: {err}"))?;
     Ok(!path.exists())
 }
 
-fn stage151_owner_root(root: &Path) -> PathBuf {
+fn control_plane_owner_root(root: &Path) -> PathBuf {
     let suffix = root
         .file_name()
         .and_then(|name| name.to_str())
-        .unwrap_or("stage152");
-    PathBuf::from(format!("/tmp/dae-stage151-owner-{suffix}"))
+        .unwrap_or("signal-control-plane");
+    PathBuf::from(format!("/tmp/dae-control-plane-owner-{suffix}"))
 }
 
 fn write_progress(path: &Path, byte: u8, suffix: &str) -> Result<(), String> {

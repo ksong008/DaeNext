@@ -34,7 +34,7 @@ pub(in crate::production_runtime_owner) fn run_active_tcp_probe(
     let original_destination_observed = accept["local_addr"].as_str() == Some(target.as_str());
     let tcp_reply_path_succeeded = client["stdout"]
         .as_str()
-        .is_some_and(|stdout| stdout.contains("stage50-tcp-ack"));
+        .is_some_and(|stdout| stdout.contains("active-tcp-tproxy-ack"));
     (
         accept,
         client,
@@ -88,7 +88,7 @@ fn tcp_accept_probe_inner(listener: TcpListener) -> Result<Value, String> {
 
 fn run_client_probe(target: &str) -> Value {
     let script = format!(
-        "import socket,sys\ns=socket.create_connection(({target_ip:?},{target_port}),3)\ns.settimeout(3)\ns.sendall(b\"stage50-tcp-ping\")\ndata=s.recv(64)\nprint(data.decode('ascii','replace'))\ns.close()\nsys.exit(0 if data == b\"stage50-tcp-ack\" else 2)\n",
+        "import socket,sys\ns=socket.create_connection(({target_ip:?},{target_port}),3)\ns.settimeout(3)\ns.sendall(b\"active-tcp-tproxy-ping\")\ndata=s.recv(64)\nprint(data.decode('ascii','replace'))\ns.close()\nsys.exit(0 if data == b\"active-tcp-tproxy-ack\" else 2)\n",
         target_ip = target
             .split(':')
             .next()
@@ -201,7 +201,7 @@ pub(in crate::production_runtime_owner) fn run_active_tcp_relay_probe(
         && client["status"].as_str() == Some("pass")
         && client["stdout"]
             .as_str()
-            .is_some_and(|stdout| stdout.contains("stage51-relay-ack-count="));
+            .is_some_and(|stdout| stdout.contains("active-tcp-relay-ack-count="));
     let outbound_dial = accept["last_outbound_dial"].clone();
     let so_mark_observed = outbound_dial["so_mark"].as_u64() == Some(mark as u64)
         && outbound_dial["so_mark_applied"].as_bool().unwrap_or(false);
@@ -404,7 +404,7 @@ fn upstream_echo_probe(
 
 fn run_client_relay_probe(target: &str, iterations: u32) -> Value {
     let script = format!(
-        "import socket,sys\nok=0\nfor i in range({iterations}):\n    s=socket.create_connection(({target_ip:?},{target_port}),3)\n    s.settimeout(3)\n    s.sendall(b\"stage51-tcp-relay-ping\")\n    data=s.recv(64)\n    s.close()\n    if data != b\"stage51-tcp-relay-ack\":\n        print(data.decode('ascii','replace'))\n        sys.exit(2)\n    ok += 1\nprint(f\"stage51-relay-ack-count={{ok}}\")\nsys.exit(0)\n",
+        "import socket,sys\nok=0\nfor i in range({iterations}):\n    s=socket.create_connection(({target_ip:?},{target_port}),3)\n    s.settimeout(3)\n    s.sendall(b\"active-tcp-relay-ping\")\n    data=s.recv(64)\n    s.close()\n    if data != b\"active-tcp-relay-ack\":\n        print(data.decode('ascii','replace'))\n        sys.exit(2)\n    ok += 1\nprint(f\"active-tcp-relay-ack-count={{ok}}\")\nsys.exit(0)\n",
         target_ip = target
             .split(':')
             .next()
