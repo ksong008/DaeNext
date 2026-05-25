@@ -34,6 +34,29 @@ pub enum DnsError {
     Timeout,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum DnsValidationError {
+    DnsResponseNil,
+    DnsRequestReceived,
+    MissingQuestion,
+    QuestionCountMismatch { got: usize, want: usize },
+    QuestionMismatch { index: usize },
+    IdMismatch { got: u16, want: u16 },
+}
+
+impl DnsValidationError {
+    pub const fn code(self) -> u64 {
+        match self {
+            Self::DnsResponseNil => 1,
+            Self::DnsRequestReceived => 2,
+            Self::MissingQuestion => 3,
+            Self::QuestionCountMismatch { got, want } => 0x1000 ^ got as u64 ^ ((want as u64) << 8),
+            Self::QuestionMismatch { index } => 0x2000 ^ index as u64,
+            Self::IdMismatch { got, want } => 0x3000 ^ got as u64 ^ ((want as u64) << 16),
+        }
+    }
+}
+
 impl fmt::Display for DnsError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {

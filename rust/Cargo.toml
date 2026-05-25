@@ -65,6 +65,7 @@ quinn = { version = "0.11.9", default-features = false, features = ["runtime-tok
 regex = "1"
 rcgen = "0.13"
 rustls = "0.23"
+serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 sha1 = "0.10"
 sha2 = "0.10"

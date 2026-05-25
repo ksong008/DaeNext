@@ -2,6 +2,7 @@ package control
 
 import (
 	"context"
+	"encoding/hex"
 	"net/http"
 	"net/netip"
 	"testing"
@@ -181,6 +182,105 @@ func BenchmarkFunctionalDnsValidationQuestionID(b *testing.B) {
 			if (err == nil) != tc.wantOK {
 				b.Fatalf("validateDnsResponseForRequest() error=%v wantOK=%v", err, tc.wantOK)
 			}
+		}
+	}
+}
+
+func BenchmarkFunctionalDnsRawPacketValidationQuestionID(b *testing.B) {
+	request := []byte{
+		0x11, 0x11, 0x01, 0x00, 0x00, 0x01, 0x00, 0x00,
+		0x00, 0x00, 0x00, 0x00, 0x07, 'e', 'x', 'a',
+		'm', 'p', 'l', 'e', 0x03, 'c', 'o', 'm', 0x00,
+		0x00, 0x01, 0x00, 0x01,
+	}
+	matching := []byte{
+		0x11, 0x11, 0x81, 0x80, 0x00, 0x01, 0x00, 0x00,
+		0x00, 0x00, 0x00, 0x00, 0x07, 'e', 'x', 'a',
+		'm', 'p', 'l', 'e', 0x03, 'c', 'o', 'm', 0x00,
+		0x00, 0x01, 0x00, 0x01,
+	}
+	mismatchedID := []byte{
+		0x22, 0x22, 0x81, 0x80, 0x00, 0x01, 0x00, 0x00,
+		0x00, 0x00, 0x00, 0x00, 0x07, 'e', 'x', 'a',
+		'm', 'p', 'l', 'e', 0x03, 'c', 'o', 'm', 0x00,
+		0x00, 0x01, 0x00, 0x01,
+	}
+	mismatchedQuestion := []byte{
+		0x11, 0x11, 0x81, 0x80, 0x00, 0x01, 0x00, 0x00,
+		0x00, 0x00, 0x00, 0x00, 0x05, 'o', 't', 'h',
+		'e', 'r', 0x07, 'e', 'x', 'a', 'm', 'p', 'l',
+		'e', 0x00, 0x00, 0x01, 0x00, 0x01,
+	}
+	cases := []struct {
+		response  []byte
+		requireID bool
+		wantOK    bool
+	}{
+		{matching, true, true},
+		{mismatchedID, true, false},
+		{mismatchedID, false, true},
+		{mismatchedQuestion, true, false},
+	}
+
+	b.ReportAllocs()
+	for i := 0; i < b.N; i++ {
+		for _, tc := range cases {
+			req := new(dnsmessage.Msg)
+			if err := req.Unpack(request); err != nil {
+				b.Fatal(err)
+			}
+			resp := new(dnsmessage.Msg)
+			if err := resp.Unpack(tc.response); err != nil {
+				b.Fatal(err)
+			}
+			err := validateDnsResponseForRequest(req, resp, tc.requireID)
+			if (err == nil) != tc.wantOK {
+				b.Fatalf("validateDnsResponseForRequest() error=%v wantOK=%v", err, tc.wantOK)
+			}
+		}
+	}
+}
+
+func BenchmarkFunctionalDnsRawPacketAnswersTTLIPCNAME(b *testing.B) {
+	cnamePacket, err := hex.DecodeString("00008100000100020000000005616c696173076578616d706c65000001000105616c696173076578616d706c6500000500010000003c001006746172676574076578616d706c650006746172676574076578616d706c6500000100010000003c0004cb007114")
+	if err != nil {
+		b.Fatal(err)
+	}
+	aaaaResponse := []byte{
+		0x33, 0x33, 0x81, 0x80, 0x00, 0x01, 0x00, 0x01,
+		0x00, 0x00, 0x00, 0x00, 0x07, 'e', 'x', 'a',
+		'm', 'p', 'l', 'e', 0x03, 'c', 'o', 'm', 0x00,
+		0x00, 0x1c, 0x00, 0x01, 0xc0, 0x0c, 0x00, 0x1c,
+		0x00, 0x01, 0x00, 0x00, 0x00, 0x78, 0x00, 0x10,
+		0x20, 0x01, 0x0d, 0xb8, 0x00, 0x00, 0x00, 0x00,
+		0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x01,
+	}
+	packets := [][]byte{cnamePacket, aaaaResponse}
+
+	b.ReportAllocs()
+	for i := 0; i < b.N; i++ {
+		checksum := uint32(0)
+		for _, packet := range packets {
+			msg := new(dnsmessage.Msg)
+			if err := msg.Unpack(packet); err != nil {
+				b.Fatal(err)
+			}
+			for _, answer := range msg.Answer {
+				checksum ^= answer.Header().Ttl
+				switch rr := answer.(type) {
+				case *dnsmessage.A:
+					checksum ^= uint32(len(rr.A))
+				case *dnsmessage.AAAA:
+					checksum ^= uint32(len(rr.AAAA)) << 8
+				case *dnsmessage.CNAME:
+					if rr.Target == "target.example." {
+						checksum ^= 1 << 16
+					}
+				}
+			}
+		}
+		if checksum == 0 {
+			b.Fatal("unexpected zero checksum")
 		}
 	}
 }

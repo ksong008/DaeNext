@@ -95,9 +95,9 @@ pub(super) fn request_instruction(
     network: VMessNetwork,
 ) -> Result<Vec<u8>, OutboundError> {
     let metadata = VMessMetadata::parse(network.as_str(), target)?;
-    let addr = metadata.encode_addr()?;
+    let addr_len = metadata.addr_len();
     let header_padding_len = 0_usize;
-    let mut out = vec![0_u8; 45 + addr.len() + header_padding_len];
+    let mut out = vec![0_u8; 45 + addr_len + header_padding_len];
     out[0] = VMESS_VERSION;
     out[1..17].copy_from_slice(&material.request_body_iv);
     out[17..33].copy_from_slice(&material.request_body_key);
@@ -108,7 +108,7 @@ pub(super) fn request_instruction(
     out[37] = network.byte();
     out[38..40].copy_from_slice(&metadata.port().to_be_bytes());
     out[40] = metadata.metadata_type().byte();
-    out[41..41 + addr.len()].copy_from_slice(&addr);
+    metadata.write_addr_to_slice(&mut out[41..41 + addr_len])?;
     let checksum_offset = out.len() - 4;
     let checksum = fnv1a32(&out[..checksum_offset]);
     out[checksum_offset..].copy_from_slice(&checksum.to_be_bytes());

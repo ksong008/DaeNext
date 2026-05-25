@@ -92,6 +92,11 @@ impl VMessMetadata {
 
     pub fn encode_addr(&self) -> Result<Vec<u8>, OutboundError> {
         let mut out = Vec::with_capacity(self.addr_len());
+        self.write_addr_to(&mut out)?;
+        Ok(out)
+    }
+
+    pub fn write_addr_to(&self, out: &mut Vec<u8>) -> Result<(), OutboundError> {
         match &self.address {
             Socks5Address::Ipv4 { addr, .. } => out.extend_from_slice(&addr.octets()),
             Socks5Address::Ipv6 { addr, .. } => out.extend_from_slice(&addr.octets()),
@@ -106,7 +111,36 @@ impl VMessMetadata {
                 out.extend_from_slice(hostname.as_bytes());
             }
         }
-        Ok(out)
+        Ok(())
+    }
+
+    pub fn write_addr_to_slice(&self, out: &mut [u8]) -> Result<usize, OutboundError> {
+        let needed = self.addr_len();
+        if out.len() < needed {
+            return Err(OutboundError::BadVmess(format!(
+                "vmess metadata buffer too small: need {needed}, got {}",
+                out.len()
+            )));
+        }
+        match &self.address {
+            Socks5Address::Ipv4 { addr, .. } => {
+                out[..4].copy_from_slice(&addr.octets());
+            }
+            Socks5Address::Ipv6 { addr, .. } => {
+                out[..16].copy_from_slice(&addr.octets());
+            }
+            Socks5Address::Domain { hostname, .. } => {
+                if hostname.len() > u8::MAX as usize {
+                    return Err(OutboundError::BadVmess(format!(
+                        "domain name too long: {} bytes",
+                        hostname.len()
+                    )));
+                }
+                out[0] = hostname.len() as u8;
+                out[1..needed].copy_from_slice(hostname.as_bytes());
+            }
+        }
+        Ok(needed)
     }
 
     pub fn hostname(&self) -> String {

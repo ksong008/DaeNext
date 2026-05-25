@@ -322,8 +322,11 @@ fn bench_vmess_metadata_bytes(iters: u64, warmup: u64) -> Result<Measurement, St
         .map_err(|err| format!("vmess metadata parse failed: {err}"))?;
     Ok(measure(
         || {
-            let encoded = metadata.encode_addr().expect("vmess metadata encode");
-            black_box(encoded.len() as u64)
+            let mut encoded = [0_u8; 256];
+            let len = metadata
+                .write_addr_to_slice(&mut encoded)
+                .expect("vmess metadata encode");
+            black_box(len as u64 ^ encoded[0] as u64)
         },
         iters,
         warmup,
@@ -545,8 +548,10 @@ fn bench_tuic_export_link(iters: u64, warmup: u64) -> Result<Measurement, String
 fn bench_tuic_alpn_split(iters: u64, warmup: u64) -> Result<Measurement, String> {
     Ok(measure(
         || {
-            let alpn = dae_outbound::tuic::link::split_alpn(black_box("h3,h2,http/1.1"));
-            black_box(alpn.len() as u64 ^ alpn[0].len() as u64)
+            let mut alpn = dae_outbound::tuic::link::split_alpn_ref(black_box("h3,h2,http/1.1"));
+            let first = alpn.next().unwrap_or_default();
+            let count = 1 + alpn.count();
+            black_box(count as u64 ^ first.len() as u64)
         },
         iters,
         warmup,
@@ -647,7 +652,7 @@ fn bench_anytls_underlay(iters: u64, warmup: u64) -> Result<Measurement, String>
 fn bench_shared_xhttp_mode(iters: u64, warmup: u64) -> Result<Measurement, String> {
     Ok(measure(
         || {
-            let mode = dae_outbound::shared_transport::ir::normalize_xhttp_mode(
+            let mode = dae_outbound::shared_transport::ir::normalize_xhttp_mode_ref(
                 black_box("auto"),
                 black_box("https"),
                 black_box("reality"),

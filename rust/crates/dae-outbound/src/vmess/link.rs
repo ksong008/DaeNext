@@ -1,4 +1,5 @@
 use base64::Engine;
+use serde::Deserialize;
 use serde_json::Value;
 use url::Url;
 
@@ -102,28 +103,62 @@ impl VMessLink {
 }
 
 fn parse_json(raw: &str) -> Result<VMessLink, OutboundError> {
-    let value: Value =
+    let fields: VMessJsonFields =
         serde_json::from_str(raw).map_err(|err| OutboundError::BadVmess(err.to_string()))?;
+    let fingerprint = fields.fingerprint.or_else_empty(fields.fp);
     Ok(VMessLink {
-        ps: json_field(&value, "ps"),
-        add: json_field(&value, "add"),
-        port: json_field(&value, "port"),
-        id: json_field(&value, "id"),
-        aid: json_field(&value, "aid"),
-        net: json_field(&value, "net"),
-        r#type: json_field(&value, "type"),
-        host: json_field(&value, "host"),
-        sni: json_field(&value, "sni"),
-        path: json_field(&value, "path"),
-        tls: json_field(&value, "tls"),
-        allow_insecure: value
-            .get("allowInsecure")
-            .and_then(Value::as_bool)
-            .unwrap_or(false),
-        fingerprint: json_field(&value, "Fingerprint").or_else_empty(json_field(&value, "fp")),
-        v: json_field(&value, "v"),
-        protocol: json_field(&value, "protocol"),
+        ps: fields.ps,
+        add: fields.add,
+        port: fields.port,
+        id: fields.id,
+        aid: fields.aid,
+        net: fields.net,
+        r#type: fields.r#type,
+        host: fields.host,
+        sni: fields.sni,
+        path: fields.path,
+        tls: fields.tls,
+        allow_insecure: fields.allow_insecure,
+        fingerprint,
+        v: fields.v,
+        protocol: fields.protocol,
     })
+}
+
+#[derive(Default, Deserialize)]
+struct VMessJsonFields {
+    #[serde(default)]
+    ps: String,
+    #[serde(default)]
+    add: String,
+    #[serde(default)]
+    port: String,
+    #[serde(default)]
+    id: String,
+    #[serde(default)]
+    aid: String,
+    #[serde(default)]
+    net: String,
+    #[serde(default, rename = "type")]
+    r#type: String,
+    #[serde(default)]
+    host: String,
+    #[serde(default)]
+    sni: String,
+    #[serde(default)]
+    path: String,
+    #[serde(default)]
+    tls: String,
+    #[serde(default, rename = "allowInsecure")]
+    allow_insecure: bool,
+    #[serde(default, rename = "Fingerprint")]
+    fingerprint: String,
+    #[serde(default)]
+    fp: String,
+    #[serde(default)]
+    v: String,
+    #[serde(default)]
+    protocol: String,
 }
 
 fn parse_legacy(raw_url: &str, decoded: &str) -> Result<VMessLink, OutboundError> {
@@ -217,14 +252,6 @@ fn query_value(
         .iter()
         .find(|(candidate, _)| candidate.as_ref() == key)
         .map(|(_, value)| value.to_string())
-}
-
-fn json_field(value: &Value, key: &str) -> String {
-    value
-        .get(key)
-        .and_then(Value::as_str)
-        .unwrap_or_default()
-        .to_owned()
 }
 
 trait OrElseEmpty {
