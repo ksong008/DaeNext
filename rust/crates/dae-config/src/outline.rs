@@ -1,4 +1,13 @@
+use std::sync::OnceLock;
+
 use serde_json::{Value, json};
+
+const OUTLINE_VERSION_PLACEHOLDER: &str = "__DAE_OUTLINE_VERSION_PLACEHOLDER__";
+
+struct OutlineJsonTemplate {
+    prefix: String,
+    suffix: String,
+}
 
 pub fn export_outline(version: &str) -> Value {
     json!({
@@ -41,7 +50,15 @@ pub fn export_outline(version: &str) -> Value {
 }
 
 pub fn export_outline_json(version: &str) -> String {
-    serde_json::to_string_pretty(&export_outline(version)).expect("outline json should serialize")
+    let template = outline_json_template();
+    let encoded_version = serde_json::to_string(version).expect("outline version should serialize");
+    let mut out = String::with_capacity(
+        template.prefix.len() + encoded_version.len() + template.suffix.len(),
+    );
+    out.push_str(&template.prefix);
+    out.push_str(&encoded_version);
+    out.push_str(&template.suffix);
+    out
 }
 
 pub fn export_flat_desc(version: &str) -> Value {
@@ -223,6 +240,23 @@ fn leaf(
     value
 }
 
+fn outline_json_template() -> &'static OutlineJsonTemplate {
+    static TEMPLATE: OnceLock<OutlineJsonTemplate> = OnceLock::new();
+    TEMPLATE.get_or_init(|| {
+        let template = serde_json::to_string_pretty(&export_outline(OUTLINE_VERSION_PLACEHOLDER))
+            .expect("outline json template should serialize");
+        let marker =
+            serde_json::to_string(OUTLINE_VERSION_PLACEHOLDER).expect("marker should serialize");
+        let index = template
+            .find(&marker)
+            .expect("outline json template should contain version marker");
+        OutlineJsonTemplate {
+            prefix: template[..index].to_owned(),
+            suffix: template[index + marker.len()..].to_owned(),
+        }
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -235,6 +269,10 @@ mod tests {
 
         let reparsed: Value = serde_json::from_str(&export_outline_json("test")).unwrap();
         assert_eq!(reparsed, fixture["outline"]);
+        assert_eq!(
+            export_outline_json("te\"st\n"),
+            serde_json::to_string_pretty(&export_outline("te\"st\n")).unwrap()
+        );
     }
 
     #[test]
