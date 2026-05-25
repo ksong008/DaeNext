@@ -8,6 +8,7 @@ mod active_dns;
 mod active_tcp;
 mod active_udp;
 mod command;
+mod host_ops;
 mod reload_runtime;
 mod report;
 mod resident;
@@ -708,6 +709,19 @@ mod tests {
                 .unwrap()
         );
         assert!(!report["reload_runtime_parity_admitted"].as_bool().unwrap());
+        assert_eq!(
+            report["typed_report"]["schema"].as_str().unwrap(),
+            "production-runtime-owner-typed-report-v1"
+        );
+        assert_eq!(
+            report["typed_report"]["status"].as_str().unwrap(),
+            "not-executed"
+        );
+        assert!(
+            !report["typed_report"]["stage_report_schema"]
+                .as_bool()
+                .unwrap()
+        );
         assert!(!report["default_switch_allowed"].as_bool().unwrap());
     }
 

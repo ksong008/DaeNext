@@ -1,42 +1,38 @@
 use std::os::fd::AsRawFd;
 
+use dae_datapath::{active_tcp_routing_fallback_value, active_tcp_routing_map_contract};
 use dae_ebpf_support::{RuntimeMapInfo, map_ids, map_info, open_map_fd, update_map_elem_bytes};
 use serde_json::{Value, json};
-
-use super::{MATCH_TYPE_FALLBACK, OUTBOUND_ACTIVE_TCP_PROXY, ROUTING_MAP_KERNEL_NAME};
 
 pub(in crate::production_runtime_owner) fn update_routing_map(
     before_map_ids: &[u32],
     so_mark: u32,
 ) -> Result<(Value, u32), String> {
-    let (fd, info, new_map_ids) =
-        open_unique_new_map(before_map_ids, ROUTING_MAP_KERNEL_NAME, 4, 24)
-            .map_err(|err| err.to_string())?;
-    let key = 0_u32.to_ne_bytes();
-    let value = fallback_match_set_value(OUTBOUND_ACTIVE_TCP_PROXY, so_mark);
+    let contract = active_tcp_routing_map_contract(so_mark);
+    let (fd, info, new_map_ids) = open_unique_new_map(
+        before_map_ids,
+        contract.map_name,
+        contract.key_size,
+        contract.value_size,
+    )
+    .map_err(|err| err.to_string())?;
+    let key = contract.key.to_ne_bytes();
+    let value = active_tcp_routing_fallback_value(&contract);
     update_map_elem_bytes(fd.as_raw_fd(), &key, &value).map_err(|err| err.to_string())?;
     Ok((
         json!({
             "status": "pass",
             "map": map_json(&info),
             "new_map_ids": new_map_ids,
-            "key": 0,
+            "key": contract.key,
             "match_type": "Fallback",
-            "match_type_value": MATCH_TYPE_FALLBACK,
-            "outbound": OUTBOUND_ACTIVE_TCP_PROXY,
-            "mark": so_mark,
-            "must": false,
+            "match_type_value": contract.match_type,
+            "outbound": contract.outbound,
+            "mark": contract.mark,
+            "must": contract.must,
         }),
         info.id,
     ))
-}
-
-fn fallback_match_set_value(outbound: u8, mark: u32) -> [u8; 24] {
-    let mut value = [0_u8; 24];
-    value[17] = MATCH_TYPE_FALLBACK;
-    value[18] = outbound;
-    value[20..24].copy_from_slice(&mark.to_ne_bytes());
-    value
 }
 
 fn open_unique_new_map(

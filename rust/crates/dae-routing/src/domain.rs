@@ -52,9 +52,9 @@ impl DomainMatcher {
         patterns: impl IntoIterator<Item = impl Into<String>>,
         key: DomainKey,
     ) -> Result<(), RoutingError> {
-        let patterns: Vec<String> = patterns.into_iter().map(Into::into).collect();
+        let raw_patterns: Vec<String> = patterns.into_iter().map(Into::into).collect();
         let regex = if key == DomainKey::Regex {
-            patterns
+            raw_patterns
                 .iter()
                 .map(|pattern| {
                     Regex::new(pattern).map_err(|_| RoutingError::InvalidRegex(pattern.clone()))
@@ -63,6 +63,7 @@ impl DomainMatcher {
         } else {
             Vec::new()
         };
+        let patterns = normalize_patterns(raw_patterns, key);
         self.sets.push(DomainSet {
             bit_index,
             key,
@@ -124,11 +125,30 @@ impl DomainSet {
 }
 
 fn suffix_matches(domain: &str, pattern: &str) -> bool {
-    let pattern = pattern.trim_end_matches('.').to_ascii_lowercase();
     if let Some(stripped) = pattern.strip_prefix('.') {
-        domain.ends_with(&format!(".{stripped}"))
+        has_label_suffix(domain, stripped)
     } else {
-        domain == pattern || domain.ends_with(&format!(".{pattern}"))
+        domain == pattern || has_label_suffix(domain, pattern)
+    }
+}
+
+fn has_label_suffix(domain: &str, suffix: &str) -> bool {
+    domain.len() > suffix.len()
+        && domain.ends_with(suffix)
+        && domain.as_bytes()[domain.len() - suffix.len() - 1] == b'.'
+}
+
+fn normalize_patterns(patterns: Vec<String>, key: DomainKey) -> Vec<String> {
+    match key {
+        DomainKey::Full => patterns
+            .into_iter()
+            .map(|pattern| pattern.trim_end_matches('.').to_owned())
+            .collect(),
+        DomainKey::Suffix => patterns
+            .into_iter()
+            .map(|pattern| pattern.trim_end_matches('.').to_ascii_lowercase())
+            .collect(),
+        DomainKey::Keyword | DomainKey::Regex => patterns,
     }
 }
 

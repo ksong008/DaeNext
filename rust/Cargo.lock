@@ -234,6 +234,26 @@ dependencies = [
 ]
 
 [[package]]
+name = "dae-bench"
+version = "0.1.0"
+dependencies = [
+ "base64",
+ "dae-cli",
+ "dae-config",
+ "dae-datapath",
+ "dae-dns",
+ "dae-engine",
+ "dae-geodata",
+ "dae-golden",
+ "dae-outbound",
+ "dae-routing",
+ "dae-sniffing",
+ "dae-sysdump",
+ "dae-trace",
+ "serde_json",
+]
+
+[[package]]
 name = "dae-cli"
 version = "0.1.0"
 dependencies = [
@@ -263,6 +283,7 @@ dependencies = [
  "dae-config-util",
  "dae-golden",
  "serde_json",
+ "sha2",
 ]
 
 [[package]]

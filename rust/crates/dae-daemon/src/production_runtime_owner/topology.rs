@@ -1,6 +1,9 @@
 use std::path::Path;
 
-use dae_ebpf_support::{DaeParamInput, build_dae_param, write_param_aware_object};
+use dae_ebpf_support::{
+    DaeParamInput, TcAttachDirection, TcAttachTarget, TcBpfAttachSpec, TcCommandSpec,
+    build_dae_param, write_param_aware_object,
+};
 use serde_json::{Value, json};
 
 use super::command::{
@@ -217,50 +220,23 @@ pub(super) fn attach_peer_program(
     param_object: &Path,
 ) -> bool {
     let param_object = path_string(param_object);
+    let target = production_peer_attach_target();
+    let attach = TcBpfAttachSpec::new(
+        target.clone(),
+        FILTER_PREF,
+        param_object,
+        options.peer_section.clone(),
+    );
     let mut ok = true;
     ok &= run_step(
         steps,
         "attach-production-peer-clsact-qdisc",
-        CommandSpec::new(
-            "ip",
-            [
-                "netns",
-                "exec",
-                PRODUCTION_NETNS,
-                "tc",
-                "qdisc",
-                "add",
-                "dev",
-                PRODUCTION_PEER_IFACE,
-                "clsact",
-            ],
-        ),
+        command_spec(target.clsact_qdisc_add_command()),
     );
     ok &= run_step(
         steps,
         "attach-production-dae0peer-param-aware-ebpf-program",
-        CommandSpec::new(
-            "ip",
-            [
-                "netns".to_owned(),
-                "exec".to_owned(),
-                PRODUCTION_NETNS.to_owned(),
-                "tc".to_owned(),
-                "filter".to_owned(),
-                "add".to_owned(),
-                "dev".to_owned(),
-                PRODUCTION_PEER_IFACE.to_owned(),
-                "ingress".to_owned(),
-                "pref".to_owned(),
-                FILTER_PREF.to_owned(),
-                "bpf".to_owned(),
-                "da".to_owned(),
-                "obj".to_owned(),
-                param_object,
-                "sec".to_owned(),
-                options.peer_section.clone(),
-            ],
-        ),
+        command_spec(attach.filter_add_command()),
     );
     ok
 }
@@ -271,36 +247,23 @@ pub(super) fn attach_host_program(
     param_object: &Path,
 ) -> bool {
     let param_object = path_string(param_object);
+    let target = production_host_attach_target();
+    let attach = TcBpfAttachSpec::new(
+        target.clone(),
+        FILTER_PREF,
+        param_object,
+        options.host_section.clone(),
+    );
     let mut ok = true;
     ok &= run_step(
         steps,
         "attach-production-host-clsact-qdisc",
-        CommandSpec::new(
-            "tc",
-            ["qdisc", "add", "dev", PRODUCTION_HOST_IFACE, "clsact"],
-        ),
+        command_spec(target.clsact_qdisc_add_command()),
     );
     ok &= run_step(
         steps,
         "attach-production-dae0-param-aware-ebpf-program",
-        CommandSpec::new(
-            "tc",
-            [
-                "filter".to_owned(),
-                "add".to_owned(),
-                "dev".to_owned(),
-                PRODUCTION_HOST_IFACE.to_owned(),
-                "ingress".to_owned(),
-                "pref".to_owned(),
-                FILTER_PREF.to_owned(),
-                "bpf".to_owned(),
-                "da".to_owned(),
-                "obj".to_owned(),
-                param_object,
-                "sec".to_owned(),
-                options.host_section.clone(),
-            ],
-        ),
+        command_spec(attach.filter_add_command()),
     );
     ok
 }
@@ -309,20 +272,7 @@ pub(super) fn show_peer_program(steps: &mut Vec<Value>) -> Value {
     run_observation_step(
         steps,
         "show-production-dae0peer-param-aware-ebpf-program-filter",
-        CommandSpec::new(
-            "ip",
-            [
-                "netns",
-                "exec",
-                PRODUCTION_NETNS,
-                "tc",
-                "filter",
-                "show",
-                "dev",
-                PRODUCTION_PEER_IFACE,
-                "ingress",
-            ],
-        ),
+        command_spec(production_peer_attach_target().filter_show_command(false)),
     )
 }
 
@@ -330,10 +280,7 @@ pub(super) fn show_host_program(steps: &mut Vec<Value>) -> Value {
     run_observation_step(
         steps,
         "show-production-dae0-param-aware-ebpf-program-filter",
-        CommandSpec::new(
-            "tc",
-            ["filter", "show", "dev", PRODUCTION_HOST_IFACE, "ingress"],
-        ),
+        command_spec(production_host_attach_target().filter_show_command(false)),
     )
 }
 
@@ -341,61 +288,19 @@ pub(super) fn cleanup_production_topology(steps: &mut Vec<Value>) {
     let cleanup = [
         (
             "delete-production-dae0-param-aware-ebpf-program-filter",
-            CommandSpec::new(
-                "tc",
-                [
-                    "filter",
-                    "del",
-                    "dev",
-                    PRODUCTION_HOST_IFACE,
-                    "ingress",
-                    "pref",
-                    FILTER_PREF,
-                ],
-            ),
+            command_spec(production_host_attach_target().filter_del_command(FILTER_PREF)),
         ),
         (
             "delete-production-host-clsact-qdisc",
-            CommandSpec::new(
-                "tc",
-                ["qdisc", "del", "dev", PRODUCTION_HOST_IFACE, "clsact"],
-            ),
+            command_spec(production_host_attach_target().clsact_qdisc_del_command()),
         ),
         (
             "delete-production-dae0peer-param-aware-ebpf-program-filter",
-            CommandSpec::new(
-                "ip",
-                [
-                    "netns",
-                    "exec",
-                    PRODUCTION_NETNS,
-                    "tc",
-                    "filter",
-                    "del",
-                    "dev",
-                    PRODUCTION_PEER_IFACE,
-                    "ingress",
-                    "pref",
-                    FILTER_PREF,
-                ],
-            ),
+            command_spec(production_peer_attach_target().filter_del_command(FILTER_PREF)),
         ),
         (
             "delete-production-peer-clsact-qdisc",
-            CommandSpec::new(
-                "ip",
-                [
-                    "netns",
-                    "exec",
-                    PRODUCTION_NETNS,
-                    "tc",
-                    "qdisc",
-                    "del",
-                    "dev",
-                    PRODUCTION_PEER_IFACE,
-                    "clsact",
-                ],
-            ),
+            command_spec(production_peer_attach_target().clsact_qdisc_del_command()),
         ),
         (
             "delete-production-host-link",
@@ -409,6 +314,22 @@ pub(super) fn cleanup_production_topology(steps: &mut Vec<Value>) {
     for (name, spec) in cleanup {
         let _ = run_step(steps, name, spec);
     }
+}
+
+fn production_host_attach_target() -> TcAttachTarget {
+    TcAttachTarget::host(PRODUCTION_HOST_IFACE, TcAttachDirection::Ingress)
+}
+
+fn production_peer_attach_target() -> TcAttachTarget {
+    TcAttachTarget::netns(
+        PRODUCTION_NETNS,
+        PRODUCTION_PEER_IFACE,
+        TcAttachDirection::Ingress,
+    )
+}
+
+fn command_spec(command: TcCommandSpec) -> CommandSpec {
+    CommandSpec::new(command.program, command.args)
 }
 
 pub(super) fn preflight_checks(options: &ProductionRuntimeOwnerOptions) -> Vec<Value> {
