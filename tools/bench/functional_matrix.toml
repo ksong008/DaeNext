@@ -1,0 +1,425 @@
+[[case]]
+id = "config/parser_example"
+go_package = "."
+go_benchmark = "BenchmarkRebuildStage2Config/parser_example"
+rust_case = "config/parser_example"
+
+[[case]]
+id = "config/schema_example"
+go_package = "."
+go_benchmark = "BenchmarkRebuildStage2Config/schema_example"
+rust_case = "config/schema_example"
+
+[[case]]
+id = "config/include_merger"
+go_package = "."
+go_benchmark = "BenchmarkRebuildStage2Config/include_merger"
+rust_case = "config/include_merger"
+
+[[case]]
+id = "config/marshal_roundtrip_example"
+go_package = "."
+go_benchmark = "BenchmarkRebuildStage2Config/marshal_roundtrip_example"
+rust_case = "config/marshal_roundtrip_example"
+
+[[case]]
+id = "dns/packed_response_restore"
+go_package = "./control"
+go_benchmark = "BenchmarkFunctionalDnsPackedResponseRestore"
+rust_case = "dns/packed_response_restore"
+
+[[case]]
+id = "dns/data_zero_id"
+go_package = "./control"
+go_benchmark = "BenchmarkDnsDataWithZeroID"
+rust_case = "dns/data_zero_id"
+
+[[case]]
+id = "dns/cache_key_roundtrip"
+go_package = "./control"
+go_benchmark = "BenchmarkFunctionalDnsCacheKeyRoundtrip"
+rust_case = "dns/cache_key_roundtrip"
+
+[[case]]
+id = "dns/cache_ttl_lookup"
+go_package = "./control"
+go_benchmark = "BenchmarkFunctionalDnsCacheTtlLookup"
+rust_case = "dns/cache_ttl_lookup"
+
+[[case]]
+id = "dns/doh_get_request"
+go_package = "./control"
+go_benchmark = "BenchmarkFunctionalDnsDohGetRequest"
+rust_case = "dns/doh_get_request"
+
+[[case]]
+id = "dns/doh_post_request"
+go_package = "./control"
+go_benchmark = "BenchmarkFunctionalDnsDohPostRequest"
+rust_case = "dns/doh_post_request"
+
+[[case]]
+id = "dns/doh_validate_content_type"
+go_package = "./control"
+go_benchmark = "BenchmarkFunctionalDnsDohValidateContentType"
+rust_case = "dns/doh_validate_content_type"
+
+[[case]]
+id = "dns/validation_question_id"
+go_package = "./control"
+go_benchmark = "BenchmarkFunctionalDnsValidationQuestionID"
+rust_case = "dns/validation_question_id"
+
+[[case]]
+id = "dns/resolve_asis_guard"
+go_package = "./control"
+go_benchmark = "BenchmarkFunctionalDnsResolveAsisGuard"
+rust_case = "dns/resolve_asis_guard"
+
+[[case]]
+id = "routing/domain_matcher_bitmap"
+go_package = "."
+go_benchmark = "BenchmarkRebuildStage3RoutingGeodataSniffing/domain_matcher_bitmap"
+rust_case = "routing/domain_matcher_bitmap"
+
+[[case]]
+id = "routing/prefix_parse"
+go_package = "."
+go_benchmark = "BenchmarkRebuildStage3RoutingGeodataSniffing/routing_prefix_parse"
+rust_case = "routing/prefix_parse"
+
+[[case]]
+id = "geodata/streaming_geoip_hit"
+go_package = "."
+go_benchmark = "BenchmarkRebuildStage3RoutingGeodataSniffing/geodata_streaming_geoip_hit"
+rust_case = "geodata/streaming_geoip_hit"
+
+[[case]]
+id = "sniffing/http_host"
+go_package = "."
+go_benchmark = "BenchmarkRebuildStage3RoutingGeodataSniffing/sniffing_http_host"
+rust_case = "sniffing/http_host"
+
+[[case]]
+id = "outbound/select_min_latency"
+go_package = "./component/outbound"
+go_benchmark = "BenchmarkDialerGroupSelectMinLastLatency"
+rust_case = "outbound/select_min_latency"
+
+[[case]]
+id = "outbound/filter_annotate_regex"
+go_package = "./component/outbound"
+go_benchmark = "BenchmarkDialerSetFilterAndAnnotateRegex"
+rust_case = "outbound/filter_annotate_regex"
+
+[[case]]
+id = "protocol/socks5_address_codec"
+go_package = "./component/outbound"
+go_benchmark = "BenchmarkSocks5NativeOptInAddressCodec"
+rust_case = "protocol/socks5_address_codec"
+
+[[case]]
+id = "protocol/socks5_handshake_bytes"
+go_package = "./component/outbound"
+go_benchmark = "BenchmarkSocks5NativeOptInHandshakeBytes"
+rust_case = "protocol/socks5_handshake_bytes"
+
+[[case]]
+id = "protocol/socks5_udp_packet_wrap"
+go_package = "./component/outbound"
+go_benchmark = "BenchmarkSocks5NativeOptInUdpPacketWrap"
+rust_case = "protocol/socks5_udp_packet_wrap"
+
+[[case]]
+id = "protocol/vless_parse_link"
+go_package = "./component/outbound"
+go_benchmark = "BenchmarkVLESSNativeOptInParseLink"
+rust_case = "protocol/vless_parse_link"
+
+[[case]]
+id = "protocol/vless_password_to_key"
+go_package = "./component/outbound"
+go_benchmark = "BenchmarkVLESSNativeOptInPassword2Key"
+rust_case = "protocol/vless_password_to_key"
+
+[[case]]
+id = "protocol/vless_request_header"
+go_package = "./component/outbound"
+go_benchmark = "BenchmarkVLESSNativeOptInRequestHeader"
+rust_case = "protocol/vless_request_header"
+
+[[case]]
+id = "protocol/vmess_parse_link"
+go_package = "./component/outbound"
+go_benchmark = "BenchmarkVMessNativeOptInParseLink"
+rust_case = "protocol/vmess_parse_link"
+
+[[case]]
+id = "protocol/vmess_metadata_bytes"
+go_package = "./component/outbound"
+go_benchmark = "BenchmarkVMessNativeOptInMetadataBytes"
+rust_case = "protocol/vmess_metadata_bytes"
+
+[[case]]
+id = "protocol/vmess_uuid5_compatibility"
+go_package = "./component/outbound"
+go_benchmark = "BenchmarkVMessNativeOptInUUID5Compatibility"
+rust_case = "protocol/vmess_uuid5_compatibility"
+
+[[case]]
+id = "protocol/shadowsocks_parse_link"
+go_package = "./component/outbound"
+go_benchmark = "BenchmarkShadowsocksNativeOptInParseLink"
+rust_case = "protocol/shadowsocks_parse_link"
+
+[[case]]
+id = "protocol/shadowsocks_metadata_bytes"
+go_package = "./component/outbound"
+go_benchmark = "BenchmarkShadowsocksNativeOptInMetadataBytes"
+rust_case = "protocol/shadowsocks_metadata_bytes"
+
+[[case]]
+id = "protocol/shadowsocks_ss2022_psk_split"
+go_package = "./component/outbound"
+go_benchmark = "BenchmarkShadowsocksNativeOptInSS2022PSKSplit"
+rust_case = "protocol/shadowsocks_ss2022_psk_split"
+
+[[case]]
+id = "protocol/trojan_parse_link"
+go_package = "./component/outbound"
+go_benchmark = "BenchmarkTrojanNativeOptInParseLink"
+rust_case = "protocol/trojan_parse_link"
+
+[[case]]
+id = "protocol/trojan_tcp_request_header"
+go_package = "./component/outbound"
+go_benchmark = "BenchmarkTrojanNativeOptInTCPRequestHeader"
+rust_case = "protocol/trojan_tcp_request_header"
+
+[[case]]
+id = "protocol/trojan_udp_packet"
+go_package = "./component/outbound"
+go_benchmark = "BenchmarkTrojanNativeOptInUDPPacket"
+rust_case = "protocol/trojan_udp_packet"
+
+[[case]]
+id = "protocol/http_parse_link"
+go_package = "./component/outbound"
+go_benchmark = "BenchmarkHTTPNativeOptInParseLink"
+rust_case = "protocol/http_parse_link"
+
+[[case]]
+id = "protocol/http_connect_request"
+go_package = "./component/outbound"
+go_benchmark = "BenchmarkHTTPNativeOptInConnectRequest"
+rust_case = "protocol/http_connect_request"
+
+[[case]]
+id = "protocol/http_forward_request"
+go_package = "./component/outbound"
+go_benchmark = "BenchmarkHTTPNativeOptInForwardRequest"
+rust_case = "protocol/http_forward_request"
+
+[[case]]
+id = "protocol/hysteria2_parse_link"
+go_package = "./component/outbound"
+go_benchmark = "BenchmarkHysteria2NativeOptInParseLink"
+rust_case = "protocol/hysteria2_parse_link"
+
+[[case]]
+id = "protocol/hysteria2_export_link"
+go_package = "./component/outbound"
+go_benchmark = "BenchmarkHysteria2NativeOptInExportLink"
+rust_case = "protocol/hysteria2_export_link"
+
+[[case]]
+id = "protocol/hysteria2_pin_normalize"
+go_package = "./component/outbound"
+go_benchmark = "BenchmarkHysteria2NativeOptInPinNormalize"
+rust_case = "protocol/hysteria2_pin_normalize"
+
+[[case]]
+id = "protocol/tuic_parse_link"
+go_package = "./component/outbound"
+go_benchmark = "BenchmarkTuicNativeOptInParseLink"
+rust_case = "protocol/tuic_parse_link"
+
+[[case]]
+id = "protocol/tuic_export_link"
+go_package = "./component/outbound"
+go_benchmark = "BenchmarkTuicNativeOptInExportLink"
+rust_case = "protocol/tuic_export_link"
+
+[[case]]
+id = "protocol/tuic_alpn_split"
+go_package = "./component/outbound"
+go_benchmark = "BenchmarkTuicNativeOptInAlpnSplit"
+rust_case = "protocol/tuic_alpn_split"
+
+[[case]]
+id = "protocol/juicity_parse_link"
+go_package = "./component/outbound"
+go_benchmark = "BenchmarkJuicityNativeOptInParseLink"
+rust_case = "protocol/juicity_parse_link"
+
+[[case]]
+id = "protocol/juicity_export_link"
+go_package = "./component/outbound"
+go_benchmark = "BenchmarkJuicityNativeOptInExportLink"
+rust_case = "protocol/juicity_export_link"
+
+[[case]]
+id = "protocol/juicity_pinned_decode"
+go_package = "./component/outbound"
+go_benchmark = "BenchmarkJuicityNativeOptInPinnedDecode"
+rust_case = "protocol/juicity_pinned_decode"
+
+[[case]]
+id = "protocol/anytls_parse_link"
+go_package = "./component/outbound"
+go_benchmark = "BenchmarkAnyTLSNativeOptInNewDialer"
+rust_case = "protocol/anytls_parse_link"
+
+[[case]]
+id = "protocol/anytls_auth_key"
+go_package = "./component/outbound"
+go_benchmark = "BenchmarkAnyTLSNativeOptInAuthKey"
+rust_case = "protocol/anytls_auth_key"
+
+[[case]]
+id = "protocol/anytls_frame"
+go_package = "./component/outbound"
+go_benchmark = "BenchmarkAnyTLSNativeOptInFrame"
+rust_case = "protocol/anytls_frame"
+
+[[case]]
+id = "protocol/anytls_underlay"
+go_package = "./component/outbound"
+go_benchmark = "BenchmarkAnyTLSNativeOptInUnderlay"
+rust_case = "protocol/anytls_underlay"
+
+[[case]]
+id = "protocol/shared_xhttp_mode"
+go_package = "./component/outbound"
+go_benchmark = "BenchmarkSharedTransportNativeOptInXHTTPMode"
+rust_case = "protocol/shared_xhttp_mode"
+
+[[case]]
+id = "protocol/shared_grpc_cache_key"
+go_package = "./component/outbound"
+go_benchmark = "BenchmarkSharedTransportNativeOptInGrpcCacheKey"
+rust_case = "protocol/shared_grpc_cache_key"
+
+[[case]]
+id = "protocol/shared_xhttp_path"
+go_package = "./component/outbound"
+go_benchmark = "BenchmarkSharedTransportNativeOptInXHTTPPath"
+rust_case = "protocol/shared_xhttp_path"
+
+[[case]]
+id = "protocol/shared_canonical_json"
+go_package = "./component/outbound"
+go_benchmark = "BenchmarkSharedTransportNativeOptInCanonicalJSON"
+rust_case = "protocol/shared_canonical_json"
+
+[[case]]
+id = "protocol/shared_timer_constants"
+go_package = "./component/outbound"
+go_benchmark = "BenchmarkSharedTransportNativeOptInTimerConstants"
+rust_case = "protocol/shared_timer_constants"
+
+[[case]]
+id = "control/magic_network_mark_mptcp"
+go_package = "./control"
+go_benchmark = "BenchmarkRebuildStage7MagicNetworkMarkMptcp"
+rust_case = "control/magic_network_mark_mptcp"
+
+[[case]]
+id = "control/choose_dial_target_domain"
+go_package = "./control"
+go_benchmark = "BenchmarkFunctionalControlChooseDialTargetDomain"
+rust_case = "control/choose_dial_target_domain"
+
+[[case]]
+id = "control/choose_dial_target_domain_plus_plus"
+go_package = "./control"
+go_benchmark = "BenchmarkFunctionalControlChooseDialTargetDomainPlusPlus"
+rust_case = "control/choose_dial_target_domain_plus_plus"
+
+[[case]]
+id = "control/udp_endpoint_trim_target"
+go_package = "./control"
+go_benchmark = "BenchmarkRebuildStage7UdpEndpointTrimTarget"
+rust_case = "control/udp_endpoint_trim_target"
+
+[[case]]
+id = "engine/runtime_overview"
+go_package = "./engine"
+go_benchmark = "BenchmarkEngineRuntimeOverviewNoControlPlane"
+rust_case = "engine/runtime_overview"
+
+[[case]]
+id = "engine/runtime_overview_scoped_udp"
+go_package = "./engine"
+go_benchmark = "BenchmarkEngineRuntimeOverviewScopedUdpTaskPool"
+rust_case = "engine/runtime_overview_scoped_udp"
+
+[[case]]
+id = "engine/route_aware_target"
+go_package = "./engine"
+go_benchmark = "BenchmarkEngineRouteAwareTarget"
+rust_case = "engine/route_aware_target"
+
+[[case]]
+id = "engine/parse_config_api"
+go_package = "./engine"
+go_benchmark = "BenchmarkEngineParseConfigAPI"
+rust_case = "engine/parse_config_api"
+
+[[case]]
+id = "engine/read_config_file_minimal"
+go_package = "./engine"
+go_benchmark = "BenchmarkEngineReadConfigFileMinimal"
+rust_case = "engine/read_config_file_minimal"
+
+[[case]]
+id = "engine/necessary_outbounds"
+go_package = "./engine"
+go_benchmark = "BenchmarkEngineNecessaryOutbounds"
+rust_case = "engine/necessary_outbounds"
+
+[[case]]
+id = "engine/subscription_persist_cleanup"
+go_package = "./engine"
+go_benchmark = "BenchmarkEngineSubscriptionPersistCleanup"
+rust_case = "engine/subscription_persist_cleanup"
+
+[[case]]
+id = "trace/ringbuf_parse"
+go_package = "./trace"
+go_benchmark = "BenchmarkRebuildStage8TraceRingbufParse"
+rust_case = "trace/ringbuf_parse"
+
+[[case]]
+id = "trace/tracker_add"
+go_package = "./trace"
+go_benchmark = "BenchmarkRebuildStage8TraceTrackerAdd"
+rust_case = "trace/tracker_add"
+
+[[case]]
+id = "sysdump/enum_strings"
+go_package = "./cmd"
+go_benchmark = "BenchmarkRebuildStage8SysdumpEnumStrings"
+rust_case = "sysdump/enum_strings"
+
+[[case]]
+id = "cli/validate_minimal_config"
+go_package = "./cmd"
+go_benchmark = "BenchmarkCliValidateMinimalConfig"
+rust_case = "cli/validate_minimal_config"
+
+[[case]]
+id = "cli/export_outline"
+go_package = "./cmd"
+go_benchmark = "BenchmarkCliExportOutline"
+rust_case = "cli/export_outline"

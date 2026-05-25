@@ -593,6 +593,11 @@ func macCase(name string, input string) map[string]any {
 func rebuildGoldenConfigParserAst(t *testing.T) any {
 	t.Helper()
 
+	example, err := os.ReadFile("example.dae")
+	if err != nil {
+		t.Fatalf("read example.dae: %v", err)
+	}
+
 	return map[string]any{
 		"name": "config-parser-ast-basic",
 		"source": []string{
@@ -644,6 +649,7 @@ global {
 }
 `),
 		},
+		"example_dae": configParserAstFileCase(t, "example.dae", example),
 	}
 }
 
@@ -662,6 +668,37 @@ func configParserAstCase(t *testing.T, name string, input string) map[string]any
 	}
 	out["sections"] = projectConfigParserSections(sections)
 	return out
+}
+
+func configParserAstFileCase(t *testing.T, inputName string, input []byte) map[string]any {
+	t.Helper()
+
+	sections, err := config_parser.Parse(string(input))
+	if err != nil {
+		t.Fatalf("parse %s: %v", inputName, err)
+	}
+	projected := projectConfigParserSections(sections)
+	projectedJSON, err := json.Marshal(projected)
+	if err != nil {
+		t.Fatalf("marshal parser projection for %s: %v", inputName, err)
+	}
+	sectionStrings := projectConfigParserSectionStrings(sections)
+	stringProjection := strings.Join(sectionStrings, "\n\n")
+	inputSum := sha256.Sum256(input)
+	projectionSum := sha256.Sum256(projectedJSON)
+	stringSum := sha256.Sum256([]byte(stringProjection))
+
+	return map[string]any{
+		"input":                         inputName,
+		"input_sha256":                  hex.EncodeToString(inputSum[:]),
+		"section_count":                 len(sections),
+		"item_count_recursive":          countConfigParserItems(sections),
+		"sections_projection_sha256":    hex.EncodeToString(projectionSum[:]),
+		"section_strings_sha256":        hex.EncodeToString(stringSum[:]),
+		"section_string_join_separator": "\n\n",
+		"sections":                      projected,
+		"section_strings":               sectionStrings,
+	}
 }
 
 type rebuildGoldenParserSection struct {
@@ -701,6 +738,33 @@ func projectConfigParserSections(sections []*config_parser.Section) []rebuildGol
 		out = append(out, projectConfigParserSection(section))
 	}
 	return out
+}
+
+func projectConfigParserSectionStrings(sections []*config_parser.Section) []string {
+	out := make([]string, 0, len(sections))
+	for _, section := range sections {
+		out = append(out, section.String(false, false))
+	}
+	return out
+}
+
+func countConfigParserItems(sections []*config_parser.Section) int {
+	total := 0
+	for _, section := range sections {
+		total += countConfigParserSectionItems(section)
+	}
+	return total
+}
+
+func countConfigParserSectionItems(section *config_parser.Section) int {
+	total := len(section.Items)
+	for _, item := range section.Items {
+		nested, ok := item.Value.(*config_parser.Section)
+		if ok {
+			total += countConfigParserSectionItems(nested)
+		}
+	}
+	return total
 }
 
 func projectConfigParserSection(section *config_parser.Section) rebuildGoldenParserSection {

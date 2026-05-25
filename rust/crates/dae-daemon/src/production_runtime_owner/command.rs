@@ -9,7 +9,10 @@ use std::time::Duration;
 use dae_ebpf_support::map_ids;
 use serde_json::{Value, json};
 
+use super::host_ops::HostOps;
 use super::{PRODUCTION_HOST_IFACE, PRODUCTION_NETNS, PRODUCTION_PEER_IFACE};
+
+pub(super) use super::host_ops::HostOpSpec as CommandSpec;
 
 pub(super) fn wait_for_loaded_map_cleanup(discovered_map_ids: &[Option<u32>]) -> (Vec<u32>, bool) {
     let ids = discovered_map_ids
@@ -48,85 +51,21 @@ pub(super) fn push_check(
     }));
 }
 
-#[derive(Debug)]
-pub(super) struct CommandSpec {
-    program: String,
-    args: Vec<String>,
-}
-
-impl CommandSpec {
-    pub(super) fn new(
-        program: impl Into<String>,
-        args: impl IntoIterator<Item = impl Into<String>>,
-    ) -> Self {
-        Self {
-            program: program.into(),
-            args: args.into_iter().map(Into::into).collect(),
-        }
-    }
-}
-
 pub(super) fn run_step(steps: &mut Vec<Value>, name: &str, spec: CommandSpec) -> bool {
-    let output = Command::new(&spec.program).args(&spec.args).output();
-    let (status, code, stdout, stderr) = command_output(output);
-    steps.push(json!({
-        "name": name,
-        "status": status,
-        "program": spec.program,
-        "args": spec.args,
-        "exit_code": code,
-        "stdout": stdout,
-        "stderr": stderr,
-    }));
-    status == "pass"
+    let result = HostOps::run_named(name, spec);
+    let passed = result.passed();
+    steps.push(result.to_step_json());
+    passed
 }
 
 pub(super) fn run_observation_step(steps: &mut Vec<Value>, name: &str, spec: CommandSpec) -> Value {
-    let output = Command::new(&spec.program).args(&spec.args).output();
-    let (status, code, stdout, stderr) = command_output(output);
-    let value = json!({
-        "name": name,
-        "status": status,
-        "program": spec.program,
-        "args": spec.args,
-        "exit_code": code,
-        "stdout": stdout,
-        "stderr": stderr,
-    });
+    let value = HostOps::observe_named(name, spec).to_step_json();
     steps.push(value.clone());
     value
 }
 
 pub(super) fn run_observation_command(spec: CommandSpec) -> Value {
-    let output = Command::new(&spec.program).args(&spec.args).output();
-    let (status, code, stdout, stderr) = command_output(output);
-    json!({
-        "name": Value::Null,
-        "status": status,
-        "program": spec.program,
-        "args": spec.args,
-        "exit_code": code,
-        "stdout": stdout,
-        "stderr": stderr,
-    })
-}
-
-fn command_output(
-    output: std::io::Result<std::process::Output>,
-) -> (&'static str, Option<i32>, String, String) {
-    match output {
-        Ok(output) => (
-            if output.status.success() {
-                "pass"
-            } else {
-                "fail"
-            },
-            output.status.code(),
-            String::from_utf8_lossy(&output.stdout).trim().to_owned(),
-            String::from_utf8_lossy(&output.stderr).trim().to_owned(),
-        ),
-        Err(err) => ("fail", None, String::new(), err.to_string()),
-    }
+    HostOps::observe(spec).to_step_json()
 }
 
 pub(super) fn command_exists(command: &str) -> bool {
