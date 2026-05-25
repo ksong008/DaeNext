@@ -2,7 +2,7 @@ use super::*;
 
 #[test]
 fn true_default_daemon_admission_contract_matches_golden_fixture() {
-    let fixture = load("product/daemon/stage23_true_default_daemon_admission.json");
+    let fixture = load("product/daemon/true_default_daemon_admission.json");
     let contract = true_default_daemon_admission_contract();
     assert_eq!(contract.name, fixture["name"].as_str().unwrap());
     assert_eq!(contract.stage, fixture["stage"].as_str().unwrap());
