@@ -158,10 +158,11 @@ pub fn validate_uuid(input: &str) -> Result<(), OutboundError> {
 }
 
 pub fn split_alpn(input: &str) -> Vec<String> {
-    input
-        .split(',')
-        .map(|value| value.trim().to_owned())
-        .collect()
+    split_alpn_ref(input).map(str::to_owned).collect()
+}
+
+pub fn split_alpn_ref(input: &str) -> impl Iterator<Item = &str> {
+    input.split(',').map(str::trim)
 }
 
 pub fn underlay_contract(network: &str, mark: u32, mptcp: bool) -> TuicUnderlayContract {

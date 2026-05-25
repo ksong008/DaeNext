@@ -2,9 +2,9 @@ use std::net::{SocketAddrV4, UdpSocket};
 
 use dae_dns::{
     ACTIVE_DNS_DEFAULT_QNAME, ACTIVE_DNS_DEFAULT_TARGET_IP, ACTIVE_DNS_DEFAULT_TARGET_PORT,
-    ACTIVE_DNS_DEFAULT_UPSTREAM_IP, ACTIVE_DNS_DEFAULT_UPSTREAM_PORT, active_dns_cache_contract,
-    active_dns_question_matches, build_active_dns_a_response, parse_message,
-    validate_dns_response_for_request,
+    ACTIVE_DNS_DEFAULT_UPSTREAM_IP, ACTIVE_DNS_DEFAULT_UPSTREAM_PORT, DnsPacketView,
+    active_dns_cache_contract, active_dns_packet_question_matches, build_active_dns_a_response,
+    validate_dns_packet_response_for_request,
 };
 use serde_json::{Value, json};
 
@@ -80,7 +80,7 @@ pub(super) fn dns_upstream_echo_probe(socket: UdpSocket, expected_qname: &str) -
         }
     };
     let request = &buf[..read];
-    let req = match parse_message(request) {
+    let req = match DnsPacketView::parse(request) {
         Ok(req) => req,
         Err(err) => {
             return json!({
@@ -91,10 +91,35 @@ pub(super) fn dns_upstream_echo_probe(socket: UdpSocket, expected_qname: &str) -
             });
         }
     };
-    let question_matches = req
-        .questions
-        .first()
-        .is_some_and(|question| active_dns_question_matches(question, expected_qname));
+    if req.response() {
+        return json!({
+            "status": "fail",
+            "local_addr": local_addr,
+            "accepted": 1,
+            "error": "DNS upstream request expected, response received",
+        });
+    }
+    let Some(question) = req.questions().next() else {
+        return json!({
+            "status": "fail",
+            "local_addr": local_addr,
+            "accepted": 1,
+            "error": "DNS upstream request has no question",
+        });
+    };
+    let qname = match question.qname_to_canonical_string() {
+        Ok(qname) => qname,
+        Err(err) => {
+            return json!({
+                "status": "fail",
+                "local_addr": local_addr,
+                "accepted": 1,
+                "error": format!("parse DNS upstream question: {err}"),
+            });
+        }
+    };
+    let question_matches =
+        active_dns_packet_question_matches(&question, expected_qname).unwrap_or(false);
     let response = match build_active_dns_a_response(request, RESPONSE_IP, RESPONSE_TTL) {
         Ok(response) => response,
         Err(err) => {
@@ -106,18 +131,8 @@ pub(super) fn dns_upstream_echo_probe(socket: UdpSocket, expected_qname: &str) -
             });
         }
     };
-    let resp = match parse_message(&response) {
-        Ok(resp) => resp,
-        Err(err) => {
-            return json!({
-                "status": "fail",
-                "local_addr": local_addr,
-                "accepted": 1,
-                "error": format!("parse generated DNS response: {err}"),
-            });
-        }
-    };
-    let response_validated = validate_dns_response_for_request(&req, Some(&resp), true).is_ok();
+    let response_validated =
+        validate_dns_packet_response_for_request(request, Some(&response), true).is_ok();
     if let Err(err) = socket.send_to(&response, peer) {
         return json!({
             "status": "fail",
@@ -131,9 +146,9 @@ pub(super) fn dns_upstream_echo_probe(socket: UdpSocket, expected_qname: &str) -
         "local_addr": local_addr,
         "accepted": 1,
         "peer": peer.to_string(),
-        "qname": req.questions.first().map(|question| question.qname.clone()),
-        "qtype": req.questions.first().map(|question| question.qtype),
-        "qclass": req.questions.first().map(|question| question.qclass),
+        "qname": qname,
+        "qtype": question.qtype(),
+        "qclass": question.qclass(),
         "question_matches": question_matches,
         "response_validated": response_validated,
         "response_ip": RESPONSE_IP_TEXT,

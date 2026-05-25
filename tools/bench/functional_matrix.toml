@@ -71,6 +71,18 @@ go_benchmark = "BenchmarkFunctionalDnsValidationQuestionID"
 rust_case = "dns/validation_question_id"
 
 [[case]]
+id = "dns/packet_view_validate_question_id"
+go_package = "./control"
+go_benchmark = "BenchmarkFunctionalDnsRawPacketValidationQuestionID"
+rust_case = "dns/packet_view_validate_question_id"
+
+[[case]]
+id = "dns/packet_view_answers_ttl_ip_cname"
+go_package = "./control"
+go_benchmark = "BenchmarkFunctionalDnsRawPacketAnswersTTLIPCNAME"
+rust_case = "dns/packet_view_answers_ttl_ip_cname"
+
+[[case]]
 id = "dns/resolve_asis_guard"
 go_package = "./control"
 go_benchmark = "BenchmarkFunctionalDnsResolveAsisGuard"

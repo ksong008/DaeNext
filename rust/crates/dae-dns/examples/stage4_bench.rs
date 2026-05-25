@@ -2,8 +2,8 @@ use std::hint::black_box;
 use std::time::Instant;
 
 use dae_dns::{
-    DnsCacheEntry, DnsCacheKey, DnsCacheStore, DnsMessage, DnsQuestion, build_doh_request,
-    dns_data_with_zero_id, validate_dns_response_for_request,
+    DnsCacheEntry, DnsCacheKey, DnsCacheStore, build_doh_request, dns_data_with_zero_id,
+    validate_dns_packet_response_for_request,
 };
 
 fn main() {
@@ -31,13 +31,19 @@ fn main() {
         );
     });
 
-    let req = DnsMessage::new(0x1111, false, vec![DnsQuestion::new("example.com.", 1, 1)]);
-    let resp = DnsMessage::new(0x1111, true, vec![DnsQuestion::new("example.com.", 1, 1)]);
+    let req = [
+        0x11, 0x11, 0x01, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x07, b'e', b'x',
+        b'a', b'm', b'p', b'l', b'e', 0x03, b'c', b'o', b'm', 0x00, 0x00, 0x01, 0x00, 0x01,
+    ];
+    let resp = [
+        0x11, 0x11, 0x81, 0x80, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x07, b'e', b'x',
+        b'a', b'm', b'p', b'l', b'e', 0x03, b'c', b'o', b'm', 0x00, 0x00, 0x01, 0x00, 0x01,
+    ];
     bench("dns_validate_response", iters, || {
         black_box(
-            validate_dns_response_for_request(
+            validate_dns_packet_response_for_request(
                 black_box(&req),
-                black_box(Some(&resp)),
+                black_box(Some(resp.as_slice())),
                 black_box(true),
             )
             .unwrap(),

@@ -1,7 +1,16 @@
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 
-use crate::cache_key::canonical_name;
-use crate::error::DnsError;
+use crate::cache_key::canonical_name_lowercase;
+use crate::error::{DnsError, DnsValidationError};
+
+mod packet_answer_view;
+mod packet_view;
+
+pub use packet_answer_view::{DnsPacketAnswerIter, DnsPacketAnswerView, DnsPacketNameView};
+pub use packet_view::{
+    DnsPacketQuestionIter, DnsPacketQuestionView, DnsPacketView,
+    validate_dns_packet_response_for_request, validate_dns_packet_response_for_request_fast,
+};
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct DnsQuestion {
@@ -13,7 +22,7 @@ pub struct DnsQuestion {
 impl DnsQuestion {
     pub fn new(qname: impl AsRef<str>, qtype: u16, qclass: u16) -> Self {
         Self {
-            qname: canonical_name(qname.as_ref()).to_ascii_lowercase(),
+            qname: canonical_name_lowercase(qname.as_ref()),
             qtype,
             qclass,
         }
@@ -110,17 +119,41 @@ pub fn restore_packed_response_request_id(packed: &[u8], request_id: u16) -> Opt
     Some(restored)
 }
 
+pub fn restore_packed_response_request_id_into(
+    packed: &[u8],
+    request_id: u16,
+    out: &mut Vec<u8>,
+) -> Option<()> {
+    if packed.len() < 2 {
+        return None;
+    }
+    out.clear();
+    out.extend_from_slice(packed);
+    out[0] = (request_id >> 8) as u8;
+    out[1] = request_id as u8;
+    Some(())
+}
+
 pub fn validate_dns_response_for_request(
     req: &DnsMessage,
     resp: Option<&DnsMessage>,
     require_matching_id: bool,
 ) -> Result<(), DnsError> {
-    let resp = resp.ok_or(DnsError::DnsResponseNil)?;
+    validate_dns_response_for_request_fast(req, resp, require_matching_id)
+        .map_err(|err| validation_error_to_dns_error(err, req, resp))
+}
+
+pub fn validate_dns_response_for_request_fast(
+    req: &DnsMessage,
+    resp: Option<&DnsMessage>,
+    require_matching_id: bool,
+) -> Result<(), DnsValidationError> {
+    let resp = resp.ok_or(DnsValidationError::DnsResponseNil)?;
     if !resp.response {
-        return Err(DnsError::DnsRequestReceived);
+        return Err(DnsValidationError::DnsRequestReceived);
     }
     if require_matching_id && resp.id != req.id {
-        return Err(DnsError::IdMismatch {
+        return Err(DnsValidationError::IdMismatch {
             got: resp.id,
             want: req.id,
         });
@@ -129,10 +162,10 @@ pub fn validate_dns_response_for_request(
         return Ok(());
     }
     if resp.questions.is_empty() {
-        return Err(DnsError::MissingQuestion);
+        return Err(DnsValidationError::MissingQuestion);
     }
     if resp.questions.len() != req.questions.len() {
-        return Err(DnsError::QuestionCountMismatch {
+        return Err(DnsValidationError::QuestionCountMismatch {
             got: resp.questions.len(),
             want: req.questions.len(),
         });
@@ -141,13 +174,37 @@ pub fn validate_dns_response_for_request(
         if want == got {
             continue;
         }
-        return Err(DnsError::QuestionMismatch {
-            index,
-            got: format_dns_question(got),
-            want: format_dns_question(want),
-        });
+        return Err(DnsValidationError::QuestionMismatch { index });
     }
     Ok(())
+}
+
+fn validation_error_to_dns_error(
+    error: DnsValidationError,
+    req: &DnsMessage,
+    resp: Option<&DnsMessage>,
+) -> DnsError {
+    match error {
+        DnsValidationError::DnsResponseNil => DnsError::DnsResponseNil,
+        DnsValidationError::DnsRequestReceived => DnsError::DnsRequestReceived,
+        DnsValidationError::MissingQuestion => DnsError::MissingQuestion,
+        DnsValidationError::QuestionCountMismatch { got, want } => {
+            DnsError::QuestionCountMismatch { got, want }
+        }
+        DnsValidationError::QuestionMismatch { index } => {
+            let got = resp
+                .and_then(|message| message.questions.get(index))
+                .map(format_dns_question)
+                .unwrap_or_default();
+            let want = req
+                .questions
+                .get(index)
+                .map(format_dns_question)
+                .unwrap_or_default();
+            DnsError::QuestionMismatch { index, got, want }
+        }
+        DnsValidationError::IdMismatch { got, want } => DnsError::IdMismatch { got, want },
+    }
 }
 
 pub fn parse_message(packet: &[u8]) -> Result<DnsMessage, DnsError> {
@@ -184,7 +241,7 @@ pub fn parse_message(packet: &[u8]) -> Result<DnsMessage, DnsError> {
         }
         let answer = match (qtype, qclass, rdlen) {
             (1, 1, 4) => DnsAnswer::A {
-                name: canonical_name(&name).to_ascii_lowercase(),
+                name: canonical_name_lowercase(&name),
                 ttl,
                 addr: Ipv4Addr::new(
                     packet[offset],
@@ -197,7 +254,7 @@ pub fn parse_message(packet: &[u8]) -> Result<DnsMessage, DnsError> {
                 let mut octets = [0u8; 16];
                 octets.copy_from_slice(&packet[offset..offset + 16]);
                 DnsAnswer::Aaaa {
-                    name: canonical_name(&name).to_ascii_lowercase(),
+                    name: canonical_name_lowercase(&name),
                     ttl,
                     addr: Ipv6Addr::from(octets),
                 }
@@ -205,13 +262,13 @@ pub fn parse_message(packet: &[u8]) -> Result<DnsMessage, DnsError> {
             (5, 1, _) => {
                 let (target, _) = read_name(packet, offset, 0)?;
                 DnsAnswer::Cname {
-                    name: canonical_name(&name).to_ascii_lowercase(),
+                    name: canonical_name_lowercase(&name),
                     ttl,
-                    target: canonical_name(&target).to_ascii_lowercase(),
+                    target: canonical_name_lowercase(&target),
                 }
             }
             _ => DnsAnswer::Other {
-                name: canonical_name(&name).to_ascii_lowercase(),
+                name: canonical_name_lowercase(&name),
                 qtype,
                 ttl,
             },
