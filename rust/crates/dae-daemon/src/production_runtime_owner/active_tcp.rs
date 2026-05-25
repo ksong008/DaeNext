@@ -1,3 +1,9 @@
+use dae_datapath::{
+    ACTIVE_TCP_CLIENT_NETNS, ACTIVE_TCP_DEFAULT_CLIENT_IP, ACTIVE_TCP_DEFAULT_MPTCP,
+    ACTIVE_TCP_DEFAULT_SO_MARK, ACTIVE_TCP_DEFAULT_TARGET_IP, ACTIVE_TCP_DEFAULT_TARGET_PORT,
+    ACTIVE_TCP_LAN_CLIENT_IFACE, ACTIVE_TCP_LAN_FILTER_PREF, ACTIVE_TCP_LAN_GATEWAY_IP,
+    ACTIVE_TCP_LAN_HOST_IFACE, ACTIVE_TCP_LAN_SECTION,
+};
 use serde_json::{Value, json};
 
 use super::ProductionRuntimeOwnerOptions;
@@ -16,21 +22,18 @@ pub(super) use topology::{
     show_host_program_stats, show_lan_program, show_lan_program_stats, show_peer_program_stats,
 };
 
-pub(super) const DEFAULT_ACTIVE_TCP_TARGET_IP: &str = "198.18.50.1";
-pub(super) const DEFAULT_ACTIVE_TCP_CLIENT_IP: &str = "10.220.50.2";
-pub(super) const DEFAULT_ACTIVE_TCP_TARGET_PORT: u16 = 18080;
-pub(super) const DEFAULT_ACTIVE_TCP_SO_MARK: u32 = 1234;
-pub(super) const DEFAULT_ACTIVE_TCP_MPTCP: bool = true;
+pub(super) const DEFAULT_ACTIVE_TCP_TARGET_IP: &str = ACTIVE_TCP_DEFAULT_TARGET_IP;
+pub(super) const DEFAULT_ACTIVE_TCP_CLIENT_IP: &str = ACTIVE_TCP_DEFAULT_CLIENT_IP;
+pub(super) const DEFAULT_ACTIVE_TCP_TARGET_PORT: u16 = ACTIVE_TCP_DEFAULT_TARGET_PORT;
+pub(super) const DEFAULT_ACTIVE_TCP_SO_MARK: u32 = ACTIVE_TCP_DEFAULT_SO_MARK;
+pub(super) const DEFAULT_ACTIVE_TCP_MPTCP: bool = ACTIVE_TCP_DEFAULT_MPTCP;
 
-const DEFAULT_LAN_GATEWAY_IP: &str = "10.220.50.1";
-const DEFAULT_LAN_SECTION: &str = "tc/lan_ingress_l2";
-const LAN_FILTER_PREF: &str = "49501";
-pub(in crate::production_runtime_owner) const CLIENT_NETNS: &str = "dae50client";
-const LAN_HOST_IFACE: &str = "dae50lan0";
-const LAN_CLIENT_IFACE: &str = "dae50cli0";
-const ROUTING_MAP_KERNEL_NAME: &str = "routing_map";
-const MATCH_TYPE_FALLBACK: u8 = 10;
-const OUTBOUND_ACTIVE_TCP_PROXY: u8 = 2;
+const DEFAULT_LAN_GATEWAY_IP: &str = ACTIVE_TCP_LAN_GATEWAY_IP;
+const DEFAULT_LAN_SECTION: &str = ACTIVE_TCP_LAN_SECTION;
+const LAN_FILTER_PREF: &str = ACTIVE_TCP_LAN_FILTER_PREF;
+pub(in crate::production_runtime_owner) const CLIENT_NETNS: &str = ACTIVE_TCP_CLIENT_NETNS;
+const LAN_HOST_IFACE: &str = ACTIVE_TCP_LAN_HOST_IFACE;
+const LAN_CLIENT_IFACE: &str = ACTIVE_TCP_LAN_CLIENT_IFACE;
 const TCP_PAYLOAD: &[u8] = b"stage50-tcp-ping";
 const TCP_RESPONSE: &[u8] = b"stage50-tcp-ack";
 const RELAY_TCP_PAYLOAD: &[u8] = b"stage51-tcp-relay-ping";

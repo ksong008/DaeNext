@@ -6,7 +6,8 @@ use dae_datapath::{
     DNS_NAT_TIMEOUT_MS, UdpDirectPacketConn, UdpDirectSocketOptions, magic_network_bytes,
 };
 use dae_dns::{
-    DnsCacheEntry, DnsCacheKey, DnsCacheStore, parse_message, validate_dns_response_for_request,
+    ACTIVE_DNS_QCLASS_IN, ACTIVE_DNS_QTYPE_A, DnsCacheEntry, DnsCacheKey, DnsCacheStore,
+    active_dns_question_matches, parse_message, validate_dns_response_for_request,
 };
 use dae_ebpf_support::open_transparent_udp_socket_bound_in_netns;
 use dae_netutil::parse_magic_network;
@@ -65,10 +66,7 @@ pub(super) fn dns_tproxy_cache_probe(
         let Some(question) = req.questions.first() else {
             return json!({"status": "fail", "error": "DNS request has no question"});
         };
-        if question.qname != DnsCacheKey::new(expected_qname, question.qtype, question.qclass).qname
-            || question.qtype != 1
-            || question.qclass != 1
-        {
+        if !active_dns_question_matches(question, expected_qname) {
             return json!({
                 "status": "fail",
                 "error": "unexpected DNS question",
@@ -220,8 +218,8 @@ pub(super) fn dns_tproxy_cache_probe(
             "status": if received_queries == iterations && validated_responses == iterations { "pass" } else { "fail" },
             "dns_udp53_controller_path": true,
             "qname": expected_qname,
-            "qtype": 1,
-            "qclass": 1,
+            "qtype": ACTIVE_DNS_QTYPE_A,
+            "qclass": ACTIVE_DNS_QCLASS_IN,
             "validated_responses": validated_responses,
             "cache_key": cache_key,
             "response_ip": RESPONSE_IP_TEXT,

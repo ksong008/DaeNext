@@ -17,6 +17,7 @@ pub mod policy;
 pub mod shadowsocks;
 pub mod shared_transport;
 pub mod socks5;
+pub mod surface;
 pub mod trojan;
 pub mod tuic;
 pub mod types;
@@ -46,6 +47,13 @@ pub use shadowsocks::{
     CipherFamily, CipherInfo, ShadowsocksLink, ShadowsocksMetadata, Sip003, Sip003Opts,
 };
 pub use socks5::{AddressKind, ServerReply, Socks5Address, Socks5Command, Socks5UdpDatagram};
+pub use surface::{
+    OutboundDependencyBoundary, OutboundDependencyContract, OutboundModuleContract,
+    OutboundSplitDecision, OutboundSurface, RuntimeOwnerSurface, RuntimeOwnership,
+    RuntimeOwnershipContract, TEST_SUPPORT_DEPENDENCIES, crate_split_decision,
+    dependency_boundary_contract, module_boundary_contract, public_api_contract,
+    runtime_ownership_contract,
+};
 pub use trojan::{
     TrojanLink, TrojanMetadata, TrojanNetwork, TrojanTcpExchangeReport, TrojanTcpRequest,
     TrojanTransportType, TrojanUdpOverTcpExchangeReport, TrojanUdpPacket,

@@ -1,15 +1,17 @@
 use std::net::{SocketAddrV4, UdpSocket};
 
 use dae_datapath::{
-    DEFAULT_NAT_TIMEOUT_MS, DEFAULT_UDP_ENDPOINT_POOL_MAX_ENTRIES, DNS_NAT_TIMEOUT_MS, MAX_RETRY,
+    ACTIVE_UDP_DEFAULT_TARGET_IP, ACTIVE_UDP_DEFAULT_TARGET_PORT, active_udp_endpoint_contract,
 };
 use serde_json::{Value, json};
 
 use super::UDP_PAYLOAD;
 use crate::production_runtime_owner::ProductionRuntimeOwnerOptions;
 
-pub(in crate::production_runtime_owner) const DEFAULT_ACTIVE_UDP_TARGET_IP: &str = "198.18.53.1";
-pub(in crate::production_runtime_owner) const DEFAULT_ACTIVE_UDP_TARGET_PORT: u16 = 18083;
+pub(in crate::production_runtime_owner) const DEFAULT_ACTIVE_UDP_TARGET_IP: &str =
+    ACTIVE_UDP_DEFAULT_TARGET_IP;
+pub(in crate::production_runtime_owner) const DEFAULT_ACTIVE_UDP_TARGET_PORT: u16 =
+    ACTIVE_UDP_DEFAULT_TARGET_PORT;
 
 pub(super) fn active_udp_target_addr(
     options: &ProductionRuntimeOwnerOptions,
@@ -24,16 +26,17 @@ pub(super) fn active_udp_target_addr(
 }
 
 pub(super) fn active_udp_endpoint_model_json(options: &ProductionRuntimeOwnerOptions) -> Value {
+    let contract = active_udp_endpoint_contract();
     json!({
         "status": "model-only",
-        "key_model": "client-source-full-cone",
+        "key_model": contract.key_model,
         "target": format!("{}:{}", options.active_udp_target_ip, options.active_udp_target_port),
-        "nat_timeout_ms": DEFAULT_NAT_TIMEOUT_MS,
-        "dns_nat_timeout_ms": DNS_NAT_TIMEOUT_MS,
-        "max_retry": MAX_RETRY,
-        "pool_max_entries_default": DEFAULT_UDP_ENDPOINT_POOL_MAX_ENTRIES,
-        "dns_udp53_excluded": true,
-        "live_endpoint_created": false,
+        "nat_timeout_ms": contract.nat_timeout_ms,
+        "dns_nat_timeout_ms": contract.dns_nat_timeout_ms,
+        "max_retry": contract.max_retry,
+        "pool_max_entries_default": contract.pool_max_entries_default,
+        "dns_udp53_excluded": contract.dns_udp53_excluded,
+        "live_endpoint_created": contract.live_endpoint_created,
     })
 }
 

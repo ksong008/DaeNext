@@ -101,6 +101,125 @@ fn map_catalog_matches_golden_fixture() {
 }
 
 #[test]
+fn ebpf_runtime_contracts_keep_abi_maps_and_loader_boundaries_explicit() {
+    let abi = bpf_abi_contract();
+    assert_eq!(abi.dae_param_size, size_of::<BpfDaeParam>());
+    assert_eq!(abi.task_comm_len, TASK_COMM_LEN);
+    assert_eq!(abi.max_match_set_len, MAX_MATCH_SET_LEN);
+    assert_eq!(abi.tproxy_mark, TPROXY_MARK);
+
+    let loader = loader_contract();
+    assert_eq!(loader.default_object_loader, LoaderBackend::TcCommandObject);
+    assert_eq!(loader.runtime_map_backend, LoaderBackend::RustSyscallMaps);
+    assert!(loader.aya_userspace_loader_planned);
+    assert!(loader.c_ebpf_object_fallback_required);
+    assert!(loader.go_fallback_preserved);
+    assert!(loader.param_rewrite_required_before_attach);
+
+    let maps = runtime_map_contract();
+    assert_eq!(maps.len(), map_catalog().len());
+    let listen = maps
+        .iter()
+        .find(|entry| entry.spec.name == "listen_socket_map")
+        .unwrap();
+    assert_eq!(listen.role, RuntimeMapRole::SocketHandoff);
+    assert!(!listen.reusable_pin);
+
+    for name in pinned_reuse_maps() {
+        let entry = maps.iter().find(|entry| entry.spec.name == *name).unwrap();
+        assert_eq!(entry.role, RuntimeMapRole::PinnedReuse);
+        assert!(entry.reusable_pin);
+        assert!(entry.spec.pinned_by_name());
+    }
+}
+
+#[test]
+fn attach_backend_plan_keeps_command_fallback_until_native_attach_is_available() {
+    let fallback = plan_attach_backend(
+        AttachBackend::Auto,
+        Some(Version::new(6, 6, 0)),
+        AttachBackendAvailability::command_fallback_only(),
+    );
+    assert!(fallback.tcx_supported);
+    assert_eq!(
+        fallback.attempt_order,
+        vec![
+            AttachBackend::Tcx,
+            AttachBackend::TcNetlink,
+            AttachBackend::TcCommandFallback,
+        ]
+    );
+    assert_eq!(fallback.selected, Some(AttachBackend::TcCommandFallback));
+    assert!(fallback.command_fallback_used);
+
+    let native_tcx = plan_attach_backend(
+        AttachBackend::Auto,
+        Some(Version::new(6, 6, 0)),
+        AttachBackendAvailability {
+            tcx: true,
+            tc_netlink: true,
+            tc_command_fallback: true,
+        },
+    );
+    assert_eq!(native_tcx.selected, Some(AttachBackend::Tcx));
+    assert!(!native_tcx.command_fallback_used);
+}
+
+#[test]
+fn tc_attach_contract_generates_existing_command_fallback_shape() {
+    let peer = TcBpfAttachSpec::new(
+        TcAttachTarget::netns("daens", "dae0peer", TcAttachDirection::Ingress),
+        "49491",
+        "/tmp/bpf_bpfel.param.o",
+        "tc/dae0peer_ingress",
+    );
+    let add = peer.filter_add_command();
+    assert_eq!(add.program, "ip");
+    assert_eq!(
+        add.args,
+        vec![
+            "netns",
+            "exec",
+            "daens",
+            "tc",
+            "filter",
+            "add",
+            "dev",
+            "dae0peer",
+            "ingress",
+            "pref",
+            "49491",
+            "bpf",
+            "da",
+            "obj",
+            "/tmp/bpf_bpfel.param.o",
+            "sec",
+            "tc/dae0peer_ingress",
+        ]
+    );
+    assert_eq!(
+        peer.filter_show_command(true).args,
+        vec![
+            "netns", "exec", "daens", "tc", "-s", "filter", "show", "dev", "dae0peer", "ingress",
+        ]
+    );
+    assert_eq!(
+        peer.filter_del_command().args,
+        vec![
+            "netns", "exec", "daens", "tc", "filter", "del", "dev", "dae0peer", "ingress", "pref",
+            "49491",
+        ]
+    );
+
+    let host = TcAttachTarget::host("dae0", TcAttachDirection::Ingress);
+    assert_eq!(host.clsact_qdisc_add_command().program, "tc");
+    assert_eq!(
+        host.clsact_qdisc_add_command().args,
+        vec!["qdisc", "add", "dev", "dae0", "clsact"]
+    );
+}
+
+#[test]
 fn kernel_feature_gates_match_golden_fixture() {
     let fixture = load("ebpf/kernel_features/basic.json");
     for feature in fixture["features"].as_array().unwrap() {

@@ -3,9 +3,32 @@ use std::io::Write;
 #[cfg(unix)]
 use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
 use std::path::{Path, PathBuf};
-use std::process::Command;
 
 use serde_json::{Map, Value, json};
+
+mod host_write_safety;
+mod repo_inspection;
+mod rollback_model;
+mod service_contract;
+mod support;
+mod topology;
+mod typed_report;
+
+use host_write_safety::{
+    production_run_command_apply_plan_blockers, production_run_command_apply_plan_blockers_json,
+    production_run_command_execution_blockers, production_run_command_execution_blockers_json,
+};
+use repo_inspection::repo_status_json;
+use rollback_model::{make_user_executable, rollback_script_content};
+use service_contract::{
+    candidate_service_contract_report, candidate_validate_report, service_contract_json,
+};
+use support::{ensure_safe_run_root, path_string};
+use topology::{ProductChainTopology, ProductChainTopologyKind, product_chain_topology};
+use typed_report::{
+    ProductChainTypedReportSummary, remaining_blockers, runtime_control_api_clean_baseline_json,
+    value_string_array,
+};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ProductChainRecertificationOptions {
@@ -58,54 +81,6 @@ pub struct ProductChainAdmissionEvidence {
     pub reload_runtime_parity_admitted: bool,
     pub matched_benchmark_recorded: bool,
     pub true_rust_default_daemon_admitted: bool,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum ProductChainTopologyKind {
-    Daed2Wing,
-    StandaloneDaeWing,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-struct ProductChainTopology {
-    kind: ProductChainTopologyKind,
-    dae_core_repo: PathBuf,
-}
-
-impl ProductChainTopology {
-    fn chain_name(&self) -> &'static str {
-        match self.kind {
-            ProductChainTopologyKind::Daed2Wing => "daed2.0-web-wing-daecore",
-            ProductChainTopologyKind::StandaloneDaeWing => "standalone-dae-wing",
-        }
-    }
-
-    fn wing_repo_label(&self) -> &'static str {
-        match self.kind {
-            ProductChainTopologyKind::Daed2Wing => "daed-wing",
-            ProductChainTopologyKind::StandaloneDaeWing => "dae-wing",
-        }
-    }
-
-    fn source_contract_shape(&self) -> &'static str {
-        match self.kind {
-            ProductChainTopologyKind::Daed2Wing => "engine-default-direct",
-            ProductChainTopologyKind::StandaloneDaeWing => "runtime-service-port",
-        }
-    }
-
-    fn as_json(&self, dae_wing_repo: &Path, daed_repo: &Path) -> Value {
-        json!({
-            "chain": self.chain_name(),
-            "daed_repo": path_string(daed_repo),
-            "wing_repo": path_string(dae_wing_repo),
-            "dae_core_repo": path_string(&self.dae_core_repo),
-            "standalone_dae_wing_repo_used": self.kind == ProductChainTopologyKind::StandaloneDaeWing,
-            "daed2_wing_repo_used": self.kind == ProductChainTopologyKind::Daed2Wing,
-            "source_contract_shape": self.source_contract_shape(),
-            "web_api_base_path": "/api",
-        })
-    }
 }
 
 pub fn product_chain_recertification_report(
@@ -227,19 +202,6 @@ fn collect_evidence(options: &ProductChainRecertificationOptions) -> ProductChai
     }
 }
 
-fn product_chain_topology(options: &ProductChainRecertificationOptions) -> ProductChainTopology {
-    let daed_wing_repo = options.daed_repo.join("wing");
-    let kind = if options.dae_wing_repo == daed_wing_repo {
-        ProductChainTopologyKind::Daed2Wing
-    } else {
-        ProductChainTopologyKind::StandaloneDaeWing
-    };
-    ProductChainTopology {
-        kind,
-        dae_core_repo: options.dae_wing_repo.join("dae-core"),
-    }
-}
-
 fn report_value(
     options: &ProductChainRecertificationOptions,
     artifact_dir: &Path,
@@ -350,7 +312,22 @@ fn report_value(
     remaining_blockers.extend(production_run_command_apply_plan_blockers(
         &production_run_command_replacement_plan,
     ));
-    json!({
+    let typed_report = ProductChainTypedReportSummary {
+        executed,
+        recertification_clean,
+        default_path_mutation_requested,
+        default_path_mutation_allowed,
+        product_chain_switch_allowed,
+        resident_default_daemon_switch_ready,
+        admission,
+        service_contract_preserved: service_contract_passed,
+        dependency_boundary_preserved,
+        runtime_control_api_source_contract_preserved,
+        clean_product_chain_baseline,
+        remaining_blocker_count: remaining_blockers.len(),
+    }
+    .to_json();
+    let mut report = json!({
         "name": "product-chain-recertification",
         "evidence_class": "read-only-default-path-and-product-chain-recertification",
         "execute": executed,
@@ -409,7 +386,11 @@ fn report_value(
             "DAENEW_RUST_REBUILD_MEMO_2026-05-16.md:26.3",
             "DAENEW_RUST_REBUILD_MEMO_2026-05-16.md:install/dae.service"
         ],
-    })
+    });
+    if let Value::Object(report) = &mut report {
+        report.insert("typed_report".to_owned(), typed_report);
+    }
+    report
 }
 
 fn resident_default_daemon_switch_gate_json(options: &ProductChainRecertificationOptions) -> Value {
@@ -1592,131 +1573,6 @@ fn materialize_local_validation_validate_input(
     Ok(staged_config)
 }
 
-fn candidate_validate_report(
-    requested: bool,
-    binary_source: Option<&Path>,
-    staged_config_source: Option<&Path>,
-) -> Value {
-    let executable = requested
-        && binary_source.is_some_and(Path::is_file)
-        && staged_config_source.is_some_and(Path::is_file);
-    if !executable {
-        return json!({
-            "executed": false,
-            "passed": false,
-            "command": Value::Null,
-            "exit_code": Value::Null,
-            "stdout": "",
-            "stderr": "",
-        });
-    }
-    let binary_source = binary_source.unwrap();
-    let staged_config_source = staged_config_source.unwrap();
-    let command = vec![
-        path_string(binary_source),
-        "validate".to_owned(),
-        "-c".to_owned(),
-        path_string(staged_config_source),
-    ];
-    match Command::new(binary_source)
-        .args(["validate", "-c"])
-        .arg(staged_config_source)
-        .output()
-    {
-        Ok(output) => json!({
-            "executed": true,
-            "passed": output.status.success(),
-            "command": command,
-            "exit_code": output.status.code(),
-            "stdout": bounded_command_output(&output.stdout),
-            "stderr": bounded_command_output(&output.stderr),
-        }),
-        Err(err) => json!({
-            "executed": true,
-            "passed": false,
-            "command": command,
-            "exit_code": Value::Null,
-            "stdout": "",
-            "stderr": err.to_string(),
-        }),
-    }
-}
-
-fn candidate_service_contract_report(requested: bool, binary_source: Option<&Path>) -> Value {
-    let executable = requested && binary_source.is_some_and(Path::is_file);
-    if !executable {
-        return json!({
-            "executed": false,
-            "passed": false,
-            "command": Value::Null,
-            "exit_code": Value::Null,
-            "stdout": "",
-            "stderr": "",
-            "resident_run_service_contract_ready": false,
-            "reload_command_service_contract_ready": false,
-            "resident_production_dataplane_ready": false,
-            "resident_default_daemon_switch_ready": false,
-        });
-    }
-    let binary_source = binary_source.unwrap();
-    let command = vec![path_string(binary_source), "service-contract".to_owned()];
-    match Command::new(binary_source).arg("service-contract").output() {
-        Ok(output) => {
-            let stdout = bounded_command_output(&output.stdout);
-            let capability = serde_json::from_slice::<Value>(&output.stdout).unwrap_or(Value::Null);
-            let resident_run_ready = capability["resident_run_service_contract_ready"]
-                .as_bool()
-                .unwrap_or(false);
-            let reload_ready = capability["reload_command_service_contract_ready"]
-                .as_bool()
-                .unwrap_or(false);
-            let resident_production_dataplane_ready =
-                capability["resident_production_dataplane_ready"]
-                    .as_bool()
-                    .unwrap_or(false);
-            let resident_default_daemon_switch_declared =
-                capability["resident_default_daemon_switch_ready"]
-                    .as_bool()
-                    .unwrap_or(false);
-            let resident_default_daemon_switch_ready = output.status.success()
-                && resident_run_ready
-                && reload_ready
-                && resident_production_dataplane_ready
-                && resident_default_daemon_switch_declared;
-            json!({
-                "executed": true,
-                "passed": output.status.success() && resident_run_ready && reload_ready,
-                "command": command,
-                "exit_code": output.status.code(),
-                "stdout": stdout,
-                "stderr": bounded_command_output(&output.stderr),
-                "resident_run_service_contract_ready": output.status.success() && resident_run_ready,
-                "reload_command_service_contract_ready": output.status.success() && reload_ready,
-                "resident_production_dataplane_ready": output.status.success() && resident_production_dataplane_ready,
-                "resident_default_daemon_switch_ready": resident_default_daemon_switch_ready,
-                "capability": capability,
-            })
-        }
-        Err(err) => json!({
-            "executed": true,
-            "passed": false,
-            "command": command,
-            "exit_code": Value::Null,
-            "stdout": "",
-            "stderr": err.to_string(),
-            "resident_run_service_contract_ready": false,
-            "reload_command_service_contract_ready": false,
-            "resident_production_dataplane_ready": false,
-            "resident_default_daemon_switch_ready": false,
-        }),
-    }
-}
-
-fn bounded_command_output(bytes: &[u8]) -> String {
-    const MAX_OUTPUT_BYTES: usize = 4000;
-    String::from_utf8_lossy(&bytes[..bytes.len().min(MAX_OUTPUT_BYTES)]).into_owned()
-}
-
 fn attach_local_validation_fresh_install_plan(report: &mut Value, plan: Value) {
     let Some(report_object) = report.as_object_mut() else {
         return;
@@ -1948,200 +1804,6 @@ fn attach_production_host_write_plan_freeze(report: &mut Value, freeze: Value) {
         freeze["pass"].clone(),
     );
     report_object.insert("production_host_write_plan_freeze".to_owned(), freeze);
-}
-
-fn rollback_script_content(
-    service_file: &Path,
-    backup_service_file: &Path,
-    backup_usr_bin_dae: &Path,
-    backup_manifest_file: &Path,
-) -> String {
-    format!(
-        r#"#!/bin/sh
-set -eu
-
-if [ "${{DAE_PRODUCTION_ROLLBACK_EXECUTE:-}}" != "1" ]; then
-  echo "rollback artifact generated in read-only admission mode"
-  echo "review backup manifest: {backup_manifest_file}"
-  echo "set DAE_PRODUCTION_ROLLBACK_EXECUTE=1 only after manual approval"
-  exit 2
-fi
-
-if [ -f {backup_service_file} ]; then
-  cp {backup_service_file} {service_file}
-fi
-
-if [ -f {backup_usr_bin_dae} ]; then
-  cp {backup_usr_bin_dae} /usr/bin/dae
-fi
-
-systemctl daemon-reload
-"#,
-        backup_manifest_file = shell_quote_path(backup_manifest_file),
-        backup_service_file = shell_quote_path(backup_service_file),
-        service_file = shell_quote_path(service_file),
-        backup_usr_bin_dae = shell_quote_path(backup_usr_bin_dae),
-    )
-}
-
-fn shell_quote_path(path: &Path) -> String {
-    let raw = path_string(path);
-    format!("'{}'", raw.replace('\'', "'\\''"))
-}
-
-#[cfg(unix)]
-fn make_user_executable(path: &Path) -> Result<(), String> {
-    use std::os::unix::fs::PermissionsExt;
-
-    let metadata = fs::metadata(path).map_err(|err| {
-        format!(
-            "failed to stat production run command artifact {}: {err}",
-            path_string(path)
-        )
-    })?;
-    let mut permissions = metadata.permissions();
-    permissions.set_mode(0o755);
-    fs::set_permissions(path, permissions).map_err(|err| {
-        format!(
-            "failed to chmod production run command artifact {}: {err}",
-            path_string(path)
-        )
-    })
-}
-
-#[cfg(not(unix))]
-fn make_user_executable(_path: &Path) -> Result<(), String> {
-    Ok(())
-}
-
-fn production_run_command_execution_blockers(plan: &Value) -> Vec<String> {
-    plan["execution_blockers"]
-        .as_array()
-        .map(|blockers| {
-            blockers
-                .iter()
-                .filter_map(|blocker| blocker.as_str().map(ToOwned::to_owned))
-                .collect()
-        })
-        .unwrap_or_default()
-}
-
-fn production_run_command_execution_blockers_json(
-    execute_requested: bool,
-    plan_admitted: bool,
-    host_mutation_allow_requested: bool,
-    host_mutation_allowed: bool,
-) -> Value {
-    let mut blockers = Vec::new();
-    if execute_requested && !plan_admitted {
-        blockers.push(
-            "production run command replacement execute requested but dry-run plan is not admitted",
-        );
-    }
-    if execute_requested && !host_mutation_allow_requested {
-        blockers.push(
-            "production run command replacement execute requested but host default path mutation is not allowed",
-        );
-    } else if execute_requested && !host_mutation_allowed {
-        blockers.push(
-            "production run command replacement execute requested but host default path mutation is not admitted",
-        );
-    }
-    json!(blockers)
-}
-
-fn production_run_command_apply_plan_blockers(plan: &Value) -> Vec<String> {
-    plan["apply_plan"]["execution_blockers"]
-        .as_array()
-        .map(|blockers| {
-            blockers
-                .iter()
-                .filter_map(|blocker| blocker.as_str().map(ToOwned::to_owned))
-                .collect()
-        })
-        .unwrap_or_default()
-}
-
-fn production_run_command_apply_plan_blockers_json(
-    requested: bool,
-    replacement_plan_admitted: bool,
-    execute_requested: bool,
-    host_mutation_allowed: bool,
-) -> Value {
-    let mut blockers = Vec::new();
-    if requested && !replacement_plan_admitted {
-        blockers.push(
-            "production run command apply plan requested but replacement dry-run plan is not admitted",
-        );
-    }
-    if requested && !execute_requested {
-        blockers.push(
-            "production run command apply plan requested but replacement execute was not requested",
-        );
-    }
-    if requested && !host_mutation_allowed {
-        blockers.push(
-            "production run command apply plan requested but host default path mutation is not admitted",
-        );
-    }
-    json!(blockers)
-}
-
-fn runtime_control_api_clean_baseline_json(
-    executed: bool,
-    clean_product_chain_baseline: bool,
-    runtime_control_api_source_contract_preserved: bool,
-    admission: ProductChainAdmissionEvidence,
-    service_contract_preserved: bool,
-    dependency_boundary_preserved: bool,
-) -> Value {
-    let recorded = executed
-        && clean_product_chain_baseline
-        && runtime_control_api_source_contract_preserved
-        && admission.true_rust_default_daemon_admitted
-        && service_contract_preserved
-        && dependency_boundary_preserved;
-    json!({
-        "status": if recorded { "pass" } else { "fail" },
-        "recorded": recorded,
-        "execute": executed,
-        "clean_product_chain_baseline": clean_product_chain_baseline,
-        "runtime_control_api_source_contract_preserved": runtime_control_api_source_contract_preserved,
-        "true_rust_default_daemon_admitted": admission.true_rust_default_daemon_admitted,
-        "production_dataplane_admitted": admission.production_dataplane_admitted,
-        "reload_runtime_parity_admitted": admission.reload_runtime_parity_admitted,
-        "matched_go_rust_default_daemon_benchmark_recorded": admission.matched_benchmark_recorded,
-        "service_contract_preserved": service_contract_preserved,
-        "outbound_quic_go_dependency_boundary_preserved": dependency_boundary_preserved,
-        "evidence_class": "read-only-daed-wing-daed-runtime-control-api-clean-baseline",
-    })
-}
-
-fn service_contract_json(path: &Path) -> Value {
-    let Ok(text) = fs::read_to_string(path) else {
-        return json!({
-            "status": "fail",
-            "path": path_string(path),
-            "error": "service file could not be read",
-            "service_contract_preserved": false,
-        });
-    };
-    let exec_start_pre = text.contains("ExecStartPre=/usr/bin/dae validate -c /etc/dae/config.dae");
-    let exec_start =
-        text.contains("ExecStart=/usr/bin/dae run --disable-timestamp -c /etc/dae/config.dae");
-    let exec_reload = text.contains("ExecReload=/usr/bin/dae reload $MAINPID");
-    let uses_rust_optin = text.contains("dae-daemon-optin");
-    let service_contract_preserved =
-        exec_start_pre && exec_start && exec_reload && !uses_rust_optin;
-    json!({
-        "status": if service_contract_preserved { "pass" } else { "fail" },
-        "path": path_string(path),
-        "exec_start_pre_validate_preserved": exec_start_pre,
-        "exec_start_go_default_run_preserved": exec_start,
-        "exec_reload_pid_signal_preserved": exec_reload,
-        "rust_optin_binary_referenced": uses_rust_optin,
-        "service_contract_preserved": service_contract_preserved,
-    })
 }
 
 fn go_mod_dependency_boundary_json(
@@ -2627,138 +2289,10 @@ fn source_file_contract_json(repo: &Path, relative: &str, checks: &[(&str, &str)
     })
 }
 
-fn repo_status_json(name: &str, path: &Path) -> Value {
-    if !path.is_dir() {
-        return json!({
-            "name": name,
-            "path": path_string(path),
-            "exists": false,
-            "git_status_available": false,
-            "dirty": false,
-        });
-    }
-    let output = Command::new("git")
-        .args(["status", "--short", "--branch"])
-        .current_dir(path)
-        .output();
-    match output {
-        Ok(output) => {
-            let stdout = String::from_utf8_lossy(&output.stdout).trim().to_owned();
-            let stderr = String::from_utf8_lossy(&output.stderr).trim().to_owned();
-            let dirty = stdout
-                .lines()
-                .any(|line| !line.trim().is_empty() && !line.starts_with("##"));
-            json!({
-                "name": name,
-                "path": path_string(path),
-                "exists": true,
-                "git_status_available": output.status.success(),
-                "dirty": dirty,
-                "status": if output.status.success() { "pass" } else { "fail" },
-                "branch": stdout.lines().next().unwrap_or_default(),
-                "stdout": stdout,
-                "stderr": stderr,
-            })
-        }
-        Err(err) => json!({
-            "name": name,
-            "path": path_string(path),
-            "exists": true,
-            "git_status_available": false,
-            "dirty": false,
-            "status": "fail",
-            "error": err.to_string(),
-        }),
-    }
-}
-
-fn value_string_array(value: &Value) -> Vec<String> {
-    value
-        .as_array()
-        .map(|values| {
-            values
-                .iter()
-                .filter_map(|value| value.as_str().map(ToOwned::to_owned))
-                .collect()
-        })
-        .unwrap_or_default()
-}
-
-fn remaining_blockers(
-    admission: ProductChainAdmissionEvidence,
-    dirty_repos: &[String],
-    missing_repos: &[String],
-    unavailable_repos: &[String],
-    runtime_control_api_source_contract_preserved: bool,
-    daed_wing_runtime_control_api_regression_recorded: bool,
-    default_path_mutation_requested: bool,
-) -> Vec<String> {
-    let mut blockers = Vec::new();
-    if !admission.true_rust_default_daemon_admitted {
-        blockers.push("true Rust default daemon admission is not present in this run".to_owned());
-    }
-    if !default_path_mutation_requested {
-        blockers.push(
-            "default path mutation was not explicitly requested; service and /usr/bin/dae remain Go-default"
-                .to_owned(),
-        );
-    }
-    if !dirty_repos.is_empty() {
-        blockers.push(format!(
-            "product-chain baseline is dirty in sibling repos: {}",
-            dirty_repos.join(", ")
-        ));
-    }
-    if !missing_repos.is_empty() {
-        blockers.push(format!(
-            "product-chain sibling repos are missing: {}",
-            missing_repos.join(", ")
-        ));
-    }
-    if !unavailable_repos.is_empty() {
-        blockers.push(format!(
-            "product-chain sibling repo git status is unavailable: {}",
-            unavailable_repos.join(", ")
-        ));
-    }
-    if !runtime_control_api_source_contract_preserved {
-        blockers.push(
-            "dae-wing/daed runtime/control API source contract is incomplete or unreadable"
-                .to_owned(),
-        );
-    }
-    if !daed_wing_runtime_control_api_regression_recorded {
-        blockers.push(
-            "dae-wing and daed runtime/control API recertification still needs an explicit clean baseline run"
-                .to_owned(),
-        );
-    }
-    blockers
-}
-
-fn ensure_safe_run_root(root: &Path) -> Result<(), String> {
-    if !root.is_absolute() {
-        return Err(format!(
-            "product-chain recertification run root must be absolute: {}",
-            path_string(root)
-        ));
-    }
-    let root_string = path_string(root);
-    if !root_string.starts_with("/tmp/dae-daemon") {
-        return Err(format!(
-            "product-chain recertification run root must be under /tmp/dae-daemon*: {root_string}"
-        ));
-    }
-    Ok(())
-}
-
-fn path_string(path: &Path) -> String {
-    path.display().to_string()
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::process::Command;
 
     #[test]
     fn product_chain_recertification_is_read_only_by_default() {
@@ -2900,6 +2434,16 @@ mod tests {
         );
         assert!(
             report["runtime_control_api_clean_baseline"]["recorded"]
+                .as_bool()
+                .unwrap()
+        );
+        assert_eq!(
+            report["typed_report"]["schema"].as_str().unwrap(),
+            "product-chain-recertification-typed-report-v1"
+        );
+        assert_eq!(report["typed_report"]["status"].as_str().unwrap(), "pass");
+        assert!(
+            !report["typed_report"]["stage_report_schema"]
                 .as_bool()
                 .unwrap()
         );

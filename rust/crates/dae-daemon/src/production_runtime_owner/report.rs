@@ -9,6 +9,66 @@ use super::{
     ProductionRuntimeOwnerOptions,
 };
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum TypedReportStatus {
+    Pass,
+    Fail,
+    NotExecuted,
+}
+
+impl TypedReportStatus {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Pass => "pass",
+            Self::Fail => "fail",
+            Self::NotExecuted => "not-executed",
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct ProductionRuntimeTypedReport {
+    executed: bool,
+    owner_smoke_passed: bool,
+    production_dataplane_admitted: bool,
+    reload_runtime_parity_admitted: bool,
+    active_tcp_relay_benchmark_recorded: bool,
+    active_udp_tproxy_benchmark_recorded: bool,
+    active_dns_tproxy_benchmark_recorded: bool,
+}
+
+impl ProductionRuntimeTypedReport {
+    fn status(self) -> TypedReportStatus {
+        if !self.executed {
+            TypedReportStatus::NotExecuted
+        } else if self.production_dataplane_admitted && self.reload_runtime_parity_admitted {
+            TypedReportStatus::Pass
+        } else {
+            TypedReportStatus::Fail
+        }
+    }
+
+    fn to_json(self) -> Value {
+        json!({
+            "schema": "production-runtime-owner-typed-report-v1",
+            "formal_surface": "daemon-runtime-owner",
+            "status": self.status().as_str(),
+            "execute": self.executed,
+            "owner_smoke_passed": self.owner_smoke_passed,
+            "production_dataplane_admitted": self.production_dataplane_admitted,
+            "reload_runtime_parity_admitted": self.reload_runtime_parity_admitted,
+            "active_tcp_relay_benchmark_recorded": self.active_tcp_relay_benchmark_recorded,
+            "active_udp_tproxy_benchmark_recorded": self.active_udp_tproxy_benchmark_recorded,
+            "active_dns_tproxy_benchmark_recorded": self.active_dns_tproxy_benchmark_recorded,
+            "matched_go_rust_default_daemon_benchmark_recorded": false,
+            "true_rust_default_daemon_admitted": false,
+            "default_switch_allowed": false,
+            "product_chain_switch_allowed": false,
+            "stage_report_schema": false,
+        })
+    }
+}
+
 pub(super) fn report_value(
     options: &ProductionRuntimeOwnerOptions,
     artifact_dir: &Path,
@@ -61,6 +121,16 @@ pub(super) fn report_value(
         && active_dns_admitted;
     let reload_runtime_executed = options.execute && options.execute_reload_runtime_parity;
     let reload_runtime_passed = reload_runtime_executed && evidence.reload_runtime.passed;
+    let typed_report = ProductionRuntimeTypedReport {
+        executed: options.execute,
+        owner_smoke_passed: options.execute && evidence.owner_smoke_passed,
+        production_dataplane_admitted,
+        reload_runtime_parity_admitted: reload_runtime_passed,
+        active_tcp_relay_benchmark_recorded,
+        active_udp_tproxy_benchmark_recorded: active_udp_benchmark_recorded,
+        active_dns_tproxy_benchmark_recorded: active_dns_benchmark_recorded,
+    }
+    .to_json();
     report.insert(
         "name".to_owned(),
         json!("daemon-owned-production-runtime-owner"),
@@ -391,6 +461,7 @@ pub(super) fn report_value(
         "reload_runtime_parity_admitted".to_owned(),
         json!(reload_runtime_passed),
     );
+    report.insert("typed_report".to_owned(), typed_report);
     report.insert(
         "production_runtime_owner_scope".to_owned(),
         json!(if production_dataplane_admitted && reload_runtime_passed {

@@ -495,6 +495,8 @@ mod tests {
     use super::*;
     use crate::ItemKind;
     use crate::fixtures::PARSER_AST_BASIC;
+    use serde_json::{Value, json};
+    use sha2::{Digest, Sha256};
 
     #[test]
     fn parses_ast_basic_success_case() {
@@ -560,6 +562,43 @@ mod tests {
     }
 
     #[test]
+    fn parses_ast_basic_projection_matches_go_golden() {
+        let fixture = dae_golden::load_json(PARSER_AST_BASIC).unwrap();
+        let case = &fixture["cases"][0];
+        let input = case["input"].as_str().unwrap();
+        let sections = parse_config(input).unwrap();
+
+        assert_eq!(project_sections(&sections), case["sections"]);
+    }
+
+    #[test]
+    fn parses_example_dae_projection_and_strings_match_go_golden() {
+        let fixture = dae_golden::load_json(PARSER_AST_BASIC).unwrap();
+        let example = include_str!("../../../../example.dae");
+        let example_bytes = include_bytes!("../../../../example.dae");
+        let sections = parse_config(example).unwrap();
+        let want = &fixture["example_dae"];
+        let section_strings = project_section_strings(&sections);
+        let joined = section_strings.join(want["section_string_join_separator"].as_str().unwrap());
+
+        assert_eq!(hex_sha256(example_bytes), want["input_sha256"]);
+        assert_eq!(
+            sections.len(),
+            want["section_count"].as_u64().unwrap() as usize
+        );
+        assert_eq!(
+            count_items_recursive(&sections),
+            want["item_count_recursive"].as_u64().unwrap() as usize
+        );
+        assert_eq!(project_sections(&sections), want["sections"]);
+        assert_eq!(json!(section_strings), want["section_strings"]);
+        assert_eq!(
+            hex_sha256(joined.as_bytes()),
+            want["section_strings_sha256"]
+        );
+    }
+
+    #[test]
     fn rejects_ast_basic_error_cases() {
         let fixture = dae_golden::load_json(PARSER_AST_BASIC).unwrap();
         for case in &fixture["cases"].as_array().unwrap()[1..] {
@@ -580,5 +619,99 @@ mod tests {
         let sections = parse_config(text).unwrap();
         assert_eq!(sections[0].name, "global");
         assert_eq!(sections.last().unwrap().name, "dns");
+    }
+
+    fn project_sections(sections: &[Section]) -> Value {
+        Value::Array(sections.iter().map(project_section).collect())
+    }
+
+    fn project_section_strings(sections: &[Section]) -> Vec<String> {
+        sections
+            .iter()
+            .map(|section| section.to_config_string(false, false))
+            .collect()
+    }
+
+    fn count_items_recursive(sections: &[Section]) -> usize {
+        sections.iter().map(count_section_items).sum()
+    }
+
+    fn count_section_items(section: &Section) -> usize {
+        section
+            .items
+            .iter()
+            .map(|item| {
+                1 + match item {
+                    Item::Section(section) => count_section_items(section),
+                    Item::Param(_) | Item::RoutingRule(_) => 0,
+                }
+            })
+            .sum()
+    }
+
+    fn hex_sha256(input: &[u8]) -> String {
+        format!("{:x}", Sha256::digest(input))
+    }
+
+    fn project_section(section: &Section) -> Value {
+        json!({
+            "name": section.name,
+            "items": section.items.iter().map(project_item).collect::<Vec<_>>(),
+        })
+    }
+
+    fn project_item(item: &Item) -> Value {
+        match item {
+            Item::Param(param) => json!({
+                "item_type": "Param",
+                "value_kind": "Param",
+                "param": project_param(param),
+            }),
+            Item::Section(section) => json!({
+                "item_type": "Param",
+                "value_kind": "Section",
+                "section": project_section(section),
+            }),
+            Item::RoutingRule(rule) => json!({
+                "item_type": "RoutingRule",
+                "value_kind": "RoutingRule",
+                "routing_rule": project_routing_rule(rule),
+            }),
+        }
+    }
+
+    fn project_param(param: &Param) -> Value {
+        let mut out = serde_json::Map::from_iter([
+            ("key".to_owned(), json!(param.key)),
+            ("val".to_owned(), json!(param.val)),
+        ]);
+        if !param.and_functions.is_empty() {
+            out.insert(
+                "and_functions".to_owned(),
+                Value::Array(param.and_functions.iter().map(project_function).collect()),
+            );
+        }
+        if !param.annotation.is_empty() {
+            out.insert(
+                "annotation".to_owned(),
+                Value::Array(param.annotation.iter().map(project_param).collect()),
+            );
+        }
+        Value::Object(out)
+    }
+
+    fn project_function(function: &Function) -> Value {
+        json!({
+            "name": function.name,
+            "not": function.not,
+            "params": function.params.iter().map(project_param).collect::<Vec<_>>(),
+        })
+    }
+
+    fn project_routing_rule(rule: &RoutingRule) -> Value {
+        json!({
+            "and_functions": rule.and_functions.iter().map(project_function).collect::<Vec<_>>(),
+            "outbound": project_function(&rule.outbound),
+        })
     }
 }

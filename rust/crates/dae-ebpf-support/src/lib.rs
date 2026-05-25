@@ -1,4 +1,5 @@
 pub mod abi;
+pub mod attach;
 pub mod connectivity;
 pub mod kernel;
 pub mod loader;
@@ -16,16 +17,25 @@ pub mod tproxy_listener;
 mod tests;
 
 pub use abi::{
-    BASIC_FEATURE_VERSION, BPF_LOOP_FEATURE_VERSION, BPF_TIMER_FEATURE_VERSION, BpfDaeParam,
-    BpfDomainRouting, BpfMatchSet, BpfOutboundConnectivityQuery, BpfPidPname, BpfRedirectEntry,
-    BpfRedirectTuple, BpfRoutingResult, BpfTuplesKey, BpfUdpConnState, CHECKSUM_FEATURE_VERSION,
-    LINK_HDR_LEN_ETHERNET, LINK_HDR_LEN_NONE, MAX_MATCH_SET_LEN, SK_ASSIGN_FEATURE_VERSION,
-    TASK_COMM_LEN, TPROXY_MARK,
+    BASIC_FEATURE_VERSION, BPF_LOOP_FEATURE_VERSION, BPF_TIMER_FEATURE_VERSION, BpfAbiContract,
+    BpfDaeParam, BpfDomainRouting, BpfMatchSet, BpfOutboundConnectivityQuery, BpfPidPname,
+    BpfRedirectEntry, BpfRedirectTuple, BpfRoutingResult, BpfTuplesKey, BpfUdpConnState,
+    CHECKSUM_FEATURE_VERSION, LINK_HDR_LEN_ETHERNET, LINK_HDR_LEN_NONE, MAX_MATCH_SET_LEN,
+    SK_ASSIGN_FEATURE_VERSION, TASK_COMM_LEN, TPROXY_MARK, bpf_abi_contract,
+};
+pub use attach::{
+    AttachBackend, AttachBackendAvailability, AttachBackendPlan, TCX_ATTACH_FEATURE_VERSION,
+    TcAttachDirection, TcAttachTarget, TcBpfAttachSpec, TcCommandSpec, plan_attach_backend,
 };
 pub use connectivity::{ConnectivityEvent, ConnectivityKey, ConnectivityMap};
 pub use kernel::{FeatureGateReport, Version};
-pub use loader::{PinnedMapAction, pinned_map_action};
-pub use maps::{MapSpec, map_catalog, pinned_reuse_maps};
+pub use loader::{
+    LoaderBackend, LoaderContract, PinnedMapAction, loader_contract, pinned_map_action,
+};
+pub use maps::{
+    MapSpec, RuntimeMapContract, RuntimeMapRole, map_catalog, pinned_reuse_maps,
+    runtime_map_contract,
+};
 pub use param::{DaeParamInput, build_dae_param, htons};
 pub use param_loader::{
     DAE_PARAM_SYMBOL, DAE_PARAM_SYMBOL_SIZE, DaeParamPayload, DaeParamRequirement,
