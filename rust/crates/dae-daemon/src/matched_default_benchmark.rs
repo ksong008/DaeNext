@@ -191,7 +191,7 @@ fn base_report(
     report.insert(
         "source".to_owned(),
         json!([
-            "DAEX_RUST_REBUILD_PLAN_2026-05-16.md:stage196",
+            "DAEX_RUST_PERFORMANCE_OPTIMIZATION_PLAN_2026-05-24.md:18.1",
             "DAENEW_RUST_REBUILD_MEMO_2026-05-16.md:15.4",
             "DAENEW_RUST_REBUILD_MEMO_2026-05-16.md:15.5",
             "DAENEW_RUST_REBUILD_MEMO_2026-05-16.md:22.2",

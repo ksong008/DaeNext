@@ -13,8 +13,8 @@ mod udp_endpoint;
 pub(super) use model::{DEFAULT_ACTIVE_UDP_TARGET_IP, DEFAULT_ACTIVE_UDP_TARGET_PORT};
 pub(super) use probes::run_active_udp_probe;
 
-const UDP_PAYLOAD: &[u8] = b"stage53-udp-tproxy-ping";
-const UDP_RESPONSE: &[u8] = b"stage53-udp-tproxy-ack";
+const UDP_PAYLOAD: &[u8] = b"active-udp-tproxy-ping";
+const UDP_RESPONSE: &[u8] = b"active-udp-tproxy-ack";
 
 #[derive(Default)]
 pub(super) struct ActiveUdpEvidence {

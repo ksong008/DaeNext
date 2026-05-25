@@ -95,7 +95,7 @@ pub(in crate::production_runtime_owner) fn run_active_udp_probe(
     let client_ok = client["status"].as_str() == Some("pass")
         && client["stdout"]
             .as_str()
-            .is_some_and(|stdout| stdout.contains("stage53-udp-ack-count="));
+            .is_some_and(|stdout| stdout.contains("active-udp-ack-count="));
     let smoke_ok = accept["status"].as_str() == Some("pass")
         && upstream["status"].as_str() == Some("pass")
         && client_ok

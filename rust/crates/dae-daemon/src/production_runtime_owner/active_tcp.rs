@@ -34,10 +34,10 @@ const LAN_FILTER_PREF: &str = ACTIVE_TCP_LAN_FILTER_PREF;
 pub(in crate::production_runtime_owner) const CLIENT_NETNS: &str = ACTIVE_TCP_CLIENT_NETNS;
 const LAN_HOST_IFACE: &str = ACTIVE_TCP_LAN_HOST_IFACE;
 const LAN_CLIENT_IFACE: &str = ACTIVE_TCP_LAN_CLIENT_IFACE;
-const TCP_PAYLOAD: &[u8] = b"stage50-tcp-ping";
-const TCP_RESPONSE: &[u8] = b"stage50-tcp-ack";
-const RELAY_TCP_PAYLOAD: &[u8] = b"stage51-tcp-relay-ping";
-const RELAY_TCP_RESPONSE: &[u8] = b"stage51-tcp-relay-ack";
+const TCP_PAYLOAD: &[u8] = b"active-tcp-tproxy-ping";
+const TCP_RESPONSE: &[u8] = b"active-tcp-tproxy-ack";
+const RELAY_TCP_PAYLOAD: &[u8] = b"active-tcp-relay-ping";
+const RELAY_TCP_RESPONSE: &[u8] = b"active-tcp-relay-ack";
 
 #[derive(Default)]
 pub(super) struct ActiveTcpEvidence {

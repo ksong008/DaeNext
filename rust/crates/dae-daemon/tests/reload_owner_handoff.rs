@@ -1,10 +1,12 @@
 use serde_json::Value;
 
 #[test]
-fn stage165_reload_owner_handoff_smoke_is_environment_aware() {
-    let root =
-        std::env::temp_dir().join(format!("dae-stage165-daemon-test-{}", std::process::id()));
-    let report = dae_daemon::stage165_reload_owner_handoff_smoke_report(&root).unwrap();
+fn reload_owner_handoff_smoke_is_environment_aware() {
+    let root = std::env::temp_dir().join(format!(
+        "dae-reload-owner-handoff-daemon-test-{}",
+        std::process::id()
+    ));
+    let report = dae_daemon::reload_owner_handoff_smoke_report(&root).unwrap();
     assert!(
         report["reload_owner_handoff_harness_available"]
             .as_bool()
@@ -27,7 +29,7 @@ fn stage165_reload_owner_handoff_smoke_is_environment_aware() {
         );
         assert!(report["old_owner_close_smoke_passed"].as_bool().unwrap());
         assert_eq!(
-            report["stage164_handoff"]["keys_updated"]
+            report["reload_owner_handoff"]["keys_updated"]
                 .as_array()
                 .unwrap()
                 .len(),
@@ -47,12 +49,14 @@ fn stage165_reload_owner_handoff_smoke_is_environment_aware() {
 }
 
 #[test]
-fn daemon_runner_stage165_reload_owner_handoff_command_outputs_json() {
-    let root =
-        std::env::temp_dir().join(format!("dae-stage165-runner-test-{}", std::process::id()));
+fn daemon_runner_reload_owner_handoff_command_outputs_json() {
+    let root = std::env::temp_dir().join(format!(
+        "dae-reload-owner-handoff-runner-test-{}",
+        std::process::id()
+    ));
     let output = dae_daemon::run_with_args_and_version(
         [
-            "stage165-reload-owner-handoff-smoke".to_owned(),
+            "reload-owner-handoff-smoke".to_owned(),
             "--root".to_owned(),
             root.display().to_string(),
         ],

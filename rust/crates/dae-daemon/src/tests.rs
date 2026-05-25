@@ -1,12 +1,11 @@
 use serde_json::{Value, json};
 
 use crate::{
-    RunOptions, Stage156DefaultRunIdentityOptions, daemon_identity, run_default_optin_report,
-    run_with_args_and_version, stage149_identity_preflight_report, stage150_lifecycle_smoke_report,
-    stage151_control_plane_owner_preflight_report, stage152_signal_control_plane_smoke_report,
-    stage153_run_entrypoint_preflight_report, stage156_default_run_identity_admission_report,
-    stage157_control_plane_entrypoint_admission_report,
-    stage160_listener_ebpf_preflight_harness_report,
+    DefaultRunIdentityAdmissionOptions, RunOptions, control_plane_entrypoint_admission_report,
+    control_plane_owner_preflight_report, daemon_identity, default_run_identity_admission_report,
+    identity_preflight_report, lifecycle_smoke_report, listener_ebpf_preflight_report,
+    run_default_optin_report, run_entrypoint_preflight_report, run_with_args_and_version,
+    signal_control_plane_smoke_report,
 };
 
 #[test]
@@ -36,8 +35,8 @@ fn daemon_identity_is_opt_in_and_not_default() {
 }
 
 #[test]
-fn stage149_preflight_keeps_benchmark_closed() {
-    let report = stage149_identity_preflight_report("test-version");
+fn identity_preflight_keeps_benchmark_closed() {
+    let report = identity_preflight_report("test-version");
     assert!(report["rust_daemon_identity_scaffolded"].as_bool().unwrap());
     assert!(
         !report["rust_daemon_lifecycle_smoke_passed"]
@@ -65,6 +64,27 @@ fn daemon_runner_identity_command_outputs_json() {
     let json: Value = serde_json::from_str(&output.stdout).unwrap();
     assert_eq!(json["name"].as_str().unwrap(), "dae-daemon-optin");
     assert_eq!(json["version"].as_str().unwrap(), "test-version");
+}
+
+#[test]
+fn daemon_runner_identity_preflight_command_outputs_json() {
+    let output = run_with_args_and_version(["identity-preflight"], "test-version");
+    assert_eq!(output.exit_code, 0, "{}", output.stderr);
+    assert_eq!(output.stderr, "");
+    let json: Value = serde_json::from_str(&output.stdout).unwrap();
+    assert!(json["rust_daemon_identity_scaffolded"].as_bool().unwrap());
+    assert!(!json["default_switch_allowed"].as_bool().unwrap());
+}
+
+#[test]
+fn daemon_runner_rejects_retired_migration_command_aliases() {
+    let output = run_with_args_and_version(["runtime-identity-preflight"], "test-version");
+    assert_eq!(output.exit_code, 2);
+    assert!(
+        output
+            .stderr
+            .contains("unsupported dae-daemon-optin command: runtime-identity-preflight")
+    );
 }
 
 #[test]
@@ -1092,10 +1112,12 @@ fn daemon_runner_product_chain_accepts_explicit_resident_default_candidate_sourc
 }
 
 #[test]
-fn stage150_lifecycle_smoke_uses_isolated_paths() {
-    let root =
-        std::env::temp_dir().join(format!("dae-stage150-daemon-test-{}", std::process::id()));
-    let report = stage150_lifecycle_smoke_report(&root).unwrap();
+fn lifecycle_smoke_uses_isolated_paths() {
+    let root = std::env::temp_dir().join(format!(
+        "dae-lifecycle-smoke-daemon-test-{}",
+        std::process::id()
+    ));
+    let report = lifecycle_smoke_report(&root).unwrap();
     assert!(
         report["rust_daemon_lifecycle_smoke_passed"]
             .as_bool()
@@ -1113,12 +1135,14 @@ fn stage150_lifecycle_smoke_uses_isolated_paths() {
 }
 
 #[test]
-fn daemon_runner_stage150_lifecycle_command_outputs_json() {
-    let root =
-        std::env::temp_dir().join(format!("dae-stage150-runner-test-{}", std::process::id()));
+fn daemon_runner_lifecycle_smoke_command_outputs_json() {
+    let root = std::env::temp_dir().join(format!(
+        "dae-lifecycle-smoke-runner-test-{}",
+        std::process::id()
+    ));
     let output = run_with_args_and_version(
         [
-            "stage150-lifecycle-smoke".to_owned(),
+            "lifecycle-smoke".to_owned(),
             "--root".to_owned(),
             root.display().to_string(),
         ],
@@ -1137,10 +1161,12 @@ fn daemon_runner_stage150_lifecycle_command_outputs_json() {
 }
 
 #[test]
-fn stage151_control_plane_owner_preflight_uses_isolated_paths() {
-    let root =
-        std::env::temp_dir().join(format!("dae-stage151-daemon-test-{}", std::process::id()));
-    let report = stage151_control_plane_owner_preflight_report(&root).unwrap();
+fn control_plane_owner_preflight_uses_isolated_paths() {
+    let root = std::env::temp_dir().join(format!(
+        "dae-control-plane-owner-daemon-test-{}",
+        std::process::id()
+    ));
+    let report = control_plane_owner_preflight_report(&root).unwrap();
     assert!(
         report["rust_control_plane_owner_preflight_recorded"]
             .as_bool()
@@ -1179,12 +1205,14 @@ fn stage151_control_plane_owner_preflight_uses_isolated_paths() {
 }
 
 #[test]
-fn daemon_runner_stage151_control_plane_owner_command_outputs_json() {
-    let root =
-        std::env::temp_dir().join(format!("dae-stage151-runner-test-{}", std::process::id()));
+fn daemon_runner_control_plane_owner_command_outputs_json() {
+    let root = std::env::temp_dir().join(format!(
+        "dae-control-plane-owner-runner-test-{}",
+        std::process::id()
+    ));
     let output = run_with_args_and_version(
         [
-            "stage151-control-plane-owner-preflight".to_owned(),
+            "control-plane-owner-preflight".to_owned(),
             "--root".to_owned(),
             root.display().to_string(),
         ],
@@ -1208,10 +1236,12 @@ fn daemon_runner_stage151_control_plane_owner_command_outputs_json() {
 }
 
 #[test]
-fn stage152_signal_control_plane_smoke_uses_isolated_paths() {
-    let root =
-        std::env::temp_dir().join(format!("dae-stage152-daemon-test-{}", std::process::id()));
-    let report = stage152_signal_control_plane_smoke_report(&root).unwrap();
+fn signal_control_plane_smoke_uses_isolated_paths() {
+    let root = std::env::temp_dir().join(format!(
+        "dae-signal-control-plane-daemon-test-{}",
+        std::process::id()
+    ));
+    let report = signal_control_plane_smoke_report(&root).unwrap();
     assert!(
         report["rust_signal_control_plane_smoke_passed"]
             .as_bool()
@@ -1241,12 +1271,14 @@ fn stage152_signal_control_plane_smoke_uses_isolated_paths() {
 }
 
 #[test]
-fn daemon_runner_stage152_signal_control_plane_command_outputs_json() {
-    let root =
-        std::env::temp_dir().join(format!("dae-stage152-runner-test-{}", std::process::id()));
+fn daemon_runner_signal_control_plane_command_outputs_json() {
+    let root = std::env::temp_dir().join(format!(
+        "dae-signal-control-plane-runner-test-{}",
+        std::process::id()
+    ));
     let output = run_with_args_and_version(
         [
-            "stage152-signal-control-plane-smoke".to_owned(),
+            "signal-control-plane-smoke".to_owned(),
             "--root".to_owned(),
             root.display().to_string(),
         ],
@@ -1274,10 +1306,12 @@ fn daemon_runner_stage152_signal_control_plane_command_outputs_json() {
 }
 
 #[test]
-fn stage153_run_entrypoint_preflight_composes_prior_smokes() {
-    let root =
-        std::env::temp_dir().join(format!("dae-stage153-daemon-test-{}", std::process::id()));
-    let report = stage153_run_entrypoint_preflight_report(&root).unwrap();
+fn run_entrypoint_preflight_composes_prior_smokes() {
+    let root = std::env::temp_dir().join(format!(
+        "dae-run-entrypoint-daemon-test-{}",
+        std::process::id()
+    ));
+    let report = run_entrypoint_preflight_report(&root).unwrap();
     assert!(
         report["non_default_run_entrypoint_wrapper_available"]
             .as_bool()
@@ -1310,12 +1344,14 @@ fn stage153_run_entrypoint_preflight_composes_prior_smokes() {
 }
 
 #[test]
-fn daemon_runner_stage153_run_entrypoint_command_outputs_json() {
-    let root =
-        std::env::temp_dir().join(format!("dae-stage153-runner-test-{}", std::process::id()));
+fn daemon_runner_run_entrypoint_command_outputs_json() {
+    let root = std::env::temp_dir().join(format!(
+        "dae-run-entrypoint-runner-test-{}",
+        std::process::id()
+    ));
     let output = run_with_args_and_version(
         [
-            "stage153-run-entrypoint-preflight".to_owned(),
+            "run-entrypoint-preflight".to_owned(),
             "--root".to_owned(),
             root.display().to_string(),
         ],
@@ -1340,11 +1376,13 @@ fn daemon_runner_stage153_run_entrypoint_command_outputs_json() {
 }
 
 #[test]
-fn stage156_default_run_identity_admits_optin_identity_only() {
-    let root =
-        std::env::temp_dir().join(format!("dae-stage156-daemon-test-{}", std::process::id()));
-    let opts = Stage156DefaultRunIdentityOptions::under_root(&root);
-    let report = stage156_default_run_identity_admission_report(&opts).unwrap();
+fn default_run_identity_admits_optin_identity_only() {
+    let root = std::env::temp_dir().join(format!(
+        "dae-default-run-identity-daemon-test-{}",
+        std::process::id()
+    ));
+    let opts = DefaultRunIdentityAdmissionOptions::under_root(&root);
+    let report = default_run_identity_admission_report(&opts).unwrap();
     assert!(
         report["rust_default_run_identity_optin_admitted"]
             .as_bool()
@@ -1373,12 +1411,14 @@ fn stage156_default_run_identity_admits_optin_identity_only() {
 }
 
 #[test]
-fn daemon_runner_stage156_default_run_identity_command_outputs_json() {
-    let root =
-        std::env::temp_dir().join(format!("dae-stage156-runner-test-{}", std::process::id()));
+fn daemon_runner_default_run_identity_command_outputs_json() {
+    let root = std::env::temp_dir().join(format!(
+        "dae-default-run-identity-runner-test-{}",
+        std::process::id()
+    ));
     let output = run_with_args_and_version(
         [
-            "stage156-default-run-identity-admission".to_owned(),
+            "default-run-identity-admission".to_owned(),
             "--root".to_owned(),
             root.display().to_string(),
             "--disable-timestamp".to_owned(),
@@ -1395,9 +1435,9 @@ fn daemon_runner_stage156_default_run_identity_command_outputs_json() {
             .unwrap()
     );
     assert!(json["run_shaped_flags_validated"].as_bool().unwrap());
-    assert!(json["stage153_wrapper_reused"].as_bool().unwrap());
+    assert!(json["run_entrypoint_wrapper_reused"].as_bool().unwrap());
     assert!(
-        json["stage153_wrapper"]["run_entrypoint_wrapper_composed"]
+        json["run_entrypoint_wrapper"]["run_entrypoint_wrapper_composed"]
             .as_bool()
             .unwrap()
     );
@@ -1406,10 +1446,12 @@ fn daemon_runner_stage156_default_run_identity_command_outputs_json() {
 }
 
 #[test]
-fn stage157_control_plane_entrypoint_admits_optin_contract_only() {
-    let root =
-        std::env::temp_dir().join(format!("dae-stage157-daemon-test-{}", std::process::id()));
-    let report = stage157_control_plane_entrypoint_admission_report(&root).unwrap();
+fn control_plane_entrypoint_admits_optin_contract_only() {
+    let root = std::env::temp_dir().join(format!(
+        "dae-control-plane-entrypoint-daemon-test-{}",
+        std::process::id()
+    ));
+    let report = control_plane_entrypoint_admission_report(&root).unwrap();
     assert!(
         report["control_plane_entrypoint_optin_admitted"]
             .as_bool()
@@ -1425,8 +1467,12 @@ fn stage157_control_plane_entrypoint_admits_optin_contract_only() {
             .as_bool()
             .unwrap()
     );
-    assert!(report["stage156_run_identity_reused"].as_bool().unwrap());
-    assert!(report["stage151_owner_preflight_reused"].as_bool().unwrap());
+    assert!(report["run_identity_admission_reused"].as_bool().unwrap());
+    assert!(
+        report["control_plane_owner_preflight_reused"]
+            .as_bool()
+            .unwrap()
+    );
     assert!(!report["production_listener_bound"].as_bool().unwrap());
     assert!(!report["ebpf_attached"].as_bool().unwrap());
     assert!(!report["benchmark_executable_now"].as_bool().unwrap());
@@ -1435,12 +1481,14 @@ fn stage157_control_plane_entrypoint_admits_optin_contract_only() {
 }
 
 #[test]
-fn daemon_runner_stage157_control_plane_entrypoint_command_outputs_json() {
-    let root =
-        std::env::temp_dir().join(format!("dae-stage157-runner-test-{}", std::process::id()));
+fn daemon_runner_control_plane_entrypoint_command_outputs_json() {
+    let root = std::env::temp_dir().join(format!(
+        "dae-control-plane-entrypoint-runner-test-{}",
+        std::process::id()
+    ));
     let output = run_with_args_and_version(
         [
-            "stage157-control-plane-entrypoint-admission".to_owned(),
+            "control-plane-entrypoint-admission".to_owned(),
             "--root".to_owned(),
             root.display().to_string(),
         ],
@@ -1468,10 +1516,12 @@ fn daemon_runner_stage157_control_plane_entrypoint_command_outputs_json() {
 }
 
 #[test]
-fn stage160_listener_ebpf_preflight_uses_temporary_loopback_scope() {
-    let root =
-        std::env::temp_dir().join(format!("dae-stage160-daemon-test-{}", std::process::id()));
-    let report = stage160_listener_ebpf_preflight_harness_report(&root).unwrap();
+fn listener_ebpf_preflight_uses_temporary_loopback_scope() {
+    let root = std::env::temp_dir().join(format!(
+        "dae-listener-ebpf-preflight-daemon-test-{}",
+        std::process::id()
+    ));
+    let report = listener_ebpf_preflight_report(&root).unwrap();
     assert!(
         report["isolated_listener_preflight_harness_available"]
             .as_bool()
@@ -1513,12 +1563,14 @@ fn stage160_listener_ebpf_preflight_uses_temporary_loopback_scope() {
 }
 
 #[test]
-fn daemon_runner_stage160_listener_ebpf_preflight_command_outputs_json() {
-    let root =
-        std::env::temp_dir().join(format!("dae-stage160-runner-test-{}", std::process::id()));
+fn daemon_runner_listener_ebpf_preflight_command_outputs_json() {
+    let root = std::env::temp_dir().join(format!(
+        "dae-listener-ebpf-preflight-runner-test-{}",
+        std::process::id()
+    ));
     let output = run_with_args_and_version(
         [
-            "stage160-listener-ebpf-preflight-harness".to_owned(),
+            "listener-ebpf-preflight".to_owned(),
             "--root".to_owned(),
             root.display().to_string(),
         ],

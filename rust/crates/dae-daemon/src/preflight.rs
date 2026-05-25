@@ -4,10 +4,9 @@ use crate::identity::{
     DAEMON_CRATE_NAME, DEFAULT_DAEMON_MANIFEST, GO_DEFAULT_IDENTITY, OPTIN_BINARY_NAME,
 };
 
-pub fn stage149_identity_preflight_report(version: &str) -> Value {
+pub fn identity_preflight_report(version: &str) -> Value {
     json!({
-        "name": "stage149-rust-daemon-identity-scaffold-preflight",
-        "stage": "stage149",
+        "name": "rust-daemon-identity-preflight",
         "crate": DAEMON_CRATE_NAME,
         "version": version,
         "optin_binary": OPTIN_BINARY_NAME,

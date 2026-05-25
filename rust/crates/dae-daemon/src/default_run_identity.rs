@@ -4,10 +4,10 @@ use std::path::{Path, PathBuf};
 use dae_core_types::reload::RELOAD_DONE;
 use serde_json::{Value, json};
 
-use crate::stage153_run_entrypoint_preflight_report;
+use crate::run_entrypoint_preflight_report;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Stage156DefaultRunIdentityOptions {
+pub struct DefaultRunIdentityAdmissionOptions {
     pub root: PathBuf,
     pub config: PathBuf,
     pub logfile: PathBuf,
@@ -16,12 +16,12 @@ pub struct Stage156DefaultRunIdentityOptions {
     pub disable_sudo: bool,
 }
 
-impl Stage156DefaultRunIdentityOptions {
+impl DefaultRunIdentityAdmissionOptions {
     pub fn under_root(root: impl Into<PathBuf>) -> Self {
         let root = root.into();
         Self {
-            config: root.join("config").join("stage156-default-run.dae"),
-            logfile: root.join("log").join("dae-stage156-default-run.log"),
+            config: root.join("config").join("default-run-identity.dae"),
+            logfile: root.join("log").join("dae-default-run-identity.log"),
             root,
             disable_timestamp: true,
             disable_pidfile: false,
@@ -30,40 +30,43 @@ impl Stage156DefaultRunIdentityOptions {
     }
 }
 
-pub fn default_stage156_root() -> PathBuf {
-    PathBuf::from("/tmp/dae-stage156-default-run-identity")
+pub fn default_run_identity_admission_root() -> PathBuf {
+    PathBuf::from("/tmp/dae-default-run-identity-admission")
 }
 
-pub fn stage156_default_run_identity_admission_report(
-    options: &Stage156DefaultRunIdentityOptions,
+pub fn default_run_identity_admission_report(
+    options: &DefaultRunIdentityAdmissionOptions,
 ) -> Result<Value, String> {
-    ensure_safe_stage156_root(&options.root)?;
+    ensure_safe_run_identity_admission_root(&options.root)?;
     if options.root.exists() {
         fs::remove_dir_all(&options.root).map_err(|err| {
             format!(
-                "failed to remove existing stage156 root {}: {err}",
+                "failed to remove existing default-run-identity root {}: {err}",
                 path_string(&options.root)
             )
         })?;
     }
 
     let run_dir = options.root.join("run");
-    let manifest_file = run_dir.join("stage156-default-run-identity.json");
-    let pid_file = run_dir.join("dae-stage156.pid");
-    let progress_file = run_dir.join("dae-stage156.progress");
+    let manifest_file = run_dir.join("default-run-identity-admission.json");
+    let pid_file = run_dir.join("dae-default-run-identity.pid");
+    let progress_file = run_dir.join("dae-default-run-identity.progress");
     let sdnotify_file = run_dir.join("sdnotify.ready");
-    let stage153_root = derived_root("/tmp/dae-stage153-default-run-identity", &options.root);
+    let run_entrypoint_root = derived_root(
+        "/tmp/dae-run-entrypoint-default-run-identity",
+        &options.root,
+    );
 
     fs::create_dir_all(&run_dir).map_err(|err| {
         format!(
-            "failed to create stage156 run dir {}: {err}",
+            "failed to create default-run-identity run dir {}: {err}",
             path_string(&run_dir)
         )
     })?;
     if let Some(parent) = options.logfile.parent() {
         fs::create_dir_all(parent).map_err(|err| {
             format!(
-                "failed to create stage156 log dir {}: {err}",
+                "failed to create default-run-identity log dir {}: {err}",
                 path_string(parent)
             )
         })?;
@@ -72,7 +75,7 @@ pub fn stage156_default_run_identity_admission_report(
 
     let config = fs::read_to_string(&options.config).map_err(|err| {
         format!(
-            "failed to read stage156 config {}: {err}",
+            "failed to read default-run-identity config {}: {err}",
             path_string(&options.config)
         )
     })?;
@@ -80,29 +83,28 @@ pub fn stage156_default_run_identity_admission_report(
     let config_lines = config.lines().count();
     if config.trim().is_empty() {
         return Err(format!(
-            "stage156 config must not be empty: {}",
+            "default-run-identity config must not be empty: {}",
             path_string(&options.config)
         ));
     }
 
     if !options.disable_pidfile {
         fs::write(&pid_file, format!("{}\n", std::process::id()))
-            .map_err(|err| format!("failed to write stage156 pid file: {err}"))?;
+            .map_err(|err| format!("failed to write default-run-identity pid file: {err}"))?;
     }
     fs::write(&progress_file, [RELOAD_DONE])
-        .map_err(|err| format!("failed to write stage156 progress file: {err}"))?;
+        .map_err(|err| format!("failed to write default-run-identity progress file: {err}"))?;
     fs::write(&sdnotify_file, "READY=1\n")
-        .map_err(|err| format!("failed to write stage156 sdnotify file: {err}"))?;
+        .map_err(|err| format!("failed to write default-run-identity sdnotify file: {err}"))?;
     fs::write(
         &options.logfile,
-        "stage156 default run identity admission\n",
+        "default-run-identity default run identity admission\n",
     )
-    .map_err(|err| format!("failed to write stage156 log file: {err}"))?;
+    .map_err(|err| format!("failed to write default-run-identity log file: {err}"))?;
 
-    let wrapper = stage153_run_entrypoint_preflight_report(&stage153_root)?;
+    let wrapper = run_entrypoint_preflight_report(&run_entrypoint_root)?;
     let mut report = json!({
-        "name": "stage156-rust-default-run-identity-admission",
-        "stage": "stage156",
+        "name": "rust-default-run-identity-admission",
         "root": path_string(&options.root),
         "run_dir": path_string(&run_dir),
         "config_file": path_string(&options.config),
@@ -111,8 +113,8 @@ pub fn stage156_default_run_identity_admission_report(
         "pid_file": path_string(&pid_file),
         "progress_file": path_string(&progress_file),
         "sdnotify_file": path_string(&sdnotify_file),
-        "stage153_root": path_string(&stage153_root),
-        "command": "stage156-default-run-identity-admission",
+        "run_entrypoint_root": path_string(&run_entrypoint_root),
+        "command": "default-run-identity-admission",
         "run_identity": "Rust default run identity shape, opt-in only",
         "default_command": "run",
         "config_bytes": config_bytes,
@@ -138,7 +140,7 @@ pub fn stage156_default_run_identity_admission_report(
         "pid file write unless disable-pidfile",
         "progress file ReloadDone write"
     ]);
-    report["stage153_wrapper"] = wrapper;
+    report["run_entrypoint_wrapper"] = wrapper;
     for key in [
         "rust_default_run_identity_optin_admitted",
         "rust_default_run_entrypoint_exists",
@@ -146,7 +148,7 @@ pub fn stage156_default_run_identity_admission_report(
         "run_identity_config_corpus_validated",
         "run_identity_on_ready_contract_validated",
         "isolated_pid_progress_paths_validated",
-        "stage153_wrapper_reused",
+        "run_entrypoint_wrapper_reused",
         "go_default_path_preserved",
         "go_fallback_required",
     ] {
@@ -169,9 +171,9 @@ pub fn stage156_default_run_identity_admission_report(
         report[key] = json!(false);
     }
     let manifest = serde_json::to_vec_pretty(&report)
-        .map_err(|err| format!("failed to encode stage156 manifest: {err}"))?;
+        .map_err(|err| format!("failed to encode default-run-identity manifest: {err}"))?;
     fs::write(&manifest_file, manifest)
-        .map_err(|err| format!("failed to write stage156 manifest: {err}"))?;
+        .map_err(|err| format!("failed to write default-run-identity manifest: {err}"))?;
     Ok(report)
 }
 
@@ -181,14 +183,14 @@ fn prepare_config(config: &Path, root: &Path) -> Result<(), String> {
     }
     if !config.starts_with(root) {
         return Err(format!(
-            "stage156 config does not exist and is outside root: {}",
+            "default-run-identity config does not exist and is outside root: {}",
             path_string(config)
         ));
     }
     if let Some(parent) = config.parent() {
         fs::create_dir_all(parent).map_err(|err| {
             format!(
-                "failed to create stage156 config dir {}: {err}",
+                "failed to create default-run-identity config dir {}: {err}",
                 path_string(parent)
             )
         })?;
@@ -197,20 +199,20 @@ fn prepare_config(config: &Path, root: &Path) -> Result<(), String> {
         config,
         "global {\n  log_level: info\n}\n\nrouting {\n  pname(NetworkManager) -> direct\n}\n",
     )
-    .map_err(|err| format!("failed to write stage156 default config: {err}"))
+    .map_err(|err| format!("failed to write default-run-identity default config: {err}"))
 }
 
-fn ensure_safe_stage156_root(root: &Path) -> Result<(), String> {
+fn ensure_safe_run_identity_admission_root(root: &Path) -> Result<(), String> {
     if !root.is_absolute() {
         return Err(format!(
-            "stage156 root must be absolute: {}",
+            "default-run-identity root must be absolute: {}",
             path_string(root)
         ));
     }
     let root_string = path_string(root);
-    if !root_string.starts_with("/tmp/dae-stage156") {
+    if !root_string.starts_with("/tmp/dae-default-run-identity") {
         return Err(format!(
-            "stage156 root must be under /tmp/dae-stage156*: {root_string}"
+            "default-run-identity root must be under /tmp/dae-default-run-identity*: {root_string}"
         ));
     }
     Ok(())
@@ -220,7 +222,7 @@ fn derived_root(prefix: &str, root: &Path) -> PathBuf {
     let suffix = root
         .file_name()
         .and_then(|name| name.to_str())
-        .unwrap_or("stage156");
+        .unwrap_or("default-run-identity");
     PathBuf::from(format!("{prefix}-{suffix}"))
 }
 
