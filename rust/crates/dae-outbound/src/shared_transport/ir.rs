@@ -10,6 +10,13 @@ pub struct XHttpModeResult {
     pub error_contains: String,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct XHttpModeRefResult {
+    pub normalized: &'static str,
+    pub ok: bool,
+    pub error_contains: &'static str,
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct XHttpAlpnResult {
     pub ok: bool,
@@ -82,12 +89,34 @@ pub fn grpc_cache_key(
     mark: u32,
     mptcp: bool,
 ) -> String {
-    let magic = magic_network_encode("tcp", mark, mptcp);
-    let magic = general_purpose::URL_SAFE_NO_PAD.encode(magic);
-    format!(
-        "{address}|{server_name}|{dialer_id}|{}|magic:{magic}",
-        if allow_insecure { "true" } else { "false" },
-    )
+    let mut magic_raw = [0_u8; 10];
+    let magic_raw_len = write_magic_network_to_slice("tcp", mark, mptcp, &mut magic_raw);
+    let mut magic_encoded = [0_u8; 16];
+    let magic_len = general_purpose::URL_SAFE_NO_PAD
+        .encode_slice(&magic_raw[..magic_raw_len], &mut magic_encoded)
+        .expect("fixed grpc magic-network buffer is large enough");
+    let magic = std::str::from_utf8(&magic_encoded[..magic_len])
+        .expect("base64 output is always valid utf-8");
+    let allow_insecure = if allow_insecure { "true" } else { "false" };
+    let mut out = String::with_capacity(
+        address.len()
+            + server_name.len()
+            + dialer_id.len()
+            + allow_insecure.len()
+            + "magic:".len()
+            + magic.len()
+            + 4,
+    );
+    out.push_str(address);
+    out.push('|');
+    out.push_str(server_name);
+    out.push('|');
+    out.push_str(dialer_id);
+    out.push('|');
+    out.push_str(allow_insecure);
+    out.push_str("|magic:");
+    out.push_str(magic);
+    out
 }
 
 pub fn normalize_xhttp_mode(
@@ -96,37 +125,49 @@ pub fn normalize_xhttp_mode(
     security: &str,
     has_download_settings: bool,
 ) -> XHttpModeResult {
-    let mode = mode.trim().to_ascii_lowercase();
-    match mode.as_str() {
-        "" | "auto" => {
-            if scheme != "https" {
-                return xhttp_mode_err("auto mode without tls is not supported yet");
-            }
-            if security.eq_ignore_ascii_case("reality") {
-                if has_download_settings {
-                    return xhttp_mode_ok("stream-up");
-                }
-                return xhttp_mode_ok("stream-one");
-            }
-            xhttp_mode_ok("packet-up")
-        }
-        "stream-up" => xhttp_mode_ok(&mode),
-        "stream-one" => {
-            if scheme == "https" {
-                xhttp_mode_ok(&mode)
-            } else {
-                xhttp_mode_err("stream-one without tls is not supported yet")
-            }
-        }
-        "packet-up" => {
-            if scheme == "https" {
-                xhttp_mode_ok(&mode)
-            } else {
-                xhttp_mode_err("packet-up without tls is not supported yet")
-            }
-        }
-        _ => xhttp_mode_err("unsupported mode"),
+    let result = normalize_xhttp_mode_ref(mode, scheme, security, has_download_settings);
+    XHttpModeResult {
+        normalized: result.normalized.to_owned(),
+        ok: result.ok,
+        error_contains: result.error_contains.to_owned(),
     }
+}
+
+pub fn normalize_xhttp_mode_ref(
+    mode: &str,
+    scheme: &str,
+    security: &str,
+    has_download_settings: bool,
+) -> XHttpModeRefResult {
+    let mode = mode.trim();
+    if mode.is_empty() || mode.eq_ignore_ascii_case("auto") {
+        if scheme != "https" {
+            return xhttp_mode_ref_err("auto mode without tls is not supported yet");
+        }
+        if security.eq_ignore_ascii_case("reality") {
+            if has_download_settings {
+                return xhttp_mode_ref_ok("stream-up");
+            }
+            return xhttp_mode_ref_ok("stream-one");
+        }
+        return xhttp_mode_ref_ok("packet-up");
+    }
+    if mode.eq_ignore_ascii_case("stream-up") {
+        return xhttp_mode_ref_ok("stream-up");
+    }
+    if mode.eq_ignore_ascii_case("stream-one") {
+        if scheme == "https" {
+            return xhttp_mode_ref_ok("stream-one");
+        }
+        return xhttp_mode_ref_err("stream-one without tls is not supported yet");
+    }
+    if mode.eq_ignore_ascii_case("packet-up") {
+        if scheme == "https" {
+            return xhttp_mode_ref_ok("packet-up");
+        }
+        return xhttp_mode_ref_err("packet-up without tls is not supported yet");
+    }
+    xhttp_mode_ref_err("unsupported mode")
 }
 
 pub fn validate_xhttp_alpn(security: &str, alpn: &str) -> XHttpAlpnResult {
@@ -172,27 +213,43 @@ pub fn canonical_json(raw: &str) -> Result<String, OutboundError> {
 pub fn magic_network_encode(network: &str, mark: u32, mptcp: bool) -> Vec<u8> {
     let network_bytes = network.as_bytes();
     let mut out = Vec::with_capacity(2 + network_bytes.len() + 4 + 1);
+    write_magic_network_to(network_bytes, mark, mptcp, &mut out);
+    out
+}
+
+fn write_magic_network_to_slice(network: &str, mark: u32, mptcp: bool, out: &mut [u8]) -> usize {
+    let network_bytes = network.as_bytes();
+    let needed = 2 + network_bytes.len() + 4 + 1;
+    out[0] = 0;
+    out[1] = network_bytes.len() as u8;
+    out[2..2 + network_bytes.len()].copy_from_slice(network_bytes);
+    let mark_offset = 2 + network_bytes.len();
+    out[mark_offset..mark_offset + 4].copy_from_slice(&mark.to_be_bytes());
+    out[mark_offset + 4] = u8::from(mptcp);
+    needed
+}
+
+fn write_magic_network_to(network_bytes: &[u8], mark: u32, mptcp: bool, out: &mut Vec<u8>) {
     out.push(0);
     out.push(network_bytes.len() as u8);
     out.extend_from_slice(network_bytes);
     out.extend_from_slice(&mark.to_be_bytes());
     out.push(u8::from(mptcp));
-    out
 }
 
-fn xhttp_mode_ok(normalized: &str) -> XHttpModeResult {
-    XHttpModeResult {
-        normalized: normalized.to_owned(),
+fn xhttp_mode_ref_ok(normalized: &'static str) -> XHttpModeRefResult {
+    XHttpModeRefResult {
+        normalized,
         ok: true,
-        error_contains: String::new(),
+        error_contains: "",
     }
 }
 
-fn xhttp_mode_err(error_contains: &str) -> XHttpModeResult {
-    XHttpModeResult {
-        normalized: String::new(),
+fn xhttp_mode_ref_err(error_contains: &'static str) -> XHttpModeRefResult {
+    XHttpModeRefResult {
+        normalized: "",
         ok: false,
-        error_contains: error_contains.to_owned(),
+        error_contains,
     }
 }
 

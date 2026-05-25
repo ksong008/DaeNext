@@ -1,15 +1,30 @@
 use crate::error::OutboundError;
-use crate::vmess::uuid::normalize_vmess_uuid;
+use crate::vmess::uuid::string_to_uuid5_bytes;
 
 pub fn password_to_key(password: &str) -> Result<[u8; 16], OutboundError> {
-    let normalized = normalize_vmess_uuid(password);
-    let compact = normalized.replace('-', "");
-    if compact.len() != 32 {
-        return Err(OutboundError::BadVless(format!("invalid UUID: {compact}")));
+    if !(32..=36).contains(&password.len()) {
+        return Ok(string_to_uuid5_bytes(password));
     }
     let mut out = [0_u8; 16];
-    for (index, chunk) in compact.as_bytes().chunks(2).enumerate() {
-        out[index] = (hex_nibble(chunk[0])? << 4) | hex_nibble(chunk[1])?;
+    let mut high = 0_u8;
+    let mut nibble_count = 0_usize;
+    for byte in password.bytes() {
+        if byte == b'-' {
+            continue;
+        }
+        let nibble = hex_nibble(byte)?;
+        if nibble_count >= 32 {
+            return Err(OutboundError::BadVless(format!("invalid UUID: {password}")));
+        }
+        if nibble_count % 2 == 0 {
+            high = nibble << 4;
+        } else {
+            out[nibble_count / 2] = high | nibble;
+        }
+        nibble_count += 1;
+    }
+    if nibble_count != 32 {
+        return Err(OutboundError::BadVless(format!("invalid UUID: {password}")));
     }
     Ok(out)
 }

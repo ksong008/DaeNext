@@ -30,7 +30,7 @@ pub fn request_header(
         out.push(metadata.network.byte());
         out.extend_from_slice(&metadata.port().to_be_bytes());
         out.push(metadata.metadata_type().byte());
-        out.extend_from_slice(&metadata.encode_addr()?);
+        metadata.write_addr_to(&mut out)?;
     }
     out.extend_from_slice(payload);
     Ok(out)
