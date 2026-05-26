@@ -10,6 +10,7 @@ use super::command::{
     CommandSpec, command_exists, iface_exists, mac_string, netns_exists, parse_step_mac,
     parse_step_u32, path_string, push_check, run_observation_step, run_step, tproxy_port_available,
 };
+use super::native_ebpf::{NativeEbpfAttachRole, NativeEbpfRuntimeState};
 use super::{
     FILTER_PREF, PRODUCTION_HOST_IFACE, PRODUCTION_NETNS, PRODUCTION_PEER_IFACE,
     ProductionRuntimeOwnerOptions,
@@ -218,6 +219,8 @@ pub(super) fn attach_peer_program(
     steps: &mut Vec<Value>,
     options: &ProductionRuntimeOwnerOptions,
     param_object: &Path,
+    native_param_object: &Path,
+    native_runtime: &mut NativeEbpfRuntimeState,
 ) -> bool {
     let param_object = path_string(param_object);
     let target = production_peer_attach_target();
@@ -227,6 +230,15 @@ pub(super) fn attach_peer_program(
         param_object,
         options.peer_section.clone(),
     );
+    if native_runtime.attach_program(
+        steps,
+        options,
+        native_param_object,
+        NativeEbpfAttachRole::PeerIngress,
+    ) == Some(true)
+    {
+        return true;
+    }
     let mut ok = true;
     ok &= run_step(
         steps,
@@ -245,6 +257,8 @@ pub(super) fn attach_host_program(
     steps: &mut Vec<Value>,
     options: &ProductionRuntimeOwnerOptions,
     param_object: &Path,
+    native_param_object: &Path,
+    native_runtime: &mut NativeEbpfRuntimeState,
 ) -> bool {
     let param_object = path_string(param_object);
     let target = production_host_attach_target();
@@ -254,6 +268,15 @@ pub(super) fn attach_host_program(
         param_object,
         options.host_section.clone(),
     );
+    if native_runtime.attach_program(
+        steps,
+        options,
+        native_param_object,
+        NativeEbpfAttachRole::HostIngress,
+    ) == Some(true)
+    {
+        return true;
+    }
     let mut ok = true;
     ok &= run_step(
         steps,
@@ -284,20 +307,45 @@ pub(super) fn show_host_program(steps: &mut Vec<Value>) -> Value {
     )
 }
 
-pub(super) fn cleanup_production_topology(steps: &mut Vec<Value>) {
-    let cleanup = [
-        (
+pub(super) fn cleanup_production_topology(
+    steps: &mut Vec<Value>,
+    native_peer_attached: bool,
+    native_host_attached: bool,
+) {
+    if native_host_attached {
+        steps.push(json!({
+            "name": "delete-production-dae0-param-aware-ebpf-program-filter",
+            "status": "skipped",
+            "reason": "native Aya link lifetime detached the host ingress filter before tc command fallback cleanup",
+        }));
+    } else {
+        let _ = run_step(
+            steps,
             "delete-production-dae0-param-aware-ebpf-program-filter",
             command_spec(production_host_attach_target().filter_del_command(FILTER_PREF)),
-        ),
-        (
-            "delete-production-host-clsact-qdisc",
-            command_spec(production_host_attach_target().clsact_qdisc_del_command()),
-        ),
-        (
+        );
+    }
+    let cleanup_host = [(
+        "delete-production-host-clsact-qdisc",
+        command_spec(production_host_attach_target().clsact_qdisc_del_command()),
+    )];
+    for (name, spec) in cleanup_host {
+        let _ = run_step(steps, name, spec);
+    }
+    if native_peer_attached {
+        steps.push(json!({
+            "name": "delete-production-dae0peer-param-aware-ebpf-program-filter",
+            "status": "skipped",
+            "reason": "native Aya link lifetime detached the peer ingress filter before tc command fallback cleanup",
+        }));
+    } else {
+        let _ = run_step(
+            steps,
             "delete-production-dae0peer-param-aware-ebpf-program-filter",
             command_spec(production_peer_attach_target().filter_del_command(FILTER_PREF)),
-        ),
+        );
+    }
+    let cleanup_rest = [
         (
             "delete-production-peer-clsact-qdisc",
             command_spec(production_peer_attach_target().clsact_qdisc_del_command()),
@@ -311,7 +359,7 @@ pub(super) fn cleanup_production_topology(steps: &mut Vec<Value>) {
             CommandSpec::new("ip", ["netns", "del", PRODUCTION_NETNS]),
         ),
     ];
-    for (name, spec) in cleanup {
+    for (name, spec) in cleanup_rest {
         let _ = run_step(steps, name, spec);
     }
 }
@@ -359,6 +407,38 @@ pub(super) fn preflight_checks(options: &ProductionRuntimeOwnerOptions) -> Vec<V
         !options.execute || options.source_object.exists(),
         json!({"path": path_string(&options.source_object)}),
         "production runtime owner source eBPF object is missing",
+    );
+    push_check(
+        &mut checks,
+        "native-ebpf-runtime-opt-in-contract",
+        true,
+        json!({
+            "opt_in": options.native_ebpf_opt_in,
+            "requested_backend": options.native_ebpf_backend.as_str(),
+            "completed_a3_admission": options.native_ebpf_completed_a3_admission,
+            "native_loader_compiled": cfg!(feature = "native-ebpf"),
+            "default_enable_allowed": false,
+            "tc_command_fallback_required": true,
+            "topology_link_mode_unchanged": "DAE_NETNS_LINK auto remains netkit/veth; TCX is only an attach backend",
+        }),
+        "native eBPF runtime opt-in contract is invalid",
+    );
+    push_check(
+        &mut checks,
+        "native-ebpf-object-present",
+        !options.execute
+            || !options.native_ebpf_opt_in
+            || options
+                .native_ebpf_object
+                .as_ref()
+                .is_none_or(|path| path.is_file()),
+        json!({
+            "opt_in": options.native_ebpf_opt_in,
+            "path": options.native_ebpf_object.as_ref().map(|path| path_string(path)),
+            "fallback_object": path_string(&options.source_object),
+            "required_when_configured": true,
+        }),
+        "configured native eBPF object is missing",
     );
     push_check(
         &mut checks,
