@@ -12,6 +12,7 @@ use serde_json::{Value, json};
 use super::command::{
     bpf_dae_snapshot, path_string, runtime_resource_leftovers, wait_for_loaded_map_cleanup,
 };
+use super::native_ebpf::NativeEbpfRuntimeState;
 use super::report::{live_handoff_json, socket_options_verified};
 use super::topology::{
     attach_host_program, attach_peer_program, cleanup_production_topology, preflight_checks,
@@ -28,6 +29,7 @@ const DEFAULT_SOURCE_OBJECT_ENV: &str = "DAE_RUST_BPF_OBJECT";
 #[derive(Debug)]
 pub struct ResidentProductionRuntime {
     live_handoff: Option<LiveLoadedTproxyListenSocketMap>,
+    native_runtime: NativeEbpfRuntimeState,
     cleanup_steps: Vec<Value>,
     discovered_map_id: Option<u32>,
     before_pin_snapshot: Vec<String>,
@@ -41,7 +43,14 @@ impl ResidentProductionRuntime {
             return;
         }
         self.live_handoff.take();
-        cleanup_production_topology(&mut self.cleanup_steps);
+        let native_peer_attached = self.native_runtime.peer_attached();
+        let native_host_attached = self.native_runtime.host_attached();
+        self.native_runtime.reset();
+        cleanup_production_topology(
+            &mut self.cleanup_steps,
+            native_peer_attached,
+            native_host_attached,
+        );
         let (after_map_ids, loaded_map_cleaned) =
             wait_for_loaded_map_cleanup(&[self.discovered_map_id]);
         let after_pin_snapshot = bpf_dae_snapshot();
@@ -137,6 +146,7 @@ fn start_with_options(
     let mut cleanup_steps = Vec::new();
     let param_object = artifact_dir.join("bpf_bpfel.param.o");
     let mut live_handoff = None;
+    let mut native_runtime = NativeEbpfRuntimeState::new();
     let mut discovered_map_id = None;
 
     let result = (|| {
@@ -161,7 +171,13 @@ fn start_with_options(
                 .unwrap_or(false);
 
         if ok {
-            ok &= attach_peer_program(&mut executed_steps, &options, &param_object);
+            ok &= attach_peer_program(
+                &mut executed_steps,
+                &options,
+                &param_object,
+                &param_object,
+                &mut native_runtime,
+            );
         }
         let peer_attach_show = show_peer_program(&mut executed_steps);
 
@@ -199,7 +215,13 @@ fn start_with_options(
         };
 
         if ok {
-            ok &= attach_host_program(&mut executed_steps, &options, &param_object);
+            ok &= attach_host_program(
+                &mut executed_steps,
+                &options,
+                &param_object,
+                &param_object,
+                &mut native_runtime,
+            );
         }
         let host_attach_show = show_host_program(&mut executed_steps);
         let peer_output = peer_attach_show["stdout"].as_str().unwrap_or_default();
@@ -210,6 +232,8 @@ fn start_with_options(
             && host_attach_show["status"].as_str() == Some("pass")
             && host_output.contains(&options.host_section)
             && host_output.contains("tproxy_dae0_ing");
+        let attach_outputs_passed = attach_outputs_passed
+            || (native_runtime.peer_attached() && native_runtime.host_attached());
         ok &= attach_outputs_passed;
 
         let start_report = json!({
@@ -250,12 +274,20 @@ fn start_with_options(
 
     if let Err(err) = result {
         drop(live_handoff.take());
-        cleanup_production_topology(&mut cleanup_steps);
+        let native_peer_attached = native_runtime.peer_attached();
+        let native_host_attached = native_runtime.host_attached();
+        native_runtime.reset();
+        cleanup_production_topology(
+            &mut cleanup_steps,
+            native_peer_attached,
+            native_host_attached,
+        );
         return Err(err);
     }
 
     Ok(ResidentProductionRuntime {
         live_handoff,
+        native_runtime,
         cleanup_steps,
         discovered_map_id,
         before_pin_snapshot,

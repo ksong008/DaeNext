@@ -41,7 +41,7 @@ endif
 
 BUILD_ARGS := -trimpath -ldflags "-s -w -X github.com/daeuniverse/dae/cmd.Version=$(VERSION) -X github.com/daeuniverse/dae/common/consts.MaxMatchSetLen_=$(MAX_MATCH_SET_LEN)" $(BUILD_ARGS)
 
-.PHONY: clean-ebpf ebpf dae submodule submodules stage-freeze-check
+.PHONY: clean-ebpf ebpf dae submodule submodules stage-freeze-check native-ebpf-runtime-gate daex-switch-readiness-gate
 
 ## Begin Dae Build
 dae: export GOOS=linux
@@ -91,6 +91,12 @@ emoji-lint:
 	./scripts/check_no_emoji.sh
 
 .PHONY: emoji-lint
+
+native-ebpf-runtime-gate:
+	./scripts/run_native_ebpf_runtime_gate.sh
+
+daex-switch-readiness-gate:
+	./scripts/run_daex_switch_readiness_gate.sh
 
 # $BPF_CLANG is used in go:generate invocations.
 ebpf: export BPF_CLANG := $(CLANG)

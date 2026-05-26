@@ -16,14 +16,56 @@ pub(in crate::production_runtime_owner) fn update_routing_map(
         contract.value_size,
     )
     .map_err(|err| err.to_string())?;
+    update_routing_map_fd(
+        fd.as_raw_fd(),
+        info,
+        new_map_ids,
+        so_mark,
+        "new_attached_map",
+    )
+}
+
+pub(in crate::production_runtime_owner) fn update_existing_routing_map(
+    map_id: u32,
+    so_mark: u32,
+) -> Result<(Value, u32), String> {
+    let fd = open_map_fd(map_id).map_err(|err| err.to_string())?;
+    let info = map_info(fd.as_raw_fd()).map_err(|err| err.to_string())?;
+    update_routing_map_fd(
+        fd.as_raw_fd(),
+        info,
+        Vec::new(),
+        so_mark,
+        "native_loaded_map",
+    )
+}
+
+fn update_routing_map_fd(
+    map_fd: i32,
+    info: RuntimeMapInfo,
+    new_map_ids: Vec<u32>,
+    so_mark: u32,
+    source: &str,
+) -> Result<(Value, u32), String> {
+    let contract = active_tcp_routing_map_contract(so_mark);
+    if info.name != contract.map_name
+        || info.key_size != contract.key_size
+        || info.value_size != contract.value_size
+    {
+        return Err(format!(
+            "routing map contract mismatch: name={} key_size={} value_size={}",
+            info.name, info.key_size, info.value_size
+        ));
+    }
     let key = contract.key.to_ne_bytes();
     let value = active_tcp_routing_fallback_value(&contract);
-    update_map_elem_bytes(fd.as_raw_fd(), &key, &value).map_err(|err| err.to_string())?;
+    update_map_elem_bytes(map_fd, &key, &value).map_err(|err| err.to_string())?;
     Ok((
         json!({
             "status": "pass",
             "map": map_json(&info),
             "new_map_ids": new_map_ids,
+            "source": source,
             "key": contract.key,
             "match_type": "Fallback",
             "match_type_value": contract.match_type,

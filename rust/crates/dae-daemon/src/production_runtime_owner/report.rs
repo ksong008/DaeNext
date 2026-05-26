@@ -1,9 +1,14 @@
 use std::path::Path;
 
-use dae_ebpf_support::{LiveLoadedTproxyListenSocketMap, TproxySocketOptions};
+use dae_ebpf_support::{
+    AttachBackend, EbpfBackendCapabilityReport, LiveLoadedTproxyListenSocketMap, LoaderBackend,
+    NativeBackendAdmissionEvidence, NativeBackendAdmissionReport, TproxySocketOptions,
+    dae_cgroup_attach_matrix, native_backend_admission_report, report_only_ebpf_backend_capability,
+};
 use serde_json::{Map, Value, json};
 
 use super::command::path_string;
+use super::native_ebpf::{native_backend_opt_in_decision_json, native_backend_runtime_decision};
 use super::{
     ExecutionEvidence, FILTER_PREF, PRODUCTION_HOST_IFACE, PRODUCTION_NETNS, PRODUCTION_PEER_IFACE,
     ProductionRuntimeOwnerOptions,
@@ -78,6 +83,8 @@ pub(super) fn report_value(
     evidence: ExecutionEvidence,
 ) -> Value {
     let mut report = Map::new();
+    let ebpf_capability = report_only_ebpf_backend_capability(None);
+    let ebpf_capability_json = ebpf_backend_capability_json(&ebpf_capability, options);
     let active_tcp_executed = options.execute && options.execute_active_tcp;
     let active_tcp_ingress_passed = active_tcp_executed
         && evidence.active_tcp.tcp_accept["status"].as_str() == Some("pass")
@@ -211,9 +218,20 @@ pub(super) fn report_value(
                 "requires_active_tcp": true,
                 "scope": "production owner lifecycle listener reuse, live listen_socket_map re-handoff, BPF/map owner transfer observation, DNS cache migration guard, bounded close, RuntimeOverview fields, invalid-config rollback, and post-reload active TCP probe",
             },
+            "ebpf_backend": ebpf_capability_json.clone(),
+            "native_ebpf": {
+                "opt_in": options.native_ebpf_opt_in,
+                "requested_backend": options.native_ebpf_backend.as_str(),
+                "completed_a3_admission": options.native_ebpf_completed_a3_admission,
+                "native_object": options.native_ebpf_object.as_ref().map(|path| path_string(path)),
+                "fallback_object": path_string(&options.source_object),
+                "fallback_object_preserved": true,
+                "default_enable_allowed": false,
+            },
             "owner_boundary": "dae-daemon",
         }),
     );
+    report.insert("ebpf_backend_capabilities".to_owned(), ebpf_capability_json);
     report.insert(
         "daemon_owned_production_runtime_owner_integrated_in_run".to_owned(),
         json!(true),
@@ -498,6 +516,7 @@ pub(super) fn report_value(
     );
     report.insert("topology_values".to_owned(), evidence.topology_values);
     report.insert("param_image".to_owned(), evidence.param_image);
+    report.insert("native_param_image".to_owned(), evidence.native_param_image);
     report.insert("peer_attach_show".to_owned(), evidence.peer_attach_show);
     report.insert("host_attach_show".to_owned(), evidence.host_attach_show);
     report.insert("loaded_map_handoff".to_owned(), evidence.loaded_map_handoff);
@@ -695,6 +714,128 @@ pub(super) fn report_value(
     report.insert("go_default_path_preserved".to_owned(), json!(true));
     report.insert("go_fallback_required".to_owned(), json!(true));
     Value::Object(report)
+}
+
+fn ebpf_backend_capability_json(
+    report: &EbpfBackendCapabilityReport,
+    options: &ProductionRuntimeOwnerOptions,
+) -> Value {
+    let native_admission = native_backend_admission_report(
+        if options.native_ebpf_completed_a3_admission {
+            NativeBackendAdmissionEvidence::completed_a3_local()
+        } else {
+            NativeBackendAdmissionEvidence::report_only()
+        },
+        !options.native_ebpf_completed_a3_admission,
+    );
+    let native_opt_in = native_backend_runtime_decision(options);
+    json!({
+        "schema": "ebpf-backend-capability-report-v1",
+        "report_only": report.report_only,
+        "aya_userspace_available": report.aya_userspace_available,
+        "tc_netlink_available": report.tc_netlink_available,
+        "tcx_supported": report.tcx_supported,
+        "tcx_available": report.tcx_available,
+        "selected_backend": attach_backend_value(report.selected_backend),
+        "command_fallback_used": report.command_fallback_used,
+        "fallback_reason": report.fallback_reason,
+        "kernel_version_source": "not-probed-report-only",
+        "attach_backend": {
+            "requested": report.attach_plan.requested.as_str(),
+            "attempt_order": report
+                .attach_plan
+                .attempt_order
+                .iter()
+                .map(|backend| backend.as_str())
+                .collect::<Vec<_>>(),
+            "selected": attach_backend_value(report.attach_plan.selected),
+            "effective_backend": "tc_command_fallback",
+            "default_native_backend_enabled": false,
+            "native_backend_admission_required": true,
+            "tcx_optional": true,
+            "tc_netlink_optional": true,
+            "command_fallback_used": report.attach_plan.command_fallback_used,
+            "command_fallback_required": true,
+            "go_netlink_parity_fields_required": [
+                "netns",
+                "iface",
+                "direction",
+                "priority",
+                "handle",
+                "protocol",
+                "direct_action",
+                "program_name",
+                "link_lifetime"
+            ],
+        },
+        "cgroup_attach": {
+            "report_only": true,
+            "default_native_backend_enabled": false,
+            "aya_cgroup_optional": true,
+            "go_attachcgroup_fallback_required": true,
+            "cgroup2_mount_source": "/proc/mounts first cgroup2",
+            "programs": dae_cgroup_attach_matrix()
+                .iter()
+                .map(|line| json!({
+                    "role": format!("{:?}", line.role),
+                    "section": line.section,
+                    "program_name": line.program_name,
+                    "go_attach_type": line.go_attach_type,
+                    "aya_program_kind": line.aya_program_kind.as_str(),
+                    "attach_mode": line.attach_mode,
+                    "link_lifetime_owned_by_backend": line.link_lifetime_owned_by_backend,
+                }))
+                .collect::<Vec<_>>(),
+        },
+        "native_backend_admission": native_backend_admission_json(&native_admission),
+        "native_backend_opt_in": native_backend_opt_in_decision_json(&native_opt_in),
+        "loader": {
+            "default_object_loader": loader_backend_str(report.loader_contract.default_object_loader),
+            "runtime_map_backend": loader_backend_str(report.loader_contract.runtime_map_backend),
+            "aya_userspace_loader_planned": report.loader_contract.aya_userspace_loader_planned,
+            "c_ebpf_object_fallback_required": report.loader_contract.c_ebpf_object_fallback_required,
+            "go_fallback_preserved": report.loader_contract.go_fallback_preserved,
+            "param_rewrite_required_before_attach": report.loader_contract.param_rewrite_required_before_attach,
+        },
+        "scope": if options.execute && options.native_ebpf_opt_in {
+            "runtime opt-in capability wiring; native attach attempts are recorded in executed_steps; default path remains unchanged"
+        } else {
+            "report-only capability wiring; no object load, no attach, no tproxy.c change"
+        },
+    })
+}
+
+fn native_backend_admission_json(report: &NativeBackendAdmissionReport) -> Value {
+    json!({
+        "schema": report.schema,
+        "report_only": report.report_only,
+        "admitted": report.admitted,
+        "default_enable_allowed": report.default_enable_allowed,
+        "selected_native_backend": attach_backend_value(report.selected_native_backend),
+        "fallback_required": report.fallback_required,
+        "tcx_optional_smoke": report.tcx_optional_smoke.as_str(),
+        "required_checks": report
+            .required_checks
+            .iter()
+            .map(|check| check.as_str())
+            .collect::<Vec<_>>(),
+        "missing_checks": report
+            .missing_checks
+            .iter()
+            .map(|check| check.as_str())
+            .collect::<Vec<_>>(),
+        "failed_optional_checks": report.failed_optional_checks,
+    })
+}
+
+fn attach_backend_value(backend: Option<AttachBackend>) -> Value {
+    backend
+        .map(|backend| json!(backend.as_str()))
+        .unwrap_or(Value::Null)
+}
+
+fn loader_backend_str(backend: LoaderBackend) -> &'static str {
+    backend.as_str()
 }
 
 pub(super) fn live_handoff_json(handoff: &LiveLoadedTproxyListenSocketMap) -> Value {

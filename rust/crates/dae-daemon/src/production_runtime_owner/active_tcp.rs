@@ -15,7 +15,7 @@ mod probes;
 mod topology;
 
 pub(super) use cleanup::cleanup_active_tcp_resources;
-pub(super) use maps::update_routing_map;
+pub(super) use maps::{update_existing_routing_map, update_routing_map};
 pub(super) use probes::{run_active_tcp_probe, run_active_tcp_relay_probe};
 pub(super) use topology::{
     attach_lan_program, setup_client_topology, setup_production_ipv4_datapath,
