@@ -12,11 +12,14 @@ use serde_json::{Value, json};
 
 const ROUTING_MAP_NAME: &str = "routing_map";
 const LPM_ARRAY_MAP_NAME: &str = "lpm_array_map";
+const OUTBOUND_CONNECTIVITY_MAP_NAME: &str = "outbound_connectivity_map";
 const UNUSED_LPM_TYPE_NAME: &str = "unused_lpm_type";
 const ROUTING_MAP_KEY_SIZE: u32 = 4;
 const ROUTING_MAP_VALUE_SIZE: u32 = 24;
 const LPM_ARRAY_KEY_SIZE: u32 = 4;
 const LPM_ARRAY_VALUE_SIZE: u32 = 4;
+const OUTBOUND_CONNECTIVITY_KEY_SIZE: u32 = 3;
+const OUTBOUND_CONNECTIVITY_VALUE_SIZE: u32 = 4;
 const LPM_KEY_SIZE: u32 = 20;
 const LPM_VALUE_SIZE: u32 = 4;
 const LPM_MAX_ENTRIES: u32 = 2_048_000;
@@ -40,6 +43,11 @@ const L4_TCP: u8 = 1;
 const L4_UDP: u8 = 2;
 const IP_VERSION_4: u8 = 1;
 const IP_VERSION_6: u8 = 2;
+const CONNECTIVITY_L4_TCP: u8 = 6;
+const CONNECTIVITY_L4_UDP: u8 = 17;
+const CONNECTIVITY_L4_UDP_GO_LEGACY: u8 = 22;
+const CONNECTIVITY_IP_VERSION_4: u8 = 4;
+const CONNECTIVITY_IP_VERSION_6: u8 = 6;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 struct ResidentRoutingPlan {
@@ -83,10 +91,18 @@ pub(super) fn update_new_resident_routing_map(
         .collect::<Vec<_>>();
     let (routing_fd, routing_info) = open_unique_map(&new_map_ids, ROUTING_MAP_NAME)?;
     let lpm = open_optional_unique_map(&new_map_ids, LPM_ARRAY_MAP_NAME)?;
+    let connectivity = match open_optional_unique_map(&new_map_ids, OUTBOUND_CONNECTIVITY_MAP_NAME)?
+    {
+        Some(map) => Some(map),
+        None => open_optional_latest_map(&current, OUTBOUND_CONNECTIVITY_MAP_NAME)?,
+    };
     update_resident_routing_map_fd(
         routing_fd.as_raw_fd(),
         routing_info,
         lpm.as_ref().map(|(fd, info)| (fd.as_raw_fd(), info)),
+        connectivity
+            .as_ref()
+            .map(|(fd, info)| (fd.as_raw_fd(), info)),
         config,
         "new_attached_map",
         new_map_ids,
@@ -113,16 +129,43 @@ pub(super) fn update_existing_resident_routing_map(
         routing_fd.as_raw_fd(),
         routing_info,
         lpm.as_ref().map(|(fd, info)| (fd.as_raw_fd(), info)),
+        None,
         config,
         "existing_loaded_map",
         Vec::new(),
     )
 }
 
+pub(super) fn seed_resident_outbound_connectivity_maps(config: &Config) -> Result<Value, String> {
+    let current = map_ids().map_err(|err| err.to_string())?;
+    let maps = open_all_maps(&current, OUTBOUND_CONNECTIVITY_MAP_NAME)?;
+    let mut updates = Vec::new();
+    for (fd, info) in maps {
+        ensure_map_contract(
+            &info,
+            OUTBOUND_CONNECTIVITY_MAP_NAME,
+            OUTBOUND_CONNECTIVITY_KEY_SIZE,
+            OUTBOUND_CONNECTIVITY_VALUE_SIZE,
+        )?;
+        let update = update_outbound_connectivity_map(fd.as_raw_fd(), config)?;
+        updates.push(json!({
+            "map": map_json(&info),
+            "update": update,
+        }));
+    }
+    Ok(json!({
+        "status": "pass",
+        "map_count": updates.len(),
+        "maps": updates,
+        "scope": "seed all currently loaded resident outbound connectivity maps after peer, LAN, and host attach",
+    }))
+}
+
 fn update_resident_routing_map_fd(
     routing_map_fd: i32,
     routing_info: RuntimeMapInfo,
     lpm_array: Option<(i32, &RuntimeMapInfo)>,
+    connectivity: Option<(i32, &RuntimeMapInfo)>,
     config: &Config,
     source: &str,
     new_map_ids: Vec<u32>,
@@ -146,6 +189,21 @@ fn update_resident_routing_map_fd(
         )?;
         update_lpm_array_map(lpm_fd, &plan.lpm_sets)?;
     }
+    let connectivity_update = match connectivity {
+        Some((fd, info)) => {
+            ensure_map_contract(
+                info,
+                OUTBOUND_CONNECTIVITY_MAP_NAME,
+                OUTBOUND_CONNECTIVITY_KEY_SIZE,
+                OUTBOUND_CONNECTIVITY_VALUE_SIZE,
+            )?;
+            update_outbound_connectivity_map(fd, config)?
+        }
+        None => json!({
+            "status": "skipped",
+            "reason": "resident outbound connectivity map was not found",
+        }),
+    };
 
     for (index, match_set) in plan.matches.iter().enumerate() {
         let key = (index as u32).to_ne_bytes();
@@ -165,6 +223,7 @@ fn update_resident_routing_map_fd(
             "skipped_rules": plan.skipped_rules,
             "fallback_is_last": plan.matches.last().is_some_and(|set| set.kind == "Fallback"),
             "compiled_match_sets": plan.matches.iter().map(match_set_json).collect::<Vec<_>>(),
+            "outbound_connectivity_map_update": connectivity_update,
         }),
         routing_info.id,
     ))
@@ -616,6 +675,53 @@ fn update_lpm_array_map(lpm_array_fd: i32, lpm_sets: &[Vec<IpPrefix>]) -> Result
     Ok(())
 }
 
+fn update_outbound_connectivity_map(
+    connectivity_fd: i32,
+    config: &Config,
+) -> Result<Value, String> {
+    let outbound_ids = resident_user_outbound_ids(config);
+    let mut written = Vec::new();
+    let alive = 1_u32.to_ne_bytes();
+    for outbound in &outbound_ids {
+        for l4proto in [
+            CONNECTIVITY_L4_TCP,
+            CONNECTIVITY_L4_UDP,
+            CONNECTIVITY_L4_UDP_GO_LEGACY,
+        ] {
+            for ipversion in [CONNECTIVITY_IP_VERSION_4, CONNECTIVITY_IP_VERSION_6] {
+                let key = [*outbound, l4proto, ipversion];
+                update_map_elem_bytes(connectivity_fd, &key, &alive)
+                    .map_err(|err| err.to_string())?;
+                written.push(json!({
+                    "outbound": outbound,
+                    "l4proto": l4proto,
+                    "ipversion": ipversion,
+                    "alive": true,
+                }));
+            }
+        }
+    }
+    Ok(json!({
+        "status": "pass",
+        "outbound_count": outbound_ids.len(),
+        "entry_count": written.len(),
+        "entries": written,
+        "scope": "resident runtime seeds user-defined outbound connectivity because Go control-plane alive callbacks are not running in the Rust resident default daemon",
+    }))
+}
+
+fn resident_user_outbound_ids(config: &Config) -> Vec<u8> {
+    config
+        .group
+        .iter()
+        .enumerate()
+        .filter_map(|(index, _)| {
+            let outbound = index + OutboundIndex::USER_DEFINED_MIN.value() as usize;
+            (outbound <= OutboundIndex::USER_DEFINED_MAX.value() as usize).then_some(outbound as u8)
+        })
+        .collect()
+}
+
 fn create_lpm_map(prefixes: &[IpPrefix]) -> Result<OwnedFd, String> {
     let fd = create_bpf_map(CreateBpfMapSpec {
         name: UNUSED_LPM_TYPE_NAME,
@@ -655,7 +761,10 @@ fn ensure_map_contract(
     key_size: u32,
     value_size: u32,
 ) -> Result<(), String> {
-    if info.name != name || info.key_size != key_size || info.value_size != value_size {
+    if !runtime_map_name_matches(&info.name, name)
+        || info.key_size != key_size
+        || info.value_size != value_size
+    {
         return Err(format!(
             "map contract mismatch: expected {name} key_size={key_size} value_size={value_size}; got name={} key_size={} value_size={}",
             info.name, info.key_size, info.value_size
@@ -670,7 +779,7 @@ fn open_unique_map(ids: &[u32], name: &str) -> Result<(OwnedFd, RuntimeMapInfo),
         let Some((fd, info)) = open_map_info_if_alive(*id)? else {
             continue;
         };
-        if info.name == name {
+        if runtime_map_name_matches(&info.name, name) {
             candidates.push((fd, info));
         }
     }
@@ -692,7 +801,7 @@ fn open_optional_unique_map(
         let Some((fd, info)) = open_map_info_if_alive(*id)? else {
             continue;
         };
-        if info.name == name {
+        if runtime_map_name_matches(&info.name, name) {
             candidates.push((fd, info));
         }
     }
@@ -703,6 +812,53 @@ fn open_optional_unique_map(
         ));
     }
     Ok(candidates.pop())
+}
+
+fn open_optional_latest_map(
+    ids: &[u32],
+    name: &str,
+) -> Result<Option<(OwnedFd, RuntimeMapInfo)>, String> {
+    let mut selected = None;
+    for id in ids {
+        let Some((fd, info)) = open_map_info_if_alive(*id)? else {
+            continue;
+        };
+        if !runtime_map_name_matches(&info.name, name) {
+            continue;
+        }
+        if selected
+            .as_ref()
+            .is_none_or(|(_, selected_info): &(OwnedFd, RuntimeMapInfo)| info.id > selected_info.id)
+        {
+            selected = Some((fd, info));
+        }
+    }
+    Ok(selected)
+}
+
+fn open_all_maps(ids: &[u32], name: &str) -> Result<Vec<(OwnedFd, RuntimeMapInfo)>, String> {
+    let mut maps = Vec::new();
+    for id in ids {
+        let Some((fd, info)) = open_map_info_if_alive(*id)? else {
+            continue;
+        };
+        if runtime_map_name_matches(&info.name, name) {
+            maps.push((fd, info));
+        }
+    }
+    Ok(maps)
+}
+
+fn runtime_map_name_matches(actual: &str, expected: &str) -> bool {
+    actual == expected || actual == kernel_map_name(expected)
+}
+
+fn kernel_map_name(name: &str) -> String {
+    name.as_bytes()
+        .iter()
+        .take(15)
+        .map(|byte| *byte as char)
+        .collect()
 }
 
 fn open_map_info_if_alive(id: u32) -> Result<Option<(OwnedFd, RuntimeMapInfo)>, String> {
@@ -840,5 +996,13 @@ routing {
             plan.matches.last().unwrap().outbound,
             OutboundIndex::DIRECT.value()
         );
+        assert_eq!(
+            resident_user_outbound_ids(&config),
+            vec![OutboundIndex::USER_DEFINED_MIN.value()]
+        );
+        assert!(runtime_map_name_matches(
+            "outbound_connec",
+            OUTBOUND_CONNECTIVITY_MAP_NAME
+        ));
     }
 }
