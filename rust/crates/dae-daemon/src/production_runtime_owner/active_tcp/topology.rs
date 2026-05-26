@@ -5,6 +5,9 @@ use serde_json::Value;
 
 use super::super::command::{CommandSpec, mac_string, path_string, run_observation_step, run_step};
 use super::super::native_ebpf::{NativeEbpfAttachRole, NativeEbpfRuntimeState};
+use super::super::netns_link::{
+    NetnsLinkMode, cleanup_partial_link_setup, create_link_pair, setup_link_pair_with_auto_fallback,
+};
 use super::super::{
     PRODUCTION_HOST_IFACE, PRODUCTION_NETNS, PRODUCTION_PEER_IFACE, ProductionRuntimeOwnerOptions,
 };
@@ -17,29 +20,35 @@ pub(in crate::production_runtime_owner) fn setup_client_topology(
     steps: &mut Vec<Value>,
     options: &ProductionRuntimeOwnerOptions,
 ) -> bool {
+    let mut ok = setup_link_pair_with_auto_fallback(
+        steps,
+        "active-tcp",
+        LAN_HOST_IFACE,
+        LAN_CLIENT_IFACE,
+        options.netns_link_mode,
+        |steps, mode| setup_client_link_topology_with_mode(steps, mode),
+        |steps| {
+            cleanup_partial_link_setup(
+                steps,
+                "active-tcp",
+                Some(CLIENT_NETNS),
+                LAN_HOST_IFACE,
+                LAN_CLIENT_IFACE,
+            );
+        },
+    );
+    ok &= setup_client_ipv4_topology(steps, options);
+    ok
+}
+
+fn setup_client_link_topology_with_mode(steps: &mut Vec<Value>, mode: NetnsLinkMode) -> bool {
     let mut ok = true;
     ok &= run_step(
         steps,
         "create-client-netns",
         CommandSpec::new("ip", ["netns", "add", CLIENT_NETNS]),
     );
-    ok &= run_step(
-        steps,
-        "create-lan-veth-pair",
-        CommandSpec::new(
-            "ip",
-            [
-                "link",
-                "add",
-                LAN_HOST_IFACE,
-                "type",
-                "veth",
-                "peer",
-                "name",
-                LAN_CLIENT_IFACE,
-            ],
-        ),
-    );
+    ok &= create_link_pair(steps, "lan", LAN_HOST_IFACE, LAN_CLIENT_IFACE, mode);
     ok &= run_step(
         steps,
         "move-lan-client-into-netns",
@@ -48,6 +57,53 @@ pub(in crate::production_runtime_owner) fn setup_client_topology(
             ["link", "set", LAN_CLIENT_IFACE, "netns", CLIENT_NETNS],
         ),
     );
+    ok &= run_step(
+        steps,
+        "bring-lan-host-link-up",
+        CommandSpec::new("ip", ["link", "set", LAN_HOST_IFACE, "up"]),
+    );
+    ok &= run_step(
+        steps,
+        "bring-client-loopback-up",
+        CommandSpec::new(
+            "ip",
+            [
+                "netns",
+                "exec",
+                CLIENT_NETNS,
+                "ip",
+                "link",
+                "set",
+                "lo",
+                "up",
+            ],
+        ),
+    );
+    ok &= run_step(
+        steps,
+        "bring-lan-client-link-up",
+        CommandSpec::new(
+            "ip",
+            [
+                "netns",
+                "exec",
+                CLIENT_NETNS,
+                "ip",
+                "link",
+                "set",
+                LAN_CLIENT_IFACE,
+                "up",
+            ],
+        ),
+    );
+    ok
+}
+
+fn setup_client_ipv4_topology(
+    steps: &mut Vec<Value>,
+    options: &ProductionRuntimeOwnerOptions,
+) -> bool {
+    let mut ok = true;
     ok &= run_step(
         steps,
         "assign-lan-host-ip",
@@ -61,11 +117,6 @@ pub(in crate::production_runtime_owner) fn setup_client_topology(
                 LAN_HOST_IFACE,
             ],
         ),
-    );
-    ok &= run_step(
-        steps,
-        "bring-lan-host-link-up",
-        CommandSpec::new("ip", ["link", "set", LAN_HOST_IFACE, "up"]),
     );
     ok &= run_step(
         steps,
@@ -88,23 +139,6 @@ pub(in crate::production_runtime_owner) fn setup_client_topology(
     );
     ok &= run_step(
         steps,
-        "bring-client-loopback-up",
-        CommandSpec::new(
-            "ip",
-            [
-                "netns",
-                "exec",
-                CLIENT_NETNS,
-                "ip",
-                "link",
-                "set",
-                "lo",
-                "up",
-            ],
-        ),
-    );
-    ok &= run_step(
-        steps,
         "assign-lan-client-ip",
         CommandSpec::new(
             "ip",
@@ -118,23 +152,6 @@ pub(in crate::production_runtime_owner) fn setup_client_topology(
                 &format!("{}/24", options.active_tcp_client_ip),
                 "dev",
                 LAN_CLIENT_IFACE,
-            ],
-        ),
-    );
-    ok &= run_step(
-        steps,
-        "bring-lan-client-link-up",
-        CommandSpec::new(
-            "ip",
-            [
-                "netns",
-                "exec",
-                CLIENT_NETNS,
-                "ip",
-                "link",
-                "set",
-                LAN_CLIENT_IFACE,
-                "up",
             ],
         ),
     );

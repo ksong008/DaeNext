@@ -176,6 +176,16 @@ pub(super) fn report_value(
             "listener_keys": [0, 1],
             "tproxy_port": options.tproxy_port,
             "dae_netns_id": options.dae_netns_id,
+            "netns_link": {
+                "env": super::netns_link::netns_link_env_name(),
+                "requested": options.netns_link_mode.as_str(),
+                "auto_policy": "netkit_l2_scrub_none_then_veth",
+                "production_pair": [PRODUCTION_HOST_IFACE, PRODUCTION_PEER_IFACE],
+                "active_tcp_lan_pair": [
+                    dae_datapath::ACTIVE_TCP_LAN_HOST_IFACE,
+                    dae_datapath::ACTIVE_TCP_LAN_CLIENT_IFACE,
+                ],
+            },
             "active_tcp": {
                 "enabled": options.execute_active_tcp,
                 "target_ip": options.active_tcp_target_ip,
