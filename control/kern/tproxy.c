@@ -67,6 +67,14 @@
 
 #define NDP_REDIRECT 137
 
+#ifdef DAE_AYA_EBPF_OBJECT
+#define DAE_TC_SEC(name) SEC("classifier/" name)
+#define DAE_AYA_PIN_BY_NAME __uint(pinning, LIBBPF_PIN_BY_NAME);
+#else
+#define DAE_TC_SEC(name) SEC("tc/" name)
+#define DAE_AYA_PIN_BY_NAME
+#endif
+
 // Param keys:
 static const __u32 zero_key;
 static const __u32 one_key = 1;
@@ -207,7 +215,7 @@ struct {
 	__uint(type, BPF_MAP_TYPE_ARRAY_OF_MAPS);
 	__uint(key_size, sizeof(__u32));
 	__uint(max_entries, MAX_LPM_NUM);
-	// __uint(pinning, LIBBPF_PIN_BY_NAME);
+	DAE_AYA_PIN_BY_NAME
 	__array(values, struct map_lpm_type);
 } lpm_array_map SEC(".maps");
 
@@ -1035,13 +1043,13 @@ static __always_inline int do_tproxy_lan_egress(struct __sk_buff *skb, u32 link_
 	return TC_ACT_PIPE;
 }
 
-SEC("tc/lan_egress_l2")
+DAE_TC_SEC("lan_egress_l2")
 int tproxy_lan_egress_l2(struct __sk_buff *skb)
 {
 	return do_tproxy_lan_egress(skb, 14);
 }
 
-SEC("tc/lan_egress_l3")
+DAE_TC_SEC("lan_egress_l3")
 int tproxy_lan_egress_l3(struct __sk_buff *skb)
 {
 	return do_tproxy_lan_egress(skb, 0);
@@ -1250,13 +1258,13 @@ block:
 	return TC_ACT_SHOT;
 }
 
-SEC("tc/lan_ingress_l2")
+DAE_TC_SEC("lan_ingress_l2")
 int tproxy_lan_ingress_l2(struct __sk_buff *skb)
 {
 	return do_tproxy_lan_ingress(skb, 14);
 }
 
-SEC("tc/lan_ingress_l3")
+DAE_TC_SEC("lan_ingress_l3")
 int tproxy_lan_ingress_l3(struct __sk_buff *skb)
 {
 	return do_tproxy_lan_ingress(skb, 0);
@@ -1346,13 +1354,13 @@ static __always_inline int do_tproxy_wan_ingress(struct __sk_buff *skb, u32 link
 	return TC_ACT_PIPE;
 }
 
-SEC("tc/wan_ingress_l2")
+DAE_TC_SEC("wan_ingress_l2")
 int tproxy_wan_ingress_l2(struct __sk_buff *skb)
 {
 	return do_tproxy_wan_ingress(skb, 14);
 }
 
-SEC("tc/wan_ingress_l3")
+DAE_TC_SEC("wan_ingress_l3")
 int tproxy_wan_ingress_l3(struct __sk_buff *skb)
 {
 	return do_tproxy_wan_ingress(skb, 0);
@@ -1649,19 +1657,19 @@ static __always_inline int do_tproxy_wan_egress(struct __sk_buff *skb, u32 link_
 	return bpf_redirect(PARAM.dae0_ifindex, 0);
 }
 
-SEC("tc/wan_egress_l2")
+DAE_TC_SEC("wan_egress_l2")
 int tproxy_wan_egress_l2(struct __sk_buff *skb)
 {
 	return do_tproxy_wan_egress(skb, 14);
 }
 
-SEC("tc/wan_egress_l3")
+DAE_TC_SEC("wan_egress_l3")
 int tproxy_wan_egress_l3(struct __sk_buff *skb)
 {
 	return do_tproxy_wan_egress(skb, 0);
 }
 
-SEC("tc/dae0peer_ingress")
+DAE_TC_SEC("dae0peer_ingress")
 int tproxy_dae0peer_ingress(struct __sk_buff *skb)
 {
 	/* Only packets redirected from wan_egress or lan_ingress have this cb mark.
@@ -1686,7 +1694,7 @@ int tproxy_dae0peer_ingress(struct __sk_buff *skb)
 	return TC_ACT_OK;
 }
 
-SEC("tc/dae0_ingress")
+DAE_TC_SEC("dae0_ingress")
 int tproxy_dae0_ingress(struct __sk_buff *skb)
 {
 	// reverse the tuple!

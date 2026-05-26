@@ -1,7 +1,9 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use dae_ebpf_support::{map_ids, open_live_loaded_tproxy_listen_socket_map_in_netns};
+use dae_ebpf_support::{
+    AttachBackend, map_ids, open_live_loaded_tproxy_listen_socket_map_in_netns,
+};
 use serde_json::{Value, json};
 
 mod active_dns;
@@ -9,6 +11,7 @@ mod active_tcp;
 mod active_udp;
 mod command;
 mod host_ops;
+mod native_ebpf;
 mod reload_runtime;
 mod report;
 mod resident;
@@ -26,7 +29,7 @@ use active_tcp::{
     attach_lan_program, cleanup_active_tcp_resources, push_active_tcp_preflight_checks,
     run_active_tcp_probe, setup_client_topology, setup_production_ipv4_datapath,
     show_host_program_stats, show_lan_program, show_lan_program_stats, show_peer_program_stats,
-    update_routing_map,
+    update_existing_routing_map, update_routing_map,
 };
 use active_udp::{
     ActiveUdpEvidence, DEFAULT_ACTIVE_UDP_TARGET_IP, DEFAULT_ACTIVE_UDP_TARGET_PORT,
@@ -37,6 +40,7 @@ use command::{
     bpf_dae_snapshot, ensure_safe_run_root, path_string, runtime_resource_leftovers,
     wait_for_loaded_map_cleanup,
 };
+use native_ebpf::NativeEbpfRuntimeState;
 use reload_runtime::{ReloadRuntimeEvidence, run_reload_runtime_parity_probe};
 use report::{live_handoff_json, report_value, socket_options_verified};
 pub use resident::{ResidentProductionRuntime, start_resident_production_runtime};
@@ -86,6 +90,10 @@ pub struct ProductionRuntimeOwnerOptions {
     pub active_dns_qname: String,
     pub active_dns_benchmark_iters: u32,
     pub execute_reload_runtime_parity: bool,
+    pub native_ebpf_opt_in: bool,
+    pub native_ebpf_backend: AttachBackend,
+    pub native_ebpf_completed_a3_admission: bool,
+    pub native_ebpf_object: Option<PathBuf>,
 }
 
 impl Default for ProductionRuntimeOwnerOptions {
@@ -119,6 +127,10 @@ impl Default for ProductionRuntimeOwnerOptions {
             active_dns_qname: DEFAULT_ACTIVE_DNS_QNAME.to_owned(),
             active_dns_benchmark_iters: 5,
             execute_reload_runtime_parity: false,
+            native_ebpf_opt_in: false,
+            native_ebpf_backend: AttachBackend::Auto,
+            native_ebpf_completed_a3_admission: false,
+            native_ebpf_object: None,
         }
     }
 }
@@ -283,6 +295,7 @@ struct ExecutionEvidence {
     param_image: Value,
     peer_attach_show: Value,
     host_attach_show: Value,
+    native_param_image: Value,
     loaded_map_handoff: Value,
     before_map_ids: Vec<u32>,
     after_map_ids: Vec<u32>,
@@ -310,6 +323,7 @@ fn execute_owner_smoke(
         before_map_ids: before_map_ids.clone(),
         ..ExecutionEvidence::default()
     };
+    let mut native_runtime = NativeEbpfRuntimeState::new();
 
     let mut ok = true;
     ok &= setup_production_topology(&mut evidence.executed_steps, options);
@@ -342,9 +356,36 @@ fn execute_owner_smoke(
         && evidence.param_image["rewritten_param_matches"]
             .as_bool()
             .unwrap_or(false);
+    let native_param_object = param_object.with_file_name("bpf_bpfel.native-param.o");
+    let native_param_object = match (ok, dae0_ifindex, dae0peer_mac) {
+        (true, Some(dae0_ifindex), Some(dae0peer_mac)) => {
+            let (path, image) = native_ebpf::prepare_native_param_object(
+                options,
+                param_object,
+                &native_param_object,
+                dae0_ifindex,
+                dae0peer_mac,
+            );
+            evidence.native_param_image = image;
+            path
+        }
+        _ => {
+            evidence.native_param_image = json!({
+                "status": "skipped",
+                "reason": "topology runtime PARAM values were not available",
+            });
+            param_object.to_path_buf()
+        }
+    };
 
     if ok {
-        ok &= attach_peer_program(&mut evidence.executed_steps, options, param_object);
+        ok &= attach_peer_program(
+            &mut evidence.executed_steps,
+            options,
+            param_object,
+            &native_param_object,
+            &mut native_runtime,
+        );
     }
     evidence.peer_attach_show = show_peer_program(&mut evidence.executed_steps);
 
@@ -380,9 +421,23 @@ fn execute_owner_smoke(
 
     if options.execute_active_tcp && ok {
         let before_lan_map_ids = map_ids().unwrap_or_default();
-        ok &= attach_lan_program(&mut evidence.executed_steps, options, param_object);
+        ok &= attach_lan_program(
+            &mut evidence.executed_steps,
+            options,
+            param_object,
+            &native_param_object,
+            &mut native_runtime,
+        );
         evidence.active_tcp.lan_attach_show = show_lan_program(&mut evidence.executed_steps);
-        match update_routing_map(&before_lan_map_ids, options.active_tcp_so_mark) {
+        let routing_map_update = if native_runtime.lan_attached() {
+            native_runtime
+                .loaded_map_id("routing_map")
+                .ok_or_else(|| "native loaded routing_map id is unavailable".to_owned())
+                .and_then(|id| update_existing_routing_map(id, options.active_tcp_so_mark))
+        } else {
+            update_routing_map(&before_lan_map_ids, options.active_tcp_so_mark)
+        };
+        match routing_map_update {
             Ok((value, id)) => {
                 evidence.active_tcp.route_map_update = value;
                 evidence.active_tcp.discovered_routing_map_id = Some(id);
@@ -396,7 +451,13 @@ fn execute_owner_smoke(
     }
 
     if ok {
-        ok &= attach_host_program(&mut evidence.executed_steps, options, param_object);
+        ok &= attach_host_program(
+            &mut evidence.executed_steps,
+            options,
+            param_object,
+            &native_param_object,
+            &mut native_runtime,
+        );
     }
     evidence.host_attach_show = show_host_program(&mut evidence.executed_steps);
 
@@ -621,15 +682,25 @@ fn execute_owner_smoke(
         && evidence.host_attach_show["status"].as_str() == Some("pass")
         && host_output.contains(&options.host_section)
         && host_output.contains("tproxy_dae0_ing");
+    let attach_outputs_passed =
+        attach_outputs_passed || (native_runtime.peer_attached() && native_runtime.host_attached());
 
+    let native_peer_attached = native_runtime.peer_attached();
+    let native_lan_attached = native_runtime.lan_attached();
+    let native_host_attached = native_runtime.host_attached();
     drop(live_handoff);
+    native_runtime.reset();
     if options.execute_active_udp {
         delete_active_udp_loopback_target(&mut evidence.cleanup_steps, options);
     }
     if options.execute_active_tcp {
-        cleanup_active_tcp_resources(&mut evidence.cleanup_steps);
+        cleanup_active_tcp_resources(&mut evidence.cleanup_steps, native_lan_attached);
     }
-    cleanup_production_topology(&mut evidence.cleanup_steps);
+    cleanup_production_topology(
+        &mut evidence.cleanup_steps,
+        native_peer_attached,
+        native_host_attached,
+    );
     let after_pin_snapshot = bpf_dae_snapshot();
     let (after_map_ids, loaded_map_cleaned) = wait_for_loaded_map_cleanup(&[
         evidence.discovered_map_id,
@@ -722,7 +793,226 @@ mod tests {
                 .as_bool()
                 .unwrap()
         );
+        assert_eq!(
+            report["ebpf_backend_capabilities"]["schema"]
+                .as_str()
+                .unwrap(),
+            "ebpf-backend-capability-report-v1"
+        );
+        assert!(
+            report["ebpf_backend_capabilities"]["report_only"]
+                .as_bool()
+                .unwrap()
+        );
+        assert!(
+            report["ebpf_backend_capabilities"]["aya_userspace_available"]
+                .as_bool()
+                .unwrap()
+                == cfg!(feature = "native-ebpf")
+        );
+        assert_eq!(
+            report["ebpf_backend_capabilities"]["selected_backend"]
+                .as_str()
+                .unwrap(),
+            "tc_command_fallback"
+        );
+        assert!(
+            report["ebpf_backend_capabilities"]["command_fallback_used"]
+                .as_bool()
+                .unwrap()
+        );
+        assert_eq!(
+            report["ebpf_backend_capabilities"]["attach_backend"]["effective_backend"]
+                .as_str()
+                .unwrap(),
+            "tc_command_fallback"
+        );
+        assert!(
+            !report["ebpf_backend_capabilities"]["attach_backend"]
+                ["default_native_backend_enabled"]
+                .as_bool()
+                .unwrap()
+        );
+        assert!(
+            report["ebpf_backend_capabilities"]["attach_backend"]["command_fallback_required"]
+                .as_bool()
+                .unwrap()
+        );
+        assert!(
+            report["ebpf_backend_capabilities"]["cgroup_attach"]["report_only"]
+                .as_bool()
+                .unwrap()
+        );
+        assert!(
+            !report["ebpf_backend_capabilities"]["cgroup_attach"]["default_native_backend_enabled"]
+                .as_bool()
+                .unwrap()
+        );
+        assert!(
+            report["ebpf_backend_capabilities"]["cgroup_attach"]
+                ["go_attachcgroup_fallback_required"]
+                .as_bool()
+                .unwrap()
+        );
+        assert_eq!(
+            report["ebpf_backend_capabilities"]["cgroup_attach"]["programs"]
+                .as_array()
+                .unwrap()
+                .len(),
+            6
+        );
+        assert_eq!(
+            report["ebpf_backend_capabilities"]["native_backend_admission"]["schema"]
+                .as_str()
+                .unwrap(),
+            "native-ebpf-backend-admission-v1"
+        );
+        assert!(
+            report["ebpf_backend_capabilities"]["native_backend_admission"]["report_only"]
+                .as_bool()
+                .unwrap()
+        );
+        assert!(
+            !report["ebpf_backend_capabilities"]["native_backend_admission"]["admitted"]
+                .as_bool()
+                .unwrap()
+        );
+        assert!(
+            report["ebpf_backend_capabilities"]["native_backend_admission"]["fallback_required"]
+                .as_bool()
+                .unwrap()
+        );
+        assert!(
+            !report["ebpf_backend_capabilities"]["native_backend_admission"]
+                ["default_enable_allowed"]
+                .as_bool()
+                .unwrap()
+        );
+        assert_eq!(
+            report["ebpf_backend_capabilities"]["native_backend_opt_in"]["schema"]
+                .as_str()
+                .unwrap(),
+            "native-ebpf-backend-opt-in-v1"
+        );
+        assert!(
+            !report["ebpf_backend_capabilities"]["native_backend_opt_in"]["opt_in_enabled"]
+                .as_bool()
+                .unwrap()
+        );
+        assert!(
+            report["ebpf_backend_capabilities"]["native_backend_opt_in"]["native_loader_available"]
+                .as_bool()
+                .unwrap()
+                == cfg!(feature = "native-ebpf")
+        );
+        assert!(
+            !report["ebpf_backend_capabilities"]["native_backend_opt_in"]["attempt_native_backend"]
+                .as_bool()
+                .unwrap()
+        );
+        assert_eq!(
+            report["ebpf_backend_capabilities"]["native_backend_opt_in"]["selected_backend"]
+                .as_str()
+                .unwrap(),
+            "tc_command_fallback"
+        );
+        assert_eq!(
+            report["ebpf_backend_capabilities"]["native_backend_opt_in"]["fallback_backend"]
+                .as_str()
+                .unwrap(),
+            "tc_command_fallback"
+        );
+        assert!(
+            report["ebpf_backend_capabilities"]["native_backend_opt_in"]["fallback_required"]
+                .as_bool()
+                .unwrap()
+        );
+        assert!(
+            report["ebpf_backend_capabilities"]["native_backend_opt_in"]["fallback_preserved"]
+                .as_bool()
+                .unwrap()
+        );
+        assert!(
+            !report["ebpf_backend_capabilities"]["native_backend_opt_in"]["default_enable_allowed"]
+                .as_bool()
+                .unwrap()
+        );
+        assert_eq!(
+            report["ebpf_backend_capabilities"]["native_backend_opt_in"]["reason"]
+                .as_str()
+                .unwrap(),
+            "not_opted_in"
+        );
+        assert_eq!(
+            report["contract"]["ebpf_backend"]["selected_backend"]
+                .as_str()
+                .unwrap(),
+            "tc_command_fallback"
+        );
         assert!(!report["default_switch_allowed"].as_bool().unwrap());
+    }
+
+    #[test]
+    fn production_runtime_owner_native_ebpf_opt_in_requires_compiled_loader() {
+        let options = ProductionRuntimeOwnerOptions {
+            native_ebpf_opt_in: true,
+            native_ebpf_backend: AttachBackend::TcNetlink,
+            native_ebpf_completed_a3_admission: true,
+            ..ProductionRuntimeOwnerOptions::default()
+        };
+        let decision = native_ebpf::native_backend_runtime_decision(&options);
+        assert!(decision.opt_in_enabled);
+        assert!(decision.admission_admitted);
+        assert_eq!(
+            decision.native_loader_available,
+            cfg!(feature = "native-ebpf")
+        );
+        assert!(decision.fallback_required);
+        assert!(decision.fallback_preserved);
+        assert!(!decision.default_enable_allowed);
+        if cfg!(feature = "native-ebpf") {
+            assert!(decision.attempt_native_backend);
+            assert_eq!(decision.selected_backend, Some(AttachBackend::TcNetlink));
+        } else {
+            assert!(!decision.attempt_native_backend);
+            assert_eq!(
+                decision.selected_backend,
+                Some(AttachBackend::TcCommandFallback)
+            );
+            assert_eq!(
+                decision.reason,
+                dae_ebpf_support::NativeBackendOptInReason::NativeLoaderUnavailable
+            );
+        }
+    }
+
+    #[test]
+    fn production_runtime_owner_native_param_object_keeps_fallback_without_native_object() {
+        let options = ProductionRuntimeOwnerOptions {
+            native_ebpf_opt_in: true,
+            ..ProductionRuntimeOwnerOptions::default()
+        };
+        let fallback = std::env::temp_dir().join("dae-native-fallback-param.o");
+        let native = std::env::temp_dir().join("dae-native-param.o");
+        let (selected, report) = native_ebpf::prepare_native_param_object(
+            &options,
+            &fallback,
+            &native,
+            7,
+            [1, 2, 3, 4, 5, 6],
+        );
+        assert_eq!(selected, fallback);
+        assert_eq!(report["status"].as_str().unwrap(), "skipped");
+        assert!(
+            report["reason"]
+                .as_str()
+                .unwrap()
+                .contains("native eBPF object is not configured")
+        );
+        assert_eq!(
+            report["fallback_param_object"].as_str().unwrap(),
+            selected.display().to_string()
+        );
     }
 
     #[test]

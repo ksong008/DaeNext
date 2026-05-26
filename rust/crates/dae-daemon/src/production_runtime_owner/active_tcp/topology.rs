@@ -4,6 +4,7 @@ use dae_ebpf_support::{TcAttachDirection, TcAttachTarget, TcBpfAttachSpec, TcCom
 use serde_json::Value;
 
 use super::super::command::{CommandSpec, mac_string, path_string, run_observation_step, run_step};
+use super::super::native_ebpf::{NativeEbpfAttachRole, NativeEbpfRuntimeState};
 use super::super::{
     PRODUCTION_HOST_IFACE, PRODUCTION_NETNS, PRODUCTION_PEER_IFACE, ProductionRuntimeOwnerOptions,
 };
@@ -339,6 +340,8 @@ pub(in crate::production_runtime_owner) fn attach_lan_program(
     steps: &mut Vec<Value>,
     options: &ProductionRuntimeOwnerOptions,
     param_object: &Path,
+    native_param_object: &Path,
+    native_runtime: &mut NativeEbpfRuntimeState,
 ) -> bool {
     let param_object = path_string(param_object);
     let target = lan_attach_target();
@@ -348,6 +351,15 @@ pub(in crate::production_runtime_owner) fn attach_lan_program(
         param_object,
         DEFAULT_LAN_SECTION,
     );
+    if native_runtime.attach_program(
+        steps,
+        options,
+        native_param_object,
+        NativeEbpfAttachRole::LanIngress,
+    ) == Some(true)
+    {
+        return true;
+    }
     let mut ok = true;
     ok &= run_step(
         steps,
@@ -359,7 +371,6 @@ pub(in crate::production_runtime_owner) fn attach_lan_program(
         "attach-lan-ingress-param-aware-ebpf-program",
         command_spec(attach.filter_add_command()),
     );
-    let _ = options;
     ok
 }
 
