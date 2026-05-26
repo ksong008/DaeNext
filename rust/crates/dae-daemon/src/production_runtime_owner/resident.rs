@@ -5,14 +5,15 @@ use std::path::{Path, PathBuf};
 
 use dae_config::Config;
 use dae_ebpf_support::{
-    LiveLoadedTproxyListenSocketMap, map_ids, open_live_loaded_tproxy_listen_socket_map_in_netns,
+    AttachBackend, LiveLoadedTproxyListenSocketMap, map_ids,
+    open_live_loaded_tproxy_listen_socket_map_in_netns,
 };
 use serde_json::{Value, json};
 
 use super::command::{
     bpf_dae_snapshot, path_string, runtime_resource_leftovers, wait_for_loaded_map_cleanup,
 };
-use super::native_ebpf::NativeEbpfRuntimeState;
+use super::native_ebpf::{NativeEbpfRuntimeState, prepare_native_param_object};
 use super::report::{live_handoff_json, socket_options_verified};
 use super::resident_dataplane::{ResidentDataplaneRuntime, start_resident_dataplane_workers};
 use super::resident_lan::{
@@ -20,7 +21,8 @@ use super::resident_lan::{
     lan_start_plan_json, show_resident_lan_program,
 };
 use super::resident_routing::{
-    seed_resident_outbound_connectivity_maps, update_new_resident_routing_map,
+    seed_resident_outbound_connectivity_maps, update_existing_resident_routing_map,
+    update_new_resident_routing_map,
 };
 use super::topology::{
     attach_host_program, attach_peer_program, cleanup_production_topology, preflight_checks,
@@ -33,7 +35,14 @@ use super::{
 };
 
 const EMBEDDED_SOURCE_OBJECT: &[u8] = include_bytes!("../../../../../control/bpf_bpfel.o");
+#[cfg(feature = "native-ebpf")]
+const EMBEDDED_NATIVE_OBJECT: &[u8] =
+    include_bytes!(concat!(env!("OUT_DIR"), "/dae-native-bpf_bpfel.o"));
 const DEFAULT_SOURCE_OBJECT_ENV: &str = "DAE_RUST_BPF_OBJECT";
+#[cfg(feature = "native-ebpf")]
+const DEFAULT_NATIVE_OBJECT_ENV: &str = "DAE_RUST_NATIVE_BPF_OBJECT";
+#[cfg(feature = "native-ebpf")]
+const DEFAULT_NATIVE_EBPF_ENV: &str = "DAE_RUST_NATIVE_EBPF";
 
 #[derive(Debug)]
 pub struct ResidentProductionRuntime {
@@ -41,6 +50,7 @@ pub struct ResidentProductionRuntime {
     native_runtime: NativeEbpfRuntimeState,
     dataplane: Option<ResidentDataplaneRuntime>,
     lan_ifaces: Vec<String>,
+    native_lan_ifaces: Vec<String>,
     cleanup_steps: Vec<Value>,
     discovered_map_id: Option<u32>,
     discovered_routing_map_ids: Vec<Option<u32>>,
@@ -62,7 +72,11 @@ impl ResidentProductionRuntime {
         let native_peer_attached = self.native_runtime.peer_attached();
         let native_host_attached = self.native_runtime.host_attached();
         self.native_runtime.reset();
-        cleanup_resident_lan_programs(&mut self.cleanup_steps, &self.lan_ifaces);
+        cleanup_resident_lan_programs(
+            &mut self.cleanup_steps,
+            &self.lan_ifaces,
+            &self.native_lan_ifaces,
+        );
         cleanup_production_topology(
             &mut self.cleanup_steps,
             native_peer_attached,
@@ -123,6 +137,8 @@ pub fn start_resident_production_runtime(
     })?;
 
     let source_object = resolve_source_object(&artifact_dir)?;
+    let native_object = resolve_native_object(&artifact_dir)?;
+    let native_ebpf_opt_in = native_object.is_some();
     let options = ProductionRuntimeOwnerOptions {
         execute: true,
         ack_root_gate: true,
@@ -131,6 +147,10 @@ pub fn start_resident_production_runtime(
         dae_netns_id: DEFAULT_DAE_NETNS_ID,
         peer_section: DEFAULT_PEER_SECTION.to_owned(),
         host_section: DEFAULT_HOST_SECTION.to_owned(),
+        native_ebpf_opt_in,
+        native_ebpf_backend: AttachBackend::TcNetlink,
+        native_ebpf_completed_a3_admission: native_ebpf_opt_in,
+        native_ebpf_object: native_object,
         ..ProductionRuntimeOwnerOptions::default()
     };
 
@@ -174,11 +194,13 @@ fn start_with_options(
     let mut executed_steps = Vec::new();
     let mut cleanup_steps = Vec::new();
     let param_object = artifact_dir.join("bpf_bpfel.param.o");
+    let native_param_object = artifact_dir.join("bpf_bpfel.native-param.o");
     let mut live_handoff = None;
     let mut dataplane = None;
     let mut native_runtime = NativeEbpfRuntimeState::new();
     let mut discovered_map_id = None;
     let mut discovered_routing_map_ids = Vec::new();
+    let mut native_lan_ifaces = Vec::new();
 
     let result = (|| {
         let mut ok = true;
@@ -203,13 +225,39 @@ fn start_with_options(
             && param_image["rewritten_param_matches"]
                 .as_bool()
                 .unwrap_or(false);
+        let (selected_native_param_object, native_param_image) = match (dae0_ifindex, dae0peer_mac)
+        {
+            (Some(dae0_ifindex), Some(dae0peer_mac)) => prepare_native_param_object(
+                &options,
+                &param_object,
+                &native_param_object,
+                dae0_ifindex,
+                dae0peer_mac,
+            ),
+            _ => (
+                param_object.clone(),
+                json!({
+                    "status": "skipped",
+                    "path": path_string(&native_param_object),
+                    "reason": "topology runtime PARAM values were not available",
+                    "selected_param_object": path_string(&param_object),
+                    "fallback_param_object": path_string(&param_object),
+                }),
+            ),
+        };
+        if options.native_ebpf_opt_in {
+            ok &= native_param_image["status"].as_str() == Some("pass")
+                && native_param_image["rewritten_param_matches"]
+                    .as_bool()
+                    .unwrap_or(false);
+        }
 
         if ok {
             ok &= attach_peer_program(
                 &mut executed_steps,
                 &options,
                 &param_object,
-                &param_object,
+                &selected_native_param_object,
                 &mut native_runtime,
             );
         }
@@ -253,10 +301,37 @@ fn start_with_options(
         for iface in &lan_ifaces {
             if ok {
                 let before_lan_map_ids = map_ids().unwrap_or_default();
-                ok &= attach_resident_lan_program(&mut executed_steps, iface, &param_object);
+                let lan_attach = attach_resident_lan_program(
+                    &mut executed_steps,
+                    &options,
+                    iface,
+                    &param_object,
+                    &selected_native_param_object,
+                    &mut native_runtime,
+                );
+                ok &= lan_attach.ok;
+                if lan_attach.native_attached {
+                    native_lan_ifaces.push(iface.clone());
+                }
                 let show = show_resident_lan_program(&mut executed_steps, iface);
                 let routing = if ok {
-                    match update_new_resident_routing_map(&before_lan_map_ids, config) {
+                    let routing_update = if lan_attach.native_attached {
+                        native_runtime
+                            .loaded_map_id("routing_map")
+                            .ok_or_else(|| {
+                                "resident LAN native attach did not expose routing_map".to_owned()
+                            })
+                            .and_then(|routing_map_id| {
+                                update_existing_resident_routing_map(
+                                    routing_map_id,
+                                    native_runtime.loaded_map_id("lpm_array_map"),
+                                    config,
+                                )
+                            })
+                    } else {
+                        update_new_resident_routing_map(&before_lan_map_ids, config)
+                    };
+                    match routing_update {
                         Ok((value, id)) => {
                             discovered_routing_map_ids.push(Some(id));
                             value
@@ -279,6 +354,7 @@ fn start_with_options(
                 };
                 resident_lan_attach.push(json!({
                     "interface": iface,
+                    "native_attached": lan_attach.native_attached,
                     "show": show,
                 }));
                 resident_lan_routing.push(json!({
@@ -331,7 +407,7 @@ fn start_with_options(
                 &mut executed_steps,
                 &options,
                 &param_object,
-                &param_object,
+                &selected_native_param_object,
                 &mut native_runtime,
             );
         }
@@ -372,7 +448,9 @@ fn start_with_options(
             "start_file": path_string(&start_file),
             "cleanup_file": path_string(&cleanup_file),
             "source_object": path_string(&options.source_object),
+            "native_object": options.native_ebpf_object.as_ref().map(|path| path_string(path)),
             "param_object": path_string(&param_object),
+            "native_param_object": path_string(&selected_native_param_object),
             "tproxy_port": options.tproxy_port,
             "dae_netns_id": options.dae_netns_id,
             "preflight_checks": checks,
@@ -380,8 +458,10 @@ fn start_with_options(
             "executed_steps": executed_steps,
             "topology_values": topology_values,
             "param_image": param_image,
+            "native_param_image": native_param_image,
             "peer_attach_show": peer_attach_show,
-            "resident_lan_plan": lan_start_plan_json(&lan_ifaces),
+            "resident_lan_plan": lan_start_plan_json(&lan_ifaces, options.native_ebpf_opt_in),
+            "resident_native_lan_ifaces": native_lan_ifaces.clone(),
             "resident_lan_attach": resident_lan_attach,
             "resident_lan_routing": resident_lan_routing,
             "resident_dataplane": resident_dataplane,
@@ -415,7 +495,7 @@ fn start_with_options(
         let native_peer_attached = native_runtime.peer_attached();
         let native_host_attached = native_runtime.host_attached();
         native_runtime.reset();
-        cleanup_resident_lan_programs(&mut cleanup_steps, &lan_ifaces);
+        cleanup_resident_lan_programs(&mut cleanup_steps, &lan_ifaces, &native_lan_ifaces);
         cleanup_production_topology(
             &mut cleanup_steps,
             native_peer_attached,
@@ -429,6 +509,7 @@ fn start_with_options(
         native_runtime,
         dataplane,
         lan_ifaces,
+        native_lan_ifaces,
         cleanup_steps,
         discovered_map_id,
         discovered_routing_map_ids,
@@ -474,6 +555,54 @@ fn resolve_source_object(artifact_dir: &Path) -> Result<PathBuf, String> {
         )
     })?;
     Ok(embedded)
+}
+
+#[cfg(feature = "native-ebpf")]
+fn resolve_native_object(artifact_dir: &Path) -> Result<Option<PathBuf>, String> {
+    if !resident_native_ebpf_enabled() {
+        return Ok(None);
+    }
+    if let Ok(path) = env::var(DEFAULT_NATIVE_OBJECT_ENV) {
+        let path = PathBuf::from(path);
+        if path.is_file() {
+            return Ok(Some(path));
+        }
+        return Err(format!(
+            "{DEFAULT_NATIVE_OBJECT_ENV} points to a missing native object: {}",
+            path_string(&path)
+        ));
+    }
+    let embedded = artifact_dir.join("bpf_bpfel.native-embedded.o");
+    fs::write(&embedded, EMBEDDED_NATIVE_OBJECT).map_err(|err| {
+        format!(
+            "failed to write embedded resident native object {}: {err}",
+            path_string(&embedded)
+        )
+    })?;
+    fs::set_permissions(&embedded, fs::Permissions::from_mode(0o644)).map_err(|err| {
+        format!(
+            "failed to chmod embedded resident native object {}: {err}",
+            path_string(&embedded)
+        )
+    })?;
+    Ok(Some(embedded))
+}
+
+#[cfg(not(feature = "native-ebpf"))]
+fn resolve_native_object(_artifact_dir: &Path) -> Result<Option<PathBuf>, String> {
+    Ok(None)
+}
+
+#[cfg(feature = "native-ebpf")]
+fn resident_native_ebpf_enabled() -> bool {
+    env::var(DEFAULT_NATIVE_EBPF_ENV)
+        .map(|value| {
+            !matches!(
+                value.as_str(),
+                "0" | "false" | "FALSE" | "off" | "OFF" | "no" | "NO"
+            )
+        })
+        .unwrap_or(true)
 }
 
 fn write_json_file(path: &Path, label: &str, value: Value) -> Result<(), String> {
