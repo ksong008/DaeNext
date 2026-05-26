@@ -14,9 +14,16 @@ use super::command::{
 };
 use super::native_ebpf::NativeEbpfRuntimeState;
 use super::report::{live_handoff_json, socket_options_verified};
+use super::resident_dataplane::{ResidentDataplaneRuntime, start_resident_dataplane_workers};
+use super::resident_lan::{
+    attach_resident_lan_program, cleanup_resident_lan_programs, configured_lan_ifaces,
+    lan_start_plan_json, show_resident_lan_program,
+};
+use super::resident_routing::update_new_resident_routing_map;
 use super::topology::{
     attach_host_program, attach_peer_program, cleanup_production_topology, preflight_checks,
-    read_topology_values, show_host_program, show_peer_program, write_param_image,
+    read_topology_values, setup_production_ipv4_datapath, show_host_program, show_peer_program,
+    write_param_image,
 };
 use super::{
     DEFAULT_DAE_NETNS_ID, DEFAULT_HOST_SECTION, DEFAULT_PEER_SECTION, PRODUCTION_NETNS,
@@ -30,8 +37,11 @@ const DEFAULT_SOURCE_OBJECT_ENV: &str = "DAE_RUST_BPF_OBJECT";
 pub struct ResidentProductionRuntime {
     live_handoff: Option<LiveLoadedTproxyListenSocketMap>,
     native_runtime: NativeEbpfRuntimeState,
+    dataplane: Option<ResidentDataplaneRuntime>,
+    lan_ifaces: Vec<String>,
     cleanup_steps: Vec<Value>,
     discovered_map_id: Option<u32>,
+    discovered_routing_map_ids: Vec<Option<u32>>,
     before_pin_snapshot: Vec<String>,
     cleanup_file: PathBuf,
     cleaned: bool,
@@ -42,17 +52,24 @@ impl ResidentProductionRuntime {
         if self.cleaned {
             return;
         }
+        if let Some(dataplane) = self.dataplane.as_mut() {
+            dataplane.shutdown(&mut self.cleanup_steps);
+        }
+        self.dataplane = None;
         self.live_handoff.take();
         let native_peer_attached = self.native_runtime.peer_attached();
         let native_host_attached = self.native_runtime.host_attached();
         self.native_runtime.reset();
+        cleanup_resident_lan_programs(&mut self.cleanup_steps, &self.lan_ifaces);
         cleanup_production_topology(
             &mut self.cleanup_steps,
             native_peer_attached,
             native_host_attached,
         );
-        let (after_map_ids, loaded_map_cleaned) =
-            wait_for_loaded_map_cleanup(&[self.discovered_map_id]);
+        let mut discovered_map_ids = Vec::with_capacity(1 + self.discovered_routing_map_ids.len());
+        discovered_map_ids.push(self.discovered_map_id);
+        discovered_map_ids.extend(self.discovered_routing_map_ids.iter().copied());
+        let (after_map_ids, loaded_map_cleaned) = wait_for_loaded_map_cleanup(&discovered_map_ids);
         let after_pin_snapshot = bpf_dae_snapshot();
         let cleanup_report = json!({
             "status": if loaded_map_cleaned && runtime_resource_leftovers(false).is_empty() && self.before_pin_snapshot == after_pin_snapshot {
@@ -117,7 +134,15 @@ pub fn start_resident_production_runtime(
 
     let start_file = artifact_dir.join("resident-production-runtime-start.json");
     let cleanup_file = artifact_dir.join("resident-production-runtime-cleanup.json");
-    start_with_options(options, artifact_dir, start_file, cleanup_file)
+    let lan_ifaces = configured_lan_ifaces(config);
+    start_with_options(
+        options,
+        artifact_dir,
+        start_file,
+        cleanup_file,
+        config,
+        lan_ifaces,
+    )
 }
 
 fn start_with_options(
@@ -125,6 +150,8 @@ fn start_with_options(
     artifact_dir: PathBuf,
     start_file: PathBuf,
     cleanup_file: PathBuf,
+    config: &Config,
+    lan_ifaces: Vec<String>,
 ) -> Result<ResidentProductionRuntime, String> {
     let checks = preflight_checks(&options);
     let blockers = checks
@@ -146,15 +173,20 @@ fn start_with_options(
     let mut cleanup_steps = Vec::new();
     let param_object = artifact_dir.join("bpf_bpfel.param.o");
     let mut live_handoff = None;
+    let mut dataplane = None;
     let mut native_runtime = NativeEbpfRuntimeState::new();
     let mut discovered_map_id = None;
+    let mut discovered_routing_map_ids = Vec::new();
 
     let result = (|| {
         let mut ok = true;
         ok &= setup_runtime_topology(&mut executed_steps, &options);
-        let (topology_values, dae0_ifindex, _dae0_mac, dae0peer_mac) =
+        let (topology_values, dae0_ifindex, dae0_mac, dae0peer_mac) =
             read_topology_values(&mut executed_steps, &options);
-        ok &= dae0_ifindex.is_some() && dae0peer_mac.is_some();
+        ok &= dae0_ifindex.is_some() && dae0_mac.is_some() && dae0peer_mac.is_some();
+        if let (true, Some(dae0_mac)) = (ok, dae0_mac) {
+            ok &= setup_production_ipv4_datapath(&mut executed_steps, dae0_mac);
+        }
         let param_image = match (dae0_ifindex, dae0peer_mac) {
             (Some(dae0_ifindex), Some(dae0peer_mac)) => {
                 write_param_image(&options, &param_object, dae0_ifindex, dae0peer_mac)
@@ -214,6 +246,84 @@ fn start_with_options(
             })
         };
 
+        let mut resident_lan_attach = Vec::new();
+        let mut resident_lan_routing = Vec::new();
+        for iface in &lan_ifaces {
+            if ok {
+                let before_lan_map_ids = map_ids().unwrap_or_default();
+                ok &= attach_resident_lan_program(&mut executed_steps, iface, &param_object);
+                let show = show_resident_lan_program(&mut executed_steps, iface);
+                let routing = if ok {
+                    match update_new_resident_routing_map(&before_lan_map_ids, config) {
+                        Ok((value, id)) => {
+                            discovered_routing_map_ids.push(Some(id));
+                            value
+                        }
+                        Err(err) => {
+                            ok = false;
+                            json!({
+                                "status": "fail",
+                                "interface": iface,
+                                "error": err,
+                            })
+                        }
+                    }
+                } else {
+                    json!({
+                        "status": "skipped",
+                        "interface": iface,
+                        "reason": "resident LAN ingress attach did not pass",
+                    })
+                };
+                resident_lan_attach.push(json!({
+                    "interface": iface,
+                    "show": show,
+                }));
+                resident_lan_routing.push(json!({
+                    "interface": iface,
+                    "routing_map_update": routing,
+                }));
+            } else {
+                resident_lan_attach.push(json!({
+                    "interface": iface,
+                    "show": Value::Null,
+                    "status": "skipped",
+                    "reason": "previous resident runtime step did not pass",
+                }));
+                resident_lan_routing.push(json!({
+                    "interface": iface,
+                    "routing_map_update": {
+                        "status": "skipped",
+                        "reason": "previous resident runtime step did not pass"
+                    },
+                }));
+            }
+        }
+
+        let resident_dataplane = if ok {
+            match live_handoff.as_ref() {
+                Some(handoff) => {
+                    let (value, runtime) =
+                        start_resident_dataplane_workers(handoff, config, &artifact_dir);
+                    ok &= value["status"].as_str() == Some("pass");
+                    dataplane = runtime;
+                    value
+                }
+                None => {
+                    ok = false;
+                    json!({
+                        "status": "fail",
+                        "error": "resident tproxy listener handoff is unavailable",
+                    })
+                }
+            }
+        } else {
+            json!({
+                "status": "skipped",
+                "reason": "previous resident runtime step did not pass",
+            })
+        };
+
         if ok {
             ok &= attach_host_program(
                 &mut executed_steps,
@@ -252,9 +362,14 @@ fn start_with_options(
             "topology_values": topology_values,
             "param_image": param_image,
             "peer_attach_show": peer_attach_show,
+            "resident_lan_plan": lan_start_plan_json(&lan_ifaces),
+            "resident_lan_attach": resident_lan_attach,
+            "resident_lan_routing": resident_lan_routing,
+            "resident_dataplane": resident_dataplane,
             "host_attach_show": host_attach_show,
             "loaded_map_handoff": loaded_map_handoff,
             "discovered_map_id": discovered_map_id,
+            "discovered_routing_map_ids": discovered_routing_map_ids.clone(),
             "resident_runtime_started": ok,
         });
         write_json_file(
@@ -273,10 +388,14 @@ fn start_with_options(
     })();
 
     if let Err(err) = result {
+        if let Some(dataplane) = dataplane.as_mut() {
+            dataplane.shutdown(&mut cleanup_steps);
+        }
         drop(live_handoff.take());
         let native_peer_attached = native_runtime.peer_attached();
         let native_host_attached = native_runtime.host_attached();
         native_runtime.reset();
+        cleanup_resident_lan_programs(&mut cleanup_steps, &lan_ifaces);
         cleanup_production_topology(
             &mut cleanup_steps,
             native_peer_attached,
@@ -288,8 +407,11 @@ fn start_with_options(
     Ok(ResidentProductionRuntime {
         live_handoff,
         native_runtime,
+        dataplane,
+        lan_ifaces,
         cleanup_steps,
         discovered_map_id,
+        discovered_routing_map_ids,
         before_pin_snapshot,
         cleanup_file,
         cleaned: false,

@@ -15,6 +15,9 @@ mod native_ebpf;
 mod reload_runtime;
 mod report;
 mod resident;
+mod resident_dataplane;
+mod resident_lan;
+mod resident_routing;
 mod topology;
 mod udp_io;
 
