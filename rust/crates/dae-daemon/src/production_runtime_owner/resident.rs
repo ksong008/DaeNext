@@ -43,6 +43,8 @@ const DEFAULT_SOURCE_OBJECT_ENV: &str = "DAE_RUST_BPF_OBJECT";
 const DEFAULT_NATIVE_OBJECT_ENV: &str = "DAE_RUST_NATIVE_BPF_OBJECT";
 #[cfg(feature = "native-ebpf")]
 const DEFAULT_NATIVE_EBPF_ENV: &str = "DAE_RUST_NATIVE_EBPF";
+#[cfg(feature = "native-ebpf")]
+const DEFAULT_NATIVE_BACKEND_ENV: &str = "DAE_RUST_NATIVE_EBPF_BACKEND";
 
 #[derive(Debug)]
 pub struct ResidentProductionRuntime {
@@ -139,6 +141,7 @@ pub fn start_resident_production_runtime(
     let source_object = resolve_source_object(&artifact_dir)?;
     let native_object = resolve_native_object(&artifact_dir)?;
     let native_ebpf_opt_in = native_object.is_some();
+    let native_ebpf_backend = resolve_native_backend()?;
     let options = ProductionRuntimeOwnerOptions {
         execute: true,
         ack_root_gate: true,
@@ -148,7 +151,7 @@ pub fn start_resident_production_runtime(
         peer_section: DEFAULT_PEER_SECTION.to_owned(),
         host_section: DEFAULT_HOST_SECTION.to_owned(),
         native_ebpf_opt_in,
-        native_ebpf_backend: AttachBackend::TcNetlink,
+        native_ebpf_backend,
         native_ebpf_completed_a3_admission: native_ebpf_opt_in,
         native_ebpf_object: native_object,
         ..ProductionRuntimeOwnerOptions::default()
@@ -603,6 +606,34 @@ fn resident_native_ebpf_enabled() -> bool {
             )
         })
         .unwrap_or(true)
+}
+
+#[cfg(feature = "native-ebpf")]
+fn resolve_native_backend() -> Result<AttachBackend, String> {
+    let Ok(raw) = env::var(DEFAULT_NATIVE_BACKEND_ENV) else {
+        return Ok(AttachBackend::TcNetlink);
+    };
+    parse_native_backend(&raw).ok_or_else(|| {
+        format!(
+            "{DEFAULT_NATIVE_BACKEND_ENV} must be one of auto, tcx, tc-netlink, tc_netlink, tc-command-fallback, tc_command_fallback; got {raw}"
+        )
+    })
+}
+
+#[cfg(not(feature = "native-ebpf"))]
+fn resolve_native_backend() -> Result<AttachBackend, String> {
+    Ok(AttachBackend::TcNetlink)
+}
+
+#[cfg(feature = "native-ebpf")]
+fn parse_native_backend(value: &str) -> Option<AttachBackend> {
+    match value {
+        "auto" => Some(AttachBackend::Auto),
+        "tcx" => Some(AttachBackend::Tcx),
+        "tc-netlink" | "tc_netlink" => Some(AttachBackend::TcNetlink),
+        "tc-command-fallback" | "tc_command_fallback" => Some(AttachBackend::TcCommandFallback),
+        _ => None,
+    }
 }
 
 fn write_json_file(path: &Path, label: &str, value: Value) -> Result<(), String> {
