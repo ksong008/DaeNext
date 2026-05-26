@@ -11,6 +11,10 @@ use super::command::{
     parse_step_u32, path_string, push_check, run_observation_step, run_step, tproxy_port_available,
 };
 use super::native_ebpf::{NativeEbpfAttachRole, NativeEbpfRuntimeState};
+use super::netns_link::{
+    NetnsLinkMode, cleanup_partial_link_setup, create_link_pair, netns_link_env_name,
+    setup_link_pair_with_auto_fallback,
+};
 use super::{
     FILTER_PREF, PRODUCTION_HOST_IFACE, PRODUCTION_NETNS, PRODUCTION_PEER_IFACE,
     ProductionRuntimeOwnerOptions,
@@ -20,23 +24,37 @@ pub(super) fn setup_production_topology(
     steps: &mut Vec<Value>,
     options: &ProductionRuntimeOwnerOptions,
 ) -> bool {
-    let mut ok = true;
-    ok &= run_step(
+    setup_link_pair_with_auto_fallback(
         steps,
-        "create-production-veth-pair",
-        CommandSpec::new(
-            "ip",
-            [
-                "link",
-                "add",
+        "production",
+        PRODUCTION_HOST_IFACE,
+        PRODUCTION_PEER_IFACE,
+        options.netns_link_mode,
+        |steps, mode| setup_production_topology_with_link_mode(steps, options, mode),
+        |steps| {
+            cleanup_partial_link_setup(
+                steps,
+                "production",
+                Some(PRODUCTION_NETNS),
                 PRODUCTION_HOST_IFACE,
-                "type",
-                "veth",
-                "peer",
-                "name",
                 PRODUCTION_PEER_IFACE,
-            ],
-        ),
+            );
+        },
+    )
+}
+
+fn setup_production_topology_with_link_mode(
+    steps: &mut Vec<Value>,
+    options: &ProductionRuntimeOwnerOptions,
+    mode: NetnsLinkMode,
+) -> bool {
+    let mut ok = true;
+    ok &= create_link_pair(
+        steps,
+        "production",
+        PRODUCTION_HOST_IFACE,
+        PRODUCTION_PEER_IFACE,
+        mode,
     );
     ok &= run_step(
         steps,
@@ -288,6 +306,29 @@ pub(super) fn read_topology_values(
     steps: &mut Vec<Value>,
     options: &ProductionRuntimeOwnerOptions,
 ) -> (Value, Option<u32>, Option<[u8; 6]>, Option<[u8; 6]>) {
+    let dae0_link_detail_step = run_observation_step(
+        steps,
+        "read-production-dae0-link-detail",
+        CommandSpec::new("ip", ["-d", "link", "show", "dev", PRODUCTION_HOST_IFACE]),
+    );
+    let dae0peer_link_detail_step = run_observation_step(
+        steps,
+        "read-production-dae0peer-link-detail",
+        CommandSpec::new(
+            "ip",
+            [
+                "netns",
+                "exec",
+                PRODUCTION_NETNS,
+                "ip",
+                "-d",
+                "link",
+                "show",
+                "dev",
+                PRODUCTION_PEER_IFACE,
+            ],
+        ),
+    );
     let dae0_ifindex_step = run_observation_step(
         steps,
         "read-production-dae0-ifindex",
@@ -321,9 +362,15 @@ pub(super) fn read_topology_values(
     let dae0_ifindex = parse_step_u32(&dae0_ifindex_step).ok();
     let dae0_mac = parse_step_mac(&dae0_mac_step).ok();
     let dae0peer_mac = parse_step_mac(&dae0peer_mac_step).ok();
+    let dae0_link_kind = parse_link_kind(&dae0_link_detail_step);
+    let dae0peer_link_kind = parse_link_kind(&dae0peer_link_detail_step);
     let value = match (dae0_ifindex, dae0_mac, dae0peer_mac) {
         (Some(dae0_ifindex), Some(dae0_mac), Some(dae0peer_mac)) => json!({
             "status": "pass",
+            "netns_link_env": netns_link_env_name(),
+            "requested_netns_link_mode": options.netns_link_mode.as_str(),
+            "production_host_link_kind": dae0_link_kind,
+            "production_peer_link_kind": dae0peer_link_kind,
             "dae0_ifindex": dae0_ifindex,
             "dae_netns_id": options.dae_netns_id,
             "dae_netns_id_source": "ip netns set daens",
@@ -334,12 +381,30 @@ pub(super) fn read_topology_values(
         }),
         _ => json!({
             "status": "fail",
+            "netns_link_env": netns_link_env_name(),
+            "requested_netns_link_mode": options.netns_link_mode.as_str(),
+            "production_host_link_kind": dae0_link_kind,
+            "production_peer_link_kind": dae0peer_link_kind,
             "dae0_ifindex_error": parse_step_u32(&dae0_ifindex_step).err(),
             "dae0_mac_error": parse_step_mac(&dae0_mac_step).err(),
             "dae0peer_mac_error": parse_step_mac(&dae0peer_mac_step).err(),
         }),
     };
     (value, dae0_ifindex, dae0_mac, dae0peer_mac)
+}
+
+fn parse_link_kind(step: &Value) -> Option<&'static str> {
+    if step["status"].as_str() != Some("pass") {
+        return None;
+    }
+    let stdout = step["stdout"].as_str().unwrap_or_default();
+    if stdout.contains(" netkit ") || stdout.contains("\n    netkit ") {
+        Some("netkit")
+    } else if stdout.contains(" veth ") || stdout.contains("\n    veth ") {
+        Some("veth")
+    } else {
+        None
+    }
 }
 
 pub(super) fn write_param_image(
@@ -591,7 +656,12 @@ pub(super) fn preflight_checks(options: &ProductionRuntimeOwnerOptions) -> Vec<V
             "native_loader_compiled": cfg!(feature = "native-ebpf"),
             "default_enable_allowed": false,
             "tc_command_fallback_required": true,
-            "topology_link_mode_unchanged": "DAE_NETNS_LINK auto remains netkit/veth; TCX is only an attach backend",
+            "topology_link_mode": {
+                "env": netns_link_env_name(),
+                "requested": options.netns_link_mode.as_str(),
+                "auto_policy": "netkit_l2_scrub_none_then_veth",
+                "tcx_is_attach_backend_only": true,
+            },
         }),
         "native eBPF runtime opt-in contract is invalid",
     );

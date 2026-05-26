@@ -2,6 +2,7 @@ use crate::config_validate::validate_config_file;
 use crate::identity::daemon_identity;
 use crate::lifecycle::{default_lifecycle_smoke_root, lifecycle_smoke_report};
 use crate::preflight::identity_preflight_report;
+use crate::production_runtime_owner::{NetnsLinkMode, parse_netns_link_mode};
 use crate::{
     DefaultRunIdentityAdmissionOptions, default_run_identity_admission_report,
     default_run_identity_admission_root,
@@ -214,6 +215,7 @@ fn run_default_optin_command(args: &[String], version: &str) -> DaemonOutput {
     let mut ack_root_gate = false;
     let mut production_runtime_tproxy_port = 12345_u16;
     let mut production_runtime_dae_netns_id = 49_u32;
+    let mut production_runtime_netns_link_mode = NetnsLinkMode::Auto;
     let mut production_runtime_object: Option<PathBuf> = None;
     let mut production_runtime_native_ebpf_opt_in = false;
     let mut production_runtime_native_ebpf_backend = AttachBackend::Auto;
@@ -392,6 +394,32 @@ fn run_default_optin_command(args: &[String], version: &str) -> DaemonOutput {
                         );
                     }
                 };
+            }
+            "--production-runtime-netns-link" => {
+                let Some(value) = iter.next() else {
+                    return DaemonOutput::usage(
+                        "missing run --production-runtime-netns-link value",
+                    );
+                };
+                production_runtime_netns_link_mode = match parse_netns_link_mode(value) {
+                    Ok(value) => value,
+                    Err(_) => {
+                        return DaemonOutput::usage(
+                            "invalid run --production-runtime-netns-link value",
+                        );
+                    }
+                };
+            }
+            _ if arg.starts_with("--production-runtime-netns-link=") => {
+                production_runtime_netns_link_mode =
+                    match parse_netns_link_mode(arg.split_once('=').unwrap().1) {
+                        Ok(value) => value,
+                        Err(_) => {
+                            return DaemonOutput::usage(
+                                "invalid run --production-runtime-netns-link value",
+                            );
+                        }
+                    };
             }
             "--production-runtime-object" => {
                 let Some(value) = iter.next() else {
@@ -1043,6 +1071,7 @@ fn run_default_optin_command(args: &[String], version: &str) -> DaemonOutput {
     options.production_runtime_owner.ack_root_gate = ack_root_gate;
     options.production_runtime_owner.tproxy_port = production_runtime_tproxy_port;
     options.production_runtime_owner.dae_netns_id = production_runtime_dae_netns_id;
+    options.production_runtime_owner.netns_link_mode = production_runtime_netns_link_mode;
     options.production_runtime_owner.execute_active_tcp = production_runtime_active_tcp;
     options.production_runtime_owner.execute_active_tcp_relay = production_runtime_active_tcp_relay;
     options.production_runtime_owner.execute_active_udp = production_runtime_active_udp;
