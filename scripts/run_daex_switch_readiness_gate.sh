@@ -68,7 +68,7 @@ global {
 }
 
 routing {
-  pname(NetworkManager, systemd-resolved, dnsmasq) -> must_direct
+  pname(NetworkManager, systemd-resolved, dnsmasq, ssh, sshd) -> must_direct
 }
 EOF
   chmod 0600 "$config_file"
