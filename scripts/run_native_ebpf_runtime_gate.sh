@@ -95,11 +95,12 @@ if [[ ! -f "$manifest" ]]; then
   exit 1
 fi
 
-python3 - "$manifest" <<'PY'
+python3 - "$manifest" "$backend" <<'PY'
 import json
 import sys
 
-manifest = sys.argv[1]
+manifest, expected_backend_raw = sys.argv[1:3]
+expected_backend = expected_backend_raw.replace("-", "_")
 with open(manifest, "r", encoding="utf-8") as fh:
     root = json.load(fh)
 owner = root.get("production_runtime_owner", {})
@@ -154,7 +155,7 @@ if len(native_steps) != 3:
 for step in native_steps:
     if step.get("status") != "pass":
         missing.append(f"{step.get('name')}.status")
-    if step.get("backend") != "tc_netlink":
+    if step.get("backend") != expected_backend:
         missing.append(f"{step.get('name')}.backend")
     if step.get("fallback_used") is not False:
         missing.append(f"{step.get('name')}.fallback_used")
