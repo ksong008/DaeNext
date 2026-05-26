@@ -19,7 +19,9 @@ use super::resident_lan::{
     attach_resident_lan_program, cleanup_resident_lan_programs, configured_lan_ifaces,
     lan_start_plan_json, show_resident_lan_program,
 };
-use super::resident_routing::update_new_resident_routing_map;
+use super::resident_routing::{
+    seed_resident_outbound_connectivity_maps, update_new_resident_routing_map,
+};
 use super::topology::{
     attach_host_program, attach_peer_program, cleanup_production_topology, preflight_checks,
     read_topology_values, setup_production_ipv4_datapath, show_host_program, show_peer_program,
@@ -334,6 +336,23 @@ fn start_with_options(
             );
         }
         let host_attach_show = show_host_program(&mut executed_steps);
+        let resident_outbound_connectivity = if ok {
+            match seed_resident_outbound_connectivity_maps(config) {
+                Ok(value) => value,
+                Err(err) => {
+                    ok = false;
+                    json!({
+                        "status": "fail",
+                        "error": err,
+                    })
+                }
+            }
+        } else {
+            json!({
+                "status": "skipped",
+                "reason": "previous resident runtime step did not pass",
+            })
+        };
         let peer_output = peer_attach_show["stdout"].as_str().unwrap_or_default();
         let host_output = host_attach_show["stdout"].as_str().unwrap_or_default();
         let attach_outputs_passed = peer_attach_show["status"].as_str() == Some("pass")
@@ -367,6 +386,7 @@ fn start_with_options(
             "resident_lan_routing": resident_lan_routing,
             "resident_dataplane": resident_dataplane,
             "host_attach_show": host_attach_show,
+            "resident_outbound_connectivity": resident_outbound_connectivity,
             "loaded_map_handoff": loaded_map_handoff,
             "discovered_map_id": discovered_map_id,
             "discovered_routing_map_ids": discovered_routing_map_ids.clone(),
