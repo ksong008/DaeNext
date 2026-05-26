@@ -5,7 +5,7 @@ use std::path::Path;
 use std::time::{Duration, Instant};
 
 use dae_ebpf_support::{
-    LiveLoadedTproxyListenSocketMap, map_info, open_map_fd, update_map_elem_bytes,
+    AttachBackend, LiveLoadedTproxyListenSocketMap, map_info, open_map_fd, update_map_elem_bytes,
 };
 use dae_engine::{
     DnsObservabilityStats, RuntimeOverview, RuntimeStatsSnapshot, RuntimeTrafficSample,
@@ -65,13 +65,14 @@ pub(super) fn run_reload_runtime_parity_probe(
     .is_ok();
 
     let listener_before = listener_identity(handoff);
-    let bpf_owner_transfer = rewrite_sockmap_with_reused_listener_fds(handoff);
+    let bpf_owner_transfer = rewrite_sockmap_with_reused_listener_fds(handoff, options);
     evidence.production_bpf_owner_transferred = bpf_owner_transfer["status"].as_str()
         == Some("pass")
         && bpf_owner_transfer["same_map_id_after_reopen"]
             .as_bool()
             .unwrap_or(false)
-        && bpf_owner_transfer["tc_filters_still_attached"]
+        && bpf_owner_transfer["attach_continuity"]["status"].as_str() == Some("pass")
+        && bpf_owner_transfer["attach_continuity_evidence_passed"]
             .as_bool()
             .unwrap_or(false);
     evidence.bpf_owner_transfer = bpf_owner_transfer;
@@ -166,7 +167,10 @@ pub(super) fn run_reload_runtime_parity_probe(
     evidence
 }
 
-fn rewrite_sockmap_with_reused_listener_fds(handoff: &LiveLoadedTproxyListenSocketMap) -> Value {
+fn rewrite_sockmap_with_reused_listener_fds(
+    handoff: &LiveLoadedTproxyListenSocketMap,
+    options: &ProductionRuntimeOwnerOptions,
+) -> Value {
     let before_info = json!({
         "id": handoff.map.id,
         "name": handoff.map.name,
@@ -212,11 +216,13 @@ fn rewrite_sockmap_with_reused_listener_fds(handoff: &LiveLoadedTproxyListenSock
             .as_str()
             .unwrap_or_default()
             .contains("tproxy_dae0_ing");
+    let attach_continuity = attach_continuity_value(options, tc_filters_still_attached);
+    let attach_continuity_evidence_passed = attach_continuity["status"].as_str() == Some("pass");
     let same_map_id_after_reopen = after_info["id"].as_u64() == Some(u64::from(handoff.map.id));
     let passed = tcp_update.is_ok()
         && udp_update.is_ok()
         && same_map_id_after_reopen
-        && tc_filters_still_attached;
+        && attach_continuity_evidence_passed;
     json!({
         "status": if passed { "pass" } else { "fail" },
         "old_owner_eject_bpf_object": true,
@@ -231,7 +237,37 @@ fn rewrite_sockmap_with_reused_listener_fds(handoff: &LiveLoadedTproxyListenSock
         "peer_filter": peer_filter,
         "host_filter": host_filter,
         "tc_filters_still_attached": tc_filters_still_attached,
+        "attach_continuity": attach_continuity,
+        "attach_continuity_evidence_passed": attach_continuity_evidence_passed,
         "current_swap_to_new_owner": passed,
+    })
+}
+
+fn attach_continuity_value(
+    options: &ProductionRuntimeOwnerOptions,
+    tc_filters_still_attached: bool,
+) -> Value {
+    let tcx_link_backend =
+        options.native_ebpf_opt_in && matches!(options.native_ebpf_backend, AttachBackend::Tcx);
+    let tc_filter_text_required = !tcx_link_backend;
+    let passed = if tc_filter_text_required {
+        tc_filters_still_attached
+    } else {
+        true
+    };
+    json!({
+        "status": if passed { "pass" } else { "fail" },
+        "backend": options.native_ebpf_backend.as_str(),
+        "native_ebpf_opt_in": options.native_ebpf_opt_in,
+        "tc_filter_text_required": tc_filter_text_required,
+        "tc_filter_text_observed": tc_filters_still_attached,
+        "tcx_link_backend": tcx_link_backend,
+        "post_reload_active_tcp_required": tcx_link_backend,
+        "reason": if tcx_link_backend {
+            "TCX links are owned by the Aya/BPF link backend and are not required to appear as tc filter text; post-reload active TCP validates attach continuity after map handoff"
+        } else {
+            "tc filter text must still show the production peer and host programs after sockmap handoff"
+        },
     })
 }
 
