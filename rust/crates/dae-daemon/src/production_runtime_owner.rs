@@ -12,6 +12,7 @@ mod active_udp;
 mod command;
 mod host_ops;
 mod native_ebpf;
+mod netns_link;
 mod reload_runtime;
 mod report;
 mod resident;
@@ -44,6 +45,7 @@ use command::{
     wait_for_loaded_map_cleanup,
 };
 use native_ebpf::NativeEbpfRuntimeState;
+pub use netns_link::{NetnsLinkMode, parse_netns_link_mode};
 use reload_runtime::{ReloadRuntimeEvidence, run_reload_runtime_parity_probe};
 use report::{live_handoff_json, report_value, socket_options_verified};
 pub use resident::{ResidentProductionRuntime, start_resident_production_runtime};
@@ -70,6 +72,7 @@ pub struct ProductionRuntimeOwnerOptions {
     pub source_object: PathBuf,
     pub tproxy_port: u16,
     pub dae_netns_id: u32,
+    pub netns_link_mode: NetnsLinkMode,
     pub peer_section: String,
     pub host_section: String,
     pub execute_active_tcp: bool,
@@ -107,6 +110,7 @@ impl Default for ProductionRuntimeOwnerOptions {
             source_object: PathBuf::from(DEFAULT_SOURCE_OBJECT),
             tproxy_port: DEFAULT_TPROXY_PORT,
             dae_netns_id: DEFAULT_DAE_NETNS_ID,
+            netns_link_mode: NetnsLinkMode::Auto,
             peer_section: DEFAULT_PEER_SECTION.to_owned(),
             host_section: DEFAULT_HOST_SECTION.to_owned(),
             execute_active_tcp: false,
