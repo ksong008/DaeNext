@@ -38,6 +38,7 @@ summary_file="${SUMMARY_FILE:-${gate_root}/daex-switch-readiness.json}"
 matched_iterations="${MATCHED_BENCHMARK_ITERATIONS:-10}"
 matched_ready_timeout_ms="${MATCHED_READY_TIMEOUT_MS:-15000}"
 backend="${DAE_NATIVE_EBPF_BACKEND:-tc-netlink}"
+netns_link="${DAE_NETNS_LINK:-auto}"
 
 case "$gate_root" in
   /tmp/dae-daex-switch-readiness-gate*) ;;
@@ -88,6 +89,7 @@ if ! RUN_ID="$run_id" \
   CARGO_LOG="$native_log" \
   CGROUP_LOG="$cgroup_log" \
   DAE_NATIVE_EBPF_BACKEND="$backend" \
+  DAE_NETNS_LINK="$netns_link" \
   ./scripts/run_native_ebpf_runtime_gate.sh >"${gate_root}/native-ebpf-runtime-gate.stdout" 2>"${gate_root}/native-ebpf-runtime-gate.stderr"; then
   echo "native Aya/eBPF runtime gate failed" >&2
   tail -c 20000 "${gate_root}/native-ebpf-runtime-gate.stderr" >&2 || true
@@ -276,6 +278,24 @@ summary = {
     },
     "native_evidence": {
         "scope": owner.get("production_runtime_owner_scope"),
+        "netns_link": {
+            "requested": (((owner.get("contract") or {}).get("netns_link") or {}).get("requested")),
+            "topology_values": owner.get("topology_values"),
+            "selection_steps": [
+                {
+                    "name": step.get("name"),
+                    "status": step.get("status"),
+                    "requested": step.get("requested"),
+                    "selected": step.get("selected"),
+                    "fallback_used": step.get("fallback_used"),
+                }
+                for step in owner.get("executed_steps", [])
+                if step.get("name") in {
+                    "select-production-netns-link-mode",
+                    "select-active-tcp-netns-link-mode",
+                }
+            ],
+        },
         "active_tcp_relay_benchmark": (owner.get("active_tcp") or {}).get("relay_benchmark"),
         "active_udp_benchmark": (owner.get("active_udp") or {}).get("benchmark"),
         "active_dns_benchmark": (owner.get("active_dns") or {}).get("benchmark"),

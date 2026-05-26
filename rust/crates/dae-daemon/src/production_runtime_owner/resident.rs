@@ -14,6 +14,7 @@ use super::command::{
     bpf_dae_snapshot, path_string, runtime_resource_leftovers, wait_for_loaded_map_cleanup,
 };
 use super::native_ebpf::{NativeEbpfRuntimeState, prepare_native_param_object};
+use super::netns_link::resolve_netns_link_mode_from_env;
 use super::report::{live_handoff_json, socket_options_verified};
 use super::resident_dataplane::{ResidentDataplaneRuntime, start_resident_dataplane_workers};
 use super::resident_lan::{
@@ -142,12 +143,14 @@ pub fn start_resident_production_runtime(
     let native_object = resolve_native_object(&artifact_dir)?;
     let native_ebpf_opt_in = native_object.is_some();
     let native_ebpf_backend = resolve_native_backend()?;
+    let netns_link_mode = resolve_netns_link_mode_from_env()?;
     let options = ProductionRuntimeOwnerOptions {
         execute: true,
         ack_root_gate: true,
         source_object,
         tproxy_port: config.global.tproxy_port,
         dae_netns_id: DEFAULT_DAE_NETNS_ID,
+        netns_link_mode,
         peer_section: DEFAULT_PEER_SECTION.to_owned(),
         host_section: DEFAULT_HOST_SECTION.to_owned(),
         native_ebpf_opt_in,
