@@ -19,6 +19,7 @@ pub(super) fn service_contract_json(path: &Path) -> Value {
     let exec_start =
         text.contains("ExecStart=/usr/bin/dae run --disable-timestamp -c /etc/dae/config.dae");
     let exec_reload = text.contains("ExecReload=/usr/bin/dae reload $MAINPID");
+    let optional_env_file = text.contains("EnvironmentFile=-/etc/default/dae");
     let uses_rust_optin = text.contains("dae-daemon-optin");
     let service_contract_preserved =
         exec_start_pre && exec_start && exec_reload && !uses_rust_optin;
@@ -28,6 +29,7 @@ pub(super) fn service_contract_json(path: &Path) -> Value {
         "exec_start_pre_validate_preserved": exec_start_pre,
         "exec_start_go_default_run_preserved": exec_start,
         "exec_reload_pid_signal_preserved": exec_reload,
+        "optional_env_file_for_backend_rollbacks": optional_env_file,
         "rust_optin_binary_referenced": uses_rust_optin,
         "service_contract_preserved": service_contract_preserved,
     })
