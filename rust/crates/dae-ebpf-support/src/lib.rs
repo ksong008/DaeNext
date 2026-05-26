@@ -1,9 +1,15 @@
 pub mod abi;
+pub mod admission;
 pub mod attach;
+#[cfg(feature = "aya-loader")]
+pub mod aya_loader;
+pub mod capability;
+pub mod cgroup;
 pub mod connectivity;
 pub mod kernel;
 pub mod loader;
 pub mod maps;
+pub mod opt_in;
 pub mod param;
 pub mod param_loader;
 pub mod param_object;
@@ -14,6 +20,12 @@ pub mod temporary_program;
 pub mod tproxy_listener;
 
 #[cfg(test)]
+mod admission_tests;
+#[cfg(test)]
+mod cgroup_tests;
+#[cfg(test)]
+mod opt_in_tests;
+#[cfg(test)]
 mod tests;
 
 pub use abi::{
@@ -23,9 +35,28 @@ pub use abi::{
     CHECKSUM_FEATURE_VERSION, LINK_HDR_LEN_ETHERNET, LINK_HDR_LEN_NONE, MAX_MATCH_SET_LEN,
     SK_ASSIGN_FEATURE_VERSION, TASK_COMM_LEN, TPROXY_MARK, bpf_abi_contract,
 };
+pub use admission::{
+    NativeBackendAdmissionCheck, NativeBackendAdmissionEvidence, NativeBackendAdmissionReport,
+    OptionalAdmissionEvidence, native_backend_admission_report, native_backend_required_checks,
+};
 pub use attach::{
-    AttachBackend, AttachBackendAvailability, AttachBackendPlan, TCX_ATTACH_FEATURE_VERSION,
-    TcAttachDirection, TcAttachTarget, TcBpfAttachSpec, TcCommandSpec, plan_attach_backend,
+    AttachBackend, AttachBackendAvailability, AttachBackendPlan, DaeTcAttachLine,
+    DaeTcAttachMatrixInput, DaeTcAttachRole, ETH_P_ALL, TCX_ATTACH_FEATURE_VERSION,
+    TcAttachBackendReport, TcAttachDirection, TcAttachLayer, TcAttachSectionPrefix, TcAttachTarget,
+    TcBpfAttachSpec, TcCommandSpec, TcNativeAttachSpec, dae_tc_attach_matrix, plan_attach_backend,
+    tc_handle,
+};
+#[cfg(feature = "aya-loader")]
+pub use aya_loader::{
+    AyaCgroupAttachDetachReport, AyaTcAttachDetachReport, AyaUserspaceLoadReport,
+    AyaUserspaceLoadedObject, AyaUserspaceLoaderOptions, aya_userspace_load_report,
+    load_attach_aya_sched_classifier, load_attach_detach_aya_cgroup_program,
+    load_attach_detach_aya_sched_classifier, load_aya_userspace_object,
+};
+pub use capability::{EbpfBackendCapabilityReport, report_only_ebpf_backend_capability};
+pub use cgroup::{
+    DaeCgroupAttachLine, DaeCgroupAttachRole, DaeCgroupProgramKind, dae_cgroup_attach_matrix,
+    detect_cgroup2_mount, detect_cgroup2_mount_from_proc_mounts,
 };
 pub use connectivity::{ConnectivityEvent, ConnectivityKey, ConnectivityMap};
 pub use kernel::{FeatureGateReport, Version};
@@ -35,6 +66,10 @@ pub use loader::{
 pub use maps::{
     MapSpec, RuntimeMapContract, RuntimeMapRole, map_catalog, pinned_reuse_maps,
     runtime_map_contract,
+};
+pub use opt_in::{
+    NativeBackendOptInDecision, NativeBackendOptInReason, NativeBackendOptInRequest,
+    native_backend_opt_in_decision,
 };
 pub use param::{DaeParamInput, build_dae_param, htons};
 pub use param_loader::{

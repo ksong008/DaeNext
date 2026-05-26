@@ -22,6 +22,7 @@ use crate::{default_reload_owner_benchmark_root, reload_owner_benchmark_report};
 use crate::{default_reload_owner_handoff_root, reload_owner_handoff_smoke_report};
 use crate::{default_run_entrypoint_preflight_root, run_entrypoint_preflight_report};
 use crate::{default_signal_control_plane_smoke_root, signal_control_plane_smoke_report};
+use dae_ebpf_support::AttachBackend;
 use std::path::PathBuf;
 use std::time::Duration;
 
@@ -214,6 +215,10 @@ fn run_default_optin_command(args: &[String], version: &str) -> DaemonOutput {
     let mut production_runtime_tproxy_port = 12345_u16;
     let mut production_runtime_dae_netns_id = 49_u32;
     let mut production_runtime_object: Option<PathBuf> = None;
+    let mut production_runtime_native_ebpf_opt_in = false;
+    let mut production_runtime_native_ebpf_backend = AttachBackend::Auto;
+    let mut production_runtime_native_ebpf_completed_a3_admission = false;
+    let mut production_runtime_native_ebpf_object: Option<PathBuf> = None;
     let mut production_runtime_active_tcp_target_ip: Option<String> = None;
     let mut production_runtime_active_tcp_client_ip: Option<String> = None;
     let mut production_runtime_active_tcp_target_port: Option<u16> = None;
@@ -396,6 +401,50 @@ fn run_default_optin_command(args: &[String], version: &str) -> DaemonOutput {
             }
             _ if arg.starts_with("--production-runtime-object=") => {
                 production_runtime_object = arg.split_once('=').map(|(_, value)| value.into());
+            }
+            "--production-runtime-native-ebpf-object" => {
+                let Some(value) = iter.next() else {
+                    return DaemonOutput::usage(
+                        "missing run --production-runtime-native-ebpf-object value",
+                    );
+                };
+                production_runtime_native_ebpf_object = Some(value.into());
+            }
+            _ if arg.starts_with("--production-runtime-native-ebpf-object=") => {
+                production_runtime_native_ebpf_object =
+                    arg.split_once('=').map(|(_, value)| value.into());
+            }
+            "--production-runtime-native-ebpf" => {
+                production_runtime_native_ebpf_opt_in = true;
+            }
+            "--production-runtime-native-ebpf-backend" => {
+                let Some(value) = iter.next() else {
+                    return DaemonOutput::usage(
+                        "missing run --production-runtime-native-ebpf-backend value",
+                    );
+                };
+                production_runtime_native_ebpf_backend = match parse_attach_backend(value) {
+                    Some(value) => value,
+                    None => {
+                        return DaemonOutput::usage(
+                            "invalid run --production-runtime-native-ebpf-backend value",
+                        );
+                    }
+                };
+            }
+            _ if arg.starts_with("--production-runtime-native-ebpf-backend=") => {
+                production_runtime_native_ebpf_backend =
+                    match parse_attach_backend(arg.split_once('=').unwrap().1) {
+                        Some(value) => value,
+                        None => {
+                            return DaemonOutput::usage(
+                                "invalid run --production-runtime-native-ebpf-backend value",
+                            );
+                        }
+                    };
+            }
+            "--production-runtime-native-ebpf-completed-a3-local" => {
+                production_runtime_native_ebpf_completed_a3_admission = true;
             }
             "--production-runtime-active-tcp-target-ip" => {
                 let Some(value) = iter.next() else {
@@ -1001,6 +1050,12 @@ fn run_default_optin_command(args: &[String], version: &str) -> DaemonOutput {
     options
         .production_runtime_owner
         .execute_reload_runtime_parity = production_runtime_reload_parity;
+    options.production_runtime_owner.native_ebpf_opt_in = production_runtime_native_ebpf_opt_in;
+    options.production_runtime_owner.native_ebpf_backend = production_runtime_native_ebpf_backend;
+    options
+        .production_runtime_owner
+        .native_ebpf_completed_a3_admission = production_runtime_native_ebpf_completed_a3_admission;
+    options.production_runtime_owner.native_ebpf_object = production_runtime_native_ebpf_object;
     if let Some(source_object) = production_runtime_object {
         options.production_runtime_owner.source_object = source_object;
     }
@@ -1145,6 +1200,16 @@ fn run_default_optin_command(args: &[String], version: &str) -> DaemonOutput {
             stderr: format!("{err}\n"),
             exit_code: 1,
         },
+    }
+}
+
+fn parse_attach_backend(value: &str) -> Option<AttachBackend> {
+    match value {
+        "auto" => Some(AttachBackend::Auto),
+        "tcx" => Some(AttachBackend::Tcx),
+        "tc-netlink" | "tc_netlink" => Some(AttachBackend::TcNetlink),
+        "tc-command-fallback" | "tc_command_fallback" => Some(AttachBackend::TcCommandFallback),
+        _ => None,
     }
 }
 

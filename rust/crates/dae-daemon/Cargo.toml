@@ -5,6 +5,10 @@ edition.workspace = true
 license.workspace = true
 repository.workspace = true
 
+[features]
+default = []
+native-ebpf = ["dae-ebpf-support/aya-loader"]
+
 [dependencies]
 dae-config.workspace = true
 dae-control.workspace = true
