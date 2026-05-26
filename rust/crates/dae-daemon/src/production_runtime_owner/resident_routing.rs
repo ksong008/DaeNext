@@ -79,6 +79,13 @@ struct IpPrefix {
     bits: u8,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct OutboundConnectivityEntry {
+    outbound: u8,
+    l4proto: u8,
+    ipversion: u8,
+}
+
 pub(super) fn update_new_resident_routing_map(
     before_map_ids: &[u32],
     config: &Config,
@@ -680,26 +687,18 @@ fn update_outbound_connectivity_map(
     config: &Config,
 ) -> Result<Value, String> {
     let outbound_ids = resident_user_outbound_ids(config);
+    let entries = resident_outbound_connectivity_entries(config);
     let mut written = Vec::new();
     let alive = 1_u32.to_ne_bytes();
-    for outbound in &outbound_ids {
-        for l4proto in [
-            CONNECTIVITY_L4_TCP,
-            CONNECTIVITY_L4_UDP,
-            CONNECTIVITY_L4_UDP_GO_LEGACY,
-        ] {
-            for ipversion in [CONNECTIVITY_IP_VERSION_4, CONNECTIVITY_IP_VERSION_6] {
-                let key = [*outbound, l4proto, ipversion];
-                update_map_elem_bytes(connectivity_fd, &key, &alive)
-                    .map_err(|err| err.to_string())?;
-                written.push(json!({
-                    "outbound": outbound,
-                    "l4proto": l4proto,
-                    "ipversion": ipversion,
-                    "alive": true,
-                }));
-            }
-        }
+    for entry in entries {
+        let key = [entry.outbound, entry.l4proto, entry.ipversion];
+        update_map_elem_bytes(connectivity_fd, &key, &alive).map_err(|err| err.to_string())?;
+        written.push(json!({
+            "outbound": entry.outbound,
+            "l4proto": entry.l4proto,
+            "ipversion": entry.ipversion,
+            "alive": true,
+        }));
     }
     Ok(json!({
         "status": "pass",
@@ -720,6 +719,26 @@ fn resident_user_outbound_ids(config: &Config) -> Vec<u8> {
             (outbound <= OutboundIndex::USER_DEFINED_MAX.value() as usize).then_some(outbound as u8)
         })
         .collect()
+}
+
+fn resident_outbound_connectivity_entries(config: &Config) -> Vec<OutboundConnectivityEntry> {
+    let mut entries = Vec::new();
+    for outbound in resident_user_outbound_ids(config) {
+        for l4proto in [
+            CONNECTIVITY_L4_TCP,
+            CONNECTIVITY_L4_UDP,
+            CONNECTIVITY_L4_UDP_GO_LEGACY,
+        ] {
+            for ipversion in [CONNECTIVITY_IP_VERSION_4, CONNECTIVITY_IP_VERSION_6] {
+                entries.push(OutboundConnectivityEntry {
+                    outbound,
+                    l4proto,
+                    ipversion,
+                });
+            }
+        }
+    }
+    entries
 }
 
 fn create_lpm_map(prefixes: &[IpPrefix]) -> Result<OwnedFd, String> {
@@ -1004,5 +1023,54 @@ routing {
             "outbound_connec",
             OUTBOUND_CONNECTIVITY_MAP_NAME
         ));
+    }
+
+    #[test]
+    fn resident_outbound_connectivity_entries_cover_user_groups() {
+        let sections = parse_config(
+            r#"
+global {
+    lan_interface: daerust0
+}
+group {
+    proxy {
+        policy: fixed(0)
+    }
+    backup {
+        policy: fixed(1)
+    }
+}
+routing {
+    l4proto(udp) && dport(19090) -> proxy
+    fallback: direct
+}
+"#,
+        )
+        .unwrap();
+        let config = build_config(&sections).unwrap();
+        let entries = resident_outbound_connectivity_entries(&config);
+        let first = OutboundIndex::USER_DEFINED_MIN.value();
+        let second = first + 1;
+
+        assert_eq!(entries.len(), 12);
+        assert!(!entries.iter().any(|entry| {
+            entry.outbound == OutboundIndex::DIRECT.value()
+                || entry.outbound == OutboundIndex::BLOCK.value()
+        }));
+        for outbound in [first, second] {
+            for l4proto in [
+                CONNECTIVITY_L4_TCP,
+                CONNECTIVITY_L4_UDP,
+                CONNECTIVITY_L4_UDP_GO_LEGACY,
+            ] {
+                for ipversion in [CONNECTIVITY_IP_VERSION_4, CONNECTIVITY_IP_VERSION_6] {
+                    assert!(entries.contains(&OutboundConnectivityEntry {
+                        outbound,
+                        l4proto,
+                        ipversion,
+                    }));
+                }
+            }
+        }
     }
 }
