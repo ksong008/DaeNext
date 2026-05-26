@@ -177,6 +177,56 @@ impl NativeEbpfRuntimeState {
         }
     }
 
+    pub(in crate::production_runtime_owner) fn attach_resident_lan_program(
+        &mut self,
+        steps: &mut Vec<Value>,
+        options: &ProductionRuntimeOwnerOptions,
+        param_object: &Path,
+        iface: &str,
+    ) -> Option<bool> {
+        let decision = native_backend_runtime_decision(options);
+        steps.push(json!({
+            "name": format!("native-ebpf-resident-lan-opt-in-decision-{iface}"),
+            "status": "pass",
+            "role": "resident_lan_ingress",
+            "interface": iface,
+            "decision": native_backend_opt_in_decision_json(&decision),
+        }));
+        if !decision.attempt_native_backend {
+            return None;
+        }
+        let backend = decision.selected_backend?;
+        match self.try_attach_resident_lan_program(param_object, iface, backend) {
+            Ok(report) => {
+                self.lan_attached = true;
+                steps.push(json!({
+                    "name": format!("attach-resident-lan-ingress-native-ebpf-program-{iface}"),
+                    "status": "pass",
+                    "role": "resident_lan_ingress",
+                    "interface": iface,
+                    "backend": backend.as_str(),
+                    "native_attach": report,
+                    "fallback_required": true,
+                    "fallback_used": false,
+                }));
+                Some(true)
+            }
+            Err(err) => {
+                steps.push(json!({
+                    "name": format!("attach-resident-lan-ingress-native-ebpf-program-{iface}"),
+                    "status": "fail",
+                    "role": "resident_lan_ingress",
+                    "interface": iface,
+                    "backend": backend.as_str(),
+                    "stderr": err,
+                    "fallback_required": true,
+                    "fallback_used": true,
+                }));
+                Some(false)
+            }
+        }
+    }
+
     #[cfg(not(feature = "native-ebpf"))]
     fn try_attach_program(
         &mut self,
@@ -197,6 +247,44 @@ impl NativeEbpfRuntimeState {
         backend: AttachBackend,
     ) -> Result<Value, String> {
         let spec = native_attach_spec(role, param_object);
+        self.try_attach_spec(param_object, spec, backend)
+    }
+
+    #[cfg(not(feature = "native-ebpf"))]
+    fn try_attach_resident_lan_program(
+        &mut self,
+        _param_object: &Path,
+        _iface: &str,
+        _backend: AttachBackend,
+    ) -> Result<Value, String> {
+        Err("native eBPF runtime feature is not compiled".to_owned())
+    }
+
+    #[cfg(feature = "native-ebpf")]
+    fn try_attach_resident_lan_program(
+        &mut self,
+        param_object: &Path,
+        iface: &str,
+        backend: AttachBackend,
+    ) -> Result<Value, String> {
+        let object = path_string(param_object);
+        let spec = TcBpfAttachSpec::new(
+            TcAttachTarget::host(iface.to_owned(), TcAttachDirection::Ingress),
+            ACTIVE_TCP_LAN_FILTER_PREF,
+            object,
+            "classifier/lan_ingress_l2",
+        )
+        .native_attach_spec("tproxy_lan_ingress_l2", 2, tc_handle(0x2023, 0b100));
+        self.try_attach_spec(param_object, spec, backend)
+    }
+
+    #[cfg(feature = "native-ebpf")]
+    fn try_attach_spec(
+        &mut self,
+        param_object: &Path,
+        spec: TcNativeAttachSpec,
+        backend: AttachBackend,
+    ) -> Result<Value, String> {
         let loaded = self.ensure_loaded(param_object)?;
         let report = dae_ebpf_support::load_attach_aya_sched_classifier(loaded, &spec, backend)?;
         Ok(json!({
