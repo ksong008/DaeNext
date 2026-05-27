@@ -39,6 +39,24 @@ matched_iterations="${MATCHED_BENCHMARK_ITERATIONS:-10}"
 matched_ready_timeout_ms="${MATCHED_READY_TIMEOUT_MS:-15000}"
 backend="${DAE_NATIVE_EBPF_BACKEND:-tc-netlink}"
 netns_link="${DAE_NETNS_LINK:-auto}"
+workspace_go_work="${MATCHED_WORKSPACE_GO_WORK:-/root/project/go.work}"
+matched_source_dir="${MATCHED_SOURCE_DIR:-$repo_root}"
+matched_go_work="${MATCHED_GO_WORK:-}"
+
+if [[ -z "${MATCHED_SOURCE_DIR:-}" && "$repo_root" != "/root/project/dae" && -f "/root/project/dae/go.mod" && -f "$workspace_go_work" ]]; then
+  repo_head="$(git -C "$repo_root" rev-parse HEAD 2>/dev/null || true)"
+  if [[ -n "$repo_head" ]] && git -C /root/project/dae merge-base --is-ancestor "$repo_head" HEAD 2>/dev/null; then
+    matched_source_dir="/root/project/dae"
+  fi
+fi
+
+if [[ -z "$matched_go_work" && -f "$workspace_go_work" ]]; then
+  case "$matched_source_dir" in
+    /root/project/dae | /root/project/dae/* | /root/project/outbound | /root/project/outbound/*)
+      matched_go_work="$workspace_go_work"
+      ;;
+  esac
+fi
 
 case "$gate_root" in
   /tmp/dae-daex-switch-readiness-gate*) ;;
@@ -54,6 +72,22 @@ mkdir -p "$gate_root"
 if [[ ! -x "$go_tool" ]]; then
   echo "matched benchmark requires an executable Go tool compatible with /root/project/go.work: $go_tool" >&2
   echo "set GO_TOOL to a Go 1.24+ binary" >&2
+  exit 2
+fi
+
+if [[ ! -f "$matched_source_dir/go.mod" ]]; then
+  echo "matched benchmark source dir must contain go.mod: $matched_source_dir" >&2
+  exit 2
+fi
+
+if [[ "$matched_source_dir" == "$repo_root" && "$repo_root" == /root/project/daed/wing/dae-core && -f "$workspace_go_work" ]]; then
+  echo "matched benchmark refuses nested dae-core Go build while $workspace_go_work is active" >&2
+  echo "set MATCHED_SOURCE_DIR=/root/project/dae after syncing dae-core to a commit contained in daex" >&2
+  exit 2
+fi
+
+if [[ -n "$matched_go_work" && ! -f "$matched_go_work" ]]; then
+  echo "matched benchmark go.work does not exist: $matched_go_work" >&2
   exit 2
 fi
 
@@ -99,19 +133,29 @@ fi
 native_manifest="${native_run_root}/run/dae-daemon-optin-run.json"
 
 echo "running matched Go/Rust default daemon benchmark: iterations=$matched_iterations"
-if ! "$candidate_binary" run \
-  --config "$config_file" \
-  --root "$matched_run_root" \
-  --disable-timestamp \
-  --disable-sudo \
-  --execute-matched-default-benchmark \
-  --matched-benchmark-iterations "$matched_iterations" \
-  --matched-ready-timeout-ms "$matched_ready_timeout_ms" \
-  --ack-root-gate \
-  --go-tool "$go_tool" \
-  --rust-binary "$candidate_binary" \
-  --source-dir "$repo_root" \
-  --exit-after-ready >"$matched_log" 2>&1; then
+echo "matched Go source dir: $matched_source_dir"
+if [[ -n "$matched_go_work" ]]; then
+  echo "matched Go workspace: $matched_go_work"
+fi
+matched_args=(
+  run
+  --config "$config_file"
+  --root "$matched_run_root"
+  --disable-timestamp
+  --disable-sudo
+  --execute-matched-default-benchmark
+  --matched-benchmark-iterations "$matched_iterations"
+  --matched-ready-timeout-ms "$matched_ready_timeout_ms"
+  --ack-root-gate
+  --go-tool "$go_tool"
+  --rust-binary "$candidate_binary"
+  --source-dir "$matched_source_dir"
+)
+if [[ -n "$matched_go_work" ]]; then
+  matched_args+=(--go-work "$matched_go_work")
+fi
+matched_args+=(--exit-after-ready)
+if ! "$candidate_binary" "${matched_args[@]}" >"$matched_log" 2>&1; then
   echo "matched Go/Rust default daemon benchmark failed; tail follows" >&2
   tail -c 20000 "$matched_log" >&2 || true
   exit 1
