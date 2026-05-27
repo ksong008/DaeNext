@@ -15,6 +15,7 @@ use serde_json::{Value, json};
 use super::ProductionRuntimeOwnerOptions;
 use super::active_tcp::run_active_tcp_probe;
 use super::command::{CommandSpec, path_string, run_observation_command};
+use super::native_ebpf::native_backend_runtime_decision;
 use super::{PRODUCTION_HOST_IFACE, PRODUCTION_NETNS, PRODUCTION_PEER_IFACE};
 
 #[derive(Default)]
@@ -247,9 +248,10 @@ fn attach_continuity_value(
     options: &ProductionRuntimeOwnerOptions,
     tc_filters_still_attached: bool,
 ) -> Value {
-    let tcx_link_backend =
-        options.native_ebpf_opt_in && matches!(options.native_ebpf_backend, AttachBackend::Tcx);
-    let tc_filter_text_required = !tcx_link_backend;
+    let native_decision = native_backend_runtime_decision(options);
+    let native_link_backend = native_decision.attempt_native_backend;
+    let tcx_link_backend = native_decision.selected_backend == Some(AttachBackend::Tcx);
+    let tc_filter_text_required = !native_link_backend;
     let passed = if tc_filter_text_required {
         tc_filters_still_attached
     } else {
@@ -261,10 +263,13 @@ fn attach_continuity_value(
         "native_ebpf_opt_in": options.native_ebpf_opt_in,
         "tc_filter_text_required": tc_filter_text_required,
         "tc_filter_text_observed": tc_filters_still_attached,
+        "native_link_backend": native_link_backend,
+        "selected_backend": native_decision.selected_backend.map(|backend| backend.as_str()),
+        "decision_reason": native_decision.reason.as_str(),
         "tcx_link_backend": tcx_link_backend,
-        "post_reload_active_tcp_required": tcx_link_backend,
-        "reason": if tcx_link_backend {
-            "TCX links are owned by the Aya/BPF link backend and are not required to appear as tc filter text; post-reload active TCP validates attach continuity after map handoff"
+        "post_reload_active_tcp_required": native_link_backend,
+        "reason": if native_link_backend {
+            "native Aya/BPF links may not be observable as tc filter text on every attach backend; post-reload active TCP validates attach continuity after map handoff"
         } else {
             "tc filter text must still show the production peer and host programs after sockmap handoff"
         },
@@ -480,4 +485,45 @@ fn stable_digest(input: &str) -> u64 {
     input.bytes().fold(0xcbf29ce484222325_u64, |hash, byte| {
         (hash ^ u64::from(byte)).wrapping_mul(0x100000001b3)
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn attach_continuity_requires_tc_filter_text_for_non_native_fallback() {
+        let options = ProductionRuntimeOwnerOptions::default();
+        let report = attach_continuity_value(&options, false);
+        assert_eq!(report["status"].as_str(), Some("fail"));
+        assert_eq!(report["tc_filter_text_required"].as_bool(), Some(true));
+        assert_eq!(report["native_link_backend"].as_bool(), Some(false));
+        assert_eq!(
+            report["post_reload_active_tcp_required"].as_bool(),
+            Some(false)
+        );
+    }
+
+    #[cfg(feature = "native-ebpf")]
+    #[test]
+    fn attach_continuity_defers_native_backend_visibility_to_active_tcp() {
+        let options = ProductionRuntimeOwnerOptions {
+            native_ebpf_opt_in: true,
+            native_ebpf_backend: AttachBackend::Auto,
+            native_ebpf_completed_a3_admission: true,
+            ..ProductionRuntimeOwnerOptions::default()
+        };
+        let report = attach_continuity_value(&options, false);
+        assert_eq!(report["status"].as_str(), Some("pass"));
+        assert_eq!(report["tc_filter_text_required"].as_bool(), Some(false));
+        assert_eq!(report["native_link_backend"].as_bool(), Some(true));
+        assert!(matches!(
+            report["selected_backend"].as_str(),
+            Some("tc_netlink" | "tcx")
+        ));
+        assert_eq!(
+            report["post_reload_active_tcp_required"].as_bool(),
+            Some(true)
+        );
+    }
 }
