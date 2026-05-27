@@ -914,6 +914,7 @@ fn daemon_runner_product_chain_accepts_external_admission_evidence() {
             "production_dataplane_admitted": true,
             "reload_runtime_parity_admitted": true,
             "matched_go_rust_default_daemon_benchmark_recorded": true,
+            "bpf_go_fallback_retired": true,
             "true_rust_default_daemon_admitted": true,
         }))
         .unwrap(),

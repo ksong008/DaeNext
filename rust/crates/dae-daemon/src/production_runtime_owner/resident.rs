@@ -17,6 +17,10 @@ use super::native_ebpf::{NativeEbpfRuntimeState, prepare_native_param_object};
 use super::netns_link::resolve_netns_link_mode_from_env;
 use super::report::{live_handoff_json, socket_options_verified};
 use super::resident_dataplane::{ResidentDataplaneRuntime, start_resident_dataplane_workers};
+use super::resident_interfaces::{
+    attach_resident_lan_egress_program, attach_resident_wan_programs, configured_wan_ifaces,
+    interface_link_layer,
+};
 use super::resident_lan::{
     attach_resident_lan_program, cleanup_resident_lan_programs, configured_lan_ifaces,
     lan_start_plan_json, show_resident_lan_program,
@@ -163,6 +167,7 @@ pub fn start_resident_production_runtime(
     let start_file = artifact_dir.join("resident-production-runtime-start.json");
     let cleanup_file = artifact_dir.join("resident-production-runtime-cleanup.json");
     let lan_ifaces = configured_lan_ifaces(config);
+    let wan_ifaces = configured_wan_ifaces(config);
     start_with_options(
         options,
         artifact_dir,
@@ -170,6 +175,7 @@ pub fn start_resident_production_runtime(
         cleanup_file,
         config,
         lan_ifaces,
+        wan_ifaces,
     )
 }
 
@@ -180,6 +186,7 @@ fn start_with_options(
     cleanup_file: PathBuf,
     config: &Config,
     lan_ifaces: Vec<String>,
+    wan_ifaces: Vec<String>,
 ) -> Result<ResidentProductionRuntime, String> {
     let checks = preflight_checks(&options);
     let blockers = checks
@@ -302,15 +309,92 @@ fn start_with_options(
             })
         };
 
+        let resident_cgroup_attach = if wan_ifaces.is_empty() {
+            json!({
+                "status": "skipped",
+                "reason": "wan_interface is not configured; pname cgroup monitor is not required",
+                "wan_interfaces": wan_ifaces,
+            })
+        } else if ok {
+            match native_runtime.attach_cgroup_programs(
+                &mut executed_steps,
+                &options,
+                &selected_native_param_object,
+            ) {
+                Some(true) => json!({
+                    "status": "pass",
+                    "backend": "aya",
+                    "wan_interfaces": wan_ifaces,
+                    "native_attached": true,
+                }),
+                Some(false) => {
+                    ok = false;
+                    json!({
+                        "status": "fail",
+                        "backend": "aya",
+                        "wan_interfaces": wan_ifaces,
+                        "native_attached": false,
+                        "error": "native Aya cgroup attach failed; Go BPF cgroup fallback is not used by Rust resident",
+                    })
+                }
+                None => {
+                    ok = false;
+                    json!({
+                        "status": "fail",
+                        "backend": Value::Null,
+                        "wan_interfaces": wan_ifaces,
+                        "native_attached": false,
+                        "error": "wan_interface/pname requires native Aya cgroup attach; Go BPF cgroup fallback is not used by Rust resident",
+                    })
+                }
+            }
+        } else {
+            json!({
+                "status": "skipped",
+                "reason": "previous resident runtime step did not pass",
+                "wan_interfaces": wan_ifaces,
+            })
+        };
+
+        let (wan_ok, resident_wan_attach) = attach_resident_wan_programs(
+            &mut executed_steps,
+            &options,
+            &selected_native_param_object,
+            &mut native_runtime,
+            &wan_ifaces,
+            ok,
+        );
+        ok = wan_ok;
+
         let mut resident_lan_attach = Vec::new();
         let mut resident_lan_routing = Vec::new();
         for iface in &lan_ifaces {
             if ok {
+                let link_layer = match interface_link_layer(iface) {
+                    Ok(layer) => layer,
+                    Err(err) => {
+                        ok = false;
+                        resident_lan_attach.push(json!({
+                            "interface": iface,
+                            "status": "fail",
+                            "error": err,
+                        }));
+                        resident_lan_routing.push(json!({
+                            "interface": iface,
+                            "routing_map_update": {
+                                "status": "skipped",
+                                "reason": "resident LAN interface link-layer detection did not pass"
+                            },
+                        }));
+                        continue;
+                    }
+                };
                 let before_lan_map_ids = map_ids().unwrap_or_default();
                 let lan_attach = attach_resident_lan_program(
                     &mut executed_steps,
                     &options,
                     iface,
+                    link_layer,
                     &param_object,
                     &selected_native_param_object,
                     &mut native_runtime,
@@ -319,6 +403,23 @@ fn start_with_options(
                 if lan_attach.native_attached {
                     native_lan_ifaces.push(iface.clone());
                 }
+                let lan_egress_attach = if lan_attach.native_attached && lan_attach.ok {
+                    let (egress_ok, egress_report) = attach_resident_lan_egress_program(
+                        &mut executed_steps,
+                        &options,
+                        &selected_native_param_object,
+                        &mut native_runtime,
+                        iface,
+                        link_layer,
+                    );
+                    ok &= egress_ok;
+                    egress_report
+                } else {
+                    json!({
+                        "status": "skipped",
+                        "reason": "LAN egress Aya attach is required only for native resident mode after native ingress passes",
+                    })
+                };
                 let show = show_resident_lan_program(&mut executed_steps, iface);
                 let routing = if ok {
                     let routing_update = if lan_attach.native_attached {
@@ -360,7 +461,14 @@ fn start_with_options(
                 };
                 resident_lan_attach.push(json!({
                     "interface": iface,
+                    "status": if lan_attach.ok { "pass" } else { "fail" },
+                    "backend": lan_attach.backend,
+                    "fallback_used": lan_attach.fallback_used,
+                    "native_backend_attempted": lan_attach.native_backend_attempted,
+                    "native_backend": lan_attach.native_backend,
                     "native_attached": lan_attach.native_attached,
+                    "link_layer": lan_attach.link_layer.suffix(),
+                    "egress": lan_egress_attach,
                     "show": show,
                 }));
                 resident_lan_routing.push(json!({
@@ -370,6 +478,13 @@ fn start_with_options(
             } else {
                 resident_lan_attach.push(json!({
                     "interface": iface,
+                    "backend": Value::Null,
+                    "fallback_used": Value::Null,
+                    "native_backend_attempted": false,
+                    "native_backend": Value::Null,
+                    "native_attached": false,
+                    "link_layer": Value::Null,
+                    "egress": Value::Null,
                     "show": Value::Null,
                     "status": "skipped",
                     "reason": "previous resident runtime step did not pass",
@@ -466,7 +581,10 @@ fn start_with_options(
             "param_image": param_image,
             "native_param_image": native_param_image,
             "peer_attach_show": peer_attach_show,
-            "resident_lan_plan": lan_start_plan_json(&lan_ifaces, options.native_ebpf_opt_in),
+            "resident_cgroup_attach": resident_cgroup_attach,
+            "resident_wan_attach": resident_wan_attach,
+            "resident_lan_plan": lan_start_plan_json(&lan_ifaces, options.native_ebpf_opt_in, &resident_lan_attach),
+            "resident_native_cgroup_attached": native_runtime.cgroup_attached(),
             "resident_native_lan_ifaces": native_lan_ifaces.clone(),
             "resident_lan_attach": resident_lan_attach,
             "resident_lan_routing": resident_lan_routing,

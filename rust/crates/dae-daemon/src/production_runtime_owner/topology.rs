@@ -656,6 +656,7 @@ pub(super) fn preflight_checks(options: &ProductionRuntimeOwnerOptions) -> Vec<V
             "native_loader_compiled": cfg!(feature = "native-ebpf"),
             "default_enable_allowed": false,
             "tc_command_fallback_required": true,
+            "go_bpf_fallback_retired": options.native_ebpf_completed_a3_admission,
             "topology_link_mode": {
                 "env": netns_link_env_name(),
                 "requested": options.netns_link_mode.as_str(),
