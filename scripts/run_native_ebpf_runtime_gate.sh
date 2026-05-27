@@ -104,6 +104,11 @@ import sys
 manifest, expected_backend_raw, expected_netns_link_raw = sys.argv[1:4]
 expected_backend = expected_backend_raw.replace("-", "_")
 expected_netns_link = expected_netns_link_raw.strip().lower()
+accepted_backends = (
+    {"tcx", "tc_netlink"}
+    if expected_backend == "auto"
+    else {expected_backend}
+)
 with open(manifest, "r", encoding="utf-8") as fh:
     root = json.load(fh)
 owner = root.get("production_runtime_owner", {})
@@ -158,7 +163,7 @@ if len(native_steps) != 3:
 for step in native_steps:
     if step.get("status") != "pass":
         missing.append(f"{step.get('name')}.status")
-    if step.get("backend") != expected_backend:
+    if step.get("backend") not in accepted_backends:
         missing.append(f"{step.get('name')}.backend")
     if step.get("fallback_used") is not False:
         missing.append(f"{step.get('name')}.fallback_used")
@@ -231,6 +236,7 @@ evidence = {
             "name": step.get("name"),
             "status": step.get("status"),
             "backend": step.get("backend"),
+            "accepted_backends": sorted(accepted_backends),
             "role": step.get("role"),
             "fallback_used": step.get("fallback_used"),
             "iface": (step.get("native_attach") or {}).get("iface"),
