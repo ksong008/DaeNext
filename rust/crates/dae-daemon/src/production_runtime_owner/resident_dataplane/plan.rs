@@ -3,6 +3,21 @@ use std::collections::BTreeMap;
 use dae_config::{Config, DynamicFunctionValue, Group};
 use dae_outbound::vless::{VLESSLink, password_to_key};
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct SelectedGroupNode {
+    tag: String,
+    link: String,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+enum GroupNodeSelection {
+    Selected(SelectedGroupNode),
+    NoCandidate {
+        explicit_name_filter: bool,
+        unresolved_names: Vec<String>,
+    },
+}
+
 #[derive(Clone, Debug)]
 pub(super) struct ResidentProxyPlan {
     pub(super) protocol: String,
@@ -41,6 +56,12 @@ pub(super) fn build_resident_dataplane_plan(
             proxy: None,
         });
     };
+    let scheme = link_scheme(&link).unwrap_or_default();
+    if scheme != "vless" {
+        return Err(format!(
+            "resident dataplane selected unsupported {scheme} node {node_tag}; current resident dataplane admits VLESS tcp/tls only, keep Go outbound for this config",
+        ));
+    }
     let vless =
         VLESSLink::parse(&link).map_err(|err| format!("parse VLESS node {node_tag}: {err}"))?;
     vless
@@ -114,8 +135,25 @@ fn selected_proxy_node(
         let Some(group) = config.group.iter().find(|group| group.name == outbound) else {
             continue;
         };
-        if let Some((node_tag, link)) = select_group_node(group, node_links)? {
-            return Ok(Some((group.name.clone(), node_tag, link)));
+        match select_group_node(group, node_links)? {
+            GroupNodeSelection::Selected(node) => {
+                return Ok(Some((group.name.clone(), node.tag, node.link)));
+            }
+            GroupNodeSelection::NoCandidate {
+                explicit_name_filter,
+                unresolved_names,
+            } if explicit_name_filter => {
+                let names = if unresolved_names.is_empty() {
+                    "<empty>".to_owned()
+                } else {
+                    unresolved_names.join(", ")
+                };
+                return Err(format!(
+                    "resident dataplane cannot resolve group {} name filter node(s): {names}; subscription-backed groups must be materialized before Rust resident dataplane can own runtime",
+                    group.name
+                ));
+            }
+            GroupNodeSelection::NoCandidate { .. } => {}
         }
     }
     Ok(None)
@@ -156,24 +194,40 @@ fn push_user_outbound(outbounds: &mut Vec<String>, name: &str) {
 fn select_group_node(
     group: &Group,
     node_links: &BTreeMap<String, String>,
-) -> Result<Option<(String, String)>, String> {
+) -> Result<GroupNodeSelection, String> {
     let mut candidates = Vec::<String>::new();
+    let mut unresolved_names = Vec::<String>::new();
+    let mut explicit_name_filter = false;
     for filter in &group.filter {
         for function in filter {
             if function.name == "name" && !function.not {
+                explicit_name_filter = true;
                 for param in &function.params {
-                    if param.key.is_empty() && node_links.contains_key(&param.val) {
-                        candidates.push(param.val.clone());
+                    if param.key.is_empty() {
+                        if node_links.contains_key(&param.val) {
+                            candidates.push(param.val.clone());
+                        } else {
+                            unresolved_names.push(param.val.clone());
+                        }
                     }
                 }
             }
         }
     }
     if candidates.is_empty() {
+        if explicit_name_filter {
+            return Ok(GroupNodeSelection::NoCandidate {
+                explicit_name_filter,
+                unresolved_names,
+            });
+        }
         candidates.extend(node_links.keys().cloned());
     }
     if candidates.is_empty() {
-        return Ok(None);
+        return Ok(GroupNodeSelection::NoCandidate {
+            explicit_name_filter,
+            unresolved_names,
+        });
     }
     let fixed_index = fixed_policy_index(&group.policy).unwrap_or(0);
     let Some(tag) = candidates
@@ -181,13 +235,19 @@ fn select_group_node(
         .or_else(|| candidates.first())
         .cloned()
     else {
-        return Ok(None);
+        return Ok(GroupNodeSelection::NoCandidate {
+            explicit_name_filter,
+            unresolved_names,
+        });
     };
     let link = node_links
         .get(&tag)
         .ok_or_else(|| format!("group {} selected missing node {tag}", group.name))?
         .clone();
-    Ok(Some((tag, link)))
+    Ok(GroupNodeSelection::Selected(SelectedGroupNode {
+        tag,
+        link,
+    }))
 }
 
 fn fixed_policy_index(policy: &DynamicFunctionValue) -> Option<usize> {
@@ -215,6 +275,11 @@ fn tagged_node_links(config: &Config) -> BTreeMap<String, String> {
         }
     }
     out
+}
+
+fn link_scheme(link: &str) -> Option<String> {
+    link.split_once("://")
+        .map(|(scheme, _)| scheme.to_ascii_lowercase())
 }
 
 fn split_keyable_link(raw: &str) -> (Option<String>, String) {
@@ -300,5 +365,66 @@ mod tests {
         assert_eq!(proxy.flow, "xtls-rprx-vision");
         assert_eq!(proxy.alpn, ["h2", "http/1.1"]);
         assert_eq!(proxy.mark, 1234);
+    }
+
+    #[test]
+    fn resident_dataplane_plan_does_not_fallback_unresolved_name_filter_to_static_ss_node() {
+        let config = parse_config(
+            r#"
+        global {
+        lan_interface: daerust0
+        allow_insecure: false
+        so_mark_from_dae: 1234
+        mptcp: false
+        }
+        node {
+        _022: 'ss://2022-blake3-aes-128-gcm:MTIzNDU2Nzg5MDEyMzQ1Ng==@217.116.171.227:25868#ss2022'
+        xhttp: 'vless://01234567-89ab-cdef-0123-456789abcdef@example.com:443?security=tls&type=xhttp&sni=office.example&path=%2Fxhttp&mode=packet-up&alpn=h3'
+        }
+        group {
+        proxy {
+            filter: name(node_17)
+            policy: fixed
+        }
+        }
+        routing {
+        l4proto(tcp) && dport(443) -> proxy
+        fallback: direct
+        }
+        "#,
+        );
+        let err = build_resident_dataplane_plan(&config).unwrap_err();
+        assert!(err.contains("cannot resolve group proxy name filter node(s): node_17"));
+        assert!(!err.contains("parse VLESS node _022"));
+    }
+
+    #[test]
+    fn resident_dataplane_plan_rejects_non_vless_node_before_vless_parser() {
+        let config = parse_config(
+            r#"
+        global {
+        lan_interface: daerust0
+        allow_insecure: false
+        so_mark_from_dae: 1234
+        mptcp: false
+        }
+        node {
+        ss_live: 'ss://2022-blake3-aes-128-gcm:MTIzNDU2Nzg5MDEyMzQ1Ng==@217.116.171.227:25868#ss2022'
+        }
+        group {
+        proxy {
+            filter: name(ss_live)
+            policy: fixed(0)
+        }
+        }
+        routing {
+        l4proto(tcp) && dport(443) -> proxy
+        fallback: direct
+        }
+        "#,
+        );
+        let err = build_resident_dataplane_plan(&config).unwrap_err();
+        assert!(err.contains("selected unsupported ss node ss_live"));
+        assert!(!err.contains("parse VLESS node ss_live"));
     }
 }
