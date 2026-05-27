@@ -113,7 +113,8 @@ fn ebpf_runtime_contracts_keep_abi_maps_and_loader_boundaries_explicit() {
     assert_eq!(loader.runtime_map_backend, LoaderBackend::RustSyscallMaps);
     assert!(loader.aya_userspace_loader_planned);
     assert!(loader.c_ebpf_object_fallback_required);
-    assert!(loader.go_fallback_preserved);
+    assert!(!loader.go_fallback_preserved);
+    assert!(loader.go_bpf_loader_fallback_retired);
     assert!(loader.param_rewrite_required_before_attach);
 
     let maps = runtime_map_contract();

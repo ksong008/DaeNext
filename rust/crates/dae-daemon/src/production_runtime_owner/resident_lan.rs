@@ -2,7 +2,9 @@ use std::path::Path;
 
 use dae_config::Config;
 use dae_datapath::{ACTIVE_TCP_LAN_FILTER_PREF, ACTIVE_TCP_LAN_SECTION};
-use dae_ebpf_support::{TcAttachDirection, TcAttachTarget, TcBpfAttachSpec, TcCommandSpec};
+use dae_ebpf_support::{
+    TcAttachDirection, TcAttachLayer, TcAttachTarget, TcBpfAttachSpec, TcCommandSpec,
+};
 use serde_json::{Value, json};
 
 use super::ProductionRuntimeOwnerOptions;
@@ -13,6 +15,11 @@ use super::native_ebpf::NativeEbpfRuntimeState;
 pub(super) struct ResidentLanAttachResult {
     pub ok: bool,
     pub native_attached: bool,
+    pub backend: &'static str,
+    pub fallback_used: bool,
+    pub native_backend_attempted: bool,
+    pub native_backend: Option<&'static str>,
+    pub link_layer: TcAttachLayer,
 }
 
 pub(super) fn configured_lan_ifaces(config: &Config) -> Vec<String> {
@@ -31,6 +38,7 @@ pub(super) fn attach_resident_lan_program(
     steps: &mut Vec<Value>,
     options: &ProductionRuntimeOwnerOptions,
     iface: &str,
+    link_layer: TcAttachLayer,
     param_object: &Path,
     native_param_object: &Path,
     native_runtime: &mut NativeEbpfRuntimeState,
@@ -40,15 +48,27 @@ pub(super) fn attach_resident_lan_program(
         target.clone(),
         ACTIVE_TCP_LAN_FILTER_PREF,
         path_string(param_object),
-        ACTIVE_TCP_LAN_SECTION,
+        format!("tc/lan_ingress_{}", link_layer.suffix()),
     );
-    if native_runtime.attach_resident_lan_program(steps, options, native_param_object, iface)
-        == Some(true)
-    {
-        return ResidentLanAttachResult {
-            ok: true,
-            native_attached: true,
-        };
+    let native_attach = native_runtime.attach_resident_lan_program(
+        steps,
+        options,
+        native_param_object,
+        iface,
+        link_layer,
+    );
+    if let Some(outcome) = native_attach {
+        if outcome.ok {
+            return ResidentLanAttachResult {
+                ok: true,
+                native_attached: true,
+                backend: outcome.backend.as_str(),
+                fallback_used: outcome.fallback_used,
+                native_backend_attempted: true,
+                native_backend: Some(outcome.backend.as_str()),
+                link_layer,
+            };
+        }
     }
     let _ = run_observation_step(
         steps,
@@ -70,6 +90,11 @@ pub(super) fn attach_resident_lan_program(
     ResidentLanAttachResult {
         ok,
         native_attached: false,
+        backend: "tc_command_fallback",
+        fallback_used: native_attach.is_some(),
+        native_backend_attempted: native_attach.is_some(),
+        native_backend: native_attach.map(|outcome| outcome.backend.as_str()),
+        link_layer,
     }
 }
 
@@ -108,19 +133,40 @@ pub(super) fn cleanup_resident_lan_programs(
     }
 }
 
-pub(super) fn lan_start_plan_json(ifaces: &[String], native_ebpf_opt_in: bool) -> Value {
+pub(super) fn lan_start_plan_json(
+    ifaces: &[String],
+    native_ebpf_opt_in: bool,
+    resident_lan_attach: &[Value],
+) -> Value {
     json!({
         "enabled": !ifaces.is_empty(),
         "interfaces": ifaces,
         "section": ACTIVE_TCP_LAN_SECTION,
         "pref": ACTIVE_TCP_LAN_FILTER_PREF,
         "backend": if native_ebpf_opt_in {
-            "aya-tc-netlink-candidate-with-tc-command-fallback"
+            "native-aya-with-tc-command-fallback"
         } else {
             "tc-command-fallback"
         },
+        "backend_scope": "plan",
+        "actual_backend_source": "resident_lan_attach[].backend",
+        "actual_backends": actual_lan_backends(resident_lan_attach),
         "qdisc_policy": "tc qdisc replace clsact; cleanup deletes only dae resident filter, not the whole clsact qdisc",
     })
+}
+
+fn actual_lan_backends(resident_lan_attach: &[Value]) -> Vec<Value> {
+    resident_lan_attach
+        .iter()
+        .map(|attach| {
+            json!({
+                "interface": attach.get("interface").cloned().unwrap_or(Value::Null),
+                "backend": attach.get("backend").cloned().unwrap_or(Value::Null),
+                "fallback_used": attach.get("fallback_used").cloned().unwrap_or(Value::Null),
+                "native_attached": attach.get("native_attached").cloned().unwrap_or(Value::Null),
+            })
+        })
+        .collect()
 }
 
 fn lan_attach_target(iface: &str) -> TcAttachTarget {
@@ -129,4 +175,34 @@ fn lan_attach_target(iface: &str) -> TcAttachTarget {
 
 fn command_spec(command: TcCommandSpec) -> CommandSpec {
     CommandSpec::new(command.program, command.args)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn lan_start_plan_separates_plan_backend_from_actual_backend() {
+        let attach = vec![json!({
+            "interface": "daerust0",
+            "backend": "tcx",
+            "fallback_used": false,
+            "native_attached": true,
+        })];
+
+        let plan = lan_start_plan_json(&["daerust0".to_owned()], true, &attach);
+
+        assert_eq!(
+            plan["backend"],
+            json!("native-aya-with-tc-command-fallback")
+        );
+        assert_eq!(plan["backend_scope"], json!("plan"));
+        assert_eq!(
+            plan["actual_backend_source"],
+            json!("resident_lan_attach[].backend")
+        );
+        assert_eq!(plan["actual_backends"][0]["backend"], json!("tcx"));
+        assert_eq!(plan["actual_backends"][0]["interface"], json!("daerust0"));
+        assert_eq!(plan["actual_backends"][0]["native_attached"], json!(true));
+    }
 }

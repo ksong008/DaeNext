@@ -26,6 +26,7 @@ fn product_chain_run_command_replacement_plan_is_read_only_and_admitted_after_de
             production_dataplane_admitted: true,
             reload_runtime_parity_admitted: true,
             matched_benchmark_recorded: true,
+            bpf_go_fallback_retired: true,
         },
         Some(clean_product_chain_evidence()),
     );
@@ -33,6 +34,8 @@ fn product_chain_run_command_replacement_plan_is_read_only_and_admitted_after_de
     assert!(plan["requested"].as_bool().unwrap());
     assert!(plan["dry_run"].as_bool().unwrap());
     assert!(plan["admitted"].as_bool().unwrap());
+    assert!(!plan["go_fallback_required"].as_bool().unwrap());
+    assert!(plan["go_fallback_retired"].as_bool().unwrap());
     assert!(plan["backup_required"].as_bool().unwrap());
     assert!(plan["rollback_required"].as_bool().unwrap());
     assert!(plan["post_replacement_smoke_required"].as_bool().unwrap());
@@ -113,6 +116,7 @@ fn product_chain_run_command_replacement_execute_request_is_blocked_without_host
             production_dataplane_admitted: true,
             reload_runtime_parity_admitted: true,
             matched_benchmark_recorded: true,
+            bpf_go_fallback_retired: true,
         },
         Some(clean_product_chain_evidence()),
     );
@@ -175,6 +179,7 @@ fn product_chain_run_command_replacement_host_mutation_allow_gate_admits_without
             production_dataplane_admitted: true,
             reload_runtime_parity_admitted: true,
             matched_benchmark_recorded: true,
+            bpf_go_fallback_retired: true,
         },
         Some(clean_product_chain_evidence()),
     );
@@ -182,6 +187,8 @@ fn product_chain_run_command_replacement_host_mutation_allow_gate_admits_without
     assert!(plan["admitted"].as_bool().unwrap());
     assert!(plan["execute_requested"].as_bool().unwrap());
     assert!(plan["execute_allowed"].as_bool().unwrap());
+    assert!(!plan["go_fallback_required"].as_bool().unwrap());
+    assert!(plan["go_fallback_retired"].as_bool().unwrap());
     assert!(plan["host_mutation_allow_requested"].as_bool().unwrap());
     assert!(plan["host_mutation_allowed"].as_bool().unwrap());
     assert_eq!(
@@ -227,6 +234,7 @@ fn product_chain_run_command_replacement_apply_plan_is_dry_run_only() {
             production_dataplane_admitted: true,
             reload_runtime_parity_admitted: true,
             matched_benchmark_recorded: true,
+            bpf_go_fallback_retired: true,
         },
         Some(clean_product_chain_evidence()),
     );

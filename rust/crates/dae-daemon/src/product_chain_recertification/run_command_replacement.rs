@@ -15,6 +15,8 @@ pub(super) fn production_run_command_replacement_plan_json(
     default_path_mutation_allowed: bool,
     resident_default_daemon_switch_ready: bool,
     service_contract_preserved: bool,
+    go_fallback_required: bool,
+    go_fallback_retired: bool,
 ) -> Value {
     let execute_requested = options.production_run_command_replacement_execute_requested;
     let apply_plan_requested = options.production_run_command_replacement_apply_plan_requested;
@@ -61,6 +63,11 @@ pub(super) fn production_run_command_replacement_plan_json(
         "go_default_path_preserved".to_owned(),
         json!(go_default_path_preserved),
     );
+    pre_execution_checks.insert(
+        "go_fallback_required".to_owned(),
+        json!(go_fallback_required),
+    );
+    pre_execution_checks.insert("go_fallback_retired".to_owned(), json!(go_fallback_retired));
     pre_execution_checks.insert("backup_required".to_owned(), json!(true));
     pre_execution_checks.insert("rollback_required".to_owned(), json!(true));
     pre_execution_checks.insert("post_replacement_smoke_required".to_owned(), json!(true));
@@ -115,7 +122,19 @@ pub(super) fn production_run_command_replacement_plan_json(
         "go_default_path_preserved".to_owned(),
         json!(go_default_path_preserved),
     );
-    plan.insert("go_fallback_required".to_owned(), json!(true));
+    plan.insert(
+        "go_fallback_required".to_owned(),
+        json!(go_fallback_required),
+    );
+    plan.insert("go_fallback_retired".to_owned(), json!(go_fallback_retired));
+    plan.insert(
+        "go_fallback_retirement_scope".to_owned(),
+        json!(if go_fallback_retired {
+            "product-chain-run-command-replacement-admission"
+        } else {
+            "blocked-before-product-chain-run-command-replacement-admission"
+        }),
+    );
     plan.insert(
         "service_file".to_owned(),
         json!(path_string(&options.service_file)),

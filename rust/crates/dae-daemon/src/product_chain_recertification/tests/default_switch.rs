@@ -25,6 +25,7 @@ fn product_chain_default_path_mutation_request_allows_switch_without_replacing_r
             production_dataplane_admitted: true,
             reload_runtime_parity_admitted: true,
             matched_benchmark_recorded: true,
+            bpf_go_fallback_retired: true,
         },
         Some(clean_product_chain_evidence()),
     );
@@ -37,6 +38,13 @@ fn product_chain_default_path_mutation_request_allows_switch_without_replacing_r
     assert!(report["default_path_mutation_allowed"].as_bool().unwrap());
     assert!(report["default_switch_allowed"].as_bool().unwrap());
     assert!(report["product_chain_switch_allowed"].as_bool().unwrap());
+    assert!(!report["go_fallback_required"].as_bool().unwrap());
+    assert!(report["go_fallback_retired"].as_bool().unwrap());
+    assert!(
+        report["typed_report"]["go_fallback_retired"]
+            .as_bool()
+            .unwrap()
+    );
     assert!(
         report["product_chain_recertification_clean"]
             .as_bool()
@@ -73,6 +81,7 @@ fn product_chain_default_path_mutation_blocks_service_contract_only_resident_pat
             production_dataplane_admitted: true,
             reload_runtime_parity_admitted: true,
             matched_benchmark_recorded: true,
+            bpf_go_fallback_retired: true,
         },
         Some(clean_product_chain_evidence()),
     );
@@ -103,6 +112,8 @@ fn product_chain_default_path_mutation_blocks_service_contract_only_resident_pat
     );
     assert!(!report["default_path_mutation_allowed"].as_bool().unwrap());
     assert!(!report["product_chain_switch_allowed"].as_bool().unwrap());
+    assert!(report["go_fallback_required"].as_bool().unwrap());
+    assert!(!report["go_fallback_retired"].as_bool().unwrap());
     assert!(
         report["remaining_blockers"]
             .as_array()
