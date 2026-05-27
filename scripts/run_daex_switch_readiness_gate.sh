@@ -57,6 +57,7 @@ if [[ -z "$matched_go_work" && -f "$workspace_go_work" ]]; then
       ;;
   esac
 fi
+product_chain_dae_repo="${PRODUCT_CHAIN_DAE_REPO:-$matched_source_dir}"
 
 case "$gate_root" in
   /tmp/dae-daex-switch-readiness-gate*) ;;
@@ -88,6 +89,11 @@ fi
 
 if [[ -n "$matched_go_work" && ! -f "$matched_go_work" ]]; then
   echo "matched benchmark go.work does not exist: $matched_go_work" >&2
+  exit 2
+fi
+
+if [[ ! -f "$product_chain_dae_repo/go.mod" ]]; then
+  echo "product-chain dae repo must contain go.mod: $product_chain_dae_repo" >&2
   exit 2
 fi
 
@@ -200,6 +206,7 @@ if not admission["true_rust_default_daemon_admitted"]:
 PY
 
 echo "running daed2.0 product-chain recertification in read-only switch-readiness mode"
+echo "product-chain dae repo: $product_chain_dae_repo"
 if ! "$candidate_binary" run \
   --config "$config_file" \
   --root "$product_run_root" \
@@ -216,7 +223,7 @@ if ! "$candidate_binary" run \
   --allow-host-default-path-mutation \
   --product-chain-resident-default-daemon-binary-source "$candidate_binary" \
   --product-chain-fresh-install-binary-source "$candidate_binary" \
-  --product-chain-dae-repo "$repo_root" \
+  --product-chain-dae-repo "$product_chain_dae_repo" \
   --product-chain-dae-wing-repo /root/project/daed/wing \
   --product-chain-daed-repo /root/project/daed \
   --product-chain-outbound-repo /root/project/outbound \
