@@ -37,6 +37,7 @@ fn product_chain_production_replacement_readiness_report_requires_manual_authori
             production_dataplane_admitted: true,
             reload_runtime_parity_admitted: true,
             matched_benchmark_recorded: true,
+            bpf_go_fallback_retired: true,
         },
         Some(clean_product_chain_evidence()),
     );
@@ -71,6 +72,16 @@ fn product_chain_production_replacement_readiness_report_requires_manual_authori
             .as_array()
             .unwrap()
             .is_empty()
+    );
+    assert!(
+        !readiness["checks"]["go_fallback_required"]
+            .as_bool()
+            .unwrap()
+    );
+    assert!(
+        readiness["checks"]["go_fallback_retired"]
+            .as_bool()
+            .unwrap()
     );
     assert!(
         report["production_replacement_ready_for_manual_authorization"]
@@ -118,6 +129,7 @@ fn product_chain_daed2_switch_rehearsal_report_uses_readiness_artifacts() {
             production_dataplane_admitted: true,
             reload_runtime_parity_admitted: true,
             matched_benchmark_recorded: true,
+            bpf_go_fallback_retired: true,
         },
         Some(clean_product_chain_evidence()),
     );
@@ -187,6 +199,7 @@ fn product_chain_host_write_plan_freeze_requires_phase4_authorization() {
             production_dataplane_admitted: true,
             reload_runtime_parity_admitted: true,
             matched_benchmark_recorded: true,
+            bpf_go_fallback_retired: true,
         },
         Some(clean_product_chain_evidence()),
     );

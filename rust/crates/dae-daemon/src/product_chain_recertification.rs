@@ -102,6 +102,7 @@ pub struct ProductChainAdmissionEvidence {
     pub production_dataplane_admitted: bool,
     pub reload_runtime_parity_admitted: bool,
     pub matched_benchmark_recorded: bool,
+    pub bpf_go_fallback_retired: bool,
     pub true_rust_default_daemon_admitted: bool,
 }
 
@@ -318,6 +319,7 @@ fn report_value(
     let resident_default_daemon_service_contract =
         resident_default_daemon_switch_gate["candidate_service_contract"].clone();
     let recertification_clean = executed
+        && admission.bpf_go_fallback_retired
         && admission.true_rust_default_daemon_admitted
         && service_contract_passed
         && dependency_boundary_preserved
@@ -327,12 +329,21 @@ fn report_value(
         && default_path_mutation_requested
         && resident_default_daemon_switch_ready;
     let product_chain_switch_allowed = default_path_mutation_allowed;
+    let go_fallback_required = !product_chain_switch_allowed;
+    let go_fallback_retired = product_chain_switch_allowed;
+    let go_fallback_retirement_scope = if go_fallback_retired {
+        "product-chain-default-path-admission"
+    } else {
+        "blocked-before-product-chain-default-path-admission"
+    };
     let production_run_command_replacement_plan = production_run_command_replacement_plan_json(
         options,
         artifact_dir,
         default_path_mutation_allowed,
         resident_default_daemon_switch_ready,
         service_contract_passed,
+        go_fallback_required,
+        go_fallback_retired,
     );
     let mut remaining_blockers = remaining_blockers(
         admission,
@@ -366,6 +377,8 @@ fn report_value(
         runtime_control_api_source_contract_preserved,
         clean_product_chain_baseline,
         product_chain_branch_contract_preserved,
+        go_fallback_required,
+        go_fallback_retired,
         remaining_blocker_count: remaining_blockers.len(),
     }
     .to_json();
@@ -381,6 +394,7 @@ fn report_value(
             "production_dataplane_admitted": admission.production_dataplane_admitted,
             "reload_runtime_parity_admitted": admission.reload_runtime_parity_admitted,
             "matched_go_rust_default_daemon_benchmark_recorded": admission.matched_benchmark_recorded,
+            "bpf_go_fallback_retired": admission.bpf_go_fallback_retired,
             "true_rust_default_daemon_admitted": admission.true_rust_default_daemon_admitted,
         },
         "paths": {
@@ -417,7 +431,6 @@ fn report_value(
         "production_run_command_replacement_plan": production_run_command_replacement_plan,
         "production_run_command_replaced": false,
         "go_default_path_preserved": true,
-        "go_fallback_required": true,
         "default_path_mutation_allowed": default_path_mutation_allowed,
         "default_switch_allowed": default_path_mutation_allowed,
         "product_chain_switch_allowed": product_chain_switch_allowed,
@@ -442,6 +455,15 @@ fn report_value(
         report.insert(
             "product_chain_branch_contract_preserved".to_owned(),
             json!(product_chain_branch_contract_preserved),
+        );
+        report.insert(
+            "go_fallback_required".to_owned(),
+            json!(go_fallback_required),
+        );
+        report.insert("go_fallback_retired".to_owned(), json!(go_fallback_retired));
+        report.insert(
+            "go_fallback_retirement_scope".to_owned(),
+            json!(go_fallback_retirement_scope),
         );
         report.insert("typed_report".to_owned(), typed_report);
     }

@@ -235,13 +235,18 @@ pub fn run_default_optin_report(options: &RunOptions, version: &str) -> Result<V
         matched_benchmark["matched_go_rust_default_daemon_benchmark_recorded"]
             .as_bool()
             .unwrap_or(false);
+    let bpf_go_fallback_retired = production_runtime_owner["go_bpf_fallback_retired"]
+        .as_bool()
+        .unwrap_or(false);
     let true_rust_default_daemon_admitted = production_dataplane_admitted
         && reload_runtime_parity_admitted
-        && matched_benchmark_recorded;
+        && matched_benchmark_recorded
+        && bpf_go_fallback_retired;
     let computed_product_chain_admission = ProductChainAdmissionEvidence {
         production_dataplane_admitted,
         reload_runtime_parity_admitted,
         matched_benchmark_recorded,
+        bpf_go_fallback_retired,
         true_rust_default_daemon_admitted,
     };
     let product_chain_admission = options
@@ -423,12 +428,15 @@ pub fn run_default_optin_report(options: &RunOptions, version: &str) -> Result<V
             "production_dataplane_admitted": product_chain_admission.production_dataplane_admitted,
             "reload_runtime_parity_admitted": product_chain_admission.reload_runtime_parity_admitted,
             "matched_go_rust_default_daemon_benchmark_recorded": product_chain_admission.matched_benchmark_recorded,
+            "bpf_go_fallback_retired": product_chain_admission.bpf_go_fallback_retired,
             "true_rust_default_daemon_admitted": product_chain_admission.true_rust_default_daemon_admitted,
         },
     });
     report["product_chain_recertification_executed"] =
         json!(product_chain_recertification_executed);
     report["product_chain_recertification_clean"] = json!(product_chain_recertification_clean);
+    report["go_fallback_required"] = product_chain_recertification["go_fallback_required"].clone();
+    report["go_fallback_retired"] = product_chain_recertification["go_fallback_retired"].clone();
     report["product_chain_recertification"] = product_chain_recertification.clone();
     for key in [
         ("production_run_command_replaced", false),
@@ -466,6 +474,7 @@ pub fn run_default_optin_report(options: &RunOptions, version: &str) -> Result<V
             "matched_go_rust_default_daemon_benchmark_recorded",
             matched_benchmark_recorded,
         ),
+        ("bpf_go_fallback_retired", bpf_go_fallback_retired),
         (
             "true_rust_default_daemon_admitted",
             true_rust_default_daemon_admitted,
@@ -660,6 +669,7 @@ pub fn product_chain_admission_from_run_report(
             "matched_go_rust_default_daemon_benchmark_recorded",
             path,
         )?,
+        bpf_go_fallback_retired: required_bool(&value, "bpf_go_fallback_retired", path)?,
         true_rust_default_daemon_admitted: required_bool(
             &value,
             "true_rust_default_daemon_admitted",

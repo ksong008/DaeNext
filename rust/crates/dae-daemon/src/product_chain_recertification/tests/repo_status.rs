@@ -50,6 +50,7 @@ fn product_chain_recertification_blocks_when_repo_status_is_unavailable() {
             production_dataplane_admitted: true,
             reload_runtime_parity_admitted: true,
             matched_benchmark_recorded: true,
+            bpf_go_fallback_retired: true,
         },
     )
     .unwrap();

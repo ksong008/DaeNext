@@ -59,6 +59,7 @@ impl RuntimeControlApiCleanBaselineReport {
             "production_dataplane_admitted": self.admission.production_dataplane_admitted,
             "reload_runtime_parity_admitted": self.admission.reload_runtime_parity_admitted,
             "matched_go_rust_default_daemon_benchmark_recorded": self.admission.matched_benchmark_recorded,
+            "bpf_go_fallback_retired": self.admission.bpf_go_fallback_retired,
             "service_contract_preserved": self.service_contract_preserved,
             "outbound_quic_go_dependency_boundary_preserved": self.dependency_boundary_preserved,
             "evidence_class": "read-only-daed-wing-daed-runtime-control-api-clean-baseline",
@@ -80,6 +81,8 @@ pub(super) struct ProductChainTypedReportSummary {
     pub(super) runtime_control_api_source_contract_preserved: bool,
     pub(super) clean_product_chain_baseline: bool,
     pub(super) product_chain_branch_contract_preserved: bool,
+    pub(super) go_fallback_required: bool,
+    pub(super) go_fallback_retired: bool,
     pub(super) remaining_blocker_count: usize,
 }
 
@@ -108,12 +111,15 @@ impl ProductChainTypedReportSummary {
             "production_dataplane_admitted": self.admission.production_dataplane_admitted,
             "reload_runtime_parity_admitted": self.admission.reload_runtime_parity_admitted,
             "matched_go_rust_default_daemon_benchmark_recorded": self.admission.matched_benchmark_recorded,
+            "bpf_go_fallback_retired": self.admission.bpf_go_fallback_retired,
             "true_rust_default_daemon_admitted": self.admission.true_rust_default_daemon_admitted,
             "service_contract_preserved": self.service_contract_preserved,
             "outbound_quic_go_dependency_boundary_preserved": self.dependency_boundary_preserved,
             "runtime_control_api_source_contract_preserved": self.runtime_control_api_source_contract_preserved,
             "clean_product_chain_baseline": self.clean_product_chain_baseline,
             "product_chain_branch_contract_preserved": self.product_chain_branch_contract_preserved,
+            "go_fallback_required": self.go_fallback_required,
+            "go_fallback_retired": self.go_fallback_retired,
             "remaining_blocker_count": self.remaining_blocker_count,
             "stage_report_schema": false,
         })
@@ -164,6 +170,10 @@ pub(super) fn remaining_blockers(
     let mut blockers = Vec::new();
     if !admission.true_rust_default_daemon_admitted {
         blockers.push("true Rust default daemon admission is not present in this run".to_owned());
+    }
+    if !admission.bpf_go_fallback_retired {
+        blockers
+            .push("BPF-side Go fallback retirement evidence is not present in this run".to_owned());
     }
     if !default_path_mutation_requested {
         blockers.push(

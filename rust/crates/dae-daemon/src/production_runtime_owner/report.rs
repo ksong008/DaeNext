@@ -723,6 +723,14 @@ pub(super) fn report_value(
     );
     report.insert("go_default_path_preserved".to_owned(), json!(true));
     report.insert("go_fallback_required".to_owned(), json!(true));
+    report.insert(
+        "go_bpf_fallback_required".to_owned(),
+        json!(!options.native_ebpf_completed_a3_admission),
+    );
+    report.insert(
+        "go_bpf_fallback_retired".to_owned(),
+        json!(options.native_ebpf_completed_a3_admission),
+    );
     Value::Object(report)
 }
 
@@ -730,13 +738,14 @@ fn ebpf_backend_capability_json(
     report: &EbpfBackendCapabilityReport,
     options: &ProductionRuntimeOwnerOptions,
 ) -> Value {
+    let go_bpf_fallback_retired = options.native_ebpf_completed_a3_admission;
     let native_admission = native_backend_admission_report(
-        if options.native_ebpf_completed_a3_admission {
+        if go_bpf_fallback_retired {
             NativeBackendAdmissionEvidence::completed_a3_local()
         } else {
             NativeBackendAdmissionEvidence::report_only()
         },
-        !options.native_ebpf_completed_a3_admission,
+        !go_bpf_fallback_retired,
     );
     let native_opt_in = native_backend_runtime_decision(options);
     json!({
@@ -779,10 +788,11 @@ fn ebpf_backend_capability_json(
             ],
         },
         "cgroup_attach": {
-            "report_only": true,
-            "default_native_backend_enabled": false,
-            "aya_cgroup_optional": true,
-            "go_attachcgroup_fallback_required": true,
+            "report_only": !go_bpf_fallback_retired,
+            "default_native_backend_enabled": go_bpf_fallback_retired,
+            "aya_cgroup_optional": !go_bpf_fallback_retired,
+            "go_attachcgroup_fallback_required": !go_bpf_fallback_retired,
+            "go_attachcgroup_fallback_retired": go_bpf_fallback_retired,
             "cgroup2_mount_source": "/proc/mounts first cgroup2",
             "programs": dae_cgroup_attach_matrix()
                 .iter()
@@ -805,6 +815,7 @@ fn ebpf_backend_capability_json(
             "aya_userspace_loader_planned": report.loader_contract.aya_userspace_loader_planned,
             "c_ebpf_object_fallback_required": report.loader_contract.c_ebpf_object_fallback_required,
             "go_fallback_preserved": report.loader_contract.go_fallback_preserved,
+            "go_bpf_loader_fallback_retired": report.loader_contract.go_bpf_loader_fallback_retired,
             "param_rewrite_required_before_attach": report.loader_contract.param_rewrite_required_before_attach,
         },
         "scope": if options.execute && options.native_ebpf_opt_in {

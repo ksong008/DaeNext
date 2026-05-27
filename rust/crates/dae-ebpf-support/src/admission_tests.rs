@@ -26,9 +26,9 @@ fn report_only_native_backend_admission_keeps_fallback_required() {
             .contains(&NativeBackendAdmissionCheck::CgroupAttachSmoke)
     );
     assert!(
-        !report
+        report
             .missing_checks
-            .contains(&NativeBackendAdmissionCheck::GoFallbackPreserved)
+            .contains(&NativeBackendAdmissionCheck::GoBpfFallbackRetired)
     );
     assert_eq!(report.failed_optional_checks, vec!["tcx_optional_smoke"]);
 }
@@ -62,15 +62,15 @@ fn native_backend_admission_allows_tcx_not_required_fallback_to_tc_netlink() {
 }
 
 #[test]
-fn native_backend_admission_blocks_missing_fallback_preservation() {
+fn native_backend_admission_blocks_missing_go_bpf_retirement() {
     let mut evidence = NativeBackendAdmissionEvidence::completed_a3_local();
-    evidence.go_fallback_preserved = false;
+    evidence.go_bpf_fallback_retired = false;
     let report = native_backend_admission_report(evidence, false);
     assert!(!report.admitted);
     assert_eq!(report.selected_native_backend, None);
     assert!(report.fallback_required);
     assert_eq!(
         report.missing_checks,
-        vec![NativeBackendAdmissionCheck::GoFallbackPreserved]
+        vec![NativeBackendAdmissionCheck::GoBpfFallbackRetired]
     );
 }

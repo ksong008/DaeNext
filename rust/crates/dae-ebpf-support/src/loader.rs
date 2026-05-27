@@ -18,6 +18,7 @@ pub struct LoaderContract {
     pub aya_userspace_loader_planned: bool,
     pub c_ebpf_object_fallback_required: bool,
     pub go_fallback_preserved: bool,
+    pub go_bpf_loader_fallback_retired: bool,
     pub param_rewrite_required_before_attach: bool,
 }
 
@@ -27,7 +28,8 @@ pub const fn loader_contract() -> LoaderContract {
         runtime_map_backend: LoaderBackend::RustSyscallMaps,
         aya_userspace_loader_planned: true,
         c_ebpf_object_fallback_required: true,
-        go_fallback_preserved: true,
+        go_fallback_preserved: false,
+        go_bpf_loader_fallback_retired: true,
         param_rewrite_required_before_attach: true,
     }
 }

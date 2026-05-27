@@ -17,6 +17,7 @@ mod reload_runtime;
 mod report;
 mod resident;
 mod resident_dataplane;
+mod resident_interfaces;
 mod resident_lan;
 mod resident_routing;
 mod topology;
@@ -956,6 +957,14 @@ mod tests {
                 .unwrap(),
             "tc_command_fallback"
         );
+        assert!(report["go_bpf_fallback_required"].as_bool().unwrap());
+        assert!(!report["go_bpf_fallback_retired"].as_bool().unwrap());
+        assert!(
+            !report["ebpf_backend_capabilities"]["cgroup_attach"]
+                ["go_attachcgroup_fallback_retired"]
+                .as_bool()
+                .unwrap()
+        );
         assert!(!report["default_switch_allowed"].as_bool().unwrap());
     }
 
@@ -977,6 +986,30 @@ mod tests {
         assert!(decision.fallback_required);
         assert!(decision.fallback_preserved);
         assert!(!decision.default_enable_allowed);
+        let root = std::env::temp_dir().join(format!(
+            "dae-daemon-production-runtime-native-ebpf-{}",
+            std::process::id()
+        ));
+        let report = production_runtime_owner_report(&root, &options).unwrap();
+        assert!(!report["go_bpf_fallback_required"].as_bool().unwrap());
+        assert!(report["go_bpf_fallback_retired"].as_bool().unwrap());
+        assert!(
+            report["ebpf_backend_capabilities"]["native_backend_admission"]["admitted"]
+                .as_bool()
+                .unwrap()
+        );
+        assert!(
+            !report["ebpf_backend_capabilities"]["cgroup_attach"]
+                ["go_attachcgroup_fallback_required"]
+                .as_bool()
+                .unwrap()
+        );
+        assert!(
+            report["ebpf_backend_capabilities"]["cgroup_attach"]
+                ["go_attachcgroup_fallback_retired"]
+                .as_bool()
+                .unwrap()
+        );
         if cfg!(feature = "native-ebpf") {
             assert!(decision.attempt_native_backend);
             assert_eq!(decision.selected_backend, Some(AttachBackend::TcNetlink));
