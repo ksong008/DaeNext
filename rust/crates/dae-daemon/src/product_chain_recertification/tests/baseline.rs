@@ -73,6 +73,7 @@ fn product_chain_recertification_records_service_and_go_mod_boundaries() {
             production_dataplane_admitted: true,
             reload_runtime_parity_admitted: true,
             matched_benchmark_recorded: true,
+            bpf_go_fallback_retired: true,
         },
     )
     .unwrap();
@@ -154,6 +155,7 @@ fn product_chain_recertification_blocks_wrong_daed2_branch_contract() {
             production_dataplane_admitted: true,
             reload_runtime_parity_admitted: true,
             matched_benchmark_recorded: true,
+            bpf_go_fallback_retired: true,
         },
     )
     .unwrap();
@@ -227,6 +229,7 @@ fn product_chain_clean_baseline_records_runtime_control_api_regression_without_s
             production_dataplane_admitted: true,
             reload_runtime_parity_admitted: true,
             matched_benchmark_recorded: true,
+            bpf_go_fallback_retired: true,
         },
         Some(evidence),
     );

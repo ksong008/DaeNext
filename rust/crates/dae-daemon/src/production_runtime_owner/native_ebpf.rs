@@ -7,12 +7,16 @@ use std::collections::BTreeMap;
 use dae_datapath::{ACTIVE_TCP_LAN_FILTER_PREF, ACTIVE_TCP_LAN_HOST_IFACE};
 use dae_ebpf_support::{
     AttachBackend, DaeParamInput, NativeBackendAdmissionEvidence, NativeBackendOptInDecision,
-    NativeBackendOptInRequest, build_dae_param, native_backend_admission_report,
+    NativeBackendOptInRequest, TcAttachLayer, build_dae_param, native_backend_admission_report,
     native_backend_opt_in_decision, write_param_aware_object,
 };
 #[cfg(feature = "native-ebpf")]
 use dae_ebpf_support::{
     TcAttachDirection, TcAttachTarget, TcBpfAttachSpec, TcNativeAttachSpec, tc_handle,
+};
+#[cfg(feature = "native-ebpf")]
+use dae_ebpf_support::{
+    dae_cgroup_attach_matrix, detect_cgroup2_mount, load_attach_aya_cgroup_program,
 };
 use serde_json::{Value, json};
 
@@ -26,6 +30,47 @@ pub(in crate::production_runtime_owner) enum NativeEbpfAttachRole {
     PeerIngress,
     LanIngress,
     HostIngress,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(in crate::production_runtime_owner) enum NativeInterfaceAttachRole {
+    LanEgress,
+    WanIngress,
+    WanEgress,
+}
+
+impl NativeInterfaceAttachRole {
+    pub(in crate::production_runtime_owner) const fn as_str(self) -> &'static str {
+        match self {
+            Self::LanEgress => "lan_egress",
+            Self::WanIngress => "wan_ingress",
+            Self::WanEgress => "wan_egress",
+        }
+    }
+
+    #[cfg(feature = "native-ebpf")]
+    const fn direction(self) -> TcAttachDirection {
+        match self {
+            Self::LanEgress | Self::WanEgress => TcAttachDirection::Egress,
+            Self::WanIngress => TcAttachDirection::Ingress,
+        }
+    }
+
+    #[cfg(feature = "native-ebpf")]
+    const fn priority(self) -> u16 {
+        match self {
+            Self::LanEgress | Self::WanIngress => 1,
+            Self::WanEgress => 2,
+        }
+    }
+
+    #[cfg(feature = "native-ebpf")]
+    const fn handle_minor(self) -> u16 {
+        match self {
+            Self::LanEgress | Self::WanIngress => 0b010,
+            Self::WanEgress => 0b100,
+        }
+    }
 }
 
 impl NativeEbpfAttachRole {
@@ -54,11 +99,19 @@ impl NativeEbpfAttachRole {
     }
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(in crate::production_runtime_owner) struct NativeAttachOutcome {
+    pub ok: bool,
+    pub backend: AttachBackend,
+    pub fallback_used: bool,
+}
+
 #[derive(Default)]
 pub(in crate::production_runtime_owner) struct NativeEbpfRuntimeState {
     peer_attached: bool,
     lan_attached: bool,
     host_attached: bool,
+    cgroup_attached: bool,
     #[cfg(feature = "native-ebpf")]
     loaded: Option<dae_ebpf_support::AyaUserspaceLoadedObject>,
     #[cfg(feature = "native-ebpf")]
@@ -73,7 +126,8 @@ impl std::fmt::Debug for NativeEbpfRuntimeState {
         debug
             .field("peer_attached", &self.peer_attached)
             .field("lan_attached", &self.lan_attached)
-            .field("host_attached", &self.host_attached);
+            .field("host_attached", &self.host_attached)
+            .field("cgroup_attached", &self.cgroup_attached);
         #[cfg(feature = "native-ebpf")]
         debug
             .field("loaded", &self.loaded.is_some())
@@ -94,6 +148,10 @@ impl NativeEbpfRuntimeState {
 
     pub(super) fn host_attached(&self) -> bool {
         self.host_attached
+    }
+
+    pub(super) fn cgroup_attached(&self) -> bool {
+        self.cgroup_attached
     }
 
     pub(in crate::production_runtime_owner) fn lan_attached(&self) -> bool {
@@ -124,6 +182,7 @@ impl NativeEbpfRuntimeState {
         self.peer_attached = false;
         self.lan_attached = false;
         self.host_attached = false;
+        self.cgroup_attached = false;
     }
 
     pub(in crate::production_runtime_owner) fn attach_program(
@@ -183,20 +242,22 @@ impl NativeEbpfRuntimeState {
         options: &ProductionRuntimeOwnerOptions,
         param_object: &Path,
         iface: &str,
-    ) -> Option<bool> {
+        link_layer: TcAttachLayer,
+    ) -> Option<NativeAttachOutcome> {
         let decision = native_backend_runtime_decision(options);
         steps.push(json!({
             "name": format!("native-ebpf-resident-lan-opt-in-decision-{iface}"),
             "status": "pass",
             "role": "resident_lan_ingress",
             "interface": iface,
+            "link_layer": link_layer.suffix(),
             "decision": native_backend_opt_in_decision_json(&decision),
         }));
         if !decision.attempt_native_backend {
             return None;
         }
         let backend = decision.selected_backend?;
-        match self.try_attach_resident_lan_program(param_object, iface, backend) {
+        match self.try_attach_resident_lan_program(param_object, iface, link_layer, backend) {
             Ok(report) => {
                 self.lan_attached = true;
                 steps.push(json!({
@@ -204,12 +265,17 @@ impl NativeEbpfRuntimeState {
                     "status": "pass",
                     "role": "resident_lan_ingress",
                     "interface": iface,
+                    "link_layer": link_layer.suffix(),
                     "backend": backend.as_str(),
                     "native_attach": report,
                     "fallback_required": true,
                     "fallback_used": false,
                 }));
-                Some(true)
+                Some(NativeAttachOutcome {
+                    ok: true,
+                    backend,
+                    fallback_used: false,
+                })
             }
             Err(err) => {
                 steps.push(json!({
@@ -217,7 +283,119 @@ impl NativeEbpfRuntimeState {
                     "status": "fail",
                     "role": "resident_lan_ingress",
                     "interface": iface,
+                    "link_layer": link_layer.suffix(),
                     "backend": backend.as_str(),
+                    "stderr": err,
+                    "fallback_required": true,
+                    "fallback_used": true,
+                }));
+                Some(NativeAttachOutcome {
+                    ok: false,
+                    backend,
+                    fallback_used: true,
+                })
+            }
+        }
+    }
+
+    pub(in crate::production_runtime_owner) fn attach_interface_program(
+        &mut self,
+        steps: &mut Vec<Value>,
+        options: &ProductionRuntimeOwnerOptions,
+        param_object: &Path,
+        iface: &str,
+        role: NativeInterfaceAttachRole,
+        link_layer: TcAttachLayer,
+    ) -> Option<NativeAttachOutcome> {
+        let decision = native_backend_runtime_decision(options);
+        steps.push(json!({
+            "name": format!("native-ebpf-resident-{}-opt-in-decision-{iface}", role.as_str()),
+            "status": "pass",
+            "role": role.as_str(),
+            "interface": iface,
+            "link_layer": link_layer.suffix(),
+            "decision": native_backend_opt_in_decision_json(&decision),
+        }));
+        if !decision.attempt_native_backend {
+            return None;
+        }
+        let backend = decision.selected_backend?;
+        match self.try_attach_interface_program(param_object, iface, role, link_layer, backend) {
+            Ok(report) => {
+                steps.push(json!({
+                    "name": format!("attach-resident-{}-native-ebpf-program-{iface}", role.as_str()),
+                    "status": "pass",
+                    "role": role.as_str(),
+                    "interface": iface,
+                    "link_layer": link_layer.suffix(),
+                    "backend": backend.as_str(),
+                    "native_attach": report,
+                    "fallback_required": true,
+                    "fallback_used": false,
+                }));
+                Some(NativeAttachOutcome {
+                    ok: true,
+                    backend,
+                    fallback_used: false,
+                })
+            }
+            Err(err) => {
+                steps.push(json!({
+                    "name": format!("attach-resident-{}-native-ebpf-program-{iface}", role.as_str()),
+                    "status": "fail",
+                    "role": role.as_str(),
+                    "interface": iface,
+                    "link_layer": link_layer.suffix(),
+                    "backend": backend.as_str(),
+                    "stderr": err,
+                    "fallback_required": true,
+                    "fallback_used": true,
+                }));
+                Some(NativeAttachOutcome {
+                    ok: false,
+                    backend,
+                    fallback_used: true,
+                })
+            }
+        }
+    }
+
+    pub(in crate::production_runtime_owner) fn attach_cgroup_programs(
+        &mut self,
+        steps: &mut Vec<Value>,
+        options: &ProductionRuntimeOwnerOptions,
+        param_object: &Path,
+    ) -> Option<bool> {
+        let decision = native_backend_runtime_decision(options);
+        steps.push(json!({
+            "name": "native-ebpf-cgroup-opt-in-decision",
+            "status": "pass",
+            "role": "cgroup_pname_monitor",
+            "decision": native_backend_opt_in_decision_json(&decision),
+        }));
+        if !decision.attempt_native_backend {
+            return None;
+        }
+        match self.try_attach_cgroup_programs(param_object) {
+            Ok(reports) => {
+                self.cgroup_attached = true;
+                steps.push(json!({
+                    "name": "attach-native-ebpf-cgroup-programs",
+                    "status": "pass",
+                    "role": "cgroup_pname_monitor",
+                    "backend": "aya",
+                    "programs": reports,
+                    "fallback_required": true,
+                    "fallback_used": false,
+                }));
+                Some(true)
+            }
+            Err(err) => {
+                steps.push(json!({
+                    "name": "attach-native-ebpf-cgroup-programs",
+                    "status": "fail",
+                    "role": "cgroup_pname_monitor",
+                    "backend": "aya",
                     "stderr": err,
                     "fallback_required": true,
                     "fallback_used": true,
@@ -255,6 +433,7 @@ impl NativeEbpfRuntimeState {
         &mut self,
         _param_object: &Path,
         _iface: &str,
+        _link_layer: TcAttachLayer,
         _backend: AttachBackend,
     ) -> Result<Value, String> {
         Err("native eBPF runtime feature is not compiled".to_owned())
@@ -265,17 +444,92 @@ impl NativeEbpfRuntimeState {
         &mut self,
         param_object: &Path,
         iface: &str,
+        link_layer: TcAttachLayer,
         backend: AttachBackend,
     ) -> Result<Value, String> {
         let object = path_string(param_object);
+        let suffix = link_layer.suffix();
         let spec = TcBpfAttachSpec::new(
             TcAttachTarget::host(iface.to_owned(), TcAttachDirection::Ingress),
             ACTIVE_TCP_LAN_FILTER_PREF,
             object,
-            "classifier/lan_ingress_l2",
+            format!("classifier/lan_ingress_{suffix}"),
         )
-        .native_attach_spec("tproxy_lan_ingress_l2", 2, tc_handle(0x2023, 0b100));
+        .native_attach_spec(
+            format!("tproxy_lan_ingress_{suffix}"),
+            2,
+            tc_handle(0x2023, 0b100),
+        );
         self.try_attach_spec(param_object, spec, backend)
+    }
+
+    #[cfg(not(feature = "native-ebpf"))]
+    fn try_attach_interface_program(
+        &mut self,
+        _param_object: &Path,
+        _iface: &str,
+        _role: NativeInterfaceAttachRole,
+        _link_layer: TcAttachLayer,
+        _backend: AttachBackend,
+    ) -> Result<Value, String> {
+        Err("native eBPF runtime feature is not compiled".to_owned())
+    }
+
+    #[cfg(feature = "native-ebpf")]
+    fn try_attach_interface_program(
+        &mut self,
+        param_object: &Path,
+        iface: &str,
+        role: NativeInterfaceAttachRole,
+        link_layer: TcAttachLayer,
+        backend: AttachBackend,
+    ) -> Result<Value, String> {
+        let suffix = link_layer.suffix();
+        let section_name = format!("{}_{suffix}", role.as_str());
+        let spec = TcBpfAttachSpec::new(
+            TcAttachTarget::host(iface.to_owned(), role.direction()),
+            role.priority().to_string(),
+            path_string(param_object),
+            format!("classifier/{section_name}"),
+        )
+        .native_attach_spec(
+            format!("tproxy_{section_name}"),
+            role.priority(),
+            tc_handle(0x2023, role.handle_minor()),
+        );
+        self.try_attach_spec(param_object, spec, backend)
+    }
+
+    #[cfg(not(feature = "native-ebpf"))]
+    fn try_attach_cgroup_programs(&mut self, _param_object: &Path) -> Result<Vec<Value>, String> {
+        Err("native eBPF runtime feature is not compiled".to_owned())
+    }
+
+    #[cfg(feature = "native-ebpf")]
+    fn try_attach_cgroup_programs(&mut self, param_object: &Path) -> Result<Vec<Value>, String> {
+        let cgroup_path = detect_cgroup2_mount()
+            .map_err(|err| format!("native eBPF cgroup2 mount detection failed: {err}"))?;
+        let mut reports = Vec::new();
+        for line in dae_cgroup_attach_matrix() {
+            let report = load_attach_aya_cgroup_program(
+                self.ensure_loaded(param_object)?,
+                &line,
+                &cgroup_path,
+            )?;
+            reports.push(json!({
+                "role": format!("{:?}", report.role),
+                "cgroup_path": path_string(&report.cgroup_path),
+                "program_name": report.program_name,
+                "section": report.section,
+                "program_kind": report.program_kind.as_str(),
+                "attach_mode": report.attach_mode,
+                "loaded": report.loaded,
+                "attached": report.attached,
+                "detached": report.detached,
+                "link_lifetime_owned_by_backend": report.link_lifetime_owned_by_backend,
+            }));
+        }
+        Ok(reports)
     }
 
     #[cfg(feature = "native-ebpf")]

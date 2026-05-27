@@ -34,6 +34,7 @@ pub(super) fn materialize_production_replacement_readiness_report(
         .as_bool()
         .unwrap_or(false);
     let go_fallback_required = plan["go_fallback_required"].as_bool().unwrap_or(false);
+    let go_fallback_retired = plan["go_fallback_retired"].as_bool().unwrap_or(false);
     let resident_default_daemon_switch_ready = report["resident_default_daemon_switch_ready"]
         .as_bool()
         .unwrap_or(false);
@@ -80,8 +81,11 @@ pub(super) fn materialize_production_replacement_readiness_report(
     if requested && !rollback_script_materialized {
         blockers.push("production run command rollback script is not materialized");
     }
-    if requested && !go_fallback_required {
-        blockers.push("Go fallback requirement is not recorded");
+    if requested && go_fallback_required {
+        blockers.push("Go fallback retirement is not admitted");
+    }
+    if requested && !go_fallback_retired {
+        blockers.push("Go fallback retirement is not recorded");
     }
     if requested && !no_host_write_executed {
         blockers.push("host write or production run command replacement was already executed");
@@ -128,6 +132,7 @@ pub(super) fn materialize_production_replacement_readiness_report(
             "host_mutation_allowed": host_mutation_allowed,
             "apply_plan_admitted": apply_plan_admitted,
             "go_fallback_required": go_fallback_required,
+            "go_fallback_retired": go_fallback_retired,
             "no_host_write_executed": no_host_write_executed,
             "resident_default_daemon_switch_ready": resident_default_daemon_switch_ready,
             "resident_default_daemon_switch_gate": resident_default_daemon_switch_gate.clone(),
@@ -150,7 +155,7 @@ pub(super) fn materialize_production_replacement_readiness_report(
             "review production-run-command-replacement-service.diff",
             "review backup-manifest.json",
             "review rollback-production-run-command-replacement.sh",
-            "confirm Go fallback and daed2.0 product-chain paths",
+            "confirm Go fallback retirement and daed2.0 product-chain paths",
             "explicitly authorize controlled production host write"
         ],
         "source": [

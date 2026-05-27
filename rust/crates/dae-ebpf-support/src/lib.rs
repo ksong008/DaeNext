@@ -50,8 +50,9 @@ pub use attach::{
 pub use aya_loader::{
     AyaCgroupAttachDetachReport, AyaTcAttachDetachReport, AyaUserspaceLoadReport,
     AyaUserspaceLoadedObject, AyaUserspaceLoaderOptions, aya_userspace_load_report,
-    load_attach_aya_sched_classifier, load_attach_detach_aya_cgroup_program,
-    load_attach_detach_aya_sched_classifier, load_aya_userspace_object,
+    load_attach_aya_cgroup_program, load_attach_aya_sched_classifier,
+    load_attach_detach_aya_cgroup_program, load_attach_detach_aya_sched_classifier,
+    load_aya_userspace_object,
 };
 pub use capability::{EbpfBackendCapabilityReport, report_only_ebpf_backend_capability};
 pub use cgroup::{
