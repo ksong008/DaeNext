@@ -1,5 +1,5 @@
 {
-  "incompatible_pinned_map_policy": "delete pinned map by parsed map name and retry load once through the same fullLoadBpfObjects path",
+  "incompatible_pinned_map_policy": "Rust/Aya loader pins a fresh Go-adoption tree under rust_aya_loader and replaces existing adoption pins before control-plane adopt",
   "maps": [
     {
       "flags": 128,

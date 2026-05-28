@@ -230,7 +230,7 @@ func rebuildGoldenStage7BpfMapCatalog(t *testing.T) any {
 			"routing_tuples_map",
 			"tgid_pname_map",
 		},
-		"incompatible_pinned_map_policy": "delete pinned map by parsed map name and retry load once through the same fullLoadBpfObjects path",
+		"incompatible_pinned_map_policy": "Rust/Aya loader pins a fresh Go-adoption tree under rust_aya_loader and replaces existing adoption pins before control-plane adopt",
 	}
 }
 
@@ -488,7 +488,7 @@ func rebuildGoldenStage14ActiveDatapathOptInContract() any {
 		},
 		"active_path_gate": map[string]any{
 			"called_from":             "control.NewControlPlane",
-			"called_before":           "rlimit.RemoveMemlock, netns setup, fullLoadBpfObjects, tc attach, tproxy listeners",
+			"called_before":           "rlimit.RemoveMemlock, netns setup, Rust/Aya eBPF load/adopt, tc attach, tproxy listeners",
 			"requires_explicit_env":   true,
 			"default_go_attach_path":  true,
 			"helper_failure_aborts":   true,

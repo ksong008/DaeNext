@@ -22,7 +22,8 @@ type ParamKey uint32
 
 const (
 	ZeroKey ParamKey = iota
-	BigEndianTproxyPortKey
+	// Legacy tproxy-port param slot; PARAM .rodata owns this field now.
+	_
 	DisableL4TxChecksumKey
 	DisableL4RxChecksumKey
 	ControlPlanePidKey

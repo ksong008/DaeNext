@@ -1,6 +1,6 @@
 {
   "active_path_gate": {
-    "called_before": "rlimit.RemoveMemlock, netns setup, fullLoadBpfObjects, tc attach, tproxy listeners",
+    "called_before": "rlimit.RemoveMemlock, netns setup, Rust/Aya eBPF load/adopt, tc attach, tproxy listeners",
     "called_from": "control.NewControlPlane",
     "default_go_attach_path": true,
     "helper_failure_aborts": true,

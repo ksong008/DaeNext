@@ -23,20 +23,10 @@ import (
 )
 
 const (
-	rustBpfLoaderOptInEnv      = "DAE_RUST_BPF_LOADER_OPTIN"
 	rustBpfLoaderHelperEnv     = "DAE_RUST_BPF_LOADER_HELPER"
-	rustBpfLoaderHelperDefault = "dae-daemon-optin"
+	rustBpfLoaderHelperDefault = "dae-aya-bpf-loader"
 	rustBpfLoaderHelperTimeout = 90 * time.Second
 )
-
-func rustBpfLoaderOptInEnabled() bool {
-	switch strings.ToLower(strings.TrimSpace(os.Getenv(rustBpfLoaderOptInEnv))) {
-	case "1", "true", "yes", "on":
-		return true
-	default:
-		return false
-	}
-}
 
 func rustBpfLoaderHelperPath() string {
 	if helper := strings.TrimSpace(os.Getenv(rustBpfLoaderHelperEnv)); helper != "" {
@@ -45,12 +35,8 @@ func rustBpfLoaderHelperPath() string {
 	return rustBpfLoaderHelperDefault
 }
 
-func RustBpfLoaderOptInContract() (text string, used bool, err error) {
-	if !rustBpfLoaderOptInEnabled() {
-		return "", false, nil
-	}
-	out, err := runRustBpfLoaderHelperOutput("bpf-loader", "contract")
-	return out, true, err
+func RustBpfLoaderContract() (text string, err error) {
+	return runRustBpfLoaderHelperOutput("bpf-loader", "contract")
 }
 
 func fullLoadBpfObjectsViaRustAyaLoader(
@@ -296,7 +282,7 @@ func runRustBpfLoaderHelperOutput(args ...string) (string, error) {
 		if message == "" {
 			message = err.Error()
 		}
-		return "", fmt.Errorf("rust bpf loader helper failed: %s", message)
+		return "", fmt.Errorf("rust bpf loader helper %q failed: %s", rustBpfLoaderHelperPath(), message)
 	}
 	return string(out), nil
 }
