@@ -685,6 +685,13 @@ func (c *ControlPlane) InjectBpf(bpf *bpfObjects) {
 	c.core.InjectBpf(bpf)
 }
 
+func (c *ControlPlane) AttachBackend() string {
+	if c == nil || c.core == nil {
+		return "tc"
+	}
+	return c.core.attachBackend()
+}
+
 func (c *ControlPlane) SnapshotDnsCache() map[string]*DnsCache {
 	c.dnsController.dnsCacheMu.RLock()
 	defer c.dnsController.dnsCacheMu.RUnlock()

@@ -7,9 +7,11 @@ package control
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"regexp"
+	"strings"
 	"sync"
 
 	"github.com/cilium/ebpf"
@@ -27,6 +29,23 @@ import (
 
 // coreFlip should be 0 or 1
 var coreFlip = 0
+
+var activeTcxLinks sync.Map
+
+type trackedTcxLink struct {
+	link ciliumLink.Link
+	once sync.Once
+	err  error
+}
+
+func (l *trackedTcxLink) Close() error {
+	l.once.Do(func() {
+		if l.link != nil {
+			l.err = l.link.Close()
+		}
+	})
+	return l.err
+}
 
 type controlPlaneCore struct {
 	mu sync.Mutex
@@ -47,6 +66,94 @@ type controlPlaneCore struct {
 	close  context.CancelFunc
 	ifmgr  *component.InterfaceManager
 	netns  *DaeNetns
+
+	attachBackendMu sync.RWMutex
+	attachBackends  map[string]tcAttachBackend
+}
+
+type tcAttachBackend string
+
+const (
+	tcAttachBackendAuto tcAttachBackend = "auto"
+	tcAttachBackendTc   tcAttachBackend = "tc"
+	tcAttachBackendTcx  tcAttachBackend = "tcx"
+)
+
+func currentTcAttachBackend() tcAttachBackend {
+	if nativeEbpfExplicitlyDisabled(os.Getenv("DAE_RUST_NATIVE_EBPF")) {
+		return tcAttachBackendTc
+	}
+	for _, envName := range []string{"DAE_RUST_NATIVE_EBPF_BACKEND", "DAE_NATIVE_EBPF_BACKEND"} {
+		if backend := parseTcAttachBackend(os.Getenv(envName)); backend != "" {
+			return backend
+		}
+	}
+	return tcAttachBackendAuto
+}
+
+func nativeEbpfExplicitlyDisabled(value string) bool {
+	switch strings.TrimSpace(strings.ToLower(value)) {
+	case "0", "false", "off", "no":
+		return true
+	default:
+		return false
+	}
+}
+
+func parseTcAttachBackend(value string) tcAttachBackend {
+	switch strings.TrimSpace(strings.ToLower(value)) {
+	case "", "auto":
+		return tcAttachBackendAuto
+	case "tcx":
+		return tcAttachBackendTcx
+	case "tc", "tc-netlink", "tc_netlink", "tc-command-fallback", "tc_command_fallback":
+		return tcAttachBackendTc
+	default:
+		return ""
+	}
+}
+
+func tcxAnchorForPriority(priority uint16) ciliumLink.Anchor {
+	if priority <= 1 {
+		return ciliumLink.Head()
+	}
+	return ciliumLink.Tail()
+}
+
+func tcxAttachTypeForParent(parent uint32) (ebpf.AttachType, bool) {
+	switch parent {
+	case netlink.HANDLE_MIN_INGRESS:
+		return ebpf.AttachTCXIngress, true
+	case netlink.HANDLE_MIN_EGRESS:
+		return ebpf.AttachTCXEgress, true
+	default:
+		return ebpf.AttachNone, false
+	}
+}
+
+func tcxLinkKey(ifname string, filter *netlink.BpfFilter, attachType ebpf.AttachType) string {
+	return fmt.Sprintf("%s:%d:%d:%s", ifname, filter.LinkIndex, attachType, filter.Name)
+}
+
+func summarizeTcAttachBackends(backends []tcAttachBackend) string {
+	hasTCX := false
+	hasTC := false
+	for _, backend := range backends {
+		switch backend {
+		case tcAttachBackendTcx:
+			hasTCX = true
+		case tcAttachBackendTc:
+			hasTC = true
+		}
+	}
+	switch {
+	case hasTCX && hasTC:
+		return "tcx+tc"
+	case hasTCX:
+		return "tcx"
+	default:
+		return "tc"
+	}
 }
 
 func newControlPlaneCore(log *logrus.Logger,
@@ -80,6 +187,7 @@ func newControlPlaneCore(log *logrus.Logger,
 		closed:          closed,
 		close:           toClose,
 		netns:           netns,
+		attachBackends:  make(map[string]tcAttachBackend),
 	}
 }
 
@@ -203,6 +311,171 @@ func (c *controlPlaneCore) delQdisc(ifname string) error {
 	return nil
 }
 
+func delBpfFilter(filter *netlink.BpfFilter) error {
+	if filter == nil {
+		return nil
+	}
+
+	var errs []error
+	if err := netlink.FilterDel(filter); err != nil && !os.IsNotExist(err) {
+		errs = append(errs, err)
+	}
+
+	link, err := netlink.LinkByIndex(filter.LinkIndex)
+	if err != nil {
+		if len(errs) == 0 && !os.IsNotExist(err) {
+			errs = append(errs, err)
+		}
+		return errors.Join(errs...)
+	}
+	filters, err := netlink.FilterList(link, filter.Parent)
+	if err != nil {
+		if len(errs) == 0 && !os.IsNotExist(err) {
+			errs = append(errs, err)
+		}
+		return errors.Join(errs...)
+	}
+	for _, existing := range filters {
+		bpfFilter, ok := existing.(*netlink.BpfFilter)
+		if !ok || !sameBpfFilterIdentity(filter, bpfFilter) {
+			continue
+		}
+		if err := netlink.FilterDel(bpfFilter); err != nil && !os.IsNotExist(err) {
+			errs = append(errs, err)
+		}
+	}
+	return errors.Join(errs...)
+}
+
+func sameBpfFilterIdentity(want *netlink.BpfFilter, got *netlink.BpfFilter) bool {
+	if want == nil || got == nil {
+		return false
+	}
+	if want.FilterAttrs.Handle != 0 {
+		return got.FilterAttrs.Handle == want.FilterAttrs.Handle
+	}
+	return want.Name != "" && got.Name == want.Name
+}
+
+func (c *controlPlaneCore) attachBackend() string {
+	c.attachBackendMu.RLock()
+	defer c.attachBackendMu.RUnlock()
+
+	backends := make([]tcAttachBackend, 0, len(c.attachBackends))
+	for _, backend := range c.attachBackends {
+		backends = append(backends, backend)
+	}
+	return summarizeTcAttachBackends(backends)
+}
+
+func (c *controlPlaneCore) recordAttachBackend(filter *netlink.BpfFilter, backend tcAttachBackend) {
+	c.attachBackendMu.Lock()
+	defer c.attachBackendMu.Unlock()
+	if c.attachBackends == nil {
+		c.attachBackends = make(map[string]tcAttachBackend)
+	}
+	c.attachBackends[filter.Name] = backend
+}
+
+func (c *controlPlaneCore) attachIfaceFilter(ifname string, filter *netlink.BpfFilter, program *ebpf.Program) error {
+	return c.attachIfaceFilterWithTcOps(
+		ifname,
+		filter,
+		program,
+		func() error {
+			return netlink.FilterAdd(filter)
+		},
+		func() error {
+			if err := delBpfFilter(filter); err != nil {
+				return fmt.Errorf("FilterDel(%v:%v): %w", ifname, filter.Name, err)
+			}
+			return nil
+		},
+	)
+}
+
+func (c *controlPlaneCore) attachIfaceFilterInNetns(daens *DaeNetns, ifname string, filter *netlink.BpfFilter, program *ebpf.Program) error {
+	return daens.With(func() error {
+		return c.attachIfaceFilterWithTcOps(
+			ifname,
+			filter,
+			program,
+			func() error {
+				return netlink.FilterAdd(filter)
+			},
+			func() error {
+				return daens.With(func() error {
+					if err := delBpfFilter(filter); err != nil {
+						return fmt.Errorf("FilterDel(%v:%v): %w", ifname, filter.Name, err)
+					}
+					return nil
+				})
+			},
+		)
+	})
+}
+
+func (c *controlPlaneCore) attachIfaceFilterWithTcOps(ifname string, filter *netlink.BpfFilter, program *ebpf.Program, tcAdd func() error, tcDel func() error) error {
+	backend := currentTcAttachBackend()
+	if backend == tcAttachBackendTc {
+		return c.attachIfaceFilterViaTc(ifname, filter, "tc", tcAdd, tcDel)
+	}
+
+	attachType, ok := tcxAttachTypeForParent(filter.Parent)
+	if !ok {
+		return fmt.Errorf("unsupported tcx parent %#x for filter %s", filter.Parent, filter.Name)
+	}
+	linkKey := tcxLinkKey(ifname, filter, attachType)
+	if old, ok := activeTcxLinks.LoadAndDelete(linkKey); ok {
+		if err := old.(*trackedTcxLink).Close(); err != nil {
+			c.log.Warnf("close stale TCX link before reattach for %s on %s: %v", filter.Name, ifname, err)
+		}
+	}
+	tcxLink, err := ciliumLink.AttachTCX(ciliumLink.TCXOptions{
+		Interface: filter.LinkIndex,
+		Program:   program,
+		Attach:    attachType,
+		Anchor:    tcxAnchorForPriority(filter.Priority),
+	})
+	if err == nil {
+		c.log.Infof("Bind %s via TCX on %s", filter.Name, ifname)
+		c.recordAttachBackend(filter, tcAttachBackendTcx)
+		tracked := &trackedTcxLink{link: tcxLink}
+		activeTcxLinks.Store(linkKey, tracked)
+		if err := tcDel(); err != nil {
+			c.log.Warnf("cleanup stale tc filter after TCX attach for %s on %s: %v", filter.Name, ifname, err)
+		}
+		c.deferFuncs = append(c.deferFuncs, func() error {
+			if current, ok := activeTcxLinks.Load(linkKey); ok && current == tracked {
+				activeTcxLinks.Delete(linkKey)
+			}
+			if err := tracked.Close(); err != nil {
+				return fmt.Errorf("TCXLinkClose(%v:%v): %w", ifname, filter.Name, err)
+			}
+			return nil
+		})
+		return nil
+	}
+	if backend == tcAttachBackendTcx {
+		return fmt.Errorf("cannot attach ebpf object to filter %s via tcx: %w", filter.Name, err)
+	}
+
+	c.log.Warnf("TCX attach failed for %s on %s, falling back to tc: %v", filter.Name, ifname, err)
+	return c.attachIfaceFilterViaTc(ifname, filter, "tc fallback", tcAdd, tcDel)
+}
+
+func (c *controlPlaneCore) attachIfaceFilterViaTc(ifname string, filter *netlink.BpfFilter, backend string, tcAdd func() error, tcDel func() error) error {
+	if err := tcAdd(); err != nil {
+		return fmt.Errorf("cannot attach ebpf object to filter %s via %s: %w", filter.Name, backend, err)
+	}
+	c.log.Infof("Bind %s via TC on %s", filter.Name, ifname)
+	c.recordAttachBackend(filter, tcAttachBackendTc)
+	c.deferFuncs = append(c.deferFuncs, func() error {
+		return tcDel()
+	})
+	return nil
+}
+
 // bindLan automatically configures kernel parameters and bind to lan interface `ifname`.
 // bindLan supports lazy-bind if interface `ifname` is not found.
 // bindLan supports rebinding when the interface `ifname` is detected in the future.
@@ -286,30 +559,27 @@ func (c *controlPlaneCore) _bindLan(ifname string) error {
 		Name:         consts.AppName + "_lan_ingress",
 		DirectAction: true,
 	}
+	var ingressProgram *ebpf.Program
 	if linkHdrLen > 0 {
-		filterIngress.Fd = c.bpf.bpfPrograms.TproxyLanIngressL2.FD()
+		ingressProgram = c.bpf.bpfPrograms.TproxyLanIngressL2
+		filterIngress.Fd = ingressProgram.FD()
 		filterIngress.Name = filterIngress.Name + "_l2"
 	} else {
-		filterIngress.Fd = c.bpf.bpfPrograms.TproxyLanIngressL3.FD()
+		ingressProgram = c.bpf.bpfPrograms.TproxyLanIngressL3
+		filterIngress.Fd = ingressProgram.FD()
 		filterIngress.Name = filterIngress.Name + "_l3"
 	}
 	// Remove and add.
-	_ = netlink.FilterDel(filterIngress)
+	_ = delBpfFilter(filterIngress)
 	if !c.isReload {
 		// Clean up thoroughly.
 		filterIngressFlipped := deepcopy.Copy(filterIngress).(*netlink.BpfFilter)
 		filterIngressFlipped.FilterAttrs.Handle ^= 1
-		_ = netlink.FilterDel(filterIngressFlipped)
+		_ = delBpfFilter(filterIngressFlipped)
 	}
-	if err := netlink.FilterAdd(filterIngress); err != nil {
-		return fmt.Errorf("cannot attach ebpf object to filter ingress: %w", err)
+	if err := c.attachIfaceFilter(ifname, filterIngress, ingressProgram); err != nil {
+		return err
 	}
-	c.deferFuncs = append(c.deferFuncs, func() error {
-		if err := netlink.FilterDel(filterIngress); err != nil {
-			return fmt.Errorf("FilterDel(%v:%v): %w", ifname, filterIngress.Name, err)
-		}
-		return nil
-	})
 
 	filterEgress := &netlink.BpfFilter{
 		FilterAttrs: netlink.FilterAttrs{
@@ -323,30 +593,27 @@ func (c *controlPlaneCore) _bindLan(ifname string) error {
 		Name:         consts.AppName + "_lan_egress",
 		DirectAction: true,
 	}
+	var egressProgram *ebpf.Program
 	if linkHdrLen > 0 {
-		filterEgress.Fd = c.bpf.bpfPrograms.TproxyLanEgressL2.FD()
+		egressProgram = c.bpf.bpfPrograms.TproxyLanEgressL2
+		filterEgress.Fd = egressProgram.FD()
 		filterEgress.Name = filterEgress.Name + "_l2"
 	} else {
-		filterEgress.Fd = c.bpf.bpfPrograms.TproxyLanEgressL3.FD()
+		egressProgram = c.bpf.bpfPrograms.TproxyLanEgressL3
+		filterEgress.Fd = egressProgram.FD()
 		filterEgress.Name = filterEgress.Name + "_l3"
 	}
 	// Remove and add.
-	_ = netlink.FilterDel(filterEgress)
+	_ = delBpfFilter(filterEgress)
 	if !c.isReload {
 		// Clean up thoroughly.
 		filterEgressFlipped := deepcopy.Copy(filterEgress).(*netlink.BpfFilter)
 		filterEgressFlipped.FilterAttrs.Handle ^= 1
-		_ = netlink.FilterDel(filterEgressFlipped)
+		_ = delBpfFilter(filterEgressFlipped)
 	}
-	if err := netlink.FilterAdd(filterEgress); err != nil {
-		return fmt.Errorf("cannot attach ebpf object to filter egress: %w", err)
+	if err := c.attachIfaceFilter(ifname, filterEgress, egressProgram); err != nil {
+		return err
 	}
-	c.deferFuncs = append(c.deferFuncs, func() error {
-		if err := netlink.FilterDel(filterEgress); err != nil {
-			return fmt.Errorf("FilterDel(%v:%v): %w", ifname, filterEgress.Name, err)
-		}
-		return nil
-	})
 
 	return nil
 }
@@ -467,30 +734,27 @@ func (c *controlPlaneCore) _bindWan(ifname string) error {
 		Name:         consts.AppName + "_wan_egress",
 		DirectAction: true,
 	}
+	var egressProgram *ebpf.Program
 	if linkHdrLen > 0 {
-		filterEgress.Fd = c.bpf.bpfPrograms.TproxyWanEgressL2.FD()
+		egressProgram = c.bpf.bpfPrograms.TproxyWanEgressL2
+		filterEgress.Fd = egressProgram.FD()
 		filterEgress.Name = filterEgress.Name + "_l2"
 	} else {
-		filterEgress.Fd = c.bpf.bpfPrograms.TproxyWanEgressL3.FD()
+		egressProgram = c.bpf.bpfPrograms.TproxyWanEgressL3
+		filterEgress.Fd = egressProgram.FD()
 		filterEgress.Name = filterEgress.Name + "_l3"
 	}
-	_ = netlink.FilterDel(filterEgress)
+	_ = delBpfFilter(filterEgress)
 	// Remove and add.
 	if !c.isReload {
 		// Clean up thoroughly.
 		filterEgressFlipped := deepcopy.Copy(filterEgress).(*netlink.BpfFilter)
 		filterEgressFlipped.FilterAttrs.Handle ^= 1
-		_ = netlink.FilterDel(filterEgressFlipped)
+		_ = delBpfFilter(filterEgressFlipped)
 	}
-	if err := netlink.FilterAdd(filterEgress); err != nil {
-		return fmt.Errorf("cannot attach ebpf object to filter egress: %w", err)
+	if err := c.attachIfaceFilter(ifname, filterEgress, egressProgram); err != nil {
+		return err
 	}
-	c.deferFuncs = append(c.deferFuncs, func() error {
-		if err := netlink.FilterDel(filterEgress); err != nil && !os.IsNotExist(err) {
-			return fmt.Errorf("FilterDel(%v:%v): %w", ifname, filterEgress.Name, err)
-		}
-		return nil
-	})
 
 	filterIngress := &netlink.BpfFilter{
 		FilterAttrs: netlink.FilterAttrs{
@@ -503,30 +767,27 @@ func (c *controlPlaneCore) _bindWan(ifname string) error {
 		Name:         consts.AppName + "_wan_ingress",
 		DirectAction: true,
 	}
+	var ingressProgram *ebpf.Program
 	if linkHdrLen > 0 {
-		filterIngress.Fd = c.bpf.bpfPrograms.TproxyWanIngressL2.FD()
+		ingressProgram = c.bpf.bpfPrograms.TproxyWanIngressL2
+		filterIngress.Fd = ingressProgram.FD()
 		filterIngress.Name = filterIngress.Name + "_l2"
 	} else {
-		filterIngress.Fd = c.bpf.bpfPrograms.TproxyWanIngressL3.FD()
+		ingressProgram = c.bpf.bpfPrograms.TproxyWanIngressL3
+		filterIngress.Fd = ingressProgram.FD()
 		filterIngress.Name = filterIngress.Name + "_l3"
 	}
-	_ = netlink.FilterDel(filterIngress)
+	_ = delBpfFilter(filterIngress)
 	// Remove and add.
 	if !c.isReload {
 		// Clean up thoroughly.
 		filterIngressFlipped := deepcopy.Copy(filterIngress).(*netlink.BpfFilter)
 		filterIngressFlipped.FilterAttrs.Handle ^= 1
-		_ = netlink.FilterDel(filterIngressFlipped)
+		_ = delBpfFilter(filterIngressFlipped)
 	}
-	if err := netlink.FilterAdd(filterIngress); err != nil {
-		return fmt.Errorf("cannot attach ebpf object to filter ingress: %w", err)
+	if err := c.attachIfaceFilter(ifname, filterIngress, ingressProgram); err != nil {
+		return err
 	}
-	c.deferFuncs = append(c.deferFuncs, func() error {
-		if err := netlink.FilterDel(filterIngress); err != nil && !os.IsNotExist(err) {
-			return fmt.Errorf("FilterDel(%v:%v): %w", ifname, filterIngress.Name, err)
-		}
-		return nil
-	})
 
 	return nil
 }
@@ -537,7 +798,7 @@ func (c *controlPlaneCore) bindDaens() (err error) {
 		return fmt.Errorf("dae netns is not initialized")
 	}
 
-	// tproxy_dae0peer_ingress@eth0 at dae netns
+	// tproxy_dae0peer_ingress@eth0 at dae netns.
 	daens.With(func() error {
 		return c.addQdisc(daens.Dae0Peer().Attrs().Name)
 	})
@@ -554,7 +815,7 @@ func (c *controlPlaneCore) bindDaens() (err error) {
 		DirectAction: true,
 	}
 	daens.With(func() error {
-		return netlink.FilterDel(filterDae0peerIngress)
+		return delBpfFilter(filterDae0peerIngress)
 	})
 	// Remove and add.
 	if !c.isReload {
@@ -562,20 +823,17 @@ func (c *controlPlaneCore) bindDaens() (err error) {
 		filterIngressFlipped := deepcopy.Copy(filterDae0peerIngress).(*netlink.BpfFilter)
 		filterIngressFlipped.FilterAttrs.Handle ^= 1
 		daens.With(func() error {
-			return netlink.FilterDel(filterDae0peerIngress)
+			return delBpfFilter(filterIngressFlipped)
 		})
 	}
-	if err = daens.With(func() error {
-		return netlink.FilterAdd(filterDae0peerIngress)
-	}); err != nil {
-		return fmt.Errorf("cannot attach ebpf object to filter ingress: %w", err)
+	if err = c.attachIfaceFilterInNetns(
+		daens,
+		daens.Dae0Peer().Attrs().Name,
+		filterDae0peerIngress,
+		c.bpf.bpfPrograms.TproxyDae0peerIngress,
+	); err != nil {
+		return err
 	}
-	c.deferFuncs = append(c.deferFuncs, func() error {
-		daens.With(func() error {
-			return netlink.FilterDel(filterDae0peerIngress)
-		})
-		return nil
-	})
 
 	// tproxy_dae0_ingress@dae0 at host netns
 	c.addQdisc(daens.Dae0().Attrs().Name)
@@ -591,23 +849,21 @@ func (c *controlPlaneCore) bindDaens() (err error) {
 		Name:         consts.AppName + "_dae0_ingress",
 		DirectAction: true,
 	}
-	_ = netlink.FilterDel(filterDae0Ingress)
+	_ = delBpfFilter(filterDae0Ingress)
 	// Remove and add.
 	if !c.isReload {
 		// Clean up thoroughly.
 		filterEgressFlipped := deepcopy.Copy(filterDae0Ingress).(*netlink.BpfFilter)
 		filterEgressFlipped.FilterAttrs.Handle ^= 1
-		_ = netlink.FilterDel(filterEgressFlipped)
+		_ = delBpfFilter(filterEgressFlipped)
 	}
-	if err := netlink.FilterAdd(filterDae0Ingress); err != nil {
-		return fmt.Errorf("cannot attach ebpf object to filter egress: %w", err)
+	if err := c.attachIfaceFilter(
+		daens.Dae0().Attrs().Name,
+		filterDae0Ingress,
+		c.bpf.bpfPrograms.TproxyDae0Ingress,
+	); err != nil {
+		return err
 	}
-	c.deferFuncs = append(c.deferFuncs, func() error {
-		if err := netlink.FilterDel(filterDae0Ingress); err != nil && !os.IsNotExist(err) {
-			return fmt.Errorf("FilterDel(%v:%v): %w", daens.Dae0().Attrs().Name, filterDae0Ingress.Name, err)
-		}
-		return nil
-	})
 	return
 }
 

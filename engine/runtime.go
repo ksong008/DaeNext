@@ -491,6 +491,14 @@ func (e *Engine) NetnsLinkMode() string {
 	return netns.LinkMode()
 }
 
+func (e *Engine) AttachBackend() string {
+	ctl, err := e.ControlPlane()
+	if err != nil {
+		return "tc"
+	}
+	return ctl.AttachBackend()
+}
+
 func (e *Engine) GetRuntimeOverview(windowSec int, maxPoints int) (*RuntimeOverview, error) {
 	activeTCPConnections := 0
 	ctl, err := e.ControlPlane()
