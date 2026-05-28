@@ -41,6 +41,21 @@ fn candidate_reports_resident_service_and_dataplane_capabilities() {
             .as_bool()
             .unwrap()
     );
+    assert!(
+        report["reload_failure_rollback_supported"]
+            .as_bool()
+            .unwrap()
+    );
+    assert!(
+        report["invalid_runtime_config_rejected_before_current_swap"]
+            .as_bool()
+            .unwrap()
+    );
+    assert!(
+        report["reload_start_failure_attempts_previous_runtime_restore"]
+            .as_bool()
+            .unwrap()
+    );
 }
 
 #[test]
@@ -88,7 +103,7 @@ fn resident_service_notifies_reloads_rejects_bad_config_and_cleans_pid() {
     );
     assert_eq!(fs::read(&progress_file).unwrap()[0], RELOAD_DONE);
 
-    let successful_reload = reload_child(child.inner.id(), &progress_file, &abort_file);
+    let successful_reload = reload_child(child.inner.id(), &progress_file, &abort_file, false);
     assert!(successful_reload.status.success());
     assert_eq!(
         String::from_utf8_lossy(&successful_reload.stdout).trim(),
@@ -97,10 +112,41 @@ fn resident_service_notifies_reloads_rejects_bad_config_and_cleans_pid() {
     assert_eq!(recv_notify(&notify_socket), "RELOADING=1");
     assert_eq!(recv_notify(&notify_socket), "READY=1");
     assert!(fs::read(&progress_file).unwrap().starts_with(b"2\nOK"));
+    assert!(!abort_file.exists());
+
+    let abort_reload = reload_child(child.inner.id(), &progress_file, &abort_file, true);
+    assert!(abort_reload.status.success());
+    assert_eq!(String::from_utf8_lossy(&abort_reload.stdout).trim(), "OK");
+    assert_eq!(recv_notify(&notify_socket), "RELOADING=1");
+    assert_eq!(recv_notify(&notify_socket), "READY=1");
+    assert!(!abort_file.exists());
+
+    write_missing_interface_config(&config);
+    let rejected_reload = reload_child(child.inner.id(), &progress_file, &abort_file, false);
+    assert!(rejected_reload.status.success());
+    assert!(
+        String::from_utf8_lossy(&rejected_reload.stdout)
+            .contains("rejected before current runtime swap")
+    );
+    assert_eq!(recv_notify(&notify_socket), "RELOADING=1");
+    assert_eq!(recv_notify(&notify_socket), "READY=1");
+    assert_eq!(fs::read(&progress_file).unwrap()[0], RELOAD_ERROR);
+    assert!(child.inner.try_wait().unwrap().is_none());
+
+    write_valid_config(&config);
+    let restored_reload = reload_child(child.inner.id(), &progress_file, &abort_file, false);
+    assert!(restored_reload.status.success());
+    assert_eq!(
+        String::from_utf8_lossy(&restored_reload.stdout).trim(),
+        "OK"
+    );
+    assert_eq!(recv_notify(&notify_socket), "RELOADING=1");
+    assert_eq!(recv_notify(&notify_socket), "READY=1");
+    assert!(fs::read(&progress_file).unwrap().starts_with(b"2\nOK"));
 
     fs::write(&config, "global {\n  log_level: info\n").unwrap();
     fs::set_permissions(&config, fs::Permissions::from_mode(0o600)).unwrap();
-    let failed_reload = reload_child(child.inner.id(), &progress_file, &abort_file);
+    let failed_reload = reload_child(child.inner.id(), &progress_file, &abort_file, false);
     assert!(failed_reload.status.success());
     assert!(
         !String::from_utf8_lossy(&failed_reload.stdout)
@@ -123,23 +169,40 @@ fn resident_service_notifies_reloads_rejects_bad_config_and_cleans_pid() {
     let _ = fs::remove_dir_all(&root);
 }
 
-fn reload_child(pid: u32, progress_file: &Path, abort_file: &Path) -> std::process::Output {
-    Command::new(binary())
+fn reload_child(
+    pid: u32,
+    progress_file: &Path,
+    abort_file: &Path,
+    abort_connections: bool,
+) -> std::process::Output {
+    let mut command = Command::new(binary());
+    command
         .arg("reload")
         .arg(pid.to_string())
         .arg("--service-progress-file")
         .arg(progress_file)
         .arg("--service-abort-file")
         .arg(abort_file)
-        .arg("--timeout-ms=5000")
-        .output()
-        .unwrap()
+        .arg("--timeout-ms=5000");
+    if abort_connections {
+        command.arg("--abort");
+    }
+    command.output().unwrap()
 }
 
 fn write_valid_config(path: &Path) {
     fs::write(
         path,
         "global {\n  log_level: info\n}\n\nrouting {\n  pname(NetworkManager, systemd-resolved, dnsmasq) -> must_direct\n}\n",
+    )
+    .unwrap();
+    fs::set_permissions(path, fs::Permissions::from_mode(0o600)).unwrap();
+}
+
+fn write_missing_interface_config(path: &Path) {
+    fs::write(
+        path,
+        "global {\n  log_level: info\n  lan_interface: dae-missing-a4-interface\n}\n\nrouting {\n  pname(NetworkManager, systemd-resolved, dnsmasq) -> must_direct\n}\n",
     )
     .unwrap();
     fs::set_permissions(path, fs::Permissions::from_mode(0o600)).unwrap();
