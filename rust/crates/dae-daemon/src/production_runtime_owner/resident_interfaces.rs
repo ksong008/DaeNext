@@ -6,6 +6,7 @@ use dae_ebpf_support::TcAttachLayer;
 use serde_json::{Value, json};
 
 use super::ProductionRuntimeOwnerOptions;
+use super::command::{CommandSpec, run_step};
 use super::native_ebpf::{NativeEbpfRuntimeState, NativeInterfaceAttachRole};
 
 pub(super) fn configured_wan_ifaces(config: &Config) -> Vec<String> {
@@ -28,6 +29,45 @@ pub(super) fn interface_link_layer(iface: &str) -> Result<TcAttachLayer, String>
         .parse::<u16>()
         .map_err(|err| format!("failed to parse interface type for {iface}: {err}"))?;
     Ok(link_layer_from_arphrd(arphrd))
+}
+
+pub(super) fn configure_resident_lan_kernel_parameters(
+    steps: &mut Vec<Value>,
+    iface: &str,
+) -> Value {
+    let ipv4_send_redirects_ok = run_step(
+        steps,
+        &format!("set-resident-lan-{iface}-ipv4-send-redirects-off"),
+        CommandSpec::new(
+            "sysctl",
+            ["-w", &format!("net.ipv4.conf.{iface}.send_redirects=0")],
+        ),
+    );
+    let ipv4_forwarding_ok = run_step(
+        steps,
+        &format!("set-resident-lan-{iface}-ipv4-forwarding-on"),
+        CommandSpec::new(
+            "sysctl",
+            ["-w", &format!("net.ipv4.conf.{iface}.forwarding=1")],
+        ),
+    );
+    let ipv6_forwarding_ok = run_step(
+        steps,
+        &format!("set-resident-lan-{iface}-ipv6-forwarding-on"),
+        CommandSpec::new(
+            "sysctl",
+            ["-w", &format!("net.ipv6.conf.{iface}.forwarding=1")],
+        ),
+    );
+    json!({
+        "name": format!("resident-lan-kernel-parameters-{iface}"),
+        "status": if ipv4_send_redirects_ok && ipv4_forwarding_ok && ipv6_forwarding_ok { "pass" } else { "warn" },
+        "interface": iface,
+        "ipv4_send_redirects_off": ipv4_send_redirects_ok,
+        "ipv4_forwarding_on": ipv4_forwarding_ok,
+        "ipv6_forwarding_on": ipv6_forwarding_ok,
+        "source_parity": "Go bindLan autoConfigKernelParameter SetSendRedirects(iface, 0) and SetForwarding(iface, 1)",
+    })
 }
 
 fn link_layer_from_arphrd(arphrd: u16) -> TcAttachLayer {
