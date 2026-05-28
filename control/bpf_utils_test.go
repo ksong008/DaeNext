@@ -2,8 +2,6 @@ package control
 
 import (
 	"errors"
-	"os"
-	"path/filepath"
 	"testing"
 
 	"github.com/cilium/ebpf"
@@ -53,27 +51,5 @@ func TestNewLpmMapClosesMapOnBatchUpdateFailure(t *testing.T) {
 	}
 	if fd := created.FD(); fd != -1 {
 		t.Fatalf("created map fd = %d, want closed fd -1", fd)
-	}
-}
-
-func TestRemovePinnedMapReturnsRemoveError(t *testing.T) {
-	pinPath := t.TempDir()
-	mapDir := filepath.Join(pinPath, "routing_tuples_map")
-	if err := os.Mkdir(mapDir, 0o755); err != nil {
-		t.Fatalf("mkdir pinned map dir: %v", err)
-	}
-	if err := os.WriteFile(filepath.Join(mapDir, "child"), []byte("x"), 0o644); err != nil {
-		t.Fatalf("write child: %v", err)
-	}
-
-	err := removePinnedMap(pinPath, "routing_tuples_map")
-	if err == nil {
-		t.Fatal("expected removePinnedMap to return remove error")
-	}
-	if !errors.Is(err, unix.ENOTEMPTY) && !errors.Is(err, unix.EEXIST) {
-		t.Fatalf("removePinnedMap error = %v, want non-empty directory error", err)
-	}
-	if _, statErr := os.Stat(mapDir); statErr != nil {
-		t.Fatalf("expected pinned map path to remain after failed remove: %v", statErr)
 	}
 }

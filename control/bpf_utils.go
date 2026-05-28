@@ -12,17 +12,12 @@ import (
 	"fmt"
 	"net/netip"
 	"os"
-	"path/filepath"
-	"reflect"
 	"strings"
 
 	"github.com/cilium/ebpf"
-	"github.com/cilium/ebpf/asm"
-	"github.com/cilium/ebpf/features"
 	"github.com/daeuniverse/dae/common"
 	"github.com/daeuniverse/dae/common/consts"
 	internal "github.com/daeuniverse/dae/pkg/ebpf_internal"
-	"github.com/sirupsen/logrus"
 )
 
 type _bpfTuples struct {
@@ -149,114 +144,6 @@ func (p bpfIfParams) CheckVersionRequirement(version *internal.Version) (err err
 }
 
 type loadBpfOptions struct {
-	PinPath             string
-	HostTproxyPort      uint16
-	BigEndianTproxyPort uint32
-	CollectionOptions   *ebpf.CollectionOptions
-}
-
-func loadBpfObjectsWithConstants(obj interface{}, opts *ebpf.CollectionOptions, constants map[string]interface{}) error {
-	spec, err := loadBpf()
-	if err != nil {
-		return err
-	}
-	for name, value := range constants {
-		variable, ok := spec.Variables[name]
-		if !ok {
-			return fmt.Errorf("variable %q not found in collection spec", name)
-		}
-		if err := variable.Set(value); err != nil {
-			return err
-		}
-	}
-	return spec.LoadAndAssign(obj, opts)
-}
-
-func fullLoadBpfObjects(
-	log *logrus.Logger,
-	netns *DaeNetns,
-	bpf *bpfObjects,
-	opts *loadBpfOptions,
-) (err error) {
-retryLoadBpf:
-	if netns == nil {
-		return fmt.Errorf("dae netns is not initialized")
-	}
-	netnsID, err := netns.NetnsID()
-	if err != nil {
-		return fmt.Errorf("failed to get netns id: %w", err)
-	}
-	hasBpfGetCurrentTask := uint8(1)
-	if err := features.HaveProgramHelper(ebpf.CGroupSock, asm.FnGetCurrentTask); err != nil {
-		hasBpfGetCurrentTask = 0
-		log.Warnf("Kernel does not support bpf_get_current_task for cgroup/sock: %v; process names may fall back to bpf_get_current_comm", err)
-	}
-	if err := features.HaveProgramHelper(ebpf.CGroupSockAddr, asm.FnGetCurrentTask); err != nil {
-		hasBpfGetCurrentTask = 0
-		log.Warnf("Kernel does not support bpf_get_current_task for cgroup/sock_addr: %v; process names may fall back to bpf_get_current_comm", err)
-	}
-	if hasBpfGetCurrentTask == 1 {
-		log.Debugf("bpf_get_current_task is supported for cgroup process-name tracking")
-	}
-	constants := map[string]interface{}{
-		"PARAM": struct {
-			tproxyPort           uint32
-			controlPlanePid      uint32
-			dae0Ifindex          uint32
-			dae0NetnsId          uint32
-			dae0peerMac          [6]byte
-			hasBpfGetCurrentTask uint8
-			padding              uint8
-		}{
-			tproxyPort:           uint32(opts.BigEndianTproxyPort),
-			controlPlanePid:      uint32(os.Getpid()),
-			dae0Ifindex:          uint32(netns.Dae0().Attrs().Index),
-			dae0NetnsId:          uint32(netnsID),
-			dae0peerMac:          [6]byte(netns.Dae0Peer().Attrs().HardwareAddr),
-			hasBpfGetCurrentTask: hasBpfGetCurrentTask,
-		},
-	}
-	if err = loadBpfObjectsWithConstants(bpf, opts.CollectionOptions, constants); err != nil {
-		if errors.Is(err, ebpf.ErrMapIncompatible) {
-			// Map property is incompatible. Remove the old map and try again.
-			prefix := "use pinned map "
-			_, after, ok := strings.Cut(err.Error(), prefix)
-			if !ok {
-				return fmt.Errorf("loading objects: bad format: %w", err)
-			}
-			mapName, _, _ := strings.Cut(after, ":")
-			if removeErr := removePinnedMap(opts.PinPath, mapName); removeErr != nil {
-				return errors.Join(err, removeErr)
-			}
-			log.Infof("Incompatible new map format with existing map %v detected; removed the old one.", mapName)
-			goto retryLoadBpf
-		}
-		// Get detailed log from ebpf.internal.(*VerifierError)
-		if log.Level == logrus.FatalLevel {
-			if v := reflect.Indirect(reflect.ValueOf(errors.Unwrap(errors.Unwrap(err)))); v.Kind() == reflect.Struct {
-				if _log := v.FieldByName("Log"); _log.IsValid() {
-					if strSlice, ok := _log.Interface().([]string); ok {
-						log.Fatalln(strings.Join(strSlice, "\n"))
-					}
-				}
-			}
-		}
-		if strings.Contains(err.Error(), "no BTF found for kernel version") {
-			err = fmt.Errorf("%w: you should re-compile linux kernel with BTF configurations; see docs for more information", err)
-		} else if strings.Contains(err.Error(), "unknown func bpf_trace_printk") {
-			err = fmt.Errorf(`%w: please try to compile dae without bpf_printk"`, err)
-		} else if strings.Contains(err.Error(), "unknown func bpf_probe_read") {
-			err = fmt.Errorf(`%w: please re-compile linux kernel with CONFIG_BPF_EVENTS=y and CONFIG_KPROBE_EVENTS=y"`, err)
-		}
-		return err
-	}
-	return nil
-}
-
-func removePinnedMap(pinPath, mapName string) error {
-	mapPath := filepath.Join(pinPath, mapName)
-	if err := os.Remove(mapPath); err != nil {
-		return fmt.Errorf("remove incompatible pinned map %s: %w", mapPath, err)
-	}
-	return nil
+	PinPath        string
+	HostTproxyPort uint16
 }

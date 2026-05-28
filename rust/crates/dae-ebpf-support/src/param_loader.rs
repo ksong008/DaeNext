@@ -30,8 +30,8 @@ pub fn dae_param_requirements() -> [DaeParamRequirement; 6] {
     [
         DaeParamRequirement {
             field: "tproxy_port",
-            source: "loadBpfOptions.BigEndianTproxyPort",
-            requirement: "must be written as network-order u16 widened to u32 before BPF load",
+            source: "DaeParamInput.tproxy_port / --tproxy-port",
+            requirement: "must be packed as network-order u16 widened to u32 by Rust/Aya loader before BPF load",
         },
         DaeParamRequirement {
             field: "control_plane_pid",
