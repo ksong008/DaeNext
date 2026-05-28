@@ -10,7 +10,7 @@ use std::time::{Duration, Instant};
 use dae_core_types::reload::{RELOAD_DONE, RELOAD_ERROR, RELOAD_PROCESSING, RELOAD_SEND};
 use serde_json::{Value, json};
 
-use crate::config_validate::{load_config_file, validate_config_file};
+use crate::config_validate::load_config_file;
 use crate::production_runtime_owner::start_resident_production_runtime;
 
 pub const PID_FILE_PATH: &str = "/var/run/dae.pid";
@@ -124,7 +124,7 @@ pub fn run_resident_service(options: &ResidentRunOptions) -> Result<(), String> 
     loop {
         let signal = wait_service_signal()?;
         match signal {
-            libc::SIGUSR1 => handle_reload(options)?,
+            libc::SIGUSR1 => handle_reload(options, &mut production_runtime)?,
             libc::SIGUSR2 => handle_suspend_compatibility(options)?,
             libc::SIGHUP => continue,
             libc::SIGTERM | libc::SIGINT | libc::SIGQUIT => {
@@ -165,12 +165,6 @@ pub fn reload_resident_service(options: &ReloadOptions) -> Result<String, String
     }
 
     let started = Instant::now();
-    thread::sleep(Duration::from_millis(500));
-    let (code, _) = read_progress(&options.progress_file).unwrap_or((RELOAD_SEND, String::new()));
-    if code == RELOAD_SEND {
-        return Ok("OK\n".to_owned());
-    }
-
     loop {
         if options
             .timeout
@@ -188,12 +182,27 @@ pub fn reload_resident_service(options: &ReloadOptions) -> Result<String, String
     }
 }
 
-fn handle_reload(options: &ResidentRunOptions) -> Result<(), String> {
+fn handle_reload(
+    options: &ResidentRunOptions,
+    production_runtime: &mut Option<crate::production_runtime_owner::ResidentProductionRuntime>,
+) -> Result<(), String> {
     notify_systemd("RELOADING=1")?;
     write_progress(&options.progress_file, RELOAD_PROCESSING, "")?;
     let _abort_connections = fs::remove_file(&options.abort_file).is_ok();
-    match validate_config_file(&options.config) {
-        Ok(_) => {
+    match load_config_file(&options.config) {
+        Ok(runtime_config) => {
+            production_runtime.take();
+            match start_resident_production_runtime(&runtime_config) {
+                Ok(next_runtime) => {
+                    *production_runtime = Some(next_runtime);
+                }
+                Err(err) => {
+                    write_progress(&options.progress_file, RELOAD_ERROR, &format!("\n{err}"))?;
+                    log_event(options, "reload failed")?;
+                    notify_systemd("READY=1")?;
+                    return Ok(());
+                }
+            }
             write_progress(&options.progress_file, RELOAD_DONE, "\nOK")?;
             log_event(options, "reload completed")?;
         }

@@ -3,6 +3,7 @@ use serde_json::{Value, json};
 use super::command::{CommandSpec, run_step};
 
 const NETNS_LINK_ENV: &str = "DAE_NETNS_LINK";
+const NETNS_LINK_AUTO_POLICY: &str = "netkit_l2_scrub_none_then_legacy_netkit_l2_then_veth";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum NetnsLinkMode {
@@ -122,19 +123,42 @@ pub(super) fn create_link_pair(
                 ],
             ),
         ),
-        NetnsLinkMode::Netkit => run_step(
-            steps,
-            &format!("create-{step_scope}-netkit-pair"),
-            CommandSpec::new(
-                "ip",
-                [
-                    "link", "add", host_iface, "type", "netkit", "mode", "l2", "scrub", "none",
-                    "peer", "scrub", "none", "name", peer_iface,
-                ],
-            ),
-        ),
+        NetnsLinkMode::Netkit => create_netkit_link_pair(steps, step_scope, host_iface, peer_iface),
         NetnsLinkMode::Auto => unreachable!("auto mode must be resolved before creating a link"),
     }
+}
+
+fn create_netkit_link_pair(
+    steps: &mut Vec<Value>,
+    step_scope: &str,
+    host_iface: &str,
+    peer_iface: &str,
+) -> bool {
+    let modern_ok = run_step(
+        steps,
+        &format!("create-{step_scope}-netkit-pair"),
+        CommandSpec::new(
+            "ip",
+            [
+                "link", "add", host_iface, "type", "netkit", "mode", "l2", "scrub", "none", "peer",
+                "scrub", "none", "name", peer_iface,
+            ],
+        ),
+    );
+    if modern_ok {
+        return true;
+    }
+    run_step(
+        steps,
+        &format!("create-{step_scope}-netkit-pair-legacy-no-scrub"),
+        CommandSpec::new(
+            "ip",
+            [
+                "link", "add", host_iface, "type", "netkit", "mode", "l2", "peer", "name",
+                peer_iface,
+            ],
+        ),
+    )
 }
 
 pub(super) fn cleanup_partial_link_setup(
@@ -177,7 +201,7 @@ fn push_selection_step(
         "selected": selected.as_str(),
         "fallback_used": fallback_used,
         "fallback_reason": fallback_reason,
-        "auto_policy": "netkit_l2_scrub_none_then_veth",
+        "auto_policy": NETNS_LINK_AUTO_POLICY,
     }));
 }
 

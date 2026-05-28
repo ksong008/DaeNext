@@ -18,8 +18,8 @@ use super::netns_link::resolve_netns_link_mode_from_env;
 use super::report::{live_handoff_json, socket_options_verified};
 use super::resident_dataplane::{ResidentDataplaneRuntime, start_resident_dataplane_workers};
 use super::resident_interfaces::{
-    attach_resident_lan_egress_program, attach_resident_wan_programs, configured_wan_ifaces,
-    interface_link_layer,
+    attach_resident_lan_egress_program, attach_resident_wan_programs,
+    configure_resident_lan_kernel_parameters, configured_wan_ifaces, interface_link_layer,
 };
 use super::resident_lan::{
     attach_resident_lan_program, cleanup_resident_lan_programs, configured_lan_ifaces,
@@ -179,6 +179,66 @@ pub fn start_resident_production_runtime(
     )
 }
 
+fn resident_interface_attach_options(
+    options: &ProductionRuntimeOwnerOptions,
+    lan_ifaces: &[String],
+    wan_ifaces: &[String],
+) -> (ProductionRuntimeOwnerOptions, Value) {
+    let overlapping_ifaces = overlapping_interfaces(lan_ifaces, wan_ifaces);
+    let same_interface_multi_role = !overlapping_ifaces.is_empty();
+    let effective = options.clone();
+    let auto_tcx_multi_role_admitted = same_interface_multi_role
+        && options.native_ebpf_opt_in
+        && options.native_ebpf_backend == AttachBackend::Auto;
+    let explicit_tcx_same_interface = !overlapping_ifaces.is_empty()
+        && options.native_ebpf_opt_in
+        && options.native_ebpf_backend == AttachBackend::Tcx;
+    let effective_backend = effective.native_ebpf_backend;
+    (
+        effective,
+        json!({
+            "name": "resident-interface-backend-policy",
+            "status": "pass",
+            "scope": "resident physical LAN/WAN interface attach backend selection",
+            "lan_interfaces": lan_ifaces,
+            "wan_interfaces": wan_ifaces,
+            "overlapping_interfaces": overlapping_ifaces,
+            "requested_backend": options.native_ebpf_backend.as_str(),
+            "effective_backend": effective_backend.as_str(),
+            "same_interface_multi_role": same_interface_multi_role,
+            "auto_tcx_multi_role_admitted": auto_tcx_multi_role_admitted,
+            "auto_same_interface_tc_netlink_required": false,
+            "auto_downgraded": false,
+            "explicit_tcx_same_interface": explicit_tcx_same_interface,
+            "reason": if auto_tcx_multi_role_admitted {
+                "LAN and WAN share a physical interface; auto keeps TCX candidate and relies on per-filter TCX order plus tc-netlink fallback to preserve Go TC priority semantics"
+            } else if explicit_tcx_same_interface {
+                "explicit tcx was requested while LAN and WAN share a physical interface; honoring explicit backend with per-filter TCX order"
+            } else {
+                "no resident interface backend adjustment required"
+            },
+            "same_interface_tc_netlink_applies_to_all_tc_roles": false,
+            "same_interface_tcx_order_policy": "ingress: wan_ingress before lan_ingress; egress: lan_egress before wan_egress; tc-netlink fallback keeps Go priority/handle",
+            "dae0_dae0peer_link_layer_unchanged": true,
+            "dae0_dae0peer_attach_backend_unchanged": true,
+        }),
+    )
+}
+
+fn overlapping_interfaces(lan_ifaces: &[String], wan_ifaces: &[String]) -> Vec<String> {
+    let mut overlaps = Vec::new();
+    for lan in lan_ifaces {
+        let lan = lan.trim();
+        if lan.is_empty() || overlaps.iter().any(|seen| seen == lan) {
+            continue;
+        }
+        if wan_ifaces.iter().any(|wan| wan.trim() == lan) {
+            overlaps.push(lan.to_owned());
+        }
+    }
+    overlaps
+}
+
 fn start_with_options(
     options: ProductionRuntimeOwnerOptions,
     artifact_dir: PathBuf,
@@ -214,9 +274,12 @@ fn start_with_options(
     let mut discovered_map_id = None;
     let mut discovered_routing_map_ids = Vec::new();
     let mut native_lan_ifaces = Vec::new();
+    let (interface_attach_options, resident_interface_backend_policy) =
+        resident_interface_attach_options(&options, &lan_ifaces, &wan_ifaces);
 
     let result = (|| {
         let mut ok = true;
+        executed_steps.push(resident_interface_backend_policy.clone());
         ok &= setup_runtime_topology(&mut executed_steps, &options);
         let (topology_values, dae0_ifindex, dae0_mac, dae0peer_mac) =
             read_topology_values(&mut executed_steps, &options);
@@ -268,7 +331,7 @@ fn start_with_options(
         if ok {
             ok &= attach_peer_program(
                 &mut executed_steps,
-                &options,
+                &interface_attach_options,
                 &param_object,
                 &selected_native_param_object,
                 &mut native_runtime,
@@ -318,7 +381,7 @@ fn start_with_options(
         } else if ok {
             match native_runtime.attach_cgroup_programs(
                 &mut executed_steps,
-                &options,
+                &interface_attach_options,
                 &selected_native_param_object,
             ) {
                 Some(true) => json!({
@@ -358,7 +421,7 @@ fn start_with_options(
 
         let (wan_ok, resident_wan_attach) = attach_resident_wan_programs(
             &mut executed_steps,
-            &options,
+            &interface_attach_options,
             &selected_native_param_object,
             &mut native_runtime,
             &wan_ifaces,
@@ -370,6 +433,8 @@ fn start_with_options(
         let mut resident_lan_routing = Vec::new();
         for iface in &lan_ifaces {
             if ok {
+                let lan_kernel_parameters =
+                    configure_resident_lan_kernel_parameters(&mut executed_steps, iface);
                 let link_layer = match interface_link_layer(iface) {
                     Ok(layer) => layer,
                     Err(err) => {
@@ -392,7 +457,7 @@ fn start_with_options(
                 let before_lan_map_ids = map_ids().unwrap_or_default();
                 let lan_attach = attach_resident_lan_program(
                     &mut executed_steps,
-                    &options,
+                    &interface_attach_options,
                     iface,
                     link_layer,
                     &param_object,
@@ -406,7 +471,7 @@ fn start_with_options(
                 let lan_egress_attach = if lan_attach.native_attached && lan_attach.ok {
                     let (egress_ok, egress_report) = attach_resident_lan_egress_program(
                         &mut executed_steps,
-                        &options,
+                        &interface_attach_options,
                         &selected_native_param_object,
                         &mut native_runtime,
                         iface,
@@ -468,6 +533,7 @@ fn start_with_options(
                     "native_backend": lan_attach.native_backend,
                     "native_attached": lan_attach.native_attached,
                     "link_layer": lan_attach.link_layer.suffix(),
+                    "kernel_parameters": lan_kernel_parameters,
                     "egress": lan_egress_attach,
                     "show": show,
                 }));
@@ -484,6 +550,7 @@ fn start_with_options(
                     "native_backend": Value::Null,
                     "native_attached": false,
                     "link_layer": Value::Null,
+                    "kernel_parameters": Value::Null,
                     "egress": Value::Null,
                     "show": Value::Null,
                     "status": "skipped",
@@ -526,7 +593,7 @@ fn start_with_options(
         if ok {
             ok &= attach_host_program(
                 &mut executed_steps,
-                &options,
+                &interface_attach_options,
                 &param_object,
                 &selected_native_param_object,
                 &mut native_runtime,
@@ -583,6 +650,7 @@ fn start_with_options(
             "peer_attach_show": peer_attach_show,
             "resident_cgroup_attach": resident_cgroup_attach,
             "resident_wan_attach": resident_wan_attach,
+            "resident_interface_backend_policy": resident_interface_backend_policy,
             "resident_lan_plan": lan_start_plan_json(&lan_ifaces, options.native_ebpf_opt_in, &resident_lan_attach),
             "resident_native_cgroup_attached": native_runtime.cgroup_attached(),
             "resident_native_lan_ifaces": native_lan_ifaces.clone(),
@@ -761,4 +829,96 @@ fn write_json_file(path: &Path, label: &str, value: Value) -> Result<(), String>
     let encoded = serde_json::to_vec_pretty(&value)
         .map_err(|err| format!("failed to encode {label}: {err}"))?;
     fs::write(path, encoded).map_err(|err| format!("failed to write {}: {err}", path_string(path)))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn resident_interface_attach_auto_keeps_tcx_candidate_for_same_lan_wan_iface() {
+        let options = ProductionRuntimeOwnerOptions {
+            native_ebpf_opt_in: true,
+            native_ebpf_backend: AttachBackend::Auto,
+            ..ProductionRuntimeOwnerOptions::default()
+        };
+        let (effective, policy) = resident_interface_attach_options(
+            &options,
+            &["enp1s0".to_owned()],
+            &["enp1s0".to_owned()],
+        );
+        assert_eq!(effective.native_ebpf_backend, AttachBackend::Auto);
+        assert_eq!(policy["effective_backend"], json!("auto"));
+        assert_eq!(policy["auto_downgraded"], json!(false));
+        assert_eq!(policy["same_interface_multi_role"], json!(true));
+        assert_eq!(policy["auto_tcx_multi_role_admitted"], json!(true));
+        assert_eq!(
+            policy["auto_same_interface_tc_netlink_required"],
+            json!(false)
+        );
+        assert_eq!(policy["overlapping_interfaces"], json!(["enp1s0"]));
+        assert_eq!(
+            policy["dae0_dae0peer_attach_backend_unchanged"],
+            json!(true)
+        );
+        assert_eq!(
+            policy["same_interface_tc_netlink_applies_to_all_tc_roles"],
+            json!(false)
+        );
+        assert_eq!(policy["dae0_dae0peer_link_layer_unchanged"], json!(true));
+        assert_eq!(
+            policy["same_interface_tcx_order_policy"],
+            json!(
+                "ingress: wan_ingress before lan_ingress; egress: lan_egress before wan_egress; tc-netlink fallback keeps Go priority/handle"
+            )
+        );
+    }
+
+    #[test]
+    fn resident_interface_attach_auto_keeps_backend_for_split_lan_wan_ifaces() {
+        let options = ProductionRuntimeOwnerOptions {
+            native_ebpf_opt_in: true,
+            native_ebpf_backend: AttachBackend::Auto,
+            ..ProductionRuntimeOwnerOptions::default()
+        };
+        let (effective, policy) = resident_interface_attach_options(
+            &options,
+            &["daerust0".to_owned()],
+            &["ens3".to_owned()],
+        );
+        assert_eq!(effective.native_ebpf_backend, AttachBackend::Auto);
+        assert_eq!(policy["auto_downgraded"], json!(false));
+        assert_eq!(
+            policy["auto_same_interface_tc_netlink_required"],
+            json!(false)
+        );
+        assert_eq!(
+            policy["same_interface_tc_netlink_applies_to_all_tc_roles"],
+            json!(false)
+        );
+        assert_eq!(policy["overlapping_interfaces"], json!([]));
+    }
+
+    #[test]
+    fn resident_interface_attach_honors_explicit_tcx_on_same_lan_wan_iface() {
+        let options = ProductionRuntimeOwnerOptions {
+            native_ebpf_opt_in: true,
+            native_ebpf_backend: AttachBackend::Tcx,
+            ..ProductionRuntimeOwnerOptions::default()
+        };
+        let (effective, policy) = resident_interface_attach_options(
+            &options,
+            &["enp1s0".to_owned()],
+            &["enp1s0".to_owned()],
+        );
+        assert_eq!(effective.native_ebpf_backend, AttachBackend::Tcx);
+        assert_eq!(policy["auto_downgraded"], json!(false));
+        assert_eq!(policy["auto_tcx_multi_role_admitted"], json!(false));
+        assert_eq!(
+            policy["same_interface_tc_netlink_applies_to_all_tc_roles"],
+            json!(false)
+        );
+        assert_eq!(policy["explicit_tcx_same_interface"], json!(true));
+    }
 }

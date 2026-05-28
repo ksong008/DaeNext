@@ -660,7 +660,7 @@ pub(super) fn preflight_checks(options: &ProductionRuntimeOwnerOptions) -> Vec<V
             "topology_link_mode": {
                 "env": netns_link_env_name(),
                 "requested": options.netns_link_mode.as_str(),
-                "auto_policy": "netkit_l2_scrub_none_then_veth",
+                "auto_policy": "netkit_l2_scrub_none_then_legacy_netkit_l2_then_veth",
                 "tcx_is_attach_backend_only": true,
             },
         }),
