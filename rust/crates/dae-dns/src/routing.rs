@@ -1,0 +1,501 @@
+use std::net::IpAddr;
+
+use dae_routing::{DomainKey, DomainMatcher, IpPrefix};
+use serde_json::Value;
+
+use crate::error::DnsError;
+
+const MATCH_TYPE_DOMAIN_SET: &str = "domain_set";
+const MATCH_TYPE_IP_SET: &str = "ip_set";
+const MATCH_TYPE_QTYPE: &str = "qtype";
+const MATCH_TYPE_UPSTREAM: &str = "upstream";
+const MATCH_TYPE_FALLBACK: &str = "fallback";
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct DnsRequestOutboundIndex(pub u8);
+
+impl DnsRequestOutboundIndex {
+    pub const REJECT: Self = Self(0xfc);
+    pub const ASIS: Self = Self(0xfd);
+    pub const LOGICAL_OR: Self = Self(0xfe);
+    pub const LOGICAL_AND: Self = Self(0xff);
+    pub const LOGICAL_MASK: Self = Self(0xfe);
+
+    pub const fn value(self) -> u8 {
+        self.0
+    }
+}
+
+impl std::fmt::Display for DnsRequestOutboundIndex {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match *self {
+            Self::REJECT => f.write_str("reject"),
+            Self::ASIS => f.write_str("asis"),
+            Self::LOGICAL_OR => f.write_str("<OR>"),
+            Self::LOGICAL_AND => f.write_str("<AND>"),
+            _ => write!(f, "<index: {}>", self.0),
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct DnsResponseOutboundIndex(pub u8);
+
+impl DnsResponseOutboundIndex {
+    pub const ACCEPT: Self = Self(0xfc);
+    pub const REJECT: Self = Self(0xfd);
+    pub const LOGICAL_OR: Self = Self(0xfe);
+    pub const LOGICAL_AND: Self = Self(0xff);
+    pub const LOGICAL_MASK: Self = Self(0xfe);
+
+    pub const fn value(self) -> u8 {
+        self.0
+    }
+}
+
+impl std::fmt::Display for DnsResponseOutboundIndex {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match *self {
+            Self::ACCEPT => f.write_str("accept"),
+            Self::REJECT => f.write_str("reject"),
+            Self::LOGICAL_OR => f.write_str("<OR>"),
+            Self::LOGICAL_AND => f.write_str("<AND>"),
+            _ => write!(f, "<index: {}>", self.0),
+        }
+    }
+}
+
+#[derive(Clone, Debug)]
+pub struct RequestMatcher {
+    domain_matcher: DomainMatcher,
+    matches: Vec<RequestMatchSet>,
+}
+
+#[derive(Clone, Debug)]
+struct RequestMatchSet {
+    match_type: DnsMatchType,
+    value: u16,
+    not: bool,
+    upstream: DnsRequestOutboundIndex,
+}
+
+#[derive(Clone, Debug)]
+pub struct ResponseMatcher {
+    domain_matcher: DomainMatcher,
+    lpm_sets: Vec<Vec<IpPrefix>>,
+    matches: Vec<ResponseMatchSet>,
+}
+
+#[derive(Clone, Debug)]
+struct ResponseMatchSet {
+    match_type: DnsMatchType,
+    value: u16,
+    not: bool,
+    upstream: DnsResponseOutboundIndex,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum DnsMatchType {
+    DomainSet,
+    IpSet,
+    QType,
+    Upstream,
+    Fallback,
+}
+
+impl RequestMatcher {
+    pub fn from_fixture_value(value: &Value) -> Result<Self, DnsError> {
+        let matches = required_array(value, "matches")?
+            .iter()
+            .map(RequestMatchSet::from_fixture_value)
+            .collect::<Result<Vec<_>, _>>()?;
+        let domain_matcher = build_domain_matcher(value, matches.len())?;
+        if matches
+            .last()
+            .map(|set| set.match_type != DnsMatchType::Fallback)
+            .unwrap_or(true)
+        {
+            return Err(DnsError::Resolve(
+                "fallback rule MUST be the last".to_owned(),
+            ));
+        }
+        Ok(Self {
+            domain_matcher,
+            matches,
+        })
+    }
+
+    pub fn match_request(
+        &self,
+        qname: &str,
+        qtype: u16,
+    ) -> Result<DnsRequestOutboundIndex, DnsError> {
+        let domain_bitmap = if qname.is_empty() {
+            Vec::new()
+        } else {
+            self.domain_matcher.match_domain_bitmap(qname)
+        };
+
+        let mut good_subrule = false;
+        let mut bad_rule = false;
+        for (index, match_set) in self.matches.iter().enumerate() {
+            if !bad_rule && !good_subrule && match_set.matches(index, qtype, &domain_bitmap) {
+                good_subrule = true;
+            }
+
+            let upstream = match_set.upstream;
+            if upstream != DnsRequestOutboundIndex::LOGICAL_OR {
+                if good_subrule == match_set.not {
+                    bad_rule = true;
+                }
+                good_subrule = false;
+            }
+
+            if upstream.value() & DnsRequestOutboundIndex::LOGICAL_MASK.value()
+                != DnsRequestOutboundIndex::LOGICAL_MASK.value()
+            {
+                if !bad_rule {
+                    return Ok(upstream);
+                }
+                bad_rule = false;
+            }
+        }
+        Err(DnsError::Resolve("no match set hit".to_owned()))
+    }
+}
+
+impl RequestMatchSet {
+    fn from_fixture_value(value: &Value) -> Result<Self, DnsError> {
+        Ok(Self {
+            match_type: dns_match_type(required_str(value, "type")?)?,
+            value: value.get("value").and_then(Value::as_u64).unwrap_or(0) as u16,
+            not: value.get("not").and_then(Value::as_bool).unwrap_or(false),
+            upstream: request_outbound_from_fixture(required_str(value, "upstream")?)?,
+        })
+    }
+
+    fn matches(&self, index: usize, qtype: u16, domain_bitmap: &[u32]) -> bool {
+        match self.match_type {
+            DnsMatchType::DomainSet => bitmap_has(domain_bitmap, index),
+            DnsMatchType::QType => qtype == self.value,
+            DnsMatchType::Fallback => true,
+            DnsMatchType::IpSet | DnsMatchType::Upstream => false,
+        }
+    }
+}
+
+impl ResponseMatcher {
+    pub fn from_fixture_value(value: &Value) -> Result<Self, DnsError> {
+        let matches = required_array(value, "matches")?
+            .iter()
+            .map(ResponseMatchSet::from_fixture_value)
+            .collect::<Result<Vec<_>, _>>()?;
+        let domain_matcher = build_domain_matcher(value, matches.len())?;
+        let lpm_sets = value
+            .get("lpm_sets")
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
+            .map(|set| {
+                required_array(set, "prefixes")?
+                    .iter()
+                    .map(|value| {
+                        let prefix = value
+                            .as_str()
+                            .ok_or_else(|| DnsError::Resolve("prefix must be string".to_owned()))?;
+                        IpPrefix::parse(prefix).map_err(|err| DnsError::Resolve(err.to_string()))
+                    })
+                    .collect::<Result<Vec<_>, _>>()
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        if matches
+            .last()
+            .map(|set| set.match_type != DnsMatchType::Fallback)
+            .unwrap_or(true)
+        {
+            return Err(DnsError::Resolve(
+                "fallback rule MUST be the last".to_owned(),
+            ));
+        }
+        Ok(Self {
+            domain_matcher,
+            lpm_sets,
+            matches,
+        })
+    }
+
+    pub fn match_response(
+        &self,
+        qname: &str,
+        qtype: u16,
+        ips: &[IpAddr],
+        upstream: DnsRequestOutboundIndex,
+    ) -> Result<DnsResponseOutboundIndex, DnsError> {
+        if qname.is_empty() {
+            return Err(DnsError::Resolve("qName cannot be empty".to_owned()));
+        }
+        let domain_bitmap = self.domain_matcher.match_domain_bitmap(qname);
+        let mut good_subrule = false;
+        let mut bad_rule = false;
+        for (index, match_set) in self.matches.iter().enumerate() {
+            if !bad_rule
+                && !good_subrule
+                && match_set.matches(index, qtype, ips, upstream, &domain_bitmap, &self.lpm_sets)
+            {
+                good_subrule = true;
+            }
+
+            let upstream = match_set.upstream;
+            if upstream != DnsResponseOutboundIndex::LOGICAL_OR {
+                if good_subrule == match_set.not {
+                    bad_rule = true;
+                }
+                good_subrule = false;
+            }
+
+            if upstream.value() & DnsResponseOutboundIndex::LOGICAL_MASK.value()
+                != DnsResponseOutboundIndex::LOGICAL_MASK.value()
+            {
+                if !bad_rule {
+                    return Ok(upstream);
+                }
+                bad_rule = false;
+            }
+        }
+        Err(DnsError::Resolve("no match set hit".to_owned()))
+    }
+}
+
+impl ResponseMatchSet {
+    fn from_fixture_value(value: &Value) -> Result<Self, DnsError> {
+        let match_type = dns_match_type(required_str(value, "type")?)?;
+        let value_u16 = value
+            .get("value")
+            .and_then(Value::as_u64)
+            .or_else(|| value.get("lpm_index").and_then(Value::as_u64))
+            .or_else(|| value.get("qtype").and_then(Value::as_u64))
+            .map(|value| value as u16)
+            .unwrap_or(0);
+        Ok(Self {
+            match_type,
+            value: value_u16,
+            not: value.get("not").and_then(Value::as_bool).unwrap_or(false),
+            upstream: response_outbound_from_fixture(required_str(value, "upstream")?)?,
+        })
+    }
+
+    fn matches(
+        &self,
+        index: usize,
+        qtype: u16,
+        ips: &[IpAddr],
+        upstream: DnsRequestOutboundIndex,
+        domain_bitmap: &[u32],
+        lpm_sets: &[Vec<IpPrefix>],
+    ) -> bool {
+        match self.match_type {
+            DnsMatchType::DomainSet => bitmap_has(domain_bitmap, index),
+            DnsMatchType::IpSet => lpm_sets
+                .get(self.value as usize)
+                .map(|prefixes| {
+                    ips.iter()
+                        .any(|ip| prefixes.iter().any(|prefix| prefix.contains(*ip)))
+                })
+                .unwrap_or(false),
+            DnsMatchType::QType => qtype == self.value,
+            DnsMatchType::Upstream => upstream.value() as u16 == self.value,
+            DnsMatchType::Fallback => true,
+        }
+    }
+}
+
+fn build_domain_matcher(value: &Value, match_count: usize) -> Result<DomainMatcher, DnsError> {
+    let mut max_domain_bit = 0_usize;
+    let mut domain_sets = Vec::new();
+    for set in value
+        .get("domain_sets")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+    {
+        let bit = required_u64(set, "bit")? as usize;
+        let key = DomainKey::try_from(required_str(set, "key")?)
+            .map_err(|err| DnsError::Resolve(err.to_string()))?;
+        let patterns = required_array(set, "patterns")?
+            .iter()
+            .map(|value| {
+                value
+                    .as_str()
+                    .map(str::to_owned)
+                    .ok_or_else(|| DnsError::Resolve("domain pattern must be string".to_owned()))
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        max_domain_bit = max_domain_bit.max(bit + 1);
+        domain_sets.push((bit, key, patterns));
+    }
+    let mut matcher = DomainMatcher::new(max_domain_bit.max(match_count).max(1));
+    for (bit, key, patterns) in domain_sets {
+        matcher
+            .add_set(bit, patterns, key)
+            .map_err(|err| DnsError::Resolve(err.to_string()))?;
+    }
+    Ok(matcher)
+}
+
+fn dns_match_type(value: &str) -> Result<DnsMatchType, DnsError> {
+    match value {
+        MATCH_TYPE_DOMAIN_SET => Ok(DnsMatchType::DomainSet),
+        MATCH_TYPE_IP_SET => Ok(DnsMatchType::IpSet),
+        MATCH_TYPE_QTYPE => Ok(DnsMatchType::QType),
+        MATCH_TYPE_UPSTREAM => Ok(DnsMatchType::Upstream),
+        MATCH_TYPE_FALLBACK => Ok(DnsMatchType::Fallback),
+        _ => Err(DnsError::Resolve(format!(
+            "unknown dns match type: {value}"
+        ))),
+    }
+}
+
+fn request_outbound_from_fixture(value: &str) -> Result<DnsRequestOutboundIndex, DnsError> {
+    match value {
+        "reject" => Ok(DnsRequestOutboundIndex::REJECT),
+        "asis" => Ok(DnsRequestOutboundIndex::ASIS),
+        "logical_or" | "<OR>" => Ok(DnsRequestOutboundIndex::LOGICAL_OR),
+        "logical_and" | "<AND>" => Ok(DnsRequestOutboundIndex::LOGICAL_AND),
+        value if value.starts_with("index:") => value[6..]
+            .parse::<u8>()
+            .map(DnsRequestOutboundIndex)
+            .map_err(|_| DnsError::Resolve(format!("unknown request outbound: {value}"))),
+        value if value.starts_with("upstream:") => value[9..]
+            .parse::<u8>()
+            .map(DnsRequestOutboundIndex)
+            .map_err(|_| DnsError::Resolve(format!("unknown request outbound: {value}"))),
+        _ => Err(DnsError::Resolve(format!(
+            "unknown request outbound: {value}"
+        ))),
+    }
+}
+
+fn response_outbound_from_fixture(value: &str) -> Result<DnsResponseOutboundIndex, DnsError> {
+    match value {
+        "accept" => Ok(DnsResponseOutboundIndex::ACCEPT),
+        "reject" => Ok(DnsResponseOutboundIndex::REJECT),
+        "logical_or" | "<OR>" => Ok(DnsResponseOutboundIndex::LOGICAL_OR),
+        "logical_and" | "<AND>" => Ok(DnsResponseOutboundIndex::LOGICAL_AND),
+        value if value.starts_with("index:") => value[6..]
+            .parse::<u8>()
+            .map(DnsResponseOutboundIndex)
+            .map_err(|_| DnsError::Resolve(format!("unknown response outbound: {value}"))),
+        value if value.starts_with("upstream:") => value[9..]
+            .parse::<u8>()
+            .map(DnsResponseOutboundIndex)
+            .map_err(|_| DnsError::Resolve(format!("unknown response outbound: {value}"))),
+        _ => Err(DnsError::Resolve(format!(
+            "unknown response outbound: {value}"
+        ))),
+    }
+}
+
+fn bitmap_has(bitmap: &[u32], bit: usize) -> bool {
+    bitmap
+        .get(bit / 32)
+        .map(|word| ((word >> (bit % 32)) & 1) != 0)
+        .unwrap_or(false)
+}
+
+fn required_str<'a>(value: &'a Value, key: &str) -> Result<&'a str, DnsError> {
+    value
+        .get(key)
+        .and_then(Value::as_str)
+        .ok_or_else(|| DnsError::Resolve(format!("{key} must be string")))
+}
+
+fn required_u64(value: &Value, key: &str) -> Result<u64, DnsError> {
+    value
+        .get(key)
+        .and_then(Value::as_u64)
+        .ok_or_else(|| DnsError::Resolve(format!("{key} must be number")))
+}
+
+fn required_array<'a>(value: &'a Value, key: &str) -> Result<&'a Vec<Value>, DnsError> {
+    value
+        .get(key)
+        .and_then(Value::as_array)
+        .ok_or_else(|| DnsError::Resolve(format!("{key} must be array")))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn request_matcher_covers_qname_qtype_not_and_fallback() {
+        let matcher = RequestMatcher::from_fixture_value(&serde_json::json!({
+            "domain_sets": [
+                {"bit": 0, "key": "suffix", "patterns": ["example.com"]}
+            ],
+            "matches": [
+                {"type": "domain_set", "upstream": "logical_and"},
+                {"type": "qtype", "value": 1, "upstream": "upstream:2"},
+                {"type": "qtype", "value": 28, "not": true, "upstream": "reject"},
+                {"type": "fallback", "upstream": "asis"}
+            ]
+        }))
+        .unwrap();
+
+        assert_eq!(
+            matcher.match_request("www.example.com", 1).unwrap().value(),
+            2
+        );
+        assert_eq!(
+            matcher.match_request("www.example.com", 28).unwrap(),
+            DnsRequestOutboundIndex::ASIS
+        );
+        assert_eq!(
+            matcher.match_request("www.invalid.test", 16).unwrap(),
+            DnsRequestOutboundIndex::REJECT
+        );
+    }
+
+    #[test]
+    fn response_matcher_covers_qname_qtype_ip_upstream_and_fallback() {
+        let matcher = ResponseMatcher::from_fixture_value(&serde_json::json!({
+            "domain_sets": [
+                {"bit": 0, "key": "suffix", "patterns": ["example.com"]}
+            ],
+            "lpm_sets": [
+                {"prefixes": ["203.0.113.0/24"]}
+            ],
+            "matches": [
+                {"type": "domain_set", "upstream": "logical_and"},
+                {"type": "qtype", "qtype": 1, "upstream": "logical_and"},
+                {"type": "ip_set", "lpm_index": 0, "upstream": "logical_and"},
+                {"type": "upstream", "value": 2, "upstream": "accept"},
+                {"type": "fallback", "upstream": "reject"}
+            ]
+        }))
+        .unwrap();
+
+        assert_eq!(
+            matcher
+                .match_response(
+                    "www.example.com",
+                    1,
+                    &["203.0.113.42".parse().unwrap()],
+                    DnsRequestOutboundIndex(2),
+                )
+                .unwrap(),
+            DnsResponseOutboundIndex::ACCEPT
+        );
+        assert_eq!(
+            matcher
+                .match_response(
+                    "www.example.com",
+                    1,
+                    &["198.51.100.42".parse().unwrap()],
+                    DnsRequestOutboundIndex(2),
+                )
+                .unwrap(),
+            DnsResponseOutboundIndex::REJECT
+        );
+    }
+}

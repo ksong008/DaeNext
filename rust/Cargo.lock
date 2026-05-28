@@ -391,6 +391,7 @@ dependencies = [
  "dae-dns",
  "dae-ebpf-support",
  "dae-engine",
+ "dae-geodata",
  "dae-netutil",
  "dae-outbound",
  "libc",
@@ -416,6 +417,7 @@ version = "0.1.0"
 dependencies = [
  "base64",
  "dae-golden",
+ "dae-routing",
  "serde_json",
  "url",
 ]
