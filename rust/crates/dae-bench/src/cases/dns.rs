@@ -2,10 +2,12 @@ use std::hint::black_box;
 
 use dae_dns::{
     DnsCacheEntry, DnsCacheKey, DnsCacheKeyView, DnsCacheStore, DnsMessage, DnsPacketAnswerView,
-    DnsPacketView, DnsQuestion, build_doh_request, guard_synthetic_asis_lookup,
-    parse_dns_cache_key_view, validate_dns_packet_response_for_request_fast,
-    validate_dns_response_for_request_fast, validate_doh_response,
+    DnsPacketView, DnsQuestion, DnsRequestOutboundIndex, DnsResponseOutboundIndex, RequestMatcher,
+    ResponseMatcher, build_doh_request, guard_synthetic_asis_lookup, parse_dns_cache_key_view,
+    validate_dns_packet_response_for_request_fast, validate_dns_response_for_request_fast,
+    validate_doh_response,
 };
+use serde_json::json;
 
 use crate::{BenchCase, Measurement, measure};
 
@@ -66,7 +68,76 @@ pub(crate) fn cases() -> Vec<BenchCase> {
             default_iters: 100_000,
             run: bench_dns_resolve_asis_guard,
         },
+        BenchCase {
+            id: "dns/request_routing_match",
+            default_iters: 100_000,
+            run: bench_dns_request_routing_match,
+        },
+        BenchCase {
+            id: "dns/response_routing_match",
+            default_iters: 100_000,
+            run: bench_dns_response_routing_match,
+        },
     ]
+}
+
+fn bench_dns_request_routing_match(iters: u64, warmup: u64) -> Result<Measurement, String> {
+    let matcher = RequestMatcher::from_fixture_value(&json!({
+        "domain_sets": [
+            {"bit": 0, "key": "suffix", "patterns": ["example.com"]}
+        ],
+        "matches": [
+            {"type": "domain_set", "upstream": "logical_and"},
+            {"type": "qtype", "value": 1, "upstream": "upstream:2"},
+            {"type": "fallback", "upstream": "asis"}
+        ]
+    }))
+    .map_err(|err| err.to_string())?;
+    Ok(measure(
+        || {
+            let upstream = matcher
+                .match_request(black_box("www.example.com."), black_box(1))
+                .expect("dns request routing match");
+            black_box(upstream.value() as u64)
+        },
+        iters,
+        warmup,
+    ))
+}
+
+fn bench_dns_response_routing_match(iters: u64, warmup: u64) -> Result<Measurement, String> {
+    let matcher = ResponseMatcher::from_fixture_value(&json!({
+        "domain_sets": [
+            {"bit": 0, "key": "suffix", "patterns": ["example.com"]}
+        ],
+        "lpm_sets": [
+            {"index": 0, "prefixes": ["203.0.113.0/24"]}
+        ],
+        "matches": [
+            {"type": "domain_set", "upstream": "logical_and"},
+            {"type": "qtype", "value": 1, "upstream": "logical_and"},
+            {"type": "ip_set", "lpm_index": 0, "upstream": "logical_and"},
+            {"type": "upstream", "value": 2, "upstream": "accept"},
+            {"type": "fallback", "upstream": "reject"}
+        ]
+    }))
+    .map_err(|err| err.to_string())?;
+    let ips = ["203.0.113.42".parse().expect("benchmark response ip")];
+    Ok(measure(
+        || {
+            let upstream = matcher
+                .match_response(
+                    black_box("www.example.com."),
+                    black_box(1),
+                    black_box(&ips),
+                    black_box(DnsRequestOutboundIndex(2)),
+                )
+                .expect("dns response routing match");
+            black_box(upstream.value() as u64 ^ DnsResponseOutboundIndex::ACCEPT.value() as u64)
+        },
+        iters,
+        warmup,
+    ))
 }
 
 fn bench_dns_data_zero_id(iters: u64, warmup: u64) -> Result<Measurement, String> {
