@@ -7,6 +7,7 @@ members = [
     "crates/dae-control",
     "crates/dae-core-types",
     "crates/dae-bench",
+    "crates/dae-aya-bpf-loader",
     "crates/dae-datapath",
     "crates/dae-dns",
     "crates/dae-ebpf-support",
@@ -41,6 +42,7 @@ dae-cli = { path = "crates/dae-cli" }
 dae-config-util = { path = "crates/dae-config-util" }
 dae-config = { path = "crates/dae-config" }
 dae-daemon = { path = "crates/dae-daemon" }
+dae-aya-bpf-loader = { path = "crates/dae-aya-bpf-loader" }
 dae-control = { path = "crates/dae-control" }
 dae-core-types = { path = "crates/dae-core-types" }
 dae-datapath = { path = "crates/dae-datapath" }
@@ -59,6 +61,7 @@ dae-trace = { path = "crates/dae-trace" }
 h3 = "0.0.8"
 h3-quinn = "0.0.10"
 http = "1"
+fastrand = "2"
 hkdf = "0.12"
 libc = "0.2"
 md-5 = "0.10"

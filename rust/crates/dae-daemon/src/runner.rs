@@ -1,3 +1,4 @@
+use crate::bpf_loader::run_bpf_loader_command;
 use crate::config_validate::validate_config_file;
 use crate::identity::daemon_identity;
 use crate::lifecycle::{default_lifecycle_smoke_root, lifecycle_smoke_report};
@@ -35,7 +36,7 @@ pub struct DaemonOutput {
 }
 
 impl DaemonOutput {
-    fn ok(stdout: String) -> Self {
+    pub(crate) fn ok(stdout: String) -> Self {
         Self {
             stdout,
             stderr: String::new(),
@@ -43,7 +44,7 @@ impl DaemonOutput {
         }
     }
 
-    fn usage(message: impl Into<String>) -> Self {
+    pub(crate) fn usage(message: impl Into<String>) -> Self {
         Self {
             stdout: String::new(),
             stderr: format!("{}\n", message.into()),
@@ -51,7 +52,7 @@ impl DaemonOutput {
         }
     }
 
-    fn error(message: impl Into<String>) -> Self {
+    pub(crate) fn error(message: impl Into<String>) -> Self {
         Self {
             stdout: String::new(),
             stderr: format!("{}\n", message.into()),
@@ -93,6 +94,7 @@ pub fn run_with_args_and_version(
         Some("listener-ebpf-preflight") => run_listener_ebpf_preflight_command(&args[1..]),
         Some("reload-owner-handoff-smoke") => run_reload_owner_handoff_smoke_command(&args[1..]),
         Some("reload-owner-benchmark") => run_reload_owner_benchmark_command(&args[1..]),
+        Some("bpf-loader") => run_bpf_loader_command(&args[1..]),
         Some("identity") | Some("service-contract") | Some("identity-preflight") => {
             DaemonOutput::usage("unsupported dae-daemon-optin argument")
         }

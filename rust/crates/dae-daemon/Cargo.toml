@@ -7,9 +7,10 @@ repository.workspace = true
 
 [features]
 default = []
-native-ebpf = ["dae-ebpf-support/aya-loader"]
+native-ebpf = ["dae-aya-bpf-loader/native-ebpf", "dae-ebpf-support/aya-loader"]
 
 [dependencies]
+dae-aya-bpf-loader.workspace = true
 dae-config.workspace = true
 dae-control.workspace = true
 dae-core-types.workspace = true
@@ -22,6 +23,7 @@ dae-netutil.workspace = true
 dae-outbound.workspace = true
 dae-routing.workspace = true
 dae-sniffing.workspace = true
+fastrand.workspace = true
 libc.workspace = true
 rustls.workspace = true
 serde_json.workspace = true

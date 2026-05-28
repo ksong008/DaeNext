@@ -148,6 +148,7 @@ fn build_vless_udp_request(
         VISION_COMMAND_CONTINUE,
         proxy.key,
         &mut uuid_sent,
+        false,
     ));
     Ok(request)
 }
