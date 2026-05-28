@@ -1,3 +1,4 @@
+use std::collections::BTreeSet;
 use std::ffi::CString;
 use std::fs;
 use std::io;
@@ -6,7 +7,8 @@ use std::os::unix::ffi::OsStrExt;
 use std::path::{Path, PathBuf};
 
 use aya::programs::{
-    CgroupAttachMode, CgroupSock, CgroupSockAddr, LinkOrder, SchedClassifier, TcAttachType,
+    CgroupAttachMode, CgroupSock, CgroupSockAddr, LinkOrder, Program, SchedClassifier,
+    TcAttachType,
     tc::{self, NlOptions, SchedClassifierLinkId, TcAttachOptions},
 };
 
@@ -80,6 +82,21 @@ pub struct AyaUserspaceLoadReport {
 pub struct AyaUserspaceLoadedObject {
     pub ebpf: aya::Ebpf,
     pub report: AyaUserspaceLoadReport,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct AyaPinnedObject {
+    pub name: String,
+    pub path: PathBuf,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct AyaGoAdoptionPinReport {
+    pub adoption_pin_root: PathBuf,
+    pub map_pin_root: PathBuf,
+    pub program_pin_root: PathBuf,
+    pub maps: Vec<AyaPinnedObject>,
+    pub programs: Vec<AyaPinnedObject>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -181,6 +198,104 @@ pub fn load_aya_userspace_object(
         map_in_map_pins,
     );
     Ok(AyaUserspaceLoadedObject { ebpf, report })
+}
+
+pub fn pin_aya_loaded_object_for_go_adoption(
+    loaded: &mut AyaUserspaceLoadedObject,
+    adoption_pin_root: &Path,
+) -> Result<AyaGoAdoptionPinReport, String> {
+    let map_pin_root = adoption_pin_root.join("maps");
+    let program_pin_root = adoption_pin_root.join("programs");
+    fs::create_dir_all(&map_pin_root)
+        .map_err(|err| format!("create Go adoption map pin root failed: {err}"))?;
+    fs::create_dir_all(&program_pin_root)
+        .map_err(|err| format!("create Go adoption program pin root failed: {err}"))?;
+
+    let expected_maps = map_catalog()
+        .iter()
+        .filter(|spec| spec.role() != RuntimeMapRole::ParamRodata)
+        .map(|spec| spec.name)
+        .collect::<BTreeSet<_>>();
+    let mut maps = Vec::new();
+    for (name, map) in loaded.ebpf.maps() {
+        if !expected_maps.contains(name) {
+            continue;
+        }
+        let path = map_pin_root.join(name);
+        remove_existing_pin(&path)?;
+        map.pin(&path)
+            .map_err(|err| format!("pin map {name} for Go adoption failed: {err:?}"))?;
+        maps.push(AyaPinnedObject {
+            name: name.to_owned(),
+            path,
+        });
+    }
+    let pinned_map_names = maps
+        .iter()
+        .map(|pin| pin.name.as_str())
+        .collect::<BTreeSet<_>>();
+    let missing_maps = expected_maps
+        .iter()
+        .filter(|name| !pinned_map_names.contains(**name))
+        .copied()
+        .collect::<Vec<_>>();
+    if !missing_maps.is_empty() {
+        return Err(format!(
+            "Go adoption missing loaded catalog maps: {}",
+            missing_maps.join(",")
+        ));
+    }
+
+    let mut programs = Vec::new();
+    for (name, program) in loaded.ebpf.programs_mut() {
+        let name = name.to_owned();
+        ensure_program_loaded_for_go_adoption(&name, program)?;
+        let path = program_pin_root.join(&name);
+        remove_existing_pin(&path)?;
+        program
+            .pin(&path)
+            .map_err(|err| format!("pin program {name} for Go adoption failed: {err:?}"))?;
+        programs.push(AyaPinnedObject { name, path });
+    }
+
+    maps.sort_by(|a, b| a.name.cmp(&b.name));
+    programs.sort_by(|a, b| a.name.cmp(&b.name));
+    Ok(AyaGoAdoptionPinReport {
+        adoption_pin_root: adoption_pin_root.to_owned(),
+        map_pin_root,
+        program_pin_root,
+        maps,
+        programs,
+    })
+}
+
+fn ensure_program_loaded_for_go_adoption(name: &str, program: &mut Program) -> Result<(), String> {
+    if program.fd().is_ok() {
+        return Ok(());
+    }
+    match program {
+        Program::SchedClassifier(program) => program
+            .load()
+            .map_err(|err| format!("load sched classifier program {name} failed: {err:?}")),
+        Program::CgroupSock(program) => program
+            .load()
+            .map_err(|err| format!("load cgroup sock program {name} failed: {err:?}")),
+        Program::CgroupSockAddr(program) => program
+            .load()
+            .map_err(|err| format!("load cgroup sock_addr program {name} failed: {err:?}")),
+        other => Err(format!(
+            "program {name} has unsupported type {:?} for dae Go adoption",
+            other.prog_type()
+        )),
+    }
+}
+
+fn remove_existing_pin(path: &Path) -> Result<(), String> {
+    if !path.exists() {
+        return Ok(());
+    }
+    fs::remove_file(path)
+        .map_err(|err| format!("remove existing BPF pin {} failed: {err}", path.display()))
 }
 
 pub fn load_attach_detach_aya_sched_classifier(

@@ -48,11 +48,12 @@ pub use attach::{
 };
 #[cfg(feature = "aya-loader")]
 pub use aya_loader::{
-    AyaCgroupAttachDetachReport, AyaTcAttachDetachReport, AyaTcxProgramOrderEntry,
-    AyaUserspaceLoadReport, AyaUserspaceLoadedObject, AyaUserspaceLoaderOptions,
-    aya_userspace_load_report, load_attach_aya_cgroup_program, load_attach_aya_sched_classifier,
-    load_attach_detach_aya_cgroup_program, load_attach_detach_aya_sched_classifier,
-    load_aya_userspace_object,
+    AyaCgroupAttachDetachReport, AyaGoAdoptionPinReport, AyaPinnedObject, AyaTcAttachDetachReport,
+    AyaTcxProgramOrderEntry, AyaUserspaceLoadReport, AyaUserspaceLoadedObject,
+    AyaUserspaceLoaderOptions, aya_userspace_load_report, load_attach_aya_cgroup_program,
+    load_attach_aya_sched_classifier, load_attach_detach_aya_cgroup_program,
+    load_attach_detach_aya_sched_classifier, load_aya_userspace_object,
+    pin_aya_loaded_object_for_go_adoption,
 };
 pub use capability::{EbpfBackendCapabilityReport, report_only_ebpf_backend_capability};
 pub use cgroup::{

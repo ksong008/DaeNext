@@ -50,6 +50,7 @@ const DEFAULT_NATIVE_OBJECT_ENV: &str = "DAE_RUST_NATIVE_BPF_OBJECT";
 const DEFAULT_NATIVE_EBPF_ENV: &str = "DAE_RUST_NATIVE_EBPF";
 #[cfg(feature = "native-ebpf")]
 const DEFAULT_NATIVE_BACKEND_ENV: &str = "DAE_RUST_NATIVE_EBPF_BACKEND";
+const DEFAULT_RESIDENT_DATAPLANE_ENV: &str = "DAE_RUST_RESIDENT_DATAPLANE";
 
 #[derive(Debug)]
 pub struct ResidentProductionRuntime {
@@ -281,16 +282,20 @@ fn start_with_options(
         let mut ok = true;
         executed_steps.push(resident_interface_backend_policy.clone());
         ok &= setup_runtime_topology(&mut executed_steps, &options);
-        let (topology_values, dae0_ifindex, dae0_mac, dae0peer_mac) =
+        let (topology_values, dae0_ifindex, dae0_mac, dae0peer_mac, dae_netns_id) =
             read_topology_values(&mut executed_steps, &options);
         ok &= dae0_ifindex.is_some() && dae0_mac.is_some() && dae0peer_mac.is_some();
         if let (true, Some(dae0_mac)) = (ok, dae0_mac) {
             ok &= setup_production_ipv4_datapath(&mut executed_steps, dae0_mac);
         }
         let param_image = match (dae0_ifindex, dae0peer_mac) {
-            (Some(dae0_ifindex), Some(dae0peer_mac)) => {
-                write_param_image(&options, &param_object, dae0_ifindex, dae0peer_mac)
-            }
+            (Some(dae0_ifindex), Some(dae0peer_mac)) => write_param_image(
+                &options,
+                &param_object,
+                dae0_ifindex,
+                dae0peer_mac,
+                dae_netns_id,
+            ),
             _ => json!({
                 "status": "skipped",
                 "path": path_string(&param_object),
@@ -309,6 +314,7 @@ fn start_with_options(
                 &native_param_object,
                 dae0_ifindex,
                 dae0peer_mac,
+                dae_netns_id,
             ),
             _ => (
                 param_object.clone(),
@@ -567,25 +573,36 @@ fn start_with_options(
         }
 
         let resident_dataplane = if ok {
-            match live_handoff.as_ref() {
-                Some(handoff) => {
-                    let routing_tuple_map_id = native_runtime.loaded_map_id("routing_tuples_map");
-                    let (value, runtime) = start_resident_dataplane_workers(
-                        handoff,
-                        config,
-                        &artifact_dir,
-                        routing_tuple_map_id,
-                    );
-                    ok &= value["status"].as_str() == Some("pass");
-                    dataplane = runtime;
-                    value
-                }
-                None => {
-                    ok = false;
-                    json!({
-                        "status": "fail",
-                        "error": "resident tproxy listener handoff is unavailable",
-                    })
+            if !resident_dataplane_enabled() {
+                json!({
+                    "status": "pass",
+                    "enabled": false,
+                    "reason": "resident Rust userspace protocol dataplane is disabled by default; current production goal is native Aya/eBPF loader and attach parity while Go userspace outbound remains authoritative",
+                    "opt_in_env": DEFAULT_RESIDENT_DATAPLANE_ENV,
+                    "scope": "loader-only admission boundary; set DAE_RUST_RESIDENT_DATAPLANE=1 only for explicit Rust protocol dataplane experiments",
+                })
+            } else {
+                match live_handoff.as_ref() {
+                    Some(handoff) => {
+                        let routing_tuple_map_id =
+                            native_runtime.loaded_map_id("routing_tuples_map");
+                        let (value, runtime) = start_resident_dataplane_workers(
+                            handoff,
+                            config,
+                            &artifact_dir,
+                            routing_tuple_map_id,
+                        );
+                        ok &= value["status"].as_str() == Some("pass");
+                        dataplane = runtime;
+                        value
+                    }
+                    None => {
+                        ok = false;
+                        json!({
+                            "status": "fail",
+                            "error": "resident tproxy listener handoff is unavailable",
+                        })
+                    }
                 }
             }
         } else {
@@ -645,7 +662,8 @@ fn start_with_options(
             "param_object": path_string(&param_object),
             "native_param_object": path_string(&selected_native_param_object),
             "tproxy_port": options.tproxy_port,
-            "dae_netns_id": options.dae_netns_id,
+            "requested_dae_netns_id": options.dae_netns_id,
+            "dae_netns_id": dae_netns_id,
             "preflight_checks": checks,
             "before_map_ids": before_map_ids,
             "executed_steps": executed_steps,
@@ -800,6 +818,17 @@ fn resident_native_ebpf_enabled() -> bool {
             )
         })
         .unwrap_or(true)
+}
+
+fn resident_dataplane_enabled() -> bool {
+    env::var(DEFAULT_RESIDENT_DATAPLANE_ENV)
+        .map(|value| {
+            matches!(
+                value.as_str(),
+                "1" | "true" | "TRUE" | "on" | "ON" | "yes" | "YES"
+            )
+        })
+        .unwrap_or(false)
 }
 
 #[cfg(feature = "native-ebpf")]
