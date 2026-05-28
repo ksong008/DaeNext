@@ -1,4 +1,4 @@
-use std::path::Path;
+use std::{path::Path, thread, time::Duration};
 
 use dae_ebpf_support::{
     DaeParamInput, TcAttachDirection, TcAttachTarget, TcBpfAttachSpec, TcCommandSpec,
@@ -48,33 +48,26 @@ fn setup_production_topology_with_link_mode(
     options: &ProductionRuntimeOwnerOptions,
     mode: NetnsLinkMode,
 ) -> bool {
-    let mut ok = true;
-    ok &= create_link_pair(
+    if !create_link_pair(
         steps,
         "production",
         PRODUCTION_HOST_IFACE,
         PRODUCTION_PEER_IFACE,
         mode,
-    );
-    ok &= run_step(
+    ) {
+        return false;
+    }
+    if !run_step(
         steps,
         "create-production-netns",
         CommandSpec::new("ip", ["netns", "add", PRODUCTION_NETNS]),
-    );
-    ok &= run_step(
-        steps,
-        "assign-production-netns-id",
-        CommandSpec::new(
-            "ip",
-            [
-                "netns",
-                "set",
-                PRODUCTION_NETNS,
-                &options.dae_netns_id.to_string(),
-            ],
-        ),
-    );
-    ok &= run_step(
+    ) {
+        return false;
+    }
+    if !assign_production_netns_id(steps, options.dae_netns_id) {
+        return false;
+    }
+    if !run_step(
         steps,
         "move-production-peer-into-netns",
         CommandSpec::new(
@@ -87,13 +80,17 @@ fn setup_production_topology_with_link_mode(
                 PRODUCTION_NETNS,
             ],
         ),
-    );
-    ok &= run_step(
+    ) {
+        return false;
+    }
+    if !run_step(
         steps,
         "bring-production-host-link-up",
         CommandSpec::new("ip", ["link", "set", PRODUCTION_HOST_IFACE, "up"]),
-    );
-    ok &= run_step(
+    ) {
+        return false;
+    }
+    if !run_step(
         steps,
         "bring-production-netns-loopback-up",
         CommandSpec::new(
@@ -109,8 +106,10 @@ fn setup_production_topology_with_link_mode(
                 "up",
             ],
         ),
-    );
-    ok &= run_step(
+    ) {
+        return false;
+    }
+    run_step(
         steps,
         "bring-production-peer-link-up",
         CommandSpec::new(
@@ -126,8 +125,54 @@ fn setup_production_topology_with_link_mode(
                 "up",
             ],
         ),
-    );
-    ok
+    )
+}
+
+fn assign_production_netns_id(steps: &mut Vec<Value>, dae_netns_id: u32) -> bool {
+    let id = dae_netns_id.to_string();
+    let mut nsid_busy_seen = false;
+    for attempt in 0..=20 {
+        let name = if attempt == 0 {
+            "assign-production-netns-id".to_owned()
+        } else {
+            format!("assign-production-netns-id-retry-{attempt}")
+        };
+        let step = run_observation_step(
+            steps,
+            &name,
+            CommandSpec::new("ip", ["netns", "set", PRODUCTION_NETNS, &id]),
+        );
+        if step["status"].as_str() == Some("pass") {
+            if attempt > 0 {
+                steps.push(json!({
+                    "name": "assign-production-netns-id-retry-summary",
+                    "status": "pass",
+                    "netns": PRODUCTION_NETNS,
+                    "dae_netns_id": dae_netns_id,
+                    "attempts": attempt + 1,
+                    "reason": "previous resident runtime stop left the requested nsid briefly busy; retry preserved the fixed Go-compatible dae_netns_id",
+                }));
+            }
+            return true;
+        }
+        let stderr = step["stderr"].as_str().unwrap_or_default();
+        if !stderr.contains("nsid is already used") {
+            return false;
+        }
+        nsid_busy_seen = true;
+        thread::sleep(Duration::from_millis(50));
+    }
+    if nsid_busy_seen {
+        steps.push(json!({
+            "name": "assign-production-netns-id-retry-summary",
+            "status": "fail",
+            "netns": PRODUCTION_NETNS,
+            "dae_netns_id": dae_netns_id,
+            "attempts": 21,
+            "reason": "requested nsid stayed busy after resident runtime stop cleanup retry window",
+        }));
+    }
+    false
 }
 
 pub(super) fn setup_production_ipv4_datapath(steps: &mut Vec<Value>, dae0_mac: [u8; 6]) -> bool {
