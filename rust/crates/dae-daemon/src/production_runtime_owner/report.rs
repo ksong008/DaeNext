@@ -185,7 +185,7 @@ pub(super) fn report_value(
             "netns_link": {
                 "env": super::netns_link::netns_link_env_name(),
                 "requested": options.netns_link_mode.as_str(),
-                "auto_policy": "netkit_l2_scrub_none_then_veth",
+                "auto_policy": "netkit_l2_scrub_none_then_legacy_netkit_l2_then_veth",
                 "production_pair": [PRODUCTION_HOST_IFACE, PRODUCTION_PEER_IFACE],
                 "active_tcp_lan_pair": [
                     dae_datapath::ACTIVE_TCP_LAN_HOST_IFACE,
@@ -808,6 +808,10 @@ fn ebpf_backend_capability_json(
                 "direction",
                 "priority",
                 "handle",
+                "tcx_order",
+                "tcx_query_revision",
+                "tcx_program_order",
+                "tcx_order_verified",
                 "protocol",
                 "direct_action",
                 "program_name",

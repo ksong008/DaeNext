@@ -680,6 +680,7 @@ fn tc_attach_backend_report_keeps_native_attach_non_default() {
     assert!(report.command_fallback_attempted);
     assert_eq!(report.native_spec.priority, 0);
     assert_eq!(report.native_spec.handle, 0x2022_0002);
+    assert_eq!(report.native_spec.tcx_order, TcxAttachOrder::First);
     assert_eq!(report.native_spec.protocol, ETH_P_ALL);
     assert!(report.native_spec.direct_action);
     assert!(report.native_spec.clsact_required);
@@ -716,6 +717,7 @@ fn dae_tc_attach_matrix_matches_go_control_plane_core_values() {
     );
     assert_eq!(lan_ingress.native.priority, 2);
     assert_eq!(lan_ingress.native.handle, tc_handle(0x2023, 0b100));
+    assert_eq!(lan_ingress.native.tcx_order, TcxAttachOrder::Last);
     assert_eq!(
         lan_ingress.stale_cleanup_handle_on_fresh_start,
         Some(tc_handle(0x2023, 0b101))
@@ -731,6 +733,7 @@ fn dae_tc_attach_matrix_matches_go_control_plane_core_values() {
     );
     assert_eq!(lan_egress.native.priority, 1);
     assert_eq!(lan_egress.native.handle, tc_handle(0x2023, 0b010));
+    assert_eq!(lan_egress.native.tcx_order, TcxAttachOrder::First);
 
     let wan_ingress = attach_line(&matrix, DaeTcAttachRole::WanIngress);
     assert_eq!(wan_ingress.go_filter_name, "dae_wan_ingress_l2");
@@ -743,6 +746,7 @@ fn dae_tc_attach_matrix_matches_go_control_plane_core_values() {
     );
     assert_eq!(wan_ingress.native.priority, 1);
     assert_eq!(wan_ingress.native.handle, tc_handle(0x2023, 0b010));
+    assert_eq!(wan_ingress.native.tcx_order, TcxAttachOrder::First);
 
     let wan_egress = attach_line(&matrix, DaeTcAttachRole::WanEgress);
     assert_eq!(wan_egress.go_filter_name, "dae_wan_egress_l2");
@@ -754,6 +758,7 @@ fn dae_tc_attach_matrix_matches_go_control_plane_core_values() {
     );
     assert_eq!(wan_egress.native.priority, 2);
     assert_eq!(wan_egress.native.handle, tc_handle(0x2023, 0b100));
+    assert_eq!(wan_egress.native.tcx_order, TcxAttachOrder::Last);
 
     let peer = attach_line(&matrix, DaeTcAttachRole::Dae0peerIngress);
     assert_eq!(peer.go_filter_name, "dae_dae0peer_ingress");
@@ -763,6 +768,7 @@ fn dae_tc_attach_matrix_matches_go_control_plane_core_values() {
     assert_eq!(peer.native.target.netns.as_deref(), Some("daens"));
     assert_eq!(peer.native.priority, 0);
     assert_eq!(peer.native.handle, tc_handle(0x2022, 0b010));
+    assert_eq!(peer.native.tcx_order, TcxAttachOrder::First);
     assert_eq!(peer.stale_cleanup_handle_on_fresh_start, None);
 
     let host = attach_line(&matrix, DaeTcAttachRole::Dae0Ingress);
@@ -773,6 +779,7 @@ fn dae_tc_attach_matrix_matches_go_control_plane_core_values() {
     assert_eq!(host.native.target.netns, None);
     assert_eq!(host.native.priority, 0);
     assert_eq!(host.native.handle, tc_handle(0x2022, 0b010));
+    assert_eq!(host.native.tcx_order, TcxAttachOrder::First);
     assert_eq!(
         host.stale_cleanup_handle_on_fresh_start,
         Some(tc_handle(0x2022, 0b011))
