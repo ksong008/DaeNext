@@ -205,6 +205,8 @@ impl NativeEbpfRuntimeState {
         let backend = decision.selected_backend?;
         match self.try_attach_program(options, param_object, role, backend) {
             Ok(report) => {
+                let actual_backend = actual_attach_backend(&report, backend);
+                let fallback_used = attach_fallback_used(&report);
                 match role {
                     NativeEbpfAttachRole::PeerIngress => self.peer_attached = true,
                     NativeEbpfAttachRole::LanIngress => self.lan_attached = true,
@@ -214,10 +216,11 @@ impl NativeEbpfRuntimeState {
                     "name": role.attach_step_name(),
                     "status": "pass",
                     "role": role.as_str(),
-                    "backend": backend.as_str(),
+                    "requested_backend": backend.as_str(),
+                    "backend": actual_backend.as_str(),
                     "native_attach": report,
                     "fallback_required": true,
-                    "fallback_used": false,
+                    "fallback_used": fallback_used,
                 }));
                 Some(true)
             }
@@ -259,6 +262,8 @@ impl NativeEbpfRuntimeState {
         let backend = decision.selected_backend?;
         match self.try_attach_resident_lan_program(param_object, iface, link_layer, backend) {
             Ok(report) => {
+                let actual_backend = actual_attach_backend(&report, backend);
+                let fallback_used = attach_fallback_used(&report);
                 self.lan_attached = true;
                 steps.push(json!({
                     "name": format!("attach-resident-lan-ingress-native-ebpf-program-{iface}"),
@@ -266,15 +271,16 @@ impl NativeEbpfRuntimeState {
                     "role": "resident_lan_ingress",
                     "interface": iface,
                     "link_layer": link_layer.suffix(),
-                    "backend": backend.as_str(),
+                    "requested_backend": backend.as_str(),
+                    "backend": actual_backend.as_str(),
                     "native_attach": report,
                     "fallback_required": true,
-                    "fallback_used": false,
+                    "fallback_used": fallback_used,
                 }));
                 Some(NativeAttachOutcome {
                     ok: true,
-                    backend,
-                    fallback_used: false,
+                    backend: actual_backend,
+                    fallback_used,
                 })
             }
             Err(err) => {
@@ -322,21 +328,24 @@ impl NativeEbpfRuntimeState {
         let backend = decision.selected_backend?;
         match self.try_attach_interface_program(param_object, iface, role, link_layer, backend) {
             Ok(report) => {
+                let actual_backend = actual_attach_backend(&report, backend);
+                let fallback_used = attach_fallback_used(&report);
                 steps.push(json!({
                     "name": format!("attach-resident-{}-native-ebpf-program-{iface}", role.as_str()),
                     "status": "pass",
                     "role": role.as_str(),
                     "interface": iface,
                     "link_layer": link_layer.suffix(),
-                    "backend": backend.as_str(),
+                    "requested_backend": backend.as_str(),
+                    "backend": actual_backend.as_str(),
                     "native_attach": report,
                     "fallback_required": true,
-                    "fallback_used": false,
+                    "fallback_used": fallback_used,
                 }));
                 Some(NativeAttachOutcome {
                     ok: true,
-                    backend,
-                    fallback_used: false,
+                    backend: actual_backend,
+                    fallback_used,
                 })
             }
             Err(err) => {
@@ -541,7 +550,23 @@ impl NativeEbpfRuntimeState {
     ) -> Result<Value, String> {
         let loaded = self.ensure_loaded(param_object)?;
         let report = dae_ebpf_support::load_attach_aya_sched_classifier(loaded, &spec, backend)?;
+        let tcx_program_order = report
+            .tcx_program_order
+            .iter()
+            .map(|entry| {
+                json!({
+                    "id": entry.id,
+                    "name": entry.name,
+                    "tag": entry.tag,
+                })
+            })
+            .collect::<Vec<_>>();
         Ok(json!({
+            "requested_backend": report.requested_backend.as_str(),
+            "backend": report.backend.as_str(),
+            "fallback_used": report.fallback_used,
+            "fallback_error": report.fallback_error,
+            "program_id": report.program_id,
             "program_name": report.program_name,
             "iface": report.iface,
             "netns": report.netns,
@@ -549,6 +574,12 @@ impl NativeEbpfRuntimeState {
             "direction": report.direction.as_str(),
             "priority": report.priority,
             "handle": report.handle,
+            "tcx_order": report.tcx_order.as_str(),
+            "tcx_query_revision": report.tcx_query_revision,
+            "tcx_program_order": tcx_program_order,
+            "tcx_query_error": report.tcx_query_error,
+            "tcx_order_verified": report.tcx_order_verified,
+            "tcx_order_error": report.tcx_order_error,
             "clsact_added_or_present": report.clsact_added_or_present,
             "loaded": report.loaded,
             "attached": report.attached,
@@ -740,6 +771,22 @@ fn attach_backend_json(backend: Option<AttachBackend>) -> Value {
     backend
         .map(|backend| json!(backend.as_str()))
         .unwrap_or(Value::Null)
+}
+
+fn actual_attach_backend(report: &Value, default_backend: AttachBackend) -> AttachBackend {
+    match report.get("backend").and_then(Value::as_str) {
+        Some("tcx") => AttachBackend::Tcx,
+        Some("tc_netlink") => AttachBackend::TcNetlink,
+        Some("tc_command_fallback") => AttachBackend::TcCommandFallback,
+        _ => default_backend,
+    }
+}
+
+fn attach_fallback_used(report: &Value) -> bool {
+    report
+        .get("fallback_used")
+        .and_then(Value::as_bool)
+        .unwrap_or(false)
 }
 
 #[cfg(feature = "native-ebpf")]
