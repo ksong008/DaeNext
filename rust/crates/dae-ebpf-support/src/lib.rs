@@ -43,14 +43,14 @@ pub use attach::{
     AttachBackend, AttachBackendAvailability, AttachBackendPlan, DaeTcAttachLine,
     DaeTcAttachMatrixInput, DaeTcAttachRole, ETH_P_ALL, TCX_ATTACH_FEATURE_VERSION,
     TcAttachBackendReport, TcAttachDirection, TcAttachLayer, TcAttachSectionPrefix, TcAttachTarget,
-    TcBpfAttachSpec, TcCommandSpec, TcNativeAttachSpec, dae_tc_attach_matrix, plan_attach_backend,
-    tc_handle,
+    TcBpfAttachSpec, TcCommandSpec, TcNativeAttachSpec, TcxAttachOrder, dae_tc_attach_matrix,
+    plan_attach_backend, tc_handle,
 };
 #[cfg(feature = "aya-loader")]
 pub use aya_loader::{
-    AyaCgroupAttachDetachReport, AyaTcAttachDetachReport, AyaUserspaceLoadReport,
-    AyaUserspaceLoadedObject, AyaUserspaceLoaderOptions, aya_userspace_load_report,
-    load_attach_aya_cgroup_program, load_attach_aya_sched_classifier,
+    AyaCgroupAttachDetachReport, AyaTcAttachDetachReport, AyaTcxProgramOrderEntry,
+    AyaUserspaceLoadReport, AyaUserspaceLoadedObject, AyaUserspaceLoaderOptions,
+    aya_userspace_load_report, load_attach_aya_cgroup_program, load_attach_aya_sched_classifier,
     load_attach_detach_aya_cgroup_program, load_attach_detach_aya_sched_classifier,
     load_aya_userspace_object,
 };

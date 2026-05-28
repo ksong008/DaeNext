@@ -48,11 +48,35 @@ pub struct TcNativeAttachSpec {
     pub program_name: String,
     pub priority: u16,
     pub handle: u32,
+    pub tcx_order: TcxAttachOrder,
     pub protocol: u16,
     pub direct_action: bool,
     pub clsact_required: bool,
     pub netns_enter_required: bool,
     pub link_lifetime_owned_by_backend: bool,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum TcxAttachOrder {
+    First,
+    Last,
+}
+
+impl TcxAttachOrder {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::First => "first",
+            Self::Last => "last",
+        }
+    }
+
+    pub const fn from_go_tc_priority(priority: u16) -> Self {
+        if priority <= 1 {
+            Self::First
+        } else {
+            Self::Last
+        }
+    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -483,6 +507,7 @@ impl TcBpfAttachSpec {
             program_name: program_name.into(),
             priority,
             handle,
+            tcx_order: TcxAttachOrder::from_go_tc_priority(priority),
             protocol: ETH_P_ALL,
             direct_action: self.direct_action,
             clsact_required: true,
