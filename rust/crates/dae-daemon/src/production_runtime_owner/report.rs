@@ -9,6 +9,7 @@ use serde_json::{Map, Value, json};
 
 use super::command::path_string;
 use super::native_ebpf::{native_backend_opt_in_decision_json, native_backend_runtime_decision};
+use super::udp_dns_datapath_contract::udp_dns_datapath_contract_json;
 use super::{
     ExecutionEvidence, FILTER_PREF, PRODUCTION_HOST_IFACE, PRODUCTION_NETNS, PRODUCTION_PEER_IFACE,
     ProductionRuntimeOwnerOptions,
@@ -83,6 +84,7 @@ pub(super) fn report_value(
     evidence: ExecutionEvidence,
 ) -> Value {
     let mut report = Map::new();
+    let udp_dns_contract = udp_dns_datapath_contract_json();
     let ebpf_capability = report_only_ebpf_backend_capability(None);
     let ebpf_capability_json = ebpf_backend_capability_json(&ebpf_capability, options);
     let active_tcp_executed = options.execute && options.execute_active_tcp;
@@ -119,6 +121,10 @@ pub(super) fn report_value(
         && evidence.active_dns.so_mark_observed;
     let active_dns_benchmark_recorded =
         active_dns_admitted && evidence.active_dns.benchmark["status"].as_str() == Some("pass");
+    let generic_udp_dns_datapath_benchmark_recorded =
+        active_udp_benchmark_recorded && active_dns_benchmark_recorded;
+    let generic_udp_dns_datapath_admitted =
+        active_udp_admitted && active_dns_admitted && generic_udp_dns_datapath_benchmark_recorded;
     let route_dial_tcp_magic_network_observed = active_tcp_relay_passed
         && evidence.active_tcp.so_mark_observed
         && (!options.active_tcp_mptcp || evidence.active_tcp.mptcp_observed);
@@ -228,6 +234,7 @@ pub(super) fn report_value(
                 "requires_active_tcp": true,
                 "scope": "production owner lifecycle listener reuse, live listen_socket_map re-handoff, BPF/map owner transfer observation, DNS cache migration guard, bounded close, RuntimeOverview fields, invalid-config rollback, and post-reload active TCP probe",
             },
+            "udp_dns_datapath": udp_dns_contract.clone(),
             "ebpf_backend": ebpf_capability_json.clone(),
             "native_ebpf": {
                 "opt_in": options.native_ebpf_opt_in,
@@ -242,6 +249,26 @@ pub(super) fn report_value(
         }),
     );
     report.insert("ebpf_backend_capabilities".to_owned(), ebpf_capability_json);
+    report.insert(
+        "generic_udp_dns_datapath_contract".to_owned(),
+        udp_dns_contract,
+    );
+    report.insert(
+        "generic_udp_dns_datapath_admitted".to_owned(),
+        json!(generic_udp_dns_datapath_admitted),
+    );
+    report.insert(
+        "generic_udp_dns_datapath_benchmark_recorded".to_owned(),
+        json!(generic_udp_dns_datapath_benchmark_recorded),
+    );
+    report.insert(
+        "generic_udp_dns_datapath_go_fallback_required".to_owned(),
+        json!(!generic_udp_dns_datapath_admitted),
+    );
+    report.insert(
+        "generic_udp_dns_default_switch_allowed".to_owned(),
+        json!(false),
+    );
     report.insert(
         "daemon_owned_production_runtime_owner_integrated_in_run".to_owned(),
         json!(true),

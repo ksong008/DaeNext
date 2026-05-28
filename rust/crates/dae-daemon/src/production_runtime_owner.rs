@@ -21,6 +21,7 @@ mod resident_interfaces;
 mod resident_lan;
 mod resident_routing;
 mod topology;
+mod udp_dns_datapath_contract;
 mod udp_io;
 
 use active_dns::{
@@ -783,6 +784,32 @@ mod tests {
                 .unwrap()
         );
         assert!(
+            !report["generic_udp_dns_datapath_admitted"]
+                .as_bool()
+                .unwrap()
+        );
+        assert!(
+            !report["generic_udp_dns_datapath_benchmark_recorded"]
+                .as_bool()
+                .unwrap()
+        );
+        assert!(
+            report["generic_udp_dns_datapath_go_fallback_required"]
+                .as_bool()
+                .unwrap()
+        );
+        assert!(
+            !report["generic_udp_dns_default_switch_allowed"]
+                .as_bool()
+                .unwrap()
+        );
+        assert!(
+            !report["generic_udp_dns_datapath_contract"]["global_hard_rule"]
+                ["test_machine_config_is_implementation_standard"]
+                .as_bool()
+                .unwrap()
+        );
+        assert!(
             !report["production_reload_runtime_parity_executed"]
                 .as_bool()
                 .unwrap()
@@ -966,6 +993,85 @@ mod tests {
                 .unwrap()
         );
         assert!(!report["default_switch_allowed"].as_bool().unwrap());
+    }
+
+    #[test]
+    fn production_runtime_owner_report_admits_generic_udp_dns_with_evidence_and_benchmarks() {
+        let root = std::env::temp_dir().join(format!(
+            "dae-daemon-production-runtime-udp-dns-{}",
+            std::process::id()
+        ));
+        let artifact_dir = root.join("run").join("production-runtime-owner");
+        let manifest_file = artifact_dir.join("production-runtime-owner.json");
+        let param_object = artifact_dir.join("bpf_bpfel.param.o");
+        let evidence = ExecutionEvidence {
+            active_udp: ActiveUdpEvidence {
+                enabled: true,
+                passed: true,
+                original_destination_observed: true,
+                endpoint_pool_live_recorded: true,
+                outbound_packet_conn_recorded: true,
+                sendpkt_reply_recorded: true,
+                so_mark_observed: true,
+                benchmark: serde_json::json!({"status": "pass"}),
+                ..ActiveUdpEvidence::default()
+            },
+            active_dns: ActiveDnsEvidence {
+                enabled: true,
+                passed: true,
+                original_destination_observed: true,
+                dns_controller_recorded: true,
+                dns_upstream_query_recorded: true,
+                dns_response_validation_recorded: true,
+                dns_cache_restore_recorded: true,
+                domain_routing_owner_migration_recorded: true,
+                sendpkt_reply_recorded: true,
+                so_mark_observed: true,
+                benchmark: serde_json::json!({"status": "pass"}),
+                ..ActiveDnsEvidence::default()
+            },
+            ..ExecutionEvidence::default()
+        };
+        let options = ProductionRuntimeOwnerOptions {
+            execute: true,
+            execute_active_udp: true,
+            execute_active_dns: true,
+            ..ProductionRuntimeOwnerOptions::default()
+        };
+
+        let report = report_value(
+            &options,
+            &artifact_dir,
+            &manifest_file,
+            &param_object,
+            Vec::new(),
+            evidence,
+        );
+
+        assert!(
+            report["generic_udp_dns_datapath_admitted"]
+                .as_bool()
+                .unwrap()
+        );
+        assert!(
+            report["generic_udp_dns_datapath_benchmark_recorded"]
+                .as_bool()
+                .unwrap()
+        );
+        assert!(
+            !report["generic_udp_dns_datapath_go_fallback_required"]
+                .as_bool()
+                .unwrap()
+        );
+        assert!(
+            !report["generic_udp_dns_default_switch_allowed"]
+                .as_bool()
+                .unwrap()
+        );
+        assert!(
+            !report["default_switch_allowed"].as_bool().unwrap(),
+            "UDP/DNS admission alone must not open default daemon switching"
+        );
     }
 
     #[test]
