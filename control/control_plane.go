@@ -272,21 +272,6 @@ func NewControlPlane(
 		log.Infof("Loading eBPF programs and maps into the kernel...")
 		log.Infof("The loading process takes about 120MB free memory, which will be released after loading. Insufficient memory will cause loading failure.")
 	}
-	// var bpf bpfObjects
-	ProgramOptions := ebpf.ProgramOptions{
-		KernelTypes:  nil,
-		LogSizeStart: 64 * 1024 * 10,
-	}
-	if log.Level == logrus.PanicLevel {
-		ProgramOptions.LogLevel = ebpf.LogLevelBranch | ebpf.LogLevelStats
-		// ProgramOptions.LogLevel = ebpf.LogLevelInstruction | ebpf.LogLevelStats
-	}
-	collectionOpts := &ebpf.CollectionOptions{
-		Maps: ebpf.MapOptions{
-			PinPath: pinPath,
-		},
-		Programs: ProgramOptions,
-	}
 	var bpf *bpfObjects
 	if _bpf != nil {
 		if _bpf, ok := _bpf.(*bpfObjects); ok {
@@ -297,16 +282,10 @@ func NewControlPlane(
 	} else {
 		bpf = new(bpfObjects)
 		loadOpts := &loadBpfOptions{
-			PinPath:             pinPath,
-			HostTproxyPort:      global.TproxyPort,
-			BigEndianTproxyPort: uint32(common.Htons(global.TproxyPort)),
-			CollectionOptions:   collectionOpts,
+			PinPath:        pinPath,
+			HostTproxyPort: global.TproxyPort,
 		}
-		if rustBpfLoaderOptInEnabled() {
-			err = fullLoadBpfObjectsViaRustAyaLoader(log, runtimeDeps.Netns, bpf, loadOpts)
-		} else {
-			err = fullLoadBpfObjects(log, runtimeDeps.Netns, bpf, loadOpts)
-		}
+		err = fullLoadBpfObjectsViaRustAyaLoader(log, runtimeDeps.Netns, bpf, loadOpts)
 		if err != nil {
 			if log.Level == logrus.PanicLevel {
 				log.Panicln(err)
