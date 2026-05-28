@@ -16,71 +16,54 @@ import (
 	"syscall"
 	"testing"
 
-	"github.com/cilium/ebpf"
 	"github.com/daeuniverse/dae/common"
 	"github.com/daeuniverse/dae/common/consts"
 	"github.com/daeuniverse/dae/component/outbound/dialer"
 	"github.com/sirupsen/logrus"
 )
 
-func TestRustBpfLoaderOptInDisabled(t *testing.T) {
-	out, used, err := RustBpfLoaderOptInContract()
-	if err != nil {
-		t.Fatalf("RustBpfLoaderOptInContract() error = %v", err)
-	}
-	if used || out != "" {
-		t.Fatalf("contract used helper while disabled: used=%v out=%q", used, out)
-	}
-}
-
-func TestRustBpfLoaderOptInContractHelperSuccess(t *testing.T) {
+func TestRustBpfLoaderContractHelperSuccess(t *testing.T) {
 	helper := writeRustBpfLoaderHelper(t, false)
-	t.Setenv(rustBpfLoaderOptInEnv, "1")
 	t.Setenv(rustBpfLoaderHelperEnv, helper)
 
-	contract, used, err := RustBpfLoaderOptInContract()
+	contract, err := RustBpfLoaderContract()
 	if err != nil {
-		t.Fatalf("RustBpfLoaderOptInContract() error = %v", err)
+		t.Fatalf("RustBpfLoaderContract() error = %v", err)
 	}
-	if !used || !strings.Contains(contract, `"go_bpf_loader_removed_when_opted_in":true`) {
-		t.Fatalf("unexpected contract output: used=%v out=%q", used, contract)
+	if !strings.Contains(contract, `"go_bpf_loader_removed_when_opted_in":true`) {
+		t.Fatalf("unexpected contract output: %q", contract)
 	}
 }
 
-func TestRustBpfLoaderOptInContractHelperFailure(t *testing.T) {
+func TestRustBpfLoaderContractHelperFailure(t *testing.T) {
 	helper := writeRustBpfLoaderHelper(t, true)
-	t.Setenv(rustBpfLoaderOptInEnv, "1")
 	t.Setenv(rustBpfLoaderHelperEnv, helper)
 
-	_, used, err := RustBpfLoaderOptInContract()
-	if !used {
-		t.Fatalf("expected helper to be used")
-	}
-	if err == nil || !strings.Contains(err.Error(), "rust bpf loader helper failed: helper failed") {
-		t.Fatalf("RustBpfLoaderOptInContract() error = %v", err)
+	_, err := RustBpfLoaderContract()
+	if err == nil || !strings.Contains(err.Error(), "failed: helper failed") {
+		t.Fatalf("RustBpfLoaderContract() error = %v", err)
 	}
 }
 
-func BenchmarkRustBpfLoaderOptInContractHelper(b *testing.B) {
+func BenchmarkRustBpfLoaderContractHelper(b *testing.B) {
 	helper := strings.TrimSpace(os.Getenv(rustBpfLoaderHelperEnv))
 	if helper == "" {
 		b.Skipf("%s is not set", rustBpfLoaderHelperEnv)
 	}
-	b.Setenv(rustBpfLoaderOptInEnv, "1")
 	b.Setenv(rustBpfLoaderHelperEnv, helper)
 	b.ReportAllocs()
 	for i := 0; i < b.N; i++ {
-		out, used, err := RustBpfLoaderOptInContract()
+		out, err := RustBpfLoaderContract()
 		if err != nil {
 			b.Fatal(err)
 		}
-		if !used || !strings.Contains(out, `"go_bpf_loader_removed_when_opted_in":true`) {
-			b.Fatalf("unexpected helper output: used=%v out=%q", used, out)
+		if !strings.Contains(out, `"go_bpf_loader_removed_when_opted_in":true`) {
+			b.Fatalf("unexpected helper output: %q", out)
 		}
 	}
 }
 
-func TestRustBpfLoaderOptInAdoptsPinnedObjectsAndUpdatesControlMaps(t *testing.T) {
+func TestRustBpfLoaderAdoptsPinnedObjectsAndUpdatesControlMaps(t *testing.T) {
 	if os.Getenv("DAE_RUN_RUST_BPF_LOADER_CONTROL_PLANE_SMOKE") != "1" {
 		t.Skip("set DAE_RUN_RUST_BPF_LOADER_CONTROL_PLANE_SMOKE=1 to run the root/BPF control-plane adoption smoke")
 	}
@@ -111,18 +94,8 @@ func TestRustBpfLoaderOptInAdoptsPinnedObjectsAndUpdatesControlMaps(t *testing.T
 	netns := testLoaderNetns(t)
 	objs := new(bpfObjects)
 	if err := fullLoadBpfObjectsViaRustAyaLoader(log, netns, objs, &loadBpfOptions{
-		PinPath:             pinPath,
-		HostTproxyPort:      12345,
-		BigEndianTproxyPort: uint32(common.Htons(12345)),
-		CollectionOptions: &ebpf.CollectionOptions{
-			Maps: ebpf.MapOptions{
-				PinPath: pinPath,
-			},
-			Programs: ebpf.ProgramOptions{
-				LogLevel:     ebpf.LogLevelBranch,
-				LogSizeStart: 64 * 1024 * 10,
-			},
-		},
+		PinPath:        pinPath,
+		HostTproxyPort: 12345,
 	}); err != nil {
 		t.Fatalf("fullLoadBpfObjectsViaRustAyaLoader: %v", err)
 	}
@@ -240,7 +213,7 @@ func TestRustBpfLoaderOptInAdoptsPinnedObjectsAndUpdatesControlMaps(t *testing.T
 
 func writeRustBpfLoaderHelper(t *testing.T, fail bool) string {
 	t.Helper()
-	path := filepath.Join(t.TempDir(), "dae-daemon-optin")
+	path := filepath.Join(t.TempDir(), "dae-aya-bpf-loader")
 	failBlock := ""
 	if fail {
 		failBlock = "echo helper failed\nexit 7\n"
