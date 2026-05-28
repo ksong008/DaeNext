@@ -510,6 +510,18 @@ fn resident_default_daemon_switch_gate_json(options: &ProductChainRecertificatio
         candidate_service_contract["resident_default_daemon_switch_ready"]
             .as_bool()
             .unwrap_or(false);
+    let reload_failure_rollback_supported =
+        candidate_service_contract["reload_failure_rollback_supported"]
+            .as_bool()
+            .unwrap_or(false);
+    let invalid_runtime_config_rejected_before_current_swap =
+        candidate_service_contract["invalid_runtime_config_rejected_before_current_swap"]
+            .as_bool()
+            .unwrap_or(false);
+    let reload_start_failure_attempts_previous_runtime_restore =
+        candidate_service_contract["reload_start_failure_attempts_previous_runtime_restore"]
+            .as_bool()
+            .unwrap_or(false);
     let candidate_service_contract_passed = candidate_service_contract["passed"]
         .as_bool()
         .unwrap_or(false);
@@ -518,7 +530,10 @@ fn resident_default_daemon_switch_gate_json(options: &ProductChainRecertificatio
         && resident_run_service_contract_ready
         && reload_command_service_contract_ready
         && resident_production_dataplane_ready
-        && resident_default_daemon_switch_declared;
+        && resident_default_daemon_switch_declared
+        && reload_failure_rollback_supported
+        && invalid_runtime_config_rejected_before_current_swap
+        && reload_start_failure_attempts_previous_runtime_restore;
 
     let mut blockers = Vec::new();
     if requested && !binary_source_provided {
@@ -542,6 +557,19 @@ fn resident_default_daemon_switch_gate_json(options: &ProductChainRecertificatio
                 "resident default daemon switch readiness is not explicitly declared by service-contract",
             );
         }
+        if !reload_failure_rollback_supported {
+            blockers.push("resident reload failure rollback is not declared by service-contract");
+        }
+        if !invalid_runtime_config_rejected_before_current_swap {
+            blockers.push(
+                "resident reload does not declare invalid runtime config rejection before current swap",
+            );
+        }
+        if !reload_start_failure_attempts_previous_runtime_restore {
+            blockers.push(
+                "resident reload does not declare previous runtime restore after start failure",
+            );
+        }
     }
 
     json!({
@@ -556,6 +584,9 @@ fn resident_default_daemon_switch_gate_json(options: &ProductChainRecertificatio
         "reload_command_service_contract_ready": reload_command_service_contract_ready,
         "resident_production_dataplane_ready": resident_production_dataplane_ready,
         "resident_default_daemon_switch_declared": resident_default_daemon_switch_declared,
+        "reload_failure_rollback_supported": reload_failure_rollback_supported,
+        "invalid_runtime_config_rejected_before_current_swap": invalid_runtime_config_rejected_before_current_swap,
+        "reload_start_failure_attempts_previous_runtime_restore": reload_start_failure_attempts_previous_runtime_restore,
         "requires_no_extra_flag_run_path": "dae-daemon-optin run --disable-timestamp -c /etc/dae/config.dae",
         "blockers": blockers,
         "source": [
