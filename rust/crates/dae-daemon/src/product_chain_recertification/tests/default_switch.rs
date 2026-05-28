@@ -33,7 +33,9 @@ fn product_chain_default_path_mutation_request_allows_switch_without_replacing_r
     assert!(
         report["resident_default_daemon_switch_ready"]
             .as_bool()
-            .unwrap()
+            .unwrap(),
+        "report: {}",
+        serde_json::to_string_pretty(&report).unwrap()
     );
     assert!(report["default_path_mutation_allowed"].as_bool().unwrap());
     assert!(report["default_switch_allowed"].as_bool().unwrap());

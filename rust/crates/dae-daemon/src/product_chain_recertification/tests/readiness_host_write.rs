@@ -49,7 +49,12 @@ fn product_chain_production_replacement_readiness_report_requires_manual_authori
         materialize_production_replacement_readiness_report(&report, &artifact_dir).unwrap();
     attach_production_replacement_readiness(&mut report, readiness.clone());
 
-    assert_eq!(readiness["status"].as_str().unwrap(), "pass");
+    assert_eq!(
+        readiness["status"].as_str().unwrap(),
+        "pass",
+        "readiness report: {}",
+        serde_json::to_string_pretty(&readiness).unwrap()
+    );
     assert!(
         readiness["ready_for_manual_authorization"]
             .as_bool()

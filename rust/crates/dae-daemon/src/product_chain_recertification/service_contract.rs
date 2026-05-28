@@ -1,6 +1,9 @@
 use std::fs;
+use std::io;
 use std::path::Path;
-use std::process::Command;
+use std::process::{Command, Output};
+use std::thread;
+use std::time::Duration;
 
 use serde_json::{Value, json};
 
@@ -61,11 +64,11 @@ pub(super) fn candidate_validate_report(
         "-c".to_owned(),
         path_string(staged_config_source),
     ];
-    match Command::new(binary_source)
-        .args(["validate", "-c"])
-        .arg(staged_config_source)
-        .output()
-    {
+    match run_candidate_command(
+        binary_source,
+        &["validate", "-c"],
+        Some(staged_config_source),
+    ) {
         Ok(output) => json!({
             "executed": true,
             "passed": output.status.success(),
@@ -106,7 +109,7 @@ pub(super) fn candidate_service_contract_report(
     }
     let binary_source = binary_source.unwrap();
     let command = vec![path_string(binary_source), "service-contract".to_owned()];
-    match Command::new(binary_source).arg("service-contract").output() {
+    match run_candidate_command(binary_source, &["service-contract"], None) {
         Ok(output) => {
             let stdout = bounded_command_output(&output.stdout);
             let capability = serde_json::from_slice::<Value>(&output.stdout).unwrap_or(Value::Null);
@@ -156,6 +159,28 @@ pub(super) fn candidate_service_contract_report(
             "resident_default_daemon_switch_ready": false,
         }),
     }
+}
+
+fn run_candidate_command(
+    binary_source: &Path,
+    args: &[&str],
+    path_arg: Option<&Path>,
+) -> io::Result<Output> {
+    const MAX_ATTEMPTS: usize = 20;
+    for attempt in 0..MAX_ATTEMPTS {
+        let mut command = Command::new(binary_source);
+        command.args(args);
+        if let Some(path_arg) = path_arg {
+            command.arg(path_arg);
+        }
+        match command.output() {
+            Err(err) if err.raw_os_error() == Some(libc::ETXTBSY) && attempt + 1 < MAX_ATTEMPTS => {
+                thread::sleep(Duration::from_millis(10));
+            }
+            result => return result,
+        }
+    }
+    unreachable!("candidate command retry loop always returns")
 }
 
 fn bounded_command_output(bytes: &[u8]) -> String {
