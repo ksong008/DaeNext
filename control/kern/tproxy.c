@@ -70,9 +70,11 @@
 #ifdef DAE_AYA_EBPF_OBJECT
 #define DAE_TC_SEC(name) SEC("classifier/" name)
 #define DAE_AYA_PIN_BY_NAME __uint(pinning, LIBBPF_PIN_BY_NAME);
+#define DAE_TC_CHAIN_NEXT -1
 #else
 #define DAE_TC_SEC(name) SEC("tc/" name)
 #define DAE_AYA_PIN_BY_NAME
+#define DAE_TC_CHAIN_NEXT TC_ACT_PIPE
 #endif
 
 // Param keys:
@@ -1019,7 +1021,7 @@ static __always_inline int do_tproxy_lan_egress(struct __sk_buff *skb, u32 link_
 				  &tcph, &udph, &ihl, &l4proto);
 	if (ret) {
 		bpf_printk("parse_transport: %d", ret);
-		return TC_ACT_OK;
+		return DAE_TC_CHAIN_NEXT;
 	}
 
 	if (skb->ingress_ifindex == NOWHERE_IFINDEX &&  // Only drop NDP_REDIRECT packets from localhost
@@ -1040,7 +1042,7 @@ static __always_inline int do_tproxy_lan_egress(struct __sk_buff *skb, u32 link_
 			return TC_ACT_SHOT;
 	}
 
-	return TC_ACT_PIPE;
+	return DAE_TC_CHAIN_NEXT;
 }
 
 DAE_TC_SEC("lan_egress_l2")
@@ -1070,7 +1072,7 @@ static __always_inline int do_tproxy_lan_ingress(struct __sk_buff *skb, u32 link
 				  &tcph, &udph, &ihl, &l4proto);
 	if (ret) {
 		bpf_printk("parse_transport: %d", ret);
-		return TC_ACT_OK;
+		return DAE_TC_CHAIN_NEXT;
 	}
 	if (l4proto == IPPROTO_ICMPV6)
 		return TC_ACT_OK;
@@ -1351,7 +1353,7 @@ static __always_inline int do_tproxy_wan_ingress(struct __sk_buff *skb, u32 link
 			return TC_ACT_SHOT;
 	}
 
-	return TC_ACT_PIPE;
+	return DAE_TC_CHAIN_NEXT;
 }
 
 DAE_TC_SEC("wan_ingress_l2")
