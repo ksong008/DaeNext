@@ -105,6 +105,9 @@ pub(super) fn candidate_service_contract_report(
             "reload_command_service_contract_ready": false,
             "resident_production_dataplane_ready": false,
             "resident_default_daemon_switch_ready": false,
+            "reload_failure_rollback_supported": false,
+            "invalid_runtime_config_rejected_before_current_swap": false,
+            "reload_start_failure_attempts_previous_runtime_restore": false,
         });
     }
     let binary_source = binary_source.unwrap();
@@ -127,14 +130,33 @@ pub(super) fn candidate_service_contract_report(
                 capability["resident_default_daemon_switch_ready"]
                     .as_bool()
                     .unwrap_or(false);
+            let reload_failure_rollback_supported = capability["reload_failure_rollback_supported"]
+                .as_bool()
+                .unwrap_or(false);
+            let invalid_runtime_config_rejected_before_current_swap =
+                capability["invalid_runtime_config_rejected_before_current_swap"]
+                    .as_bool()
+                    .unwrap_or(false);
+            let reload_start_failure_attempts_previous_runtime_restore =
+                capability["reload_start_failure_attempts_previous_runtime_restore"]
+                    .as_bool()
+                    .unwrap_or(false);
             let resident_default_daemon_switch_ready = output.status.success()
                 && resident_run_ready
                 && reload_ready
                 && resident_production_dataplane_ready
-                && resident_default_daemon_switch_declared;
+                && resident_default_daemon_switch_declared
+                && reload_failure_rollback_supported
+                && invalid_runtime_config_rejected_before_current_swap
+                && reload_start_failure_attempts_previous_runtime_restore;
             json!({
                 "executed": true,
-                "passed": output.status.success() && resident_run_ready && reload_ready,
+                "passed": output.status.success()
+                    && resident_run_ready
+                    && reload_ready
+                    && reload_failure_rollback_supported
+                    && invalid_runtime_config_rejected_before_current_swap
+                    && reload_start_failure_attempts_previous_runtime_restore,
                 "command": command,
                 "exit_code": output.status.code(),
                 "stdout": stdout,
@@ -143,6 +165,9 @@ pub(super) fn candidate_service_contract_report(
                 "reload_command_service_contract_ready": output.status.success() && reload_ready,
                 "resident_production_dataplane_ready": output.status.success() && resident_production_dataplane_ready,
                 "resident_default_daemon_switch_ready": resident_default_daemon_switch_ready,
+                "reload_failure_rollback_supported": output.status.success() && reload_failure_rollback_supported,
+                "invalid_runtime_config_rejected_before_current_swap": output.status.success() && invalid_runtime_config_rejected_before_current_swap,
+                "reload_start_failure_attempts_previous_runtime_restore": output.status.success() && reload_start_failure_attempts_previous_runtime_restore,
                 "capability": capability,
             })
         }
@@ -157,6 +182,9 @@ pub(super) fn candidate_service_contract_report(
             "reload_command_service_contract_ready": false,
             "resident_production_dataplane_ready": false,
             "resident_default_daemon_switch_ready": false,
+            "reload_failure_rollback_supported": false,
+            "invalid_runtime_config_rejected_before_current_swap": false,
+            "reload_start_failure_attempts_previous_runtime_restore": false,
         }),
     }
 }

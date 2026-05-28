@@ -25,7 +25,7 @@ fn write_candidate_service_contract(path: &Path, resident_dataplane_ready: bool)
                 "#!/bin/sh\n\
                  if [ \"$1\" = \"validate\" ]; then exit 0; fi\n\
                  if [ \"$1\" = \"service-contract\" ]; then\n\
-                   printf '%s\\n' '{{\"resident_run_service_contract_ready\":true,\"reload_command_service_contract_ready\":true,\"resident_production_dataplane_ready\":{resident_dataplane_ready},\"resident_default_daemon_switch_ready\":{resident_dataplane_ready}}}'\n\
+                   printf '%s\\n' '{{\"resident_run_service_contract_ready\":true,\"reload_command_service_contract_ready\":true,\"reload_failure_rollback_supported\":true,\"invalid_runtime_config_rejected_before_current_swap\":true,\"reload_start_failure_attempts_previous_runtime_restore\":true,\"resident_production_dataplane_ready\":{resident_dataplane_ready},\"resident_default_daemon_switch_ready\":{resident_dataplane_ready}}}'\n\
                    exit 0\n\
                  fi\n\
                  exit 2\n"

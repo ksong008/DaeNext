@@ -7,11 +7,14 @@ use std::path::{Path, PathBuf};
 use std::thread;
 use std::time::{Duration, Instant};
 
+use dae_config::Config;
 use dae_core_types::reload::{RELOAD_DONE, RELOAD_ERROR, RELOAD_PROCESSING, RELOAD_SEND};
 use serde_json::{Value, json};
 
 use crate::config_validate::load_config_file;
-use crate::production_runtime_owner::start_resident_production_runtime;
+use crate::production_runtime_owner::{
+    ResidentProductionRuntime, start_resident_production_runtime,
+};
 
 pub const PID_FILE_PATH: &str = "/var/run/dae.pid";
 pub const PROGRESS_FILE_PATH: &str = "/var/run/dae.progress";
@@ -76,6 +79,9 @@ pub fn service_contract_capabilities(version: &str) -> Value {
         "resident_run_service_contract_ready": true,
         "reload_command_service_contract_ready": true,
         "systemd_notify_ready_supported": true,
+        "reload_failure_rollback_supported": true,
+        "invalid_runtime_config_rejected_before_current_swap": true,
+        "reload_start_failure_attempts_previous_runtime_restore": true,
         "pid_file_path": PID_FILE_PATH,
         "progress_file_path": PROGRESS_FILE_PATH,
         "abort_file_path": ABORT_FILE_PATH,
@@ -99,7 +105,10 @@ pub fn run_resident_service(options: &ResidentRunOptions) -> Result<(), String> 
     let runtime_config = load_config_file(&options.config)
         .map_err(|err| format!("resident run config validation failed: {err}"))?;
     block_service_signals()?;
-    let mut production_runtime = Some(start_resident_production_runtime(&runtime_config)?);
+    let mut state = ResidentServiceState {
+        runtime: Some(start_resident_production_runtime(&runtime_config)?),
+        config: runtime_config,
+    };
 
     let started = (|| {
         if !options.disable_pidfile {
@@ -114,7 +123,7 @@ pub fn run_resident_service(options: &ResidentRunOptions) -> Result<(), String> 
         Ok::<(), String>(())
     })();
     if let Err(err) = started {
-        production_runtime.take();
+        state.runtime.take();
         if !options.disable_pidfile {
             let _ = fs::remove_file(&options.pid_file);
         }
@@ -124,13 +133,13 @@ pub fn run_resident_service(options: &ResidentRunOptions) -> Result<(), String> 
     loop {
         let signal = wait_service_signal()?;
         match signal {
-            libc::SIGUSR1 => handle_reload(options, &mut production_runtime)?,
+            libc::SIGUSR1 => handle_reload(options, &mut state)?,
             libc::SIGUSR2 => handle_suspend_compatibility(options)?,
             libc::SIGHUP => continue,
             libc::SIGTERM | libc::SIGINT | libc::SIGQUIT => {
                 let _ = notify_systemd("STOPPING=1");
                 let _ = log_event(options, "service stopping");
-                production_runtime.take();
+                state.runtime.take();
                 if !options.disable_pidfile {
                     let _ = fs::remove_file(&options.pid_file);
                 }
@@ -139,6 +148,11 @@ pub fn run_resident_service(options: &ResidentRunOptions) -> Result<(), String> 
             _ => continue,
         }
     }
+}
+
+struct ResidentServiceState {
+    runtime: Option<ResidentProductionRuntime>,
+    config: Config,
 }
 
 pub fn reload_resident_service(options: &ReloadOptions) -> Result<String, String> {
@@ -184,24 +198,32 @@ pub fn reload_resident_service(options: &ReloadOptions) -> Result<String, String
 
 fn handle_reload(
     options: &ResidentRunOptions,
-    production_runtime: &mut Option<crate::production_runtime_owner::ResidentProductionRuntime>,
+    state: &mut ResidentServiceState,
 ) -> Result<(), String> {
     notify_systemd("RELOADING=1")?;
     write_progress(&options.progress_file, RELOAD_PROCESSING, "")?;
     let _abort_connections = fs::remove_file(&options.abort_file).is_ok();
     match load_config_file(&options.config) {
         Ok(runtime_config) => {
-            production_runtime.take();
-            match start_resident_production_runtime(&runtime_config) {
-                Ok(next_runtime) => {
-                    *production_runtime = Some(next_runtime);
+            if let Err(err) = validate_resident_runtime_reload_config(&runtime_config) {
+                write_progress(&options.progress_file, RELOAD_ERROR, &format!("\n{err}"))?;
+                log_event(options, "reload failed")?;
+                notify_systemd("READY=1")?;
+                return Ok(());
+            }
+            if let Err(err) = swap_runtime_with_rollback(
+                &mut state.runtime,
+                &mut state.config,
+                runtime_config,
+                start_resident_production_runtime,
+            ) {
+                write_progress(&options.progress_file, RELOAD_ERROR, &format!("\n{err}"))?;
+                log_event(options, "reload failed")?;
+                notify_systemd("READY=1")?;
+                if state.runtime.is_none() {
+                    return Err(err);
                 }
-                Err(err) => {
-                    write_progress(&options.progress_file, RELOAD_ERROR, &format!("\n{err}"))?;
-                    log_event(options, "reload failed")?;
-                    notify_systemd("READY=1")?;
-                    return Ok(());
-                }
+                return Ok(());
             }
             write_progress(&options.progress_file, RELOAD_DONE, "\nOK")?;
             log_event(options, "reload completed")?;
@@ -212,6 +234,57 @@ fn handle_reload(
         }
     }
     notify_systemd("READY=1")
+}
+
+fn validate_resident_runtime_reload_config(config: &Config) -> Result<(), String> {
+    for iface in config
+        .global
+        .lan_interface
+        .iter()
+        .flatten()
+        .chain(config.global.wan_interface.iter().flatten())
+    {
+        let iface = iface.trim();
+        if iface.is_empty() || iface == "auto" {
+            continue;
+        }
+        let sysfs = Path::new("/sys/class/net").join(iface);
+        if !sysfs.exists() {
+            return Err(format!(
+                "resident reload rejected before current runtime swap: configured interface {iface:?} does not exist"
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn swap_runtime_with_rollback<R>(
+    runtime: &mut Option<R>,
+    current_config: &mut Config,
+    next_config: Config,
+    mut start_runtime: impl FnMut(&Config) -> Result<R, String>,
+) -> Result<(), String> {
+    let previous_config = current_config.clone();
+    let previous_runtime = runtime.take();
+    drop(previous_runtime);
+    match start_runtime(&next_config) {
+        Ok(next_runtime) => {
+            *runtime = Some(next_runtime);
+            *current_config = next_config;
+            Ok(())
+        }
+        Err(start_err) => match start_runtime(&previous_config) {
+            Ok(restored_runtime) => {
+                *runtime = Some(restored_runtime);
+                Err(format!(
+                    "{start_err}\nrollback: restored previous resident runtime"
+                ))
+            }
+            Err(rollback_err) => Err(format!(
+                "{start_err}\nrollback failed while restoring previous resident runtime: {rollback_err}"
+            )),
+        },
+    }
 }
 
 fn handle_suspend_compatibility(options: &ResidentRunOptions) -> Result<(), String> {
@@ -362,4 +435,92 @@ fn wait_service_signal() -> Result<i32, String> {
         }
     }
     Ok(received)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use dae_config::{Global, Routing};
+    use std::sync::{
+        Arc,
+        atomic::{AtomicUsize, Ordering},
+    };
+
+    #[derive(Clone)]
+    struct FakeRuntime {
+        drops: Arc<AtomicUsize>,
+    }
+
+    impl Drop for FakeRuntime {
+        fn drop(&mut self) {
+            self.drops.fetch_add(1, Ordering::SeqCst);
+        }
+    }
+
+    fn minimal_config() -> Config {
+        Config {
+            global: Global::default(),
+            subscription: Vec::new(),
+            node: Vec::new(),
+            group: Vec::new(),
+            routing: Routing::default(),
+            dns: Default::default(),
+        }
+    }
+
+    #[test]
+    fn resident_reload_preflight_rejects_missing_interface_before_swap() {
+        let mut config = minimal_config();
+        config.global.lan_interface = Some(vec!["dae-missing-a4-interface".to_owned()]);
+        let err = validate_resident_runtime_reload_config(&config).unwrap_err();
+        assert!(err.contains("rejected before current runtime swap"));
+        assert!(err.contains("dae-missing-a4-interface"));
+    }
+
+    #[test]
+    fn resident_reload_swap_restores_previous_runtime_when_next_start_fails() {
+        let drops = Arc::new(AtomicUsize::new(0));
+        let mut current_config = minimal_config();
+        current_config.global.log_level = "info".to_owned();
+        let mut next_config = current_config.clone();
+        next_config.global.log_level = "debug".to_owned();
+        let mut runtime = Some(FakeRuntime {
+            drops: Arc::clone(&drops),
+        });
+        let err =
+            swap_runtime_with_rollback(&mut runtime, &mut current_config, next_config, |cfg| {
+                if cfg.global.log_level == "debug" {
+                    Err("simulated next runtime start failure".to_owned())
+                } else {
+                    Ok(FakeRuntime {
+                        drops: Arc::clone(&drops),
+                    })
+                }
+            })
+            .unwrap_err();
+        assert!(err.contains("simulated next runtime start failure"));
+        assert!(err.contains("restored previous resident runtime"));
+        assert!(runtime.is_some());
+        assert_eq!(current_config.global.log_level, "info");
+        assert_eq!(drops.load(Ordering::SeqCst), 1);
+    }
+
+    #[test]
+    fn resident_reload_swap_reports_fatal_when_rollback_start_fails() {
+        let drops = Arc::new(AtomicUsize::new(0));
+        let mut current_config = minimal_config();
+        let mut next_config = current_config.clone();
+        next_config.global.log_level = "debug".to_owned();
+        let mut runtime = Some(FakeRuntime {
+            drops: Arc::clone(&drops),
+        });
+        let err =
+            swap_runtime_with_rollback(&mut runtime, &mut current_config, next_config, |_| {
+                Err("simulated runtime start failure".to_owned())
+            })
+            .unwrap_err();
+        assert!(err.contains("rollback failed"));
+        assert!(runtime.is_none());
+        assert_eq!(drops.load(Ordering::SeqCst), 1);
+    }
 }
