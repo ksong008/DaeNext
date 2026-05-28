@@ -96,6 +96,7 @@ fn run_route_match(args: &[String]) -> RunnerOutput {
         dest: dest_ip,
         dest_port,
         domain: domain.to_owned(),
+        ..Query::default()
     }) {
         Ok(outbound) => outbound,
         Err(err) => return RunnerOutput::stdout_error(err.to_string()),
