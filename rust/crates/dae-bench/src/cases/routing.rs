@@ -1,6 +1,6 @@
 use std::hint::black_box;
 
-use dae_routing::{DomainKey, DomainMatcher, IpPrefix};
+use dae_routing::{DomainKey, DomainMatcher, IpPrefix, Query, RoutingMatcher};
 use serde_json::Value;
 
 use crate::{BenchCase, Measurement, measure};
@@ -16,6 +16,11 @@ pub(crate) fn cases() -> Vec<BenchCase> {
             id: "routing/domain_matcher_bitmap",
             default_iters: 100_000,
             run: bench_routing_domain_matcher_bitmap,
+        },
+        BenchCase {
+            id: "routing/userspace_ip_port_match",
+            default_iters: 100_000,
+            run: bench_routing_userspace_ip_port_match,
         },
     ]
 }
@@ -42,6 +47,32 @@ fn bench_routing_domain_matcher_bitmap(iters: u64, warmup: u64) -> Result<Measur
         || {
             let bitmap = matcher.match_domain_bitmap(black_box("API12.EXAMPLE.NET"));
             black_box(bitmap.iter().fold(0_u64, |acc, value| acc ^ *value as u64))
+        },
+        iters,
+        warmup,
+    ))
+}
+
+fn bench_routing_userspace_ip_port_match(iters: u64, warmup: u64) -> Result<Measurement, String> {
+    let fixture = dae_golden::load_json("routing/userspace/basic_matcher.json")
+        .map_err(|err| err.to_string())?;
+    let case = fixture["cases"]
+        .as_array()
+        .and_then(|cases| {
+            cases
+                .iter()
+                .find(|case| case["name"].as_str() == Some("ip-and-port-or-direct-else-block"))
+        })
+        .ok_or_else(|| "missing userspace ip/port matcher case".to_owned())?;
+    let matcher =
+        RoutingMatcher::from_fixture_value(&case["matcher"]).map_err(|err| err.to_string())?;
+    let query = Query::tcp("203.0.113.42".parse().expect("benchmark ip"), 443, "");
+    Ok(measure(
+        || {
+            let outcome = matcher
+                .match_query_detail(black_box(&query))
+                .expect("userspace route match");
+            black_box(outcome.outbound.value() as u64 ^ outcome.mark as u64 ^ outcome.must as u64)
         },
         iters,
         warmup,
