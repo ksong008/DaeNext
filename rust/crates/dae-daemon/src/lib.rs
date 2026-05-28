@@ -1,3 +1,4 @@
+pub mod bpf_loader;
 pub mod config_validate;
 pub mod control_plane;
 pub mod control_plane_entrypoint;

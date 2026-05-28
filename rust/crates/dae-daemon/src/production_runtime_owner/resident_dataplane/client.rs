@@ -10,6 +10,7 @@ use std::time::Instant;
 use dae_datapath::{TcpDirectDialOptions, magic_tcp_connect};
 use rustls::{ClientConfig, ClientConnection, RootCertStore, pki_types::ServerName};
 
+use super::XTLS_RPRX_VISION;
 use super::plan::ResidentProxyPlan;
 use super::{
     RESIDENT_CONNECT_TIMEOUT, RESIDENT_IDLE_SLEEP, TLS_RECORD_HEADER_LEN,
@@ -20,6 +21,11 @@ pub(super) struct VlessTlsClient {
     pub(super) tcp: TcpStream,
     pub(super) conn: ClientConnection,
     pub(super) tls_records: TlsRecordReader,
+}
+
+pub(super) enum TlsDriveOutcome {
+    Progressed(bool),
+    DecryptErrorRawRecord { record: Vec<u8>, error: String },
 }
 
 #[derive(Default)]
@@ -34,12 +40,12 @@ impl TlsRecordReader {
         &mut self,
         conn: &mut ClientConnection,
         tcp: &mut TcpStream,
-    ) -> Result<bool, String> {
+    ) -> Result<TlsDriveOutcome, String> {
         let mut progressed = false;
         while self.header.len() < TLS_RECORD_HEADER_LEN {
             let mut byte = [0_u8; 1];
             match tcp.read(&mut byte) {
-                Ok(0) => return Ok(progressed),
+                Ok(0) => return Ok(TlsDriveOutcome::Progressed(progressed)),
                 Ok(_) => {
                     self.header.push(byte[0]);
                     progressed = true;
@@ -50,7 +56,7 @@ impl TlsRecordReader {
                         ErrorKind::WouldBlock | ErrorKind::TimedOut | ErrorKind::Interrupted
                     ) =>
                 {
-                    return Ok(progressed);
+                    return Ok(TlsDriveOutcome::Progressed(progressed));
                 }
                 Err(err) => return Err(format!("read VLESS TLS record header: {err}")),
             }
@@ -72,7 +78,7 @@ impl TlsRecordReader {
             let mut buf = [0_u8; 4096];
             let want = need.min(buf.len());
             match tcp.read(&mut buf[..want]) {
-                Ok(0) => return Ok(progressed),
+                Ok(0) => return Ok(TlsDriveOutcome::Progressed(progressed)),
                 Ok(read) => {
                     self.body.extend_from_slice(&buf[..read]);
                     progressed = true;
@@ -83,7 +89,7 @@ impl TlsRecordReader {
                         ErrorKind::WouldBlock | ErrorKind::TimedOut | ErrorKind::Interrupted
                     ) =>
                 {
-                    return Ok(progressed);
+                    return Ok(TlsDriveOutcome::Progressed(progressed));
                 }
                 Err(err) => return Err(format!("read VLESS TLS record body: {err}")),
             }
@@ -91,17 +97,35 @@ impl TlsRecordReader {
         let mut record = Vec::with_capacity(TLS_RECORD_HEADER_LEN + body_len);
         record.extend_from_slice(&self.header);
         record.extend_from_slice(&self.body);
+        let record_header_hex = hex_prefix(&record[..TLS_RECORD_HEADER_LEN], TLS_RECORD_HEADER_LEN);
+        let record_body_prefix_hex = hex_prefix(&record[TLS_RECORD_HEADER_LEN..], 16.min(body_len));
         self.header.clear();
         self.body.clear();
         self.body_len = None;
 
-        let mut cursor = Cursor::new(record);
+        let mut cursor = Cursor::new(record.as_slice());
         conn.read_tls(&mut cursor)
             .map_err(|err| format!("feed VLESS TLS record: {err}"))?;
-        conn.process_new_packets()
-            .map_err(|err| format!("process VLESS TLS record: {err}"))?;
-        Ok(true)
+        match conn.process_new_packets() {
+            Ok(_) => Ok(TlsDriveOutcome::Progressed(true)),
+            Err(err) => Ok(TlsDriveOutcome::DecryptErrorRawRecord {
+                record,
+                error: format!(
+                    "process VLESS TLS record: {err}; tls_record_header={record_header_hex} tls_record_body_prefix={record_body_prefix_hex}"
+                ),
+            }),
+        }
     }
+}
+
+fn hex_prefix(bytes: &[u8], limit: usize) -> String {
+    let take = bytes.len().min(limit);
+    let mut out = String::with_capacity(take * 2);
+    for byte in &bytes[..take] {
+        use std::fmt::Write as _;
+        let _ = write!(&mut out, "{byte:02x}");
+    }
+    out
 }
 
 pub(super) fn open_vless_tls_client(proxy: &ResidentProxyPlan) -> Result<VlessTlsClient, String> {
@@ -143,9 +167,12 @@ pub(super) fn open_vless_tls_client(proxy: &ResidentProxyPlan) -> Result<VlessTl
 fn vless_client_config(proxy: &ResidentProxyPlan) -> Result<Arc<ClientConfig>, String> {
     let mut roots = RootCertStore::empty();
     roots.extend(webpki_roots::TLS_SERVER_ROOTS.iter().cloned());
-    let mut config = ClientConfig::builder()
-        .with_root_certificates(roots)
-        .with_no_client_auth();
+    let builder = if proxy.flow == XTLS_RPRX_VISION {
+        ClientConfig::builder_with_protocol_versions(&[&rustls::version::TLS13])
+    } else {
+        ClientConfig::builder()
+    };
+    let mut config = builder.with_root_certificates(roots).with_no_client_auth();
     config.alpn_protocols = proxy
         .alpn
         .iter()
@@ -178,7 +205,9 @@ fn resolve_proxy_addr(proxy: &ResidentProxyPlan) -> Result<SocketAddrV4, String>
         })
 }
 
-pub(super) fn drive_tls_io_record_aware(client: &mut VlessTlsClient) -> Result<bool, String> {
+pub(super) fn drive_tls_io_record_aware(
+    client: &mut VlessTlsClient,
+) -> Result<TlsDriveOutcome, String> {
     let mut progressed = false;
     while client.conn.wants_write() {
         match client.conn.write_tls(&mut client.tcp) {
@@ -196,11 +225,15 @@ pub(super) fn drive_tls_io_record_aware(client: &mut VlessTlsClient) -> Result<b
         }
     }
     if client.conn.wants_read() {
-        progressed |= client
+        match client
             .tls_records
-            .read_one(&mut client.conn, &mut client.tcp)?;
+            .read_one(&mut client.conn, &mut client.tcp)?
+        {
+            TlsDriveOutcome::Progressed(read_progressed) => progressed |= read_progressed,
+            error @ TlsDriveOutcome::DecryptErrorRawRecord { .. } => return Ok(error),
+        }
     }
-    Ok(progressed)
+    Ok(TlsDriveOutcome::Progressed(progressed))
 }
 
 pub(super) fn flush_tls_writes(

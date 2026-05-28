@@ -1,4 +1,4 @@
-use std::{path::Path, thread, time::Duration};
+use std::{collections::BTreeSet, path::Path};
 
 use dae_ebpf_support::{
     DaeParamInput, TcAttachDirection, TcAttachTarget, TcBpfAttachSpec, TcCommandSpec,
@@ -128,51 +128,84 @@ fn setup_production_topology_with_link_mode(
     )
 }
 
-fn assign_production_netns_id(steps: &mut Vec<Value>, dae_netns_id: u32) -> bool {
-    let id = dae_netns_id.to_string();
-    let mut nsid_busy_seen = false;
-    for attempt in 0..=20 {
-        let name = if attempt == 0 {
-            "assign-production-netns-id".to_owned()
-        } else {
-            format!("assign-production-netns-id-retry-{attempt}")
-        };
-        let step = run_observation_step(
-            steps,
-            &name,
-            CommandSpec::new("ip", ["netns", "set", PRODUCTION_NETNS, &id]),
-        );
-        if step["status"].as_str() == Some("pass") {
-            if attempt > 0 {
-                steps.push(json!({
-                    "name": "assign-production-netns-id-retry-summary",
-                    "status": "pass",
-                    "netns": PRODUCTION_NETNS,
-                    "dae_netns_id": dae_netns_id,
-                    "attempts": attempt + 1,
-                    "reason": "previous resident runtime stop left the requested nsid briefly busy; retry preserved the fixed Go-compatible dae_netns_id",
-                }));
-            }
-            return true;
-        }
-        let stderr = step["stderr"].as_str().unwrap_or_default();
-        if !stderr.contains("nsid is already used") {
-            return false;
-        }
-        nsid_busy_seen = true;
-        thread::sleep(Duration::from_millis(50));
-    }
-    if nsid_busy_seen {
+fn assign_production_netns_id(steps: &mut Vec<Value>, configured_dae_netns_id: u32) -> bool {
+    let before_step = run_observation_step(
+        steps,
+        "list-production-netns-id-before-auto",
+        CommandSpec::new("ip", ["netns", "list-id"]),
+    );
+    let before = parse_used_netns_ids(before_step["stdout"].as_str().unwrap_or_default());
+    let assign_step = run_observation_step(
+        steps,
+        "assign-production-netns-id-auto",
+        CommandSpec::new("ip", ["netns", "set", PRODUCTION_NETNS, "auto"]),
+    );
+    if assign_step["status"].as_str() != Some("pass") {
         steps.push(json!({
-            "name": "assign-production-netns-id-retry-summary",
+            "name": "assign-production-netns-id-summary",
             "status": "fail",
             "netns": PRODUCTION_NETNS,
-            "dae_netns_id": dae_netns_id,
-            "attempts": 21,
-            "reason": "requested nsid stayed busy after resident runtime stop cleanup retry window",
+            "configured_dae_netns_id": configured_dae_netns_id,
+            "strategy": "auto",
+            "reason": "kernel auto netns id assignment failed",
         }));
+        return false;
     }
-    false
+    let after_step = run_observation_step(
+        steps,
+        "list-production-netns-id-after-auto",
+        CommandSpec::new("ip", ["netns", "list-id"]),
+    );
+    let after = parse_used_netns_ids(after_step["stdout"].as_str().unwrap_or_default());
+    let Some(effective_id) = new_netns_id_after_auto(&before, &after) else {
+        steps.push(json!({
+            "name": "assign-production-netns-id-summary",
+            "status": "fail",
+            "netns": PRODUCTION_NETNS,
+            "configured_dae_netns_id": configured_dae_netns_id,
+            "strategy": "auto",
+            "reason": "kernel auto netns id assignment succeeded but the effective nsid could not be determined from ip netns list-id",
+        }));
+        return false;
+    };
+    steps.push(json!({
+        "name": "assign-production-netns-id-summary",
+        "status": "pass",
+        "netns": PRODUCTION_NETNS,
+        "configured_dae_netns_id": configured_dae_netns_id,
+        "effective_dae_netns_id": effective_id,
+        "strategy": "auto",
+        "reason": "dae netns id was assigned by the kernel and will be propagated into BPF PARAM, matching Go's runtime netns id behavior",
+    }));
+    true
+}
+
+fn parse_used_netns_ids(stdout: &str) -> BTreeSet<u32> {
+    stdout
+        .lines()
+        .filter_map(|line| {
+            let line = line.trim();
+            let rest = line.strip_prefix("nsid ")?;
+            rest.split_whitespace().next()?.parse::<u32>().ok()
+        })
+        .collect()
+}
+
+fn new_netns_id_after_auto(before: &BTreeSet<u32>, after: &BTreeSet<u32>) -> Option<u32> {
+    after.difference(before).next().copied()
+}
+
+fn effective_dae_netns_id(steps: &[Value], requested_dae_netns_id: u32) -> u32 {
+    steps
+        .iter()
+        .rev()
+        .find(|step| {
+            step["name"].as_str() == Some("assign-production-netns-id-summary")
+                && step["status"].as_str() == Some("pass")
+        })
+        .and_then(|step| step["effective_dae_netns_id"].as_u64())
+        .and_then(|id| u32::try_from(id).ok())
+        .unwrap_or(requested_dae_netns_id)
 }
 
 pub(super) fn setup_production_ipv4_datapath(steps: &mut Vec<Value>, dae0_mac: [u8; 6]) -> bool {
@@ -350,7 +383,8 @@ pub(super) fn setup_production_ipv4_datapath(steps: &mut Vec<Value>, dae0_mac: [
 pub(super) fn read_topology_values(
     steps: &mut Vec<Value>,
     options: &ProductionRuntimeOwnerOptions,
-) -> (Value, Option<u32>, Option<[u8; 6]>, Option<[u8; 6]>) {
+) -> (Value, Option<u32>, Option<[u8; 6]>, Option<[u8; 6]>, u32) {
+    let dae_netns_id = effective_dae_netns_id(steps, options.dae_netns_id);
     let dae0_link_detail_step = run_observation_step(
         steps,
         "read-production-dae0-link-detail",
@@ -417,7 +451,8 @@ pub(super) fn read_topology_values(
             "production_host_link_kind": dae0_link_kind,
             "production_peer_link_kind": dae0peer_link_kind,
             "dae0_ifindex": dae0_ifindex,
-            "dae_netns_id": options.dae_netns_id,
+            "requested_dae_netns_id": options.dae_netns_id,
+            "dae_netns_id": dae_netns_id,
             "dae_netns_id_source": "ip netns set daens",
             "dae0_mac": mac_string(dae0_mac),
             "dae0peer_mac": mac_string(dae0peer_mac),
@@ -430,12 +465,14 @@ pub(super) fn read_topology_values(
             "requested_netns_link_mode": options.netns_link_mode.as_str(),
             "production_host_link_kind": dae0_link_kind,
             "production_peer_link_kind": dae0peer_link_kind,
+            "requested_dae_netns_id": options.dae_netns_id,
+            "dae_netns_id": dae_netns_id,
             "dae0_ifindex_error": parse_step_u32(&dae0_ifindex_step).err(),
             "dae0_mac_error": parse_step_mac(&dae0_mac_step).err(),
             "dae0peer_mac_error": parse_step_mac(&dae0peer_mac_step).err(),
         }),
     };
-    (value, dae0_ifindex, dae0_mac, dae0peer_mac)
+    (value, dae0_ifindex, dae0_mac, dae0peer_mac, dae_netns_id)
 }
 
 fn parse_link_kind(step: &Value) -> Option<&'static str> {
@@ -457,12 +494,13 @@ pub(super) fn write_param_image(
     param_object: &Path,
     dae0_ifindex: u32,
     dae0peer_mac: [u8; 6],
+    dae_netns_id: u32,
 ) -> Value {
     let param = build_dae_param(DaeParamInput {
         tproxy_port: options.tproxy_port,
         control_plane_pid: std::process::id(),
         dae0_ifindex,
-        dae_netns_id: options.dae_netns_id,
+        dae_netns_id,
         dae0peer_mac,
         has_bpf_get_current_task: true,
     });
@@ -494,6 +532,45 @@ pub(super) fn write_param_image(
             "path": path_string(param_object),
             "error": err.to_string(),
         }),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parses_used_netns_ids_from_ip_output() {
+        let used = parse_used_netns_ids(
+            "nsid 49 \nnsid 12 current-nsid unassigned \ninvalid\nnsid not-a-number\n",
+        );
+        assert!(used.contains(&49));
+        assert!(used.contains(&12));
+        assert!(!used.contains(&0));
+    }
+
+    #[test]
+    fn effective_dae_netns_id_uses_latest_success_summary() {
+        let steps = vec![
+            json!({
+                "name": "assign-production-netns-id-summary",
+                "status": "pass",
+                "effective_dae_netns_id": 51,
+            }),
+            json!({
+                "name": "assign-production-netns-id-summary",
+                "status": "pass",
+                "effective_dae_netns_id": 52,
+            }),
+        ];
+        assert_eq!(effective_dae_netns_id(&steps, 49), 52);
+    }
+
+    #[test]
+    fn netns_id_auto_uses_newly_assigned_id() {
+        let before = BTreeSet::from([49]);
+        let after = BTreeSet::from([49, 50]);
+        assert_eq!(new_netns_id_after_auto(&before, &after), Some(50));
     }
 }
 

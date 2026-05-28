@@ -77,6 +77,29 @@ fn daemon_runner_identity_preflight_command_outputs_json() {
 }
 
 #[test]
+fn daemon_runner_bpf_loader_contract_outputs_json() {
+    let output = run_with_args_and_version(["bpf-loader", "contract"], "test-version");
+    assert_eq!(output.exit_code, 0, "{}", output.stderr);
+    assert_eq!(output.stderr, "");
+    let json: Value = serde_json::from_str(&output.stdout).unwrap();
+    assert_eq!(
+        json["name"].as_str().unwrap(),
+        "rust-aya-bpf-loader-go-adoption-contract-v1"
+    );
+    assert!(
+        json["go_bpf_loader_removed_when_opted_in"]
+            .as_bool()
+            .unwrap()
+    );
+    assert!(
+        json["go_userspace_outbound_remains_authoritative"]
+            .as_bool()
+            .unwrap()
+    );
+    assert!(!json["kernel_ebpf_program_rewrite"].as_bool().unwrap());
+}
+
+#[test]
 fn daemon_runner_rejects_retired_migration_command_aliases() {
     let output = run_with_args_and_version(["runtime-identity-preflight"], "test-version");
     assert_eq!(output.exit_code, 2);
