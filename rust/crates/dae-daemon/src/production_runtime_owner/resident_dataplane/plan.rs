@@ -1,6 +1,9 @@
 use std::collections::BTreeMap;
+use std::time::Duration;
 
 use dae_config::{Config, DynamicFunctionValue, Group};
+use dae_core_types::OutboundIndex;
+use dae_datapath::TcpDialMode;
 use dae_outbound::vless::{VLESSLink, password_to_key};
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -40,26 +43,108 @@ pub(super) struct ResidentProxyPlan {
 pub(super) struct ResidentDataplanePlan {
     pub(super) enabled: bool,
     pub(super) unsupported_reason: Option<String>,
-    pub(super) proxy: Option<ResidentProxyPlan>,
+    pub(super) proxies: BTreeMap<u8, ResidentProxyPlan>,
+    pub(super) default_proxy: Option<ResidentProxyPlan>,
+    pub(super) tcp_dial_mode: TcpDialMode,
+    pub(super) sniffing_timeout: Duration,
 }
 
 pub(super) fn build_resident_dataplane_plan(
     config: &Config,
 ) -> Result<ResidentDataplanePlan, String> {
     let node_links = tagged_node_links(config);
-    let Some((group_name, node_tag, link)) = selected_proxy_node(config, &node_links)? else {
+    let (proxies, default_outbound) = resident_proxy_plans(config, &node_links)?;
+    let Some(default_proxy) = default_outbound.and_then(|outbound| proxies.get(&outbound).cloned())
+    else {
         return Ok(ResidentDataplanePlan {
             enabled: false,
             unsupported_reason: Some(
                 "no user-defined routing outbound with a resolvable node link was found".to_owned(),
             ),
-            proxy: None,
+            proxies,
+            default_proxy: None,
+            tcp_dial_mode: parse_tcp_dial_mode(config)?,
+            sniffing_timeout: Duration::ZERO,
         });
     };
+    let tcp_dial_mode = parse_tcp_dial_mode(config)?;
+    let sniffing_timeout = tcp_sniffing_timeout(config, tcp_dial_mode);
+    Ok(ResidentDataplanePlan {
+        enabled: true,
+        unsupported_reason: None,
+        proxies,
+        default_proxy: Some(default_proxy),
+        tcp_dial_mode,
+        sniffing_timeout,
+    })
+}
+
+fn resident_proxy_plans(
+    config: &Config,
+    node_links: &BTreeMap<String, String>,
+) -> Result<(BTreeMap<u8, ResidentProxyPlan>, Option<u8>), String> {
+    let mut proxies = BTreeMap::new();
+    let mut default_outbound = None;
+    for outbound in referenced_user_outbounds(config) {
+        if node_links.contains_key(&outbound) {
+            return Err(format!(
+                "resident dataplane cannot assign direct node outbound {outbound} to a stable Go-compatible outbound index; put the node behind a group before enabling Rust resident dataplane",
+            ));
+        }
+        let Some((group_index, group)) = config
+            .group
+            .iter()
+            .enumerate()
+            .find(|(_, group)| group.name == outbound)
+        else {
+            continue;
+        };
+        let outbound_index = (OutboundIndex::USER_DEFINED_MIN.value() as usize + group_index) as u8;
+        if proxies.contains_key(&outbound_index) {
+            continue;
+        }
+        let node = match select_group_node(group, node_links)? {
+            GroupNodeSelection::Selected(node) => node,
+            GroupNodeSelection::NoCandidate {
+                explicit_name_filter,
+                unresolved_names,
+            } => {
+                let names = if unresolved_names.is_empty() {
+                    "<empty>".to_owned()
+                } else {
+                    unresolved_names.join(", ")
+                };
+                let reason = if explicit_name_filter {
+                    format!(
+                        "resident dataplane cannot resolve group {} name filter node(s): {names}; subscription-backed groups must be materialized before Rust resident dataplane can own runtime",
+                        group.name
+                    )
+                } else {
+                    format!(
+                        "resident dataplane cannot resolve any node for referenced group {}",
+                        group.name
+                    )
+                };
+                return Err(reason);
+            }
+        };
+        let proxy = build_proxy_plan(config, group.name.clone(), node.tag, node.link)?;
+        default_outbound.get_or_insert(outbound_index);
+        proxies.insert(outbound_index, proxy);
+    }
+    Ok((proxies, default_outbound))
+}
+
+fn build_proxy_plan(
+    config: &Config,
+    group_name: String,
+    node_tag: String,
+    link: String,
+) -> Result<ResidentProxyPlan, String> {
     let scheme = link_scheme(&link).unwrap_or_default();
     if scheme != "vless" {
         return Err(format!(
-            "resident dataplane selected unsupported {scheme} node {node_tag}; current resident dataplane admits VLESS tcp/tls only, keep Go outbound for this config",
+            "resident dataplane selected unsupported {scheme} node {node_tag}; no Rust protocol handler is admitted for this node yet, keep Go outbound for this config",
         ));
     }
     let vless =
@@ -72,19 +157,19 @@ pub(super) fn build_resident_dataplane_plan(
         .map_err(|err| format!("validate VLESS transport for {node_tag}: {err}"))?;
     if vless.net != "tcp" {
         return Err(format!(
-            "resident dataplane currently supports VLESS tcp transport only, got {} for node {node_tag}",
+            "resident dataplane vless handler currently supports tcp transport only, got {} for node {node_tag}",
             vless.net
         ));
     }
     if vless.tls != "tls" {
         return Err(format!(
-            "resident dataplane currently supports VLESS security=tls only, got {} for node {node_tag}",
+            "resident dataplane vless handler currently supports security=tls only, got {} for node {node_tag}",
             vless.tls
         ));
     }
     if vless.allow_insecure || config.global.allow_insecure {
         return Err(
-            "resident VLESS TLS dataplane does not admit allow_insecure; keep Go fallback for this config"
+            "resident dataplane vless TLS handler does not admit allow_insecure; keep Go fallback for this config"
                 .to_owned(),
         );
     }
@@ -102,61 +187,42 @@ pub(super) fn build_resident_dataplane_plan(
         vless.sni.clone()
     };
     let alpn = split_alpn(&vless.alpn);
-    Ok(ResidentDataplanePlan {
-        enabled: true,
-        unsupported_reason: None,
-        proxy: Some(ResidentProxyPlan {
-            protocol: "vless".to_owned(),
-            group_name,
-            node_tag,
-            server_host: vless.add,
-            server_port,
-            server_name,
-            alpn,
-            flow: vless.flow,
-            net: vless.net,
-            tls: vless.tls,
-            allow_insecure: false,
-            key,
-            mark: config.global.so_mark_from_dae,
-            mptcp: config.global.mptcp,
-        }),
+    Ok(ResidentProxyPlan {
+        protocol: "vless".to_owned(),
+        group_name,
+        node_tag,
+        server_host: vless.add,
+        server_port,
+        server_name,
+        alpn,
+        flow: vless.flow,
+        net: vless.net,
+        tls: vless.tls,
+        allow_insecure: false,
+        key,
+        mark: config.global.so_mark_from_dae,
+        mptcp: config.global.mptcp,
     })
 }
 
-fn selected_proxy_node(
-    config: &Config,
-    node_links: &BTreeMap<String, String>,
-) -> Result<Option<(String, String, String)>, String> {
-    for outbound in referenced_user_outbounds(config) {
-        if let Some(link) = node_links.get(&outbound) {
-            return Ok(Some((outbound.clone(), outbound, link.clone())));
-        }
-        let Some(group) = config.group.iter().find(|group| group.name == outbound) else {
-            continue;
-        };
-        match select_group_node(group, node_links)? {
-            GroupNodeSelection::Selected(node) => {
-                return Ok(Some((group.name.clone(), node.tag, node.link)));
-            }
-            GroupNodeSelection::NoCandidate {
-                explicit_name_filter,
-                unresolved_names,
-            } if explicit_name_filter => {
-                let names = if unresolved_names.is_empty() {
-                    "<empty>".to_owned()
-                } else {
-                    unresolved_names.join(", ")
-                };
-                return Err(format!(
-                    "resident dataplane cannot resolve group {} name filter node(s): {names}; subscription-backed groups must be materialized before Rust resident dataplane can own runtime",
-                    group.name
-                ));
-            }
-            GroupNodeSelection::NoCandidate { .. } => {}
-        }
+fn parse_tcp_dial_mode(config: &Config) -> Result<TcpDialMode, String> {
+    config
+        .global
+        .dial_mode
+        .parse::<TcpDialMode>()
+        .map_err(|err| format!("resident dataplane dial_mode: {err}"))
+}
+
+fn tcp_sniffing_timeout(config: &Config, dial_mode: TcpDialMode) -> Duration {
+    if dial_mode == TcpDialMode::Ip {
+        return Duration::ZERO;
     }
-    Ok(None)
+    let nanos = config.global.sniffing_timeout.as_nanos();
+    if nanos <= 0 {
+        Duration::ZERO
+    } else {
+        Duration::from_nanos(nanos as u64)
+    }
 }
 
 fn referenced_user_outbounds(config: &Config) -> Vec<String> {
@@ -355,8 +421,9 @@ mod tests {
         "#,
         );
         let plan = build_resident_dataplane_plan(&config).unwrap();
-        let proxy = plan.proxy.unwrap();
+        let proxy = plan.default_proxy.unwrap();
         assert!(plan.enabled);
+        assert_eq!(plan.proxies.len(), 1);
         assert_eq!(proxy.group_name, "proxy");
         assert_eq!(proxy.node_tag, "vless_live");
         assert_eq!(proxy.server_host, "156.246.90.2");
@@ -425,6 +492,47 @@ mod tests {
         );
         let err = build_resident_dataplane_plan(&config).unwrap_err();
         assert!(err.contains("selected unsupported ss node ss_live"));
+        assert!(err.contains("no Rust protocol handler is admitted"));
         assert!(!err.contains("parse VLESS node ss_live"));
+    }
+
+    #[test]
+    fn resident_dataplane_plan_builds_proxy_by_outbound_index() {
+        let config = parse_config(
+            r#"
+        global {
+        lan_interface: daerust0
+        allow_insecure: false
+        so_mark_from_dae: 1234
+        mptcp: false
+        dial_mode: domain++
+        }
+        node {
+        hk: 'vless://01234567-89ab-cdef-0123-456789abcdef@156.246.90.2:443?security=tls&type=tcp&sni=hk.example&flow=xtls-rprx-vision&fp=chrome&alpn=h2,http/1.1'
+        us: 'vless://01234567-89ab-cdef-0123-456789abcdef@203.0.113.2:443?security=tls&type=tcp&sni=us.example&flow=xtls-rprx-vision&fp=chrome&alpn=h2,http/1.1'
+        }
+        group {
+        proxy {
+            filter: name(hk)
+            policy: fixed(0)
+        }
+        openai {
+            filter: name(us)
+            policy: fixed(0)
+        }
+        }
+        routing {
+        domain(suffix: googleapis.com) -> openai
+        fallback: proxy
+        }
+        "#,
+        );
+        let plan = build_resident_dataplane_plan(&config).unwrap();
+        assert!(plan.enabled);
+        assert_eq!(plan.tcp_dial_mode, TcpDialMode::DomainPlusPlus);
+        assert_eq!(plan.proxies.get(&2).unwrap().group_name, "proxy");
+        assert_eq!(plan.proxies.get(&2).unwrap().node_tag, "hk");
+        assert_eq!(plan.proxies.get(&3).unwrap().group_name, "openai");
+        assert_eq!(plan.proxies.get(&3).unwrap().node_tag, "us");
     }
 }

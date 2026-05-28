@@ -4,6 +4,7 @@ use std::os::fd::RawFd;
 use std::os::fd::{FromRawFd, OwnedFd};
 
 const BPF_MAP_UPDATE_ELEM: libc::c_uint = 2;
+const BPF_MAP_LOOKUP_ELEM: libc::c_uint = 1;
 const BPF_MAP_GET_NEXT_ID: libc::c_uint = 12;
 const BPF_MAP_GET_FD_BY_ID: libc::c_uint = 14;
 const BPF_OBJ_GET_INFO_BY_FD: libc::c_uint = 15;
@@ -124,6 +125,27 @@ pub fn update_map_elem_bytes(map_fd: RawFd, key: &[u8], value: &[u8]) -> io::Res
     Ok(())
 }
 
+pub fn lookup_map_elem_bytes(map_fd: RawFd, key: &[u8], value: &mut [u8]) -> io::Result<()> {
+    let attr = BpfMapLookupElemAttr {
+        map_fd: map_fd as u32,
+        key: key.as_ptr() as u64,
+        value: value.as_mut_ptr() as u64,
+        ..BpfMapLookupElemAttr::default()
+    };
+    let status = unsafe {
+        libc::syscall(
+            libc::SYS_bpf,
+            BPF_MAP_LOOKUP_ELEM,
+            &attr as *const BpfMapLookupElemAttr,
+            size_of::<BpfMapLookupElemAttr>(),
+        )
+    };
+    if status < 0 {
+        return Err(io::Error::last_os_error());
+    }
+    Ok(())
+}
+
 #[repr(C)]
 #[derive(Clone, Copy, Debug, Default)]
 struct BpfIdAttr {
@@ -143,6 +165,16 @@ struct BpfInfoAttr {
 #[repr(C)]
 #[derive(Clone, Copy, Debug, Default)]
 struct BpfMapUpdateElemAttr {
+    map_fd: u32,
+    padding: u32,
+    key: u64,
+    value: u64,
+    flags: u64,
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default)]
+struct BpfMapLookupElemAttr {
     map_fd: u32,
     padding: u32,
     key: u64,

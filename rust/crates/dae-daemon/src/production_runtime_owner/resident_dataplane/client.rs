@@ -58,7 +58,7 @@ impl TlsRecordReader {
         let record_type = self.header[0];
         if !matches!(record_type, 20 | 21 | 22 | 23) {
             return Err(format!(
-                "unexpected VLESS TLS record type before Vision direct switch: {record_type}"
+                "unexpected VLESS TLS record type while driving proxy TLS: {record_type}"
             ));
         }
         let body_len = *self

@@ -569,8 +569,13 @@ fn start_with_options(
         let resident_dataplane = if ok {
             match live_handoff.as_ref() {
                 Some(handoff) => {
-                    let (value, runtime) =
-                        start_resident_dataplane_workers(handoff, config, &artifact_dir);
+                    let routing_tuple_map_id = native_runtime.loaded_map_id("routing_tuples_map");
+                    let (value, runtime) = start_resident_dataplane_workers(
+                        handoff,
+                        config,
+                        &artifact_dir,
+                        routing_tuple_map_id,
+                    );
                     ok &= value["status"].as_str() == Some("pass");
                     dataplane = runtime;
                     value
