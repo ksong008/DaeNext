@@ -21,7 +21,7 @@ config_file="${CONFIG_FILE:-/tmp/dae-native-ebpf-runtime-gate-${run_id}.dae}"
 native_object="${NATIVE_OBJECT:-/tmp/dae-native-bpf_bpfel.o}"
 cargo_log="${CARGO_LOG:-/tmp/dae-native-ebpf-runtime-gate-${run_id}.log}"
 cgroup_log="${CGROUP_LOG:-/tmp/dae-native-ebpf-cgroup-gate-${run_id}.log}"
-backend="${DAE_NATIVE_EBPF_BACKEND:-tc-netlink}"
+backend="${DAE_NATIVE_EBPF_BACKEND:-auto}"
 netns_link="${DAE_NETNS_LINK:-auto}"
 
 case "$run_root" in

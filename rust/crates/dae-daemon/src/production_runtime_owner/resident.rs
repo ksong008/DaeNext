@@ -800,13 +800,18 @@ fn resident_native_ebpf_enabled() -> bool {
 #[cfg(feature = "native-ebpf")]
 fn resolve_native_backend() -> Result<AttachBackend, String> {
     let Ok(raw) = env::var(DEFAULT_NATIVE_BACKEND_ENV) else {
-        return Ok(AttachBackend::TcNetlink);
+        return Ok(default_native_backend());
     };
     parse_native_backend(&raw).ok_or_else(|| {
         format!(
             "{DEFAULT_NATIVE_BACKEND_ENV} must be one of auto, tcx, tc-netlink, tc_netlink, tc-command-fallback, tc_command_fallback; got {raw}"
         )
     })
+}
+
+#[cfg(feature = "native-ebpf")]
+fn default_native_backend() -> AttachBackend {
+    AttachBackend::Auto
 }
 
 #[cfg(not(feature = "native-ebpf"))]
@@ -920,5 +925,11 @@ mod tests {
             json!(false)
         );
         assert_eq!(policy["explicit_tcx_same_interface"], json!(true));
+    }
+
+    #[cfg(feature = "native-ebpf")]
+    #[test]
+    fn resident_native_backend_defaults_to_auto() {
+        assert_eq!(default_native_backend(), AttachBackend::Auto);
     }
 }
