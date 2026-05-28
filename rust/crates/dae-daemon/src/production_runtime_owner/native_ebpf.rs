@@ -161,7 +161,12 @@ impl NativeEbpfRuntimeState {
     pub(in crate::production_runtime_owner) fn loaded_map_id(&self, name: &str) -> Option<u32> {
         #[cfg(feature = "native-ebpf")]
         {
-            self.loaded_map_ids.get(name).copied()
+            self.loaded_map_ids.get(name).copied().or_else(|| {
+                let truncated = truncated_bpf_name(name);
+                (truncated != name)
+                    .then(|| self.loaded_map_ids.get(&truncated).copied())
+                    .flatten()
+            })
         }
         #[cfg(not(feature = "native-ebpf"))]
         {
@@ -623,6 +628,12 @@ impl NativeEbpfRuntimeState {
             .as_mut()
             .ok_or_else(|| "native eBPF loader state was not initialized".to_owned())
     }
+}
+
+#[cfg(feature = "native-ebpf")]
+fn truncated_bpf_name(name: &str) -> String {
+    const BPF_OBJ_NAME_MAX_VISIBLE_LEN: usize = 15;
+    name.chars().take(BPF_OBJ_NAME_MAX_VISIBLE_LEN).collect()
 }
 
 #[cfg(feature = "native-ebpf")]

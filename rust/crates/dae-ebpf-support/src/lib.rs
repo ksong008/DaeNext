@@ -30,10 +30,10 @@ mod tests;
 
 pub use abi::{
     BASIC_FEATURE_VERSION, BPF_LOOP_FEATURE_VERSION, BPF_TIMER_FEATURE_VERSION, BpfAbiContract,
-    BpfDaeParam, BpfDomainRouting, BpfMatchSet, BpfOutboundConnectivityQuery, BpfPidPname,
-    BpfRedirectEntry, BpfRedirectTuple, BpfRoutingResult, BpfTuplesKey, BpfUdpConnState,
-    CHECKSUM_FEATURE_VERSION, LINK_HDR_LEN_ETHERNET, LINK_HDR_LEN_NONE, MAX_MATCH_SET_LEN,
-    SK_ASSIGN_FEATURE_VERSION, TASK_COMM_LEN, TPROXY_MARK, bpf_abi_contract,
+    BpfDaeParam, BpfDomainRouting, BpfIpBytes, BpfMatchSet, BpfOutboundConnectivityQuery,
+    BpfPidPname, BpfRedirectEntry, BpfRedirectTuple, BpfRoutingResult, BpfTuplesKey,
+    BpfUdpConnState, CHECKSUM_FEATURE_VERSION, LINK_HDR_LEN_ETHERNET, LINK_HDR_LEN_NONE,
+    MAX_MATCH_SET_LEN, SK_ASSIGN_FEATURE_VERSION, TASK_COMM_LEN, TPROXY_MARK, bpf_abi_contract,
 };
 pub use admission::{
     NativeBackendAdmissionCheck, NativeBackendAdmissionEvidence, NativeBackendAdmissionReport,
@@ -83,7 +83,9 @@ pub use param_object::{
     param_from_object_bytes, param_to_object_bytes, read_param_from_object,
     write_param_aware_object,
 };
-pub use runtime_maps::{RuntimeMapInfo, map_ids, map_info, open_map_fd, update_map_elem_bytes};
+pub use runtime_maps::{
+    RuntimeMapInfo, lookup_map_elem_bytes, map_ids, map_info, open_map_fd, update_map_elem_bytes,
+};
 pub use sockmap::{
     ListenSocketMapFdSmoke, LiveLoadedTproxyListenSocketMap, LoadedListenSocketMapFdSmoke,
     LoadedTproxyListenSocketMapFdSmoke, open_live_loaded_tproxy_listen_socket_map,

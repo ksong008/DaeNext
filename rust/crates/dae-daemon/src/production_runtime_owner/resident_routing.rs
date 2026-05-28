@@ -2,6 +2,7 @@ use std::os::fd::AsRawFd;
 
 use dae_config::Config;
 use dae_ebpf_support::{RuntimeMapInfo, map_ids, map_info, open_map_fd, update_map_elem_bytes};
+use dae_routing::RoutingMatcher;
 use serde_json::{Value, json};
 
 mod geodata;
@@ -18,7 +19,7 @@ use maps::{
     open_optional_unique_map, open_unique_map, update_lpm_array_map,
     update_outbound_connectivity_map,
 };
-use plan::{build_routing_plan, domain_set_json};
+use plan::{build_routing_plan, domain_set_json, userspace_matcher_fixture_json};
 use types::MatchSetBytes;
 
 const ROUTING_MAP_NAME: &str = "routing_map";
@@ -140,6 +141,15 @@ pub(super) fn seed_resident_outbound_connectivity_maps(config: &Config) -> Resul
         "maps": updates,
         "scope": "seed all currently loaded resident outbound connectivity maps after peer, LAN, and host attach",
     }))
+}
+
+pub(super) fn build_resident_userspace_routing_matcher(
+    config: &Config,
+) -> Result<RoutingMatcher, String> {
+    let plan = build_routing_plan(config)?;
+    let fixture = userspace_matcher_fixture_json(&plan);
+    RoutingMatcher::from_fixture_value(&fixture)
+        .map_err(|err| format!("build resident userspace routing matcher: {err}"))
 }
 
 fn update_resident_routing_map_fd(

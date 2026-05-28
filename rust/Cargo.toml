@@ -72,5 +72,6 @@ sha1 = "0.10"
 sha2 = "0.10"
 sha3 = "0.10"
 tokio = { version = "1.52.3", default-features = false, features = ["rt", "net", "time", "io-util", "sync"] }
+tls-parser = "0.12.2"
 url = "2"
 webpki-roots = "1"
