@@ -6,6 +6,7 @@ pub mod error;
 pub mod message;
 pub mod netutils;
 pub mod resolve;
+pub mod routing;
 pub mod upstream;
 
 pub use active::{
@@ -36,4 +37,7 @@ pub use netutils::{
     UdpForwardError, UdpForwardOutcome, forward_udp_with_retry, read_tcp_dns_response,
 };
 pub use resolve::guard_synthetic_asis_lookup;
+pub use routing::{
+    DnsRequestOutboundIndex, DnsResponseOutboundIndex, RequestMatcher, ResponseMatcher,
+};
 pub use upstream::{Upstream, UpstreamResolver, UpstreamResolverStats};
