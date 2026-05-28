@@ -70,6 +70,18 @@ pub(super) fn materialize_local_validation_fresh_install_plan(
         candidate_service_contract["resident_production_dataplane_ready"]
             .as_bool()
             .unwrap_or(false);
+    let reload_failure_rollback_supported =
+        candidate_service_contract["reload_failure_rollback_supported"]
+            .as_bool()
+            .unwrap_or(false);
+    let invalid_runtime_config_rejected_before_current_swap =
+        candidate_service_contract["invalid_runtime_config_rejected_before_current_swap"]
+            .as_bool()
+            .unwrap_or(false);
+    let reload_start_failure_attempts_previous_runtime_restore =
+        candidate_service_contract["reload_start_failure_attempts_previous_runtime_restore"]
+            .as_bool()
+            .unwrap_or(false);
 
     let mut blockers = Vec::new();
     if requested && !fresh_install_host_state_confirmed {
@@ -108,6 +120,16 @@ pub(super) fn materialize_local_validation_fresh_install_plan(
     if requested && !resident_production_dataplane_ready {
         blockers.push("resident default service path does not admit production dataplane");
     }
+    if requested && !reload_failure_rollback_supported {
+        blockers.push("resident reload failure rollback is not implemented by dae-daemon-optin");
+    }
+    if requested && !invalid_runtime_config_rejected_before_current_swap {
+        blockers.push("resident reload does not reject invalid runtime config before swap");
+    }
+    if requested && !reload_start_failure_attempts_previous_runtime_restore {
+        blockers
+            .push("resident reload does not attempt previous runtime restore after start failure");
+    }
     let pass = requested && blockers.is_empty();
     let plan = json!({
         "status": if pass { "pass" } else if requested { "blocked" } else { "not-requested" },
@@ -132,6 +154,9 @@ pub(super) fn materialize_local_validation_fresh_install_plan(
             "resident_run_service_contract_ready": resident_run_service_contract_ready,
             "reload_command_service_contract_ready": reload_command_service_contract_ready,
             "resident_production_dataplane_ready": resident_production_dataplane_ready,
+            "reload_failure_rollback_supported": reload_failure_rollback_supported,
+            "invalid_runtime_config_rejected_before_current_swap": invalid_runtime_config_rejected_before_current_swap,
+            "reload_start_failure_attempts_previous_runtime_restore": reload_start_failure_attempts_previous_runtime_restore,
         },
         "candidate_validate": candidate_validate,
         "candidate_service_contract": candidate_service_contract,
