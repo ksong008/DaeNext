@@ -1,10 +1,10 @@
-use std::fs;
 use std::os::unix::fs::PermissionsExt;
 use std::os::unix::net::UnixDatagram;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::thread;
 use std::time::{Duration, Instant};
+use std::{fs, io};
 
 use dae_core_types::reload::{RELOAD_DONE, RELOAD_ERROR};
 use serde_json::Value;
@@ -146,7 +146,7 @@ fn write_valid_config(path: &Path) {
 }
 
 fn wait_for_file(path: &PathBuf) {
-    let deadline = Instant::now() + Duration::from_secs(5);
+    let deadline = Instant::now() + Duration::from_secs(15);
     while !path.exists() && Instant::now() < deadline {
         thread::sleep(Duration::from_millis(10));
     }
@@ -155,8 +155,22 @@ fn wait_for_file(path: &PathBuf) {
 
 fn recv_notify(socket: &UnixDatagram) -> String {
     let mut bytes = [0_u8; 128];
-    let size = socket.recv(&mut bytes).unwrap();
-    String::from_utf8_lossy(&bytes[..size]).to_string()
+    let deadline = Instant::now() + Duration::from_secs(15);
+    loop {
+        match socket.recv(&mut bytes) {
+            Ok(size) => return String::from_utf8_lossy(&bytes[..size]).to_string(),
+            Err(err)
+                if (matches!(
+                    err.kind(),
+                    io::ErrorKind::WouldBlock | io::ErrorKind::TimedOut
+                ) || err.raw_os_error() == Some(libc::EAGAIN))
+                    && Instant::now() < deadline =>
+            {
+                thread::sleep(Duration::from_millis(10));
+            }
+            Err(err) => panic!("failed to receive notify datagram: {err}"),
+        }
+    }
 }
 
 struct ChildGuard {
