@@ -150,6 +150,7 @@ func (p bpfIfParams) CheckVersionRequirement(version *internal.Version) (err err
 
 type loadBpfOptions struct {
 	PinPath             string
+	HostTproxyPort      uint16
 	BigEndianTproxyPort uint32
 	CollectionOptions   *ebpf.CollectionOptions
 }

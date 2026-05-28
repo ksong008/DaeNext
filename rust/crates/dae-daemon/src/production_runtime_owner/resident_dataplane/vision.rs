@@ -13,7 +13,6 @@ use tls_parser::{
 };
 
 const TLS_CONTENT_TYPE_APPLICATION_DATA: u8 = 23;
-#[cfg(test)]
 const TLS_CONTENT_TYPE_HANDSHAKE: u8 = 22;
 #[cfg(test)]
 const TLS_HANDSHAKE_TYPE_SERVER_HELLO: u8 = 0x02;
@@ -169,6 +168,7 @@ pub(super) struct VisionInnerTlsState {
     client_pending: Vec<u8>,
     server_pending: Vec<u8>,
     decision: VisionTlsDecision,
+    client_tls_observed: bool,
     client_tls13_advertised: Option<bool>,
 }
 
@@ -178,12 +178,14 @@ impl VisionInnerTlsState {
             client_pending: Vec::new(),
             server_pending: Vec::new(),
             decision: VisionTlsDecision::Unknown,
+            client_tls_observed: false,
             client_tls13_advertised: None,
         }
     }
 
     pub(super) fn observe_client_payload(&mut self, payload: &[u8]) -> Result<(), String> {
         let mut advertised = self.client_tls13_advertised;
+        let mut observed = self.client_tls_observed;
         observe_tls_records(&mut self.client_pending, payload, |record| {
             if record.hdr.record_type != TlsRecordType::Handshake {
                 return;
@@ -192,11 +194,13 @@ impl VisionInnerTlsState {
                 if let TlsMessage::Handshake(TlsMessageHandshake::ClientHello(client_hello)) =
                     message
                 {
+                    observed = true;
                     advertised = client_hello_advertises_tls13(client_hello.ext);
                 }
             }
         })
         .map(|()| {
+            self.client_tls_observed = observed;
             self.client_tls13_advertised = advertised;
         })
     }
@@ -244,6 +248,14 @@ impl VisionInnerTlsState {
             VisionTlsDecision::PlainOverlay => Some(VISION_COMMAND_END),
         }
     }
+
+    fn client_tls_filter_active(&self) -> bool {
+        self.client_tls_observed
+            || self
+                .client_pending
+                .first()
+                .is_some_and(|record_type| *record_type == TLS_CONTENT_TYPE_HANDSHAKE)
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -281,6 +293,7 @@ pub(super) fn drain_vision_uplink(
     stop: &AtomicBool,
     user_uuid: [u8; 16],
     uuid_sent: &mut bool,
+    first_block: &mut bool,
     mode: &mut VisionUplinkMode,
     tls_state: &mut VisionInnerTlsState,
 ) -> Result<(), String> {
@@ -288,10 +301,33 @@ pub(super) fn drain_vision_uplink(
         return Ok(());
     }
 
+    if *mode == VisionUplinkMode::Padding && *first_block && !pending.is_empty() {
+        let payload = std::mem::take(pending);
+        tls_state.observe_client_payload(&payload)?;
+        let long_padding = looks_like_tls_record_start(&payload);
+        let block = vision_padding_block(
+            &payload,
+            VISION_COMMAND_CONTINUE,
+            user_uuid,
+            uuid_sent,
+            long_padding,
+        );
+        client.conn.writer().write_all(&block).map_err(|err| {
+            format!(
+                "queue VLESS Vision uplink {} block: {err}",
+                vision_command_name(VISION_COMMAND_CONTINUE)
+            )
+        })?;
+        flush_tls_writes(client, stop)?;
+        *first_block = false;
+        return Ok(());
+    }
+
     while !pending.is_empty() && *mode == VisionUplinkMode::Padding {
-        if !looks_like_tls_record_start(pending) {
+        if !should_continue_vision_tls_filtering(pending, tls_state) {
             let payload = std::mem::take(pending);
-            let block = vision_padding_block(&payload, VISION_COMMAND_END, user_uuid, uuid_sent);
+            let block =
+                vision_padding_block(&payload, VISION_COMMAND_END, user_uuid, uuid_sent, false);
             client.conn.writer().write_all(&block).map_err(|err| {
                 format!(
                     "queue VLESS Vision uplink {} block: {err}",
@@ -311,7 +347,7 @@ pub(super) fn drain_vision_uplink(
         };
         let record = pending.drain(..record_len).collect::<Vec<_>>();
         tls_state.observe_client_payload(&record)?;
-        let block = vision_padding_block(&record, command, user_uuid, uuid_sent);
+        let block = vision_padding_block(&record, command, user_uuid, uuid_sent, true);
         client.conn.writer().write_all(&block).map_err(|err| {
             format!(
                 "queue VLESS Vision uplink {} block: {err}",
@@ -365,10 +401,37 @@ fn write_pending_after_vision_mode(
 }
 
 fn looks_like_tls_record_start(pending: &[u8]) -> bool {
+    could_be_tls_record_prefix(pending)
+}
+
+fn should_continue_vision_tls_filtering(pending: &[u8], tls_state: &VisionInnerTlsState) -> bool {
+    tls_state.client_tls_filter_active() && looks_like_tls_record_start(pending)
+}
+
+fn could_be_tls_record_prefix(pending: &[u8]) -> bool {
+    if pending.is_empty() {
+        return true;
+    }
+    if !matches!(pending[0], 20 | 21 | 22 | 23) {
+        return false;
+    }
+    if pending.len() == 1 {
+        return true;
+    }
+    if pending[1] != 3 {
+        return false;
+    }
+    if pending.len() == 2 {
+        return true;
+    }
+    if !(1..=4).contains(&pending[2]) {
+        return false;
+    }
     if pending.len() < TLS_RECORD_HEADER_LEN {
         return true;
     }
-    matches!(pending[0], 20 | 21 | 22 | 23) && pending[1] == 3 && (1..=4).contains(&pending[2])
+    let payload_len = u16::from_be_bytes([pending[3], pending[4]]) as usize;
+    payload_len <= TLS_RECORD_MAX_PAYLOAD_LEN
 }
 
 #[cfg(test)]
@@ -512,9 +575,12 @@ pub(super) fn vision_padding_block(
     command: u8,
     user_uuid: [u8; 16],
     uuid_sent: &mut bool,
+    long_padding: bool,
 ) -> Vec<u8> {
-    let mut out =
-        Vec::with_capacity(if *uuid_sent { 0 } else { user_uuid.len() } + 5 + payload.len());
+    let padding_len = vision_padding_len(payload.len(), long_padding);
+    let mut out = Vec::with_capacity(
+        if *uuid_sent { 0 } else { user_uuid.len() } + 5 + payload.len() + padding_len,
+    );
     if !*uuid_sent {
         out.extend_from_slice(&user_uuid);
         *uuid_sent = true;
@@ -522,9 +588,18 @@ pub(super) fn vision_padding_block(
     let content_len = payload.len().min(u16::MAX as usize) as u16;
     out.push(command);
     out.extend_from_slice(&content_len.to_be_bytes());
-    out.extend_from_slice(&0_u16.to_be_bytes());
+    out.extend_from_slice(&(padding_len as u16).to_be_bytes());
     out.extend_from_slice(&payload[..content_len as usize]);
+    out.resize(out.len() + padding_len, 0);
     out
+}
+
+fn vision_padding_len(content_len: usize, long_padding: bool) -> usize {
+    if content_len < 900 && long_padding {
+        900 - content_len + fastrand::usize(..500)
+    } else {
+        fastrand::usize(..256)
+    }
 }
 
 #[cfg(test)]
@@ -560,7 +635,7 @@ mod tests {
         assert!(!tls_application_data_records_complete(&payload[..6]));
 
         let mut uuid_sent = false;
-        let block = vision_padding_block(&payload, VISION_COMMAND_END, key, &mut uuid_sent);
+        let block = vision_padding_block(&payload, VISION_COMMAND_END, key, &mut uuid_sent, false);
         assert!(uuid_sent);
         assert_eq!(&block[..16], &key);
         assert_eq!(block[16], VISION_COMMAND_END);
@@ -568,12 +643,35 @@ mod tests {
             u16::from_be_bytes([block[17], block[18]]),
             payload.len() as u16
         );
-        assert_eq!(u16::from_be_bytes([block[19], block[20]]), 0);
-        assert_eq!(&block[21..], &payload);
+        let padding_len = u16::from_be_bytes([block[19], block[20]]) as usize;
+        assert!(padding_len <= 255);
+        assert_eq!(&block[21..21 + payload.len()], &payload);
+        assert_eq!(block.len(), 21 + payload.len() + padding_len);
 
-        let second = vision_padding_block(&payload, VISION_COMMAND_CONTINUE, key, &mut uuid_sent);
+        let second = vision_padding_block(
+            &payload,
+            VISION_COMMAND_CONTINUE,
+            key,
+            &mut uuid_sent,
+            false,
+        );
         assert_eq!(second[0], VISION_COMMAND_CONTINUE);
-        assert_eq!(&second[5..], &payload);
+        let second_padding_len = u16::from_be_bytes([second[3], second[4]]) as usize;
+        assert_eq!(&second[5..5 + payload.len()], &payload);
+        assert_eq!(second.len(), 5 + payload.len() + second_padding_len);
+    }
+
+    #[test]
+    fn resident_vless_vision_long_padding_matches_go_floor() {
+        let key = [9_u8; 16];
+        let payload = [22, 3, 1, 0, 2, 0x01, 0x00];
+        let mut uuid_sent = false;
+
+        let block =
+            vision_padding_block(&payload, VISION_COMMAND_CONTINUE, key, &mut uuid_sent, true);
+
+        let padding_len = u16::from_be_bytes([block[19], block[20]]) as usize;
+        assert!((900 - payload.len()..900 - payload.len() + 500).contains(&padding_len));
     }
 
     #[test]
@@ -598,6 +696,41 @@ mod tests {
         assert_eq!(ty, 22);
         assert_eq!(record, [22, 3, 1, 0, 2, 0x01, 0x00]);
         assert!(pending.is_empty());
+    }
+
+    #[test]
+    fn resident_vless_vision_tls_prefix_rejects_short_non_tls_mtproto() {
+        assert!(!could_be_tls_record_prefix(&[0xef]));
+        assert!(!looks_like_tls_record_start(&[0xef, 0xef, 0xef, 0xef]));
+        assert!(could_be_tls_record_prefix(&[22]));
+        assert!(could_be_tls_record_prefix(&[22, 3, 3]));
+        assert!(looks_like_tls_record_start(&[22, 3, 3, 0, 1]));
+    }
+
+    #[test]
+    fn resident_vless_vision_non_tls_after_first_block_does_not_wait_on_fake_appdata_prefix() {
+        let mut state = VisionInnerTlsState::new();
+        state
+            .observe_client_payload(&[0xee, 0xee, 0xee, 0xee])
+            .unwrap();
+
+        assert!(!state.client_tls_filter_active());
+        assert!(!should_continue_vision_tls_filtering(
+            &[23, 3, 3, 0, 2, 0xaa, 0xbb],
+            &state
+        ));
+    }
+
+    #[test]
+    fn resident_vless_vision_observed_tls_allows_application_data_filtering() {
+        let mut state = VisionInnerTlsState::new();
+        state.client_tls_observed = true;
+
+        assert!(state.client_tls_filter_active());
+        assert!(should_continue_vision_tls_filtering(
+            &[23, 3, 3, 0, 2, 0xaa, 0xbb],
+            &state
+        ));
     }
 
     #[test]

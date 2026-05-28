@@ -339,7 +339,7 @@ fn execute_owner_smoke(
     if options.execute_active_tcp {
         ok &= setup_client_topology(&mut evidence.executed_steps, options);
     }
-    let (topology_values, dae0_ifindex, dae0_mac, dae0peer_mac) =
+    let (topology_values, dae0_ifindex, dae0_mac, dae0peer_mac, dae_netns_id) =
         read_topology_values(&mut evidence.executed_steps, options);
     evidence.topology_values = topology_values;
     ok &= dae0_ifindex.is_some() && dae0peer_mac.is_some();
@@ -352,9 +352,13 @@ fn execute_owner_smoke(
     }
 
     evidence.param_image = match (dae0_ifindex, dae0peer_mac) {
-        (Some(dae0_ifindex), Some(dae0peer_mac)) => {
-            write_param_image(options, param_object, dae0_ifindex, dae0peer_mac)
-        }
+        (Some(dae0_ifindex), Some(dae0peer_mac)) => write_param_image(
+            options,
+            param_object,
+            dae0_ifindex,
+            dae0peer_mac,
+            dae_netns_id,
+        ),
         _ => json!({
             "status": "skipped",
             "path": path_string(param_object),
@@ -374,6 +378,7 @@ fn execute_owner_smoke(
                 &native_param_object,
                 dae0_ifindex,
                 dae0peer_mac,
+                dae_netns_id,
             );
             evidence.native_param_image = image;
             path
@@ -1146,6 +1151,7 @@ mod tests {
             &native,
             7,
             [1, 2, 3, 4, 5, 6],
+            49,
         );
         assert_eq!(selected, fallback);
         assert_eq!(report["status"].as_str().unwrap(), "skipped");

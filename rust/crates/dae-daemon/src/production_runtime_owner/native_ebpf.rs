@@ -207,7 +207,8 @@ impl NativeEbpfRuntimeState {
         if !decision.attempt_native_backend {
             return None;
         }
-        let backend = decision.selected_backend?;
+        let requested_backend = decision.selected_backend?;
+        let backend = native_backend_for_role(role, requested_backend);
         match self.try_attach_program(options, param_object, role, backend) {
             Ok(report) => {
                 let actual_backend = actual_attach_backend(&report, backend);
@@ -221,7 +222,8 @@ impl NativeEbpfRuntimeState {
                     "name": role.attach_step_name(),
                     "status": "pass",
                     "role": role.as_str(),
-                    "requested_backend": backend.as_str(),
+                    "requested_backend": requested_backend.as_str(),
+                    "effective_backend": backend.as_str(),
                     "backend": actual_backend.as_str(),
                     "native_attach": report,
                     "fallback_required": true,
@@ -235,6 +237,7 @@ impl NativeEbpfRuntimeState {
                     "status": "fail",
                     "role": role.as_str(),
                     "backend": backend.as_str(),
+                    "requested_backend": requested_backend.as_str(),
                     "stderr": err,
                     "fallback_required": true,
                     "fallback_used": true,
@@ -668,6 +671,7 @@ pub(super) fn prepare_native_param_object(
     native_param_object: &Path,
     dae0_ifindex: u32,
     dae0peer_mac: [u8; 6],
+    dae_netns_id: u32,
 ) -> (PathBuf, Value) {
     if !options.native_ebpf_opt_in {
         return (
@@ -695,7 +699,7 @@ pub(super) fn prepare_native_param_object(
         tproxy_port: options.tproxy_port,
         control_plane_pid: std::process::id(),
         dae0_ifindex,
-        dae_netns_id: options.dae_netns_id,
+        dae_netns_id,
         dae0peer_mac,
         has_bpf_get_current_task: true,
     });
@@ -798,6 +802,42 @@ fn attach_fallback_used(report: &Value) -> bool {
         .get("fallback_used")
         .and_then(Value::as_bool)
         .unwrap_or(false)
+}
+
+fn native_backend_for_role(
+    role: NativeEbpfAttachRole,
+    requested_backend: AttachBackend,
+) -> AttachBackend {
+    if requested_backend == AttachBackend::Tcx
+        && matches!(
+            role,
+            NativeEbpfAttachRole::PeerIngress | NativeEbpfAttachRole::HostIngress
+        )
+    {
+        return AttachBackend::TcNetlink;
+    }
+    requested_backend
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn tcx_runtime_keeps_netkit_l2_roles_on_tc_netlink() {
+        assert_eq!(
+            native_backend_for_role(NativeEbpfAttachRole::PeerIngress, AttachBackend::Tcx),
+            AttachBackend::TcNetlink
+        );
+        assert_eq!(
+            native_backend_for_role(NativeEbpfAttachRole::HostIngress, AttachBackend::Tcx),
+            AttachBackend::TcNetlink
+        );
+        assert_eq!(
+            native_backend_for_role(NativeEbpfAttachRole::LanIngress, AttachBackend::Tcx),
+            AttachBackend::Tcx
+        );
+    }
 }
 
 #[cfg(feature = "native-ebpf")]

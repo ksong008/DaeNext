@@ -296,11 +296,18 @@ func NewControlPlane(
 		}
 	} else {
 		bpf = new(bpfObjects)
-		if err = fullLoadBpfObjects(log, runtimeDeps.Netns, bpf, &loadBpfOptions{
+		loadOpts := &loadBpfOptions{
 			PinPath:             pinPath,
+			HostTproxyPort:      global.TproxyPort,
 			BigEndianTproxyPort: uint32(common.Htons(global.TproxyPort)),
 			CollectionOptions:   collectionOpts,
-		}); err != nil {
+		}
+		if rustBpfLoaderOptInEnabled() {
+			err = fullLoadBpfObjectsViaRustAyaLoader(log, runtimeDeps.Netns, bpf, loadOpts)
+		} else {
+			err = fullLoadBpfObjects(log, runtimeDeps.Netns, bpf, loadOpts)
+		}
+		if err != nil {
 			if log.Level == logrus.PanicLevel {
 				log.Panicln(err)
 			}

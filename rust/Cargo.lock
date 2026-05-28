@@ -301,6 +301,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "dae-aya-bpf-loader"
+version = "0.1.0"
+dependencies = [
+ "dae-ebpf-support",
+ "fastrand",
+ "serde_json",
+]
+
+[[package]]
 name = "dae-bench"
 version = "0.1.0"
 dependencies = [
@@ -384,6 +393,7 @@ dependencies = [
 name = "dae-daemon"
 version = "0.1.0"
 dependencies = [
+ "dae-aya-bpf-loader",
  "dae-config",
  "dae-control",
  "dae-core-types",
@@ -396,6 +406,7 @@ dependencies = [
  "dae-outbound",
  "dae-routing",
  "dae-sniffing",
+ "fastrand",
  "libc",
  "rustls",
  "serde_json",

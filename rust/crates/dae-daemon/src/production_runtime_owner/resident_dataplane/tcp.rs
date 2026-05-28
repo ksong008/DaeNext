@@ -25,7 +25,9 @@ use dae_routing::{Query, RoutingMatcher};
 use dae_sniffing::{SniffingError, sniff_tcp};
 use serde_json::{Value, json};
 
-use super::client::{VlessTlsClient, drive_tls_io_record_aware, open_vless_tls_client};
+use super::client::{
+    TlsDriveOutcome, VlessTlsClient, drive_tls_io_record_aware, open_vless_tls_client,
+};
 use super::direct::{open_direct_tcp_connection, relay_tcp_direct};
 use super::events::append_event;
 use super::io::write_all_nonblocking;
@@ -435,7 +437,22 @@ fn handle_proxy_tcp_connection(
             "response_header_stripped": stats.response_header_stripped,
             "vision_unpadding_blocks": stats.vision_unpadding_blocks,
             "vision_direct_command_seen": stats.vision_direct_command_seen,
+            "vision_raw_direct_recovered": stats.vision_raw_direct_recovered,
         })
+    })
+    .map_err(|err| {
+        format!(
+            "{err}; original_dst={original_dst} dial_target={} dial_ip={} initial_outbound={} final_outbound={} final_mark={} proxy_group={} node_tag={} sniffed_domain={} sniff_error={}",
+            selection.route.dial_target,
+            selection.route.dial_ip,
+            selection.route.initial_outbound,
+            selection.route.final_outbound,
+            selection.route.final_mark,
+            selection.proxy.group_name,
+            selection.proxy.node_tag,
+            sniff.domain,
+            sniff.error.as_deref().unwrap_or(""),
+        )
     })
 }
 
@@ -596,6 +613,7 @@ struct RelayStats {
     response_header_stripped: bool,
     vision_unpadding_blocks: usize,
     vision_direct_command_seen: bool,
+    vision_raw_direct_recovered: bool,
 }
 
 fn relay_tcp_over_vless_tls(
@@ -614,6 +632,7 @@ fn relay_tcp_over_vless_tls(
     let mut vision_uplink_mode = VisionUplinkMode::Padding;
     let mut vision_tls_state = VisionInnerTlsState::new();
     let mut uplink_uuid_sent = false;
+    let mut vision_first_uplink_block = true;
     let mut pending_vision_uplink = Vec::<u8>::new();
     let mut inbound_closed = false;
     let mut last_activity = Instant::now();
@@ -628,6 +647,7 @@ fn relay_tcp_over_vless_tls(
                 stop,
                 user_uuid,
                 &mut uplink_uuid_sent,
+                &mut vision_first_uplink_block,
                 &mut vision_uplink_mode,
                 &mut vision_tls_state,
             )?;
@@ -664,6 +684,7 @@ fn relay_tcp_over_vless_tls(
                             stop,
                             user_uuid,
                             &mut uplink_uuid_sent,
+                            &mut vision_first_uplink_block,
                             &mut vision_uplink_mode,
                             &mut vision_tls_state,
                         )?;
@@ -709,7 +730,29 @@ fn relay_tcp_over_vless_tls(
                 Err(err) => return Err(format!("read VLESS Vision direct TCP: {err}")),
             }
         } else {
-            progressed |= drive_tls_io_record_aware(client)?;
+            match drive_tls_io_record_aware(client)? {
+                TlsDriveOutcome::Progressed(tls_progressed) => progressed |= tls_progressed,
+                TlsDriveOutcome::DecryptErrorRawRecord { record, error } => {
+                    if can_recover_vision_raw_direct_after_tls_error(
+                        vision_enabled,
+                        stats.response_header_stripped,
+                        vision.as_ref(),
+                    ) {
+                        downlink_direct = true;
+                        stats.vision_raw_direct_recovered = true;
+                        write_all_nonblocking(
+                            inbound,
+                            &record,
+                            stop,
+                            "write recovered VLESS Vision raw-direct payload to client",
+                        )?;
+                        stats.proxy_to_client += record.len();
+                        progressed = true;
+                    } else {
+                        return Err(error);
+                    }
+                }
+            }
             loop {
                 match client.conn.reader().read(&mut proxy_buf) {
                     Ok(0) => break,
@@ -731,6 +774,7 @@ fn relay_tcp_over_vless_tls(
                                     stop,
                                     user_uuid,
                                     &mut uplink_uuid_sent,
+                                    &mut vision_first_uplink_block,
                                     &mut vision_uplink_mode,
                                     &mut vision_tls_state,
                                 )?;
@@ -778,6 +822,16 @@ fn relay_tcp_over_vless_tls(
     Ok(stats)
 }
 
+fn can_recover_vision_raw_direct_after_tls_error(
+    vision_enabled: bool,
+    response_header_stripped: bool,
+    vision: Option<&VisionUnpadder>,
+) -> bool {
+    vision_enabled
+        && response_header_stripped
+        && vision.is_some_and(|vision| vision.completed_blocks > 0)
+}
+
 #[derive(Default)]
 pub(super) struct VlessResponseStripper {
     header: Vec<u8>,
@@ -810,6 +864,7 @@ impl VlessResponseStripper {
 
 #[cfg(test)]
 mod tests {
+    use super::super::vision::VisionUnpadState;
     use super::*;
     use serde_json::json;
 
@@ -821,6 +876,59 @@ mod tests {
         assert_eq!(stripper.consume(b"bcOK").unwrap(), b"OK");
         assert!(stripper.done);
         assert_eq!(stripper.consume(b"NEXT").unwrap(), b"NEXT");
+    }
+
+    #[test]
+    fn resident_vision_raw_direct_recovery_requires_prior_vision_block() {
+        let key = [7_u8; 16];
+        let mut unpadder = VisionUnpadder::new(key);
+        assert!(!can_recover_vision_raw_direct_after_tls_error(
+            true,
+            true,
+            Some(&unpadder)
+        ));
+
+        let mut uuid_sent = false;
+        let end_block = super::super::vision::vision_padding_block(
+            b"tail",
+            super::super::VISION_COMMAND_END,
+            key,
+            &mut uuid_sent,
+            false,
+        );
+        let mut ended = VisionUnpadder::new(key);
+        assert_eq!(ended.consume(&end_block).unwrap(), b"tail");
+        assert!(matches!(ended.state, VisionUnpadState::Raw));
+        assert!(can_recover_vision_raw_direct_after_tls_error(
+            true,
+            true,
+            Some(&ended)
+        ));
+
+        let mut uuid_sent = false;
+        let block = super::super::vision::vision_padding_block(
+            b"hello",
+            super::super::VISION_COMMAND_CONTINUE,
+            key,
+            &mut uuid_sent,
+            false,
+        );
+        assert_eq!(unpadder.consume(&block).unwrap(), b"hello");
+        assert!(can_recover_vision_raw_direct_after_tls_error(
+            true,
+            true,
+            Some(&unpadder)
+        ));
+        assert!(!can_recover_vision_raw_direct_after_tls_error(
+            false,
+            true,
+            Some(&unpadder)
+        ));
+        assert!(!can_recover_vision_raw_direct_after_tls_error(
+            true,
+            false,
+            Some(&unpadder)
+        ));
     }
 
     #[test]
