@@ -499,6 +499,51 @@ mod tests {
     use sha2::{Digest, Sha256};
 
     #[test]
+    fn parses_quoted_keyable_tags_with_config_delimiters() {
+        let sections = parse_config(
+            r#"
+node {
+  "9.[region]edge": "vless://uuid@example.com:443?security=tls&type=tcp#edge"
+  "name with space": "ss://example"
+  "name#fragment": "http://example"
+}
+dns {
+  upstream {
+    "dns.[region]": "udp://1.1.1.1:53"
+  }
+}
+"#,
+        )
+        .unwrap();
+
+        let Item::Param(first_node) = &sections[0].items[0] else {
+            panic!("first node should be a param");
+        };
+        assert_eq!(first_node.key, "9.[region]edge");
+        assert_eq!(
+            first_node.val,
+            "vless://uuid@example.com:443?security=tls&type=tcp#edge"
+        );
+        let Item::Param(space_node) = &sections[0].items[1] else {
+            panic!("second node should be a param");
+        };
+        assert_eq!(space_node.key, "name with space");
+        let Item::Param(fragment_node) = &sections[0].items[2] else {
+            panic!("third node should be a param");
+        };
+        assert_eq!(fragment_node.key, "name#fragment");
+
+        let Item::Section(upstream) = &sections[1].items[0] else {
+            panic!("upstream should be a nested section");
+        };
+        let Item::Param(dns_upstream) = &upstream.items[0] else {
+            panic!("dns upstream should be a param");
+        };
+        assert_eq!(dns_upstream.key, "dns.[region]");
+        assert_eq!(dns_upstream.val, "udp://1.1.1.1:53");
+    }
+
+    #[test]
     fn parses_ast_basic_success_case() {
         let fixture = dae_golden::load_json(PARSER_AST_BASIC).unwrap();
         let input = fixture["cases"][0]["input"].as_str().unwrap();
