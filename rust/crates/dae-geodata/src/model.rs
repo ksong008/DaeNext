@@ -9,6 +9,7 @@ use crate::wire::{
 pub struct GeoIp {
     pub country_code: String,
     pub cidrs: Vec<String>,
+    pub inverse_match: bool,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -21,6 +22,7 @@ pub struct GeoSite {
 pub struct Domain {
     pub domain_type: DomainType,
     pub value: String,
+    pub attributes: Vec<String>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -113,17 +115,20 @@ fn parse_geoip_entry(entry: &[u8]) -> Result<GeoIp, GeoDataError> {
     let mut input = entry;
     let mut country_code = String::new();
     let mut cidrs = Vec::new();
+    let mut inverse_match = false;
     while !input.is_empty() {
         let tag = read_varint(&mut input)?;
         match (tag >> 3, tag & 0x07) {
             (1, 2) => country_code = string(read_length_delimited(&mut input))?,
             (2, 2) => cidrs.push(parse_cidr(read_length_delimited(&mut input)?)?),
+            (3, 0) => inverse_match = read_varint(&mut input)? != 0,
             (_, wire_type) => skip_field(wire_type, &mut input)?,
         }
     }
     Ok(GeoIp {
         country_code,
         cidrs,
+        inverse_match,
     })
 }
 
@@ -174,15 +179,34 @@ fn parse_domain(data: &[u8]) -> Result<Domain, GeoDataError> {
     let mut input = data;
     let mut domain_type = DomainType::Plain;
     let mut value = String::new();
+    let mut attributes = Vec::new();
     while !input.is_empty() {
         let tag = read_varint(&mut input)?;
         match (tag >> 3, tag & 0x07) {
             (1, 0) => domain_type = domain_type_from_u64(read_varint(&mut input)?),
             (2, 2) => value = string(read_length_delimited(&mut input))?,
+            (3, 2) => attributes.push(parse_attribute_key(read_length_delimited(&mut input)?)?),
             (_, wire_type) => skip_field(wire_type, &mut input)?,
         }
     }
-    Ok(Domain { domain_type, value })
+    Ok(Domain {
+        domain_type,
+        value,
+        attributes,
+    })
+}
+
+fn parse_attribute_key(data: &[u8]) -> Result<String, GeoDataError> {
+    let mut input = data;
+    let mut key = String::new();
+    while !input.is_empty() {
+        let tag = read_varint(&mut input)?;
+        match (tag >> 3, tag & 0x07) {
+            (1, 2) => key = string(read_length_delimited(&mut input))?,
+            (_, wire_type) => skip_field(wire_type, &mut input)?,
+        }
+    }
+    Ok(key)
 }
 
 fn domain_type_from_u64(value: u64) -> DomainType {

@@ -43,6 +43,7 @@ fn main() {
         dest: IpAddr::from_str("203.0.113.42").unwrap(),
         dest_port: 443,
         domain: String::new(),
+        ..Query::default()
     };
     bench("userspace_ip_port_match", iters, || {
         black_box(userspace.match_query(black_box(&userspace_query)).unwrap());
