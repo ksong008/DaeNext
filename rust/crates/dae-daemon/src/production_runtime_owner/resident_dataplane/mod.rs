@@ -13,10 +13,12 @@ use serde_json::{Value, json};
 
 use self::events::path_string;
 use self::plan::build_resident_dataplane_plan;
-use self::tcp::resident_tcp_accept_loop;
+use self::tcp::{ResidentTcpRouter, resident_tcp_accept_loop};
 use self::udp::resident_udp_loop;
+use super::resident_routing::build_resident_userspace_routing_matcher;
 
 mod client;
+mod direct;
 mod events;
 mod io;
 mod plan;
@@ -73,6 +75,7 @@ pub(super) fn start_resident_dataplane_workers(
     handoff: &LiveLoadedTproxyListenSocketMap,
     config: &Config,
     artifact_dir: &Path,
+    routing_tuple_map_id: Option<u32>,
 ) -> (Value, Option<ResidentDataplaneRuntime>) {
     let event_file = artifact_dir.join("resident-production-dataplane-events.jsonl");
     let _ = fs::remove_file(&event_file);
@@ -101,16 +104,30 @@ pub(super) fn start_resident_dataplane_workers(
             None,
         );
     }
-    let Some(proxy) = plan.proxy else {
+    let Some(default_proxy) = plan.default_proxy else {
         return (
             json!({
                 "status": "fail",
                 "enabled": true,
-                "error": "resident dataplane plan is enabled without a proxy plan",
+                "error": "resident dataplane plan is enabled without a default proxy plan",
                 "event_file": path_string(&event_file),
             }),
             None,
         );
+    };
+    let routing_matcher = match build_resident_userspace_routing_matcher(config) {
+        Ok(matcher) => matcher,
+        Err(err) => {
+            return (
+                json!({
+                    "status": "fail",
+                    "enabled": true,
+                    "error": err,
+                    "event_file": path_string(&event_file),
+                }),
+                None,
+            );
+        }
     };
 
     let tcp_listener = match handoff.listeners.tcp_listener.try_clone() {
@@ -143,16 +160,38 @@ pub(super) fn start_resident_dataplane_workers(
     };
 
     let stop = Arc::new(AtomicBool::new(false));
-    let proxy = Arc::new(proxy);
+    let proxy = Arc::new(default_proxy);
+    let tcp_router = match ResidentTcpRouter::new(
+        plan.proxies,
+        routing_tuple_map_id,
+        routing_matcher,
+        plan.tcp_dial_mode,
+        plan.sniffing_timeout,
+        config.global.so_mark_from_dae,
+        config.global.mptcp,
+    ) {
+        Ok(router) => Arc::new(router),
+        Err(err) => {
+            return (
+                json!({
+                    "status": "fail",
+                    "enabled": true,
+                    "error": err,
+                    "event_file": path_string(&event_file),
+                }),
+                None,
+            );
+        }
+    };
     let event_lock = Arc::new(Mutex::new(()));
     let mut handles = Vec::new();
     {
         let stop = Arc::clone(&stop);
-        let proxy = Arc::clone(&proxy);
+        let tcp_router = Arc::clone(&tcp_router);
         let event_file = event_file.clone();
         let event_lock = Arc::clone(&event_lock);
         handles.push(thread::spawn(move || {
-            resident_tcp_accept_loop(tcp_listener, proxy, stop, event_file, event_lock)
+            resident_tcp_accept_loop(tcp_listener, tcp_router, stop, event_file, event_lock)
         }));
     }
     {
@@ -171,7 +210,11 @@ pub(super) fn start_resident_dataplane_workers(
         "tcp_worker_started": true,
         "udp_worker_started": true,
         "event_file": path_string(&event_file),
-        "proxy": {
+        "routing_tuple_map_id": routing_tuple_map_id,
+        "tcp_dial_mode": tcp_router.dial_mode_name(),
+        "tcp_sniffing_timeout": format!("{:?}", tcp_router.sniffing_timeout()),
+        "proxy_count": tcp_router.proxy_count(),
+        "default_proxy": {
             "protocol": proxy.protocol,
             "group": proxy.group_name,
             "node_tag": proxy.node_tag,
@@ -186,7 +229,7 @@ pub(super) fn start_resident_dataplane_workers(
             "mark": proxy.mark,
             "mptcp": proxy.mptcp,
         },
-        "scope": "resident worker consumes live tproxy TCP/UDP sockets and relays through the selected VLESS node; unsupported configs fail explicitly instead of faking proxy success",
+        "scope": "resident worker consumes live tproxy TCP/UDP sockets and relays through admitted Rust proxy handlers; unsupported protocols fail explicitly instead of faking proxy success",
     });
     (
         start,

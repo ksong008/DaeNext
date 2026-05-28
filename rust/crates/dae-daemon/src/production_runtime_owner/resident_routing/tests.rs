@@ -186,6 +186,93 @@ routing {
 }
 
 #[test]
+fn resident_routing_plan_groups_domain_values_like_go_builder() {
+    let sections = parse_config(
+        r#"
+global {
+    lan_interface: daerust0
+}
+group {
+    proxy {
+        policy: fixed(0)
+    }
+}
+routing {
+    domain(suffix: example.com, suffix: example.org, full: exact.example.net) -> proxy
+    fallback: direct
+}
+"#,
+    )
+    .unwrap();
+    let config = build_config(&sections).unwrap();
+    let plan = build_routing_plan(&config).unwrap();
+
+    assert_eq!(plan.domain_sets.len(), 2);
+    assert!(plan.domain_sets.iter().any(|set| {
+        set.key == "suffix"
+            && set.values == vec!["example.com".to_owned(), "example.org".to_owned()]
+    }));
+    assert!(
+        plan.domain_sets
+            .iter()
+            .any(|set| { set.key == "full" && set.values == vec!["exact.example.net".to_owned()] })
+    );
+    assert_eq!(
+        plan.matches
+            .iter()
+            .filter(|set| set.kind == "DomainSet")
+            .count(),
+        plan.domain_sets.len()
+    );
+}
+
+#[test]
+fn resident_userspace_routing_matcher_preserves_group_outbound_indices() {
+    let sections = parse_config(
+        r#"
+global {
+    lan_interface: daerust0
+}
+group {
+    proxy {
+        policy: fixed(0)
+    }
+    openai {
+        policy: fixed(0)
+    }
+}
+routing {
+    domain(suffix: googleapis.com) -> openai
+    fallback: proxy
+}
+"#,
+    )
+    .unwrap();
+    let config = build_config(&sections).unwrap();
+    let matcher = build_resident_userspace_routing_matcher(&config).unwrap();
+
+    let outcome = matcher
+        .match_query_detail(&dae_routing::Query::tcp(
+            "142.250.191.170".parse().unwrap(),
+            443,
+            "www.googleapis.com",
+        ))
+        .unwrap();
+    assert_eq!(outcome.outbound, OutboundIndex(3));
+    assert_eq!(outcome.mark, 0);
+    assert!(!outcome.must);
+
+    let fallback = matcher
+        .match_query(&dae_routing::Query::tcp(
+            "93.184.216.34".parse().unwrap(),
+            443,
+            "example.org",
+        ))
+        .unwrap();
+    assert_eq!(fallback, OutboundIndex(2));
+}
+
+#[test]
 fn resident_routing_plan_rejects_inverse_geoip_from_asset() {
     let root = test_asset_root("inverse-geoip");
     write_asset(

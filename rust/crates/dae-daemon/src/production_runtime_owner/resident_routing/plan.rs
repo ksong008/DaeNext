@@ -7,6 +7,7 @@ use std::{
 
 use dae_config::{Config, DynamicFunctionValue, Function, Param, RoutingRule};
 use dae_core_types::OutboundIndex;
+use dae_ebpf_support::MAX_MATCH_SET_LEN;
 use serde_json::{Value, json};
 
 use super::geodata::{
@@ -56,10 +57,11 @@ pub(super) fn build_routing_plan_with_asset_dirs(
         fallback,
         "Fallback",
     ));
-    if plan.matches.len() > 1024 {
+    if plan.matches.len() > MAX_MATCH_SET_LEN {
         return Err(format!(
-            "resident routing_map match set overflow: {} > 1024",
-            plan.matches.len()
+            "resident routing_map match set overflow: {} > {}",
+            plan.matches.len(),
+            MAX_MATCH_SET_LEN
         ));
     }
     Ok(plan)
@@ -218,6 +220,98 @@ pub(super) fn domain_set_json(set: &ResidentDomainSet) -> Value {
     })
 }
 
+pub(super) fn userspace_matcher_fixture_json(plan: &ResidentRoutingPlan) -> Value {
+    json!({
+        "domain_sets": plan.domain_sets.iter().map(|set| {
+            json!({
+                "bit": set.rule_index,
+                "key": &set.key,
+                "patterns": &set.values,
+            })
+        }).collect::<Vec<_>>(),
+        "lpm_sets": plan.lpm_sets.iter().enumerate().map(|(index, prefixes)| {
+            json!({
+                "index": index,
+                "prefixes": prefixes.iter().map(ip_prefix_string).collect::<Vec<_>>(),
+            })
+        }).collect::<Vec<_>>(),
+        "matches": plan.matches.iter().map(match_set_fixture_json).collect::<Vec<_>>(),
+    })
+}
+
+fn match_set_fixture_json(set: &MatchSetBytes) -> Value {
+    let mut item = json!({
+        "type": match set.bytes[17] {
+            MATCH_TYPE_DOMAIN_SET => "domain_set",
+            MATCH_TYPE_IP_SET => "ip_set",
+            MATCH_TYPE_SOURCE_IP_SET => "source_ip_set",
+            MATCH_TYPE_PORT => "port",
+            MATCH_TYPE_SOURCE_PORT => "source_port",
+            MATCH_TYPE_L4_PROTO => "l4proto",
+            MATCH_TYPE_IP_VERSION => "ipversion",
+            MATCH_TYPE_MAC => "mac",
+            MATCH_TYPE_PROCESS_NAME => "process_name",
+            MATCH_TYPE_DSCP => "dscp",
+            MATCH_TYPE_FALLBACK => "fallback",
+            _ => "unknown",
+        },
+        "outbound": outbound_fixture_name(set.outbound),
+    });
+    if set.bytes[16] != 0 {
+        item["not"] = json!(true);
+    }
+    if set.mark != 0 {
+        item["mark"] = json!(set.mark);
+    }
+    if set.must {
+        item["must"] = json!(true);
+    }
+    match set.bytes[17] {
+        MATCH_TYPE_IP_SET | MATCH_TYPE_SOURCE_IP_SET | MATCH_TYPE_MAC => {
+            item["lpm_index"] = json!(u32::from_le_bytes([
+                set.bytes[0],
+                set.bytes[1],
+                set.bytes[2],
+                set.bytes[3],
+            ]));
+        }
+        MATCH_TYPE_PORT | MATCH_TYPE_SOURCE_PORT => {
+            item["port_start"] = json!(u16::from_le_bytes([set.bytes[0], set.bytes[1]]));
+            item["port_end"] = json!(u16::from_le_bytes([set.bytes[2], set.bytes[3]]));
+        }
+        MATCH_TYPE_L4_PROTO | MATCH_TYPE_IP_VERSION => {
+            item["value"] = json!(set.bytes[0]);
+        }
+        MATCH_TYPE_PROCESS_NAME => {
+            let end = set.bytes[..16]
+                .iter()
+                .position(|byte| *byte == 0)
+                .unwrap_or(16);
+            item["process_name"] = json!(String::from_utf8_lossy(&set.bytes[..end]).into_owned());
+        }
+        MATCH_TYPE_DSCP => {
+            item["dscp"] = json!(set.bytes[0]);
+        }
+        _ => {}
+    }
+    item
+}
+
+fn outbound_fixture_name(outbound: u8) -> String {
+    match OutboundIndex(outbound) {
+        OutboundIndex::DIRECT => "direct".to_owned(),
+        OutboundIndex::BLOCK => "block".to_owned(),
+        OutboundIndex::MUST_RULES => "must_rules".to_owned(),
+        OutboundIndex::LOGICAL_OR => "logical_or".to_owned(),
+        OutboundIndex::LOGICAL_AND => "logical_and".to_owned(),
+        _ => format!("index:{outbound}"),
+    }
+}
+
+fn ip_prefix_string(prefix: &IpPrefix) -> String {
+    format!("{}/{}", prefix.addr, prefix.bits)
+}
+
 fn compile_rule(
     plan: &mut ResidentRoutingPlan,
     groups: &BTreeMap<String, u8>,
@@ -260,21 +354,19 @@ fn add_function_match_sets(
                     "unsupported resident domain parameter key: {param_key}"
                 ));
             }
-            for (value, outbound) in values.iter().zip(or_split(values, outbound)) {
-                let rule_index = plan.matches.len();
-                plan.domain_sets.push(ResidentDomainSet {
-                    rule_index,
-                    key: param_key.to_owned(),
-                    values: vec![value.clone()],
-                });
-                plan.matches.push(match_set(
-                    [0; 16],
-                    function.not,
-                    MATCH_TYPE_DOMAIN_SET,
-                    outbound,
-                    "DomainSet",
-                ));
-            }
+            let rule_index = plan.matches.len();
+            plan.domain_sets.push(ResidentDomainSet {
+                rule_index,
+                key: param_key.to_owned(),
+                values: values.to_vec(),
+            });
+            plan.matches.push(match_set(
+                [0; 16],
+                function.not,
+                MATCH_TYPE_DOMAIN_SET,
+                outbound,
+                "DomainSet",
+            ));
             Ok(())
         }
         "ip" | "sip" | "mac" => {
@@ -510,20 +602,6 @@ fn match_set(
         mark: outbound.mark,
         must: outbound.must,
     }
-}
-
-fn or_split(values: &[String], outbound: OutboundSpec) -> Vec<OutboundSpec> {
-    values
-        .iter()
-        .enumerate()
-        .map(|(index, _)| {
-            if index == values.len() - 1 {
-                outbound.clone()
-            } else {
-                logical_outbound(OutboundIndex::LOGICAL_OR)
-            }
-        })
-        .collect()
 }
 
 fn logical_outbound(index: OutboundIndex) -> OutboundSpec {
