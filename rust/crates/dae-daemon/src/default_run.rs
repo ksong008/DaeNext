@@ -323,6 +323,22 @@ pub fn run_default_optin_report(options: &RunOptions, version: &str) -> Result<V
     let release_gate_open = release_product_chain_live_gate["release_gate_open"]
         .as_bool()
         .unwrap_or(false);
+    let release_gate_default_switch_allowed =
+        release_product_chain_live_gate["default_switch_allowed"]
+            .as_bool()
+            .unwrap_or(false);
+    let release_gate_product_chain_switch_allowed =
+        release_product_chain_live_gate["product_chain_switch_allowed"]
+            .as_bool()
+            .unwrap_or(false);
+    let release_gate_go_fallback_required =
+        release_product_chain_live_gate["go_runtime_outbound_fallback_required"]
+            .as_bool()
+            .unwrap_or(true);
+    let release_gate_go_fallback_retired =
+        release_product_chain_live_gate["go_runtime_outbound_fallback_deletion_allowed"]
+            .as_bool()
+            .unwrap_or(false);
 
     fs::write(
         &options.logfile,
@@ -482,8 +498,16 @@ pub fn run_default_optin_report(options: &RunOptions, version: &str) -> Result<V
     report["product_chain_recertification_executed"] =
         json!(product_chain_recertification_executed);
     report["product_chain_recertification_clean"] = json!(product_chain_recertification_clean);
-    report["go_fallback_required"] = product_chain_recertification["go_fallback_required"].clone();
-    report["go_fallback_retired"] = product_chain_recertification["go_fallback_retired"].clone();
+    report["product_chain_recertification_go_fallback_required"] =
+        product_chain_recertification["go_fallback_required"].clone();
+    report["product_chain_recertification_go_fallback_retired"] =
+        product_chain_recertification["go_fallback_retired"].clone();
+    report["product_chain_recertification_default_path_mutation_allowed"] =
+        product_chain_recertification["default_path_mutation_allowed"].clone();
+    report["product_chain_recertification_product_chain_switch_allowed"] =
+        product_chain_recertification["product_chain_switch_allowed"].clone();
+    report["go_fallback_required"] = json!(release_gate_go_fallback_required);
+    report["go_fallback_retired"] = json!(release_gate_go_fallback_retired);
     report["product_chain_recertification"] = product_chain_recertification.clone();
     report["default_daemon_live_matrix"] = default_daemon_live_matrix;
     report["release_product_chain_live_gate"] = release_product_chain_live_gate;
@@ -529,12 +553,18 @@ pub fn run_default_optin_report(options: &RunOptions, version: &str) -> Result<V
             "true_rust_default_daemon_admitted",
             true_rust_default_daemon_admitted,
         ),
-        ("default_switch_allowed", default_path_mutation_allowed),
+        (
+            "default_switch_allowed",
+            release_gate_default_switch_allowed,
+        ),
         (
             "default_path_mutation_allowed",
-            default_path_mutation_allowed,
+            release_gate_default_switch_allowed,
         ),
-        ("product_chain_switch_allowed", product_chain_switch_allowed),
+        (
+            "product_chain_switch_allowed",
+            release_gate_product_chain_switch_allowed,
+        ),
         (
             "resident_default_daemon_switch_ready",
             resident_default_daemon_switch_ready,
@@ -578,9 +608,13 @@ pub fn run_default_optin_report(options: &RunOptions, version: &str) -> Result<V
         remaining_blockers.push("matched Go/Rust default daemon benchmark remains blocked");
     }
     if true_rust_default_daemon_admitted {
-        if product_chain_switch_allowed {
+        if release_gate_product_chain_switch_allowed {
             remaining_blockers.push(
                 "default path mutation request is admitted by clean product-chain recertification; production run command replacement is still not executed",
+            );
+        } else if product_chain_switch_allowed {
+            remaining_blockers.push(
+                "product-chain recertification admits its local default path mutation inputs, but the stage 7 release gate remains closed until the default daemon live matrix is complete",
             );
         } else if !resident_default_daemon_switch_ready {
             remaining_blockers.push(
@@ -1028,6 +1062,56 @@ pub fn product_chain_admission_from_run_report(
             path,
         )?,
     })
+}
+
+#[cfg(test)]
+mod stage7_gate_tests {
+    use super::*;
+
+    #[test]
+    fn stage7_release_gate_blocks_product_chain_switch_without_live_matrix() {
+        let production_runtime_owner = json!({
+            "datapath_outbound_ebpf_deep_area": {
+                "fixed_queue_completed": true,
+                "datapath_native_assets_recorded": true,
+                "go_bpf_loader_restored": false,
+                "aya_loader_direction_preserved": true
+            }
+        });
+        let gate = release_product_chain_live_gate_json(
+            true,
+            true,
+            true,
+            true,
+            true,
+            false,
+            true,
+            true,
+            true,
+            true,
+            true,
+            &production_runtime_owner,
+        );
+
+        assert!(
+            !gate["default_daemon_live_matrix_complete"]
+                .as_bool()
+                .unwrap()
+        );
+        assert!(!gate["release_gate_open"].as_bool().unwrap());
+        assert!(!gate["default_switch_allowed"].as_bool().unwrap());
+        assert!(!gate["product_chain_switch_allowed"].as_bool().unwrap());
+        assert!(
+            gate["go_runtime_outbound_fallback_required"]
+                .as_bool()
+                .unwrap()
+        );
+        assert!(
+            !gate["go_runtime_outbound_fallback_deletion_allowed"]
+                .as_bool()
+                .unwrap()
+        );
+    }
 }
 
 fn required_bool(value: &Value, key: &str, source: &Path) -> Result<bool, String> {
