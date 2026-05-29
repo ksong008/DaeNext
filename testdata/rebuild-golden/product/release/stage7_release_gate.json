@@ -1,0 +1,91 @@
+{
+  "accepted_native_groups": [
+    "control-plane-native-owner",
+    "routing-lpm-native-build",
+    "dns-native-hot-path",
+    "sniffing-geodata-matcher-native",
+    "daemon-runtime-native-owner",
+    "datapath-outbound-ebpf-deep-area"
+  ],
+  "admission_decision": "stage 7 records the release/product-chain/live-matrix gate after the fixed 1-6 Rust native queue; it does not switch the default daemon or delete Go runtime/outbound fallback",
+  "default_switch_allowed": false,
+  "denied_actions": [
+    "do not add a new fixed Rust native stage after stage 7",
+    "do not switch dae run or daed default daemon from this report alone",
+    "do not delete Go runtime or Go outbound fallback from this report alone",
+    "do not restore Go BPF loader",
+    "do not write test-machine-specific routing, DNS, geodata, sniffing, group, or outbound logic",
+    "do not label release artifacts as Rust-default-ready before full live matrix and product-chain recertification pass"
+  ],
+  "fixed_queue_complete": true,
+  "fixed_queue_range": "stage1-stage6",
+  "gate_rows": [
+    {
+      "area": "fixed native queue closure",
+      "blocker": "none for queue closure; this row only records that the fixed native queue is complete",
+      "next_action": "use this row as the prior gate for product-chain and default/live validation",
+      "required_evidence": "stage 1-6 typed owner summaries exist and keep default_switch_allowed=false until release gates pass",
+      "status": "recorded-complete"
+    },
+    {
+      "area": "default daemon live matrix",
+      "blocker": "stage 6 accepted datapath/outbound/eBPF assets but did not run a full default daemon live matrix",
+      "next_action": "run default daemon live matrix before allowing any default path mutation",
+      "required_evidence": "TCP, UDP, DNS UDP/53, sniff/domain reroute, reload, suspend, systemd, RuntimeOverview, and failure rollback pass under the same default daemon candidate",
+      "status": "blocked-pending-full-live-matrix"
+    },
+    {
+      "area": "product-chain recertification",
+      "blocker": "local dae evidence cannot by itself certify downstream product-chain defaults",
+      "next_action": "reuse product_chain_admission and true_default_daemon_admission contracts for downstream recertification",
+      "required_evidence": "daed, dae-wing, package, systemd, release workflow, WebUI runtime overview, reload API, and route-aware subscription behavior are validated against the same candidate",
+      "status": "blocked-pending-daed-daewing-release-validation"
+    },
+    {
+      "area": "matched Go/Rust default benchmark",
+      "blocker": "stage 6 benchmark measures report/admission JSON cost only, not default daemon datapath performance",
+      "next_action": "record TCP/UDP/DNS/protocol/RSS/CPU/startup/reload benchmark raw logs before reopening the switch",
+      "required_evidence": "Go default daemon and true Rust default daemon are benchmarked on the same host, config, traffic corpus, protocol set, reload window, and rollback path",
+      "status": "blocked-pending-matched-default-benchmark"
+    },
+    {
+      "area": "fallback deletion",
+      "blocker": "Go runtime and Go outbound are still authoritative for the default product path",
+      "next_action": "keep Go runtime/outbound fallback until every row passes and rollback has been tested",
+      "required_evidence": "Go runtime/outbound fallback deletion has an explicit release gate, rollback proof, and downstream product-chain confirmation",
+      "status": "blocked-until-release-gate-opens"
+    },
+    {
+      "area": "BPF loader boundary",
+      "blocker": "C eBPF object and Linux TC backend compatibility remain separate release concerns, not Go BPF loader fallback",
+      "next_action": "continue validating Aya/TCX/TC fallback through production owner gates without restoring Go BPF loader",
+      "required_evidence": "Rust/Aya loader direction remains preserved and Go BPF loader is not restored",
+      "status": "preserved-rust-aya-loader"
+    }
+  ],
+  "go_bpf_loader_restored": false,
+  "go_default_path_preserved": true,
+  "go_runtime_outbound_fallback_required": true,
+  "name": "stage7-release-product-chain-live-gate",
+  "prior_gate": "fixed-queue-complete-release-gates",
+  "product_chain_switch_allowed": false,
+  "release_gate_open": false,
+  "source": [
+    "DAEX_RUST_PERFORMANCE_OPTIMIZATION_PLAN_2026-05-24.md:stage6",
+    "DAEX_RUST_PERFORMANCE_OPTIMIZATION_PLAN_2026-05-24.md:fixed-queue-complete-release-gates",
+    "DAEX_RUST_REBUILD_PLAN_2026-05-16.md:execution-discipline",
+    "DAENEW_RUST_REBUILD_MEMO_2026-05-16.md:33.8",
+    "DAENEW_RUST_REBUILD_MEMO_2026-05-16.md:33.9",
+    "rust/crates/dae-daemon/src/production_runtime_owner/deep_area.rs",
+    "rust/crates/dae-product/src/product_chain_admission.rs",
+    "rust/crates/dae-product/src/true_daemon_admission.rs"
+  ],
+  "stage": "stage7",
+  "stage7_gate_complete": true,
+  "validation_commands": [
+    "cargo test --manifest-path rust/Cargo.toml -p dae-product stage7_release_gate_contract_matches_golden_fixture -- --nocapture",
+    "cargo fmt --manifest-path rust/Cargo.toml --all --check",
+    "cargo test --manifest-path rust/Cargo.toml -p dae-product",
+    "git diff --check"
+  ]
+}
