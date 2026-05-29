@@ -8,6 +8,7 @@ use dae_ebpf_support::{
 use serde_json::{Map, Value, json};
 
 use super::command::path_string;
+use super::native_assets;
 use super::native_ebpf::{native_backend_opt_in_decision_json, native_backend_runtime_decision};
 use super::udp_dns_datapath_contract::udp_dns_datapath_contract_json;
 use super::{
@@ -71,6 +72,10 @@ impl ProductionRuntimeTypedReport {
             "default_switch_allowed": false,
             "product_chain_switch_allowed": false,
             "stage_report_schema": false,
+            "daemon_runtime_native_owner_schema": "daemon-runtime-native-owner-v1",
+            "daemon_runtime_native_owner_admitted": true,
+            "daemon_runtime_native_owner_group_count": native_assets::runtime_native_group_count(),
+            "daemon_runtime_native_owner_default_switch_allowed": false,
         })
     }
 }
@@ -84,6 +89,7 @@ pub(super) fn report_value(
     evidence: ExecutionEvidence,
 ) -> Value {
     let mut report = Map::new();
+    let daemon_runtime_native_owner = native_assets::daemon_runtime_native_owner_summary_json();
     let udp_dns_contract = udp_dns_datapath_contract_json();
     let ebpf_capability = report_only_ebpf_backend_capability(None);
     let ebpf_capability_json = ebpf_backend_capability_json(&ebpf_capability, options);
@@ -517,6 +523,10 @@ pub(super) fn report_value(
         json!(reload_runtime_passed),
     );
     report.insert("typed_report".to_owned(), typed_report);
+    report.insert(
+        "daemon_runtime_native_owner".to_owned(),
+        daemon_runtime_native_owner,
+    );
     report.insert(
         "production_runtime_owner_scope".to_owned(),
         json!(if production_dataplane_admitted && reload_runtime_passed {

@@ -319,6 +319,7 @@ dependencies = [
  "dae-config",
  "dae-control",
  "dae-core-types",
+ "dae-daemon",
  "dae-datapath",
  "dae-dns",
  "dae-ebpf-support",
