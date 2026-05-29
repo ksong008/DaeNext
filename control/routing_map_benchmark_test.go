@@ -202,6 +202,34 @@ func BenchmarkDomainRoutingMapGoUpdate(b *testing.B) {
 	}
 }
 
+func BenchmarkDomainRoutingMapGoReloadClear(b *testing.B) {
+	m := newBenchmarkDomainRoutingMap(b)
+	defer m.Close()
+	key, value := benchmarkDomainRoutingEntry()
+	keys := [][4]uint32{
+		key,
+		{0, 0, 0xffff, 0xcb00710b},
+	}
+	core := &controlPlaneCore{
+		bpf: &bpfObjects{
+			bpfMaps: bpfMaps{
+				DomainRoutingMap: m,
+			},
+		},
+	}
+	b.ReportAllocs()
+	for i := 0; i < b.N; i++ {
+		b.StopTimer()
+		for _, key := range keys {
+			if err := m.Update(key, value, ebpf.UpdateAny); err != nil {
+				b.Fatal(err)
+			}
+		}
+		b.StartTimer()
+		core.clearDomainRoutingMapForReload()
+	}
+}
+
 func BenchmarkDomainRoutingMapRustHelperUpdate(b *testing.B) {
 	helperPath := strings.TrimSpace(os.Getenv(rustBpfLoaderHelperEnv))
 	if helperPath == "" {
