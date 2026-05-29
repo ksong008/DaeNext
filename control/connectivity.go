@@ -34,13 +34,7 @@ func (c *controlPlaneCore) outboundAliveChangeCallback(outbound uint8, dryrun bo
 		default:
 		}
 		if !isInit && dryrun {
-			if written, err := c.updateOutboundConnectivityMapViaRustHelper(outbound, alive, networkType, isInit, dryrun); err == nil {
-				if !written {
-					return
-				}
-			} else {
-				return
-			}
+			return
 		}
 		if !isInit || c.log.IsLevelEnabled(logrus.TraceLevel) {
 			strAlive := "NOT ALIVE"
@@ -92,15 +86,37 @@ func (c *controlPlaneCore) updateOutboundConnectivityMapViaRustHelper(outbound u
 	if err != nil {
 		return false, err
 	}
+	request := rustConnectivityMapRequest{
+		MapID:     mapID,
+		Outbound:  outbound,
+		L4Proto:   networkType.L4Proto.ToL4Proto(),
+		IPVersion: networkType.IpVersion.ToIpVersion(),
+		Alive:     alive,
+		IsInit:    isInit,
+		Dryrun:    dryrun,
+	}
+	if written, err := c.getRustConnectivityHelper().Update(request); err == nil {
+		return written, nil
+	} else {
+		c.log.WithFields(logrus.Fields{
+			"alive":    alive,
+			"network":  networkType.StringWithoutDns(),
+			"outbound": c.outboundId2Name[outbound],
+		}).Debugf("Persistent Rust outbound connectivity map writer unavailable, trying process helper: %v", err)
+	}
+	return updateOutboundConnectivityMapViaRustProcessHelper(request)
+}
+
+func updateOutboundConnectivityMapViaRustProcessHelper(request rustConnectivityMapRequest) (bool, error) {
 	out, err := runRustBpfLoaderHelperOutput(
 		"connectivity-map", "update",
-		"--map-id", strconv.FormatUint(uint64(mapID), 10),
-		"--outbound", strconv.Itoa(int(outbound)),
-		"--l4-proto", strconv.Itoa(int(networkType.L4Proto.ToL4Proto())),
-		"--ip-version", strconv.Itoa(int(networkType.IpVersion.ToIpVersion())),
-		"--alive", strconv.FormatBool(alive),
-		"--is-init", strconv.FormatBool(isInit),
-		"--dryrun", strconv.FormatBool(dryrun),
+		"--map-id", strconv.FormatUint(uint64(request.MapID), 10),
+		"--outbound", strconv.Itoa(int(request.Outbound)),
+		"--l4-proto", strconv.Itoa(int(request.L4Proto)),
+		"--ip-version", strconv.Itoa(int(request.IPVersion)),
+		"--alive", strconv.FormatBool(request.Alive),
+		"--is-init", strconv.FormatBool(request.IsInit),
+		"--dryrun", strconv.FormatBool(request.Dryrun),
 	)
 	if err != nil {
 		return false, err

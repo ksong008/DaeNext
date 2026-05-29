@@ -56,6 +56,9 @@ type controlPlaneCore struct {
 	domainRouting   *domainRoutingTracker
 	outboundId2Name map[uint8]string
 
+	connectivityHelperMu sync.Mutex
+	connectivityHelper   *rustConnectivityHelper
+
 	kernelVersion *internal.Version
 
 	flip       int
@@ -202,6 +205,9 @@ func (c *controlPlaneCore) Close() (err error) {
 		return nil
 	default:
 	}
+	if e := c.closeRustConnectivityHelper(); e != nil {
+		err = e
+	}
 	// Invoke defer funcs in reverse order.
 	for i := len(c.deferFuncs) - 1; i >= 0; i-- {
 		if e := c.deferFuncs[i](); e != nil {
@@ -215,6 +221,26 @@ func (c *controlPlaneCore) Close() (err error) {
 	}
 	c.close()
 	return err
+}
+
+func (c *controlPlaneCore) getRustConnectivityHelper() *rustConnectivityHelper {
+	c.connectivityHelperMu.Lock()
+	defer c.connectivityHelperMu.Unlock()
+	if c.connectivityHelper == nil {
+		c.connectivityHelper = newRustConnectivityHelper()
+	}
+	return c.connectivityHelper
+}
+
+func (c *controlPlaneCore) closeRustConnectivityHelper() error {
+	c.connectivityHelperMu.Lock()
+	helper := c.connectivityHelper
+	c.connectivityHelper = nil
+	c.connectivityHelperMu.Unlock()
+	if helper == nil {
+		return nil
+	}
+	return helper.Close()
 }
 
 func getIfParamsFromLink(link netlink.Link) (ifParams bpfIfParams, err error) {
