@@ -7,6 +7,7 @@ pub mod outbound_contract;
 pub mod product_chain_admission;
 pub mod protocol_dataplane;
 pub mod release;
+pub mod release_gate;
 pub mod systemd;
 pub mod true_daemon_admission;
 
@@ -34,6 +35,9 @@ pub use protocol_dataplane::{
     protocol_dataplane_admission_contract,
 };
 pub use release::{ReleaseWorkflowContract, release_workflow_contract};
+pub use release_gate::{
+    Stage7ReleaseGateContract, Stage7ReleaseGateRow, stage7_release_gate_contract,
+};
 pub use systemd::{SystemdContract, systemd_contract};
 pub use true_daemon_admission::{
     TrueDefaultDaemonAdmissionContract, TrueDefaultDaemonAdmissionRow,
