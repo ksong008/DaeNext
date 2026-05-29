@@ -318,8 +318,19 @@ func (b *RoutingMatcherBuilder) addFallback(fallbackOutbound config.FunctionOrSt
 }
 
 func (b *RoutingMatcherBuilder) BuildKernspace(log *logrus.Logger) (err error) {
-	// Update lpm_array_map.
-	for i, cidrs := range b.simulatedLpmTries {
+	// Fallback rule MUST be the last.
+	if b.rules[len(b.rules)-1].Type != uint8(consts.MatchType_Fallback) {
+		return fmt.Errorf("fallback rule MUST be the last")
+	}
+
+	// Build LPM inner maps before choosing the writer backend.
+	var lpmMaps []*ebpf.Map
+	defer func() {
+		for _, m := range lpmMaps {
+			_ = m.Close()
+		}
+	}()
+	for _, cidrs := range b.simulatedLpmTries {
 		var keys []_bpfLpmKey
 		var values []uint32
 		for _, cidr := range cidrs {
@@ -330,18 +341,24 @@ func (b *RoutingMatcherBuilder) BuildKernspace(log *logrus.Logger) (err error) {
 		if err != nil {
 			return fmt.Errorf("newLpmMap: %w", err)
 		}
-		// We cannot invoke BpfMapBatchUpdate when value is ebpf.Map.
+		lpmMaps = append(lpmMaps, m)
+	}
+
+	if err := b.updateKernelRoutingMapsViaRustHelper(lpmMaps); err == nil {
+		log.Infof("Routing match set len: %v/%v", len(b.rules), consts.MaxMatchSetLen)
+		return nil
+	} else {
+		log.Debugf("Rust routing map writer unavailable, falling back to Go writer: %v", err)
+	}
+
+	// Update lpm_array_map. We cannot invoke BpfMapBatchUpdate when value is ebpf.Map.
+	for i, m := range lpmMaps {
 		if err = b.bpf.LpmArrayMap.Update(uint32(i), m, ebpf.UpdateAny); err != nil {
-			m.Close()
 			return fmt.Errorf("Update: %w", err)
 		}
-		m.Close()
 	}
+
 	// Write routings.
-	// Fallback rule MUST be the last.
-	if b.rules[len(b.rules)-1].Type != uint8(consts.MatchType_Fallback) {
-		return fmt.Errorf("fallback rule MUST be the last")
-	}
 	routingsLen := uint32(len(b.rules))
 	routingsKeys := common.ARangeU32(routingsLen)
 	if _, err = BpfMapBatchUpdate(b.bpf.RoutingMap, routingsKeys, b.rules, &ebpf.BatchOptions{
