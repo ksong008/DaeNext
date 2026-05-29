@@ -49,18 +49,21 @@ pub use attach::{
 #[cfg(feature = "aya-loader")]
 pub use aya_loader::{
     AyaCgroupAttachDetachReport, AyaGoAdoptionPinReport, AyaPinnedObject, AyaTcAttachDetachReport,
-    AyaTcxProgramOrderEntry, AyaUserspaceLoadReport, AyaUserspaceLoadedObject,
-    AyaUserspaceLoaderOptions, aya_userspace_load_report, load_attach_aya_cgroup_program,
-    load_attach_aya_sched_classifier, load_attach_detach_aya_cgroup_program,
-    load_attach_detach_aya_sched_classifier, load_aya_userspace_object,
-    pin_aya_loaded_object_for_go_adoption,
+    AyaTcxProgramOrderEntry, AyaTraceConfig, AyaTraceLoadPinReport, AyaTraceLoaderOptions,
+    AyaUserspaceLoadReport, AyaUserspaceLoadedObject, AyaUserspaceLoaderOptions,
+    aya_userspace_load_report, load_attach_aya_cgroup_program, load_attach_aya_sched_classifier,
+    load_attach_detach_aya_cgroup_program, load_attach_detach_aya_sched_classifier,
+    load_aya_userspace_object, load_pin_aya_trace_object, pin_aya_loaded_object_for_go_adoption,
 };
 pub use capability::{EbpfBackendCapabilityReport, report_only_ebpf_backend_capability};
 pub use cgroup::{
     DaeCgroupAttachLine, DaeCgroupAttachRole, DaeCgroupProgramKind, dae_cgroup_attach_matrix,
     detect_cgroup2_mount, detect_cgroup2_mount_from_proc_mounts,
 };
-pub use connectivity::{ConnectivityEvent, ConnectivityKey, ConnectivityMap};
+pub use connectivity::{
+    ConnectivityEvent, ConnectivityKey, ConnectivityMap, ConnectivityWritePlan,
+    connectivity_write_plan, update_connectivity_map_by_id,
+};
 pub use kernel::{FeatureGateReport, Version};
 pub use loader::{
     LoaderBackend, LoaderContract, PinnedMapAction, loader_contract, pinned_map_action,
@@ -85,7 +88,8 @@ pub use param_object::{
     write_param_aware_object,
 };
 pub use runtime_maps::{
-    RuntimeMapInfo, lookup_map_elem_bytes, map_ids, map_info, open_map_fd, update_map_elem_bytes,
+    RuntimeMapInfo, count_map_entries_by_fd, count_map_entries_by_id, lookup_map_elem_bytes,
+    map_ids, map_info, open_map_fd, update_map_elem_bytes,
 };
 pub use sockmap::{
     ListenSocketMapFdSmoke, LiveLoadedTproxyListenSocketMap, LoadedListenSocketMapFdSmoke,

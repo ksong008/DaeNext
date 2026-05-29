@@ -1,11 +1,12 @@
 use std::io;
 use std::mem::size_of;
-use std::os::fd::RawFd;
+use std::os::fd::{AsRawFd, RawFd};
 use std::os::fd::{FromRawFd, OwnedFd};
 
 const BPF_MAP_UPDATE_ELEM: libc::c_uint = 2;
 const BPF_MAP_LOOKUP_ELEM: libc::c_uint = 1;
 const BPF_MAP_GET_NEXT_ID: libc::c_uint = 12;
+const BPF_MAP_GET_NEXT_KEY: libc::c_uint = 4;
 const BPF_MAP_GET_FD_BY_ID: libc::c_uint = 14;
 const BPF_OBJ_GET_INFO_BY_FD: libc::c_uint = 15;
 const BPF_ANY: u64 = 0;
@@ -146,6 +147,57 @@ pub fn lookup_map_elem_bytes(map_fd: RawFd, key: &[u8], value: &mut [u8]) -> io:
     Ok(())
 }
 
+pub fn count_map_entries_by_id(id: u32) -> io::Result<u64> {
+    let fd = open_map_fd(id)?;
+    count_map_entries_by_fd(fd.as_raw_fd())
+}
+
+pub fn count_map_entries_by_fd(map_fd: RawFd) -> io::Result<u64> {
+    let info = map_info(map_fd)?;
+    if info.key_size == 0 {
+        return Ok(0);
+    }
+
+    let mut current_key = vec![0_u8; info.key_size as usize];
+    let mut next_key = vec![0_u8; info.key_size as usize];
+    let mut has_previous_key = false;
+    let mut count = 0_u64;
+
+    loop {
+        let key_ptr = if has_previous_key {
+            current_key.as_ptr() as u64
+        } else {
+            0
+        };
+        let mut attr = BpfMapGetNextKeyAttr {
+            map_fd: map_fd as u32,
+            key: key_ptr,
+            next_key: next_key.as_mut_ptr() as u64,
+            ..BpfMapGetNextKeyAttr::default()
+        };
+        let status = unsafe {
+            libc::syscall(
+                libc::SYS_bpf,
+                BPF_MAP_GET_NEXT_KEY,
+                &mut attr as *mut BpfMapGetNextKeyAttr,
+                size_of::<BpfMapGetNextKeyAttr>(),
+            )
+        };
+        if status < 0 {
+            let err = io::Error::last_os_error();
+            if err.raw_os_error() == Some(libc::ENOENT) {
+                break;
+            }
+            return Err(err);
+        }
+        count += 1;
+        current_key.copy_from_slice(&next_key);
+        has_previous_key = true;
+    }
+
+    Ok(count)
+}
+
 #[repr(C)]
 #[derive(Clone, Copy, Debug, Default)]
 struct BpfIdAttr {
@@ -180,6 +232,15 @@ struct BpfMapLookupElemAttr {
     key: u64,
     value: u64,
     flags: u64,
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default)]
+struct BpfMapGetNextKeyAttr {
+    map_fd: u32,
+    padding: u32,
+    key: u64,
+    next_key: u64,
 }
 
 #[repr(C, align(8))]

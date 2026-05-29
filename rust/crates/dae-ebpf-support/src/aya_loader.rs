@@ -84,6 +84,41 @@ pub struct AyaUserspaceLoadedObject {
     pub report: AyaUserspaceLoadReport,
 }
 
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct AyaTraceConfig {
+    pub port: u16,
+    pub l4_proto: u16,
+    pub ip_version: u8,
+    pub pad: u8,
+}
+
+unsafe impl aya::Pod for AyaTraceConfig {}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct AyaTraceLoaderOptions<'a> {
+    pub object: &'a Path,
+    pub pin_root: &'a Path,
+    pub port: u16,
+    pub l4_proto: u16,
+    pub ip_version: u8,
+    pub ringbuf_size: u32,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct AyaTraceLoadPinReport {
+    pub object: PathBuf,
+    pub pin_root: PathBuf,
+    pub map_pin_root: PathBuf,
+    pub program_pin_root: PathBuf,
+    pub maps: Vec<AyaPinnedObject>,
+    pub programs: Vec<AyaPinnedObject>,
+    pub port: u16,
+    pub l4_proto: u16,
+    pub ip_version: u8,
+    pub ringbuf_size: u32,
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct AyaPinnedObject {
     pub name: String,
@@ -269,6 +304,84 @@ pub fn pin_aya_loaded_object_for_go_adoption(
     })
 }
 
+pub fn load_pin_aya_trace_object(
+    options: AyaTraceLoaderOptions<'_>,
+) -> Result<AyaTraceLoadPinReport, String> {
+    let map_pin_root = options.pin_root.join("maps");
+    let program_pin_root = options.pin_root.join("programs");
+    fs::create_dir_all(&map_pin_root)
+        .map_err(|err| format!("create trace map pin root failed: {err}"))?;
+    fs::create_dir_all(&program_pin_root)
+        .map_err(|err| format!("create trace program pin root failed: {err}"))?;
+
+    let mut loader = aya::EbpfLoader::new();
+    loader.allow_unsupported_maps();
+    let trace_config = AyaTraceConfig {
+        port: crate::htons(options.port),
+        l4_proto: options.l4_proto,
+        ip_version: options.ip_version,
+        pad: 0,
+    };
+    loader.set_global("tracing_cfg", &trace_config, true);
+    loader.set_max_entries("events", options.ringbuf_size);
+
+    let mut ebpf = loader
+        .load_file(options.object)
+        .map_err(|err| format!("aya trace object load failed: {err:?}"))?;
+
+    let mut maps = Vec::new();
+    for name in ["events", "skb_addresses"] {
+        let map = ebpf
+            .map(name)
+            .ok_or_else(|| format!("aya trace map not found: {name}"))?;
+        let path = map_pin_root.join(name);
+        remove_existing_pin(&path)?;
+        map.pin(&path)
+            .map_err(|err| format!("pin trace map {name} failed: {err:?}"))?;
+        maps.push(AyaPinnedObject {
+            name: name.to_owned(),
+            path,
+        });
+    }
+
+    let mut programs = Vec::new();
+    for name in [
+        "kprobe_skb_1",
+        "kprobe_skb_2",
+        "kprobe_skb_3",
+        "kprobe_skb_4",
+        "kprobe_skb_5",
+        "kprobe_skb_lifetime_termination",
+    ] {
+        let program = ebpf
+            .program_mut(name)
+            .ok_or_else(|| format!("aya trace program not found: {name}"))?;
+        ensure_trace_program_loaded(name, program)?;
+        let path = program_pin_root.join(name);
+        remove_existing_pin(&path)?;
+        program
+            .pin(&path)
+            .map_err(|err| format!("pin trace program {name} failed: {err:?}"))?;
+        programs.push(AyaPinnedObject {
+            name: name.to_owned(),
+            path,
+        });
+    }
+
+    Ok(AyaTraceLoadPinReport {
+        object: options.object.to_owned(),
+        pin_root: options.pin_root.to_owned(),
+        map_pin_root,
+        program_pin_root,
+        maps,
+        programs,
+        port: options.port,
+        l4_proto: options.l4_proto,
+        ip_version: options.ip_version,
+        ringbuf_size: options.ringbuf_size,
+    })
+}
+
 fn ensure_program_loaded_for_go_adoption(name: &str, program: &mut Program) -> Result<(), String> {
     if program.fd().is_ok() {
         return Ok(());
@@ -285,6 +398,21 @@ fn ensure_program_loaded_for_go_adoption(name: &str, program: &mut Program) -> R
             .map_err(|err| format!("load cgroup sock_addr program {name} failed: {err:?}")),
         other => Err(format!(
             "program {name} has unsupported type {:?} for dae Go adoption",
+            other.prog_type()
+        )),
+    }
+}
+
+fn ensure_trace_program_loaded(name: &str, program: &mut Program) -> Result<(), String> {
+    if program.fd().is_ok() {
+        return Ok(());
+    }
+    match program {
+        Program::KProbe(program) => program
+            .load()
+            .map_err(|err| format!("load trace kprobe program {name} failed: {err:?}")),
+        other => Err(format!(
+            "program {name} has unsupported type {:?} for trace loader",
             other.prog_type()
         )),
     }
