@@ -19,6 +19,7 @@ use super::resident_routing::build_resident_userspace_routing_matcher;
 
 mod client;
 mod direct;
+mod dns;
 mod events;
 mod io;
 mod plan;
@@ -161,6 +162,7 @@ pub(super) fn start_resident_dataplane_workers(
 
     let stop = Arc::new(AtomicBool::new(false));
     let proxy = Arc::new(default_proxy);
+    let dns = Arc::new(plan.dns);
     let tcp_router = match ResidentTcpRouter::new(
         plan.proxies,
         routing_tuple_map_id,
@@ -197,10 +199,11 @@ pub(super) fn start_resident_dataplane_workers(
     {
         let stop = Arc::clone(&stop);
         let proxy = Arc::clone(&proxy);
+        let dns = Arc::clone(&dns);
         let event_file = event_file.clone();
         let event_lock = Arc::clone(&event_lock);
         handles.push(thread::spawn(move || {
-            resident_udp_loop(udp_socket, proxy, stop, event_file, event_lock)
+            resident_udp_loop(udp_socket, proxy, dns, stop, event_file, event_lock)
         }));
     }
 
