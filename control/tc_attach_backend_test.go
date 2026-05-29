@@ -92,3 +92,33 @@ func TestSameBpfFilterIdentityMatchesHandleOrName(t *testing.T) {
 		t.Fatal("sameBpfFilterIdentity should reject unrelated filters")
 	}
 }
+
+func TestRustTcAttachHelpersDeriveProgramAndBackend(t *testing.T) {
+	filter := &netlink.BpfFilter{
+		FilterAttrs: netlink.FilterAttrs{Parent: netlink.HANDLE_MIN_INGRESS},
+		Name:        "dae_lan_ingress_l2",
+	}
+	programName, err := rustTcProgramNameForFilter(filter)
+	if err != nil {
+		t.Fatalf("rustTcProgramNameForFilter() error = %v", err)
+	}
+	if programName != "tproxy_lan_ingress_l2" {
+		t.Fatalf("programName = %q", programName)
+	}
+	direction, err := rustTcDirectionForFilter(filter)
+	if err != nil {
+		t.Fatalf("rustTcDirectionForFilter() error = %v", err)
+	}
+	if direction != "ingress" {
+		t.Fatalf("direction = %q", direction)
+	}
+	if got := rustTcAttachBackendArg(tcAttachBackendAuto); got != "auto" {
+		t.Fatalf("auto backend arg = %q", got)
+	}
+	if got := rustTcAttachBackendArg(tcAttachBackendTc); got != "tc_netlink" {
+		t.Fatalf("tc backend arg = %q", got)
+	}
+	if got, err := rustTcAttachBackendFromReport("tc_netlink"); err != nil || got != tcAttachBackendTc {
+		t.Fatalf("rustTcAttachBackendFromReport(tc_netlink) = %q, %v", got, err)
+	}
+}
