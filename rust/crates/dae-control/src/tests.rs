@@ -1,7 +1,9 @@
 use serde_json::Value;
 
 use crate::*;
-use dae_ebpf_support::{ConnectivityEvent, ConnectivityKey};
+use dae_core_types::OutboundIndex;
+use dae_ebpf_support::{BpfMatchSet, ConnectivityEvent, ConnectivityKey, RoutingMapEntry};
+use dae_routing::IpPrefix;
 
 #[test]
 fn domain_routing_owner_tracker_matches_golden_fixture() {
@@ -357,6 +359,124 @@ fn outbound_connectivity_owner_replays_state_when_map_id_changes() {
     assert!(!skipped.state.accepted);
     assert!(!skipped.flush);
     assert_eq!(owner.state().get(tcp4), Some(0));
+}
+
+#[test]
+fn routing_native_plan_builds_kernel_lpm_abi_without_helper_boundary() {
+    let rules = vec![
+        RoutingNativeRule::new(RoutingNativeMatch::DomainSet, OutboundIndex(2)),
+        RoutingNativeRule::new(
+            RoutingNativeMatch::IpSet(vec![
+                IpPrefix::parse("203.0.113.0/24").unwrap(),
+                IpPrefix::parse("2001:db8::/48").unwrap(),
+            ]),
+            OutboundIndex::BLOCK,
+        ),
+        RoutingNativeRule::new(
+            RoutingNativeMatch::Port(vec![(80, 80), (443, 443)]),
+            OutboundIndex::DIRECT,
+        ),
+        RoutingNativeRule::new(
+            RoutingNativeMatch::Mac(vec![[0xaa, 0xbb, 0xcc, 0xdd, 0xee, 0xff]]),
+            OutboundIndex(3),
+        )
+        .with_flags(true, 0x0800_0000, true),
+    ];
+    let plan = build_routing_native_plan(
+        &rules,
+        RoutingNativeFallback::new(OutboundIndex::DIRECT),
+        LpmMapTemplate::default(),
+    )
+    .unwrap();
+
+    assert_eq!(plan.routing_entries.len(), 6);
+    assert_eq!(plan.lpm_maps.len(), 2);
+    assert_eq!(plan.routing_entries[0].index, 0);
+    assert_eq!(plan.routing_entries[0].value.kind, 0);
+    assert_eq!(plan.routing_entries[0].value.outbound, 2);
+
+    let ip_rule = &plan.routing_entries[1].value;
+    assert_eq!(ip_rule.kind, 1);
+    assert_eq!(
+        u32::from_le_bytes(ip_rule.value[..4].try_into().unwrap()),
+        0
+    );
+    assert_eq!(plan.lpm_maps[0].index, 0);
+    assert_eq!(plan.lpm_maps[0].flags, BPF_F_NO_PREALLOC);
+    assert_eq!(plan.lpm_maps[0].max_entries, DEFAULT_LPM_MAX_ENTRIES);
+    assert_eq!(plan.lpm_maps[0].entries[0].key.prefix_len, 120);
+    assert_eq!(
+        plan.lpm_maps[0].entries[0].key,
+        ip_prefix_to_bpf_lpm_key(&IpPrefix::parse("203.0.113.0/24").unwrap())
+    );
+    assert_eq!(plan.lpm_maps[0].entries[1].key.prefix_len, 48);
+
+    assert_eq!(plan.routing_entries[2].value.kind, 3);
+    assert_eq!(
+        plan.routing_entries[2].value.outbound,
+        OutboundIndex::LOGICAL_OR.value()
+    );
+    assert_eq!(
+        plan.routing_entries[3].value.outbound,
+        OutboundIndex::DIRECT.value()
+    );
+
+    let mac_rule = &plan.routing_entries[4].value;
+    assert_eq!(mac_rule.kind, 7);
+    assert_eq!(mac_rule.not, 1);
+    assert_eq!(mac_rule.must, 1);
+    assert_eq!(mac_rule.mark, 0x0800_0000);
+    assert_eq!(
+        u32::from_le_bytes(mac_rule.value[..4].try_into().unwrap()),
+        1
+    );
+    assert_eq!(plan.lpm_maps[1].index, 1);
+    assert_eq!(plan.lpm_maps[1].entries[0].key.prefix_len, 128);
+
+    let fallback = plan.routing_entries.last().unwrap();
+    assert_eq!(fallback.value.kind, 10);
+    assert_eq!(fallback.value.outbound, OutboundIndex::DIRECT.value());
+    plan.validate().unwrap();
+}
+
+#[test]
+fn routing_native_plan_rejects_invalid_fallback_and_lpm_template() {
+    let invalid = RoutingNativeBuildPlan {
+        routing_entries: vec![RoutingMapEntry {
+            index: 0,
+            value: BpfMatchSet {
+                kind: 1,
+                outbound: OutboundIndex::DIRECT.value(),
+                ..BpfMatchSet::default()
+            },
+        }],
+        lpm_maps: Vec::new(),
+    };
+    assert_eq!(
+        invalid.validate().unwrap_err(),
+        RoutingNativePlanError::FallbackNotLast
+    );
+
+    let err = build_routing_native_plan(
+        &[RoutingNativeRule::new(
+            RoutingNativeMatch::IpSet(vec![IpPrefix::parse("203.0.113.0/24").unwrap()]),
+            OutboundIndex::DIRECT,
+        )],
+        RoutingNativeFallback::new(OutboundIndex::BLOCK),
+        LpmMapTemplate {
+            key_size: 1,
+            ..LpmMapTemplate::default()
+        },
+    )
+    .unwrap_err();
+    assert_eq!(
+        err,
+        RoutingNativePlanError::InvalidLpmTemplate {
+            field: "key_size",
+            got: 1,
+            want: std::mem::size_of::<dae_ebpf_support::BpfLpmKey>() as u32,
+        }
+    );
 }
 
 fn assert_domain_view(got: &DomainRoutingView, expected: &Value) {

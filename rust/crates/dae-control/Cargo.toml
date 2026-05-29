@@ -6,7 +6,9 @@ license.workspace = true
 repository.workspace = true
 
 [dependencies]
+dae-core-types.workspace = true
 dae-ebpf-support.workspace = true
+dae-routing.workspace = true
 
 [dev-dependencies]
 dae-golden.workspace = true

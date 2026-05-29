@@ -6,6 +6,7 @@
 package control
 
 import (
+	"encoding/binary"
 	"encoding/json"
 	"net/netip"
 	"os"
@@ -17,6 +18,8 @@ import (
 	"github.com/daeuniverse/dae/common/consts"
 	"golang.org/x/sys/unix"
 )
+
+var routingNativePlanBenchmarkSink uint64
 
 func BenchmarkRoutingMapGoUpdate(b *testing.B) {
 	m := newBenchmarkRoutingMap(b)
@@ -185,6 +188,18 @@ func BenchmarkRoutingMapRustHelperUpdateWithLpmBuild(b *testing.B) {
 	}
 }
 
+func BenchmarkRoutingNativePlanGoBuildWithLpm(b *testing.B) {
+	rules := benchmarkRoutingNativePlanRules()
+	var checksum uint64
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		routingEntries, lpmMaps := buildBenchmarkRoutingNativePlan(rules)
+		checksum ^= benchmarkRoutingNativePlanChecksum(routingEntries, lpmMaps)
+	}
+	routingNativePlanBenchmarkSink = checksum
+}
+
 func BenchmarkDomainRoutingMapGoUpdate(b *testing.B) {
 	m := newBenchmarkDomainRoutingMap(b)
 	defer m.Close()
@@ -319,6 +334,198 @@ func benchmarkRoutingEntriesWithLpm() ([]uint32, []bpfMatchSet) {
 	}
 	values[0].Value[0] = 0
 	return keys, values
+}
+
+type benchmarkRoutingNativeRule struct {
+	matchType uint8
+	outbound  uint8
+	not       bool
+	mark      uint32
+	must      bool
+	prefixes  []netip.Prefix
+	ports     [][2]uint16
+	value     uint8
+	macs      [][6]byte
+}
+
+type benchmarkRoutingNativeLpmMapSpec struct {
+	index      uint32
+	flags      uint32
+	maxEntries uint32
+	keySize    uint32
+	valueSize  uint32
+	entries    []benchmarkRoutingNativeLpmMapEntry
+}
+
+type benchmarkRoutingNativeLpmMapEntry struct {
+	key   _bpfLpmKey
+	value uint32
+}
+
+func benchmarkRoutingNativePlanRules() []benchmarkRoutingNativeRule {
+	return []benchmarkRoutingNativeRule{
+		{
+			matchType: uint8(consts.MatchType_IpSet),
+			outbound:  uint8(consts.OutboundBlock),
+			prefixes: []netip.Prefix{
+				netip.MustParsePrefix("203.0.113.0/24"),
+				netip.MustParsePrefix("2001:db8::/48"),
+			},
+		},
+		{
+			matchType: uint8(consts.MatchType_SourceIpSet),
+			outbound:  uint8(consts.OutboundLogicalAnd),
+			prefixes: []netip.Prefix{
+				netip.MustParsePrefix("198.51.100.0/24"),
+				netip.MustParsePrefix("2001:db8:1::/48"),
+			},
+		},
+		{
+			matchType: uint8(consts.MatchType_Port),
+			outbound:  uint8(consts.OutboundDirect),
+			ports: [][2]uint16{
+				{80, 80},
+				{443, 443},
+				{8443, 8443},
+			},
+		},
+		{
+			matchType: uint8(consts.MatchType_L4Proto),
+			outbound:  uint8(consts.OutboundDirect),
+			value:     uint8(consts.L4ProtoType_TCP),
+		},
+		{
+			matchType: uint8(consts.MatchType_IpVersion),
+			outbound:  uint8(consts.OutboundDirect),
+			value:     uint8(consts.IpVersion_4),
+		},
+		{
+			matchType: uint8(consts.MatchType_Mac),
+			outbound:  uint8(consts.OutboundUserDefinedMin),
+			mark:      consts.TproxyMark,
+			must:      true,
+			macs:      [][6]byte{{0xaa, 0xbb, 0xcc, 0xdd, 0xee, 0xff}},
+		},
+	}
+}
+
+func buildBenchmarkRoutingNativePlan(rules []benchmarkRoutingNativeRule) ([]bpfMatchSet, []benchmarkRoutingNativeLpmMapSpec) {
+	routingEntries := make([]bpfMatchSet, 0, len(rules)+3)
+	lpmMaps := make([]benchmarkRoutingNativeLpmMapSpec, 0, 3)
+	for _, rule := range rules {
+		switch consts.MatchType(rule.matchType) {
+		case consts.MatchType_IpSet, consts.MatchType_SourceIpSet:
+			lpmIndex := uint32(len(lpmMaps))
+			entries := make([]benchmarkRoutingNativeLpmMapEntry, 0, len(rule.prefixes))
+			for _, prefix := range rule.prefixes {
+				entries = append(entries, benchmarkRoutingNativeLpmMapEntry{
+					key:   cidrToBpfLpmKey(prefix),
+					value: 1,
+				})
+			}
+			lpmMaps = append(lpmMaps, benchmarkRoutingNativeLpmMapSpec{
+				index:      lpmIndex,
+				flags:      unix.BPF_F_NO_PREALLOC,
+				maxEntries: 2048000,
+				keySize:    uint32(unsafe.Sizeof(_bpfLpmKey{})),
+				valueSize:  uint32(unsafe.Sizeof(uint32(0))),
+				entries:    entries,
+			})
+			matchSet := benchmarkRoutingNativeBaseMatchSet(rule)
+			binary.LittleEndian.PutUint32(matchSet.Value[:], lpmIndex)
+			routingEntries = append(routingEntries, matchSet)
+		case consts.MatchType_Mac:
+			lpmIndex := uint32(len(lpmMaps))
+			entries := make([]benchmarkRoutingNativeLpmMapEntry, 0, len(rule.macs))
+			for _, mac := range rule.macs {
+				entries = append(entries, benchmarkRoutingNativeLpmMapEntry{
+					key:   benchmarkMacToBpfLpmKey(mac),
+					value: 1,
+				})
+			}
+			lpmMaps = append(lpmMaps, benchmarkRoutingNativeLpmMapSpec{
+				index:      lpmIndex,
+				flags:      unix.BPF_F_NO_PREALLOC,
+				maxEntries: 2048000,
+				keySize:    uint32(unsafe.Sizeof(_bpfLpmKey{})),
+				valueSize:  uint32(unsafe.Sizeof(uint32(0))),
+				entries:    entries,
+			})
+			matchSet := benchmarkRoutingNativeBaseMatchSet(rule)
+			binary.LittleEndian.PutUint32(matchSet.Value[:], lpmIndex)
+			routingEntries = append(routingEntries, matchSet)
+		case consts.MatchType_Port, consts.MatchType_SourcePort:
+			for index, ports := range rule.ports {
+				matchSet := benchmarkRoutingNativeBaseMatchSet(rule)
+				if index+1 != len(rule.ports) {
+					matchSet.Outbound = uint8(consts.OutboundLogicalOr)
+				}
+				binary.LittleEndian.PutUint16(matchSet.Value[:2], ports[0])
+				binary.LittleEndian.PutUint16(matchSet.Value[2:4], ports[1])
+				routingEntries = append(routingEntries, matchSet)
+			}
+		case consts.MatchType_L4Proto, consts.MatchType_IpVersion, consts.MatchType_Dscp:
+			matchSet := benchmarkRoutingNativeBaseMatchSet(rule)
+			matchSet.Value[0] = rule.value
+			routingEntries = append(routingEntries, matchSet)
+		default:
+			routingEntries = append(routingEntries, benchmarkRoutingNativeBaseMatchSet(rule))
+		}
+	}
+	routingEntries = append(routingEntries, bpfMatchSet{
+		Type:     uint8(consts.MatchType_Fallback),
+		Outbound: uint8(consts.OutboundDirect),
+	})
+	return routingEntries, lpmMaps
+}
+
+func benchmarkRoutingNativeBaseMatchSet(rule benchmarkRoutingNativeRule) bpfMatchSet {
+	return bpfMatchSet{
+		Type:     rule.matchType,
+		Not:      rule.not,
+		Outbound: rule.outbound,
+		Must:     rule.must,
+		Mark:     rule.mark,
+	}
+}
+
+func benchmarkMacToBpfLpmKey(mac [6]byte) _bpfLpmKey {
+	var addr16 [16]byte
+	copy(addr16[10:], mac[:])
+	return cidrToBpfLpmKey(netip.PrefixFrom(netip.AddrFrom16(addr16), 128))
+}
+
+func benchmarkRoutingNativePlanChecksum(routingEntries []bpfMatchSet, lpmMaps []benchmarkRoutingNativeLpmMapSpec) uint64 {
+	out := uint64(len(routingEntries)) ^ (uint64(len(lpmMaps)) << 32)
+	for _, entry := range routingEntries {
+		out = out*1315423911 + uint64(entry.Type)
+		out = out*1315423911 + uint64(entry.Outbound)
+		out = out*1315423911 + uint64(entry.Mark)
+		if entry.Not {
+			out ^= 0x100
+		}
+		if entry.Must {
+			out ^= 0x200
+		}
+		for _, value := range entry.Value {
+			out = out*1315423911 + uint64(value)
+		}
+	}
+	for _, spec := range lpmMaps {
+		out = out*1315423911 + uint64(spec.index)
+		out = out*1315423911 + uint64(spec.flags)
+		out = out*1315423911 + uint64(spec.maxEntries)
+		out = out*1315423911 + uint64(spec.keySize)
+		out = out*1315423911 + uint64(spec.valueSize)
+		for _, entry := range spec.entries {
+			out = out*1315423911 + uint64(entry.key.PrefixLen)
+			out = out*1315423911 + uint64(entry.value)
+			for _, word := range entry.key.Data {
+				out = out*1315423911 + uint64(word)
+			}
+		}
+	}
+	return out
 }
 
 func benchmarkDomainRoutingEntry() ([4]uint32, bpfDomainRouting) {
