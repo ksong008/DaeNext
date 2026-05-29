@@ -319,19 +319,19 @@ func rebuildGoldenStage7DomainRoutingTracker(t *testing.T) any {
 	}
 
 	steps := make([]map[string]any, 0, 4)
-	if err := tracker.syncOwner(nil, "q=a.example|type=A|class=IN", ownerA); err != nil {
+	if err := tracker.syncOwner(nil, "q=a.example|type=A|class=IN", ownerA, nil); err != nil {
 		t.Fatalf("sync owner A: %v", err)
 	}
 	steps = append(steps, domainTrackerView("after_owner_a", tracker))
-	if err := tracker.syncOwner(nil, "q=b.example|type=A|class=IN", ownerB); err != nil {
+	if err := tracker.syncOwner(nil, "q=b.example|type=A|class=IN", ownerB, nil); err != nil {
 		t.Fatalf("sync owner B: %v", err)
 	}
 	steps = append(steps, domainTrackerView("after_owner_b", tracker))
-	if err := tracker.syncOwner(nil, "q=a.example|type=A|class=IN", domainRoutingOwnerSnapshot{}); err != nil {
+	if err := tracker.syncOwner(nil, "q=a.example|type=A|class=IN", domainRoutingOwnerSnapshot{}, nil); err != nil {
 		t.Fatalf("remove owner A: %v", err)
 	}
 	steps = append(steps, domainTrackerView("after_remove_owner_a", tracker))
-	if err := tracker.syncOwner(nil, "q=b.example|type=A|class=IN", ownerBReplace); err != nil {
+	if err := tracker.syncOwner(nil, "q=b.example|type=A|class=IN", ownerBReplace, nil); err != nil {
 		t.Fatalf("replace owner B: %v", err)
 	}
 	steps = append(steps, domainTrackerView("after_replace_owner_b", tracker))
@@ -789,13 +789,13 @@ func BenchmarkRebuildStage7DomainRoutingOwnerMerge(b *testing.B) {
 	b.ReportAllocs()
 	for i := 0; i < b.N; i++ {
 		tracker := newDomainRoutingTracker()
-		if err := tracker.syncOwner(nil, "a", ownerA); err != nil {
+		if err := tracker.syncOwner(nil, "a", ownerA, nil); err != nil {
 			b.Fatal(err)
 		}
-		if err := tracker.syncOwner(nil, "b", ownerB); err != nil {
+		if err := tracker.syncOwner(nil, "b", ownerB, nil); err != nil {
 			b.Fatal(err)
 		}
-		if err := tracker.syncOwner(nil, "a", domainRoutingOwnerSnapshot{}); err != nil {
+		if err := tracker.syncOwner(nil, "a", domainRoutingOwnerSnapshot{}, nil); err != nil {
 			b.Fatal(err)
 		}
 	}

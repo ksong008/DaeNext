@@ -130,10 +130,10 @@ func TestDomainRoutingTrackerKeepsStructuredOwnersSeparateOnRemove(t *testing.T)
 	snapshotClass3.bitmap.Bitmap[0] = 0x2
 	snapshotClass3.ips = map[[4]uint32]struct{}{ipKey: {}}
 
-	if err := tracker.syncOwner(nil, ownerINET, snapshotINET); err != nil {
+	if err := tracker.syncOwner(nil, ownerINET, snapshotINET, nil); err != nil {
 		t.Fatalf("syncOwner(INET): %v", err)
 	}
-	if err := tracker.syncOwner(nil, ownerClass3, snapshotClass3); err != nil {
+	if err := tracker.syncOwner(nil, ownerClass3, snapshotClass3, nil); err != nil {
 		t.Fatalf("syncOwner(class3): %v", err)
 	}
 
@@ -145,7 +145,7 @@ func TestDomainRoutingTrackerKeepsStructuredOwnersSeparateOnRemove(t *testing.T)
 		t.Fatalf("merged bitmap = %#x, want %#x", got, uint32(0x3))
 	}
 
-	if err := tracker.syncOwner(nil, ownerINET, domainRoutingOwnerSnapshot{}); err != nil {
+	if err := tracker.syncOwner(nil, ownerINET, domainRoutingOwnerSnapshot{}, nil); err != nil {
 		t.Fatalf("remove INET owner: %v", err)
 	}
 	if _, ok := tracker.owners[ownerINET]; ok {
