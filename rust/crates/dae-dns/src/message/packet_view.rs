@@ -61,6 +61,10 @@ impl<'a> DnsPacketView<'a> {
         self.answer_count as usize
     }
 
+    pub const fn answer_offset(&self) -> usize {
+        self.answer_offset
+    }
+
     pub fn questions(&self) -> DnsPacketQuestionIter<'a> {
         DnsPacketQuestionIter {
             packet: self.packet,

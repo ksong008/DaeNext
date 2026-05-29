@@ -3,9 +3,10 @@ use std::hint::black_box;
 use dae_dns::{
     DnsCacheEntry, DnsCacheKey, DnsCacheKeyView, DnsCacheStore, DnsMessage, DnsPacketAnswerView,
     DnsPacketView, DnsQuestion, DnsRequestOutboundIndex, DnsResponseOutboundIndex, RequestMatcher,
-    ResponseMatcher, build_doh_request, guard_synthetic_asis_lookup, parse_dns_cache_key_view,
-    validate_dns_packet_response_for_request_fast, validate_dns_response_for_request_fast,
-    validate_doh_response,
+    ResponseMatcher, build_doh_request, build_response_cache_plan_from_packet,
+    guard_synthetic_asis_lookup, parse_dns_cache_key_view,
+    restore_cached_response_for_packet_question, validate_dns_packet_response_for_request_fast,
+    validate_dns_response_for_request_fast, validate_doh_response,
 };
 use serde_json::json;
 
@@ -32,6 +33,16 @@ pub(crate) fn cases() -> Vec<BenchCase> {
             id: "dns/cache_ttl_lookup",
             default_iters: 10_000,
             run: bench_dns_cache_ttl_lookup,
+        },
+        BenchCase {
+            id: "dns/request_cache_hit_packet_view",
+            default_iters: 100_000,
+            run: bench_dns_request_cache_hit_packet_view,
+        },
+        BenchCase {
+            id: "dns/response_cache_plan_packet_view",
+            default_iters: 100_000,
+            run: bench_dns_response_cache_plan_packet_view,
         },
         BenchCase {
             id: "dns/doh_get_request",
@@ -263,6 +274,68 @@ fn bench_dns_cache_ttl_lookup(iters: u64, warmup: u64) -> Result<Measurement, St
     ))
 }
 
+fn bench_dns_request_cache_hit_packet_view(iters: u64, warmup: u64) -> Result<Measurement, String> {
+    const NOW: i64 = 1_700_000_000;
+    const QUERY: &[u8] = &[
+        0x12, 0x34, 0x01, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x07, b'e', b'x',
+        b'a', b'm', b'p', b'l', b'e', 0x03, b'c', b'o', b'm', 0x00, 0x00, 0x01, 0x00, 0x01,
+    ];
+    let response = dns_response_cache_plan_packet_fixture();
+    let plan = build_response_cache_plan_from_packet(NOW, &response, None)
+        .map_err(|err| err.to_string())?
+        .ok_or_else(|| "missing response cache plan".to_owned())?;
+    let mut store = DnsCacheStore::new(8);
+    store.insert_without_route_owner_key(NOW, plan.key, plan.entry);
+    let mut restored = Vec::with_capacity(response.len());
+    Ok(measure(
+        || {
+            let hit = restore_cached_response_for_packet_question(
+                black_box(&mut store),
+                black_box(NOW),
+                black_box(QUERY),
+                black_box(false),
+                black_box(&mut restored),
+            )
+            .expect("packet cache lookup")
+            .expect("packet cache hit");
+            black_box(hit.request_id as u64 ^ hit.response_len as u64 ^ restored[0] as u64)
+        },
+        iters,
+        warmup,
+    ))
+}
+
+fn bench_dns_response_cache_plan_packet_view(
+    iters: u64,
+    warmup: u64,
+) -> Result<Measurement, String> {
+    const NOW: i64 = 1_700_000_000;
+    let response = dns_response_cache_plan_packet_fixture();
+    let mut store = DnsCacheStore::new(8);
+    Ok(measure(
+        || {
+            let plan = build_response_cache_plan_from_packet(
+                black_box(NOW),
+                black_box(&response),
+                Some(0),
+            )
+            .expect("response cache plan")
+            .expect("cacheable response");
+            let checksum = plan.min_ttl as u64
+                ^ plan.answer_count as u64
+                ^ plan.ip_count as u64
+                ^ plan.client_ttl_zeroed as u64
+                ^ plan.entry.deadline_unix as u64
+                ^ plan.entry.original_deadline_unix as u64
+                ^ plan.entry.packed_response.len() as u64;
+            store.insert_without_route_owner_key(black_box(NOW), plan.key, plan.entry);
+            black_box(checksum ^ store.len() as u64)
+        },
+        iters,
+        warmup,
+    ))
+}
+
 fn bench_dns_doh_get_request(iters: u64, warmup: u64) -> Result<Measurement, String> {
     let payload = [0x12, 0x34, 0x56, 0x78];
     Ok(measure(
@@ -473,4 +546,13 @@ fn bench_dns_resolve_asis_guard(iters: u64, warmup: u64) -> Result<Measurement, 
         iters,
         warmup,
     ))
+}
+
+fn dns_response_cache_plan_packet_fixture() -> Vec<u8> {
+    vec![
+        0x12, 0x34, 0x81, 0x80, 0x00, 0x01, 0x00, 0x02, 0x00, 0x00, 0x00, 0x00, 0x07, b'e', b'x',
+        b'a', b'm', b'p', b'l', b'e', 0x03, b'c', b'o', b'm', 0x00, 0x00, 0x01, 0x00, 0x01, 0xc0,
+        0x0c, 0x00, 0x05, 0x00, 0x01, 0x00, 0x00, 0x00, 0x3c, 0x00, 0x02, 0xc0, 0x0c, 0xc0, 0x0c,
+        0x00, 0x01, 0x00, 0x01, 0x00, 0x00, 0x00, 0x78, 0x00, 0x04, 0xcb, 0x00, 0x71, 0x14,
+    ]
 }
