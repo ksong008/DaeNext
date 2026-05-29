@@ -877,9 +877,11 @@ func (c *ControlPlane) ChooseDialTarget(ctx context.Context, src netip.AddrPort,
 }
 
 type Listener struct {
-	tcpListener net.Listener
-	packetConn  net.PacketConn
-	port        uint16
+	tcpListener          net.Listener
+	packetConn           net.PacketConn
+	port                 uint16
+	listenSocketMapReady bool
+	listenSocketMapID    uint32
 }
 
 func (l *Listener) Close() error {
@@ -914,13 +916,8 @@ func (c *ControlPlane) Serve(readyChan chan<- bool, listener *Listener) (err err
 	}
 	var serveWg sync.WaitGroup
 	/// Serve.
-	// TCP socket.
-	if err := updateListenSocketMap(c.core.bpf.ListenSocketMap, consts.ZeroKey, tcpListener); err != nil {
-		return fmt.Errorf("update TCP listen socket map: %w", err)
-	}
-	// UDP socket.
-	if err := updateListenSocketMap(c.core.bpf.ListenSocketMap, consts.OneKey, udpConn); err != nil {
-		return fmt.Errorf("update UDP listen socket map: %w", err)
+	if err := c.updateListenSocketMapForListener(listener, tcpListener, udpConn); err != nil {
+		return err
 	}
 
 	sentReady = true
@@ -1049,6 +1046,12 @@ func (c *ControlPlane) Serve(readyChan chan<- bool, listener *Listener) (err err
 }
 
 func (c *ControlPlane) ListenAndServe(readyChan chan<- bool, port uint16) (listener *Listener, err error) {
+	if listener, err = c.listenAndServeViaRustAya(readyChan, port); err == nil {
+		return listener, nil
+	} else {
+		c.log.WithError(err).Debugln("Rust/Aya tproxy listener handoff failed; falling back to Go listener")
+	}
+
 	// Listen.
 	listenConfig := net.ListenConfig{
 		Control: func(network, address string, c syscall.RawConn) error {

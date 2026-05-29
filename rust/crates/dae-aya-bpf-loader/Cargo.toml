@@ -12,4 +12,5 @@ native-ebpf = ["dae-ebpf-support/aya-loader"]
 [dependencies]
 dae-ebpf-support.workspace = true
 fastrand.workspace = true
+libc.workspace = true
 serde_json.workspace = true
