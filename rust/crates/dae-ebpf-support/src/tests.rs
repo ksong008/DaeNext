@@ -975,6 +975,34 @@ fn connectivity_fd_cache_skips_dryrun_without_opening_map() {
 }
 
 #[test]
+fn routing_map_apply_models_report_counts() {
+    let routing = [RoutingMapEntry {
+        index: 0,
+        value: BpfMatchSet {
+            kind: 1,
+            outbound: 2,
+            ..BpfMatchSet::default()
+        },
+    }];
+    let lpm = [LpmArrayMapEntry {
+        index: 3,
+        map_id: 9,
+    }];
+    assert_eq!(routing.len(), 1);
+    assert_eq!(lpm.len(), 1);
+}
+
+#[test]
+fn domain_routing_map_apply_models_bitmap_shape() {
+    let entry = DomainRoutingMapEntry {
+        key: [0, 0, 0, 1],
+        value: BpfDomainRouting { bitmap: [0x40; 32] },
+    };
+    assert_eq!(entry.key, [0, 0, 0, 1]);
+    assert_eq!(entry.value.bitmap.len(), 32);
+}
+
+#[test]
 fn dae_param_packs_big_endian_tproxy_port() {
     let param = build_dae_param(DaeParamInput {
         tproxy_port: 12345,

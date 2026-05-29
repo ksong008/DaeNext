@@ -122,6 +122,8 @@ pub fn run_with_args(args: impl IntoIterator<Item = impl Into<String>>) -> Loade
         Some("cgroup-monitor") => run_cgroup_monitor_command(&args[1..]),
         Some("map-stats") => run_map_stats_command(&args[1..]),
         Some("connectivity-map") => run_connectivity_map_command(&args[1..]),
+        Some("domain-routing-map") => run_domain_routing_map_command(&args[1..]),
+        Some("routing-map") => run_routing_map_command(&args[1..]),
         Some("tc-attach") => run_tc_attach_command(&args[1..]),
         Some("tproxy-listener") => run_tproxy_listener_command(&args[1..]),
         Some("trace-loader") => run_trace_loader_command(&args[1..]),
@@ -161,6 +163,33 @@ fn run_connectivity_map_command(args: &[String]) -> LoaderOutput {
             "unsupported connectivity-map subcommand: {subcommand}"
         )),
         None => LoaderOutput::usage("missing connectivity-map subcommand"),
+    }
+}
+
+fn run_domain_routing_map_command(args: &[String]) -> LoaderOutput {
+    match args.first().map(String::as_str) {
+        Some("apply") if args.len() == 1 => LoaderOutput::usage(
+            "domain-routing-map apply requires the dae-aya-bpf-loader stdio entrypoint",
+        ),
+        Some("serve") if args.len() == 1 => LoaderOutput::usage(
+            "domain-routing-map serve requires the dae-aya-bpf-loader stdio entrypoint",
+        ),
+        Some(subcommand) => LoaderOutput::usage(format!(
+            "unsupported domain-routing-map subcommand: {subcommand}"
+        )),
+        None => LoaderOutput::usage("missing domain-routing-map subcommand"),
+    }
+}
+
+fn run_routing_map_command(args: &[String]) -> LoaderOutput {
+    match args.first().map(String::as_str) {
+        Some("apply") if args.len() == 1 => LoaderOutput::usage(
+            "routing-map apply requires the dae-aya-bpf-loader stdio entrypoint",
+        ),
+        Some(subcommand) => {
+            LoaderOutput::usage(format!("unsupported routing-map subcommand: {subcommand}"))
+        }
+        None => LoaderOutput::usage("missing routing-map subcommand"),
     }
 }
 
@@ -745,6 +774,247 @@ fn json_bool(value: Option<&Value>, name: &str) -> Result<bool, String> {
     value
         .and_then(Value::as_bool)
         .ok_or_else(|| format!("missing or non-bool connectivity-map field: {name}"))
+}
+
+pub fn run_routing_map_apply_json(input: &str) -> LoaderOutput {
+    let request = match parse_routing_map_apply_request(input) {
+        Ok(request) => request,
+        Err(err) => return LoaderOutput::usage(err),
+    };
+    match dae_ebpf_support::apply_routing_maps_by_id(
+        request.routing_map_id,
+        request.lpm_array_map_id,
+        &request.routing_entries,
+        &request.lpm_entries,
+    ) {
+        Ok(report) => LoaderOutput::ok(format!(
+            "{}\n",
+            json!({
+                "status": "pass",
+                "loader": "rust",
+                "scope": "routing-map-apply",
+                "routing_map_id": request.routing_map_id,
+                "lpm_array_map_id": request.lpm_array_map_id,
+                "routing_entries_updated": report.routing_entries_updated,
+                "lpm_entries_updated": report.lpm_entries_updated,
+            })
+        )),
+        Err(err) => LoaderOutput::error(format!("routing map apply failed: {err}")),
+    }
+}
+
+pub fn run_domain_routing_map_apply_json(input: &str) -> LoaderOutput {
+    let request = match parse_domain_routing_map_apply_request(input) {
+        Ok(request) => request,
+        Err(err) => return LoaderOutput::usage(err),
+    };
+    match dae_ebpf_support::apply_domain_routing_map_by_id(
+        request.map_id,
+        &request.updates,
+        &request.deletes,
+    ) {
+        Ok(report) => LoaderOutput::ok(format!(
+            "{}\n",
+            json!({
+                "status": "pass",
+                "loader": "rust",
+                "scope": "domain-routing-map-apply",
+                "map_id": request.map_id,
+                "entries_updated": report.entries_updated,
+                "entries_deleted": report.entries_deleted,
+            })
+        )),
+        Err(err) => LoaderOutput::error(format!("domain routing map apply failed: {err}")),
+    }
+}
+
+pub fn run_domain_routing_map_serve<R, W>(reader: R, mut writer: W) -> io::Result<()>
+where
+    R: BufRead,
+    W: Write,
+{
+    for line in reader.lines() {
+        let line = line?;
+        if line.trim().is_empty() {
+            continue;
+        }
+        let response = handle_domain_routing_map_serve_line(&line);
+        writer.write_all(response.as_bytes())?;
+        writer.write_all(b"\n")?;
+        writer.flush()?;
+    }
+    Ok(())
+}
+
+fn handle_domain_routing_map_serve_line(line: &str) -> String {
+    let output = run_domain_routing_map_apply_json(line);
+    if output.exit_code == 0 {
+        return output.stdout.trim_end().to_owned();
+    }
+    json!({
+        "status": "error",
+        "loader": "rust",
+        "scope": "domain-routing-map-apply",
+        "error": output.stderr.trim(),
+    })
+    .to_string()
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct RoutingMapApplyRequest {
+    routing_map_id: u32,
+    lpm_array_map_id: u32,
+    routing_entries: Vec<dae_ebpf_support::RoutingMapEntry>,
+    lpm_entries: Vec<dae_ebpf_support::LpmArrayMapEntry>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct DomainRoutingMapApplyRequest {
+    map_id: u32,
+    updates: Vec<dae_ebpf_support::DomainRoutingMapEntry>,
+    deletes: Vec<[u32; 4]>,
+}
+
+fn parse_routing_map_apply_request(input: &str) -> Result<RoutingMapApplyRequest, String> {
+    let value: Value =
+        serde_json::from_str(input).map_err(|err| format!("bad routing-map request: {err}"))?;
+    let object = value
+        .as_object()
+        .ok_or_else(|| "bad routing-map request: expected JSON object".to_owned())?;
+    let routing_entries = json_array(object.get("routing_entries"), "routing_entries")?
+        .iter()
+        .map(parse_routing_map_entry)
+        .collect::<Result<Vec<_>, _>>()?;
+    let lpm_entries = json_array(object.get("lpm_entries"), "lpm_entries")?
+        .iter()
+        .map(parse_lpm_array_map_entry)
+        .collect::<Result<Vec<_>, _>>()?;
+    Ok(RoutingMapApplyRequest {
+        routing_map_id: json_u32(object.get("routing_map_id"), "routing_map_id")?,
+        lpm_array_map_id: json_u32(object.get("lpm_array_map_id"), "lpm_array_map_id")?,
+        routing_entries,
+        lpm_entries,
+    })
+}
+
+fn parse_domain_routing_map_apply_request(
+    input: &str,
+) -> Result<DomainRoutingMapApplyRequest, String> {
+    let value: Value = serde_json::from_str(input)
+        .map_err(|err| format!("bad domain-routing-map request: {err}"))?;
+    let object = value
+        .as_object()
+        .ok_or_else(|| "bad domain-routing-map request: expected JSON object".to_owned())?;
+    let updates = json_array(object.get("updates"), "updates")?
+        .iter()
+        .map(parse_domain_routing_map_entry)
+        .collect::<Result<Vec<_>, _>>()?;
+    let deletes = json_array(object.get("deletes"), "deletes")?
+        .iter()
+        .map(|value| json_u32_array_4(Some(value), "deletes[]"))
+        .collect::<Result<Vec<_>, _>>()?;
+    Ok(DomainRoutingMapApplyRequest {
+        map_id: json_u32(object.get("map_id"), "map_id")?,
+        updates,
+        deletes,
+    })
+}
+
+fn parse_routing_map_entry(value: &Value) -> Result<dae_ebpf_support::RoutingMapEntry, String> {
+    let object = value
+        .as_object()
+        .ok_or_else(|| "bad routing entry: expected JSON object".to_owned())?;
+    Ok(dae_ebpf_support::RoutingMapEntry {
+        index: json_u32(object.get("index"), "routing_entries[].index")?,
+        value: parse_bpf_match_set(
+            object
+                .get("value")
+                .ok_or_else(|| "missing routing_entries[].value".to_owned())?,
+        )?,
+    })
+}
+
+fn parse_lpm_array_map_entry(value: &Value) -> Result<dae_ebpf_support::LpmArrayMapEntry, String> {
+    let object = value
+        .as_object()
+        .ok_or_else(|| "bad lpm entry: expected JSON object".to_owned())?;
+    Ok(dae_ebpf_support::LpmArrayMapEntry {
+        index: json_u32(object.get("index"), "lpm_entries[].index")?,
+        map_id: json_u32(object.get("map_id"), "lpm_entries[].map_id")?,
+    })
+}
+
+fn parse_domain_routing_map_entry(
+    value: &Value,
+) -> Result<dae_ebpf_support::DomainRoutingMapEntry, String> {
+    let object = value
+        .as_object()
+        .ok_or_else(|| "bad domain routing entry: expected JSON object".to_owned())?;
+    Ok(dae_ebpf_support::DomainRoutingMapEntry {
+        key: json_u32_array_4(object.get("key"), "updates[].key")?,
+        value: dae_ebpf_support::BpfDomainRouting {
+            bitmap: json_u32_array_32(object.get("bitmap"), "updates[].bitmap")?,
+        },
+    })
+}
+
+fn parse_bpf_match_set(value: &Value) -> Result<dae_ebpf_support::BpfMatchSet, String> {
+    let object = value
+        .as_object()
+        .ok_or_else(|| "bad match set: expected JSON object".to_owned())?;
+    Ok(dae_ebpf_support::BpfMatchSet {
+        value: json_u8_array_16(object.get("value"), "match_set.value")?,
+        not: u8::from(json_bool(object.get("not"), "match_set.not")?),
+        kind: json_u8(
+            object.get("type").or_else(|| object.get("kind")),
+            "match_set.type",
+        )?,
+        outbound: json_u8(object.get("outbound"), "match_set.outbound")?,
+        must: u8::from(json_bool(object.get("must"), "match_set.must")?),
+        mark: json_u32(object.get("mark"), "match_set.mark")?,
+    })
+}
+
+fn json_array<'a>(value: Option<&'a Value>, name: &str) -> Result<&'a Vec<Value>, String> {
+    value
+        .and_then(Value::as_array)
+        .ok_or_else(|| format!("missing or non-array field: {name}"))
+}
+
+fn json_u32_array_4(value: Option<&Value>, name: &str) -> Result<[u32; 4], String> {
+    let values = json_array(value, name)?;
+    if values.len() != 4 {
+        return Err(format!("bad {name}: got {} values, want 4", values.len()));
+    }
+    let mut out = [0_u32; 4];
+    for (index, value) in values.iter().enumerate() {
+        out[index] = json_u32(Some(value), name)?;
+    }
+    Ok(out)
+}
+
+fn json_u32_array_32(value: Option<&Value>, name: &str) -> Result<[u32; 32], String> {
+    let values = json_array(value, name)?;
+    if values.len() != 32 {
+        return Err(format!("bad {name}: got {} values, want 32", values.len()));
+    }
+    let mut out = [0_u32; 32];
+    for (index, value) in values.iter().enumerate() {
+        out[index] = json_u32(Some(value), name)?;
+    }
+    Ok(out)
+}
+
+fn json_u8_array_16(value: Option<&Value>, name: &str) -> Result<[u8; 16], String> {
+    let values = json_array(value, name)?;
+    if values.len() != 16 {
+        return Err(format!("bad {name}: got {} values, want 16", values.len()));
+    }
+    let mut out = [0_u8; 16];
+    for (index, value) in values.iter().enumerate() {
+        out[index] = json_u8(Some(value), name)?;
+    }
+    Ok(out)
 }
 
 #[cfg(feature = "native-ebpf")]
@@ -1789,6 +2059,65 @@ mod tests {
     }
 
     #[test]
+    fn routing_map_apply_parser_preserves_match_set_shape() {
+        let request = parse_routing_map_apply_request(
+            r#"{
+              "routing_map_id": 7,
+              "lpm_array_map_id": 8,
+              "lpm_entries": [{"index": 3, "map_id": 9}],
+              "routing_entries": [{
+                "index": 0,
+                "value": {
+                  "value": [1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0],
+                  "not": false,
+                  "type": 10,
+                  "outbound": 2,
+                  "must": true,
+                  "mark": 134217728
+                }
+              }]
+            }"#,
+        )
+        .unwrap();
+        assert_eq!(request.routing_map_id, 7);
+        assert_eq!(request.lpm_array_map_id, 8);
+        assert_eq!(request.lpm_entries[0].map_id, 9);
+        assert_eq!(request.routing_entries[0].value.value[0], 1);
+        assert_eq!(request.routing_entries[0].value.kind, 10);
+        assert_eq!(request.routing_entries[0].value.must, 1);
+
+        let output = run_with_args(["routing-map", "apply"]);
+        assert_eq!(output.exit_code, 2);
+        assert!(output.stderr.contains("stdio entrypoint"));
+    }
+
+    #[test]
+    fn domain_routing_map_apply_parser_preserves_bitmap_shape() {
+        let bitmap = vec![1_u32; 32];
+        let payload = json!({
+            "map_id": 7,
+            "updates": [{
+                "key": [0, 0, 65535, 1],
+                "bitmap": bitmap,
+            }],
+            "deletes": [[0, 0, 65535, 2]],
+        })
+        .to_string();
+        let request = parse_domain_routing_map_apply_request(&payload).unwrap();
+        assert_eq!(request.map_id, 7);
+        assert_eq!(request.updates[0].key, [0, 0, 65535, 1]);
+        assert_eq!(request.updates[0].value.bitmap[31], 1);
+        assert_eq!(request.deletes[0], [0, 0, 65535, 2]);
+
+        let output = run_with_args(["domain-routing-map", "apply"]);
+        assert_eq!(output.exit_code, 2);
+        assert!(output.stderr.contains("stdio entrypoint"));
+        let output = run_with_args(["domain-routing-map", "serve"]);
+        assert_eq!(output.exit_code, 2);
+        assert!(output.stderr.contains("stdio entrypoint"));
+    }
+
+    #[test]
     fn connectivity_map_serve_dryrun_skip_does_not_open_map() {
         let mut cache = dae_ebpf_support::ConnectivityMapFdCache::default();
         let response = handle_connectivity_map_serve_line(
@@ -1813,6 +2142,19 @@ mod tests {
                 .as_str()
                 .unwrap()
                 .contains("bad connectivity-map request")
+        );
+    }
+
+    #[test]
+    fn domain_routing_map_serve_reports_malformed_requests() {
+        let response = handle_domain_routing_map_serve_line("{bad-json");
+        let json: Value = serde_json::from_str(&response).unwrap();
+        assert_eq!(json["status"].as_str().unwrap(), "error");
+        assert!(
+            json["error"]
+                .as_str()
+                .unwrap()
+                .contains("bad domain-routing-map request")
         );
     }
 

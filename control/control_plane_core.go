@@ -58,6 +58,8 @@ type controlPlaneCore struct {
 
 	connectivityHelperMu sync.Mutex
 	connectivityHelper   *rustConnectivityHelper
+	domainHelperMu       sync.Mutex
+	domainHelper         *rustDomainRoutingHelper
 
 	kernelVersion *internal.Version
 
@@ -208,6 +210,13 @@ func (c *controlPlaneCore) Close() (err error) {
 	if e := c.closeRustConnectivityHelper(); e != nil {
 		err = e
 	}
+	if e := c.closeRustDomainRoutingHelper(); e != nil {
+		if err != nil {
+			err = fmt.Errorf("%w; %v", err, e)
+		} else {
+			err = e
+		}
+	}
 	// Invoke defer funcs in reverse order.
 	for i := len(c.deferFuncs) - 1; i >= 0; i-- {
 		if e := c.deferFuncs[i](); e != nil {
@@ -237,6 +246,26 @@ func (c *controlPlaneCore) closeRustConnectivityHelper() error {
 	helper := c.connectivityHelper
 	c.connectivityHelper = nil
 	c.connectivityHelperMu.Unlock()
+	if helper == nil {
+		return nil
+	}
+	return helper.Close()
+}
+
+func (c *controlPlaneCore) getRustDomainRoutingHelper() *rustDomainRoutingHelper {
+	c.domainHelperMu.Lock()
+	defer c.domainHelperMu.Unlock()
+	if c.domainHelper == nil {
+		c.domainHelper = newRustDomainRoutingHelper()
+	}
+	return c.domainHelper
+}
+
+func (c *controlPlaneCore) closeRustDomainRoutingHelper() error {
+	c.domainHelperMu.Lock()
+	helper := c.domainHelper
+	c.domainHelper = nil
+	c.domainHelperMu.Unlock()
 	if helper == nil {
 		return nil
 	}
@@ -917,7 +946,7 @@ func (c *controlPlaneCore) BatchUpdateDomainRouting(cache *DnsCache) error {
 		if err != nil {
 			return err
 		}
-		return c.domainRouting.syncOwner(c.bpf.DomainRoutingMap, cache.RouteOwnerKey, snapshot)
+		return c.domainRouting.syncOwner(c.bpf.DomainRoutingMap, cache.RouteOwnerKey, snapshot, c.updateDomainRoutingMapViaRustHelper)
 	}
 
 	ips := cache.cachedIPs()
@@ -929,15 +958,24 @@ func (c *controlPlaneCore) BatchUpdateDomainRouting(cache *DnsCache) error {
 	// Construct keys and vals, and BpfMapBatchUpdate.
 	var keys [][4]uint32
 	var vals []bpfDomainRouting
+	var updates []rustDomainRoutingMapUpdate
 	for _, ip := range ips {
 		ip6 := ip.As16()
-		keys = append(keys, common.Ipv6ByteSliceToUint32Array(ip6[:]))
+		key := common.Ipv6ByteSliceToUint32Array(ip6[:])
+		keys = append(keys, key)
 		r := bpfDomainRouting{}
 		if len(cache.DomainBitmap) != len(r.Bitmap) {
 			return fmt.Errorf("domain bitmap length not sync with kern program")
 		}
 		copy(r.Bitmap[:], cache.DomainBitmap)
 		vals = append(vals, r)
+		updates = append(updates, rustDomainRoutingMapUpdate{
+			Key:    key,
+			Bitmap: r.Bitmap,
+		})
+	}
+	if err := c.updateDomainRoutingMapViaRustHelper(c.bpf.DomainRoutingMap, updates, nil); err == nil {
+		return nil
 	}
 	if _, err := BpfMapBatchUpdate(c.bpf.DomainRoutingMap, keys, vals, &ebpf.BatchOptions{
 		ElemFlags: uint64(ebpf.UpdateAny),
@@ -950,7 +988,7 @@ func (c *controlPlaneCore) BatchUpdateDomainRouting(cache *DnsCache) error {
 // BatchRemoveDomainRouting remove bpf map domain_routing.
 func (c *controlPlaneCore) BatchRemoveDomainRouting(cache *DnsCache) error {
 	if c.domainRouting != nil && cache != nil && cache.RouteOwnerKey != "" {
-		return c.domainRouting.syncOwner(c.bpf.DomainRoutingMap, cache.RouteOwnerKey, domainRoutingOwnerSnapshot{})
+		return c.domainRouting.syncOwner(c.bpf.DomainRoutingMap, cache.RouteOwnerKey, domainRoutingOwnerSnapshot{}, c.updateDomainRoutingMapViaRustHelper)
 	}
 
 	ips := cache.cachedIPs()
@@ -964,6 +1002,9 @@ func (c *controlPlaneCore) BatchRemoveDomainRouting(cache *DnsCache) error {
 	for _, ip := range ips {
 		ip6 := ip.As16()
 		keys = append(keys, common.Ipv6ByteSliceToUint32Array(ip6[:]))
+	}
+	if err := c.updateDomainRoutingMapViaRustHelper(c.bpf.DomainRoutingMap, nil, keys); err == nil {
+		return nil
 	}
 	if _, err := BpfMapBatchDelete(c.bpf.DomainRoutingMap, keys); err != nil {
 		return err

@@ -5,6 +5,7 @@ use std::os::fd::{FromRawFd, OwnedFd};
 
 const BPF_MAP_UPDATE_ELEM: libc::c_uint = 2;
 const BPF_MAP_LOOKUP_ELEM: libc::c_uint = 1;
+const BPF_MAP_DELETE_ELEM: libc::c_uint = 3;
 const BPF_MAP_GET_NEXT_ID: libc::c_uint = 12;
 const BPF_MAP_GET_NEXT_KEY: libc::c_uint = 4;
 const BPF_MAP_GET_FD_BY_ID: libc::c_uint = 14;
@@ -126,6 +127,26 @@ pub fn update_map_elem_bytes(map_fd: RawFd, key: &[u8], value: &[u8]) -> io::Res
     Ok(())
 }
 
+pub fn delete_map_elem_bytes(map_fd: RawFd, key: &[u8]) -> io::Result<()> {
+    let attr = BpfMapDeleteElemAttr {
+        map_fd: map_fd as u32,
+        key: key.as_ptr() as u64,
+        ..BpfMapDeleteElemAttr::default()
+    };
+    let status = unsafe {
+        libc::syscall(
+            libc::SYS_bpf,
+            BPF_MAP_DELETE_ELEM,
+            &attr as *const BpfMapDeleteElemAttr,
+            size_of::<BpfMapDeleteElemAttr>(),
+        )
+    };
+    if status < 0 {
+        return Err(io::Error::last_os_error());
+    }
+    Ok(())
+}
+
 pub fn lookup_map_elem_bytes(map_fd: RawFd, key: &[u8], value: &mut [u8]) -> io::Result<()> {
     let attr = BpfMapLookupElemAttr {
         map_fd: map_fd as u32,
@@ -222,6 +243,14 @@ struct BpfMapUpdateElemAttr {
     key: u64,
     value: u64,
     flags: u64,
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default)]
+struct BpfMapDeleteElemAttr {
+    map_fd: u32,
+    padding: u32,
+    key: u64,
 }
 
 #[repr(C)]

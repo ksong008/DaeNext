@@ -270,9 +270,16 @@ func closeBpfProgram(p *ebpf.Program) error {
 }
 
 func runRustBpfLoaderHelperOutput(args ...string) (string, error) {
+	return runRustBpfLoaderHelperInput(nil, args...)
+}
+
+func runRustBpfLoaderHelperInput(input []byte, args ...string) (string, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), rustBpfLoaderHelperTimeout)
 	defer cancel()
 	cmd := exec.CommandContext(ctx, rustBpfLoaderHelperPath(), args...)
+	if input != nil {
+		cmd.Stdin = strings.NewReader(string(input))
+	}
 	out, err := cmd.CombinedOutput()
 	if ctx.Err() == context.DeadlineExceeded {
 		return "", fmt.Errorf("rust bpf loader helper timed out after %s", rustBpfLoaderHelperTimeout)
