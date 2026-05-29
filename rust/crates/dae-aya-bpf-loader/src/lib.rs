@@ -85,6 +85,20 @@ struct CgroupMonitorAttachPinOptions {
     cgroup_path: PathBuf,
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct TcAttachPinOptions {
+    program_root: PathBuf,
+    link_root: PathBuf,
+    program_name: String,
+    iface: String,
+    netns: Option<String>,
+    direction: dae_ebpf_support::TcAttachDirection,
+    priority: u16,
+    handle: u32,
+    backend: dae_ebpf_support::AttachBackend,
+    filter_name: Option<String>,
+}
+
 pub fn run_with_args(args: impl IntoIterator<Item = impl Into<String>>) -> LoaderOutput {
     let args = args.into_iter().map(Into::into).collect::<Vec<_>>();
     match args.first().map(String::as_str) {
@@ -92,6 +106,7 @@ pub fn run_with_args(args: impl IntoIterator<Item = impl Into<String>>) -> Loade
         Some("cgroup-monitor") => run_cgroup_monitor_command(&args[1..]),
         Some("map-stats") => run_map_stats_command(&args[1..]),
         Some("connectivity-map") => run_connectivity_map_command(&args[1..]),
+        Some("tc-attach") => run_tc_attach_command(&args[1..]),
         Some("trace-loader") => run_trace_loader_command(&args[1..]),
         Some("contract") if args.len() == 1 => run_contract(),
         Some("load-pin") => run_load_pin_command(&args[1..]),
@@ -126,6 +141,20 @@ fn run_connectivity_map_command(args: &[String]) -> LoaderOutput {
             "unsupported connectivity-map subcommand: {subcommand}"
         )),
         None => LoaderOutput::usage("missing connectivity-map subcommand"),
+    }
+}
+
+fn run_tc_attach_command(args: &[String]) -> LoaderOutput {
+    match args.first().map(String::as_str) {
+        Some("contract") if args.len() == 1 => run_tc_attach_contract(),
+        Some("attach-pin") => match parse_tc_attach_pin_options(&args[1..]) {
+            Ok(options) => run_tc_attach_pin(options),
+            Err(err) => LoaderOutput::usage(err),
+        },
+        Some(subcommand) => {
+            LoaderOutput::usage(format!("unsupported tc-attach subcommand: {subcommand}"))
+        }
+        None => LoaderOutput::usage("missing tc-attach subcommand"),
     }
 }
 
@@ -220,6 +249,47 @@ fn run_cgroup_monitor_contract() -> LoaderOutput {
     ))
 }
 
+fn run_tc_attach_contract() -> LoaderOutput {
+    let matrix = dae_ebpf_support::dae_tc_attach_matrix(dae_ebpf_support::DaeTcAttachMatrixInput {
+        object: "runtime-pinned-program".to_owned(),
+        lan_iface: "lan".to_owned(),
+        wan_iface: "wan".to_owned(),
+        host_iface: "dae0".to_owned(),
+        peer_iface: "dae0peer".to_owned(),
+        peer_netns: "daens".to_owned(),
+        section_prefix: dae_ebpf_support::TcAttachSectionPrefix::Tc,
+        link_layer: dae_ebpf_support::TcAttachLayer::L2,
+        flip: 0,
+        is_reload: false,
+    });
+    LoaderOutput::ok(format!(
+        "{}\n",
+        json!({
+            "name": "rust-tc-tcx-attach-pin-contract-v1",
+            "binary": "dae-aya-bpf-loader",
+            "scope": "Rust/Aya attaches pinned TC sched classifier programs for LAN/WAN/dae0/dae0peer and pins TCX bpf_link lifetime for Go control-plane cleanup",
+            "go_userspace_outbound_remains_authoritative": true,
+            "go_routing_dns_sniff_group_remain_authoritative": true,
+            "kernel_ebpf_program_rewrite": false,
+            "backend": "auto attempts tcx first and falls back to tc_netlink; explicit tcx is strict; explicit tc/tc_netlink uses tc_netlink",
+            "link_lifetime": {
+                "tcx": "pinned under --link-root/link; Go control-plane removes link root on close/reload cleanup",
+                "tc_netlink": "persistent kernel filter; Go control-plane deletes by priority/handle/name on close/reload cleanup"
+            },
+            "attach_matrix": matrix.iter().map(|line| json!({
+                "role": line.role.as_str(),
+                "filter_name": line.go_filter_name,
+                "program_name": line.native.program_name,
+                "direction": line.native.target.direction.as_str(),
+                "priority": line.native.priority,
+                "handle": line.native.handle,
+                "tcx_order": line.native.tcx_order.as_str(),
+                "netns": line.native.target.netns,
+            })).collect::<Vec<_>>(),
+        })
+    ))
+}
+
 fn run_cgroup_monitor_attach_pin(options: CgroupMonitorAttachPinOptions) -> LoaderOutput {
     let reports = match dae_ebpf_support::attach_pin_cgroup_monitor(
         dae_ebpf_support::PinnedCgroupAttachOptions {
@@ -253,6 +323,79 @@ fn run_cgroup_monitor_attach_pin(options: CgroupMonitorAttachPinOptions) -> Load
             })).collect::<Vec<_>>(),
         })
     ))
+}
+
+#[cfg(feature = "native-ebpf")]
+fn run_tc_attach_pin(options: TcAttachPinOptions) -> LoaderOutput {
+    let spec = dae_ebpf_support::TcNativeAttachSpec {
+        target: dae_ebpf_support::TcAttachTarget {
+            iface: options.iface.clone(),
+            netns: options.netns.clone(),
+            direction: options.direction,
+        },
+        object: "runtime-pinned-program".to_owned(),
+        section: options.program_name.clone(),
+        program_name: options.program_name.clone(),
+        priority: options.priority,
+        handle: options.handle,
+        tcx_order: dae_ebpf_support::TcxAttachOrder::from_go_tc_priority(options.priority),
+        protocol: dae_ebpf_support::ETH_P_ALL,
+        direct_action: true,
+        clsact_required: true,
+        netns_enter_required: options.netns.is_some(),
+        link_lifetime_owned_by_backend: true,
+    };
+    let report = match dae_ebpf_support::attach_pin_aya_sched_classifier(
+        dae_ebpf_support::PinnedTcAttachOptions {
+            program_root: &options.program_root,
+            link_root: &options.link_root,
+            spec: &spec,
+            requested_backend: options.backend,
+        },
+    ) {
+        Ok(report) => report,
+        Err(err) => return LoaderOutput::error(format!("tc attach-pin failed: {err}")),
+    };
+    LoaderOutput::ok(format!(
+        "{}\n",
+        json!({
+            "status": "pass",
+            "loader": "rust-aya",
+            "scope": "tc-tcx-attach-pin",
+            "program_root": options.program_root,
+            "link_root": options.link_root,
+            "filter_name": options.filter_name,
+            "requested_backend": report.requested_backend.as_str(),
+            "backend": report.backend.as_str(),
+            "fallback_used": report.fallback_used,
+            "fallback_error": report.fallback_error,
+            "program_id": report.program_id,
+            "program_name": report.program_name,
+            "program_path": report.program_path,
+            "iface": report.iface,
+            "netns": report.netns,
+            "netns_entered": report.netns_entered,
+            "direction": report.direction.as_str(),
+            "priority": report.priority,
+            "handle": report.handle,
+            "tcx_order": report.tcx_order.as_str(),
+            "tcx_query_revision": report.tcx_query_revision,
+            "tcx_order_verified": report.tcx_order_verified,
+            "tcx_program_order": report.tcx_program_order.iter().map(|entry| json!({
+                "id": entry.id,
+                "name": entry.name,
+                "tag": entry.tag,
+            })).collect::<Vec<_>>(),
+            "link_path": report.link_path,
+            "tc_filter_persistent": report.tc_filter_persistent,
+            "clsact_added_or_present": report.clsact_added_or_present,
+        })
+    ))
+}
+
+#[cfg(not(feature = "native-ebpf"))]
+fn run_tc_attach_pin(_options: TcAttachPinOptions) -> LoaderOutput {
+    LoaderOutput::error("tc-attach attach-pin requires dae-aya-bpf-loader feature native-ebpf")
 }
 
 fn run_load_pin_command(args: &[String]) -> LoaderOutput {
@@ -711,6 +854,109 @@ fn parse_cgroup_monitor_attach_pin_options(
     })
 }
 
+fn parse_tc_attach_pin_options(args: &[String]) -> Result<TcAttachPinOptions, String> {
+    let mut program_root = None;
+    let mut link_root = None;
+    let mut program_name = None;
+    let mut iface = None;
+    let mut netns = None;
+    let mut direction = None;
+    let mut priority = None;
+    let mut handle = None;
+    let mut backend = None;
+    let mut filter_name = None;
+    let mut iter = args.iter();
+    while let Some(arg) = iter.next() {
+        match arg.as_str() {
+            "--program-root" => {
+                program_root = Some(parse_next_path(
+                    &mut iter,
+                    "tc-attach attach-pin --program-root",
+                )?)
+            }
+            "--link-root" => {
+                link_root = Some(parse_next_path(
+                    &mut iter,
+                    "tc-attach attach-pin --link-root",
+                )?)
+            }
+            "--program-name" => {
+                program_name =
+                    Some(next_value(&mut iter, "tc-attach attach-pin --program-name")?.to_owned())
+            }
+            "--iface" => {
+                iface = Some(next_value(&mut iter, "tc-attach attach-pin --iface")?.to_owned())
+            }
+            "--netns" => {
+                netns = Some(next_value(&mut iter, "tc-attach attach-pin --netns")?.to_owned())
+            }
+            "--direction" => {
+                direction = Some(parse_tc_attach_direction(next_value(
+                    &mut iter,
+                    "tc-attach attach-pin --direction",
+                )?)?)
+            }
+            "--priority" => {
+                priority = Some(parse_next::<u16>(
+                    &mut iter,
+                    "tc-attach attach-pin --priority",
+                )?)
+            }
+            "--handle" => {
+                handle = Some(parse_next::<u32>(
+                    &mut iter,
+                    "tc-attach attach-pin --handle",
+                )?)
+            }
+            "--backend" => {
+                backend = Some(parse_attach_backend(next_value(
+                    &mut iter,
+                    "tc-attach attach-pin --backend",
+                )?)?)
+            }
+            "--filter-name" => {
+                filter_name =
+                    Some(next_value(&mut iter, "tc-attach attach-pin --filter-name")?.to_owned())
+            }
+            _ if arg.starts_with("--program-root=") => program_root = Some(parse_path_value(arg)?),
+            _ if arg.starts_with("--link-root=") => link_root = Some(parse_path_value(arg)?),
+            _ if arg.starts_with("--program-name=") => {
+                program_name = Some(split_value(arg)?.to_owned())
+            }
+            _ if arg.starts_with("--iface=") => iface = Some(split_value(arg)?.to_owned()),
+            _ if arg.starts_with("--netns=") => netns = Some(split_value(arg)?.to_owned()),
+            _ if arg.starts_with("--direction=") => {
+                direction = Some(parse_tc_attach_direction(split_value(arg)?)?)
+            }
+            _ if arg.starts_with("--priority=") => priority = Some(parse_value(arg)?),
+            _ if arg.starts_with("--handle=") => handle = Some(parse_value(arg)?),
+            _ if arg.starts_with("--backend=") => {
+                backend = Some(parse_attach_backend(split_value(arg)?)?)
+            }
+            _ if arg.starts_with("--filter-name=") => {
+                filter_name = Some(split_value(arg)?.to_owned())
+            }
+            _ => return Err(format!("unsupported tc-attach attach-pin argument: {arg}")),
+        }
+    }
+    Ok(TcAttachPinOptions {
+        program_root: program_root
+            .ok_or_else(|| "missing tc-attach attach-pin --program-root".to_owned())?,
+        link_root: link_root
+            .ok_or_else(|| "missing tc-attach attach-pin --link-root".to_owned())?,
+        program_name: program_name
+            .ok_or_else(|| "missing tc-attach attach-pin --program-name".to_owned())?,
+        iface: iface.ok_or_else(|| "missing tc-attach attach-pin --iface".to_owned())?,
+        netns,
+        direction: direction
+            .ok_or_else(|| "missing tc-attach attach-pin --direction".to_owned())?,
+        priority: priority.ok_or_else(|| "missing tc-attach attach-pin --priority".to_owned())?,
+        handle: handle.ok_or_else(|| "missing tc-attach attach-pin --handle".to_owned())?,
+        backend: backend.ok_or_else(|| "missing tc-attach attach-pin --backend".to_owned())?,
+        filter_name,
+    })
+}
+
 fn parse_connectivity_map_update_options(
     args: &[String],
 ) -> Result<ConnectivityMapUpdateOptions, String> {
@@ -866,6 +1112,23 @@ fn parse_bool(value: &str) -> Result<bool, String> {
     }
 }
 
+fn parse_tc_attach_direction(value: &str) -> Result<dae_ebpf_support::TcAttachDirection, String> {
+    match value.trim().to_ascii_lowercase().as_str() {
+        "ingress" => Ok(dae_ebpf_support::TcAttachDirection::Ingress),
+        "egress" => Ok(dae_ebpf_support::TcAttachDirection::Egress),
+        _ => Err(format!("bad tc attach direction: {value}")),
+    }
+}
+
+fn parse_attach_backend(value: &str) -> Result<dae_ebpf_support::AttachBackend, String> {
+    match value.trim().to_ascii_lowercase().as_str() {
+        "" | "auto" => Ok(dae_ebpf_support::AttachBackend::Auto),
+        "tcx" => Ok(dae_ebpf_support::AttachBackend::Tcx),
+        "tc" | "tc-netlink" | "tc_netlink" => Ok(dae_ebpf_support::AttachBackend::TcNetlink),
+        _ => Err(format!("bad tc attach backend: {value}")),
+    }
+}
+
 fn parse_mac(value: &str) -> Result<[u8; 6], String> {
     let mut mac = [0_u8; 6];
     let parts = value.split(':').collect::<Vec<_>>();
@@ -984,6 +1247,57 @@ mod tests {
                 program_root: PathBuf::from("/bpffs/programs"),
                 link_root: PathBuf::from("/bpffs/links"),
                 cgroup_path: PathBuf::from("/sys/fs/cgroup"),
+            }
+        );
+    }
+
+    #[test]
+    fn tc_attach_contract_declares_pinned_lifetime_and_matrix() {
+        let output = run_with_args(["tc-attach", "contract"]);
+        assert_eq!(output.exit_code, 0, "{}", output.stderr);
+        let json: Value = serde_json::from_str(&output.stdout).unwrap();
+        assert_eq!(
+            json["name"].as_str().unwrap(),
+            "rust-tc-tcx-attach-pin-contract-v1"
+        );
+        assert!(
+            json["go_routing_dns_sniff_group_remain_authoritative"]
+                .as_bool()
+                .unwrap()
+        );
+        assert_eq!(json["attach_matrix"].as_array().unwrap().len(), 6);
+    }
+
+    #[test]
+    fn tc_attach_pin_requires_full_spec() {
+        let output = run_with_args(["tc-attach", "attach-pin", "--program-root", "/bpffs/p"]);
+        assert_eq!(output.exit_code, 2);
+        assert!(output.stderr.contains("--link-root"));
+        let options = parse_tc_attach_pin_options(&[
+            "--program-root=/bpffs/programs".to_owned(),
+            "--link-root=/bpffs/tc-links/one".to_owned(),
+            "--program-name=tproxy_lan_ingress_l2".to_owned(),
+            "--iface=eth0".to_owned(),
+            "--direction=ingress".to_owned(),
+            "--priority=2".to_owned(),
+            "--handle=539164676".to_owned(),
+            "--backend=tc-netlink".to_owned(),
+            "--filter-name=dae_lan_ingress_l2".to_owned(),
+        ])
+        .unwrap();
+        assert_eq!(
+            options,
+            TcAttachPinOptions {
+                program_root: PathBuf::from("/bpffs/programs"),
+                link_root: PathBuf::from("/bpffs/tc-links/one"),
+                program_name: "tproxy_lan_ingress_l2".to_owned(),
+                iface: "eth0".to_owned(),
+                netns: None,
+                direction: dae_ebpf_support::TcAttachDirection::Ingress,
+                priority: 2,
+                handle: 539164676,
+                backend: dae_ebpf_support::AttachBackend::TcNetlink,
+                filter_name: Some("dae_lan_ingress_l2".to_owned()),
             }
         );
     }

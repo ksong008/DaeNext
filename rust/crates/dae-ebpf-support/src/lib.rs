@@ -51,6 +51,7 @@ pub use aya_loader::{
     AyaCgroupAttachDetachReport, AyaGoAdoptionPinReport, AyaPinnedObject, AyaTcAttachDetachReport,
     AyaTcxProgramOrderEntry, AyaTraceConfig, AyaTraceLoadPinReport, AyaTraceLoaderOptions,
     AyaUserspaceLoadReport, AyaUserspaceLoadedObject, AyaUserspaceLoaderOptions,
+    PinnedTcAttachOptions, PinnedTcAttachReport, attach_pin_aya_sched_classifier,
     aya_userspace_load_report, load_attach_aya_cgroup_program, load_attach_aya_sched_classifier,
     load_attach_detach_aya_cgroup_program, load_attach_detach_aya_sched_classifier,
     load_aya_userspace_object, load_pin_aya_trace_object, pin_aya_loaded_object_for_go_adoption,
