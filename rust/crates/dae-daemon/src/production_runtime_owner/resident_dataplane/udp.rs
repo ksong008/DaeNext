@@ -15,6 +15,7 @@ use serde_json::json;
 use super::super::PRODUCTION_NETNS;
 use super::super::udp_io::recv_udp_with_original_dst;
 use super::client::{VlessTlsClient, drive_tls_io_blocking, open_vless_tls_client};
+use super::dns::{ResidentDnsPlan, handle_resident_dns_udp};
 use super::events::append_event;
 use super::plan::ResidentProxyPlan;
 use super::vision::{VisionUnpadState, VisionUnpadder, vision_padding_block};
@@ -27,6 +28,7 @@ use super::{
 pub(super) fn resident_udp_loop(
     socket: std::net::UdpSocket,
     proxy: Arc<ResidentProxyPlan>,
+    dns: Arc<ResidentDnsPlan>,
     stop: Arc<AtomicBool>,
     event_file: PathBuf,
     event_lock: Arc<Mutex<()>>,
@@ -72,13 +74,20 @@ pub(super) fn resident_udp_loop(
             );
             continue;
         };
-        match exchange_vless_udp(&proxy, original_dst, &packet.payload) {
-            Ok(response) => match send_udp_reply(original_dst, packet.peer, &response) {
+        let exchange = if original_dst.port() == 53 {
+            handle_resident_dns_udp(&dns, original_dst, &packet.payload)
+                .map(|response| ("udp_dns_packet_finished", response))
+        } else {
+            exchange_vless_udp(&proxy, original_dst, &packet.payload)
+                .map(|response| ("udp_packet_finished", response))
+        };
+        match exchange {
+            Ok((event, response)) => match send_udp_reply(original_dst, packet.peer, &response) {
                 Ok(()) => append_event(
                     &event_file,
                     &event_lock,
                     json!({
-                        "event": "udp_packet_finished",
+                        "event": event,
                         "peer": packet.peer.to_string(),
                         "original_dst": original_dst.to_string(),
                         "request_len": packet.payload.len(),

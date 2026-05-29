@@ -6,6 +6,8 @@ use dae_core_types::OutboundIndex;
 use dae_datapath::TcpDialMode;
 use dae_outbound::vless::{VLESSLink, password_to_key};
 
+use super::dns::{ResidentDnsPlan, build_resident_dns_plan};
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 struct SelectedGroupNode {
     tag: String,
@@ -47,6 +49,7 @@ pub(super) struct ResidentDataplanePlan {
     pub(super) default_proxy: Option<ResidentProxyPlan>,
     pub(super) tcp_dial_mode: TcpDialMode,
     pub(super) sniffing_timeout: Duration,
+    pub(super) dns: ResidentDnsPlan,
 }
 
 pub(super) fn build_resident_dataplane_plan(
@@ -65,10 +68,12 @@ pub(super) fn build_resident_dataplane_plan(
             default_proxy: None,
             tcp_dial_mode: parse_tcp_dial_mode(config)?,
             sniffing_timeout: Duration::ZERO,
+            dns: ResidentDnsPlan::asis(config.global.so_mark_from_dae),
         });
     };
     let tcp_dial_mode = parse_tcp_dial_mode(config)?;
     let sniffing_timeout = tcp_sniffing_timeout(config, tcp_dial_mode);
+    let dns = build_resident_dns_plan(config)?;
     Ok(ResidentDataplanePlan {
         enabled: true,
         unsupported_reason: None,
@@ -76,6 +81,7 @@ pub(super) fn build_resident_dataplane_plan(
         default_proxy: Some(default_proxy),
         tcp_dial_mode,
         sniffing_timeout,
+        dns,
     })
 }
 
