@@ -8,6 +8,10 @@ const VERSION_TLS_1_0: [u8; 2] = [0x03, 0x01];
 const VERSION_TLS_1_2: [u8; 2] = [0x03, 0x03];
 
 pub fn sniff_tls(data: &[u8]) -> Result<String, SniffingError> {
+    sniff_tls_sni(data).map(str::to_owned)
+}
+
+pub fn sniff_tls_sni(data: &[u8]) -> Result<&str, SniffingError> {
     if data.len() < 5 {
         return Err(SniffingError::NotApplicable);
     }
@@ -25,7 +29,7 @@ pub fn sniff_tls(data: &[u8]) -> Result<String, SniffingError> {
     extract_sni_from_tls(&search[..length])
 }
 
-fn extract_sni_from_tls(search: &[u8]) -> Result<String, SniffingError> {
+fn extract_sni_from_tls(search: &[u8]) -> Result<&str, SniffingError> {
     let mut boundary = 39_usize;
     if search.len() < boundary {
         return Err(SniffingError::NotApplicable);
@@ -71,7 +75,7 @@ fn extract_sni_from_tls(search: &[u8]) -> Result<String, SniffingError> {
     find_sni_extension(&search[boundary - extensions_length..boundary])
 }
 
-fn find_sni_extension(search: &[u8]) -> Result<String, SniffingError> {
+fn find_sni_extension(search: &[u8]) -> Result<&str, SniffingError> {
     let mut i = 0_usize;
     loop {
         if i + 4 >= search.len() {
@@ -100,7 +104,7 @@ fn find_sni_extension(search: &[u8]) -> Result<String, SniffingError> {
                     }
                     let sni = std::str::from_utf8(&search[j + 3..j + 3 + indicator_len])
                         .map_err(|_| SniffingError::NotApplicable)?;
-                    return Ok(sni.trim_end_matches('.').to_owned());
+                    return Ok(sni.trim_end_matches('.'));
                 }
                 j += indicator_len;
             }

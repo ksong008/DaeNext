@@ -223,6 +223,25 @@ func BenchmarkAhocorasickSlimtrie(b *testing.B) {
 	runBenchmark(b, ahocorasick)
 }
 
+func BenchmarkAhocorasickSlimtrieBasicBitmap(b *testing.B) {
+	ahocorasick := NewAhocorasickSlimtrie(logrus.New(), consts.MaxMatchSetLen)
+	ahocorasick.AddSet(0, []string{"example.com"}, consts.RoutingDomainKey_Suffix)
+	ahocorasick.AddSet(1, []string{".child.example.com"}, consts.RoutingDomainKey_Suffix)
+	ahocorasick.AddSet(31, []string{"cdn"}, consts.RoutingDomainKey_Keyword)
+	ahocorasick.AddSet(32, []string{"exact.example.org"}, consts.RoutingDomainKey_Full)
+	ahocorasick.AddSet(63, []string{"^api[0-9]+\\.example\\.net$"}, consts.RoutingDomainKey_Regex)
+	if err := ahocorasick.Build(); err != nil {
+		b.Fatal(err)
+	}
+	b.ReportAllocs()
+	for i := 0; i < b.N; i++ {
+		bitmap := ahocorasick.MatchDomainBitmap("api12.example.net")
+		if len(bitmap) < 2 || bitmap[1] != 0x80000000 {
+			b.Fatalf("unexpected bitmap: %v", bitmap)
+		}
+	}
+}
+
 func runBenchmark(b *testing.B, matcher routing.DomainMatcher) {
 	rand.Seed(100)
 	for i := 0; i < b.N; i++ {

@@ -1,18 +1,26 @@
+use std::borrow::Cow;
+
 pub mod error;
 pub mod http;
 pub mod normalize;
 pub mod packet;
+pub mod stream;
 pub mod tls;
 
 pub use error::{SniffingError, is_sniffing_error};
-pub use http::sniff_http;
-pub use normalize::normalize_domain;
+pub use http::{sniff_http, sniff_http_host};
+pub use normalize::{normalize_domain, normalize_domain_cow};
 pub use packet::{PACKET_SNIFFER_MAX_BUFFERED_BYTES, PACKET_SNIFFER_MAX_CHUNKS, PacketSniffer};
-pub use tls::sniff_tls;
+pub use stream::TcpSniffBuffer;
+pub use tls::{sniff_tls, sniff_tls_sni};
 
 pub fn sniff_tcp(data: &[u8]) -> Result<String, SniffingError> {
-    match sniff_tls(data) {
-        Ok(domain) => return Ok(normalize_domain(&domain)),
+    sniff_tcp_cow(data).map(Cow::into_owned)
+}
+
+pub fn sniff_tcp_cow(data: &[u8]) -> Result<Cow<'_, str>, SniffingError> {
+    match sniff_tls_sni(data) {
+        Ok(domain) => return Ok(normalize_domain_cow(domain)),
         Err(SniffingError::NotApplicable) => {}
         Err(SniffingError::NeedMore) => {
             return Err(SniffingError::Message(
@@ -23,12 +31,13 @@ pub fn sniff_tcp(data: &[u8]) -> Result<String, SniffingError> {
         Err(err) => return Err(err),
     }
 
-    sniff_http(data).map(|domain| normalize_domain(&domain))
+    sniff_http_host(data).map(normalize_domain_cow)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::borrow::Cow;
 
     #[test]
     fn sniffing_basic_matches_golden_fixture() {
@@ -72,6 +81,21 @@ mod tests {
                 name => panic!("unexpected sniffing fixture case: {name}"),
             }
         }
+    }
+
+    #[test]
+    fn borrowed_http_hot_path_and_tcp_buffer_preserve_first_payload() {
+        let input = b"GET / HTTP/1.1\r\nHost:example.com\r\n\r\n";
+        let got = sniff_tcp_cow(input).unwrap();
+        assert!(matches!(got, Cow::Borrowed("example.com")));
+
+        let mut buffer = TcpSniffBuffer::new(input);
+        assert_eq!(buffer.sniff_tcp().unwrap(), "example.com");
+        assert_eq!(buffer.data_view(), input);
+
+        let mut copied = buffer.data();
+        copied[0] = b'P';
+        assert_eq!(buffer.data_view()[0], b'G');
     }
 
     fn decode_hex(input: &str) -> Vec<u8> {

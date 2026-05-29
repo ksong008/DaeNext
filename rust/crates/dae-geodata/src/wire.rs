@@ -3,6 +3,10 @@ use std::io::Read;
 use crate::GeoDataError;
 
 pub fn decode_entry_bytes(data: &[u8], code: &str) -> Result<Vec<u8>, GeoDataError> {
+    decode_entry_view_bytes(data, code).map(<[u8]>::to_vec)
+}
+
+pub fn decode_entry_view_bytes<'a>(data: &'a [u8], code: &str) -> Result<&'a [u8], GeoDataError> {
     let mut input = data;
     while !input.is_empty() {
         let tag = read_varint(&mut input)?;
@@ -10,8 +14,8 @@ pub fn decode_entry_bytes(data: &[u8], code: &str) -> Result<Vec<u8>, GeoDataErr
             return Err(GeoDataError::InvalidGeodataFile);
         }
         let entry = read_length_delimited(&mut input)?;
-        if country_code(entry)?.eq_ignore_ascii_case(code) {
-            return Ok(entry.to_vec());
+        if country_code_eq_ignore_ascii_case(entry, code)? {
+            return Ok(entry);
         }
     }
 
@@ -54,17 +58,25 @@ pub fn entries_from_list(data: &[u8]) -> Result<Vec<Vec<u8>>, GeoDataError> {
 }
 
 pub fn country_code(entry: &[u8]) -> Result<String, GeoDataError> {
+    country_code_view(entry).map(str::to_owned)
+}
+
+pub fn country_code_view(entry: &[u8]) -> Result<&str, GeoDataError> {
     let mut input = entry;
     while !input.is_empty() {
         let tag = read_varint(&mut input)?;
         let field = tag >> 3;
         let wire_type = tag & 0x07;
         if field == 1 && wire_type == 2 {
-            return string(read_length_delimited(&mut input));
+            return string_view(read_length_delimited(&mut input));
         }
         skip_field(wire_type, &mut input)?;
     }
-    Ok(String::new())
+    Ok("")
+}
+
+pub fn country_code_eq_ignore_ascii_case(entry: &[u8], code: &str) -> Result<bool, GeoDataError> {
+    Ok(country_code_view(entry)?.eq_ignore_ascii_case(code))
 }
 
 pub fn read_varint(input: &mut &[u8]) -> Result<u64, GeoDataError> {
@@ -93,10 +105,12 @@ pub fn read_length_delimited<'a>(input: &mut &'a [u8]) -> Result<&'a [u8], GeoDa
 }
 
 pub fn string(data: Result<&[u8], GeoDataError>) -> Result<String, GeoDataError> {
+    string_view(data).map(str::to_owned)
+}
+
+pub fn string_view(data: Result<&[u8], GeoDataError>) -> Result<&str, GeoDataError> {
     let data = data?;
-    std::str::from_utf8(data)
-        .map(str::to_owned)
-        .map_err(|_| GeoDataError::InvalidUtf8)
+    std::str::from_utf8(data).map_err(|_| GeoDataError::InvalidUtf8)
 }
 
 pub fn skip_field(wire_type: u64, input: &mut &[u8]) -> Result<(), GeoDataError> {
