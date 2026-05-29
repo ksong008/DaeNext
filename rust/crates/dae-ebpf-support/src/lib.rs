@@ -91,8 +91,10 @@ pub use param_object::{
     write_param_aware_object,
 };
 pub use routing_maps::{
-    DomainRoutingMapApplyReport, DomainRoutingMapEntry, LpmArrayMapEntry, RoutingMapApplyReport,
-    RoutingMapEntry, apply_domain_routing_map_by_id, apply_routing_maps_by_id,
+    BpfLpmKey, DomainRoutingMapApplyReport, DomainRoutingMapEntry, LpmArrayMapEntry,
+    LpmMapBuildSpec, LpmMapEntry, RoutingMapApplyReport, RoutingMapEntry,
+    apply_domain_routing_map_by_id, apply_routing_maps_by_id,
+    apply_routing_maps_with_lpm_build_by_id,
 };
 pub use runtime_maps::{
     RuntimeMapInfo, count_map_entries_by_fd, count_map_entries_by_id, delete_map_elem_bytes,

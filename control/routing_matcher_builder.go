@@ -323,7 +323,14 @@ func (b *RoutingMatcherBuilder) BuildKernspace(log *logrus.Logger) (err error) {
 		return fmt.Errorf("fallback rule MUST be the last")
 	}
 
-	// Build LPM inner maps before choosing the writer backend.
+	if err := b.updateKernelRoutingMapsViaRustHelper(); err == nil {
+		log.Infof("Routing match set len: %v/%v", len(b.rules), consts.MaxMatchSetLen)
+		return nil
+	} else {
+		log.Debugf("Rust routing map writer unavailable, falling back to Go writer: %v", err)
+	}
+
+	// Build LPM inner maps in Go only when the Rust writer is unavailable.
 	var lpmMaps []*ebpf.Map
 	defer func() {
 		for _, m := range lpmMaps {
@@ -342,13 +349,6 @@ func (b *RoutingMatcherBuilder) BuildKernspace(log *logrus.Logger) (err error) {
 			return fmt.Errorf("newLpmMap: %w", err)
 		}
 		lpmMaps = append(lpmMaps, m)
-	}
-
-	if err := b.updateKernelRoutingMapsViaRustHelper(lpmMaps); err == nil {
-		log.Infof("Routing match set len: %v/%v", len(b.rules), consts.MaxMatchSetLen)
-		return nil
-	} else {
-		log.Debugf("Rust routing map writer unavailable, falling back to Go writer: %v", err)
 	}
 
 	// Update lpm_array_map. We cannot invoke BpfMapBatchUpdate when value is ebpf.Map.
