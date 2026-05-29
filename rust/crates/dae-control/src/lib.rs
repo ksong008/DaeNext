@@ -1,6 +1,7 @@
 pub mod connectivity_owned;
 pub mod domain_routing;
 pub mod reload;
+pub mod routing_native;
 pub mod runtime_deps;
 
 #[cfg(test)]
@@ -57,4 +58,9 @@ pub use domain_routing::{
     ip_to_key, parse_ip_key,
 };
 pub use reload::{CoreFlip, ReloadCoreState};
+pub use routing_native::{
+    BPF_F_NO_PREALLOC, DEFAULT_LPM_MAX_ENTRIES, LpmMapTemplate, MAX_LPM_ARRAY_ENTRIES,
+    RoutingNativeBuildPlan, RoutingNativeFallback, RoutingNativeMatch, RoutingNativePlanError,
+    RoutingNativeRule, build_routing_native_plan, ip_prefix_to_bpf_lpm_key,
+};
 pub use runtime_deps::{EnvironmentGate, RuntimeDependencyPlan};
