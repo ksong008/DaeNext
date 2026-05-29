@@ -1,5 +1,10 @@
 use std::hint::black_box;
 
+use dae_control::{
+    LpmMapTemplate, RoutingNativeFallback, RoutingNativeMatch, RoutingNativeRule,
+    build_routing_native_plan,
+};
+use dae_core_types::OutboundIndex;
 use dae_routing::{DomainKey, DomainMatcher, IpPrefix, Query, RoutingMatcher};
 use serde_json::Value;
 
@@ -21,6 +26,11 @@ pub(crate) fn cases() -> Vec<BenchCase> {
             id: "routing/userspace_ip_port_match",
             default_iters: 100_000,
             run: bench_routing_userspace_ip_port_match,
+        },
+        BenchCase {
+            id: "routing/lpm_native_plan_build",
+            default_iters: 100_000,
+            run: bench_routing_lpm_native_plan_build,
         },
     ]
 }
@@ -79,6 +89,25 @@ fn bench_routing_userspace_ip_port_match(iters: u64, warmup: u64) -> Result<Meas
     ))
 }
 
+fn bench_routing_lpm_native_plan_build(iters: u64, warmup: u64) -> Result<Measurement, String> {
+    let rules = benchmark_native_plan_rules()?;
+    let fallback = RoutingNativeFallback::new(OutboundIndex::DIRECT);
+    let template = LpmMapTemplate::default();
+    Ok(measure(
+        || {
+            let plan = build_routing_native_plan(
+                black_box(rules.as_slice()),
+                black_box(fallback),
+                black_box(template),
+            )
+            .expect("routing native plan");
+            black_box(plan.checksum())
+        },
+        iters,
+        warmup,
+    ))
+}
+
 fn build_domain_matcher() -> Result<DomainMatcher, String> {
     let fixture = dae_golden::load_json("routing/domain_matcher/basic_bitmap.json")
         .map_err(|err| err.to_string())?;
@@ -102,4 +131,34 @@ fn string_array(value: &Value) -> Vec<String> {
         .iter()
         .map(|value| value.as_str().unwrap().to_owned())
         .collect()
+}
+
+fn benchmark_native_plan_rules() -> Result<Vec<RoutingNativeRule>, String> {
+    Ok(vec![
+        RoutingNativeRule::new(
+            RoutingNativeMatch::IpSet(vec![
+                IpPrefix::parse("203.0.113.0/24").map_err(|err| err.to_string())?,
+                IpPrefix::parse("2001:db8::/48").map_err(|err| err.to_string())?,
+            ]),
+            OutboundIndex::BLOCK,
+        ),
+        RoutingNativeRule::new(
+            RoutingNativeMatch::SourceIpSet(vec![
+                IpPrefix::parse("198.51.100.0/24").map_err(|err| err.to_string())?,
+                IpPrefix::parse("2001:db8:1::/48").map_err(|err| err.to_string())?,
+            ]),
+            OutboundIndex::LOGICAL_AND,
+        ),
+        RoutingNativeRule::new(
+            RoutingNativeMatch::Port(vec![(80, 80), (443, 443), (8443, 8443)]),
+            OutboundIndex::DIRECT,
+        ),
+        RoutingNativeRule::new(RoutingNativeMatch::L4Proto(1), OutboundIndex::DIRECT),
+        RoutingNativeRule::new(RoutingNativeMatch::IpVersion(1), OutboundIndex::DIRECT),
+        RoutingNativeRule::new(
+            RoutingNativeMatch::Mac(vec![[0xaa, 0xbb, 0xcc, 0xdd, 0xee, 0xff]]),
+            OutboundIndex(2),
+        )
+        .with_flags(false, 0x0800_0000, true),
+    ])
 }
