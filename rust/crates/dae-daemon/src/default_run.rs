@@ -276,12 +276,43 @@ pub fn run_default_optin_report(options: &RunOptions, version: &str) -> Result<V
         product_chain_recertification["resident_default_daemon_switch_ready"]
             .as_bool()
             .unwrap_or(false);
+    let default_daemon_live_matrix = default_daemon_live_matrix_json(
+        options.listener_smoke,
+        listener_smoke_passed,
+        options.reload_smoke,
+        reload_smoke_passed,
+        production_runtime_owner_executed,
+        production_runtime_owner_passed,
+        production_runtime_active_tcp_executed,
+        production_runtime_active_tcp_passed,
+        active_tcp_relay_executed,
+        active_tcp_relay_passed,
+        active_tcp_relay_benchmark_recorded,
+        route_dial_tcp_magic_network_observed,
+        production_runtime_active_udp_executed,
+        production_runtime_active_udp_passed,
+        active_udp_admitted,
+        active_udp_benchmark_recorded,
+        production_runtime_active_dns_executed,
+        production_runtime_active_dns_passed,
+        active_dns_admitted,
+        active_dns_benchmark_recorded,
+        reload_runtime_parity_executed,
+        reload_runtime_parity_admitted,
+        options.matched_default_benchmark.execute,
+        matched_benchmark_recorded,
+        bpf_go_fallback_retired,
+    );
+    let default_daemon_live_matrix_complete = default_daemon_live_matrix["matrix_complete"]
+        .as_bool()
+        .unwrap_or(false);
     let release_product_chain_live_gate = release_product_chain_live_gate_json(
         production_dataplane_admitted,
         reload_runtime_parity_admitted,
         matched_benchmark_recorded,
         bpf_go_fallback_retired,
         true_rust_default_daemon_admitted,
+        default_daemon_live_matrix_complete,
         product_chain_recertification_executed,
         product_chain_recertification_clean,
         default_path_mutation_allowed,
@@ -454,6 +485,7 @@ pub fn run_default_optin_report(options: &RunOptions, version: &str) -> Result<V
     report["go_fallback_required"] = product_chain_recertification["go_fallback_required"].clone();
     report["go_fallback_retired"] = product_chain_recertification["go_fallback_retired"].clone();
     report["product_chain_recertification"] = product_chain_recertification.clone();
+    report["default_daemon_live_matrix"] = default_daemon_live_matrix;
     report["release_product_chain_live_gate"] = release_product_chain_live_gate;
     report["release_gate_open"] = json!(release_gate_open);
     for key in [
@@ -651,12 +683,165 @@ fn derived_support_root(prefix: &str, root: &Path) -> PathBuf {
 }
 
 #[allow(clippy::too_many_arguments)]
+fn default_daemon_live_matrix_json(
+    listener_smoke_executed: bool,
+    listener_smoke_passed: bool,
+    reload_owner_handoff_executed: bool,
+    reload_owner_handoff_passed: bool,
+    production_runtime_owner_executed: bool,
+    production_runtime_owner_passed: bool,
+    production_runtime_active_tcp_executed: bool,
+    production_runtime_active_tcp_passed: bool,
+    active_tcp_relay_executed: bool,
+    active_tcp_relay_passed: bool,
+    active_tcp_relay_benchmark_recorded: bool,
+    route_dial_tcp_magic_network_observed: bool,
+    production_runtime_active_udp_executed: bool,
+    production_runtime_active_udp_passed: bool,
+    active_udp_admitted: bool,
+    active_udp_benchmark_recorded: bool,
+    production_runtime_active_dns_executed: bool,
+    production_runtime_active_dns_passed: bool,
+    active_dns_admitted: bool,
+    active_dns_benchmark_recorded: bool,
+    reload_runtime_parity_executed: bool,
+    reload_runtime_parity_admitted: bool,
+    matched_default_benchmark_executed: bool,
+    matched_default_benchmark_recorded: bool,
+    bpf_go_fallback_retired: bool,
+) -> Value {
+    let rows = vec![
+        live_matrix_row_json(
+            "listener-loopback-smoke",
+            listener_smoke_executed,
+            listener_smoke_passed,
+            "TCP and UDP loopback listener smoke must pass before any daemon default switch",
+            "run --exit-after-ready keeps listener smoke enabled by default",
+        ),
+        live_matrix_row_json(
+            "reload-owner-handoff-smoke",
+            reload_owner_handoff_executed,
+            reload_owner_handoff_passed,
+            "non-production reload owner handoff smoke must pass before production reload evidence is considered",
+            "run --exit-after-ready keeps reload smoke enabled by default",
+        ),
+        live_matrix_row_json(
+            "production-runtime-owner",
+            production_runtime_owner_executed,
+            production_runtime_owner_passed,
+            "daemon-owned production runtime owner smoke must pass under the candidate root",
+            "run with --execute-production-runtime-owner and --ack-root-gate",
+        ),
+        live_matrix_row_json(
+            "active-tcp-ingress",
+            production_runtime_active_tcp_executed,
+            production_runtime_active_tcp_passed,
+            "active TCP tproxy ingress must reach the transparent listener",
+            "run with production runtime active TCP options and root/BPF/netns access",
+        ),
+        live_matrix_row_json(
+            "active-tcp-relay-magic-network",
+            active_tcp_relay_executed,
+            active_tcp_relay_passed
+                && active_tcp_relay_benchmark_recorded
+                && route_dial_tcp_magic_network_observed,
+            "active TCP relay must pass with benchmark evidence and MagicNetwork mark/mptcp observation",
+            "run with active TCP relay benchmark enabled",
+        ),
+        live_matrix_row_json(
+            "active-udp-datapath",
+            production_runtime_active_udp_executed,
+            production_runtime_active_udp_passed
+                && active_udp_admitted
+                && active_udp_benchmark_recorded,
+            "active UDP datapath must pass with admission and benchmark evidence",
+            "run with active UDP tproxy options and benchmark iterations",
+        ),
+        live_matrix_row_json(
+            "active-dns-udp53",
+            production_runtime_active_dns_executed,
+            production_runtime_active_dns_passed
+                && active_dns_admitted
+                && active_dns_benchmark_recorded,
+            "DNS UDP/53 path must pass with upstream/cache/domain-routing evidence and benchmark record",
+            "run with active DNS target/upstream options and benchmark iterations",
+        ),
+        live_matrix_row_json(
+            "production-reload-runtime-parity",
+            reload_runtime_parity_executed,
+            reload_runtime_parity_admitted,
+            "production reload/runtime parity must prove listener reuse, BPF owner handoff, DNS cache guard, bounded close, RuntimeOverview parity, and scoped cleanup",
+            "run with production reload/runtime parity enabled",
+        ),
+        live_matrix_row_json(
+            "matched-go-rust-default-benchmark",
+            matched_default_benchmark_executed,
+            matched_default_benchmark_recorded,
+            "matched Go default daemon vs true Rust default daemon benchmark must be recorded on the same host/config/corpus",
+            "run with --execute-matched-default-benchmark and --ack-root-gate",
+        ),
+        live_matrix_row_json(
+            "bpf-go-fallback-retirement",
+            production_runtime_owner_executed,
+            bpf_go_fallback_retired,
+            "BPF-side Go fallback retirement evidence must be present without restoring the Go BPF loader",
+            "run production runtime owner gate with BPF fallback retirement evidence",
+        ),
+    ];
+    let matrix_complete = rows
+        .iter()
+        .all(|row| row["recorded"].as_bool().unwrap_or(false));
+    let remaining = rows
+        .iter()
+        .filter(|row| !row["recorded"].as_bool().unwrap_or(false))
+        .filter_map(|row| row["area"].as_str())
+        .collect::<Vec<_>>();
+
+    json!({
+        "schema": "default-daemon-live-matrix-v1",
+        "formal_surface": "stage7-default-daemon-live-matrix",
+        "matrix_complete": matrix_complete,
+        "release_gate_input": true,
+        "default_switch_allowed_by_this_matrix": false,
+        "host_write_performed": false,
+        "default_path_mutation_performed": false,
+        "go_runtime_outbound_fallback_required_until_release_gate": true,
+        "rows": rows,
+        "remaining_rows": remaining,
+        "source": [
+            "DAEX_RUST_PERFORMANCE_OPTIMIZATION_PLAN_2026-05-24.md:stage7",
+            "DAEX_RUST_REBUILD_PLAN_2026-05-16.md:stage22",
+            "DAENEW_RUST_REBUILD_MEMO_2026-05-16.md:33.8"
+        ],
+    })
+}
+
+fn live_matrix_row_json(
+    area: &'static str,
+    executed: bool,
+    passed: bool,
+    required_evidence: &'static str,
+    rerun_hint: &'static str,
+) -> Value {
+    json!({
+        "area": area,
+        "executed": executed,
+        "passed": passed,
+        "recorded": executed && passed,
+        "status": if executed && passed { "pass" } else if executed { "fail" } else { "not-executed" },
+        "required_evidence": required_evidence,
+        "rerun_hint": rerun_hint,
+    })
+}
+
+#[allow(clippy::too_many_arguments)]
 fn release_product_chain_live_gate_json(
     production_dataplane_admitted: bool,
     reload_runtime_parity_admitted: bool,
     matched_benchmark_recorded: bool,
     bpf_go_fallback_retired: bool,
     true_rust_default_daemon_admitted: bool,
+    default_daemon_live_matrix_complete: bool,
     product_chain_recertification_executed: bool,
     product_chain_recertification_clean: bool,
     default_path_mutation_allowed: bool,
@@ -680,7 +865,8 @@ fn release_product_chain_live_gate_json(
         ["datapath_outbound_ebpf_deep_area"]["aya_loader_direction_preserved"]
         .as_bool()
         .unwrap_or(false);
-    let full_live_matrix_admitted = production_dataplane_admitted
+    let full_live_matrix_admitted = default_daemon_live_matrix_complete
+        && production_dataplane_admitted
         && reload_runtime_parity_admitted
         && matched_benchmark_recorded
         && bpf_go_fallback_retired
@@ -781,6 +967,7 @@ fn release_product_chain_live_gate_json(
         "matched_go_rust_default_daemon_benchmark_recorded": matched_benchmark_recorded,
         "bpf_go_fallback_retired": bpf_go_fallback_retired,
         "true_rust_default_daemon_admitted": true_rust_default_daemon_admitted,
+        "default_daemon_live_matrix_complete": default_daemon_live_matrix_complete,
         "product_chain_recertification_executed": product_chain_recertification_executed,
         "product_chain_recertification_clean": product_chain_recertification_clean,
         "default_path_mutation_allowed": default_path_mutation_allowed,
