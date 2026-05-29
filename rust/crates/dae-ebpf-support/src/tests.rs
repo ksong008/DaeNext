@@ -953,6 +953,34 @@ fn connectivity_dryrun_matches_golden_fixture() {
 }
 
 #[test]
+fn connectivity_state_dedupes_known_and_legacy_udp_keys() {
+    let mut map = ConnectivityMap::default();
+    let udp_legacy = ConnectivityKey {
+        outbound: 2,
+        l4proto: 22,
+        ipversion: 4,
+    };
+    let first = ConnectivityEvent {
+        key: udp_legacy,
+        alive: true,
+        is_init: true,
+        dryrun: false,
+    };
+    assert!(map.record(first));
+    assert!(!map.record(first));
+    assert_eq!(map.get(udp_legacy), Some(1));
+    assert_eq!(map.len(), 1);
+
+    let changed = ConnectivityEvent {
+        alive: false,
+        ..first
+    };
+    assert!(map.record(changed));
+    assert_eq!(map.get(udp_legacy), Some(0));
+    assert_eq!(map.len(), 1);
+}
+
+#[test]
 fn connectivity_fd_cache_skips_dryrun_without_opening_map() {
     let mut cache = ConnectivityMapFdCache::default();
     let plan = cache

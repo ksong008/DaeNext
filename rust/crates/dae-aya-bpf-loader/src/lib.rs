@@ -768,6 +768,7 @@ fn connectivity_map_pass_response(
             "ipversion": plan.key.ipversion,
         },
         "value": plan.value,
+        "changed": plan.changed,
         "dryrun": dryrun,
         "is_init": is_init,
     })

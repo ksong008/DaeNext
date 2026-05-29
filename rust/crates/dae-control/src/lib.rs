@@ -1,3 +1,4 @@
+pub mod connectivity_owned;
 pub mod domain_routing;
 pub mod reload;
 pub mod runtime_deps;
@@ -45,8 +46,15 @@ impl ControlApiTypedReport {
     }
 }
 
+pub use connectivity_owned::{
+    ConnectivityMapReplay, ConnectivityOwnerUpdate, ConnectivityStateEntry,
+    ConnectivityStateUpdate, OutboundConnectivityOwner, OutboundConnectivityState,
+};
 pub use domain_routing::{
-    DomainRoutingOwnerSnapshot, DomainRoutingTracker, DomainRoutingView, IpRoutingView,
+    DomainRoutingIpKey, DomainRoutingMapReplay, DomainRoutingOwner, DomainRoutingOwnerSnapshot,
+    DomainRoutingOwnerUpdate, DomainRoutingReloadClearPlan, DomainRoutingStateEntry,
+    DomainRoutingSyncPlan, DomainRoutingTracker, DomainRoutingView, IpRoutingView, format_ip_key,
+    ip_to_key, parse_ip_key,
 };
 pub use reload::{CoreFlip, ReloadCoreState};
 pub use runtime_deps::{EnvironmentGate, RuntimeDependencyPlan};
