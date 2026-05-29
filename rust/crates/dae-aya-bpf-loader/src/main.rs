@@ -14,6 +14,17 @@ fn main() {
         }
         return;
     }
+    if args == ["connectivity-map", "serve-binary"] {
+        let stdin = io::stdin();
+        let stdout = io::stdout();
+        if let Err(err) =
+            dae_aya_bpf_loader::run_connectivity_map_serve_binary(stdin.lock(), stdout.lock())
+        {
+            let _ = writeln!(io::stderr(), "connectivity-map serve-binary failed: {err}");
+            std::process::exit(1);
+        }
+        return;
+    }
     if args == ["domain-routing-map", "serve"] {
         let stdin = io::stdin();
         let stdout = io::stdout();

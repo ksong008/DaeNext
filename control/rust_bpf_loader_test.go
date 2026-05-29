@@ -18,9 +18,11 @@ import (
 	"testing"
 	"time"
 
+	"github.com/cilium/ebpf"
 	"github.com/daeuniverse/dae/common"
 	"github.com/daeuniverse/dae/common/consts"
 	"github.com/daeuniverse/dae/component/outbound/dialer"
+	"github.com/daeuniverse/dae/pkg/config_parser"
 	"github.com/sirupsen/logrus"
 )
 
@@ -161,6 +163,59 @@ func TestRustBpfLoaderAdoptsPinnedObjectsAndUpdatesControlMaps(t *testing.T) {
 	if fallback.Type != uint8(consts.MatchType_Fallback) ||
 		fallback.Outbound != uint8(consts.OutboundDirect) {
 		t.Fatalf("unexpected fallback route: type=%d outbound=%d", fallback.Type, fallback.Outbound)
+	}
+
+	lpmBuilder, err := NewRoutingMatcherBuilder(
+		log,
+		[]*config_parser.RoutingRule{{
+			AndFunctions: []*config_parser.Function{{
+				Name: consts.Function_Ip,
+				Params: []*config_parser.Param{{
+					Val: "203.0.113.0/24",
+				}},
+			}},
+			Outbound: config_parser.Function{Name: consts.OutboundBlock.String()},
+		}},
+		map[string]uint8{
+			consts.OutboundDirect.String(): uint8(consts.OutboundDirect),
+			consts.OutboundBlock.String():  uint8(consts.OutboundBlock),
+		},
+		objs,
+		consts.OutboundDirect.String(),
+	)
+	if err != nil {
+		t.Fatalf("NewRoutingMatcherBuilder with IP rule: %v", err)
+	}
+	if err := lpmBuilder.updateKernelRoutingMapsViaRustHelper(); err != nil {
+		t.Fatalf("updateKernelRoutingMapsViaRustHelper with LPM rule: %v", err)
+	}
+	var ipRule bpfMatchSet
+	if err := objs.RoutingMap.Lookup(uint32(0), &ipRule); err != nil {
+		t.Fatalf("RoutingMap IP rule lookup: %v", err)
+	}
+	if ipRule.Type != uint8(consts.MatchType_IpSet) ||
+		ipRule.Outbound != uint8(consts.OutboundBlock) {
+		t.Fatalf("unexpected IP route: type=%d outbound=%d", ipRule.Type, ipRule.Outbound)
+	}
+	if err := objs.RoutingMap.Lookup(uint32(1), &fallback); err != nil {
+		t.Fatalf("RoutingMap fallback after IP rule lookup: %v", err)
+	}
+	if fallback.Type != uint8(consts.MatchType_Fallback) ||
+		fallback.Outbound != uint8(consts.OutboundDirect) {
+		t.Fatalf("unexpected fallback after IP route: type=%d outbound=%d", fallback.Type, fallback.Outbound)
+	}
+	var inner *ebpf.Map
+	if err := objs.LpmArrayMap.Lookup(uint32(0), &inner); err != nil {
+		t.Fatalf("LpmArrayMap inner lookup: %v", err)
+	}
+	defer inner.Close()
+	lpmLookupKey := cidrToBpfLpmKey(netip.MustParsePrefix("203.0.113.42/32"))
+	var lpmValue uint32
+	if err := inner.Lookup(lpmLookupKey, &lpmValue); err != nil {
+		t.Fatalf("Rust-created LPM inner map lookup: %v", err)
+	}
+	if lpmValue != 1 {
+		t.Fatalf("Rust-created LPM value=%d, want 1", lpmValue)
 	}
 
 	cache := &DnsCache{
