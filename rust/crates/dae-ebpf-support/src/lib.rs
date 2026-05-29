@@ -57,7 +57,8 @@ pub use aya_loader::{
 };
 pub use capability::{EbpfBackendCapabilityReport, report_only_ebpf_backend_capability};
 pub use cgroup::{
-    DaeCgroupAttachLine, DaeCgroupAttachRole, DaeCgroupProgramKind, dae_cgroup_attach_matrix,
+    DaeCgroupAttachLine, DaeCgroupAttachRole, DaeCgroupProgramKind, PinnedCgroupAttachOptions,
+    PinnedCgroupAttachReport, attach_pin_cgroup_monitor, dae_cgroup_attach_matrix,
     detect_cgroup2_mount, detect_cgroup2_mount_from_proc_mounts,
 };
 pub use connectivity::{

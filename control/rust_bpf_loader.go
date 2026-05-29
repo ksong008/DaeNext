@@ -56,7 +56,7 @@ func fullLoadBpfObjectsViaRustAyaLoader(
 		return fmt.Errorf("failed to get netns id: %w", err)
 	}
 	hasBpfGetCurrentTask := rustBpfLoaderHasGetCurrentTask(log)
-	pinRoot := filepath.Join(opts.PinPath, "rust_aya_loader")
+	pinRoot := rustAyaLoaderPinRoot(opts.PinPath)
 	out, err := runRustBpfLoaderHelperOutput(
 		"bpf-loader", "load-pin",
 		"--pin-root", pinRoot,

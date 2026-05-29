@@ -7,6 +7,7 @@ package control
 
 import (
 	"context"
+	"fmt"
 	"net"
 	"net/netip"
 	"os"
@@ -15,6 +16,7 @@ import (
 	"strings"
 	"syscall"
 	"testing"
+	"time"
 
 	"github.com/daeuniverse/dae/common"
 	"github.com/daeuniverse/dae/common/consts"
@@ -42,6 +44,19 @@ func TestRustBpfLoaderContractHelperFailure(t *testing.T) {
 	_, err := RustBpfLoaderContract()
 	if err == nil || !strings.Contains(err.Error(), "failed: helper failed") {
 		t.Fatalf("RustBpfLoaderContract() error = %v", err)
+	}
+}
+
+func TestRustAyaCgroupMonitorPinPaths(t *testing.T) {
+	base := filepath.Join(t.TempDir(), "bpffs", consts.AppName)
+	loaderRoot := rustAyaLoaderPinRoot(base)
+	if loaderRoot != filepath.Join(base, rustAyaLoaderPinDirName) {
+		t.Fatalf("loader root = %q", loaderRoot)
+	}
+	linkRoot := rustAyaCgroupLinkRoot(loaderRoot, 123, time.Unix(0, 456))
+	want := filepath.Join(loaderRoot, "cgroup_links", "cp_123_456")
+	if linkRoot != want {
+		t.Fatalf("link root = %q, want %q", linkRoot, want)
 	}
 }
 
@@ -121,6 +136,7 @@ func TestRustBpfLoaderAdoptsPinnedObjectsAndUpdatesControlMaps(t *testing.T) {
 	assertPinned("maps/outbound_connectivity_map")
 	assertPinned("maps/listen_socket_map")
 	assertPinned("programs/tproxy_dae0_ingress")
+	assertRustCgroupMonitorAttachPin(t, pinPath)
 
 	builder, err := NewRoutingMatcherBuilder(
 		log,
@@ -208,6 +224,43 @@ func TestRustBpfLoaderAdoptsPinnedObjectsAndUpdatesControlMaps(t *testing.T) {
 	}
 	if err := updateListenSocketMap(objs.ListenSocketMap, consts.OneKey, udpConn); err != nil {
 		t.Fatalf("update UDP listen socket map: %v", err)
+	}
+}
+
+func assertRustCgroupMonitorAttachPin(t *testing.T, pinPath string) {
+	t.Helper()
+	cgroupRoot, err := detectCgroupPath()
+	if err != nil {
+		t.Skipf("skip Rust/Aya cgroup monitor attach smoke: %v", err)
+	}
+	cgroupPath := filepath.Join(cgroupRoot, fmt.Sprintf("dae-rust-cgroup-%d", os.Getpid()))
+	_ = os.RemoveAll(cgroupPath)
+	if err := os.Mkdir(cgroupPath, 0755); err != nil {
+		t.Skipf("skip Rust/Aya cgroup monitor attach smoke: create %s: %v", cgroupPath, err)
+	}
+	defer os.RemoveAll(cgroupPath)
+
+	linkRoot := filepath.Join(pinPath, rustAyaLoaderPinDirName, "cgroup_links", "test")
+	_ = os.RemoveAll(linkRoot)
+	defer os.RemoveAll(linkRoot)
+	out, err := runRustBpfLoaderHelperOutput(
+		"cgroup-monitor", "attach-pin",
+		"--program-root", filepath.Join(pinPath, rustAyaLoaderPinDirName, "programs"),
+		"--link-root", linkRoot,
+		"--cgroup-path", cgroupPath,
+	)
+	if err != nil {
+		t.Fatalf("cgroup-monitor attach-pin: %v", err)
+	}
+	if !strings.Contains(out, `"scope":"cgroup-pname-monitor-attach-pin"`) {
+		t.Fatalf("unexpected cgroup monitor output: %s", out)
+	}
+	entries, err := os.ReadDir(linkRoot)
+	if err != nil {
+		t.Fatalf("read cgroup link root: %v", err)
+	}
+	if len(entries) != 6 {
+		t.Fatalf("expected 6 pinned cgroup links, got %d", len(entries))
 	}
 }
 
