@@ -78,10 +78,18 @@ struct ConnectivityMapUpdateOptions {
     dryrun: bool,
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct CgroupMonitorAttachPinOptions {
+    program_root: PathBuf,
+    link_root: PathBuf,
+    cgroup_path: PathBuf,
+}
+
 pub fn run_with_args(args: impl IntoIterator<Item = impl Into<String>>) -> LoaderOutput {
     let args = args.into_iter().map(Into::into).collect::<Vec<_>>();
     match args.first().map(String::as_str) {
         Some("bpf-loader") => run_bpf_loader_command(&args[1..]),
+        Some("cgroup-monitor") => run_cgroup_monitor_command(&args[1..]),
         Some("map-stats") => run_map_stats_command(&args[1..]),
         Some("connectivity-map") => run_connectivity_map_command(&args[1..]),
         Some("trace-loader") => run_trace_loader_command(&args[1..]),
@@ -91,6 +99,20 @@ pub fn run_with_args(args: impl IntoIterator<Item = impl Into<String>>) -> Loade
             LoaderOutput::usage(format!("unsupported dae-aya-bpf-loader command: {command}"))
         }
         None => LoaderOutput::usage("missing dae-aya-bpf-loader command"),
+    }
+}
+
+fn run_cgroup_monitor_command(args: &[String]) -> LoaderOutput {
+    match args.first().map(String::as_str) {
+        Some("contract") if args.len() == 1 => run_cgroup_monitor_contract(),
+        Some("attach-pin") => match parse_cgroup_monitor_attach_pin_options(&args[1..]) {
+            Ok(options) => run_cgroup_monitor_attach_pin(options),
+            Err(err) => LoaderOutput::usage(err),
+        },
+        Some(subcommand) => LoaderOutput::usage(format!(
+            "unsupported cgroup-monitor subcommand: {subcommand}"
+        )),
+        None => LoaderOutput::usage("missing cgroup-monitor subcommand"),
     }
 }
 
@@ -169,6 +191,66 @@ fn run_contract() -> LoaderOutput {
                 "dae0peer_mac": "initialized dae0peer mac",
                 "has_bpf_get_current_task": "Go feature probe result"
             }
+        })
+    ))
+}
+
+fn run_cgroup_monitor_contract() -> LoaderOutput {
+    LoaderOutput::ok(format!(
+        "{}\n",
+        json!({
+            "name": "rust-cgroup-pname-monitor-attach-contract-v1",
+            "binary": "dae-aya-bpf-loader",
+            "scope": "Rust attaches pinned cgroup pname monitor programs and pins bpf_link objects for Go control-plane lifetime ownership",
+            "go_pname_routing_semantics_remain_authoritative": true,
+            "kernel_ebpf_program_rewrite": false,
+            "link_lifetime": "pinned under --link-root; Go control-plane removes the pin root on close/reload cleanup",
+            "program_source": "--program-root/<program_name> from Rust/Aya-loaded pinned programs",
+            "cgroup_source": "--cgroup-path, normally the first cgroup2 mount from /proc/mounts",
+            "attach_matrix": dae_ebpf_support::dae_cgroup_attach_matrix().iter().map(|line| json!({
+                "role": line.role.section_tail(),
+                "section": line.section,
+                "program_name": line.program_name,
+                "go_attach_type": line.go_attach_type,
+                "bpf_attach_type": line.role.bpf_attach_type(),
+                "aya_program_kind": line.aya_program_kind.as_str(),
+                "attach_mode": line.attach_mode,
+            })).collect::<Vec<_>>(),
+        })
+    ))
+}
+
+fn run_cgroup_monitor_attach_pin(options: CgroupMonitorAttachPinOptions) -> LoaderOutput {
+    let reports = match dae_ebpf_support::attach_pin_cgroup_monitor(
+        dae_ebpf_support::PinnedCgroupAttachOptions {
+            program_root: &options.program_root,
+            link_root: &options.link_root,
+            cgroup_path: &options.cgroup_path,
+        },
+    ) {
+        Ok(reports) => reports,
+        Err(err) => return LoaderOutput::error(format!("cgroup monitor attach-pin failed: {err}")),
+    };
+    LoaderOutput::ok(format!(
+        "{}\n",
+        json!({
+            "status": "pass",
+            "loader": "rust",
+            "scope": "cgroup-pname-monitor-attach-pin",
+            "program_root": options.program_root,
+            "link_root": options.link_root,
+            "cgroup_path": options.cgroup_path,
+            "links": reports.iter().map(|report| json!({
+                "role": report.role.section_tail(),
+                "program_name": report.program_name,
+                "program_path": report.program_path,
+                "link_path": report.link_path,
+                "section": report.section,
+                "attach_type": report.attach_type,
+                "attach_mode": report.attach_mode,
+                "attached": report.attached,
+                "pinned": report.pinned,
+            })).collect::<Vec<_>>(),
         })
     ))
 }
@@ -582,6 +664,53 @@ fn parse_trace_load_pin_options(args: &[String]) -> Result<TraceLoaderLoadPinOpt
     })
 }
 
+fn parse_cgroup_monitor_attach_pin_options(
+    args: &[String],
+) -> Result<CgroupMonitorAttachPinOptions, String> {
+    let mut program_root = None;
+    let mut link_root = None;
+    let mut cgroup_path = None;
+    let mut iter = args.iter();
+    while let Some(arg) = iter.next() {
+        match arg.as_str() {
+            "--program-root" => {
+                program_root = Some(parse_next_path(
+                    &mut iter,
+                    "cgroup-monitor attach-pin --program-root",
+                )?)
+            }
+            "--link-root" => {
+                link_root = Some(parse_next_path(
+                    &mut iter,
+                    "cgroup-monitor attach-pin --link-root",
+                )?)
+            }
+            "--cgroup-path" => {
+                cgroup_path = Some(parse_next_path(
+                    &mut iter,
+                    "cgroup-monitor attach-pin --cgroup-path",
+                )?)
+            }
+            _ if arg.starts_with("--program-root=") => program_root = Some(parse_path_value(arg)?),
+            _ if arg.starts_with("--link-root=") => link_root = Some(parse_path_value(arg)?),
+            _ if arg.starts_with("--cgroup-path=") => cgroup_path = Some(parse_path_value(arg)?),
+            _ => {
+                return Err(format!(
+                    "unsupported cgroup-monitor attach-pin argument: {arg}"
+                ));
+            }
+        }
+    }
+    Ok(CgroupMonitorAttachPinOptions {
+        program_root: program_root
+            .ok_or_else(|| "missing cgroup-monitor attach-pin --program-root".to_owned())?,
+        link_root: link_root
+            .ok_or_else(|| "missing cgroup-monitor attach-pin --link-root".to_owned())?,
+        cgroup_path: cgroup_path
+            .ok_or_else(|| "missing cgroup-monitor attach-pin --cgroup-path".to_owned())?,
+    })
+}
+
 fn parse_connectivity_map_update_options(
     args: &[String],
 ) -> Result<ConnectivityMapUpdateOptions, String> {
@@ -763,6 +892,8 @@ fn mac_string(mac: [u8; 6]) -> String {
 
 #[cfg(test)]
 mod tests {
+    use std::path::PathBuf;
+
     use serde_json::Value;
 
     use super::*;
@@ -806,6 +937,23 @@ mod tests {
     }
 
     #[test]
+    fn cgroup_monitor_contract_declares_pinned_link_lifetime() {
+        let output = run_with_args(["cgroup-monitor", "contract"]);
+        assert_eq!(output.exit_code, 0, "{}", output.stderr);
+        let json: Value = serde_json::from_str(&output.stdout).unwrap();
+        assert_eq!(
+            json["name"].as_str().unwrap(),
+            "rust-cgroup-pname-monitor-attach-contract-v1"
+        );
+        assert!(
+            json["go_pname_routing_semantics_remain_authoritative"]
+                .as_bool()
+                .unwrap()
+        );
+        assert_eq!(json["attach_matrix"].as_array().unwrap().len(), 6);
+    }
+
+    #[test]
     fn map_stats_count_requires_map_specs() {
         let output = run_with_args(["map-stats", "count"]);
         assert_eq!(output.exit_code, 2);
@@ -815,6 +963,27 @@ mod tests {
             MapStatsCountRequest {
                 name: "routing_tuples_map".to_owned(),
                 id: 7,
+            }
+        );
+    }
+
+    #[test]
+    fn cgroup_monitor_attach_pin_requires_paths() {
+        let output = run_with_args(["cgroup-monitor", "attach-pin", "--program-root", "/bpffs/p"]);
+        assert_eq!(output.exit_code, 2);
+        assert!(output.stderr.contains("--link-root"));
+        let options = parse_cgroup_monitor_attach_pin_options(&[
+            "--program-root=/bpffs/programs".to_owned(),
+            "--link-root=/bpffs/links".to_owned(),
+            "--cgroup-path=/sys/fs/cgroup".to_owned(),
+        ])
+        .unwrap();
+        assert_eq!(
+            options,
+            CgroupMonitorAttachPinOptions {
+                program_root: PathBuf::from("/bpffs/programs"),
+                link_root: PathBuf::from("/bpffs/links"),
+                cgroup_path: PathBuf::from("/sys/fs/cgroup"),
             }
         );
     }

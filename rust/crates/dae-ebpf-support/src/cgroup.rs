@@ -1,6 +1,9 @@
+use std::ffi::CString;
 use std::fs;
 use std::io;
-use std::path::PathBuf;
+use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
+use std::os::unix::ffi::OsStrExt;
+use std::path::{Path, PathBuf};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum DaeCgroupProgramKind {
@@ -58,6 +61,17 @@ impl DaeCgroupAttachRole {
             Self::Connect6 => "AttachCGroupInet6Connect",
             Self::Sendmsg4 => "AttachCGroupUDP4Sendmsg",
             Self::Sendmsg6 => "AttachCGroupUDP6Sendmsg",
+        }
+    }
+
+    pub const fn bpf_attach_type(self) -> u32 {
+        match self {
+            Self::SockCreate => 2,
+            Self::Connect4 => 10,
+            Self::Connect6 => 11,
+            Self::Sendmsg4 => 14,
+            Self::Sendmsg6 => 15,
+            Self::SockRelease => 34,
         }
     }
 
@@ -125,5 +139,168 @@ pub fn detect_cgroup2_mount_from_proc_mounts(mounts: &str) -> Option<PathBuf> {
         } else {
             None
         }
+    })
+}
+
+pub struct PinnedCgroupAttachOptions<'a> {
+    pub program_root: &'a Path,
+    pub link_root: &'a Path,
+    pub cgroup_path: &'a Path,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct PinnedCgroupAttachReport {
+    pub role: DaeCgroupAttachRole,
+    pub cgroup_path: PathBuf,
+    pub program_name: String,
+    pub program_path: PathBuf,
+    pub link_path: PathBuf,
+    pub section: String,
+    pub attach_type: u32,
+    pub attach_mode: String,
+    pub attached: bool,
+    pub pinned: bool,
+}
+
+pub fn attach_pin_cgroup_monitor(
+    options: PinnedCgroupAttachOptions<'_>,
+) -> Result<Vec<PinnedCgroupAttachReport>, String> {
+    if options.link_root.exists() {
+        return Err(format!(
+            "cgroup link root already exists: {}",
+            options.link_root.display()
+        ));
+    }
+    fs::create_dir_all(options.link_root).map_err(|err| {
+        format!(
+            "create cgroup link root {} failed: {err}",
+            options.link_root.display()
+        )
+    })?;
+
+    let mut reports = Vec::new();
+    for line in dae_cgroup_attach_matrix() {
+        let result = attach_pin_one_cgroup_line(&options, &line);
+        match result {
+            Ok(report) => reports.push(report),
+            Err(err) => {
+                let _ = fs::remove_dir_all(options.link_root);
+                return Err(err);
+            }
+        }
+    }
+    Ok(reports)
+}
+
+fn attach_pin_one_cgroup_line(
+    options: &PinnedCgroupAttachOptions<'_>,
+    line: &DaeCgroupAttachLine,
+) -> Result<PinnedCgroupAttachReport, String> {
+    let program_path = options.program_root.join(line.program_name);
+    let link_path = options.link_root.join(line.program_name);
+    let program_fd = bpf_obj_get(&program_path)?;
+    let cgroup_file = fs::File::open(options.cgroup_path).map_err(|err| {
+        format!(
+            "open cgroup path {} failed: {err}",
+            options.cgroup_path.display()
+        )
+    })?;
+    let link_fd = bpf_link_create(
+        program_fd.as_raw_fd(),
+        cgroup_file.as_raw_fd(),
+        line.role.bpf_attach_type(),
+    )?;
+    bpf_obj_pin(link_fd.as_raw_fd(), &link_path)?;
+    Ok(PinnedCgroupAttachReport {
+        role: line.role,
+        cgroup_path: options.cgroup_path.to_owned(),
+        program_name: line.program_name.to_owned(),
+        program_path,
+        link_path,
+        section: line.section.to_owned(),
+        attach_type: line.role.bpf_attach_type(),
+        attach_mode: line.attach_mode.to_owned(),
+        attached: true,
+        pinned: true,
+    })
+}
+
+#[repr(C)]
+#[derive(Default)]
+struct BpfAttrObj {
+    pathname: u64,
+    bpf_fd: u32,
+    file_flags: u32,
+}
+
+#[repr(C)]
+#[derive(Default)]
+struct BpfAttrLinkCreate {
+    prog_fd: u32,
+    target_fd: u32,
+    attach_type: u32,
+    flags: u32,
+    extra: [u64; 8],
+}
+
+const BPF_OBJ_PIN: u32 = 6;
+const BPF_OBJ_GET: u32 = 7;
+const BPF_LINK_CREATE: u32 = 28;
+
+fn bpf_obj_get(path: &Path) -> Result<OwnedFd, String> {
+    let path = c_path(path)?;
+    let attr = BpfAttrObj {
+        pathname: path.as_ptr() as u64,
+        bpf_fd: 0,
+        file_flags: 0,
+    };
+    let fd = bpf_syscall(BPF_OBJ_GET, &attr)?;
+    Ok(unsafe { OwnedFd::from_raw_fd(fd) })
+}
+
+fn bpf_obj_pin(fd: i32, path: &Path) -> Result<(), String> {
+    let path = c_path(path)?;
+    let attr = BpfAttrObj {
+        pathname: path.as_ptr() as u64,
+        bpf_fd: fd as u32,
+        file_flags: 0,
+    };
+    bpf_syscall(BPF_OBJ_PIN, &attr).map(|_| ())
+}
+
+fn bpf_link_create(prog_fd: i32, target_fd: i32, attach_type: u32) -> Result<OwnedFd, String> {
+    let attr = BpfAttrLinkCreate {
+        prog_fd: prog_fd as u32,
+        target_fd: target_fd as u32,
+        attach_type,
+        flags: 0,
+        extra: [0; 8],
+    };
+    let fd = bpf_syscall(BPF_LINK_CREATE, &attr)?;
+    Ok(unsafe { OwnedFd::from_raw_fd(fd) })
+}
+
+fn bpf_syscall<T>(cmd: u32, attr: &T) -> Result<i32, String> {
+    let ret = unsafe {
+        libc::syscall(
+            libc::SYS_bpf,
+            cmd,
+            attr as *const T as *const libc::c_void,
+            std::mem::size_of::<T>(),
+        )
+    };
+    if ret < 0 {
+        Err(io::Error::last_os_error().to_string())
+    } else {
+        Ok(ret as i32)
+    }
+}
+
+fn c_path(path: &Path) -> Result<CString, String> {
+    CString::new(path.as_os_str().as_bytes()).map_err(|err| {
+        format!(
+            "path {} contains an interior NUL byte: {err}",
+            path.display()
+        )
     })
 }
