@@ -477,6 +477,29 @@ fn run_default_optin_report_executes_bounded_lifecycle_and_smokes() {
     assert!(!report["benchmark_executable_now"].as_bool().unwrap());
     assert!(!report["default_switch_allowed"].as_bool().unwrap());
     assert_eq!(
+        report["default_daemon_live_matrix"]["schema"]
+            .as_str()
+            .unwrap(),
+        "default-daemon-live-matrix-v1"
+    );
+    assert!(
+        !report["default_daemon_live_matrix"]["matrix_complete"]
+            .as_bool()
+            .unwrap()
+    );
+    assert!(
+        !report["default_daemon_live_matrix"]["default_switch_allowed_by_this_matrix"]
+            .as_bool()
+            .unwrap()
+    );
+    assert!(
+        report["default_daemon_live_matrix"]["remaining_rows"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|row| row.as_str().unwrap() == "production-runtime-owner")
+    );
+    assert_eq!(
         report["release_product_chain_live_gate"]["schema"]
             .as_str()
             .unwrap(),
@@ -494,6 +517,11 @@ fn run_default_optin_report_executes_bounded_lifecycle_and_smokes() {
     );
     assert!(
         report["release_product_chain_live_gate"]["go_runtime_outbound_fallback_required"]
+            .as_bool()
+            .unwrap()
+    );
+    assert!(
+        !report["release_product_chain_live_gate"]["default_daemon_live_matrix_complete"]
             .as_bool()
             .unwrap()
     );
@@ -1039,6 +1067,11 @@ fn daemon_runner_product_chain_accepts_external_admission_evidence() {
     );
     assert!(!json["true_rust_default_daemon_admitted"].as_bool().unwrap());
     assert!(!json["default_switch_allowed"].as_bool().unwrap());
+    assert!(
+        !json["default_daemon_live_matrix"]["matrix_complete"]
+            .as_bool()
+            .unwrap()
+    );
     assert!(
         !json["release_product_chain_live_gate"]["release_gate_open"]
             .as_bool()
