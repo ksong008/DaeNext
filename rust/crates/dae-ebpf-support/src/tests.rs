@@ -988,8 +988,24 @@ fn routing_map_apply_models_report_counts() {
         index: 3,
         map_id: 9,
     }];
+    let lpm_build = LpmMapBuildSpec {
+        index: 4,
+        flags: 1,
+        max_entries: 2048,
+        key_size: std::mem::size_of::<BpfLpmKey>() as u32,
+        value_size: std::mem::size_of::<u32>() as u32,
+        entries: vec![LpmMapEntry {
+            key: BpfLpmKey {
+                prefix_len: 128,
+                data: [0, 0, 0xffff, 1],
+            },
+            value: 1,
+        }],
+    };
     assert_eq!(routing.len(), 1);
     assert_eq!(lpm.len(), 1);
+    assert_eq!(lpm_build.entries[0].key.prefix_len, 128);
+    assert_eq!(lpm_build.entries[0].value, 1);
 }
 
 #[test]
