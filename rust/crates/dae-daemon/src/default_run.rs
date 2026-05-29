@@ -12,6 +12,7 @@ use crate::{
     matched_default_benchmark_report, product_chain_recertification_report,
     production_dataplane_harness_report, production_runtime_owner_report,
     reload_owner_handoff_smoke_report,
+    service_contract::{RESIDENT_DATAPLANE_ENV, resident_dataplane_default_switch_ready_from_env},
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -238,10 +239,14 @@ pub fn run_default_optin_report(options: &RunOptions, version: &str) -> Result<V
     let bpf_go_fallback_retired = production_runtime_owner["go_bpf_fallback_retired"]
         .as_bool()
         .unwrap_or(false);
+    let resident_dataplane_default_switch_required = true;
+    let resident_dataplane_default_switch_ready =
+        resident_dataplane_default_switch_ready_from_env();
     let true_rust_default_daemon_admitted = production_dataplane_admitted
         && reload_runtime_parity_admitted
         && matched_benchmark_recorded
-        && bpf_go_fallback_retired;
+        && bpf_go_fallback_retired
+        && resident_dataplane_default_switch_ready;
     let computed_product_chain_admission = ProductChainAdmissionEvidence {
         production_dataplane_admitted,
         reload_runtime_parity_admitted,
@@ -302,6 +307,8 @@ pub fn run_default_optin_report(options: &RunOptions, version: &str) -> Result<V
         options.matched_default_benchmark.execute,
         matched_benchmark_recorded,
         bpf_go_fallback_retired,
+        resident_dataplane_default_switch_required,
+        resident_dataplane_default_switch_ready,
     );
     let default_daemon_live_matrix_complete = default_daemon_live_matrix["matrix_complete"]
         .as_bool()
@@ -313,6 +320,7 @@ pub fn run_default_optin_report(options: &RunOptions, version: &str) -> Result<V
         bpf_go_fallback_retired,
         true_rust_default_daemon_admitted,
         default_daemon_live_matrix_complete,
+        resident_dataplane_default_switch_ready,
         product_chain_recertification_executed,
         product_chain_recertification_clean,
         default_path_mutation_allowed,
@@ -477,6 +485,23 @@ pub fn run_default_optin_report(options: &RunOptions, version: &str) -> Result<V
             .unwrap_or(false)
     );
     report["production_runtime_owner"] = production_runtime_owner;
+    report["resident_dataplane_default_switch_gate"] = json!({
+        "required": resident_dataplane_default_switch_required,
+        "env": RESIDENT_DATAPLANE_ENV,
+        "env_enabled": resident_dataplane_default_switch_ready,
+        "ready": resident_dataplane_default_switch_ready,
+        "blocker": if resident_dataplane_default_switch_ready {
+            Value::Null
+        } else {
+            json!(format!(
+                "{RESIDENT_DATAPLANE_ENV}=1 is required before true Rust default daemon admission"
+            ))
+        },
+        "source": [
+            "DAEX_RUST_PERFORMANCE_OPTIMIZATION_PLAN_2026-05-24.md:stage7-resident-dns-udp53-hostwrite",
+            "DAENEW_RUST_REBUILD_MEMO_2026-05-16.md:DNS/tproxy control-plane routing"
+        ],
+    });
     report["production_dataplane_harness_executed"] = json!(production_dataplane_harness_executed);
     report["production_dataplane_harness_passed"] = json!(production_dataplane_harness_passed);
     report["production_dataplane_harness"] = production_dataplane;
@@ -550,6 +575,14 @@ pub fn run_default_optin_report(options: &RunOptions, version: &str) -> Result<V
         ),
         ("bpf_go_fallback_retired", bpf_go_fallback_retired),
         (
+            "resident_dataplane_default_switch_required",
+            resident_dataplane_default_switch_required,
+        ),
+        (
+            "resident_dataplane_default_switch_ready",
+            resident_dataplane_default_switch_ready,
+        ),
+        (
             "true_rust_default_daemon_admitted",
             true_rust_default_daemon_admitted,
         ),
@@ -606,6 +639,11 @@ pub fn run_default_optin_report(options: &RunOptions, version: &str) -> Result<V
         vec!["opt-in run now exists, but it still uses isolated pid/progress paths"];
     if !matched_benchmark_recorded {
         remaining_blockers.push("matched Go/Rust default daemon benchmark remains blocked");
+    }
+    if !resident_dataplane_default_switch_ready {
+        remaining_blockers.push(
+            "resident userspace dataplane is not enabled; default switch would redirect tproxy TCP/UDP payloads without the required Rust worker",
+        );
     }
     if true_rust_default_daemon_admitted {
         if release_gate_product_chain_switch_allowed {
@@ -743,6 +781,8 @@ fn default_daemon_live_matrix_json(
     matched_default_benchmark_executed: bool,
     matched_default_benchmark_recorded: bool,
     bpf_go_fallback_retired: bool,
+    resident_dataplane_default_switch_required: bool,
+    resident_dataplane_default_switch_ready: bool,
 ) -> Value {
     let rows = vec![
         live_matrix_row_json(
@@ -821,6 +861,13 @@ fn default_daemon_live_matrix_json(
             "BPF-side Go fallback retirement evidence must be present without restoring the Go BPF loader",
             "run production runtime owner gate with BPF fallback retirement evidence",
         ),
+        live_matrix_row_json(
+            "resident-userspace-dataplane-default-switch",
+            resident_dataplane_default_switch_required,
+            resident_dataplane_default_switch_ready,
+            "resident userspace dataplane must be explicitly enabled before the Rust default daemon owns redirected TCP/UDP payloads",
+            "set DAE_RUST_RESIDENT_DATAPLANE=1 only after the resident dataplane worker path is expected to own the default daemon traffic",
+        ),
     ];
     let matrix_complete = rows
         .iter()
@@ -876,6 +923,7 @@ fn release_product_chain_live_gate_json(
     bpf_go_fallback_retired: bool,
     true_rust_default_daemon_admitted: bool,
     default_daemon_live_matrix_complete: bool,
+    resident_dataplane_default_switch_ready: bool,
     product_chain_recertification_executed: bool,
     product_chain_recertification_clean: bool,
     default_path_mutation_allowed: bool,
@@ -904,6 +952,7 @@ fn release_product_chain_live_gate_json(
         && reload_runtime_parity_admitted
         && matched_benchmark_recorded
         && bpf_go_fallback_retired
+        && resident_dataplane_default_switch_ready
         && true_rust_default_daemon_admitted;
     let release_gate_open = fixed_queue_completed
         && full_live_matrix_admitted
@@ -928,6 +977,13 @@ fn release_product_chain_live_gate_json(
             "recorded": full_live_matrix_admitted,
             "required_evidence": "production dataplane, reload/runtime parity, matched Go/Rust default daemon benchmark, and BPF fallback retirement all pass together",
             "blocker": if full_live_matrix_admitted { "" } else { "full default daemon live matrix is incomplete" },
+        }),
+        json!({
+            "area": "resident-userspace-dataplane-default-switch",
+            "status": if resident_dataplane_default_switch_ready { "pass" } else { "fail" },
+            "recorded": resident_dataplane_default_switch_ready,
+            "required_evidence": "DAE_RUST_RESIDENT_DATAPLANE=1 is present before default path mutation",
+            "blocker": if resident_dataplane_default_switch_ready { "" } else { "resident userspace dataplane is not enabled" },
         }),
         json!({
             "area": "product-chain-recertification",
@@ -965,6 +1021,9 @@ fn release_product_chain_live_gate_json(
     if !matched_benchmark_recorded {
         blockers.push("matched Go/Rust default daemon benchmark is not recorded");
     }
+    if !resident_dataplane_default_switch_ready {
+        blockers.push("resident userspace dataplane default switch env is not enabled");
+    }
     if !product_chain_recertification_clean {
         blockers.push("product-chain recertification is not clean");
     }
@@ -1000,6 +1059,9 @@ fn release_product_chain_live_gate_json(
         "reload_runtime_parity_admitted": reload_runtime_parity_admitted,
         "matched_go_rust_default_daemon_benchmark_recorded": matched_benchmark_recorded,
         "bpf_go_fallback_retired": bpf_go_fallback_retired,
+        "resident_dataplane_default_switch_required": true,
+        "resident_dataplane_env": RESIDENT_DATAPLANE_ENV,
+        "resident_dataplane_default_switch_ready": resident_dataplane_default_switch_ready,
         "true_rust_default_daemon_admitted": true_rust_default_daemon_admitted,
         "default_daemon_live_matrix_complete": default_daemon_live_matrix_complete,
         "product_chain_recertification_executed": product_chain_recertification_executed,
@@ -1090,6 +1152,7 @@ mod stage7_gate_tests {
             true,
             true,
             true,
+            true,
             &production_runtime_owner,
         );
 
@@ -1110,6 +1173,70 @@ mod stage7_gate_tests {
             !gate["go_runtime_outbound_fallback_deletion_allowed"]
                 .as_bool()
                 .unwrap()
+        );
+    }
+
+    #[test]
+    fn stage7_release_gate_blocks_without_resident_dataplane_default_switch() {
+        let production_runtime_owner = json!({
+            "datapath_outbound_ebpf_deep_area": {
+                "fixed_queue_completed": true,
+                "datapath_native_assets_recorded": true,
+                "go_bpf_loader_restored": false,
+                "aya_loader_direction_preserved": true
+            }
+        });
+        let gate = release_product_chain_live_gate_json(
+            true,
+            true,
+            true,
+            true,
+            false,
+            false,
+            false,
+            true,
+            true,
+            true,
+            true,
+            true,
+            &production_runtime_owner,
+        );
+
+        assert!(
+            !gate["resident_dataplane_default_switch_ready"]
+                .as_bool()
+                .unwrap()
+        );
+        assert!(!gate["true_rust_default_daemon_admitted"].as_bool().unwrap());
+        assert!(!gate["release_gate_open"].as_bool().unwrap());
+        assert!(
+            gate["remaining_blockers"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|blocker| blocker
+                    .as_str()
+                    .unwrap()
+                    .contains("resident userspace dataplane default switch env"))
+        );
+    }
+
+    #[test]
+    fn stage7_live_matrix_records_resident_dataplane_default_switch_row() {
+        let matrix = default_daemon_live_matrix_json(
+            true, true, true, true, true, true, true, true, true, true, true, true, true, true,
+            true, true, true, true, true, true, true, true, true, true, true, true, false,
+        );
+
+        assert!(!matrix["matrix_complete"].as_bool().unwrap());
+        assert!(
+            matrix["remaining_rows"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|row| {
+                    row.as_str().unwrap() == "resident-userspace-dataplane-default-switch"
+                })
         );
     }
 }
