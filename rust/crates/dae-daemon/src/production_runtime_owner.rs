@@ -10,6 +10,7 @@ mod active_dns;
 mod active_tcp;
 mod active_udp;
 mod command;
+mod deep_area;
 mod host_ops;
 mod native_assets;
 mod native_ebpf;
@@ -227,6 +228,10 @@ pub fn production_runtime_owner_report(
 
 pub fn daemon_runtime_native_owner_summary_json() -> Value {
     native_assets::daemon_runtime_native_owner_summary_json()
+}
+
+pub fn datapath_outbound_ebpf_deep_area_summary_json() -> Value {
+    deep_area::datapath_outbound_ebpf_deep_area_summary_json()
 }
 
 fn validate_options(options: &ProductionRuntimeOwnerOptions) -> Result<(), String> {
@@ -855,6 +860,22 @@ mod tests {
                 .unwrap()
         );
         assert_eq!(
+            report["typed_report"]["datapath_outbound_ebpf_deep_area_schema"]
+                .as_str()
+                .unwrap(),
+            "datapath-outbound-ebpf-deep-area-v1"
+        );
+        assert!(
+            report["typed_report"]["datapath_outbound_ebpf_deep_area_completed"]
+                .as_bool()
+                .unwrap()
+        );
+        assert!(
+            !report["typed_report"]["datapath_outbound_ebpf_deep_area_default_switch_allowed"]
+                .as_bool()
+                .unwrap()
+        );
+        assert_eq!(
             report["daemon_runtime_native_owner"]["schema"]
                 .as_str()
                 .unwrap(),
@@ -876,6 +897,11 @@ mod tests {
                 .unwrap()
         );
         assert!(
+            report["daemon_runtime_native_owner"]["datapath_deep_area_recorded"]
+                .as_bool()
+                .unwrap()
+        );
+        assert!(
             !report["daemon_runtime_native_owner"]["go_bpf_loader_restored_or_required_by_this_stage"]
                 .as_bool()
                 .unwrap()
@@ -893,6 +919,48 @@ mod tests {
                 "routing-lpm-native-build",
                 "dns-native-hot-path",
                 "sniffing-geodata-matcher-native",
+                "datapath-outbound-ebpf-deep-area",
+            ]
+        );
+        assert_eq!(
+            report["datapath_outbound_ebpf_deep_area"]["schema"]
+                .as_str()
+                .unwrap(),
+            "datapath-outbound-ebpf-deep-area-v1"
+        );
+        assert!(
+            report["datapath_outbound_ebpf_deep_area"]["fixed_queue_completed"]
+                .as_bool()
+                .unwrap()
+        );
+        assert!(
+            !report["datapath_outbound_ebpf_deep_area"]["default_switch_allowed"]
+                .as_bool()
+                .unwrap()
+        );
+        assert!(
+            !report["datapath_outbound_ebpf_deep_area"]["go_fallback_deletion_allowed"]
+                .as_bool()
+                .unwrap()
+        );
+        assert!(
+            !report["datapath_outbound_ebpf_deep_area"]["go_bpf_loader_required"]
+                .as_bool()
+                .unwrap()
+        );
+        let deep_area_ids = report["datapath_outbound_ebpf_deep_area"]["surfaces"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|surface| surface["id"].as_str().unwrap())
+            .collect::<Vec<_>>();
+        assert_eq!(
+            deep_area_ids,
+            [
+                "tcp-active-datapath",
+                "udp-active-datapath",
+                "outbound-protocol-stack",
+                "ebpf-backend-host-ops",
             ]
         );
         assert_eq!(
