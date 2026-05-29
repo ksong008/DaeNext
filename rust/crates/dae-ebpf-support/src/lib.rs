@@ -13,6 +13,7 @@ pub mod opt_in;
 pub mod param;
 pub mod param_loader;
 pub mod param_object;
+pub mod routing_maps;
 pub mod runtime_maps;
 pub mod sockmap;
 pub mod temporary_map;
@@ -89,9 +90,13 @@ pub use param_object::{
     param_from_object_bytes, param_to_object_bytes, read_param_from_object,
     write_param_aware_object,
 };
+pub use routing_maps::{
+    DomainRoutingMapApplyReport, DomainRoutingMapEntry, LpmArrayMapEntry, RoutingMapApplyReport,
+    RoutingMapEntry, apply_domain_routing_map_by_id, apply_routing_maps_by_id,
+};
 pub use runtime_maps::{
-    RuntimeMapInfo, count_map_entries_by_fd, count_map_entries_by_id, lookup_map_elem_bytes,
-    map_ids, map_info, open_map_fd, update_map_elem_bytes,
+    RuntimeMapInfo, count_map_entries_by_fd, count_map_entries_by_id, delete_map_elem_bytes,
+    lookup_map_elem_bytes, map_ids, map_info, open_map_fd, update_map_elem_bytes,
 };
 pub use sockmap::{
     ListenSocketMapFdSmoke, LiveLoadedTproxyListenSocketMap, LoadedListenSocketMapFdSmoke,
