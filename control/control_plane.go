@@ -612,12 +612,7 @@ func NewControlPlane(
 	// Refresh domain routing cache with new routing.
 	// Only restore cached DNS records when DNS config itself is unchanged.
 	if _bpf != nil {
-		var key [4]uint32
-		var val bpfDomainRouting
-		iter := core.bpf.DomainRoutingMap.Iterate()
-		for iter.Next(&key, &val) {
-			_ = core.bpf.DomainRoutingMap.Delete(&key)
-		}
+		core.clearDomainRoutingMapForReload()
 	}
 	restoreDnsCacheSnapshot(log, plane.dnsController, dnsCache)
 

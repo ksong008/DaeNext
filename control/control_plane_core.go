@@ -1012,6 +1012,30 @@ func (c *controlPlaneCore) BatchRemoveDomainRouting(cache *DnsCache) error {
 	return nil
 }
 
+func (c *controlPlaneCore) clearDomainRoutingMapForReload() {
+	if c == nil || c.bpf == nil || c.bpf.DomainRoutingMap == nil {
+		return
+	}
+	keys := make([][4]uint32, 0)
+	var key [4]uint32
+	var val bpfDomainRouting
+	iter := c.bpf.DomainRoutingMap.Iterate()
+	for iter.Next(&key, &val) {
+		keys = append(keys, key)
+	}
+	if len(keys) == 0 {
+		return
+	}
+	if err := c.updateDomainRoutingMapViaRustHelper(c.bpf.DomainRoutingMap, nil, keys); err == nil {
+		return
+	} else if c.log != nil {
+		c.log.Debugf("Rust domain_routing_map reload clear failed; falling back to Go delete: %v", err)
+	}
+	for i := range keys {
+		_ = c.bpf.DomainRoutingMap.Delete(&keys[i])
+	}
+}
+
 // EjectBpf will resect bpf from destroying life-cycle of control plane core.
 func (c *controlPlaneCore) EjectBpf() *bpfObjects {
 	if !c.bpfEjected && !c.isReload {
