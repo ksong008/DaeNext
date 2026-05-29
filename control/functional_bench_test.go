@@ -15,6 +15,8 @@ import (
 	"github.com/sirupsen/logrus"
 )
 
+var dnsResponseCachePlanBenchmarkSink uint64
+
 func BenchmarkFunctionalDnsPackedResponseRestore(b *testing.B) {
 	cache := &DnsCache{
 		PackedResponse: []byte{
@@ -283,6 +285,95 @@ func BenchmarkFunctionalDnsRawPacketAnswersTTLIPCNAME(b *testing.B) {
 			b.Fatal("unexpected zero checksum")
 		}
 	}
+}
+
+func BenchmarkFunctionalDnsResponseCachePlanFromPacket(b *testing.B) {
+	packet := []byte{
+		0x12, 0x34, 0x81, 0x80, 0x00, 0x01, 0x00, 0x02, 0x00, 0x00, 0x00, 0x00, 0x07, 'e',
+		'x', 'a', 'm', 'p', 'l', 'e', 0x03, 'c', 'o', 'm', 0x00, 0x00, 0x01, 0x00,
+		0x01, 0xc0, 0x0c, 0x00, 0x05, 0x00, 0x01, 0x00, 0x00, 0x00, 0x3c, 0x00, 0x02, 0xc0,
+		0x0c, 0xc0, 0x0c, 0x00, 0x01, 0x00, 0x01, 0x00, 0x00, 0x00, 0x78, 0x00, 0x04, 0xcb,
+		0x00, 0x71, 0x14,
+	}
+	now := time.Unix(1_700_000_000, 0)
+	controller := &DnsController{
+		log:            logrus.New(),
+		fixedDomainTtl: map[string]int{"example.com": 0},
+		now: func() time.Time {
+			return now
+		},
+		dnsCache: make(map[dnsCacheKey]*DnsCache),
+	}
+	controller.newCache = func(_ string, answers []dnsmessage.RR, deadline time.Time, originalDeadline time.Time) (*DnsCache, error) {
+		ips, hasAnyIP := summarizeDNSAnswers(answers)
+		return &DnsCache{
+			Answer:           answers,
+			IPs:              ips,
+			HasAnyIP:         hasAnyIP,
+			Deadline:         deadline,
+			OriginalDeadline: originalDeadline,
+		}, nil
+	}
+	key := controller.cacheKey("example.com.", dnsmessage.TypeA)
+	var checksum uint64
+	b.ReportAllocs()
+	for i := 0; i < b.N; i++ {
+		var msg dnsmessage.Msg
+		if err := msg.Unpack(packet); err != nil {
+			b.Fatal(err)
+		}
+		if err := controller.NormalizeAndCacheDnsResp_(&msg); err != nil {
+			b.Fatal(err)
+		}
+		cache := controller.LookupDnsRespCache(key, true)
+		if cache == nil || len(cache.PackedResponse) == 0 || len(cache.IPs) != 1 {
+			b.Fatal("expected cache plan to be installed")
+		}
+		checksum ^= uint64(len(cache.PackedResponse)) ^ uint64(len(cache.IPs)) ^ uint64(cache.PackedResponse[0])
+	}
+	dnsResponseCachePlanBenchmarkSink = checksum
+}
+
+func BenchmarkFunctionalDnsRequestCacheHitFromPacket(b *testing.B) {
+	query := []byte{
+		0x12, 0x34, 0x01, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x07, 'e',
+		'x', 'a', 'm', 'p', 'l', 'e', 0x03, 'c', 'o', 'm', 0x00, 0x00, 0x01, 0x00,
+		0x01,
+	}
+	packed := []byte{
+		0x00, 0x00, 0x81, 0x80, 0x00, 0x01, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x07, 'e',
+		'x', 'a', 'm', 'p', 'l', 'e', 0x03, 'c', 'o', 'm', 0x00, 0x00, 0x01, 0x00,
+		0x01, 0xc0, 0x0c, 0x00, 0x01, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x04, 0xcb,
+		0x00, 0x71, 0x14,
+	}
+	now := time.Unix(1_700_000_000, 0)
+	controller := &DnsController{
+		log: logrus.New(),
+		now: func() time.Time {
+			return now
+		},
+		dnsCache: make(map[dnsCacheKey]*DnsCache),
+	}
+	key := controller.cacheKey("example.com.", dnsmessage.TypeA)
+	controller.dnsCache[key] = &DnsCache{
+		Deadline:         now.Add(time.Minute),
+		OriginalDeadline: now.Add(time.Minute),
+		PackedResponse:   packed,
+	}
+	var checksum uint64
+	b.ReportAllocs()
+	for i := 0; i < b.N; i++ {
+		var msg dnsmessage.Msg
+		if err := msg.Unpack(query); err != nil {
+			b.Fatal(err)
+		}
+		response := controller.LookupDnsRespCache_(&msg, key, false)
+		if len(response) != len(packed) || response[0] != 0x12 || response[1] != 0x34 {
+			b.Fatal("expected packed response cache hit")
+		}
+		checksum ^= uint64(len(response)) ^ uint64(response[0]) ^ uint64(response[1])
+	}
+	dnsResponseCachePlanBenchmarkSink = checksum
 }
 
 func BenchmarkFunctionalDnsResolveAsisGuard(b *testing.B) {
