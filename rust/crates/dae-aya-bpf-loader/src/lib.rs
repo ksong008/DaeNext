@@ -1,3 +1,4 @@
+use std::os::fd::AsRawFd;
 use std::path::PathBuf;
 
 use serde_json::json;
@@ -99,6 +100,20 @@ struct TcAttachPinOptions {
     filter_name: Option<String>,
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct TproxyListenerOpenHandoffOptions {
+    map_id: u32,
+    port: u16,
+    handoff_fd: i32,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct TproxyListenerUpdateMapOptions {
+    map_id: u32,
+    tcp_fd: i32,
+    udp_fd: i32,
+}
+
 pub fn run_with_args(args: impl IntoIterator<Item = impl Into<String>>) -> LoaderOutput {
     let args = args.into_iter().map(Into::into).collect::<Vec<_>>();
     match args.first().map(String::as_str) {
@@ -107,6 +122,7 @@ pub fn run_with_args(args: impl IntoIterator<Item = impl Into<String>>) -> Loade
         Some("map-stats") => run_map_stats_command(&args[1..]),
         Some("connectivity-map") => run_connectivity_map_command(&args[1..]),
         Some("tc-attach") => run_tc_attach_command(&args[1..]),
+        Some("tproxy-listener") => run_tproxy_listener_command(&args[1..]),
         Some("trace-loader") => run_trace_loader_command(&args[1..]),
         Some("contract") if args.len() == 1 => run_contract(),
         Some("load-pin") => run_load_pin_command(&args[1..]),
@@ -155,6 +171,24 @@ fn run_tc_attach_command(args: &[String]) -> LoaderOutput {
             LoaderOutput::usage(format!("unsupported tc-attach subcommand: {subcommand}"))
         }
         None => LoaderOutput::usage("missing tc-attach subcommand"),
+    }
+}
+
+fn run_tproxy_listener_command(args: &[String]) -> LoaderOutput {
+    match args.first().map(String::as_str) {
+        Some("contract") if args.len() == 1 => run_tproxy_listener_contract(),
+        Some("open-handoff") => match parse_tproxy_listener_open_handoff_options(&args[1..]) {
+            Ok(options) => run_tproxy_listener_open_handoff(options),
+            Err(err) => LoaderOutput::usage(err),
+        },
+        Some("update-map") => match parse_tproxy_listener_update_map_options(&args[1..]) {
+            Ok(options) => run_tproxy_listener_update_map(options),
+            Err(err) => LoaderOutput::usage(err),
+        },
+        Some(subcommand) => LoaderOutput::usage(format!(
+            "unsupported tproxy-listener subcommand: {subcommand}"
+        )),
+        None => LoaderOutput::usage("missing tproxy-listener subcommand"),
     }
 }
 
@@ -290,6 +324,33 @@ fn run_tc_attach_contract() -> LoaderOutput {
     ))
 }
 
+fn run_tproxy_listener_contract() -> LoaderOutput {
+    LoaderOutput::ok(format!(
+        "{}\n",
+        json!({
+            "name": "rust-tproxy-listener-sockmap-handoff-contract-v1",
+            "binary": "dae-aya-bpf-loader",
+            "scope": "Rust opens TCP/UDP tproxy listeners in the caller netns, writes listen_socket_map key 0/1, and hands listener fds back to Go userspace handlers",
+            "go_userspace_tcp_udp_handlers_remain_authoritative": true,
+            "go_routing_dns_sniff_group_outbound_remain_authoritative": true,
+            "kernel_ebpf_program_rewrite": false,
+            "listen_socket_map": {
+                "key_0": "tcp listener fd",
+                "key_1": "udp socket fd",
+                "map_type": "BPF_MAP_TYPE_SOCKMAP",
+                "max_entries": 2
+            },
+            "socket_options": {
+                "ip_transparent": true,
+                "so_reuseaddr": true,
+                "ip_recvorigdstaddr_or_ipv6_recvorigdstaddr": true
+            },
+            "handoff": "open-handoff sends TCP/UDP listener fds over SCM_RIGHTS; update-map accepts inherited fds for reload listener reuse",
+            "fallback": "Go listener open and Go listen_socket_map update remain available when the helper fails",
+        })
+    ))
+}
+
 fn run_cgroup_monitor_attach_pin(options: CgroupMonitorAttachPinOptions) -> LoaderOutput {
     let reports = match dae_ebpf_support::attach_pin_cgroup_monitor(
         dae_ebpf_support::PinnedCgroupAttachOptions {
@@ -396,6 +457,83 @@ fn run_tc_attach_pin(options: TcAttachPinOptions) -> LoaderOutput {
 #[cfg(not(feature = "native-ebpf"))]
 fn run_tc_attach_pin(_options: TcAttachPinOptions) -> LoaderOutput {
     LoaderOutput::error("tc-attach attach-pin requires dae-aya-bpf-loader feature native-ebpf")
+}
+
+fn run_tproxy_listener_open_handoff(options: TproxyListenerOpenHandoffOptions) -> LoaderOutput {
+    let handoff = match dae_ebpf_support::open_tproxy_listener_set_and_update_sockmap_by_id(
+        options.map_id,
+        options.port,
+    ) {
+        Ok(handoff) => handoff,
+        Err(err) => {
+            return LoaderOutput::error(format!("tproxy listener open-handoff failed: {err}"));
+        }
+    };
+    let payload = json!({
+        "status": "pass",
+        "loader": "rust",
+        "scope": "tproxy-listener-open-handoff",
+        "map_id": handoff.map.id,
+        "map_name": handoff.map.name,
+        "port": options.port,
+        "keys_updated": handoff.keys_updated,
+        "tcp_listener_fd": handoff.tcp_listener_fd,
+        "udp_socket_fd": handoff.udp_socket_fd,
+        "tcp_options": {
+            "ip_transparent": handoff.tcp_options.ip_transparent,
+            "so_reuseaddr": handoff.tcp_options.so_reuseaddr,
+            "ip_recvorigdstaddr": handoff.tcp_options.ip_recvorigdstaddr,
+            "ipv6_recvorigdstaddr": handoff.tcp_options.ipv6_recvorigdstaddr,
+            "original_dst_capture_ready": handoff.tcp_options.original_dst_capture_ready,
+        },
+        "udp_options": {
+            "ip_transparent": handoff.udp_options.ip_transparent,
+            "so_reuseaddr": handoff.udp_options.so_reuseaddr,
+            "ip_recvorigdstaddr": handoff.udp_options.ip_recvorigdstaddr,
+            "ipv6_recvorigdstaddr": handoff.udp_options.ipv6_recvorigdstaddr,
+            "original_dst_capture_ready": handoff.udp_options.original_dst_capture_ready,
+        },
+        "go_userspace_handlers_remain_authoritative": true,
+    });
+    let payload = format!("{payload}\n");
+    if let Err(err) = send_fd_handoff(
+        options.handoff_fd,
+        payload.as_bytes(),
+        &[
+            handoff.listeners.tcp_listener.as_raw_fd(),
+            handoff.listeners.udp_socket.as_raw_fd(),
+        ],
+    ) {
+        return LoaderOutput::error(format!("send tproxy listener fd handoff failed: {err}"));
+    }
+    LoaderOutput::ok(payload)
+}
+
+fn run_tproxy_listener_update_map(options: TproxyListenerUpdateMapOptions) -> LoaderOutput {
+    let map = match dae_ebpf_support::update_listen_socket_map_by_id(
+        options.map_id,
+        options.tcp_fd,
+        options.udp_fd,
+    ) {
+        Ok(map) => map,
+        Err(err) => {
+            return LoaderOutput::error(format!("tproxy listener update-map failed: {err}"));
+        }
+    };
+    LoaderOutput::ok(format!(
+        "{}\n",
+        json!({
+            "status": "pass",
+            "loader": "rust",
+            "scope": "tproxy-listener-update-map",
+            "map_id": map.id,
+            "map_name": map.name,
+            "keys_updated": [0, 1],
+            "tcp_fd": options.tcp_fd,
+            "udp_fd": options.udp_fd,
+            "go_userspace_handlers_remain_authoritative": true,
+        })
+    ))
 }
 
 fn run_load_pin_command(args: &[String]) -> LoaderOutput {
@@ -957,6 +1095,95 @@ fn parse_tc_attach_pin_options(args: &[String]) -> Result<TcAttachPinOptions, St
     })
 }
 
+fn parse_tproxy_listener_open_handoff_options(
+    args: &[String],
+) -> Result<TproxyListenerOpenHandoffOptions, String> {
+    let mut map_id = None;
+    let mut port = None;
+    let mut handoff_fd = None;
+    let mut iter = args.iter();
+    while let Some(arg) = iter.next() {
+        match arg.as_str() {
+            "--map-id" => {
+                map_id = Some(parse_next::<u32>(
+                    &mut iter,
+                    "tproxy-listener open-handoff --map-id",
+                )?)
+            }
+            "--port" => {
+                port = Some(parse_next::<u16>(
+                    &mut iter,
+                    "tproxy-listener open-handoff --port",
+                )?)
+            }
+            "--handoff-fd" => {
+                handoff_fd = Some(parse_next::<i32>(
+                    &mut iter,
+                    "tproxy-listener open-handoff --handoff-fd",
+                )?)
+            }
+            _ if arg.starts_with("--map-id=") => map_id = Some(parse_value(arg)?),
+            _ if arg.starts_with("--port=") => port = Some(parse_value(arg)?),
+            _ if arg.starts_with("--handoff-fd=") => handoff_fd = Some(parse_value(arg)?),
+            _ => {
+                return Err(format!(
+                    "unsupported tproxy-listener open-handoff argument: {arg}"
+                ));
+            }
+        }
+    }
+    Ok(TproxyListenerOpenHandoffOptions {
+        map_id: map_id.ok_or_else(|| "missing tproxy-listener open-handoff --map-id".to_owned())?,
+        port: port.ok_or_else(|| "missing tproxy-listener open-handoff --port".to_owned())?,
+        handoff_fd: handoff_fd
+            .ok_or_else(|| "missing tproxy-listener open-handoff --handoff-fd".to_owned())?,
+    })
+}
+
+fn parse_tproxy_listener_update_map_options(
+    args: &[String],
+) -> Result<TproxyListenerUpdateMapOptions, String> {
+    let mut map_id = None;
+    let mut tcp_fd = None;
+    let mut udp_fd = None;
+    let mut iter = args.iter();
+    while let Some(arg) = iter.next() {
+        match arg.as_str() {
+            "--map-id" => {
+                map_id = Some(parse_next::<u32>(
+                    &mut iter,
+                    "tproxy-listener update-map --map-id",
+                )?)
+            }
+            "--tcp-fd" => {
+                tcp_fd = Some(parse_next::<i32>(
+                    &mut iter,
+                    "tproxy-listener update-map --tcp-fd",
+                )?)
+            }
+            "--udp-fd" => {
+                udp_fd = Some(parse_next::<i32>(
+                    &mut iter,
+                    "tproxy-listener update-map --udp-fd",
+                )?)
+            }
+            _ if arg.starts_with("--map-id=") => map_id = Some(parse_value(arg)?),
+            _ if arg.starts_with("--tcp-fd=") => tcp_fd = Some(parse_value(arg)?),
+            _ if arg.starts_with("--udp-fd=") => udp_fd = Some(parse_value(arg)?),
+            _ => {
+                return Err(format!(
+                    "unsupported tproxy-listener update-map argument: {arg}"
+                ));
+            }
+        }
+    }
+    Ok(TproxyListenerUpdateMapOptions {
+        map_id: map_id.ok_or_else(|| "missing tproxy-listener update-map --map-id".to_owned())?,
+        tcp_fd: tcp_fd.ok_or_else(|| "missing tproxy-listener update-map --tcp-fd".to_owned())?,
+        udp_fd: udp_fd.ok_or_else(|| "missing tproxy-listener update-map --udp-fd".to_owned())?,
+    })
+}
+
 fn parse_connectivity_map_update_options(
     args: &[String],
 ) -> Result<ConnectivityMapUpdateOptions, String> {
@@ -1145,6 +1372,56 @@ fn parse_mac(value: &str) -> Result<[u8; 6], String> {
     Ok(mac)
 }
 
+fn send_fd_handoff(socket_fd: i32, payload: &[u8], fds: &[i32]) -> Result<(), String> {
+    if payload.is_empty() {
+        return Err("fd handoff payload must not be empty".to_owned());
+    }
+    if fds.is_empty() {
+        return Err("fd handoff requires at least one fd".to_owned());
+    }
+
+    let mut iov = libc::iovec {
+        iov_base: payload.as_ptr() as *mut libc::c_void,
+        iov_len: payload.len(),
+    };
+    let rights_len = std::mem::size_of_val(fds);
+    let mut control = vec![0_u8; unsafe { libc::CMSG_SPACE(rights_len as u32) as usize }];
+    let mut msg: libc::msghdr = unsafe { std::mem::zeroed() };
+    msg.msg_iov = &mut iov;
+    msg.msg_iovlen = 1;
+    msg.msg_control = control.as_mut_ptr().cast::<libc::c_void>();
+    msg.msg_controllen = control.len();
+
+    unsafe {
+        let cmsg = libc::CMSG_FIRSTHDR(&msg);
+        if cmsg.is_null() {
+            return Err("failed to allocate SCM_RIGHTS control message".to_owned());
+        }
+        (*cmsg).cmsg_level = libc::SOL_SOCKET;
+        (*cmsg).cmsg_type = libc::SCM_RIGHTS;
+        (*cmsg).cmsg_len = libc::CMSG_LEN(rights_len as u32) as usize;
+        std::ptr::copy_nonoverlapping(
+            fds.as_ptr().cast::<u8>(),
+            libc::CMSG_DATA(cmsg).cast::<u8>(),
+            rights_len,
+        );
+        let sent = libc::sendmsg(socket_fd, &msg, 0);
+        if sent < 0 {
+            return Err(format!(
+                "sendmsg failed: {}",
+                std::io::Error::last_os_error()
+            ));
+        }
+        if sent as usize != payload.len() {
+            return Err(format!(
+                "sendmsg wrote {sent} bytes, expected {}",
+                payload.len()
+            ));
+        }
+    }
+    Ok(())
+}
+
 #[cfg(feature = "native-ebpf")]
 fn mac_string(mac: [u8; 6]) -> String {
     mac.iter()
@@ -1298,6 +1575,69 @@ mod tests {
                 handle: 539164676,
                 backend: dae_ebpf_support::AttachBackend::TcNetlink,
                 filter_name: Some("dae_lan_ingress_l2".to_owned()),
+            }
+        );
+    }
+
+    #[test]
+    fn tproxy_listener_contract_keeps_go_handlers_authoritative() {
+        let output = run_with_args(["tproxy-listener", "contract"]);
+        assert_eq!(output.exit_code, 0, "{}", output.stderr);
+        let json: Value = serde_json::from_str(&output.stdout).unwrap();
+        assert_eq!(
+            json["name"].as_str().unwrap(),
+            "rust-tproxy-listener-sockmap-handoff-contract-v1"
+        );
+        assert!(
+            json["go_userspace_tcp_udp_handlers_remain_authoritative"]
+                .as_bool()
+                .unwrap()
+        );
+        assert_eq!(
+            json["listen_socket_map"]["key_0"].as_str().unwrap(),
+            "tcp listener fd"
+        );
+        assert_eq!(
+            json["listen_socket_map"]["key_1"].as_str().unwrap(),
+            "udp socket fd"
+        );
+    }
+
+    #[test]
+    fn tproxy_listener_commands_require_handoff_and_socket_fds() {
+        let output = run_with_args(["tproxy-listener", "open-handoff", "--map-id", "7"]);
+        assert_eq!(output.exit_code, 2);
+        assert!(output.stderr.contains("--port"));
+        let open = parse_tproxy_listener_open_handoff_options(&[
+            "--map-id=7".to_owned(),
+            "--port=12345".to_owned(),
+            "--handoff-fd=3".to_owned(),
+        ])
+        .unwrap();
+        assert_eq!(
+            open,
+            TproxyListenerOpenHandoffOptions {
+                map_id: 7,
+                port: 12345,
+                handoff_fd: 3,
+            }
+        );
+
+        let output = run_with_args(["tproxy-listener", "update-map", "--map-id", "7"]);
+        assert_eq!(output.exit_code, 2);
+        assert!(output.stderr.contains("--tcp-fd"));
+        let update = parse_tproxy_listener_update_map_options(&[
+            "--map-id=7".to_owned(),
+            "--tcp-fd=3".to_owned(),
+            "--udp-fd=4".to_owned(),
+        ])
+        .unwrap();
+        assert_eq!(
+            update,
+            TproxyListenerUpdateMapOptions {
+                map_id: 7,
+                tcp_fd: 3,
+                udp_fd: 4,
             }
         );
     }
