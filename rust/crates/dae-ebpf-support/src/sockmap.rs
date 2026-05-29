@@ -131,6 +131,39 @@ pub fn open_live_loaded_tproxy_listen_socket_map_in_netns(
     })
 }
 
+pub fn open_tproxy_listener_set_and_update_sockmap_by_id(
+    map_id: u32,
+    port: u16,
+) -> io::Result<LiveLoadedTproxyListenSocketMap> {
+    let (map_fd, map) = open_listen_socket_map_by_id(map_id)?;
+    let listeners = open_tproxy_listener_set(port)?;
+
+    update_sockmap_fd(map_fd.as_raw_fd(), 0, listeners.tcp_listener.as_raw_fd())?;
+    update_sockmap_fd(map_fd.as_raw_fd(), 1, listeners.udp_socket.as_raw_fd())?;
+
+    Ok(LiveLoadedTproxyListenSocketMap {
+        map,
+        new_map_ids: Vec::new(),
+        keys_updated: [0, 1],
+        tcp_listener_fd: listeners.tcp_listener.as_raw_fd(),
+        udp_socket_fd: listeners.udp_socket.as_raw_fd(),
+        tcp_options: listeners.tcp_options.clone(),
+        udp_options: listeners.udp_options.clone(),
+        listeners,
+    })
+}
+
+pub fn update_listen_socket_map_by_id(
+    map_id: u32,
+    tcp_socket_fd: i32,
+    udp_socket_fd: i32,
+) -> io::Result<RuntimeMapInfo> {
+    let (map_fd, map) = open_listen_socket_map_by_id(map_id)?;
+    update_sockmap_fd(map_fd.as_raw_fd(), 0, tcp_socket_fd)?;
+    update_sockmap_fd(map_fd.as_raw_fd(), 1, udp_socket_fd)?;
+    Ok(map)
+}
+
 fn open_live_loaded_tproxy_listen_socket_map_with_listener(
     before_map_ids: &[u32],
     listener_factory: impl FnOnce() -> io::Result<TproxyListenerSet>,
@@ -178,6 +211,18 @@ fn open_new_loaded_listen_socket_map(
     }
     let (map_fd, map) = candidates.remove(0);
     Ok((map_fd, map, new_map_ids))
+}
+
+fn open_listen_socket_map_by_id(map_id: u32) -> io::Result<(OwnedFd, RuntimeMapInfo)> {
+    let fd = open_map_fd(map_id)?;
+    let info = map_info(fd.as_raw_fd())?;
+    if !listen_socket_map_matches(&info) {
+        return Err(io::Error::other(format!(
+            "map id {} is not a listen_socket_map: name={} type={} key_size={} value_size={} max_entries={}",
+            map_id, info.name, info.map_type, info.key_size, info.value_size, info.max_entries
+        )));
+    }
+    Ok((fd, info))
 }
 
 fn listen_socket_map_matches(info: &RuntimeMapInfo) -> bool {
