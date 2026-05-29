@@ -306,6 +306,7 @@ version = "0.1.0"
 dependencies = [
  "dae-ebpf-support",
  "fastrand",
+ "libc",
  "serde_json",
 ]
 

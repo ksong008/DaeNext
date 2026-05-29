@@ -96,8 +96,10 @@ pub use runtime_maps::{
 pub use sockmap::{
     ListenSocketMapFdSmoke, LiveLoadedTproxyListenSocketMap, LoadedListenSocketMapFdSmoke,
     LoadedTproxyListenSocketMapFdSmoke, open_live_loaded_tproxy_listen_socket_map,
-    open_live_loaded_tproxy_listen_socket_map_in_netns, run_listen_socket_map_fd_smoke,
+    open_live_loaded_tproxy_listen_socket_map_in_netns,
+    open_tproxy_listener_set_and_update_sockmap_by_id, run_listen_socket_map_fd_smoke,
     run_loaded_listen_socket_map_fd_smoke, run_loaded_tproxy_listen_socket_map_fd_smoke,
+    update_listen_socket_map_by_id,
 };
 pub use temporary_map::{
     TemporaryBpfArrayMapSmoke, default_bpffs_mount, run_temporary_array_map_pin_smoke,
