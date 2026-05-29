@@ -11,6 +11,7 @@ dae-cli.workspace = true
 dae-config.workspace = true
 dae-control.workspace = true
 dae-core-types.workspace = true
+dae-daemon.workspace = true
 dae-datapath.workspace = true
 dae-dns.workspace = true
 dae-ebpf-support.workspace = true
