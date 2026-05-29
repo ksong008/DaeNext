@@ -206,12 +206,62 @@ impl RoutingMatcher {
     }
 
     pub fn match_query_detail(&self, query: &Query) -> Result<MatchOutcome, RoutingError> {
-        let domain_bitmap = if query.domain.is_empty() {
-            Vec::new()
-        } else {
-            self.domain_matcher.match_domain_bitmap(&query.domain)
-        };
+        let mut domain_bitmap = Vec::new();
+        self.match_query_detail_into(query, &mut domain_bitmap)
+    }
 
+    pub fn match_query_detail_into(
+        &self,
+        query: &Query,
+        domain_bitmap: &mut Vec<u32>,
+    ) -> Result<MatchOutcome, RoutingError> {
+        domain_bitmap.resize(self.domain_bitmap_words(), 0);
+        self.match_query_detail_with_bitmap(query, domain_bitmap)
+    }
+
+    pub fn match_query_detail_with_bitmap(
+        &self,
+        query: &Query,
+        domain_bitmap: &mut [u32],
+    ) -> Result<MatchOutcome, RoutingError> {
+        let domain_bitmap = self.prepare_domain_bitmap(query, domain_bitmap)?;
+        self.match_query_detail_with_prepared_domain_bitmap(query, domain_bitmap)
+    }
+
+    pub fn domain_bitmap_words(&self) -> usize {
+        self.domain_matcher.bitmap_words()
+    }
+
+    fn prepare_domain_bitmap<'a>(
+        &'a self,
+        query: &Query,
+        domain_bitmap: &'a mut [u32],
+    ) -> Result<&'a [u32], RoutingError> {
+        let domain_bitmap = if query.domain.is_empty() {
+            let words = self.domain_bitmap_words();
+            if domain_bitmap.len() < words {
+                return Err(RoutingError::InvalidFixture(format!(
+                    "domain bitmap buffer too short: got {}, want {words}",
+                    domain_bitmap.len()
+                )));
+            }
+            let domain_bitmap = &mut domain_bitmap[..words];
+            domain_bitmap.fill(0);
+            domain_bitmap
+        } else {
+            let words = self
+                .domain_matcher
+                .fill_domain_bitmap(&query.domain, domain_bitmap)?;
+            &mut domain_bitmap[..words]
+        };
+        Ok(domain_bitmap)
+    }
+
+    fn match_query_detail_with_prepared_domain_bitmap(
+        &self,
+        query: &Query,
+        domain_bitmap: &[u32],
+    ) -> Result<MatchOutcome, RoutingError> {
         let mut good_subrule = false;
         let mut bad_rule = false;
         let mut must_rules_hit = false;
@@ -556,5 +606,34 @@ mod tests {
             })
             .unwrap();
         assert_eq!(fallback, OutboundIndex::BLOCK);
+    }
+
+    #[test]
+    fn userspace_matcher_reuses_domain_bitmap_buffer() {
+        let fixture = dae_golden::load_json("routing/userspace/basic_matcher.json").unwrap();
+        let case = fixture["cases"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|case| case["name"].as_str() == Some("domain-suffix-direct-else-block"))
+            .unwrap();
+        let matcher = RoutingMatcher::from_fixture_value(&case["matcher"]).unwrap();
+        let query = Query::tcp(
+            IpAddr::from_str("203.0.113.42").unwrap(),
+            443,
+            "www.example.com",
+        );
+        let mut bitmap = vec![0xaaaaaaaa; matcher.domain_bitmap_words()];
+        let outcome = matcher
+            .match_query_detail_with_bitmap(&query, &mut bitmap)
+            .unwrap();
+
+        assert_eq!(outcome.outbound, OutboundIndex::DIRECT);
+        assert_eq!(bitmap[0], 1);
+
+        let err = matcher
+            .match_query_detail_with_bitmap(&query, &mut [])
+            .unwrap_err();
+        assert!(err.to_string().contains("domain bitmap buffer too short"));
     }
 }
