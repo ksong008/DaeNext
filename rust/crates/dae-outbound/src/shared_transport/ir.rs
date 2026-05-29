@@ -91,6 +91,38 @@ pub fn grpc_cache_key(
 ) -> String {
     let mut magic_raw = [0_u8; 10];
     let magic_raw_len = write_magic_network_to_slice("tcp", mark, mptcp, &mut magic_raw);
+    let magic = String::from_utf8_lossy(&magic_raw[..magic_raw_len]);
+    let allow_insecure = if allow_insecure { "true" } else { "false" };
+    let mut out = String::with_capacity(
+        address.len()
+            + server_name.len()
+            + dialer_id.len()
+            + allow_insecure.len()
+            + magic.len()
+            + 4,
+    );
+    out.push_str(address);
+    out.push('|');
+    out.push_str(server_name);
+    out.push('|');
+    out.push_str(dialer_id);
+    out.push('|');
+    out.push_str(allow_insecure);
+    out.push('|');
+    out.push_str(&magic);
+    out
+}
+
+pub fn grpc_cache_key_lossless(
+    address: &str,
+    server_name: &str,
+    dialer_id: &str,
+    allow_insecure: bool,
+    mark: u32,
+    mptcp: bool,
+) -> String {
+    let mut magic_raw = [0_u8; 10];
+    let magic_raw_len = write_magic_network_to_slice("tcp", mark, mptcp, &mut magic_raw);
     let mut magic_encoded = [0_u8; 16];
     let magic_len = general_purpose::URL_SAFE_NO_PAD
         .encode_slice(&magic_raw[..magic_raw_len], &mut magic_encoded)

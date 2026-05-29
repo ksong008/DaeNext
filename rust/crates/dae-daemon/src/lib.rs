@@ -62,7 +62,7 @@ pub use production_dataplane_harness::{
 };
 pub use production_runtime_owner::{
     ProductionRuntimeOwnerOptions, daemon_runtime_native_owner_summary_json,
-    production_runtime_owner_report,
+    datapath_outbound_ebpf_deep_area_summary_json, production_runtime_owner_report,
 };
 pub use reload_owner_benchmark::{
     default_reload_owner_benchmark_root, reload_owner_benchmark_report,

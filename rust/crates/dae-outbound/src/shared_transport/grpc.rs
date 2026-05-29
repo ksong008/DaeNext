@@ -65,7 +65,7 @@ impl GrpcLifecycleOptions {
     }
 
     pub fn cache_key(&self) -> String {
-        ir::grpc_cache_key(
+        ir::grpc_cache_key_lossless(
             &self.address,
             &self.server_name,
             &self.dialer_id,
