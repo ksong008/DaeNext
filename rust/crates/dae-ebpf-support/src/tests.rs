@@ -935,7 +935,16 @@ fn connectivity_dryrun_matches_golden_fixture() {
             is_init: event["name"].as_str().unwrap().contains("_init_"),
             dryrun: event["name"].as_str().unwrap().starts_with("dryrun_"),
         });
+        let plan = connectivity_write_plan(ConnectivityEvent {
+            key,
+            alive: event["value"].as_u64().unwrap() == 1,
+            is_init: event["name"].as_str().unwrap().contains("_init_"),
+            dryrun: event["name"].as_str().unwrap().starts_with("dryrun_"),
+        });
         assert_eq!(written, event["written"].as_bool().unwrap());
+        assert_eq!(plan.written, written);
+        assert_eq!(plan.key, key);
+        assert_eq!(plan.value, event["value"].as_u64().unwrap() as u32);
         assert_eq!(map.len(), event["state_len"].as_u64().unwrap() as usize);
         if written {
             assert_eq!(map.get(key), Some(event["value"].as_u64().unwrap() as u32));
