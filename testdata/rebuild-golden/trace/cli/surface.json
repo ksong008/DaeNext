@@ -50,6 +50,15 @@
       "shorthand": ""
     }
   ],
+  "loader": {
+    "default": "rust-aya",
+    "default_daemon_path": false,
+    "disable_env": "DAE_TRACE_RUST_AYA_LOADER=0",
+    "go_fallback_preserved": true,
+    "helper_default": "dae-aya-bpf-loader",
+    "helper_env": "DAE_RUST_BPF_LOADER_HELPER",
+    "strict_env": "DAE_TRACE_RUST_AYA_LOADER_STRICT"
+  },
   "name": "trace-cli-surface",
   "output_fields": [
     "skb",
@@ -70,6 +79,7 @@
   "source": [
     "cmd/trace.go",
     "trace/trace.go",
+    "trace/rust_aya_loader.go",
     "trace/ringbuf.go",
     "trace/tracker.go"
   ],

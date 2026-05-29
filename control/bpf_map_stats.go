@@ -5,7 +5,13 @@
 
 package control
 
-import "github.com/cilium/ebpf"
+import (
+	"encoding/json"
+	"fmt"
+	"strconv"
+
+	"github.com/cilium/ebpf"
+)
 
 type BPFMapStats struct {
 	RedirectTrackEntries int `json:"redirectTrackEntries"`
@@ -20,6 +26,13 @@ func (c *controlPlaneCore) BPFMapStats() (stats BPFMapStats, err error) {
 	if c == nil || c.bpf == nil {
 		return stats, nil
 	}
+	if stats, err = c.bpfMapStatsViaRustHelper(); err == nil {
+		return stats, nil
+	}
+	return c.bpfMapStatsViaGo()
+}
+
+func (c *controlPlaneCore) bpfMapStatsViaGo() (stats BPFMapStats, err error) {
 	if stats.RedirectTrackEntries, err = countMapEntries[bpfRedirectTuple, bpfRedirectEntry](c.bpf.RedirectTrack); err != nil {
 		return stats, err
 	}
@@ -39,6 +52,76 @@ func (c *controlPlaneCore) BPFMapStats() (stats BPFMapStats, err error) {
 		return stats, err
 	}
 	return stats, nil
+}
+
+func (c *controlPlaneCore) bpfMapStatsViaRustHelper() (BPFMapStats, error) {
+	maps := []struct {
+		name string
+		m    *ebpf.Map
+	}{
+		{"redirect_track", c.bpf.RedirectTrack},
+		{"routing_tuples_map", c.bpf.RoutingTuplesMap},
+		{"domain_routing_map", c.bpf.DomainRoutingMap},
+		{"udp_conn_state_map", c.bpf.UdpConnStateMap},
+		{"cookie_pid_map", c.bpf.CookiePidMap},
+		{"tgid_pname_map", c.bpf.TgidPnameMap},
+	}
+	args := []string{"map-stats", "count"}
+	for _, item := range maps {
+		id, err := bpfMapID(item.m)
+		if err != nil {
+			return BPFMapStats{}, err
+		}
+		args = append(args, "--map", item.name+":"+strconv.FormatUint(uint64(id), 10))
+	}
+	out, err := runRustBpfLoaderHelperOutput(args...)
+	if err != nil {
+		return BPFMapStats{}, err
+	}
+	var decoded struct {
+		Counts []struct {
+			Name    string `json:"name"`
+			Entries int    `json:"entries"`
+		} `json:"counts"`
+	}
+	if err := json.Unmarshal([]byte(out), &decoded); err != nil {
+		return BPFMapStats{}, fmt.Errorf("decode rust map stats output: %w", err)
+	}
+	var stats BPFMapStats
+	for _, count := range decoded.Counts {
+		switch count.Name {
+		case "redirect_track":
+			stats.RedirectTrackEntries = count.Entries
+		case "routing_tuples_map":
+			stats.RoutingTuplesEntries = count.Entries
+		case "domain_routing_map":
+			stats.DomainRoutingEntries = count.Entries
+		case "udp_conn_state_map":
+			stats.UdpConnStateEntries = count.Entries
+		case "cookie_pid_map":
+			stats.CookiePidEntries = count.Entries
+		case "tgid_pname_map":
+			stats.TgidPnameEntries = count.Entries
+		default:
+			return BPFMapStats{}, fmt.Errorf("unexpected rust map stats name %q", count.Name)
+		}
+	}
+	return stats, nil
+}
+
+func bpfMapID(m *ebpf.Map) (uint32, error) {
+	if m == nil {
+		return 0, fmt.Errorf("nil BPF map")
+	}
+	info, err := m.Info()
+	if err != nil {
+		return 0, err
+	}
+	id, ok := info.ID()
+	if !ok {
+		return 0, fmt.Errorf("BPF map %q has no kernel id", info.Name)
+	}
+	return uint32(id), nil
 }
 
 func countMapEntries[K any, V any](m *ebpf.Map) (int, error) {
