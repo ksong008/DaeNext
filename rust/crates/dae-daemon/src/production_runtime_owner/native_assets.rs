@@ -97,6 +97,35 @@ const RUNTIME_NATIVE_GROUPS: &[RuntimeNativeGroup] = &[
             "DAENEW_RUST_REBUILD_MEMO_2026-05-16.md:22.1",
         ],
     },
+    RuntimeNativeGroup {
+        id: "datapath-outbound-ebpf-deep-area",
+        queue_index: 6,
+        name: "Datapath / Outbound / eBPF Deep Area",
+        primary_crates: &[
+            "dae-datapath",
+            "dae-outbound",
+            "dae-ebpf-support",
+            "dae-netutil",
+            "dae-daemon",
+        ],
+        accepted_native_assets: &[
+            "tcp_active_datapath_native_assets",
+            "udp_active_datapath_native_assets",
+            "outbound_protocol_stack_native_assets",
+            "ebpf_backend_host_ops_native_assets",
+        ],
+        default_switch_blockers: &[
+            "product_chain_release_gate_not_opened_by_stage6_report",
+            "go_runtime_and_go_outbound_still_authoritative_for_default_product_path",
+            "full_live_protocol_matrix_not_completed_in_default_resident_daemon",
+        ],
+        source: &[
+            "DAEX_RUST_PERFORMANCE_OPTIMIZATION_PLAN_2026-05-24.md:stage6",
+            "DAENEW_RUST_REBUILD_MEMO_2026-05-16.md:12",
+            "DAENEW_RUST_REBUILD_MEMO_2026-05-16.md:21",
+            "DAENEW_RUST_REBUILD_MEMO_2026-05-16.md:22",
+        ],
+    },
 ];
 
 const RUNTIME_OWNER_BLOCKERS: &[&str] = &[
@@ -104,8 +133,8 @@ const RUNTIME_OWNER_BLOCKERS: &[&str] = &[
     "go_runtime_reload_loop_still_authoritative",
     "control_api_runtime_overview_not_yet_rust_default_owned",
     "fd_link_map_lifetime_owner_not_yet_fully_rust_default_owned",
-    "outbound_protocol_stack_rewrite_deferred_to_stage6",
-    "datapath_and_ebpf_deep_area_deferred_to_stage6",
+    "stage6_deep_area_recorded_but_default_switch_requires_release_gate",
+    "go_runtime_and_go_outbound_still_authoritative_for_default_product_path",
 ];
 
 pub(super) fn runtime_native_group_count() -> usize {
@@ -130,13 +159,14 @@ pub(super) fn daemon_runtime_native_owner_summary_json() -> Value {
         "process_helper_target_architecture": false,
         "cgo_or_dlopen_target_architecture": false,
         "outbound_protocol_rewrite_claimed": false,
-        "datapath_deep_area_claimed": false,
+        "datapath_deep_area_recorded": true,
         "aya_tcx_default_switch_claimed": false,
         "go_bpf_loader_restored_or_required_by_this_stage": false,
         "go_default_path_preserved_until_runtime_owner_admission": true,
-        "next_queue": "datapath-outbound-ebpf-deep-area",
+        "next_queue": "fixed-queue-complete-release-gates",
         "source": [
             "DAEX_RUST_PERFORMANCE_OPTIMIZATION_PLAN_2026-05-24.md:stage5",
+            "DAEX_RUST_PERFORMANCE_OPTIMIZATION_PLAN_2026-05-24.md:stage6",
             "DAEX_RUST_REBUILD_PLAN_2026-05-16.md:execution-discipline",
             "DAENEW_RUST_REBUILD_MEMO_2026-05-16.md:22.1",
             "DAENEW_RUST_REBUILD_MEMO_2026-05-16.md:22.2",
@@ -184,7 +214,7 @@ mod tests {
                 .as_bool()
                 .unwrap()
         );
-        assert!(!summary["datapath_deep_area_claimed"].as_bool().unwrap());
+        assert!(summary["datapath_deep_area_recorded"].as_bool().unwrap());
         assert!(
             !summary["go_bpf_loader_restored_or_required_by_this_stage"]
                 .as_bool()
