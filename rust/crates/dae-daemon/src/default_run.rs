@@ -276,6 +276,22 @@ pub fn run_default_optin_report(options: &RunOptions, version: &str) -> Result<V
         product_chain_recertification["resident_default_daemon_switch_ready"]
             .as_bool()
             .unwrap_or(false);
+    let release_product_chain_live_gate = release_product_chain_live_gate_json(
+        production_dataplane_admitted,
+        reload_runtime_parity_admitted,
+        matched_benchmark_recorded,
+        bpf_go_fallback_retired,
+        true_rust_default_daemon_admitted,
+        product_chain_recertification_executed,
+        product_chain_recertification_clean,
+        default_path_mutation_allowed,
+        product_chain_switch_allowed,
+        resident_default_daemon_switch_ready,
+        &production_runtime_owner,
+    );
+    let release_gate_open = release_product_chain_live_gate["release_gate_open"]
+        .as_bool()
+        .unwrap_or(false);
 
     fs::write(
         &options.logfile,
@@ -438,6 +454,8 @@ pub fn run_default_optin_report(options: &RunOptions, version: &str) -> Result<V
     report["go_fallback_required"] = product_chain_recertification["go_fallback_required"].clone();
     report["go_fallback_retired"] = product_chain_recertification["go_fallback_retired"].clone();
     report["product_chain_recertification"] = product_chain_recertification.clone();
+    report["release_product_chain_live_gate"] = release_product_chain_live_gate;
+    report["release_gate_open"] = json!(release_gate_open);
     for key in [
         ("production_run_command_replaced", false),
         ("production_pid_progress_paths_mutated", false),
@@ -630,6 +648,153 @@ fn derived_support_root(prefix: &str, root: &Path) -> PathBuf {
         .and_then(|name| name.to_str())
         .unwrap_or("run");
     PathBuf::from(format!("{prefix}-{suffix}"))
+}
+
+#[allow(clippy::too_many_arguments)]
+fn release_product_chain_live_gate_json(
+    production_dataplane_admitted: bool,
+    reload_runtime_parity_admitted: bool,
+    matched_benchmark_recorded: bool,
+    bpf_go_fallback_retired: bool,
+    true_rust_default_daemon_admitted: bool,
+    product_chain_recertification_executed: bool,
+    product_chain_recertification_clean: bool,
+    default_path_mutation_allowed: bool,
+    product_chain_switch_allowed: bool,
+    resident_default_daemon_switch_ready: bool,
+    production_runtime_owner: &Value,
+) -> Value {
+    let fixed_queue_completed =
+        production_runtime_owner["datapath_outbound_ebpf_deep_area"]["fixed_queue_completed"]
+            .as_bool()
+            .unwrap_or(false);
+    let stage6_deep_area_recorded = production_runtime_owner["datapath_outbound_ebpf_deep_area"]
+        ["datapath_native_assets_recorded"]
+        .as_bool()
+        .unwrap_or(false);
+    let go_bpf_loader_restored =
+        production_runtime_owner["datapath_outbound_ebpf_deep_area"]["go_bpf_loader_restored"]
+            .as_bool()
+            .unwrap_or(false);
+    let aya_loader_direction_preserved = production_runtime_owner
+        ["datapath_outbound_ebpf_deep_area"]["aya_loader_direction_preserved"]
+        .as_bool()
+        .unwrap_or(false);
+    let full_live_matrix_admitted = production_dataplane_admitted
+        && reload_runtime_parity_admitted
+        && matched_benchmark_recorded
+        && bpf_go_fallback_retired
+        && true_rust_default_daemon_admitted;
+    let release_gate_open = fixed_queue_completed
+        && full_live_matrix_admitted
+        && product_chain_recertification_executed
+        && product_chain_recertification_clean
+        && default_path_mutation_allowed
+        && product_chain_switch_allowed
+        && resident_default_daemon_switch_ready
+        && !go_bpf_loader_restored;
+
+    let rows = vec![
+        json!({
+            "area": "fixed-native-queue",
+            "status": if fixed_queue_completed { "pass" } else { "fail" },
+            "recorded": fixed_queue_completed,
+            "required_evidence": "stage1-stage6 native groups are accepted by production_runtime_owner and stage6 deep area is recorded",
+            "blocker": if fixed_queue_completed { "" } else { "stage6 fixed queue completion evidence is absent from production_runtime_owner" },
+        }),
+        json!({
+            "area": "default-daemon-live-matrix",
+            "status": if full_live_matrix_admitted { "pass" } else { "fail" },
+            "recorded": full_live_matrix_admitted,
+            "required_evidence": "production dataplane, reload/runtime parity, matched Go/Rust default daemon benchmark, and BPF fallback retirement all pass together",
+            "blocker": if full_live_matrix_admitted { "" } else { "full default daemon live matrix is incomplete" },
+        }),
+        json!({
+            "area": "product-chain-recertification",
+            "status": if product_chain_recertification_clean { "pass" } else if product_chain_recertification_executed { "fail" } else { "not-executed" },
+            "recorded": product_chain_recertification_clean,
+            "required_evidence": "daed, dae-wing, release, package, service, WebUI/API, and dependency boundary recertification are clean",
+            "blocker": if product_chain_recertification_clean { "" } else if product_chain_recertification_executed { "product-chain recertification executed but is not clean" } else { "product-chain recertification has not executed" },
+        }),
+        json!({
+            "area": "fallback-policy",
+            "status": if release_gate_open { "pass" } else { "fail" },
+            "recorded": release_gate_open,
+            "required_evidence": "Go runtime/outbound fallback deletion is only allowed after release gate opens and rollback is proven",
+            "blocker": if release_gate_open { "" } else { "Go runtime/outbound fallback remains required" },
+        }),
+        json!({
+            "area": "bpf-loader-boundary",
+            "status": if aya_loader_direction_preserved && !go_bpf_loader_restored { "pass" } else { "fail" },
+            "recorded": aya_loader_direction_preserved && !go_bpf_loader_restored,
+            "required_evidence": "Rust/Aya loader direction is preserved and Go BPF loader is not restored",
+            "blocker": if aya_loader_direction_preserved && !go_bpf_loader_restored { "" } else { "BPF loader boundary evidence is invalid" },
+        }),
+    ];
+
+    let mut blockers = Vec::new();
+    if !fixed_queue_completed {
+        blockers.push("fixed stage1-stage6 native queue completion evidence is missing");
+    }
+    if !stage6_deep_area_recorded {
+        blockers.push("stage6 datapath/outbound/eBPF deep area evidence is missing");
+    }
+    if !full_live_matrix_admitted {
+        blockers.push("full default daemon live matrix is incomplete");
+    }
+    if !matched_benchmark_recorded {
+        blockers.push("matched Go/Rust default daemon benchmark is not recorded");
+    }
+    if !product_chain_recertification_clean {
+        blockers.push("product-chain recertification is not clean");
+    }
+    if !default_path_mutation_allowed {
+        blockers.push("default path mutation is not allowed");
+    }
+    if !product_chain_switch_allowed {
+        blockers.push("product-chain switch is not allowed");
+    }
+    if !resident_default_daemon_switch_ready {
+        blockers.push("resident default daemon switch is not ready");
+    }
+    if go_bpf_loader_restored {
+        blockers.push("Go BPF loader restoration would violate the Rust/Aya loader boundary");
+    }
+
+    json!({
+        "schema": "release-product-chain-live-gate-v1",
+        "formal_surface": "stage7-release-product-chain-live-gate",
+        "fixed_queue_range": "stage1-stage6",
+        "fixed_queue_completed": fixed_queue_completed,
+        "stage6_deep_area_recorded": stage6_deep_area_recorded,
+        "stage7_gate_recorded": true,
+        "release_gate_open": release_gate_open,
+        "default_switch_allowed": release_gate_open && default_path_mutation_allowed,
+        "product_chain_switch_allowed": release_gate_open && product_chain_switch_allowed,
+        "go_default_path_preserved": !release_gate_open,
+        "go_runtime_outbound_fallback_required": !release_gate_open,
+        "go_runtime_outbound_fallback_deletion_allowed": release_gate_open,
+        "go_bpf_loader_restored": go_bpf_loader_restored,
+        "aya_loader_direction_preserved": aya_loader_direction_preserved,
+        "production_dataplane_admitted": production_dataplane_admitted,
+        "reload_runtime_parity_admitted": reload_runtime_parity_admitted,
+        "matched_go_rust_default_daemon_benchmark_recorded": matched_benchmark_recorded,
+        "bpf_go_fallback_retired": bpf_go_fallback_retired,
+        "true_rust_default_daemon_admitted": true_rust_default_daemon_admitted,
+        "product_chain_recertification_executed": product_chain_recertification_executed,
+        "product_chain_recertification_clean": product_chain_recertification_clean,
+        "default_path_mutation_allowed": default_path_mutation_allowed,
+        "resident_default_daemon_switch_ready": resident_default_daemon_switch_ready,
+        "gate_rows": rows,
+        "remaining_blockers": blockers,
+        "source": [
+            "DAEX_RUST_PERFORMANCE_OPTIMIZATION_PLAN_2026-05-24.md:stage7",
+            "rust/crates/dae-daemon/src/production_runtime_owner/deep_area.rs",
+            "rust/crates/dae-product/src/release_gate.rs",
+            "rust/crates/dae-product/src/product_chain_admission.rs",
+            "rust/crates/dae-product/src/true_daemon_admission.rs"
+        ],
+    })
 }
 
 fn write_progress(path: &Path, byte: u8, suffix: &str) -> Result<(), String> {
