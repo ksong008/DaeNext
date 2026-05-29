@@ -1,6 +1,7 @@
 pub(crate) mod cli;
 pub(crate) mod config;
 pub(crate) mod control;
+pub(crate) mod daemon;
 pub(crate) mod dns;
 pub(crate) mod engine;
 pub(crate) mod geodata;
