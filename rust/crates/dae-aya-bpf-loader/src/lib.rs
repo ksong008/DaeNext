@@ -1,4 +1,4 @@
-use std::io::{self, BufRead, Write};
+use std::io::{self, BufRead, Read, Write};
 use std::os::fd::AsRawFd;
 use std::path::PathBuf;
 
@@ -671,6 +671,55 @@ where
     Ok(())
 }
 
+pub fn run_connectivity_map_serve_binary<R, W>(mut reader: R, mut writer: W) -> io::Result<()>
+where
+    R: Read,
+    W: Write,
+{
+    let mut cache = dae_ebpf_support::ConnectivityMapFdCache::default();
+    let mut request = [0_u8; 8];
+    loop {
+        match reader.read_exact(&mut request) {
+            Ok(()) => {}
+            Err(err) if err.kind() == io::ErrorKind::UnexpectedEof => return Ok(()),
+            Err(err) => return Err(err),
+        }
+        let response = handle_connectivity_map_serve_binary_request(&mut cache, request);
+        writer.write_all(&response)?;
+        writer.flush()?;
+    }
+}
+
+fn handle_connectivity_map_serve_binary_request(
+    cache: &mut dae_ebpf_support::ConnectivityMapFdCache,
+    request: [u8; 8],
+) -> [u8; 8] {
+    let map_id = u32::from_le_bytes([request[0], request[1], request[2], request[3]]);
+    let flags = request[7];
+    let event = dae_ebpf_support::ConnectivityEvent {
+        key: dae_ebpf_support::ConnectivityKey {
+            outbound: request[4],
+            l4proto: request[5],
+            ipversion: request[6],
+        },
+        alive: flags & 0x01 != 0,
+        is_init: flags & 0x02 != 0,
+        dryrun: flags & 0x04 != 0,
+    };
+    let mut response = [0_u8; 8];
+    response[4..8].copy_from_slice(&map_id.to_le_bytes());
+    match cache.update_by_id(map_id, event) {
+        Ok(plan) => {
+            response[0] = 0;
+            response[1] = u8::from(plan.written);
+        }
+        Err(_) => {
+            response[0] = 1;
+        }
+    }
+    response
+}
+
 fn handle_connectivity_map_serve_line(
     cache: &mut dae_ebpf_support::ConnectivityMapFdCache,
     line: &str,
@@ -781,11 +830,12 @@ pub fn run_routing_map_apply_json(input: &str) -> LoaderOutput {
         Ok(request) => request,
         Err(err) => return LoaderOutput::usage(err),
     };
-    match dae_ebpf_support::apply_routing_maps_by_id(
+    match dae_ebpf_support::apply_routing_maps_with_lpm_build_by_id(
         request.routing_map_id,
         request.lpm_array_map_id,
         &request.routing_entries,
         &request.lpm_entries,
+        &request.lpm_maps,
     ) {
         Ok(report) => LoaderOutput::ok(format!(
             "{}\n",
@@ -797,6 +847,7 @@ pub fn run_routing_map_apply_json(input: &str) -> LoaderOutput {
                 "lpm_array_map_id": request.lpm_array_map_id,
                 "routing_entries_updated": report.routing_entries_updated,
                 "lpm_entries_updated": report.lpm_entries_updated,
+                "lpm_maps_created": report.lpm_maps_created,
             })
         )),
         Err(err) => LoaderOutput::error(format!("routing map apply failed: {err}")),
@@ -866,6 +917,7 @@ struct RoutingMapApplyRequest {
     lpm_array_map_id: u32,
     routing_entries: Vec<dae_ebpf_support::RoutingMapEntry>,
     lpm_entries: Vec<dae_ebpf_support::LpmArrayMapEntry>,
+    lpm_maps: Vec<dae_ebpf_support::LpmMapBuildSpec>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -889,11 +941,16 @@ fn parse_routing_map_apply_request(input: &str) -> Result<RoutingMapApplyRequest
         .iter()
         .map(parse_lpm_array_map_entry)
         .collect::<Result<Vec<_>, _>>()?;
+    let lpm_maps = optional_json_array(object.get("lpm_maps"))?
+        .iter()
+        .map(parse_lpm_map_build_spec)
+        .collect::<Result<Vec<_>, _>>()?;
     Ok(RoutingMapApplyRequest {
         routing_map_id: json_u32(object.get("routing_map_id"), "routing_map_id")?,
         lpm_array_map_id: json_u32(object.get("lpm_array_map_id"), "lpm_array_map_id")?,
         routing_entries,
         lpm_entries,
+        lpm_maps,
     })
 }
 
@@ -944,6 +1001,41 @@ fn parse_lpm_array_map_entry(value: &Value) -> Result<dae_ebpf_support::LpmArray
     })
 }
 
+fn parse_lpm_map_build_spec(value: &Value) -> Result<dae_ebpf_support::LpmMapBuildSpec, String> {
+    let object = value
+        .as_object()
+        .ok_or_else(|| "bad lpm map build spec: expected JSON object".to_owned())?;
+    let entries = json_array(object.get("entries"), "lpm_maps[].entries")?
+        .iter()
+        .map(parse_lpm_map_entry)
+        .collect::<Result<Vec<_>, _>>()?;
+    Ok(dae_ebpf_support::LpmMapBuildSpec {
+        index: json_u32(object.get("index"), "lpm_maps[].index")?,
+        flags: json_u32(object.get("flags"), "lpm_maps[].flags")?,
+        max_entries: json_u32(object.get("max_entries"), "lpm_maps[].max_entries")?,
+        key_size: json_u32(object.get("key_size"), "lpm_maps[].key_size")?,
+        value_size: json_u32(object.get("value_size"), "lpm_maps[].value_size")?,
+        entries,
+    })
+}
+
+fn parse_lpm_map_entry(value: &Value) -> Result<dae_ebpf_support::LpmMapEntry, String> {
+    let object = value
+        .as_object()
+        .ok_or_else(|| "bad lpm map entry: expected JSON object".to_owned())?;
+    let key = object
+        .get("key")
+        .and_then(Value::as_object)
+        .ok_or_else(|| "bad lpm map entry key: expected JSON object".to_owned())?;
+    Ok(dae_ebpf_support::LpmMapEntry {
+        key: dae_ebpf_support::BpfLpmKey {
+            prefix_len: json_u32(key.get("prefix_len"), "lpm_maps[].entries[].key.prefix_len")?,
+            data: json_u32_array_4(key.get("data"), "lpm_maps[].entries[].key.data")?,
+        },
+        value: json_u32(object.get("value"), "lpm_maps[].entries[].value")?,
+    })
+}
+
 fn parse_domain_routing_map_entry(
     value: &Value,
 ) -> Result<dae_ebpf_support::DomainRoutingMapEntry, String> {
@@ -979,6 +1071,16 @@ fn json_array<'a>(value: Option<&'a Value>, name: &str) -> Result<&'a Vec<Value>
     value
         .and_then(Value::as_array)
         .ok_or_else(|| format!("missing or non-array field: {name}"))
+}
+
+fn optional_json_array(value: Option<&Value>) -> Result<Vec<Value>, String> {
+    match value {
+        Some(value) => value
+            .as_array()
+            .cloned()
+            .ok_or_else(|| "optional field is not an array".to_owned()),
+        None => Ok(Vec::new()),
+    }
 }
 
 fn json_u32_array_4(value: Option<&Value>, name: &str) -> Result<[u32; 4], String> {
@@ -2065,6 +2167,17 @@ mod tests {
               "routing_map_id": 7,
               "lpm_array_map_id": 8,
               "lpm_entries": [{"index": 3, "map_id": 9}],
+              "lpm_maps": [{
+                "index": 4,
+                "flags": 1,
+                "max_entries": 2048,
+                "key_size": 20,
+                "value_size": 4,
+                "entries": [{
+                  "key": {"prefix_len": 128, "data": [0,0,65535,1]},
+                  "value": 1
+                }]
+              }],
               "routing_entries": [{
                 "index": 0,
                 "value": {
@@ -2082,6 +2195,9 @@ mod tests {
         assert_eq!(request.routing_map_id, 7);
         assert_eq!(request.lpm_array_map_id, 8);
         assert_eq!(request.lpm_entries[0].map_id, 9);
+        assert_eq!(request.lpm_maps[0].index, 4);
+        assert_eq!(request.lpm_maps[0].entries[0].key.prefix_len, 128);
+        assert_eq!(request.lpm_maps[0].entries[0].value, 1);
         assert_eq!(request.routing_entries[0].value.value[0], 1);
         assert_eq!(request.routing_entries[0].value.kind, 10);
         assert_eq!(request.routing_entries[0].value.must, 1);
@@ -2128,6 +2244,31 @@ mod tests {
         assert_eq!(json["status"].as_str().unwrap(), "pass");
         assert!(!json["written"].as_bool().unwrap());
         assert_eq!(json["key"]["outbound"].as_u64().unwrap(), 2);
+        assert!(cache.is_empty());
+    }
+
+    #[test]
+    fn connectivity_map_serve_binary_dryrun_skip_does_not_open_map() {
+        let mut cache = dae_ebpf_support::ConnectivityMapFdCache::default();
+        let response = handle_connectivity_map_serve_binary_request(
+            &mut cache,
+            [
+                0,
+                0,
+                0,
+                0, // map id
+                2,
+                6,
+                4,           // outbound, l4 proto, ip version
+                0x01 | 0x04, // alive + dryrun, no is-init
+            ],
+        );
+        assert_eq!(response[0], 0);
+        assert_eq!(response[1], 0);
+        assert_eq!(
+            u32::from_le_bytes([response[4], response[5], response[6], response[7]]),
+            0
+        );
         assert!(cache.is_empty());
     }
 

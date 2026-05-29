@@ -16,12 +16,32 @@ type rustRoutingMapApplyRequest struct {
 	RoutingMapID   uint32                 `json:"routing_map_id"`
 	LpmArrayMapID  uint32                 `json:"lpm_array_map_id"`
 	LpmEntries     []rustLpmArrayMapEntry `json:"lpm_entries"`
+	LpmMaps        []rustLpmMapBuildSpec  `json:"lpm_maps"`
 	RoutingEntries []rustRoutingMapEntry  `json:"routing_entries"`
 }
 
 type rustLpmArrayMapEntry struct {
 	Index uint32 `json:"index"`
 	MapID uint32 `json:"map_id"`
+}
+
+type rustLpmMapBuildSpec struct {
+	Index      uint32            `json:"index"`
+	Flags      uint32            `json:"flags"`
+	MaxEntries uint32            `json:"max_entries"`
+	KeySize    uint32            `json:"key_size"`
+	ValueSize  uint32            `json:"value_size"`
+	Entries    []rustLpmMapEntry `json:"entries"`
+}
+
+type rustLpmMapEntry struct {
+	Key   rustBpfLpmKey `json:"key"`
+	Value uint32        `json:"value"`
+}
+
+type rustBpfLpmKey struct {
+	PrefixLen uint32    `json:"prefix_len"`
+	Data      [4]uint32 `json:"data"`
 }
 
 type rustRoutingMapEntry struct {
@@ -49,8 +69,8 @@ type rustDomainRoutingMapUpdate struct {
 	Bitmap [32]uint32 `json:"bitmap"`
 }
 
-func (b *RoutingMatcherBuilder) updateKernelRoutingMapsViaRustHelper(lpmMaps []*ebpf.Map) error {
-	if b == nil || b.bpf == nil || b.bpf.RoutingMap == nil || b.bpf.LpmArrayMap == nil {
+func (b *RoutingMatcherBuilder) updateKernelRoutingMapsViaRustHelper() error {
+	if b == nil || b.bpf == nil || b.bpf.RoutingMap == nil || b.bpf.LpmArrayMap == nil || b.bpf.UnusedLpmType == nil {
 		return fmt.Errorf("routing maps are not initialized")
 	}
 	routingMapID, err := bpfMapID(b.bpf.RoutingMap)
@@ -64,18 +84,30 @@ func (b *RoutingMatcherBuilder) updateKernelRoutingMapsViaRustHelper(lpmMaps []*
 	request := rustRoutingMapApplyRequest{
 		RoutingMapID:   routingMapID,
 		LpmArrayMapID:  lpmArrayMapID,
-		LpmEntries:     make([]rustLpmArrayMapEntry, 0, len(lpmMaps)),
+		LpmEntries:     []rustLpmArrayMapEntry{},
+		LpmMaps:        make([]rustLpmMapBuildSpec, 0, len(b.simulatedLpmTries)),
 		RoutingEntries: make([]rustRoutingMapEntry, 0, len(b.rules)),
 	}
-	for index, m := range lpmMaps {
-		mapID, err := bpfMapID(m)
-		if err != nil {
-			return fmt.Errorf("get LPM map id at index %d: %w", index, err)
+	for index, cidrs := range b.simulatedLpmTries {
+		spec := rustLpmMapBuildSpec{
+			Index:      uint32(index),
+			Flags:      b.bpf.UnusedLpmType.Flags(),
+			MaxEntries: b.bpf.UnusedLpmType.MaxEntries(),
+			KeySize:    b.bpf.UnusedLpmType.KeySize(),
+			ValueSize:  b.bpf.UnusedLpmType.ValueSize(),
+			Entries:    make([]rustLpmMapEntry, 0, len(cidrs)),
 		}
-		request.LpmEntries = append(request.LpmEntries, rustLpmArrayMapEntry{
-			Index: uint32(index),
-			MapID: mapID,
-		})
+		for _, cidr := range cidrs {
+			key := cidrToBpfLpmKey(cidr)
+			spec.Entries = append(spec.Entries, rustLpmMapEntry{
+				Key: rustBpfLpmKey{
+					PrefixLen: key.PrefixLen,
+					Data:      key.Data,
+				},
+				Value: 1,
+			})
+		}
+		request.LpmMaps = append(request.LpmMaps, spec)
 	}
 	for index, rule := range b.rules {
 		request.RoutingEntries = append(request.RoutingEntries, rustRoutingMapEntry{
@@ -102,13 +134,15 @@ func (b *RoutingMatcherBuilder) updateKernelRoutingMapsViaRustHelper(lpmMaps []*
 		Status                string `json:"status"`
 		RoutingEntriesUpdated int    `json:"routing_entries_updated"`
 		LpmEntriesUpdated     int    `json:"lpm_entries_updated"`
+		LpmMapsCreated        int    `json:"lpm_maps_created"`
 	}
 	if err := json.Unmarshal([]byte(out), &decoded); err != nil {
 		return fmt.Errorf("decode Rust routing map output: %w", err)
 	}
 	if decoded.Status != "pass" ||
 		decoded.RoutingEntriesUpdated != len(request.RoutingEntries) ||
-		decoded.LpmEntriesUpdated != len(request.LpmEntries) {
+		decoded.LpmEntriesUpdated != len(request.LpmEntries)+len(request.LpmMaps) ||
+		decoded.LpmMapsCreated != len(request.LpmMaps) {
 		return fmt.Errorf("unexpected Rust routing map output: %s", out)
 	}
 	return nil
