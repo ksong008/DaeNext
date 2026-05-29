@@ -252,6 +252,7 @@ fn bench_cases() -> Vec<BenchCase> {
     cases.extend(cases::outbound::cases());
     cases.extend(cases::protocol::cases());
     cases.extend(cases::control::cases());
+    cases.extend(cases::daemon::cases());
     cases.extend(cases::engine::cases());
     cases.extend(cases::trace::cases());
     cases.extend(cases::sysdump::cases());

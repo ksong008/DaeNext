@@ -11,6 +11,7 @@ mod active_tcp;
 mod active_udp;
 mod command;
 mod host_ops;
+mod native_assets;
 mod native_ebpf;
 mod netns_link;
 mod reload_runtime;
@@ -222,6 +223,10 @@ pub fn production_runtime_owner_report(
             path_string(&manifest_file)
         ))
     }
+}
+
+pub fn daemon_runtime_native_owner_summary_json() -> Value {
+    native_assets::daemon_runtime_native_owner_summary_json()
 }
 
 fn validate_options(options: &ProductionRuntimeOwnerOptions) -> Result<(), String> {
@@ -832,6 +837,63 @@ mod tests {
             !report["typed_report"]["stage_report_schema"]
                 .as_bool()
                 .unwrap()
+        );
+        assert_eq!(
+            report["typed_report"]["daemon_runtime_native_owner_schema"]
+                .as_str()
+                .unwrap(),
+            "daemon-runtime-native-owner-v1"
+        );
+        assert!(
+            report["typed_report"]["daemon_runtime_native_owner_admitted"]
+                .as_bool()
+                .unwrap()
+        );
+        assert!(
+            !report["typed_report"]["daemon_runtime_native_owner_default_switch_allowed"]
+                .as_bool()
+                .unwrap()
+        );
+        assert_eq!(
+            report["daemon_runtime_native_owner"]["schema"]
+                .as_str()
+                .unwrap(),
+            "daemon-runtime-native-owner-v1"
+        );
+        assert!(
+            !report["daemon_runtime_native_owner"]["default_switch_allowed"]
+                .as_bool()
+                .unwrap()
+        );
+        assert!(
+            !report["daemon_runtime_native_owner"]["stage_report_schema"]
+                .as_bool()
+                .unwrap()
+        );
+        assert!(
+            !report["daemon_runtime_native_owner"]["outbound_protocol_rewrite_claimed"]
+                .as_bool()
+                .unwrap()
+        );
+        assert!(
+            !report["daemon_runtime_native_owner"]["go_bpf_loader_restored_or_required_by_this_stage"]
+                .as_bool()
+                .unwrap()
+        );
+        let native_group_ids = report["daemon_runtime_native_owner"]["accepted_native_groups"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|group| group["id"].as_str().unwrap())
+            .collect::<Vec<_>>();
+        assert_eq!(
+            native_group_ids,
+            [
+                "control-plane-native-owner",
+                "routing-lpm-native-build",
+                "dns-native-hot-path",
+                "sniffing-geodata-matcher-native",
+            ]
         );
         assert_eq!(
             report["ebpf_backend_capabilities"]["schema"]
