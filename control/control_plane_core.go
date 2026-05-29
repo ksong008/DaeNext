@@ -626,6 +626,15 @@ func (c *controlPlaneCore) setupSkPidMonitor() error {
 	if err != nil {
 		return err
 	}
+	if err := c.setupSkPidMonitorViaRustAya(cgroupPath); err == nil {
+		return nil
+	} else {
+		c.log.WithError(err).Debugln("Rust/Aya cgroup pname monitor attach failed; falling back to Go AttachCgroup")
+	}
+	return c.setupSkPidMonitorViaGo(cgroupPath)
+}
+
+func (c *controlPlaneCore) setupSkPidMonitorViaGo(cgroupPath string) error {
 	// Bind cg programs
 	type cgProg struct {
 		Name   string
