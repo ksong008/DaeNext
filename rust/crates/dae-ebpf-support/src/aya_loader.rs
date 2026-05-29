@@ -2,6 +2,7 @@ use std::collections::BTreeSet;
 use std::ffi::CString;
 use std::fs;
 use std::io;
+use std::mem;
 use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
 use std::os::unix::ffi::OsStrExt;
 use std::path::{Path, PathBuf};
@@ -9,6 +10,7 @@ use std::path::{Path, PathBuf};
 use aya::programs::{
     CgroupAttachMode, CgroupSock, CgroupSockAddr, LinkOrder, Program, SchedClassifier,
     TcAttachType,
+    links::FdLink,
     tc::{self, NlOptions, SchedClassifierLinkId, TcAttachOptions},
 };
 
@@ -166,6 +168,38 @@ pub struct AyaTcAttachDetachReport {
     pub attached: bool,
     pub detached: bool,
     pub link_lifetime_owned_by_backend: bool,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct PinnedTcAttachOptions<'a> {
+    pub program_root: &'a Path,
+    pub link_root: &'a Path,
+    pub spec: &'a TcNativeAttachSpec,
+    pub requested_backend: AttachBackend,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct PinnedTcAttachReport {
+    pub requested_backend: AttachBackend,
+    pub backend: AttachBackend,
+    pub fallback_used: bool,
+    pub fallback_error: Option<String>,
+    pub program_id: Option<u32>,
+    pub program_name: String,
+    pub program_path: PathBuf,
+    pub iface: String,
+    pub netns: Option<String>,
+    pub netns_entered: bool,
+    pub direction: TcAttachDirection,
+    pub priority: u16,
+    pub handle: u32,
+    pub tcx_order: TcxAttachOrder,
+    pub tcx_query_revision: Option<u64>,
+    pub tcx_program_order: Vec<AyaTcxProgramOrderEntry>,
+    pub tcx_order_verified: bool,
+    pub link_path: Option<PathBuf>,
+    pub tc_filter_persistent: bool,
+    pub clsact_added_or_present: bool,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -464,6 +498,26 @@ pub fn load_attach_aya_sched_classifier(
     Ok(report)
 }
 
+pub fn attach_pin_aya_sched_classifier(
+    options: PinnedTcAttachOptions<'_>,
+) -> Result<PinnedTcAttachReport, String> {
+    if !matches!(
+        options.requested_backend,
+        AttachBackend::Auto | AttachBackend::TcNetlink | AttachBackend::Tcx
+    ) {
+        return Err(format!(
+            "aya sched classifier attach-pin requires auto/tcx/tc_netlink backend, got {}",
+            options.requested_backend.as_str()
+        ));
+    }
+    let mut report = with_optional_netns(options.spec.target.netns.as_deref(), || {
+        attach_pin_aya_sched_classifier_in_current_netns(&options)
+    })?;
+    report.netns = options.spec.target.netns.clone();
+    report.netns_entered = options.spec.target.netns.is_some();
+    Ok(report)
+}
+
 pub fn load_attach_detach_aya_cgroup_program(
     loaded: &mut AyaUserspaceLoadedObject,
     line: &DaeCgroupAttachLine,
@@ -756,6 +810,183 @@ fn load_attach_aya_sched_classifier_in_current_netns(
         },
         link_id,
     ))
+}
+
+fn attach_pin_aya_sched_classifier_in_current_netns(
+    options: &PinnedTcAttachOptions<'_>,
+) -> Result<PinnedTcAttachReport, String> {
+    let spec = options.spec;
+    if spec.clsact_required {
+        add_clsact_or_accept_existing(&spec.target.iface)?;
+    }
+    fs::create_dir_all(options.link_root).map_err(|err| {
+        format!(
+            "create tc attach link root {} failed: {err}",
+            options.link_root.display()
+        )
+    })?;
+
+    let attach_type = match spec.target.direction {
+        TcAttachDirection::Ingress => TcAttachType::Ingress,
+        TcAttachDirection::Egress => TcAttachType::Egress,
+    };
+    let program_path = options.program_root.join(&spec.program_name);
+    let mut classifier = SchedClassifier::from_pin(&program_path).map_err(|err| {
+        format!(
+            "open pinned sched classifier {} failed: {err:?}",
+            program_path.display()
+        )
+    })?;
+    let program_id = classifier.info().ok().map(|info| info.id());
+
+    let attach_result = match options.requested_backend {
+        AttachBackend::Auto => {
+            match attach_pinned_classifier_once(
+                &mut classifier,
+                spec,
+                attach_type,
+                AttachBackend::Tcx,
+                program_id,
+            ) {
+                Ok(result) => result,
+                Err(tcx_err) => {
+                    let mut result = attach_pinned_classifier_once(
+                        &mut classifier,
+                        spec,
+                        attach_type,
+                        AttachBackend::TcNetlink,
+                        program_id,
+                    )
+                    .map_err(|tc_err| {
+                        format!(
+                            "aya tcx attach-pin failed: {tcx_err}; tc-netlink fallback failed: {tc_err}"
+                        )
+                    })?;
+                    result.fallback_used = true;
+                    result.fallback_error = Some(tcx_err);
+                    result
+                }
+            }
+        }
+        AttachBackend::Tcx | AttachBackend::TcNetlink => attach_pinned_classifier_once(
+            &mut classifier,
+            spec,
+            attach_type,
+            options.requested_backend,
+            program_id,
+        )?,
+        AttachBackend::TcCommandFallback => unreachable!(),
+    };
+
+    let link_path = if attach_result.backend == AttachBackend::Tcx {
+        let link = classifier
+            .take_link(attach_result.link_id)
+            .map_err(|err| format!("take tcx sched classifier link failed: {err:?}"))?;
+        let fd_link: FdLink = link
+            .try_into()
+            .map_err(|err| format!("tcx sched classifier link is not an fd link: {err:?}"))?;
+        let link_path = options.link_root.join("link");
+        remove_existing_pin(&link_path)?;
+        let pinned = fd_link
+            .pin(&link_path)
+            .map_err(|err| format!("pin tcx sched classifier link failed: {err:?}"))?;
+        drop(pinned);
+        Some(link_path)
+    } else {
+        let link = classifier
+            .take_link(attach_result.link_id)
+            .map_err(|err| format!("take tc-netlink sched classifier link failed: {err:?}"))?;
+        // TC netlink attachments are persistent kernel filters. After a
+        // successful helper-owned attach, Go keeps the cleanup contract via
+        // FilterDel/delBpfFilter, so the temporary Aya link must not detach on
+        // helper process exit.
+        mem::forget(link);
+        None
+    };
+
+    Ok(PinnedTcAttachReport {
+        requested_backend: options.requested_backend,
+        backend: attach_result.backend,
+        fallback_used: attach_result.fallback_used,
+        fallback_error: attach_result.fallback_error,
+        program_id,
+        program_name: spec.program_name.clone(),
+        program_path,
+        iface: spec.target.iface.clone(),
+        netns: None,
+        netns_entered: false,
+        direction: spec.target.direction,
+        priority: spec.priority,
+        handle: spec.handle,
+        tcx_order: spec.tcx_order,
+        tcx_query_revision: attach_result.tcx_query_revision,
+        tcx_program_order: attach_result.tcx_program_order,
+        tcx_order_verified: attach_result.tcx_order_verified,
+        link_path,
+        tc_filter_persistent: attach_result.backend == AttachBackend::TcNetlink,
+        clsact_added_or_present: spec.clsact_required,
+    })
+}
+
+struct PinnedClassifierAttachResult {
+    backend: AttachBackend,
+    link_id: SchedClassifierLinkId,
+    fallback_used: bool,
+    fallback_error: Option<String>,
+    tcx_query_revision: Option<u64>,
+    tcx_program_order: Vec<AyaTcxProgramOrderEntry>,
+    tcx_order_verified: bool,
+}
+
+fn attach_pinned_classifier_once(
+    classifier: &mut SchedClassifier,
+    spec: &TcNativeAttachSpec,
+    attach_type: TcAttachType,
+    backend: AttachBackend,
+    program_id: Option<u32>,
+) -> Result<PinnedClassifierAttachResult, String> {
+    let link_id = attach_loaded_aya_sched_classifier(classifier, spec, attach_type, backend)?;
+    if backend != AttachBackend::Tcx {
+        return Ok(PinnedClassifierAttachResult {
+            backend,
+            link_id,
+            fallback_used: false,
+            fallback_error: None,
+            tcx_query_revision: None,
+            tcx_program_order: Vec::new(),
+            tcx_order_verified: false,
+        });
+    }
+
+    let (revision, program_order) = match query_tcx_program_order(&spec.target.iface, attach_type) {
+        Ok(value) => value,
+        Err(query_err) => {
+            classifier.detach(link_id).map_err(|detach_err| {
+                format!(
+                    "aya tcx query failed after attach-pin: {query_err}; tcx detach failed: {detach_err:?}"
+                )
+            })?;
+            return Err(query_err);
+        }
+    };
+    if let Err(order_err) = verify_tcx_program_order(program_id, spec.tcx_order, &program_order) {
+        classifier.detach(link_id).map_err(|detach_err| {
+            format!(
+                "aya tcx order verification failed after attach-pin: {order_err}; tcx detach failed: {detach_err:?}"
+            )
+        })?;
+        return Err(order_err);
+    }
+
+    Ok(PinnedClassifierAttachResult {
+        backend,
+        link_id,
+        fallback_used: false,
+        fallback_error: None,
+        tcx_query_revision: Some(revision),
+        tcx_program_order: program_order,
+        tcx_order_verified: true,
+    })
 }
 
 fn attach_loaded_aya_sched_classifier(

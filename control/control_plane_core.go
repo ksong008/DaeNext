@@ -380,6 +380,7 @@ func (c *controlPlaneCore) recordAttachBackend(filter *netlink.BpfFilter, backen
 func (c *controlPlaneCore) attachIfaceFilter(ifname string, filter *netlink.BpfFilter, program *ebpf.Program) error {
 	return c.attachIfaceFilterWithTcOps(
 		ifname,
+		"",
 		filter,
 		program,
 		func() error {
@@ -398,6 +399,7 @@ func (c *controlPlaneCore) attachIfaceFilterInNetns(daens *DaeNetns, ifname stri
 	return daens.With(func() error {
 		return c.attachIfaceFilterWithTcOps(
 			ifname,
+			NsName,
 			filter,
 			program,
 			func() error {
@@ -415,8 +417,13 @@ func (c *controlPlaneCore) attachIfaceFilterInNetns(daens *DaeNetns, ifname stri
 	})
 }
 
-func (c *controlPlaneCore) attachIfaceFilterWithTcOps(ifname string, filter *netlink.BpfFilter, program *ebpf.Program, tcAdd func() error, tcDel func() error) error {
+func (c *controlPlaneCore) attachIfaceFilterWithTcOps(ifname string, netnsName string, filter *netlink.BpfFilter, program *ebpf.Program, tcAdd func() error, tcDel func() error) error {
 	backend := currentTcAttachBackend()
+	if err := c.attachIfaceFilterViaRustAya(ifname, netnsName, filter, backend, tcDel); err == nil {
+		return nil
+	} else {
+		c.log.WithError(err).Debugf("Rust/Aya TC attach failed for %s on %s; falling back to Go attach path", filter.Name, ifname)
+	}
 	if backend == tcAttachBackendTc {
 		return c.attachIfaceFilterViaTc(ifname, filter, "tc", tcAdd, tcDel)
 	}
