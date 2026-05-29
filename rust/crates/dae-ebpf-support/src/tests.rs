@@ -953,6 +953,28 @@ fn connectivity_dryrun_matches_golden_fixture() {
 }
 
 #[test]
+fn connectivity_fd_cache_skips_dryrun_without_opening_map() {
+    let mut cache = ConnectivityMapFdCache::default();
+    let plan = cache
+        .update_by_id(
+            0,
+            ConnectivityEvent {
+                key: ConnectivityKey {
+                    outbound: 2,
+                    l4proto: 6,
+                    ipversion: 4,
+                },
+                alive: true,
+                is_init: false,
+                dryrun: true,
+            },
+        )
+        .unwrap();
+    assert!(!plan.written);
+    assert!(cache.is_empty());
+}
+
+#[test]
 fn dae_param_packs_big_endian_tproxy_port() {
     let param = build_dae_param(DaeParamInput {
         tproxy_port: 12345,

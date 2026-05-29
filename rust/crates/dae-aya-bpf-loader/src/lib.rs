@@ -1,7 +1,8 @@
+use std::io::{self, BufRead, Write};
 use std::os::fd::AsRawFd;
 use std::path::PathBuf;
 
-use serde_json::json;
+use serde_json::{Value, json};
 
 #[cfg(feature = "native-ebpf")]
 const EMBEDDED_NATIVE_AYA_OBJECT: &[u8] =
@@ -153,6 +154,9 @@ fn run_connectivity_map_command(args: &[String]) -> LoaderOutput {
             Ok(options) => run_connectivity_map_update(options),
             Err(err) => LoaderOutput::usage(err),
         },
+        Some("serve") if args.len() == 1 => LoaderOutput::usage(
+            "connectivity-map serve requires the dae-aya-bpf-loader stdio entrypoint",
+        ),
         Some(subcommand) => LoaderOutput::usage(format!(
             "unsupported connectivity-map subcommand: {subcommand}"
         )),
@@ -615,22 +619,132 @@ fn run_connectivity_map_update(options: ConnectivityMapUpdateOptions) -> LoaderO
     };
     LoaderOutput::ok(format!(
         "{}\n",
-        json!({
-            "status": "pass",
-            "loader": "rust",
-            "scope": "outbound-connectivity-map-update",
-            "map_id": options.map_id,
-            "written": plan.written,
-            "key": {
-                "outbound": plan.key.outbound,
-                "l4proto": plan.key.l4proto,
-                "ipversion": plan.key.ipversion,
-            },
-            "value": plan.value,
-            "dryrun": options.dryrun,
-            "is_init": options.is_init,
-        })
+        connectivity_map_pass_response(options.map_id, plan, options.dryrun, options.is_init)
     ))
+}
+
+pub fn run_connectivity_map_serve<R, W>(reader: R, mut writer: W) -> io::Result<()>
+where
+    R: BufRead,
+    W: Write,
+{
+    let mut cache = dae_ebpf_support::ConnectivityMapFdCache::default();
+    for line in reader.lines() {
+        let line = line?;
+        if line.trim().is_empty() {
+            continue;
+        }
+        let response = handle_connectivity_map_serve_line(&mut cache, &line);
+        writer.write_all(response.as_bytes())?;
+        writer.write_all(b"\n")?;
+        writer.flush()?;
+    }
+    Ok(())
+}
+
+fn handle_connectivity_map_serve_line(
+    cache: &mut dae_ebpf_support::ConnectivityMapFdCache,
+    line: &str,
+) -> String {
+    let options = match parse_connectivity_map_serve_request(line) {
+        Ok(options) => options,
+        Err(err) => return connectivity_map_error_response(err).to_string(),
+    };
+    let event = dae_ebpf_support::ConnectivityEvent {
+        key: dae_ebpf_support::ConnectivityKey {
+            outbound: options.outbound,
+            l4proto: options.l4_proto,
+            ipversion: options.ip_version,
+        },
+        alive: options.alive,
+        is_init: options.is_init,
+        dryrun: options.dryrun,
+    };
+    match cache.update_by_id(options.map_id, event) {
+        Ok(plan) => {
+            connectivity_map_pass_response(options.map_id, plan, options.dryrun, options.is_init)
+                .to_string()
+        }
+        Err(err) => {
+            connectivity_map_error_response(format!("connectivity map update failed: {err}"))
+                .to_string()
+        }
+    }
+}
+
+fn connectivity_map_pass_response(
+    map_id: u32,
+    plan: dae_ebpf_support::ConnectivityWritePlan,
+    dryrun: bool,
+    is_init: bool,
+) -> Value {
+    json!({
+        "status": "pass",
+        "loader": "rust",
+        "scope": "outbound-connectivity-map-update",
+        "map_id": map_id,
+        "written": plan.written,
+        "key": {
+            "outbound": plan.key.outbound,
+            "l4proto": plan.key.l4proto,
+            "ipversion": plan.key.ipversion,
+        },
+        "value": plan.value,
+        "dryrun": dryrun,
+        "is_init": is_init,
+    })
+}
+
+fn connectivity_map_error_response(message: impl Into<String>) -> Value {
+    json!({
+        "status": "error",
+        "loader": "rust",
+        "scope": "outbound-connectivity-map-update",
+        "error": message.into(),
+    })
+}
+
+fn parse_connectivity_map_serve_request(
+    line: &str,
+) -> Result<ConnectivityMapUpdateOptions, String> {
+    let value: Value =
+        serde_json::from_str(line).map_err(|err| format!("bad connectivity-map request: {err}"))?;
+    let object = value
+        .as_object()
+        .ok_or_else(|| "bad connectivity-map request: expected JSON object".to_owned())?;
+    Ok(ConnectivityMapUpdateOptions {
+        map_id: json_u32(object.get("map_id"), "map_id")?,
+        outbound: json_u8(object.get("outbound"), "outbound")?,
+        l4_proto: json_u8(
+            object.get("l4_proto").or_else(|| object.get("l4proto")),
+            "l4_proto",
+        )?,
+        ip_version: json_u8(
+            object.get("ip_version").or_else(|| object.get("ipversion")),
+            "ip_version",
+        )?,
+        alive: json_bool(object.get("alive"), "alive")?,
+        is_init: json_bool(object.get("is_init"), "is_init")?,
+        dryrun: json_bool(object.get("dryrun"), "dryrun")?,
+    })
+}
+
+fn json_u32(value: Option<&Value>, name: &str) -> Result<u32, String> {
+    let raw = value
+        .and_then(Value::as_u64)
+        .ok_or_else(|| format!("missing or non-u32 connectivity-map field: {name}"))?;
+    u32::try_from(raw).map_err(|_| format!("connectivity-map field out of u32 range: {name}"))
+}
+
+fn json_u8(value: Option<&Value>, name: &str) -> Result<u8, String> {
+    let raw = json_u32(value, name)?;
+    u8::try_from(raw).map_err(|_| format!("connectivity-map field out of u8 range: {name}"))
+}
+
+fn json_bool(value: Option<&Value>, name: &str) -> Result<bool, String> {
+    value
+        .and_then(Value::as_bool)
+        .ok_or_else(|| format!("missing or non-bool connectivity-map field: {name}"))
 }
 
 #[cfg(feature = "native-ebpf")]
@@ -1647,6 +1761,9 @@ mod tests {
         let output = run_with_args(["connectivity-map", "update", "--map-id", "1"]);
         assert_eq!(output.exit_code, 2);
         assert!(output.stderr.contains("--outbound"));
+        let output = run_with_args(["connectivity-map", "serve"]);
+        assert_eq!(output.exit_code, 2);
+        assert!(output.stderr.contains("stdio entrypoint"));
         let options = parse_connectivity_map_update_options(&[
             "--map-id=7".to_owned(),
             "--outbound=2".to_owned(),
@@ -1668,6 +1785,34 @@ mod tests {
                 is_init: true,
                 dryrun: false,
             }
+        );
+    }
+
+    #[test]
+    fn connectivity_map_serve_dryrun_skip_does_not_open_map() {
+        let mut cache = dae_ebpf_support::ConnectivityMapFdCache::default();
+        let response = handle_connectivity_map_serve_line(
+            &mut cache,
+            r#"{"map_id":0,"outbound":2,"l4_proto":6,"ip_version":4,"alive":true,"is_init":false,"dryrun":true}"#,
+        );
+        let json: Value = serde_json::from_str(&response).unwrap();
+        assert_eq!(json["status"].as_str().unwrap(), "pass");
+        assert!(!json["written"].as_bool().unwrap());
+        assert_eq!(json["key"]["outbound"].as_u64().unwrap(), 2);
+        assert!(cache.is_empty());
+    }
+
+    #[test]
+    fn connectivity_map_serve_reports_malformed_requests() {
+        let mut cache = dae_ebpf_support::ConnectivityMapFdCache::default();
+        let response = handle_connectivity_map_serve_line(&mut cache, "{bad-json");
+        let json: Value = serde_json::from_str(&response).unwrap();
+        assert_eq!(json["status"].as_str().unwrap(), "error");
+        assert!(
+            json["error"]
+                .as_str()
+                .unwrap()
+                .contains("bad connectivity-map request")
         );
     }
 
