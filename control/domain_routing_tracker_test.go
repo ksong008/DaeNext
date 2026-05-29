@@ -113,6 +113,36 @@ func TestDomainRoutingTrackerMergesSharedIPAcrossOwners(t *testing.T) {
 	}
 }
 
+func TestControlPlaneCoreClearDomainRoutingMapForReloadRemovesExistingEntries(t *testing.T) {
+	domainMap := newDomainRoutingTestMap(t)
+	core := &controlPlaneCore{
+		bpf: &bpfObjects{
+			bpfMaps: bpfMaps{
+				DomainRoutingMap: domainMap,
+			},
+		},
+	}
+	keys := [][4]uint32{
+		{0, 0, 0xffff, 0xcb00710a},
+		{0, 0, 0xffff, 0xcb00710b},
+	}
+	value := bpfDomainRouting{}
+	value.Bitmap[0] = 0x1
+	for _, key := range keys {
+		if err := domainMap.Update(key, value, ebpf.UpdateAny); err != nil {
+			t.Fatalf("Update(%v): %v", key, err)
+		}
+	}
+
+	core.clearDomainRoutingMapForReload()
+
+	for _, key := range keys {
+		if err := domainMap.Lookup(&key, &value); !stderrors.Is(err, ebpf.ErrKeyNotExist) {
+			t.Fatalf("Lookup(%v) err = %v, want %v", key, err, ebpf.ErrKeyNotExist)
+		}
+	}
+}
+
 func TestDomainRoutingTrackerKeepsStructuredOwnersSeparateOnRemove(t *testing.T) {
 	tracker := newDomainRoutingTracker()
 	ip := netip.MustParseAddr("203.0.113.12")
