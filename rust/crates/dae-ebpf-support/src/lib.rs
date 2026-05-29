@@ -63,8 +63,8 @@ pub use cgroup::{
     detect_cgroup2_mount, detect_cgroup2_mount_from_proc_mounts,
 };
 pub use connectivity::{
-    ConnectivityEvent, ConnectivityKey, ConnectivityMap, ConnectivityWritePlan,
-    connectivity_write_plan, update_connectivity_map_by_id,
+    ConnectivityEvent, ConnectivityKey, ConnectivityMap, ConnectivityMapFdCache,
+    ConnectivityWritePlan, connectivity_write_plan, update_connectivity_map_by_id,
 };
 pub use kernel::{FeatureGateReport, Version};
 pub use loader::{

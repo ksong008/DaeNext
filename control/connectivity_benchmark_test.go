@@ -21,6 +21,7 @@ func BenchmarkOutboundConnectivityMapGoUpdate(b *testing.B) {
 	key := bpfOutboundConnectivityQuery{Outbound: 2, L4proto: 6, Ipversion: 4}
 	value := uint32(1)
 	b.ReportAllocs()
+	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
 		if err := m.Update(key, value, ebpf.UpdateAny); err != nil {
 			b.Fatal(err)
@@ -53,9 +54,50 @@ func BenchmarkOutboundConnectivityMapRustHelperUpdate(b *testing.B) {
 		"--dryrun", "false",
 	}
 	b.ReportAllocs()
+	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
 		if _, err := runRustBpfLoaderHelperOutput(args...); err != nil {
 			b.Fatal(err)
+		}
+	}
+}
+
+func BenchmarkOutboundConnectivityMapRustPersistentHelperUpdate(b *testing.B) {
+	helperPath := strings.TrimSpace(os.Getenv(rustBpfLoaderHelperEnv))
+	if helperPath == "" {
+		b.Skipf("%s is not set", rustBpfLoaderHelperEnv)
+	}
+	b.Setenv(rustBpfLoaderHelperEnv, helperPath)
+
+	m := newBenchmarkConnectivityMap(b)
+	defer m.Close()
+	mapID, err := bpfMapID(m)
+	if err != nil {
+		b.Fatal(err)
+	}
+	helper := newRustConnectivityHelper()
+	defer helper.Close()
+	request := rustConnectivityMapRequest{
+		MapID:     mapID,
+		Outbound:  2,
+		L4Proto:   6,
+		IPVersion: 4,
+		Alive:     true,
+		IsInit:    true,
+		Dryrun:    false,
+	}
+	if written, err := helper.Update(request); err != nil {
+		b.Fatal(err)
+	} else if !written {
+		b.Fatal("persistent helper skipped non-dryrun update")
+	}
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		if written, err := helper.Update(request); err != nil {
+			b.Fatal(err)
+		} else if !written {
+			b.Fatal("persistent helper skipped non-dryrun update")
 		}
 	}
 }
