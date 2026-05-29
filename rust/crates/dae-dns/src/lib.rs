@@ -3,6 +3,7 @@ pub mod cache;
 pub mod cache_key;
 pub mod doh;
 pub mod error;
+pub mod hot_path;
 pub mod message;
 pub mod netutils;
 pub mod resolve;
@@ -25,6 +26,10 @@ pub use doh::{
     build_doh_request, validate_doh_response,
 };
 pub use error::{DnsError, DnsValidationError};
+pub use hot_path::{
+    DnsPacketCacheHit, DnsResponseCachePlan, build_response_cache_plan_from_packet,
+    cache_plan_question, restore_cached_response_for_packet_question,
+};
 pub use message::{
     DnsAnswer, DnsMessage, DnsPacketAnswerIter, DnsPacketAnswerView, DnsPacketNameView,
     DnsPacketQuestionIter, DnsPacketQuestionView, DnsPacketView, DnsQuestion,
