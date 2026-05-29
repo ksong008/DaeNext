@@ -87,7 +87,7 @@ func StartTrace(ctx context.Context, ipVersion int, l4ProtoNo uint16, port int, 
 	return
 }
 
-func rewriteAndLoadBpf(ipVersion int, l4ProtoNo uint16, port int, ringbufSizeBytes uint32) (_ *bpfObjects, err error) {
+func rewriteAndLoadBpfViaGo(ipVersion int, l4ProtoNo uint16, port int, ringbufSizeBytes uint32) (_ *bpfObjects, err error) {
 	spec, err := loadBpf()
 	if err != nil {
 		return nil, fmt.Errorf("failed to load BPF: %+v\n", err)

@@ -51,16 +51,59 @@ struct BpfLoaderLoadPinOptions {
     has_bpf_get_current_task: bool,
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct MapStatsCountRequest {
+    name: String,
+    id: u32,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct TraceLoaderLoadPinOptions {
+    object: PathBuf,
+    pin_root: PathBuf,
+    ip_version: u8,
+    l4_proto: u16,
+    port: u16,
+    ringbuf_size: u32,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct ConnectivityMapUpdateOptions {
+    map_id: u32,
+    outbound: u8,
+    l4_proto: u8,
+    ip_version: u8,
+    alive: bool,
+    is_init: bool,
+    dryrun: bool,
+}
+
 pub fn run_with_args(args: impl IntoIterator<Item = impl Into<String>>) -> LoaderOutput {
     let args = args.into_iter().map(Into::into).collect::<Vec<_>>();
     match args.first().map(String::as_str) {
         Some("bpf-loader") => run_bpf_loader_command(&args[1..]),
+        Some("map-stats") => run_map_stats_command(&args[1..]),
+        Some("connectivity-map") => run_connectivity_map_command(&args[1..]),
+        Some("trace-loader") => run_trace_loader_command(&args[1..]),
         Some("contract") if args.len() == 1 => run_contract(),
         Some("load-pin") => run_load_pin_command(&args[1..]),
         Some(command) => {
             LoaderOutput::usage(format!("unsupported dae-aya-bpf-loader command: {command}"))
         }
         None => LoaderOutput::usage("missing dae-aya-bpf-loader command"),
+    }
+}
+
+fn run_connectivity_map_command(args: &[String]) -> LoaderOutput {
+    match args.first().map(String::as_str) {
+        Some("update") => match parse_connectivity_map_update_options(&args[1..]) {
+            Ok(options) => run_connectivity_map_update(options),
+            Err(err) => LoaderOutput::usage(err),
+        },
+        Some(subcommand) => LoaderOutput::usage(format!(
+            "unsupported connectivity-map subcommand: {subcommand}"
+        )),
+        None => LoaderOutput::usage("missing connectivity-map subcommand"),
     }
 }
 
@@ -72,6 +115,33 @@ pub fn run_bpf_loader_command(args: &[String]) -> LoaderOutput {
             LoaderOutput::usage(format!("unsupported bpf-loader subcommand: {subcommand}"))
         }
         None => LoaderOutput::usage("missing bpf-loader subcommand"),
+    }
+}
+
+fn run_map_stats_command(args: &[String]) -> LoaderOutput {
+    match args.first().map(String::as_str) {
+        Some("count") => match parse_map_stats_count_options(&args[1..]) {
+            Ok(requests) => run_map_stats_count(requests),
+            Err(err) => LoaderOutput::usage(err),
+        },
+        Some(subcommand) => {
+            LoaderOutput::usage(format!("unsupported map-stats subcommand: {subcommand}"))
+        }
+        None => LoaderOutput::usage("missing map-stats subcommand"),
+    }
+}
+
+fn run_trace_loader_command(args: &[String]) -> LoaderOutput {
+    match args.first().map(String::as_str) {
+        Some("contract") if args.len() == 1 => run_trace_loader_contract(),
+        Some("load-pin") => match parse_trace_load_pin_options(&args[1..]) {
+            Ok(options) => run_trace_load_pin(options),
+            Err(err) => LoaderOutput::usage(err),
+        },
+        Some(subcommand) => {
+            LoaderOutput::usage(format!("unsupported trace-loader subcommand: {subcommand}"))
+        }
+        None => LoaderOutput::usage("missing trace-loader subcommand"),
     }
 }
 
@@ -108,6 +178,144 @@ fn run_load_pin_command(args: &[String]) -> LoaderOutput {
         Ok(options) => run_load_pin(options),
         Err(err) => LoaderOutput::usage(err),
     }
+}
+
+fn run_map_stats_count(requests: Vec<MapStatsCountRequest>) -> LoaderOutput {
+    if requests.is_empty() {
+        return LoaderOutput::usage("map-stats count requires at least one --map name:id");
+    }
+    let mut counts = Vec::with_capacity(requests.len());
+    for request in requests {
+        match dae_ebpf_support::count_map_entries_by_id(request.id) {
+            Ok(entries) => counts.push(json!({
+                "name": request.name,
+                "id": request.id,
+                "entries": entries,
+            })),
+            Err(err) => {
+                return LoaderOutput::error(format!(
+                    "count map {}:{} failed: {err}",
+                    request.name, request.id
+                ));
+            }
+        }
+    }
+    LoaderOutput::ok(format!(
+        "{}\n",
+        json!({
+            "status": "pass",
+            "loader": "rust",
+            "scope": "read-only-bpf-map-stats",
+            "counts": counts,
+        })
+    ))
+}
+
+fn run_trace_loader_contract() -> LoaderOutput {
+    LoaderOutput::ok(format!(
+        "{}\n",
+        json!({
+            "name": "rust-aya-trace-loader-contract-v1",
+            "binary": "dae-aya-bpf-loader",
+            "compiled_native_ebpf": cfg!(feature = "native-ebpf"),
+            "scope": "Rust/Aya loads the existing trace C eBPF object and pins maps/programs for Go trace attach and ringbuf adoption",
+            "default_daemon_path": false,
+            "kernel_ebpf_program_rewrite": false,
+            "required_pins": {
+                "maps": "pin_root/maps/{events,skb_addresses}",
+                "programs": "pin_root/programs/kprobe_skb_*"
+            },
+            "config_source": {
+                "port": "host-order u16, converted to BPF big-endian tracing_cfg.port",
+                "l4_proto": "kernel protocol number",
+                "ip_version": "4 or 6",
+                "ringbuf_size": "events map max_entries override"
+            }
+        })
+    ))
+}
+
+fn run_connectivity_map_update(options: ConnectivityMapUpdateOptions) -> LoaderOutput {
+    let event = dae_ebpf_support::ConnectivityEvent {
+        key: dae_ebpf_support::ConnectivityKey {
+            outbound: options.outbound,
+            l4proto: options.l4_proto,
+            ipversion: options.ip_version,
+        },
+        alive: options.alive,
+        is_init: options.is_init,
+        dryrun: options.dryrun,
+    };
+    let plan = match dae_ebpf_support::update_connectivity_map_by_id(options.map_id, event) {
+        Ok(plan) => plan,
+        Err(err) => return LoaderOutput::error(format!("connectivity map update failed: {err}")),
+    };
+    LoaderOutput::ok(format!(
+        "{}\n",
+        json!({
+            "status": "pass",
+            "loader": "rust",
+            "scope": "outbound-connectivity-map-update",
+            "map_id": options.map_id,
+            "written": plan.written,
+            "key": {
+                "outbound": plan.key.outbound,
+                "l4proto": plan.key.l4proto,
+                "ipversion": plan.key.ipversion,
+            },
+            "value": plan.value,
+            "dryrun": options.dryrun,
+            "is_init": options.is_init,
+        })
+    ))
+}
+
+#[cfg(feature = "native-ebpf")]
+fn run_trace_load_pin(options: TraceLoaderLoadPinOptions) -> LoaderOutput {
+    use dae_ebpf_support::{AyaTraceLoaderOptions, load_pin_aya_trace_object};
+
+    let report = match load_pin_aya_trace_object(AyaTraceLoaderOptions {
+        object: &options.object,
+        pin_root: &options.pin_root,
+        port: options.port,
+        l4_proto: options.l4_proto,
+        ip_version: options.ip_version,
+        ringbuf_size: options.ringbuf_size,
+    }) {
+        Ok(report) => report,
+        Err(err) => return LoaderOutput::error(err),
+    };
+    LoaderOutput::ok(format!(
+        "{}\n",
+        json!({
+            "status": "pass",
+            "loader": "rust-aya",
+            "object": report.object,
+            "pin_root": report.pin_root,
+            "map_pin_root": report.map_pin_root,
+            "program_pin_root": report.program_pin_root,
+            "maps": report.maps.iter().map(|pin| json!({
+                "name": pin.name,
+                "path": pin.path,
+            })).collect::<Vec<_>>(),
+            "programs": report.programs.iter().map(|pin| json!({
+                "name": pin.name,
+                "path": pin.path,
+            })).collect::<Vec<_>>(),
+            "trace_config": {
+                "port": report.port,
+                "l4_proto": report.l4_proto,
+                "ip_version": report.ip_version,
+                "ringbuf_size": report.ringbuf_size,
+            },
+            "go_trace_adoption_ready": true,
+        })
+    ))
+}
+
+#[cfg(not(feature = "native-ebpf"))]
+fn run_trace_load_pin(_options: TraceLoaderLoadPinOptions) -> LoaderOutput {
+    LoaderOutput::error("trace-loader load-pin requires dae-aya-bpf-loader feature native-ebpf")
 }
 
 #[cfg(feature = "native-ebpf")]
@@ -313,6 +521,166 @@ fn parse_load_pin_options(args: &[String]) -> Result<BpfLoaderLoadPinOptions, St
     })
 }
 
+fn parse_map_stats_count_options(args: &[String]) -> Result<Vec<MapStatsCountRequest>, String> {
+    let mut maps = Vec::new();
+    let mut iter = args.iter();
+    while let Some(arg) = iter.next() {
+        match arg.as_str() {
+            "--map" => maps.push(parse_map_count_request(next_value(
+                &mut iter,
+                "map-stats count --map",
+            )?)?),
+            _ if arg.starts_with("--map=") => {
+                maps.push(parse_map_count_request(split_value(arg)?)?)
+            }
+            _ => return Err(format!("unsupported map-stats count argument: {arg}")),
+        }
+    }
+    Ok(maps)
+}
+
+fn parse_trace_load_pin_options(args: &[String]) -> Result<TraceLoaderLoadPinOptions, String> {
+    let mut object = None;
+    let mut pin_root = None;
+    let mut ip_version = None;
+    let mut l4_proto = None;
+    let mut port = None;
+    let mut ringbuf_size = None;
+    let mut iter = args.iter();
+    while let Some(arg) = iter.next() {
+        match arg.as_str() {
+            "--object" => object = Some(parse_next_path(&mut iter, "trace-loader --object")?),
+            "--pin-root" => pin_root = Some(parse_next_path(&mut iter, "trace-loader --pin-root")?),
+            "--ip-version" => {
+                ip_version = Some(parse_next::<u8>(&mut iter, "trace-loader --ip-version")?)
+            }
+            "--l4-proto" => {
+                l4_proto = Some(parse_next::<u16>(&mut iter, "trace-loader --l4-proto")?)
+            }
+            "--port" => port = Some(parse_next::<u16>(&mut iter, "trace-loader --port")?),
+            "--ringbuf-size" => {
+                ringbuf_size = Some(parse_next::<u32>(&mut iter, "trace-loader --ringbuf-size")?)
+            }
+            _ if arg.starts_with("--object=") => object = Some(parse_path_value(arg)?),
+            _ if arg.starts_with("--pin-root=") => pin_root = Some(parse_path_value(arg)?),
+            _ if arg.starts_with("--ip-version=") => ip_version = Some(parse_value(arg)?),
+            _ if arg.starts_with("--l4-proto=") => l4_proto = Some(parse_value(arg)?),
+            _ if arg.starts_with("--port=") => port = Some(parse_value(arg)?),
+            _ if arg.starts_with("--ringbuf-size=") => ringbuf_size = Some(parse_value(arg)?),
+            _ => return Err(format!("unsupported trace-loader load-pin argument: {arg}")),
+        }
+    }
+    Ok(TraceLoaderLoadPinOptions {
+        object: object.ok_or_else(|| "missing trace-loader load-pin --object".to_owned())?,
+        pin_root: pin_root.ok_or_else(|| "missing trace-loader load-pin --pin-root".to_owned())?,
+        ip_version: ip_version
+            .ok_or_else(|| "missing trace-loader load-pin --ip-version".to_owned())?,
+        l4_proto: l4_proto.ok_or_else(|| "missing trace-loader load-pin --l4-proto".to_owned())?,
+        port: port.ok_or_else(|| "missing trace-loader load-pin --port".to_owned())?,
+        ringbuf_size: ringbuf_size
+            .ok_or_else(|| "missing trace-loader load-pin --ringbuf-size".to_owned())?,
+    })
+}
+
+fn parse_connectivity_map_update_options(
+    args: &[String],
+) -> Result<ConnectivityMapUpdateOptions, String> {
+    let mut map_id = None;
+    let mut outbound = None;
+    let mut l4_proto = None;
+    let mut ip_version = None;
+    let mut alive = None;
+    let mut is_init = None;
+    let mut dryrun = None;
+    let mut iter = args.iter();
+    while let Some(arg) = iter.next() {
+        match arg.as_str() {
+            "--map-id" => {
+                map_id = Some(parse_next::<u32>(
+                    &mut iter,
+                    "connectivity-map update --map-id",
+                )?)
+            }
+            "--outbound" => {
+                outbound = Some(parse_next::<u8>(
+                    &mut iter,
+                    "connectivity-map update --outbound",
+                )?)
+            }
+            "--l4-proto" => {
+                l4_proto = Some(parse_next::<u8>(
+                    &mut iter,
+                    "connectivity-map update --l4-proto",
+                )?)
+            }
+            "--ip-version" => {
+                ip_version = Some(parse_next::<u8>(
+                    &mut iter,
+                    "connectivity-map update --ip-version",
+                )?)
+            }
+            "--alive" => {
+                alive = Some(parse_bool(next_value(
+                    &mut iter,
+                    "connectivity-map update --alive",
+                )?)?)
+            }
+            "--is-init" => {
+                is_init = Some(parse_bool(next_value(
+                    &mut iter,
+                    "connectivity-map update --is-init",
+                )?)?)
+            }
+            "--dryrun" => {
+                dryrun = Some(parse_bool(next_value(
+                    &mut iter,
+                    "connectivity-map update --dryrun",
+                )?)?)
+            }
+            _ if arg.starts_with("--map-id=") => map_id = Some(parse_value(arg)?),
+            _ if arg.starts_with("--outbound=") => outbound = Some(parse_value(arg)?),
+            _ if arg.starts_with("--l4-proto=") => l4_proto = Some(parse_value(arg)?),
+            _ if arg.starts_with("--ip-version=") => ip_version = Some(parse_value(arg)?),
+            _ if arg.starts_with("--alive=") => alive = Some(parse_bool(split_value(arg)?)?),
+            _ if arg.starts_with("--is-init=") => is_init = Some(parse_bool(split_value(arg)?)?),
+            _ if arg.starts_with("--dryrun=") => dryrun = Some(parse_bool(split_value(arg)?)?),
+            _ => {
+                return Err(format!(
+                    "unsupported connectivity-map update argument: {arg}"
+                ));
+            }
+        }
+    }
+    Ok(ConnectivityMapUpdateOptions {
+        map_id: map_id.ok_or_else(|| "missing connectivity-map update --map-id".to_owned())?,
+        outbound: outbound
+            .ok_or_else(|| "missing connectivity-map update --outbound".to_owned())?,
+        l4_proto: l4_proto
+            .ok_or_else(|| "missing connectivity-map update --l4-proto".to_owned())?,
+        ip_version: ip_version
+            .ok_or_else(|| "missing connectivity-map update --ip-version".to_owned())?,
+        alive: alive.ok_or_else(|| "missing connectivity-map update --alive".to_owned())?,
+        is_init: is_init.ok_or_else(|| "missing connectivity-map update --is-init".to_owned())?,
+        dryrun: dryrun.ok_or_else(|| "missing connectivity-map update --dryrun".to_owned())?,
+    })
+}
+
+fn parse_map_count_request(value: &str) -> Result<MapStatsCountRequest, String> {
+    let (name, id) = value
+        .split_once(':')
+        .ok_or_else(|| format!("bad map-stats count --map {value:?}; want name:id"))?;
+    if name.trim().is_empty() {
+        return Err(format!("bad map-stats count --map {value:?}; empty name"));
+    }
+    let id = id
+        .parse::<u32>()
+        .map_err(|err| format!("bad map id in --map {value:?}: {err}"))?;
+    Ok(MapStatsCountRequest {
+        name: name.to_owned(),
+        id,
+    })
+}
+
 fn next_value<'a>(
     iter: &mut impl Iterator<Item = &'a String>,
     name: &str,
@@ -422,6 +790,62 @@ mod tests {
         let output = run_with_args(["bpf-loader", "load-pin", "--pin-root", "/tmp/dae"]);
         assert_eq!(output.exit_code, 2);
         assert!(output.stderr.contains("--tproxy-port"));
+    }
+
+    #[test]
+    fn trace_loader_contract_declares_non_default_scope() {
+        let output = run_with_args(["trace-loader", "contract"]);
+        assert_eq!(output.exit_code, 0, "{}", output.stderr);
+        let json: Value = serde_json::from_str(&output.stdout).unwrap();
+        assert_eq!(
+            json["name"].as_str().unwrap(),
+            "rust-aya-trace-loader-contract-v1"
+        );
+        assert!(!json["default_daemon_path"].as_bool().unwrap());
+        assert!(!json["kernel_ebpf_program_rewrite"].as_bool().unwrap());
+    }
+
+    #[test]
+    fn map_stats_count_requires_map_specs() {
+        let output = run_with_args(["map-stats", "count"]);
+        assert_eq!(output.exit_code, 2);
+        assert!(output.stderr.contains("--map name:id"));
+        assert_eq!(
+            parse_map_count_request("routing_tuples_map:7").unwrap(),
+            MapStatsCountRequest {
+                name: "routing_tuples_map".to_owned(),
+                id: 7,
+            }
+        );
+    }
+
+    #[test]
+    fn connectivity_map_update_requires_full_key() {
+        let output = run_with_args(["connectivity-map", "update", "--map-id", "1"]);
+        assert_eq!(output.exit_code, 2);
+        assert!(output.stderr.contains("--outbound"));
+        let options = parse_connectivity_map_update_options(&[
+            "--map-id=7".to_owned(),
+            "--outbound=2".to_owned(),
+            "--l4-proto=6".to_owned(),
+            "--ip-version=4".to_owned(),
+            "--alive=true".to_owned(),
+            "--is-init=true".to_owned(),
+            "--dryrun=false".to_owned(),
+        ])
+        .unwrap();
+        assert_eq!(
+            options,
+            ConnectivityMapUpdateOptions {
+                map_id: 7,
+                outbound: 2,
+                l4_proto: 6,
+                ip_version: 4,
+                alive: true,
+                is_init: true,
+                dryrun: false,
+            }
+        );
     }
 
     #[test]
