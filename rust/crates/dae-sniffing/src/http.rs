@@ -3,6 +3,10 @@ use dae_config_util::is_valid_http_method;
 use crate::SniffingError;
 
 pub fn sniff_http(data: &[u8]) -> Result<String, SniffingError> {
+    sniff_http_host(data).map(str::to_owned)
+}
+
+pub fn sniff_http_host(data: &[u8]) -> Result<&str, SniffingError> {
     if data.first().copied().map(is_printable_ascii) != Some(true) {
         return Err(SniffingError::NotApplicable);
     }
@@ -25,9 +29,7 @@ pub fn sniff_http(data: &[u8]) -> Result<String, SniffingError> {
             continue;
         };
         if line[..colon].eq_ignore_ascii_case(b"host") {
-            return std::str::from_utf8(&line[colon + 1..])
-                .map(str::to_owned)
-                .map_err(|_| SniffingError::NotFound);
+            return std::str::from_utf8(&line[colon + 1..]).map_err(|_| SniffingError::NotFound);
         }
     }
 
