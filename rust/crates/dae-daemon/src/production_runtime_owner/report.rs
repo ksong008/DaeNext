@@ -8,6 +8,7 @@ use dae_ebpf_support::{
 use serde_json::{Map, Value, json};
 
 use super::command::path_string;
+use super::deep_area;
 use super::native_assets;
 use super::native_ebpf::{native_backend_opt_in_decision_json, native_backend_runtime_decision};
 use super::udp_dns_datapath_contract::udp_dns_datapath_contract_json;
@@ -76,6 +77,10 @@ impl ProductionRuntimeTypedReport {
             "daemon_runtime_native_owner_admitted": true,
             "daemon_runtime_native_owner_group_count": native_assets::runtime_native_group_count(),
             "daemon_runtime_native_owner_default_switch_allowed": false,
+            "datapath_outbound_ebpf_deep_area_schema": "datapath-outbound-ebpf-deep-area-v1",
+            "datapath_outbound_ebpf_deep_area_completed": true,
+            "datapath_outbound_ebpf_deep_area_surface_count": deep_area::deep_area_surface_count(),
+            "datapath_outbound_ebpf_deep_area_default_switch_allowed": false,
         })
     }
 }
@@ -90,6 +95,8 @@ pub(super) fn report_value(
 ) -> Value {
     let mut report = Map::new();
     let daemon_runtime_native_owner = native_assets::daemon_runtime_native_owner_summary_json();
+    let datapath_outbound_ebpf_deep_area =
+        deep_area::datapath_outbound_ebpf_deep_area_summary_json();
     let udp_dns_contract = udp_dns_datapath_contract_json();
     let ebpf_capability = report_only_ebpf_backend_capability(None);
     let ebpf_capability_json = ebpf_backend_capability_json(&ebpf_capability, options);
@@ -526,6 +533,10 @@ pub(super) fn report_value(
     report.insert(
         "daemon_runtime_native_owner".to_owned(),
         daemon_runtime_native_owner,
+    );
+    report.insert(
+        "datapath_outbound_ebpf_deep_area".to_owned(),
+        datapath_outbound_ebpf_deep_area,
     );
     report.insert(
         "production_runtime_owner_scope".to_owned(),
