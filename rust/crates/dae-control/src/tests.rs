@@ -1,6 +1,7 @@
 use serde_json::Value;
 
 use crate::*;
+use dae_ebpf_support::{ConnectivityEvent, ConnectivityKey};
 
 #[test]
 fn domain_routing_owner_tracker_matches_golden_fixture() {
@@ -31,6 +32,146 @@ fn domain_routing_owner_tracker_matches_golden_fixture() {
         DomainRoutingOwnerSnapshot::new(&[16], &["198.51.100.7", "2001:db8::2"]),
     );
     assert_domain_view(&tracker.view("after_replace_owner_b"), &steps[3]);
+}
+
+#[test]
+fn domain_routing_owner_plans_delta_and_replay_without_helper_boundary() {
+    let mut owner = DomainRoutingOwner::default();
+    let owner_a = DomainRoutingOwnerSnapshot::new(&[0x1], &["192.0.2.1", "2001:db8::1"]);
+    let owner_b = DomainRoutingOwnerSnapshot::new(&[0x2], &["192.0.2.1", "198.51.100.7"]);
+
+    let first = owner.apply_owner_snapshot("owner-a", owner_a.clone());
+    assert_eq!(first.map_id, None);
+    assert!(!first.flush);
+    assert_eq!(
+        first.plan.updates,
+        vec![
+            DomainRoutingStateEntry {
+                key: parse_ip_key("192.0.2.1").unwrap(),
+                bitmap: bitmap([0x1]),
+            },
+            DomainRoutingStateEntry {
+                key: parse_ip_key("2001:db8::1").unwrap(),
+                bitmap: bitmap([0x1]),
+            },
+        ]
+    );
+    assert!(first.plan.deletes.is_empty());
+
+    let replay = owner.install_map(77);
+    assert!(replay.changed);
+    assert_eq!(replay.map_id, 77);
+    assert_eq!(replay.entries, first.plan.updates);
+
+    let merged = owner.apply_owner_snapshot("owner-b", owner_b);
+    assert_eq!(merged.map_id, Some(77));
+    assert!(merged.flush);
+    assert_eq!(
+        merged.plan.updates,
+        vec![
+            DomainRoutingStateEntry {
+                key: parse_ip_key("192.0.2.1").unwrap(),
+                bitmap: bitmap([0x3]),
+            },
+            DomainRoutingStateEntry {
+                key: parse_ip_key("198.51.100.7").unwrap(),
+                bitmap: bitmap([0x2]),
+            },
+        ]
+    );
+    assert!(merged.plan.deletes.is_empty());
+
+    let remove_a = owner.apply_owner_snapshot("owner-a", DomainRoutingOwnerSnapshot::default());
+    assert_eq!(remove_a.map_id, Some(77));
+    assert!(remove_a.flush);
+    assert_eq!(
+        remove_a.plan.updates,
+        vec![DomainRoutingStateEntry {
+            key: parse_ip_key("192.0.2.1").unwrap(),
+            bitmap: bitmap([0x2]),
+        }]
+    );
+    assert_eq!(
+        remove_a.plan.deletes,
+        vec![parse_ip_key("2001:db8::1").unwrap()]
+    );
+
+    let same_map = owner.install_map(77);
+    assert!(!same_map.changed);
+    assert!(same_map.entries.is_empty());
+
+    let reload_map = owner.install_map(78);
+    assert!(reload_map.changed);
+    assert_eq!(
+        reload_map.entries,
+        vec![
+            DomainRoutingStateEntry {
+                key: parse_ip_key("192.0.2.1").unwrap(),
+                bitmap: bitmap([0x2]),
+            },
+            DomainRoutingStateEntry {
+                key: parse_ip_key("198.51.100.7").unwrap(),
+                bitmap: bitmap([0x2]),
+            },
+        ]
+    );
+}
+
+#[test]
+fn domain_routing_owner_clears_reused_map_before_reload_restore() {
+    let mut owner = DomainRoutingOwner::default();
+    owner.install_map(77);
+    owner.apply_owner_snapshot(
+        "old-cache",
+        DomainRoutingOwnerSnapshot::new(&[0x1], &["192.0.2.1", "2001:db8::1"]),
+    );
+    assert_eq!(owner.tracker().owner_count(), 1);
+    assert_eq!(owner.tracker().ip_count(), 2);
+
+    let clear = owner.prepare_reload_map(
+        77,
+        [
+            parse_ip_key("2001:db8::1").unwrap(),
+            parse_ip_key("192.0.2.1").unwrap(),
+            parse_ip_key("192.0.2.1").unwrap(),
+        ],
+    );
+    assert_eq!(clear.map_id, 77);
+    assert!(!clear.map_id_changed);
+    assert_eq!(
+        clear.deletes,
+        vec![
+            parse_ip_key("192.0.2.1").unwrap(),
+            parse_ip_key("2001:db8::1").unwrap(),
+        ]
+    );
+    assert_eq!(clear.owner_count, 0);
+    assert_eq!(clear.ip_count, 0);
+    assert_eq!(owner.tracker().owner_count(), 0);
+    assert_eq!(owner.tracker().ip_count(), 0);
+
+    let restored = owner.apply_owner_snapshot(
+        "new-cache",
+        DomainRoutingOwnerSnapshot::new(&[0x4], &["198.51.100.7"]),
+    );
+    assert_eq!(restored.map_id, Some(77));
+    assert!(restored.flush);
+    assert_eq!(
+        restored.plan.updates,
+        vec![DomainRoutingStateEntry {
+            key: parse_ip_key("198.51.100.7").unwrap(),
+            bitmap: bitmap([0x4]),
+        }]
+    );
+    assert!(restored.plan.deletes.is_empty());
+
+    let clear_next_map = owner.prepare_reload_map(78, [parse_ip_key("198.51.100.7").unwrap()]);
+    assert_eq!(clear_next_map.map_id, 78);
+    assert!(clear_next_map.map_id_changed);
+    assert_eq!(
+        clear_next_map.deletes,
+        vec![parse_ip_key("198.51.100.7").unwrap()]
+    );
 }
 
 #[test]
@@ -80,6 +221,144 @@ fn control_api_typed_report_covers_formal_surfaces_without_stage_schema() {
     assert!(!report.stage_report_schema);
 }
 
+#[test]
+fn outbound_connectivity_state_dedupes_without_losing_dryrun_semantics() {
+    let mut state = OutboundConnectivityState::default();
+    let tcp4 = ConnectivityKey {
+        outbound: 2,
+        l4proto: 6,
+        ipversion: 4,
+    };
+
+    let skipped = state.update(connectivity_event(tcp4, true, false, true));
+    assert!(!skipped.accepted);
+    assert!(!skipped.changed);
+    assert!(!skipped.flush);
+    assert!(state.is_empty());
+
+    let first = state.update(connectivity_event(tcp4, true, true, true));
+    assert!(first.accepted);
+    assert!(first.changed);
+    assert!(first.flush);
+    assert_eq!(first.len, 1);
+    assert_eq!(state.get(tcp4), Some(1));
+
+    let duplicate = state.update(connectivity_event(tcp4, true, false, false));
+    assert!(duplicate.accepted);
+    assert!(!duplicate.changed);
+    assert!(!duplicate.flush);
+    assert_eq!(duplicate.len, 1);
+
+    let changed = state.update(connectivity_event(tcp4, false, false, false));
+    assert!(changed.accepted);
+    assert!(changed.changed);
+    assert!(changed.flush);
+    assert_eq!(state.get(tcp4), Some(0));
+
+    let udp4_legacy = ConnectivityKey {
+        outbound: 2,
+        l4proto: 22,
+        ipversion: 4,
+    };
+    let udp_first = state.update(connectivity_event(udp4_legacy, true, true, false));
+    assert!(udp_first.changed);
+    assert!(udp_first.flush);
+    assert_eq!(udp_first.len, 2);
+    let udp_duplicate = state.update(connectivity_event(udp4_legacy, true, false, false));
+    assert!(!udp_duplicate.changed);
+    assert!(!udp_duplicate.flush);
+    assert_eq!(udp_duplicate.len, 2);
+
+    let fallback_key = ConnectivityKey {
+        outbound: 2,
+        l4proto: 132,
+        ipversion: 5,
+    };
+    let fallback = state.update(connectivity_event(fallback_key, true, false, false));
+    assert!(fallback.changed);
+    assert!(fallback.flush);
+    assert_eq!(fallback.len, 3);
+    assert_eq!(state.get(fallback_key), Some(1));
+
+    assert_eq!(
+        state.entries(),
+        vec![
+            ConnectivityStateEntry {
+                key: tcp4,
+                value: 0,
+            },
+            ConnectivityStateEntry {
+                key: udp4_legacy,
+                value: 1,
+            },
+            ConnectivityStateEntry {
+                key: fallback_key,
+                value: 1,
+            },
+        ]
+    );
+}
+
+#[test]
+fn outbound_connectivity_owner_replays_state_when_map_id_changes() {
+    let tcp4 = ConnectivityKey {
+        outbound: 2,
+        l4proto: 6,
+        ipversion: 4,
+    };
+    let mut owner = OutboundConnectivityOwner::default();
+
+    let init = owner.apply_event(connectivity_event(tcp4, true, true, true));
+    assert_eq!(init.map_id, None);
+    assert!(init.state.accepted);
+    assert!(init.state.flush);
+    assert!(!init.flush);
+    assert_eq!(owner.state().get(tcp4), Some(1));
+
+    let first_map = owner.install_map(1001);
+    assert!(first_map.changed);
+    assert_eq!(first_map.map_id, 1001);
+    assert_eq!(
+        first_map.entries,
+        vec![ConnectivityStateEntry {
+            key: tcp4,
+            value: 1,
+        }]
+    );
+
+    let duplicate = owner.apply_event(connectivity_event(tcp4, true, false, false));
+    assert_eq!(duplicate.map_id, Some(1001));
+    assert!(!duplicate.state.changed);
+    assert!(!duplicate.state.flush);
+    assert!(!duplicate.flush);
+
+    let changed = owner.apply_event(connectivity_event(tcp4, false, false, false));
+    assert_eq!(changed.map_id, Some(1001));
+    assert!(changed.state.changed);
+    assert!(changed.state.flush);
+    assert!(changed.flush);
+    assert_eq!(owner.state().get(tcp4), Some(0));
+
+    let same_map = owner.install_map(1001);
+    assert!(!same_map.changed);
+    assert!(same_map.entries.is_empty());
+
+    let reload_map = owner.install_map(1002);
+    assert!(reload_map.changed);
+    assert_eq!(
+        reload_map.entries,
+        vec![ConnectivityStateEntry {
+            key: tcp4,
+            value: 0,
+        }]
+    );
+
+    let skipped = owner.apply_event(connectivity_event(tcp4, true, false, true));
+    assert!(!skipped.state.accepted);
+    assert!(!skipped.flush);
+    assert_eq!(owner.state().get(tcp4), Some(0));
+}
+
 fn assert_domain_view(got: &DomainRoutingView, expected: &Value) {
     assert_eq!(got.step, expected["step"].as_str().unwrap());
     assert_eq!(got.owners, string_array(&expected["owners"]));
@@ -119,6 +398,26 @@ fn string_array(value: &Value) -> Vec<String> {
         .iter()
         .map(|item| item.as_str().unwrap().to_owned())
         .collect()
+}
+
+fn bitmap<const N: usize>(words: [u32; N]) -> [u32; 32] {
+    let mut bitmap = [0; 32];
+    bitmap[..N].copy_from_slice(&words);
+    bitmap
+}
+
+fn connectivity_event(
+    key: ConnectivityKey,
+    alive: bool,
+    is_init: bool,
+    dryrun: bool,
+) -> ConnectivityEvent {
+    ConnectivityEvent {
+        key,
+        alive,
+        is_init,
+        dryrun,
+    }
 }
 
 fn load(path: &str) -> Value {

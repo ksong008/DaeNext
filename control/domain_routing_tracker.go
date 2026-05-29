@@ -194,8 +194,8 @@ func (t *domainRoutingTracker) syncOwner(
 		}
 	}
 
-	if m != nil {
-		if len(keysToUpdate) > 0 {
+	if m != nil && (len(keysToUpdate) > 0 || len(keysToDelete) > 0) {
+		if rustWriter != nil {
 			updates := make([]rustDomainRoutingMapUpdate, 0, len(keysToUpdate))
 			for i, key := range keysToUpdate {
 				updates = append(updates, rustDomainRoutingMapUpdate{
@@ -203,29 +203,21 @@ func (t *domainRoutingTracker) syncOwner(
 					Bitmap: valuesToUpdate[i].Bitmap,
 				})
 			}
-			if rustWriter == nil {
-				rustWriter = updateDomainRoutingMapViaRustProcessHelperForMap
+			if err := rustWriter(m, updates, keysToDelete); err == nil {
+				t.applyOwnerSnapshotLocked(ownerKey, snapshot)
+				return nil
 			}
-			if err := rustWriter(m, updates, keysToDelete); err != nil {
-				if _, goErr := BpfMapBatchUpdate(m, keysToUpdate, valuesToUpdate, &ebpf.BatchOptions{
-					ElemFlags: uint64(ebpf.UpdateAny),
-				}); goErr != nil {
-					return fmt.Errorf("update domain_routing_map: rust=%v; go=%w", err, goErr)
-				}
-				if len(keysToDelete) > 0 {
-					if _, goErr := BpfMapBatchDelete(m, keysToDelete); goErr != nil {
-						return fmt.Errorf("delete domain_routing_map: rust=%v; go=%w", err, goErr)
-					}
-				}
+		}
+		if len(keysToUpdate) > 0 {
+			if _, err := BpfMapBatchUpdate(m, keysToUpdate, valuesToUpdate, &ebpf.BatchOptions{
+				ElemFlags: uint64(ebpf.UpdateAny),
+			}); err != nil {
+				return fmt.Errorf("update domain_routing_map: %w", err)
 			}
-		} else if len(keysToDelete) > 0 {
-			if rustWriter == nil {
-				rustWriter = updateDomainRoutingMapViaRustProcessHelperForMap
-			}
-			if err := rustWriter(m, nil, keysToDelete); err != nil {
-				if _, goErr := BpfMapBatchDelete(m, keysToDelete); goErr != nil {
-					return fmt.Errorf("delete domain_routing_map: rust=%v; go=%w", err, goErr)
-				}
+		}
+		if len(keysToDelete) > 0 {
+			if _, err := BpfMapBatchDelete(m, keysToDelete); err != nil {
+				return fmt.Errorf("delete domain_routing_map: %w", err)
 			}
 		}
 	}
