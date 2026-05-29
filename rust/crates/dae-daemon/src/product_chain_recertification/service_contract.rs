@@ -105,6 +105,10 @@ pub(super) fn candidate_service_contract_report(
             "reload_command_service_contract_ready": false,
             "resident_production_dataplane_ready": false,
             "resident_default_daemon_switch_ready": false,
+            "resident_dataplane_default_switch_ready": false,
+            "resident_dataplane_env": Value::Null,
+            "resident_dataplane_env_enabled": false,
+            "default_path_switch_blocker": Value::Null,
             "reload_failure_rollback_supported": false,
             "invalid_runtime_config_rejected_before_current_swap": false,
             "reload_start_failure_attempts_previous_runtime_restore": false,
@@ -130,6 +134,17 @@ pub(super) fn candidate_service_contract_report(
                 capability["resident_default_daemon_switch_ready"]
                     .as_bool()
                     .unwrap_or(false);
+            let resident_dataplane_default_switch_ready =
+                capability["resident_dataplane_default_switch_ready"]
+                    .as_bool()
+                    .unwrap_or(resident_default_daemon_switch_declared);
+            let resident_dataplane_env = capability["resident_dataplane_env"]
+                .as_str()
+                .map(str::to_owned);
+            let resident_dataplane_env_enabled = capability["resident_dataplane_env_enabled"]
+                .as_bool()
+                .unwrap_or(resident_dataplane_default_switch_ready);
+            let default_path_switch_blocker = capability["default_path_switch_blocker"].clone();
             let reload_failure_rollback_supported = capability["reload_failure_rollback_supported"]
                 .as_bool()
                 .unwrap_or(false);
@@ -165,6 +180,10 @@ pub(super) fn candidate_service_contract_report(
                 "reload_command_service_contract_ready": output.status.success() && reload_ready,
                 "resident_production_dataplane_ready": output.status.success() && resident_production_dataplane_ready,
                 "resident_default_daemon_switch_ready": resident_default_daemon_switch_ready,
+                "resident_dataplane_default_switch_ready": output.status.success() && resident_dataplane_default_switch_ready,
+                "resident_dataplane_env": resident_dataplane_env,
+                "resident_dataplane_env_enabled": output.status.success() && resident_dataplane_env_enabled,
+                "default_path_switch_blocker": default_path_switch_blocker,
                 "reload_failure_rollback_supported": output.status.success() && reload_failure_rollback_supported,
                 "invalid_runtime_config_rejected_before_current_swap": output.status.success() && invalid_runtime_config_rejected_before_current_swap,
                 "reload_start_failure_attempts_previous_runtime_restore": output.status.success() && reload_start_failure_attempts_previous_runtime_restore,
@@ -182,6 +201,10 @@ pub(super) fn candidate_service_contract_report(
             "reload_command_service_contract_ready": false,
             "resident_production_dataplane_ready": false,
             "resident_default_daemon_switch_ready": false,
+            "resident_dataplane_default_switch_ready": false,
+            "resident_dataplane_env": Value::Null,
+            "resident_dataplane_env_enabled": false,
+            "default_path_switch_blocker": Value::Null,
             "reload_failure_rollback_supported": false,
             "invalid_runtime_config_rejected_before_current_swap": false,
             "reload_start_failure_attempts_previous_runtime_restore": false,

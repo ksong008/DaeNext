@@ -510,6 +510,15 @@ fn resident_default_daemon_switch_gate_json(options: &ProductChainRecertificatio
         candidate_service_contract["resident_default_daemon_switch_ready"]
             .as_bool()
             .unwrap_or(false);
+    let resident_dataplane_default_switch_ready =
+        candidate_service_contract["resident_dataplane_default_switch_ready"]
+            .as_bool()
+            .unwrap_or(resident_default_daemon_switch_declared);
+    let resident_dataplane_env = candidate_service_contract["resident_dataplane_env"].clone();
+    let resident_dataplane_env_enabled =
+        candidate_service_contract["resident_dataplane_env_enabled"]
+            .as_bool()
+            .unwrap_or(resident_dataplane_default_switch_ready);
     let reload_failure_rollback_supported =
         candidate_service_contract["reload_failure_rollback_supported"]
             .as_bool()
@@ -531,6 +540,7 @@ fn resident_default_daemon_switch_gate_json(options: &ProductChainRecertificatio
         && reload_command_service_contract_ready
         && resident_production_dataplane_ready
         && resident_default_daemon_switch_declared
+        && resident_dataplane_default_switch_ready
         && reload_failure_rollback_supported
         && invalid_runtime_config_rejected_before_current_swap
         && reload_start_failure_attempts_previous_runtime_restore;
@@ -555,6 +565,11 @@ fn resident_default_daemon_switch_gate_json(options: &ProductChainRecertificatio
         if resident_production_dataplane_ready && !resident_default_daemon_switch_declared {
             blockers.push(
                 "resident default daemon switch readiness is not explicitly declared by service-contract",
+            );
+        }
+        if !resident_dataplane_default_switch_ready {
+            blockers.push(
+                "resident userspace dataplane default switch env is not enabled by service-contract",
             );
         }
         if !reload_failure_rollback_supported {
@@ -584,6 +599,9 @@ fn resident_default_daemon_switch_gate_json(options: &ProductChainRecertificatio
         "reload_command_service_contract_ready": reload_command_service_contract_ready,
         "resident_production_dataplane_ready": resident_production_dataplane_ready,
         "resident_default_daemon_switch_declared": resident_default_daemon_switch_declared,
+        "resident_dataplane_default_switch_ready": resident_dataplane_default_switch_ready,
+        "resident_dataplane_env": resident_dataplane_env,
+        "resident_dataplane_env_enabled": resident_dataplane_env_enabled,
         "reload_failure_rollback_supported": reload_failure_rollback_supported,
         "invalid_runtime_config_rejected_before_current_swap": invalid_runtime_config_rejected_before_current_swap,
         "reload_start_failure_attempts_previous_runtime_restore": reload_start_failure_attempts_previous_runtime_restore,
