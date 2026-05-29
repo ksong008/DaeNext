@@ -26,6 +26,7 @@ fn dae_cgroup_attach_matrix_matches_go_attachcgroup_order() {
         "cgroup/sock_create",
         "tproxy_wan_cg_sock_create",
         "AttachCGroupInetSockCreate",
+        2,
         DaeCgroupProgramKind::Sock,
     );
     assert_cgroup_line(
@@ -34,6 +35,7 @@ fn dae_cgroup_attach_matrix_matches_go_attachcgroup_order() {
         "cgroup/sock_release",
         "tproxy_wan_cg_sock_release",
         "AttachCgroupInetSockRelease",
+        34,
         DaeCgroupProgramKind::Sock,
     );
     assert_cgroup_line(
@@ -42,6 +44,7 @@ fn dae_cgroup_attach_matrix_matches_go_attachcgroup_order() {
         "cgroup/connect4",
         "tproxy_wan_cg_connect4",
         "AttachCGroupInet4Connect",
+        10,
         DaeCgroupProgramKind::SockAddr,
     );
     assert_cgroup_line(
@@ -50,6 +53,7 @@ fn dae_cgroup_attach_matrix_matches_go_attachcgroup_order() {
         "cgroup/connect6",
         "tproxy_wan_cg_connect6",
         "AttachCGroupInet6Connect",
+        11,
         DaeCgroupProgramKind::SockAddr,
     );
     assert_cgroup_line(
@@ -58,6 +62,7 @@ fn dae_cgroup_attach_matrix_matches_go_attachcgroup_order() {
         "cgroup/sendmsg4",
         "tproxy_wan_cg_sendmsg4",
         "AttachCGroupUDP4Sendmsg",
+        14,
         DaeCgroupProgramKind::SockAddr,
     );
     assert_cgroup_line(
@@ -66,6 +71,7 @@ fn dae_cgroup_attach_matrix_matches_go_attachcgroup_order() {
         "cgroup/sendmsg6",
         "tproxy_wan_cg_sendmsg6",
         "AttachCGroupUDP6Sendmsg",
+        15,
         DaeCgroupProgramKind::SockAddr,
     );
     assert!(
@@ -154,12 +160,14 @@ fn assert_cgroup_line(
     section: &'static str,
     program_name: &'static str,
     go_attach_type: &'static str,
+    bpf_attach_type: u32,
     kind: DaeCgroupProgramKind,
 ) {
     assert_eq!(line.role, role);
     assert_eq!(line.section, section);
     assert_eq!(line.program_name, program_name);
     assert_eq!(line.go_attach_type, go_attach_type);
+    assert_eq!(line.role.bpf_attach_type(), bpf_attach_type);
     assert_eq!(line.aya_program_kind, kind);
 }
 
