@@ -169,3 +169,31 @@ func BenchmarkRoutingMatcherUserspaceIpPort(b *testing.B) {
 		}
 	}
 }
+
+func BenchmarkRoutingMatcherUserspaceDomain(b *testing.B) {
+	matcher := newTestDomainRoutingMatcher(b)
+	sourceAddr := testRoutingMatcherAddr(b, "10.0.0.2")
+	destAddr := testRoutingMatcherAddr(b, "203.0.113.42")
+	mac := testRoutingMatcherAddr(b, "::aabb:ccdd:eeff")
+	b.ReportAllocs()
+	for i := 0; i < b.N; i++ {
+		got, _, _, err := matcher.Match(
+			sourceAddr,
+			destAddr,
+			12345,
+			443,
+			consts.IpVersion_4,
+			consts.L4ProtoType_TCP,
+			"www.example.com",
+			[16]uint8{},
+			0,
+			mac,
+		)
+		if err != nil {
+			b.Fatal(err)
+		}
+		if got != consts.OutboundDirect {
+			b.Fatalf("expected direct domain match, got %v", got)
+		}
+	}
+}

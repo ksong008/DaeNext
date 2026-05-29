@@ -23,9 +23,19 @@ pub(crate) fn cases() -> Vec<BenchCase> {
             run: bench_routing_domain_matcher_bitmap,
         },
         BenchCase {
+            id: "routing/domain_matcher_bitmap_reuse",
+            default_iters: 100_000,
+            run: bench_routing_domain_matcher_bitmap_reuse,
+        },
+        BenchCase {
             id: "routing/userspace_ip_port_match",
             default_iters: 100_000,
             run: bench_routing_userspace_ip_port_match,
+        },
+        BenchCase {
+            id: "routing/userspace_domain_match_reuse",
+            default_iters: 100_000,
+            run: bench_routing_userspace_domain_match_reuse,
         },
         BenchCase {
             id: "routing/lpm_native_plan_build",
@@ -55,8 +65,30 @@ fn bench_routing_domain_matcher_bitmap(iters: u64, warmup: u64) -> Result<Measur
     let matcher = build_domain_matcher()?;
     Ok(measure(
         || {
-            let bitmap = matcher.match_domain_bitmap(black_box("API12.EXAMPLE.NET"));
+            let bitmap = matcher.match_domain_bitmap(black_box("api12.example.net"));
             black_box(bitmap.iter().fold(0_u64, |acc, value| acc ^ *value as u64))
+        },
+        iters,
+        warmup,
+    ))
+}
+
+fn bench_routing_domain_matcher_bitmap_reuse(
+    iters: u64,
+    warmup: u64,
+) -> Result<Measurement, String> {
+    let matcher = build_domain_matcher()?;
+    let mut bitmap = vec![0_u32; matcher.bitmap_words()];
+    Ok(measure(
+        || {
+            let words = matcher
+                .fill_domain_bitmap(black_box("api12.example.net"), black_box(&mut bitmap))
+                .expect("domain bitmap");
+            black_box(
+                bitmap[..words]
+                    .iter()
+                    .fold(0_u64, |acc, value| acc ^ *value as u64),
+            )
         },
         iters,
         warmup,
@@ -82,6 +114,40 @@ fn bench_routing_userspace_ip_port_match(iters: u64, warmup: u64) -> Result<Meas
             let outcome = matcher
                 .match_query_detail(black_box(&query))
                 .expect("userspace route match");
+            black_box(outcome.outbound.value() as u64 ^ outcome.mark as u64 ^ outcome.must as u64)
+        },
+        iters,
+        warmup,
+    ))
+}
+
+fn bench_routing_userspace_domain_match_reuse(
+    iters: u64,
+    warmup: u64,
+) -> Result<Measurement, String> {
+    let fixture = dae_golden::load_json("routing/userspace/basic_matcher.json")
+        .map_err(|err| err.to_string())?;
+    let case = fixture["cases"]
+        .as_array()
+        .and_then(|cases| {
+            cases
+                .iter()
+                .find(|case| case["name"].as_str() == Some("domain-suffix-direct-else-block"))
+        })
+        .ok_or_else(|| "missing userspace domain matcher case".to_owned())?;
+    let matcher =
+        RoutingMatcher::from_fixture_value(&case["matcher"]).map_err(|err| err.to_string())?;
+    let query = Query::tcp(
+        "203.0.113.42".parse().expect("benchmark ip"),
+        443,
+        "www.example.com",
+    );
+    let mut bitmap = vec![0_u32; matcher.domain_bitmap_words()];
+    Ok(measure(
+        || {
+            let outcome = matcher
+                .match_query_detail_with_bitmap(black_box(&query), black_box(&mut bitmap))
+                .expect("userspace domain route match");
             black_box(outcome.outbound.value() as u64 ^ outcome.mark as u64 ^ outcome.must as u64)
         },
         iters,

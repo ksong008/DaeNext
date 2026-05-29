@@ -1,13 +1,34 @@
+use std::borrow::Cow;
+
 pub fn normalize_domain(host: &str) -> String {
-    let host = host.trim().to_ascii_lowercase();
-    if host.ends_with(']') {
-        return host.trim_matches(['[', ']']).to_owned();
+    normalize_domain_cow(host).into_owned()
+}
+
+pub fn normalize_domain_cow(input: &str) -> Cow<'_, str> {
+    let trimmed = input.trim();
+    let mut host = trimmed;
+    let mut needs_owned = host.len() != input.len();
+
+    if host.starts_with('[') && host.ends_with(']') {
+        host = &host[1..host.len() - 1];
+        needs_owned = true;
+    } else if let Some(domain) = split_host_port(host) {
+        host = domain;
+        needs_owned = true;
     }
 
-    if let Some(domain) = split_host_port(&host) {
-        return domain.to_owned();
+    if let Some(stripped) = host.strip_suffix('.') {
+        host = stripped;
+        needs_owned = true;
     }
-    host.trim_end_matches('.').to_owned()
+
+    if host.bytes().any(|ch| ch.is_ascii_uppercase()) {
+        Cow::Owned(host.to_ascii_lowercase())
+    } else if needs_owned {
+        Cow::Owned(host.to_owned())
+    } else {
+        Cow::Borrowed(host)
+    }
 }
 
 fn split_host_port(host: &str) -> Option<&str> {
@@ -21,6 +42,7 @@ fn split_host_port(host: &str) -> Option<&str> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::borrow::Cow;
 
     #[test]
     fn normalize_domain_matches_go_edges() {
@@ -30,5 +52,9 @@ mod tests {
             normalize_domain("[2606:4700:20::681a:d1f]"),
             "2606:4700:20::681a:d1f"
         );
+        assert!(matches!(
+            normalize_domain_cow("example.com"),
+            Cow::Borrowed("example.com")
+        ));
     }
 }
