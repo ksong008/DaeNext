@@ -82,7 +82,11 @@ func (h *rustDomainRoutingHelper) startLocked() error {
 		return nil
 	}
 	ctx, cancel := context.WithCancel(context.Background())
-	cmd := exec.CommandContext(ctx, rustBpfLoaderHelperPath(), "domain-routing-map", "serve")
+	cmd, err := rustBpfLoaderCommandContext(ctx, "domain-routing-map", "serve")
+	if err != nil {
+		cancel()
+		return fmt.Errorf("resolve persistent rust domain routing helper: %w", err)
+	}
 	stdin, err := cmd.StdinPipe()
 	if err != nil {
 		cancel()
