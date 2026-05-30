@@ -30,6 +30,12 @@ pub struct BpfIpBytes {
     pub u6_addr8: [u8; 16],
 }
 
+impl BpfIpBytes {
+    pub const fn zeroed() -> Self {
+        Self { u6_addr8: [0; 16] }
+    }
+}
+
 #[repr(C)]
 #[derive(Clone, Copy)]
 pub struct BpfDomainRouting {
@@ -60,6 +66,15 @@ pub struct BpfOutboundConnectivityQuery {
 pub struct BpfPidPname {
     pub pid: u32,
     pub pname: [i8; TASK_COMM_LEN],
+}
+
+impl BpfPidPname {
+    pub const fn zeroed() -> Self {
+        Self {
+            pid: 0,
+            pname: [0; TASK_COMM_LEN],
+        }
+    }
 }
 
 #[repr(C)]
@@ -103,10 +118,24 @@ pub struct BpfTuplesKey {
     pub padding: [u8; 3],
 }
 
-#[repr(C)]
+impl BpfTuplesKey {
+    pub const fn zeroed() -> Self {
+        Self {
+            sip: BpfIpBytes::zeroed(),
+            dip: BpfIpBytes::zeroed(),
+            sport: 0,
+            dport: 0,
+            l4proto: 0,
+            padding: [0; 3],
+        }
+    }
+}
+
+#[allow(non_camel_case_types)]
+#[repr(C, align(8))]
 #[derive(Clone, Copy)]
-pub struct BpfTimerOpaque {
-    pub opaque: [u64; 2],
+pub struct bpf_timer {
+    pub __opaque: [u64; 2],
 }
 
 #[repr(C)]
@@ -114,7 +143,17 @@ pub struct BpfTimerOpaque {
 pub struct BpfUdpConnState {
     pub is_wan_ingress_direction: u8,
     pub padding: [u8; 7],
-    pub timer: BpfTimerOpaque,
+    pub timer: bpf_timer,
+}
+
+impl BpfUdpConnState {
+    pub const fn new(is_wan_ingress_direction: bool) -> Self {
+        Self {
+            is_wan_ingress_direction: is_wan_ingress_direction as u8,
+            padding: [0; 7],
+            timer: bpf_timer { __opaque: [0; 2] },
+        }
+    }
 }
 
 #[repr(C)]
