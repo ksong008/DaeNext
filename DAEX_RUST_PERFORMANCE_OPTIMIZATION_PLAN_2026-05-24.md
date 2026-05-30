@@ -16745,6 +16745,77 @@ CO-RE 继续推进前置审计：
 | `cargo test --manifest-path rust/Cargo.toml -p dae-daemon production_runtime_owner` | pass，67 passed |
 | `git diff --check` | pass |
 
+### daex 独立链 product-chain runtime/control source-contract 修正记录（2026-05-31）
+
+本节承接老链路 `daed2.0` bootstrap empty config warning 修复已提交远程后的下一步：回到 `/root/project/dae-daex-align` 独立链，继续 product-chain recertification / fallback retirement gate 前置收口。
+
+修改前参考：
+
+- `DAEX_RUST_REBUILD_PLAN_2026-05-16.md` 阶段 23/24 product-chain admission 记录：产品链路只允许先做只读 contract / clean baseline / runtime-control API regression 证据，不允许直接切默认路径。
+- `DAEX_RUST_REBUILD_PLAN_2026-05-16.md` 中 dae-wing 记录曾出现两类形态：
+  - `transport/httpapi/service_port.go` + `engine.DefaultRuntimeLifecycleService()` / `engine.DefaultRuntimeAccessService()`。
+  - 当前 daed2/独立链实际使用的 `engine.Default().Run/ReloadContext/Stop/GetRuntimeOverview/HTTPTransport`。
+- `DAENEW_RUST_REBUILD_MEMO_2026-05-16.md` 第 15 节 / 15.5 / 15.6：`ReloadWithContext`、`Stop`、`GetRuntimeOverview`、`HTTPTransport`、listener/reload lifecycle 是 WebUI/daed 依赖的 runtime/control API 边界，不能为通过扫描而改运行代码。
+
+问题确认：
+
+- `product-chain-recertification` 在独立链下识别到结构 baseline、分支 contract、outbound/quic-go dependency boundary、service contract 均可记录。
+- 阻断点是 `dae-wing/daed runtime/control API source contract is incomplete or unreadable`。
+- 根因不是当前 `dae-wing-daex-align` 缺功能，而是 `rust/crates/dae-daemon/src/product_chain_recertification/runtime_control_contract.rs` 的 standalone dae-wing 扫描器只接受较新的 service-port 形态：
+  - 强制要求 `transport/httpapi/service_port.go`。
+  - 强制要求 `engine.DefaultRuntimeLifecycleService().Run/Stop`。
+  - 强制要求 `ReloadWithContext(ctx, engine.DefaultConfigService().EmptyConfig())`。
+- 当前独立链真实源码形态为：
+  - `cmd/run.go` 使用 `engine.Default().Run(...)`。
+  - `transport/httpapi/handler.go` 使用 `engine.Default().GetRuntimeOverview(...)`。
+  - `orchestrator/config_run.go` 使用 `engine.Default().ReloadContext(...)` / `engine.Default().Stop(...)`。
+  - `engine/engine.go` 提供 `Default() Service`、`ReloadContext`、`GetRuntimeOverview`、`HTTPTransport`。
+
+修改记录：
+
+- `rust/crates/dae-daemon/src/product_chain_recertification/runtime_control_contract.rs`
+  - 新增 `source_file_contract_any_json(...)`，同一个 source-contract 检查项可以接受多个等价源码 needle。
+  - 新增 `source_contract_alternative_json(...)`，允许同一个 runtime status/access provider contract 由以下二选一满足：
+    - `transport/httpapi/service_port.go` 中的 `GetRuntimeOverview(...)` + `engine.DefaultRuntimeAccessService()`。
+    - `engine/engine.go` 中的 `Default() Service` + `ReloadContext(...)` + `GetRuntimeOverview(...)` + `HTTPTransport()`。
+  - standalone dae-wing `cmd/run.go` 检查改为接受：
+    - `engine.DefaultRuntimeLifecycleService().Run(...)`
+    - 或 `engine.Default().Run(...)`
+  - standalone dae-wing `orchestrator/config_run.go` 检查改为接受：
+    - `ReloadWithContext(...)` / `engine.DefaultRuntimeLifecycleService().Stop(...)`
+    - 或 `engine.Default().ReloadContext(...)` / `engine.Default().Stop(...)`
+- `rust/crates/dae-daemon/src/product_chain_recertification/topology.rs`
+  - `StandaloneDaeWing` 的 `source_contract_shape` 从 `runtime-service-port` 改为 `runtime-service-port-or-engine-default-direct`，避免报告误导。
+- `rust/crates/dae-daemon/src/product_chain_recertification/tests/runtime_control_contract.rs`
+  - 新增 standalone dae-wing 当前 `engine.Default()` 形态 fixture。
+  - 明确验证不存在 `transport/httpapi/service_port.go` 时，只要 `engine/engine.go` runtime/control provider 完整，source-contract 仍应通过。
+
+边界说明：
+
+- 本轮未修改 `dae-wing-daex-align` runtime 代码。
+- 本轮未修改 Go userspace outbound/control plane。
+- 本轮未切换默认路径。
+- 本轮未删除 TC command fallback、C trace object、Go trace fallback 或 Go userspace fallback。
+- 本轮不是性能路径修改，不记录 benchmark。
+- 该修正是通用 source-contract 兼容，不以 10.10.10.2、38 机或任何测试机 config 为标准。
+
+验证记录：
+
+| 验证项 | 结果 |
+| --- | --- |
+| `cargo fmt --manifest-path rust/Cargo.toml --all` | pass |
+| `cargo test --manifest-path rust/Cargo.toml -p dae-daemon runtime_control` | pass，4 passed |
+| `cargo test --manifest-path rust/Cargo.toml -p dae-daemon product_chain_recertification` | pass，28 passed |
+| `PATH=/root/.local/go1.25.9/bin:$PATH GOWORK=off go test ./control` | pass |
+| `cargo test --manifest-path rust/Cargo.toml -p dae-ebpf-support kernel_program` | pass，19 passed |
+| `cargo test --manifest-path rust/Cargo.toml -p dae-daemon production_runtime_owner_report_is_read_only_by_default` | pass，1 passed |
+
+下一步：
+
+- 提交本地后重跑 clean product-chain recertification report；提交前工作区脏会被 report 正确阻断，不能作为 clean baseline。
+- 预期 runtime/control API source-contract blocker 消失。
+- 若 clean report 仍阻断，只继续处理明确证据缺口；不新增阶段、不切默认路径、不删除 fallback。
+
 ### daed bootstrap 空配置误导性 warning 收口（2026-05-31）
 
 触发背景：
