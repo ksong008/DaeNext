@@ -177,3 +177,32 @@ pub const LINK_HDR_LEN_ETHERNET: u32 = 14;
 #[unsafe(no_mangle)]
 #[used]
 pub static PARAM: BpfDaeParam = BpfDaeParam::zeroed();
+
+#[inline(always)]
+pub fn param_control_plane_pid() -> u32 {
+    unsafe { core::ptr::addr_of!(PARAM.control_plane_pid).read_volatile() }
+}
+
+#[inline(always)]
+pub fn param_dae0_ifindex() -> u32 {
+    unsafe { core::ptr::addr_of!(PARAM.dae0_ifindex).read_volatile() }
+}
+
+#[inline(always)]
+pub fn param_dae_netns_id() -> u32 {
+    unsafe { core::ptr::addr_of!(PARAM.dae_netns_id).read_volatile() }
+}
+
+#[inline(always)]
+pub fn param_dae0peer_mac() -> [u8; 6] {
+    unsafe {
+        [
+            core::ptr::addr_of!(PARAM.dae0peer_mac[0]).read_volatile(),
+            core::ptr::addr_of!(PARAM.dae0peer_mac[1]).read_volatile(),
+            core::ptr::addr_of!(PARAM.dae0peer_mac[2]).read_volatile(),
+            core::ptr::addr_of!(PARAM.dae0peer_mac[3]).read_volatile(),
+            core::ptr::addr_of!(PARAM.dae0peer_mac[4]).read_volatile(),
+            core::ptr::addr_of!(PARAM.dae0peer_mac[5]).read_volatile(),
+        ]
+    }
+}

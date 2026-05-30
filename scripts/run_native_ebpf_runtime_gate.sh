@@ -19,10 +19,12 @@ run_id="${RUN_ID:-$(date +%Y%m%d%H%M%S)-$$}"
 run_root="${RUN_ROOT:-/tmp/dae-daemon-native-ebpf-runtime-gate-${run_id}}"
 config_file="${CONFIG_FILE:-/tmp/dae-native-ebpf-runtime-gate-${run_id}.dae}"
 native_object="${NATIVE_OBJECT:-/tmp/dae-native-bpf_bpfel.o}"
+rust_native_object="${RUST_NATIVE_OBJECT:-rust/target/bpfel-unknown-none/release/libdae_ebpf_program.so}"
 cargo_log="${CARGO_LOG:-/tmp/dae-native-ebpf-runtime-gate-${run_id}.log}"
 cgroup_log="${CGROUP_LOG:-/tmp/dae-native-ebpf-cgroup-gate-${run_id}.log}"
 backend="${DAE_NATIVE_EBPF_BACKEND:-auto}"
 netns_link="${DAE_NETNS_LINK:-auto}"
+runtime_timeout="${RUNTIME_TIMEOUT:-180s}"
 
 case "$run_root" in
   /tmp/dae-daemon-native-ebpf-runtime-gate*) ;;
@@ -37,13 +39,27 @@ rm -rf "$run_root"
 mkdir -p "$run_root"
 
 echo "building native Aya classifier object: $native_object"
-clang -g -O2 -Wall -Werror \
-  -DMAX_MATCH_SET_LEN="${MAX_MATCH_SET_LEN:-1024}" \
-  -DDAE_AYA_EBPF_OBJECT \
-  -target bpfel \
-  -c control/kern/tproxy.c \
-  -I./control/kern/headers \
-  -o "$native_object"
+echo "native object source: rust/crates/dae-ebpf-program"
+cargo +nightly build -Z build-std=core --manifest-path rust/Cargo.toml \
+  -p dae-ebpf-program \
+  --target bpfel-unknown-none \
+  --release
+if [[ ! -f "$rust_native_object" ]]; then
+  echo "missing Rust native eBPF object after build: $rust_native_object" >&2
+  exit 1
+fi
+mkdir -p "$(dirname "$native_object")"
+rust_native_object_real="$(readlink -f "$rust_native_object")"
+native_object_real="$(readlink -m "$native_object")"
+if [[ "$rust_native_object_real" != "$native_object_real" ]]; then
+  cp "$rust_native_object" "$native_object"
+fi
+chmod 0644 "$native_object"
+native_object_symbols="$(llvm-readelf -s "$native_object" 2>/dev/null || true)"
+if ! grep -q ' PARAM$' <<<"$native_object_symbols"; then
+  echo "Rust native eBPF object does not expose expected PARAM symbol: $native_object" >&2
+  exit 1
+fi
 
 echo "running Aya cgroup attach/detach gate"
 if ! DAE_RUN_AYA_CGROUP_ATTACH_SMOKE=1 cargo test --manifest-path rust/Cargo.toml \
@@ -62,8 +78,8 @@ if grep -q 'skip aya cgroup attach smoke' "$cgroup_log"; then
 fi
 echo "Aya cgroup attach/detach gate passed"
 
-echo "running native eBPF runtime gate: root=$run_root backend=$backend netns_link=$netns_link"
-if ! cargo run --manifest-path rust/Cargo.toml \
+echo "running native eBPF runtime gate: root=$run_root backend=$backend netns_link=$netns_link timeout=$runtime_timeout"
+if ! DAE_RUST_NATIVE_BPF_OBJECT="$native_object" timeout "$runtime_timeout" cargo run --manifest-path rust/Cargo.toml \
   -p dae-daemon \
   --features native-ebpf \
   --bin dae-daemon-optin \
