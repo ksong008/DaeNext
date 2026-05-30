@@ -15321,6 +15321,74 @@ A4 coverage 结论：
 | `cargo test --manifest-path rust/Cargo.toml -p dae-daemon production_runtime_owner` | pass，67 passed |
 | `git diff --check` | pass |
 
+### A4 product-chain 结构基线与默认切换准入拆分记录（2026-05-30）
+
+本节承接 `A4 tproxy dataplane 与 trace diagnostic gate 拆分记录` 以及提交后 product-chain clean baseline 复认证结果。修改前再次参考：
+
+- `DAEX_RUST_REBUILD_PLAN_2026-05-16.md`：默认切换必须先有 clean product-chain、service contract、runtime/control API、benchmark、host-write、rollback 与 explicit approval；不能因为单项 native/Aya 准入就切默认或删除 fallback。
+- `DAENEW_RUST_REBUILD_MEMO_2026-05-16.md` 第 12 节、第 15.5 节、第 26.3 节以及 `install/dae.service`：service contract、runtime/control API、outbound/quic-go dependency boundary、reload/run 语义必须保持 daenew/daed2.0 产品链行为。
+
+发现的问题：
+
+- 旧 `product_chain_recertification_clean` 同时要求：
+  - product-chain service / dependency / repo / runtime-control API 基线干净；
+  - `true_rust_default_daemon_admitted=true`；
+  - `bpf_go_fallback_retired=true`。
+- 但 Go BPF fallback retirement gate 又需要 product-chain recertification 作为前置证据，导致“fallback 退休需要 product-chain clean，product-chain clean 又需要 fallback 已退休”的循环依赖。
+- 这会把只读产品链结构基线误判为失败，进而干扰 A4 后续 fallback retirement admission 的证据顺序。
+
+本轮修改：
+
+- `rust/crates/dae-daemon/src/product_chain_recertification.rs`
+  - 新增 `product_chain_structural_baseline_clean`：只表达结构复认证基线，要求 `execute=true`、service contract preserved、outbound/quic-go dependency boundary preserved、repo clean/branch contract preserved、runtime/control API source baseline recorded。
+  - `product_chain_recertification_clean` 改为结构复认证基线别名，用作 fallback retirement 的前置证据，不再要求 true Rust default daemon admission 或 Go BPF fallback retirement。
+  - 新增 `product_chain_default_switch_admission_clean`：用于默认切换准入，继续要求结构基线、`bpf_go_fallback_retired=true`、`true_rust_default_daemon_admitted=true` 和 runtime/control API final admission。
+  - `default_path_mutation_allowed` 仍必须同时满足 `product_chain_default_switch_admission_clean=true`、显式 default path mutation request 和 resident default daemon switch ready。
+- `rust/crates/dae-daemon/src/product_chain_recertification/typed_report.rs`
+  - `runtime_control_api_clean_baseline.recorded` 改为 source baseline recorded。
+  - 新增 `source_baseline_recorded` 与 `final_admission_recorded`，把 runtime/control API 源契约基线和 true Rust default admission 后的最终回归记录拆开。
+  - typed report 新增 `structural_baseline_clean` 与 `default_switch_admission_clean`。
+- `rust/crates/dae-daemon/src/default_run.rs`
+  - 顶层 run report 透出 `product_chain_structural_baseline_clean` 与 `product_chain_default_switch_admission_clean`，便于后续 release/fallback gate 明确读取。
+- `rust/crates/dae-daemon/src/product_chain_recertification/tests/baseline.rs`
+  - 新增测试：结构基线干净但没有 true Rust default daemon admission / BPF fallback retirement / default mutation request 时，`product_chain_recertification_clean=true`，`product_chain_default_switch_admission_clean=false`，默认切换仍关闭，remaining blockers 不再误报 runtime/control API 缺失。
+
+当前语义：
+
+| 字段 | 含义 | 是否允许默认切换 |
+| --- | --- | --- |
+| `clean_product_chain_baseline` | sibling repo 存在、git status 可读、无 dirty、分支合同匹配 | 否 |
+| `runtime_control_api_source_baseline_recorded` | daed2.0 dae-wing / daed runtime/control API 源契约基线已记录 | 否 |
+| `product_chain_structural_baseline_clean` | product-chain 结构复认证基线干净 | 否 |
+| `product_chain_recertification_clean` | 当前作为结构复认证基线别名，用于解除 fallback retirement 前置循环 | 否 |
+| `runtime_control_api_final_admission_recorded` | runtime/control API 在 true Rust default daemon admission 输入下也已记录 | 否 |
+| `product_chain_default_switch_admission_clean` | 结构基线 + true Rust default daemon admission + BPF fallback retirement 均满足 | 仍需显式 mutation request 和 resident ready |
+| `default_path_mutation_allowed` / `product_chain_switch_allowed` | 默认路径/产品链切换真正允许 | 是，但本轮仍为 false |
+
+不变边界：
+
+- 不切默认。
+- 不删除 Go BPF fallback、C tproxy object、C trace object、Go trace fallback 或 TC command fallback。
+- 不触碰 Go userspace control plane / outbound 协议栈权威边界。
+- CO-RE side-load 继续关闭。
+- 不按测试机配置写特定逻辑。
+
+验证记录：
+
+| 验证项 | 结果 |
+| --- | --- |
+| `cargo fmt --manifest-path rust/Cargo.toml --all` | pass |
+| `cargo test --manifest-path rust/Cargo.toml -p dae-daemon product_chain_recertification` | pass，27 passed |
+| `cargo test --manifest-path rust/Cargo.toml -p dae-daemon release_gate` | pass，2 passed |
+| `cargo test --manifest-path rust/Cargo.toml -p dae-daemon production_runtime_owner` | pass，67 passed |
+
+未执行：
+
+- 未执行远程 host write。
+- 未生成或替换 daed 二进制。
+- 未推送远程。
+- 未删除任何 fallback。
+
 ### A4 约束追加：CO-RE side-load 保持关闭（2026-05-30）
 
 用户确认：CO-RE side-load 保持关闭。

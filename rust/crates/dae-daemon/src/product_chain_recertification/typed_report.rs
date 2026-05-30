@@ -30,17 +30,20 @@ pub(super) struct RuntimeControlApiCleanBaselineReport {
 }
 
 impl RuntimeControlApiCleanBaselineReport {
-    fn recorded(self) -> bool {
+    fn source_baseline_recorded(self) -> bool {
         self.executed
             && self.clean_product_chain_baseline
             && self.runtime_control_api_source_contract_preserved
-            && self.admission.true_rust_default_daemon_admitted
             && self.service_contract_preserved
             && self.dependency_boundary_preserved
     }
 
+    fn final_admission_recorded(self) -> bool {
+        self.source_baseline_recorded() && self.admission.true_rust_default_daemon_admitted
+    }
+
     fn status(self) -> TypedReportStatus {
-        if self.recorded() {
+        if self.source_baseline_recorded() {
             TypedReportStatus::Pass
         } else {
             TypedReportStatus::Fail
@@ -48,14 +51,18 @@ impl RuntimeControlApiCleanBaselineReport {
     }
 
     fn to_json(self) -> Value {
-        let recorded = self.recorded();
+        let source_baseline_recorded = self.source_baseline_recorded();
+        let final_admission_recorded = self.final_admission_recorded();
         json!({
             "status": self.status().as_str(),
-            "recorded": recorded,
+            "recorded": source_baseline_recorded,
+            "source_baseline_recorded": source_baseline_recorded,
+            "final_admission_recorded": final_admission_recorded,
             "execute": self.executed,
             "clean_product_chain_baseline": self.clean_product_chain_baseline,
             "runtime_control_api_source_contract_preserved": self.runtime_control_api_source_contract_preserved,
             "true_rust_default_daemon_admitted": self.admission.true_rust_default_daemon_admitted,
+            "true_rust_default_daemon_required_for_final_admission": true,
             "production_dataplane_admitted": self.admission.production_dataplane_admitted,
             "reload_runtime_parity_admitted": self.admission.reload_runtime_parity_admitted,
             "matched_go_rust_default_daemon_benchmark_recorded": self.admission.matched_benchmark_recorded,
@@ -71,6 +78,8 @@ impl RuntimeControlApiCleanBaselineReport {
 pub(super) struct ProductChainTypedReportSummary {
     pub(super) executed: bool,
     pub(super) recertification_clean: bool,
+    pub(super) structural_baseline_clean: bool,
+    pub(super) default_switch_admission_clean: bool,
     pub(super) default_path_mutation_requested: bool,
     pub(super) default_path_mutation_allowed: bool,
     pub(super) product_chain_switch_allowed: bool,
@@ -104,6 +113,8 @@ impl ProductChainTypedReportSummary {
             "status": self.status().as_str(),
             "execute": self.executed,
             "recertification_clean": self.recertification_clean,
+            "structural_baseline_clean": self.structural_baseline_clean,
+            "default_switch_admission_clean": self.default_switch_admission_clean,
             "default_path_mutation_requested": self.default_path_mutation_requested,
             "default_path_mutation_allowed": self.default_path_mutation_allowed,
             "product_chain_switch_allowed": self.product_chain_switch_allowed,
