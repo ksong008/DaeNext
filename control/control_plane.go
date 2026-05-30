@@ -1041,44 +1041,9 @@ func (c *ControlPlane) Serve(readyChan chan<- bool, listener *Listener) (err err
 }
 
 func (c *ControlPlane) ListenAndServe(readyChan chan<- bool, port uint16) (listener *Listener, err error) {
-	if listener, err = c.listenAndServeViaRustAya(readyChan, port); err == nil {
-		return listener, nil
-	} else {
-		c.log.WithError(err).Debugln("Rust/Aya tproxy listener handoff failed; falling back to Go listener")
+	if listener, err = c.listenAndServeViaRustAya(readyChan, port); err != nil {
+		return nil, fmt.Errorf("Rust/Aya tproxy listener handoff failed: %w", err)
 	}
-
-	// Listen.
-	listenConfig := net.ListenConfig{
-		Control: func(network, address string, c syscall.RawConn) error {
-			return dialer.TproxyControl(c)
-		},
-	}
-	listenAddr := net.JoinHostPort(c.listenIp, strconv.Itoa(int(port)))
-	tcpListener, err := listenConfig.Listen(context.TODO(), "tcp", listenAddr)
-	if err != nil {
-		return nil, fmt.Errorf("listenTCP: %w", err)
-	}
-	packetConn, err := listenConfig.ListenPacket(context.TODO(), "udp", listenAddr)
-	if err != nil {
-		_ = tcpListener.Close()
-		return nil, fmt.Errorf("listenUDP: %w", err)
-	}
-	listener = &Listener{
-		tcpListener: tcpListener,
-		packetConn:  packetConn,
-		port:        port,
-	}
-	defer func() {
-		if err != nil {
-			_ = listener.Close()
-		}
-	}()
-
-	// Serve
-	if err = c.Serve(readyChan, listener); err != nil {
-		return nil, fmt.Errorf("failed to serve: %w", err)
-	}
-
 	return listener, nil
 }
 
