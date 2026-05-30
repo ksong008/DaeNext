@@ -13,6 +13,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/daeuniverse/dae/common/consts"
 	componentdns "github.com/daeuniverse/dae/component/dns"
 	"github.com/daeuniverse/dae/config"
 	dnsmessage "github.com/miekg/dns"
@@ -20,8 +21,10 @@ import (
 )
 
 type fakeDNSResponseWriter struct {
-	localAddr  net.Addr
-	remoteAddr net.Addr
+	localAddr     net.Addr
+	remoteAddr    net.Addr
+	msg           *dnsmessage.Msg
+	writeMsgCount int
 }
 
 func (f *fakeDNSResponseWriter) LocalAddr() net.Addr {
@@ -32,7 +35,11 @@ func (f *fakeDNSResponseWriter) RemoteAddr() net.Addr {
 	return f.remoteAddr
 }
 
-func (f *fakeDNSResponseWriter) WriteMsg(*dnsmessage.Msg) error {
+func (f *fakeDNSResponseWriter) WriteMsg(msg *dnsmessage.Msg) error {
+	f.writeMsgCount++
+	if msg != nil {
+		f.msg = msg.Copy()
+	}
 	return nil
 }
 
@@ -194,5 +201,107 @@ func TestHandleWithResponseWriterRejectsAsIsForLocalListener(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "asis") {
 		t.Fatalf("expected error to mention asis, got: %v", err)
+	}
+}
+
+func TestHandleWithResponseWriterWritesFirstMissFromUpstream(t *testing.T) {
+	log := logrus.New()
+	log.SetLevel(logrus.ErrorLevel)
+
+	routing, err := componentdns.New(&config.Dns{
+		Upstream: []config.KeyableString{
+			"test:udp://1.1.1.1:53",
+		},
+		Routing: config.DnsRouting{
+			Request: config.DnsRequestRouting{
+				Fallback: "test",
+			},
+			Response: config.DnsResponseRouting{
+				Fallback: "accept",
+			},
+		},
+	}, &componentdns.NewOption{
+		Logger: log,
+		UpstreamReadyCallback: func(*componentdns.Upstream) error {
+			return nil
+		},
+	})
+	if err != nil {
+		t.Fatalf("failed to build dns routing: %v", err)
+	}
+
+	controller, err := NewDnsController(routing, &DnsControllerOption{
+		Log:                 log,
+		CacheAccessCallback: func(*DnsCache) error { return nil },
+		CacheRemoveCallback: func(*DnsCache) error { return nil },
+		NewCache: func(_ string, answers []dnsmessage.RR, deadline time.Time, originalDeadline time.Time) (*DnsCache, error) {
+			ips, hasAnyIP := summarizeDNSAnswers(answers)
+			return &DnsCache{
+				Answer:           answers,
+				IPs:              ips,
+				HasAnyIP:         hasAnyIP,
+				Deadline:         deadline,
+				OriginalDeadline: originalDeadline,
+			}, nil
+		},
+		BestDialerChooser: func(*udpRequest, *componentdns.Upstream) (*dialArgument, error) {
+			return &dialArgument{
+				l4proto:   consts.L4ProtoStr_UDP,
+				ipversion: consts.IpVersionStr_4,
+			}, nil
+		},
+		TimeoutExceedCallback: func(*dialArgument, error) {},
+	})
+	if err != nil {
+		t.Fatalf("failed to create dns controller: %v", err)
+	}
+	defer controller.Close()
+
+	forwardCalls := 0
+	controller.forwarderFactory = func(*componentdns.Upstream, dialArgument) (DnsForwarder, error) {
+		return &fakeDnsForwarder{forward: func(_ context.Context, data []byte) (*dnsmessage.Msg, error) {
+			forwardCalls++
+			req := new(dnsmessage.Msg)
+			if err := req.Unpack(data); err != nil {
+				return nil, err
+			}
+			resp := new(dnsmessage.Msg)
+			resp.SetReply(req)
+			resp.Answer = []dnsmessage.RR{newTestARecord(req.Question[0].Name, "1.1.1.1")}
+			return resp, nil
+		}}, nil
+	}
+
+	req := new(dnsmessage.Msg)
+	req.SetQuestion("first-miss.example.", dnsmessage.TypeA)
+	req.Id = 0x1234
+	writer := &fakeDNSResponseWriter{
+		localAddr:  &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1), Port: 5353},
+		remoteAddr: &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1), Port: 43210},
+	}
+
+	err = controller.handleWithResponseWriter_(req, &udpRequest{
+		ctx:     context.Background(),
+		realSrc: netip.MustParseAddrPort("127.0.0.1:43210"),
+		realDst: netip.MustParseAddrPort("127.0.0.1:5353"),
+		src:     netip.MustParseAddrPort("127.0.0.1:43210"),
+	}, true, writer)
+	if err != nil {
+		t.Fatalf("handleWithResponseWriter_() returned error: %v", err)
+	}
+	if forwardCalls != 1 {
+		t.Fatalf("expected one upstream lookup for first miss, got %d", forwardCalls)
+	}
+	if writer.writeMsgCount != 1 {
+		t.Fatalf("expected first miss to write through response writer once, got %d", writer.writeMsgCount)
+	}
+	if writer.msg == nil {
+		t.Fatal("expected response writer to receive a DNS response")
+	}
+	if writer.msg.Id != req.Id {
+		t.Fatalf("response id = %d, want %d", writer.msg.Id, req.Id)
+	}
+	if len(writer.msg.Answer) != 1 {
+		t.Fatalf("response answers = %d, want 1", len(writer.msg.Answer))
 	}
 }
