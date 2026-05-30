@@ -1,0 +1,140 @@
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct BpfDaeParam {
+    pub tproxy_port: u32,
+    pub control_plane_pid: u32,
+    pub dae0_ifindex: u32,
+    pub dae_netns_id: u32,
+    pub dae0peer_mac: [u8; 6],
+    pub has_bpf_get_current_task: u8,
+    pub padding: u8,
+}
+
+impl BpfDaeParam {
+    pub const fn zeroed() -> Self {
+        Self {
+            tproxy_port: 0,
+            control_plane_pid: 0,
+            dae0_ifindex: 0,
+            dae_netns_id: 0,
+            dae0peer_mac: [0; 6],
+            has_bpf_get_current_task: 0,
+            padding: 0,
+        }
+    }
+}
+
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct BpfIpBytes {
+    pub u6_addr8: [u8; 16],
+}
+
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct BpfDomainRouting {
+    pub bitmap: [u32; 32],
+}
+
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct BpfMatchSet {
+    pub value: [u8; 16],
+    pub not: u8,
+    pub kind: u8,
+    pub outbound: u8,
+    pub must: u8,
+    pub mark: u32,
+}
+
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct BpfOutboundConnectivityQuery {
+    pub outbound: u8,
+    pub l4proto: u8,
+    pub ipversion: u8,
+}
+
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct BpfPidPname {
+    pub pid: u32,
+    pub pname: [i8; TASK_COMM_LEN],
+}
+
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct BpfRedirectEntry {
+    pub ifindex: u32,
+    pub smac: [u8; 6],
+    pub dmac: [u8; 6],
+    pub from_wan: u8,
+    pub padding: [u8; 3],
+}
+
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct BpfRedirectTuple {
+    pub sip: BpfIpBytes,
+    pub dip: BpfIpBytes,
+}
+
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct BpfRoutingResult {
+    pub mark: u32,
+    pub must: u8,
+    pub mac: [u8; 6],
+    pub outbound: u8,
+    pub pname: [u8; TASK_COMM_LEN],
+    pub pid: u32,
+    pub dscp: u8,
+    pub padding: [u8; 3],
+}
+
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct BpfTuplesKey {
+    pub sip: BpfIpBytes,
+    pub dip: BpfIpBytes,
+    pub sport: u16,
+    pub dport: u16,
+    pub l4proto: u8,
+    pub padding: [u8; 3],
+}
+
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct BpfTimerOpaque {
+    pub opaque: [u64; 2],
+}
+
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct BpfUdpConnState {
+    pub is_wan_ingress_direction: u8,
+    pub padding: [u8; 7],
+    pub timer: BpfTimerOpaque,
+}
+
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct BpfLpmKey {
+    pub prefix_len: u32,
+    pub data: [u32; 4],
+}
+
+pub const TASK_COMM_LEN: usize = 16;
+pub const MAX_MATCH_SET_LEN: u32 = 32 * 32;
+pub const MAX_LPM_NUM: u32 = MAX_MATCH_SET_LEN + 8;
+pub const MAX_LPM_SIZE: u32 = 2_048_000;
+pub const MAX_DST_MAPPING_NUM: u32 = 65_536 * 2;
+pub const MAX_TGID_PNAME_MAPPING_NUM: u32 = 8_192;
+pub const MAX_COOKIE_PID_PNAME_MAPPING_NUM: u32 = 65_536;
+pub const MAX_DOMAIN_ROUTING_NUM: u32 = 65_536;
+pub const TPROXY_MARK: u32 = 0x0800_0000;
+pub const LINK_HDR_LEN_ETHERNET: u32 = 14;
+
+#[unsafe(no_mangle)]
+#[used]
+pub static PARAM: BpfDaeParam = BpfDaeParam::zeroed();
