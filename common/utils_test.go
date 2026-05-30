@@ -6,9 +6,12 @@
 package common
 
 import (
+	"net"
 	"os"
 	"path/filepath"
 	"testing"
+
+	"github.com/vishvananda/netlink"
 )
 
 func TestEnsureFileInSubDirAllowsNormalPath(t *testing.T) {
@@ -59,5 +62,38 @@ func TestEnsureFileInSubDirRejectsSymlinkFileEscape(t *testing.T) {
 
 	if err := EnsureFileInSubDir(link, dir); err == nil {
 		t.Fatal("expected symlink file escape to be rejected")
+	}
+}
+
+func TestRouteIsDefaultAcceptsNilAndZeroPrefix(t *testing.T) {
+	_, v4Default, err := net.ParseCIDR("0.0.0.0/0")
+	if err != nil {
+		t.Fatalf("parse v4 default: %v", err)
+	}
+	_, v6Default, err := net.ParseCIDR("::/0")
+	if err != nil {
+		t.Fatalf("parse v6 default: %v", err)
+	}
+	_, v4Route, err := net.ParseCIDR("192.0.2.0/24")
+	if err != nil {
+		t.Fatalf("parse non-default route: %v", err)
+	}
+
+	tests := []struct {
+		name  string
+		route netlink.Route
+		want  bool
+	}{
+		{name: "nil destination", route: netlink.Route{}, want: true},
+		{name: "ipv4 zero prefix", route: netlink.Route{Dst: v4Default}, want: true},
+		{name: "ipv6 zero prefix", route: netlink.Route{Dst: v6Default}, want: true},
+		{name: "non-default prefix", route: netlink.Route{Dst: v4Route}, want: false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := routeIsDefault(tt.route); got != tt.want {
+				t.Fatalf("routeIsDefault() = %v, want %v", got, tt.want)
+			}
+		})
 	}
 }
