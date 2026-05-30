@@ -81,9 +81,9 @@ require (
 	google.golang.org/grpc v1.65.0 // indirect
 )
 
-replace github.com/daeuniverse/outbound => github.com/ksong008/outbound v0.0.0-20260503111656-34ca7d09e020
+replace github.com/daeuniverse/outbound => /root/project/outbound-daex-align
 
-replace github.com/daeuniverse/quic-go => github.com/ksong008/quic-go v0.0.0-20260419080117-578539b67bcc
+replace github.com/daeuniverse/quic-go => /root/project/quic-go-rust
 
 // replace github.com/daeuniverse/quic-go => ../quic-go
 
