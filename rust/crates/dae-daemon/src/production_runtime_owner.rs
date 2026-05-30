@@ -104,6 +104,7 @@ pub struct ProductionRuntimeOwnerOptions {
     pub native_ebpf_backend: AttachBackend,
     pub native_ebpf_completed_a3_admission: bool,
     pub fallback_retirement_product_chain_recertified: bool,
+    pub fallback_retirement_explicit_user_approval: bool,
     pub native_ebpf_object: Option<PathBuf>,
 }
 
@@ -143,6 +144,7 @@ impl Default for ProductionRuntimeOwnerOptions {
             native_ebpf_backend: AttachBackend::Auto,
             native_ebpf_completed_a3_admission: false,
             fallback_retirement_product_chain_recertified: false,
+            fallback_retirement_explicit_user_approval: false,
             native_ebpf_object: None,
         }
     }
@@ -1367,6 +1369,18 @@ mod tests {
         );
         assert!(
             !report["ebpf_backend_capabilities"]["kernel_program_fallback_retirement_gate"]
+                ["c_tproxy_object_retirement_allowed"]
+                .as_bool()
+                .unwrap()
+        );
+        assert!(
+            report["ebpf_backend_capabilities"]["kernel_program_fallback_retirement_gate"]
+                ["c_tproxy_object_required"]
+                .as_bool()
+                .unwrap()
+        );
+        assert!(
+            !report["ebpf_backend_capabilities"]["kernel_program_fallback_retirement_gate"]
                 ["c_trace_object_retirement_allowed"]
                 .as_bool()
                 .unwrap()
@@ -1558,6 +1572,59 @@ mod tests {
         assert!(!report["go_bpf_fallback_retired"].as_bool().unwrap());
         assert!(
             !report["go_bpf_fallback_retirement_gate_admitted"]
+                .as_bool()
+                .unwrap()
+        );
+    }
+
+    #[test]
+    fn production_runtime_owner_fallback_gate_admits_with_explicit_approval() {
+        let root = std::env::temp_dir().join(format!(
+            "dae-daemon-production-runtime-explicit-fallback-retirement-{}",
+            std::process::id()
+        ));
+        let options = ProductionRuntimeOwnerOptions {
+            fallback_retirement_product_chain_recertified: true,
+            fallback_retirement_explicit_user_approval: true,
+            ..ProductionRuntimeOwnerOptions::default()
+        };
+        let report = production_runtime_owner_report(&root, &options).unwrap();
+        let gate = &report["ebpf_backend_capabilities"]["kernel_program_fallback_retirement_gate"];
+        assert!(gate["product_chain_recertified"].as_bool().unwrap());
+        assert!(gate["explicit_user_approval_recorded"].as_bool().unwrap());
+        assert!(gate["admitted"].as_bool().unwrap());
+        assert!(!gate["default_switch_allowed"].as_bool().unwrap());
+        assert!(!gate["go_bpf_fallback_required"].as_bool().unwrap());
+        assert!(
+            gate["go_bpf_fallback_retirement_allowed"]
+                .as_bool()
+                .unwrap()
+        );
+        assert!(gate["blockers"].as_array().unwrap().is_empty());
+        assert!(!report["go_bpf_fallback_required"].as_bool().unwrap());
+        assert!(report["go_bpf_fallback_retired"].as_bool().unwrap());
+        assert!(
+            report["go_bpf_fallback_retirement_gate_admitted"]
+                .as_bool()
+                .unwrap()
+        );
+        assert!(
+            !report["default_switch_allowed"].as_bool().unwrap(),
+            "A5 admits fallback retirement but does not mutate the daemon default path"
+        );
+        assert!(
+            report["go_default_path_preserved"].as_bool().unwrap(),
+            "A5 does not mutate the daemon default path"
+        );
+        assert!(
+            !report["ebpf_backend_capabilities"]["kernel_program_fallback_retirement_gate"]
+                ["c_trace_object_retirement_allowed"]
+                .as_bool()
+                .unwrap()
+        );
+        assert!(
+            !report["ebpf_backend_capabilities"]["kernel_program_fallback_retirement_gate"]
+                ["tc_command_fallback_retirement_allowed"]
                 .as_bool()
                 .unwrap()
         );

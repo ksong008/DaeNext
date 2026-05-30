@@ -322,13 +322,13 @@ fn kernel_program_fallback_retirement_gate_can_admit_only_after_full_evidence() 
     );
 
     assert!(gate.admitted);
-    assert!(gate.default_switch_allowed);
-    assert!(gate.c_tproxy_object_retirement_allowed);
+    assert!(!gate.default_switch_allowed);
+    assert!(!gate.c_tproxy_object_retirement_allowed);
     assert!(!gate.c_trace_object_retirement_allowed);
     assert!(gate.go_bpf_fallback_retirement_allowed);
     assert!(!gate.tc_command_fallback_retirement_allowed);
     assert!(!gate.trace_diagnostic_retirement_allowed);
-    assert!(!gate.c_tproxy_object_required);
+    assert!(gate.c_tproxy_object_required);
     assert!(gate.c_trace_object_required);
     assert!(!gate.go_bpf_fallback_required);
     assert!(gate.go_trace_fallback_required);
