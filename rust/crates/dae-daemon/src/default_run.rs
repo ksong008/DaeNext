@@ -269,6 +269,14 @@ pub fn run_default_optin_report(options: &RunOptions, version: &str) -> Result<V
         product_chain_recertification["product_chain_recertification_clean"]
             .as_bool()
             .unwrap_or(false);
+    let product_chain_structural_baseline_clean =
+        product_chain_recertification["product_chain_structural_baseline_clean"]
+            .as_bool()
+            .unwrap_or(false);
+    let product_chain_default_switch_admission_clean =
+        product_chain_recertification["product_chain_default_switch_admission_clean"]
+            .as_bool()
+            .unwrap_or(false);
     let default_path_mutation_allowed =
         product_chain_recertification["default_path_mutation_allowed"]
             .as_bool()
@@ -523,6 +531,10 @@ pub fn run_default_optin_report(options: &RunOptions, version: &str) -> Result<V
     report["product_chain_recertification_executed"] =
         json!(product_chain_recertification_executed);
     report["product_chain_recertification_clean"] = json!(product_chain_recertification_clean);
+    report["product_chain_structural_baseline_clean"] =
+        json!(product_chain_structural_baseline_clean);
+    report["product_chain_default_switch_admission_clean"] =
+        json!(product_chain_default_switch_admission_clean);
     report["product_chain_recertification_go_fallback_required"] =
         product_chain_recertification["go_fallback_required"].clone();
     report["product_chain_recertification_go_fallback_retired"] =
