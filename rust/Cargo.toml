@@ -10,6 +10,7 @@ members = [
     "crates/dae-aya-bpf-loader",
     "crates/dae-datapath",
     "crates/dae-dns",
+    "crates/dae-ebpf-program",
     "crates/dae-ebpf-support",
     "crates/dae-engine",
     "crates/dae-geodata",
@@ -34,6 +35,7 @@ repository = "https://github.com/daeuniverse/dae"
 aes = "0.8"
 aes-gcm = "0.10"
 aya = { version = "0.13.1", default-features = false }
+aya-ebpf = { version = "0.1.1", default-features = false }
 base64 = "0.22"
 blake3 = "1"
 bytes = "1"
