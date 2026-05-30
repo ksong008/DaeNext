@@ -71,7 +71,7 @@ unsafe fn current_dae_netns_tcp_state(
             skb.cast::<c_void>(),
             tuple.cast::<c_void>(),
             tuple_size,
-            crate::abi::PARAM.dae_netns_id as u64,
+            crate::abi::param_dae_netns_id() as u64,
             0,
         )
     };
@@ -112,11 +112,12 @@ unsafe fn prep_redirect_to_control_plane(
         };
     }
 
+    let dae0peer_mac = crate::abi::param_dae0peer_mac();
     let _ = unsafe {
         helpers::bpf_skb_store_bytes(
             skb_void,
             packet::ETH_DST_OFFSET,
-            ptr::addr_of!(crate::abi::PARAM.dae0peer_mac).cast::<c_void>(),
+            dae0peer_mac.as_ptr().cast::<c_void>(),
             6,
             0,
         )
@@ -180,7 +181,7 @@ unsafe fn redirect_to_control_plane(
     } {
         return TC_ACT_SHOT;
     }
-    unsafe { helpers::bpf_redirect(crate::abi::PARAM.dae0_ifindex, 0) as i32 }
+    unsafe { helpers::bpf_redirect(crate::abi::param_dae0_ifindex(), 0) as i32 }
 }
 
 pub fn dae0peer_ingress(skb: *mut __sk_buff) -> i32 {

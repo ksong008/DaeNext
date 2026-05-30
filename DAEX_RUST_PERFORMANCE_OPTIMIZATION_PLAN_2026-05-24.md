@@ -14861,3 +14861,105 @@ A2 收口结论：
 - A2 没有把任何测试机配置写入实现；后续排查真实流量问题仍必须从通用规则/map/packet/attach 语义出发。
 - A2 仍不等于 production 默认切换完成：远程 host write、真实 reload/runtime parity、LAN/WAN TCP/UDP/DNS 流量 benchmark、长稳和失败回滚仍需在下一阶段单独准入。
 - 因此当前可以把 A2 标记为“Rust/Aya eBPF object 本地准入完成”，但不得据此删除 C object、Go BPF fallback 或 `tc` fallback，也不得默认切到 Rust object，除非后续阶段给出生产流量证据并获得用户确认。
+
+## Rust/Aya eBPF production runtime admission 入口修正记录（2026-05-30）
+
+本节目标：
+
+- 承接 A2 收口结果，把真正的 production runtime admission 入口改为验证 Rust `aya-ebpf` object，而不是继续默认构建 `control/kern/tproxy.c`。
+- 只修正 admission/object source/build embedding/验证 harness，不修改 Go userspace control plane、routing/DNS/sniff/group/outbound 语义。
+- 不以测试机 config、域名、IP、端口、协议、节点或 VLESS/Telegram/Cloudflare 等现象作为实现标准。
+- 不删除 C object、Go BPF fallback、TC fallback；C object 仍保留为 golden baseline 和回退 oracle。
+
+修改前复核依据：
+
+- `DAEX_RUST_REBUILD_PLAN_2026-05-16.md`：eBPF/tproxy/netns 默认切换前必须保持 map ABI、listener handoff、reload 复用、netkit/veth 和 attach backend 分层。
+- `DAENEW_RUST_REBUILD_MEMO_2026-05-16.md` 第 5.4、5.5、5.6、5.11：`ControlPlane -> BPF maps/programs -> tproxy listener -> TCP/UDP/DNS/sniff/userspace route/outbound` 边界必须保持；本节不改 userspace 选组、sniff、DNS、outbound 协议栈。
+- A2 收口结论：Rust object 本地 load/adopt/attach 完成后，下一步必须验证 production runtime gate；不能继续让 gate 暗中使用 C object。
+
+本轮发现：
+
+- `scripts/run_native_ebpf_runtime_gate.sh` 原来仍用 `clang -DDAE_AYA_EBPF_OBJECT -target bpfel -c control/kern/tproxy.c` 生成 native object。
+- `rust/crates/dae-daemon/build.rs` 和 `rust/crates/dae-aya-bpf-loader/build.rs` 在 `native-ebpf` feature 下仍默认嵌入 C object。
+- 因此 A2 之后如果不修正入口，所谓 native runtime gate 仍可能只验证 C object，不能证明 Rust `dae-ebpf-program` 生产路径。
+
+本轮源码修改：
+
+- `scripts/run_native_ebpf_runtime_gate.sh`
+  - 默认构建 `rust/crates/dae-ebpf-program`：
+    - `cargo +nightly build -Z build-std=core --manifest-path rust/Cargo.toml -p dae-ebpf-program --target bpfel-unknown-none --release`
+    - 将 `rust/target/bpfel-unknown-none/release/libdae_ebpf_program.so` 复制为 gate 使用的 `NATIVE_OBJECT`。
+  - 增加 `PARAM` symbol 检查，防止拿错 object。
+  - 运行 daemon gate 时设置 `DAE_RUST_NATIVE_BPF_OBJECT="$native_object"`，确保 build.rs 嵌入路径与 runtime explicit object 一致。
+  - 增加 `RUNTIME_TIMEOUT`，避免 active datapath 未触发时长期挂起。
+- `rust/crates/dae-daemon/build.rs`
+  - 新增 `DAE_RUST_NATIVE_BPF_OBJECT` build-time override；设置后直接复制该 object 到 `OUT_DIR/dae-native-bpf_bpfel.o`。
+  - 未设置 override 时继续保留原 C object 构建路径，作为迁移期 fallback。
+- `rust/crates/dae-aya-bpf-loader/build.rs`
+  - 同步支持 `DAE_RUST_NATIVE_BPF_OBJECT` build-time override。
+  - 未设置 override 时继续保留原 C object 构建路径。
+- `rust/crates/dae-aya-bpf-loader/src/lib.rs`
+  - 更新 contract 文案：`rust-aya-skeleton` 是历史 option 名，实际指向 `rust/crates/dae-ebpf-program` 的显式 Rust/Aya native object candidate；默认切换仍需 admission。
+- `rust/crates/dae-daemon/src/production_runtime_owner/active_tcp/probes.rs`
+  - `active TCP` transparent listener accept 改为带 3 秒超时的非阻塞等待；Rust object 未触发 ingress 时返回可记录失败，不再无限挂起。
+- `rust/crates/dae-daemon/src/production_runtime_owner/native_ebpf.rs`
+  - `PeerIngress` / `LanIngress` / `HostIngress` 这类 production smoke 的 netkit/veth L2 临时链路，在 requested backend 为 `tcx` 时固定使用 `tc_netlink`。
+  - resident/真实物理 LAN/WAN interface 的 attach 仍保留 auto 优先 TCX 的候选逻辑；本轮只修正临时 L2 smoke 拓扑，不影响物理口 TCX 方向。
+- `rust/crates/dae-ebpf-program/src/abi.rs`
+  - 新增 `PARAM` volatile accessor：`param_control_plane_pid()`、`param_dae0_ifindex()`、`param_dae_netns_id()`、`param_dae0peer_mac()`。
+- `rust/crates/dae-ebpf-program/src/tproxy.rs` / `routing.rs`
+  - 所有 eBPF program 内 `PARAM` 字段读取改为 volatile accessor。
+  - 修复 Rust object 中 `PARAM` 普通 static 读取可能被优化为零值的问题；该问题会导致 `bpf_redirect(PARAM.dae0_ifindex, 0)` 变成 redirect 到 0，active TCP 无法进入 tproxy listener。
+
+中间故障与修复记录：
+
+- 首次把 runtime gate 接到 Rust object 后，`owner-only` 能完成，但 `active TCP` 卡在 listener `accept()`。
+- 加入 accept timeout 后确认失败证据为：
+  - `tcp_accept`: `accept timeout waiting for active TCP tproxy ingress`
+  - `client_traffic`: TCP connect timeout
+- 对照 C object baseline：同一拓扑下 C object active TCP 通过，说明问题在 Rust object 或 Rust native attach 边界，不是测试拓扑。
+- 修复顺序：
+  1. netkit/veth L2 临时链路不使用 TCX，改为 tc-netlink，避免 attach 成功但流量不触发。
+  2. `PARAM` 读取改为 volatile，避免 rewritten PARAM 无法被运行时代码读取。
+- 修复后 Rust object active TCP 通过，完整 runtime gate 通过。
+
+验证记录：
+
+| 验证项 | 结果 |
+| --- | --- |
+| `cargo fmt --manifest-path rust/Cargo.toml --all --check` | pass |
+| `bash -n scripts/run_native_ebpf_runtime_gate.sh` | pass |
+| `bash -n scripts/run_daex_switch_readiness_gate.sh` | pass |
+| `cargo check --manifest-path rust/Cargo.toml -p dae-ebpf-program` | pass |
+| `cargo +nightly build -Z build-std=core --manifest-path rust/Cargo.toml -p dae-ebpf-program --target bpfel-unknown-none --release` | pass |
+| `DAE_RUST_NATIVE_BPF_OBJECT=<rust object> cargo check --manifest-path rust/Cargo.toml -p dae-daemon --features native-ebpf` | pass，确认 daemon build.rs 可嵌入 Rust object |
+| `DAE_RUST_NATIVE_BPF_OBJECT=<rust object> cargo check --manifest-path rust/Cargo.toml -p dae-aya-bpf-loader --features native-ebpf` | pass，确认 loader build.rs 可嵌入 Rust object |
+| `cargo test --manifest-path rust/Cargo.toml -p dae-daemon --features native-ebpf` | pass，141 library tests + integration tests passed |
+| `cargo test --manifest-path rust/Cargo.toml -p dae-aya-bpf-loader --features native-ebpf` | pass，19 passed |
+| `cargo test --manifest-path rust/Cargo.toml -p dae-ebpf-support --features aya-loader` | pass，39 passed |
+| `cargo test --manifest-path rust/Cargo.toml --workspace` | pass，workspace tests/doc-tests passed |
+| `DAE_NATIVE_EBPF_BACKEND=auto RUNTIME_TIMEOUT=180s ./scripts/run_native_ebpf_runtime_gate.sh` | pass，Rust object production runtime admission 通过 |
+| cleanup | pass，`/tmp`、`/sys/fs/bpf/dae-native-runtime-*`、临时 `daens` / `dae50client` netns 和临时 link 已清理 |
+
+本轮 runtime gate 关键结果：
+
+| 指标 | 结果 |
+| --- | --- |
+| production runtime scope | `daemon-owned-production-runtime-active-tcp-udp-dns-reload-runtime-parity` |
+| `production_dataplane_admitted` | true |
+| `reload_runtime_parity_admitted` | true |
+| active TCP relay benchmark | 5 iterations，`204806738 ns` total，`40961347.6 ns/connection` |
+| active UDP benchmark | 5 iterations，`102986311 ns` total，`20597262.2 ns/packet` |
+| active DNS benchmark | 5 iterations，`103083972 ns` total，`20616794.4 ns/query` |
+| selected netns link | `auto -> netkit`，`fallback_used=false` |
+| production `dae0peer` attach | `tc_netlink`，`fallback_used=false` |
+| active TCP LAN attach | `tc_netlink`，`fallback_used=false` |
+| production `dae0` attach | `tc_netlink`，`fallback_used=false` |
+
+本节结论：
+
+- production runtime admission 入口已经真正接入 Rust `dae-ebpf-program` object，不再暗中用 C `tproxy.c` object 代表 Rust object。
+- Rust object 已通过本地 daemon-owned active TCP relay、UDP、DNS、reload/runtime parity gate。
+- `PARAM` volatile accessor 是 Rust eBPF program 必需边界；后续新增 eBPF program 不允许直接读普通 `PARAM` static 字段。
+- production smoke 的 netkit/veth L2 临时链路必须使用 tc-netlink；物理 LAN/WAN resident attach 仍可继续按 auto 优先 TCX、失败回落 TC。
+- 本节仍不是默认切换或 fallback 删除：Go userspace control plane/outbound 仍保持权威，C object/Go BPF fallback/TC fallback 仍保留，后续需要远程 host write、长稳、matched Go/Rust benchmark、产品链 recertification 后再决定默认切换。
