@@ -262,6 +262,8 @@ pub(super) fn report_value(
                 "native_object": options.native_ebpf_object.as_ref().map(|path| path_string(path)),
                 "fallback_object": path_string(&options.source_object),
                 "fallback_object_preserved": true,
+                "fallback_retirement_product_chain_recertified": options.fallback_retirement_product_chain_recertified,
+                "fallback_retirement_explicit_user_approval": false,
                 "default_enable_allowed": false,
             },
             "owner_boundary": "dae-daemon",
@@ -842,7 +844,10 @@ fn ebpf_backend_capability_json(
     let fallback_retirement_gate = kernel_program_fallback_retirement_gate_report(
         &tproxy_dataplane_admission,
         &trace_diagnostic_gate,
-        KernelProgramFallbackRetirementEvidence::read_only(),
+        KernelProgramFallbackRetirementEvidence {
+            explicit_user_approval: false,
+            product_chain_recertified: options.fallback_retirement_product_chain_recertified,
+        },
     );
     json!({
         "schema": "ebpf-backend-capability-report-v1",
