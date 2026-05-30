@@ -58,6 +58,11 @@ type Options struct {
 	SubscriptionConfigDir string
 	CheckNetworkLinks     []string
 	OnReady               func()
+
+	// Suppresses the misleading empty-config warnings emitted by the first
+	// control-plane construction. This is only for daed's bootstrap
+	// EmptyConfig; reloads and real empty configs must still warn.
+	SuppressInitialEmptyConfigWarnings bool
 }
 
 type RuntimeTrafficSample struct {
@@ -105,21 +110,22 @@ type Engine struct {
 	reloadCh chan *reloadMessage
 	exitCh   chan struct{}
 
-	subscriptionConfigDir    string
-	checkNetworkLinks        []string
-	onReady                  func()
-	httpTransport            *http.Transport
-	netns                    *control.DaeNetns
-	udpEndpointPool          *control.UdpEndpointPool
-	udpTaskPool              *control.UdpTaskPool
-	anyfromPool              *control.AnyfromPool
-	fallbackDNS              netip.AddrPort
-	bootstrapDirect          netproxy.Dialer
-	bootstrapDirectFullcone  netproxy.Dialer
-	logMu                    sync.RWMutex
-	log                      *logrus.Logger
-	lastPostStartupGC        time.Time
-	lastPostStartupHeapAlloc uint64
+	subscriptionConfigDir              string
+	checkNetworkLinks                  []string
+	onReady                            func()
+	suppressInitialEmptyConfigWarnings bool
+	httpTransport                      *http.Transport
+	netns                              *control.DaeNetns
+	udpEndpointPool                    *control.UdpEndpointPool
+	udpTaskPool                        *control.UdpTaskPool
+	anyfromPool                        *control.AnyfromPool
+	fallbackDNS                        netip.AddrPort
+	bootstrapDirect                    netproxy.Dialer
+	bootstrapDirectFullcone            netproxy.Dialer
+	logMu                              sync.RWMutex
+	log                                *logrus.Logger
+	lastPostStartupGC                  time.Time
+	lastPostStartupHeapAlloc           uint64
 }
 
 func New(opts Options) *Engine {
@@ -129,14 +135,15 @@ func New(opts Options) *Engine {
 	}
 	netns := control.NewDaeNetns(nil)
 	e := &Engine{
-		reloadCh:              make(chan *reloadMessage),
-		subscriptionConfigDir: opts.SubscriptionConfigDir,
-		checkNetworkLinks:     checkLinks,
-		onReady:               opts.OnReady,
-		netns:                 netns,
-		udpEndpointPool:       control.NewUdpEndpointPool(),
-		udpTaskPool:           control.NewUdpTaskPool(),
-		anyfromPool:           control.NewAnyfromPoolWithNetns(netns),
+		reloadCh:                           make(chan *reloadMessage),
+		subscriptionConfigDir:              opts.SubscriptionConfigDir,
+		checkNetworkLinks:                  checkLinks,
+		onReady:                            opts.OnReady,
+		suppressInitialEmptyConfigWarnings: opts.SuppressInitialEmptyConfigWarnings,
+		netns:                              netns,
+		udpEndpointPool:                    control.NewUdpEndpointPool(),
+		udpTaskPool:                        control.NewUdpTaskPool(),
+		anyfromPool:                        control.NewAnyfromPoolWithNetns(netns),
 	}
 	e.httpTransport = &http.Transport{
 		DialContext:           e.routeAwareDialContext,
@@ -209,7 +216,7 @@ func (e *Engine) Run(log *logrus.Logger, conf *config.Config, externGeoDataDirs 
 	}
 
 	controlPlaneStartedAt := time.Now()
-	current, err := e.newControlPlane(log, nil, nil, conf, externGeoDataDirs)
+	current, err := e.newControlPlane(log, nil, nil, conf, externGeoDataDirs, e.suppressInitialEmptyConfigWarnings)
 	logStartupPhase(log, "control-plane.create.total", controlPlaneStartedAt, err)
 	if err != nil {
 		return err
@@ -359,11 +366,11 @@ loop:
 			}
 
 			log.Warnln("[Reload] Load new control plane")
-			next, nextErr := e.newControlPlane(log, obj, dnsCache, newConf, externGeoDataDirs)
+			next, nextErr := e.newControlPlane(log, obj, dnsCache, newConf, externGeoDataDirs, false)
 			if nextErr != nil {
 				reloadErr = nextErr
 				log.WithField("err", nextErr).Errorln("[Reload] Failed to reload; try to roll back configuration")
-				next, nextErr = e.newControlPlane(log, obj, dnsCache, conf, externGeoDataDirs)
+				next, nextErr = e.newControlPlane(log, obj, dnsCache, conf, externGeoDataDirs, false)
 				if nextErr != nil {
 					if oldDNSListenerStopped {
 						if restartErr := current.StartDNSListener(); restartErr != nil {
@@ -745,7 +752,7 @@ func (e *Engine) checkNetworkLinksOnce(client *http.Client, log *logrus.Logger) 
 	return success, timedOut
 }
 
-func (e *Engine) newControlPlane(log *logrus.Logger, bpf interface{}, dnsCache map[string]*control.DnsCache, conf *config.Config, externGeoDataDirs []string) (c *control.ControlPlane, err error) {
+func (e *Engine) newControlPlane(log *logrus.Logger, bpf interface{}, dnsCache map[string]*control.DnsCache, conf *config.Config, externGeoDataDirs []string, suppressEmptyConfigWarnings bool) (c *control.ControlPlane, err error) {
 	if log.IsLevelEnabled(logrus.DebugLevel) {
 		bConf, _ := conf.Marshal(2)
 		log.Debugln(string(bConf))
@@ -857,16 +864,7 @@ func (e *Engine) newControlPlane(log *logrus.Logger, bpf interface{}, dnsCache m
 		}
 	}
 
-	if len(tagToNodeList) == 0 {
-		if resolvingFailed {
-			log.Warnln("No node found because all subscription resolving failed.")
-		} else {
-			log.Warnln("No node found.")
-		}
-	}
-	if len(globalConf.LanInterface) == 0 && len(globalConf.WanInterface) == 0 {
-		log.Warnln("No interface to bind.")
-	}
+	warnEmptyRuntimeConfig(log, tagToNodeList, resolvingFailed, &globalConf, suppressEmptyConfigWarnings)
 
 	controlPlaneStartedAt := time.Now()
 	c, err = control.NewControlPlane(
@@ -894,6 +892,22 @@ func (e *Engine) newControlPlane(log *logrus.Logger, bpf interface{}, dnsCache m
 		return nil, err
 	}
 	return c, nil
+}
+
+func warnEmptyRuntimeConfig(log *logrus.Logger, tagToNodeList map[string][]string, resolvingFailed bool, globalConf *config.Global, suppress bool) {
+	if suppress {
+		return
+	}
+	if len(tagToNodeList) == 0 {
+		if resolvingFailed {
+			log.Warnln("No node found because all subscription resolving failed.")
+		} else {
+			log.Warnln("No node found.")
+		}
+	}
+	if globalConf == nil || len(globalConf.LanInterface) == 0 && len(globalConf.WanInterface) == 0 {
+		log.Warnln("No interface to bind.")
+	}
 }
 
 func cleanupSubscriptionPersistFiles(configDir string, tagToNodeList map[string][]string) error {
