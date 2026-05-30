@@ -16151,6 +16151,68 @@ CO-RE 继续推进前置审计：
 | `cargo fmt --manifest-path rust/Cargo.toml --all --check` | pass |
 | `git diff --check` | pass |
 
+### A4 提交后 product-chain clean baseline 复认证记录（2026-05-30）
+
+本节记录 `bc176c1d a4: split tproxy and trace retirement gates` 本地提交后的只读 product-chain recertification 结果。执行前再次参考：
+
+- `DAEX_RUST_REBUILD_PLAN_2026-05-16.md`：默认切换必须先有 clean product-chain、service contract、runtime/control API、benchmark、host-write、rollback 与 explicit approval。
+- `DAENEW_RUST_REBUILD_MEMO_2026-05-16.md`：daed2.0 / dae-wing / outbound / quic-go 链路仍是正式产品链，不能以测试机配置或临时路径作为通用实现标准。
+
+本地提交：
+
+| 项 | 值 |
+| --- | --- |
+| commit | `bc176c1d` |
+| message | `a4: split tproxy and trace retirement gates` |
+| branch | `daex` |
+| remote delta | `origin/daex` ahead 7 |
+
+执行命令范围：
+
+- 只读执行 `dae-daemon-optin run --execute-product-chain-recertification --exit-after-ready`。
+- `dae`：`/root/project/dae-daex-align`
+- `daed`：`/root/project/daed-daex-align/daed`
+- `dae-wing`：`/root/project/daed-daex-align/daed/wing`
+- `outbound`：`/root/project/outbound-daex-align`
+- `quic-go`：`/root/project/quic-go-rust`
+- service contract 文件：`/root/project/dae-daex-align/install/dae.service`
+- go.mod：`/root/project/daed-daex-align/daed/wing/go.mod`
+- run root：`/tmp/dae-daemon-daex-product-chain-recert-20260530195931`
+- 未执行 host write，未改 systemd，未替换 `/usr/bin/dae` 或 `/usr/bin/daed`。
+
+复认证结果：
+
+| 项 | 结果 |
+| --- | --- |
+| command rc | 0 |
+| `product_chain_recertification_executed` | true |
+| `clean_product_chain_baseline` | true |
+| `service_contract_preserved` | true |
+| `outbound_quic_go_dependency_boundary_preserved` | true |
+| `runtime_control_api_source_contract_preserved` | true |
+| `product_chain_branch_contract_preserved` | true |
+| `dirty_sibling_repos` | `[]` |
+| `branch_mismatched_sibling_repos` | `[]` |
+| `product_chain_recertification_clean` | false |
+| `go_fallback_required` | true |
+| `go_fallback_retired` | false |
+| `release_gate_open` | false |
+
+剩余 blocker：
+
+| blocker | 当前解释 |
+| --- | --- |
+| `true Rust default daemon admission is not present in this run` | 本轮只跑 product-chain read-only，不声明默认 daemon 已准入。 |
+| `BPF-side Go fallback retirement evidence is not present in this run` | A4 gate 只把 tproxy dataplane 标记为 retirement candidate，不声明 Go BPF fallback 已退休。 |
+| `default path mutation was not explicitly requested; service and /usr/bin/dae remain Go-default` | 本轮不做默认路径写入。 |
+| `dae-wing and daed runtime/control API recertification still needs an explicit clean baseline run` | runtime/control API source contract 已 pass，但最终 clean baseline 仍需在 true Rust admission + fallback retirement 输入齐全后重新记录。 |
+
+结论：
+
+- 本地提交后，product-chain 的 git clean baseline 已经闭合；当前不再被 `dae` 工作区 dirty 阻断。
+- daed-daex-align 链路中的 detached `daed/wing` 已由 local origin branch contract 识别为 pass。
+- 当前不能切默认，也不能删除 Go/C/TC fallback；下一步需要先决定是否进入 explicit fallback retirement admission，而不是继续修 product-chain dirty。
+
 ### A4 tproxy dataplane 与 trace diagnostic gate 拆分记录（2026-05-30）
 
 本节承接 A4 Rust/aya-ebpf kernel program 可行性评估。修改前再次参考：
