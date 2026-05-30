@@ -1,4 +1,4 @@
-use core::cell::UnsafeCell;
+use core::{cell::UnsafeCell, ffi::c_void, ptr};
 
 use aya_ebpf::{
     bindings::{
@@ -9,7 +9,7 @@ use aya_ebpf::{
             BPF_MAP_TYPE_SOCKMAP,
         },
     },
-    macros::map,
+    macros::{btf_map, map},
 };
 
 use crate::abi::{
@@ -49,6 +49,30 @@ impl RawMap {
                 id: 0,
                 pinning,
             }),
+        }
+    }
+}
+
+#[repr(C)]
+pub struct BtfMapDef<K, V, const TYPE: usize, const MAX_ENTRIES: usize> {
+    pub r#type: *const [i32; TYPE],
+    pub key: *const K,
+    pub value: *const V,
+    pub max_entries: *const [i32; MAX_ENTRIES],
+}
+
+unsafe impl<K, V, const TYPE: usize, const MAX_ENTRIES: usize> Sync
+    for BtfMapDef<K, V, TYPE, MAX_ENTRIES>
+{
+}
+
+impl<K, V, const TYPE: usize, const MAX_ENTRIES: usize> BtfMapDef<K, V, TYPE, MAX_ENTRIES> {
+    pub const fn new() -> Self {
+        Self {
+            r#type: ptr::null(),
+            key: ptr::null(),
+            value: ptr::null(),
+            max_entries: ptr::null(),
         }
     }
 }
@@ -167,12 +191,72 @@ static COOKIE_PID_MAP: RawMap = RawMap::new(
     PIN_BY_NAME,
 );
 
-#[map(name = "udp_conn_state_map")]
-static UDP_CONN_STATE_MAP: RawMap = RawMap::new(
-    BPF_MAP_TYPE_HASH,
-    size_of::<BpfTuplesKey>(),
-    size_of::<BpfUdpConnState>(),
-    MAX_DST_MAPPING_NUM,
-    0,
-    PIN_NONE,
-);
+#[btf_map(name = "udp_conn_state_map")]
+static UDP_CONN_STATE_MAP: BtfMapDef<
+    BpfTuplesKey,
+    BpfUdpConnState,
+    { BPF_MAP_TYPE_HASH as usize },
+    { MAX_DST_MAPPING_NUM as usize },
+> = BtfMapDef::new();
+
+#[inline(always)]
+fn map_ptr(map: &'static RawMap) -> *mut c_void {
+    ptr::addr_of!(*map).cast_mut().cast::<c_void>()
+}
+
+#[inline(always)]
+fn btf_map_ptr<K, V, const TYPE: usize, const MAX_ENTRIES: usize>(
+    map: &'static BtfMapDef<K, V, TYPE, MAX_ENTRIES>,
+) -> *mut c_void {
+    ptr::addr_of!(*map).cast_mut().cast::<c_void>()
+}
+
+#[inline(always)]
+pub(crate) fn listen_socket_map_ptr() -> *mut c_void {
+    map_ptr(&LISTEN_SOCKET_MAP)
+}
+
+#[inline(always)]
+pub(crate) fn redirect_track_map_ptr() -> *mut c_void {
+    map_ptr(&REDIRECT_TRACK)
+}
+
+#[inline(always)]
+pub(crate) fn tgid_pname_map_ptr() -> *mut c_void {
+    map_ptr(&TGID_PNAME_MAP)
+}
+
+#[inline(always)]
+pub(crate) fn cookie_pid_map_ptr() -> *mut c_void {
+    map_ptr(&COOKIE_PID_MAP)
+}
+
+#[inline(always)]
+pub(crate) fn udp_conn_state_map_ptr() -> *mut c_void {
+    btf_map_ptr(&UDP_CONN_STATE_MAP)
+}
+
+#[inline(always)]
+pub(crate) fn routing_map_ptr() -> *mut c_void {
+    map_ptr(&ROUTING_MAP)
+}
+
+#[inline(always)]
+pub(crate) fn lpm_array_map_ptr() -> *mut c_void {
+    map_ptr(&LPM_ARRAY_MAP)
+}
+
+#[inline(always)]
+pub(crate) fn domain_routing_map_ptr() -> *mut c_void {
+    map_ptr(&DOMAIN_ROUTING_MAP)
+}
+
+#[inline(always)]
+pub(crate) fn routing_tuples_map_ptr() -> *mut c_void {
+    map_ptr(&ROUTING_TUPLES_MAP)
+}
+
+#[inline(always)]
+pub(crate) fn outbound_connectivity_map_ptr() -> *mut c_void {
+    map_ptr(&OUTBOUND_CONNECTIVITY_MAP)
+}
