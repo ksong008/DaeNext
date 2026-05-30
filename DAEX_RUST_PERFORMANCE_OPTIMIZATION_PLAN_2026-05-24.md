@@ -15444,6 +15444,7 @@ A4 coverage 结论：
 4. `rust_skb_core_read_semantics` 继续保持 missing。
 5. `trace_kprobe_coverage` 继续保持 missing。
 6. C trace object、Go trace fallback、Go userspace control-plane/outbound 和 TC command fallback 继续保留。
+7. A4 不再继续细分，不新增 A4.x、小阶段或子阶段编号；后续 A4 工作只按单一收口队列推进，完成一项记录一项验证结果。
 
 下一步允许方向：
 
