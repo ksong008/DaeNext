@@ -1013,18 +1013,24 @@ mod tests {
                 .unwrap()
         );
         assert!(
-            report["ebpf_backend_capabilities"]["cgroup_attach"]["report_only"]
+            !report["ebpf_backend_capabilities"]["cgroup_attach"]["report_only"]
                 .as_bool()
                 .unwrap()
         );
         assert!(
-            !report["ebpf_backend_capabilities"]["cgroup_attach"]["default_native_backend_enabled"]
+            report["ebpf_backend_capabilities"]["cgroup_attach"]["default_native_backend_enabled"]
+                .as_bool()
+                .unwrap()
+        );
+        assert!(
+            !report["ebpf_backend_capabilities"]["cgroup_attach"]
+                ["go_attachcgroup_fallback_required"]
                 .as_bool()
                 .unwrap()
         );
         assert!(
             report["ebpf_backend_capabilities"]["cgroup_attach"]
-                ["go_attachcgroup_fallback_required"]
+                ["go_attachcgroup_fallback_retired"]
                 .as_bool()
                 .unwrap()
         );
@@ -1527,7 +1533,7 @@ mod tests {
         assert!(report["go_bpf_fallback_required"].as_bool().unwrap());
         assert!(!report["go_bpf_fallback_retired"].as_bool().unwrap());
         assert!(
-            !report["ebpf_backend_capabilities"]["cgroup_attach"]
+            report["ebpf_backend_capabilities"]["cgroup_attach"]
                 ["go_attachcgroup_fallback_retired"]
                 .as_bool()
                 .unwrap()

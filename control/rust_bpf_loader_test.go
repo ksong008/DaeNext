@@ -109,6 +109,23 @@ func TestRustAyaTproxyListenerHasNoGoFallback(t *testing.T) {
 	}
 }
 
+func TestRustAyaCgroupMonitorHasNoGoAttachFallback(t *testing.T) {
+	content, err := os.ReadFile("control_plane_core.go")
+	if err != nil {
+		t.Fatalf("read control_plane_core.go: %v", err)
+	}
+	source := string(content)
+	for _, marker := range []string{
+		"falling back to Go AttachCgroup",
+		"setupSkPidMonitorViaGo",
+		"ciliumLink.AttachCgroup",
+	} {
+		if strings.Contains(source, marker) {
+			t.Fatalf("control_plane_core.go still contains Go cgroup fallback marker %q", marker)
+		}
+	}
+}
+
 func TestRustAyaCgroupMonitorPinPaths(t *testing.T) {
 	base := filepath.Join(t.TempDir(), "bpffs", consts.AppName)
 	loaderRoot := rustAyaLoaderPinRoot(base)

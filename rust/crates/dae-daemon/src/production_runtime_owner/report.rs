@@ -893,11 +893,12 @@ fn ebpf_backend_capability_json(
             ],
         },
         "cgroup_attach": {
-            "report_only": !go_bpf_fallback_retired,
-            "default_native_backend_enabled": go_bpf_fallback_retired,
-            "aya_cgroup_optional": !go_bpf_fallback_retired,
-            "go_attachcgroup_fallback_required": !go_bpf_fallback_retired,
-            "go_attachcgroup_fallback_retired": go_bpf_fallback_retired,
+            "report_only": false,
+            "default_native_backend_enabled": true,
+            "aya_cgroup_optional": false,
+            "go_attachcgroup_fallback_required": false,
+            "go_attachcgroup_fallback_retired": true,
+            "fallback_retirement_scope": "control-plane-cgroup-only",
             "cgroup2_mount_source": "/proc/mounts first cgroup2",
             "programs": dae_cgroup_attach_matrix()
                 .iter()
