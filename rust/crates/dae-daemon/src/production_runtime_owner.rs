@@ -103,6 +103,7 @@ pub struct ProductionRuntimeOwnerOptions {
     pub native_ebpf_opt_in: bool,
     pub native_ebpf_backend: AttachBackend,
     pub native_ebpf_completed_a3_admission: bool,
+    pub fallback_retirement_product_chain_recertified: bool,
     pub native_ebpf_object: Option<PathBuf>,
 }
 
@@ -141,6 +142,7 @@ impl Default for ProductionRuntimeOwnerOptions {
             native_ebpf_opt_in: false,
             native_ebpf_backend: AttachBackend::Auto,
             native_ebpf_completed_a3_admission: false,
+            fallback_retirement_product_chain_recertified: false,
             native_ebpf_object: None,
         }
     }
@@ -1405,6 +1407,12 @@ mod tests {
                 .as_bool()
                 .unwrap()
         );
+        assert!(
+            !report["ebpf_backend_capabilities"]["kernel_program_fallback_retirement_gate"]
+                ["product_chain_recertified"]
+                .as_bool()
+                .unwrap()
+        );
         let fallback_blockers = report["ebpf_backend_capabilities"]
             ["kernel_program_fallback_retirement_gate"]["blockers"]
             .as_array()
@@ -1511,6 +1519,48 @@ mod tests {
                 .unwrap()
         );
         assert!(!report["default_switch_allowed"].as_bool().unwrap());
+    }
+
+    #[test]
+    fn production_runtime_owner_fallback_gate_accepts_product_chain_prereq() {
+        let root = std::env::temp_dir().join(format!(
+            "dae-daemon-production-runtime-product-chain-prereq-{}",
+            std::process::id()
+        ));
+        let options = ProductionRuntimeOwnerOptions {
+            fallback_retirement_product_chain_recertified: true,
+            ..ProductionRuntimeOwnerOptions::default()
+        };
+        let report = production_runtime_owner_report(&root, &options).unwrap();
+        let gate = &report["ebpf_backend_capabilities"]["kernel_program_fallback_retirement_gate"];
+        assert!(gate["product_chain_recertified"].as_bool().unwrap());
+        assert!(!gate["explicit_user_approval_recorded"].as_bool().unwrap());
+        assert!(!gate["admitted"].as_bool().unwrap());
+        assert!(!gate["default_switch_allowed"].as_bool().unwrap());
+        assert!(gate["go_bpf_fallback_required"].as_bool().unwrap());
+        assert!(
+            !gate["go_bpf_fallback_retirement_allowed"]
+                .as_bool()
+                .unwrap()
+        );
+        let blockers = gate["blockers"].as_array().unwrap();
+        assert!(
+            blockers
+                .iter()
+                .any(|entry| entry.as_str().unwrap() == "explicit_user_approval_missing")
+        );
+        assert!(
+            !blockers
+                .iter()
+                .any(|entry| entry.as_str().unwrap() == "product_chain_recertification_missing")
+        );
+        assert!(report["go_bpf_fallback_required"].as_bool().unwrap());
+        assert!(!report["go_bpf_fallback_retired"].as_bool().unwrap());
+        assert!(
+            !report["go_bpf_fallback_retirement_gate_admitted"]
+                .as_bool()
+                .unwrap()
+        );
     }
 
     #[test]
