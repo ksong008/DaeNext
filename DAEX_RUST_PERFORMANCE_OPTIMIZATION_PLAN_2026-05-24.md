@@ -16893,6 +16893,129 @@ CO-RE 继续推进前置审计：
 - 删除 `listen_socket_map` 的 Go map update fallback 后，Rust/Aya open-handoff / update-map 路径没有触发 Go fallback，日志未出现回退标记。
 - 本轮仍只收 tproxy listener / listen_socket_map fallback；TC attach fallback、cgroup fallback、trace fallback、routing map writer fallback 保持上一节的保留边界。
 
+### cgroup AttachCgroup Go fallback 删除收口（2026-05-31）
+
+本节执行上一轮建议的下一阶段：收口 `cgroup AttachCgroup` Go fallback。执行前继续参考：
+
+- `DAEX_RUST_REBUILD_PLAN_2026-05-16.md`：eBPF/tproxy/netns/cgroup 修改必须保持 runtime/reload、map owner、cgroup link lifetime 和产品链验证边界。
+- `DAENEW_RUST_REBUILD_MEMO_2026-05-16.md` 第 22.7、第 23.12 节：cgroup pid/pname monitor 负责 6 条 cgroup hook，维护 `cookie_pid_map` 和 `tgid_pname_map`；pname 是 WAN/local process 路径能力，不能扩散到 LAN；`cgroup2` 缺失时应降级 pname routing，不应阻止控制面启动。
+- 本文件前期 A3/A4 记录：6 条 cgroup program 已有 Rust typed matrix、Aya attach/detach smoke、远端 runtime admission 证据；TC attach fallback、trace fallback、routing writer fallback 不在本节删除范围。
+
+删除边界：
+
+| 项 | 处理 |
+| --- | --- |
+| `controlPlaneCore.setupSkPidMonitor()` 的 Rust/Aya attach | 保留，作为唯一产品路径 |
+| `setupSkPidMonitorViaGo()` / `ciliumLink.AttachCgroup` fallback | 已删除 |
+| cgroup2 不存在或 Rust/Aya attach 失败 | 返回错误给 `NewControlPlane`，继续按原语义 warning：`cgroup pname monitor is not available; pname routing cannot be used`，不阻止控制面启动 |
+| TC attach fallback | 保留，仍需 `auto/tcx/tc-netlink/tc-command` kernel/backend matrix 单独准入 |
+| trace / CO-RE fallback | 保留且不进入当前 tproxy dataplane 默认候选 |
+| routing map writer fallback | 保留，后续按 map owner/reload parity 单独处理 |
+
+代码修改：
+
+- `control/control_plane_core.go`
+  - 删除 `setupSkPidMonitorViaGo()`。
+  - 删除 Rust/Aya cgroup attach 失败后的 `falling back to Go AttachCgroup` 分支。
+  - `setupSkPidMonitor()` 现在仅调用 `setupSkPidMonitorViaRustAya(cgroupPath)`，失败时返回 `Rust/Aya cgroup pname monitor attach failed`。
+- `control/control_plane.go`
+  - WAN setup warning 从 `cgroup2 is not enabled` 调整为 `cgroup pname monitor is not available`，避免 Rust/Aya attach 失败时误报为 cgroup2 缺失。
+- `control/rust_bpf_loader_test.go`
+  - 新增 `TestRustAyaCgroupMonitorHasNoGoAttachFallback`，防止 `falling back to Go AttachCgroup`、`setupSkPidMonitorViaGo`、`ciliumLink.AttachCgroup` 回到 `control_plane_core.go`。
+- `rust/crates/dae-daemon/src/production_runtime_owner/report.rs`
+  - `cgroup_attach` 改为 cgroup-only fallback retired：`go_attachcgroup_fallback_required=false`、`go_attachcgroup_fallback_retired=true`、`fallback_retirement_scope=control-plane-cgroup-only`。
+  - 该字段不再跟“全部 Go BPF fallback 是否退休”绑定；`go_bpf_fallback_required` 顶层仍保持 true，因为 TC/trace/routing writer 等 fallback 尚未收口。
+- `rust/crates/dae-daemon/src/production_runtime_owner.rs`
+  - 更新 read-only report 测试，固定 cgroup fallback 已退休，但顶层 default switch / go_bpf_fallback retirement 仍不自动打开。
+
+本地验证：
+
+| 验证项 | 结果 |
+| --- | --- |
+| `gofmt -w control/control_plane.go control/control_plane_core.go control/rust_bpf_loader_test.go` | pass |
+| `cargo fmt --manifest-path rust/Cargo.toml --all` | pass |
+| 产品路径防回退关键字复查 | pass，`control/control_plane_core.go` 未再出现 Go AttachCgroup fallback 标记 |
+| `PATH=/root/.local/go1.25.9/bin:$PATH GOWORK=off go test ./control` | pass，`ok github.com/daeuniverse/dae/control 0.085s` |
+| `cargo test --manifest-path rust/Cargo.toml -p dae-daemon production_runtime_owner_report_is_read_only_by_default` | pass，1 passed |
+| `cargo test --manifest-path rust/Cargo.toml -p dae-daemon production_runtime_owner` | pass，69 passed |
+| `cargo test --manifest-path rust/Cargo.toml -p dae-ebpf-support cgroup` | pass，3 passed |
+| `cargo test --manifest-path rust/Cargo.toml -p dae-ebpf-support --features aya-loader cgroup` | pass，4 passed |
+
+本地构建：
+
+| 项 | 结果 |
+| --- | --- |
+| `PATH=/root/.local/node-v22.12.0-linux-x64/bin:/root/.local/go1.25.9/bin:$PATH GOWORK=off make dist`（daed） | pass |
+| `make OUTPUT=/tmp/daed-daex-align-no-go-cgroup-fallback-20260531 APPNAME=daed WEB_DIST=../dist VERSION=daed2-daex-align-no-go-cgroup-fallback-20260531 bundle`（wing） | pass |
+| `/tmp/daed-daex-align-no-go-cgroup-fallback-20260531 --version` | `daed version daed2-daex-align-no-go-cgroup-fallback-20260531` |
+
+本地产物：
+
+| 产物 | sha256 | 大小 |
+| --- | --- | --- |
+| `/tmp/daed-daex-align-no-go-cgroup-fallback-20260531` | `029232c0317d24cf1912b765d7477ba6a138907c1aabc252ec446acb92cf8968` | 50M |
+
+远程 38 严格验证条件：
+
+| 条件 | 结果 |
+| --- | --- |
+| kernel | `6.12.86+deb12-amd64` |
+| 安装的产品二进制 | 仅 `/usr/bin/daed`，sha256 为 `029232c0317d24cf1912b765d7477ba6a138907c1aabc252ec446acb92cf8968` |
+| `/usr/bin/dae` | 不存在 |
+| `/usr/bin/dae-aya-bpf-loader` | 不存在 |
+| PATH 中 `dae-aya-bpf-loader` | 不存在 |
+| `DAE_RUST_BPF_LOADER_HELPER` | 未设置 |
+| 临时 unit 环境 | `DAE_RUST_NATIVE_EBPF_BACKEND=auto`、`DAE_NATIVE_EBPF_BACKEND=auto`、`DAE_NETNS_LINK=auto`、`DAE_RUST_RESIDENT_DATAPLANE=1` |
+
+远端验证结果：
+
+| 验证项 | 结果 |
+| --- | --- |
+| `/api/health` | `{"healthCheck":1}` |
+| `/api/auth/status` | `{"numberUsers":0}` |
+| `/api/user/me/dae-config-file` import | `{"imported":true}` |
+| `/api/runtime/reload` | `{"applied":1,"dry":false}` |
+| API reload 后 DNS 首包 | `pass=8 fail=0`，首包 `first_rtt_ms=3.51` |
+| `systemctl reload daed` | 返回成功，服务保持 `active` |
+| systemctl reload 后 DNS 首包 | `pass=8 fail=0`，首包 `first_rtt_ms=0.38` |
+| `systemctl restart daed` | 返回成功，服务保持 `active` |
+| restart 后 DNS 首包 | `pass=8 fail=0`，首包 `first_rtt_ms=6.14` |
+| HTTPS trace | `https://www.cloudflare.com/cdn-cgi/trace` 成功，返回 `ip=38.65.91.47`、`colo=LAX` |
+| cgroup link 数 | `6` |
+| `bpftool link show` | 6 条 cgroup link：`sock_create`、`sock_release`、`inet4_connect`、`inet6_connect`、`udp4_sendmsg`、`udp6_sendmsg` |
+
+远端 dataplane / fallback 观测：
+
+| 观测项 | 结果 |
+| --- | --- |
+| netns link | `dae netns link mode: netkit` |
+| tproxy listener | `Opened tproxy listener via Rust/Aya on port 12345 and wrote listen_socket_map` |
+| WAN egress | `Bind daed_wan_egress_l2 via Rust/Aya tcx on ens3` |
+| WAN ingress | `Bind daed_wan_ingress_l2 via Rust/Aya tcx on ens3` |
+| dae0peer ingress | `Bind daed_dae0peer_ingress via Rust/Aya tcx on dae0peer` |
+| dae0 ingress | `Bind daed_dae0_ingress via Rust/Aya tcx on dae0` |
+| DNS listener | `DNS listener started on udp://127.0.0.1:1053` |
+| Go cgroup fallback 日志 | 未出现 `falling back to Go` 或 `AttachCgroup` fallback 标记 |
+
+远端清理结果：
+
+| 清理项 | 结果 |
+| --- | --- |
+| `daed.service` / `dae.service` | inactive |
+| `/usr/bin/dae` / `/usr/bin/daed` / `/usr/bin/dae-aya-bpf-loader` | 已删除 |
+| 上传产物 `/tmp/daed-daex-align-no-go-cgroup-fallback-20260531` | 已删除 |
+| `/tmp/daed-final-config` / `/tmp/dae-daemon-resident-runtime-*` | 已删除 |
+| `/root/.cache/daed/rust-aya-loader` / `/root/.cache/dae/embedded-helpers` | 已删除 |
+| `dae0` / `dae0peer` | 无残留 |
+| `dae` netns | 无残留 |
+| `/sys/fs/bpf/daed` | absent |
+
+收口结论：
+
+- cgroup pid/pname monitor 产品路径已只保留 Rust/Aya attach，Go `AttachCgroup` fallback 删除并通过本地测试和 38 机严格 embedded-only runtime gate。
+- cgroup-only fallback retirement 已在 read-only report 中单独表达；这不代表顶层 Go BPF fallback 全部退休。
+- 后续真正高风险项仍是 TC attach fallback 收口，因为它涉及 `auto/tcx/tc-netlink/tc-command` backend matrix、不同 kernel/接口/链路层兼容性和回滚策略。
+
 ### 1-4 收口：daed 内嵌 Aya loader，无外置 dae/helper 依赖验证（2026-05-30）
 
 本节按用户授权完成上一轮提出的 1-4，不新增 stage。执行前继续遵守：

@@ -327,7 +327,7 @@ func NewControlPlane(
 	// Bind to WAN
 	if len(global.WanInterface) > 0 {
 		if err = core.setupSkPidMonitor(); err != nil {
-			log.WithError(err).Warnln("cgroup2 is not enabled; pname routing cannot be used")
+			log.WithError(err).Warnln("cgroup pname monitor is not available; pname routing cannot be used")
 		}
 		for _, ifname := range global.WanInterface {
 			if len(global.LanInterface) > 0 {
