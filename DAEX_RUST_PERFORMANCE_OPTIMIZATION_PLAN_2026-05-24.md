@@ -15391,6 +15391,61 @@ A5 完成结论：
 - 当前不删除 C tproxy object、不删除 C trace object、不删除 Go trace fallback、不删除 TC command fallback、不触碰 Go userspace control plane / outbound。
 - 本轮未执行远程 host write，未生成或替换 daed 二进制，未推送远程。
 
+A5 授权后只读 product-chain / release gate 复验补记（不新增 stage，2026-05-30）：
+
+- 用户授权完成 A5 后，按“不新增 stage”的要求只在 A5 收口内追加复验，不建立 A6/A5.x。
+- 复验目的：
+  - 确认 `--production-runtime-fallback-retirement-product-chain-recertified` 与 `--production-runtime-fallback-retirement-explicit-approval` 可以作为 A5 可复现输入进入 product-chain / release gate。
+  - 确认 A5 只能让 Go BPF fallback retirement gate admitted，不能绕过 default daemon live matrix、resident dataplane env、default path mutation 和 product-chain switch gate。
+  - 确认不因 A5 授权删除 C tproxy object、C trace object、Go trace fallback、TC command fallback 或 Go userspace control plane / outbound。
+- 执行范围：
+  - 本地只读运行，不执行 host write。
+  - 未替换 `/usr/bin/dae` / `/usr/bin/daed`。
+  - 未生成或替换 daed 二进制。
+  - 未推送远程。
+  - 使用正式 daex 独立链路路径：
+    - dae：`/root/project/dae-daex-align`
+    - daed：`/root/project/daed-daex-align/daed`
+    - dae-wing：`/root/project/daed-daex-align/daed/wing`
+    - outbound：`/root/project/outbound-daex-align`
+    - quic-go：`/root/project/quic-go`
+- 执行命令：
+  - `dae-daemon-optin run --production-runtime-fallback-retirement-product-chain-recertified --production-runtime-fallback-retirement-explicit-approval --execute-product-chain-recertification --exit-after-ready`
+  - run root：`/tmp/dae-daemon-daex-a5-authorized-recert-20260530204037`
+
+复验结果：
+
+| 项 | 结果 |
+| --- | --- |
+| `kernel_program_fallback_retirement_gate.admitted` | true |
+| `production_runtime_owner.go_bpf_fallback_retired` | true |
+| `product_chain_recertification_executed` | true |
+| `product_chain_recertification_clean` | true |
+| `product_chain_default_switch_admission_clean` | false |
+| `release_gate_open` | false |
+| `default_switch_allowed` | false |
+| `product_chain_switch_allowed` | false |
+| `dirty_sibling_repos` | `[]` |
+| `branch_mismatched_sibling_repos` | `[]` |
+
+release gate 仍关闭的剩余 blocker：
+
+| blocker | 含义 |
+| --- | --- |
+| `full default daemon live matrix is incomplete` | 未执行完整默认 daemon live matrix。 |
+| `matched Go/Rust default daemon benchmark is not recorded` | 未执行 matched Go/Rust 默认 daemon benchmark。 |
+| `resident userspace dataplane default switch env is not enabled` | 未设置默认切换所需 resident dataplane env。 |
+| `default path mutation is not allowed` | 未请求默认路径 mutation。 |
+| `product-chain switch is not allowed` | product-chain switch 仍关闭。 |
+| `resident default daemon switch is not ready` | resident default daemon switch gate 仍未 ready。 |
+
+复验结论：
+
+- A5 授权输入已完成 product-chain/release gate 只读复验。
+- A5 退役准入只影响 Go BPF fallback retirement gate，不打开 release/default/product-chain switch。
+- 本复验继续保持 C tproxy object、C trace object、Go trace fallback、TC command fallback 和 Go userspace control plane / outbound 边界。
+- 临时 run root 已在记录后清理。
+
 ### A4 product-chain 结构基线与默认切换准入拆分记录（2026-05-30）
 
 本节承接 `A4 tproxy dataplane 与 trace diagnostic gate 拆分记录` 以及提交后 product-chain clean baseline 复认证结果。修改前再次参考：
