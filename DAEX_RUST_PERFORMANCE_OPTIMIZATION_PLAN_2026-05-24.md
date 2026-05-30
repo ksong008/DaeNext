@@ -14987,6 +14987,130 @@ A2 收口结论：
 | `cargo fmt --manifest-path rust/Cargo.toml --all --check` | pass |
 | `bash -n scripts/run_native_ebpf_runtime_gate.sh` / `bash -n scripts/run_daex_switch_readiness_gate.sh` | pass |
 | `git diff --check` | pass |
+
+### A7 远程 38 release-gate 验证与 auto WAN 修复收口记录（2026-05-30）
+
+本节只完成 A7，不新增 stage。执行前继续按硬性规定参考：
+
+- `DAEX_RUST_REBUILD_PLAN_2026-05-16.md`：默认 daemon / product-chain 切换必须覆盖真实 host write、root/BPF/netns/tc/cgroup、reload/runtime、control API、benchmark/traffic 和 rollback/cleanup 证据。
+- `DAENEW_RUST_REBUILD_MEMO_2026-05-16.md` 第 11、15、22、33 节：BPF map ABI、TC/TCX attach、tproxy listener、listen_socket_map、reload owner transfer、DNS listener/cache 和 Go userspace outbound 边界必须保持。
+- 本文件 A5/A6 记录：A5/A6 只允许 Go BPF fallback retirement gate 进入 release-gate 裁决链，不能绕过 default daemon live matrix、resident dataplane env、host mutation 和 product-chain switch gate。
+
+A7 执行范围：
+
+- 目标机器：远程 38 测试机。
+- host write：已授权，临时写入 `/usr/bin/dae`、`/usr/bin/daed`、`/usr/bin/dae-aya-bpf-loader` 和 `/etc/systemd/system/daed.service`。
+- 运行配置：仅使用 `/tmp/daed-a7-config` 临时配置，不以测试机配置作为实现标准。
+- 链路：`/root/project/dae-daex-align` + `/root/project/daed-daex-align/daed` + `dae-wing` replace 到 `/root/project/dae-daex-align`。
+- 不删除 C tproxy object、C trace object、Go trace fallback、TC command fallback；不替换 Go userspace control plane / outbound。
+- 远端验证结束后已清理二进制、unit、tmp 配置、链路、netns、bpffs 残留。
+
+构建产物：
+
+| 产物 | sha256 | 说明 |
+| --- | --- | --- |
+| `dae-daemon-optin` | `7bc67fac160a923c83e6480c04127173fe460f457f2c4cc2343928c112c052c6` | 14M，Rust daemon opt-in |
+| `dae-aya-bpf-loader` | `5769f62fb2b77af7abef60085036374cb319728cf366de3bb40b260bf1bd30e1` | 2.8M，Rust/Aya loader |
+| `daed` | `6e13a45cc2aeb133e86617baaec90c09a8eafd706445e61b82ed916f897b8692` | 50M，`daed2-daex-align-a7-release-gate-20260530` |
+
+远端环境：
+
+| 项 | 结果 |
+| --- | --- |
+| kernel | `6.12.86+deb12-amd64` |
+| cgroup2 | mounted |
+| BTF | `/sys/kernel/btf/vmlinux` 存在 |
+| 初始 `dae.service` | inactive |
+| 初始 `daed.service` | inactive |
+
+本轮发现并修复的问题：
+
+- 第一轮 A7 远端验证中，`wan_interface: auto` 在 38 机没有解析出物理默认口，日志出现 `No interface to bind`；显式 `wan_interface: ens3` 才能绑定 `daed_wan_egress_l2` / `daed_wan_ingress_l2`。
+- 原因是 `common.GetDefaultIfnames()` 只把 netlink `Route.Dst == nil` 视为默认路由；38 机的默认路由可表现为 `0.0.0.0/0` 这类零前缀，导致 auto 检测为空。
+- 已通用修复为 `routeIsDefault(route)`：同时接受 `Dst == nil`、IPv4 `0.0.0.0/0` 和 IPv6 `::/0`，不写死测试机接口名。
+- 已补单测覆盖 nil destination、IPv4/IPv6 零前缀和普通非默认前缀。
+
+修改文件：
+
+- `common/utils.go`
+  - `GetDefaultIfnames()` 改为调用 `routeIsDefault(route)`。
+  - 新增 `routeIsDefault()`，兼容 netlink 默认路由的 nil 和 zero-prefix 两种表示。
+- `common/utils_test.go`
+  - 新增 `TestRouteIsDefaultAcceptsNilAndZeroPrefix`。
+
+远端 `dae service-contract`：
+
+| 场景 | 关键结果 |
+| --- | --- |
+| 未设置 `DAE_RUST_RESIDENT_DATAPLANE` | `resident_dataplane_env_enabled=false`，`resident_default_daemon_switch_ready=false`，阻断原因为必须显式启用 resident dataplane |
+| `DAE_RUST_RESIDENT_DATAPLANE=1` | `resident_dataplane_env_enabled=true`，`resident_default_daemon_switch_ready=true`，`resident_production_dataplane_ready=true` |
+
+远端 `daed` / control API / runtime 验证：
+
+| 验证项 | 结果 |
+| --- | --- |
+| Rust/Aya loader contract | `go_bpf_loader_removed_when_opted_in=true`，`go_userspace_outbound_remains_authoritative=true` |
+| `daed --version` | `daed version daed2-daex-align-a7-release-gate-20260530` |
+| systemd start | `service_active=active` |
+| `/api/health` | `{"healthCheck":1}` |
+| `/api/auth/status` | 初始 `{"numberUsers":0}` |
+| WebUI root | `938` bytes |
+| `/api/runtime/overview` | 返回 `activeConnections`、`udpSessions`、`udpTaskQueues`、RSS、heap、goroutines |
+| `/api/runtime/reload` 第一次 | `{"applied":1,"dry":false}` |
+| `/api/runtime/reload` 第二次 | `{"applied":1,"dry":false}` |
+| `systemctl restart daed` | 重启后 `service_after_restart=active`，runtime overview 可读 |
+| `systemctl reload daed` | 当前临时/安装 unit 仍无 `ExecReload`，返回 `Job type reload is not applicable`；本轮以 control API reload 验证 runtime reload contract |
+
+远端 active datapath / TCX / netkit 验证：
+
+| 项 | 结果 |
+| --- | --- |
+| `DAE_NETNS_LINK=auto` | `dae netns link mode: netkit` |
+| `DAE_NATIVE_EBPF_BACKEND=auto` | auto 选择 Rust/Aya TCX |
+| auto WAN 修复后 `wan_interface: auto` | 自动解析并绑定到 `ens3` |
+| WAN egress | `Bind daed_wan_egress_l2 via Rust/Aya tcx on ens3` |
+| WAN ingress | `Bind daed_wan_ingress_l2 via Rust/Aya tcx on ens3` |
+| dae0peer ingress | `Bind daed_dae0peer_ingress via Rust/Aya tcx on dae0peer` |
+| dae0 ingress | `Bind daed_dae0_ingress via Rust/Aya tcx on dae0` |
+| tproxy listener | `Opened tproxy listener via Rust/Aya on port 12345 and wrote listen_socket_map id ...` |
+| cgroup links | `bpftool link show` 可见 `cgroup_inet_sock_create`、`cgroup_inet_sock_release`、`cgroup_inet4_connect`、`cgroup_inet6_connect`、`cgroup_udp4_sendmsg`、`cgroup_udp6_sendmsg` |
+
+远端 traffic / DNS 验证：
+
+| 项 | 结果 |
+| --- | --- |
+| HTTPS external trace | `https://www.cloudflare.com/cdn-cgi/trace` 返回 HTTP `200`，回显公网 IP 为 `38.65.91.47` |
+| DNS listener bind | `127.0.0.1:1053/udp` 存在 |
+| DNS listener repeated query | 后续 Python UDP DNS 查询 4/4 pass，每次返回 92 bytes，answer count 2 |
+| DNS 首包观察 | reload/restart 后第一笔 Python UDP 1053 查询曾出现一次 5s timeout，日志显示 query 已进入 DNS listener 并转发到 `8.8.8.8:53`，后续相同查询立即命中并返回；记录为后续 DNS first-query latency/response-path 复核项，不在本轮中伪装为已彻底消除 |
+
+远端清理结果：
+
+| 项 | 结果 |
+| --- | --- |
+| `dae_active` | inactive |
+| `daed_active` | inactive |
+| `/usr/bin/dae` / `/usr/bin/daed` / `/usr/bin/dae-aya-bpf-loader` | 已删除 |
+| `/etc/systemd/system/daed.service` / `/etc/systemd/system/dae.service` | 已删除 |
+| `/tmp/daed-a7-*`、`/tmp/daed-hostwrite.log`、A7 上传产物 | 已删除 |
+| dae/netkit/veth link | 无残留 |
+| netns | 无残留 |
+| bpffs dae pin | 无残留 |
+| dae/daed 进程 | 无残留 |
+
+本地验证记录：
+
+| 验证项 | 结果 |
+| --- | --- |
+| `PATH=/root/.local/go1.25.9/bin:$PATH GOWORK=off go test ./common` | pass |
+| `daed bundle` | pass，生成 `6e13a45cc2aeb133e86617baaec90c09a8eafd706445e61b82ed916f897b8692` |
+
+A7 结论：
+
+- A7 已完成远程 38 真实 host write 验证、auto WAN 修复、Rust/Aya TCX/netkit/tproxy listener/control API/reload/restart/traffic/cleanup 证据收口。
+- `wan_interface:auto` 已不再依赖测试机显式接口名，能在 38 机自动绑定 `ens3` 并走 Rust/Aya TCX。
+- Go userspace outbound/control plane 仍保持权威；本轮不删除 C/Go/TC fallback。
+- release/default/product-chain switch 仍不能仅凭 A7 自动打开：还需要补齐 DNS first-query 复核、正式 install `ExecReload` 策略或明确接受 API reload 作为 daed reload 合同、以及最终 matched default daemon benchmark / product-chain switch 审批记录。
 | `cargo check --manifest-path rust/Cargo.toml -p dae-ebpf-program` | pass |
 | `cargo +nightly build -Z build-std=core --manifest-path rust/Cargo.toml -p dae-ebpf-program --target bpfel-unknown-none --release` | pass |
 | `llvm-readelf -s rust/target/bpfel-unknown-none/release/libdae_ebpf_program.so` PARAM symbol check | pass，`PARAM` symbol size 24 |
