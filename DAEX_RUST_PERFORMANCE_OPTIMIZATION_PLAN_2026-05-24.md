@@ -15445,6 +15445,137 @@ A4 coverage 结论：
 | `cargo test --manifest-path rust/Cargo.toml -p dae-daemon production_runtime_owner` | pass，67 passed |
 | `git diff --check` | pass |
 
+### 1-3 收口：DNS 首包、daed reload service contract、38 机 release gate（2026-05-30）
+
+本节按用户授权完成原 1-3 收口，不新增 stage。执行前继续参考：
+
+- `DAEX_RUST_REBUILD_PLAN_2026-05-16.md`：runtime/reload/API 数据面必须和真实 active path 一起验证；eBPF/tproxy/netns 修改必须覆盖 host write、reload、cleanup 证据。
+- `DAENEW_RUST_REBUILD_MEMO_2026-05-16.md`：DNS controller、runtime reload、BPF attach、Go userspace outbound/control-plane 边界必须保持；不允许以测试机配置写特定实现。
+
+问题复核：
+
+- 远端 38 机上一轮复现到 `/api/runtime/reload` 后 DNS 首包超时，但日志已经出现 `localhost:<port> <-> 8.8.8.8:53`，说明请求已进入 DNS controller 并完成上游路径，问题更接近本地 listener 响应写回。
+- 代码复核发现 `DnsController.handleWithResponseWriter_()` 的缓存命中/拒绝路径会使用 `dnsmessage.ResponseWriter` 写回本地 DNS listener，但首次 cache miss 经 `dialSend()` 上游返回后仍使用旧 `sendPkt()` 路径。
+- 对本地 listener 来说，`udpRequest.lConn == nil`，且 listener 已占用 `127.0.0.1:1053`；首次 miss 走 `sendPkt()` 会偏离 `miekg/dns` listener 的正常响应写回路径，导致首包可能被上游返回后无法交还给原请求方。缓存命中后再查会正常，因此表现为“第一包失败、后续正常”。
+
+代码修改：
+
+- `control/dns_control.go`
+  - `dialSend()` 增加 `dnsmessage.ResponseWriter` 参数。
+  - cache miss / response routing 递归 / 上游返回后，如果 `needResp && responseWriter != nil`，直接 `responseWriter.WriteMsg(respMsg)`。
+  - 普通 tproxy UDP 路径保持 `responseWriter == nil`，继续使用原 `sendPkt()`，不改变非本地 listener 行为。
+- `control/dns_listener_test.go`
+  - 增加 `TestHandleWithResponseWriterWritesFirstMissFromUpstream`，覆盖本地 DNS listener 首次 cache miss 必须通过 response writer 写回。
+- `control/dns_control_test.go`
+  - 更新 `dialSend()` 单测调用参数，保持原上下文、truncated retry、question/id validation 行为不变。
+- `dae-wing-daex-align/cmd/run.go`
+  - daed 内嵌 wing runtime 对 `SIGHUP` 执行 `orchestrator.Run(ctx,false)`，reload 后继续服务，不再把 `SIGHUP` 当退出信号。
+- `daed-daex-align/daed/install/daed.service`
+  - 增加 `ExecReload=/bin/kill -HUP $MAINPID`，避免指向不存在的 `daed reload` 子命令。
+
+本地提交/指针：
+
+| 项 | 结果 |
+| --- | --- |
+| `dae-daex-align` | `4a94441d dns: write local listener first misses via response writer` |
+| `dae-wing-daex-align` | `c99fc73 dae-core: bring dns listener first-miss fix` |
+| `daed-daex-align/daed/wing` | 指向 `c99fc73` |
+| `daed-daex-align/daed/install/daed.service` | 待随本节记录提交，包含 `ExecReload=/bin/kill -HUP $MAINPID` |
+
+本地验证：
+
+| 验证项 | 结果 |
+| --- | --- |
+| `PATH=/root/.local/go1.25.9/bin:$PATH GOWORK=off go test ./control` | pass，`ok github.com/daeuniverse/dae/control 0.063s` |
+| `PATH=/root/.local/go1.25.9/bin:$PATH GOWORK=off go test ./cmd`（dae-wing） | pass，`ok github.com/daeuniverse/dae-wing/cmd 0.129s` |
+| `cargo build --manifest-path rust/Cargo.toml -p dae-daemon --bin dae-daemon-optin --release --features native-ebpf` | pass |
+| `cargo build --manifest-path rust/Cargo.toml -p dae-aya-bpf-loader --release --features native-ebpf` | pass |
+| `PATH=/root/.local/node-v22.12.0-linux-x64/bin:/root/.local/go1.25.9/bin:$PATH GOWORK=off make dist`（daed） | pass |
+| `make OUTPUT=/tmp/daed-daex-align-release-gate-final-20260530 APPNAME=daed WEB_DIST=../dist VERSION=daed2-daex-align-release-gate-final-20260530 bundle`（wing） | pass |
+
+本地产物：
+
+| 产物 | sha256 | 大小 |
+| --- | --- | --- |
+| `/root/project/dae-daex-align/rust/target/release/dae-daemon-optin` | `7bc67fac160a923c83e6480c04127173fe460f457f2c4cc2343928c112c052c6` | 14M |
+| `/root/project/dae-daex-align/rust/target/release/dae-aya-bpf-loader` | `5769f62fb2b77af7abef60085036374cb319728cf366de3bb40b260bf1bd30e1` | 2.8M |
+| `/tmp/daed-daex-align-release-gate-final-20260530` | `741fba12b77c6c23e6cc49e87ed266150da79a17dd9ef799a2d21a3f2b734e29` | 50M |
+
+远程 38 验证环境：
+
+| 项 | 结果 |
+| --- | --- |
+| kernel | `6.12.86+deb12-amd64` |
+| BTF | `/sys/kernel/btf/vmlinux` 存在 |
+| cgroup2 | mounted |
+| 临时 daed unit | `ExecReload=/bin/kill -HUP $MAINPID` |
+| 临时配置目录 | `/tmp/daed-final-config` |
+| 说明 | 该配置仅用于本轮验证，不作为通用实现标准 |
+
+远端产物 sha256 复核：
+
+| 远端路径 | sha256 |
+| --- | --- |
+| `/usr/bin/dae` | `7bc67fac160a923c83e6480c04127173fe460f457f2c4cc2343928c112c052c6` |
+| `/usr/bin/dae-aya-bpf-loader` | `5769f62fb2b77af7abef60085036374cb319728cf366de3bb40b260bf1bd30e1` |
+| `/usr/bin/daed` | `741fba12b77c6c23e6cc49e87ed266150da79a17dd9ef799a2d21a3f2b734e29` |
+
+远端 service / loader contract：
+
+| 验证项 | 结果 |
+| --- | --- |
+| `/usr/bin/dae service-contract` | `resident_dataplane_env_enabled=false`，`resident_default_daemon_switch_ready=false`，blocker 为需要 `DAE_RUST_RESIDENT_DATAPLANE=1` |
+| `DAE_RUST_RESIDENT_DATAPLANE=1 /usr/bin/dae service-contract` | `resident_dataplane_env_enabled=true`，`resident_default_daemon_switch_ready=true`，`resident_production_dataplane_ready=true` |
+| `/usr/bin/dae bpf-loader contract` | `go_bpf_loader_removed_when_opted_in=true`，`go_userspace_outbound_remains_authoritative=true`，`compiled_native_ebpf=true`，`default_object_source=c-aya` |
+
+远端 API / reload / DNS 首包验证：
+
+| 验证项 | 结果 |
+| --- | --- |
+| `/api/health` | `{"healthCheck":1}` |
+| `/api/auth/status` | `{"numberUsers":0}`，随后创建临时本地用户用于 API 验证 |
+| `/api/user/me/dae-config-file` import | `{"imported":true}` |
+| `/api/runtime/reload` | `{"applied":1,"dry":false}` |
+| API reload 后 DNS 首包 | `pass=8 fail=0`，首包 `first_rtt_ms=8.6` |
+| `systemctl reload daed` | 返回成功，服务保持 `active` |
+| systemctl reload 后 DNS 首包 | `pass=8 fail=0`，首包 `first_rtt_ms=6.9` |
+| `systemctl restart daed` | 返回成功，服务保持 `active` |
+| restart 后 DNS 首包 | `pass=8 fail=0`，首包 `first_rtt_ms=35.45` |
+| HTTPS trace | `https://www.cloudflare.com/cdn-cgi/trace` 成功，返回 `ip=38.65.91.47` |
+| DNS listener | `127.0.0.1:1053` 由 `daed` 监听 |
+
+远端 dataplane 观测：
+
+| 观测项 | 结果 |
+| --- | --- |
+| netns link | `dae netns link mode: netkit` |
+| WAN egress | `Bind daed_wan_egress_l2 via Rust/Aya tcx on ens3` |
+| WAN ingress | `Bind daed_wan_ingress_l2 via Rust/Aya tcx on ens3` |
+| dae0peer ingress | `Bind daed_dae0peer_ingress via Rust/Aya tcx on dae0peer` |
+| dae0 ingress | `Bind daed_dae0_ingress via Rust/Aya tcx on dae0` |
+| tproxy listener | `Opened tproxy listener via Rust/Aya on port 12345 and wrote listen_socket_map` |
+| DNS listener | `DNS listener started on udp://127.0.0.1:1053` |
+
+远端清理结果：
+
+| 清理项 | 结果 |
+| --- | --- |
+| `daed.service` | inactive，临时 unit 已删除 |
+| `dae.service` | inactive，临时 unit 已删除 |
+| `/usr/bin/dae` / `/usr/bin/daed` / `/usr/bin/dae-aya-bpf-loader` | 已删除 |
+| `/tmp/daed-final-config` / `/tmp/dae-daemon-resident-runtime-*` | 已删除 |
+| `dae0` / `dae0peer` | 无残留 |
+| `dae` netns | 无残留 |
+| `/sys/fs/bpf/daed` | absent |
+
+收口结论：
+
+- DNS 首包问题已定位为本地 DNS listener 首次 cache miss 写回路径未贯通 `ResponseWriter`，已修复并由单测和 38 机真实 reload/restart 首包验证覆盖。
+- daed reload service contract 已收口到 `SIGHUP -> orchestrator.Run(ctx,false)`，临时和安装 unit 均使用 `ExecReload=/bin/kill -HUP $MAINPID`。
+- 38 机 release gate 本轮通过：Rust/Aya loader、TCX attach、netkit link、tproxy listener、DNS listener、API reload、systemctl reload、restart、HTTPS trace 均有证据。
+- 本轮仍不改变 Go userspace outbound/control-plane 作为权威实现的边界；也不据此删除 C trace object、Go trace fallback 或 TC command fallback。
+- 远端测试机已清理，后续如需正式默认切换或删除 fallback，仍应按用户单独授权和产品链复认证执行。
+
 ### A5 最终 Go eBPF fallback 退役准入收口记录（2026-05-30）
 
 本节只完成 A5，不新增 stage。执行前继续按硬性规定参考：
