@@ -308,24 +308,33 @@ fn report_value(
         service_contract_passed,
         dependency_boundary_preserved,
     );
-    let daed_wing_runtime_control_api_regression_recorded =
+    let runtime_control_api_source_baseline_recorded =
         runtime_control_api_clean_baseline["recorded"]
             .as_bool()
             .unwrap_or(false);
+    let runtime_control_api_final_admission_recorded =
+        runtime_control_api_clean_baseline["final_admission_recorded"]
+            .as_bool()
+            .unwrap_or(false);
+    let daed_wing_runtime_control_api_regression_recorded =
+        runtime_control_api_source_baseline_recorded;
+    let product_chain_structural_baseline_clean = executed
+        && service_contract_passed
+        && dependency_boundary_preserved
+        && clean_product_chain_baseline
+        && runtime_control_api_source_baseline_recorded;
     let resident_default_daemon_switch_gate = resident_default_daemon_switch_gate_json(options);
     let resident_default_daemon_switch_ready = resident_default_daemon_switch_gate["ready"]
         .as_bool()
         .unwrap_or(false);
     let resident_default_daemon_service_contract =
         resident_default_daemon_switch_gate["candidate_service_contract"].clone();
-    let recertification_clean = executed
+    let default_switch_admission_clean = product_chain_structural_baseline_clean
         && admission.bpf_go_fallback_retired
         && admission.true_rust_default_daemon_admitted
-        && service_contract_passed
-        && dependency_boundary_preserved
-        && clean_product_chain_baseline
-        && daed_wing_runtime_control_api_regression_recorded;
-    let default_path_mutation_allowed = recertification_clean
+        && runtime_control_api_final_admission_recorded;
+    let recertification_clean = product_chain_structural_baseline_clean;
+    let default_path_mutation_allowed = default_switch_admission_clean
         && default_path_mutation_requested
         && resident_default_daemon_switch_ready;
     let product_chain_switch_allowed = default_path_mutation_allowed;
@@ -367,6 +376,8 @@ fn report_value(
     let typed_report = ProductChainTypedReportSummary {
         executed,
         recertification_clean,
+        structural_baseline_clean: product_chain_structural_baseline_clean,
+        default_switch_admission_clean,
         default_path_mutation_requested,
         default_path_mutation_allowed,
         product_chain_switch_allowed,
@@ -455,6 +466,26 @@ fn report_value(
         report.insert(
             "product_chain_branch_contract_preserved".to_owned(),
             json!(product_chain_branch_contract_preserved),
+        );
+        report.insert(
+            "product_chain_structural_baseline_clean".to_owned(),
+            json!(product_chain_structural_baseline_clean),
+        );
+        report.insert(
+            "runtime_control_api_source_baseline_recorded".to_owned(),
+            json!(runtime_control_api_source_baseline_recorded),
+        );
+        report.insert(
+            "runtime_control_api_final_admission_recorded".to_owned(),
+            json!(runtime_control_api_final_admission_recorded),
+        );
+        report.insert(
+            "daed_wing_runtime_control_api_default_switch_regression_recorded".to_owned(),
+            json!(runtime_control_api_final_admission_recorded),
+        );
+        report.insert(
+            "product_chain_default_switch_admission_clean".to_owned(),
+            json!(default_switch_admission_clean),
         );
         report.insert(
             "go_fallback_required".to_owned(),

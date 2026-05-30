@@ -102,6 +102,11 @@ fn product_chain_recertification_records_service_and_go_mod_boundaries() {
             .unwrap()
     );
     assert!(
+        !report["product_chain_structural_baseline_clean"]
+            .as_bool()
+            .unwrap()
+    );
+    assert!(
         !report["product_chain_recertification_clean"]
             .as_bool()
             .unwrap()
@@ -238,6 +243,16 @@ fn product_chain_clean_baseline_records_runtime_control_api_regression_without_s
             .as_bool()
             .unwrap()
     );
+    assert!(
+        report["runtime_control_api_source_baseline_recorded"]
+            .as_bool()
+            .unwrap()
+    );
+    assert!(
+        report["runtime_control_api_final_admission_recorded"]
+            .as_bool()
+            .unwrap()
+    );
     assert_eq!(
         report["typed_report"]["schema"].as_str().unwrap(),
         "product-chain-recertification-typed-report-v1"
@@ -250,6 +265,21 @@ fn product_chain_clean_baseline_records_runtime_control_api_regression_without_s
     );
     assert!(
         report["daed_wing_runtime_control_api_regression_recorded"]
+            .as_bool()
+            .unwrap()
+    );
+    assert!(
+        report["daed_wing_runtime_control_api_default_switch_regression_recorded"]
+            .as_bool()
+            .unwrap()
+    );
+    assert!(
+        report["product_chain_structural_baseline_clean"]
+            .as_bool()
+            .unwrap()
+    );
+    assert!(
+        report["product_chain_default_switch_admission_clean"]
             .as_bool()
             .unwrap()
     );
@@ -272,6 +302,105 @@ fn product_chain_clean_baseline_records_runtime_control_api_regression_without_s
         !report["remaining_blockers"]
             .as_array()
             .unwrap()
+            .iter()
+            .any(|blocker| blocker.as_str().unwrap().contains("runtime/control API"))
+    );
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[test]
+fn product_chain_structural_baseline_does_not_require_default_switch_admission() {
+    let root = std::env::temp_dir().join(format!(
+        "dae-daemon-product-chain-structural-no-default-{}",
+        std::process::id()
+    ));
+    let artifact_dir = root.join("artifact");
+    let manifest_file = artifact_dir.join("product-chain-recertification.json");
+    let options = ProductChainRecertificationOptions {
+        execute: true,
+        ..ProductChainRecertificationOptions::default()
+    };
+    let report = report_value(
+        &options,
+        &artifact_dir,
+        &manifest_file,
+        ProductChainAdmissionEvidence::default(),
+        Some(clean_product_chain_evidence()),
+    );
+
+    assert!(
+        report["runtime_control_api_clean_baseline"]["recorded"]
+            .as_bool()
+            .unwrap()
+    );
+    assert!(
+        report["runtime_control_api_source_baseline_recorded"]
+            .as_bool()
+            .unwrap()
+    );
+    assert!(
+        !report["runtime_control_api_final_admission_recorded"]
+            .as_bool()
+            .unwrap()
+    );
+    assert!(
+        report["daed_wing_runtime_control_api_regression_recorded"]
+            .as_bool()
+            .unwrap()
+    );
+    assert!(
+        !report["daed_wing_runtime_control_api_default_switch_regression_recorded"]
+            .as_bool()
+            .unwrap()
+    );
+    assert!(
+        report["product_chain_structural_baseline_clean"]
+            .as_bool()
+            .unwrap()
+    );
+    assert!(
+        report["product_chain_recertification_clean"]
+            .as_bool()
+            .unwrap()
+    );
+    assert!(
+        !report["product_chain_default_switch_admission_clean"]
+            .as_bool()
+            .unwrap()
+    );
+    assert_eq!(report["typed_report"]["status"].as_str().unwrap(), "pass");
+    assert!(
+        report["typed_report"]["structural_baseline_clean"]
+            .as_bool()
+            .unwrap()
+    );
+    assert!(
+        !report["typed_report"]["default_switch_admission_clean"]
+            .as_bool()
+            .unwrap()
+    );
+    assert!(!report["default_path_mutation_allowed"].as_bool().unwrap());
+    assert!(!report["product_chain_switch_allowed"].as_bool().unwrap());
+    let blockers = report["remaining_blockers"].as_array().unwrap();
+    assert!(blockers.iter().any(|blocker| {
+        blocker
+            .as_str()
+            .unwrap()
+            .contains("true Rust default daemon admission")
+    }));
+    assert!(blockers.iter().any(|blocker| {
+        blocker
+            .as_str()
+            .unwrap()
+            .contains("BPF-side Go fallback retirement")
+    }));
+    assert!(
+        blockers
+            .iter()
+            .any(|blocker| blocker.as_str().unwrap().contains("default path mutation"))
+    );
+    assert!(
+        !blockers
             .iter()
             .any(|blocker| blocker.as_str().unwrap().contains("runtime/control API"))
     );
