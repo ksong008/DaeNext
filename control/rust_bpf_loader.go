@@ -35,6 +35,22 @@ func rustBpfLoaderHelperPath() string {
 	return rustBpfLoaderHelperDefault
 }
 
+var errEmbeddedRustBpfLoaderUnavailable = errors.New("embedded rust bpf loader unavailable")
+
+func rustBpfLoaderExecutable() (string, error) {
+	if strings.TrimSpace(os.Getenv(rustBpfLoaderHelperEnv)) != "" {
+		return rustBpfLoaderHelperPath(), nil
+	}
+	helper, err := embeddedRustBpfLoaderPath()
+	if err == nil && helper != "" {
+		return helper, nil
+	}
+	if err != nil && !errors.Is(err, errEmbeddedRustBpfLoaderUnavailable) {
+		return "", err
+	}
+	return rustBpfLoaderHelperDefault, nil
+}
+
 func RustBpfLoaderContract() (text string, err error) {
 	return runRustBpfLoaderHelperOutput("bpf-loader", "contract")
 }
@@ -276,7 +292,11 @@ func runRustBpfLoaderHelperOutput(args ...string) (string, error) {
 func runRustBpfLoaderHelperInput(input []byte, args ...string) (string, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), rustBpfLoaderHelperTimeout)
 	defer cancel()
-	cmd := exec.CommandContext(ctx, rustBpfLoaderHelperPath(), args...)
+	helper, helperErr := rustBpfLoaderExecutable()
+	if helperErr != nil {
+		return "", helperErr
+	}
+	cmd := exec.CommandContext(ctx, helper, args...)
 	if input != nil {
 		cmd.Stdin = strings.NewReader(string(input))
 	}
@@ -289,7 +309,7 @@ func runRustBpfLoaderHelperInput(input []byte, args ...string) (string, error) {
 		if message == "" {
 			message = err.Error()
 		}
-		return "", fmt.Errorf("rust bpf loader helper %q failed: %s", rustBpfLoaderHelperPath(), message)
+		return "", fmt.Errorf("rust bpf loader helper %q failed: %s", helper, message)
 	}
 	return string(out), nil
 }
