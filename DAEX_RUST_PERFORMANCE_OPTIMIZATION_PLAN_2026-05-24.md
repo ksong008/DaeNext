@@ -14657,3 +14657,52 @@ Block 1 skeleton contract 已完成：
 - 不允许提前删除 C object 或 Go fallback。
 
 完成 Block 1 之后，才能进入 Rust eBPF program 行为迁移。任何从测试机流量现象直接改 routing/DNS/sniff/outbound 的行为都不属于 A2 Block 1。
+
+### A2-Block1.5 临时资源清理规定（2026-05-30）
+
+- 本地 `/tmp`、`/var/tmp` 中历史 daex/dae/daed/Aya/BPF/TCX/Rust 测试残留已清理。
+- 后续所有本地测试、benchmark、root smoke、clone check、临时 veth/netns/cgroup/bpffs 验证，必须在命令或脚本末尾显式清理临时目录、临时文件、socket、bpffs pin root、veth/netns 和 cgroup smoke 目录。
+- 验证输出若需要长期保留，必须写入项目内备忘录或明确的 artifact 目录；不得长期散落在 `/tmp`。
+- 新增测试入口时必须优先使用 `TempDir`/scope guard/drop cleanup，root-gated shell smoke 必须使用 `trap cleanup EXIT`。
+
+### A2-Block1.6 独立 daex 工作目录复验记录（2026-05-30）
+
+复验目录：
+
+- `/root/project/dae-daex-align`
+
+复验原因：
+
+- daex 正式工作目录已从 `/root/project/dae` 切到 `/root/project/dae-daex-align`。
+- 需要确认 A2 Rust `aya-ebpf` skeleton 在独立目录内仍满足 Block 1 准出条件。
+- 需要确认测试后 `/tmp`、`/var/tmp`、bpffs、veth/netns/cgroup smoke 不再留下残留。
+
+复验结果：
+
+| 验证项 | 结果 |
+| --- | --- |
+| `/tmp` / `/var/tmp` 历史项目测试残留清理 | pass，清理 11649 个匹配 daex/dae/daed/Aya/BPF/TCX/Rust 测试残留 |
+| `control/kern/headers` / `trace/kern/headers` 子模块初始化 | pass，`errno-base.h` 存在 |
+| `cargo fmt --manifest-path rust/Cargo.toml --all --check` | pass |
+| `cargo check --manifest-path rust/Cargo.toml --workspace` | pass |
+| `cargo +nightly build -Z build-std=core --manifest-path rust/Cargo.toml -p dae-ebpf-program --target bpfel-unknown-none --release` | pass |
+| `llvm-readelf -S/-s rust/target/bpfel-unknown-none/release/libdae_ebpf_program.so` | pass，存在 10 个 `classifier/*`、6 个 `cgroup/*`、`PARAM` 和 runtime map symbols |
+| `cargo test --manifest-path rust/Cargo.toml -p dae-aya-bpf-loader --features native-ebpf` | pass，19 passed |
+| `cargo test --manifest-path rust/Cargo.toml -p dae-ebpf-support` | pass，33 passed |
+| `DAE_RUN_AYA_LOAD_SMOKE=1 cargo test --manifest-path rust/Cargo.toml -p dae-ebpf-support --features aya-loader aya_userspace_real_object_load_smoke_is_env_gated -- --nocapture` | pass |
+| `DAE_RUN_AYA_TC_ATTACH_SMOKE=1 cargo test --manifest-path rust/Cargo.toml -p dae-ebpf-support --features aya-loader aya_tc_attach_detach_smoke_is_env_gated -- --nocapture` | pass |
+| `DAE_RUN_AYA_TCX_ATTACH_SMOKE=1 cargo test --manifest-path rust/Cargo.toml -p dae-ebpf-support --features aya-loader aya_tcx_attach_detach_smoke_is_env_gated -- --nocapture` | pass |
+| `DAE_RUN_AYA_TC_NETNS_ATTACH_SMOKE=1 cargo test --manifest-path rust/Cargo.toml -p dae-ebpf-support --features aya-loader aya_tc_netns_attach_detach_smoke_is_env_gated -- --nocapture` | pass |
+| `DAE_RUN_AYA_CGROUP_ATTACH_SMOKE=1 cargo test --manifest-path rust/Cargo.toml -p dae-ebpf-support --features aya-loader cgroup_tests::aya_cgroup_attach_detach_smoke_is_env_gated -- --nocapture` | pass |
+| `cargo build --manifest-path rust/Cargo.toml -p dae-aya-bpf-loader --features native-ebpf --release` | pass |
+| `dae-aya-bpf-loader bpf-loader load-pin --object <rust object> --object-source rust-aya-skeleton ...` | pass，12 maps + 16 programs pinned，`go_adoption_ready=true`，`rust_aya_skeleton_opt_in=true` |
+| `dae-aya-bpf-loader bpf-loader load-pin ...` 默认 `c-aya` | pass，12 maps + 16 programs pinned，`go_adoption_ready=true`，`rust_aya_skeleton_opt_in=false` |
+| root smoke cleanup | pass，`/tmp`、`/var/tmp`、`/sys/fs/bpf/dae_a2_*`、`/sys/fs/bpf/dae-aya-*`、临时 `day*` veth/netns 无残留 |
+| 历史 bpffs smoke/test pin root 清理 | pass，删除 `dae-native-runtime-*`、`dae-rust-ebpf-program-test-*`、`dae-ebpf-aya-*`；保留可能为运行时使用的 `/sys/fs/bpf/dae` |
+
+复验结论：
+
+- A2 Block 1 在 `/root/project/dae-daex-align` 独立工作目录中完成。
+- Rust `aya-ebpf` skeleton 仍只作为显式 opt-in object source；默认 production object source 仍是 `c-aya`。
+- 本次未修改 routing/DNS/sniff/outbound/userspace active datapath，未基于测试机配置增加任何特定逻辑，未删除 C object 或 Go fallback。
+- 后续进入 Block 2 前，必须继续保持测试后立即清理临时资源的规定。
