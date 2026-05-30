@@ -569,6 +569,7 @@ fn daemon_runner_run_command_outputs_json() {
             "--production-runtime-active-dns-upstream-port=11530".to_owned(),
             "--production-runtime-active-dns-qname=runner.example.".to_owned(),
             "--production-runtime-active-dns-benchmark-iters=13".to_owned(),
+            "--production-runtime-fallback-retirement-product-chain-recertified".to_owned(),
             "--dataplane-benchmark-iters=7".to_owned(),
             "--matched-benchmark-iterations=9".to_owned(),
             "--exit-after-ready".to_owned(),
@@ -683,6 +684,35 @@ fn daemon_runner_run_command_outputs_json() {
         !json["production_runtime_active_dns_executed"]
             .as_bool()
             .unwrap()
+    );
+    assert!(
+        json["production_runtime_owner"]["contract"]["native_ebpf"]
+            ["fallback_retirement_product_chain_recertified"]
+            .as_bool()
+            .unwrap()
+    );
+    let fallback_gate = &json["production_runtime_owner"]["ebpf_backend_capabilities"]["kernel_program_fallback_retirement_gate"];
+    assert!(
+        fallback_gate["product_chain_recertified"]
+            .as_bool()
+            .unwrap()
+    );
+    assert!(
+        !fallback_gate["explicit_user_approval_recorded"]
+            .as_bool()
+            .unwrap()
+    );
+    assert!(!fallback_gate["admitted"].as_bool().unwrap());
+    let fallback_blockers = fallback_gate["blockers"].as_array().unwrap();
+    assert!(
+        fallback_blockers
+            .iter()
+            .any(|entry| entry.as_str().unwrap() == "explicit_user_approval_missing")
+    );
+    assert!(
+        !fallback_blockers
+            .iter()
+            .any(|entry| entry.as_str().unwrap() == "product_chain_recertification_missing")
     );
     assert_eq!(
         json["production_dataplane_harness"]["benchmark_iters"]
