@@ -14963,3 +14963,1357 @@ A2 收口结论：
 - `PARAM` volatile accessor 是 Rust eBPF program 必需边界；后续新增 eBPF program 不允许直接读普通 `PARAM` static 字段。
 - production smoke 的 netkit/veth L2 临时链路必须使用 tc-netlink；物理 LAN/WAN resident attach 仍可继续按 auto 优先 TCX、失败回落 TC。
 - 本节仍不是默认切换或 fallback 删除：Go userspace control plane/outbound 仍保持权威，C object/Go BPF fallback/TC fallback 仍保留，后续需要远程 host write、长稳、matched Go/Rust benchmark、产品链 recertification 后再决定默认切换。
+
+### A3 原计划范围复核收口记录（2026-05-30）
+
+本节只复核原 A3 范围，不纳入 `runtime_param_map` 动态注入评估项。`runtime_param_map` 属于 A3 之后的可选优化评估，不能计入 A3 完成标准。
+
+原 A3 收口范围：
+
+- Aya userspace load / map-in-map prepin smoke。
+- TC netlink host attach/detach smoke。
+- TC netlink netns attach/detach smoke。
+- TCX optional attach/detach smoke。
+- cgroup attach matrix parity 与 Aya cgroup attach/detach smoke。
+- LAN/WAN/dae0/dae0peer attach spec parity。
+- native backend admission gate 与 opt-in decision 层。
+- Rust `dae-ebpf-program` object production runtime admission：active TCP relay、active UDP、active DNS、reload/runtime parity。
+- 保留默认非切换语义：不删除 C object、Go BPF fallback、TC command fallback，不改变 Go userspace control plane/outbound 权威边界。
+
+本轮复核结果：
+
+| 验证项 | 结果 |
+| --- | --- |
+| `cargo fmt --manifest-path rust/Cargo.toml --all --check` | pass |
+| `bash -n scripts/run_native_ebpf_runtime_gate.sh` / `bash -n scripts/run_daex_switch_readiness_gate.sh` | pass |
+| `git diff --check` | pass |
+| `cargo check --manifest-path rust/Cargo.toml -p dae-ebpf-program` | pass |
+| `cargo +nightly build -Z build-std=core --manifest-path rust/Cargo.toml -p dae-ebpf-program --target bpfel-unknown-none --release` | pass |
+| `llvm-readelf -s rust/target/bpfel-unknown-none/release/libdae_ebpf_program.so` PARAM symbol check | pass，`PARAM` symbol size 24 |
+| `DAE_RUST_NATIVE_BPF_OBJECT=<rust object> cargo check --manifest-path rust/Cargo.toml -p dae-daemon --features native-ebpf` | pass |
+| `DAE_RUST_NATIVE_BPF_OBJECT=<rust object> cargo check --manifest-path rust/Cargo.toml -p dae-aya-bpf-loader --features native-ebpf` | pass |
+| `cargo test --manifest-path rust/Cargo.toml -p dae-ebpf-support admission` | pass，5 passed |
+| `cargo test --manifest-path rust/Cargo.toml -p dae-ebpf-support --features aya-loader` | pass，39 passed |
+| `DAE_RUST_NATIVE_BPF_OBJECT=<rust object> cargo test --manifest-path rust/Cargo.toml -p dae-daemon --features native-ebpf` | pass，141 library tests + integration tests passed |
+| `DAE_RUST_NATIVE_BPF_OBJECT=<rust object> cargo test --manifest-path rust/Cargo.toml -p dae-aya-bpf-loader --features native-ebpf` | pass，19 passed |
+| `cargo test --manifest-path rust/Cargo.toml --workspace` | pass，workspace unit/doc tests passed |
+| `DAE_RUN_AYA_LOAD_SMOKE=1 ... aya_userspace_real_object_load_smoke_is_env_gated` | pass，1 passed |
+| `DAE_RUN_AYA_TC_ATTACH_SMOKE=1 ... aya_tc_attach_detach_smoke_is_env_gated` | pass，1 passed |
+| `DAE_RUN_AYA_TC_NETNS_ATTACH_SMOKE=1 ... aya_tc_netns_attach_detach_smoke_is_env_gated` | pass，1 passed |
+| `DAE_RUN_AYA_TCX_ATTACH_SMOKE=1 ... aya_tcx_attach_detach_smoke_is_env_gated` | pass，1 passed |
+| `DAE_RUN_AYA_CGROUP_ATTACH_SMOKE=1 ... aya_cgroup_attach_detach_smoke_is_env_gated` | pass，1 passed |
+| `DAE_NATIVE_EBPF_BACKEND=auto RUNTIME_TIMEOUT=180s ./scripts/run_native_ebpf_runtime_gate.sh` | pass |
+
+本轮 runtime gate 关键结果：
+
+| 指标 | 结果 |
+| --- | --- |
+| scope | `daemon-owned-production-runtime-active-tcp-udp-dns-reload-runtime-parity` |
+| `production_dataplane_admitted` | true |
+| `reload_runtime_parity_admitted` | true |
+| active TCP relay benchmark | 5 iterations，`204605502 ns` total，`40921100.4 ns/connection` |
+| active UDP benchmark | 5 iterations，`104223105 ns` total，`20844621.0 ns/packet` |
+| active DNS benchmark | 5 iterations，`103620542 ns` total，`20724108.4 ns/query` |
+| selected netns link | `auto -> netkit`，production/active TCP 均 `fallback_used=false` |
+| production `dae0peer` attach | `tc_netlink`，`fallback_used=false` |
+| active TCP LAN attach | `tc_netlink`，`fallback_used=false` |
+| production `dae0` attach | `tc_netlink`，`fallback_used=false` |
+| cleanup | pass，无 `daens` / `dae50` / `dae-native` / `dae-aya` netns、link、bpffs 残留 |
+
+本轮结论：
+
+- 原 A3 范围已完成并复核通过；当前 HEAD 仍是 `4491470d a3: admit rust aya ebpf runtime object`，tag 为 `daex-a3-rust-aya-ebpf-runtime-admission-20260530`。
+- A3 的完成标准仍限定在 Rust/Aya eBPF loader/object/runtime admission 与 attach/cgroup/admission gate，不包括 `runtime_param_map` 动态注入。
+- 默认生产路径仍不自动切换；Go userspace control plane/outbound、C object fallback、Go BPF fallback、TC command fallback 的保留边界不变。
+
+### PARAM volatile accessor 与 eBPF Map 动态注入评估记录（2026-05-30）
+
+本节记录用户确认后的后续约束：`PARAM` volatile accessor 不立即全量替换为 eBPF Map 动态注入；先作为单独评估项保留，等 benchmark、parity 和 runtime admission 证据完整后再决定是否默认切换。
+
+当前判断：
+
+- `PARAM` volatile accessor 解决的是 Rust/LLVM 把 rewritten/load-time `PARAM` 优化成零值的问题；这是 Rust eBPF object 的编译器边界修正，不等同于运行期动态配置机制。
+- `dae0_ifindex`、`dae_netns_id`、`dae0peer_mac`、`control_plane_pid` 当前属于拓扑/加载期参数，热路径读取应优先保持低成本；直接改为每包 `bpf_map_lookup_elem()` 不一定更安全，可能引入缺 key、旧 pinned map 复用、reload 写入顺序、ABI 版本不一致和热路径性能回退。
+- eBPF Map 动态注入更适合未来“不重新加载 object，只更新 runtime topology/state”的场景；它应作为 runtime 参数覆盖层评估，而不是立刻替代已通过 A3 gate 的 `PARAM` 注入路径。
+
+后续推荐方案：
+
+1. 保留 `PARAM + volatile accessor` 作为 fast immutable bootstrap 和 fallback。
+2. 新增可选单 entry `runtime_param_map`，建议 `BPF_MAP_TYPE_ARRAY`，key 固定为 `0`，value 为 `BpfDaeParam`。
+3. loader 在 attach 前写入 `runtime_param_map[0]`；admission 必须校验 map 存在、写入成功、map 值与 `PARAM` 一致。
+4. eBPF program 如启用 hybrid 模式，可优先读取 `runtime_param_map[0]`，缺失或校验失败时回退到 volatile `PARAM`；默认切换前不得让缺 map 直接造成数据面不可用。
+5. benchmark 必须覆盖 volatile-only、map-only、hybrid 三组，对比 active TCP/UDP/DNS、LAN/WAN 热路径、reload、attach、verifier/load time、map update cost、drop/reset 率和 RSS。
+
+硬性约束：
+
+- 不以测试机 config、特定域名、IP、端口、协议、节点、VLESS、Telegram、Cloudflare 等现象作为实现标准。
+- 不在 benchmark 和 parity 通过前删除 `PARAM`、C object、Go BPF fallback 或 TC fallback。
+- 不把 map 动态注入作为“天然更安全”的默认结论；必须用性能和生产链路证据证明它没有破坏原 daenew/daed2.0 工作语义。
+- 后续如果推进该项，修改前仍必须参考 `DAEX_RUST_REBUILD_PLAN_2026-05-16.md` 和 `DAENEW_RUST_REBUILD_MEMO_2026-05-16.md` 中 eBPF、tproxy、netns、listener handoff、routing/DNS/sniff/outbound 边界记录。
+
+当前状态：
+
+- 本轮仅记录决策和评估约束，不修改源码。
+- 下一步如进入实现，应先补 runtime param map 的 ABI/admission/benchmark，再决定是否允许默认启用 hybrid。
+
+### A4 Rust/aya-ebpf kernel program 可行性评估收口记录（2026-05-30）
+
+本节按原 A4 范围执行：只做 Rust/aya-ebpf kernel program 可行性、coverage 和默认切换阻断合同，不把 `runtime_param_map` 动态注入纳入 A4，不删除 C object、Go fallback 或 TC command fallback。
+
+修改前复核依据：
+
+- `DAEX_RUST_PERFORMANCE_OPTIMIZATION_PLAN_2026-05-24.md` 18.4：A4 目标是评估是否值得把 `control/kern/tproxy.c` / `trace/kern/trace.c` 迁成 Rust eBPF program；只做设计和小型 verifier/golden 实验；正式替换必须另开 kernel-program parity 阶段。
+- `DAEX_RUST_REBUILD_PLAN_2026-05-16.md` 阶段 7 / 阶段 14：eBPF/tproxy/netns 必须保持 map ABI、reload 复用、active TCP/UDP/DNS、listener handoff 和 fallback 边界。
+- `DAENEW_RUST_REBUILD_MEMO_2026-05-16.md` 5.11 / 22：BPF maps/programs、tproxy listener、TCP/UDP/DNS/sniff/userspace route/outbound 边界必须保持；Go userspace control plane/outbound 仍保持权威。
+
+本轮源码修改：
+
+- `rust/crates/dae-ebpf-support/src/kernel_program.rs`
+  - 新增 `KernelProgramSurface`、`KernelProgramCoverageStatus`、`KernelProgramCoverageLine`、`KernelProgramFeasibilityReport`。
+  - 新增 `kernel_program_feasibility_report()`，固定 A4 覆盖与阻断合同。
+  - 固定 Rust `dae-ebpf-program` 当前覆盖的 tproxy classifier section：10 条。
+  - 固定 Rust `dae-ebpf-program` 当前覆盖的 tproxy cgroup section：6 条。
+  - 固定 `trace/kern/trace.c` 仍为 C oracle：6 条 kprobe，Rust native trace 覆盖为 0。
+  - 明确 `PARAM` 模型仍是 load-time `PARAM + volatile accessor`；`runtime_param_map` 是后续评估项。
+- `rust/crates/dae-ebpf-support/src/kernel_program_tests.rs`
+  - 新增 A4 合同测试，确认 A4 不打开默认切换、不允许删除 fallback。
+  - 确认 tproxy classifier/cgroup 覆盖完整，trace kprobe 仍要求 C oracle。
+- `rust/crates/dae-ebpf-support/src/lib.rs`
+  - 导出 kernel program feasibility 合同和测试模块。
+- `rust/crates/dae-daemon/src/production_runtime_owner/report.rs`
+  - 在 `ebpf_backend_capabilities` 下新增 `kernel_program_feasibility` report。
+  - report 暴露 tproxy/trace 覆盖计数、fallback 要求、default switch 阻断、formal kernel-program parity 阶段要求。
+- `rust/crates/dae-daemon/src/production_runtime_owner.rs`
+  - 更新 read-only report 测试，固定 A4 report 合同。
+
+A4 coverage 结论：
+
+| 覆盖面 | C baseline | Rust native 当前覆盖 | 状态 |
+| --- | ---: | ---: | --- |
+| tproxy classifier sections | 10 | 10 | `rust_native_admitted` |
+| tproxy cgroup sections | 6 | 6 | `rust_native_admitted` |
+| trace kprobe sections | 6 | 0 | `c_oracle_required` |
+
+关键边界：
+
+- A4 不是默认切换阶段：`default_switch_allowed=false`。
+- A4 不允许删除 C tproxy object：`c_tproxy_object_fallback_required=true`。
+- A4 不允许删除 C trace object：`c_trace_object_fallback_required=true`。
+- A4 不允许删除 TC command fallback：`tc_command_fallback_required=true`。
+- A4 不恢复 Go BPF loader，也不把 Go userspace control plane/outbound 替换为 Rust：`go_userspace_control_plane_authoritative=true`。
+- 正式替换 Rust kernel program 仍需要单独 kernel-program parity 阶段：`formal_kernel_program_parity_stage_required=true`。
+
+验证记录：
+
+| 验证项 | 结果 |
+| --- | --- |
+| `cargo fmt --manifest-path rust/Cargo.toml --all --check` | pass |
+| `cargo test --manifest-path rust/Cargo.toml -p dae-ebpf-support kernel_program` | pass，3 passed |
+| `cargo test --manifest-path rust/Cargo.toml -p dae-daemon production_runtime_owner_report_is_read_only_by_default` | pass，1 passed |
+| `cargo test --manifest-path rust/Cargo.toml -p dae-ebpf-support` | pass，36 passed |
+| `cargo test --manifest-path rust/Cargo.toml -p dae-ebpf-support --features aya-loader` | pass，42 passed |
+| `cargo test --manifest-path rust/Cargo.toml -p dae-daemon production_runtime_owner` | pass，67 passed |
+| `cargo test --manifest-path rust/Cargo.toml --workspace` | pass，workspace unit/doc tests passed |
+| `DAE_NATIVE_EBPF_BACKEND=auto RUNTIME_TIMEOUT=180s ./scripts/run_native_ebpf_runtime_gate.sh` | pass |
+
+本轮 runtime gate 关键结果：
+
+| 指标 | 结果 |
+| --- | --- |
+| scope | `daemon-owned-production-runtime-active-tcp-udp-dns-reload-runtime-parity` |
+| `production_dataplane_admitted` | true |
+| `reload_runtime_parity_admitted` | true |
+| active TCP relay benchmark | 5 iterations，`205210538 ns` total，`41042107.6 ns/connection` |
+| active UDP benchmark | 5 iterations，`103432335 ns` total，`20686467.0 ns/packet` |
+| active DNS benchmark | 5 iterations，`104133376 ns` total，`20826675.2 ns/query` |
+| selected netns link | `auto -> netkit`，production/active TCP 均 `fallback_used=false` |
+| production `dae0peer` attach | `tc_netlink`，`fallback_used=false` |
+| active TCP LAN attach | `tc_netlink`，`fallback_used=false` |
+| production `dae0` attach | `tc_netlink`，`fallback_used=false` |
+| cleanup | pass，无 `daens` / `dae50` / `dae-native` / `dae-aya` netns、link、bpffs 残留 |
+
+本轮结论：
+
+- A4 已完成为可审计的 kernel-program feasibility/coverage 合同。
+- Rust tproxy kernel program 覆盖面已经具备 A3 runtime admission 证据；trace kernel program 尚未 Rust native，继续保留 C trace oracle。
+- A4 没有打开默认切换，没有删除 fallback，没有改变 Go userspace control plane/outbound 权威边界。
+- 如果后续要正式替换 kernel program，应进入单独 kernel-program parity 阶段，覆盖 packet-level golden、map ABI/BTF/verifier parity、LAN/WAN/dae0/dae0peer/cgroup/trace 全 section、远程真实 runtime admission 和 matched Go/Rust benchmark。
+
+### Kernel-program parity admission gate 推进记录（2026-05-30）
+
+本节承接 A4 feasibility/coverage 合同，新增正式 kernel-program parity admission gate。该 gate 只回答“是否已经具备删除 C object / Go BPF fallback / TC fallback 的准入证据”，不执行默认切换，不删除 fallback，不把 `runtime_param_map` 动态注入纳入本轮。
+
+设计目标：
+
+- 把正式替换 Rust kernel program 所需条件写成代码，而不是依靠备忘录描述。
+- A4 已证明 Rust tproxy classifier/cgroup 覆盖和 runtime admission 通过，但 trace Rust native、packet-level golden、map ABI/BTF/verifier parity、matched Go/Rust benchmark、远程真实 host write admission 仍未完成。
+- gate 必须在当前状态下保持未准入，并明确列出缺项。
+- 即使未来所有证据完整，默认切换和 fallback 删除仍不能由本 gate 自动打开，必须另由 release/runtime gate 决定。
+
+本轮源码修改：
+
+- `rust/crates/dae-ebpf-support/src/kernel_program.rs`
+  - 新增 `KernelProgramParityCheck`。
+  - 新增 `KernelProgramParityEvidence`。
+  - 新增 `KernelProgramParityAdmissionReport`。
+  - 新增 `kernel_program_parity_required_checks()`。
+  - 新增 `kernel_program_parity_admission_report()`。
+  - `KernelProgramParityEvidence::from_feasibility()` 会从 A4 feasibility report 生成当前 evidence：
+    - tproxy classifier coverage：通过。
+    - tproxy cgroup coverage：通过。
+    - runtime admission：通过。
+    - trace kprobe coverage：未通过。
+    - map ABI/BTF/verifier parity：未通过。
+    - packet-level golden parity：未通过。
+    - matched Go/Rust benchmark：未通过。
+    - remote host write admission：未通过。
+    - C object fallback preserved：通过。
+    - Go userspace boundary preserved：通过。
+- `rust/crates/dae-ebpf-support/src/kernel_program_tests.rs`
+  - 新增 feasibility-only 状态下必须阻断 fallback 删除的测试。
+  - 新增 complete evidence 只允许 `admitted=true`，仍不自动打开 default switch / fallback deletion 的测试。
+- `rust/crates/dae-ebpf-support/src/lib.rs`
+  - 导出 kernel-program parity admission 合同。
+- `rust/crates/dae-daemon/src/production_runtime_owner/report.rs`
+  - 在 `ebpf_backend_capabilities` 下新增 `kernel_program_parity_admission` JSON。
+  - report 中固定：
+    - `schema=kernel-program-parity-admission-v1`
+    - 当前 `admitted=false`
+    - `default_switch_allowed=false`
+    - `c_tproxy_object_deletion_allowed=false`
+    - `c_trace_object_deletion_allowed=false`
+    - `go_bpf_fallback_deletion_allowed=false`
+    - `fallback_required=true`
+- `rust/crates/dae-daemon/src/production_runtime_owner.rs`
+  - 更新 read-only report 测试，固定当前缺项为 `trace_kprobe_coverage` 与 `remote_host_write_admission`。
+
+当前 gate 状态：
+
+| 检查项 | 当前状态 |
+| --- | --- |
+| `tproxy_classifier_coverage` | pass |
+| `tproxy_cgroup_coverage` | pass |
+| `runtime_admission` | pass |
+| `c_object_fallback_preserved` | pass |
+| `go_userspace_boundary_preserved` | pass |
+| `trace_kprobe_coverage` | missing |
+| `map_abi_btf_verifier_parity` | pass |
+| `packet_level_golden_parity` | pass |
+| `matched_go_rust_benchmark` | pass |
+| `remote_host_write_admission` | missing |
+
+当前准入结论：
+
+- `admitted=false`。
+- `default_switch_allowed=false`。
+- `c_tproxy_object_deletion_allowed=false`。
+- `c_trace_object_deletion_allowed=false`。
+- `go_bpf_fallback_deletion_allowed=false`。
+- `fallback_required=true`。
+
+验证记录：
+
+| 验证项 | 结果 |
+| --- | --- |
+| `cargo fmt --manifest-path rust/Cargo.toml --all --check` | pass |
+| `cargo test --manifest-path rust/Cargo.toml -p dae-ebpf-support kernel_program` | pass，5 passed |
+| `cargo test --manifest-path rust/Cargo.toml -p dae-daemon production_runtime_owner_report_is_read_only_by_default` | pass，1 passed |
+| `cargo test --manifest-path rust/Cargo.toml -p dae-ebpf-support` | pass，38 passed |
+| `cargo test --manifest-path rust/Cargo.toml -p dae-ebpf-support --features aya-loader` | pass，44 passed |
+| `cargo test --manifest-path rust/Cargo.toml -p dae-daemon production_runtime_owner` | pass，67 passed |
+| `cargo test --manifest-path rust/Cargo.toml --workspace` | pass，workspace unit/doc tests passed |
+| `DAE_NATIVE_EBPF_BACKEND=auto RUNTIME_TIMEOUT=180s ./scripts/run_native_ebpf_runtime_gate.sh` | pass |
+
+本轮 runtime gate 关键结果：
+
+| 指标 | 结果 |
+| --- | --- |
+| scope | `daemon-owned-production-runtime-active-tcp-udp-dns-reload-runtime-parity` |
+| `production_dataplane_admitted` | true |
+| `reload_runtime_parity_admitted` | true |
+| active TCP relay benchmark | 5 iterations，`204907301 ns` total，`40981460.2 ns/connection` |
+| active UDP benchmark | 5 iterations，`104285718 ns` total，`20857143.6 ns/packet` |
+| active DNS benchmark | 5 iterations，`104216393 ns` total，`20843278.6 ns/query` |
+| selected netns link | `auto -> netkit`，production/active TCP 均 `fallback_used=false` |
+| production `dae0peer` attach | `tc_netlink`，`fallback_used=false` |
+| active TCP LAN attach | `tc_netlink`，`fallback_used=false` |
+| production `dae0` attach | `tc_netlink`，`fallback_used=false` |
+| cleanup | pass，无 `daens` / `dae50` / `dae-native` / `dae-aya` netns、link、bpffs 残留 |
+
+本轮结论：
+
+- kernel-program parity admission gate 已建立。
+- 当前 gate 明确阻止 fallback 删除和默认切换，原因是 trace Rust native、packet-level golden、map ABI/BTF/verifier parity、matched Go/Rust benchmark、远程 host write admission 尚未完成。
+- 下一步如继续推进，应优先补 packet-level golden 与 map ABI/BTF/verifier parity，再决定是否推进 trace Rust native；不能直接删除 C trace oracle 或 Go/userspace fallback。
+
+### Kernel-program packet/map evidence queue 推进记录（2026-05-30）
+
+本节继续承接 A4 feasibility 与 kernel-program parity admission gate。目标不是切换默认路径，而是把 `packet_level_golden_parity` 与 `map_abi_btf_verifier_parity` 从“缺一项”细化为可审计 evidence queue，后续每补一个真实验证项都能直接落到代码和 report 中。
+
+修改前参考：
+
+- `DAEX_RUST_REBUILD_PLAN_2026-05-16.md` 中 A4 要求：正式替换必须覆盖 packet-level golden、map ABI/BTF/verifier parity、LAN/WAN/dae0/dae0peer/cgroup section、远程真实 runtime admission。
+- `DAENEW_RUST_REBUILD_MEMO_2026-05-16.md` 5.11：eBPF/tproxy/netns 的 Go 控制面职责和 Rust 对等拆分边界。
+- `DAENEW_RUST_REBUILD_MEMO_2026-05-16.md` 10.1、11.1、11.3、11.4：routing/match_set ABI、map schema、generated layout、reload/pinned map 行为。
+- `DAENEW_RUST_REBUILD_MEMO_2026-05-16.md` 11.5：domain routing owner tracker 不能被简化成测试机配置特例。
+
+本轮源码修改：
+
+- `rust/crates/dae-ebpf-support/src/kernel_program.rs`
+  - 新增 `KernelProgramParityEvidenceStatus`。
+  - 新增 `KernelProgramParityEvidenceLine`。
+  - `KernelProgramParityAdmissionReport` 新增 `evidence_queue`。
+  - 新增 `kernel_program_parity_evidence_queue()`，把总 gate 拆成可审计 evidence 行。
+  - 新增 `map_abi_btf_verifier_evidence_queue()`。
+  - 新增 `packet_level_golden_evidence_queue()`。
+- `rust/crates/dae-ebpf-support/src/lib.rs`
+  - 导出 evidence queue 相关类型和函数。
+- `rust/crates/dae-daemon/src/production_runtime_owner/report.rs`
+  - `ebpf_backend_capabilities.kernel_program_parity_admission` 增加 `evidence_queue` JSON。
+- `rust/crates/dae-daemon/src/production_runtime_owner.rs`
+  - read-only report 测试增加 evidence queue 断言。
+- `rust/crates/dae-ebpf-support/src/kernel_program_tests.rs`
+  - 增加 packet/map evidence queue 合同测试。
+
+当前 `map_abi_btf_verifier_parity` evidence 状态：
+
+| evidence | 状态 | 说明 |
+| --- | --- | --- |
+| `abi_layout_golden_fixture` | passed | Rust ABI layout 已有 golden fixture 覆盖 |
+| `map_catalog_golden_fixture` | passed | map catalog 已有 golden fixture 覆盖 |
+| `param_symbol_rewrite_contract` | passed | PARAM symbol rewrite 已有合同测试 |
+| `rust_object_btf_timer_verifier_admission` | passed | 当前 Rust object 已验证存在 `.BTF` / `.BTF.ext` / `.maps`，并通过 Aya load smoke |
+| `c_vs_rust_object_map_catalog_diff` | passed | C object 与 Rust object 的 `PARAM` + 12 个 runtime map symbol 集合一致 |
+| `pinned_map_upgrade_retry_parity` | passed | pinned map schema 不兼容时删除重试策略已有合同测试覆盖 |
+
+当前 `packet_level_golden_parity` required cases：
+
+| case | 状态 |
+| --- | --- |
+| `l2_ipv4_tcp` | passed |
+| `l2_ipv4_udp` | passed |
+| `l3_ipv4_tcp` | passed |
+| `l3_ipv4_udp` | passed |
+| `l2_ipv6_tcp` | passed |
+| `l2_ipv6_udp` | passed |
+| `ipv6_extension_headers` | passed |
+| `ipv6_icmpv6_ndp_redirect` | passed |
+| `unsupported_l3_protocol_pass` | passed |
+| `unsupported_l4_protocol_pass` | passed |
+| `truncated_packet_no_drop` | passed |
+
+本轮边界：
+
+- 不把测试机当前 config、IP、域名、协议或节点写成通用逻辑。
+- 不把 packet/map queue 的细化当作准入通过。
+- 不删除 C tproxy object、C trace object、Go userspace control plane/outbound 边界或 TC fallback。
+- `runtime_param_map` 仍属于后续可选评估项，不纳入本轮。
+
+验证记录：
+
+| 验证项 | 结果 |
+| --- | --- |
+| `cargo fmt --manifest-path rust/Cargo.toml --all --check` | pass |
+| `cargo test --manifest-path rust/Cargo.toml -p dae-ebpf-support kernel_program` | pass，6 passed |
+| `cargo test --manifest-path rust/Cargo.toml -p dae-daemon production_runtime_owner_report_is_read_only_by_default` | pass，1 passed |
+| `cargo test --manifest-path rust/Cargo.toml -p dae-ebpf-support` | pass，39 passed |
+| `cargo test --manifest-path rust/Cargo.toml -p dae-ebpf-support --features aya-loader` | pass，45 passed |
+| `cargo test --manifest-path rust/Cargo.toml -p dae-daemon production_runtime_owner` | pass，67 passed |
+| `git diff --check` | pass |
+
+### A4 约束追加：CO-RE side-load 保持关闭（2026-05-30）
+
+用户确认：CO-RE side-load 保持关闭。
+
+当前代码状态：
+
+- `rust/crates/dae-ebpf-support/src/aya_loader.rs` 中 `TRACE_CORE_SIDELOAD_ENABLED=false`。
+- `dae-aya-bpf-loader trace-loader load-pin` 继续返回 `trace_core_sideload_gate_report().disabled_reason`，不执行 load/pin。
+- `dae-aya-bpf-loader trace-loader attach-ringbuf-smoke` 继续返回同一 disabled reason，不执行 attach/ringbuf smoke。
+- `trace_core_sideload_gate_report()` 继续固定输出：
+  - `enabled=false`
+  - `go_trace_adoption_ready=false`
+  - `default_daemon_path=false`
+  - `c_trace_object_required=true`
+  - `go_trace_fallback_required=true`
+  - `restore_gate=requires nonzero Rust .BTF.ext core_relo_len, verifier load, and semantic ringbuf parity`
+
+后续约束：
+
+1. 不再把恢复 Rust/Aya trace CO-RE side-load 作为当前 A4 下一步。
+2. 不使用固定 offset、测试机内核布局、普通 Rust struct 字段访问或特定 config 来绕过 `sk_buff` CO-RE 语义缺口。
+3. `rust_trace_load_pin_smoke` / `rust_trace_attach_and_ringbuf_smoke` 只作为历史非默认 skeleton smoke 证据保留，不代表 CO-RE side-load 可执行。
+4. `rust_skb_core_read_semantics` 继续保持 missing。
+5. `trace_kprobe_coverage` 继续保持 missing。
+6. C trace object、Go trace fallback、Go userspace control-plane/outbound 和 TC command fallback 继续保留。
+
+下一步允许方向：
+
+- 优先保持当前 gate 失败关闭。
+- 如继续 trace 相关工作，只允许做 C trace CO-RE object 的 Rust/Aya userspace adoption 只读评估，且不能改变默认路径。
+- Rust native trace CO-RE 只能作为未来独立 toolchain spike；必须先证明非零 `.BTF.ext core_relo_len`、verifier load 和 semantic ringbuf parity，才允许重新讨论打开 side-load gate。
+
+### A4 trace loader 默认关闭修正记录（2026-05-30）
+
+本节承接“CO-RE side-load 保持关闭”的硬约束。修改前再次参考：
+
+- `DAENEW_RUST_REBUILD_MEMO_2026-05-16.md` `16.4 trace CLI 与 BPF trace`：trace 是 feature-gated 高级排障能力，BTF target 自动发现、ringbuf 输出、kallsyms 解析和输出字段必须保持兼容。
+- `DAENEW_RUST_REBUILD_MEMO_2026-05-16.md` eBPF 生成记录：trace BPF generated files 是 ignored 产物，验证前必须确认生成物是否存在，不能只看 `git status`。
+- 当前 A4 约束：Rust/Aya trace CO-RE side-load 保持关闭，不能作为默认路径或 adoption-ready 证据。
+
+问题：
+
+- Rust 侧 `TRACE_CORE_SIDELOAD_ENABLED=false`，`dae-aya-bpf-loader trace-loader load-pin/attach-ringbuf-smoke` 已经会返回 disabled reason。
+- 但 Go trace 入口 `rustTraceAyaLoaderEnabled()` 之前默认返回 true：即使 side-load 被关闭，`trace.StartTrace()` 仍会先尝试调用 Rust/Aya helper，失败后再 fallback 到 Go trace loader。
+- 这会让“关闭”变成“默认尝试失败再回落”，不符合当前硬约束，也会在 trace 启动时产生无意义 warning/latency。
+
+修改范围：
+
+| 文件 | 修改 |
+| --- | --- |
+| `trace/rust_aya_loader.go` | `rustTraceAyaLoaderEnabled()` 改为显式 opt-in：只有 `DAE_TRACE_RUST_AYA_LOADER=1/true/on/yes` 才启用 Rust/Aya trace loader；未设置、空值、`0/false/off/no` 或未知值均保持关闭。 |
+| `trace/loader_upgrade_test.go` | 新增 `TestRustTraceAyaLoaderEnabledIsExplicitOptIn`，固定默认关闭和显式 opt-in 行为。 |
+| `trace/rebuild_golden_test.go` | trace CLI golden 的 loader 默认值从 `rust-aya` 改为 `go`，新增 `enable_env=DAE_TRACE_RUST_AYA_LOADER=1`。 |
+| `testdata/rebuild-golden/trace/cli/surface.json` | 同步 golden：默认 Go trace loader，Rust/Aya helper 仅显式 opt-in。 |
+
+当前行为：
+
+- 默认：Go trace loader / C trace CO-RE object 继续作为权威路径。
+- 显式 `DAE_TRACE_RUST_AYA_LOADER=1`：允许尝试 Rust/Aya helper，但由于 CO-RE side-load gate 仍关闭，helper 会返回 disabled reason；非 strict 时仍 fallback Go loader，strict 时失败关闭。
+- `DAE_TRACE_RUST_AYA_LOADER_STRICT=1` 不会单独启用 Rust/Aya loader；必须同时显式启用 `DAE_TRACE_RUST_AYA_LOADER=1`。
+
+验证记录：
+
+| 验证项 | 结果 |
+| --- | --- |
+| `gofmt -w trace/rust_aya_loader.go trace/loader_upgrade_test.go trace/rebuild_golden_test.go` | pass |
+| 初次 `GOWORK=off go test -count=1 ./trace ...` | fail，原因是 trace generated BPF 文件缺失，`bpfObjects` / `_BpfBytes` 未生成；这是环境/生成物问题，不是本次逻辑失败。 |
+| `PATH=/root/.local/go1.25.9/bin:$PATH GOWORK=off make ebpf` | pass，生成 trace/control BPF ignored 产物并写 `.build_tags=trace`。 |
+| `TAGS=$(cat .build_tags); GOWORK=off /root/.local/go1.25.9/bin/go test -tags="$TAGS" -count=1 ./trace -run 'TestRustTraceAyaLoaderEnabledIsExplicitOptIn|TestRebuildTraceCliSurface|TestRewriteAndLoadBpf'` | pass，`ok github.com/daeuniverse/dae/trace 0.046s`。 |
+| 测试残留清理 | pass，已删除本轮新生成的 `trace/bpf_x86_bpfel.go`、`trace/bpf_x86_bpfel.o` 和 `.build_tags`；原本已存在的 control BPF 产物不动。 |
+| `cargo test --manifest-path rust/Cargo.toml -p dae-ebpf-support trace_core_sideload_gate_is_disabled_until_real_core_relocations_exist` | pass，1 passed。 |
+
+结论：
+
+- CO-RE side-load 现在不仅 Rust 侧关闭，Go trace 默认路径也不再主动尝试 Rust/Aya helper。
+- C trace CO-RE object / Go trace loader 继续保持默认和 fallback 权威。
+- 后续若做 C trace CO-RE object 的 Rust/Aya userspace adoption，只能在显式 opt-in / read-only 评估路径下推进，不得改变默认 trace 行为。
+
+### A4 product-chain daed-daex-align 边界修正记录（2026-05-30）
+
+本节承接远程 38 host-write runtime admission 后的 product-chain recertification 收口。执行前继续参考：
+
+- `DAEX_RUST_REBUILD_PLAN_2026-05-16.md`：daed2.0 产品链仍是正式链路，默认切换必须经过 product-chain / service contract / rollback / host write gate。
+- `DAENEW_RUST_REBUILD_MEMO_2026-05-16.md`：daed/wing runtime/control API 是 WebUI 和运行态观测面依赖，不能为测试机或单次配置做特定改写。
+
+用户约束更新：
+
+1. 不修改 daed2.0 内嵌 `wing` 的 runtime/control API 源实现。
+2. 当前 daex 独立产品链以 `/root/project/daed-daex-align/daed` 为 daed 集成仓库，`/root/project/daed-daex-align/daed/wing` 只是该链路中被 daed 持有的 wing worktree/submodule 形态。
+3. 如果 `wing` worktree 处于 detached HEAD，不能简单判为错分支；只有当它的本地 `origin` 预期分支 HEAD 与当前 HEAD 完全一致时，才允许作为 daed-daex-align 持有的干净指针通过。
+4. 该规则是通用产品链规则，不以 38 测试机、10.10.10.2/10.10.10.4、当前 config、当前节点或当前协议作为实现标准。
+
+修改范围：
+
+| 文件 | 修改 |
+| --- | --- |
+| `rust/crates/dae-daemon/src/product_chain_recertification/dependency_boundary.rs` | `go.mod` 依赖边界允许 daed2 独立链路中的 `replace github.com/daeuniverse/dae => /root/project/dae-daex-align`，同时继续保留 `./dae-core` 嵌入形态检查。新增字段记录 `dae_core_replace_target`、embedded/local replace 是否命中。 |
+| `rust/crates/dae-daemon/src/product_chain_recertification/repo_inspection.rs` | 分支合同新增 detached HEAD + local origin branch head 校验。只有本地 origin 的预期分支 commit 等于当前 HEAD 时，`branch_contract_preserved=true`；远程 URL 或不匹配 commit 不放宽。 |
+| `rust/crates/dae-daemon/src/product_chain_recertification/tests/dependency_boundary.rs` | 新增独立 daex 本地 replace fixture，覆盖 `dae => /root/project/dae-daex-align` 形态。 |
+| `rust/crates/dae-daemon/src/product_chain_recertification/tests/repo_status.rs` | 新增 detached `daed-wing` worktree fixture，验证 local origin `daewing2-daex-align` 与 HEAD 同 commit 时才通过分支合同。 |
+
+本地 daed-daex-align 链路只读复认证结果：
+
+| 项 | 结果 |
+| --- | --- |
+| `product_chain_topology.chain` | `daed2.0-web-wing-daecore` |
+| `dae` | `/root/project/dae-daex-align`，branch `daex`，当前 dirty |
+| `daed` | `/root/project/daed-daex-align/daed`，branch `daed2-daex-align`，clean |
+| `daed-wing` | `/root/project/daed-daex-align/daed/wing`，detached HEAD，`branch_contract_source=detached_head_local_origin`，clean |
+| `outbound` | `/root/project/outbound-daex-align`，branch `outbound-daex-align`，clean |
+| `quic-go` | `/root/project/quic-go-rust`，branch `quic-go-rust`，clean |
+| dependency boundary | pass |
+| runtime/control API source contract | pass |
+| product-chain branch contract | pass |
+| product-chain clean | false |
+
+仍然阻断默认切换 / fallback 删除的原因：
+
+- `dae` 当前有本轮未提交改动，`clean_product_chain_baseline=false`。
+- 本轮只读复认证输入仍保持 `bpf_go_fallback_retired=false`、`true_rust_default_daemon_admitted=false`，不声明 Go BPF fallback 已退休，也不声明 true Rust default daemon 已准入。
+- 未请求默认路径写入，不修改 systemd、`/usr/bin/dae`、`/usr/bin/daed` 或生产配置。
+- `dae-wing and daed runtime/control API recertification still needs an explicit clean baseline run` 仍保留为 clean baseline 后复跑项。
+
+验证记录：
+
+| 验证项 | 结果 |
+| --- | --- |
+| `cargo fmt --manifest-path rust/Cargo.toml --all --check` | pass |
+| `cargo test --manifest-path rust/Cargo.toml -p dae-daemon product_chain_recertification::tests::dependency_boundary` | pass，2 passed |
+| `cargo test --manifest-path rust/Cargo.toml -p dae-daemon product_chain_recertification::tests::repo_status` | pass，2 passed |
+| `cargo test --manifest-path rust/Cargo.toml -p dae-daemon product_chain_recertification` | pass，26 passed |
+| `dae-daemon-optin run --execute-product-chain-recertification ... daed-daex-align ...` | pass/read-only，依赖边界、runtime/control API、分支合同均 pass，clean=false |
+
+结论：
+
+- 不需要、也不应该为了 product-chain recertification 去改 daed2.0 内嵌 `wing` runtime/control API。
+- 当前应继续在 `/root/project/dae-daex-align` 的 recertification 逻辑和 `/root/project/daed-daex-align/daed` 的集成边界上推进。
+- fallback retirement gate 仍保持失败关闭；在 clean baseline、trace parity、明确删除批准和默认切换准入全部完成前，不删除 Go/C/TC fallback。
+
+### A4 trace evidence queue 与已验证 smoke 记录对齐（2026-05-30）
+
+本节继续承接 kernel-program fallback retirement gate。修改前再次确认：
+
+- `DAEX_RUST_REBUILD_PLAN_2026-05-16.md` 要求 A4 只做 Rust/Aya eBPF object skeleton、load/adopt/attach/map/TC/cgroup/listener/routing smoke 的逐项证据，不允许用未完成 trace 覆盖默认切换。
+- `DAENEW_RUST_REBUILD_MEMO_2026-05-16.md` `5.13 Trace and diagnostics` 明确 trace 是 feature-gated 诊断能力，依赖 BTF/kprobe/ringbuf/kallsyms，不能把 trace skeleton 当作 production dataplane。
+- 上文已经记录过 Rust/Aya trace object 的 `load-pin` 和 `attach-ringbuf-smoke` 非默认验证通过；随后 CO-RE side-load 被临时屏蔽，原因是 Rust object `.BTF.ext core_relo_len=0`，不能证明 `sk_buff` 字段级 CO-RE relocation。
+
+本轮修正目标：
+
+- 只把已经验证过的 `rust_trace_load_pin_smoke` 与 `rust_trace_attach_and_ringbuf_smoke` 在 evidence queue 中从 `missing` 对齐为 `passed`。
+- 不打开 `trace_core_sideload_gate.enabled`。
+- 不标记 `rust_skb_core_read_semantics`。
+- 不让 `trace_kprobe_coverage` 通过。
+- 不删除 C trace object、Go trace fallback、Go userspace/control-plane/outbound 或 TC command fallback。
+
+修改范围：
+
+| 文件 | 修改 |
+| --- | --- |
+| `rust/crates/dae-ebpf-support/src/kernel_program_trace.rs` | `rust_trace_load_pin_smoke`、`rust_trace_attach_and_ringbuf_smoke` evidence line 改为 `passed`，source 指向本备忘录 2026-05-30 trace smoke 记录，并注明 CO-RE side-load 仍 disabled。 |
+| `rust/crates/dae-ebpf-support/src/kernel_program_trace_tests.rs` | 更新 trace evidence queue 测试，确认 load-pin 和 attach-ringbuf smoke 已 passed，但 `trace_kprobe_evidence_admitted()` 仍为 false。 |
+| `rust/crates/dae-ebpf-support/src/kernel_program_tests.rs` | 更新 kernel-program 总 evidence queue 断言，确认 trace smoke 两项已 passed，`rust_skb_core_read_semantics` 仍 missing。 |
+
+当前 trace gate 状态：
+
+| evidence | 状态 |
+| --- | --- |
+| `trace_event_ringbuf_record_abi` | passed |
+| `tracing_cfg_rewrite_contract` | passed |
+| `events_ringbuf_and_skb_addresses_maps` | passed |
+| `btf_skb_target_discovery_contract` | passed |
+| `rust_trace_load_pin_smoke` | passed |
+| `rust_trace_attach_and_ringbuf_smoke` | passed |
+| `rust_skb_core_read_semantics` | missing |
+| `trace_core_sideload_gate.enabled` | false |
+| `trace_kprobe_coverage` | missing |
+
+验证记录：
+
+| 验证项 | 结果 |
+| --- | --- |
+| `cargo fmt --manifest-path rust/Cargo.toml --all --check` | pass |
+| `cargo test --manifest-path rust/Cargo.toml -p dae-ebpf-support trace` | pass，6 passed |
+| `cargo test --manifest-path rust/Cargo.toml -p dae-ebpf-support kernel_program` | pass，17 passed |
+
+结论：
+
+- 当前 missing 已进一步收敛到真正的 CO-RE 语义缺口：`rust_skb_core_read_semantics`。
+- 该修正不会放宽 fallback retirement gate，因为 `trace_core_sideload_disabled` blocker 和 `trace_kprobe_coverage` missing 仍然存在。
+- 后续若继续 A4 trace parity，只能走真实 CO-RE 生成/验证路线，不能使用固定 offset、测试机内核布局或普通 Rust struct 字段访问冒充 CO-RE。
+
+追加真实验证记录：
+
+| 验证项 | 结果 |
+| --- | --- |
+| `cargo +nightly build -Z build-std=core --manifest-path rust/Cargo.toml -p dae-ebpf-program --target bpfel-unknown-none --release` | pass |
+| `llvm-readelf -S rust/target/bpfel-unknown-none/release/libdae_ebpf_program.so` | pass，存在 `classifier/*`、`cgroup/*`、`maps`、`.maps`、`.BTF`、`.BTF.ext` |
+| `llvm-readelf -s rust/target/bpfel-unknown-none/release/libdae_ebpf_program.so` | pass，存在 `PARAM`、`udp_conn_state_map`、10 个 tproxy classifier program symbol、6 个 cgroup program symbol |
+| `DAE_RUN_AYA_LOAD_SMOKE=1 cargo test --manifest-path rust/Cargo.toml -p dae-ebpf-support --features aya-loader aya_userspace_real_object_load_smoke_is_env_gated -- --nocapture` | pass，1 passed |
+| C object vs Rust object map symbol diff | pass，`PARAM` + `cookie_pid_map`、`domain_routing_map`、`fast_sock`、`listen_socket_map`、`lpm_array_map`、`outbound_connectivity_map`、`redirect_track`、`routing_map`、`routing_tuples_map`、`tgid_pname_map`、`udp_conn_state_map`、`unused_lpm_type` 完全一致 |
+
+本轮结论：
+
+- packet/map parity admission 的缺口已从总项拆为 evidence queue，后续可以按 queue 补真实验证，不再依赖口头说明。
+- `map_abi_btf_verifier_parity` 已由子 evidence queue 闭合为 passed。
+- `packet_level_golden_parity` 已由子 evidence queue 闭合为 passed。
+- 当前 kernel-program 总准入仍保持未通过：`trace_kprobe_coverage`、`remote_host_write_admission` 仍在 missing，不能据此删除 fallback 或打开默认切换。
+
+### Kernel-program packet-level golden parity 收口记录（2026-05-30）
+
+本节继续承接 kernel-program parity admission gate，补齐 `packet_level_golden_parity`。修改前复核 `control/kern/tproxy.c` 的 `parse_transport()` 与 `rust/crates/dae-ebpf-program/src/packet.rs`，重点对齐 IPv4/IPv6、L2/L3、TCP/UDP/ICMPv6、IPv6 extension header、unsupported protocol、truncated packet 的 no-drop 语义。
+
+审计发现并修复的真实 parity 差异：
+
+- C object 对 TCP 使用完整 `struct tcphdr` 读取；Rust eBPF 原先只读取 14 bytes。已改为读取 20 bytes。
+- C object 对 UDP 使用完整 `struct udphdr` 读取；Rust eBPF 原先只读取 4 bytes。已改为读取 8 bytes。
+- C object 对 ICMPv6 使用完整 `struct icmp6hdr` 读取；Rust eBPF 原先只读取 1 byte。已改为读取 8 bytes。
+- 该修复只改变 truncated/incomplete L4 header 的 fault/no-drop 判定，正常 TCP/UDP/ICMPv6 packet 的字段提取保持一致。
+
+本轮源码修改：
+
+- `rust/crates/dae-ebpf-program/src/packet.rs`
+  - `parse_l4()` 中 TCP/UDP/ICMPv6 load length 对齐 C object。
+- `rust/crates/dae-ebpf-support/src/kernel_program_packet.rs`
+  - 新增 userspace packet golden parser/model，用于固定 C/Rust kernel parser 应有行为。
+  - 新增 `KernelPacketParseDisposition`、`KernelPacketParsed`、`KernelPacketParseReport`、`KernelPacketGoldenCase`。
+  - 新增 `packet_level_golden_cases()` 和 `parse_kernel_program_packet()`。
+- `rust/crates/dae-ebpf-support/src/kernel_program_packet_tests.rs`
+  - 覆盖 11 个 packet-level golden case：
+    - L2/L3 IPv4 TCP/UDP。
+    - L2 IPv6 TCP/UDP。
+    - IPv6 extension header skip。
+    - ICMPv6 NDP redirect。
+    - unsupported L3/L4 chain-next no-drop。
+    - truncated packet fault no-drop。
+- `rust/crates/dae-ebpf-support/src/kernel_program.rs`
+  - `packet_level_golden_evidence_queue()` 全部更新为 passed。
+  - `KernelProgramParityEvidence::from_feasibility()` 由 packet evidence queue 自动计算 `packet_level_golden_parity_passed=true`。
+- `rust/crates/dae-daemon/src/production_runtime_owner.rs`
+  - read-only report 测试更新为 packet evidence passed。
+
+验证记录：
+
+| 验证项 | 结果 |
+| --- | --- |
+| `cargo fmt --manifest-path rust/Cargo.toml --all --check` | pass |
+| `cargo test --manifest-path rust/Cargo.toml -p dae-ebpf-support kernel_program` | pass，10 passed |
+| `cargo test --manifest-path rust/Cargo.toml -p dae-ebpf-support packet_level_golden` | pass，4 passed |
+| `cargo test --manifest-path rust/Cargo.toml -p dae-daemon production_runtime_owner_report_is_read_only_by_default` | pass，1 passed |
+| `cargo check --manifest-path rust/Cargo.toml -p dae-ebpf-program` | pass |
+| `cargo +nightly build -Z build-std=core --manifest-path rust/Cargo.toml -p dae-ebpf-program --target bpfel-unknown-none --release` | pass |
+| `llvm-readelf -S rust/target/bpfel-unknown-none/release/libdae_ebpf_program.so` | pass，存在 `classifier/*`、`cgroup/*`、`.maps`、`.BTF`、`.BTF.ext` |
+| `DAE_RUN_AYA_LOAD_SMOKE=1 cargo test --manifest-path rust/Cargo.toml -p dae-ebpf-support --features aya-loader aya_userspace_real_object_load_smoke_is_env_gated -- --nocapture` | pass，1 passed |
+| `cargo test --manifest-path rust/Cargo.toml -p dae-ebpf-support` | pass，43 passed |
+| `cargo test --manifest-path rust/Cargo.toml -p dae-ebpf-support --features aya-loader` | pass，49 passed |
+| `cargo test --manifest-path rust/Cargo.toml -p dae-daemon production_runtime_owner` | pass，67 passed |
+| `DAE_NATIVE_EBPF_BACKEND=auto RUNTIME_TIMEOUT=180s ./scripts/run_native_ebpf_runtime_gate.sh` | pass |
+| `cargo test --manifest-path rust/Cargo.toml --workspace` | pass，workspace unit/integration/doc tests passed |
+| `git diff --check` | pass |
+| residue check：`ip netns list` / `ip link show type veth` / `/sys/fs/cgroup` | pass，无 `daens` / `dae50` / `dae-native` / `dae-aya` / `daya*` / `dayn*` / `dayx*` / cgroup smoke 残留 |
+
+runtime gate 关键结果：
+
+| 指标 | 结果 |
+| --- | --- |
+| `production_dataplane_admitted` | true |
+| `reload_runtime_parity_admitted` | true |
+| active TCP relay benchmark | 5 iterations，`205114129 ns` total，`41022825.8 ns/connection` |
+| active UDP benchmark | 5 iterations，`103888088 ns` total，`20777617.6 ns/packet` |
+| active DNS benchmark | 5 iterations，`104893079 ns` total，`20978615.8 ns/query` |
+| selected netns link | `auto -> netkit`，fallback_used=false |
+| production `dae0peer` attach | `tc_netlink`，fallback_used=false |
+| active TCP LAN attach | `tc_netlink`，fallback_used=false |
+| production `dae0` attach | `tc_netlink`，fallback_used=false |
+| cleanup | pass，无 `daens` / `dae50` / `dae-native` / `dae-aya` netns、link、bpffs 残留 |
+
+本轮结论：
+
+- `packet_level_golden_parity` 已闭合为 passed。
+- Rust eBPF packet parser 的 truncated L4 header 行为已对齐 C object。
+- kernel-program 总 gate 仍未准入，剩余缺口是 `trace_kprobe_coverage`、`remote_host_write_admission`。
+
+### Kernel-program matched Go/Rust benchmark 准入记录（2026-05-30）
+
+本节继续承接 kernel-program parity admission gate，补齐 `matched_go_rust_benchmark`。修改前复核 `DAEX_RUST_REBUILD_PLAN_2026-05-16.md` 与 `DAENEW_RUST_REBUILD_MEMO_2026-05-16.md` 中的 eBPF/tproxy、control-plane、outbound 边界和 matched benchmark 约束：
+
+- benchmark 只证明同一 host、同一 corpus/config 下 Go default daemon 与 Rust opt-in daemon 的启动到 ready 时间，不替代 active TCP/UDP/DNS dataplane、reload/runtime parity、远程 host write。
+- Go userspace control plane/outbound 仍保持当前权威边界，不在本轮替换。
+- 不根据测试机 config、IP、域名、节点或协议写入特定逻辑。
+- C tproxy object、C trace object、TC fallback、Go userspace fallback 在总 gate 未通过前继续保留。
+
+本轮执行：
+
+- 先构建当前候选：
+  - `cargo build --manifest-path rust/Cargo.toml -p dae-daemon --features native-ebpf --bin dae-daemon-optin`
+  - `cargo build --manifest-path rust/Cargo.toml -p dae-aya-bpf-loader --features native-ebpf`
+- 首次 benchmark 暴露当前 Go default daemon 已经会调用 Rust/Aya loader helper；临时 benchmark 环境未设置 helper 路径时失败：
+  - error：`rust bpf loader helper "dae-aya-bpf-loader" failed: executable file not found in $PATH`
+  - 处理：使用当前构建的 helper，通过 `DAE_RUST_BPF_LOADER_HELPER=/root/project/dae-daex-align/rust/target/debug/dae-aya-bpf-loader` 明确传入，避免依赖宿主 PATH。
+- 重新执行 count=10 matched benchmark：
+  - config：只包含 `global.log_level=info` 和 `pname(NetworkManager, systemd-resolved, dnsmasq, ssh, sshd) -> must_direct` 的最小安全配置。
+  - `--matched-benchmark-iterations 10`
+  - `--matched-ready-timeout-ms 15000`
+  - `--go-tool /root/.local/go1.25.9/bin/go`
+  - `--go-work off`
+  - `--source-dir /root/project/dae-daex-align`
+  - `--rust-binary rust/target/debug/dae-daemon-optin`
+
+benchmark 结果：
+
+| 指标 | 结果 |
+| --- | --- |
+| `matched_go_rust_default_daemon_benchmark_recorded` | true |
+| `benchmark_executable_now` | true |
+| iterations | 10 |
+| Go ready elapsed avg | `1067243467.9 ns` |
+| Go ready elapsed min/max | `1052154525 ns` / `1102380522 ns` |
+| Rust opt-in ready elapsed avg | `9505507.2 ns` |
+| Rust opt-in ready elapsed min/max | `9244255 ns` / `9913174 ns` |
+| Rust/Go ready elapsed ratio | `0.00890659674751053` |
+| temporary summary file | `/tmp/dae-daemon-kernel-program-matched-20260530160844-928341/run/matched-default-benchmark/matched-default-daemon-benchmark.json`，数值已记录，本轮结束后按测试残留清理规则删除 |
+
+本轮源码修改：
+
+- `rust/crates/dae-ebpf-support/src/kernel_program.rs`
+  - 新增 `matched_go_rust_benchmark_evidence_queue()`。
+  - 新增 `matched_go_rust_benchmark_evidence_admitted()`。
+  - `KernelProgramParityEvidence::from_feasibility()` 改为从 matched evidence queue 计算 `matched_go_rust_benchmark_passed=true`。
+- `rust/crates/dae-ebpf-support/src/lib.rs`
+  - 导出 matched benchmark evidence queue/admission 函数。
+- `rust/crates/dae-ebpf-support/src/kernel_program_tests.rs`
+  - 更新 kernel-program parity gate 测试，确认 matched benchmark 不再出现在 missing checks。
+- `rust/crates/dae-daemon/src/production_runtime_owner.rs`
+  - 更新 read-only report 测试，确认 report 中 matched benchmark evidence 为 passed。
+
+验证记录：
+
+| 验证项 | 结果 |
+| --- | --- |
+| `cargo fmt --manifest-path rust/Cargo.toml --all --check` | pass |
+| `cargo test --manifest-path rust/Cargo.toml -p dae-ebpf-support kernel_program` | pass，10 passed |
+| `cargo test --manifest-path rust/Cargo.toml -p dae-daemon production_runtime_owner_report_is_read_only_by_default` | pass，1 passed |
+| `cargo test --manifest-path rust/Cargo.toml -p dae-ebpf-support` | pass，43 passed |
+| `cargo test --manifest-path rust/Cargo.toml -p dae-daemon production_runtime_owner` | pass，67 passed |
+| `cargo test --manifest-path rust/Cargo.toml -p dae-ebpf-support --features aya-loader` | pass，49 passed |
+| `cargo test --manifest-path rust/Cargo.toml --workspace` | pass，workspace unit/integration/doc tests passed |
+| `git diff --check` | pass |
+| residue check：`/tmp` benchmark roots、`ip netns list`、`ip link show type veth`、`/sys/fs/cgroup` | pass，无本轮 benchmark/netns/veth/cgroup 残留 |
+
+本轮结论：
+
+- `matched_go_rust_benchmark` 已由真实 count=10 同 corpus benchmark 闭合为 passed。
+- kernel-program 总 gate 仍未准入，剩余缺口收敛为：
+  - `trace_kprobe_coverage`
+  - `remote_host_write_admission`
+- trace native 不能用空 section/stub 伪造通过：C trace 依赖 `sk_buff` CO-RE 字段读取、`events` ringbuf、`skb_addresses` 去重、lifetime termination、kallsyms/kprobe target discovery；Rust/Aya 侧需要真实 map/section/config/event ABI 和 load/adopt/attach 证据后才能标记 passed。
+- 远程 host write admission 仍必须在授权的真实测试机/生产式配置下单独执行，不能用本机 read-only benchmark 代替。
+
+### Kernel-program trace parity evidence queue 建立记录（2026-05-30）
+
+本节继续承接 kernel-program parity admission gate，推进 `trace_kprobe_coverage` 的真实准入拆解。修改前再次复核 `DAEX_RUST_REBUILD_PLAN_2026-05-16.md` 和 `DAENEW_RUST_REBUILD_MEMO_2026-05-16.md` 中 trace/eBPF 约束：
+
+- `dae trace` 是 feature-gated CLI surface，不能把 trace 默认并入生产 runtime。
+- trace C object 不是 tproxy 数据面替代物，而是后置观测/诊断模块。
+- trace 依赖 Linux eBPF build pipeline、BTF、kprobe、ringbuf 和 kallsyms；失败要区分环境限制和产品缺陷。
+- trace native parity 不能只看 section 名称，必须覆盖 ringbuf record ABI、config rewrite、BTF target discovery、skb lifetime 追踪、事件消费和 attach/load 证据。
+
+本轮审计结论：
+
+- `trace/kern/trace.c` 的 kernel program surface 包含：
+  - `events` ringbuf map。
+  - `skb_addresses` hash map，用于同一 skb 多个 kprobe 事件的跟踪去重。
+  - `tracing_cfg` 只读 config，包含 network-order port、l4 proto、ip version。
+  - 5 个按 skb 参数位置分发的 kprobe section：`kprobe/skb-1` 到 `kprobe/skb-5`。
+  - `kprobe/skb_lifetime_termination`，在 `kfree_skbmem` 路径删除 `skb_addresses`。
+  - `get_netns/filter_l3_and_l4/set_meta/set_tuple` 依赖 `sk_buff`、`sock`、`task_struct`、`iphdr/ipv6hdr/tcphdr/udphdr` 的 CO-RE 字段读取。
+- `trace/trace.go` 的 userspace 合同包含：
+  - `rewriteAndLoadBpfViaGo()` 写入 `tracing_cfg` 并重写 `events` ringbuf size。
+  - `searchAvailableTargets()` 通过 kernel BTF 查找 `sk_buff` 指针参数，最多支持第 1-5 个参数。
+  - `attachBpfToTargets()` 将不同参数位置的 kernel function attach 到对应 `kprobe_skb_N`。
+  - `handleEvents()` 从 ringbuf 读 `traceEventRecord`，用 kallsyms 解析 PC，并按 skb lifetime 输出完整轨迹。
+
+本轮源码修改：
+
+- 新增 `rust/crates/dae-ebpf-support/src/kernel_program_trace.rs`。
+  - 新增 `TraceEventAbiContract`，固化 C ringbuf event 与 Go `traceEventRecord` 的 ABI 尺寸：
+    - `meta_size=88`
+    - `tuple_size=42`
+    - `event_size=130`
+    - `tracing_config_size=6`
+    - `events_c_default_bytes=1<<29`
+    - `events_go_default_bytes=64MiB`
+  - 新增 `TraceConfigRewriteContract`，记录 `port` network-order、`l4_proto` host-order、`ip_version` u8、显式 padding、ringbuf runtime override。
+  - 新增 `TraceKprobeProgramSpec` 和 `trace_kprobe_program_specs()`，固化 5 个 skb 参数位置 section 与 1 个 lifetime termination section。
+  - 新增 `TraceTargetDiscoveryContract`，记录 feature gate、`trace` build tag、kernel BTF、max skb arg position、`kfree_skbmem` lifetime target、`bpf_get_func_ip` 和 kallsyms PC symbolization。
+  - 新增 `trace_kprobe_evidence_queue()`，把 trace gate 拆为 7 条证据：
+    - `trace_event_ringbuf_record_abi`：passed。
+    - `tracing_cfg_rewrite_contract`：passed。
+    - `events_ringbuf_and_skb_addresses_maps`：passed。
+    - `btf_skb_target_discovery_contract`：passed。
+    - `rust_skb_core_read_semantics`：missing。
+    - `rust_trace_load_pin_smoke`：missing。
+    - `rust_trace_attach_and_ringbuf_smoke`：missing。
+  - 新增 `trace_kprobe_evidence_admitted()`，当前为 false。
+- `rust/crates/dae-ebpf-support/src/kernel_program.rs`
+  - 总 `kernel_program_parity_evidence_queue()` 纳入 trace evidence queue。
+  - `trace_kprobe_coverage_passed` 需要 section coverage 与 trace evidence queue 同时通过；当前仍为 false。
+- `rust/crates/dae-ebpf-support/src/lib.rs`
+  - 导出 trace contract 与 evidence queue API。
+- 新增 `rust/crates/dae-ebpf-support/src/kernel_program_trace_tests.rs`。
+  - 覆盖 trace event ABI、config rewrite、kprobe program spec、target discovery、trace evidence queue failure-closed 行为。
+
+验证记录：
+
+| 验证项 | 结果 |
+| --- | --- |
+| `cargo fmt --manifest-path rust/Cargo.toml --all` | pass |
+| `cargo test --manifest-path rust/Cargo.toml -p dae-ebpf-support trace` | pass，5 passed |
+| `cargo test --manifest-path rust/Cargo.toml -p dae-ebpf-support kernel_program` | pass，14 passed |
+| `cargo test --manifest-path rust/Cargo.toml -p dae-daemon production_runtime_owner_report_is_read_only_by_default` | pass，1 passed |
+
+本轮结论：
+
+- trace gate 已经从“单一 missing 项”变成可审计 evidence queue。
+- 已闭合的是 trace ABI/config/map/target discovery 合同，不是 Rust native trace program。
+- `trace_kprobe_coverage` 仍保持 missing；不能删除 C trace object，不能打开 default switch。
+- 后续要真正闭合 trace，需要实现 Rust/Aya eBPF trace program 对 `sk_buff` CO-RE 字段读取的等价语义，并补 `trace-loader load-pin` 与真实 kprobe attach/ringbuf smoke。
+
+### Kernel-program trace Rust object skeleton load-pin 记录（2026-05-30）
+
+本节继续承接 kernel-program parity admission gate。修改前再次复核：
+
+- `DAEX_RUST_REBUILD_PLAN_2026-05-16.md`：A4 只能做 Rust/aya-ebpf kernel program 可行性、coverage 和小型 verifier/golden 实验；正式替换必须另开 parity 准入，不删除 C object / Go fallback。
+- `DAENEW_RUST_REBUILD_MEMO_2026-05-16.md` `5.13 Trace and diagnostics`：`dae trace` 是 feature-gated CLI surface，依赖 BTF/kprobe/ringbuf/kallsyms，不能并入默认生产 runtime。
+- `DAENEW_RUST_REBUILD_MEMO_2026-05-16.md` `5.11` 与第 11 节：eBPF loader/map/attach 行为必须保持 ABI 和 ownership 边界，不得用测试机配置或固定 offset 代替通用实现。
+
+本轮推进目标：
+
+- 只闭合 `rust_trace_load_pin_smoke` 这条证据。
+- 不把 trace skeleton 计为 `rust_skb_core_read_semantics`。
+- 不把 trace skeleton 计为 `rust_trace_attach_and_ringbuf_smoke`。
+- 不打开 default switch，不删除 C trace object，不删除 Go userspace/control-plane fallback。
+
+源码修改：
+
+- `rust/crates/dae-ebpf-program/Cargo.toml`
+  - 新增 feature：
+    - `default = ["tproxy-program"]`
+    - `tproxy-program`
+    - `trace-program`
+  - 默认构建仍只生成 tproxy object，避免 trace maps/sections 污染正式 tproxy object catalog。
+- `rust/crates/dae-ebpf-program/src/lib.rs`
+  - 按 feature 拆分 tproxy modules 与 trace module。
+- `rust/crates/dae-ebpf-program/src/trace.rs`
+  - 新增 Rust/Aya trace object skeleton：
+    - `events` ringbuf map，默认 `1<<29` bytes，可由 loader override。
+    - `skb_addresses` hash map，`u64 -> u8`，`1024` entries。
+    - `tracing_cfg` global，6 bytes，对齐 Go loader 写入的 `port/l4_proto/ip_vsn/pad`。
+    - 6 个 kprobe section：
+      - `kprobe/skb-1`
+      - `kprobe/skb-2`
+      - `kprobe/skb-3`
+      - `kprobe/skb-4`
+      - `kprobe/skb-5`
+      - `kprobe/skb_lifetime_termination`
+  - 注意：当前 skeleton 只用于 object/map/section/load-pin 准入；本轮后已能写入 ringbuf skeleton event，并能更新/删除 `skb_addresses`，但尚未实现 `sk_buff` CO-RE read、L3/L4 filter、meta/tuple 完整填充和真实 attach+ringbuf 消费语义。
+- `rust/crates/dae-ebpf-support/src/kernel_program_trace.rs`
+  - 将 `rust_trace_load_pin_smoke` 从 missing 更新为 passed。
+  - `rust_skb_core_read_semantics` 与 `rust_trace_attach_and_ringbuf_smoke` 继续 missing，因此 `trace_kprobe_evidence_admitted()` 仍为 false。
+- `rust/crates/dae-ebpf-support/src/kernel_program_trace_tests.rs`
+  - 更新 trace evidence queue 测试，确认 load-pin 已 passed，但 trace native 总 gate 仍 failure-closed。
+- `rust/crates/dae-ebpf-support/src/kernel_program_tests.rs`
+  - 增加 admission report 断言：`rust_trace_load_pin_smoke=passed`，`rust_skb_core_read_semantics=missing`。
+
+验证记录：
+
+| 验证项 | 结果 |
+| --- | --- |
+| `cargo fmt --manifest-path rust/Cargo.toml --all --check` | pass |
+| `cargo check --manifest-path rust/Cargo.toml -p dae-ebpf-program` | pass，默认 tproxy feature |
+| `cargo check --manifest-path rust/Cargo.toml -p dae-ebpf-program --no-default-features --features trace-program` | pass |
+| `cargo +nightly build -Z build-std=core --manifest-path rust/Cargo.toml -p dae-ebpf-program --target bpfel-unknown-none --release` | pass，默认 tproxy object |
+| `cargo +nightly build -Z build-std=core --manifest-path rust/Cargo.toml -p dae-ebpf-program --target bpfel-unknown-none --release --no-default-features --features trace-program` | pass，trace object |
+| `llvm-readelf -S/-s rust/target/bpfel-unknown-none/release/libdae_ebpf_program.so` after trace build | pass，存在 6 个 `kprobe/*` section、`events`、`skb_addresses`、`tracing_cfg` |
+| `cargo build --manifest-path rust/Cargo.toml -p dae-aya-bpf-loader --features native-ebpf` | pass |
+| `dae-aya-bpf-loader trace-loader load-pin --pin-root /sys/fs/bpf/dae-trace-load-pin-smoke ...` | pass，2 maps + 6 programs 全部 pin 成功 |
+| bpffs residue cleanup | pass，已删除 `/sys/fs/bpf/dae-trace-load-pin-smoke` |
+| trace build 后重建默认 tproxy object | pass |
+| 默认 tproxy object `llvm-readelf -S/-s` | pass，仅含 `classifier/*`、`cgroup/*`、tproxy maps、`PARAM`，无 trace kprobe/maps 污染 |
+| `cargo test --manifest-path rust/Cargo.toml -p dae-ebpf-support trace` | pass，5 passed |
+| `cargo test --manifest-path rust/Cargo.toml -p dae-ebpf-support kernel_program` | pass，14 passed |
+
+补充说明：
+
+- 第一次尝试把 pin root 放在 `/tmp/dae-trace-load-pin-smoke`，`BPF_OBJ_PIN` 返回 `Operation not permitted`；这不是 object/verifier 失败，而是 BPF object pin 必须落在 bpffs。已改用 `/sys/fs/bpf/dae-trace-load-pin-smoke` 并清理。
+- 由于 trace build 与默认 tproxy build 当前输出同一路径 `rust/target/bpfel-unknown-none/release/libdae_ebpf_program.so`，完成 trace smoke 后必须立即重建默认 tproxy object，避免后续 runtime gate 误用 trace object。
+
+本轮结论：
+
+- `rust_trace_load_pin_smoke` 已由真实 Rust/Aya trace object + Rust/Aya loader load-pin 闭合为 passed。
+- `trace_kprobe_coverage` 仍未通过，剩余 trace 缺口：
+  - `rust_skb_core_read_semantics`
+  - `rust_trace_attach_and_ringbuf_smoke`
+- 当前不能删除 C trace object，不能删除 Go fallback，不能打开 default switch。
+- 下一步如继续 trace parity，应先解决 CO-RE binding 生成/准入问题，再实现 `get_netns/filter_l3_and_l4/set_meta/set_tuple` 的 Rust/Aya 等价语义；不能手写固定 offset，也不能按测试机配置特化。
+
+### Kernel-program trace ringbuf skeleton 补充记录（2026-05-30）
+
+本节继续承接 A4/kernel-program trace gate。修改前仍以 `DAEX_RUST_REBUILD_PLAN_2026-05-16.md` 的阶段 8 trace/sysdump 记录，以及 `DAENEW_RUST_REBUILD_MEMO_2026-05-16.md` `5.11`、`5.13`、`16.4`、`28.6` 为边界：
+
+- `dae trace` 保持 feature-gated 诊断能力，不进入默认生产 dataplane。
+- BTF target auto-discovery 是 trace 的核心能力；不能用少数固定 kprobe target 替代最终 parity。
+- `sk_buff`、`task_struct`、`sock` 等字段读取必须走 CO-RE 等价路径；不能按本机 kernel offset 或测试机配置手写。
+- 本轮只推进 Rust/Aya trace object 的 verifier/load-pin 和 ringbuf skeleton，不标记 trace 总 gate 通过。
+
+本轮源码推进：
+
+- `rust/crates/dae-ebpf-program/src/trace.rs`
+  - `kprobe_skb_1` 到 `kprobe_skb_5` 现在会读取对应参数位的 skb 地址。
+  - 新 skb 地址会写入 `skb_addresses`，已跟踪 skb 会继续输出事件。
+  - 事件通过 `events` ringbuf 输出，当前填充 `pc`、`skb`、`second_param`，其余 meta/tuple 字段保持 0，避免伪造未实现语义。
+  - `kprobe_skb_lifetime_termination` 现在会按 arg0 删除 `skb_addresses`。
+- 仍未修改 `trace/kern/trace.c`、Go trace attach/ringbuf 消费路径或默认 daemon 路径。
+
+验证记录：
+
+| 验证项 | 结果 |
+| --- | --- |
+| `cargo check --manifest-path rust/Cargo.toml -p dae-ebpf-program --no-default-features --features trace-program` | pass |
+| `cargo +nightly build -Z build-std=core --manifest-path rust/Cargo.toml -p dae-ebpf-program --target bpfel-unknown-none --release --no-default-features --features trace-program` | pass |
+| `llvm-readelf -s rust/target/bpfel-unknown-none/release/libdae_ebpf_program.so` | pass，存在 `events`、`skb_addresses`、`tracing_cfg`、6 个 trace kprobe program |
+| `llvm-objdump -d --no-show-raw-insn rust/target/bpfel-unknown-none/release/libdae_ebpf_program.so` | pass，trace kprobe 路径包含 `bpf_get_func_ip`、`bpf_ringbuf_output`，lifetime 路径包含 map delete |
+| `cargo build --manifest-path rust/Cargo.toml -p dae-aya-bpf-loader --features native-ebpf` | pass |
+| `dae-aya-bpf-loader trace-loader load-pin --pin-root /sys/fs/bpf/dae-trace-load-pin-smoke ...` | pass，输出 `status=pass`，2 个 map 和 6 个 program 全部 pin 成功 |
+| `dae-aya-bpf-loader trace-loader attach-ringbuf-smoke --target ip_rcv_core --program-name kprobe_skb_1 --trigger loopback-udp ...` | pass，真实 attach kprobe 并消费 ringbuf：`events_seen=8`、`first_event_len=130`、`first_event_pc_nonzero=true`、`first_event_skb_nonzero=true` |
+| trace smoke 后重建默认 tproxy object | pass，默认 object 恢复为 `classifier/*`、`cgroup/*`、tproxy maps、`PARAM`，无 trace kprobe/maps 污染 |
+| bpffs residue cleanup | pass，已删除 `/sys/fs/bpf/dae-trace-load-pin-smoke` |
+| `cargo fmt --manifest-path rust/Cargo.toml --all --check` | pass |
+| `cargo test --manifest-path rust/Cargo.toml -p dae-ebpf-support trace` | pass，5 passed |
+| `cargo test --manifest-path rust/Cargo.toml -p dae-ebpf-support kernel_program` | pass，14 passed |
+| `cargo test --manifest-path rust/Cargo.toml -p dae-ebpf-support --features aya-loader` | pass，53 passed |
+| `cargo test --manifest-path rust/Cargo.toml -p dae-aya-bpf-loader` | pass，20 passed |
+| `cargo test --manifest-path rust/Cargo.toml -p dae-daemon production_runtime_owner` | pass，67 passed |
+| `cargo test --manifest-path rust/Cargo.toml --workspace --quiet` | pass |
+| `git diff --check` | pass |
+| residue check：`/tmp`、`/sys/fs/bpf`、`ip netns list`、`ip link show type veth`、`/sys/fs/cgroup` | pass，无本轮 trace smoke/netns/veth/cgroup 残留 |
+
+本轮结论：
+
+- Rust/Aya trace object 已从空 section/load-pin skeleton 推进到 ringbuf event skeleton。
+- `rust_trace_load_pin_smoke` 仍保持 passed；新增 `rust_trace_attach_and_ringbuf_smoke=passed`，覆盖非默认、显式目标的 Rust/Aya kprobe attach 与 ringbuf 消费闭环。
+- `rust_skb_core_read_semantics` 仍为 missing：本地当前没有 `aya-tool`、`bpftool`、`bindgen`，`aya-ebpf-bindings` 内置 `sk_buff`/`task_struct` 等为 opaque struct，不能安全实现 CO-RE 字段读取。
+- `trace_kprobe_coverage` 仍未通过：当前 attach smoke 只证明 attach/ringbuf 机制，不能替代 `get_netns/filter_l3_and_l4/set_meta/set_tuple` 的 CO-RE 语义，也不能替代最终 BTF target discovery 覆盖。
+- C trace object、Go trace fallback、Go userspace/control-plane 边界必须继续保留，default switch 仍不允许打开。
+
+CO-RE 继续推进前置审计：
+
+- 本地 `/sys/kernel/btf/vmlinux` 存在，可作为 kernel BTF 输入。
+- 本地已安装 `clang`、`llvm-readelf`、`llvm-objdump`、`llvm-strip`。
+- 本地未安装 `bpftool`、`bindgen`、`aya-tool`；Debian 12 apt 源中可用 `bpftool` 和 `bindgen`，但本轮未安装，避免在未定生成策略前引入宿主依赖。
+- `aya-ebpf-bindings` 当前内置 `sk_buff`、`task_struct`、`iphdr`、`ipv6hdr` 等为 opaque struct，不能直接访问 `head`、`network_header`、`transport_header`、`mark`、`dev`、`pid`、`mm.arg_start` 等字段。
+- 因此 `rust_skb_core_read_semantics` 不允许用固定 offset 或本机特化结构体硬过；下一步需要先确定 Rust/Aya CO-RE binding 生成策略，再实现并验证 `get_netns/filter_l3_and_l4/set_meta/set_tuple`。
+
+### Kernel-program trace CO-RE 远程验证记录（2026-05-30）
+
+本节承接 A4/kernel-program trace gate。修改和验证前再次复核：
+
+- `DAEX_RUST_REBUILD_PLAN_2026-05-16.md`：A4 只允许做 Rust/aya-ebpf kernel program 可行性评估、verifier/golden/coverage 证据，不允许提前删除 C object、Go fallback 或打开默认切换。
+- `DAENEW_RUST_REBUILD_MEMO_2026-05-16.md` `5.11`、`5.13`、第 11 节：trace/tproxy/netns/eBPF 必须按 ABI、map ownership、BTF/kprobe/ringbuf 语义逐项对齐；`sk_buff`、`task_struct`、`sock`、`net_device` 等字段读取必须是 CO-RE 等价路径，不能写固定 offset，也不能按测试机配置特化。
+
+远程测试机环境：
+
+- 目标：`38.65.91.47:5122`，仅用于 CO-RE/BTF/verifier 测试环境，不作为通用实现标准。
+- OS/kernel：Debian 12，kernel `6.12.86+deb12-amd64`。
+- BTF/mount：
+  - `/sys/kernel/btf/vmlinux` 存在，约 4.9 MiB。
+  - `bpffs`、`debugfs`、`tracefs`、`cgroup2` 均已挂载。
+- 按授权安装测试工具：
+  - `bpftool`
+  - `bindgen`
+  - `clang`
+  - `llvm`
+  - `libclang-dev`
+  - `make`
+  - `pkg-config`
+- 远程 apt 前置处理：
+  - `/etc/apt/sources.list.d/xanmod-kernel.list` 指向的源不可用，已临时重命名为 `xanmod-kernel.list.disabled-daex-core-test-20260530`，用于解除 `apt-get update` 阻断。
+
+验证记录：
+
+| 验证项 | 结果 | 结论 |
+| --- | --- | --- |
+| `bpftool btf dump file /sys/kernel/btf/vmlinux format c` | pass | 远程 kernel BTF 可读取，包含 `struct sk_buff`、`dev`、`sk`、`head`、`data`、`network_header`、`transport_header`、`mark` 等 trace 需要字段。 |
+| 远程编译 `trace/kern/trace.c` 为 `trace_c_core.o` | pass | 现有 C trace CO-RE 基线可在 38 机编译。 |
+| `bpftool prog loadall trace_c_core.o ... type kprobe` | pass | 6 个 C trace kprobe program 均可被 verifier 接受并 pin：`kprobe_skb_1..5`、`kprobe_skb_lifetime_termination`。 |
+| C trace object `.BTF.ext` header | pass | `core_relo_len=0x1264`，证明 C 基线包含真实 CO-RE relocation。 |
+| 远程 `bindgen --use-core` 生成 `vmlinux_bindings.rs` | partial | 生成物包含 `sk_buff`、`task_struct`、`iphdr` 等字段；但 clang 14 对 `preserve_access_index` 输出大量 `unknown attribute ... ignored`，生成的 Rust binding 中没有 preserve/access-index/relocation 标记。 |
+| 当前 Rust trace object `.BTF.ext` header | fail for CO-RE | `core_relo_len=0`；当前 Rust/Aya trace skeleton 有 BTF.ext line/func info，但没有 CO-RE relocation。 |
+| 临时最小 Rust field-read probe | fail for CO-RE | 即使 Rust 代码实际读取一个 `SkBuff` 字段，`core_relo_len` 仍为 0；不能把普通 Rust struct 字段访问当作 CO-RE。 |
+| 测试残留清理 | pass | 已清理本地 `/tmp/daex-core-rust-probe*`、`/tmp/daex-rust-trace-btfext.bin`，以及 38 机 `/tmp/daex-core-test`、`/sys/fs/bpf/daex-core-*`、`/sys/fs/bpf/dae-trace-load-pin-smoke`。 |
+
+本轮结论：
+
+- 38 机内核/BTF/verifier 环境支持现有 C trace CO-RE object；问题不在测试机内核能力。
+- 当前 Rust/Aya/bpf-linker 路径可以生成可加载、可 attach、可 ringbuf 输出的 trace skeleton，但尚不能证明生成 `sk_buff` 字段级 CO-RE relocation。
+- `bindgen --use-core` 只能证明能生成 Rust 字段绑定，不能证明 Rust object 具备 CO-RE；在当前工具链下还不能用它替代 `BPF_CORE_READ`。
+- `rust_skb_core_read_semantics` 必须继续保持 missing。
+- `trace_kprobe_coverage` 必须继续保持 failure-closed。
+- C trace object、Go trace fallback、Go userspace/control-plane fallback 必须继续保留。
+- 不允许为了通过 gate 写固定 offset、按 38 机内核布局写结构体、或按测试机配置特化 trace 逻辑。
+
+后续允许路线：
+
+- 路线 A：继续保留 C trace CO-RE object，由 Rust/Aya userspace loader/admission 逐步接管 load/attach/map/ringbuf，但 kernel trace program 本体仍以 C CO-RE 为准，直到 Rust 工具链能生成等价 CO-RE relocation。
+- 路线 B：另开受控 toolchain spike，验证新版 Rust/LLVM/bpf-linker/aya-tool 是否能为真实 `sk_buff` 字段访问生成非零 `core_relo_len`，并以 `.BTF.ext core_relo_len>0`、远程 verifier load、ringbuf semantic parity 三项作为准入。
+- 不走路线：不使用固定 offset，不做 kernel-version-specific binding，不把普通 Rust binding 字段访问标记为 CO-RE 等价。
+
+### Kernel-program trace CO-RE side-load 临时屏蔽记录（2026-05-30）
+
+本节继续承接 A4/kernel-program trace gate。修改前参考：
+
+- `DAEX_RUST_REBUILD_PLAN_2026-05-16.md`：A4 不允许把未完成的 Rust/Aya trace CO-RE 能力作为默认切换依据。
+- `DAENEW_RUST_REBUILD_MEMO_2026-05-16.md` `5.11`、`5.13`、第 11 节：trace/eBPF 必须按 ABI、BTF、kprobe、ringbuf、map ownership 对齐，不能用固定 offset 或测试机内核布局替代 CO-RE。
+- 上一节 38 机验证结论：C trace object 有真实 `core_relo_len=0x1264`，当前 Rust/Aya trace object 和最小 Rust field-read probe 均为 `core_relo_len=0`。
+
+本轮决策：
+
+- CO-RE side-load 能力暂时屏蔽。
+- 保留 trace-loader contract、parse contract 和后续路线记录，便于后续 toolchain spike 恢复。
+- 不删除 C trace object，不删除 Go trace fallback，不删除 Go userspace/control-plane fallback。
+- 不把历史 load-pin / attach-ringbuf smoke 当作当前 admission passed 能力。
+
+代码修改：
+
+- `rust/crates/dae-ebpf-support/src/aya_loader.rs`
+  - 新增 `TRACE_CORE_SIDELOAD_ENABLED=false`。
+  - 新增统一 disabled reason。
+  - `load_pin_aya_trace_object()` 入口直接返回 disabled error。
+  - `attach_ringbuf_smoke_aya_trace_object()` 入口直接返回 disabled error。
+- `rust/crates/dae-ebpf-support/src/kernel_program_trace.rs`
+  - `rust_trace_load_pin_smoke` 从 `passed` 改回 `missing`。
+  - `rust_trace_attach_and_ringbuf_smoke` 从 `passed` 改回 `missing`。
+  - `rust_skb_core_read_semantics` 继续 `missing`。
+- `rust/crates/dae-aya-bpf-loader/src/lib.rs`
+  - `trace-loader contract` 明确输出：
+    - `core_sideload_enabled=false`
+    - `go_trace_adoption_ready=false`
+    - `non_default_smokes.attach_ringbuf=disabled`
+    - `disabled_reason`
+  - 不带 `native-ebpf` feature 时，`trace-loader load-pin` / `attach-ringbuf-smoke` 也返回同一 disabled reason。
+- 测试同步更新：
+  - trace evidence queue 断言 side-load 两项为 `missing`。
+  - CLI contract 断言 side-load disabled。
+  - CLI load-pin / attach-ringbuf-smoke 断言返回 disabled。
+
+当前准入结论：
+
+- `trace_kprobe_coverage` 继续 failure-closed。
+- `rust_skb_core_read_semantics` 继续 missing。
+- CO-RE side-load 当前不可执行、不可作为 adoption ready 证据。
+- default switch 仍不允许打开。
+
+### Kernel-program trace CO-RE side-load gate 报告化记录（2026-05-30）
+
+本节继续承接 A4/kernel-program trace gate，修改前仍参考：
+
+- `DAEX_RUST_REBUILD_PLAN_2026-05-16.md`：A4 是 kernel program 可行性和准入证据阶段，不允许把未完成 trace CO-RE 能力计入默认切换。
+- `DAENEW_RUST_REBUILD_MEMO_2026-05-16.md` `5.11`、`5.13`、第 11 节：eBPF trace 必须保留 C CO-RE oracle、BTF/kprobe/ringbuf/map ABI 和 Go trace fallback 边界，直到 Rust/Aya 能证明字段级 CO-RE relocation parity。
+
+本轮目标：
+
+- 不再只靠常量和备忘录描述屏蔽状态。
+- 将 CO-RE side-load 屏蔽状态纳入正式可查询 gate/report。
+- 让 read-only daemon report 能明确显示该能力是主动 disabled，而不是缺测试或环境失败。
+
+代码修改：
+
+- `rust/crates/dae-ebpf-support/src/kernel_program_trace.rs`
+  - 新增 `TRACE_CORE_SIDELOAD_DISABLED_REASON`。
+  - 新增 `TraceCoreSideloadGateReport`。
+  - 新增 `trace_core_sideload_gate_report()`，固定输出：
+    - `schema=trace-core-sideload-gate-v1`
+    - `enabled=false`
+    - `go_trace_adoption_ready=false`
+    - `default_daemon_path=false`
+    - `rust_skb_core_read_semantics_required=true`
+    - `rust_core_relocation_required=true`
+    - `c_trace_object_required=true`
+    - `go_trace_fallback_required=true`
+    - `restore_gate=requires nonzero Rust .BTF.ext core_relo_len, verifier load, and semantic ringbuf parity`
+- `rust/crates/dae-ebpf-support/src/aya_loader.rs`
+  - side-load load/attach disabled reason 改为读取 `trace_core_sideload_gate_report()`，避免多处字符串漂移。
+- `rust/crates/dae-aya-bpf-loader/src/lib.rs`
+  - `trace-loader contract` 改为读取同一个 gate report。
+- `rust/crates/dae-daemon/src/production_runtime_owner/report.rs`
+  - `ebpf_backend_capabilities.trace_core_sideload_gate` 新增 read-only 输出。
+- `rust/crates/dae-daemon/src/production_runtime_owner.rs`
+  - read-only report 测试新增 `trace_core_sideload_gate` 断言。
+
+当前准入结论：
+
+- trace CO-RE side-load 屏蔽状态已经成为正式 report 字段。
+- `trace_kprobe_coverage` 继续 missing。
+- C trace object 和 Go trace fallback 继续作为正式保留边界。
+- 恢复该 gate 的唯一准入方向是 Rust 生成非零 `.BTF.ext core_relo_len`，并完成 verifier load 与 semantic ringbuf parity。
+
+### Kernel-program fallback retirement gate 收口记录（2026-05-30）
+
+本节继续承接 A4/kernel-program parity admission。修改前再次参考：
+
+- `DAEX_RUST_REBUILD_PLAN_2026-05-16.md`：eBPF/tproxy/netns 默认切换前必须保持 ABI、listener handoff、reload 复用、netkit/veth 与 attach backend 分层；正式替换必须有完整 parity、benchmark、远程 host-write 与回滚证据。
+- `DAENEW_RUST_REBUILD_MEMO_2026-05-16.md` 第 5.11、5.13、第 11 节：Go userspace control plane/outbound 当前仍是权威边界，C trace CO-RE object 和 Go trace fallback 在 Rust/Aya 不能证明字段级 CO-RE relocation 前必须保留。
+
+本轮目标：
+
+- 不继续扩张 CO-RE trace spike。
+- 不执行远程 host write。
+- 不删除 C tproxy object、C trace object、Go BPF fallback 或 TC command fallback。
+- 将“为什么现在不能删除 fallback / 默认切换”从口头结论固化为 read-only gate/report。
+
+代码修改：
+
+- `rust/crates/dae-ebpf-support/src/kernel_program.rs`
+  - 新增 `KernelProgramFallbackRetirementBlocker`。
+  - 新增 `KernelProgramFallbackRetirementEvidence`。
+  - 新增 `KernelProgramFallbackRetirementGateReport`。
+  - 新增 `kernel_program_fallback_retirement_gate_report()`。
+- `rust/crates/dae-ebpf-support/src/lib.rs`
+  - 导出 fallback retirement gate API。
+- `rust/crates/dae-daemon/src/production_runtime_owner/report.rs`
+  - 在 `ebpf_backend_capabilities` 中新增 `kernel_program_fallback_retirement_gate` read-only report。
+- `rust/crates/dae-daemon/src/production_runtime_owner.rs`
+  - read-only report 测试新增 fallback retirement gate 断言。
+
+当时 gate 语义（后续 `A4 tproxy dataplane 与 trace diagnostic gate 拆分记录` 已修正覆盖）：
+
+| 条件 | 当前状态 |
+| --- | --- |
+| `kernel_program_parity_missing` | blocked，仍有 `trace_kprobe_coverage` / `remote_host_write_admission` |
+| `trace_core_sideload_disabled` | blocked，Rust/Aya trace CO-RE side-load 已主动关闭 |
+| `remote_host_write_admission_missing` | blocked，本轮不执行真实 host write |
+| `explicit_user_approval_missing` | blocked，read-only report 不记录删除批准 |
+| `product_chain_recertification_missing` | blocked，未执行产品链默认切换复认证 |
+
+当前结论：
+
+- `default_switch_allowed=false`。
+- `c_tproxy_object_retirement_allowed=false`。
+- `c_trace_object_retirement_allowed=false`。
+- `go_bpf_fallback_retirement_allowed=false`。
+- `tc_command_fallback_retirement_allowed=false`；即使后续 Go/C fallback 满足删除条件，TC command fallback 仍需作为 host ops 安全回退单独准入。
+- Go userspace control plane/outbound 继续保持权威，不纳入本 gate 删除范围。
+
+验证记录：
+
+| 验证项 | 结果 |
+| --- | --- |
+| `cargo fmt --manifest-path rust/Cargo.toml --all --check` | pass |
+| `cargo test --manifest-path rust/Cargo.toml -p dae-ebpf-support kernel_program` | pass，17 passed |
+| `cargo test --manifest-path rust/Cargo.toml -p dae-daemon production_runtime_owner_report_is_read_only_by_default` | pass，1 passed |
+| `cargo test --manifest-path rust/Cargo.toml -p dae-ebpf-support --features aya-loader` | pass，56 passed |
+| `cargo test --manifest-path rust/Cargo.toml -p dae-daemon production_runtime_owner` | pass，67 passed |
+| `git diff --check` | pass |
+
+### A4 Go BPF fallback retirement 顶层字段语义修正（2026-05-30）
+
+本节继续承接 `A4 tproxy dataplane 与 trace diagnostic gate 拆分记录`。修改前再次参考：
+
+- `DAEX_RUST_REBUILD_PLAN_2026-05-16.md`：默认切换必须经过产品链、service contract、benchmark、远程 host-write 和 rollback gate；不能把单项 native admission 当作 fallback 删除。
+- `DAENEW_RUST_REBUILD_MEMO_2026-05-16.md` 第 5.11、第 11 节：Go userspace control plane/outbound、C object、TC fallback 和 map/listener/reload ownership 是独立边界；Rust/Aya loader/attach 可准入不等于全部 fallback 已退休。
+
+问题：
+
+- `native_ebpf_completed_a3_admission=true` 原先会让 `production_runtime_owner` 顶层 report 输出：
+  - `go_bpf_fallback_required=false`
+  - `go_bpf_fallback_retired=true`
+- 这会把“A3/native eBPF loader/attach admission 已完成”误写成“Go BPF fallback 已经退休”。
+- 在新的 tproxy-only fallback retirement gate 里，fallback retirement 还需要显式用户删除批准和 product-chain recertification，因此不能由 A3 admission 直接置真。
+
+修正：
+
+- `rust/crates/dae-daemon/src/production_runtime_owner/report.rs`
+  - 顶层 `go_bpf_fallback_required` / `go_bpf_fallback_retired` 改为读取 `ebpf_backend_capabilities.kernel_program_fallback_retirement_gate`。
+  - 新增 `go_bpf_loader_retirement_candidate`，用于表达 tproxy dataplane 当前已经具备 loader retirement candidate。
+  - 新增 `go_bpf_fallback_retirement_gate_admitted`。
+  - 新增 `go_bpf_fallback_retirement_scope`。
+- `rust/crates/dae-daemon/src/production_runtime_owner.rs`
+  - read-only report 测试固定：candidate 可以为 true，但 fallback retirement gate 仍为 false。
+  - native eBPF opt-in 测试固定：`native_ebpf_completed_a3_admission=true` 只代表 native admission，不代表显式 fallback retirement approval。
+- `rust/crates/dae-ebpf-support/src/admission.rs`
+  - `NativeBackendAdmissionEvidence::completed_a3_local()` 不再把 `go_bpf_fallback_retired` 置为 true。
+  - `native_backend_required_checks()` 不再把 `GoBpfFallbackRetired` 作为 native loader/attach admission 的必需检查。
+- `rust/crates/dae-ebpf-support/src/admission_tests.rs`
+  - 将旧的 `native_backend_admission_blocks_missing_go_bpf_retirement` 改为 `native_backend_admission_does_not_claim_go_bpf_fallback_retirement`，固定 native admission 不声明 fallback retirement。
+
+当前字段语义：
+
+| 字段 | 语义 |
+| --- | --- |
+| `go_bpf_loader_retirement_candidate` | tproxy dataplane 证据已满足 loader retirement 候选；不是删除批准 |
+| `go_bpf_fallback_retirement_gate_admitted` | fallback retirement gate 是否完整准入；当前 false |
+| `go_bpf_fallback_required` | 是否仍需保留 Go BPF fallback；当前 true |
+| `go_bpf_fallback_retired` | 是否已允许退休 Go BPF fallback；当前 false |
+| `go_bpf_fallback_retirement_scope` | 当前 scope 为 `tproxy-dataplane-only; trace diagnostic fallback is feature-gated and preserved` |
+
+当前结论：
+
+- A3/native eBPF admission 可以继续作为 native loader/attach 候选能力。
+- Go BPF fallback retirement 必须以后续 gate 为准，不能由 `native_ebpf_completed_a3_admission` 直接置真。
+- Native backend admission 的 required checks 只覆盖 Aya userspace load、map-in-map prepin、TC/TCX/cgroup attach/parity、C object fallback preserved 和 TC command fallback preserved；不再覆盖 Go BPF fallback retirement。
+- product-chain recertification 的 `bpf_go_fallback_retired` 输入因此不会被 A3 admission 误导；未显式准入前继续保持 false。
+- 这不是默认切换，不删除 Go/C/TC fallback。
+
+验证记录：
+
+| 验证项 | 结果 |
+| --- | --- |
+| `cargo fmt --manifest-path rust/Cargo.toml --all` | pass |
+| `cargo test --manifest-path rust/Cargo.toml -p dae-daemon production_runtime_owner_report_is_read_only_by_default` | pass，1 passed |
+| `cargo test --manifest-path rust/Cargo.toml -p dae-daemon production_runtime_owner_native_ebpf_opt_in_requires_compiled_loader` | pass，1 passed |
+| `cargo test --manifest-path rust/Cargo.toml -p dae-daemon daemon_runner_run_command_records_product_chain_recertification` | pass，1 passed |
+| `cargo test --manifest-path rust/Cargo.toml -p dae-ebpf-support admission` | pass，10 passed |
+| `cargo test --manifest-path rust/Cargo.toml -p dae-daemon production_runtime_owner` | pass，67 passed |
+| `cargo test --manifest-path rust/Cargo.toml -p dae-daemon product_chain_recertification` | pass，26 passed |
+| `cargo test --manifest-path rust/Cargo.toml -p dae-daemon release_gate` | pass，2 passed |
+| `cargo test --manifest-path rust/Cargo.toml -p dae-ebpf-support kernel_program` | pass，19 passed |
+| `cargo test --manifest-path rust/Cargo.toml -p dae-ebpf-support --features aya-loader` | pass，58 passed |
+| `cargo fmt --manifest-path rust/Cargo.toml --all --check` | pass |
+| `git diff --check` | pass |
+
+### A4 tproxy dataplane 与 trace diagnostic gate 拆分记录（2026-05-30）
+
+本节承接 A4 Rust/aya-ebpf kernel program 可行性评估。修改前再次参考：
+
+- `DAEX_RUST_REBUILD_PLAN_2026-05-16.md`：eBPF/tproxy/netns 正式切换必须覆盖 loader、map、tc/cgroup attach、reload ownership、benchmark、远程 host write 和 rollback；outbound / daewing / Go userspace control plane 仍作为当前权威边界保留。
+- `DAENEW_RUST_REBUILD_MEMO_2026-05-16.md` 第 5.11、第 5.13、第 11 节：eBPF/tproxy/map ABI 和 trace diagnostics 是不同风险面；trace 是 feature-gated diagnostics，C trace object / Go trace fallback 在 Rust/Aya 不能证明真实 `sk_buff` CO-RE relocation 与 ringbuf 语义前必须保留。
+
+用户确认后的本轮结论：
+
+- CO-RE side-load 保持关闭。
+- Go/C trace CO-RE object 路径不进入当前 tproxy/Aya 默认候选准入。
+- trace 相关源码、feature-gated CLI、C object 和 Go trace fallback 保留，不删除。
+- tproxy dataplane 的默认候选准入不再因为 `trace_kprobe_coverage` 或 `trace_core_sideload_disabled` 被阻断。
+- 这不是默认切换，不删除 C tproxy object，不删除 C trace object，不删除 TC command fallback，不触碰 Go userspace control plane / outbound。
+
+代码修改：
+
+- `rust/crates/dae-ebpf-support/src/kernel_program.rs`
+  - 新增 `TproxyDataplaneAdmissionReport`，只覆盖 tproxy dataplane 默认候选所需证据。
+  - 新增 `TraceDiagnosticGateReport`，把 trace/CO-RE 诊断缺口单独表达为 `deferred_preserved`。
+  - 新增 `tproxy_dataplane_admission_report()` / `trace_diagnostic_gate_report()`。
+  - `tproxy_dataplane_required_checks()` 明确排除 `TraceKprobeCoverage`。
+  - `kernel_program_fallback_retirement_gate_report()` 改为读取 tproxy dataplane gate 和 trace diagnostic gate；fallback retirement scope 固定为 `tproxy-dataplane-only; trace diagnostic fallback is feature-gated and preserved`。
+  - `c_trace_object_retirement_allowed=false`、`trace_diagnostic_retirement_allowed=false`、`go_trace_fallback_required=true` 固定保留。
+- `rust/crates/dae-ebpf-support/src/lib.rs`
+  - 导出 tproxy dataplane gate 与 trace diagnostic gate API。
+- `rust/crates/dae-daemon/src/production_runtime_owner/report.rs`
+  - `ebpf_backend_capabilities` 新增 `tproxy_dataplane_admission` 和 `trace_diagnostic_gate`。
+  - fallback retirement gate JSON 新增 trace diagnostic / go trace fallback / retirement scope 字段。
+- `rust/crates/dae-ebpf-support/src/kernel_program_tests.rs`
+  - 新增 tproxy dataplane gate 单测，确保 required/missing/evidence queue 不含 trace coverage。
+  - 新增 trace diagnostic gate 单测，确保 trace 缺口保留但不参与 tproxy 默认候选。
+- `rust/crates/dae-daemon/src/production_runtime_owner.rs`
+  - read-only report 单测更新：完整 parity view 仍记录 `trace_kprobe_coverage` missing；tproxy dataplane gate 已 admitted；fallback blockers 不再包含 `trace_core_sideload_disabled`。
+
+当前 read-only gate 语义：
+
+| 项 | 当前状态 |
+| --- | --- |
+| `kernel_program_parity_admission` | 未完全 admitted；完整审计视图仍保留 `trace_kprobe_coverage` missing |
+| `tproxy_dataplane_admission` | admitted；不含 trace required check，不含 trace missing check |
+| `trace_diagnostic_gate` | `deferred_preserved`；不参与 tproxy 默认候选 |
+| `kernel_program_fallback_retirement_gate` | 仍未 admitted；阻断来自显式用户删除批准缺失和 product-chain recertification 缺失 |
+| `trace_core_sideload_gate` | `enabled=false`，仅作为 trace diagnostic 恢复条件记录 |
+| C trace object / Go trace fallback | required，不能删除 |
+| TC command fallback | required，不能删除 |
+
+对“关闭 CO-RE side-load 是否影响正常功能”的结论：
+
+- 不影响当前 tproxy/Aya dataplane 正常功能准入，因为当前 tproxy dataplane 使用的证据链是 classifier/cgroup/map ABI/packet golden/runtime/benchmark/host-write，不依赖 trace CO-RE side-load。
+- 内核开启 BTF/CO-RE 能力只是必要条件，不是充分条件；trace side-load 只有在 Rust object 具备非零 `.BTF.ext core_relo_len`、verifier load 和 `sk_buff` 字段语义 parity 后才有意义。
+- 在这些 trace 专属证据完成前，正确做法是让 trace diagnostic 独立保留 C/Go fallback，而不是让 trace 阻塞 tproxy dataplane。
+
+验证记录：
+
+| 验证项 | 结果 |
+| --- | --- |
+| `cargo fmt --manifest-path rust/Cargo.toml --all` | pass |
+| `cargo test --manifest-path rust/Cargo.toml -p dae-ebpf-support kernel_program` | pass，19 passed |
+| `cargo test --manifest-path rust/Cargo.toml -p dae-ebpf-support trace` | pass，8 passed |
+| `cargo test --manifest-path rust/Cargo.toml -p dae-daemon production_runtime_owner_report_is_read_only_by_default` | pass，1 passed |
+| `cargo test --manifest-path rust/Cargo.toml -p dae-daemon production_runtime_owner` | pass，67 passed |
+| `cargo test --manifest-path rust/Cargo.toml -p dae-ebpf-support --features aya-loader` | pass，58 passed |
+
+未执行：
+
+- 未执行远程 host write。
+- 未生成或替换 daed 二进制。
+- 未提交本地。
+- 未推送远程。
+- 未清理或删除任何 C/Go/TC fallback。
+
+本节原始收口结论（后续 `A4 tproxy dataplane 与 trace diagnostic gate 拆分记录` 已修正覆盖）：
+
+- 当前下一阶段已完成为 read-only fallback retirement gate，而不是新增远程 host write 或 CO-RE trace 实验。
+- 当时报告能明确说明 fallback 不能删除的具体 blocker；后续修正后，tproxy dataplane 默认候选不再被 trace/CO-RE 或远程 host-write 缺口阻断，fallback retirement 仍因显式删除批准缺失和产品链复认证缺失保持失败关闭。
+- 该 gate 不改变现有默认行为，不触发真实 host write，不切默认 object source，不删除任何 C/Go/TC fallback。
+
+### 远程 38 host-write runtime admission 收口记录（2026-05-30）
+
+本节承接上一节 fallback retirement gate。用户已授权在远程 38 测试机执行真实 root-gated host write 验证。本轮执行前再次参考：
+
+- `DAEX_RUST_REBUILD_PLAN_2026-05-16.md`：eBPF/tproxy/netns 准入必须覆盖真实 host/netns/tc/BPF 操作、reload/runtime parity、rollback/cleanup 证据。
+- `DAENEW_RUST_REBUILD_MEMO_2026-05-16.md` 第 5.11、第 11 节：BPF object、TC attach、cgroup、listener handoff、reload owner 和 Go userspace control-plane/outbound 边界必须保持，不以测试机配置写特定实现。
+
+执行范围：
+
+- 目标：远程 38 测试机。
+- 方式：上传当前本机生成的 `dae-daemon-optin`、Rust `libdae_ebpf_program.so` 和 C baseline `control/bpf_bpfel.o` 到远端 `/tmp/daex-remote-hostwrite-20260530183055`。
+- 运行 root：`/tmp/dae-daemon-daex-remote-hostwrite-20260530183226`，符合 daemon safe run root 约束。
+- 配置：仅使用本轮临时 `remote-admission.dae`，不以该配置作为通用实现标准。
+- 未修改 systemd、`/usr/bin/dae`、`/usr/bin/daed` 或生产配置。
+- 未删除 C object、Go fallback、TC command fallback。
+
+远端环境确认：
+
+| 项 | 结果 |
+| --- | --- |
+| kernel | `6.12.86+deb12-amd64` |
+| bpffs | mounted |
+| cgroup2 | mounted |
+| BTF | `/sys/kernel/btf/vmlinux` 存在 |
+| `dae.service` | inactive |
+| `daed.service` | inactive |
+
+远端验证结果：
+
+| 验证项 | 结果 |
+| --- | --- |
+| `production_runtime_owner_passed` | true |
+| `production_dataplane_admitted` | true |
+| `reload_runtime_parity_admitted` | true |
+| `attach-production-dae0peer-native-ebpf-program` | pass，`backend=tc_netlink`，`fallback_used=false`，`netns=daens`，`iface=dae0peer` |
+| `attach-lan-ingress-native-ebpf-program` | pass，`backend=tc_netlink`，`fallback_used=false`，`iface=dae50lan0` |
+| `attach-production-dae0-native-ebpf-program` | pass，`backend=tc_netlink`，`fallback_used=false`，`iface=dae0` |
+| production netns link | `auto -> netkit`，`fallback_used=false` |
+| active TCP netns link | `auto -> netkit`，`fallback_used=false` |
+| `sys_fs_bpf_dae.mutated` | false |
+| temporary leftovers | `[]` |
+| remote residue check | 无 `daens` / `dae50` / `dae-native` / `dae-aya` netns、link、bpffs 残留 |
+
+benchmark 记录：
+
+| 项 | 结果 |
+| --- | --- |
+| active TCP relay | 5 iterations，`188063926 ns` total，`37612785.2 ns/connection` |
+| active UDP | 5 iterations，`105835531 ns` total，`21167106.2 ns/packet` |
+| active DNS | 5 iterations，`106102483 ns` total，`21220496.6 ns/query` |
+
+代码准入更新：
+
+- `rust/crates/dae-ebpf-support/src/kernel_program.rs`
+  - 新增 `remote_host_write_runtime_evidence_queue()`。
+  - 新增 `remote_host_write_runtime_evidence_admitted()`。
+  - `KernelProgramParityEvidence::from_feasibility()` 中 `remote_host_write_admission_passed` 改为读取该 evidence queue。
+- `rust/crates/dae-ebpf-support/src/lib.rs`
+  - 导出 remote host-write runtime evidence API。
+- `rust/crates/dae-ebpf-support/src/kernel_program_tests.rs`
+  - 更新 kernel-program parity gate 测试：`remote_host_write_admission` 不再是 missing check。
+  - 增加远程 38 host-write runtime evidence queue 断言。
+- `rust/crates/dae-daemon/src/production_runtime_owner.rs`
+  - fallback retirement gate read-only report 测试更新：不再出现 `remote_host_write_admission_missing` blocker。
+
+当前 gate 变化：
+
+- `remote_host_write_admission` 已按本轮 38 机 root-gated runtime admission 证据收口为 passed。
+- kernel-program 总 gate 仍未完全准入，因为 `trace_kprobe_coverage` 仍 missing。
+- fallback retirement gate 仍 blocked；后续 `A4 tproxy dataplane 与 trace diagnostic gate 拆分记录` 已将 trace diagnostic 从 tproxy 默认候选中拆出，因此当前 tproxy-only retirement blocker 应以代码 gate 为准：
+  - `explicit_user_approval_missing`
+  - `product_chain_recertification_missing`
+- 该远端验证不是默认 daemon/systemd 切换，不允许据此删除 C trace object、Go trace fallback、Go userspace control plane/outbound 或 TC command fallback。
+
+验证记录：
+
+| 验证项 | 结果 |
+| --- | --- |
+| 远端 `dae-daemon-optin run --execute-production-runtime-owner ... --production-runtime-native-ebpf` | pass，`REMOTE_ADMISSION_RC=0` |
+| 远端 manifest 解析 | pass，`production_runtime_owner_passed=true`，`production_dataplane_admitted=true`，`reload_runtime_parity_admitted=true` |
+| 远端 native attach 解析 | pass，`dae0peer` / `dae50lan0` / `dae0` 均 `backend=tc_netlink` 且 `fallback_used=false` |
+| 远端 cleanup residue check | pass，无 `daens` / `dae50` / `dae-native` / `dae-aya` netns、link、bpffs 残留 |
+| `cargo fmt --manifest-path rust/Cargo.toml --all --check` | pass |
+| `cargo test --manifest-path rust/Cargo.toml -p dae-ebpf-support kernel_program` | pass，17 passed |
+| `cargo test --manifest-path rust/Cargo.toml -p dae-daemon production_runtime_owner_report_is_read_only_by_default` | pass，1 passed |
+| `cargo test --manifest-path rust/Cargo.toml -p dae-ebpf-support --features aya-loader` | pass，56 passed |
+| `cargo test --manifest-path rust/Cargo.toml -p dae-daemon production_runtime_owner` | pass，67 passed |
+| `git diff --check` | pass |

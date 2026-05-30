@@ -1114,10 +1114,393 @@ mod tests {
             "not_opted_in"
         );
         assert_eq!(
+            report["ebpf_backend_capabilities"]["kernel_program_feasibility"]["schema"]
+                .as_str()
+                .unwrap(),
+            "kernel-program-feasibility-v1"
+        );
+        assert_eq!(
+            report["ebpf_backend_capabilities"]["kernel_program_feasibility"]
+                ["rust_tproxy_classifier_covered"]
+                .as_u64()
+                .unwrap(),
+            10
+        );
+        assert_eq!(
+            report["ebpf_backend_capabilities"]["kernel_program_feasibility"]
+                ["rust_tproxy_cgroup_covered"]
+                .as_u64()
+                .unwrap(),
+            6
+        );
+        assert_eq!(
+            report["ebpf_backend_capabilities"]["kernel_program_feasibility"]
+                ["rust_trace_kprobe_covered"]
+                .as_u64()
+                .unwrap(),
+            0
+        );
+        assert!(
+            !report["ebpf_backend_capabilities"]["kernel_program_feasibility"]
+                ["default_switch_allowed"]
+                .as_bool()
+                .unwrap()
+        );
+        assert!(
+            report["ebpf_backend_capabilities"]["kernel_program_feasibility"]
+                ["formal_kernel_program_parity_stage_required"]
+                .as_bool()
+                .unwrap()
+        );
+        assert!(
+            report["ebpf_backend_capabilities"]["kernel_program_feasibility"]
+                ["c_trace_object_fallback_required"]
+                .as_bool()
+                .unwrap()
+        );
+        assert_eq!(
+            report["ebpf_backend_capabilities"]["kernel_program_parity_admission"]["schema"]
+                .as_str()
+                .unwrap(),
+            "kernel-program-parity-admission-v1"
+        );
+        assert!(
+            !report["ebpf_backend_capabilities"]["kernel_program_parity_admission"]["admitted"]
+                .as_bool()
+                .unwrap()
+        );
+        assert!(
+            !report["ebpf_backend_capabilities"]["kernel_program_parity_admission"]
+                ["default_switch_allowed"]
+                .as_bool()
+                .unwrap()
+        );
+        assert!(
+            report["ebpf_backend_capabilities"]["kernel_program_parity_admission"]
+                ["fallback_required"]
+                .as_bool()
+                .unwrap()
+        );
+        assert!(
+            report["ebpf_backend_capabilities"]["kernel_program_parity_admission"]
+                ["missing_checks"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|entry| entry.as_str().unwrap() == "trace_kprobe_coverage")
+        );
+        assert_eq!(
+            report["ebpf_backend_capabilities"]["tproxy_dataplane_admission"]["schema"]
+                .as_str()
+                .unwrap(),
+            "tproxy-dataplane-admission-v1"
+        );
+        assert!(
+            report["ebpf_backend_capabilities"]["tproxy_dataplane_admission"]["admitted"]
+                .as_bool()
+                .unwrap()
+        );
+        assert!(
+            report["ebpf_backend_capabilities"]["tproxy_dataplane_admission"]
+                ["default_candidate_allowed"]
+                .as_bool()
+                .unwrap()
+        );
+        assert!(
+            report["ebpf_backend_capabilities"]["tproxy_dataplane_admission"]
+                ["go_bpf_loader_retirement_candidate"]
+                .as_bool()
+                .unwrap()
+        );
+        assert!(
+            !report["ebpf_backend_capabilities"]["tproxy_dataplane_admission"]
+                ["c_tproxy_object_required"]
+                .as_bool()
+                .unwrap()
+        );
+        assert!(
+            report["ebpf_backend_capabilities"]["tproxy_dataplane_admission"]
+                ["c_trace_object_required"]
+                .as_bool()
+                .unwrap()
+        );
+        assert!(
+            report["ebpf_backend_capabilities"]["tproxy_dataplane_admission"]
+                ["trace_diagnostic_excluded_from_default_candidate"]
+                .as_bool()
+                .unwrap()
+        );
+        assert!(
+            report["ebpf_backend_capabilities"]["tproxy_dataplane_admission"]
+                ["tc_command_fallback_required"]
+                .as_bool()
+                .unwrap()
+        );
+        assert!(
+            report["ebpf_backend_capabilities"]["tproxy_dataplane_admission"]
+                ["go_userspace_control_plane_preserved"]
+                .as_bool()
+                .unwrap()
+        );
+        assert!(
+            report["ebpf_backend_capabilities"]["tproxy_dataplane_admission"]["missing_checks"]
+                .as_array()
+                .unwrap()
+                .is_empty()
+        );
+        assert!(
+            !report["ebpf_backend_capabilities"]["tproxy_dataplane_admission"]["required_checks"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|entry| entry.as_str().unwrap() == "trace_kprobe_coverage")
+        );
+        assert!(
+            !report["ebpf_backend_capabilities"]["tproxy_dataplane_admission"]["evidence_queue"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|entry| entry["check"].as_str().unwrap() == "trace_kprobe_coverage")
+        );
+        assert_eq!(
+            report["ebpf_backend_capabilities"]["trace_diagnostic_gate"]["schema"]
+                .as_str()
+                .unwrap(),
+            "trace-diagnostic-gate-v1"
+        );
+        assert_eq!(
+            report["ebpf_backend_capabilities"]["trace_diagnostic_gate"]["status"]
+                .as_str()
+                .unwrap(),
+            "deferred_preserved"
+        );
+        assert!(
+            !report["ebpf_backend_capabilities"]["trace_diagnostic_gate"]
+                ["participates_in_tproxy_default_candidate"]
+                .as_bool()
+                .unwrap()
+        );
+        assert!(
+            report["ebpf_backend_capabilities"]["trace_diagnostic_gate"]["c_trace_object_required"]
+                .as_bool()
+                .unwrap()
+        );
+        assert!(
+            report["ebpf_backend_capabilities"]["trace_diagnostic_gate"]
+                ["go_trace_fallback_required"]
+                .as_bool()
+                .unwrap()
+        );
+        assert!(
+            !report["ebpf_backend_capabilities"]["trace_diagnostic_gate"]
+                ["rust_core_sideload_enabled"]
+                .as_bool()
+                .unwrap()
+        );
+        assert!(
+            !report["ebpf_backend_capabilities"]["trace_diagnostic_gate"]
+                ["fallback_retirement_allowed"]
+                .as_bool()
+                .unwrap()
+        );
+        assert!(
+            report["ebpf_backend_capabilities"]["trace_diagnostic_gate"]["missing_checks"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|entry| entry.as_str().unwrap() == "trace_kprobe_coverage")
+        );
+        assert_eq!(
+            report["ebpf_backend_capabilities"]["trace_core_sideload_gate"]["schema"]
+                .as_str()
+                .unwrap(),
+            "trace-core-sideload-gate-v1"
+        );
+        assert!(
+            !report["ebpf_backend_capabilities"]["trace_core_sideload_gate"]["enabled"]
+                .as_bool()
+                .unwrap()
+        );
+        assert!(
+            !report["ebpf_backend_capabilities"]["trace_core_sideload_gate"]
+                ["go_trace_adoption_ready"]
+                .as_bool()
+                .unwrap()
+        );
+        assert!(
+            report["ebpf_backend_capabilities"]["trace_core_sideload_gate"]
+                ["rust_core_relocation_required"]
+                .as_bool()
+                .unwrap()
+        );
+        assert!(
+            report["ebpf_backend_capabilities"]["trace_core_sideload_gate"]["disabled_reason"]
+                .as_str()
+                .unwrap()
+                .contains("temporarily disabled")
+        );
+        assert_eq!(
+            report["ebpf_backend_capabilities"]["kernel_program_fallback_retirement_gate"]["schema"]
+                .as_str()
+                .unwrap(),
+            "kernel-program-fallback-retirement-gate-v1"
+        );
+        assert!(
+            !report["ebpf_backend_capabilities"]["kernel_program_fallback_retirement_gate"]
+                ["admitted"]
+                .as_bool()
+                .unwrap()
+        );
+        assert!(
+            !report["ebpf_backend_capabilities"]["kernel_program_fallback_retirement_gate"]
+                ["default_switch_allowed"]
+                .as_bool()
+                .unwrap()
+        );
+        assert!(
+            report["ebpf_backend_capabilities"]["kernel_program_fallback_retirement_gate"]
+                ["c_trace_object_required"]
+                .as_bool()
+                .unwrap()
+        );
+        assert!(
+            !report["ebpf_backend_capabilities"]["kernel_program_fallback_retirement_gate"]
+                ["c_trace_object_retirement_allowed"]
+                .as_bool()
+                .unwrap()
+        );
+        assert!(
+            report["ebpf_backend_capabilities"]["kernel_program_fallback_retirement_gate"]
+                ["go_bpf_fallback_required"]
+                .as_bool()
+                .unwrap()
+        );
+        assert!(
+            report["ebpf_backend_capabilities"]["kernel_program_fallback_retirement_gate"]
+                ["go_trace_fallback_required"]
+                .as_bool()
+                .unwrap()
+        );
+        assert!(
+            report["ebpf_backend_capabilities"]["kernel_program_fallback_retirement_gate"]
+                ["tc_command_fallback_required"]
+                .as_bool()
+                .unwrap()
+        );
+        assert!(
+            !report["ebpf_backend_capabilities"]["kernel_program_fallback_retirement_gate"]
+                ["trace_diagnostic_retirement_allowed"]
+                .as_bool()
+                .unwrap()
+        );
+        assert!(
+            report["ebpf_backend_capabilities"]["kernel_program_fallback_retirement_gate"]
+                ["go_userspace_control_plane_preserved"]
+                .as_bool()
+                .unwrap()
+        );
+        assert!(
+            !report["ebpf_backend_capabilities"]["kernel_program_fallback_retirement_gate"]
+                ["explicit_user_approval_recorded"]
+                .as_bool()
+                .unwrap()
+        );
+        let fallback_blockers = report["ebpf_backend_capabilities"]
+            ["kernel_program_fallback_retirement_gate"]["blockers"]
+            .as_array()
+            .unwrap();
+        assert!(
+            fallback_blockers
+                .iter()
+                .any(|entry| entry.as_str().unwrap() == "explicit_user_approval_missing")
+        );
+        assert!(
+            fallback_blockers
+                .iter()
+                .any(|entry| entry.as_str().unwrap() == "product_chain_recertification_missing")
+        );
+        assert!(
+            !fallback_blockers
+                .iter()
+                .any(|entry| entry.as_str().unwrap() == "tproxy_dataplane_admission_missing")
+        );
+        assert!(
+            !fallback_blockers
+                .iter()
+                .any(|entry| entry.as_str().unwrap() == "kernel_program_parity_missing")
+        );
+        assert!(
+            !fallback_blockers
+                .iter()
+                .any(|entry| entry.as_str().unwrap() == "trace_core_sideload_disabled")
+        );
+        assert!(
+            !fallback_blockers
+                .iter()
+                .any(|entry| entry.as_str().unwrap() == "remote_host_write_admission_missing")
+        );
+        assert!(
+            report["ebpf_backend_capabilities"]["kernel_program_fallback_retirement_gate"]
+                ["missing_parity_checks"]
+                .as_array()
+                .unwrap()
+                .is_empty()
+        );
+        assert!(!report["ebpf_backend_capabilities"]["kernel_program_parity_admission"]
+                ["missing_checks"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|entry| entry.as_str().unwrap() == "matched_go_rust_benchmark"));
+        let kernel_program_evidence = report["ebpf_backend_capabilities"]
+            ["kernel_program_parity_admission"]["evidence_queue"]
+            .as_array()
+            .unwrap();
+        assert!(kernel_program_evidence.iter().any(|entry| {
+            entry["check"].as_str().unwrap() == "packet_level_golden_parity"
+                && entry["item"].as_str().unwrap() == "l2_ipv4_tcp"
+                && entry["status"].as_str().unwrap() == "passed"
+        }));
+        assert!(kernel_program_evidence.iter().any(|entry| {
+            entry["check"].as_str().unwrap() == "map_abi_btf_verifier_parity"
+                && entry["item"].as_str().unwrap() == "abi_layout_golden_fixture"
+                && entry["status"].as_str().unwrap() == "passed"
+        }));
+        assert!(kernel_program_evidence.iter().any(|entry| {
+            entry["check"].as_str().unwrap() == "map_abi_btf_verifier_parity"
+                && entry["item"].as_str().unwrap() == "rust_object_btf_timer_verifier_admission"
+                && entry["status"].as_str().unwrap() == "passed"
+        }));
+        assert!(kernel_program_evidence.iter().any(|entry| {
+            entry["check"].as_str().unwrap() == "map_abi_btf_verifier_parity"
+                && entry["item"].as_str().unwrap() == "c_vs_rust_object_map_catalog_diff"
+                && entry["status"].as_str().unwrap() == "passed"
+        }));
+        assert!(kernel_program_evidence.iter().any(|entry| {
+            entry["check"].as_str().unwrap() == "matched_go_rust_benchmark"
+                && entry["item"].as_str().unwrap()
+                    == "count10_same_corpus_default_daemon_ready_benchmark"
+                && entry["status"].as_str().unwrap() == "passed"
+        }));
+        assert_eq!(
             report["contract"]["ebpf_backend"]["selected_backend"]
                 .as_str()
                 .unwrap(),
             "tc_command_fallback"
+        );
+        assert!(
+            report["go_bpf_loader_retirement_candidate"]
+                .as_bool()
+                .unwrap()
+        );
+        assert!(
+            !report["go_bpf_fallback_retirement_gate_admitted"]
+                .as_bool()
+                .unwrap()
+        );
+        assert_eq!(
+            report["go_bpf_fallback_retirement_scope"].as_str().unwrap(),
+            "tproxy-dataplane-only; trace diagnostic fallback is feature-gated and preserved"
         );
         assert!(report["go_bpf_fallback_required"].as_bool().unwrap());
         assert!(!report["go_bpf_fallback_retired"].as_bool().unwrap());
@@ -1232,8 +1615,19 @@ mod tests {
             std::process::id()
         ));
         let report = production_runtime_owner_report(&root, &options).unwrap();
-        assert!(!report["go_bpf_fallback_required"].as_bool().unwrap());
-        assert!(report["go_bpf_fallback_retired"].as_bool().unwrap());
+        assert!(
+            report["go_bpf_loader_retirement_candidate"]
+                .as_bool()
+                .unwrap()
+        );
+        assert!(
+            !report["go_bpf_fallback_retirement_gate_admitted"]
+                .as_bool()
+                .unwrap(),
+            "A3/native admission is not explicit fallback retirement approval"
+        );
+        assert!(report["go_bpf_fallback_required"].as_bool().unwrap());
+        assert!(!report["go_bpf_fallback_retired"].as_bool().unwrap());
         assert!(
             report["ebpf_backend_capabilities"]["native_backend_admission"]["admitted"]
                 .as_bool()
