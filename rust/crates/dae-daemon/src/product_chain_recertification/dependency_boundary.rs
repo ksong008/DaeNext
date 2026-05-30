@@ -13,6 +13,7 @@ pub(super) fn go_mod_dependency_boundary_json(
     let root = go_mod_file_dependency_boundary_json(
         &options.go_mod_file,
         false,
+        &options.dae_repo,
         &options.outbound_repo,
         &options.quic_go_repo,
     );
@@ -32,12 +33,14 @@ pub(super) fn go_mod_dependency_boundary_json(
     let wing = go_mod_file_dependency_boundary_json(
         &options.dae_wing_repo.join("go.mod"),
         true,
+        &options.dae_repo,
         &options.outbound_repo,
         &options.quic_go_repo,
     );
     let dae_core = go_mod_file_dependency_boundary_json(
         &topology.dae_core_repo.join("go.mod"),
         false,
+        &options.dae_repo,
         &options.outbound_repo,
         &options.quic_go_repo,
     );
@@ -65,6 +68,7 @@ pub(super) fn go_mod_dependency_boundary_json(
 fn go_mod_file_dependency_boundary_json(
     path: &Path,
     require_dae_core_replace: bool,
+    dae_repo: &Path,
     outbound_repo: &Path,
     quic_go_repo: &Path,
 ) -> Value {
@@ -77,7 +81,7 @@ fn go_mod_file_dependency_boundary_json(
             "outbound_quic_go_dependency_boundary_preserved": false,
         });
     };
-    let dae_core_replace = text.contains("replace github.com/daeuniverse/dae => ./dae-core");
+    let dae_replace = dae_dependency_replace_target(&text, dae_repo);
     let outbound_replace = dependency_replace_target(
         &text,
         "github.com/daeuniverse/outbound",
@@ -90,7 +94,7 @@ fn go_mod_file_dependency_boundary_json(
         "github.com/ksong008/quic-go",
         quic_go_repo,
     );
-    let dae_core_replace_preserved = !require_dae_core_replace || dae_core_replace;
+    let dae_core_replace_preserved = !require_dae_core_replace || dae_replace.preserved;
     let preserved =
         dae_core_replace_preserved && outbound_replace.preserved && quic_go_replace.preserved;
     json!({
@@ -98,6 +102,9 @@ fn go_mod_file_dependency_boundary_json(
         "path": path_string(path),
         "dae_core_replace_required": require_dae_core_replace,
         "dae_core_replace_preserved": dae_core_replace_preserved,
+        "dae_core_replace_target": dae_replace.target,
+        "dae_core_embedded_replace_preserved": dae_replace.embedded_preserved,
+        "dae_core_local_repo_replace_preserved": dae_replace.local_preserved,
         "outbound_replace_preserved": outbound_replace.preserved,
         "outbound_replace_target": outbound_replace.target,
         "outbound_local_replace_preserved": outbound_replace.local_preserved,
@@ -109,6 +116,33 @@ fn go_mod_file_dependency_boundary_json(
         "outbound_quic_go_still_required": true,
         "outbound_quic_go_dependency_boundary_preserved": preserved,
     })
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct DaeReplaceTarget {
+    preserved: bool,
+    embedded_preserved: bool,
+    local_preserved: bool,
+    target: &'static str,
+}
+
+fn dae_dependency_replace_target(text: &str, dae_repo: &Path) -> DaeReplaceTarget {
+    let embedded_preserved = text.contains("replace github.com/daeuniverse/dae => ./dae-core");
+    let local_preserved = text.contains(&format!(
+        "replace github.com/daeuniverse/dae => {}",
+        path_string(dae_repo)
+    ));
+    let target = match (embedded_preserved, local_preserved) {
+        (true, _) => "embedded",
+        (false, true) => "local",
+        (false, false) => "missing",
+    };
+    DaeReplaceTarget {
+        preserved: embedded_preserved || local_preserved,
+        embedded_preserved,
+        local_preserved,
+        target,
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

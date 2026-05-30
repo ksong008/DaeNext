@@ -1,9 +1,15 @@
 use std::path::Path;
 
 use dae_ebpf_support::{
-    AttachBackend, EbpfBackendCapabilityReport, LiveLoadedTproxyListenSocketMap, LoaderBackend,
-    NativeBackendAdmissionEvidence, NativeBackendAdmissionReport, TproxySocketOptions,
-    dae_cgroup_attach_matrix, native_backend_admission_report, report_only_ebpf_backend_capability,
+    AttachBackend, EbpfBackendCapabilityReport, KernelProgramFallbackRetirementEvidence,
+    KernelProgramFallbackRetirementGateReport, KernelProgramParityAdmissionReport,
+    KernelProgramParityEvidence, LiveLoadedTproxyListenSocketMap, LoaderBackend,
+    NativeBackendAdmissionEvidence, NativeBackendAdmissionReport, TproxyDataplaneAdmissionReport,
+    TproxySocketOptions, TraceDiagnosticGateReport, dae_cgroup_attach_matrix,
+    kernel_program_fallback_retirement_gate_report, kernel_program_feasibility_report,
+    kernel_program_parity_admission_report, native_backend_admission_report,
+    report_only_ebpf_backend_capability, tproxy_dataplane_admission_report,
+    trace_core_sideload_gate_report, trace_diagnostic_gate_report,
 };
 use serde_json::{Map, Value, json};
 
@@ -261,7 +267,10 @@ pub(super) fn report_value(
             "owner_boundary": "dae-daemon",
         }),
     );
-    report.insert("ebpf_backend_capabilities".to_owned(), ebpf_capability_json);
+    report.insert(
+        "ebpf_backend_capabilities".to_owned(),
+        ebpf_capability_json.clone(),
+    );
     report.insert(
         "generic_udp_dns_datapath_contract".to_owned(),
         udp_dns_contract,
@@ -771,13 +780,41 @@ pub(super) fn report_value(
     );
     report.insert("go_default_path_preserved".to_owned(), json!(true));
     report.insert("go_fallback_required".to_owned(), json!(true));
+    let fallback_retirement_gate = &ebpf_capability_json["kernel_program_fallback_retirement_gate"];
+    let tproxy_dataplane_admission = &ebpf_capability_json["tproxy_dataplane_admission"];
+    let go_bpf_fallback_required = fallback_retirement_gate["go_bpf_fallback_required"]
+        .as_bool()
+        .unwrap_or(true);
+    let go_bpf_fallback_retired = fallback_retirement_gate["go_bpf_fallback_retirement_allowed"]
+        .as_bool()
+        .unwrap_or(false);
+    report.insert(
+        "go_bpf_loader_retirement_candidate".to_owned(),
+        json!(
+            tproxy_dataplane_admission["go_bpf_loader_retirement_candidate"]
+                .as_bool()
+                .unwrap_or(false)
+        ),
+    );
+    report.insert(
+        "go_bpf_fallback_retirement_gate_admitted".to_owned(),
+        json!(
+            fallback_retirement_gate["admitted"]
+                .as_bool()
+                .unwrap_or(false)
+        ),
+    );
+    report.insert(
+        "go_bpf_fallback_retirement_scope".to_owned(),
+        fallback_retirement_gate["retirement_scope"].clone(),
+    );
     report.insert(
         "go_bpf_fallback_required".to_owned(),
-        json!(!options.native_ebpf_completed_a3_admission),
+        json!(go_bpf_fallback_required),
     );
     report.insert(
         "go_bpf_fallback_retired".to_owned(),
-        json!(options.native_ebpf_completed_a3_admission),
+        json!(go_bpf_fallback_retired),
     );
     Value::Object(report)
 }
@@ -796,6 +833,17 @@ fn ebpf_backend_capability_json(
         !go_bpf_fallback_retired,
     );
     let native_opt_in = native_backend_runtime_decision(options);
+    let kernel_program = kernel_program_feasibility_report();
+    let kernel_program_evidence = KernelProgramParityEvidence::from_feasibility(&kernel_program);
+    let kernel_program_parity = kernel_program_parity_admission_report(kernel_program_evidence);
+    let tproxy_dataplane_admission = tproxy_dataplane_admission_report(kernel_program_evidence);
+    let trace_core_sideload_gate = trace_core_sideload_gate_report();
+    let trace_diagnostic_gate = trace_diagnostic_gate_report(&trace_core_sideload_gate);
+    let fallback_retirement_gate = kernel_program_fallback_retirement_gate_report(
+        &tproxy_dataplane_admission,
+        &trace_diagnostic_gate,
+        KernelProgramFallbackRetirementEvidence::read_only(),
+    );
     json!({
         "schema": "ebpf-backend-capability-report-v1",
         "report_only": report.report_only,
@@ -861,6 +909,62 @@ fn ebpf_backend_capability_json(
         },
         "native_backend_admission": native_backend_admission_json(&native_admission),
         "native_backend_opt_in": native_backend_opt_in_decision_json(&native_opt_in),
+        "kernel_program_feasibility": {
+            "schema": kernel_program.schema,
+            "tproxy_classifier_total": kernel_program.tproxy_classifier_total,
+            "rust_tproxy_classifier_covered": kernel_program.rust_tproxy_classifier_covered,
+            "tproxy_cgroup_total": kernel_program.tproxy_cgroup_total,
+            "rust_tproxy_cgroup_covered": kernel_program.rust_tproxy_cgroup_covered,
+            "trace_kprobe_total": kernel_program.trace_kprobe_total,
+            "rust_trace_kprobe_covered": kernel_program.rust_trace_kprobe_covered,
+            "rust_tproxy_runtime_admitted": kernel_program.rust_tproxy_runtime_admitted,
+            "trace_rust_native_admitted": kernel_program.trace_rust_native_admitted,
+            "default_switch_allowed": kernel_program.default_switch_allowed,
+            "formal_kernel_program_parity_stage_required": kernel_program.formal_kernel_program_parity_stage_required,
+            "c_tproxy_object_fallback_required": kernel_program.c_tproxy_object_fallback_required,
+            "c_trace_object_fallback_required": kernel_program.c_trace_object_fallback_required,
+            "tc_command_fallback_required": kernel_program.tc_command_fallback_required,
+            "go_userspace_control_plane_authoritative": kernel_program.go_userspace_control_plane_authoritative,
+            "go_bpf_loader_restored_by_this_stage": kernel_program.go_bpf_loader_restored_by_this_stage,
+            "go_bpf_fallback_deletion_allowed_by_this_stage": kernel_program.go_bpf_fallback_deletion_allowed_by_this_stage,
+            "param_model": kernel_program.param_model,
+            "tproxy_coverage": kernel_program.tproxy_coverage
+                .iter()
+                .map(|line| json!({
+                    "surface": line.surface.as_str(),
+                    "c_section": line.c_section,
+                    "rust_section": line.rust_section,
+                    "program_name": line.program_name,
+                    "status": line.status.as_str(),
+                }))
+                .collect::<Vec<_>>(),
+            "trace_coverage": kernel_program.trace_coverage
+                .iter()
+                .map(|line| json!({
+                    "surface": line.surface.as_str(),
+                    "c_section": line.c_section,
+                    "rust_section": line.rust_section,
+                    "program_name": line.program_name,
+                    "status": line.status.as_str(),
+                }))
+                .collect::<Vec<_>>(),
+        },
+        "kernel_program_parity_admission": kernel_program_parity_admission_json(&kernel_program_parity),
+        "tproxy_dataplane_admission": tproxy_dataplane_admission_json(&tproxy_dataplane_admission),
+        "trace_diagnostic_gate": trace_diagnostic_gate_json(&trace_diagnostic_gate),
+        "kernel_program_fallback_retirement_gate": kernel_program_fallback_retirement_gate_json(&fallback_retirement_gate),
+        "trace_core_sideload_gate": {
+            "schema": trace_core_sideload_gate.schema,
+            "enabled": trace_core_sideload_gate.enabled,
+            "go_trace_adoption_ready": trace_core_sideload_gate.go_trace_adoption_ready,
+            "default_daemon_path": trace_core_sideload_gate.default_daemon_path,
+            "rust_skb_core_read_semantics_required": trace_core_sideload_gate.rust_skb_core_read_semantics_required,
+            "rust_core_relocation_required": trace_core_sideload_gate.rust_core_relocation_required,
+            "c_trace_object_required": trace_core_sideload_gate.c_trace_object_required,
+            "go_trace_fallback_required": trace_core_sideload_gate.go_trace_fallback_required,
+            "disabled_reason": trace_core_sideload_gate.disabled_reason,
+            "restore_gate": trace_core_sideload_gate.restore_gate,
+        },
         "loader": {
             "default_object_loader": loader_backend_str(report.loader_contract.default_object_loader),
             "runtime_map_backend": loader_backend_str(report.loader_contract.runtime_map_backend),
@@ -875,6 +979,139 @@ fn ebpf_backend_capability_json(
         } else {
             "report-only capability wiring; no object load, no attach, no tproxy.c change"
         },
+    })
+}
+
+fn kernel_program_parity_admission_json(report: &KernelProgramParityAdmissionReport) -> Value {
+    json!({
+        "schema": report.schema,
+        "admitted": report.admitted,
+        "default_switch_allowed": report.default_switch_allowed,
+        "c_tproxy_object_deletion_allowed": report.c_tproxy_object_deletion_allowed,
+        "c_trace_object_deletion_allowed": report.c_trace_object_deletion_allowed,
+        "go_bpf_fallback_deletion_allowed": report.go_bpf_fallback_deletion_allowed,
+        "fallback_required": report.fallback_required,
+        "required_checks": report
+            .required_checks
+            .iter()
+            .map(|check| check.as_str())
+            .collect::<Vec<_>>(),
+        "missing_checks": report
+            .missing_checks
+            .iter()
+            .map(|check| check.as_str())
+            .collect::<Vec<_>>(),
+        "evidence_queue": report
+            .evidence_queue
+            .iter()
+            .map(|line| json!({
+                "check": line.check.as_str(),
+                "item": line.item,
+                "status": line.status.as_str(),
+                "source": line.source,
+                "required_before_default": line.required_before_default,
+            }))
+            .collect::<Vec<_>>(),
+    })
+}
+
+fn tproxy_dataplane_admission_json(report: &TproxyDataplaneAdmissionReport) -> Value {
+    json!({
+        "schema": report.schema,
+        "admitted": report.admitted,
+        "default_candidate_allowed": report.default_candidate_allowed,
+        "go_bpf_loader_retirement_candidate": report.go_bpf_loader_retirement_candidate,
+        "c_tproxy_object_retirement_candidate": report.c_tproxy_object_retirement_candidate,
+        "c_tproxy_object_required": report.c_tproxy_object_required,
+        "c_trace_object_required": report.c_trace_object_required,
+        "trace_diagnostic_excluded_from_default_candidate": report.trace_diagnostic_excluded_from_default_candidate,
+        "tc_command_fallback_required": report.tc_command_fallback_required,
+        "go_userspace_control_plane_preserved": report.go_userspace_control_plane_preserved,
+        "required_checks": report
+            .required_checks
+            .iter()
+            .map(|check| check.as_str())
+            .collect::<Vec<_>>(),
+        "missing_checks": report
+            .missing_checks
+            .iter()
+            .map(|check| check.as_str())
+            .collect::<Vec<_>>(),
+        "evidence_queue": report
+            .evidence_queue
+            .iter()
+            .map(|line| json!({
+                "check": line.check.as_str(),
+                "item": line.item,
+                "status": line.status.as_str(),
+                "source": line.source,
+                "required_before_default": line.required_before_default,
+            }))
+            .collect::<Vec<_>>(),
+    })
+}
+
+fn trace_diagnostic_gate_json(report: &TraceDiagnosticGateReport) -> Value {
+    json!({
+        "schema": report.schema,
+        "status": report.status,
+        "participates_in_tproxy_default_candidate": report.participates_in_tproxy_default_candidate,
+        "c_trace_object_required": report.c_trace_object_required,
+        "go_trace_fallback_required": report.go_trace_fallback_required,
+        "rust_core_sideload_enabled": report.rust_core_sideload_enabled,
+        "fallback_retirement_allowed": report.fallback_retirement_allowed,
+        "missing_checks": report
+            .missing_checks
+            .iter()
+            .map(|check| check.as_str())
+            .collect::<Vec<_>>(),
+        "evidence_queue": report
+            .evidence_queue
+            .iter()
+            .map(|line| json!({
+                "check": line.check.as_str(),
+                "item": line.item,
+                "status": line.status.as_str(),
+                "source": line.source,
+                "required_before_default": line.required_before_default,
+            }))
+            .collect::<Vec<_>>(),
+        "restore_gate": report.restore_gate,
+    })
+}
+
+fn kernel_program_fallback_retirement_gate_json(
+    report: &KernelProgramFallbackRetirementGateReport,
+) -> Value {
+    json!({
+        "schema": report.schema,
+        "admitted": report.admitted,
+        "default_switch_allowed": report.default_switch_allowed,
+        "c_tproxy_object_retirement_allowed": report.c_tproxy_object_retirement_allowed,
+        "c_trace_object_retirement_allowed": report.c_trace_object_retirement_allowed,
+        "go_bpf_fallback_retirement_allowed": report.go_bpf_fallback_retirement_allowed,
+        "tc_command_fallback_retirement_allowed": report.tc_command_fallback_retirement_allowed,
+        "trace_diagnostic_retirement_allowed": report.trace_diagnostic_retirement_allowed,
+        "c_tproxy_object_required": report.c_tproxy_object_required,
+        "c_trace_object_required": report.c_trace_object_required,
+        "go_bpf_fallback_required": report.go_bpf_fallback_required,
+        "go_trace_fallback_required": report.go_trace_fallback_required,
+        "tc_command_fallback_required": report.tc_command_fallback_required,
+        "go_userspace_control_plane_preserved": report.go_userspace_control_plane_preserved,
+        "retirement_scope": report.retirement_scope,
+        "explicit_user_approval_recorded": report.explicit_user_approval_recorded,
+        "product_chain_recertified": report.product_chain_recertified,
+        "blockers": report
+            .blockers
+            .iter()
+            .map(|blocker| blocker.as_str())
+            .collect::<Vec<_>>(),
+        "missing_parity_checks": report
+            .missing_parity_checks
+            .iter()
+            .map(|check| check.as_str())
+            .collect::<Vec<_>>(),
+        "trace_restore_gate": report.trace_restore_gate,
     })
 }
 

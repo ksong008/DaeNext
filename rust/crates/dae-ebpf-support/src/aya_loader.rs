@@ -7,6 +7,7 @@ use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
 use std::os::unix::ffi::OsStrExt;
 use std::path::{Path, PathBuf};
 
+use aya::maps::RingBuf;
 use aya::programs::{
     CgroupAttachMode, CgroupSock, CgroupSockAddr, LinkOrder, Program, SchedClassifier,
     TcAttachType,
@@ -17,7 +18,7 @@ use aya::programs::{
 use crate::{
     AttachBackend, BpfDaeParam, DaeCgroupAttachLine, DaeCgroupProgramKind, LoaderBackend,
     RuntimeMapRole, TcAttachDirection, TcNativeAttachSpec, TcxAttachOrder, map_catalog,
-    pinned_reuse_maps,
+    pinned_reuse_maps, trace_core_sideload_gate_report,
 };
 
 const BPF_MAP_CREATE: libc::c_uint = 0;
@@ -27,6 +28,7 @@ const BPF_MAP_TYPE_ARRAY_OF_MAPS: u32 = 12;
 const BPF_F_NO_PREALLOC: u32 = 1;
 const LPM_ARRAY_MAP_NAME: &str = "lpm_array_map";
 const UNUSED_LPM_TYPE_NAME: &str = "unused_lpm_type";
+pub const TRACE_CORE_SIDELOAD_ENABLED: bool = false;
 
 unsafe impl aya::Pod for BpfDaeParam {}
 
@@ -119,6 +121,49 @@ pub struct AyaTraceLoadPinReport {
     pub l4_proto: u16,
     pub ip_version: u8,
     pub ringbuf_size: u32,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum AyaTraceAttachSmokeTrigger {
+    LoopbackUdp,
+    OpenProcSelfStat,
+}
+
+impl AyaTraceAttachSmokeTrigger {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::LoopbackUdp => "loopback-udp",
+            Self::OpenProcSelfStat => "open-proc-self-stat",
+        }
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct AyaTraceAttachRingbufSmokeOptions<'a> {
+    pub object: &'a Path,
+    pub target: &'a str,
+    pub program_name: &'a str,
+    pub port: u16,
+    pub l4_proto: u16,
+    pub ip_version: u8,
+    pub ringbuf_size: u32,
+    pub trigger: AyaTraceAttachSmokeTrigger,
+    pub trigger_count: u32,
+    pub poll_attempts: u32,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct AyaTraceAttachRingbufSmokeReport {
+    pub object: PathBuf,
+    pub target: String,
+    pub program_name: String,
+    pub trigger: AyaTraceAttachSmokeTrigger,
+    pub trigger_count: u32,
+    pub poll_attempts: u32,
+    pub events_seen: u32,
+    pub first_event_len: usize,
+    pub first_event_pc_nonzero: bool,
+    pub first_event_skb_nonzero: bool,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -341,6 +386,10 @@ pub fn pin_aya_loaded_object_for_go_adoption(
 pub fn load_pin_aya_trace_object(
     options: AyaTraceLoaderOptions<'_>,
 ) -> Result<AyaTraceLoadPinReport, String> {
+    if !TRACE_CORE_SIDELOAD_ENABLED {
+        return Err(trace_core_sideload_gate_report().disabled_reason.to_owned());
+    }
+
     let map_pin_root = options.pin_root.join("maps");
     let program_pin_root = options.pin_root.join("programs");
     fs::create_dir_all(&map_pin_root)
@@ -416,6 +465,104 @@ pub fn load_pin_aya_trace_object(
     })
 }
 
+pub fn attach_ringbuf_smoke_aya_trace_object(
+    options: AyaTraceAttachRingbufSmokeOptions<'_>,
+) -> Result<AyaTraceAttachRingbufSmokeReport, String> {
+    if !TRACE_CORE_SIDELOAD_ENABLED {
+        return Err(trace_core_sideload_gate_report().disabled_reason.to_owned());
+    }
+
+    let mut loader = aya::EbpfLoader::new();
+    loader.allow_unsupported_maps();
+    let trace_config = AyaTraceConfig {
+        port: crate::htons(options.port),
+        l4_proto: options.l4_proto,
+        ip_version: options.ip_version,
+        pad: 0,
+    };
+    loader.set_global("tracing_cfg", &trace_config, true);
+    loader.set_max_entries("events", options.ringbuf_size);
+
+    let mut ebpf = loader
+        .load_file(options.object)
+        .map_err(|err| format!("aya trace object load failed: {err:?}"))?;
+    let events_map = ebpf
+        .take_map("events")
+        .ok_or_else(|| "aya trace events ringbuf map not found".to_owned())?;
+    let mut ringbuf = RingBuf::try_from(events_map)
+        .map_err(|err| format!("open trace events ringbuf failed: {err:?}"))?;
+
+    let _link_id = {
+        let program = ebpf
+            .program_mut(options.program_name)
+            .ok_or_else(|| format!("aya trace program not found: {}", options.program_name))?;
+        match program {
+            Program::KProbe(program) => {
+                program.load().map_err(|err| {
+                    format!(
+                        "load trace kprobe program {} failed: {err:?}",
+                        options.program_name
+                    )
+                })?;
+                program.attach(options.target, 0).map_err(|err| {
+                    format!(
+                        "attach trace kprobe program {} to {} failed: {err:?}",
+                        options.program_name, options.target
+                    )
+                })?
+            }
+            other => {
+                return Err(format!(
+                    "program {} has unsupported type {:?} for trace attach smoke",
+                    options.program_name,
+                    other.prog_type()
+                ));
+            }
+        }
+    };
+
+    trigger_trace_smoke(options.trigger, options.trigger_count)?;
+
+    let mut events_seen = 0_u32;
+    let mut first_event_len = 0_usize;
+    let mut first_event_pc_nonzero = false;
+    let mut first_event_skb_nonzero = false;
+    for _ in 0..options.poll_attempts.max(1) {
+        while let Some(item) = ringbuf.next() {
+            events_seen = events_seen.saturating_add(1);
+            if first_event_len == 0 {
+                first_event_len = item.len();
+                first_event_pc_nonzero = read_ne_u64(&item, 0).is_some_and(|value| value != 0);
+                first_event_skb_nonzero = read_ne_u64(&item, 8).is_some_and(|value| value != 0);
+            }
+        }
+        if events_seen > 0 {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    }
+    if events_seen == 0 {
+        return Err(format!(
+            "trace attach ringbuf smoke observed no events for target {} using trigger {}",
+            options.target,
+            options.trigger.as_str()
+        ));
+    }
+
+    Ok(AyaTraceAttachRingbufSmokeReport {
+        object: options.object.to_owned(),
+        target: options.target.to_owned(),
+        program_name: options.program_name.to_owned(),
+        trigger: options.trigger,
+        trigger_count: options.trigger_count,
+        poll_attempts: options.poll_attempts,
+        events_seen,
+        first_event_len,
+        first_event_pc_nonzero,
+        first_event_skb_nonzero,
+    })
+}
+
 fn ensure_program_loaded_for_go_adoption(name: &str, program: &mut Program) -> Result<(), String> {
     if program.fd().is_ok() {
         return Ok(());
@@ -450,6 +597,39 @@ fn ensure_trace_program_loaded(name: &str, program: &mut Program) -> Result<(), 
             other.prog_type()
         )),
     }
+}
+
+fn trigger_trace_smoke(
+    trigger: AyaTraceAttachSmokeTrigger,
+    trigger_count: u32,
+) -> Result<(), String> {
+    let count = trigger_count.max(1);
+    match trigger {
+        AyaTraceAttachSmokeTrigger::LoopbackUdp => {
+            let socket = std::net::UdpSocket::bind((std::net::Ipv4Addr::LOCALHOST, 0))
+                .map_err(|err| format!("bind loopback UDP trigger socket failed: {err}"))?;
+            for _ in 0..count {
+                let _ = socket
+                    .send_to(&[0xda, 0xe0], (std::net::Ipv4Addr::LOCALHOST, 9))
+                    .map_err(|err| format!("send loopback UDP trigger packet failed: {err}"))?;
+            }
+            Ok(())
+        }
+        AyaTraceAttachSmokeTrigger::OpenProcSelfStat => {
+            for _ in 0..count {
+                let _ = fs::read("/proc/self/stat")
+                    .map_err(|err| format!("open proc self stat trigger failed: {err}"))?;
+            }
+            Ok(())
+        }
+    }
+}
+
+fn read_ne_u64(bytes: &[u8], offset: usize) -> Option<u64> {
+    let bytes = bytes.get(offset..offset + mem::size_of::<u64>())?;
+    let mut out = [0_u8; mem::size_of::<u64>()];
+    out.copy_from_slice(bytes);
+    Some(u64::from_ne_bytes(out))
 }
 
 fn remove_existing_pin(path: &Path) -> Result<(), String> {

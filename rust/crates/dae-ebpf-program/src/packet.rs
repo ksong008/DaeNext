@@ -300,7 +300,7 @@ unsafe fn parse_ipv6(skb: *mut __sk_buff, network_offset: u32, out: *mut ParsedP
 unsafe fn parse_l4(skb: *mut __sk_buff, transport_offset: u32, out: *mut ParsedPacket) -> i32 {
     let proto = unsafe { (*out).l4proto };
     if proto == IPPROTO_TCP {
-        let mut tcp = [0u8; 14];
+        let mut tcp = [0u8; 20];
         if !unsafe {
             load_bytes(
                 skb,
@@ -317,7 +317,7 @@ unsafe fn parse_l4(skb: *mut __sk_buff, transport_offset: u32, out: *mut ParsedP
             (*out).tcp_flags = tcp[13];
         }
     } else if proto == IPPROTO_UDP {
-        let mut udp = [0u8; 4];
+        let mut udp = [0u8; 8];
         if !unsafe {
             load_bytes(
                 skb,
@@ -333,11 +333,19 @@ unsafe fn parse_l4(skb: *mut __sk_buff, transport_offset: u32, out: *mut ParsedP
             (*out).dport = read_ne_u16(&udp, 2);
         }
     } else if proto == IPPROTO_ICMPV6 {
-        let mut icmp = [0u8; 1];
-        if unsafe { load_bytes(skb, transport_offset, icmp.as_mut_ptr().cast::<c_void>(), 1) } {
-            unsafe {
-                (*out).icmp6_type = icmp[0];
-            }
+        let mut icmp = [0u8; 8];
+        if !unsafe {
+            load_bytes(
+                skb,
+                transport_offset,
+                icmp.as_mut_ptr().cast::<c_void>(),
+                icmp.len() as u32,
+            )
+        } {
+            return -1;
+        }
+        unsafe {
+            (*out).icmp6_type = icmp[0];
         }
     } else {
         return 1;
