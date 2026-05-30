@@ -1366,7 +1366,7 @@ func TestDialSendUsesRequestContext(t *testing.T) {
 		Ip46: &netutils.Ip46{
 			Ip4: netip.MustParseAddr("1.1.1.1"),
 		},
-	}, false)
+	}, false, nil)
 	if !errors.Is(err, context.Canceled) {
 		t.Fatalf("expected canceled error, got %v", err)
 	}
@@ -1502,7 +1502,7 @@ func TestDialSendRetriesTruncatedTCPUDPResponseOverTCP(t *testing.T) {
 		Ip46: &netutils.Ip46{
 			Ip4: netip.MustParseAddr("1.1.1.1"),
 		},
-	}, false)
+	}, false, nil)
 	if err != nil {
 		t.Fatalf("dialSend() returned error: %v", err)
 	}
@@ -1624,7 +1624,7 @@ func TestDialSendDoesNotRetryTruncatedPureUDPResponseOverTCP(t *testing.T) {
 		Ip46: &netutils.Ip46{
 			Ip4: netip.MustParseAddr("1.1.1.1"),
 		},
-	}, false)
+	}, false, nil)
 	if err != nil {
 		t.Fatalf("dialSend() returned error: %v", err)
 	}
@@ -1730,7 +1730,7 @@ func TestDialSendRejectsMismatchedResponseQuestion(t *testing.T) {
 		Ip46: &netutils.Ip46{
 			Ip4: netip.MustParseAddr("1.1.1.1"),
 		},
-	}, false)
+	}, false, nil)
 	if err == nil {
 		t.Fatal("expected dialSend() to reject mismatched response question")
 	}
@@ -1829,7 +1829,7 @@ func TestDialSendRejectsMismatchedResponseIDForUdpUpstream(t *testing.T) {
 		Ip46: &netutils.Ip46{
 			Ip4: netip.MustParseAddr("1.1.1.1"),
 		},
-	}, false)
+	}, false, nil)
 	if err == nil {
 		t.Fatal("expected dialSend() to reject mismatched response id")
 	}
@@ -1929,7 +1929,7 @@ func TestDialSendAllowsZeroResponseIDForDoH(t *testing.T) {
 		Ip46: &netutils.Ip46{
 			Ip4: netip.MustParseAddr("1.1.1.1"),
 		},
-	}, false)
+	}, false, nil)
 	if err != nil {
 		t.Fatalf("expected DoH-style zero response id to be accepted, got: %v", err)
 	}
