@@ -16745,6 +16745,42 @@ CO-RE 继续推进前置审计：
 | `cargo test --manifest-path rust/Cargo.toml -p dae-daemon production_runtime_owner` | pass，67 passed |
 | `git diff --check` | pass |
 
+### daed bootstrap 空配置误导性 warning 收口（2026-05-31）
+
+触发背景：
+
+- 10.10.10.2 替换 `daed2-daex-align-no-go-cgroup-fallback-20260531` 后，启动日志出现：
+  - `No node found.`
+  - `No interface to bind.`
+- 现场核查显示当前 `/etc/daed/config.dae` 与 `/etc/daed/rust-aya-runtime/generated.dae` 均包含 `node` / `group` / `routing` / `lan_interface` / `wan_interface`。
+- `bpftool net` 与 `bpftool prog show` 显示当前 `daed` 进程实际持有并运行 TCX 程序；10.10.10.4 LAN 侧 HTTPS trace 通过。因此该 warning 不是当前运行配置为空，而是 daed 启动时先用 `engine.Default().EmptyConfig()` 拉起 dae-core bootstrap runtime，再由 WebUI DB 恢复运行状态 reload 的启动期噪音。
+
+修复原则：
+
+- 不根据测试机配置做特判。
+- 不改变 routing / DNS / node / interface 配置语义。
+- 只抑制 daed bootstrap `EmptyConfig()` 第一次 control-plane 构建产生的空配置 warning。
+- 后续 reload 或真实运行配置如果确实缺少 node/interface，仍必须继续打印 warning。
+
+代码调整：
+
+- `engine/runtime.go`
+  - 新增 `Options.SuppressInitialEmptyConfigWarnings`。
+  - 该选项只传给 `Run()` 初始 `newControlPlane()`；reload 新配置和 rollback 均固定传 `false`。
+  - 抽出 `warnEmptyRuntimeConfig()`，集中处理 `No node found` / `No interface to bind`。
+- `engine/runtime_test.go`
+  - 新增 `TestWarnEmptyRuntimeConfigCanSuppressBootstrapEmptyWarnings`。
+  - 新增 `TestWarnEmptyRuntimeConfigStillWarnsForRealEmptyConfig`。
+
+验证记录：
+
+| 验证项 | 结果 |
+| --- | --- |
+| `gofmt -w engine/runtime.go engine/runtime_test.go` | pass |
+| `go test ./engine` | pass |
+| `go test ./engine ./control` | pass |
+| `git diff --check` | pass |
+
 ### Go BPF / Aya fallback 删除边界审计与第一批收口（2026-05-30）
 
 本节执行用户指定的事项 2-4：审计 Go BPF fallback 删除边界、选择并删除第一批低风险 fallback、明确 helper 子进程边界。执行前参考：
