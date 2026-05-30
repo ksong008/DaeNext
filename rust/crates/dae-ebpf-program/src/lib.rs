@@ -3,6 +3,7 @@
 
 pub mod abi;
 pub mod cgroup;
+pub mod helpers;
 pub mod maps;
 pub mod packet;
 pub mod programs;
