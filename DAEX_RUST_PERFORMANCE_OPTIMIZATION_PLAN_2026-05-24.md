@@ -16816,6 +16816,33 @@ CO-RE 继续推进前置审计：
 - 预期 runtime/control API source-contract blocker 消失。
 - 若 clean report 仍阻断，只继续处理明确证据缺口；不新增阶段、不切默认路径、不删除 fallback。
 
+提交后 clean report 验证追加：
+
+| 验证项 | 结果 |
+| --- | --- |
+| 本地提交 | `31c45789 product: accept current wing runtime control contract` |
+| report artifact | `/tmp/dae-daex-product-chain-recertification-20260531.json` |
+| `product_chain_recertification_recorded` | true |
+| `product_chain_recertification_clean` | true |
+| `clean_product_chain_baseline` | true |
+| `runtime_control_api_source_contract_preserved` | true |
+| `runtime_control_api_clean_baseline.recorded` | true |
+| `branch_mismatched_sibling_repos` | `[]` |
+| `dirty_sibling_repos` | `[]` |
+| `product_chain_switch_allowed` | false，未请求默认路径 mutation，保持阻断 |
+
+clean report 剩余 blocker：
+
+- `true Rust default daemon admission is not present in this run`
+- `BPF-side Go fallback retirement evidence is not present in this run`
+- `default path mutation was not explicitly requested; service and /usr/bin/dae remain Go-default`
+
+本次修正结果：
+
+- `dae-wing/daed runtime/control API source contract is incomplete or unreadable` 已消失。
+- `dae-wing and daed runtime/control API recertification still needs an explicit clean baseline run` 已消失。
+- product-chain 结构性 clean baseline 已完成；默认切换仍必须等待 true Rust default daemon admission 和 BPF-side Go fallback retirement evidence。
+
 ### daed bootstrap 空配置误导性 warning 收口（2026-05-31）
 
 触发背景：
