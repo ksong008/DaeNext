@@ -16843,6 +16843,52 @@ clean report 剩余 blocker：
 - `dae-wing and daed runtime/control API recertification still needs an explicit clean baseline run` 已消失。
 - product-chain 结构性 clean baseline 已完成；默认切换仍必须等待 true Rust default daemon admission 和 BPF-side Go fallback retirement evidence。
 
+### BPF-side Go fallback retirement 只读 gate 探针记录（2026-05-31）
+
+本节承接 product-chain clean report 后的下一步，只做只读 gate 探针，不删除 fallback、不切默认路径、不执行 host write。
+
+执行命令：
+
+```bash
+cargo run --manifest-path rust/Cargo.toml -p dae-daemon --bin dae-daemon-optin -- run \
+  --config /root/project/dae-daex-align/example.dae \
+  --root /tmp/dae-daemon-daex-fallback-retirement-readonly-20260531 \
+  --disable-timestamp \
+  --disable-sudo \
+  --production-runtime-fallback-retirement-product-chain-recertified \
+  --production-runtime-fallback-retirement-explicit-approval \
+  --exit-after-ready
+```
+
+结果：
+
+| 验证项 | 结果 |
+| --- | --- |
+| report artifact | `/tmp/dae-daex-fallback-retirement-readonly-20260531.json` |
+| host write / production runtime owner execute | 未执行 |
+| `tproxy_dataplane_admission.admitted` | true |
+| `kernel_program_fallback_retirement_gate.admitted` | true |
+| `go_bpf_fallback_retirement_gate_admitted` | true |
+| `go_bpf_fallback_retired` | true |
+| `kernel_program_fallback_retirement_gate.blockers` | `[]` |
+| `tc_command_fallback_retirement_allowed` | false |
+| `tc_command_fallback_required` | true |
+| `go_trace_fallback_required` | true |
+
+结论：
+
+- 代码层 gate 已能表达“仅 tproxy dataplane 范围内 Go BPF fallback retirement 可准入”。
+- 该准入不等于默认 daemon / systemd / `/usr/bin/dae` 切换。
+- `tc command fallback` 仍保留，不能随 Go BPF fallback 一起删除。
+- trace diagnostic 仍保留 C/Go fallback；CO-RE side-load 关闭不参与当前 tproxy 默认候选。
+- 因本轮未执行 production runtime owner host write，报告中的 `production_dataplane_admitted=false`、`reload_runtime_parity_admitted=false` 是预期结果，不能把该只读探针当作 true Rust default daemon admission。
+
+后续约束：
+
+- 若要让 product-chain report 的 `BPF-side Go fallback retirement evidence` blocker 消失，需要提供明确 admission evidence，而不是仅依赖默认 read-only run。
+- admission evidence 必须来自已完成的 tproxy dataplane、远程 host-write、reload/runtime parity、matched benchmark、product-chain clean baseline 和 explicit approval 组合；不能伪造，也不能用测试机 config 作为通用标准。
+- 删除 Go BPF fallback 前仍需单独审计删除面；本节只证明 gate 语义，不执行删除。
+
 ### daed bootstrap 空配置误导性 warning 收口（2026-05-31）
 
 触发背景：
