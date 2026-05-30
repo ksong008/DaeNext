@@ -223,6 +223,7 @@ fn run_default_optin_command(args: &[String], version: &str) -> DaemonOutput {
     let mut production_runtime_native_ebpf_backend = AttachBackend::Auto;
     let mut production_runtime_native_ebpf_completed_a3_admission = false;
     let mut production_runtime_fallback_retirement_product_chain_recertified = false;
+    let mut production_runtime_fallback_retirement_explicit_user_approval = false;
     let mut production_runtime_native_ebpf_object: Option<PathBuf> = None;
     let mut production_runtime_active_tcp_target_ip: Option<String> = None;
     let mut production_runtime_active_tcp_client_ip: Option<String> = None;
@@ -479,6 +480,9 @@ fn run_default_optin_command(args: &[String], version: &str) -> DaemonOutput {
             }
             "--production-runtime-fallback-retirement-product-chain-recertified" => {
                 production_runtime_fallback_retirement_product_chain_recertified = true;
+            }
+            "--production-runtime-fallback-retirement-explicit-approval" => {
+                production_runtime_fallback_retirement_explicit_user_approval = true;
             }
             "--production-runtime-active-tcp-target-ip" => {
                 let Some(value) = iter.next() else {
@@ -1094,6 +1098,10 @@ fn run_default_optin_command(args: &[String], version: &str) -> DaemonOutput {
         .production_runtime_owner
         .fallback_retirement_product_chain_recertified =
         production_runtime_fallback_retirement_product_chain_recertified;
+    options
+        .production_runtime_owner
+        .fallback_retirement_explicit_user_approval =
+        production_runtime_fallback_retirement_explicit_user_approval;
     options.production_runtime_owner.native_ebpf_object = production_runtime_native_ebpf_object;
     if let Some(source_object) = production_runtime_object {
         options.production_runtime_owner.source_object = source_object;
