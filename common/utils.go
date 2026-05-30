@@ -497,7 +497,7 @@ nextLink:
 				return nil, err
 			}
 			for _, route := range rs {
-				if route.Dst != nil {
+				if !routeIsDefault(route) {
 					continue
 				}
 				// Have no dst, it is a default route.
@@ -507,6 +507,14 @@ nextLink:
 		}
 	}
 	return Deduplicate(defaultIfs), nil
+}
+
+func routeIsDefault(route netlink.Route) bool {
+	if route.Dst == nil {
+		return true
+	}
+	ones, bits := route.Dst.Mask.Size()
+	return ones == 0 && bits > 0
 }
 
 func MagicNetwork(network string, mark uint32, mptcp bool) string {
