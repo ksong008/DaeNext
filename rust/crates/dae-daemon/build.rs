@@ -2,11 +2,14 @@ use std::env;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
+const RUST_NATIVE_BPF_OBJECT_ENV: &str = "DAE_RUST_NATIVE_BPF_OBJECT";
+
 fn main() {
     println!("cargo:rerun-if-changed=../../../control/kern/tproxy.c");
     println!("cargo:rerun-if-changed=../../../control/kern/headers");
     println!("cargo:rerun-if-env-changed=CLANG");
     println!("cargo:rerun-if-env-changed=MAX_MATCH_SET_LEN");
+    println!("cargo:rerun-if-env-changed={RUST_NATIVE_BPF_OBJECT_ENV}");
 
     if env::var_os("CARGO_FEATURE_NATIVE_EBPF").is_none() {
         return;
@@ -19,7 +22,32 @@ fn main() {
         .expect("dae-daemon manifest must live under rust/crates/dae-daemon");
     let out_dir = PathBuf::from(env::var("OUT_DIR").unwrap());
     let output = out_dir.join("dae-native-bpf_bpfel.o");
-    compile_native_aya_object(repo_root, &output);
+    if let Some(source) = rust_native_bpf_object_override() {
+        copy_native_aya_object(&source, &output);
+    } else {
+        compile_native_aya_object(repo_root, &output);
+    }
+}
+
+fn rust_native_bpf_object_override() -> Option<PathBuf> {
+    env::var_os(RUST_NATIVE_BPF_OBJECT_ENV).map(PathBuf::from)
+}
+
+fn copy_native_aya_object(source: &Path, output: &Path) {
+    println!("cargo:rerun-if-changed={}", source.display());
+    if !source.is_file() {
+        panic!(
+            "{RUST_NATIVE_BPF_OBJECT_ENV} points to a missing native eBPF object: {}",
+            source.display()
+        );
+    }
+    std::fs::copy(source, output).unwrap_or_else(|err| {
+        panic!(
+            "failed to copy native eBPF object from {} to {}: {err}",
+            source.display(),
+            output.display()
+        )
+    });
 }
 
 fn compile_native_aya_object(repo_root: &Path, output: &Path) {

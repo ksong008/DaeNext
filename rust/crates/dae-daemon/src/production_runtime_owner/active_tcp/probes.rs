@@ -52,9 +52,21 @@ fn tcp_accept_probe(listener: TcpListener) -> Value {
 
 fn tcp_accept_probe_inner(listener: TcpListener) -> Result<Value, String> {
     listener
-        .set_nonblocking(false)
-        .map_err(|err| format!("set listener blocking: {err}"))?;
-    let (mut stream, peer) = listener.accept().map_err(|err| format!("accept: {err}"))?;
+        .set_nonblocking(true)
+        .map_err(|err| format!("set listener nonblocking: {err}"))?;
+    let started = Instant::now();
+    let (mut stream, peer) = loop {
+        match listener.accept() {
+            Ok(value) => break value,
+            Err(err) if err.kind() == std::io::ErrorKind::WouldBlock => {
+                if started.elapsed() >= Duration::from_secs(3) {
+                    return Err("accept timeout waiting for active TCP tproxy ingress".to_owned());
+                }
+                thread::sleep(Duration::from_millis(10));
+            }
+            Err(err) => return Err(format!("accept: {err}")),
+        }
+    };
     stream
         .set_read_timeout(Some(Duration::from_secs(3)))
         .map_err(|err| format!("set read timeout: {err}"))?;

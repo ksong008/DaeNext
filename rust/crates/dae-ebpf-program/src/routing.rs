@@ -149,7 +149,7 @@ pub fn pid_pname_for_packet(skb: *mut __sk_buff) -> *mut BpfPidPname {
 #[inline(always)]
 pub fn pid_is_control_plane(skb: *mut __sk_buff, pid_pname: *mut BpfPidPname) -> bool {
     if !pid_pname.is_null() {
-        let pid_tproxy = crate::abi::PARAM.control_plane_pid;
+        let pid_tproxy = crate::abi::param_control_plane_pid();
         return pid_tproxy != 0 && unsafe { (*pid_pname).pid } == pid_tproxy;
     }
     (unsafe { (*skb).mark } & 0x100) == 0x100

@@ -811,7 +811,9 @@ fn native_backend_for_role(
     if requested_backend == AttachBackend::Tcx
         && matches!(
             role,
-            NativeEbpfAttachRole::PeerIngress | NativeEbpfAttachRole::HostIngress
+            NativeEbpfAttachRole::PeerIngress
+                | NativeEbpfAttachRole::LanIngress
+                | NativeEbpfAttachRole::HostIngress
         )
     {
         return AttachBackend::TcNetlink;
@@ -835,7 +837,7 @@ mod tests {
         );
         assert_eq!(
             native_backend_for_role(NativeEbpfAttachRole::LanIngress, AttachBackend::Tcx),
-            AttachBackend::Tcx
+            AttachBackend::TcNetlink
         );
     }
 }

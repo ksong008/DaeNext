@@ -325,7 +325,7 @@ fn run_contract() -> LoaderOutput {
             },
             "object_source": {
                 "c-aya": "default embedded native Aya object built from control/kern/tproxy.c with DAE_AYA_EBPF_OBJECT, or explicit --object",
-                "rust-aya-skeleton": "explicit --object built from rust/crates/dae-ebpf-program; opt-in only and not a production datapath"
+                "rust-aya-skeleton": "legacy option name for an explicit --object built from rust/crates/dae-ebpf-program; opt-in Rust/Aya native object candidate, not default without admission"
             },
             "param_source": {
                 "tproxy_port": "host-order u16, converted to BPF big-endian PARAM",
