@@ -15382,6 +15382,36 @@ A4 coverage 结论：
 | `cargo test --manifest-path rust/Cargo.toml -p dae-daemon release_gate` | pass，2 passed |
 | `cargo test --manifest-path rust/Cargo.toml -p dae-daemon production_runtime_owner` | pass，67 passed |
 
+提交后只读 product-chain recertification 复跑：
+
+| 项 | 结果 |
+| --- | --- |
+| commit | `61a815de product-chain: split structural recertification gate` |
+| run root | `/tmp/dae-daemon-daex-product-chain-recert-20260530201040` |
+| `product_chain_recertification_clean` | true |
+| `product_chain_structural_baseline_clean` | true |
+| `clean_product_chain_baseline` | true |
+| `service_contract_preserved` | true |
+| `outbound_quic_go_dependency_boundary_preserved` | true |
+| `runtime_control_api_source_contract_preserved` | true |
+| `runtime_control_api_source_baseline_recorded` | true |
+| `product_chain_default_switch_admission_clean` | false |
+| `runtime_control_api_final_admission_recorded` | false |
+| `default_path_mutation_allowed` / `product_chain_switch_allowed` | false / false |
+| `dirty_sibling_repos` | `[]` |
+| `branch_mismatched_sibling_repos` | `[]` |
+
+提交后剩余 blockers：
+
+- `true Rust default daemon admission is not present in this run`
+- `BPF-side Go fallback retirement evidence is not present in this run`
+- `default path mutation was not explicitly requested; service and /usr/bin/dae remain Go-default`
+
+结论：
+
+- product-chain 结构复认证基线已经 clean，可作为后续 fallback retirement gate 的前置证据。
+- 默认切换/产品链切换仍保持关闭；需要后续独立提供 true Rust default daemon admission、BPF fallback retirement evidence、显式 default path mutation request 和 resident ready。
+
 未执行：
 
 - 未执行远程 host write。
