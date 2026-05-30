@@ -16745,6 +16745,131 @@ CO-RE 继续推进前置审计：
 | `cargo test --manifest-path rust/Cargo.toml -p dae-daemon production_runtime_owner` | pass，67 passed |
 | `git diff --check` | pass |
 
+### 1-4 收口：daed 内嵌 Aya loader，无外置 dae/helper 依赖验证（2026-05-30）
+
+本节按用户授权完成上一轮提出的 1-4，不新增 stage。执行前继续遵守：
+
+- 不以测试机配置作为实现标准。
+- 修改前参考 `DAEX_RUST_REBUILD_PLAN_2026-05-16.md` 和 `DAENEW_RUST_REBUILD_MEMO_2026-05-16.md` 中 runtime/reload、DNS controller、BPF attach、Go userspace outbound/control-plane 边界记录。
+- 当前目标是去除 daed 产品链对外置 Aya helper 文件的依赖；不是删除 helper 子进程边界，也不是替换 Go userspace outbound/control-plane。
+
+边界结论：
+
+- daed 产品链运行时不应依赖外部 `/usr/bin/dae`。
+- daed 产品链运行时不应依赖外部 `/usr/bin/dae-aya-bpf-loader`。
+- `DAE_RUST_BPF_LOADER_HELPER` 仅保留为调试/覆盖入口，正式 daed bundle 默认应使用内嵌 `dae-core/control/embedded/dae-aya-bpf-loader`。
+- helper 子进程边界仍保留：Go control-plane 仍通过子进程执行 Rust/Aya loader/attach/map/listener 操作；本节只把 helper 来源从“外置二进制”收口为“daed 内嵌资产释放到 cache 后执行”。
+
+代码修改：
+
+- `control/rust_bpf_loader.go`
+  - 新增 `rustBpfLoaderCommandContext(ctx,args...)`。
+  - `runRustBpfLoaderHelperInput()` 改为通过统一命令构造函数执行。
+  - 未设置 `DAE_RUST_BPF_LOADER_HELPER` 时优先使用 `embeddedRustBpfLoaderPath()`；显式设置环境变量时仍允许使用外置 helper 便于调试。
+- `control/rust_tproxy_listener.go`
+  - `tproxy-listener open-handoff` 改为走统一 embedded/external 解析。
+  - `tproxy-listener update-map` 改为走统一 embedded/external 解析。
+- `control/rust_domain_routing_helper.go`
+  - `domain-routing-map serve` 持久 helper 改为走统一 embedded/external 解析。
+- `control/rust_bpf_loader_test.go`
+  - 增加显式 `DAE_RUST_BPF_LOADER_HELPER` 覆盖测试。
+  - 增加产品调用点防回退测试，防止 `rust_tproxy_listener.go` / `rust_domain_routing_helper.go` 再绕过 embedded resolver。
+
+本地提交/指针：
+
+| 项 | 结果 |
+| --- | --- |
+| `dae-daex-align` | `e6fb577b control: resolve aya loader through embedded asset` |
+| `dae-wing-daex-align` | `7e9cc52 dae-core: embed aya loader resolution` |
+| `daed-daex-align/daed/wing` | 指向 `7e9cc52`，待随本节记录提交 |
+
+本地验证：
+
+| 验证项 | 结果 |
+| --- | --- |
+| `PATH=/root/.local/go1.25.9/bin:$PATH GOWORK=off go test ./control` | pass，`ok github.com/daeuniverse/dae/control 0.064s` |
+| `PATH=/root/.local/go1.25.9/bin:$PATH GOWORK=off go test ./cmd`（dae-wing） | pass，`ok github.com/daeuniverse/dae-wing/cmd 0.141s` |
+| `PATH=/root/.local/node-v22.12.0-linux-x64/bin:/root/.local/go1.25.9/bin:$PATH GOWORK=off make dist`（daed） | pass |
+| `make OUTPUT=/tmp/daed-daex-align-embedded-aya-only-20260530 APPNAME=daed WEB_DIST=../dist VERSION=daed2-daex-align-embedded-aya-only-20260530 bundle`（wing） | pass |
+
+本地产物：
+
+| 产物 | sha256 | 大小 |
+| --- | --- | --- |
+| `/tmp/daed-daex-align-embedded-aya-only-20260530` | `327e9e8832f1006e4215ba3d72cf5108c382c132e5fceebaed18191ff4893086` | 50M |
+
+远程 38 严格验证条件：
+
+| 条件 | 结果 |
+| --- | --- |
+| `/usr/bin/dae` | 不存在 |
+| `/usr/bin/dae-aya-bpf-loader` | 不存在 |
+| PATH 中 `dae-aya-bpf-loader` | 不存在 |
+| systemd `Environment` | 仅 `DAE_RUST_NATIVE_EBPF_BACKEND=auto`、`DAE_NATIVE_EBPF_BACKEND=auto`、`DAE_NETNS_LINK=auto`、`DAE_RUST_RESIDENT_DATAPLANE=1` |
+| `DAE_RUST_BPF_LOADER_HELPER` | 未设置 |
+| 安装的产品二进制 | 仅 `/usr/bin/daed` |
+| kernel | `6.12.86+deb12-amd64` |
+| BTF | `/sys/kernel/btf/vmlinux` 存在 |
+| cgroup2 | mounted |
+
+远端产物复核：
+
+| 远端路径 | sha256 |
+| --- | --- |
+| `/usr/bin/daed` | `327e9e8832f1006e4215ba3d72cf5108c382c132e5fceebaed18191ff4893086` |
+
+远端验证结果：
+
+| 验证项 | 结果 |
+| --- | --- |
+| `/api/health` | `{"healthCheck":1}` |
+| `/api/auth/status` | `{"numberUsers":0}`，随后创建临时本地用户用于 API 验证 |
+| `/api/user/me/dae-config-file` import | `{"imported":true}` |
+| `/api/runtime/reload` | `{"applied":1,"dry":false}` |
+| API reload 后 DNS 首包 | `pass=8 fail=0`，首包 `first_rtt_ms=6.12` |
+| embedded helper cache | `/root/.cache/dae/embedded-helpers/dae-aya-bpf-loader-5769f62fb2b77af7` |
+| `systemctl reload daed` | 返回成功，服务保持 `active` |
+| systemctl reload 后 DNS 首包 | `pass=8 fail=0`，首包 `first_rtt_ms=8.63` |
+| `systemctl restart daed` | 返回成功，服务保持 `active` |
+| restart 后 DNS 首包 | `pass=8 fail=0`，首包 `first_rtt_ms=38.18` |
+| HTTPS trace | `https://www.cloudflare.com/cdn-cgi/trace` 成功，返回 `ip=38.65.91.47` |
+| DNS listener | `127.0.0.1:1053` 由 `daed` 监听 |
+| no external after run | `/usr/bin/dae`、`/usr/bin/dae-aya-bpf-loader`、PATH loader 均不存在 |
+
+远端 dataplane 观测：
+
+| 观测项 | 结果 |
+| --- | --- |
+| netns link | `dae netns link mode: netkit` |
+| WAN egress | `Bind daed_wan_egress_l2 via Rust/Aya tcx on ens3` |
+| WAN ingress | `Bind daed_wan_ingress_l2 via Rust/Aya tcx on ens3` |
+| dae0peer ingress | `Bind daed_dae0peer_ingress via Rust/Aya tcx on dae0peer` |
+| dae0 ingress | `Bind daed_dae0_ingress via Rust/Aya tcx on dae0` |
+| tproxy listener | `Opened tproxy listener via Rust/Aya on port 12345 and wrote listen_socket_map` |
+| DNS listener | `DNS listener started on udp://127.0.0.1:1053` |
+
+远端清理结果：
+
+| 清理项 | 结果 |
+| --- | --- |
+| `daed.service` | inactive，临时 unit 已删除 |
+| `dae.service` | inactive，临时 unit 已删除 |
+| `/usr/bin/dae` / `/usr/bin/daed` / `/usr/bin/dae-aya-bpf-loader` | 已删除 |
+| PATH 中 `dae-aya-bpf-loader` | 不存在 |
+| `/tmp/daed-final-config` / `/tmp/dae-daemon-resident-runtime-*` | 已删除 |
+| embedded helper cache | `/root/.cache/dae/embedded-helpers` 和 `/tmp/dae/embedded-helpers` 已删除 |
+| `dae0` / `dae0peer` | 无残留 |
+| `dae` netns | 无残留 |
+| `/sys/fs/bpf/daed` | absent |
+
+收口结论：
+
+- daed 产品链已证明不依赖外置 `/usr/bin/dae`。
+- daed 产品链已证明不依赖外置 `/usr/bin/dae-aya-bpf-loader`。
+- daed bundle 内嵌 Aya loader 可在运行时释放到 cache，并完成 load-pin、TCX attach、cgroup attach、tproxy listener handoff、DNS/API reload/restart 验证。
+- `DAE_RUST_BPF_LOADER_HELPER` 仍保留为调试覆盖项，但不再是 daed 产品链默认运行要求。
+- 本节没有删除 helper 子进程边界，没有替换 Go userspace outbound/control-plane，没有删除 C trace object、Go trace fallback 或 TC command fallback。
+
 ### A4 Go BPF fallback retirement 顶层字段语义修正（2026-05-30）
 
 本节继续承接 `A4 tproxy dataplane 与 trace diagnostic gate 拆分记录`。修改前再次参考：
