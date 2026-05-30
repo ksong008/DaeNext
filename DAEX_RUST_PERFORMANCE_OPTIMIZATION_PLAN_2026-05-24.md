@@ -16745,6 +16745,154 @@ CO-RE 继续推进前置审计：
 | `cargo test --manifest-path rust/Cargo.toml -p dae-daemon production_runtime_owner` | pass，67 passed |
 | `git diff --check` | pass |
 
+### Go BPF / Aya fallback 删除边界审计与第一批收口（2026-05-30）
+
+本节执行用户指定的事项 2-4：审计 Go BPF fallback 删除边界、选择并删除第一批低风险 fallback、明确 helper 子进程边界。执行前参考：
+
+- `DAEX_RUST_REBUILD_PLAN_2026-05-16.md`：eBPF/tproxy/netns 改造必须保持真实 runtime、reload、map owner、TC/cgroup/listener 合同，不得按单台测试机配置写特例。
+- `DAENEW_RUST_REBUILD_MEMO_2026-05-16.md` 第 2.5、第 5.11、第 11 节：`listen_socket_map`、routing maps、TC attach、cgroup hooks、tproxy listener、reload owner 是 Rust/Aya 与现有 Go userspace/control-plane 的硬边界。
+- 本文件上一轮记录：CO-RE side-load / trace fallback 当前关闭保留；不删除 C tproxy object、C trace object、TC command fallback；Go userspace outbound/control-plane 暂时保持权威。
+
+#### 删除边界审计
+
+| 位置 | 当前判断 | 处理决定 | 原因 |
+| --- | --- | --- | --- |
+| `control/control_plane.go` 的 `ListenAndServe` Go listener fallback | 第一批低风险删除 | 已删除 | 严格 embedded Aya-only gate 已证明产品链只安装 `/usr/bin/daed` 时，Rust/Aya tproxy listener 能 open handoff 并写 `listen_socket_map`；继续 fallback 会掩盖产品路径回归。 |
+| `control/rust_tproxy_listener.go` 的 `listen_socket_map` Go map update fallback | 第一批低风险删除 | 已删除 | Rust/Aya listener 已在 open-handoff 阶段写 map；后续 update-map 失败应 fail closed，不能再静默回退 Go map update。 |
+| `control/control_plane_core.go` 的 TC attach Go/Cilium/TC fallback 链 | 保留 | 暂不删除 | 这里覆盖 kernel/backend 兼容性，包含 `auto -> tcx -> tc-netlink/tc` 的真实环境回退。删除需要独立 kernel/backend 矩阵准入。 |
+| `control/control_plane_core.go` 的 cgroup `AttachCgroup` Go fallback | 保留 | 暂不删除 | pname/cookie pid 相关 cgroup hook 对内核/cgroup 挂载方式敏感。Rust/Aya 默认路径可继续推进，但删除 Go attach fallback 需要更大兼容矩阵。 |
+| `trace/rust_aya_loader.go` 的 Go trace fallback | 保留且关闭默认候选 | 暂不删除 | trace/CO-RE side-load 已明确不参与当前 tproxy dataplane 默认准入；删除 trace fallback 会扩大范围。 |
+| `control/routing_matcher_builder.go` 的 routing map writer fallback | 保留 | 暂不删除 | 这是 userspace map writer 边界，不等同 Go BPF loader。需要按 routing/map owner benchmark 和 reload parity 单独切换。 |
+| Rust 报告里的 `TcCommandFallback` / fallback gate 字段 | 保留 | 暂不删除 | 这些是准入报告和兼容性表达，不是实际 Go BPF loader 回退代码。删除会降低可观测性。 |
+
+#### 第一批代码收口
+
+已完成：
+
+- `control/control_plane.go`
+  - `ListenAndServe` 改为只走 `listenAndServeViaRustAya`。
+  - Rust/Aya handoff 失败时直接返回 `Rust/Aya tproxy listener handoff failed`，不再创建 Go `net.ListenConfig` tproxy listener。
+- `control/rust_tproxy_listener.go`
+  - `updateListenSocketMapForListener` 改为只调用 Rust/Aya `tproxy-listener update-map`。
+  - update-map 失败直接返回错误，不再调用 Go `updateListenSocketMap(c.core.bpf.ListenSocketMap, ...)`。
+- `control/rust_bpf_loader_test.go`
+  - 新增源级防回退测试，禁止 `falling back to Go listener`、`dialer.TproxyControl(c)`、`falling back to Go map update`、`updateListenSocketMap(c.core.bpf.ListenSocketMap` 回到 tproxy 产品路径。
+
+当前保留的 `updateListenSocketMap` 函数只作为现有 root/BPF smoke 里的底层 map 写入辅助存在，不再是 `ListenAndServe` 产品路径的 fallback。后续若 root smoke 也迁到 Rust/Aya update-map，可再单独删除该 Go 辅助函数。
+
+#### helper 子进程边界
+
+本轮不删除 helper 子进程。当前边界定义如下：
+
+- Go userspace control-plane / outbound 仍是产品链主控。
+- Rust/Aya loader、tproxy listener handoff、listen_socket_map update、domain routing helper 当前通过 embedded helper 子进程承接。
+- daed 产品链不再依赖外部 `/usr/bin/dae` 或外部 `/usr/bin/dae-aya-bpf-loader`；helper 来源必须是 daed/wing 内嵌资产或显式测试覆盖的 resolver。
+- 去掉 helper 子进程不是 Go BPF fallback 删除的下一步；它要求 Rust-owned control-plane 或稳定的进程内 ABI。当前用户已明确不希望走 helper 方向扩张，因此后续应优先继续把已证明的 Go BPF/Go map fallback 按准入证据收口，而不是把 helper 变成新的长期架构核心。
+
+后续删除顺序建议：
+
+1. 先用同一严格 gate 复测本轮 tproxy/listen_socket_map fail-closed 版本，确认无外部 helper、无外部 dae、reload/restart/DNS/HTTPS 正常。
+2. 再评估 cgroup attach fallback 是否可按 kernel/cgroup matrix 收口。
+3. 再评估 TC attach fallback 是否可按 `auto/tcx/tc-netlink/tc-command` backend matrix 收口。
+4. routing writer fallback 和 helper 子进程去留另走 Rust native control-plane / map owner 计划，不和本轮 Go BPF loader 删除混在一起。
+
+本轮本地验证：
+
+| 验证项 | 结果 |
+| --- | --- |
+| `gofmt -w control/control_plane.go control/rust_tproxy_listener.go control/rust_bpf_loader_test.go` | pass |
+| `GOWORK=off go test ./control` | pass，`ok github.com/daeuniverse/dae/control 0.051s` |
+| `git diff --check` | pass |
+| 产品路径防回退关键字复查 | pass，`control/control_plane.go` 和 `control/rust_tproxy_listener.go` 未再出现 Go listener / Go map update fallback 标记 |
+
+#### 严格 gate 复测：tproxy/listen_socket_map fail-closed 版本（2026-05-31）
+
+本轮继续推进上一节第一批 fallback 删除后的严格产品链验证，不新增 stage，不推远程。验证目标仍是：只安装 daed 产品二进制，不安装外置 `/usr/bin/dae`，不安装外置 `/usr/bin/dae-aya-bpf-loader`，不设置 `DAE_RUST_BPF_LOADER_HELPER`，确认删除 Go listener / Go map update fallback 后 Rust/Aya 路径可 fail-closed 运行。
+
+本地构建：
+
+| 项 | 结果 |
+| --- | --- |
+| `PATH=/root/.local/node-v22.12.0-linux-x64/bin:/root/.local/go1.25.9/bin:$PATH GOWORK=off make dist`（daed） | pass |
+| `make OUTPUT=/tmp/daed-daex-align-no-go-tproxy-fallback-20260531 APPNAME=daed WEB_DIST=../dist VERSION=daed2-daex-align-no-go-tproxy-fallback-20260531 bundle`（wing） | pass |
+| `/tmp/daed-daex-align-no-go-tproxy-fallback-20260531 --version` | `daed version daed2-daex-align-no-go-tproxy-fallback-20260531` |
+
+本地产物：
+
+| 产物 | sha256 | 大小 |
+| --- | --- | --- |
+| `/tmp/daed-daex-align-no-go-tproxy-fallback-20260531` | `547e525b2a0b4ebfc01b7c7e1280db40202f75247121fabda2c09403ce94488e` | 50M |
+
+远程 38 验证条件：
+
+| 条件 | 结果 |
+| --- | --- |
+| kernel | `6.12.86+deb12-amd64` |
+| BTF | `/sys/kernel/btf/vmlinux` 存在 |
+| cgroup2 | mounted |
+| 安装的产品二进制 | 仅 `/usr/bin/daed`，sha256 为 `547e525b2a0b4ebfc01b7c7e1280db40202f75247121fabda2c09403ce94488e` |
+| `/usr/bin/dae` | 不存在 |
+| `/usr/bin/dae-aya-bpf-loader` | 不存在 |
+| PATH 中 `dae-aya-bpf-loader` | 不存在 |
+| `DAE_RUST_BPF_LOADER_HELPER` | 未设置 |
+| 临时 unit 环境 | `DAE_RUST_NATIVE_EBPF_BACKEND=auto`、`DAE_NATIVE_EBPF_BACKEND=auto`、`DAE_NETNS_LINK=auto`、`DAE_RUST_RESIDENT_DATAPLANE=1` |
+
+配置说明：
+
+- 远端当前 `/etc/dae/config.dae` 没有 `dns.bind`，直接导入时 runtime reload 成功，但不会启动 `127.0.0.1:1053` DNS listener，DNS 首包 gate 超时。这不是本轮 tproxy/listen_socket_map fallback 删除导致的 dataplane 失败。
+- 为继续执行 DNS listener 首包 gate，仅在 daed API 导入的临时配置内容中注入 `bind: 'udp://127.0.0.1:1053'`。
+- 未修改远端 `/etc/dae/config.dae`，该临时配置只用于验证 listener/reload/restart 合同，不作为通用实现标准。
+
+远端验证结果：
+
+| 验证项 | 结果 |
+| --- | --- |
+| `/api/health` | `{"healthCheck":1}` |
+| `/api/auth/status` | `{"numberUsers":0}` |
+| `/api/user/me/dae-config-file` import | `{"imported":true}` |
+| `/api/runtime/reload` | `{"applied":1,"dry":false}` |
+| API reload 后 DNS 首包 | `pass=8 fail=0`，首包 `first_rtt_ms=3.16` |
+| `systemctl reload daed` | 返回成功，服务保持 `active` |
+| systemctl reload 后 DNS 首包 | `pass=8 fail=0`，首包 `first_rtt_ms=0.41` |
+| `systemctl restart daed` | 返回成功，服务保持 `active` |
+| restart 后 DNS 首包 | `pass=8 fail=0`，首包 `first_rtt_ms=2.51` |
+| HTTPS trace | `https://www.cloudflare.com/cdn-cgi/trace` 成功，返回 `ip=38.65.91.47`、`colo=LAX` |
+| DNS listener | `127.0.0.1:1053` 由 `daed` 监听 |
+
+远端 dataplane / loader 观测：
+
+| 观测项 | 结果 |
+| --- | --- |
+| netns link | `dae netns link mode: netkit` |
+| tproxy listener | `Opened tproxy listener via Rust/Aya on port 12345 and wrote listen_socket_map` |
+| WAN egress | `Bind daed_wan_egress_l2 via Rust/Aya tcx on ens3` |
+| WAN ingress | `Bind daed_wan_ingress_l2 via Rust/Aya tcx on ens3` |
+| dae0peer ingress | `Bind daed_dae0peer_ingress via Rust/Aya tcx on dae0peer` |
+| dae0 ingress | `Bind daed_dae0_ingress via Rust/Aya tcx on dae0` |
+| DNS listener | `DNS listener started on udp://127.0.0.1:1053` |
+| Go listener fallback 日志 | 未出现 `falling back to Go listener` |
+| Go listen_socket_map fallback 日志 | 未出现 `falling back to Go map update` |
+| daed 内嵌 loader cache | 实际路径为 `/root/.cache/daed/rust-aya-loader/dae-aya-bpf-loader-7f328f8887a0f2d8`，验证后已清理 |
+
+远端清理结果：
+
+| 清理项 | 结果 |
+| --- | --- |
+| `daed.service` / `dae.service` | inactive |
+| `/usr/bin/dae` / `/usr/bin/daed` / `/usr/bin/dae-aya-bpf-loader` | 已删除 |
+| PATH 中 `dae-aya-bpf-loader` | 不存在 |
+| `/tmp/daed-final-config` / `/tmp/dae-daemon-resident-runtime-*` | 已删除 |
+| `/root/.cache/daed/rust-aya-loader` | 已删除 |
+| `dae0` / `dae0peer` | 无残留 |
+| `dae` netns | 无残留 |
+| `/sys/fs/bpf/daed` | absent |
+
+收口结论：
+
+- 删除 `ListenAndServe` 的 Go tproxy listener fallback 后，daed 产品链严格 embedded-only 路径通过 API reload、systemctl reload、restart、DNS 首包和 HTTPS trace 验证。
+- 删除 `listen_socket_map` 的 Go map update fallback 后，Rust/Aya open-handoff / update-map 路径没有触发 Go fallback，日志未出现回退标记。
+- 本轮仍只收 tproxy listener / listen_socket_map fallback；TC attach fallback、cgroup fallback、trace fallback、routing map writer fallback 保持上一节的保留边界。
+
 ### 1-4 收口：daed 内嵌 Aya loader，无外置 dae/helper 依赖验证（2026-05-30）
 
 本节按用户授权完成上一轮提出的 1-4，不新增 stage。执行前继续遵守：
