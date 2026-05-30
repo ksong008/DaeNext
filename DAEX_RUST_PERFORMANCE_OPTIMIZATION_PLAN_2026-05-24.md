@@ -15321,6 +15321,76 @@ A4 coverage 结论：
 | `cargo test --manifest-path rust/Cargo.toml -p dae-daemon production_runtime_owner` | pass，67 passed |
 | `git diff --check` | pass |
 
+### A5 最终 Go eBPF fallback 退役准入收口记录（2026-05-30）
+
+本节只完成 A5，不新增 stage。执行前继续按硬性规定参考：
+
+- `DAEX_RUST_REBUILD_PLAN_2026-05-16.md`：默认切换必须受 release/product-chain gate 控制，不能把单项 eBPF 准入当作默认 daemon 切换。
+- `DAENEW_RUST_REBUILD_MEMO_2026-05-16.md`：Go userspace control plane / outbound、C object、TC fallback、trace diagnostic fallback 是独立边界；Rust/Aya loader/attach 准入不等于这些 fallback 可以一并删除。
+- `DAEX_RUST_PERFORMANCE_OPTIMIZATION_PLAN_2026-05-24.md`：A5 目标是最终 Go eBPF fallback 退役准入判断；删除前保留 C eBPF object 和 Rust 侧 `tc-netlink` / `tc command` fallback，是否改写 aya-ebpf program 另列独立项目。
+
+本轮代码修改：
+
+- `rust/crates/dae-daemon/src/production_runtime_owner.rs`
+  - `ProductionRuntimeOwnerOptions` 新增 `fallback_retirement_explicit_user_approval`，默认 `false`。
+  - 新增 A5 单测：product-chain 复认证证据与 explicit approval 同时存在时，Go BPF fallback retirement gate 可准入；但默认路径、C object、trace fallback、TC fallback 删除许可继续关闭。
+- `rust/crates/dae-daemon/src/production_runtime_owner/report.rs`
+  - `contract.native_ebpf` 透出 `fallback_retirement_explicit_user_approval`。
+  - `KernelProgramFallbackRetirementEvidence.explicit_user_approval` 改为读取 runtime options，不再在 report 中固定为 `false`。
+- `rust/crates/dae-daemon/src/runner.rs`
+  - 新增只读证据开关：`--production-runtime-fallback-retirement-explicit-approval`。
+  - 该开关只作为 A5 可复现输入；不执行 host write，不切默认 daemon，不删除任何 fallback。
+- `rust/crates/dae-ebpf-support/src/kernel_program.rs`
+  - `kernel_program_fallback_retirement_gate_report()` 在 A5 admitted 后仍固定 `default_switch_allowed=false`。
+  - A5 admitted 后只允许 `go_bpf_fallback_retirement_allowed=true`。
+  - `c_tproxy_object_retirement_allowed=false`、`c_trace_object_retirement_allowed=false`、`tc_command_fallback_retirement_allowed=false` 固定保留。
+  - `c_tproxy_object_required=true`、`c_trace_object_required=true`、`tc_command_fallback_required=true` 固定保留，避免 A5 扩张成 C object 或 TC fallback 删除阶段。
+- `rust/crates/dae-daemon/src/tests.rs` / `rust/crates/dae-ebpf-support/src/kernel_program_tests.rs`
+  - runner JSON 与 kernel-program gate 单测固定上述 A5 边界。
+
+A5 report 实测：
+
+| 项 | 结果 |
+| --- | --- |
+| run root | `/tmp/dae-daemon-daex-a5-approval-20260530203559` |
+| command | `dae-daemon-optin run --production-runtime-fallback-retirement-product-chain-recertified --production-runtime-fallback-retirement-explicit-approval --exit-after-ready` |
+| exit code | 0 |
+| `product_chain_recertified` | true |
+| `explicit_user_approval_recorded` | true |
+| `kernel_program_fallback_retirement_gate.admitted` | true |
+| `kernel_program_fallback_retirement_gate.default_switch_allowed` | false |
+| `production_runtime_owner.default_switch_allowed` | false |
+| `go_default_path_preserved` | true |
+| `go_bpf_fallback_required` | false |
+| `go_bpf_fallback_retirement_allowed` | true |
+| `production_runtime_owner.go_bpf_fallback_retired` | true |
+| `c_tproxy_object_retirement_allowed` | false |
+| `c_tproxy_object_required` | true |
+| `c_trace_object_retirement_allowed` | false |
+| `tc_command_fallback_retirement_allowed` | false |
+| blockers | `[]` |
+
+验证记录：
+
+| 验证项 | 结果 |
+| --- | --- |
+| `cargo fmt --manifest-path rust/Cargo.toml --all --check` | pass |
+| `cargo test --manifest-path rust/Cargo.toml -p dae-daemon production_runtime_owner_fallback_gate_admits_with_explicit_approval` | pass，1 passed |
+| `cargo test --manifest-path rust/Cargo.toml -p dae-daemon daemon_runner_run_command_outputs_json` | pass，1 passed |
+| `cargo test --manifest-path rust/Cargo.toml -p dae-daemon production_runtime_owner` | pass，69 passed |
+| `cargo test --manifest-path rust/Cargo.toml -p dae-daemon product_chain_recertification` | pass，27 passed |
+| `cargo test --manifest-path rust/Cargo.toml -p dae-daemon release_gate` | pass，2 passed |
+| `cargo test --manifest-path rust/Cargo.toml -p dae-ebpf-support kernel_program` | pass，19 passed |
+| `cargo test --manifest-path rust/Cargo.toml -p dae-ebpf-support --features aya-loader` | pass，58 passed |
+
+A5 完成结论：
+
+- A5 已把“产品链复认证 + 显式用户批准”作为可复现输入接入 Go eBPF fallback retirement gate。
+- 当前只表示 Go BPF fallback 退役准入可被记录：`go_bpf_fallback_retirement_allowed=true`、`go_bpf_fallback_required=false`。
+- 当前不切默认 daemon：`default_switch_allowed=false`、`go_default_path_preserved=true`。
+- 当前不删除 C tproxy object、不删除 C trace object、不删除 Go trace fallback、不删除 TC command fallback、不触碰 Go userspace control plane / outbound。
+- 本轮未执行远程 host write，未生成或替换 daed 二进制，未推送远程。
+
 ### A4 product-chain 结构基线与默认切换准入拆分记录（2026-05-30）
 
 本节承接 `A4 tproxy dataplane 与 trace diagnostic gate 拆分记录` 以及提交后 product-chain clean baseline 复认证结果。修改前再次参考：
