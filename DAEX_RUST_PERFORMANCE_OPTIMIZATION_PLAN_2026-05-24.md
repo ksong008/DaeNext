@@ -15419,6 +15419,83 @@ A4 coverage 结论：
 - 未推送远程。
 - 未删除任何 fallback。
 
+### A4 收口完成记录（2026-05-30）
+
+本节按“A4 不再继续细分”的约束完成剩余收口，不新增 A4.x 或子阶段编号。修改前再次参考：
+
+- `DAEX_RUST_REBUILD_PLAN_2026-05-16.md`：A4 仍是 Rust/aya-ebpf kernel program 可行性、coverage 和准入证据收口，不允许直接删除 C object、Go BPF fallback 或 TC command fallback。
+- `DAENEW_RUST_REBUILD_MEMO_2026-05-16.md` 第 5.11、第 5.13、第 11 节：tproxy/trace/map ABI、Go userspace control plane/outbound 边界、reload/attach/cleanup 语义必须保持。
+- 本备忘录前文 product-chain 结构复认证结果：`product_chain_recertification_clean=true`、`product_chain_structural_baseline_clean=true`。
+
+本轮完成：
+
+- `rust/crates/dae-daemon/src/production_runtime_owner.rs`
+  - `ProductionRuntimeOwnerOptions` 新增 `fallback_retirement_product_chain_recertified`。
+  - 默认值为 `false`，避免普通 report 默认声明 product-chain 已复认证。
+  - 新增测试固定：带入 product-chain 前置证据后，fallback retirement gate 仍因缺少 explicit approval 关闭。
+- `rust/crates/dae-daemon/src/production_runtime_owner/report.rs`
+  - `kernel_program_fallback_retirement_gate_report()` 不再固定使用 `KernelProgramFallbackRetirementEvidence::read_only()`。
+  - product-chain 前置证据从 `options.fallback_retirement_product_chain_recertified` 进入 `KernelProgramFallbackRetirementEvidence.product_chain_recertified`。
+  - `explicit_user_approval` 在 A4 内固定为 `false`，因此不会打开 fallback retirement。
+  - report contract 透出 `fallback_retirement_product_chain_recertified` 与 `fallback_retirement_explicit_user_approval=false`。
+- `rust/crates/dae-daemon/src/runner.rs`
+  - 新增只读 CLI 证据开关：`--production-runtime-fallback-retirement-product-chain-recertified`。
+  - 该开关只移除 `product_chain_recertification_missing` blocker，不提供 fallback 删除批准。
+- `rust/crates/dae-daemon/src/tests.rs`
+  - runner JSON 测试覆盖新开关，固定 gate 仍不 admitted。
+
+A4 收口后 gate 状态：
+
+| 项 | 结果 |
+| --- | --- |
+| `product_chain_recertified` | true |
+| `explicit_user_approval_recorded` | false |
+| `go_bpf_fallback_retirement_gate_admitted` | false |
+| `default_switch_allowed` | false |
+| `go_bpf_fallback_required` | true |
+| `go_bpf_fallback_retired` | false |
+| blockers | `["explicit_user_approval_missing"]` |
+
+实际 report 验证：
+
+| 项 | 结果 |
+| --- | --- |
+| run root | `/tmp/dae-daemon-daex-a4-closure-20260530202226` |
+| command | `dae-daemon-optin run --production-runtime-fallback-retirement-product-chain-recertified --exit-after-ready` |
+| exit code | 0 |
+| `product_chain_recertified` | true |
+| `explicit_user_approval_recorded` | false |
+| `go_bpf_fallback_retirement_allowed` | false |
+| blockers | `["explicit_user_approval_missing"]` |
+
+A4 完成结论：
+
+- product-chain 结构复认证前置证据已经接入 fallback retirement gate。
+- A4 的 read-only fallback retirement gate 已收口到唯一 blocker：`explicit_user_approval_missing`。
+- A4 不打开默认切换，不删除 Go BPF fallback，不删除 C tproxy object，不删除 C trace object，不删除 Go trace fallback，不删除 TC command fallback。
+- Go userspace control plane / outbound 继续保持权威边界。
+- CO-RE side-load 继续关闭。
+
+验证记录：
+
+| 验证项 | 结果 |
+| --- | --- |
+| `cargo fmt --manifest-path rust/Cargo.toml --all` | pass |
+| `cargo test --manifest-path rust/Cargo.toml -p dae-daemon production_runtime_owner_fallback_gate_accepts_product_chain_prereq` | pass，1 passed |
+| `cargo test --manifest-path rust/Cargo.toml -p dae-daemon daemon_runner_run_command_outputs_json` | pass，1 passed |
+| `cargo test --manifest-path rust/Cargo.toml -p dae-ebpf-support kernel_program` | pass，19 passed |
+| `cargo test --manifest-path rust/Cargo.toml -p dae-daemon production_runtime_owner` | pass，68 passed |
+| `cargo test --manifest-path rust/Cargo.toml -p dae-daemon product_chain_recertification` | pass，27 passed |
+| `cargo test --manifest-path rust/Cargo.toml -p dae-daemon release_gate` | pass，2 passed |
+| `cargo test --manifest-path rust/Cargo.toml -p dae-ebpf-support --features aya-loader` | pass，58 passed |
+
+未执行：
+
+- 未执行远程 host write。
+- 未生成或替换 daed 二进制。
+- 未推送远程。
+- 未删除任何 fallback。
+
 ### A4 约束追加：CO-RE side-load 保持关闭（2026-05-30）
 
 用户确认：CO-RE side-load 保持关闭。
