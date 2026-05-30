@@ -12,7 +12,6 @@ import (
 	"fmt"
 	"net"
 	"os"
-	"os/exec"
 	"strconv"
 	"strings"
 
@@ -72,14 +71,16 @@ func (c *ControlPlane) openTproxyListenerViaRustAya(port uint16) (*Listener, err
 
 	ctx, cancel := context.WithTimeout(context.Background(), rustBpfLoaderHelperTimeout)
 	defer cancel()
-	cmd := exec.CommandContext(
+	cmd, err := rustBpfLoaderCommandContext(
 		ctx,
-		rustBpfLoaderHelperPath(),
 		"tproxy-listener", "open-handoff",
 		"--map-id", strconv.FormatUint(uint64(mapID), 10),
 		"--port", strconv.Itoa(int(port)),
 		"--handoff-fd", "3",
 	)
+	if err != nil {
+		return nil, fmt.Errorf("resolve Rust/Aya tproxy listener helper: %w", err)
+	}
 	var stdout bytes.Buffer
 	var stderr bytes.Buffer
 	cmd.Stdout = &stdout
@@ -176,14 +177,16 @@ func (c *ControlPlane) updateListenSocketMapViaRustAya(mapID uint32, tcpListener
 
 	ctx, cancel := context.WithTimeout(context.Background(), rustBpfLoaderHelperTimeout)
 	defer cancel()
-	cmd := exec.CommandContext(
+	cmd, err := rustBpfLoaderCommandContext(
 		ctx,
-		rustBpfLoaderHelperPath(),
 		"tproxy-listener", "update-map",
 		"--map-id", strconv.FormatUint(uint64(mapID), 10),
 		"--tcp-fd", "3",
 		"--udp-fd", "4",
 	)
+	if err != nil {
+		return fmt.Errorf("resolve Rust/Aya listen_socket_map helper: %w", err)
+	}
 	cmd.ExtraFiles = []*os.File{tcpFile, udpFile}
 	out, err := cmd.CombinedOutput()
 	if ctx.Err() == context.DeadlineExceeded {
