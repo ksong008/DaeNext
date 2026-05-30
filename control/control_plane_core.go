@@ -663,44 +663,8 @@ func (c *controlPlaneCore) setupSkPidMonitor() error {
 	if err != nil {
 		return err
 	}
-	if err := c.setupSkPidMonitorViaRustAya(cgroupPath); err == nil {
-		return nil
-	} else {
-		c.log.WithError(err).Debugln("Rust/Aya cgroup pname monitor attach failed; falling back to Go AttachCgroup")
-	}
-	return c.setupSkPidMonitorViaGo(cgroupPath)
-}
-
-func (c *controlPlaneCore) setupSkPidMonitorViaGo(cgroupPath string) error {
-	// Bind cg programs
-	type cgProg struct {
-		Name   string
-		Prog   *ebpf.Program
-		Attach ebpf.AttachType
-	}
-	cgProgs := []cgProg{
-		{Prog: c.bpf.TproxyWanCgSockCreate, Attach: ebpf.AttachCGroupInetSockCreate},
-		{Prog: c.bpf.TproxyWanCgSockRelease, Attach: ebpf.AttachCgroupInetSockRelease},
-		{Prog: c.bpf.TproxyWanCgConnect4, Attach: ebpf.AttachCGroupInet4Connect},
-		{Prog: c.bpf.TproxyWanCgConnect6, Attach: ebpf.AttachCGroupInet6Connect},
-		{Prog: c.bpf.TproxyWanCgSendmsg4, Attach: ebpf.AttachCGroupUDP4Sendmsg},
-		{Prog: c.bpf.TproxyWanCgSendmsg6, Attach: ebpf.AttachCGroupUDP6Sendmsg},
-	}
-	for _, prog := range cgProgs {
-		attached, err := ciliumLink.AttachCgroup(ciliumLink.CgroupOptions{
-			Path:    cgroupPath,
-			Attach:  prog.Attach,
-			Program: prog.Prog,
-		})
-		if err != nil {
-			return fmt.Errorf("AttachCgroup: %v: %w", prog.Prog.String(), err)
-		}
-		c.deferFuncs = append(c.deferFuncs, func() error {
-			if err := attached.Close(); err != nil {
-				return fmt.Errorf("inet6Bind.Close(): %w", err)
-			}
-			return nil
-		})
+	if err := c.setupSkPidMonitorViaRustAya(cgroupPath); err != nil {
+		return fmt.Errorf("Rust/Aya cgroup pname monitor attach failed: %w", err)
 	}
 	return nil
 }
