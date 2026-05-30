@@ -6,6 +6,7 @@
 package engine
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"strings"
@@ -60,7 +61,7 @@ func TestNewControlPlaneRejectsInvalidFallbackResolver(t *testing.T) {
 	conf.Global.FallbackResolver = "bad-resolver"
 	e := New(Options{})
 
-	_, err := e.newControlPlane(logrus.New(), nil, nil, conf, nil)
+	_, err := e.newControlPlane(logrus.New(), nil, nil, conf, nil, false)
 	if err == nil {
 		t.Fatal("expected newControlPlane() to reject invalid fallback_resolver")
 	}
@@ -126,6 +127,35 @@ func TestMaybePostStartupGCCooldown(t *testing.T) {
 	e.maybePostStartupGC(log, false)
 	if calls != 2 {
 		t.Fatalf("postStartupGC calls above threshold = %d, want 2", calls)
+	}
+}
+
+func TestWarnEmptyRuntimeConfigCanSuppressBootstrapEmptyWarnings(t *testing.T) {
+	var buf bytes.Buffer
+	log := logrus.New()
+	log.SetOutput(&buf)
+	log.SetFormatter(&logrus.TextFormatter{DisableTimestamp: true, DisableColors: true})
+
+	warnEmptyRuntimeConfig(log, map[string][]string{}, false, &config.Global{}, true)
+
+	if got := buf.String(); got != "" {
+		t.Fatalf("suppressed warnings = %q, want empty", got)
+	}
+}
+
+func TestWarnEmptyRuntimeConfigStillWarnsForRealEmptyConfig(t *testing.T) {
+	var buf bytes.Buffer
+	log := logrus.New()
+	log.SetOutput(&buf)
+	log.SetFormatter(&logrus.TextFormatter{DisableTimestamp: true, DisableColors: true})
+
+	warnEmptyRuntimeConfig(log, map[string][]string{}, false, &config.Global{}, false)
+
+	got := buf.String()
+	for _, want := range []string{"No node found.", "No interface to bind."} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("warnings = %q, want %q", got, want)
+		}
 	}
 }
 
