@@ -34,7 +34,9 @@ impl ProductChainTopology {
     fn source_contract_shape(&self) -> &'static str {
         match self.kind {
             ProductChainTopologyKind::Daed2Wing => "engine-default-direct",
-            ProductChainTopologyKind::StandaloneDaeWing => "runtime-service-port",
+            ProductChainTopologyKind::StandaloneDaeWing => {
+                "runtime-service-port-or-engine-default-direct"
+            }
         }
     }
 
