@@ -49,6 +49,41 @@ func TestRustBpfLoaderContractHelperFailure(t *testing.T) {
 	}
 }
 
+func TestRustBpfLoaderCommandContextUsesExplicitEnv(t *testing.T) {
+	helper := writeRustBpfLoaderHelper(t, false)
+	t.Setenv(rustBpfLoaderHelperEnv, helper)
+
+	cmd, err := rustBpfLoaderCommandContext(context.Background(), "bpf-loader", "contract")
+	if err != nil {
+		t.Fatalf("rustBpfLoaderCommandContext() error = %v", err)
+	}
+	if cmd.Path != helper {
+		t.Fatalf("helper path = %q, want %q", cmd.Path, helper)
+	}
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("helper command failed: %v: %s", err, strings.TrimSpace(string(out)))
+	}
+	if !strings.Contains(string(out), `"go_bpf_loader_removed_when_opted_in":true`) {
+		t.Fatalf("unexpected helper output: %q", string(out))
+	}
+}
+
+func TestRustAyaProductCallersUseExecutableResolver(t *testing.T) {
+	for _, file := range []string{
+		"rust_tproxy_listener.go",
+		"rust_domain_routing_helper.go",
+	} {
+		content, err := os.ReadFile(file)
+		if err != nil {
+			t.Fatalf("read %s: %v", file, err)
+		}
+		if strings.Contains(string(content), "rustBpfLoaderHelperPath(") {
+			t.Fatalf("%s bypasses embedded loader resolution", file)
+		}
+	}
+}
+
 func TestRustAyaCgroupMonitorPinPaths(t *testing.T) {
 	base := filepath.Join(t.TempDir(), "bpffs", consts.AppName)
 	loaderRoot := rustAyaLoaderPinRoot(base)
