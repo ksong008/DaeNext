@@ -15,7 +15,6 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/daeuniverse/dae/common/consts"
 	"golang.org/x/sys/unix"
 )
 
@@ -145,18 +144,8 @@ func (c *ControlPlane) updateListenSocketMapForListener(listener *Listener, tcpL
 	if listener.listenSocketMapReady && listener.listenSocketMapID == mapID {
 		return nil
 	}
-	if err := c.updateListenSocketMapViaRustAya(mapID, tcpListener, udpConn); err == nil {
-		listener.listenSocketMapReady = true
-		listener.listenSocketMapID = mapID
-		return nil
-	} else {
-		c.log.WithError(err).Debugln("Rust/Aya listen_socket_map update failed; falling back to Go map update")
-	}
-	if err := updateListenSocketMap(c.core.bpf.ListenSocketMap, consts.ZeroKey, tcpListener); err != nil {
-		return fmt.Errorf("update TCP listen socket map: %w", err)
-	}
-	if err := updateListenSocketMap(c.core.bpf.ListenSocketMap, consts.OneKey, udpConn); err != nil {
-		return fmt.Errorf("update UDP listen socket map: %w", err)
+	if err := c.updateListenSocketMapViaRustAya(mapID, tcpListener, udpConn); err != nil {
+		return err
 	}
 	listener.listenSocketMapReady = true
 	listener.listenSocketMapID = mapID

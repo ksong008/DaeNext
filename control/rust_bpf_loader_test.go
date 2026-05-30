@@ -84,6 +84,31 @@ func TestRustAyaProductCallersUseExecutableResolver(t *testing.T) {
 	}
 }
 
+func TestRustAyaTproxyListenerHasNoGoFallback(t *testing.T) {
+	checks := map[string][]string{
+		"control_plane.go": {
+			"falling back to Go listener",
+			"dialer.TproxyControl(c)",
+		},
+		"rust_tproxy_listener.go": {
+			"falling back to Go map update",
+			"updateListenSocketMap(c.core.bpf.ListenSocketMap",
+		},
+	}
+	for file, forbidden := range checks {
+		content, err := os.ReadFile(file)
+		if err != nil {
+			t.Fatalf("read %s: %v", file, err)
+		}
+		source := string(content)
+		for _, marker := range forbidden {
+			if strings.Contains(source, marker) {
+				t.Fatalf("%s still contains Go tproxy fallback marker %q", file, marker)
+			}
+		}
+	}
+}
+
 func TestRustAyaCgroupMonitorPinPaths(t *testing.T) {
 	base := filepath.Join(t.TempDir(), "bpffs", consts.AppName)
 	loaderRoot := rustAyaLoaderPinRoot(base)
