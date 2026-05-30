@@ -14706,3 +14706,158 @@ Block 1 skeleton contract 已完成：
 - Rust `aya-ebpf` skeleton 仍只作为显式 opt-in object source；默认 production object source 仍是 `c-aya`。
 - 本次未修改 routing/DNS/sniff/outbound/userspace active datapath，未基于测试机配置增加任何特定逻辑，未删除 C object 或 Go fallback。
 - 后续进入 Block 2 前，必须继续保持测试后立即清理临时资源的规定。
+
+## A2-Block2 Safe Side Effects 实施记录（2026-05-30）
+
+本节目标：
+
+- 在 A2-ARCH 约束下推进 Block 2: Safe Side Effects。
+- 只迁移不依赖完整 route loop 的 kernel side effect：cgroup cookie/pname map、`dae0peer` listener assign、`dae0` response restore、LAN/WAN UDP reverse state 基础写入。
+- 不改 Go userspace control plane、routing/DNS/sniff/outbound、daed2.0/dae-wing/outbound/quic-go 链路。
+- 不以测试机 config、节点、DNS、IP、端口、协议或日志现象作为实现标准。
+- 不切默认 object source，不删除 C object、Go BPF fallback 或 `tc` command fallback。
+
+修改前复核依据：
+
+- `DAEX_RUST_REBUILD_PLAN_2026-05-16.md` 阶段 7 / 阶段 14：eBPF/tproxy/netns active datapath 必须保持 BPF map ABI、reload 复用、TCP/UDP mark/mptcp 透传、netkit/veth/auto 边界。
+- `DAENEW_RUST_REBUILD_MEMO_2026-05-16.md` 第 5.11：Go 层当前负责 BPF object load/pin、tc/cgroup attach、LAN/WAN/dae netns 绑定、routing/domain/socket map 写入和 reload flip handle。
+- `DAENEW_RUST_REBUILD_MEMO_2026-05-16.md` 第 31.6 / A1-GoBPF 审计记录：eBPF map struct layout、reserved index、listener assign、redirect_track、UDP state、pname/cookie map 是 P0 parity 资产。
+
+本轮源码修改：
+
+- `rust/crates/dae-ebpf-program/src/helpers.rs`
+  - 新增 BPF helper wrapper，用于 Rust `aya-ebpf` program 内调用 `bpf_map_lookup_elem`、`bpf_map_update_elem`、`bpf_map_delete_elem`、`bpf_skb_load_bytes`、`bpf_skb_store_bytes`、`bpf_skb_change_type`、`bpf_redirect`、`bpf_get_socket_cookie`、`bpf_get_current_pid_tgid`、`bpf_get_current_comm`、`bpf_sk_assign`、`bpf_sk_release`。
+  - host target 保留 no-op stub，只用于 workspace check；真实 BPF target 使用 helper number。
+- `rust/crates/dae-ebpf-program/src/packet.rs`
+  - 新增最小 packet view：IPv4/IPv6、TCP/UDP、ICMPv6 NDP redirect、tuple build/reverse、redirect tuple build。
+  - 仅服务 Block 2 side effect，不接 routing optimizer、domain bitmap、LPM route loop、DNS/sniff/outbound userspace 逻辑。
+- `rust/crates/dae-ebpf-program/src/cgroup.rs`
+  - `sock_create` / `connect4` / `connect6` / `sendmsg4` / `sendmsg6` 写入 `cookie_pid_map` 和 `tgid_pname_map`。
+  - `sock_release` 删除 `cookie_pid_map`。
+  - 当前 Rust object 使用 `bpf_get_current_comm` 获取 pname；C object 中 `PARAM.has_bpf_get_current_task=true` 时通过 argv basename 获取更真实 pname。该 helper/BTF 路径尚未在 Rust object 中完成，不能作为 pname parity 完成证据。
+- `rust/crates/dae-ebpf-program/src/tproxy.rs`
+  - `dae0peer_ingress` 复刻安全副作用：要求 `skb->cb[0] == TPROXY_MARK`，设置 `skb->mark`，`bpf_skb_change_type(PACKET_HOST)`，根据 `skb->cb[1]` 从 `listen_socket_map` key 0/1 取 TCP/UDP listener 并 `bpf_sk_assign`。
+  - `dae0_ingress` 复刻 response restore 基础路径：反向构造 `redirect_tuple`，查 `redirect_track`，恢复源/目的 MAC，按 `from_wan` 设置 packet type 和 redirect flags，再 `bpf_redirect`。
+  - `lan_egress` / `wan_ingress` 对 UDP 包写 reversed `udp_conn_state_map`；`lan_egress` 保留本机 NDP redirect drop。
+- `rust/crates/dae-ebpf-program/src/udp_state.rs`
+  - 写入/复用 `udp_conn_state_map`，保留 `BpfUdpConnState` timer 字段 ABI。
+  - 当前 Rust object 没有 `.BTF`，真实调用 `bpf_timer_init` 会被 verifier 拒绝：`map 'udp_conn_state_' has to have BTF in order to use bpf_timer`。
+  - 因此本轮只准入“UDP state map side effect 可观测”，不伪装完成 UDP 300s timer parity；后续进入完整默认前必须补 Rust object BTF map/timer 方案，或另行证明 Go 等价替代。
+
+未修改内容：
+
+- 未修改 `control/kern/tproxy.c`。
+- 未修改 Go control plane、Go outbound 协议栈、routing/DNS/sniff userspace owner。
+- 未改变 `c-aya` 默认 object source；Rust object 仍必须显式 `--object-source rust-aya-skeleton --object <path>`。
+- 未删除 C object、generated Go BPF 证据、Go fallback、TC fallback。
+- 未把任何测试机 config、`geoip`、`geosite`、域名/IP/端口、VLESS 或当前节点现象写成实现分支。
+
+验证记录：
+
+| 验证项 | 结果 |
+| --- | --- |
+| `cargo fmt --manifest-path rust/Cargo.toml --all --check` | pass |
+| `cargo check --manifest-path rust/Cargo.toml -p dae-ebpf-program` | pass |
+| `cargo check --manifest-path rust/Cargo.toml --workspace` | pass |
+| `cargo +nightly build -Z build-std=core --manifest-path rust/Cargo.toml -p dae-ebpf-program --target bpfel-unknown-none --release` | pass |
+| `llvm-readelf -S/-s rust/target/bpfel-unknown-none/release/libdae_ebpf_program.so` | pass，Rust object 中 `dae0` / `dae0peer` / cgroup / UDP state 相关函数和 map symbol 已非空 skeleton |
+| `cargo test --manifest-path rust/Cargo.toml -p dae-aya-bpf-loader --features native-ebpf` | pass，19 passed |
+| `cargo test --manifest-path rust/Cargo.toml -p dae-ebpf-support` | pass，33 passed |
+| `cargo test --manifest-path rust/Cargo.toml -p dae-ebpf-support --features aya-loader` | pass，39 passed |
+| Rust object load-pin | pass，`object_source=rust-aya-skeleton`，12 maps + 16 programs pinned，`go_adoption_ready=true` |
+| cgroup attach-pin | pass，临时 `/sys/fs/cgroup/dae-a2-block2-smoke` 上 6 条 cgroup program 全部 attach/pin 成功 |
+| TCX attach-pin | pass，临时 veth 上 `tproxy_dae0peer_ingress` 以 `backend=tcx` attach，`fallback_used=false`，`tcx_order_verified=true` |
+| cleanup | pass，`/sys/fs/bpf/dae_a2_*`、`/sys/fs/cgroup/dae-a2-block2-smoke`、临时 veth 均无残留 |
+
+benchmark 记录：
+
+- 本轮改动是 kernel object side effect 和 verifier/load/attach 准入，不新增 userspace hot-path benchmark。
+- A2-ARCH.7 已规定 kernel datapath benchmark 不能用 synthetic us/op 替代；后续进入 Block 3/4 时再记录 C object vs Rust object 的 startup/load、reload、attach fallback 率、LAN TCP throughput/latency、UDP burst/drop、DNS qps/latency、RSS 和 verifier load time。
+
+Block 2 当前结论：
+
+- A2 Block 2 的可安全迁移部分已经完成：Rust object 可真实 load-pin，cgroup attach 可用，`dae0peer` listener assign / `dae0` response restore / UDP reverse state 写入已经进入 Rust eBPF object。
+- 当前仍不是完整 kernel datapath parity：LAN/WAN 初始 routing/tproxy route loop、connectivity gate、domain/LPM route、full UDP timer、TCP/UDP/DNS runtime traffic parity 尚未完成。
+- 由于 Rust object 暂无 `.BTF`，`udp_conn_state_map` 上的 `bpf_timer` 不能启用；这不是测试机特例，而是 verifier/BTF 通用门禁。
+- 默认 production object source 仍是 `c-aya`；Rust object 仍只允许 opt-in 对照验证。
+- 不允许基于本节结果删除 C object 或 Go BPF fallback；删除只能在后续完整 parity、benchmark、远程 host write 和用户确认之后执行。
+
+## A2-Block3/Block4 Rust aya-ebpf object 收口记录（2026-05-30）
+
+本节目标：
+
+- 完成 A2-ARCH 中 Block 3: Routing/TProxy Core 和 Block 4 的本地 runtime admission 收口。
+- 仍只替换/验证 kernel eBPF object；Go userspace control plane、routing/DNS/sniff/group/outbound、daed2.0/dae-wing/outbound/quic-go 链路继续保持权威。
+- 不以测试机 config、域名、IP、端口、协议、节点或 VLESS/Telegram 等现象作为实现标准。
+- 不切默认 object source，不删除 C object、Go BPF fallback 或 `tc` command fallback。
+
+修改前复核依据：
+
+- `DAEX_RUST_REBUILD_PLAN_2026-05-16.md`：active datapath 必须保持 eBPF map ABI、tproxy listener、reload BPF 复用、netkit/veth 与 attach backend 分层。
+- `DAENEW_RUST_REBUILD_MEMO_2026-05-16.md` 第 5.4、5.5、5.6、5.11：`ControlPlane -> BPF maps/programs -> tproxy listener -> TCP/UDP/DNS/sniff/userspace route/outbound` 的边界必须保持；A2 不改 userspace 选择 outbound 的流程。
+- `DAENEW_RUST_REBUILD_MEMO_2026-05-16.md` 第 5.10：sniff/dial mode 是 userspace TCP/UDP handler 语义；A2 kernel route loop 只消费 map 结果，不新增协议特定逻辑。
+- A2-ARCH.4 / A2-ARCH.8：C object 仍是 golden baseline；默认切换和删除 fallback 必须另走完整准入和用户确认。
+
+本轮源码修改：
+
+- `rust/crates/dae-ebpf-program/src/helpers.rs`
+  - 补齐 `bpf_skb_change_head`、`bpf_sk_lookup_udp`、`bpf_skc_lookup_tcp`、`bpf_redirect_peer`、`bpf_loop` wrapper。
+- `rust/crates/dae-ebpf-program/src/packet.rs`
+  - 完成 Ethernet/IPv4/IPv6 extension header/TCP/UDP/ICMPv6 parse，补齐 DSCP、tuple/reverse tuple、socket tuple、redirect tuple、MAC/IP copy、TCP SYN/ACK helper。
+- `rust/crates/dae-ebpf-program/src/routing.rs`
+  - 按 C `route_loop_cb` / `route` 语义实现通用 route loop：`routing_map` 顺序扫描、`lpm_array_map`、`domain_routing_map` bitmap、端口/source-port、l4proto、ipversion、MAC、pname、DSCP、fallback、logical OR/not/must、DNS control-plane-routing 语义。
+  - 补齐 `routing_tuples_map` lookup/save、`outbound_connectivity_map` 查询、pid/control-plane helper。
+  - 未加入任何 config-specific 或 protocol-specific 分支。
+- `rust/crates/dae-ebpf-program/src/tproxy.rs`
+  - 接入 `lan_ingress` / `wan_egress` 初始 route、TCP established restore、UDP state、direct/block/connectivity gate、redirect prep。
+  - 保持 `dae0peer_ingress` listener assign、`dae0_ingress` return restore、`lan_egress`/`wan_ingress` reverse UDP state。
+- `rust/crates/dae-ebpf-program/src/programs.rs`
+  - 将 `tproxy_lan_ingress_l2/l3`、`tproxy_wan_egress_l2/l3` 接到 Rust tproxy core。
+- `rust/crates/dae-ebpf-program/src/abi.rs` / `maps.rs`
+  - 将 `udp_conn_state_map` 改为 `.maps` BTF map definition，value 内 timer 类型改为 BTF 可识别的 `bpf_timer` 等价结构。
+  - 解除 Block 2 记录中的通用 blocker：`bpf_timer` 不再因 legacy map 缺少 key/value BTF 被 verifier 拒绝。
+- `.cargo/config.toml` / `rust/.cargo/config.toml`
+  - 为 repo root 与 `rust/` manifest 两种构建入口都显式配置 `bpf-linker` 和 `--btf`，避免从 root 构建时丢失 `.BTF/.BTF.ext`。
+
+本轮未修改内容：
+
+- 未修改 `control/kern/tproxy.c`，C object 继续保留为 golden baseline。
+- 未修改 Go control plane、Go outbound 协议栈、DNS/sniff/userspace routing owner。
+- 未修改 daed2.0/dae-wing/outbound/quic-go 产品链路。
+- 未切换 production 默认 object source；`rust-aya-skeleton` 仍需显式 opt-in。
+- 未删除 C object、Go BPF fallback、TC fallback、netkit/veth fallback。
+
+验证记录：
+
+| 验证项 | 结果 |
+| --- | --- |
+| `cargo fmt --manifest-path rust/Cargo.toml --all --check` | pass |
+| `cargo check --manifest-path rust/Cargo.toml -p dae-ebpf-program` | pass |
+| `cargo check --manifest-path rust/Cargo.toml --workspace` | pass |
+| `cargo +nightly build -Z build-std=core --manifest-path rust/Cargo.toml -p dae-ebpf-program --target bpfel-unknown-none --release` | pass |
+| `llvm-readelf -S rust/target/bpfel-unknown-none/release/libdae_ebpf_program.so` | pass，存在 legacy `maps`、BTF `.maps`、`.BTF`、`.BTF.ext` |
+| Rust object load-pin | pass，`object_source=rust-aya-skeleton`，12 maps + 16 programs pinned，`go_adoption_ready=true` |
+| Rust object timer verifier | pass，`udp_conn_state_map` BTF map + `bpf_timer` value 通过 load-pin |
+| Rust object cgroup attach-pin | pass，临时 cgroup 上 6 条 cgroup program 全部 attach/pin 成功 |
+| Rust object TC attach matrix | pass，临时 veth/netns 上 6 条 LAN/WAN/dae0/dae0peer TC attach 全部通过，`backend=auto` |
+| C object baseline load-pin | pass，默认 `c-aya` 同样 12 maps + 16 programs pinned，`go_adoption_ready=true` |
+| C object baseline TC/cgroup attach matrix | pass，同一类临时 veth/netns/cgroup smoke 全部通过 |
+| `cargo test --manifest-path rust/Cargo.toml -p dae-aya-bpf-loader --features native-ebpf` | pass，19 passed |
+| `cargo test --manifest-path rust/Cargo.toml -p dae-ebpf-support` | pass，33 passed |
+| `cargo test --manifest-path rust/Cargo.toml -p dae-ebpf-support --features aya-loader` | pass，39 passed |
+| `cargo test --manifest-path rust/Cargo.toml --workspace` | pass，workspace unit/doc tests 全部通过 |
+| cleanup | pass，`/tmp`、`/var/tmp`、`/sys/fs/bpf/dae_a2_*`、临时 veth/netns/cgroup 均无残留 |
+
+benchmark 记录：
+
+- 本轮是 kernel object rewrite 的 verifier/load/adopt/attach admission，不新增 userspace `us/op b/op allocs/op` benchmark。
+- C/Rust 对比本轮记录为 object load-pin 与 TC/cgroup attach parity；还不是生产流量 benchmark。
+- 若后续推进默认切换或删除 fallback，必须补生产链路 benchmark：load/reload 耗时、attach fallback 率、LAN TCP throughput/latency、UDP burst/drop、DNS qps/latency、RSS、verifier load time，并与 C object/Go BPF baseline 对比。
+
+A2 收口结论：
+
+- A2 Block 1-4 在本地完成：Rust `aya-ebpf` object 已具备 map/program/section/ABI、safe side effect、routing/tproxy core、BTF timer、load/adopt、cgroup attach 和 TC attach matrix 的本机准入证据。
+- A2 没有改变 userspace 语义；routing/DNS/sniff/group/outbound 仍由现有 Go control plane 和既有 Rust userspace owner 负责。
+- A2 没有把任何测试机配置写入实现；后续排查真实流量问题仍必须从通用规则/map/packet/attach 语义出发。
+- A2 仍不等于 production 默认切换完成：远程 host write、真实 reload/runtime parity、LAN/WAN TCP/UDP/DNS 流量 benchmark、长稳和失败回滚仍需在下一阶段单独准入。
+- 因此当前可以把 A2 标记为“Rust/Aya eBPF object 本地准入完成”，但不得据此删除 C object、Go BPF fallback 或 `tc` fallback，也不得默认切到 Rust object，除非后续阶段给出生产流量证据并获得用户确认。
