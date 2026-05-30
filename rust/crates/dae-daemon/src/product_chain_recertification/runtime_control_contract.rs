@@ -154,17 +154,23 @@ fn daed2_wing_runtime_control_source_files(repo: &Path) -> Vec<Value> {
 
 fn standalone_dae_wing_runtime_control_source_files(repo: &Path) -> Vec<Value> {
     vec![
-        source_file_contract_json(
+        source_file_contract_any_json(
             repo,
             "cmd/run.go",
             &[
                 (
-                    "runtime_lifecycle_service_run",
-                    "engine.DefaultRuntimeLifecycleService().Run(",
+                    "runtime_lifecycle_run",
+                    &[
+                        "engine.DefaultRuntimeLifecycleService().Run(",
+                        "engine.Default().Run(",
+                    ][..],
                 ),
-                ("restore_running_state", "orchestrator.RestoreRunningState("),
-                ("control_plane_api_handler", "httpapi.NewHandler()"),
-                ("api_only_mode_preserved", "apiOnly"),
+                (
+                    "restore_running_state",
+                    &["orchestrator.RestoreRunningState("][..],
+                ),
+                ("control_plane_api_handler", &["httpapi.NewHandler()"][..]),
+                ("api_only_mode_preserved", &["apiOnly"][..]),
             ],
         ),
         source_file_contract_json(
@@ -198,37 +204,70 @@ fn standalone_dae_wing_runtime_control_source_files(repo: &Path) -> Vec<Value> {
                 ),
             ],
         ),
-        source_file_contract_json(
-            repo,
-            "transport/httpapi/service_port.go",
-            &[
-                (
-                    "runtime_status_port_get_overview",
-                    "GetRuntimeOverview(windowSec int, maxPoints int)",
+        source_contract_alternative_json(
+            "runtime_status_access_provider",
+            vec![
+                source_file_contract_json(
+                    repo,
+                    "transport/httpapi/service_port.go",
+                    &[
+                        (
+                            "runtime_status_port_get_overview",
+                            "GetRuntimeOverview(windowSec int, maxPoints int)",
+                        ),
+                        (
+                            "runtime_access_service_provider",
+                            "engine.DefaultRuntimeAccessService()",
+                        ),
+                    ],
                 ),
-                (
-                    "runtime_access_service_provider",
-                    "engine.DefaultRuntimeAccessService()",
+                source_file_contract_json(
+                    repo,
+                    "engine/engine.go",
+                    &[
+                        ("engine_default_service", "func Default() Service"),
+                        (
+                            "reload_context",
+                            "ReloadContext(ctx context.Context, conf *daeConfig.Config) error",
+                        ),
+                        (
+                            "runtime_overview_service",
+                            "GetRuntimeOverview(windowSec int, maxPoints int)",
+                        ),
+                        (
+                            "route_aware_http_transport",
+                            "HTTPTransport() http.RoundTripper",
+                        ),
+                    ],
                 ),
             ],
         ),
-        source_file_contract_json(
+        source_file_contract_any_json(
             repo,
             "orchestrator/config_run.go",
             &[
-                ("runtime_lifecycle_lock", "lockRuntimeLifecycle()"),
-                ("reload_with_context", "ReloadWithContext(ctx, c)"),
+                ("runtime_lifecycle_lock", &["lockRuntimeLifecycle()"][..]),
+                (
+                    "reload_with_context",
+                    &["ReloadWithContext(ctx, c)", "ReloadContext(ctx, c)"][..],
+                ),
                 (
                     "dry_run_reload_with_empty_config",
-                    "ReloadWithContext(ctx, engine.DefaultConfigService().EmptyConfig())",
+                    &[
+                        "ReloadWithContext(ctx, engine.DefaultConfigService().EmptyConfig())",
+                        "ReloadContext(ctx, engine.Default().EmptyConfig())",
+                    ][..],
                 ),
                 (
                     "restore_running_state_entrypoint",
-                    "RestoreRunningState(ctx context.Context)",
+                    &["RestoreRunningState(ctx context.Context)"][..],
                 ),
                 (
-                    "stop_runtime_lifecycle_service",
-                    "engine.DefaultRuntimeLifecycleService().Stop(timeout)",
+                    "stop_runtime",
+                    &[
+                        "engine.DefaultRuntimeLifecycleService().Stop(timeout)",
+                        "engine.Default().Stop(timeout)",
+                    ][..],
                 ),
             ],
         ),
@@ -319,6 +358,20 @@ fn source_contract_group_json(repo: &Path, name: &str, files: Vec<Value>) -> Val
     })
 }
 
+fn source_contract_alternative_json(name: &str, variants: Vec<Value>) -> Value {
+    let source_contract_preserved = variants.iter().any(|variant| {
+        variant["source_contract_preserved"]
+            .as_bool()
+            .unwrap_or(false)
+    });
+    json!({
+        "name": name,
+        "status": if source_contract_preserved { "pass" } else { "fail" },
+        "source_contract_preserved": source_contract_preserved,
+        "alternatives": variants,
+    })
+}
+
 fn source_file_contract_json(repo: &Path, relative: &str, checks: &[(&str, &str)]) -> Value {
     let path = repo.join(relative);
     let Ok(text) = fs::read_to_string(&path) else {
@@ -339,6 +392,41 @@ fn source_file_contract_json(repo: &Path, relative: &str, checks: &[(&str, &str)
     let mut passed = true;
     for (name, needle) in checks {
         let found = text.contains(needle);
+        if !found {
+            passed = false;
+        }
+        check_values.insert((*name).to_owned(), json!(found));
+    }
+    json!({
+        "relative_path": relative,
+        "path": path_string(&path),
+        "status": if passed { "pass" } else { "fail" },
+        "readable": true,
+        "checks": check_values,
+        "source_contract_preserved": passed,
+    })
+}
+
+fn source_file_contract_any_json(repo: &Path, relative: &str, checks: &[(&str, &[&str])]) -> Value {
+    let path = repo.join(relative);
+    let Ok(text) = fs::read_to_string(&path) else {
+        let mut check_values = Map::new();
+        for (name, _) in checks {
+            check_values.insert((*name).to_owned(), json!(false));
+        }
+        return json!({
+            "relative_path": relative,
+            "path": path_string(&path),
+            "status": "fail",
+            "readable": false,
+            "checks": check_values,
+            "source_contract_preserved": false,
+        });
+    };
+    let mut check_values = Map::new();
+    let mut passed = true;
+    for (name, needles) in checks {
+        let found = needles.iter().any(|needle| text.contains(needle));
         if !found {
             passed = false;
         }
