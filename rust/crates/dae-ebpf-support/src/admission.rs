@@ -96,7 +96,7 @@ impl NativeBackendAdmissionEvidence {
             tc_attach_matrix_parity_passed: true,
             cgroup_attach_matrix_parity_passed: true,
             cgroup_attach_smoke_passed: true,
-            go_bpf_fallback_retired: true,
+            go_bpf_fallback_retired: false,
             c_ebpf_object_fallback_preserved: true,
             tc_command_fallback_preserved: true,
         }
@@ -164,7 +164,6 @@ pub fn native_backend_required_checks() -> Vec<NativeBackendAdmissionCheck> {
         NativeBackendAdmissionCheck::TcAttachMatrixParity,
         NativeBackendAdmissionCheck::CgroupAttachMatrixParity,
         NativeBackendAdmissionCheck::CgroupAttachSmoke,
-        NativeBackendAdmissionCheck::GoBpfFallbackRetired,
         NativeBackendAdmissionCheck::CEbpfObjectFallbackPreserved,
         NativeBackendAdmissionCheck::TcCommandFallbackPreserved,
     ]

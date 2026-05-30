@@ -51,9 +51,9 @@
     }
   ],
   "loader": {
-    "default": "rust-aya",
+    "default": "go",
     "default_daemon_path": false,
-    "disable_env": "DAE_TRACE_RUST_AYA_LOADER=0",
+    "enable_env": "DAE_TRACE_RUST_AYA_LOADER=1",
     "go_fallback_preserved": true,
     "helper_default": "dae-aya-bpf-loader",
     "helper_env": "DAE_RUST_BPF_LOADER_HELPER",

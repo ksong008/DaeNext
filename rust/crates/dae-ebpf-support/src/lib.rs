@@ -7,6 +7,9 @@ pub mod capability;
 pub mod cgroup;
 pub mod connectivity;
 pub mod kernel;
+pub mod kernel_program;
+pub mod kernel_program_packet;
+pub mod kernel_program_trace;
 pub mod loader;
 pub mod maps;
 pub mod opt_in;
@@ -24,6 +27,12 @@ pub mod tproxy_listener;
 mod admission_tests;
 #[cfg(test)]
 mod cgroup_tests;
+#[cfg(test)]
+mod kernel_program_packet_tests;
+#[cfg(test)]
+mod kernel_program_tests;
+#[cfg(test)]
+mod kernel_program_trace_tests;
 #[cfg(test)]
 mod opt_in_tests;
 #[cfg(test)]
@@ -50,9 +59,11 @@ pub use attach::{
 #[cfg(feature = "aya-loader")]
 pub use aya_loader::{
     AyaCgroupAttachDetachReport, AyaGoAdoptionPinReport, AyaPinnedObject, AyaTcAttachDetachReport,
-    AyaTcxProgramOrderEntry, AyaTraceConfig, AyaTraceLoadPinReport, AyaTraceLoaderOptions,
+    AyaTcxProgramOrderEntry, AyaTraceAttachRingbufSmokeOptions, AyaTraceAttachRingbufSmokeReport,
+    AyaTraceAttachSmokeTrigger, AyaTraceConfig, AyaTraceLoadPinReport, AyaTraceLoaderOptions,
     AyaUserspaceLoadReport, AyaUserspaceLoadedObject, AyaUserspaceLoaderOptions,
-    PinnedTcAttachOptions, PinnedTcAttachReport, attach_pin_aya_sched_classifier,
+    PinnedTcAttachOptions, PinnedTcAttachReport, TRACE_CORE_SIDELOAD_ENABLED,
+    attach_pin_aya_sched_classifier, attach_ringbuf_smoke_aya_trace_object,
     aya_userspace_load_report, load_attach_aya_cgroup_program, load_attach_aya_sched_classifier,
     load_attach_detach_aya_cgroup_program, load_attach_detach_aya_sched_classifier,
     load_aya_userspace_object, load_pin_aya_trace_object, pin_aya_loaded_object_for_go_adoption,
@@ -68,6 +79,35 @@ pub use connectivity::{
     ConnectivityWritePlan, connectivity_write_plan, update_connectivity_map_by_id,
 };
 pub use kernel::{FeatureGateReport, Version};
+pub use kernel_program::{
+    KernelProgramCoverageLine, KernelProgramCoverageStatus, KernelProgramFallbackRetirementBlocker,
+    KernelProgramFallbackRetirementEvidence, KernelProgramFallbackRetirementGateReport,
+    KernelProgramFeasibilityReport, KernelProgramParityAdmissionReport, KernelProgramParityCheck,
+    KernelProgramParityEvidence, KernelProgramParityEvidenceLine,
+    KernelProgramParityEvidenceStatus, KernelProgramSurface, TproxyDataplaneAdmissionReport,
+    TraceDiagnosticGateReport, kernel_program_fallback_retirement_gate_report,
+    kernel_program_feasibility_report, kernel_program_parity_admission_report,
+    kernel_program_parity_evidence_queue, kernel_program_parity_required_checks,
+    map_abi_btf_verifier_evidence_admitted, map_abi_btf_verifier_evidence_queue,
+    matched_go_rust_benchmark_evidence_admitted, matched_go_rust_benchmark_evidence_queue,
+    packet_level_golden_evidence_admitted, packet_level_golden_evidence_queue,
+    remote_host_write_runtime_evidence_admitted, remote_host_write_runtime_evidence_queue,
+    tproxy_dataplane_admission_report, tproxy_dataplane_evidence_queue,
+    tproxy_dataplane_required_checks, tproxy_kernel_program_coverage, trace_diagnostic_gate_report,
+    trace_kernel_program_coverage,
+};
+pub use kernel_program_packet::{
+    ETH_HLEN, ETH_P_IP_NETWORK, ETH_P_IPV6_NETWORK, IPPROTO_ICMPV6, IPPROTO_TCP, IPPROTO_UDP,
+    KernelPacketGoldenCase, KernelPacketParseDisposition, KernelPacketParseReport,
+    KernelPacketParsed, NDP_REDIRECT, packet_level_golden_cases, parse_kernel_program_packet,
+};
+pub use kernel_program_trace::{
+    TRACE_CORE_SIDELOAD_DISABLED_REASON, TraceConfigRewriteContract, TraceCoreSideloadGateReport,
+    TraceEventAbiContract, TraceKprobeProgramSpec, TraceTargetDiscoveryContract,
+    trace_config_rewrite_contract, trace_core_sideload_gate_report, trace_event_abi_contract,
+    trace_kprobe_evidence_admitted, trace_kprobe_evidence_queue, trace_kprobe_program_specs,
+    trace_target_discovery_contract,
+};
 pub use loader::{
     LoaderBackend, LoaderContract, PinnedMapAction, loader_contract, pinned_map_action,
 };

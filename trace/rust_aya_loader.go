@@ -188,10 +188,10 @@ func rustTraceLoaderHelperPath() string {
 
 func rustTraceAyaLoaderEnabled() bool {
 	switch strings.ToLower(strings.TrimSpace(os.Getenv("DAE_TRACE_RUST_AYA_LOADER"))) {
-	case "0", "false", "off", "no":
-		return false
-	default:
+	case "1", "true", "on", "yes":
 		return true
+	default:
+		return false
 	}
 }
 

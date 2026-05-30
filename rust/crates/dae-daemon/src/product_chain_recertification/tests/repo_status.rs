@@ -71,3 +71,107 @@ fn product_chain_recertification_blocks_when_repo_status_is_unavailable() {
     assert!(!report["default_switch_allowed"].as_bool().unwrap());
     let _ = std::fs::remove_dir_all(root);
 }
+
+#[test]
+fn daed2_wing_detached_head_can_match_independent_local_origin_branch() {
+    let root = std::env::temp_dir().join(format!(
+        "dae-daemon-product-chain-detached-wing-{}",
+        std::process::id()
+    ));
+    let origin = root.join("dae-wing-daex-align");
+    let wing = root.join("daed/wing");
+    std::fs::create_dir_all(&origin).unwrap();
+    assert!(
+        std::process::Command::new("git")
+            .args(["init", "--quiet"])
+            .current_dir(&origin)
+            .status()
+            .unwrap()
+            .success()
+    );
+    assert!(
+        std::process::Command::new("git")
+            .args(["config", "user.email", "daemon-test@example.invalid"])
+            .current_dir(&origin)
+            .status()
+            .unwrap()
+            .success()
+    );
+    assert!(
+        std::process::Command::new("git")
+            .args(["config", "user.name", "dae-daemon-test"])
+            .current_dir(&origin)
+            .status()
+            .unwrap()
+            .success()
+    );
+    write_fixture_file(&origin.join("README.md"), "fixture\n");
+    assert!(
+        std::process::Command::new("git")
+            .args(["add", "README.md"])
+            .current_dir(&origin)
+            .status()
+            .unwrap()
+            .success()
+    );
+    assert!(
+        std::process::Command::new("git")
+            .args(["commit", "--quiet", "-m", "fixture"])
+            .current_dir(&origin)
+            .status()
+            .unwrap()
+            .success()
+    );
+    assert!(
+        std::process::Command::new("git")
+            .args(["checkout", "--quiet", "-B", "daewing2-daex-align"])
+            .current_dir(&origin)
+            .status()
+            .unwrap()
+            .success()
+    );
+    assert!(
+        std::process::Command::new("git")
+            .args([
+                "clone",
+                "--quiet",
+                origin.to_str().unwrap(),
+                wing.to_str().unwrap()
+            ])
+            .current_dir(&root)
+            .status()
+            .unwrap()
+            .success()
+    );
+    let head = std::process::Command::new("git")
+        .args(["rev-parse", "HEAD"])
+        .current_dir(&wing)
+        .output()
+        .unwrap();
+    assert!(head.status.success());
+    let head = String::from_utf8_lossy(&head.stdout).trim().to_owned();
+    assert!(
+        std::process::Command::new("git")
+            .args(["checkout", "--quiet", "--detach", &head])
+            .current_dir(&wing)
+            .status()
+            .unwrap()
+            .success()
+    );
+
+    let report = repo_status_json("daed-wing", &wing);
+    assert!(report["git_status_available"].as_bool().unwrap());
+    assert!(report["actual_branch"].is_null());
+    assert!(
+        report["detached_head_matches_expected_local_origin"]
+            .as_bool()
+            .unwrap()
+    );
+    assert!(report["branch_matches_expected"].as_bool().unwrap());
+    assert_eq!(
+        report["branch_contract_source"].as_str().unwrap(),
+        "detached_head_local_origin"
+    );
+    assert!(report["branch_contract_preserved"].as_bool().unwrap());
+    let _ = std::fs::remove_dir_all(root);
+}

@@ -95,6 +95,38 @@ struct TraceLoaderLoadPinOptions {
     ringbuf_size: u32,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum TraceLoaderAttachSmokeTrigger {
+    LoopbackUdp,
+    OpenProcSelfStat,
+}
+
+impl TraceLoaderAttachSmokeTrigger {
+    fn parse(value: &str) -> Result<Self, String> {
+        match value {
+            "loopback-udp" => Ok(Self::LoopbackUdp),
+            "open-proc-self-stat" => Ok(Self::OpenProcSelfStat),
+            _ => Err(format!(
+                "bad trace attach smoke trigger: {value}; want loopback-udp or open-proc-self-stat"
+            )),
+        }
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct TraceLoaderAttachRingbufSmokeOptions {
+    object: PathBuf,
+    target: String,
+    program_name: String,
+    ip_version: u8,
+    l4_proto: u16,
+    port: u16,
+    ringbuf_size: u32,
+    trigger: TraceLoaderAttachSmokeTrigger,
+    trigger_count: u32,
+    poll_attempts: u32,
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 struct ConnectivityMapUpdateOptions {
     map_id: u32,
@@ -282,6 +314,12 @@ fn run_trace_loader_command(args: &[String]) -> LoaderOutput {
             Ok(options) => run_trace_load_pin(options),
             Err(err) => LoaderOutput::usage(err),
         },
+        Some("attach-ringbuf-smoke") => {
+            match parse_trace_attach_ringbuf_smoke_options(&args[1..]) {
+                Ok(options) => run_trace_attach_ringbuf_smoke(options),
+                Err(err) => LoaderOutput::usage(err),
+            }
+        }
         Some(subcommand) => {
             LoaderOutput::usage(format!("unsupported trace-loader subcommand: {subcommand}"))
         }
@@ -684,18 +722,27 @@ fn run_map_stats_count(requests: Vec<MapStatsCountRequest>) -> LoaderOutput {
 }
 
 fn run_trace_loader_contract() -> LoaderOutput {
+    let gate = dae_ebpf_support::trace_core_sideload_gate_report();
     LoaderOutput::ok(format!(
         "{}\n",
         json!({
             "name": "rust-aya-trace-loader-contract-v1",
             "binary": "dae-aya-bpf-loader",
             "compiled_native_ebpf": cfg!(feature = "native-ebpf"),
-            "scope": "Rust/Aya loads the existing trace C eBPF object and pins maps/programs for Go trace attach and ringbuf adoption",
+            "scope": "Rust/Aya trace CO-RE side-load contract is retained for audit but temporarily disabled",
+            "core_sideload_enabled": gate.enabled,
+            "disabled_reason": gate.disabled_reason,
             "default_daemon_path": false,
             "kernel_ebpf_program_rewrite": false,
+            "go_trace_adoption_ready": gate.go_trace_adoption_ready,
+            "rust_core_relocation_required": gate.rust_core_relocation_required,
+            "restore_gate": gate.restore_gate,
             "required_pins": {
-                "maps": "pin_root/maps/{events,skb_addresses}",
-                "programs": "pin_root/programs/kprobe_skb_*"
+                "maps": null,
+                "programs": null
+            },
+            "non_default_smokes": {
+                "attach_ringbuf": "disabled"
             },
             "config_source": {
                 "port": "host-order u16, converted to BPF big-endian tracing_cfg.port",
@@ -1241,7 +1288,62 @@ fn run_trace_load_pin(options: TraceLoaderLoadPinOptions) -> LoaderOutput {
 
 #[cfg(not(feature = "native-ebpf"))]
 fn run_trace_load_pin(_options: TraceLoaderLoadPinOptions) -> LoaderOutput {
-    LoaderOutput::error("trace-loader load-pin requires dae-aya-bpf-loader feature native-ebpf")
+    LoaderOutput::error(dae_ebpf_support::trace_core_sideload_gate_report().disabled_reason)
+}
+
+#[cfg(feature = "native-ebpf")]
+fn run_trace_attach_ringbuf_smoke(options: TraceLoaderAttachRingbufSmokeOptions) -> LoaderOutput {
+    use dae_ebpf_support::{
+        AyaTraceAttachRingbufSmokeOptions, AyaTraceAttachSmokeTrigger,
+        attach_ringbuf_smoke_aya_trace_object,
+    };
+
+    let trigger = match options.trigger {
+        TraceLoaderAttachSmokeTrigger::LoopbackUdp => AyaTraceAttachSmokeTrigger::LoopbackUdp,
+        TraceLoaderAttachSmokeTrigger::OpenProcSelfStat => {
+            AyaTraceAttachSmokeTrigger::OpenProcSelfStat
+        }
+    };
+    let report = match attach_ringbuf_smoke_aya_trace_object(AyaTraceAttachRingbufSmokeOptions {
+        object: &options.object,
+        target: &options.target,
+        program_name: &options.program_name,
+        port: options.port,
+        l4_proto: options.l4_proto,
+        ip_version: options.ip_version,
+        ringbuf_size: options.ringbuf_size,
+        trigger,
+        trigger_count: options.trigger_count,
+        poll_attempts: options.poll_attempts,
+    }) {
+        Ok(report) => report,
+        Err(err) => return LoaderOutput::error(err),
+    };
+    LoaderOutput::ok(format!(
+        "{}\n",
+        json!({
+            "status": "pass",
+            "loader": "rust-aya",
+            "scope": "trace-attach-ringbuf-smoke",
+            "object": report.object,
+            "target": report.target,
+            "program_name": report.program_name,
+            "trigger": report.trigger.as_str(),
+            "trigger_count": report.trigger_count,
+            "poll_attempts": report.poll_attempts,
+            "events_seen": report.events_seen,
+            "first_event_len": report.first_event_len,
+            "first_event_pc_nonzero": report.first_event_pc_nonzero,
+            "first_event_skb_nonzero": report.first_event_skb_nonzero,
+            "sk_buff_core_semantics": false,
+            "default_daemon_path": false,
+        })
+    ))
+}
+
+#[cfg(not(feature = "native-ebpf"))]
+fn run_trace_attach_ringbuf_smoke(_options: TraceLoaderAttachRingbufSmokeOptions) -> LoaderOutput {
+    LoaderOutput::error(dae_ebpf_support::trace_core_sideload_gate_report().disabled_reason)
 }
 
 #[cfg(feature = "native-ebpf")]
@@ -1526,6 +1628,130 @@ fn parse_trace_load_pin_options(args: &[String]) -> Result<TraceLoaderLoadPinOpt
         port: port.ok_or_else(|| "missing trace-loader load-pin --port".to_owned())?,
         ringbuf_size: ringbuf_size
             .ok_or_else(|| "missing trace-loader load-pin --ringbuf-size".to_owned())?,
+    })
+}
+
+fn parse_trace_attach_ringbuf_smoke_options(
+    args: &[String],
+) -> Result<TraceLoaderAttachRingbufSmokeOptions, String> {
+    let mut object = None;
+    let mut target = None;
+    let mut program_name = Some("kprobe_skb_1".to_owned());
+    let mut ip_version = Some(4_u8);
+    let mut l4_proto = Some(6_u16);
+    let mut port = Some(443_u16);
+    let mut ringbuf_size = Some(65_536_u32);
+    let mut trigger = Some(TraceLoaderAttachSmokeTrigger::LoopbackUdp);
+    let mut trigger_count = Some(4_u32);
+    let mut poll_attempts = Some(50_u32);
+    let mut iter = args.iter();
+    while let Some(arg) = iter.next() {
+        match arg.as_str() {
+            "--object" => {
+                object = Some(parse_next_path(
+                    &mut iter,
+                    "trace-loader attach-ringbuf-smoke --object",
+                )?)
+            }
+            "--target" => {
+                target = Some(
+                    next_value(&mut iter, "trace-loader attach-ringbuf-smoke --target")?.to_owned(),
+                )
+            }
+            "--program-name" => {
+                program_name = Some(
+                    next_value(
+                        &mut iter,
+                        "trace-loader attach-ringbuf-smoke --program-name",
+                    )?
+                    .to_owned(),
+                )
+            }
+            "--ip-version" => {
+                ip_version = Some(parse_next::<u8>(
+                    &mut iter,
+                    "trace-loader attach-ringbuf-smoke --ip-version",
+                )?)
+            }
+            "--l4-proto" => {
+                l4_proto = Some(parse_next::<u16>(
+                    &mut iter,
+                    "trace-loader attach-ringbuf-smoke --l4-proto",
+                )?)
+            }
+            "--port" => {
+                port = Some(parse_next::<u16>(
+                    &mut iter,
+                    "trace-loader attach-ringbuf-smoke --port",
+                )?)
+            }
+            "--ringbuf-size" => {
+                ringbuf_size = Some(parse_next::<u32>(
+                    &mut iter,
+                    "trace-loader attach-ringbuf-smoke --ringbuf-size",
+                )?)
+            }
+            "--trigger" => {
+                trigger = Some(TraceLoaderAttachSmokeTrigger::parse(next_value(
+                    &mut iter,
+                    "trace-loader attach-ringbuf-smoke --trigger",
+                )?)?)
+            }
+            "--trigger-count" => {
+                trigger_count = Some(parse_next::<u32>(
+                    &mut iter,
+                    "trace-loader attach-ringbuf-smoke --trigger-count",
+                )?)
+            }
+            "--poll-attempts" => {
+                poll_attempts = Some(parse_next::<u32>(
+                    &mut iter,
+                    "trace-loader attach-ringbuf-smoke --poll-attempts",
+                )?)
+            }
+            _ if arg.starts_with("--object=") => object = Some(parse_path_value(arg)?),
+            _ if arg.starts_with("--target=") => target = Some(split_value(arg)?.to_owned()),
+            _ if arg.starts_with("--program-name=") => {
+                program_name = Some(split_value(arg)?.to_owned())
+            }
+            _ if arg.starts_with("--ip-version=") => ip_version = Some(parse_value(arg)?),
+            _ if arg.starts_with("--l4-proto=") => l4_proto = Some(parse_value(arg)?),
+            _ if arg.starts_with("--port=") => port = Some(parse_value(arg)?),
+            _ if arg.starts_with("--ringbuf-size=") => ringbuf_size = Some(parse_value(arg)?),
+            _ if arg.starts_with("--trigger=") => {
+                trigger = Some(TraceLoaderAttachSmokeTrigger::parse(split_value(arg)?)?)
+            }
+            _ if arg.starts_with("--trigger-count=") => trigger_count = Some(parse_value(arg)?),
+            _ if arg.starts_with("--poll-attempts=") => poll_attempts = Some(parse_value(arg)?),
+            _ => {
+                return Err(format!(
+                    "unsupported trace-loader attach-ringbuf-smoke argument: {arg}"
+                ));
+            }
+        }
+    }
+    Ok(TraceLoaderAttachRingbufSmokeOptions {
+        object: object
+            .ok_or_else(|| "missing trace-loader attach-ringbuf-smoke --object".to_owned())?,
+        target: target
+            .ok_or_else(|| "missing trace-loader attach-ringbuf-smoke --target".to_owned())?,
+        program_name: program_name
+            .ok_or_else(|| "missing trace-loader attach-ringbuf-smoke --program-name".to_owned())?,
+        ip_version: ip_version
+            .ok_or_else(|| "missing trace-loader attach-ringbuf-smoke --ip-version".to_owned())?,
+        l4_proto: l4_proto
+            .ok_or_else(|| "missing trace-loader attach-ringbuf-smoke --l4-proto".to_owned())?,
+        port: port.ok_or_else(|| "missing trace-loader attach-ringbuf-smoke --port".to_owned())?,
+        ringbuf_size: ringbuf_size
+            .ok_or_else(|| "missing trace-loader attach-ringbuf-smoke --ringbuf-size".to_owned())?,
+        trigger: trigger
+            .ok_or_else(|| "missing trace-loader attach-ringbuf-smoke --trigger".to_owned())?,
+        trigger_count: trigger_count.ok_or_else(|| {
+            "missing trace-loader attach-ringbuf-smoke --trigger-count".to_owned()
+        })?,
+        poll_attempts: poll_attempts.ok_or_else(|| {
+            "missing trace-loader attach-ringbuf-smoke --poll-attempts".to_owned()
+        })?,
     })
 }
 
@@ -2108,8 +2334,104 @@ mod tests {
             json["name"].as_str().unwrap(),
             "rust-aya-trace-loader-contract-v1"
         );
+        assert!(!json["core_sideload_enabled"].as_bool().unwrap());
+        assert!(!json["go_trace_adoption_ready"].as_bool().unwrap());
         assert!(!json["default_daemon_path"].as_bool().unwrap());
         assert!(!json["kernel_ebpf_program_rewrite"].as_bool().unwrap());
+        assert_eq!(
+            json["non_default_smokes"]["attach_ringbuf"]
+                .as_str()
+                .unwrap(),
+            "disabled"
+        );
+        assert!(
+            json["disabled_reason"]
+                .as_str()
+                .unwrap()
+                .contains("temporarily disabled")
+        );
+    }
+
+    #[test]
+    fn trace_loader_core_sideload_commands_are_disabled() {
+        let output = run_with_args([
+            "trace-loader",
+            "load-pin",
+            "--object",
+            "/tmp/trace.o",
+            "--pin-root",
+            "/sys/fs/bpf/trace",
+            "--ip-version",
+            "4",
+            "--l4-proto",
+            "6",
+            "--port",
+            "443",
+            "--ringbuf-size",
+            "65536",
+        ]);
+        assert_eq!(output.exit_code, 1);
+        assert!(output.stderr.contains("temporarily disabled"));
+
+        let output = run_with_args([
+            "trace-loader",
+            "attach-ringbuf-smoke",
+            "--object",
+            "/tmp/trace.o",
+            "--target",
+            "ip_rcv_core",
+        ]);
+        assert_eq!(output.exit_code, 1);
+        assert!(output.stderr.contains("temporarily disabled"));
+    }
+
+    #[test]
+    fn trace_attach_ringbuf_smoke_options_parse_explicit_target_and_defaults() {
+        let options = parse_trace_attach_ringbuf_smoke_options(&[
+            "--object=/tmp/trace.o".to_owned(),
+            "--target=ip_rcv_core".to_owned(),
+        ])
+        .unwrap();
+        assert_eq!(options.object, PathBuf::from("/tmp/trace.o"));
+        assert_eq!(options.target, "ip_rcv_core");
+        assert_eq!(options.program_name, "kprobe_skb_1");
+        assert_eq!(options.ip_version, 4);
+        assert_eq!(options.l4_proto, 6);
+        assert_eq!(options.port, 443);
+        assert_eq!(options.ringbuf_size, 65_536);
+        assert_eq!(options.trigger, TraceLoaderAttachSmokeTrigger::LoopbackUdp);
+        assert_eq!(options.trigger_count, 4);
+        assert_eq!(options.poll_attempts, 50);
+
+        let explicit = parse_trace_attach_ringbuf_smoke_options(&[
+            "--object".to_owned(),
+            "/tmp/trace.o".to_owned(),
+            "--target".to_owned(),
+            "security_file_open".to_owned(),
+            "--program-name".to_owned(),
+            "kprobe_skb_1".to_owned(),
+            "--trigger".to_owned(),
+            "open-proc-self-stat".to_owned(),
+            "--trigger-count".to_owned(),
+            "2".to_owned(),
+            "--poll-attempts".to_owned(),
+            "3".to_owned(),
+        ])
+        .unwrap();
+        assert_eq!(explicit.target, "security_file_open");
+        assert_eq!(
+            explicit.trigger,
+            TraceLoaderAttachSmokeTrigger::OpenProcSelfStat
+        );
+        assert_eq!(explicit.trigger_count, 2);
+        assert_eq!(explicit.poll_attempts, 3);
+
+        let err = parse_trace_attach_ringbuf_smoke_options(&[
+            "--object=/tmp/trace.o".to_owned(),
+            "--trigger=bad".to_owned(),
+        ])
+        .unwrap_err();
+        assert!(err.contains("bad trace attach smoke trigger"));
     }
 
     #[test]

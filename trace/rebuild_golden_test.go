@@ -204,11 +204,11 @@ func rebuildGoldenTraceCliSurface() any {
 			"requires_attached_target": true,
 		},
 		"loader": map[string]any{
-			"default":               "rust-aya",
+			"default":               "go",
+			"enable_env":            "DAE_TRACE_RUST_AYA_LOADER=1",
 			"helper_env":            rustTraceLoaderHelperEnv,
 			"helper_default":        rustTraceLoaderHelperDefault,
 			"strict_env":            "DAE_TRACE_RUST_AYA_LOADER_STRICT",
-			"disable_env":           "DAE_TRACE_RUST_AYA_LOADER=0",
 			"go_fallback_preserved": true,
 			"default_daemon_path":   false,
 		},
