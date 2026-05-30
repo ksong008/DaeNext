@@ -15446,6 +15446,110 @@ release gate 仍关闭的剩余 blocker：
 - 本复验继续保持 C tproxy object、C trace object、Go trace fallback、TC command fallback 和 Go userspace control plane / outbound 边界。
 - 临时 run root 已在记录后清理。
 
+### A6 fallback retirement 到 release gate 裁决边界收口记录（2026-05-30）
+
+本节只完成 A6，不新增 A6.x 或后续 stage。A6 的目标不是切默认，也不是删除 C/TC/trace fallback，而是把 A5 fallback retirement admitted 后的证据固定到 release/product-chain gate 的既有裁决链中，并防止它绕过 default daemon live matrix。
+
+执行前继续参考：
+
+- `DAEX_RUST_REBUILD_PLAN_2026-05-16.md`：默认路径切换必须经过 product-chain、service contract、runtime/control API、benchmark、host-write、rollback 与 explicit approval；单项 fallback retirement admitted 不能替代 release gate。
+- `DAENEW_RUST_REBUILD_MEMO_2026-05-16.md`：Go userspace control plane / outbound、C object、TC fallback、trace fallback 和 runtime reload owner 是独立边界。
+- 本文件 A5 记录：A5 admitted 只表示 Go BPF fallback retirement gate 可记录，`default_switch_allowed=false`、`c_tproxy_object_retirement_allowed=false`、`c_trace_object_retirement_allowed=false`、`tc_command_fallback_retirement_allowed=false` 必须继续保持。
+
+代码修改：
+
+- `rust/crates/dae-daemon/src/tests.rs`
+  - 新增功能级回归测试 `daemon_runner_product_chain_accepts_fallback_retirement_without_release_switch`。
+  - 测试输入使用 A5 两个显式证据开关：
+    - `--production-runtime-fallback-retirement-product-chain-recertified`
+    - `--production-runtime-fallback-retirement-explicit-approval`
+  - 固定行为：
+    - `kernel_program_fallback_retirement_gate.admitted=true`
+    - `production_runtime_owner.go_bpf_fallback_retired=true`
+    - `product_chain_recertification.admission_input.bpf_go_fallback_retired=true`
+    - release gate 仍关闭：`release_gate_open=false`
+    - default/product-chain switch 仍关闭：`default_switch_allowed=false`、`product_chain_switch_allowed=false`
+    - default daemon live matrix 仍未完成：`default_daemon_live_matrix.matrix_complete=false`
+    - A5/A6 不能开放 C/TC fallback 删除：`c_tproxy_object_retirement_allowed=false`、`tc_command_fallback_retirement_allowed=false`
+  - 该测试故意使用不完整合成 product-chain fixture，确认 A5/A6 证据不会绕过 branch/runtime-control/API 等 product-chain 基线检查。
+  - 代码中未使用 `a6_` 前缀，未新增 stage 命令或 runtime stage 表面。
+
+本地提交：
+
+| 项 | 值 |
+| --- | --- |
+| commit | `0f975763` |
+| message | `a6: lock fallback retirement release gate` |
+| branch | `daex` |
+
+正式链只读复验：
+
+- 执行范围：
+  - 本地只读运行，不执行 host write。
+  - 未替换 `/usr/bin/dae` / `/usr/bin/daed`。
+  - 未生成或替换 daed 二进制。
+  - 未推送远程。
+  - 使用正式 daex 独立链路路径：
+    - dae：`/root/project/dae-daex-align`
+    - daed：`/root/project/daed-daex-align/daed`
+    - dae-wing：`/root/project/daed-daex-align/daed/wing`
+    - outbound：`/root/project/outbound-daex-align`
+    - quic-go：`/root/project/quic-go`
+- 命令：
+  - `dae-daemon-optin run --production-runtime-fallback-retirement-product-chain-recertified --production-runtime-fallback-retirement-explicit-approval --execute-product-chain-recertification --exit-after-ready`
+- run root：
+  - `/tmp/dae-daemon-daex-a6-release-gate-20260530204700`
+
+复验结果：
+
+| 项 | 结果 |
+| --- | --- |
+| `kernel_program_fallback_retirement_gate.admitted` | true |
+| `production_runtime_owner.go_bpf_fallback_retired` | true |
+| `product_chain_recertification_executed` | true |
+| `product_chain_recertification_clean` | true |
+| `product_chain_default_switch_admission_clean` | false |
+| `release_gate_open` | false |
+| `default_switch_allowed` | false |
+| `product_chain_switch_allowed` | false |
+| `c_tproxy_object_retirement_allowed` | false |
+| `c_trace_object_retirement_allowed` | false |
+| `tc_command_fallback_retirement_allowed` | false |
+| `dirty_sibling_repos` | `[]` |
+| `branch_mismatched_sibling_repos` | `[]` |
+
+release gate 仍关闭的剩余 blocker：
+
+| blocker | 含义 |
+| --- | --- |
+| `full default daemon live matrix is incomplete` | 未执行完整默认 daemon live matrix。 |
+| `matched Go/Rust default daemon benchmark is not recorded` | 未执行 matched Go/Rust 默认 daemon benchmark。 |
+| `resident userspace dataplane default switch env is not enabled` | 未设置默认切换所需 resident dataplane env。 |
+| `default path mutation is not allowed` | 未请求默认路径 mutation。 |
+| `product-chain switch is not allowed` | product-chain switch 仍关闭。 |
+| `resident default daemon switch is not ready` | resident default daemon switch gate 仍未 ready。 |
+
+验证记录：
+
+| 验证项 | 结果 |
+| --- | --- |
+| `cargo fmt --manifest-path rust/Cargo.toml --all --check` | pass |
+| `cargo test --manifest-path rust/Cargo.toml -p dae-daemon daemon_runner_product_chain_accepts_fallback_retirement_without_release_switch` | pass，1 passed |
+| `cargo test --manifest-path rust/Cargo.toml -p dae-daemon daemon_runner_product_chain_accepts_external_admission_evidence` | pass，1 passed |
+| `cargo test --manifest-path rust/Cargo.toml -p dae-daemon product_chain_recertification` | pass，27 passed |
+| `cargo test --manifest-path rust/Cargo.toml -p dae-daemon release_gate` | pass，2 passed |
+| `cargo test --manifest-path rust/Cargo.toml -p dae-daemon production_runtime_owner` | pass，69 passed |
+| `cargo test --manifest-path rust/Cargo.toml -p dae-ebpf-support kernel_program` | pass，19 passed |
+| `git diff --check` | pass |
+
+A6 完成结论：
+
+- A6 已把 A5 fallback retirement admitted 证据固定到 product-chain/release gate 裁决边界。
+- product-chain 结构复认证在正式 daex 独立链路上 clean；但 default switch admission 仍关闭。
+- A6 不打开 release gate，不切默认 daemon，不执行 host write，不生成/替换 daed 二进制。
+- A6 不删除 C tproxy object、C trace object、Go trace fallback、TC command fallback，也不触碰 Go userspace control plane / outbound。
+- 临时 run root 已在记录后清理。
+
 ### A4 product-chain 结构基线与默认切换准入拆分记录（2026-05-30）
 
 本节承接 `A4 tproxy dataplane 与 trace diagnostic gate 拆分记录` 以及提交后 product-chain clean baseline 复认证结果。修改前再次参考：
