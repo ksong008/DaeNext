@@ -48,7 +48,7 @@ func BenchmarkRoutingMapRustHelperUpdate(b *testing.B) {
 	if err != nil {
 		b.Fatal(err)
 	}
-	_, values := benchmarkRoutingEntries()
+	_, values := benchmarkRoutingEntriesWithFallback()
 	request := rustRoutingMapApplyRequest{
 		RoutingMapID:   mapID,
 		LpmArrayMapID:  mapID,
@@ -92,7 +92,7 @@ func BenchmarkRoutingMapRustInprocessUpdate(b *testing.B) {
 	if err != nil {
 		b.Fatal(err)
 	}
-	_, values := benchmarkRoutingEntries()
+	_, values := benchmarkRoutingEntriesWithFallback()
 	request := rustRoutingMapApplyRequest{
 		RoutingMapID:   mapID,
 		LpmArrayMapID:  mapID,
@@ -117,6 +117,49 @@ func BenchmarkRoutingMapRustInprocessUpdate(b *testing.B) {
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
 		if err := applyKernelRoutingMapsViaRustInprocess(request); err != nil {
+			b.Fatal(err)
+		}
+	}
+}
+
+func BenchmarkRoutingMapRustOwnedInprocessUpdate(b *testing.B) {
+	if !rustInprocessRoutingMapAvailable() {
+		b.Skip("Rust in-process routing map owner is not enabled")
+	}
+	m := newBenchmarkRoutingMap(b)
+	defer m.Close()
+	mapID, err := bpfMapID(m)
+	if err != nil {
+		b.Fatal(err)
+	}
+	_, values := benchmarkRoutingEntriesWithFallback()
+	request := rustRoutingMapApplyRequest{
+		RoutingMapID:   mapID,
+		LpmArrayMapID:  mapID,
+		LpmEntries:     []rustLpmArrayMapEntry{},
+		LpmMaps:        []rustLpmMapBuildSpec{},
+		RoutingEntries: make([]rustRoutingMapEntry, 0, len(values)),
+	}
+	for index, value := range values {
+		request.RoutingEntries = append(request.RoutingEntries, rustRoutingMapEntry{
+			Index: uint32(index),
+			Value: rustBpfMatchSet{
+				Value:    value.Value,
+				Not:      value.Not,
+				Type:     value.Type,
+				Outbound: value.Outbound,
+				Must:     value.Must,
+				Mark:     value.Mark,
+			},
+		})
+	}
+	if err := applyKernelRoutingMapsViaRustOwnedInprocess(request); err != nil {
+		b.Fatal(err)
+	}
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		if err := applyKernelRoutingMapsViaRustOwnedInprocess(request); err != nil {
 			b.Fatal(err)
 		}
 	}
@@ -286,6 +329,71 @@ func BenchmarkRoutingMapRustInprocessUpdateWithLpmBuild(b *testing.B) {
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
 		if err := applyKernelRoutingMapsViaRustInprocess(request); err != nil {
+			b.Fatal(err)
+		}
+	}
+}
+
+func BenchmarkRoutingMapRustOwnedInprocessUpdateWithLpmBuild(b *testing.B) {
+	if !rustInprocessRoutingMapAvailable() {
+		b.Skip("Rust in-process routing map owner is not enabled")
+	}
+	routingMap := newBenchmarkRoutingMap(b)
+	defer routingMap.Close()
+	lpmTemplate := newBenchmarkLpmTemplateMap(b)
+	defer lpmTemplate.Close()
+	lpmArrayMap := newBenchmarkLpmArrayMap(b)
+	defer lpmArrayMap.Close()
+	routingMapID, err := bpfMapID(routingMap)
+	if err != nil {
+		b.Fatal(err)
+	}
+	lpmArrayMapID, err := bpfMapID(lpmArrayMap)
+	if err != nil {
+		b.Fatal(err)
+	}
+	_, values := benchmarkRoutingEntriesWithLpm()
+	lpmKey := cidrToBpfLpmKey(netip.MustParsePrefix("203.0.113.0/24"))
+	request := rustRoutingMapApplyRequest{
+		RoutingMapID:  routingMapID,
+		LpmArrayMapID: lpmArrayMapID,
+		LpmEntries:    []rustLpmArrayMapEntry{},
+		LpmMaps: []rustLpmMapBuildSpec{{
+			Index:      0,
+			Flags:      lpmTemplate.Flags(),
+			MaxEntries: lpmTemplate.MaxEntries(),
+			KeySize:    lpmTemplate.KeySize(),
+			ValueSize:  lpmTemplate.ValueSize(),
+			Entries: []rustLpmMapEntry{{
+				Key: rustBpfLpmKey{
+					PrefixLen: lpmKey.PrefixLen,
+					Data:      lpmKey.Data,
+				},
+				Value: 1,
+			}},
+		}},
+		RoutingEntries: make([]rustRoutingMapEntry, 0, len(values)),
+	}
+	for index, value := range values {
+		request.RoutingEntries = append(request.RoutingEntries, rustRoutingMapEntry{
+			Index: uint32(index),
+			Value: rustBpfMatchSet{
+				Value:    value.Value,
+				Not:      value.Not,
+				Type:     value.Type,
+				Outbound: value.Outbound,
+				Must:     value.Must,
+				Mark:     value.Mark,
+			},
+		})
+	}
+	if err := applyKernelRoutingMapsViaRustOwnedInprocess(request); err != nil {
+		b.Fatal(err)
+	}
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		if err := applyKernelRoutingMapsViaRustOwnedInprocess(request); err != nil {
 			b.Fatal(err)
 		}
 	}
@@ -494,6 +602,19 @@ func benchmarkRoutingEntries() ([]uint32, []bpfMatchSet) {
 	}
 	values[0].Value[0] = 6
 	values[1].Value[0] = 4
+	return keys, values
+}
+
+func benchmarkRoutingEntriesWithFallback() ([]uint32, []bpfMatchSet) {
+	keys := []uint32{0, 1}
+	values := []bpfMatchSet{
+		{Type: uint8(consts.MatchType_Port), Outbound: uint8(consts.OutboundBlock)},
+		{Type: uint8(consts.MatchType_Fallback), Outbound: uint8(consts.OutboundDirect)},
+	}
+	values[0].Value[0] = 0xbb
+	values[0].Value[1] = 0x01
+	values[0].Value[2] = 0xbb
+	values[0].Value[3] = 0x01
 	return keys, values
 }
 
