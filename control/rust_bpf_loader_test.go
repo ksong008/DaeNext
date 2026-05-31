@@ -126,6 +126,25 @@ func TestRustAyaCgroupMonitorHasNoGoAttachFallback(t *testing.T) {
 	}
 }
 
+func TestRustAyaTcAttachHasNoGoAttachFallback(t *testing.T) {
+	content, err := os.ReadFile("control_plane_core.go")
+	if err != nil {
+		t.Fatalf("read control_plane_core.go: %v", err)
+	}
+	source := string(content)
+	for _, marker := range []string{
+		"falling back to Go attach path",
+		"ciliumLink.AttachTCX",
+		"attachIfaceFilterViaTc",
+		"netlink.FilterAdd(filter)",
+		"TCX attach failed",
+	} {
+		if strings.Contains(source, marker) {
+			t.Fatalf("control_plane_core.go still contains Go TC attach fallback marker %q", marker)
+		}
+	}
+}
+
 func TestRustAyaCgroupMonitorPinPaths(t *testing.T) {
 	base := filepath.Join(t.TempDir(), "bpffs", consts.AppName)
 	loaderRoot := rustAyaLoaderPinRoot(base)
