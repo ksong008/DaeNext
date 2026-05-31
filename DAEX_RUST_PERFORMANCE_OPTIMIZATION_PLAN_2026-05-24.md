@@ -19304,3 +19304,126 @@ cleanup 发现的问题：
 - `daed` 验证包已生成，并确认代入 `/root/project/dae-daex-align`、`/root/project/outbound-daex-align`、`/root/project/quic-go-rust` 链路。
 - `10.10.10.2` 已部署并验证基础产品运行、reload、Web/API、Rust/Aya attach 日志和 LAN 侧客户端出网。
 - 第 1-7 项 Rust-owned control-plane state 收口的验证版可以继续作为后续默认路径切换和第 8-10 项 Rust/Aya kernel datapath parity 的基线。
+
+阶段 8-10：Rust/Aya kernel datapath parity、真实流量准入与收口（2026-05-31）：
+
+阶段边界：
+
+- 本轮只推进 Rust/Aya eBPF program 本体替换，不 Rust 化 daewing / outbound / quic-go 协议栈。
+- 修改前继续参考：
+  - `DAEX_RUST_REBUILD_PLAN_2026-05-16.md`
+  - `DAENEW_RUST_REBUILD_MEMO_2026-05-16.md`
+  - 本文件 A1-GoBPF 合同，尤其是 `tproxy.c` map/section/return code/routing/domain/UDP/tproxy listener/reload 边界。
+- 不按测试机配置写死规则、geoip/geosite、域名、IP、节点协议或 VLESS/Trojan 等协议特例。
+- `control/kern/tproxy.c` 继续作为开发 oracle；本轮目标是默认 Rust/Aya native object 能 load/attach/real-flow，而不是恢复 Go BPF loader。
+
+基线 tag：
+
+- 阶段 1-7 clean baseline 已打 tag：`daex-stage1-7-rustowners-cleanup-20260531`。
+- 本轮在该基线后推进阶段 8-10；阶段 8-10 完成后单独提交并打 tag。
+
+代码修改：
+
+- `rust/.cargo/config.toml`
+  - 移除重复 `--btf` linker arg，避免当前 `bpf-linker` 已自带 BTF 时出现 `--btf` 重复参数错误。
+- `rust/crates/dae-aya-bpf-loader/build.rs`
+  - 默认构建 Rust native eBPF object：`rust/crates/dae-ebpf-program`。
+  - build script 使用 nightly `cargo build -Z build-std=core --target bpfel-unknown-none --release`，并清理继承的 `CARGO/RUSTC/RUSTFLAGS` 等环境，避免污染 BTF/target 参数。
+- `rust/crates/dae-daemon/build.rs`
+  - 同步构建并嵌入 Rust native eBPF object，供 resident runtime 使用。
+- `rust/crates/dae-aya-bpf-loader/src/lib.rs`
+  - `bpf-loader contract` 标记 `kernel_ebpf_program_rewrite=true`。
+  - 默认 object source 切为 `rust-aya-skeleton`，实际指向 Rust/Aya native object candidate。
+  - `c-aya` 仅作为显式兼容 object source，要求显式 `--object`，避免静默回到 C object。
+- `control/rust_bpf_loader.go`
+  - Go control-plane adoption 日志增加 object source / default object source / kernel rewrite 信息，方便确认生产路径没有静默回退。
+- `rust/crates/dae-ebpf-program/src/tproxy.rs`
+  - 对 `dae0peer_ingress`、`dae0_ingress`、LAN/WAN ingress/egress 入口做 verifier-friendly inline，减少 tiny wrapper 调大 subprogram 的不确定性。
+- `rust/crates/dae-ebpf-program/src/abi.rs`
+  - 在 eBPF crate 内把 `BpfMatchSet.value` 改为 C `struct match_set` 等价 union 访问形态。
+  - 保持 map value ABI 仍为 24 字节：`value[16] + not/kind/outbound/must + mark`。
+- `rust/crates/dae-ebpf-program/src/routing.rs`
+  - `RouteCtx` 调整为更接近 C `route_ctx` 的布局：`params -> h_dport/h_sport -> result -> LPM keys -> state`。
+  - route loop 中端口、LPM index、l4proto、ipversion、dscp、pname 改为 union 字段读取，减少 byte slicing 拼装。
+  - `domain_routing.bitmap` 使用 bounded word index 读取，保持通用 bitmap 语义，不做任何测试机特判。
+  - route state 继续按 C 的 volatile state machine 语义处理 `bad_rule/good_subrule/must/dns`。
+
+关键阻断与修复：
+
+- 初始远程 38 最小 `load-pin` 曾在 `tproxy_wan_egress_l2` 触发 verifier 复杂度上限：
+  - `processed 1000001 insns (limit 1000000)`。
+  - 根因不是 TCX，也不是 bpffs pin root，而是 Rust route loop / WAN egress packet path 的 verifier state 过大。
+- 修复方向是把 Rust eBPF 对齐到 C `tproxy.c` 的 verifier 可读形态：
+  - C-like `match_set` union 字段访问。
+  - C-like route context layout。
+  - 去掉不必要的 byte-array unaligned read 拼装。
+  - 保持 map ABI 与规则语义不变。
+- 修复后远程 38 最小 `load-pin` 通过：
+  - object source：`rust-aya-skeleton`。
+  - default object source：`rust-aya-skeleton`。
+  - `go_adoption_ready=true`。
+  - 12 个 maps、16 个 programs 全部 pin 成功。
+
+本地验证：
+
+| 验证项 | 结果 |
+| --- | --- |
+| `cargo +nightly build -Z build-std=core --manifest-path rust/Cargo.toml -p dae-ebpf-program --target bpfel-unknown-none --release` | pass |
+| `cargo build --manifest-path rust/Cargo.toml -p dae-aya-bpf-loader --release --features native-ebpf` | pass |
+| `make native-ebpf-runtime-gate` | pass，`production_dataplane_admitted=true`，`reload_runtime_parity_admitted=true` |
+| `cargo test --manifest-path rust/Cargo.toml -p dae-ebpf-support -p dae-aya-bpf-loader --features native-ebpf` | pass，`dae-ebpf-support` 58 passed，`dae-aya-bpf-loader` 21 passed |
+| `GOWORK=off go test -count=1 ./control -run 'Test(RustBpfLoader\|CleanupRustAya\|ControlPlaneCoreReloadInject\|RustAya)'` | pass |
+| `GOWORK=off go test -count=1 -tags=embedallowed ./control -run 'TestEmbeddedRustBpfLoader\|TestRustBpfLoader'` | pass |
+| `git diff --check` | pass |
+
+本地构建产物：
+
+- Rust/Aya loader：`control/embedded/dae-aya-bpf-loader`
+  - SHA256：`e50a0f32b428b4b32df70c0f6db49716ce8631d609b471c9a76b08508ab0a6c9`。
+- Rust native eBPF object：`rust/target/bpfel-unknown-none/release/libdae_ebpf_program.so`
+  - SHA256：`8277b12f374b0ea9dfab4991595aa9e0c4b0531e303b7d52752d4cb0261ed89e`。
+- daed 验证二进制：`/root/project/daed-daex-align/daed/daed-stage8-10-rust-aya-ebpf`
+  - 版本：`daex-stage8-10-rust-aya-ebpf-20260531`。
+  - SHA256：`554e35dccb56fef5f9088049c1439ced890cfccd994aa5518bcf240471473434`。
+  - 构建链路确认：`wing/go.mod` replace 到 `/root/project/dae-daex-align`、`/root/project/outbound-daex-align`、`/root/project/quic-go-rust`。
+
+远程 38 验证：
+
+| 验证项 | 结果 |
+| --- | --- |
+| 初始清理 | pass，停止 `dae/daed`，清理旧 `/tmp/dae-daemon-*`、旧 Rust/Aya bpffs pins |
+| 最小 Rust object `load-pin` | pass，12 maps + 16 programs pinned，`object_source=rust-aya-skeleton`，`go_adoption_ready=true` |
+| resident native runtime | pass，使用 `/tmp/libdae_ebpf_program.so` 作为 native param source |
+| native attach | pass，`attach-production-dae0peer-native-ebpf-program`、`attach-lan-ingress-native-ebpf-program`、`attach-production-dae0-native-ebpf-program` 均 pass |
+| attach backend | pass，远程本轮有效 backend 为 `tc_netlink`，`fallback_used=false`；这属于 Rust/Aya native attach 后端，不是 Go BPF fallback |
+| active TCP relay | pass，5 次，`208747068 ns` 总耗时，约 `41749413.6 ns/connection` |
+| active UDP datapath | pass，5 次，`105766106 ns` 总耗时，约 `21153221.2 ns/packet` |
+| active DNS UDP/53 | pass，5 次，`106203033 ns` 总耗时，约 `21240606.6 ns/query` |
+| DNS cache/domain routing | pass，cache miss/upstream、cache restore、domain routing owner merge 均通过 |
+| reload/runtime parity | pass，`reload_runtime_parity_admitted=true` |
+| BPF-side Go fallback retirement evidence | pass，`go_bpf_fallback_retired=true` |
+
+远程 38 host write / service contract 验证：
+
+- 临时 host write：
+  - `/usr/bin/dae` 写入本轮 `dae-daemon-optin-stage8-10`。
+  - `/etc/systemd/system/dae.service` 写入阶段 8-10 临时 service。
+  - `/etc/dae/config.dae` 使用仅供验证的通用配置，包含 `pname(NetworkManager, systemd-resolved, dnsmasq, ssh, sshd) -> must_direct`，防止 SSH 和本机服务被拦截。
+- 验证结果：
+  - `dae validate -c /etc/dae/config.dae`：pass。
+  - `systemctl start dae.service`：pass，服务 active。
+  - `systemctl reload dae.service`：pass，reload 后服务仍 active，journal 输出 `OK`。
+  - `systemctl stop dae.service`：pass。
+- 清理/恢复：
+  - 删除临时 `/usr/bin/dae`、临时 service、阶段 8-10 `/tmp` 产物。
+  - 恢复原 `/etc/dae/config.dae`。
+  - 清理 `daens`、`dae0`、`dae50lan0` 和阶段 8-10 bpffs pins。
+  - 最终复查：`dae`/`daed` 均 inactive，`/sys/fs/bpf/dae` 仅剩空目录，无阶段 8-10 文件残留。
+
+阶段 8-10 结论：
+
+- Rust/Aya eBPF object 已不只是 skeleton：本轮已进入真实 `tproxy.c` kernel datapath parity 候选，且能在 38 上完成全 program `load-pin`、native attach、active TCP/UDP/DNS、reload/runtime parity 和临时 systemd host write/reload。
+- C `tproxy.c` 仍保留为开发 oracle 和回滚 tag 参考；生产默认 object source 已转向 Rust/Aya native object candidate。
+- Go BPF loader 不恢复；本轮涉及的 `tc_netlink` 是 Rust/Aya attach backend 的兼容路径，不是 Go BPF fallback。
+- daewing / outbound / quic-go 协议栈仍保持 Go；本轮没有替换 outbound 协议栈，也没有引入协议特例。
+- 阶段 8-10 可以进入本地提交与 tag；后续若继续推进，应进入 Rust/Aya object 默认路径在 daed 产品链中的长期运行观察、matched benchmark 和 C object 删除准入，而不是继续拆小阶段。

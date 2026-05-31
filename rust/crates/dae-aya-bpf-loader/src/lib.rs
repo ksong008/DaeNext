@@ -350,9 +350,9 @@ fn run_contract() -> LoaderOutput {
             "scope": "Rust/Aya loads a selected daemon eBPF object and pins all maps/programs for Go control-plane adoption",
             "go_userspace_outbound_remains_authoritative": true,
             "go_bpf_loader_removed_when_opted_in": true,
-            "kernel_ebpf_program_rewrite": false,
+            "kernel_ebpf_program_rewrite": true,
             "rust_aya_skeleton_object_supported": true,
-            "default_object_source": BpfObjectSource::CAya.as_str(),
+            "default_object_source": BpfObjectSource::RustAyaSkeleton.as_str(),
             "supported_object_sources": [
                 BpfObjectSource::CAya.as_str(),
                 BpfObjectSource::RustAyaSkeleton.as_str(),
@@ -362,8 +362,8 @@ fn run_contract() -> LoaderOutput {
                 "programs": "pin_root/programs/<program_name>"
             },
             "object_source": {
-                "c-aya": "default embedded native Aya object built from control/kern/tproxy.c with DAE_AYA_EBPF_OBJECT, or explicit --object",
-                "rust-aya-skeleton": "legacy option name for an explicit --object built from rust/crates/dae-ebpf-program; opt-in Rust/Aya native object candidate, not default without admission"
+                "c-aya": "explicit --object compatibility source for an Aya-compatible C eBPF object; no longer embedded by default",
+                "rust-aya-skeleton": "default embedded Rust/Aya eBPF object built from rust/crates/dae-ebpf-program"
             },
             "param_source": {
                 "tproxy_port": "host-order u16, converted to BPF big-endian PARAM",
@@ -1398,7 +1398,7 @@ fn run_load_pin(options: BpfLoaderLoadPinOptions) -> LoaderOutput {
     let object_source = requested_object_source
         .map(BpfObjectSource::as_str)
         .unwrap_or(if cleanup_object.is_some() {
-            BpfObjectSource::CAya.as_str()
+            BpfObjectSource::RustAyaSkeleton.as_str()
         } else {
             "explicit"
         });
@@ -1412,7 +1412,7 @@ fn run_load_pin(options: BpfLoaderLoadPinOptions) -> LoaderOutput {
             "loader": "rust-aya",
             "object": object,
             "object_source": object_source,
-            "default_object_source": BpfObjectSource::CAya.as_str(),
+            "default_object_source": BpfObjectSource::RustAyaSkeleton.as_str(),
             "rust_aya_skeleton_opt_in": object_source == BpfObjectSource::RustAyaSkeleton.as_str(),
             "pin_root": pin_report.adoption_pin_root,
             "map_pin_root": pin_report.map_pin_root,
@@ -1546,10 +1546,8 @@ fn parse_load_pin_options(args: &[String]) -> Result<BpfLoaderLoadPinOptions, St
             _ => return Err(format!("unsupported bpf-loader load-pin argument: {arg}")),
         }
     }
-    if object_source == Some(BpfObjectSource::RustAyaSkeleton) && object.is_none() {
-        return Err(
-            "bpf-loader load-pin --object-source=rust-aya-skeleton requires --object".to_owned(),
-        );
+    if object_source == Some(BpfObjectSource::CAya) && object.is_none() {
+        return Err("bpf-loader load-pin --object-source=c-aya requires --object".to_owned());
     }
     Ok(BpfLoaderLoadPinOptions {
         object,
@@ -2263,8 +2261,11 @@ mod tests {
                 .as_bool()
                 .unwrap()
         );
-        assert!(!json["kernel_ebpf_program_rewrite"].as_bool().unwrap());
-        assert_eq!(json["default_object_source"].as_str().unwrap(), "c-aya");
+        assert!(json["kernel_ebpf_program_rewrite"].as_bool().unwrap());
+        assert_eq!(
+            json["default_object_source"].as_str().unwrap(),
+            "rust-aya-skeleton"
+        );
         assert!(
             json["rust_aya_skeleton_object_supported"]
                 .as_bool()
@@ -2311,7 +2312,7 @@ mod tests {
         );
         assert_eq!(options.object, Some(PathBuf::from("/tmp/dae-ebpf-program")));
 
-        let err = parse_load_pin_options(&[
+        let options = parse_load_pin_options(&[
             "--object-source=rust-aya-skeleton".to_owned(),
             "--pin-root=/tmp/dae".to_owned(),
             "--tproxy-port=12345".to_owned(),
@@ -2321,8 +2322,25 @@ mod tests {
             "--dae0peer-mac=02:00:00:00:00:01".to_owned(),
             "--has-bpf-get-current-task=true".to_owned(),
         ])
+        .unwrap();
+        assert_eq!(
+            options.object_source,
+            Some(BpfObjectSource::RustAyaSkeleton)
+        );
+        assert_eq!(options.object, None);
+
+        let err = parse_load_pin_options(&[
+            "--object-source=c-aya".to_owned(),
+            "--pin-root=/tmp/dae".to_owned(),
+            "--tproxy-port=12345".to_owned(),
+            "--control-plane-pid=7".to_owned(),
+            "--dae0-ifindex=8".to_owned(),
+            "--dae-netns-id=9".to_owned(),
+            "--dae0peer-mac=02:00:00:00:00:01".to_owned(),
+            "--has-bpf-get-current-task=true".to_owned(),
+        ])
         .unwrap_err();
-        assert!(err.contains("rust-aya-skeleton requires --object"));
+        assert!(err.contains("c-aya requires --object"));
     }
 
     #[test]
