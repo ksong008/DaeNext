@@ -13,8 +13,6 @@ import (
 
 	"github.com/daeuniverse/dae/pkg/trie"
 
-	"github.com/cilium/ebpf"
-	"github.com/daeuniverse/dae/common"
 	"github.com/daeuniverse/dae/common/consts"
 	"github.com/daeuniverse/dae/component/routing"
 	"github.com/daeuniverse/dae/component/routing/domain_matcher"
@@ -323,48 +321,8 @@ func (b *RoutingMatcherBuilder) BuildKernspace(log *logrus.Logger) (err error) {
 		return fmt.Errorf("fallback rule MUST be the last")
 	}
 
-	if err := b.updateKernelRoutingMapsViaRustHelper(); err == nil {
-		log.Infof("Routing match set len: %v/%v", len(b.rules), consts.MaxMatchSetLen)
-		return nil
-	} else {
-		log.Debugf("Rust routing map writer unavailable, falling back to Go writer: %v", err)
-	}
-
-	// Build LPM inner maps in Go only when the Rust writer is unavailable.
-	var lpmMaps []*ebpf.Map
-	defer func() {
-		for _, m := range lpmMaps {
-			_ = m.Close()
-		}
-	}()
-	for _, cidrs := range b.simulatedLpmTries {
-		var keys []_bpfLpmKey
-		var values []uint32
-		for _, cidr := range cidrs {
-			keys = append(keys, cidrToBpfLpmKey(cidr))
-			values = append(values, 1)
-		}
-		m, err := b.bpf.newLpmMap(keys, values)
-		if err != nil {
-			return fmt.Errorf("newLpmMap: %w", err)
-		}
-		lpmMaps = append(lpmMaps, m)
-	}
-
-	// Update lpm_array_map. We cannot invoke BpfMapBatchUpdate when value is ebpf.Map.
-	for i, m := range lpmMaps {
-		if err = b.bpf.LpmArrayMap.Update(uint32(i), m, ebpf.UpdateAny); err != nil {
-			return fmt.Errorf("Update: %w", err)
-		}
-	}
-
-	// Write routings.
-	routingsLen := uint32(len(b.rules))
-	routingsKeys := common.ARangeU32(routingsLen)
-	if _, err = BpfMapBatchUpdate(b.bpf.RoutingMap, routingsKeys, b.rules, &ebpf.BatchOptions{
-		ElemFlags: uint64(ebpf.UpdateAny),
-	}); err != nil {
-		return fmt.Errorf("BpfMapBatchUpdate: %w", err)
+	if err := b.updateKernelRoutingMapsViaRustHelper(); err != nil {
+		return fmt.Errorf("update kernel routing maps via Rust/Aya: %w", err)
 	}
 	log.Infof("Routing match set len: %v/%v", len(b.rules), consts.MaxMatchSetLen)
 

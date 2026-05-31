@@ -9,6 +9,8 @@ import (
 	stderrors "errors"
 	"net"
 	"net/netip"
+	"os"
+	"path/filepath"
 	"testing"
 	"time"
 	"unsafe"
@@ -24,6 +26,14 @@ func newDomainRoutingTestMap(t *testing.T) *ebpf.Map {
 	if err := rlimit.RemoveMemlock(); err != nil {
 		t.Skipf("requires ebpf memlock privileges: %v", err)
 	}
+	helper := os.Getenv(rustBpfLoaderHelperEnv)
+	if helper == "" {
+		helper = filepath.Join("embedded", "dae-aya-bpf-loader")
+	}
+	if _, err := os.Stat(helper); err != nil {
+		t.Skipf("requires Rust/Aya BPF loader helper %s: %v", helper, err)
+	}
+	t.Setenv(rustBpfLoaderHelperEnv, helper)
 	m, err := ebpf.NewMap(&ebpf.MapSpec{
 		Type:       ebpf.Hash,
 		KeySize:    uint32(unsafe.Sizeof([4]uint32{})),
@@ -134,7 +144,9 @@ func TestControlPlaneCoreClearDomainRoutingMapForReloadRemovesExistingEntries(t 
 		}
 	}
 
-	core.clearDomainRoutingMapForReload()
+	if err := core.clearDomainRoutingMapForReload(); err != nil {
+		t.Fatalf("clearDomainRoutingMapForReload(): %v", err)
+	}
 
 	for _, key := range keys {
 		if err := domainMap.Lookup(&key, &value); !stderrors.Is(err, ebpf.ErrKeyNotExist) {
@@ -190,6 +202,30 @@ func TestDomainRoutingTrackerKeepsStructuredOwnersSeparateOnRemove(t *testing.T)
 	}
 	if _, ok := state.owners[ownerClass3]; !ok {
 		t.Fatal("expected class3 owner to remain after INET owner removal")
+	}
+}
+
+func TestDomainRoutingTrackerDoesNotCommitOwnerStateWhenRustWriterFails(t *testing.T) {
+	tracker := newDomainRoutingTracker()
+	ip := netip.MustParseAddr("203.0.113.13")
+	ip16 := ip.As16()
+	ipKey := common.Ipv6ByteSliceToUint32Array(ip16[:])
+
+	var snapshot domainRoutingOwnerSnapshot
+	snapshot.bitmap.Bitmap[0] = 0x8
+	snapshot.ips = map[[4]uint32]struct{}{ipKey: {}}
+
+	err := tracker.syncOwner(new(ebpf.Map), "owner-fail", snapshot, func(*ebpf.Map, []rustDomainRoutingMapUpdate, [][4]uint32) error {
+		return stderrors.New("rust writer failed")
+	})
+	if err == nil {
+		t.Fatal("expected Rust writer error")
+	}
+	if _, ok := tracker.owners["owner-fail"]; ok {
+		t.Fatal("owner state was committed after Rust writer failure")
+	}
+	if _, ok := tracker.ips[ipKey]; ok {
+		t.Fatal("ip state was committed after Rust writer failure")
 	}
 }
 

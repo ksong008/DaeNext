@@ -1,5 +1,6 @@
 pub mod connectivity_owned;
 pub mod domain_routing;
+pub mod ffi;
 pub mod reload;
 pub mod routing_native;
 pub mod runtime_deps;
