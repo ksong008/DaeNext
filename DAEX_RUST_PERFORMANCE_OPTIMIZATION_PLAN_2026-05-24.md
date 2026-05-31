@@ -17869,3 +17869,128 @@ resident runtime 结构化结果：
 - 默认 daemon/systemd host write、resident run、reload service contract、Rust/Aya native attach、TCX physical WAN/LAN、netkit L2 link、rollback 清理已在远程 38 测试机通过。
 - 本轮验证证明 `DAE_RUST_RESIDENT_DATAPLANE=1 + DAE_RUST_NATIVE_EBPF=1 + backend auto + netns link auto` 的默认路径具备远程 host-write 切换准备证据。
 - 仍不删除 C trace object、Go trace fallback、TC command fallback；Go userspace outbound/control plane 仍按既定混合架构保留。
+
+### TC attach Go fallback 删除收口（2026-05-31）
+
+本节执行上一轮之后的下一阶段：收口 Go control-plane 中 TC attach 的 Go/Cilium/Go netlink 回退路径。本轮按一个大阶段完成，不拆新 stage。修改前继续参考：
+
+- `DAEX_RUST_REBUILD_PLAN_2026-05-16.md`：阶段 7 / 14 要求 eBPF/tproxy/netns active path 对齐 Go eBPF loader、netns/sysctl/tc/cgroup attach 顺序、reload ownership 和 runtime 验证。
+- `DAENEW_RUST_REBUILD_MEMO_2026-05-16.md` 第 5.11：Go 层原职责包含 BPF object、map pin、tc clsact ingress/egress attach、LAN/WAN/dae netns 绑定；Rust 侧可以先保持 C eBPF program 不变，重写 userspace loader/attach/mapper。
+- 本文件前期 A3/A4/A5/A6 与 38 机 host-write 记录：Rust/Aya loader、TCX/TC-netlink attach、cgroup attach、listener handoff、default daemon/systemd host write 已有远端证据；trace / CO-RE diagnostic、TC command fallback、Go userspace outbound/control-plane 不在本节删除范围。
+
+删除边界：
+
+| 项 | 处理 |
+| --- | --- |
+| Rust/Aya `tc-attach attach-pin` | 保留，作为唯一产品 TC attach 路径 |
+| Rust/Aya backend `auto -> tcx -> tc_netlink` | 保留，仍由 Rust/Aya loader 决策 |
+| Go/Cilium `link.AttachTCX` fallback | 已删除 |
+| Go netlink `netlink.FilterAdd(filter)` TC fallback | 已删除 |
+| Rust/Aya attach 失败 | fail closed，返回 `cannot attach ebpf object ... via Rust/Aya ...` |
+| TC command fallback | 保留在 Rust/report 兼容边界；本节不删除 |
+| C tproxy object / C trace object / Go trace fallback | 保留 |
+| routing map writer fallback | 保留，后续按 map owner / reload parity 单独处理 |
+| Go userspace outbound/control plane | 保留，仍是当前混合架构边界 |
+
+代码修改：
+
+- `control/control_plane_core.go`
+  - 删除 `ciliumLink` import、`activeTcxLinks`、`trackedTcxLink`、`tcxAnchorForPriority()`、`tcxAttachTypeForParent()`、`tcxLinkKey()`。
+  - 删除 `attachIfaceFilterViaTc()`。
+  - 删除 Rust/Aya attach 失败后的 `falling back to Go attach path` 分支。
+  - 删除 host/netns attach wrapper 中的 `netlink.FilterAdd(filter)` Go TC add 回退。
+  - `attachIfaceFilterWithTcOps()` 现在只调用 `attachIfaceFilterViaRustAya()`，失败即返回错误。
+- `control/rust_bpf_loader_test.go`
+  - 新增 `TestRustAyaTcAttachHasNoGoAttachFallback`，防止 `falling back to Go attach path`、`ciliumLink.AttachTCX`、`attachIfaceFilterViaTc`、`netlink.FilterAdd(filter)`、`TCX attach failed` 回到 `control_plane_core.go`。
+- `control/tc_attach_backend_test.go`
+  - 删除已经不再存在的 `tcxAnchorForPriority` 单测。
+
+本地验证：
+
+| 验证项 | 结果 |
+| --- | --- |
+| `gofmt -w control/control_plane_core.go control/tc_attach_backend_test.go control/rust_bpf_loader_test.go` | pass |
+| `PATH=/root/.local/go1.25.9/bin:$PATH GOWORK=off go test -count=1 ./control -run 'TestRustAya|TestParseTcAttachBackend|TestCurrentTcAttachBackend|TestSummarizeTcAttachBackends|TestSameBpfFilterIdentity|TestRustTcAttachHelpers'` | pass |
+| `PATH=/root/.local/go1.25.9/bin:$PATH GOWORK=off go test -count=1 ./control` | pass，`ok github.com/daeuniverse/dae/control 0.055s` |
+| 产品路径防回退关键字复查 | pass，`control/control_plane_core.go` 不再出现 Go TC attach fallback 标记 |
+
+本地构建：
+
+| 项 | 结果 |
+| --- | --- |
+| `make OUTPUT=/tmp/daed-daex-align-no-go-tc-fallback-20260531 APPNAME=daed WEB_DIST=../dist VERSION=daed2-daex-align-no-go-tc-fallback-20260531 bundle`（daed-daex-align/wing） | pass |
+| `/tmp/daed-daex-align-no-go-tc-fallback-20260531 --version` | `daed version daed2-daex-align-no-go-tc-fallback-20260531` |
+| `/tmp/daed-daex-align-no-go-tc-fallback-20260531` | sha256 `e05717c349b9280aff18ba9126dc401da1b86d964b4ce71b38099f2aacf8ef57`，大小 50M |
+
+远程 38 严格 embedded-only 验证条件：
+
+| 条件 | 结果 |
+| --- | --- |
+| kernel | `6.12.86+deb12-amd64` |
+| 安装的产品二进制 | 仅 `/usr/bin/daed`，sha256 为 `e05717c349b9280aff18ba9126dc401da1b86d964b4ce71b38099f2aacf8ef57` |
+| `/usr/bin/dae` | 不存在 |
+| `/usr/bin/dae-aya-bpf-loader` | 不存在 |
+| `DAE_RUST_BPF_LOADER_HELPER` | 未设置 |
+| 临时 unit 环境 | `DAE_RUST_NATIVE_EBPF=1`、`DAE_RUST_NATIVE_EBPF_BACKEND=auto`、`DAE_NATIVE_EBPF_BACKEND=auto`、`DAE_NETNS_LINK=auto`、`DAE_RUST_RESIDENT_DATAPLANE=1` |
+| 临时 LAN 环境 | 创建 `daerust0` dummy link，用于匹配远端验证配置中的 LAN interface；清理时删除 |
+| 配置导入 | 使用 `/etc/dae/config.dae` 的临时 API 导入副本，并仅在导入内容中补 `bind: 'udp://127.0.0.1:1053'` 以验证 DNS listener；未修改原始 `/etc/dae/config.dae` |
+| 原始配置 sha256 | 验证前后均为 `5f6590e9a981456e1b4fcb2166e809617960b172f3bd860b9fb4d192b01206d4` |
+
+远端验证结果：
+
+| 验证项 | 结果 |
+| --- | --- |
+| `/api/health` | `{"healthCheck":1}` |
+| `/api/auth/status` | `{"numberUsers":0}` |
+| `/api/user/me/dae-config-file` import | `{"imported":true}` |
+| `/api/runtime/reload` | `{"applied":1,"dry":false}` |
+| `/api/general/state` | `running=true`，`version=daed2-daex-align-no-go-tc-fallback-20260531`，`netnsLinkMode=netkit`，`attachBackend=tcx` |
+| `/api/runtime/overview` | HTTP 200，`goroutines=27`，`activeConnections=0` |
+| API reload 后 DNS 首包 | `pass=8 fail=0`，首包 `first_rtt_ms=2.36` |
+| HTTPS trace | `https://www.cloudflare.com/cdn-cgi/trace` 成功，返回 `ip=38.65.91.47`、`colo=LAX` |
+| `systemctl reload daed` | 返回成功，服务保持 `active` |
+| systemctl reload 后 DNS 首包 | `pass=8 fail=0`，首包 `first_rtt_ms=0.30` |
+| `systemctl restart daed` | 返回成功，服务保持 `active` |
+| restart 后 `MainPID` | `88554` |
+| cgroup link | 6 条：`sock_create`、`sock_release`、`inet4_connect`、`inet6_connect`、`udp4_sendmsg`、`udp6_sendmsg` |
+
+远端 dataplane / fallback 观测：
+
+| 观测项 | 结果 |
+| --- | --- |
+| netns link | `dae netns link mode: netkit` |
+| tproxy listener | `Opened tproxy listener via Rust/Aya on port 12345 and wrote listen_socket_map` |
+| LAN ingress | `Bind daed_lan_ingress_l2 via Rust/Aya tcx on daerust0` |
+| LAN egress | `Bind daed_lan_egress_l2 via Rust/Aya tcx on daerust0` |
+| WAN egress | `Bind daed_wan_egress_l2 via Rust/Aya tcx on ens3` |
+| WAN ingress | `Bind daed_wan_ingress_l2 via Rust/Aya tcx on ens3` |
+| dae0peer ingress | `Bind daed_dae0peer_ingress via Rust/Aya tcx on dae0peer` |
+| dae0 ingress | `Bind daed_dae0_ingress via Rust/Aya tcx on dae0` |
+| DNS listener | `DNS listener started on udp://127.0.0.1:1053` |
+| Go TC attach fallback 日志 | 未出现 `falling back to Go attach path`、`ciliumLink`、`Bind ... via TC on`、`TCX attach failed` |
+| Go listener / listen_socket_map fallback 日志 | 未出现 `falling back to Go listener` 或 `falling back to Go map update` |
+| Go cgroup fallback 日志 | 未出现 `AttachCgroup` fallback 标记 |
+
+远端清理结果：
+
+| 清理项 | 结果 |
+| --- | --- |
+| `daed.service` / `dae.service` | inactive |
+| `/usr/bin/daed` / `/usr/bin/dae` / `/usr/bin/dae-aya-bpf-loader` | absent |
+| `/etc/systemd/system/daed.service` | absent |
+| `/etc/daed` | absent |
+| 上传产物 `/tmp/daed-daex-align-no-go-tc-fallback-20260531` | absent |
+| `/tmp/daed-no-go-tc-fallback.log` | absent |
+| `/tmp/dae-daemon-resident-runtime-*` | count `0` |
+| `/root/.cache/daed/rust-aya-loader` / `/root/.cache/dae/embedded-helpers` | 已删除 |
+| `dae0` / `dae0peer` / `daerust0` | absent |
+| `dae` netns | absent |
+| `/sys/fs/bpf/daed` | 已删除，最终 absent |
+| `bpftool link show | grep -E 'daed|tproxy'` | 无输出 |
+
+收口结论：
+
+- Go control-plane TC attach 的 Go/Cilium/Go netlink fallback 已删除。
+- daed 产品链严格 embedded-only 路径在 38 机通过 API reload、systemctl reload/restart、DNS 首包、HTTPS trace、TCX attachBackend 和日志防回退验证。
+- 当前产品 TC attach 路径为 Rust/Aya `auto -> tcx -> tc_netlink`；Go attach fallback 不再掩盖 Rust/Aya attach 失败。
+- 本节仍不删除 TC command fallback、C trace object、Go trace fallback、routing map writer fallback，也不替换 Go userspace outbound/control plane。

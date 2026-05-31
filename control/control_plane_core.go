@@ -15,7 +15,6 @@ import (
 	"sync"
 
 	"github.com/cilium/ebpf"
-	ciliumLink "github.com/cilium/ebpf/link"
 	"github.com/daeuniverse/dae/common"
 	"github.com/daeuniverse/dae/common/consts"
 	"github.com/daeuniverse/dae/component"
@@ -29,23 +28,6 @@ import (
 
 // coreFlip should be 0 or 1
 var coreFlip = 0
-
-var activeTcxLinks sync.Map
-
-type trackedTcxLink struct {
-	link ciliumLink.Link
-	once sync.Once
-	err  error
-}
-
-func (l *trackedTcxLink) Close() error {
-	l.once.Do(func() {
-		if l.link != nil {
-			l.err = l.link.Close()
-		}
-	})
-	return l.err
-}
 
 type controlPlaneCore struct {
 	mu sync.Mutex
@@ -114,28 +96,6 @@ func parseTcAttachBackend(value string) tcAttachBackend {
 	default:
 		return ""
 	}
-}
-
-func tcxAnchorForPriority(priority uint16) ciliumLink.Anchor {
-	if priority <= 1 {
-		return ciliumLink.Head()
-	}
-	return ciliumLink.Tail()
-}
-
-func tcxAttachTypeForParent(parent uint32) (ebpf.AttachType, bool) {
-	switch parent {
-	case netlink.HANDLE_MIN_INGRESS:
-		return ebpf.AttachTCXIngress, true
-	case netlink.HANDLE_MIN_EGRESS:
-		return ebpf.AttachTCXEgress, true
-	default:
-		return ebpf.AttachNone, false
-	}
-}
-
-func tcxLinkKey(ifname string, filter *netlink.BpfFilter, attachType ebpf.AttachType) string {
-	return fmt.Sprintf("%s:%d:%d:%s", ifname, filter.LinkIndex, attachType, filter.Name)
 }
 
 func summarizeTcAttachBackends(backends []tcAttachBackend) string {
@@ -412,10 +372,6 @@ func (c *controlPlaneCore) attachIfaceFilter(ifname string, filter *netlink.BpfF
 		ifname,
 		"",
 		filter,
-		program,
-		func() error {
-			return netlink.FilterAdd(filter)
-		},
 		func() error {
 			if err := delBpfFilter(filter); err != nil {
 				return fmt.Errorf("FilterDel(%v:%v): %w", ifname, filter.Name, err)
@@ -431,10 +387,6 @@ func (c *controlPlaneCore) attachIfaceFilterInNetns(daens *DaeNetns, ifname stri
 			ifname,
 			NsName,
 			filter,
-			program,
-			func() error {
-				return netlink.FilterAdd(filter)
-			},
 			func() error {
 				return daens.With(func() error {
 					if err := delBpfFilter(filter); err != nil {
@@ -447,70 +399,13 @@ func (c *controlPlaneCore) attachIfaceFilterInNetns(daens *DaeNetns, ifname stri
 	})
 }
 
-func (c *controlPlaneCore) attachIfaceFilterWithTcOps(ifname string, netnsName string, filter *netlink.BpfFilter, program *ebpf.Program, tcAdd func() error, tcDel func() error) error {
+func (c *controlPlaneCore) attachIfaceFilterWithTcOps(ifname string, netnsName string, filter *netlink.BpfFilter, tcDel func() error) error {
 	backend := currentTcAttachBackend()
 	if err := c.attachIfaceFilterViaRustAya(ifname, netnsName, filter, backend, tcDel); err == nil {
 		return nil
 	} else {
-		c.log.WithError(err).Debugf("Rust/Aya TC attach failed for %s on %s; falling back to Go attach path", filter.Name, ifname)
+		return fmt.Errorf("cannot attach ebpf object to filter %s on %s via Rust/Aya %s: %w", filter.Name, ifname, backend, err)
 	}
-	if backend == tcAttachBackendTc {
-		return c.attachIfaceFilterViaTc(ifname, filter, "tc", tcAdd, tcDel)
-	}
-
-	attachType, ok := tcxAttachTypeForParent(filter.Parent)
-	if !ok {
-		return fmt.Errorf("unsupported tcx parent %#x for filter %s", filter.Parent, filter.Name)
-	}
-	linkKey := tcxLinkKey(ifname, filter, attachType)
-	if old, ok := activeTcxLinks.LoadAndDelete(linkKey); ok {
-		if err := old.(*trackedTcxLink).Close(); err != nil {
-			c.log.Warnf("close stale TCX link before reattach for %s on %s: %v", filter.Name, ifname, err)
-		}
-	}
-	tcxLink, err := ciliumLink.AttachTCX(ciliumLink.TCXOptions{
-		Interface: filter.LinkIndex,
-		Program:   program,
-		Attach:    attachType,
-		Anchor:    tcxAnchorForPriority(filter.Priority),
-	})
-	if err == nil {
-		c.log.Infof("Bind %s via TCX on %s", filter.Name, ifname)
-		c.recordAttachBackend(filter, tcAttachBackendTcx)
-		tracked := &trackedTcxLink{link: tcxLink}
-		activeTcxLinks.Store(linkKey, tracked)
-		if err := tcDel(); err != nil {
-			c.log.Warnf("cleanup stale tc filter after TCX attach for %s on %s: %v", filter.Name, ifname, err)
-		}
-		c.deferFuncs = append(c.deferFuncs, func() error {
-			if current, ok := activeTcxLinks.Load(linkKey); ok && current == tracked {
-				activeTcxLinks.Delete(linkKey)
-			}
-			if err := tracked.Close(); err != nil {
-				return fmt.Errorf("TCXLinkClose(%v:%v): %w", ifname, filter.Name, err)
-			}
-			return nil
-		})
-		return nil
-	}
-	if backend == tcAttachBackendTcx {
-		return fmt.Errorf("cannot attach ebpf object to filter %s via tcx: %w", filter.Name, err)
-	}
-
-	c.log.Warnf("TCX attach failed for %s on %s, falling back to tc: %v", filter.Name, ifname, err)
-	return c.attachIfaceFilterViaTc(ifname, filter, "tc fallback", tcAdd, tcDel)
-}
-
-func (c *controlPlaneCore) attachIfaceFilterViaTc(ifname string, filter *netlink.BpfFilter, backend string, tcAdd func() error, tcDel func() error) error {
-	if err := tcAdd(); err != nil {
-		return fmt.Errorf("cannot attach ebpf object to filter %s via %s: %w", filter.Name, backend, err)
-	}
-	c.log.Infof("Bind %s via TC on %s", filter.Name, ifname)
-	c.recordAttachBackend(filter, tcAttachBackendTc)
-	c.deferFuncs = append(c.deferFuncs, func() error {
-		return tcDel()
-	})
-	return nil
 }
 
 // bindLan automatically configures kernel parameters and bind to lan interface `ifname`.
