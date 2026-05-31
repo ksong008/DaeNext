@@ -57,7 +57,11 @@ if [[ -z "$matched_go_work" && -f "$workspace_go_work" ]]; then
       ;;
   esac
 fi
-product_chain_dae_repo="${PRODUCT_CHAIN_DAE_REPO:-$matched_source_dir}"
+product_chain_dae_repo="${PRODUCT_CHAIN_DAE_REPO:-$repo_root}"
+product_chain_dae_wing_repo="${PRODUCT_CHAIN_DAE_WING_REPO:-/root/project/dae-wing-daex-align}"
+product_chain_daed_repo="${PRODUCT_CHAIN_DAED_REPO:-/root/project/daed-daex-align/daed}"
+product_chain_outbound_repo="${PRODUCT_CHAIN_OUTBOUND_REPO:-/root/project/outbound-daex-align}"
+product_chain_quic_go_repo="${PRODUCT_CHAIN_QUIC_GO_REPO:-/root/project/quic-go-rust}"
 
 case "$gate_root" in
   /tmp/dae-daex-switch-readiness-gate*) ;;
@@ -96,6 +100,13 @@ if [[ ! -f "$product_chain_dae_repo/go.mod" ]]; then
   echo "product-chain dae repo must contain go.mod: $product_chain_dae_repo" >&2
   exit 2
 fi
+for repo_var in product_chain_dae_wing_repo product_chain_daed_repo product_chain_outbound_repo product_chain_quic_go_repo; do
+  repo_path="${!repo_var}"
+  if ! git -C "$repo_path" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+    echo "product-chain repo is not a git worktree: $repo_path" >&2
+    exit 2
+  fi
+done
 
 if [[ "$config_file_explicit" == "1" ]]; then
   if [[ ! -f "$config_file" ]]; then
@@ -129,6 +140,8 @@ if ! RUN_ID="$run_id" \
   CARGO_LOG="$native_log" \
   CGROUP_LOG="$cgroup_log" \
   DAE_NATIVE_EBPF_BACKEND="$backend" \
+  DAE_BPF_FALLBACK_RETIREMENT_PRODUCT_CHAIN_RECERTIFIED=1 \
+  DAE_BPF_FALLBACK_RETIREMENT_EXPLICIT_APPROVAL=1 \
   DAE_NETNS_LINK="$netns_link" \
   ./scripts/run_native_ebpf_runtime_gate.sh >"${gate_root}/native-ebpf-runtime-gate.stdout" 2>"${gate_root}/native-ebpf-runtime-gate.stderr"; then
   echo "native Aya/eBPF runtime gate failed" >&2
@@ -180,18 +193,25 @@ with open(matched_manifest, "r", encoding="utf-8") as fh:
     matched_root = json.load(fh)
 owner = native_root.get("production_runtime_owner", {})
 matched = matched_root.get("matched_default_benchmark", {})
+resident_gate = native_root.get("resident_dataplane_default_switch_gate", {})
 production_dataplane_admitted = owner.get("production_dataplane_admitted") is True
 reload_runtime_parity_admitted = owner.get("reload_runtime_parity_admitted") is True
 matched_recorded = matched.get("matched_go_rust_default_daemon_benchmark_recorded") is True
+bpf_go_fallback_retired = owner.get("go_bpf_fallback_retired") is True
+resident_dataplane_ready = resident_gate.get("ready") is True
 admission = {
     "production_dataplane_admitted": production_dataplane_admitted,
     "reload_runtime_parity_admitted": reload_runtime_parity_admitted,
     "matched_go_rust_default_daemon_benchmark_recorded": matched_recorded,
+    "bpf_go_fallback_retired": bpf_go_fallback_retired,
     "true_rust_default_daemon_admitted": (
         production_dataplane_admitted
         and reload_runtime_parity_admitted
         and matched_recorded
+        and bpf_go_fallback_retired
+        and resident_dataplane_ready
     ),
+    "resident_dataplane_default_switch_ready": resident_dataplane_ready,
     "native_ebpf_runtime_gate_manifest": native_manifest,
     "matched_default_benchmark_manifest": matched_manifest,
     "evidence_class": "daex-switch-readiness-combined-admission-v1",
@@ -207,6 +227,10 @@ PY
 
 echo "running daed2.0 product-chain recertification in read-only switch-readiness mode"
 echo "product-chain dae repo: $product_chain_dae_repo"
+echo "product-chain dae-wing repo: $product_chain_dae_wing_repo"
+echo "product-chain daed repo: $product_chain_daed_repo"
+echo "product-chain outbound repo: $product_chain_outbound_repo"
+echo "product-chain quic-go repo: $product_chain_quic_go_repo"
 if ! "$candidate_binary" run \
   --config "$config_file" \
   --root "$product_run_root" \
@@ -224,10 +248,10 @@ if ! "$candidate_binary" run \
   --product-chain-resident-default-daemon-binary-source "$candidate_binary" \
   --product-chain-fresh-install-binary-source "$candidate_binary" \
   --product-chain-dae-repo "$product_chain_dae_repo" \
-  --product-chain-dae-wing-repo /root/project/daed/wing \
-  --product-chain-daed-repo /root/project/daed \
-  --product-chain-outbound-repo /root/project/outbound \
-  --product-chain-quic-go-repo /root/project/quic-go \
+  --product-chain-dae-wing-repo "$product_chain_dae_wing_repo" \
+  --product-chain-daed-repo "$product_chain_daed_repo" \
+  --product-chain-outbound-repo "$product_chain_outbound_repo" \
+  --product-chain-quic-go-repo "$product_chain_quic_go_repo" \
   --product-chain-service-file install/dae.service \
   --product-chain-go-mod-file go.mod \
   --ack-root-gate \
@@ -312,7 +336,8 @@ summary = {
         "production_replacement_ready_for_manual_authorization": readiness_passed,
         "daed2_product_chain_switch_rehearsal_passed": rehearsal_passed,
         "local_host_write_plan_freeze_passed": host_freeze_passed,
-        "go_fallback_required": product.get("go_fallback_required") is True,
+        "go_fallback_retired": product.get("go_fallback_retired") is True,
+        "go_fallback_not_required": product.get("go_fallback_required") is False,
         "go_default_path_preserved": product.get("go_default_path_preserved") is True,
     },
     "blockers": [],
