@@ -15445,6 +15445,7 @@ A4 coverage 结论：
 | `cargo test --manifest-path rust/Cargo.toml -p dae-daemon production_runtime_owner` | pass，67 passed |
 | `git diff --check` | pass |
 
+
 ### 1-3 收口：DNS 首包、daed reload service contract、38 机 release gate（2026-05-30）
 
 本节按用户授权完成原 1-3 收口，不新增 stage。执行前继续参考：
@@ -17763,3 +17764,108 @@ benchmark 记录：
 | `cargo test --manifest-path rust/Cargo.toml -p dae-ebpf-support --features aya-loader` | pass，56 passed |
 | `cargo test --manifest-path rust/Cargo.toml -p dae-daemon production_runtime_owner` | pass，67 passed |
 | `git diff --check` | pass |
+
+### 远程 38 默认 daemon/systemd host-write 验证收口记录（2026-05-31）
+
+本节承接 `switch-readiness` 大 gate 和上一轮远程 host-write runtime admission。用户已授权在远程 38 测试机执行真实 host write / 默认路径验证；本轮按一个大阶段完成，不新增细分 stage。执行前再次参考：
+
+- `DAEX_RUST_REBUILD_PLAN_2026-05-16.md`：阶段 14 / 16 的 eBPF、tproxy、netns、reload、systemd、默认路径切换约束。
+- `DAENEW_RUST_REBUILD_MEMO_2026-05-16.md`：第 5.11、第 11 节的 Go 基线运行流、BPF object / map / tc / cgroup / listener handoff、reload owner 和 outbound/control-plane 边界。
+
+执行边界：
+
+- 目标：远程 38 测试机，仅作为 host-write/default-path 验证环境。
+- 不以远程测试机配置作为通用实现标准；缺失 `daerust0` 时只补临时 dummy LAN 接口作为验证环境，不写入代码特例。
+- 不删除 TC command fallback、C trace object、Go trace fallback。
+- 不改 Go userspace outbound/control plane，不改 daed/dae-wing/outbound/quic-go 链路。
+- 配置必须保留本机服务/SSH 保护：`pname(NetworkManager, systemd-resolved, systemd-networkd, dnsmasq, ssh, sshd) -> must_direct`。
+
+本机候选构建：
+
+| 项 | 结果 |
+| --- | --- |
+| `dae-daemon-optin` | `c15d006b70596753a3f910d9f6267b0d207487da8677cf15eccdff2a486d79b7` |
+| `dae-aya-bpf-loader` | `5769f62fb2b77af7abef60085036374cb319728cf366de3bb40b260bf1bd30e1` |
+| 上传目录 | `/tmp/daex-hostwrite-20260531-081406`，验证完成后已清理 |
+
+远端前置状态：
+
+| 项 | 结果 |
+| --- | --- |
+| kernel | `6.12.86+deb12-amd64` |
+| `dae.service` | 初始 inactive |
+| `/usr/bin/dae` | 初始 absent |
+| `/usr/bin/daed` | 初始 absent |
+| `/etc/dae/config.dae` | 存在，sha256 `5f6590e9a981456e1b4fcb2166e809617960b172f3bd860b9fb4d192b01206d4` |
+| SSH/local service 保护 | 已确认包含 `pname(NetworkManager, systemd-resolved, systemd-networkd, dnsmasq, ssh, sshd) -> must_direct` |
+
+真实 host write 动作：
+
+| 写入项 | 结果 |
+| --- | --- |
+| `/usr/bin/dae` | 写入 `dae-daemon-optin` 候选 |
+| `/usr/bin/dae-daemon-optin` | 写入同一候选，便于诊断 |
+| `/usr/bin/dae-aya-bpf-loader` | 写入 Rust/Aya loader |
+| `/etc/default/dae` | 写入/恢复 systemd 环境，包含 `DAE_RUST_RESIDENT_DATAPLANE=1`、`DAE_RUST_NATIVE_EBPF=1`、`DAE_RUST_NATIVE_EBPF_BACKEND=auto`、`DAE_NETNS_LINK=auto` |
+| `/etc/systemd/system/dae.service` | 写入正式 `validate -> run -> reload` systemd contract |
+| rollback 备份 | `/tmp/daex-hostwrite-20260531-081406/backup-before-hostwrite`，验证完成后随临时目录清理 |
+
+启动过程：
+
+- 第一次 `systemctl start dae.service` 失败，`ExecStartPre=/usr/bin/dae validate -c /etc/dae/config.dae` 已通过，失败点为 resident runtime start。
+- 结构化失败文件：`/tmp/dae-daemon-resident-runtime-87267/resident-production-runtime-start.json`。
+- 失败原因：配置中的 LAN 接口 `daerust0` 在测试机不存在，导致以下通用 sysctl 步骤失败：
+  - `set-resident-lan-daerust0-ipv4-send-redirects-off`
+  - `set-resident-lan-daerust0-ipv4-forwarding-on`
+  - `set-resident-lan-daerust0-ipv6-forwarding-on`
+- 处理方式：在远程测试机临时创建 `daerust0` dummy link 并纳入 rollback 清理；这是验证环境搭建，不是代码特化，也不改变通用 routing / geodata / DNS / sniffing / outbound 规则。
+
+默认 daemon/systemd 验证结果：
+
+| 验证项 | 结果 |
+| --- | --- |
+| `systemctl start dae.service` | pass，`active=active`，`MainPID=87569` |
+| `systemctl reload dae.service` | pass，`ExecReload=/usr/bin/dae reload $MAINPID` 返回 `OK` |
+| `systemctl status dae.service` | pass，`Active: active (running)` |
+| `/usr/bin/dae service-contract`（加载 `/etc/default/dae` 后） | pass，`resident_run_service_contract_ready=true`，`reload_command_service_contract_ready=true`，`resident_dataplane_default_switch_ready=true`，`resident_default_daemon_switch_ready=true`，`resident_production_dataplane_ready=true`，`default_path_switch_blocker=null` |
+| `curl https://www.cloudflare.com/cdn-cgi/trace` | pass，`curl_exit=0`，返回 trace 前 8 行 |
+| 日志错误扫描 | pass，本轮成功启动和 reload 后未见 `fatal/panic/error/failed/falling back to Go/AttachCgroup/No node found/No interface to bind/parse config/permission denied` |
+
+resident runtime 结构化结果：
+
+| 项 | 结果 |
+| --- | --- |
+| start file | `/tmp/dae-daemon-resident-runtime-87569/resident-production-runtime-start.json` |
+| `status` | `pass` |
+| failed step count | `0` |
+| netns link | `auto -> netkit`，`fallback_used=false` |
+| backend policy | `requested_backend=auto`，`effective_backend=auto`，WAN=`ens3`，LAN=`daerust0`，无同接口多 role 降级 |
+| `attach-production-dae0peer-native-ebpf-program` | pass，role=`peer_ingress`，iface=`dae0peer`，backend=`tc_netlink`，requested=`tcx`，`fallback_used=false` |
+| `attach-native-ebpf-cgroup-programs` | pass，backend=`aya`，`fallback_used=false` |
+| `attach-resident-wan_ingress-native-ebpf-program-ens3` | pass，backend=`tcx`，requested=`tcx`，`fallback_used=false` |
+| `attach-resident-wan_egress-native-ebpf-program-ens3` | pass，backend=`tcx`，requested=`tcx`，`fallback_used=false` |
+| `attach-resident-lan-ingress-native-ebpf-program-daerust0` | pass，backend=`tcx`，requested=`tcx`，`fallback_used=false` |
+| `attach-resident-lan_egress-native-ebpf-program-daerust0` | pass，backend=`tcx`，requested=`tcx`，`fallback_used=false` |
+| `attach-production-dae0-native-ebpf-program` | pass，role=`host_ingress`，iface=`dae0`，backend=`tc_netlink`，requested=`tcx`，`fallback_used=false` |
+
+回滚和测试机清理：
+
+| 项 | 结果 |
+| --- | --- |
+| rollback script | 实际执行，输出 `rollback_done` |
+| `dae.service` | 回滚后 `active=inactive`，unit fragment 为空 |
+| `/usr/bin/dae` | absent |
+| `/usr/bin/dae-daemon-optin` | absent |
+| `/usr/bin/dae-aya-bpf-loader` | absent |
+| `/etc/systemd/system/dae.service` | absent |
+| `dae0` / `dae0peer` / `daerust0` | absent |
+| `daens` netns | absent |
+| `/etc/dae/config.dae` | sha256 仍为 `5f6590e9a981456e1b4fcb2166e809617960b172f3bd860b9fb4d192b01206d4` |
+| `/tmp/dae-daemon-resident-runtime-*` | 已清理 |
+| `/tmp/daex-hostwrite-20260531-081406` | 已清理 |
+
+结论：
+
+- 默认 daemon/systemd host write、resident run、reload service contract、Rust/Aya native attach、TCX physical WAN/LAN、netkit L2 link、rollback 清理已在远程 38 测试机通过。
+- 本轮验证证明 `DAE_RUST_RESIDENT_DATAPLANE=1 + DAE_RUST_NATIVE_EBPF=1 + backend auto + netns link auto` 的默认路径具备远程 host-write 切换准备证据。
+- 仍不删除 C trace object、Go trace fallback、TC command fallback；Go userspace outbound/control plane 仍按既定混合架构保留。
