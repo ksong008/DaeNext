@@ -477,6 +477,7 @@ dependencies = [
  "dae-ebpf-support",
  "dae-golden",
  "dae-routing",
+ "libc",
  "serde_json",
 ]
 

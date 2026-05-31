@@ -29,6 +29,8 @@ type domainRoutingTracker struct {
 	ips    map[[4]uint32]*domainRoutingIPState
 }
 
+type domainRoutingMapWriter func(*ebpf.Map, []rustDomainRoutingMapUpdate, [][4]uint32) error
+
 func newDomainRoutingTracker() *domainRoutingTracker {
 	return &domainRoutingTracker{
 		owners: make(map[string]domainRoutingOwnerSnapshot),
@@ -158,7 +160,7 @@ func (t *domainRoutingTracker) syncOwner(
 	m *ebpf.Map,
 	ownerKey string,
 	snapshot domainRoutingOwnerSnapshot,
-	rustWriter func(*ebpf.Map, []rustDomainRoutingMapUpdate, [][4]uint32) error,
+	rustWriter domainRoutingMapWriter,
 ) error {
 	if ownerKey == "" {
 		return fmt.Errorf("empty domain routing owner key")
@@ -195,30 +197,18 @@ func (t *domainRoutingTracker) syncOwner(
 	}
 
 	if m != nil && (len(keysToUpdate) > 0 || len(keysToDelete) > 0) {
-		if rustWriter != nil {
-			updates := make([]rustDomainRoutingMapUpdate, 0, len(keysToUpdate))
-			for i, key := range keysToUpdate {
-				updates = append(updates, rustDomainRoutingMapUpdate{
-					Key:    key,
-					Bitmap: valuesToUpdate[i].Bitmap,
-				})
-			}
-			if err := rustWriter(m, updates, keysToDelete); err == nil {
-				t.applyOwnerSnapshotLocked(ownerKey, snapshot)
-				return nil
-			}
+		if rustWriter == nil {
+			return fmt.Errorf("rust domain_routing_map writer is not configured")
 		}
-		if len(keysToUpdate) > 0 {
-			if _, err := BpfMapBatchUpdate(m, keysToUpdate, valuesToUpdate, &ebpf.BatchOptions{
-				ElemFlags: uint64(ebpf.UpdateAny),
-			}); err != nil {
-				return fmt.Errorf("update domain_routing_map: %w", err)
-			}
+		updates := make([]rustDomainRoutingMapUpdate, 0, len(keysToUpdate))
+		for i, key := range keysToUpdate {
+			updates = append(updates, rustDomainRoutingMapUpdate{
+				Key:    key,
+				Bitmap: valuesToUpdate[i].Bitmap,
+			})
 		}
-		if len(keysToDelete) > 0 {
-			if _, err := BpfMapBatchDelete(m, keysToDelete); err != nil {
-				return fmt.Errorf("delete domain_routing_map: %w", err)
-			}
+		if err := rustWriter(m, updates, keysToDelete); err != nil {
+			return fmt.Errorf("apply domain_routing_map via Rust/Aya: %w", err)
 		}
 	}
 
