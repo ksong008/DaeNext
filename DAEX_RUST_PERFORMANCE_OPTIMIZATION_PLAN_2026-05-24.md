@@ -16889,6 +16889,154 @@ cargo run --manifest-path rust/Cargo.toml -p dae-daemon --bin dae-daemon-optin -
 - admission evidence 必须来自已完成的 tproxy dataplane、远程 host-write、reload/runtime parity、matched benchmark、product-chain clean baseline 和 explicit approval 组合；不能伪造，也不能用测试机 config 作为通用标准。
 - 删除 Go BPF fallback 前仍需单独审计删除面；本节只证明 gate 语义，不执行删除。
 
+### switch-readiness 大 gate 收口记录（2026-05-31）
+
+本节按“大阶段内一次完成”的原则收口，不再把 admission evidence、fallback retirement、matched benchmark、product-chain recertification 继续拆成新阶段。本轮目标是让现有 `scripts/run_daex_switch_readiness_gate.sh` 能在 daex 独立链路上完整复跑：
+
+- native Aya/eBPF runtime gate。
+- matched Go/Rust default daemon benchmark，`iterations=10`。
+- BPF-side Go fallback retirement evidence。
+- resident dataplane default switch env gate。
+- standalone `dae-wing-daex-align` / `daed-daex-align` product-chain recertification。
+- replacement readiness / apply plan / rollback artifact 只读生成。
+
+修改前参考：
+
+- `DAEX_RUST_REBUILD_PLAN_2026-05-16.md`：产品链默认切换必须同时具备 runtime/dataplane、matched benchmark、host-write/rollback、runtime/control API、outbound/quic-go dependency boundary、显式授权和 clean baseline 证据。
+- `DAENEW_RUST_REBUILD_MEMO_2026-05-16.md`：默认路径不能绕过 runtime/control API、Go userspace outbound/control plane 边界、netkit/veth link topology、TC/TCX attach backend、service contract 和 rollback 语义。
+- 本文件前文 A4/A5/A6 记录：Go BPF fallback retirement 只允许限定为 tproxy dataplane 范围；TC command fallback、C trace object、Go trace fallback 继续保留。
+
+本轮修正：
+
+- `scripts/run_daex_switch_readiness_gate.sh`
+  - product-chain 默认路径改为 daex 独立链：
+    - dae：`/root/project/dae-daex-align`
+    - dae-wing：`/root/project/dae-wing-daex-align`
+    - daed：`/root/project/daed-daex-align/daed`
+    - outbound：`/root/project/outbound-daex-align`
+    - quic-go：`/root/project/quic-go-rust`
+  - matched benchmark 对 `dae-daex-align` 使用 `GOWORK=off`，避免被 `/root/project/go.work` 误拦截。
+  - 构建并暴露 `dae-aya-bpf-loader --features native-ebpf` 到 `PATH`，保证 Go baseline daemon 能找到 native loader helper。
+  - combined admission evidence 新增：
+    - `bpf_go_fallback_retired`
+    - `resident_dataplane_default_switch_ready`
+  - `true_rust_default_daemon_admitted` 现在在 gate 脚本里要求：
+    - `production_dataplane_admitted=true`
+    - `reload_runtime_parity_admitted=true`
+    - `matched_go_rust_default_daemon_benchmark_recorded=true`
+    - `bpf_go_fallback_retired=true`
+    - `resident_dataplane_default_switch_ready=true`
+  - standalone `dae-wing` 拓扑不再要求 daed2 内嵌 `daed/wing` rehearsal；只有 `daed2_wing_repo_used=true` 时才要求 `daed2_product_chain_switch_rehearsal.pass=true`。
+- `scripts/run_native_ebpf_runtime_gate.sh`
+  - 新增环境控制：
+    - `DAE_BPF_FALLBACK_RETIREMENT_PRODUCT_CHAIN_RECERTIFIED=1`
+    - `DAE_BPF_FALLBACK_RETIREMENT_EXPLICIT_APPROVAL=1`
+  - 由 switch-readiness gate 在同一次大 gate 中传入，用于生成 BPF-side Go fallback retirement evidence。
+
+本轮中途失败和修正：
+
+| 失败点 | 原因 | 修正 |
+| --- | --- | --- |
+| matched Go build 失败 | `dae-daex-align` 不在父级 `/root/project/go.work` 中，Go 自动加载 workspace 后拒绝构建 | 对非 workspace source dir 设置 `GOWORK=off` |
+| Go baseline daemon 未 ready | `dae-aya-bpf-loader` 不在 `PATH` | gate 构建 loader 并将 `rust/target/debug` / `rust/target/release` 加入 `PATH` |
+| Go baseline daemon 仍未 ready | loader 未启用 `native-ebpf` feature | loader build 增加 `--features native-ebpf` |
+| switch readiness 被 daed2 rehearsal 阻断 | 当前 product-chain topology 是 `standalone-dae-wing`，不是 `daed2_wing_repo_used` | standalone topology 下 daed2 rehearsal 标为 not required |
+
+提交记录：
+
+| commit | 内容 |
+| --- | --- |
+| `610becfc` | `scripts: align switch readiness admission gate` |
+| `c0a79c23` | `scripts: isolate matched benchmark workspace` |
+| `26198abe` | `scripts: expose aya loader for switch benchmark` |
+| `58dca663` | `scripts: build native aya loader for readiness gate` |
+| `03b6395e` | `scripts: admit standalone wing readiness rehearsal` |
+
+最终完整 gate：
+
+```bash
+DAE_RUST_RESIDENT_DATAPLANE=1 RUN_ID=20260531-bigphase-080654 ./scripts/run_daex_switch_readiness_gate.sh
+```
+
+最终 artifact：
+
+| 项 | 路径 |
+| --- | --- |
+| gate summary | `/tmp/dae-daex-switch-readiness-gate-20260531-bigphase-080654/daex-switch-readiness.json` |
+| native manifest | `/tmp/dae-daemon-native-ebpf-runtime-gate-20260531-bigphase-080654/run/dae-daemon-optin-run.json` |
+| matched manifest | `/tmp/dae-daemon-daex-switch-matched-20260531-bigphase-080654/run/dae-daemon-optin-run.json` |
+| product manifest | `/tmp/dae-daemon-daex-switch-product-20260531-bigphase-080654/run/dae-daemon-optin-run.json` |
+| admission evidence | `/tmp/dae-daex-switch-readiness-gate-20260531-bigphase-080654/product-chain-admission-evidence.json` |
+| product-chain manifest | `/tmp/dae-daemon-daex-switch-product-20260531-bigphase-080654/run/product-chain-recertification/product-chain-recertification.json` |
+
+最终 gate 结果：
+
+| 检查项 | 结果 |
+| --- | --- |
+| `status` | `pass` |
+| `core_switch_readiness_passed` | true |
+| `ready_for_manual_switch_authorization` | true |
+| `host_write_allowed` | false |
+| `host_write_executed` | false |
+| `default_path_mutation_executed` | false |
+| `production_run_command_replaced` | false |
+| `native_ebpf_runtime_gate_passed` | true |
+| `matched_go_rust_default_daemon_benchmark_recorded` | true |
+| `true_rust_default_daemon_admitted` | true |
+| `product_chain_recertification_clean` | true |
+| `product_chain_switch_allowed` | true |
+| `production_replacement_ready_for_manual_authorization` | true |
+| `product_chain_switch_rehearsal_passed_or_not_required` | true |
+| `go_fallback_retired` | true |
+| `go_fallback_not_required` | true |
+| `go_default_path_preserved` | true |
+| `blockers` | `[]` |
+
+product-chain topology：
+
+| 字段 | 结果 |
+| --- | --- |
+| `chain` | `standalone-dae-wing` |
+| `standalone_dae_wing_repo_used` | true |
+| `daed2_wing_repo_used` | false |
+| `source_contract_shape` | `runtime-service-port-or-engine-default-direct` |
+| `dae_core_repo` | `/root/project/dae-wing-daex-align/dae-core` |
+
+native Aya/eBPF runtime evidence：
+
+| 项 | 结果 |
+| --- | --- |
+| netns link requested | `auto` |
+| production link selected | `netkit` |
+| active TCP link selected | `netkit` |
+| `attach-production-dae0peer-native-ebpf-program` | pass，`backend=tc_netlink`，`fallback_used=false`，`iface=dae0peer`，`netns=daens` |
+| `attach-lan-ingress-native-ebpf-program` | pass，`backend=tc_netlink`，`fallback_used=false`，`iface=dae50lan0` |
+| `attach-production-dae0-native-ebpf-program` | pass，`backend=tc_netlink`，`fallback_used=false`，`iface=dae0` |
+
+native runtime benchmark：
+
+| 项 | iterations | total | 单次 |
+| --- | ---: | ---: | ---: |
+| active TCP relay | 5 | `204935600 ns` | `40987120.0 ns/connection` |
+| active UDP | 5 | `104191143 ns` | `20838228.6 ns/packet` |
+| active DNS | 5 | `103023224 ns` | `20604644.8 ns/query` |
+
+matched Go/Rust default daemon benchmark：
+
+| 项 | count | avg | min | max |
+| --- | ---: | ---: | ---: | ---: |
+| Go ready elapsed | 10 | `1067383961.4 ns` | `1052062811 ns` | `1102517633 ns` |
+| Rust ready elapsed | 10 | `11814561.0 ns` | `11579745 ns` | `11960362 ns` |
+| Rust/Go ready ratio | - | `0.011068707632166226` | - | - |
+
+边界结论：
+
+- 本轮大 gate 已完成“可以进入手动切换授权评估”的只读证据闭环。
+- 本轮仍未执行 host write，未替换 `/usr/bin/dae`，未写 systemd，未替换 daed 二进制。
+- `go_fallback_not_required=true` / `go_fallback_retired=true` 的范围来自 product-chain default-path admission；Go userspace outbound/control plane 仍按既定边界保留。
+- TC command fallback、C trace object、Go trace fallback 仍保留，不在本轮删除范围内。
+- 本机 `local_host_write_plan_freeze_passed=false` 是预期结果：本机没有正式 `/usr/bin/dae`、`dae.service`、`/etc/dae/config.dae`；真实 host write 仍必须在授权目标机上单独执行。
+
 ### daed bootstrap 空配置误导性 warning 收口（2026-05-31）
 
 触发背景：
