@@ -3,6 +3,7 @@ pub mod domain_routing;
 pub mod ffi;
 pub mod reload;
 pub mod routing_native;
+pub mod routing_owned;
 pub mod runtime_deps;
 
 #[cfg(test)]
@@ -64,4 +65,5 @@ pub use routing_native::{
     RoutingNativeBuildPlan, RoutingNativeFallback, RoutingNativeMatch, RoutingNativePlanError,
     RoutingNativeRule, build_routing_native_plan, ip_prefix_to_bpf_lpm_key,
 };
+pub use routing_owned::{RoutingMapOwner, RoutingMapOwnerApplyReport};
 pub use runtime_deps::{EnvironmentGate, RuntimeDependencyPlan};

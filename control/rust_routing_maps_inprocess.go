@@ -51,8 +51,24 @@ typedef struct {
 	uint32_t bitmap[32];
 } dae_control_domain_routing_update;
 
+typedef struct dae_control_routing_owner dae_control_routing_owner;
+
+typedef struct {
+	uint32_t routing_map_id;
+	uint32_t lpm_array_map_id;
+	uint8_t map_changed;
+	uint8_t plan_changed;
+	uint8_t skipped;
+	uint8_t padding;
+	uint64_t checksum;
+	size_t routing_entries_updated;
+	size_t lpm_maps_created;
+} dae_control_routing_owner_apply_report;
+
 extern uint32_t dae_control_ffi_abi_version(void);
 extern const char *dae_control_last_error_message(void);
+extern dae_control_routing_owner *dae_control_routing_owner_new(void);
+extern void dae_control_routing_owner_free(dae_control_routing_owner *owner);
 extern int32_t dae_control_apply_routing_maps_with_lpm_build_by_id(
 	uint32_t routing_map_id,
 	uint32_t lpm_array_map_id,
@@ -68,35 +84,81 @@ extern int32_t dae_control_apply_domain_routing_map_by_id(
 	const uint32_t (*deletes)[4],
 	size_t deletes_len
 );
+extern int32_t dae_control_routing_owner_apply_snapshot_by_id(
+	dae_control_routing_owner *owner,
+	uint32_t routing_map_id,
+	uint32_t lpm_array_map_id,
+	const dae_control_routing_map_entry *routing_entries,
+	size_t routing_entries_len,
+	const dae_control_lpm_map_build_spec *lpm_maps,
+	size_t lpm_maps_len,
+	dae_control_routing_owner_apply_report *report
+);
 */
 import "C"
 
 import (
 	"fmt"
 	"runtime"
+	"sync"
 	"unsafe"
 )
 
+var rustRoutingOwnerState struct {
+	sync.Mutex
+	ptr *C.dae_control_routing_owner
+}
+
 func rustInprocessRoutingMapAvailable() bool {
 	return C.dae_control_ffi_abi_version() == 1
+}
+
+func applyKernelRoutingMapsViaRustOwnedInprocess(request rustRoutingMapApplyRequest) error {
+	if len(request.LpmEntries) != 0 {
+		return fmt.Errorf("Rust in-process routing map owner does not accept prebuilt LPM entries")
+	}
+	routingEntries := cRoutingMapEntries(request.RoutingEntries)
+	lpmMaps, freeLpmMaps, err := cLpmMapBuildSpecs(request.LpmMaps)
+	if err != nil {
+		return err
+	}
+	defer freeLpmMaps()
+
+	var routingPtr *C.dae_control_routing_map_entry
+	if len(routingEntries) > 0 {
+		routingPtr = &routingEntries[0]
+	}
+	rustRoutingOwnerState.Lock()
+	defer rustRoutingOwnerState.Unlock()
+	if rustRoutingOwnerState.ptr == nil {
+		rustRoutingOwnerState.ptr = C.dae_control_routing_owner_new()
+		if rustRoutingOwnerState.ptr == nil {
+			return fmt.Errorf("create Rust in-process routing map owner")
+		}
+	}
+	var report C.dae_control_routing_owner_apply_report
+	rc := C.dae_control_routing_owner_apply_snapshot_by_id(
+		rustRoutingOwnerState.ptr,
+		C.uint32_t(request.RoutingMapID),
+		C.uint32_t(request.LpmArrayMapID),
+		routingPtr,
+		C.size_t(len(routingEntries)),
+		lpmMaps,
+		C.size_t(len(request.LpmMaps)),
+		&report,
+	)
+	runtime.KeepAlive(routingEntries)
+	if rc != 0 {
+		return fmt.Errorf("Rust in-process routing map owner failed: %s", rustInprocessLastError())
+	}
+	return nil
 }
 
 func applyKernelRoutingMapsViaRustInprocess(request rustRoutingMapApplyRequest) error {
 	if len(request.LpmEntries) != 0 {
 		return fmt.Errorf("Rust in-process routing map writer does not accept prebuilt LPM entries")
 	}
-	routingEntries := make([]C.dae_control_routing_map_entry, len(request.RoutingEntries))
-	for i, entry := range request.RoutingEntries {
-		routingEntries[i].index = C.uint32_t(entry.Index)
-		for j, b := range entry.Value.Value {
-			routingEntries[i].value.value[j] = C.uint8_t(b)
-		}
-		routingEntries[i].value.not_ = cUint8Bool(entry.Value.Not)
-		routingEntries[i].value.kind = C.uint8_t(entry.Value.Type)
-		routingEntries[i].value.outbound = C.uint8_t(entry.Value.Outbound)
-		routingEntries[i].value.must = cUint8Bool(entry.Value.Must)
-		routingEntries[i].value.mark = C.uint32_t(entry.Value.Mark)
-	}
+	routingEntries := cRoutingMapEntries(request.RoutingEntries)
 	lpmMaps, freeLpmMaps, err := cLpmMapBuildSpecs(request.LpmMaps)
 	if err != nil {
 		return err
@@ -166,6 +228,22 @@ func cUint8Bool(v bool) C.uint8_t {
 		return 1
 	}
 	return 0
+}
+
+func cRoutingMapEntries(entries []rustRoutingMapEntry) []C.dae_control_routing_map_entry {
+	routingEntries := make([]C.dae_control_routing_map_entry, len(entries))
+	for i, entry := range entries {
+		routingEntries[i].index = C.uint32_t(entry.Index)
+		for j, b := range entry.Value.Value {
+			routingEntries[i].value.value[j] = C.uint8_t(b)
+		}
+		routingEntries[i].value.not_ = cUint8Bool(entry.Value.Not)
+		routingEntries[i].value.kind = C.uint8_t(entry.Value.Type)
+		routingEntries[i].value.outbound = C.uint8_t(entry.Value.Outbound)
+		routingEntries[i].value.must = cUint8Bool(entry.Value.Must)
+		routingEntries[i].value.mark = C.uint32_t(entry.Value.Mark)
+	}
+	return routingEntries
 }
 
 func cLpmMapBuildSpecs(specs []rustLpmMapBuildSpec) (*C.dae_control_lpm_map_build_spec, func(), error) {

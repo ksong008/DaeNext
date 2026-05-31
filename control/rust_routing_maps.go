@@ -123,7 +123,7 @@ func (b *RoutingMatcherBuilder) updateKernelRoutingMapsViaRustHelper() error {
 		})
 	}
 	if rustInprocessRoutingMapAvailable() {
-		return applyKernelRoutingMapsViaRustInprocess(request)
+		return applyKernelRoutingMapsViaRustOwnedInprocess(request)
 	}
 	payload, err := json.Marshal(request)
 	if err != nil {
