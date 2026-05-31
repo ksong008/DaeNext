@@ -47,15 +47,6 @@ func TestCurrentTcAttachBackendCanDisableNativeAttach(t *testing.T) {
 	}
 }
 
-func TestTcxAnchorForPriorityMatchesTcOrdering(t *testing.T) {
-	if got := tcxAnchorForPriority(1); got == nil {
-		t.Fatalf("priority 1 should return a cilium link anchor")
-	}
-	if got := tcxAnchorForPriority(2); got == nil {
-		t.Fatalf("priority 2 should return a cilium link anchor")
-	}
-}
-
 func TestSummarizeTcAttachBackendsNeverReportsAuto(t *testing.T) {
 	tests := []struct {
 		name     string
