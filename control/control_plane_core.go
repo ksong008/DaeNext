@@ -40,6 +40,10 @@ type controlPlaneCore struct {
 
 	domainHelperMu sync.Mutex
 	domainHelper   *rustDomainRoutingHelper
+	domainOwner    *rustDomainRoutingOwner
+
+	connectivityOwnerMu sync.Mutex
+	connectivityOwner   *rustOutboundConnectivityOwner
 
 	kernelVersion *internal.Version
 
@@ -172,6 +176,20 @@ func (c *controlPlaneCore) Close() (err error) {
 			err = e
 		}
 	}
+	if e := c.closeRustDomainRoutingOwner(); e != nil {
+		if err != nil {
+			err = fmt.Errorf("%w; %v", err, e)
+		} else {
+			err = e
+		}
+	}
+	if e := c.closeRustOutboundConnectivityOwner(); e != nil {
+		if err != nil {
+			err = fmt.Errorf("%w; %v", err, e)
+		} else {
+			err = e
+		}
+	}
 	// Invoke defer funcs in reverse order.
 	for i := len(c.deferFuncs) - 1; i >= 0; i-- {
 		if e := c.deferFuncs[i](); e != nil {
@@ -205,6 +223,46 @@ func (c *controlPlaneCore) closeRustDomainRoutingHelper() error {
 		return nil
 	}
 	return helper.Close()
+}
+
+func (c *controlPlaneCore) getRustDomainRoutingOwner() *rustDomainRoutingOwner {
+	c.domainHelperMu.Lock()
+	defer c.domainHelperMu.Unlock()
+	if c.domainOwner == nil {
+		c.domainOwner = newRustDomainRoutingOwner()
+	}
+	return c.domainOwner
+}
+
+func (c *controlPlaneCore) closeRustDomainRoutingOwner() error {
+	c.domainHelperMu.Lock()
+	owner := c.domainOwner
+	c.domainOwner = nil
+	c.domainHelperMu.Unlock()
+	if owner == nil {
+		return nil
+	}
+	return owner.Close()
+}
+
+func (c *controlPlaneCore) getRustOutboundConnectivityOwner() *rustOutboundConnectivityOwner {
+	c.connectivityOwnerMu.Lock()
+	defer c.connectivityOwnerMu.Unlock()
+	if c.connectivityOwner == nil {
+		c.connectivityOwner = newRustOutboundConnectivityOwner()
+	}
+	return c.connectivityOwner
+}
+
+func (c *controlPlaneCore) closeRustOutboundConnectivityOwner() error {
+	c.connectivityOwnerMu.Lock()
+	owner := c.connectivityOwner
+	c.connectivityOwner = nil
+	c.connectivityOwnerMu.Unlock()
+	if owner == nil {
+		return nil
+	}
+	return owner.Close()
 }
 
 func getIfParamsFromLink(link netlink.Link) (ifParams bpfIfParams, err error) {
@@ -775,6 +833,13 @@ func (c *controlPlaneCore) bindDaens() (err error) {
 // BatchUpdateDomainRouting update bpf map domain_routing. Since one IP may have multiple domains, this function should
 // be invoked every A/AAAA-record lookup.
 func (c *controlPlaneCore) BatchUpdateDomainRouting(cache *DnsCache) error {
+	if rustInprocessRoutingMapAvailable() && cache != nil && cache.RouteOwnerKey != "" {
+		snapshot, err := buildDomainRoutingOwnerSnapshot(cache)
+		if err != nil {
+			return err
+		}
+		return c.getRustDomainRoutingOwner().Update(c.bpf.DomainRoutingMap, cache.RouteOwnerKey, snapshot)
+	}
 	if c.domainRouting != nil && cache != nil && cache.RouteOwnerKey != "" {
 		snapshot, err := buildDomainRoutingOwnerSnapshot(cache)
 		if err != nil {
@@ -807,6 +872,9 @@ func (c *controlPlaneCore) BatchUpdateDomainRouting(cache *DnsCache) error {
 
 // BatchRemoveDomainRouting remove bpf map domain_routing.
 func (c *controlPlaneCore) BatchRemoveDomainRouting(cache *DnsCache) error {
+	if rustInprocessRoutingMapAvailable() && cache != nil && cache.RouteOwnerKey != "" {
+		return c.getRustDomainRoutingOwner().Update(c.bpf.DomainRoutingMap, cache.RouteOwnerKey, domainRoutingOwnerSnapshot{})
+	}
 	if c.domainRouting != nil && cache != nil && cache.RouteOwnerKey != "" {
 		return c.domainRouting.syncOwner(c.bpf.DomainRoutingMap, cache.RouteOwnerKey, domainRoutingOwnerSnapshot{}, c.updateDomainRoutingMapViaRustHelper)
 	}
@@ -837,6 +905,9 @@ func (c *controlPlaneCore) clearDomainRoutingMapForReload() error {
 	}
 	if err := iter.Err(); err != nil {
 		return fmt.Errorf("iterate domain_routing_map for reload clear: %w", err)
+	}
+	if rustInprocessRoutingMapAvailable() {
+		return c.getRustDomainRoutingOwner().PrepareReload(c.bpf.DomainRoutingMap, keys)
 	}
 	if len(keys) == 0 {
 		return nil

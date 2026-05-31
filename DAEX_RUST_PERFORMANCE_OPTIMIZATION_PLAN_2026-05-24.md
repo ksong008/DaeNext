@@ -18402,3 +18402,110 @@ benchmark 结论：
 - 带 LPM build 的同 plan no-op 从约 `29.8 us/op` 降到约 `395 ns/op`。
 - 这不是最终 Rust native control-plane 的全部收益，只是第一步把“是否需要重写 map”的状态判断从 Go request/FFI 外部推进到 Rust owner 内部。
 - 下一步应继续把 domain routing owner、reload clear/restore、outbound connectivity owner 的 state 和 map flush 决策从 Go tracker 下沉到 Rust-owned control-plane；最终目标是 Rust 持有 runtime state，Go/daed 只触发高层事件，而不是每次构造完整 map request。
+
+### Rust-owned domain routing / outbound connectivity owner 继续实现记录（2026-05-31）
+
+本节承接上一段 `Rust-owned state / in-process control-plane`，按同一大阶段继续推进，不新增 stage。执行前继续参考：
+
+- `DAEX_RUST_REBUILD_PLAN_2026-05-16.md` 阶段 7 / 14：control/datapath/eBPF/tproxy/netns 必须保持 BPF map ABI、reload BPF ownership、domain routing owner tracker、DNS cache restore 和 active datapath 边界。
+- `DAENEW_RUST_REBUILD_MEMO_2026-05-16.md` 第 5.11、第 10、第 11 节：DNS cache access/remove callback 会更新 `domain_routing` map；`outbound_connectivity_map` 必须保留 `outbound,l4proto,ipversion` 维度；reload 复用 BPF 时要保证旧 map 清理、新 map replay 和 writer ownership 清晰。
+- 本文件上一节结论：短期 `rust_inprocess` 只是把高频 map writer 从 helper/process JSON 边界推进到进程内 Rust；长期目标仍是 Rust-owned state / Rust-owned in-process control-plane，不把 helper、persistent helper 或 Go 重复 request construction 作为最终架构。
+
+执行边界：
+
+- 本节只推进 `rust_inprocess` opt-in 路径；默认非 `rust_inprocess` 构建仍保持原 Go 行为。
+- 不部署到 `10.10.10.2`；本节只做本地代码、测试和 benchmark。
+- 不以测试机 config 为标准，不写特定 domain / geoip / outbound 规则。
+- 不改 daewing / outbound 全协议栈边界；这里的 outbound connectivity 只指 `outbound_connectivity_map` 的 alive 状态 owner 和 map 写入。
+
+代码修改：
+
+- `rust/crates/dae-control/src/domain_routing.rs`
+  - `DomainRoutingOwner` 新增 `apply_owner_snapshot_by_id()` / `apply_owner_snapshot_with()`：
+    - Rust 侧持有 owner tracker、当前 `domain_routing_map` id；
+    - map id 变化时 replay 当前 owner 合并状态；
+    - 同 map / 同 owner snapshot 时返回 `skipped=true`，不重复写 map；
+    - map 写入失败时不提交 Rust owner state。
+  - 新增 `prepare_reload_map_by_id()` / `prepare_reload_map_with()`：
+    - reload 前先删除现有 map keys；
+    - 删除成功后再清空 Rust owner tracker 并绑定当前 map id。
+  - 新增 `DomainRoutingOwnerApplyReport`，记录 map id 变化、skip、update/delete 计数、owner/ip 计数。
+- `rust/crates/dae-control/src/connectivity_owned.rs`
+  - 新增 `ConnectivityOwnerApplyReport`。
+  - `OutboundConnectivityOwner` 新增 `apply_event_with()`，用于测试和非 map writer 场景下验证“写入成功后才提交状态”。
+  - 新增 `OutboundConnectivityMapOwner`：
+    - Rust 侧持有 `OutboundConnectivityOwner` state；
+    - 缓存当前 map fd；
+    - map id 变化时 replay 已知 alive state；
+    - dryrun 非 init 事件不写 map、不污染 state；
+    - 同 key 同 value 事件直接 skip。
+- `rust/crates/dae-control/src/ffi.rs`
+  - 新增 domain routing owner FFI：
+    - `dae_control_domain_routing_owner_new`
+    - `dae_control_domain_routing_owner_free`
+    - `dae_control_domain_routing_owner_apply_snapshot_by_id`
+    - `dae_control_domain_routing_owner_apply_snapshot_bytes_by_id`
+    - `dae_control_domain_routing_owner_prepare_reload_map_by_id`
+  - 新增 outbound connectivity owner FFI：
+    - `dae_control_outbound_connectivity_owner_new`
+    - `dae_control_outbound_connectivity_owner_free`
+    - `dae_control_outbound_connectivity_owner_apply_event_by_id`
+  - 增加 null owner 防护测试。
+- `control/control_plane_core.go`
+  - `controlPlaneCore` 增加 per-core Rust domain routing owner 和 Rust outbound connectivity owner 生命周期。
+  - `Close()` 中补齐 owner 释放，避免 reload/shutdown 后保留 Rust state / fd。
+  - `BatchUpdateDomainRouting()`、`BatchRemoveDomainRouting()` 在 `rust_inprocess` 下走 Rust-owned domain owner。
+  - `clearDomainRoutingMapForReload()` 在 `rust_inprocess` 下走 Rust-owned reload clear owner。
+- `control/connectivity.go`
+  - `rust_inprocess` 下 outbound alive callback 走 Rust-owned outbound connectivity owner。
+  - 默认构建仍走原 `OutboundConnectivityMap.Update()`。
+- `control/rust_routing_maps_inprocess.go`
+  - 新增 Go 侧 Rust domain owner bridge。
+  - 缓存 `*ebpf.Map -> map id`，避免每次 owner update 都调用 `Map.Info()`。
+  - domain owner key 改用 bytes+len FFI，避免每次 `C.CString`。
+  - 单 IP snapshot 使用栈上小数组，避免常见单 answer case 的临时 slice 分配。
+- `control/rust_connectivity_inprocess.go`
+  - 新增 Go 侧 Rust outbound connectivity owner bridge。
+  - 缓存 `*ebpf.Map -> map id`，只在 map 对象变化时重新读取 kernel map id。
+- `control/rust_routing_maps_inprocess_disabled.go` / `control/rust_connectivity_inprocess_disabled.go`
+  - 补齐默认非 `rust_inprocess` stub，保证默认构建不被 cgo/Rust staticlib 绑定。
+- `control/routing_map_benchmark_test.go`
+  - 新增 domain routing owned duplicate/toggle benchmark。
+- `control/connectivity_inprocess_benchmark_test.go`
+  - 新增 outbound connectivity owned duplicate/toggle benchmark。
+- `control/rust_connectivity_inprocess_test.go`
+  - 新增 Rust outbound connectivity owner 写 map / update map 测试。
+
+本地验证：
+
+| 验证项 | 结果 |
+| --- | --- |
+| `cargo fmt --manifest-path rust/Cargo.toml --all` | pass |
+| `cargo test --manifest-path rust/Cargo.toml -p dae-control -p dae-ebpf-support` | pass，`dae-control` 21 passed，`dae-ebpf-support` 52 passed |
+| `cargo build --manifest-path rust/Cargo.toml -p dae-control --release` | pass |
+| `PATH=/root/.local/go1.25.9/bin:$PATH GOWORK=off go test -count=1 ./control` | pass，`ok github.com/daeuniverse/dae/control 0.070s` |
+| `PATH=/root/.local/go1.25.9/bin:$PATH GOWORK=off go test -count=1 -tags rust_inprocess ./control` | pass，`ok github.com/daeuniverse/dae/control 0.037s` |
+| `DAE_RUN_RUST_BPF_LOADER_CONTROL_PLANE_SMOKE=1 DAE_RUST_BPF_LOADER_HELPER=/root/project/dae-daex-align/control/embedded/dae-aya-bpf-loader go test -count=1 -tags rust_inprocess ./control -run TestRustBpfLoaderAdoptsPinnedObjectsAndUpdatesControlMaps` | pass，`ok github.com/daeuniverse/dae/control 0.804s` |
+
+benchmark 记录：
+
+- 命令：`PATH=/root/.local/go1.25.9/bin:$PATH GOWORK=off DAE_RUST_BPF_LOADER_HELPER=/root/project/dae-daex-align/control/embedded/dae-aya-bpf-loader go test -run '^$' -tags rust_inprocess -bench 'BenchmarkDomainRoutingMap(GoUpdate|RustInprocessUpdate|RustOwnedInprocessDuplicate|RustOwnedInprocessToggle)$|BenchmarkOutboundConnectivityMap(GoUpdate|RustOwnedInprocessDuplicate|RustOwnedInprocessToggle)$' -benchmem -benchtime=1s -count=10 ./control`
+- 输出留档：`/tmp/dae-daex-rust-owned-domain-connectivity-bench-20260531.txt`
+- 结果：pass，`ok github.com/daeuniverse/dae/control 110.159s`。
+
+| case | count | avg ns/op | min ns/op | max ns/op | avg B/op | avg allocs/op |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| `BenchmarkOutboundConnectivityMapGoUpdate` | 10 | 762.6 | 760.7 | 765.7 | 16.0 | 2.0 |
+| `BenchmarkOutboundConnectivityMapRustOwnedInprocessDuplicate` | 10 | 79.4 | 77.8 | 81.1 | 24.0 | 1.0 |
+| `BenchmarkOutboundConnectivityMapRustOwnedInprocessToggle` | 10 | 657.9 | 651.8 | 678.0 | 24.0 | 1.0 |
+| `BenchmarkDomainRoutingMapGoUpdate` | 10 | 841.8 | 834.3 | 850.4 | 64.0 | 3.0 |
+| `BenchmarkDomainRoutingMapRustInprocessUpdate` | 10 | 2144.7 | 2085.0 | 2185.0 | 144.0 | 1.0 |
+| `BenchmarkDomainRoutingMapRustOwnedInprocessDuplicate` | 10 | 267.6 | 257.6 | 278.2 | 192.0 | 3.0 |
+| `BenchmarkDomainRoutingMapRustOwnedInprocessToggle` | 10 | 2838.7 | 2808.0 | 2889.0 | 192.0 | 3.0 |
+
+benchmark 结论：
+
+- `outbound_connectivity_map`：Rust-owned duplicate no-op 约 `79 ns/op`，toggle 写 map 约 `658 ns/op`，已经快于 Go direct map update 约 `763 ns/op`，并且 alloc 从 2 降到 1。
+- `domain_routing_map`：Rust-owned duplicate no-op 约 `268 ns/op`，明显快于 Go direct 单次 map update 约 `842 ns/op`，也快于 stateless Rust in-process writer 约 `2.1 us/op`。
+- `domain_routing_map` toggle 写 map 约 `2.84 us/op`，慢于 Go direct 单次 map update；原因是该路径做的是 owner merge/state commit/write-after-success 语义，不是单纯裸 map update。后续如果要继续压缩，应优先减少 Go snapshot 构造和 FFI 边界分配，或进入真正 Rust-owned DNS/cache/control-plane，让 Rust 直接接收高层 DNS cache event，而不是 Go 每次构造 snapshot。
+- 本节确认 Rust-owned state 方向有效：重复 reload / 重复 alive / 重复 DNS owner snapshot 能在 Rust 侧 skip，而不是从 Go 侧反复构造完整 writer request。
