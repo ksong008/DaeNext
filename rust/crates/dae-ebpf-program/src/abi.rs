@@ -44,8 +44,27 @@ pub struct BpfDomainRouting {
 
 #[repr(C)]
 #[derive(Clone, Copy)]
+pub struct BpfPortRange {
+    pub port_start: u16,
+    pub port_end: u16,
+}
+
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub union BpfMatchValue {
+    pub bytes: [u8; 16],
+    pub index: u32,
+    pub port_range: BpfPortRange,
+    pub l4proto_type: u32,
+    pub ip_version: u32,
+    pub pname: [u32; TASK_COMM_LEN / 4],
+    pub dscp: u8,
+}
+
+#[repr(C)]
+#[derive(Clone, Copy)]
 pub struct BpfMatchSet {
-    pub value: [u8; 16],
+    pub value: BpfMatchValue,
     pub not: u8,
     pub kind: u8,
     pub outbound: u8,

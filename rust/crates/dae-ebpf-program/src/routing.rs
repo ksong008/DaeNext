@@ -82,19 +82,22 @@ impl RouteParams {
 #[repr(C)]
 struct RouteCtx {
     params: *const RouteParams,
+    h_dport: u16,
+    h_sport: u16,
     result: i64,
-    state: u8,
     lpm_key_saddr: BpfLpmKey,
     lpm_key_daddr: BpfLpmKey,
     lpm_key_mac: BpfLpmKey,
+    state: u8,
 }
 
 impl RouteCtx {
     const fn zeroed() -> Self {
         Self {
             params: ptr::null(),
+            h_dport: 0,
+            h_sport: 0,
             result: -ENOEXEC,
-            state: 0,
             lpm_key_saddr: BpfLpmKey {
                 prefix_len: 0,
                 data: [0; 4],
@@ -107,6 +110,7 @@ impl RouteCtx {
                 prefix_len: 0,
                 data: [0; 4],
             },
+            state: 0,
         }
     }
 }
@@ -175,16 +179,30 @@ unsafe fn set_lpm_key(key: *mut BpfLpmKey, ip: *const BpfIpBytes) {
 }
 
 #[inline(always)]
+unsafe fn domain_bitmap_hit(domain: *const BpfDomainRouting, index: u32) -> bool {
+    unsafe {
+        let word_index = ((index >> 5) & 31) as usize;
+        let bit_index = index & 31;
+        (((*domain).bitmap[word_index] >> bit_index) & 1) != 0
+    }
+}
+
+#[inline(always)]
 unsafe fn init_route_ctx(ctx: *mut RouteCtx, params: *const RouteParams) {
     unsafe {
         ptr::write(ctx, RouteCtx::zeroed());
         (*ctx).params = params;
         (*ctx).result = -ENOEXEC;
-        (*ctx).state = if (*params).h_dport == 53 && (*params).l4proto_type == L4_PROTO_UDP_MATCH {
-            ROUTE_IS_DNS
-        } else {
-            0
-        };
+        (*ctx).h_dport = (*params).h_dport;
+        (*ctx).h_sport = (*params).h_sport;
+        write_route_state(
+            ctx,
+            if (*ctx).h_dport == 53 && (*params).l4proto_type == L4_PROTO_UDP_MATCH {
+                ROUTE_IS_DNS
+            } else {
+                0
+            },
+        );
         set_lpm_key(
             ptr::addr_of_mut!((*ctx).lpm_key_saddr),
             ptr::addr_of!((*params).saddr),
@@ -197,6 +215,32 @@ unsafe fn init_route_ctx(ctx: *mut RouteCtx, params: *const RouteParams) {
             ptr::addr_of_mut!((*ctx).lpm_key_mac),
             ptr::addr_of!((*params).mac),
         );
+    }
+}
+
+#[inline(always)]
+unsafe fn route_state(ctx: *const RouteCtx) -> u8 {
+    unsafe { ptr::addr_of!((*ctx).state).read_volatile() }
+}
+
+#[inline(always)]
+unsafe fn write_route_state(ctx: *mut RouteCtx, state: u8) {
+    unsafe {
+        ptr::addr_of_mut!((*ctx).state).write_volatile(state);
+    }
+}
+
+#[inline(always)]
+unsafe fn route_state_or(ctx: *mut RouteCtx, bits: u8) {
+    unsafe {
+        write_route_state(ctx, route_state(ctx) | bits);
+    }
+}
+
+#[inline(always)]
+unsafe fn route_state_and(ctx: *mut RouteCtx, bits: u8) {
+    unsafe {
+        write_route_state(ctx, route_state(ctx) & bits);
     }
 }
 
@@ -222,6 +266,11 @@ unsafe fn names_equal(a: *const u8, b: *const u8) -> bool {
     }
 }
 
+#[inline(always)]
+unsafe fn match_value_ptr(match_set: *const BpfMatchSet) -> *const u8 {
+    unsafe { ptr::addr_of!((*match_set).value.bytes).cast::<u8>() }
+}
+
 #[inline(never)]
 extern "C" fn route_loop_cb(index: u32, data: *mut c_void) -> i64 {
     let ctx = data.cast::<RouteCtx>();
@@ -241,99 +290,88 @@ extern "C" fn route_loop_cb(index: u32, data: *mut c_void) -> i64 {
     }
 
     unsafe {
-        if ((*ctx).state & (ROUTE_GOOD_SUBRULE | ROUTE_BAD_RULE)) == 0 {
+        if (route_state(ctx) & (ROUTE_GOOD_SUBRULE | ROUTE_BAD_RULE)) == 0 {
             let params = (*ctx).params;
-            match (*match_set).kind {
-                MATCH_TYPE_MAC | MATCH_TYPE_IP_SET | MATCH_TYPE_SOURCE_IP_SET => {
-                    let lpm_index = packet::read_le_u32(&(*match_set).value, 0);
-                    let lpm = lookup_lpm_map(ptr::addr_of!(lpm_index));
-                    if lpm.is_null() {
-                        (*ctx).result = -EFAULT;
-                        return 1;
-                    }
-                    let lpm_key = if (*match_set).kind == MATCH_TYPE_MAC {
-                        ptr::addr_of_mut!((*ctx).lpm_key_mac)
-                    } else if (*match_set).kind == MATCH_TYPE_IP_SET {
-                        ptr::addr_of_mut!((*ctx).lpm_key_daddr)
-                    } else {
-                        ptr::addr_of_mut!((*ctx).lpm_key_saddr)
-                    };
-                    if !helpers::bpf_map_lookup_elem(lpm, lpm_key.cast::<c_void>()).is_null() {
-                        (*ctx).state |= ROUTE_GOOD_SUBRULE;
-                    }
-                }
-                MATCH_TYPE_PORT => {
-                    let start = packet::read_le_u16(&(*match_set).value, 0);
-                    let end = packet::read_le_u16(&(*match_set).value, 2);
-                    if start <= (*params).h_dport && (*params).h_dport <= end {
-                        (*ctx).state |= ROUTE_GOOD_SUBRULE;
-                    }
-                }
-                MATCH_TYPE_SOURCE_PORT => {
-                    let start = packet::read_le_u16(&(*match_set).value, 0);
-                    let end = packet::read_le_u16(&(*match_set).value, 2);
-                    if start <= (*params).h_sport && (*params).h_sport <= end {
-                        (*ctx).state |= ROUTE_GOOD_SUBRULE;
-                    }
-                }
-                MATCH_TYPE_L4_PROTO => {
-                    if ((*params).l4proto_type & ((*match_set).value[0] as u32)) != 0 {
-                        (*ctx).state |= ROUTE_GOOD_SUBRULE;
-                    }
-                }
-                MATCH_TYPE_IP_VERSION => {
-                    if ((*params).ipversion_type & ((*match_set).value[0] as u32)) != 0 {
-                        (*ctx).state |= ROUTE_GOOD_SUBRULE;
-                    }
-                }
-                MATCH_TYPE_DOMAIN_SET => {
-                    let domain = lookup_domain_route(ptr::addr_of!((*params).daddr));
-                    let word_index = (index / 32) as usize;
-                    if !domain.is_null()
-                        && word_index < (*domain).bitmap.len()
-                        && (((*domain).bitmap[word_index] >> (index % 32)) & 1) != 0
-                    {
-                        (*ctx).state |= ROUTE_GOOD_SUBRULE;
-                    }
-                }
-                MATCH_TYPE_PROCESS_NAME => {
-                    if (*params).is_wan != 0
-                        && names_equal((*match_set).value.as_ptr(), (*params).pname.as_ptr())
-                    {
-                        (*ctx).state |= ROUTE_GOOD_SUBRULE;
-                    }
-                }
-                MATCH_TYPE_DSCP => {
-                    if (*params).dscp == (*match_set).value[0] as u32 {
-                        (*ctx).state |= ROUTE_GOOD_SUBRULE;
-                    }
-                }
-                MATCH_TYPE_FALLBACK => {
-                    (*ctx).state |= ROUTE_GOOD_SUBRULE;
-                }
-                _ => {
-                    (*ctx).result = -EINVAL;
+            let kind = (*match_set).kind;
+            if kind == MATCH_TYPE_MAC
+                || kind == MATCH_TYPE_IP_SET
+                || kind == MATCH_TYPE_SOURCE_IP_SET
+            {
+                let lpm_index = (*match_set).value.index;
+                let lpm = lookup_lpm_map(ptr::addr_of!(lpm_index));
+                if lpm.is_null() {
+                    (*ctx).result = -EFAULT;
                     return 1;
                 }
+                let lpm_key = if kind == MATCH_TYPE_MAC {
+                    ptr::addr_of_mut!((*ctx).lpm_key_mac)
+                } else if kind == MATCH_TYPE_IP_SET {
+                    ptr::addr_of_mut!((*ctx).lpm_key_daddr)
+                } else {
+                    ptr::addr_of_mut!((*ctx).lpm_key_saddr)
+                };
+                if !helpers::bpf_map_lookup_elem(lpm, lpm_key.cast::<c_void>()).is_null() {
+                    route_state_or(ctx, ROUTE_GOOD_SUBRULE);
+                }
+            } else if kind == MATCH_TYPE_PORT {
+                let range = (*match_set).value.port_range;
+                if range.port_start <= (*ctx).h_dport && (*ctx).h_dport <= range.port_end {
+                    route_state_or(ctx, ROUTE_GOOD_SUBRULE);
+                }
+            } else if kind == MATCH_TYPE_SOURCE_PORT {
+                let range = (*match_set).value.port_range;
+                if range.port_start <= (*ctx).h_sport && (*ctx).h_sport <= range.port_end {
+                    route_state_or(ctx, ROUTE_GOOD_SUBRULE);
+                }
+            } else if kind == MATCH_TYPE_L4_PROTO {
+                if ((*params).l4proto_type & (*match_set).value.l4proto_type) != 0 {
+                    route_state_or(ctx, ROUTE_GOOD_SUBRULE);
+                }
+            } else if kind == MATCH_TYPE_IP_VERSION {
+                if ((*params).ipversion_type & (*match_set).value.ip_version) != 0 {
+                    route_state_or(ctx, ROUTE_GOOD_SUBRULE);
+                }
+            } else if kind == MATCH_TYPE_DOMAIN_SET {
+                let domain = lookup_domain_route(ptr::addr_of!((*params).daddr));
+                if !domain.is_null() && domain_bitmap_hit(domain, index) {
+                    route_state_or(ctx, ROUTE_GOOD_SUBRULE);
+                }
+            } else if kind == MATCH_TYPE_PROCESS_NAME {
+                if (*params).is_wan != 0
+                    && names_equal(match_value_ptr(match_set), (*params).pname.as_ptr())
+                {
+                    route_state_or(ctx, ROUTE_GOOD_SUBRULE);
+                }
+            } else if kind == MATCH_TYPE_DSCP {
+                if (*params).dscp == (*match_set).value.dscp as u32 {
+                    route_state_or(ctx, ROUTE_GOOD_SUBRULE);
+                }
+            } else if kind == MATCH_TYPE_FALLBACK {
+                route_state_or(ctx, ROUTE_GOOD_SUBRULE);
+            } else {
+                (*ctx).result = -EINVAL;
+                return 1;
             }
         }
 
         if (*match_set).outbound != OUTBOUND_LOGICAL_OR {
-            let subrule_hit = ((*ctx).state & ROUTE_GOOD_SUBRULE) != 0;
+            let state = route_state(ctx);
+            let subrule_hit = (state & ROUTE_GOOD_SUBRULE) != 0;
             let negated = (*match_set).not != 0;
             if subrule_hit == negated {
-                (*ctx).state |= ROUTE_BAD_RULE;
+                route_state_or(ctx, ROUTE_BAD_RULE);
             }
-            (*ctx).state &= !ROUTE_GOOD_SUBRULE;
+            route_state_and(ctx, !ROUTE_GOOD_SUBRULE);
         }
 
         if ((*match_set).outbound & OUTBOUND_LOGICAL_MASK) != OUTBOUND_LOGICAL_MASK {
-            if ((*ctx).state & ROUTE_BAD_RULE) == 0 {
+            let state = route_state(ctx);
+            if (state & ROUTE_BAD_RULE) == 0 {
                 if (*match_set).outbound == OUTBOUND_MUST_RULES {
-                    (*ctx).state |= ROUTE_MUST;
+                    route_state_or(ctx, ROUTE_MUST);
                 } else {
-                    let must = ((*ctx).state & ROUTE_MUST) != 0 || (*match_set).must != 0;
-                    let outbound = if !must && ((*ctx).state & ROUTE_IS_DNS) != 0 {
+                    let must = (state & ROUTE_MUST) != 0 || (*match_set).must != 0;
+                    let outbound = if !must && (state & ROUTE_IS_DNS) != 0 {
                         OUTBOUND_CONTROL_PLANE_ROUTING
                     } else {
                         (*match_set).outbound
@@ -344,7 +382,7 @@ extern "C" fn route_loop_cb(index: u32, data: *mut c_void) -> i64 {
                     return 1;
                 }
             }
-            (*ctx).state &= !ROUTE_BAD_RULE;
+            route_state_and(ctx, !ROUTE_BAD_RULE);
         }
     }
 

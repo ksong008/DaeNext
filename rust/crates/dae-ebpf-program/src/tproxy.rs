@@ -184,6 +184,7 @@ unsafe fn redirect_to_control_plane(
     unsafe { helpers::bpf_redirect(crate::abi::param_dae0_ifindex(), 0) as i32 }
 }
 
+#[inline(always)]
 pub fn dae0peer_ingress(skb: *mut __sk_buff) -> i32 {
     if unsafe { (*skb).cb[0] } != TPROXY_MARK {
         return TC_ACT_SHOT;
@@ -200,6 +201,7 @@ pub fn dae0peer_ingress(skb: *mut __sk_buff) -> i32 {
     TC_ACT_OK
 }
 
+#[inline(always)]
 pub fn dae0_ingress(skb: *mut __sk_buff) -> i32 {
     let mut tuple = BpfRedirectTuple {
         sip: crate::abi::BpfIpBytes::zeroed(),
@@ -250,6 +252,7 @@ pub fn dae0_ingress(skb: *mut __sk_buff) -> i32 {
     }
 }
 
+#[inline(always)]
 pub fn lan_egress(skb: *mut __sk_buff, link_h_len: u32) -> i32 {
     let mut info = ParsedPacket::zeroed();
     let ret = unsafe { packet::parse_transport(skb, link_h_len, ptr::addr_of_mut!(info)) };
@@ -270,6 +273,7 @@ pub fn lan_egress(skb: *mut __sk_buff, link_h_len: u32) -> i32 {
     chain_next()
 }
 
+#[inline(always)]
 pub fn wan_ingress(skb: *mut __sk_buff, link_h_len: u32) -> i32 {
     let mut info = ParsedPacket::zeroed();
     let ret = unsafe { packet::parse_transport(skb, link_h_len, ptr::addr_of_mut!(info)) };
@@ -284,6 +288,7 @@ pub fn wan_ingress(skb: *mut __sk_buff, link_h_len: u32) -> i32 {
     chain_next()
 }
 
+#[inline(always)]
 pub fn lan_ingress(skb: *mut __sk_buff, link_h_len: u32) -> i32 {
     let mut info = ParsedPacket::zeroed();
     let ret = unsafe { packet::parse_transport(skb, link_h_len, ptr::addr_of_mut!(info)) };
@@ -415,6 +420,7 @@ pub fn lan_ingress(skb: *mut __sk_buff, link_h_len: u32) -> i32 {
     }
 }
 
+#[inline(always)]
 pub fn wan_egress(skb: *mut __sk_buff, link_h_len: u32) -> i32 {
     if unsafe { (*skb).ingress_ifindex } != NOWHERE_IFINDEX {
         return TC_ACT_OK;
