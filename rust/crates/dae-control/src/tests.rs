@@ -479,6 +479,111 @@ fn routing_native_plan_rejects_invalid_fallback_and_lpm_template() {
     );
 }
 
+#[test]
+fn routing_map_owner_replays_on_map_change_and_skips_same_snapshot() {
+    let plan = build_routing_native_plan(
+        &[
+            RoutingNativeRule::new(
+                RoutingNativeMatch::IpSet(vec![IpPrefix::parse("203.0.113.0/24").unwrap()]),
+                OutboundIndex::DIRECT,
+            ),
+            RoutingNativeRule::new(
+                RoutingNativeMatch::Port(vec![(443, 443)]),
+                OutboundIndex::BLOCK,
+            ),
+        ],
+        RoutingNativeFallback::new(OutboundIndex::DIRECT),
+        LpmMapTemplate::default(),
+    )
+    .unwrap();
+    let checksum = plan.checksum();
+    let mut owner = RoutingMapOwner::default();
+    let mut applied = Vec::new();
+
+    let first = owner
+        .apply_snapshot_with(
+            11,
+            12,
+            plan.clone(),
+            |routing_map_id, lpm_array_map_id, plan| {
+                applied.push((routing_map_id, lpm_array_map_id, plan.checksum()));
+                Ok(())
+            },
+        )
+        .unwrap();
+    assert!(first.map_changed);
+    assert!(first.plan_changed);
+    assert!(!first.skipped);
+    assert_eq!(first.routing_entries_updated, plan.routing_entries.len());
+    assert_eq!(first.lpm_maps_created, plan.lpm_maps.len());
+    assert_eq!(first.checksum, checksum);
+    assert_eq!(owner.routing_map_id(), Some(11));
+    assert_eq!(owner.lpm_array_map_id(), Some(12));
+    assert_eq!(owner.checksum(), Some(checksum));
+
+    let same = owner
+        .apply_snapshot_with(11, 12, plan.clone(), |_, _, _| {
+            panic!("unchanged routing owner snapshot must not rewrite kernel maps")
+        })
+        .unwrap();
+    assert!(!same.map_changed);
+    assert!(!same.plan_changed);
+    assert!(same.skipped);
+    assert_eq!(same.routing_entries_updated, 0);
+    assert_eq!(same.lpm_maps_created, 0);
+    assert_eq!(applied, vec![(11, 12, checksum)]);
+
+    let reload = owner
+        .apply_snapshot_with(
+            21,
+            22,
+            plan.clone(),
+            |routing_map_id, lpm_array_map_id, plan| {
+                applied.push((routing_map_id, lpm_array_map_id, plan.checksum()));
+                Ok(())
+            },
+        )
+        .unwrap();
+    assert!(reload.map_changed);
+    assert!(!reload.plan_changed);
+    assert!(!reload.skipped);
+    assert_eq!(applied, vec![(11, 12, checksum), (21, 22, checksum)]);
+
+    let changed_plan = build_routing_native_plan(
+        &[RoutingNativeRule::new(
+            RoutingNativeMatch::Port(vec![(80, 80)]),
+            OutboundIndex::BLOCK,
+        )],
+        RoutingNativeFallback::new(OutboundIndex::DIRECT),
+        LpmMapTemplate::default(),
+    )
+    .unwrap();
+    let changed_checksum = changed_plan.checksum();
+    let changed = owner
+        .apply_snapshot_with(
+            21,
+            22,
+            changed_plan.clone(),
+            |routing_map_id, lpm_array_map_id, plan| {
+                applied.push((routing_map_id, lpm_array_map_id, plan.checksum()));
+                Ok(())
+            },
+        )
+        .unwrap();
+    assert!(!changed.map_changed);
+    assert!(changed.plan_changed);
+    assert!(!changed.skipped);
+    assert_eq!(owner.checksum(), Some(changed_checksum));
+    assert_eq!(
+        applied,
+        vec![
+            (11, 12, checksum),
+            (21, 22, checksum),
+            (21, 22, changed_checksum)
+        ]
+    );
+}
+
 fn assert_domain_view(got: &DomainRoutingView, expected: &Value) {
     assert_eq!(got.step, expected["step"].as_str().unwrap());
     assert_eq!(got.owners, string_array(&expected["owners"]));
