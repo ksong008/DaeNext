@@ -27,3 +27,19 @@ func TestRustOwnedInprocessRoutingMapOwnerRejectsEmptySnapshot(t *testing.T) {
 		t.Fatalf("error = %v, want missing fallback", err)
 	}
 }
+
+func TestRustOwnedRuntimeStateReportIsReadyForDefaultControlPlane(t *testing.T) {
+	report, err := BuildRustOwnedRuntimeStateReport()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if report.SchemaVersion != 1 || !report.RustOwnedRuntime || !report.ReadyForDefaultControlPlane {
+		t.Fatalf("runtime state report = %+v, want ready Rust-owned control-plane report", report)
+	}
+	if !report.ReloadStateAvailable || !report.BackendStateAvailable ||
+		!report.RoutingOwnerAvailable || !report.DomainOwnerAvailable ||
+		!report.ConnectivityOwnerAvailable || !report.ActiveHandoffAvailable ||
+		!report.APICompatible {
+		t.Fatalf("runtime state report missing required surface: %+v", report)
+	}
+}

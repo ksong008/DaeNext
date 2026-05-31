@@ -5,6 +5,7 @@ pub mod reload;
 pub mod routing_native;
 pub mod routing_owned;
 pub mod runtime_deps;
+pub mod runtime_state;
 
 #[cfg(test)]
 mod tests;
@@ -55,16 +56,20 @@ pub use connectivity_owned::{
     OutboundConnectivityOwner, OutboundConnectivityState,
 };
 pub use domain_routing::{
-    DomainRoutingIpKey, DomainRoutingMapReplay, DomainRoutingOwner, DomainRoutingOwnerSnapshot,
-    DomainRoutingOwnerUpdate, DomainRoutingReloadClearPlan, DomainRoutingStateEntry,
-    DomainRoutingSyncPlan, DomainRoutingTracker, DomainRoutingView, IpRoutingView, format_ip_key,
-    ip_to_key, parse_ip_key,
+    DomainRoutingDnsEvent, DomainRoutingIpKey, DomainRoutingMapReplay, DomainRoutingOwner,
+    DomainRoutingOwnerSnapshot, DomainRoutingOwnerUpdate, DomainRoutingReloadClearPlan,
+    DomainRoutingStateEntry, DomainRoutingSyncPlan, DomainRoutingTracker, DomainRoutingView,
+    IpRoutingView, format_ip_key, ip_to_key, parse_ip_key,
 };
-pub use reload::{CoreFlip, ReloadCoreState};
+pub use reload::{CoreFlip, ReloadCoreState, ReloadDnsCachePlan};
 pub use routing_native::{
     BPF_F_NO_PREALLOC, DEFAULT_LPM_MAX_ENTRIES, LpmMapTemplate, MAX_LPM_ARRAY_ENTRIES,
     RoutingNativeBuildPlan, RoutingNativeFallback, RoutingNativeMatch, RoutingNativePlanError,
     RoutingNativeRule, build_routing_native_plan, ip_prefix_to_bpf_lpm_key,
 };
-pub use routing_owned::{RoutingMapOwner, RoutingMapOwnerApplyReport};
+pub use routing_owned::{
+    RoutingMapOwner, RoutingMapOwnerApplyReport, RoutingRuleOwner, RoutingRuleOwnerApplyReport,
+    RoutingRuleState,
+};
 pub use runtime_deps::{EnvironmentGate, RuntimeDependencyPlan};
+pub use runtime_state::{ControlPlaneDefaultAdmission, RuntimeStateReport};

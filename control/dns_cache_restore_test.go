@@ -47,7 +47,7 @@ func TestRestoreDnsCacheSnapshotParsesLegacyAndStructuredKeys(t *testing.T) {
 		"class.example.":  domainRoutingBitmap(0x20),
 	})
 
-	restoreDnsCacheSnapshot(logrus.New(), controller, map[string]*DnsCache{
+	stats := restoreDnsCacheSnapshot(logrus.New(), controller, map[string]*DnsCache{
 		"legacy.example.1": {
 			DomainBitmap:     domainRoutingBitmap(0x1),
 			IPs:              []netip.Addr{netip.MustParseAddr("203.0.113.10")},
@@ -63,6 +63,9 @@ func TestRestoreDnsCacheSnapshotParsesLegacyAndStructuredKeys(t *testing.T) {
 			OriginalDeadline: deadline,
 		},
 	})
+	if stats.SnapshotEntries != 2 || stats.RestoredEntries != 2 || stats.InvalidKeys != 0 || stats.EmptyAnswers != 0 || stats.FailedEntries != 0 {
+		t.Fatalf("restore stats = %+v, want 2 restored without errors", stats)
+	}
 
 	legacyCache := controller.LookupDnsRespCache(controller.cacheKey("legacy.example.", dnsmessage.TypeA), false)
 	if legacyCache == nil {
@@ -103,6 +106,15 @@ func TestRestoreDnsCacheSnapshotParsesLegacyAndStructuredKeys(t *testing.T) {
 	}
 	if got := respMsg.Answer[0].Header().Class; got != 3 {
 		t.Fatalf("restored response class = %d, want 3", got)
+	}
+}
+
+func TestRustOwnedReloadDnsCacheRestoreAllowedKeepsDnsConfigGate(t *testing.T) {
+	if !RustOwnedReloadDnsCacheRestoreAllowed(true) {
+		t.Fatal("expected unchanged DNS config to allow DNS cache restore")
+	}
+	if RustOwnedReloadDnsCacheRestoreAllowed(false) {
+		t.Fatal("expected changed DNS config to reject DNS cache restore")
 	}
 }
 

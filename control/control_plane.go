@@ -611,12 +611,18 @@ func NewControlPlane(
 	}
 	// Refresh domain routing cache with new routing.
 	// Only restore cached DNS records when DNS config itself is unchanged.
-	if _bpf != nil {
+	reloadDnsPlan, err := rustReloadDnsCachePlanForReload(dnsCache != nil, _bpf != nil, len(dnsCache))
+	if err != nil {
+		return nil, err
+	}
+	if reloadDnsPlan.clearDomainRoutingMap {
 		if err = core.clearDomainRoutingMapForReload(); err != nil {
 			return nil, err
 		}
 	}
-	restoreDnsCacheSnapshot(log, plane.dnsController, dnsCache)
+	if reloadDnsPlan.restoreCache {
+		restoreDnsCacheSnapshot(log, plane.dnsController, dnsCache)
+	}
 
 	// Init immediately to avoid DNS leaking in the very beginning because param control_plane_dns_routing will
 	// be set in callback.

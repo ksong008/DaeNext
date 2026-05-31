@@ -87,12 +87,51 @@ typedef struct {
 	size_t ip_count;
 } dae_control_domain_routing_reload_clear_report;
 
+typedef struct {
+	uint8_t dns_config_unchanged;
+	uint8_t bpf_present;
+	uint8_t restore_cache;
+	uint8_t clear_domain_routing_map;
+	size_t snapshot_entries;
+} dae_control_reload_dns_cache_plan_report;
+
+typedef struct {
+	uint32_t schema_version;
+	uint8_t rust_owned_runtime;
+	uint8_t reload_state_available;
+	uint8_t backend_state_available;
+	uint8_t routing_owner_available;
+	uint8_t domain_owner_available;
+	uint8_t connectivity_owner_available;
+	uint8_t active_handoff_available;
+	uint8_t api_compatible;
+	uint8_t ready_for_default_control_plane;
+	uint8_t padding[2];
+} dae_control_runtime_state_report_result;
+
 extern uint32_t dae_control_ffi_abi_version(void);
 extern const char *dae_control_last_error_message(void);
 extern dae_control_routing_owner *dae_control_routing_owner_new(void);
 extern void dae_control_routing_owner_free(dae_control_routing_owner *owner);
 extern dae_control_domain_routing_owner *dae_control_domain_routing_owner_new(void);
 extern void dae_control_domain_routing_owner_free(dae_control_domain_routing_owner *owner);
+extern int32_t dae_control_reload_dns_cache_plan(
+	uint8_t dns_config_unchanged,
+	uint8_t bpf_present,
+	size_t snapshot_entries,
+	dae_control_reload_dns_cache_plan_report *report
+);
+extern int32_t dae_control_runtime_state_report(
+	uint8_t rust_owned_runtime,
+	uint8_t reload_state_available,
+	uint8_t backend_state_available,
+	uint8_t routing_owner_available,
+	uint8_t domain_owner_available,
+	uint8_t connectivity_owner_available,
+	uint8_t active_handoff_available,
+	uint8_t api_compatible,
+	dae_control_runtime_state_report_result *report
+);
 extern int32_t dae_control_apply_routing_maps_with_lpm_build_by_id(
 	uint32_t routing_map_id,
 	uint32_t lpm_array_map_id,
@@ -137,6 +176,16 @@ extern int32_t dae_control_domain_routing_owner_apply_snapshot_bytes_by_id(
 	size_t ips_len,
 	dae_control_domain_routing_owner_apply_report *report
 );
+extern int32_t dae_control_domain_routing_owner_apply_dns_event_by_id(
+	dae_control_domain_routing_owner *owner,
+	uint32_t map_id,
+	const uint8_t *owner_key,
+	size_t owner_key_len,
+	const uint32_t (*bitmap)[32],
+	const uint32_t (*ips)[4],
+	size_t ips_len,
+	dae_control_domain_routing_owner_apply_report *report
+);
 extern int32_t dae_control_domain_routing_owner_prepare_reload_map_by_id(
 	dae_control_domain_routing_owner *owner,
 	uint32_t map_id,
@@ -154,6 +203,7 @@ import (
 	"unsafe"
 
 	"github.com/cilium/ebpf"
+	"github.com/daeuniverse/dae/common"
 )
 
 var rustRoutingOwnerState struct {
@@ -168,8 +218,96 @@ type rustDomainRoutingOwner struct {
 	mapID  uint32
 }
 
+type rustReloadDnsCachePlan struct {
+	dnsConfigUnchanged    bool
+	bpfPresent            bool
+	restoreCache          bool
+	clearDomainRoutingMap bool
+	snapshotEntries       int
+}
+
+type RustOwnedRuntimeStateReport struct {
+	SchemaVersion               uint32
+	RustOwnedRuntime            bool
+	ReloadStateAvailable        bool
+	BackendStateAvailable       bool
+	RoutingOwnerAvailable       bool
+	DomainOwnerAvailable        bool
+	ConnectivityOwnerAvailable  bool
+	ActiveHandoffAvailable      bool
+	APICompatible               bool
+	ReadyForDefaultControlPlane bool
+}
+
 func rustInprocessRoutingMapAvailable() bool {
 	return C.dae_control_ffi_abi_version() == 1
+}
+
+func BuildRustOwnedRuntimeStateReport() (RustOwnedRuntimeStateReport, error) {
+	if !rustInprocessRoutingMapAvailable() {
+		return RustOwnedRuntimeStateReport{APICompatible: true}, nil
+	}
+	var report C.dae_control_runtime_state_report_result
+	rc := C.dae_control_runtime_state_report(
+		1,
+		1,
+		1,
+		1,
+		1,
+		1,
+		1,
+		1,
+		&report,
+	)
+	if rc != 0 {
+		return RustOwnedRuntimeStateReport{}, fmt.Errorf("Rust in-process runtime state report failed: %s", rustInprocessLastError())
+	}
+	return RustOwnedRuntimeStateReport{
+		SchemaVersion:               uint32(report.schema_version),
+		RustOwnedRuntime:            report.rust_owned_runtime != 0,
+		ReloadStateAvailable:        report.reload_state_available != 0,
+		BackendStateAvailable:       report.backend_state_available != 0,
+		RoutingOwnerAvailable:       report.routing_owner_available != 0,
+		DomainOwnerAvailable:        report.domain_owner_available != 0,
+		ConnectivityOwnerAvailable:  report.connectivity_owner_available != 0,
+		ActiveHandoffAvailable:      report.active_handoff_available != 0,
+		APICompatible:               report.api_compatible != 0,
+		ReadyForDefaultControlPlane: report.ready_for_default_control_plane != 0,
+	}, nil
+}
+
+func RustOwnedReloadDnsCacheRestoreAllowed(dnsConfigUnchanged bool) bool {
+	if !rustInprocessRoutingMapAvailable() {
+		return dnsConfigUnchanged
+	}
+	plan, err := rustReloadDnsCachePlanForReload(dnsConfigUnchanged, false, 1)
+	if err != nil {
+		return dnsConfigUnchanged
+	}
+	return plan.restoreCache
+}
+
+func rustReloadDnsCachePlanForReload(dnsConfigUnchanged bool, bpfPresent bool, snapshotEntries int) (rustReloadDnsCachePlan, error) {
+	if snapshotEntries < 0 {
+		snapshotEntries = 0
+	}
+	var report C.dae_control_reload_dns_cache_plan_report
+	rc := C.dae_control_reload_dns_cache_plan(
+		cUint8Bool(dnsConfigUnchanged),
+		cUint8Bool(bpfPresent),
+		C.size_t(snapshotEntries),
+		&report,
+	)
+	if rc != 0 {
+		return rustReloadDnsCachePlan{}, fmt.Errorf("Rust in-process reload DNS cache plan failed: %s", rustInprocessLastError())
+	}
+	return rustReloadDnsCachePlan{
+		dnsConfigUnchanged:    report.dns_config_unchanged != 0,
+		bpfPresent:            report.bpf_present != 0,
+		restoreCache:          report.restore_cache != 0,
+		clearDomainRoutingMap: report.clear_domain_routing_map != 0,
+		snapshotEntries:       int(report.snapshot_entries),
+	}, nil
 }
 
 func newRustDomainRoutingOwner() *rustDomainRoutingOwner {
@@ -287,6 +425,95 @@ func (o *rustDomainRoutingOwner) Update(m *ebpf.Map, ownerKey string, snapshot d
 	runtime.KeepAlive(ips)
 	if rc != 0 {
 		return fmt.Errorf("Rust in-process domain routing owner failed: %s", rustInprocessLastError())
+	}
+	return nil
+}
+
+func (o *rustDomainRoutingOwner) UpdateDnsCacheEvent(m *ebpf.Map, cache *DnsCache) error {
+	if m == nil || cache == nil || cache.RouteOwnerKey == "" {
+		return nil
+	}
+	if len(cache.DomainBitmap) != len(bpfDomainRouting{}.Bitmap) {
+		return fmt.Errorf("domain bitmap length not sync with kern program")
+	}
+	var bitmap [32]C.uint32_t
+	for i, word := range cache.DomainBitmap {
+		bitmap[i] = C.uint32_t(word)
+	}
+
+	ips := cache.cachedIPs()
+	if len(ips) == 1 {
+		var one [1][4]C.uint32_t
+		ip16 := ips[0].As16()
+		key := common.Ipv6ByteSliceToUint32Array(ip16[:])
+		for i, word := range key {
+			one[0][i] = C.uint32_t(word)
+		}
+		return o.applyDnsCacheEvent(m, cache.RouteOwnerKey, &bitmap, &one[0], 1)
+	}
+
+	var keys [][4]C.uint32_t
+	if len(ips) > 0 {
+		keys = make([][4]C.uint32_t, len(ips))
+		for i, ip := range ips {
+			ip16 := ip.As16()
+			key := common.Ipv6ByteSliceToUint32Array(ip16[:])
+			for j, word := range key {
+				keys[i][j] = C.uint32_t(word)
+			}
+		}
+	}
+	var keysPtr *[4]C.uint32_t
+	if len(keys) > 0 {
+		keysPtr = &keys[0]
+	}
+	err := o.applyDnsCacheEvent(m, cache.RouteOwnerKey, &bitmap, keysPtr, len(keys))
+	runtime.KeepAlive(keys)
+	return err
+}
+
+func (o *rustDomainRoutingOwner) RemoveDnsCacheEvent(m *ebpf.Map, ownerKey string) error {
+	if m == nil || ownerKey == "" {
+		return nil
+	}
+	var bitmap [32]C.uint32_t
+	return o.applyDnsCacheEvent(m, ownerKey, &bitmap, nil, 0)
+}
+
+func (o *rustDomainRoutingOwner) applyDnsCacheEvent(
+	m *ebpf.Map,
+	ownerKey string,
+	bitmap *[32]C.uint32_t,
+	ips *[4]C.uint32_t,
+	ipsLen int,
+) error {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	mapID, err := o.mapIDLocked(m)
+	if err != nil {
+		return err
+	}
+	if err := o.ensureLocked(); err != nil {
+		return err
+	}
+	var ownerKeyPtr *C.uint8_t
+	if len(ownerKey) > 0 {
+		ownerKeyPtr = (*C.uint8_t)(unsafe.Pointer(unsafe.StringData(ownerKey)))
+	}
+	var report C.dae_control_domain_routing_owner_apply_report
+	rc := C.dae_control_domain_routing_owner_apply_dns_event_by_id(
+		o.ptr,
+		C.uint32_t(mapID),
+		ownerKeyPtr,
+		C.size_t(len(ownerKey)),
+		bitmap,
+		ips,
+		C.size_t(ipsLen),
+		&report,
+	)
+	runtime.KeepAlive(ownerKey)
+	if rc != 0 {
+		return fmt.Errorf("Rust in-process domain routing DNS event failed: %s", rustInprocessLastError())
 	}
 	return nil
 }

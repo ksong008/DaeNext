@@ -59,6 +59,16 @@ type rustOutboundConnectivityOwner struct {
 	mapID  uint32
 }
 
+type rustOutboundConnectivityApplyReport struct {
+	mapID        uint32
+	mapChanged   bool
+	accepted     bool
+	changed      bool
+	skipped      bool
+	entries      int
+	stateEntries int
+}
+
 func newRustOutboundConnectivityOwner() *rustOutboundConnectivityOwner {
 	return &rustOutboundConnectivityOwner{}
 }
@@ -107,17 +117,22 @@ func (o *rustOutboundConnectivityOwner) mapIDLocked(m *ebpf.Map) (uint32, error)
 }
 
 func (o *rustOutboundConnectivityOwner) Update(m *ebpf.Map, outbound, l4proto, ipversion uint8, alive, isInit, dryrun bool) error {
+	_, err := o.ApplyEvent(m, outbound, l4proto, ipversion, alive, isInit, dryrun)
+	return err
+}
+
+func (o *rustOutboundConnectivityOwner) ApplyEvent(m *ebpf.Map, outbound, l4proto, ipversion uint8, alive, isInit, dryrun bool) (rustOutboundConnectivityApplyReport, error) {
 	if m == nil {
-		return nil
+		return rustOutboundConnectivityApplyReport{}, nil
 	}
 	o.mu.Lock()
 	defer o.mu.Unlock()
 	mapID, err := o.mapIDLocked(m)
 	if err != nil {
-		return err
+		return rustOutboundConnectivityApplyReport{}, err
 	}
 	if err := o.ensureLocked(); err != nil {
-		return err
+		return rustOutboundConnectivityApplyReport{}, err
 	}
 	event := C.dae_control_connectivity_event{
 		outbound:  C.uint8_t(outbound),
@@ -135,7 +150,15 @@ func (o *rustOutboundConnectivityOwner) Update(m *ebpf.Map, outbound, l4proto, i
 		&report,
 	)
 	if rc != 0 {
-		return fmt.Errorf("Rust in-process outbound connectivity owner failed: %s", rustInprocessLastError())
+		return rustOutboundConnectivityApplyReport{}, fmt.Errorf("Rust in-process outbound connectivity owner failed: %s", rustInprocessLastError())
 	}
-	return nil
+	return rustOutboundConnectivityApplyReport{
+		mapID:        uint32(report.map_id),
+		mapChanged:   report.map_id_changed != 0,
+		accepted:     report.accepted != 0,
+		changed:      report.changed != 0,
+		skipped:      report.skipped != 0,
+		entries:      int(report.entries_updated),
+		stateEntries: int(report.len),
+	}, nil
 }
