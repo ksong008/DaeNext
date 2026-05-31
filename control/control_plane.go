@@ -612,7 +612,9 @@ func NewControlPlane(
 	// Refresh domain routing cache with new routing.
 	// Only restore cached DNS records when DNS config itself is unchanged.
 	if _bpf != nil {
-		core.clearDomainRoutingMapForReload()
+		if err = core.clearDomainRoutingMapForReload(); err != nil {
+			return nil, err
+		}
 	}
 	restoreDnsCacheSnapshot(log, plane.dnsController, dnsCache)
 

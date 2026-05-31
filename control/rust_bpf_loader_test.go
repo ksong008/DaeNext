@@ -145,6 +145,38 @@ func TestRustAyaTcAttachHasNoGoAttachFallback(t *testing.T) {
 	}
 }
 
+func TestRustAyaRoutingMapWritersHaveNoGoFallback(t *testing.T) {
+	checks := map[string][]string{
+		"routing_matcher_builder.go": {
+			"falling back to Go writer",
+			"Build LPM inner maps in Go",
+			"b.bpf.newLpmMap(",
+			"BpfMapBatchUpdate(b.bpf.RoutingMap",
+		},
+		"domain_routing_tracker.go": {
+			"BpfMapBatchUpdate(m, keysToUpdate",
+			"BpfMapBatchDelete(m, keysToDelete",
+		},
+		"control_plane_core.go": {
+			"BpfMapBatchUpdate(c.bpf.DomainRoutingMap",
+			"BpfMapBatchDelete(c.bpf.DomainRoutingMap",
+			"c.bpf.DomainRoutingMap.Delete(",
+		},
+	}
+	for file, forbidden := range checks {
+		content, err := os.ReadFile(file)
+		if err != nil {
+			t.Fatalf("read %s: %v", file, err)
+		}
+		source := string(content)
+		for _, marker := range forbidden {
+			if strings.Contains(source, marker) {
+				t.Fatalf("%s still contains Go routing map writer fallback marker %q", file, marker)
+			}
+		}
+	}
+}
+
 func TestRustAyaCgroupMonitorPinPaths(t *testing.T) {
 	base := filepath.Join(t.TempDir(), "bpffs", consts.AppName)
 	loaderRoot := rustAyaLoaderPinRoot(base)

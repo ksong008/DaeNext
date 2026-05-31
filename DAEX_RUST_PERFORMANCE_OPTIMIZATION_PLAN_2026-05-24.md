@@ -17994,3 +17994,322 @@ resident runtime 结构化结果：
 - daed 产品链严格 embedded-only 路径在 38 机通过 API reload、systemctl reload/restart、DNS 首包、HTTPS trace、TCX attachBackend 和日志防回退验证。
 - 当前产品 TC attach 路径为 Rust/Aya `auto -> tcx -> tc_netlink`；Go attach fallback 不再掩盖 Rust/Aya attach 失败。
 - 本节仍不删除 TC command fallback、C trace object、Go trace fallback、routing map writer fallback，也不替换 Go userspace outbound/control plane。
+
+### routing map writer Go fallback 删除收口（2026-05-31）
+
+本节执行上一轮之后的下一阶段：收口 routing map writer / domain routing map writer 的 Go 直接写 map fallback。本轮按一个大阶段完成，不新增小 stage。修改前继续参考：
+
+- `DAEX_RUST_REBUILD_PLAN_2026-05-16.md`：阶段 7 / 14 要求保持 BPF map ABI、reload 复用、domain routing owner tracker、DNS cache migration、active datapath 和 reload ownership 语义。
+- `DAENEW_RUST_REBUILD_MEMO_2026-05-16.md` 第 5.11、第 11 节：`routing_map`、`lpm_array_map`、`domain_routing_map` 的 key/value layout、map-in-map、owner merge、reload clear/restore 是硬边界；同一 IP 多 owner 删除时不能误删其他 owner bitmap。
+- 本文件前期 tproxy/listen_socket_map、cgroup、TC attach fallback 删除记录：Rust/Aya loader、TCX/TC-netlink attach、cgroup attach、listener handoff、default daemon/systemd host write 已有证据；C trace object、Go trace fallback、TC command fallback、Go userspace outbound/control-plane 仍不在本节删除范围。
+
+删除边界：
+
+| 项 | 处理 |
+| --- | --- |
+| `routing_map` / `lpm_array_map` 产品写入 | 只走 Rust/Aya `routing-map apply`，失败即返回错误 |
+| Go `newLpmMap` + `BpfMapBatchUpdate(routing_map)` fallback | 已删除 |
+| `domain_routing_map` owner merge 写入 | 只走 Rust/Aya domain routing writer；map 写入成功后才提交内存 owner state |
+| `domain_routing_map` 非 owner update/delete | 改为 Rust/Aya writer |
+| reload 时 `domain_routing_map` clear | 改为 Rust/Aya writer，失败返回 reload 错误 |
+| helper JSON 空数组合约 | Go 侧空 `updates/deletes/lpm_maps` 固定编码为 `[]`，避免 Rust helper 把 `null` 视为无效字段 |
+| C trace object / Go trace fallback / TC command fallback | 保留 |
+| Go userspace outbound/control plane | 保留 |
+
+代码修改：
+
+- `control/routing_matcher_builder.go`
+  - `BuildKernspace()` 删除 Rust writer 失败后的 Go writer 回退。
+  - 删除 Go 内部 LPM map 创建、`lpm_array_map.Update` 和 `BpfMapBatchUpdate(routing_map)` 产品路径。
+- `control/domain_routing_tracker.go`
+  - `syncOwner()` 增加 `domainRoutingMapWriter` 边界；map 写入存在变更时必须有 Rust writer。
+  - Rust writer 失败时不提交 `owners` / `ips` 内存状态，避免 userspace tracker 与 kernel map 不一致。
+- `control/control_plane_core.go`
+  - `BatchUpdateDomainRouting()`、`BatchRemoveDomainRouting()` 均改为 Rust/Aya domain routing writer。
+  - `clearDomainRoutingMapForReload()` 改为返回 error，并通过 Rust/Aya writer 删除所有 reload 旧 bitmap。
+- `control/control_plane.go`
+  - reload 复用 `_bpf` 时，如果 `domain_routing_map` clear 失败，直接返回错误，不继续 restore DNS cache。
+- `control/rust_routing_maps.go`
+  - domain routing map 请求的空 `updates/deletes` 固定编码为空数组。
+- `control/domain_routing_tracker_test.go`
+  - BPF map 测试显式使用 embedded Rust/Aya helper。
+  - 增加 Rust writer 失败不提交 owner state 的回归测试。
+- `control/rust_bpf_loader_test.go`
+  - 增加 `TestRustAyaRoutingMapWritersHaveNoGoFallback`，防止 Go routing map writer fallback 回归。
+- `control/routing_map_benchmark_test.go`
+  - reload clear benchmark 改为 Rust writer 路径，并修正 routing-map benchmark 空 LPM 字段编码。
+
+本地验证：
+
+| 验证项 | 结果 |
+| --- | --- |
+| `gofmt -w ...` | pass |
+| `PATH=/root/.local/go1.25.9/bin:$PATH GOWORK=off go test -count=1 ./control -run 'TestRustAyaRoutingMapWritersHaveNoGoFallback|TestRustAyaTproxyListenerHasNoGoFallback|TestRustAyaCgroupMonitorHasNoGoAttachFallback|TestRustAyaTcAttachHasNoGoAttachFallback|TestDomainRoutingTracker|TestControlPlaneCoreClearDomainRoutingMapForReload|TestUpdateDnsCacheDeadlineAssignsRouteOwnerKey'` | pass |
+| `PATH=/root/.local/go1.25.9/bin:$PATH GOWORK=off go test -count=1 ./control` | pass，`ok github.com/daeuniverse/dae/control 0.040s` |
+| `DAE_RUN_RUST_BPF_LOADER_CONTROL_PLANE_SMOKE=1 DAE_RUST_BPF_LOADER_HELPER=/root/project/dae-daex-align/control/embedded/dae-aya-bpf-loader go test -count=1 ./control -run TestRustBpfLoaderAdoptsPinnedObjectsAndUpdatesControlMaps` | pass，覆盖 Rust/Aya load/adopt、routing_map、LPM map-in-map、domain_routing_map、connectivity_map、listen_socket_map |
+
+benchmark 记录：
+
+- 命令：`PATH=/root/.local/go1.25.9/bin:$PATH GOWORK=off DAE_RUST_BPF_LOADER_HELPER=/root/project/dae-daex-align/control/embedded/dae-aya-bpf-loader go test -run '^$' -bench 'BenchmarkRoutingMap(GoUpdate|RustHelperUpdate|GoUpdateWithLpmBuild|RustHelperUpdateWithLpmBuild)$|BenchmarkDomainRoutingMap(GoUpdate|RustHelperUpdate|RustReloadClear)$' -benchmem -benchtime=1s -count=10 ./control`
+- 结果：pass，`ok github.com/daeuniverse/dae/control 111.321s`。
+
+| case | avg ns/op | min ns/op | max ns/op | B/op | allocs/op |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| `BenchmarkRoutingMapGoUpdate` | 1206.7 | 1202 | 1219 | 64 | 3 |
+| `BenchmarkRoutingMapRustHelperUpdate` | 494653.6 | 489124 | 510444 | ~9440-9466 | 67 |
+| `BenchmarkRoutingMapGoUpdateWithLpmBuild` | 28064.2 | 27593 | 28397 | 336 | 14 |
+| `BenchmarkRoutingMapRustHelperUpdateWithLpmBuild` | 525698.4 | 521095 | 530855 | ~9312-9315 | 67 |
+| `BenchmarkDomainRoutingMapGoUpdate` | 818.8 | 814.3 | 822.2 | 64 | 3 |
+| `BenchmarkDomainRoutingMapRustReloadClear` | 53941.7 | 52897 | 54879 | ~6492-6495 | 39 |
+| `BenchmarkDomainRoutingMapRustHelperUpdate` | 499983.0 | 494025 | 514397 | ~8896-8911 | 67 |
+
+benchmark 结论：
+
+- 本节目标是删除 Go direct map writer fallback，使产品路径不再被 Go map 写入掩盖；不是性能优化收口。
+- 当前 Rust/Aya writer 仍是 helper/process JSON 边界，单次写入成本明显高于 Go 进程内 direct map update。
+- 后续若要拿性能收益，应进入 Rust-owned control-plane / in-process map owner，或至少把 routing/domain routing writer 迁到更低开销的批量二进制协议；本节不扩大到 helper 去留重构。
+
+本地构建与 10.10.10.2 替换验证：
+
+| 项 | 结果 |
+| --- | --- |
+| 构建路径 | `/root/project/daed-daex-align/daed/wing`，通过 `replace github.com/daeuniverse/dae => /root/project/dae-daex-align` 带入本轮 daex 修改 |
+| 输出 | `/tmp/daed-daex-align-no-go-routing-map-fallback-20260531-local` |
+| version | `daed version daed2-daex-align-no-go-routing-map-fallback-20260531-local` |
+| sha256 | `278ffd7089a94063965723a244519104ea82d15f6fd4e64417e896419c4af0eb` |
+| 10.10.10.2 旧版本 | `daed2-daex-align-no-go-tc-fallback-20260531-local`，sha256 `9a5b07a83600a05dc5de1443181ade884460cc5ce7c429ac1733b5c117176dff` |
+| 10.10.10.2 备份 | `/root/daed-backup-before-no-go-routing-map-fallback-20260531-090412` |
+| 10.10.10.2 新 `/usr/bin/daed` | sha256 `278ffd7089a94063965723a244519104ea82d15f6fd4e64417e896419c4af0eb` |
+| `daed.service` | `active`，`MainPID=14688` |
+| `systemctl reload daed.service` | pass，reload 前后 PID 均为 `14688` |
+| HTTPS trace | pass，`https://www.cloudflare.com/cdn-cgi/trace` 返回 `ip=83.147.60.195`、`colo=HKG` |
+| 上传临时文件 | 已删除 |
+
+10.10.10.2 当前日志观测：
+
+| 观测项 | 结果 |
+| --- | --- |
+| netns link | `dae netns link mode: netkit` |
+| eBPF load | `Loaded eBPF programs and maps` |
+| dae0peer ingress | `Bind daed_dae0peer_ingress via Rust/Aya tcx on dae0peer` |
+| dae0 ingress | `Bind daed_dae0_ingress via Rust/Aya tcx on dae0` |
+| routing writer | `Routing match set len: 1/1024`，启动成功说明 Rust/Aya routing writer 可用 |
+| domain routing helper | `/root/.cache/dae/embedded-helpers/dae-aya-bpf-loader-5769f62fb2b77af7 domain-routing-map serve` 正常驻留 |
+| 防回退扫描 | 当前 PID 未见 `falling back to Go writer`、`falling back to Go attach path`、`falling back to Go listener`、`falling back to Go map update`、`BpfMapBatchUpdate`、`BpfMapBatchDelete`、`ciliumLink`、`AttachCgroup`、`Bind ... via TC on`、`TCX attach failed`、`fatal`、`panic`、`parse config`、`error` |
+
+收口结论：
+
+- routing/lpm/domain routing 的产品 map writer Go fallback 已删除。
+- 当前 Go BPF loader 删除主线已完成：tproxy listener / listen_socket_map、cgroup attach、TC attach、routing map writer 均不再回退 Go 产品路径。
+- 仍保留：TC command fallback、C trace object、Go trace fallback、Go userspace outbound/control-plane，以及 helper/process 边界。
+- 下一步不应继续删除 trace/TC command fallback，除非先单独完成 trace diagnostic / TC command backend 准入；更现实的下一大项是把高频 map writer 从 helper JSON 边界推进到 Rust-owned/in-process control-plane 或二进制批量协议，以解决本轮 benchmark 显示的性能倒退。
+
+### Rust-owned in-process control-plane map writer 准入记录（2026-05-31）
+
+本节承接上一轮 routing/lpm/domain routing writer 删除 Go fallback 后暴露的性能问题，按一个大阶段推进，不再拆分小 stage。修改前再次参考：
+
+- `DAEX_RUST_REBUILD_PLAN_2026-05-16.md` 阶段 7 / 14：control/datapath/eBPF/tproxy/netns 必须保持 BPF map ABI、reload BPF ownership、domain routing owner tracker、DNS cache restore 和 active datapath 边界。
+- `DAENEW_RUST_REBUILD_MEMO_2026-05-16.md` 第 5.11、第 10、第 11 节：`routing_map`、`lpm_array_map`、`domain_routing_map` 的 key/value layout、map-in-map、owner merge、reload clear/restore 是硬边界；不能为了当前测试配置生成特例逻辑。
+- 本文件上一节结论：helper/process JSON 边界是当前性能瓶颈；去掉 helper 子进程需要 Rust-owned control-plane 或进程内 ABI，不应把 helper 变成长期架构核心。
+
+本轮边界：
+
+| 项 | 处理 |
+| --- | --- |
+| 默认产品构建 | 不改变，默认非 `rust_inprocess` / 非 cgo 路径仍继续使用现有 Rust/Aya helper writer |
+| opt-in in-process writer | 新增 `linux && cgo && rust_inprocess` build tag，通过 Rust staticlib 在 Go 进程内调用 `dae-control` map writer |
+| Go direct map writer fallback | 不恢复；routing/lpm/domain routing 仍不允许回退 Go 直接写 map |
+| BPF ABI | 复用 `dae-ebpf-support` 的 `BpfMatchSet`、`BpfLpmKey`、`BpfDomainRouting` 和 map-by-id writer，不新建临时 layout |
+| prebuilt LPM entries | in-process writer 暂不接收预建 inner-map entry；当前产品路径使用 LPM build spec |
+| 长期架构结论 | 本轮是 in-process Rust staticlib 准入和 benchmark，不把 cgo/dlopen 定为最终正式架构；后续如要默认切换，需要单独决定产品构建和 release gate |
+
+代码修改：
+
+- `rust/crates/dae-control/Cargo.toml`
+  - 增加 `staticlib` crate type，允许生成 `libdae_control.a`。
+  - 引入 workspace `libc`。
+- `rust/crates/dae-control/src/lib.rs`
+  - 导出 `ffi` 模块。
+- `rust/crates/dae-control/src/ffi.rs`
+  - 新增 C ABI：
+    - `dae_control_ffi_abi_version`
+    - `dae_control_last_error_message`
+    - `dae_control_apply_routing_maps_with_lpm_build_by_id`
+    - `dae_control_apply_domain_routing_map_by_id`
+  - FFI 层只做 ABI 转换、错误记录和 panic 边界，实际写 map 仍调用 `dae_ebpf_support`。
+  - 增加 ABI version 和 null pointer 防护单测。
+- `control/rust_routing_maps_inprocess.go`
+  - 新增 `linux && cgo && rust_inprocess` opt-in cgo wrapper。
+  - 将 Go request 转为 C ABI struct，调用 Rust staticlib。
+  - LPM build spec 的 C 分配路径增加 malloc 失败保护、entry 指针显式初始化和释放。
+- `control/rust_routing_maps_inprocess_disabled.go`
+  - 默认 build tag stub，保证非 cgo / 非 `rust_inprocess` 构建不受影响。
+- `control/rust_routing_maps.go`
+  - routing/lpm/domain routing writer 优先尝试 in-process writer；不可用时继续走现有 Rust/Aya helper writer。
+- `control/rust_routing_maps_inprocess_test.go`
+  - 增加 opt-in build tag 下的可用性门禁。
+- `control/routing_map_benchmark_test.go`
+  - 增加 routing map、routing map + LPM build、domain routing update、domain routing reload clear 的 in-process benchmark。
+
+本地验证：
+
+| 验证项 | 结果 |
+| --- | --- |
+| `cargo fmt --manifest-path rust/Cargo.toml --all --check` | pass |
+| `cargo test --manifest-path rust/Cargo.toml -p dae-control -p dae-ebpf-support` | pass，`dae-control` 12 passed，`dae-ebpf-support` 52 passed |
+| `cargo build --manifest-path rust/Cargo.toml -p dae-control --release` | pass，生成 `rust/target/release/libdae_control.a` |
+| `git diff --check` | pass |
+| `PATH=/root/.local/go1.25.9/bin:$PATH GOWORK=off go test -count=1 ./control` | pass，`ok github.com/daeuniverse/dae/control 0.058s` |
+| `PATH=/root/.local/go1.25.9/bin:$PATH GOWORK=off go test -count=1 -tags rust_inprocess ./control` | pass，`ok github.com/daeuniverse/dae/control 0.043s` |
+| `DAE_RUN_RUST_BPF_LOADER_CONTROL_PLANE_SMOKE=1 DAE_RUST_BPF_LOADER_HELPER=/root/project/dae-daex-align/control/embedded/dae-aya-bpf-loader go test -count=1 -tags rust_inprocess ./control -run TestRustBpfLoaderAdoptsPinnedObjectsAndUpdatesControlMaps` | pass，`ok github.com/daeuniverse/dae/control 0.805s` |
+
+完整 benchmark 记录：
+
+- 命令：`PATH=/root/.local/go1.25.9/bin:$PATH GOWORK=off DAE_RUST_BPF_LOADER_HELPER=/root/project/dae-daex-align/control/embedded/dae-aya-bpf-loader go test -run '^$' -tags rust_inprocess -bench 'BenchmarkRoutingMap(GoUpdate|RustHelperUpdate|RustInprocessUpdate|GoUpdateWithLpmBuild|RustHelperUpdateWithLpmBuild|RustInprocessUpdateWithLpmBuild)$|BenchmarkDomainRoutingMap(GoUpdate|RustHelperUpdate|RustInprocessUpdate|RustReloadClear|RustInprocessReloadClear)$' -benchmem -benchtime=1s -count=10 ./control`
+- 输出留档：`/tmp/dae-daex-rust-inprocess-control-bench-20260531.txt`
+- 结果：pass，`ok github.com/daeuniverse/dae/control 176.635s`。
+
+| case | count | avg ns/op | min ns/op | max ns/op | avg B/op | avg allocs/op |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| `BenchmarkRoutingMapGoUpdate` | 10 | 1178.4 | 1176.0 | 1181.0 | 64.0 | 3.0 |
+| `BenchmarkRoutingMapRustHelperUpdate` | 10 | 492459.2 | 489469.0 | 497684.0 | 9443.9 | 67.0 |
+| `BenchmarkRoutingMapRustInprocessUpdate` | 10 | 4670.0 | 4651.0 | 4694.0 | 112.0 | 1.0 |
+| `BenchmarkRoutingMapGoUpdateWithLpmBuild` | 10 | 27812.9 | 27574.0 | 28140.0 | 336.0 | 14.0 |
+| `BenchmarkRoutingMapRustHelperUpdateWithLpmBuild` | 10 | 525381.1 | 521137.0 | 540311.0 | 9313.0 | 67.0 |
+| `BenchmarkRoutingMapRustInprocessUpdateWithLpmBuild` | 10 | 30119.1 | 29735.0 | 30971.0 | 120.0 | 3.0 |
+| `BenchmarkDomainRoutingMapGoUpdate` | 10 | 842.0 | 832.1 | 852.9 | 64.0 | 3.0 |
+| `BenchmarkDomainRoutingMapRustHelperUpdate` | 10 | 482088.3 | 478291.0 | 493608.0 | 8897.6 | 67.0 |
+| `BenchmarkDomainRoutingMapRustInprocessUpdate` | 10 | 2151.8 | 2130.0 | 2189.0 | 144.0 | 1.0 |
+| `BenchmarkDomainRoutingMapRustReloadClear` | 10 | 17211.2 | 16903.0 | 17406.0 | 5469.0 | 25.0 |
+| `BenchmarkDomainRoutingMapRustInprocessReloadClear` | 10 | 17159.6 | 16889.0 | 17429.0 | 5468.5 | 25.0 |
+
+补充专项 benchmark：
+
+- 目的：C 分配保护补充后，复跑 in-process 热点，确认最终代码数据稳定。
+- 命令：`PATH=/root/.local/go1.25.9/bin:$PATH GOWORK=off DAE_RUST_BPF_LOADER_HELPER=/root/project/dae-daex-align/control/embedded/dae-aya-bpf-loader go test -run '^$' -tags rust_inprocess -bench 'BenchmarkRoutingMapRustInprocessUpdate$|BenchmarkRoutingMapRustInprocessUpdateWithLpmBuild$|BenchmarkDomainRoutingMapRustInprocessUpdate$|BenchmarkDomainRoutingMapRustInprocessReloadClear$' -benchmem -benchtime=1s -count=10 ./control`
+- 输出留档：`/tmp/dae-daex-rust-inprocess-control-bench-final-20260531.txt`
+- 结果：pass，`ok github.com/daeuniverse/dae/control 65.939s`。
+
+| case | count | avg ns/op | min ns/op | max ns/op | avg B/op | avg allocs/op |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| `BenchmarkRoutingMapRustInprocessUpdate` | 10 | 4682.3 | 4656.0 | 4708.0 | 112.0 | 1.0 |
+| `BenchmarkRoutingMapRustInprocessUpdateWithLpmBuild` | 10 | 30562.2 | 29620.0 | 32150.0 | 120.0 | 3.0 |
+| `BenchmarkDomainRoutingMapRustInprocessUpdate` | 10 | 2155.4 | 2148.0 | 2162.0 | 144.0 | 1.0 |
+| `BenchmarkDomainRoutingMapRustInprocessReloadClear` | 10 | 17152.0 | 17002.0 | 17342.0 | 5468.0 | 25.0 |
+
+benchmark 结论：
+
+- `routing_map` 单次更新：helper 约 `492459 ns/op`，in-process 约 `4670 ns/op`，约快 `105x`，alloc 从 `67` 降到 `1`。
+- `routing_map + LPM build`：helper 约 `525381 ns/op`，in-process 约 `30119 ns/op`，约快 `17x`，alloc 从 `67` 降到 `3`。
+- `domain_routing_map` 单次更新：helper 约 `482088 ns/op`，in-process 约 `2152 ns/op`，约快 `224x`，alloc 从 `67` 降到 `1`。
+- `domain_routing_map` reload clear：当前 Rust helper 和 in-process 都约 `17 us/op`，主要成本已经不是 helper JSON/process 边界，而是遍历/删除批量语义本身；后续优化应看批量删除策略和 map dump/delete 方式。
+- in-process 路径仍慢于 Go direct map update，主要来自 Go request -> C ABI -> Rust Vec 的转换；如果要继续压榨，应转向 Rust-owned control-plane state，避免 Go 侧重复构造 request。
+
+收口结论：
+
+- 本阶段已完成 routing/lpm/domain routing writer 的 Rust in-process staticlib 准入和 benchmark，证明 helper/process JSON 边界可以被移除到微秒级。
+- 默认构建仍保持非 cgo，不会因本阶段破坏现有 daed/dae 默认发布路径。
+- 当前不能把 `rust_inprocess` 直接等价为最终 Rust native control-plane；它是“Go 进程内调用 Rust map owner”的过渡形态。最终 Rust native 仍应是 Rust-owned state / Rust-owned control-plane，减少 Go request 构造和跨语言 ABI。
+- 下一步若用户确认打开产品验证，应在 daed-daex-align 链路显式构建 `rust_inprocess` 二进制，验证 runtime/reload/host write 后再决定是否把该路径作为短期默认；长期方向仍是把 map owner state 下沉到 Rust control-plane，而不是长期依赖 helper 或 cgo 适配层。
+
+### Rust-owned in-process control-plane writer 远程 38 产品验证收口（2026-05-31）
+
+本节承接上一节本地 opt-in `rust_inprocess` 准入。用户纠正授权边界后，本轮只在远程 38 测试机执行真实 host write / runtime 验证，不触碰 `10.10.10.2`。执行前继续遵守：
+
+- 38 机只是测试机；测试完成后删除 `/usr/bin/dae`、`/usr/bin/daed`、systemd unit、`/etc/daed`、上传产物和运行残留。
+- `/etc/dae/config.dae` 可作为测试输入，但不得按当前测试机 config 做特定实现；本轮只读使用，原始文件 sha256 必须保持不变。
+- `rust_inprocess` 仍是显式 opt-in 产品验证，不改变默认非 cgo 构建策略。
+
+本地产品构建：
+
+| 项 | 结果 |
+| --- | --- |
+| 构建链路 | `/root/project/daed-daex-align/daed/wing`，`go.mod` 通过 `replace github.com/daeuniverse/dae => /root/project/dae-daex-align` 带入 daex 修改 |
+| Rust staticlib | `cargo build --manifest-path /root/project/dae-daex-align/rust/Cargo.toml -p dae-control --release`，生成 `rust/target/release/libdae_control.a` |
+| daed 构建方式 | `CGO_ENABLED=1 go build -tags 'embedallowed rust_inprocess' ...`，不改 `wing/Makefile` 默认 `bundle` 语义 |
+| 输出 | `/tmp/daed-daex-align-rust-inprocess-control-20260531-local` |
+| version | `daed version daed2-daex-align-rust-inprocess-control-20260531-local` |
+| sha256 | `99049f76896b517f37d818dc8aa5484c26f9337fdff56e5d29b0ef051b9495a8` |
+| size | `51M` |
+
+远程 38 初始条件：
+
+| 条件 | 结果 |
+| --- | --- |
+| host | 远程 38 测试机 |
+| kernel | `6.12.86+deb12-amd64` |
+| `daed.service` / `dae.service` | 初始均为 `inactive` |
+| `/usr/bin/daed` | 初始不存在 |
+| `/etc/dae/config.dae` | 存在，sha256 为 `5f6590e9a981456e1b4fcb2166e809617960b172f3bd860b9fb4d192b01206d4` |
+| 配置关键点 | `lan_interface: daerust0`，`wan_interface: ens3`，`pname(NetworkManager, systemd-resolved, systemd-networkd, dnsmasq, ssh, sshd) -> must_direct` |
+
+真实 host write 动作：
+
+| 动作 | 结果 |
+| --- | --- |
+| 上传产物 | `/tmp/daed-daex-align-rust-inprocess-control-20260531-local` |
+| 安装产品二进制 | 安装为 `/usr/bin/daed`，sha256 `99049f76896b517f37d818dc8aa5484c26f9337fdff56e5d29b0ef051b9495a8` |
+| `/usr/bin/dae` | 未安装 |
+| `/usr/bin/dae-aya-bpf-loader` | 未安装，仍验证 embedded helper 路径 |
+| 临时 unit | 写入 `/etc/systemd/system/daed.service`，`ExecStart=/usr/bin/daed run -c /etc/daed/`，`ExecReload=/bin/kill -HUP $MAINPID` |
+| 临时 unit 环境 | `DAE_RUST_NATIVE_EBPF=1`、`DAE_RUST_NATIVE_EBPF_BACKEND=auto`、`DAE_NATIVE_EBPF_BACKEND=auto`、`DAE_NETNS_LINK=auto`、`DAE_RUST_RESIDENT_DATAPLANE=1` |
+| 临时 LAN link | 创建并启用 `daerust0` dummy link，用于匹配测试配置 |
+| 临时 API 用户 | 因 API 需要 auth，创建测试用户，仅存在于 `/etc/daed` 临时目录；清理时随 `/etc/daed` 删除 |
+| 配置导入 | 通过 daed API 导入 `/etc/dae/config.dae` 的内存副本，仅在导入内容中补 `bind: 'udp://127.0.0.1:1053'` 以验证 DNS listener；未修改原始 `/etc/dae/config.dae` |
+
+远程验证结果：
+
+| 验证项 | 结果 |
+| --- | --- |
+| `/api/health` | `{"healthCheck":1}` |
+| `/api/auth/status` | 初始 `{"numberUsers":0}` |
+| `/api/user/me/dae-config-file` import | `{"imported":true}` |
+| `/api/runtime/reload` | `{"applied":1,"dry":false}` |
+| `/api/general/state` | `running=true`，`version=daed2-daex-align-rust-inprocess-control-20260531-local`，`netnsLinkMode=netkit`，`attachBackend=tcx` |
+| `/api/runtime/overview` | HTTP 200，`goroutines=26`，`activeConnections=0` |
+| DNS 当前状态 | `pass=8 fail=0`，首包 `first_rtt_ms=1.69`，`rcode=0 answers=2` |
+| HTTPS trace | `https://www.cloudflare.com/cdn-cgi/trace` 成功，返回 `ip=38.65.91.47`、`colo=LAX` |
+| `systemctl reload daed.service` | pass，`MainPID` 从 `88980` 到 `88980`，服务保持 `active` |
+| reload 后 DNS | `pass=8 fail=0`，首包 `first_rtt_ms=0.39`，`rcode=0 answers=2` |
+| `systemctl restart daed.service` | pass，服务保持 `active`，新 `MainPID=89276` |
+| restart 后 DNS | `pass=8 fail=0`，首包 `first_rtt_ms=3.05`，`rcode=0 answers=2` |
+| restart 后 HTTPS trace | 成功，返回 `ip=38.65.91.47`、`colo=LAX` |
+
+远程日志和防回退观测：
+
+| 观测项 | 结果 |
+| --- | --- |
+| 二进制 in-process 标记 | `strings /usr/bin/daed` 可见 `Rust in-process routing map writer failed` 和 `does not accept prebuilt LPM entries` |
+| `dae netns link mode` | `netkit` |
+| tproxy listener | `Opened tproxy listener via Rust/Aya on port 12345 and wrote listen_socket_map` |
+| LAN ingress/egress | `Bind daed_lan_ingress_l2 via Rust/Aya tcx on daerust0`，`Bind daed_lan_egress_l2 via Rust/Aya tcx on daerust0` |
+| WAN ingress/egress | `Bind daed_wan_ingress_l2 via Rust/Aya tcx on ens3`，`Bind daed_wan_egress_l2 via Rust/Aya tcx on ens3` |
+| dae0 / dae0peer | `Bind daed_dae0_ingress via Rust/Aya tcx on dae0`，`Bind daed_dae0peer_ingress via Rust/Aya tcx on dae0peer` |
+| routing writer | reload 后 `Routing match set len: 10/1024`，restart 后同样恢复到 `10/1024` |
+| DNS listener | `DNS listener started on udp://127.0.0.1:1053` |
+| helper map writer 日志 | 未出现 `routing-map apply`、`domain-routing-map apply`、`domain-routing-map serve` |
+| helper 进程 | 未发现常驻 `dae-aya-bpf-loader` 进程 |
+| 防回退扫描 | 未出现 `falling back to Go writer`、`falling back to Go attach path`、`falling back to Go listener`、`falling back to Go map update`、`BpfMapBatchUpdate`、`BpfMapBatchDelete`、`ciliumLink`、`AttachCgroup`、`Bind ... via TC on`、`TCX attach failed`、`fatal`、`panic`、`parse config` |
+| restart 过程日志 | 仅出现预期的 `Exiting: terminated`，来自 `systemctl restart` 停旧进程，不计为 runtime 错误 |
+
+远程清理结果：
+
+| 清理项 | 结果 |
+| --- | --- |
+| `daed.service` / `dae.service` | `inactive` |
+| `/usr/bin/daed` / `/usr/bin/dae` / `/usr/bin/dae-aya-bpf-loader` | absent |
+| `/etc/systemd/system/daed.service` | absent |
+| `/etc/daed` | absent |
+| 上传产物 `/tmp/daed-daex-align-rust-inprocess-control-20260531-local` | absent |
+| `/tmp/daed-*` 临时 API / DNS 文件 | 已删除 |
+| `/root/.cache/daed/rust-aya-loader` / `/root/.cache/dae/embedded-helpers` | 已删除 |
+| `daerust0` / `dae0` / `dae0peer` | absent |
+| `dae` netns | absent |
+| `/sys/fs/bpf/daed` | absent |
+| `/etc/dae/config.dae` | sha256 仍为 `5f6590e9a981456e1b4fcb2166e809617960b172f3bd860b9fb4d192b01206d4` |
+
+收口结论：
+
+- `rust_inprocess` 产品二进制已在远程 38 机完成真实 host write、API import/reload、systemctl reload、systemctl restart、DNS 首包、HTTPS trace、TCX/netkit attach 和清理验证。
+- routing/lpm/domain routing writer 在该二进制中走进程内 Rust staticlib，远端日志未出现 routing/domain routing helper writer 或 Go direct map writer fallback。
+- 本轮证明 `rust_inprocess` 可作为短期去掉 helper/process JSON 边界的候选产品路径；但默认构建仍未切换，且长期架构仍应继续推进 Rust-owned state / Rust-owned control-plane，避免把 cgo 适配层作为最终形态。
