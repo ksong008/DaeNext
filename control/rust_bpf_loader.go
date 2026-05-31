@@ -14,11 +14,14 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
+	"syscall"
 	"time"
 
 	"github.com/cilium/ebpf"
 	"github.com/cilium/ebpf/asm"
 	"github.com/cilium/ebpf/features"
+	"github.com/daeuniverse/dae/common/consts"
 	"github.com/sirupsen/logrus"
 )
 
@@ -27,6 +30,8 @@ const (
 	rustBpfLoaderHelperDefault = "dae-aya-bpf-loader"
 	rustBpfLoaderHelperTimeout = 90 * time.Second
 )
+
+var rustAyaAdoptedPinRoots sync.Map
 
 func rustBpfLoaderHelperPath() string {
 	if helper := strings.TrimSpace(os.Getenv(rustBpfLoaderHelperEnv)); helper != "" {
@@ -98,6 +103,7 @@ func fullLoadBpfObjectsViaRustAyaLoader(
 	if err := adoptRustAyaPinnedBpfObjects(bpf, pinRoot); err != nil {
 		return fmt.Errorf("adopt Rust/Aya loaded BPF objects: %w", err)
 	}
+	rememberRustAyaAdoptedPinRoot(bpf, pinRoot)
 	return nil
 }
 
@@ -291,6 +297,88 @@ func closeBpfProgram(p *ebpf.Program) error {
 		return nil
 	}
 	return p.Close()
+}
+
+func rememberRustAyaAdoptedPinRoot(bpf *bpfObjects, pinRoot string) {
+	if bpf == nil || strings.TrimSpace(pinRoot) == "" {
+		return
+	}
+	rustAyaAdoptedPinRoots.Store(bpf, pinRoot)
+}
+
+func rustAyaAdoptedPinRoot(bpf *bpfObjects) (string, bool) {
+	if bpf == nil {
+		return "", false
+	}
+	value, ok := rustAyaAdoptedPinRoots.Load(bpf)
+	if !ok {
+		return "", false
+	}
+	pinRoot, ok := value.(string)
+	return pinRoot, ok && strings.TrimSpace(pinRoot) != ""
+}
+
+func forgetRustAyaAdoptedPinRoot(bpf *bpfObjects) {
+	if bpf != nil {
+		rustAyaAdoptedPinRoots.Delete(bpf)
+	}
+}
+
+func closeBpfObjectsAndRustAyaPins(bpf *bpfObjects) error {
+	if bpf == nil {
+		return nil
+	}
+	closeErr := bpf.Close()
+	cleanupErr := cleanupRustAyaAdoptedPinnedObjects(bpf)
+	return errors.Join(closeErr, cleanupErr)
+}
+
+func cleanupRustAyaAdoptedPinnedObjects(bpf *bpfObjects) error {
+	pinRoot, ok := rustAyaAdoptedPinRoot(bpf)
+	if !ok {
+		return nil
+	}
+	forgetRustAyaAdoptedPinRoot(bpf)
+
+	var errs []error
+	if err := os.RemoveAll(pinRoot); err != nil {
+		errs = append(errs, fmt.Errorf("remove Rust/Aya loader pin root %s: %w", pinRoot, err))
+	}
+
+	if filepath.Clean(pinRoot) == filepath.Clean(rustAyaDefaultLoaderPinRoot()) {
+		tcGlobalsRoot := filepath.Join(consts.BpfPinRoot, "tc", "globals")
+		for _, name := range rustAyaTcGlobalPinNames() {
+			path := filepath.Join(tcGlobalsRoot, name)
+			if err := os.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
+				errs = append(errs, fmt.Errorf("remove Rust/Aya tc globals pin %s: %w", path, err))
+			}
+		}
+
+		appPinRoot := filepath.Join(consts.BpfPinRoot, consts.AppName)
+		if err := os.Remove(appPinRoot); err != nil && !errors.Is(err, os.ErrNotExist) {
+			if !errors.Is(err, syscall.ENOTEMPTY) {
+				errs = append(errs, fmt.Errorf("remove empty Rust/Aya app pin root %s: %w", appPinRoot, err))
+			}
+		}
+	}
+	return errors.Join(errs...)
+}
+
+func rustAyaTcGlobalPinNames() []string {
+	return []string{
+		"cookie_pid_map",
+		"domain_routing_map",
+		"fast_sock",
+		"listen_socket_map",
+		"lpm_array_map",
+		"outbound_connectivity_map",
+		"redirect_track",
+		"routing_map",
+		"routing_tuples_map",
+		"tgid_pname_map",
+		"udp_conn_state_map",
+		"unused_lpm_type",
+	}
 }
 
 func runRustBpfLoaderHelperOutput(args ...string) (string, error) {

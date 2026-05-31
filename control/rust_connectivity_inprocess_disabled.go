@@ -15,6 +15,16 @@ import (
 
 type rustOutboundConnectivityOwner struct{}
 
+type rustOutboundConnectivityApplyReport struct {
+	mapID        uint32
+	mapChanged   bool
+	accepted     bool
+	changed      bool
+	skipped      bool
+	entries      int
+	stateEntries int
+}
+
 func newRustOutboundConnectivityOwner() *rustOutboundConnectivityOwner {
 	return &rustOutboundConnectivityOwner{}
 }
@@ -25,4 +35,8 @@ func (o *rustOutboundConnectivityOwner) Close() error {
 
 func (o *rustOutboundConnectivityOwner) Update(m *ebpf.Map, outbound, l4proto, ipversion uint8, alive, isInit, dryrun bool) error {
 	return fmt.Errorf("Rust in-process outbound connectivity owner is not enabled")
+}
+
+func (o *rustOutboundConnectivityOwner) ApplyEvent(m *ebpf.Map, outbound, l4proto, ipversion uint8, alive, isInit, dryrun bool) (rustOutboundConnectivityApplyReport, error) {
+	return rustOutboundConnectivityApplyReport{}, fmt.Errorf("Rust in-process outbound connectivity owner is not enabled")
 }

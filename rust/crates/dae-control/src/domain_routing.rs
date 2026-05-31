@@ -40,6 +40,46 @@ impl DomainRoutingOwnerSnapshot {
     }
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct DomainRoutingDnsEvent<'a> {
+    pub owner_key: &'a str,
+    pub bitmap: [u32; 32],
+    pub ips: Vec<DomainRoutingIpKey>,
+}
+
+impl<'a> DomainRoutingDnsEvent<'a> {
+    pub fn from_keys(
+        owner_key: &'a str,
+        bitmap_words: &[u32],
+        ips: impl IntoIterator<Item = DomainRoutingIpKey>,
+    ) -> Self {
+        let mut bitmap = [0; 32];
+        for (index, word) in bitmap_words.iter().copied().enumerate().take(32) {
+            bitmap[index] = word;
+        }
+        Self {
+            owner_key,
+            bitmap,
+            ips: normalize_ip_keys(ips),
+        }
+    }
+
+    pub fn remove(owner_key: &'a str) -> Self {
+        Self {
+            owner_key,
+            bitmap: [0; 32],
+            ips: Vec::new(),
+        }
+    }
+
+    pub fn into_snapshot(self) -> DomainRoutingOwnerSnapshot {
+        DomainRoutingOwnerSnapshot {
+            bitmap: self.bitmap,
+            ips: self.ips,
+        }
+    }
+}
+
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 struct IpState {
     owners: HashMap<String, [u32; 32]>,
@@ -350,6 +390,35 @@ impl DomainRoutingOwner {
         self.apply_owner_snapshot_with(map_id, owner_key, snapshot, |map_id, updates, deletes| {
             apply_domain_routing_entries(map_id, updates, deletes)
         })
+    }
+
+    pub fn apply_dns_event_by_id(
+        &mut self,
+        map_id: u32,
+        event: DomainRoutingDnsEvent<'_>,
+    ) -> io::Result<DomainRoutingOwnerApplyReport> {
+        self.apply_dns_event_with(map_id, event, |map_id, updates, deletes| {
+            apply_domain_routing_entries(map_id, updates, deletes)
+        })
+    }
+
+    pub fn apply_dns_event_with(
+        &mut self,
+        map_id: u32,
+        event: DomainRoutingDnsEvent<'_>,
+        apply: impl FnOnce(u32, &[DomainRoutingStateEntry], &[DomainRoutingIpKey]) -> io::Result<()>,
+    ) -> io::Result<DomainRoutingOwnerApplyReport> {
+        let DomainRoutingDnsEvent {
+            owner_key,
+            bitmap,
+            ips,
+        } = event;
+        self.apply_owner_snapshot_with(
+            map_id,
+            &owner_key,
+            DomainRoutingOwnerSnapshot { bitmap, ips },
+            apply,
+        )
     }
 
     pub fn apply_owner_snapshot_with(

@@ -35,6 +35,7 @@ type controlPlaneCore struct {
 	log             *logrus.Logger
 	deferFuncs      []func() error
 	bpf             *bpfObjects
+	bpfCloseOwned   bool
 	domainRouting   *domainRoutingTracker
 	outboundId2Name map[uint8]string
 
@@ -134,8 +135,12 @@ func newControlPlaneCore(log *logrus.Logger,
 		coreFlip = coreFlip&1 ^ 1
 	}
 	var deferFuncs []func() error
+	bpfCloseOwned := false
 	if !isReload {
-		deferFuncs = append(deferFuncs, bpf.Close)
+		deferFuncs = append(deferFuncs, func() error {
+			return closeBpfObjectsAndRustAyaPins(bpf)
+		})
+		bpfCloseOwned = true
 	}
 	closed, toClose := context.WithCancel(context.Background())
 	ifmgr := component.NewInterfaceManager(log)
@@ -144,6 +149,7 @@ func newControlPlaneCore(log *logrus.Logger,
 		log:             log,
 		deferFuncs:      deferFuncs,
 		bpf:             bpf,
+		bpfCloseOwned:   bpfCloseOwned,
 		domainRouting:   newDomainRoutingTracker(),
 		outboundId2Name: outboundId2Name,
 		kernelVersion:   kernelVersion,
@@ -834,11 +840,7 @@ func (c *controlPlaneCore) bindDaens() (err error) {
 // be invoked every A/AAAA-record lookup.
 func (c *controlPlaneCore) BatchUpdateDomainRouting(cache *DnsCache) error {
 	if rustInprocessRoutingMapAvailable() && cache != nil && cache.RouteOwnerKey != "" {
-		snapshot, err := buildDomainRoutingOwnerSnapshot(cache)
-		if err != nil {
-			return err
-		}
-		return c.getRustDomainRoutingOwner().Update(c.bpf.DomainRoutingMap, cache.RouteOwnerKey, snapshot)
+		return c.getRustDomainRoutingOwner().UpdateDnsCacheEvent(c.bpf.DomainRoutingMap, cache)
 	}
 	if c.domainRouting != nil && cache != nil && cache.RouteOwnerKey != "" {
 		snapshot, err := buildDomainRoutingOwnerSnapshot(cache)
@@ -873,7 +875,7 @@ func (c *controlPlaneCore) BatchUpdateDomainRouting(cache *DnsCache) error {
 // BatchRemoveDomainRouting remove bpf map domain_routing.
 func (c *controlPlaneCore) BatchRemoveDomainRouting(cache *DnsCache) error {
 	if rustInprocessRoutingMapAvailable() && cache != nil && cache.RouteOwnerKey != "" {
-		return c.getRustDomainRoutingOwner().Update(c.bpf.DomainRoutingMap, cache.RouteOwnerKey, domainRoutingOwnerSnapshot{})
+		return c.getRustDomainRoutingOwner().RemoveDnsCacheEvent(c.bpf.DomainRoutingMap, cache.RouteOwnerKey)
 	}
 	if c.domainRouting != nil && cache != nil && cache.RouteOwnerKey != "" {
 		return c.domainRouting.syncOwner(c.bpf.DomainRoutingMap, cache.RouteOwnerKey, domainRoutingOwnerSnapshot{}, c.updateDomainRoutingMapViaRustHelper)
@@ -917,8 +919,9 @@ func (c *controlPlaneCore) clearDomainRoutingMapForReload() error {
 
 // EjectBpf will resect bpf from destroying life-cycle of control plane core.
 func (c *controlPlaneCore) EjectBpf() *bpfObjects {
-	if !c.bpfEjected && !c.isReload {
+	if !c.bpfEjected && c.bpfCloseOwned {
 		c.deferFuncs = c.deferFuncs[1:]
+		c.bpfCloseOwned = false
 	}
 	c.bpfEjected = true
 	return c.bpf
@@ -926,9 +929,13 @@ func (c *controlPlaneCore) EjectBpf() *bpfObjects {
 
 // InjectBpf will inject bpf back.
 func (c *controlPlaneCore) InjectBpf(bpf *bpfObjects) {
-	if c.bpfEjected {
-		c.bpfEjected = false
-		c.deferFuncs = append([]func() error{bpf.Close}, c.deferFuncs...)
+	c.bpf = bpf
+	if !c.bpfCloseOwned {
+		c.deferFuncs = append([]func() error{func() error {
+			return closeBpfObjectsAndRustAyaPins(bpf)
+		}}, c.deferFuncs...)
+		c.bpfCloseOwned = true
 	}
+	c.bpfEjected = false
 	return
 }
