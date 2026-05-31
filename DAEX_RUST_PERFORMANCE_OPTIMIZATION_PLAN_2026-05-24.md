@@ -20011,3 +20011,53 @@ cargo run --release --manifest-path rust/Cargo.toml -p dae-daemon --bin dae-daem
 - `routing_map` / `lpm_array_map`、`domain_routing_map`、`outbound_connectivity_map` 的产品 writer 入口已经从 `rust_inprocess`/cgo staticlib 接入迁出；r4 使用 `CGO_ENABLED=0` + `embedallowed` 生成 daed 并在远程 38 完整 run/reload/API/DNS/TCX/netkit 验证通过。
 - `control/embedded/dae-aya-bpf-loader` 仍需要作为构建期 `go:embed` 资产存在；它已经随 daed 二进制一起部署，不需要运行时额外安装。真正取消 executable helper 形态，需要后续把 control-plane owner 进一步迁移为 Rust resident service / Rust 主进程，而不是恢复 cgo in-process。
 - 本轮仍不替换 daewing/outbound/quic-go 全协议栈；Go DNS controller 仍负责 DNS 请求处理、cache 生命周期、routing 语义输入和 reload snapshot 触发，但相关 map owner 写入已走 no-cgo Rust/Aya 入口。
+
+### r4 部署到 `10.10.10.2` 与 LAN 侧验证（2026-05-31）
+
+目标：
+
+- 在远程 38 通过 r4 产品链验证后，将同一 r4 二进制替换到 `10.10.10.2`，验证现有生产式 `/etc/daed/` 配置下是否正常启动、加载 Rust/Aya、保持 LAN 客户端代理链路。
+- 本轮只替换 `/usr/bin/daed`，不改 `/etc/daed` 配置，不重置 WebUI 用户，不修改 daewing/outbound/quic-go 协议栈。
+
+部署前状态：
+
+| 项目 | 结果 |
+| --- | --- |
+| host | `10.10.10.2`，hostname `fendoradaed` |
+| 服务 | `daed=active`，`dae=inactive` |
+| 原二进制 | `/usr/bin/daed` 为 `daed-r3-rust-native-control-plane-no-cgo-20260531` |
+| unit | `ExecStart=/usr/bin/daed run -c /etc/daed/`，已有 drop-in `20-daex-reload.conf` 将 reload 改为 `SIGHUP`；已有 `30-daex-r3-env.conf` 设置 `DAE_RUST_NATIVE_EBPF=1`、`DAE_RUST_NATIVE_EBPF_BACKEND=auto`、`DAE_NETNS_LINK=auto` |
+
+部署内容：
+
+| 项目 | 结果 |
+| --- | --- |
+| 本地源二进制 | `/root/project/daed-daex-align/daed/daed-r4-no-cgo-owner-entry-20260531` |
+| 远端目标 | `/usr/bin/daed` |
+| sha256 | `9ab9baa86114d1579466b01a8fb677fdf34b3ed73a37d93ae11d07d27773dd30` |
+| version | `daed version daed-r4-no-cgo-owner-entry-20260531` |
+| 服务操作 | `systemctl restart daed.service` |
+
+验证结果：
+
+| 验证项 | 结果 |
+| --- | --- |
+| `daed.service` | pass，重启后 `active` |
+| API health | pass，`/api/health={"healthCheck":1}` |
+| auth boundary | `/api/auth/status={"numberUsers":1}`；未重置 WebUI 用户，因此未强行读取需要认证的 `/api/general/state` |
+| Rust/Aya loader | pass，journal 出现 `Rust/Aya BPF loader loaded object_source=rust-aya-skeleton default_object_source=rust-aya-skeleton kernel_ebpf_program_rewrite=true` |
+| attach 日志 | pass，出现 `Bind daed_dae0peer_ingress via Rust/Aya tcx on dae0peer`、`Bind daed_dae0_ingress via Rust/Aya tcx on dae0` |
+| no-cgo owner helper | pass，进程存在 `/root/.cache/dae/embedded-helpers/dae-aya-bpf-loader-de3544950984eb5d connectivity-map serve-binary` 和 `domain-routing-map serve` |
+| 本机 HTTPS trace | pass，`https://www.cloudflare.com/cdn-cgi/trace` 返回 `ip=83.147.60.195`、`colo=HKG`、`tls=TLSv1.3` |
+| LAN 侧测试机 | `10.10.10.4`，hostname `rockylinux-daed`，默认路由包含 `default via 10.10.10.2 dev enp1s0` |
+| LAN 侧 HTTPS trace | pass，从 `10.10.10.4` 访问 Cloudflare trace 返回 `ip=83.147.60.195`、`colo=HKG`、`tls=TLSv1.3` |
+| LAN 侧 DNS | pass，`10.10.10.4` 上 `getent hosts www.cloudflare.com` 有解析结果 |
+| 本机 DNS listener | `127.0.0.1:53` / `127.0.0.1:1053` 查询超时；当前 `/etc/daed/rust-aya-runtime/generated.dae` 未声明本地 DNS bind，因此不作为 r4 失败结论 |
+| 错误扫描 | 未见新的 `fatal`、`panic`、`parse config`、`TCX attach failed`、`falling back`；唯一 `error` 是替换重启时旧 r3 进程正常 `Exiting: terminated` |
+| 临时文件清理 | 删除 `/tmp/daed-r4-no-cgo-owner-entry-20260531`、`/tmp/daed-r4-curl.err`、`/tmp/daed-r4-state-check.*`，`tmp_left=0` |
+
+当前结论：
+
+- r4 已在 `10.10.10.2` 替换并运行，服务状态、Rust/Aya skeleton loader、TCX attach、no-cgo owner helper、本机 HTTPS trace 和 `10.10.10.4 -> 10.10.10.2` LAN 侧 trace 均通过。
+- 这次部署确认的是“no-cgo owner 产品接入 + Rust/Aya embedded loader + 现有 Go daed/dae-wing/outbound 协议栈”的混合架构运行态，不代表全 Rust DNS controller 或全 Rust outbound 协议栈已完成。
+- 下一步不再扩 helper 方向；按混合架构计划，应进入 Rust-owned control-plane / Rust resident service 设计与准入，把当前 `connectivity-map serve-binary`、`domain-routing-map serve` 这类 executable helper 热路径继续下沉到 Rust 持有 runtime state 的正式入口，同时保留 daed 产品壳/WebUI/API 和 daewing/outbound/quic-go 协议栈边界。
