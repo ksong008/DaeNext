@@ -2,7 +2,10 @@ use std::io;
 
 use dae_ebpf_support::apply_routing_maps_with_lpm_build_by_id;
 
-use crate::routing_native::RoutingNativeBuildPlan;
+use crate::routing_native::{
+    LpmMapTemplate, RoutingNativeBuildPlan, RoutingNativeFallback, RoutingNativePlanError,
+    RoutingNativeRule, build_routing_native_plan,
+};
 
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct RoutingMapOwner {
@@ -106,6 +109,96 @@ impl RoutingMapOwner {
             checksum,
             routing_entries_updated,
             lpm_maps_created,
+        })
+    }
+
+    pub fn clear(&mut self) {
+        *self = Self::default();
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct RoutingRuleState {
+    pub rules: Vec<RoutingNativeRule>,
+    pub fallback: RoutingNativeFallback,
+    pub lpm_template: LpmMapTemplate,
+}
+
+impl RoutingRuleState {
+    pub fn new(
+        rules: Vec<RoutingNativeRule>,
+        fallback: RoutingNativeFallback,
+        lpm_template: LpmMapTemplate,
+    ) -> Self {
+        Self {
+            rules,
+            fallback,
+            lpm_template,
+        }
+    }
+
+    pub fn build_plan(&self) -> Result<RoutingNativeBuildPlan, RoutingNativePlanError> {
+        build_routing_native_plan(&self.rules, self.fallback, self.lpm_template)
+    }
+}
+
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct RoutingRuleOwner {
+    state: Option<RoutingRuleState>,
+    map_owner: RoutingMapOwner,
+}
+
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct RoutingRuleOwnerApplyReport {
+    pub map: RoutingMapOwnerApplyReport,
+    pub rule_count: usize,
+    pub lpm_rule_count: usize,
+}
+
+impl RoutingRuleOwner {
+    pub fn state(&self) -> Option<&RoutingRuleState> {
+        self.state.as_ref()
+    }
+
+    pub fn map_owner(&self) -> &RoutingMapOwner {
+        &self.map_owner
+    }
+
+    pub fn apply_rules_with(
+        &mut self,
+        routing_map_id: u32,
+        lpm_array_map_id: u32,
+        state: RoutingRuleState,
+        apply: impl FnOnce(u32, u32, &RoutingNativeBuildPlan) -> io::Result<()>,
+    ) -> io::Result<RoutingRuleOwnerApplyReport> {
+        let plan = state
+            .build_plan()
+            .map_err(|err| io::Error::new(io::ErrorKind::InvalidInput, err))?;
+        let lpm_rule_count = state
+            .rules
+            .iter()
+            .filter(|rule| {
+                matches!(
+                    &rule.matcher,
+                    crate::routing_native::RoutingNativeMatch::IpSet(_)
+                        | crate::routing_native::RoutingNativeMatch::SourceIpSet(_)
+                        | crate::routing_native::RoutingNativeMatch::Mac(_)
+                )
+            })
+            .count();
+        let rule_count = state.rules.len();
+        let report =
+            self.map_owner
+                .apply_snapshot_with(routing_map_id, lpm_array_map_id, plan, apply)?;
+        if !report.skipped {
+            self.state = Some(state);
+        } else if self.state.is_none() {
+            self.state = Some(state);
+        }
+        Ok(RoutingRuleOwnerApplyReport {
+            map: report,
+            rule_count,
+            lpm_rule_count,
         })
     }
 

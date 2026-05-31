@@ -586,6 +586,54 @@ func BenchmarkDomainRoutingMapRustOwnedInprocessToggle(b *testing.B) {
 	}
 }
 
+func BenchmarkDomainRoutingMapRustOwnedDnsEventDuplicate(b *testing.B) {
+	if !rustInprocessRoutingMapAvailable() {
+		b.Skip("Rust in-process domain routing DNS event owner is not enabled")
+	}
+	m := newBenchmarkDomainRoutingMap(b)
+	defer m.Close()
+	_, value := benchmarkDomainRoutingEntry()
+	owner := newRustDomainRoutingOwner()
+	defer owner.Close()
+	cache := benchmarkDomainRoutingDnsCache("bench-owner", value, netip.MustParseAddr("203.0.113.10"))
+	if err := owner.UpdateDnsCacheEvent(m, cache); err != nil {
+		b.Fatal(err)
+	}
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		if err := owner.UpdateDnsCacheEvent(m, cache); err != nil {
+			b.Fatal(err)
+		}
+	}
+}
+
+func BenchmarkDomainRoutingMapRustOwnedDnsEventToggle(b *testing.B) {
+	if !rustInprocessRoutingMapAvailable() {
+		b.Skip("Rust in-process domain routing DNS event owner is not enabled")
+	}
+	m := newBenchmarkDomainRoutingMap(b)
+	defer m.Close()
+	_, value := benchmarkDomainRoutingEntry()
+	alternate := bpfDomainRouting{Bitmap: [32]uint32{0x3}}
+	owner := newRustDomainRoutingOwner()
+	defer owner.Close()
+	caches := [2]*DnsCache{
+		benchmarkDomainRoutingDnsCache("bench-owner", value, netip.MustParseAddr("203.0.113.10")),
+		benchmarkDomainRoutingDnsCache("bench-owner", alternate, netip.MustParseAddr("203.0.113.10")),
+	}
+	if err := owner.UpdateDnsCacheEvent(m, caches[0]); err != nil {
+		b.Fatal(err)
+	}
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		if err := owner.UpdateDnsCacheEvent(m, caches[i%2]); err != nil {
+			b.Fatal(err)
+		}
+	}
+}
+
 func BenchmarkDomainRoutingMapRustInprocessReloadClear(b *testing.B) {
 	if !rustInprocessRoutingMapAvailable() {
 		b.Skip("Rust in-process domain routing map writer is not enabled")
@@ -886,6 +934,15 @@ func benchmarkDomainRoutingEntry() ([4]uint32, bpfDomainRouting) {
 	var value bpfDomainRouting
 	value.Bitmap[0] = 0x1
 	return [4]uint32{0, 0, 0xffff, 0xcb00710a}, value
+}
+
+func benchmarkDomainRoutingDnsCache(ownerKey string, bitmap bpfDomainRouting, ips ...netip.Addr) *DnsCache {
+	return &DnsCache{
+		RouteOwnerKey: ownerKey,
+		DomainBitmap:  append([]uint32(nil), bitmap.Bitmap[:]...),
+		IPs:           append([]netip.Addr(nil), ips...),
+		HasAnyIP:      len(ips) > 0,
+	}
 }
 
 func benchmarkLpmMapSpec() *ebpf.MapSpec {

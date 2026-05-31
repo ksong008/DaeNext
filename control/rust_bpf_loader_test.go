@@ -69,6 +69,59 @@ func TestRustBpfLoaderCommandContextUsesExplicitEnv(t *testing.T) {
 	}
 }
 
+func TestCleanupRustAyaAdoptedPinnedObjectsRemovesRecordedPinRoot(t *testing.T) {
+	bpf := new(bpfObjects)
+	pinRoot := filepath.Join(t.TempDir(), "rust_aya_loader")
+	if err := os.MkdirAll(filepath.Join(pinRoot, "maps"), 0755); err != nil {
+		t.Fatalf("create maps pin root: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(pinRoot, "maps", "routing_map"), []byte("pin"), 0644); err != nil {
+		t.Fatalf("write fake pin: %v", err)
+	}
+
+	rememberRustAyaAdoptedPinRoot(bpf, pinRoot)
+	if err := cleanupRustAyaAdoptedPinnedObjects(bpf); err != nil {
+		t.Fatalf("cleanupRustAyaAdoptedPinnedObjects() error = %v", err)
+	}
+	if _, err := os.Stat(pinRoot); !os.IsNotExist(err) {
+		t.Fatalf("pin root still exists after cleanup: err=%v", err)
+	}
+	if _, ok := rustAyaAdoptedPinRoot(bpf); ok {
+		t.Fatal("pin root record still exists after cleanup")
+	}
+	if err := cleanupRustAyaAdoptedPinnedObjects(bpf); err != nil {
+		t.Fatalf("second cleanupRustAyaAdoptedPinnedObjects() error = %v", err)
+	}
+}
+
+func TestControlPlaneCoreReloadInjectOwnsBpfClose(t *testing.T) {
+	log := logrus.New()
+	bpf := new(bpfObjects)
+	core := newControlPlaneCore(log, bpf, nil, nil, nil, true)
+	if core.bpfCloseOwned {
+		t.Fatal("reload core should not own bpf before InjectBpf")
+	}
+	initialDefers := len(core.deferFuncs)
+
+	core.InjectBpf(bpf)
+	if !core.bpfCloseOwned {
+		t.Fatal("InjectBpf should register bpf close ownership")
+	}
+	if got := len(core.deferFuncs); got != initialDefers+1 {
+		t.Fatalf("defer func count after InjectBpf = %d, want %d", got, initialDefers+1)
+	}
+
+	if got := core.EjectBpf(); got != bpf {
+		t.Fatal("EjectBpf returned unexpected bpf object")
+	}
+	if core.bpfCloseOwned {
+		t.Fatal("EjectBpf should remove bpf close ownership")
+	}
+	if got := len(core.deferFuncs); got != initialDefers {
+		t.Fatalf("defer func count after EjectBpf = %d, want %d", got, initialDefers)
+	}
+}
+
 func TestRustAyaProductCallersUseExecutableResolver(t *testing.T) {
 	for _, file := range []string{
 		"rust_tproxy_listener.go",

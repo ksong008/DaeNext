@@ -1,4 +1,5 @@
 pub mod active;
+pub mod active_handoff;
 pub mod dial;
 pub mod packet_sniffer;
 pub mod route;
@@ -21,6 +22,10 @@ pub use active::{
     ACTIVE_UDP_DEFAULT_TARGET_IP, ACTIVE_UDP_DEFAULT_TARGET_PORT, ActiveTcpRoutingMapContract,
     ActiveTcpTopologyContract, ActiveUdpEndpointContract, active_tcp_routing_fallback_value,
     active_tcp_routing_map_contract, active_tcp_topology_contract, active_udp_endpoint_contract,
+};
+pub use active_handoff::{
+    ActiveHandoffDecision, ActiveHandoffKey, ActiveHandoffState, ActiveL4, ActiveTcpHandoffInput,
+    ActiveUdpHandoffInput,
 };
 pub use dial::{magic_network, magic_network_bytes};
 pub use packet_sniffer::{PACKET_SNIFFER_POOL_MAX_ENTRIES, PACKET_SNIFFER_TTL_MS};

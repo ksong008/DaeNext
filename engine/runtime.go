@@ -350,7 +350,7 @@ loop:
 
 			obj := current.EjectBpf()
 			var dnsCache map[string]*control.DnsCache
-			if reflect.DeepEqual(conf.Dns, newConf.Dns) {
+			if control.RustOwnedReloadDnsCacheRestoreAllowed(reflect.DeepEqual(conf.Dns, newConf.Dns)) {
 				dnsCache = current.SnapshotDnsCache()
 			}
 			shouldStopOldDNSListener := strings.TrimSpace(conf.Dns.Bind) != "" &&

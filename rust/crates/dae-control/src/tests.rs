@@ -242,6 +242,79 @@ fn domain_routing_owner_applies_after_map_write_and_skips_duplicate_snapshot() {
 }
 
 #[test]
+fn domain_routing_dns_event_is_normalized_in_rust_and_preserves_multi_owner_delete() {
+    let mut owner = DomainRoutingOwner::default();
+    let ip = parse_ip_key("192.0.2.1").unwrap();
+    let mut applied = Vec::new();
+
+    let first = owner
+        .apply_dns_event_with(
+            77,
+            DomainRoutingDnsEvent::from_keys("owner-a", &[0x1], [ip, ip]),
+            |map_id, updates, deletes| {
+                applied.push((map_id, updates.to_vec(), deletes.to_vec()));
+                Ok(())
+            },
+        )
+        .unwrap();
+    assert!(!first.skipped);
+    assert_eq!(first.entries_updated, 1);
+    assert_eq!(first.ip_count, 1);
+    assert_eq!(applied[0].1[0].bitmap, bitmap([0x1]));
+
+    let duplicate = owner
+        .apply_dns_event_with(
+            77,
+            DomainRoutingDnsEvent::from_keys("owner-a", &[0x1], [ip, ip]),
+            |_, _, _| panic!("duplicate DNS cache event must not rewrite domain_routing_map"),
+        )
+        .unwrap();
+    assert!(duplicate.skipped);
+
+    let second_owner = owner
+        .apply_dns_event_with(
+            77,
+            DomainRoutingDnsEvent::from_keys("owner-b", &[0x2], [ip]),
+            |map_id, updates, deletes| {
+                applied.push((map_id, updates.to_vec(), deletes.to_vec()));
+                Ok(())
+            },
+        )
+        .unwrap();
+    assert_eq!(second_owner.entries_updated, 1);
+    assert!(second_owner.entries_deleted == 0);
+    assert_eq!(applied[1].1[0].bitmap, bitmap([0x3]));
+
+    let remove_a = owner
+        .apply_dns_event_with(
+            77,
+            DomainRoutingDnsEvent::remove("owner-a"),
+            |map_id, updates, deletes| {
+                applied.push((map_id, updates.to_vec(), deletes.to_vec()));
+                Ok(())
+            },
+        )
+        .unwrap();
+    assert_eq!(remove_a.entries_updated, 1);
+    assert_eq!(remove_a.entries_deleted, 0);
+    assert_eq!(applied[2].1[0].bitmap, bitmap([0x2]));
+
+    let remove_b = owner
+        .apply_dns_event_with(
+            77,
+            DomainRoutingDnsEvent::remove("owner-b"),
+            |map_id, updates, deletes| {
+                applied.push((map_id, updates.to_vec(), deletes.to_vec()));
+                Ok(())
+            },
+        )
+        .unwrap();
+    assert_eq!(remove_b.entries_updated, 0);
+    assert_eq!(remove_b.entries_deleted, 1);
+    assert_eq!(applied[3].2, vec![ip]);
+}
+
+#[test]
 fn domain_routing_owner_does_not_commit_when_map_apply_fails() {
     let mut owner = DomainRoutingOwner::default();
     let snapshot = DomainRoutingOwnerSnapshot::new(&[0x1], &["192.0.2.1"]);
@@ -319,6 +392,22 @@ fn runtime_dependency_plan_keeps_stage7_env_gates() {
 }
 
 #[test]
+fn reload_dns_cache_plan_restores_only_when_dns_config_is_unchanged() {
+    let restore = ReloadDnsCachePlan::decide(true, true, 2);
+    assert!(restore.restore_cache);
+    assert!(restore.clear_domain_routing_map);
+    assert_eq!(restore.snapshot_entries, 2);
+
+    let changed = ReloadDnsCachePlan::decide(false, true, 2);
+    assert!(!changed.restore_cache);
+    assert!(changed.clear_domain_routing_map);
+
+    let empty = ReloadDnsCachePlan::decide(true, false, 0);
+    assert!(!empty.restore_cache);
+    assert!(!empty.clear_domain_routing_map);
+}
+
+#[test]
 fn control_api_typed_report_covers_formal_surfaces_without_stage_schema() {
     let report = ControlApiTypedReport::formal_runtime_control_api();
     assert_eq!(report.schema, "control-api-typed-report-v1");
@@ -329,6 +418,46 @@ fn control_api_typed_report_covers_formal_surfaces_without_stage_schema() {
     assert!(report.domain_routing_owner_available);
     assert!(report.runtime_dependency_plan_available);
     assert!(!report.stage_report_schema);
+}
+
+#[test]
+fn runtime_state_report_requires_all_rust_owned_surfaces_for_default_control_plane() {
+    let empty = RuntimeStateReport::new();
+    assert!(empty.api_compatible);
+    assert!(!empty.ready_for_default_control_plane());
+
+    let ready = RuntimeStateReport::rust_owned_control_plane();
+    assert_eq!(ready.schema_version, RuntimeStateReport::SCHEMA_VERSION);
+    assert!(ready.ready_for_default_control_plane());
+
+    let mut missing_active = ready;
+    missing_active.active_handoff_available = false;
+    assert!(!missing_active.ready_for_default_control_plane());
+}
+
+#[test]
+fn control_plane_default_admission_keeps_c_tproxy_oracle_until_full_gate_passes() {
+    let ready = RuntimeStateReport::rust_owned_control_plane();
+    let admission = ControlPlaneDefaultAdmission {
+        runtime: ready,
+        benchmark_passed: true,
+        unit_passed: true,
+        integration_passed: true,
+        reload_passed: true,
+        host_write_passed: true,
+        cleanup_passed: true,
+        rollback_passed: true,
+        c_tproxy_oracle_retained: true,
+    };
+    assert!(admission.admitted());
+
+    let mut missing_host_write = admission;
+    missing_host_write.host_write_passed = false;
+    assert!(!missing_host_write.admitted());
+
+    let mut removed_c_oracle = admission;
+    removed_c_oracle.c_tproxy_oracle_retained = false;
+    assert!(!removed_c_oracle.admitted());
 }
 
 #[test]
@@ -784,6 +913,74 @@ fn routing_map_owner_replays_on_map_change_and_skips_same_snapshot() {
             (21, 22, changed_checksum)
         ]
     );
+}
+
+#[test]
+fn routing_rule_owner_builds_generic_rule_state_and_preserves_noop_replay() {
+    let mut pname = [0_u8; 16];
+    pname[..4].copy_from_slice(b"curl");
+    let state = RoutingRuleState::new(
+        vec![
+            RoutingNativeRule::new(
+                RoutingNativeMatch::SourceIpSet(vec![IpPrefix::parse("192.0.2.0/24").unwrap()]),
+                OutboundIndex::DIRECT,
+            ),
+            RoutingNativeRule::new(
+                RoutingNativeMatch::SourcePort(vec![(1024, 65535)]),
+                OutboundIndex::BLOCK,
+            ),
+            RoutingNativeRule::new(RoutingNativeMatch::L4Proto(0b11), OutboundIndex(3)),
+            RoutingNativeRule::new(RoutingNativeMatch::IpVersion(0b10), OutboundIndex(4)),
+            RoutingNativeRule::new(
+                RoutingNativeMatch::ProcessName(vec![pname]),
+                OutboundIndex(5),
+            ),
+            RoutingNativeRule::new(RoutingNativeMatch::Dscp(vec![46]), OutboundIndex(6))
+                .with_flags(false, 0x0800_0000, true),
+        ],
+        RoutingNativeFallback::new(OutboundIndex::DIRECT),
+        LpmMapTemplate::default(),
+    );
+
+    let plan = state.build_plan().unwrap();
+    assert_eq!(plan.routing_entries.len(), 7);
+    assert_eq!(plan.lpm_maps.len(), 1);
+    assert_eq!(plan.routing_entries[0].value.kind, 2);
+    assert_eq!(plan.routing_entries[1].value.kind, 4);
+    assert_eq!(plan.routing_entries[2].value.kind, 5);
+    assert_eq!(plan.routing_entries[3].value.kind, 6);
+    assert_eq!(plan.routing_entries[4].value.kind, 8);
+    assert_eq!(plan.routing_entries[5].value.kind, 9);
+    assert_eq!(plan.routing_entries[5].value.must, 1);
+    assert_eq!(plan.routing_entries[5].value.mark, 0x0800_0000);
+    assert_eq!(plan.routing_entries[6].value.kind, 10);
+
+    let checksum = plan.checksum();
+    let mut owner = RoutingRuleOwner::default();
+    let mut applied = Vec::new();
+    let first = owner
+        .apply_rules_with(
+            31,
+            32,
+            state.clone(),
+            |routing_map_id, lpm_array_map_id, plan| {
+                applied.push((routing_map_id, lpm_array_map_id, plan.checksum()));
+                Ok(())
+            },
+        )
+        .unwrap();
+    assert!(!first.map.skipped);
+    assert_eq!(first.rule_count, 6);
+    assert_eq!(first.lpm_rule_count, 1);
+    assert_eq!(owner.map_owner().checksum(), Some(checksum));
+
+    let same = owner
+        .apply_rules_with(31, 32, state, |_, _, _| {
+            panic!("same routing rule state must not rewrite kernel maps")
+        })
+        .unwrap();
+    assert!(same.map.skipped);
+    assert_eq!(applied, vec![(31, 32, checksum)]);
 }
 
 fn assert_domain_view(got: &DomainRoutingView, expected: &Value) {

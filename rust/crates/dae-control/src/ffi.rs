@@ -10,8 +10,9 @@ use dae_ebpf_support::{
 };
 
 use crate::{
-    DomainRoutingIpKey, DomainRoutingOwner, DomainRoutingOwnerSnapshot,
-    OutboundConnectivityMapOwner, RoutingMapOwner, RoutingNativeBuildPlan,
+    DomainRoutingDnsEvent, DomainRoutingIpKey, DomainRoutingOwner, DomainRoutingOwnerSnapshot,
+    OutboundConnectivityMapOwner, ReloadDnsCachePlan, RoutingMapOwner, RoutingNativeBuildPlan,
+    RuntimeStateReport,
 };
 
 #[repr(C)]
@@ -109,6 +110,32 @@ pub struct FfiOutboundConnectivityOwnerApplyReport {
     pub len: usize,
 }
 
+#[repr(C)]
+#[derive(Clone, Copy, Default)]
+pub struct FfiReloadDnsCachePlan {
+    pub dns_config_unchanged: u8,
+    pub bpf_present: u8,
+    pub restore_cache: u8,
+    pub clear_domain_routing_map: u8,
+    pub snapshot_entries: usize,
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, Default)]
+pub struct FfiRuntimeStateReport {
+    pub schema_version: u32,
+    pub rust_owned_runtime: u8,
+    pub reload_state_available: u8,
+    pub backend_state_available: u8,
+    pub routing_owner_available: u8,
+    pub domain_owner_available: u8,
+    pub connectivity_owner_available: u8,
+    pub active_handoff_available: u8,
+    pub api_compatible: u8,
+    pub ready_for_default_control_plane: u8,
+    pub _padding: [u8; 2],
+}
+
 thread_local! {
     static LAST_ERROR: RefCell<CString> = RefCell::new(CString::new("").expect("empty CString"));
 }
@@ -121,6 +148,81 @@ pub unsafe extern "C" fn dae_control_last_error_message() -> *const c_char {
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn dae_control_ffi_abi_version() -> u32 {
     1
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn dae_control_reload_dns_cache_plan(
+    dns_config_unchanged: u8,
+    bpf_present: u8,
+    snapshot_entries: usize,
+    report: *mut FfiReloadDnsCachePlan,
+) -> i32 {
+    ffi_result(|| {
+        if report.is_null() {
+            return Err("nonnull reload DNS cache plan report required".to_owned());
+        }
+        let plan = ReloadDnsCachePlan::decide(
+            dns_config_unchanged != 0,
+            bpf_present != 0,
+            snapshot_entries,
+        );
+        unsafe {
+            *report = FfiReloadDnsCachePlan {
+                dns_config_unchanged: u8::from(plan.dns_config_unchanged),
+                bpf_present: u8::from(plan.bpf_present),
+                restore_cache: u8::from(plan.restore_cache),
+                clear_domain_routing_map: u8::from(plan.clear_domain_routing_map),
+                snapshot_entries: plan.snapshot_entries,
+            };
+        }
+        Ok(())
+    })
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn dae_control_runtime_state_report(
+    rust_owned_runtime: u8,
+    reload_state_available: u8,
+    backend_state_available: u8,
+    routing_owner_available: u8,
+    domain_owner_available: u8,
+    connectivity_owner_available: u8,
+    active_handoff_available: u8,
+    api_compatible: u8,
+    report: *mut FfiRuntimeStateReport,
+) -> i32 {
+    ffi_result(|| {
+        if report.is_null() {
+            return Err("nonnull runtime state report required".to_owned());
+        }
+        let state = RuntimeStateReport {
+            schema_version: RuntimeStateReport::SCHEMA_VERSION,
+            rust_owned_runtime: rust_owned_runtime != 0,
+            reload_state_available: reload_state_available != 0,
+            backend_state_available: backend_state_available != 0,
+            routing_owner_available: routing_owner_available != 0,
+            domain_owner_available: domain_owner_available != 0,
+            connectivity_owner_available: connectivity_owner_available != 0,
+            active_handoff_available: active_handoff_available != 0,
+            api_compatible: api_compatible != 0,
+        };
+        unsafe {
+            *report = FfiRuntimeStateReport {
+                schema_version: state.schema_version,
+                rust_owned_runtime: u8::from(state.rust_owned_runtime),
+                reload_state_available: u8::from(state.reload_state_available),
+                backend_state_available: u8::from(state.backend_state_available),
+                routing_owner_available: u8::from(state.routing_owner_available),
+                domain_owner_available: u8::from(state.domain_owner_available),
+                connectivity_owner_available: u8::from(state.connectivity_owner_available),
+                active_handoff_available: u8::from(state.active_handoff_available),
+                api_compatible: u8::from(state.api_compatible),
+                ready_for_default_control_plane: u8::from(state.ready_for_default_control_plane()),
+                _padding: [0; 2],
+            };
+        }
+        Ok(())
+    })
 }
 
 #[unsafe(no_mangle)]
@@ -363,6 +465,51 @@ pub unsafe extern "C" fn dae_control_domain_routing_owner_apply_snapshot_bytes_b
 }
 
 #[unsafe(no_mangle)]
+pub unsafe extern "C" fn dae_control_domain_routing_owner_apply_dns_event_by_id(
+    owner: *mut DomainRoutingOwner,
+    map_id: u32,
+    owner_key: *const u8,
+    owner_key_len: usize,
+    bitmap: *const [u32; 32],
+    ips: *const DomainRoutingIpKey,
+    ips_len: usize,
+    report: *mut FfiDomainRoutingOwnerApplyReport,
+) -> i32 {
+    ffi_result(|| {
+        if owner.is_null() {
+            return Err("nonnull domain routing owner required".to_owned());
+        }
+        if bitmap.is_null() {
+            return Err("nonnull domain routing bitmap required".to_owned());
+        }
+        let owner_key =
+            unsafe { str_from_raw(owner_key, owner_key_len, "domain routing owner key")? };
+        let bitmap = unsafe { *bitmap };
+        let ips = unsafe { slice_from_raw(ips, ips_len)? };
+        let event = DomainRoutingDnsEvent::from_keys(owner_key, &bitmap, ips.iter().copied());
+        let owner = unsafe { &mut *owner };
+        let applied = owner
+            .apply_dns_event_by_id(map_id, event)
+            .map_err(|err| format!("apply domain routing DNS event via Rust in-process: {err}"))?;
+        if !report.is_null() {
+            unsafe {
+                *report = FfiDomainRoutingOwnerApplyReport {
+                    map_id: applied.map_id,
+                    map_id_changed: u8::from(applied.map_id_changed),
+                    skipped: u8::from(applied.skipped),
+                    _padding: [0; 2],
+                    entries_updated: applied.entries_updated,
+                    entries_deleted: applied.entries_deleted,
+                    owner_count: applied.owner_count,
+                    ip_count: applied.ip_count,
+                };
+            }
+        }
+        Ok(())
+    })
+}
+
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn dae_control_domain_routing_owner_prepare_reload_map_by_id(
     owner: *mut DomainRoutingOwner,
     map_id: u32,
@@ -545,6 +692,22 @@ mod tests {
     #[test]
     fn ffi_abi_version_is_stable() {
         assert_eq!(unsafe { dae_control_ffi_abi_version() }, 1);
+    }
+
+    #[test]
+    fn ffi_reload_dns_cache_plan_requires_report() {
+        let rc = unsafe { dae_control_reload_dns_cache_plan(1, 1, 1, std::ptr::null_mut()) };
+        assert_eq!(rc, -1);
+        assert!(last_error_for_tests().contains("reload DNS cache plan"));
+    }
+
+    #[test]
+    fn ffi_runtime_state_report_requires_report() {
+        let rc = unsafe {
+            dae_control_runtime_state_report(1, 1, 1, 1, 1, 1, 1, 1, std::ptr::null_mut())
+        };
+        assert_eq!(rc, -1);
+        assert!(last_error_for_tests().contains("runtime state report"));
     }
 
     #[test]
