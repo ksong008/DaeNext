@@ -16,6 +16,7 @@ pub mod reload_owner_benchmark;
 pub mod reload_owner_handoff;
 pub mod run_entrypoint;
 pub mod runner;
+pub mod rust_native_control_plane;
 pub mod service_contract;
 pub mod signal;
 pub mod version;
@@ -72,6 +73,9 @@ pub use reload_owner_handoff::{
 };
 pub use run_entrypoint::{default_run_entrypoint_preflight_root, run_entrypoint_preflight_report};
 pub use runner::{DaemonOutput, run_with_args_and_version};
+pub use rust_native_control_plane::{
+    default_rust_native_control_plane_admission_root, rust_native_control_plane_admission_report,
+};
 pub use service_contract::{
     ABORT_FILE_PATH, PID_FILE_PATH, PROGRESS_FILE_PATH, ReloadOptions, ResidentRunOptions,
     reload_resident_service, run_resident_service, service_contract_capabilities,

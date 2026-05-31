@@ -19521,3 +19521,302 @@ cleanup 发现的问题：
 
 - 首次部署脚本等待 `Ready/listener` 的日志条件不完整，触发了无效回滚尝试；因为回滚路径试图直接覆盖正在运行的 `/usr/bin/daed`，遇到 `Text file busy`。实际检查确认 `/usr/bin/daed` 已是 r3 且服务 active，随后继续完成 reload 与 LAN 侧验证。
 - 后续部署脚本应避免直接覆盖运行中的可执行文件，改用 stop 后 install 或 rename/swap 方式，并且日志判断应以 journal cursor 之后的完整启动/运行态证据为准。
+
+### 混合架构 1-2 收口与远程 38 验证（2026-05-31）
+
+本节按当前混合架构计划继续完成第 1-2 项，不新增细分 stage：
+
+1. Rust-owned DNS/domain-routing event source 继续收口。
+2. Rust-owned reload clear/restore/replay 与真实 38 验证矩阵补齐。
+
+执行边界：
+
+- 修改前已复核 `DAEX_RUST_REBUILD_PLAN_2026-05-16.md` 和 `DAENEW_RUST_REBUILD_MEMO_2026-05-16.md` 中 DNS cache、domain routing owner merge、reload restore、BPF map ownership 和 runtime/control-plane 生命周期约束。
+- 不改 daewing / outbound / quic-go 协议栈。
+- 不恢复 Go BPF loader，不增加 Go BPF fallback。
+- 不以 38 测试机 `/etc/dae/config.dae` 作为实现标准；该配置只作为真实 host-write 回归输入。
+- 未部署或替换 `10.10.10.2`。
+
+代码修改：
+
+- `control/domain_routing_tracker.go`
+  - 新增 `domainRoutingDnsEvent` 与 `buildDomainRoutingDnsEvent()`。
+  - Rust-owned DNS/domain-routing 路径只向 Rust owner 传入 `ownerKey + domain bitmap + IP list` 的轻量事件边界，不再回到 Go owner snapshot/request 构造。
+- `control/control_plane_core.go`
+  - `BatchUpdateDomainRouting()` 在 `rust_inprocess` 可用时先构造轻量 DNS event，再调用 Rust domain owner。
+  - 非 `rust_inprocess` 路径仍保留原 Go tracker/helper fallback，作为非 opt-in 构建兼容路径。
+- `control/rust_routing_maps_inprocess.go`
+  - `rustDomainRoutingOwner.UpdateDnsCacheEvent()` 改为消费 `domainRoutingDnsEvent`。
+  - 继续由 Rust `DomainRoutingOwner` 负责 duplicate no-op、多 owner merge、同 IP 删除不误删和写 map 后提交 state。
+- `control/dns_cache_restore.go`
+  - `dnsCacheRestoreStats` 增加 `Err()`。
+  - reload restore 过程中如果 `__updateDnsCacheDeadline()` / cache callback 失败，返回错误而不是静默提交部分恢复状态。
+- `control/control_plane.go`
+  - `NewControlPlane()` 在 `restoreDnsCacheSnapshot()` 后检查 `restoreStats.Err()`；失败时走现有 control-plane 创建失败和 engine rollback 语义。
+- 测试补充：
+  - `TestBuildDomainRoutingDnsEventUsesThinCacheFields`
+  - `TestRestoreDnsCacheSnapshotReportsCallbackFailure`
+  - benchmark 调整为预构造轻量 DNS event，确保测量 Rust owner event 边界本身。
+
+本地验证：
+
+| 验证项 | 结果 |
+| --- | --- |
+| `go test -count=1 -tags=embedallowed,rust_inprocess ./control -run 'Test(BuildDomainRoutingDnsEvent\|RestoreDnsCacheSnapshot\|RustOwnedReloadDnsCacheRestoreAllowed\|DomainRoutingTracker\|ControlPlaneCoreClearDomainRoutingMap)'` | pass |
+| `go test -count=1 -tags=embedallowed,rust_inprocess ./control ./engine` | pass |
+| `go test -count=1 ./control ./engine` | pass |
+| `cargo test --manifest-path rust/Cargo.toml -p dae-control -p dae-datapath -p dae-ebpf-support -p dae-aya-bpf-loader --features native-ebpf` | pass |
+| `make native-ebpf-runtime-gate` | pass，`production_dataplane_admitted=true`，`reload_runtime_parity_admitted=true`，cleanup 无残留 |
+| `git diff --check` | pass |
+
+targeted benchmark（`go test -run '^$' -bench 'Benchmark(DomainRoutingMapGoUpdate|DomainRoutingMapRustOwnedDnsEventDuplicate|DomainRoutingMapRustOwnedDnsEventToggle|ReloadDnsCacheRestoreDecision)' -benchmem -count=10 -benchtime=1s -tags=embedallowed,rust_inprocess ./control`）：
+
+| Benchmark | count | mean ns/op | min ns/op | max ns/op | B/op | allocs/op |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| `BenchmarkReloadDnsCacheRestoreDecisionGoBool` | 10 | 0.22 | 0.22 | 0.24 | 0 | 0 |
+| `BenchmarkReloadDnsCacheRestoreDecisionRustOwned` | 10 | 95.10 | 92.93 | 96.71 | 16 | 1 |
+| `BenchmarkDomainRoutingMapGoUpdate` | 10 | 835.76 | 830.60 | 841.50 | 64 | 3 |
+| `BenchmarkDomainRoutingMapRustOwnedDnsEventDuplicate` | 10 | 261.45 | 255.70 | 278.00 | 208 | 4 |
+| `BenchmarkDomainRoutingMapRustOwnedDnsEventToggle` | 10 | 2847.40 | 2826.00 | 2863.00 | 208 | 4 |
+
+benchmark 结论：
+
+- DNS/domain-routing duplicate event 仍明显快于 Go direct map update：约 `261 ns/op` vs `836 ns/op`。
+- toggle event 仍约 `2.85 us/op`，主要成本仍是 owner merge + kernel map write + cgo 边界；本轮没有放宽语义来追求裸 map update 数值。
+- reload restore decision 仍是轻量 Rust gate，约 `95 ns/op`，保持可接受；长期要继续减少 cgo 边界时，应迁到 Rust-owned/in-process control-plane 而不是 helper。
+
+构建产物：
+
+- 路径：`/root/project/daed-daex-align/daed/daed-items1-2-rustowned-state-20260531`。
+- version：`daed version daex-items1-2-rustowned-state-20260531`。
+- SHA256：`d26d266f848625aa4b1aeb03fb28d81104659d58255c5acb053b7caf94d1e878`。
+- build tags：`embedallowed,rust_inprocess`。
+- `CGO_ENABLED=1`。
+- `go version -m` 确认：
+  - `github.com/daeuniverse/dae => /root/project/dae-daex-align`
+  - `github.com/daeuniverse/outbound => /root/project/outbound-daex-align`
+  - `github.com/daeuniverse/quic-go => /root/project/quic-go-rust`
+
+远程 38 真实验证：
+
+| 验证项 | 结果 |
+| --- | --- |
+| 初始状态 | pass，`dae.service` / `daed.service` 均 inactive，`/etc/dae/config.dae` sha256 为 `5f6590e9a981456e1b4fcb2166e809617960b172f3bd860b9fb4d192b01206d4` |
+| 临时 host-write | pass，安装 `/usr/bin/daed`，version `daex-items1-2-rustowned-state-20260531`，sha256 `d26d266f848625aa4b1aeb03fb28d81104659d58255c5acb053b7caf94d1e878` |
+| `export openapi` | pass，`112149` bytes |
+| 临时 `daed.service` | pass，`DAE_RUST_NATIVE_EBPF=1`、backend `auto`、`DAE_NETNS_LINK=auto`、`DAE_RUST_RESIDENT_DATAPLANE=1` |
+| WebUI/API health | pass，`/api/health` 返回 `{"healthCheck":1}` |
+| 临时 API 用户 | pass，仅存在于临时 `/etc/daed`，清理时删除 |
+| config import | pass，导入 `/etc/dae/config.dae` 的内存副本，并仅在导入内容中增加 `dns.bind: udp://127.0.0.1:1053` 以验证 DNS listener；原始 `/etc/dae/config.dae` 未修改 |
+| API dry reload | pass，`{"applied":1,"dry":true}` |
+| API real reload | pass，`{"applied":1,"dry":false}` |
+| `/api/general/state` | pass，`running=true`，version `daex-items1-2-rustowned-state-20260531`，`netnsLinkMode=netkit`，`attachBackend=tcx` |
+| `/api/runtime/overview` | pass，HTTP 200 |
+| DNS listener / cache path | pass，`cloudflare.com` UDP/1053 连续 5 次 `rcode=0`、`answers=2`，首包约 `5.59 ms`，后续 cache hit 约 `0.09-0.15 ms` |
+| HTTPS trace | pass，`ip=38.65.91.47`，`colo=LAX`，`warp=off` |
+| `systemctl reload daed.service` | pass，服务继续 running，state 仍 `attachBackend=tcx`，reload 后 DNS `rcode=0`、`answers=2` |
+| `systemctl restart daed.service` | pass，restart 后 state 仍 `running=true`、`netnsLinkMode=netkit`、`attachBackend=tcx` |
+| Rust/Aya 日志 | pass，出现 `object_source=rust-aya-skeleton default_object_source=rust-aya-skeleton kernel_ebpf_program_rewrite=true`、`Bind daed_lan_* via Rust/Aya tcx`、`Bind daed_wan_* via Rust/Aya tcx`、`Bind daed_dae0* via Rust/Aya tcx`、`Opened tproxy listener via Rust/Aya`、`Routing match set len: 10/1024`、`DNS listener started`、`[Reload] Finished` |
+| 防回退扫描 | pass，未出现 `falling back to Go writer`、`falling back to Go attach path`、`falling back to Go listener`、`falling back to Go map update`、`BpfMapBatchUpdate`、`BpfMapBatchDelete`、`ciliumLink`、`AttachCgroup`、`Bind ... via TC on`、`TCX attach failed`、`fatal`、`panic`、`parse config`、`restore DNS cache snapshot failed` |
+| 远程清理 | pass，`dae.service` / `daed.service` 均 inactive，`/usr/bin/daed`、`/etc/daed`、临时 unit、上传产物、`daerust0`、`dae0`、`daens`、`/sys/fs/bpf/dae*`、`/sys/fs/bpf/daed*` 均无残留 |
+| 原始 config | pass，`/etc/dae/config.dae` sha256 验证前后均为 `5f6590e9a981456e1b4fcb2166e809617960b172f3bd860b9fb4d192b01206d4` |
+
+验证脚本注意：
+
+- 第一次远程脚本的预清理模式误删了刚上传的 `/tmp/daed-items1-2-*` 二进制，未进入有效验证；远程清理后改用 `/tmp/daed_items12_bin` 重跑，以上结果来自第二次有效验证。
+- 第二次脚本中防回退 `grep | wc -l` 在 `pipefail` 下因 0 命中提前触发 trap，因此最终清理复查单独执行；复查结果确认远程 38 已恢复干净。
+
+本轮结论：
+
+- 第 1 项 DNS/domain-routing event source 已继续收口到轻量 event 边界，Rust owner 仍保持 duplicate no-op、多 owner merge、同 IP 删除不误删和失败不提交 state 语义。
+- 第 2 项 reload clear/restore/replay 增加 restore 失败返回错误，避免部分 DNS cache/domain routing 恢复状态被静默提交；该错误会交给现有 reload rollback 路径处理。
+- 远程 38 已完成真实 daed 产品链验证：host-write、API import/reload、systemctl reload/restart、DNS listener/cache、HTTPS trace、Rust/Aya TCX attach、日志防回退和清理均通过。
+- 当前仍是混合架构：daed 产品壳/WebUI/API 以及 daewing/outbound/quic-go 协议栈暂留 Go；Rust/Aya 继续负责 BPF/runtime/control-plane state 收口路径。
+
+### Rust native control-plane no-cgo 准入收口（2026-05-31）
+
+本节按“完成以上项目、不要细分”的要求执行，不再拆新的 stage。目标不是继续优化 `rust_inprocess` 的 cgo 边界，而是建立一条 Rust crate 内部直接串联的 control-plane/runtime admission 路径，用于证明 DNS/cache/domain-routing/reload/routing/connectivity 这些状态型热路径可以不经过 Go -> cgo -> Rust。
+
+修改前参考约束：
+
+- `DAEX_RUST_REBUILD_PLAN_2026-05-16.md`：runtime/control-plane 生命周期、reload、DNS cache、routing/domain owner、BPF map ownership。
+- `DAENEW_RUST_REBUILD_MEMO_2026-05-16.md`：DNS cache access/remove callback、domain routing owner merge、reload snapshot/restore、outbound connectivity key 维度。
+- 本文件前文混合架构边界：daed 产品壳/WebUI/API 与 daewing/outbound/quic-go 协议栈暂留 Go；BPF/runtime/DNS/routing/reload/connectivity 等状态型 control-plane 继续 Rust-owned；不以测试机 config 写特例；不恢复 Go BPF loader；不把 helper/persistent helper 作为方向。
+
+代码修改：
+
+- 新增 `rust/crates/dae-daemon/src/rust_native_control_plane.rs`。
+  - 新增 `rust_native_control_plane_admission_report()` 和默认安全 root `/tmp/dae-rust-native-control-plane-admission`。
+  - 纯 Rust 串联 `dae-dns` raw packet parse/cache restore、`dae-control` `DomainRoutingOwner`、`ReloadDnsCachePlan`、`RoutingRuleOwner`、`OutboundConnectivityOwner`。
+  - admission 报告显式输出 `rust_native_control_plane_no_cgo_admitted=true`、`hot_path_cgo_required=false`、`ffi_symbols_called=false`、`helper_required=false`、`persistent_helper_required=false`、`go_bpf_loader_required=false`。
+  - 报告仍保持 `default_switch_allowed=false` / `product_chain_switch_allowed=false`，因为本节只完成 no-cgo control-plane admission，不直接替换 daed 产品默认路径，也不部署 `10.10.10.2`。
+- `rust/crates/dae-daemon/src/runner.rs`
+  - 新增 `dae-daemon-optin rust-native-control-plane-admission --root ... --iterations ...` 命令。
+- `rust/crates/dae-daemon/src/lib.rs`
+  - 导出 no-cgo admission API。
+- `rust/crates/dae-daemon/src/tests.rs`
+  - 新增 runner/API 测试，要求 no-cgo admission 通过。
+  - 同步 Aya BPF loader contract 测试：当前默认 object source 已是 `rust-aya-skeleton`，因此 `kernel_ebpf_program_rewrite=true` 是当前合同，不再按旧 Go-adoption-only 断言 false。
+
+本地 release admission benchmark：
+
+命令：
+
+```text
+cargo run --release --manifest-path rust/Cargo.toml -p dae-daemon --bin dae-daemon-optin -- rust-native-control-plane-admission --root /tmp/dae-rust-native-control-plane-local-release-20260531 --iterations 100000
+```
+
+| 项目 | ns/op | 说明 |
+| --- | ---: | --- |
+| `dns_packet_to_domain_event_ns_per_op` | 439 | raw DNS response parse -> cache plan -> cache hit restore -> domain event seed。 |
+| `domain_routing_duplicate_ns_per_op` | 100 | Rust owner duplicate no-op，不经过 FFI/helper。 |
+| `domain_routing_toggle_ns_per_op` | 1172 | Rust owner 状态切换，包含 owner merge/plan/apply closure 边界。 |
+| `reload_transaction_ns_per_op` | 574 | Rust reload decision + domain map clear + restore replay。 |
+| `routing_owner_duplicate_ns_per_op` | 78 | Rust routing/LPM owner duplicate no-op。 |
+| `connectivity_owner_duplicate_ns_per_op` | 7 | Rust outbound connectivity owner duplicate no-op。 |
+
+对比结论：
+
+- 前一轮 `rust_inprocess` 路径仍有 cgo 边界，典型结果为 `DomainRoutingMapRustOwnedDnsEventDuplicate` 约 `261 ns/op`、toggle 约 `2.85 us/op`，并且仍有 `208 B/op`、`4 allocs/op` 的 Go/FFI 边界成本。
+- 本轮 Rust native no-cgo admission 的 release duplicate/toggle 分别约 `100 ns/op` / `1.17 us/op`，说明真正消除热路径 cgo 后才能体现 Rust-owned state 的收益。
+- 该 benchmark 是 crate 内 no-cgo admission，不等价于 daed 产品默认路径已切换；下一步若要让产品默认路径获得同样收益，需要把 Go product shell 对这些状态型事件的调用边界改为粗粒度 Rust runtime/control-plane ownership，而不是继续在 Go 内逐事件 cgo 调 Rust。
+
+本地验证：
+
+| 验证项 | 结果 |
+| --- | --- |
+| `cargo test --manifest-path rust/Cargo.toml -p dae-daemon rust_native_control_plane --features native-ebpf` | pass，2 个 no-cgo admission 测试通过。 |
+| `cargo test --manifest-path rust/Cargo.toml -p dae-control -p dae-dns -p dae-daemon -p dae-datapath -p dae-ebpf-support -p dae-aya-bpf-loader --features native-ebpf` | pass。 |
+| `go test -count=1 ./control ./engine` | pass。 |
+| `go test -count=1 -tags=embedallowed,rust_inprocess ./control ./engine` | pass。 |
+| `make native-ebpf-runtime-gate` | pass，`production_dataplane_admitted=true`，`reload_runtime_parity_admitted=true`，cleanup 无残留。 |
+| `git diff --check` | pass。 |
+
+远程 38 验证：
+
+- 上传产物：`rust/target/release/dae-daemon-optin` -> `/tmp/dae-daemon-optin-rust-native-control-plane-20260531`。
+- SHA256：`cba9d97c89a67def03301a6d3f1d15759122a319a91cae5485b20393f1410883`。
+- 只在 `/tmp` 运行 `rust-native-control-plane-admission --iterations 100000`，未 host-write `/usr/bin/dae` 或 `/usr/bin/daed`，未修改 `/etc/dae` 或 `/etc/daed`。
+- 验证前后 `dae.service` / `daed.service` 均为 inactive。
+
+远程 38 release admission benchmark：
+
+| 项目 | ns/op |
+| --- | ---: |
+| `dns_packet_to_domain_event_ns_per_op` | 1173 |
+| `domain_routing_duplicate_ns_per_op` | 201 |
+| `domain_routing_toggle_ns_per_op` | 2246 |
+| `reload_transaction_ns_per_op` | 1124 |
+| `routing_owner_duplicate_ns_per_op` | 137 |
+| `connectivity_owner_duplicate_ns_per_op` | 19 |
+
+远程 38 admission 结果：
+
+| 验证项 | 结果 |
+| --- | --- |
+| `rust_native_control_plane_no_cgo_admitted` | true |
+| `hot_path_cgo_required` | false |
+| `helper_required` | false |
+| `go_bpf_loader_required` | false |
+| DNS smoke | `dns_ip_count=1`，`dns_cache_hit_response_len=59` |
+| reload/domain smoke | `domain_reload_clear_deletes=1`，restore 后 owner/ip 均恢复 |
+| routing smoke | `routing_entries_updated=2`，LPM map 1 个 |
+| connectivity smoke | duplicate no-op 生效 |
+| cleanup | `/tmp/dae-daemon-optin-rust-native-control-plane-20260531`、`/tmp/dae-rust-native-control-plane-38-20260531`、`/tmp/dae-rust-native-control-plane-38-20260531.json` 均已删除 |
+
+本节结论：
+
+- no-cgo Rust native control-plane admission 已完成并在本地和远程 38 通过。
+- 这条路径证明 Rust-owned DNS/cache/domain-routing/reload/routing/connectivity 状态可以完全在 Rust crate 内运行，不需要 Go -> cgo -> Rust 热路径，也不需要 helper。
+- 现有 Go `rust_inprocess` 文件和 Rust `ffi.rs` 仍保留为过渡/兼容准入路径；删除它们必须等产品默认路径切到 Rust-owned runtime/control-plane 后再做。
+- 仍不触碰 daewing/outbound/quic-go 协议栈，也不改变 `10.10.10.2`。
+
+### Domain routing Rust native toggle 优化（2026-05-31）
+
+目标：
+
+- 针对上一节和 Go direct 对比暴露的问题，继续压低 `domain_routing_toggle`。
+- 本地 release 目标：低于 Go direct `BenchmarkDomainRoutingMapGoUpdate` 的 `835.76 ns/op`。
+- 不改 daewing/outbound/quic-go，不恢复 Go BPF，不增加 helper，不写测试机配置特例。
+
+问题定位：
+
+- `DomainRoutingOwner::apply_owner_snapshot_with()` 在 map write 成功路径中先调用 `plan_owner_update()` 计算一次 delta。
+- map apply 成功后，又调用 `apply_owner_update_ref()`，内部再次调用 `plan_owner_update()`，导致同一个 owner 变更被重复 plan。
+- 旧提交逻辑还会 remove 整个 owner，再把新 snapshot 的所有 IP 重插回 `ips` state；对于 A/B toggle 这种只有少数 IP 变化的场景，会不必要地触碰未变化的 IP。
+
+代码修改：
+
+- `rust/crates/dae-control/src/domain_routing.rs`
+  - `plan_owner_update()` 增加 duplicate snapshot 快速返回：旧 snapshot 与新 snapshot 完全一致时不分配 affected Vec，不再进入 merge 计算。
+  - `apply_owner_snapshot_with()` 成功写 map 后不再第二次 plan，直接复用第一次得到的 `DomainRoutingSyncPlan`。
+  - 新增 `apply_owner_snapshot_incremental()`，按 plan 只更新真正变化的 IP：
+    - `plan.deletes` 只删除 owner 对应 IP；
+    - `plan.updates` 根据新 snapshot 是否仍包含该 IP，执行 owner bitmap 更新或 owner 移除；
+    - shared IP 的 merged bitmap 继续保留其它 owner，不误删。
+  - 保持原有失败语义：map apply 失败时不提交 Rust owner state。
+
+本地 release benchmark 对比：
+
+命令：
+
+```text
+cargo run --release --manifest-path rust/Cargo.toml -p dae-daemon --bin dae-daemon-optin -- rust-native-control-plane-admission --root /tmp/dae-rust-native-control-plane-domain-incremental-opt-20260531 --iterations 100000
+```
+
+| 项目 | 优化前 no-cgo | 去重 plan 后 | 增量提交后 | Go direct 参考 | 结论 |
+| --- | ---: | ---: | ---: | ---: | --- |
+| `domain_routing_duplicate_ns_per_op` | `100 ns/op` | `43 ns/op` | `43 ns/op` | `835.76 ns/op` | Rust native 约 `19.4x` 快于 Go direct 参考。 |
+| `domain_routing_toggle_ns_per_op` | `1172 ns/op` | `872 ns/op` | `540 ns/op` | `835.76 ns/op` | Rust native 已低于 Go direct，约 `1.55x` 快。 |
+| `reload_transaction_ns_per_op` | `574 ns/op` | 未单独记录 | `519 ns/op` | 不直接可比 | 小幅下降。 |
+| `dns_packet_to_domain_event_ns_per_op` | `439 ns/op` | 未单独记录 | `419 ns/op` | 无同口径 Go direct | 小幅下降。 |
+
+说明：
+
+- `domain_routing_toggle_ns_per_op` 当前 admission benchmark 的一次 op 是 A/B toggle cycle。即使按 cycle 口径也已低于 Go direct 单次 `BenchmarkDomainRoutingMapGoUpdate` 的 `835.76 ns/op`。
+- 若按单次 A 或 B update 粗略折半，当前约 `270 ns/update`，但备忘录仍以 admission 报告的保守 cycle 口径记录。
+
+远程 38 release admission：
+
+- 上传产物：`rust/target/release/dae-daemon-optin` -> `/tmp/dae-daemon-optin-domain-routing-opt-20260531`。
+- SHA256：`8edc6cfebb051fcae55b9ada8d659e57fb7f8a8919b1bf3dbe4142057c365027`。
+- 只在 `/tmp` 运行 admission；未 host-write `/usr/bin/dae` 或 `/usr/bin/daed`；未修改 `/etc/dae` 或 `/etc/daed`。
+- 验证前后 `dae.service` / `daed.service` 均为 inactive。
+
+| 项目 | 远程 38 优化前 | 远程 38 优化后 | 结论 |
+| --- | ---: | ---: | --- |
+| `domain_routing_duplicate_ns_per_op` | `201 ns/op` | `85 ns/op` | 约 `2.36x` 提升。 |
+| `domain_routing_toggle_ns_per_op` | `2246 ns/op` | `1062 ns/op` | 约 `2.11x` 提升。 |
+| `reload_transaction_ns_per_op` | `1124 ns/op` | `1017 ns/op` | 小幅提升。 |
+| `dns_packet_to_domain_event_ns_per_op` | `1173 ns/op` | `1069 ns/op` | 小幅提升。 |
+
+远程 38 admission 结果：
+
+| 验证项 | 结果 |
+| --- | --- |
+| `rust_native_control_plane_no_cgo_admitted` | true |
+| `hot_path_cgo_required` | false |
+| `helper_required` | false |
+| `go_bpf_loader_required` | false |
+| DNS smoke | `dns_ip_count=1`，`dns_cache_hit_response_len=59` |
+| reload/domain smoke | `domain_reload_clear_deletes=1`，restore 后 owner/ip 均恢复 |
+| routing smoke | `routing_entries_updated=2` |
+| cleanup | 远程 `/tmp` 二进制、JSON、root 均已删除 |
+
+本地验证：
+
+| 验证项 | 结果 |
+| --- | --- |
+| `cargo test --manifest-path rust/Cargo.toml -p dae-control domain_routing` | pass。 |
+| `cargo test --manifest-path rust/Cargo.toml -p dae-daemon rust_native_control_plane --features native-ebpf` | pass。 |
+| `cargo test --manifest-path rust/Cargo.toml -p dae-control -p dae-dns -p dae-daemon -p dae-datapath -p dae-ebpf-support -p dae-aya-bpf-loader --features native-ebpf` | 第一次 `service_contract` notify datagram 时序失败；单独重跑通过；完整重跑通过。 |
+| `go test -count=1 ./control ./engine` | pass。 |
+| `go test -count=1 -tags=embedallowed,rust_inprocess ./control ./engine` | pass。 |
+| `make native-ebpf-runtime-gate` | pass，`production_dataplane_admitted=true`，`reload_runtime_parity_admitted=true`，cleanup 无残留。 |
+| `git diff --check` | pass。 |
+
+本节结论：
+
+- 本地 no-cgo Rust native domain routing duplicate 和 toggle 均已超过 Go direct 参考成绩。
+- 远程 38 也确认同一优化方向有效，duplicate/toggle 分别约 `2.36x` / `2.11x` 提升；远程绝对值仍受机器差异影响，不与本地 Go direct 直接横向比较。
+- 该优化没有改变 map apply 失败不提交 state、多 owner merge、shared IP 删除不误删、reload clear/restore 的语义。

@@ -205,6 +205,28 @@ func TestDomainRoutingTrackerKeepsStructuredOwnersSeparateOnRemove(t *testing.T)
 	}
 }
 
+func TestBuildDomainRoutingDnsEventUsesThinCacheFields(t *testing.T) {
+	cache := &DnsCache{
+		RouteOwnerKey: "thin-event",
+		DomainBitmap:  domainRoutingBitmap(0x40),
+		IPs:           []netip.Addr{netip.MustParseAddr("203.0.113.14")},
+		HasAnyIP:      true,
+	}
+	event, err := buildDomainRoutingDnsEvent(cache)
+	if err != nil {
+		t.Fatalf("buildDomainRoutingDnsEvent(): %v", err)
+	}
+	if event.ownerKey != "thin-event" {
+		t.Fatalf("owner key = %q, want thin-event", event.ownerKey)
+	}
+	if got := event.domainBitmap[0]; got != 0x40 {
+		t.Fatalf("domain bitmap = %#x, want %#x", got, uint32(0x40))
+	}
+	if len(event.ips) != 1 || event.ips[0] != netip.MustParseAddr("203.0.113.14") {
+		t.Fatalf("event ips = %v, want [203.0.113.14]", event.ips)
+	}
+}
+
 func TestDomainRoutingTrackerDoesNotCommitOwnerStateWhenRustWriterFails(t *testing.T) {
 	tracker := newDomainRoutingTracker()
 	ip := netip.MustParseAddr("203.0.113.13")
