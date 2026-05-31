@@ -42,9 +42,10 @@ func (c *ControlPlane) listenAndServeViaRustAya(readyChan chan<- bool, port uint
 	if err != nil {
 		return nil, err
 	}
+	openedListener := listener
 	defer func() {
 		if err != nil {
-			_ = listener.Close()
+			_ = openedListener.Close()
 		}
 	}()
 	if err = c.Serve(readyChan, listener); err != nil {

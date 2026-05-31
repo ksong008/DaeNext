@@ -19427,3 +19427,97 @@ cleanup 发现的问题：
 - Go BPF loader 不恢复；本轮涉及的 `tc_netlink` 是 Rust/Aya attach backend 的兼容路径，不是 Go BPF fallback。
 - daewing / outbound / quic-go 协议栈仍保持 Go；本轮没有替换 outbound 协议栈，也没有引入协议特例。
 - 阶段 8-10 可以进入本地提交与 tag；后续若继续推进，应进入 Rust/Aya object 默认路径在 daed 产品链中的长期运行观察、matched benchmark 和 C object 删除准入，而不是继续拆小阶段。
+
+阶段 1-10 全开 daed 验证补充（2026-05-31）：
+
+目标：
+
+- 生成同时包含阶段 1-7 Rust-owned control-plane state 收口和阶段 8-10 Rust/Aya native eBPF object 路径的 `daed` 二进制。
+- 只在远程 38 测试机验证，不部署到 `10.10.10.2`。
+- 验证范围覆盖 native runtime gate、daed 产品壳、WebUI/API、非 API-only 前台运行、临时 systemd `daed.service` start/reload/stop、Rust/Aya attach/listener handoff 和退出清理。
+
+本轮发现并修复：
+
+- 非 API-only daed 临时运行时，Rust/Aya BPF 已加载并 attach，tproxy listener handoff 已完成，但退出时触发 `panic: runtime error: invalid memory address or nil pointer dereference`。
+- 根因在 `control/rust_tproxy_listener.go:listenAndServeViaRustAya`：`Serve` 返回错误时使用 `return nil, err` 会先把具名返回值 `listener` 改成 nil，随后 defer 中 `listener.Close()` 触发 nil receiver panic。
+- 修复方式：在 listener 打开成功后用局部变量保存 `openedListener`，错误路径 defer 关闭该已打开 listener。该修复只调整生命周期回收，不改变 `listen_socket_map` key `0/1`、tproxy port、BPF map ABI、routing 规则语义或 outbound 协议栈。
+- 追加修正 `rust/crates/dae-aya-bpf-loader/src/lib.rs` 的 `load-pin` 成功报告：当 object source 为 `rust-aya-skeleton` 时输出 `kernel_ebpf_program_rewrite=true`。此前 daed 日志中的 `kernel_ebpf_program_rewrite=false` 是 JSON 缺字段导致 Go 侧 bool 零值，不代表实际回退到 C object。
+
+本地验证：
+
+| 验证项 | 结果 |
+| --- | --- |
+| `cargo test --manifest-path rust/Cargo.toml -p dae-aya-bpf-loader --features native-ebpf` | pass，21 passed |
+| `PATH=/root/.local/go1.25.9/bin:$PATH GOWORK=off go test -count=1 ./control -run 'Test(RustBpfLoader\|CleanupRustAya\|ControlPlaneCoreReloadInject\|RustAya)'` | pass |
+| `PATH=/root/.local/go1.25.9/bin:$PATH GOWORK=off go test -count=1 -tags=embedallowed ./control -run 'TestEmbeddedRustBpfLoader\|TestRustBpfLoader'` | pass |
+| `PATH=/root/.local/go1.25.9/bin:$PATH GOWORK=off go test -count=1 ./control ./engine` | pass |
+
+二进制：
+
+- 路径：`/root/project/daed-daex-align/daed/daed-stage1-10-all-enabled-20260531-r3`。
+- 版本：`daex-stage1-10-all-enabled-20260531-r3`。
+- SHA256：`921d07519194bb21bd165e4bb652b68af2022eea82df2c324d93b4cb2e4e7801`。
+- 嵌入 loader SHA256：`de3544950984eb5dec971b20f1af8c07ca377f75e576ff1e78a2637466a1e687`。
+- 构建边界：
+  - `go1.25.9`。
+  - build tags：`embedallowed,rust_inprocess`。
+  - `CGO_ENABLED=1`。
+  - `github.com/daeuniverse/dae => /root/project/dae-daex-align`。
+  - `github.com/daeuniverse/outbound => /root/project/outbound-daex-align`。
+  - `github.com/daeuniverse/quic-go => /root/project/quic-go-rust`。
+
+远程 38 验证：
+
+| 验证项 | 结果 |
+| --- | --- |
+| native runtime gate | pass，`production_dataplane_admitted=true`、`reload_runtime_parity_admitted=true`、`bpf_go_fallback_retired=true` |
+| native attach | pass，`attach-production-dae0peer-native-ebpf-program`、`attach-lan-ingress-native-ebpf-program`、`attach-production-dae0-native-ebpf-program` 均为 `tc_netlink` 且 `fallback_used=false` |
+| active TCP/UDP/DNS | pass，TCP ingress、TCP relay、UDP datapath、DNS UDP/53 均通过 |
+| daed `export openapi` | pass，OpenAPI JSON 112149 bytes，46 paths |
+| daed API-only WebUI | pass，WebUI root 返回 200；未登录 `/api/runtime/overview` 返回 401，符合认证边界 |
+| daed 非 API-only 前台运行 | pass，WebUI root 200、Rust/Aya `tcx` attach、tproxy listener handoff、Ready、退出后无 panic |
+| 临时 `/usr/bin/daed` + `daed.service` start | pass，服务 active，WebUI 200，日志显示 `object_source=rust-aya-skeleton default_object_source=rust-aya-skeleton kernel_ebpf_program_rewrite=true`、`Bind daed_dae0peer_ingress via Rust/Aya tcx on dae0peer`、`Bind daed_dae0_ingress via Rust/Aya tcx on dae0`、`Opened tproxy listener via Rust/Aya`、`Ready` |
+| 临时 `daed.service` reload | pass，使用通用 selected `global {}` / `dns {}` / `routing {}` 验证数据后，日志出现 `[Reload] Finished`，服务保持 active，WebUI 仍为 200 |
+| 临时 `daed.service` stop cleanup | pass，服务 inactive，`/sys/fs/bpf/dae` 无本轮 pin 残留，`daens`/`dae0` 无残留 |
+| 38 清理 | pass，删除临时 `/usr/bin/dae`、`/usr/bin/daed`、临时 service、临时 `/tmp` 产物和本轮验证数据库；最终 `dae`/`daed` 均 inactive |
+
+注意：
+
+- 第一次 systemd reload 用空 DB 验证时，`systemctl reload` 返回 0，但 daed 日志出现 `please select a config`。这属于测试数据不完整，不计入通过结果。
+- 第二次 reload 使用通用 selected config/dns/routing 验证通过，没有写入任何测试机特定 routing/geodata/节点/协议逻辑。
+- 本轮仍不替换 daewing / outbound / quic-go 协议栈；只验证 daed 产品壳引入阶段 1-10 的 Rust-owned control-plane state 与 Rust/Aya eBPF 路径后可启动、reload、停止并清理。
+
+10.10.10.2 部署验证（2026-05-31）：
+
+部署目标：
+
+- 将阶段 1-10 全开 `daed` r3 二进制部署到 `10.10.10.2`，使用现有 `/etc/daed/` 配置和现有 `daed.service`。
+- 不修改测试机配置规则，不写入测试机特定 routing/geodata/节点/协议逻辑。
+
+部署前：
+
+- 运行版本：`daed-daex-stage1-7-rustowners-cleanup-20260531`。
+- SHA256：`c75d259814c933c7d48a6819a0a967e787eebc9425eed54aa154f3bbb86ae8e1`。
+- `daed.service` active，`dae.service` inactive。
+
+部署后：
+
+| 验证项 | 结果 |
+| --- | --- |
+| `/usr/bin/daed --version` | `daex-stage1-10-all-enabled-20260531-r3` |
+| `/usr/bin/daed` SHA256 | `921d07519194bb21bd165e4bb652b68af2022eea82df2c324d93b4cb2e4e7801` |
+| `daed.service` | active |
+| WebUI | `http://127.0.0.1:2023/` 返回 200 |
+| Runtime API auth boundary | 未登录 `/api/runtime/overview` 返回 401 |
+| Rust/Aya object source | 日志确认 `object_source=rust-aya-skeleton default_object_source=rust-aya-skeleton kernel_ebpf_program_rewrite=true` |
+| Rust/Aya attach | 日志确认 `Bind daed_dae0peer_ingress via Rust/Aya tcx on dae0peer`、`Bind daed_dae0_ingress via Rust/Aya tcx on dae0` |
+| tproxy listener 运行态 | `daens` 存在，`dae0` up，`ss` 确认 r3 `daed` 进程持有 TCP/UDP `0.0.0.0:12345` |
+| `systemctl reload daed.service` | 返回 0，服务保持 active，WebUI reload 后仍返回 200，无 fatal/panic/parse config |
+| LAN 侧验证 | `10.10.10.4` 到 `1.1.1.1` 路由经 `10.10.10.2`，`curl https://www.cloudflare.com/cdn-cgi/trace` 成功，出口 `ip=83.147.60.195`、`colo=HKG` |
+| 运行态 BPF map 快速检查 | 可见 `routing_map`、`lpm_array_map`、`tgid_pname_map`、`cookie_pid_map` 等运行态 map |
+| 临时文件清理 | 删除 `/tmp/daed-stage1-10-all-enabled-20260531-r3` 和部署脚本临时 rollback 文件 |
+
+注意：
+
+- 首次部署脚本等待 `Ready/listener` 的日志条件不完整，触发了无效回滚尝试；因为回滚路径试图直接覆盖正在运行的 `/usr/bin/daed`，遇到 `Text file busy`。实际检查确认 `/usr/bin/daed` 已是 r3 且服务 active，随后继续完成 reload 与 LAN 侧验证。
+- 后续部署脚本应避免直接覆盖运行中的可执行文件，改用 stop 后 install 或 rename/swap 方式，并且日志判断应以 journal cursor 之后的完整启动/运行态证据为准。
