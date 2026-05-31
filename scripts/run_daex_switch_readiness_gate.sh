@@ -291,6 +291,7 @@ product = product_root.get("product_chain_recertification", {})
 readiness = product.get("production_replacement_readiness", {})
 rehearsal = product.get("daed2_product_chain_switch_rehearsal", {})
 freeze = product.get("production_host_write_plan_freeze", {})
+topology = product.get("product_chain_topology", {})
 
 native_steps = [
     step for step in owner.get("executed_steps", [])
@@ -311,7 +312,8 @@ matched_recorded = matched.get("matched_go_rust_default_daemon_benchmark_recorde
 product_chain_clean = product.get("product_chain_recertification_clean") is True
 product_switch_allowed = product.get("product_chain_switch_allowed") is True
 readiness_passed = readiness.get("ready_for_manual_authorization") is True
-rehearsal_passed = rehearsal.get("pass") is True
+rehearsal_required = topology.get("daed2_wing_repo_used") is True
+rehearsal_passed = (rehearsal.get("pass") is True) if rehearsal_required else True
 host_freeze_passed = freeze.get("pass") is True
 core_switch_readiness_passed = (
     native_gate_passed
@@ -342,7 +344,7 @@ summary = {
         "product_chain_recertification_clean": product_chain_clean,
         "product_chain_switch_allowed": product_switch_allowed,
         "production_replacement_ready_for_manual_authorization": readiness_passed,
-        "daed2_product_chain_switch_rehearsal_passed": rehearsal_passed,
+        "product_chain_switch_rehearsal_passed_or_not_required": rehearsal_passed,
         "local_host_write_plan_freeze_passed": host_freeze_passed,
         "go_fallback_retired": product.get("go_fallback_retired") is True,
         "go_fallback_not_required": product.get("go_fallback_required") is False,
@@ -360,6 +362,8 @@ summary = {
         "daed2_product_chain_switch_rehearsal_file": product.get("daed2_product_chain_switch_rehearsal_file"),
         "production_host_write_plan_freeze_file": product.get("production_host_write_plan_freeze_file"),
     },
+    "product_chain_topology": topology,
+    "daed2_product_chain_switch_rehearsal_required": rehearsal_required,
     "native_evidence": {
         "scope": owner.get("production_runtime_owner_scope"),
         "netns_link": {
@@ -399,7 +403,7 @@ summary = {
     "matched_benchmark_aggregate": matched.get("aggregate"),
     "product_chain_blockers": product.get("remaining_blockers", []),
     "production_replacement_blockers": readiness.get("readiness_blockers", []),
-    "daed2_rehearsal_blockers": rehearsal.get("blockers", []),
+    "daed2_rehearsal_blockers": rehearsal.get("blockers", []) if rehearsal_required else [],
     "local_host_write_plan_freeze_blockers": freeze.get("blockers", []),
     "source": [
         "DAEX_RUST_PERFORMANCE_OPTIMIZATION_PLAN_2026-05-24.md:Aya/BPF switch-readiness",
