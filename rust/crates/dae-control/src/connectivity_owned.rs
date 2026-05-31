@@ -237,11 +237,20 @@ impl OutboundConnectivityOwner {
     ) -> io::Result<ConnectivityOwnerApplyReport> {
         let map_id_changed = self.map_id != Some(map_id);
         let update = self.state.preview_update(event);
+        if !update.accepted {
+            return Ok(ConnectivityOwnerApplyReport {
+                map_id,
+                map_id_changed: false,
+                accepted: false,
+                changed: false,
+                skipped: true,
+                entries_updated: 0,
+                len: self.state.len(),
+            });
+        }
         if map_id_changed {
             let mut next = self.state.clone();
-            if update.accepted {
-                next.apply(event);
-            }
+            next.apply(event);
             let entries = next.entries();
             if !entries.is_empty() {
                 apply(map_id, &entries)?;
@@ -259,11 +268,11 @@ impl OutboundConnectivityOwner {
             });
         }
 
-        if !update.accepted || !update.changed {
+        if !update.changed {
             return Ok(ConnectivityOwnerApplyReport {
                 map_id,
                 map_id_changed: false,
-                accepted: update.accepted,
+                accepted: true,
                 changed: update.changed,
                 skipped: true,
                 entries_updated: 0,
@@ -301,11 +310,20 @@ impl OutboundConnectivityMapOwner {
     ) -> io::Result<ConnectivityOwnerApplyReport> {
         let map_id_changed = self.owner.map_id != Some(map_id);
         let update = self.owner.state.preview_update(event);
+        if !update.accepted {
+            return Ok(ConnectivityOwnerApplyReport {
+                map_id,
+                map_id_changed: false,
+                accepted: false,
+                changed: false,
+                skipped: true,
+                entries_updated: 0,
+                len: self.owner.state.len(),
+            });
+        }
         if map_id_changed {
             let mut next = self.owner.state.clone();
-            if update.accepted {
-                next.apply(event);
-            }
+            next.apply(event);
             let entries = next.entries();
             if !entries.is_empty() {
                 self.write_entries(map_id, &entries)?;
@@ -323,11 +341,11 @@ impl OutboundConnectivityMapOwner {
             });
         }
 
-        if !update.accepted || !update.changed {
+        if !update.changed {
             return Ok(ConnectivityOwnerApplyReport {
                 map_id,
                 map_id_changed: false,
-                accepted: update.accepted,
+                accepted: true,
                 changed: update.changed,
                 skipped: true,
                 entries_updated: 0,
