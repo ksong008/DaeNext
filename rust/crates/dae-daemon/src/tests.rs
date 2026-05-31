@@ -5,7 +5,7 @@ use crate::{
     control_plane_owner_preflight_report, daemon_identity, default_run_identity_admission_report,
     identity_preflight_report, lifecycle_smoke_report, listener_ebpf_preflight_report,
     run_default_optin_report, run_entrypoint_preflight_report, run_with_args_and_version,
-    signal_control_plane_smoke_report,
+    rust_native_control_plane_admission_report, signal_control_plane_smoke_report,
 };
 
 #[test]
@@ -96,7 +96,7 @@ fn daemon_runner_bpf_loader_contract_outputs_json() {
             .as_bool()
             .unwrap()
     );
-    assert!(!json["kernel_ebpf_program_rewrite"].as_bool().unwrap());
+    assert!(json["kernel_ebpf_program_rewrite"].as_bool().unwrap());
 }
 
 #[test]
@@ -1785,6 +1785,64 @@ fn daemon_runner_control_plane_entrypoint_command_outputs_json() {
             .unwrap()
     );
     assert!(!json["true_rust_default_daemon_admitted"].as_bool().unwrap());
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[test]
+fn rust_native_control_plane_admission_records_no_cgo_hot_path() {
+    let root = std::env::temp_dir().join(format!(
+        "dae-rust-native-control-plane-daemon-test-{}",
+        std::process::id()
+    ));
+    let report = rust_native_control_plane_admission_report(&root, 50).unwrap();
+    assert!(
+        report["rust_native_control_plane_no_cgo_admitted"]
+            .as_bool()
+            .unwrap()
+    );
+    assert!(!report["hot_path_cgo_required"].as_bool().unwrap());
+    assert!(!report["helper_required"].as_bool().unwrap());
+    assert!(!report["go_bpf_loader_required"].as_bool().unwrap());
+    assert!(report["dns_domain_routing_event_native"].as_bool().unwrap());
+    assert!(report["reload_transaction_native"].as_bool().unwrap());
+    assert!(report["routing_lpm_owner_native"].as_bool().unwrap());
+    assert!(report["connectivity_owner_native"].as_bool().unwrap());
+    assert!(
+        report["benchmark"]["dns_packet_to_domain_event_ns_per_op"]
+            .as_u64()
+            .unwrap()
+            > 0
+    );
+    assert!(!report["default_switch_allowed"].as_bool().unwrap());
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[test]
+fn daemon_runner_rust_native_control_plane_command_outputs_json() {
+    let root = std::env::temp_dir().join(format!(
+        "dae-rust-native-control-plane-runner-test-{}",
+        std::process::id()
+    ));
+    let output = run_with_args_and_version(
+        [
+            "rust-native-control-plane-admission".to_owned(),
+            "--root".to_owned(),
+            root.display().to_string(),
+            "--iterations".to_owned(),
+            "50".to_owned(),
+        ],
+        "test-version",
+    );
+    assert_eq!(output.exit_code, 0, "{}", output.stderr);
+    assert_eq!(output.stderr, "");
+    let json: Value = serde_json::from_str(&output.stdout).unwrap();
+    assert!(
+        json["rust_native_control_plane_no_cgo_admitted"]
+            .as_bool()
+            .unwrap()
+    );
+    assert!(!json["ffi_symbols_called"].as_bool().unwrap());
+    assert_eq!(json["benchmark"]["iterations"].as_u64().unwrap(), 50);
     let _ = std::fs::remove_dir_all(root);
 }
 

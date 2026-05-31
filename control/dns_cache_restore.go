@@ -6,6 +6,7 @@
 package control
 
 import (
+	"fmt"
 	"time"
 
 	"github.com/sirupsen/logrus"
@@ -17,6 +18,13 @@ type dnsCacheRestoreStats struct {
 	InvalidKeys     int
 	EmptyAnswers    int
 	FailedEntries   int
+}
+
+func (s dnsCacheRestoreStats) Err() error {
+	if s.FailedEntries == 0 {
+		return nil
+	}
+	return fmt.Errorf("restore DNS cache snapshot failed: %d/%d entries failed", s.FailedEntries, s.SnapshotEntries)
 }
 
 func restoreDnsCacheSnapshot(log *logrus.Logger, controller *DnsController, dnsCache map[string]*DnsCache) dnsCacheRestoreStats {

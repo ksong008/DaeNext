@@ -840,7 +840,11 @@ func (c *controlPlaneCore) bindDaens() (err error) {
 // be invoked every A/AAAA-record lookup.
 func (c *controlPlaneCore) BatchUpdateDomainRouting(cache *DnsCache) error {
 	if rustInprocessRoutingMapAvailable() && cache != nil && cache.RouteOwnerKey != "" {
-		return c.getRustDomainRoutingOwner().UpdateDnsCacheEvent(c.bpf.DomainRoutingMap, cache)
+		event, err := buildDomainRoutingDnsEvent(cache)
+		if err != nil {
+			return err
+		}
+		return c.getRustDomainRoutingOwner().UpdateDnsCacheEvent(c.bpf.DomainRoutingMap, event)
 	}
 	if c.domainRouting != nil && cache != nil && cache.RouteOwnerKey != "" {
 		snapshot, err := buildDomainRoutingOwnerSnapshot(cache)
