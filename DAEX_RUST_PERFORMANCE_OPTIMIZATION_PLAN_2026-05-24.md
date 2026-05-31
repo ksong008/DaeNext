@@ -19820,3 +19820,65 @@ cargo run --release --manifest-path rust/Cargo.toml -p dae-daemon --bin dae-daem
 - 本地 no-cgo Rust native domain routing duplicate 和 toggle 均已超过 Go direct 参考成绩。
 - 远程 38 也确认同一优化方向有效，duplicate/toggle 分别约 `2.36x` / `2.11x` 提升；远程绝对值仍受机器差异影响，不与本地 Go direct 直接横向比较。
 - 该优化没有改变 map apply 失败不提交 state、多 owner merge、shared IP 删除不误删、reload clear/restore 的语义。
+
+### daed r3 集成 no-cgo control-plane / domain-routing 优化验证（2026-05-31）
+
+目标：
+
+- 按最新混合架构边界，把 `dae-daex-align` 中已提交的 Rust native no-cgo control-plane admission 和 domain routing 增量优化接入 daed r3 链路。
+- daed 产品壳 / WebUI / API 和 daewing/outbound/quic-go 协议栈仍保持 Go；本轮只确认 daed r3 产物引用最新 daex 链路，并验证 Rust/Aya BPF loader、TCX/netkit、reload、DNS listener/cache、control API 和清理合同。
+- 不在 `10.10.10.2` 部署；真实 host-write 仅在远程 38 测试机执行；不以测试机配置写特例。
+
+本地提交和 tag：
+
+| 仓库 | 提交 / tag | 说明 |
+| --- | --- | --- |
+| `/root/project/dae-daex-align` | `a07ab54c`，tag `daex-rust-native-control-plane-no-cgo-20260531` | 已提交 Rust native no-cgo admission 与 domain routing 增量优化。 |
+| `/root/project/dae-wing-daex-align` | `a2aa426` | `dae-core` 子模块指向 `dae-daex-align@a07ab54c`，确保内嵌 Rust/Aya loader 资产从同一 daex 链构建。 |
+| `/root/project/daed-daex-align/daed` | `5545e38`，tag `daed-r3-rust-native-control-plane-no-cgo-20260531` | `wing` 子模块指向 `dae-wing-daex-align@a2aa426`。 |
+
+本地 daed r3 构建：
+
+| 项目 | 结果 |
+| --- | --- |
+| 构建命令 | `PATH=/root/.local/go1.25.9/bin:$PATH GOWORK=off CGO_ENABLED=1 make OUTPUT=../daed-r3-rust-native-control-plane-no-cgo-20260531 APPNAME=daed WEB_DIST=../dist VERSION=daed-r3-rust-native-control-plane-no-cgo-20260531 bundle` |
+| 二进制 | `/root/project/daed-daex-align/daed/daed-r3-rust-native-control-plane-no-cgo-20260531` |
+| size | `50M` |
+| sha256 | `c3fdfabdbec68a7dae6ac528724b2854511f93efad94c9c4308f5292e32989cd` |
+| version | `daed version daed-r3-rust-native-control-plane-no-cgo-20260531` |
+| Go 版本 | `go1.25.9` |
+| build tags | `embedallowed` |
+| module replace | `github.com/daeuniverse/dae => /root/project/dae-daex-align`，`github.com/daeuniverse/outbound => /root/project/outbound-daex-align`，`github.com/daeuniverse/quic-go => /root/project/quic-go-rust` |
+| embedded Aya loader | 从 `wing/dae-core/rust` 重新构建并复制到 `wing/dae-core/control/embedded/dae-aya-bpf-loader`，size `2807344` bytes。 |
+| WebUI dist 清理 | 首次构建发现 `dist/daed-stage1-7-rustowners-cleanup-20260531/*` 旧二进制混入 WebUI 产物，已用干净 `apps/web/dist` 重建，最终 bundle 中未再发现 `daed*` / `dae-stage*` / `>10M` WebUI 残留文件。 |
+
+远程 38 daed 产品链验证：
+
+| 验证项 | 结果 |
+| --- | --- |
+| 测试机 | `38.65.91.47:5122`，kernel `6.12.86+deb12-amd64` |
+| 初始服务状态 | `dae.service=inactive`，`daed.service=inactive` |
+| 原始配置保护 | `/etc/dae/config.dae` sha256 验证前后均为 `5f6590e9a981456e1b4fcb2166e809617960b172f3bd860b9fb4d192b01206d4` |
+| 临时 host-write | pass，仅安装 `/usr/bin/daed` 和临时 `/etc/daed` / `daed.service`；测试结束删除。 |
+| 临时 unit 环境 | `DAE_RUST_NATIVE_EBPF=1`，`DAE_RUST_NATIVE_EBPF_BACKEND=auto`，`DAE_NETNS_LINK=auto`，`DAE_RUST_RESIDENT_DATAPLANE=1` |
+| `export openapi` | pass，`112160` bytes |
+| API health/auth | pass，`/api/health={"healthCheck":1}`，临时用户创建成功 |
+| config preview/import | pass，读取 `/etc/dae/config.dae` 的导入副本，仅在导入内容中增加 `dns.bind: udp://127.0.0.1:1053` 用于 DNS listener 验证；原始配置未修改 |
+| API dry reload | pass，`{"applied":1,"dry":true}` |
+| API real reload | pass，`{"applied":1,"dry":false}` |
+| `/api/general/state` | pass，`running=true`，`netnsLinkMode=netkit`，`attachBackend=tcx`，version 为本轮 r3 版本 |
+| `/api/runtime/overview` | pass，HTTP 200，`396` bytes |
+| `/api/general/cache-stats` | pass，返回 DNS/cache/UDP/TCP 统计字段 |
+| DNS listener/cache | pass，`cloudflare.com` UDP/1053 连续 5 次 `rcode=0`、`answers=2`；首包约 `2.474 ms`，后续约 `0.227/0.176/0.118/0.277 ms` |
+| HTTPS trace | pass，`https://www.cloudflare.com/cdn-cgi/trace` 返回 `ip=38.65.91.47`、`colo=LAX`、`tls=TLSv1.3` |
+| `systemctl reload daed.service` | pass，reload 后 state 仍为 `running=true`、`netnsLinkMode=netkit`、`attachBackend=tcx`；DNS 5 次继续 `rcode=0`、`answers=2` |
+| `systemctl restart daed.service` | pass，restart 后 state 仍为 `running=true`、`netnsLinkMode=netkit`、`attachBackend=tcx` |
+| Rust/Aya 日志 | pass，出现 `Rust/Aya BPF loader loaded object_source=rust-aya-skeleton default_object_source=rust-aya-skeleton kernel_ebpf_program_rewrite=true`；`Bind daed_wan_* via Rust/Aya tcx on ens3`；`Bind daed_dae0peer_ingress via Rust/Aya tcx on dae0peer`；`Bind daed_dae0_ingress via Rust/Aya tcx on dae0`；`Opened tproxy listener via Rust/Aya`；`DNS listener started`；`[Reload] Finished` |
+| 防回退扫描 | pass，未出现 `falling back to Go writer`、`falling back to Go attach path`、`falling back to Go listener`、`falling back to Go map update`、`BpfMapBatchUpdate`、`BpfMapBatchDelete`、`ciliumLink`、`AttachCgroup`、`Bind ... via TC on`、`TCX attach failed`、`fatal`、`panic`、`parse config`、`restore DNS cache snapshot failed` |
+| 远程清理 | pass，测试结束后 `dae.service=inactive`、`daed.service=inactive`，`/usr/bin/daed` 不存在，`/etc/daed` 不存在，`/sys/fs/bpf/dae*` / `/sys/fs/bpf/daed*` 残留数 `0` |
+
+执行注意：
+
+- 第一次远程脚本的预清理误删了刚上传的 `/tmp` 二进制，未进入有效验证；第二次脚本中 API reload JSON 转义和 state summary stdin 写法不够严格，虽然系统级 reload/restart/DNS/日志已通过，但不作为准入结果。
+- 上表以修正后的第三次有效验证为准：API dry/real reload、state 校验、DNS、HTTPS、systemctl reload/restart、日志扫描和清理全部通过。
+- 本轮 daed r3 确认的是“最新 daex Rust/Aya loader 与 control-plane 优化代码已进入 daed r3 链路并通过产品级 smoke”。产品默认热路径是否完全使用 no-cgo Rust-owned control-plane，仍以后续 Rust-owned in-process/control-plane 切换计划为准；当前不改变 daewing/outbound/quic-go 协议栈边界。
