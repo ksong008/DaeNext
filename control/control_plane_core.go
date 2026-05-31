@@ -780,7 +780,7 @@ func (c *controlPlaneCore) BatchUpdateDomainRouting(cache *DnsCache) error {
 		if err != nil {
 			return err
 		}
-		return c.domainRouting.syncOwner(c.bpf.DomainRoutingMap, cache.RouteOwnerKey, snapshot, nil)
+		return c.domainRouting.syncOwner(c.bpf.DomainRoutingMap, cache.RouteOwnerKey, snapshot, c.updateDomainRoutingMapViaRustHelper)
 	}
 
 	ips := cache.cachedIPs()
@@ -788,33 +788,27 @@ func (c *controlPlaneCore) BatchUpdateDomainRouting(cache *DnsCache) error {
 		return nil
 	}
 
-	// Update bpf map.
-	// Construct keys and vals, and BpfMapBatchUpdate.
-	var keys [][4]uint32
-	var vals []bpfDomainRouting
+	updates := make([]rustDomainRoutingMapUpdate, 0, len(ips))
 	for _, ip := range ips {
 		ip6 := ip.As16()
 		key := common.Ipv6ByteSliceToUint32Array(ip6[:])
-		keys = append(keys, key)
 		r := bpfDomainRouting{}
 		if len(cache.DomainBitmap) != len(r.Bitmap) {
 			return fmt.Errorf("domain bitmap length not sync with kern program")
 		}
 		copy(r.Bitmap[:], cache.DomainBitmap)
-		vals = append(vals, r)
+		updates = append(updates, rustDomainRoutingMapUpdate{
+			Key:    key,
+			Bitmap: r.Bitmap,
+		})
 	}
-	if _, err := BpfMapBatchUpdate(c.bpf.DomainRoutingMap, keys, vals, &ebpf.BatchOptions{
-		ElemFlags: uint64(ebpf.UpdateAny),
-	}); err != nil {
-		return err
-	}
-	return nil
+	return c.updateDomainRoutingMapViaRustHelper(c.bpf.DomainRoutingMap, updates, nil)
 }
 
 // BatchRemoveDomainRouting remove bpf map domain_routing.
 func (c *controlPlaneCore) BatchRemoveDomainRouting(cache *DnsCache) error {
 	if c.domainRouting != nil && cache != nil && cache.RouteOwnerKey != "" {
-		return c.domainRouting.syncOwner(c.bpf.DomainRoutingMap, cache.RouteOwnerKey, domainRoutingOwnerSnapshot{}, nil)
+		return c.domainRouting.syncOwner(c.bpf.DomainRoutingMap, cache.RouteOwnerKey, domainRoutingOwnerSnapshot{}, c.updateDomainRoutingMapViaRustHelper)
 	}
 
 	ips := cache.cachedIPs()
@@ -822,22 +816,17 @@ func (c *controlPlaneCore) BatchRemoveDomainRouting(cache *DnsCache) error {
 		return nil
 	}
 
-	// Update bpf map.
-	// Construct keys and vals, and BpfMapBatchUpdate.
-	var keys [][4]uint32
+	keys := make([][4]uint32, 0, len(ips))
 	for _, ip := range ips {
 		ip6 := ip.As16()
 		keys = append(keys, common.Ipv6ByteSliceToUint32Array(ip6[:]))
 	}
-	if _, err := BpfMapBatchDelete(c.bpf.DomainRoutingMap, keys); err != nil {
-		return err
-	}
-	return nil
+	return c.updateDomainRoutingMapViaRustHelper(c.bpf.DomainRoutingMap, nil, keys)
 }
 
-func (c *controlPlaneCore) clearDomainRoutingMapForReload() {
+func (c *controlPlaneCore) clearDomainRoutingMapForReload() error {
 	if c == nil || c.bpf == nil || c.bpf.DomainRoutingMap == nil {
-		return
+		return nil
 	}
 	keys := make([][4]uint32, 0)
 	var key [4]uint32
@@ -846,12 +835,13 @@ func (c *controlPlaneCore) clearDomainRoutingMapForReload() {
 	for iter.Next(&key, &val) {
 		keys = append(keys, key)
 	}
+	if err := iter.Err(); err != nil {
+		return fmt.Errorf("iterate domain_routing_map for reload clear: %w", err)
+	}
 	if len(keys) == 0 {
-		return
+		return nil
 	}
-	for i := range keys {
-		_ = c.bpf.DomainRoutingMap.Delete(&keys[i])
-	}
+	return c.updateDomainRoutingMapViaRustHelper(c.bpf.DomainRoutingMap, nil, keys)
 }
 
 // EjectBpf will resect bpf from destroying life-cycle of control plane core.

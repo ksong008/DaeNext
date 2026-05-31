@@ -122,6 +122,9 @@ func (b *RoutingMatcherBuilder) updateKernelRoutingMapsViaRustHelper() error {
 			},
 		})
 	}
+	if rustInprocessRoutingMapAvailable() {
+		return applyKernelRoutingMapsViaRustInprocess(request)
+	}
 	payload, err := json.Marshal(request)
 	if err != nil {
 		return fmt.Errorf("encode Rust routing map request: %w", err)
@@ -156,6 +159,12 @@ func (c *controlPlaneCore) updateDomainRoutingMapViaRustHelper(
 	if m == nil {
 		return nil
 	}
+	if updates == nil {
+		updates = []rustDomainRoutingMapUpdate{}
+	}
+	if deletes == nil {
+		deletes = [][4]uint32{}
+	}
 	mapID, err := bpfMapID(m)
 	if err != nil {
 		return err
@@ -164,6 +173,9 @@ func (c *controlPlaneCore) updateDomainRoutingMapViaRustHelper(
 		MapID:   mapID,
 		Updates: updates,
 		Deletes: deletes,
+	}
+	if rustInprocessRoutingMapAvailable() {
+		return updateDomainRoutingMapViaRustInprocess(request)
 	}
 	if c != nil {
 		if err := c.getRustDomainRoutingHelper().Update(request); err == nil {
@@ -181,6 +193,12 @@ func updateDomainRoutingMapViaRustProcessHelperForMap(
 	if m == nil {
 		return nil
 	}
+	if updates == nil {
+		updates = []rustDomainRoutingMapUpdate{}
+	}
+	if deletes == nil {
+		deletes = [][4]uint32{}
+	}
 	mapID, err := bpfMapID(m)
 	if err != nil {
 		return err
@@ -193,6 +211,12 @@ func updateDomainRoutingMapViaRustProcessHelperForMap(
 }
 
 func updateDomainRoutingMapViaRustProcessHelper(request rustDomainRoutingMapApplyRequest) error {
+	if request.Updates == nil {
+		request.Updates = []rustDomainRoutingMapUpdate{}
+	}
+	if request.Deletes == nil {
+		request.Deletes = [][4]uint32{}
+	}
 	payload, err := json.Marshal(request)
 	if err != nil {
 		return fmt.Errorf("encode Rust domain routing map request: %w", err)

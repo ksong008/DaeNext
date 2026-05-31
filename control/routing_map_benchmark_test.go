@@ -53,6 +53,7 @@ func BenchmarkRoutingMapRustHelperUpdate(b *testing.B) {
 		RoutingMapID:   mapID,
 		LpmArrayMapID:  mapID,
 		LpmEntries:     []rustLpmArrayMapEntry{},
+		LpmMaps:        []rustLpmMapBuildSpec{},
 		RoutingEntries: make([]rustRoutingMapEntry, 0, len(values)),
 	}
 	for index, value := range values {
@@ -76,6 +77,46 @@ func BenchmarkRoutingMapRustHelperUpdate(b *testing.B) {
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
 		if _, err := runRustBpfLoaderHelperInput(payload, "routing-map", "apply"); err != nil {
+			b.Fatal(err)
+		}
+	}
+}
+
+func BenchmarkRoutingMapRustInprocessUpdate(b *testing.B) {
+	if !rustInprocessRoutingMapAvailable() {
+		b.Skip("Rust in-process routing map writer is not enabled")
+	}
+	m := newBenchmarkRoutingMap(b)
+	defer m.Close()
+	mapID, err := bpfMapID(m)
+	if err != nil {
+		b.Fatal(err)
+	}
+	_, values := benchmarkRoutingEntries()
+	request := rustRoutingMapApplyRequest{
+		RoutingMapID:   mapID,
+		LpmArrayMapID:  mapID,
+		LpmEntries:     []rustLpmArrayMapEntry{},
+		LpmMaps:        []rustLpmMapBuildSpec{},
+		RoutingEntries: make([]rustRoutingMapEntry, 0, len(values)),
+	}
+	for index, value := range values {
+		request.RoutingEntries = append(request.RoutingEntries, rustRoutingMapEntry{
+			Index: uint32(index),
+			Value: rustBpfMatchSet{
+				Value:    value.Value,
+				Not:      value.Not,
+				Type:     value.Type,
+				Outbound: value.Outbound,
+				Must:     value.Must,
+				Mark:     value.Mark,
+			},
+		})
+	}
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		if err := applyKernelRoutingMapsViaRustInprocess(request); err != nil {
 			b.Fatal(err)
 		}
 	}
@@ -188,6 +229,68 @@ func BenchmarkRoutingMapRustHelperUpdateWithLpmBuild(b *testing.B) {
 	}
 }
 
+func BenchmarkRoutingMapRustInprocessUpdateWithLpmBuild(b *testing.B) {
+	if !rustInprocessRoutingMapAvailable() {
+		b.Skip("Rust in-process routing map writer is not enabled")
+	}
+	routingMap := newBenchmarkRoutingMap(b)
+	defer routingMap.Close()
+	lpmTemplate := newBenchmarkLpmTemplateMap(b)
+	defer lpmTemplate.Close()
+	lpmArrayMap := newBenchmarkLpmArrayMap(b)
+	defer lpmArrayMap.Close()
+	routingMapID, err := bpfMapID(routingMap)
+	if err != nil {
+		b.Fatal(err)
+	}
+	lpmArrayMapID, err := bpfMapID(lpmArrayMap)
+	if err != nil {
+		b.Fatal(err)
+	}
+	_, values := benchmarkRoutingEntriesWithLpm()
+	lpmKey := cidrToBpfLpmKey(netip.MustParsePrefix("203.0.113.0/24"))
+	request := rustRoutingMapApplyRequest{
+		RoutingMapID:  routingMapID,
+		LpmArrayMapID: lpmArrayMapID,
+		LpmEntries:    []rustLpmArrayMapEntry{},
+		LpmMaps: []rustLpmMapBuildSpec{{
+			Index:      0,
+			Flags:      lpmTemplate.Flags(),
+			MaxEntries: lpmTemplate.MaxEntries(),
+			KeySize:    lpmTemplate.KeySize(),
+			ValueSize:  lpmTemplate.ValueSize(),
+			Entries: []rustLpmMapEntry{{
+				Key: rustBpfLpmKey{
+					PrefixLen: lpmKey.PrefixLen,
+					Data:      lpmKey.Data,
+				},
+				Value: 1,
+			}},
+		}},
+		RoutingEntries: make([]rustRoutingMapEntry, 0, len(values)),
+	}
+	for index, value := range values {
+		request.RoutingEntries = append(request.RoutingEntries, rustRoutingMapEntry{
+			Index: uint32(index),
+			Value: rustBpfMatchSet{
+				Value:    value.Value,
+				Not:      value.Not,
+				Type:     value.Type,
+				Outbound: value.Outbound,
+				Must:     value.Must,
+				Mark:     value.Mark,
+			},
+		})
+	}
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		if err := applyKernelRoutingMapsViaRustInprocess(request); err != nil {
+			b.Fatal(err)
+		}
+	}
+}
+
 func BenchmarkRoutingNativePlanGoBuildWithLpm(b *testing.B) {
 	rules := benchmarkRoutingNativePlanRules()
 	var checksum uint64
@@ -217,7 +320,12 @@ func BenchmarkDomainRoutingMapGoUpdate(b *testing.B) {
 	}
 }
 
-func BenchmarkDomainRoutingMapGoReloadClear(b *testing.B) {
+func BenchmarkDomainRoutingMapRustReloadClear(b *testing.B) {
+	helperPath := strings.TrimSpace(os.Getenv(rustBpfLoaderHelperEnv))
+	if helperPath == "" {
+		b.Skipf("%s is not set", rustBpfLoaderHelperEnv)
+	}
+	b.Setenv(rustBpfLoaderHelperEnv, helperPath)
 	m := newBenchmarkDomainRoutingMap(b)
 	defer m.Close()
 	key, value := benchmarkDomainRoutingEntry()
@@ -241,7 +349,9 @@ func BenchmarkDomainRoutingMapGoReloadClear(b *testing.B) {
 			}
 		}
 		b.StartTimer()
-		core.clearDomainRoutingMapForReload()
+		if err := core.clearDomainRoutingMapForReload(); err != nil {
+			b.Fatal(err)
+		}
 	}
 }
 
@@ -273,6 +383,67 @@ func BenchmarkDomainRoutingMapRustHelperUpdate(b *testing.B) {
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
 		if _, err := runRustBpfLoaderHelperInput(payload, "domain-routing-map", "apply"); err != nil {
+			b.Fatal(err)
+		}
+	}
+}
+
+func BenchmarkDomainRoutingMapRustInprocessUpdate(b *testing.B) {
+	if !rustInprocessRoutingMapAvailable() {
+		b.Skip("Rust in-process domain routing map writer is not enabled")
+	}
+	m := newBenchmarkDomainRoutingMap(b)
+	defer m.Close()
+	mapID, err := bpfMapID(m)
+	if err != nil {
+		b.Fatal(err)
+	}
+	key, value := benchmarkDomainRoutingEntry()
+	request := rustDomainRoutingMapApplyRequest{
+		MapID: mapID,
+		Updates: []rustDomainRoutingMapUpdate{{
+			Key:    key,
+			Bitmap: value.Bitmap,
+		}},
+		Deletes: [][4]uint32{},
+	}
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		if err := updateDomainRoutingMapViaRustInprocess(request); err != nil {
+			b.Fatal(err)
+		}
+	}
+}
+
+func BenchmarkDomainRoutingMapRustInprocessReloadClear(b *testing.B) {
+	if !rustInprocessRoutingMapAvailable() {
+		b.Skip("Rust in-process domain routing map writer is not enabled")
+	}
+	m := newBenchmarkDomainRoutingMap(b)
+	defer m.Close()
+	key, value := benchmarkDomainRoutingEntry()
+	keys := [][4]uint32{
+		key,
+		{0, 0, 0xffff, 0xcb00710b},
+	}
+	core := &controlPlaneCore{
+		bpf: &bpfObjects{
+			bpfMaps: bpfMaps{
+				DomainRoutingMap: m,
+			},
+		},
+	}
+	b.ReportAllocs()
+	for i := 0; i < b.N; i++ {
+		b.StopTimer()
+		for _, key := range keys {
+			if err := m.Update(key, value, ebpf.UpdateAny); err != nil {
+				b.Fatal(err)
+			}
+		}
+		b.StartTimer()
+		if err := core.clearDomainRoutingMapForReload(); err != nil {
 			b.Fatal(err)
 		}
 	}
