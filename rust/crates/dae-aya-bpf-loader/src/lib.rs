@@ -780,13 +780,13 @@ where
     R: BufRead,
     W: Write,
 {
-    let mut cache = dae_ebpf_support::ConnectivityMapFdCache::default();
+    let mut owner = dae_control::OutboundConnectivityMapOwner::default();
     for line in reader.lines() {
         let line = line?;
         if line.trim().is_empty() {
             continue;
         }
-        let response = handle_connectivity_map_serve_line(&mut cache, &line);
+        let response = handle_connectivity_map_serve_line(&mut owner, &line);
         writer.write_all(response.as_bytes())?;
         writer.write_all(b"\n")?;
         writer.flush()?;
@@ -799,7 +799,7 @@ where
     R: Read,
     W: Write,
 {
-    let mut cache = dae_ebpf_support::ConnectivityMapFdCache::default();
+    let mut owner = dae_control::OutboundConnectivityMapOwner::default();
     let mut request = [0_u8; 8];
     loop {
         match reader.read_exact(&mut request) {
@@ -807,14 +807,14 @@ where
             Err(err) if err.kind() == io::ErrorKind::UnexpectedEof => return Ok(()),
             Err(err) => return Err(err),
         }
-        let response = handle_connectivity_map_serve_binary_request(&mut cache, request);
+        let response = handle_connectivity_map_serve_binary_request(&mut owner, request);
         writer.write_all(&response)?;
         writer.flush()?;
     }
 }
 
 fn handle_connectivity_map_serve_binary_request(
-    cache: &mut dae_ebpf_support::ConnectivityMapFdCache,
+    owner: &mut dae_control::OutboundConnectivityMapOwner,
     request: [u8; 8],
 ) -> [u8; 8] {
     let map_id = u32::from_le_bytes([request[0], request[1], request[2], request[3]]);
@@ -831,10 +831,12 @@ fn handle_connectivity_map_serve_binary_request(
     };
     let mut response = [0_u8; 8];
     response[4..8].copy_from_slice(&map_id.to_le_bytes());
-    match cache.update_by_id(map_id, event) {
-        Ok(plan) => {
+    match owner.apply_event_by_id(map_id, event) {
+        Ok(report) => {
             response[0] = 0;
-            response[1] = u8::from(plan.written);
+            response[1] = u8::from(report.entries_updated > 0);
+            response[2] = u8::from(report.map_id_changed);
+            response[3] = u8::from(report.accepted);
         }
         Err(_) => {
             response[0] = 1;
@@ -844,7 +846,7 @@ fn handle_connectivity_map_serve_binary_request(
 }
 
 fn handle_connectivity_map_serve_line(
-    cache: &mut dae_ebpf_support::ConnectivityMapFdCache,
+    owner: &mut dae_control::OutboundConnectivityMapOwner,
     line: &str,
 ) -> String {
     let options = match parse_connectivity_map_serve_request(line) {
@@ -861,16 +863,43 @@ fn handle_connectivity_map_serve_line(
         is_init: options.is_init,
         dryrun: options.dryrun,
     };
-    match cache.update_by_id(options.map_id, event) {
-        Ok(plan) => {
-            connectivity_map_pass_response(options.map_id, plan, options.dryrun, options.is_init)
-                .to_string()
+    match owner.apply_event_by_id(options.map_id, event) {
+        Ok(report) => {
+            connectivity_map_owner_pass_response(options.map_id, event, report).to_string()
         }
         Err(err) => {
             connectivity_map_error_response(format!("connectivity map update failed: {err}"))
                 .to_string()
         }
     }
+}
+
+fn connectivity_map_owner_pass_response(
+    map_id: u32,
+    event: dae_ebpf_support::ConnectivityEvent,
+    report: dae_control::ConnectivityOwnerApplyReport,
+) -> Value {
+    json!({
+        "status": "pass",
+        "loader": "rust",
+        "owner": "dae-control",
+        "scope": "outbound-connectivity-map-update",
+        "map_id": map_id,
+        "map_id_changed": report.map_id_changed,
+        "written": report.entries_updated > 0,
+        "entries_updated": report.entries_updated,
+        "state_entries": report.len,
+        "key": {
+            "outbound": event.key.outbound,
+            "l4proto": event.key.l4proto,
+            "ipversion": event.key.ipversion,
+        },
+        "value": u32::from(event.alive),
+        "accepted": report.accepted,
+        "changed": report.changed,
+        "dryrun": event.dryrun,
+        "is_init": event.is_init,
+    })
 }
 
 fn connectivity_map_pass_response(
@@ -2726,23 +2755,25 @@ mod tests {
 
     #[test]
     fn connectivity_map_serve_dryrun_skip_does_not_open_map() {
-        let mut cache = dae_ebpf_support::ConnectivityMapFdCache::default();
+        let mut owner = dae_control::OutboundConnectivityMapOwner::default();
         let response = handle_connectivity_map_serve_line(
-            &mut cache,
+            &mut owner,
             r#"{"map_id":0,"outbound":2,"l4_proto":6,"ip_version":4,"alive":true,"is_init":false,"dryrun":true}"#,
         );
         let json: Value = serde_json::from_str(&response).unwrap();
         assert_eq!(json["status"].as_str().unwrap(), "pass");
         assert!(!json["written"].as_bool().unwrap());
+        assert!(!json["accepted"].as_bool().unwrap());
+        assert_eq!(json["owner"].as_str().unwrap(), "dae-control");
         assert_eq!(json["key"]["outbound"].as_u64().unwrap(), 2);
-        assert!(cache.is_empty());
+        assert!(owner.state_owner().state().is_empty());
     }
 
     #[test]
     fn connectivity_map_serve_binary_dryrun_skip_does_not_open_map() {
-        let mut cache = dae_ebpf_support::ConnectivityMapFdCache::default();
+        let mut owner = dae_control::OutboundConnectivityMapOwner::default();
         let response = handle_connectivity_map_serve_binary_request(
-            &mut cache,
+            &mut owner,
             [
                 0,
                 0,
@@ -2756,17 +2787,19 @@ mod tests {
         );
         assert_eq!(response[0], 0);
         assert_eq!(response[1], 0);
+        assert_eq!(response[2], 0);
+        assert_eq!(response[3], 0);
         assert_eq!(
             u32::from_le_bytes([response[4], response[5], response[6], response[7]]),
             0
         );
-        assert!(cache.is_empty());
+        assert!(owner.state_owner().state().is_empty());
     }
 
     #[test]
     fn connectivity_map_serve_reports_malformed_requests() {
-        let mut cache = dae_ebpf_support::ConnectivityMapFdCache::default();
-        let response = handle_connectivity_map_serve_line(&mut cache, "{bad-json");
+        let mut owner = dae_control::OutboundConnectivityMapOwner::default();
+        let response = handle_connectivity_map_serve_line(&mut owner, "{bad-json");
         let json: Value = serde_json::from_str(&response).unwrap();
         assert_eq!(json["status"].as_str().unwrap(), "error");
         assert!(
