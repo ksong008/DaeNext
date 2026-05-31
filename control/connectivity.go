@@ -8,7 +8,6 @@ package control
 import (
 	"strconv"
 
-	"github.com/cilium/ebpf"
 	"github.com/daeuniverse/dae/component/outbound/dialer"
 	"github.com/sirupsen/logrus"
 	"golang.org/x/sys/unix"
@@ -31,10 +30,6 @@ func (c *controlPlaneCore) outboundAliveChangeCallback(outbound uint8, dryrun bo
 			return
 		default:
 		}
-		useRustOwner := rustInprocessRoutingMapAvailable()
-		if !isInit && dryrun && !useRustOwner {
-			return
-		}
 		if !isInit || c.log.IsLevelEnabled(logrus.TraceLevel) {
 			strAlive := "NOT ALIVE"
 			if alive {
@@ -45,31 +40,17 @@ func (c *controlPlaneCore) outboundAliveChangeCallback(outbound uint8, dryrun bo
 			}).Tracef("Outbound <%v> %v -> %v, notify the kernel program.", c.outboundId2Name[outbound], networkType.StringWithoutDns(), strAlive)
 		}
 
-		value := uint32(0)
-		if alive {
-			value = 1
-		}
 		l4proto := networkType.L4Proto.ToL4Proto()
 		ipversion := networkType.IpVersion.ToIpVersion()
-		var err error
-		if useRustOwner {
-			err = c.getRustOutboundConnectivityOwner().Update(
-				c.bpf.OutboundConnectivityMap,
-				outbound,
-				l4proto,
-				ipversion,
-				alive,
-				isInit,
-				dryrun,
-			)
-		} else {
-			err = c.bpf.OutboundConnectivityMap.Update(bpfOutboundConnectivityQuery{
-				Outbound:  outbound,
-				L4proto:   l4proto,
-				Ipversion: ipversion,
-			}, value, ebpf.UpdateAny)
-		}
-		if err != nil {
+		if err := c.getRustOutboundConnectivityOwner().Update(
+			c.bpf.OutboundConnectivityMap,
+			outbound,
+			l4proto,
+			ipversion,
+			alive,
+			isInit,
+			dryrun,
+		); err != nil {
 			c.log.WithFields(logrus.Fields{
 				"alive":    alive,
 				"network":  networkType.StringWithoutDns(),

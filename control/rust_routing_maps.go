@@ -122,9 +122,6 @@ func (b *RoutingMatcherBuilder) updateKernelRoutingMapsViaRustHelper() error {
 			},
 		})
 	}
-	if rustInprocessRoutingMapAvailable() {
-		return applyKernelRoutingMapsViaRustOwnedInprocess(request)
-	}
 	payload, err := json.Marshal(request)
 	if err != nil {
 		return fmt.Errorf("encode Rust routing map request: %w", err)
@@ -173,9 +170,6 @@ func (c *controlPlaneCore) updateDomainRoutingMapViaRustHelper(
 		MapID:   mapID,
 		Updates: updates,
 		Deletes: deletes,
-	}
-	if rustInprocessRoutingMapAvailable() {
-		return updateDomainRoutingMapViaRustInprocess(request)
 	}
 	if c != nil {
 		if err := c.getRustDomainRoutingHelper().Update(request); err == nil {
