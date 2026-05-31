@@ -693,6 +693,29 @@ fn outbound_connectivity_owner_does_not_commit_when_map_apply_fails() {
 }
 
 #[test]
+fn outbound_connectivity_owner_dryrun_reject_does_not_install_map() {
+    let tcp4 = ConnectivityKey {
+        outbound: 2,
+        l4proto: 6,
+        ipversion: 4,
+    };
+    let mut owner = OutboundConnectivityOwner::default();
+    let report = owner
+        .apply_event_with(1001, connectivity_event(tcp4, true, false, true), |_, _| {
+            panic!("rejected dryrun connectivity event must not write map")
+        })
+        .unwrap();
+
+    assert!(!report.map_id_changed);
+    assert!(!report.accepted);
+    assert!(!report.changed);
+    assert!(report.skipped);
+    assert_eq!(report.entries_updated, 0);
+    assert_eq!(owner.map_id(), None);
+    assert!(owner.state().is_empty());
+}
+
+#[test]
 fn routing_native_plan_builds_kernel_lpm_abi_without_helper_boundary() {
     let rules = vec![
         RoutingNativeRule::new(RoutingNativeMatch::DomainSet, OutboundIndex(2)),
