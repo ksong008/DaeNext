@@ -17,6 +17,10 @@ func applyKernelRoutingMapsViaRustInprocess(request rustRoutingMapApplyRequest) 
 	return fmt.Errorf("Rust in-process routing map writer is not enabled")
 }
 
+func applyKernelRoutingMapsViaRustOwnedInprocess(request rustRoutingMapApplyRequest) error {
+	return fmt.Errorf("Rust in-process routing map owner is not enabled")
+}
+
 func updateDomainRoutingMapViaRustInprocess(request rustDomainRoutingMapApplyRequest) error {
 	return fmt.Errorf("Rust in-process domain routing map writer is not enabled")
 }

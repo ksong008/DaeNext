@@ -1,0 +1,115 @@
+use std::io;
+
+use dae_ebpf_support::apply_routing_maps_with_lpm_build_by_id;
+
+use crate::routing_native::RoutingNativeBuildPlan;
+
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct RoutingMapOwner {
+    routing_map_id: Option<u32>,
+    lpm_array_map_id: Option<u32>,
+    checksum: Option<u64>,
+    plan: RoutingNativeBuildPlan,
+}
+
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct RoutingMapOwnerApplyReport {
+    pub routing_map_id: u32,
+    pub lpm_array_map_id: u32,
+    pub map_changed: bool,
+    pub plan_changed: bool,
+    pub skipped: bool,
+    pub checksum: u64,
+    pub routing_entries_updated: usize,
+    pub lpm_maps_created: usize,
+}
+
+impl RoutingMapOwner {
+    pub fn routing_map_id(&self) -> Option<u32> {
+        self.routing_map_id
+    }
+
+    pub fn lpm_array_map_id(&self) -> Option<u32> {
+        self.lpm_array_map_id
+    }
+
+    pub fn checksum(&self) -> Option<u64> {
+        self.checksum
+    }
+
+    pub fn plan(&self) -> &RoutingNativeBuildPlan {
+        &self.plan
+    }
+
+    pub fn apply_snapshot_by_id(
+        &mut self,
+        routing_map_id: u32,
+        lpm_array_map_id: u32,
+        plan: RoutingNativeBuildPlan,
+    ) -> io::Result<RoutingMapOwnerApplyReport> {
+        self.apply_snapshot_with(
+            routing_map_id,
+            lpm_array_map_id,
+            plan,
+            |routing, lpm, plan| {
+                apply_routing_maps_with_lpm_build_by_id(
+                    routing,
+                    lpm,
+                    &plan.routing_entries,
+                    &[],
+                    &plan.lpm_maps,
+                )
+                .map(|_| ())
+            },
+        )
+    }
+
+    pub fn apply_snapshot_with(
+        &mut self,
+        routing_map_id: u32,
+        lpm_array_map_id: u32,
+        plan: RoutingNativeBuildPlan,
+        apply: impl FnOnce(u32, u32, &RoutingNativeBuildPlan) -> io::Result<()>,
+    ) -> io::Result<RoutingMapOwnerApplyReport> {
+        plan.validate()
+            .map_err(|err| io::Error::new(io::ErrorKind::InvalidInput, err))?;
+        let checksum = plan.checksum();
+        let map_changed = self.routing_map_id != Some(routing_map_id)
+            || self.lpm_array_map_id != Some(lpm_array_map_id);
+        let plan_changed = self.checksum != Some(checksum);
+        if !map_changed && !plan_changed {
+            return Ok(RoutingMapOwnerApplyReport {
+                routing_map_id,
+                lpm_array_map_id,
+                map_changed: false,
+                plan_changed: false,
+                skipped: true,
+                checksum,
+                routing_entries_updated: 0,
+                lpm_maps_created: 0,
+            });
+        }
+
+        apply(routing_map_id, lpm_array_map_id, &plan)?;
+        let routing_entries_updated = plan.routing_entries.len();
+        let lpm_maps_created = plan.lpm_maps.len();
+        self.routing_map_id = Some(routing_map_id);
+        self.lpm_array_map_id = Some(lpm_array_map_id);
+        self.checksum = Some(checksum);
+        self.plan = plan;
+        Ok(RoutingMapOwnerApplyReport {
+            routing_map_id,
+            lpm_array_map_id,
+            map_changed,
+            plan_changed,
+            skipped: false,
+            checksum,
+            routing_entries_updated,
+            lpm_maps_created,
+        })
+    }
+
+    pub fn clear(&mut self) {
+        *self = Self::default();
+    }
+}

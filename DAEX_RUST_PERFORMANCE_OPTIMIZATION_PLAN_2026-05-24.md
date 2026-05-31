@@ -18313,3 +18313,92 @@ benchmark 结论：
 - `rust_inprocess` 产品二进制已在远程 38 机完成真实 host write、API import/reload、systemctl reload、systemctl restart、DNS 首包、HTTPS trace、TCX/netkit attach 和清理验证。
 - routing/lpm/domain routing writer 在该二进制中走进程内 Rust staticlib，远端日志未出现 routing/domain routing helper writer 或 Go direct map writer fallback。
 - 本轮证明 `rust_inprocess` 可作为短期去掉 helper/process JSON 边界的候选产品路径；但默认构建仍未切换，且长期架构仍应继续推进 Rust-owned state / Rust-owned control-plane，避免把 cgo 适配层作为最终形态。
+
+### Rust-owned state / in-process control-plane 入口实现记录（2026-05-31）
+
+本节在 `daex-rust-inprocess-control-20260531` 本地 tag 之后直接进入长期方向。目标不是继续扩大 helper，也不是把 cgo 视为最终架构，而是先把 routing map owner state 下沉到 Rust 侧，让进程内 Rust control-plane 能判断 map id / plan checksum / reload replay，从而减少 Go 侧重复构造和重复写 map。
+
+执行边界：
+
+- 本节只推进 routing/lpm map owner state，不改 outbound / daewing / Go userspace control-plane 权威边界。
+- 默认非 `rust_inprocess` 构建仍不变。
+- `rust_inprocess` opt-in 产品路径从 stateless writer 改为优先走 Rust-owned routing owner。
+- 不为了 benchmark 放宽语义；Rust owner 强制 `routing_map` plan 必须有 fallback 且 fallback last。
+- 不部署到 `10.10.10.2`；本节只做本地代码、测试和 benchmark。
+
+代码修改：
+
+- `rust/crates/dae-control/src/routing_owned.rs`
+  - 新增 `RoutingMapOwner`，持有：
+    - `routing_map_id`
+    - `lpm_array_map_id`
+    - last successful `checksum`
+    - last successful `RoutingNativeBuildPlan`
+  - 新增 `apply_snapshot_with()` / `apply_snapshot_by_id()`：
+    - map id 或 plan checksum 变化时写入 kernel map；
+    - 同 map + 同 plan 时返回 `skipped=true`，不重复写 kernel map；
+    - apply 失败时不更新 owner state。
+  - 新增 `RoutingMapOwnerApplyReport`，记录 `map_changed`、`plan_changed`、`skipped`、checksum、写入计数。
+- `rust/crates/dae-control/src/ffi.rs`
+  - 新增 opaque owner FFI：
+    - `dae_control_routing_owner_new`
+    - `dae_control_routing_owner_free`
+    - `dae_control_routing_owner_apply_snapshot_by_id`
+  - 复用现有 `FfiRoutingMapEntry` / `FfiLpmMapBuildSpec` ABI，并转换为 `RoutingNativeBuildPlan`。
+  - 增加 null owner 防护测试。
+- `rust/crates/dae-control/src/lib.rs`
+  - 导出 `routing_owned`。
+- `rust/crates/dae-control/src/tests.rs`
+  - 增加 owner 行为测试：
+    - 首次 apply 写 map；
+    - 同 map 同 plan no-op；
+    - reload 换 map replay；
+    - 同 map plan 变化重新写入。
+- `control/rust_routing_maps_inprocess.go`
+  - 新增 package-level Rust routing owner handle 和 mutex。
+  - 新增 `applyKernelRoutingMapsViaRustOwnedInprocess()`。
+  - `rust_inprocess` 产品路径优先走 Rust owner，而不是直接 stateless writer。
+- `control/rust_routing_maps_inprocess_disabled.go`
+  - 增加非 `rust_inprocess` stub，默认构建不受影响。
+- `control/rust_routing_maps_inprocess_test.go`
+  - 增加空 snapshot 拒绝测试，确认 owner 不接受缺失 fallback 的 plan。
+- `control/routing_map_benchmark_test.go`
+  - 增加 `BenchmarkRoutingMapRustOwnedInprocessUpdate`。
+  - 增加 `BenchmarkRoutingMapRustOwnedInprocessUpdateWithLpmBuild`。
+  - simple owned benchmark 改用带 fallback-last 的产品形态输入，避免为了 benchmark 破坏 routing 语义。
+
+本地验证：
+
+| 验证项 | 结果 |
+| --- | --- |
+| `cargo fmt --manifest-path rust/Cargo.toml --all --check` | pass |
+| `cargo test --manifest-path rust/Cargo.toml -p dae-control -p dae-ebpf-support` | pass，`dae-control` 14 passed，`dae-ebpf-support` 52 passed |
+| `cargo build --manifest-path rust/Cargo.toml -p dae-control --release` | pass |
+| `PATH=/root/.local/go1.25.9/bin:$PATH GOWORK=off go test -count=1 ./control` | pass，`ok github.com/daeuniverse/dae/control 0.055s` |
+| `PATH=/root/.local/go1.25.9/bin:$PATH GOWORK=off go test -count=1 -tags rust_inprocess ./control` | pass，`ok github.com/daeuniverse/dae/control 0.036s` |
+| `DAE_RUN_RUST_BPF_LOADER_CONTROL_PLANE_SMOKE=1 DAE_RUST_BPF_LOADER_HELPER=/root/project/dae-daex-align/control/embedded/dae-aya-bpf-loader go test -count=1 -tags rust_inprocess ./control -run TestRustBpfLoaderAdoptsPinnedObjectsAndUpdatesControlMaps` | pass，`ok github.com/daeuniverse/dae/control 0.812s` |
+| `git diff --check` | pass |
+
+验证备注：
+
+- 曾并行执行默认 `go test ./control` 和 `go test -tags rust_inprocess ./control`，`rust_inprocess` 组在读取 golden fixture 时出现一次瞬时 `bad file descriptor`；顺序复跑通过，按并行文件读取干扰记录。
+
+benchmark 记录：
+
+- 命令：`PATH=/root/.local/go1.25.9/bin:$PATH GOWORK=off DAE_RUST_BPF_LOADER_HELPER=/root/project/dae-daex-align/control/embedded/dae-aya-bpf-loader go test -run '^$' -tags rust_inprocess -bench 'BenchmarkRoutingMapRust(InprocessUpdate|OwnedInprocessUpdate|InprocessUpdateWithLpmBuild|OwnedInprocessUpdateWithLpmBuild)$' -benchmem -benchtime=1s -count=10 ./control`
+- 输出留档：`/tmp/dae-daex-rust-owned-control-bench-20260531.txt`
+- 结果：pass，`ok github.com/daeuniverse/dae/control 57.552s`。
+
+| case | count | avg ns/op | min ns/op | max ns/op | avg B/op | avg allocs/op |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| `BenchmarkRoutingMapRustInprocessUpdate` | 10 | 3787.8 | 3747.0 | 3825.0 | 64.0 | 1.0 |
+| `BenchmarkRoutingMapRustOwnedInprocessUpdate` | 10 | 167.3 | 159.6 | 180.8 | 112.0 | 2.0 |
+| `BenchmarkRoutingMapRustInprocessUpdateWithLpmBuild` | 10 | 29798.4 | 29458.0 | 30236.0 | 120.0 | 3.0 |
+| `BenchmarkRoutingMapRustOwnedInprocessUpdateWithLpmBuild` | 10 | 394.6 | 384.4 | 419.5 | 168.0 | 4.0 |
+
+benchmark 结论：
+
+- Rust-owned owner 对同 map / 同 plan 的 reload no-op 能把 routing map 重复写入路径从约 `3.8 us/op` 降到约 `167 ns/op`。
+- 带 LPM build 的同 plan no-op 从约 `29.8 us/op` 降到约 `395 ns/op`。
+- 这不是最终 Rust native control-plane 的全部收益，只是第一步把“是否需要重写 map”的状态判断从 Go request/FFI 外部推进到 Rust owner 内部。
+- 下一步应继续把 domain routing owner、reload clear/restore、outbound connectivity owner 的 state 和 map flush 决策从 Go tracker 下沉到 Rust-owned control-plane；最终目标是 Rust 持有 runtime state，Go/daed 只触发高层事件，而不是每次构造完整 map request。

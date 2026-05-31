@@ -8,6 +8,8 @@ use dae_ebpf_support::{
     RoutingMapEntry, apply_domain_routing_map_by_id, apply_routing_maps_with_lpm_build_by_id,
 };
 
+use crate::{RoutingMapOwner, RoutingNativeBuildPlan};
+
 #[repr(C)]
 #[derive(Clone, Copy)]
 pub struct FfiRoutingMapEntry {
@@ -41,6 +43,20 @@ pub struct FfiDomainRoutingUpdate {
     pub bitmap: [u32; 32],
 }
 
+#[repr(C)]
+#[derive(Clone, Copy, Default)]
+pub struct FfiRoutingOwnerApplyReport {
+    pub routing_map_id: u32,
+    pub lpm_array_map_id: u32,
+    pub map_changed: u8,
+    pub plan_changed: u8,
+    pub skipped: u8,
+    pub _padding: u8,
+    pub checksum: u64,
+    pub routing_entries_updated: usize,
+    pub lpm_maps_created: usize,
+}
+
 thread_local! {
     static LAST_ERROR: RefCell<CString> = RefCell::new(CString::new("").expect("empty CString"));
 }
@@ -65,44 +81,75 @@ pub unsafe extern "C" fn dae_control_apply_routing_maps_with_lpm_build_by_id(
     lpm_maps_len: usize,
 ) -> i32 {
     ffi_result(|| {
-        let routing_entries = unsafe { slice_from_raw(routing_entries, routing_entries_len)? };
-        let lpm_maps = unsafe { slice_from_raw(lpm_maps, lpm_maps_len)? };
-        let routing_entries = routing_entries
-            .iter()
-            .map(|entry| RoutingMapEntry {
-                index: entry.index,
-                value: entry.value,
-            })
-            .collect::<Vec<_>>();
-        let lpm_maps = lpm_maps
-            .iter()
-            .map(|spec| {
-                let entries = unsafe { slice_from_raw(spec.entries, spec.entries_len)? };
-                let entries = entries
-                    .iter()
-                    .map(|entry| LpmMapEntry {
-                        key: entry.key,
-                        value: entry.value,
-                    })
-                    .collect::<Vec<_>>();
-                Ok(LpmMapBuildSpec {
-                    index: spec.index,
-                    flags: spec.flags,
-                    max_entries: spec.max_entries,
-                    key_size: spec.key_size,
-                    value_size: spec.value_size,
-                    entries,
-                })
-            })
-            .collect::<Result<Vec<_>, String>>()?;
+        let plan = unsafe {
+            routing_plan_from_ffi(routing_entries, routing_entries_len, lpm_maps, lpm_maps_len)?
+        };
         apply_routing_maps_with_lpm_build_by_id(
             routing_map_id,
             lpm_array_map_id,
-            &routing_entries,
+            &plan.routing_entries,
             &[],
-            &lpm_maps,
+            &plan.lpm_maps,
         )
         .map_err(|err| format!("apply routing maps via Rust in-process: {err}"))?;
+        Ok(())
+    })
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn dae_control_routing_owner_new() -> *mut RoutingMapOwner {
+    Box::into_raw(Box::<RoutingMapOwner>::default())
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn dae_control_routing_owner_free(owner: *mut RoutingMapOwner) {
+    if owner.is_null() {
+        return;
+    }
+    unsafe {
+        drop(Box::from_raw(owner));
+    }
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn dae_control_routing_owner_apply_snapshot_by_id(
+    owner: *mut RoutingMapOwner,
+    routing_map_id: u32,
+    lpm_array_map_id: u32,
+    routing_entries: *const FfiRoutingMapEntry,
+    routing_entries_len: usize,
+    lpm_maps: *const FfiLpmMapBuildSpec,
+    lpm_maps_len: usize,
+    report: *mut FfiRoutingOwnerApplyReport,
+) -> i32 {
+    ffi_result(|| {
+        if owner.is_null() {
+            return Err("nonnull routing owner required".to_owned());
+        }
+        let plan = unsafe {
+            routing_plan_from_ffi(routing_entries, routing_entries_len, lpm_maps, lpm_maps_len)?
+        };
+        let owner = unsafe { &mut *owner };
+        let applied = owner
+            .apply_snapshot_by_id(routing_map_id, lpm_array_map_id, plan)
+            .map_err(|err| {
+                format!("apply routing map owner snapshot via Rust in-process: {err}")
+            })?;
+        if !report.is_null() {
+            unsafe {
+                *report = FfiRoutingOwnerApplyReport {
+                    routing_map_id: applied.routing_map_id,
+                    lpm_array_map_id: applied.lpm_array_map_id,
+                    map_changed: u8::from(applied.map_changed),
+                    plan_changed: u8::from(applied.plan_changed),
+                    skipped: u8::from(applied.skipped),
+                    _padding: 0,
+                    checksum: applied.checksum,
+                    routing_entries_updated: applied.routing_entries_updated,
+                    lpm_maps_created: applied.lpm_maps_created,
+                };
+            }
+        }
         Ok(())
     })
 }
@@ -141,6 +188,48 @@ unsafe fn slice_from_raw<'a, T>(ptr: *const T, len: usize) -> Result<&'a [T], St
         return Err("nonnull pointer required when length is nonzero".to_owned());
     }
     Ok(unsafe { slice::from_raw_parts(ptr, len) })
+}
+
+unsafe fn routing_plan_from_ffi(
+    routing_entries: *const FfiRoutingMapEntry,
+    routing_entries_len: usize,
+    lpm_maps: *const FfiLpmMapBuildSpec,
+    lpm_maps_len: usize,
+) -> Result<RoutingNativeBuildPlan, String> {
+    let routing_entries = unsafe { slice_from_raw(routing_entries, routing_entries_len)? };
+    let lpm_maps = unsafe { slice_from_raw(lpm_maps, lpm_maps_len)? };
+    let routing_entries = routing_entries
+        .iter()
+        .map(|entry| RoutingMapEntry {
+            index: entry.index,
+            value: entry.value,
+        })
+        .collect::<Vec<_>>();
+    let lpm_maps = lpm_maps
+        .iter()
+        .map(|spec| {
+            let entries = unsafe { slice_from_raw(spec.entries, spec.entries_len)? };
+            let entries = entries
+                .iter()
+                .map(|entry| LpmMapEntry {
+                    key: entry.key,
+                    value: entry.value,
+                })
+                .collect::<Vec<_>>();
+            Ok(LpmMapBuildSpec {
+                index: spec.index,
+                flags: spec.flags,
+                max_entries: spec.max_entries,
+                key_size: spec.key_size,
+                value_size: spec.value_size,
+                entries,
+            })
+        })
+        .collect::<Result<Vec<_>, String>>()?;
+    Ok(RoutingNativeBuildPlan {
+        routing_entries,
+        lpm_maps,
+    })
 }
 
 fn ffi_result(f: impl FnOnce() -> Result<(), String>) -> i32 {
@@ -194,5 +283,23 @@ mod tests {
     #[test]
     fn ffi_abi_version_is_stable() {
         assert_eq!(unsafe { dae_control_ffi_abi_version() }, 1);
+    }
+
+    #[test]
+    fn ffi_routing_owner_rejects_null_owner() {
+        let rc = unsafe {
+            dae_control_routing_owner_apply_snapshot_by_id(
+                std::ptr::null_mut(),
+                0,
+                0,
+                std::ptr::null(),
+                0,
+                std::ptr::null(),
+                0,
+                std::ptr::null_mut(),
+            )
+        };
+        assert_eq!(rc, -1);
+        assert!(last_error_for_tests().contains("routing owner"));
     }
 }
