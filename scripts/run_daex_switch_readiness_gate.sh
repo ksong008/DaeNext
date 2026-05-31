@@ -55,6 +55,9 @@ if [[ -z "$matched_go_work" && -f "$workspace_go_work" ]]; then
     /root/project/dae | /root/project/dae/* | /root/project/outbound | /root/project/outbound/*)
       matched_go_work="$workspace_go_work"
       ;;
+    *)
+      matched_go_work="off"
+      ;;
   esac
 fi
 product_chain_dae_repo="${PRODUCT_CHAIN_DAE_REPO:-$repo_root}"
@@ -91,7 +94,7 @@ if [[ "$matched_source_dir" == "$repo_root" && "$repo_root" == /root/project/dae
   exit 2
 fi
 
-if [[ -n "$matched_go_work" && ! -f "$matched_go_work" ]]; then
+if [[ -n "$matched_go_work" && "$matched_go_work" != "off" && ! -f "$matched_go_work" ]]; then
   echo "matched benchmark go.work does not exist: $matched_go_work" >&2
   exit 2
 fi
