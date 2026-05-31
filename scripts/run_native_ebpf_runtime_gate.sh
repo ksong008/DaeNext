@@ -25,6 +25,8 @@ cgroup_log="${CGROUP_LOG:-/tmp/dae-native-ebpf-cgroup-gate-${run_id}.log}"
 backend="${DAE_NATIVE_EBPF_BACKEND:-auto}"
 netns_link="${DAE_NETNS_LINK:-auto}"
 runtime_timeout="${RUNTIME_TIMEOUT:-180s}"
+fallback_retirement_product_chain_recertified="${DAE_BPF_FALLBACK_RETIREMENT_PRODUCT_CHAIN_RECERTIFIED:-0}"
+fallback_retirement_explicit_approval="${DAE_BPF_FALLBACK_RETIREMENT_EXPLICIT_APPROVAL:-0}"
 
 case "$run_root" in
   /tmp/dae-daemon-native-ebpf-runtime-gate*) ;;
@@ -79,6 +81,18 @@ fi
 echo "Aya cgroup attach/detach gate passed"
 
 echo "running native eBPF runtime gate: root=$run_root backend=$backend netns_link=$netns_link timeout=$runtime_timeout"
+fallback_retirement_args=()
+case "$fallback_retirement_product_chain_recertified" in
+  1 | true | TRUE | on | ON | yes | YES)
+    fallback_retirement_args+=(--production-runtime-fallback-retirement-product-chain-recertified)
+    ;;
+esac
+case "$fallback_retirement_explicit_approval" in
+  1 | true | TRUE | on | ON | yes | YES)
+    fallback_retirement_args+=(--production-runtime-fallback-retirement-explicit-approval)
+    ;;
+esac
+
 if ! DAE_RUST_NATIVE_BPF_OBJECT="$native_object" timeout "$runtime_timeout" cargo run --manifest-path rust/Cargo.toml \
   -p dae-daemon \
   --features native-ebpf \
@@ -100,6 +114,7 @@ if ! DAE_RUST_NATIVE_BPF_OBJECT="$native_object" timeout "$runtime_timeout" carg
   --production-runtime-native-ebpf-backend "$backend" \
   --production-runtime-netns-link "$netns_link" \
   --production-runtime-native-ebpf-object "$native_object" \
+  "${fallback_retirement_args[@]}" \
   --exit-after-ready >"$cargo_log" 2>&1; then
   echo "native eBPF runtime gate failed; tail of cargo log follows" >&2
   tail -c 20000 "$cargo_log" >&2 || true
