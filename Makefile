@@ -16,6 +16,7 @@ CFLAGS := -DMAX_MATCH_SET_LEN=$(MAX_MATCH_SET_LEN) $(CFLAGS)
 NOSTRIP ?= n
 STRIP_PATH := $(shell command -v $(STRIP) 2>/dev/null)
 BUILD_TAGS_FILE := .build_tags
+RUST_AYA_LOADER_ASSET ?= control/embedded/dae-aya-bpf-loader
 ifeq ($(strip $(NOSTRIP)),y)
 	STRIP_FLAG := -no-strip
 else ifeq ($(wildcard $(STRIP_PATH)),)
@@ -41,7 +42,7 @@ endif
 
 BUILD_ARGS := -trimpath -ldflags "-s -w -X github.com/daeuniverse/dae/cmd.Version=$(VERSION) -X github.com/daeuniverse/dae/common/consts.MaxMatchSetLen_=$(MAX_MATCH_SET_LEN)" $(BUILD_ARGS)
 
-.PHONY: clean-ebpf ebpf dae submodule submodules stage-freeze-check native-ebpf-runtime-gate daex-switch-readiness-gate
+.PHONY: clean-ebpf ebpf dae submodule submodules stage-freeze-check native-ebpf-runtime-gate daex-switch-readiness-gate rust-aya-bpf-loader-asset
 
 ## Begin Dae Build
 dae: export GOOS=linux
@@ -97,6 +98,12 @@ native-ebpf-runtime-gate:
 
 daex-switch-readiness-gate:
 	./scripts/run_daex_switch_readiness_gate.sh
+
+rust-aya-bpf-loader-asset:
+	cd rust && \
+	cargo build -p dae-aya-bpf-loader --release --features native-ebpf
+	@mkdir -p "$(dir $(RUST_AYA_LOADER_ASSET))"
+	cp rust/target/release/dae-aya-bpf-loader "$(RUST_AYA_LOADER_ASSET)"
 
 # $BPF_CLANG is used in go:generate invocations.
 ebpf: export BPF_CLANG := $(CLANG)

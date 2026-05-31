@@ -126,6 +126,7 @@ func TestRustAyaProductCallersUseExecutableResolver(t *testing.T) {
 	for _, file := range []string{
 		"rust_tproxy_listener.go",
 		"rust_domain_routing_helper.go",
+		"rust_connectivity_inprocess_disabled.go",
 	} {
 		content, err := os.ReadFile(file)
 		if err != nil {
@@ -133,6 +134,24 @@ func TestRustAyaProductCallersUseExecutableResolver(t *testing.T) {
 		}
 		if strings.Contains(string(content), "rustBpfLoaderHelperPath(") {
 			t.Fatalf("%s bypasses embedded loader resolution", file)
+		}
+	}
+}
+
+func TestRustAyaConnectivityMapHasNoGoDirectFallback(t *testing.T) {
+	content, err := os.ReadFile("connectivity.go")
+	if err != nil {
+		t.Fatalf("read connectivity.go: %v", err)
+	}
+	source := string(content)
+	for _, marker := range []string{
+		"OutboundConnectivityMap.Update(",
+		"bpfOutboundConnectivityQuery{",
+		"ebpf.UpdateAny",
+		"rustInprocessRoutingMapAvailable()",
+	} {
+		if strings.Contains(source, marker) {
+			t.Fatalf("connectivity.go still contains Go/direct connectivity fallback marker %q", marker)
 		}
 	}
 }
@@ -205,6 +224,7 @@ func TestRustAyaRoutingMapWritersHaveNoGoFallback(t *testing.T) {
 			"Build LPM inner maps in Go",
 			"b.bpf.newLpmMap(",
 			"BpfMapBatchUpdate(b.bpf.RoutingMap",
+			"rustInprocessRoutingMapAvailable()",
 		},
 		"domain_routing_tracker.go": {
 			"BpfMapBatchUpdate(m, keysToUpdate",
@@ -214,6 +234,7 @@ func TestRustAyaRoutingMapWritersHaveNoGoFallback(t *testing.T) {
 			"BpfMapBatchUpdate(c.bpf.DomainRoutingMap",
 			"BpfMapBatchDelete(c.bpf.DomainRoutingMap",
 			"c.bpf.DomainRoutingMap.Delete(",
+			"rustInprocessRoutingMapAvailable()",
 		},
 	}
 	for file, forbidden := range checks {

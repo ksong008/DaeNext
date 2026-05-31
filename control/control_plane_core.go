@@ -839,13 +839,6 @@ func (c *controlPlaneCore) bindDaens() (err error) {
 // BatchUpdateDomainRouting update bpf map domain_routing. Since one IP may have multiple domains, this function should
 // be invoked every A/AAAA-record lookup.
 func (c *controlPlaneCore) BatchUpdateDomainRouting(cache *DnsCache) error {
-	if rustInprocessRoutingMapAvailable() && cache != nil && cache.RouteOwnerKey != "" {
-		event, err := buildDomainRoutingDnsEvent(cache)
-		if err != nil {
-			return err
-		}
-		return c.getRustDomainRoutingOwner().UpdateDnsCacheEvent(c.bpf.DomainRoutingMap, event)
-	}
 	if c.domainRouting != nil && cache != nil && cache.RouteOwnerKey != "" {
 		snapshot, err := buildDomainRoutingOwnerSnapshot(cache)
 		if err != nil {
@@ -878,9 +871,6 @@ func (c *controlPlaneCore) BatchUpdateDomainRouting(cache *DnsCache) error {
 
 // BatchRemoveDomainRouting remove bpf map domain_routing.
 func (c *controlPlaneCore) BatchRemoveDomainRouting(cache *DnsCache) error {
-	if rustInprocessRoutingMapAvailable() && cache != nil && cache.RouteOwnerKey != "" {
-		return c.getRustDomainRoutingOwner().RemoveDnsCacheEvent(c.bpf.DomainRoutingMap, cache.RouteOwnerKey)
-	}
 	if c.domainRouting != nil && cache != nil && cache.RouteOwnerKey != "" {
 		return c.domainRouting.syncOwner(c.bpf.DomainRoutingMap, cache.RouteOwnerKey, domainRoutingOwnerSnapshot{}, c.updateDomainRoutingMapViaRustHelper)
 	}
@@ -911,9 +901,6 @@ func (c *controlPlaneCore) clearDomainRoutingMapForReload() error {
 	}
 	if err := iter.Err(); err != nil {
 		return fmt.Errorf("iterate domain_routing_map for reload clear: %w", err)
-	}
-	if rustInprocessRoutingMapAvailable() {
-		return c.getRustDomainRoutingOwner().PrepareReload(c.bpf.DomainRoutingMap, keys)
 	}
 	if len(keys) == 0 {
 		return nil
