@@ -136,6 +136,7 @@ cargo build --manifest-path rust/Cargo.toml \
   --bin dae-daemon-optin
 cargo build --manifest-path rust/Cargo.toml \
   -p dae-aya-bpf-loader \
+  --features native-ebpf \
   --bin dae-aya-bpf-loader
 export PATH="${repo_root}/rust/target/debug:${repo_root}/rust/target/release:${PATH}"
 
