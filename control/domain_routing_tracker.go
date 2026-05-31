@@ -7,6 +7,7 @@ package control
 
 import (
 	"fmt"
+	"net/netip"
 	"sync"
 
 	"github.com/cilium/ebpf"
@@ -16,6 +17,12 @@ import (
 type domainRoutingOwnerSnapshot struct {
 	bitmap bpfDomainRouting
 	ips    map[[4]uint32]struct{}
+}
+
+type domainRoutingDnsEvent struct {
+	ownerKey     string
+	domainBitmap []uint32
+	ips          []netip.Addr
 }
 
 type domainRoutingIPState struct {
@@ -91,6 +98,20 @@ func buildDomainRoutingOwnerSnapshot(cache *DnsCache) (domainRoutingOwnerSnapsho
 		snapshot.ips[common.Ipv6ByteSliceToUint32Array(ip6[:])] = struct{}{}
 	}
 	return snapshot, nil
+}
+
+func buildDomainRoutingDnsEvent(cache *DnsCache) (domainRoutingDnsEvent, error) {
+	if cache == nil || cache.RouteOwnerKey == "" {
+		return domainRoutingDnsEvent{}, nil
+	}
+	if len(cache.DomainBitmap) != len(bpfDomainRouting{}.Bitmap) {
+		return domainRoutingDnsEvent{}, fmt.Errorf("domain bitmap length not sync with kern program")
+	}
+	return domainRoutingDnsEvent{
+		ownerKey:     cache.RouteOwnerKey,
+		domainBitmap: cache.DomainBitmap,
+		ips:          cache.cachedIPs(),
+	}, nil
 }
 
 func (t *domainRoutingTracker) desiredBitmapForKeyLocked(

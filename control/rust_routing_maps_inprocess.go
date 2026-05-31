@@ -429,19 +429,19 @@ func (o *rustDomainRoutingOwner) Update(m *ebpf.Map, ownerKey string, snapshot d
 	return nil
 }
 
-func (o *rustDomainRoutingOwner) UpdateDnsCacheEvent(m *ebpf.Map, cache *DnsCache) error {
-	if m == nil || cache == nil || cache.RouteOwnerKey == "" {
+func (o *rustDomainRoutingOwner) UpdateDnsCacheEvent(m *ebpf.Map, event domainRoutingDnsEvent) error {
+	if m == nil || event.ownerKey == "" {
 		return nil
 	}
-	if len(cache.DomainBitmap) != len(bpfDomainRouting{}.Bitmap) {
+	if len(event.domainBitmap) != len(bpfDomainRouting{}.Bitmap) {
 		return fmt.Errorf("domain bitmap length not sync with kern program")
 	}
 	var bitmap [32]C.uint32_t
-	for i, word := range cache.DomainBitmap {
+	for i, word := range event.domainBitmap {
 		bitmap[i] = C.uint32_t(word)
 	}
 
-	ips := cache.cachedIPs()
+	ips := event.ips
 	if len(ips) == 1 {
 		var one [1][4]C.uint32_t
 		ip16 := ips[0].As16()
@@ -449,7 +449,7 @@ func (o *rustDomainRoutingOwner) UpdateDnsCacheEvent(m *ebpf.Map, cache *DnsCach
 		for i, word := range key {
 			one[0][i] = C.uint32_t(word)
 		}
-		return o.applyDnsCacheEvent(m, cache.RouteOwnerKey, &bitmap, &one[0], 1)
+		return o.applyDnsCacheEvent(m, event.ownerKey, &bitmap, &one[0], 1)
 	}
 
 	var keys [][4]C.uint32_t
@@ -467,7 +467,7 @@ func (o *rustDomainRoutingOwner) UpdateDnsCacheEvent(m *ebpf.Map, cache *DnsCach
 	if len(keys) > 0 {
 		keysPtr = &keys[0]
 	}
-	err := o.applyDnsCacheEvent(m, cache.RouteOwnerKey, &bitmap, keysPtr, len(keys))
+	err := o.applyDnsCacheEvent(m, event.ownerKey, &bitmap, keysPtr, len(keys))
 	runtime.KeepAlive(keys)
 	return err
 }

@@ -88,7 +88,7 @@ func (o *rustDomainRoutingOwner) Update(m *ebpf.Map, ownerKey string, snapshot d
 	return fmt.Errorf("Rust in-process domain routing owner is not enabled")
 }
 
-func (o *rustDomainRoutingOwner) UpdateDnsCacheEvent(m *ebpf.Map, cache *DnsCache) error {
+func (o *rustDomainRoutingOwner) UpdateDnsCacheEvent(m *ebpf.Map, event domainRoutingDnsEvent) error {
 	return fmt.Errorf("Rust in-process domain routing DNS event owner is not enabled")
 }
 

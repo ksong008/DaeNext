@@ -165,6 +165,14 @@ impl DomainRoutingTracker {
         }
 
         let old_snapshot = self.owners.get(owner_key);
+        if old_snapshot == Some(snapshot) {
+            return DomainRoutingSyncPlan {
+                owner_count: self.owners.len(),
+                ip_count: self.ips.len(),
+                ..DomainRoutingSyncPlan::default()
+            };
+        }
+
         let mut affected =
             Vec::with_capacity(old_snapshot.map_or(0, |old| old.ips.len()) + snapshot.ips.len());
         if let Some(old) = old_snapshot {
@@ -202,7 +210,14 @@ impl DomainRoutingTracker {
         owner_key: &str,
         snapshot: DomainRoutingOwnerSnapshot,
     ) -> DomainRoutingSyncPlan {
-        self.apply_owner_update_ref(owner_key, &snapshot)
+        let mut plan = self.plan_owner_update(owner_key, &snapshot);
+        if owner_key.is_empty() {
+            return plan;
+        }
+        self.apply_owner_snapshot_owned(owner_key, snapshot);
+        plan.owner_count = self.owners.len();
+        plan.ip_count = self.ips.len();
+        plan
     }
 
     pub fn apply_owner_update_ref(
@@ -266,6 +281,83 @@ impl DomainRoutingTracker {
     }
 
     fn apply_owner_snapshot_ref(&mut self, owner_key: &str, snapshot: &DomainRoutingOwnerSnapshot) {
+        self.remove_owner(owner_key);
+
+        if snapshot.is_empty() {
+            return;
+        }
+
+        self.owners.insert(owner_key.to_owned(), snapshot.clone());
+        self.apply_owner_ip_state(owner_key, &snapshot.ips, snapshot.bitmap);
+    }
+
+    fn apply_owner_snapshot_owned(
+        &mut self,
+        owner_key: &str,
+        snapshot: DomainRoutingOwnerSnapshot,
+    ) {
+        self.remove_owner(owner_key);
+
+        if snapshot.is_empty() {
+            return;
+        }
+
+        self.apply_owner_ip_state(owner_key, &snapshot.ips, snapshot.bitmap);
+        self.owners.insert(owner_key.to_owned(), snapshot);
+    }
+
+    fn apply_owner_snapshot_incremental(
+        &mut self,
+        owner_key: &str,
+        snapshot: DomainRoutingOwnerSnapshot,
+        plan: &DomainRoutingSyncPlan,
+    ) {
+        let snapshot_empty = snapshot.is_empty();
+        let mut remove_empty_ips = Vec::new();
+
+        for key in &plan.deletes {
+            let Some(state) = self.ips.get_mut(key) else {
+                continue;
+            };
+            state.owners.remove(owner_key);
+            if state.owners.is_empty() {
+                remove_empty_ips.push(*key);
+            } else {
+                state.merged = merge_owner_bitmaps(&state.owners);
+            }
+        }
+
+        for entry in &plan.updates {
+            if !snapshot_empty && snapshot.ips.contains(&entry.key) {
+                let state = self.ips.entry(entry.key).or_default();
+                state.owners.insert(owner_key.to_owned(), snapshot.bitmap);
+                state.merged = entry.bitmap;
+                continue;
+            }
+
+            let Some(state) = self.ips.get_mut(&entry.key) else {
+                continue;
+            };
+            state.owners.remove(owner_key);
+            if state.owners.is_empty() {
+                remove_empty_ips.push(entry.key);
+            } else {
+                state.merged = entry.bitmap;
+            }
+        }
+
+        for key in remove_empty_ips {
+            self.ips.remove(&key);
+        }
+
+        if snapshot_empty {
+            self.owners.remove(owner_key);
+        } else {
+            self.owners.insert(owner_key.to_owned(), snapshot);
+        }
+    }
+
+    fn remove_owner(&mut self, owner_key: &str) {
         if let Some(old) = self.owners.remove(owner_key) {
             for ip in old.ips {
                 let Some(state) = self.ips.get_mut(&ip) else {
@@ -279,16 +371,18 @@ impl DomainRoutingTracker {
                 }
             }
         }
+    }
 
-        if snapshot.is_empty() {
-            return;
-        }
-
-        self.owners.insert(owner_key.to_owned(), snapshot.clone());
-        for ip in &snapshot.ips {
+    fn apply_owner_ip_state(
+        &mut self,
+        owner_key: &str,
+        ips: &[DomainRoutingIpKey],
+        bitmap: [u32; 32],
+    ) {
+        for ip in ips {
             let ip = *ip;
             let state = self.ips.entry(ip).or_default();
-            state.owners.insert(owner_key.to_owned(), snapshot.bitmap);
+            state.owners.insert(owner_key.to_owned(), bitmap);
             state.merged = merge_owner_bitmaps(&state.owners);
         }
     }
@@ -468,15 +562,18 @@ impl DomainRoutingOwner {
             });
         }
         apply(map_id, &plan.updates, &plan.deletes)?;
-        let plan = self.tracker.apply_owner_update_ref(owner_key, &snapshot);
+        let entries_updated = plan.updates.len();
+        let entries_deleted = plan.deletes.len();
+        self.tracker
+            .apply_owner_snapshot_incremental(owner_key, snapshot, &plan);
         Ok(DomainRoutingOwnerApplyReport {
             map_id,
             map_id_changed: false,
             skipped: false,
-            entries_updated: plan.updates.len(),
-            entries_deleted: plan.deletes.len(),
-            owner_count: plan.owner_count,
-            ip_count: plan.ip_count,
+            entries_updated,
+            entries_deleted,
+            owner_count: self.tracker.owner_count(),
+            ip_count: self.tracker.ip_count(),
         })
     }
 

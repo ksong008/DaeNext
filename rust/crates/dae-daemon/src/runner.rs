@@ -23,6 +23,9 @@ use crate::{default_listener_ebpf_preflight_root, listener_ebpf_preflight_report
 use crate::{default_reload_owner_benchmark_root, reload_owner_benchmark_report};
 use crate::{default_reload_owner_handoff_root, reload_owner_handoff_smoke_report};
 use crate::{default_run_entrypoint_preflight_root, run_entrypoint_preflight_report};
+use crate::{
+    default_rust_native_control_plane_admission_root, rust_native_control_plane_admission_report,
+};
 use crate::{default_signal_control_plane_smoke_root, signal_control_plane_smoke_report};
 use dae_ebpf_support::AttachBackend;
 use std::path::PathBuf;
@@ -94,6 +97,9 @@ pub fn run_with_args_and_version(
         Some("listener-ebpf-preflight") => run_listener_ebpf_preflight_command(&args[1..]),
         Some("reload-owner-handoff-smoke") => run_reload_owner_handoff_smoke_command(&args[1..]),
         Some("reload-owner-benchmark") => run_reload_owner_benchmark_command(&args[1..]),
+        Some("rust-native-control-plane-admission") => {
+            run_rust_native_control_plane_admission_command(&args[1..])
+        }
         Some("bpf-loader") => run_bpf_loader_command(&args[1..]),
         Some("identity") | Some("service-contract") | Some("identity-preflight") => {
             DaemonOutput::usage("unsupported dae-daemon-optin argument")
@@ -1257,6 +1263,65 @@ fn parse_attach_backend(value: &str) -> Option<AttachBackend> {
         "tc-netlink" | "tc_netlink" => Some(AttachBackend::TcNetlink),
         "tc-command-fallback" | "tc_command_fallback" => Some(AttachBackend::TcCommandFallback),
         _ => None,
+    }
+}
+
+fn run_rust_native_control_plane_admission_command(args: &[String]) -> DaemonOutput {
+    let mut root = default_rust_native_control_plane_admission_root();
+    let mut iterations = 10_000_u32;
+    let mut iter = args.iter();
+    while let Some(arg) = iter.next() {
+        match arg.as_str() {
+            "--root" => {
+                let Some(value) = iter.next() else {
+                    return DaemonOutput::usage(
+                        "missing rust-native-control-plane-admission --root value",
+                    );
+                };
+                root = value.into();
+            }
+            _ if arg.starts_with("--root=") => {
+                root = arg.split_once('=').unwrap().1.into();
+            }
+            "--iterations" => {
+                let Some(value) = iter.next() else {
+                    return DaemonOutput::usage(
+                        "missing rust-native-control-plane-admission --iterations value",
+                    );
+                };
+                iterations = match value.parse() {
+                    Ok(value) => value,
+                    Err(_) => {
+                        return DaemonOutput::usage(
+                            "invalid rust-native-control-plane-admission --iterations value",
+                        );
+                    }
+                };
+            }
+            _ if arg.starts_with("--iterations=") => {
+                iterations = match arg.split_once('=').unwrap().1.parse() {
+                    Ok(value) => value,
+                    Err(_) => {
+                        return DaemonOutput::usage(
+                            "invalid rust-native-control-plane-admission --iterations value",
+                        );
+                    }
+                };
+            }
+            _ => {
+                return DaemonOutput::usage(format!(
+                    "unsupported rust-native-control-plane-admission argument: {arg}"
+                ));
+            }
+        }
+    }
+    match rust_native_control_plane_admission_report(&root, iterations) {
+        Ok(report) => DaemonOutput::ok(format!("{report}\n")),
+        Err(err) => DaemonOutput {
+            stdout: String::new(),
+            stderr: format!("{err}\n"),
+            exit_code: 1,
+        },
     }
 }
 

@@ -621,7 +621,10 @@ func NewControlPlane(
 		}
 	}
 	if reloadDnsPlan.restoreCache {
-		restoreDnsCacheSnapshot(log, plane.dnsController, dnsCache)
+		restoreStats := restoreDnsCacheSnapshot(log, plane.dnsController, dnsCache)
+		if err = restoreStats.Err(); err != nil {
+			return nil, err
+		}
 	}
 
 	// Init immediately to avoid DNS leaking in the very beginning because param control_plane_dns_routing will

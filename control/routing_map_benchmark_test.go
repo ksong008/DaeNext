@@ -596,13 +596,17 @@ func BenchmarkDomainRoutingMapRustOwnedDnsEventDuplicate(b *testing.B) {
 	owner := newRustDomainRoutingOwner()
 	defer owner.Close()
 	cache := benchmarkDomainRoutingDnsCache("bench-owner", value, netip.MustParseAddr("203.0.113.10"))
-	if err := owner.UpdateDnsCacheEvent(m, cache); err != nil {
+	event, err := buildDomainRoutingDnsEvent(cache)
+	if err != nil {
+		b.Fatal(err)
+	}
+	if err := owner.UpdateDnsCacheEvent(m, event); err != nil {
 		b.Fatal(err)
 	}
 	b.ReportAllocs()
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		if err := owner.UpdateDnsCacheEvent(m, cache); err != nil {
+		if err := owner.UpdateDnsCacheEvent(m, event); err != nil {
 			b.Fatal(err)
 		}
 	}
@@ -622,13 +626,21 @@ func BenchmarkDomainRoutingMapRustOwnedDnsEventToggle(b *testing.B) {
 		benchmarkDomainRoutingDnsCache("bench-owner", value, netip.MustParseAddr("203.0.113.10")),
 		benchmarkDomainRoutingDnsCache("bench-owner", alternate, netip.MustParseAddr("203.0.113.10")),
 	}
-	if err := owner.UpdateDnsCacheEvent(m, caches[0]); err != nil {
+	events := [2]domainRoutingDnsEvent{}
+	for i, cache := range caches {
+		event, err := buildDomainRoutingDnsEvent(cache)
+		if err != nil {
+			b.Fatal(err)
+		}
+		events[i] = event
+	}
+	if err := owner.UpdateDnsCacheEvent(m, events[0]); err != nil {
 		b.Fatal(err)
 	}
 	b.ReportAllocs()
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		if err := owner.UpdateDnsCacheEvent(m, caches[i%2]); err != nil {
+		if err := owner.UpdateDnsCacheEvent(m, events[i%2]); err != nil {
 			b.Fatal(err)
 		}
 	}

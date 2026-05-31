@@ -6,6 +6,7 @@
 package control
 
 import (
+	"errors"
 	"net"
 	"net/netip"
 	"testing"
@@ -115,6 +116,48 @@ func TestRustOwnedReloadDnsCacheRestoreAllowedKeepsDnsConfigGate(t *testing.T) {
 	}
 	if RustOwnedReloadDnsCacheRestoreAllowed(false) {
 		t.Fatal("expected changed DNS config to reject DNS cache restore")
+	}
+}
+
+func TestRestoreDnsCacheSnapshotReportsCallbackFailure(t *testing.T) {
+	deadline := time.Now().Add(time.Hour)
+	controller, err := NewDnsController(nil, &DnsControllerOption{
+		Log: logrus.New(),
+		NewCache: func(_ string, answers []dnsmessage.RR, deadline time.Time, originalDeadline time.Time) (*DnsCache, error) {
+			ips, hasAnyIP := summarizeDNSAnswers(answers)
+			return &DnsCache{
+				DomainBitmap:     domainRoutingBitmap(0x1),
+				Answer:           answers,
+				IPs:              ips,
+				HasAnyIP:         hasAnyIP,
+				Deadline:         deadline,
+				OriginalDeadline: originalDeadline,
+			}, nil
+		},
+		CacheAccessCallback: func(*DnsCache) error {
+			return errors.New("domain routing map write failed")
+		},
+	})
+	if err != nil {
+		t.Fatalf("NewDnsController(): %v", err)
+	}
+	t.Cleanup(func() {
+		_ = controller.Close()
+	})
+
+	stats := restoreDnsCacheSnapshot(logrus.New(), controller, map[string]*DnsCache{
+		newDnsCacheKey("failure.example.", dnsmessage.TypeA, dnsmessage.ClassINET).String(): {
+			IPs:              []netip.Addr{netip.MustParseAddr("203.0.113.30")},
+			HasAnyIP:         true,
+			Deadline:         deadline,
+			OriginalDeadline: deadline,
+		},
+	})
+	if stats.FailedEntries != 1 {
+		t.Fatalf("FailedEntries = %d, want 1", stats.FailedEntries)
+	}
+	if err := stats.Err(); err == nil {
+		t.Fatal("expected restore stats to report failure")
 	}
 }
 
