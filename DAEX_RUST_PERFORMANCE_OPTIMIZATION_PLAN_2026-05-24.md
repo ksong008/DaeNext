@@ -19882,3 +19882,132 @@ cargo run --release --manifest-path rust/Cargo.toml -p dae-daemon --bin dae-daem
 - 第一次远程脚本的预清理误删了刚上传的 `/tmp` 二进制，未进入有效验证；第二次脚本中 API reload JSON 转义和 state summary stdin 写法不够严格，虽然系统级 reload/restart/DNS/日志已通过，但不作为准入结果。
 - 上表以修正后的第三次有效验证为准：API dry/real reload、state 校验、DNS、HTTPS、systemctl reload/restart、日志扫描和清理全部通过。
 - 本轮 daed r3 确认的是“最新 daex Rust/Aya loader 与 control-plane 优化代码已进入 daed r3 链路并通过产品级 smoke”。产品默认热路径是否完全使用 no-cgo Rust-owned control-plane，仍以后续 Rust-owned in-process/control-plane 切换计划为准；当前不改变 daewing/outbound/quic-go 协议栈边界。
+
+### no-cgo owner 接入形态修正：移出 `rust_inprocess` 产品热路径（2026-05-31）
+
+背景：
+
+- 复核时发现阶段 1-10 的部分 owner 热路径仍可能因为 `rust_inprocess` build tag 而进入 cgo staticlib 入口：
+  - `routing_map` / `lpm_array_map` 的产品写入函数在 `rustInprocessRoutingMapAvailable()` 为真时走 `applyKernelRoutingMapsViaRustOwnedInprocess()`。
+  - `domain_routing_map` 的产品更新、DNS cache event、reload clear 在 `rustInprocessRoutingMapAvailable()` 为真时走 `rustDomainRoutingOwner` cgo 入口。
+  - `outbound_connectivity_map` 在非 `rust_inprocess` 时仍回落到 Go direct `OutboundConnectivityMap.Update(...)`，导致默认 CGO=0 产品热路径没有真正打开 Rust owner。
+- 这与当前混合架构目标不一致：daed 产品壳 / WebUI / API、daewing/outbound/quic-go 协议栈暂时保留 Go，但 eBPF loader/map/link/listener/control-plane owner 热路径应向 Rust/Aya no-cgo 产品入口迁移，不能把 cgo `rust_inprocess` 当作默认打开方式。
+- 修改前继续参考：
+  - `DAEX_RUST_REBUILD_PLAN_2026-05-16.md` 对阶段 7 / 阶段 14 的 eBPF、tproxy、netns、reload ownership、map ABI、root/BPF/netns 验证约束。
+  - `DAENEW_RUST_REBUILD_MEMO_2026-05-16.md` 对 DNS controller、domain routing map、outbound connectivity map、BPF map schema、reload cache restore 的前期审计。
+  - 本文件前文混合架构边界：不按测试机 config 写特例，不替换 daewing/outbound/quic-go 全协议栈。
+
+本轮修正：
+
+- `control/connectivity.go`
+  - 删除 `rustInprocessRoutingMapAvailable()` 分支和 Go direct `OutboundConnectivityMap.Update(...)` 路径。
+  - `outboundAliveChangeCallback` 默认统一调用 `c.getRustOutboundConnectivityOwner().Update(...)`。
+- `control/rust_connectivity_inprocess_disabled.go`
+  - 将非 `rust_inprocess` 的 `rustOutboundConnectivityOwner` 从空 stub 改为 no-cgo Rust/Aya 二进制常驻通道。
+  - 使用 `dae-aya-bpf-loader connectivity-map serve-binary`，8 字节 binary request/response，按 map id 缓存 Rust 侧 fd/state，保持 dryrun 非 init 不写 map 的语义。
+  - 仍通过 `rustBpfLoaderCommandContext()` 解析嵌入的 Rust/Aya loader，避免绕过 embedded resolver。
+- `control/rust_routing_maps.go`
+  - 产品 `routing_map` / `lpm_array_map` 写入不再检查 `rustInprocessRoutingMapAvailable()`，统一走 Rust/Aya no-cgo 二进制 apply 入口。
+  - 产品 `domain_routing_map` 更新不再优先走 cgo inprocess，统一走 no-cgo Rust/Aya domain routing service；service 失败时仍只回退到一次性 Rust apply，不回退 Go map writer。
+- `control/control_plane_core.go`
+  - DNS cache event / domain routing owner / reload clear 的产品路径移除 `rustInprocessRoutingMapAvailable()` 分支。
+  - 保留 Go DNS controller 生成通用语义输入和 cache snapshot，但 map 写入入口不再依赖 cgo owner。
+- `control/rust_bpf_loader_test.go`
+  - 增加防回退测试：
+    - connectivity 产品路径不得出现 `OutboundConnectivityMap.Update(`、`bpfOutboundConnectivityQuery{`、`ebpf.UpdateAny`、`rustInprocessRoutingMapAvailable()`。
+    - routing/domain 产品 writer 不得重新引入 `rustInprocessRoutingMapAvailable()` 分支。
+    - 新的 connectivity no-cgo owner 必须继续使用 embedded Rust/Aya loader resolver。
+
+验证：
+
+| 验证项 | 结果 |
+| --- | --- |
+| `PATH=/root/.local/go1.25.9/bin:$PATH GOWORK=off go test -count=1 -tags=embedallowed ./control -run 'TestRustAya(ProductCallersUseExecutableResolver\|ConnectivityMapHasNoGoDirectFallback\|RoutingMapWritersHaveNoGoFallback\|BpfLoaderAdoptsPinnedObjectsAndUpdatesControlMaps)'` | pass |
+| `PATH=/root/.local/go1.25.9/bin:$PATH GOWORK=off go test -count=1 -tags rust_inprocess ./control -run 'TestRustOwnedRuntimeStateReportIsReadyForDefaultControlPlane\|TestRustOutboundConnectivityOwnerUpdatesMap\|TestRustOwnedInprocessRoutingMapOwnerRejectsEmptySnapshot'` | pass，旧 cgo inprocess 对照测试仍保留 |
+| `PATH=/root/.local/go1.25.9/bin:$PATH GOWORK=off go test -count=1 -tags=embedallowed ./control ./engine` | pass |
+| `PATH=/root/.local/go1.25.9/bin:$PATH GOWORK=off go test -count=1 ./control ./engine` | pass |
+| `PATH=/root/.local/go1.25.9/bin:$PATH GOWORK=off CGO_ENABLED=0 go test -count=1 -tags=embedallowed ./control ./engine` | pass |
+| `PATH=/root/.local/go1.25.9/bin:$PATH GOWORK=off CGO_ENABLED=0 go build -tags=embedallowed -o /tmp/dae-daex-no-cgo-owner-entry-20260531 .` | pass，生成 `40M` Linux amd64 二进制 |
+| `go version -m /tmp/dae-daex-no-cgo-owner-entry-20260531` | 显示 `build -tags=embedallowed`、`CGO_ENABLED=0`、`vcs.modified=true` |
+| `git diff --check` | pass |
+
+当前结论：
+
+- 产品 map owner 接入形态已从 `rust_inprocess` cgo staticlib 分支迁出：
+  - `routing_map` / `lpm_array_map`：no-cgo Rust/Aya apply。
+  - `domain_routing_map`：no-cgo Rust/Aya domain routing service / Rust apply。
+  - `outbound_connectivity_map`：no-cgo Rust/Aya `connectivity-map serve-binary`。
+- `rust_inprocess` 仍保留为历史准入/benchmark/对照测试入口，但不再作为上述产品 writer 的默认热路径。
+- 这次修正不等于“全 Rust DNS controller / 全 Rust outbound 协议栈”：
+  - Go DNS controller 仍负责请求处理、cache 生命周期、routing 语义输入和 reload snapshot 触发。
+  - daewing/outbound/quic-go 全协议栈仍保留 Go。
+  - 本轮目标是纠正 owner 写 map/控制面状态接入形态，让默认 CGO=0 产品构建也能打开 Rust/Aya owner 写入路径。
+- 下一步必须用该 CGO=0 / `embedallowed` 产物重新生成 daed 链路二进制，并在远程 38 做真实 run/reload/DNS/control API/TCX/netkit 验证；通过后再决定是否部署到 `10.10.10.2`。
+
+### no-cgo owner r4 产品链验证与 embedded loader 构建入口修正（2026-05-31）
+
+目标：
+
+- 回应“阶段 1-10 owner 热路径仍挂在 `rust_inprocess` build tag 下、no-cgo 还没有接成 daed/dae 产品默认入口”的问题。
+- 确认 `control/embedded/dae-aya-bpf-loader` 的定位：它是 `embedallowed` 构建期资产，不是运行时单独部署文件。Go 产品二进制通过 `go:embed` 将 Rust/Aya loader 打包进 daed/dae，运行时解压到 cache 执行；这避免了 cgo/staticlib，同时保持部署时单个 `/usr/bin/daed` 即可。
+- 避免 daed bundle 在 replace 链路下刷新错误资产：`wing/go.mod` 当前将 `github.com/daeuniverse/dae` replace 到 `/root/project/dae-daex-align`，因此 bundle 必须刷新这个实际 module 的 `control/embedded/dae-aya-bpf-loader`，不能只刷新 `wing/dae-core` detached 子目录。
+
+本轮构建入口修正：
+
+- `/root/project/dae-daex-align/Makefile`
+  - 新增 `RUST_AYA_LOADER_ASSET ?= control/embedded/dae-aya-bpf-loader`。
+  - 新增 `rust-aya-bpf-loader-asset` target：在 `rust/` 内执行 `cargo build -p dae-aya-bpf-loader --release --features native-ebpf`，然后复制到 `control/embedded/dae-aya-bpf-loader`。
+- `/root/project/daed-daex-align/daed/wing/Makefile`
+  - 新增 `DAE_MODULE_DIR ?= $(shell go list -m -f '{{.Dir}}' github.com/daeuniverse/dae ...)`。
+  - `rust-aya-bpf-loader-asset` 改为 `$(MAKE) -C "$(DAE_MODULE_DIR)" rust-aya-bpf-loader-asset`。
+  - 验证输出显示 bundle 命中 `/root/project/dae-daex-align`：`make -C "/root/project/dae-daex-align" rust-aya-bpf-loader-asset`。
+
+本地 daed r4 构建：
+
+| 项目 | 结果 |
+| --- | --- |
+| 构建命令 | `PATH=/root/.local/go1.25.9/bin:$PATH GOWORK=off CGO_ENABLED=0 make OUTPUT=/root/project/daed-daex-align/daed/daed-r4-no-cgo-owner-entry-20260531 APPNAME=daed WEB_DIST=../dist VERSION=daed-r4-no-cgo-owner-entry-20260531 bundle` |
+| 二进制 | `/root/project/daed-daex-align/daed/daed-r4-no-cgo-owner-entry-20260531` |
+| size | `50M` |
+| sha256 | `9ab9baa86114d1579466b01a8fb677fdf34b3ed73a37d93ae11d07d27773dd30` |
+| version | `daed version daed-r4-no-cgo-owner-entry-20260531` |
+| build tags | `embedallowed` |
+| cgo | `CGO_ENABLED=0` |
+| module replace | `github.com/daeuniverse/dae => /root/project/dae-daex-align`，`github.com/daeuniverse/outbound => /root/project/outbound-daex-align`，`github.com/daeuniverse/quic-go => /root/project/quic-go-rust` |
+| embedded Aya loader | `/root/project/dae-daex-align/control/embedded/dae-aya-bpf-loader`，sha256 `de3544950984eb5dec971b20f1af8c07ca377f75e576ff1e78a2637466a1e687` |
+| 构建状态说明 | `vcs.modified=true` 来自本轮 Makefile / no-cgo owner 接入修正尚未提交，不是构建失败。 |
+
+远程 38 r4 产品链验证：
+
+| 验证项 | 结果 |
+| --- | --- |
+| 测试机 | `38.65.91.47:5122`，kernel `6.12.86+deb12-amd64` |
+| 初始服务状态 | `dae.service=inactive`，`daed.service=inactive` |
+| 远程预清理 | pass，清理 `/tmp/dae-*` / `/tmp/daed-*` 文件和目录，`/sys/fs/bpf/dae*` / `/sys/fs/bpf/daed*` 残留为 `0` |
+| 临时 host-write | pass，临时安装 `/usr/bin/daed`、`/etc/daed` 和 `/etc/systemd/system/daed.service`；结束后全部删除 |
+| 临时 unit 环境 | `DAE_RUST_NATIVE_EBPF=1`，`DAE_RUST_NATIVE_EBPF_BACKEND=auto`，`DAE_NETNS_LINK=auto`，`DAE_RUST_RESIDENT_DATAPLANE=1` |
+| API health/auth | pass，`/api/health={"healthCheck":1}`，`/api/auth/status={"numberUsers":0}`，临时用户创建成功 |
+| config preview/import | pass，从 `/etc/dae/config.dae` 导入临时 daed config；仅在导入副本中增加 `dns.bind: 'udp://127.0.0.1:1053'` 用于 DNS listener 验证，原始 `/etc/dae/config.dae` 未修改 |
+| API dry reload | pass，`{"applied":1,"dry":true}` |
+| API real reload | pass，`{"applied":1,"dry":false}` |
+| `/api/general/state` | pass，`running=true`，`netnsLinkMode=netkit`，`attachBackend=tcx`，version `daed-r4-no-cgo-owner-entry-20260531` |
+| `/api/runtime/overview` | pass，返回 `14` 个顶层字段 |
+| `/api/general/cache-stats` | pass，返回 `10` 个顶层字段 |
+| DNS listener/cache | pass，`cloudflare.com` UDP/1053 连续 5 次 `rcode=0`、`answers=2`；耗时约 `35.405 ms`、`0.175 ms`、`0.087 ms`、`0.068 ms`、`0.081 ms` |
+| HTTPS trace | pass，`https://www.cloudflare.com/cdn-cgi/trace` 返回 `ip=38.65.91.47`、`colo=LAX`、`tls=TLSv1.3` |
+| `systemctl reload daed.service` | pass，reload 后 state 仍为 `running=true`、`netnsLinkMode=netkit`、`attachBackend=tcx` |
+| `systemctl restart daed.service` | pass，restart 后 state 仍为 `running=true`、`netnsLinkMode=netkit`、`attachBackend=tcx` |
+| Rust/Aya 日志 | pass，logfile/journal 合并扫描出现 `Rust/Aya BPF loader loaded object_source=rust-aya-skeleton`、`via Rust/Aya tcx`、`Opened tproxy listener via Rust/Aya`、`DNS listener started`、`[Reload] Finished` |
+| 防回退扫描 | pass，未出现 `falling back to Go writer`、`falling back to Go attach path`、`falling back to Go listener`、`falling back to Go map update`、`BpfMapBatchUpdate`、`BpfMapBatchDelete`、`ciliumLink`、`AttachCgroup`、`Bind ... via TC on`、`TCX attach failed`、`fatal`、`panic`、`parse config`、`restore DNS cache snapshot failed` |
+| 远程最终清理 | pass，`tmp_left=0`，`bpf_left=0`，`daed=inactive`，`dae=inactive`；`/usr/bin/daed`、`/etc/daed`、临时 unit 和上传的 `/tmp` 产物均已删除 |
+
+执行注意：
+
+- 第一次远程 r4 脚本在 API real reload 后用未认证请求访问 `/api/general/state`，返回 `401` 后中断；这是验证脚本问题，不计为产品失败。现场随后已清理并重跑。
+- 第二次完整验证在 journald 中未找到 Rust/Aya marker，是因为临时 unit 使用 `--logfile` 将 daed 主日志写入 `/tmp/daed-r4-no-cgo-owner-entry-20260531.log`。改为 logfile + journal 合并扫描后 marker 全部存在，防回退扫描通过。
+
+当前结论：
+
+- `routing_map` / `lpm_array_map`、`domain_routing_map`、`outbound_connectivity_map` 的产品 writer 入口已经从 `rust_inprocess`/cgo staticlib 接入迁出；r4 使用 `CGO_ENABLED=0` + `embedallowed` 生成 daed 并在远程 38 完整 run/reload/API/DNS/TCX/netkit 验证通过。
+- `control/embedded/dae-aya-bpf-loader` 仍需要作为构建期 `go:embed` 资产存在；它已经随 daed 二进制一起部署，不需要运行时额外安装。真正取消 executable helper 形态，需要后续把 control-plane owner 进一步迁移为 Rust resident service / Rust 主进程，而不是恢复 cgo in-process。
+- 本轮仍不替换 daewing/outbound/quic-go 全协议栈；Go DNS controller 仍负责 DNS 请求处理、cache 生命周期、routing 语义输入和 reload snapshot 触发，但相关 map owner 写入已走 no-cgo Rust/Aya 入口。
