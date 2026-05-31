@@ -134,6 +134,10 @@ cargo build --manifest-path rust/Cargo.toml \
   -p dae-daemon \
   --features native-ebpf \
   --bin dae-daemon-optin
+cargo build --manifest-path rust/Cargo.toml \
+  -p dae-aya-bpf-loader \
+  --bin dae-aya-bpf-loader
+export PATH="${repo_root}/rust/target/debug:${repo_root}/rust/target/release:${PATH}"
 
 echo "running native Aya/eBPF runtime gate"
 if ! RUN_ID="$run_id" \
