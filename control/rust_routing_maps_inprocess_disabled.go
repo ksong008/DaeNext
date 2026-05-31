@@ -7,7 +7,13 @@
 
 package control
 
-import "fmt"
+import (
+	"fmt"
+
+	"github.com/cilium/ebpf"
+)
+
+type rustDomainRoutingOwner struct{}
 
 func rustInprocessRoutingMapAvailable() bool {
 	return false
@@ -23,4 +29,20 @@ func applyKernelRoutingMapsViaRustOwnedInprocess(request rustRoutingMapApplyRequ
 
 func updateDomainRoutingMapViaRustInprocess(request rustDomainRoutingMapApplyRequest) error {
 	return fmt.Errorf("Rust in-process domain routing map writer is not enabled")
+}
+
+func newRustDomainRoutingOwner() *rustDomainRoutingOwner {
+	return &rustDomainRoutingOwner{}
+}
+
+func (o *rustDomainRoutingOwner) Close() error {
+	return nil
+}
+
+func (o *rustDomainRoutingOwner) Update(m *ebpf.Map, ownerKey string, snapshot domainRoutingOwnerSnapshot) error {
+	return fmt.Errorf("Rust in-process domain routing owner is not enabled")
+}
+
+func (o *rustDomainRoutingOwner) PrepareReload(m *ebpf.Map, keys [][4]uint32) error {
+	return fmt.Errorf("Rust in-process domain routing reload owner is not enabled")
 }

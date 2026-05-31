@@ -1,5 +1,8 @@
 use std::collections::HashMap;
+use std::io;
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
+
+use dae_ebpf_support::{BpfDomainRouting, DomainRoutingMapEntry, apply_domain_routing_map_by_id};
 
 pub type DomainRoutingIpKey = [u32; 4];
 
@@ -74,6 +77,17 @@ pub struct DomainRoutingOwnerUpdate {
     pub map_id: Option<u32>,
     pub plan: DomainRoutingSyncPlan,
     pub flush: bool,
+}
+
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct DomainRoutingOwnerApplyReport {
+    pub map_id: u32,
+    pub map_id_changed: bool,
+    pub skipped: bool,
+    pub entries_updated: usize,
+    pub entries_deleted: usize,
+    pub owner_count: usize,
+    pub ip_count: usize,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -326,6 +340,108 @@ impl DomainRoutingOwner {
             plan,
         }
     }
+
+    pub fn apply_owner_snapshot_by_id(
+        &mut self,
+        map_id: u32,
+        owner_key: &str,
+        snapshot: DomainRoutingOwnerSnapshot,
+    ) -> io::Result<DomainRoutingOwnerApplyReport> {
+        self.apply_owner_snapshot_with(map_id, owner_key, snapshot, |map_id, updates, deletes| {
+            apply_domain_routing_entries(map_id, updates, deletes)
+        })
+    }
+
+    pub fn apply_owner_snapshot_with(
+        &mut self,
+        map_id: u32,
+        owner_key: &str,
+        snapshot: DomainRoutingOwnerSnapshot,
+        apply: impl FnOnce(u32, &[DomainRoutingStateEntry], &[DomainRoutingIpKey]) -> io::Result<()>,
+    ) -> io::Result<DomainRoutingOwnerApplyReport> {
+        if owner_key.is_empty() {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "domain routing owner key is empty",
+            ));
+        }
+        let map_id_changed = self.map_id != Some(map_id);
+        if map_id_changed {
+            let mut next = self.tracker.clone();
+            next.apply_owner_update_ref(owner_key, &snapshot);
+            let entries = next.entries();
+            if !entries.is_empty() {
+                apply(map_id, &entries, &[])?;
+            }
+            self.map_id = Some(map_id);
+            self.tracker = next;
+            return Ok(DomainRoutingOwnerApplyReport {
+                map_id,
+                map_id_changed: true,
+                skipped: entries.is_empty(),
+                entries_updated: entries.len(),
+                entries_deleted: 0,
+                owner_count: self.tracker.owner_count(),
+                ip_count: self.tracker.ip_count(),
+            });
+        }
+
+        let plan = self.tracker.plan_owner_update(owner_key, &snapshot);
+        if plan.updates.is_empty() && plan.deletes.is_empty() {
+            return Ok(DomainRoutingOwnerApplyReport {
+                map_id,
+                map_id_changed: false,
+                skipped: true,
+                entries_updated: 0,
+                entries_deleted: 0,
+                owner_count: self.tracker.owner_count(),
+                ip_count: self.tracker.ip_count(),
+            });
+        }
+        apply(map_id, &plan.updates, &plan.deletes)?;
+        let plan = self.tracker.apply_owner_update_ref(owner_key, &snapshot);
+        Ok(DomainRoutingOwnerApplyReport {
+            map_id,
+            map_id_changed: false,
+            skipped: false,
+            entries_updated: plan.updates.len(),
+            entries_deleted: plan.deletes.len(),
+            owner_count: plan.owner_count,
+            ip_count: plan.ip_count,
+        })
+    }
+
+    pub fn prepare_reload_map_by_id(
+        &mut self,
+        map_id: u32,
+        existing_keys: impl IntoIterator<Item = DomainRoutingIpKey>,
+    ) -> io::Result<DomainRoutingReloadClearPlan> {
+        self.prepare_reload_map_with(map_id, existing_keys, |map_id, deletes| {
+            apply_domain_routing_entries(map_id, &[], deletes)
+        })
+    }
+
+    pub fn prepare_reload_map_with(
+        &mut self,
+        map_id: u32,
+        existing_keys: impl IntoIterator<Item = DomainRoutingIpKey>,
+        apply: impl FnOnce(u32, &[DomainRoutingIpKey]) -> io::Result<()>,
+    ) -> io::Result<DomainRoutingReloadClearPlan> {
+        let deletes = normalize_ip_keys(existing_keys);
+        if !deletes.is_empty() {
+            apply(map_id, &deletes)?;
+        }
+        let map_id_changed = self.map_id != Some(map_id);
+        self.map_id = Some(map_id);
+        self.tracker = DomainRoutingTracker::default();
+        Ok(DomainRoutingReloadClearPlan {
+            map_id,
+            map_id_changed,
+            deletes,
+            owner_count: self.tracker.owner_count(),
+            ip_count: self.tracker.ip_count(),
+        })
+    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -355,6 +471,23 @@ fn or_bitmap(dst: &mut [u32; 32], src: &[u32; 32]) {
     for (dst, src) in dst.iter_mut().zip(src.iter()) {
         *dst |= *src;
     }
+}
+
+fn apply_domain_routing_entries(
+    map_id: u32,
+    updates: &[DomainRoutingStateEntry],
+    deletes: &[DomainRoutingIpKey],
+) -> io::Result<()> {
+    let updates = updates
+        .iter()
+        .map(|entry| DomainRoutingMapEntry {
+            key: entry.key,
+            value: BpfDomainRouting {
+                bitmap: entry.bitmap,
+            },
+        })
+        .collect::<Vec<_>>();
+    apply_domain_routing_map_by_id(map_id, &updates, deletes).map(|_| ())
 }
 
 fn normalize_ip_keys(

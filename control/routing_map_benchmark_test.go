@@ -524,6 +524,68 @@ func BenchmarkDomainRoutingMapRustInprocessUpdate(b *testing.B) {
 	}
 }
 
+func BenchmarkDomainRoutingMapRustOwnedInprocessDuplicate(b *testing.B) {
+	if !rustInprocessRoutingMapAvailable() {
+		b.Skip("Rust in-process domain routing map owner is not enabled")
+	}
+	m := newBenchmarkDomainRoutingMap(b)
+	defer m.Close()
+	key, value := benchmarkDomainRoutingEntry()
+	owner := newRustDomainRoutingOwner()
+	defer owner.Close()
+	snapshot := domainRoutingOwnerSnapshot{
+		bitmap: value,
+		ips: map[[4]uint32]struct{}{
+			key: {},
+		},
+	}
+	if err := owner.Update(m, "bench-owner", snapshot); err != nil {
+		b.Fatal(err)
+	}
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		if err := owner.Update(m, "bench-owner", snapshot); err != nil {
+			b.Fatal(err)
+		}
+	}
+}
+
+func BenchmarkDomainRoutingMapRustOwnedInprocessToggle(b *testing.B) {
+	if !rustInprocessRoutingMapAvailable() {
+		b.Skip("Rust in-process domain routing map owner is not enabled")
+	}
+	m := newBenchmarkDomainRoutingMap(b)
+	defer m.Close()
+	key, value := benchmarkDomainRoutingEntry()
+	owner := newRustDomainRoutingOwner()
+	defer owner.Close()
+	snapshots := [2]domainRoutingOwnerSnapshot{
+		{
+			bitmap: value,
+			ips: map[[4]uint32]struct{}{
+				key: {},
+			},
+		},
+		{
+			bitmap: bpfDomainRouting{Bitmap: [32]uint32{0x3}},
+			ips: map[[4]uint32]struct{}{
+				key: {},
+			},
+		},
+	}
+	if err := owner.Update(m, "bench-owner", snapshots[0]); err != nil {
+		b.Fatal(err)
+	}
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		if err := owner.Update(m, "bench-owner", snapshots[i%2]); err != nil {
+			b.Fatal(err)
+		}
+	}
+}
+
 func BenchmarkDomainRoutingMapRustInprocessReloadClear(b *testing.B) {
 	if !rustInprocessRoutingMapAvailable() {
 		b.Skip("Rust in-process domain routing map writer is not enabled")
