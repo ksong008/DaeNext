@@ -51,11 +51,27 @@ func (c *controlPlaneCore) outboundAliveChangeCallback(outbound uint8, dryrun bo
 		if alive {
 			value = 1
 		}
-		if err := c.bpf.OutboundConnectivityMap.Update(bpfOutboundConnectivityQuery{
-			Outbound:  outbound,
-			L4proto:   networkType.L4Proto.ToL4Proto(),
-			Ipversion: networkType.IpVersion.ToIpVersion(),
-		}, value, ebpf.UpdateAny); err != nil {
+		l4proto := networkType.L4Proto.ToL4Proto()
+		ipversion := networkType.IpVersion.ToIpVersion()
+		var err error
+		if rustInprocessRoutingMapAvailable() {
+			err = c.getRustOutboundConnectivityOwner().Update(
+				c.bpf.OutboundConnectivityMap,
+				outbound,
+				l4proto,
+				ipversion,
+				alive,
+				isInit,
+				dryrun,
+			)
+		} else {
+			err = c.bpf.OutboundConnectivityMap.Update(bpfOutboundConnectivityQuery{
+				Outbound:  outbound,
+				L4proto:   l4proto,
+				Ipversion: ipversion,
+			}, value, ebpf.UpdateAny)
+		}
+		if err != nil {
 			c.log.WithFields(logrus.Fields{
 				"alive":    alive,
 				"network":  networkType.StringWithoutDns(),

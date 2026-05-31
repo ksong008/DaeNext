@@ -50,8 +50,9 @@ impl ControlApiTypedReport {
 }
 
 pub use connectivity_owned::{
-    ConnectivityMapReplay, ConnectivityOwnerUpdate, ConnectivityStateEntry,
-    ConnectivityStateUpdate, OutboundConnectivityOwner, OutboundConnectivityState,
+    ConnectivityMapReplay, ConnectivityOwnerApplyReport, ConnectivityOwnerUpdate,
+    ConnectivityStateEntry, ConnectivityStateUpdate, OutboundConnectivityMapOwner,
+    OutboundConnectivityOwner, OutboundConnectivityState,
 };
 pub use domain_routing::{
     DomainRoutingIpKey, DomainRoutingMapReplay, DomainRoutingOwner, DomainRoutingOwnerSnapshot,

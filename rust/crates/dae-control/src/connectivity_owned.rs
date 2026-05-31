@@ -1,6 +1,11 @@
 use std::collections::HashMap;
+use std::io;
+use std::os::fd::{AsRawFd, OwnedFd};
 
-use dae_ebpf_support::{ConnectivityEvent, ConnectivityKey};
+use dae_ebpf_support::{
+    ConnectivityEvent, ConnectivityKey,
+    runtime_maps::{open_map_fd, update_map_elem_bytes},
+};
 
 const KNOWN_L4_COUNT: usize = 3;
 const KNOWN_IP_COUNT: usize = 2;
@@ -23,10 +28,27 @@ pub struct ConnectivityStateEntry {
     pub value: u32,
 }
 
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct ConnectivityOwnerApplyReport {
+    pub map_id: u32,
+    pub map_id_changed: bool,
+    pub accepted: bool,
+    pub changed: bool,
+    pub skipped: bool,
+    pub entries_updated: usize,
+    pub len: usize,
+}
+
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct OutboundConnectivityOwner {
     map_id: Option<u32>,
     state: OutboundConnectivityState,
+}
+
+#[derive(Debug, Default)]
+pub struct OutboundConnectivityMapOwner {
+    owner: OutboundConnectivityOwner,
+    map_fd: Option<(u32, OwnedFd)>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -205,6 +227,158 @@ impl OutboundConnectivityOwner {
             self.state.apply(event);
         }
         update
+    }
+
+    pub fn apply_event_with(
+        &mut self,
+        map_id: u32,
+        event: ConnectivityEvent,
+        apply: impl FnOnce(u32, &[ConnectivityStateEntry]) -> io::Result<()>,
+    ) -> io::Result<ConnectivityOwnerApplyReport> {
+        let map_id_changed = self.map_id != Some(map_id);
+        let update = self.state.preview_update(event);
+        if map_id_changed {
+            let mut next = self.state.clone();
+            if update.accepted {
+                next.apply(event);
+            }
+            let entries = next.entries();
+            if !entries.is_empty() {
+                apply(map_id, &entries)?;
+            }
+            self.map_id = Some(map_id);
+            self.state = next;
+            return Ok(ConnectivityOwnerApplyReport {
+                map_id,
+                map_id_changed: true,
+                accepted: update.accepted,
+                changed: update.changed,
+                skipped: entries.is_empty(),
+                entries_updated: entries.len(),
+                len: self.state.len(),
+            });
+        }
+
+        if !update.accepted || !update.changed {
+            return Ok(ConnectivityOwnerApplyReport {
+                map_id,
+                map_id_changed: false,
+                accepted: update.accepted,
+                changed: update.changed,
+                skipped: true,
+                entries_updated: 0,
+                len: self.state.len(),
+            });
+        }
+
+        let entry = ConnectivityStateEntry {
+            key: update.key,
+            value: update.value,
+        };
+        apply(map_id, std::slice::from_ref(&entry))?;
+        self.state.apply(event);
+        Ok(ConnectivityOwnerApplyReport {
+            map_id,
+            map_id_changed: false,
+            accepted: true,
+            changed: true,
+            skipped: false,
+            entries_updated: 1,
+            len: self.state.len(),
+        })
+    }
+}
+
+impl OutboundConnectivityMapOwner {
+    pub fn state_owner(&self) -> &OutboundConnectivityOwner {
+        &self.owner
+    }
+
+    pub fn apply_event_by_id(
+        &mut self,
+        map_id: u32,
+        event: ConnectivityEvent,
+    ) -> io::Result<ConnectivityOwnerApplyReport> {
+        let map_id_changed = self.owner.map_id != Some(map_id);
+        let update = self.owner.state.preview_update(event);
+        if map_id_changed {
+            let mut next = self.owner.state.clone();
+            if update.accepted {
+                next.apply(event);
+            }
+            let entries = next.entries();
+            if !entries.is_empty() {
+                self.write_entries(map_id, &entries)?;
+            }
+            self.owner.map_id = Some(map_id);
+            self.owner.state = next;
+            return Ok(ConnectivityOwnerApplyReport {
+                map_id,
+                map_id_changed: true,
+                accepted: update.accepted,
+                changed: update.changed,
+                skipped: entries.is_empty(),
+                entries_updated: entries.len(),
+                len: self.owner.state.len(),
+            });
+        }
+
+        if !update.accepted || !update.changed {
+            return Ok(ConnectivityOwnerApplyReport {
+                map_id,
+                map_id_changed: false,
+                accepted: update.accepted,
+                changed: update.changed,
+                skipped: true,
+                entries_updated: 0,
+                len: self.owner.state.len(),
+            });
+        }
+
+        let entry = ConnectivityStateEntry {
+            key: update.key,
+            value: update.value,
+        };
+        self.write_entries(map_id, std::slice::from_ref(&entry))?;
+        self.owner.state.apply(event);
+        Ok(ConnectivityOwnerApplyReport {
+            map_id,
+            map_id_changed: false,
+            accepted: true,
+            changed: true,
+            skipped: false,
+            entries_updated: 1,
+            len: self.owner.state.len(),
+        })
+    }
+
+    fn write_entries(&mut self, map_id: u32, entries: &[ConnectivityStateEntry]) -> io::Result<()> {
+        let fd = self.ensure_fd(map_id)?;
+        for entry in entries {
+            let key = [entry.key.outbound, entry.key.l4proto, entry.key.ipversion];
+            let value = entry.value.to_ne_bytes();
+            if let Err(err) = update_map_elem_bytes(fd, &key, &value) {
+                self.map_fd = None;
+                return Err(err);
+            }
+        }
+        Ok(())
+    }
+
+    fn ensure_fd(&mut self, map_id: u32) -> io::Result<i32> {
+        let needs_open = self
+            .map_fd
+            .as_ref()
+            .map_or(true, |(cached_map_id, _)| *cached_map_id != map_id);
+        if needs_open {
+            self.map_fd = Some((map_id, open_map_fd(map_id)?));
+        }
+        Ok(self
+            .map_fd
+            .as_ref()
+            .expect("connectivity owner map fd is present")
+            .1
+            .as_raw_fd())
     }
 }
 
