@@ -1413,6 +1413,7 @@ fn run_load_pin(options: BpfLoaderLoadPinOptions) -> LoaderOutput {
             "object": object,
             "object_source": object_source,
             "default_object_source": BpfObjectSource::RustAyaSkeleton.as_str(),
+            "kernel_ebpf_program_rewrite": object_source == BpfObjectSource::RustAyaSkeleton.as_str(),
             "rust_aya_skeleton_opt_in": object_source == BpfObjectSource::RustAyaSkeleton.as_str(),
             "pin_root": pin_report.adoption_pin_root,
             "map_pin_root": pin_report.map_pin_root,
