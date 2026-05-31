@@ -48,3 +48,24 @@ impl ReloadCoreState {
         }
     }
 }
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct ReloadDnsCachePlan {
+    pub dns_config_unchanged: bool,
+    pub bpf_present: bool,
+    pub snapshot_entries: usize,
+    pub restore_cache: bool,
+    pub clear_domain_routing_map: bool,
+}
+
+impl ReloadDnsCachePlan {
+    pub fn decide(dns_config_unchanged: bool, bpf_present: bool, snapshot_entries: usize) -> Self {
+        Self {
+            dns_config_unchanged,
+            bpf_present,
+            snapshot_entries,
+            restore_cache: dns_config_unchanged && snapshot_entries > 0,
+            clear_domain_routing_map: bpf_present,
+        }
+    }
+}

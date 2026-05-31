@@ -31,7 +31,8 @@ func (c *controlPlaneCore) outboundAliveChangeCallback(outbound uint8, dryrun bo
 			return
 		default:
 		}
-		if !isInit && dryrun {
+		useRustOwner := rustInprocessRoutingMapAvailable()
+		if !isInit && dryrun && !useRustOwner {
 			return
 		}
 		if !isInit || c.log.IsLevelEnabled(logrus.TraceLevel) {
@@ -44,9 +45,6 @@ func (c *controlPlaneCore) outboundAliveChangeCallback(outbound uint8, dryrun bo
 			}).Tracef("Outbound <%v> %v -> %v, notify the kernel program.", c.outboundId2Name[outbound], networkType.StringWithoutDns(), strAlive)
 		}
 
-		if !isInit && dryrun {
-			return
-		}
 		value := uint32(0)
 		if alive {
 			value = 1
@@ -54,7 +52,7 @@ func (c *controlPlaneCore) outboundAliveChangeCallback(outbound uint8, dryrun bo
 		l4proto := networkType.L4Proto.ToL4Proto()
 		ipversion := networkType.IpVersion.ToIpVersion()
 		var err error
-		if rustInprocessRoutingMapAvailable() {
+		if useRustOwner {
 			err = c.getRustOutboundConnectivityOwner().Update(
 				c.bpf.OutboundConnectivityMap,
 				outbound,
