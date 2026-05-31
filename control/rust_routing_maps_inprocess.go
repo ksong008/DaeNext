@@ -65,10 +65,34 @@ typedef struct {
 	size_t lpm_maps_created;
 } dae_control_routing_owner_apply_report;
 
+typedef struct dae_control_domain_routing_owner dae_control_domain_routing_owner;
+
+typedef struct {
+	uint32_t map_id;
+	uint8_t map_id_changed;
+	uint8_t skipped;
+	uint8_t padding[2];
+	size_t entries_updated;
+	size_t entries_deleted;
+	size_t owner_count;
+	size_t ip_count;
+} dae_control_domain_routing_owner_apply_report;
+
+typedef struct {
+	uint32_t map_id;
+	uint8_t map_id_changed;
+	uint8_t padding[3];
+	size_t entries_deleted;
+	size_t owner_count;
+	size_t ip_count;
+} dae_control_domain_routing_reload_clear_report;
+
 extern uint32_t dae_control_ffi_abi_version(void);
 extern const char *dae_control_last_error_message(void);
 extern dae_control_routing_owner *dae_control_routing_owner_new(void);
 extern void dae_control_routing_owner_free(dae_control_routing_owner *owner);
+extern dae_control_domain_routing_owner *dae_control_domain_routing_owner_new(void);
+extern void dae_control_domain_routing_owner_free(dae_control_domain_routing_owner *owner);
 extern int32_t dae_control_apply_routing_maps_with_lpm_build_by_id(
 	uint32_t routing_map_id,
 	uint32_t lpm_array_map_id,
@@ -94,6 +118,32 @@ extern int32_t dae_control_routing_owner_apply_snapshot_by_id(
 	size_t lpm_maps_len,
 	dae_control_routing_owner_apply_report *report
 );
+extern int32_t dae_control_domain_routing_owner_apply_snapshot_by_id(
+	dae_control_domain_routing_owner *owner,
+	uint32_t map_id,
+	const char *owner_key,
+	const uint32_t (*bitmap)[32],
+	const uint32_t (*ips)[4],
+	size_t ips_len,
+	dae_control_domain_routing_owner_apply_report *report
+);
+extern int32_t dae_control_domain_routing_owner_apply_snapshot_bytes_by_id(
+	dae_control_domain_routing_owner *owner,
+	uint32_t map_id,
+	const uint8_t *owner_key,
+	size_t owner_key_len,
+	const uint32_t (*bitmap)[32],
+	const uint32_t (*ips)[4],
+	size_t ips_len,
+	dae_control_domain_routing_owner_apply_report *report
+);
+extern int32_t dae_control_domain_routing_owner_prepare_reload_map_by_id(
+	dae_control_domain_routing_owner *owner,
+	uint32_t map_id,
+	const uint32_t (*existing_keys)[4],
+	size_t existing_keys_len,
+	dae_control_domain_routing_reload_clear_report *report
+);
 */
 import "C"
 
@@ -102,6 +152,8 @@ import (
 	"runtime"
 	"sync"
 	"unsafe"
+
+	"github.com/cilium/ebpf"
 )
 
 var rustRoutingOwnerState struct {
@@ -109,8 +161,167 @@ var rustRoutingOwnerState struct {
 	ptr *C.dae_control_routing_owner
 }
 
+type rustDomainRoutingOwner struct {
+	mu     sync.Mutex
+	ptr    *C.dae_control_domain_routing_owner
+	mapPtr *ebpf.Map
+	mapID  uint32
+}
+
 func rustInprocessRoutingMapAvailable() bool {
 	return C.dae_control_ffi_abi_version() == 1
+}
+
+func newRustDomainRoutingOwner() *rustDomainRoutingOwner {
+	return &rustDomainRoutingOwner{}
+}
+
+func (o *rustDomainRoutingOwner) Close() error {
+	if o == nil {
+		return nil
+	}
+	o.mu.Lock()
+	ptr := o.ptr
+	o.ptr = nil
+	o.mapPtr = nil
+	o.mapID = 0
+	o.mu.Unlock()
+	if ptr != nil {
+		C.dae_control_domain_routing_owner_free(ptr)
+	}
+	return nil
+}
+
+func (o *rustDomainRoutingOwner) ensureLocked() error {
+	if o.ptr != nil {
+		return nil
+	}
+	o.ptr = C.dae_control_domain_routing_owner_new()
+	if o.ptr == nil {
+		return fmt.Errorf("create Rust in-process domain routing owner")
+	}
+	return nil
+}
+
+func (o *rustDomainRoutingOwner) mapIDLocked(m *ebpf.Map) (uint32, error) {
+	if m == nil {
+		return 0, nil
+	}
+	if o.mapPtr == m && o.mapID != 0 {
+		return o.mapID, nil
+	}
+	mapID, err := bpfMapID(m)
+	if err != nil {
+		return 0, err
+	}
+	o.mapPtr = m
+	o.mapID = mapID
+	return mapID, nil
+}
+
+func (o *rustDomainRoutingOwner) Update(m *ebpf.Map, ownerKey string, snapshot domainRoutingOwnerSnapshot) error {
+	if m == nil {
+		return nil
+	}
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	mapID, err := o.mapIDLocked(m)
+	if err != nil {
+		return err
+	}
+	if err := o.ensureLocked(); err != nil {
+		return err
+	}
+	var ownerKeyPtr *C.uint8_t
+	if len(ownerKey) > 0 {
+		ownerKeyPtr = (*C.uint8_t)(unsafe.Pointer(unsafe.StringData(ownerKey)))
+	}
+	var bitmap [32]C.uint32_t
+	for i, word := range snapshot.bitmap.Bitmap {
+		bitmap[i] = C.uint32_t(word)
+	}
+	var ips [][4]C.uint32_t
+	var ipsPtr *[4]C.uint32_t
+	ipsLen := len(snapshot.ips)
+	if ipsLen == 1 {
+		var one [1][4]C.uint32_t
+		for key := range snapshot.ips {
+			for i, word := range key {
+				one[0][i] = C.uint32_t(word)
+			}
+		}
+		ipsPtr = &one[0]
+		var report C.dae_control_domain_routing_owner_apply_report
+		rc := C.dae_control_domain_routing_owner_apply_snapshot_bytes_by_id(
+			o.ptr,
+			C.uint32_t(mapID),
+			ownerKeyPtr,
+			C.size_t(len(ownerKey)),
+			(*[32]C.uint32_t)(&bitmap),
+			ipsPtr,
+			C.size_t(ipsLen),
+			&report,
+		)
+		runtime.KeepAlive(ownerKey)
+		if rc != 0 {
+			return fmt.Errorf("Rust in-process domain routing owner failed: %s", rustInprocessLastError())
+		}
+		return nil
+	}
+	ips = cDomainRoutingIPKeys(snapshot.ips)
+	if len(ips) > 0 {
+		ipsPtr = &ips[0]
+	}
+	var report C.dae_control_domain_routing_owner_apply_report
+	rc := C.dae_control_domain_routing_owner_apply_snapshot_bytes_by_id(
+		o.ptr,
+		C.uint32_t(mapID),
+		ownerKeyPtr,
+		C.size_t(len(ownerKey)),
+		(*[32]C.uint32_t)(&bitmap),
+		ipsPtr,
+		C.size_t(len(ips)),
+		&report,
+	)
+	runtime.KeepAlive(ownerKey)
+	runtime.KeepAlive(ips)
+	if rc != 0 {
+		return fmt.Errorf("Rust in-process domain routing owner failed: %s", rustInprocessLastError())
+	}
+	return nil
+}
+
+func (o *rustDomainRoutingOwner) PrepareReload(m *ebpf.Map, keys [][4]uint32) error {
+	if m == nil {
+		return nil
+	}
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	mapID, err := o.mapIDLocked(m)
+	if err != nil {
+		return err
+	}
+	if err := o.ensureLocked(); err != nil {
+		return err
+	}
+	cKeys := cDomainRoutingKeys(keys)
+	var keysPtr *[4]C.uint32_t
+	if len(cKeys) > 0 {
+		keysPtr = &cKeys[0]
+	}
+	var report C.dae_control_domain_routing_reload_clear_report
+	rc := C.dae_control_domain_routing_owner_prepare_reload_map_by_id(
+		o.ptr,
+		C.uint32_t(mapID),
+		keysPtr,
+		C.size_t(len(cKeys)),
+		&report,
+	)
+	runtime.KeepAlive(cKeys)
+	if rc != 0 {
+		return fmt.Errorf("Rust in-process domain routing reload owner failed: %s", rustInprocessLastError())
+	}
+	return nil
 }
 
 func applyKernelRoutingMapsViaRustOwnedInprocess(request rustRoutingMapApplyRequest) error {
@@ -221,6 +432,34 @@ func updateDomainRoutingMapViaRustInprocess(request rustDomainRoutingMapApplyReq
 		return fmt.Errorf("Rust in-process domain routing map writer failed: %s", rustInprocessLastError())
 	}
 	return nil
+}
+
+func cDomainRoutingIPKeys(keys map[[4]uint32]struct{}) [][4]C.uint32_t {
+	if len(keys) == 0 {
+		return nil
+	}
+	out := make([][4]C.uint32_t, 0, len(keys))
+	for key := range keys {
+		var cKey [4]C.uint32_t
+		for i, word := range key {
+			cKey[i] = C.uint32_t(word)
+		}
+		out = append(out, cKey)
+	}
+	return out
+}
+
+func cDomainRoutingKeys(keys [][4]uint32) [][4]C.uint32_t {
+	if len(keys) == 0 {
+		return nil
+	}
+	out := make([][4]C.uint32_t, len(keys))
+	for i, key := range keys {
+		for j, word := range key {
+			out[i][j] = C.uint32_t(word)
+		}
+	}
+	return out
 }
 
 func cUint8Bool(v bool) C.uint8_t {

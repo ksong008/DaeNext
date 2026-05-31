@@ -177,6 +177,114 @@ fn domain_routing_owner_clears_reused_map_before_reload_restore() {
 }
 
 #[test]
+fn domain_routing_owner_applies_after_map_write_and_skips_duplicate_snapshot() {
+    let mut owner = DomainRoutingOwner::default();
+    let owner_a = DomainRoutingOwnerSnapshot::new(&[0x1], &["192.0.2.1", "2001:db8::1"]);
+    let mut applied = Vec::new();
+
+    let first = owner
+        .apply_owner_snapshot_with(
+            77,
+            "owner-a",
+            owner_a.clone(),
+            |map_id, updates, deletes| {
+                applied.push((map_id, updates.to_vec(), deletes.to_vec()));
+                Ok(())
+            },
+        )
+        .unwrap();
+    assert!(!first.skipped);
+    assert!(first.map_id_changed);
+    assert_eq!(first.entries_updated, 2);
+    assert_eq!(first.entries_deleted, 0);
+    assert_eq!(owner.map_id(), Some(77));
+    assert_eq!(owner.tracker().owner_count(), 1);
+    assert_eq!(applied.len(), 1);
+
+    let duplicate = owner
+        .apply_owner_snapshot_with(77, "owner-a", owner_a.clone(), |_, _, _| {
+            panic!("duplicate snapshot must not rewrite domain_routing_map")
+        })
+        .unwrap();
+    assert!(duplicate.skipped);
+    assert!(!duplicate.map_id_changed);
+    assert_eq!(duplicate.entries_updated, 0);
+    assert_eq!(duplicate.entries_deleted, 0);
+    assert_eq!(applied.len(), 1);
+
+    let owner_b = DomainRoutingOwnerSnapshot::new(&[0x2], &["192.0.2.1"]);
+    let second = owner
+        .apply_owner_snapshot_with(77, "owner-b", owner_b, |map_id, updates, deletes| {
+            applied.push((map_id, updates.to_vec(), deletes.to_vec()));
+            Ok(())
+        })
+        .unwrap();
+    assert!(!second.skipped);
+    assert!(!second.map_id_changed);
+    assert_eq!(second.entries_updated, 1);
+    assert_eq!(second.entries_deleted, 0);
+    assert_eq!(owner.tracker().ip_count(), 2);
+    assert_eq!(applied[1].1[0].bitmap[0], 0x3);
+
+    let replay = owner
+        .apply_owner_snapshot_with(88, "owner-b", owner_a, |map_id, updates, deletes| {
+            applied.push((map_id, updates.to_vec(), deletes.to_vec()));
+            Ok(())
+        })
+        .unwrap();
+    assert!(replay.map_id_changed);
+    assert!(!replay.skipped);
+    assert_eq!(replay.entries_updated, 2);
+    assert_eq!(replay.entries_deleted, 0);
+    assert_eq!(owner.map_id(), Some(88));
+    assert_eq!(applied[2].0, 88);
+    assert_eq!(applied[2].1.len(), 2);
+}
+
+#[test]
+fn domain_routing_owner_does_not_commit_when_map_apply_fails() {
+    let mut owner = DomainRoutingOwner::default();
+    let snapshot = DomainRoutingOwnerSnapshot::new(&[0x1], &["192.0.2.1"]);
+    let err = owner
+        .apply_owner_snapshot_with(77, "owner-a", snapshot, |_, _, _| {
+            Err(std::io::Error::other("map write failed"))
+        })
+        .unwrap_err();
+    assert!(err.to_string().contains("map write failed"));
+    assert_eq!(owner.map_id(), None);
+    assert_eq!(owner.tracker().owner_count(), 0);
+    assert_eq!(owner.tracker().ip_count(), 0);
+}
+
+#[test]
+fn domain_routing_owner_reload_clear_applies_before_state_reset() {
+    let mut owner = DomainRoutingOwner::default();
+    owner
+        .apply_owner_snapshot_with(
+            77,
+            "owner-a",
+            DomainRoutingOwnerSnapshot::new(&[0x1], &["192.0.2.1"]),
+            |_, _, _| Ok(()),
+        )
+        .unwrap();
+    assert_eq!(owner.tracker().owner_count(), 1);
+    let key = parse_ip_key("192.0.2.1").unwrap();
+    let mut applied = Vec::new();
+    let clear = owner
+        .prepare_reload_map_with(77, [key], |map_id, deletes| {
+            applied.push((map_id, deletes.to_vec()));
+            Ok(())
+        })
+        .unwrap();
+    assert_eq!(clear.deletes, vec![key]);
+    assert_eq!(clear.owner_count, 0);
+    assert_eq!(clear.ip_count, 0);
+    assert_eq!(owner.map_id(), Some(77));
+    assert_eq!(owner.tracker().owner_count(), 0);
+    assert_eq!(applied, vec![(77, vec![key])]);
+}
+
+#[test]
 fn reload_bpf_ownership_matches_golden_fixture() {
     let fixture = load("control/reload_bpf_ownership/eject_inject.json");
     let steps = fixture["steps"].as_array().unwrap();
@@ -359,6 +467,100 @@ fn outbound_connectivity_owner_replays_state_when_map_id_changes() {
     assert!(!skipped.state.accepted);
     assert!(!skipped.flush);
     assert_eq!(owner.state().get(tcp4), Some(0));
+}
+
+#[test]
+fn outbound_connectivity_owner_writes_before_committing_state() {
+    let tcp4 = ConnectivityKey {
+        outbound: 2,
+        l4proto: 6,
+        ipversion: 4,
+    };
+    let mut owner = OutboundConnectivityOwner::default();
+    let mut applied = Vec::new();
+
+    let first = owner
+        .apply_event_with(
+            1001,
+            connectivity_event(tcp4, true, true, true),
+            |map_id, entries| {
+                applied.push((map_id, entries.to_vec()));
+                Ok(())
+            },
+        )
+        .unwrap();
+    assert!(first.map_id_changed);
+    assert!(first.accepted);
+    assert!(first.changed);
+    assert!(!first.skipped);
+    assert_eq!(first.entries_updated, 1);
+    assert_eq!(owner.map_id(), Some(1001));
+    assert_eq!(owner.state().get(tcp4), Some(1));
+    assert_eq!(applied.len(), 1);
+
+    let duplicate = owner
+        .apply_event_with(
+            1001,
+            connectivity_event(tcp4, true, false, false),
+            |_, _| panic!("duplicate connectivity event must not rewrite map"),
+        )
+        .unwrap();
+    assert!(!duplicate.map_id_changed);
+    assert!(duplicate.accepted);
+    assert!(!duplicate.changed);
+    assert!(duplicate.skipped);
+    assert_eq!(duplicate.entries_updated, 0);
+    assert_eq!(applied.len(), 1);
+
+    let changed = owner
+        .apply_event_with(
+            1001,
+            connectivity_event(tcp4, false, false, false),
+            |map_id, entries| {
+                applied.push((map_id, entries.to_vec()));
+                Ok(())
+            },
+        )
+        .unwrap();
+    assert!(!changed.map_id_changed);
+    assert!(changed.changed);
+    assert_eq!(changed.entries_updated, 1);
+    assert_eq!(owner.state().get(tcp4), Some(0));
+    assert_eq!(applied[1].1[0].value, 0);
+
+    let replay = owner
+        .apply_event_with(
+            1002,
+            connectivity_event(tcp4, false, false, false),
+            |map_id, entries| {
+                applied.push((map_id, entries.to_vec()));
+                Ok(())
+            },
+        )
+        .unwrap();
+    assert!(replay.map_id_changed);
+    assert!(!replay.changed);
+    assert_eq!(replay.entries_updated, 1);
+    assert_eq!(owner.map_id(), Some(1002));
+    assert_eq!(applied[2].0, 1002);
+}
+
+#[test]
+fn outbound_connectivity_owner_does_not_commit_when_map_apply_fails() {
+    let tcp4 = ConnectivityKey {
+        outbound: 2,
+        l4proto: 6,
+        ipversion: 4,
+    };
+    let mut owner = OutboundConnectivityOwner::default();
+    let err = owner
+        .apply_event_with(1001, connectivity_event(tcp4, true, true, true), |_, _| {
+            Err(std::io::Error::other("connectivity map write failed"))
+        })
+        .unwrap_err();
+    assert!(err.to_string().contains("connectivity map write failed"));
+    assert_eq!(owner.map_id(), None);
+    assert!(owner.state().is_empty());
 }
 
 #[test]
