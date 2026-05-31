@@ -396,6 +396,7 @@ dependencies = [
 name = "dae-aya-bpf-loader"
 version = "0.1.0"
 dependencies = [
+ "dae-control",
  "dae-ebpf-support",
  "fastrand",
  "libc",

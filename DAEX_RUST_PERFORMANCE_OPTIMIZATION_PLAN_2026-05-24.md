@@ -20061,3 +20061,179 @@ cargo run --release --manifest-path rust/Cargo.toml -p dae-daemon --bin dae-daem
 - r4 已在 `10.10.10.2` 替换并运行，服务状态、Rust/Aya skeleton loader、TCX attach、no-cgo owner helper、本机 HTTPS trace 和 `10.10.10.4 -> 10.10.10.2` LAN 侧 trace 均通过。
 - 这次部署确认的是“no-cgo owner 产品接入 + Rust/Aya embedded loader + 现有 Go daed/dae-wing/outbound 协议栈”的混合架构运行态，不代表全 Rust DNS controller 或全 Rust outbound 协议栈已完成。
 - 下一步不再扩 helper 方向；按混合架构计划，应进入 Rust-owned control-plane / Rust resident service 设计与准入，把当前 `connectivity-map serve-binary`、`domain-routing-map serve` 这类 executable helper 热路径继续下沉到 Rust 持有 runtime state 的正式入口，同时保留 daed 产品壳/WebUI/API 和 daewing/outbound/quic-go 协议栈边界。
+
+### `outbound_connectivity_map` 迁入 `dae-control` owner（2026-05-31）
+
+目标：
+
+- 完成 `outbound_connectivity_map` 从 `dae-ebpf-support::ConnectivityMapFdCache` 迁入 `dae-control::OutboundConnectivityMapOwner`。
+- 保持当前混合架构边界：daed 产品壳/WebUI/API、daewing/outbound/quic-go 全协议栈仍保持 Go；本轮只迁移 connectivity map 的 Rust-owned state owner，不改 outbound/dialer 协议实现。
+- 保持 `outbound,l4proto,ipversion` 三维 key ABI，不压缩为单 outbound 状态。
+- 保持通用语义，不按任何测试机 config 做特定修复。
+- 保持 `dryrun && !is_init` 为严格 no-op：不写 eBPF map、不打开 map fd、不提交 owner state、不安装 map id。
+
+修改内容：
+
+- `rust/crates/dae-aya-bpf-loader/Cargo.toml`
+  - `dae-aya-bpf-loader` 引入 `dae-control` workspace dependency。
+- `rust/crates/dae-aya-bpf-loader/src/lib.rs`
+  - `connectivity-map serve` / `serve-binary` 的常驻入口从 `dae_ebpf_support::ConnectivityMapFdCache` 改为 `dae_control::OutboundConnectivityMapOwner`。
+  - JSON 响应增加 `owner: "dae-control"`、`map_id_changed`、`entries_updated`、`state_entries`、`accepted`，便于后续 reload replay 和准入观测。
+  - binary response 保持 8 字节协议：
+    - `response[0]`：status。
+    - `response[1]`：本次是否写入至少一个 entry。
+    - `response[2]`：owner 是否接受了 map id 变更并触发 replay。
+    - `response[3]`：事件是否被 owner 接受。
+    - `response[4..8]`：map id echo。
+- `rust/crates/dae-control/src/connectivity_owned.rs`
+  - `OutboundConnectivityOwner::apply_event_with` 与 `OutboundConnectivityMapOwner::apply_event_by_id` 收紧 rejected dryrun 语义：非 init dryrun 事件在任何 map id 下均直接返回 skipped，不安装 map id、不回放旧 state。
+  - 正常 init/非 dryrun 事件保持 map id 变更时 replay Rust-owned state 的行为。
+- `control/rust_connectivity_inprocess_disabled.go`
+  - no-cgo 产品入口解析 binary response 的 `mapChanged` / `accepted` 字段，不再把所有 helper pass 都固定视作 accepted。
+- `control/rust_connectivity_inprocess_disabled_test.go`
+  - 新增 no-cgo 单测，锁住 Go 侧 binary response 协议解析和 dryrun no-op 报告。
+- `control/embedded/dae-aya-bpf-loader`
+  - 已通过 `make rust-aya-bpf-loader-asset` 重新生成本地 embedded loader asset；该文件为 ignored 构建期资产，用于后续 daed/dae `embedallowed` 打包，源码提交不直接包含该二进制。
+
+验证：
+
+| 验证项 | 结果 |
+| --- | --- |
+| `cargo test --manifest-path rust/Cargo.toml -p dae-control outbound_connectivity` | pass，6 passed |
+| `cargo test --manifest-path rust/Cargo.toml -p dae-aya-bpf-loader connectivity_map` | pass，4 passed |
+| `PATH=/root/.local/go1.25.9/bin:$PATH GOWORK=off CGO_ENABLED=0 go test -count=1 -tags=embedallowed ./control -run 'TestRustOutboundConnectivityUpdateIO\|TestRustAya(ProductCallersUseExecutableResolver\|ConnectivityMapHasNoGoDirectFallback\|RoutingMapWritersHaveNoGoFallback\|BpfLoaderAdoptsPinnedObjectsAndUpdatesControlMaps)'` | pass |
+| `PATH=/root/.local/go1.25.9/bin:$PATH GOWORK=off CGO_ENABLED=0 go test -count=1 -tags=embedallowed ./control ./engine` | pass |
+| `make rust-aya-bpf-loader-asset` | pass，生成 `control/embedded/dae-aya-bpf-loader`，sha256 `ec71740783afdfc2dd94ef1263bd65d08720b141417285f3c874d05162722590` |
+| `PATH=/root/.local/go1.25.9/bin:$PATH GOWORK=off CGO_ENABLED=0 go test -count=1 -tags=embedallowed ./control -run 'TestEmbeddedRustBpfLoader\|TestRustOutboundConnectivityUpdateIO\|TestRustAya(ProductCallersUseExecutableResolver\|ConnectivityMapHasNoGoDirectFallback)'` | pass |
+| `PATH=/root/.local/go1.25.9/bin:$PATH GOWORK=off CGO_ENABLED=0 go build -tags=embedallowed -o /tmp/dae-daex-connectivity-owner-20260531 .` | pass，生成 `40M` Linux amd64 二进制；验证后删除 `/tmp` 产物 |
+| `git diff --check` | pass |
+
+benchmark（本地，2026-05-31，count/repeat=10）：
+
+| 项目 | 模式 | 平均 ns/op | B/op | allocs/op | 说明 |
+| --- | --- | ---: | ---: | ---: | --- |
+| `BenchmarkOutboundConnectivityMapGoUpdate` | Go direct eBPF map update，`go test -benchmem -count=10 -benchtime=1s` | `760.050` | `16` | `2` | 对照项：每次直接更新 eBPF hash map |
+| `control/outbound_connectivity_state_stable` | Rust owner state duplicate/no-write，`dae-bench --repeat 10 --iters auto` | `9.753779` | `0` | `0` | 稳定状态重复事件只做 owner 判定，不写 map |
+| `control/outbound_connectivity_state_toggle` | Rust owner state toggle，`dae-bench --repeat 10 --iters auto` | `9.775942` | `0` | `0` | 只测 Rust state 更新，不含 fd/map syscall |
+| `control/outbound_connectivity_owner_toggle` | Rust owner with installed map id，`dae-bench --repeat 10 --iters auto` | `16.441742` | `0` | `0` | owner 层包含 map id/flush 计划，不含 helper IPC |
+
+结论：
+
+- `outbound_connectivity_map` 的状态所有权已经迁入 `dae-control`，`dae-aya-bpf-loader` 常驻 connectivity service 不再使用 `ConnectivityMapFdCache` 的 per-map 独立 state。
+- 迁入后能在 map id 变化时按 Rust-owned state replay 已知 connectivity entries，避免 reload 后只依赖后续 dialer callback 重新填充。
+- dryrun 非 init 事件保持严格 no-op，避免 health/dryrun 观测事件污染 owner state 或触发 map fd 打开。
+- 当前产品默认仍是 no-cgo executable embedded helper 形态，不是 cgo `rust_inprocess`，也不是最终 Rust-owned in-process/resident control-plane；后续优化方向仍是把 owner service 继续下沉到 Rust-owned resident control-plane，消除每事件 helper IPC。
+
+### r5 `outbound_connectivity_map` owner 迁入后的 38 host-write no-cgo 验证（2026-05-31）
+
+目标：
+
+- 使用包含本轮 `outbound_connectivity_map -> dae-control owner` 迁入的 daed r5 二进制，在远程 38 测试机执行真实 host-write 验证。
+- 验证重点不是只看服务能启动，而是确认当前 no-cgo 项目均已引入并处于可工作状态：
+  - `CGO_ENABLED=0` + `embedallowed` daed 产品二进制。
+  - embedded Rust/Aya loader asset。
+  - Rust/Aya skeleton eBPF loader 与 TCX/netkit attach。
+  - no-cgo `connectivity-map serve-binary` 常驻 owner，并确认 `owner=dae-control`。
+  - no-cgo `domain-routing-map serve` helper 能对真实临时 BPF map 写入成功；该 helper 在产品中是按 domain routing event 懒启动，不要求无事件配置下常驻。
+  - no Go BPF fallback / Go map writer / Go listener / Go attach path 回退日志。
+
+本地构建：
+
+| 项目 | 结果 |
+| --- | --- |
+| 构建目录 | `/root/project/daed-daex-align/daed/wing` |
+| 构建命令 | `PATH=/root/.local/go1.25.9/bin:$PATH GOWORK=off CGO_ENABLED=0 make OUTPUT=/root/project/daed-daex-align/daed/daed-r5-connectivity-owner-20260531 APPNAME=daed WEB_DIST=../dist VERSION=daed-r5-connectivity-owner-20260531 bundle` |
+| 二进制 | `/root/project/daed-daex-align/daed/daed-r5-connectivity-owner-20260531` |
+| size | `50M` |
+| sha256 | `21f9c785d9178f778e26e725b7b809d5b4f5093138a82386d81d006406d5d88c` |
+| version | `daed version daed-r5-connectivity-owner-20260531` |
+| Go build metadata | `-tags=embedallowed`、`CGO_ENABLED=0`、`github.com/daeuniverse/dae => /root/project/dae-daex-align`、`outbound => /root/project/outbound-daex-align`、`quic-go => /root/project/quic-go-rust` |
+| embedded Aya loader asset | `control/embedded/dae-aya-bpf-loader`，sha256 `ec71740783afdfc2dd94ef1263bd65d08720b141417285f3c874d05162722590` |
+
+远程 38 验证：
+
+| 验证项 | 结果 |
+| --- | --- |
+| 测试机 | `38.65.91.47:5122`，kernel `6.12.86+deb12-amd64` |
+| host-write 方式 | 临时上传 r5 到 `/tmp`，临时安装 `/usr/bin/daed`、`/etc/daed`、`/etc/systemd/system/daed.service` |
+| unit 环境 | `DAE_RUST_NATIVE_EBPF=1`、`DAE_RUST_NATIVE_EBPF_BACKEND=auto`、`DAE_NETNS_LINK=auto`、`DAE_RUST_RESIDENT_DATAPLANE=1` |
+| API health/auth | pass，`/api/health` ready，临时用户创建成功 |
+| config import | pass，基于 `/etc/dae/config.dae` 的临时导入副本；仅验证副本中加入 `dns.bind: udp://127.0.0.1:1053` 和一条通用 `domain(suffix: example.com) -> proxy` 规则用于触发 domain routing no-cgo writer，不修改原始 `/etc/dae/config.dae` |
+| API dry reload | pass |
+| API real reload | pass |
+| `/api/general/state` | pass，`running=true`、`attachBackend=tcx`、`netnsLinkMode=netkit` |
+| `/api/runtime/overview` | pass |
+| `/api/general/cache-stats` | pass |
+| DNS listener | pass，`127.0.0.1:1053` 查询 `example.com` 成功 |
+| HTTPS trace | pass，`https://www.cloudflare.com/cdn-cgi/trace` 成功 |
+| `systemctl reload daed.service` | pass，reload 后 runtime 仍 running |
+| `systemctl restart daed.service` | pass，restart 后 API health 与 runtime running 均恢复 |
+| Rust/Aya skeleton loader | pass，日志含 `Rust/Aya BPF loader loaded object_source=rust-aya-skeleton` |
+| Rust/Aya TCX attach | pass，日志含 `via Rust/Aya tcx` |
+| Rust/Aya listener | pass，日志含 `Opened tproxy listener via Rust/Aya` |
+| no-cgo connectivity owner | pass，进程存在 `dae-aya-bpf-loader-ec71740783afdfc2 connectivity-map serve-binary` |
+| connectivity owner marker | pass，同一 embedded helper 执行 dryrun no-op 返回 `owner=dae-control` |
+| no-cgo domain routing writer | pass，同一 embedded helper 执行 `domain-routing-map serve`，对临时 `BPF_MAP_TYPE_HASH key=16 value=128` map 写入 1 条 entry，返回 `status=pass` / `entries_updated=1` |
+| forbidden fallback scan | pass，未见 `falling back to Go`、`Go map update`、`Go writer`、`Go attach path`、`Go listener`、`TCX attach failed`、`fatal`、`panic`、`parse config` |
+| 远端清理 | pass，验证后 `daed.service=inactive`、`dae.service=inactive`，删除临时 `/usr/bin/daed`、`/etc/daed`、unit、`/tmp/daed-r5*`、临时 BPF pin 与 `dae*` BPF 残留 |
+
+38 验证结论：
+
+- r5 已在真实 host-write 环境验证通过。
+- 本轮新增的 `outbound_connectivity_map` owner 迁入随 no-cgo daed 产品链生效：default daed 仍通过 embedded executable helper 形态运行，但 helper 内部 state owner 已是 `dae-control`。
+- `domain-routing-map serve` 不应被要求在无 domain routing event 的配置下常驻；正确验证方式是触发产品 event 或对真实临时 BPF map 做 helper smoke。本轮使用后者确认 no-cgo domain writer 可工作。
+- 38 通过后可进行本地提交/tag，并进入 `10.10.10.2` 替换验证。
+
+### r5 替换 `10.10.10.2` 与 LAN 侧验证（2026-05-31）
+
+目标：
+
+- 在 38 host-write no-cgo 验证通过后，将同一 r5 二进制替换到 `10.10.10.2`。
+- 只替换 `/usr/bin/daed`，不修改 `/etc/daed` 配置，不重置 WebUI 用户。
+- 验证 gateway 本机和 LAN 客户端 `10.10.10.4` 均能正常通过当前链路。
+
+替换前状态：
+
+| 项目 | 结果 |
+| --- | --- |
+| host | `10.10.10.2`，hostname `fendoradaed` |
+| 服务 | `daed=active`，`dae=inactive` |
+| 原版本 | `daed version daed-r4-no-cgo-owner-entry-20260531` |
+| 原 sha256 | `9ab9baa86114d1579466b01a8fb677fdf34b3ed73a37d93ae11d07d27773dd30` |
+| unit | `ExecStart=/usr/bin/daed run -c /etc/daed/`；已有 drop-in 使用 `ExecReload=/bin/kill -HUP $MAINPID`，并设置 `DAE_RUST_NATIVE_EBPF=1`、`DAE_RUST_NATIVE_EBPF_BACKEND=auto`、`DAE_NETNS_LINK=auto` |
+
+部署内容：
+
+| 项目 | 结果 |
+| --- | --- |
+| 本地源二进制 | `/root/project/daed-daex-align/daed/daed-r5-connectivity-owner-20260531` |
+| 远端目标 | `/usr/bin/daed` |
+| sha256 | `21f9c785d9178f778e26e725b7b809d5b4f5093138a82386d81d006406d5d88c` |
+| version | `daed version daed-r5-connectivity-owner-20260531` |
+| 服务操作 | `systemctl restart daed.service` |
+
+验证结果：
+
+| 验证项 | 结果 |
+| --- | --- |
+| `daed.service` | pass，重启后 `active` |
+| API health | pass，`/api/health={"healthCheck":1}` |
+| auth boundary | pass，`/api/auth/status={"numberUsers":1}`；未重置 WebUI 用户 |
+| Rust/Aya skeleton loader | pass，journal 出现 `Rust/Aya BPF loader loaded object_source=rust-aya-skeleton default_object_source=rust-aya-skeleton kernel_ebpf_program_rewrite=true` |
+| Rust/Aya TCX attach | pass，journal 出现 `Bind ... via Rust/Aya tcx` |
+| no-cgo connectivity owner | pass，进程存在 `dae-aya-bpf-loader-ec71740783afdfc2 connectivity-map serve-binary` |
+| no-cgo domain routing helper | pass，进程存在 `dae-aya-bpf-loader-ec71740783afdfc2 domain-routing-map serve` |
+| connectivity owner marker | pass，同一 embedded helper dryrun no-op 返回 `owner=dae-control`、`accepted=false`、`entries_updated=0`、`map_id_changed=false` |
+| gateway HTTPS trace | pass，`https://www.cloudflare.com/cdn-cgi/trace` 返回 `ip=83.147.60.195`、`colo=HKG`、`tls=TLSv1.3` |
+| LAN 客户端 | `10.10.10.4`，hostname `rockylinux-daed` |
+| LAN 路由 | pass，`10.10.10.4` 默认路由包含 `default via 10.10.10.2 dev enp1s0` |
+| LAN DNS | pass，`getent hosts www.cloudflare.com` 有解析结果 |
+| LAN HTTPS trace | pass，从 `10.10.10.4` 访问 Cloudflare trace 返回 `ip=83.147.60.195`、`colo=HKG`、`tls=TLSv1.3` |
+| forbidden fallback scan | pass，本轮日志检查未见 `falling back to Go`、`Go map update`、`Go writer`、`Go attach path`、`Go listener`、`TCX attach failed`、`fatal`、`panic`、`parse config` |
+| 临时文件清理 | pass，删除 `/tmp/daed-r5-connectivity-owner-20260531` 和 `/tmp/daed-r5-owner.err`，远端 `/tmp/daed-r5*` 无残留 |
+
+当前结论：
+
+- `10.10.10.2` 已运行 r5：`daed-r5-connectivity-owner-20260531`。
+- r5 在该网关上确认加载 Rust/Aya skeleton、使用 TCX/netkit、启动 no-cgo connectivity/domain-routing helper，并且 connectivity helper 已返回 `owner=dae-control`。
+- LAN 侧 `10.10.10.4 -> 10.10.10.2` 代理链路验证通过。

@@ -10,6 +10,7 @@ default = []
 native-ebpf = ["dae-ebpf-support/aya-loader"]
 
 [dependencies]
+dae-control.workspace = true
 dae-ebpf-support.workspace = true
 fastrand.workspace = true
 libc.workspace = true

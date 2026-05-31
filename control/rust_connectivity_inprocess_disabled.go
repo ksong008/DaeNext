@@ -225,11 +225,13 @@ func rustOutboundConnectivityUpdateIO(
 		return rustOutboundConnectivityIOReport{err: fmt.Errorf("Rust outbound connectivity owner returned status %d", response[0])}
 	}
 	written := response[1] != 0
+	mapChanged := response[2] != 0
+	accepted := response[3] != 0
 	return rustOutboundConnectivityIOReport{
 		report: rustOutboundConnectivityApplyReport{
 			mapID:        mapID,
-			mapChanged:   false,
-			accepted:     true,
+			mapChanged:   mapChanged,
+			accepted:     accepted,
 			changed:      written,
 			skipped:      !written,
 			entries:      boolToInt(written),
