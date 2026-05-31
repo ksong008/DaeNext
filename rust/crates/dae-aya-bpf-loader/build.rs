@@ -3,12 +3,16 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 const RUST_NATIVE_BPF_OBJECT_ENV: &str = "DAE_RUST_NATIVE_BPF_OBJECT";
+const RUST_NATIVE_BPF_PACKAGE: &str = "dae-ebpf-program";
+const RUST_NATIVE_BPF_OUTPUT: &str = "libdae_ebpf_program.so";
 
 fn main() {
-    println!("cargo:rerun-if-changed=../../../control/kern/tproxy.c");
-    println!("cargo:rerun-if-changed=../../../control/kern/headers");
-    println!("cargo:rerun-if-env-changed=CLANG");
-    println!("cargo:rerun-if-env-changed=MAX_MATCH_SET_LEN");
+    println!("cargo:rerun-if-changed=../dae-ebpf-program/Cargo.toml");
+    println!("cargo:rerun-if-changed=../dae-ebpf-program/src");
+    println!("cargo:rerun-if-changed=../../Cargo.toml");
+    println!("cargo:rerun-if-changed=../../.cargo/config.toml");
+    println!("cargo:rerun-if-env-changed=DAE_RUST_NATIVE_BPF_CARGO");
+    println!("cargo:rerun-if-env-changed=DAE_RUST_NATIVE_BPF_TOOLCHAIN");
     println!("cargo:rerun-if-env-changed={RUST_NATIVE_BPF_OBJECT_ENV}");
 
     if env::var_os("CARGO_FEATURE_NATIVE_EBPF").is_none() {
@@ -25,7 +29,7 @@ fn main() {
     if let Some(source) = rust_native_bpf_object_override() {
         copy_native_aya_object(&source, &output);
     } else {
-        compile_native_aya_object(repo_root, &output);
+        build_rust_native_aya_object(repo_root, &out_dir, &output);
     }
 }
 
@@ -50,34 +54,57 @@ fn copy_native_aya_object(source: &Path, output: &Path) {
     });
 }
 
-fn compile_native_aya_object(repo_root: &Path, output: &Path) {
-    let clang = env::var("CLANG").unwrap_or_else(|_| "clang".to_owned());
-    let max_match_set_len = env::var("MAX_MATCH_SET_LEN").unwrap_or_else(|_| "1024".to_owned());
-    let source = repo_root.join("control/kern/tproxy.c");
-    let headers = repo_root.join("control/kern/headers");
-    let status = Command::new(&clang)
-        .arg("-g")
-        .arg("-O2")
-        .arg("-Wall")
-        .arg("-Werror")
-        .arg(format!("-DMAX_MATCH_SET_LEN={max_match_set_len}"))
-        .arg("-DDAE_AYA_EBPF_OBJECT")
-        .arg("-target")
-        .arg("bpfel")
-        .arg("-c")
-        .arg(&source)
-        .arg("-I")
-        .arg(&headers)
-        .arg("-o")
-        .arg(output)
+fn build_rust_native_aya_object(repo_root: &Path, out_dir: &Path, output: &Path) {
+    let rust_root = repo_root.join("rust");
+    let cargo = env::var("DAE_RUST_NATIVE_BPF_CARGO").ok();
+    let toolchain =
+        env::var("DAE_RUST_NATIVE_BPF_TOOLCHAIN").unwrap_or_else(|_| "nightly".to_owned());
+    let target_dir = out_dir.join("native-ebpf-target");
+    let mut command = match cargo {
+        Some(cargo) => Command::new(cargo),
+        None => {
+            let mut command = Command::new("rustup");
+            command.arg("run").arg(toolchain).arg("cargo");
+            command
+        }
+    };
+    let status = command
+        .current_dir(&rust_root)
+        .env("CARGO_TARGET_DIR", &target_dir)
+        .env_remove("CARGO")
+        .env_remove("CARGO_ENCODED_RUSTFLAGS")
+        .env_remove("RUSTC")
+        .env_remove("RUSTDOC")
+        .env_remove("RUSTFLAGS")
+        .arg("build")
+        .arg("-Z")
+        .arg("build-std=core")
+        .arg("--manifest-path")
+        .arg(rust_root.join("Cargo.toml"))
+        .arg("-p")
+        .arg(RUST_NATIVE_BPF_PACKAGE)
+        .arg("--target")
+        .arg("bpfel-unknown-none")
+        .arg("--release")
         .output()
-        .unwrap_or_else(|err| panic!("failed to run {clang} for native Aya eBPF object: {err}"));
+        .unwrap_or_else(|err| panic!("failed to run cargo for Rust native eBPF object: {err}"));
     if !status.status.success() {
         panic!(
-            "native Aya eBPF object build failed\nstatus: {}\nstdout:\n{}\nstderr:\n{}",
+            "Rust native Aya eBPF object build failed\nstatus: {}\nstdout:\n{}\nstderr:\n{}",
             status.status,
             String::from_utf8_lossy(&status.stdout),
             String::from_utf8_lossy(&status.stderr)
         );
     }
+    let built = target_dir
+        .join("bpfel-unknown-none")
+        .join("release")
+        .join(RUST_NATIVE_BPF_OUTPUT);
+    std::fs::copy(&built, output).unwrap_or_else(|err| {
+        panic!(
+            "failed to copy Rust native eBPF object from {} to {}: {err}",
+            built.display(),
+            output.display()
+        )
+    });
 }

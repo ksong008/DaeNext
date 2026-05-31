@@ -7,6 +7,7 @@ package control
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -99,12 +100,31 @@ func fullLoadBpfObjectsViaRustAyaLoader(
 	if err != nil {
 		return err
 	}
-	log.Debugf("Rust/Aya BPF loader output: %s", strings.TrimSpace(out))
+	logRustAyaBpfLoaderSummary(log, out)
 	if err := adoptRustAyaPinnedBpfObjects(bpf, pinRoot); err != nil {
 		return fmt.Errorf("adopt Rust/Aya loaded BPF objects: %w", err)
 	}
 	rememberRustAyaAdoptedPinRoot(bpf, pinRoot)
 	return nil
+}
+
+func logRustAyaBpfLoaderSummary(log *logrus.Logger, out string) {
+	trimmed := strings.TrimSpace(out)
+	var summary struct {
+		ObjectSource             string `json:"object_source"`
+		DefaultObjectSource      string `json:"default_object_source"`
+		KernelEbpfProgramRewrite bool   `json:"kernel_ebpf_program_rewrite"`
+	}
+	if err := json.Unmarshal([]byte(trimmed), &summary); err == nil && summary.ObjectSource != "" {
+		log.Infof(
+			"Rust/Aya BPF loader loaded object_source=%s default_object_source=%s kernel_ebpf_program_rewrite=%t",
+			summary.ObjectSource,
+			summary.DefaultObjectSource,
+			summary.KernelEbpfProgramRewrite,
+		)
+		return
+	}
+	log.Debugf("Rust/Aya BPF loader output: %s", trimmed)
 }
 
 func rustBpfLoaderHasGetCurrentTask(log *logrus.Logger) bool {
