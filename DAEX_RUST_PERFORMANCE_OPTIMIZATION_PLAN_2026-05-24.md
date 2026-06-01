@@ -20581,3 +20581,54 @@ benchmark（本地 release admission，`iterations=1000`）：
 - 1-5 已作为统一 Rust-owned admission 完成并记录：Rust-owned dae core 的 control-plane/runtime/state/BPF 准入证据已经可复跑，且显式禁止 helper 扩张和 outbound 协议重写。
 - 这次完成不是 product default switch，也没有部署 `10.10.10.2`；`default_switch_allowed=false`、`product_chain_switch_allowed=false` 仍保持，避免把 admission 误当生产切换。
 - 下一步应在该准入基础上进入 daed 产品链二进制集成和远程 38 host-write 验证，而不是继续新增 helper 或拆分阶段。
+
+### Rust-owned 1-5 本机 benchmark 复跑（2026-06-01）
+
+目标：
+
+- 在进入 daed 产品链集成和远程 38 host-write 验证前，先本机复跑 benchmark。
+- 对比 Rust-owned native admission、Go direct map update、当前 embedded helper 过渡形态和 r6 resident owner helper 过渡形态。
+- 不部署 `10.10.10.2`，不修改生产路径。
+
+运行环境：
+
+| 项目 | 值 |
+| --- | --- |
+| repo | `/root/project/dae-daex-align` |
+| branch | `daex` |
+| embedded loader sha256 | `d04ba53356a2c7e4ab8cd85bb0f2c361877b0f188b042a36e037cc18e615c563` |
+| Rust admission command | `cargo run --release --manifest-path rust/Cargo.toml -p dae-daemon --bin dae-daemon-optin -- rust-native-control-plane-admission --root /tmp/dae-rust-native-control-plane-bench-20260601 --iterations 100000` |
+| Go benchmark command | `PATH=/root/.local/go1.25.9/bin:$PATH GOWORK=off CGO_ENABLED=0 DAE_RUST_BPF_LOADER_HELPER=/root/project/dae-daex-align/control/embedded/dae-aya-bpf-loader go test -run '^$' -bench 'Benchmark(DomainRoutingMapGoUpdate\|DomainRoutingMapRustPersistentHelperUpdate\|DomainRoutingMapRustOwnerDuplicate\|DomainRoutingMapRustOwnerToggle\|OutboundConnectivityMapGoUpdate)$' -benchmem -count=10 -benchtime=1s -tags=embedallowed ./control` |
+
+Rust-owned native admission benchmark（release，`iterations=100000`）：
+
+| 项目 | ns/op | 说明 |
+| --- | ---: | --- |
+| `dns_packet_to_domain_event` | `430` | Rust DNS packet -> cache/domain event |
+| `domain_routing_duplicate` | `43` | Rust owner duplicate/no-op |
+| `domain_routing_toggle` | `561` | Rust owner toggle |
+| `reload_transaction` | `520` | Rust reload clear/restore transaction |
+| `routing_owner_duplicate` | `72` | Rust routing owner duplicate/no-op |
+| `connectivity_owner_duplicate` | `7` | Rust connectivity owner duplicate/no-op |
+
+Go/control benchmark（`count=10`、`benchtime=1s`）：
+
+| 项目 | 平均 ns/op | min ns/op | max ns/op | B/op | allocs/op | 说明 |
+| --- | ---: | ---: | ---: | ---: | ---: | --- |
+| `BenchmarkOutboundConnectivityMapGoUpdate` | `753.3` | `747.4` | `759.1` | `16` | `2` | Go direct eBPF map update 对照 |
+| `BenchmarkDomainRoutingMapGoUpdate` | `831.2` | `826.0` | `839.9` | `64` | `3` | Go direct eBPF map update 对照 |
+| `BenchmarkDomainRoutingMapRustPersistentHelperUpdate` | `25332.8` | `24874.0` | `25843.0` | `1112` | `15` | Rust helper 过渡形态，JSON/stdio IPC |
+| `BenchmarkDomainRoutingMapRustOwnerDuplicate` | `27547.2` | `27139.0` | `28011.0` | `1864.9` | `23` | r6 resident owner helper duplicate/no-op |
+| `BenchmarkDomainRoutingMapRustOwnerToggle` | `30843.1` | `30195.0` | `31459.0` | `1864.7` | `23` | r6 resident owner helper toggle |
+
+本机 benchmark 结论：
+
+- Rust-owned native 热路径已经体现 Rust 优势：
+  - `domain_routing_duplicate`：`43 ns/op`，约为 Go direct domain map update `831.2 ns/op` 的 `5.17%`，约 `19.3x` 快。
+  - `domain_routing_toggle`：`561 ns/op`，约为 Go direct domain map update `831.2 ns/op` 的 `67.5%`，约 `1.48x` 快。
+  - `connectivity_owner_duplicate`：`7 ns/op`，约为 Go direct connectivity map update `753.3 ns/op` 的 `0.93%`，约 `107.6x` 快。
+- 当前 embedded executable helper 过渡形态仍明显不适合作为最终热路径：
+  - `DomainRoutingMapRustPersistentHelperUpdate` 平均 `25.33 us/op`。
+  - `DomainRoutingMapRustOwnerDuplicate` 平均 `27.55 us/op`。
+  - `DomainRoutingMapRustOwnerToggle` 平均 `30.84 us/op`。
+- 因此后续继续按 Rust-owned dae core 收口推进；不能继续优化 helper IPC 作为主线。
