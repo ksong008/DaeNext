@@ -37,6 +37,18 @@ fn main() {
         }
         return;
     }
+    if args == ["domain-routing-map", "serve-owner"] {
+        let stdin = io::stdin();
+        let stdout = io::stdout();
+        if let Err(err) = dae_aya_bpf_loader::run_domain_routing_map_owner_serve(
+            BufReader::new(stdin.lock()),
+            stdout.lock(),
+        ) {
+            let _ = writeln!(io::stderr(), "domain-routing-map serve-owner failed: {err}");
+            std::process::exit(1);
+        }
+        return;
+    }
     if args == ["routing-map", "apply"] {
         run_json_stdin_command(dae_aya_bpf_loader::run_routing_map_apply_json);
         return;
