@@ -805,19 +805,9 @@ fn attach_fallback_used(report: &Value) -> bool {
 }
 
 fn native_backend_for_role(
-    role: NativeEbpfAttachRole,
+    _role: NativeEbpfAttachRole,
     requested_backend: AttachBackend,
 ) -> AttachBackend {
-    if requested_backend == AttachBackend::Tcx
-        && matches!(
-            role,
-            NativeEbpfAttachRole::PeerIngress
-                | NativeEbpfAttachRole::LanIngress
-                | NativeEbpfAttachRole::HostIngress
-        )
-    {
-        return AttachBackend::TcNetlink;
-    }
     requested_backend
 }
 
@@ -826,18 +816,18 @@ mod tests {
     use super::*;
 
     #[test]
-    fn tcx_runtime_keeps_netkit_l2_roles_on_tc_netlink() {
+    fn tcx_runtime_uses_requested_backend_for_netkit_l2_roles() {
         assert_eq!(
             native_backend_for_role(NativeEbpfAttachRole::PeerIngress, AttachBackend::Tcx),
-            AttachBackend::TcNetlink
+            AttachBackend::Tcx
         );
         assert_eq!(
             native_backend_for_role(NativeEbpfAttachRole::HostIngress, AttachBackend::Tcx),
-            AttachBackend::TcNetlink
+            AttachBackend::Tcx
         );
         assert_eq!(
             native_backend_for_role(NativeEbpfAttachRole::LanIngress, AttachBackend::Tcx),
-            AttachBackend::TcNetlink
+            AttachBackend::Tcx
         );
     }
 }
