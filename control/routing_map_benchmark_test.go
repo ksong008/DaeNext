@@ -714,6 +714,74 @@ func BenchmarkDomainRoutingMapRustPersistentHelperUpdate(b *testing.B) {
 	}
 }
 
+func BenchmarkDomainRoutingMapRustOwnerDuplicate(b *testing.B) {
+	if !rustInprocessRoutingMapAvailable() {
+		helperPath := strings.TrimSpace(os.Getenv(rustBpfLoaderHelperEnv))
+		if helperPath == "" {
+			b.Skipf("%s is not set", rustBpfLoaderHelperEnv)
+		}
+		b.Setenv(rustBpfLoaderHelperEnv, helperPath)
+	}
+	m := newBenchmarkDomainRoutingMap(b)
+	defer m.Close()
+	_, value := benchmarkDomainRoutingEntry()
+	owner := newRustDomainRoutingOwner()
+	defer owner.Close()
+	cache := benchmarkDomainRoutingDnsCache("bench-owner", value, netip.MustParseAddr("203.0.113.10"))
+	event, err := buildDomainRoutingDnsEvent(cache)
+	if err != nil {
+		b.Fatal(err)
+	}
+	if err := owner.UpdateDnsCacheEvent(m, event); err != nil {
+		b.Fatal(err)
+	}
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		if err := owner.UpdateDnsCacheEvent(m, event); err != nil {
+			b.Fatal(err)
+		}
+	}
+}
+
+func BenchmarkDomainRoutingMapRustOwnerToggle(b *testing.B) {
+	if !rustInprocessRoutingMapAvailable() {
+		helperPath := strings.TrimSpace(os.Getenv(rustBpfLoaderHelperEnv))
+		if helperPath == "" {
+			b.Skipf("%s is not set", rustBpfLoaderHelperEnv)
+		}
+		b.Setenv(rustBpfLoaderHelperEnv, helperPath)
+	}
+	m := newBenchmarkDomainRoutingMap(b)
+	defer m.Close()
+	_, value := benchmarkDomainRoutingEntry()
+	alternate := bpfDomainRouting{Bitmap: [32]uint32{0x3}}
+	owner := newRustDomainRoutingOwner()
+	defer owner.Close()
+	caches := [2]*DnsCache{
+		benchmarkDomainRoutingDnsCache("bench-owner", value, netip.MustParseAddr("203.0.113.10")),
+		benchmarkDomainRoutingDnsCache("bench-owner", alternate, netip.MustParseAddr("203.0.113.10")),
+	}
+	events := [2]domainRoutingDnsEvent{}
+	for i, cache := range caches {
+		event, err := buildDomainRoutingDnsEvent(cache)
+		if err != nil {
+			b.Fatal(err)
+		}
+		events[i] = event
+	}
+	if err := owner.UpdateDnsCacheEvent(m, events[0]); err != nil {
+		b.Fatal(err)
+	}
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		if err := owner.UpdateDnsCacheEvent(m, events[i%2]); err != nil {
+			b.Fatal(err)
+		}
+	}
+}
+
 func benchmarkRoutingEntries() ([]uint32, []bpfMatchSet) {
 	keys := []uint32{0, 1, 2, 3}
 	values := []bpfMatchSet{
