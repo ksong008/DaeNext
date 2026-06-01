@@ -1229,7 +1229,7 @@ mod tests {
                 .unwrap()
         );
         assert!(
-            report["ebpf_backend_capabilities"]["tproxy_dataplane_admission"]
+            !report["ebpf_backend_capabilities"]["tproxy_dataplane_admission"]
                 ["c_trace_object_required"]
                 .as_bool()
                 .unwrap()
@@ -1282,7 +1282,7 @@ mod tests {
             report["ebpf_backend_capabilities"]["trace_diagnostic_gate"]["status"]
                 .as_str()
                 .unwrap(),
-            "deferred_preserved"
+            "retired_from_product_default"
         );
         assert!(
             !report["ebpf_backend_capabilities"]["trace_diagnostic_gate"]
@@ -1291,12 +1291,12 @@ mod tests {
                 .unwrap()
         );
         assert!(
-            report["ebpf_backend_capabilities"]["trace_diagnostic_gate"]["c_trace_object_required"]
+            !report["ebpf_backend_capabilities"]["trace_diagnostic_gate"]["c_trace_object_required"]
                 .as_bool()
                 .unwrap()
         );
         assert!(
-            report["ebpf_backend_capabilities"]["trace_diagnostic_gate"]
+            !report["ebpf_backend_capabilities"]["trace_diagnostic_gate"]
                 ["go_trace_fallback_required"]
                 .as_bool()
                 .unwrap()
@@ -1308,7 +1308,7 @@ mod tests {
                 .unwrap()
         );
         assert!(
-            !report["ebpf_backend_capabilities"]["trace_diagnostic_gate"]
+            report["ebpf_backend_capabilities"]["trace_diagnostic_gate"]
                 ["fallback_retirement_allowed"]
                 .as_bool()
                 .unwrap()
@@ -1317,8 +1317,7 @@ mod tests {
             report["ebpf_backend_capabilities"]["trace_diagnostic_gate"]["missing_checks"]
                 .as_array()
                 .unwrap()
-                .iter()
-                .any(|entry| entry.as_str().unwrap() == "trace_kprobe_coverage")
+                .is_empty()
         );
         assert_eq!(
             report["ebpf_backend_capabilities"]["trace_core_sideload_gate"]["schema"]
@@ -1347,7 +1346,7 @@ mod tests {
             report["ebpf_backend_capabilities"]["trace_core_sideload_gate"]["disabled_reason"]
                 .as_str()
                 .unwrap()
-                .contains("temporarily disabled")
+                .contains("retired from the product default path")
         );
         assert_eq!(
             report["ebpf_backend_capabilities"]["kernel_program_fallback_retirement_gate"]["schema"]
@@ -1368,7 +1367,7 @@ mod tests {
                 .unwrap()
         );
         assert!(
-            report["ebpf_backend_capabilities"]["kernel_program_fallback_retirement_gate"]
+            !report["ebpf_backend_capabilities"]["kernel_program_fallback_retirement_gate"]
                 ["c_trace_object_required"]
                 .as_bool()
                 .unwrap()
@@ -1398,7 +1397,7 @@ mod tests {
                 .unwrap()
         );
         assert!(
-            report["ebpf_backend_capabilities"]["kernel_program_fallback_retirement_gate"]
+            !report["ebpf_backend_capabilities"]["kernel_program_fallback_retirement_gate"]
                 ["go_trace_fallback_required"]
                 .as_bool()
                 .unwrap()
@@ -1528,7 +1527,7 @@ mod tests {
         );
         assert_eq!(
             report["go_bpf_fallback_retirement_scope"].as_str().unwrap(),
-            "tproxy-dataplane-only; trace diagnostic fallback is feature-gated and preserved"
+            "kernel-facing-tproxy-default-rust-aya; trace diagnostic retired from product default; outbound protocol boundary preserved"
         );
         assert!(report["go_bpf_fallback_required"].as_bool().unwrap());
         assert!(!report["go_bpf_fallback_retired"].as_bool().unwrap());
@@ -1599,7 +1598,7 @@ mod tests {
         assert!(gate["product_chain_recertified"].as_bool().unwrap());
         assert!(gate["explicit_user_approval_recorded"].as_bool().unwrap());
         assert!(gate["admitted"].as_bool().unwrap());
-        assert!(!gate["default_switch_allowed"].as_bool().unwrap());
+        assert!(gate["default_switch_allowed"].as_bool().unwrap());
         assert!(!gate["go_bpf_fallback_required"].as_bool().unwrap());
         assert!(
             gate["go_bpf_fallback_retirement_allowed"]
@@ -1623,7 +1622,7 @@ mod tests {
             "A5 does not mutate the daemon default path"
         );
         assert!(
-            !report["ebpf_backend_capabilities"]["kernel_program_fallback_retirement_gate"]
+            report["ebpf_backend_capabilities"]["kernel_program_fallback_retirement_gate"]
                 ["c_trace_object_retirement_allowed"]
                 .as_bool()
                 .unwrap()

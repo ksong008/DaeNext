@@ -19428,6 +19428,97 @@ cleanup 发现的问题：
 - daewing / outbound / quic-go 协议栈仍保持 Go；本轮没有替换 outbound 协议栈，也没有引入协议特例。
 - 阶段 8-10 可以进入本地提交与 tag；后续若继续推进，应进入 Rust/Aya object 默认路径在 daed 产品链中的长期运行观察、matched benchmark 和 C object 删除准入，而不是继续拆小阶段。
 
+#### 阶段 8-10 当前代码复验与 kernel-facing Rust/Aya 收口记录（2026-06-01）
+
+说明：
+
+- 本节是阶段 8-10 的当前代码复验记录，不是新增阶段，也不拆出临时小阶段。
+- 本次只验证 Rust/Aya `tproxy.c` kernel datapath parity、远程 38 实流准入和 kernel-facing 收口 gate；不 Rust 化 daewing / outbound / quic-go 协议栈。
+- 修改和判断继续以 `DAEX_RUST_REBUILD_PLAN_2026-05-16.md`、`DAENEW_RUST_REBUILD_MEMO_2026-05-16.md`、本文件 A1-GoBPF 合同和阶段 8-10 边界为准；不按测试机 config 写死 routing/geodata/DNS/协议/节点特例。
+
+本次代码侧收口：
+
+- `rust/crates/dae-ebpf-support/src/kernel_program.rs`
+  - `tproxy_dataplane_admission_report()` 不再把 C trace object 作为 tproxy 默认候选依赖。
+  - `trace_diagnostic_gate_report()` 状态改为 `retired_from_product_default`；trace diagnostic 不参与 tproxy default candidate。
+  - `kernel_program_fallback_retirement_gate_report()` 在完整 evidence admitted 后允许 `default_switch_allowed=true`、`c_tproxy_object_retirement_allowed=true`、`go_bpf_fallback_retirement_allowed=true`。
+  - `tc_command_fallback_retirement_allowed=false` 仍保持；TC netlink/TCX 兼容 attach 后端继续保留，不和 Go BPF fallback 混淆。
+- `rust/crates/dae-ebpf-support/src/kernel_program_trace.rs`
+  - trace CO-RE side-load 明确为“从产品默认路径退役”，不是 tproxy 默认切换阻断项。
+  - 恢复 trace diagnostic 的门槛仍是 Rust CO-RE relocation、verifier load 和 ringbuf semantic parity，不能用旧 C/Go trace fallback 静默替代。
+
+本地验证：
+
+| 验证项 | 结果 |
+| --- | --- |
+| `cargo test --manifest-path rust/Cargo.toml -p dae-ebpf-support -p dae-aya-bpf-loader --features native-ebpf` | pass，`dae-aya-bpf-loader` 24 passed，`dae-ebpf-support` 58 passed |
+| `cargo test --manifest-path rust/Cargo.toml -p dae-daemon` | pass |
+| `PATH=/root/.local/go1.25.9/bin:$PATH GOWORK=off go test -count=1 ./control -run 'Test(RustBpfLoader\|CleanupRustAya\|ControlPlaneCoreReloadInject\|RustAya)'` | pass，`ok github.com/daeuniverse/dae/control` |
+| `rustup run nightly cargo build -Z build-std=core --manifest-path rust/Cargo.toml -p dae-ebpf-program --target bpfel-unknown-none --release` | pass |
+| `DAE_BPF_FALLBACK_RETIREMENT_PRODUCT_CHAIN_RECERTIFIED=1 DAE_BPF_FALLBACK_RETIREMENT_EXPLICIT_APPROVAL=1 scripts/run_native_ebpf_runtime_gate.sh` | pass，`production_dataplane_admitted=true`，`reload_runtime_parity_admitted=true` |
+
+本地 runtime gate benchmark：
+
+| 项目 | 结果 |
+| --- | --- |
+| active TCP relay | 5 iterations，`204702408 ns` total，约 `40940481.6 ns/connection` |
+| active UDP datapath | 5 iterations，`104246241 ns` total，约 `20849248.2 ns/packet` |
+| active DNS UDP/53 | 5 iterations，`104273124 ns` total，约 `20854624.8 ns/query` |
+| native attach | peer/LAN/host 三个 native attach step 均 pass，backend=`tc_netlink`，`fallback_used=false` |
+| netns link | auto 选择 `netkit`，cleanup 后无 `daens/dae50/dae-native/dae-aya` netns/link/bpffs 残留 |
+
+daed 验证二进制：
+
+- 路径：`/root/project/daed-daex-align/daed/daed-stage8-10-kernel-rustaya-20260601`
+- 版本：`daed-stage8-10-kernel-rustaya-20260601`
+- SHA256：`693ba796222e1d699181a0c1a2e56c2d2da45d84e35997e41ddc1daebaea02c4`
+- 体积：约 `62M`，静态链接、stripped。
+
+远程 38 daed 产品链 host-write 验证：
+
+| 验证项 | 结果 |
+| --- | --- |
+| 初始状态 | 38 机 kernel `6.12.86+deb12-amd64`，`dae.service`/`daed.service` inactive，`/etc/dae/config.dae` hash=`5f6590e9a981456e1b4fcb2166e809617960b172f3bd860b9fb4d192b01206d4` |
+| 临时部署 | 写入临时 `/usr/bin/daed`、临时 `/etc/daed`、临时 `daed.service`，`DAED_RUNTIME=rust-owned`，native backend/netns link 均为 `auto` |
+| API health/auth | `/api/health=200`，`/api/auth/status=200`，临时首用户创建 `201` |
+| config import | `/api/user/me/dae-config-file/preview=200`，`PUT /api/user/me/dae-config-file=200` |
+| reload | `/api/runtime/reload` dry=true 为 `200`，dry=false 为 `200`，`systemctl reload daed.service` 后服务仍 active |
+| runtime state | `/api/general/state=200`，`running=true`，`attachBackend=tcx+tc`，`netnsLinkMode=netkit` |
+| runtime overview/cache API | `/api/runtime/overview=200`，`/api/general/cache-stats=200` |
+| HTTPS smoke | 远程 host `curl https://www.cloudflare.com/cdn-cgi/trace` 成功返回 |
+| 日志/进程 | daed journal 出现 `Rust-owned dae runtime is ready attachBackend=tcx+tc netnsLinkMode=netkit`；未发现 `falling back to Go`、`Go map update`、`Go attach path`、`TCX attach failed`、`panic`、`fatal`、`parse config` |
+
+远程 38 active datapath gate：
+
+| 验证项 | 结果 |
+| --- | --- |
+| gate 命令 | 使用同一 `dae-daemon-optin` 与同一 Rust/Aya object，执行 `--execute-production-runtime-owner --execute-production-runtime-active-tcp --execute-production-runtime-active-tcp-relay --execute-production-runtime-active-udp --execute-production-runtime-active-dns --execute-production-runtime-reload-parity --production-runtime-native-ebpf --production-runtime-native-ebpf-backend auto --production-runtime-netns-link auto` |
+| production dataplane | `production_dataplane_admitted=True` |
+| reload/runtime parity | `reload_runtime_parity_admitted=True` |
+| Go BPF fallback | `go_bpf_fallback_retired=True` |
+| active TCP relay | 5 iterations，`207339657 ns` total，约 `41467931.4 ns/connection` |
+| active UDP datapath | 5 iterations，`106408219 ns` total，约 `21281643.8 ns/packet` |
+| active DNS UDP/53 | 5 iterations，`106590794 ns` total，约 `21318158.8 ns/query` |
+| native attach | `attach-production-dae0peer-native-ebpf-program`、`attach-lan-ingress-native-ebpf-program`、`attach-production-dae0-native-ebpf-program` 均 pass，backend=`tc_netlink`，`fallback_used=false` |
+
+远程清理：
+
+- 已停止 `dae.service` / `daed.service`。
+- 已删除临时 `/usr/bin/daed`、`/etc/daed`、临时 `daed.service`、阶段 8-10 `/tmp` 产物。
+- 已清理 `daens`、`dae50client`、`dae0`、`daerust0` 和阶段 8-10 bpffs pins。
+- 复查结果：`dae=inactive`，`daed=inactive`，`/usr/bin/daed=absent`，`/etc/daed=absent`，netns/link/bpffs/tmp 均无阶段 8-10 残留。
+- `/etc/dae/config.dae` hash 仍为 `5f6590e9a981456e1b4fcb2166e809617960b172f3bd860b9fb4d192b01206d4`，未被本轮测试改写。
+- 本轮未部署到 `10.10.10.2`。
+
+阶段 8-10 当前结论：
+
+- 阶段 8 已完成：Rust/Aya native eBPF object build、map/section/packet/gate 测试、loader contract 和 daemon runtime gate 均通过。
+- 阶段 9 已完成：远程 38 完成 daed 产品链 host-write、API import/reload、systemd reload、runtime state、HTTPS smoke、active TCP/UDP/DNS/reload runtime gate 和 cleanup。
+- 阶段 10 已完成：tproxy 主数据面可以作为 Rust/Aya 默认候选准入；C `control/kern/tproxy.c` 不再是通过 gate 后的产品默认依赖，但继续保留为开发 oracle 和显式 rollback 参考，直到最终删除提交单独执行。
+- C trace object / Go trace fallback 已从当前 tproxy 产品默认路径退役，不再阻断 tproxy default candidate；若未来恢复 trace diagnostic，必须补齐 Rust CO-RE relocation/ringbuf parity 后再进入产品默认路径。
+- Go BPF loader 不恢复；当前 `tc_netlink`/`tcx` 表示 Rust/Aya attach backend，不表示 Go BPF fallback。
+- outbound `netproxy.Dialer` 合同、daewing/outbound/quic-go 协议栈保持 Go，本轮没有替换 VLESS/VMess/Trojan/SS 等协议实现，也没有引入协议或测试机配置特例。
+
 阶段 1-10 全开 daed 验证补充（2026-05-31）：
 
 目标：
@@ -20580,7 +20671,7 @@ benchmark（本地 release admission，`iterations=1000`）：
 
 - 1-5 已作为统一 Rust-owned admission 完成并记录：Rust-owned dae core 的 control-plane/runtime/state/BPF 准入证据已经可复跑，且显式禁止 helper 扩张和 outbound 协议重写。
 - 这次完成不是 product default switch，也没有部署 `10.10.10.2`；`default_switch_allowed=false`、`product_chain_switch_allowed=false` 仍保持，避免把 admission 误当生产切换。
-- 下一步应在该准入基础上进入 daed 产品链二进制集成和远程 38 host-write 验证，而不是继续新增 helper 或拆分阶段。
+- 同一 1-5 大阶段内应在该准入基础上完成 daed 产品链二进制集成和远程 38 host-write 验证，而不是继续新增 helper 或拆分阶段。
 
 ### Rust-owned 1-5 本机 benchmark 复跑（2026-06-01）
 
@@ -20632,3 +20723,319 @@ Go/control benchmark（`count=10`、`benchtime=1s`）：
   - `DomainRoutingMapRustOwnerDuplicate` 平均 `27.55 us/op`。
   - `DomainRoutingMapRustOwnerToggle` 平均 `30.84 us/op`。
 - 因此后续继续按 Rust-owned dae core 收口推进；不能继续优化 helper IPC 作为主线。
+
+### Rust-owned 1-5 daed 产品链 38 host-write 验证（2026-06-01）
+
+目标：
+
+- 在远程 38 测试机执行临时 host-write，验证 1-5 准入后的 daed 产品链二进制。
+- 二进制运行时必须打开 Rust/Aya 与 Rust-owned 相关开关，验证真实 backend、reload/restart、DNS listener、HTTPS trace 和日志防回退。
+- 不部署 `10.10.10.2`，不修改远程原始 `/etc/dae/config.dae`，测试后清理临时 host-write 产物。
+
+二进制：
+
+| 项目 | 值 |
+| --- | --- |
+| 本地路径 | `/root/project/daed-daex-align/daed/daed-rustowned-1-5-20260601` |
+| version | `daed version daed-rustowned-1-5-20260601` |
+| sha256 | `772df2cbf782bb83dedd66909457b56fab7607b5bdc8b0ae42095b46626e6fb0` |
+| size | `50M` |
+| build tags | `embedallowed` |
+| `CGO_ENABLED` | `0` |
+| module replace | `github.com/daeuniverse/dae => /root/project/dae-daex-align`、`github.com/daeuniverse/outbound => /root/project/outbound-daex-align`、`github.com/daeuniverse/quic-go => /root/project/quic-go-rust` |
+| embedded loader sha256 | `d04ba53356a2c7e4ab8cd85bb0f2c361877b0f188b042a36e037cc18e615c563` |
+
+临时 unit 打开项：
+
+| 环境变量 | 值 |
+| --- | --- |
+| `DAE_RUST_NATIVE_EBPF` | `1` |
+| `DAE_RUST_NATIVE_EBPF_BACKEND` | `auto` |
+| `DAE_NATIVE_EBPF_BACKEND` | `auto` |
+| `DAE_RUST_NATIVE_EBPF_TCX_DATAPATH_ADMITTED` | `1` |
+| `DAE_NETNS_LINK` | `auto` |
+| `DAE_RUST_RESIDENT_DATAPLANE` | `1` |
+
+远程 38 验证结果：
+
+| 验证项 | 结果 |
+| --- | --- |
+| 测试机 | `38.65.91.47:5122`，kernel `6.12.86+deb12-amd64` |
+| host-write 范围 | 临时安装 `/usr/bin/daed`、`/etc/daed`、`/etc/systemd/system/daed.service`，结束后删除 |
+| 原始配置保护 | `/etc/dae/config.dae` sha256 验证前后均为 `5f6590e9a981456e1b4fcb2166e809617960b172f3bd860b9fb4d192b01206d4` |
+| 临时导入配置 | 只读复制 `/etc/dae/config.dae` 到 `/etc/daed/import.dae`；临时加入 `dns.bind: udp://127.0.0.1:1053`；为覆盖 domain owner event，在顶层 `routing {}` 加入通用 `domain(suffix: example.com) -> proxy` |
+| 配置插入纠偏 | 第一次脚本把 domain 规则误插到 `dns.routing`，preview 返回 400：`cannot use routing rule in this context`；纠正为插入最后一个顶层 `routing {}` 后通过 |
+| `/api/health` | pass，`{"healthCheck":1}` |
+| `/api/auth/status` | pass，临时 `/etc/daed` 初始 `{"numberUsers":0}`，创建临时用户/token 成功 |
+| config preview/import | pass，preview `warnings=0`，import `{"imported":true}` |
+| dry reload | pass，`{"applied":1,"dry":true}` |
+| real reload | pass，`{"applied":1,"dry":false}` |
+| `/api/general/state` | pass，`running=true`、`attachBackend=tcx`、`netnsLinkMode=netkit` |
+| `/api/runtime/overview` | pass，HTTP 200，`396` bytes |
+| `/api/general/cache-stats` | pass，HTTP 200，`251` bytes |
+| DNS listener | pass，UDP `127.0.0.1:1053` 查询 `cloudflare.com` 返回 `rcode=0`、`ancount=2`、约 `34.298 ms` |
+| HTTPS trace | pass，`ip=38.65.91.47`、`colo=LAX`、`tls=TLSv1.3`、`warp=off` |
+| `systemctl reload daed.service` | pass，reload 前后 `MainPID=110009`，API health 恢复 |
+| `systemctl restart daed.service` | pass，restart 后 API health 恢复，临时用户 DB 仍为 `{"numberUsers":1}` |
+| Rust/Aya skeleton loader | pass，日志含 `Rust/Aya BPF loader loaded object_source=rust-aya-skeleton default_object_source=rust-aya-skeleton kernel_ebpf_program_rewrite=true` |
+| Rust/Aya TCX attach | pass，日志含 `Bind daed_wan_egress_l2 via Rust/Aya tcx on ens3`、`Bind daed_wan_ingress_l2 via Rust/Aya tcx on ens3`、`Bind daed_dae0peer_ingress via Rust/Aya tcx on dae0peer`、`Bind daed_dae0_ingress via Rust/Aya tcx on dae0` |
+| Rust/Aya listener | pass，日志含 `Opened tproxy listener via Rust/Aya on port 12345` |
+| DNS reload 日志 | pass，日志含 `DNS listener started on udp://127.0.0.1:1053` 与 `[Reload] Finished` |
+| forbidden fallback scan | pass，未见 `falling back to Go`、`Go map update`、`Go writer`、`Go attach path`、`Go listener`、`TCX attach failed`、`fatal`、`panic`、`parse config` |
+| 远程清理 | pass，测试后 `daed.service=inactive`、`dae.service=inactive`，`/usr/bin/daed`、`/etc/daed`、上传二进制、临时 unit、`/sys/fs/bpf/dae*`、`/sys/fs/bpf/daed*`、`daens` 均无残留 |
+
+重要限制：
+
+- 本轮二进制已经按运行时环境打开 Rust/Aya loader、TCX auto、resident dataplane 与 1-5 相关产品链路径，并确认真实 backend 为 `tcx`、真实链路为 `netkit`。
+- 但该 `CGO_ENABLED=0` daed 产品二进制仍可观察到 embedded Rust helper 进程：
+  - `/tmp/dae/embedded-helpers/dae-aya-bpf-loader-d04ba53356a2c7e4 connectivity-map serve-binary`
+  - `/tmp/dae/embedded-helpers/dae-aya-bpf-loader-d04ba53356a2c7e4 domain-routing-map serve-owner`
+- 因此本轮验证结果应定义为“daed 产品链 Rust/Aya + Rust-owned 1-5 准入代码已进入二进制并可运行验证”，不能定义为“无 helper 的完整 Rust-owned product default”。
+- 同一 1-5 大阶段内若要满足“二进制内完全打开 Rust-owned 且不再依赖 helper 热路径”，必须把 1-5 admission 中已经验证的 no-cgo Rust-owned control-plane/state 入口接入 daed/dae 产品默认 runtime，而不是继续优化或扩展 embedded helper IPC。
+
+#### 同一 1-5 任务内补齐：默认 runtime 接入与 38 复验（2026-06-01）
+
+本记录不是新增阶段，也不新增阶段号；它属于“Rust-owned dae core 收口”原 1-5 大阶段中的第 2 项 `Rust-owned runtime/control-plane 生产入口`，同时覆盖第 3 项 `DNS / domain routing / reload 默认热路径 Rust-owned` 与第 5 项 `Rust/Aya eBPF datapath parity 与默认候选` 的产品链验证。
+
+目标：
+
+- 回答“现在哪些还用了 helper”：本轮前默认 `CGO_ENABLED=0` daed 产品二进制仍通过 embedded `dae-aya-bpf-loader` 启动以下持久 helper：
+  - `domain-routing-map serve-owner`
+  - `connectivity-map serve-binary`
+- 同时 `routing-map apply`、`domain-routing-map apply` 仍保留旧 helper 入口，作为非 `rust_inprocess` 构建兼容路径。
+- 本轮将 control-plane/state 热路径接入默认 runtime：默认 daed `bundle` 采用 `rust_inprocess`，链接 `dae-control` 静态库，使 routing map、domain routing owner、connectivity owner 在产品进程内执行 Rust-owned runtime。
+
+代码调整：
+
+| 文件 | 调整 |
+| --- | --- |
+| `control/routing_matcher_builder.go` | `BuildKernspace` 改为调用 `updateKernelRoutingMapsViaRustDefaultRuntime()` |
+| `control/rust_routing_maps.go` | 新增默认 runtime 入口：routing map 优先 `applyKernelRoutingMapsViaRustOwnedInprocess()`；domain routing map 优先 `updateDomainRoutingMapViaRustInprocess()`；仅在非 `rust_inprocess` 构建时 fallback 到旧 helper；fallback 判定改为 `errors.Is(errRustInprocessRuntimeUnavailable)`，避免真实 Rust owner 错误被误判为 runtime 未启用 |
+| `control/rust_routing_maps_inprocess_disabled.go` | 非 `rust_inprocess` 构建返回统一 sentinel error，仅兼容 fallback，不作为产品默认热路径 |
+| `control/rust_routing_maps_default_runtime_disabled_test.go` | 锁住非 `rust_inprocess` 构建下 sentinel fallback 边界 |
+| `control/rust_routing_maps_inprocess_test.go` | 锁住 `rust_inprocess` 构建下真实 owner 错误不得触发 helper fallback |
+| `control/control_plane_core.go` | 无 owner-key 的 DNS/domain routing update/remove 也改走默认 runtime 入口 |
+| `Makefile` | 新增 `rust-control-staticlib`，构建 `rust/target/release/libdae_control.a` |
+| `daed-daex-align/daed/wing/Makefile` | `bundle` 默认 `RUST_OWNED_DEFAULT=y`，构建 tags 改为 `embedallowed,rust_inprocess`，并以 `CGO_ENABLED=1` 链接 Rust `dae-control` 静态库 |
+
+保留边界：
+
+- Go 产品壳、WebUI/API、daewing/outbound/quic-go 全协议栈仍保持 Go，不改 VLESS/VMess/Trojan/SS 等 outbound 协议实现。
+- `dae-aya-bpf-loader` 仍作为 Rust/Aya BPF loader asset 存在，用于 Rust/Aya object load/pin、tproxy listener handoff 等 datapath 装载动作；本轮消除的是 control-plane/state 热路径的持久 helper，不是删除 Rust/Aya loader 资产。
+- 非 `rust_inprocess` 构建仍保留旧 helper fallback，便于兼容测试；正式 daed `bundle` 默认打开 `rust_inprocess`。
+
+本地验证：
+
+| 验证项 | 结果 |
+| --- | --- |
+| `make -C /root/project/dae-daex-align rust-control-staticlib` | pass，`dae-control` release staticlib 构建完成 |
+| `CGO_ENABLED=1 go test -tags=embedallowed,rust_inprocess ./control` | pass，`ok github.com/daeuniverse/dae/control 0.044s` |
+| `CGO_ENABLED=0 go test -tags=embedallowed ./control` | pass，兼容 fallback 构建仍通过 |
+| daed bundle | pass，生成 `/root/project/daed-daex-align/daed/daed-rustowned-default-runtime-20260601` |
+| build metadata | `-tags=embedallowed,rust_inprocess`、`CGO_ENABLED=1` |
+| sentinel fallback 收口后 `CGO_ENABLED=0 go test -tags=embedallowed ./control` | pass，`ok github.com/daeuniverse/dae/control 0.069s` |
+| sentinel fallback 收口后 `CGO_ENABLED=1 go test -tags=embedallowed,rust_inprocess ./control` | pass，`ok github.com/daeuniverse/dae/control 0.055s` |
+| `diff --check` | pass，`dae-daex-align` 与 `daed-daex-align/daed/wing` 均无 whitespace error |
+| r2 daed bundle | pass，`GOWORK=off make -C /root/project/daed-daex-align/daed/wing OUTPUT=../daed-rustowned-default-runtime-20260601-r2 APPNAME=daed WEB_DIST=../dist VERSION=daed-rustowned-default-runtime-20260601-r2 bundle` |
+
+默认 runtime 二进制：
+
+| 项目 | 值 |
+| --- | --- |
+| 路径 | `/root/project/daed-daex-align/daed/daed-rustowned-default-runtime-20260601` |
+| version | `daed version daed-rustowned-default-runtime-20260601` |
+| sha256 | `d4ee3165989fae0b9de14f016ea98d8693b4eb2aaa8537fb165a21027c049bcc` |
+| size | `51M` |
+| build tags | `embedallowed,rust_inprocess` |
+| `CGO_ENABLED` | `1` |
+
+同一 1-5 内 r2 收口二进制：
+
+| 项目 | 值 |
+| --- | --- |
+| 路径 | `/root/project/daed-daex-align/daed/daed-rustowned-default-runtime-20260601-r2` |
+| version | `daed version daed-rustowned-default-runtime-20260601-r2` |
+| sha256 | `67a301156e3c8ced513fdbdec2488c60b87ce7444b6831b767d1cc72342e38fa` |
+| size | `51M` |
+| build tags | `embedallowed,rust_inprocess` |
+| `CGO_ENABLED` | `1` |
+| dynamic deps | `libgcc_s.so.1`、`libc.so.6`、`ld-linux-x86-64.so.2` |
+
+38 远程 host-write 复验：
+
+| 验证项 | 结果 |
+| --- | --- |
+| 测试机 | `38.65.91.47:5122`，kernel `6.12.86+deb12-amd64` |
+| host-write 范围 | 临时安装 `/usr/bin/daed`、`/etc/daed`、`/etc/systemd/system/daed.service`，结束后删除 |
+| 原始配置保护 | `/etc/dae/config.dae` sha256 验证前后均为 `5f6590e9a981456e1b4fcb2166e809617960b172f3bd860b9fb4d192b01206d4` |
+| unit 环境 | `DAE_RUST_NATIVE_EBPF=1`、`DAE_RUST_NATIVE_EBPF_BACKEND=auto`、`DAE_NATIVE_EBPF_BACKEND=auto`、`DAE_RUST_NATIVE_EBPF_TCX_DATAPATH_ADMITTED=1`、`DAE_NETNS_LINK=auto`、`DAE_RUST_RESIDENT_DATAPLANE=1` |
+| `/api/health` | pass，`{"healthCheck":1}` |
+| config preview/import | pass，preview `warnings=0`，import `{"imported":true}` |
+| dry reload / real reload | pass，`{"applied":1,"dry":true}` / `{"applied":1,"dry":false}` |
+| `/api/general/state` | pass，`running=true`、`attachBackend=tcx`、`netnsLinkMode=netkit` |
+| `/api/runtime/overview` | pass，HTTP 200，`396` bytes |
+| `/api/general/cache-stats` | pass，HTTP 200，`251` bytes |
+| DNS listener | pass，UDP `127.0.0.1:1053` 查询 `cloudflare.com` 返回 `rcode=0`、`ancount=2`、约 `1.989 ms` |
+| HTTPS trace | pass，`ip=38.65.91.47`、`colo=LAX`、`tls=TLSv1.3`、`warp=off` |
+| `systemctl reload daed.service` | pass，reload 前后 `MainPID=110442`，API health 恢复 |
+| `systemctl restart daed.service` | pass，restart 后 API health 恢复 |
+| Rust/Aya loader/TCX | pass，日志含 `Rust/Aya BPF loader loaded object_source=rust-aya-skeleton`，WAN/`dae0peer`/`dae0` 均出现 `via Rust/Aya tcx` |
+| tproxy listener | pass，日志含 `Opened tproxy listener via Rust/Aya on port 12345` |
+| 持久 helper 进程 | pass，`helper_process_count=0`、`owner_helper_process_count=0` |
+| forbidden fallback scan | pass，未见 `falling back to Go`、`Go map update`、`Go writer`、`Go attach path`、`Go listener`、`TCX attach failed`、`fatal`、`panic`、`parse config` |
+| 远程清理 | pass，测试后 `daed.service=inactive`、`dae.service=inactive`，`/usr/bin/daed`、`/etc/daed`、上传二进制、临时 unit、`/sys/fs/bpf/dae*`、`/sys/fs/bpf/daed*`、`daens` 均无残留 |
+
+同一 1-5 内 r2 远程 38 复验：
+
+| 验证项 | 结果 |
+| --- | --- |
+| 二进制 | `/usr/bin/daed` 临时安装自 `daed-rustowned-default-runtime-20260601-r2`，sha256 `67a301156e3c8ced513fdbdec2488c60b87ce7444b6831b767d1cc72342e38fa` |
+| 原始配置保护 | `/etc/dae/config.dae` sha256 前后均为 `5f6590e9a981456e1b4fcb2166e809617960b172f3bd860b9fb4d192b01206d4` |
+| `/api/health` | pass，`{"healthCheck":1}` |
+| `/api/auth/status` | pass，临时 `/etc/daed` 初始 `{"numberUsers":0}` |
+| config preview/import | pass，preview `warnings=0`，import `{"imported":true}` |
+| dry reload / real reload | pass，`{"applied":1,"dry":true}` / `{"applied":1,"dry":false}` |
+| `/api/general/state` | pass，`running=true`、`attachBackend=tcx`、`netnsLinkMode=netkit`、version `daed-rustowned-default-runtime-20260601-r2` |
+| `/api/runtime/overview` / `/api/general/cache-stats` | pass，分别 `396` / `251` bytes |
+| DNS listener | pass，UDP `127.0.0.1:1053` 查询 `cloudflare.com` 返回 `rcode=0`、`ancount=2`、约 `35.420 ms` |
+| HTTPS trace | pass，`ip=38.65.91.47`、`colo=LAX`、`tls=TLSv1.3`、`warp=off` |
+| `systemctl reload daed.service` | pass，reload 前后 `MainPID=110823` |
+| `systemctl restart daed.service` | pass，restart 后 API health 恢复 |
+| 持久 helper 进程 | pass，`helper_process_count=0` |
+| Rust/Aya 日志 | pass，`Rust/Aya BPF loader loaded object_source=rust-aya-skeleton` 出现 `2` 次，`via Rust/Aya tcx` 出现 `18` 次，`Opened tproxy listener via Rust/Aya` 出现 `2` 次 |
+| forbidden fallback scan | pass，未见 `falling back to Go`、`Go map update`、`Go writer`、`Go attach path`、`Go listener`、`TCX attach failed`、`fatal`、`panic`、`parse config` |
+| 远程清理 | pass，测试后 `daed.service=inactive`、`dae.service=inactive`，`/usr/bin/daed`、`/etc/daed`、`/sys/fs/bpf/dae*`、`/sys/fs/bpf/daed*`、`daens` 均无残留 |
+
+结论：
+
+- 默认 daed bundle 已接入 Rust-owned in-process runtime：routing map、domain routing map/owner、outbound connectivity owner 不再依赖持久 helper 进程。
+- 38 真实 host-write 验证确认 runtime 正常，且稳定运行后没有 `dae-aya-bpf-loader` helper 进程残留。
+- 后续若要继续“全部 Rust-owned”，仍应在原计划大阶段边界内推进：不是优化 helper，也不是新增碎阶段，而是继续把仍由 Go control-plane 组织的上层 runtime 编排逐步迁入 Rust-owned state，同时保持 outbound 协议栈边界不动。
+
+#### 同一 1-5 任务内纠偏：废弃 `rust_inprocess` 默认方向，改为 Rust-owned resident runtime/control-plane（2026-06-01）
+
+本记录不是新增阶段，也不新增阶段号；它是对上一条 `rust_inprocess` 默认化记录的纠偏。上一条 r2 结果只能作为临时对照证据保留，不能视为真正 Rust-owned runtime/control-plane：
+
+- `rust_inprocess` 本质是 Go 产品进程通过 cgo 静态链接调用 Rust 库；虽然不是外部 helper IPC，但 runtime/control-plane 的生命周期、入口和错误边界仍由 Go 进程控制。
+- `CGO_ENABLED=1`、`-tags=rust_inprocess` 不满足当前混合架构目标：Go 只保留 daed 产品壳、WebUI/API、配置拼装和 outbound 协议栈边界；dae core runtime/control-plane/BPF/state 应由 Rust resident service 拥有。
+- 因此 r2 默认化方向作废；后续不得把 `rust_inprocess` 当作产品默认入口，也不得继续围绕 cgo/inprocess 优化作为主线。
+
+本轮按原“大阶段 1-5：Rust-owned dae core 收口”继续，不拆小阶段，完成真正产品接入形态：
+
+| 文件 | 调整 |
+| --- | --- |
+| `control/routing_matcher_builder.go`、`control/control_plane_core.go` | 撤回默认 `rust_inprocess` 调用；Go fallback 路径恢复为原 Rust helper/兼容路径，仅作为显式 Go runtime fallback 的旧路径存在。 |
+| `control/rust_routing_maps.go`、`control/rust_routing_maps_inprocess_disabled.go`、`control/rust_routing_maps_inprocess_test.go` | 删除“默认 runtime 优先 inprocess，失败再 helper”的产品路径；去掉 sentinel fallback 纠偏测试，避免把 cgo/inprocess 误当默认 runtime。 |
+| `Makefile` | 撤回 `rust-control-staticlib` 默认构建入口；不再为 daed 默认 bundle 提供 cgo staticlib 依赖。 |
+| `daed-daex-align/daed/wing/Makefile` | 默认 bundle 改为 `CGO_ENABLED=0`、`-tags=embedallowed,rust_owned_daemon_embed`；新增 `rust-daemon-embed` 构建 `dae-daemon-optin --features native-ebpf` 并嵌入 daed。 |
+| `daed-daex-align/daed/wing/engine/runtime_mode.go` | 新增 runtime selector：默认优先 Rust-owned resident service；`DAED_RUNTIME=go` 才显式回到旧 Go engine。 |
+| `daed-daex-align/daed/wing/engine/rust_owned_service.go` | 新增 Rust-owned resident service：由 daed/wing 负责配置拼装和 API 壳，实际 `run/reload/stop` 交给嵌入的 `dae-daemon-optin` resident service；reload 走 service pid/progress/abort contract。 |
+| `daed-daex-align/daed/wing/engine/rust_owned_embed*.go` | 新增嵌入边界：正式 bundle 嵌入 Rust daemon；非 bundle/test 构建不强制需要大二进制资产。 |
+| `daed-daex-align/daed/wing/orchestrator/general_state.go` | WebUI 状态读取优先使用 Rust-owned service 的实际 attach backend / netns link report；避免显示 `auto`，仍兼容旧 Go control-plane。 |
+
+默认 Rust-owned resident runtime 行为：
+
+- 运行时配置由 daed/wing 继续按通用配置模型生成，不按测试机 config 做特定修复；生成路径位于 daed 配置目录下的 `rust-owned-runtime/generated.dae`，只作为 resident service 的运行时快照。
+- resident service 默认设置：
+  - `DAE_RUST_NATIVE_EBPF=1`
+  - `DAE_RUST_NATIVE_EBPF_BACKEND=auto`
+  - `DAE_NATIVE_EBPF_BACKEND=auto`
+  - `DAE_RUST_NATIVE_EBPF_TCX_DATAPATH_ADMITTED=1`
+  - `DAE_NETNS_LINK=auto`
+  - `DAE_RUST_RESIDENT_DATAPLANE=1`，可通过 `DAED_RUST_RESIDENT_DATAPLANE_DEFAULT=0` 显式关闭。
+- `DAED_RUST_DAEMON=/path/to/dae-daemon-optin` 可用于本地/远程验证覆盖嵌入二进制；正式 bundle 仍使用内置 runtime。
+- `DAED_RUNTIME=go` 是显式旧 runtime fallback，仅用于回滚/对照验证；不作为默认产品路径。
+
+边界保持：
+
+- daed 产品壳、WebUI/API、数据库、订阅导入、配置拼装仍保持 Go。
+- daewing / outbound / quic-go 协议栈边界暂不重写；本轮不改 VLESS/VMess/Trojan/SS 等 outbound 协议实现。
+- Rust-owned resident runtime 当前接管的是 dae core runtime/control-plane/BPF/state/service contract。后续若继续缩小 Go 边界，应按混合架构计划推进，不得回到 cgo/inprocess 默认路径。
+
+本地验证：
+
+| 验证项 | 结果 |
+| --- | --- |
+| `PATH=/root/.local/go1.25.9/bin:$PATH GOWORK=off CGO_ENABLED=0 go test -tags=embedallowed ./control` | pass，确认撤回默认 `rust_inprocess` 后 Go fallback 兼容构建仍通过。 |
+| `PATH=/root/.local/go1.25.9/bin:$PATH GOWORK=off go test ./engine ./orchestrator` | pass，确认 Rust-owned service selector、runtime report 汇总、orchestrator runtime state 兼容。 |
+
+当前结论：
+
+- 真正 Rust-owned runtime/control-plane 的产品接入形态已经从 cgo/inprocess 改为嵌入式 Rust resident daemon service。
+- `rust_inprocess` 不再进入 daed 默认 bundle；默认 bundle 目标为 no-cgo Go 产品壳 + 内置 Rust resident runtime。
+- 同一大阶段内要求的 bundle 构建与 38 host-write 复验见后续完成记录；该动作不是新增阶段，且未部署 `10.10.10.2`。
+
+#### 同一 1-5 任务内完成记录：Rust-owned resident runtime/control-plane 默认路径验证通过（2026-06-01）
+
+本记录仍属于原“大阶段 1-5：Rust-owned dae core 收口”，不是新增阶段，也不拆小阶段。上一条记录中的“下一步做 bundle 构建与 38 host-write 复验”已完成。
+
+本地构建产物：
+
+| 项目 | 值 |
+| --- | --- |
+| 路径 | `/root/project/daed-daex-align/daed/daed-rustowned-runtime-controlplane-20260601-r3` |
+| version | `daed version daed-rustowned-runtime-controlplane-20260601-r3` |
+| sha256 | `bbc9138b6199863ff323b6407ea3c9edc3f1eac3554a07305ad9fcdc604f1b9f` |
+| size | `62M` |
+| build tags | `embedallowed,rust_owned_daemon_embed` |
+| `CGO_ENABLED` | `0` |
+| dynamic deps | `not a dynamic executable` |
+
+本地验证：
+
+| 验证项 | 结果 |
+| --- | --- |
+| `PATH=/root/.local/go1.25.9/bin:$PATH GOWORK=off CGO_ENABLED=0 go test -tags=embedallowed ./control` | pass，`ok github.com/daeuniverse/dae/control 0.064s` |
+| `PATH=/root/.local/go1.25.9/bin:$PATH GOWORK=off go test ./engine ./orchestrator ./transport/httpapi` | pass，engine/orchestrator/httpapi 均通过 |
+| bundle build | pass，默认 `bundle` 构建 `dae-daemon-optin --features native-ebpf` 并嵌入 daed；daed 本体为 no-cgo 静态二进制 |
+
+38 远程 host-write 复验：
+
+| 验证项 | 结果 |
+| --- | --- |
+| host-write 范围 | 仅临时安装 `/usr/bin/daed`、`/etc/daed`、`/etc/systemd/system/daed.service`；使用 `/etc/dae/config.dae` 作为输入，不修改原始 dae 配置 |
+| 测试环境准备 | 远程配置引用 `lan_interface: daerust0`，测试机无该接口；验证时临时创建 dummy `daerust0`，结束后删除。该动作只属于测试环境准备，不写入代码，不作为通用逻辑特例 |
+| 原始配置保护 | `/etc/dae/config.dae` sha256 前后均为 `5f6590e9a981456e1b4fcb2166e809617960b172f3bd860b9fb4d192b01206d4` |
+| API health/auth | pass，`/api/health` 返回 `{"healthCheck":1}`，临时 `/etc/daed` 初始 `numberUsers=0` |
+| config preview/import | pass，preview `warnings=0`，import `{"imported":true}` |
+| dry reload / real reload | pass，`{"applied":1,"dry":true}` / `{"applied":1,"dry":false}` |
+| `/api/general/state` | pass，real reload 与 restart 后均为 `running=true`、`attachBackend=tcx+tc`、`netnsLinkMode=netkit`、version `daed-rustowned-runtime-controlplane-20260601-r3` |
+| generated runtime config | pass，`/etc/daed/rust-owned-runtime/generated.dae` mode 为 `0600` |
+| `/api/runtime/overview` / `/api/general/cache-stats` | pass，分别返回 `396` / `251` bytes |
+| DNS listener | skip，38 当前 `/etc/dae/config.dae` 只有 DNS upstream/routing，没有本地 DNS listen；不再硬编码 `127.0.0.1:1053` 作为验证项 |
+| HTTPS trace | pass，`cloudflare.com/cdn-cgi/trace` 返回 `ip=38.65.91.47`、`colo=LAX`、`tls=TLSv1.3`、`warp=off` |
+| `systemctl reload daed.service` | pass，HUP reload 前后 `MainPID` 不变，journal 出现 `[Reload] Finished` |
+| `systemctl restart daed.service` | pass，restart 后 API health 恢复，runtime state 恢复为 running |
+| resident process | pass，运行时存在 1 个内嵌提取出的 `dae-daemon-optin` resident 进程 |
+| 持久 helper 进程 | pass，`dae-aya-bpf-loader`、`dae-cli-optin`、`bpf-loader` helper 进程计数为 0 |
+| forbidden fallback scan | pass，未见 `falling back to Go`、`Go map update`、`Go writer`、`Go attach path`、`Go listener`、`TCX attach failed`、`fatal`、`panic`、`parse config` |
+| 远程清理 | pass，测试后 `daed.service=inactive`、`dae.service=inactive`，`/usr/bin/daed`、`/etc/daed`、上传二进制、`daens`、临时 `daerust0`、`/sys/fs/bpf/dae*`、`/sys/fs/bpf/daed*`、`/sys/fs/bpf/dae-native-runtime-*` 均已清理 |
+
+resident start report 关键证据：
+
+| 项目 | 结果 |
+| --- | --- |
+| `status` / `resident_runtime_started` | `pass` / `true` |
+| native object | `native_object_present=true`、`native_param_object_present=true` |
+| cgroup attach | `resident_cgroup_attach.status=pass`、`backend=aya`、`native_attached=true`、`wan_interfaces=["ens3"]` |
+| WAN attach | `resident_wan_attach[0].interface=ens3`、`status=pass`、`link_layer=l2` |
+| LAN attach | `resident_lan_attach[0].interface=daerust0`、`status=pass`、`backend=tcx`、`native_backend=tcx`、`native_attached=true`、`fallback_used=false`、`link_layer=l2` |
+| LAN egress attach | `status=pass`、`backend=tcx`、`native_attached=true`、`fallback_used=false` |
+| peer/host attach show | `peer_attach_show_status=pass`、`host_attach_show_status=pass` |
+| netns link | `production_host_link_kind=netkit`、`production_peer_link_kind=netkit`、`requested_netns_link_mode=auto` |
+| outbound connectivity | `resident_outbound_connectivity_status=pass` |
+| resident dataplane | `enabled=true`、`status=pass`、`tcp_worker_started=true`、`udp_worker_started=true`；当前测试配置的默认 proxy 是 VLESS/TCP/Vision，但实现要求仍以通用配置模型为准，不允许为测试机配置写特例 |
+
+结论更新：
+
+- 真正 Rust-owned runtime/control-plane 默认产品路径已经完成并通过本地 + 38 真实 host-write 验证。
+- 默认 daed bundle 不再使用 `rust_inprocess`、cgo staticlib、持久 helper IPC 或 Go 调 Rust 的产品热路径；形态为 no-cgo Go daed 产品壳 + 内嵌 Rust `dae-daemon-optin` resident service。
+- `DAED_RUNTIME=go` 仅作为显式回滚/对照路径保留，不是默认路径。
+- daed 产品壳、WebUI/API、数据库、订阅导入、配置拼装，以及 daewing/outbound/quic-go 全协议栈仍按混合架构边界保留 Go；本轮完成的是 dae core runtime/control-plane/BPF/state/service contract 的 Rust-owned 默认接入。
+- 远程 38 验证已清理干净；未部署到 `10.10.10.2`。
+
+执行纪律修正：
+
+- 后续执行只能引用本计划书已有阶段编号或已有阶段标题，不再临时写“下一步”作为新增任务来源。
+- 若计划书没有已定义阶段，则先补充/修订计划并经确认后再执行；不得在阶段完成记录末尾随意追加未定义方向。
+- 当前记录截止点为原“大阶段 1-5：Rust-owned dae core 收口”中的“Rust-owned resident runtime/control-plane 默认路径验证通过”，该阶段已完成；后续若继续，必须回到本计划书已定义阶段边界内执行。

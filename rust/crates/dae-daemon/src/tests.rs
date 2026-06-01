@@ -1251,9 +1251,9 @@ fn daemon_runner_product_chain_accepts_fallback_retirement_without_release_switc
             .unwrap()
             .contains("resident userspace dataplane")
     }));
-    assert!(!fallback_gate["default_switch_allowed"].as_bool().unwrap());
+    assert!(fallback_gate["default_switch_allowed"].as_bool().unwrap());
     assert!(
-        !fallback_gate["c_tproxy_object_retirement_allowed"]
+        fallback_gate["c_tproxy_object_retirement_allowed"]
             .as_bool()
             .unwrap()
     );
