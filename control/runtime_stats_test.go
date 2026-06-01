@@ -51,6 +51,23 @@ func TestRuntimeStatsSnapshotAggregatesAcrossShards(t *testing.T) {
 	}
 }
 
+func TestRuntimeStatsSnapshotIncludesCPUUsagePercent(t *testing.T) {
+	originalCPUUsagePercent := currentCPUUsagePercent
+	currentCPUUsagePercent = func() float64 {
+		return 12.5
+	}
+	defer func() {
+		currentCPUUsagePercent = originalCPUUsagePercent
+	}()
+
+	stats := newRuntimeStats(1)
+	snapshot := stats.snapshot(0, 0, 0, 0, 0, 30, 180, time.Unix(1_700_000_010, 0))
+
+	if snapshot.CPUUsagePercent != 12.5 {
+		t.Fatalf("expected cpu usage 12.5, got %f", snapshot.CPUUsagePercent)
+	}
+}
+
 func TestRuntimeStatsSnapshotIncludesRecordsFromMultipleBuckets(t *testing.T) {
 	stats := newRuntimeStats(2)
 	base := time.Unix(1_700_000_100, 0)
