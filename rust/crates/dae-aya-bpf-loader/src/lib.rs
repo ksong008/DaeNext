@@ -2555,7 +2555,7 @@ mod tests {
             json["disabled_reason"]
                 .as_str()
                 .unwrap()
-                .contains("temporarily disabled")
+                .contains("retired from the product default path")
         );
     }
 
@@ -2578,7 +2578,11 @@ mod tests {
             "65536",
         ]);
         assert_eq!(output.exit_code, 1);
-        assert!(output.stderr.contains("temporarily disabled"));
+        assert!(
+            output
+                .stderr
+                .contains("retired from the product default path")
+        );
 
         let output = run_with_args([
             "trace-loader",
@@ -2589,7 +2593,11 @@ mod tests {
             "ip_rcv_core",
         ]);
         assert_eq!(output.exit_code, 1);
-        assert!(output.stderr.contains("temporarily disabled"));
+        assert!(
+            output
+                .stderr
+                .contains("retired from the product default path")
+        );
     }
 
     #[test]

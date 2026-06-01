@@ -194,7 +194,7 @@ fn tproxy_dataplane_admission_excludes_trace_diagnostic_gate() {
     assert!(report.go_bpf_loader_retirement_candidate);
     assert!(report.c_tproxy_object_retirement_candidate);
     assert!(!report.c_tproxy_object_required);
-    assert!(report.c_trace_object_required);
+    assert!(!report.c_trace_object_required);
     assert!(report.trace_diagnostic_excluded_from_default_candidate);
     assert!(report.tc_command_fallback_required);
     assert!(report.go_userspace_control_plane_preserved);
@@ -217,20 +217,17 @@ fn tproxy_dataplane_admission_excludes_trace_diagnostic_gate() {
 }
 
 #[test]
-fn trace_diagnostic_gate_is_preserved_outside_tproxy_default_candidate() {
+fn trace_diagnostic_gate_is_retired_outside_tproxy_default_candidate() {
     let report = trace_diagnostic_gate_report(&trace_core_sideload_gate_report());
 
     assert_eq!(report.schema, "trace-diagnostic-gate-v1");
-    assert_eq!(report.status, "deferred_preserved");
+    assert_eq!(report.status, "retired_from_product_default");
     assert!(!report.participates_in_tproxy_default_candidate);
-    assert!(report.c_trace_object_required);
-    assert!(report.go_trace_fallback_required);
+    assert!(!report.c_trace_object_required);
+    assert!(!report.go_trace_fallback_required);
     assert!(!report.rust_core_sideload_enabled);
-    assert!(!report.fallback_retirement_allowed);
-    assert_eq!(
-        report.missing_checks,
-        vec![KernelProgramParityCheck::TraceKprobeCoverage]
-    );
+    assert!(report.fallback_retirement_allowed);
+    assert!(report.missing_checks.is_empty());
     assert!(report.evidence_queue.iter().any(|line| {
         line.check == KernelProgramParityCheck::TraceKprobeCoverage
             && line.item == "rust_skb_core_read_semantics"
@@ -259,14 +256,14 @@ fn kernel_program_fallback_retirement_gate_blocks_current_incomplete_state() {
     assert!(!gate.tc_command_fallback_retirement_allowed);
     assert!(!gate.trace_diagnostic_retirement_allowed);
     assert!(gate.c_tproxy_object_required);
-    assert!(gate.c_trace_object_required);
+    assert!(!gate.c_trace_object_required);
     assert!(gate.go_bpf_fallback_required);
-    assert!(gate.go_trace_fallback_required);
+    assert!(!gate.go_trace_fallback_required);
     assert!(gate.tc_command_fallback_required);
     assert!(gate.go_userspace_control_plane_preserved);
     assert_eq!(
         gate.retirement_scope,
-        "tproxy-dataplane-only; trace diagnostic fallback is feature-gated and preserved"
+        "kernel-facing-tproxy-default-rust-aya; trace diagnostic retired from product default; outbound protocol boundary preserved"
     );
     assert!(!gate.explicit_user_approval_recorded);
     assert!(!gate.product_chain_recertified);
@@ -322,16 +319,16 @@ fn kernel_program_fallback_retirement_gate_can_admit_only_after_full_evidence() 
     );
 
     assert!(gate.admitted);
-    assert!(!gate.default_switch_allowed);
-    assert!(!gate.c_tproxy_object_retirement_allowed);
-    assert!(!gate.c_trace_object_retirement_allowed);
+    assert!(gate.default_switch_allowed);
+    assert!(gate.c_tproxy_object_retirement_allowed);
+    assert!(gate.c_trace_object_retirement_allowed);
     assert!(gate.go_bpf_fallback_retirement_allowed);
     assert!(!gate.tc_command_fallback_retirement_allowed);
-    assert!(!gate.trace_diagnostic_retirement_allowed);
-    assert!(gate.c_tproxy_object_required);
-    assert!(gate.c_trace_object_required);
+    assert!(gate.trace_diagnostic_retirement_allowed);
+    assert!(!gate.c_tproxy_object_required);
+    assert!(!gate.c_trace_object_required);
     assert!(!gate.go_bpf_fallback_required);
-    assert!(gate.go_trace_fallback_required);
+    assert!(!gate.go_trace_fallback_required);
     assert!(gate.tc_command_fallback_required);
     assert!(gate.go_userspace_control_plane_preserved);
     assert!(gate.explicit_user_approval_recorded);
