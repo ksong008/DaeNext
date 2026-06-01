@@ -62,13 +62,52 @@ func (m *Marshaller) writeLine(depth int, line string) {
 	m.buf.WriteString("\n")
 }
 
+func canMarshalAsBareKey(key string) bool {
+	if key == "" {
+		return false
+	}
+	for i := 0; i < len(key); i++ {
+		c := key[i]
+		if c >= 0x80 {
+			return false
+		}
+		if i == 0 {
+			if isSafeIDHeadChar(c) || isSafeNonIDHeadChar(c) {
+				continue
+			}
+			return false
+		}
+		if isSafeIDHeadChar(c) || isSafeNonIDHeadChar(c) || isSafeIntermediateChar(c) {
+			continue
+		}
+		return false
+	}
+	return true
+}
+
+func isSafeIDHeadChar(c byte) bool {
+	return (c >= 'A' && c <= 'Z') || c == '_' || (c >= 'a' && c <= 'z')
+}
+
+func isSafeNonIDHeadChar(c byte) bool {
+	return c == '*' || c == '+' || (c >= '-' && c <= '9') || c == '\\' || c == '^'
+}
+
+func isSafeIntermediateChar(c byte) bool {
+	return c == '!' || (c >= '#' && c <= '%') || c == '=' || c == '@'
+}
+
 func (m *Marshaller) marshalStringList(from reflect.Value, depth int, keyable bool) (err error) {
 	for i := 0; i < from.Len(); i++ {
 		str := from.Index(i)
 		if keyable {
 			tag, afterTag := common.GetTagFromLinkLikePlaintext(str.String())
 			if len(tag) > 0 {
-				m.writeLine(depth, tag+":"+strconv.Quote(afterTag))
+				if canMarshalAsBareKey(tag) {
+					m.writeLine(depth, tag+":"+strconv.Quote(afterTag))
+				} else {
+					m.writeLine(depth, strconv.Quote(str.String()))
+				}
 				continue
 			}
 		}
