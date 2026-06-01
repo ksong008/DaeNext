@@ -1808,6 +1808,31 @@ fn rust_native_control_plane_admission_records_no_cgo_hot_path() {
     assert!(report["routing_lpm_owner_native"].as_bool().unwrap());
     assert!(report["connectivity_owner_native"].as_bool().unwrap());
     assert!(
+        report["rust_aya_datapath_contract_ready"]
+            .as_bool()
+            .unwrap()
+    );
+    assert!(
+        report["rust_owned_1_to_5"]["all_1_to_5_admission_completed"]
+            .as_bool()
+            .unwrap()
+    );
+    assert!(
+        report["rust_owned_1_to_5"]["phase_4_routing_sniff_active_handoff_state_admitted"]
+            .as_bool()
+            .unwrap()
+    );
+    assert!(
+        report["rust_owned_1_to_5"]["phase_5_rust_aya_datapath_parity_candidate_admitted"]
+            .as_bool()
+            .unwrap()
+    );
+    assert!(
+        !report["rust_owned_1_to_5"]["helper_expansion_allowed"]
+            .as_bool()
+            .unwrap()
+    );
+    assert!(
         report["benchmark"]["dns_packet_to_domain_event_ns_per_op"]
             .as_u64()
             .unwrap()
@@ -1843,6 +1868,11 @@ fn daemon_runner_rust_native_control_plane_command_outputs_json() {
     );
     assert!(!json["ffi_symbols_called"].as_bool().unwrap());
     assert_eq!(json["benchmark"]["iterations"].as_u64().unwrap(), 50);
+    assert!(
+        json["rust_owned_1_to_5"]["all_1_to_5_admission_completed"]
+            .as_bool()
+            .unwrap()
+    );
     let _ = std::fs::remove_dir_all(root);
 }
 
