@@ -21039,3 +21039,197 @@ resident start report 关键证据：
 - 后续执行只能引用本计划书已有阶段编号或已有阶段标题，不再临时写“下一步”作为新增任务来源。
 - 若计划书没有已定义阶段，则先补充/修订计划并经确认后再执行；不得在阶段完成记录末尾随意追加未定义方向。
 - 当前记录截止点为原“大阶段 1-5：Rust-owned dae core 收口”中的“Rust-owned resident runtime/control-plane 默认路径验证通过”，该阶段已完成；后续若继续，必须回到本计划书已定义阶段边界内执行。
+
+### 产品默认路径 / 发布切换准入收口记录（2026-06-01）
+
+本节承接“Rust-owned dae core 收口”与阶段 8-10 Rust/Aya kernel datapath 收口后的既定下一阶段：产品默认路径 / 发布切换准入收口。本节不是 helper IPC 优化，不新增小阶段，不推进 outbound 协议栈 Rust 化，不部署 `10.10.10.2`。
+
+执行边界：
+
+- 产品链固定为：
+  ```text
+  daed-daex-align/daed
+    -> dae-wing-daex-align
+    -> dae-daex-align
+    -> outbound-daex-align
+    -> quic-go-rust
+  ```
+- 继续保留 daed 产品壳 / WebUI / API / 配置编排为 Go。
+- 继续保留 daewing / outbound / quic-go 全协议栈为 Go；不改 VLESS/VMess/Trojan/SS/SSR/TUIC/Hysteria2/Juicity/AnyTLS 等协议实现。
+- Rust-owned resident runtime/control-plane 与 Rust/Aya eBPF datapath 作为默认路径候选接受产品链准入。
+- `10.10.10.2` 未授权，不部署；远程 host-write 仅在 38 测试机执行。
+
+基线提交与 tag：
+
+| 仓库 | 提交 | tag | 说明 |
+| --- | --- | --- | --- |
+| `/root/project/dae-daex-align` | `ae586d3a daex: admit rust aya kernel datapath candidate` | `daex-product-default-admission-baseline-20260601` | 固定阶段 8-10 gate/report 与本计划记录 |
+| `/root/project/daed-daex-align/daed/wing` | `4766498 engine: embed rust owned resident runtime` | `daewing2-rustowned-resident-runtime-20260601` | daed 持有的 wing worktree，接入内嵌 Rust-owned resident runtime |
+| `/root/project/dae-wing-daex-align` | `63c8a40 engine: embed rust owned resident runtime` | `dae-wing-daex-rustowned-resident-runtime-20260601` | 独立 dae-wing 正式链路同步同源改动 |
+| `/root/project/daed-daex-align/daed` | `50baebf chore: point wing at rust owned runtime` | `daed2-daex-product-default-admission-baseline-20260601` | 固定 daed 外层 submodule/worktree 指针 |
+
+基线前验证：
+
+| 验证项 | 结果 |
+| --- | --- |
+| `git diff --check` in `dae-daex-align` | pass |
+| `git diff --check` in `daed-daex-align/daed/wing` | pass |
+| `cargo test --manifest-path rust/Cargo.toml -p dae-ebpf-support -p dae-aya-bpf-loader --features native-ebpf` | pass，`dae-aya-bpf-loader` 24 passed，`dae-ebpf-support` 58 passed |
+| `cargo test --manifest-path rust/Cargo.toml -p dae-daemon` | pass，148 tests passed |
+| `PATH=/root/.local/go1.25.9/bin:$PATH GOWORK=off go test -count=1 ./engine ./orchestrator ./transport/httpapi` in wing | pass |
+| daed commit hook | pass，turbo cached tests 10/10 successful；commitlint 要求 conventional commit，最终使用 `chore:` 提交 |
+
+产品链 clean baseline 处理：
+
+- `daed-daex-align/daed` 根目录存在历史验证二进制残留，会导致 product-chain clean baseline 失败。
+- 已删除的未跟踪生成产物包括：
+  - `daed-items1-2-rustowned-state-20260531`
+  - `daed-r3-rust-native-control-plane-no-cgo-20260531`
+  - `daed-r4-no-cgo-owner-entry-20260531`
+  - `daed-r5-connectivity-owner-20260531`
+  - `daed-r6-resident-domain-owner-20260601`
+  - `daed-rustowned-1-5-20260601`
+  - `daed-rustowned-default-runtime-20260601`
+  - `daed-rustowned-default-runtime-20260601-r2`
+  - `daed-rustowned-runtime-controlplane-20260601`
+  - `daed-rustowned-runtime-controlplane-20260601-r2`
+  - `daed-rustowned-runtime-controlplane-20260601-r3`
+  - `daed-stage1-10-all-enabled-20260531-r3`
+  - `daed-stage8-10-kernel-rustaya-20260601`
+- 清理后 `/root/project/daed-daex-align/daed` 工作区只剩本地 ahead 提交，无未跟踪二进制。
+
+readiness gate：
+
+| 验证项 | 结果 |
+| --- | --- |
+| gate | `scripts/run_daex_switch_readiness_gate.sh` |
+| RUN_ID | `product-default-admission-rerun-20260601` |
+| 环境 | `DAE_NATIVE_EBPF_BACKEND=auto`、`DAE_NETNS_LINK=auto`、`DAE_RUST_RESIDENT_DATAPLANE=1` |
+| 结果 | pass |
+| `core_switch_readiness_passed` | `true` |
+| `ready_for_manual_switch_authorization` | `true` |
+| `product_chain_recertification_clean` | `true` |
+| `product_chain_switch_allowed` | `true` |
+| `true_rust_default_daemon_admitted` | `true` |
+| `go_fallback_retired` | `true` |
+| `go_fallback_not_required` | `true` |
+| `go_default_path_preserved` | `true` |
+| `host_write_executed` | `false`，该 gate 只读，不写 host |
+
+readiness gate 纠偏：
+
+- 第一次执行未显式设置 `DAE_RUST_RESIDENT_DATAPLANE=1`，combined admission 被 `resident_dataplane_default_switch_ready=false` 阻断。
+- manifest 明确给出 blocker：`DAE_RUST_RESIDENT_DATAPLANE=1 is required before true Rust default daemon admission`。
+- 按既有 resident dataplane default gate 重新执行，显式设置 `DAE_RUST_RESIDENT_DATAPLANE=1` 后 gate 通过。
+- 该纠偏不修改代码，不新增阶段；它只是按 gate 要求打开当前默认路径准入所需环境。
+
+native runtime evidence：
+
+| 项目 | 结果 |
+| --- | --- |
+| `production_dataplane_admitted` | `true` |
+| `reload_runtime_parity_admitted` | `true` |
+| netns link | requested=`auto`，selected=`netkit`，`fallback_used=false` |
+| native attach | peer/LAN/host 三个 attach step 均 pass，backend=`tc_netlink`，`fallback_used=false` |
+| active TCP relay | 5 iterations，`204660117 ns` total，约 `40932023.4 ns/connection` |
+| active UDP datapath | 5 iterations，`103432140 ns` total，约 `20686428.0 ns/packet` |
+| active DNS UDP/53 | 5 iterations，`103296730 ns` total，约 `20659346.0 ns/query` |
+
+matched Go/Rust default daemon benchmark：
+
+| 项目 | 结果 |
+| --- | --- |
+| iterations | `10` |
+| Go ready avg | `626277058.1 ns` |
+| Go ready min/max | `601146876 ns` / `651415646 ns` |
+| Rust ready avg | `12011598.6 ns` |
+| Rust ready min/max | `11737029 ns` / `12685852 ns` |
+| Rust/Go ready ratio | `0.019179368690976483` |
+| 结论 | Rust opt-in daemon start-to-ready 明显快于 Go default daemon baseline；该 benchmark 是产品默认路径准入证据之一，不替代 38 host-write 验证 |
+
+daed 产品二进制：
+
+| 项目 | 结果 |
+| --- | --- |
+| 构建入口 | `/root/project/daed-daex-align/daed/wing` |
+| 构建命令 | `PATH=/root/.local/go1.25.9/bin:$PATH GOWORK=off make -C /root/project/daed-daex-align/daed/wing OUTPUT=/root/project/daed-daex-align/daed/daed-product-default-admission-20260601 APPNAME=daed WEB_DIST=../dist VERSION=daed-product-default-admission-20260601 bundle` |
+| 二进制 | `/root/project/daed-daex-align/daed/daed-product-default-admission-20260601` |
+| version | `daed version daed-product-default-admission-20260601` |
+| sha256 | `1d67c74c12f7850248bd5e1d711886c5ed6837a30edcfd27d251c8015a1db848` |
+| size | `62M` |
+| link | static，`not a dynamic executable` |
+| embedded `dae-aya-bpf-loader` sha256 | `8577435b4b1f9c90e7614f4a8f5c20e4ab7c0daba8e56a328606f4ae49d947fb` |
+| embedded `dae-daemon-optin` sha256 | `092c7da2881547d07ab52ac1af317fb3ce972e2f64c022e83a1be0da9168109c` |
+
+远程 38 host-write 验证：
+
+| 验证项 | 结果 |
+| --- | --- |
+| 测试机 | `38.65.91.47:5122`，kernel `6.12.86+deb12-amd64` |
+| 初始状态 | `dae.service=inactive`，`daed.service=inactive` |
+| 原始配置保护 | `/etc/dae/config.dae` sha256 验证前后均为 `5f6590e9a981456e1b4fcb2166e809617960b172f3bd860b9fb4d192b01206d4` |
+| host-write 范围 | 临时安装 `/usr/bin/daed`、`/etc/daed`、`/etc/systemd/system/daed.service`；结束后全部删除 |
+| 测试环境准备 | 远程配置引用 `lan_interface: daerust0`，验证时临时创建 dummy `daerust0`，结束后删除；该动作不写入代码，不作为通用逻辑 |
+| unit 环境 | `DAED_RUNTIME=rust-owned`、`DAED_RUST_RESIDENT_DATAPLANE_DEFAULT=1`、`DAE_RUST_NATIVE_EBPF=1`、`DAE_RUST_NATIVE_EBPF_BACKEND=auto`、`DAE_NATIVE_EBPF_BACKEND=auto`、`DAE_RUST_NATIVE_EBPF_TCX_DATAPATH_ADMITTED=1`、`DAE_NETNS_LINK=auto` |
+| `/api/health` | pass，HTTP 200 |
+| auth bootstrap | pass，临时 `/etc/daed` 初始用户创建成功；restart 后 `numberUsers=1` |
+| config preview/import | pass，使用 `/etc/dae/config.dae` 作为输入，preview/import 均 HTTP 200 |
+| dry reload / real reload | pass，`/api/runtime/reload` dry=true / dry=false 均 HTTP 200 |
+| `/api/general/state` | pass，`running=true`，`version=daed-product-default-admission-20260601`，`attachBackend=tcx+tc`，`netnsLinkMode=netkit` |
+| `/api/runtime/overview` | pass，HTTP 200，`activeConnections=0`，`udpSessions=0`，`goroutines=12`，`rssBytes=69898240` |
+| `/api/general/cache-stats` | pass，HTTP 200 |
+| HTTPS trace | pass，`https://www.cloudflare.com/cdn-cgi/trace` 返回 `ip=38.65.91.47`、`colo=LAX`、`http=http/2` |
+| `systemctl reload daed.service` | pass，reload 后服务仍 active，API health 可用 |
+| `systemctl restart daed.service` | pass，restart 后 API health 可用，auth DB 保留 |
+| journal | pass，出现 `Rust-owned dae runtime is ready attachBackend=tcx+tc netnsLinkMode=netkit` |
+| forbidden fallback scan | pass，未见 `falling back to Go`、`Go map update`、`Go writer`、`Go attach path`、`Go listener`、`TCX attach failed`、`panic`、`fatal`、`parse config` |
+| helper 进程 | pass，稳定运行态无 `dae-aya-bpf-loader`、`dae-cli-optin`、`bpf-loader` helper 进程 |
+| resident 进程 | pass，存在 `/etc/daed/rust-owned-runtime/bin/dae-daemon-optin run ...` resident service |
+
+resident start report 关键证据：
+
+| 项目 | 结果 |
+| --- | --- |
+| `status` / `resident_runtime_started` | `pass` / `true` |
+| cgroup attach | `resident_cgroup_attach.status=pass`，backend=`aya`，`native_attached=true`，`wan_interfaces=["ens3"]` |
+| WAN attach | `ens3` ingress/egress 均 pass，backend=`tcx`，`fallback_used=false` |
+| LAN attach | `daerust0` ingress/egress 均 pass，backend=`tcx`，`native_attached=true`，`fallback_used=false`，link layer=`l2` |
+| peer/host attach | `peer_attach_show_status=pass`，`host_attach_show_status=pass` |
+| netns link | `production_host_link_kind=netkit`，`production_peer_link_kind=netkit`，requested=`auto` |
+| outbound connectivity | `resident_outbound_connectivity.status=pass`，seeded user-defined outbound connectivity map entries |
+| resident dataplane | `enabled=true`，`status=pass`，`tcp_worker_started=true`，`udp_worker_started=true` |
+
+远程清理：
+
+- 已停止 `daed.service` / `dae.service`。
+- 已删除临时 `/usr/bin/daed`、`/etc/daed`、临时 `daed.service`、上传二进制和阶段 `/tmp` 产物。
+- 已清理 `daens`、`dae50client`、`dae0`、临时 `daerust0`、`/sys/fs/bpf/dae*`、`/sys/fs/bpf/daed*`、`/sys/fs/bpf/dae-native-runtime-*`。
+- 复查结果：
+  - `dae=inactive`
+  - `daed=inactive`
+  - `/usr/bin/daed=absent`
+  - `/etc/daed=absent`
+  - netns/link/bpffs/tmp 均无本阶段残留
+  - `/etc/dae/config.dae` hash 仍为 `5f6590e9a981456e1b4fcb2166e809617960b172f3bd860b9fb4d192b01206d4`
+
+C object 删除准入审计结论：
+
+- 本阶段允许进入 C object 删除准备，但不在本阶段删除 `control/kern/tproxy.c`。
+- 当前 gate 已证明 Rust/Aya object 具备产品默认候选准入，且 `go_bpf_loader_required=false`、Go BPF fallback 已不再需要。
+- C `control/kern/tproxy.c` 仍应作为开发 oracle / 显式 rollback 参考保留到单独删除提交：
+  - 删除提交前必须再次确认 Rust/Aya packet parity、LAN/WAN/dae0/dae0peer 实流、reload/restart、38 host-write、cleanup/rollback 全部通过。
+  - 删除提交必须保留明确 rollback tag，不能和 outbound 协议栈、daed WebUI/API、quic-go 改动混在一起。
+- C trace object / Go trace fallback 当前已从 tproxy 产品默认路径退役；未来若恢复 trace diagnostic，必须单独补齐 Rust CO-RE relocation/ringbuf parity，不得用旧 C/Go trace fallback 静默回到默认路径。
+- TC command fallback 仍未在本阶段删除；`tc_netlink` / `tcx` 是 Rust/Aya attach backend，不代表 Go BPF fallback。
+
+本阶段结论：
+
+- 产品默认路径 / 发布切换准入收口通过：
+  - readiness gate pass；
+  - product-chain recertification clean；
+  - matched Go/Rust default daemon benchmark recorded；
+  - Rust-owned resident runtime/control-plane 默认候选在 daed 产品链中通过 38 host-write/reload/restart/cleanup；
+  - 38 稳定运行态无 helper 进程；
+  - Go BPF fallback 不再需要。
+- 本阶段没有执行生产默认切换，没有替换 `10.10.10.2`，没有删除 C `tproxy.c`，没有修改 outbound 协议栈。
+- 下一次若继续执行，应在本计划边界内进入“C object 删除准备/执行”或“经用户授权的目标机默认路径切换”，不得继续新增 helper 小阶段。
