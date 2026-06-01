@@ -232,6 +232,9 @@ fn run_domain_routing_map_command(args: &[String]) -> LoaderOutput {
         Some("serve") if args.len() == 1 => LoaderOutput::usage(
             "domain-routing-map serve requires the dae-aya-bpf-loader stdio entrypoint",
         ),
+        Some("serve-owner") if args.len() == 1 => LoaderOutput::usage(
+            "domain-routing-map serve-owner requires the dae-aya-bpf-loader stdio entrypoint",
+        ),
         Some(subcommand) => LoaderOutput::usage(format!(
             "unsupported domain-routing-map subcommand: {subcommand}"
         )),
@@ -1050,6 +1053,25 @@ where
     Ok(())
 }
 
+pub fn run_domain_routing_map_owner_serve<R, W>(reader: R, mut writer: W) -> io::Result<()>
+where
+    R: BufRead,
+    W: Write,
+{
+    let mut owner = dae_control::DomainRoutingOwner::default();
+    for line in reader.lines() {
+        let line = line?;
+        if line.trim().is_empty() {
+            continue;
+        }
+        let response = handle_domain_routing_map_owner_serve_line(&mut owner, &line);
+        writer.write_all(response.as_bytes())?;
+        writer.write_all(b"\n")?;
+        writer.flush()?;
+    }
+    Ok(())
+}
+
 fn handle_domain_routing_map_serve_line(line: &str) -> String {
     let output = run_domain_routing_map_apply_json(line);
     if output.exit_code == 0 {
@@ -1062,6 +1084,25 @@ fn handle_domain_routing_map_serve_line(line: &str) -> String {
         "error": output.stderr.trim(),
     })
     .to_string()
+}
+
+fn handle_domain_routing_map_owner_serve_line(
+    owner: &mut dae_control::DomainRoutingOwner,
+    line: &str,
+) -> String {
+    match parse_domain_routing_map_owner_request(line)
+        .and_then(|request| apply_domain_routing_map_owner_request(owner, request))
+    {
+        Ok(response) => response.to_string(),
+        Err(err) => json!({
+            "status": "error",
+            "loader": "rust",
+            "scope": "domain-routing-map-owner",
+            "owner": "dae-control",
+            "error": err,
+        })
+        .to_string(),
+    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -1078,6 +1119,20 @@ struct DomainRoutingMapApplyRequest {
     map_id: u32,
     updates: Vec<dae_ebpf_support::DomainRoutingMapEntry>,
     deletes: Vec<[u32; 4]>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+enum DomainRoutingOwnerRequest {
+    SyncOwner {
+        map_id: u32,
+        owner_key: String,
+        bitmap: [u32; 32],
+        ips: Vec<[u32; 4]>,
+    },
+    PrepareReload {
+        map_id: u32,
+        existing_keys: Vec<[u32; 4]>,
+    },
 }
 
 fn parse_routing_map_apply_request(input: &str) -> Result<RoutingMapApplyRequest, String> {
@@ -1128,6 +1183,103 @@ fn parse_domain_routing_map_apply_request(
         updates,
         deletes,
     })
+}
+
+fn parse_domain_routing_map_owner_request(
+    input: &str,
+) -> Result<DomainRoutingOwnerRequest, String> {
+    let value: Value = serde_json::from_str(input)
+        .map_err(|err| format!("bad domain-routing-map owner request: {err}"))?;
+    let object = value
+        .as_object()
+        .ok_or_else(|| "bad domain-routing-map owner request: expected JSON object".to_owned())?;
+    let op = json_string(object.get("op"), "op")?;
+    let map_id = json_u32(object.get("map_id"), "map_id")?;
+    match op.as_str() {
+        "sync_owner" => {
+            let owner_key = json_string(object.get("owner_key"), "owner_key")?;
+            let ips = optional_json_array(object.get("ips"))?
+                .iter()
+                .map(|value| json_u32_array_4(Some(value), "ips[]"))
+                .collect::<Result<Vec<_>, _>>()?;
+            Ok(DomainRoutingOwnerRequest::SyncOwner {
+                map_id,
+                owner_key,
+                bitmap: json_u32_array_32(object.get("bitmap"), "bitmap")?,
+                ips,
+            })
+        }
+        "prepare_reload" => {
+            let existing_keys = optional_json_array(object.get("existing_keys"))?
+                .iter()
+                .map(|value| json_u32_array_4(Some(value), "existing_keys[]"))
+                .collect::<Result<Vec<_>, _>>()?;
+            Ok(DomainRoutingOwnerRequest::PrepareReload {
+                map_id,
+                existing_keys,
+            })
+        }
+        _ => Err(format!(
+            "unsupported domain-routing-map owner op: {op}; want sync_owner or prepare_reload"
+        )),
+    }
+}
+
+fn apply_domain_routing_map_owner_request(
+    owner: &mut dae_control::DomainRoutingOwner,
+    request: DomainRoutingOwnerRequest,
+) -> Result<Value, String> {
+    match request {
+        DomainRoutingOwnerRequest::SyncOwner {
+            map_id,
+            owner_key,
+            bitmap,
+            ips,
+        } => {
+            let report = owner
+                .apply_owner_snapshot_by_id(
+                    map_id,
+                    &owner_key,
+                    dae_control::DomainRoutingOwnerSnapshot::from_keys(&bitmap, &ips),
+                )
+                .map_err(|err| format!("domain routing owner apply failed: {err}"))?;
+            Ok(json!({
+                "status": "pass",
+                "loader": "rust",
+                "scope": "domain-routing-map-owner",
+                "owner": "dae-control",
+                "op": "sync_owner",
+                "map_id": report.map_id,
+                "map_id_changed": report.map_id_changed,
+                "skipped": report.skipped,
+                "entries_updated": report.entries_updated,
+                "entries_deleted": report.entries_deleted,
+                "owner_count": report.owner_count,
+                "ip_count": report.ip_count,
+            }))
+        }
+        DomainRoutingOwnerRequest::PrepareReload {
+            map_id,
+            existing_keys,
+        } => {
+            let report = owner
+                .prepare_reload_map_by_id(map_id, existing_keys)
+                .map_err(|err| format!("domain routing owner prepare reload failed: {err}"))?;
+            Ok(json!({
+                "status": "pass",
+                "loader": "rust",
+                "scope": "domain-routing-map-owner",
+                "owner": "dae-control",
+                "op": "prepare_reload",
+                "map_id": report.map_id,
+                "map_id_changed": report.map_id_changed,
+                "entries_updated": 0,
+                "entries_deleted": report.deletes.len(),
+                "owner_count": report.owner_count,
+                "ip_count": report.ip_count,
+            }))
+        }
+    }
 }
 
 fn parse_routing_map_entry(value: &Value) -> Result<dae_ebpf_support::RoutingMapEntry, String> {
@@ -1234,6 +1386,13 @@ fn optional_json_array(value: Option<&Value>) -> Result<Vec<Value>, String> {
             .ok_or_else(|| "optional field is not an array".to_owned()),
         None => Ok(Vec::new()),
     }
+}
+
+fn json_string(value: Option<&Value>, name: &str) -> Result<String, String> {
+    value
+        .and_then(Value::as_str)
+        .map(str::to_owned)
+        .ok_or_else(|| format!("missing or non-string field: {name}"))
 }
 
 fn json_u32_array_4(value: Option<&Value>, name: &str) -> Result<[u32; 4], String> {
@@ -2751,6 +2910,65 @@ mod tests {
         let output = run_with_args(["domain-routing-map", "serve"]);
         assert_eq!(output.exit_code, 2);
         assert!(output.stderr.contains("stdio entrypoint"));
+        let output = run_with_args(["domain-routing-map", "serve-owner"]);
+        assert_eq!(output.exit_code, 2);
+        assert!(output.stderr.contains("stdio entrypoint"));
+    }
+
+    #[test]
+    fn domain_routing_map_owner_parser_preserves_snapshot_shape() {
+        let bitmap = vec![2_u32; 32];
+        let payload = json!({
+            "op": "sync_owner",
+            "map_id": 11,
+            "owner_key": "q=example.test|type=A|class=IN",
+            "bitmap": bitmap,
+            "ips": [[0, 0, 65535, 1]],
+        })
+        .to_string();
+        let request = parse_domain_routing_map_owner_request(&payload).unwrap();
+        match request {
+            DomainRoutingOwnerRequest::SyncOwner {
+                map_id,
+                owner_key,
+                bitmap,
+                ips,
+            } => {
+                assert_eq!(map_id, 11);
+                assert_eq!(owner_key, "q=example.test|type=A|class=IN");
+                assert_eq!(bitmap[31], 2);
+                assert_eq!(ips[0], [0, 0, 65535, 1]);
+            }
+            _ => panic!("unexpected owner request"),
+        }
+
+        let reload = parse_domain_routing_map_owner_request(
+            r#"{"op":"prepare_reload","map_id":12,"existing_keys":[[0,0,65535,2]]}"#,
+        )
+        .unwrap();
+        assert_eq!(
+            reload,
+            DomainRoutingOwnerRequest::PrepareReload {
+                map_id: 12,
+                existing_keys: vec![[0, 0, 65535, 2]],
+            }
+        );
+    }
+
+    #[test]
+    fn domain_routing_map_owner_serve_reports_empty_snapshot_without_opening_map() {
+        let mut owner = dae_control::DomainRoutingOwner::default();
+        let response = handle_domain_routing_map_owner_serve_line(
+            &mut owner,
+            r#"{"op":"sync_owner","map_id":0,"owner_key":"empty","bitmap":[0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0],"ips":[]}"#,
+        );
+        let json: Value = serde_json::from_str(&response).unwrap();
+        assert_eq!(json["status"].as_str().unwrap(), "pass");
+        assert_eq!(json["owner"].as_str().unwrap(), "dae-control");
+        assert_eq!(json["scope"].as_str().unwrap(), "domain-routing-map-owner");
+        assert!(json["map_id_changed"].as_bool().unwrap());
+        assert!(json["skipped"].as_bool().unwrap());
+        assert_eq!(json["entries_updated"].as_u64().unwrap(), 0);
     }
 
     #[test]
@@ -2820,6 +3038,20 @@ mod tests {
                 .as_str()
                 .unwrap()
                 .contains("bad domain-routing-map request")
+        );
+    }
+
+    #[test]
+    fn domain_routing_map_owner_serve_reports_malformed_requests() {
+        let mut owner = dae_control::DomainRoutingOwner::default();
+        let response = handle_domain_routing_map_owner_serve_line(&mut owner, "{bad-json");
+        let json: Value = serde_json::from_str(&response).unwrap();
+        assert_eq!(json["status"].as_str().unwrap(), "error");
+        assert!(
+            json["error"]
+                .as_str()
+                .unwrap()
+                .contains("bad domain-routing-map owner request")
         );
     }
 
