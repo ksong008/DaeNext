@@ -272,6 +272,7 @@ func TestGetRuntimeOverviewIncludesDnsObservabilityStats(t *testing.T) {
 			DownloadTotal:     40,
 			ActiveConnections: 0,
 			UDPSessions:       0,
+			CPUUsagePercent:   12.5,
 			RSSBytes:          50,
 			HeapAllocBytes:    60,
 			Goroutines:        70,
@@ -306,6 +307,9 @@ func TestGetRuntimeOverviewIncludesDnsObservabilityStats(t *testing.T) {
 
 	if overview.DnsCacheHitTotal != 101 {
 		t.Fatalf("expected dns cache hit total 101, got %d", overview.DnsCacheHitTotal)
+	}
+	if overview.CPUUsagePercent != 12.5 {
+		t.Fatalf("expected cpu usage 12.5, got %f", overview.CPUUsagePercent)
 	}
 	if overview.DnsCacheExpiredRemovalTotal != 102 {
 		t.Fatalf("expected dns cache expired removal total 102, got %d", overview.DnsCacheExpiredRemovalTotal)

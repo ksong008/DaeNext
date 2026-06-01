@@ -82,6 +82,7 @@ type RuntimeOverview struct {
 	UDPTaskQueues         int
 	UDPTaskDropTotal      uint64
 	PacketSnifferSessions int
+	CPUUsagePercent       float64
 	RSSBytes              uint64
 	HeapAllocBytes        uint64
 	Goroutines            int
@@ -548,6 +549,7 @@ func (e *Engine) GetRuntimeOverview(windowSec int, maxPoints int) (*RuntimeOverv
 		UDPTaskQueues:         udpTaskQueues,
 		UDPTaskDropTotal:      udpTaskDropTotal,
 		PacketSnifferSessions: snapshot.PacketSnifferSessions,
+		CPUUsagePercent:       snapshot.CPUUsagePercent,
 		RSSBytes:              snapshot.RSSBytes,
 		HeapAllocBytes:        snapshot.HeapAllocBytes,
 		Goroutines:            snapshot.Goroutines,

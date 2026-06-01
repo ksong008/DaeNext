@@ -18,9 +18,9 @@ import (
 )
 
 const (
-	maxRuntimeHistorySeconds = 60 * 60
-	defaultRuntimeWindowSec  = 30 * 60
-	defaultRuntimeMaxPoints  = 180
+	maxRuntimeHistorySeconds = 60
+	defaultRuntimeWindowSec  = 60
+	defaultRuntimeMaxPoints  = 240
 	runtimeBucketDuration    = 250 * time.Millisecond
 	runtimeRateWindow        = time.Second
 	maxRuntimeHistoryBuckets = int((time.Duration(maxRuntimeHistorySeconds) * time.Second) / runtimeBucketDuration)
@@ -45,6 +45,7 @@ type RuntimeStatsSnapshot struct {
 	UDPTaskQueues         int
 	UDPTaskDropTotal      uint64
 	PacketSnifferSessions int
+	CPUUsagePercent       float64
 	RSSBytes              uint64
 	HeapAllocBytes        uint64
 	Goroutines            int
@@ -94,6 +95,18 @@ var runtimeStatsOccupancySnapshot = func() (udpTaskQueues int, udpTaskDropTotal 
 }
 
 var runtimeStatsDnsObservabilitySnapshot = snapshotDnsObservabilityStats
+var globalRuntimeCPUSampler = &processCPUSampler{}
+var currentCPUUsagePercent = func() float64 {
+	return globalRuntimeCPUSampler.sample()
+}
+
+type processCPUSampler struct {
+	mu sync.Mutex
+
+	lastProcessTicks uint64
+	lastTotalTicks   uint64
+	lastPercent      float64
+}
 
 func RecordUploadTraffic(n int64) {
 	if n <= 0 {
@@ -210,6 +223,7 @@ func (s *runtimeStats) snapshot(
 		UDPTaskQueues:         udpTaskQueues,
 		UDPTaskDropTotal:      udpTaskDropTotal,
 		PacketSnifferSessions: packetSnifferSessions,
+		CPUUsagePercent:       currentCPUUsagePercent(),
 		RSSBytes:              rssBytes,
 		HeapAllocBytes:        memStats.HeapAlloc,
 		Goroutines:            runtime.NumGoroutine(),
@@ -241,6 +255,87 @@ func (s *runtimeStatsShard) snapshotBuckets(nowBucketStart time.Time, startTime 
 		Duration:      currentDuration,
 	})
 	return buckets, s.uploadTotal, s.downloadTotal
+}
+
+func (s *processCPUSampler) sample() float64 {
+	processTicks, ok := currentProcessCPUTicks()
+	if !ok {
+		return 0
+	}
+	totalTicks, ok := currentTotalCPUTicks()
+	if !ok {
+		return 0
+	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if s.lastTotalTicks == 0 || totalTicks <= s.lastTotalTicks || processTicks < s.lastProcessTicks {
+		s.lastProcessTicks = processTicks
+		s.lastTotalTicks = totalTicks
+		return s.lastPercent
+	}
+
+	processDelta := processTicks - s.lastProcessTicks
+	totalDelta := totalTicks - s.lastTotalTicks
+	s.lastProcessTicks = processTicks
+	s.lastTotalTicks = totalTicks
+	if totalDelta == 0 {
+		return s.lastPercent
+	}
+
+	percent := float64(processDelta) / float64(totalDelta) * float64(runtime.NumCPU()) * 100
+	if math.IsNaN(percent) || math.IsInf(percent, 0) || percent < 0 {
+		return 0
+	}
+	s.lastPercent = percent
+	return percent
+}
+
+func currentProcessCPUTicks() (uint64, bool) {
+	data, err := os.ReadFile("/proc/self/stat")
+	if err != nil {
+		return 0, false
+	}
+	stat := string(data)
+	endComm := strings.LastIndexByte(stat, ')')
+	if endComm < 0 || endComm+2 >= len(stat) {
+		return 0, false
+	}
+	fields := strings.Fields(stat[endComm+2:])
+	if len(fields) < 13 {
+		return 0, false
+	}
+	utime, err := strconv.ParseUint(fields[11], 10, 64)
+	if err != nil {
+		return 0, false
+	}
+	stime, err := strconv.ParseUint(fields[12], 10, 64)
+	if err != nil {
+		return 0, false
+	}
+	return utime + stime, true
+}
+
+func currentTotalCPUTicks() (uint64, bool) {
+	data, err := os.ReadFile("/proc/stat")
+	if err != nil {
+		return 0, false
+	}
+	lines := strings.SplitN(string(data), "\n", 2)
+	fields := strings.Fields(lines[0])
+	if len(fields) < 2 || fields[0] != "cpu" {
+		return 0, false
+	}
+	var total uint64
+	for _, field := range fields[1:] {
+		ticks, err := strconv.ParseUint(field, 10, 64)
+		if err != nil {
+			return 0, false
+		}
+		total += ticks
+	}
+	return total, total > 0
 }
 
 func currentRSSBytes() uint64 {
