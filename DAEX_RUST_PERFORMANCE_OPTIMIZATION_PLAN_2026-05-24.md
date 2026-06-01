@@ -21233,3 +21233,565 @@ C object 删除准入审计结论：
   - Go BPF fallback 不再需要。
 - 本阶段没有执行生产默认切换，没有替换 `10.10.10.2`，没有删除 C `tproxy.c`，没有修改 outbound 协议栈。
 - 下一次若继续执行，应在本计划边界内进入“C object 删除准备/执行”或“经用户授权的目标机默认路径切换”，不得继续新增 helper 小阶段。
+
+### 10.10.10.2 默认切换二进制实机验证记录（2026-06-01）
+
+目标：
+
+- 本地生成默认切换版 daed 二进制，并在 `10.10.10.2` 上替换 `/usr/bin/daed` 进行真实运行验证。
+- 产品配置来源必须继续使用 `10.10.10.2` 默认 `/etc/daed/wing.db`；`/etc/daed/rust-owned-runtime/generated.dae` 仅作为 daed 将 wing.db 中的配置交给内嵌 Rust-owned resident daemon 的运行期快照，不是新的产品配置入口。
+
+本地构建：
+
+| 项目 | 结果 |
+| --- | --- |
+| 构建入口 | `/root/project/daed-daex-align/daed/wing` |
+| 二进制 | `/root/project/daed-daex-align/daed/daed-default-switch-10-20260601-fix1` |
+| version | `daed version daed-default-switch-10-20260601-fix1` |
+| sha256 | `79b5a31c4e303b110ad647700def9d7f93b53bd71f99c246aaf63710f506b064` |
+| size | `62M` |
+| link | static，`not a dynamic executable` |
+| embedded `dae-aya-bpf-loader` sha256 | `8577435b4b1f9c90e7614f4a8f5c20e4ab7c0daba8e56a328606f4ae49d947fb` |
+| embedded `dae-daemon-optin` sha256 | `092c7da2881547d07ab52ac1af317fb3ce972e2f64c022e83a1be0da9168109c` |
+
+发现并修复的问题：
+
+- 首次替换 `daed-default-switch-10-20260601` 后，daed 已经按产品路径读取 `/etc/daed/wing.db`，但 Rust-owned resident runtime 需要通过 `generated.dae` 接收 daed 已解析的 dae config。
+- `Config.Marshal` 原先把所有 `KeyableString` tag 都写成 `tag:"value"` 声明；当节点 tag 包含 `[]`、或以数字加特殊字符形式出现时，例如 `14.[SG]Oracle-Sg`，生成的 `generated.dae` 会变成非法 dae grammar，resident daemon 启动失败。
+- 修复方式是通用 grammar-aware marshal：
+  - 可作为 dae bare key 的 tag 保持原来的 `tag:"value"` 输出；
+  - 不可作为 dae bare key 的 tag 写成完整 quoted literal，例如 `"14.[SG]Oracle-Sg:vless://..."`；
+  - parser 再按 `KeyableString` 的原有语义恢复 tag，不改变节点、不改订阅、不改 outbound 协议栈。
+- 本地新增 round-trip 测试，覆盖非法 bare tag 与合法 bare tag 同时存在的场景。
+
+本地验证：
+
+| 验证项 | 结果 |
+| --- | --- |
+| `go test ./config` | pass |
+| 非法 bare tag 输出 | pass，未再生成 `14.[SG]Oracle-Sg:"..."` |
+| quoted literal round-trip | pass，`Config -> generated.dae -> Config` 后 node list 保持一致 |
+
+10.10.10.2 部署与验证：
+
+| 验证项 | 结果 |
+| --- | --- |
+| 替换目标 | `/usr/bin/daed` |
+| 远端 version | `daed version daed-default-switch-10-20260601-fix1` |
+| 远端 sha256 | `79b5a31c4e303b110ad647700def9d7f93b53bd71f99c246aaf63710f506b064` |
+| 回滚点 | 保留 `/usr/bin/daed.rollback-product-default-admission-20260601`，内容为替换前 `daed-r5-connectivity-owner-20260531` |
+| service | `daed.service=active` |
+| rust-owned resident | pass，存在 `/etc/daed/rust-owned-runtime/bin/dae-daemon-optin run ...` |
+| attach/link | pass，journal 显示 `Rust-owned dae runtime is ready attachBackend=tcx+tc netnsLinkMode=netkit` |
+| generated.dae | pass，节点 tag 已写为完整 quoted literal，未见非法 `数字.[地区]...:` bare key |
+| API health | pass，`/api/health` 返回 `{"healthCheck":1}` |
+| auth status | pass，`/api/auth/status` 返回 `{"numberUsers":1}` |
+| 10.10.10.2 HTTPS trace | pass，`https://www.cloudflare.com/cdn-cgi/trace` 返回 `ip=83.147.60.195`、`colo=HKG`、`http=http/2` |
+| 10.10.10.4 LAN trace | pass，客户端默认路由包含 `via 10.10.10.2`，HTTPS trace 返回 `ip=83.147.60.195`、`colo=HKG`、`http=http/2` |
+| reload | pass，`systemctl reload daed.service` 后服务仍 active，`resident.log` 记录 `reload completed` |
+| reload 后 HTTPS trace | pass，10.10.10.2 仍返回 `ip=83.147.60.195`、`colo=HKG`、`http=http/2` |
+| stable helper scan | pass，稳定运行态只有 `/usr/bin/daed run ...` 与 resident `/etc/daed/rust-owned-runtime/bin/dae-daemon-optin run ...`；无常驻 `dae-aya-bpf-loader`、`dae-cli-optin`、`bpf-loader` helper |
+| forbidden fallback scan | pass，近 10 分钟未见 `falling back to Go`、`Go map update`、`Go writer`、`Go attach path`、`Go listener`、`TCX attach failed`、`panic`、`fatal`、`parse config` |
+
+结论：
+
+- 10.10.10.2 默认切换版 daed 已可使用默认 `wing.db` 产品配置启动 Rust-owned resident runtime。
+- 本次失败根因不是 daed 未使用 `wing.db`，而是 `wing.db -> dae Config -> generated.dae` 运行期快照的通用 marshal 不完整。
+- 通用修复后，`wing.db` 仍是 daed 产品配置源；`generated.dae` 只作为内嵌 resident daemon 的临时运行输入。
+- 当前 10.10.10.2 正在运行修复版默认切换二进制；保留一个明确回滚点，未修改用户配置、未改 outbound/daewing/quic-go 协议栈。
+
+### 10.10.10.2 默认切换纠偏记录（2026-06-01）
+
+触发问题：
+
+- `daed-default-switch-10-20260601-fix1` 在短时 HTTP trace 和 reload 验证中可用，但真实 Telegram/IP 长连接暴露失败：连接会快速 reset，不能作为产品默认切换版本。
+- 运行期事件显示 `domain(geosite:"telegram")->TG` 与 `dip(geoip:"telegram")->TG` 已经命中 `TG`，失败不是 routing/geosite/geoip 规则缺失，也不能按测试机配置写特定规则修复。
+- 失败边界在 Rust resident userspace 协议数据面：当前混合架构明确要求 `daed/dae-wing/outbound` 全协议栈暂时保持 Go，Rust/Aya 负责 eBPF loader/attach/map/control-plane 收敛；VLESS/Vision、Trojan、VMess、SS 等 outbound 协议不能因为测试配置临时进入默认 Rust 实现。
+
+修复决策：
+
+- `daed/wing/engine/rust_owned_service.go` 的产品默认 env 已调整为 `DAE_RUST_RESIDENT_DATAPLANE=0`。
+- 显式实验入口保留：`DAED_RUST_RESIDENT_DATAPLANE_DEFAULT=1` 或调用方已有 `DAE_RUST_RESIDENT_DATAPLANE=1` 时才启用 Rust resident 协议数据面。
+- 这符合 `DAENEW_RUST_REBUILD_MEMO_2026-05-16.md` 中 TCP active path 约束：tproxy accept 后由 Go `ConnSniffer`、routing result、`RouteDialTcp`、`DialerGroup.Select` 与 outbound/netproxy dialer 负责真实协议拨号；Rust 不应在默认路径直接替换 Go outbound 协议栈。
+
+本地验证：
+
+| 验证项 | 结果 |
+| --- | --- |
+| `go test ./engine`（daed-daex-align/daed/wing） | pass |
+| resident dataplane 默认值 | pass，默认生成 `DAE_RUST_RESIDENT_DATAPLANE=0` |
+| 显式 opt-in | pass，`DAED_RUST_RESIDENT_DATAPLANE_DEFAULT=1` 时生成 `DAE_RUST_RESIDENT_DATAPLANE=1` |
+| 调用方已有 env | pass，已有 `DAE_RUST_RESIDENT_DATAPLANE=1` 不被覆盖、不重复 |
+
+10.10.10.2 当前运行态判定：
+
+- 已按用户要求回滚到 `/usr/bin/daed.rollback-product-default-admission-20260601`，当前版本为 `daed-r5-connectivity-owner-20260531`，服务 active。
+- 当前 r5 不是 `fix1` resident 默认切换态；不能用 `fix1` 的 `attachBackend=tcx+tc` 总结反推 r5。
+- r5 journal 显示：
+  - `Bind daed_dae0peer_ingress via Rust/Aya tcx on dae0peer`
+  - `Bind daed_dae0_ingress via Rust/Aya tcx on dae0`
+- r5 内核态确认：
+  - host netns `bpftool net` 显示 `dae0 tcx/ingress tproxy_dae0_ingress`
+  - `daens` netns `bpftool net` 显示 `dae0peer tcx/ingress tproxy_dae0peer_ingress`
+  - `tc qdisc show` 仍可见 `clsact`，但这不是 tc fallback 证据；真实 backend 以 `bpftool net` 的 `tcx/ingress` link 为准。
+
+后续准入要求：
+
+- 新默认切换二进制必须在 resident 协议数据面默认关闭的情况下验证：稳定运行态不应出现 Rust resident TCP/VLESS/Vision 等协议替代 Go outbound 的行为。
+- 重新验证时必须同时记录：
+  - `DAE_RUST_RESIDENT_DATAPLANE=0` 是否进入 runtime env；
+  - Telegram/IP 长连接是否恢复；
+  - `dae0/dae0peer` 是否仍由 `bpftool net` 显示为 TCX；
+  - WebUI 显示只能反映真实 backend，不能把 `auto` 或 qdisc `clsact` 误显示为 fallback。
+
+### 默认切换修复执行记录（2026-06-01）
+
+目标：
+
+- 修复默认切换版暴露的 Telegram/IP 长连接失败。
+- 保持 `dae0/dae0peer` backend 与 r5 一致：`auto` 模式优先尝试 TCX，只有 TCX attach/query/order 不支持或失败时才回落到 `tc_netlink`。
+
+修改内容：
+
+- `daed/wing/engine/rust_owned_service.go`
+  - 默认注入 `DAE_RUST_RESIDENT_DATAPLANE=0`。
+  - 保留显式 opt-in：`DAED_RUST_RESIDENT_DATAPLANE_DEFAULT=1` 或调用方已有 `DAE_RUST_RESIDENT_DATAPLANE=1` 时才启用 Rust resident userspace 协议数据面。
+  - 目的：默认产品路径不再让 Rust resident 直接承载 VLESS/Vision/Trojan/VMess/SS 等协议，继续由 Go `ConnSniffer -> RouteDialTcp -> DialerGroup.Select -> outbound/netproxy dialer` 承载真实协议栈。
+- `daed/wing/engine/runtime_mode.go`
+  - `DAED_RUNTIME=auto` 或未设置时默认回到 Go native service，不再因为二进制内嵌 Rust-owned daemon 就自动切换到 Rust-owned service。
+  - 只有显式 `DAED_RUNTIME=rust-owned` / `rust` / `aya` 时才进入 Rust-owned service。
+  - 目的：产品默认链路恢复为 r5 形态，即 Go userspace/outbound 协议栈 + Rust/Aya eBPF loader/attach backend；避免 resident 协议数据面关闭后形成没有 Go outbound 接管的半切换状态。
+- `rust/crates/dae-daemon/src/production_runtime_owner/native_ebpf.rs`
+  - 去除 `NativeEbpfAttachRole::{PeerIngress,HostIngress,LanIngress}` 在请求 `Tcx` 时被硬性改写为 `TcNetlink` 的逻辑。
+  - 现在 role 层尊重上层 native backend 决策；当 `auto` 已准入并选择 TCX 时，`dae0peer` / `dae0` 会先尝试 TCX。
+  - TCX 不支持或 attach/query/order 验证失败时，底层 `dae-ebpf-support` 的 attach 实现继续回落到 `tc_netlink` 并记录 `fallback_used/fallback_error`。
+
+本地验证：
+
+| 验证项 | 结果 |
+| --- | --- |
+| `go test ./engine`（daed-daex-align/daed/wing） | pass |
+| `go test ./config`（dae-daex-align） | pass |
+| `cargo test -p dae-daemon production_runtime_owner` | pass，69 passed |
+| `cargo test -p dae-ebpf-support` | pass，52 passed |
+
+当前结论：
+
+- 第二个问题的默认路径修复已落地：默认 runtime 回到 Go native service，且 Rust-owned service 即使显式启用也默认不启用 resident 协议数据面，避免 Telegram/IP 长连接走未准入的 Rust VLESS/Vision 实现。
+- 第一个问题的 backend 修复已落地：Rust-owned resident 中 `dae0/dae0peer` 不再被 role 层硬性降级，语义恢复为 r5 类似的 `auto -> TCX -> tc_netlink fallback`。
+- 下一步生成新的默认切换测试二进制后，必须在 38 机先验证：
+  - 默认 `DAED_RUNTIME` 未设置时使用 Go native service，不启动 Rust-owned resident daemon；
+  - 显式 `DAED_RUNTIME=rust-owned` 时 runtime env 中 `DAE_RUST_RESIDENT_DATAPLANE=0`；
+  - `bpftool net` 显示 `dae0` 与 `dae0peer` 为 `tcx/ingress`，或在不支持时明确记录 `fallback_used=true`；
+  - Telegram/IP 长连接恢复；
+  - WebUI/API 只显示真实 backend。
+
+### fix2 二进制与 38 机准入验证（2026-06-01）
+
+本地构建：
+
+| 项目 | 结果 |
+| --- | --- |
+| 构建入口 | `/root/project/daed-daex-align/daed/wing` |
+| 输出二进制 | `/root/project/daed-daex-align/daed/daed-default-switch-10-20260601-fix2` |
+| version | `daed version daed-default-switch-10-20260601-fix2` |
+| sha256 | `a928b196e817237a65fc3987cc01a17b5680985eb4c4f3291b66659a7c3f516a` |
+| embedded `dae-aya-bpf-loader` sha256 | `8577435b4b1f9c90e7614f4a8f5c20e4ab7c0daba8e56a328606f4ae49d947fb` |
+| embedded `dae-daemon-optin` sha256 | `5dcf93d9f9abad43d39267db6d85a1cb51f9e9063538e1c529d990dfb822e27c` |
+
+38 机验证配置：
+
+- 使用临时 `/tmp/daed-fix2-verify` 目录与临时 `wing.db`。
+- 配置仅用于验证 runtime 选择和 attach backend，不作为通用实现标准。
+- routing 中保留 `pname(NetworkManager) -> direct` 与 `dip(geoip:private) -> direct`，避免测试机本机服务被拦截。
+
+38 机验证结果：
+
+| 验证项 | 结果 |
+| --- | --- |
+| `DAED_RUNTIME` / `DAED_RUNTIME_MODE` | 未设置，使用默认 auto 路径 |
+| API health | pass，`{"healthCheck":1}` |
+| runtime ready | pass，日志出现 `Ready` |
+| 默认 runtime 形态 | pass，进程只有 `daed ... run`、`dae-aya-bpf-loader ... connectivity-map serve-binary`、`dae-aya-bpf-loader ... domain-routing-map serve-owner` |
+| Rust-owned resident 进程 | pass，未出现 `dae-daemon-optin run` |
+| Rust/Aya object | pass，日志出现 `Rust/Aya BPF loader loaded object_source=rust-aya-skeleton default_object_source=rust-aya-skeleton kernel_ebpf_program_rewrite=true` |
+| netns link | pass，日志出现 `dae netns link mode: netkit` |
+| WAN backend | pass，`Bind daed_wan_egress_l2 via Rust/Aya tcx on ens3`，`Bind daed_wan_ingress_l2 via Rust/Aya tcx on ens3` |
+| dae0peer backend | pass，`Bind daed_dae0peer_ingress via Rust/Aya tcx on dae0peer` |
+| dae0 backend | pass，`Bind daed_dae0_ingress via Rust/Aya tcx on dae0` |
+| TCX kernel link evidence | pass，`bpftool link show` 显示 type `11` TCX links 指向 `tproxy_dae0peer_ingress` 与 `tproxy_dae0_ingress` 的程序 ID |
+| TC qdisc | pass，仅作为兼容 qdisc 存在；`clsact` 不是 fallback 判定依据 |
+| parse config | pass，修正临时 DB 为完整 `dns {}` / `routing {}` section 后启动成功；早先裸 body 配置触发 parser 异常，属于临时验证配置错误 |
+| 清理 | pass，验证后无 daed/helper 进程，无 netns，`dae0` 不存在，无 `/sys/fs/bpf/daed*` 或 `/sys/fs/bpf/dae-native-runtime-*` 残留，临时目录已删除 |
+
+结论：
+
+- `fix2` 已恢复 r5 类似默认链路：Go native userspace/outbound + Rust/Aya eBPF loader/attach。
+- 默认路径不再启动 Rust-owned resident daemon，因此不会让 Telegram/IP 长连接进入未准入的 Rust resident VLESS/Vision 协议实现。
+- `dae0/dae0peer` 在 38 机 `auto` 路径下已按 TCX attach；如果目标机 TCX 不支持，仍由底层 attach 实现回落到 `tc_netlink` 并记录 fallback。
+- 尚未替换 `10.10.10.2`，该机器仍保持用户要求的 r5 回滚状态。
+
+### fix2 部署到 10.10.10.2 与 DNS/domain-routing-map benchmark（2026-06-01）
+
+部署前状态：
+
+| 项目 | 结果 |
+| --- | --- |
+| `/usr/bin/daed --version` | `daed version daed-r5-connectivity-owner-20260531` |
+| `/usr/bin/daed` sha256 | `21f9c785d9178f778e26e725b7b809d5b4f5093138a82386d81d006406d5d88c` |
+| rollback 文件 | `/usr/bin/daed.rollback-product-default-admission-20260601` 存在，sha256 同 r5 |
+| unit env | `DAE_RUST_NATIVE_EBPF=1`、`DAE_RUST_NATIVE_EBPF_BACKEND=auto`、`DAE_NETNS_LINK=auto` |
+| 当前 r5 backend 证据 | journal 与 `bpftool` 均显示 `dae0` / `dae0peer` 为 TCX |
+
+部署结果：
+
+| 项目 | 结果 |
+| --- | --- |
+| 部署二进制 | `/root/project/daed-daex-align/daed/daed-default-switch-10-20260601-fix2` |
+| 安装位置 | `10.10.10.2:/usr/bin/daed` |
+| version | `daed version daed-default-switch-10-20260601-fix2` |
+| sha256 | `a928b196e817237a65fc3987cc01a17b5680985eb4c4f3291b66659a7c3f516a` |
+| service | `active/running` |
+| API health | `{"healthCheck":1}` |
+| 默认 runtime | Go native service + Rust/Aya eBPF loader/attach |
+| Rust-owned resident | 未出现 `dae-daemon-optin run` 进程 |
+| map helper | 存在 `dae-aya-bpf-loader ... connectivity-map serve-binary` 与 `dae-aya-bpf-loader ... domain-routing-map serve-owner` |
+| netns link | `dae netns link mode: netkit` |
+| Rust/Aya object | `Rust/Aya BPF loader loaded object_source=rust-aya-skeleton default_object_source=rust-aya-skeleton kernel_ebpf_program_rewrite=true` |
+| `dae0peer` backend | `Bind daed_dae0peer_ingress via Rust/Aya tcx on dae0peer` |
+| `dae0` backend | `Bind daed_dae0_ingress via Rust/Aya tcx on dae0` |
+| TCX kernel evidence | `bpftool link show` 显示 `tcx` links；`bpftool prog show` 显示 `tproxy_lan_ingress_l2`、`tproxy_lan_egress_l2`、`tproxy_wan_ingress_l2`、`tproxy_wan_egress_l2`、`tproxy_dae0peer_ingress`、`tproxy_dae0_ingress` 均归属当前 `daed` PID |
+
+LAN 侧验证：
+
+| 验证项 | 结果 |
+| --- | --- |
+| 客户端 | `10.10.10.4` |
+| `ip route get 1.1.1.1` | `via 10.10.10.2 dev enp1s0 src 10.10.10.4` |
+| `ip route get 149.154.167.50` | `via 10.10.10.2 dev enp1s0 src 10.10.10.4` |
+| Cloudflare trace | pass，返回 `http=http/2`、`tls=TLSv1.3`、`colo=HKG` |
+| Telegram API HTTPS | pass，`https://api.telegram.org/` 返回 HTTP 302，remote IP 为 `149.154.166.110` |
+| Telegram raw TCP | pass，`149.154.167.50:443` 可建立 TCP |
+| BPF run_cnt | pass，测试后 `lan_ingress_l2`、`lan_egress_l2`、`wan_ingress_l2`、`wan_egress_l2`、`dae0peer_ingress`、`dae0_ingress` 计数均增长 |
+
+WebUI/API 展示说明：
+
+- `/api/runtime/overview` 与 `/api/general/state` 在 `10.10.10.2` 当前配置下需要登录态，无认证访问返回 `authentication required`。
+- 本轮未绕过用户登录态读取 WebUI 数据；真实 backend 判定以 journal 与 `bpftool link/prog` 为准。
+- 展示层后续仍必须遵循：不显示 `auto`，只显示实际 attach backend；`clsact` qdisc 不能被误判为 tc fallback。
+
+DNS/domain-routing-map benchmark：
+
+- 命令范围：
+  - `PATH=/root/.local/go1.25.9/bin:$PATH GOWORK=off DAE_RUST_BPF_LOADER_HELPER=/root/project/dae-daex-align/rust/target/release/dae-aya-bpf-loader go test ./control ./component/dns -run '^$' -bench 'Benchmark(DnsCacheKey|DnsDataWithZeroID|ValidateDnsResponseForRequest|DomainRoutingMap(GoUpdate|RustReloadClear|RustHelperUpdate|RustPersistentHelperUpdate|RustOwnerDuplicate|RustOwnerToggle)|RequestMatcherSelect|ResponseMatcherSelect)$' -benchmem -count=10 -benchtime=1s`
+  - `PATH=/root/.local/go1.25.9/bin:$PATH GOWORK=off go test ./control -run '^$' -bench 'BenchmarkFunctionalDns.*' -benchmem -count=10 -benchtime=1s`
+- 本轮结果是本地 `AMD Ryzen 9 7945HX` 上的 count=10 平均值。
+
+| Benchmark | n | avg ns/op | min | max | B/op | allocs/op |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| `BenchmarkDnsCacheKey` | 10 | 104.9 | 102.2 | 107.3 | 48 | 3 |
+| `BenchmarkDnsDataWithZeroID` | 10 | 11.8 | 11.4 | 12.0 | 8 | 1 |
+| `BenchmarkValidateDnsResponseForRequest` | 10 | 50.7 | 50.4 | 51.2 | 0 | 0 |
+| `BenchmarkDomainRoutingMapGoUpdate` | 10 | 824.2 | 821.0 | 832.0 | 64 | 3 |
+| `BenchmarkDomainRoutingMapRustReloadClear` | 10 | 42023.3 | 41521.0 | 42770.0 | 2142 | 28 |
+| `BenchmarkDomainRoutingMapRustHelperUpdate` | 10 | 498331.3 | 493169.0 | 502777.0 | 8898 | 67 |
+| `BenchmarkDomainRoutingMapRustPersistentHelperUpdate` | 10 | 25686.8 | 25166.0 | 26193.0 | 1113 | 15 |
+| `BenchmarkDomainRoutingMapRustOwnerDuplicate` | 10 | 28032.3 | 27505.0 | 28342.0 | 1865 | 23 |
+| `BenchmarkDomainRoutingMapRustOwnerToggle` | 10 | 31821.0 | 30649.0 | 33392.0 | 1865 | 23 |
+| `BenchmarkRequestMatcherSelect` | 10 | 389.9 | 383.6 | 406.3 | 144 | 2 |
+| `BenchmarkResponseMatcherSelect` | 10 | 7599.8 | 7581.0 | 7635.0 | 272 | 3 |
+| `BenchmarkFunctionalDnsPackedResponseRestore` | 10 | 23.5 | 21.2 | 25.9 | 48 | 1 |
+| `BenchmarkFunctionalDnsCacheKeyRoundtrip` | 10 | 214.4 | 207.7 | 227.7 | 64 | 4 |
+| `BenchmarkFunctionalDnsCacheTtlLookup` | 10 | 572.0 | 545.3 | 654.7 | 1136 | 7 |
+| `BenchmarkFunctionalDnsDohGetRequest` | 10 | 863.2 | 850.9 | 899.8 | 1464 | 17 |
+| `BenchmarkFunctionalDnsDohPostRequest` | 10 | 1645.9 | 1580.0 | 1698.0 | 5024 | 13 |
+| `BenchmarkFunctionalDnsDohValidateContentType` | 10 | 859.9 | 845.6 | 887.3 | 896 | 11 |
+| `BenchmarkFunctionalDnsValidationQuestionID` | 10 | 757.5 | 726.8 | 791.7 | 340 | 14 |
+| `BenchmarkFunctionalDnsRawPacketValidationQuestionID` | 10 | 1578.5 | 1536.0 | 1629.0 | 656 | 30 |
+| `BenchmarkFunctionalDnsRawPacketAnswersTTLIPCNAME` | 10 | 690.7 | 667.2 | 749.7 | 504 | 19 |
+| `BenchmarkFunctionalDnsResponseCachePlanFromPacket` | 10 | 3175.1 | 3061.0 | 3365.0 | 1552 | 54 |
+| `BenchmarkFunctionalDnsRequestCacheHitFromPacket` | 10 | 146.5 | 141.1 | 155.1 | 88 | 3 |
+| `BenchmarkFunctionalDnsResolveAsisGuard` | 10 | 266.7 | 260.9 | 276.6 | 288 | 5 |
+
+benchmark 结论：
+
+- 当前默认混合路径已经避免 Rust-owned resident DNS 数据面接管，因此不会复现此前 resident DNS 热路径默认打开带来的产品级风险。
+- 但 `domain-routing-map` 仍暴露明显性能边界：
+  - Go direct map update 约 `0.824 us/op`。
+  - 每次新建短生命周期 Rust helper 约 `498 us/op`，约为 Go direct 的 `604x`，不适合作为热路径。
+  - persistent helper/owner 约 `25.7-31.8 us/op`，比短生命周期 helper 明显改善，但仍比 Go direct 慢约 `31-39x`。
+- 因此后续优化优先级应保持：
+  1. 热路径 map update 不再走每次 fork/exec helper。
+  2. 若必须保留 Go 产品壳，则 map owner 应转为 Rust-owned/in-process 或由 Rust/Aya loader 常驻服务持有 map FD，并把 Go 侧调用降到批量/低频控制事件。
+  3. DNS 解析/缓存热路径暂不扩张到 Rust resident；先保持 Go DNS 正常路径，避免把 outbound/dae-wing 协议栈未替换前的状态管理边界打乱。
+
+### hybrid v1 默认路径与 38 机真实验证（2026-06-01）
+
+本节记录当前确认的混合架构 v1 边界。该边界用于先完成可切换的产品形态，再做完整 benchmark 后决定哪些 userspace/control-plane 模块继续 Rust native 化。
+
+| 层级 | v1 默认归属 | 约束 |
+| --- | --- | --- |
+| `daed` 产品壳、WebUI、API、DB | Go | 保持现有产品入口，不切到 Rust resident 默认 daemon |
+| `dae-wing` runtime orchestration | Go | 继续使用现有 reload/runtime/control API 合同 |
+| userspace control-plane、routing、DNS、sniff、reload lifecycle | Go | 暂不把 Rust-owned resident 作为默认路径 |
+| outbound 协议栈、`outbound`、`quic-go` | Go | VLESS/VMess/Trojan/SS/QUIC/H3 等协议实现不在 v1 替换 |
+| eBPF object/load/PARAM/map/program adopt/TCX/TC/cgroup/listener/map backend | Rust/Aya | 默认产品路径必须使用 embedded `dae-aya-bpf-loader`，不使用 Go BPF loader |
+| Rust-owned resident daemon / Rust resident protocol dataplane | 显式 opt-in | 只作为后续候选和测试入口，不进入 v1 默认产品路径 |
+
+本地构建：
+
+| 项目 | 结果 |
+| --- | --- |
+| 输出二进制 | `/root/project/daed-daex-align/daed/daed-hybrid-v1-20260601` |
+| version | `daed version daed-hybrid-v1-20260601` |
+| sha256 | `e140595ec99b840ed53c6c06878c3ce46c5554769947710c4dfc5a7be1f1ff4e` |
+| embedded `dae-aya-bpf-loader` sha256 | `8577435b4b1f9c90e7614f4a8f5c20e4ab7c0daba8e56a328606f4ae49d947fb` |
+| embedded `dae-daemon-optin` sha256 | `5dcf93d9f9abad43d39267db6d85a1cb51f9e9063538e1c529d990dfb822e27c` |
+
+本地验证已通过：
+
+| 范围 | 命令 | 结果 |
+| --- | --- | --- |
+| control Rust/Aya fallback/adopt 合同 | `PATH=/root/.local/go1.25.9/bin:$PATH GOWORK=off go test ./control -run 'TestRustAya(ProductCallersUseExecutableResolver|ConnectivityMapHasNoGoDirectFallback|TproxyListenerHasNoGoFallback|CgroupMonitorHasNoGoAttachFallback|TcAttachHasNoGoAttachFallback|RoutingMapWritersHaveNoGoFallback)|TestCurrentTcAttachBackend|TestParseTcAttachBackend|TestSummarizeTcAttachBackends|TestRustTcAttachHelpers|TestRustBpfLoaderEmbed|TestRustBpfLoaderCommandContext|TestRustBpfLoaderContract' -count=1` | pass |
+| config marshal | `PATH=/root/.local/go1.25.9/bin:$PATH GOWORK=off go test ./config -count=1` | pass |
+| daed wing engine runtime 选择 | `PATH=/root/.local/go1.25.9/bin:$PATH GOWORK=off go test ./engine -count=1` | pass |
+| Rust production runtime owner | `cargo test -p dae-daemon production_runtime_owner` | pass，`69 passed` |
+| Rust eBPF support / loader | `cargo test -p dae-ebpf-support -p dae-aya-bpf-loader` | pass，`52 + 24 passed` |
+| native-ebpf feature | `cargo test -p dae-aya-bpf-loader --features native-ebpf` | pass，`24 passed` |
+| Go control/config/engine 集成范围 | `PATH=/root/.local/go1.25.9/bin:$PATH GOWORK=off go test ./control ./config ./engine -count=1` | pass |
+
+38 机真实验证：
+
+| 验证项 | 结果 |
+| --- | --- |
+| 测试机 | `38.65.91.47:5122` |
+| 测试方式 | 临时 `/tmp/daed-hybrid-v1-verify` + 临时 `wing.db`，不复用生产配置，不作为通用实现标准 |
+| 启动环境 | `DAED_RUNTIME=`、`DAED_RUNTIME_MODE=`，即默认 auto 路径 |
+| API health | pass，返回 `{"healthCheck":1}` |
+| 默认 runtime 形态 | pass，仅出现 `daed ... run`、`dae-aya-bpf-loader ... connectivity-map serve-binary`、`dae-aya-bpf-loader ... domain-routing-map serve-owner` |
+| Rust-owned resident | pass，未出现 `dae-daemon-optin run` |
+| Rust/Aya object | pass，日志出现 `Rust/Aya BPF loader loaded object_source=rust-aya-skeleton default_object_source=rust-aya-skeleton kernel_ebpf_program_rewrite=true` |
+| netns link | pass，日志出现 `dae netns link mode: netkit` |
+| dae0peer backend | pass，`Bind daed_dae0peer_ingress via Rust/Aya tcx on dae0peer` |
+| dae0 backend | pass，`Bind daed_dae0_ingress via Rust/Aya tcx on dae0` |
+| WAN backend | pass，`Bind daed_wan_egress_l2 via Rust/Aya tcx on ens3`，`Bind daed_wan_ingress_l2 via Rust/Aya tcx on ens3` |
+| BPF 程序证据 | pass，`bpftool prog show` 可见 `tproxy_wan_*`、`tproxy_lan_*`、`tproxy_dae0peer_ingress`、`tproxy_dae0_ingress` |
+| 外联 smoke | pass，`https://www.cloudflare.com/cdn-cgi/trace` 返回 `http=http/2`、`tls=TLSv1.3`、`warp=off` |
+| fallback/resident 负向检查 | pass，未出现 `falling back to Go`、`Go map update`、`Go writer`、`Go attach path`、`embedded Rust-owned daemon`、`[Reload] Failed`、`ApplyRulesOptimizers error` |
+| 测试机清理 | pass，验证后无 daed/helper 进程，无 `daens`，无 `dae0`，无 `/sys/fs/bpf/dae` 残留；本轮上传的 `/tmp/daed-hybrid-v1-*` 与验证脚本已删除 |
+
+结论：
+
+- hybrid v1 默认路径已在 38 机验证通过：Go userspace/control/outbound + Rust/Aya kernel/eBPF backend。
+- 默认 `daed` 不再启动 `dae-daemon-optin run`，因此当前 v1 不把 DNS/sniff/routing/outbound 热路径切入 Rust resident。
+- `auto -> tcx` 在 38 机对 WAN 与 `dae0/dae0peer` 均生效；后续目标机如果 TCX attach 失败，仍应由 attach 层自动回落到 `tc_netlink` 并记录真实 backend。
+- 本轮未部署 `10.10.10.2`；如需替换生产旁路测试机，必须使用同一二进制和同一默认 runtime 边界，并先确认是否获得授权。
+
+后续 benchmark 约束：
+
+1. 先保持 hybrid v1 边界不变，跑完整功能与性能 benchmark，再决定 Go/Rust 模块归属。
+2. benchmark 必须覆盖 DNS、routing/geodata/sniffing、control/reload、BPF load/attach/map、默认 daemon RSS/进程形态、端到端 smoke。
+3. Go outbound/protocol 栈仍作为功能正确性基准；Rust 改动只有在同语料功能通过且 count=10、benchtime=1s 的结果明确有收益后才允许默认替换。
+4. map 热路径禁止回到每次 fork/exec helper 的形态；`domain-routing-map` 等已暴露性能倒退的路径只允许作为低频控制事件或后续 Rust-owned 常驻/in-process owner 设计输入。
+
+### hybrid v1 count10 综合 benchmark 记录（2026-06-01）
+
+本轮 benchmark 目标：
+
+- 在 hybrid v1 边界下建立 Go/Rust 同语料功能级基准。
+- 不改变默认产品架构：Go userspace/control/outbound 仍是默认，Rust/Aya 负责 kernel/eBPF backend。
+- 先看完整 benchmark 结果，再决定后续哪些模块允许默认 Rust native 化。
+
+执行环境：
+
+| 项目 | 结果 |
+| --- | --- |
+| 机器 | 本地 `AMD Ryzen 9 7945HX with Radeon Graphics` |
+| Go | `/root/.local/go1.25.9/bin/go`，`GOWORK=off` |
+| Rust | `rustc` / `cargo` 以 `env.json` 为准 |
+| 功能矩阵产物 | `/root/project/dae-daex-align/benchmark_artifacts/hybrid_v1_20260601_count10` |
+| 完整对比表 | `benchmark_artifacts/hybrid_v1_20260601_count10/compare.md` |
+| Go 原始输出 | `benchmark_artifacts/hybrid_v1_20260601_count10/go.raw.txt` |
+| Rust 原始输出 | `benchmark_artifacts/hybrid_v1_20260601_count10/rust.raw.jsonl` |
+| BPF/map/reload 输出 | `benchmark_artifacts/hybrid_v1_20260601_count10/control_backend.raw.txt` |
+
+执行命令：
+
+```bash
+PATH=/root/.local/go1.25.9/bin:$PATH GOWORK=off \
+python3 tools/bench/run_functional_bench.py \
+  --out-dir /root/project/dae-daex-align/benchmark_artifacts/hybrid_v1_20260601_count10 \
+  --go-count 10 \
+  --go-benchtime 1s \
+  --rust-repeat 10 \
+  --rust-iters auto \
+  --rust-warmup 100
+```
+
+补充 BPF/map/reload：
+
+```bash
+PATH=/root/.local/go1.25.9/bin:$PATH \
+GOWORK=off \
+DAE_RUST_BPF_LOADER_HELPER=/root/project/dae-daex-align/rust/target/release/dae-aya-bpf-loader \
+go test ./control -run '^$' \
+  -bench 'Benchmark(RoutingMap|DomainRoutingMap|OutboundConnectivityMap|ReloadDnsCacheRestoreDecision|RustOwnedRuntimeStateReport|RustBpfLoaderContractHelper|RustActiveDatapathOptIn)' \
+  -benchmem -count=10 -benchtime=1s
+```
+
+trace benchmark 准入说明：
+
+- 首轮功能矩阵在 `./trace` 构建失败，原因是本地缺少 `trace` 的 bpf2go 生成产物：`bpfObjects` / `_BpfBytes` 未定义。
+- 已按现有 `go:generate` 合同本地生成忽略文件 `trace/bpf_x86_bpfel.go` / `trace/bpf_x86_bpfel.o` 后重跑。
+- 小范围验证：`go test ./trace -run '^$' -bench 'BenchmarkRebuildStage8Trace(RingbufParse|TrackerAdd)' -benchmem -count=1 -benchtime=100ms` pass。
+- 这些文件是 `.gitignore` 忽略的本地 benchmark 准备产物，不是产品代码修改。
+
+功能矩阵总体结果：
+
+| 统计项 | 结果 |
+| --- | ---: |
+| case 总数 | 73 |
+| Rust 时间更快 | 64 |
+| Rust B/op 更低 | 63 |
+| Rust allocs/op 更低 | 50 |
+
+按功能域统计：
+
+| 功能域 | cases | Rust 时间更快 | Rust B/op 更低 | Rust allocs/op 更低 |
+| --- | ---: | ---: | ---: | ---: |
+| `config` | 4 | 4 | 4 | 4 |
+| `dns` | 11 | 10 | 11 | 10 |
+| `routing` | 2 | 2 | 2 | 2 |
+| `geodata` | 1 | 1 | 1 | 1 |
+| `sniffing` | 1 | 1 | 1 | 1 |
+| `outbound` | 2 | 1 | 0 | 1 |
+| `protocol` | 36 | 33 | 31 | 22 |
+| `control` | 4 | 2 | 3 | 2 |
+| `engine` | 7 | 6 | 6 | 5 |
+| `trace` | 2 | 2 | 2 | 0 |
+| `cli` | 2 | 2 | 2 | 2 |
+| `sysdump` | 1 | 0 | 0 | 0 |
+
+代表性优势项：
+
+| case | Go us/op | Rust us/op | Rust/Go time | 结论 |
+| --- | ---: | ---: | ---: | --- |
+| `config/parser_example` | 1925.358 | 19.304 | 0.010 | Rust config parser 有显著收益 |
+| `config/schema_example` | 1936.554 | 25.126 | 0.013 | Rust schema 路径有显著收益 |
+| `config/marshal_roundtrip_example` | 2272.564 | 33.626 | 0.015 | Rust marshal/roundtrip 值得继续推进 |
+| `engine/parse_config_api` | 165.529 | 2.741 | 0.017 | config API 适合进入后续 Rust native 默认候选 |
+| `geodata/streaming_geoip_hit` | 6.162 | 0.032 | 0.005 | geodata streaming 是高优先级优化方向 |
+| `sniffing/http_host` | 2.727 | 0.062 | 0.023 | sniffing header parse 有明显收益 |
+| `dns/validation_question_id` | 0.746 | 0.015 | 0.020 | DNS zero-copy/view 路径有效 |
+| `dns/packet_view_validate_question_id` | 1.559 | 0.135 | 0.086 | raw packet view 可作为 DNS 后续优化基础 |
+| `protocol/vless_parse_link` | 9.951 | 1.271 | 0.128 | 解析/metadata 可 Rust native，但协议拨号默认仍保留 Go |
+| `protocol/trojan_parse_link` | 5.447 | 0.879 | 0.161 | 解析/metadata 可 Rust native，但协议拨号默认仍保留 Go |
+
+代表性落后或需要谨慎项：
+
+| case | Go us/op | Rust us/op | Rust/Go time | 约束 |
+| --- | ---: | ---: | ---: | --- |
+| `protocol/shadowsocks_parse_link` | 0.632 | 0.967 | 1.530 | Rust 解析暂不应默认替换 |
+| `control/magic_network_mark_mptcp` | 0.016 | 0.021 | 1.316 | 差距很小，但无必要默认替换 |
+| `engine/route_aware_target` | 0.094 | 0.114 | 1.216 | 需要确认收益边界，不应为了 Rust 化而替换 |
+| `outbound/select_min_latency` | 0.010 | 0.010 | 1.065 | 基本持平，Go 默认保留 |
+| `dns/data_zero_id` | 0.012 | 0.012 | 1.005 | 基本持平，不能作为替换依据 |
+| `protocol/juicity_pinned_decode` | 0.046 | 0.046 | 1.003 | 基本持平，需更多协议级功能验证 |
+
+BPF/map/reload 结果：
+
+| Benchmark | n | avg us/op | min us/op | max us/op | B/op | allocs/op |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| `BenchmarkOutboundConnectivityMapGoUpdate` | 10 | 0.783 | 0.779 | 0.789 | 16.0 | 2.0 |
+| `BenchmarkRoutingMapGoUpdate` | 10 | 1.200 | 1.196 | 1.205 | 64.0 | 3.0 |
+| `BenchmarkRoutingMapRustHelperUpdate` | 10 | 498.127 | 494.726 | 505.394 | 9284.0 | 67.0 |
+| `BenchmarkRoutingMapGoUpdateWithLpmBuild` | 10 | 28.250 | 27.863 | 28.710 | 336.0 | 14.0 |
+| `BenchmarkRoutingMapRustHelperUpdateWithLpmBuild` | 10 | 539.872 | 535.282 | 551.897 | 9441.7 | 67.0 |
+| `BenchmarkDomainRoutingMapGoUpdate` | 10 | 0.825 | 0.819 | 0.841 | 64.0 | 3.0 |
+| `BenchmarkDomainRoutingMapRustReloadClear` | 10 | 41.940 | 41.280 | 42.216 | 2141.0 | 28.0 |
+| `BenchmarkDomainRoutingMapRustHelperUpdate` | 10 | 497.918 | 490.166 | 502.373 | 9026.9 | 67.0 |
+| `BenchmarkDomainRoutingMapRustPersistentHelperUpdate` | 10 | 25.596 | 25.339 | 26.168 | 1112.9 | 15.0 |
+| `BenchmarkDomainRoutingMapRustOwnerDuplicate` | 10 | 27.728 | 27.344 | 28.867 | 1865.0 | 23.0 |
+| `BenchmarkDomainRoutingMapRustOwnerToggle` | 10 | 31.123 | 30.614 | 31.555 | 1865.0 | 23.0 |
+| `BenchmarkRustBpfLoaderContractHelper` | 10 | 558.438 | 546.571 | 567.432 | 28171.9 | 61.0 |
+
+benchmark 结论：
+
+- Rust crate 层对 config、DNS packet view、routing/geodata、sniffing、协议解析/metadata、engine API 有明显性能和分配优势，说明 21 个 crate 的方向不是无效的。
+- hybrid v1 默认路径不应把 outbound 协议拨号切到 Rust：当前 benchmark 只证明解析/metadata/字节构造有收益，不能证明真实 VLESS/Vision/Trojan/VMess/SS/Hysteria2/TUIC/Juicity 全协议拨号已经可替换。
+- Rust/Aya backend 已可替换 Go BPF loader，但 Go 产品壳调用 Rust helper 的 map 热路径仍有明显成本：
+  - `RoutingMapRustHelperUpdate` 约 `498 us/op`，比 Go direct `1.2 us/op` 慢约 `415x`。
+  - `DomainRoutingMapRustHelperUpdate` 约 `498 us/op`，比 Go direct `0.825 us/op` 慢约 `603x`。
+  - persistent/helper owner 可降到 `25.6-31.1 us/op`，但仍慢于 Go direct 约 `31-38x`。
+- 因此 v1 后续优化优先级应调整为：
+  1. 保持 Go userspace/control/outbound 默认，先完成 Rust/Aya kernel/eBPF backend 的产品化与 Go BPF loader 删除。
+  2. 对 config、geodata、DNS packet view、sniffing、engine parse/config API 这类 crate 内已明显领先且边界清晰的能力，逐项做 Rust native 接入候选。
+  3. map update 不能走每次 fork/exec helper；如果要 Rust 化 map owner，必须走常驻 owner、FD 持有、批量更新或真正 in-process 边界，且需要先解决当前 cgo/build-tag/产品默认入口问题。
+  4. outbound 协议栈暂不替换；只允许先把 parser/metadata/export/header builder 等纯函数能力作为可选加速路径，真实拨号和流状态继续以 Go outbound 为准。
+
+### hybrid v1 clean bundle 收敛记录（2026-06-01）
+
+目标：
+
+- 先完成 hybrid v1，而不是继续扩张到 Rust-owned resident 默认 daemon。
+- 默认产品包只包含 Go userspace/control/outbound 与 Rust/Aya eBPF backend。
+- `dae-daemon-optin` 不再进入默认 `daed bundle`；Rust-owned resident 只保留显式实验/后续候选入口。
+
+修改：
+
+| 文件 | 修改 |
+| --- | --- |
+| `/root/project/daed-daex-align/daed/wing/Makefile` | 默认 `BUNDLE_TAGS` 从 `embedallowed,rust_owned_daemon_embed` 改为 `embedallowed` |
+| `/root/project/daed-daex-align/daed/wing/Makefile` | 默认 `bundle` 只依赖 `rust-aya-bpf-loader-asset`，不再依赖 `rust-daemon-embed` |
+| `/root/project/daed-daex-align/daed/wing/Makefile` | 新增显式 `bundle-rust-owned` 目标，需要时才构建并嵌入 `dae-daemon-optin` |
+
+本地验证：
+
+| 验证项 | 结果 |
+| --- | --- |
+| `go test ./engine`（daed wing） | pass |
+| `go test ./control ./config ./engine`（dae-daex-align） | pass |
+| `cargo test -p dae-daemon production_runtime_owner` | pass，`69 passed` |
+| 默认 v1 二进制 | `/root/project/daed-daex-align/daed/daed-hybrid-v1-clean-20260601` |
+| version | `daed version daed-hybrid-v1-clean-20260601` |
+| sha256 | `d05a1a250022674a25cbfdeea61406334fe86bb5dae5414717132b811adfd912` |
+| size | `50M` |
+| 上一版 hybrid v1 size | `62M` |
+| `go version -m` build tags | `embedallowed`，未包含 `rust_owned_daemon_embed` |
+| embedded Rust/Aya loader | 保留，`dae-aya-bpf-loader` 仍由 `rust-aya-bpf-loader-asset` 构建并嵌入 |
+
+38 机真实验证：
+
+| 验证项 | 结果 |
+| --- | --- |
+| 测试方式 | 临时 `/tmp/daed-hybrid-v1-clean-verify` + 临时 `wing.db` |
+| 启动环境 | `DAED_RUNTIME=`、`DAED_RUNTIME_MODE=`，默认 auto 路径 |
+| API health | pass，返回 `{"healthCheck":1}` |
+| 默认 runtime 形态 | pass，仅出现 `daed ... run`、`dae-aya-bpf-loader ... connectivity-map serve-binary`、`dae-aya-bpf-loader ... domain-routing-map serve-owner` |
+| Rust-owned resident | pass，未出现 `dae-daemon-optin run` |
+| Rust/Aya object | pass，日志出现 `Rust/Aya BPF loader loaded object_source=rust-aya-skeleton default_object_source=rust-aya-skeleton kernel_ebpf_program_rewrite=true` |
+| netns link | pass，日志出现 `dae netns link mode: netkit` |
+| dae0peer backend | pass，`Bind daed_dae0peer_ingress via Rust/Aya tcx on dae0peer` |
+| dae0 backend | pass，`Bind daed_dae0_ingress via Rust/Aya tcx on dae0` |
+| WAN backend | pass，`Bind daed_wan_egress_l2 via Rust/Aya tcx on ens3`，`Bind daed_wan_ingress_l2 via Rust/Aya tcx on ens3` |
+| 外联 smoke | pass，Cloudflare trace 返回 `http=http/2`、`tls=TLSv1.3`、`warp=off` |
+| fallback/resident 负向检查 | pass，未出现 `falling back to Go`、`Go map update`、`Go writer`、`Go attach path`、`dae-daemon-optin run`、`embedded Rust-owned daemon`、`[Reload] Failed`、`ApplyRulesOptimizers error` |
+| 测试机清理 | pass，验证后无 daed/helper 进程，无 `daens`，无 `dae0`，无 `/sys/fs/bpf/dae` 残留，上传到 `/tmp` 的二进制和脚本已删除 |
+
+release/action 构建入口核查：
+
+- `/root/project/daed-daex-align/daed/.github/workflows/daed2.0.yml` 使用 `make bundle`。
+- `/root/project/daed-daex-align/daed/.github/workflows/test-linux-amd64v3.yml` 使用 `make bundle`。
+- `/root/project/daed-daex-align/daed/Dockerfile` 与 `publish.Dockerfile` 使用 `make ... bundle`。
+- 未发现 release/action/Docker 默认传入 `BUNDLE_TAGS=...,rust_owned_daemon_embed` 或调用 `bundle-rust-owned`。
+- 因此默认 action/release 路径会继承 clean v1 bundle；若后续要发布 Rust-owned resident 实验包，必须显式改用 `bundle-rust-owned`。
+
+结论：
+
+- hybrid v1 默认包已经从“包含 Rust-owned resident 但默认不运行”收敛为“默认不嵌入 Rust-owned resident”。
+- 默认产品路径现在更明确：Go userspace/control/outbound + embedded Rust/Aya eBPF loader/backend。
+- `bundle-rust-owned` 只作为显式实验或后续 Rust-owned control-plane 候选，不属于 v1 默认发布路径。
+- 后续 v1 收尾重点应放在：
+  1. 确认正式 release/action 使用默认 `bundle` 而不是 `bundle-rust-owned`。
+  2. 继续清理默认路径中的 Go BPF loader/fallback 入口，但不删除 Go userspace/control/outbound。
+  3. 只在 benchmark 和 parity 明确领先的纯函数边界上推进 Rust native 默认接入候选。

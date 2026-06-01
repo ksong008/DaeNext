@@ -1,0 +1,2776 @@
+[
+  {
+    "case": "config/parser_example",
+    "go": {
+      "count": 10,
+      "ns_per_op_avg": 1925358.2,
+      "ns_per_op_min": 1834139.0,
+      "ns_per_op_max": 2066813.0,
+      "us_per_op_avg": 1925.3582,
+      "us_per_op_min": 1834.139,
+      "us_per_op_max": 2066.813,
+      "bytes_per_op_avg": 1766857.4,
+      "bytes_per_op_min": 1766845.0,
+      "bytes_per_op_max": 1766890.0,
+      "allocs_per_op_avg": 28414.0,
+      "allocs_per_op_min": 28414.0,
+      "allocs_per_op_max": 28414.0
+    },
+    "rust": {
+      "count": 10,
+      "ns_per_op_avg": 19303.95439,
+      "ns_per_op_min": 18572.087,
+      "ns_per_op_max": 19700.636,
+      "us_per_op_avg": 19.30395439,
+      "us_per_op_min": 18.572087,
+      "us_per_op_max": 19.700636,
+      "bytes_per_op_avg": 36525.0,
+      "bytes_per_op_min": 36525.0,
+      "bytes_per_op_max": 36525.0,
+      "allocs_per_op_avg": 419.0,
+      "allocs_per_op_min": 419.0,
+      "allocs_per_op_max": 419.0
+    },
+    "ratio": {
+      "us_per_op_rust_vs_go": 0.010026162607041122,
+      "bytes_per_op_rust_vs_go": 0.020672296473954264,
+      "allocs_per_op_rust_vs_go": 0.014746251847680721
+    }
+  },
+  {
+    "case": "config/schema_example",
+    "go": {
+      "count": 10,
+      "ns_per_op_avg": 1936553.7,
+      "ns_per_op_min": 1902093.0,
+      "ns_per_op_max": 2013024.0,
+      "us_per_op_avg": 1936.5537,
+      "us_per_op_min": 1902.093,
+      "us_per_op_max": 2013.024,
+      "bytes_per_op_avg": 1781416.5,
+      "bytes_per_op_min": 1781406.0,
+      "bytes_per_op_max": 1781430.0,
+      "allocs_per_op_avg": 28696.0,
+      "allocs_per_op_min": 28696.0,
+      "allocs_per_op_max": 28696.0
+    },
+    "rust": {
+      "count": 10,
+      "ns_per_op_avg": 25126.0456,
+      "ns_per_op_min": 24882.082,
+      "ns_per_op_max": 26187.976,
+      "us_per_op_avg": 25.1260456,
+      "us_per_op_min": 24.882081999999997,
+      "us_per_op_max": 26.187976,
+      "bytes_per_op_avg": 44485.0,
+      "bytes_per_op_min": 44485.0,
+      "bytes_per_op_max": 44485.0,
+      "allocs_per_op_avg": 592.0,
+      "allocs_per_op_min": 592.0,
+      "allocs_per_op_max": 592.0
+    },
+    "ratio": {
+      "us_per_op_rust_vs_go": 0.012974618571124572,
+      "bytes_per_op_rust_vs_go": 0.02497170089083603,
+      "allocs_per_op_rust_vs_go": 0.02063005296905492
+    }
+  },
+  {
+    "case": "config/include_merger",
+    "go": {
+      "count": 10,
+      "ns_per_op_avg": 323984.5,
+      "ns_per_op_min": 313312.0,
+      "ns_per_op_max": 334318.0,
+      "us_per_op_avg": 323.98449999999997,
+      "us_per_op_min": 313.312,
+      "us_per_op_max": 334.318,
+      "bytes_per_op_avg": 238724.4,
+      "bytes_per_op_min": 238681.0,
+      "bytes_per_op_max": 238781.0,
+      "allocs_per_op_avg": 4112.0,
+      "allocs_per_op_min": 4112.0,
+      "allocs_per_op_max": 4112.0
+    },
+    "rust": {
+      "count": 10,
+      "ns_per_op_avg": 46270.2906,
+      "ns_per_op_min": 45961.595,
+      "ns_per_op_max": 46906.043,
+      "us_per_op_avg": 46.270290599999996,
+      "us_per_op_min": 45.961595,
+      "us_per_op_max": 46.906043,
+      "bytes_per_op_avg": 30038.0,
+      "bytes_per_op_min": 30038.0,
+      "bytes_per_op_max": 30038.0,
+      "allocs_per_op_avg": 359.0,
+      "allocs_per_op_min": 359.0,
+      "allocs_per_op_max": 359.0
+    },
+    "ratio": {
+      "us_per_op_rust_vs_go": 0.14281637115355827,
+      "bytes_per_op_rust_vs_go": 0.1258271043931831,
+      "allocs_per_op_rust_vs_go": 0.08730544747081712
+    }
+  },
+  {
+    "case": "config/marshal_roundtrip_example",
+    "go": {
+      "count": 10,
+      "ns_per_op_avg": 2272564.1,
+      "ns_per_op_min": 2097688.0,
+      "ns_per_op_max": 2687593.0,
+      "us_per_op_avg": 2272.5641,
+      "us_per_op_min": 2097.688,
+      "us_per_op_max": 2687.593,
+      "bytes_per_op_avg": 2066483.5,
+      "bytes_per_op_min": 2066123.0,
+      "bytes_per_op_max": 2067026.0,
+      "allocs_per_op_avg": 34192.1,
+      "allocs_per_op_min": 34187.0,
+      "allocs_per_op_max": 34200.0
+    },
+    "rust": {
+      "count": 10,
+      "ns_per_op_avg": 33626.250400000004,
+      "ns_per_op_min": 32450.506,
+      "ns_per_op_max": 35339.014,
+      "us_per_op_avg": 33.6262504,
+      "us_per_op_min": 32.450506000000004,
+      "us_per_op_max": 35.339014000000006,
+      "bytes_per_op_avg": 78852.0,
+      "bytes_per_op_min": 78852.0,
+      "bytes_per_op_max": 78852.0,
+      "allocs_per_op_avg": 1063.0,
+      "allocs_per_op_min": 1063.0,
+      "allocs_per_op_max": 1063.0
+    },
+    "ratio": {
+      "us_per_op_rust_vs_go": 0.014796612513592027,
+      "bytes_per_op_rust_vs_go": 0.03815757541736965,
+      "allocs_per_op_rust_vs_go": 0.03108905273440356
+    }
+  },
+  {
+    "case": "dns/packed_response_restore",
+    "go": {
+      "count": 10,
+      "ns_per_op_avg": 19.699,
+      "ns_per_op_min": 18.54,
+      "ns_per_op_max": 21.57,
+      "us_per_op_avg": 0.019699,
+      "us_per_op_min": 0.018539999999999997,
+      "us_per_op_max": 0.02157,
+      "bytes_per_op_avg": 48.0,
+      "bytes_per_op_min": 48.0,
+      "bytes_per_op_max": 48.0,
+      "allocs_per_op_avg": 1.0,
+      "allocs_per_op_min": 1.0,
+      "allocs_per_op_max": 1.0
+    },
+    "rust": {
+      "count": 10,
+      "ns_per_op_avg": 3.7468960000000004,
+      "ns_per_op_min": 3.723,
+      "ns_per_op_max": 3.81779,
+      "us_per_op_avg": 0.0037468960000000004,
+      "us_per_op_min": 0.0037229999999999997,
+      "us_per_op_max": 0.00381779,
+      "bytes_per_op_avg": 0.0,
+      "bytes_per_op_min": 0.0,
+      "bytes_per_op_max": 0.0,
+      "allocs_per_op_avg": 0.0,
+      "allocs_per_op_min": 0.0,
+      "allocs_per_op_max": 0.0
+    },
+    "ratio": {
+      "us_per_op_rust_vs_go": 0.19020742169653282,
+      "bytes_per_op_rust_vs_go": 0.0,
+      "allocs_per_op_rust_vs_go": 0.0
+    }
+  },
+  {
+    "case": "dns/data_zero_id",
+    "go": {
+      "count": 10,
+      "ns_per_op_avg": 12.059999999999999,
+      "ns_per_op_min": 11.46,
+      "ns_per_op_max": 14.0,
+      "us_per_op_avg": 0.01206,
+      "us_per_op_min": 0.011460000000000001,
+      "us_per_op_max": 0.014,
+      "bytes_per_op_avg": 8.0,
+      "bytes_per_op_min": 8.0,
+      "bytes_per_op_max": 8.0,
+      "allocs_per_op_avg": 1.0,
+      "allocs_per_op_min": 1.0,
+      "allocs_per_op_max": 1.0
+    },
+    "rust": {
+      "count": 10,
+      "ns_per_op_avg": 12.118975,
+      "ns_per_op_min": 12.08291,
+      "ns_per_op_max": 12.21027,
+      "us_per_op_avg": 0.012118975,
+      "us_per_op_min": 0.01208291,
+      "us_per_op_max": 0.012210269999999999,
+      "bytes_per_op_avg": 4.0,
+      "bytes_per_op_min": 4.0,
+      "bytes_per_op_max": 4.0,
+      "allocs_per_op_avg": 1.0,
+      "allocs_per_op_min": 1.0,
+      "allocs_per_op_max": 1.0
+    },
+    "ratio": {
+      "us_per_op_rust_vs_go": 1.0048901326699835,
+      "bytes_per_op_rust_vs_go": 0.5,
+      "allocs_per_op_rust_vs_go": 1.0
+    }
+  },
+  {
+    "case": "dns/cache_key_roundtrip",
+    "go": {
+      "count": 10,
+      "ns_per_op_avg": 211.85,
+      "ns_per_op_min": 208.6,
+      "ns_per_op_max": 217.1,
+      "us_per_op_avg": 0.21185,
+      "us_per_op_min": 0.2086,
+      "us_per_op_max": 0.2171,
+      "bytes_per_op_avg": 64.0,
+      "bytes_per_op_min": 64.0,
+      "bytes_per_op_max": 64.0,
+      "allocs_per_op_avg": 4.0,
+      "allocs_per_op_min": 4.0,
+      "allocs_per_op_max": 4.0
+    },
+    "rust": {
+      "count": 10,
+      "ns_per_op_avg": 74.14809299999999,
+      "ns_per_op_min": 73.74738,
+      "ns_per_op_max": 74.98535,
+      "us_per_op_avg": 0.074148093,
+      "us_per_op_min": 0.07374738,
+      "us_per_op_max": 0.07498534999999999,
+      "bytes_per_op_avg": 12.0,
+      "bytes_per_op_min": 12.0,
+      "bytes_per_op_max": 12.0,
+      "allocs_per_op_avg": 1.0,
+      "allocs_per_op_min": 1.0,
+      "allocs_per_op_max": 1.0
+    },
+    "ratio": {
+      "us_per_op_rust_vs_go": 0.3500027991503422,
+      "bytes_per_op_rust_vs_go": 0.1875,
+      "allocs_per_op_rust_vs_go": 0.25
+    }
+  },
+  {
+    "case": "dns/cache_ttl_lookup",
+    "go": {
+      "count": 10,
+      "ns_per_op_avg": 557.0600000000001,
+      "ns_per_op_min": 544.6,
+      "ns_per_op_max": 584.2,
+      "us_per_op_avg": 0.55706,
+      "us_per_op_min": 0.5446,
+      "us_per_op_max": 0.5842,
+      "bytes_per_op_avg": 1136.0,
+      "bytes_per_op_min": 1136.0,
+      "bytes_per_op_max": 1136.0,
+      "allocs_per_op_avg": 7.0,
+      "allocs_per_op_min": 7.0,
+      "allocs_per_op_max": 7.0
+    },
+    "rust": {
+      "count": 10,
+      "ns_per_op_avg": 266.9167,
+      "ns_per_op_min": 265.2282,
+      "ns_per_op_max": 269.7822,
+      "us_per_op_avg": 0.2669167,
+      "us_per_op_min": 0.2652282,
+      "us_per_op_max": 0.26978219999999997,
+      "bytes_per_op_avg": 660.0,
+      "bytes_per_op_min": 660.0,
+      "bytes_per_op_max": 660.0,
+      "allocs_per_op_avg": 4.0,
+      "allocs_per_op_min": 4.0,
+      "allocs_per_op_max": 4.0
+    },
+    "ratio": {
+      "us_per_op_rust_vs_go": 0.4791525149894087,
+      "bytes_per_op_rust_vs_go": 0.5809859154929577,
+      "allocs_per_op_rust_vs_go": 0.5714285714285714
+    }
+  },
+  {
+    "case": "dns/doh_get_request",
+    "go": {
+      "count": 10,
+      "ns_per_op_avg": 879.55,
+      "ns_per_op_min": 842.4,
+      "ns_per_op_max": 983.9,
+      "us_per_op_avg": 0.87955,
+      "us_per_op_min": 0.8423999999999999,
+      "us_per_op_max": 0.9839,
+      "bytes_per_op_avg": 1464.0,
+      "bytes_per_op_min": 1464.0,
+      "bytes_per_op_max": 1464.0,
+      "allocs_per_op_avg": 17.0,
+      "allocs_per_op_min": 17.0,
+      "allocs_per_op_max": 17.0
+    },
+    "rust": {
+      "count": 10,
+      "ns_per_op_avg": 505.486385,
+      "ns_per_op_min": 503.42137,
+      "ns_per_op_max": 507.04567,
+      "us_per_op_avg": 0.505486385,
+      "us_per_op_min": 0.50342137,
+      "us_per_op_max": 0.50704567,
+      "bytes_per_op_avg": 295.0,
+      "bytes_per_op_min": 295.0,
+      "bytes_per_op_max": 295.0,
+      "allocs_per_op_avg": 12.0,
+      "allocs_per_op_min": 12.0,
+      "allocs_per_op_max": 12.0
+    },
+    "ratio": {
+      "us_per_op_rust_vs_go": 0.5747102325052583,
+      "bytes_per_op_rust_vs_go": 0.20150273224043716,
+      "allocs_per_op_rust_vs_go": 0.7058823529411765
+    }
+  },
+  {
+    "case": "dns/doh_post_request",
+    "go": {
+      "count": 10,
+      "ns_per_op_avg": 1645.0,
+      "ns_per_op_min": 1590.0,
+      "ns_per_op_max": 1703.0,
+      "us_per_op_avg": 1.645,
+      "us_per_op_min": 1.59,
+      "us_per_op_max": 1.703,
+      "bytes_per_op_avg": 5024.0,
+      "bytes_per_op_min": 5024.0,
+      "bytes_per_op_max": 5024.0,
+      "allocs_per_op_avg": 13.0,
+      "allocs_per_op_min": 13.0,
+      "allocs_per_op_max": 13.0
+    },
+    "rust": {
+      "count": 10,
+      "ns_per_op_avg": 901.02919,
+      "ns_per_op_min": 896.9868,
+      "ns_per_op_max": 910.8354,
+      "us_per_op_avg": 0.90102919,
+      "us_per_op_min": 0.8969868,
+      "us_per_op_max": 0.9108354000000001,
+      "bytes_per_op_avg": 2616.0,
+      "bytes_per_op_min": 2616.0,
+      "bytes_per_op_max": 2616.0,
+      "allocs_per_op_avg": 11.0,
+      "allocs_per_op_min": 11.0,
+      "allocs_per_op_max": 11.0
+    },
+    "ratio": {
+      "us_per_op_rust_vs_go": 0.5477381094224925,
+      "bytes_per_op_rust_vs_go": 0.5207006369426752,
+      "allocs_per_op_rust_vs_go": 0.8461538461538461
+    }
+  },
+  {
+    "case": "dns/doh_validate_content_type",
+    "go": {
+      "count": 10,
+      "ns_per_op_avg": 834.8399999999999,
+      "ns_per_op_min": 806.0,
+      "ns_per_op_max": 868.5,
+      "us_per_op_avg": 0.83484,
+      "us_per_op_min": 0.806,
+      "us_per_op_max": 0.8685,
+      "bytes_per_op_avg": 896.0,
+      "bytes_per_op_min": 896.0,
+      "bytes_per_op_max": 896.0,
+      "allocs_per_op_avg": 11.0,
+      "allocs_per_op_min": 11.0,
+      "allocs_per_op_max": 11.0
+    },
+    "rust": {
+      "count": 10,
+      "ns_per_op_avg": 243.662754,
+      "ns_per_op_min": 242.61322,
+      "ns_per_op_max": 244.73303,
+      "us_per_op_avg": 0.24366275399999998,
+      "us_per_op_min": 0.24261322000000002,
+      "us_per_op_max": 0.24473303000000002,
+      "bytes_per_op_avg": 259.0,
+      "bytes_per_op_min": 259.0,
+      "bytes_per_op_max": 259.0,
+      "allocs_per_op_avg": 9.0,
+      "allocs_per_op_min": 9.0,
+      "allocs_per_op_max": 9.0
+    },
+    "ratio": {
+      "us_per_op_rust_vs_go": 0.2918676081644387,
+      "bytes_per_op_rust_vs_go": 0.2890625,
+      "allocs_per_op_rust_vs_go": 0.8181818181818182
+    }
+  },
+  {
+    "case": "dns/validation_question_id",
+    "go": {
+      "count": 10,
+      "ns_per_op_avg": 746.21,
+      "ns_per_op_min": 722.6,
+      "ns_per_op_max": 790.7,
+      "us_per_op_avg": 0.74621,
+      "us_per_op_min": 0.7226,
+      "us_per_op_max": 0.7907000000000001,
+      "bytes_per_op_avg": 340.0,
+      "bytes_per_op_min": 340.0,
+      "bytes_per_op_max": 340.0,
+      "allocs_per_op_avg": 14.0,
+      "allocs_per_op_min": 14.0,
+      "allocs_per_op_max": 14.0
+    },
+    "rust": {
+      "count": 10,
+      "ns_per_op_avg": 15.181145,
+      "ns_per_op_min": 15.03357,
+      "ns_per_op_max": 15.43177,
+      "us_per_op_avg": 0.015181144999999998,
+      "us_per_op_min": 0.01503357,
+      "us_per_op_max": 0.015431770000000001,
+      "bytes_per_op_avg": 0.0,
+      "bytes_per_op_min": 0.0,
+      "bytes_per_op_max": 0.0,
+      "allocs_per_op_avg": 0.0,
+      "allocs_per_op_min": 0.0,
+      "allocs_per_op_max": 0.0
+    },
+    "ratio": {
+      "us_per_op_rust_vs_go": 0.020344333364602455,
+      "bytes_per_op_rust_vs_go": 0.0,
+      "allocs_per_op_rust_vs_go": 0.0
+    }
+  },
+  {
+    "case": "dns/packet_view_validate_question_id",
+    "go": {
+      "count": 10,
+      "ns_per_op_avg": 1558.8,
+      "ns_per_op_min": 1527.0,
+      "ns_per_op_max": 1610.0,
+      "us_per_op_avg": 1.5588,
+      "us_per_op_min": 1.527,
+      "us_per_op_max": 1.61,
+      "bytes_per_op_avg": 656.0,
+      "bytes_per_op_min": 656.0,
+      "bytes_per_op_max": 656.0,
+      "allocs_per_op_avg": 30.0,
+      "allocs_per_op_min": 30.0,
+      "allocs_per_op_max": 30.0
+    },
+    "rust": {
+      "count": 10,
+      "ns_per_op_avg": 134.77515499999998,
+      "ns_per_op_min": 133.8808,
+      "ns_per_op_max": 135.56405,
+      "us_per_op_avg": 0.13477515499999998,
+      "us_per_op_min": 0.1338808,
+      "us_per_op_max": 0.13556405000000002,
+      "bytes_per_op_avg": 0.0,
+      "bytes_per_op_min": 0.0,
+      "bytes_per_op_max": 0.0,
+      "allocs_per_op_avg": 0.0,
+      "allocs_per_op_min": 0.0,
+      "allocs_per_op_max": 0.0
+    },
+    "ratio": {
+      "us_per_op_rust_vs_go": 0.08646083846548626,
+      "bytes_per_op_rust_vs_go": 0.0,
+      "allocs_per_op_rust_vs_go": 0.0
+    }
+  },
+  {
+    "case": "dns/packet_view_answers_ttl_ip_cname",
+    "go": {
+      "count": 10,
+      "ns_per_op_avg": 726.5699999999999,
+      "ns_per_op_min": 645.6,
+      "ns_per_op_max": 882.2,
+      "us_per_op_avg": 0.72657,
+      "us_per_op_min": 0.6456000000000001,
+      "us_per_op_max": 0.8822000000000001,
+      "bytes_per_op_avg": 504.0,
+      "bytes_per_op_min": 504.0,
+      "bytes_per_op_max": 504.0,
+      "allocs_per_op_avg": 19.0,
+      "allocs_per_op_min": 19.0,
+      "allocs_per_op_max": 19.0
+    },
+    "rust": {
+      "count": 10,
+      "ns_per_op_avg": 86.593776,
+      "ns_per_op_min": 86.29602,
+      "ns_per_op_max": 86.79971,
+      "us_per_op_avg": 0.086593776,
+      "us_per_op_min": 0.08629602,
+      "us_per_op_max": 0.08679971,
+      "bytes_per_op_avg": 0.0,
+      "bytes_per_op_min": 0.0,
+      "bytes_per_op_max": 0.0,
+      "allocs_per_op_avg": 0.0,
+      "allocs_per_op_min": 0.0,
+      "allocs_per_op_max": 0.0
+    },
+    "ratio": {
+      "us_per_op_rust_vs_go": 0.11918160122218092,
+      "bytes_per_op_rust_vs_go": 0.0,
+      "allocs_per_op_rust_vs_go": 0.0
+    }
+  },
+  {
+    "case": "dns/resolve_asis_guard",
+    "go": {
+      "count": 10,
+      "ns_per_op_avg": 265.95,
+      "ns_per_op_min": 252.6,
+      "ns_per_op_max": 293.6,
+      "us_per_op_avg": 0.26595,
+      "us_per_op_min": 0.2526,
+      "us_per_op_max": 0.2936,
+      "bytes_per_op_avg": 288.0,
+      "bytes_per_op_min": 288.0,
+      "bytes_per_op_max": 288.0,
+      "allocs_per_op_avg": 5.0,
+      "allocs_per_op_min": 5.0,
+      "allocs_per_op_max": 5.0
+    },
+    "rust": {
+      "count": 10,
+      "ns_per_op_avg": 17.776254,
+      "ns_per_op_min": 17.56421,
+      "ns_per_op_max": 18.72141,
+      "us_per_op_avg": 0.017776254,
+      "us_per_op_min": 0.01756421,
+      "us_per_op_max": 0.018721409999999997,
+      "bytes_per_op_avg": 107.0,
+      "bytes_per_op_min": 107.0,
+      "bytes_per_op_max": 107.0,
+      "allocs_per_op_avg": 1.0,
+      "allocs_per_op_min": 1.0,
+      "allocs_per_op_max": 1.0
+    },
+    "ratio": {
+      "us_per_op_rust_vs_go": 0.06684058657642412,
+      "bytes_per_op_rust_vs_go": 0.3715277777777778,
+      "allocs_per_op_rust_vs_go": 0.2
+    }
+  },
+  {
+    "case": "routing/domain_matcher_bitmap",
+    "go": {
+      "count": 10,
+      "ns_per_op_avg": 266.16999999999996,
+      "ns_per_op_min": 263.4,
+      "ns_per_op_max": 269.5,
+      "us_per_op_avg": 0.26617,
+      "us_per_op_min": 0.26339999999999997,
+      "us_per_op_max": 0.2695,
+      "bytes_per_op_avg": 64.0,
+      "bytes_per_op_min": 64.0,
+      "bytes_per_op_max": 64.0,
+      "allocs_per_op_avg": 3.0,
+      "allocs_per_op_min": 3.0,
+      "allocs_per_op_max": 3.0
+    },
+    "rust": {
+      "count": 10,
+      "ns_per_op_avg": 90.489499,
+      "ns_per_op_min": 90.22013,
+      "ns_per_op_max": 90.717,
+      "us_per_op_avg": 0.090489499,
+      "us_per_op_min": 0.09022013,
+      "us_per_op_max": 0.09071699999999999,
+      "bytes_per_op_avg": 12.0,
+      "bytes_per_op_min": 12.0,
+      "bytes_per_op_max": 12.0,
+      "allocs_per_op_avg": 1.0,
+      "allocs_per_op_min": 1.0,
+      "allocs_per_op_max": 1.0
+    },
+    "ratio": {
+      "us_per_op_rust_vs_go": 0.3399688131645189,
+      "bytes_per_op_rust_vs_go": 0.1875,
+      "allocs_per_op_rust_vs_go": 0.3333333333333333
+    }
+  },
+  {
+    "case": "routing/prefix_parse",
+    "go": {
+      "count": 10,
+      "ns_per_op_avg": 177.66,
+      "ns_per_op_min": 171.9,
+      "ns_per_op_max": 185.6,
+      "us_per_op_avg": 0.17765999999999998,
+      "us_per_op_min": 0.1719,
+      "us_per_op_max": 0.1856,
+      "bytes_per_op_avg": 224.0,
+      "bytes_per_op_min": 224.0,
+      "bytes_per_op_max": 224.0,
+      "allocs_per_op_avg": 3.0,
+      "allocs_per_op_min": 3.0,
+      "allocs_per_op_max": 3.0
+    },
+    "rust": {
+      "count": 10,
+      "ns_per_op_avg": 112.96038200000001,
+      "ns_per_op_min": 112.66464,
+      "ns_per_op_max": 113.11473,
+      "us_per_op_avg": 0.112960382,
+      "us_per_op_min": 0.11266464000000001,
+      "us_per_op_max": 0.11311473,
+      "bytes_per_op_avg": 0.0,
+      "bytes_per_op_min": 0.0,
+      "bytes_per_op_max": 0.0,
+      "allocs_per_op_avg": 0.0,
+      "allocs_per_op_min": 0.0,
+      "allocs_per_op_max": 0.0
+    },
+    "ratio": {
+      "us_per_op_rust_vs_go": 0.6358233817404031,
+      "bytes_per_op_rust_vs_go": 0.0,
+      "allocs_per_op_rust_vs_go": 0.0
+    }
+  },
+  {
+    "case": "geodata/streaming_geoip_hit",
+    "go": {
+      "count": 10,
+      "ns_per_op_avg": 6162.2,
+      "ns_per_op_min": 6129.0,
+      "ns_per_op_max": 6186.0,
+      "us_per_op_avg": 6.1622,
+      "us_per_op_min": 6.129,
+      "us_per_op_max": 6.186,
+      "bytes_per_op_avg": 248.0,
+      "bytes_per_op_min": 248.0,
+      "bytes_per_op_max": 248.0,
+      "allocs_per_op_avg": 10.0,
+      "allocs_per_op_min": 10.0,
+      "allocs_per_op_max": 10.0
+    },
+    "rust": {
+      "count": 10,
+      "ns_per_op_avg": 32.199874,
+      "ns_per_op_min": 30.93249,
+      "ns_per_op_max": 33.27915,
+      "us_per_op_avg": 0.032199874,
+      "us_per_op_min": 0.03093249,
+      "us_per_op_max": 0.03327915,
+      "bytes_per_op_avg": 36.0,
+      "bytes_per_op_min": 36.0,
+      "bytes_per_op_max": 36.0,
+      "allocs_per_op_avg": 1.0,
+      "allocs_per_op_min": 1.0,
+      "allocs_per_op_max": 1.0
+    },
+    "ratio": {
+      "us_per_op_rust_vs_go": 0.005225386063418909,
+      "bytes_per_op_rust_vs_go": 0.14516129032258066,
+      "allocs_per_op_rust_vs_go": 0.1
+    }
+  },
+  {
+    "case": "sniffing/http_host",
+    "go": {
+      "count": 10,
+      "ns_per_op_avg": 2726.9,
+      "ns_per_op_min": 2529.0,
+      "ns_per_op_max": 2897.0,
+      "us_per_op_avg": 2.7268999999999997,
+      "us_per_op_min": 2.529,
+      "us_per_op_max": 2.897,
+      "bytes_per_op_avg": 9098.2,
+      "bytes_per_op_min": 9088.0,
+      "bytes_per_op_max": 9175.0,
+      "allocs_per_op_avg": 15.0,
+      "allocs_per_op_min": 15.0,
+      "allocs_per_op_max": 15.0
+    },
+    "rust": {
+      "count": 10,
+      "ns_per_op_avg": 62.236836,
+      "ns_per_op_min": 61.10324,
+      "ns_per_op_max": 63.92586,
+      "us_per_op_avg": 0.062236836,
+      "us_per_op_min": 0.061103239999999996,
+      "us_per_op_max": 0.06392586,
+      "bytes_per_op_avg": 11.0,
+      "bytes_per_op_min": 11.0,
+      "bytes_per_op_max": 11.0,
+      "allocs_per_op_avg": 1.0,
+      "allocs_per_op_min": 1.0,
+      "allocs_per_op_max": 1.0
+    },
+    "ratio": {
+      "us_per_op_rust_vs_go": 0.022823292383292386,
+      "bytes_per_op_rust_vs_go": 0.0012090303576531621,
+      "allocs_per_op_rust_vs_go": 0.06666666666666667
+    }
+  },
+  {
+    "case": "outbound/select_min_latency",
+    "go": {
+      "count": 10,
+      "ns_per_op_avg": 9.5237,
+      "ns_per_op_min": 9.492,
+      "ns_per_op_max": 9.546,
+      "us_per_op_avg": 0.0095237,
+      "us_per_op_min": 0.009492,
+      "us_per_op_max": 0.009545999999999999,
+      "bytes_per_op_avg": 0.0,
+      "bytes_per_op_min": 0.0,
+      "bytes_per_op_max": 0.0,
+      "allocs_per_op_avg": 0.0,
+      "allocs_per_op_min": 0.0,
+      "allocs_per_op_max": 0.0
+    },
+    "rust": {
+      "count": 10,
+      "ns_per_op_avg": 10.144684,
+      "ns_per_op_min": 10.01672,
+      "ns_per_op_max": 10.57592,
+      "us_per_op_avg": 0.010144684,
+      "us_per_op_min": 0.01001672,
+      "us_per_op_max": 0.01057592,
+      "bytes_per_op_avg": 0.0,
+      "bytes_per_op_min": 0.0,
+      "bytes_per_op_max": 0.0,
+      "allocs_per_op_avg": 0.0,
+      "allocs_per_op_min": 0.0,
+      "allocs_per_op_max": 0.0
+    },
+    "ratio": {
+      "us_per_op_rust_vs_go": 1.0652040698468033,
+      "bytes_per_op_rust_vs_go": null,
+      "allocs_per_op_rust_vs_go": null
+    }
+  },
+  {
+    "case": "outbound/filter_annotate_regex",
+    "go": {
+      "count": 10,
+      "ns_per_op_avg": 238283.7,
+      "ns_per_op_min": 225699.0,
+      "ns_per_op_max": 251390.0,
+      "us_per_op_avg": 238.2837,
+      "us_per_op_min": 225.699,
+      "us_per_op_max": 251.39,
+      "bytes_per_op_avg": 148377.7,
+      "bytes_per_op_min": 148377.0,
+      "bytes_per_op_max": 148378.0,
+      "allocs_per_op_avg": 3108.0,
+      "allocs_per_op_min": 3108.0,
+      "allocs_per_op_max": 3108.0
+    },
+    "rust": {
+      "count": 10,
+      "ns_per_op_avg": 110811.58910000001,
+      "ns_per_op_min": 109479.722,
+      "ns_per_op_max": 111623.284,
+      "us_per_op_avg": 110.81158909999999,
+      "us_per_op_min": 109.479722,
+      "us_per_op_max": 111.623284,
+      "bytes_per_op_avg": 193448.0,
+      "bytes_per_op_min": 193448.0,
+      "bytes_per_op_max": 193448.0,
+      "allocs_per_op_avg": 2323.0,
+      "allocs_per_op_min": 2323.0,
+      "allocs_per_op_max": 2323.0
+    },
+    "ratio": {
+      "us_per_op_rust_vs_go": 0.46504057600247095,
+      "bytes_per_op_rust_vs_go": 1.3037538659785128,
+      "allocs_per_op_rust_vs_go": 0.7474259974259975
+    }
+  },
+  {
+    "case": "protocol/socks5_address_codec",
+    "go": {
+      "count": 10,
+      "ns_per_op_avg": 91.48400000000001,
+      "ns_per_op_min": 86.1,
+      "ns_per_op_max": 95.72,
+      "us_per_op_avg": 0.091484,
+      "us_per_op_min": 0.0861,
+      "us_per_op_max": 0.09572,
+      "bytes_per_op_avg": 116.0,
+      "bytes_per_op_min": 116.0,
+      "bytes_per_op_max": 116.0,
+      "allocs_per_op_avg": 5.0,
+      "allocs_per_op_min": 5.0,
+      "allocs_per_op_max": 5.0
+    },
+    "rust": {
+      "count": 10,
+      "ns_per_op_avg": 62.067867,
+      "ns_per_op_min": 61.08612,
+      "ns_per_op_max": 65.35031,
+      "us_per_op_avg": 0.062067867,
+      "us_per_op_min": 0.06108612,
+      "us_per_op_max": 0.06535031,
+      "bytes_per_op_avg": 35.0,
+      "bytes_per_op_min": 35.0,
+      "bytes_per_op_max": 35.0,
+      "allocs_per_op_avg": 3.0,
+      "allocs_per_op_min": 3.0,
+      "allocs_per_op_max": 3.0
+    },
+    "ratio": {
+      "us_per_op_rust_vs_go": 0.6784559813737921,
+      "bytes_per_op_rust_vs_go": 0.3017241379310345,
+      "allocs_per_op_rust_vs_go": 0.6
+    }
+  },
+  {
+    "case": "protocol/socks5_handshake_bytes",
+    "go": {
+      "count": 10,
+      "ns_per_op_avg": 246.73000000000002,
+      "ns_per_op_min": 240.2,
+      "ns_per_op_max": 254.1,
+      "us_per_op_avg": 0.24672999999999998,
+      "us_per_op_min": 0.2402,
+      "us_per_op_max": 0.2541,
+      "bytes_per_op_avg": 120.0,
+      "bytes_per_op_min": 120.0,
+      "bytes_per_op_max": 120.0,
+      "allocs_per_op_avg": 6.0,
+      "allocs_per_op_min": 6.0,
+      "allocs_per_op_max": 6.0
+    },
+    "rust": {
+      "count": 10,
+      "ns_per_op_avg": 112.002043,
+      "ns_per_op_min": 108.58685,
+      "ns_per_op_max": 116.23193,
+      "us_per_op_avg": 0.11200204300000001,
+      "us_per_op_min": 0.10858685,
+      "us_per_op_max": 0.11623193000000001,
+      "bytes_per_op_avg": 82.0,
+      "bytes_per_op_min": 82.0,
+      "bytes_per_op_max": 82.0,
+      "allocs_per_op_avg": 6.0,
+      "allocs_per_op_min": 6.0,
+      "allocs_per_op_max": 6.0
+    },
+    "ratio": {
+      "us_per_op_rust_vs_go": 0.4539457828395413,
+      "bytes_per_op_rust_vs_go": 0.6833333333333333,
+      "allocs_per_op_rust_vs_go": 1.0
+    }
+  },
+  {
+    "case": "protocol/socks5_udp_packet_wrap",
+    "go": {
+      "count": 10,
+      "ns_per_op_avg": 205.36999999999998,
+      "ns_per_op_min": 201.6,
+      "ns_per_op_max": 212.1,
+      "us_per_op_avg": 0.20537,
+      "us_per_op_min": 0.2016,
+      "us_per_op_max": 0.21209999999999998,
+      "bytes_per_op_avg": 91.0,
+      "bytes_per_op_min": 91.0,
+      "bytes_per_op_max": 91.0,
+      "allocs_per_op_avg": 4.0,
+      "allocs_per_op_min": 4.0,
+      "allocs_per_op_max": 4.0
+    },
+    "rust": {
+      "count": 10,
+      "ns_per_op_avg": 84.773561,
+      "ns_per_op_min": 81.42816,
+      "ns_per_op_max": 93.83903,
+      "us_per_op_avg": 0.084773561,
+      "us_per_op_min": 0.08142816,
+      "us_per_op_max": 0.09383902999999999,
+      "bytes_per_op_avg": 67.0,
+      "bytes_per_op_min": 67.0,
+      "bytes_per_op_max": 67.0,
+      "allocs_per_op_avg": 4.0,
+      "allocs_per_op_min": 4.0,
+      "allocs_per_op_max": 4.0
+    },
+    "ratio": {
+      "us_per_op_rust_vs_go": 0.4127845400983591,
+      "bytes_per_op_rust_vs_go": 0.7362637362637363,
+      "allocs_per_op_rust_vs_go": 1.0
+    }
+  },
+  {
+    "case": "protocol/vless_parse_link",
+    "go": {
+      "count": 10,
+      "ns_per_op_avg": 9951.0,
+      "ns_per_op_min": 9726.0,
+      "ns_per_op_max": 10594.0,
+      "us_per_op_avg": 9.951,
+      "us_per_op_min": 9.726,
+      "us_per_op_max": 10.594,
+      "bytes_per_op_avg": 8704.0,
+      "bytes_per_op_min": 8704.0,
+      "bytes_per_op_max": 8704.0,
+      "allocs_per_op_avg": 168.0,
+      "allocs_per_op_min": 168.0,
+      "allocs_per_op_max": 168.0
+    },
+    "rust": {
+      "count": 10,
+      "ns_per_op_avg": 1270.74228,
+      "ns_per_op_min": 1241.0971,
+      "ns_per_op_max": 1326.7053,
+      "us_per_op_avg": 1.27074228,
+      "us_per_op_min": 1.2410971,
+      "us_per_op_max": 1.3267053,
+      "bytes_per_op_avg": 908.0,
+      "bytes_per_op_min": 908.0,
+      "bytes_per_op_max": 908.0,
+      "allocs_per_op_avg": 18.0,
+      "allocs_per_op_min": 18.0,
+      "allocs_per_op_max": 18.0
+    },
+    "ratio": {
+      "us_per_op_rust_vs_go": 0.1276999577931866,
+      "bytes_per_op_rust_vs_go": 0.10431985294117647,
+      "allocs_per_op_rust_vs_go": 0.10714285714285714
+    }
+  },
+  {
+    "case": "protocol/vless_password_to_key",
+    "go": {
+      "count": 10,
+      "ns_per_op_avg": 193.44,
+      "ns_per_op_min": 189.2,
+      "ns_per_op_max": 206.2,
+      "us_per_op_avg": 0.19344,
+      "us_per_op_min": 0.18919999999999998,
+      "us_per_op_max": 0.2062,
+      "bytes_per_op_avg": 120.0,
+      "bytes_per_op_min": 120.0,
+      "bytes_per_op_max": 120.0,
+      "allocs_per_op_avg": 4.0,
+      "allocs_per_op_min": 4.0,
+      "allocs_per_op_max": 4.0
+    },
+    "rust": {
+      "count": 10,
+      "ns_per_op_avg": 67.98429300000001,
+      "ns_per_op_min": 67.89126,
+      "ns_per_op_max": 68.07423,
+      "us_per_op_avg": 0.067984293,
+      "us_per_op_min": 0.06789126000000001,
+      "us_per_op_max": 0.06807423,
+      "bytes_per_op_avg": 0.0,
+      "bytes_per_op_min": 0.0,
+      "bytes_per_op_max": 0.0,
+      "allocs_per_op_avg": 0.0,
+      "allocs_per_op_min": 0.0,
+      "allocs_per_op_max": 0.0
+    },
+    "ratio": {
+      "us_per_op_rust_vs_go": 0.3514489919354839,
+      "bytes_per_op_rust_vs_go": 0.0,
+      "allocs_per_op_rust_vs_go": 0.0
+    }
+  },
+  {
+    "case": "protocol/vless_request_header",
+    "go": {
+      "count": 10,
+      "ns_per_op_avg": 450.86,
+      "ns_per_op_min": 436.3,
+      "ns_per_op_max": 484.1,
+      "us_per_op_avg": 0.45086000000000004,
+      "us_per_op_min": 0.4363,
+      "us_per_op_max": 0.48410000000000003,
+      "bytes_per_op_avg": 549.0,
+      "bytes_per_op_min": 549.0,
+      "bytes_per_op_max": 549.0,
+      "allocs_per_op_avg": 15.0,
+      "allocs_per_op_min": 15.0,
+      "allocs_per_op_max": 15.0
+    },
+    "rust": {
+      "count": 10,
+      "ns_per_op_avg": 83.268697,
+      "ns_per_op_min": 81.47066,
+      "ns_per_op_max": 88.44191,
+      "us_per_op_avg": 0.083268697,
+      "us_per_op_min": 0.08147066,
+      "us_per_op_max": 0.08844191,
+      "bytes_per_op_avg": 59.0,
+      "bytes_per_op_min": 59.0,
+      "bytes_per_op_max": 59.0,
+      "allocs_per_op_avg": 3.0,
+      "allocs_per_op_min": 3.0,
+      "allocs_per_op_max": 3.0
+    },
+    "ratio": {
+      "us_per_op_rust_vs_go": 0.18468858847535818,
+      "bytes_per_op_rust_vs_go": 0.10746812386156648,
+      "allocs_per_op_rust_vs_go": 0.2
+    }
+  },
+  {
+    "case": "protocol/vmess_parse_link",
+    "go": {
+      "count": 10,
+      "ns_per_op_avg": 1169.6,
+      "ns_per_op_min": 1144.0,
+      "ns_per_op_max": 1224.0,
+      "us_per_op_avg": 1.1696,
+      "us_per_op_min": 1.144,
+      "us_per_op_max": 1.224,
+      "bytes_per_op_avg": 1664.0,
+      "bytes_per_op_min": 1664.0,
+      "bytes_per_op_max": 1664.0,
+      "allocs_per_op_avg": 29.0,
+      "allocs_per_op_min": 29.0,
+      "allocs_per_op_max": 29.0
+    },
+    "rust": {
+      "count": 10,
+      "ns_per_op_avg": 833.8227199999999,
+      "ns_per_op_min": 812.005,
+      "ns_per_op_max": 867.3141,
+      "us_per_op_avg": 0.83382272,
+      "us_per_op_min": 0.812005,
+      "us_per_op_max": 0.8673141000000001,
+      "bytes_per_op_avg": 1402.0,
+      "bytes_per_op_min": 1402.0,
+      "bytes_per_op_max": 1402.0,
+      "allocs_per_op_avg": 19.0,
+      "allocs_per_op_min": 19.0,
+      "allocs_per_op_max": 19.0
+    },
+    "ratio": {
+      "us_per_op_rust_vs_go": 0.7129127222982217,
+      "bytes_per_op_rust_vs_go": 0.8425480769230769,
+      "allocs_per_op_rust_vs_go": 0.6551724137931034
+    }
+  },
+  {
+    "case": "protocol/vmess_metadata_bytes",
+    "go": {
+      "count": 10,
+      "ns_per_op_avg": 2.9414000000000002,
+      "ns_per_op_min": 2.867,
+      "ns_per_op_max": 3.306,
+      "us_per_op_avg": 0.0029414,
+      "us_per_op_min": 0.002867,
+      "us_per_op_max": 0.003306,
+      "bytes_per_op_avg": 0.0,
+      "bytes_per_op_min": 0.0,
+      "bytes_per_op_max": 0.0,
+      "allocs_per_op_avg": 0.0,
+      "allocs_per_op_min": 0.0,
+      "allocs_per_op_max": 0.0
+    },
+    "rust": {
+      "count": 10,
+      "ns_per_op_avg": 4.205419,
+      "ns_per_op_min": 4.16137,
+      "ns_per_op_max": 4.41858,
+      "us_per_op_avg": 0.004205419,
+      "us_per_op_min": 0.00416137,
+      "us_per_op_max": 0.00441858,
+      "bytes_per_op_avg": 0.0,
+      "bytes_per_op_min": 0.0,
+      "bytes_per_op_max": 0.0,
+      "allocs_per_op_avg": 0.0,
+      "allocs_per_op_min": 0.0,
+      "allocs_per_op_max": 0.0
+    },
+    "ratio": {
+      "us_per_op_rust_vs_go": 1.4297338002311826,
+      "bytes_per_op_rust_vs_go": null,
+      "allocs_per_op_rust_vs_go": null
+    }
+  },
+  {
+    "case": "protocol/vmess_uuid5_compatibility",
+    "go": {
+      "count": 10,
+      "ns_per_op_avg": 108.17999999999999,
+      "ns_per_op_min": 106.9,
+      "ns_per_op_max": 110.3,
+      "us_per_op_avg": 0.10818000000000001,
+      "us_per_op_min": 0.10690000000000001,
+      "us_per_op_max": 0.1103,
+      "bytes_per_op_avg": 72.0,
+      "bytes_per_op_min": 72.0,
+      "bytes_per_op_max": 72.0,
+      "allocs_per_op_avg": 2.0,
+      "allocs_per_op_min": 2.0,
+      "allocs_per_op_max": 2.0
+    },
+    "rust": {
+      "count": 10,
+      "ns_per_op_avg": 67.107844,
+      "ns_per_op_min": 66.65469,
+      "ns_per_op_max": 67.82884,
+      "us_per_op_avg": 0.067107844,
+      "us_per_op_min": 0.06665469,
+      "us_per_op_max": 0.06782884,
+      "bytes_per_op_avg": 36.0,
+      "bytes_per_op_min": 36.0,
+      "bytes_per_op_max": 36.0,
+      "allocs_per_op_avg": 1.0,
+      "allocs_per_op_min": 1.0,
+      "allocs_per_op_max": 1.0
+    },
+    "ratio": {
+      "us_per_op_rust_vs_go": 0.6203350342022554,
+      "bytes_per_op_rust_vs_go": 0.5,
+      "allocs_per_op_rust_vs_go": 0.5
+    }
+  },
+  {
+    "case": "protocol/shadowsocks_parse_link",
+    "go": {
+      "count": 10,
+      "ns_per_op_avg": 631.55,
+      "ns_per_op_min": 617.7,
+      "ns_per_op_max": 650.4,
+      "us_per_op_avg": 0.6315500000000001,
+      "us_per_op_min": 0.6177,
+      "us_per_op_max": 0.6504,
+      "bytes_per_op_avg": 480.0,
+      "bytes_per_op_min": 480.0,
+      "bytes_per_op_max": 480.0,
+      "allocs_per_op_avg": 5.0,
+      "allocs_per_op_min": 5.0,
+      "allocs_per_op_max": 5.0
+    },
+    "rust": {
+      "count": 10,
+      "ns_per_op_avg": 966.5755300000001,
+      "ns_per_op_min": 961.786,
+      "ns_per_op_max": 974.0752,
+      "us_per_op_avg": 0.9665755300000001,
+      "us_per_op_min": 0.9617859999999999,
+      "us_per_op_max": 0.9740752,
+      "bytes_per_op_avg": 471.0,
+      "bytes_per_op_min": 471.0,
+      "bytes_per_op_max": 471.0,
+      "allocs_per_op_avg": 10.0,
+      "allocs_per_op_min": 10.0,
+      "allocs_per_op_max": 10.0
+    },
+    "ratio": {
+      "us_per_op_rust_vs_go": 1.5304814028976328,
+      "bytes_per_op_rust_vs_go": 0.98125,
+      "allocs_per_op_rust_vs_go": 2.0
+    }
+  },
+  {
+    "case": "protocol/shadowsocks_metadata_bytes",
+    "go": {
+      "count": 10,
+      "ns_per_op_avg": 43.491,
+      "ns_per_op_min": 41.88,
+      "ns_per_op_max": 45.95,
+      "us_per_op_avg": 0.043491,
+      "us_per_op_min": 0.04188,
+      "us_per_op_max": 0.045950000000000005,
+      "bytes_per_op_avg": 40.0,
+      "bytes_per_op_min": 40.0,
+      "bytes_per_op_max": 40.0,
+      "allocs_per_op_avg": 2.0,
+      "allocs_per_op_min": 2.0,
+      "allocs_per_op_max": 2.0
+    },
+    "rust": {
+      "count": 10,
+      "ns_per_op_avg": 32.111315000000005,
+      "ns_per_op_min": 31.99029,
+      "ns_per_op_max": 32.2468,
+      "us_per_op_avg": 0.032111315,
+      "us_per_op_min": 0.031990290000000005,
+      "us_per_op_max": 0.0322468,
+      "bytes_per_op_avg": 24.0,
+      "bytes_per_op_min": 24.0,
+      "bytes_per_op_max": 24.0,
+      "allocs_per_op_avg": 2.0,
+      "allocs_per_op_min": 2.0,
+      "allocs_per_op_max": 2.0
+    },
+    "ratio": {
+      "us_per_op_rust_vs_go": 0.7383439102343013,
+      "bytes_per_op_rust_vs_go": 0.6,
+      "allocs_per_op_rust_vs_go": 1.0
+    }
+  },
+  {
+    "case": "protocol/shadowsocks_ss2022_psk_split",
+    "go": {
+      "count": 10,
+      "ns_per_op_avg": 99.35600000000001,
+      "ns_per_op_min": 94.02,
+      "ns_per_op_max": 105.1,
+      "us_per_op_avg": 0.099356,
+      "us_per_op_min": 0.09401999999999999,
+      "us_per_op_max": 0.1051,
+      "bytes_per_op_avg": 80.0,
+      "bytes_per_op_min": 80.0,
+      "bytes_per_op_max": 80.0,
+      "allocs_per_op_avg": 3.0,
+      "allocs_per_op_min": 3.0,
+      "allocs_per_op_max": 3.0
+    },
+    "rust": {
+      "count": 10,
+      "ns_per_op_avg": 84.02398000000001,
+      "ns_per_op_min": 83.37373,
+      "ns_per_op_max": 84.83494,
+      "us_per_op_avg": 0.08402398,
+      "us_per_op_min": 0.08337373,
+      "us_per_op_max": 0.08483494,
+      "bytes_per_op_avg": 39.0,
+      "bytes_per_op_min": 39.0,
+      "bytes_per_op_max": 39.0,
+      "allocs_per_op_avg": 2.0,
+      "allocs_per_op_min": 2.0,
+      "allocs_per_op_max": 2.0
+    },
+    "ratio": {
+      "us_per_op_rust_vs_go": 0.8456860179556343,
+      "bytes_per_op_rust_vs_go": 0.4875,
+      "allocs_per_op_rust_vs_go": 0.6666666666666666
+    }
+  },
+  {
+    "case": "protocol/trojan_parse_link",
+    "go": {
+      "count": 10,
+      "ns_per_op_avg": 5446.8,
+      "ns_per_op_min": 5222.0,
+      "ns_per_op_max": 5784.0,
+      "us_per_op_avg": 5.4468000000000005,
+      "us_per_op_min": 5.222,
+      "us_per_op_max": 5.784,
+      "bytes_per_op_avg": 6224.0,
+      "bytes_per_op_min": 6224.0,
+      "bytes_per_op_max": 6224.0,
+      "allocs_per_op_avg": 87.0,
+      "allocs_per_op_min": 87.0,
+      "allocs_per_op_max": 87.0
+    },
+    "rust": {
+      "count": 10,
+      "ns_per_op_avg": 878.5717699999999,
+      "ns_per_op_min": 866.1698,
+      "ns_per_op_max": 887.3279,
+      "us_per_op_avg": 0.87857177,
+      "us_per_op_min": 0.8661698,
+      "us_per_op_max": 0.8873279,
+      "bytes_per_op_avg": 475.0,
+      "bytes_per_op_min": 475.0,
+      "bytes_per_op_max": 475.0,
+      "allocs_per_op_avg": 17.0,
+      "allocs_per_op_min": 17.0,
+      "allocs_per_op_max": 17.0
+    },
+    "ratio": {
+      "us_per_op_rust_vs_go": 0.161300537930528,
+      "bytes_per_op_rust_vs_go": 0.07631748071979434,
+      "allocs_per_op_rust_vs_go": 0.19540229885057472
+    }
+  },
+  {
+    "case": "protocol/trojan_tcp_request_header",
+    "go": {
+      "count": 10,
+      "ns_per_op_avg": 681.15,
+      "ns_per_op_min": 658.9,
+      "ns_per_op_max": 727.3,
+      "us_per_op_avg": 0.6811499999999999,
+      "us_per_op_min": 0.6588999999999999,
+      "us_per_op_max": 0.7273,
+      "bytes_per_op_avg": 1012.0,
+      "bytes_per_op_min": 1012.0,
+      "bytes_per_op_max": 1012.0,
+      "allocs_per_op_avg": 14.0,
+      "allocs_per_op_min": 14.0,
+      "allocs_per_op_max": 14.0
+    },
+    "rust": {
+      "count": 10,
+      "ns_per_op_avg": 175.534559,
+      "ns_per_op_min": 175.03184,
+      "ns_per_op_max": 176.38595,
+      "us_per_op_avg": 0.17553455899999998,
+      "us_per_op_min": 0.17503184,
+      "us_per_op_max": 0.17638595,
+      "bytes_per_op_avg": 171.0,
+      "bytes_per_op_min": 171.0,
+      "bytes_per_op_max": 171.0,
+      "allocs_per_op_avg": 5.0,
+      "allocs_per_op_min": 5.0,
+      "allocs_per_op_max": 5.0
+    },
+    "ratio": {
+      "us_per_op_rust_vs_go": 0.2577032357043236,
+      "bytes_per_op_rust_vs_go": 0.16897233201581027,
+      "allocs_per_op_rust_vs_go": 0.35714285714285715
+    }
+  },
+  {
+    "case": "protocol/trojan_udp_packet",
+    "go": {
+      "count": 10,
+      "ns_per_op_avg": 427.68,
+      "ns_per_op_min": 417.1,
+      "ns_per_op_max": 472.5,
+      "us_per_op_avg": 0.42767999999999995,
+      "us_per_op_min": 0.4171,
+      "us_per_op_max": 0.4725,
+      "bytes_per_op_avg": 532.0,
+      "bytes_per_op_min": 532.0,
+      "bytes_per_op_max": 532.0,
+      "allocs_per_op_avg": 9.0,
+      "allocs_per_op_min": 9.0,
+      "allocs_per_op_max": 9.0
+    },
+    "rust": {
+      "count": 10,
+      "ns_per_op_avg": 87.284461,
+      "ns_per_op_min": 86.82028,
+      "ns_per_op_max": 87.60836,
+      "us_per_op_avg": 0.08728446100000001,
+      "us_per_op_min": 0.08682028,
+      "us_per_op_max": 0.08760836000000001,
+      "bytes_per_op_avg": 58.0,
+      "bytes_per_op_min": 58.0,
+      "bytes_per_op_max": 58.0,
+      "allocs_per_op_avg": 4.0,
+      "allocs_per_op_min": 4.0,
+      "allocs_per_op_max": 4.0
+    },
+    "ratio": {
+      "us_per_op_rust_vs_go": 0.2040882458847737,
+      "bytes_per_op_rust_vs_go": 0.10902255639097744,
+      "allocs_per_op_rust_vs_go": 0.4444444444444444
+    }
+  },
+  {
+    "case": "protocol/http_parse_link",
+    "go": {
+      "count": 10,
+      "ns_per_op_avg": 767.42,
+      "ns_per_op_min": 742.2,
+      "ns_per_op_max": 814.5,
+      "us_per_op_avg": 0.76742,
+      "us_per_op_min": 0.7422000000000001,
+      "us_per_op_max": 0.8145,
+      "bytes_per_op_avg": 1168.0,
+      "bytes_per_op_min": 1168.0,
+      "bytes_per_op_max": 1168.0,
+      "allocs_per_op_avg": 11.0,
+      "allocs_per_op_min": 11.0,
+      "allocs_per_op_max": 11.0
+    },
+    "rust": {
+      "count": 10,
+      "ns_per_op_avg": 677.32823,
+      "ns_per_op_min": 673.0268,
+      "ns_per_op_max": 684.9366,
+      "us_per_op_avg": 0.67732823,
+      "us_per_op_min": 0.6730267999999999,
+      "us_per_op_max": 0.6849366,
+      "bytes_per_op_avg": 361.0,
+      "bytes_per_op_min": 361.0,
+      "bytes_per_op_max": 361.0,
+      "allocs_per_op_avg": 13.0,
+      "allocs_per_op_min": 13.0,
+      "allocs_per_op_max": 13.0
+    },
+    "ratio": {
+      "us_per_op_rust_vs_go": 0.8826043496390503,
+      "bytes_per_op_rust_vs_go": 0.3090753424657534,
+      "allocs_per_op_rust_vs_go": 1.1818181818181819
+    }
+  },
+  {
+    "case": "protocol/http_connect_request",
+    "go": {
+      "count": 10,
+      "ns_per_op_avg": 1577.5,
+      "ns_per_op_min": 1553.0,
+      "ns_per_op_max": 1623.0,
+      "us_per_op_avg": 1.5775000000000001,
+      "us_per_op_min": 1.553,
+      "us_per_op_max": 1.623,
+      "bytes_per_op_avg": 1585.0,
+      "bytes_per_op_min": 1585.0,
+      "bytes_per_op_max": 1585.0,
+      "allocs_per_op_avg": 18.0,
+      "allocs_per_op_min": 18.0,
+      "allocs_per_op_max": 18.0
+    },
+    "rust": {
+      "count": 10,
+      "ns_per_op_avg": 208.937386,
+      "ns_per_op_min": 207.80299,
+      "ns_per_op_max": 210.60447,
+      "us_per_op_avg": 0.20893738599999997,
+      "us_per_op_min": 0.20780299,
+      "us_per_op_max": 0.21060447,
+      "bytes_per_op_avg": 395.0,
+      "bytes_per_op_min": 395.0,
+      "bytes_per_op_max": 395.0,
+      "allocs_per_op_avg": 10.0,
+      "allocs_per_op_min": 10.0,
+      "allocs_per_op_max": 10.0
+    },
+    "ratio": {
+      "us_per_op_rust_vs_go": 0.13244842218700473,
+      "bytes_per_op_rust_vs_go": 0.24921135646687698,
+      "allocs_per_op_rust_vs_go": 0.5555555555555556
+    }
+  },
+  {
+    "case": "protocol/http_forward_request",
+    "go": {
+      "count": 10,
+      "ns_per_op_avg": 2517.6,
+      "ns_per_op_min": 2445.0,
+      "ns_per_op_max": 2786.0,
+      "us_per_op_avg": 2.5176000000000003,
+      "us_per_op_min": 2.445,
+      "us_per_op_max": 2.786,
+      "bytes_per_op_avg": 6543.2,
+      "bytes_per_op_min": 6538.0,
+      "bytes_per_op_max": 6545.0,
+      "allocs_per_op_avg": 24.0,
+      "allocs_per_op_min": 24.0,
+      "allocs_per_op_max": 24.0
+    },
+    "rust": {
+      "count": 10,
+      "ns_per_op_avg": 345.09252200000003,
+      "ns_per_op_min": 343.70297,
+      "ns_per_op_max": 348.82205,
+      "us_per_op_avg": 0.345092522,
+      "us_per_op_min": 0.34370297,
+      "us_per_op_max": 0.34882205,
+      "bytes_per_op_avg": 512.0,
+      "bytes_per_op_min": 512.0,
+      "bytes_per_op_max": 512.0,
+      "allocs_per_op_avg": 13.0,
+      "allocs_per_op_min": 13.0,
+      "allocs_per_op_max": 13.0
+    },
+    "ratio": {
+      "us_per_op_rust_vs_go": 0.13707202176676198,
+      "bytes_per_op_rust_vs_go": 0.07824917471573542,
+      "allocs_per_op_rust_vs_go": 0.5416666666666666
+    }
+  },
+  {
+    "case": "protocol/hysteria2_parse_link",
+    "go": {
+      "count": 10,
+      "ns_per_op_avg": 762.3199999999999,
+      "ns_per_op_min": 740.6,
+      "ns_per_op_max": 787.1,
+      "us_per_op_avg": 0.76232,
+      "us_per_op_min": 0.7406,
+      "us_per_op_max": 0.7871,
+      "bytes_per_op_avg": 800.0,
+      "bytes_per_op_min": 800.0,
+      "bytes_per_op_max": 800.0,
+      "allocs_per_op_avg": 10.0,
+      "allocs_per_op_min": 10.0,
+      "allocs_per_op_max": 10.0
+    },
+    "rust": {
+      "count": 10,
+      "ns_per_op_avg": 477.28985,
+      "ns_per_op_min": 472.5082,
+      "ns_per_op_max": 480.9211,
+      "us_per_op_avg": 0.47728985,
+      "us_per_op_min": 0.4725082,
+      "us_per_op_max": 0.48092110000000005,
+      "bytes_per_op_avg": 676.0,
+      "bytes_per_op_min": 676.0,
+      "bytes_per_op_max": 676.0,
+      "allocs_per_op_avg": 14.0,
+      "allocs_per_op_min": 14.0,
+      "allocs_per_op_max": 14.0
+    },
+    "ratio": {
+      "us_per_op_rust_vs_go": 0.6261017026970301,
+      "bytes_per_op_rust_vs_go": 0.845,
+      "allocs_per_op_rust_vs_go": 1.4
+    }
+  },
+  {
+    "case": "protocol/hysteria2_export_link",
+    "go": {
+      "count": 10,
+      "ns_per_op_avg": 998.24,
+      "ns_per_op_min": 945.1,
+      "ns_per_op_max": 1082.0,
+      "us_per_op_avg": 0.99824,
+      "us_per_op_min": 0.9451,
+      "us_per_op_max": 1.082,
+      "bytes_per_op_avg": 1184.0,
+      "bytes_per_op_min": 1184.0,
+      "bytes_per_op_max": 1184.0,
+      "allocs_per_op_avg": 23.0,
+      "allocs_per_op_min": 23.0,
+      "allocs_per_op_max": 23.0
+    },
+    "rust": {
+      "count": 10,
+      "ns_per_op_avg": 500.953034,
+      "ns_per_op_min": 495.06146,
+      "ns_per_op_max": 510.64534,
+      "us_per_op_avg": 0.500953034,
+      "us_per_op_min": 0.49506146,
+      "us_per_op_max": 0.51064534,
+      "bytes_per_op_avg": 1325.0,
+      "bytes_per_op_min": 1325.0,
+      "bytes_per_op_max": 1325.0,
+      "allocs_per_op_avg": 24.0,
+      "allocs_per_op_min": 24.0,
+      "allocs_per_op_max": 24.0
+    },
+    "ratio": {
+      "us_per_op_rust_vs_go": 0.501836265827857,
+      "bytes_per_op_rust_vs_go": 1.119087837837838,
+      "allocs_per_op_rust_vs_go": 1.0434782608695652
+    }
+  },
+  {
+    "case": "protocol/hysteria2_pin_normalize",
+    "go": {
+      "count": 10,
+      "ns_per_op_avg": 85.833,
+      "ns_per_op_min": 84.72,
+      "ns_per_op_max": 88.23,
+      "us_per_op_avg": 0.085833,
+      "us_per_op_min": 0.08472,
+      "us_per_op_max": 0.08823,
+      "bytes_per_op_avg": 24.0,
+      "bytes_per_op_min": 24.0,
+      "bytes_per_op_max": 24.0,
+      "allocs_per_op_avg": 3.0,
+      "allocs_per_op_min": 3.0,
+      "allocs_per_op_max": 3.0
+    },
+    "rust": {
+      "count": 10,
+      "ns_per_op_avg": 55.433403999999996,
+      "ns_per_op_min": 54.36979,
+      "ns_per_op_max": 56.70113,
+      "us_per_op_avg": 0.055433404,
+      "us_per_op_min": 0.05436979,
+      "us_per_op_max": 0.05670113,
+      "bytes_per_op_avg": 8.0,
+      "bytes_per_op_min": 8.0,
+      "bytes_per_op_max": 8.0,
+      "allocs_per_op_avg": 1.0,
+      "allocs_per_op_min": 1.0,
+      "allocs_per_op_max": 1.0
+    },
+    "ratio": {
+      "us_per_op_rust_vs_go": 0.6458285740915498,
+      "bytes_per_op_rust_vs_go": 0.3333333333333333,
+      "allocs_per_op_rust_vs_go": 0.3333333333333333
+    }
+  },
+  {
+    "case": "protocol/tuic_parse_link",
+    "go": {
+      "count": 10,
+      "ns_per_op_avg": 3712.6,
+      "ns_per_op_min": 3591.0,
+      "ns_per_op_max": 4129.0,
+      "us_per_op_avg": 3.7125999999999997,
+      "us_per_op_min": 3.591,
+      "us_per_op_max": 4.129,
+      "bytes_per_op_avg": 5328.0,
+      "bytes_per_op_min": 5328.0,
+      "bytes_per_op_max": 5328.0,
+      "allocs_per_op_avg": 59.0,
+      "allocs_per_op_min": 59.0,
+      "allocs_per_op_max": 59.0
+    },
+    "rust": {
+      "count": 10,
+      "ns_per_op_avg": 1037.55191,
+      "ns_per_op_min": 1029.8533,
+      "ns_per_op_max": 1043.8162,
+      "us_per_op_avg": 1.03755191,
+      "us_per_op_min": 1.0298533,
+      "us_per_op_max": 1.0438162,
+      "bytes_per_op_avg": 536.0,
+      "bytes_per_op_min": 536.0,
+      "bytes_per_op_max": 536.0,
+      "allocs_per_op_avg": 17.0,
+      "allocs_per_op_min": 17.0,
+      "allocs_per_op_max": 17.0
+    },
+    "ratio": {
+      "us_per_op_rust_vs_go": 0.27946773420244575,
+      "bytes_per_op_rust_vs_go": 0.1006006006006006,
+      "allocs_per_op_rust_vs_go": 0.288135593220339
+    }
+  },
+  {
+    "case": "protocol/tuic_export_link",
+    "go": {
+      "count": 10,
+      "ns_per_op_avg": 1057.6,
+      "ns_per_op_min": 1043.0,
+      "ns_per_op_max": 1092.0,
+      "us_per_op_avg": 1.0576,
+      "us_per_op_min": 1.043,
+      "us_per_op_max": 1.092,
+      "bytes_per_op_avg": 1168.0,
+      "bytes_per_op_min": 1168.0,
+      "bytes_per_op_max": 1168.0,
+      "allocs_per_op_avg": 24.0,
+      "allocs_per_op_min": 24.0,
+      "allocs_per_op_max": 24.0
+    },
+    "rust": {
+      "count": 10,
+      "ns_per_op_avg": 463.78639000000004,
+      "ns_per_op_min": 459.97967,
+      "ns_per_op_max": 469.44287,
+      "us_per_op_avg": 0.46378639,
+      "us_per_op_min": 0.45997967,
+      "us_per_op_max": 0.46944287,
+      "bytes_per_op_avg": 884.0,
+      "bytes_per_op_min": 884.0,
+      "bytes_per_op_max": 884.0,
+      "allocs_per_op_avg": 22.0,
+      "allocs_per_op_min": 22.0,
+      "allocs_per_op_max": 22.0
+    },
+    "ratio": {
+      "us_per_op_rust_vs_go": 0.4385272220121028,
+      "bytes_per_op_rust_vs_go": 0.7568493150684932,
+      "allocs_per_op_rust_vs_go": 0.9166666666666666
+    }
+  },
+  {
+    "case": "protocol/tuic_alpn_split",
+    "go": {
+      "count": 10,
+      "ns_per_op_avg": 43.856,
+      "ns_per_op_min": 40.84,
+      "ns_per_op_max": 48.04,
+      "us_per_op_avg": 0.043856,
+      "us_per_op_min": 0.04084,
+      "us_per_op_max": 0.04804,
+      "bytes_per_op_avg": 48.0,
+      "bytes_per_op_min": 48.0,
+      "bytes_per_op_max": 48.0,
+      "allocs_per_op_avg": 1.0,
+      "allocs_per_op_min": 1.0,
+      "allocs_per_op_max": 1.0
+    },
+    "rust": {
+      "count": 10,
+      "ns_per_op_avg": 23.119486000000002,
+      "ns_per_op_min": 23.07317,
+      "ns_per_op_max": 23.14281,
+      "us_per_op_avg": 0.023119486,
+      "us_per_op_min": 0.02307317,
+      "us_per_op_max": 0.02314281,
+      "bytes_per_op_avg": 0.0,
+      "bytes_per_op_min": 0.0,
+      "bytes_per_op_max": 0.0,
+      "allocs_per_op_avg": 0.0,
+      "allocs_per_op_min": 0.0,
+      "allocs_per_op_max": 0.0
+    },
+    "ratio": {
+      "us_per_op_rust_vs_go": 0.527168141189347,
+      "bytes_per_op_rust_vs_go": 0.0,
+      "allocs_per_op_rust_vs_go": 0.0
+    }
+  },
+  {
+    "case": "protocol/juicity_parse_link",
+    "go": {
+      "count": 10,
+      "ns_per_op_avg": 2834.0,
+      "ns_per_op_min": 2781.0,
+      "ns_per_op_max": 2899.0,
+      "us_per_op_avg": 2.834,
+      "us_per_op_min": 2.781,
+      "us_per_op_max": 2.899,
+      "bytes_per_op_avg": 3792.0,
+      "bytes_per_op_min": 3792.0,
+      "bytes_per_op_max": 3792.0,
+      "allocs_per_op_avg": 35.0,
+      "allocs_per_op_min": 35.0,
+      "allocs_per_op_max": 35.0
+    },
+    "rust": {
+      "count": 10,
+      "ns_per_op_avg": 1173.93733,
+      "ns_per_op_min": 1139.9944,
+      "ns_per_op_max": 1200.9776,
+      "us_per_op_avg": 1.17393733,
+      "us_per_op_min": 1.1399944,
+      "us_per_op_max": 1.2009775999999999,
+      "bytes_per_op_avg": 511.0,
+      "bytes_per_op_min": 511.0,
+      "bytes_per_op_max": 511.0,
+      "allocs_per_op_avg": 12.0,
+      "allocs_per_op_min": 12.0,
+      "allocs_per_op_max": 12.0
+    },
+    "ratio": {
+      "us_per_op_rust_vs_go": 0.4142333556810162,
+      "bytes_per_op_rust_vs_go": 0.13475738396624473,
+      "allocs_per_op_rust_vs_go": 0.34285714285714286
+    }
+  },
+  {
+    "case": "protocol/juicity_export_link",
+    "go": {
+      "count": 10,
+      "ns_per_op_avg": 1212.8,
+      "ns_per_op_min": 1179.0,
+      "ns_per_op_max": 1268.0,
+      "us_per_op_avg": 1.2128,
+      "us_per_op_min": 1.179,
+      "us_per_op_max": 1.268,
+      "bytes_per_op_avg": 1344.0,
+      "bytes_per_op_min": 1344.0,
+      "bytes_per_op_max": 1344.0,
+      "allocs_per_op_avg": 21.0,
+      "allocs_per_op_min": 21.0,
+      "allocs_per_op_max": 21.0
+    },
+    "rust": {
+      "count": 10,
+      "ns_per_op_avg": 418.38028199999997,
+      "ns_per_op_min": 410.14258,
+      "ns_per_op_max": 427.62337,
+      "us_per_op_avg": 0.41838028200000005,
+      "us_per_op_min": 0.41014258000000003,
+      "us_per_op_max": 0.42762337,
+      "bytes_per_op_avg": 969.0,
+      "bytes_per_op_min": 969.0,
+      "bytes_per_op_max": 969.0,
+      "allocs_per_op_avg": 19.0,
+      "allocs_per_op_min": 19.0,
+      "allocs_per_op_max": 19.0
+    },
+    "ratio": {
+      "us_per_op_rust_vs_go": 0.3449705491424802,
+      "bytes_per_op_rust_vs_go": 0.7209821428571429,
+      "allocs_per_op_rust_vs_go": 0.9047619047619048
+    }
+  },
+  {
+    "case": "protocol/juicity_pinned_decode",
+    "go": {
+      "count": 10,
+      "ns_per_op_avg": 45.806,
+      "ns_per_op_min": 43.59,
+      "ns_per_op_max": 47.82,
+      "us_per_op_avg": 0.045806,
+      "us_per_op_min": 0.043590000000000004,
+      "us_per_op_max": 0.04782,
+      "bytes_per_op_avg": 48.0,
+      "bytes_per_op_min": 48.0,
+      "bytes_per_op_max": 48.0,
+      "allocs_per_op_avg": 1.0,
+      "allocs_per_op_min": 1.0,
+      "allocs_per_op_max": 1.0
+    },
+    "rust": {
+      "count": 10,
+      "ns_per_op_avg": 45.924984,
+      "ns_per_op_min": 45.60536,
+      "ns_per_op_max": 46.46006,
+      "us_per_op_avg": 0.045924983999999995,
+      "us_per_op_min": 0.04560536,
+      "us_per_op_max": 0.04646006,
+      "bytes_per_op_avg": 43.0,
+      "bytes_per_op_min": 43.0,
+      "bytes_per_op_max": 43.0,
+      "allocs_per_op_avg": 2.0,
+      "allocs_per_op_min": 2.0,
+      "allocs_per_op_max": 2.0
+    },
+    "ratio": {
+      "us_per_op_rust_vs_go": 1.0025975636379512,
+      "bytes_per_op_rust_vs_go": 0.8958333333333334,
+      "allocs_per_op_rust_vs_go": 2.0
+    }
+  },
+  {
+    "case": "protocol/anytls_parse_link",
+    "go": {
+      "count": 10,
+      "ns_per_op_avg": 1255.9,
+      "ns_per_op_min": 1177.0,
+      "ns_per_op_max": 1426.0,
+      "us_per_op_avg": 1.2559,
+      "us_per_op_min": 1.177,
+      "us_per_op_max": 1.426,
+      "bytes_per_op_avg": 2352.0,
+      "bytes_per_op_min": 2352.0,
+      "bytes_per_op_max": 2352.0,
+      "allocs_per_op_avg": 20.0,
+      "allocs_per_op_min": 20.0,
+      "allocs_per_op_max": 20.0
+    },
+    "rust": {
+      "count": 10,
+      "ns_per_op_avg": 534.93682,
+      "ns_per_op_min": 530.7432,
+      "ns_per_op_max": 539.3644,
+      "us_per_op_avg": 0.53493682,
+      "us_per_op_min": 0.5307432,
+      "us_per_op_max": 0.5393644000000001,
+      "bytes_per_op_avg": 413.0,
+      "bytes_per_op_min": 413.0,
+      "bytes_per_op_max": 413.0,
+      "allocs_per_op_avg": 13.0,
+      "allocs_per_op_min": 13.0,
+      "allocs_per_op_max": 13.0
+    },
+    "ratio": {
+      "us_per_op_rust_vs_go": 0.425939023807628,
+      "bytes_per_op_rust_vs_go": 0.17559523809523808,
+      "allocs_per_op_rust_vs_go": 0.65
+    }
+  },
+  {
+    "case": "protocol/anytls_auth_key",
+    "go": {
+      "count": 10,
+      "ns_per_op_avg": 129.44,
+      "ns_per_op_min": 124.6,
+      "ns_per_op_max": 146.1,
+      "us_per_op_avg": 0.12944,
+      "us_per_op_min": 0.12459999999999999,
+      "us_per_op_max": 0.1461,
+      "bytes_per_op_avg": 128.0,
+      "bytes_per_op_min": 128.0,
+      "bytes_per_op_max": 128.0,
+      "allocs_per_op_avg": 2.0,
+      "allocs_per_op_min": 2.0,
+      "allocs_per_op_max": 2.0
+    },
+    "rust": {
+      "count": 10,
+      "ns_per_op_avg": 54.230827,
+      "ns_per_op_min": 54.09385,
+      "ns_per_op_max": 54.76407,
+      "us_per_op_avg": 0.054230827,
+      "us_per_op_min": 0.054093850000000006,
+      "us_per_op_max": 0.05476407,
+      "bytes_per_op_avg": 0.0,
+      "bytes_per_op_min": 0.0,
+      "bytes_per_op_max": 0.0,
+      "allocs_per_op_avg": 0.0,
+      "allocs_per_op_min": 0.0,
+      "allocs_per_op_max": 0.0
+    },
+    "ratio": {
+      "us_per_op_rust_vs_go": 0.4189649799134734,
+      "bytes_per_op_rust_vs_go": 0.0,
+      "allocs_per_op_rust_vs_go": 0.0
+    }
+  },
+  {
+    "case": "protocol/anytls_frame",
+    "go": {
+      "count": 10,
+      "ns_per_op_avg": 23.165,
+      "ns_per_op_min": 21.78,
+      "ns_per_op_max": 25.96,
+      "us_per_op_avg": 0.023164999999999998,
+      "us_per_op_min": 0.02178,
+      "us_per_op_max": 0.02596,
+      "bytes_per_op_avg": 80.0,
+      "bytes_per_op_min": 80.0,
+      "bytes_per_op_max": 80.0,
+      "allocs_per_op_avg": 1.0,
+      "allocs_per_op_min": 1.0,
+      "allocs_per_op_max": 1.0
+    },
+    "rust": {
+      "count": 10,
+      "ns_per_op_avg": 15.452610000000002,
+      "ns_per_op_min": 15.37015,
+      "ns_per_op_max": 15.78077,
+      "us_per_op_avg": 0.01545261,
+      "us_per_op_min": 0.01537015,
+      "us_per_op_max": 0.01578077,
+      "bytes_per_op_avg": 66.0,
+      "bytes_per_op_min": 66.0,
+      "bytes_per_op_max": 66.0,
+      "allocs_per_op_avg": 1.0,
+      "allocs_per_op_min": 1.0,
+      "allocs_per_op_max": 1.0
+    },
+    "ratio": {
+      "us_per_op_rust_vs_go": 0.6670671271314483,
+      "bytes_per_op_rust_vs_go": 0.825,
+      "allocs_per_op_rust_vs_go": 1.0
+    }
+  },
+  {
+    "case": "protocol/anytls_underlay",
+    "go": {
+      "count": 10,
+      "ns_per_op_avg": 515.96,
+      "ns_per_op_min": 498.6,
+      "ns_per_op_max": 530.1,
+      "us_per_op_avg": 0.51596,
+      "us_per_op_min": 0.49860000000000004,
+      "us_per_op_max": 0.5301,
+      "bytes_per_op_avg": 781.0,
+      "bytes_per_op_min": 781.0,
+      "bytes_per_op_max": 781.0,
+      "allocs_per_op_avg": 13.0,
+      "allocs_per_op_min": 13.0,
+      "allocs_per_op_max": 13.0
+    },
+    "rust": {
+      "count": 10,
+      "ns_per_op_avg": 53.7288,
+      "ns_per_op_min": 52.48624,
+      "ns_per_op_max": 54.53172,
+      "us_per_op_avg": 0.0537288,
+      "us_per_op_min": 0.05248624,
+      "us_per_op_max": 0.05453172,
+      "bytes_per_op_avg": 26.0,
+      "bytes_per_op_min": 26.0,
+      "bytes_per_op_max": 26.0,
+      "allocs_per_op_avg": 4.0,
+      "allocs_per_op_min": 4.0,
+      "allocs_per_op_max": 4.0
+    },
+    "ratio": {
+      "us_per_op_rust_vs_go": 0.10413365377161021,
+      "bytes_per_op_rust_vs_go": 0.03329065300896287,
+      "allocs_per_op_rust_vs_go": 0.3076923076923077
+    }
+  },
+  {
+    "case": "protocol/shared_xhttp_mode",
+    "go": {
+      "count": 10,
+      "ns_per_op_avg": 11.154,
+      "ns_per_op_min": 11.09,
+      "ns_per_op_max": 11.23,
+      "us_per_op_avg": 0.011154,
+      "us_per_op_min": 0.01109,
+      "us_per_op_max": 0.01123,
+      "bytes_per_op_avg": 0.0,
+      "bytes_per_op_min": 0.0,
+      "bytes_per_op_max": 0.0,
+      "allocs_per_op_avg": 0.0,
+      "allocs_per_op_min": 0.0,
+      "allocs_per_op_max": 0.0
+    },
+    "rust": {
+      "count": 10,
+      "ns_per_op_avg": 9.364457,
+      "ns_per_op_min": 9.31801,
+      "ns_per_op_max": 9.40852,
+      "us_per_op_avg": 0.009364457,
+      "us_per_op_min": 0.00931801,
+      "us_per_op_max": 0.00940852,
+      "bytes_per_op_avg": 0.0,
+      "bytes_per_op_min": 0.0,
+      "bytes_per_op_max": 0.0,
+      "allocs_per_op_avg": 0.0,
+      "allocs_per_op_min": 0.0,
+      "allocs_per_op_max": 0.0
+    },
+    "ratio": {
+      "us_per_op_rust_vs_go": 0.8395604267527343,
+      "bytes_per_op_rust_vs_go": null,
+      "allocs_per_op_rust_vs_go": null
+    }
+  },
+  {
+    "case": "protocol/shared_grpc_cache_key",
+    "go": {
+      "count": 10,
+      "ns_per_op_avg": 60.48,
+      "ns_per_op_min": 57.42,
+      "ns_per_op_max": 64.65,
+      "us_per_op_avg": 0.06048,
+      "us_per_op_min": 0.05742,
+      "us_per_op_max": 0.06465,
+      "bytes_per_op_avg": 64.0,
+      "bytes_per_op_min": 64.0,
+      "bytes_per_op_max": 64.0,
+      "allocs_per_op_avg": 2.0,
+      "allocs_per_op_min": 2.0,
+      "allocs_per_op_max": 2.0
+    },
+    "rust": {
+      "count": 10,
+      "ns_per_op_avg": 56.427577,
+      "ns_per_op_min": 54.63622,
+      "ns_per_op_max": 57.9422,
+      "us_per_op_avg": 0.05642757699999999,
+      "us_per_op_min": 0.05463622,
+      "us_per_op_max": 0.0579422,
+      "bytes_per_op_avg": 77.0,
+      "bytes_per_op_min": 77.0,
+      "bytes_per_op_max": 77.0,
+      "allocs_per_op_avg": 3.0,
+      "allocs_per_op_min": 3.0,
+      "allocs_per_op_max": 3.0
+    },
+    "ratio": {
+      "us_per_op_rust_vs_go": 0.9329956514550264,
+      "bytes_per_op_rust_vs_go": 1.203125,
+      "allocs_per_op_rust_vs_go": 1.5
+    }
+  },
+  {
+    "case": "protocol/shared_xhttp_path",
+    "go": {
+      "count": 10,
+      "ns_per_op_avg": 62.826,
+      "ns_per_op_min": 57.9,
+      "ns_per_op_max": 67.66,
+      "us_per_op_avg": 0.062826,
+      "us_per_op_min": 0.0579,
+      "us_per_op_max": 0.06766,
+      "bytes_per_op_avg": 48.0,
+      "bytes_per_op_min": 48.0,
+      "bytes_per_op_max": 48.0,
+      "allocs_per_op_avg": 3.0,
+      "allocs_per_op_min": 3.0,
+      "allocs_per_op_max": 3.0
+    },
+    "rust": {
+      "count": 10,
+      "ns_per_op_avg": 43.112886,
+      "ns_per_op_min": 42.56291,
+      "ns_per_op_max": 44.78013,
+      "us_per_op_avg": 0.043112886,
+      "us_per_op_min": 0.04256291,
+      "us_per_op_max": 0.04478013,
+      "bytes_per_op_avg": 30.0,
+      "bytes_per_op_min": 30.0,
+      "bytes_per_op_max": 30.0,
+      "allocs_per_op_avg": 3.0,
+      "allocs_per_op_min": 3.0,
+      "allocs_per_op_max": 3.0
+    },
+    "ratio": {
+      "us_per_op_rust_vs_go": 0.68622681692293,
+      "bytes_per_op_rust_vs_go": 0.625,
+      "allocs_per_op_rust_vs_go": 1.0
+    }
+  },
+  {
+    "case": "protocol/shared_canonical_json",
+    "go": {
+      "count": 10,
+      "ns_per_op_avg": 4725.5,
+      "ns_per_op_min": 4611.0,
+      "ns_per_op_max": 4923.0,
+      "us_per_op_avg": 4.7255,
+      "us_per_op_min": 4.611,
+      "us_per_op_max": 4.923,
+      "bytes_per_op_avg": 3890.0,
+      "bytes_per_op_min": 3890.0,
+      "bytes_per_op_max": 3890.0,
+      "allocs_per_op_avg": 74.0,
+      "allocs_per_op_min": 74.0,
+      "allocs_per_op_max": 74.0
+    },
+    "rust": {
+      "count": 10,
+      "ns_per_op_avg": 1274.05809,
+      "ns_per_op_min": 1260.0332,
+      "ns_per_op_max": 1349.4058,
+      "us_per_op_avg": 1.27405809,
+      "us_per_op_min": 1.2600332,
+      "us_per_op_max": 1.3494058,
+      "bytes_per_op_avg": 3756.0,
+      "bytes_per_op_min": 3756.0,
+      "bytes_per_op_max": 3756.0,
+      "allocs_per_op_avg": 31.0,
+      "allocs_per_op_min": 31.0,
+      "allocs_per_op_max": 31.0
+    },
+    "ratio": {
+      "us_per_op_rust_vs_go": 0.26961339329171513,
+      "bytes_per_op_rust_vs_go": 0.9655526992287917,
+      "allocs_per_op_rust_vs_go": 0.4189189189189189
+    }
+  },
+  {
+    "case": "protocol/shared_timer_constants",
+    "go": {
+      "count": 10,
+      "ns_per_op_avg": 0.22149999999999997,
+      "ns_per_op_min": 0.2208,
+      "ns_per_op_max": 0.2228,
+      "us_per_op_avg": 0.0002215,
+      "us_per_op_min": 0.0002208,
+      "us_per_op_max": 0.0002228,
+      "bytes_per_op_avg": 0.0,
+      "bytes_per_op_min": 0.0,
+      "bytes_per_op_max": 0.0,
+      "allocs_per_op_avg": 0.0,
+      "allocs_per_op_min": 0.0,
+      "allocs_per_op_max": 0.0
+    },
+    "rust": {
+      "count": 10,
+      "ns_per_op_avg": 0.219265,
+      "ns_per_op_min": 0.21913,
+      "ns_per_op_max": 0.21953,
+      "us_per_op_avg": 0.000219265,
+      "us_per_op_min": 0.00021913,
+      "us_per_op_max": 0.00021953,
+      "bytes_per_op_avg": 0.0,
+      "bytes_per_op_min": 0.0,
+      "bytes_per_op_max": 0.0,
+      "allocs_per_op_avg": 0.0,
+      "allocs_per_op_min": 0.0,
+      "allocs_per_op_max": 0.0
+    },
+    "ratio": {
+      "us_per_op_rust_vs_go": 0.9899097065462755,
+      "bytes_per_op_rust_vs_go": null,
+      "allocs_per_op_rust_vs_go": null
+    }
+  },
+  {
+    "case": "control/magic_network_mark_mptcp",
+    "go": {
+      "count": 10,
+      "ns_per_op_avg": 15.588,
+      "ns_per_op_min": 14.86,
+      "ns_per_op_max": 16.72,
+      "us_per_op_avg": 0.015588,
+      "us_per_op_min": 0.01486,
+      "us_per_op_max": 0.01672,
+      "bytes_per_op_avg": 16.0,
+      "bytes_per_op_min": 16.0,
+      "bytes_per_op_max": 16.0,
+      "allocs_per_op_avg": 1.0,
+      "allocs_per_op_min": 1.0,
+      "allocs_per_op_max": 1.0
+    },
+    "rust": {
+      "count": 10,
+      "ns_per_op_avg": 20.509543999999998,
+      "ns_per_op_min": 19.54325,
+      "ns_per_op_max": 22.89622,
+      "us_per_op_avg": 0.020509543999999998,
+      "us_per_op_min": 0.01954325,
+      "us_per_op_max": 0.02289622,
+      "bytes_per_op_avg": 10.0,
+      "bytes_per_op_min": 10.0,
+      "bytes_per_op_max": 10.0,
+      "allocs_per_op_avg": 1.0,
+      "allocs_per_op_min": 1.0,
+      "allocs_per_op_max": 1.0
+    },
+    "ratio": {
+      "us_per_op_rust_vs_go": 1.3157264562483961,
+      "bytes_per_op_rust_vs_go": 0.625,
+      "allocs_per_op_rust_vs_go": 1.0
+    }
+  },
+  {
+    "case": "control/choose_dial_target_domain",
+    "go": {
+      "count": 10,
+      "ns_per_op_avg": 398.69,
+      "ns_per_op_min": 377.5,
+      "ns_per_op_max": 440.2,
+      "us_per_op_avg": 0.39869,
+      "us_per_op_min": 0.3775,
+      "us_per_op_max": 0.4402,
+      "bytes_per_op_avg": 640.0,
+      "bytes_per_op_min": 640.0,
+      "bytes_per_op_max": 640.0,
+      "allocs_per_op_avg": 11.0,
+      "allocs_per_op_min": 11.0,
+      "allocs_per_op_max": 11.0
+    },
+    "rust": {
+      "count": 10,
+      "ns_per_op_avg": 80.785043,
+      "ns_per_op_min": 80.3773,
+      "ns_per_op_max": 81.12047,
+      "us_per_op_avg": 0.080785043,
+      "us_per_op_min": 0.0803773,
+      "us_per_op_max": 0.08112047,
+      "bytes_per_op_avg": 44.0,
+      "bytes_per_op_min": 44.0,
+      "bytes_per_op_max": 44.0,
+      "allocs_per_op_avg": 3.0,
+      "allocs_per_op_min": 3.0,
+      "allocs_per_op_max": 3.0
+    },
+    "ratio": {
+      "us_per_op_rust_vs_go": 0.20262620833228825,
+      "bytes_per_op_rust_vs_go": 0.06875,
+      "allocs_per_op_rust_vs_go": 0.2727272727272727
+    }
+  },
+  {
+    "case": "control/choose_dial_target_domain_plus_plus",
+    "go": {
+      "count": 10,
+      "ns_per_op_avg": 427.89,
+      "ns_per_op_min": 416.1,
+      "ns_per_op_max": 450.9,
+      "us_per_op_avg": 0.42789,
+      "us_per_op_min": 0.4161,
+      "us_per_op_max": 0.45089999999999997,
+      "bytes_per_op_avg": 664.0,
+      "bytes_per_op_min": 664.0,
+      "bytes_per_op_max": 664.0,
+      "allocs_per_op_avg": 12.0,
+      "allocs_per_op_min": 12.0,
+      "allocs_per_op_max": 12.0
+    },
+    "rust": {
+      "count": 10,
+      "ns_per_op_avg": 83.173379,
+      "ns_per_op_min": 82.13098,
+      "ns_per_op_max": 83.79159,
+      "us_per_op_avg": 0.08317337899999999,
+      "us_per_op_min": 0.08213097999999999,
+      "us_per_op_max": 0.08379159,
+      "bytes_per_op_avg": 44.0,
+      "bytes_per_op_min": 44.0,
+      "bytes_per_op_max": 44.0,
+      "allocs_per_op_avg": 3.0,
+      "allocs_per_op_min": 3.0,
+      "allocs_per_op_max": 3.0
+    },
+    "ratio": {
+      "us_per_op_rust_vs_go": 0.19438028231554838,
+      "bytes_per_op_rust_vs_go": 0.06626506024096386,
+      "allocs_per_op_rust_vs_go": 0.25
+    }
+  },
+  {
+    "case": "control/udp_endpoint_trim_target",
+    "go": {
+      "count": 10,
+      "ns_per_op_avg": 0.22104,
+      "ns_per_op_min": 0.2204,
+      "ns_per_op_max": 0.2219,
+      "us_per_op_avg": 0.00022103999999999998,
+      "us_per_op_min": 0.00022040000000000002,
+      "us_per_op_max": 0.00022189999999999997,
+      "bytes_per_op_avg": 0.0,
+      "bytes_per_op_min": 0.0,
+      "bytes_per_op_max": 0.0,
+      "allocs_per_op_avg": 0.0,
+      "allocs_per_op_min": 0.0,
+      "allocs_per_op_max": 0.0
+    },
+    "rust": {
+      "count": 10,
+      "ns_per_op_avg": 1.407731,
+      "ns_per_op_min": 1.39327,
+      "ns_per_op_max": 1.44357,
+      "us_per_op_avg": 0.001407731,
+      "us_per_op_min": 0.00139327,
+      "us_per_op_max": 0.00144357,
+      "bytes_per_op_avg": 0.0,
+      "bytes_per_op_min": 0.0,
+      "bytes_per_op_max": 0.0,
+      "allocs_per_op_avg": 0.0,
+      "allocs_per_op_min": 0.0,
+      "allocs_per_op_max": 0.0
+    },
+    "ratio": {
+      "us_per_op_rust_vs_go": 6.3686708288092655,
+      "bytes_per_op_rust_vs_go": null,
+      "allocs_per_op_rust_vs_go": null
+    }
+  },
+  {
+    "case": "engine/runtime_overview",
+    "go": {
+      "count": 10,
+      "ns_per_op_avg": 121.25999999999999,
+      "ns_per_op_min": 112.8,
+      "ns_per_op_max": 131.5,
+      "us_per_op_avg": 0.12126,
+      "us_per_op_min": 0.1128,
+      "us_per_op_max": 0.1315,
+      "bytes_per_op_avg": 320.0,
+      "bytes_per_op_min": 320.0,
+      "bytes_per_op_max": 320.0,
+      "allocs_per_op_avg": 3.0,
+      "allocs_per_op_min": 3.0,
+      "allocs_per_op_max": 3.0
+    },
+    "rust": {
+      "count": 10,
+      "ns_per_op_avg": 12.778232,
+      "ns_per_op_min": 12.62401,
+      "ns_per_op_max": 13.05378,
+      "us_per_op_avg": 0.012778232,
+      "us_per_op_min": 0.01262401,
+      "us_per_op_max": 0.01305378,
+      "bytes_per_op_avg": 24.0,
+      "bytes_per_op_min": 24.0,
+      "bytes_per_op_max": 24.0,
+      "allocs_per_op_avg": 1.0,
+      "allocs_per_op_min": 1.0,
+      "allocs_per_op_max": 1.0
+    },
+    "ratio": {
+      "us_per_op_rust_vs_go": 0.10537878937819561,
+      "bytes_per_op_rust_vs_go": 0.075,
+      "allocs_per_op_rust_vs_go": 0.3333333333333333
+    }
+  },
+  {
+    "case": "engine/runtime_overview_scoped_udp",
+    "go": {
+      "count": 10,
+      "ns_per_op_avg": 71.529,
+      "ns_per_op_min": 65.63,
+      "ns_per_op_max": 78.59,
+      "us_per_op_avg": 0.071529,
+      "us_per_op_min": 0.06563,
+      "us_per_op_max": 0.07859000000000001,
+      "bytes_per_op_avg": 224.0,
+      "bytes_per_op_min": 224.0,
+      "bytes_per_op_max": 224.0,
+      "allocs_per_op_avg": 1.0,
+      "allocs_per_op_min": 1.0,
+      "allocs_per_op_max": 1.0
+    },
+    "rust": {
+      "count": 10,
+      "ns_per_op_avg": 5.9470469999999995,
+      "ns_per_op_min": 5.91346,
+      "ns_per_op_max": 6.02369,
+      "us_per_op_avg": 0.005947047,
+      "us_per_op_min": 0.00591346,
+      "us_per_op_max": 0.00602369,
+      "bytes_per_op_avg": 0.0,
+      "bytes_per_op_min": 0.0,
+      "bytes_per_op_max": 0.0,
+      "allocs_per_op_avg": 0.0,
+      "allocs_per_op_min": 0.0,
+      "allocs_per_op_max": 0.0
+    },
+    "ratio": {
+      "us_per_op_rust_vs_go": 0.08314176068447762,
+      "bytes_per_op_rust_vs_go": 0.0,
+      "allocs_per_op_rust_vs_go": 0.0
+    }
+  },
+  {
+    "case": "engine/route_aware_target",
+    "go": {
+      "count": 10,
+      "ns_per_op_avg": 94.019,
+      "ns_per_op_min": 91.52,
+      "ns_per_op_max": 99.92,
+      "us_per_op_avg": 0.09401899999999999,
+      "us_per_op_min": 0.09151999999999999,
+      "us_per_op_max": 0.09992,
+      "bytes_per_op_avg": 48.0,
+      "bytes_per_op_min": 48.0,
+      "bytes_per_op_max": 48.0,
+      "allocs_per_op_avg": 1.0,
+      "allocs_per_op_min": 1.0,
+      "allocs_per_op_max": 1.0
+    },
+    "rust": {
+      "count": 10,
+      "ns_per_op_avg": 114.28406399999999,
+      "ns_per_op_min": 113.05319,
+      "ns_per_op_max": 116.23593,
+      "us_per_op_avg": 0.11428406399999999,
+      "us_per_op_min": 0.11305319,
+      "us_per_op_max": 0.11623593,
+      "bytes_per_op_avg": 11.0,
+      "bytes_per_op_min": 11.0,
+      "bytes_per_op_max": 11.0,
+      "allocs_per_op_avg": 1.0,
+      "allocs_per_op_min": 1.0,
+      "allocs_per_op_max": 1.0
+    },
+    "ratio": {
+      "us_per_op_rust_vs_go": 1.215542220189536,
+      "bytes_per_op_rust_vs_go": 0.22916666666666666,
+      "allocs_per_op_rust_vs_go": 1.0
+    }
+  },
+  {
+    "case": "engine/parse_config_api",
+    "go": {
+      "count": 10,
+      "ns_per_op_avg": 165529.0,
+      "ns_per_op_min": 159446.0,
+      "ns_per_op_max": 175439.0,
+      "us_per_op_avg": 165.529,
+      "us_per_op_min": 159.446,
+      "us_per_op_max": 175.439,
+      "bytes_per_op_avg": 153340.8,
+      "bytes_per_op_min": 153339.0,
+      "bytes_per_op_max": 153344.0,
+      "allocs_per_op_avg": 2678.0,
+      "allocs_per_op_min": 2678.0,
+      "allocs_per_op_max": 2678.0
+    },
+    "rust": {
+      "count": 10,
+      "ns_per_op_avg": 2740.6715,
+      "ns_per_op_min": 2485.146,
+      "ns_per_op_max": 2786.726,
+      "us_per_op_avg": 2.7406715000000004,
+      "us_per_op_min": 2.4851460000000003,
+      "us_per_op_max": 2.7867260000000003,
+      "bytes_per_op_avg": 8100.0,
+      "bytes_per_op_min": 8100.0,
+      "bytes_per_op_max": 8100.0,
+      "allocs_per_op_avg": 90.0,
+      "allocs_per_op_min": 90.0,
+      "allocs_per_op_max": 90.0
+    },
+    "ratio": {
+      "us_per_op_rust_vs_go": 0.016557047405590563,
+      "bytes_per_op_rust_vs_go": 0.05282351468102423,
+      "allocs_per_op_rust_vs_go": 0.033607169529499624
+    }
+  },
+  {
+    "case": "engine/read_config_file_minimal",
+    "go": {
+      "count": 10,
+      "ns_per_op_avg": 62474.8,
+      "ns_per_op_min": 59911.0,
+      "ns_per_op_max": 65915.0,
+      "us_per_op_avg": 62.4748,
+      "us_per_op_min": 59.911,
+      "us_per_op_max": 65.915,
+      "bytes_per_op_avg": 40775.4,
+      "bytes_per_op_min": 40761.0,
+      "bytes_per_op_max": 40777.0,
+      "allocs_per_op_avg": 651.0,
+      "allocs_per_op_min": 651.0,
+      "allocs_per_op_max": 651.0
+    },
+    "rust": {
+      "count": 10,
+      "ns_per_op_avg": 9525.1183,
+      "ns_per_op_min": 9449.977,
+      "ns_per_op_max": 9662.721,
+      "us_per_op_avg": 9.525118299999999,
+      "us_per_op_min": 9.449977,
+      "us_per_op_max": 9.662721,
+      "bytes_per_op_avg": 4795.0,
+      "bytes_per_op_min": 4795.0,
+      "bytes_per_op_max": 4795.0,
+      "allocs_per_op_avg": 76.0,
+      "allocs_per_op_min": 76.0,
+      "allocs_per_op_max": 76.0
+    },
+    "ratio": {
+      "us_per_op_rust_vs_go": 0.15246336602918295,
+      "bytes_per_op_rust_vs_go": 0.11759541292053542,
+      "allocs_per_op_rust_vs_go": 0.11674347158218126
+    }
+  },
+  {
+    "case": "engine/necessary_outbounds",
+    "go": {
+      "count": 10,
+      "ns_per_op_avg": 146.22,
+      "ns_per_op_min": 136.7,
+      "ns_per_op_max": 159.6,
+      "us_per_op_avg": 0.14622,
+      "us_per_op_min": 0.1367,
+      "us_per_op_max": 0.1596,
+      "bytes_per_op_avg": 160.0,
+      "bytes_per_op_min": 160.0,
+      "bytes_per_op_max": 160.0,
+      "allocs_per_op_avg": 4.0,
+      "allocs_per_op_min": 4.0,
+      "allocs_per_op_max": 4.0
+    },
+    "rust": {
+      "count": 10,
+      "ns_per_op_avg": 78.179247,
+      "ns_per_op_min": 77.49102,
+      "ns_per_op_max": 79.17898,
+      "us_per_op_avg": 0.07817924700000001,
+      "us_per_op_min": 0.07749102000000001,
+      "us_per_op_max": 0.07917898,
+      "bytes_per_op_avg": 170.0,
+      "bytes_per_op_min": 170.0,
+      "bytes_per_op_max": 170.0,
+      "allocs_per_op_avg": 6.0,
+      "allocs_per_op_min": 6.0,
+      "allocs_per_op_max": 6.0
+    },
+    "ratio": {
+      "us_per_op_rust_vs_go": 0.534668629462454,
+      "bytes_per_op_rust_vs_go": 1.0625,
+      "allocs_per_op_rust_vs_go": 1.5
+    }
+  },
+  {
+    "case": "engine/subscription_persist_cleanup",
+    "go": {
+      "count": 10,
+      "ns_per_op_avg": 74687.8,
+      "ns_per_op_min": 72785.0,
+      "ns_per_op_max": 76700.0,
+      "us_per_op_avg": 74.68780000000001,
+      "us_per_op_min": 72.785,
+      "us_per_op_max": 76.7,
+      "bytes_per_op_avg": 1827.6,
+      "bytes_per_op_min": 1788.0,
+      "bytes_per_op_max": 1839.0,
+      "allocs_per_op_avg": 31.0,
+      "allocs_per_op_min": 31.0,
+      "allocs_per_op_max": 31.0
+    },
+    "rust": {
+      "count": 10,
+      "ns_per_op_avg": 72231.4079,
+      "ns_per_op_min": 71946.603,
+      "ns_per_op_max": 73156.051,
+      "us_per_op_avg": 72.2314079,
+      "us_per_op_min": 71.946603,
+      "us_per_op_max": 73.156051,
+      "bytes_per_op_avg": 1690.0,
+      "bytes_per_op_min": 1690.0,
+      "bytes_per_op_max": 1690.0,
+      "allocs_per_op_avg": 26.0,
+      "allocs_per_op_min": 26.0,
+      "allocs_per_op_max": 26.0
+    },
+    "ratio": {
+      "us_per_op_rust_vs_go": 0.9671112002227938,
+      "bytes_per_op_rust_vs_go": 0.9247100021886627,
+      "allocs_per_op_rust_vs_go": 0.8387096774193549
+    }
+  },
+  {
+    "case": "trace/ringbuf_parse",
+    "go": {
+      "count": 10,
+      "ns_per_op_avg": 51.286,
+      "ns_per_op_min": 50.94,
+      "ns_per_op_max": 52.15,
+      "us_per_op_avg": 0.051286,
+      "us_per_op_min": 0.05094,
+      "us_per_op_max": 0.05215,
+      "bytes_per_op_avg": 8.0,
+      "bytes_per_op_min": 8.0,
+      "bytes_per_op_max": 8.0,
+      "allocs_per_op_avg": 1.0,
+      "allocs_per_op_min": 1.0,
+      "allocs_per_op_max": 1.0
+    },
+    "rust": {
+      "count": 10,
+      "ns_per_op_avg": 26.292908999999998,
+      "ns_per_op_min": 26.01959,
+      "ns_per_op_max": 26.7791,
+      "us_per_op_avg": 0.026292908999999996,
+      "us_per_op_min": 0.026019590000000002,
+      "us_per_op_max": 0.0267791,
+      "bytes_per_op_avg": 5.0,
+      "bytes_per_op_min": 5.0,
+      "bytes_per_op_max": 5.0,
+      "allocs_per_op_avg": 1.0,
+      "allocs_per_op_min": 1.0,
+      "allocs_per_op_max": 1.0
+    },
+    "ratio": {
+      "us_per_op_rust_vs_go": 0.5126722497367702,
+      "bytes_per_op_rust_vs_go": 0.625,
+      "allocs_per_op_rust_vs_go": 1.0
+    }
+  },
+  {
+    "case": "trace/tracker_add",
+    "go": {
+      "count": 10,
+      "ns_per_op_avg": 498.03999999999996,
+      "ns_per_op_min": 488.5,
+      "ns_per_op_max": 520.4,
+      "us_per_op_avg": 0.4980399999999999,
+      "us_per_op_min": 0.4885,
+      "us_per_op_max": 0.5204,
+      "bytes_per_op_avg": 31.2,
+      "bytes_per_op_min": 30.0,
+      "bytes_per_op_max": 33.0,
+      "allocs_per_op_avg": 0.0,
+      "allocs_per_op_min": 0.0,
+      "allocs_per_op_max": 0.0
+    },
+    "rust": {
+      "count": 10,
+      "ns_per_op_avg": 103.099,
+      "ns_per_op_min": 100.54782,
+      "ns_per_op_max": 106.72871,
+      "us_per_op_avg": 0.10309900000000001,
+      "us_per_op_min": 0.10054782,
+      "us_per_op_max": 0.10672871,
+      "bytes_per_op_avg": 27.984,
+      "bytes_per_op_min": 27.984,
+      "bytes_per_op_max": 27.984,
+      "allocs_per_op_avg": 1.08018,
+      "allocs_per_op_min": 1.08018,
+      "allocs_per_op_max": 1.08018
+    },
+    "ratio": {
+      "us_per_op_rust_vs_go": 0.20700947715042972,
+      "bytes_per_op_rust_vs_go": 0.896923076923077,
+      "allocs_per_op_rust_vs_go": null
+    }
+  },
+  {
+    "case": "sysdump/enum_strings",
+    "go": {
+      "count": 10,
+      "ns_per_op_avg": 1.3282,
+      "ns_per_op_min": 1.324,
+      "ns_per_op_max": 1.335,
+      "us_per_op_avg": 0.0013282,
+      "us_per_op_min": 0.001324,
+      "us_per_op_max": 0.001335,
+      "bytes_per_op_avg": 0.0,
+      "bytes_per_op_min": 0.0,
+      "bytes_per_op_max": 0.0,
+      "allocs_per_op_avg": 0.0,
+      "allocs_per_op_min": 0.0,
+      "allocs_per_op_max": 0.0
+    },
+    "rust": {
+      "count": 10,
+      "ns_per_op_avg": 1.982166,
+      "ns_per_op_min": 1.97123,
+      "ns_per_op_max": 2.02555,
+      "us_per_op_avg": 0.0019821659999999996,
+      "us_per_op_min": 0.00197123,
+      "us_per_op_max": 0.00202555,
+      "bytes_per_op_avg": 0.0,
+      "bytes_per_op_min": 0.0,
+      "bytes_per_op_max": 0.0,
+      "allocs_per_op_avg": 0.0,
+      "allocs_per_op_min": 0.0,
+      "allocs_per_op_max": 0.0
+    },
+    "ratio": {
+      "us_per_op_rust_vs_go": 1.4923701249811772,
+      "bytes_per_op_rust_vs_go": null,
+      "allocs_per_op_rust_vs_go": null
+    }
+  },
+  {
+    "case": "cli/validate_minimal_config",
+    "go": {
+      "count": 10,
+      "ns_per_op_avg": 60487.6,
+      "ns_per_op_min": 58656.0,
+      "ns_per_op_max": 62012.0,
+      "us_per_op_avg": 60.4876,
+      "us_per_op_min": 58.656,
+      "us_per_op_max": 62.012,
+      "bytes_per_op_avg": 40642.6,
+      "bytes_per_op_min": 40585.0,
+      "bytes_per_op_max": 40681.0,
+      "allocs_per_op_avg": 651.0,
+      "allocs_per_op_min": 651.0,
+      "allocs_per_op_max": 651.0
+    },
+    "rust": {
+      "count": 10,
+      "ns_per_op_avg": 9461.302,
+      "ns_per_op_min": 9398.304,
+      "ns_per_op_max": 9535.177,
+      "us_per_op_avg": 9.461302,
+      "us_per_op_min": 9.398304,
+      "us_per_op_max": 9.535177,
+      "bytes_per_op_avg": 4675.0,
+      "bytes_per_op_min": 4675.0,
+      "bytes_per_op_max": 4675.0,
+      "allocs_per_op_avg": 76.0,
+      "allocs_per_op_min": 76.0,
+      "allocs_per_op_max": 76.0
+    },
+    "ratio": {
+      "us_per_op_rust_vs_go": 0.15641721609057063,
+      "bytes_per_op_rust_vs_go": 0.11502708980232565,
+      "allocs_per_op_rust_vs_go": 0.11674347158218126
+    }
+  },
+  {
+    "case": "cli/export_outline",
+    "go": {
+      "count": 10,
+      "ns_per_op_avg": 37068.9,
+      "ns_per_op_min": 35256.0,
+      "ns_per_op_max": 40019.0,
+      "us_per_op_avg": 37.0689,
+      "us_per_op_min": 35.256,
+      "us_per_op_max": 40.019,
+      "bytes_per_op_avg": 47887.7,
+      "bytes_per_op_min": 47763.0,
+      "bytes_per_op_max": 48019.0,
+      "allocs_per_op_avg": 97.0,
+      "allocs_per_op_min": 97.0,
+      "allocs_per_op_max": 97.0
+    },
+    "rust": {
+      "count": 10,
+      "ns_per_op_avg": 241.9634,
+      "ns_per_op_min": 240.658,
+      "ns_per_op_max": 245.9,
+      "us_per_op_avg": 0.2419634,
+      "us_per_op_min": 0.24065799999999998,
+      "us_per_op_max": 0.2459,
+      "bytes_per_op_avg": 17597.0,
+      "bytes_per_op_min": 17597.0,
+      "bytes_per_op_max": 17597.0,
+      "allocs_per_op_avg": 2.0,
+      "allocs_per_op_min": 2.0,
+      "allocs_per_op_max": 2.0
+    },
+    "ratio": {
+      "us_per_op_rust_vs_go": 0.006527396280979474,
+      "bytes_per_op_rust_vs_go": 0.36746387903365585,
+      "allocs_per_op_rust_vs_go": 0.020618556701030927
+    }
+  }
+]
