@@ -2,7 +2,7 @@ use crate::kernel_program::{
     KernelProgramParityCheck, KernelProgramParityEvidenceLine, KernelProgramParityEvidenceStatus,
 };
 
-pub const TRACE_CORE_SIDELOAD_DISABLED_REASON: &str = "trace CO-RE side-load is temporarily disabled until Rust/Aya can prove real sk_buff CO-RE relocation parity";
+pub const TRACE_CORE_SIDELOAD_DISABLED_REASON: &str = "trace diagnostic is retired from the product default path; Rust/Aya CO-RE side-load remains disabled until real sk_buff CO-RE relocation parity is proven";
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct TraceEventAbiContract {
@@ -127,10 +127,10 @@ pub fn trace_core_sideload_gate_report() -> TraceCoreSideloadGateReport {
         default_daemon_path: false,
         rust_skb_core_read_semantics_required: true,
         rust_core_relocation_required: true,
-        c_trace_object_required: true,
-        go_trace_fallback_required: true,
+        c_trace_object_required: false,
+        go_trace_fallback_required: false,
         disabled_reason: TRACE_CORE_SIDELOAD_DISABLED_REASON,
-        restore_gate: "requires nonzero Rust .BTF.ext core_relo_len, verifier load, and semantic ringbuf parity",
+        restore_gate: "trace diagnostic is retired from product default; restoring it requires nonzero Rust .BTF.ext core_relo_len, verifier load, and semantic ringbuf parity",
     }
 }
 
@@ -203,6 +203,6 @@ const fn trace_evidence_line(
         item,
         status,
         source,
-        required_before_default: true,
+        required_before_default: false,
     }
 }
