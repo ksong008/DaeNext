@@ -17,6 +17,7 @@ use dae_dns::{
 };
 use dae_ebpf_support::{ConnectivityEvent, ConnectivityKey};
 use dae_routing::IpPrefix;
+use dae_routing::{Query, RoutingMatcher};
 use serde_json::{Value, json};
 
 const NOW_UNIX: i64 = 1_700_000_000;
@@ -56,6 +57,8 @@ struct NativeFlowEvidence {
     reload_plan: ReloadDnsCachePlan,
     routing_apply: RoutingRuleOwnerApplyReport,
     routing_duplicate_skipped: bool,
+    sniff_domain: String,
+    userspace_routing_outbound: OutboundIndex,
     connectivity_apply_entries: usize,
     connectivity_duplicate_skipped: bool,
     runtime_ready: bool,
@@ -118,6 +121,23 @@ pub fn rust_native_control_plane_admission_report(
 
     let flow = run_native_control_plane_flow()?;
     let benchmark = run_native_control_plane_benchmark(iterations)?;
+    let datapath = rust_aya_datapath_contract()?;
+    let datapath_contract_ready = datapath
+        .get("go_bpf_loader_removed_when_opted_in")
+        .and_then(Value::as_bool)
+        .unwrap_or(false)
+        && datapath
+            .get("rust_aya_skeleton_object_supported")
+            .and_then(Value::as_bool)
+            .unwrap_or(false)
+        && datapath
+            .get("kernel_ebpf_program_rewrite")
+            .and_then(Value::as_bool)
+            .unwrap_or(false)
+        && datapath
+            .get("go_userspace_outbound_remains_authoritative")
+            .and_then(Value::as_bool)
+            .unwrap_or(false);
     let admitted = flow.admission_ready
         && flow.runtime_ready
         && flow.domain_apply.entries_updated > 0
@@ -128,8 +148,11 @@ pub fn rust_native_control_plane_admission_report(
         && flow.reload_plan.clear_domain_routing_map
         && flow.routing_apply.map.routing_entries_updated > 0
         && flow.routing_duplicate_skipped
+        && flow.sniff_domain == "example.com"
+        && flow.userspace_routing_outbound == OutboundIndex::USER_DEFINED_MIN
         && flow.connectivity_apply_entries > 0
-        && flow.connectivity_duplicate_skipped;
+        && flow.connectivity_duplicate_skipped
+        && datapath_contract_ready;
 
     let smoke = json!({
         "dns_owner_key": flow.dns_event.owner_key,
@@ -169,6 +192,8 @@ pub fn rust_native_control_plane_admission_report(
             "skipped": flow.routing_apply.map.skipped
         },
         "routing_duplicate_skipped": flow.routing_duplicate_skipped,
+        "sniff_domain": flow.sniff_domain,
+        "userspace_routing_outbound": flow.userspace_routing_outbound.value(),
         "connectivity_apply_entries": flow.connectivity_apply_entries,
         "connectivity_duplicate_skipped": flow.connectivity_duplicate_skipped
     });
@@ -207,6 +232,36 @@ pub fn rust_native_control_plane_admission_report(
         "connectivity_owner_native": true,
         "rust_owned_runtime_ready": flow.runtime_ready,
         "control_plane_default_admission_ready": flow.admission_ready,
+        "rust_aya_datapath_contract_ready": datapath_contract_ready,
+        "rust_owned_1_to_5": {
+            "phase_1_r6_transition_baseline_recorded": true,
+            "phase_2_runtime_control_plane_entry_admitted": flow.runtime_ready && flow.admission_ready,
+            "phase_3_dns_domain_reload_default_hot_path_admitted": flow.domain_apply.entries_updated > 0
+                && flow.domain_duplicate.skipped
+                && flow.domain_reload_clear_deletes > 0
+                && flow.domain_reload_restore.entries_updated > 0
+                && flow.reload_plan.restore_cache
+                && flow.reload_plan.clear_domain_routing_map,
+            "phase_4_routing_sniff_active_handoff_state_admitted": flow.routing_apply.map.routing_entries_updated > 0
+                && flow.routing_duplicate_skipped
+                && flow.sniff_domain == "example.com"
+                && flow.userspace_routing_outbound == OutboundIndex::USER_DEFINED_MIN
+                && flow.runtime_ready,
+            "phase_5_rust_aya_datapath_parity_candidate_admitted": datapath_contract_ready,
+            "all_1_to_5_admission_completed": admitted,
+            "helper_expansion_allowed": false,
+            "outbound_protocol_rewrite_allowed": false,
+            "c_tproxy_oracle_retained": true,
+            "product_default_switch_allowed_by_this_report": false
+        },
+        "rust_aya_datapath_contract": {
+            "name": datapath.get("name").cloned().unwrap_or(Value::Null),
+            "default_object_source": datapath.get("default_object_source").cloned().unwrap_or(Value::Null),
+            "go_bpf_loader_removed_when_opted_in": datapath.get("go_bpf_loader_removed_when_opted_in").cloned().unwrap_or(Value::Bool(false)),
+            "rust_aya_skeleton_object_supported": datapath.get("rust_aya_skeleton_object_supported").cloned().unwrap_or(Value::Bool(false)),
+            "kernel_ebpf_program_rewrite": datapath.get("kernel_ebpf_program_rewrite").cloned().unwrap_or(Value::Bool(false)),
+            "go_userspace_outbound_remains_authoritative": datapath.get("go_userspace_outbound_remains_authoritative").cloned().unwrap_or(Value::Bool(false))
+        },
         "default_switch_allowed": false,
         "default_path_mutation_allowed": false,
         "product_chain_switch_allowed": false,
@@ -284,6 +339,9 @@ fn run_native_control_plane_flow() -> Result<NativeFlowEvidence, String> {
     let connectivity_duplicate = connectivity_owner
         .apply_event_with(CONNECTIVITY_MAP_ID, connectivity_event, |_, _| Ok(()))
         .map_err(|err| format!("rust native connectivity owner duplicate failed: {err}"))?;
+    let sniff_domain = dae_sniffing::sniff_tcp(b"GET / HTTP/1.1\r\nHost: example.com\r\n\r\n")
+        .map_err(|err| format!("rust native TCP sniff failed: {err}"))?;
+    let userspace_routing_outbound = sample_userspace_routing_outbound()?;
 
     let runtime = RuntimeStateReport::rust_owned_control_plane();
     let admission = ControlPlaneDefaultAdmission {
@@ -307,6 +365,8 @@ fn run_native_control_plane_flow() -> Result<NativeFlowEvidence, String> {
         reload_plan,
         routing_apply,
         routing_duplicate_skipped: routing_duplicate.map.skipped,
+        sniff_domain,
+        userspace_routing_outbound,
         connectivity_apply_entries: connectivity_apply.entries_updated,
         connectivity_duplicate_skipped: connectivity_duplicate.skipped,
         runtime_ready: runtime.ready_for_default_control_plane(),
@@ -382,6 +442,36 @@ fn sample_routing_state() -> Result<RoutingRuleState, String> {
     ))
 }
 
+fn sample_userspace_routing_outbound() -> Result<OutboundIndex, String> {
+    let fixture = json!({
+        "domain_sets": [{
+            "bit": 0,
+            "key": "suffix",
+            "patterns": ["example.com"]
+        }],
+        "lpm_sets": [],
+        "matches": [
+            {
+                "type": "domain_set",
+                "outbound": format!("user:{}", OutboundIndex::USER_DEFINED_MIN.value())
+            },
+            {
+                "type": "fallback",
+                "outbound": "direct"
+            }
+        ]
+    });
+    let matcher = RoutingMatcher::from_fixture_value(&fixture)
+        .map_err(|err| format!("rust native userspace routing fixture failed: {err}"))?;
+    matcher
+        .match_query(&Query::tcp(
+            "203.0.113.10".parse().unwrap(),
+            443,
+            "www.example.com",
+        ))
+        .map_err(|err| format!("rust native userspace routing match failed: {err}"))
+}
+
 fn sample_connectivity_event() -> ConnectivityEvent {
     ConnectivityEvent {
         key: ConnectivityKey {
@@ -393,6 +483,18 @@ fn sample_connectivity_event() -> ConnectivityEvent {
         is_init: false,
         dryrun: false,
     }
+}
+
+fn rust_aya_datapath_contract() -> Result<Value, String> {
+    let output = dae_aya_bpf_loader::run_with_args(["bpf-loader", "contract"]);
+    if output.exit_code != 0 {
+        return Err(format!(
+            "rust/Aya datapath contract failed: {}",
+            output.stderr.trim()
+        ));
+    }
+    serde_json::from_str(output.stdout.trim())
+        .map_err(|err| format!("rust/Aya datapath contract JSON decode failed: {err}"))
 }
 
 fn run_native_control_plane_benchmark(iterations: u32) -> Result<NativeBenchmarkEvidence, String> {

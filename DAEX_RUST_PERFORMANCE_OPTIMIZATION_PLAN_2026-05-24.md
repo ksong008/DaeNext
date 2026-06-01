@@ -20494,3 +20494,90 @@ daed-daex-align/daed
    - C `control/kern/tproxy.c` 继续作为 oracle/fallback，不能在本阶段直接删除；只有 Aya eBPF packet parity、LAN/WAN/dae0/dae0peer 实流、reload、benchmark、38 host-write、rollback 全部通过后，才进入删除准入。
 
 本节执行结论：后续 1-5 不再按 helper IPC 优化推进，而是按 Rust-owned dae core 收口推进；r6 helper owner 只保留为过渡基线和对照 benchmark。
+
+### Rust-owned 1-5 统一准入完成记录（2026-06-01）
+
+目标：
+
+- 按上一节重新指定的 1-5 大阶段执行，不再新增细分阶段号。
+- 不继续实现 binary helper / JSON helper 优化路线。
+- 用 Rust native control-plane admission 建立 1-5 的统一准入证据：Rust-owned runtime/control-plane、DNS/domain/reload、routing/sniff/active handoff、Rust/Aya datapath contract 同时满足，且保持 daed/dae-wing/outbound/quic-go 协议栈边界。
+
+完成内容：
+
+- 第 1 项 r6 过渡基线已收口：
+  - 本地提交：`0f89f94c daex: record rust-owned plan and r6 domain owner baseline`。
+  - 本地 tag：`daex-rustowned-1-r6-transition-baseline-20260601`。
+  - 该基线明确为 helper transition baseline，不作为最终 Rust-owned 架构。
+- 第 2-5 项接入统一 Rust-owned 准入报告：
+  - `rust/crates/dae-daemon/src/rust_native_control_plane.rs`
+    - `rust_native_control_plane_admission_report()` 新增 `rust_owned_1_to_5` 汇总。
+    - 报告显式记录：
+      - `phase_1_r6_transition_baseline_recorded`
+      - `phase_2_runtime_control_plane_entry_admitted`
+      - `phase_3_dns_domain_reload_default_hot_path_admitted`
+      - `phase_4_routing_sniff_active_handoff_state_admitted`
+      - `phase_5_rust_aya_datapath_parity_candidate_admitted`
+      - `all_1_to_5_admission_completed`
+      - `helper_expansion_allowed=false`
+      - `outbound_protocol_rewrite_allowed=false`
+      - `c_tproxy_oracle_retained=true`
+      - `product_default_switch_allowed_by_this_report=false`
+    - 准入 flow 新增 Rust native TCP sniff 和 userspace routing sample，避免第 4 项只停留在 routing map owner。
+    - 准入 flow 读取 `dae-aya-bpf-loader bpf-loader contract`，确认第 5 项 Rust/Aya datapath contract：
+      - `default_object_source=rust-aya-skeleton`
+      - `go_bpf_loader_removed_when_opted_in=true`
+      - `rust_aya_skeleton_object_supported=true`
+      - `kernel_ebpf_program_rewrite=true`
+      - `go_userspace_outbound_remains_authoritative=true`
+  - `rust/crates/dae-daemon/src/tests.rs`
+    - 增加 1-5 汇总字段断言，锁住禁止 helper 扩张、禁止 outbound 协议重写、Rust/Aya datapath contract ready。
+
+本地验证：
+
+| 验证项 | 结果 |
+| --- | --- |
+| `cargo test --manifest-path rust/Cargo.toml -p dae-daemon rust_native_control_plane` | pass，2 passed |
+| `cargo run --release --manifest-path rust/Cargo.toml -p dae-daemon --bin dae-daemon-optin -- rust-native-control-plane-admission --root /tmp/dae-rust-native-control-plane-1-5-20260601 --iterations 1000` | pass |
+| `/tmp/dae-rust-native-control-plane-1-5-20260601` | 验证后已删除 |
+
+统一准入结果：
+
+| 字段 | 结果 |
+| --- | --- |
+| `rust_native_control_plane_no_cgo_admitted` | `true` |
+| `rust_owned_1_to_5.all_1_to_5_admission_completed` | `true` |
+| `rust_owned_1_to_5.phase_1_r6_transition_baseline_recorded` | `true` |
+| `rust_owned_1_to_5.phase_2_runtime_control_plane_entry_admitted` | `true` |
+| `rust_owned_1_to_5.phase_3_dns_domain_reload_default_hot_path_admitted` | `true` |
+| `rust_owned_1_to_5.phase_4_routing_sniff_active_handoff_state_admitted` | `true` |
+| `rust_owned_1_to_5.phase_5_rust_aya_datapath_parity_candidate_admitted` | `true` |
+| `helper_required` | `false` |
+| `persistent_helper_required` | `false` |
+| `hot_path_cgo_required` | `false` |
+| `ffi_symbols_called` | `false` |
+| `go_bpf_loader_required` | `false` |
+| `go_product_shell_retained` | `true` |
+| `go_outbound_protocol_stack_retained` | `true` |
+| `daewing_outbound_quic_go_protocol_stack_retained` | `true` |
+| `rust_aya_datapath_contract_ready` | `true` |
+| `default_switch_allowed` | `false` |
+| `product_chain_switch_allowed` | `false` |
+| `production_paths_mutated` | `false` |
+
+benchmark（本地 release admission，`iterations=1000`）：
+
+| 项目 | ns/op |
+| --- | ---: |
+| `dns_packet_to_domain_event` | `429` |
+| `domain_routing_duplicate` | `43` |
+| `domain_routing_toggle` | `559` |
+| `reload_transaction` | `546` |
+| `routing_owner_duplicate` | `78` |
+| `connectivity_owner_duplicate` | `7` |
+
+结论：
+
+- 1-5 已作为统一 Rust-owned admission 完成并记录：Rust-owned dae core 的 control-plane/runtime/state/BPF 准入证据已经可复跑，且显式禁止 helper 扩张和 outbound 协议重写。
+- 这次完成不是 product default switch，也没有部署 `10.10.10.2`；`default_switch_allowed=false`、`product_chain_switch_allowed=false` 仍保持，避免把 admission 误当生产切换。
+- 下一步应在该准入基础上进入 daed 产品链二进制集成和远程 38 host-write 验证，而不是继续新增 helper 或拆分阶段。
