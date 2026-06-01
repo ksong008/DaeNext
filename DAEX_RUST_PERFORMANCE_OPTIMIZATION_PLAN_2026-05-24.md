@@ -20237,3 +20237,260 @@ benchmark（本地，2026-05-31，count/repeat=10）：
 - `10.10.10.2` 已运行 r5：`daed-r5-connectivity-owner-20260531`。
 - r5 在该网关上确认加载 Rust/Aya skeleton、使用 TCX/netkit、启动 no-cgo connectivity/domain-routing helper，并且 connectivity helper 已返回 `owner=dae-control`。
 - LAN 侧 `10.10.10.4 -> 10.10.10.2` 代理链路验证通过。
+
+### 混合架构 outbound 边界确认与 Aya 替换 Go BPF 影响（2026-05-31）
+
+背景：
+
+- 重新核对原 `dae -> outbound` 链路后确认，原实现不是通过外部进程、socket、HTTP API 或动态插件对接 outbound，而是在 Go module 层直接依赖 `github.com/daeuniverse/outbound`，编译期链接进同一个产品二进制。
+- `dae` 的职责是 config/routing/geodata/DNS/sniffing/control-plane/BPF/tproxy/listener/outbound group selection；`outbound` 的职责是 link parser、protocol/transport stack、`netproxy.Dialer` 拨号。
+- 当前 daex Rust 化目标不应把 VLESS/VMess/Trojan/Trojan-Go/SS/SSR/SIP003/TUIC/Hysteria2/Juicity/AnyTLS/TLS/WS/gRPC/xHTTP/mux/quic-go 等协议栈重写纳入默认阶段。
+
+硬性边界：
+
+1. Rust-owned control/data plane 继续保留原 outbound `netproxy.Dialer` 调用合同。
+2. Rust 侧只负责通用的 routing/sniff/DNS/state/mark/mptcp/outboundIndex/dialTarget 决策，不按测试机 config 写死协议逻辑。
+3. 不在 Rust resident、Aya loader 或 BPF program 中写死 `vless`、`trojan`、`ss` 等具体协议分支；协议拨号仍统一交给原 outbound dialer。
+4. 所有 Rust 替换必须验证进入 outbound 前的通用参数与原 Go dae 一致：`outboundIndex`、`dialTarget`、`domain/sniff result`、`tcp/udp`、`SO_MARK`、`MPTCP`、`strictIpVersion`、DNS/non-DNS network type。
+5. outbound/quic-go 只做 daex 链路对齐、必要 bugfix 和合同测试，不作为当前 Rust native 重写范围。
+6. 后续如果要完全去 Go runtime，应另立阶段评估 Rust 协议栈或独立进程/FFI 边界；不能把该长期目标混入当前 Aya/Go BPF 替换。
+
+对 Aya 替换 Go BPF 的影响：
+
+- 结论：保留 outbound `netproxy.Dialer` 合同后，Aya 替换 Go BPF 的范围明显收敛，整体更简单、更可控。
+- 更简单的原因是 Aya 侧不需要理解或实现 outbound 协议，也不需要处理 VLESS Vision、Trojan-Go、SS2022、TUIC、Hysteria2、Juicity、xHTTP、mux 等应用层协议细节。
+- Aya/TCX/eBPF 只需要复刻原 Go BPF/control-plane 的内核侧合同：packet classify、redirect、mark、tproxy/listener handoff、routing result map、domain/routing map、connectivity map、sockmap、cgroup/pname、WAN/LAN/dae0/dae0peer attach backend、TCX/TC fallback、map pin/open/update/replay、reload 后 owner state 恢复。
+- userspace 出站仍按原路径执行：`routing/sniff/DNS -> outboundIndex/dialTarget/mark/mptcp -> outbound.Select(...) -> netproxy.Dialer.DialContext(ctx, MagicNetwork(...), target)`。
+- 因此 Aya 替换 Go BPF 的准入重点应从“协议全 Rust”改为“BPF/loader/attach/map/listener 合同 100% 对齐原 Go BPF，并确保最终进入 outbound 的参数 100% 对齐原 Go dae”。
+
+不能降低的风险项：
+
+- Aya 替换 Go BPF 虽然不碰协议栈，但仍不能简化 routing 语义；geoip/geosite/domain/ip/source/pname/mac/dscp/l4proto/fallback/must_direct 等规则必须按通用规则引擎结果走，不能根据当前测试配置特化。
+- TCX 与 TC/netkit/veth 的 attach/return 语义仍是高风险区，尤其是同一物理口多 role、`TCX_NEXT`/`TCX_PASS`、dae0/dae0peer L2 承载、WAN/LAN ingress/egress 顺序。
+- BPF map ABI、key/value layout、endianness、lifetime、pin path、reload replay、owner handoff 必须保持与原 Go BPF 行为一致。
+- listener/tproxy/sockmap/cgroup/pname 相关能力必须做真实 host-write 验证，不能只靠 helper smoke。
+
+后续执行原则：
+
+- Aya 阶段优先实现和验证 Go BPF 合同，不扩张到 outbound 协议重写。
+- 每次 Aya/BPF 修改前继续参考 `DAEX_RUST_REBUILD_PLAN_2026-05-16.md` 和 `DAENEW_RUST_REBUILD_MEMO_2026-05-16.md` 中的原工作流程和审计注意点。
+- 每个替换点必须同时记录：修改内容、对齐的原 Go BPF 行为、验证方式、是否影响 outbound 调用合同。
+
+### daex 独立产品链路径与计划覆盖规则更新（2026-06-01）
+
+触发原因：
+
+- 重新核查 `dae`、`outbound`、`quic-go`、`dae-wing`、`daed` 的实际链接方式后，确认计划需要补充最新覆盖规则。
+- 目标不是改变混合架构方向，而是防止后续执行时混用老 `daed2.0` 链路、旧 `/root/project/quic-go` 路径，或误把 outbound 协议重写纳入 Aya/Go BPF 替换范围。
+
+最新正式 daex 独立链路：
+
+| 角色 | 正式路径 | 分支/模块语义 |
+| --- | --- | --- |
+| daed 产品壳/WebUI 构建入口 | `/root/project/daed-daex-align/daed` | `daed2-daex-align` |
+| daed 持有的 wing worktree/submodule | `/root/project/daed-daex-align/daed/wing` | 指向 daex wing；由 daed 构建时使用 |
+| 独立 dae-wing 源仓库 | `/root/project/dae-wing-daex-align` | `daewing2-daex-align` |
+| dae core | `/root/project/dae-daex-align` | `daex` |
+| outbound | `/root/project/outbound-daex-align` | `outbound-daex-align` |
+| quic-go | `/root/project/quic-go-rust` | `quic-go-rust`，module 仍为 `github.com/daeuniverse/quic-go` |
+
+当前 Go module 解析合同：
+
+```text
+daed-daex-align/daed/wing
+  github.com/daeuniverse/dae      => /root/project/dae-daex-align
+  github.com/daeuniverse/outbound => /root/project/outbound-daex-align
+  github.com/daeuniverse/quic-go  => /root/project/quic-go-rust
+
+dae-daex-align
+  github.com/daeuniverse/outbound => /root/project/outbound-daex-align
+  github.com/daeuniverse/quic-go  => /root/project/quic-go-rust
+
+outbound-daex-align
+  github.com/daeuniverse/quic-go  => /root/project/quic-go-rust
+```
+
+构建链路合同：
+
+- `daed-daex-align/daed` 先构建 WebUI `dist`，再进入 `wing` 执行 `make bundle`。
+- 最终 `daed` 二进制本质是带 WebUI 的 `dae-wing` 产品二进制，`APPNAME=daed`，不是一个单独重新实现 dae runtime 的壳。
+- `dae-wing` 通过 `github.com/daeuniverse/dae/engine`、`config`、`control` 调用 dae core，并通过空导入 `github.com/daeuniverse/dae/component/outbound` 完成 outbound 协议/dialer/transport 注册。
+- `dae` 继续通过 outbound `netproxy.Dialer` 合同出站；`quic-go-rust` 被 dae 的 DNS DoH3/DoQ 和 outbound 的 TUIC/Hysteria2/Juicity/xHTTP/H3 等路径使用。
+
+覆盖规则：
+
+1. 后续 daex 产品链构建、二进制生成、远程 38 host-write 验证、`10.10.10.2` 替换验证，均以 `/root/project/daed-daex-align/daed` 为入口。
+2. 后续计划中凡是旧记录提到 `/root/project/quic-go` 作为 daex 正式 quic-go 路径的，均视为历史记录；当前正式路径以 `/root/project/quic-go-rust` 为准。
+3. `/root/project/daed`、`/root/project/dae-wing`、`/root/project/dae`、`/root/project/outbound`、`/root/project/quic-go` 可作为老链路/对照链路查看，但不得作为 daex 后续默认修改和验证入口，除非用户明确要求修老链路。
+4. 如果需要同步 daed submodule 指针，只同步 `/root/project/daed-daex-align/daed` 持有的 `wing` 指针，以及 wing 持有的 dae core 指针；不要把老 daed2.0 子模块指针混入 daex 计划。
+5. 所有新计划和验证报告必须显式写出 `daed-daex-align -> dae-wing-daex-align -> dae-daex-align -> outbound-daex-align -> quic-go-rust`，避免再次写成含糊的 `daed2.0 链路`。
+
+对后续 Rust/Aya 计划的约束：
+
+- Aya 替换 Go BPF 只处理 dae core 的 BPF/loader/attach/map/listener/control-plane 合同，不修改 daed WebUI 产品壳的职责边界。
+- 保留 outbound `netproxy.Dialer` 合同后，协议栈不需要当前阶段重写；Rust/Aya 的准入重点是确保最终传入 outbound 的 `outboundIndex`、`dialTarget`、`domain/sniff result`、`SO_MARK`、`MPTCP`、`tcp/udp`、DNS/non-DNS network type 与原 Go dae 行为一致。
+- 计划中 `dae-wing / outbound 全协议暂时保持 Go` 的表述继续有效；更准确地说，`dae-wing/daed 产品壳和 outbound 协议拨号栈保持 Go，dae core 中除 outbound 协议边界以外的 control/data/eBPF 逐步 Rust-owned`。
+- `quic-go-rust` 仍作为 Go module 链路中的 quic-go 替换路径保留；它不是当前 Rust native 协议重写目标。
+
+### r6 `domain_routing_map` resident owner 迁入与 38 host-write 验证（2026-06-01）
+
+目标：
+
+- 在不改 outbound 协议栈、不改 daed/dae-wing WebUI/API 产品壳职责的前提下，把 DNS/cache 触发的 `domain_routing_map` owner merge / duplicate skip / reload clear 热路径从 Go `domainRoutingTracker` 默认路径迁入 Rust-owned resident owner。
+- 继续保持通用规则语义：不按测试机配置写死 `geoip`、`geosite`、`vless`、固定节点或固定域名逻辑；测试中只在导入副本加入通用 `domain(suffix: example.com) -> proxy` 用于触发 domain owner 事件。
+- 继续使用正式 daex 独立链：`daed-daex-align -> dae-wing-daex-align -> dae-daex-align -> outbound-daex-align -> quic-go-rust`。
+
+修改内容：
+
+- `rust/crates/dae-aya-bpf-loader/src/main.rs`
+  - 新增 `domain-routing-map serve-owner` stdio 常驻入口。
+- `rust/crates/dae-aya-bpf-loader/src/lib.rs`
+  - 新增 `run_domain_routing_map_owner_serve()`，进程内持有 `dae_control::DomainRoutingOwner`。
+  - 新增 owner JSON line 协议：
+    - `op=sync_owner`：输入 `map_id`、`owner_key`、`bitmap[32]`、`ips[][4]`，由 Rust owner 计算增量并写真实 BPF map。
+    - `op=prepare_reload`：输入 `map_id`、`existing_keys[][4]`，由 Rust owner 先删除旧 map entries，再清空 resident owner state。
+  - 响应统一带 `owner:"dae-control"`、`scope:"domain-routing-map-owner"`、`map_id_changed`、`entries_updated`、`entries_deleted`、`owner_count`、`ip_count`，便于验证产品默认路径是否进入 Rust owner。
+- `control/rust_routing_maps_inprocess_disabled.go`
+  - no-cgo 默认路径不再把 `rustDomainRoutingOwner` 视为不可用 stub。
+  - 新增 no-cgo resident owner client，启动 embedded `dae-aya-bpf-loader domain-routing-map serve-owner`，并通过 JSON line 协议提交 DNS/cache owner event。
+  - `BuildRustOwnedRuntimeStateReport()` 在 no-cgo 默认路径标记 `DomainOwnerAvailable=true`、`ConnectivityOwnerAvailable=true`；不标记 `ReadyForDefaultControlPlane=true`，因为 routing owner、reload/backend/active handoff 还没有全部 Rust-owned。
+- `control/control_plane_core.go`
+  - `BatchUpdateDomainRouting()` 在 `RouteOwnerKey` 存在时改走 `getRustDomainRoutingOwner().UpdateDnsCacheEvent(...)`。
+  - `BatchRemoveDomainRouting()` 在 `RouteOwnerKey` 存在时改走 `RemoveDnsCacheEvent(...)`。
+  - `clearDomainRoutingMapForReload()` 改走 Rust owner `PrepareReload(...)`，即使当前 map 无 entry 也会重置 resident owner state，避免 reload 后 owner state 残留。
+  - 无 `RouteOwnerKey` 的旧 raw update/delete 路径仍保留为兼容路径，继续走 Rust map writer；不增加 Go BPF fallback。
+- `control/rust_domain_routing_owner_process_test.go`
+  - 新增 no-cgo resident owner IO 协议测试，锁住 `owner=dae-control` marker、op/map_id 校验和错误路径。
+- `control/routing_map_benchmark_test.go`
+  - 新增 `BenchmarkDomainRoutingMapRustOwnerDuplicate` / `BenchmarkDomainRoutingMapRustOwnerToggle`，用于直接量化默认 no-cgo resident owner 形态下的 IPC/JSON 成本。
+- `control/embedded/dae-aya-bpf-loader`
+  - 已通过 `make rust-aya-bpf-loader-asset` 重新生成；sha256：`d04ba53356a2c7e4ab8cd85bb0f2c361877b0f188b042a36e037cc18e615c563`。
+
+本地验证：
+
+| 验证项 | 结果 |
+| --- | --- |
+| `cargo test --manifest-path rust/Cargo.toml -p dae-control domain_routing` | pass，8 passed |
+| `cargo test --manifest-path rust/Cargo.toml -p dae-aya-bpf-loader` | pass，24 passed |
+| `PATH=/root/.local/go1.25.9/bin:$PATH GOWORK=off CGO_ENABLED=0 go test -count=1 -tags=embedallowed ./control -run 'TestRustDomainRoutingOwner\|TestDomainRoutingTracker\|TestControlPlaneCoreClearDomainRoutingMapForReload\|TestRustAyaBpfLoaderAdoptsPinnedObjectsAndUpdatesControlMaps\|TestBuildDomainRoutingDnsEvent'` | pass |
+| `PATH=/root/.local/go1.25.9/bin:$PATH GOWORK=off CGO_ENABLED=0 go test -count=1 -tags=embedallowed ./control ./engine` | pass |
+| `make rust-aya-bpf-loader-asset` | pass |
+
+benchmark（本地，`count=10`、`benchtime=1s`、`CGO_ENABLED=0`、helper=`control/embedded/dae-aya-bpf-loader`；原始临时输出已汇总进下表，测试后按清理规则删除本地 `/tmp` 残留）：
+
+| 项目 | 模式 | count | 平均 ns/op | min ns/op | max ns/op | B/op | allocs/op | 结论 |
+| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | --- |
+| `BenchmarkDomainRoutingMapGoUpdate` | Go direct eBPF map update | 10 | `830.1` | `825.5` | `842.8` | `64` | `3` | 单次 map syscall 对照 |
+| `BenchmarkRebuildStage7DomainRoutingOwnerMerge` | Go tracker owner merge，纯 userspace | 10 | `2874.1` | `2796.0` | `3087.0` | `6552` | `26` | 旧 Go owner merge 对照，不含 Rust helper IPC |
+| `BenchmarkDomainRoutingMapRustPersistentHelperUpdate` | Rust persistent raw map writer，JSON line IPC | 10 | `25383.6` | `24947.0` | `26355.0` | `1112` | `15` | helper IPC 仍是主要成本 |
+| `BenchmarkDomainRoutingMapRustOwnerDuplicate` | Rust resident owner duplicate/no-op，JSON line IPC | 10 | `27792.8` | `27042.0` | `28796.0` | `1865` | `23` | Rust owner 能跳过 map 写入，但 IPC/JSON 成本远高于 Go direct |
+| `BenchmarkDomainRoutingMapRustOwnerToggle` | Rust resident owner toggle，JSON line IPC + map write | 10 | `31129.9` | `30661.0` | `31787.0` | `1864.9` | `23` | 当前默认产品形态还没有体现 Rust 性能优势 |
+
+benchmark 结论：
+
+- 功能所有权已迁入 Rust `dae-control::DomainRoutingOwner`，但默认 daed/no-cgo 产品仍通过 embedded executable helper 承载 resident owner。
+- 当前性能瓶颈不是 Rust owner 内部 merge，而是 Go daed 与 Rust helper 之间的 JSON/stdio IPC 和进程边界。
+- 因此本阶段是 owner state ownership 迁移，不是最终性能优化完成态；后续如果要体现 Rust 优势，必须继续推进 Rust-owned/in-process control-plane 或至少去掉 JSON/stdio helper IPC。不能把本阶段 helper 形态视为最终发布形态。
+
+本地 daed 构建：
+
+| 项目 | 结果 |
+| --- | --- |
+| 构建入口 | `/root/project/daed-daex-align/daed/wing` |
+| 构建命令 | `PATH=/root/.local/go1.25.9/bin:$PATH GOWORK=off CGO_ENABLED=0 make OUTPUT=/root/project/daed-daex-align/daed/daed-r6-resident-domain-owner-20260601 APPNAME=daed WEB_DIST=../dist VERSION=daed-r6-resident-domain-owner-20260601 bundle` |
+| 二进制 | `/root/project/daed-daex-align/daed/daed-r6-resident-domain-owner-20260601` |
+| size | `50M` |
+| sha256 | `088661f8b0825349ee5aa789bc8f5a1b7c07e4f9b3ee2d0ff8548a95aa4de1ce` |
+| version | `daed version daed-r6-resident-domain-owner-20260601` |
+| Go build metadata | `CGO_ENABLED=0`、`-tags=embedallowed`、`vcs.modified=false` |
+| module replace | `github.com/daeuniverse/dae => /root/project/dae-daex-align`、`github.com/daeuniverse/outbound => /root/project/outbound-daex-align`、`github.com/daeuniverse/quic-go => /root/project/quic-go-rust` |
+
+38 远程 host-write 验证：
+
+| 验证项 | 结果 |
+| --- | --- |
+| 测试机 | `38.65.91.47:5122`，kernel `6.12.86+deb12-amd64` |
+| 部署方式 | 上传 r6 到 `/tmp`，临时安装 `/usr/bin/daed`、`/etc/daed`、`/etc/systemd/system/daed.service` |
+| unit 环境 | `DAE_RUST_NATIVE_EBPF=1`、`DAE_RUST_NATIVE_EBPF_BACKEND=auto`、`DAE_NATIVE_EBPF_BACKEND=auto`、`DAE_RUST_NATIVE_EBPF_TCX_DATAPATH_ADMITTED=1`、`DAE_NETNS_LINK=auto`、`DAE_RUST_RESIDENT_DATAPLANE=1` |
+| 源配置 | 读取 `/etc/dae/config.dae` 的临时导入副本；原始 `/etc/dae/config.dae` 未修改 |
+| 本机服务直连保护 | 源配置已包含 `pname(NetworkManager, systemd-resolved, systemd-networkd, dnsmasq, ssh, sshd) -> must_direct` |
+| 临时导入副本改动 | 仅加入 `dns.bind: 'udp://127.0.0.1:1053'` 与通用 `domain(suffix: example.com) -> proxy`，用于 DNS listener 与 domain owner event 验证 |
+| API health/auth | pass，`/api/health={"healthCheck":1}`，临时用户创建/token 获取成功 |
+| config preview/import | pass，`warnings=0`，`mode=rule`，`configs=1`、`routings=1`、`dnss=1` |
+| dry reload | pass，`dry=true`、`applied=1` |
+| real reload | pass，`dry=false`、`applied=1` |
+| `/api/runtime/overview` | pass，HTTP 200，`activeConnections=0`、`udpSessions=0`、`goroutines=33` |
+| `/api/general/state` | pass，`running=true`、`attachBackend=tcx`、`netnsLinkMode=netkit` |
+| DNS listener | pass，UDP `127.0.0.1:1053` 查询 `example.com` 返回 `rcode=0`、`ancount=2` |
+| Rust domain owner product path | pass，进程存在 `dae-aya-bpf-loader-d04ba53356a2c7e4 domain-routing-map serve-owner` |
+| Rust connectivity owner product path | pass，进程存在 `dae-aya-bpf-loader-d04ba53356a2c7e4 connectivity-map serve-binary` |
+| HTTPS trace | pass，Cloudflare trace 返回 `ip=38.65.91.47`、`colo=LAX`、`tls=TLSv1.3` |
+| `systemctl reload daed.service` | pass，reload 后 API health 恢复 |
+| `systemctl restart daed.service` | pass，restart 后 API health/auth/runtime overview 恢复 |
+| Rust/Aya skeleton loader | pass，日志含 `Rust/Aya BPF loader loaded object_source=rust-aya-skeleton` |
+| Rust/Aya TCX attach | pass，日志含 `Bind ... via Rust/Aya tcx` |
+| Rust/Aya listener | pass，日志含 `Opened tproxy listener via Rust/Aya` |
+| forbidden fallback scan | pass，未见 `falling back to Go`、`Go map update`、`Go writer`、`Go attach path`、`Go listener`、`fatal`、`panic`、`parse config` |
+| 远端清理 | pass，验证后 `daed.service=inactive`、`dae.service=inactive`，删除临时 `/usr/bin/daed`、`/etc/daed`、unit、上传二进制和 r6 临时文件 |
+
+38 验证结论：
+
+- r6 在真实 host-write 环境验证通过。
+- 默认 no-cgo daed 产品链已经进入 Rust/Aya skeleton loader、TCX/netkit、Rust tproxy listener、Rust connectivity owner 和 Rust domain routing resident owner。
+- `domain_routing_map` 的 DNS/cache owner merge、duplicate skip、reload clear 默认路径已由 Rust `dae-control::DomainRoutingOwner` 承担。
+- 仍需注意：由于 Go daed/no-cgo 产品当前通过 embedded executable helper 连接 Rust owner，性能数据明确显示 helper IPC 是瓶颈；后续性能优化不应继续扩张 helper，而应推进真正 Rust-owned/in-process control-plane 或去 JSON/stdio IPC 的产品接入形态。
+
+### 后续 1-5 大阶段重新指定：Rust-owned dae core 收口（2026-06-01）
+
+本节覆盖 r6 之后的执行方向。后续不再把 `connectivity-map serve-binary`、`domain-routing-map serve`、`domain-routing-map serve-owner` 这类 executable helper 继续扩张为最终架构；它们只作为过渡兼容和历史验证资产保留。正式方向是 Rust-owned dae core：Go 只保留 daed/dae-wing 产品壳、WebUI/API/service/release 以及 outbound/quic-go 协议拨号栈 adapter，dae core 的 control-plane/runtime/state/BPF 逐步由 Rust 持有。
+
+固定产品链：
+
+```text
+daed-daex-align/daed
+  -> dae-wing-daex-align
+  -> dae-daex-align
+  -> outbound-daex-align
+  -> quic-go-rust
+```
+
+硬性边界：
+
+1. 不重写 VLESS/VMess/Trojan/Trojan-Go/SS/SSR/SIP003/TUIC/Hysteria2/Juicity/AnyTLS/TLS/WS/gRPC/xHTTP/mux/quic-go 等 outbound 协议栈。
+2. Rust 侧只持有通用 control-plane/state/BPF 决策：routing、DNS、sniff、reload、map owner、backend、mark、MPTCP、outboundIndex、dialTarget、runtime state。
+3. 不在 Rust runtime、Aya loader、BPF program 或 Go adapter 中按测试机 config 写特例，不出现 `vless_specific`、`trojan_specific`、固定节点、固定域名、固定 geoip/geosite 规则等特化逻辑。
+4. 修改前继续参考 `DAEX_RUST_REBUILD_PLAN_2026-05-16.md` 与 `DAENEW_RUST_REBUILD_MEMO_2026-05-16.md` 中的原工作流程、reload、DNS、routing、BPF ABI、TC/TCX、tproxy、outbound adapter 审计资料。
+5. benchmark 必须对比 Go baseline、当前 helper 过渡形态和 Rust-owned native 形态；不能用 helper IPC 成绩代表 Rust-owned 性能。
+6. 远程 38 可做 host-write 验证；`10.10.10.2` 只在用户明确批准后部署。
+7. 后续只执行本节 1-5，不新增细分阶段号。
+
+1. 收口当前 r6 过渡基线：
+   - 核查 r6 修改只保留 `domain_routing_map` Rust owner 迁入、测试、benchmark 和记录。
+   - 明确 r6 是 helper transition baseline，不是最终 Rust-owned 架构。
+   - 记录并阻止继续新增 binary helper / JSON helper 优化路线。
+   - 提交/tag 后作为后续 Rust-owned runtime/control-plane 的回退基线。
+
+2. Rust-owned runtime/control-plane 生产入口：
+   - 建立真正 Rust-owned dae core runtime/control-plane 入口，避免 Go 对每个 DNS/routing/connectivity 事件逐次调用 helper。
+   - Rust 持有 BPF object/map/link ownership、DNS/cache/domain owner、routing owner、connectivity owner、reload clear/restore/replay、runtime report。
+   - Go 保留 daed/dae-wing 产品壳和 outbound adapter，不再作为这些 state owner 的权威实现。
+   - 准入报告必须能输出 `helper_required=false`、`persistent_helper_required=false`、`go_bpf_loader_required=false`，且不只停留在 crate 内 benchmark。
+
+3. DNS / domain routing / reload 默认热路径 Rust-owned：
+   - Rust runtime 直接持有 DNS cache/domain routing event source。
+   - `domain_routing_map` owner merge、duplicate skip、remove、reload clear、reload restore/replay 都在 Rust runtime 内完成。
+   - Go DNS controller 如暂时保留，只作为兼容输入源，不作为权威 owner。
+   - reload 失败必须保持原 engine rollback 语义；clear 成功后才能提交 Rust owner state。
+
+4. Routing / geodata / sniff / active handoff state Rust-owned：
+   - Rust 持有 routing matcher/geodata/domain/ip/cidr/pname/dscp/l4proto/must_direct 等通用规则决策状态。
+   - Rust 产出 `outboundIndex`、`dialTarget`、`domain/sniff result`、`tcp/udp`、`SO_MARK`、`MPTCP`、`strictIpVersion`、DNS/non-DNS network type。
+   - `sniff` 是否启用继续服从原 dial mode，不允许强制 sniff。
+   - Go outbound adapter 只负责调用原 outbound `netproxy.Dialer`，不接管 control-plane state。
+
+5. Rust/Aya eBPF datapath parity 与默认候选：
+   - Rust/Aya loader、TC/TCX auto backend、map pin/open/update/replay、listener/tproxy/sockmap/cgroup/pname、WAN/LAN/dae0/dae0peer attach 必须对齐原 Go BPF / C `tproxy.c` 合同。
+   - `TCX_NEXT` / `TCX_PASS`、同物理口多 role、dae0/dae0peer netkit/veth L2 承载语义必须逐项验证。
+   - C `control/kern/tproxy.c` 继续作为 oracle/fallback，不能在本阶段直接删除；只有 Aya eBPF packet parity、LAN/WAN/dae0/dae0peer 实流、reload、benchmark、38 host-write、rollback 全部通过后，才进入删除准入。
+
+本节执行结论：后续 1-5 不再按 helper IPC 优化推进，而是按 Rust-owned dae core 收口推进；r6 helper owner 只保留为过渡基线和对照 benchmark。
