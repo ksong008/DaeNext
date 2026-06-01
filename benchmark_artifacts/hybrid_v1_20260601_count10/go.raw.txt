@@ -1,0 +1,1492 @@
+$ bash -lc PATH=/root/.local/go1.25.9/bin:$PATH GOWORK=off go test -run '^$' -bench '(BenchmarkRebuildStage2Config|BenchmarkRebuildStage3RoutingGeodataSniffing)' -benchmem -count=10 -benchtime=1s .
+goos: linux
+goarch: amd64
+pkg: github.com/daeuniverse/dae
+cpu: AMD Ryzen 9 7945HX with Radeon Graphics        
+BenchmarkRebuildStage2Config/parser_example-6    	     654	   1873727 ns/op	 1766890 B/op	   28414 allocs/op
+BenchmarkRebuildStage2Config/parser_example-6    	     636	   1834139 ns/op	 1766859 B/op	   28414 allocs/op
+BenchmarkRebuildStage2Config/parser_example-6    	     662	   2066813 ns/op	 1766862 B/op	   28414 allocs/op
+BenchmarkRebuildStage2Config/parser_example-6    	     649	   1849919 ns/op	 1766856 B/op	   28414 allocs/op
+BenchmarkRebuildStage2Config/parser_example-6    	     584	   1945879 ns/op	 1766851 B/op	   28414 allocs/op
+BenchmarkRebuildStage2Config/parser_example-6    	     536	   1945836 ns/op	 1766849 B/op	   28414 allocs/op
+BenchmarkRebuildStage2Config/parser_example-6    	     643	   1861362 ns/op	 1766856 B/op	   28414 allocs/op
+BenchmarkRebuildStage2Config/parser_example-6    	     602	   1985858 ns/op	 1766858 B/op	   28414 allocs/op
+BenchmarkRebuildStage2Config/parser_example-6    	     499	   2017918 ns/op	 1766848 B/op	   28414 allocs/op
+BenchmarkRebuildStage2Config/parser_example-6    	     570	   1872131 ns/op	 1766845 B/op	   28414 allocs/op
+BenchmarkRebuildStage2Config/schema_example-6    	     603	   1946044 ns/op	 1781414 B/op	   28696 allocs/op
+BenchmarkRebuildStage2Config/schema_example-6    	     639	   1941124 ns/op	 1781420 B/op	   28696 allocs/op
+BenchmarkRebuildStage2Config/schema_example-6    	     628	   1928717 ns/op	 1781410 B/op	   28696 allocs/op
+BenchmarkRebuildStage2Config/schema_example-6    	     628	   2013024 ns/op	 1781430 B/op	   28696 allocs/op
+BenchmarkRebuildStage2Config/schema_example-6    	     624	   1902548 ns/op	 1781421 B/op	   28696 allocs/op
+BenchmarkRebuildStage2Config/schema_example-6    	     632	   1902093 ns/op	 1781417 B/op	   28696 allocs/op
+BenchmarkRebuildStage2Config/schema_example-6    	     571	   1911382 ns/op	 1781406 B/op	   28696 allocs/op
+BenchmarkRebuildStage2Config/schema_example-6    	     627	   1956848 ns/op	 1781415 B/op	   28696 allocs/op
+BenchmarkRebuildStage2Config/schema_example-6    	     596	   1919138 ns/op	 1781421 B/op	   28696 allocs/op
+BenchmarkRebuildStage2Config/schema_example-6    	     638	   1944619 ns/op	 1781411 B/op	   28696 allocs/op
+BenchmarkRebuildStage2Config/include_merger-6    	    3816	    315847 ns/op	  238713 B/op	    4112 allocs/op
+BenchmarkRebuildStage2Config/include_merger-6    	    3661	    315266 ns/op	  238738 B/op	    4112 allocs/op
+BenchmarkRebuildStage2Config/include_merger-6    	    3771	    313312 ns/op	  238706 B/op	    4112 allocs/op
+BenchmarkRebuildStage2Config/include_merger-6    	    3894	    315715 ns/op	  238745 B/op	    4112 allocs/op
+BenchmarkRebuildStage2Config/include_merger-6    	    3802	    331654 ns/op	  238729 B/op	    4112 allocs/op
+BenchmarkRebuildStage2Config/include_merger-6    	    3776	    333197 ns/op	  238766 B/op	    4112 allocs/op
+BenchmarkRebuildStage2Config/include_merger-6    	    3085	    330246 ns/op	  238689 B/op	    4112 allocs/op
+BenchmarkRebuildStage2Config/include_merger-6    	    3463	    319076 ns/op	  238681 B/op	    4112 allocs/op
+BenchmarkRebuildStage2Config/include_merger-6    	    3828	    331214 ns/op	  238781 B/op	    4112 allocs/op
+BenchmarkRebuildStage2Config/include_merger-6    	    3772	    334318 ns/op	  238696 B/op	    4112 allocs/op
+BenchmarkRebuildStage2Config/marshal_roundtrip_example-6         	     567	   2140721 ns/op	 2066123 B/op	   34187 allocs/op
+BenchmarkRebuildStage2Config/marshal_roundtrip_example-6         	     518	   2124821 ns/op	 2066467 B/op	   34191 allocs/op
+BenchmarkRebuildStage2Config/marshal_roundtrip_example-6         	     446	   2278444 ns/op	 2067026 B/op	   34200 allocs/op
+BenchmarkRebuildStage2Config/marshal_roundtrip_example-6         	     489	   2279118 ns/op	 2066638 B/op	   34195 allocs/op
+BenchmarkRebuildStage2Config/marshal_roundtrip_example-6         	     562	   2254090 ns/op	 2066150 B/op	   34187 allocs/op
+BenchmarkRebuildStage2Config/marshal_roundtrip_example-6         	     516	   2687593 ns/op	 2066451 B/op	   34192 allocs/op
+BenchmarkRebuildStage2Config/marshal_roundtrip_example-6         	     517	   2305549 ns/op	 2066458 B/op	   34192 allocs/op
+BenchmarkRebuildStage2Config/marshal_roundtrip_example-6         	     483	   2234805 ns/op	 2066700 B/op	   34195 allocs/op
+BenchmarkRebuildStage2Config/marshal_roundtrip_example-6         	     493	   2322812 ns/op	 2066633 B/op	   34194 allocs/op
+BenchmarkRebuildStage2Config/marshal_roundtrip_example-6         	     559	   2097688 ns/op	 2066189 B/op	   34188 allocs/op
+BenchmarkRebuildStage3RoutingGeodataSniffing/routing_prefix_parse-6         	 6983127	       174.7 ns/op	     224 B/op	       3 allocs/op
+BenchmarkRebuildStage3RoutingGeodataSniffing/routing_prefix_parse-6         	 6444165	       176.3 ns/op	     224 B/op	       3 allocs/op
+BenchmarkRebuildStage3RoutingGeodataSniffing/routing_prefix_parse-6         	 6940857	       185.6 ns/op	     224 B/op	       3 allocs/op
+BenchmarkRebuildStage3RoutingGeodataSniffing/routing_prefix_parse-6         	 6420206	       174.1 ns/op	     224 B/op	       3 allocs/op
+BenchmarkRebuildStage3RoutingGeodataSniffing/routing_prefix_parse-6         	 6971040	       182.0 ns/op	     224 B/op	       3 allocs/op
+BenchmarkRebuildStage3RoutingGeodataSniffing/routing_prefix_parse-6         	 6425634	       177.7 ns/op	     224 B/op	       3 allocs/op
+BenchmarkRebuildStage3RoutingGeodataSniffing/routing_prefix_parse-6         	 7055118	       183.3 ns/op	     224 B/op	       3 allocs/op
+BenchmarkRebuildStage3RoutingGeodataSniffing/routing_prefix_parse-6         	 6786766	       178.8 ns/op	     224 B/op	       3 allocs/op
+BenchmarkRebuildStage3RoutingGeodataSniffing/routing_prefix_parse-6         	 7186240	       171.9 ns/op	     224 B/op	       3 allocs/op
+BenchmarkRebuildStage3RoutingGeodataSniffing/routing_prefix_parse-6         	 5955700	       172.2 ns/op	     224 B/op	       3 allocs/op
+BenchmarkRebuildStage3RoutingGeodataSniffing/domain_matcher_bitmap-6        	 4528081	       265.6 ns/op	      64 B/op	       3 allocs/op
+BenchmarkRebuildStage3RoutingGeodataSniffing/domain_matcher_bitmap-6        	 4547025	       266.3 ns/op	      64 B/op	       3 allocs/op
+BenchmarkRebuildStage3RoutingGeodataSniffing/domain_matcher_bitmap-6        	 4505601	       267.1 ns/op	      64 B/op	       3 allocs/op
+BenchmarkRebuildStage3RoutingGeodataSniffing/domain_matcher_bitmap-6        	 4482864	       265.0 ns/op	      64 B/op	       3 allocs/op
+BenchmarkRebuildStage3RoutingGeodataSniffing/domain_matcher_bitmap-6        	 4452964	       263.4 ns/op	      64 B/op	       3 allocs/op
+BenchmarkRebuildStage3RoutingGeodataSniffing/domain_matcher_bitmap-6        	 4548985	       268.7 ns/op	      64 B/op	       3 allocs/op
+BenchmarkRebuildStage3RoutingGeodataSniffing/domain_matcher_bitmap-6        	 4515741	       265.5 ns/op	      64 B/op	       3 allocs/op
+BenchmarkRebuildStage3RoutingGeodataSniffing/domain_matcher_bitmap-6        	 4431376	       265.9 ns/op	      64 B/op	       3 allocs/op
+BenchmarkRebuildStage3RoutingGeodataSniffing/domain_matcher_bitmap-6        	 4544030	       269.5 ns/op	      64 B/op	       3 allocs/op
+BenchmarkRebuildStage3RoutingGeodataSniffing/domain_matcher_bitmap-6        	 4544935	       264.7 ns/op	      64 B/op	       3 allocs/op
+BenchmarkRebuildStage3RoutingGeodataSniffing/geodata_streaming_geoip_hit-6  	  194356	      6186 ns/op	     248 B/op	      10 allocs/op
+BenchmarkRebuildStage3RoutingGeodataSniffing/geodata_streaming_geoip_hit-6  	  190046	      6151 ns/op	     248 B/op	      10 allocs/op
+BenchmarkRebuildStage3RoutingGeodataSniffing/geodata_streaming_geoip_hit-6  	  190023	      6167 ns/op	     248 B/op	      10 allocs/op
+BenchmarkRebuildStage3RoutingGeodataSniffing/geodata_streaming_geoip_hit-6  	  194811	      6129 ns/op	     248 B/op	      10 allocs/op
+BenchmarkRebuildStage3RoutingGeodataSniffing/geodata_streaming_geoip_hit-6  	  192758	      6156 ns/op	     248 B/op	      10 allocs/op
+BenchmarkRebuildStage3RoutingGeodataSniffing/geodata_streaming_geoip_hit-6  	  192422	      6149 ns/op	     248 B/op	      10 allocs/op
+BenchmarkRebuildStage3RoutingGeodataSniffing/geodata_streaming_geoip_hit-6  	  194248	      6154 ns/op	     248 B/op	      10 allocs/op
+BenchmarkRebuildStage3RoutingGeodataSniffing/geodata_streaming_geoip_hit-6  	  192700	      6173 ns/op	     248 B/op	      10 allocs/op
+BenchmarkRebuildStage3RoutingGeodataSniffing/geodata_streaming_geoip_hit-6  	  190300	      6172 ns/op	     248 B/op	      10 allocs/op
+BenchmarkRebuildStage3RoutingGeodataSniffing/geodata_streaming_geoip_hit-6  	  190261	      6185 ns/op	     248 B/op	      10 allocs/op
+BenchmarkRebuildStage3RoutingGeodataSniffing/sniffing_http_host-6           	  404296	      2529 ns/op	    9175 B/op	      15 allocs/op
+BenchmarkRebuildStage3RoutingGeodataSniffing/sniffing_http_host-6           	  561840	      2617 ns/op	    9099 B/op	      15 allocs/op
+BenchmarkRebuildStage3RoutingGeodataSniffing/sniffing_http_host-6           	  524526	      2681 ns/op	    9088 B/op	      15 allocs/op
+BenchmarkRebuildStage3RoutingGeodataSniffing/sniffing_http_host-6           	  549199	      2708 ns/op	    9088 B/op	      15 allocs/op
+BenchmarkRebuildStage3RoutingGeodataSniffing/sniffing_http_host-6           	  525753	      2698 ns/op	    9090 B/op	      15 allocs/op
+BenchmarkRebuildStage3RoutingGeodataSniffing/sniffing_http_host-6           	  523891	      2701 ns/op	    9088 B/op	      15 allocs/op
+BenchmarkRebuildStage3RoutingGeodataSniffing/sniffing_http_host-6           	  552177	      2779 ns/op	    9090 B/op	      15 allocs/op
+BenchmarkRebuildStage3RoutingGeodataSniffing/sniffing_http_host-6           	  536372	      2837 ns/op	    9088 B/op	      15 allocs/op
+BenchmarkRebuildStage3RoutingGeodataSniffing/sniffing_http_host-6           	  517969	      2822 ns/op	    9088 B/op	      15 allocs/op
+BenchmarkRebuildStage3RoutingGeodataSniffing/sniffing_http_host-6           	  536948	      2897 ns/op	    9088 B/op	      15 allocs/op
+PASS
+ok  	github.com/daeuniverse/dae	113.385s
+$ bash -lc PATH=/root/.local/go1.25.9/bin:$PATH GOWORK=off go test -run '^$' -bench '(BenchmarkCliExportOutline|BenchmarkCliValidateMinimalConfig|BenchmarkRebuildStage8SysdumpEnumStrings)' -benchmem -count=10 -benchtime=1s ./cmd
+goos: linux
+goarch: amd64
+pkg: github.com/daeuniverse/dae/cmd
+cpu: AMD Ryzen 9 7945HX with Radeon Graphics        
+BenchmarkCliValidateMinimalConfig-6          	   20706	     61742 ns/op	   40585 B/op	     651 allocs/op
+BenchmarkCliValidateMinimalConfig-6          	   20620	     61497 ns/op	   40681 B/op	     651 allocs/op
+BenchmarkCliValidateMinimalConfig-6          	   19389	     62012 ns/op	   40585 B/op	     651 allocs/op
+BenchmarkCliValidateMinimalConfig-6          	   19603	     58656 ns/op	   40681 B/op	     651 allocs/op
+BenchmarkCliValidateMinimalConfig-6          	   20308	     59956 ns/op	   40681 B/op	     651 allocs/op
+BenchmarkCliValidateMinimalConfig-6          	   20535	     59637 ns/op	   40681 B/op	     651 allocs/op
+BenchmarkCliValidateMinimalConfig-6          	   19687	     61118 ns/op	   40681 B/op	     651 allocs/op
+BenchmarkCliValidateMinimalConfig-6          	   19434	     60185 ns/op	   40681 B/op	     651 allocs/op
+BenchmarkCliValidateMinimalConfig-6          	   20301	     59594 ns/op	   40585 B/op	     651 allocs/op
+BenchmarkCliValidateMinimalConfig-6          	   20322	     60479 ns/op	   40585 B/op	     651 allocs/op
+BenchmarkCliExportOutline-6                  	   32419	     36714 ns/op	   47828 B/op	      97 allocs/op
+BenchmarkCliExportOutline-6                  	   33957	     36845 ns/op	   47923 B/op	      97 allocs/op
+BenchmarkCliExportOutline-6                  	   31276	     35897 ns/op	   47933 B/op	      97 allocs/op
+BenchmarkCliExportOutline-6                  	   29922	     36947 ns/op	   47780 B/op	      97 allocs/op
+BenchmarkCliExportOutline-6                  	   30787	     36368 ns/op	   47883 B/op	      97 allocs/op
+BenchmarkCliExportOutline-6                  	   34340	     40019 ns/op	   48019 B/op	      97 allocs/op
+BenchmarkCliExportOutline-6                  	   31771	     36726 ns/op	   47949 B/op	      97 allocs/op
+BenchmarkCliExportOutline-6                  	   33526	     35256 ns/op	   47824 B/op	      97 allocs/op
+BenchmarkCliExportOutline-6                  	   30696	     36237 ns/op	   47763 B/op	      97 allocs/op
+BenchmarkCliExportOutline-6                  	   29979	     39680 ns/op	   47975 B/op	      97 allocs/op
+BenchmarkRebuildStage8SysdumpEnumStrings-6   	900523566	         1.329 ns/op	       0 B/op	       0 allocs/op
+BenchmarkRebuildStage8SysdumpEnumStrings-6   	899866539	         1.335 ns/op	       0 B/op	       0 allocs/op
+BenchmarkRebuildStage8SysdumpEnumStrings-6   	901944081	         1.331 ns/op	       0 B/op	       0 allocs/op
+BenchmarkRebuildStage8SysdumpEnumStrings-6   	905010996	         1.329 ns/op	       0 B/op	       0 allocs/op
+BenchmarkRebuildStage8SysdumpEnumStrings-6   	900824782	         1.326 ns/op	       0 B/op	       0 allocs/op
+BenchmarkRebuildStage8SysdumpEnumStrings-6   	905935131	         1.325 ns/op	       0 B/op	       0 allocs/op
+BenchmarkRebuildStage8SysdumpEnumStrings-6   	896270593	         1.329 ns/op	       0 B/op	       0 allocs/op
+BenchmarkRebuildStage8SysdumpEnumStrings-6   	905538829	         1.328 ns/op	       0 B/op	       0 allocs/op
+BenchmarkRebuildStage8SysdumpEnumStrings-6   	903476254	         1.324 ns/op	       0 B/op	       0 allocs/op
+BenchmarkRebuildStage8SysdumpEnumStrings-6   	904336905	         1.326 ns/op	       0 B/op	       0 allocs/op
+PASS
+ok  	github.com/daeuniverse/dae/cmd	47.214s
+$ bash -lc PATH=/root/.local/go1.25.9/bin:$PATH GOWORK=off go test -run '^$' -bench '(BenchmarkAnyTLSNativeOptInAuthKey|BenchmarkAnyTLSNativeOptInFrame|BenchmarkAnyTLSNativeOptInNewDialer|BenchmarkAnyTLSNativeOptInUnderlay|BenchmarkDialerGroupSelectMinLastLatency|BenchmarkDialerSetFilterAndAnnotateRegex|BenchmarkHTTPNativeOptInConnectRequest|BenchmarkHTTPNativeOptInForwardRequest|BenchmarkHTTPNativeOptInParseLink|BenchmarkHysteria2NativeOptInExportLink|BenchmarkHysteria2NativeOptInParseLink|BenchmarkHysteria2NativeOptInPinNormalize|BenchmarkJuicityNativeOptInExportLink|BenchmarkJuicityNativeOptInParseLink|BenchmarkJuicityNativeOptInPinnedDecode|BenchmarkShadowsocksNativeOptInMetadataBytes|BenchmarkShadowsocksNativeOptInParseLink|BenchmarkShadowsocksNativeOptInSS2022PSKSplit|BenchmarkSharedTransportNativeOptInCanonicalJSON|BenchmarkSharedTransportNativeOptInGrpcCacheKey|BenchmarkSharedTransportNativeOptInTimerConstants|BenchmarkSharedTransportNativeOptInXHTTPMode|BenchmarkSharedTransportNativeOptInXHTTPPath|BenchmarkSocks5NativeOptInAddressCodec|BenchmarkSocks5NativeOptInHandshakeBytes|BenchmarkSocks5NativeOptInUdpPacketWrap|BenchmarkTrojanNativeOptInParseLink|BenchmarkTrojanNativeOptInTCPRequestHeader|BenchmarkTrojanNativeOptInUDPPacket|BenchmarkTuicNativeOptInAlpnSplit|BenchmarkTuicNativeOptInExportLink|BenchmarkTuicNativeOptInParseLink|BenchmarkVLESSNativeOptInParseLink|BenchmarkVLESSNativeOptInPassword2Key|BenchmarkVLESSNativeOptInRequestHeader|BenchmarkVMessNativeOptInMetadataBytes|BenchmarkVMessNativeOptInParseLink|BenchmarkVMessNativeOptInUUID5Compatibility)' -benchmem -count=10 -benchtime=1s ./component/outbound
+goos: linux
+goarch: amd64
+pkg: github.com/daeuniverse/dae/component/outbound
+cpu: AMD Ryzen 9 7945HX with Radeon Graphics        
+BenchmarkAnyTLSNativeOptInNewDialer-6                 	  970498	      1188 ns/op	    2352 B/op	      20 allocs/op
+BenchmarkAnyTLSNativeOptInNewDialer-6                 	  958225	      1426 ns/op	    2352 B/op	      20 allocs/op
+BenchmarkAnyTLSNativeOptInNewDialer-6                 	  979582	      1266 ns/op	    2352 B/op	      20 allocs/op
+BenchmarkAnyTLSNativeOptInNewDialer-6                 	  871182	      1193 ns/op	    2352 B/op	      20 allocs/op
+BenchmarkAnyTLSNativeOptInNewDialer-6                 	  950886	      1328 ns/op	    2352 B/op	      20 allocs/op
+BenchmarkAnyTLSNativeOptInNewDialer-6                 	 1015503	      1226 ns/op	    2352 B/op	      20 allocs/op
+BenchmarkAnyTLSNativeOptInNewDialer-6                 	  978979	      1243 ns/op	    2352 B/op	      20 allocs/op
+BenchmarkAnyTLSNativeOptInNewDialer-6                 	  924418	      1306 ns/op	    2352 B/op	      20 allocs/op
+BenchmarkAnyTLSNativeOptInNewDialer-6                 	  992474	      1177 ns/op	    2352 B/op	      20 allocs/op
+BenchmarkAnyTLSNativeOptInNewDialer-6                 	  928321	      1206 ns/op	    2352 B/op	      20 allocs/op
+BenchmarkAnyTLSNativeOptInAuthKey-6                   	 9686156	       146.1 ns/op	     128 B/op	       2 allocs/op
+BenchmarkAnyTLSNativeOptInAuthKey-6                   	 9514518	       126.4 ns/op	     128 B/op	       2 allocs/op
+BenchmarkAnyTLSNativeOptInAuthKey-6                   	 8239870	       131.0 ns/op	     128 B/op	       2 allocs/op
+BenchmarkAnyTLSNativeOptInAuthKey-6                   	 9607923	       136.5 ns/op	     128 B/op	       2 allocs/op
+BenchmarkAnyTLSNativeOptInAuthKey-6                   	 9140204	       124.7 ns/op	     128 B/op	       2 allocs/op
+BenchmarkAnyTLSNativeOptInAuthKey-6                   	 9462748	       124.6 ns/op	     128 B/op	       2 allocs/op
+BenchmarkAnyTLSNativeOptInAuthKey-6                   	 9589443	       125.9 ns/op	     128 B/op	       2 allocs/op
+BenchmarkAnyTLSNativeOptInAuthKey-6                   	 9610545	       129.4 ns/op	     128 B/op	       2 allocs/op
+BenchmarkAnyTLSNativeOptInAuthKey-6                   	 9588327	       124.8 ns/op	     128 B/op	       2 allocs/op
+BenchmarkAnyTLSNativeOptInAuthKey-6                   	 9407281	       125.0 ns/op	     128 B/op	       2 allocs/op
+BenchmarkAnyTLSNativeOptInFrame-6                     	58028958	        22.44 ns/op	      80 B/op	       1 allocs/op
+BenchmarkAnyTLSNativeOptInFrame-6                     	59417444	        22.04 ns/op	      80 B/op	       1 allocs/op
+BenchmarkAnyTLSNativeOptInFrame-6                     	56814159	        23.30 ns/op	      80 B/op	       1 allocs/op
+BenchmarkAnyTLSNativeOptInFrame-6                     	59542050	        21.78 ns/op	      80 B/op	       1 allocs/op
+BenchmarkAnyTLSNativeOptInFrame-6                     	56991868	        23.23 ns/op	      80 B/op	       1 allocs/op
+BenchmarkAnyTLSNativeOptInFrame-6                     	57554762	        22.86 ns/op	      80 B/op	       1 allocs/op
+BenchmarkAnyTLSNativeOptInFrame-6                     	58182680	        22.05 ns/op	      80 B/op	       1 allocs/op
+BenchmarkAnyTLSNativeOptInFrame-6                     	54657501	        23.59 ns/op	      80 B/op	       1 allocs/op
+BenchmarkAnyTLSNativeOptInFrame-6                     	57616292	        25.96 ns/op	      80 B/op	       1 allocs/op
+BenchmarkAnyTLSNativeOptInFrame-6                     	57497983	        24.40 ns/op	      80 B/op	       1 allocs/op
+BenchmarkAnyTLSNativeOptInUnderlay-6                  	 2348768	       525.4 ns/op	     781 B/op	      13 allocs/op
+BenchmarkAnyTLSNativeOptInUnderlay-6                  	 2267202	       530.1 ns/op	     781 B/op	      13 allocs/op
+BenchmarkAnyTLSNativeOptInUnderlay-6                  	 2413177	       503.2 ns/op	     781 B/op	      13 allocs/op
+BenchmarkAnyTLSNativeOptInUnderlay-6                  	 2351816	       527.9 ns/op	     781 B/op	      13 allocs/op
+BenchmarkAnyTLSNativeOptInUnderlay-6                  	 2403529	       504.1 ns/op	     781 B/op	      13 allocs/op
+BenchmarkAnyTLSNativeOptInUnderlay-6                  	 2369052	       528.8 ns/op	     781 B/op	      13 allocs/op
+BenchmarkAnyTLSNativeOptInUnderlay-6                  	 2132112	       512.0 ns/op	     781 B/op	      13 allocs/op
+BenchmarkAnyTLSNativeOptInUnderlay-6                  	 2374713	       518.0 ns/op	     781 B/op	      13 allocs/op
+BenchmarkAnyTLSNativeOptInUnderlay-6                  	 2328620	       498.6 ns/op	     781 B/op	      13 allocs/op
+BenchmarkAnyTLSNativeOptInUnderlay-6                  	 2427109	       511.5 ns/op	     781 B/op	      13 allocs/op
+time="Jun 01 17:36:32" level=trace msg=NewDialer dialer=direct p=0xc0000f2000
+time="Jun 01 17:36:32" level=trace msg=NewDialer dialer=direct p=0xc0000f2180
+time="Jun 01 17:36:32" level=trace msg=NewDialer dialer=direct p=0xc0000f2240
+time="Jun 01 17:36:32" level=trace msg=NewDialer dialer=direct p=0xc0000f2300
+time="Jun 01 17:36:32" level=info msg="Group selects dialer" dialer=direct group=test-group network=tcp4
+time="Jun 01 17:36:32" level=info msg="Group selects dialer" dialer=direct group=test-group network=tcp6
+time="Jun 01 17:36:32" level=info msg="Group selects dialer" dialer=direct group=test-group network="udp4(DNS)"
+time="Jun 01 17:36:32" level=info msg="Group selects dialer" dialer=direct group=test-group network="udp6(DNS)"
+time="Jun 01 17:36:32" level=info msg="Group re-selects dialer" _new_dialer=direct _old_dialer=direct group=test-group min=100ms network=tcp4
+time="Jun 01 17:36:32" level=info msg="Group 'test-group' [tcp4]:
+   1. [] direct: 100ms
+   2. [] direct: 200ms"
+BenchmarkDialerGroupSelectMinLastLatency-6            	time="Jun 01 17:36:32" level=trace msg=NewDialer dialer=direct p=0xc0000f2000
+time="Jun 01 17:36:32" level=trace msg=NewDialer dialer=direct p=0xc0000f2180
+time="Jun 01 17:36:32" level=trace msg=NewDialer dialer=direct p=0xc0000f2240
+time="Jun 01 17:36:32" level=trace msg=NewDialer dialer=direct p=0xc0000f2300
+time="Jun 01 17:36:32" level=info msg="Group selects dialer" dialer=direct group=test-group network=tcp4
+time="Jun 01 17:36:32" level=info msg="Group selects dialer" dialer=direct group=test-group network=tcp6
+time="Jun 01 17:36:32" level=info msg="Group selects dialer" dialer=direct group=test-group network="udp4(DNS)"
+time="Jun 01 17:36:32" level=info msg="Group selects dialer" dialer=direct group=test-group network="udp6(DNS)"
+time="Jun 01 17:36:32" level=info msg="Group re-selects dialer" _new_dialer=direct _old_dialer=direct group=test-group min=100ms network=tcp4
+time="Jun 01 17:36:32" level=info msg="Group 'test-group' [tcp4]:
+   1. [] direct: 100ms
+   2. [] direct: 200ms"
+time="Jun 01 17:36:32" level=trace msg=NewDialer dialer=direct p=0xc0000f2000
+time="Jun 01 17:36:32" level=trace msg=NewDialer dialer=direct p=0xc0000f2180
+time="Jun 01 17:36:32" level=trace msg=NewDialer dialer=direct p=0xc0000f2240
+time="Jun 01 17:36:32" level=trace msg=NewDialer dialer=direct p=0xc0000f2300
+time="Jun 01 17:36:32" level=info msg="Group selects dialer" dialer=direct group=test-group network=tcp4
+time="Jun 01 17:36:32" level=info msg="Group selects dialer" dialer=direct group=test-group network=tcp6
+time="Jun 01 17:36:32" level=info msg="Group selects dialer" dialer=direct group=test-group network="udp4(DNS)"
+time="Jun 01 17:36:32" level=info msg="Group selects dialer" dialer=direct group=test-group network="udp6(DNS)"
+time="Jun 01 17:36:32" level=info msg="Group re-selects dialer" _new_dialer=direct _old_dialer=direct group=test-group min=100ms network=tcp4
+time="Jun 01 17:36:32" level=info msg="Group 'test-group' [tcp4]:
+   1. [] direct: 100ms
+   2. [] direct: 200ms"
+time="Jun 01 17:36:32" level=trace msg=NewDialer dialer=direct p=0xc0000f2000
+time="Jun 01 17:36:32" level=trace msg=NewDialer dialer=direct p=0xc0000f2180
+time="Jun 01 17:36:32" level=trace msg=NewDialer dialer=direct p=0xc0000f2240
+time="Jun 01 17:36:32" level=trace msg=NewDialer dialer=direct p=0xc0000f2300
+time="Jun 01 17:36:32" level=info msg="Group selects dialer" dialer=direct group=test-group network=tcp4
+time="Jun 01 17:36:32" level=info msg="Group selects dialer" dialer=direct group=test-group network=tcp6
+time="Jun 01 17:36:32" level=info msg="Group selects dialer" dialer=direct group=test-group network="udp4(DNS)"
+time="Jun 01 17:36:32" level=info msg="Group selects dialer" dialer=direct group=test-group network="udp6(DNS)"
+time="Jun 01 17:36:32" level=info msg="Group re-selects dialer" _new_dialer=direct _old_dialer=direct group=test-group min=100ms network=tcp4
+time="Jun 01 17:36:32" level=info msg="Group 'test-group' [tcp4]:
+   1. [] direct: 100ms
+   2. [] direct: 200ms"
+time="Jun 01 17:36:32" level=trace msg=NewDialer dialer=direct p=0xc0000f2000
+time="Jun 01 17:36:32" level=trace msg=NewDialer dialer=direct p=0xc0000f2180
+time="Jun 01 17:36:32" level=trace msg=NewDialer dialer=direct p=0xc0000f2240
+time="Jun 01 17:36:32" level=trace msg=NewDialer dialer=direct p=0xc0000f2300
+time="Jun 01 17:36:32" level=info msg="Group selects dialer" dialer=direct group=test-group network=tcp4
+time="Jun 01 17:36:32" level=info msg="Group selects dialer" dialer=direct group=test-group network=tcp6
+time="Jun 01 17:36:32" level=info msg="Group selects dialer" dialer=direct group=test-group network="udp4(DNS)"
+time="Jun 01 17:36:32" level=info msg="Group selects dialer" dialer=direct group=test-group network="udp6(DNS)"
+time="Jun 01 17:36:32" level=info msg="Group re-selects dialer" _new_dialer=direct _old_dialer=direct group=test-group min=100ms network=tcp4
+time="Jun 01 17:36:32" level=info msg="Group 'test-group' [tcp4]:
+   1. [] direct: 100ms
+   2. [] direct: 200ms"
+time="Jun 01 17:36:33" level=trace msg=NewDialer dialer=direct p=0xc0000f2000
+time="Jun 01 17:36:33" level=trace msg=NewDialer dialer=direct p=0xc0000f2180
+time="Jun 01 17:36:33" level=trace msg=NewDialer dialer=direct p=0xc0000f2240
+time="Jun 01 17:36:33" level=trace msg=NewDialer dialer=direct p=0xc0000f2300
+time="Jun 01 17:36:33" level=info msg="Group selects dialer" dialer=direct group=test-group network=tcp4
+time="Jun 01 17:36:33" level=info msg="Group selects dialer" dialer=direct group=test-group network=tcp6
+time="Jun 01 17:36:33" level=info msg="Group selects dialer" dialer=direct group=test-group network="udp4(DNS)"
+time="Jun 01 17:36:33" level=info msg="Group selects dialer" dialer=direct group=test-group network="udp6(DNS)"
+time="Jun 01 17:36:33" level=info msg="Group re-selects dialer" _new_dialer=direct _old_dialer=direct group=test-group min=100ms network=tcp4
+time="Jun 01 17:36:33" level=info msg="Group 'test-group' [tcp4]:
+   1. [] direct: 100ms
+   2. [] direct: 200ms"
+126226634	         9.519 ns/op	       0 B/op	       0 allocs/op
+BenchmarkDialerGroupSelectMinLastLatency-6            	time="Jun 01 17:36:35" level=trace msg=NewDialer dialer=direct p=0xc0000f2000
+time="Jun 01 17:36:35" level=trace msg=NewDialer dialer=direct p=0xc0000f2180
+time="Jun 01 17:36:35" level=trace msg=NewDialer dialer=direct p=0xc0000f2240
+time="Jun 01 17:36:35" level=trace msg=NewDialer dialer=direct p=0xc0000f2300
+time="Jun 01 17:36:35" level=info msg="Group selects dialer" dialer=direct group=test-group network=tcp4
+time="Jun 01 17:36:35" level=info msg="Group selects dialer" dialer=direct group=test-group network=tcp6
+time="Jun 01 17:36:35" level=info msg="Group selects dialer" dialer=direct group=test-group network="udp4(DNS)"
+time="Jun 01 17:36:35" level=info msg="Group selects dialer" dialer=direct group=test-group network="udp6(DNS)"
+time="Jun 01 17:36:35" level=info msg="Group re-selects dialer" _new_dialer=direct _old_dialer=direct group=test-group min=100ms network=tcp4
+time="Jun 01 17:36:35" level=info msg="Group 'test-group' [tcp4]:
+   1. [] direct: 100ms
+   2. [] direct: 200ms"
+time="Jun 01 17:36:35" level=trace msg=NewDialer dialer=direct p=0xc0000f2000
+time="Jun 01 17:36:35" level=trace msg=NewDialer dialer=direct p=0xc0000f2180
+time="Jun 01 17:36:35" level=trace msg=NewDialer dialer=direct p=0xc0000f2240
+time="Jun 01 17:36:35" level=trace msg=NewDialer dialer=direct p=0xc0000f2300
+time="Jun 01 17:36:35" level=info msg="Group selects dialer" dialer=direct group=test-group network=tcp4
+time="Jun 01 17:36:35" level=info msg="Group selects dialer" dialer=direct group=test-group network=tcp6
+time="Jun 01 17:36:35" level=info msg="Group selects dialer" dialer=direct group=test-group network="udp4(DNS)"
+time="Jun 01 17:36:35" level=info msg="Group selects dialer" dialer=direct group=test-group network="udp6(DNS)"
+time="Jun 01 17:36:35" level=info msg="Group re-selects dialer" _new_dialer=direct _old_dialer=direct group=test-group min=100ms network=tcp4
+time="Jun 01 17:36:35" level=info msg="Group 'test-group' [tcp4]:
+   1. [] direct: 100ms
+   2. [] direct: 200ms"
+time="Jun 01 17:36:35" level=trace msg=NewDialer dialer=direct p=0xc0000f2000
+time="Jun 01 17:36:35" level=trace msg=NewDialer dialer=direct p=0xc0000f2180
+time="Jun 01 17:36:35" level=trace msg=NewDialer dialer=direct p=0xc0000f2240
+time="Jun 01 17:36:35" level=trace msg=NewDialer dialer=direct p=0xc0000f2300
+time="Jun 01 17:36:35" level=info msg="Group selects dialer" dialer=direct group=test-group network=tcp4
+time="Jun 01 17:36:35" level=info msg="Group selects dialer" dialer=direct group=test-group network=tcp6
+time="Jun 01 17:36:35" level=info msg="Group selects dialer" dialer=direct group=test-group network="udp4(DNS)"
+time="Jun 01 17:36:35" level=info msg="Group selects dialer" dialer=direct group=test-group network="udp6(DNS)"
+time="Jun 01 17:36:35" level=info msg="Group re-selects dialer" _new_dialer=direct _old_dialer=direct group=test-group min=100ms network=tcp4
+time="Jun 01 17:36:35" level=info msg="Group 'test-group' [tcp4]:
+   1. [] direct: 100ms
+   2. [] direct: 200ms"
+time="Jun 01 17:36:35" level=trace msg=NewDialer dialer=direct p=0xc0000f2000
+time="Jun 01 17:36:35" level=trace msg=NewDialer dialer=direct p=0xc0000f2180
+time="Jun 01 17:36:35" level=trace msg=NewDialer dialer=direct p=0xc0000f2240
+time="Jun 01 17:36:35" level=trace msg=NewDialer dialer=direct p=0xc0000f2300
+time="Jun 01 17:36:35" level=info msg="Group selects dialer" dialer=direct group=test-group network=tcp4
+time="Jun 01 17:36:35" level=info msg="Group selects dialer" dialer=direct group=test-group network=tcp6
+time="Jun 01 17:36:35" level=info msg="Group selects dialer" dialer=direct group=test-group network="udp4(DNS)"
+time="Jun 01 17:36:35" level=info msg="Group selects dialer" dialer=direct group=test-group network="udp6(DNS)"
+time="Jun 01 17:36:35" level=info msg="Group re-selects dialer" _new_dialer=direct _old_dialer=direct group=test-group min=100ms network=tcp4
+time="Jun 01 17:36:35" level=info msg="Group 'test-group' [tcp4]:
+   1. [] direct: 100ms
+   2. [] direct: 200ms"
+time="Jun 01 17:36:35" level=trace msg=NewDialer dialer=direct p=0xc0000f2000
+time="Jun 01 17:36:35" level=trace msg=NewDialer dialer=direct p=0xc0000f2180
+time="Jun 01 17:36:35" level=trace msg=NewDialer dialer=direct p=0xc0000f2240
+time="Jun 01 17:36:35" level=trace msg=NewDialer dialer=direct p=0xc0000f2300
+time="Jun 01 17:36:35" level=info msg="Group selects dialer" dialer=direct group=test-group network=tcp4
+time="Jun 01 17:36:35" level=info msg="Group selects dialer" dialer=direct group=test-group network=tcp6
+time="Jun 01 17:36:35" level=info msg="Group selects dialer" dialer=direct group=test-group network="udp4(DNS)"
+time="Jun 01 17:36:35" level=info msg="Group selects dialer" dialer=direct group=test-group network="udp6(DNS)"
+time="Jun 01 17:36:35" level=info msg="Group re-selects dialer" _new_dialer=direct _old_dialer=direct group=test-group min=100ms network=tcp4
+time="Jun 01 17:36:35" level=info msg="Group 'test-group' [tcp4]:
+   1. [] direct: 100ms
+   2. [] direct: 200ms"
+time="Jun 01 17:36:36" level=trace msg=NewDialer dialer=direct p=0xc0000f2000
+time="Jun 01 17:36:36" level=trace msg=NewDialer dialer=direct p=0xc0000f2180
+time="Jun 01 17:36:36" level=trace msg=NewDialer dialer=direct p=0xc0000f2240
+time="Jun 01 17:36:36" level=trace msg=NewDialer dialer=direct p=0xc0000f2300
+time="Jun 01 17:36:36" level=info msg="Group selects dialer" dialer=direct group=test-group network=tcp4
+time="Jun 01 17:36:36" level=info msg="Group selects dialer" dialer=direct group=test-group network=tcp6
+time="Jun 01 17:36:36" level=info msg="Group selects dialer" dialer=direct group=test-group network="udp4(DNS)"
+time="Jun 01 17:36:36" level=info msg="Group selects dialer" dialer=direct group=test-group network="udp6(DNS)"
+time="Jun 01 17:36:36" level=info msg="Group re-selects dialer" _new_dialer=direct _old_dialer=direct group=test-group min=100ms network=tcp4
+time="Jun 01 17:36:36" level=info msg="Group 'test-group' [tcp4]:
+   1. [] direct: 100ms
+   2. [] direct: 200ms"
+125437274	         9.546 ns/op	       0 B/op	       0 allocs/op
+BenchmarkDialerGroupSelectMinLastLatency-6            	time="Jun 01 17:36:37" level=trace msg=NewDialer dialer=direct p=0xc0000f2000
+time="Jun 01 17:36:37" level=trace msg=NewDialer dialer=direct p=0xc0000f2180
+time="Jun 01 17:36:37" level=trace msg=NewDialer dialer=direct p=0xc0000f2240
+time="Jun 01 17:36:37" level=trace msg=NewDialer dialer=direct p=0xc0000f2300
+time="Jun 01 17:36:37" level=info msg="Group selects dialer" dialer=direct group=test-group network=tcp4
+time="Jun 01 17:36:37" level=info msg="Group selects dialer" dialer=direct group=test-group network=tcp6
+time="Jun 01 17:36:37" level=info msg="Group selects dialer" dialer=direct group=test-group network="udp4(DNS)"
+time="Jun 01 17:36:37" level=info msg="Group selects dialer" dialer=direct group=test-group network="udp6(DNS)"
+time="Jun 01 17:36:37" level=info msg="Group re-selects dialer" _new_dialer=direct _old_dialer=direct group=test-group min=100ms network=tcp4
+time="Jun 01 17:36:37" level=info msg="Group 'test-group' [tcp4]:
+   1. [] direct: 100ms
+   2. [] direct: 200ms"
+time="Jun 01 17:36:37" level=trace msg=NewDialer dialer=direct p=0xc0000f2000
+time="Jun 01 17:36:37" level=trace msg=NewDialer dialer=direct p=0xc0000f2180
+time="Jun 01 17:36:37" level=trace msg=NewDialer dialer=direct p=0xc0000f2240
+time="Jun 01 17:36:37" level=trace msg=NewDialer dialer=direct p=0xc0000f2300
+time="Jun 01 17:36:37" level=info msg="Group selects dialer" dialer=direct group=test-group network=tcp4
+time="Jun 01 17:36:37" level=info msg="Group selects dialer" dialer=direct group=test-group network=tcp6
+time="Jun 01 17:36:37" level=info msg="Group selects dialer" dialer=direct group=test-group network="udp4(DNS)"
+time="Jun 01 17:36:37" level=info msg="Group selects dialer" dialer=direct group=test-group network="udp6(DNS)"
+time="Jun 01 17:36:37" level=info msg="Group re-selects dialer" _new_dialer=direct _old_dialer=direct group=test-group min=100ms network=tcp4
+time="Jun 01 17:36:37" level=info msg="Group 'test-group' [tcp4]:
+   1. [] direct: 100ms
+   2. [] direct: 200ms"
+time="Jun 01 17:36:37" level=trace msg=NewDialer dialer=direct p=0xc0000f2000
+time="Jun 01 17:36:37" level=trace msg=NewDialer dialer=direct p=0xc0000f2180
+time="Jun 01 17:36:37" level=trace msg=NewDialer dialer=direct p=0xc0000f2240
+time="Jun 01 17:36:37" level=trace msg=NewDialer dialer=direct p=0xc0000f2300
+time="Jun 01 17:36:37" level=info msg="Group selects dialer" dialer=direct group=test-group network=tcp4
+time="Jun 01 17:36:37" level=info msg="Group selects dialer" dialer=direct group=test-group network=tcp6
+time="Jun 01 17:36:37" level=info msg="Group selects dialer" dialer=direct group=test-group network="udp4(DNS)"
+time="Jun 01 17:36:37" level=info msg="Group selects dialer" dialer=direct group=test-group network="udp6(DNS)"
+time="Jun 01 17:36:37" level=info msg="Group re-selects dialer" _new_dialer=direct _old_dialer=direct group=test-group min=100ms network=tcp4
+time="Jun 01 17:36:37" level=info msg="Group 'test-group' [tcp4]:
+   1. [] direct: 100ms
+   2. [] direct: 200ms"
+time="Jun 01 17:36:37" level=trace msg=NewDialer dialer=direct p=0xc0000f2000
+time="Jun 01 17:36:37" level=trace msg=NewDialer dialer=direct p=0xc0000f2180
+time="Jun 01 17:36:37" level=trace msg=NewDialer dialer=direct p=0xc0000f2240
+time="Jun 01 17:36:37" level=trace msg=NewDialer dialer=direct p=0xc0000f2300
+time="Jun 01 17:36:37" level=info msg="Group selects dialer" dialer=direct group=test-group network=tcp4
+time="Jun 01 17:36:37" level=info msg="Group selects dialer" dialer=direct group=test-group network=tcp6
+time="Jun 01 17:36:37" level=info msg="Group selects dialer" dialer=direct group=test-group network="udp4(DNS)"
+time="Jun 01 17:36:37" level=info msg="Group selects dialer" dialer=direct group=test-group network="udp6(DNS)"
+time="Jun 01 17:36:37" level=info msg="Group re-selects dialer" _new_dialer=direct _old_dialer=direct group=test-group min=100ms network=tcp4
+time="Jun 01 17:36:37" level=info msg="Group 'test-group' [tcp4]:
+   1. [] direct: 100ms
+   2. [] direct: 200ms"
+time="Jun 01 17:36:37" level=trace msg=NewDialer dialer=direct p=0xc0000f2000
+time="Jun 01 17:36:37" level=trace msg=NewDialer dialer=direct p=0xc0000f2180
+time="Jun 01 17:36:37" level=trace msg=NewDialer dialer=direct p=0xc0000f2240
+time="Jun 01 17:36:37" level=trace msg=NewDialer dialer=direct p=0xc0000f2300
+time="Jun 01 17:36:37" level=info msg="Group selects dialer" dialer=direct group=test-group network=tcp4
+time="Jun 01 17:36:37" level=info msg="Group selects dialer" dialer=direct group=test-group network=tcp6
+time="Jun 01 17:36:37" level=info msg="Group selects dialer" dialer=direct group=test-group network="udp4(DNS)"
+time="Jun 01 17:36:37" level=info msg="Group selects dialer" dialer=direct group=test-group network="udp6(DNS)"
+time="Jun 01 17:36:37" level=info msg="Group re-selects dialer" _new_dialer=direct _old_dialer=direct group=test-group min=100ms network=tcp4
+time="Jun 01 17:36:37" level=info msg="Group 'test-group' [tcp4]:
+   1. [] direct: 100ms
+   2. [] direct: 200ms"
+time="Jun 01 17:36:38" level=trace msg=NewDialer dialer=direct p=0xc0000f2000
+time="Jun 01 17:36:38" level=trace msg=NewDialer dialer=direct p=0xc0000f2180
+time="Jun 01 17:36:38" level=trace msg=NewDialer dialer=direct p=0xc0000f2240
+time="Jun 01 17:36:38" level=trace msg=NewDialer dialer=direct p=0xc0000f2300
+time="Jun 01 17:36:38" level=info msg="Group selects dialer" dialer=direct group=test-group network=tcp4
+time="Jun 01 17:36:38" level=info msg="Group selects dialer" dialer=direct group=test-group network=tcp6
+time="Jun 01 17:36:38" level=info msg="Group selects dialer" dialer=direct group=test-group network="udp4(DNS)"
+time="Jun 01 17:36:38" level=info msg="Group selects dialer" dialer=direct group=test-group network="udp6(DNS)"
+time="Jun 01 17:36:38" level=info msg="Group re-selects dialer" _new_dialer=direct _old_dialer=direct group=test-group min=100ms network=tcp4
+time="Jun 01 17:36:38" level=info msg="Group 'test-group' [tcp4]:
+   1. [] direct: 100ms
+   2. [] direct: 200ms"
+125766915	         9.527 ns/op	       0 B/op	       0 allocs/op
+BenchmarkDialerGroupSelectMinLastLatency-6            	time="Jun 01 17:36:39" level=trace msg=NewDialer dialer=direct p=0xc0000f2000
+time="Jun 01 17:36:39" level=trace msg=NewDialer dialer=direct p=0xc0000f2180
+time="Jun 01 17:36:39" level=trace msg=NewDialer dialer=direct p=0xc0000f2240
+time="Jun 01 17:36:39" level=trace msg=NewDialer dialer=direct p=0xc0000f2300
+time="Jun 01 17:36:39" level=info msg="Group selects dialer" dialer=direct group=test-group network=tcp4
+time="Jun 01 17:36:39" level=info msg="Group selects dialer" dialer=direct group=test-group network=tcp6
+time="Jun 01 17:36:39" level=info msg="Group selects dialer" dialer=direct group=test-group network="udp4(DNS)"
+time="Jun 01 17:36:39" level=info msg="Group selects dialer" dialer=direct group=test-group network="udp6(DNS)"
+time="Jun 01 17:36:39" level=info msg="Group re-selects dialer" _new_dialer=direct _old_dialer=direct group=test-group min=100ms network=tcp4
+time="Jun 01 17:36:39" level=info msg="Group 'test-group' [tcp4]:
+   1. [] direct: 100ms
+   2. [] direct: 200ms"
+time="Jun 01 17:36:39" level=trace msg=NewDialer dialer=direct p=0xc0000f2000
+time="Jun 01 17:36:39" level=trace msg=NewDialer dialer=direct p=0xc0000f2180
+time="Jun 01 17:36:39" level=trace msg=NewDialer dialer=direct p=0xc0000f2240
+time="Jun 01 17:36:39" level=trace msg=NewDialer dialer=direct p=0xc0000f2300
+time="Jun 01 17:36:39" level=info msg="Group selects dialer" dialer=direct group=test-group network=tcp4
+time="Jun 01 17:36:39" level=info msg="Group selects dialer" dialer=direct group=test-group network=tcp6
+time="Jun 01 17:36:39" level=info msg="Group selects dialer" dialer=direct group=test-group network="udp4(DNS)"
+time="Jun 01 17:36:39" level=info msg="Group selects dialer" dialer=direct group=test-group network="udp6(DNS)"
+time="Jun 01 17:36:39" level=info msg="Group re-selects dialer" _new_dialer=direct _old_dialer=direct group=test-group min=100ms network=tcp4
+time="Jun 01 17:36:39" level=info msg="Group 'test-group' [tcp4]:
+   1. [] direct: 100ms
+   2. [] direct: 200ms"
+time="Jun 01 17:36:39" level=trace msg=NewDialer dialer=direct p=0xc0000f2000
+time="Jun 01 17:36:39" level=trace msg=NewDialer dialer=direct p=0xc0000f2180
+time="Jun 01 17:36:39" level=trace msg=NewDialer dialer=direct p=0xc0000f2240
+time="Jun 01 17:36:39" level=trace msg=NewDialer dialer=direct p=0xc0000f2300
+time="Jun 01 17:36:39" level=info msg="Group selects dialer" dialer=direct group=test-group network=tcp4
+time="Jun 01 17:36:39" level=info msg="Group selects dialer" dialer=direct group=test-group network=tcp6
+time="Jun 01 17:36:39" level=info msg="Group selects dialer" dialer=direct group=test-group network="udp4(DNS)"
+time="Jun 01 17:36:39" level=info msg="Group selects dialer" dialer=direct group=test-group network="udp6(DNS)"
+time="Jun 01 17:36:39" level=info msg="Group re-selects dialer" _new_dialer=direct _old_dialer=direct group=test-group min=100ms network=tcp4
+time="Jun 01 17:36:39" level=info msg="Group 'test-group' [tcp4]:
+   1. [] direct: 100ms
+   2. [] direct: 200ms"
+time="Jun 01 17:36:39" level=trace msg=NewDialer dialer=direct p=0xc0000f2000
+time="Jun 01 17:36:39" level=trace msg=NewDialer dialer=direct p=0xc0000f2180
+time="Jun 01 17:36:39" level=trace msg=NewDialer dialer=direct p=0xc0000f2240
+time="Jun 01 17:36:39" level=trace msg=NewDialer dialer=direct p=0xc0000f2300
+time="Jun 01 17:36:39" level=info msg="Group selects dialer" dialer=direct group=test-group network=tcp4
+time="Jun 01 17:36:39" level=info msg="Group selects dialer" dialer=direct group=test-group network=tcp6
+time="Jun 01 17:36:39" level=info msg="Group selects dialer" dialer=direct group=test-group network="udp4(DNS)"
+time="Jun 01 17:36:39" level=info msg="Group selects dialer" dialer=direct group=test-group network="udp6(DNS)"
+time="Jun 01 17:36:39" level=info msg="Group re-selects dialer" _new_dialer=direct _old_dialer=direct group=test-group min=100ms network=tcp4
+time="Jun 01 17:36:39" level=info msg="Group 'test-group' [tcp4]:
+   1. [] direct: 100ms
+   2. [] direct: 200ms"
+time="Jun 01 17:36:39" level=trace msg=NewDialer dialer=direct p=0xc0000f2000
+time="Jun 01 17:36:39" level=trace msg=NewDialer dialer=direct p=0xc0000f2180
+time="Jun 01 17:36:39" level=trace msg=NewDialer dialer=direct p=0xc0000f2240
+time="Jun 01 17:36:39" level=trace msg=NewDialer dialer=direct p=0xc0000f2300
+time="Jun 01 17:36:39" level=info msg="Group selects dialer" dialer=direct group=test-group network=tcp4
+time="Jun 01 17:36:39" level=info msg="Group selects dialer" dialer=direct group=test-group network=tcp6
+time="Jun 01 17:36:39" level=info msg="Group selects dialer" dialer=direct group=test-group network="udp4(DNS)"
+time="Jun 01 17:36:39" level=info msg="Group selects dialer" dialer=direct group=test-group network="udp6(DNS)"
+time="Jun 01 17:36:39" level=info msg="Group re-selects dialer" _new_dialer=direct _old_dialer=direct group=test-group min=100ms network=tcp4
+time="Jun 01 17:36:39" level=info msg="Group 'test-group' [tcp4]:
+   1. [] direct: 100ms
+   2. [] direct: 200ms"
+time="Jun 01 17:36:40" level=trace msg=NewDialer dialer=direct p=0xc0000f2000
+time="Jun 01 17:36:40" level=trace msg=NewDialer dialer=direct p=0xc0000f2180
+time="Jun 01 17:36:40" level=trace msg=NewDialer dialer=direct p=0xc0000f2240
+time="Jun 01 17:36:40" level=trace msg=NewDialer dialer=direct p=0xc0000f2300
+time="Jun 01 17:36:40" level=info msg="Group selects dialer" dialer=direct group=test-group network=tcp4
+time="Jun 01 17:36:40" level=info msg="Group selects dialer" dialer=direct group=test-group network=tcp6
+time="Jun 01 17:36:40" level=info msg="Group selects dialer" dialer=direct group=test-group network="udp4(DNS)"
+time="Jun 01 17:36:40" level=info msg="Group selects dialer" dialer=direct group=test-group network="udp6(DNS)"
+time="Jun 01 17:36:40" level=info msg="Group re-selects dialer" _new_dialer=direct _old_dialer=direct group=test-group min=100ms network=tcp4
+time="Jun 01 17:36:40" level=info msg="Group 'test-group' [tcp4]:
+   1. [] direct: 100ms
+   2. [] direct: 200ms"
+126096666	         9.510 ns/op	       0 B/op	       0 allocs/op
+BenchmarkDialerGroupSelectMinLastLatency-6            	time="Jun 01 17:36:41" level=trace msg=NewDialer dialer=direct p=0xc0000f2000
+time="Jun 01 17:36:41" level=trace msg=NewDialer dialer=direct p=0xc0000f2180
+time="Jun 01 17:36:41" level=trace msg=NewDialer dialer=direct p=0xc0000f2240
+time="Jun 01 17:36:41" level=trace msg=NewDialer dialer=direct p=0xc0000f2300
+time="Jun 01 17:36:41" level=info msg="Group selects dialer" dialer=direct group=test-group network=tcp4
+time="Jun 01 17:36:41" level=info msg="Group selects dialer" dialer=direct group=test-group network=tcp6
+time="Jun 01 17:36:41" level=info msg="Group selects dialer" dialer=direct group=test-group network="udp4(DNS)"
+time="Jun 01 17:36:41" level=info msg="Group selects dialer" dialer=direct group=test-group network="udp6(DNS)"
+time="Jun 01 17:36:41" level=info msg="Group re-selects dialer" _new_dialer=direct _old_dialer=direct group=test-group min=100ms network=tcp4
+time="Jun 01 17:36:41" level=info msg="Group 'test-group' [tcp4]:
+   1. [] direct: 100ms
+   2. [] direct: 200ms"
+time="Jun 01 17:36:41" level=trace msg=NewDialer dialer=direct p=0xc0000f2000
+time="Jun 01 17:36:41" level=trace msg=NewDialer dialer=direct p=0xc0000f2180
+time="Jun 01 17:36:41" level=trace msg=NewDialer dialer=direct p=0xc0000f2240
+time="Jun 01 17:36:41" level=trace msg=NewDialer dialer=direct p=0xc0000f2300
+time="Jun 01 17:36:41" level=info msg="Group selects dialer" dialer=direct group=test-group network=tcp4
+time="Jun 01 17:36:41" level=info msg="Group selects dialer" dialer=direct group=test-group network=tcp6
+time="Jun 01 17:36:41" level=info msg="Group selects dialer" dialer=direct group=test-group network="udp4(DNS)"
+time="Jun 01 17:36:41" level=info msg="Group selects dialer" dialer=direct group=test-group network="udp6(DNS)"
+time="Jun 01 17:36:41" level=info msg="Group re-selects dialer" _new_dialer=direct _old_dialer=direct group=test-group min=100ms network=tcp4
+time="Jun 01 17:36:41" level=info msg="Group 'test-group' [tcp4]:
+   1. [] direct: 100ms
+   2. [] direct: 200ms"
+time="Jun 01 17:36:41" level=trace msg=NewDialer dialer=direct p=0xc0000f2000
+time="Jun 01 17:36:41" level=trace msg=NewDialer dialer=direct p=0xc0000f2180
+time="Jun 01 17:36:41" level=trace msg=NewDialer dialer=direct p=0xc0000f2240
+time="Jun 01 17:36:41" level=trace msg=NewDialer dialer=direct p=0xc0000f2300
+time="Jun 01 17:36:41" level=info msg="Group selects dialer" dialer=direct group=test-group network=tcp4
+time="Jun 01 17:36:41" level=info msg="Group selects dialer" dialer=direct group=test-group network=tcp6
+time="Jun 01 17:36:41" level=info msg="Group selects dialer" dialer=direct group=test-group network="udp4(DNS)"
+time="Jun 01 17:36:41" level=info msg="Group selects dialer" dialer=direct group=test-group network="udp6(DNS)"
+time="Jun 01 17:36:41" level=info msg="Group re-selects dialer" _new_dialer=direct _old_dialer=direct group=test-group min=100ms network=tcp4
+time="Jun 01 17:36:41" level=info msg="Group 'test-group' [tcp4]:
+   1. [] direct: 100ms
+   2. [] direct: 200ms"
+time="Jun 01 17:36:41" level=trace msg=NewDialer dialer=direct p=0xc0000f2000
+time="Jun 01 17:36:41" level=trace msg=NewDialer dialer=direct p=0xc0000f2180
+time="Jun 01 17:36:41" level=trace msg=NewDialer dialer=direct p=0xc0000f2240
+time="Jun 01 17:36:41" level=trace msg=NewDialer dialer=direct p=0xc0000f2300
+time="Jun 01 17:36:41" level=info msg="Group selects dialer" dialer=direct group=test-group network=tcp4
+time="Jun 01 17:36:41" level=info msg="Group selects dialer" dialer=direct group=test-group network=tcp6
+time="Jun 01 17:36:41" level=info msg="Group selects dialer" dialer=direct group=test-group network="udp4(DNS)"
+time="Jun 01 17:36:41" level=info msg="Group selects dialer" dialer=direct group=test-group network="udp6(DNS)"
+time="Jun 01 17:36:41" level=info msg="Group re-selects dialer" _new_dialer=direct _old_dialer=direct group=test-group min=100ms network=tcp4
+time="Jun 01 17:36:41" level=info msg="Group 'test-group' [tcp4]:
+   1. [] direct: 100ms
+   2. [] direct: 200ms"
+time="Jun 01 17:36:41" level=trace msg=NewDialer dialer=direct p=0xc0000f2000
+time="Jun 01 17:36:41" level=trace msg=NewDialer dialer=direct p=0xc0000f2180
+time="Jun 01 17:36:41" level=trace msg=NewDialer dialer=direct p=0xc0000f2240
+time="Jun 01 17:36:41" level=trace msg=NewDialer dialer=direct p=0xc0000f2300
+time="Jun 01 17:36:41" level=info msg="Group selects dialer" dialer=direct group=test-group network=tcp4
+time="Jun 01 17:36:41" level=info msg="Group selects dialer" dialer=direct group=test-group network=tcp6
+time="Jun 01 17:36:41" level=info msg="Group selects dialer" dialer=direct group=test-group network="udp4(DNS)"
+time="Jun 01 17:36:41" level=info msg="Group selects dialer" dialer=direct group=test-group network="udp6(DNS)"
+time="Jun 01 17:36:41" level=info msg="Group re-selects dialer" _new_dialer=direct _old_dialer=direct group=test-group min=100ms network=tcp4
+time="Jun 01 17:36:41" level=info msg="Group 'test-group' [tcp4]:
+   1. [] direct: 100ms
+   2. [] direct: 200ms"
+time="Jun 01 17:36:42" level=trace msg=NewDialer dialer=direct p=0xc0000f2000
+time="Jun 01 17:36:42" level=trace msg=NewDialer dialer=direct p=0xc0000f2180
+time="Jun 01 17:36:42" level=trace msg=NewDialer dialer=direct p=0xc0000f2240
+time="Jun 01 17:36:42" level=trace msg=NewDialer dialer=direct p=0xc0000f2300
+time="Jun 01 17:36:42" level=info msg="Group selects dialer" dialer=direct group=test-group network=tcp4
+time="Jun 01 17:36:42" level=info msg="Group selects dialer" dialer=direct group=test-group network=tcp6
+time="Jun 01 17:36:42" level=info msg="Group selects dialer" dialer=direct group=test-group network="udp4(DNS)"
+time="Jun 01 17:36:42" level=info msg="Group selects dialer" dialer=direct group=test-group network="udp6(DNS)"
+time="Jun 01 17:36:42" level=info msg="Group re-selects dialer" _new_dialer=direct _old_dialer=direct group=test-group min=100ms network=tcp4
+time="Jun 01 17:36:42" level=info msg="Group 'test-group' [tcp4]:
+   1. [] direct: 100ms
+   2. [] direct: 200ms"
+126173035	         9.528 ns/op	       0 B/op	       0 allocs/op
+BenchmarkDialerGroupSelectMinLastLatency-6            	time="Jun 01 17:36:43" level=trace msg=NewDialer dialer=direct p=0xc0000f2000
+time="Jun 01 17:36:43" level=trace msg=NewDialer dialer=direct p=0xc0000f2180
+time="Jun 01 17:36:43" level=trace msg=NewDialer dialer=direct p=0xc0000f2240
+time="Jun 01 17:36:43" level=trace msg=NewDialer dialer=direct p=0xc0000f2300
+time="Jun 01 17:36:43" level=info msg="Group selects dialer" dialer=direct group=test-group network=tcp4
+time="Jun 01 17:36:43" level=info msg="Group selects dialer" dialer=direct group=test-group network=tcp6
+time="Jun 01 17:36:43" level=info msg="Group selects dialer" dialer=direct group=test-group network="udp4(DNS)"
+time="Jun 01 17:36:43" level=info msg="Group selects dialer" dialer=direct group=test-group network="udp6(DNS)"
+time="Jun 01 17:36:43" level=info msg="Group re-selects dialer" _new_dialer=direct _old_dialer=direct group=test-group min=100ms network=tcp4
+time="Jun 01 17:36:43" level=info msg="Group 'test-group' [tcp4]:
+   1. [] direct: 100ms
+   2. [] direct: 200ms"
+time="Jun 01 17:36:43" level=trace msg=NewDialer dialer=direct p=0xc0000f2000
+time="Jun 01 17:36:43" level=trace msg=NewDialer dialer=direct p=0xc0000f2180
+time="Jun 01 17:36:43" level=trace msg=NewDialer dialer=direct p=0xc0000f2240
+time="Jun 01 17:36:43" level=trace msg=NewDialer dialer=direct p=0xc0000f2300
+time="Jun 01 17:36:43" level=info msg="Group selects dialer" dialer=direct group=test-group network=tcp4
+time="Jun 01 17:36:43" level=info msg="Group selects dialer" dialer=direct group=test-group network=tcp6
+time="Jun 01 17:36:43" level=info msg="Group selects dialer" dialer=direct group=test-group network="udp4(DNS)"
+time="Jun 01 17:36:43" level=info msg="Group selects dialer" dialer=direct group=test-group network="udp6(DNS)"
+time="Jun 01 17:36:43" level=info msg="Group re-selects dialer" _new_dialer=direct _old_dialer=direct group=test-group min=100ms network=tcp4
+time="Jun 01 17:36:43" level=info msg="Group 'test-group' [tcp4]:
+   1. [] direct: 100ms
+   2. [] direct: 200ms"
+time="Jun 01 17:36:43" level=trace msg=NewDialer dialer=direct p=0xc0000f2000
+time="Jun 01 17:36:43" level=trace msg=NewDialer dialer=direct p=0xc0000f2180
+time="Jun 01 17:36:43" level=trace msg=NewDialer dialer=direct p=0xc0000f2240
+time="Jun 01 17:36:43" level=trace msg=NewDialer dialer=direct p=0xc0000f2300
+time="Jun 01 17:36:43" level=info msg="Group selects dialer" dialer=direct group=test-group network=tcp4
+time="Jun 01 17:36:43" level=info msg="Group selects dialer" dialer=direct group=test-group network=tcp6
+time="Jun 01 17:36:43" level=info msg="Group selects dialer" dialer=direct group=test-group network="udp4(DNS)"
+time="Jun 01 17:36:43" level=info msg="Group selects dialer" dialer=direct group=test-group network="udp6(DNS)"
+time="Jun 01 17:36:43" level=info msg="Group re-selects dialer" _new_dialer=direct _old_dialer=direct group=test-group min=100ms network=tcp4
+time="Jun 01 17:36:43" level=info msg="Group 'test-group' [tcp4]:
+   1. [] direct: 100ms
+   2. [] direct: 200ms"
+time="Jun 01 17:36:43" level=trace msg=NewDialer dialer=direct p=0xc0000f2000
+time="Jun 01 17:36:43" level=trace msg=NewDialer dialer=direct p=0xc0000f2180
+time="Jun 01 17:36:43" level=trace msg=NewDialer dialer=direct p=0xc0000f2240
+time="Jun 01 17:36:43" level=trace msg=NewDialer dialer=direct p=0xc0000f2300
+time="Jun 01 17:36:43" level=info msg="Group selects dialer" dialer=direct group=test-group network=tcp4
+time="Jun 01 17:36:43" level=info msg="Group selects dialer" dialer=direct group=test-group network=tcp6
+time="Jun 01 17:36:43" level=info msg="Group selects dialer" dialer=direct group=test-group network="udp4(DNS)"
+time="Jun 01 17:36:43" level=info msg="Group selects dialer" dialer=direct group=test-group network="udp6(DNS)"
+time="Jun 01 17:36:43" level=info msg="Group re-selects dialer" _new_dialer=direct _old_dialer=direct group=test-group min=100ms network=tcp4
+time="Jun 01 17:36:43" level=info msg="Group 'test-group' [tcp4]:
+   1. [] direct: 100ms
+   2. [] direct: 200ms"
+time="Jun 01 17:36:43" level=trace msg=NewDialer dialer=direct p=0xc0000f2000
+time="Jun 01 17:36:43" level=trace msg=NewDialer dialer=direct p=0xc0000f2180
+time="Jun 01 17:36:43" level=trace msg=NewDialer dialer=direct p=0xc0000f2240
+time="Jun 01 17:36:43" level=trace msg=NewDialer dialer=direct p=0xc0000f2300
+time="Jun 01 17:36:43" level=info msg="Group selects dialer" dialer=direct group=test-group network=tcp4
+time="Jun 01 17:36:43" level=info msg="Group selects dialer" dialer=direct group=test-group network=tcp6
+time="Jun 01 17:36:43" level=info msg="Group selects dialer" dialer=direct group=test-group network="udp4(DNS)"
+time="Jun 01 17:36:43" level=info msg="Group selects dialer" dialer=direct group=test-group network="udp6(DNS)"
+time="Jun 01 17:36:43" level=info msg="Group re-selects dialer" _new_dialer=direct _old_dialer=direct group=test-group min=100ms network=tcp4
+time="Jun 01 17:36:43" level=info msg="Group 'test-group' [tcp4]:
+   1. [] direct: 100ms
+   2. [] direct: 200ms"
+time="Jun 01 17:36:44" level=trace msg=NewDialer dialer=direct p=0xc0000f2000
+time="Jun 01 17:36:44" level=trace msg=NewDialer dialer=direct p=0xc0000f2180
+time="Jun 01 17:36:44" level=trace msg=NewDialer dialer=direct p=0xc0000f2240
+time="Jun 01 17:36:44" level=trace msg=NewDialer dialer=direct p=0xc0000f2300
+time="Jun 01 17:36:44" level=info msg="Group selects dialer" dialer=direct group=test-group network=tcp4
+time="Jun 01 17:36:44" level=info msg="Group selects dialer" dialer=direct group=test-group network=tcp6
+time="Jun 01 17:36:44" level=info msg="Group selects dialer" dialer=direct group=test-group network="udp4(DNS)"
+time="Jun 01 17:36:44" level=info msg="Group selects dialer" dialer=direct group=test-group network="udp6(DNS)"
+time="Jun 01 17:36:44" level=info msg="Group re-selects dialer" _new_dialer=direct _old_dialer=direct group=test-group min=100ms network=tcp4
+time="Jun 01 17:36:44" level=info msg="Group 'test-group' [tcp4]:
+   1. [] direct: 100ms
+   2. [] direct: 200ms"
+125912014	         9.533 ns/op	       0 B/op	       0 allocs/op
+BenchmarkDialerGroupSelectMinLastLatency-6            	time="Jun 01 17:36:45" level=trace msg=NewDialer dialer=direct p=0xc0000f2000
+time="Jun 01 17:36:45" level=trace msg=NewDialer dialer=direct p=0xc0000f2180
+time="Jun 01 17:36:45" level=trace msg=NewDialer dialer=direct p=0xc0000f2240
+time="Jun 01 17:36:45" level=trace msg=NewDialer dialer=direct p=0xc0000f2300
+time="Jun 01 17:36:45" level=info msg="Group selects dialer" dialer=direct group=test-group network=tcp4
+time="Jun 01 17:36:45" level=info msg="Group selects dialer" dialer=direct group=test-group network=tcp6
+time="Jun 01 17:36:45" level=info msg="Group selects dialer" dialer=direct group=test-group network="udp4(DNS)"
+time="Jun 01 17:36:45" level=info msg="Group selects dialer" dialer=direct group=test-group network="udp6(DNS)"
+time="Jun 01 17:36:45" level=info msg="Group re-selects dialer" _new_dialer=direct _old_dialer=direct group=test-group min=100ms network=tcp4
+time="Jun 01 17:36:45" level=info msg="Group 'test-group' [tcp4]:
+   1. [] direct: 100ms
+   2. [] direct: 200ms"
+time="Jun 01 17:36:45" level=trace msg=NewDialer dialer=direct p=0xc0000f2000
+time="Jun 01 17:36:45" level=trace msg=NewDialer dialer=direct p=0xc0000f2180
+time="Jun 01 17:36:45" level=trace msg=NewDialer dialer=direct p=0xc0000f2240
+time="Jun 01 17:36:45" level=trace msg=NewDialer dialer=direct p=0xc0000f2300
+time="Jun 01 17:36:45" level=info msg="Group selects dialer" dialer=direct group=test-group network=tcp4
+time="Jun 01 17:36:45" level=info msg="Group selects dialer" dialer=direct group=test-group network=tcp6
+time="Jun 01 17:36:45" level=info msg="Group selects dialer" dialer=direct group=test-group network="udp4(DNS)"
+time="Jun 01 17:36:45" level=info msg="Group selects dialer" dialer=direct group=test-group network="udp6(DNS)"
+time="Jun 01 17:36:45" level=info msg="Group re-selects dialer" _new_dialer=direct _old_dialer=direct group=test-group min=100ms network=tcp4
+time="Jun 01 17:36:45" level=info msg="Group 'test-group' [tcp4]:
+   1. [] direct: 100ms
+   2. [] direct: 200ms"
+time="Jun 01 17:36:45" level=trace msg=NewDialer dialer=direct p=0xc0000f2000
+time="Jun 01 17:36:45" level=trace msg=NewDialer dialer=direct p=0xc0000f2180
+time="Jun 01 17:36:45" level=trace msg=NewDialer dialer=direct p=0xc0000f2240
+time="Jun 01 17:36:45" level=trace msg=NewDialer dialer=direct p=0xc0000f2300
+time="Jun 01 17:36:45" level=info msg="Group selects dialer" dialer=direct group=test-group network=tcp4
+time="Jun 01 17:36:45" level=info msg="Group selects dialer" dialer=direct group=test-group network=tcp6
+time="Jun 01 17:36:45" level=info msg="Group selects dialer" dialer=direct group=test-group network="udp4(DNS)"
+time="Jun 01 17:36:45" level=info msg="Group selects dialer" dialer=direct group=test-group network="udp6(DNS)"
+time="Jun 01 17:36:45" level=info msg="Group re-selects dialer" _new_dialer=direct _old_dialer=direct group=test-group min=100ms network=tcp4
+time="Jun 01 17:36:45" level=info msg="Group 'test-group' [tcp4]:
+   1. [] direct: 100ms
+   2. [] direct: 200ms"
+time="Jun 01 17:36:45" level=trace msg=NewDialer dialer=direct p=0xc0000f2000
+time="Jun 01 17:36:45" level=trace msg=NewDialer dialer=direct p=0xc0000f2180
+time="Jun 01 17:36:45" level=trace msg=NewDialer dialer=direct p=0xc0000f2240
+time="Jun 01 17:36:45" level=trace msg=NewDialer dialer=direct p=0xc0000f2300
+time="Jun 01 17:36:45" level=info msg="Group selects dialer" dialer=direct group=test-group network=tcp4
+time="Jun 01 17:36:45" level=info msg="Group selects dialer" dialer=direct group=test-group network=tcp6
+time="Jun 01 17:36:45" level=info msg="Group selects dialer" dialer=direct group=test-group network="udp4(DNS)"
+time="Jun 01 17:36:45" level=info msg="Group selects dialer" dialer=direct group=test-group network="udp6(DNS)"
+time="Jun 01 17:36:45" level=info msg="Group re-selects dialer" _new_dialer=direct _old_dialer=direct group=test-group min=100ms network=tcp4
+time="Jun 01 17:36:45" level=info msg="Group 'test-group' [tcp4]:
+   1. [] direct: 100ms
+   2. [] direct: 200ms"
+time="Jun 01 17:36:45" level=trace msg=NewDialer dialer=direct p=0xc0000f2000
+time="Jun 01 17:36:45" level=trace msg=NewDialer dialer=direct p=0xc0000f2180
+time="Jun 01 17:36:45" level=trace msg=NewDialer dialer=direct p=0xc0000f2240
+time="Jun 01 17:36:45" level=trace msg=NewDialer dialer=direct p=0xc0000f2300
+time="Jun 01 17:36:45" level=info msg="Group selects dialer" dialer=direct group=test-group network=tcp4
+time="Jun 01 17:36:45" level=info msg="Group selects dialer" dialer=direct group=test-group network=tcp6
+time="Jun 01 17:36:45" level=info msg="Group selects dialer" dialer=direct group=test-group network="udp4(DNS)"
+time="Jun 01 17:36:45" level=info msg="Group selects dialer" dialer=direct group=test-group network="udp6(DNS)"
+time="Jun 01 17:36:45" level=info msg="Group re-selects dialer" _new_dialer=direct _old_dialer=direct group=test-group min=100ms network=tcp4
+time="Jun 01 17:36:45" level=info msg="Group 'test-group' [tcp4]:
+   1. [] direct: 100ms
+   2. [] direct: 200ms"
+time="Jun 01 17:36:46" level=trace msg=NewDialer dialer=direct p=0xc0000f2000
+time="Jun 01 17:36:46" level=trace msg=NewDialer dialer=direct p=0xc0000f2180
+time="Jun 01 17:36:46" level=trace msg=NewDialer dialer=direct p=0xc0000f2240
+time="Jun 01 17:36:46" level=trace msg=NewDialer dialer=direct p=0xc0000f2300
+time="Jun 01 17:36:46" level=info msg="Group selects dialer" dialer=direct group=test-group network=tcp4
+time="Jun 01 17:36:46" level=info msg="Group selects dialer" dialer=direct group=test-group network=tcp6
+time="Jun 01 17:36:46" level=info msg="Group selects dialer" dialer=direct group=test-group network="udp4(DNS)"
+time="Jun 01 17:36:46" level=info msg="Group selects dialer" dialer=direct group=test-group network="udp6(DNS)"
+time="Jun 01 17:36:46" level=info msg="Group re-selects dialer" _new_dialer=direct _old_dialer=direct group=test-group min=100ms network=tcp4
+time="Jun 01 17:36:46" level=info msg="Group 'test-group' [tcp4]:
+   1. [] direct: 100ms
+   2. [] direct: 200ms"
+126024324	         9.524 ns/op	       0 B/op	       0 allocs/op
+BenchmarkDialerGroupSelectMinLastLatency-6            	time="Jun 01 17:36:48" level=trace msg=NewDialer dialer=direct p=0xc0000f2000
+time="Jun 01 17:36:48" level=trace msg=NewDialer dialer=direct p=0xc0000f2180
+time="Jun 01 17:36:48" level=trace msg=NewDialer dialer=direct p=0xc0000f2240
+time="Jun 01 17:36:48" level=trace msg=NewDialer dialer=direct p=0xc0000f2300
+time="Jun 01 17:36:48" level=info msg="Group selects dialer" dialer=direct group=test-group network=tcp4
+time="Jun 01 17:36:48" level=info msg="Group selects dialer" dialer=direct group=test-group network=tcp6
+time="Jun 01 17:36:48" level=info msg="Group selects dialer" dialer=direct group=test-group network="udp4(DNS)"
+time="Jun 01 17:36:48" level=info msg="Group selects dialer" dialer=direct group=test-group network="udp6(DNS)"
+time="Jun 01 17:36:48" level=info msg="Group re-selects dialer" _new_dialer=direct _old_dialer=direct group=test-group min=100ms network=tcp4
+time="Jun 01 17:36:48" level=info msg="Group 'test-group' [tcp4]:
+   1. [] direct: 100ms
+   2. [] direct: 200ms"
+time="Jun 01 17:36:48" level=trace msg=NewDialer dialer=direct p=0xc0000f2000
+time="Jun 01 17:36:48" level=trace msg=NewDialer dialer=direct p=0xc0000f2180
+time="Jun 01 17:36:48" level=trace msg=NewDialer dialer=direct p=0xc0000f2240
+time="Jun 01 17:36:48" level=trace msg=NewDialer dialer=direct p=0xc0000f2300
+time="Jun 01 17:36:48" level=info msg="Group selects dialer" dialer=direct group=test-group network=tcp4
+time="Jun 01 17:36:48" level=info msg="Group selects dialer" dialer=direct group=test-group network=tcp6
+time="Jun 01 17:36:48" level=info msg="Group selects dialer" dialer=direct group=test-group network="udp4(DNS)"
+time="Jun 01 17:36:48" level=info msg="Group selects dialer" dialer=direct group=test-group network="udp6(DNS)"
+time="Jun 01 17:36:48" level=info msg="Group re-selects dialer" _new_dialer=direct _old_dialer=direct group=test-group min=100ms network=tcp4
+time="Jun 01 17:36:48" level=info msg="Group 'test-group' [tcp4]:
+   1. [] direct: 100ms
+   2. [] direct: 200ms"
+time="Jun 01 17:36:48" level=trace msg=NewDialer dialer=direct p=0xc0000f2000
+time="Jun 01 17:36:48" level=trace msg=NewDialer dialer=direct p=0xc0000f2180
+time="Jun 01 17:36:48" level=trace msg=NewDialer dialer=direct p=0xc0000f2240
+time="Jun 01 17:36:48" level=trace msg=NewDialer dialer=direct p=0xc0000f2300
+time="Jun 01 17:36:48" level=info msg="Group selects dialer" dialer=direct group=test-group network=tcp4
+time="Jun 01 17:36:48" level=info msg="Group selects dialer" dialer=direct group=test-group network=tcp6
+time="Jun 01 17:36:48" level=info msg="Group selects dialer" dialer=direct group=test-group network="udp4(DNS)"
+time="Jun 01 17:36:48" level=info msg="Group selects dialer" dialer=direct group=test-group network="udp6(DNS)"
+time="Jun 01 17:36:48" level=info msg="Group re-selects dialer" _new_dialer=direct _old_dialer=direct group=test-group min=100ms network=tcp4
+time="Jun 01 17:36:48" level=info msg="Group 'test-group' [tcp4]:
+   1. [] direct: 100ms
+   2. [] direct: 200ms"
+time="Jun 01 17:36:48" level=trace msg=NewDialer dialer=direct p=0xc0000f2000
+time="Jun 01 17:36:48" level=trace msg=NewDialer dialer=direct p=0xc0000f2180
+time="Jun 01 17:36:48" level=trace msg=NewDialer dialer=direct p=0xc0000f2240
+time="Jun 01 17:36:48" level=trace msg=NewDialer dialer=direct p=0xc0000f2300
+time="Jun 01 17:36:48" level=info msg="Group selects dialer" dialer=direct group=test-group network=tcp4
+time="Jun 01 17:36:48" level=info msg="Group selects dialer" dialer=direct group=test-group network=tcp6
+time="Jun 01 17:36:48" level=info msg="Group selects dialer" dialer=direct group=test-group network="udp4(DNS)"
+time="Jun 01 17:36:48" level=info msg="Group selects dialer" dialer=direct group=test-group network="udp6(DNS)"
+time="Jun 01 17:36:48" level=info msg="Group re-selects dialer" _new_dialer=direct _old_dialer=direct group=test-group min=100ms network=tcp4
+time="Jun 01 17:36:48" level=info msg="Group 'test-group' [tcp4]:
+   1. [] direct: 100ms
+   2. [] direct: 200ms"
+time="Jun 01 17:36:48" level=trace msg=NewDialer dialer=direct p=0xc0000f2000
+time="Jun 01 17:36:48" level=trace msg=NewDialer dialer=direct p=0xc0000f2180
+time="Jun 01 17:36:48" level=trace msg=NewDialer dialer=direct p=0xc0000f2240
+time="Jun 01 17:36:48" level=trace msg=NewDialer dialer=direct p=0xc0000f2300
+time="Jun 01 17:36:48" level=info msg="Group selects dialer" dialer=direct group=test-group network=tcp4
+time="Jun 01 17:36:48" level=info msg="Group selects dialer" dialer=direct group=test-group network=tcp6
+time="Jun 01 17:36:48" level=info msg="Group selects dialer" dialer=direct group=test-group network="udp4(DNS)"
+time="Jun 01 17:36:48" level=info msg="Group selects dialer" dialer=direct group=test-group network="udp6(DNS)"
+time="Jun 01 17:36:48" level=info msg="Group re-selects dialer" _new_dialer=direct _old_dialer=direct group=test-group min=100ms network=tcp4
+time="Jun 01 17:36:48" level=info msg="Group 'test-group' [tcp4]:
+   1. [] direct: 100ms
+   2. [] direct: 200ms"
+time="Jun 01 17:36:49" level=trace msg=NewDialer dialer=direct p=0xc0000f2000
+time="Jun 01 17:36:49" level=trace msg=NewDialer dialer=direct p=0xc0000f2180
+time="Jun 01 17:36:49" level=trace msg=NewDialer dialer=direct p=0xc0000f2240
+time="Jun 01 17:36:49" level=trace msg=NewDialer dialer=direct p=0xc0000f2300
+time="Jun 01 17:36:49" level=info msg="Group selects dialer" dialer=direct group=test-group network=tcp4
+time="Jun 01 17:36:49" level=info msg="Group selects dialer" dialer=direct group=test-group network=tcp6
+time="Jun 01 17:36:49" level=info msg="Group selects dialer" dialer=direct group=test-group network="udp4(DNS)"
+time="Jun 01 17:36:49" level=info msg="Group selects dialer" dialer=direct group=test-group network="udp6(DNS)"
+time="Jun 01 17:36:49" level=info msg="Group re-selects dialer" _new_dialer=direct _old_dialer=direct group=test-group min=100ms network=tcp4
+time="Jun 01 17:36:49" level=info msg="Group 'test-group' [tcp4]:
+   1. [] direct: 100ms
+   2. [] direct: 200ms"
+126111223	         9.542 ns/op	       0 B/op	       0 allocs/op
+BenchmarkDialerGroupSelectMinLastLatency-6            	time="Jun 01 17:36:50" level=trace msg=NewDialer dialer=direct p=0xc0000f2000
+time="Jun 01 17:36:50" level=trace msg=NewDialer dialer=direct p=0xc0000f2180
+time="Jun 01 17:36:50" level=trace msg=NewDialer dialer=direct p=0xc0000f2240
+time="Jun 01 17:36:50" level=trace msg=NewDialer dialer=direct p=0xc0000f2300
+time="Jun 01 17:36:50" level=info msg="Group selects dialer" dialer=direct group=test-group network=tcp4
+time="Jun 01 17:36:50" level=info msg="Group selects dialer" dialer=direct group=test-group network=tcp6
+time="Jun 01 17:36:50" level=info msg="Group selects dialer" dialer=direct group=test-group network="udp4(DNS)"
+time="Jun 01 17:36:50" level=info msg="Group selects dialer" dialer=direct group=test-group network="udp6(DNS)"
+time="Jun 01 17:36:50" level=info msg="Group re-selects dialer" _new_dialer=direct _old_dialer=direct group=test-group min=100ms network=tcp4
+time="Jun 01 17:36:50" level=info msg="Group 'test-group' [tcp4]:
+   1. [] direct: 100ms
+   2. [] direct: 200ms"
+time="Jun 01 17:36:50" level=trace msg=NewDialer dialer=direct p=0xc0000f2000
+time="Jun 01 17:36:50" level=trace msg=NewDialer dialer=direct p=0xc0000f2180
+time="Jun 01 17:36:50" level=trace msg=NewDialer dialer=direct p=0xc0000f2240
+time="Jun 01 17:36:50" level=trace msg=NewDialer dialer=direct p=0xc0000f2300
+time="Jun 01 17:36:50" level=info msg="Group selects dialer" dialer=direct group=test-group network=tcp4
+time="Jun 01 17:36:50" level=info msg="Group selects dialer" dialer=direct group=test-group network=tcp6
+time="Jun 01 17:36:50" level=info msg="Group selects dialer" dialer=direct group=test-group network="udp4(DNS)"
+time="Jun 01 17:36:50" level=info msg="Group selects dialer" dialer=direct group=test-group network="udp6(DNS)"
+time="Jun 01 17:36:50" level=info msg="Group re-selects dialer" _new_dialer=direct _old_dialer=direct group=test-group min=100ms network=tcp4
+time="Jun 01 17:36:50" level=info msg="Group 'test-group' [tcp4]:
+   1. [] direct: 100ms
+   2. [] direct: 200ms"
+time="Jun 01 17:36:50" level=trace msg=NewDialer dialer=direct p=0xc0000f2000
+time="Jun 01 17:36:50" level=trace msg=NewDialer dialer=direct p=0xc0000f2180
+time="Jun 01 17:36:50" level=trace msg=NewDialer dialer=direct p=0xc0000f2240
+time="Jun 01 17:36:50" level=trace msg=NewDialer dialer=direct p=0xc0000f2300
+time="Jun 01 17:36:50" level=info msg="Group selects dialer" dialer=direct group=test-group network=tcp4
+time="Jun 01 17:36:50" level=info msg="Group selects dialer" dialer=direct group=test-group network=tcp6
+time="Jun 01 17:36:50" level=info msg="Group selects dialer" dialer=direct group=test-group network="udp4(DNS)"
+time="Jun 01 17:36:50" level=info msg="Group selects dialer" dialer=direct group=test-group network="udp6(DNS)"
+time="Jun 01 17:36:50" level=info msg="Group re-selects dialer" _new_dialer=direct _old_dialer=direct group=test-group min=100ms network=tcp4
+time="Jun 01 17:36:50" level=info msg="Group 'test-group' [tcp4]:
+   1. [] direct: 100ms
+   2. [] direct: 200ms"
+time="Jun 01 17:36:50" level=trace msg=NewDialer dialer=direct p=0xc0000f2000
+time="Jun 01 17:36:50" level=trace msg=NewDialer dialer=direct p=0xc0000f2180
+time="Jun 01 17:36:50" level=trace msg=NewDialer dialer=direct p=0xc0000f2240
+time="Jun 01 17:36:50" level=trace msg=NewDialer dialer=direct p=0xc0000f2300
+time="Jun 01 17:36:50" level=info msg="Group selects dialer" dialer=direct group=test-group network=tcp4
+time="Jun 01 17:36:50" level=info msg="Group selects dialer" dialer=direct group=test-group network=tcp6
+time="Jun 01 17:36:50" level=info msg="Group selects dialer" dialer=direct group=test-group network="udp4(DNS)"
+time="Jun 01 17:36:50" level=info msg="Group selects dialer" dialer=direct group=test-group network="udp6(DNS)"
+time="Jun 01 17:36:50" level=info msg="Group re-selects dialer" _new_dialer=direct _old_dialer=direct group=test-group min=100ms network=tcp4
+time="Jun 01 17:36:50" level=info msg="Group 'test-group' [tcp4]:
+   1. [] direct: 100ms
+   2. [] direct: 200ms"
+time="Jun 01 17:36:50" level=trace msg=NewDialer dialer=direct p=0xc0000f2000
+time="Jun 01 17:36:50" level=trace msg=NewDialer dialer=direct p=0xc0000f2180
+time="Jun 01 17:36:50" level=trace msg=NewDialer dialer=direct p=0xc0000f2240
+time="Jun 01 17:36:50" level=trace msg=NewDialer dialer=direct p=0xc0000f2300
+time="Jun 01 17:36:50" level=info msg="Group selects dialer" dialer=direct group=test-group network=tcp4
+time="Jun 01 17:36:50" level=info msg="Group selects dialer" dialer=direct group=test-group network=tcp6
+time="Jun 01 17:36:50" level=info msg="Group selects dialer" dialer=direct group=test-group network="udp4(DNS)"
+time="Jun 01 17:36:50" level=info msg="Group selects dialer" dialer=direct group=test-group network="udp6(DNS)"
+time="Jun 01 17:36:50" level=info msg="Group re-selects dialer" _new_dialer=direct _old_dialer=direct group=test-group min=100ms network=tcp4
+time="Jun 01 17:36:50" level=info msg="Group 'test-group' [tcp4]:
+   1. [] direct: 100ms
+   2. [] direct: 200ms"
+time="Jun 01 17:36:51" level=trace msg=NewDialer dialer=direct p=0xc0000f2000
+time="Jun 01 17:36:51" level=trace msg=NewDialer dialer=direct p=0xc0000f2180
+time="Jun 01 17:36:51" level=trace msg=NewDialer dialer=direct p=0xc0000f2240
+time="Jun 01 17:36:51" level=trace msg=NewDialer dialer=direct p=0xc0000f2300
+time="Jun 01 17:36:51" level=info msg="Group selects dialer" dialer=direct group=test-group network=tcp4
+time="Jun 01 17:36:51" level=info msg="Group selects dialer" dialer=direct group=test-group network=tcp6
+time="Jun 01 17:36:51" level=info msg="Group selects dialer" dialer=direct group=test-group network="udp4(DNS)"
+time="Jun 01 17:36:51" level=info msg="Group selects dialer" dialer=direct group=test-group network="udp6(DNS)"
+time="Jun 01 17:36:51" level=info msg="Group re-selects dialer" _new_dialer=direct _old_dialer=direct group=test-group min=100ms network=tcp4
+time="Jun 01 17:36:51" level=info msg="Group 'test-group' [tcp4]:
+   1. [] direct: 100ms
+   2. [] direct: 200ms"
+125922304	         9.492 ns/op	       0 B/op	       0 allocs/op
+BenchmarkDialerGroupSelectMinLastLatency-6            	time="Jun 01 17:36:52" level=trace msg=NewDialer dialer=direct p=0xc0000f2000
+time="Jun 01 17:36:52" level=trace msg=NewDialer dialer=direct p=0xc0000f2180
+time="Jun 01 17:36:52" level=trace msg=NewDialer dialer=direct p=0xc0000f2240
+time="Jun 01 17:36:52" level=trace msg=NewDialer dialer=direct p=0xc0000f2300
+time="Jun 01 17:36:52" level=info msg="Group selects dialer" dialer=direct group=test-group network=tcp4
+time="Jun 01 17:36:52" level=info msg="Group selects dialer" dialer=direct group=test-group network=tcp6
+time="Jun 01 17:36:52" level=info msg="Group selects dialer" dialer=direct group=test-group network="udp4(DNS)"
+time="Jun 01 17:36:52" level=info msg="Group selects dialer" dialer=direct group=test-group network="udp6(DNS)"
+time="Jun 01 17:36:52" level=info msg="Group re-selects dialer" _new_dialer=direct _old_dialer=direct group=test-group min=100ms network=tcp4
+time="Jun 01 17:36:52" level=info msg="Group 'test-group' [tcp4]:
+   1. [] direct: 100ms
+   2. [] direct: 200ms"
+time="Jun 01 17:36:52" level=trace msg=NewDialer dialer=direct p=0xc0000f2000
+time="Jun 01 17:36:52" level=trace msg=NewDialer dialer=direct p=0xc0000f2180
+time="Jun 01 17:36:52" level=trace msg=NewDialer dialer=direct p=0xc0000f2240
+time="Jun 01 17:36:52" level=trace msg=NewDialer dialer=direct p=0xc0000f2300
+time="Jun 01 17:36:52" level=info msg="Group selects dialer" dialer=direct group=test-group network=tcp4
+time="Jun 01 17:36:52" level=info msg="Group selects dialer" dialer=direct group=test-group network=tcp6
+time="Jun 01 17:36:52" level=info msg="Group selects dialer" dialer=direct group=test-group network="udp4(DNS)"
+time="Jun 01 17:36:52" level=info msg="Group selects dialer" dialer=direct group=test-group network="udp6(DNS)"
+time="Jun 01 17:36:52" level=info msg="Group re-selects dialer" _new_dialer=direct _old_dialer=direct group=test-group min=100ms network=tcp4
+time="Jun 01 17:36:52" level=info msg="Group 'test-group' [tcp4]:
+   1. [] direct: 100ms
+   2. [] direct: 200ms"
+time="Jun 01 17:36:52" level=trace msg=NewDialer dialer=direct p=0xc0000f2000
+time="Jun 01 17:36:52" level=trace msg=NewDialer dialer=direct p=0xc0000f2180
+time="Jun 01 17:36:52" level=trace msg=NewDialer dialer=direct p=0xc0000f2240
+time="Jun 01 17:36:52" level=trace msg=NewDialer dialer=direct p=0xc0000f2300
+time="Jun 01 17:36:52" level=info msg="Group selects dialer" dialer=direct group=test-group network=tcp4
+time="Jun 01 17:36:52" level=info msg="Group selects dialer" dialer=direct group=test-group network=tcp6
+time="Jun 01 17:36:52" level=info msg="Group selects dialer" dialer=direct group=test-group network="udp4(DNS)"
+time="Jun 01 17:36:52" level=info msg="Group selects dialer" dialer=direct group=test-group network="udp6(DNS)"
+time="Jun 01 17:36:52" level=info msg="Group re-selects dialer" _new_dialer=direct _old_dialer=direct group=test-group min=100ms network=tcp4
+time="Jun 01 17:36:52" level=info msg="Group 'test-group' [tcp4]:
+   1. [] direct: 100ms
+   2. [] direct: 200ms"
+time="Jun 01 17:36:52" level=trace msg=NewDialer dialer=direct p=0xc0000f2000
+time="Jun 01 17:36:52" level=trace msg=NewDialer dialer=direct p=0xc0000f2180
+time="Jun 01 17:36:52" level=trace msg=NewDialer dialer=direct p=0xc0000f2240
+time="Jun 01 17:36:52" level=trace msg=NewDialer dialer=direct p=0xc0000f2300
+time="Jun 01 17:36:52" level=info msg="Group selects dialer" dialer=direct group=test-group network=tcp4
+time="Jun 01 17:36:52" level=info msg="Group selects dialer" dialer=direct group=test-group network=tcp6
+time="Jun 01 17:36:52" level=info msg="Group selects dialer" dialer=direct group=test-group network="udp4(DNS)"
+time="Jun 01 17:36:52" level=info msg="Group selects dialer" dialer=direct group=test-group network="udp6(DNS)"
+time="Jun 01 17:36:52" level=info msg="Group re-selects dialer" _new_dialer=direct _old_dialer=direct group=test-group min=100ms network=tcp4
+time="Jun 01 17:36:52" level=info msg="Group 'test-group' [tcp4]:
+   1. [] direct: 100ms
+   2. [] direct: 200ms"
+time="Jun 01 17:36:52" level=trace msg=NewDialer dialer=direct p=0xc0000f2000
+time="Jun 01 17:36:52" level=trace msg=NewDialer dialer=direct p=0xc0000f2180
+time="Jun 01 17:36:52" level=trace msg=NewDialer dialer=direct p=0xc0000f2240
+time="Jun 01 17:36:52" level=trace msg=NewDialer dialer=direct p=0xc0000f2300
+time="Jun 01 17:36:52" level=info msg="Group selects dialer" dialer=direct group=test-group network=tcp4
+time="Jun 01 17:36:52" level=info msg="Group selects dialer" dialer=direct group=test-group network=tcp6
+time="Jun 01 17:36:52" level=info msg="Group selects dialer" dialer=direct group=test-group network="udp4(DNS)"
+time="Jun 01 17:36:52" level=info msg="Group selects dialer" dialer=direct group=test-group network="udp6(DNS)"
+time="Jun 01 17:36:52" level=info msg="Group re-selects dialer" _new_dialer=direct _old_dialer=direct group=test-group min=100ms network=tcp4
+time="Jun 01 17:36:52" level=info msg="Group 'test-group' [tcp4]:
+   1. [] direct: 100ms
+   2. [] direct: 200ms"
+time="Jun 01 17:36:53" level=trace msg=NewDialer dialer=direct p=0xc0000f2000
+time="Jun 01 17:36:53" level=trace msg=NewDialer dialer=direct p=0xc0000f2180
+time="Jun 01 17:36:53" level=trace msg=NewDialer dialer=direct p=0xc0000f2240
+time="Jun 01 17:36:53" level=trace msg=NewDialer dialer=direct p=0xc0000f2300
+time="Jun 01 17:36:53" level=info msg="Group selects dialer" dialer=direct group=test-group network=tcp4
+time="Jun 01 17:36:53" level=info msg="Group selects dialer" dialer=direct group=test-group network=tcp6
+time="Jun 01 17:36:53" level=info msg="Group selects dialer" dialer=direct group=test-group network="udp4(DNS)"
+time="Jun 01 17:36:53" level=info msg="Group selects dialer" dialer=direct group=test-group network="udp6(DNS)"
+time="Jun 01 17:36:53" level=info msg="Group re-selects dialer" _new_dialer=direct _old_dialer=direct group=test-group min=100ms network=tcp4
+time="Jun 01 17:36:53" level=info msg="Group 'test-group' [tcp4]:
+   1. [] direct: 100ms
+   2. [] direct: 200ms"
+126152048	         9.516 ns/op	       0 B/op	       0 allocs/op
+BenchmarkDialerSetFilterAndAnnotateRegex-6            	    5366	    225699 ns/op	  148377 B/op	    3108 allocs/op
+BenchmarkDialerSetFilterAndAnnotateRegex-6            	    5272	    241553 ns/op	  148378 B/op	    3108 allocs/op
+BenchmarkDialerSetFilterAndAnnotateRegex-6            	    5047	    241892 ns/op	  148378 B/op	    3108 allocs/op
+BenchmarkDialerSetFilterAndAnnotateRegex-6            	    5242	    251390 ns/op	  148378 B/op	    3108 allocs/op
+BenchmarkDialerSetFilterAndAnnotateRegex-6            	    5181	    231065 ns/op	  148377 B/op	    3108 allocs/op
+BenchmarkDialerSetFilterAndAnnotateRegex-6            	    5121	    240008 ns/op	  148378 B/op	    3108 allocs/op
+BenchmarkDialerSetFilterAndAnnotateRegex-6            	    4489	    242640 ns/op	  148378 B/op	    3108 allocs/op
+BenchmarkDialerSetFilterAndAnnotateRegex-6            	    4866	    236262 ns/op	  148377 B/op	    3108 allocs/op
+BenchmarkDialerSetFilterAndAnnotateRegex-6            	    4230	    239055 ns/op	  148378 B/op	    3108 allocs/op
+BenchmarkDialerSetFilterAndAnnotateRegex-6            	    5070	    233273 ns/op	  148378 B/op	    3108 allocs/op
+BenchmarkHTTPNativeOptInParseLink-6                   	 1603951	       760.5 ns/op	    1168 B/op	      11 allocs/op
+BenchmarkHTTPNativeOptInParseLink-6                   	 1424677	       760.7 ns/op	    1168 B/op	      11 allocs/op
+BenchmarkHTTPNativeOptInParseLink-6                   	 1541970	       755.5 ns/op	    1168 B/op	      11 allocs/op
+BenchmarkHTTPNativeOptInParseLink-6                   	 1576411	       782.4 ns/op	    1168 B/op	      11 allocs/op
+BenchmarkHTTPNativeOptInParseLink-6                   	 1607097	       742.2 ns/op	    1168 B/op	      11 allocs/op
+BenchmarkHTTPNativeOptInParseLink-6                   	 1589101	       752.7 ns/op	    1168 B/op	      11 allocs/op
+BenchmarkHTTPNativeOptInParseLink-6                   	 1580091	       751.4 ns/op	    1168 B/op	      11 allocs/op
+BenchmarkHTTPNativeOptInParseLink-6                   	 1614166	       787.1 ns/op	    1168 B/op	      11 allocs/op
+BenchmarkHTTPNativeOptInParseLink-6                   	 1575182	       767.2 ns/op	    1168 B/op	      11 allocs/op
+BenchmarkHTTPNativeOptInParseLink-6                   	 1582779	       814.5 ns/op	    1168 B/op	      11 allocs/op
+BenchmarkHTTPNativeOptInConnectRequest-6              	  716946	      1565 ns/op	    1585 B/op	      18 allocs/op
+BenchmarkHTTPNativeOptInConnectRequest-6              	  735186	      1560 ns/op	    1585 B/op	      18 allocs/op
+BenchmarkHTTPNativeOptInConnectRequest-6              	  720219	      1561 ns/op	    1585 B/op	      18 allocs/op
+BenchmarkHTTPNativeOptInConnectRequest-6              	  742449	      1559 ns/op	    1585 B/op	      18 allocs/op
+BenchmarkHTTPNativeOptInConnectRequest-6              	  721071	      1610 ns/op	    1585 B/op	      18 allocs/op
+BenchmarkHTTPNativeOptInConnectRequest-6              	  739716	      1593 ns/op	    1585 B/op	      18 allocs/op
+BenchmarkHTTPNativeOptInConnectRequest-6              	  736532	      1623 ns/op	    1585 B/op	      18 allocs/op
+BenchmarkHTTPNativeOptInConnectRequest-6              	  728280	      1586 ns/op	    1585 B/op	      18 allocs/op
+BenchmarkHTTPNativeOptInConnectRequest-6              	  718819	      1565 ns/op	    1585 B/op	      18 allocs/op
+BenchmarkHTTPNativeOptInConnectRequest-6              	  734492	      1553 ns/op	    1585 B/op	      18 allocs/op
+BenchmarkHTTPNativeOptInForwardRequest-6              	  483552	      2495 ns/op	    6542 B/op	      24 allocs/op
+BenchmarkHTTPNativeOptInForwardRequest-6              	  472987	      2463 ns/op	    6544 B/op	      24 allocs/op
+BenchmarkHTTPNativeOptInForwardRequest-6              	  480691	      2445 ns/op	    6543 B/op	      24 allocs/op
+BenchmarkHTTPNativeOptInForwardRequest-6              	  479860	      2445 ns/op	    6543 B/op	      24 allocs/op
+BenchmarkHTTPNativeOptInForwardRequest-6              	  475528	      2489 ns/op	    6545 B/op	      24 allocs/op
+BenchmarkHTTPNativeOptInForwardRequest-6              	  477585	      2482 ns/op	    6545 B/op	      24 allocs/op
+BenchmarkHTTPNativeOptInForwardRequest-6              	  475156	      2482 ns/op	    6543 B/op	      24 allocs/op
+BenchmarkHTTPNativeOptInForwardRequest-6              	  479545	      2469 ns/op	    6538 B/op	      24 allocs/op
+BenchmarkHTTPNativeOptInForwardRequest-6              	  394531	      2620 ns/op	    6545 B/op	      24 allocs/op
+BenchmarkHTTPNativeOptInForwardRequest-6              	  476110	      2786 ns/op	    6544 B/op	      24 allocs/op
+BenchmarkHysteria2NativeOptInParseLink-6              	 1595252	       759.4 ns/op	     800 B/op	      10 allocs/op
+BenchmarkHysteria2NativeOptInParseLink-6              	 1607520	       766.2 ns/op	     800 B/op	      10 allocs/op
+BenchmarkHysteria2NativeOptInParseLink-6              	 1604695	       757.8 ns/op	     800 B/op	      10 allocs/op
+BenchmarkHysteria2NativeOptInParseLink-6              	 1618176	       764.3 ns/op	     800 B/op	      10 allocs/op
+BenchmarkHysteria2NativeOptInParseLink-6              	 1580546	       787.1 ns/op	     800 B/op	      10 allocs/op
+BenchmarkHysteria2NativeOptInParseLink-6              	 1615189	       773.6 ns/op	     800 B/op	      10 allocs/op
+BenchmarkHysteria2NativeOptInParseLink-6              	 1564352	       751.2 ns/op	     800 B/op	      10 allocs/op
+BenchmarkHysteria2NativeOptInParseLink-6              	 1598490	       755.6 ns/op	     800 B/op	      10 allocs/op
+BenchmarkHysteria2NativeOptInParseLink-6              	 1601576	       740.6 ns/op	     800 B/op	      10 allocs/op
+BenchmarkHysteria2NativeOptInParseLink-6              	 1567820	       767.4 ns/op	     800 B/op	      10 allocs/op
+BenchmarkHysteria2NativeOptInExportLink-6             	 1000000	      1070 ns/op	    1184 B/op	      23 allocs/op
+BenchmarkHysteria2NativeOptInExportLink-6             	 1000000	      1082 ns/op	    1184 B/op	      23 allocs/op
+BenchmarkHysteria2NativeOptInExportLink-6             	 1269404	       949.3 ns/op	    1184 B/op	      23 allocs/op
+BenchmarkHysteria2NativeOptInExportLink-6             	 1252282	       945.1 ns/op	    1184 B/op	      23 allocs/op
+BenchmarkHysteria2NativeOptInExportLink-6             	 1248111	       951.7 ns/op	    1184 B/op	      23 allocs/op
+BenchmarkHysteria2NativeOptInExportLink-6             	 1221295	      1007 ns/op	    1184 B/op	      23 allocs/op
+BenchmarkHysteria2NativeOptInExportLink-6             	 1000000	      1027 ns/op	    1184 B/op	      23 allocs/op
+BenchmarkHysteria2NativeOptInExportLink-6             	 1000000	      1037 ns/op	    1184 B/op	      23 allocs/op
+BenchmarkHysteria2NativeOptInExportLink-6             	 1218916	       963.4 ns/op	    1184 B/op	      23 allocs/op
+BenchmarkHysteria2NativeOptInExportLink-6             	 1201263	       949.9 ns/op	    1184 B/op	      23 allocs/op
+BenchmarkHysteria2NativeOptInPinNormalize-6           	12934128	        84.72 ns/op	      24 B/op	       3 allocs/op
+BenchmarkHysteria2NativeOptInPinNormalize-6           	14121823	        84.77 ns/op	      24 B/op	       3 allocs/op
+BenchmarkHysteria2NativeOptInPinNormalize-6           	13995591	        84.93 ns/op	      24 B/op	       3 allocs/op
+BenchmarkHysteria2NativeOptInPinNormalize-6           	12742390	        85.99 ns/op	      24 B/op	       3 allocs/op
+BenchmarkHysteria2NativeOptInPinNormalize-6           	14100805	        88.23 ns/op	      24 B/op	       3 allocs/op
+BenchmarkHysteria2NativeOptInPinNormalize-6           	13964548	        85.43 ns/op	      24 B/op	       3 allocs/op
+BenchmarkHysteria2NativeOptInPinNormalize-6           	13902054	        86.02 ns/op	      24 B/op	       3 allocs/op
+BenchmarkHysteria2NativeOptInPinNormalize-6           	13495736	        86.62 ns/op	      24 B/op	       3 allocs/op
+BenchmarkHysteria2NativeOptInPinNormalize-6           	13894720	        86.51 ns/op	      24 B/op	       3 allocs/op
+BenchmarkHysteria2NativeOptInPinNormalize-6           	14156696	        85.11 ns/op	      24 B/op	       3 allocs/op
+BenchmarkJuicityNativeOptInParseLink-6                	  417597	      2845 ns/op	    3792 B/op	      35 allocs/op
+BenchmarkJuicityNativeOptInParseLink-6                	  415312	      2895 ns/op	    3792 B/op	      35 allocs/op
+BenchmarkJuicityNativeOptInParseLink-6                	  421819	      2899 ns/op	    3792 B/op	      35 allocs/op
+BenchmarkJuicityNativeOptInParseLink-6                	  381772	      2836 ns/op	    3792 B/op	      35 allocs/op
+BenchmarkJuicityNativeOptInParseLink-6                	  404636	      2884 ns/op	    3792 B/op	      35 allocs/op
+BenchmarkJuicityNativeOptInParseLink-6                	  370270	      2826 ns/op	    3792 B/op	      35 allocs/op
+BenchmarkJuicityNativeOptInParseLink-6                	  425548	      2781 ns/op	    3792 B/op	      35 allocs/op
+BenchmarkJuicityNativeOptInParseLink-6                	  419146	      2783 ns/op	    3792 B/op	      35 allocs/op
+BenchmarkJuicityNativeOptInParseLink-6                	  421195	      2803 ns/op	    3792 B/op	      35 allocs/op
+BenchmarkJuicityNativeOptInParseLink-6                	  414541	      2788 ns/op	    3792 B/op	      35 allocs/op
+BenchmarkJuicityNativeOptInExportLink-6               	  960316	      1179 ns/op	    1344 B/op	      21 allocs/op
+BenchmarkJuicityNativeOptInExportLink-6               	  957132	      1229 ns/op	    1344 B/op	      21 allocs/op
+BenchmarkJuicityNativeOptInExportLink-6               	  987230	      1180 ns/op	    1344 B/op	      21 allocs/op
+BenchmarkJuicityNativeOptInExportLink-6               	  956299	      1186 ns/op	    1344 B/op	      21 allocs/op
+BenchmarkJuicityNativeOptInExportLink-6               	  970657	      1268 ns/op	    1344 B/op	      21 allocs/op
+BenchmarkJuicityNativeOptInExportLink-6               	  963540	      1179 ns/op	    1344 B/op	      21 allocs/op
+BenchmarkJuicityNativeOptInExportLink-6               	  986989	      1236 ns/op	    1344 B/op	      21 allocs/op
+BenchmarkJuicityNativeOptInExportLink-6               	  929068	      1242 ns/op	    1344 B/op	      21 allocs/op
+BenchmarkJuicityNativeOptInExportLink-6               	  923020	      1219 ns/op	    1344 B/op	      21 allocs/op
+BenchmarkJuicityNativeOptInExportLink-6               	  853450	      1210 ns/op	    1344 B/op	      21 allocs/op
+BenchmarkJuicityNativeOptInPinnedDecode-6             	27076954	        46.37 ns/op	      48 B/op	       1 allocs/op
+BenchmarkJuicityNativeOptInPinnedDecode-6             	26688030	        46.45 ns/op	      48 B/op	       1 allocs/op
+BenchmarkJuicityNativeOptInPinnedDecode-6             	27097212	        45.49 ns/op	      48 B/op	       1 allocs/op
+BenchmarkJuicityNativeOptInPinnedDecode-6             	26770078	        46.41 ns/op	      48 B/op	       1 allocs/op
+BenchmarkJuicityNativeOptInPinnedDecode-6             	26972126	        43.76 ns/op	      48 B/op	       1 allocs/op
+BenchmarkJuicityNativeOptInPinnedDecode-6             	25784304	        45.58 ns/op	      48 B/op	       1 allocs/op
+BenchmarkJuicityNativeOptInPinnedDecode-6             	26687822	        43.59 ns/op	      48 B/op	       1 allocs/op
+BenchmarkJuicityNativeOptInPinnedDecode-6             	25136455	        47.03 ns/op	      48 B/op	       1 allocs/op
+BenchmarkJuicityNativeOptInPinnedDecode-6             	26979808	        47.82 ns/op	      48 B/op	       1 allocs/op
+BenchmarkJuicityNativeOptInPinnedDecode-6             	27093624	        45.56 ns/op	      48 B/op	       1 allocs/op
+BenchmarkShadowsocksNativeOptInParseLink-6            	 1894618	       631.8 ns/op	     480 B/op	       5 allocs/op
+BenchmarkShadowsocksNativeOptInParseLink-6            	 1877839	       629.0 ns/op	     480 B/op	       5 allocs/op
+BenchmarkShadowsocksNativeOptInParseLink-6            	 1917078	       627.8 ns/op	     480 B/op	       5 allocs/op
+BenchmarkShadowsocksNativeOptInParseLink-6            	 1778456	       623.7 ns/op	     480 B/op	       5 allocs/op
+BenchmarkShadowsocksNativeOptInParseLink-6            	 1928250	       623.7 ns/op	     480 B/op	       5 allocs/op
+BenchmarkShadowsocksNativeOptInParseLink-6            	 1949172	       617.7 ns/op	     480 B/op	       5 allocs/op
+BenchmarkShadowsocksNativeOptInParseLink-6            	 1885047	       650.4 ns/op	     480 B/op	       5 allocs/op
+BenchmarkShadowsocksNativeOptInParseLink-6            	 1933311	       650.0 ns/op	     480 B/op	       5 allocs/op
+BenchmarkShadowsocksNativeOptInParseLink-6            	 1884885	       622.6 ns/op	     480 B/op	       5 allocs/op
+BenchmarkShadowsocksNativeOptInParseLink-6            	 1862498	       638.8 ns/op	     480 B/op	       5 allocs/op
+BenchmarkShadowsocksNativeOptInMetadataBytes-6        	22985592	        44.38 ns/op	      40 B/op	       2 allocs/op
+BenchmarkShadowsocksNativeOptInMetadataBytes-6        	28204051	        45.95 ns/op	      40 B/op	       2 allocs/op
+BenchmarkShadowsocksNativeOptInMetadataBytes-6        	28417936	        41.88 ns/op	      40 B/op	       2 allocs/op
+BenchmarkShadowsocksNativeOptInMetadataBytes-6        	24436221	        42.09 ns/op	      40 B/op	       2 allocs/op
+BenchmarkShadowsocksNativeOptInMetadataBytes-6        	28608914	        42.33 ns/op	      40 B/op	       2 allocs/op
+BenchmarkShadowsocksNativeOptInMetadataBytes-6        	28922944	        43.31 ns/op	      40 B/op	       2 allocs/op
+BenchmarkShadowsocksNativeOptInMetadataBytes-6        	28280108	        44.47 ns/op	      40 B/op	       2 allocs/op
+BenchmarkShadowsocksNativeOptInMetadataBytes-6        	27808641	        43.54 ns/op	      40 B/op	       2 allocs/op
+BenchmarkShadowsocksNativeOptInMetadataBytes-6        	25698961	        42.59 ns/op	      40 B/op	       2 allocs/op
+BenchmarkShadowsocksNativeOptInMetadataBytes-6        	24783968	        44.37 ns/op	      40 B/op	       2 allocs/op
+BenchmarkShadowsocksNativeOptInSS2022PSKSplit-6       	12836815	        96.82 ns/op	      80 B/op	       3 allocs/op
+BenchmarkShadowsocksNativeOptInSS2022PSKSplit-6       	12767583	       102.9 ns/op	      80 B/op	       3 allocs/op
+BenchmarkShadowsocksNativeOptInSS2022PSKSplit-6       	12627705	       105.1 ns/op	      80 B/op	       3 allocs/op
+BenchmarkShadowsocksNativeOptInSS2022PSKSplit-6       	12662366	        98.31 ns/op	      80 B/op	       3 allocs/op
+BenchmarkShadowsocksNativeOptInSS2022PSKSplit-6       	10641397	        97.23 ns/op	      80 B/op	       3 allocs/op
+BenchmarkShadowsocksNativeOptInSS2022PSKSplit-6       	12843933	        97.43 ns/op	      80 B/op	       3 allocs/op
+BenchmarkShadowsocksNativeOptInSS2022PSKSplit-6       	12705454	       102.9 ns/op	      80 B/op	       3 allocs/op
+BenchmarkShadowsocksNativeOptInSS2022PSKSplit-6       	12740151	       101.7 ns/op	      80 B/op	       3 allocs/op
+BenchmarkShadowsocksNativeOptInSS2022PSKSplit-6       	11820676	        94.02 ns/op	      80 B/op	       3 allocs/op
+BenchmarkShadowsocksNativeOptInSS2022PSKSplit-6       	12798488	        97.15 ns/op	      80 B/op	       3 allocs/op
+BenchmarkSharedTransportNativeOptInXHTTPMode-6        	100000000	        11.15 ns/op	       0 B/op	       0 allocs/op
+BenchmarkSharedTransportNativeOptInXHTTPMode-6        	100000000	        11.16 ns/op	       0 B/op	       0 allocs/op
+BenchmarkSharedTransportNativeOptInXHTTPMode-6        	100000000	        11.12 ns/op	       0 B/op	       0 allocs/op
+BenchmarkSharedTransportNativeOptInXHTTPMode-6        	100000000	        11.16 ns/op	       0 B/op	       0 allocs/op
+BenchmarkSharedTransportNativeOptInXHTTPMode-6        	100000000	        11.20 ns/op	       0 B/op	       0 allocs/op
+BenchmarkSharedTransportNativeOptInXHTTPMode-6        	100000000	        11.15 ns/op	       0 B/op	       0 allocs/op
+BenchmarkSharedTransportNativeOptInXHTTPMode-6        	100000000	        11.23 ns/op	       0 B/op	       0 allocs/op
+BenchmarkSharedTransportNativeOptInXHTTPMode-6        	100000000	        11.13 ns/op	       0 B/op	       0 allocs/op
+BenchmarkSharedTransportNativeOptInXHTTPMode-6        	100000000	        11.15 ns/op	       0 B/op	       0 allocs/op
+BenchmarkSharedTransportNativeOptInXHTTPMode-6        	100000000	        11.09 ns/op	       0 B/op	       0 allocs/op
+BenchmarkSharedTransportNativeOptInGrpcCacheKey-6     	20401180	        57.43 ns/op	      64 B/op	       2 allocs/op
+BenchmarkSharedTransportNativeOptInGrpcCacheKey-6     	20666511	        64.03 ns/op	      64 B/op	       2 allocs/op
+BenchmarkSharedTransportNativeOptInGrpcCacheKey-6     	20584101	        60.10 ns/op	      64 B/op	       2 allocs/op
+BenchmarkSharedTransportNativeOptInGrpcCacheKey-6     	20750770	        64.65 ns/op	      64 B/op	       2 allocs/op
+BenchmarkSharedTransportNativeOptInGrpcCacheKey-6     	20413539	        57.54 ns/op	      64 B/op	       2 allocs/op
+BenchmarkSharedTransportNativeOptInGrpcCacheKey-6     	20908264	        57.42 ns/op	      64 B/op	       2 allocs/op
+BenchmarkSharedTransportNativeOptInGrpcCacheKey-6     	21017493	        59.56 ns/op	      64 B/op	       2 allocs/op
+BenchmarkSharedTransportNativeOptInGrpcCacheKey-6     	20691399	        64.34 ns/op	      64 B/op	       2 allocs/op
+BenchmarkSharedTransportNativeOptInGrpcCacheKey-6     	20843292	        60.32 ns/op	      64 B/op	       2 allocs/op
+BenchmarkSharedTransportNativeOptInGrpcCacheKey-6     	20668434	        59.41 ns/op	      64 B/op	       2 allocs/op
+BenchmarkSharedTransportNativeOptInXHTTPPath-6        	19450594	        60.27 ns/op	      48 B/op	       3 allocs/op
+BenchmarkSharedTransportNativeOptInXHTTPPath-6        	19960087	        61.83 ns/op	      48 B/op	       3 allocs/op
+BenchmarkSharedTransportNativeOptInXHTTPPath-6        	16493542	        67.66 ns/op	      48 B/op	       3 allocs/op
+BenchmarkSharedTransportNativeOptInXHTTPPath-6        	20304822	        57.90 ns/op	      48 B/op	       3 allocs/op
+BenchmarkSharedTransportNativeOptInXHTTPPath-6        	20550868	        65.58 ns/op	      48 B/op	       3 allocs/op
+BenchmarkSharedTransportNativeOptInXHTTPPath-6        	19382114	        60.91 ns/op	      48 B/op	       3 allocs/op
+BenchmarkSharedTransportNativeOptInXHTTPPath-6        	20722632	        65.79 ns/op	      48 B/op	       3 allocs/op
+BenchmarkSharedTransportNativeOptInXHTTPPath-6        	20412651	        60.45 ns/op	      48 B/op	       3 allocs/op
+BenchmarkSharedTransportNativeOptInXHTTPPath-6        	20495266	        63.54 ns/op	      48 B/op	       3 allocs/op
+BenchmarkSharedTransportNativeOptInXHTTPPath-6        	20472039	        64.33 ns/op	      48 B/op	       3 allocs/op
+BenchmarkSharedTransportNativeOptInCanonicalJSON-6    	  238761	      4752 ns/op	    3890 B/op	      74 allocs/op
+BenchmarkSharedTransportNativeOptInCanonicalJSON-6    	  258121	      4713 ns/op	    3890 B/op	      74 allocs/op
+BenchmarkSharedTransportNativeOptInCanonicalJSON-6    	  258111	      4923 ns/op	    3890 B/op	      74 allocs/op
+BenchmarkSharedTransportNativeOptInCanonicalJSON-6    	  253718	      4697 ns/op	    3890 B/op	      74 allocs/op
+BenchmarkSharedTransportNativeOptInCanonicalJSON-6    	  220984	      4744 ns/op	    3890 B/op	      74 allocs/op
+BenchmarkSharedTransportNativeOptInCanonicalJSON-6    	  256797	      4626 ns/op	    3890 B/op	      74 allocs/op
+BenchmarkSharedTransportNativeOptInCanonicalJSON-6    	  250980	      4622 ns/op	    3890 B/op	      74 allocs/op
+BenchmarkSharedTransportNativeOptInCanonicalJSON-6    	  252459	      4822 ns/op	    3890 B/op	      74 allocs/op
+BenchmarkSharedTransportNativeOptInCanonicalJSON-6    	  261782	      4611 ns/op	    3890 B/op	      74 allocs/op
+BenchmarkSharedTransportNativeOptInCanonicalJSON-6    	  255952	      4745 ns/op	    3890 B/op	      74 allocs/op
+BenchmarkSharedTransportNativeOptInTimerConstants-6   	1000000000	         0.2208 ns/op	       0 B/op	       0 allocs/op
+BenchmarkSharedTransportNativeOptInTimerConstants-6   	1000000000	         0.2211 ns/op	       0 B/op	       0 allocs/op
+BenchmarkSharedTransportNativeOptInTimerConstants-6   	1000000000	         0.2219 ns/op	       0 B/op	       0 allocs/op
+BenchmarkSharedTransportNativeOptInTimerConstants-6   	1000000000	         0.2210 ns/op	       0 B/op	       0 allocs/op
+BenchmarkSharedTransportNativeOptInTimerConstants-6   	1000000000	         0.2228 ns/op	       0 B/op	       0 allocs/op
+BenchmarkSharedTransportNativeOptInTimerConstants-6   	1000000000	         0.2212 ns/op	       0 B/op	       0 allocs/op
+BenchmarkSharedTransportNativeOptInTimerConstants-6   	1000000000	         0.2212 ns/op	       0 B/op	       0 allocs/op
+BenchmarkSharedTransportNativeOptInTimerConstants-6   	1000000000	         0.2217 ns/op	       0 B/op	       0 allocs/op
+BenchmarkSharedTransportNativeOptInTimerConstants-6   	1000000000	         0.2215 ns/op	       0 B/op	       0 allocs/op
+BenchmarkSharedTransportNativeOptInTimerConstants-6   	1000000000	         0.2218 ns/op	       0 B/op	       0 allocs/op
+BenchmarkSocks5NativeOptInAddressCodec-6              	12722002	        89.56 ns/op	     116 B/op	       5 allocs/op
+BenchmarkSocks5NativeOptInAddressCodec-6              	13880432	        91.83 ns/op	     116 B/op	       5 allocs/op
+BenchmarkSocks5NativeOptInAddressCodec-6              	13921689	        86.84 ns/op	     116 B/op	       5 allocs/op
+BenchmarkSocks5NativeOptInAddressCodec-6              	13526265	        94.69 ns/op	     116 B/op	       5 allocs/op
+BenchmarkSocks5NativeOptInAddressCodec-6              	11625375	        95.72 ns/op	     116 B/op	       5 allocs/op
+BenchmarkSocks5NativeOptInAddressCodec-6              	13563008	        94.11 ns/op	     116 B/op	       5 allocs/op
+BenchmarkSocks5NativeOptInAddressCodec-6              	13722306	        90.40 ns/op	     116 B/op	       5 allocs/op
+BenchmarkSocks5NativeOptInAddressCodec-6              	14011353	        86.10 ns/op	     116 B/op	       5 allocs/op
+BenchmarkSocks5NativeOptInAddressCodec-6              	13637701	        91.37 ns/op	     116 B/op	       5 allocs/op
+BenchmarkSocks5NativeOptInAddressCodec-6              	13796318	        94.22 ns/op	     116 B/op	       5 allocs/op
+BenchmarkSocks5NativeOptInHandshakeBytes-6            	 4685235	       254.0 ns/op	     120 B/op	       6 allocs/op
+BenchmarkSocks5NativeOptInHandshakeBytes-6            	 4943508	       249.6 ns/op	     120 B/op	       6 allocs/op
+BenchmarkSocks5NativeOptInHandshakeBytes-6            	 4984688	       240.4 ns/op	     120 B/op	       6 allocs/op
+BenchmarkSocks5NativeOptInHandshakeBytes-6            	 4927447	       250.1 ns/op	     120 B/op	       6 allocs/op
+BenchmarkSocks5NativeOptInHandshakeBytes-6            	 4996488	       242.9 ns/op	     120 B/op	       6 allocs/op
+BenchmarkSocks5NativeOptInHandshakeBytes-6            	 4948322	       254.1 ns/op	     120 B/op	       6 allocs/op
+BenchmarkSocks5NativeOptInHandshakeBytes-6            	 4616547	       246.0 ns/op	     120 B/op	       6 allocs/op
+BenchmarkSocks5NativeOptInHandshakeBytes-6            	 4884979	       248.9 ns/op	     120 B/op	       6 allocs/op
+BenchmarkSocks5NativeOptInHandshakeBytes-6            	 5005676	       240.2 ns/op	     120 B/op	       6 allocs/op
+BenchmarkSocks5NativeOptInHandshakeBytes-6            	 4980451	       241.1 ns/op	     120 B/op	       6 allocs/op
+BenchmarkSocks5NativeOptInUdpPacketWrap-6             	 5920839	       202.5 ns/op	      91 B/op	       4 allocs/op
+BenchmarkSocks5NativeOptInUdpPacketWrap-6             	 5928075	       203.9 ns/op	      91 B/op	       4 allocs/op
+BenchmarkSocks5NativeOptInUdpPacketWrap-6             	 5757117	       207.3 ns/op	      91 B/op	       4 allocs/op
+BenchmarkSocks5NativeOptInUdpPacketWrap-6             	 5975608	       202.5 ns/op	      91 B/op	       4 allocs/op
+BenchmarkSocks5NativeOptInUdpPacketWrap-6             	 5937842	       201.6 ns/op	      91 B/op	       4 allocs/op
+BenchmarkSocks5NativeOptInUdpPacketWrap-6             	 5879624	       207.3 ns/op	      91 B/op	       4 allocs/op
+BenchmarkSocks5NativeOptInUdpPacketWrap-6             	 5924403	       202.1 ns/op	      91 B/op	       4 allocs/op
+BenchmarkSocks5NativeOptInUdpPacketWrap-6             	 5989222	       205.3 ns/op	      91 B/op	       4 allocs/op
+BenchmarkSocks5NativeOptInUdpPacketWrap-6             	 5934440	       209.1 ns/op	      91 B/op	       4 allocs/op
+BenchmarkSocks5NativeOptInUdpPacketWrap-6             	 5340678	       212.1 ns/op	      91 B/op	       4 allocs/op
+BenchmarkTrojanNativeOptInParseLink-6                 	  199358	      5497 ns/op	    6224 B/op	      87 allocs/op
+BenchmarkTrojanNativeOptInParseLink-6                 	  200426	      5222 ns/op	    6224 B/op	      87 allocs/op
+BenchmarkTrojanNativeOptInParseLink-6                 	  224606	      5368 ns/op	    6224 B/op	      87 allocs/op
+BenchmarkTrojanNativeOptInParseLink-6                 	  230811	      5477 ns/op	    6224 B/op	      87 allocs/op
+BenchmarkTrojanNativeOptInParseLink-6                 	  224122	      5583 ns/op	    6224 B/op	      87 allocs/op
+BenchmarkTrojanNativeOptInParseLink-6                 	  219121	      5316 ns/op	    6224 B/op	      87 allocs/op
+BenchmarkTrojanNativeOptInParseLink-6                 	  226563	      5251 ns/op	    6224 B/op	      87 allocs/op
+BenchmarkTrojanNativeOptInParseLink-6                 	  228385	      5784 ns/op	    6224 B/op	      87 allocs/op
+BenchmarkTrojanNativeOptInParseLink-6                 	  209458	      5417 ns/op	    6224 B/op	      87 allocs/op
+BenchmarkTrojanNativeOptInParseLink-6                 	  228510	      5553 ns/op	    6224 B/op	      87 allocs/op
+BenchmarkTrojanNativeOptInTCPRequestHeader-6          	 1829179	       678.7 ns/op	    1012 B/op	      14 allocs/op
+BenchmarkTrojanNativeOptInTCPRequestHeader-6          	 1821864	       661.8 ns/op	    1012 B/op	      14 allocs/op
+BenchmarkTrojanNativeOptInTCPRequestHeader-6          	 1820475	       662.6 ns/op	    1012 B/op	      14 allocs/op
+BenchmarkTrojanNativeOptInTCPRequestHeader-6          	 1807014	       658.9 ns/op	    1012 B/op	      14 allocs/op
+BenchmarkTrojanNativeOptInTCPRequestHeader-6          	 1727011	       698.3 ns/op	    1012 B/op	      14 allocs/op
+BenchmarkTrojanNativeOptInTCPRequestHeader-6          	 1801684	       712.7 ns/op	    1012 B/op	      14 allocs/op
+BenchmarkTrojanNativeOptInTCPRequestHeader-6          	 1589396	       683.5 ns/op	    1012 B/op	      14 allocs/op
+BenchmarkTrojanNativeOptInTCPRequestHeader-6          	 1807830	       659.9 ns/op	    1012 B/op	      14 allocs/op
+BenchmarkTrojanNativeOptInTCPRequestHeader-6          	 1832065	       727.3 ns/op	    1012 B/op	      14 allocs/op
+BenchmarkTrojanNativeOptInTCPRequestHeader-6          	 1644318	       667.8 ns/op	    1012 B/op	      14 allocs/op
+BenchmarkTrojanNativeOptInUDPPacket-6                 	 2786600	       420.6 ns/op	     532 B/op	       9 allocs/op
+BenchmarkTrojanNativeOptInUDPPacket-6                 	 2658097	       422.1 ns/op	     532 B/op	       9 allocs/op
+BenchmarkTrojanNativeOptInUDPPacket-6                 	 2701039	       417.1 ns/op	     532 B/op	       9 allocs/op
+BenchmarkTrojanNativeOptInUDPPacket-6                 	 2866058	       421.7 ns/op	     532 B/op	       9 allocs/op
+BenchmarkTrojanNativeOptInUDPPacket-6                 	 2726714	       424.4 ns/op	     532 B/op	       9 allocs/op
+BenchmarkTrojanNativeOptInUDPPacket-6                 	 2830035	       429.9 ns/op	     532 B/op	       9 allocs/op
+BenchmarkTrojanNativeOptInUDPPacket-6                 	 2854668	       420.6 ns/op	     532 B/op	       9 allocs/op
+BenchmarkTrojanNativeOptInUDPPacket-6                 	 2876659	       419.0 ns/op	     532 B/op	       9 allocs/op
+BenchmarkTrojanNativeOptInUDPPacket-6                 	 2586584	       428.9 ns/op	     532 B/op	       9 allocs/op
+BenchmarkTrojanNativeOptInUDPPacket-6                 	 2534764	       472.5 ns/op	     532 B/op	       9 allocs/op
+BenchmarkTuicNativeOptInParseLink-6                   	  319752	      3694 ns/op	    5328 B/op	      59 allocs/op
+BenchmarkTuicNativeOptInParseLink-6                   	  323974	      3734 ns/op	    5328 B/op	      59 allocs/op
+BenchmarkTuicNativeOptInParseLink-6                   	  323540	      3641 ns/op	    5328 B/op	      59 allocs/op
+BenchmarkTuicNativeOptInParseLink-6                   	  328713	      3647 ns/op	    5328 B/op	      59 allocs/op
+BenchmarkTuicNativeOptInParseLink-6                   	  325290	      3591 ns/op	    5328 B/op	      59 allocs/op
+BenchmarkTuicNativeOptInParseLink-6                   	  328485	      4129 ns/op	    5328 B/op	      59 allocs/op
+BenchmarkTuicNativeOptInParseLink-6                   	  331408	      3664 ns/op	    5328 B/op	      59 allocs/op
+BenchmarkTuicNativeOptInParseLink-6                   	  329834	      3615 ns/op	    5328 B/op	      59 allocs/op
+BenchmarkTuicNativeOptInParseLink-6                   	  328369	      3811 ns/op	    5328 B/op	      59 allocs/op
+BenchmarkTuicNativeOptInParseLink-6                   	  327559	      3600 ns/op	    5328 B/op	      59 allocs/op
+BenchmarkTuicNativeOptInExportLink-6                  	 1000000	      1049 ns/op	    1168 B/op	      24 allocs/op
+BenchmarkTuicNativeOptInExportLink-6                  	 1000000	      1060 ns/op	    1168 B/op	      24 allocs/op
+BenchmarkTuicNativeOptInExportLink-6                  	 1000000	      1092 ns/op	    1168 B/op	      24 allocs/op
+BenchmarkTuicNativeOptInExportLink-6                  	 1000000	      1067 ns/op	    1168 B/op	      24 allocs/op
+BenchmarkTuicNativeOptInExportLink-6                  	 1000000	      1049 ns/op	    1168 B/op	      24 allocs/op
+BenchmarkTuicNativeOptInExportLink-6                  	 1000000	      1056 ns/op	    1168 B/op	      24 allocs/op
+BenchmarkTuicNativeOptInExportLink-6                  	 1000000	      1053 ns/op	    1168 B/op	      24 allocs/op
+BenchmarkTuicNativeOptInExportLink-6                  	 1110628	      1052 ns/op	    1168 B/op	      24 allocs/op
+BenchmarkTuicNativeOptInExportLink-6                  	 1000000	      1043 ns/op	    1168 B/op	      24 allocs/op
+BenchmarkTuicNativeOptInExportLink-6                  	  991620	      1055 ns/op	    1168 B/op	      24 allocs/op
+BenchmarkTuicNativeOptInAlpnSplit-6                   	28713663	        40.84 ns/op	      48 B/op	       1 allocs/op
+BenchmarkTuicNativeOptInAlpnSplit-6                   	28761967	        40.90 ns/op	      48 B/op	       1 allocs/op
+BenchmarkTuicNativeOptInAlpnSplit-6                   	28960431	        42.85 ns/op	      48 B/op	       1 allocs/op
+BenchmarkTuicNativeOptInAlpnSplit-6                   	27539052	        42.30 ns/op	      48 B/op	       1 allocs/op
+BenchmarkTuicNativeOptInAlpnSplit-6                   	29298106	        45.28 ns/op	      48 B/op	       1 allocs/op
+BenchmarkTuicNativeOptInAlpnSplit-6                   	29367424	        44.23 ns/op	      48 B/op	       1 allocs/op
+BenchmarkTuicNativeOptInAlpnSplit-6                   	28505840	        47.75 ns/op	      48 B/op	       1 allocs/op
+BenchmarkTuicNativeOptInAlpnSplit-6                   	24580831	        48.04 ns/op	      48 B/op	       1 allocs/op
+BenchmarkTuicNativeOptInAlpnSplit-6                   	28216120	        43.40 ns/op	      48 B/op	       1 allocs/op
+BenchmarkTuicNativeOptInAlpnSplit-6                   	28768161	        42.97 ns/op	      48 B/op	       1 allocs/op
+BenchmarkVLESSNativeOptInParseLink-6                  	  117703	     10594 ns/op	    8704 B/op	     168 allocs/op
+BenchmarkVLESSNativeOptInParseLink-6                  	  122413	      9791 ns/op	    8704 B/op	     168 allocs/op
+BenchmarkVLESSNativeOptInParseLink-6                  	  122366	      9726 ns/op	    8704 B/op	     168 allocs/op
+BenchmarkVLESSNativeOptInParseLink-6                  	  123350	     10324 ns/op	    8704 B/op	     168 allocs/op
+BenchmarkVLESSNativeOptInParseLink-6                  	  123295	      9855 ns/op	    8704 B/op	     168 allocs/op
+BenchmarkVLESSNativeOptInParseLink-6                  	  121933	      9838 ns/op	    8704 B/op	     168 allocs/op
+BenchmarkVLESSNativeOptInParseLink-6                  	  120604	     10051 ns/op	    8704 B/op	     168 allocs/op
+BenchmarkVLESSNativeOptInParseLink-6                  	  121993	      9819 ns/op	    8704 B/op	     168 allocs/op
+BenchmarkVLESSNativeOptInParseLink-6                  	  121587	      9785 ns/op	    8704 B/op	     168 allocs/op
+BenchmarkVLESSNativeOptInParseLink-6                  	  123018	      9727 ns/op	    8704 B/op	     168 allocs/op
+BenchmarkVLESSNativeOptInPassword2Key-6               	 6259578	       192.2 ns/op	     120 B/op	       4 allocs/op
+BenchmarkVLESSNativeOptInPassword2Key-6               	 6300650	       190.8 ns/op	     120 B/op	       4 allocs/op
+BenchmarkVLESSNativeOptInPassword2Key-6               	 6331978	       195.6 ns/op	     120 B/op	       4 allocs/op
+BenchmarkVLESSNativeOptInPassword2Key-6               	 6234814	       189.4 ns/op	     120 B/op	       4 allocs/op
+BenchmarkVLESSNativeOptInPassword2Key-6               	 6214836	       190.6 ns/op	     120 B/op	       4 allocs/op
+BenchmarkVLESSNativeOptInPassword2Key-6               	 6280348	       206.2 ns/op	     120 B/op	       4 allocs/op
+BenchmarkVLESSNativeOptInPassword2Key-6               	 6000255	       191.3 ns/op	     120 B/op	       4 allocs/op
+BenchmarkVLESSNativeOptInPassword2Key-6               	 6304162	       190.5 ns/op	     120 B/op	       4 allocs/op
+BenchmarkVLESSNativeOptInPassword2Key-6               	 5523388	       189.2 ns/op	     120 B/op	       4 allocs/op
+BenchmarkVLESSNativeOptInPassword2Key-6               	 5992864	       198.6 ns/op	     120 B/op	       4 allocs/op
+BenchmarkVLESSNativeOptInRequestHeader-6              	 2734180	       436.3 ns/op	     549 B/op	      15 allocs/op
+BenchmarkVLESSNativeOptInRequestHeader-6              	 2677214	       440.8 ns/op	     549 B/op	      15 allocs/op
+BenchmarkVLESSNativeOptInRequestHeader-6              	 2554598	       442.5 ns/op	     549 B/op	      15 allocs/op
+BenchmarkVLESSNativeOptInRequestHeader-6              	 2693097	       454.3 ns/op	     549 B/op	      15 allocs/op
+BenchmarkVLESSNativeOptInRequestHeader-6              	 2768866	       458.4 ns/op	     549 B/op	      15 allocs/op
+BenchmarkVLESSNativeOptInRequestHeader-6              	 2708955	       440.7 ns/op	     549 B/op	      15 allocs/op
+BenchmarkVLESSNativeOptInRequestHeader-6              	 2766950	       484.1 ns/op	     549 B/op	      15 allocs/op
+BenchmarkVLESSNativeOptInRequestHeader-6              	 2712991	       444.0 ns/op	     549 B/op	      15 allocs/op
+BenchmarkVLESSNativeOptInRequestHeader-6              	 2770220	       440.6 ns/op	     549 B/op	      15 allocs/op
+BenchmarkVLESSNativeOptInRequestHeader-6              	 2476152	       466.9 ns/op	     549 B/op	      15 allocs/op
+BenchmarkVMessNativeOptInParseLink-6                  	  943695	      1200 ns/op	    1664 B/op	      29 allocs/op
+BenchmarkVMessNativeOptInParseLink-6                  	 1000000	      1163 ns/op	    1664 B/op	      29 allocs/op
+BenchmarkVMessNativeOptInParseLink-6                  	  950696	      1189 ns/op	    1664 B/op	      29 allocs/op
+BenchmarkVMessNativeOptInParseLink-6                  	 1000000	      1158 ns/op	    1664 B/op	      29 allocs/op
+BenchmarkVMessNativeOptInParseLink-6                  	  997531	      1224 ns/op	    1664 B/op	      29 allocs/op
+BenchmarkVMessNativeOptInParseLink-6                  	  994468	      1144 ns/op	    1664 B/op	      29 allocs/op
+BenchmarkVMessNativeOptInParseLink-6                  	  923206	      1147 ns/op	    1664 B/op	      29 allocs/op
+BenchmarkVMessNativeOptInParseLink-6                  	  940578	      1166 ns/op	    1664 B/op	      29 allocs/op
+BenchmarkVMessNativeOptInParseLink-6                  	  925136	      1152 ns/op	    1664 B/op	      29 allocs/op
+BenchmarkVMessNativeOptInParseLink-6                  	  966228	      1153 ns/op	    1664 B/op	      29 allocs/op
+BenchmarkVMessNativeOptInMetadataBytes-6              	413682375	         2.915 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVMessNativeOptInMetadataBytes-6              	389195190	         2.871 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVMessNativeOptInMetadataBytes-6              	409224318	         2.872 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVMessNativeOptInMetadataBytes-6              	390261232	         2.885 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVMessNativeOptInMetadataBytes-6              	389946514	         2.879 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVMessNativeOptInMetadataBytes-6              	411532179	         2.867 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVMessNativeOptInMetadataBytes-6              	418132508	         3.084 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVMessNativeOptInMetadataBytes-6              	418369431	         3.306 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVMessNativeOptInMetadataBytes-6              	415107506	         2.867 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVMessNativeOptInMetadataBytes-6              	390638184	         2.868 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVMessNativeOptInUUID5Compatibility-6         	10236322	       106.9 ns/op	      72 B/op	       2 allocs/op
+BenchmarkVMessNativeOptInUUID5Compatibility-6         	11057756	       107.0 ns/op	      72 B/op	       2 allocs/op
+BenchmarkVMessNativeOptInUUID5Compatibility-6         	11185724	       108.9 ns/op	      72 B/op	       2 allocs/op
+BenchmarkVMessNativeOptInUUID5Compatibility-6         	11138240	       106.9 ns/op	      72 B/op	       2 allocs/op
+BenchmarkVMessNativeOptInUUID5Compatibility-6         	11123820	       107.1 ns/op	      72 B/op	       2 allocs/op
+BenchmarkVMessNativeOptInUUID5Compatibility-6         	10541222	       110.3 ns/op	      72 B/op	       2 allocs/op
+BenchmarkVMessNativeOptInUUID5Compatibility-6         	11172306	       107.8 ns/op	      72 B/op	       2 allocs/op
+BenchmarkVMessNativeOptInUUID5Compatibility-6         	10949617	       110.3 ns/op	      72 B/op	       2 allocs/op
+BenchmarkVMessNativeOptInUUID5Compatibility-6         	10926770	       107.5 ns/op	      72 B/op	       2 allocs/op
+BenchmarkVMessNativeOptInUUID5Compatibility-6         	11071461	       109.1 ns/op	      72 B/op	       2 allocs/op
+PASS
+ok  	github.com/daeuniverse/dae/component/outbound	538.618s
+$ bash -lc PATH=/root/.local/go1.25.9/bin:$PATH GOWORK=off go test -run '^$' -bench '(BenchmarkDnsDataWithZeroID|BenchmarkFunctionalControlChooseDialTargetDomain|BenchmarkFunctionalControlChooseDialTargetDomainPlusPlus|BenchmarkFunctionalDnsCacheKeyRoundtrip|BenchmarkFunctionalDnsCacheTtlLookup|BenchmarkFunctionalDnsDohGetRequest|BenchmarkFunctionalDnsDohPostRequest|BenchmarkFunctionalDnsDohValidateContentType|BenchmarkFunctionalDnsPackedResponseRestore|BenchmarkFunctionalDnsRawPacketAnswersTTLIPCNAME|BenchmarkFunctionalDnsRawPacketValidationQuestionID|BenchmarkFunctionalDnsResolveAsisGuard|BenchmarkFunctionalDnsValidationQuestionID|BenchmarkRebuildStage7MagicNetworkMarkMptcp|BenchmarkRebuildStage7UdpEndpointTrimTarget)' -benchmem -count=10 -benchtime=1s ./control
+goos: linux
+goarch: amd64
+pkg: github.com/daeuniverse/dae/control
+cpu: AMD Ryzen 9 7945HX with Radeon Graphics        
+BenchmarkDnsDataWithZeroID-6                                 	87510564	        14.00 ns/op	       8 B/op	       1 allocs/op
+BenchmarkDnsDataWithZeroID-6                                 	99444650	        11.49 ns/op	       8 B/op	       1 allocs/op
+BenchmarkDnsDataWithZeroID-6                                 	101848438	        11.84 ns/op	       8 B/op	       1 allocs/op
+BenchmarkDnsDataWithZeroID-6                                 	95886432	        12.27 ns/op	       8 B/op	       1 allocs/op
+BenchmarkDnsDataWithZeroID-6                                 	95100606	        12.90 ns/op	       8 B/op	       1 allocs/op
+BenchmarkDnsDataWithZeroID-6                                 	103837635	        11.46 ns/op	       8 B/op	       1 allocs/op
+BenchmarkDnsDataWithZeroID-6                                 	99036244	        12.12 ns/op	       8 B/op	       1 allocs/op
+BenchmarkDnsDataWithZeroID-6                                 	96159747	        11.48 ns/op	       8 B/op	       1 allocs/op
+BenchmarkDnsDataWithZeroID-6                                 	96233022	        11.53 ns/op	       8 B/op	       1 allocs/op
+BenchmarkDnsDataWithZeroID-6                                 	97932705	        11.51 ns/op	       8 B/op	       1 allocs/op
+BenchmarkFunctionalDnsPackedResponseRestore-6                	62814925	        18.54 ns/op	      48 B/op	       1 allocs/op
+BenchmarkFunctionalDnsPackedResponseRestore-6                	61141735	        20.93 ns/op	      48 B/op	       1 allocs/op
+BenchmarkFunctionalDnsPackedResponseRestore-6                	60992736	        18.89 ns/op	      48 B/op	       1 allocs/op
+BenchmarkFunctionalDnsPackedResponseRestore-6                	59376225	        20.41 ns/op	      48 B/op	       1 allocs/op
+BenchmarkFunctionalDnsPackedResponseRestore-6                	61166290	        19.22 ns/op	      48 B/op	       1 allocs/op
+BenchmarkFunctionalDnsPackedResponseRestore-6                	61211247	        19.05 ns/op	      48 B/op	       1 allocs/op
+BenchmarkFunctionalDnsPackedResponseRestore-6                	63686137	        18.56 ns/op	      48 B/op	       1 allocs/op
+BenchmarkFunctionalDnsPackedResponseRestore-6                	62965002	        20.43 ns/op	      48 B/op	       1 allocs/op
+BenchmarkFunctionalDnsPackedResponseRestore-6                	59697476	        19.39 ns/op	      48 B/op	       1 allocs/op
+BenchmarkFunctionalDnsPackedResponseRestore-6                	60651729	        21.57 ns/op	      48 B/op	       1 allocs/op
+BenchmarkFunctionalDnsCacheKeyRoundtrip-6                    	 5130367	       210.3 ns/op	      64 B/op	       4 allocs/op
+BenchmarkFunctionalDnsCacheKeyRoundtrip-6                    	 5762538	       208.6 ns/op	      64 B/op	       4 allocs/op
+BenchmarkFunctionalDnsCacheKeyRoundtrip-6                    	 5672007	       216.6 ns/op	      64 B/op	       4 allocs/op
+BenchmarkFunctionalDnsCacheKeyRoundtrip-6                    	 5650470	       209.6 ns/op	      64 B/op	       4 allocs/op
+BenchmarkFunctionalDnsCacheKeyRoundtrip-6                    	 5771499	       216.3 ns/op	      64 B/op	       4 allocs/op
+BenchmarkFunctionalDnsCacheKeyRoundtrip-6                    	 5739622	       209.6 ns/op	      64 B/op	       4 allocs/op
+BenchmarkFunctionalDnsCacheKeyRoundtrip-6                    	 5633630	       211.7 ns/op	      64 B/op	       4 allocs/op
+BenchmarkFunctionalDnsCacheKeyRoundtrip-6                    	 5515845	       208.8 ns/op	      64 B/op	       4 allocs/op
+BenchmarkFunctionalDnsCacheKeyRoundtrip-6                    	 5782584	       217.1 ns/op	      64 B/op	       4 allocs/op
+BenchmarkFunctionalDnsCacheKeyRoundtrip-6                    	 5714863	       209.9 ns/op	      64 B/op	       4 allocs/op
+BenchmarkFunctionalDnsCacheTtlLookup-6                       	 2127795	       552.9 ns/op	    1136 B/op	       7 allocs/op
+BenchmarkFunctionalDnsCacheTtlLookup-6                       	 2150749	       564.8 ns/op	    1136 B/op	       7 allocs/op
+BenchmarkFunctionalDnsCacheTtlLookup-6                       	 2135739	       554.6 ns/op	    1136 B/op	       7 allocs/op
+BenchmarkFunctionalDnsCacheTtlLookup-6                       	 1982359	       547.6 ns/op	    1136 B/op	       7 allocs/op
+BenchmarkFunctionalDnsCacheTtlLookup-6                       	 1946888	       554.3 ns/op	    1136 B/op	       7 allocs/op
+BenchmarkFunctionalDnsCacheTtlLookup-6                       	 2211132	       544.6 ns/op	    1136 B/op	       7 allocs/op
+BenchmarkFunctionalDnsCacheTtlLookup-6                       	 2221932	       547.3 ns/op	    1136 B/op	       7 allocs/op
+BenchmarkFunctionalDnsCacheTtlLookup-6                       	 2008852	       584.2 ns/op	    1136 B/op	       7 allocs/op
+BenchmarkFunctionalDnsCacheTtlLookup-6                       	 2202582	       570.3 ns/op	    1136 B/op	       7 allocs/op
+BenchmarkFunctionalDnsCacheTtlLookup-6                       	 2141335	       550.0 ns/op	    1136 B/op	       7 allocs/op
+BenchmarkFunctionalDnsDohGetRequest-6                        	 1396719	       849.5 ns/op	    1464 B/op	      17 allocs/op
+BenchmarkFunctionalDnsDohGetRequest-6                        	 1327006	       889.2 ns/op	    1464 B/op	      17 allocs/op
+BenchmarkFunctionalDnsDohGetRequest-6                        	 1399270	       847.2 ns/op	    1464 B/op	      17 allocs/op
+BenchmarkFunctionalDnsDohGetRequest-6                        	 1399008	       842.4 ns/op	    1464 B/op	      17 allocs/op
+BenchmarkFunctionalDnsDohGetRequest-6                        	 1425775	       983.9 ns/op	    1464 B/op	      17 allocs/op
+BenchmarkFunctionalDnsDohGetRequest-6                        	 1436038	       869.7 ns/op	    1464 B/op	      17 allocs/op
+BenchmarkFunctionalDnsDohGetRequest-6                        	 1416390	       846.6 ns/op	    1464 B/op	      17 allocs/op
+BenchmarkFunctionalDnsDohGetRequest-6                        	 1368158	       858.2 ns/op	    1464 B/op	      17 allocs/op
+BenchmarkFunctionalDnsDohGetRequest-6                        	 1398248	       853.7 ns/op	    1464 B/op	      17 allocs/op
+BenchmarkFunctionalDnsDohGetRequest-6                        	 1425667	       955.1 ns/op	    1464 B/op	      17 allocs/op
+BenchmarkFunctionalDnsDohPostRequest-6                       	  733314	      1590 ns/op	    5024 B/op	      13 allocs/op
+BenchmarkFunctionalDnsDohPostRequest-6                       	  732421	      1672 ns/op	    5024 B/op	      13 allocs/op
+BenchmarkFunctionalDnsDohPostRequest-6                       	  739274	      1637 ns/op	    5024 B/op	      13 allocs/op
+BenchmarkFunctionalDnsDohPostRequest-6                       	  726360	      1703 ns/op	    5024 B/op	      13 allocs/op
+BenchmarkFunctionalDnsDohPostRequest-6                       	  717057	      1630 ns/op	    5024 B/op	      13 allocs/op
+BenchmarkFunctionalDnsDohPostRequest-6                       	  727326	      1643 ns/op	    5024 B/op	      13 allocs/op
+BenchmarkFunctionalDnsDohPostRequest-6                       	  716494	      1676 ns/op	    5024 B/op	      13 allocs/op
+BenchmarkFunctionalDnsDohPostRequest-6                       	  720456	      1656 ns/op	    5024 B/op	      13 allocs/op
+BenchmarkFunctionalDnsDohPostRequest-6                       	  702435	      1635 ns/op	    5024 B/op	      13 allocs/op
+BenchmarkFunctionalDnsDohPostRequest-6                       	  709291	      1608 ns/op	    5024 B/op	      13 allocs/op
+BenchmarkFunctionalDnsDohValidateContentType-6               	 1358870	       868.5 ns/op	     896 B/op	      11 allocs/op
+BenchmarkFunctionalDnsDohValidateContentType-6               	 1470565	       825.8 ns/op	     896 B/op	      11 allocs/op
+BenchmarkFunctionalDnsDohValidateContentType-6               	 1434507	       822.9 ns/op	     896 B/op	      11 allocs/op
+BenchmarkFunctionalDnsDohValidateContentType-6               	 1459330	       823.4 ns/op	     896 B/op	      11 allocs/op
+BenchmarkFunctionalDnsDohValidateContentType-6               	 1435312	       865.9 ns/op	     896 B/op	      11 allocs/op
+BenchmarkFunctionalDnsDohValidateContentType-6               	 1476190	       844.4 ns/op	     896 B/op	      11 allocs/op
+BenchmarkFunctionalDnsDohValidateContentType-6               	 1464444	       817.2 ns/op	     896 B/op	      11 allocs/op
+BenchmarkFunctionalDnsDohValidateContentType-6               	 1424007	       806.0 ns/op	     896 B/op	      11 allocs/op
+BenchmarkFunctionalDnsDohValidateContentType-6               	 1449645	       840.5 ns/op	     896 B/op	      11 allocs/op
+BenchmarkFunctionalDnsDohValidateContentType-6               	 1431260	       833.8 ns/op	     896 B/op	      11 allocs/op
+BenchmarkFunctionalDnsValidationQuestionID-6                 	 1609237	       754.5 ns/op	     340 B/op	      14 allocs/op
+BenchmarkFunctionalDnsValidationQuestionID-6                 	 1665020	       742.5 ns/op	     340 B/op	      14 allocs/op
+BenchmarkFunctionalDnsValidationQuestionID-6                 	 1651192	       733.2 ns/op	     340 B/op	      14 allocs/op
+BenchmarkFunctionalDnsValidationQuestionID-6                 	 1669438	       740.6 ns/op	     340 B/op	      14 allocs/op
+BenchmarkFunctionalDnsValidationQuestionID-6                 	 1646750	       723.2 ns/op	     340 B/op	      14 allocs/op
+BenchmarkFunctionalDnsValidationQuestionID-6                 	 1659615	       739.5 ns/op	     340 B/op	      14 allocs/op
+BenchmarkFunctionalDnsValidationQuestionID-6                 	 1603448	       751.7 ns/op	     340 B/op	      14 allocs/op
+BenchmarkFunctionalDnsValidationQuestionID-6                 	 1643712	       763.6 ns/op	     340 B/op	      14 allocs/op
+BenchmarkFunctionalDnsValidationQuestionID-6                 	 1633230	       790.7 ns/op	     340 B/op	      14 allocs/op
+BenchmarkFunctionalDnsValidationQuestionID-6                 	 1648844	       722.6 ns/op	     340 B/op	      14 allocs/op
+BenchmarkFunctionalDnsRawPacketValidationQuestionID-6        	  735390	      1529 ns/op	     656 B/op	      30 allocs/op
+BenchmarkFunctionalDnsRawPacketValidationQuestionID-6        	  734816	      1541 ns/op	     656 B/op	      30 allocs/op
+BenchmarkFunctionalDnsRawPacketValidationQuestionID-6        	  724296	      1588 ns/op	     656 B/op	      30 allocs/op
+BenchmarkFunctionalDnsRawPacketValidationQuestionID-6        	  717019	      1587 ns/op	     656 B/op	      30 allocs/op
+BenchmarkFunctionalDnsRawPacketValidationQuestionID-6        	  731784	      1527 ns/op	     656 B/op	      30 allocs/op
+BenchmarkFunctionalDnsRawPacketValidationQuestionID-6        	  728572	      1610 ns/op	     656 B/op	      30 allocs/op
+BenchmarkFunctionalDnsRawPacketValidationQuestionID-6        	  711010	      1531 ns/op	     656 B/op	      30 allocs/op
+BenchmarkFunctionalDnsRawPacketValidationQuestionID-6        	  739792	      1546 ns/op	     656 B/op	      30 allocs/op
+BenchmarkFunctionalDnsRawPacketValidationQuestionID-6        	  736843	      1570 ns/op	     656 B/op	      30 allocs/op
+BenchmarkFunctionalDnsRawPacketValidationQuestionID-6        	  721884	      1559 ns/op	     656 B/op	      30 allocs/op
+BenchmarkFunctionalDnsRawPacketAnswersTTLIPCNAME-6           	 1809637	       702.7 ns/op	     504 B/op	      19 allocs/op
+BenchmarkFunctionalDnsRawPacketAnswersTTLIPCNAME-6           	 1839206	       780.0 ns/op	     504 B/op	      19 allocs/op
+BenchmarkFunctionalDnsRawPacketAnswersTTLIPCNAME-6           	 1726506	       804.6 ns/op	     504 B/op	      19 allocs/op
+BenchmarkFunctionalDnsRawPacketAnswersTTLIPCNAME-6           	 1637400	       882.2 ns/op	     504 B/op	      19 allocs/op
+BenchmarkFunctionalDnsRawPacketAnswersTTLIPCNAME-6           	 1618141	       778.3 ns/op	     504 B/op	      19 allocs/op
+BenchmarkFunctionalDnsRawPacketAnswersTTLIPCNAME-6           	 1590462	       679.7 ns/op	     504 B/op	      19 allocs/op
+BenchmarkFunctionalDnsRawPacketAnswersTTLIPCNAME-6           	 1828946	       662.0 ns/op	     504 B/op	      19 allocs/op
+BenchmarkFunctionalDnsRawPacketAnswersTTLIPCNAME-6           	 1827140	       681.0 ns/op	     504 B/op	      19 allocs/op
+BenchmarkFunctionalDnsRawPacketAnswersTTLIPCNAME-6           	 1837089	       649.6 ns/op	     504 B/op	      19 allocs/op
+BenchmarkFunctionalDnsRawPacketAnswersTTLIPCNAME-6           	 1837074	       645.6 ns/op	     504 B/op	      19 allocs/op
+BenchmarkFunctionalDnsResolveAsisGuard-6                     	 4730976	       258.5 ns/op	     288 B/op	       5 allocs/op
+BenchmarkFunctionalDnsResolveAsisGuard-6                     	 4744099	       275.4 ns/op	     288 B/op	       5 allocs/op
+BenchmarkFunctionalDnsResolveAsisGuard-6                     	 4779364	       269.8 ns/op	     288 B/op	       5 allocs/op
+BenchmarkFunctionalDnsResolveAsisGuard-6                     	 4727854	       254.7 ns/op	     288 B/op	       5 allocs/op
+BenchmarkFunctionalDnsResolveAsisGuard-6                     	 4567167	       270.2 ns/op	     288 B/op	       5 allocs/op
+BenchmarkFunctionalDnsResolveAsisGuard-6                     	 4779141	       253.6 ns/op	     288 B/op	       5 allocs/op
+BenchmarkFunctionalDnsResolveAsisGuard-6                     	 4032585	       293.6 ns/op	     288 B/op	       5 allocs/op
+BenchmarkFunctionalDnsResolveAsisGuard-6                     	 4741080	       252.6 ns/op	     288 B/op	       5 allocs/op
+BenchmarkFunctionalDnsResolveAsisGuard-6                     	 4788914	       262.3 ns/op	     288 B/op	       5 allocs/op
+BenchmarkFunctionalDnsResolveAsisGuard-6                     	 4646197	       268.8 ns/op	     288 B/op	       5 allocs/op
+BenchmarkFunctionalControlChooseDialTargetDomain-6           	 3143751	       433.7 ns/op	     640 B/op	      11 allocs/op
+BenchmarkFunctionalControlChooseDialTargetDomain-6           	 3181443	       393.7 ns/op	     640 B/op	      11 allocs/op
+BenchmarkFunctionalControlChooseDialTargetDomain-6           	 2951910	       440.2 ns/op	     640 B/op	      11 allocs/op
+BenchmarkFunctionalControlChooseDialTargetDomain-6           	 3013873	       377.5 ns/op	     640 B/op	      11 allocs/op
+BenchmarkFunctionalControlChooseDialTargetDomain-6           	 3175610	       379.6 ns/op	     640 B/op	      11 allocs/op
+BenchmarkFunctionalControlChooseDialTargetDomain-6           	 3199096	       378.4 ns/op	     640 B/op	      11 allocs/op
+BenchmarkFunctionalControlChooseDialTargetDomain-6           	 3180042	       379.3 ns/op	     640 B/op	      11 allocs/op
+BenchmarkFunctionalControlChooseDialTargetDomain-6           	 2932912	       398.2 ns/op	     640 B/op	      11 allocs/op
+BenchmarkFunctionalControlChooseDialTargetDomain-6           	 3179821	       415.2 ns/op	     640 B/op	      11 allocs/op
+BenchmarkFunctionalControlChooseDialTargetDomain-6           	 2765985	       391.1 ns/op	     640 B/op	      11 allocs/op
+BenchmarkFunctionalControlChooseDialTargetDomainPlusPlus-6   	 2855457	       434.8 ns/op	     664 B/op	      12 allocs/op
+BenchmarkFunctionalControlChooseDialTargetDomainPlusPlus-6   	 2470374	       441.0 ns/op	     664 B/op	      12 allocs/op
+BenchmarkFunctionalControlChooseDialTargetDomainPlusPlus-6   	 2783443	       419.3 ns/op	     664 B/op	      12 allocs/op
+BenchmarkFunctionalControlChooseDialTargetDomainPlusPlus-6   	 2893682	       417.3 ns/op	     664 B/op	      12 allocs/op
+BenchmarkFunctionalControlChooseDialTargetDomainPlusPlus-6   	 2889862	       418.8 ns/op	     664 B/op	      12 allocs/op
+BenchmarkFunctionalControlChooseDialTargetDomainPlusPlus-6   	 2572226	       420.6 ns/op	     664 B/op	      12 allocs/op
+BenchmarkFunctionalControlChooseDialTargetDomainPlusPlus-6   	 2872327	       416.1 ns/op	     664 B/op	      12 allocs/op
+BenchmarkFunctionalControlChooseDialTargetDomainPlusPlus-6   	 2882228	       450.9 ns/op	     664 B/op	      12 allocs/op
+BenchmarkFunctionalControlChooseDialTargetDomainPlusPlus-6   	 2888431	       423.1 ns/op	     664 B/op	      12 allocs/op
+BenchmarkFunctionalControlChooseDialTargetDomainPlusPlus-6   	 2889732	       437.0 ns/op	     664 B/op	      12 allocs/op
+BenchmarkRebuildStage7MagicNetworkMarkMptcp-6                	78186742	        16.14 ns/op	      16 B/op	       1 allocs/op
+BenchmarkRebuildStage7MagicNetworkMarkMptcp-6                	75254180	        14.86 ns/op	      16 B/op	       1 allocs/op
+BenchmarkRebuildStage7MagicNetworkMarkMptcp-6                	76899848	        15.35 ns/op	      16 B/op	       1 allocs/op
+BenchmarkRebuildStage7MagicNetworkMarkMptcp-6                	78035132	        15.21 ns/op	      16 B/op	       1 allocs/op
+BenchmarkRebuildStage7MagicNetworkMarkMptcp-6                	76409296	        15.83 ns/op	      16 B/op	       1 allocs/op
+BenchmarkRebuildStage7MagicNetworkMarkMptcp-6                	76590472	        15.89 ns/op	      16 B/op	       1 allocs/op
+BenchmarkRebuildStage7MagicNetworkMarkMptcp-6                	77109423	        15.43 ns/op	      16 B/op	       1 allocs/op
+BenchmarkRebuildStage7MagicNetworkMarkMptcp-6                	75300537	        15.52 ns/op	      16 B/op	       1 allocs/op
+BenchmarkRebuildStage7MagicNetworkMarkMptcp-6                	73119106	        16.72 ns/op	      16 B/op	       1 allocs/op
+BenchmarkRebuildStage7MagicNetworkMarkMptcp-6                	79242266	        14.93 ns/op	      16 B/op	       1 allocs/op
+BenchmarkRebuildStage7UdpEndpointTrimTarget-6                	1000000000	         0.2219 ns/op	       0 B/op	       0 allocs/op
+BenchmarkRebuildStage7UdpEndpointTrimTarget-6                	1000000000	         0.2210 ns/op	       0 B/op	       0 allocs/op
+BenchmarkRebuildStage7UdpEndpointTrimTarget-6                	1000000000	         0.2205 ns/op	       0 B/op	       0 allocs/op
+BenchmarkRebuildStage7UdpEndpointTrimTarget-6                	1000000000	         0.2204 ns/op	       0 B/op	       0 allocs/op
+BenchmarkRebuildStage7UdpEndpointTrimTarget-6                	1000000000	         0.2207 ns/op	       0 B/op	       0 allocs/op
+BenchmarkRebuildStage7UdpEndpointTrimTarget-6                	1000000000	         0.2215 ns/op	       0 B/op	       0 allocs/op
+BenchmarkRebuildStage7UdpEndpointTrimTarget-6                	1000000000	         0.2218 ns/op	       0 B/op	       0 allocs/op
+BenchmarkRebuildStage7UdpEndpointTrimTarget-6                	1000000000	         0.2205 ns/op	       0 B/op	       0 allocs/op
+BenchmarkRebuildStage7UdpEndpointTrimTarget-6                	1000000000	         0.2209 ns/op	       0 B/op	       0 allocs/op
+BenchmarkRebuildStage7UdpEndpointTrimTarget-6                	1000000000	         0.2212 ns/op	       0 B/op	       0 allocs/op
+PASS
+ok  	github.com/daeuniverse/dae/control	227.696s
+$ bash -lc PATH=/root/.local/go1.25.9/bin:$PATH GOWORK=off go test -run '^$' -bench '(BenchmarkEngineNecessaryOutbounds|BenchmarkEngineParseConfigAPI|BenchmarkEngineReadConfigFileMinimal|BenchmarkEngineRouteAwareTarget|BenchmarkEngineRuntimeOverviewNoControlPlane|BenchmarkEngineRuntimeOverviewScopedUdpTaskPool|BenchmarkEngineSubscriptionPersistCleanup)' -benchmem -count=10 -benchtime=1s ./engine
+goos: linux
+goarch: amd64
+pkg: github.com/daeuniverse/dae/engine
+cpu: AMD Ryzen 9 7945HX with Radeon Graphics        
+BenchmarkEngineRuntimeOverviewScopedUdpTaskPool-6   	16062738	        75.30 ns/op	     224 B/op	       1 allocs/op
+BenchmarkEngineRuntimeOverviewScopedUdpTaskPool-6   	17435568	        66.66 ns/op	     224 B/op	       1 allocs/op
+BenchmarkEngineRuntimeOverviewScopedUdpTaskPool-6   	18613228	        78.59 ns/op	     224 B/op	       1 allocs/op
+BenchmarkEngineRuntimeOverviewScopedUdpTaskPool-6   	18862201	        71.84 ns/op	     224 B/op	       1 allocs/op
+BenchmarkEngineRuntimeOverviewScopedUdpTaskPool-6   	18689307	        74.43 ns/op	     224 B/op	       1 allocs/op
+BenchmarkEngineRuntimeOverviewScopedUdpTaskPool-6   	17967375	        66.54 ns/op	     224 B/op	       1 allocs/op
+BenchmarkEngineRuntimeOverviewScopedUdpTaskPool-6   	17601978	        71.41 ns/op	     224 B/op	       1 allocs/op
+BenchmarkEngineRuntimeOverviewScopedUdpTaskPool-6   	19376821	        70.20 ns/op	     224 B/op	       1 allocs/op
+BenchmarkEngineRuntimeOverviewScopedUdpTaskPool-6   	14647410	        74.69 ns/op	     224 B/op	       1 allocs/op
+BenchmarkEngineRuntimeOverviewScopedUdpTaskPool-6   	17592644	        65.63 ns/op	     224 B/op	       1 allocs/op
+BenchmarkEngineRouteAwareTarget-6                   	12888181	        96.26 ns/op	      48 B/op	       1 allocs/op
+BenchmarkEngineRouteAwareTarget-6                   	13064499	        93.70 ns/op	      48 B/op	       1 allocs/op
+BenchmarkEngineRouteAwareTarget-6                   	13018680	        95.08 ns/op	      48 B/op	       1 allocs/op
+BenchmarkEngineRouteAwareTarget-6                   	12881696	        95.33 ns/op	      48 B/op	       1 allocs/op
+BenchmarkEngineRouteAwareTarget-6                   	11483116	        99.92 ns/op	      48 B/op	       1 allocs/op
+BenchmarkEngineRouteAwareTarget-6                   	12971768	        92.09 ns/op	      48 B/op	       1 allocs/op
+BenchmarkEngineRouteAwareTarget-6                   	13107340	        91.67 ns/op	      48 B/op	       1 allocs/op
+BenchmarkEngineRouteAwareTarget-6                   	12858963	        92.56 ns/op	      48 B/op	       1 allocs/op
+BenchmarkEngineRouteAwareTarget-6                   	12910387	        92.06 ns/op	      48 B/op	       1 allocs/op
+BenchmarkEngineRouteAwareTarget-6                   	13008794	        91.52 ns/op	      48 B/op	       1 allocs/op
+BenchmarkEngineNecessaryOutbounds-6                 	 8745152	       139.5 ns/op	     160 B/op	       4 allocs/op
+BenchmarkEngineNecessaryOutbounds-6                 	 8852740	       141.2 ns/op	     160 B/op	       4 allocs/op
+BenchmarkEngineNecessaryOutbounds-6                 	 8708882	       136.7 ns/op	     160 B/op	       4 allocs/op
+BenchmarkEngineNecessaryOutbounds-6                 	 8410536	       145.8 ns/op	     160 B/op	       4 allocs/op
+BenchmarkEngineNecessaryOutbounds-6                 	 8226342	       141.8 ns/op	     160 B/op	       4 allocs/op
+BenchmarkEngineNecessaryOutbounds-6                 	 6953686	       149.3 ns/op	     160 B/op	       4 allocs/op
+BenchmarkEngineNecessaryOutbounds-6                 	 8838216	       149.8 ns/op	     160 B/op	       4 allocs/op
+BenchmarkEngineNecessaryOutbounds-6                 	 8865153	       157.5 ns/op	     160 B/op	       4 allocs/op
+BenchmarkEngineNecessaryOutbounds-6                 	 7133884	       141.0 ns/op	     160 B/op	       4 allocs/op
+BenchmarkEngineNecessaryOutbounds-6                 	 8748949	       159.6 ns/op	     160 B/op	       4 allocs/op
+BenchmarkEngineRuntimeOverviewNoControlPlane-6      	 9328312	       127.4 ns/op	     320 B/op	       3 allocs/op
+BenchmarkEngineRuntimeOverviewNoControlPlane-6      	10761339	       131.5 ns/op	     320 B/op	       3 allocs/op
+BenchmarkEngineRuntimeOverviewNoControlPlane-6      	11211738	       122.2 ns/op	     320 B/op	       3 allocs/op
+BenchmarkEngineRuntimeOverviewNoControlPlane-6      	11197318	       118.8 ns/op	     320 B/op	       3 allocs/op
+BenchmarkEngineRuntimeOverviewNoControlPlane-6      	11029125	       112.8 ns/op	     320 B/op	       3 allocs/op
+BenchmarkEngineRuntimeOverviewNoControlPlane-6      	10939628	       122.1 ns/op	     320 B/op	       3 allocs/op
+BenchmarkEngineRuntimeOverviewNoControlPlane-6      	10606168	       122.6 ns/op	     320 B/op	       3 allocs/op
+BenchmarkEngineRuntimeOverviewNoControlPlane-6      	10899166	       120.8 ns/op	     320 B/op	       3 allocs/op
+BenchmarkEngineRuntimeOverviewNoControlPlane-6      	10786701	       114.4 ns/op	     320 B/op	       3 allocs/op
+BenchmarkEngineRuntimeOverviewNoControlPlane-6      	10622682	       120.0 ns/op	     320 B/op	       3 allocs/op
+BenchmarkEngineParseConfigAPI-6                     	    6885	    159446 ns/op	  153344 B/op	    2678 allocs/op
+BenchmarkEngineParseConfigAPI-6                     	    7275	    163297 ns/op	  153341 B/op	    2678 allocs/op
+BenchmarkEngineParseConfigAPI-6                     	    6648	    161971 ns/op	  153342 B/op	    2678 allocs/op
+BenchmarkEngineParseConfigAPI-6                     	    7140	    168703 ns/op	  153341 B/op	    2678 allocs/op
+BenchmarkEngineParseConfigAPI-6                     	    7780	    160819 ns/op	  153341 B/op	    2678 allocs/op
+BenchmarkEngineParseConfigAPI-6                     	    7440	    175439 ns/op	  153339 B/op	    2678 allocs/op
+BenchmarkEngineParseConfigAPI-6                     	    6853	    166584 ns/op	  153340 B/op	    2678 allocs/op
+BenchmarkEngineParseConfigAPI-6                     	    6794	    169740 ns/op	  153340 B/op	    2678 allocs/op
+BenchmarkEngineParseConfigAPI-6                     	    6213	    164362 ns/op	  153340 B/op	    2678 allocs/op
+BenchmarkEngineParseConfigAPI-6                     	    7060	    164929 ns/op	  153340 B/op	    2678 allocs/op
+BenchmarkEngineReadConfigFileMinimal-6              	   19069	     61052 ns/op	   40777 B/op	     651 allocs/op
+BenchmarkEngineReadConfigFileMinimal-6              	   19075	     60325 ns/op	   40777 B/op	     651 allocs/op
+BenchmarkEngineReadConfigFileMinimal-6              	   19975	     62158 ns/op	   40777 B/op	     651 allocs/op
+BenchmarkEngineReadConfigFileMinimal-6              	   19698	     61838 ns/op	   40777 B/op	     651 allocs/op
+BenchmarkEngineReadConfigFileMinimal-6              	   18879	     63040 ns/op	   40777 B/op	     651 allocs/op
+BenchmarkEngineReadConfigFileMinimal-6              	   18874	     65915 ns/op	   40777 B/op	     651 allocs/op
+BenchmarkEngineReadConfigFileMinimal-6              	   20002	     61444 ns/op	   40777 B/op	     651 allocs/op
+BenchmarkEngineReadConfigFileMinimal-6              	   19845	     64271 ns/op	   40777 B/op	     651 allocs/op
+BenchmarkEngineReadConfigFileMinimal-6              	   16549	     64794 ns/op	   40777 B/op	     651 allocs/op
+BenchmarkEngineReadConfigFileMinimal-6              	   19010	     59911 ns/op	   40761 B/op	     651 allocs/op
+BenchmarkEngineSubscriptionPersistCleanup-6         	   16014	     74599 ns/op	    1838 B/op	      31 allocs/op
+BenchmarkEngineSubscriptionPersistCleanup-6         	   16054	     76103 ns/op	    1837 B/op	      31 allocs/op
+BenchmarkEngineSubscriptionPersistCleanup-6         	   16322	     76700 ns/op	    1838 B/op	      31 allocs/op
+BenchmarkEngineSubscriptionPersistCleanup-6         	   16048	     72785 ns/op	    1836 B/op	      31 allocs/op
+BenchmarkEngineSubscriptionPersistCleanup-6         	   16062	     73945 ns/op	    1836 B/op	      31 allocs/op
+BenchmarkEngineSubscriptionPersistCleanup-6         	   16153	     75668 ns/op	    1839 B/op	      31 allocs/op
+BenchmarkEngineSubscriptionPersistCleanup-6         	   16171	     74903 ns/op	    1836 B/op	      31 allocs/op
+BenchmarkEngineSubscriptionPersistCleanup-6         	   16189	     74954 ns/op	    1838 B/op	      31 allocs/op
+BenchmarkEngineSubscriptionPersistCleanup-6         	   16395	     74034 ns/op	    1788 B/op	      31 allocs/op
+BenchmarkEngineSubscriptionPersistCleanup-6         	   16074	     73187 ns/op	    1790 B/op	      31 allocs/op
+PASS
+ok  	github.com/daeuniverse/dae/engine	107.677s
+$ bash -lc PATH=/root/.local/go1.25.9/bin:$PATH GOWORK=off go test -run '^$' -bench '(BenchmarkRebuildStage8TraceRingbufParse|BenchmarkRebuildStage8TraceTrackerAdd)' -benchmem -count=10 -benchtime=1s ./trace
+goos: linux
+goarch: amd64
+pkg: github.com/daeuniverse/dae/trace
+cpu: AMD Ryzen 9 7945HX with Radeon Graphics        
+BenchmarkRebuildStage8TraceRingbufParse-6   	23258917	        50.94 ns/op	       8 B/op	       1 allocs/op
+BenchmarkRebuildStage8TraceRingbufParse-6   	22508012	        50.99 ns/op	       8 B/op	       1 allocs/op
+BenchmarkRebuildStage8TraceRingbufParse-6   	23073409	        52.15 ns/op	       8 B/op	       1 allocs/op
+BenchmarkRebuildStage8TraceRingbufParse-6   	22774400	        51.46 ns/op	       8 B/op	       1 allocs/op
+BenchmarkRebuildStage8TraceRingbufParse-6   	22834201	        51.58 ns/op	       8 B/op	       1 allocs/op
+BenchmarkRebuildStage8TraceRingbufParse-6   	23010297	        51.21 ns/op	       8 B/op	       1 allocs/op
+BenchmarkRebuildStage8TraceRingbufParse-6   	22936304	        51.06 ns/op	       8 B/op	       1 allocs/op
+BenchmarkRebuildStage8TraceRingbufParse-6   	22553665	        51.03 ns/op	       8 B/op	       1 allocs/op
+BenchmarkRebuildStage8TraceRingbufParse-6   	22813232	        51.36 ns/op	       8 B/op	       1 allocs/op
+BenchmarkRebuildStage8TraceRingbufParse-6   	22645162	        51.08 ns/op	       8 B/op	       1 allocs/op
+BenchmarkRebuildStage8TraceTrackerAdd-6     	 2777871	       488.5 ns/op	      31 B/op	       0 allocs/op
+BenchmarkRebuildStage8TraceTrackerAdd-6     	 2784218	       520.4 ns/op	      31 B/op	       0 allocs/op
+BenchmarkRebuildStage8TraceTrackerAdd-6     	 2704389	       504.9 ns/op	      32 B/op	       0 allocs/op
+BenchmarkRebuildStage8TraceTrackerAdd-6     	 2786455	       495.0 ns/op	      31 B/op	       0 allocs/op
+BenchmarkRebuildStage8TraceTrackerAdd-6     	 2677138	       492.6 ns/op	      33 B/op	       0 allocs/op
+BenchmarkRebuildStage8TraceTrackerAdd-6     	 2833353	       489.0 ns/op	      31 B/op	       0 allocs/op
+BenchmarkRebuildStage8TraceTrackerAdd-6     	 2770975	       504.3 ns/op	      31 B/op	       0 allocs/op
+BenchmarkRebuildStage8TraceTrackerAdd-6     	 2808972	       493.5 ns/op	      31 B/op	       0 allocs/op
+BenchmarkRebuildStage8TraceTrackerAdd-6     	 2857233	       492.3 ns/op	      30 B/op	       0 allocs/op
+BenchmarkRebuildStage8TraceTrackerAdd-6     	 2788576	       499.9 ns/op	      31 B/op	       0 allocs/op
+PASS
+ok  	github.com/daeuniverse/dae/trace	30.475s

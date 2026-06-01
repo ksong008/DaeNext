@@ -1,0 +1,119 @@
+[
+  {
+    "benchmark": "BenchmarkDomainRoutingMapGoUpdate",
+    "n": 10,
+    "avg_ns": 824.7299999999999,
+    "min_ns": 819.4,
+    "max_ns": 840.9,
+    "b_op": 64.0,
+    "allocs_op": 3.0
+  },
+  {
+    "benchmark": "BenchmarkDomainRoutingMapRustHelperUpdate",
+    "n": 10,
+    "avg_ns": 497917.9,
+    "min_ns": 490166.0,
+    "max_ns": 502373.0,
+    "b_op": 9026.9,
+    "allocs_op": 67.0
+  },
+  {
+    "benchmark": "BenchmarkDomainRoutingMapRustOwnerDuplicate",
+    "n": 10,
+    "avg_ns": 27728.0,
+    "min_ns": 27344.0,
+    "max_ns": 28867.0,
+    "b_op": 1865.0,
+    "allocs_op": 23.0
+  },
+  {
+    "benchmark": "BenchmarkDomainRoutingMapRustOwnerToggle",
+    "n": 10,
+    "avg_ns": 31123.1,
+    "min_ns": 30614.0,
+    "max_ns": 31555.0,
+    "b_op": 1865.0,
+    "allocs_op": 23.0
+  },
+  {
+    "benchmark": "BenchmarkDomainRoutingMapRustPersistentHelperUpdate",
+    "n": 10,
+    "avg_ns": 25596.3,
+    "min_ns": 25339.0,
+    "max_ns": 26168.0,
+    "b_op": 1112.9,
+    "allocs_op": 15.0
+  },
+  {
+    "benchmark": "BenchmarkDomainRoutingMapRustReloadClear",
+    "n": 10,
+    "avg_ns": 41939.5,
+    "min_ns": 41280.0,
+    "max_ns": 42216.0,
+    "b_op": 2141.0,
+    "allocs_op": 28.0
+  },
+  {
+    "benchmark": "BenchmarkOutboundConnectivityMapGoUpdate",
+    "n": 10,
+    "avg_ns": 782.6,
+    "min_ns": 778.7,
+    "max_ns": 789.0,
+    "b_op": 16.0,
+    "allocs_op": 2.0
+  },
+  {
+    "benchmark": "BenchmarkReloadDnsCacheRestoreDecisionGoBool",
+    "n": 10,
+    "avg_ns": 0.22119,
+    "min_ns": 0.2204,
+    "max_ns": 0.2225,
+    "b_op": 0.0,
+    "allocs_op": 0.0
+  },
+  {
+    "benchmark": "BenchmarkRoutingMapGoUpdate",
+    "n": 10,
+    "avg_ns": 1200.1,
+    "min_ns": 1196.0,
+    "max_ns": 1205.0,
+    "b_op": 64.0,
+    "allocs_op": 3.0
+  },
+  {
+    "benchmark": "BenchmarkRoutingMapGoUpdateWithLpmBuild",
+    "n": 10,
+    "avg_ns": 28250.4,
+    "min_ns": 27863.0,
+    "max_ns": 28710.0,
+    "b_op": 336.0,
+    "allocs_op": 14.0
+  },
+  {
+    "benchmark": "BenchmarkRoutingMapRustHelperUpdate",
+    "n": 10,
+    "avg_ns": 498127.5,
+    "min_ns": 494726.0,
+    "max_ns": 505394.0,
+    "b_op": 9284.0,
+    "allocs_op": 67.0
+  },
+  {
+    "benchmark": "BenchmarkRoutingMapRustHelperUpdateWithLpmBuild",
+    "n": 10,
+    "avg_ns": 539871.6,
+    "min_ns": 535282.0,
+    "max_ns": 551897.0,
+    "b_op": 9441.7,
+    "allocs_op": 67.0
+  },
+  {
+    "benchmark": "BenchmarkRustBpfLoaderContractHelper",
+    "n": 10,
+    "avg_ns": 558438.5,
+    "min_ns": 546571.0,
+    "max_ns": 567432.0,
+    "b_op": 28171.9,
+    "allocs_op": 61.0
+  }
+]
