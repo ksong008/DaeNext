@@ -4,14 +4,32 @@ use std::time::Duration;
 use dae_config::{Config, DynamicFunctionValue, Group};
 use dae_core_types::OutboundIndex;
 use dae_datapath::TcpDialMode;
-use dae_outbound::vless::{VLESSLink, password_to_key};
+use dae_outbound::{
+    shared_transport::{U_TLS_WIRE_STACK_DEFERRED, UtlsFingerprint, resolve_utls_client_hello_id},
+    vless::{VLESSLink, password_to_key},
+};
 
-use super::dns::{ResidentDnsPlan, build_resident_dns_plan};
+use super::{
+    XTLS_RPRX_VISION,
+    dns::{ResidentDnsPlan, build_resident_dns_plan},
+};
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 struct SelectedGroupNode {
     tag: String,
     link: String,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(super) struct ResidentUtlsFingerprintPlan {
+    pub(super) source: &'static str,
+    pub(super) requested: String,
+    pub(super) name: String,
+    pub(super) canonical: String,
+    pub(super) family: String,
+    pub(super) client: String,
+    pub(super) randomized: bool,
+    pub(super) alpn_policy: String,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -36,6 +54,7 @@ pub(super) struct ResidentProxyPlan {
     pub(super) net: String,
     pub(super) tls: String,
     pub(super) allow_insecure: bool,
+    pub(super) utls_fingerprint: Option<ResidentUtlsFingerprintPlan>,
     pub(super) key: [u8; 16],
     pub(super) mark: u32,
     pub(super) mptcp: bool,
@@ -161,6 +180,12 @@ fn build_proxy_plan(
     vless
         .validate_transport_contract()
         .map_err(|err| format!("validate VLESS transport for {node_tag}: {err}"))?;
+    if vless.flow != XTLS_RPRX_VISION {
+        return Err(format!(
+            "resident dataplane vless native experiment admits only flow={XTLS_RPRX_VISION}, got '{}' for node {node_tag}; keep Go outbound for this config",
+            vless.flow
+        ));
+    }
     if vless.net != "tcp" {
         return Err(format!(
             "resident dataplane vless handler currently supports tcp transport only, got {} for node {node_tag}",
@@ -178,6 +203,12 @@ fn build_proxy_plan(
             "resident dataplane vless TLS handler does not admit allow_insecure; keep Go fallback for this config"
                 .to_owned(),
         );
+    }
+    let utls_fingerprint = resident_utls_fingerprint_plan(config, &vless)?;
+    if let Some(utls) = &utls_fingerprint {
+        if !vless_vision_fp_rust_native_experiment_enabled() {
+            return Err(resident_utls_wire_not_admitted_error(utls, &node_tag));
+        }
     }
     let server_port = vless.port.parse::<u16>().map_err(|err| {
         format!(
@@ -205,10 +236,97 @@ fn build_proxy_plan(
         net: vless.net,
         tls: vless.tls,
         allow_insecure: false,
+        utls_fingerprint,
         key,
         mark: config.global.so_mark_from_dae,
         mptcp: config.global.mptcp,
     })
+}
+
+fn vless_vision_fp_rust_native_experiment_enabled() -> bool {
+    option_env!("DAE_EXPERIMENT_VLESS_VISION_FP_RUST_NATIVE")
+        .is_some_and(|value| matches!(value, "1" | "true" | "TRUE" | "yes" | "YES"))
+}
+
+fn resident_utls_fingerprint_plan(
+    config: &Config,
+    vless: &VLESSLink,
+) -> Result<Option<ResidentUtlsFingerprintPlan>, String> {
+    let link_fingerprint = vless.fingerprint.trim();
+    if !link_fingerprint.is_empty() {
+        return resolve_resident_utls_fingerprint("link fp", link_fingerprint).map(Some);
+    }
+
+    if config
+        .global
+        .tls_implementation
+        .trim()
+        .eq_ignore_ascii_case("utls")
+    {
+        let global_fingerprint = config.global.utls_imitate.trim();
+        if global_fingerprint.is_empty() {
+            return Err(
+                "resident dataplane vless TLS handler requires utls_imitate when tls_implementation=utls"
+                    .to_owned(),
+            );
+        }
+        return resolve_resident_utls_fingerprint("global utls_imitate", global_fingerprint)
+            .map(Some);
+    }
+
+    Ok(None)
+}
+
+fn resident_utls_wire_not_admitted_error(
+    utls: &ResidentUtlsFingerprintPlan,
+    node_tag: &str,
+) -> String {
+    let wire_state = if U_TLS_WIRE_STACK_DEFERRED {
+        "deferred"
+    } else {
+        "not connected"
+    };
+    format!(
+        "resident dataplane vless TLS handler resolved {} uTLS ClientHello ID {} (name={}, canonical={}, family={}, client={}, randomized={}, alpn_policy={}) but native uTLS wire emission is {wire_state}; keep Go outbound for node {node_tag}",
+        utls.source,
+        utls.requested,
+        utls.name,
+        utls.canonical,
+        utls.family,
+        utls.client,
+        utls.randomized,
+        utls.alpn_policy
+    )
+}
+
+fn resolve_resident_utls_fingerprint(
+    source: &'static str,
+    requested: &str,
+) -> Result<ResidentUtlsFingerprintPlan, String> {
+    let fingerprint = resolve_utls_client_hello_id(requested)
+        .map_err(|err| format!("resident dataplane unsupported {source} {requested}: {err}"))?;
+    Ok(resident_utls_fingerprint_plan_from(
+        source,
+        requested,
+        fingerprint,
+    ))
+}
+
+fn resident_utls_fingerprint_plan_from(
+    source: &'static str,
+    requested: &str,
+    fingerprint: UtlsFingerprint,
+) -> ResidentUtlsFingerprintPlan {
+    ResidentUtlsFingerprintPlan {
+        source,
+        requested: requested.to_owned(),
+        name: fingerprint.name.to_owned(),
+        canonical: fingerprint.canonical.to_owned(),
+        family: fingerprint.family.to_owned(),
+        client: fingerprint.client.to_owned(),
+        randomized: fingerprint.randomized,
+        alpn_policy: fingerprint.alpn_policy.to_owned(),
+    }
 }
 
 fn parse_tcp_dial_mode(config: &Config) -> Result<TcpDialMode, String> {
@@ -411,7 +529,7 @@ mod tests {
         mptcp: false
         }
         node {
-        vless_live: 'vless://01234567-89ab-cdef-0123-456789abcdef@156.246.90.2:443?security=tls&type=tcp&sni=office.example&flow=xtls-rprx-vision&fp=chrome&alpn=h2,http/1.1'
+        vless_live: 'vless://01234567-89ab-cdef-0123-456789abcdef@156.246.90.2:443?security=tls&type=tcp&sni=office.example&flow=xtls-rprx-vision&alpn=h2,http/1.1'
         }
         group {
         proxy {
@@ -514,8 +632,8 @@ mod tests {
         dial_mode: domain++
         }
         node {
-        hk: 'vless://01234567-89ab-cdef-0123-456789abcdef@156.246.90.2:443?security=tls&type=tcp&sni=hk.example&flow=xtls-rprx-vision&fp=chrome&alpn=h2,http/1.1'
-        us: 'vless://01234567-89ab-cdef-0123-456789abcdef@203.0.113.2:443?security=tls&type=tcp&sni=us.example&flow=xtls-rprx-vision&fp=chrome&alpn=h2,http/1.1'
+        hk: 'vless://01234567-89ab-cdef-0123-456789abcdef@156.246.90.2:443?security=tls&type=tcp&sni=hk.example&flow=xtls-rprx-vision&alpn=h2,http/1.1'
+        us: 'vless://01234567-89ab-cdef-0123-456789abcdef@203.0.113.2:443?security=tls&type=tcp&sni=us.example&flow=xtls-rprx-vision&alpn=h2,http/1.1'
         }
         group {
         proxy {
@@ -540,5 +658,249 @@ mod tests {
         assert_eq!(plan.proxies.get(&2).unwrap().node_tag, "hk");
         assert_eq!(plan.proxies.get(&3).unwrap().group_name, "openai");
         assert_eq!(plan.proxies.get(&3).unwrap().node_tag, "us");
+    }
+
+    #[test]
+    fn resident_dataplane_plan_rejects_vless_without_vision_flow() {
+        let config = parse_config(
+            r#"
+        global {
+        lan_interface: daerust0
+        allow_insecure: false
+        so_mark_from_dae: 1234
+        mptcp: false
+        }
+        node {
+        vless_live: 'vless://01234567-89ab-cdef-0123-456789abcdef@156.246.90.2:443?security=tls&type=tcp&sni=office.example&alpn=h2,http/1.1'
+        }
+        group {
+        proxy {
+            filter: name(vless_live)
+            policy: fixed(0)
+        }
+        }
+        routing {
+        l4proto(tcp) && dport(443) -> proxy
+        fallback: direct
+        }
+        "#,
+        );
+        let err = build_resident_dataplane_plan(&config).unwrap_err();
+        assert!(err.contains("admits only flow=xtls-rprx-vision"));
+        assert!(err.contains("keep Go outbound"));
+    }
+
+    #[test]
+    fn resident_dataplane_plan_resolves_link_fingerprint_before_wire_gate() {
+        let config = parse_config(
+            r#"
+        global {
+        lan_interface: daerust0
+        allow_insecure: false
+        so_mark_from_dae: 1234
+        mptcp: false
+        }
+        node {
+        vless_live: 'vless://01234567-89ab-cdef-0123-456789abcdef@156.246.90.2:443?security=tls&type=tcp&sni=office.example&flow=xtls-rprx-vision&fp=firefox_105&alpn=h2,http/1.1'
+        }
+        group {
+        proxy {
+            filter: name(vless_live)
+            policy: fixed(0)
+        }
+        }
+        routing {
+        l4proto(tcp) && dport(443) -> proxy
+        fallback: direct
+        }
+        "#,
+        );
+        let result = build_resident_dataplane_plan(&config);
+        if vless_vision_fp_rust_native_experiment_enabled() {
+            let plan = result.unwrap();
+            let proxy = plan.default_proxy.unwrap();
+            let utls = proxy.utls_fingerprint.unwrap();
+            assert_eq!(utls.source, "link fp");
+            assert_eq!(utls.requested, "firefox_105");
+            assert_eq!(utls.name, "firefox_105");
+            assert_eq!(utls.family, "firefox");
+        } else {
+            let err = result.unwrap_err();
+            assert!(err.contains("resolved link fp uTLS ClientHello ID firefox_105"));
+            assert!(err.contains("family=firefox"));
+            assert!(err.contains("native uTLS wire emission is deferred"));
+            assert!(err.contains("keep Go outbound"));
+        }
+    }
+
+    #[test]
+    fn resident_dataplane_plan_carries_generic_link_fingerprint_when_fp_native_experiment_enabled()
+    {
+        if !vless_vision_fp_rust_native_experiment_enabled() {
+            return;
+        }
+        let config = parse_config(
+            r#"
+        global {
+        lan_interface: daerust0
+        allow_insecure: false
+        so_mark_from_dae: 1234
+        mptcp: false
+        }
+        node {
+        vless_live: 'vless://01234567-89ab-cdef-0123-456789abcdef@156.246.90.2:443?security=tls&type=tcp&sni=office.example&flow=xtls-rprx-vision&fp=safari_16_0&alpn=h2,http/1.1'
+        }
+        group {
+        proxy {
+            filter: name(vless_live)
+            policy: fixed(0)
+        }
+        }
+        routing {
+        l4proto(tcp) && dport(443) -> proxy
+        fallback: direct
+        }
+        "#,
+        );
+        let plan = build_resident_dataplane_plan(&config).unwrap();
+        let proxy = plan.default_proxy.unwrap();
+        assert!(plan.enabled);
+        assert_eq!(proxy.node_tag, "vless_live");
+        assert_eq!(proxy.flow, XTLS_RPRX_VISION);
+        let utls = proxy.utls_fingerprint.unwrap();
+        assert_eq!(utls.source, "link fp");
+        assert_eq!(utls.requested, "safari_16_0");
+        assert_eq!(utls.family, "safari");
+    }
+
+    #[test]
+    fn resident_dataplane_plan_keeps_no_fingerprint_auxiliary_rustls_path() {
+        if !vless_vision_fp_rust_native_experiment_enabled() {
+            return;
+        }
+        let config = parse_config(
+            r#"
+        global {
+        lan_interface: daerust0
+        allow_insecure: false
+        so_mark_from_dae: 1234
+        mptcp: false
+        }
+        node {
+        vless_live: 'vless://01234567-89ab-cdef-0123-456789abcdef@156.246.90.2:443?security=tls&type=tcp&sni=office.example&flow=xtls-rprx-vision&alpn=h2,http/1.1'
+        }
+        group {
+        proxy {
+            filter: name(vless_live)
+            policy: fixed(0)
+        }
+        }
+        routing {
+        l4proto(tcp) && dport(443) -> proxy
+        fallback: direct
+        }
+        "#,
+        );
+        let plan = build_resident_dataplane_plan(&config).unwrap();
+        let proxy = plan.default_proxy.unwrap();
+        assert!(proxy.utls_fingerprint.is_none());
+    }
+
+    #[test]
+    fn resident_dataplane_plan_resolves_global_utls_alias_before_wire_gate() {
+        let config = parse_config(
+            r#"
+        global {
+        lan_interface: daerust0
+        allow_insecure: false
+        so_mark_from_dae: 1234
+        mptcp: false
+        tls_implementation: utls
+        utls_imitate: safari
+        }
+        node {
+        vless_live: 'vless://01234567-89ab-cdef-0123-456789abcdef@156.246.90.2:443?security=tls&type=tcp&sni=office.example&flow=xtls-rprx-vision&alpn=h2,http/1.1'
+        }
+        group {
+        proxy {
+            filter: name(vless_live)
+            policy: fixed(0)
+        }
+        }
+        routing {
+        l4proto(tcp) && dport(443) -> proxy
+        fallback: direct
+        }
+        "#,
+        );
+        let result = build_resident_dataplane_plan(&config);
+        if vless_vision_fp_rust_native_experiment_enabled() {
+            let plan = result.unwrap();
+            let proxy = plan.default_proxy.unwrap();
+            let utls = proxy.utls_fingerprint.unwrap();
+            assert_eq!(utls.source, "global utls_imitate");
+            assert_eq!(utls.requested, "safari");
+            assert_eq!(utls.canonical, "safari_auto");
+            assert_eq!(utls.family, "safari");
+        } else {
+            let err = result.unwrap_err();
+            assert!(err.contains("resolved global utls_imitate uTLS ClientHello ID safari"));
+            assert!(err.contains("canonical=safari_auto"));
+            assert!(err.contains("family=safari"));
+            assert!(err.contains("keep Go outbound"));
+        }
+    }
+
+    #[test]
+    fn resident_dataplane_plan_rejects_unknown_utls_fingerprint() {
+        let config = parse_config(
+            r#"
+        global {
+        lan_interface: daerust0
+        allow_insecure: false
+        so_mark_from_dae: 1234
+        mptcp: false
+        }
+        node {
+        vless_live: 'vless://01234567-89ab-cdef-0123-456789abcdef@156.246.90.2:443?security=tls&type=tcp&sni=office.example&flow=xtls-rprx-vision&fp=Chrome&alpn=h2,http/1.1'
+        }
+        group {
+        proxy {
+            filter: name(vless_live)
+            policy: fixed(0)
+        }
+        }
+        routing {
+        l4proto(tcp) && dport(443) -> proxy
+        fallback: direct
+        }
+        "#,
+        );
+        let err = build_resident_dataplane_plan(&config).unwrap_err();
+        assert!(err.contains("unsupported link fp Chrome"));
+        assert!(err.contains("unknown uTLS Client Hello ID: Chrome"));
+    }
+
+    #[test]
+    fn resident_utls_fingerprint_resolution_uses_generic_registry() {
+        for (name, canonical, family) in [
+            ("chrome", "chrome_auto", "chrome"),
+            ("firefox_105", "firefox_105", "firefox"),
+            ("safari_16_0", "safari_16_0", "safari"),
+            ("ios_14", "ios_14", "ios"),
+            ("edge_106", "edge_106", "edge"),
+            ("android_11_okhttp", "android_11_okhttp", "android"),
+            ("randomizednoalpn", "randomizednoalpn", "random"),
+        ] {
+            let plan = resolve_resident_utls_fingerprint("test", name).unwrap();
+            assert_eq!(plan.name, name);
+            assert_eq!(plan.canonical, canonical);
+            assert_eq!(plan.family, family);
+        }
+
+        let randomized_no_alpn =
+            resolve_resident_utls_fingerprint("test", "randomizednoalpn").unwrap();
+        assert!(randomized_no_alpn.randomized);
+        assert_eq!(randomized_no_alpn.alpn_policy, "force-no-alpn");
     }
 }

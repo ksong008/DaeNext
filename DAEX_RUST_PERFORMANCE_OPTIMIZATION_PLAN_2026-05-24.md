@@ -20383,7 +20383,7 @@ benchmark（本地，2026-05-31，count/repeat=10）：
 | 独立 dae-wing 源仓库 | `/root/project/dae-wing-daex-align` | `daewing2-daex-align` |
 | dae core | `/root/project/dae-daex-align` | `daex` |
 | outbound | `/root/project/outbound-daex-align` | `outbound-daex-align` |
-| quic-go | `/root/project/quic-go-rust` | `quic-go-rust`，module 仍为 `github.com/daeuniverse/quic-go` |
+| quic-go | `/root/project/quic-go-daex-align` | `quic-go-daex-align`，module 仍为 `github.com/daeuniverse/quic-go` |
 
 当前 Go module 解析合同：
 
@@ -20391,14 +20391,14 @@ benchmark（本地，2026-05-31，count/repeat=10）：
 daed-daex-align/daed/wing
   github.com/daeuniverse/dae      => /root/project/dae-daex-align
   github.com/daeuniverse/outbound => /root/project/outbound-daex-align
-  github.com/daeuniverse/quic-go  => /root/project/quic-go-rust
+  github.com/daeuniverse/quic-go  => /root/project/quic-go-daex-align
 
 dae-daex-align
   github.com/daeuniverse/outbound => /root/project/outbound-daex-align
-  github.com/daeuniverse/quic-go  => /root/project/quic-go-rust
+  github.com/daeuniverse/quic-go  => /root/project/quic-go-daex-align
 
 outbound-daex-align
-  github.com/daeuniverse/quic-go  => /root/project/quic-go-rust
+  github.com/daeuniverse/quic-go  => /root/project/quic-go-daex-align
 ```
 
 构建链路合同：
@@ -20406,22 +20406,22 @@ outbound-daex-align
 - `daed-daex-align/daed` 先构建 WebUI `dist`，再进入 `wing` 执行 `make bundle`。
 - 最终 `daed` 二进制本质是带 WebUI 的 `dae-wing` 产品二进制，`APPNAME=daed`，不是一个单独重新实现 dae runtime 的壳。
 - `dae-wing` 通过 `github.com/daeuniverse/dae/engine`、`config`、`control` 调用 dae core，并通过空导入 `github.com/daeuniverse/dae/component/outbound` 完成 outbound 协议/dialer/transport 注册。
-- `dae` 继续通过 outbound `netproxy.Dialer` 合同出站；`quic-go-rust` 被 dae 的 DNS DoH3/DoQ 和 outbound 的 TUIC/Hysteria2/Juicity/xHTTP/H3 等路径使用。
+- `dae` 继续通过 outbound `netproxy.Dialer` 合同出站；`quic-go-daex-align` 被 dae 的 DNS DoH3/DoQ 和 outbound 的 TUIC/Hysteria2/Juicity/xHTTP/H3 等路径使用。
 
 覆盖规则：
 
 1. 后续 daex 产品链构建、二进制生成、远程 38 host-write 验证、`10.10.10.2` 替换验证，均以 `/root/project/daed-daex-align/daed` 为入口。
-2. 后续计划中凡是旧记录提到 `/root/project/quic-go` 作为 daex 正式 quic-go 路径的，均视为历史记录；当前正式路径以 `/root/project/quic-go-rust` 为准。
+2. 后续计划中凡是旧记录提到 `/root/project/quic-go` 或 `/root/project/quic-go-rust` 作为 daex 正式 quic-go 路径的，均视为历史记录；2026-06-02 核对后的当前正式路径以 `/root/project/quic-go-daex-align` 为准。
 3. `/root/project/daed`、`/root/project/dae-wing`、`/root/project/dae`、`/root/project/outbound`、`/root/project/quic-go` 可作为老链路/对照链路查看，但不得作为 daex 后续默认修改和验证入口，除非用户明确要求修老链路。
 4. 如果需要同步 daed submodule 指针，只同步 `/root/project/daed-daex-align/daed` 持有的 `wing` 指针，以及 wing 持有的 dae core 指针；不要把老 daed2.0 子模块指针混入 daex 计划。
-5. 所有新计划和验证报告必须显式写出 `daed-daex-align -> dae-wing-daex-align -> dae-daex-align -> outbound-daex-align -> quic-go-rust`，避免再次写成含糊的 `daed2.0 链路`。
+5. 所有新计划和验证报告必须显式写出 `daed-daex-align -> daed/wing submodule -> dae-daex-align -> outbound-daex-align -> quic-go-daex-align`，并说明 `daed/wing` 子模块指针是否与 `/root/project/dae-wing-daex-align` 一致，避免再次写成含糊的 `daed2.0 链路`。
 
 对后续 Rust/Aya 计划的约束：
 
 - Aya 替换 Go BPF 只处理 dae core 的 BPF/loader/attach/map/listener/control-plane 合同，不修改 daed WebUI 产品壳的职责边界。
 - 保留 outbound `netproxy.Dialer` 合同后，协议栈不需要当前阶段重写；Rust/Aya 的准入重点是确保最终传入 outbound 的 `outboundIndex`、`dialTarget`、`domain/sniff result`、`SO_MARK`、`MPTCP`、`tcp/udp`、DNS/non-DNS network type 与原 Go dae 行为一致。
 - 计划中 `dae-wing / outbound 全协议暂时保持 Go` 的表述继续有效；更准确地说，`dae-wing/daed 产品壳和 outbound 协议拨号栈保持 Go，dae core 中除 outbound 协议边界以外的 control/data/eBPF 逐步 Rust-owned`。
-- `quic-go-rust` 仍作为 Go module 链路中的 quic-go 替换路径保留；它不是当前 Rust native 协议重写目标。
+- `quic-go-daex-align` 仍作为 Go module 链路中的 quic-go 替换路径保留；它不是当前 Rust native 协议重写目标。
 
 ### r6 `domain_routing_map` resident owner 迁入与 38 host-write 验证（2026-06-01）
 
@@ -20429,7 +20429,7 @@ outbound-daex-align
 
 - 在不改 outbound 协议栈、不改 daed/dae-wing WebUI/API 产品壳职责的前提下，把 DNS/cache 触发的 `domain_routing_map` owner merge / duplicate skip / reload clear 热路径从 Go `domainRoutingTracker` 默认路径迁入 Rust-owned resident owner。
 - 继续保持通用规则语义：不按测试机配置写死 `geoip`、`geosite`、`vless`、固定节点或固定域名逻辑；测试中只在导入副本加入通用 `domain(suffix: example.com) -> proxy` 用于触发 domain owner 事件。
-- 继续使用正式 daex 独立链：`daed-daex-align -> dae-wing-daex-align -> dae-daex-align -> outbound-daex-align -> quic-go-rust`。
+- 继续使用正式 daex 独立链：`daed-daex-align -> daed/wing submodule -> dae-daex-align -> outbound-daex-align -> quic-go-daex-align`。
 
 修改内容：
 
@@ -21795,3 +21795,326 @@ release/action 构建入口核查：
   1. 确认正式 release/action 使用默认 `bundle` 而不是 `bundle-rust-owned`。
   2. 继续清理默认路径中的 Go BPF loader/fallback 入口，但不删除 Go userspace/control/outbound。
   3. 只在 benchmark 和 parity 明确领先的纯函数边界上推进 Rust native 默认接入候选。
+
+### VLESS Vision native IP/no-domain 实验修复记录（2026-06-01）
+
+参考范围：
+
+- `DAEX_RUST_REBUILD_PLAN_2026-05-16.md` 第 1-2 节：outbound native protocol rewrite 原计划后置，任何 native 实验不能破坏 daewing/outbound 兼容边界。
+- `DAENEW_RUST_REBUILD_MEMO_2026-05-16.md` 第 5.5、10.3、11.1、26.6 节：Go TCP path 为 `ConnSniffer -> routing_tuples_map -> RouteDialTcp -> ChooseDialTarget -> DialerGroup.Select -> MagicNetwork -> RelayTCP`；`domain == ""` 时 IP/no-domain 路径保持 `dialTarget=dst.String()`、`dialIp=true`；VLESS Vision 依赖 TLS/REALITY intrinsic conn 与 padding/unpadding 状态机。
+- 本文件 2026-05-28 Telegram/IP 记录：`geoip:telegram` / BPF 初始 route 已命中，故障不是 routing/geodata 特例，应检查 VLESS Vision 非 TLS/MTProto plain-overlay/direct 边界和 uTLS/fingerprint 准入。
+- `DAEX_RUST_NATIVE_OUTBOUND_PLAN_2026-06-01.md` 第 2、6、7 节：native 实验不能按测试机 config 写特例；未实现 uTLS/fingerprint 时 admission 必须 fail，不允许 silent fallback 成普通 rustls。
+
+修改：
+
+- `rust/crates/dae-daemon/src/production_runtime_owner/resident_dataplane/tcp.rs`
+  - `can_recover_vision_raw_direct_after_tls_error` 从“完成过任意 Vision block 即可 raw-direct 恢复”收紧为“必须已收到明确 `CMD_DIRECT`”。
+  - 这对齐 Go `vision.Conn` 语义：`CMD_END` 只进入 outer TLS plain-overlay，不能把后续 rustls 解密错误猜成 underlay raw direct；只有 `CMD_DIRECT` 才能切 raw。
+  - 单测改为 `resident_vision_raw_direct_recovery_requires_explicit_direct_command`，覆盖 `CONTINUE`、`END` 不允许 raw-direct，`DIRECT` 才允许。
+  - 新增 `resident_tcp_selection_keeps_ip_target_when_domain_plus_plus_has_no_sniffed_domain`，覆盖 `domain++` 下 `sniffed_domain=""` 时继续保持 `dial_ip=true`、`dial_target=dst`、不触发 userspace reroute，避免把 IP/no-domain 规则改成 domain 特例。
+- `rust/crates/dae-daemon/src/production_runtime_owner/resident_dataplane/plan.rs`
+  - VLESS native admission 增加 fail-closed：全局 `tls_implementation=utls` 或 link `fp` 非空时拒绝 Rust resident VLESS 接管。
+  - 成功 VLESS Vision native fixture 改成无 `fp` 的 rustls 可实验配置；新增 `fp=chrome` 与 `tls_implementation=utls` 拒绝测试。
+
+通用性约束：
+
+- 未写入 Telegram、TG、节点 tag、测试机 IP、域名、geoip/geosite code 或当前 config 特例。
+- IP/no-domain 只按 BPF routing result 与 `ChooseDialTarget` 通用规则执行。
+- 真实 `fp=chrome` / `utls_imitate=chrome_auto` 配置在 Rust uTLS/fingerprint 等价实现前不能进入 native resident dataplane；这不是退回 Go BPF loader，而是避免未完成 Rust outbound 协议栈被误判为生产可切。
+- hybrid v1 默认路径不变：Go userspace/control/outbound + Rust/Aya eBPF backend。
+
+本地验证：
+
+| 验证项 | 结果 |
+| --- | --- |
+| `cargo fmt --manifest-path rust/Cargo.toml -p dae-daemon -- --check` | pass |
+| `cargo test --manifest-path rust/Cargo.toml -p dae-daemon --features native-ebpf resident_vision_raw_direct_recovery_requires_explicit_direct_command -- --nocapture` | pass，1/1 |
+| `cargo test --manifest-path rust/Cargo.toml -p dae-daemon --features native-ebpf resident_tcp_selection_keeps_ip_target_when_domain_plus_plus_has_no_sniffed_domain -- --nocapture` | pass，1/1 |
+| `cargo test --manifest-path rust/Cargo.toml -p dae-daemon --features native-ebpf resident_dataplane_plan_rejects_vless_link_fingerprint_until_utls_native -- --nocapture` | pass，1/1 |
+| `cargo test --manifest-path rust/Cargo.toml -p dae-daemon --features native-ebpf resident_dataplane_plan_rejects_global_utls_until_native_fingerprint -- --nocapture` | pass，1/1 |
+| `cargo test --manifest-path rust/Cargo.toml -p dae-daemon --features native-ebpf resident_vless_vision -- --nocapture` | pass，12/12 |
+| `cargo test --manifest-path rust/Cargo.toml -p dae-daemon --features native-ebpf resident_dataplane -- --nocapture` | pass，35/35 |
+
+验证边界：
+
+- 本轮只做本地 unit/admission 验证，未部署 `10.10.10.2`。
+- `cargo fmt --manifest-path rust/Cargo.toml --all --check` 暴露 `dae-ebpf-support` 中两个既有格式差异；本轮未修改该 crate，未做 unrelated 格式化。
+- 真实 VLESS Vision + `fp=chrome` / `utls` live smoke 仍需在 Rust uTLS/fingerprint 完成后再跑；当前准入会正确 fail-closed。
+
+### DAEX 全项目 Rust native 范围纠偏与总计划入口（2026-06-02）
+
+纠偏：
+
+- 上一版临时计划把重点放在 resident outbound/protocol matrix，这是必要子集，但不是用户要求的 “DAEX 整个项目 Rust native”。
+- DAEX 全项目 Rust native 的目标不是只把 VLESS/Trojan/SS 等协议 handler 写成 Rust，而是把默认产品路径从 Go userspace/control/outbound + Rust/Aya eBPF hybrid，推进到 Rust-owned daemon/control-plane/datapath/eBPF/outbound/product-chain/release 的整体默认候选。
+- BoringSSL 解决 Oracle-Sg 上 VLESS Vision + link `fp=chrome` 的实测阻断，只解除 outbound TLS fingerprint 这一项 blocker；它不能单独代表整个 DAEX Rust native ready。
+
+全项目 Rust native 范围：
+
+1. `dae-daemon` Rust-owned runtime：
+   - `run` / `reload` / `service-contract` / signal / pid / progress / cleanup。
+   - runtime ownership 统一，正式路径不再依赖分散 helper 或 Go daemon control-loop。
+   - resident start/cleanup report typed 化，JSON 只作为输出，不作为 runtime 内部状态结构。
+
+2. Rust control-plane：
+   - config load/validate/reload。
+   - routing map owner。
+   - domain routing owner。
+   - outbound connectivity map owner。
+   - runtime overview / stats / cache state。
+   - daed runtime/control API contract 对齐。
+
+3. Rust datapath：
+   - TCP tproxy accept/route/sniff/direct/proxy/block。
+   - UDP tproxy/session/DNS/proxy/direct/block。
+   - DNS active datapath、qtype/qclass/cache/forward/reject 语义。
+   - MagicNetwork、SO_MARK、MPTCP、dial_mode、domain++、must_direct。
+   - copy budget 和 buffer ownership 纳入 `dae-datapath` / `dae-dns` 正式边界。
+
+4. Rust eBPF / Aya userspace owner：
+   - ABI / map schema / PARAM object。
+   - loader / attach / detach / cleanup。
+   - TCX、tc-netlink、cgroup attach。
+   - routing_map、domain_routing_map、outbound_connectivity_map、listen_socket_map。
+   - BPF-side Go fallback retirement 与 userspace/outbound Go fallback retirement 分开准入。
+   - C eBPF program 可继续作为正式 kernel program，Rust native 当前目标是 userspace owner 全 Rust；是否改写 kernel program 单独设 gate。
+
+5. Rust outbound：
+   - 协议 parser/export/metadata。
+   - production resident dataplane handler。
+   - shared transport：TLS/rustls、TLS/Boring fingerprint-aware underlay、uTLS/REALITY/TLS fragment 后续专项。
+   - link/global fingerprint-aware TLS underlay 是第一条推进线；具体协议只进入矩阵、fixture 和 handler 实现细节。
+   - 协议矩阵是全项目 Rust native 的一部分，不是总目标本身。
+
+6. Rust routing / geodata / sniffing / config：
+   - `dae-config`、`dae-routing`、`dae-geodata`、`dae-sniffing` 作为正式基础能力保留。
+   - Go parity、golden、benchmark 必须覆盖默认产品语义，而不是只覆盖 parser 小函数。
+
+7. product-chain / daed / release：
+   - daed2.0 runtime/control API contract。
+   - Rust-owned daemon embed / external runtime 两种部署形态。
+   - `/usr/bin/daed` product shell 与 `/usr/bin/dae`/`dae-daemon-optin` 关系。
+   - systemd unit、package install/remove、rollback。
+   - release/action/Docker 默认 bundle 何时从 hybrid v1 切到 Rust-owned native。
+
+8. benchmark / admission / rollback：
+   - matched Go default daemon vs Rust-owned daemon benchmark。
+   - RSS/PSS/FD/thread/session/reload latency/throughput。
+   - live host smoke：38 机、10.10.10.2。
+   - host-write freeze、backup manifest、rollback script。
+   - switch-readiness gate 必须输出分层 admission，不能只给一个 `resident_dataplane_ready` 布尔值。
+
+新的执行分层：
+
+| 层级 | 名称 | 目标 | 默认切换含义 |
+| --- | --- | --- | --- |
+| L0 | hybrid v1 baseline | Go userspace/control/outbound + Rust/Aya eBPF loader/backend | 当前可保留默认 |
+| L1 | Rust-owned runtime shell | Rust daemon 生命周期、reload、service contract 可长期运行 | 仍可用 Go outbound/control fallback |
+| L2 | Rust-owned control-plane owner | routing/domain/outbound connectivity/runtime state 由 Rust owner 持有 | Go control-plane fallback 退役候选 |
+| L3 | Rust-owned datapath core | TCP/UDP/DNS tproxy、route、sniff、direct/block/proxy 由 Rust resident 持有 | Go userspace datapath fallback 退役候选 |
+| L4 | Rust outbound production matrix | 主要生产协议由 Rust resident handler 承载 | Go outbound fallback 按协议退役 |
+| L5 | product-chain default switch | daed/release/systemd/package 默认切到 Rust-owned native | 需要完整 rollback 和 live evidence |
+| L6 | Go-free product-chain retirement | daed/wing Go product shell、Go runtime/control/API/service/release 默认路径退役 | 最终去 Go 硬门槛 |
+| L7 | optional kernel Rust rewrite | 如需要，再评估 C eBPF program 改写为 Rust aya-ebpf | 不作为 L1-L6 的前置条件 |
+
+通用命名原则追加：
+
+- 顶层阶段、work package、gate、feature/admission 名称不得包含具体协议名，例如 VLESS、Trojan、Shadowsocks、VMess 等。
+- 协议名只能出现在 L4 protocol matrix、fixture、测试用例、handler 内部实现和 evidence 描述中。
+- 当前 Oracle-Sg/Hytron/TG/VLESS Vision live result 只作为 `outbound-fingerprint-underlay-v1` 的验证样本，不作为阶段、gate、feature 或 work package 名称。
+- 命名必须描述通用能力，而不是某个节点、协议或测试路径；例如 runtime owner、control-plane owner、datapath core、fingerprint underlay、transport feature boundary、product-chain native。
+
+近期优先级修正：
+
+1. 先建立 “全项目 Rust native 总 gate”，把现有 switch-readiness gate 从协议/daemon 单点准入扩展为分层准入：
+   - `rust_owned_runtime_ready`
+   - `rust_control_plane_owner_ready`
+   - `rust_datapath_core_ready`
+   - `rust_outbound_matrix_ready`
+   - `rust_product_chain_ready`
+   - `go_bpf_fallback_retired`
+   - `go_control_plane_fallback_retired`
+   - `go_outbound_fallback_retired_by_protocol`
+
+2. 收口当前 fingerprint-aware underlay 成果，但只作为 L4 的第一项：
+   - Boring 解决当前 Oracle-Sg `fp=chrome` live blocker；Oracle-Sg/Hytron/TG/VLESS Vision 只作为验证样本和矩阵条目。
+   - 将实验编译开关改为正式 feature/admission gate。
+   - 不把 Boring 结果扩展为 full uTLS parity，也不扩展为全项目 ready。
+
+3. 立即补 L1-L3 的平台化缺口：
+   - resident start report 瘦身。
+   - resident runtime memory/RSS gate。
+   - TCP/UDP/DNS worker typed event。
+   - UDP routing/session 补齐。
+   - routing/domain/outbound connectivity owner 的 reload/cleanup benchmark。
+
+4. `dae-outbound` feature 边界仍要做，但作为 L4 的依赖清理：
+   - Boring optional。
+   - QUIC/H3/rcgen/test-support optional。
+   - daemon 只启用当前 admission 需要的正式 features。
+
+5. product-chain/default switch 不能等协议矩阵最后才看：
+   - 从现在开始每个 L 层都要产出 daed2.0 contract evidence。
+   - `/usr/bin/daed`、systemd、release bundle、Docker/action 默认路径单独跟踪。
+   - 10.10.10.2 live 测试只用于 L 层 evidence，完成后必须恢复。
+
+第一批全项目工作包：
+
+1. `daex-native-gate-v1`：
+   - 定义全项目 Rust native 分层 admission schema。
+   - 更新 `scripts/run_daex_switch_readiness_gate.sh`，不要只依赖 `resident_dataplane_default_switch_ready`。
+   - 输出每层 blocker 和对应 artifact。
+
+2. `resident-runtime-platform-v1`：
+   - 瘦身 `resident-production-runtime-start.json`。
+   - 增加 memory/thread/fd/report-size summary。
+   - typed start/cleanup/event structs。
+   - 保持现有 live rollback 模型。
+
+3. `control-plane-owner-v1`：
+   - 复核 routing_map、domain_routing_map、outbound_connectivity_map、runtime overview 的 Rust owner。
+   - 增加 reload parity 和 cleanup leftovers gate。
+   - daed runtime/control API clean baseline 必须进入 artifact。
+
+4. `datapath-core-v1`：
+   - TCP route/sniff/direct/block/proxy 整理为正式 `dae-datapath` contract。
+   - UDP router/session/DNS 补齐。
+   - MagicNetwork/SO_MARK/MPTCP/dial_mode/domain++ 全部进入矩阵。
+
+5. `outbound-fingerprint-underlay-v1`：
+   - 将 link/global fingerprint-aware TLS underlay 从实验开关转为正式 feature/admission。
+   - Oracle-Sg/Hytron/TG/VLESS Vision live evidence 只作为当前验证 fixture 和 L4 矩阵条目，不进入阶段、gate、feature 或 work package 命名。
+   - 不声明 full uTLS parity。
+
+6. `product-chain-native-v1`：
+   - daed2.0、dae-wing、outbound、quic-go 依赖边界复核。
+   - bundle / bundle-rust-owned / embed / external runtime 策略重新定名。
+   - host-write freeze、backup、rollback、release/action/Docker 默认路径进入 gate。
+
+全项目 Rust native 默认切换硬门槛：
+
+- Rust-owned default candidate：L1-L5 全部 pass。
+- 最终去 Go：L1-L6 全部 pass；L5 只代表 Rust-owned default candidate，不代表 Go 已从产品链退役。
+- Go fallback retirement 分层明确，不允许用 BPF fallback retirement 代表 userspace/outbound fallback retirement。
+- 主要生产配置在 38 机和 10.10.10.2 都有可重复 live evidence。
+- matched Go/Rust benchmark 没有明显 CPU/RSS/reload/latency 回退。
+- daed2.0 runtime/control API 和 release/package contract clean。
+- rollback 脚本和恢复演练完成。
+
+当前结论：
+
+- 下一步不是继续单独扩协议矩阵，而是先做全项目 Rust native gate 和 resident runtime/control/datapath 平台化。
+- 协议矩阵从属于 L4；当前 fingerprint-aware underlay live result 是 L4 的第一项成功证据。
+- DAEX 全项目 Rust native 的主线应恢复为：runtime owner -> control-plane owner -> datapath core -> outbound matrix -> product-chain default switch -> Go-free product-chain retirement。
+
+### daed-daex-align 构建链路核对与计划校准（2026-06-02）
+
+核对范围：
+
+- `/root/project/daed-daex-align/daed/Makefile`
+- `/root/project/daed-daex-align/daed/wing/Makefile`
+- `/root/project/daed-daex-align/daed/.github/workflows/daed2.0.yml`
+- `/root/project/daed-daex-align/daed/.github/workflows/release-please.yml`
+- `/root/project/daed-daex-align/daed/Dockerfile`
+- `/root/project/daed-daex-align/daed/publish.Dockerfile`
+- `/root/project/daed-daex-align/daed/install/daed.service`
+- `/root/project/daed-daex-align/daed/wing/engine/runtime_mode.go`
+- `/root/project/daed-daex-align/daed/wing/engine/rust_owned_service.go`
+- `scripts/run_daex_switch_readiness_gate.sh`
+- `rust/crates/dae-daemon/src/product_chain_recertification/*`
+
+当前构建链路事实：
+
+1. `daed` 顶层默认链路是：
+   - `make` / workflow / release / Docker 构建 WebUI `dist`。
+   - 进入 `daed/wing` 执行 `make bundle`。
+   - `daed/wing/Makefile` 默认 `BUNDLE_TAGS=embedallowed`、`BUNDLE_CGO_ENABLED=0`。
+   - 默认 `bundle` 只执行 `rust-aya-bpf-loader-asset`，不执行 `rust-daemon-embed`。
+   - 默认 `bundle` 最终 `go build -tags=embedallowed`，不会嵌入 `dae-daemon-optin`。
+
+2. 显式 Rust-owned 候选链路是：
+   - `make bundle-rust-owned` 才会设置 `BUNDLE_TAGS=embedallowed,rust_owned_daemon_embed`。
+   - `bundle-rust-owned` 会构建 `dae-daemon-optin --features native-ebpf`，复制到 `wing/engine/assets/dae-daemon-optin` 并 strip。
+   - 该目标当前没有被 release/action/Docker 默认调用。
+
+3. runtime selector 仍是 Go 默认：
+   - `wing/engine/runtime_mode.go` 只有 `DAED_RUNTIME` / `DAED_RUNTIME_MODE` 显式为 `rust-owned` 等值时才选 `newRustOwnedService()`。
+   - 环境未设置或为 `auto` 时返回 Go native service。
+   - 因此 `bundle-rust-owned` 只是“可嵌入 Rust daemon 的实验/候选包”，不是“默认 Rust-owned 运行包”。
+
+4. service/package 默认路径仍是 daed Go 产品壳：
+   - `install/daed.service` 为 `ExecStart=/usr/bin/daed run -c /etc/daed/`。
+   - unit 没有设置 `DAED_RUNTIME=rust-owned`。
+   - 当前 service contract 不能证明 Rust-owned 已成为 daed 默认 runtime。
+
+5. 实际构建 truth source 是 `daed/wing` 子模块，不是兄弟仓库当前工作区：
+   - `daed/.gitmodules` 指向 `/root/project/dae-wing-daex-align`。
+   - 但 `/root/project/daed-daex-align/daed/wing` 当前检出为 `1b6f178`。
+   - `/root/project/dae-wing-daex-align` 当前为 `63c8a40`。
+   - 二者默认 `Makefile` 策略不同：`daed/wing` 当前是 hybrid v1 clean bundle；兄弟仓库当前仍是 Rust-owned embed 默认。
+   - product-chain gate 必须以实际 `daed/wing` 子模块为 build truth，或先强制同步并验证子模块指针；不能用兄弟仓库状态替代 daed 构建链路。
+
+6. dependency boundary 当前路径是：
+   - `github.com/daeuniverse/dae => /root/project/dae-daex-align`
+   - `github.com/daeuniverse/outbound => /root/project/outbound-daex-align`
+   - `github.com/daeuniverse/quic-go => /root/project/quic-go-daex-align`
+   - 后续记录不得再写成旧的 `/root/project/quic-go-rust`。
+
+7. 构建工具链是硬前置：
+   - 必须使用 `/root/.local/go1.25.9/bin` 在 `PATH` 前面，并设置 `GOWORK=off`。
+   - 否则系统 `go` 不能解析 `go 1.24.0` / `toolchain go1.25.9`，`DAE_MODULE_DIR` 会退回 `dae-core`，随后 `rust-aya-bpf-loader-asset` 目标失败。
+
+计划校准：
+
+1. `product-chain-native-v1` 不能只检查 release/action 是否调用 `bundle`。
+   - 需要拆出 default bundle gate、Rust-owned bundle candidate gate、default runtime selector gate、daed service contract gate。
+   - default bundle gate 当前应判定为 hybrid v1 pass，而不是 Rust-owned pass。
+
+2. `bundle-rust-owned` 不能作为 L5 通过条件本身。
+   - L5 必须同时证明：默认 release/action/Docker/package 入口切到 Rust-owned candidate、默认 runtime selector 无需环境变量即可选择 Rust-owned、service/package/rollback contract 对齐、live host evidence pass。
+
+3. 当前 `product_chain_recertification` 仍主要围绕 `install/dae.service` 和 `/usr/bin/dae -> dae-daemon-optin` 替换建模。
+   - 这不能代表 daed2.0 `/usr/bin/daed run -c /etc/daed/` 产品链。
+   - 必须新增 daed service contract：`install/daed.service`、`/usr/bin/daed`、Web/API、runtime selector、embedded/external Rust daemon、reload/stop/overview API、package after-install/after-remove。
+
+4. `scripts/run_daex_switch_readiness_gate.sh` 默认 `PRODUCT_CHAIN_DAE_WING_REPO=/root/project/dae-wing-daex-align`，但实际 daed 构建使用 `/root/project/daed-daex-align/daed/wing`。
+   - 后续 gate 默认值应改为 actual daed submodule，或 gate 必须显式报告 sibling repo 与 submodule pointer 是否一致。
+   - 若二者不一致，product-chain clean baseline 必须 blocked。
+
+5. “最终去 Go”不能由 L5 表示。
+   - L5 只是 Rust-owned default candidate，可以仍保留 Go daed product shell。
+   - 最终目标必须进入 L6：Go-free product-chain retirement。
+   - L6 的硬门槛是 daed/wing Go product shell、Go runtime/control/API/service/release 默认路径不再参与正式产品链；Go outbound/quic-go 依赖边界也必须退役或从默认包中移除。
+
+核对后的第一批 product-chain 工作包修正：
+
+1. `product-chain-topology-lock-v1`：
+   - 以 `daed-daex-align/daed/wing` 子模块为 build truth。
+   - 记录 sibling repo、submodule pointer、branch、dirty state、go.mod replace target。
+   - 子模块与兄弟仓库不一致时 blocking，而不是静默使用兄弟仓库。
+
+2. `default-bundle-boundary-v1`：
+   - 固定 hybrid v1 default bundle 与 Rust-owned candidate bundle 的差异。
+   - 默认 release/action/Docker/package 入口必须显式报告调用 `bundle` 还是 `bundle-rust-owned`。
+   - 二进制必须通过 `go version -m` / embedded asset scan 验证 build tags 和是否包含 Rust-owned daemon。
+
+3. `default-runtime-selector-v1`：
+   - 审计 `DAED_RUNTIME` / `DAED_RUNTIME_MODE` / `auto` 的语义。
+   - L5 前必须能证明无环境变量时默认选择 Rust-owned。
+   - 必须保留显式 rollback mode，但 rollback mode 不能被误认为默认路径。
+
+4. `daed-service-contract-v1`：
+   - 将 daed2.0 `install/daed.service`、package scripts、`/usr/bin/daed run -c /etc/daed/`、API `/api/runtime/*` 纳入正式 gate。
+   - 与现有 `install/dae.service` gate 分开，不能互相替代。
+
+5. `go-free-product-chain-v1`：
+   - 作为 L6，不作为 L5 子项。
+   - 目标是去除 Go product shell、Go runtime/control/API/service/release 默认路径。
+   - 在 L6 前，不得把“Rust-owned daemon embedded in Go daed shell”描述为最终去 Go。
+
+当前结论：
+
+- 计划的总体方向正确，但 L5 需要收紧为“Rust-owned default candidate”，不能声称已经去 Go。
+- 当前 `daed-daex-align` 默认构建链路仍是 hybrid v1 clean bundle。
+- Rust-owned daemon 已有显式候选构建入口，但还缺默认 runtime selector、daed service contract、release/action/Docker 默认入口切换和 live evidence。
+- 最终去 Go 必须新增并执行 L6；optional kernel rewrite 不是去 Go 的前置条件，应后置为 L7 或 side-track。
