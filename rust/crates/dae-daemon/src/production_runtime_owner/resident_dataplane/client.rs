@@ -1,4 +1,4 @@
-use std::io::{Cursor, ErrorKind, Read};
+use std::io::{Cursor, ErrorKind, Read, Write};
 use std::net::{Ipv4Addr, SocketAddr, SocketAddrV4, TcpStream, ToSocketAddrs};
 use std::sync::{
     Arc,
@@ -7,6 +7,7 @@ use std::sync::{
 use std::thread;
 use std::time::Instant;
 
+use boring::ssl::{SslConnector, SslMethod, SslStream, SslVerifyMode, SslVersion};
 use dae_datapath::{TcpDirectDialOptions, magic_tcp_connect};
 use rustls::{ClientConfig, ClientConnection, RootCertStore, pki_types::ServerName};
 
@@ -18,9 +19,19 @@ use super::{
 };
 
 pub(super) struct VlessTlsClient {
-    pub(super) tcp: TcpStream,
-    pub(super) conn: ClientConnection,
-    pub(super) tls_records: TlsRecordReader,
+    engine: VlessTlsEngine,
+}
+
+enum VlessTlsEngine {
+    Rustls {
+        tcp: TcpStream,
+        conn: ClientConnection,
+        tls_records: TlsRecordReader,
+    },
+    Boring {
+        tls: SslStream<TcpStream>,
+        pending_plaintext: Vec<u8>,
+    },
 }
 
 pub(super) enum TlsDriveOutcome {
@@ -33,6 +44,89 @@ pub(super) struct TlsRecordReader {
     header: Vec<u8>,
     body: Vec<u8>,
     body_len: Option<usize>,
+}
+
+impl VlessTlsClient {
+    pub(super) fn set_nonblocking(&mut self, nonblocking: bool) -> Result<(), String> {
+        self.raw_tcp_mut()
+            .set_nonblocking(nonblocking)
+            .map_err(|err| format!("set proxy tcp nonblocking: {err}"))
+    }
+
+    pub(super) fn queue_plain(&mut self, payload: &[u8], label: &str) -> Result<(), String> {
+        match &mut self.engine {
+            VlessTlsEngine::Rustls { conn, .. } => conn
+                .writer()
+                .write_all(payload)
+                .map_err(|err| format!("{label}: {err}")),
+            VlessTlsEngine::Boring {
+                pending_plaintext, ..
+            } => {
+                pending_plaintext.extend_from_slice(payload);
+                Ok(())
+            }
+        }
+    }
+
+    pub(super) fn read_plain(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+        match &mut self.engine {
+            VlessTlsEngine::Rustls { conn, .. } => conn.reader().read(buf),
+            VlessTlsEngine::Boring { tls, .. } => tls.read(buf),
+        }
+    }
+
+    pub(super) fn raw_read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+        self.raw_tcp_mut().read(buf)
+    }
+
+    pub(super) fn raw_write_all_nonblocking(
+        &mut self,
+        mut payload: &[u8],
+        stop: &AtomicBool,
+        label: &str,
+    ) -> Result<(), String> {
+        while !payload.is_empty() && !stop.load(Ordering::Relaxed) {
+            match self.raw_tcp_mut().write(payload) {
+                Ok(0) => return Err(format!("{label}: wrote zero bytes")),
+                Ok(written) => payload = &payload[written..],
+                Err(err)
+                    if matches!(
+                        err.kind(),
+                        ErrorKind::WouldBlock | ErrorKind::TimedOut | ErrorKind::Interrupted
+                    ) =>
+                {
+                    thread::sleep(RESIDENT_IDLE_SLEEP);
+                }
+                Err(err) => return Err(format!("{label}: {err}")),
+            }
+        }
+        Ok(())
+    }
+
+    pub(super) fn send_close_notify(&mut self) {
+        match &mut self.engine {
+            VlessTlsEngine::Rustls { conn, .. } => conn.send_close_notify(),
+            VlessTlsEngine::Boring { tls, .. } => {
+                let _ = tls.shutdown();
+            }
+        }
+    }
+
+    pub(super) fn idle_tls_complete(&self) -> bool {
+        match &self.engine {
+            VlessTlsEngine::Rustls { conn, .. } => !conn.wants_write() && !conn.wants_read(),
+            VlessTlsEngine::Boring {
+                pending_plaintext, ..
+            } => pending_plaintext.is_empty(),
+        }
+    }
+
+    fn raw_tcp_mut(&mut self) -> &mut TcpStream {
+        match &mut self.engine {
+            VlessTlsEngine::Rustls { tcp, .. } => tcp,
+            VlessTlsEngine::Boring { tls, .. } => tls.get_mut(),
+        }
+    }
 }
 
 impl TlsRecordReader {
@@ -130,7 +224,7 @@ fn hex_prefix(bytes: &[u8], limit: usize) -> String {
 
 pub(super) fn open_vless_tls_client(proxy: &ResidentProxyPlan) -> Result<VlessTlsClient, String> {
     let target = resolve_proxy_addr(proxy)?;
-    let mut connected = magic_tcp_connect(
+    let connected = magic_tcp_connect(
         target,
         &TcpDirectDialOptions {
             mark: proxy.mark,
@@ -151,20 +245,71 @@ pub(super) fn open_vless_tls_client(proxy: &ResidentProxyPlan) -> Result<VlessTl
         .stream
         .set_nodelay(true)
         .map_err(|err| format!("set VLESS TCP_NODELAY: {err}"))?;
-    let config = vless_client_config(proxy)?;
+    if proxy.utls_fingerprint.is_some() {
+        open_boring_vless_tls_client(proxy, connected.stream)
+    } else {
+        open_rustls_vless_tls_client(proxy, connected.stream)
+    }
+}
+
+fn open_rustls_vless_tls_client(
+    proxy: &ResidentProxyPlan,
+    tcp: TcpStream,
+) -> Result<VlessTlsClient, String> {
+    let config = rustls_vless_client_config(proxy)?;
     let server_name = ServerName::try_from(proxy.server_name.clone())
         .map_err(|err| format!("invalid VLESS TLS server name {}: {err}", proxy.server_name))?;
-    let mut conn = ClientConnection::new(config, server_name)
-        .map_err(|err| format!("create VLESS TLS client: {err}"))?;
-    drive_tls_io_blocking(&mut conn, &mut connected.stream)?;
+    let conn = ClientConnection::new(config, server_name)
+        .map_err(|err| format!("create VLESS rustls client: {err}"))?;
+    let mut client = VlessTlsClient {
+        engine: VlessTlsEngine::Rustls {
+            tcp,
+            conn,
+            tls_records: TlsRecordReader::default(),
+        },
+    };
+    drive_tls_io_blocking(&mut client)?;
+    Ok(client)
+}
+
+fn open_boring_vless_tls_client(
+    proxy: &ResidentProxyPlan,
+    tcp: TcpStream,
+) -> Result<VlessTlsClient, String> {
+    let mut builder = SslConnector::builder(SslMethod::tls())
+        .map_err(|err| format!("create VLESS BoringSSL connector: {err}"))?;
+    builder.set_verify(SslVerifyMode::PEER);
+    builder.set_read_ahead(false);
+    if proxy.flow == XTLS_RPRX_VISION {
+        builder
+            .set_min_proto_version(Some(SslVersion::TLS1_3))
+            .map_err(|err| format!("set VLESS BoringSSL min TLS version: {err}"))?;
+        builder
+            .set_max_proto_version(Some(SslVersion::TLS1_3))
+            .map_err(|err| format!("set VLESS BoringSSL max TLS version: {err}"))?;
+    }
+    if let Some(fingerprint) = &proxy.utls_fingerprint {
+        configure_boring_fingerprint(&mut builder, fingerprint)?;
+    }
+    let alpn = boring_alpn_wire(proxy)?;
+    if !alpn.is_empty() {
+        builder
+            .set_alpn_protos(&alpn)
+            .map_err(|err| format!("set VLESS BoringSSL ALPN: {err}"))?;
+    }
+    let connector = builder.build();
+    let tls = connector
+        .connect(&proxy.server_name, tcp)
+        .map_err(|err| format!("connect VLESS BoringSSL client: {err}"))?;
     Ok(VlessTlsClient {
-        tcp: connected.stream,
-        conn,
-        tls_records: TlsRecordReader::default(),
+        engine: VlessTlsEngine::Boring {
+            tls,
+            pending_plaintext: Vec::new(),
+        },
     })
 }
 
-fn vless_client_config(proxy: &ResidentProxyPlan) -> Result<Arc<ClientConfig>, String> {
+fn rustls_vless_client_config(proxy: &ResidentProxyPlan) -> Result<Arc<ClientConfig>, String> {
     let mut roots = RootCertStore::empty();
     roots.extend(webpki_roots::TLS_SERVER_ROOTS.iter().cloned());
     let builder = if proxy.flow == XTLS_RPRX_VISION {
@@ -179,6 +324,70 @@ fn vless_client_config(proxy: &ResidentProxyPlan) -> Result<Arc<ClientConfig>, S
         .map(|value| value.as_bytes().to_vec())
         .collect();
     Ok(Arc::new(config))
+}
+
+fn configure_boring_fingerprint(
+    builder: &mut boring::ssl::SslConnectorBuilder,
+    fingerprint: &super::plan::ResidentUtlsFingerprintPlan,
+) -> Result<(), String> {
+    match fingerprint.family.as_str() {
+        "firefox" => {
+            builder
+                .set_curves_list("X25519:P-256:P-384:P-521")
+                .map_err(|err| format!("set VLESS BoringSSL Firefox-style groups: {err}"))?;
+        }
+        "android" => {
+            builder
+                .set_curves_list("X25519:P-256")
+                .map_err(|err| format!("set VLESS BoringSSL Android-style groups: {err}"))?;
+        }
+        _ => {
+            builder.set_grease_enabled(true);
+            builder
+                .set_curves_list("X25519:P-256:P-384")
+                .map_err(|err| format!("set VLESS BoringSSL browser-style groups: {err}"))?;
+        }
+    }
+
+    if matches!(
+        fingerprint.family.as_str(),
+        "chrome" | "edge" | "random" | "360" | "qq"
+    ) {
+        builder.set_permute_extensions(true);
+    }
+    Ok(())
+}
+
+fn boring_alpn_wire(proxy: &ResidentProxyPlan) -> Result<Vec<u8>, String> {
+    if proxy
+        .utls_fingerprint
+        .as_ref()
+        .is_some_and(|fingerprint| fingerprint.alpn_policy == "force-no-alpn")
+    {
+        return Ok(Vec::new());
+    }
+    let mut protocols = proxy.alpn.clone();
+    if protocols.is_empty()
+        && proxy
+            .utls_fingerprint
+            .as_ref()
+            .is_some_and(|fingerprint| fingerprint.alpn_policy == "force-alpn")
+    {
+        protocols.extend(["h2".to_owned(), "http/1.1".to_owned()]);
+    }
+    let mut out = Vec::new();
+    for protocol in protocols {
+        let bytes = protocol.as_bytes();
+        if bytes.is_empty() {
+            continue;
+        }
+        if bytes.len() > u8::MAX as usize {
+            return Err(format!("VLESS ALPN item too long: {protocol}"));
+        }
+        out.push(bytes.len() as u8);
+        out.extend_from_slice(bytes);
+    }
+    Ok(out)
 }
 
 fn resolve_proxy_addr(proxy: &ResidentProxyPlan) -> Result<SocketAddrV4, String> {
@@ -208,41 +417,92 @@ fn resolve_proxy_addr(proxy: &ResidentProxyPlan) -> Result<SocketAddrV4, String>
 pub(super) fn drive_tls_io_record_aware(
     client: &mut VlessTlsClient,
 ) -> Result<TlsDriveOutcome, String> {
-    let mut progressed = false;
-    while client.conn.wants_write() {
-        match client.conn.write_tls(&mut client.tcp) {
-            Ok(0) => break,
-            Ok(_) => progressed = true,
-            Err(err)
-                if matches!(
-                    err.kind(),
-                    ErrorKind::WouldBlock | ErrorKind::TimedOut | ErrorKind::Interrupted
-                ) =>
-            {
-                break;
+    match &mut client.engine {
+        VlessTlsEngine::Rustls {
+            tcp,
+            conn,
+            tls_records,
+        } => {
+            let mut progressed = false;
+            while conn.wants_write() {
+                match conn.write_tls(tcp) {
+                    Ok(0) => break,
+                    Ok(_) => progressed = true,
+                    Err(err)
+                        if matches!(
+                            err.kind(),
+                            ErrorKind::WouldBlock | ErrorKind::TimedOut | ErrorKind::Interrupted
+                        ) =>
+                    {
+                        break;
+                    }
+                    Err(err) => return Err(format!("write VLESS TLS record: {err}")),
+                }
             }
-            Err(err) => return Err(format!("write VLESS TLS record: {err}")),
+            if conn.wants_read() {
+                match tls_records.read_one(conn, tcp)? {
+                    TlsDriveOutcome::Progressed(read_progressed) => progressed |= read_progressed,
+                    error @ TlsDriveOutcome::DecryptErrorRawRecord { .. } => return Ok(error),
+                }
+            }
+            Ok(TlsDriveOutcome::Progressed(progressed))
         }
+        VlessTlsEngine::Boring {
+            tls,
+            pending_plaintext,
+        } => Ok(TlsDriveOutcome::Progressed(
+            flush_boring_writes_nonblocking(tls, pending_plaintext)?,
+        )),
     }
-    if client.conn.wants_read() {
-        match client
-            .tls_records
-            .read_one(&mut client.conn, &mut client.tcp)?
-        {
-            TlsDriveOutcome::Progressed(read_progressed) => progressed |= read_progressed,
-            error @ TlsDriveOutcome::DecryptErrorRawRecord { .. } => return Ok(error),
-        }
-    }
-    Ok(TlsDriveOutcome::Progressed(progressed))
 }
 
 pub(super) fn flush_tls_writes(
     client: &mut VlessTlsClient,
     stop: &AtomicBool,
 ) -> Result<(), String> {
+    match &mut client.engine {
+        VlessTlsEngine::Rustls { tcp, conn, .. } => flush_rustls_writes(tcp, conn, stop),
+        VlessTlsEngine::Boring {
+            tls,
+            pending_plaintext,
+        } => {
+            let started = Instant::now();
+            while !pending_plaintext.is_empty() && !stop.load(Ordering::Relaxed) {
+                match tls.write(pending_plaintext) {
+                    Ok(0) => {
+                        return Err("flush VLESS BoringSSL writes: wrote zero bytes".to_owned());
+                    }
+                    Ok(written) => {
+                        pending_plaintext.drain(..written);
+                    }
+                    Err(err)
+                        if matches!(
+                            err.kind(),
+                            ErrorKind::WouldBlock | ErrorKind::TimedOut | ErrorKind::Interrupted
+                        ) =>
+                    {
+                        if started.elapsed() > RESIDENT_CONNECT_TIMEOUT {
+                            return Err("flush VLESS BoringSSL writes timeout".to_owned());
+                        }
+                        thread::sleep(RESIDENT_IDLE_SLEEP);
+                    }
+                    Err(err) => return Err(format!("flush VLESS BoringSSL writes: {err}")),
+                }
+            }
+            tls.flush()
+                .map_err(|err| format!("flush VLESS BoringSSL stream: {err}"))
+        }
+    }
+}
+
+fn flush_rustls_writes(
+    tcp: &mut TcpStream,
+    conn: &mut ClientConnection,
+    stop: &AtomicBool,
+) -> Result<(), String> {
     let started = Instant::now();
-    while client.conn.wants_write() && !stop.load(Ordering::Relaxed) {
-        match client.conn.write_tls(&mut client.tcp) {
+    while conn.wants_write() && !stop.load(Ordering::Relaxed) {
+        match conn.write_tls(tcp) {
             Ok(0) => return Err("flush VLESS TLS writes: wrote zero bytes".to_owned()),
             Ok(_) => {}
             Err(err)
@@ -262,24 +522,61 @@ pub(super) fn flush_tls_writes(
     Ok(())
 }
 
-pub(super) fn drive_tls_io_blocking(
-    conn: &mut ClientConnection,
-    tcp: &mut TcpStream,
-) -> Result<(), String> {
-    let started = Instant::now();
-    loop {
-        match conn.complete_io(tcp) {
-            Ok(_) if !conn.is_handshaking() && !conn.wants_write() => return Ok(()),
-            Ok(_) => {}
+fn flush_boring_writes_nonblocking(
+    tls: &mut SslStream<TcpStream>,
+    pending_plaintext: &mut Vec<u8>,
+) -> Result<bool, String> {
+    let mut progressed = false;
+    while !pending_plaintext.is_empty() {
+        match tls.write(pending_plaintext) {
+            Ok(0) => {
+                return Err("flush VLESS BoringSSL writes: wrote zero bytes".to_owned());
+            }
+            Ok(written) => {
+                pending_plaintext.drain(..written);
+                progressed = true;
+            }
             Err(err)
                 if matches!(
                     err.kind(),
                     ErrorKind::WouldBlock | ErrorKind::TimedOut | ErrorKind::Interrupted
-                ) && started.elapsed() <= RESIDENT_CONNECT_TIMEOUT => {}
-            Err(err) => return Err(format!("drive VLESS TLS handshake: {err}")),
+                ) =>
+            {
+                break;
+            }
+            Err(err) => return Err(format!("flush VLESS BoringSSL writes: {err}")),
         }
-        if started.elapsed() > RESIDENT_CONNECT_TIMEOUT {
-            return Err("VLESS TLS handshake timeout".to_owned());
+    }
+    Ok(progressed)
+}
+
+pub(super) fn drive_tls_io_blocking(client: &mut VlessTlsClient) -> Result<(), String> {
+    match &mut client.engine {
+        VlessTlsEngine::Rustls { tcp, conn, .. } => {
+            let started = Instant::now();
+            loop {
+                match conn.complete_io(tcp) {
+                    Ok(_) if !conn.is_handshaking() && !conn.wants_write() => return Ok(()),
+                    Ok(_) => {}
+                    Err(err)
+                        if matches!(
+                            err.kind(),
+                            ErrorKind::WouldBlock | ErrorKind::TimedOut | ErrorKind::Interrupted
+                        ) && started.elapsed() <= RESIDENT_CONNECT_TIMEOUT => {}
+                    Err(err) => return Err(format!("drive VLESS TLS handshake: {err}")),
+                }
+                if started.elapsed() > RESIDENT_CONNECT_TIMEOUT {
+                    return Err("VLESS TLS handshake timeout".to_owned());
+                }
+            }
         }
+        VlessTlsEngine::Boring { .. } => Ok(()),
+    }
+}
+
+pub(super) fn tls_underlay_name(client: &VlessTlsClient) -> &'static str {
+    match &client.engine {
+        VlessTlsEngine::Rustls { .. } => "rustls",
+        VlessTlsEngine::Boring { .. } => "boringssl",
     }
 }

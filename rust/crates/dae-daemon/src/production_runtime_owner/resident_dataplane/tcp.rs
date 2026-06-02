@@ -1,5 +1,5 @@
 use std::collections::BTreeMap;
-use std::io::{ErrorKind, Read, Write};
+use std::io::{ErrorKind, Read};
 use std::mem::size_of;
 use std::net::{IpAddr, Ipv4Addr, Shutdown, SocketAddr, SocketAddrV4, TcpListener, TcpStream};
 use std::os::fd::AsRawFd;
@@ -27,6 +27,7 @@ use serde_json::{Value, json};
 
 use super::client::{
     TlsDriveOutcome, VlessTlsClient, drive_tls_io_record_aware, open_vless_tls_client,
+    tls_underlay_name,
 };
 use super::direct::{open_direct_tcp_connection, relay_tcp_direct};
 use super::events::append_event;
@@ -389,10 +390,8 @@ fn handle_proxy_tcp_connection(
     sniff: &TcpSniffReport,
 ) -> Result<Value, String> {
     let mut client = open_vless_tls_client(&selection.proxy)?;
-    client
-        .tcp
-        .set_nonblocking(true)
-        .map_err(|err| format!("set proxy tcp nonblocking: {err}"))?;
+    let tls_underlay = tls_underlay_name(&client);
+    client.set_nonblocking(true)?;
     let request = packet::first_write_bytes(
         &selection.proxy.key,
         &selection.proxy.flow,
@@ -403,10 +402,8 @@ fn handle_proxy_tcp_connection(
     )
     .map_err(|err| format!("build VLESS TCP request: {err}"))?;
     client
-        .conn
-        .writer()
-        .write_all(&request)
-        .map_err(|err| format!("queue VLESS TCP request: {err}"))?;
+        .queue_plain(&request, "queue VLESS TCP request")
+        .map_err(|err| err.to_string())?;
     relay_tcp_over_vless_tls(
         inbound,
         &mut client,
@@ -432,6 +429,7 @@ fn handle_proxy_tcp_connection(
             "sniff_error": &sniff.error,
             "proxy_group": &selection.proxy.group_name,
             "node_tag": &selection.proxy.node_tag,
+            "tls_underlay": tls_underlay,
             "bytes_client_to_proxy": stats.client_to_proxy,
             "bytes_proxy_to_client": stats.proxy_to_client,
             "response_header_stripped": stats.response_header_stripped,
@@ -652,11 +650,7 @@ fn relay_tcp_over_vless_tls(
                 &mut vision_tls_state,
             )?;
         } else {
-            client
-                .conn
-                .writer()
-                .write_all(initial_payload)
-                .map_err(|err| format!("queue sniffed client payload to proxy TLS: {err}"))?;
+            client.queue_plain(initial_payload, "queue sniffed client payload to proxy TLS")?;
         }
         stats.client_to_proxy += initial_payload.len();
     }
@@ -666,7 +660,7 @@ fn relay_tcp_over_vless_tls(
             match inbound.read(&mut inbound_buf) {
                 Ok(0) => {
                     inbound_closed = true;
-                    client.conn.send_close_notify();
+                    client.send_close_notify();
                     progressed = true;
                 }
                 Ok(read) => {
@@ -689,11 +683,10 @@ fn relay_tcp_over_vless_tls(
                             &mut vision_tls_state,
                         )?;
                     } else {
-                        client
-                            .conn
-                            .writer()
-                            .write_all(&inbound_buf[..read])
-                            .map_err(|err| format!("queue client payload to proxy TLS: {err}"))?;
+                        client.queue_plain(
+                            &inbound_buf[..read],
+                            "queue client payload to proxy TLS",
+                        )?;
                     }
                     stats.client_to_proxy += read;
                     progressed = true;
@@ -708,7 +701,7 @@ fn relay_tcp_over_vless_tls(
         }
 
         if downlink_direct {
-            match client.tcp.read(&mut proxy_buf) {
+            match client.raw_read(&mut proxy_buf) {
                 Ok(0) => {
                     break;
                 }
@@ -754,7 +747,7 @@ fn relay_tcp_over_vless_tls(
                 }
             }
             loop {
-                match client.conn.reader().read(&mut proxy_buf) {
+                match client.read_plain(&mut proxy_buf) {
                     Ok(0) => break,
                     Ok(read) => {
                         let mut payload = stripper.consume(&proxy_buf[..read])?;
@@ -804,11 +797,7 @@ fn relay_tcp_over_vless_tls(
             }
         }
 
-        if inbound_closed
-            && !downlink_direct
-            && !client.conn.wants_write()
-            && !client.conn.wants_read()
-        {
+        if inbound_closed && !downlink_direct && client.idle_tls_complete() {
             break;
         }
         if progressed {
@@ -829,7 +818,7 @@ fn can_recover_vision_raw_direct_after_tls_error(
 ) -> bool {
     vision_enabled
         && response_header_stripped
-        && vision.is_some_and(|vision| vision.completed_blocks > 0)
+        && vision.is_some_and(|vision| vision.direct_command_seen)
 }
 
 #[derive(Default)]
@@ -879,7 +868,7 @@ mod tests {
     }
 
     #[test]
-    fn resident_vision_raw_direct_recovery_requires_prior_vision_block() {
+    fn resident_vision_raw_direct_recovery_requires_explicit_direct_command() {
         let key = [7_u8; 16];
         let mut unpadder = VisionUnpadder::new(key);
         assert!(!can_recover_vision_raw_direct_after_tls_error(
@@ -899,7 +888,7 @@ mod tests {
         let mut ended = VisionUnpadder::new(key);
         assert_eq!(ended.consume(&end_block).unwrap(), b"tail");
         assert!(matches!(ended.state, VisionUnpadState::Raw));
-        assert!(can_recover_vision_raw_direct_after_tls_error(
+        assert!(!can_recover_vision_raw_direct_after_tls_error(
             true,
             true,
             Some(&ended)
@@ -914,20 +903,37 @@ mod tests {
             false,
         );
         assert_eq!(unpadder.consume(&block).unwrap(), b"hello");
+        assert!(!can_recover_vision_raw_direct_after_tls_error(
+            true,
+            true,
+            Some(&unpadder)
+        ));
+
+        let mut uuid_sent = false;
+        let direct_block = super::super::vision::vision_padding_block(
+            b"raw",
+            super::super::VISION_COMMAND_DIRECT,
+            key,
+            &mut uuid_sent,
+            false,
+        );
+        let mut direct = VisionUnpadder::new(key);
+        assert_eq!(direct.consume(&direct_block).unwrap(), b"raw");
+        assert!(direct.direct_command_seen);
         assert!(can_recover_vision_raw_direct_after_tls_error(
             true,
             true,
-            Some(&unpadder)
+            Some(&direct)
         ));
         assert!(!can_recover_vision_raw_direct_after_tls_error(
             false,
             true,
-            Some(&unpadder)
+            Some(&direct)
         ));
         assert!(!can_recover_vision_raw_direct_after_tls_error(
             true,
             false,
-            Some(&unpadder)
+            Some(&direct)
         ));
     }
 
@@ -1035,6 +1041,43 @@ mod tests {
         assert!(err.contains("unsupported protocol"));
     }
 
+    #[test]
+    fn resident_tcp_selection_keeps_ip_target_when_domain_plus_plus_has_no_sniffed_domain() {
+        let router = tcp_router_for_test(
+            fallback_matcher("direct", 0x77),
+            TcpDialMode::DomainPlusPlus,
+        );
+        let peer = SocketAddrV4::new(Ipv4Addr::new(192, 0, 2, 10), 43100);
+        let dst = SocketAddrV4::new(Ipv4Addr::new(91, 108, 56, 177), 443);
+        let selection = router
+            .select_from_routing_result(
+                peer,
+                dst,
+                "",
+                BpfRoutingResult {
+                    outbound: OutboundIndex::USER_DEFINED_MIN.value(),
+                    mark: 0x55,
+                    ..BpfRoutingResult::default()
+                },
+            )
+            .unwrap();
+        let TcpSelection::Proxy(selection) = selection else {
+            panic!("expected proxy selection");
+        };
+        assert_eq!(
+            selection.route.initial_outbound,
+            OutboundIndex::USER_DEFINED_MIN.value()
+        );
+        assert_eq!(
+            selection.route.final_outbound,
+            OutboundIndex::USER_DEFINED_MIN.value()
+        );
+        assert_eq!(selection.route.dial_target, dst.to_string());
+        assert!(selection.route.dial_ip);
+        assert!(!selection.route.userspace_route_executed);
+        assert_eq!(selection.route.final_mark, 0x55);
+    }
+
     fn tcp_router_for_test(
         routing_matcher: RoutingMatcher,
         dial_mode: TcpDialMode,
@@ -1081,6 +1124,7 @@ mod tests {
             net: "tcp".to_owned(),
             tls: "tls".to_owned(),
             allow_insecure: false,
+            utls_fingerprint: None,
             key: [0; 16],
             mark: 0,
             mptcp: false,

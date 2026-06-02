@@ -99,7 +99,7 @@ fn daed2_dependency_boundary_accepts_independent_local_dae_replace() {
     let wing = daed.join("wing");
     let dae_go_mod = dae.join("go.mod");
     let outbound = root.join("outbound-daex-align");
-    let quic_go = root.join("quic-go-rust");
+    let quic_go = root.join("quic-go-daex-align");
     write_fixture_file(
         &dae_go_mod,
         &format!(

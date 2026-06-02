@@ -83,7 +83,7 @@ require (
 
 replace github.com/daeuniverse/outbound => /root/project/outbound-daex-align
 
-replace github.com/daeuniverse/quic-go => /root/project/quic-go-rust
+replace github.com/daeuniverse/quic-go => /root/project/quic-go-daex-align
 
 // replace github.com/daeuniverse/quic-go => ../quic-go
 
