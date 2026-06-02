@@ -6068,3 +6068,547 @@ do not implement a simplified WebUI API and call C10 complete
 do not treat generated .dae as product source of truth
 do not claim Go-free while Go daewing still owns product materialization or runtime supervision
 ```
+
+## 36. C10 first-batch implementation record：daed native 1-5（2026-06-02）
+
+This section records the implementation result for the requested C10 internal items 1-5.
+
+This is still under C10 `go-free-product-chain-v1`.
+
+No new C phase was added.
+
+Leptos remains out of scope for the current plan.
+
+### 36.1 Completed scope
+
+Completed C10 internal items:
+
+```text
+1. service-contract/package-info outputs daed.db + protected wing.db fields
+2. Rust daed product binary skeleton
+3. daed.db schema + non-destructive wing.db import/check
+4. setup/auth/user-storage minimal API
+5. current React WebUI dist static serving by Rust daed
+```
+
+Implemented product binary:
+
+```text
+cargo build -p dae-daemon --bin daed
+```
+
+New binary entry:
+
+```text
+rust/crates/dae-daemon/src/bin/daed.rs
+```
+
+New product module:
+
+```text
+rust/crates/dae-daemon/src/daed_product.rs
+```
+
+No new local crate was added.
+
+The SQLite state layer required an external dependency in the existing `dae-daemon` crate:
+
+```text
+rusqlite
+```
+
+This is a state-layer dependency needed to read/write SQLite-compatible `daed.db` and import old `wing.db`.
+
+### 36.2 Service contract and package info
+
+`daed service-contract --json` now reports:
+
+```text
+primary_state_store=/etc/daed/daed.db
+protected_rollback_state_store=/etc/daed/wing.db
+rust_daed_writes_wing_db_by_default=false
+wing_db_import_supported=true
+wing_db_import_destructive_by_default=false
+daed_db_primary_required=true
+var_lib_daed_required_by_default=false
+```
+
+`dae-daemon` common service-contract capabilities also expose the same state-store constraints so admission tooling cannot drift back to `/var/lib/daed/state/product.db`.
+
+`daed package-info --json` reports:
+
+```text
+binary=/usr/bin/daed
+work_package=go-free-product-chain-v1
+primary_state_store=/etc/daed/daed.db
+protected_rollback_state_store=/etc/daed/wing.db
+webui.framework=current React/Vite dist
+webui.served_by=Rust daed static file server
+webui.leptos_considered=false
+full_go_free_product_chain_ready=false
+```
+
+Important contract boundary:
+
+```text
+rust_product_binary_contract_ready=true
+rust_product_lifecycle_contract_ready=true
+rust_daed_state_layer_ready=true
+rust_daed_setup_auth_user_storage_api_ready=true
+rust_daed_static_webui_serving_ready=true
+go_free_product_chain_ready=false
+```
+
+The first batch is complete, but full C10 remains blocked until later items complete.
+
+### 36.3 Rust daed command surface
+
+Implemented command surface:
+
+```text
+daed run -c /etc/daed --listen 0.0.0.0:2023 --api-only
+daed service-contract --json
+daed package-info --json
+daed state check --state /etc/daed/daed.db
+daed state migrate --from-wing-db /etc/daed/wing.db --to /etc/daed/daed.db
+daed export openapi
+daed export flatdesc
+daed export outline
+daed resetpass -c /etc/daed
+```
+
+Notes:
+
+- `run` starts the first-batch Rust product HTTP server.
+- `service-contract` and `package-info` emit C10 product facts.
+- `state check` creates/checks the first-batch schema if needed.
+- `state migrate` imports old `wing.db` into `daed.db` without mutating `wing.db`.
+- `export` is a first-batch metadata skeleton.
+- `resetpass` command exists as skeleton only; full resetpass behavior remains later product parity work.
+
+### 36.4 daed.db state layer
+
+Primary state:
+
+```text
+/etc/daed/daed.db
+```
+
+Protected rollback state:
+
+```text
+/etc/daed/wing.db
+```
+
+First-batch schema creates/keeps these tables:
+
+```text
+users
+configs
+dns
+routings
+subscriptions
+nodes
+groups
+group_nodes
+group_subscriptions
+group_policy_params
+systems
+log_settings
+node_latency_results
+daed_product_metadata
+daed_schema_migrations
+```
+
+Migration behavior:
+
+```text
+daed state migrate --from-wing-db /etc/daed/wing.db --to /etc/daed/daed.db
+```
+
+Safeguards implemented:
+
+- compute `wing.db` SHA256 before import.
+- copy/import to `daed.db`.
+- apply Rust metadata/schema to `daed.db`.
+- compute `wing.db` SHA256 after import.
+- fail if `wing.db` hash changes.
+- do not write `wing.db` by default.
+- if target exists and `--force` is not provided, do not overwrite target.
+
+### 36.5 Minimal API implemented
+
+Implemented first-batch API under `/api`:
+
+```text
+GET    /api/health
+GET    /api/auth/status
+POST   /api/auth/users
+POST   /api/auth/token
+GET    /api/user/me
+PATCH  /api/user/me
+POST   /api/user/me/password
+GET    /api/user/me/storage
+PUT    /api/user/me/storage
+DELETE /api/user/me/storage
+POST   /api/user/me/default-resources
+```
+
+Auth compatibility:
+
+- password hash matches Go daewing behavior: SHAKE256 over `jwt_secret` bytes plus password.
+- token shape is HS256 JWT-compatible with `role`, `sub`, and `exp`.
+- bearer auth supports `Authorization: Bearer ...`.
+- event-source token query fallback is reserved for `/api/events/runtime` and `/api/events/logs`.
+
+Storage compatibility:
+
+- `JsonStorage` remains JSON text in the `users` table.
+- `GET /api/user/me/storage` returns `{"values":[...]}`.
+- `PUT /api/user/me/storage` returns `{"updated":N}`.
+- `DELETE /api/user/me/storage` returns `{"removed":N}`.
+- dotted storage paths such as `ui.sidebar` are supported for the first batch.
+
+Default-resource behavior:
+
+- first-batch endpoint creates/returns default config/dns/routing/group IDs.
+- it stores `defaultConfigID`, `defaultRoutingID`, `defaultDNSID`, `defaultGroupID`, and `mode` in user storage.
+- full resource CRUD/materializer parity is still later C10 work.
+
+### 36.6 Static WebUI serving
+
+The Rust `daed run` server now serves:
+
+```text
+/api/*   -> Rust first-batch API
+/*       -> current React/Vite WebUI dist static files
+```
+
+Default Web root:
+
+```text
+/usr/share/daed/web
+```
+
+Override:
+
+```text
+--web-root PATH
+DAED_WEB_ROOT=PATH
+```
+
+`--api-only` disables static WebUI serving and keeps only the API surface.
+
+The current plan keeps the existing React/Vite WebUI.
+
+Leptos POC/rewrite is not part of the current C10 implementation path.
+
+### 36.7 Validation completed
+
+Validation commands completed:
+
+```text
+cargo check -p dae-daemon --bin daed
+cargo build -p dae-daemon --bin daed
+cargo test -p dae-daemon --test daed_product
+cargo test -p dae-daemon --test service_contract candidate_reports_resident_service_and_dataplane_capabilities
+cargo fmt --check -p dae-daemon
+```
+
+`daed_product` integration tests cover:
+
+```text
+service-contract/package-info state path fields
+go_free_product_chain_ready remains false
+state check
+non-destructive wing.db -> daed.db migration
+wing.db SHA256 unchanged
+run server
+GET /api/health
+GET /api/auth/status
+POST /api/auth/users
+GET /api/user/me
+PUT /api/user/me/storage
+GET /api/user/me/storage
+static index.html serving
+```
+
+### 36.8 Remaining C10 work
+
+The following are still not complete and must remain under C10:
+
+```text
+resource CRUD API parity
+Rust materializer
+Rust runtime owner
+logs/SSE
+latency and group-policy feedback
+subscription scheduler
+import/export parity
+resetpass full parity
+static Web dist package integration
+systemd/docker/package default switch
+live host default-switch validation
+```
+
+Do not claim full C10 go-free product-chain completion until these are implemented and admitted.
+
+## 37. C10 local Rust product surface implementation record：daed native 6-10（2026-06-03）
+
+Scope:
+
+```text
+C10 go-free-product-chain-v1
+```
+
+This section records completion of local Rust `daed` product-surface items 6-10.
+
+It does not add a new stage.
+
+It does not change the hard C0-C10 phase rule.
+
+It does not introduce Leptos work.
+
+It does not mark the full go-free product chain ready.
+
+`go_free_product_chain_ready` remains `false` until live package admission, rollback validation, and default-path removal are complete.
+
+### 37.1 Resource CRUD API parity first pass
+
+Implemented Rust `daed` local API coverage for:
+
+```text
+GET/POST          /api/configs
+GET/PUT/DELETE    /api/configs/{id}
+POST              /api/configs/{id}/select
+POST              /api/configs/parsed
+
+GET/POST          /api/dns
+GET/PUT/DELETE    /api/dns/{id}
+POST              /api/dns/{id}/select
+POST              /api/dns/parsed
+
+GET/POST          /api/routings
+GET/PUT/DELETE    /api/routings/{id}
+POST              /api/routings/{id}/select
+POST              /api/routings/parsed
+
+GET/POST/DELETE   /api/nodes
+GET/PUT/DELETE    /api/nodes/{id}
+
+GET/POST/DELETE   /api/subscriptions
+GET/PUT/DELETE    /api/subscriptions/{id}
+GET               /api/subscriptions/{id}/nodes
+POST              /api/subscriptions/{id}/refresh
+
+GET/POST          /api/groups
+GET/PUT/DELETE    /api/groups/{id}
+POST/DELETE       /api/groups/{id}/nodes
+POST/DELETE       /api/groups/{id}/subscriptions
+```
+
+Compatibility notes:
+
+- Group list shape follows current React/Vite WebUI expectations: `nodes: NodeAPI[]` and subscription bindings with `subscriptionId`, `matchedCount`, `matchedNodes`, `updatedAt`, `status`, `info`, `link`, and `tag`.
+- Group policy params accept both `val` and `value` input, and return `val`.
+- Node import parses link protocol, host/address, fragment/tag, and subscription ownership into `daed.db`.
+- Subscription refresh is a Rust local state update in this batch; it does not yet perform production remote subscription fetching.
+
+### 37.2 Runtime materializer and owner API
+
+Implemented Rust local materializer:
+
+```text
+POST /api/runtime/reload
+POST /api/runtime/stop
+GET  /api/runtime/overview
+GET  /api/general/state
+GET  /api/general/cache-stats
+GET  /api/general/interfaces
+```
+
+Materializer output:
+
+```text
+<config_dir>/runtime/generated.dae
+```
+
+Default config dir:
+
+```text
+/etc/daed
+```
+
+Runtime behavior in this batch:
+
+- `runtime/reload` materializes selected config/dns/routing, groups, and nodes into `generated.dae`.
+- `runtime/reload` records Rust local runtime state in `daed_product_metadata` and `systems`.
+- `runtime/stop` clears the Rust local running marker.
+- `runtime/overview` returns current local Rust product overview including RSS observation.
+- This is still local Rust product ownership evidence; it is not yet the final live package default switch.
+
+### 37.3 Logs, SSE, latency, and subscription scheduler skeleton
+
+Implemented:
+
+```text
+GET    /api/logs
+DELETE /api/logs
+GET    /api/logs/settings
+PATCH  /api/logs/settings
+GET    /api/events/runtime
+GET    /api/events/logs
+GET    /api/nodes/latencies
+POST   /api/nodes/latencies
+GET    /api/runtime/log-level
+PATCH  /api/runtime/log-level
+```
+
+State tables used:
+
+```text
+log_entries
+log_settings
+node_latency_results
+daed_product_metadata
+```
+
+Notes:
+
+- SSE endpoints emit snapshot events and support bearer auth plus `access_token` query auth fallback for WebUI EventSource compatibility.
+- Latency probes are local Rust C10 synthetic probes in this batch; production network probing remains an admission item.
+- Subscription scheduler skeleton records startup metadata/log evidence but does not yet fetch remote subscriptions on cron.
+
+### 37.4 Import/export/package surface
+
+Implemented:
+
+```text
+GET /api/user/me/dae-bundle
+PUT /api/user/me/dae-bundle
+GET /api/user/me/dae-config-file
+PUT /api/user/me/dae-config-file
+POST /api/user/me/dae-config-file/preview
+
+daed export openapi
+daed export flatdesc
+daed export outline
+```
+
+Bundle behavior:
+
+- Exports `schemaVersion`, `exportedAt`, `mode`, `defaults`, `selected`, `configs`, `dnss`, `routings`, `subscriptions`, `nodes`, and `groups`.
+- Imports into `daed.db`.
+- Does not write `/etc/daed/wing.db`.
+- Preserves `wing.db` as protected old daed/daewing rollback DB.
+- Updates user JSON storage defaults/mode from imported bundle.
+
+Package surface reported:
+
+```text
+systemd_unit=daed.service uses /usr/bin/daed run -c /etc/daed
+docker_entrypoint=/usr/bin/daed run -c /etc/daed --listen 0.0.0.0:2023
+default_package_switch_live_applied=false
+go_daewing_default_path_removed=false
+```
+
+### 37.5 Contract state after 6-10
+
+Rust `daed service-contract --json` now reports:
+
+```text
+rust_product_binary_contract_ready=true
+rust_product_lifecycle_contract_ready=true
+rust_product_web_api_package_release_contract_ready=true
+rust_daed_state_layer_ready=true
+rust_daed_non_destructive_wing_db_import_ready=true
+rust_daed_setup_auth_user_storage_api_ready=true
+rust_daed_static_webui_serving_ready=true
+rust_daed_current_react_webui_served_by_rust_ready=true
+rust_daed_resource_crud_api_ready=true
+rust_daed_materializer_ready=true
+rust_daed_runtime_owner_ready=true
+rust_daed_logs_sse_latency_subscription_ready=true
+rust_daed_import_export_package_surface_ready=true
+go_free_product_chain_ready=false
+go_free_product_chain_current_batch=C10.1-C10.10 local Rust product surface
+```
+
+Remaining contract blockers:
+
+```text
+live host default package switch
+live rollback validation
+remove Go daewing from default package path
+full WebUI route audit against Rust API
+production package admission
+```
+
+### 37.6 Validation completed
+
+Validation commands completed:
+
+```text
+cargo check -p dae-daemon --bin daed
+cargo fmt --check -p dae-daemon
+cargo test -p dae-daemon --test daed_product
+cargo test -p dae-daemon --test service_contract candidate_reports_resident_service_and_dataplane_capabilities
+cargo test -p dae-daemon daed_product::
+cargo build -p dae-daemon --bin daed
+git -C /root/project/dae-daex-align diff --check
+```
+
+`cargo test -p dae-daemon --test daed_product` required running outside the sandbox because the integration tests bind `127.0.0.1` on a temporary HTTP port.
+
+Validated integration coverage:
+
+```text
+service-contract/package-info state path fields
+go_free_product_chain_ready remains false
+state check
+non-destructive wing.db -> daed.db migration
+wing.db SHA256 unchanged
+run server
+GET /api/health
+GET /api/auth/status
+POST /api/auth/users
+GET /api/user/me
+PUT/GET /api/user/me/storage
+static index.html serving
+config/dns/routing create/select/list
+node import
+subscription import/refresh
+group create and node/subscription binding
+latency probe update/list
+log settings update/list
+runtime log-level update
+runtime reload materializes runtime/generated.dae
+runtime overview/general state
+runtime/log SSE snapshot endpoints
+bundle export/import
+dae config-file export/preview
+logs clear
+runtime stop
+daed export openapi
+daed export flatdesc
+daed export outline
+```
+
+### 37.7 Remaining C10 admission work
+
+Still not done:
+
+```text
+production remote subscription fetching
+production latency probing against real outbound path
+full WebUI route audit against Rust API
+resetpass full parity
+static Web dist package integration
+systemd/docker package files in final artifact
+live default package switch
+live rollback validation with old daed/daewing protected wing.db
+remove Go daewing from default package path
+production package admission evidence
+```
+
+The implementation is therefore a completed local Rust `daed` product-surface batch, not full C10 completion.
