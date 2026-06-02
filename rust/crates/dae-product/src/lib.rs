@@ -2,11 +2,13 @@ pub mod complex_dataplane;
 pub mod daemon_default;
 pub mod daemon_gray_switch;
 pub mod daemon_live_evidence;
+pub mod go_free_product_chain;
 pub mod integration;
 pub mod outbound_contract;
 pub mod product_chain_admission;
 pub mod protocol_dataplane;
 pub mod release;
+pub mod release_default_switch;
 pub mod release_gate;
 pub mod systemd;
 pub mod true_daemon_admission;
@@ -25,6 +27,7 @@ pub use daemon_live_evidence::{
     DaemonLiveEvidenceQueueContract, DaemonLiveEvidenceQueueRow,
     daemon_live_evidence_queue_contract,
 };
+pub use go_free_product_chain::{GoFreeProductChainContract, go_free_product_chain_contract};
 pub use integration::{DaedDaewingContract, daed_daewing_contract};
 pub use outbound_contract::{OutboundNativeMigrationContract, outbound_native_migration_contract};
 pub use product_chain_admission::{
@@ -35,6 +38,7 @@ pub use protocol_dataplane::{
     protocol_dataplane_admission_contract,
 };
 pub use release::{ReleaseWorkflowContract, release_workflow_contract};
+pub use release_default_switch::{ReleaseDefaultSwitchContract, release_default_switch_contract};
 pub use release_gate::{
     Stage7ReleaseGateContract, Stage7ReleaseGateRow, stage7_release_gate_contract,
 };
