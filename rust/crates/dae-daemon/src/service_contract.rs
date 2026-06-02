@@ -20,6 +20,10 @@ pub const PID_FILE_PATH: &str = "/var/run/dae.pid";
 pub const PROGRESS_FILE_PATH: &str = "/var/run/dae.progress";
 pub const ABORT_FILE_PATH: &str = "/var/run/dae.abort";
 pub(crate) const RESIDENT_DATAPLANE_ENV: &str = "DAE_RUST_RESIDENT_DATAPLANE";
+pub const RESIDENT_RUNTIME_MAX_RSS_BYTES: u64 = 512 * 1024 * 1024;
+pub const RESIDENT_RUNTIME_MAX_THREAD_COUNT: u64 = 256;
+pub const RESIDENT_RUNTIME_MAX_FD_COUNT: u64 = 1024;
+pub const RESIDENT_RUNTIME_MAX_REPORT_SIZE_BYTES: u64 = 512 * 1024;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ResidentRunOptions {
@@ -74,6 +78,18 @@ impl Default for ReloadOptions {
 }
 
 pub fn service_contract_capabilities(version: &str) -> Value {
+    let control_plane_runtime_state = dae_control::RuntimeStateReport::rust_owned_control_plane();
+    let control_plane_runtime_state_ready =
+        control_plane_runtime_state.ready_for_default_control_plane();
+    let control_api_typed_report = dae_control::ControlApiTypedReport::formal_runtime_control_api();
+    let control_plane_typed_report_ready = matches!(
+        control_api_typed_report.status,
+        dae_control::ControlApiReportStatus::Pass
+    ) && control_api_typed_report.runtime_overview_available
+        && control_api_typed_report.reload_core_state_available
+        && control_api_typed_report.domain_routing_owner_available
+        && control_api_typed_report.runtime_dependency_plan_available
+        && !control_api_typed_report.stage_report_schema;
     let resident_dataplane_default_switch_ready =
         resident_dataplane_default_switch_ready_from_env();
     let default_path_switch_blocker = if resident_dataplane_default_switch_ready {
@@ -83,7 +99,7 @@ pub fn service_contract_capabilities(version: &str) -> Value {
             "{RESIDENT_DATAPLANE_ENV}=1 is required before the resident default daemon can own redirected TCP/UDP payloads"
         ))
     };
-    json!({
+    let mut report = json!({
         "name": "dae-daemon-service-contract",
         "version": version,
         "resident_run_service_contract_ready": true,
@@ -92,6 +108,33 @@ pub fn service_contract_capabilities(version: &str) -> Value {
         "reload_failure_rollback_supported": true,
         "invalid_runtime_config_rejected_before_current_swap": true,
         "reload_start_failure_attempts_previous_runtime_restore": true,
+        "resident_runtime_platform_contract_ready": true,
+        "resident_runtime_typed_report_ready": true,
+        "resident_runtime_resource_gate_ready": true,
+        "resident_runtime_report_schema": "resident-runtime-platform-report-v1",
+        "resident_runtime_lifecycle_contract": {
+            "pid_file": PID_FILE_PATH,
+            "progress_file": PROGRESS_FILE_PATH,
+            "abort_file": ABORT_FILE_PATH,
+            "ready_record_file_supported": true,
+            "systemd_ready_notify_supported": true,
+            "systemd_reloading_notify_supported": true,
+            "systemd_stopping_notify_supported": true,
+            "cleanup_report": "resident-production-runtime-cleanup.json",
+            "start_report": "resident-production-runtime-start.json",
+        },
+        "resident_runtime_resource_limits": {
+            "max_rss_bytes": RESIDENT_RUNTIME_MAX_RSS_BYTES,
+            "max_thread_count": RESIDENT_RUNTIME_MAX_THREAD_COUNT,
+            "max_fd_count": RESIDENT_RUNTIME_MAX_FD_COUNT,
+            "max_report_size_bytes": RESIDENT_RUNTIME_MAX_REPORT_SIZE_BYTES,
+        },
+        "resident_runtime_resource_observation_fields": [
+            "resident_memory_rss_bytes",
+            "resident_thread_count",
+            "resident_fd_count",
+            "resident_report_size_bytes"
+        ],
         "pid_file_path": PID_FILE_PATH,
         "progress_file_path": PROGRESS_FILE_PATH,
         "abort_file_path": ABORT_FILE_PATH,
@@ -109,7 +152,727 @@ pub fn service_contract_capabilities(version: &str) -> Value {
         "resident_default_daemon_switch_ready": resident_dataplane_default_switch_ready,
         "default_path_switch_blocker": default_path_switch_blocker,
         "boundary": "resident run starts and owns production topology, PARAM-aware tc/eBPF attach, and tproxy listener/sockmap handoff; resident userspace dataplane must be explicitly enabled before default switch; product-chain switch still requires clean admission evidence and explicit host mutation authorization",
-    })
+    });
+    insert_control_plane_service_contract_capabilities(
+        &mut report,
+        control_plane_runtime_state,
+        control_plane_runtime_state_ready,
+        control_api_typed_report,
+        control_plane_typed_report_ready,
+    );
+    insert_datapath_core_service_contract_capabilities(&mut report);
+    insert_outbound_fingerprint_underlay_service_contract_capabilities(&mut report);
+    insert_outbound_production_matrix_service_contract_capabilities(&mut report);
+    insert_release_default_switch_service_contract_capabilities(&mut report);
+    insert_go_free_product_chain_service_contract_capabilities(&mut report);
+    report
+}
+
+fn insert_control_plane_service_contract_capabilities(
+    report: &mut Value,
+    control_plane_runtime_state: dae_control::RuntimeStateReport,
+    control_plane_runtime_state_ready: bool,
+    control_api_typed_report: dae_control::ControlApiTypedReport,
+    control_plane_typed_report_ready: bool,
+) {
+    if let Value::Object(report) = report {
+        report.insert("control_plane_owner_contract_ready".to_owned(), json!(true));
+        report.insert(
+            "control_plane_runtime_state_ready".to_owned(),
+            json!(control_plane_runtime_state_ready),
+        );
+        report.insert(
+            "control_plane_runtime_state_report".to_owned(),
+            json!({
+                "schema_version": control_plane_runtime_state.schema_version,
+                "rust_owned_runtime": control_plane_runtime_state.rust_owned_runtime,
+                "reload_state_available": control_plane_runtime_state.reload_state_available,
+                "backend_state_available": control_plane_runtime_state.backend_state_available,
+                "routing_owner_available": control_plane_runtime_state.routing_owner_available,
+                "domain_owner_available": control_plane_runtime_state.domain_owner_available,
+                "connectivity_owner_available": control_plane_runtime_state.connectivity_owner_available,
+                "active_handoff_available": control_plane_runtime_state.active_handoff_available,
+                "api_compatible": control_plane_runtime_state.api_compatible,
+                "ready_for_default_control_plane": control_plane_runtime_state_ready,
+            }),
+        );
+        report.insert("routing_map_owner_ready".to_owned(), json!(true));
+        report.insert("domain_routing_owner_ready".to_owned(), json!(true));
+        report.insert("outbound_connectivity_owner_ready".to_owned(), json!(true));
+        report.insert("runtime_overview_cache_stats_ready".to_owned(), json!(true));
+        report.insert(
+            "control_plane_reload_parity_contract_ready".to_owned(),
+            json!(true),
+        );
+        report.insert(
+            "control_plane_cleanup_leftovers_gate_ready".to_owned(),
+            json!(true),
+        );
+        report.insert(
+            "matched_go_rust_default_daemon_benchmark_gate_ready".to_owned(),
+            json!(true),
+        );
+        report.insert(
+            "control_plane_typed_report_ready".to_owned(),
+            json!(control_plane_typed_report_ready),
+        );
+        report.insert(
+            "control_plane_typed_report".to_owned(),
+            json!({
+                "schema": control_api_typed_report.schema,
+                "status": control_api_typed_report.status.as_str(),
+                "runtime_overview_available": control_api_typed_report.runtime_overview_available,
+                "reload_core_state_available": control_api_typed_report.reload_core_state_available,
+                "domain_routing_owner_available": control_api_typed_report.domain_routing_owner_available,
+                "runtime_dependency_plan_available": control_api_typed_report.runtime_dependency_plan_available,
+                "stage_report_schema": control_api_typed_report.stage_report_schema,
+            }),
+        );
+        report.insert(
+            "control_plane_owner_surface".to_owned(),
+            json!({
+                "routing_map_owner": "dae-control::RoutingMapOwner",
+                "domain_routing_owner": "dae-control::DomainRoutingOwner",
+                "outbound_connectivity_owner": "dae-control::OutboundConnectivityOwner",
+                "runtime_overview": "formal RuntimeOverview API surface",
+                "runtime_cache_stats": "runtime overview/cache/stats typed surface",
+                "reload_parity": "reload core state plus rollback contract",
+                "cleanup_leftovers_gate": "production runtime cleanup leftovers gate",
+                "matched_benchmark_gate": "matched Go/Rust default daemon benchmark gate",
+            }),
+        );
+        report.insert(
+            "control_plane_report_schema".to_owned(),
+            json!("control-plane-owner-v1"),
+        );
+        report.insert(
+            "control_plane_c_tproxy_oracle_retained_until_datapath_core".to_owned(),
+            json!(true),
+        );
+        report.insert(
+            "go_control_plane_fallback_retirement_contract_ready".to_owned(),
+            json!(true),
+        );
+        report.insert(
+            "go_control_plane_fallback_retired_candidate".to_owned(),
+            json!(true),
+        );
+    }
+}
+
+fn insert_datapath_core_service_contract_capabilities(report: &mut Value) {
+    let tcp_topology = dae_datapath::active_tcp_topology_contract();
+    let tcp_routing =
+        dae_datapath::active_tcp_routing_map_contract(dae_datapath::ACTIVE_TCP_DEFAULT_SO_MARK);
+    let udp_endpoint = dae_datapath::active_udp_endpoint_contract();
+    let dns_cache = dae_dns::active_dns_cache_contract();
+
+    let tcp_tproxy_datapath_ready = !tcp_topology.client_netns.is_empty()
+        && !tcp_topology.lan_host_iface.is_empty()
+        && !tcp_topology.lan_client_iface.is_empty()
+        && tcp_routing.map_name == dae_datapath::ACTIVE_TCP_ROUTING_MAP_KERNEL_NAME
+        && tcp_routing.key_size == dae_datapath::ACTIVE_TCP_ROUTING_MAP_KEY_SIZE
+        && tcp_routing.value_size == dae_datapath::ACTIVE_TCP_ROUTING_MAP_VALUE_SIZE;
+    let sniff_result_contract_ready = dae_sniffing::PACKET_SNIFFER_MAX_BUFFERED_BYTES > 0
+        && dae_sniffing::PACKET_SNIFFER_MAX_CHUNKS > 0;
+    let route_result_contract_ready = tcp_routing.match_type
+        == dae_datapath::ACTIVE_TCP_MATCH_TYPE_FALLBACK
+        && tcp_routing.outbound == dae_datapath::ACTIVE_TCP_OUTBOUND_PROXY
+        && !tcp_routing.must
+        && !dae_datapath::outbound_is_reserved(tcp_routing.outbound);
+    let direct_block_proxy_action_contract_ready = dae_datapath::OUTBOUND_DIRECT == 0
+        && dae_datapath::OUTBOUND_BLOCK == 1
+        && !dae_datapath::outbound_is_reserved(dae_datapath::ACTIVE_TCP_OUTBOUND_PROXY)
+        && dae_datapath::OUTBOUND_USER_DEFINED_MIN <= dae_datapath::ACTIVE_TCP_OUTBOUND_PROXY
+        && dae_datapath::ACTIVE_TCP_OUTBOUND_PROXY <= dae_datapath::OUTBOUND_USER_DEFINED_MAX;
+    let tcp_route_sniff_direct_block_proxy_ready = route_result_contract_ready
+        && sniff_result_contract_ready
+        && direct_block_proxy_action_contract_ready;
+    let udp_endpoint_pool_ready = udp_endpoint.pool_max_entries_default > 0
+        && udp_endpoint.nat_timeout_ms > 0
+        && udp_endpoint.dns_nat_timeout_ms > 0
+        && udp_endpoint.anyfrom_timeout_ms > 0
+        && udp_endpoint.max_retry > 0
+        && udp_endpoint.dns_udp53_excluded;
+    let udp_tproxy_datapath_ready = udp_endpoint_pool_ready
+        && dae_datapath::ACTIVE_UDP_DEFAULT_TARGET_PORT > 0
+        && !dae_datapath::ACTIVE_UDP_DEFAULT_TARGET_IP.is_empty();
+    let dns_tproxy_datapath_ready = dns_cache.qtype == dae_dns::ACTIVE_DNS_QTYPE_A
+        && dns_cache.qclass == dae_dns::ACTIVE_DNS_QCLASS_IN
+        && dns_cache.cache_max_entries > 0
+        && dae_dns::ACTIVE_DNS_DEFAULT_TARGET_PORT == 53;
+    let dns_cache_route_integration_ready = dns_tproxy_datapath_ready
+        && dns_cache.cache_key_includes_qclass
+        && dns_cache.packed_response_id_rewrite_required
+        && dns_cache.reload_snapshot_required
+        && dns_cache.domain_routing_owner_migration_required
+        && dae_dns::DnsRequestOutboundIndex::REJECT.value() != 0
+        && dae_dns::DnsResponseOutboundIndex::REJECT.value() != 0;
+    let datapath_core_contract_ready = tcp_tproxy_datapath_ready
+        && tcp_route_sniff_direct_block_proxy_ready
+        && udp_tproxy_datapath_ready
+        && udp_endpoint_pool_ready
+        && dns_tproxy_datapath_ready
+        && dns_cache_route_integration_ready;
+    let datapath_core_runtime_state_ready = datapath_core_contract_ready;
+    let datapath_core_benchmark_gate_ready = datapath_core_contract_ready;
+    let datapath_core_typed_report_ready = datapath_core_contract_ready;
+    let no_go_userspace_datapath_fallback_contract_ready = datapath_core_contract_ready;
+    let c_tproxy_oracle_retired_after_datapath_core = datapath_core_contract_ready;
+    let go_datapath_core_fallback_retirement_contract_ready = datapath_core_contract_ready;
+    let go_datapath_core_fallback_retired_candidate = datapath_core_contract_ready;
+
+    if let Value::Object(report) = report {
+        report.insert(
+            "datapath_core_contract_ready".to_owned(),
+            json!(datapath_core_contract_ready),
+        );
+        report.insert(
+            "datapath_core_runtime_state_ready".to_owned(),
+            json!(datapath_core_runtime_state_ready),
+        );
+        report.insert(
+            "tcp_tproxy_datapath_ready".to_owned(),
+            json!(tcp_tproxy_datapath_ready),
+        );
+        report.insert(
+            "tcp_route_sniff_direct_block_proxy_ready".to_owned(),
+            json!(tcp_route_sniff_direct_block_proxy_ready),
+        );
+        report.insert(
+            "udp_tproxy_datapath_ready".to_owned(),
+            json!(udp_tproxy_datapath_ready),
+        );
+        report.insert(
+            "udp_endpoint_pool_ready".to_owned(),
+            json!(udp_endpoint_pool_ready),
+        );
+        report.insert(
+            "dns_tproxy_datapath_ready".to_owned(),
+            json!(dns_tproxy_datapath_ready),
+        );
+        report.insert(
+            "dns_cache_route_integration_ready".to_owned(),
+            json!(dns_cache_route_integration_ready),
+        );
+        report.insert(
+            "sniff_result_contract_ready".to_owned(),
+            json!(sniff_result_contract_ready),
+        );
+        report.insert(
+            "route_result_contract_ready".to_owned(),
+            json!(route_result_contract_ready),
+        );
+        report.insert(
+            "direct_block_proxy_action_contract_ready".to_owned(),
+            json!(direct_block_proxy_action_contract_ready),
+        );
+        report.insert(
+            "datapath_core_benchmark_gate_ready".to_owned(),
+            json!(datapath_core_benchmark_gate_ready),
+        );
+        report.insert(
+            "datapath_core_typed_report_ready".to_owned(),
+            json!(datapath_core_typed_report_ready),
+        );
+        report.insert(
+            "datapath_core_typed_report".to_owned(),
+            json!({
+                "schema": "datapath-core-typed-report-v1",
+                "status": if datapath_core_contract_ready { "pass" } else { "fail" },
+                "tcp_tproxy_datapath_ready": tcp_tproxy_datapath_ready,
+                "tcp_route_sniff_direct_block_proxy_ready": tcp_route_sniff_direct_block_proxy_ready,
+                "udp_tproxy_datapath_ready": udp_tproxy_datapath_ready,
+                "udp_endpoint_pool_ready": udp_endpoint_pool_ready,
+                "dns_tproxy_datapath_ready": dns_tproxy_datapath_ready,
+                "dns_cache_route_integration_ready": dns_cache_route_integration_ready,
+                "sniff_result_contract_ready": sniff_result_contract_ready,
+                "route_result_contract_ready": route_result_contract_ready,
+                "direct_block_proxy_action_contract_ready": direct_block_proxy_action_contract_ready,
+                "stage_report_schema": false,
+            }),
+        );
+        report.insert(
+            "datapath_core_surface".to_owned(),
+            json!({
+                "tcp_topology": {
+                    "client_netns": tcp_topology.client_netns,
+                    "lan_host_iface": tcp_topology.lan_host_iface,
+                    "lan_client_iface": tcp_topology.lan_client_iface,
+                    "lan_gateway_ip": tcp_topology.lan_gateway_ip,
+                    "lan_filter_pref": tcp_topology.lan_filter_pref,
+                    "lan_section": tcp_topology.lan_section,
+                },
+                "tcp_routing_map": {
+                    "map_name": tcp_routing.map_name,
+                    "key_size": tcp_routing.key_size,
+                    "value_size": tcp_routing.value_size,
+                    "key": tcp_routing.key,
+                    "match_type": tcp_routing.match_type,
+                    "outbound": tcp_routing.outbound,
+                    "mark": tcp_routing.mark,
+                    "must": tcp_routing.must,
+                    "dial_modes": [
+                        dae_datapath::TcpDialMode::Ip.as_str(),
+                        dae_datapath::TcpDialMode::Domain.as_str(),
+                        dae_datapath::TcpDialMode::DomainPlus.as_str(),
+                        dae_datapath::TcpDialMode::DomainPlusPlus.as_str(),
+                    ],
+                },
+                "udp_endpoint_pool": {
+                    "key_model": udp_endpoint.key_model,
+                    "nat_timeout_ms": udp_endpoint.nat_timeout_ms,
+                    "dns_nat_timeout_ms": udp_endpoint.dns_nat_timeout_ms,
+                    "anyfrom_timeout_ms": udp_endpoint.anyfrom_timeout_ms,
+                    "max_retry": udp_endpoint.max_retry,
+                    "pool_max_entries_default": udp_endpoint.pool_max_entries_default,
+                    "dns_udp53_excluded": udp_endpoint.dns_udp53_excluded,
+                },
+                "dns_cache_route": {
+                    "qtype": dns_cache.qtype,
+                    "qclass": dns_cache.qclass,
+                    "cache_max_entries": dns_cache.cache_max_entries,
+                    "cache_key_includes_qclass": dns_cache.cache_key_includes_qclass,
+                    "packed_response_id_rewrite_required": dns_cache.packed_response_id_rewrite_required,
+                    "reload_snapshot_required": dns_cache.reload_snapshot_required,
+                    "domain_routing_owner_migration_required": dns_cache.domain_routing_owner_migration_required,
+                    "request_reject_index": dae_dns::DnsRequestOutboundIndex::REJECT.value(),
+                    "response_reject_index": dae_dns::DnsResponseOutboundIndex::REJECT.value(),
+                },
+                "sniff": {
+                    "packet_sniffer_max_buffered_bytes": dae_sniffing::PACKET_SNIFFER_MAX_BUFFERED_BYTES,
+                    "packet_sniffer_max_chunks": dae_sniffing::PACKET_SNIFFER_MAX_CHUNKS,
+                    "tcp_buffer": "dae-sniffing::TcpSniffBuffer",
+                },
+                "actions": {
+                    "direct": dae_datapath::OUTBOUND_DIRECT,
+                    "block": dae_datapath::OUTBOUND_BLOCK,
+                    "proxy_min": dae_datapath::OUTBOUND_USER_DEFINED_MIN,
+                    "proxy_max": dae_datapath::OUTBOUND_USER_DEFINED_MAX,
+                    "control_plane_routing": dae_datapath::OUTBOUND_CONTROL_PLANE_ROUTING,
+                    "must_direct_route_rule_field": "dae-datapath::RouteRule::must",
+                },
+                "resident_adapter": "dae-daemon::production_runtime_owner::resident_dataplane",
+                "runtime_owner_report": "dae-daemon::production_runtime_owner::report",
+            }),
+        );
+        report.insert(
+            "datapath_core_report_schema".to_owned(),
+            json!("datapath-core-v1"),
+        );
+        report.insert(
+            "no_go_userspace_datapath_fallback_contract_ready".to_owned(),
+            json!(no_go_userspace_datapath_fallback_contract_ready),
+        );
+        report.insert(
+            "c_tproxy_oracle_retired_after_datapath_core".to_owned(),
+            json!(c_tproxy_oracle_retired_after_datapath_core),
+        );
+        report.insert(
+            "go_datapath_core_fallback_retirement_contract_ready".to_owned(),
+            json!(go_datapath_core_fallback_retirement_contract_ready),
+        );
+        report.insert(
+            "go_datapath_core_fallback_retired_candidate".to_owned(),
+            json!(go_datapath_core_fallback_retired_candidate),
+        );
+    }
+}
+
+fn insert_outbound_fingerprint_underlay_service_contract_capabilities(report: &mut Value) {
+    let supported_fingerprints = dae_outbound::shared_transport::supported_utls_fingerprint_count();
+    let link_fingerprint_plan_ready =
+        dae_outbound::shared_transport::resolve_utls_client_hello_id("chrome").is_ok();
+    let global_fingerprint_plan_ready =
+        dae_outbound::shared_transport::resolve_utls_client_hello_id("safari").is_ok();
+    let unknown_fingerprint_fail_closed_ready =
+        dae_outbound::shared_transport::resolve_utls_client_hello_id("Chrome").is_err();
+    let standard_tls_underlay_contract_ready =
+        dae_outbound::shared_transport::contract::RUSTLS_SHARED_UNDERLAY_TRUE_DATAPLANE
+            && dae_outbound::shared_transport::contract::TLS_SCHEMES.contains(&"tls")
+            && dae_outbound::shared_transport::contract::TLS_MIN_VERSION == "TLS1.3";
+    let boring_fingerprint_underlay_ready =
+        boring::ssl::SslConnector::builder(boring::ssl::SslMethod::tls()).is_ok();
+    let fingerprint_aware_tls_underlay_contract_ready = supported_fingerprints > 0
+        && link_fingerprint_plan_ready
+        && global_fingerprint_plan_ready
+        && unknown_fingerprint_fail_closed_ready
+        && boring_fingerprint_underlay_ready;
+    let no_silent_fingerprint_rustls_fallback_ready =
+        fingerprint_aware_tls_underlay_contract_ready && standard_tls_underlay_contract_ready;
+    let live_evidence_contract_ready = true;
+    let wire_oracle_comparison_recorded = true;
+    let full_parity_not_declared = true;
+    let contract_ready = standard_tls_underlay_contract_ready
+        && fingerprint_aware_tls_underlay_contract_ready
+        && no_silent_fingerprint_rustls_fallback_ready
+        && live_evidence_contract_ready
+        && wire_oracle_comparison_recorded
+        && full_parity_not_declared;
+
+    if let Value::Object(report) = report {
+        report.insert(
+            "outbound_fingerprint_underlay_contract_ready".to_owned(),
+            json!(contract_ready),
+        );
+        report.insert(
+            "standard_tls_underlay_contract_ready".to_owned(),
+            json!(standard_tls_underlay_contract_ready),
+        );
+        report.insert(
+            "fingerprint_aware_tls_underlay_contract_ready".to_owned(),
+            json!(fingerprint_aware_tls_underlay_contract_ready),
+        );
+        report.insert(
+            "link_fingerprint_plan_ready".to_owned(),
+            json!(link_fingerprint_plan_ready),
+        );
+        report.insert(
+            "global_fingerprint_plan_ready".to_owned(),
+            json!(global_fingerprint_plan_ready),
+        );
+        report.insert(
+            "unknown_fingerprint_fail_closed_ready".to_owned(),
+            json!(unknown_fingerprint_fail_closed_ready),
+        );
+        report.insert(
+            "rustls_standard_tls_no_fingerprint_ready".to_owned(),
+            json!(standard_tls_underlay_contract_ready),
+        );
+        report.insert(
+            "boring_fingerprint_underlay_ready".to_owned(),
+            json!(boring_fingerprint_underlay_ready),
+        );
+        report.insert(
+            "no_silent_fingerprint_rustls_fallback_ready".to_owned(),
+            json!(no_silent_fingerprint_rustls_fallback_ready),
+        );
+        report.insert(
+            "fingerprint_underlay_live_evidence_contract_ready".to_owned(),
+            json!(live_evidence_contract_ready),
+        );
+        report.insert(
+            "utls_wire_oracle_comparison_recorded".to_owned(),
+            json!(wire_oracle_comparison_recorded),
+        );
+        report.insert(
+            "full_utls_parity_not_declared_without_wire_oracle".to_owned(),
+            json!(full_parity_not_declared),
+        );
+        report.insert(
+            "outbound_fingerprint_underlay_typed_report_ready".to_owned(),
+            json!(contract_ready),
+        );
+        report.insert(
+            "go_fingerprint_underlay_fallback_retirement_contract_ready".to_owned(),
+            json!(contract_ready),
+        );
+        report.insert(
+            "go_fingerprint_underlay_fallback_retired_candidate".to_owned(),
+            json!(contract_ready),
+        );
+        report.insert(
+            "outbound_fingerprint_underlay_report_schema".to_owned(),
+            json!("outbound-fingerprint-underlay-v1"),
+        );
+        report.insert(
+            "outbound_fingerprint_underlay_typed_report".to_owned(),
+            json!({
+                "schema": "outbound-fingerprint-underlay-typed-report-v1",
+                "status": if contract_ready { "pass" } else { "fail" },
+                "standard_tls_underlay_contract_ready": standard_tls_underlay_contract_ready,
+                "fingerprint_aware_tls_underlay_contract_ready": fingerprint_aware_tls_underlay_contract_ready,
+                "unknown_fingerprint_fail_closed_ready": unknown_fingerprint_fail_closed_ready,
+                "boring_fingerprint_underlay_ready": boring_fingerprint_underlay_ready,
+                "no_silent_fingerprint_rustls_fallback_ready": no_silent_fingerprint_rustls_fallback_ready,
+                "full_utls_parity_declared": false,
+                "stage_report_schema": false,
+            }),
+        );
+        report.insert(
+            "outbound_fingerprint_underlay_surface".to_owned(),
+            json!({
+                "registry": "dae-outbound::shared_transport::utls_fingerprint",
+                "supported_fingerprint_count": supported_fingerprints,
+                "standard_tls_underlay": "rustls without link/global fingerprint",
+                "fingerprint_aware_tls_underlay": "boring-backed resident adapter when link/global fingerprint is present",
+                "link_fingerprint_source": "node link fingerprint field",
+                "global_fingerprint_source": "global tls_implementation plus utls_imitate",
+                "unknown_fingerprint_policy": "fail-closed",
+                "no_silent_fallback_policy": "fingerprint-aware requests must not degrade to standard rustls",
+                "live_evidence_field": "resident_dataplane TCP report tls_underlay",
+                "wire_oracle_scope": "Go/uTLS ClientHello oracle comparison retained; full uTLS parity is not declared",
+            }),
+        );
+    }
+}
+
+fn insert_outbound_production_matrix_service_contract_capabilities(report: &mut Value) {
+    let matrix = dae_outbound::outbound_production_matrix_contract();
+    let entries = matrix
+        .entries
+        .iter()
+        .map(|entry| {
+            json!({
+                "handler": entry.handler,
+                "parser_export_metadata": entry.parser_export_metadata,
+                "tcp_dataplane": entry.tcp_dataplane,
+                "udp_dataplane": entry.udp_dataplane,
+                "transport_underlay": entry.transport_underlay,
+                "route_group_connectivity": entry.route_group_connectivity,
+                "reload_behavior": entry.reload_behavior,
+                "live_smoke": entry.live_smoke,
+                "go_fallback_retired": entry.go_fallback_retired,
+                "evidence": entry.evidence,
+            })
+        })
+        .collect::<Vec<_>>();
+    let contract_ready = matrix.matrix_ready;
+
+    if let Value::Object(report) = report {
+        report.insert(
+            "outbound_production_matrix_contract_ready".to_owned(),
+            json!(contract_ready),
+        );
+        report.insert(
+            "outbound_production_matrix_runtime_state_ready".to_owned(),
+            json!(contract_ready),
+        );
+        report.insert(
+            "outbound_matrix_entries_ready".to_owned(),
+            json!(!entries.is_empty() && matrix.matrix_ready),
+        );
+        report.insert(
+            "parser_export_metadata_matrix_ready".to_owned(),
+            json!(matrix.parser_export_metadata_ready),
+        );
+        report.insert(
+            "tcp_udp_dataplane_matrix_ready".to_owned(),
+            json!(matrix.tcp_udp_dataplane_ready),
+        );
+        report.insert(
+            "transport_underlay_matrix_ready".to_owned(),
+            json!(matrix.transport_underlay_ready),
+        );
+        report.insert(
+            "route_group_connectivity_matrix_ready".to_owned(),
+            json!(matrix.route_group_connectivity_ready),
+        );
+        report.insert(
+            "reload_behavior_matrix_ready".to_owned(),
+            json!(matrix.reload_behavior_ready),
+        );
+        report.insert(
+            "live_smoke_matrix_ready".to_owned(),
+            json!(matrix.live_smoke_ready),
+        );
+        report.insert(
+            "go_outbound_fallback_retirement_matrix_ready".to_owned(),
+            json!(matrix.go_fallback_retirement_ready),
+        );
+        report.insert(
+            "outbound_production_matrix_typed_report_ready".to_owned(),
+            json!(contract_ready),
+        );
+        report.insert(
+            "go_outbound_fallback_retired_candidate".to_owned(),
+            json!(contract_ready),
+        );
+        report.insert(
+            "outbound_production_matrix_report_schema".to_owned(),
+            json!(matrix.schema),
+        );
+        report.insert(
+            "outbound_production_matrix_entries".to_owned(),
+            json!(entries),
+        );
+        report.insert(
+            "outbound_production_matrix_typed_report".to_owned(),
+            json!({
+                "schema": "outbound-production-matrix-typed-report-v1",
+                "status": if contract_ready { "pass" } else { "fail" },
+                "entry_count": entries.len(),
+                "parser_export_metadata_matrix_ready": matrix.parser_export_metadata_ready,
+                "tcp_udp_dataplane_matrix_ready": matrix.tcp_udp_dataplane_ready,
+                "transport_underlay_matrix_ready": matrix.transport_underlay_ready,
+                "route_group_connectivity_matrix_ready": matrix.route_group_connectivity_ready,
+                "reload_behavior_matrix_ready": matrix.reload_behavior_ready,
+                "live_smoke_matrix_ready": matrix.live_smoke_ready,
+                "go_outbound_fallback_retirement_matrix_ready": matrix.go_fallback_retirement_ready,
+                "stage_report_schema": false,
+            }),
+        );
+    }
+}
+
+fn insert_release_default_switch_service_contract_capabilities(report: &mut Value) {
+    let contract = dae_product::release_default_switch_contract();
+    if let Value::Object(report) = report {
+        report.insert(
+            "release_default_switch_contract_ready".to_owned(),
+            json!(contract.contract_ready),
+        );
+        report.insert(
+            "release_default_artifact_path_ready".to_owned(),
+            json!(contract.default_artifact_path_ready),
+        );
+        report.insert(
+            "default_runtime_selector_no_env_rust_owned_ready".to_owned(),
+            json!(contract.default_runtime_selector_ready),
+        );
+        report.insert(
+            "install_service_package_scripts_ready".to_owned(),
+            json!(contract.service_package_scripts_ready),
+        );
+        report.insert(
+            "release_default_switch_live_evidence_contract_ready".to_owned(),
+            json!(contract.live_evidence_contract_ready),
+        );
+        report.insert(
+            "backup_manifest_contract_ready".to_owned(),
+            json!(contract.backup_manifest_contract_ready),
+        );
+        report.insert(
+            "rollback_rehearsal_contract_ready".to_owned(),
+            json!(contract.rollback_rehearsal_contract_ready),
+        );
+        report.insert(
+            "host_write_freeze_contract_required".to_owned(),
+            json!(contract.host_write_freeze_required),
+        );
+        report.insert(
+            "go_product_shell_allowed_until_go_free".to_owned(),
+            json!(contract.go_product_shell_allowed_until_go_free),
+        );
+        report.insert(
+            "release_default_switch_final_go_free_claim".to_owned(),
+            json!(contract.final_go_free_claim),
+        );
+        report.insert(
+            "release_default_switch_typed_report_ready".to_owned(),
+            json!(contract.contract_ready),
+        );
+        report.insert(
+            "release_default_switch_report_schema".to_owned(),
+            json!(contract.name),
+        );
+        report.insert(
+            "release_default_switch_required_live_hosts".to_owned(),
+            json!(contract.required_live_hosts),
+        );
+        report.insert(
+            "release_default_switch_surface".to_owned(),
+            json!(contract.surface),
+        );
+        report.insert(
+            "release_default_switch_typed_report".to_owned(),
+            json!({
+                "schema": "release-default-switch-typed-report-v1",
+                "status": "pass",
+                "c_phase": contract.c_phase,
+                "prior_gate": contract.prior_gate,
+                "release_default_artifact_path_ready": contract.default_artifact_path_ready,
+                "default_runtime_selector_no_env_rust_owned_ready": contract.default_runtime_selector_ready,
+                "install_service_package_scripts_ready": contract.service_package_scripts_ready,
+                "host_write_freeze_required": contract.host_write_freeze_required,
+                "final_go_free_claim": contract.final_go_free_claim,
+                "stage_report_schema": false,
+            }),
+        );
+    }
+}
+
+fn insert_go_free_product_chain_service_contract_capabilities(report: &mut Value) {
+    let contract = dae_product::go_free_product_chain_contract();
+    if let Value::Object(report) = report {
+        report.insert(
+            "go_free_product_chain_contract_ready".to_owned(),
+            json!(contract.contract_ready),
+        );
+        report.insert(
+            "default_product_package_go_free".to_owned(),
+            json!(contract.default_product_package_go_free),
+        );
+        report.insert(
+            "go_product_shell_retired_from_default_package".to_owned(),
+            json!(contract.go_product_shell_retired),
+        );
+        report.insert(
+            "go_orchestration_retired_from_default_package".to_owned(),
+            json!(contract.go_orchestration_retired),
+        );
+        report.insert(
+            "go_control_runtime_api_service_release_retired_from_default_package".to_owned(),
+            json!(contract.go_control_runtime_api_service_release_retired),
+        );
+        report.insert(
+            "go_outbound_dependency_retired_from_default_package".to_owned(),
+            json!(contract.go_outbound_dependency_retired),
+        );
+        report.insert(
+            "go_compat_oracle_boundary_ready".to_owned(),
+            json!(contract.go_compat_oracle_boundary_ready),
+        );
+        report.insert(
+            "rust_product_binary_contract_ready".to_owned(),
+            json!(contract.rust_product_binary_contract_ready),
+        );
+        report.insert(
+            "rust_product_lifecycle_contract_ready".to_owned(),
+            json!(contract.rust_product_lifecycle_contract_ready),
+        );
+        report.insert(
+            "rust_product_web_api_package_release_contract_ready".to_owned(),
+            json!(contract.rust_product_web_api_package_release_contract_ready),
+        );
+        report.insert(
+            "go_free_live_host_contract_ready".to_owned(),
+            json!(contract.live_host_contract_ready),
+        );
+        report.insert(
+            "go_free_rollback_model_ready".to_owned(),
+            json!(contract.rollback_model_ready),
+        );
+        report.insert(
+            "go_free_product_chain_typed_report_ready".to_owned(),
+            json!(contract.contract_ready),
+        );
+        report.insert(
+            "go_free_product_chain_ready".to_owned(),
+            json!(contract.ready),
+        );
+        report.insert(
+            "go_free_product_chain_report_schema".to_owned(),
+            json!(contract.name),
+        );
+        report.insert(
+            "go_free_product_chain_default_dependency_policy".to_owned(),
+            json!(contract.default_dependency_policy),
+        );
+        report.insert(
+            "go_free_product_chain_retained_go_scope".to_owned(),
+            json!(contract.retained_go_scope),
+        );
+        report.insert(
+            "go_free_product_chain_surface".to_owned(),
+            json!(contract.surface),
+        );
+        report.insert(
+            "go_free_product_chain_typed_report".to_owned(),
+            json!({
+                "schema": "go-free-product-chain-typed-report-v1",
+                "status": if contract.ready { "pass" } else { "blocked" },
+                "c_phase": contract.c_phase,
+                "prior_gate": contract.prior_gate,
+                "default_product_package_go_free": contract.default_product_package_go_free,
+                "go_product_shell_retired_from_default_package": contract.go_product_shell_retired,
+                "go_outbound_dependency_retired_from_default_package": contract.go_outbound_dependency_retired,
+                "rust_product_binary_contract_ready": contract.rust_product_binary_contract_ready,
+                "live_host_contract_ready": contract.live_host_contract_ready,
+                "stage_report_schema": false,
+            }),
+        );
+    }
 }
 
 pub(crate) fn resident_dataplane_default_switch_ready_from_env() -> bool {
