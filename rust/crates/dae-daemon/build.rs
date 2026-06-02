@@ -14,6 +14,7 @@ fn main() {
     println!("cargo:rerun-if-env-changed=DAE_RUST_NATIVE_BPF_CARGO");
     println!("cargo:rerun-if-env-changed=DAE_RUST_NATIVE_BPF_TOOLCHAIN");
     println!("cargo:rerun-if-env-changed={RUST_NATIVE_BPF_OBJECT_ENV}");
+    println!("cargo:rerun-if-env-changed=DAE_EXPERIMENT_VLESS_VISION_FP_RUST_NATIVE");
 
     if env::var_os("CARGO_FEATURE_NATIVE_EBPF").is_none() {
         return;

@@ -139,7 +139,7 @@ fn product_chain_recertification_blocks_wrong_daed2_branch_contract() {
     init_fixture_repo(&fixture.join("dae-wing"), "daewing2.0");
     init_fixture_repo(&fixture.join("daed"), "daed2.0");
     init_fixture_repo(&fixture.join("outbound"), "outboundrust");
-    init_fixture_repo(&fixture.join("quic-go"), "quic-go-rust");
+    init_fixture_repo(&fixture.join("quic-go"), "quic-go-daex-align");
 
     let options = ProductChainRecertificationOptions {
         execute: true,

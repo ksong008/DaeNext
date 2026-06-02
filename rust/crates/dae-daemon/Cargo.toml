@@ -23,6 +23,7 @@ dae-netutil.workspace = true
 dae-outbound.workspace = true
 dae-routing.workspace = true
 dae-sniffing.workspace = true
+boring.workspace = true
 fastrand.workspace = true
 libc.workspace = true
 rustls.workspace = true
