@@ -2,6 +2,7 @@ pub mod bpf_loader;
 pub mod config_validate;
 pub mod control_plane;
 pub mod control_plane_entrypoint;
+pub mod daed_product;
 pub mod default_run;
 pub mod default_run_identity;
 pub mod identity;
@@ -33,6 +34,7 @@ pub use control_plane::{
 pub use control_plane_entrypoint::{
     control_plane_entrypoint_admission_report, default_control_plane_entrypoint_admission_root,
 };
+pub use daed_product::{DaedProductOutput, run_daed_product_with_args_and_version};
 pub use default_run::{
     RunOptions, default_run_root, product_chain_admission_from_run_report, run_default_optin_report,
 };

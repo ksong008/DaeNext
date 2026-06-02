@@ -20,6 +20,8 @@ pub const PID_FILE_PATH: &str = "/var/run/dae.pid";
 pub const PROGRESS_FILE_PATH: &str = "/var/run/dae.progress";
 pub const ABORT_FILE_PATH: &str = "/var/run/dae.abort";
 pub(crate) const RESIDENT_DATAPLANE_ENV: &str = "DAE_RUST_RESIDENT_DATAPLANE";
+pub const DAED_PRIMARY_STATE_STORE: &str = "/etc/daed/daed.db";
+pub const DAED_PROTECTED_ROLLBACK_STATE_STORE: &str = "/etc/daed/wing.db";
 pub const RESIDENT_RUNTIME_MAX_RSS_BYTES: u64 = 512 * 1024 * 1024;
 pub const RESIDENT_RUNTIME_MAX_THREAD_COUNT: u64 = 256;
 pub const RESIDENT_RUNTIME_MAX_FD_COUNT: u64 = 1024;
@@ -138,6 +140,13 @@ pub fn service_contract_capabilities(version: &str) -> Value {
         "pid_file_path": PID_FILE_PATH,
         "progress_file_path": PROGRESS_FILE_PATH,
         "abort_file_path": ABORT_FILE_PATH,
+        "primary_state_store": DAED_PRIMARY_STATE_STORE,
+        "protected_rollback_state_store": DAED_PROTECTED_ROLLBACK_STATE_STORE,
+        "rust_daed_writes_wing_db_by_default": false,
+        "wing_db_import_supported": true,
+        "wing_db_import_destructive_by_default": false,
+        "daed_db_primary_required": true,
+        "var_lib_daed_required_by_default": false,
         "reload_progress_bytes": {
             "send": (RELOAD_SEND as char).to_string(),
             "processing": (RELOAD_PROCESSING as char).to_string(),
