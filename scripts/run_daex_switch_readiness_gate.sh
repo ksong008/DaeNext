@@ -61,10 +61,12 @@ if [[ -z "$matched_go_work" && -f "$workspace_go_work" ]]; then
   esac
 fi
 product_chain_dae_repo="${PRODUCT_CHAIN_DAE_REPO:-$repo_root}"
-product_chain_dae_wing_repo="${PRODUCT_CHAIN_DAE_WING_REPO:-/root/project/dae-wing-daex-align}"
 product_chain_daed_repo="${PRODUCT_CHAIN_DAED_REPO:-/root/project/daed-daex-align/daed}"
+product_chain_dae_wing_repo="${PRODUCT_CHAIN_DAE_WING_REPO:-${product_chain_daed_repo}/wing}"
 product_chain_outbound_repo="${PRODUCT_CHAIN_OUTBOUND_REPO:-/root/project/outbound-daex-align}"
 product_chain_quic_go_repo="${PRODUCT_CHAIN_QUIC_GO_REPO:-/root/project/quic-go-daex-align}"
+product_chain_service_file="${PRODUCT_CHAIN_SERVICE_FILE:-${product_chain_daed_repo}/install/daed.service}"
+product_chain_go_mod_file="${PRODUCT_CHAIN_GO_MOD_FILE:-${product_chain_dae_repo}/go.mod}"
 
 case "$gate_root" in
   /tmp/dae-daex-switch-readiness-gate*) ;;
@@ -239,6 +241,8 @@ echo "product-chain dae-wing repo: $product_chain_dae_wing_repo"
 echo "product-chain daed repo: $product_chain_daed_repo"
 echo "product-chain outbound repo: $product_chain_outbound_repo"
 echo "product-chain quic-go repo: $product_chain_quic_go_repo"
+echo "product-chain service file: $product_chain_service_file"
+echo "product-chain go.mod file: $product_chain_go_mod_file"
 if ! "$candidate_binary" run \
   --config "$config_file" \
   --root "$product_run_root" \
@@ -260,8 +264,8 @@ if ! "$candidate_binary" run \
   --product-chain-daed-repo "$product_chain_daed_repo" \
   --product-chain-outbound-repo "$product_chain_outbound_repo" \
   --product-chain-quic-go-repo "$product_chain_quic_go_repo" \
-  --product-chain-service-file install/dae.service \
-  --product-chain-go-mod-file go.mod \
+  --product-chain-service-file "$product_chain_service_file" \
+  --product-chain-go-mod-file "$product_chain_go_mod_file" \
   --ack-root-gate \
   --exit-after-ready >"$product_log" 2>&1; then
   echo "daed2.0 product-chain recertification failed; tail follows" >&2
@@ -311,6 +315,15 @@ native_gate_passed = (
 matched_recorded = matched.get("matched_go_rust_default_daemon_benchmark_recorded") is True
 product_chain_clean = product.get("product_chain_recertification_clean") is True
 product_switch_allowed = product.get("product_chain_switch_allowed") is True
+datapath_core_ready = product.get("datapath_core_ready") is True
+datapath_core_default_switch_admission_ready = product.get("datapath_core_default_switch_admission_ready") is True
+outbound_fingerprint_underlay_ready = product.get("outbound_fingerprint_underlay_ready") is True
+outbound_fingerprint_underlay_default_switch_admission_ready = product.get("outbound_fingerprint_underlay_default_switch_admission_ready") is True
+outbound_production_matrix_ready = product.get("outbound_production_matrix_ready") is True
+outbound_production_matrix_default_switch_admission_ready = product.get("outbound_production_matrix_default_switch_admission_ready") is True
+release_default_switch_admission_ready = product.get("release_default_switch_admission_ready") is True
+release_default_switch_ready = product.get("release_default_switch_ready") is True
+go_free_product_chain_ready = product.get("go_free_product_chain_ready") is True
 readiness_passed = readiness.get("ready_for_manual_authorization") is True
 rehearsal_required = topology.get("daed2_wing_repo_used") is True
 rehearsal_passed = (rehearsal.get("pass") is True) if rehearsal_required else True
@@ -320,6 +333,14 @@ core_switch_readiness_passed = (
     and matched_recorded
     and admission.get("true_rust_default_daemon_admitted") is True
     and product_chain_clean
+    and datapath_core_ready
+    and datapath_core_default_switch_admission_ready
+    and outbound_fingerprint_underlay_ready
+    and outbound_fingerprint_underlay_default_switch_admission_ready
+    and outbound_production_matrix_ready
+    and outbound_production_matrix_default_switch_admission_ready
+    and release_default_switch_admission_ready
+    and release_default_switch_ready
     and product_switch_allowed
     and readiness_passed
     and rehearsal_passed
@@ -342,6 +363,14 @@ summary = {
         "matched_go_rust_default_daemon_benchmark_recorded": matched_recorded,
         "true_rust_default_daemon_admitted": admission.get("true_rust_default_daemon_admitted") is True,
         "product_chain_recertification_clean": product_chain_clean,
+        "datapath_core_ready": datapath_core_ready,
+        "datapath_core_default_switch_admission_ready": datapath_core_default_switch_admission_ready,
+        "outbound_fingerprint_underlay_ready": outbound_fingerprint_underlay_ready,
+        "outbound_fingerprint_underlay_default_switch_admission_ready": outbound_fingerprint_underlay_default_switch_admission_ready,
+        "outbound_production_matrix_ready": outbound_production_matrix_ready,
+        "outbound_production_matrix_default_switch_admission_ready": outbound_production_matrix_default_switch_admission_ready,
+        "release_default_switch_admission_ready": release_default_switch_admission_ready,
+        "release_default_switch_ready": release_default_switch_ready,
         "product_chain_switch_allowed": product_switch_allowed,
         "production_replacement_ready_for_manual_authorization": readiness_passed,
         "product_chain_switch_rehearsal_passed_or_not_required": rehearsal_passed,
@@ -349,6 +378,11 @@ summary = {
         "go_fallback_retired": product.get("go_fallback_retired") is True,
         "go_fallback_not_required": product.get("go_fallback_required") is False,
         "go_default_path_preserved": product.get("go_default_path_preserved") is True,
+    },
+    "go_free_product_chain": {
+        "ready": go_free_product_chain_ready,
+        "gate": product.get("go_free_product_chain_gate"),
+        "c10_is_not_required_for_c9_switch": True,
     },
     "blockers": [],
     "artifacts": {
