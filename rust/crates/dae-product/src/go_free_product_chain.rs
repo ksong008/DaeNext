@@ -1,0 +1,53 @@
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct GoFreeProductChainContract {
+    pub name: &'static str,
+    pub c_phase: &'static str,
+    pub prior_gate: &'static str,
+    pub contract_ready: bool,
+    pub default_product_package_go_free: bool,
+    pub go_product_shell_retired: bool,
+    pub go_orchestration_retired: bool,
+    pub go_control_runtime_api_service_release_retired: bool,
+    pub go_outbound_dependency_retired: bool,
+    pub go_compat_oracle_boundary_ready: bool,
+    pub rust_product_binary_contract_ready: bool,
+    pub rust_product_lifecycle_contract_ready: bool,
+    pub rust_product_web_api_package_release_contract_ready: bool,
+    pub live_host_contract_ready: bool,
+    pub rollback_model_ready: bool,
+    pub ready: bool,
+    pub default_dependency_policy: &'static str,
+    pub retained_go_scope: &'static str,
+    pub surface: Vec<&'static str>,
+}
+
+pub fn go_free_product_chain_contract() -> GoFreeProductChainContract {
+    GoFreeProductChainContract {
+        name: "go-free-product-chain-v1",
+        c_phase: "C10",
+        prior_gate: "release-default-switch-v1",
+        contract_ready: true,
+        default_product_package_go_free: false,
+        go_product_shell_retired: false,
+        go_orchestration_retired: false,
+        go_control_runtime_api_service_release_retired: false,
+        go_outbound_dependency_retired: false,
+        go_compat_oracle_boundary_ready: true,
+        rust_product_binary_contract_ready: false,
+        rust_product_lifecycle_contract_ready: false,
+        rust_product_web_api_package_release_contract_ready: false,
+        live_host_contract_ready: false,
+        rollback_model_ready: true,
+        ready: false,
+        default_dependency_policy: "Go dependencies are not allowed in the default product package after this gate passes",
+        retained_go_scope: "oracle/test/compat only until the final product package is proven go-free",
+        surface: vec![
+            "Rust product binary owns run/reload/stop/service-contract",
+            "Rust product binary owns Web/API/package/release entry points",
+            "Go product shell is absent from default package and release path",
+            "Go orchestration and Go outbound dependencies are absent from default package",
+            "Go compatibility code is retained only as oracle/test/compat evidence",
+            "live host and rollback evidence pass on the final go-free package",
+        ],
+    }
+}

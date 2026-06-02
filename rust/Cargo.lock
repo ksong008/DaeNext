@@ -569,6 +569,7 @@ dependencies = [
  "dae-geodata",
  "dae-netutil",
  "dae-outbound",
+ "dae-product",
  "dae-routing",
  "dae-sniffing",
  "fastrand",

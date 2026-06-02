@@ -14,6 +14,7 @@ pub mod juicity;
 pub mod latency;
 pub mod link_parser;
 pub mod policy;
+pub mod production_matrix;
 pub mod shadowsocks;
 pub mod shared_transport;
 pub mod socks5;
@@ -43,6 +44,10 @@ pub use juicity::JuicityLink;
 pub use latency::LatenciesN;
 pub use link_parser::{LinkNode, LinkParseResult, parse_link_chain};
 pub use policy::SelectionPolicy;
+pub use production_matrix::{
+    OutboundProductionMatrixContract, OutboundProductionMatrixEntry,
+    outbound_production_matrix_contract, production_matrix_entries,
+};
 pub use shadowsocks::{
     CipherFamily, CipherInfo, ShadowsocksLink, ShadowsocksMetadata, Sip003, Sip003Opts,
 };
