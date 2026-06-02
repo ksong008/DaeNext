@@ -64,7 +64,7 @@ product_chain_dae_repo="${PRODUCT_CHAIN_DAE_REPO:-$repo_root}"
 product_chain_dae_wing_repo="${PRODUCT_CHAIN_DAE_WING_REPO:-/root/project/dae-wing-daex-align}"
 product_chain_daed_repo="${PRODUCT_CHAIN_DAED_REPO:-/root/project/daed-daex-align/daed}"
 product_chain_outbound_repo="${PRODUCT_CHAIN_OUTBOUND_REPO:-/root/project/outbound-daex-align}"
-product_chain_quic_go_repo="${PRODUCT_CHAIN_QUIC_GO_REPO:-/root/project/quic-go-rust}"
+product_chain_quic_go_repo="${PRODUCT_CHAIN_QUIC_GO_REPO:-/root/project/quic-go-daex-align}"
 
 case "$gate_root" in
   /tmp/dae-daex-switch-readiness-gate*) ;;

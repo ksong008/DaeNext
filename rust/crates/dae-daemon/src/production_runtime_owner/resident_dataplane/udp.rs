@@ -1,4 +1,4 @@
-use std::io::{ErrorKind, Read, Write};
+use std::io::ErrorKind;
 use std::net::SocketAddrV4;
 use std::path::PathBuf;
 use std::sync::{
@@ -123,12 +123,14 @@ fn exchange_vless_udp(
 ) -> Result<Vec<u8>, String> {
     let mut client = open_vless_tls_client(proxy)?;
     let request = build_vless_udp_request(proxy, original_dst, payload)?;
-    client
-        .conn
-        .writer()
-        .write_all(&request)
-        .map_err(|err| format!("queue VLESS UDP request: {err}"))?;
+    client.queue_plain(&request, "queue VLESS UDP request")?;
+    flush_tls_writes_for_udp(&mut client)?;
     read_vless_udp_response(&mut client, &proxy.flow, proxy.key)
+}
+
+fn flush_tls_writes_for_udp(client: &mut VlessTlsClient) -> Result<(), String> {
+    let stop = AtomicBool::new(false);
+    super::client::flush_tls_writes(client, &stop)
 }
 
 fn build_vless_udp_request(
@@ -216,9 +218,9 @@ fn read_vless_udp_response(
         if started.elapsed() > RESIDENT_UDP_RESPONSE_TIMEOUT {
             return Err("VLESS UDP response timeout".to_owned());
         }
-        let _ = drive_tls_io_blocking(&mut client.conn, &mut client.tcp);
+        let _ = drive_tls_io_blocking(client);
         loop {
-            match client.conn.reader().read(&mut buf) {
+            match client.read_plain(&mut buf) {
                 Ok(0) => break,
                 Ok(read) => plaintext.extend_from_slice(&buf[..read]),
                 Err(err)
@@ -335,6 +337,7 @@ mod tests {
             net: "tcp".to_owned(),
             tls: "tls".to_owned(),
             allow_insecure: false,
+            utls_fingerprint: None,
             key: [9_u8; 16],
             mark: 0,
             mptcp: false,

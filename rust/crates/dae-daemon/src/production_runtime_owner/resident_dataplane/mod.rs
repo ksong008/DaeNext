@@ -207,6 +207,18 @@ pub(super) fn start_resident_dataplane_workers(
         }));
     }
 
+    let default_proxy_utls = proxy.utls_fingerprint.as_ref().map(|fingerprint| {
+        json!({
+            "source": fingerprint.source,
+            "requested": &fingerprint.requested,
+            "name": &fingerprint.name,
+            "canonical": &fingerprint.canonical,
+            "family": &fingerprint.family,
+            "client": &fingerprint.client,
+            "randomized": fingerprint.randomized,
+            "alpn_policy": &fingerprint.alpn_policy,
+        })
+    });
     let start = json!({
         "status": "pass",
         "enabled": true,
@@ -229,6 +241,7 @@ pub(super) fn start_resident_dataplane_workers(
             "flow": proxy.flow,
             "alpn": proxy.alpn,
             "allow_insecure": proxy.allow_insecure,
+            "utls_fingerprint": default_proxy_utls,
             "mark": proxy.mark,
             "mptcp": proxy.mptcp,
         },

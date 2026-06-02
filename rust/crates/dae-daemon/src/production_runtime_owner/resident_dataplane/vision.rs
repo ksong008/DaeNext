@@ -1,8 +1,6 @@
-use std::io::Write;
 use std::sync::atomic::AtomicBool;
 
 use super::client::{VlessTlsClient, flush_tls_writes};
-use super::io::write_all_nonblocking;
 use super::{
     TLS_RECORD_HEADER_LEN, TLS_RECORD_MAX_PAYLOAD_LEN, VISION_COMMAND_CONTINUE,
     VISION_COMMAND_DIRECT, VISION_COMMAND_END,
@@ -312,12 +310,13 @@ pub(super) fn drain_vision_uplink(
             uuid_sent,
             long_padding,
         );
-        client.conn.writer().write_all(&block).map_err(|err| {
-            format!(
-                "queue VLESS Vision uplink {} block: {err}",
+        client.queue_plain(
+            &block,
+            &format!(
+                "queue VLESS Vision uplink {} block",
                 vision_command_name(VISION_COMMAND_CONTINUE)
-            )
-        })?;
+            ),
+        )?;
         flush_tls_writes(client, stop)?;
         *first_block = false;
         return Ok(());
@@ -328,12 +327,13 @@ pub(super) fn drain_vision_uplink(
             let payload = std::mem::take(pending);
             let block =
                 vision_padding_block(&payload, VISION_COMMAND_END, user_uuid, uuid_sent, false);
-            client.conn.writer().write_all(&block).map_err(|err| {
-                format!(
-                    "queue VLESS Vision uplink {} block: {err}",
+            client.queue_plain(
+                &block,
+                &format!(
+                    "queue VLESS Vision uplink {} block",
                     vision_command_name(VISION_COMMAND_END)
-                )
-            })?;
+                ),
+            )?;
             flush_tls_writes(client, stop)?;
             *mode = VisionUplinkMode::PlainOverlay;
             return Ok(());
@@ -348,12 +348,13 @@ pub(super) fn drain_vision_uplink(
         let record = pending.drain(..record_len).collect::<Vec<_>>();
         tls_state.observe_client_payload(&record)?;
         let block = vision_padding_block(&record, command, user_uuid, uuid_sent, true);
-        client.conn.writer().write_all(&block).map_err(|err| {
-            format!(
-                "queue VLESS Vision uplink {} block: {err}",
+        client.queue_plain(
+            &block,
+            &format!(
+                "queue VLESS Vision uplink {} block",
                 vision_command_name(command)
-            )
-        })?;
+            ),
+        )?;
         flush_tls_writes(client, stop)?;
         match command {
             VISION_COMMAND_END => *mode = VisionUplinkMode::PlainOverlay,
@@ -376,11 +377,7 @@ fn write_pending_after_vision_mode(
         VisionUplinkMode::PlainOverlay => {
             if !pending.is_empty() {
                 let tail = std::mem::take(pending);
-                client
-                    .conn
-                    .writer()
-                    .write_all(&tail)
-                    .map_err(|err| format!("queue pending Vision plain-overlay tail: {err}"))?;
+                client.queue_plain(&tail, "queue pending Vision plain-overlay tail")?;
                 flush_tls_writes(client, stop)?;
             }
             Ok(true)
@@ -388,8 +385,7 @@ fn write_pending_after_vision_mode(
         VisionUplinkMode::Direct => {
             if !pending.is_empty() {
                 let tail = std::mem::take(pending);
-                write_all_nonblocking(
-                    &mut client.tcp,
+                client.raw_write_all_nonblocking(
                     &tail,
                     stop,
                     "write VLESS Vision direct uplink payload",

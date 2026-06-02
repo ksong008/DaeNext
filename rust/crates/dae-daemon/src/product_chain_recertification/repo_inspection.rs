@@ -11,7 +11,7 @@ pub(super) fn expected_product_chain_branch(name: &str) -> &'static str {
         "daed" => "daed2-daex-align",
         "dae-wing" | "daed-wing" => "daewing2-daex-align",
         "outbound" => "outbound-daex-align",
-        "quic-go" => "quic-go-rust",
+        "quic-go" => "quic-go-daex-align",
         _ => "",
     }
 }
@@ -162,7 +162,10 @@ mod tests {
             expected_product_chain_branch("outbound"),
             "outbound-daex-align"
         );
-        assert_eq!(expected_product_chain_branch("quic-go"), "quic-go-rust");
+        assert_eq!(
+            expected_product_chain_branch("quic-go"),
+            "quic-go-daex-align"
+        );
     }
 
     #[test]
