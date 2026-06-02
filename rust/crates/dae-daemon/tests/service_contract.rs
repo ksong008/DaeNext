@@ -21,6 +21,31 @@ fn candidate_reports_resident_service_and_dataplane_capabilities() {
         .unwrap();
     assert!(output.status.success());
     let report: Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(
+        report["primary_state_store"].as_str().unwrap(),
+        "/etc/daed/daed.db"
+    );
+    assert_eq!(
+        report["protected_rollback_state_store"].as_str().unwrap(),
+        "/etc/daed/wing.db"
+    );
+    assert!(
+        !report["rust_daed_writes_wing_db_by_default"]
+            .as_bool()
+            .unwrap()
+    );
+    assert!(report["wing_db_import_supported"].as_bool().unwrap());
+    assert!(
+        !report["wing_db_import_destructive_by_default"]
+            .as_bool()
+            .unwrap()
+    );
+    assert!(report["daed_db_primary_required"].as_bool().unwrap());
+    assert!(
+        !report["var_lib_daed_required_by_default"]
+            .as_bool()
+            .unwrap()
+    );
     assert!(
         report["resident_run_service_contract_ready"]
             .as_bool()
