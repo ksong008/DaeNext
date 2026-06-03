@@ -7,7 +7,10 @@ use std::time::Instant;
 use dae_datapath::{TcpDirectDialOptions, TcpDirectDialReport, magic_tcp_connect};
 
 use super::io::write_all_nonblocking;
-use super::{RESIDENT_CONNECT_TIMEOUT, RESIDENT_IDLE_SLEEP, RESIDENT_TCP_IDLE_TIMEOUT};
+use super::{
+    RESIDENT_CONNECT_TIMEOUT, RESIDENT_IDLE_SLEEP, RESIDENT_TCP_IDLE_TIMEOUT,
+    ResidentDataplaneMetrics,
+};
 
 #[derive(Debug)]
 pub(super) struct DirectTcpConnection {
@@ -71,6 +74,7 @@ pub(super) fn relay_tcp_direct(
     direct: &mut TcpStream,
     stop: &AtomicBool,
     initial_payload: &[u8],
+    metrics: &ResidentDataplaneMetrics,
 ) -> Result<DirectTcpRelayStats, String> {
     let mut stats = DirectTcpRelayStats::default();
     if !initial_payload.is_empty() {
@@ -81,6 +85,7 @@ pub(super) fn relay_tcp_direct(
             "write sniffed client payload to direct TCP",
         )?;
         stats.client_to_direct += initial_payload.len();
+        metrics.add_upload(initial_payload.len());
     }
 
     let mut inbound_closed = false;
@@ -105,6 +110,7 @@ pub(super) fn relay_tcp_direct(
                         "write client payload to direct TCP",
                     )?;
                     stats.client_to_direct += read;
+                    metrics.add_upload(read);
                     progressed = true;
                 }
                 Err(err)
@@ -131,6 +137,7 @@ pub(super) fn relay_tcp_direct(
                         "write direct TCP payload to client",
                     )?;
                     stats.direct_to_client += read;
+                    metrics.add_download(read);
                     progressed = true;
                 }
                 Err(err)
@@ -194,7 +201,8 @@ mod tests {
         direct.set_nonblocking(true).unwrap();
 
         let stop = AtomicBool::new(false);
-        let stats = relay_tcp_direct(&mut inbound, &mut direct, &stop, b"HELLO").unwrap();
+        let metrics = ResidentDataplaneMetrics::default();
+        let stats = relay_tcp_direct(&mut inbound, &mut direct, &stop, b"HELLO", &metrics).unwrap();
         assert_eq!(stats.client_to_direct, 5);
         assert_eq!(stats.direct_to_client, 5);
 
@@ -225,7 +233,9 @@ mod tests {
         direct_client.set_nonblocking(true).unwrap();
         let stop = Arc::new(AtomicBool::new(false));
         stop.store(true, Ordering::Relaxed);
-        let stats = relay_tcp_direct(&mut inbound, &mut direct_client, &stop, b"").unwrap();
+        let metrics = ResidentDataplaneMetrics::default();
+        let stats =
+            relay_tcp_direct(&mut inbound, &mut direct_client, &stop, b"", &metrics).unwrap();
         assert_eq!(stats, DirectTcpRelayStats::default());
     }
 }

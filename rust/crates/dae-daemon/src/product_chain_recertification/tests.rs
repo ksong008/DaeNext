@@ -250,8 +250,8 @@ fn candidate_service_contract_value(resident_dataplane_ready: bool) -> Value {
         "outbound_fingerprint_underlay_surface".to_owned(),
         json!({
             "registry": "dae-outbound::shared_transport::utls_fingerprint",
-            "standard_tls_underlay": "rustls without link/global fingerprint",
-            "fingerprint_aware_tls_underlay": "boring-backed resident adapter",
+            "standard_tls_underlay": "rustls when no fingerprint is selected or fingerprint resolves to unsafe",
+            "fingerprint_aware_tls_underlay": "boring-backed resident adapter for link fingerprint or global fingerprint fallback",
             "unknown_fingerprint_policy": "fail-closed",
             "no_silent_fallback_policy": "fingerprint-aware requests must not degrade to standard rustls",
         }),

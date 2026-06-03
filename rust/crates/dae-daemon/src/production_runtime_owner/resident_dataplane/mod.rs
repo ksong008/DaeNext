@@ -2,7 +2,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::{
     Arc, Mutex,
-    atomic::{AtomicBool, Ordering},
+    atomic::{AtomicBool, AtomicU64, Ordering},
 };
 use std::thread::{self, JoinHandle};
 use std::time::Duration;
@@ -12,6 +12,7 @@ use dae_ebpf_support::LiveLoadedTproxyListenSocketMap;
 use serde_json::{Value, json};
 
 use self::events::path_string;
+pub(crate) use self::events::{ResidentEventLogSink, set_event_log_sink};
 use self::plan::build_resident_dataplane_plan;
 use self::tcp::{ResidentTcpRouter, resident_tcp_accept_loop};
 use self::udp::resident_udp_loop;
@@ -49,9 +50,14 @@ pub(super) struct ResidentDataplaneRuntime {
     stop: Arc<AtomicBool>,
     handles: Vec<JoinHandle<()>>,
     event_file: PathBuf,
+    metrics: Arc<ResidentDataplaneMetrics>,
 }
 
 impl ResidentDataplaneRuntime {
+    pub(super) fn metrics_snapshot(&self) -> Value {
+        self.metrics.snapshot()
+    }
+
     pub(super) fn shutdown(&mut self, steps: &mut Vec<Value>) {
         self.stop.store(true, Ordering::Relaxed);
         let mut joined = 0_usize;
@@ -69,6 +75,50 @@ impl ResidentDataplaneRuntime {
             "panicked_worker_threads": panicked,
             "event_file": path_string(&self.event_file),
         }));
+    }
+}
+
+#[derive(Debug, Default)]
+pub(super) struct ResidentDataplaneMetrics {
+    upload_total: AtomicU64,
+    download_total: AtomicU64,
+    active_tcp_connections: AtomicU64,
+    active_udp_sessions: AtomicU64,
+}
+
+impl ResidentDataplaneMetrics {
+    pub(super) fn tcp_opened(&self) {
+        self.active_tcp_connections.fetch_add(1, Ordering::Relaxed);
+    }
+
+    pub(super) fn tcp_closed(&self) {
+        self.active_tcp_connections.fetch_sub(1, Ordering::Relaxed);
+    }
+
+    pub(super) fn udp_opened(&self) {
+        self.active_udp_sessions.fetch_add(1, Ordering::Relaxed);
+    }
+
+    pub(super) fn udp_closed(&self) {
+        self.active_udp_sessions.fetch_sub(1, Ordering::Relaxed);
+    }
+
+    pub(super) fn add_upload(&self, bytes: usize) {
+        self.upload_total.fetch_add(bytes as u64, Ordering::Relaxed);
+    }
+
+    pub(super) fn add_download(&self, bytes: usize) {
+        self.download_total
+            .fetch_add(bytes as u64, Ordering::Relaxed);
+    }
+
+    fn snapshot(&self) -> Value {
+        json!({
+            "uploadTotal": self.upload_total.load(Ordering::Relaxed),
+            "downloadTotal": self.download_total.load(Ordering::Relaxed),
+            "activeTcpConnections": self.active_tcp_connections.load(Ordering::Relaxed),
+            "activeUdpSessions": self.active_udp_sessions.load(Ordering::Relaxed),
+        })
     }
 }
 
@@ -161,6 +211,7 @@ pub(super) fn start_resident_dataplane_workers(
     };
 
     let stop = Arc::new(AtomicBool::new(false));
+    let metrics = Arc::new(ResidentDataplaneMetrics::default());
     let proxy = Arc::new(default_proxy);
     let dns = Arc::new(plan.dns);
     let tcp_router = match ResidentTcpRouter::new(
@@ -192,8 +243,16 @@ pub(super) fn start_resident_dataplane_workers(
         let tcp_router = Arc::clone(&tcp_router);
         let event_file = event_file.clone();
         let event_lock = Arc::clone(&event_lock);
+        let metrics = Arc::clone(&metrics);
         handles.push(thread::spawn(move || {
-            resident_tcp_accept_loop(tcp_listener, tcp_router, stop, event_file, event_lock)
+            resident_tcp_accept_loop(
+                tcp_listener,
+                tcp_router,
+                stop,
+                event_file,
+                event_lock,
+                metrics,
+            )
         }));
     }
     {
@@ -202,8 +261,11 @@ pub(super) fn start_resident_dataplane_workers(
         let dns = Arc::clone(&dns);
         let event_file = event_file.clone();
         let event_lock = Arc::clone(&event_lock);
+        let metrics = Arc::clone(&metrics);
         handles.push(thread::spawn(move || {
-            resident_udp_loop(udp_socket, proxy, dns, stop, event_file, event_lock)
+            resident_udp_loop(
+                udp_socket, proxy, dns, stop, event_file, event_lock, metrics,
+            )
         }));
     }
 
@@ -253,6 +315,7 @@ pub(super) fn start_resident_dataplane_workers(
             stop,
             handles,
             event_file,
+            metrics,
         }),
     )
 }
