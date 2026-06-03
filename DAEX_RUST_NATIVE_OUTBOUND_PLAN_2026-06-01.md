@@ -7084,3 +7084,226 @@ keep names protocol-generic at the C10 gate level
 This means the next task remains C10 product-chain work: bridge the Rust product
 surface to the existing Rust resident production runtime and re-run the same
 live switch plus rollback evidence loop.
+
+## 40. C10 resident runtime bridge implementation record (2026-06-03)
+
+This record is still under C10 `go-free-product-chain-v1`. It is not a new
+stage.
+
+### 40.1 Code-level blocker addressed
+
+The live switch attempt in section 39 failed because Rust `daed` served the
+Web/API product shell but did not own a real runtime. The following section 39
+requirements are now implemented locally:
+
+```text
+wire Rust daed run/reload/stop to the production resident runtime owner
+restore selected running state from daed.db on startup
+make /api/general/state report real runtime state, not metadata-only state
+make admission require running=true with a real attach backend and netns link mode
+```
+
+Changed files:
+
+```text
+rust/crates/dae-daemon/src/daed_product.rs
+rust/crates/dae-daemon/src/production_runtime_owner/resident.rs
+rust/crates/dae-daemon/tests/daed_product.rs
+```
+
+### 40.2 Product runtime manager
+
+Rust `daed run` now creates a product runtime manager:
+
+```text
+ProductRuntimeManager
+ProductRuntimeState
+ProductRuntimeInstance::Resident(ResidentProductionRuntime)
+ProductRuntimeInstance::Fake(FakeProductRuntime)
+```
+
+Default behavior is real resident runtime ownership:
+
+```text
+start_product_runtime_instance() -> start_resident_production_runtime(config)
+```
+
+The fake runtime path exists only for local HTTP/API tests:
+
+```text
+DAED_PRODUCT_RUNTIME_FAKE_START=1
+```
+
+This test-only switch is not part of the live default path and is not a fallback.
+Without that env var, Rust `daed` uses the real production resident runtime
+owner.
+
+### 40.3 Startup restore
+
+`daed run -c /etc/daed` now checks the Rust primary state store:
+
+```text
+/etc/daed/daed.db systems.running
+```
+
+If the persisted running state is true, startup now:
+
+```text
+materializes a dry runtime config preview from daed.db
+parses the generated config through dae_config parser/build_config
+starts the resident production runtime owner
+writes /etc/daed/runtime/generated.dae only after runtime start succeeds
+returns a run error if startup runtime restore fails
+```
+
+This makes live default switch fail-closed instead of leaving a live API shell
+with no runtime.
+
+### 40.4 Runtime reload and stop
+
+`POST /api/runtime/reload` now:
+
+```text
+builds a dry materialized config preview
+parses the generated config into dae_config::Config
+starts or swaps the resident production runtime
+rolls back to the previous runtime on start failure
+writes generated.dae and systems.running=1 only after runtime start succeeds
+returns runtimeStarted=true only after a real manager-owned runtime is active
+```
+
+`POST /api/runtime/stop` now:
+
+```text
+drops the runtime handle and runs ResidentProductionRuntime cleanup
+sets systems.running=0
+returns the manager state after stop
+```
+
+Signal behavior:
+
+```text
+SIGHUP/SIGUSR1 reloads only when systems.running=1
+SIGTERM/SIGINT/SIGQUIT stops the runtime before process exit
+```
+
+This preserves the current systemd reload surface, including the existing HUP
+drop-in behavior.
+
+### 40.5 Real state reporting
+
+`GET /api/general/state` and `GET /api/runtime/overview` now report manager
+state instead of metadata-only state.
+
+For a real resident runtime, state is derived from:
+
+```text
+ResidentProductionRuntime::product_state_summary()
+resident-production-runtime-start.json
+```
+
+Reported fields include:
+
+```text
+running
+attachBackend
+netnsLinkMode
+residentRuntimeStarted
+residentDataplane
+artifactDir
+startFile
+cleanupFile
+```
+
+This avoids the previous false-positive path where only
+`daed_product_metadata.runtime_running=true` could make `/api/general/state`
+look running.
+
+### 40.6 Materializer validity fix
+
+The generated runtime config is now parseable dae config. The previous
+materializer appended JSON values after comments, which was not valid dae config
+input for `dae_config`.
+
+The materializer now renders:
+
+```text
+node {
+    tag: 'node-link'
+}
+
+group {
+    group_name {
+        filter: name('node_tag')
+        policy: fixed(0)
+    }
+}
+```
+
+Node and group rendering uses one shared runtime node tag rule so group filters
+resolve against the generated node section.
+
+`/etc/daed/runtime/generated.dae` is written with private permissions:
+
+```text
+0600
+```
+
+### 40.7 Reports updated
+
+`daed service-contract --json`, `daed package-info --json`,
+`daed export package-manifest`, and `daed export admission-report` now record:
+
+```text
+rust_daed_real_runtime_bridge_ready=true
+rust_daed_runtime_state_metadata_only=false
+real_runtime_bridge=true
+metadata_only_runtime_state=false
+local-runtime-bridge-pass-live-revalidation-pending
+```
+
+`go_free_product_chain_ready` remains false until live revalidation passes and
+the remaining C10 product-chain work is complete.
+
+### 40.8 Validation completed
+
+Validation commands completed:
+
+```text
+cargo fmt -p dae-daemon
+cargo check -p dae-daemon --bin daed
+cargo test -p dae-daemon --test daed_product
+cargo test -p dae-daemon daed_product::
+cargo test -p dae-daemon --test service_contract candidate_reports_resident_service_and_dataplane_capabilities
+```
+
+New/updated test coverage:
+
+```text
+fake runtime manager path for local Web/API tests
+runtime reload returns runtimeStarted=true only after manager start
+/api/general/state reports manager attachBackend
+/api/runtime/overview includes runtime manager state
+generated runtime config renders node/group dae sections
+generated runtime config parses through dae_config parser/build_config
+```
+
+### 40.9 Still not done
+
+Still not done:
+
+```text
+release build after the runtime bridge
+install new candidate on 10.10.10.2
+re-run live default-path switch
+verify /api/general/state running=true with real resident summary
+verify Telegram/proxy dataplane behavior under Rust daed
+verify rollback to old daed still preserves wing.db
+remove Go daewing from default package path
+final production package admission
+```
+
+Therefore the next action remains C10 live revalidation: build a new Rust
+`daed` candidate, stage it on 10.10.10.2, repeat the default-path switch and
+rollback loop, and leave the host on the safe working binary if the real runtime
+or dataplane admission fails.
