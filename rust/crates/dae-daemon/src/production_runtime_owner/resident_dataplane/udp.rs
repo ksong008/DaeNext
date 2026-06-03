@@ -20,9 +20,9 @@ use super::events::append_event;
 use super::plan::ResidentProxyPlan;
 use super::vision::{VisionUnpadState, VisionUnpadder, vision_padding_block};
 use super::{
-    RESIDENT_IDLE_SLEEP, RESIDENT_UDP_RESPONSE_TIMEOUT, VISION_COMMAND_CONTINUE,
-    VLESS_RESPONSE_VERSION, XTLS_RPRX_VISION, XUDP_COMMAND_NEW, XUDP_MUX_TARGET, XUDP_NETWORK_UDP,
-    XUDP_OPTION_DATA,
+    RESIDENT_IDLE_SLEEP, RESIDENT_UDP_RESPONSE_TIMEOUT, ResidentDataplaneMetrics,
+    VISION_COMMAND_CONTINUE, VLESS_RESPONSE_VERSION, XTLS_RPRX_VISION, XUDP_COMMAND_NEW,
+    XUDP_MUX_TARGET, XUDP_NETWORK_UDP, XUDP_OPTION_DATA,
 };
 
 pub(super) fn resident_udp_loop(
@@ -32,6 +32,7 @@ pub(super) fn resident_udp_loop(
     stop: Arc<AtomicBool>,
     event_file: PathBuf,
     event_lock: Arc<Mutex<()>>,
+    metrics: Arc<ResidentDataplaneMetrics>,
 ) {
     if let Err(err) = socket.set_nonblocking(true) {
         append_event(
@@ -74,6 +75,8 @@ pub(super) fn resident_udp_loop(
             );
             continue;
         };
+        metrics.udp_opened();
+        metrics.add_upload(packet.payload.len());
         let exchange = if original_dst.port() == 53 {
             handle_resident_dns_udp(&dns, original_dst, &packet.payload)
                 .map(|response| ("udp_dns_packet_finished", response))
@@ -83,19 +86,22 @@ pub(super) fn resident_udp_loop(
         };
         match exchange {
             Ok((event, response)) => match send_udp_reply(original_dst, packet.peer, &response) {
-                Ok(()) => append_event(
-                    &event_file,
-                    &event_lock,
-                    json!({
-                        "event": event,
-                        "peer": packet.peer.to_string(),
-                        "original_dst": original_dst.to_string(),
-                        "request_len": packet.payload.len(),
-                        "response_len": response.len(),
-                        "proxy_group": proxy.group_name,
-                        "node_tag": proxy.node_tag,
-                    }),
-                ),
+                Ok(()) => {
+                    metrics.add_download(response.len());
+                    append_event(
+                        &event_file,
+                        &event_lock,
+                        json!({
+                            "event": event,
+                            "peer": packet.peer.to_string(),
+                            "original_dst": original_dst.to_string(),
+                            "request_len": packet.payload.len(),
+                            "response_len": response.len(),
+                            "proxy_group": proxy.group_name,
+                            "node_tag": proxy.node_tag,
+                        }),
+                    )
+                }
                 Err(err) => append_event(
                     &event_file,
                     &event_lock,
@@ -108,6 +114,7 @@ pub(super) fn resident_udp_loop(
                 json!({"event": "udp_exchange_failed", "peer": packet.peer.to_string(), "original_dst": original_dst.to_string(), "error": err}),
             ),
         }
+        metrics.udp_closed();
     }
     append_event(
         &event_file,

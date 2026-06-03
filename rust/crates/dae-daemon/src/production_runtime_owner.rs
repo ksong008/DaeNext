@@ -53,6 +53,7 @@ pub use netns_link::{NetnsLinkMode, parse_netns_link_mode};
 use reload_runtime::{ReloadRuntimeEvidence, run_reload_runtime_parity_probe};
 use report::{live_handoff_json, report_value, socket_options_verified};
 pub use resident::{ResidentProductionRuntime, start_resident_production_runtime};
+pub(crate) use resident_dataplane::ResidentEventLogSink;
 use topology::{
     attach_host_program, attach_peer_program, cleanup_production_topology, preflight_checks,
     read_topology_values, setup_production_topology, show_host_program, show_peer_program,
@@ -68,6 +69,10 @@ const FILTER_PREF: &str = "49491";
 const PRODUCTION_NETNS: &str = "daens";
 const PRODUCTION_HOST_IFACE: &str = "dae0";
 const PRODUCTION_PEER_IFACE: &str = "dae0peer";
+
+pub(crate) fn set_resident_event_log_sink(sink: Option<ResidentEventLogSink>) {
+    resident_dataplane::set_event_log_sink(sink);
+}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ProductionRuntimeOwnerOptions {

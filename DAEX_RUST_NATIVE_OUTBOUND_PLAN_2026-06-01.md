@@ -7822,3 +7822,696 @@ surface without requiring embedded WebUI assets. Because WebUI, API,
 runtime/dataplane, and Telegram probe validation passed, the Rust candidate was
 kept live on 10.10.10.2 for manual testing instead of rolling back.
 ```
+
+### 41.12 C10 fingerprint parameter precedence update
+
+The resident outbound fingerprint plan was updated to follow dae/Xray-compatible
+parameter precedence without protocol-specific top-level naming:
+
+```text
+1. Node link `fp` has priority.
+2. If node link `fp` is absent or empty, global `tls_implementation=utls`
+   falls back to `utls_imitate`.
+3. If global `tls_implementation=utls` is selected but `utls_imitate` is empty,
+   use the documented default fingerprint `chrome`.
+4. If no node/global fingerprint is selected, use standard `rustls`.
+5. If selected fingerprint is `unsafe`, use standard `rustls`.
+6. Unknown fingerprint values fail closed; they must not silently fall back to
+   standard `rustls`.
+7. Any selected valid fingerprint uses the fingerprint-aware TLS underlay
+   (`boring`/BoringSSL in the current resident adapter).
+```
+
+Implementation notes:
+
+```text
+rust/crates/dae-daemon/src/production_runtime_owner/resident_dataplane/plan.rs
+- removed compile-time DAE_EXPERIMENT_VLESS_VISION_FP_RUST_NATIVE admission gate
+- kept node `fp` before global fallback
+- allowed `unsafe` as the explicit standard-TLS escape hatch
+- retained fail-closed behavior for unknown values such as `no`, `none`, `off`,
+  `false`, and `0`
+
+rust/crates/dae-daemon/src/service_contract.rs
+rust/crates/dae-daemon/src/product_chain_recertification/tests.rs
+- updated C7 fingerprint-underlay surface text to describe node-priority and
+  global-fallback behavior
+```
+
+Local verification:
+
+```text
+cargo test --manifest-path rust/Cargo.toml -p dae-daemon resident_dataplane_plan
+result: pass, 15 resident plan tests
+
+cargo test --manifest-path rust/Cargo.toml -p dae-daemon
+result: pass, 187 lib tests plus integration/doc tests
+
+cargo build --manifest-path rust/Cargo.toml -p dae-daemon --bin daed --release --features native-ebpf
+result: pass
+release daed sha256=3f2f51bb29d2a86f77e64a8c03eab3d4bf453ab4062a708e8f21a324fd755c62
+release daed size=16M
+```
+
+### 41.13 C10 product API and WebUI resource parity update
+
+The Rust product surface now treats WebUI resources, runtime materialization,
+and log streaming as one C10 parity gate instead of isolated endpoint stubs.
+
+Implementation notes:
+
+```text
+rust/crates/dae-daemon/src/daed_product.rs
+- `/api/nodes` default list now matches the original product boundary:
+  manual nodes only unless `subscriptionId` or `independent=false` is explicit
+- runtime materialization uses the full node pool, so subscription-backed nodes
+  remain available for generated runtime config
+- node resources expose decoded display labels while preserving `runtimeTag`
+  for generated config keys
+- subscription refresh preserves group-bound subscription nodes by unique name
+  and only deletes unpreserved stale subscription nodes
+- group subscription resources apply `nameFilterRegex` to `matchedNodes`
+- generated group config fails closed when a group has no matched nodes instead
+  of emitting a no-filter group
+- `/api/general/interfaces` enumerates system interfaces and default routes
+  instead of returning only loopback
+- `/api/logs` treats `level=all` as unfiltered, canonicalizes `warning` to
+  `warn`, searches case-insensitively, and returns the filtered tail in time
+  order
+- `/api/logs/settings` uses the original logstore limits:
+  entries 500-50000, bytes 5MiB-200MiB
+- `/api/events/logs` emits `log.entry` and honors the current level/query
+  snapshot filter, matching WebUI EventSource listeners
+
+rust/crates/dae-daemon/tests/daed_product.rs
+- updated C10 product integration assertions for `log.entry` and logstore
+  limits
+```
+
+Local verification:
+
+```text
+cargo test --manifest-path rust/Cargo.toml -p dae-daemon
+result: pass, 192 lib tests plus integration/doc tests
+```
+
+### 41.14 C10 product API remote validation update
+
+Remote validation on `10.10.10.2` used the C10 Rust product binary built from
+the current local checkout.
+
+Deployment notes:
+
+```text
+release daed sha256=93962c16912b52a99824285ecbe2a39aaa678d5cce1798c66ed3d39d496e4dad
+release daed size=16M
+
+/usr/bin/daed was replaced with the validated release binary.
+/etc/daed/daed.db was regenerated from /etc/daed/wing.db with:
+  daed state migrate --from-wing-db /etc/daed/wing.db --to /etc/daed/daed.db --force
+
+wing.db sha256 before/after:
+  bada431fed16f050f40daea1365798293ac31a11701c97b16b4c264d8cd1d441
+result: unchanged
+```
+
+Remote API validation:
+
+```text
+GET / -> 200, WebUI HTML served
+GET /api/health -> 200
+GET /api/general/state -> running=true, attachBackend=tcx, netnsLinkMode=netkit
+GET /api/general/interfaces?up=true -> enp1s0 plus IPv4 default route gateway 10.10.10.1
+GET /api/configs?expand=parsed -> selected Home, tproxyPort=12345, lan/wan=enp1s0, dialMode=domain++
+GET /api/dns?expand=parsed -> 5 DNS entries
+GET /api/routings?expand=parsed -> 6 routing entries
+GET /api/nodes -> 3 manual nodes, subscriptionId=null for all returned rows
+GET /api/nodes?independent=false -> 21 subscription-backed nodes
+GET /api/subscriptions?expand=nodes -> 2 subscriptions, expanded node lists present
+GET /api/groups -> proxy/media/openai/youtube/TG/speedtest/hkmedia/google all show selected nodes
+GET /api/logs?level=all -> returns log entries
+GET /api/logs/settings -> original logstore limits exposed
+GET /api/events/logs?level=all -> event: log.entry
+POST /api/runtime/reload {"dry":false} -> HTTP 200, applied=1
+
+/etc/daed/runtime/generated.dae -> 13353 bytes, node/group sections present,
+8 group filters rendered, no no-filter empty group pattern.
+```
+
+Traffic/runtime evidence:
+
+```text
+GET /api/runtime/overview -> uploadTotal/downloadTotal/uploadRate/downloadRate
+present, samples present, activeConnections and udpSessions present.
+
+Telegram smoke:
+curl https://api.telegram.org/ -> HTTP 200, effective https://core.telegram.org/bots
+resident event:
+  event=tcp_connection_finished
+  proxy_group=TG
+  node_tag=[SG]Oracle-Sg
+  tls_underlay=boringssl
+```
+
+### 41.15 C10 runtime cards and log-level query fix
+
+The Rust product surface had two WebUI runtime-card gaps after the first C10
+product API parity pass:
+
+```text
+1. Runtime log level updates were stored, but the emitted log entry was always
+   written as level=info. Selecting query level debug/trace/warn/error could
+   therefore show an empty list immediately after setting that runtime level.
+
+2. Runtime overview still carried Go-era placeholder fields:
+   heapAllocBytes=0, goroutines=1, cpuUsagePercent=0.0. The WebUI cards for
+   heap memory, goroutine count, and CPU usage were therefore not meaningful
+   under the Rust product runtime.
+
+3. Runtime EventSource compatibility was incomplete. The Rust endpoint returned
+   a one-shot runtime.overview event only, while the WebUI also listens for
+   runtime.overview.delta and disables polling while the stream is considered
+   live.
+```
+
+Implementation notes:
+
+```text
+rust/crates/dae-daemon/src/daed_product.rs
+- PATCH /runtime/log-level now validates and canonicalizes levels:
+  error, warn, info, debug, trace
+- the runtime level update log is written at the selected level, so
+  /logs?level=<selected> immediately shows the update
+- /runtime/overview reads process metrics from /proc/self/status and
+  /proc/self/stat:
+  - rssBytes from VmRSS
+  - heapAllocBytes from VmData as the Rust process heap/data approximation
+  - goroutines compatibility field from Linux Threads
+  - cpuUsagePercent from process utime+stime deltas, normalized by available
+    CPU parallelism and clamped to 0-100
+- /events/runtime now includes retry: 1000 and emits both runtime.overview and
+  runtime.overview.delta in the SSE body, giving the current HTTP shim
+  EventSource-compatible 1s reconnect behavior
+```
+
+Local verification:
+
+```text
+cargo test --manifest-path rust/Cargo.toml -p dae-daemon
+result: pass, 193 lib tests plus integration/doc tests
+
+cargo build --manifest-path rust/Cargo.toml -p dae-daemon --bin daed --release --features native-ebpf
+result: pass
+release daed sha256=5767fb011571867ad2d51f9232b8567478439b018e31e553ebab4059588b877b
+release daed size=16M
+```
+
+Remote validation on 10.10.10.2:
+
+```text
+/usr/bin/daed sha256=5767fb011571867ad2d51f9232b8567478439b018e31e553ebab4059588b877b
+wing.db sha256=bada431fed16f050f40daea1365798293ac31a11701c97b16b4c264d8cd1d441
+runtime reload after binary replacement -> HTTP 200, applied=1
+
+GET /api/general/state:
+  running=true
+  attachBackend=tcx
+  netnsLinkMode=netkit
+
+PATCH /api/runtime/log-level {"level":"debug"} -> HTTP 200, level=debug
+GET /api/logs?level=debug&limit=20 -> includes:
+  level=debug
+  message="runtime log level set to debug"
+
+GET /api/runtime/overview?windowSec=60&maxPoints=10:
+  heapAllocBytes=195375104
+  goroutines=29
+  cpuUsagePercent=0.99
+  rssBytes=147582976
+  uploadTotal/downloadTotal present and increasing
+  uploadRate/downloadRate present
+  activeConnections/udpSessions present
+  samples_len=10
+
+GET /api/events/runtime?windowSec=60&maxPoints=10:
+  retry: 1000
+  event: runtime.overview
+  event: runtime.overview.delta
+```
+
+### C10 runtime observability correction - 2026-06-03
+
+This section supersedes the previous temporary Rust product observability notes
+that used `log_entries`, `VmData`, and one-shot SSE reconnect shims.
+
+Original daewing parity audit:
+
+```text
+1. WebUI log content is an independent JSONL cache:
+   <config-dir>/logs/current.jsonl
+
+2. The database stores log settings only:
+   log_settings(id=1, max_entries, max_bytes)
+   There is no log_entries runtime log table in the original wing.db schema.
+
+3. Log entry JSON shape:
+   id, ts, level, message, fields
+   fields is optional and contains stringified logrus fields.
+
+4. Query behavior:
+   - default limit 500
+   - max limit 2000
+   - invalid level returns HTTP 400
+   - warning is canonicalized to warn
+   - query matches message and fields key/value
+   - clear truncates current.jsonl instead of deleting DB rows
+
+5. Retention behavior:
+   - maxEntries default 10000, clamp 500..50000
+   - maxBytes default 50 MiB, clamp 5..200 MiB
+   - startup resumes next ID from the JSONL tail
+   - pruning keeps newest complete lines
+
+6. SSE behavior:
+   - /events/logs is a live stream, not a replay endpoint
+   - initial log list comes from /logs
+   - retry: 3000
+   - heartbeat every 15s
+   - event name log.entry
+
+7. Runtime overview SSE behavior:
+   - /events/runtime is a live stream, not a close-and-reconnect shim
+   - sends runtime.overview immediately
+   - sends runtime.overview.delta every 1s
+   - retry: 3000
+   - heartbeat every 15s
+```
+
+Implementation corrections:
+
+```text
+rust/crates/dae-daemon/src/daed_product.rs
+- /logs now reads <config-dir>/logs/current.jsonl.
+- /logs DELETE truncates current.jsonl.
+- /logs/settings still reads/writes daed.db log_settings.
+- clean daed.db schema no longer creates log_entries; old test tables are not
+  deleted in place.
+- log line encoding follows the original max line/field trimming policy.
+- runtime log level now uses logrus-compatible ordering:
+  panic, fatal, error, warn, info, debug, trace
+- actual reload updates runtime_log_level from generated config global.log_level.
+- /events/logs and /events/runtime now have dedicated keep-alive SSE writers.
+- runtime overview heapAllocBytes now uses /proc/self/status RssAnon first,
+  with VmData only as fallback. This is a Rust-compatible resident anonymous
+  memory approximation; exact allocator heap requires allocator
+  instrumentation.
+
+rust/crates/dae-daemon/src/production_runtime_owner/resident_dataplane
+- resident dataplane now owns generic live metrics:
+  uploadTotal, downloadTotal, activeTcpConnections, activeUdpSessions
+- TCP/UDP relay paths update metrics while traffic is in flight.
+- runtime overview prefers live metrics over finished-event JSONL fallback,
+  removing the visible lag caused by waiting for long-lived connections to
+  close.
+
+rust/crates/dae-daemon/tests/daed_product.rs
+- integration test now treats SSE endpoints as long-lived streams.
+```
+
+Local verification:
+
+```text
+cargo fmt --manifest-path rust/Cargo.toml -p dae-daemon
+result: pass
+
+cargo test --manifest-path rust/Cargo.toml -p dae-daemon
+result: pass
+196 lib tests, 6 daed product integration tests, reload owner tests,
+service contract tests, and doc tests passed.
+
+cargo build --manifest-path rust/Cargo.toml -p dae-daemon --bin daed --release --features native-ebpf
+result: pass
+release daed sha256=2d2de6d53bf47488b8407c86da010425a6ce58373bc2d2777d9436e03e136cce
+release daed size=16M
+```
+
+Remote validation on 10.10.10.2:
+
+```text
+/usr/bin/daed sha256=2d2de6d53bf47488b8407c86da010425a6ce58373bc2d2777d9436e03e136cce
+systemctl is-active daed -> active
+runtime reload -> applied=1, dry=false, runtimeStarted=true
+
+GET /api/general/state:
+  running=true
+  attachBackend=tcx
+  netnsLinkMode=netkit
+  counts.logs=500
+
+Log file layout:
+  /etc/daed/logs mode=750
+  /etc/daed/logs/current.jsonl mode=600
+  /api/logs returns original JSONL entries with fields/id/ts/level/message.
+
+GET /api/runtime/overview?windowSec=60&maxPoints=5:
+  activeConnections=19
+  uploadTotal=4089
+  downloadTotal=5278
+  samplesLen=1 immediately after reload
+  residentDataplane.metrics.activeTcpConnections=19
+  residentDataplane.metrics.uploadTotal=4089
+  residentDataplane.metrics.downloadTotal=5278
+  heapAllocBytes=119992320
+  rssBytes=134389760
+  goroutines=25
+
+/proc/<daed>/status at validation:
+  VmRSS=137992 kB
+  RssAnon=123932 kB
+  VmData=178352 kB
+  Threads=25
+
+GET /api/events/runtime:
+  retry: 3000
+  event: runtime.overview
+
+GET /api/events/logs:
+  retry: 3000
+```
+
+### C10 log level HTTP query matrix correction - 2026-06-03
+
+Follow-up after live WebUI testing found that the previous fix covered the
+internal JSONL log reader, but `/api/logs` still had a separate
+`log_level_filter_from_request` path that only treated ASCII `all` as
+unfiltered. Therefore a browser/WebUI query such as:
+
+```text
+level=%E5%85%A8%E9%83%A8
+```
+
+which is the normal URL-encoded UTF-8 representation of `level=全部`, still
+returned HTTP 400 on the live host even though `list_logs_value(...,
+Some("全部"), ...)` passed locally.
+
+Correction:
+
+```text
+rust/crates/dae-daemon/src/daed_product.rs
+- /api/logs, /api/events/logs, and the live SSE log stream now all route level
+  query parsing through the same generic normalize_log_level_filter helper.
+- Supported unfiltered query values:
+  empty, all, any, *, 全部, 所有
+- Supported level aliases:
+  panic, fatal, error, err, 错误, warn, warning, 警告, info, 信息,
+  debug, 调试, trace, 跟踪
+- Invalid query levels still return HTTP 400.
+- PATCH /api/runtime/log-level still rejects `all`; runtime level is a concrete
+  log level, not a query filter.
+
+Local tests added:
+- real HTTP query path coverage through split_path_query + api_logs
+- encoded Chinese query values such as `%E5%85%A8%E9%83%A8`
+- all aliases above plus invalid value rejection
+```
+
+Local verification:
+
+```text
+cargo fmt --manifest-path rust/Cargo.toml -p dae-daemon
+result: pass
+
+cargo test --manifest-path rust/Cargo.toml -p dae-daemon daed_product::tests::logs_filter_level_all_case_insensitive_query_and_sse_event_name
+result: pass
+
+cargo test --manifest-path rust/Cargo.toml -p dae-daemon
+result: pass
+196 lib tests, 6 daed product integration tests, reload owner tests,
+service contract tests, and doc tests passed.
+
+cargo build --manifest-path rust/Cargo.toml -p dae-daemon --bin daed --release --features native-ebpf
+result: pass
+release daed sha256=f6079a471901f9b529b3f101048d1b403c6dadee98ec4331fa1df75bd094c002
+release daed size=16M
+```
+
+Remote validation on `10.10.10.2`:
+
+```text
+/usr/bin/daed sha256=f6079a471901f9b529b3f101048d1b403c6dadee98ec4331fa1df75bd094c002
+systemctl is-active daed -> active
+
+No /api/runtime/reload was used for this log-level validation. Runtime log
+level is expected to be live metadata and was verified through
+PATCH /api/runtime/log-level only.
+
+Generated log entries after start_id=12:
+  debug=3
+  error=3
+  fatal=1
+  info=1
+  panic=1
+  trace=1
+  warn=2
+
+PATCH /api/runtime/log-level alias matrix:
+  trace, debug, info, warning, 警告, error, err, 错误, fatal, panic, 调试 -> pass
+  all -> HTTP 400, pass
+
+GET /api/logs query matrix:
+  no level -> HTTP 200
+  level= -> HTTP 200
+  level=all -> HTTP 200
+  level=ALL -> HTTP 200
+  level=any -> HTTP 200
+  level=* -> HTTP 200
+  level=%E5%85%A8%E9%83%A8 -> HTTP 200
+  level=%E6%89%80%E6%9C%89 -> HTTP 200
+  info / INFO / 信息 -> HTTP 200, only info entries
+  warn / warning / 警告 -> HTTP 200, only warn entries
+  error / err / 错误 -> HTTP 200, only error entries
+  debug / 调试 -> HTTP 200, only debug entries
+  trace / 跟踪 -> HTTP 200, only trace entries
+  fatal -> HTTP 200, only fatal entries
+  panic -> HTTP 200, only panic entries
+  invalid -> HTTP 400
+
+GET /api/logs?level=all&q=runtime&limit=2 -> HTTP 200, <=2 entries
+GET /api/logs?level=all&q=definitely-not-present-daex&limit=10 -> HTTP 200, []
+GET /api/events/logs?level=%E5%85%A8%E9%83%A8 -> HTTP 200, retry: 3000
+GET /api/runtime/log-level -> debug
+/etc/daed/logs/current.jsonl size=2949 after validation
+/etc/daed/wing.db sha256=bada431fed16f050f40daea1365798293ac31a11701c97b16b4c264d8cd1d441
+```
+
+### 2026-06-03 unified Rust product runtime log bridge
+
+Correction from original daed/wing audit:
+
+- Original daed WebUI logs are not subscription-only task logs. They are a
+  unified runtime log stream backed by wing `logstore`, which hooks logrus,
+  writes JSONL entries, and streams them to `/api/events/logs`.
+- Rust product mode must therefore keep one product logstore surface for
+  startup, reload, stop, control-plane, materializer, and resident dataplane
+  events.
+- WebUI/API formal query values remain stable API tokens:
+  `all`, `error`, `warn`, `info`, `debug`, `trace`, etc.
+- Chinese labels such as `全部`, `调试`, `警告`, `错误`, `信息`, `跟踪`
+  are compatibility aliases only. WebUI select values must not send localized
+  labels as the primary API semantic.
+
+Implementation notes:
+
+- `production_runtime_owner::resident_dataplane::events::append_event` now
+  supports a generic process-level resident event log sink.
+- `daed_product` registers that sink after initializing
+  `/etc/daed/logs/current.jsonl`.
+- Resident worker lifecycle and dataplane events are translated into regular
+  product log entries:
+  - `*_started` / `*_stopped` -> `info`
+  - `*_failed` / `*error*` -> `warn`
+  - connection/packet completion and other high-volume events -> `debug`
+- The conversion is protocol-generic: it uses the event name and scalar fields;
+  it does not introduce protocol-specific top-level log gates.
+- Runtime level filtering remains centralized in
+  `append_log_fields_for_config`; debug dataplane completion events only appear
+  when runtime log level is `debug` or higher.
+- API reload now emits unified `[Reload]` entries for request receipt, dry
+  preview success, materializer/build/config errors, runtime start failure, and
+  applied reload success.
+- Startup restore now emits `[Startup] runtime restore started/finished`.
+- Signal reload emits `[Reload] Received signal reload request`,
+  `[Reload] Finished`, or `[Reload] Failed to reload`.
+
+Local focused verification added:
+
+```text
+cargo fmt --manifest-path rust/Cargo.toml -p dae-daemon
+result: pass
+
+cargo test --manifest-path rust/Cargo.toml -p dae-daemon resident_events_are_bridged_to_product_logs_with_runtime_level_filter
+result: pass
+
+cargo test --manifest-path rust/Cargo.toml -p dae-daemon runtime_reload_dry_preview_writes_unified_reload_logs
+result: pass
+
+cargo test --manifest-path rust/Cargo.toml -p dae-daemon logs_filter_level_all_case_insensitive_query_and_sse_event_name
+result: pass
+```
+
+Full local verification after the unified log bridge:
+
+```text
+cargo test --manifest-path rust/Cargo.toml -p dae-daemon
+result: pass
+198 lib tests, 6 daed product integration tests, reload owner tests,
+service contract tests, and doc tests passed.
+
+cargo build --manifest-path rust/Cargo.toml -p dae-daemon --bin daed --release --features native-ebpf
+result: pass
+release daed sha256=053716867af5081633bdf4dcd49b027486428096141073b2e7173834b4a2a6f4
+release daed size=16M
+```
+
+Remote validation on `10.10.10.2`:
+
+```text
+/usr/bin/daed sha256=053716867af5081633bdf4dcd49b027486428096141073b2e7173834b4a2a6f4
+systemctl is-active daed -> active
+/etc/daed/wing.db sha256=bada431fed16f050f40daea1365798293ac31a11701c97b16b4c264d8cd1d441
+
+/etc/daed/logs/current.jsonl contains startup/runtime product logs:
+  runtime stopped by signal
+  Rust daed product log store initialized
+  Listen on http://0.0.0.0:2023
+  subscription scheduler started by Rust daed
+
+Authenticated API verification:
+  GET /api/runtime/log-level -> HTTP 200
+  GET /api/logs?level=all&limit=20 -> HTTP 200, product logs present
+  GET /api/logs?level=%E5%85%A8%E9%83%A8&limit=5 -> HTTP 200
+  GET /api/events/logs?level=all -> HTTP 200, retry: 3000, log.entry stream
+
+Live log-level update verification:
+  PATCH /api/runtime/log-level {"level":"debug"} -> HTTP 200, {"level":"debug"}
+  GET /api/logs?level=debug&limit=10 -> HTTP 200, resident dataplane debug logs present
+  GET /api/logs?level=all&q=resident&limit=10 -> HTTP 200, resident dataplane logs present
+  GET /api/logs?level=%E8%B0%83%E8%AF%95&limit=10 -> HTTP 200, debug logs present
+
+Observed resident dataplane fields include:
+  event=tcp_connection_finished / tcp_connection_failed
+  proxy_group=openai
+  node_tag=[US]Dmit-Mabuli
+  tls_underlay=boringssl
+  bytes_client_to_proxy / bytes_proxy_to_client
+  vision_* diagnostics
+```
+
+### 2026-06-03 Rust native product build parameter standard note
+
+This section is a higher-priority standard note for future Rust native product
+builds and live tests. It normalizes the current build/runtime truth and avoids
+mixing historical C9 transition artifacts into the C10 Rust product path.
+
+Standard build truth:
+
+```text
+repo root: /root/project/dae-daex-align/rust
+product package: dae-daemon
+product binary: daed
+source entry: rust/crates/dae-daemon/src/bin/daed.rs
+build target: cargo build --release -p dae-daemon --bin daed
+```
+
+Build command matrix:
+
+```text
+# Product userspace / Web API / state / outbound engine validation:
+cargo build --release -p dae-daemon --bin daed
+
+# Full Rust resident native datapath validation with Rust/Aya eBPF object:
+cargo build --release --features native-ebpf -p dae-daemon --bin daed
+```
+
+`native-ebpf` is the only current `dae-daemon` Cargo feature that changes the
+Rust native datapath build. It enables the Rust/Aya eBPF loader path and causes
+`build.rs` to build or embed the native BPF object. It is not a protocol feature.
+
+Native eBPF build overrides:
+
+```text
+DAE_RUST_NATIVE_BPF_TOOLCHAIN  # default: nightly
+DAE_RUST_NATIVE_BPF_CARGO      # optional cargo binary override
+DAE_RUST_NATIVE_BPF_OBJECT     # optional prebuilt native BPF object override
+```
+
+Standard extra attention:
+
+```text
+1. Do not build the current Rust product test binary through daed/wing
+   `make bundle` or `make bundle-rust-owned`.
+
+2. Do not use `dae-daemon-optin` as the product entry for this path.
+   `dae-daemon-optin` is a C9 transition payload name, not the C10 product
+   binary.
+
+3. Do not use an old `/root/project/daed-daex-align/daed/daed` artifact as
+   proof of the current Rust native product state.
+
+4. For live Rust product tests, `/usr/bin/daed` should be the Rust product
+   binary built from `dae-daemon --bin daed`.
+
+5. For resident dataplane ownership, set the runtime gate explicitly:
+   `DAE_RUST_RESIDENT_DATAPLANE=1`.
+   This gate is about resident userspace dataplane ownership, not about a
+   specific outbound protocol.
+
+6. The historical `DAE_EXPERIMENT_VLESS_VISION_FP_RUST_NATIVE` variable must not
+   be treated as a current runtime or admission switch. Current resident
+   plan/client code no longer reads it. If it appears in older evidence, treat
+   it as historical context only. A leftover `build.rs` rerun-if-env-changed
+   line is not a semantic gate.
+```
+
+Current protocol admission truth:
+
+```text
+VLESS is not a Cargo feature and does not need a separate build parameter.
+The code is compiled through the default dae-daemon dependency graph.
+
+This does not mean all VLESS nodes are admitted by default. Current resident
+dataplane admission is limited to:
+  scheme=vless
+  flow=xtls-rprx-vision
+  type=tcp
+  security=tls
+  allow_insecure=false
+
+Other schemes, transports, flows, insecure TLS, or unsupported link forms must
+fail closed instead of silently falling back.
+```
+
+Current fingerprint/TLS underlay truth:
+
+```text
+1. Node link `fp` has priority.
+2. If node `fp` is absent or empty, global `tls_implementation=utls` falls back
+   to `utls_imitate`.
+3. If global `tls_implementation=utls` is selected and `utls_imitate` is empty,
+   use the documented default fingerprint `chrome`.
+4. If no valid fingerprint is selected, use standard `rustls`.
+5. If selected fingerprint is `unsafe`, use standard `rustls`.
+6. Unknown values such as `no`, `none`, `off`, `false`, and `0` fail closed.
+7. Any selected valid fingerprint uses the fingerprint-aware TLS underlay,
+   currently BoringSSL through the Rust `boring` crate.
+```
+
+Live-test state rule:
+
+```text
+primary Rust product state: /etc/daed/daed.db
+protected rollback state: /etc/daed/wing.db
+
+Rust test builds must not mutate /etc/daed/wing.db by default. If existing state
+is needed, migrate/import from wing.db into daed.db first.
+```
