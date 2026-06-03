@@ -413,45 +413,95 @@ fn handle_proxy_tcp_connection(
         &sniff.payload,
     )
     .map(|stats| {
-        json!({
-            "event": "tcp_connection_finished",
-            "outbound_kind": "proxy",
-            "peer": peer.to_string(),
-            "original_dst": original_dst.to_string(),
-            "dial_target": &selection.route.dial_target,
-            "dial_ip": selection.route.dial_ip,
-            "initial_outbound": selection.route.initial_outbound,
-            "final_outbound": selection.route.final_outbound,
-            "final_mark": selection.route.final_mark,
-            "userspace_route_executed": selection.route.userspace_route_executed,
-            "userspace_route_must": selection.route.userspace_route_must,
-            "sniffed_domain": &sniff.domain,
-            "sniff_error": &sniff.error,
-            "proxy_group": &selection.proxy.group_name,
-            "node_tag": &selection.proxy.node_tag,
-            "tls_underlay": tls_underlay,
-            "bytes_client_to_proxy": stats.client_to_proxy,
-            "bytes_proxy_to_client": stats.proxy_to_client,
-            "response_header_stripped": stats.response_header_stripped,
-            "vision_unpadding_blocks": stats.vision_unpadding_blocks,
-            "vision_direct_command_seen": stats.vision_direct_command_seen,
-            "vision_raw_direct_recovered": stats.vision_raw_direct_recovered,
-        })
+        proxy_tcp_finished_event(peer, original_dst, &selection, sniff, tls_underlay, &stats)
     })
-    .map_err(|err| {
-        format!(
-            "{err}; original_dst={original_dst} dial_target={} dial_ip={} initial_outbound={} final_outbound={} final_mark={} proxy_group={} node_tag={} sniffed_domain={} sniff_error={}",
-            selection.route.dial_target,
-            selection.route.dial_ip,
-            selection.route.initial_outbound,
-            selection.route.final_outbound,
-            selection.route.final_mark,
-            selection.proxy.group_name,
-            selection.proxy.node_tag,
-            sniff.domain,
-            sniff.error.as_deref().unwrap_or(""),
-        )
+    .or_else(|err| {
+        Ok::<Value, String>(proxy_tcp_failed_event(
+            peer,
+            original_dst,
+            &selection,
+            sniff,
+            tls_underlay,
+            &err,
+        ))
     })
+}
+
+fn proxy_tcp_finished_event(
+    peer: SocketAddr,
+    original_dst: SocketAddrV4,
+    selection: &TcpProxySelection,
+    sniff: &TcpSniffReport,
+    tls_underlay: &'static str,
+    stats: &RelayStats,
+) -> Value {
+    let mut event = proxy_tcp_base_event(
+        "tcp_connection_finished",
+        peer,
+        original_dst,
+        selection,
+        sniff,
+    );
+    event["tls_underlay"] = json!(tls_underlay);
+    append_proxy_relay_stats(&mut event, stats);
+    event
+}
+
+fn proxy_tcp_failed_event(
+    peer: SocketAddr,
+    original_dst: SocketAddrV4,
+    selection: &TcpProxySelection,
+    sniff: &TcpSniffReport,
+    tls_underlay: &'static str,
+    err: &RelayError,
+) -> Value {
+    let mut event = proxy_tcp_base_event(
+        "tcp_connection_failed",
+        peer,
+        original_dst,
+        selection,
+        sniff,
+    );
+    event["error"] = json!(&err.message);
+    event["tls_underlay"] = json!(tls_underlay);
+    append_proxy_relay_stats(&mut event, &err.stats);
+    event
+}
+
+fn proxy_tcp_base_event(
+    event_name: &str,
+    peer: SocketAddr,
+    original_dst: SocketAddrV4,
+    selection: &TcpProxySelection,
+    sniff: &TcpSniffReport,
+) -> Value {
+    json!({
+        "event": event_name,
+        "outbound_kind": "proxy",
+        "peer": peer.to_string(),
+        "original_dst": original_dst.to_string(),
+        "dial_target": &selection.route.dial_target,
+        "dial_ip": selection.route.dial_ip,
+        "initial_outbound": selection.route.initial_outbound,
+        "final_outbound": selection.route.final_outbound,
+        "final_mark": selection.route.final_mark,
+        "userspace_route_executed": selection.route.userspace_route_executed,
+        "userspace_route_must": selection.route.userspace_route_must,
+        "sniffed_domain": &sniff.domain,
+        "sniff_error": &sniff.error,
+        "proxy_group": &selection.proxy.group_name,
+        "node_tag": &selection.proxy.node_tag,
+    })
+}
+
+fn append_proxy_relay_stats(event: &mut Value, stats: &RelayStats) {
+    event["bytes_client_to_proxy"] = json!(stats.client_to_proxy);
+    event["bytes_proxy_to_client"] = json!(stats.proxy_to_client);
+    event["response_header_stripped"] = json!(stats.response_header_stripped);
+    event["vision_unpadding_blocks"] = json!(stats.vision_unpadding_blocks);
+    event["vision_direct_command_seen"] = json!(stats.vision_direct_command_seen);
+    event["vision_raw_direct_recovered"] = json!(stats.vision_raw_direct_recovered);
+    event["vision_downlink_direct_active"] = json!(stats.vision_downlink_direct_active);
 }
 
 fn handle_direct_tcp_connection(
@@ -604,7 +654,7 @@ fn bytes_of_mut<T>(value: &mut T) -> &mut [u8] {
     unsafe { slice::from_raw_parts_mut((value as *mut T).cast::<u8>(), size_of::<T>()) }
 }
 
-#[derive(Default)]
+#[derive(Clone, Debug, Default)]
 struct RelayStats {
     client_to_proxy: usize,
     proxy_to_client: usize,
@@ -612,6 +662,22 @@ struct RelayStats {
     vision_unpadding_blocks: usize,
     vision_direct_command_seen: bool,
     vision_raw_direct_recovered: bool,
+    vision_downlink_direct_active: bool,
+}
+
+#[derive(Debug)]
+struct RelayError {
+    message: String,
+    stats: RelayStats,
+}
+
+impl RelayError {
+    fn new(message: impl Into<String>, stats: &RelayStats) -> Self {
+        Self {
+            message: message.into(),
+            stats: stats.clone(),
+        }
+    }
 }
 
 fn relay_tcp_over_vless_tls(
@@ -621,7 +687,7 @@ fn relay_tcp_over_vless_tls(
     flow: &str,
     user_uuid: [u8; 16],
     initial_payload: &[u8],
-) -> Result<RelayStats, String> {
+) -> Result<RelayStats, RelayError> {
     let mut stats = RelayStats::default();
     let mut stripper = VlessResponseStripper::default();
     let vision_enabled = flow == XTLS_RPRX_VISION;
@@ -648,9 +714,12 @@ fn relay_tcp_over_vless_tls(
                 &mut vision_first_uplink_block,
                 &mut vision_uplink_mode,
                 &mut vision_tls_state,
-            )?;
+            )
+            .map_err(|err| RelayError::new(err, &stats))?;
         } else {
-            client.queue_plain(initial_payload, "queue sniffed client payload to proxy TLS")?;
+            client
+                .queue_plain(initial_payload, "queue sniffed client payload to proxy TLS")
+                .map_err(|err| RelayError::new(err.to_string(), &stats))?;
         }
         stats.client_to_proxy += initial_payload.len();
     }
@@ -667,9 +736,12 @@ fn relay_tcp_over_vless_tls(
                     if vision_enabled {
                         pending_vision_uplink.extend_from_slice(&inbound_buf[..read]);
                         if pending_vision_uplink.len() > TLS_RECORD_MAX_PAYLOAD_LEN * 4 {
-                            return Err(format!(
-                                "pending Vision uplink payload did not form complete TLS records: {} bytes",
-                                pending_vision_uplink.len()
+                            return Err(RelayError::new(
+                                format!(
+                                    "pending Vision uplink payload did not form complete TLS records: {} bytes",
+                                    pending_vision_uplink.len()
+                                ),
+                                &stats,
                             ));
                         }
                         drain_vision_uplink(
@@ -681,12 +753,12 @@ fn relay_tcp_over_vless_tls(
                             &mut vision_first_uplink_block,
                             &mut vision_uplink_mode,
                             &mut vision_tls_state,
-                        )?;
+                        )
+                        .map_err(|err| RelayError::new(err, &stats))?;
                     } else {
-                        client.queue_plain(
-                            &inbound_buf[..read],
-                            "queue client payload to proxy TLS",
-                        )?;
+                        client
+                            .queue_plain(&inbound_buf[..read], "queue client payload to proxy TLS")
+                            .map_err(|err| RelayError::new(err.to_string(), &stats))?;
                     }
                     stats.client_to_proxy += read;
                     progressed = true;
@@ -696,7 +768,9 @@ fn relay_tcp_over_vless_tls(
                         err.kind(),
                         ErrorKind::WouldBlock | ErrorKind::TimedOut | ErrorKind::Interrupted
                     ) => {}
-                Err(err) => return Err(format!("read inbound TCP: {err}")),
+                Err(err) => {
+                    return Err(RelayError::new(format!("read inbound TCP: {err}"), &stats));
+                }
             }
         }
 
@@ -711,7 +785,8 @@ fn relay_tcp_over_vless_tls(
                         &proxy_buf[..read],
                         stop,
                         "write VLESS Vision direct payload to client",
-                    )?;
+                    )
+                    .map_err(|err| RelayError::new(err, &stats))?;
                     stats.proxy_to_client += read;
                     progressed = true;
                 }
@@ -720,10 +795,17 @@ fn relay_tcp_over_vless_tls(
                         err.kind(),
                         ErrorKind::WouldBlock | ErrorKind::TimedOut | ErrorKind::Interrupted
                     ) => {}
-                Err(err) => return Err(format!("read VLESS Vision direct TCP: {err}")),
+                Err(err) => {
+                    return Err(RelayError::new(
+                        format!("read VLESS Vision direct TCP: {err}"),
+                        &stats,
+                    ));
+                }
             }
         } else {
-            match drive_tls_io_record_aware(client)? {
+            match drive_tls_io_record_aware(client)
+                .map_err(|err| RelayError::new(err.to_string(), &stats))?
+            {
                 TlsDriveOutcome::Progressed(tls_progressed) => progressed |= tls_progressed,
                 TlsDriveOutcome::DecryptErrorRawRecord { record, error } => {
                     if can_recover_vision_raw_direct_after_tls_error(
@@ -732,17 +814,19 @@ fn relay_tcp_over_vless_tls(
                         vision.as_ref(),
                     ) {
                         downlink_direct = true;
+                        stats.vision_downlink_direct_active = true;
                         stats.vision_raw_direct_recovered = true;
                         write_all_nonblocking(
                             inbound,
                             &record,
                             stop,
                             "write recovered VLESS Vision raw-direct payload to client",
-                        )?;
+                        )
+                        .map_err(|err| RelayError::new(err, &stats))?;
                         stats.proxy_to_client += record.len();
                         progressed = true;
                     } else {
-                        return Err(error);
+                        return Err(RelayError::new(error, &stats));
                     }
                 }
             }
@@ -750,16 +834,23 @@ fn relay_tcp_over_vless_tls(
                 match client.read_plain(&mut proxy_buf) {
                     Ok(0) => break,
                     Ok(read) => {
-                        let mut payload = stripper.consume(&proxy_buf[..read])?;
+                        let mut payload = stripper
+                            .consume(&proxy_buf[..read])
+                            .map_err(|err| RelayError::new(err, &stats))?;
                         stats.response_header_stripped = stripper.done;
                         if let Some(vision) = vision.as_mut()
                             && !payload.is_empty()
                         {
-                            payload = vision.consume(&payload)?;
-                            vision_tls_state.observe_server_payload(&payload)?;
+                            payload = vision
+                                .consume(&payload)
+                                .map_err(|err| RelayError::new(err, &stats))?;
+                            vision_tls_state
+                                .observe_server_payload(&payload)
+                                .map_err(|err| RelayError::new(err, &stats))?;
                             stats.vision_unpadding_blocks = vision.completed_blocks;
                             stats.vision_direct_command_seen = vision.direct_command_seen;
                             downlink_direct = vision.direct_command_seen;
+                            stats.vision_downlink_direct_active = downlink_direct;
                             if !pending_vision_uplink.is_empty() {
                                 drain_vision_uplink(
                                     &mut pending_vision_uplink,
@@ -770,7 +861,8 @@ fn relay_tcp_over_vless_tls(
                                     &mut vision_first_uplink_block,
                                     &mut vision_uplink_mode,
                                     &mut vision_tls_state,
-                                )?;
+                                )
+                                .map_err(|err| RelayError::new(err, &stats))?;
                             }
                         }
                         if !payload.is_empty() {
@@ -779,7 +871,8 @@ fn relay_tcp_over_vless_tls(
                                 &payload,
                                 stop,
                                 "write VLESS payload to client",
-                            )?;
+                            )
+                            .map_err(|err| RelayError::new(err, &stats))?;
                             stats.proxy_to_client += payload.len();
                         }
                         progressed = true;
@@ -792,7 +885,12 @@ fn relay_tcp_over_vless_tls(
                     {
                         break;
                     }
-                    Err(err) => return Err(format!("read VLESS TLS plaintext: {err}")),
+                    Err(err) => {
+                        return Err(RelayError::new(
+                            format!("read VLESS TLS plaintext: {err}"),
+                            &stats,
+                        ));
+                    }
                 }
             }
         }
@@ -803,7 +901,7 @@ fn relay_tcp_over_vless_tls(
         if progressed {
             last_activity = Instant::now();
         } else if last_activity.elapsed() > RESIDENT_TCP_IDLE_TIMEOUT {
-            return Err("resident TCP relay idle timeout".to_owned());
+            return Err(RelayError::new("resident TCP relay idle timeout", &stats));
         } else {
             thread::sleep(RESIDENT_IDLE_SLEEP);
         }
@@ -865,6 +963,60 @@ mod tests {
         assert_eq!(stripper.consume(b"bcOK").unwrap(), b"OK");
         assert!(stripper.done);
         assert_eq!(stripper.consume(b"NEXT").unwrap(), b"NEXT");
+    }
+
+    #[test]
+    fn proxy_failure_event_carries_relay_diagnostics() {
+        let selection = TcpProxySelection {
+            route: TcpRouteSelection {
+                initial_outbound: 7,
+                final_outbound: 7,
+                final_mark: 0x55,
+                userspace_route_executed: true,
+                userspace_route_must: false,
+                dial_target: "203.0.113.10:443".to_owned(),
+                dial_ip: false,
+            },
+            proxy: dummy_proxy_plan(),
+        };
+        let sniff = TcpSniffReport {
+            payload: Vec::new(),
+            domain: "service.example".to_owned(),
+            error: None,
+        };
+        let stats = RelayStats {
+            client_to_proxy: 128,
+            proxy_to_client: 64,
+            response_header_stripped: true,
+            vision_unpadding_blocks: 2,
+            vision_direct_command_seen: false,
+            vision_raw_direct_recovered: false,
+            vision_downlink_direct_active: false,
+        };
+        let err = RelayError::new("read proxy plaintext: sample failure", &stats);
+
+        let event = proxy_tcp_failed_event(
+            SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::new(192, 0, 2, 10), 43100)),
+            SocketAddrV4::new(Ipv4Addr::new(198, 51, 100, 20), 443),
+            &selection,
+            &sniff,
+            "boringssl",
+            &err,
+        );
+
+        assert_eq!(event["event"], "tcp_connection_failed");
+        assert_eq!(event["tls_underlay"], "boringssl");
+        assert_eq!(event["error"], "read proxy plaintext: sample failure");
+        assert_eq!(event["bytes_client_to_proxy"], 128);
+        assert_eq!(event["bytes_proxy_to_client"], 64);
+        assert_eq!(event["response_header_stripped"], true);
+        assert_eq!(event["vision_unpadding_blocks"], 2);
+        assert_eq!(event["vision_direct_command_seen"], false);
+        assert_eq!(event["vision_raw_direct_recovered"], false);
+        assert_eq!(event["vision_downlink_direct_active"], false);
+        assert_eq!(event["proxy_group"], "proxy");
+        assert_eq!(event["node_tag"], "node");
+        assert_eq!(event["sniffed_domain"], "service.example");
     }
 
     #[test]
