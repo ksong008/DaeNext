@@ -7757,3 +7757,68 @@ Rust product packaging must either:
 
 This is a product packaging/WebUI serving blocker, not a resident dataplane or
 BoringSSL underlay blocker.
+
+### 41.11 C10 filesystem WebUI dist validation kept live
+
+Follow-up validation used the C10 filesystem WebUI package layout instead of
+embedded WebUI assets:
+
+```text
+local dist source: /root/project/daed-daex-align/daed/apps/web/dist
+local tarball: /tmp/daed-web-dist-c10.tgz
+tarball sha256=1dc4902f55f64d1650d5905c1766c9877dc27ed77004fde48ec670b51934c1c3
+installed web root: /usr/share/daed/web
+systemd env: DAED_WEB_ROOT=/usr/share/daed/web
+remote evidence: /root/daed-c10-webroot-test-20260603-100223
+```
+
+The Rust C10 candidate was installed live:
+
+```text
+/usr/bin/daed sha256=74862b9edb418cd96580a69b6113e7f7a24861436b4899eef8b791be9a13e5a7
+service state: active
+drop-ins: 20-daex-reload.conf, 30-c10-runtime-bridge-env.conf
+rollback binary retained: /usr/bin/daed.c10-manual-rollback-b296303fc01b0
+```
+
+WebUI/API validation passed:
+
+```text
+GET / -> HTTP 200 text/html
+GET /assets/index-D6BRl2SC.js -> HTTP 200 application/javascript
+GET /setup -> HTTP 200 text/html
+GET /api/health -> HTTP 200 {"healthCheck":1}
+```
+
+Runtime/dataplane validation passed:
+
+```text
+POST /api/runtime/reload -> HTTP 200
+/api/general/state -> HTTP 200
+/api/runtime/overview -> HTTP 200
+running=true
+residentRuntimeStarted=true
+residentDataplane.status=pass
+residentDataplane.tcp_worker_started=true
+residentDataplane.udp_worker_started=true
+```
+
+Telegram/API probe evidence:
+
+```text
+curl https://api.telegram.org/ -> HTTP 200
+effective URL: https://core.telegram.org/bots
+event=tcp_connection_finished
+proxy_group=TG
+node_tag=[SG]Oracle-Sg
+tls_underlay=boringssl
+```
+
+Conclusion:
+
+```text
+C10 filesystem WebUI dist layout validates the current Rust daed product
+surface without requiring embedded WebUI assets. Because WebUI, API,
+runtime/dataplane, and Telegram probe validation passed, the Rust candidate was
+kept live on 10.10.10.2 for manual testing instead of rolling back.
+```
