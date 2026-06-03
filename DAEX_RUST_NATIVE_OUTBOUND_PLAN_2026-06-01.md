@@ -7307,3 +7307,196 @@ Therefore the next action remains C10 live revalidation: build a new Rust
 `daed` candidate, stage it on 10.10.10.2, repeat the default-path switch and
 rollback loop, and leave the host on the safe working binary if the real runtime
 or dataplane admission fails.
+
+## 41. C10 runtime bridge live retry blocker and generic parser fix
+
+Date: 2026-06-03
+
+Scope remains C10 `go-free-product-chain-v1`. This is not a new C-stage.
+
+### 41.1 Live retry result
+
+A Rust `daed` runtime-bridge candidate was staged on the live host and tested as
+the default `/usr/bin/daed` path with a temporary systemd environment drop-in:
+
+```text
+DAE_RUST_RESIDENT_DATAPLANE=1
+DAE_EXPERIMENT_VLESS_VISION_FP_RUST_NATIVE=1
+DAE_NETNS_LINK=auto
+```
+
+The candidate failed before the HTTP API came up. The immediate blocker was
+startup runtime restore parsing the generated dae config:
+
+```text
+startup runtime restore failed: parse config:
+domain(geosite:category-ai-!cn, geosite:apple-intelligence, geosite:bing) -> openai
+expected )
+```
+
+This was not a dataplane-runtime failure yet. The failure happened before
+`start_resident_production_runtime()` could run for that candidate.
+
+Rollback was completed on the live host:
+
+```text
+/usr/bin/daed restored to the previous working binary
+temporary C10 runtime-bridge env drop-in removed
+systemd daemon-reload and reset-failed completed
+daed active again
+/api/health returned 200
+wing.db hash stayed unchanged
+```
+
+The staged Rust candidate remains a candidate artifact only and is not the live
+default binary.
+
+### 41.2 Generic parser rule
+
+The parser fix must stay protocol- and service-generic. It must not special-case
+VLESS, any node provider name, geosite category names, or one live routing rule.
+
+The accepted rule is:
+
+```text
+For any function parameter written as key:value, the value may be assembled from
+bare literal fragments plus ':' and '!' fragments until a structural delimiter
+is reached.
+```
+
+Structural delimiters still stop parsing:
+
+```text
+,
+)
+&&
+->
+```
+
+This keeps compatibility with legacy/default daed configuration text such as
+delimiter-bearing matcher values while preserving the parser structure.
+
+### 41.3 Generic test principle
+
+Tests for this fix must avoid provider/protocol-specific sample identities.
+
+Use generic placeholders for generated product config tests:
+
+```text
+node tag: [edge]sample
+node link: scheme://example.invalid:443#sample
+group name: egress
+function value shape: sample-set:alpha-!beta
+```
+
+Specific live strings may appear only as evidence in this memo or other
+validation logs, not as top-level stage/gate names or protocol-specific
+capability names.
+
+### 41.4 Fail-closed runtime admission gate
+
+The Rust `daed` runtime bridge now refuses to report C10 default-path success
+unless the resident userspace dataplane is admitted:
+
+```text
+residentDataplane.enabled == true
+residentDataplane.status == "pass"
+```
+
+If the resident runtime starts but the dataplane is skipped or not admitted,
+Rust `daed` calls runtime cleanup and returns an error. This prevents a false
+positive where the product shell and resident BPF/runtime start while the actual
+userspace dataplane is not owned by Rust.
+
+### 41.5 Validation completed after the fix
+
+Validation commands completed:
+
+```text
+cargo fmt -p dae-config -p dae-daemon
+cargo test -p dae-config parser::tests
+cargo test -p dae-daemon daed_product::tests::generated_runtime_config_renders_parseable_nodes_and_groups
+cargo check -p dae-daemon --bin daed
+cargo test -p dae-daemon --test daed_product
+cargo test -p dae-daemon daed_product::
+```
+
+All listed validation passed.
+
+### 41.6 Next C10 action
+
+Build a new release candidate from this parser/runtime-gate state, stage it on
+the live host, repeat the default-path switch with rollback protection, and only
+count C10 live revalidation as passing if:
+
+```text
+Rust daed API comes up
+startup runtime restore succeeds
+/api/general/state reports manager-owned resident runtime running
+residentDataplane.enabled=true
+residentDataplane.status=pass
+real traffic test passes
+rollback path still preserves wing.db
+```
+
+### 41.7 C10 condition split and proxy failure diagnostics
+
+Do not reinterpret section 13 as a BoringSSL regression.
+
+Section 13 remains the recorded 2026-06-02 live result for the temporary
+Rust-owned `dae-daemon-optin` runtime:
+
+```text
+Telegram target flows used the Oracle-Sg route
+TCP connection events reached tcp_connection_finished
+tls_underlay=boringssl
+```
+
+That result means the fingerprint-aware BoringSSL underlay solved the previously
+observed link-fingerprint admission/wire-emission blocker for that runtime
+condition. It does not automatically certify every later C10 product-shell
+condition.
+
+The C10 Rust `daed` default-product path adds different validation variables:
+
+```text
+single Rust /usr/bin/daed product shell
+daed.db materialization and startup restore
+API reload/runtime-start ownership
+native-ebpf build feature
+compile-time fingerprint admission gate
+resident dataplane fail-closed admission
+```
+
+If a later C10 live retry shows a failed proxy connection, treat it as C10
+condition-specific evidence until reproduced and recorded. Do not describe it as
+`BoringSSL did not work` unless the event itself shows the fingerprint-aware
+underlay was absent or misselected.
+
+The resident proxy failure event now carries the same generic relay diagnostics
+that the finished event carries:
+
+```text
+tls_underlay
+bytes_client_to_proxy
+bytes_proxy_to_client
+response_header_stripped
+vision_unpadding_blocks
+vision_direct_command_seen
+vision_raw_direct_recovered
+vision_downlink_direct_active
+```
+
+Purpose: the next live C10 retry can distinguish these cases without blind
+retesting:
+
+```text
+fingerprint-aware TLS underlay not selected
+failure before response header strip
+failure before explicit downlink direct command
+failure after direct command but before raw-direct recovery
+raw-direct recovery succeeded and a later direct read/write failed
+```
+
+This is observability only. It does not change routing, protocol selection,
+fingerprint admission, or Vision command semantics.
