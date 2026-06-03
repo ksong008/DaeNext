@@ -70,11 +70,14 @@ pub struct ResidentProductionRuntime {
 
 impl ResidentProductionRuntime {
     pub fn product_state_summary(&self) -> Value {
-        let attach_backend = self
-            .start_report
-            .pointer("/resident_interface_backend_policy/effective_backend")
-            .and_then(Value::as_str)
-            .unwrap_or("resident-production-runtime");
+        let attach_backend =
+            actual_resident_attach_backend(&self.start_report).unwrap_or_else(|| {
+                self.start_report
+                    .pointer("/resident_interface_backend_policy/effective_backend")
+                    .and_then(Value::as_str)
+                    .unwrap_or("resident-production-runtime")
+                    .to_owned()
+            });
         let netns_link_mode = selected_netns_link_mode(&self.start_report).unwrap_or_else(|| {
             self.start_report
                 .pointer("/topology_values/requested_netns_link_mode")
@@ -82,6 +85,12 @@ impl ResidentProductionRuntime {
                 .unwrap_or("production-runtime-owner")
                 .to_owned()
         });
+        let mut resident_dataplane = self.start_report["resident_dataplane"].clone();
+        if let Some(dataplane) = self.dataplane.as_ref()
+            && let Value::Object(map) = &mut resident_dataplane
+        {
+            map.insert("metrics".to_owned(), dataplane.metrics_snapshot());
+        }
         json!({
             "running": !self.cleaned,
             "state": if self.cleaned { "stopped" } else { "running" },
@@ -89,7 +98,7 @@ impl ResidentProductionRuntime {
             "netnsLinkMode": netns_link_mode,
             "fakeRuntime": false,
             "residentRuntimeStarted": self.start_report["resident_runtime_started"].as_bool().unwrap_or(false),
-            "residentDataplane": self.start_report["resident_dataplane"].clone(),
+            "residentDataplane": resident_dataplane,
             "artifactDir": self.start_report["artifact_dir"].clone(),
             "startFile": self.start_report["start_file"].clone(),
             "cleanupFile": self.start_report["cleanup_file"].clone(),
@@ -775,6 +784,55 @@ fn selected_netns_link_mode(start_report: &Value) -> Option<String> {
         .map(str::to_owned)
 }
 
+fn actual_resident_attach_backend(start_report: &Value) -> Option<String> {
+    let mut saw_tcx = false;
+    let mut saw_tc = false;
+    for backend in resident_actual_backend_values(start_report) {
+        match backend {
+            "tcx" => saw_tcx = true,
+            "tc"
+            | "tc_netlink"
+            | "tc-command-fallback"
+            | "tc_command_fallback"
+            | "tc-command"
+            | "tc_command" => saw_tc = true,
+            _ => {}
+        }
+    }
+    match (saw_tcx, saw_tc) {
+        (true, true) => Some("tcx+tc".to_owned()),
+        (true, false) => Some("tcx".to_owned()),
+        (false, true) => Some("tc".to_owned()),
+        (false, false) => None,
+    }
+}
+
+fn resident_actual_backend_values(start_report: &Value) -> Vec<&str> {
+    let mut out = Vec::new();
+    if let Some(wan) = start_report["resident_wan_attach"].as_array() {
+        for attach in wan {
+            if let Some(directions) = attach["directions"].as_array() {
+                for direction in directions {
+                    if let Some(backend) = direction["backend"].as_str() {
+                        out.push(backend);
+                    }
+                }
+            }
+        }
+    }
+    if let Some(lan) = start_report["resident_lan_attach"].as_array() {
+        for attach in lan {
+            if let Some(backend) = attach["backend"].as_str() {
+                out.push(backend);
+            }
+            if let Some(backend) = attach.pointer("/egress/backend").and_then(Value::as_str) {
+                out.push(backend);
+            }
+        }
+    }
+    out
+}
+
 fn setup_runtime_topology(
     executed_steps: &mut Vec<Value>,
     options: &ProductionRuntimeOwnerOptions,
@@ -1000,6 +1058,28 @@ mod tests {
             json!(false)
         );
         assert_eq!(policy["explicit_tcx_same_interface"], json!(true));
+    }
+
+    #[test]
+    fn resident_summary_reports_actual_tcx_backend_instead_of_auto_plan() {
+        let report = json!({
+            "resident_interface_backend_policy": {"effective_backend": "auto"},
+            "resident_wan_attach": [{
+                "directions": [
+                    {"backend": "tcx"},
+                    {"backend": "tcx"}
+                ]
+            }],
+            "resident_lan_attach": [{
+                "backend": "tcx",
+                "egress": {"backend": "tcx"}
+            }]
+        });
+
+        assert_eq!(
+            actual_resident_attach_backend(&report).as_deref(),
+            Some("tcx")
+        );
     }
 
     #[cfg(feature = "native-ebpf")]

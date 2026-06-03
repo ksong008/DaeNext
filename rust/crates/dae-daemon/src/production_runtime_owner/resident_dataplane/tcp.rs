@@ -25,6 +25,7 @@ use dae_routing::{Query, RoutingMatcher};
 use dae_sniffing::{SniffingError, sniff_tcp};
 use serde_json::{Value, json};
 
+use super::ResidentDataplaneMetrics;
 use super::client::{
     TlsDriveOutcome, VlessTlsClient, drive_tls_io_record_aware, open_vless_tls_client,
     tls_underlay_name,
@@ -268,6 +269,7 @@ pub(super) fn resident_tcp_accept_loop(
     stop: Arc<AtomicBool>,
     event_file: PathBuf,
     event_lock: Arc<Mutex<()>>,
+    metrics: Arc<ResidentDataplaneMetrics>,
 ) {
     if let Err(err) = listener.set_nonblocking(true) {
         append_event(
@@ -289,8 +291,11 @@ pub(super) fn resident_tcp_accept_loop(
                 let stop = Arc::clone(&stop);
                 let event_file = event_file.clone();
                 let event_lock = Arc::clone(&event_lock);
+                let metrics = Arc::clone(&metrics);
                 thread::spawn(move || {
-                    let result = handle_tcp_connection(stream, peer, router, stop);
+                    metrics.tcp_opened();
+                    let result = handle_tcp_connection(stream, peer, router, stop, &metrics);
+                    metrics.tcp_closed();
                     match result {
                         Ok(event) => append_event(&event_file, &event_lock, event),
                         Err(err) => append_event(
@@ -326,6 +331,7 @@ fn handle_tcp_connection(
     peer: SocketAddr,
     router: Arc<ResidentTcpRouter>,
     stop: Arc<AtomicBool>,
+    metrics: &ResidentDataplaneMetrics,
 ) -> Result<Value, String> {
     let peer_v4 = match peer {
         SocketAddr::V4(addr) => addr,
@@ -355,12 +361,24 @@ fn handle_tcp_connection(
     let sniff = sniff_initial_tcp_payload(&mut inbound, router.sniffing_timeout)?;
     let selection = router.select(peer_v4, original_dst, &sniff.domain)?;
     match selection {
-        TcpSelection::Proxy(selection) => {
-            handle_proxy_tcp_connection(&mut inbound, peer, original_dst, selection, &stop, &sniff)
-        }
-        TcpSelection::Direct(selection) => {
-            handle_direct_tcp_connection(&mut inbound, peer, original_dst, selection, &stop, &sniff)
-        }
+        TcpSelection::Proxy(selection) => handle_proxy_tcp_connection(
+            &mut inbound,
+            peer,
+            original_dst,
+            selection,
+            &stop,
+            &sniff,
+            metrics,
+        ),
+        TcpSelection::Direct(selection) => handle_direct_tcp_connection(
+            &mut inbound,
+            peer,
+            original_dst,
+            selection,
+            &stop,
+            &sniff,
+            metrics,
+        ),
         TcpSelection::Block(selection) => {
             let _ = inbound.shutdown(Shutdown::Both);
             Ok(json!({
@@ -388,6 +406,7 @@ fn handle_proxy_tcp_connection(
     selection: TcpProxySelection,
     stop: &AtomicBool,
     sniff: &TcpSniffReport,
+    metrics: &ResidentDataplaneMetrics,
 ) -> Result<Value, String> {
     let mut client = open_vless_tls_client(&selection.proxy)?;
     let tls_underlay = tls_underlay_name(&client);
@@ -411,6 +430,7 @@ fn handle_proxy_tcp_connection(
         &selection.proxy.flow,
         selection.proxy.key,
         &sniff.payload,
+        metrics,
     )
     .map(|stats| {
         proxy_tcp_finished_event(peer, original_dst, &selection, sniff, tls_underlay, &stats)
@@ -511,13 +531,14 @@ fn handle_direct_tcp_connection(
     selection: TcpDirectSelection,
     stop: &AtomicBool,
     sniff: &TcpSniffReport,
+    metrics: &ResidentDataplaneMetrics,
 ) -> Result<Value, String> {
     let mut direct = open_direct_tcp_connection(
         &selection.route.dial_target,
         selection.route.final_mark,
         selection.mptcp,
     )?;
-    let stats = relay_tcp_direct(inbound, &mut direct.stream, stop, &sniff.payload)?;
+    let stats = relay_tcp_direct(inbound, &mut direct.stream, stop, &sniff.payload, metrics)?;
     Ok(json!({
         "event": "tcp_connection_finished",
         "outbound_kind": "direct",
@@ -687,6 +708,7 @@ fn relay_tcp_over_vless_tls(
     flow: &str,
     user_uuid: [u8; 16],
     initial_payload: &[u8],
+    metrics: &ResidentDataplaneMetrics,
 ) -> Result<RelayStats, RelayError> {
     let mut stats = RelayStats::default();
     let mut stripper = VlessResponseStripper::default();
@@ -722,6 +744,7 @@ fn relay_tcp_over_vless_tls(
                 .map_err(|err| RelayError::new(err.to_string(), &stats))?;
         }
         stats.client_to_proxy += initial_payload.len();
+        metrics.add_upload(initial_payload.len());
     }
     while !stop.load(Ordering::Relaxed) {
         let mut progressed = false;
@@ -761,6 +784,7 @@ fn relay_tcp_over_vless_tls(
                             .map_err(|err| RelayError::new(err.to_string(), &stats))?;
                     }
                     stats.client_to_proxy += read;
+                    metrics.add_upload(read);
                     progressed = true;
                 }
                 Err(err)
@@ -788,6 +812,7 @@ fn relay_tcp_over_vless_tls(
                     )
                     .map_err(|err| RelayError::new(err, &stats))?;
                     stats.proxy_to_client += read;
+                    metrics.add_download(read);
                     progressed = true;
                 }
                 Err(err)
@@ -824,6 +849,7 @@ fn relay_tcp_over_vless_tls(
                         )
                         .map_err(|err| RelayError::new(err, &stats))?;
                         stats.proxy_to_client += record.len();
+                        metrics.add_download(record.len());
                         progressed = true;
                     } else {
                         return Err(RelayError::new(error, &stats));
@@ -874,6 +900,7 @@ fn relay_tcp_over_vless_tls(
                             )
                             .map_err(|err| RelayError::new(err, &stats))?;
                             stats.proxy_to_client += payload.len();
+                            metrics.add_download(payload.len());
                         }
                         progressed = true;
                         if downlink_direct {

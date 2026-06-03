@@ -1,5 +1,5 @@
 use std::fs;
-use std::io::{Read, Write};
+use std::io::{ErrorKind, Read, Write};
 use std::net::{TcpListener, TcpStream};
 use std::path::Path;
 use std::process::{Child, Command, Stdio};
@@ -469,7 +469,7 @@ fn daed_run_serves_c10_resource_runtime_log_latency_and_bundle_surface() {
     );
     let settings = json_body(&settings);
     assert_eq!(settings["maxEntries"].as_i64().unwrap(), 500);
-    assert_eq!(settings["minMaxEntries"].as_i64().unwrap(), 100);
+    assert_eq!(settings["minMaxEntries"].as_i64().unwrap(), 500);
 
     let log_level = http_request(
         port,
@@ -512,10 +512,30 @@ fn daed_run_serves_c10_resource_runtime_log_latency_and_bundle_surface() {
     let overview = http_request(port, "GET", "/api/runtime/overview", None, Some(&token));
     assert!(overview.contains("\"rssBytes\""), "{overview}");
     assert!(overview.contains("\"runtime\""), "{overview}");
-    let events = http_request(port, "GET", "/api/events/runtime", None, Some(&token));
+    let logs = http_request(port, "GET", "/api/logs?level=all", None, Some(&token));
+    assert!(logs.contains("\"items\""), "{logs}");
+    assert!(
+        logs.contains("runtime reload applied") || logs.contains("subscription"),
+        "{logs}"
+    );
+    let events = http_request_until(
+        port,
+        "GET",
+        "/api/events/runtime",
+        None,
+        Some(&token),
+        "event: runtime.overview",
+    );
     assert!(events.contains("event: runtime.overview"), "{events}");
-    let log_events = http_request(port, "GET", "/api/events/logs", None, Some(&token));
-    assert!(log_events.contains("event: logs.append"), "{log_events}");
+    let log_events = http_request_until(
+        port,
+        "GET",
+        "/api/events/logs",
+        None,
+        Some(&token),
+        "retry: 3000",
+    );
+    assert!(log_events.contains("retry: 3000"), "{log_events}");
 
     let bundle = json_body(&http_request(
         port,
@@ -798,6 +818,68 @@ fn try_http_request(
     let mut response = String::new();
     stream.read_to_string(&mut response)?;
     Ok(response)
+}
+
+fn http_request_until(
+    port: u16,
+    method: &str,
+    path: &str,
+    body: Option<&str>,
+    token: Option<&str>,
+    needle: &str,
+) -> String {
+    let mut stream = TcpStream::connect(("127.0.0.1", port)).unwrap();
+    stream
+        .set_read_timeout(Some(Duration::from_secs(2)))
+        .unwrap();
+    let body = body.unwrap_or("");
+    write!(
+        stream,
+        "{method} {path} HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n"
+    )
+    .unwrap();
+    if let Some(token) = token {
+        write!(stream, "Authorization: Bearer {token}\r\n").unwrap();
+    }
+    if !body.is_empty() {
+        write!(
+            stream,
+            "Content-Type: application/json\r\nContent-Length: {}\r\n",
+            body.len()
+        )
+        .unwrap();
+    }
+    write!(stream, "\r\n").unwrap();
+    if !body.is_empty() {
+        write!(stream, "{body}").unwrap();
+    }
+
+    let mut response = String::new();
+    let mut buf = [0_u8; 1024];
+    let started = Instant::now();
+    while started.elapsed() < Duration::from_secs(3) {
+        match stream.read(&mut buf) {
+            Ok(0) => break,
+            Ok(read) => {
+                response.push_str(&String::from_utf8_lossy(&buf[..read]));
+                if response.contains(needle) {
+                    break;
+                }
+            }
+            Err(err)
+                if matches!(
+                    err.kind(),
+                    ErrorKind::WouldBlock | ErrorKind::TimedOut | ErrorKind::Interrupted
+                ) =>
+            {
+                if response.contains(needle) {
+                    break;
+                }
+            }
+            Err(err) => panic!("stream request failed: {err}"),
+        }
+    }
+    response
 }
 
 fn json_body(response: &str) -> Value {

@@ -587,6 +587,7 @@ dependencies = [
  "dae-sniffing",
  "fastrand",
  "libc",
+ "regex",
  "rusqlite",
  "rustls",
  "serde_json",
