@@ -6863,3 +6863,224 @@ final product-chain recertification after live mutation
 ```
 
 Therefore the next live action is still a C10 live default-path switch and rollback validation task, not a new C-stage.
+
+## 39. C10 live default-path switch and rollback evidence record (2026-06-03)
+
+This record is still under C10 `go-free-product-chain-v1`. It is not a new
+stage.
+
+### 39.1 Live host and artifacts
+
+Target host:
+
+```text
+10.10.10.2
+hostname=fendoradaed
+remote evidence dir=/root/daed-c10-live-20260603-080402
+```
+
+Local release candidate built from `/root/project/dae-daex-align`:
+
+```text
+artifact=/root/project/dae-daex-align/rust/target/release/daed
+remote staged artifact=/usr/bin/daed.rust-c10-candidate
+size=9948816 bytes
+sha256=ecfe16e85cbe96bbb008194f96ca97c7cf878e2cb1b3266787dbfd95fcc4f2bb
+```
+
+Original live rollback binary:
+
+```text
+/usr/bin/daed sha256 before switch=b296303fc01b0cd4453ab90bb7bf988d6315a952a548fd483a0a9c5bab2448bf
+/usr/bin/daed.go-rollback.20260603-080402 sha256=b296303fc01b0cd4453ab90bb7bf988d6315a952a548fd483a0a9c5bab2448bf
+```
+
+Protected rollback state:
+
+```text
+/etc/daed/wing.db sha256 before switch=bada431fed16f050f40daea1365798293ac31a11701c97b16b4c264d8cd1d441
+```
+
+Rust product state:
+
+```text
+/etc/daed/daed.db was created for Rust daed and migrated from /etc/daed/wing.db
+Rust daed did not use /etc/daed/wing.db as its primary state store
+```
+
+### 39.2 Pre-switch and staged admission
+
+Pre-switch live state:
+
+```text
+systemctl is-active daed=active
+live command=/usr/bin/daed run -c /etc/daed/
+live port=*:2023
+```
+
+Candidate CLI checks passed on the live host:
+
+```text
+/usr/bin/daed.rust-c10-candidate package-info --json
+/usr/bin/daed.rust-c10-candidate export admission-report
+/usr/bin/daed.rust-c10-candidate state check --state /etc/daed/daed.db
+```
+
+The `state check` created `/etc/daed/daed.db` when it did not exist. It did not
+modify `/etc/daed/wing.db`.
+
+Staged HTTP smoke on `127.0.0.1:22023` passed before migration:
+
+```text
+GET /api/health=200
+GET /api/auth/status=200
+POST /api/auth/users=200
+GET /api/user/me=200
+PUT /api/user/me/storage=200
+GET /api/runtime/overview=200
+GET /api/logs/settings=200
+```
+
+The migrated `wing.db -> daed.db` state preserved the rollback database:
+
+```text
+wing_db_sha256_before=bada431fed16f050f40daea1365798293ac31a11701c97b16b4c264d8cd1d441
+wing_db_sha256_after=bada431fed16f050f40daea1365798293ac31a11701c97b16b4c264d8cd1d441
+wing_db_unchanged=true
+daed.db user_count=1
+daed.db node_count=24
+daed.db group_count=8
+```
+
+Staged HTTP smoke on `127.0.0.1:22023` passed after migration:
+
+```text
+GET /api/health=200
+GET /api/user/me=200 username=shaka
+GET /api/nodes=200
+GET /api/groups=200
+```
+
+### 39.3 Live Rust default-path switch attempt
+
+The live default path was switched by replacing `/usr/bin/daed` with
+`/usr/bin/daed.rust-c10-candidate` while keeping the original binary at
+`/usr/bin/daed.go-rollback.20260603-080402`.
+
+Rust candidate systemd/API admission passed:
+
+```text
+systemctl is-active daed=active
+command=/usr/bin/daed run -c /etc/daed/
+port=0.0.0.0:2023
+/usr/bin/daed sha256=ecfe16e85cbe96bbb008194f96ca97c7cf878e2cb1b3266787dbfd95fcc4f2bb
+GET /api/health=200
+GET /api/user/me=200 username=shaka
+GET /api/nodes=200 total=24
+GET /api/groups=200 items=8
+GET /api/general/state=200
+GET /api/runtime/overview=200
+GET /api/logs/settings=200
+```
+
+However, C10 live default-path admission did not pass:
+
+```text
+/api/general/state running=false
+/api/general/state netnsLinkMode=none
+/api/general/state attachBackend=rust-native-owned-local
+```
+
+Local code audit matched the live result:
+
+```text
+rust/crates/dae-daemon/src/daed_product.rs api_runtime_reload()
+```
+
+currently only:
+
+```text
+materializes /etc/daed/runtime/generated.dae
+sets metadata runtime_running=true when not dry
+updates the systems table
+```
+
+It does not start or own the production resident dataplane, does not attach the
+runtime path, and does not restore the selected running state on `daed run`
+startup. Calling `/api/runtime/reload` would therefore be a metadata/materializer
+operation, not real live dataplane admission.
+
+### 39.4 Rollback validation
+
+Rollback to the original binary was validated:
+
+```text
+/usr/bin/daed restored sha256=b296303fc01b0cd4453ab90bb7bf988d6315a952a548fd483a0a9c5bab2448bf
+systemctl is-active daed=active
+port=*:2023
+GET /api/health=200
+GET /api/user/me=200 username=shaka
+GET /api/general/state=200
+/api/general/state running=true
+/api/general/state netnsLinkMode=netkit
+/api/general/state attachBackend=tcx
+```
+
+Rollback state was protected:
+
+```text
+/etc/daed/wing.db sha256 after rollback=bada431fed16f050f40daea1365798293ac31a11701c97b16b4c264d8cd1d441
+wing.db unchanged=true
+```
+
+### 39.5 Final live state after this C10 attempt
+
+Because the Rust candidate did not start a real resident/dataplane runtime, the
+host was intentionally left on the original working `daed` binary.
+
+Final live state:
+
+```text
+systemctl is-active daed=active
+command=/usr/bin/daed run -c /etc/daed/
+port=*:2023
+/usr/bin/daed sha256=b296303fc01b0cd4453ab90bb7bf988d6315a952a548fd483a0a9c5bab2448bf
+/usr/bin/daed.rust-c10-candidate sha256=ecfe16e85cbe96bbb008194f96ca97c7cf878e2cb1b3266787dbfd95fcc4f2bb
+/usr/bin/daed.go-rollback.20260603-080402 sha256=b296303fc01b0cd4453ab90bb7bf988d6315a952a548fd483a0a9c5bab2448bf
+/etc/daed/wing.db sha256=bada431fed16f050f40daea1365798293ac31a11701c97b16b4c264d8cd1d441
+/etc/daed/daed.db sha256=0e8392cece6f1f8fad3bbd87ac7cbc0c4f17c190d550193c1ebc006696497119
+```
+
+### 39.6 C10 conclusion and next work item
+
+Passed:
+
+```text
+Rust daed binary can run as the live systemd API/product shell
+Rust daed can serve the migrated daed.db Web/API state
+Rust daed uses daed.db and did not write wing.db by default
+Rollback binary and wing.db rollback path are valid
+```
+
+Not passed:
+
+```text
+C10 live default-path admission
+go_free_product_chain_ready
+production runtime ownership from Rust daed run
+```
+
+Required C10 fix before keeping Rust `daed` as the live default:
+
+```text
+wire Rust daed run/reload/stop to the production resident runtime owner
+restore selected running state from daed.db on startup
+make /api/general/state report real runtime state, not metadata-only state
+make admission require running=true with a real attach backend and netns link mode
+keep /etc/daed/wing.db protected for old daed rollback
+keep names protocol-generic at the C10 gate level
+```
+
+This means the next task remains C10 product-chain work: bridge the Rust product
+surface to the existing Rust resident production runtime and re-run the same
+live switch plus rollback evidence loop.
