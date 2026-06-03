@@ -1,9 +1,10 @@
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 use std::fs;
-use std::io::{self, Read, Write};
+use std::io::{self, BufRead, Read, Seek, SeekFrom, Write};
 use std::net::{TcpListener, TcpStream, ToSocketAddrs};
 use std::path::{Component, Path, PathBuf};
-use std::sync::{Arc, Mutex};
+use std::process::Command;
+use std::sync::{Arc, Mutex, OnceLock};
 use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
@@ -12,6 +13,7 @@ use base64::engine::general_purpose::{STANDARD, URL_SAFE_NO_PAD};
 use dae_config::Config;
 use dae_config::parser::parse_config;
 use dae_config::schema::build_config;
+use regex::Regex;
 use rusqlite::{Connection, OptionalExtension, params};
 use rustls::pki_types::ServerName;
 use rustls::{ClientConfig, ClientConnection, RootCertStore};
@@ -23,7 +25,7 @@ use sha3::{
 };
 
 use crate::production_runtime_owner::{
-    ResidentProductionRuntime, start_resident_production_runtime,
+    ResidentProductionRuntime, set_resident_event_log_sink, start_resident_production_runtime,
 };
 
 const DEFAULT_CONFIG_DIR: &str = "/etc/daed";
@@ -34,6 +36,22 @@ const PROTECTED_ROLLBACK_STATE_STORE: &str =
     crate::service_contract::DAED_PROTECTED_ROLLBACK_STATE_STORE;
 const MAX_BODY_BYTES: usize = 1 << 20;
 const TOKEN_TTL_SECONDS: u64 = 30 * 24 * 60 * 60;
+const DEFAULT_LOG_MAX_ENTRIES: i64 = 10_000;
+const DEFAULT_LOG_MAX_BYTES: i64 = 50 * 1024 * 1024;
+const MIN_LOG_MAX_ENTRIES: i64 = 500;
+const MAX_LOG_MAX_ENTRIES: i64 = 50_000;
+const MIN_LOG_MAX_BYTES: i64 = 5 * 1024 * 1024;
+const MAX_LOG_MAX_BYTES: i64 = 200 * 1024 * 1024;
+const DEFAULT_LOG_QUERY_LIMIT: usize = 500;
+const MAX_LOG_QUERY_LIMIT: usize = 2_000;
+const MAX_LOG_LINE_BYTES: usize = 16 * 1024;
+const MAX_LOG_FIELD_VALUE_LEN: usize = 1024;
+const LOG_TAIL_ID_SCAN_BYTES: u64 = 1024 * 1024;
+const LOG_STREAM_POLL_INTERVAL: Duration = Duration::from_millis(500);
+const LOG_STREAM_HEARTBEAT_INTERVAL: Duration = Duration::from_secs(15);
+const LOG_STREAM_RETRY_MS: u64 = 3_000;
+const PRODUCT_LOG_DIR: &str = "logs";
+const PRODUCT_LOG_FILE: &str = "current.jsonl";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DaedProductOutput {
@@ -434,6 +452,22 @@ fn run_product_server_command(args: &[String], _version: &str) -> DaedProductOut
     if let Err(err) = ensure_state_schema(&options.state) {
         return DaedProductOutput::error(format!("init state failed: {err}"));
     }
+    if let Err(err) = initialize_log_store(&options.config_dir, &options.state) {
+        return DaedProductOutput::error(format!("init log store failed: {err}"));
+    }
+    register_resident_event_product_log_sink(&options.config_dir, &options.state);
+    let mut fields = BTreeMap::new();
+    fields.insert("config_dir".to_owned(), path_string(&options.config_dir));
+    fields.insert("state".to_owned(), path_string(&options.state));
+    fields.insert("web_root".to_owned(), path_string(&options.web_root));
+    fields.insert("api_only".to_owned(), options.api_only.to_string());
+    let _ = append_log_fields_for_config(
+        &options.config_dir,
+        &options.state,
+        "info",
+        "Rust daed product log store initialized",
+        fields,
+    );
     let runtime = Arc::new(ProductRuntimeManager::new());
     if let Err(err) = install_product_signal_thread(
         Arc::clone(&runtime),
@@ -443,10 +477,17 @@ fn run_product_server_command(args: &[String], _version: &str) -> DaedProductOut
         return DaedProductOutput::error(format!("install signal control failed: {err}"));
     }
     if should_restore_runtime_on_start(&options.state).unwrap_or(false) {
+        let _ = append_log_for_config(
+            &options.config_dir,
+            &options.state,
+            "info",
+            "startup runtime restore started by Rust daed",
+        );
         if let Err(err) =
             restore_runtime_from_state(&runtime, &options.state, Some(&options.config_dir))
         {
-            let _ = append_log(
+            let _ = append_log_for_config(
+                &options.config_dir,
                 &options.state,
                 "error",
                 &format!("startup runtime restore failed: {err}"),
@@ -454,7 +495,17 @@ fn run_product_server_command(args: &[String], _version: &str) -> DaedProductOut
             return DaedProductOutput::error(format!("startup runtime restore failed: {err}"));
         }
     }
-    start_subscription_scheduler(options.state.clone());
+    start_subscription_scheduler(options.state.clone(), options.config_dir.clone());
+    let mut fields = BTreeMap::new();
+    fields.insert("listen".to_owned(), options.listen.clone());
+    fields.insert("api_only".to_owned(), options.api_only.to_string());
+    let _ = append_log_fields_for_config(
+        &options.config_dir,
+        &options.state,
+        "info",
+        &format!("Listen on http://{}", options.listen),
+        fields,
+    );
     let app = AppState {
         config_dir: options.config_dir,
         state: options.state,
@@ -473,11 +524,20 @@ fn restore_runtime_from_state(
     state: &Path,
     config_dir: Option<&Path>,
 ) -> Result<Value, String> {
+    let log_config_dir =
+        config_dir.unwrap_or_else(|| state.parent().unwrap_or(Path::new(DEFAULT_CONFIG_DIR)));
+    let _ = append_log_for_config(
+        log_config_dir,
+        state,
+        "info",
+        "[Startup] runtime restore started",
+    );
     let preview = materialize_runtime(state, config_dir, true).map_err(|err| err.to_string())?;
     let content = preview["content"]
         .as_str()
         .ok_or_else(|| "runtime materializer did not return content".to_owned())?;
     let config = build_runtime_config_from_content(content)?;
+    set_runtime_log_level_from_config(state, &config).map_err(|err| err.to_string())?;
     let outcome = runtime.reload(config, "startup-restore")?;
     let applied = match materialize_runtime(state, config_dir, false) {
         Ok(applied) => applied,
@@ -487,7 +547,25 @@ fn restore_runtime_from_state(
             return Err(err.to_string());
         }
     };
-    let _ = append_log(state, "info", "runtime restored by Rust daed startup");
+    let mut fields = BTreeMap::new();
+    fields.insert("source".to_owned(), "startup-restore".to_owned());
+    fields.insert("applied".to_owned(), "true".to_owned());
+    if let Some(status) = outcome.report.get("status").and_then(Value::as_str) {
+        fields.insert("status".to_owned(), status.to_owned());
+    }
+    if let Some(tproxy_port) = outcome.report.get("tproxyPort") {
+        fields.insert(
+            "tproxy_port".to_owned(),
+            product_log_field_value(tproxy_port),
+        );
+    }
+    let _ = append_log_fields_for_config(
+        log_config_dir,
+        state,
+        "info",
+        "[Startup] runtime restore finished",
+        fields,
+    );
     Ok(json!({
         "restored": true,
         "runtime": outcome.report,
@@ -518,8 +596,19 @@ fn install_product_signal_thread(
         while let Ok(signal) = wait_product_signal() {
             match signal {
                 libc::SIGHUP | libc::SIGUSR1 => {
+                    let mut fields = BTreeMap::new();
+                    fields.insert("signal".to_owned(), signal.to_string());
+                    fields.insert("source".to_owned(), "signal".to_owned());
+                    let _ = append_log_fields_for_config(
+                        &config_dir,
+                        &state,
+                        "info",
+                        "[Reload] Received signal reload request",
+                        fields,
+                    );
                     if !should_restore_runtime_on_start(&state).unwrap_or(false) {
-                        let _ = append_log(
+                        let _ = append_log_for_config(
+                            &config_dir,
                             &state,
                             "info",
                             "runtime signal reload skipped because persisted running state is false",
@@ -529,13 +618,27 @@ fn install_product_signal_thread(
                     let result = restore_runtime_from_state(&runtime, &state, Some(&config_dir));
                     match result {
                         Ok(_) => {
-                            let _ = append_log(&state, "info", "runtime reloaded by signal");
+                            let mut fields = BTreeMap::new();
+                            fields.insert("source".to_owned(), "signal".to_owned());
+                            fields.insert("applied".to_owned(), "true".to_owned());
+                            let _ = append_log_fields_for_config(
+                                &config_dir,
+                                &state,
+                                "info",
+                                "[Reload] Finished",
+                                fields,
+                            );
                         }
                         Err(err) => {
-                            let _ = append_log(
+                            let mut fields = BTreeMap::new();
+                            fields.insert("source".to_owned(), "signal".to_owned());
+                            fields.insert("error".to_owned(), err.clone());
+                            let _ = append_log_fields_for_config(
+                                &config_dir,
                                 &state,
                                 "error",
-                                &format!("runtime signal reload failed: {err}"),
+                                "[Reload] Failed to reload",
+                                fields,
                             );
                         }
                     }
@@ -543,7 +646,12 @@ fn install_product_signal_thread(
                 libc::SIGTERM | libc::SIGINT | libc::SIGQUIT => {
                     let _ = runtime.stop();
                     let _ = mark_system_stopped(&state);
-                    let _ = append_log(&state, "info", "runtime stopped by signal");
+                    let _ = append_log_for_config(
+                        &config_dir,
+                        &state,
+                        "info",
+                        "runtime stopped by signal",
+                    );
                     std::process::exit(0);
                 }
                 _ => {}
@@ -1089,18 +1197,12 @@ fn apply_state_schema(conn: &Connection) -> io::Result<()> {
             id TEXT PRIMARY KEY,
             applied_at TEXT NOT NULL
         );
-        CREATE TABLE IF NOT EXISTS log_entries (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            ts TEXT NOT NULL,
-            level TEXT NOT NULL,
-            message TEXT NOT NULL
-        );
         INSERT OR IGNORE INTO daed_schema_migrations(id, applied_at)
             VALUES('c10-first-batch-daed-product-schema-v1', datetime('now'));
         INSERT OR IGNORE INTO daed_schema_migrations(id, applied_at)
             VALUES('c10-local-product-surface-v2', datetime('now'));
         INSERT OR IGNORE INTO log_settings(id, max_entries, max_bytes)
-            VALUES(1, 1000, 1048576);
+            VALUES(1, 10000, 52428800);
         INSERT OR IGNORE INTO daed_product_metadata(key, value)
             VALUES('runtime_log_level', 'info');
         "#,
@@ -1220,6 +1322,18 @@ fn handle_stream(mut stream: TcpStream, app: &AppState) -> io::Result<()> {
         }
     };
     let head_only = request.method == "HEAD";
+    if request.method == "GET"
+        && (request.path == "/api/events/logs" || request.path == "/api/events/runtime")
+    {
+        let Some(_user) = authenticate_request(app, &request) else {
+            let response = HttpResponse::json(401, json!({"error": "authentication required"}));
+            return write_http_response(&mut stream, &response, head_only);
+        };
+        if request.path == "/api/events/logs" {
+            return stream_log_events(&mut stream, app, &request);
+        }
+        return stream_runtime_events(&mut stream, app, &request);
+    }
     let response = route_request(app, &request);
     write_http_response(&mut stream, &response, head_only)
 }
@@ -1271,14 +1385,14 @@ fn handle_api_request(app: &AppState, request: &HttpRequest, api_path: &str) -> 
                 }
                 ("GET", "/general/state") => api_general_state(app),
                 ("GET", "/general/cache-stats") => api_general_cache_stats(app),
-                ("GET", "/general/interfaces") => api_general_interfaces(),
-                ("GET", "/runtime/overview") => api_runtime_overview(app),
+                ("GET", "/general/interfaces") => api_general_interfaces(request),
+                ("GET", "/runtime/overview") => api_runtime_overview(app, request),
                 ("POST", "/runtime/reload") => api_runtime_reload(app, request),
                 ("POST", "/runtime/stop") => api_runtime_stop(app),
                 ("GET", "/runtime/log-level") => api_get_runtime_log_level(app),
                 ("PATCH", "/runtime/log-level") => api_set_runtime_log_level(app, request),
-                ("GET", "/events/runtime") => api_runtime_events(app),
-                ("GET", "/events/logs") => api_log_events(app),
+                ("GET", "/events/runtime") => api_runtime_events(app, request),
+                ("GET", "/events/logs") => api_log_events(app, request),
                 ("GET", "/logs") => api_logs(app, request),
                 ("DELETE", "/logs") => api_clear_logs(app),
                 ("GET", "/logs/settings") => api_get_log_settings(app),
@@ -1610,7 +1724,7 @@ fn api_section_resource(app: &AppState, request: &HttpRequest, api_path: &str) -
 fn api_nodes(app: &AppState, request: &HttpRequest, api_path: &str) -> HttpResponse {
     if api_path == "/nodes" {
         return match request.method.as_str() {
-            "GET" => list_nodes(&app.state, None),
+            "GET" => list_nodes_for_request(&app.state, request),
             "POST" => import_nodes(&app.state, request, None),
             "DELETE" => delete_nodes(&app.state, request),
             _ => HttpResponse::json(405, json!({"error": "method not allowed"})),
@@ -1634,7 +1748,7 @@ fn api_subscriptions(app: &AppState, request: &HttpRequest, api_path: &str) -> H
     if api_path == "/subscriptions" {
         return match request.method.as_str() {
             "GET" => list_subscriptions(&app.state, request),
-            "POST" => create_subscription(&app.state, request),
+            "POST" => create_subscription(&app.state, &app.config_dir, request),
             "DELETE" => delete_subscriptions(&app.state, request),
             _ => HttpResponse::json(405, json!({"error": "method not allowed"})),
         };
@@ -1652,7 +1766,7 @@ fn api_subscriptions(app: &AppState, request: &HttpRequest, api_path: &str) -> H
     }
     if parts.len() == 2 && parts[1] == "refresh" {
         return match request.method.as_str() {
-            "POST" => refresh_subscription(&app.state, id),
+            "POST" => refresh_subscription(&app.state, &app.config_dir, id),
             _ => HttpResponse::json(405, json!({"error": "method not allowed"})),
         };
     }
@@ -1706,7 +1820,7 @@ fn api_groups(app: &AppState, request: &HttpRequest, api_path: &str) -> HttpResp
 }
 
 fn api_general_state(app: &AppState) -> HttpResponse {
-    match general_state_report(&app.state, &app.runtime) {
+    match general_state_report(&app.state, &app.config_dir, &app.runtime) {
         Ok(report) => HttpResponse::json(200, report),
         Err(err) => HttpResponse::json(500, json!({"error": err.to_string()})),
     }
@@ -1728,58 +1842,495 @@ fn api_general_cache_stats(app: &AppState) -> HttpResponse {
     )
 }
 
-fn api_general_interfaces() -> HttpResponse {
-    HttpResponse::json(
-        200,
-        json!({
-            "items": [
-                {
-                    "name": "lo",
-                    "index": 1,
-                    "up": true,
-                    "addresses": ["127.0.0.1"]
+fn api_general_interfaces(request: &HttpRequest) -> HttpResponse {
+    let up = query_bool(request, "up");
+    let only_global_scope = query_bool(request, "onlyGlobalScope").unwrap_or(false);
+    match list_system_interfaces(up, only_global_scope) {
+        Ok(items) => HttpResponse::json(200, json!({"items": items})),
+        Err(err) => HttpResponse::json(500, json!({"error": err.to_string()})),
+    }
+}
+
+fn api_runtime_overview(app: &AppState, request: &HttpRequest) -> HttpResponse {
+    HttpResponse::json(200, runtime_overview_report(&app.runtime, request))
+}
+
+#[derive(Debug, Default)]
+struct RuntimeTrafficStats {
+    upload_total: u64,
+    download_total: u64,
+    upload_rate: u64,
+    download_rate: u64,
+    active_connections: u64,
+    udp_sessions: u64,
+    samples: Vec<Value>,
+}
+
+#[derive(Clone, Copy, Debug)]
+struct RuntimeTrafficTotalSample {
+    upload_total: u64,
+    download_total: u64,
+    observed_at: Instant,
+}
+
+static LAST_RUNTIME_TRAFFIC_TOTAL_SAMPLE: OnceLock<Mutex<Option<RuntimeTrafficTotalSample>>> =
+    OnceLock::new();
+static RUNTIME_TRAFFIC_RATE_SAMPLES: OnceLock<Mutex<VecDeque<(u64, u64, u64)>>> = OnceLock::new();
+
+fn runtime_overview_report(runtime: &ProductRuntimeManager, request: &HttpRequest) -> Value {
+    let runtime = runtime.summary();
+    let window_sec = query_u64(request, "windowSec")
+        .unwrap_or(60)
+        .clamp(1, 3_600);
+    let max_points = query_usize(request, "maxPoints")
+        .unwrap_or(120)
+        .clamp(1, 1_000);
+    let traffic = resident_runtime_traffic_stats(&runtime, window_sec, max_points);
+    let process = current_process_metrics();
+    json!({
+        "updatedAt": now_text(),
+        "uploadRate": traffic.upload_rate.to_string(),
+        "downloadRate": traffic.download_rate.to_string(),
+        "uploadTotal": traffic.upload_total.to_string(),
+        "downloadTotal": traffic.download_total.to_string(),
+        "activeConnections": traffic.active_connections,
+        "udpSessions": traffic.udp_sessions,
+        "udpTaskQueues": 0,
+        "udpTaskDropTotal": "0",
+        "packetSnifferSessions": 0,
+        "cpuUsagePercent": process.cpu_usage_percent,
+        "rssBytes": process.rss_bytes.to_string(),
+        "heapAllocBytes": process.heap_alloc_bytes.to_string(),
+        "goroutines": process.thread_count,
+        "runtime": runtime,
+        "samples": traffic.samples,
+    })
+}
+
+fn resident_runtime_traffic_stats(
+    runtime: &Value,
+    window_sec: u64,
+    max_points: usize,
+) -> RuntimeTrafficStats {
+    if let Some(stats) = resident_live_runtime_traffic_stats(runtime, window_sec, max_points) {
+        return stats;
+    }
+    let Some(event_file) = runtime
+        .pointer("/residentDataplane/event_file")
+        .and_then(Value::as_str)
+        .filter(|path| !path.is_empty())
+    else {
+        return RuntimeTrafficStats::default();
+    };
+    let Ok(file) = fs::File::open(event_file) else {
+        return RuntimeTrafficStats::default();
+    };
+    let now = unix_now();
+    let window_start = now.saturating_sub(window_sec);
+    let rate_window_start = now.saturating_sub(5);
+    let mut stats = RuntimeTrafficStats::default();
+    let mut samples: BTreeMap<u64, (u64, u64)> = BTreeMap::new();
+    for line in io::BufReader::new(file).lines().map_while(Result::ok) {
+        let Ok(event) = serde_json::from_str::<Value>(&line) else {
+            continue;
+        };
+        let (upload, download) = event_traffic_bytes(&event);
+        stats.upload_total = stats.upload_total.saturating_add(upload);
+        stats.download_total = stats.download_total.saturating_add(download);
+        let timestamp = event["timestampUnix"].as_u64();
+        if let Some(timestamp) = timestamp {
+            if timestamp >= window_start {
+                let entry = samples.entry(timestamp).or_insert((0, 0));
+                entry.0 = entry.0.saturating_add(upload);
+                entry.1 = entry.1.saturating_add(download);
+                if is_tcp_connection_event(&event) {
+                    stats.active_connections = stats.active_connections.saturating_add(1);
                 }
-            ]
-        }),
+                if is_udp_session_event(&event) {
+                    stats.udp_sessions = stats.udp_sessions.saturating_add(1);
+                }
+            }
+            if timestamp >= rate_window_start {
+                stats.upload_rate = stats.upload_rate.saturating_add(upload);
+                stats.download_rate = stats.download_rate.saturating_add(download);
+            }
+        }
+    }
+    stats.upload_rate /= 5;
+    stats.download_rate /= 5;
+    let mut sample_values = samples
+        .into_iter()
+        .map(|(timestamp, (upload, download))| {
+            json!({
+                "timestamp": iso8601_utc(timestamp),
+                "uploadRate": upload.to_string(),
+                "downloadRate": download.to_string(),
+            })
+        })
+        .collect::<Vec<_>>();
+    if sample_values.len() > max_points {
+        sample_values = sample_values.split_off(sample_values.len() - max_points);
+    }
+    stats.samples = sample_values;
+    stats
+}
+
+fn resident_live_runtime_traffic_stats(
+    runtime: &Value,
+    window_sec: u64,
+    max_points: usize,
+) -> Option<RuntimeTrafficStats> {
+    let metrics = runtime.pointer("/residentDataplane/metrics")?;
+    let upload_total = event_u64(metrics, "uploadTotal");
+    let download_total = event_u64(metrics, "downloadTotal");
+    let (upload_rate, download_rate, samples) =
+        live_runtime_traffic_rate_samples(upload_total, download_total, window_sec, max_points);
+    Some(RuntimeTrafficStats {
+        upload_total,
+        download_total,
+        upload_rate,
+        download_rate,
+        active_connections: event_u64(metrics, "activeTcpConnections"),
+        udp_sessions: event_u64(metrics, "activeUdpSessions"),
+        samples,
+    })
+}
+
+fn live_runtime_traffic_rate_samples(
+    upload_total: u64,
+    download_total: u64,
+    window_sec: u64,
+    max_points: usize,
+) -> (u64, u64, Vec<Value>) {
+    let now = unix_now();
+    let observed_at = Instant::now();
+    let sample_lock = LAST_RUNTIME_TRAFFIC_TOTAL_SAMPLE.get_or_init(|| Mutex::new(None));
+    let mut previous = sample_lock.lock().ok();
+    let mut upload_rate = 0_u64;
+    let mut download_rate = 0_u64;
+    let mut totals_reset = false;
+    if let Some(previous_guard) = previous.as_deref_mut() {
+        if let Some(previous_sample) = *previous_guard {
+            if upload_total < previous_sample.upload_total
+                || download_total < previous_sample.download_total
+            {
+                totals_reset = true;
+            } else {
+                let elapsed = observed_at
+                    .duration_since(previous_sample.observed_at)
+                    .as_secs_f64();
+                if elapsed > 0.0 {
+                    upload_rate =
+                        ((upload_total - previous_sample.upload_total) as f64 / elapsed) as u64;
+                    download_rate =
+                        ((download_total - previous_sample.download_total) as f64 / elapsed) as u64;
+                }
+            }
+        }
+        *previous_guard = Some(RuntimeTrafficTotalSample {
+            upload_total,
+            download_total,
+            observed_at,
+        });
+    }
+
+    let history_lock = RUNTIME_TRAFFIC_RATE_SAMPLES.get_or_init(|| Mutex::new(VecDeque::new()));
+    let mut history = match history_lock.lock() {
+        Ok(history) => history,
+        Err(_) => return (upload_rate, download_rate, Vec::new()),
+    };
+    if totals_reset {
+        history.clear();
+    }
+    if history
+        .back()
+        .is_some_and(|(timestamp, _, _)| *timestamp == now)
+    {
+        if let Some(back) = history.back_mut() {
+            *back = (now, upload_rate, download_rate);
+        }
+    } else {
+        history.push_back((now, upload_rate, download_rate));
+    }
+    let window_start = now.saturating_sub(window_sec);
+    while history
+        .front()
+        .is_some_and(|(timestamp, _, _)| *timestamp < window_start)
+    {
+        history.pop_front();
+    }
+    while history.len() > max_points {
+        history.pop_front();
+    }
+    let samples = history
+        .iter()
+        .map(|(timestamp, upload, download)| {
+            json!({
+                "timestamp": iso8601_utc(*timestamp),
+                "uploadRate": upload.to_string(),
+                "downloadRate": download.to_string(),
+            })
+        })
+        .collect();
+    (upload_rate, download_rate, samples)
+}
+
+fn event_traffic_bytes(event: &Value) -> (u64, u64) {
+    let upload = event_u64(event, "bytes_client_to_proxy")
+        .saturating_add(event_u64(event, "bytes_client_to_direct"))
+        .saturating_add(event_u64(event, "request_len"));
+    let download = event_u64(event, "bytes_proxy_to_client")
+        .saturating_add(event_u64(event, "bytes_direct_to_client"))
+        .saturating_add(event_u64(event, "response_len"));
+    (upload, download)
+}
+
+fn event_u64(event: &Value, key: &str) -> u64 {
+    event
+        .get(key)
+        .and_then(|value| {
+            value
+                .as_u64()
+                .or_else(|| value.as_str().and_then(|value| value.parse::<u64>().ok()))
+        })
+        .unwrap_or(0)
+}
+
+fn is_tcp_connection_event(event: &Value) -> bool {
+    matches!(
+        event.get("event").and_then(Value::as_str),
+        Some("tcp_connection_finished" | "tcp_connection_failed")
     )
 }
 
-fn api_runtime_overview(app: &AppState) -> HttpResponse {
-    let runtime = app.runtime.summary();
-    let running = runtime["running"].as_bool().unwrap_or(false);
-    HttpResponse::json(
-        200,
-        json!({
-            "updatedAt": now_text(),
-            "uploadRate": "0",
-            "downloadRate": "0",
-            "uploadTotal": "0",
-            "downloadTotal": "0",
-            "activeConnections": 0,
-            "udpSessions": 0,
-            "udpTaskQueues": 0,
-            "udpTaskDropTotal": "0",
-            "packetSnifferSessions": 0,
-            "cpuUsagePercent": 0.0,
-            "rssBytes": current_rss_bytes().to_string(),
-            "heapAllocBytes": "0",
-            "goroutines": if running { 1 } else { 0 },
-            "runtime": runtime,
-            "samples": []
-        }),
+fn is_udp_session_event(event: &Value) -> bool {
+    matches!(
+        event.get("event").and_then(Value::as_str),
+        Some("udp_packet_finished" | "udp_dns_packet_finished")
     )
+}
+
+fn query_u64(request: &HttpRequest, key: &str) -> Option<u64> {
+    request
+        .query
+        .get(key)
+        .and_then(|values| values.first())
+        .and_then(|value| value.parse::<u64>().ok())
+}
+
+fn query_usize(request: &HttpRequest, key: &str) -> Option<usize> {
+    request
+        .query
+        .get(key)
+        .and_then(|values| values.first())
+        .and_then(|value| value.parse::<usize>().ok())
+}
+
+fn query_bool(request: &HttpRequest, key: &str) -> Option<bool> {
+    request
+        .query
+        .get(key)
+        .and_then(|values| values.first())
+        .and_then(|value| parse_bool(value))
+}
+
+fn parse_bool(value: &str) -> Option<bool> {
+    match value.trim().to_ascii_lowercase().as_str() {
+        "1" | "true" | "yes" | "on" => Some(true),
+        "0" | "false" | "no" | "off" => Some(false),
+        _ => None,
+    }
+}
+
+fn list_system_interfaces(up: Option<bool>, only_global_scope: bool) -> io::Result<Vec<Value>> {
+    let routes_by_iface = default_routes_by_iface();
+    match ip_address_interfaces(up, only_global_scope, &routes_by_iface) {
+        Ok(items) => Ok(items),
+        Err(_) => sysfs_interfaces(up, &routes_by_iface),
+    }
+}
+
+fn ip_address_interfaces(
+    up: Option<bool>,
+    only_global_scope: bool,
+    routes_by_iface: &HashMap<String, Vec<Value>>,
+) -> io::Result<Vec<Value>> {
+    let output = Command::new("ip")
+        .args(["-j", "address", "show"])
+        .output()?;
+    if !output.status.success() {
+        return Err(io::Error::other("ip address query failed"));
+    }
+    let interfaces = serde_json::from_slice::<Value>(&output.stdout)
+        .map_err(|err| io::Error::new(io::ErrorKind::InvalidData, err))?;
+    let mut items = Vec::new();
+    for iface in interfaces.as_array().into_iter().flatten() {
+        let name = iface["ifname"].as_str().unwrap_or_default();
+        if name.is_empty() {
+            continue;
+        }
+        let flags = iface["flags"].as_array().cloned().unwrap_or_default();
+        let iface_up = flags
+            .iter()
+            .filter_map(Value::as_str)
+            .any(|flag| flag.eq_ignore_ascii_case("UP"));
+        if up.is_some_and(|wanted| wanted != iface_up) {
+            continue;
+        }
+        let mut addresses = Vec::new();
+        for addr in iface["addr_info"].as_array().into_iter().flatten() {
+            if only_global_scope
+                && addr["scope"]
+                    .as_str()
+                    .is_some_and(|scope| scope != "global")
+            {
+                continue;
+            }
+            let Some(local) = addr["local"].as_str() else {
+                continue;
+            };
+            let prefix = addr["prefixlen"].as_u64().unwrap_or(0);
+            addresses.push(format!("{local}/{prefix}"));
+        }
+        let mut item = Map::new();
+        item.insert("name".to_owned(), json!(name));
+        item.insert("index".to_owned(), iface["ifindex"].clone());
+        item.insert("up".to_owned(), json!(iface_up));
+        item.insert("addresses".to_owned(), json!(addresses));
+        if let Some(routes) = routes_by_iface
+            .get(name)
+            .filter(|routes| !routes.is_empty())
+        {
+            item.insert("defaultRoutes".to_owned(), json!(routes));
+        }
+        items.push(Value::Object(item));
+    }
+    Ok(items)
+}
+
+fn default_routes_by_iface() -> HashMap<String, Vec<Value>> {
+    let mut out = HashMap::<String, Vec<Value>>::new();
+    collect_default_routes(&mut out, "4", &["-j", "route", "show", "default"]);
+    collect_default_routes(&mut out, "6", &["-j", "-6", "route", "show", "default"]);
+    out
+}
+
+fn collect_default_routes(out: &mut HashMap<String, Vec<Value>>, ip_version: &str, args: &[&str]) {
+    let Ok(output) = Command::new("ip").args(args).output() else {
+        return;
+    };
+    if !output.status.success() {
+        return;
+    }
+    let Ok(routes) = serde_json::from_slice::<Value>(&output.stdout) else {
+        return;
+    };
+    for route in routes.as_array().into_iter().flatten() {
+        let Some(dev) = route["dev"].as_str().filter(|value| !value.is_empty()) else {
+            continue;
+        };
+        let mut item = Map::new();
+        item.insert("ipVersion".to_owned(), json!(ip_version));
+        if let Some(gateway) = route["gateway"].as_str() {
+            item.insert("gateway".to_owned(), json!(gateway));
+        }
+        if let Some(source) = route["prefsrc"].as_str().or_else(|| route["src"].as_str()) {
+            item.insert("source".to_owned(), json!(source));
+        }
+        out.entry(dev.to_owned())
+            .or_default()
+            .push(Value::Object(item));
+    }
+}
+
+fn sysfs_interfaces(
+    up: Option<bool>,
+    routes_by_iface: &HashMap<String, Vec<Value>>,
+) -> io::Result<Vec<Value>> {
+    let mut items = Vec::new();
+    for entry in fs::read_dir("/sys/class/net")? {
+        let entry = entry?;
+        let name = entry.file_name().to_string_lossy().into_owned();
+        let base = entry.path();
+        let index = fs::read_to_string(base.join("ifindex"))
+            .ok()
+            .and_then(|value| value.trim().parse::<i64>().ok())
+            .unwrap_or(0);
+        let iface_up = fs::read_to_string(base.join("operstate"))
+            .map(|value| matches!(value.trim(), "up" | "unknown"))
+            .unwrap_or(false);
+        if up.is_some_and(|wanted| wanted != iface_up) {
+            continue;
+        }
+        let mut item = Map::new();
+        item.insert("name".to_owned(), json!(name));
+        item.insert("index".to_owned(), json!(index));
+        item.insert("up".to_owned(), json!(iface_up));
+        item.insert("addresses".to_owned(), json!([]));
+        if let Some(routes) = routes_by_iface
+            .get(&name)
+            .filter(|routes| !routes.is_empty())
+        {
+            item.insert("defaultRoutes".to_owned(), json!(routes));
+        }
+        items.push(Value::Object(item));
+    }
+    items.sort_by(|left, right| {
+        left["index"]
+            .as_i64()
+            .unwrap_or(i64::MAX)
+            .cmp(&right["index"].as_i64().unwrap_or(i64::MAX))
+    });
+    Ok(items)
 }
 
 fn api_runtime_reload(app: &AppState, request: &HttpRequest) -> HttpResponse {
     let body = json_body(request).unwrap_or_else(|_| json!({}));
     let dry = body.get("dry").and_then(Value::as_bool).unwrap_or(false);
+    let mut request_fields = BTreeMap::new();
+    request_fields.insert("source".to_owned(), "api".to_owned());
+    request_fields.insert("dry".to_owned(), dry.to_string());
+    let _ = append_log_fields_for_config(
+        &app.config_dir,
+        &app.state,
+        "info",
+        "[Reload] Received reload request",
+        request_fields,
+    );
     let preview = match materialize_runtime(&app.state, Some(&app.config_dir), true) {
         Ok(report) => report,
-        Err(err) => return HttpResponse::json(400, json!({"error": err.to_string()})),
+        Err(err) => {
+            let mut fields = BTreeMap::new();
+            fields.insert("source".to_owned(), "api".to_owned());
+            fields.insert("dry".to_owned(), dry.to_string());
+            fields.insert("error".to_owned(), err.to_string());
+            let _ = append_log_fields_for_config(
+                &app.config_dir,
+                &app.state,
+                "error",
+                "[Reload] Failed to materialize runtime preview",
+                fields,
+            );
+            return HttpResponse::json(400, json!({"error": err.to_string()}));
+        }
     };
     let content = match preview.get("content").and_then(Value::as_str) {
         Some(content) => content,
         None => {
+            let mut fields = BTreeMap::new();
+            fields.insert("source".to_owned(), "api".to_owned());
+            fields.insert("dry".to_owned(), dry.to_string());
+            fields.insert(
+                "error".to_owned(),
+                "runtime materializer did not return content".to_owned(),
+            );
+            let _ = append_log_fields_for_config(
+                &app.config_dir,
+                &app.state,
+                "error",
+                "[Reload] Failed to materialize runtime preview",
+                fields,
+            );
             return HttpResponse::json(
                 500,
                 json!({"error": "runtime materializer did not return content"}),
@@ -1788,29 +2339,92 @@ fn api_runtime_reload(app: &AppState, request: &HttpRequest) -> HttpResponse {
     };
     let config = match build_runtime_config_from_content(content) {
         Ok(config) => config,
-        Err(err) => return HttpResponse::json(400, json!({"error": err})),
+        Err(err) => {
+            let mut fields = BTreeMap::new();
+            fields.insert("source".to_owned(), "api".to_owned());
+            fields.insert("dry".to_owned(), dry.to_string());
+            fields.insert("error".to_owned(), err.clone());
+            let _ = append_log_fields_for_config(
+                &app.config_dir,
+                &app.state,
+                "error",
+                "[Reload] Failed to build runtime config",
+                fields,
+            );
+            return HttpResponse::json(400, json!({"error": err}));
+        }
     };
     if dry {
+        let mut fields = BTreeMap::new();
+        fields.insert("source".to_owned(), "api".to_owned());
+        fields.insert("dry".to_owned(), "true".to_owned());
+        fields.insert("applied".to_owned(), "false".to_owned());
+        let _ = append_log_fields_for_config(
+            &app.config_dir,
+            &app.state,
+            "info",
+            "[Reload] Preview finished",
+            fields,
+        );
         let mut response = preview.as_object().cloned().unwrap_or_default();
         response.insert("applied".to_owned(), json!(0));
         response.insert("dry".to_owned(), json!(true));
         response.insert("runtimeStarted".to_owned(), json!(false));
         return HttpResponse::json(200, Value::Object(response));
     }
+    if let Err(err) = set_runtime_log_level_from_config(&app.state, &config) {
+        let mut fields = BTreeMap::new();
+        fields.insert("source".to_owned(), "api".to_owned());
+        fields.insert("dry".to_owned(), "false".to_owned());
+        fields.insert("error".to_owned(), err.to_string());
+        let _ = append_log_fields_for_config(
+            &app.config_dir,
+            &app.state,
+            "error",
+            "[Reload] Failed to apply runtime log level",
+            fields,
+        );
+        return HttpResponse::json(500, json!({"error": err.to_string()}));
+    }
     let runtime = match app.runtime.reload(config, "api-runtime-reload") {
         Ok(outcome) => outcome.report,
         Err(err) => {
-            let _ = append_log(
+            let mut fields = BTreeMap::new();
+            fields.insert("source".to_owned(), "api".to_owned());
+            fields.insert("dry".to_owned(), "false".to_owned());
+            fields.insert("error".to_owned(), err.clone());
+            let _ = append_log_fields_for_config(
+                &app.config_dir,
                 &app.state,
                 "error",
-                &format!("runtime reload failed by Rust daed: {err}"),
+                "[Reload] Failed to reload",
+                fields,
             );
             return HttpResponse::json(500, json!({"error": err}));
         }
     };
     match materialize_runtime(&app.state, Some(&app.config_dir), false) {
         Ok(report) => {
-            let _ = append_log(&app.state, "info", "runtime reload applied by Rust daed");
+            let mut fields = BTreeMap::new();
+            fields.insert("source".to_owned(), "api".to_owned());
+            fields.insert("dry".to_owned(), "false".to_owned());
+            fields.insert("applied".to_owned(), "true".to_owned());
+            if let Some(status) = runtime.get("status").and_then(Value::as_str) {
+                fields.insert("status".to_owned(), status.to_owned());
+            }
+            if let Some(tproxy_port) = runtime.get("tproxyPort") {
+                fields.insert(
+                    "tproxy_port".to_owned(),
+                    product_log_field_value(tproxy_port),
+                );
+            }
+            let _ = append_log_fields_for_config(
+                &app.config_dir,
+                &app.state,
+                "info",
+                "[Reload] Finished",
+                fields,
+            );
             let mut response = report.as_object().cloned().unwrap_or_default();
             response.insert("applied".to_owned(), json!(1));
             response.insert("dry".to_owned(), json!(false));
@@ -1821,6 +2435,17 @@ fn api_runtime_reload(app: &AppState, request: &HttpRequest) -> HttpResponse {
         Err(err) => {
             let _ = app.runtime.stop();
             let _ = mark_system_stopped(&app.state);
+            let mut fields = BTreeMap::new();
+            fields.insert("source".to_owned(), "api".to_owned());
+            fields.insert("dry".to_owned(), "false".to_owned());
+            fields.insert("error".to_owned(), err.to_string());
+            let _ = append_log_fields_for_config(
+                &app.config_dir,
+                &app.state,
+                "error",
+                "[Reload] Failed to materialize applied runtime config",
+                fields,
+            );
             HttpResponse::json(500, json!({"error": err.to_string()}))
         }
     }
@@ -1832,7 +2457,12 @@ fn api_runtime_stop(app: &AppState) -> HttpResponse {
             if let Err(err) = mark_system_stopped(&app.state) {
                 return HttpResponse::json(500, json!({"error": err.to_string()}));
             }
-            let _ = append_log(&app.state, "info", "runtime stopped by Rust daed");
+            let _ = append_log_for_config(
+                &app.config_dir,
+                &app.state,
+                "info",
+                "runtime stopped by Rust daed",
+            );
             if let Value::Object(map) = &mut report {
                 map.insert("runtime".to_owned(), app.runtime.summary());
             }
@@ -1846,6 +2476,7 @@ fn api_get_runtime_log_level(app: &AppState) -> HttpResponse {
     let level = get_metadata(&app.state, "runtime_log_level")
         .unwrap_or_else(|_| Some("info".to_owned()))
         .unwrap_or_else(|| "info".to_owned());
+    let level = normalize_runtime_log_level(&level).unwrap_or_else(|| "info".to_owned());
     HttpResponse::json(200, json!({"level": level}))
 }
 
@@ -1854,36 +2485,153 @@ fn api_set_runtime_log_level(app: &AppState, request: &HttpRequest) -> HttpRespo
         Ok(body) => body,
         Err(err) => return HttpResponse::json(400, json!({"error": err})),
     };
-    let level = body.get("level").and_then(Value::as_str).unwrap_or("info");
-    if let Err(err) = set_metadata(&app.state, "runtime_log_level", level) {
+    let Some(level) =
+        normalize_runtime_log_level(body.get("level").and_then(Value::as_str).unwrap_or("info"))
+    else {
+        return HttpResponse::json(400, json!({"error": "invalid log level"}));
+    };
+    if let Err(err) = set_metadata(&app.state, "runtime_log_level", &level) {
         return HttpResponse::json(500, json!({"error": err.to_string()}));
     }
-    let _ = append_log(
+    let mut fields = BTreeMap::new();
+    fields.insert("level".to_owned(), level.clone());
+    let _ = append_log_fields_for_config(
+        &app.config_dir,
         &app.state,
-        "info",
+        &level,
         &format!("runtime log level set to {level}"),
+        fields,
     );
     HttpResponse::json(200, json!({"level": level}))
 }
 
-fn api_runtime_events(app: &AppState) -> HttpResponse {
-    let payload = general_state_report(&app.state, &app.runtime).unwrap_or_else(|_| json!({}));
-    sse_response("runtime.overview", payload)
+fn normalize_runtime_log_level(level: &str) -> Option<String> {
+    normalize_log_level_name(level)
 }
 
-fn api_log_events(app: &AppState) -> HttpResponse {
-    let payload =
-        list_logs_value(&app.state, None, None, 1).unwrap_or_else(|_| json!({"items": []}));
-    sse_response("logs.append", payload)
+fn api_runtime_events(app: &AppState, request: &HttpRequest) -> HttpResponse {
+    let full = runtime_overview_report(&app.runtime, request);
+    thread::sleep(Duration::from_millis(200));
+    let delta = runtime_overview_report(&app.runtime, request);
+    sse_response_events(
+        &[
+            ("runtime.overview", full),
+            ("runtime.overview.delta", delta),
+        ],
+        Some(LOG_STREAM_RETRY_MS),
+    )
+}
+
+fn stream_runtime_events(
+    stream: &mut TcpStream,
+    app: &AppState,
+    request: &HttpRequest,
+) -> io::Result<()> {
+    write_sse_stream_headers(stream)?;
+    write!(stream, "retry: {LOG_STREAM_RETRY_MS}\n\n")?;
+    write_sse_stream_event(
+        stream,
+        "runtime.overview",
+        &runtime_overview_report(&app.runtime, request),
+    )?;
+    let mut last_heartbeat = Instant::now();
+    loop {
+        thread::sleep(Duration::from_secs(1));
+        write_sse_stream_event(
+            stream,
+            "runtime.overview.delta",
+            &runtime_overview_report(&app.runtime, request),
+        )?;
+        if last_heartbeat.elapsed() >= LOG_STREAM_HEARTBEAT_INTERVAL {
+            stream.write_all(b": keep-alive\n\n")?;
+            stream.flush()?;
+            last_heartbeat = Instant::now();
+        }
+    }
+}
+
+fn api_log_events(app: &AppState, request: &HttpRequest) -> HttpResponse {
+    let level = match log_level_filter_from_request(request) {
+        Ok(level) => level,
+        Err(err) => return HttpResponse::json(400, json!({"error": err})),
+    };
+    let query = request
+        .query
+        .get("q")
+        .and_then(|values| values.first())
+        .filter(|value| !value.trim().is_empty())
+        .cloned();
+    let logs = list_logs_value(
+        &app.config_dir,
+        &app.state,
+        level.as_deref(),
+        query.as_deref(),
+        1,
+    )
+    .unwrap_or_else(|_| json!({"items": []}));
+    let Some(entry) = logs["items"]
+        .as_array()
+        .and_then(|items| items.first())
+        .cloned()
+    else {
+        return sse_response("log.ready", json!({}));
+    };
+    sse_response("log.entry", entry)
+}
+
+fn stream_log_events(
+    stream: &mut TcpStream,
+    app: &AppState,
+    request: &HttpRequest,
+) -> io::Result<()> {
+    let level = match log_level_filter_from_request(request) {
+        Ok(level) => level,
+        Err(err) => {
+            let response = HttpResponse::json(400, json!({"error": err}));
+            return write_http_response(stream, &response, false);
+        }
+    };
+    let query = request
+        .query
+        .get("q")
+        .and_then(|values| values.first())
+        .map(|value| value.trim().to_ascii_lowercase())
+        .filter(|value| !value.is_empty());
+    write_sse_stream_headers(stream)?;
+    write!(stream, "retry: {LOG_STREAM_RETRY_MS}\n\n")?;
+    stream.flush()?;
+
+    let mut last_seen_id = read_last_log_id(&product_log_file(&app.config_dir)).unwrap_or(0);
+    let mut last_heartbeat = Instant::now();
+    loop {
+        let current_last_id = read_last_log_id(&product_log_file(&app.config_dir)).unwrap_or(0);
+        if current_last_id < last_seen_id {
+            last_seen_id = 0;
+        }
+        let (entries, max_seen_id) =
+            scan_log_entries_after_id(&app.config_dir, last_seen_id).unwrap_or_default();
+        for entry in entries {
+            if log_entry_matches_filter(&entry, level.as_deref(), query.as_deref()) {
+                write_sse_stream_event(stream, "log.entry", &log_entry_value(entry))?;
+            }
+        }
+        if max_seen_id > last_seen_id {
+            last_seen_id = max_seen_id;
+        }
+        if last_heartbeat.elapsed() >= LOG_STREAM_HEARTBEAT_INTERVAL {
+            stream.write_all(b": heartbeat\n\n")?;
+            stream.flush()?;
+            last_heartbeat = Instant::now();
+        }
+        thread::sleep(LOG_STREAM_POLL_INTERVAL);
+    }
 }
 
 fn api_logs(app: &AppState, request: &HttpRequest) -> HttpResponse {
-    let level = request
-        .query
-        .get("level")
-        .and_then(|values| values.first())
-        .filter(|value| !value.is_empty())
-        .cloned();
+    let level = match log_level_filter_from_request(request) {
+        Ok(level) => level,
+        Err(err) => return HttpResponse::json(400, json!({"error": err})),
+    };
     let query = request
         .query
         .get("q")
@@ -1895,19 +2643,30 @@ fn api_logs(app: &AppState, request: &HttpRequest) -> HttpResponse {
         .get("limit")
         .and_then(|values| values.first())
         .and_then(|value| value.parse::<usize>().ok())
-        .unwrap_or(200);
-    match list_logs_value(&app.state, level.as_deref(), query.as_deref(), limit) {
+        .unwrap_or(DEFAULT_LOG_QUERY_LIMIT);
+    match list_logs_value(
+        &app.config_dir,
+        &app.state,
+        level.as_deref(),
+        query.as_deref(),
+        limit,
+    ) {
         Ok(value) => HttpResponse::json(200, value),
         Err(err) => HttpResponse::json(500, json!({"error": err.to_string()})),
     }
 }
 
+fn log_level_filter_from_request(request: &HttpRequest) -> Result<Option<String>, String> {
+    let level = request
+        .query
+        .get("level")
+        .and_then(|values| values.first())
+        .map(String::as_str);
+    normalize_log_level_filter(level).map_err(|err| err.to_string())
+}
+
 fn api_clear_logs(app: &AppState) -> HttpResponse {
-    match open_state_connection(&app.state).and_then(|conn| {
-        conn.execute("DELETE FROM log_entries", [])
-            .map_err(sqlite_io_error)?;
-        Ok(())
-    }) {
+    match clear_log_file(&app.config_dir) {
         Ok(()) => HttpResponse::json(200, json!({"cleared": true})),
         Err(err) => HttpResponse::json(500, json!({"error": err.to_string()})),
     }
@@ -1925,20 +2684,24 @@ fn api_set_log_settings(app: &AppState, request: &HttpRequest) -> HttpResponse {
         Ok(body) => body,
         Err(err) => return HttpResponse::json(400, json!({"error": err})),
     };
-    let max_entries = body
-        .get("maxEntries")
-        .and_then(Value::as_i64)
-        .unwrap_or(1000);
-    let max_bytes = body
-        .get("maxBytes")
-        .and_then(Value::as_i64)
-        .unwrap_or(1048576);
     match open_state_connection(&app.state).and_then(|conn| {
+        let (current_entries, current_bytes) = log_settings_tuple(&conn)?;
+        let max_entries = normalize_log_max_entries(
+            body.get("maxEntries")
+                .and_then(Value::as_i64)
+                .unwrap_or(current_entries),
+        );
+        let max_bytes = normalize_log_max_bytes(
+            body.get("maxBytes")
+                .and_then(Value::as_i64)
+                .unwrap_or(current_bytes),
+        );
         conn.execute(
             "INSERT OR REPLACE INTO log_settings(id, max_entries, max_bytes) VALUES(1, ?1, ?2)",
             params![max_entries, max_bytes],
         )
         .map_err(sqlite_io_error)?;
+        prune_log_file(&app.config_dir, &conn)?;
         Ok(())
     }) {
         Ok(()) => match log_settings_value(&app.state) {
@@ -1959,7 +2722,7 @@ fn api_get_node_latencies(app: &AppState) -> HttpResponse {
 fn api_test_node_latencies(app: &AppState, request: &HttpRequest) -> HttpResponse {
     let body = json_body(request).unwrap_or_else(|_| json!({}));
     let ids = integer_array(&body, "ids");
-    match update_node_latencies(&app.state, &ids) {
+    match update_node_latencies(&app.state, &app.config_dir, &ids) {
         Ok(value) => HttpResponse::json(200, value),
         Err(err) => HttpResponse::json(500, json!({"error": err.to_string()})),
     }
@@ -1977,7 +2740,7 @@ fn api_put_bundle(app: &AppState, request: &HttpRequest, user: &UserRecord) -> H
         Ok(body) => body,
         Err(err) => return HttpResponse::json(400, json!({"error": err})),
     };
-    match import_bundle(&app.state, &body, user) {
+    match import_bundle(&app.state, &app.config_dir, &body, user) {
         Ok(imported) => HttpResponse::json(200, json!({"imported": imported})),
         Err(err) => HttpResponse::json(400, json!({"error": err.to_string()})),
     }
@@ -2025,7 +2788,12 @@ fn api_put_dae_config_file(
     });
     match ensure_default_resources(&app.state, &import_body) {
         Ok(response) => {
-            let _ = append_log(&app.state, "info", "dae config file imported by Rust daed");
+            let _ = append_log_for_config(
+                &app.config_dir,
+                &app.state,
+                "info",
+                "dae config file imported by Rust daed",
+            );
             let _ = save_json_storage(&app.state, user.id, &user.json_storage);
             HttpResponse::json(
                 200,
@@ -2133,7 +2901,7 @@ fn api_section_preview(request: &HttpRequest, api_path: &str) -> HttpResponse {
             200,
             json!({
                 "global": global,
-                "parsedGlobal": normalize_global_value(None),
+                "parsedGlobal": normalize_global_value(Some(&global)),
             }),
         );
     }
@@ -2358,7 +3126,20 @@ fn section_resource(
     }
 }
 
-fn normalize_global_value(_raw: Option<&str>) -> Value {
+fn normalize_global_value(raw: Option<&str>) -> Value {
+    let mut value = default_global_value();
+    let Some(raw) = raw.map(str::trim).filter(|raw| !raw.is_empty()) else {
+        return value;
+    };
+    if let Ok(parsed) = serde_json::from_str::<Value>(raw) {
+        merge_global_json_value(&mut value, &parsed);
+        return value;
+    }
+    merge_global_directives(&mut value, &parse_global_directives(raw));
+    value
+}
+
+fn default_global_value() -> Value {
     json!({
         "logLevel": "",
         "tproxyPort": 0,
@@ -2385,6 +3166,435 @@ fn normalize_global_value(_raw: Option<&str>) -> Value {
         "bandwidthMaxTx": "",
         "bandwidthMaxRx": "",
     })
+}
+
+fn merge_global_json_value(target: &mut Value, source: &Value) {
+    set_global_string(
+        target,
+        "logLevel",
+        json_string(source, &["logLevel", "log_level"]),
+    );
+    set_global_u64(
+        target,
+        "tproxyPort",
+        json_u64(source, &["tproxyPort", "tproxy_port"]),
+    );
+    set_global_bool(
+        target,
+        "allowInsecure",
+        json_bool(source, &["allowInsecure", "allow_insecure"]),
+    );
+    set_global_string(
+        target,
+        "checkInterval",
+        json_string(source, &["checkInterval", "check_interval"]),
+    );
+    set_global_string(
+        target,
+        "checkTolerance",
+        json_string(source, &["checkTolerance", "check_tolerance"]),
+    );
+    set_global_array(
+        target,
+        "lanInterface",
+        json_array_or_split_string(source, &["lanInterface", "lan_interface"]),
+    );
+    set_global_array(
+        target,
+        "wanInterface",
+        json_array_or_split_string(source, &["wanInterface", "wan_interface"]),
+    );
+    set_global_array(
+        target,
+        "udpCheckDns",
+        json_array_or_split_string(source, &["udpCheckDns", "udp_check_dns"]),
+    );
+    set_global_array(
+        target,
+        "tcpCheckUrl",
+        json_array_or_split_string(source, &["tcpCheckUrl", "tcp_check_url"]),
+    );
+    set_global_string(
+        target,
+        "fallbackResolver",
+        json_string(source, &["fallbackResolver", "fallback_resolver"]),
+    );
+    set_global_string(
+        target,
+        "dialMode",
+        json_string(source, &["dialMode", "dial_mode"]),
+    );
+    set_global_string(
+        target,
+        "tcpCheckHttpMethod",
+        json_string(source, &["tcpCheckHttpMethod", "tcp_check_http_method"]),
+    );
+    set_global_bool(
+        target,
+        "disableWaitingNetwork",
+        json_bool(
+            source,
+            &["disableWaitingNetwork", "disable_waiting_network"],
+        ),
+    );
+    set_global_bool(
+        target,
+        "autoConfigKernelParameter",
+        json_bool(
+            source,
+            &["autoConfigKernelParameter", "auto_config_kernel_parameter"],
+        ),
+    );
+    set_global_string(
+        target,
+        "sniffingTimeout",
+        json_string(source, &["sniffingTimeout", "sniffing_timeout"]),
+    );
+    set_global_string(
+        target,
+        "tlsImplementation",
+        json_string(source, &["tlsImplementation", "tls_implementation"]),
+    );
+    set_global_string(
+        target,
+        "utlsImitate",
+        json_string(source, &["utlsImitate", "utls_imitate"]),
+    );
+    set_global_bool(
+        target,
+        "tproxyPortProtect",
+        json_bool(source, &["tproxyPortProtect", "tproxy_port_protect"]),
+    );
+    set_global_u64(
+        target,
+        "soMarkFromDae",
+        json_u64(source, &["soMarkFromDae", "so_mark_from_dae"]),
+    );
+    set_global_u64(
+        target,
+        "pprofPort",
+        json_u64(source, &["pprofPort", "pprof_port"]),
+    );
+    set_global_bool(
+        target,
+        "enableLocalTcpFastRedirect",
+        json_bool(
+            source,
+            &[
+                "enableLocalTcpFastRedirect",
+                "enable_local_tcp_fast_redirect",
+            ],
+        ),
+    );
+    set_global_bool(target, "mptcp", json_bool(source, &["mptcp"]));
+    set_global_string(
+        target,
+        "bandwidthMaxTx",
+        json_string(source, &["bandwidthMaxTx", "bandwidth_max_tx"]),
+    );
+    set_global_string(
+        target,
+        "bandwidthMaxRx",
+        json_string(source, &["bandwidthMaxRx", "bandwidth_max_rx"]),
+    );
+}
+
+fn merge_global_directives(target: &mut Value, directives: &HashMap<String, String>) {
+    set_global_string(
+        target,
+        "logLevel",
+        directive_string(directives, "log_level"),
+    );
+    set_global_u64(
+        target,
+        "tproxyPort",
+        directive_u64(directives, "tproxy_port"),
+    );
+    set_global_bool(
+        target,
+        "allowInsecure",
+        directive_bool(directives, "allow_insecure"),
+    );
+    set_global_string(
+        target,
+        "checkInterval",
+        directive_string(directives, "check_interval"),
+    );
+    set_global_string(
+        target,
+        "checkTolerance",
+        directive_string(directives, "check_tolerance"),
+    );
+    set_global_array(
+        target,
+        "lanInterface",
+        directive_array(directives, "lan_interface"),
+    );
+    set_global_array(
+        target,
+        "wanInterface",
+        directive_array(directives, "wan_interface"),
+    );
+    set_global_array(
+        target,
+        "udpCheckDns",
+        directive_array(directives, "udp_check_dns"),
+    );
+    set_global_array(
+        target,
+        "tcpCheckUrl",
+        directive_array(directives, "tcp_check_url"),
+    );
+    set_global_string(
+        target,
+        "fallbackResolver",
+        directive_string(directives, "fallback_resolver"),
+    );
+    set_global_string(
+        target,
+        "dialMode",
+        directive_string(directives, "dial_mode"),
+    );
+    set_global_string(
+        target,
+        "tcpCheckHttpMethod",
+        directive_string(directives, "tcp_check_http_method"),
+    );
+    set_global_bool(
+        target,
+        "disableWaitingNetwork",
+        directive_bool(directives, "disable_waiting_network"),
+    );
+    set_global_bool(
+        target,
+        "autoConfigKernelParameter",
+        directive_bool(directives, "auto_config_kernel_parameter"),
+    );
+    set_global_string(
+        target,
+        "sniffingTimeout",
+        directive_string(directives, "sniffing_timeout"),
+    );
+    set_global_string(
+        target,
+        "tlsImplementation",
+        directive_string(directives, "tls_implementation"),
+    );
+    set_global_string(
+        target,
+        "utlsImitate",
+        directive_string(directives, "utls_imitate"),
+    );
+    set_global_bool(
+        target,
+        "tproxyPortProtect",
+        directive_bool(directives, "tproxy_port_protect"),
+    );
+    set_global_u64(
+        target,
+        "soMarkFromDae",
+        directive_u64(directives, "so_mark_from_dae"),
+    );
+    set_global_u64(target, "pprofPort", directive_u64(directives, "pprof_port"));
+    set_global_bool(
+        target,
+        "enableLocalTcpFastRedirect",
+        directive_bool(directives, "enable_local_tcp_fast_redirect"),
+    );
+    set_global_bool(target, "mptcp", directive_bool(directives, "mptcp"));
+    set_global_string(
+        target,
+        "bandwidthMaxTx",
+        directive_string(directives, "bandwidth_max_tx"),
+    );
+    set_global_string(
+        target,
+        "bandwidthMaxRx",
+        directive_string(directives, "bandwidth_max_rx"),
+    );
+}
+
+fn parse_global_directives(raw: &str) -> HashMap<String, String> {
+    let body = global_block_body(raw).unwrap_or(raw);
+    let mut directives = HashMap::new();
+    for line in body.lines() {
+        let line = strip_line_comment(line).trim();
+        if line.is_empty() || line == "{" || line == "}" {
+            continue;
+        }
+        let Some((key, value)) = line.split_once(':') else {
+            continue;
+        };
+        let key = key.trim().trim_matches(',').to_owned();
+        if key.is_empty() {
+            continue;
+        }
+        directives.insert(key, clean_global_scalar(value));
+    }
+    directives
+}
+
+fn global_block_body(raw: &str) -> Option<&str> {
+    let start = raw.find("global")?;
+    let open = raw[start..].find('{')? + start;
+    let bytes = raw.as_bytes();
+    let mut depth = 0_i32;
+    let mut close = None;
+    for (idx, byte) in bytes.iter().enumerate().skip(open) {
+        match byte {
+            b'{' => depth += 1,
+            b'}' => {
+                depth -= 1;
+                if depth == 0 {
+                    close = Some(idx);
+                    break;
+                }
+            }
+            _ => {}
+        }
+    }
+    close.and_then(|close| raw.get(open + 1..close))
+}
+
+fn strip_line_comment(line: &str) -> &str {
+    let mut quote = None;
+    for (idx, ch) in line.char_indices() {
+        match ch {
+            '\'' | '"' if quote == Some(ch) => quote = None,
+            '\'' | '"' if quote.is_none() => quote = Some(ch),
+            '#' if quote.is_none() => return &line[..idx],
+            _ => {}
+        }
+    }
+    line
+}
+
+fn clean_global_scalar(value: &str) -> String {
+    let value = value.trim().trim_end_matches(',').trim();
+    let value = value
+        .strip_prefix('"')
+        .and_then(|value| value.strip_suffix('"'))
+        .or_else(|| {
+            value
+                .strip_prefix('\'')
+                .and_then(|value| value.strip_suffix('\''))
+        })
+        .unwrap_or(value);
+    value.trim().to_owned()
+}
+
+fn directive_string(directives: &HashMap<String, String>, key: &str) -> Option<String> {
+    directives
+        .get(key)
+        .cloned()
+        .filter(|value| !value.is_empty())
+}
+
+fn directive_bool(directives: &HashMap<String, String>, key: &str) -> Option<bool> {
+    directives.get(key).and_then(|value| parse_boolish(value))
+}
+
+fn directive_u64(directives: &HashMap<String, String>, key: &str) -> Option<u64> {
+    directives
+        .get(key)
+        .and_then(|value| value.trim().parse::<u64>().ok())
+}
+
+fn directive_array(directives: &HashMap<String, String>, key: &str) -> Option<Vec<String>> {
+    directives
+        .get(key)
+        .map(|value| split_global_list(value))
+        .filter(|values| !values.is_empty())
+}
+
+fn split_global_list(value: &str) -> Vec<String> {
+    value
+        .split(',')
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_owned)
+        .collect()
+}
+
+fn json_value_by_keys<'a>(source: &'a Value, keys: &[&str]) -> Option<&'a Value> {
+    keys.iter().find_map(|key| source.get(*key))
+}
+
+fn json_string(source: &Value, keys: &[&str]) -> Option<String> {
+    json_value_by_keys(source, keys).and_then(|value| match value {
+        Value::String(value) if !value.is_empty() => Some(value.clone()),
+        Value::Number(value) => Some(value.to_string()),
+        Value::Bool(value) => Some(value.to_string()),
+        _ => None,
+    })
+}
+
+fn json_bool(source: &Value, keys: &[&str]) -> Option<bool> {
+    json_value_by_keys(source, keys).and_then(|value| match value {
+        Value::Bool(value) => Some(*value),
+        Value::String(value) => parse_boolish(value),
+        _ => None,
+    })
+}
+
+fn json_u64(source: &Value, keys: &[&str]) -> Option<u64> {
+    json_value_by_keys(source, keys).and_then(|value| match value {
+        Value::Number(value) => value.as_u64(),
+        Value::String(value) => value.trim().parse::<u64>().ok(),
+        _ => None,
+    })
+}
+
+fn json_array_or_split_string(source: &Value, keys: &[&str]) -> Option<Vec<String>> {
+    json_value_by_keys(source, keys).and_then(|value| match value {
+        Value::Array(values) => {
+            let out = values
+                .iter()
+                .filter_map(Value::as_str)
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .map(str::to_owned)
+                .collect::<Vec<_>>();
+            (!out.is_empty()).then_some(out)
+        }
+        Value::String(value) => {
+            let out = split_global_list(value);
+            (!out.is_empty()).then_some(out)
+        }
+        _ => None,
+    })
+}
+
+fn parse_boolish(value: &str) -> Option<bool> {
+    match value.trim().to_ascii_lowercase().as_str() {
+        "1" | "true" | "on" | "yes" => Some(true),
+        "0" | "false" | "off" | "no" => Some(false),
+        _ => None,
+    }
+}
+
+fn set_global_string(target: &mut Value, key: &str, value: Option<String>) {
+    if let (Some(map), Some(value)) = (target.as_object_mut(), value) {
+        map.insert(key.to_owned(), json!(value));
+    }
+}
+
+fn set_global_bool(target: &mut Value, key: &str, value: Option<bool>) {
+    if let (Some(map), Some(value)) = (target.as_object_mut(), value) {
+        map.insert(key.to_owned(), json!(value));
+    }
+}
+
+fn set_global_u64(target: &mut Value, key: &str, value: Option<u64>) {
+    if let (Some(map), Some(value)) = (target.as_object_mut(), value) {
+        map.insert(key.to_owned(), json!(value));
+    }
+}
+
+fn set_global_array(target: &mut Value, key: &str, value: Option<Vec<String>>) {
+    if let (Some(map), Some(value)) = (target.as_object_mut(), value) {
+        map.insert(key.to_owned(), json!(value));
+    }
 }
 
 fn parsed_dns_value(raw: &str) -> Value {
@@ -2423,32 +3633,117 @@ fn list_nodes(state: &Path, subscription_id: Option<i64>) -> HttpResponse {
     }
 }
 
+fn list_nodes_for_request(state: &Path, request: &HttpRequest) -> HttpResponse {
+    let subscription_id = request
+        .query
+        .get("subscriptionId")
+        .or_else(|| request.query.get("subscriptionID"))
+        .and_then(|values| values.first())
+        .and_then(|value| value.parse::<i64>().ok());
+    let scope = if let Some(subscription_id) = subscription_id {
+        NodeListScope::Subscription(subscription_id)
+    } else {
+        match request
+            .query
+            .get("independent")
+            .and_then(|values| values.first())
+            .and_then(|value| parse_boolish(value))
+        {
+            Some(false) => NodeListScope::SubscriptionBacked,
+            _ => NodeListScope::Independent,
+        }
+    };
+    match list_nodes_by_scope(state, scope) {
+        Ok(value) => HttpResponse::json(200, value),
+        Err(err) => HttpResponse::json(500, json!({"error": err.to_string()})),
+    }
+}
+
+#[derive(Clone, Copy)]
+enum NodeListScope {
+    Independent,
+    SubscriptionBacked,
+    Subscription(i64),
+    All,
+}
+
 fn list_nodes_value(state: &Path, subscription_id: Option<i64>) -> io::Result<Value> {
+    let scope = subscription_id
+        .map(NodeListScope::Subscription)
+        .unwrap_or(NodeListScope::Independent);
+    list_nodes_by_scope(state, scope)
+}
+
+fn list_all_nodes_value(state: &Path) -> io::Result<Value> {
+    list_nodes_by_scope(state, NodeListScope::All)
+}
+
+fn list_nodes_by_scope(state: &Path, scope: NodeListScope) -> io::Result<Value> {
     let conn = open_state_connection(state)?;
     let mut items = Vec::new();
-    if let Some(subscription_id) = subscription_id {
-        let mut stmt = conn
-            .prepare(
-                "SELECT id, link, name, address, protocol, tag, subscription_id FROM nodes WHERE subscription_id = ?1 ORDER BY id",
-            )
-            .map_err(sqlite_io_error)?;
-        let rows = stmt
-            .query_map(params![subscription_id], node_row_value)
-            .map_err(sqlite_io_error)?;
-        for row in rows {
-            items.push(row.map_err(sqlite_io_error)?);
+    match scope {
+        NodeListScope::Independent => {
+            let mut stmt = conn
+                .prepare(
+                    "SELECT id, link, name, address, protocol, tag, subscription_id
+                     FROM nodes
+                     WHERE subscription_id IS NULL
+                     ORDER BY id",
+                )
+                .map_err(sqlite_io_error)?;
+            let rows = stmt
+                .query_map([], node_row_value)
+                .map_err(sqlite_io_error)?;
+            for row in rows {
+                items.push(row.map_err(sqlite_io_error)?);
+            }
         }
-    } else {
-        let mut stmt = conn
-            .prepare(
-                "SELECT id, link, name, address, protocol, tag, subscription_id FROM nodes ORDER BY id",
-            )
-            .map_err(sqlite_io_error)?;
-        let rows = stmt
-            .query_map([], node_row_value)
-            .map_err(sqlite_io_error)?;
-        for row in rows {
-            items.push(row.map_err(sqlite_io_error)?);
+        NodeListScope::SubscriptionBacked => {
+            let mut stmt = conn
+                .prepare(
+                    "SELECT id, link, name, address, protocol, tag, subscription_id
+                     FROM nodes
+                     WHERE subscription_id IS NOT NULL
+                     ORDER BY id",
+                )
+                .map_err(sqlite_io_error)?;
+            let rows = stmt
+                .query_map([], node_row_value)
+                .map_err(sqlite_io_error)?;
+            for row in rows {
+                items.push(row.map_err(sqlite_io_error)?);
+            }
+        }
+        NodeListScope::Subscription(subscription_id) => {
+            let mut stmt = conn
+                .prepare(
+                    "SELECT id, link, name, address, protocol, tag, subscription_id
+                     FROM nodes
+                     WHERE subscription_id = ?1
+                     ORDER BY id",
+                )
+                .map_err(sqlite_io_error)?;
+            let rows = stmt
+                .query_map(params![subscription_id], node_row_value)
+                .map_err(sqlite_io_error)?;
+            for row in rows {
+                items.push(row.map_err(sqlite_io_error)?);
+            }
+        }
+        NodeListScope::All => {
+            let mut stmt = conn
+                .prepare(
+                    "SELECT id, link, name, address, protocol, tag, subscription_id
+                     FROM nodes
+                     ORDER BY id",
+                )
+                .map_err(sqlite_io_error)?;
+            let rows = stmt
+                .query_map([], node_row_value)
+                .map_err(sqlite_io_error)?;
+            for row in rows {
+                items.push(row.map_err(sqlite_io_error)?);
+            }
         }
     }
     Ok(json!({
@@ -2624,8 +3919,8 @@ fn parse_node_link(link: &str, tag: Option<&str>) -> ParsedNodeLink {
         .filter(|value| !value.is_empty())
         .unwrap_or_else(|| "unknown".to_owned());
     let name = tag
-        .map(str::to_owned)
-        .or_else(|| parsed_url.and_then(|url| url.fragment().map(str::to_owned)))
+        .map(decode_node_label)
+        .or_else(|| parsed_url.and_then(|url| url.fragment().map(decode_node_label)))
         .unwrap_or_else(|| format!("{protocol}-{address}"));
     ParsedNodeLink {
         name,
@@ -2634,16 +3929,53 @@ fn parse_node_link(link: &str, tag: Option<&str>) -> ParsedNodeLink {
     }
 }
 
+fn decode_node_label(value: &str) -> String {
+    decode_percent_escapes(value.trim())
+}
+
+fn decode_percent_escapes(value: &str) -> String {
+    let mut out = Vec::with_capacity(value.len());
+    let bytes = value.as_bytes();
+    let mut changed = false;
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == b'%' && i + 2 < bytes.len() {
+            if let (Some(high), Some(low)) = (hex_value(bytes[i + 1]), hex_value(bytes[i + 2])) {
+                out.push((high << 4) | low);
+                changed = true;
+                i += 3;
+                continue;
+            }
+        }
+        out.push(bytes[i]);
+        i += 1;
+    }
+    if changed {
+        String::from_utf8_lossy(&out).into_owned()
+    } else {
+        value.to_owned()
+    }
+}
+
 fn node_row_value(row: &rusqlite::Row<'_>) -> rusqlite::Result<Value> {
     let subscription_id: Option<i64> = row.get(6)?;
+    let name = row.get::<_, String>(2)?;
+    let tag = row.get::<_, Option<String>>(5)?;
+    let runtime_tag = tag
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .unwrap_or(name.as_str())
+        .to_owned();
     Ok(json!({
         "id": row.get::<_, i64>(0)?,
         "link": row.get::<_, String>(1)?,
-        "name": row.get::<_, String>(2)?,
+        "name": decode_node_label(&name),
         "address": row.get::<_, String>(3)?,
         "protocol": row.get::<_, String>(4)?,
         "transport": Value::Null,
-        "tag": row.get::<_, Option<String>>(5)?,
+        "tag": tag.as_deref().map(decode_node_label),
+        "runtimeTag": runtime_tag,
         "subscriptionId": subscription_id,
         "subscriptionID": subscription_id.map(|value| value.to_string()),
     }))
@@ -2685,7 +4017,7 @@ fn list_subscriptions_value(state: &Path, expand_nodes: bool) -> io::Result<Valu
     Ok(json!({"items": items}))
 }
 
-fn create_subscription(state: &Path, request: &HttpRequest) -> HttpResponse {
+fn create_subscription(state: &Path, config_dir: &Path, request: &HttpRequest) -> HttpResponse {
     let body = match json_body(request) {
         Ok(body) => body,
         Err(err) => return HttpResponse::json(400, json!({"error": err})),
@@ -2707,7 +4039,12 @@ fn create_subscription(state: &Path, request: &HttpRequest) -> HttpResponse {
         return HttpResponse::json(400, json!({"error": err.to_string()}));
     }
     let id = conn.last_insert_rowid();
-    let _ = append_log(state, "info", &format!("subscription {id} imported"));
+    let _ = append_log_for_config(
+        config_dir,
+        state,
+        "info",
+        &format!("subscription {id} imported"),
+    );
     let import_report = refresh_subscription_from_remote(state, id).unwrap_or_else(|err| {
         json!({
             "link": link,
@@ -2787,10 +4124,15 @@ fn update_subscription(state: &Path, request: &HttpRequest, id: i64) -> HttpResp
     get_subscription(state, id)
 }
 
-fn refresh_subscription(state: &Path, id: i64) -> HttpResponse {
+fn refresh_subscription(state: &Path, config_dir: &Path, id: i64) -> HttpResponse {
     match refresh_subscription_from_remote(state, id) {
         Ok(mut report) => {
-            let _ = append_log(state, "info", &format!("subscription {id} refreshed"));
+            let _ = append_log_for_config(
+                config_dir,
+                state,
+                "info",
+                &format!("subscription {id} refreshed"),
+            );
             if let Some(subscription) = get_subscription_value(state, id)
                 .ok()
                 .flatten()
@@ -2929,25 +4271,109 @@ fn replace_subscription_nodes(
     subscription_id: i64,
     links: &[String],
 ) -> io::Result<Vec<Value>> {
-    conn.execute(
-        "DELETE FROM group_nodes WHERE node_id IN (SELECT id FROM nodes WHERE subscription_id = ?1)",
-        params![subscription_id],
-    )
-    .map_err(sqlite_io_error)?;
-    conn.execute(
-        "DELETE FROM node_latency_results WHERE node_id IN (SELECT id FROM nodes WHERE subscription_id = ?1)",
-        params![subscription_id],
-    )
-    .map_err(sqlite_io_error)?;
-    conn.execute(
-        "DELETE FROM nodes WHERE subscription_id = ?1",
-        params![subscription_id],
-    )
-    .map_err(sqlite_io_error)?;
+    let existing_nodes = existing_subscription_nodes(conn, subscription_id)?;
+    let preserved_ids = preserved_subscription_node_ids(conn, subscription_id)?;
+    let mut preserved_name_counts = HashMap::<String, usize>::new();
+    let mut preserved_by_name = HashMap::<String, ExistingSubscriptionNode>::new();
+    for node in existing_nodes
+        .iter()
+        .filter(|node| preserved_ids.contains(&node.id))
+    {
+        *preserved_name_counts.entry(node.name.clone()).or_default() += 1;
+        preserved_by_name.insert(node.name.clone(), node.clone());
+    }
 
-    let mut out = Vec::new();
+    let mut candidates = Vec::<(String, ParsedNodeLink)>::new();
+    let mut incoming_name_counts = HashMap::<String, usize>::new();
     for link in links {
         let parsed = parse_node_link(link, None);
+        *incoming_name_counts.entry(parsed.name.clone()).or_default() += 1;
+        candidates.push((link.clone(), parsed));
+    }
+
+    for node in existing_nodes
+        .iter()
+        .filter(|node| !preserved_ids.contains(&node.id))
+    {
+        conn.execute(
+            "DELETE FROM group_nodes WHERE node_id = ?1",
+            params![node.id],
+        )
+        .map_err(sqlite_io_error)?;
+        conn.execute(
+            "DELETE FROM node_latency_results WHERE node_id = ?1",
+            params![node.id],
+        )
+        .map_err(sqlite_io_error)?;
+        conn.execute("DELETE FROM nodes WHERE id = ?1", params![node.id])
+            .map_err(sqlite_io_error)?;
+    }
+
+    let mut out = Vec::new();
+    let mut reused_preserved = HashSet::<i64>::new();
+    for (link, parsed) in candidates {
+        if incoming_name_counts.get(&parsed.name).copied().unwrap_or(0) == 1
+            && preserved_name_counts
+                .get(&parsed.name)
+                .copied()
+                .unwrap_or(0)
+                == 1
+        {
+            if let Some(preserved) = preserved_by_name.get(&parsed.name) {
+                if reused_preserved.insert(preserved.id) {
+                    match conn.execute(
+                        "UPDATE nodes
+                         SET link = ?1,
+                             name = ?2,
+                             address = ?3,
+                             protocol = ?4,
+                             tag = NULL,
+                             subscription_id = ?5
+                         WHERE id = ?6",
+                        params![
+                            link,
+                            parsed.name,
+                            parsed.address,
+                            parsed.protocol,
+                            subscription_id,
+                            preserved.id
+                        ],
+                    ) {
+                        Ok(_) => {
+                            conn.execute(
+                                "DELETE FROM node_latency_results WHERE node_id = ?1",
+                                params![preserved.id],
+                            )
+                            .map_err(sqlite_io_error)?;
+                            bump_group_versions_for_node(conn, preserved.id)?;
+                            out.push(json!({
+                                "link": link,
+                                "error": Value::Null,
+                                "node": {"id": preserved.id}
+                            }));
+                            continue;
+                        }
+                        Err(err) => {
+                            out.push(json!({
+                                "link": link,
+                                "error": err.to_string(),
+                                "node": Value::Null
+                            }));
+                            continue;
+                        }
+                    }
+                }
+            }
+        }
+
+        if subscription_node_link_exists(conn, subscription_id, &link)? {
+            out.push(json!({
+                "link": link,
+                "error": "node duplicated",
+                "node": Value::Null
+            }));
+            continue;
+        }
         match conn.execute(
             "INSERT INTO nodes(link, name, address, protocol, tag, subscription_id) VALUES(?1, ?2, ?3, ?4, NULL, ?5)",
             params![link, parsed.name, parsed.address, parsed.protocol, subscription_id],
@@ -2967,7 +4393,101 @@ fn replace_subscription_nodes(
             })),
         }
     }
+    bump_group_versions_for_subscription(conn, subscription_id)?;
     Ok(out)
+}
+
+#[derive(Clone)]
+struct ExistingSubscriptionNode {
+    id: i64,
+    name: String,
+}
+
+fn existing_subscription_nodes(
+    conn: &Connection,
+    subscription_id: i64,
+) -> io::Result<Vec<ExistingSubscriptionNode>> {
+    let mut stmt = conn
+        .prepare(
+            "SELECT id, link, name, address, protocol
+             FROM nodes
+             WHERE subscription_id = ?1
+             ORDER BY id",
+        )
+        .map_err(sqlite_io_error)?;
+    let rows = stmt
+        .query_map(params![subscription_id], |row| {
+            Ok(ExistingSubscriptionNode {
+                id: row.get(0)?,
+                name: row.get(2)?,
+            })
+        })
+        .map_err(sqlite_io_error)?;
+    let mut out = Vec::new();
+    for row in rows {
+        out.push(row.map_err(sqlite_io_error)?);
+    }
+    Ok(out)
+}
+
+fn preserved_subscription_node_ids(
+    conn: &Connection,
+    subscription_id: i64,
+) -> io::Result<HashSet<i64>> {
+    let mut stmt = conn
+        .prepare(
+            "SELECT DISTINCT n.id
+             FROM nodes n
+             JOIN group_nodes gn ON gn.node_id = n.id
+             WHERE n.subscription_id = ?1",
+        )
+        .map_err(sqlite_io_error)?;
+    let rows = stmt
+        .query_map(params![subscription_id], |row| row.get::<_, i64>(0))
+        .map_err(sqlite_io_error)?;
+    let mut out = HashSet::new();
+    for row in rows {
+        out.insert(row.map_err(sqlite_io_error)?);
+    }
+    Ok(out)
+}
+
+fn subscription_node_link_exists(
+    conn: &Connection,
+    subscription_id: i64,
+    link: &str,
+) -> io::Result<bool> {
+    conn.query_row(
+        "SELECT COUNT(*) FROM nodes WHERE subscription_id = ?1 AND link = ?2",
+        params![subscription_id, link],
+        |row| row.get::<_, i64>(0),
+    )
+    .map(|count| count > 0)
+    .map_err(sqlite_io_error)
+}
+
+fn bump_group_versions_for_node(conn: &Connection, node_id: i64) -> io::Result<()> {
+    conn.execute(
+        "UPDATE groups
+         SET version = version + 1
+         WHERE id IN (SELECT group_id FROM group_nodes WHERE node_id = ?1)",
+        params![node_id],
+    )
+    .map_err(sqlite_io_error)?;
+    Ok(())
+}
+
+fn bump_group_versions_for_subscription(conn: &Connection, subscription_id: i64) -> io::Result<()> {
+    conn.execute(
+        "UPDATE groups
+         SET version = version + 1
+         WHERE id IN (
+             SELECT group_id FROM group_subscriptions WHERE subscription_id = ?1
+         )",
+        params![subscription_id],
+    )
+    .map_err(sqlite_io_error)?;
+    Ok(())
 }
 
 fn subscription_links_from_content(content: &str) -> Vec<String> {
@@ -3149,14 +4669,15 @@ fn connect_tcp(host: &str, port: u16, timeout: Duration) -> io::Result<TcpStream
     }))
 }
 
-fn start_subscription_scheduler(state: PathBuf) {
+fn start_subscription_scheduler(state: PathBuf, config_dir: PathBuf) {
     thread::spawn(move || {
         let _ = ensure_state_schema(&state);
         let _ = set_metadata(&state, "subscription_scheduler_started_at", &now_text());
-        let _ = append_log(
+        let _ = append_log_for_config(
+            &config_dir,
             &state,
             "info",
-            "subscription scheduler skeleton started by Rust daed",
+            "subscription scheduler started by Rust daed",
         );
     });
 }
@@ -3423,7 +4944,8 @@ fn group_subscriptions_value(conn: &Connection, group_id: i64) -> io::Result<Vec
     for row in rows {
         let (id, updated_at, link, _cron_exp, _cron_enable, status, info, tag, name_filter_regex) =
             row.map_err(sqlite_io_error)?;
-        let matched_nodes = nodes_for_subscription_value(conn, id)?;
+        let matched_nodes =
+            nodes_for_subscription_filtered_value(conn, id, name_filter_regex.as_deref())?;
         out.push(json!({
             "subscriptionId": id,
             "nameFilterRegex": name_filter_regex,
@@ -3439,7 +4961,12 @@ fn group_subscriptions_value(conn: &Connection, group_id: i64) -> io::Result<Vec
     Ok(out)
 }
 
-fn nodes_for_subscription_value(conn: &Connection, subscription_id: i64) -> io::Result<Vec<Value>> {
+fn nodes_for_subscription_filtered_value(
+    conn: &Connection,
+    subscription_id: i64,
+    name_filter_regex: Option<&str>,
+) -> io::Result<Vec<Value>> {
+    let filter = compile_name_filter(name_filter_regex)?;
     let mut stmt = conn
         .prepare(
             "SELECT id, link, name, address, protocol, tag, subscription_id FROM nodes WHERE subscription_id = ?1 ORDER BY id",
@@ -3450,9 +4977,34 @@ fn nodes_for_subscription_value(conn: &Connection, subscription_id: i64) -> io::
         .map_err(sqlite_io_error)?;
     let mut items = Vec::new();
     for row in rows {
-        items.push(row.map_err(sqlite_io_error)?);
+        let node = row.map_err(sqlite_io_error)?;
+        if node_matches_name_filter(&node, filter.as_ref()) {
+            items.push(node);
+        }
     }
     Ok(items)
+}
+
+fn compile_name_filter(name_filter_regex: Option<&str>) -> io::Result<Option<Regex>> {
+    let Some(raw) = name_filter_regex
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    else {
+        return Ok(None);
+    };
+    Regex::new(raw)
+        .map(Some)
+        .map_err(|err| io::Error::new(io::ErrorKind::InvalidInput, err.to_string()))
+}
+
+fn node_matches_name_filter(node: &Value, filter: Option<&Regex>) -> bool {
+    let Some(filter) = filter else {
+        return true;
+    };
+    node.get("name")
+        .and_then(Value::as_str)
+        .map(|name| filter.is_match(name))
+        .unwrap_or(false)
 }
 
 fn group_policy_params_value(conn: &Connection, group_id: i64) -> io::Result<Vec<Value>> {
@@ -3537,6 +5089,12 @@ fn apply_group_subscription_ids(
     name_filter_regex: Option<&str>,
     add: bool,
 ) -> io::Result<()> {
+    let name_filter_regex = name_filter_regex
+        .map(str::trim)
+        .filter(|value| !value.is_empty());
+    if add {
+        let _ = compile_name_filter(name_filter_regex)?;
+    }
     for id in ids {
         if add {
             conn.execute(
@@ -3554,7 +5112,11 @@ fn apply_group_subscription_ids(
     Ok(())
 }
 
-fn general_state_report(state: &Path, runtime: &ProductRuntimeManager) -> io::Result<Value> {
+fn general_state_report(
+    state: &Path,
+    config_dir: &Path,
+    runtime: &ProductRuntimeManager,
+) -> io::Result<Value> {
     ensure_state_schema(state)?;
     let conn = open_state_connection(state)?;
     let runtime_state = runtime.summary();
@@ -3583,7 +5145,7 @@ fn general_state_report(state: &Path, runtime: &ProductRuntimeManager) -> io::Re
             "groups": count_table(&conn, "groups")?,
             "nodes": count_table(&conn, "nodes")?,
             "subscriptions": count_table(&conn, "subscriptions")?,
-            "logs": count_table(&conn, "log_entries")?,
+            "logs": count_log_file_entries(config_dir)?,
         }
     }))
 }
@@ -3618,7 +5180,7 @@ fn materialize_runtime(state: &Path, config_dir: Option<&Path>, dry: bool) -> io
     let dns = selected_section_raw(&conn, SectionKind::Dns)?;
     let routing = selected_section_raw(&conn, SectionKind::Routing)?;
     let groups = list_groups_value(state)?;
-    let nodes = list_nodes_value(state, None)?;
+    let nodes = list_all_nodes_value(state)?;
     let generated_at = now_text();
     let content = render_generated_config(
         &generated_at,
@@ -3627,7 +5189,7 @@ fn materialize_runtime(state: &Path, config_dir: Option<&Path>, dry: bool) -> io
         routing.as_ref(),
         &groups,
         &nodes,
-    );
+    )?;
     let output_path = config_dir.map(|dir| dir.join("runtime").join("generated.dae"));
     if !dry {
         if let Some(path) = &output_path {
@@ -3681,7 +5243,7 @@ fn render_generated_config(
     routing: Option<&(i64, String, String, i64)>,
     groups: &Value,
     nodes: &Value,
-) -> String {
+) -> io::Result<String> {
     let mut out = String::new();
     out.push_str("# generated by Rust daed C10 local product surface\n");
     out.push_str(&format!("# generated_at: {generated_at}\n\n"));
@@ -3708,9 +5270,9 @@ fn render_generated_config(
     out.push_str("\n\n# local product nodes\n");
     out.push_str(&render_node_section(nodes));
     out.push_str("\n\n# local product groups\n");
-    out.push_str(&render_group_section(groups));
+    out.push_str(&render_group_section(groups)?);
     out.push('\n');
-    out
+    Ok(out)
 }
 
 fn render_node_section(nodes: &Value) -> String {
@@ -3733,7 +5295,7 @@ fn render_node_section(nodes: &Value) -> String {
     out
 }
 
-fn render_group_section(groups: &Value) -> String {
+fn render_group_section(groups: &Value) -> io::Result<String> {
     let mut out = String::from("group {\n");
     for group in groups["items"].as_array().into_iter().flatten() {
         let Some(name) = group.get("name").and_then(Value::as_str) else {
@@ -3744,14 +5306,18 @@ fn render_group_section(groups: &Value) -> String {
         }
         out.push_str(&format!("    {} {{\n", dae_key_literal(name)));
         let node_tags = runtime_group_node_tags(group);
-        if !node_tags.is_empty() {
-            let names = node_tags
-                .iter()
-                .map(|tag| dae_string_literal(tag))
-                .collect::<Vec<_>>()
-                .join(", ");
-            out.push_str(&format!("        filter: name({names})\n"));
+        if node_tags.is_empty() {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                format!("group {name} has no matched nodes"),
+            ));
         }
+        let names = node_tags
+            .iter()
+            .map(|tag| dae_string_literal(tag))
+            .collect::<Vec<_>>()
+            .join(", ");
+        out.push_str(&format!("        filter: name({names})\n"));
         let policy = group
             .get("policy")
             .and_then(Value::as_str)
@@ -3762,7 +5328,7 @@ fn render_group_section(groups: &Value) -> String {
         out.push_str("    }\n");
     }
     out.push_str("}\n");
-    out
+    Ok(out)
 }
 
 fn runtime_group_node_tags(group: &Value) -> Vec<String> {
@@ -3783,15 +5349,20 @@ fn runtime_group_node_tags(group: &Value) -> Vec<String> {
 }
 
 fn runtime_node_tag(node: &Value) -> String {
-    node.get("tag")
+    node.get("runtimeTag")
         .and_then(Value::as_str)
         .filter(|value| !value.trim().is_empty())
+        .or_else(|| {
+            node.get("tag")
+                .and_then(Value::as_str)
+                .filter(|value| !value.trim().is_empty())
+        })
         .or_else(|| {
             node.get("name")
                 .and_then(Value::as_str)
                 .filter(|value| !value.trim().is_empty())
         })
-        .map(str::to_owned)
+        .map(|value| value.trim().to_owned())
         .unwrap_or_else(|| {
             let id = node.get("id").and_then(Value::as_i64).unwrap_or(0);
             format!("node_{id}")
@@ -3927,61 +5498,185 @@ fn set_metadata(state: &Path, key: &str, value: &str) -> io::Result<()> {
     Ok(())
 }
 
-fn append_log(state: &Path, level: &str, message: &str) -> io::Result<()> {
+static LOG_FILE_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+
+fn initialize_log_store(config_dir: &Path, state: &Path) -> io::Result<()> {
+    ensure_state_schema(state)?;
+    ensure_log_dir(config_dir)?;
+    let log_file = product_log_file(config_dir);
+    if log_file.exists() {
+        set_log_file_permissions(&log_file)?;
+        let conn = open_state_connection(state)?;
+        prune_log_file(config_dir, &conn)?;
+    }
+    Ok(())
+}
+
+fn register_resident_event_product_log_sink(config_dir: &Path, state: &Path) {
+    let config_dir = config_dir.to_path_buf();
+    let state = state.to_path_buf();
+    set_resident_event_log_sink(Some(Arc::new(move |event| {
+        let _ = append_resident_event_product_log(&config_dir, &state, event);
+    })));
+}
+
+#[cfg(test)]
+fn clear_resident_event_product_log_sink() {
+    set_resident_event_log_sink(None);
+}
+
+fn append_resident_event_product_log(
+    config_dir: &Path,
+    state: &Path,
+    event: &Value,
+) -> io::Result<()> {
+    let Some(event_name) = event.get("event").and_then(Value::as_str) else {
+        return Ok(());
+    };
+    if resident_event_is_flow_diagnostic(event_name) {
+        return Ok(());
+    }
+    let level = resident_event_product_log_level(event_name);
+    let fields = resident_event_product_log_fields(event_name, event);
+    append_log_fields_for_config(
+        config_dir,
+        state,
+        level,
+        &resident_event_product_log_message(event_name),
+        fields,
+    )
+}
+
+fn resident_event_product_log_level(event_name: &str) -> &'static str {
+    if event_name.contains("failed") || event_name.contains("error") {
+        return "warn";
+    }
+    if event_name.ends_with("_started") || event_name.ends_with("_stopped") {
+        return "info";
+    }
+    "debug"
+}
+
+fn resident_event_is_flow_diagnostic(event_name: &str) -> bool {
+    matches!(
+        event_name,
+        "tcp_connection_finished"
+            | "tcp_connection_failed"
+            | "udp_packet_finished"
+            | "udp_dns_packet_finished"
+            | "udp_packet_skipped"
+            | "udp_reply_failed"
+            | "udp_exchange_failed"
+    )
+}
+
+fn resident_event_product_log_message(event_name: &str) -> String {
+    format!("resident dataplane {}", event_name.replace('_', " "))
+}
+
+fn resident_event_product_log_fields(event_name: &str, event: &Value) -> BTreeMap<String, String> {
+    let mut fields = BTreeMap::new();
+    fields.insert("event".to_owned(), event_name.to_owned());
+    if let Some(object) = event.as_object() {
+        for (key, value) in object {
+            if key == "event" {
+                continue;
+            }
+            fields.insert(key.to_owned(), product_log_field_value(value));
+        }
+    }
+    fields
+}
+
+fn product_log_field_value(value: &Value) -> String {
+    match value {
+        Value::String(value) => value.to_owned(),
+        Value::Number(_) | Value::Bool(_) | Value::Null => value.to_string(),
+        Value::Array(_) | Value::Object(_) => value.to_string(),
+    }
+}
+
+fn append_log_for_config(
+    config_dir: &Path,
+    state: &Path,
+    level: &str,
+    message: &str,
+) -> io::Result<()> {
+    append_log_fields_for_config(config_dir, state, level, message, BTreeMap::new())
+}
+
+fn append_log_fields_for_config(
+    config_dir: &Path,
+    state: &Path,
+    level: &str,
+    message: &str,
+    fields: BTreeMap<String, String>,
+) -> io::Result<()> {
+    let Some(level) = normalize_log_level_name(level) else {
+        return Ok(());
+    };
+    let runtime_level = current_runtime_log_level(state)?;
+    if !log_level_enabled(&level, &runtime_level) {
+        return Ok(());
+    }
     ensure_state_schema(state)?;
     let conn = open_state_connection(state)?;
-    conn.execute(
-        "INSERT INTO log_entries(ts, level, message) VALUES(?1, ?2, ?3)",
-        params![now_text(), level, message],
-    )
-    .map_err(sqlite_io_error)?;
-    let (max_entries, _max_bytes) = log_settings_tuple(&conn)?;
-    conn.execute(
-        "DELETE FROM log_entries WHERE id NOT IN (SELECT id FROM log_entries ORDER BY id DESC LIMIT ?1)",
-        params![max_entries],
-    )
-    .map_err(sqlite_io_error)?;
+    let (max_entries, max_bytes) = log_settings_tuple(&conn)?;
+    let log_file = product_log_file(config_dir);
+    ensure_log_dir(config_dir)?;
+    let lock = LOG_FILE_LOCK.get_or_init(|| Mutex::new(()));
+    let _guard = lock
+        .lock()
+        .map_err(|_| io::Error::other("product log file lock poisoned"))?;
+    let id = read_last_log_id(&log_file)?.saturating_add(1);
+    let line = encode_log_entry_line(id, &level, message, fields)?;
+    append_log_line(&log_file, &line)?;
+    prune_log_file_with_settings(&log_file, max_entries, max_bytes)?;
     Ok(())
 }
 
 fn list_logs_value(
+    config_dir: &Path,
     state: &Path,
     level: Option<&str>,
     query: Option<&str>,
     limit: usize,
 ) -> io::Result<Value> {
     ensure_state_schema(state)?;
-    let conn = open_state_connection(state)?;
-    let limit = limit.clamp(1, 5000) as i64;
-    let mut stmt = conn
-        .prepare("SELECT id, ts, level, message FROM log_entries ORDER BY id DESC LIMIT ?1")
-        .map_err(sqlite_io_error)?;
-    let rows = stmt
-        .query_map(params![limit], |row| {
-            Ok((
-                row.get::<_, i64>(0)?,
-                row.get::<_, String>(1)?,
-                row.get::<_, String>(2)?,
-                row.get::<_, String>(3)?,
-            ))
-        })
-        .map_err(sqlite_io_error)?;
+    let limit = limit.clamp(1, MAX_LOG_QUERY_LIMIT);
+    let level = normalize_log_level_filter(level)?;
+    let query = query
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_ascii_lowercase);
+    let log_file = product_log_file(config_dir);
+    let file = match fs::File::open(&log_file) {
+        Ok(file) => file,
+        Err(err) if err.kind() == io::ErrorKind::NotFound => return Ok(json!({"items": []})),
+        Err(err) => return Err(err),
+    };
     let mut items = Vec::new();
-    for row in rows {
-        let (id, ts, row_level, message) = row.map_err(sqlite_io_error)?;
-        if level.is_some_and(|level| level != row_level) {
+    let mut reader = io::BufReader::new(file);
+    let mut line = String::new();
+    loop {
+        line.clear();
+        let read = reader.read_line(&mut line)?;
+        if read == 0 {
+            break;
+        }
+        if read > MAX_LOG_LINE_BYTES * 2 {
             continue;
         }
-        if query.is_some_and(|query| !message.contains(query)) {
+        let Some(entry) = parse_log_entry_line(&line) else {
+            continue;
+        };
+        if !log_entry_matches_filter(&entry, level.as_deref(), query.as_deref()) {
             continue;
         }
-        items.push(json!({
-            "id": id,
-            "ts": ts,
-            "level": row_level,
-            "message": message,
-            "fields": {},
-        }));
+        if items.len() == limit {
+            items.remove(0);
+        }
+        items.push(log_entry_value(entry));
     }
     Ok(json!({"items": items}))
 }
@@ -3993,10 +5688,10 @@ fn log_settings_value(state: &Path) -> io::Result<Value> {
     Ok(json!({
         "maxEntries": max_entries,
         "maxBytes": max_bytes,
-        "minMaxEntries": 100,
-        "maxMaxEntries": 100000,
-        "minMaxBytes": 65536,
-        "maxMaxBytes": 134217728,
+        "minMaxEntries": MIN_LOG_MAX_ENTRIES,
+        "maxMaxEntries": MAX_LOG_MAX_ENTRIES,
+        "minMaxBytes": MIN_LOG_MAX_BYTES,
+        "maxMaxBytes": MAX_LOG_MAX_BYTES,
     }))
 }
 
@@ -4008,15 +5703,407 @@ fn log_settings_tuple(conn: &Connection) -> io::Result<(i64, i64)> {
     )
     .optional()
     .map_err(sqlite_io_error)
-    .map(|value| value.unwrap_or((1000, 1048576)))
+    .map(|value| {
+        let (max_entries, max_bytes) =
+            value.unwrap_or((DEFAULT_LOG_MAX_ENTRIES, DEFAULT_LOG_MAX_BYTES));
+        (
+            normalize_log_max_entries(max_entries),
+            normalize_log_max_bytes(max_bytes),
+        )
+    })
+}
+
+#[derive(Debug)]
+struct ProductLogEntry {
+    id: u64,
+    ts: String,
+    level: String,
+    message: String,
+    fields: BTreeMap<String, String>,
+}
+
+fn product_log_file(config_dir: &Path) -> PathBuf {
+    config_dir.join(PRODUCT_LOG_DIR).join(PRODUCT_LOG_FILE)
+}
+
+fn clear_log_file(config_dir: &Path) -> io::Result<()> {
+    let log_file = product_log_file(config_dir);
+    ensure_log_dir(config_dir)?;
+    fs::write(&log_file, [])?;
+    set_log_file_permissions(&log_file)
+}
+
+fn append_log_line(path: &Path, line: &[u8]) -> io::Result<()> {
+    let mut file = fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .write(true)
+        .open(path)?;
+    file.write_all(line)?;
+    set_log_file_permissions(path)
+}
+
+fn set_log_file_permissions(path: &Path) -> io::Result<()> {
+    use std::os::unix::fs::PermissionsExt;
+    fs::set_permissions(path, fs::Permissions::from_mode(0o600))
+}
+
+fn ensure_log_dir(config_dir: &Path) -> io::Result<()> {
+    use std::os::unix::fs::PermissionsExt;
+    let log_dir = config_dir.join(PRODUCT_LOG_DIR);
+    fs::create_dir_all(&log_dir)?;
+    fs::set_permissions(log_dir, fs::Permissions::from_mode(0o750))
+}
+
+fn encode_log_entry_line(
+    id: u64,
+    level: &str,
+    message: &str,
+    fields: BTreeMap<String, String>,
+) -> io::Result<Vec<u8>> {
+    let mut message = trim_log_string(message, MAX_LOG_LINE_BYTES);
+    let mut fields = trim_log_fields(fields, MAX_LOG_FIELD_VALUE_LEN);
+    let mut line = encode_log_entry_json_line(id, level, &message, &fields)?;
+    if line.len() > MAX_LOG_LINE_BYTES {
+        message = trim_log_string(&message, MAX_LOG_LINE_BYTES / 2);
+        fields = trim_log_fields(fields, 256);
+        line = encode_log_entry_json_line(id, level, &message, &fields)?;
+    }
+    if line.len() > MAX_LOG_LINE_BYTES {
+        message = trim_log_string(&message, 1024);
+        fields.clear();
+        line = encode_log_entry_json_line(id, level, &message, &fields)?;
+    }
+    Ok(line)
+}
+
+fn encode_log_entry_json_line(
+    id: u64,
+    level: &str,
+    message: &str,
+    fields: &BTreeMap<String, String>,
+) -> io::Result<Vec<u8>> {
+    let mut object = Map::new();
+    object.insert("id".to_owned(), json!(id));
+    object.insert("ts".to_owned(), json!(now_text()));
+    object.insert("level".to_owned(), json!(level));
+    object.insert("message".to_owned(), json!(message));
+    if !fields.is_empty() {
+        object.insert("fields".to_owned(), json!(fields));
+    }
+    let mut data = serde_json::to_vec(&Value::Object(object))
+        .map_err(|err| io::Error::new(io::ErrorKind::InvalidData, err))?;
+    data.push(b'\n');
+    Ok(data)
+}
+
+fn trim_log_fields(
+    fields: BTreeMap<String, String>,
+    max_value_len: usize,
+) -> BTreeMap<String, String> {
+    fields
+        .into_iter()
+        .map(|(key, value)| (key, trim_log_string(&value, max_value_len)))
+        .collect()
+}
+
+fn trim_log_string(value: &str, max_len: usize) -> String {
+    if max_len == 0 || value.len() <= max_len {
+        return value.to_owned();
+    }
+    let mut boundary = 0;
+    for (idx, _) in value.char_indices() {
+        if idx > max_len {
+            break;
+        }
+        boundary = idx;
+    }
+    if boundary == 0 {
+        return "...".to_owned();
+    }
+    format!("{}...", &value[..boundary])
+}
+
+fn parse_log_entry_line(line: &str) -> Option<ProductLogEntry> {
+    let value = serde_json::from_str::<Value>(line).ok()?;
+    let id = value.get("id").and_then(|value| {
+        value
+            .as_u64()
+            .or_else(|| value.as_i64().and_then(|value| u64::try_from(value).ok()))
+    })?;
+    let ts = value.get("ts")?.as_str()?.to_owned();
+    let level = normalize_log_level_name(value.get("level")?.as_str()?)?;
+    let message = value.get("message")?.as_str()?.to_owned();
+    let fields = value
+        .get("fields")
+        .and_then(Value::as_object)
+        .map(|fields| {
+            fields
+                .iter()
+                .map(|(key, value)| {
+                    (
+                        key.to_owned(),
+                        value
+                            .as_str()
+                            .map(str::to_owned)
+                            .unwrap_or_else(|| value.to_string()),
+                    )
+                })
+                .collect::<BTreeMap<_, _>>()
+        })
+        .unwrap_or_default();
+    Some(ProductLogEntry {
+        id,
+        ts,
+        level,
+        message,
+        fields,
+    })
+}
+
+fn log_entry_value(entry: ProductLogEntry) -> Value {
+    let mut object = Map::new();
+    object.insert("id".to_owned(), json!(entry.id));
+    object.insert("ts".to_owned(), json!(entry.ts));
+    object.insert("level".to_owned(), json!(entry.level));
+    object.insert("message".to_owned(), json!(entry.message));
+    object.insert("fields".to_owned(), json!(entry.fields));
+    Value::Object(object)
+}
+
+fn log_entry_matches_filter(
+    entry: &ProductLogEntry,
+    level: Option<&str>,
+    query: Option<&str>,
+) -> bool {
+    if log_entry_is_internal_resident_flow_diagnostic(entry) {
+        return false;
+    }
+    if level.is_some_and(|level| level != entry.level) {
+        return false;
+    }
+    let Some(query) = query else {
+        return true;
+    };
+    if entry.message.to_ascii_lowercase().contains(query) {
+        return true;
+    }
+    entry.fields.iter().any(|(key, value)| {
+        key.to_ascii_lowercase().contains(query) || value.to_ascii_lowercase().contains(query)
+    })
+}
+
+fn log_entry_is_internal_resident_flow_diagnostic(entry: &ProductLogEntry) -> bool {
+    entry
+        .fields
+        .get("event")
+        .is_some_and(|event| resident_event_is_flow_diagnostic(event))
+}
+
+fn read_last_log_id(path: &Path) -> io::Result<u64> {
+    let data = match read_tail_bytes(path, LOG_TAIL_ID_SCAN_BYTES) {
+        Ok(data) => data,
+        Err(err) if err.kind() == io::ErrorKind::NotFound => return Ok(0),
+        Err(err) => return Err(err),
+    };
+    for line in data.lines().rev() {
+        if let Some(entry) = parse_log_entry_line(line) {
+            return Ok(entry.id);
+        }
+    }
+    Ok(0)
+}
+
+fn scan_log_entries_after_id(
+    config_dir: &Path,
+    after_id: u64,
+) -> io::Result<(Vec<ProductLogEntry>, u64)> {
+    let log_file = product_log_file(config_dir);
+    let file = match fs::File::open(&log_file) {
+        Ok(file) => file,
+        Err(err) if err.kind() == io::ErrorKind::NotFound => return Ok((Vec::new(), after_id)),
+        Err(err) => return Err(err),
+    };
+    let mut max_seen_id = after_id;
+    let mut entries = Vec::new();
+    for line in io::BufReader::new(file).lines().map_while(Result::ok) {
+        let Some(entry) = parse_log_entry_line(&line) else {
+            continue;
+        };
+        if entry.id > max_seen_id {
+            max_seen_id = entry.id;
+        }
+        if entry.id > after_id {
+            entries.push(entry);
+        }
+    }
+    Ok((entries, max_seen_id))
+}
+
+fn count_log_file_entries(config_dir: &Path) -> io::Result<i64> {
+    let log_file = product_log_file(config_dir);
+    let file = match fs::File::open(&log_file) {
+        Ok(file) => file,
+        Err(err) if err.kind() == io::ErrorKind::NotFound => return Ok(0),
+        Err(err) => return Err(err),
+    };
+    let mut count = 0_i64;
+    for line in io::BufReader::new(file).lines().map_while(Result::ok) {
+        if parse_log_entry_line(&line).is_some() {
+            count = count.saturating_add(1);
+        }
+    }
+    Ok(count)
+}
+
+fn read_tail_bytes(path: &Path, max_bytes: u64) -> io::Result<String> {
+    let mut file = fs::File::open(path)?;
+    let size = file.metadata()?.len();
+    if size == 0 {
+        return Ok(String::new());
+    }
+    let offset = size.saturating_sub(max_bytes);
+    file.seek(SeekFrom::Start(offset))?;
+    let mut data = Vec::new();
+    file.read_to_end(&mut data)?;
+    if offset > 0
+        && let Some(newline) = data.iter().position(|byte| *byte == b'\n')
+    {
+        data = data.split_off(newline + 1);
+    }
+    Ok(String::from_utf8_lossy(&data).into_owned())
+}
+
+fn prune_log_file(config_dir: &Path, conn: &Connection) -> io::Result<()> {
+    let (max_entries, max_bytes) = log_settings_tuple(conn)?;
+    prune_log_file_with_settings(&product_log_file(config_dir), max_entries, max_bytes)
+}
+
+fn prune_log_file_with_settings(path: &Path, max_entries: i64, max_bytes: i64) -> io::Result<()> {
+    let max_entries = normalize_log_max_entries(max_entries) as usize;
+    let max_bytes = normalize_log_max_bytes(max_bytes) as u64;
+    let data = match read_tail_bytes(path, max_bytes) {
+        Ok(data) => data,
+        Err(err) if err.kind() == io::ErrorKind::NotFound => return Ok(()),
+        Err(err) => return Err(err),
+    };
+    if data.is_empty() {
+        return Ok(());
+    }
+    let mut lines = data
+        .trim_end_matches('\n')
+        .lines()
+        .map(str::to_owned)
+        .collect::<Vec<_>>();
+    if lines.len() > max_entries {
+        lines = lines.split_off(lines.len() - max_entries);
+    }
+    let mut pruned = lines.join("\n");
+    if !pruned.is_empty() {
+        pruned.push('\n');
+    }
+    let tmp_path = path.with_extension("jsonl.tmp");
+    fs::write(&tmp_path, pruned)?;
+    set_log_file_permissions(&tmp_path)?;
+    fs::rename(tmp_path, path)
+}
+
+fn current_runtime_log_level(state: &Path) -> io::Result<String> {
+    let level = get_metadata(state, "runtime_log_level")?
+        .and_then(|level| normalize_runtime_log_level(&level))
+        .unwrap_or_else(|| "info".to_owned());
+    Ok(level)
+}
+
+fn set_runtime_log_level_from_config(state: &Path, config: &Config) -> io::Result<()> {
+    let level =
+        normalize_runtime_log_level(&config.global.log_level).unwrap_or_else(|| "info".to_owned());
+    set_metadata(state, "runtime_log_level", &level)
+}
+
+fn log_level_enabled(entry_level: &str, runtime_level: &str) -> bool {
+    let Some(entry_rank) = log_level_rank(entry_level) else {
+        return false;
+    };
+    let runtime_rank = log_level_rank(runtime_level).unwrap_or(4);
+    entry_rank <= runtime_rank
+}
+
+fn log_level_rank(level: &str) -> Option<u8> {
+    match level {
+        "panic" => Some(0),
+        "fatal" => Some(1),
+        "error" => Some(2),
+        "warn" => Some(3),
+        "info" => Some(4),
+        "debug" => Some(5),
+        "trace" => Some(6),
+        _ => None,
+    }
+}
+
+fn normalize_log_max_entries(value: i64) -> i64 {
+    if value == 0 {
+        DEFAULT_LOG_MAX_ENTRIES
+    } else {
+        value.clamp(MIN_LOG_MAX_ENTRIES, MAX_LOG_MAX_ENTRIES)
+    }
+}
+
+fn normalize_log_max_bytes(value: i64) -> i64 {
+    if value == 0 {
+        DEFAULT_LOG_MAX_BYTES
+    } else {
+        value.clamp(MIN_LOG_MAX_BYTES, MAX_LOG_MAX_BYTES)
+    }
+}
+
+fn normalize_log_level_filter(level: Option<&str>) -> io::Result<Option<String>> {
+    let Some(level) = level else {
+        return Ok(None);
+    };
+    let level = level.trim();
+    if level.is_empty() || is_all_log_level_filter(level) {
+        return Ok(None);
+    }
+    normalize_log_level_name(level)
+        .map(Some)
+        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "invalid log level"))
+}
+
+fn is_all_log_level_filter(level: &str) -> bool {
+    matches!(
+        level.trim().to_ascii_lowercase().as_str(),
+        "all" | "*" | "any"
+    ) || matches!(level.trim(), "全部" | "所有")
+}
+
+fn normalize_log_level_name(level: &str) -> Option<String> {
+    let level = level.trim().to_ascii_lowercase();
+    match level.as_str() {
+        "panic" | "fatal" | "error" | "warn" | "info" | "debug" | "trace" => Some(level),
+        "err" | "错误" => Some("error".to_owned()),
+        "warning" | "警告" => Some("warn".to_owned()),
+        "信息" => Some("info".to_owned()),
+        "调试" => Some("debug".to_owned()),
+        "跟踪" => Some("trace".to_owned()),
+        _ => None,
+    }
 }
 
 fn sse_response(event: &str, payload: Value) -> HttpResponse {
-    let mut response = HttpResponse::text(
-        200,
-        "text/event-stream; charset=utf-8",
-        format!("event: {event}\ndata: {payload}\n\n"),
-    );
+    sse_response_events(&[(event, payload)], None)
+}
+
+fn sse_response_events(events: &[(&str, Value)], retry_ms: Option<u64>) -> HttpResponse {
+    let mut body = String::new();
+    if let Some(retry_ms) = retry_ms {
+        body.push_str(&format!("retry: {retry_ms}\n\n"));
+    }
+    for (event, payload) in events {
+        body.push_str(&format!("event: {event}\ndata: {payload}\n\n"));
+    }
+    let mut response = HttpResponse::text(200, "text/event-stream; charset=utf-8", body);
     response
         .extra_headers
         .push(("Cache-Control".to_owned(), "no-cache".to_owned()));
@@ -4024,6 +6111,24 @@ fn sse_response(event: &str, payload: Value) -> HttpResponse {
         .extra_headers
         .push(("X-Accel-Buffering".to_owned(), "no".to_owned()));
     response
+}
+
+fn write_sse_stream_headers(stream: &mut TcpStream) -> io::Result<()> {
+    write!(
+        stream,
+        "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nCache-Control: no-cache\r\nConnection: keep-alive\r\nX-Accel-Buffering: no\r\nAccess-Control-Allow-Origin: *\r\nAccess-Control-Allow-Headers: Authorization, Content-Type\r\nAccess-Control-Allow-Methods: GET, POST, PUT, PATCH, DELETE, OPTIONS, HEAD\r\n\r\n"
+    )
+}
+
+fn write_sse_stream_event(stream: &mut TcpStream, event: &str, payload: &Value) -> io::Result<()> {
+    let data = serde_json::to_string(payload)
+        .map_err(|err| io::Error::new(io::ErrorKind::InvalidData, err))?;
+    writeln!(stream, "event: {event}")?;
+    for line in data.lines() {
+        writeln!(stream, "data: {line}")?;
+    }
+    writeln!(stream)?;
+    stream.flush()
 }
 
 fn list_node_latencies_value(state: &Path) -> io::Result<Value> {
@@ -4055,7 +6160,7 @@ fn list_node_latencies_value(state: &Path) -> io::Result<Value> {
     Ok(json!({"items": items}))
 }
 
-fn update_node_latencies(state: &Path, ids: &[i64]) -> io::Result<Value> {
+fn update_node_latencies(state: &Path, config_dir: &Path, ids: &[i64]) -> io::Result<Value> {
     ensure_state_schema(state)?;
     let conn = open_state_connection(state)?;
     let target_ids = if ids.is_empty() {
@@ -4089,7 +6194,12 @@ fn update_node_latencies(state: &Path, ids: &[i64]) -> io::Result<Value> {
         )
         .map_err(sqlite_io_error)?;
     }
-    append_log(state, "info", "node latency probe updated by Rust daed")?;
+    append_log_for_config(
+        config_dir,
+        state,
+        "info",
+        "node latency probe updated by Rust daed",
+    )?;
     list_node_latencies_value(state)
 }
 
@@ -4186,7 +6296,12 @@ fn export_bundle(state: &Path, user: &UserRecord) -> io::Result<Value> {
     }))
 }
 
-fn import_bundle(state: &Path, body: &Value, user: &UserRecord) -> io::Result<bool> {
+fn import_bundle(
+    state: &Path,
+    config_dir: &Path,
+    body: &Value,
+    user: &UserRecord,
+) -> io::Result<bool> {
     ensure_state_schema(state)?;
     let mut conn = open_state_connection(state)?;
     let tx = conn.transaction().map_err(sqlite_io_error)?;
@@ -4247,7 +6362,12 @@ fn import_bundle(state: &Path, body: &Value, user: &UserRecord) -> io::Result<bo
         }
     }
     save_json_storage(state, user.id, &storage.to_string())?;
-    append_log(state, "info", "DAE bundle imported by Rust daed")?;
+    append_log_for_config(
+        config_dir,
+        state,
+        "info",
+        "DAE bundle imported by Rust daed",
+    )?;
     Ok(true)
 }
 
@@ -4560,8 +6680,8 @@ fn product_openapi_skeleton() -> Value {
             "/api/runtime/overview": {"get": {"summary": "runtime overview"}},
             "/api/logs": {"get": {"summary": "list logs"}, "delete": {"summary": "clear logs"}},
             "/api/logs/settings": {"get": {"summary": "read log settings"}, "patch": {"summary": "update log settings"}},
-            "/api/events/runtime": {"get": {"summary": "runtime SSE snapshot"}},
-            "/api/events/logs": {"get": {"summary": "log SSE snapshot"}}
+            "/api/events/runtime": {"get": {"summary": "runtime SSE stream"}},
+            "/api/events/logs": {"get": {"summary": "log SSE stream"}}
         }
     })
 }
@@ -4845,7 +6965,6 @@ fn count_table(conn: &Connection, table: &str) -> io::Result<i64> {
         "groups" => "SELECT COUNT(*) FROM groups",
         "nodes" => "SELECT COUNT(*) FROM nodes",
         "subscriptions" => "SELECT COUNT(*) FROM subscriptions",
-        "log_entries" => "SELECT COUNT(*) FROM log_entries",
         "node_latency_results" => "SELECT COUNT(*) FROM node_latency_results",
         _ => {
             return Err(io::Error::new(
@@ -4858,7 +6977,167 @@ fn count_table(conn: &Connection, table: &str) -> io::Result<i64> {
         .map_err(sqlite_io_error)
 }
 
-fn current_rss_bytes() -> u64 {
+#[derive(Clone, Copy, Debug, Default)]
+struct ProcessMetrics {
+    rss_bytes: u64,
+    heap_alloc_bytes: u64,
+    thread_count: u64,
+    cpu_usage_percent: f64,
+}
+
+#[derive(Clone, Copy, Debug)]
+struct ProcCpuSample {
+    total_ticks: u64,
+    observed_at: Instant,
+}
+
+static LAST_PROC_CPU_SAMPLE: OnceLock<Mutex<Option<ProcCpuSample>>> = OnceLock::new();
+
+fn current_process_metrics() -> ProcessMetrics {
+    let mut metrics = process_status_metrics().unwrap_or_default();
+    metrics.cpu_usage_percent = current_process_cpu_usage_percent().unwrap_or(0.0);
+    metrics
+}
+
+fn process_status_metrics() -> io::Result<ProcessMetrics> {
+    let status = fs::read_to_string("/proc/self/status")?;
+    let mut metrics = process_status_metrics_from_str(&status);
+    if metrics.rss_bytes == 0 {
+        metrics.rss_bytes = current_rss_bytes_from_statm();
+    }
+    Ok(metrics)
+}
+
+fn process_status_metrics_from_str(status: &str) -> ProcessMetrics {
+    let mut metrics = ProcessMetrics::default();
+    let mut vm_data_bytes = 0_u64;
+    for line in status.lines() {
+        if let Some(value) = line.strip_prefix("VmRSS:") {
+            metrics.rss_bytes = proc_status_kib_value(value).saturating_mul(1024);
+        } else if let Some(value) = line.strip_prefix("RssAnon:") {
+            metrics.heap_alloc_bytes = proc_status_kib_value(value).saturating_mul(1024);
+        } else if let Some(value) = line.strip_prefix("VmData:") {
+            vm_data_bytes = proc_status_kib_value(value).saturating_mul(1024);
+        } else if let Some(value) = line.strip_prefix("Threads:") {
+            metrics.thread_count = value.trim().parse::<u64>().unwrap_or(0);
+        }
+    }
+    if metrics.heap_alloc_bytes == 0 {
+        metrics.heap_alloc_bytes = vm_data_bytes;
+    }
+    metrics
+}
+
+fn proc_status_kib_value(value: &str) -> u64 {
+    value
+        .split_whitespace()
+        .next()
+        .and_then(|value| value.parse::<u64>().ok())
+        .unwrap_or(0)
+}
+
+fn current_process_cpu_usage_percent() -> io::Result<f64> {
+    let stat = fs::read_to_string("/proc/self/stat")?;
+    let total_ticks = proc_stat_total_cpu_ticks(&stat)?;
+    let now = Instant::now();
+    let lock = LAST_PROC_CPU_SAMPLE.get_or_init(|| Mutex::new(None));
+    let mut guard = lock
+        .lock()
+        .map_err(|_| io::Error::other("process cpu sample lock poisoned"))?;
+    let usage = if let Some(previous) = *guard {
+        let elapsed = now.duration_since(previous.observed_at).as_secs_f64();
+        if elapsed > 0.0 {
+            let delta_ticks = total_ticks.saturating_sub(previous.total_ticks) as f64;
+            cpu_ticks_to_percent(delta_ticks, elapsed)
+        } else {
+            0.0
+        }
+    } else {
+        process_lifetime_cpu_usage_percent(&stat, total_ticks).unwrap_or(0.0)
+    };
+    *guard = Some(ProcCpuSample {
+        total_ticks,
+        observed_at: now,
+    });
+    Ok(round_percent(usage))
+}
+
+fn proc_stat_total_cpu_ticks(stat: &str) -> io::Result<u64> {
+    let fields = proc_stat_fields_after_comm(stat)?;
+    let utime = fields
+        .get(11)
+        .and_then(|value| value.parse::<u64>().ok())
+        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "missing proc utime"))?;
+    let stime = fields
+        .get(12)
+        .and_then(|value| value.parse::<u64>().ok())
+        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "missing proc stime"))?;
+    Ok(utime.saturating_add(stime))
+}
+
+fn process_lifetime_cpu_usage_percent(stat: &str, total_ticks: u64) -> io::Result<f64> {
+    let fields = proc_stat_fields_after_comm(stat)?;
+    let start_ticks = fields
+        .get(19)
+        .and_then(|value| value.parse::<u64>().ok())
+        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "missing proc starttime"))?;
+    let uptime = system_uptime_seconds()?;
+    let process_start = start_ticks as f64 / clock_ticks_per_second() as f64;
+    let elapsed = (uptime - process_start).max(0.001);
+    Ok(cpu_ticks_to_percent(total_ticks as f64, elapsed))
+}
+
+fn proc_stat_fields_after_comm(stat: &str) -> io::Result<Vec<&str>> {
+    let Some((_, tail)) = stat.rsplit_once(") ") else {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "invalid proc stat comm field",
+        ));
+    };
+    Ok(tail.split_whitespace().collect())
+}
+
+fn system_uptime_seconds() -> io::Result<f64> {
+    let uptime = fs::read_to_string("/proc/uptime")?;
+    uptime
+        .split_whitespace()
+        .next()
+        .and_then(|value| value.parse::<f64>().ok())
+        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "invalid uptime"))
+}
+
+fn clock_ticks_per_second() -> u64 {
+    let value = unsafe { libc::sysconf(libc::_SC_CLK_TCK) };
+    if value > 0 { value as u64 } else { 100 }
+}
+
+fn cpu_ticks_to_percent(cpu_ticks: f64, elapsed_seconds: f64) -> f64 {
+    if elapsed_seconds <= 0.0 {
+        return 0.0;
+    }
+    let capacity = clock_ticks_per_second() as f64 * cpu_parallelism() as f64 * elapsed_seconds;
+    if capacity <= 0.0 {
+        return 0.0;
+    }
+    (cpu_ticks / capacity * 100.0).clamp(0.0, 100.0)
+}
+
+fn cpu_parallelism() -> usize {
+    thread::available_parallelism()
+        .map(usize::from)
+        .unwrap_or(1)
+        .max(1)
+}
+
+fn round_percent(value: f64) -> f64 {
+    if !value.is_finite() {
+        0.0
+    } else {
+        (value * 100.0).round() / 100.0
+    }
+}
+
+fn current_rss_bytes_from_statm() -> u64 {
     let Ok(statm) = fs::read_to_string("/proc/self/statm") else {
         return 0;
     };
@@ -5889,6 +8168,253 @@ mod tests {
     }
 
     #[test]
+    fn parsed_global_reads_dae_text_and_json_storage_shapes() {
+        let text = r#"
+global {
+  tproxy_port:"12345"
+  tproxy_port_protect:"true"
+  so_mark_from_dae:"7"
+  lan_interface:"enp1s0"
+  wan_interface:"auto,enp1s0"
+  tcp_check_url:"http://cp.cloudflare.com,1.1.1.1"
+  udp_check_dns:"dns.google.com:53,8.8.8.8"
+  dial_mode:"domain++"
+  fallback_resolver:"8.8.8.8:53"
+  auto_config_kernel_parameter:"true"
+  bandwidth_max_tx:"200 mbps"
+}
+"#;
+        let parsed = normalize_global_value(Some(text));
+        assert_eq!(parsed["tproxyPort"], json!(12345));
+        assert_eq!(parsed["tproxyPortProtect"], json!(true));
+        assert_eq!(parsed["soMarkFromDae"], json!(7));
+        assert_eq!(parsed["lanInterface"], json!(["enp1s0"]));
+        assert_eq!(parsed["wanInterface"], json!(["auto", "enp1s0"]));
+        assert_eq!(
+            parsed["tcpCheckUrl"],
+            json!(["http://cp.cloudflare.com", "1.1.1.1"])
+        );
+        assert_eq!(parsed["dialMode"], json!("domain++"));
+        assert_eq!(parsed["fallbackResolver"], json!("8.8.8.8:53"));
+        assert_eq!(parsed["autoConfigKernelParameter"], json!(true));
+        assert_eq!(parsed["bandwidthMaxTx"], json!("200 mbps"));
+
+        let parsed = normalize_global_value(Some(
+            r#"{"tproxyPort":12345,"wanInterface":["auto"],"dialMode":"domain"}"#,
+        ));
+        assert_eq!(parsed["tproxyPort"], json!(12345));
+        assert_eq!(parsed["wanInterface"], json!(["auto"]));
+        assert_eq!(parsed["dialMode"], json!("domain"));
+    }
+
+    #[test]
+    fn runtime_traffic_stats_read_resident_event_bytes() {
+        let dir = std::env::temp_dir().join(format!("daed-product-test-{}", fastrand::u64(..)));
+        fs::create_dir_all(&dir).unwrap();
+        let event_file = dir.join("events.jsonl");
+        let now = unix_now();
+        fs::write(
+            &event_file,
+            format!(
+                "{{\"event\":\"tcp_connection_finished\",\"timestampUnix\":{now},\"bytes_client_to_proxy\":100,\"bytes_proxy_to_client\":200}}\n{{\"event\":\"udp_packet_finished\",\"timestampUnix\":{now},\"request_len\":30,\"response_len\":40}}\n"
+            ),
+        )
+        .unwrap();
+        let runtime = json!({
+            "residentDataplane": {
+                "event_file": path_string(&event_file)
+            }
+        });
+        let stats = resident_runtime_traffic_stats(&runtime, 60, 10);
+        assert_eq!(stats.upload_total, 130);
+        assert_eq!(stats.download_total, 240);
+        assert_eq!(stats.active_connections, 1);
+        assert_eq!(stats.udp_sessions, 1);
+        assert_eq!(stats.samples.len(), 1);
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn runtime_traffic_stats_prefer_live_resident_metrics() {
+        *LAST_RUNTIME_TRAFFIC_TOTAL_SAMPLE
+            .get_or_init(|| Mutex::new(None))
+            .lock()
+            .unwrap() = None;
+        RUNTIME_TRAFFIC_RATE_SAMPLES
+            .get_or_init(|| Mutex::new(VecDeque::new()))
+            .lock()
+            .unwrap()
+            .clear();
+
+        let runtime = json!({
+            "residentDataplane": {
+                "metrics": {
+                    "uploadTotal": 100,
+                    "downloadTotal": 200,
+                    "activeTcpConnections": 3,
+                    "activeUdpSessions": 2
+                }
+            }
+        });
+        let first = resident_runtime_traffic_stats(&runtime, 60, 10);
+        assert_eq!(first.upload_total, 100);
+        assert_eq!(first.download_total, 200);
+        assert_eq!(first.active_connections, 3);
+        assert_eq!(first.udp_sessions, 2);
+
+        thread::sleep(Duration::from_millis(10));
+        let runtime = json!({
+            "residentDataplane": {
+                "metrics": {
+                    "uploadTotal": 300,
+                    "downloadTotal": 500,
+                    "activeTcpConnections": 1,
+                    "activeUdpSessions": 0
+                }
+            }
+        });
+        let second = resident_runtime_traffic_stats(&runtime, 60, 10);
+        assert!(second.upload_rate > 0);
+        assert!(second.download_rate > 0);
+        assert_eq!(second.active_connections, 1);
+        assert!(!second.samples.is_empty());
+    }
+
+    #[test]
+    fn node_labels_decode_uri_fragments_without_special_casing_nodes() {
+        let parsed = parse_node_link(
+            "vless://01234567-89ab-cdef-0123-456789abcdef@example.com:443?security=tls#%5BHK%5DAki-Hk",
+            None,
+        );
+        assert_eq!(parsed.name, "[HK]Aki-Hk");
+        assert_eq!(decode_node_label("%5BHK%5DAki-Hk"), "[HK]Aki-Hk");
+        assert_eq!(decode_node_label("literal+plus"), "literal+plus");
+
+        let node = json!({
+            "id": 1,
+            "name": "[HK]Aki-Hk",
+            "runtimeTag": "%5BHK%5DAki-Hk",
+            "link": "scheme://example.invalid:443#%5BHK%5DAki-Hk"
+        });
+        assert_eq!(runtime_node_tag(&node), "%5BHK%5DAki-Hk");
+    }
+
+    #[test]
+    fn node_lists_keep_manual_subscription_and_runtime_scopes_separate() {
+        let dir = std::env::temp_dir().join(format!("daed-product-test-{}", fastrand::u64(..)));
+        let state = dir.join("daed.db");
+        ensure_state_schema(&state).unwrap();
+        let conn = open_state_connection(&state).unwrap();
+        conn.execute_batch(
+            r#"
+            INSERT INTO subscriptions(id, updated_at, link, status, info, tag)
+                VALUES(7, 'now', 'https://subscription.invalid/list', 'fetched', '', 'sub-a');
+            INSERT INTO nodes(id, link, name, address, protocol, tag, subscription_id)
+                VALUES(1, 'scheme://manual.invalid:443#manual', 'manual', 'manual.invalid', 'scheme', 'manual-tag', NULL);
+            INSERT INTO nodes(id, link, name, address, protocol, tag, subscription_id)
+                VALUES(2, 'scheme://sub.invalid:443#%5BHK%5DSub', '%5BHK%5DSub', 'sub.invalid', 'scheme', NULL, 7);
+            "#,
+        )
+        .unwrap();
+
+        let manual = list_nodes_value(&state, None).unwrap();
+        assert_eq!(manual["totalCount"], json!(1));
+        assert_eq!(manual["items"][0]["name"], json!("manual"));
+
+        let subscription = list_nodes_value(&state, Some(7)).unwrap();
+        assert_eq!(subscription["totalCount"], json!(1));
+        assert_eq!(subscription["items"][0]["name"], json!("[HK]Sub"));
+        assert_eq!(subscription["items"][0]["runtimeTag"], json!("%5BHK%5DSub"));
+
+        let runtime = list_all_nodes_value(&state).unwrap();
+        assert_eq!(runtime["totalCount"], json!(2));
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn group_subscription_bindings_apply_name_regex_to_matched_nodes() {
+        let dir = std::env::temp_dir().join(format!("daed-product-test-{}", fastrand::u64(..)));
+        let state = dir.join("daed.db");
+        ensure_state_schema(&state).unwrap();
+        let conn = open_state_connection(&state).unwrap();
+        conn.execute_batch(
+            r#"
+            INSERT INTO subscriptions(id, updated_at, link, status, info, tag)
+                VALUES(7, 'now', 'https://subscription.invalid/list', 'fetched', '', 'sub-a');
+            INSERT INTO nodes(id, link, name, address, protocol, tag, subscription_id)
+                VALUES(2, 'scheme://sub1.invalid:443#Oracle-Sg', 'Oracle-Sg', 'sub1.invalid', 'scheme', NULL, 7);
+            INSERT INTO nodes(id, link, name, address, protocol, tag, subscription_id)
+                VALUES(3, 'scheme://sub2.invalid:443#Hytron', 'Hytron', 'sub2.invalid', 'scheme', NULL, 7);
+            INSERT INTO groups(id, name, policy, version)
+                VALUES(9, 'TG', 'fixed(0)', 1);
+            INSERT INTO group_subscriptions(group_id, subscription_id, name_filter_regex)
+                VALUES(9, 7, 'Oracle');
+            "#,
+        )
+        .unwrap();
+
+        let group = get_group_value(&state, 9).unwrap().unwrap();
+        assert_eq!(group["subscriptions"][0]["matchedCount"], json!(1));
+        assert_eq!(
+            group["subscriptions"][0]["matchedNodes"][0]["name"],
+            json!("Oracle-Sg")
+        );
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn subscription_refresh_preserves_group_bound_nodes_by_unique_name() {
+        let dir = std::env::temp_dir().join(format!("daed-product-test-{}", fastrand::u64(..)));
+        let state = dir.join("daed.db");
+        ensure_state_schema(&state).unwrap();
+        let conn = open_state_connection(&state).unwrap();
+        conn.execute_batch(
+            r#"
+            INSERT INTO subscriptions(id, updated_at, link, status, info, tag)
+                VALUES(7, 'now', 'https://subscription.invalid/list', 'fetched', '', 'sub-a');
+            INSERT INTO nodes(id, link, name, address, protocol, tag, subscription_id)
+                VALUES(2, 'scheme://old.invalid:443#keep', 'keep', 'old.invalid', 'scheme', NULL, 7);
+            INSERT INTO nodes(id, link, name, address, protocol, tag, subscription_id)
+                VALUES(3, 'scheme://remove.invalid:443#drop', 'drop', 'remove.invalid', 'scheme', NULL, 7);
+            INSERT INTO groups(id, name, policy, version)
+                VALUES(9, 'TG', 'fixed(0)', 1);
+            INSERT INTO group_nodes(group_id, node_id) VALUES(9, 2);
+            "#,
+        )
+        .unwrap();
+
+        let report = replace_subscription_nodes(
+            &conn,
+            7,
+            &[
+                "scheme://new.invalid:443#keep".to_owned(),
+                "scheme://other.invalid:443#other".to_owned(),
+            ],
+        )
+        .unwrap();
+        assert_eq!(report.len(), 2);
+        let kept_link: String = conn
+            .query_row("SELECT link FROM nodes WHERE id = 2", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(kept_link, "scheme://new.invalid:443#keep");
+        let group_binding_count: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM group_nodes WHERE group_id = 9 AND node_id = 2",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(group_binding_count, 1);
+        let removed_count: i64 = conn
+            .query_row("SELECT COUNT(*) FROM nodes WHERE id = 3", [], |row| {
+                row.get(0)
+            })
+            .unwrap();
+        assert_eq!(removed_count, 0);
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
     fn generated_runtime_config_renders_parseable_nodes_and_groups() {
         let groups = json!({
             "items": [
@@ -5942,7 +8468,8 @@ mod tests {
             )),
             &groups,
             &nodes,
-        );
+        )
+        .unwrap();
         assert!(content.contains("node {"));
         assert!(content.contains("'[edge]sample':"));
         assert!(content.contains("filter: name('[edge]sample')"));
@@ -5953,6 +8480,438 @@ mod tests {
             config.routing.rules[0].and_functions[0].params[0].val,
             "sample-set:alpha-!beta"
         );
+    }
+
+    #[test]
+    fn generated_runtime_config_rejects_empty_group_filters() {
+        let groups = json!({
+            "items": [
+                {
+                    "name": "proxy",
+                    "policy": "fixed(0)",
+                    "nodes": [],
+                    "subscriptions": []
+                }
+            ]
+        });
+        let nodes = json!({"items": []});
+        let err = render_generated_config(
+            "test",
+            Some(&(1, "global".to_owned(), "global {}\n".to_owned(), 1)),
+            Some(&(1, "dns".to_owned(), "dns {}\n".to_owned(), 1)),
+            Some(&(
+                1,
+                "routing".to_owned(),
+                "routing { fallback: proxy }\n".to_owned(),
+                1,
+            )),
+            &groups,
+            &nodes,
+        )
+        .unwrap_err();
+        assert!(err.to_string().contains("group proxy has no matched nodes"));
+    }
+
+    #[test]
+    fn logs_filter_level_all_case_insensitive_query_and_sse_event_name() {
+        let dir = std::env::temp_dir().join(format!("daed-product-test-{}", fastrand::u64(..)));
+        let state = dir.join("daed.db");
+        ensure_state_schema(&state).unwrap();
+        let conn = open_state_connection(&state).unwrap();
+        let log_entries_table: Option<String> = conn
+            .query_row(
+                "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'log_entries'",
+                [],
+                |row| row.get(0),
+            )
+            .optional()
+            .unwrap();
+        assert!(log_entries_table.is_none());
+
+        append_log_for_config(&dir, &state, "info", "Runtime proxy started").unwrap();
+        let mut fields = BTreeMap::new();
+        fields.insert("subscription".to_owned(), "daily".to_owned());
+        append_log_fields_for_config(&dir, &state, "warning", "Policy changed", fields).unwrap();
+        append_log_for_config(&dir, &state, "error", "Dial failed").unwrap();
+
+        let log_file = product_log_file(&dir);
+        assert!(log_file.exists());
+        assert!(fs::read_to_string(&log_file).unwrap().contains("\"id\":1"));
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            assert_eq!(
+                fs::metadata(dir.join(PRODUCT_LOG_DIR))
+                    .unwrap()
+                    .permissions()
+                    .mode()
+                    & 0o777,
+                0o750
+            );
+            assert_eq!(
+                fs::metadata(&log_file).unwrap().permissions().mode() & 0o777,
+                0o600
+            );
+        }
+
+        let all = list_logs_value(&dir, &state, Some("all"), Some("PROXY"), 500).unwrap();
+        assert_eq!(all["items"].as_array().unwrap().len(), 1);
+        assert_eq!(all["items"][0]["level"], json!("info"));
+
+        let warn = list_logs_value(&dir, &state, Some("warning"), None, 500).unwrap();
+        assert_eq!(warn["items"].as_array().unwrap().len(), 1);
+        assert_eq!(warn["items"][0]["level"], json!("warn"));
+        assert_eq!(warn["items"][0]["fields"]["subscription"], json!("daily"));
+
+        let field = list_logs_value(&dir, &state, Some("all"), Some("DAILY"), 500).unwrap();
+        assert_eq!(field["items"].as_array().unwrap().len(), 1);
+        let cn_all = list_logs_value(&dir, &state, Some("全部"), Some("proxy"), 500).unwrap();
+        assert_eq!(cn_all["items"].as_array().unwrap().len(), 1);
+
+        let mut query = HashMap::new();
+        query.insert("level".to_owned(), vec!["all".to_owned()]);
+        query.insert("q".to_owned(), vec!["dial".to_owned()]);
+        let request = HttpRequest {
+            method: "GET".to_owned(),
+            path: "/api/events/logs".to_owned(),
+            query,
+            headers: HashMap::new(),
+            body: Vec::new(),
+        };
+        let app = AppState {
+            config_dir: dir.clone(),
+            state: state.clone(),
+            web_root: dir.clone(),
+            api_only: true,
+            runtime: Arc::new(ProductRuntimeManager::new()),
+        };
+        for (raw_query, expected_len, expected_level) in [
+            ("", 3, None),
+            ("level=", 3, None),
+            ("level=all", 3, None),
+            ("level=ALL", 3, None),
+            ("level=any", 3, None),
+            ("level=*", 3, None),
+            ("level=%E5%85%A8%E9%83%A8", 3, None),
+            ("level=%E6%89%80%E6%9C%89", 3, None),
+            ("level=info", 1, Some("info")),
+            ("level=INFO", 1, Some("info")),
+            ("level=%E4%BF%A1%E6%81%AF", 1, Some("info")),
+            ("level=warn", 1, Some("warn")),
+            ("level=warning", 1, Some("warn")),
+            ("level=%E8%AD%A6%E5%91%8A", 1, Some("warn")),
+            ("level=error", 1, Some("error")),
+            ("level=err", 1, Some("error")),
+            ("level=%E9%94%99%E8%AF%AF", 1, Some("error")),
+            ("level=debug", 0, None),
+            ("level=%E8%B0%83%E8%AF%95", 0, None),
+            ("level=trace", 0, None),
+            ("level=%E8%B7%9F%E8%B8%AA", 0, None),
+            ("level=fatal", 0, None),
+            ("level=panic", 0, None),
+        ] {
+            let raw_path = if raw_query.is_empty() {
+                "/api/logs".to_owned()
+            } else {
+                format!("/api/logs?{raw_query}")
+            };
+            let (path, query) = split_path_query(&raw_path);
+            let response = api_logs(
+                &app,
+                &HttpRequest {
+                    method: "GET".to_owned(),
+                    path,
+                    query,
+                    headers: HashMap::new(),
+                    body: Vec::new(),
+                },
+            );
+            assert_eq!(response.status, 200, "{raw_query}");
+            let value: Value = serde_json::from_slice(&response.body).unwrap();
+            let items = value["items"].as_array().unwrap();
+            assert_eq!(items.len(), expected_len, "{raw_query}: {value}");
+            if let Some(expected_level) = expected_level {
+                assert_eq!(items[0]["level"], json!(expected_level), "{raw_query}");
+            }
+        }
+        let response = api_log_events(&app, &request);
+        let body = String::from_utf8(response.body).unwrap();
+        assert!(body.contains("event: log.entry"));
+        assert!(body.contains("Dial failed"));
+
+        let mut invalid_query = HashMap::new();
+        invalid_query.insert("level".to_owned(), vec!["invalid".to_owned()]);
+        let invalid = api_logs(
+            &app,
+            &HttpRequest {
+                method: "GET".to_owned(),
+                path: "/api/logs".to_owned(),
+                query: invalid_query,
+                headers: HashMap::new(),
+                body: Vec::new(),
+            },
+        );
+        assert_eq!(invalid.status, 400);
+
+        let request = HttpRequest {
+            method: "PATCH".to_owned(),
+            path: "/api/runtime/log-level".to_owned(),
+            query: HashMap::new(),
+            headers: HashMap::new(),
+            body: br#"{"level":"debug"}"#.to_vec(),
+        };
+        let response = api_set_runtime_log_level(&app, &request);
+        assert_eq!(response.status, 200);
+        append_log_for_config(&dir, &state, "debug", "debug runtime detail").unwrap();
+        let debug = list_logs_value(&dir, &state, Some("debug"), None, 500).unwrap();
+        assert_eq!(debug["items"].as_array().unwrap().len(), 2);
+        assert_eq!(debug["items"][0]["level"], json!("debug"));
+        assert_eq!(
+            debug["items"][0]["message"],
+            json!("runtime log level set to debug")
+        );
+        assert_eq!(debug["items"][1]["level"], json!("debug"));
+        assert_eq!(debug["items"][1]["message"], json!("debug runtime detail"));
+
+        let cleared = api_clear_logs(&app);
+        assert_eq!(cleared.status, 200);
+        let empty = list_logs_value(&dir, &state, Some("all"), None, 500).unwrap();
+        assert_eq!(empty["items"].as_array().unwrap().len(), 0);
+
+        append_log_for_config(&dir, &state, "info", "after clear").unwrap();
+        let after_clear = list_logs_value(&dir, &state, Some("all"), None, 500).unwrap();
+        assert_eq!(after_clear["items"][0]["id"], json!(1));
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn log_store_initialization_repairs_existing_jsonl_permissions() {
+        let dir = std::env::temp_dir().join(format!("daed-product-test-{}", fastrand::u64(..)));
+        let state = dir.join("daed.db");
+        ensure_state_schema(&state).unwrap();
+        fs::create_dir_all(dir.join(PRODUCT_LOG_DIR)).unwrap();
+        let log_file = product_log_file(&dir);
+        fs::write(
+            &log_file,
+            "{\"id\":1,\"ts\":\"2026-06-03T00:00:00Z\",\"level\":\"info\",\"message\":\"existing\"}\n",
+        )
+        .unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            fs::set_permissions(&log_file, fs::Permissions::from_mode(0o644)).unwrap();
+        }
+
+        initialize_log_store(&dir, &state).unwrap();
+
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            assert_eq!(
+                fs::metadata(dir.join(PRODUCT_LOG_DIR))
+                    .unwrap()
+                    .permissions()
+                    .mode()
+                    & 0o777,
+                0o750
+            );
+            assert_eq!(
+                fs::metadata(&log_file).unwrap().permissions().mode() & 0o777,
+                0o600
+            );
+        }
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn resident_events_are_bridged_to_product_logs_with_runtime_level_filter() {
+        let dir = std::env::temp_dir().join(format!("daed-product-test-{}", fastrand::u64(..)));
+        let state = dir.join("daed.db");
+        ensure_state_schema(&state).unwrap();
+        initialize_log_store(&dir, &state).unwrap();
+
+        append_resident_event_product_log(
+            &dir,
+            &state,
+            &json!({"event": "tcp_worker_started", "proxy_count": 2, "dial_mode": "tls"}),
+        )
+        .unwrap();
+        append_resident_event_product_log(
+            &dir,
+            &state,
+            &json!({"event": "tcp_connection_finished", "peer": "198.51.100.10:443", "bytes_client_to_proxy": 128}),
+        )
+        .unwrap();
+        append_resident_event_product_log(
+            &dir,
+            &state,
+            &json!({"event": "tcp_connection_failed", "peer": "198.51.100.20:443", "error": "sample failure"}),
+        )
+        .unwrap();
+        append_resident_event_product_log(
+            &dir,
+            &state,
+            &json!({"event": "tcp_accept_failed", "error": "accept failure"}),
+        )
+        .unwrap();
+
+        let all = list_logs_value(&dir, &state, Some("all"), None, 500).unwrap();
+        let items = all["items"].as_array().unwrap();
+        assert_eq!(items.len(), 2, "{all}");
+        assert_eq!(
+            items[0]["message"],
+            json!("resident dataplane tcp worker started")
+        );
+        assert_eq!(items[0]["level"], json!("info"));
+        assert_eq!(items[0]["fields"]["event"], json!("tcp_worker_started"));
+        assert_eq!(items[0]["fields"]["proxy_count"], json!("2"));
+        assert_eq!(
+            items[1]["message"],
+            json!("resident dataplane tcp accept failed")
+        );
+        assert_eq!(items[1]["level"], json!("warn"));
+        assert_eq!(items[1]["fields"]["error"], json!("accept failure"));
+
+        set_metadata(&state, "runtime_log_level", "debug").unwrap();
+        append_resident_event_product_log(
+            &dir,
+            &state,
+            &json!({"event": "tcp_connection_finished", "peer": "198.51.100.30:443", "bytes_client_to_proxy": 256}),
+        )
+        .unwrap();
+        append_resident_event_product_log(
+            &dir,
+            &state,
+            &json!({"event": "udp_packet_finished", "peer": "198.51.100.40:443", "request_len": 64, "response_len": 128}),
+        )
+        .unwrap();
+        let mut legacy_fields = BTreeMap::new();
+        legacy_fields.insert("event".to_owned(), "tcp_connection_finished".to_owned());
+        legacy_fields.insert("peer".to_owned(), "198.51.100.50:443".to_owned());
+        append_log_fields_for_config(
+            &dir,
+            &state,
+            "debug",
+            "resident dataplane tcp connection finished",
+            legacy_fields,
+        )
+        .unwrap();
+        let debug = list_logs_value(&dir, &state, Some("debug"), None, 500).unwrap();
+        let items = debug["items"].as_array().unwrap();
+        assert_eq!(items.len(), 0, "{debug}");
+
+        clear_resident_event_product_log_sink();
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn runtime_reload_dry_preview_writes_unified_reload_logs() {
+        let dir = std::env::temp_dir().join(format!("daed-product-test-{}", fastrand::u64(..)));
+        let state = dir.join("daed.db");
+        ensure_state_schema(&state).unwrap();
+        initialize_log_store(&dir, &state).unwrap();
+        let app = AppState {
+            config_dir: dir.clone(),
+            state: state.clone(),
+            web_root: dir.clone(),
+            api_only: true,
+            runtime: Arc::new(ProductRuntimeManager::new()),
+        };
+        let request = HttpRequest {
+            method: "POST".to_owned(),
+            path: "/api/runtime/reload".to_owned(),
+            query: HashMap::new(),
+            headers: HashMap::new(),
+            body: br#"{"dry":true}"#.to_vec(),
+        };
+
+        let response = api_runtime_reload(&app, &request);
+        assert_eq!(
+            response.status,
+            200,
+            "{}",
+            String::from_utf8_lossy(&response.body)
+        );
+        let logs = list_logs_value(&dir, &state, Some("all"), Some("[Reload]"), 500).unwrap();
+        let items = logs["items"].as_array().unwrap();
+        assert_eq!(items.len(), 2, "{logs}");
+        assert_eq!(
+            items[0]["message"],
+            json!("[Reload] Received reload request")
+        );
+        assert_eq!(items[0]["fields"]["source"], json!("api"));
+        assert_eq!(items[0]["fields"]["dry"], json!("true"));
+        assert_eq!(items[1]["message"], json!("[Reload] Preview finished"));
+        assert_eq!(items[1]["fields"]["applied"], json!("false"));
+
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn runtime_overview_reports_process_metrics_and_stream_retry_delta() {
+        let dir = std::env::temp_dir().join(format!("daed-product-test-{}", fastrand::u64(..)));
+        let state = dir.join("daed.db");
+        ensure_state_schema(&state).unwrap();
+        let app = AppState {
+            config_dir: dir.clone(),
+            state,
+            web_root: dir.clone(),
+            api_only: true,
+            runtime: Arc::new(ProductRuntimeManager::new()),
+        };
+        let request = HttpRequest {
+            method: "GET".to_owned(),
+            path: "/api/events/runtime".to_owned(),
+            query: HashMap::new(),
+            headers: HashMap::new(),
+            body: Vec::new(),
+        };
+        let overview = runtime_overview_report(&app.runtime, &request);
+        assert!(
+            overview["rssBytes"]
+                .as_str()
+                .unwrap()
+                .parse::<u64>()
+                .unwrap()
+                > 0
+        );
+        assert!(
+            overview["heapAllocBytes"]
+                .as_str()
+                .unwrap()
+                .parse::<u64>()
+                .unwrap()
+                > 0
+        );
+        assert!(overview["goroutines"].as_u64().unwrap() > 0);
+        assert!(overview["cpuUsagePercent"].as_f64().unwrap() >= 0.0);
+
+        let response = api_runtime_events(&app, &request);
+        let body = String::from_utf8(response.body).unwrap();
+        assert!(body.contains("retry: 3000"));
+        assert!(body.contains("event: runtime.overview\n"));
+        assert!(body.contains("event: runtime.overview.delta\n"));
+        assert!(body.contains("\"heapAllocBytes\""));
+        assert!(body.contains("\"goroutines\""));
+        assert!(body.contains("\"cpuUsagePercent\""));
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn process_status_metrics_uses_resident_anonymous_memory_for_heap_card() {
+        let status = "\
+Name:\tdaed\n\
+VmRSS:\t  200000 kB\n\
+RssAnon:\t  150000 kB\n\
+VmData:\t  260000 kB\n\
+Threads:\t38\n";
+        let metrics = process_status_metrics_from_str(status);
+        assert_eq!(metrics.rss_bytes, 200000 * 1024);
+        assert_eq!(metrics.heap_alloc_bytes, 150000 * 1024);
+        assert_eq!(metrics.thread_count, 38);
+
+        let fallback = process_status_metrics_from_str("VmData:\t42 kB\n");
+        assert_eq!(fallback.heap_alloc_bytes, 42 * 1024);
     }
 
     #[test]
