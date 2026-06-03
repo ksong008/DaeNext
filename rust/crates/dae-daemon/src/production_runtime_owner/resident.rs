@@ -57,6 +57,7 @@ pub struct ResidentProductionRuntime {
     live_handoff: Option<LiveLoadedTproxyListenSocketMap>,
     native_runtime: NativeEbpfRuntimeState,
     dataplane: Option<ResidentDataplaneRuntime>,
+    start_report: Value,
     lan_ifaces: Vec<String>,
     native_lan_ifaces: Vec<String>,
     cleanup_steps: Vec<Value>,
@@ -68,6 +69,33 @@ pub struct ResidentProductionRuntime {
 }
 
 impl ResidentProductionRuntime {
+    pub fn product_state_summary(&self) -> Value {
+        let attach_backend = self
+            .start_report
+            .pointer("/resident_interface_backend_policy/effective_backend")
+            .and_then(Value::as_str)
+            .unwrap_or("resident-production-runtime");
+        let netns_link_mode = selected_netns_link_mode(&self.start_report).unwrap_or_else(|| {
+            self.start_report
+                .pointer("/topology_values/requested_netns_link_mode")
+                .and_then(Value::as_str)
+                .unwrap_or("production-runtime-owner")
+                .to_owned()
+        });
+        json!({
+            "running": !self.cleaned,
+            "state": if self.cleaned { "stopped" } else { "running" },
+            "attachBackend": attach_backend,
+            "netnsLinkMode": netns_link_mode,
+            "fakeRuntime": false,
+            "residentRuntimeStarted": self.start_report["resident_runtime_started"].as_bool().unwrap_or(false),
+            "residentDataplane": self.start_report["resident_dataplane"].clone(),
+            "artifactDir": self.start_report["artifact_dir"].clone(),
+            "startFile": self.start_report["start_file"].clone(),
+            "cleanupFile": self.start_report["cleanup_file"].clone(),
+        })
+    }
+
     pub fn cleanup(&mut self) {
         if self.cleaned {
             return;
@@ -275,6 +303,7 @@ fn start_with_options(
     let mut discovered_map_id = None;
     let mut discovered_routing_map_ids = Vec::new();
     let mut native_lan_ifaces = Vec::new();
+    let mut start_report_for_runtime = Value::Null;
     let (interface_attach_options, resident_interface_backend_policy) =
         resident_interface_attach_options(&options, &lan_ifaces, &wan_ifaces);
 
@@ -690,8 +719,9 @@ fn start_with_options(
         write_json_file(
             &start_file,
             "resident-production-runtime-start",
-            start_report,
+            start_report.clone(),
         )?;
+        start_report_for_runtime = start_report;
         if ok {
             Ok(())
         } else {
@@ -723,6 +753,7 @@ fn start_with_options(
         live_handoff,
         native_runtime,
         dataplane,
+        start_report: start_report_for_runtime,
         lan_ifaces,
         native_lan_ifaces,
         cleanup_steps,
@@ -732,6 +763,16 @@ fn start_with_options(
         cleanup_file,
         cleaned: false,
     })
+}
+
+fn selected_netns_link_mode(start_report: &Value) -> Option<String> {
+    start_report["executed_steps"]
+        .as_array()?
+        .iter()
+        .rev()
+        .find(|step| step["name"].as_str() == Some("select-production-netns-link-mode"))
+        .and_then(|step| step["selected"].as_str())
+        .map(str::to_owned)
 }
 
 fn setup_runtime_topology(
