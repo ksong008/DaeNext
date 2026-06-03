@@ -7500,3 +7500,193 @@ raw-direct recovery succeeded and a later direct read/write failed
 
 This is observability only. It does not change routing, protocol selection,
 fingerprint admission, or Vision command semantics.
+
+### 41.8 C10 authenticated reload evidence and direct-command transition fix
+
+Live evidence directory:
+
+```text
+/root/daed-c10-runtime-bridge-20260603-094308
+```
+
+The C10 Rust `daed` candidate was actually installed as `/usr/bin/daed` via
+atomic rename for this run:
+
+```text
+candidate sha256: afdf0d977b9ee48c713292b49407e0aa380709276fa98ef8cd370f68c0b0c026
+live /usr/bin/daed during candidate run matched that sha256
+candidate process: /usr/bin/daed run -c /etc/daed/
+```
+
+The Rust product API requires authentication for runtime state and reload
+routes. The authenticated reload path returned HTTP 200 and started the resident
+runtime:
+
+```text
+runtimeStarted=true
+running=true
+state=running
+residentDataplane.enabled=true
+residentDataplane.status=pass
+residentDataplane.tcp_worker_started=true
+residentDataplane.udp_worker_started=true
+runtime dir=/tmp/dae-daemon-resident-runtime-21076
+```
+
+The default proxy plan still selected the fingerprint-aware underlay:
+
+```text
+default_proxy.node_tag=[HK]Hytron
+default_proxy.utls_fingerprint.source=link fp
+default_proxy.utls_fingerprint.requested=chrome
+default_proxy.utls_fingerprint.canonical=chrome_auto
+```
+
+Telegram/API probe evidence:
+
+```text
+proxy_group=TG
+node_tag=[SG]Oracle-Sg
+sniffed_domain=api.telegram.org
+dial_target=api.telegram.org:443
+original_dst=149.154.167.220:443
+tls_underlay=boringssl
+event=tcp_connection_failed
+error=read VLESS TLS plaintext: [BAD_DECRYPT] [DECRYPTION_FAILED_OR_BAD_RECORD_MAC]
+bytes_client_to_proxy=1787
+bytes_proxy_to_client=6176
+response_header_stripped=true
+vision_unpadding_blocks=4
+vision_direct_command_seen=true
+vision_downlink_direct_active=true
+vision_raw_direct_recovered=false
+```
+
+Interpretation:
+
+```text
+BoringSSL underlay was selected.
+Routing to TG / Oracle-Sg was selected.
+The Vision downlink explicit direct command was seen.
+The failure still occurred from the TLS plaintext read path.
+```
+
+Therefore this is not evidence that BoringSSL did not work. It is evidence that
+after the Vision downlink direct command is seen, the TCP relay must stop reading
+from TLS plaintext in the same inner loop and let the next outer loop iteration
+enter the raw-direct read path.
+
+Code fix:
+
+```text
+After Vision consume sets downlink_direct=true, write the current decoded payload
+if present, mark progress, then break out of the TLS plaintext read loop.
+```
+
+This preserves existing behavior before the explicit direct command and only
+changes the transition point after the command has already been observed.
+
+Rollback status after the run:
+
+```text
+/usr/bin/daed restored to previous working binary
+temporary C10 drop-in removed
+wing.db hash remained bada431fed16f050f40daea1365798293ac31a11701c97b16b4c264d8cd1d441
+daed.db restored to the pre-run backup for that retry
+/api/health returned 200
+```
+
+### 41.9 C10 direct-command fix live validation
+
+Live evidence directory:
+
+```text
+/root/daed-c10-runtime-bridge-20260603-094704
+```
+
+Candidate:
+
+```text
+sha256=74862b9edb418cd96580a69b6113e7f7a24861436b4899eef8b791be9a13e5a7
+size=16183288 bytes
+build=DAE_EXPERIMENT_VLESS_VISION_FP_RUST_NATIVE=1 cargo build --release -p dae-daemon --bin daed --features native-ebpf
+```
+
+The candidate was installed as `/usr/bin/daed` by atomic rename and the live
+process was:
+
+```text
+/usr/bin/daed run -c /etc/daed/
+```
+
+Authenticated reload result:
+
+```text
+POST /api/runtime/reload -> HTTP 200
+GET /api/general/state -> HTTP 200
+GET /api/runtime/overview -> HTTP 200
+running=true
+residentRuntimeStarted=true
+state=running
+residentDataplane.status=pass
+residentDataplane.tcp_worker_started=true
+residentDataplane.udp_worker_started=true
+runtime dir=/tmp/dae-daemon-resident-runtime-21741
+```
+
+Telegram/API probe after the direct-command transition fix:
+
+```text
+curl https://api.telegram.org/ with resolve 149.154.167.220 -> HTTP 302
+event=tcp_connection_finished
+proxy_group=TG
+node_tag=[SG]Oracle-Sg
+sniffed_domain=api.telegram.org
+dial_target=api.telegram.org:443
+original_dst=149.154.167.220:443
+tls_underlay=boringssl
+bytes_client_to_proxy=1890
+bytes_proxy_to_client=6707
+response_header_stripped=true
+vision_unpadding_blocks=3
+vision_direct_command_seen=true
+vision_downlink_direct_active=true
+vision_raw_direct_recovered=false
+```
+
+The prior failure mode:
+
+```text
+read VLESS TLS plaintext: [BAD_DECRYPT] [DECRYPTION_FAILED_OR_BAD_RECORD_MAC]
+```
+
+was not present for the Telegram/API probe after this fix. The event completed
+after the explicit downlink direct command was seen.
+
+Additional evidence in the same run showed other fingerprint-aware proxy paths
+also finishing with `tls_underlay=boringssl`, including:
+
+```text
+firebaselogging-pa.googleapis.com -> openai / [US]Dmit-Mabuli
+sandbox.itunes.apple.com -> proxy / [HK]Hytron
+```
+
+Rollback status after the successful retry:
+
+```text
+/usr/bin/daed restored to sha256 b296303fc01b0cd4453ab90bb7bf988d6315a952a548fd483a0a9c5bab2448bf
+staged candidate kept at /usr/bin/daed.rust-c10-runtime-bridge-candidate
+temporary C10 drop-in removed; only 20-daex-reload.conf remained
+wing.db sha256=bada431fed16f050f40daea1365798293ac31a11701c97b16b4c264d8cd1d441
+daed.db restored to this retry's pre-run sha256=9bcc0ba4a1eb76e621ad5a2dec867f0cb05dc9fee488f6d6ce8df3abcdc12b4d
+/api/health returned 200
+```
+
+Conclusion:
+
+```text
+C10 Rust daed default product path can start the resident runtime/dataplane,
+use the BoringSSL fingerprint-aware underlay for link fp nodes, route Telegram
+to TG / Oracle-Sg, and complete the Telegram/API probe after the Vision
+direct-command transition fix.
+```
