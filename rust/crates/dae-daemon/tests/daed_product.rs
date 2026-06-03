@@ -3,7 +3,7 @@ use std::io::{Read, Write};
 use std::net::{TcpListener, TcpStream};
 use std::path::Path;
 use std::process::{Child, Command, Stdio};
-use std::thread;
+use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
 use serde_json::Value;
@@ -62,6 +62,36 @@ fn daed_product_contract_reports_c10_first_batch_state_paths() {
             .unwrap()
     );
     assert!(
+        report["rust_daed_subscription_fetch_ready"]
+            .as_bool()
+            .unwrap()
+    );
+    assert!(
+        report["rust_daed_latency_probe_tcp_ready"]
+            .as_bool()
+            .unwrap()
+    );
+    assert!(
+        report["rust_daed_resetpass_parity_ready"]
+            .as_bool()
+            .unwrap()
+    );
+    assert!(
+        report["rust_daed_package_manifest_ready"]
+            .as_bool()
+            .unwrap()
+    );
+    assert!(
+        report["rust_daed_webui_route_audit_ready"]
+            .as_bool()
+            .unwrap()
+    );
+    assert!(
+        report["rust_daed_local_package_admission_ready"]
+            .as_bool()
+            .unwrap()
+    );
+    assert!(
         report["go_free_product_chain_typed_report"]["rust_product_binary_contract_ready"]
             .as_bool()
             .unwrap()
@@ -83,6 +113,11 @@ fn daed_product_contract_reports_c10_first_batch_state_paths() {
     assert_eq!(
         package["primary_state_store"].as_str().unwrap(),
         "/etc/daed/daed.db"
+    );
+    assert!(
+        package["current_batch_ready"]["local_package_admission"]
+            .as_bool()
+            .unwrap()
     );
     assert!(!package["webui"]["leptos_considered"].as_bool().unwrap());
 }
@@ -229,6 +264,11 @@ fn daed_run_serves_c10_resource_runtime_log_latency_and_bundle_surface() {
     assert!(create.contains("201 Created"), "{create}");
     let token = json_body(&create)["token"].as_str().unwrap().to_owned();
 
+    let (probe_port, probe_handle) = spawn_tcp_probe_server();
+    let (subscription_port, subscription_handle) = spawn_text_server(&format!(
+        "http://127.0.0.1:{probe_port}/sub-node#subscription-node\n"
+    ));
+
     let config = http_request(
         port,
         "POST",
@@ -286,26 +326,63 @@ fn daed_run_serves_c10_resource_runtime_log_latency_and_bundle_surface() {
         port,
         "POST",
         "/api/nodes",
-        Some(
-            r#"{"args":[{"link":"vless://00000000-0000-0000-0000-000000000000@example.com:443?security=tls#n1","tag":"n1"}]}"#,
-        ),
+        Some(&format!(
+            r#"{{"args":[{{"link":"http://127.0.0.1:{probe_port}/node#n1","tag":"n1"}}]}}"#
+        )),
         Some(&token),
     );
     let node_id = json_body(&nodes)["items"][0]["node"]["id"]
         .as_i64()
         .unwrap();
+    let tag_node = http_request(
+        port,
+        "PUT",
+        &format!("/api/nodes/{node_id}"),
+        Some(r#"{"tag":"n1-renamed"}"#),
+        Some(&token),
+    );
+    assert!(tag_node.contains("\"tag\":\"n1-renamed\""), "{tag_node}");
 
     let subscription = http_request(
         port,
         "POST",
         "/api/subscriptions",
-        Some(r#"{"link":"https://example.invalid/sub","tag":"sub1"}"#),
+        Some(&format!(
+            r#"{{"link":"http://127.0.0.1:{subscription_port}/sub","tag":"sub1"}}"#
+        )),
         Some(&token),
     );
     assert!(subscription.contains("201 Created"), "{subscription}");
+    assert!(
+        subscription.contains("subscription-node"),
+        "subscription fetch did not import local node: {subscription}"
+    );
+    subscription_handle.join().unwrap();
     let subscription_id = json_body(&subscription)["subscription"]["id"]
         .as_i64()
         .unwrap();
+    let tag_subscription = http_request(
+        port,
+        "PUT",
+        &format!("/api/subscriptions/{subscription_id}"),
+        Some(r#"{"tag":"sub-renamed"}"#),
+        Some(&token),
+    );
+    assert!(
+        tag_subscription.contains("\"tag\":\"sub-renamed\""),
+        "{tag_subscription}"
+    );
+    let cron_subscription = http_request(
+        port,
+        "PUT",
+        &format!("/api/subscriptions/{subscription_id}"),
+        Some(r#"{"cronExp":"0 */2 * * *","cronEnable":false}"#),
+        Some(&token),
+    );
+    assert!(
+        cron_subscription.contains("\"tag\":\"sub-renamed\""),
+        "{cron_subscription}"
+    );
     let refreshed = http_request(
         port,
         "POST",
@@ -314,7 +391,7 @@ fn daed_run_serves_c10_resource_runtime_log_latency_and_bundle_surface() {
         Some(&token),
     );
     assert!(
-        refreshed.contains("\"status\":\"refreshed\""),
+        refreshed.contains("\"status\":\"fetch_error\""),
         "{refreshed}"
     );
 
@@ -372,6 +449,14 @@ fn daed_run_serves_c10_resource_runtime_log_latency_and_bundle_surface() {
     let latency = json_body(&latency);
     assert_eq!(latency["items"][0]["id"].as_i64().unwrap(), node_id);
     assert!(latency["items"][0]["alive"].as_bool().unwrap());
+    assert!(
+        latency["items"][0]["message"]
+            .as_str()
+            .unwrap()
+            .contains("tcp connect"),
+        "{latency}"
+    );
+    probe_handle.join().unwrap();
 
     let settings = http_request(
         port,
@@ -480,12 +565,151 @@ fn daed_export_commands_report_c10_package_surface() {
         let value: Value = serde_json::from_slice(&output.stdout).unwrap();
         assert!(value.to_string().contains("go-free-product-chain-v1"));
     }
+    for command in ["package-manifest", "admission-report", "webui-route-audit"] {
+        let output = Command::new(binary())
+            .args(["export", command])
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "command={command} stderr={}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let value: Value = serde_json::from_slice(&output.stdout).unwrap();
+        assert!(value.to_string().contains("go-free-product-chain-v1"));
+    }
+    let route_audit = Command::new(binary())
+        .args(["export", "webui-route-audit"])
+        .output()
+        .unwrap();
+    let route_audit: Value = serde_json::from_slice(&route_audit.stdout).unwrap();
+    assert!(route_audit["pass"].as_bool().unwrap());
+    assert!(route_audit["missing"].as_array().unwrap().is_empty());
+
+    let systemd = Command::new(binary())
+        .args(["export", "systemd-unit"])
+        .output()
+        .unwrap();
+    assert!(systemd.status.success());
+    assert!(String::from_utf8_lossy(&systemd.stdout).contains("ExecStart=/usr/bin/daed run"));
+
+    let docker = Command::new(binary())
+        .args(["export", "docker-entrypoint"])
+        .output()
+        .unwrap();
+    assert!(docker.status.success());
+    assert!(String::from_utf8_lossy(&docker.stdout).contains("exec /usr/bin/daed run"));
+}
+
+#[test]
+fn daed_resetpass_updates_daed_db_users_without_wing_db() {
+    let temp = temp_dir("resetpass");
+    let web = temp.join("web");
+    fs::create_dir_all(&web).unwrap();
+    fs::write(web.join("index.html"), "<!doctype html><title>daed</title>").unwrap();
+    let port = free_port();
+    let listen = format!("127.0.0.1:{port}");
+    let mut child = Command::new(binary())
+        .args(["run", "-c"])
+        .arg(&temp)
+        .args(["--listen", &listen, "--web-root"])
+        .arg(&web)
+        .stdout(Stdio::null())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+
+    wait_for_http(port, "/api/health", &mut child);
+    let create = http_request(
+        port,
+        "POST",
+        "/api/auth/users",
+        Some(r#"{"username":"admin","password":"abc123"}"#),
+        None,
+    );
+    assert!(create.contains("201 Created"), "{create}");
+    child.kill().unwrap();
+    let _ = child.wait();
+
+    let wing = temp.join("wing.db");
+    fs::write(&wing, b"protected rollback db").unwrap();
+    let wing_hash_before = sha256(&wing);
+    let reset = Command::new(binary())
+        .args(["resetpass", "-c"])
+        .arg(&temp)
+        .arg("--json")
+        .output()
+        .unwrap();
+    assert!(
+        reset.status.success(),
+        "stderr={}",
+        String::from_utf8_lossy(&reset.stderr)
+    );
+    assert_eq!(wing_hash_before, sha256(&wing));
+    let report: Value = serde_json::from_slice(&reset.stdout).unwrap();
+    let password = report["users"][0]["password"].as_str().unwrap().to_owned();
+    assert_eq!(report["users"][0]["username"].as_str().unwrap(), "admin");
+
+    let port = free_port();
+    let listen = format!("127.0.0.1:{port}");
+    let mut child = Command::new(binary())
+        .args(["run", "-c"])
+        .arg(&temp)
+        .args(["--listen", &listen, "--web-root"])
+        .arg(&web)
+        .stdout(Stdio::null())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    wait_for_http(port, "/api/health", &mut child);
+    let token = http_request(
+        port,
+        "POST",
+        "/api/auth/token",
+        Some(&format!(
+            r#"{{"username":"admin","password":"{password}"}}"#
+        )),
+        None,
+    );
+    assert!(token.contains("\"token\""), "{token}");
+    child.kill().unwrap();
+    let _ = child.wait();
+
+    fs::remove_dir_all(temp).unwrap();
 }
 
 fn temp_dir(name: &str) -> std::path::PathBuf {
     let path = std::env::temp_dir().join(format!("daed-product-{name}-{}", fastrand::u64(..)));
     fs::create_dir_all(&path).unwrap();
     path
+}
+
+fn spawn_text_server(body: &str) -> (u16, JoinHandle<()>) {
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let body = body.to_owned();
+    let handle = thread::spawn(move || {
+        let (mut stream, _) = listener.accept().unwrap();
+        let mut request = [0_u8; 1024];
+        let _ = stream.read(&mut request);
+        write!(
+            stream,
+            "HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+            body.len(),
+            body
+        )
+        .unwrap();
+    });
+    (port, handle)
+}
+
+fn spawn_tcp_probe_server() -> (u16, JoinHandle<()>) {
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let handle = thread::spawn(move || {
+        let (_stream, _) = listener.accept().unwrap();
+    });
+    (port, handle)
 }
 
 fn free_port() -> u16 {
