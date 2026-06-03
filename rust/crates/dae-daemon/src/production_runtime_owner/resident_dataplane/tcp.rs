@@ -876,6 +876,9 @@ fn relay_tcp_over_vless_tls(
                             stats.proxy_to_client += payload.len();
                         }
                         progressed = true;
+                        if downlink_direct {
+                            break;
+                        }
                     }
                     Err(err)
                         if matches!(
