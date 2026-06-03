@@ -3,12 +3,15 @@ use std::fs;
 use std::io::{self, Read, Write};
 use std::net::{TcpListener, TcpStream, ToSocketAddrs};
 use std::path::{Component, Path, PathBuf};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use base64::Engine;
 use base64::engine::general_purpose::{STANDARD, URL_SAFE_NO_PAD};
+use dae_config::Config;
+use dae_config::parser::parse_config;
+use dae_config::schema::build_config;
 use rusqlite::{Connection, OptionalExtension, params};
 use rustls::pki_types::ServerName;
 use rustls::{ClientConfig, ClientConnection, RootCertStore};
@@ -17,6 +20,10 @@ use sha2::{Digest, Sha256};
 use sha3::{
     Shake256,
     digest::{ExtendableOutput, Update, XofReader},
+};
+
+use crate::production_runtime_owner::{
+    ResidentProductionRuntime, start_resident_production_runtime,
 };
 
 const DEFAULT_CONFIG_DIR: &str = "/etc/daed";
@@ -76,6 +83,225 @@ struct AppState {
     state: PathBuf,
     web_root: PathBuf,
     api_only: bool,
+    runtime: Arc<ProductRuntimeManager>,
+}
+
+#[derive(Debug)]
+struct ProductRuntimeManager {
+    inner: Mutex<ProductRuntimeState>,
+}
+
+#[derive(Debug, Default)]
+struct ProductRuntimeState {
+    runtime: Option<ProductRuntimeInstance>,
+    config: Option<Config>,
+    last_error: Option<String>,
+    last_transition_at: Option<String>,
+    last_report: Option<Value>,
+    reload_count: u64,
+    stop_count: u64,
+}
+
+#[derive(Debug)]
+enum ProductRuntimeInstance {
+    Resident(ResidentProductionRuntime),
+    Fake(FakeProductRuntime),
+}
+
+#[derive(Debug)]
+struct FakeProductRuntime {
+    started_at: String,
+    tproxy_port: u16,
+}
+
+#[derive(Debug)]
+struct RuntimeStartOutcome {
+    report: Value,
+}
+
+const PRODUCT_RUNTIME_FAKE_START_ENV: &str = "DAED_PRODUCT_RUNTIME_FAKE_START";
+
+impl ProductRuntimeManager {
+    fn new() -> Self {
+        Self {
+            inner: Mutex::new(ProductRuntimeState::default()),
+        }
+    }
+
+    fn reload(&self, config: Config, source: &str) -> Result<RuntimeStartOutcome, String> {
+        let mut inner = self
+            .inner
+            .lock()
+            .map_err(|_| "product runtime manager lock poisoned".to_owned())?;
+        let previous_runtime = inner.runtime.take();
+        let previous_config = inner.config.clone();
+        drop(previous_runtime);
+
+        match start_product_runtime_instance(&config, source) {
+            Ok((runtime, report)) => {
+                inner.runtime = Some(runtime);
+                inner.config = Some(config);
+                inner.reload_count += 1;
+                inner.last_error = None;
+                inner.last_transition_at = Some(now_text());
+                inner.last_report = Some(report.clone());
+                Ok(RuntimeStartOutcome { report })
+            }
+            Err(start_err) => {
+                let restored = previous_config
+                    .as_ref()
+                    .and_then(|previous| match start_product_runtime_instance(previous, "rollback")
+                    {
+                        Ok((runtime, report)) => {
+                            inner.runtime = Some(runtime);
+                            inner.config = Some(previous.clone());
+                            inner.last_report = Some(report);
+                            Some(true)
+                        }
+                        Err(rollback_err) => {
+                            inner.runtime = None;
+                            inner.config = None;
+                            inner.last_error = Some(format!(
+                                "{start_err}\nrollback failed while restoring previous product runtime: {rollback_err}"
+                            ));
+                            Some(false)
+                        }
+                    });
+                let message = match restored {
+                    Some(true) => {
+                        format!("{start_err}\nrollback: restored previous product runtime")
+                    }
+                    Some(false) => inner
+                        .last_error
+                        .clone()
+                        .unwrap_or_else(|| start_err.clone()),
+                    None => start_err,
+                };
+                inner.last_transition_at = Some(now_text());
+                inner.last_error = Some(message.clone());
+                Err(message)
+            }
+        }
+    }
+
+    fn stop(&self) -> Result<Value, String> {
+        let mut inner = self
+            .inner
+            .lock()
+            .map_err(|_| "product runtime manager lock poisoned".to_owned())?;
+        let was_running = inner.runtime.is_some();
+        inner.runtime.take();
+        inner.config = None;
+        inner.stop_count += 1;
+        inner.last_transition_at = Some(now_text());
+        inner.last_report = None;
+        inner.last_error = None;
+        Ok(json!({
+            "stopped": true,
+            "wasRunning": was_running,
+            "runtimeControl": "resident-production-runtime-manager",
+            "fakeRuntime": product_runtime_fake_start_enabled(),
+        }))
+    }
+
+    fn summary(&self) -> Value {
+        let Ok(inner) = self.inner.lock() else {
+            return json!({
+                "running": false,
+                "state": "error",
+                "attachBackend": "unavailable",
+                "netnsLinkMode": "unavailable",
+                "error": "product runtime manager lock poisoned",
+            });
+        };
+        match inner.runtime.as_ref() {
+            Some(ProductRuntimeInstance::Resident(runtime)) => {
+                let mut summary = runtime.product_state_summary();
+                if let Value::Object(map) = &mut summary {
+                    map.insert(
+                        "lastTransitionAt".to_owned(),
+                        json!(inner.last_transition_at.clone()),
+                    );
+                    map.insert("lastError".to_owned(), json!(inner.last_error.clone()));
+                    map.insert("reloadCount".to_owned(), json!(inner.reload_count));
+                    map.insert("stopCount".to_owned(), json!(inner.stop_count));
+                    map.insert("lastReport".to_owned(), json!(inner.last_report.clone()));
+                }
+                summary
+            }
+            Some(ProductRuntimeInstance::Fake(fake)) => json!({
+                "running": true,
+                "state": "running",
+                "attachBackend": "fake-resident-runtime-test-only",
+                "netnsLinkMode": "fake-test-only",
+                "fakeRuntime": true,
+                "startedAt": fake.started_at,
+                "tproxyPort": fake.tproxy_port,
+                "lastTransitionAt": inner.last_transition_at,
+                "lastError": inner.last_error,
+                "reloadCount": inner.reload_count,
+                "stopCount": inner.stop_count,
+                "lastReport": inner.last_report,
+            }),
+            None => json!({
+                "running": false,
+                "state": if inner.last_error.is_some() { "error" } else { "stopped" },
+                "attachBackend": Value::Null,
+                "netnsLinkMode": Value::Null,
+                "fakeRuntime": product_runtime_fake_start_enabled(),
+                "lastTransitionAt": inner.last_transition_at,
+                "lastError": inner.last_error,
+                "reloadCount": inner.reload_count,
+                "stopCount": inner.stop_count,
+                "lastReport": inner.last_report,
+            }),
+        }
+    }
+}
+
+fn start_product_runtime_instance(
+    config: &Config,
+    source: &str,
+) -> Result<(ProductRuntimeInstance, Value), String> {
+    if product_runtime_fake_start_enabled() {
+        let started_at = now_text();
+        let report = json!({
+            "status": "pass",
+            "runtimeControl": "fake-resident-runtime-test-only",
+            "source": source,
+            "fakeRuntime": true,
+            "startedAt": started_at,
+            "tproxyPort": config.global.tproxy_port,
+        });
+        return Ok((
+            ProductRuntimeInstance::Fake(FakeProductRuntime {
+                started_at,
+                tproxy_port: config.global.tproxy_port,
+            }),
+            report,
+        ));
+    }
+
+    let runtime = start_resident_production_runtime(config)?;
+    let report = json!({
+        "status": "pass",
+        "runtimeControl": "resident-production-runtime-manager",
+        "source": source,
+        "fakeRuntime": false,
+        "tproxyPort": config.global.tproxy_port,
+    });
+    Ok((ProductRuntimeInstance::Resident(runtime), report))
+}
+
+fn product_runtime_fake_start_enabled() -> bool {
+    std::env::var(PRODUCT_RUNTIME_FAKE_START_ENV)
+        .map(|value| {
+            matches!(
+                value.as_str(),
+                "1" | "true" | "TRUE" | "on" | "ON" | "yes" | "YES"
+            )
+        })
+        .unwrap_or(false)
 }
 
 #[derive(Clone, Debug)]
@@ -196,17 +422,165 @@ fn run_product_server_command(args: &[String], _version: &str) -> DaedProductOut
     if let Err(err) = ensure_state_schema(&options.state) {
         return DaedProductOutput::error(format!("init state failed: {err}"));
     }
+    let runtime = Arc::new(ProductRuntimeManager::new());
+    if let Err(err) = install_product_signal_thread(
+        Arc::clone(&runtime),
+        options.state.clone(),
+        options.config_dir.clone(),
+    ) {
+        return DaedProductOutput::error(format!("install signal control failed: {err}"));
+    }
+    if should_restore_runtime_on_start(&options.state).unwrap_or(false) {
+        if let Err(err) =
+            restore_runtime_from_state(&runtime, &options.state, Some(&options.config_dir))
+        {
+            let _ = append_log(
+                &options.state,
+                "error",
+                &format!("startup runtime restore failed: {err}"),
+            );
+            return DaedProductOutput::error(format!("startup runtime restore failed: {err}"));
+        }
+    }
     start_subscription_scheduler(options.state.clone());
     let app = AppState {
         config_dir: options.config_dir,
         state: options.state,
         web_root: options.web_root,
         api_only: options.api_only,
+        runtime,
     };
     match serve_forever(&options.listen, app) {
         Ok(()) => DaedProductOutput::ok(String::new()),
         Err(err) => DaedProductOutput::error(format!("run failed: {err}")),
     }
+}
+
+fn restore_runtime_from_state(
+    runtime: &ProductRuntimeManager,
+    state: &Path,
+    config_dir: Option<&Path>,
+) -> Result<Value, String> {
+    let preview = materialize_runtime(state, config_dir, true).map_err(|err| err.to_string())?;
+    let content = preview["content"]
+        .as_str()
+        .ok_or_else(|| "runtime materializer did not return content".to_owned())?;
+    let config = build_runtime_config_from_content(content)?;
+    let outcome = runtime.reload(config, "startup-restore")?;
+    let applied = match materialize_runtime(state, config_dir, false) {
+        Ok(applied) => applied,
+        Err(err) => {
+            let _ = runtime.stop();
+            let _ = mark_system_stopped(state);
+            return Err(err.to_string());
+        }
+    };
+    let _ = append_log(state, "info", "runtime restored by Rust daed startup");
+    Ok(json!({
+        "restored": true,
+        "runtime": outcome.report,
+        "materialized": applied,
+    }))
+}
+
+fn should_restore_runtime_on_start(state: &Path) -> io::Result<bool> {
+    ensure_state_schema(state)?;
+    let conn = open_state_connection(state)?;
+    conn.query_row(
+        "SELECT running FROM systems ORDER BY id LIMIT 1",
+        [],
+        |row| row.get::<_, i64>(0),
+    )
+    .optional()
+    .map(|value| value.unwrap_or(0) != 0)
+    .map_err(sqlite_io_error)
+}
+
+fn install_product_signal_thread(
+    runtime: Arc<ProductRuntimeManager>,
+    state: PathBuf,
+    config_dir: PathBuf,
+) -> io::Result<()> {
+    block_product_signals()?;
+    thread::spawn(move || {
+        while let Ok(signal) = wait_product_signal() {
+            match signal {
+                libc::SIGHUP | libc::SIGUSR1 => {
+                    if !should_restore_runtime_on_start(&state).unwrap_or(false) {
+                        let _ = append_log(
+                            &state,
+                            "info",
+                            "runtime signal reload skipped because persisted running state is false",
+                        );
+                        continue;
+                    }
+                    let result = restore_runtime_from_state(&runtime, &state, Some(&config_dir));
+                    match result {
+                        Ok(_) => {
+                            let _ = append_log(&state, "info", "runtime reloaded by signal");
+                        }
+                        Err(err) => {
+                            let _ = append_log(
+                                &state,
+                                "error",
+                                &format!("runtime signal reload failed: {err}"),
+                            );
+                        }
+                    }
+                }
+                libc::SIGTERM | libc::SIGINT | libc::SIGQUIT => {
+                    let _ = runtime.stop();
+                    let _ = mark_system_stopped(&state);
+                    let _ = append_log(&state, "info", "runtime stopped by signal");
+                    std::process::exit(0);
+                }
+                _ => {}
+            }
+        }
+    });
+    Ok(())
+}
+
+fn block_product_signals() -> io::Result<()> {
+    let mut signals = unsafe { std::mem::zeroed::<libc::sigset_t>() };
+    unsafe {
+        libc::sigemptyset(&mut signals);
+        for signal in [
+            libc::SIGUSR1,
+            libc::SIGHUP,
+            libc::SIGTERM,
+            libc::SIGINT,
+            libc::SIGQUIT,
+        ] {
+            libc::sigaddset(&mut signals, signal);
+        }
+        if libc::pthread_sigmask(libc::SIG_BLOCK, &signals, std::ptr::null_mut()) != 0 {
+            return Err(io::Error::last_os_error());
+        }
+    }
+    Ok(())
+}
+
+fn wait_product_signal() -> io::Result<i32> {
+    let mut signals = unsafe { std::mem::zeroed::<libc::sigset_t>() };
+    let mut received = 0_i32;
+    unsafe {
+        libc::sigemptyset(&mut signals);
+        for signal in [
+            libc::SIGUSR1,
+            libc::SIGHUP,
+            libc::SIGTERM,
+            libc::SIGINT,
+            libc::SIGQUIT,
+        ] {
+            libc::sigaddset(&mut signals, signal);
+        }
+        let status = libc::sigwait(&signals, &mut received);
+        if status != 0 {
+            return Err(io::Error::from_raw_os_error(status));
+        }
+    }
+    Ok(received)
 }
 
 fn run_export_command(args: &[String]) -> DaedProductOutput {
@@ -454,6 +828,14 @@ fn daed_service_contract(version: &str) -> Value {
         report.insert("rust_daed_materializer_ready".to_owned(), json!(true));
         report.insert("rust_daed_runtime_owner_ready".to_owned(), json!(true));
         report.insert(
+            "rust_daed_real_runtime_bridge_ready".to_owned(),
+            json!(true),
+        );
+        report.insert(
+            "rust_daed_runtime_state_metadata_only".to_owned(),
+            json!(false),
+        );
+        report.insert(
             "rust_daed_logs_sse_latency_subscription_ready".to_owned(),
             json!(true),
         );
@@ -474,13 +856,13 @@ fn daed_service_contract(version: &str) -> Value {
         report.insert("go_free_product_chain_ready".to_owned(), json!(false));
         report.insert(
             "go_free_product_chain_current_batch".to_owned(),
-            json!("C10 local package admission evidence"),
+            json!("C10 resident runtime bridge implementation"),
         );
         report.insert(
             "go_free_product_chain_remaining_work".to_owned(),
             json!([
-                "live host default package switch",
-                "live rollback validation",
+                "live host default package switch revalidation",
+                "live rollback validation revalidation",
                 "remove Go daewing from default package path",
                 "production package admission"
             ]),
@@ -499,7 +881,7 @@ fn daed_service_contract(version: &str) -> Value {
             );
             typed_report.insert(
                 "current_batch".to_owned(),
-                json!("C10 local package admission evidence"),
+                json!("C10 resident runtime bridge implementation"),
             );
             typed_report.insert("status".to_owned(), json!("blocked"));
         }
@@ -544,6 +926,8 @@ fn daed_package_info(version: &str) -> Value {
             "resource_crud_api": true,
             "materializer": true,
             "runtime_owner": true,
+            "real_runtime_bridge": true,
+            "metadata_only_runtime_state": false,
             "logs_sse_latency_subscription": true,
             "import_export_package_surface": true,
             "subscription_fetch": true,
@@ -1307,7 +1691,7 @@ fn api_groups(app: &AppState, request: &HttpRequest, api_path: &str) -> HttpResp
 }
 
 fn api_general_state(app: &AppState) -> HttpResponse {
-    match general_state_report(&app.state) {
+    match general_state_report(&app.state, &app.runtime) {
         Ok(report) => HttpResponse::json(200, report),
         Err(err) => HttpResponse::json(500, json!({"error": err.to_string()})),
     }
@@ -1346,7 +1730,8 @@ fn api_general_interfaces() -> HttpResponse {
 }
 
 fn api_runtime_overview(app: &AppState) -> HttpResponse {
-    let running = metadata_bool(&app.state, "runtime_running").unwrap_or(false);
+    let runtime = app.runtime.summary();
+    let running = runtime["running"].as_bool().unwrap_or(false);
     HttpResponse::json(
         200,
         json!({
@@ -1364,6 +1749,7 @@ fn api_runtime_overview(app: &AppState) -> HttpResponse {
             "rssBytes": current_rss_bytes().to_string(),
             "heapAllocBytes": "0",
             "goroutines": if running { 1 } else { 0 },
+            "runtime": runtime,
             "samples": []
         }),
     )
@@ -1372,26 +1758,73 @@ fn api_runtime_overview(app: &AppState) -> HttpResponse {
 fn api_runtime_reload(app: &AppState, request: &HttpRequest) -> HttpResponse {
     let body = json_body(request).unwrap_or_else(|_| json!({}));
     let dry = body.get("dry").and_then(Value::as_bool).unwrap_or(false);
-    match materialize_runtime(&app.state, Some(&app.config_dir), dry) {
+    let preview = match materialize_runtime(&app.state, Some(&app.config_dir), true) {
+        Ok(report) => report,
+        Err(err) => return HttpResponse::json(400, json!({"error": err.to_string()})),
+    };
+    let content = match preview.get("content").and_then(Value::as_str) {
+        Some(content) => content,
+        None => {
+            return HttpResponse::json(
+                500,
+                json!({"error": "runtime materializer did not return content"}),
+            );
+        }
+    };
+    let config = match build_runtime_config_from_content(content) {
+        Ok(config) => config,
+        Err(err) => return HttpResponse::json(400, json!({"error": err})),
+    };
+    if dry {
+        let mut response = preview.as_object().cloned().unwrap_or_default();
+        response.insert("applied".to_owned(), json!(0));
+        response.insert("dry".to_owned(), json!(true));
+        response.insert("runtimeStarted".to_owned(), json!(false));
+        return HttpResponse::json(200, Value::Object(response));
+    }
+    let runtime = match app.runtime.reload(config, "api-runtime-reload") {
+        Ok(outcome) => outcome.report,
+        Err(err) => {
+            let _ = append_log(
+                &app.state,
+                "error",
+                &format!("runtime reload failed by Rust daed: {err}"),
+            );
+            return HttpResponse::json(500, json!({"error": err}));
+        }
+    };
+    match materialize_runtime(&app.state, Some(&app.config_dir), false) {
         Ok(report) => {
-            if !dry {
-                let _ = set_metadata(&app.state, "runtime_running", "true");
-                let _ = append_log(&app.state, "info", "runtime reload applied by Rust daed");
-            }
-            let applied = if dry { 0 } else { 1 };
+            let _ = append_log(&app.state, "info", "runtime reload applied by Rust daed");
             let mut response = report.as_object().cloned().unwrap_or_default();
-            response.insert("applied".to_owned(), json!(applied));
-            response.insert("dry".to_owned(), json!(dry));
+            response.insert("applied".to_owned(), json!(1));
+            response.insert("dry".to_owned(), json!(false));
+            response.insert("runtimeStarted".to_owned(), json!(true));
+            response.insert("runtime".to_owned(), runtime);
             HttpResponse::json(200, Value::Object(response))
         }
-        Err(err) => HttpResponse::json(400, json!({"error": err.to_string()})),
+        Err(err) => {
+            let _ = app.runtime.stop();
+            let _ = mark_system_stopped(&app.state);
+            HttpResponse::json(500, json!({"error": err.to_string()}))
+        }
     }
 }
 
 fn api_runtime_stop(app: &AppState) -> HttpResponse {
-    let _ = set_metadata(&app.state, "runtime_running", "false");
-    let _ = append_log(&app.state, "info", "runtime stopped by Rust daed");
-    HttpResponse::json(200, json!({"stopped": true}))
+    match app.runtime.stop() {
+        Ok(mut report) => {
+            if let Err(err) = mark_system_stopped(&app.state) {
+                return HttpResponse::json(500, json!({"error": err.to_string()}));
+            }
+            let _ = append_log(&app.state, "info", "runtime stopped by Rust daed");
+            if let Value::Object(map) = &mut report {
+                map.insert("runtime".to_owned(), app.runtime.summary());
+            }
+            HttpResponse::json(200, report)
+        }
+        Err(err) => HttpResponse::json(500, json!({"error": err})),
+    }
 }
 
 fn api_get_runtime_log_level(app: &AppState) -> HttpResponse {
@@ -1419,7 +1852,7 @@ fn api_set_runtime_log_level(app: &AppState, request: &HttpRequest) -> HttpRespo
 }
 
 fn api_runtime_events(app: &AppState) -> HttpResponse {
-    let payload = general_state_report(&app.state).unwrap_or_else(|_| json!({}));
+    let payload = general_state_report(&app.state, &app.runtime).unwrap_or_else(|_| json!({}));
     sse_response("runtime.overview", payload)
 }
 
@@ -3106,10 +3539,11 @@ fn apply_group_subscription_ids(
     Ok(())
 }
 
-fn general_state_report(state: &Path) -> io::Result<Value> {
+fn general_state_report(state: &Path, runtime: &ProductRuntimeManager) -> io::Result<Value> {
     ensure_state_schema(state)?;
     let conn = open_state_connection(state)?;
-    let running = metadata_bool(state, "runtime_running")?;
+    let runtime_state = runtime.summary();
+    let running = runtime_state["running"].as_bool().unwrap_or(false);
     let selected_config_id = selected_id(&conn, SectionKind::Config)?;
     let selected_dns_id = selected_id(&conn, SectionKind::Dns)?;
     let selected_routing_id = selected_id(&conn, SectionKind::Routing)?;
@@ -3117,8 +3551,9 @@ fn general_state_report(state: &Path) -> io::Result<Value> {
         "running": running,
         "modified": false,
         "version": crate::version::version_from_env(),
-        "netnsLinkMode": "none",
-        "attachBackend": "rust-native-owned-local",
+        "netnsLinkMode": runtime_state["netnsLinkMode"].clone(),
+        "attachBackend": runtime_state["attachBackend"].clone(),
+        "runtime": runtime_state,
         "updatedAt": now_text(),
         "state": path_string(state),
         "selected": {
@@ -3136,6 +3571,29 @@ fn general_state_report(state: &Path) -> io::Result<Value> {
             "logs": count_table(&conn, "log_entries")?,
         }
     }))
+}
+
+fn build_runtime_config_from_content(content: &str) -> Result<Config, String> {
+    let sections = parse_config(content).map_err(|err| err.to_string())?;
+    build_config(&sections).map_err(|err| err.to_string())
+}
+
+fn mark_system_stopped(state: &Path) -> io::Result<()> {
+    ensure_state_schema(state)?;
+    let conn = open_state_connection(state)?;
+    let updated = conn
+        .execute("UPDATE systems SET running = 0", [])
+        .map_err(sqlite_io_error)?;
+    if updated == 0 {
+        conn.execute(
+            "INSERT INTO systems(running, running_config_version, running_dns_version, running_routing_version, running_group_version_sum, running_group_ids)
+             VALUES(0, 0, 0, 0, 0, '')",
+            [],
+        )
+        .map_err(sqlite_io_error)?;
+    }
+    set_metadata(state, "runtime_running", "false")?;
+    Ok(())
 }
 
 fn materialize_runtime(state: &Path, config_dir: Option<&Path>, dry: bool) -> io::Result<Value> {
@@ -3162,6 +3620,7 @@ fn materialize_runtime(state: &Path, config_dir: Option<&Path>, dry: bool) -> io
                 fs::create_dir_all(parent)?;
             }
             fs::write(path, &content)?;
+            set_private_runtime_file_permissions(path)?;
             set_metadata(state, "last_generated_config_path", &path_string(path))?;
         }
         set_metadata(state, "last_materialized_at", &generated_at)?;
@@ -3231,11 +3690,131 @@ fn render_generated_config(
             .filter(|raw| !raw.trim().is_empty())
             .unwrap_or("routing {}\n"),
     );
-    out.push_str("\n\n# local product groups\n");
-    out.push_str(&serde_json::to_string_pretty(groups).unwrap_or_else(|_| "{}".to_owned()));
     out.push_str("\n\n# local product nodes\n");
-    out.push_str(&serde_json::to_string_pretty(nodes).unwrap_or_else(|_| "{}".to_owned()));
+    out.push_str(&render_node_section(nodes));
+    out.push_str("\n\n# local product groups\n");
+    out.push_str(&render_group_section(groups));
     out.push('\n');
+    out
+}
+
+fn render_node_section(nodes: &Value) -> String {
+    let mut out = String::from("node {\n");
+    for node in nodes["items"].as_array().into_iter().flatten() {
+        let Some(link) = node.get("link").and_then(Value::as_str) else {
+            continue;
+        };
+        if link.trim().is_empty() {
+            continue;
+        }
+        let tag = runtime_node_tag(node);
+        out.push_str(&format!(
+            "    {}: {}\n",
+            dae_key_literal(&tag),
+            dae_string_literal(link)
+        ));
+    }
+    out.push_str("}\n");
+    out
+}
+
+fn render_group_section(groups: &Value) -> String {
+    let mut out = String::from("group {\n");
+    for group in groups["items"].as_array().into_iter().flatten() {
+        let Some(name) = group.get("name").and_then(Value::as_str) else {
+            continue;
+        };
+        if name.trim().is_empty() {
+            continue;
+        }
+        out.push_str(&format!("    {} {{\n", dae_key_literal(name)));
+        let node_tags = runtime_group_node_tags(group);
+        if !node_tags.is_empty() {
+            let names = node_tags
+                .iter()
+                .map(|tag| dae_string_literal(tag))
+                .collect::<Vec<_>>()
+                .join(", ");
+            out.push_str(&format!("        filter: name({names})\n"));
+        }
+        let policy = group
+            .get("policy")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|policy| !policy.is_empty())
+            .unwrap_or("fixed(0)");
+        out.push_str(&format!("        policy: {policy}\n"));
+        out.push_str("    }\n");
+    }
+    out.push_str("}\n");
+    out
+}
+
+fn runtime_group_node_tags(group: &Value) -> Vec<String> {
+    let mut tags = Vec::<String>::new();
+    for node in group["nodes"].as_array().into_iter().flatten() {
+        push_unique(&mut tags, runtime_node_tag(node));
+    }
+    for subscription in group["subscriptions"].as_array().into_iter().flatten() {
+        for node in subscription["matchedNodes"]
+            .as_array()
+            .into_iter()
+            .flatten()
+        {
+            push_unique(&mut tags, runtime_node_tag(node));
+        }
+    }
+    tags
+}
+
+fn runtime_node_tag(node: &Value) -> String {
+    node.get("tag")
+        .and_then(Value::as_str)
+        .filter(|value| !value.trim().is_empty())
+        .or_else(|| {
+            node.get("name")
+                .and_then(Value::as_str)
+                .filter(|value| !value.trim().is_empty())
+        })
+        .map(str::to_owned)
+        .unwrap_or_else(|| {
+            let id = node.get("id").and_then(Value::as_i64).unwrap_or(0);
+            format!("node_{id}")
+        })
+}
+
+fn push_unique(values: &mut Vec<String>, value: String) {
+    if !values.iter().any(|seen| seen == &value) {
+        values.push(value);
+    }
+}
+
+fn dae_key_literal(value: &str) -> String {
+    if value
+        .chars()
+        .all(|ch| ch.is_ascii_alphanumeric() || ch == '_' || ch == '-')
+        && value
+            .chars()
+            .next()
+            .map(|ch| ch.is_ascii_alphabetic() || ch == '_')
+            .unwrap_or(false)
+    {
+        value.to_owned()
+    } else {
+        dae_string_literal(value)
+    }
+}
+
+fn dae_string_literal(value: &str) -> String {
+    let mut out = String::from("'");
+    for ch in value.chars() {
+        match ch {
+            '\\' => out.push_str("\\\\"),
+            '\'' => out.push_str("\\'"),
+            _ => out.push(ch),
+        }
+    }
+    out.push('\'');
     out
 }
 
@@ -3308,12 +3887,6 @@ fn group_ids_text(conn: &Connection) -> io::Result<String> {
         ids.push(row.map_err(sqlite_io_error)?.to_string());
     }
     Ok(ids.join(","))
-}
-
-fn metadata_bool(state: &Path, key: &str) -> io::Result<bool> {
-    Ok(get_metadata(state, key)?
-        .map(|value| matches!(value.as_str(), "1" | "true" | "yes" | "on"))
-        .unwrap_or(false))
 }
 
 fn get_metadata(state: &Path, key: &str) -> io::Result<Option<String>> {
@@ -3986,7 +4559,7 @@ fn product_flatdesc() -> Value {
         "stateStore": PRIMARY_STATE_STORE,
         "protectedRollbackStore": PROTECTED_ROLLBACK_STATE_STORE,
         "resources": ["configs", "dns", "routings", "nodes", "subscriptions", "groups"],
-        "runtime": ["materialize-generated-config", "reload-state-owner", "stop-state-owner"],
+        "runtime": ["materialize-parseable-generated-config", "resident-runtime-reload", "resident-runtime-stop", "live-manager-state"],
         "logs": ["log-list", "log-settings", "sse-snapshot"],
         "package": ["systemd-unit-surface", "docker-entrypoint-surface", "package-manifest", "admission-report", "webui-route-audit", "openapi", "flatdesc", "outline"],
         "fullGoFreeProductChainReady": false,
@@ -4006,6 +4579,8 @@ fn product_outline() -> Value {
             "webApi": true,
             "staticWebui": true,
             "materializer": true,
+            "realRuntimeBridge": true,
+            "metadataOnlyRuntimeState": false,
             "logsSseLatencySubscription": true,
             "importExport": true,
             "subscriptionFetch": true,
@@ -4015,8 +4590,8 @@ fn product_outline() -> Value {
             "webuiRouteAudit": true,
         },
         "remainingAdmission": [
-            "live host default package switch",
-            "live rollback validation",
+            "live host default package switch revalidation",
+            "live rollback validation revalidation",
             "remove Go daewing from default package path",
             "production package admission"
         ]
@@ -4048,6 +4623,9 @@ fn product_package_manifest() -> Value {
         "runtime": {
             "generatedConfig": "/etc/daed/runtime/generated.dae",
             "materializer": "POST /api/runtime/reload",
+            "owner": "resident-production-runtime-manager",
+            "state": "GET /api/general/state reports live manager state",
+            "metadataOnlyRunningState": false,
         },
         "systemd": {
             "unitName": "daed.service",
@@ -4073,7 +4651,7 @@ fn product_admission_report() -> Value {
         "schemaVersion": 1,
         "cPhase": "C10",
         "workPackage": "go-free-product-chain-v1",
-        "status": "local-admission-pass-live-switch-pending",
+        "status": "local-runtime-bridge-pass-live-revalidation-pending",
         "localEvidence": {
             "rustDaedBinary": true,
             "primaryStateStore": PRIMARY_STATE_STORE,
@@ -4082,7 +4660,10 @@ fn product_admission_report() -> Value {
             "currentReactViteWebuiServedByRust": true,
             "resourceCrudApi": true,
             "runtimeMaterializer": true,
+            "runtimeMaterializerParseableConfig": true,
             "runtimeOwnerApi": true,
+            "realRuntimeBridge": true,
+            "metadataOnlyRuntimeState": false,
             "logsSse": true,
             "subscriptionFetch": true,
             "tcpLatencyProbe": true,
@@ -4100,12 +4681,13 @@ fn product_admission_report() -> Value {
         },
         "liveEvidence": {
             "defaultPackageSwitchApplied": false,
+            "previousDefaultSwitchBlockedByMetadataOnlyRuntimeState": true,
             "rollbackValidationApplied": false,
             "goDaewingDefaultPathRemoved": false,
         },
         "remainingBlockers": [
-            "live host default package switch",
-            "live rollback validation",
+            "live host default package switch revalidation",
+            "live rollback validation revalidation",
             "remove Go daewing from default package path",
             "production package admission"
         ]
@@ -5170,6 +5752,19 @@ fn set_private_db_permissions(path: &Path) -> io::Result<()> {
     Ok(())
 }
 
+fn set_private_runtime_file_permissions(path: &Path) -> io::Result<()> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(path, fs::Permissions::from_mode(0o600))?;
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = path;
+    }
+    Ok(())
+}
+
 fn sqlite_io_error(err: rusqlite::Error) -> io::Error {
     io::Error::other(err)
 }
@@ -5276,5 +5871,55 @@ mod tests {
                 .unwrap()
         );
         assert!(!report["go_free_product_chain_ready"].as_bool().unwrap());
+    }
+
+    #[test]
+    fn generated_runtime_config_renders_parseable_nodes_and_groups() {
+        let groups = json!({
+            "items": [
+                {
+                    "name": "proxy",
+                    "policy": "fixed(0)",
+                    "nodes": [
+                        {
+                            "id": 1,
+                            "tag": "[HK]Hytron",
+                            "name": "[HK]Hytron",
+                            "link": "vless://uuid@example.com:443?security=tls#Hytron"
+                        }
+                    ],
+                    "subscriptions": []
+                }
+            ]
+        });
+        let nodes = json!({
+            "items": [
+                {
+                    "id": 1,
+                    "tag": "[HK]Hytron",
+                    "name": "[HK]Hytron",
+                    "link": "vless://uuid@example.com:443?security=tls#Hytron"
+                }
+            ]
+        });
+        let content = render_generated_config(
+            "test",
+            Some(&(1, "global".to_owned(), "global {}\n".to_owned(), 1)),
+            Some(&(1, "dns".to_owned(), "dns {}\n".to_owned(), 1)),
+            Some(&(
+                1,
+                "routing".to_owned(),
+                "routing { fallback: proxy }\n".to_owned(),
+                1,
+            )),
+            &groups,
+            &nodes,
+        );
+        assert!(content.contains("node {"));
+        assert!(content.contains("'[HK]Hytron':"));
+        assert!(content.contains("filter: name('[HK]Hytron')"));
+        let config = build_runtime_config_from_content(&content).unwrap();
+        assert_eq!(config.node.len(), 1);
+        assert_eq!(config.group[0].name, "proxy");
     }
 }
