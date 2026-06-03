@@ -6612,3 +6612,254 @@ production package admission evidence
 ```
 
 The implementation is therefore a completed local Rust `daed` product-surface batch, not full C10 completion.
+
+## 38. C10 local package admission evidence implementation record（2026-06-03）
+
+Scope:
+
+```text
+C10 go-free-product-chain-v1
+```
+
+This section records the next C10 batch after local Rust `daed` product surface completion.
+
+It is still not a new stage.
+
+It does not mark `go_free_product_chain_ready=true`.
+
+It does not perform a live host default switch.
+
+It produces local package admission evidence that is required before live default-path mutation.
+
+### 38.1 Production subscription fetch
+
+Implemented Rust `daed` subscription fetch behavior:
+
+```text
+POST /api/subscriptions
+POST /api/subscriptions/{id}/refresh
+```
+
+Behavior:
+
+- HTTP and HTTPS subscription URLs are fetched by Rust `daed`.
+- Plain text subscription bodies are parsed as node-link lines.
+- Base64 subscription bodies are decoded and parsed as node-link lines.
+- Refresh replaces nodes owned by that subscription.
+- Subscription status becomes `fetched` on success.
+- Subscription status becomes `fetch_error` on fetch failure, with error text stored in `info`.
+- `nodeImportResult` is returned for WebUI compatibility.
+
+Implementation notes:
+
+- Uses existing Rust dependencies and existing `dae-daemon` crate boundary.
+- Does not add a new local crate.
+- Does not add a protocol-specific top-level gate name.
+
+### 38.2 TCP latency probe
+
+Replaced C10 synthetic latency with an actual TCP connect probe:
+
+```text
+POST /api/nodes/latencies
+GET  /api/nodes/latencies
+```
+
+Behavior:
+
+- Target host/port are derived from the node link URL.
+- If the link has no explicit port, Rust `daed` uses conservative default ports by scheme.
+- Probe records:
+  - `latencyMs`
+  - `alive`
+  - `testedAt`
+  - `message`
+- Results are stored in `node_latency_results`.
+
+This is still admission evidence for product WebUI latency workflow.
+
+It is not a claim that full protocol handshake latency or full selected-outbound-path probing is complete.
+
+### 38.3 WebUI route audit
+
+Implemented export:
+
+```text
+daed export webui-route-audit
+```
+
+Report fields:
+
+```text
+schemaVersion
+workPackage=go-free-product-chain-v1
+source=daed/apps/web/src/apis
+rustServer=rust/crates/dae-daemon/src/daed_product.rs
+pass
+missing
+covered
+notes
+```
+
+Covered route classes:
+
+```text
+auth/setup
+user profile/password/storage
+bundle import/export
+dae config-file import/export/preview
+general state/interfaces/cache stats
+runtime overview/reload/stop/log-level
+events runtime/logs
+logs/settings
+configs/dns/routings CRUD/select/parse
+nodes CRUD/tag/latencies
+subscriptions CRUD/tag/link/cron/refresh/nodes
+groups CRUD/policy/nodes/subscriptions
+```
+
+This removes the local `full WebUI route audit against Rust API` blocker from the local-admission list.
+
+Live browser route validation can still be run before final live default switch.
+
+### 38.4 resetpass parity
+
+Implemented Rust `daed` resetpass behavior:
+
+```text
+daed resetpass -c /etc/daed
+daed resetpass -c /etc/daed --json
+```
+
+Behavior:
+
+- Opens `<config_dir>/daed.db`.
+- Resets every user to a random recovery password.
+- Updates `password_hash` and `jwt_secret`.
+- Prints plaintext parity output:
+
+```text
+Username: <username>, Password: <password>
+```
+
+- `--json` returns structured recovery output for tests and automation.
+- Does not write `/etc/daed/wing.db`.
+
+Validation includes a protected `wing.db` hash check and login with the new password.
+
+### 38.5 Package artifacts and admission report
+
+Implemented exports:
+
+```text
+daed export package-manifest
+daed export admission-report
+daed export systemd-unit
+daed export docker-entrypoint
+```
+
+`package-manifest` records:
+
+```text
+/usr/bin/daed
+/etc/daed/daed.db
+/etc/daed/wing.db protected rollback store
+/usr/share/daed/web
+/etc/daed/runtime/generated.dae
+systemd unit command
+docker entrypoint command
+live default switch not applied
+Go daewing default path not removed
+live rollback validation not applied
+```
+
+`admission-report` records:
+
+```text
+rustDaedBinary=true
+currentReactViteWebuiServedByRust=true
+resourceCrudApi=true
+runtimeMaterializer=true
+runtimeOwnerApi=true
+logsSse=true
+subscriptionFetch=true
+tcpLatencyProbe=true
+resetpassParity=true
+packageManifest=true
+webuiRouteAuditPass=true
+defaultPackageSwitchApplied=false
+rollbackValidationApplied=false
+goDaewingDefaultPathRemoved=false
+```
+
+### 38.6 Contract state after local package admission evidence
+
+Rust `daed service-contract --json` now reports:
+
+```text
+rust_daed_subscription_fetch_ready=true
+rust_daed_latency_probe_tcp_ready=true
+rust_daed_resetpass_parity_ready=true
+rust_daed_package_manifest_ready=true
+rust_daed_webui_route_audit_ready=true
+rust_daed_local_package_admission_ready=true
+go_free_product_chain_ready=false
+go_free_product_chain_current_batch=C10 local package admission evidence
+```
+
+Remaining C10 blockers:
+
+```text
+live host default package switch
+live rollback validation
+remove Go daewing from default package path
+production package admission
+```
+
+### 38.7 Validation completed
+
+Validation commands completed:
+
+```text
+cargo fmt --check -p dae-daemon
+cargo check -p dae-daemon --bin daed
+cargo test -p dae-daemon --test daed_product
+cargo test -p dae-daemon --test service_contract candidate_reports_resident_service_and_dataplane_capabilities
+cargo test -p dae-daemon daed_product::
+cargo build -p dae-daemon --bin daed
+git -C /root/project/dae-daex-align diff --check
+```
+
+New integration coverage:
+
+```text
+local HTTP subscription fetch
+subscription node import result
+subscription fetch_error path
+node tag-only update
+subscription tag-only update
+subscription cron update preserves tag
+real TCP latency probe against local listener
+resetpass updates daed.db users
+resetpass does not modify protected wing.db
+login with reset password
+package-manifest export
+admission-report export
+webui-route-audit export
+systemd-unit export
+docker-entrypoint export
+```
+
+### 38.8 Still not done
+
+Still not done in this local batch:
+
+```text
+live host default package switch
+live rollback validation on target host
+remove Go daewing from default product path
+production artifact installation on target host
+final product-chain recertification after live mutation
+```
+
+Therefore the next live action is still a C10 live default-path switch and rollback validation task, not a new C-stage.

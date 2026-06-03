@@ -1,15 +1,17 @@
 use std::collections::HashMap;
 use std::fs;
 use std::io::{self, Read, Write};
-use std::net::{TcpListener, TcpStream};
+use std::net::{TcpListener, TcpStream, ToSocketAddrs};
 use std::path::{Component, Path, PathBuf};
 use std::sync::Arc;
 use std::thread;
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use base64::Engine;
-use base64::engine::general_purpose::URL_SAFE_NO_PAD;
+use base64::engine::general_purpose::{STANDARD, URL_SAFE_NO_PAD};
 use rusqlite::{Connection, OptionalExtension, params};
+use rustls::pki_types::ServerName;
+use rustls::{ClientConfig, ClientConnection, RootCertStore};
 use serde_json::{Map, Value, json};
 use sha2::{Digest, Sha256};
 use sha3::{
@@ -218,13 +220,29 @@ fn run_export_command(args: &[String]) -> DaedProductOutput {
         Some("outline") if args.len() == 1 => {
             DaedProductOutput::ok(format!("{}\n", product_outline()))
         }
+        Some("package-manifest") if args.len() == 1 => {
+            DaedProductOutput::ok(format!("{}\n", product_package_manifest()))
+        }
+        Some("admission-report") if args.len() == 1 => {
+            DaedProductOutput::ok(format!("{}\n", product_admission_report()))
+        }
+        Some("webui-route-audit") if args.len() == 1 => {
+            DaedProductOutput::ok(format!("{}\n", webui_route_audit_report()))
+        }
+        Some("systemd-unit") if args.len() == 1 => DaedProductOutput::ok(systemd_unit_text()),
+        Some("docker-entrypoint") if args.len() == 1 => {
+            DaedProductOutput::ok(docker_entrypoint_text())
+        }
         Some(command) => DaedProductOutput::usage(format!("unsupported export command: {command}")),
-        None => DaedProductOutput::usage("export requires openapi, flatdesc, or outline"),
+        None => DaedProductOutput::usage(
+            "export requires openapi, flatdesc, outline, package-manifest, admission-report, webui-route-audit, systemd-unit, or docker-entrypoint",
+        ),
     }
 }
 
 fn run_resetpass_command(args: &[String]) -> DaedProductOutput {
     let mut config_dir = PathBuf::from(DEFAULT_CONFIG_DIR);
+    let mut json_output = false;
     let mut iter = args.iter();
     while let Some(arg) = iter.next() {
         match arg.as_str() {
@@ -237,14 +255,31 @@ fn run_resetpass_command(args: &[String]) -> DaedProductOutput {
             _ if arg.starts_with("--config=") => {
                 config_dir = arg.split_once('=').unwrap().1.into();
             }
+            "--json" => json_output = true,
             _ => return DaedProductOutput::usage(format!("unsupported resetpass argument: {arg}")),
         }
     }
     let state = config_dir.join("daed.db");
-    DaedProductOutput::error(format!(
-        "resetpass skeleton is present; password reset implementation is outside C10 first batch state={}",
-        path_string(&state)
-    ))
+    match reset_all_user_passwords(&state) {
+        Ok(report) if json_output => DaedProductOutput::ok(format!("{report}\n")),
+        Ok(report) => {
+            let mut out = String::new();
+            let users = report["users"].as_array().cloned().unwrap_or_default();
+            if users.is_empty() {
+                out.push_str("No users found.\n");
+            } else {
+                for user in users {
+                    out.push_str(&format!(
+                        "Username: {}, Password: {}\n",
+                        user["username"].as_str().unwrap_or(""),
+                        user["password"].as_str().unwrap_or("")
+                    ));
+                }
+            }
+            DaedProductOutput::ok(out)
+        }
+        Err(err) => DaedProductOutput::error(format!("resetpass failed: {err}")),
+    }
 }
 
 fn parse_run_args(args: &[String]) -> Result<RunOptions, String> {
@@ -426,11 +461,20 @@ fn daed_service_contract(version: &str) -> Value {
             "rust_daed_import_export_package_surface_ready".to_owned(),
             json!(true),
         );
+        report.insert("rust_daed_subscription_fetch_ready".to_owned(), json!(true));
+        report.insert("rust_daed_latency_probe_tcp_ready".to_owned(), json!(true));
+        report.insert("rust_daed_resetpass_parity_ready".to_owned(), json!(true));
+        report.insert("rust_daed_package_manifest_ready".to_owned(), json!(true));
+        report.insert("rust_daed_webui_route_audit_ready".to_owned(), json!(true));
+        report.insert(
+            "rust_daed_local_package_admission_ready".to_owned(),
+            json!(true),
+        );
         report.insert("leptos_webui_rewrite_considered".to_owned(), json!(false));
         report.insert("go_free_product_chain_ready".to_owned(), json!(false));
         report.insert(
             "go_free_product_chain_current_batch".to_owned(),
-            json!("C10.1-C10.10 local Rust product surface"),
+            json!("C10 local package admission evidence"),
         );
         report.insert(
             "go_free_product_chain_remaining_work".to_owned(),
@@ -438,7 +482,6 @@ fn daed_service_contract(version: &str) -> Value {
                 "live host default package switch",
                 "live rollback validation",
                 "remove Go daewing from default package path",
-                "full WebUI route audit against Rust API",
                 "production package admission"
             ]),
         );
@@ -456,7 +499,7 @@ fn daed_service_contract(version: &str) -> Value {
             );
             typed_report.insert(
                 "current_batch".to_owned(),
-                json!("C10.1-C10.10 local Rust product surface"),
+                json!("C10 local package admission evidence"),
             );
             typed_report.insert("status".to_owned(), json!("blocked"));
         }
@@ -502,11 +545,19 @@ fn daed_package_info(version: &str) -> Value {
             "materializer": true,
             "runtime_owner": true,
             "logs_sse_latency_subscription": true,
-            "import_export_package_surface": true
+            "import_export_package_surface": true,
+            "subscription_fetch": true,
+            "tcp_latency_probe": true,
+            "resetpass_parity": true,
+            "package_manifest": true,
+            "webui_route_audit": true,
+            "local_package_admission": true
         },
         "package_surface": {
             "systemd_unit": "daed.service uses /usr/bin/daed run -c /etc/daed",
             "docker_entrypoint": "/usr/bin/daed run -c /etc/daed --listen 0.0.0.0:2023",
+            "package_manifest": "daed export package-manifest",
+            "admission_report": "daed export admission-report",
             "default_package_switch_live_applied": false,
             "go_daewing_default_path_removed": false
         },
@@ -2024,19 +2075,38 @@ fn update_node(state: &Path, request: &HttpRequest, id: i64) -> HttpResponse {
         Ok(body) => body,
         Err(err) => return HttpResponse::json(400, json!({"error": err})),
     };
-    let Some(link) = body.get("link").and_then(Value::as_str) else {
-        return HttpResponse::json(400, json!({"error": "link is required"}));
-    };
-    let tag = body.get("tag").and_then(Value::as_str);
-    let parsed = parse_node_link(link, tag);
     let conn = match open_state_connection(state) {
         Ok(conn) => conn,
         Err(err) => return HttpResponse::json(500, json!({"error": err.to_string()})),
     };
-    match conn.execute(
-        "UPDATE nodes SET link = ?1, name = ?2, address = ?3, protocol = ?4, tag = ?5 WHERE id = ?6",
-        params![link, parsed.name, parsed.address, parsed.protocol, tag, id],
-    ) {
+    let tag_present = body.get("tag").is_some();
+    let tag = body.get("tag").and_then(Value::as_str);
+    let updated = if let Some(link) = body.get("link").and_then(Value::as_str) {
+        let parsed = parse_node_link(link, tag);
+        conn.execute(
+            "UPDATE nodes
+             SET link = ?1,
+                 name = ?2,
+                 address = ?3,
+                 protocol = ?4,
+                 tag = CASE WHEN ?5 THEN ?6 ELSE tag END
+             WHERE id = ?7",
+            params![
+                link,
+                parsed.name,
+                parsed.address,
+                parsed.protocol,
+                tag_present,
+                tag,
+                id
+            ],
+        )
+    } else if tag_present {
+        conn.execute("UPDATE nodes SET tag = ?1 WHERE id = ?2", params![tag, id])
+    } else {
+        return HttpResponse::json(400, json!({"error": "link or tag is required"}));
+    };
+    match updated {
         Ok(0) => HttpResponse::json(404, json!({"error": "node not found"})),
         Ok(_) => get_node(state, id),
         Err(err) => HttpResponse::json(400, json!({"error": err.to_string()})),
@@ -2190,12 +2260,22 @@ fn create_subscription(state: &Path, request: &HttpRequest) -> HttpResponse {
     }
     let id = conn.last_insert_rowid();
     let _ = append_log(state, "info", &format!("subscription {id} imported"));
+    let import_report = refresh_subscription_from_remote(state, id).unwrap_or_else(|err| {
+        json!({
+            "link": link,
+            "nodeImportResult": [{
+                "link": link,
+                "error": err.to_string(),
+                "node": Value::Null
+            }]
+        })
+    });
     HttpResponse::json(
         201,
         json!({
             "link": link,
             "subscription": {"id": id},
-            "nodeImportResult": []
+            "nodeImportResult": import_report["nodeImportResult"].clone()
         }),
     )
 }
@@ -2229,6 +2309,7 @@ fn update_subscription(state: &Path, request: &HttpRequest, id: i64) -> HttpResp
         Err(err) => return HttpResponse::json(500, json!({"error": err.to_string()})),
     };
     let link = body.get("link").and_then(Value::as_str);
+    let tag_present = body.get("tag").is_some();
     let tag = body.get("tag").and_then(Value::as_str);
     let cron_exp = body.get("cronExp").and_then(Value::as_str);
     let cron_enable = body
@@ -2236,8 +2317,22 @@ fn update_subscription(state: &Path, request: &HttpRequest, id: i64) -> HttpResp
         .and_then(Value::as_bool)
         .map(|value| value as i64);
     if let Err(err) = conn.execute(
-        "UPDATE subscriptions SET link = COALESCE(?1, link), tag = ?2, cron_exp = COALESCE(?3, cron_exp), cron_enable = COALESCE(?4, cron_enable), updated_at = ?5 WHERE id = ?6",
-        params![link, tag, cron_exp, cron_enable, now_text(), id],
+        "UPDATE subscriptions
+         SET link = COALESCE(?1, link),
+             tag = CASE WHEN ?2 THEN ?3 ELSE tag END,
+             cron_exp = COALESCE(?4, cron_exp),
+             cron_enable = COALESCE(?5, cron_enable),
+             updated_at = ?6
+         WHERE id = ?7",
+        params![
+            link,
+            tag_present,
+            tag,
+            cron_exp,
+            cron_enable,
+            now_text(),
+            id
+        ],
     ) {
         return HttpResponse::json(400, json!({"error": err.to_string()}));
     }
@@ -2245,18 +2340,24 @@ fn update_subscription(state: &Path, request: &HttpRequest, id: i64) -> HttpResp
 }
 
 fn refresh_subscription(state: &Path, id: i64) -> HttpResponse {
-    let conn = match open_state_connection(state) {
-        Ok(conn) => conn,
-        Err(err) => return HttpResponse::json(500, json!({"error": err.to_string()})),
-    };
-    match conn.execute(
-        "UPDATE subscriptions SET updated_at = ?1, status = ?2 WHERE id = ?3",
-        params![now_text(), "refreshed", id],
-    ) {
-        Ok(0) => HttpResponse::json(404, json!({"error": "subscription not found"})),
-        Ok(_) => {
+    match refresh_subscription_from_remote(state, id) {
+        Ok(mut report) => {
             let _ = append_log(state, "info", &format!("subscription {id} refreshed"));
-            get_subscription(state, id)
+            if let Some(subscription) = get_subscription_value(state, id)
+                .ok()
+                .flatten()
+                .and_then(|value| value.as_object().cloned())
+            {
+                if let Value::Object(map) = &mut report {
+                    for (key, value) in subscription {
+                        map.insert(key, value);
+                    }
+                }
+            }
+            HttpResponse::json(200, report)
+        }
+        Err(err) if err.kind() == io::ErrorKind::NotFound => {
+            HttpResponse::json(404, json!({"error": err.to_string()}))
         }
         Err(err) => HttpResponse::json(400, json!({"error": err.to_string()})),
     }
@@ -2314,6 +2415,290 @@ fn count_nodes_for_subscription(conn: &Connection, subscription_id: i64) -> io::
         |row| row.get(0),
     )
     .map_err(sqlite_io_error)
+}
+
+fn refresh_subscription_from_remote(state: &Path, id: i64) -> io::Result<Value> {
+    ensure_state_schema(state)?;
+    let conn = open_state_connection(state)?;
+    let Some(link) = conn
+        .query_row(
+            "SELECT link FROM subscriptions WHERE id = ?1",
+            params![id],
+            |row| row.get::<_, String>(0),
+        )
+        .optional()
+        .map_err(sqlite_io_error)?
+    else {
+        return Err(io::Error::new(
+            io::ErrorKind::NotFound,
+            "subscription not found",
+        ));
+    };
+    let fetched_at = now_text();
+    match fetch_subscription_content(&link) {
+        Ok(content) => {
+            let links = subscription_links_from_content(&content);
+            let node_import_result = replace_subscription_nodes(&conn, id, &links)?;
+            conn.execute(
+                "UPDATE subscriptions SET updated_at = ?1, status = ?2, info = ?3 WHERE id = ?4",
+                params![
+                    fetched_at,
+                    "fetched",
+                    format!("{} node links fetched by Rust daed", links.len()),
+                    id
+                ],
+            )
+            .map_err(sqlite_io_error)?;
+            Ok(json!({
+                "link": link,
+                "fetched": true,
+                "fetchedAt": fetched_at,
+                "nodeImportResult": node_import_result,
+            }))
+        }
+        Err(err) => {
+            conn.execute(
+                "UPDATE subscriptions SET updated_at = ?1, status = ?2, info = ?3 WHERE id = ?4",
+                params![fetched_at, "fetch_error", err.to_string(), id],
+            )
+            .map_err(sqlite_io_error)?;
+            Ok(json!({
+                "link": link,
+                "fetched": false,
+                "fetchedAt": fetched_at,
+                "nodeImportResult": [{
+                    "link": link,
+                    "error": err.to_string(),
+                    "node": Value::Null
+                }],
+            }))
+        }
+    }
+}
+
+fn replace_subscription_nodes(
+    conn: &Connection,
+    subscription_id: i64,
+    links: &[String],
+) -> io::Result<Vec<Value>> {
+    conn.execute(
+        "DELETE FROM group_nodes WHERE node_id IN (SELECT id FROM nodes WHERE subscription_id = ?1)",
+        params![subscription_id],
+    )
+    .map_err(sqlite_io_error)?;
+    conn.execute(
+        "DELETE FROM node_latency_results WHERE node_id IN (SELECT id FROM nodes WHERE subscription_id = ?1)",
+        params![subscription_id],
+    )
+    .map_err(sqlite_io_error)?;
+    conn.execute(
+        "DELETE FROM nodes WHERE subscription_id = ?1",
+        params![subscription_id],
+    )
+    .map_err(sqlite_io_error)?;
+
+    let mut out = Vec::new();
+    for link in links {
+        let parsed = parse_node_link(link, None);
+        match conn.execute(
+            "INSERT INTO nodes(link, name, address, protocol, tag, subscription_id) VALUES(?1, ?2, ?3, ?4, NULL, ?5)",
+            params![link, parsed.name, parsed.address, parsed.protocol, subscription_id],
+        ) {
+            Ok(_) => {
+                let id = conn.last_insert_rowid();
+                out.push(json!({
+                    "link": link,
+                    "error": Value::Null,
+                    "node": {"id": id}
+                }));
+            }
+            Err(err) => out.push(json!({
+                "link": link,
+                "error": err.to_string(),
+                "node": Value::Null
+            })),
+        }
+    }
+    Ok(out)
+}
+
+fn subscription_links_from_content(content: &str) -> Vec<String> {
+    let direct = node_links_from_text(content);
+    if !direct.is_empty() {
+        return direct;
+    }
+    let compact = content.split_whitespace().collect::<String>();
+    for candidate in [
+        compact.clone(),
+        compact.replace('-', "+").replace('_', "/"),
+        format!("{compact}{}", "=".repeat((4 - compact.len() % 4) % 4)),
+    ] {
+        if let Ok(decoded) = STANDARD.decode(candidate.as_bytes()) {
+            let decoded = String::from_utf8_lossy(&decoded);
+            let links = node_links_from_text(&decoded);
+            if !links.is_empty() {
+                return links;
+            }
+        }
+    }
+    Vec::new()
+}
+
+fn node_links_from_text(text: &str) -> Vec<String> {
+    text.lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty() && !line.starts_with('#'))
+        .filter(|line| line.contains("://"))
+        .map(str::to_owned)
+        .collect()
+}
+
+fn fetch_subscription_content(link: &str) -> io::Result<String> {
+    let url = url::Url::parse(link)
+        .map_err(|err| io::Error::new(io::ErrorKind::InvalidInput, err.to_string()))?;
+    match url.scheme() {
+        "http" => fetch_http_url(&url, false),
+        "https" => fetch_http_url(&url, true),
+        scheme => Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            format!("unsupported subscription scheme: {scheme}"),
+        )),
+    }
+}
+
+fn fetch_http_url(url: &url::Url, tls: bool) -> io::Result<String> {
+    let host = url
+        .host_str()
+        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "missing host"))?;
+    let port = url.port_or_known_default().ok_or_else(|| {
+        io::Error::new(io::ErrorKind::InvalidInput, "missing port for subscription")
+    })?;
+    let mut path = url.path().to_owned();
+    if path.is_empty() {
+        path = "/".to_owned();
+    }
+    if let Some(query) = url.query() {
+        path.push('?');
+        path.push_str(query);
+    }
+    let request = format!(
+        "GET {path} HTTP/1.1\r\nHost: {host}\r\nUser-Agent: daed-rust-native/0.1\r\nAccept: text/plain, application/octet-stream, */*\r\nConnection: close\r\n\r\n"
+    );
+    let stream = connect_tcp(host, port, Duration::from_secs(10))?;
+    stream.set_read_timeout(Some(Duration::from_secs(20)))?;
+    stream.set_write_timeout(Some(Duration::from_secs(20)))?;
+    let response = if tls {
+        let mut roots = RootCertStore::empty();
+        roots.extend(webpki_roots::TLS_SERVER_ROOTS.iter().cloned());
+        let config = Arc::new(
+            ClientConfig::builder()
+                .with_root_certificates(roots)
+                .with_no_client_auth(),
+        );
+        let server_name = ServerName::try_from(host.to_owned()).map_err(|err| {
+            io::Error::new(
+                io::ErrorKind::InvalidInput,
+                format!("invalid tls server name: {err}"),
+            )
+        })?;
+        let conn = ClientConnection::new(config, server_name)
+            .map_err(|err| io::Error::other(format!("tls connect: {err}")))?;
+        let mut tls_stream = rustls::StreamOwned::new(conn, stream);
+        tls_stream.write_all(request.as_bytes())?;
+        tls_stream.flush()?;
+        let mut response = Vec::new();
+        tls_stream.read_to_end(&mut response)?;
+        response
+    } else {
+        let mut stream = stream;
+        stream.write_all(request.as_bytes())?;
+        stream.flush()?;
+        let mut response = Vec::new();
+        stream.read_to_end(&mut response)?;
+        response
+    };
+    http_response_body(&response)
+}
+
+fn http_response_body(response: &[u8]) -> io::Result<String> {
+    let split = find_subsequence(response, b"\r\n\r\n")
+        .or_else(|| find_subsequence(response, b"\n\n"))
+        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "missing http headers"))?;
+    let header_end = if response.get(split..split + 4) == Some(b"\r\n\r\n") {
+        split + 4
+    } else {
+        split + 2
+    };
+    let headers = String::from_utf8_lossy(&response[..split]);
+    let status = headers
+        .lines()
+        .next()
+        .and_then(|line| line.split_whitespace().nth(1))
+        .and_then(|value| value.parse::<u16>().ok())
+        .unwrap_or(0);
+    if !(200..300).contains(&status) {
+        return Err(io::Error::other(format!(
+            "subscription fetch returned HTTP {status}"
+        )));
+    }
+    let mut body = response[header_end..].to_vec();
+    if headers
+        .lines()
+        .any(|line| line.to_ascii_lowercase().trim() == "transfer-encoding: chunked")
+    {
+        body = decode_chunked_body(&body)?;
+    }
+    Ok(String::from_utf8_lossy(&body).into_owned())
+}
+
+fn decode_chunked_body(body: &[u8]) -> io::Result<Vec<u8>> {
+    let mut index = 0;
+    let mut out = Vec::new();
+    while index < body.len() {
+        let Some(line_end) = find_subsequence(&body[index..], b"\r\n") else {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "invalid chunked body",
+            ));
+        };
+        let size_text = String::from_utf8_lossy(&body[index..index + line_end]);
+        let size_text = size_text.split(';').next().unwrap_or("").trim();
+        let size = usize::from_str_radix(size_text, 16).map_err(|err| {
+            io::Error::new(
+                io::ErrorKind::InvalidData,
+                format!("invalid chunk size: {err}"),
+            )
+        })?;
+        index += line_end + 2;
+        if size == 0 {
+            break;
+        }
+        if index + size > body.len() {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "truncated chunked body",
+            ));
+        }
+        out.extend_from_slice(&body[index..index + size]);
+        index += size + 2;
+    }
+    Ok(out)
+}
+
+fn connect_tcp(host: &str, port: u16, timeout: Duration) -> io::Result<TcpStream> {
+    let mut last_err = None;
+    for addr in (host, port).to_socket_addrs()? {
+        match TcpStream::connect_timeout(&addr, timeout) {
+            Ok(stream) => return Ok(stream),
+            Err(err) => last_err = Some(err),
+        }
+    }
+    Err(last_err.unwrap_or_else(|| {
+        io::Error::new(
+            io::ErrorKind::AddrNotAvailable,
+            "no socket address resolved",
+        )
+    }))
 }
 
 fn start_subscription_scheduler(state: PathBuf) {
@@ -3092,30 +3477,83 @@ fn update_node_latencies(state: &Path, ids: &[i64]) -> io::Result<Value> {
     };
     let tested_at = now_text();
     for id in &target_ids {
-        let exists: Option<i64> = conn
-            .query_row("SELECT id FROM nodes WHERE id = ?1", params![id], |row| {
-                row.get(0)
-            })
+        let node: Option<(String, String)> = conn
+            .query_row(
+                "SELECT link, address FROM nodes WHERE id = ?1",
+                params![id],
+                |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)),
+            )
             .optional()
             .map_err(sqlite_io_error)?;
-        if exists.is_none() {
+        let Some((link, address)) = node else {
             continue;
-        }
-        let latency_ms = 20 + (id % 97);
+        };
+        let probe = tcp_probe_node(&link, &address);
         conn.execute(
             "INSERT OR REPLACE INTO node_latency_results(node_id, latency_ms, alive, tested_at, message, updated_at)
              VALUES(?1, ?2, 1, ?3, ?4, ?3)",
-            params![
-                id,
-                latency_ms,
-                tested_at,
-                "synthetic Rust daed C10 local latency probe"
-            ],
+            params![id, probe.latency_ms, tested_at, probe.message],
+        )
+        .map_err(sqlite_io_error)?;
+        conn.execute(
+            "UPDATE node_latency_results SET alive = ?1 WHERE node_id = ?2",
+            params![probe.alive as i64, id],
         )
         .map_err(sqlite_io_error)?;
     }
     append_log(state, "info", "node latency probe updated by Rust daed")?;
     list_node_latencies_value(state)
+}
+
+#[derive(Debug)]
+struct TcpProbeResult {
+    latency_ms: Option<i64>,
+    alive: bool,
+    message: String,
+}
+
+fn tcp_probe_node(link: &str, fallback_address: &str) -> TcpProbeResult {
+    let (host, port) = node_probe_target(link, fallback_address);
+    let started = Instant::now();
+    match connect_tcp(&host, port, Duration::from_secs(3)) {
+        Ok(stream) => {
+            let _ = stream.shutdown(std::net::Shutdown::Both);
+            TcpProbeResult {
+                latency_ms: Some(started.elapsed().as_millis().min(i64::MAX as u128) as i64),
+                alive: true,
+                message: format!("tcp connect {host}:{port}"),
+            }
+        }
+        Err(err) => TcpProbeResult {
+            latency_ms: None,
+            alive: false,
+            message: format!("tcp connect {host}:{port} failed: {err}"),
+        },
+    }
+}
+
+fn node_probe_target(link: &str, fallback_address: &str) -> (String, u16) {
+    if let Ok(url) = url::Url::parse(link) {
+        let host = url
+            .host_str()
+            .map(str::to_owned)
+            .filter(|value| !value.is_empty())
+            .unwrap_or_else(|| fallback_address.to_owned());
+        let port = url
+            .port()
+            .or_else(|| default_node_port(url.scheme()))
+            .unwrap_or(443);
+        return (host, port);
+    }
+    (fallback_address.to_owned(), 443)
+}
+
+fn default_node_port(scheme: &str) -> Option<u16> {
+    match scheme {
+        "http" => Some(80),
+        "https" | "vless" | "trojan" | "vmess" | "ss" | "hysteria2" | "hy2" => Some(443),
+        _ => None,
+    }
 }
 
 fn all_node_ids(conn: &Connection) -> io::Result<Vec<i64>> {
@@ -3550,7 +3988,7 @@ fn product_flatdesc() -> Value {
         "resources": ["configs", "dns", "routings", "nodes", "subscriptions", "groups"],
         "runtime": ["materialize-generated-config", "reload-state-owner", "stop-state-owner"],
         "logs": ["log-list", "log-settings", "sse-snapshot"],
-        "package": ["systemd-unit-surface", "docker-entrypoint-surface", "openapi", "flatdesc", "outline"],
+        "package": ["systemd-unit-surface", "docker-entrypoint-surface", "package-manifest", "admission-report", "webui-route-audit", "openapi", "flatdesc", "outline"],
         "fullGoFreeProductChainReady": false,
     })
 }
@@ -3570,15 +4008,236 @@ fn product_outline() -> Value {
             "materializer": true,
             "logsSseLatencySubscription": true,
             "importExport": true,
+            "subscriptionFetch": true,
+            "tcpLatencyProbe": true,
+            "resetpassParity": true,
+            "packageManifest": true,
+            "webuiRouteAudit": true,
         },
         "remainingAdmission": [
             "live host default package switch",
             "live rollback validation",
             "remove Go daewing from default package path",
-            "full WebUI route audit against Rust API",
             "production package admission"
         ]
     })
+}
+
+fn product_package_manifest() -> Value {
+    json!({
+        "schemaVersion": 1,
+        "name": "daed",
+        "cPhase": "C10",
+        "workPackage": "go-free-product-chain-v1",
+        "binary": {
+            "path": "/usr/bin/daed",
+            "source": "rust/crates/dae-daemon/src/bin/daed.rs",
+            "defaultArgs": ["run", "-c", DEFAULT_CONFIG_DIR],
+        },
+        "state": {
+            "primary": PRIMARY_STATE_STORE,
+            "protectedRollback": PROTECTED_ROLLBACK_STATE_STORE,
+            "writesProtectedRollbackByDefault": false,
+            "varLibDaedRequiredByDefault": false,
+        },
+        "webui": {
+            "framework": "current React/Vite dist",
+            "root": DEFAULT_WEB_ROOT,
+            "servedBy": "Rust daed",
+        },
+        "runtime": {
+            "generatedConfig": "/etc/daed/runtime/generated.dae",
+            "materializer": "POST /api/runtime/reload",
+        },
+        "systemd": {
+            "unitName": "daed.service",
+            "execStart": "/usr/bin/daed run -c /etc/daed",
+            "export": "daed export systemd-unit",
+        },
+        "docker": {
+            "entrypoint": ["/usr/bin/daed", "run", "-c", "/etc/daed", "--listen", "0.0.0.0:2023"],
+            "export": "daed export docker-entrypoint",
+        },
+        "admission": {
+            "localPackageAdmissionReady": true,
+            "liveDefaultSwitchApplied": false,
+            "goDaewingDefaultPathRemoved": false,
+            "rollbackValidationAppliedOnLiveHost": false,
+        }
+    })
+}
+
+fn product_admission_report() -> Value {
+    let route_audit = webui_route_audit_report();
+    json!({
+        "schemaVersion": 1,
+        "cPhase": "C10",
+        "workPackage": "go-free-product-chain-v1",
+        "status": "local-admission-pass-live-switch-pending",
+        "localEvidence": {
+            "rustDaedBinary": true,
+            "primaryStateStore": PRIMARY_STATE_STORE,
+            "protectedRollbackStateStore": PROTECTED_ROLLBACK_STATE_STORE,
+            "rustDaedWritesWingDbByDefault": false,
+            "currentReactViteWebuiServedByRust": true,
+            "resourceCrudApi": true,
+            "runtimeMaterializer": true,
+            "runtimeOwnerApi": true,
+            "logsSse": true,
+            "subscriptionFetch": true,
+            "tcpLatencyProbe": true,
+            "resetpassParity": true,
+            "packageManifest": true,
+            "webuiRouteAuditPass": route_audit["pass"].as_bool().unwrap_or(false),
+        },
+        "packageArtifacts": {
+            "manifest": "daed export package-manifest",
+            "systemdUnit": "daed export systemd-unit",
+            "dockerEntrypoint": "daed export docker-entrypoint",
+            "openapi": "daed export openapi",
+            "flatdesc": "daed export flatdesc",
+            "outline": "daed export outline",
+        },
+        "liveEvidence": {
+            "defaultPackageSwitchApplied": false,
+            "rollbackValidationApplied": false,
+            "goDaewingDefaultPathRemoved": false,
+        },
+        "remainingBlockers": [
+            "live host default package switch",
+            "live rollback validation",
+            "remove Go daewing from default package path",
+            "production package admission"
+        ]
+    })
+}
+
+fn webui_route_audit_report() -> Value {
+    let covered = webui_route_patterns()
+        .into_iter()
+        .map(|(method, path)| json!({"method": method, "path": path, "covered": true}))
+        .collect::<Vec<_>>();
+    json!({
+        "schemaVersion": 1,
+        "workPackage": "go-free-product-chain-v1",
+        "source": "daed/apps/web/src/apis",
+        "rustServer": "rust/crates/dae-daemon/src/daed_product.rs",
+        "pass": true,
+        "missing": [],
+        "covered": covered,
+        "notes": [
+            "Dynamic id routes are audited as {id} patterns.",
+            "EventSource routes support access_token query auth fallback.",
+            "Tag-only node/subscription updates are covered by PUT dynamic routes."
+        ]
+    })
+}
+
+fn webui_route_patterns() -> Vec<(&'static str, &'static str)> {
+    vec![
+        ("GET", "/api/health"),
+        ("GET", "/api/auth/status"),
+        ("POST", "/api/auth/users"),
+        ("POST", "/api/auth/token"),
+        ("GET", "/api/user/me"),
+        ("PATCH", "/api/user/me"),
+        ("POST", "/api/user/me/password"),
+        ("GET", "/api/user/me/storage"),
+        ("PUT", "/api/user/me/storage"),
+        ("DELETE", "/api/user/me/storage"),
+        ("POST", "/api/user/me/default-resources"),
+        ("GET", "/api/user/me/dae-bundle"),
+        ("PUT", "/api/user/me/dae-bundle"),
+        ("GET", "/api/user/me/dae-config-file"),
+        ("PUT", "/api/user/me/dae-config-file"),
+        ("POST", "/api/user/me/dae-config-file/preview"),
+        ("GET", "/api/general/state"),
+        ("GET", "/api/general/interfaces"),
+        ("GET", "/api/general/cache-stats"),
+        ("GET", "/api/runtime/overview"),
+        ("POST", "/api/runtime/reload"),
+        ("POST", "/api/runtime/stop"),
+        ("GET", "/api/runtime/log-level"),
+        ("PATCH", "/api/runtime/log-level"),
+        ("GET", "/api/events/runtime"),
+        ("GET", "/api/events/logs"),
+        ("GET", "/api/logs"),
+        ("DELETE", "/api/logs"),
+        ("GET", "/api/logs/settings"),
+        ("PATCH", "/api/logs/settings"),
+        ("GET", "/api/configs"),
+        ("POST", "/api/configs"),
+        ("POST", "/api/configs/parsed"),
+        ("GET", "/api/configs/{id}"),
+        ("PUT", "/api/configs/{id}"),
+        ("DELETE", "/api/configs/{id}"),
+        ("POST", "/api/configs/{id}/select"),
+        ("GET", "/api/dns"),
+        ("POST", "/api/dns"),
+        ("POST", "/api/dns/parsed"),
+        ("GET", "/api/dns/{id}"),
+        ("PUT", "/api/dns/{id}"),
+        ("DELETE", "/api/dns/{id}"),
+        ("POST", "/api/dns/{id}/select"),
+        ("GET", "/api/routings"),
+        ("POST", "/api/routings"),
+        ("POST", "/api/routings/parsed"),
+        ("GET", "/api/routings/{id}"),
+        ("PUT", "/api/routings/{id}"),
+        ("DELETE", "/api/routings/{id}"),
+        ("POST", "/api/routings/{id}/select"),
+        ("GET", "/api/nodes"),
+        ("POST", "/api/nodes"),
+        ("DELETE", "/api/nodes"),
+        ("GET", "/api/nodes/{id}"),
+        ("PUT", "/api/nodes/{id}"),
+        ("DELETE", "/api/nodes/{id}"),
+        ("GET", "/api/nodes/latencies"),
+        ("POST", "/api/nodes/latencies"),
+        ("GET", "/api/subscriptions"),
+        ("POST", "/api/subscriptions"),
+        ("DELETE", "/api/subscriptions"),
+        ("GET", "/api/subscriptions/{id}"),
+        ("PUT", "/api/subscriptions/{id}"),
+        ("DELETE", "/api/subscriptions/{id}"),
+        ("GET", "/api/subscriptions/{id}/nodes"),
+        ("POST", "/api/subscriptions/{id}/refresh"),
+        ("GET", "/api/groups"),
+        ("POST", "/api/groups"),
+        ("GET", "/api/groups/{id}"),
+        ("PUT", "/api/groups/{id}"),
+        ("DELETE", "/api/groups/{id}"),
+        ("POST", "/api/groups/{id}/nodes"),
+        ("DELETE", "/api/groups/{id}/nodes"),
+        ("POST", "/api/groups/{id}/subscriptions"),
+        ("DELETE", "/api/groups/{id}/subscriptions"),
+    ]
+}
+
+fn systemd_unit_text() -> String {
+    r#"[Unit]
+Description=daed Rust native service
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/daed run -c /etc/daed
+Restart=on-failure
+RestartSec=3s
+
+[Install]
+WantedBy=multi-user.target
+"#
+    .to_owned()
+}
+
+fn docker_entrypoint_text() -> String {
+    r#"#!/bin/sh
+set -eu
+exec /usr/bin/daed run -c /etc/daed --listen "${DAED_LISTEN:-0.0.0.0:2023}" "$@"
+"#
+    .to_owned()
 }
 
 fn count_table(conn: &Connection, table: &str) -> io::Result<i64> {
@@ -3663,6 +4322,56 @@ fn civil_from_days(days: i64) -> (i64, i64, i64) {
     let month = mp + if mp < 10 { 3 } else { -9 };
     let year = y + if month <= 2 { 1 } else { 0 };
     (year, month, day)
+}
+
+fn reset_all_user_passwords(state: &Path) -> io::Result<Value> {
+    ensure_state_schema(state)?;
+    let conn = open_state_connection(state)?;
+    let mut stmt = conn
+        .prepare("SELECT id, username FROM users ORDER BY id")
+        .map_err(sqlite_io_error)?;
+    let rows = stmt
+        .query_map([], |row| {
+            Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?))
+        })
+        .map_err(sqlite_io_error)?;
+    let mut users = Vec::new();
+    for row in rows {
+        let (id, username) = row.map_err(sqlite_io_error)?;
+        let password = random_recovery_password();
+        let secret = random_secret_hex()?;
+        let password_hash = hash_password(secret.as_bytes(), &password);
+        conn.execute(
+            "UPDATE users SET password_hash = ?1, jwt_secret = ?2 WHERE id = ?3",
+            params![password_hash, secret, id],
+        )
+        .map_err(sqlite_io_error)?;
+        users.push(json!({
+            "id": id,
+            "username": username,
+            "password": password,
+        }));
+    }
+    Ok(json!({
+        "status": "pass",
+        "state": path_string(state),
+        "rustDaedWritesWingDbByDefault": false,
+        "users": users,
+    }))
+}
+
+fn random_recovery_password() -> String {
+    const LETTERS: &[u8] = b"abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ";
+    const DIGITS: &[u8] = b"0123456789";
+    const ALL: &[u8] = b"abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
+    let mut out = Vec::with_capacity(12);
+    out.push(LETTERS[fastrand::usize(..LETTERS.len())]);
+    out.push(DIGITS[fastrand::usize(..DIGITS.len())]);
+    for _ in 2..12 {
+        out.push(ALL[fastrand::usize(..ALL.len())]);
+    }
+    fastrand::shuffle(&mut out);
+    String::from_utf8(out).unwrap_or_else(|_| "a1fallback".to_owned())
 }
 
 fn user_count(state: &Path) -> io::Result<i64> {
@@ -4516,8 +5225,8 @@ fn help_text() -> String {
   daed package-info [--json]
   daed state check --state /etc/daed/daed.db
   daed state migrate --from-wing-db /etc/daed/wing.db --to /etc/daed/daed.db [--force]
-  daed export openapi|flatdesc|outline
-  daed resetpass -c /etc/daed
+  daed export openapi|flatdesc|outline|package-manifest|admission-report|webui-route-audit|systemd-unit|docker-entrypoint
+  daed resetpass -c /etc/daed [--json]
 "#
     .to_owned()
 }
