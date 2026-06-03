@@ -282,13 +282,25 @@ fn start_product_runtime_instance(
         ));
     }
 
-    let runtime = start_resident_production_runtime(config)?;
+    let mut runtime = start_resident_production_runtime(config)?;
+    let state = runtime.product_state_summary();
+    let dataplane_enabled = state["residentDataplane"]["enabled"]
+        .as_bool()
+        .unwrap_or(false);
+    let dataplane_status = state["residentDataplane"]["status"].as_str().unwrap_or("");
+    if !dataplane_enabled || dataplane_status != "pass" {
+        runtime.cleanup();
+        return Err(format!(
+            "resident production runtime started without admitted userspace dataplane; set DAE_RUST_RESIDENT_DATAPLANE=1 and require resident_dataplane.status=pass before Rust daed can be the C10 default product path"
+        ));
+    }
     let report = json!({
         "status": "pass",
         "runtimeControl": "resident-production-runtime-manager",
         "source": source,
         "fakeRuntime": false,
         "tproxyPort": config.global.tproxy_port,
+        "residentDataplane": state["residentDataplane"].clone(),
     });
     Ok((ProductRuntimeInstance::Resident(runtime), report))
 }
@@ -959,13 +971,16 @@ fn ensure_state_schema(path: &Path) -> io::Result<()> {
 }
 
 fn open_state_connection(path: &Path) -> io::Result<Connection> {
-    Connection::open(path).map_err(sqlite_io_error)
+    let conn = Connection::open(path).map_err(sqlite_io_error)?;
+    conn.execute_batch("PRAGMA foreign_keys = OFF;")
+        .map_err(sqlite_io_error)?;
+    Ok(conn)
 }
 
 fn apply_state_schema(conn: &Connection) -> io::Result<()> {
     conn.execute_batch(
         r#"
-        PRAGMA foreign_keys = ON;
+        PRAGMA foreign_keys = OFF;
         CREATE TABLE IF NOT EXISTS users (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             username TEXT NOT NULL UNIQUE,
@@ -5883,9 +5898,22 @@ mod tests {
                     "nodes": [
                         {
                             "id": 1,
-                            "tag": "[HK]Hytron",
-                            "name": "[HK]Hytron",
-                            "link": "vless://uuid@example.com:443?security=tls#Hytron"
+                            "tag": "[edge]sample",
+                            "name": "[edge]sample",
+                            "link": "scheme://example.invalid:443#sample"
+                        }
+                    ],
+                    "subscriptions": []
+                },
+                {
+                    "name": "egress",
+                    "policy": "fixed(0)",
+                    "nodes": [
+                        {
+                            "id": 1,
+                            "tag": "[edge]sample",
+                            "name": "[edge]sample",
+                            "link": "scheme://example.invalid:443#sample"
                         }
                     ],
                     "subscriptions": []
@@ -5896,9 +5924,9 @@ mod tests {
             "items": [
                 {
                     "id": 1,
-                    "tag": "[HK]Hytron",
-                    "name": "[HK]Hytron",
-                    "link": "vless://uuid@example.com:443?security=tls#Hytron"
+                    "tag": "[edge]sample",
+                    "name": "[edge]sample",
+                    "link": "scheme://example.invalid:443#sample"
                 }
             ]
         });
@@ -5909,17 +5937,62 @@ mod tests {
             Some(&(
                 1,
                 "routing".to_owned(),
-                "routing { fallback: proxy }\n".to_owned(),
+                "routing {\n    sample(scope:sample-set:alpha-!beta, suffix:example.invalid) -> egress\n    fallback: proxy\n}\n".to_owned(),
                 1,
             )),
             &groups,
             &nodes,
         );
         assert!(content.contains("node {"));
-        assert!(content.contains("'[HK]Hytron':"));
-        assert!(content.contains("filter: name('[HK]Hytron')"));
+        assert!(content.contains("'[edge]sample':"));
+        assert!(content.contains("filter: name('[edge]sample')"));
         let config = build_runtime_config_from_content(&content).unwrap();
         assert_eq!(config.node.len(), 1);
         assert_eq!(config.group[0].name, "proxy");
+        assert_eq!(
+            config.routing.rules[0].and_functions[0].params[0].val,
+            "sample-set:alpha-!beta"
+        );
+    }
+
+    #[test]
+    fn materializer_tolerates_legacy_orphan_group_node_rows() {
+        let dir = std::env::temp_dir().join(format!("daed-product-test-{}", fastrand::u64(..)));
+        let state = dir.join("daed.db");
+        let runtime_dir = dir.join("config");
+        ensure_state_schema(&state).unwrap();
+        let conn = open_state_connection(&state).unwrap();
+        conn.execute_batch(
+            r#"
+            DROP TABLE group_nodes;
+            CREATE TABLE group_nodes (
+                group_id INTEGER NOT NULL,
+                node_id INTEGER NOT NULL,
+                PRIMARY KEY(group_id, node_id),
+                FOREIGN KEY(group_id) REFERENCES groups(id),
+                FOREIGN KEY(node_id) REFERENCES nodes(id)
+            );
+            INSERT INTO configs(id, name, global, selected, version)
+                VALUES(1, 'global', 'global {}', 1, 1);
+            INSERT INTO dns(id, name, dns, selected, version)
+                VALUES(1, 'dns', 'dns {}', 1, 1);
+            INSERT INTO routings(id, name, routing, selected, version)
+                VALUES(1, 'routing', 'routing { fallback: proxy }', 1, 1);
+            INSERT INTO groups(id, name, policy, version)
+                VALUES(1, 'proxy', 'fixed(0)', 1);
+            INSERT INTO nodes(id, link, name, address, protocol, tag)
+                VALUES(1, 'scheme://example.invalid:443#sample', 'sample', 'example.invalid', 'sample', 'sample');
+            INSERT INTO group_nodes(group_id, node_id) VALUES(1, 1);
+            INSERT INTO group_nodes(group_id, node_id) VALUES(1, 9999);
+            INSERT INTO systems(running, running_config_version, running_dns_version, running_routing_version, running_group_version_sum, running_group_ids)
+                VALUES(1, 0, 0, 0, 0, '');
+            "#,
+        )
+        .unwrap();
+
+        let report = materialize_runtime(&state, Some(&runtime_dir), false).unwrap();
+        assert_eq!(report["selected"]["configId"].as_i64(), Some(1));
+        assert!(runtime_dir.join("runtime/generated.dae").is_file());
+        fs::remove_dir_all(dir).unwrap();
     }
 }

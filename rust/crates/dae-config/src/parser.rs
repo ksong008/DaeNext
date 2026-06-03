@@ -328,7 +328,7 @@ impl<'a> Parser<'a> {
             self.expect(TokenKindName::Colon)?;
             Ok(Param {
                 key: first,
-                val: self.expect_literal("function parameter value")?,
+                val: self.parse_function_param_value()?,
                 and_functions: Vec::new(),
                 annotation: Vec::new(),
             })
@@ -339,6 +339,34 @@ impl<'a> Parser<'a> {
                 and_functions: Vec::new(),
                 annotation: Vec::new(),
             })
+        }
+    }
+
+    fn parse_function_param_value(&mut self) -> Result<String, ConfigError> {
+        let mut value = String::new();
+        let mut has_literal = false;
+        loop {
+            match self.peek().kind.clone() {
+                TokenKind::Literal(part) => {
+                    self.pos += 1;
+                    value.push_str(&part);
+                    has_literal = true;
+                }
+                TokenKind::Colon => {
+                    self.pos += 1;
+                    value.push(':');
+                }
+                TokenKind::Bang => {
+                    self.pos += 1;
+                    value.push('!');
+                }
+                _ => break,
+            }
+        }
+        if has_literal {
+            Ok(value)
+        } else {
+            Err(self.error_here("expected function parameter value"))
         }
     }
 
@@ -503,9 +531,9 @@ mod tests {
         let sections = parse_config(
             r#"
 node {
-  "9.[region]edge": "vless://uuid@example.com:443?security=tls&type=tcp#edge"
-  "name with space": "ss://example"
-  "name#fragment": "http://example"
+  "9.[region]edge": "scheme://token@example.invalid:443?mode=test&type=stream#edge"
+  "name with space": "opaque://example.invalid"
+  "name#fragment": "endpoint://example.invalid"
 }
 dns {
   upstream {
@@ -522,7 +550,7 @@ dns {
         assert_eq!(first_node.key, "9.[region]edge");
         assert_eq!(
             first_node.val,
-            "vless://uuid@example.com:443?security=tls&type=tcp#edge"
+            "scheme://token@example.invalid:443?mode=test&type=stream#edge"
         );
         let Item::Param(space_node) = &sections[0].items[1] else {
             panic!("second node should be a param");
@@ -604,6 +632,56 @@ dns {
         assert_eq!(rule.outbound.name, "proxy");
         assert_eq!(rule.outbound.params[0].key, "mark");
         assert_eq!(rule.outbound.params[0].val, "1");
+    }
+
+    #[test]
+    fn parses_bare_function_param_values_with_delimiter_fragments() {
+        let sections = parse_config(
+            r#"
+routing {
+    sample(scope:set-alpha-!beta, source:sample-set:item@scope) -> outlet
+}
+"#,
+        )
+        .unwrap();
+
+        let Item::RoutingRule(rule) = &sections[0].items[0] else {
+            panic!("routing item should be a rule");
+        };
+        let params = &rule.and_functions[0].params;
+        assert_eq!(params[0].key, "scope");
+        assert_eq!(params[0].val, "set-alpha-!beta");
+        assert_eq!(params[1].key, "source");
+        assert_eq!(params[1].val, "sample-set:item@scope");
+    }
+
+    #[test]
+    fn parses_delimiter_fragments_in_generic_function_values_only_until_structure_boundaries() {
+        let sections = parse_config(
+            r#"
+group {
+    sample {
+        filter: name(label:!edge:alpha) && subtag(scope:default)
+        policy: fixed(0)
+    }
+}
+"#,
+        )
+        .unwrap();
+
+        let Item::Section(group) = &sections[0].items[0] else {
+            panic!("group item should be a nested section");
+        };
+        let Item::Param(filter) = &group.items[0] else {
+            panic!("filter item should be a param");
+        };
+        assert_eq!(filter.and_functions.len(), 2);
+        assert_eq!(filter.and_functions[0].name, "name");
+        assert_eq!(filter.and_functions[0].params[0].key, "label");
+        assert_eq!(filter.and_functions[0].params[0].val, "!edge:alpha");
+        assert_eq!(filter.and_functions[1].name, "subtag");
+        assert_eq!(filter.and_functions[1].params[0].key, "scope");
+        assert_eq!(filter.and_functions[1].params[0].val, "default");
     }
 
     #[test]
