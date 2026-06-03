@@ -7690,3 +7690,70 @@ use the BoringSSL fingerprint-aware underlay for link fp nodes, route Telegram
 to TG / Oracle-Sg, and complete the Telegram/API probe after the Vision
 direct-command transition fix.
 ```
+
+### 41.10 Manual deploy WebUI blocker
+
+Manual-deploy evidence:
+
+```text
+/root/daed-c10-manual-20260603-095142
+/root/daed-c10-manual-runtime-20260603-095234
+/root/daed-c10-webui-restore-20260603-095500
+```
+
+The Rust C10 candidate was installed live for manual testing:
+
+```text
+/usr/bin/daed sha256=74862b9edb418cd96580a69b6113e7f7a24861436b4899eef8b791be9a13e5a7
+service active/running
+health endpoint returned 200
+resident runtime reload returned 200 through a temporary generated token
+residentDataplane.status=pass
+```
+
+But the WebUI page failed:
+
+```text
+GET / -> HTTP 404
+body={"error":"No such file or directory (os error 2)"}
+```
+
+Root cause:
+
+```text
+The currently installed legacy daed package does not place React/Vite WebUI dist
+files under a filesystem path such as /usr/share/daed/web.
+The old Go daed serves the WebUI from embedded resources.
+The Rust C10 product shell serves static files from DAED_WEB_ROOT/default web
+root and currently has no packaged or embedded WebUI assets.
+```
+
+Therefore the correct C10 classification is:
+
+```text
+runtime/dataplane/default product path: live pass for the tested probe
+current React WebUI served by Rust daed: blocker remains
+```
+
+The host was restored for user access:
+
+```text
+/usr/bin/daed restored to sha256 b296303fc01b0cd4453ab90bb7bf988d6315a952a548fd483a0a9c5bab2448bf
+temporary 30-c10-runtime-bridge-env.conf removed
+only 20-daex-reload.conf remained
+/api/health returned 200
+GET / returned HTTP 200 and the embedded legacy WebUI index
+staged Rust candidate retained at /usr/bin/daed.rust-c10-runtime-bridge-candidate
+```
+
+Next C10 product-package requirement:
+
+```text
+Rust product packaging must either:
+1. install the current React/Vite dist to a stable DAED_WEB_ROOT path and set
+   the systemd environment accordingly; or
+2. embed the current WebUI assets into the Rust daed binary.
+```
+
+This is a product packaging/WebUI serving blocker, not a resident dataplane or
+BoringSSL underlay blocker.
