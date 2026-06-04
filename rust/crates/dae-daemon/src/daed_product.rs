@@ -15,6 +15,11 @@ use base64::engine::general_purpose::{STANDARD, URL_SAFE_NO_PAD};
 use dae_config::Config;
 use dae_config::parser::parse_config;
 use dae_config::schema::build_config;
+use dae_datapath::{
+    ANYFROM_TIMEOUT_MS, DEFAULT_NAT_TIMEOUT_MS, DEFAULT_UDP_ENDPOINT_POOL_MAX_ENTRIES,
+    DNS_NAT_TIMEOUT_MS, MAX_RETRY, PACKET_SNIFFER_POOL_MAX_ENTRIES, PACKET_SNIFFER_TTL_MS,
+    UDP_TASK_POOL_MAX_QUEUES, UDP_TASK_QUEUE_LENGTH, udp_endpoint_pool_trim_target,
+};
 use regex::Regex;
 use rusqlite::{Connection, OptionalExtension, params};
 use rustls::pki_types::ServerName;
@@ -26,6 +31,10 @@ use sha3::{
     digest::{ExtendableOutput, Update, XofReader},
 };
 
+use crate::allocator::{
+    AllocatorReclaimReason, allocator_live_heap_bytes, allocator_profile, allocator_reclaim,
+    allocator_reclaim_snapshot_json, allocator_stats_json,
+};
 use crate::production_runtime_owner::{
     ResidentProductionRuntime, set_resident_event_log_sink, start_resident_production_runtime,
 };
@@ -282,11 +291,25 @@ impl ProductRuntimeManager {
             .lock()
             .map_err(|_| "product runtime manager lock poisoned".to_owned())?;
         let previous_runtime = inner.runtime.take();
+        let had_previous_runtime = previous_runtime.is_some();
         let previous_config = inner.config.clone();
         drop(previous_runtime);
+        let old_owner_reclaim = had_previous_runtime
+            .then(|| allocator_reclaim(AllocatorReclaimReason::ReloadOldOwnerClosed));
 
         match start_product_runtime_instance(&config, source) {
-            Ok((runtime, report)) => {
+            Ok((runtime, mut report)) => {
+                let startup_reclaim =
+                    allocator_reclaim(AllocatorReclaimReason::StartupControlBuilt);
+                let scoped_reclaim = had_previous_runtime.then(|| {
+                    allocator_reclaim(AllocatorReclaimReason::ReloadScopedResourcesFlushed)
+                });
+                append_runtime_reclaim_report(
+                    &mut report,
+                    old_owner_reclaim,
+                    startup_reclaim,
+                    scoped_reclaim,
+                );
                 inner.runtime = Some(runtime);
                 inner.config = Some(config);
                 inner.reload_count += 1;
@@ -339,6 +362,7 @@ impl ProductRuntimeManager {
             .map_err(|_| "product runtime manager lock poisoned".to_owned())?;
         let was_running = inner.runtime.is_some();
         inner.runtime.take();
+        let reclaim = was_running.then(|| allocator_reclaim(AllocatorReclaimReason::StopRuntime));
         inner.config = None;
         inner.stop_count += 1;
         inner.last_transition_at = Some(now_text());
@@ -349,6 +373,7 @@ impl ProductRuntimeManager {
             "wasRunning": was_running,
             "runtimeControl": "resident-production-runtime-manager",
             "fakeRuntime": product_runtime_fake_start_enabled(),
+            "allocatorReclaim": reclaim,
         }))
     }
 
@@ -462,6 +487,25 @@ fn product_runtime_fake_start_enabled() -> bool {
             )
         })
         .unwrap_or(false)
+}
+
+fn append_runtime_reclaim_report(
+    report: &mut Value,
+    old_owner_reclaim: Option<Value>,
+    startup_reclaim: Value,
+    scoped_reclaim: Option<Value>,
+) {
+    if let Value::Object(map) = report {
+        map.insert("allocatorProfile".to_owned(), json!(allocator_profile()));
+        map.insert(
+            "allocatorReclaim".to_owned(),
+            json!({
+                "oldOwnerClosed": old_owner_reclaim,
+                "startupControlBuilt": startup_reclaim,
+                "reloadScopedResourcesFlushed": scoped_reclaim,
+            }),
+        );
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -776,12 +820,12 @@ fn install_product_signal_thread(
                 }
                 libc::SIGTERM | libc::SIGINT | libc::SIGQUIT => {
                     let _ = runtime.stop();
-                    let _ = mark_system_stopped(&state);
+                    let _ = mark_runtime_process_stopped(&state);
                     let _ = append_log_for_config(
                         &config_dir,
                         &state,
                         "info",
-                        "runtime stopped by signal",
+                        "runtime process stopped by signal",
                     );
                     std::process::exit(0);
                 }
@@ -2100,6 +2144,7 @@ fn runtime_overview_report(app: &AppState, request: &HttpRequest) -> Value {
         .clamp(1, 1_000);
     let traffic = resident_runtime_traffic_stats(&runtime, window_sec, max_points);
     let process = current_process_metrics();
+    let allocator_live_heap = allocator_live_heap_bytes();
     json!({
         "updatedAt": now_text(),
         "uploadRate": traffic.upload_rate.to_string(),
@@ -2113,17 +2158,57 @@ fn runtime_overview_report(app: &AppState, request: &HttpRequest) -> Value {
         "packetSnifferSessions": 0,
         "cpuUsagePercent": process.cpu_usage_percent,
         "rssBytes": process.rss_bytes.to_string(),
+        "rssAnonBytes": process.anonymous_rss_bytes.to_string(),
+        "rssFileBytes": process.file_rss_bytes.to_string(),
         "anonymousRssBytes": process.anonymous_rss_bytes.to_string(),
         "fileRssBytes": process.file_rss_bytes.to_string(),
         "vmDataBytes": process.vm_data_bytes.to_string(),
-        "heapLiveBytes": Value::Null,
-        "heapMetricSource": "unavailable",
+        "heapLiveBytes": allocator_live_heap.map(|bytes| json!(bytes.to_string())).unwrap_or(Value::Null),
+        "heapMetricSource": if allocator_live_heap.is_some() { "allocator-stats" } else { "unavailable" },
+        "heapCompatBytes": process.heap_alloc_bytes_compat().to_string(),
+        "heapCompatBytesSource": "compat-alias-rss-anon-not-live-heap",
         "heapAllocBytes": process.heap_alloc_bytes_compat().to_string(),
         "heapAllocBytesSource": "compat-alias-rss-anon-not-live-heap",
+        "allocatorProfile": allocator_profile(),
+        "allocatorStats": allocator_stats_json(),
+        "allocatorReclaim": allocator_reclaim_snapshot_json(),
+        "resourcePools": resource_pool_policy_json(),
         "goroutines": process.thread_count,
         "productHttp": app.http_metrics.snapshot(),
         "runtime": runtime,
         "samples": traffic.samples,
+    })
+}
+
+fn resource_pool_policy_json() -> Value {
+    json!({
+        "udpEndpoint": {
+            "defaultMaxEntries": DEFAULT_UDP_ENDPOINT_POOL_MAX_ENTRIES,
+            "trimTarget": udp_endpoint_pool_trim_target(DEFAULT_UDP_ENDPOINT_POOL_MAX_ENTRIES),
+            "defaultNatTimeoutMs": DEFAULT_NAT_TIMEOUT_MS,
+            "dnsNatTimeoutMs": DNS_NAT_TIMEOUT_MS,
+            "anyfromTimeoutMs": ANYFROM_TIMEOUT_MS,
+            "maxRetry": MAX_RETRY,
+            "currentEntries": 0,
+            "evictions": 0,
+        },
+        "udpTask": {
+            "queueLength": UDP_TASK_QUEUE_LENGTH,
+            "maxQueues": UDP_TASK_POOL_MAX_QUEUES,
+            "currentQueues": 0,
+            "dropTotal": 0,
+        },
+        "packetSniffer": {
+            "ttlMs": PACKET_SNIFFER_TTL_MS,
+            "maxEntries": PACKET_SNIFFER_POOL_MAX_ENTRIES,
+            "currentEntries": 0,
+            "evictions": 0,
+        },
+        "bufferPool": {
+            "status": "planned",
+            "maxClassBytes": 65536,
+            "source": "DAEX_RUST_NATIVE_OUTBOUND_PLAN_2026-06-01.md:RSS allocator/reclaim and Go structural cleanup plan",
+        }
     })
 }
 
@@ -5403,6 +5488,11 @@ fn mark_system_stopped(state: &Path) -> io::Result<()> {
     Ok(())
 }
 
+fn mark_runtime_process_stopped(state: &Path) -> io::Result<()> {
+    ensure_state_schema(state)?;
+    set_metadata(state, "runtime_running", "false")
+}
+
 fn materialize_runtime(state: &Path, config_dir: Option<&Path>, dry: bool) -> io::Result<Value> {
     ensure_state_schema(state)?;
     let conn = open_state_connection(state)?;
@@ -5449,6 +5539,7 @@ fn materialize_runtime(state: &Path, config_dir: Option<&Path>, dry: bool) -> io
             ],
         )
         .map_err(sqlite_io_error)?;
+        set_metadata(state, "runtime_running", "true")?;
     }
     let content_len = content.len();
     let mut report = Map::new();
@@ -9353,13 +9444,40 @@ global {
                 .unwrap()
                 > 0
         );
+        assert_eq!(overview["rssAnonBytes"], overview["anonymousRssBytes"]);
         assert!(overview["fileRssBytes"].as_str().is_some());
+        assert_eq!(overview["rssFileBytes"], overview["fileRssBytes"]);
         assert!(overview["vmDataBytes"].as_str().is_some());
-        assert_eq!(overview["heapLiveBytes"], Value::Null);
-        assert_eq!(overview["heapMetricSource"], json!("unavailable"));
+        if allocator_live_heap_bytes().is_some() {
+            assert!(
+                overview["heapLiveBytes"]
+                    .as_str()
+                    .unwrap()
+                    .parse::<u64>()
+                    .unwrap()
+                    > 0
+            );
+            assert_eq!(overview["heapMetricSource"], json!("allocator-stats"));
+            assert_eq!(overview["allocatorStats"]["available"], json!(true));
+        } else {
+            assert_eq!(overview["heapLiveBytes"], Value::Null);
+            assert_eq!(overview["heapMetricSource"], json!("unavailable"));
+            assert_eq!(overview["allocatorStats"]["available"], json!(false));
+        }
+        assert_eq!(overview["heapCompatBytes"], overview["heapAllocBytes"]);
+        assert_eq!(
+            overview["heapCompatBytesSource"],
+            json!("compat-alias-rss-anon-not-live-heap")
+        );
         assert_eq!(
             overview["heapAllocBytesSource"],
             json!("compat-alias-rss-anon-not-live-heap")
+        );
+        assert_eq!(overview["allocatorProfile"], json!(allocator_profile()));
+        assert!(overview["allocatorReclaim"]["total"].as_u64().is_some());
+        assert_eq!(
+            overview["resourcePools"]["udpEndpoint"]["defaultMaxEntries"],
+            json!(DEFAULT_UDP_ENDPOINT_POOL_MAX_ENTRIES)
         );
         assert!(overview["goroutines"].as_u64().unwrap() > 0);
         assert!(overview["cpuUsagePercent"].as_f64().unwrap() >= 0.0);
@@ -9371,8 +9489,13 @@ global {
         assert!(body.contains("event: runtime.overview.delta\n"));
         assert!(body.contains("\"heapAllocBytes\""));
         assert!(body.contains("\"anonymousRssBytes\""));
+        assert!(body.contains("\"rssAnonBytes\""));
         assert!(body.contains("\"fileRssBytes\""));
+        assert!(body.contains("\"rssFileBytes\""));
+        assert!(body.contains("\"heapCompatBytes\""));
         assert!(body.contains("\"heapAllocBytesSource\""));
+        assert!(body.contains("\"allocatorProfile\""));
+        assert!(body.contains("\"resourcePools\""));
         assert!(body.contains("\"goroutines\""));
         assert!(body.contains("\"cpuUsagePercent\""));
         fs::remove_dir_all(dir).unwrap();
@@ -9399,6 +9522,32 @@ Threads:\t38\n";
         assert_eq!(fallback.anonymous_rss_bytes, 42 * 1024);
         assert_eq!(fallback.vm_data_bytes, 42 * 1024);
         assert_eq!(fallback.heap_alloc_bytes_compat(), 42 * 1024);
+    }
+
+    #[test]
+    fn runtime_process_stop_preserves_persisted_running_state() {
+        let dir = std::env::temp_dir().join(format!("daed-product-test-{}", fastrand::u64(..)));
+        let state = dir.join("daed.db");
+        ensure_state_schema(&state).unwrap();
+        let conn = open_state_connection(&state).unwrap();
+        conn.execute(
+            "INSERT INTO systems(running, running_config_version, running_dns_version, running_routing_version, running_group_version_sum, running_group_ids)
+             VALUES(1, 0, 0, 0, 0, '')",
+            [],
+        )
+        .unwrap();
+        set_metadata(&state, "runtime_running", "true").unwrap();
+
+        mark_runtime_process_stopped(&state).unwrap();
+
+        assert!(should_restore_runtime_on_start(&state).unwrap());
+        assert_eq!(
+            get_metadata(&state, "runtime_running").unwrap().as_deref(),
+            Some("false")
+        );
+        mark_system_stopped(&state).unwrap();
+        assert!(!should_restore_runtime_on_start(&state).unwrap());
+        fs::remove_dir_all(dir).unwrap();
     }
 
     #[test]
