@@ -4,6 +4,7 @@ use crate::error::OutboundError;
 
 pub const TUIC_VERSION5: u8 = 0x05;
 pub const TUIC_AUTHENTICATE_TYPE: u8 = 0x00;
+pub const TUIC_CONNECT_TYPE: u8 = 0x01;
 pub const TUIC_PACKET_TYPE: u8 = 0x02;
 pub const TUIC_AUTH_TOKEN_LEN: usize = 32;
 pub const TUIC_AUTHENTICATE_FRAME_LEN: usize = 2 + 16 + TUIC_AUTH_TOKEN_LEN;
@@ -113,6 +114,15 @@ pub(super) fn build_packet_frame(
     out.extend_from_slice(&(payload.len() as u16).to_be_bytes());
     address.write_to(&mut out);
     out.extend_from_slice(payload);
+    Ok(out)
+}
+
+pub(super) fn build_connect_frame(target: &str) -> Result<Vec<u8>, OutboundError> {
+    let address = build_address(target)?;
+    let mut out = Vec::with_capacity(2 + address.encoded_len());
+    out.push(TUIC_VERSION5);
+    out.push(TUIC_CONNECT_TYPE);
+    address.write_to(&mut out);
     Ok(out)
 }
 

@@ -191,6 +191,11 @@ node {
   http_live: 'http://matrix:matrix-http-pass@example.com:28448#http'
   ss_live: 'ss://aes-128-gcm:matrix-ss-pass@example.com:28446#ss'
   trojan_live: 'trojan://matrix-trojan-pass@example.com:28444?security=tls&sni=office.example#trojan'
+  anytls_live: 'anytls://matrix-anytls-pass@example.com:28451?sni=office.example#anytls'
+  vmess_live: 'vmess://eyJ2IjoiMiIsInBzIjoidm1lc3MiLCJhZGQiOiJleGFtcGxlLmNvbSIsInBvcnQiOiIyODQ1MiIsImlkIjoiMDEyMzQ1NjctODlhYi1jZGVmLTAxMjMtNDU2Nzg5YWJjZGVmIiwiYWlkIjoiMCIsIm5ldCI6InRjcCIsInR5cGUiOiJub25lIiwiaG9zdCI6IiIsInBhdGgiOiIiLCJ0bHMiOiIifQ=='
+  hy2_live: 'hy2://matrix-hy2-auth@example.com:28453?sni=office.example&pinSHA256=AA-BB-CC#hy2'
+  tuic_live: 'tuic://01234567-89ab-cdef-0123-456789abcdef:matrix-tuic-pass@example.com:28454?allow_insecure=1&sni=office.example&alpn=h3#tuic'
+  juicity_live: 'juicity://01234567-89ab-cdef-0123-456789abcdef:matrix-juicity-pass@example.com:28455?allow_insecure=1&sni=office.example#juicity'
 }
 group {
   proxy {
@@ -223,10 +228,21 @@ routing {
     assert!(report["full_matrix_open"].as_bool().unwrap());
     assert_eq!(
         report["full_matrix_admitted_row_count"].as_u64().unwrap(),
-        5
+        10
     );
     let rows = report["full_matrix_rows"].as_array().unwrap();
-    for handler in ["vless", "socks5", "http-proxy", "shadowsocks", "trojan"] {
+    for handler in [
+        "vless",
+        "socks5",
+        "http-proxy",
+        "shadowsocks",
+        "trojan",
+        "anytls",
+        "vmess",
+        "hysteria2",
+        "tuic",
+        "juicity",
+    ] {
         let row = rows
             .iter()
             .find(|row| row["formal_matrix_handler"].as_str().unwrap() == handler)
@@ -242,10 +258,19 @@ routing {
         "http://matrix",
         "ss://",
         "trojan://",
+        "anytls://",
+        "vmess://",
+        "hy2://",
+        "tuic://",
+        "juicity://",
         "matrix-socks-pass",
         "matrix-http-pass",
         "matrix-ss-pass",
         "matrix-trojan-pass",
+        "matrix-anytls-pass",
+        "matrix-hy2-auth",
+        "matrix-tuic-pass",
+        "matrix-juicity-pass",
         "01234567-89ab",
     ] {
         assert!(!stdout.contains(secret), "{secret} leaked in {stdout}");

@@ -5,11 +5,16 @@ use dae_config::{Config, DynamicFunctionValue, Group};
 use dae_core_types::OutboundIndex;
 use dae_datapath::TcpDialMode;
 use dae_outbound::{
+    AnyTLSLink,
     http_proxy::{HttpProxyLink, HttpScheme},
+    hysteria2::{Hysteria2Link, server_contract as hysteria2_server_contract},
+    juicity::JuicityLink,
     shadowsocks::{ShadowsocksLink, cipher_spec},
     shared_transport::{UtlsFingerprint, resolve_utls_client_hello_id},
     trojan::{TrojanLink, TrojanTransportType},
+    tuic::TuicLink,
     vless::{VLESSLink, password_to_key},
+    vmess::VMessLink,
 };
 use url::Url;
 
@@ -72,6 +77,28 @@ pub(super) enum ResidentProxyProtocolPlan {
     },
     TrojanTcpTls {
         password: String,
+    },
+    AnyTlsTcpTls {
+        auth: String,
+    },
+    VmessAeadTcp {
+        id: String,
+    },
+    Hysteria2QuicTcp {
+        auth: String,
+        pin_sha256: String,
+        max_rx: u64,
+    },
+    TuicQuicTcp {
+        uuid: String,
+        password: String,
+        alpn: Vec<String>,
+    },
+    JuicityQuicTcp {
+        uuid: String,
+        password: String,
+        allow_insecure: bool,
+        pinned_certchain_sha256: String,
     },
 }
 
@@ -219,6 +246,11 @@ fn build_proxy_plan(
         "http" | "https" => build_http_proxy_plan(config, group_name, node_tag, link),
         "ss" | "shadowsocks" => build_shadowsocks_proxy_plan(config, group_name, node_tag, link),
         "trojan" | "trojan-go" => build_trojan_proxy_plan(config, group_name, node_tag, link),
+        "anytls" => build_anytls_proxy_plan(config, group_name, node_tag, link),
+        "vmess" => build_vmess_proxy_plan(config, group_name, node_tag, link),
+        "hysteria2" | "hy2" => build_hysteria2_proxy_plan(config, group_name, node_tag, link),
+        "tuic" => build_tuic_proxy_plan(config, group_name, node_tag, link),
+        "juicity" => build_juicity_proxy_plan(config, group_name, node_tag, link),
         _ => Err(format!(
             "resident dataplane selected unsupported {scheme} node {node_tag}; no Rust protocol handler is admitted for this node yet, keep Go outbound for this config",
         )),
@@ -458,6 +490,279 @@ fn build_trojan_proxy_plan(
         handler: ResidentProxyProtocolPlan::TrojanTcpTls {
             password: parsed.password,
         },
+        mark: config.global.so_mark_from_dae,
+        mptcp: config.global.mptcp,
+    })
+}
+
+fn build_anytls_proxy_plan(
+    config: &Config,
+    group_name: String,
+    node_tag: String,
+    link: String,
+) -> Result<ResidentProxyPlan, String> {
+    let parsed =
+        AnyTLSLink::parse(&link).map_err(|err| format!("parse AnyTLS node {node_tag}: {err}"))?;
+    if parsed.insecure || config.global.allow_insecure {
+        return Err(
+            "resident dataplane generic TLS/TCP handler does not admit AnyTLS insecure mode; keep Go fallback for this config"
+                .to_owned(),
+        );
+    }
+    let url =
+        Url::parse(&link).map_err(|err| format!("parse AnyTLS endpoint {node_tag}: {err}"))?;
+    let server_host = url
+        .host_str()
+        .ok_or_else(|| format!("parse AnyTLS endpoint {node_tag}: missing host"))?
+        .to_owned();
+    let server_port = url.port().unwrap_or(443);
+    let utls_fingerprint = resident_utls_fingerprint_plan(config, None)?;
+    Ok(ResidentProxyPlan {
+        protocol: "anytls".to_owned(),
+        group_name,
+        node_tag,
+        server_host,
+        server_port,
+        server_name: parsed.tls_server_name,
+        alpn: Vec::new(),
+        flow: String::new(),
+        net: "tcp".to_owned(),
+        tls: "tls".to_owned(),
+        allow_insecure: false,
+        utls_fingerprint,
+        handler: ResidentProxyProtocolPlan::AnyTlsTcpTls { auth: parsed.auth },
+        mark: config.global.so_mark_from_dae,
+        mptcp: config.global.mptcp,
+    })
+}
+
+fn build_tuic_proxy_plan(
+    config: &Config,
+    group_name: String,
+    node_tag: String,
+    link: String,
+) -> Result<ResidentProxyPlan, String> {
+    let parsed =
+        TuicLink::parse(&link).map_err(|err| format!("parse TUIC node {node_tag}: {err}"))?;
+    parsed
+        .validate_uuid()
+        .map_err(|err| format!("validate TUIC UUID for {node_tag}: {err}"))?;
+    if !(parsed.allow_insecure || config.global.allow_insecure || parsed.disable_sni) {
+        return Err(format!(
+            "resident dataplane generic QUIC handler admits TUIC only when allow_insecure is explicit for node {node_tag}; keep Go fallback for this config"
+        ));
+    }
+    if parsed.password.is_empty() {
+        return Err(format!(
+            "resident dataplane generic QUIC handler requires TUIC password for node {node_tag}; keep Go fallback for this config"
+        ));
+    }
+    let server_name = if parsed.sni.is_empty() {
+        parsed.server.clone()
+    } else {
+        parsed.sni.clone()
+    };
+    let alpn = if parsed.alpn.is_empty() {
+        vec!["h3".to_owned()]
+    } else {
+        parsed.alpn.clone()
+    };
+    Ok(ResidentProxyPlan {
+        protocol: "tuic".to_owned(),
+        group_name,
+        node_tag,
+        server_host: parsed.server,
+        server_port: parsed.port,
+        server_name,
+        alpn: alpn.clone(),
+        flow: String::new(),
+        net: "udp".to_owned(),
+        tls: "quic".to_owned(),
+        allow_insecure: true,
+        utls_fingerprint: None,
+        handler: ResidentProxyProtocolPlan::TuicQuicTcp {
+            uuid: parsed.user,
+            password: parsed.password,
+            alpn,
+        },
+        mark: config.global.so_mark_from_dae,
+        mptcp: config.global.mptcp,
+    })
+}
+
+fn build_hysteria2_proxy_plan(
+    config: &Config,
+    group_name: String,
+    node_tag: String,
+    link: String,
+) -> Result<ResidentProxyPlan, String> {
+    let parsed = Hysteria2Link::parse(&link)
+        .map_err(|err| format!("parse Hysteria2 node {node_tag}: {err}"))?;
+    if parsed.insecure || config.global.allow_insecure {
+        return Err(
+            "resident dataplane generic QUIC handler does not admit Hysteria2 insecure mode; keep Go fallback for this config"
+                .to_owned(),
+        );
+    }
+    if parsed.pin_sha256.is_empty() {
+        return Err(format!(
+            "resident dataplane generic QUIC handler requires Hysteria2 pinSHA256 for node {node_tag}; keep Go fallback for this config"
+        ));
+    }
+    let auth = if parsed.password.is_empty() {
+        parsed.user.clone()
+    } else {
+        format!("{}:{}", parsed.user, parsed.password)
+    };
+    if auth.is_empty() {
+        return Err(format!(
+            "resident dataplane generic QUIC handler requires Hysteria2 auth for node {node_tag}; keep Go fallback for this config"
+        ));
+    }
+    let server = hysteria2_server_contract(&parsed.server);
+    if server.port_hopping {
+        return Err(format!(
+            "resident dataplane generic QUIC handler admits only single-port Hysteria2 endpoints for node {node_tag}; got {}",
+            parsed.server
+        ));
+    }
+    let server_port = server.port.parse::<u16>().map_err(|err| {
+        format!(
+            "invalid Hysteria2 port {} for node {node_tag}: {err}",
+            server.port
+        )
+    })?;
+    let server_name = if parsed.sni.is_empty() {
+        server.host.clone()
+    } else {
+        parsed.sni.clone()
+    };
+    Ok(ResidentProxyPlan {
+        protocol: "hysteria2".to_owned(),
+        group_name,
+        node_tag,
+        server_host: server.host,
+        server_port,
+        server_name,
+        alpn: vec!["h3".to_owned()],
+        flow: String::new(),
+        net: "udp".to_owned(),
+        tls: "quic".to_owned(),
+        allow_insecure: false,
+        utls_fingerprint: None,
+        handler: ResidentProxyProtocolPlan::Hysteria2QuicTcp {
+            auth,
+            pin_sha256: parsed.pin_sha256,
+            max_rx: parsed.max_rx,
+        },
+        mark: config.global.so_mark_from_dae,
+        mptcp: config.global.mptcp,
+    })
+}
+
+fn build_juicity_proxy_plan(
+    config: &Config,
+    group_name: String,
+    node_tag: String,
+    link: String,
+) -> Result<ResidentProxyPlan, String> {
+    let parsed =
+        JuicityLink::parse(&link).map_err(|err| format!("parse Juicity node {node_tag}: {err}"))?;
+    parsed
+        .validate_uuid()
+        .map_err(|err| format!("validate Juicity UUID for {node_tag}: {err}"))?;
+    if parsed.password.is_empty() {
+        return Err(format!(
+            "resident dataplane generic QUIC handler requires Juicity password for node {node_tag}; keep Go fallback for this config"
+        ));
+    }
+    let allow_insecure = parsed.allow_insecure || config.global.allow_insecure;
+    if !allow_insecure && parsed.pinned_certchain_sha256.is_empty() {
+        return Err(format!(
+            "resident dataplane generic QUIC handler requires Juicity allow_insecure or pinned_certchain_sha256 for node {node_tag}; keep Go fallback for this config"
+        ));
+    }
+    let server_name = if parsed.sni.is_empty() {
+        parsed.server.clone()
+    } else {
+        parsed.sni.clone()
+    };
+    Ok(ResidentProxyPlan {
+        protocol: "juicity".to_owned(),
+        group_name,
+        node_tag,
+        server_host: parsed.server,
+        server_port: parsed.port,
+        server_name,
+        alpn: vec!["h3".to_owned()],
+        flow: String::new(),
+        net: "udp".to_owned(),
+        tls: "quic".to_owned(),
+        allow_insecure,
+        utls_fingerprint: None,
+        handler: ResidentProxyProtocolPlan::JuicityQuicTcp {
+            uuid: parsed.user,
+            password: parsed.password,
+            allow_insecure,
+            pinned_certchain_sha256: parsed.pinned_certchain_sha256,
+        },
+        mark: config.global.so_mark_from_dae,
+        mptcp: config.global.mptcp,
+    })
+}
+
+fn build_vmess_proxy_plan(
+    config: &Config,
+    group_name: String,
+    node_tag: String,
+    link: String,
+) -> Result<ResidentProxyPlan, String> {
+    let parsed =
+        VMessLink::parse(&link).map_err(|err| format!("parse VMess node {node_tag}: {err}"))?;
+    parsed
+        .validate_aead()
+        .map_err(|err| format!("validate VMess AEAD for {node_tag}: {err}"))?;
+    parsed
+        .validate_transport()
+        .map_err(|err| format!("validate VMess transport for {node_tag}: {err}"))?;
+    if parsed.net != "tcp" {
+        return Err(format!(
+            "resident dataplane generic AEAD TCP handler admits only VMess net=tcp endpoints for node {node_tag}; got {}",
+            parsed.net
+        ));
+    }
+    if !parsed.tls.is_empty() && parsed.tls != "none" {
+        return Err(format!(
+            "resident dataplane generic AEAD TCP handler admits only plain VMess TCP endpoints for node {node_tag}; got tls={}",
+            parsed.tls
+        ));
+    }
+    if parsed.allow_insecure || config.global.allow_insecure {
+        return Err(
+            "resident dataplane generic AEAD TCP handler does not admit allow_insecure; keep Go fallback for this config"
+                .to_owned(),
+        );
+    }
+    let server_port = parsed.port.parse::<u16>().map_err(|err| {
+        format!(
+            "invalid VMess port {} for node {node_tag}: {err}",
+            parsed.port
+        )
+    })?;
+    Ok(ResidentProxyPlan {
+        protocol: "vmess".to_owned(),
+        group_name,
+        node_tag,
+        server_host: parsed.add,
+        server_port,
+        server_name: String::new(),
+        alpn: Vec::new(),
+        flow: String::new(),
+        net: "tcp".to_owned(),
+        tls: "none".to_owned(),
+        allow_insecure: false,
+        utls_fingerprint: None,
+        handler: ResidentProxyProtocolPlan::VmessAeadTcp { id: parsed.id },
         mark: config.global.so_mark_from_dae,
         mptcp: config.global.mptcp,
     })
@@ -919,6 +1224,96 @@ mod tests {
             trojan.handler,
             ResidentProxyProtocolPlan::TrojanTcpTls { .. }
         ));
+
+        let anytls = build_resident_proxy_plan_for_node(
+            &config,
+            "proxy".to_owned(),
+            "anytls_live".to_owned(),
+            "anytls://matrix-anytls-pass@203.0.113.10:28451?sni=office.example#anytls".to_owned(),
+        )
+        .unwrap();
+        assert_eq!(anytls.protocol, "anytls");
+        assert_eq!(anytls.server_host, "203.0.113.10");
+        assert_eq!(anytls.server_port, 28451);
+        assert_eq!(anytls.server_name, "office.example");
+        assert_eq!(anytls.tls, "tls");
+        assert!(matches!(
+            anytls.handler,
+            ResidentProxyProtocolPlan::AnyTlsTcpTls { .. }
+        ));
+
+        let vmess = build_resident_proxy_plan_for_node(
+            &config,
+            "proxy".to_owned(),
+            "vmess_live".to_owned(),
+            "vmess://eyJ2IjoiMiIsInBzIjoidm1lc3MiLCJhZGQiOiIyMDMuMC4xMTMuMTAiLCJwb3J0IjoiMjg0NTIiLCJpZCI6IjAxMjM0NTY3LTg5YWItY2RlZi0wMTIzLTQ1Njc4OWFiY2RlZiIsImFpZCI6IjAiLCJuZXQiOiJ0Y3AiLCJ0eXBlIjoibm9uZSIsImhvc3QiOiIiLCJwYXRoIjoiIiwidGxzIjoiIn0=".to_owned(),
+        )
+        .unwrap();
+        assert_eq!(vmess.protocol, "vmess");
+        assert_eq!(vmess.server_host, "203.0.113.10");
+        assert_eq!(vmess.server_port, 28452);
+        assert_eq!(vmess.tls, "none");
+        assert!(matches!(
+            vmess.handler,
+            ResidentProxyProtocolPlan::VmessAeadTcp { .. }
+        ));
+
+        let hysteria2 = build_resident_proxy_plan_for_node(
+            &config,
+            "proxy".to_owned(),
+            "hy2_live".to_owned(),
+            "hy2://matrix-hy2-auth@203.0.113.10:28453?sni=office.example&pinSHA256=AA-BB-CC#hy2"
+                .to_owned(),
+        )
+        .unwrap();
+        assert_eq!(hysteria2.protocol, "hysteria2");
+        assert_eq!(hysteria2.server_host, "203.0.113.10");
+        assert_eq!(hysteria2.server_port, 28453);
+        assert_eq!(hysteria2.server_name, "office.example");
+        assert_eq!(hysteria2.net, "udp");
+        assert_eq!(hysteria2.tls, "quic");
+        assert!(matches!(
+            hysteria2.handler,
+            ResidentProxyProtocolPlan::Hysteria2QuicTcp { .. }
+        ));
+
+        let tuic = build_resident_proxy_plan_for_node(
+            &config,
+            "proxy".to_owned(),
+            "tuic_live".to_owned(),
+            "tuic://01234567-89ab-cdef-0123-456789abcdef:matrix-tuic-pass@203.0.113.10:28454?allow_insecure=1&sni=office.example&alpn=h3#tuic"
+                .to_owned(),
+        )
+        .unwrap();
+        assert_eq!(tuic.protocol, "tuic");
+        assert_eq!(tuic.server_host, "203.0.113.10");
+        assert_eq!(tuic.server_port, 28454);
+        assert_eq!(tuic.server_name, "office.example");
+        assert_eq!(tuic.net, "udp");
+        assert_eq!(tuic.tls, "quic");
+        assert!(matches!(
+            tuic.handler,
+            ResidentProxyProtocolPlan::TuicQuicTcp { .. }
+        ));
+
+        let juicity = build_resident_proxy_plan_for_node(
+            &config,
+            "proxy".to_owned(),
+            "juicity_live".to_owned(),
+            "juicity://01234567-89ab-cdef-0123-456789abcdef:matrix-juicity-pass@203.0.113.10:28455?allow_insecure=1&sni=office.example#juicity"
+                .to_owned(),
+        )
+        .unwrap();
+        assert_eq!(juicity.protocol, "juicity");
+        assert_eq!(juicity.server_host, "203.0.113.10");
+        assert_eq!(juicity.server_port, 28455);
+        assert_eq!(juicity.server_name, "office.example");
+        assert_eq!(juicity.net, "udp");
+        assert_eq!(juicity.tls, "quic");
+        assert!(matches!(
+            juicity.handler,
+            ResidentProxyProtocolPlan::JuicityQuicTcp { .. }
+        ));
     }
 
     #[test]
@@ -962,6 +1357,67 @@ mod tests {
         )
         .unwrap_err();
         assert!(trojan_go.contains("admits only plain trojan endpoints"));
+
+        let anytls_insecure = build_resident_proxy_plan_for_node(
+            &config,
+            "proxy".to_owned(),
+            "anytls_insecure".to_owned(),
+            "anytls://matrix-anytls-pass@203.0.113.10:28451?insecure=1&sni=office.example#anytls"
+                .to_owned(),
+        )
+        .unwrap_err();
+        assert!(anytls_insecure.contains("does not admit AnyTLS insecure mode"));
+
+        let vmess_tls = build_resident_proxy_plan_for_node(
+            &config,
+            "proxy".to_owned(),
+            "vmess_tls".to_owned(),
+            "vmess://eyJ2IjoiMiIsInBzIjoidm1lc3MtdGxzIiwiYWRkIjoiMjAzLjAuMTEzLjEwIiwicG9ydCI6IjI4NDUyIiwiaWQiOiIwMTIzNDU2Ny04OWFiLWNkZWYtMDEyMy00NTY3ODlhYmNkZWYiLCJhaWQiOiIwIiwibmV0IjoidGNwIiwidHlwZSI6Im5vbmUiLCJob3N0IjoiIiwicGF0aCI6IiIsInRscyI6InRscyJ9".to_owned(),
+        )
+        .unwrap_err();
+        assert!(vmess_tls.contains("admits only plain VMess TCP endpoints"));
+
+        let hy2_no_pin = build_resident_proxy_plan_for_node(
+            &config,
+            "proxy".to_owned(),
+            "hy2_no_pin".to_owned(),
+            "hy2://matrix-hy2-auth@203.0.113.10:28453?sni=office.example#hy2".to_owned(),
+        )
+        .unwrap_err();
+        assert!(hy2_no_pin.contains("requires Hysteria2 pinSHA256"));
+
+        let hy2_hopping = build_resident_proxy_plan_for_node(
+            &config,
+            "proxy".to_owned(),
+            "hy2_hopping".to_owned(),
+            "hy2://matrix-hy2-auth@example.com:443,8443-8445?sni=office.example&pinSHA256=AA-BB-CC#hy2"
+                .to_owned(),
+        )
+        .unwrap_err();
+        assert!(hy2_hopping.contains("single-port Hysteria2 endpoints"));
+
+        let tuic_without_insecure = build_resident_proxy_plan_for_node(
+            &config,
+            "proxy".to_owned(),
+            "tuic_without_insecure".to_owned(),
+            "tuic://01234567-89ab-cdef-0123-456789abcdef:matrix-tuic-pass@203.0.113.10:28454?sni=office.example&alpn=h3#tuic"
+                .to_owned(),
+        )
+        .unwrap_err();
+        assert!(tuic_without_insecure.contains("allow_insecure is explicit"));
+
+        let juicity_without_verification = build_resident_proxy_plan_for_node(
+            &config,
+            "proxy".to_owned(),
+            "juicity_without_verification".to_owned(),
+            "juicity://01234567-89ab-cdef-0123-456789abcdef:matrix-juicity-pass@203.0.113.10:28455?sni=office.example#juicity"
+                .to_owned(),
+        )
+        .unwrap_err();
+        assert!(
+            juicity_without_verification
+                .contains("requires Juicity allow_insecure or pinned_certchain_sha256")
+        );
     }
 
     #[test]

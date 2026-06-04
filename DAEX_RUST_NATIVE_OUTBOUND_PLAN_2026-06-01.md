@@ -13341,3 +13341,118 @@ Local align-chain follow-up:
       `daed-daex-align/daed/wing/dae-core`,
       `dae-wing-daex-align`,
       `dae-wing-daex-align/dae-core`.
+
+## 2026-06-04 C8 Resident Live Adapter Matrix Expansion Follow-up
+
+Scope:
+  - Continue the C8 outbound production matrix work without creating a new
+    stage name.
+  - Keep top-level naming protocol-generic; protocol names appear only in
+    matrix rows, handler internals, fixtures, tests, and evidence.
+  - Finish the remaining selected-node resident admission gap with real runtime
+    wiring rather than a fake planner admission.
+
+Implementation notes:
+  - Added reusable runtime helpers in `dae_outbound::juicity`:
+      `build_juicity_runtime_client_config`,
+      `authenticate_juicity_connection`,
+      `write_juicity_tcp_request`,
+      `build_juicity_tcp_request`.
+  - Juicity auth now follows the Go-side shape:
+      open QUIC connection,
+      open a unidirectional auth stream,
+      derive the auth token from QUIC TLS exporter material,
+      write the version-0 authenticate header,
+      keep the auth stream alive while TCP relay is active.
+  - Juicity TCP stream request follows the Go-side stream connection shape:
+      network byte `tcp`,
+      Trojan/SOCKS-style target metadata,
+      optional sniffed initial payload,
+      then raw bidirectional TCP relay over the QUIC stream.
+  - Resident TCP QUIC relay was made protocol-generic in error wording and is
+    shared by the existing QUIC stream handlers and Juicity.
+  - Juicity planner admission is conservative:
+      valid UUID required,
+      password required,
+      QUIC TLS verifier requires either `pinned_certchain_sha256` or explicit
+      `allow_insecure` / global allow-insecure,
+      no silent accept-any secure mode.
+  - Resident matrix entry for Juicity moved from blocked to partial wired:
+      `planner_admitted=true`,
+      `tcp_live_adapter=true`,
+      `transport_underlay=true`,
+      `route_group_connectivity=true`,
+      `selected_node_fail_closed=true`,
+      `fingerprint_underlay=true`,
+      `udp_live_adapter=false`,
+      `remote_live_matrix=false`,
+      `go_outbound_fallback_retired=false`.
+
+Local verification:
+  - `cargo fmt --all --manifest-path rust/Cargo.toml`: pass.
+  - `cargo check --manifest-path rust/Cargo.toml -p dae-daemon`: pass.
+  - `cargo test --manifest-path rust/Cargo.toml -p dae-daemon production_runtime_owner::resident_dataplane`:
+      pass, 46 tests passed.
+  - `cargo test --manifest-path rust/Cargo.toml -p dae-daemon --test daed_product resident_adapter_matrix`:
+      pass, 4 tests passed.
+  - `cargo test --manifest-path rust/Cargo.toml -p dae-daemon`:
+      pass, 205 lib tests, 10 product tests, 2 reload owner benchmark tests,
+      2 reload owner handoff tests, and 2 service contract tests passed.
+  - `cargo test --manifest-path rust/Cargo.toml -p dae-outbound juicity`:
+      pass, 23 Juicity-related tests passed.
+
+Release artifact:
+  - Built with:
+      `cargo build --manifest-path rust/Cargo.toml -p dae-daemon --bin daed --release --features native-ebpf`.
+  - Candidate:
+      local path `rust/target/release/daed`,
+      size `20M`,
+      sha256 `9061e50397c2798574a3c65deb9b6debcfff672b8a7baa7abe2304018eeff22c`.
+
+Remote 38 read-only assessment:
+  - Copied the release candidate temporarily to remote 38 as:
+      `/tmp/daed-rust-native-matrix`.
+  - Created a temporary 10-row full matrix fixture with only documentation
+    hosts and fake fixture credentials.
+  - First run was rejected because the temporary config mode was `0644`; this
+    confirmed the config permission gate. The config was changed to `0600` and
+    the read-only assessment was rerun.
+  - Ran only:
+      `resident-adapter-matrix -c /tmp/daex-matrix-10row.dae --json`.
+  - No service replacement, no host-network mutation, no live tproxy traffic,
+    and no persistent config write was performed.
+  - Result:
+      `schema=resident-live-adapter-config-assessment-v1`,
+      `status=admitted`,
+      `read_only=True`,
+      `host_mutation_executed=False`,
+      `network_io_executed=False`,
+      `planner_admitted=True`,
+      `selected_node_fail_closed=True`,
+      `full_matrix_row_count=10`,
+      `full_matrix_admitted_row_count=10`.
+  - Row summary:
+      `vless admitted candidates=1 admitted=1 blocked=0`,
+      `shadowsocks admitted candidates=1 admitted=1 blocked=0`,
+      `trojan admitted candidates=1 admitted=1 blocked=0`,
+      `vmess admitted candidates=1 admitted=1 blocked=0`,
+      `hysteria2 admitted candidates=1 admitted=1 blocked=0`,
+      `tuic admitted candidates=1 admitted=1 blocked=0`,
+      `juicity admitted candidates=1 admitted=1 blocked=0`,
+      `anytls admitted candidates=1 admitted=1 blocked=0`,
+      `http-proxy admitted candidates=1 admitted=1 blocked=0`,
+      `socks5 admitted candidates=1 admitted=1 blocked=0`.
+  - Temporary candidate binary, config, and report were removed from remote 38.
+
+Current matrix caveat:
+  - Planner admission is now open for all 10 rows in the resident full matrix
+    fixture.
+  - Complete matrix readiness still remains false by design:
+      `resident_live_adapter_wired_matrix_ready=False`,
+      `resident_live_adapter_remote_live_matrix_ready=False`,
+      `resident_live_adapter_matrix_ready=False`,
+      `full_matrix_complete=False`.
+  - The current completion blocker remains:
+      real live traffic evidence plus the remaining UDP live adapters and Go
+      outbound fallback retirement must be finished before the resident live
+      adapter matrix is complete.

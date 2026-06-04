@@ -93,7 +93,7 @@ impl ChunkNonce {
 }
 
 pub(super) struct ChunkSizeMask {
-    pub(super) reader: Option<Box<dyn XofReader>>,
+    pub(super) reader: Option<Box<dyn XofReader + Send>>,
     pub(super) global_padding: bool,
 }
 
