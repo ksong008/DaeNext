@@ -301,6 +301,21 @@ pub(super) struct VMessAeadChunkedRequestPacket {
     pub(super) request: VMessAeadTcpRequest,
 }
 
+pub struct VMessAeadTcpClientSessionStart {
+    pub first_write: Vec<u8>,
+    pub request: VMessAeadTcpRequest,
+    pub upload: VMessAeadTcpUploadCodec,
+}
+
+pub struct VMessAeadTcpUploadCodec {
+    pub(super) codec: BodyCodec,
+}
+
+pub struct VMessAeadTcpResponseReader {
+    pub response_header_len: usize,
+    pub(super) codec: BodyCodec,
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(super) struct VMessAeadMaterial {
     pub(super) request_body_iv: [u8; 16],

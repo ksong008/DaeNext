@@ -1,7 +1,10 @@
 use std::collections::BTreeMap;
 use std::io::{ErrorKind, Read, Write};
 use std::mem::size_of;
-use std::net::{IpAddr, Ipv4Addr, Shutdown, SocketAddr, SocketAddrV4, TcpListener, TcpStream};
+use std::net::{
+    IpAddr, Ipv4Addr, Shutdown, SocketAddr, SocketAddrV4, TcpListener, TcpStream, ToSocketAddrs,
+    UdpSocket,
+};
 use std::os::fd::AsRawFd;
 use std::path::PathBuf;
 use std::slice;
@@ -21,11 +24,27 @@ use dae_ebpf_support::{
     BpfIpBytes, BpfRoutingResult, BpfTuplesKey, lookup_map_elem_bytes, open_map_fd,
 };
 use dae_outbound::{
+    anytls::{AnyTlsFrame, contract as anytls_contract, link as anytls_link},
     http_proxy::{HttpConnectOptions, request as http_request},
+    hysteria2::{
+        authenticate_hysteria2_connection, build_hysteria2_pinned_client_config,
+        read_hysteria2_tcp_response, write_hysteria2_tcp_request,
+    },
+    juicity::{
+        authenticate_juicity_connection, build_juicity_runtime_client_config,
+        write_juicity_tcp_request,
+    },
     shadowsocks::{AeadStreamCodec, ShadowsocksMetadata, read_encrypted_chunk_from_stream},
     socks5::{Socks5Address, handshake},
     trojan::packet as trojan_packet,
+    tuic::{
+        authenticate_tuic_connection, build_tuic_runtime_client_config, write_tuic_connect_request,
+    },
     vless::packet,
+    vmess::{
+        VMessAeadTcpClientSessionStart, aead_tcp_client_session_start,
+        aead_tcp_response_reader_from_stream,
+    },
 };
 use dae_routing::{Query, RoutingMatcher};
 use dae_sniffing::{SniffingError, sniff_tcp};
@@ -504,8 +523,25 @@ async fn handle_tcp_connection_async_or_handoff(
             } else if matches!(
                 selection.proxy.handler,
                 ResidentProxyProtocolPlan::TrojanTcpTls { .. }
+                    | ResidentProxyProtocolPlan::AnyTlsTcpTls { .. }
             ) {
-                handle_trojan_tls_tcp_connection_async(
+                handle_frame_tls_tcp_connection_async(
+                    &mut inbound,
+                    peer,
+                    original_dst,
+                    selection,
+                    Arc::clone(&stop),
+                    &sniff,
+                    &metrics,
+                )
+                .await
+            } else if matches!(
+                selection.proxy.handler,
+                ResidentProxyProtocolPlan::Hysteria2QuicTcp { .. }
+                    | ResidentProxyProtocolPlan::TuicQuicTcp { .. }
+                    | ResidentProxyProtocolPlan::JuicityQuicTcp { .. }
+            ) {
+                handle_quic_tcp_connection_async(
                     &mut inbound,
                     peer,
                     original_dst,
@@ -914,6 +950,16 @@ fn handle_first_batch_proxy_tcp_connection(
             password,
             *salt_len,
         ),
+        ResidentProxyProtocolPlan::VmessAeadTcp { id } => handle_vmess_proxy_tcp_connection(
+            inbound,
+            peer,
+            original_dst,
+            &selection,
+            stop,
+            sniff,
+            metrics,
+            id,
+        ),
         ResidentProxyProtocolPlan::VlessVisionTcpTls { .. } => Err(
             "first-batch proxy dispatcher received VLESS handler; use VLESS TLS dispatcher"
                 .to_owned(),
@@ -922,6 +968,62 @@ fn handle_first_batch_proxy_tcp_connection(
             "first-batch proxy dispatcher received generic TLS handler; use TLS dispatcher"
                 .to_owned(),
         ),
+        ResidentProxyProtocolPlan::AnyTlsTcpTls { .. } => Err(
+            "first-batch proxy dispatcher received frame TLS handler; use TLS dispatcher"
+                .to_owned(),
+        ),
+        ResidentProxyProtocolPlan::Hysteria2QuicTcp { .. } => Err(
+            "first-batch proxy dispatcher received QUIC handler; use QUIC dispatcher".to_owned(),
+        ),
+        ResidentProxyProtocolPlan::TuicQuicTcp { .. } => Err(
+            "first-batch proxy dispatcher received QUIC handler; use QUIC dispatcher".to_owned(),
+        ),
+        ResidentProxyProtocolPlan::JuicityQuicTcp { .. } => Err(
+            "first-batch proxy dispatcher received QUIC handler; use QUIC dispatcher".to_owned(),
+        ),
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn handle_frame_tls_tcp_connection_async(
+    inbound: &mut TokioTcpStream,
+    peer: SocketAddr,
+    original_dst: SocketAddrV4,
+    selection: TcpProxySelection,
+    stop: Arc<AtomicBool>,
+    sniff: &TcpSniffReport,
+    metrics: &ResidentDataplaneMetrics,
+) -> Result<Value, String> {
+    match &selection.proxy.handler {
+        ResidentProxyProtocolPlan::TrojanTcpTls { password } => {
+            let password = password.clone();
+            handle_trojan_tls_tcp_connection_async(
+                inbound,
+                peer,
+                original_dst,
+                selection,
+                stop,
+                sniff,
+                metrics,
+                &password,
+            )
+            .await
+        }
+        ResidentProxyProtocolPlan::AnyTlsTcpTls { auth } => {
+            let auth = auth.clone();
+            handle_anytls_tls_tcp_connection_async(
+                inbound,
+                peer,
+                original_dst,
+                selection,
+                stop,
+                sniff,
+                metrics,
+                &auth,
+            )
+            .await
+        }
+        _ => Err("frame TLS dispatcher received unsupported handler".to_owned()),
     }
 }
 
@@ -934,10 +1036,8 @@ async fn handle_trojan_tls_tcp_connection_async(
     stop: Arc<AtomicBool>,
     sniff: &TcpSniffReport,
     metrics: &ResidentDataplaneMetrics,
+    password: &str,
 ) -> Result<Value, String> {
-    let ResidentProxyProtocolPlan::TrojanTcpTls { password } = &selection.proxy.handler else {
-        return Err("generic TLS dispatcher received non-Trojan handler".to_owned());
-    };
     let mut client = open_async_resident_tls_client(&selection.proxy).await?;
     let tls_underlay = async_resident_tls_underlay_name(&client);
     let request = trojan_packet::tcp_request_header(
@@ -984,6 +1084,749 @@ async fn handle_trojan_tls_tcp_connection_async(
             Ok(event)
         }
     }
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn handle_anytls_tls_tcp_connection_async(
+    inbound: &mut TokioTcpStream,
+    peer: SocketAddr,
+    original_dst: SocketAddrV4,
+    selection: TcpProxySelection,
+    stop: Arc<AtomicBool>,
+    sniff: &TcpSniffReport,
+    metrics: &ResidentDataplaneMetrics,
+    auth: &str,
+) -> Result<Value, String> {
+    let mut client = open_async_resident_tls_client(&selection.proxy).await?;
+    let tls_underlay = async_resident_tls_underlay_name(&client);
+    let sid = 1_u32;
+    client
+        .write_plain_all(
+            &anytls_link::handshake_auth_bytes(auth),
+            "write AnyTLS auth handshake",
+        )
+        .await?;
+    write_anytls_frame(
+        &mut client,
+        anytls_contract::CMD_SETTINGS,
+        sid,
+        &anytls_link::settings_bytes(),
+        "write AnyTLS settings",
+    )
+    .await?;
+    write_anytls_frame(
+        &mut client,
+        anytls_contract::CMD_SYN,
+        sid,
+        &[],
+        "write AnyTLS SYN",
+    )
+    .await?;
+    let target_addr = anytls_link::socks_addr(&selection.route.dial_target)
+        .map_err(|err| format!("build AnyTLS target address: {err}"))?;
+    write_anytls_frame(
+        &mut client,
+        anytls_contract::CMD_PSH,
+        sid,
+        &target_addr,
+        "write AnyTLS target",
+    )
+    .await?;
+    if !sniff.payload.is_empty() {
+        write_anytls_frame(
+            &mut client,
+            anytls_contract::CMD_PSH,
+            sid,
+            &sniff.payload,
+            "write AnyTLS initial payload",
+        )
+        .await?;
+        metrics.add_upload(sniff.payload.len());
+    }
+    wait_anytls_synack(&mut client, sid).await?;
+
+    match relay_tcp_over_anytls_async(inbound, &mut client, stop, sid, metrics).await {
+        Ok(mut stats) => {
+            stats.client_to_direct += sniff.payload.len();
+            let mut event = generic_proxy_tcp_finished_event(
+                peer,
+                original_dst,
+                &selection,
+                sniff,
+                "anytls",
+                &stats,
+                "async-proxy-frame-tls-v1",
+            );
+            event["tls_underlay"] = json!(tls_underlay);
+            Ok(event)
+        }
+        Err(err) => {
+            let mut event = generic_proxy_tcp_failed_event(
+                peer,
+                original_dst,
+                &selection,
+                sniff,
+                "anytls",
+                &err,
+                "async-proxy-frame-tls-v1",
+            );
+            event["tls_underlay"] = json!(tls_underlay);
+            Ok(event)
+        }
+    }
+}
+
+async fn write_anytls_frame(
+    client: &mut AsyncResidentTlsClient,
+    cmd: u8,
+    sid: u32,
+    data: &[u8],
+    label: &str,
+) -> Result<(), String> {
+    let frame = anytls_link::frame(cmd, sid, data);
+    client.write_plain_all(&frame, label).await
+}
+
+async fn wait_anytls_synack(client: &mut AsyncResidentTlsClient, sid: u32) -> Result<(), String> {
+    loop {
+        let frame = read_anytls_frame(client).await?;
+        match frame.cmd {
+            cmd if cmd == anytls_contract::CMD_SYNACK
+                && frame.sid == sid
+                && frame.data.is_empty() =>
+            {
+                return Ok(());
+            }
+            cmd if matches!(
+                cmd,
+                anytls_contract::CMD_WASTE
+                    | anytls_contract::CMD_SERVER_SETTINGS
+                    | anytls_contract::CMD_UPDATE_PADDING
+                    | anytls_contract::CMD_HEART_RESPONSE
+            ) => {}
+            cmd if cmd == anytls_contract::CMD_ALERT => {
+                return Err(format!(
+                    "AnyTLS alert before SYNACK: {} bytes",
+                    frame.data.len()
+                ));
+            }
+            cmd => {
+                return Err(format!(
+                    "unexpected AnyTLS frame before SYNACK: cmd={cmd} sid={} len={}",
+                    frame.sid,
+                    frame.data.len()
+                ));
+            }
+        }
+    }
+}
+
+async fn relay_tcp_over_anytls_async(
+    inbound: &mut TokioTcpStream,
+    client: &mut AsyncResidentTlsClient,
+    stop: Arc<AtomicBool>,
+    sid: u32,
+    metrics: &ResidentDataplaneMetrics,
+) -> Result<DirectTcpRelayStats, String> {
+    let mut stats = DirectTcpRelayStats::default();
+    let mut inbound_closed = false;
+    let mut proxy_closed = false;
+    let mut last_activity = Instant::now();
+    let mut inbound_buf = [0_u8; 16 * 1024];
+
+    while !stop.load(Ordering::Relaxed) {
+        tokio::select! {
+            read = inbound.read(&mut inbound_buf), if !inbound_closed && !proxy_closed => {
+                match read {
+                    Ok(0) => {
+                        inbound_closed = true;
+                        let _ = write_anytls_frame(
+                            client,
+                            anytls_contract::CMD_FIN,
+                            sid,
+                            &[],
+                            "write AnyTLS FIN",
+                        )
+                        .await;
+                        last_activity = Instant::now();
+                    }
+                    Ok(read) => {
+                        write_anytls_frame(
+                            client,
+                            anytls_contract::CMD_PSH,
+                            sid,
+                            &inbound_buf[..read],
+                            "write client payload to AnyTLS",
+                        )
+                        .await?;
+                        stats.client_to_direct += read;
+                        metrics.add_upload(read);
+                        last_activity = Instant::now();
+                    }
+                    Err(err) => return Err(format!("read inbound TCP for AnyTLS relay: {err}")),
+                }
+            }
+            frame = read_anytls_frame(client), if !proxy_closed => {
+                let frame = frame?;
+                match frame.cmd {
+                    cmd if cmd == anytls_contract::CMD_PSH && frame.sid == sid => {
+                        if !frame.data.is_empty() {
+                            inbound
+                                .write_all(&frame.data)
+                                .await
+                                .map_err(|err| format!("write AnyTLS payload to client: {err}"))?;
+                            stats.direct_to_client += frame.data.len();
+                            metrics.add_download(frame.data.len());
+                        }
+                        last_activity = Instant::now();
+                    }
+                    cmd if cmd == anytls_contract::CMD_FIN && frame.sid == sid => {
+                        proxy_closed = true;
+                        let _ = inbound.shutdown().await;
+                        last_activity = Instant::now();
+                    }
+                    cmd if matches!(
+                        cmd,
+                        anytls_contract::CMD_WASTE
+                            | anytls_contract::CMD_SERVER_SETTINGS
+                            | anytls_contract::CMD_UPDATE_PADDING
+                            | anytls_contract::CMD_HEART_RESPONSE
+                    ) => {
+                        last_activity = Instant::now();
+                    }
+                    cmd if cmd == anytls_contract::CMD_ALERT => {
+                        return Err(format!("AnyTLS alert frame: sid={} len={}", frame.sid, frame.data.len()));
+                    }
+                    cmd => {
+                        return Err(format!(
+                            "unexpected AnyTLS relay frame: cmd={cmd} sid={} len={}",
+                            frame.sid,
+                            frame.data.len()
+                        ));
+                    }
+                }
+            }
+            _ = time::sleep(Duration::from_millis(100)) => {
+                if inbound_closed && proxy_closed {
+                    break;
+                }
+                if last_activity.elapsed() > RESIDENT_TCP_IDLE_TIMEOUT {
+                    return Err("resident AnyTLS relay idle timeout".to_owned());
+                }
+            }
+        }
+
+        if proxy_closed || (inbound_closed && proxy_closed) {
+            break;
+        }
+    }
+    Ok(stats)
+}
+
+async fn read_anytls_frame(client: &mut AsyncResidentTlsClient) -> Result<AnyTlsFrame, String> {
+    let mut header = [0_u8; anytls_contract::HEADER_OVERHEAD_SIZE];
+    read_resident_tls_plain_exact(client, &mut header, "read AnyTLS frame header").await?;
+    let len = u16::from_be_bytes([header[5], header[6]]) as usize;
+    let mut data = vec![0_u8; len];
+    read_resident_tls_plain_exact(client, &mut data, "read AnyTLS frame data").await?;
+    Ok(AnyTlsFrame {
+        cmd: header[0],
+        sid: u32::from_be_bytes([header[1], header[2], header[3], header[4]]),
+        data,
+    })
+}
+
+async fn read_resident_tls_plain_exact(
+    client: &mut AsyncResidentTlsClient,
+    buf: &mut [u8],
+    label: &str,
+) -> Result<(), String> {
+    let mut offset = 0_usize;
+    while offset < buf.len() {
+        let read = time::timeout(
+            RESIDENT_TCP_IDLE_TIMEOUT,
+            client.read_plain(&mut buf[offset..]),
+        )
+        .await
+        .map_err(|_| format!("{label}: timeout"))?
+        .map_err(|err| format!("{label}: {err}"))?;
+        if read == 0 {
+            return Err(format!("{label}: early eof"));
+        }
+        offset += read;
+    }
+    Ok(())
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn handle_quic_tcp_connection_async(
+    inbound: &mut TokioTcpStream,
+    peer: SocketAddr,
+    original_dst: SocketAddrV4,
+    selection: TcpProxySelection,
+    stop: Arc<AtomicBool>,
+    sniff: &TcpSniffReport,
+    metrics: &ResidentDataplaneMetrics,
+) -> Result<Value, String> {
+    match &selection.proxy.handler {
+        ResidentProxyProtocolPlan::Hysteria2QuicTcp {
+            auth,
+            pin_sha256,
+            max_rx,
+        } => {
+            let auth = auth.clone();
+            let pin_sha256 = pin_sha256.clone();
+            let max_rx = *max_rx;
+            handle_hysteria2_quic_tcp_connection_async(
+                inbound,
+                peer,
+                original_dst,
+                selection,
+                stop,
+                sniff,
+                metrics,
+                &auth,
+                &pin_sha256,
+                max_rx,
+            )
+            .await
+        }
+        ResidentProxyProtocolPlan::TuicQuicTcp {
+            uuid,
+            password,
+            alpn,
+        } => {
+            let uuid = uuid.clone();
+            let password = password.clone();
+            let alpn = alpn.clone();
+            handle_tuic_quic_tcp_connection_async(
+                inbound,
+                peer,
+                original_dst,
+                selection,
+                stop,
+                sniff,
+                metrics,
+                &uuid,
+                &password,
+                &alpn,
+            )
+            .await
+        }
+        ResidentProxyProtocolPlan::JuicityQuicTcp {
+            uuid,
+            password,
+            allow_insecure,
+            pinned_certchain_sha256,
+        } => {
+            let uuid = uuid.clone();
+            let password = password.clone();
+            let allow_insecure = *allow_insecure;
+            let pinned_certchain_sha256 = pinned_certchain_sha256.clone();
+            handle_juicity_quic_tcp_connection_async(
+                inbound,
+                peer,
+                original_dst,
+                selection,
+                stop,
+                sniff,
+                metrics,
+                &uuid,
+                &password,
+                allow_insecure,
+                &pinned_certchain_sha256,
+            )
+            .await
+        }
+        _ => Err("QUIC dispatcher received unsupported handler".to_owned()),
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn handle_hysteria2_quic_tcp_connection_async(
+    inbound: &mut TokioTcpStream,
+    peer: SocketAddr,
+    original_dst: SocketAddrV4,
+    selection: TcpProxySelection,
+    stop: Arc<AtomicBool>,
+    sniff: &TcpSniffReport,
+    metrics: &ResidentDataplaneMetrics,
+    auth: &str,
+    pin_sha256: &str,
+    max_rx: u64,
+) -> Result<Value, String> {
+    let mut endpoint = open_marked_quic_endpoint(selection.proxy.mark)?;
+    endpoint.set_default_client_config(
+        build_hysteria2_pinned_client_config(pin_sha256.to_owned())
+            .map_err(|err| format!("build Hysteria2 QUIC client config: {err}"))?,
+    );
+    let remote = resolve_proxy_udp_addr(&selection.proxy)?;
+    let connection = endpoint
+        .connect(remote, &selection.proxy.server_name)
+        .map_err(|err| format!("connect Hysteria2 QUIC endpoint: {err}"))?
+        .await
+        .map_err(|err| format!("await Hysteria2 QUIC connect: {err}"))?;
+    let auth_report = authenticate_hysteria2_connection(connection.clone(), auth, max_rx)
+        .await
+        .map_err(|err| format!("authenticate Hysteria2 QUIC connection: {err}"))?;
+    if !auth_report.auth_ok {
+        connection.close(0x101_u32.into(), b"resident hysteria2 auth failed");
+        return Ok(generic_proxy_tcp_failed_event(
+            peer,
+            original_dst,
+            &selection,
+            sniff,
+            "hysteria2",
+            &format!("Hysteria2 auth status {}", auth_report.status),
+            "async-proxy-quic-tcp-v1",
+        ));
+    }
+    let (mut send, mut recv) = connection
+        .open_bi()
+        .await
+        .map_err(|err| format!("open Hysteria2 TCP stream: {err}"))?;
+    write_hysteria2_tcp_request(&mut send, &selection.route.dial_target)
+        .await
+        .map_err(|err| format!("write Hysteria2 TCP request: {err}"))?;
+    let response = read_hysteria2_tcp_response(&mut recv)
+        .await
+        .map_err(|err| format!("read Hysteria2 TCP response: {err}"))?;
+    if !response.ok {
+        connection.close(0x101_u32.into(), b"resident hysteria2 tcp response failed");
+        return Ok(generic_proxy_tcp_failed_event(
+            peer,
+            original_dst,
+            &selection,
+            sniff,
+            "hysteria2",
+            &format!("Hysteria2 TCP response rejected: {}", response.message),
+            "async-proxy-quic-tcp-v1",
+        ));
+    }
+    let mut initial_stats = DirectTcpRelayStats::default();
+    if !sniff.payload.is_empty() {
+        send.write_all(&sniff.payload)
+            .await
+            .map_err(|err| format!("write Hysteria2 initial payload: {err}"))?;
+        send.flush()
+            .await
+            .map_err(|err| format!("flush Hysteria2 initial payload: {err}"))?;
+        initial_stats.client_to_direct += sniff.payload.len();
+        metrics.add_upload(sniff.payload.len());
+    }
+
+    match relay_tcp_over_quic_stream_async(inbound, &mut send, &mut recv, stop, metrics).await {
+        Ok(mut stats) => {
+            stats.client_to_direct += initial_stats.client_to_direct;
+            connection.close(0_u32.into(), b"resident hysteria2 done");
+            endpoint.wait_idle().await;
+            let mut event = generic_proxy_tcp_finished_event(
+                peer,
+                original_dst,
+                &selection,
+                sniff,
+                "hysteria2",
+                &stats,
+                "async-proxy-quic-tcp-v1",
+            );
+            event["quic_underlay"] = json!("quinn-h3");
+            event["hysteria2_udp_enabled"] = json!(auth_report.udp_enabled);
+            Ok(event)
+        }
+        Err(err) => {
+            connection.close(0x101_u32.into(), b"resident hysteria2 relay failed");
+            endpoint.wait_idle().await;
+            let mut event = generic_proxy_tcp_failed_event(
+                peer,
+                original_dst,
+                &selection,
+                sniff,
+                "hysteria2",
+                &err,
+                "async-proxy-quic-tcp-v1",
+            );
+            event["quic_underlay"] = json!("quinn-h3");
+            event["hysteria2_udp_enabled"] = json!(auth_report.udp_enabled);
+            Ok(event)
+        }
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn handle_tuic_quic_tcp_connection_async(
+    inbound: &mut TokioTcpStream,
+    peer: SocketAddr,
+    original_dst: SocketAddrV4,
+    selection: TcpProxySelection,
+    stop: Arc<AtomicBool>,
+    sniff: &TcpSniffReport,
+    metrics: &ResidentDataplaneMetrics,
+    uuid: &str,
+    password: &str,
+    alpn: &[String],
+) -> Result<Value, String> {
+    let mut endpoint = open_marked_quic_endpoint(selection.proxy.mark)?;
+    endpoint.set_default_client_config(
+        build_tuic_runtime_client_config(alpn)
+            .map_err(|err| format!("build TUIC QUIC client config: {err}"))?,
+    );
+    let remote = resolve_proxy_udp_addr(&selection.proxy)?;
+    let connection = endpoint
+        .connect(remote, &selection.proxy.server_name)
+        .map_err(|err| format!("connect TUIC QUIC endpoint: {err}"))?
+        .await
+        .map_err(|err| format!("await TUIC QUIC connect: {err}"))?;
+    let auth_report = authenticate_tuic_connection(&connection, uuid, password)
+        .await
+        .map_err(|err| format!("authenticate TUIC QUIC connection: {err}"))?;
+    let (mut send, mut recv) = connection
+        .open_bi()
+        .await
+        .map_err(|err| format!("open TUIC TCP stream: {err}"))?;
+    write_tuic_connect_request(&mut send, &selection.route.dial_target)
+        .await
+        .map_err(|err| format!("write TUIC TCP connect: {err}"))?;
+    let mut initial_stats = DirectTcpRelayStats::default();
+    if !sniff.payload.is_empty() {
+        send.write_all(&sniff.payload)
+            .await
+            .map_err(|err| format!("write TUIC initial payload: {err}"))?;
+        send.flush()
+            .await
+            .map_err(|err| format!("flush TUIC initial payload: {err}"))?;
+        initial_stats.client_to_direct += sniff.payload.len();
+        metrics.add_upload(sniff.payload.len());
+    }
+
+    match relay_tcp_over_quic_stream_async(inbound, &mut send, &mut recv, stop, metrics).await {
+        Ok(mut stats) => {
+            stats.client_to_direct += initial_stats.client_to_direct;
+            connection.close(0_u32.into(), b"resident tuic done");
+            endpoint.wait_idle().await;
+            let mut event = generic_proxy_tcp_finished_event(
+                peer,
+                original_dst,
+                &selection,
+                sniff,
+                "tuic",
+                &stats,
+                "async-proxy-quic-tcp-v1",
+            );
+            event["quic_underlay"] = json!("quinn");
+            event["tuic_auth_token_nonzero"] = json!(auth_report.auth_token_nonzero);
+            Ok(event)
+        }
+        Err(err) => {
+            connection.close(0x101_u32.into(), b"resident tuic relay failed");
+            endpoint.wait_idle().await;
+            let mut event = generic_proxy_tcp_failed_event(
+                peer,
+                original_dst,
+                &selection,
+                sniff,
+                "tuic",
+                &err,
+                "async-proxy-quic-tcp-v1",
+            );
+            event["quic_underlay"] = json!("quinn");
+            event["tuic_auth_token_nonzero"] = json!(auth_report.auth_token_nonzero);
+            Ok(event)
+        }
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn handle_juicity_quic_tcp_connection_async(
+    inbound: &mut TokioTcpStream,
+    peer: SocketAddr,
+    original_dst: SocketAddrV4,
+    selection: TcpProxySelection,
+    stop: Arc<AtomicBool>,
+    sniff: &TcpSniffReport,
+    metrics: &ResidentDataplaneMetrics,
+    uuid: &str,
+    password: &str,
+    allow_insecure: bool,
+    pinned_certchain_sha256: &str,
+) -> Result<Value, String> {
+    let mut endpoint = open_marked_quic_endpoint(selection.proxy.mark)?;
+    endpoint.set_default_client_config(
+        build_juicity_runtime_client_config(allow_insecure, pinned_certchain_sha256)
+            .map_err(|err| format!("build Juicity QUIC client config: {err}"))?,
+    );
+    let remote = resolve_proxy_udp_addr(&selection.proxy)?;
+    let connection = endpoint
+        .connect(remote, &selection.proxy.server_name)
+        .map_err(|err| format!("connect Juicity QUIC endpoint: {err}"))?
+        .await
+        .map_err(|err| format!("await Juicity QUIC connect: {err}"))?;
+    let (auth_report, mut auth_stream) =
+        authenticate_juicity_connection(&connection, uuid, password)
+            .await
+            .map_err(|err| format!("authenticate Juicity QUIC connection: {err}"))?;
+    let (mut send, mut recv) = connection
+        .open_bi()
+        .await
+        .map_err(|err| format!("open Juicity TCP stream: {err}"))?;
+    write_juicity_tcp_request(&mut send, &selection.route.dial_target, &sniff.payload)
+        .await
+        .map_err(|err| format!("write Juicity TCP request: {err}"))?;
+    let mut initial_stats = DirectTcpRelayStats::default();
+    if !sniff.payload.is_empty() {
+        initial_stats.client_to_direct += sniff.payload.len();
+        metrics.add_upload(sniff.payload.len());
+    }
+
+    match relay_tcp_over_quic_stream_async(inbound, &mut send, &mut recv, stop, metrics).await {
+        Ok(mut stats) => {
+            stats.client_to_direct += initial_stats.client_to_direct;
+            let _ = auth_stream.finish().await;
+            connection.close(0_u32.into(), b"resident juicity done");
+            endpoint.wait_idle().await;
+            let mut event = generic_proxy_tcp_finished_event(
+                peer,
+                original_dst,
+                &selection,
+                sniff,
+                "juicity",
+                &stats,
+                "async-proxy-quic-tcp-v1",
+            );
+            event["quic_underlay"] = json!("quinn-h3");
+            event["juicity_auth_token_nonzero"] = json!(auth_report.auth_token_nonzero);
+            event["juicity_certchain_pinned"] = json!(!pinned_certchain_sha256.is_empty());
+            event["juicity_allow_insecure"] = json!(allow_insecure);
+            Ok(event)
+        }
+        Err(err) => {
+            let _ = auth_stream.finish().await;
+            connection.close(0x101_u32.into(), b"resident juicity relay failed");
+            endpoint.wait_idle().await;
+            let mut event = generic_proxy_tcp_failed_event(
+                peer,
+                original_dst,
+                &selection,
+                sniff,
+                "juicity",
+                &err,
+                "async-proxy-quic-tcp-v1",
+            );
+            event["quic_underlay"] = json!("quinn-h3");
+            event["juicity_auth_token_nonzero"] = json!(auth_report.auth_token_nonzero);
+            event["juicity_certchain_pinned"] = json!(!pinned_certchain_sha256.is_empty());
+            event["juicity_allow_insecure"] = json!(allow_insecure);
+            Ok(event)
+        }
+    }
+}
+
+async fn relay_tcp_over_quic_stream_async(
+    inbound: &mut TokioTcpStream,
+    send: &mut quinn::SendStream,
+    recv: &mut quinn::RecvStream,
+    stop: Arc<AtomicBool>,
+    metrics: &ResidentDataplaneMetrics,
+) -> Result<DirectTcpRelayStats, String> {
+    let mut stats = DirectTcpRelayStats::default();
+    let mut inbound_closed = false;
+    let mut proxy_closed = false;
+    let mut last_activity = Instant::now();
+    let mut inbound_buf = [0_u8; 16 * 1024];
+    let mut proxy_buf = [0_u8; 16 * 1024];
+
+    while !stop.load(Ordering::Relaxed) {
+        tokio::select! {
+            read = inbound.read(&mut inbound_buf), if !inbound_closed && !proxy_closed => {
+                match read {
+                    Ok(0) => {
+                        inbound_closed = true;
+                        let _ = send.finish();
+                        last_activity = Instant::now();
+                    }
+                    Ok(read) => {
+                        send.write_all(&inbound_buf[..read])
+                            .await
+                            .map_err(|err| format!("write client payload to QUIC stream: {err}"))?;
+                        send.flush()
+                            .await
+                            .map_err(|err| format!("flush QUIC stream: {err}"))?;
+                        stats.client_to_direct += read;
+                        metrics.add_upload(read);
+                        last_activity = Instant::now();
+                    }
+                    Err(err) => return Err(format!("read inbound TCP for QUIC stream relay: {err}")),
+                }
+            }
+            read = recv.read(&mut proxy_buf), if !proxy_closed => {
+                match read {
+                    Ok(None) => {
+                        proxy_closed = true;
+                        let _ = inbound.shutdown().await;
+                        last_activity = Instant::now();
+                    }
+                    Ok(Some(read)) => {
+                        inbound
+                            .write_all(&proxy_buf[..read])
+                            .await
+                            .map_err(|err| format!("write QUIC stream payload to client: {err}"))?;
+                        stats.direct_to_client += read;
+                        metrics.add_download(read);
+                        last_activity = Instant::now();
+                    }
+                    Err(err) => return Err(format!("read QUIC stream payload: {err}")),
+                }
+            }
+            _ = time::sleep(Duration::from_millis(100)) => {
+                if last_activity.elapsed() > RESIDENT_TCP_IDLE_TIMEOUT {
+                    return Err("resident QUIC stream relay idle timeout".to_owned());
+                }
+            }
+        }
+
+        if proxy_closed || (inbound_closed && proxy_closed) {
+            break;
+        }
+    }
+    Ok(stats)
+}
+
+fn open_marked_quic_endpoint(mark: u32) -> Result<quinn::Endpoint, String> {
+    let socket = UdpSocket::bind(SocketAddr::new(IpAddr::V4(Ipv4Addr::UNSPECIFIED), 0))
+        .map_err(|err| format!("bind QUIC UDP socket: {err}"))?;
+    if mark != 0 {
+        set_socket_mark(socket.as_raw_fd(), mark)
+            .map_err(|err| format!("set QUIC UDP SO_MARK {mark}: {err}"))?;
+    }
+    let runtime =
+        quinn::default_runtime().ok_or_else(|| "no quinn runtime available".to_owned())?;
+    quinn::Endpoint::new(quinn::EndpointConfig::default(), None, socket, runtime)
+        .map_err(|err| format!("create QUIC endpoint: {err}"))
+}
+
+fn resolve_proxy_udp_addr(proxy: &ResidentProxyPlan) -> Result<SocketAddr, String> {
+    let target = format!("{}:{}", proxy.server_host, proxy.server_port);
+    target
+        .to_socket_addrs()
+        .map_err(|err| format!("resolve QUIC endpoint {target}: {err}"))?
+        .next()
+        .ok_or_else(|| format!("resolve QUIC endpoint {target}: no address"))
+}
+
+fn set_socket_mark(fd: i32, mark: u32) -> std::io::Result<()> {
+    let mark = mark as libc::c_int;
+    let status = unsafe {
+        libc::setsockopt(
+            fd,
+            libc::SOL_SOCKET,
+            libc::SO_MARK,
+            (&mark as *const libc::c_int).cast::<libc::c_void>(),
+            std::mem::size_of::<libc::c_int>() as libc::socklen_t,
+        )
+    };
+    if status < 0 {
+        return Err(std::io::Error::last_os_error());
+    }
+    Ok(())
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -1137,6 +1980,70 @@ fn handle_shadowsocks_proxy_tcp_connection(
                 "shadowsocks",
                 &err,
                 "first-batch-tcp-v1",
+            ))
+        })
+}
+
+#[allow(clippy::too_many_arguments)]
+fn handle_vmess_proxy_tcp_connection(
+    inbound: &mut TcpStream,
+    peer: SocketAddr,
+    original_dst: SocketAddrV4,
+    selection: &TcpProxySelection,
+    stop: &AtomicBool,
+    sniff: &TcpSniffReport,
+    metrics: &ResidentDataplaneMetrics,
+    id: &str,
+) -> Result<Value, String> {
+    let mut proxy = open_plain_proxy_tcp_stream(&selection.proxy)?;
+    proxy
+        .set_nonblocking(false)
+        .map_err(|err| format!("set VMess proxy blocking: {err}"))?;
+    proxy
+        .set_read_timeout(Some(RESIDENT_TCP_IDLE_TIMEOUT))
+        .map_err(|err| format!("set VMess proxy read timeout: {err}"))?;
+    proxy
+        .set_write_timeout(Some(RESIDENT_TCP_IDLE_TIMEOUT))
+        .map_err(|err| format!("set VMess proxy write timeout: {err}"))?;
+    inbound
+        .set_read_timeout(Some(RESIDENT_TCP_IDLE_TIMEOUT))
+        .map_err(|err| format!("set VMess inbound read timeout: {err}"))?;
+    inbound
+        .set_write_timeout(Some(RESIDENT_TCP_IDLE_TIMEOUT))
+        .map_err(|err| format!("set VMess inbound write timeout: {err}"))?;
+
+    let session = aead_tcp_client_session_start(id, &selection.route.dial_target, &sniff.payload)
+        .map_err(|err| format!("build VMess AEAD TCP session: {err}"))?;
+    proxy
+        .write_all(&session.first_write)
+        .map_err(|err| format!("write VMess AEAD TCP initial request: {err}"))?;
+    let mut initial_stats = DirectTcpRelayStats::default();
+    if !sniff.payload.is_empty() {
+        initial_stats.client_to_direct += sniff.payload.len();
+        metrics.add_upload(sniff.payload.len());
+    }
+
+    relay_tcp_over_vmess_aead(inbound, &mut proxy, stop, session, initial_stats, metrics)
+        .map(|stats| {
+            generic_proxy_tcp_finished_event(
+                peer,
+                original_dst,
+                selection,
+                sniff,
+                "vmess",
+                &stats,
+                "first-batch-aead-tcp-v1",
+            )
+        })
+        .or_else(|err| {
+            Ok::<Value, String>(generic_proxy_tcp_failed_event(
+                peer,
+                original_dst,
+                selection,
+                sniff,
+                "vmess",
+                &err,
+                "first-batch-aead-tcp-v1",
             ))
         })
 }
@@ -1474,6 +2381,117 @@ fn relay_tcp_over_shadowsocks_aead(
     let upload_bytes = upload
         .join()
         .map_err(|_| "join Shadowsocks upload relay thread failed".to_owned())??;
+    if let Some(err) = download_error {
+        return Err(err);
+    }
+    if upload_bytes > 0 {
+        stats.client_to_direct += upload_bytes;
+        metrics.add_upload(upload_bytes);
+    }
+    Ok(stats)
+}
+
+fn relay_tcp_over_vmess_aead(
+    inbound: &mut TcpStream,
+    proxy: &mut TcpStream,
+    stop: &AtomicBool,
+    session: VMessAeadTcpClientSessionStart,
+    mut stats: DirectTcpRelayStats,
+    metrics: &ResidentDataplaneMetrics,
+) -> Result<DirectTcpRelayStats, String> {
+    let mut upload_proxy = proxy
+        .try_clone()
+        .map_err(|err| format!("clone VMess proxy stream for upload: {err}"))?;
+    let mut upload_inbound = inbound
+        .try_clone()
+        .map_err(|err| format!("clone inbound stream for VMess upload: {err}"))?;
+    upload_inbound
+        .set_read_timeout(Some(RESIDENT_CONNECT_TIMEOUT))
+        .map_err(|err| format!("set VMess upload read timeout: {err}"))?;
+    let relay_done = Arc::new(AtomicBool::new(false));
+    let upload_done = Arc::clone(&relay_done);
+    let mut upload_codec = session.upload;
+    let upload = thread::spawn(move || {
+        let mut stats = 0_usize;
+        let mut buf = [0_u8; 16 * 1024];
+        loop {
+            if upload_done.load(Ordering::Relaxed) {
+                break;
+            }
+            let read = match upload_inbound.read(&mut buf) {
+                Ok(0) => break,
+                Ok(read) => read,
+                Err(err)
+                    if matches!(
+                        err.kind(),
+                        ErrorKind::TimedOut | ErrorKind::WouldBlock | ErrorKind::Interrupted
+                    ) =>
+                {
+                    continue;
+                }
+                Err(err) => return Err(format!("read inbound TCP for VMess upload: {err}")),
+            };
+            let encrypted = upload_codec
+                .seal_chunk(&buf[..read])
+                .map_err(|err| format!("encode VMess upload chunk: {err}"))?;
+            upload_proxy
+                .write_all(&encrypted)
+                .map_err(|err| format!("write VMess upload chunk: {err}"))?;
+            stats += read;
+        }
+        let _ = upload_proxy.shutdown(Shutdown::Write);
+        Ok::<usize, String>(stats)
+    });
+
+    let mut response = match aead_tcp_response_reader_from_stream(proxy, &session.request) {
+        Ok(response) => response,
+        Err(err) => {
+            relay_done.store(true, Ordering::Relaxed);
+            let _ = inbound.shutdown(Shutdown::Read);
+            let _ = proxy.shutdown(Shutdown::Write);
+            let _ = upload.join();
+            return Err(format!("read VMess AEAD response header: {err}"));
+        }
+    };
+    let _response_header_len = response.response_header_len;
+
+    let mut download_error = None;
+    loop {
+        if stop.load(Ordering::Relaxed) {
+            break;
+        }
+        match response.read_chunk_from_stream(proxy) {
+            Ok(plain) => {
+                if plain.is_empty() {
+                    continue;
+                }
+                inbound
+                    .write_all(&plain)
+                    .map_err(|err| format!("write VMess response to inbound: {err}"))?;
+                stats.direct_to_client += plain.len();
+                metrics.add_download(plain.len());
+            }
+            Err(err) => {
+                let message = err.to_string();
+                if message.contains("early eof")
+                    || message.contains("failed to fill whole buffer")
+                    || message.contains("Connection reset")
+                    || message.contains("connection reset")
+                    || message.contains("timed out")
+                {
+                    break;
+                }
+                download_error = Some(format!("read VMess response chunk: {message}"));
+                break;
+            }
+        }
+    }
+    relay_done.store(true, Ordering::Relaxed);
+    let _ = inbound.shutdown(Shutdown::Read);
+    let _ = proxy.shutdown(Shutdown::Write);
+    let upload_bytes = upload
+        .join()
+        .map_err(|_| "join VMess upload relay thread failed".to_owned())??;
     if let Some(err) = download_error {
         return Err(err);
     }

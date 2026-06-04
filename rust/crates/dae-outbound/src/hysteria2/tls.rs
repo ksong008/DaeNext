@@ -147,6 +147,15 @@ pub(super) fn build_hysteria2_client_config(
     Ok(config)
 }
 
+pub fn build_hysteria2_pinned_client_config(
+    configured_pin_sha256: String,
+) -> Result<quinn::ClientConfig, OutboundError> {
+    build_hysteria2_client_config(
+        configured_pin_sha256,
+        Arc::new(Mutex::new(RawCertVerifierState::default())),
+    )
+}
+
 pub(super) fn selected_alpn(connection: &quinn::Connection) -> String {
     connection
         .handshake_data()

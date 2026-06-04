@@ -10,6 +10,7 @@ pub mod h3_loopback;
 pub mod link;
 pub mod outbound_dataplane;
 pub mod packet;
+pub mod runtime;
 pub mod stream_packet_congestion;
 pub mod stream_packet_conn;
 pub mod transport_packet_conn;
@@ -62,6 +63,10 @@ pub use packet::{
     JuicityPacketStateSmokeReport, JuicityStreamPacketFrame, JuicityUdpPacketConnDecision,
     JuicityUdpPacketConnKind, build_dialauth_record_for_port_zero, decode_stream_packet_frame,
     packet_state_smoke, seal_stream_packet_frame, select_udp_packet_conn,
+};
+pub use runtime::{
+    JuicityAuthReport, JuicityAuthStream, authenticate_juicity_connection,
+    build_juicity_runtime_client_config, build_juicity_tcp_request, write_juicity_tcp_request,
 };
 pub use stream_packet_congestion::{
     DEFAULT_STREAM_PACKET_CONGESTION_CONTROL, DEFAULT_STREAM_PACKET_CONGESTION_ITERATIONS,
