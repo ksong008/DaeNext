@@ -53,7 +53,7 @@ pub use netns_link::{NetnsLinkMode, parse_netns_link_mode};
 use reload_runtime::{ReloadRuntimeEvidence, run_reload_runtime_parity_probe};
 use report::{live_handoff_json, report_value, socket_options_verified};
 pub use resident::{ResidentProductionRuntime, start_resident_production_runtime};
-pub(crate) use resident_dataplane::ResidentEventLogSink;
+pub(crate) use resident_dataplane::{ResidentEventLogSink, resident_live_adapter_matrix_contract};
 use topology::{
     attach_host_program, attach_peer_program, cleanup_production_topology, preflight_checks,
     read_topology_values, setup_production_topology, show_host_program, show_peer_program,

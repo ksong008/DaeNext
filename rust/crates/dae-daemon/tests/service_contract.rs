@@ -336,6 +336,71 @@ fn candidate_reports_resident_service_and_dataplane_capabilities() {
             .unwrap()
     );
     assert!(
+        report["resident_live_adapter_matrix_contract_ready"]
+            .as_bool()
+            .unwrap()
+    );
+    assert!(
+        !report["resident_live_adapter_matrix_ready"]
+            .as_bool()
+            .unwrap()
+    );
+    assert!(
+        !report["resident_live_adapter_matrix_runtime_state_ready"]
+            .as_bool()
+            .unwrap()
+    );
+    assert!(
+        report["resident_live_adapter_entries_ready"]
+            .as_bool()
+            .unwrap()
+    );
+    assert!(
+        !report["resident_live_adapter_wired_matrix_ready"]
+            .as_bool()
+            .unwrap()
+    );
+    assert!(
+        !report["resident_live_adapter_remote_live_matrix_ready"]
+            .as_bool()
+            .unwrap()
+    );
+    assert_eq!(
+        report["resident_live_adapter_wired_handler_count"]
+            .as_u64()
+            .unwrap(),
+        1
+    );
+    assert_eq!(
+        report["resident_live_adapter_live_ready_handler_count"]
+            .as_u64()
+            .unwrap(),
+        0
+    );
+    assert_eq!(
+        report["resident_live_adapter_matrix_report_schema"]
+            .as_str()
+            .unwrap(),
+        "resident-live-adapter-matrix-v1"
+    );
+    assert!(
+        report["resident_live_adapter_matrix_entries"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(
+                |entry| entry["handler"].as_str().unwrap() == "vless-vision-tcp-tls"
+                    && entry["wired_ready"].as_bool().unwrap()
+                    && !entry["live_ready"].as_bool().unwrap()
+            )
+    );
+    assert_eq!(
+        report["resident_live_adapter_matrix_typed_report"]["status"]
+            .as_str()
+            .unwrap(),
+        "blocked"
+    );
+    assert!(
         report["release_default_switch_contract_ready"]
             .as_bool()
             .unwrap()

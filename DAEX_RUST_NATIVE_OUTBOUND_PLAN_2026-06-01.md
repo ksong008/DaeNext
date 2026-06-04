@@ -12152,3 +12152,232 @@ Operational rule:
     running.
   - Only WebUI/API stop, explicit state change, or failed applied-runtime
     rollback may persist `systems.running=0`.
+
+## 2026-06-04 allocator profile release-retirement note
+
+Current allocator decision:
+  - The current Rust native daemon production candidate uses jemalloc by default.
+  - `allocator-jemalloc` is enabled through `dae-daemon` default features.
+  - `allocator-system` and `allocator-mimalloc` remain closed in the current live
+    build and are only short-term comparison/diagnostic profiles.
+
+Release retirement policy:
+  - `allocator-mimalloc` is a formal deletion candidate for the final production
+    build once the jemalloc live path is stable. It did not beat jemalloc in the
+    `10.10.10.2` A/B run and only adds feature-graph and dependency surface.
+  - `allocator-system` should not be exposed as a formal production profile in
+    the final package. It may remain temporarily as a no-default-features local
+    diagnostic escape hatch while RSS/reload/live rollback evidence is still
+    being collected.
+  - Do not delete either profile during the immediate post-A/B testing window.
+    Keep them available until the jemalloc build has passed sustained live
+    traffic, restart/reload, TG/Oracle-Sg/Hytron, WebUI, rollback, and C10
+    package admission checks.
+
+Final production target:
+  - Publish only the jemalloc allocator build.
+  - Remove `allocator-mimalloc`, `mimalloc`, and `libmimalloc-sys`.
+  - Remove `allocator-system` as a documented/release profile.
+  - Decide at C10 package freeze whether no-default-features system allocator
+    builds remain a local debug-only path or fail-closed.
+
+## 2026-06-04 protocol matrix versus live resident adapter truth
+
+Important distinction:
+  - `dae-outbound` currently exposes a formal outbound production matrix
+    contract with ten handler rows and service-contract reports it as ready.
+  - That matrix is not the same thing as the current live resident dataplane
+    adapter used by `/usr/bin/daed run -c /etc/daed/` on `10.10.10.2`.
+
+Current formal matrix truth:
+  - `outbound_production_matrix_contract_ready=true`.
+  - `outbound_production_matrix_runtime_state_ready=true`.
+  - `outbound_production_matrix_typed_report.status=pass`.
+  - Matrix rows cover:
+      shadowsocks,
+      trojan,
+      vmess,
+      vless,
+      hysteria2,
+      tuic,
+      juicity,
+      anytls,
+      http-proxy,
+      socks5.
+  - This is formal/admission evidence inside `dae-outbound`; it must not be
+    mistaken for complete live default resident adapter coverage.
+
+Current live resident adapter truth:
+  - `10.10.10.2` has resident dataplane enabled and running:
+      `DAE_RUST_RESIDENT_DATAPLANE=1`,
+      resident start report status `pass`.
+  - The active default proxy is currently one VLESS Vision TCP/TLS/Boring/link-fp
+    path:
+      protocol `vless`,
+      flow `xtls-rprx-vision`,
+      transport `tcp`,
+      security `tls`,
+      fingerprint source `link fp`.
+  - The live adapter planner in
+    `rust/crates/dae-daemon/src/production_runtime_owner/resident_dataplane/plan.rs`
+    still fail-closes non-`vless` selected nodes:
+      `resident dataplane selected unsupported {scheme} node ...; no Rust protocol
+      handler is admitted for this node yet`.
+  - The same planner also restricts the admitted VLESS shape to Vision flow,
+    TCP transport, TLS security, and non-`allow_insecure`.
+
+Current biggest functional gap:
+  - The issue is not that the protocol matrix artifact is absent; it exists and
+    reports pass.
+  - The real C10 runtime gap is that the matrix is not wired into the live
+    resident default adapter as a generic handler dispatch path.
+  - Therefore current live Rust native owned runtime is proven for the active
+    VLESS Vision/fingerprint path, not for full selected-node protocol coverage
+    under real tproxy traffic.
+
+Required next C10 work:
+  - Replace the resident adapter's one-shape planner with a generic outbound
+    handler dispatch that consumes the same selected group/routing/connectivity
+    plan.
+  - Keep unsupported shapes fail-closed until their live adapter bridge is wired
+    and tested.
+  - Add a live default-adapter protocol matrix on remote `38.65.91.47`, separate
+    from the formal `dae-outbound` matrix contract:
+      selected node,
+      TCP dataplane,
+      UDP dataplane where applicable,
+      transport underlay,
+      link/global fingerprint behavior where applicable,
+      reload/restart,
+      task logs,
+      traffic counters,
+      RSS behavior.
+  - Do not run the protocol/live adapter matrix on `10.10.10.2`. Keep
+    `10.10.10.2` for the current household/default-path smoke checks, WebUI
+    checks, TG/Oracle-Sg/Hytron functional confirmation, and rollback sanity.
+  - Remote `38.65.91.47` is the live matrix host for protocol coverage and
+    should be prepared as an isolated test target. Do not persist host
+    credentials in this memo, commits, scripts, or logs.
+  - Do not rename this into a protocol-specific stage or top-level gate; keep it
+    under the existing C0-C10 plan as the live resident adapter matrix closure.
+
+## 2026-06-04 live resident adapter matrix contract implementation
+
+Change summary:
+  - Added an explicit live resident default-adapter matrix under
+    `dae-daemon::production_runtime_owner::resident_dataplane`.
+  - Exposed the matrix through `service-contract` separately from the
+    `dae-outbound` formal production matrix.
+  - Wired C8 outbound production matrix recertification to require the live
+    resident adapter matrix before it can pass default-switch admission.
+  - Wired C9 release-default-switch and C10 go-free product-chain gates to keep
+    consuming the live adapter readiness from C8/C9, so a formal outbound matrix
+    pass can no longer advance the package/release gates by itself.
+
+Important current truth after the implementation:
+  - `outbound_production_matrix_contract_ready=true` still means the formal
+    protocol/parser/dataplane/underlay matrix exists.
+  - `resident_live_adapter_matrix_ready=false` is the current runtime/product
+    truth because the live resident adapter is not fully wired for every
+    selected-node protocol row.
+  - `resident_live_adapter_wired_handler_count=1`.
+  - `resident_live_adapter_live_ready_handler_count=0`.
+  - The one currently wired row is `vless-vision-tcp-tls`; it records:
+      planner admitted,
+      TCP live adapter wired,
+      UDP live adapter wired,
+      transport underlay wired,
+      route/group connectivity wired,
+      selected-node fail-closed behavior present,
+      fingerprint underlay behavior present.
+  - That row is still not `live_ready` because remote `38.65.91.47` live matrix
+    evidence has not been recorded.
+  - The other formal outbound rows are present in the live adapter matrix as
+    fail-closed/not-wired rows, not as falsely supported live handlers.
+
+New service-contract fields:
+  - `resident_live_adapter_matrix_contract_ready`
+  - `resident_live_adapter_matrix_ready`
+  - `resident_live_adapter_matrix_runtime_state_ready`
+  - `resident_live_adapter_entries_ready`
+  - `resident_live_adapter_planner_admission_ready`
+  - `resident_live_adapter_tcp_ready`
+  - `resident_live_adapter_udp_ready`
+  - `resident_live_adapter_transport_underlay_ready`
+  - `resident_live_adapter_route_group_connectivity_ready`
+  - `resident_live_adapter_selected_node_fail_closed_ready`
+  - `resident_live_adapter_fingerprint_underlay_ready`
+  - `resident_live_adapter_go_outbound_fallback_retirement_ready`
+  - `resident_live_adapter_wired_matrix_ready`
+  - `resident_live_adapter_remote_live_matrix_ready`
+  - `resident_live_adapter_wired_handler_count`
+  - `resident_live_adapter_live_ready_handler_count`
+  - `resident_live_adapter_matrix_entries`
+  - `resident_live_adapter_matrix_typed_report`
+  - `resident_live_adapter_matrix_surface`
+
+C8/C9/C10 admission rule:
+  - C8 now requires:
+      formal outbound matrix ready,
+      fingerprint underlay ready,
+      resident live adapter matrix contract ready,
+      resident live adapter matrix ready,
+      resident live adapter runtime state ready,
+      resident live adapter wired matrix ready,
+      resident live adapter remote live matrix ready,
+      resident live adapter typed report ready.
+  - C9 now explicitly blocks if C8 did not carry
+    `resident_live_adapter_matrix_ready=true`.
+  - C10 now explicitly blocks if C9 did not carry
+    `resident_live_adapter_matrix_ready=true`.
+  - This prevents a go-free/default-package claim from being derived only from
+    the formal `dae-outbound` matrix.
+
+uTLS parity claim boundary:
+  - The service-contract still reports
+    `outbound_fingerprint_underlay_typed_report.full_utls_parity_declared=false`.
+  - A new typed-report field records
+    `wire_oracle_required_before_full_utls_parity=true`.
+  - The current Boring-backed fingerprint underlay is enough for native
+    fingerprint admission testing, but it is not a full uTLS parity claim.
+
+Validation completed locally:
+  - `cargo fmt --manifest-path rust/Cargo.toml --all`
+  - `cargo test --manifest-path rust/Cargo.toml -p dae-daemon --test service_contract`
+  - `cargo test --manifest-path rust/Cargo.toml -p dae-daemon --test daed_product --test service_contract`
+  - `cargo test --manifest-path rust/Cargo.toml -p dae-daemon product_chain_recertification::tests`
+  - `cargo test --manifest-path rust/Cargo.toml -p dae-daemon production_runtime_owner::resident_dataplane::plan`
+
+Remote/live boundary:
+  - Live protocol/default-adapter matrix testing remains assigned to remote
+    `38.65.91.47`.
+  - Do not use `10.10.10.2` for this protocol matrix. It remains only the
+    household/default-path smoke host.
+
+Remote `38.65.91.47` check for this change:
+  - Uploaded the release `daed` candidate only to a temporary path:
+      `/tmp/daed-native-live-adapter-ddc9888c`
+  - Candidate sha256:
+      `ddc9888c644917aaf4244024fc8c0d572d3cac81b532a7d411e289d1dad7e462`
+  - No system `daed` binary or `daed.service` was present on this host during
+    this check.
+  - Existing lab service state:
+      `daerust-route-lab.service=active`
+  - Existing config inventory:
+      `/etc/dae/config.dae` exists and contains vless plus ss/http-style
+      material, but it is not a complete ten-protocol live matrix fixture.
+  - Temporary candidate `service-contract` result on remote 38:
+      `outbound_production_matrix_contract_ready=True`,
+      `resident_live_adapter_matrix_ready=False`,
+      `resident_live_adapter_wired_matrix_ready=False`,
+      `resident_live_adapter_remote_live_matrix_ready=False`,
+      `resident_live_adapter_wired_handler_count=1`,
+      `resident_live_adapter_live_ready_handler_count=0`,
+      `resident_live_adapter_matrix_typed_report.status=blocked`,
+      `outbound_fingerprint_underlay_typed_report.full_utls_parity_declared=False`,
+      `wire_oracle_required_before_full_utls_parity=True`.
+  - Attempting old-style `validate -c /etc/dae/config.dae` against this `daed`
+    product binary returned `unsupported daed command: validate`; do not treat
+    old `dae validate` parity as proven by this product binary.
+  - No system binary replacement, service restart, tproxy attachment, or default
+    path mutation was performed on remote 38 in this check.
