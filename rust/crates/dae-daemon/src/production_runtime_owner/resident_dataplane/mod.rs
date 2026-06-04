@@ -337,6 +337,7 @@ pub(crate) fn resident_live_adapter_config_assessment(
     config_path: Option<&Path>,
 ) -> Value {
     let matrix = resident_live_adapter_matrix_contract();
+    let node_shapes = plan::resident_node_link_shapes(config);
     let matrix_entries = resident_live_adapter_matrix_entries()
         .iter()
         .map(|entry| {
@@ -349,6 +350,15 @@ pub(crate) fn resident_live_adapter_config_assessment(
             })
         })
         .collect::<Vec<_>>();
+    let full_matrix_rows = resident_full_matrix_config_rows(config, &node_shapes);
+    let full_matrix_present_rows = full_matrix_rows
+        .iter()
+        .filter(|row| row["candidate_count"].as_u64().unwrap_or(0) > 0)
+        .count();
+    let full_matrix_admitted_rows = full_matrix_rows
+        .iter()
+        .filter(|row| row["planner_status"].as_str() == Some("admitted"))
+        .count();
     let mut report = json!({
         "schema": "resident-live-adapter-config-assessment-v1",
         "config": config_path.map(path_string),
@@ -361,6 +371,13 @@ pub(crate) fn resident_live_adapter_config_assessment(
         "resident_live_adapter_wired_matrix_ready": matrix.wired_matrix_ready,
         "resident_live_adapter_remote_live_matrix_ready": matrix.remote_live_matrix_ready,
         "resident_live_adapter_entries": matrix_entries,
+        "full_matrix_open": true,
+        "full_matrix_row_count": full_matrix_rows.len(),
+        "full_matrix_present_row_count": full_matrix_present_rows,
+        "full_matrix_admitted_row_count": full_matrix_admitted_rows,
+        "full_matrix_complete": matrix.matrix_ready,
+        "full_matrix_completion_blocker": if matrix.matrix_ready { Value::Null } else { json!("real live traffic evidence is required before the resident live adapter matrix can be complete") },
+        "full_matrix_rows": full_matrix_rows,
     });
 
     match build_resident_dataplane_plan(config) {
@@ -411,6 +428,106 @@ pub(crate) fn resident_live_adapter_config_assessment(
         }
     }
     report
+}
+
+fn resident_full_matrix_config_rows(
+    config: &Config,
+    nodes: &[plan::ResidentNodeLinkShape],
+) -> Vec<Value> {
+    resident_live_adapter_matrix_entries()
+        .iter()
+        .map(|entry| {
+            let schemes = matrix_row_schemes(entry.formal_matrix_handler);
+            let candidates = nodes
+                .iter()
+                .filter(|node| schemes.iter().any(|scheme| *scheme == node.scheme))
+                .collect::<Vec<_>>();
+            let candidate_reports = candidates
+                .iter()
+                .map(|node| resident_matrix_candidate_report(config, entry, node))
+                .collect::<Vec<_>>();
+            let admitted_count = candidate_reports
+                .iter()
+                .filter(|candidate| candidate["planner_status"].as_str() == Some("admitted"))
+                .count();
+            let blocked_count = candidate_reports
+                .iter()
+                .filter(|candidate| candidate["planner_status"].as_str() == Some("blocked"))
+                .count();
+            let planner_status = if candidates.is_empty() {
+                "not-present"
+            } else if admitted_count > 0 {
+                "admitted"
+            } else {
+                "blocked"
+            };
+            json!({
+                "handler": entry.handler,
+                "formal_matrix_handler": entry.formal_matrix_handler,
+                "opened": true,
+                "planner_status": planner_status,
+                "wired_ready": entry.wired_ready(),
+                "live_ready": entry.live_ready(),
+                "remote_live_matrix": entry.remote_live_matrix,
+                "candidate_count": candidates.len(),
+                "admitted_count": admitted_count,
+                "blocked_count": blocked_count,
+                "selected_node_fail_closed": entry.selected_node_fail_closed,
+                "fingerprint_behavior": entry.fingerprint_behavior,
+                "missing": entry.missing,
+                "candidates": candidate_reports,
+            })
+        })
+        .collect()
+}
+
+fn resident_matrix_candidate_report(
+    config: &Config,
+    entry: &adapter_matrix::ResidentLiveAdapterMatrixEntry,
+    node: &plan::ResidentNodeLinkShape,
+) -> Value {
+    match plan::build_resident_proxy_plan_for_node(
+        config,
+        entry.formal_matrix_handler.to_owned(),
+        node.tag.clone(),
+        node.link.clone(),
+    ) {
+        Ok(proxy) => {
+            let mut summary = resident_proxy_plan_summary_json(&proxy);
+            summary["planner_status"] = json!("admitted");
+            summary["scheme"] = json!(&node.scheme);
+            summary
+        }
+        Err(err) => json!({
+            "planner_status": "blocked",
+            "node_tag": &node.tag,
+            "scheme": &node.scheme,
+            "error": sanitize_matrix_error(&err),
+        }),
+    }
+}
+
+fn matrix_row_schemes(formal_matrix_handler: &str) -> &'static [&'static str] {
+    match formal_matrix_handler {
+        "vless" => &["vless"],
+        "shadowsocks" => &["ss", "shadowsocks"],
+        "trojan" => &["trojan"],
+        "vmess" => &["vmess"],
+        "hysteria2" => &["hysteria2", "hy2"],
+        "tuic" => &["tuic"],
+        "juicity" => &["juicity"],
+        "anytls" => &["anytls"],
+        "http-proxy" => &["http", "https"],
+        "socks5" => &["socks", "socks5"],
+        _ => &[],
+    }
+}
+
+fn sanitize_matrix_error(error: &str) -> String {
+    if error.contains("://") {
+        return "planner error contained a raw link and was redacted".to_owned();
+    }
+    error.to_owned()
 }
 
 fn resident_proxy_plan_summary_json(proxy: &plan::ResidentProxyPlan) -> Value {
