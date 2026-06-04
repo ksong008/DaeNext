@@ -186,6 +186,60 @@ routing {
 }
 
 #[test]
+fn resident_routing_geodata_report_records_asset_cache_and_bytes() {
+    let root = test_asset_root("geosite-cache");
+    write_asset(
+        &root,
+        "test-geosite.dat",
+        geosite_list(&[geosite_entry(
+            "sample",
+            &[
+                (3, "full.example.test", &[][..]),
+                (2, "suffix.example.test", &["cn"][..]),
+            ],
+        )]),
+    );
+    let sections = parse_config(
+        r#"
+global {
+    lan_interface: daerust0
+}
+group {
+    proxy {
+        policy: fixed(0)
+    }
+}
+routing {
+    domain(ext:'test-geosite:sample') -> proxy
+    domain(ext:'test-geosite:sample') -> proxy
+    fallback: direct
+}
+"#,
+    )
+    .unwrap();
+    let config = build_config(&sections).unwrap();
+    let plan = build_routing_plan_with_asset_dirs(&config, [&root]).unwrap();
+
+    assert_eq!(plan.geodata_report.lookups.len(), 2);
+    assert!(!plan.geodata_report.lookups[0].asset_cache_hit);
+    assert!(plan.geodata_report.lookups[1].asset_cache_hit);
+    assert!(!plan.geodata_report.lookups[0].decoded_entry_cache_hit);
+    assert!(plan.geodata_report.lookups[1].decoded_entry_cache_hit);
+    assert!(plan.geodata_report.lookups[0].raw_file_bytes > 0);
+    assert!(plan.geodata_report.lookups[0].decoded_entry_bytes > 0);
+    assert!(plan.geodata_report.lookups[0].expanded_string_bytes > 0);
+
+    let report = super::geodata::geodata_report_json(&plan.geodata_report);
+    assert_eq!(report["lookup_count"].as_u64().unwrap(), 2);
+    assert_eq!(report["asset_read_count"].as_u64().unwrap(), 1);
+    assert_eq!(report["asset_cache_hit_count"].as_u64().unwrap(), 1);
+    assert_eq!(report["decoded_entry_cache_hit_count"].as_u64().unwrap(), 1);
+    assert!(report["raw_file_bytes_read"].as_u64().unwrap() > 0);
+    assert!(report["decoded_entry_bytes_sum"].as_u64().unwrap() > 0);
+    assert!(report["expanded_string_bytes_sum"].as_u64().unwrap() > 0);
+}
+
+#[test]
 fn resident_routing_plan_groups_domain_values_like_go_builder() {
     let sections = parse_config(
         r#"
