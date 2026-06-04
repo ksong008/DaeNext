@@ -129,25 +129,49 @@ const RESIDENT_LIVE_ADAPTER_MATRIX_ENTRIES: [ResidentLiveAdapterMatrixEntry; 10]
             "resident_dataplane::tcp sends the request header then relays TLS plaintext",
         ],
     ),
-    not_wired_entry(
+    tcp_wired_entry(
         "vmess",
-        &["resident planner rejects this selected node shape"],
+        "AEAD plain TCP endpoints use the resident TCP relay; TLS and transport combinations remain fail-closed",
+        &[
+            "resident_dataplane::plan admits VMess AEAD plain TCP endpoint shapes",
+            "dae_outbound::vmess exposes reusable AEAD session/chunk codecs for resident relay",
+            "resident_dataplane::tcp sends VMess header/chunks and relays response chunks",
+        ],
     ),
-    not_wired_entry(
+    tcp_wired_entry(
         "hysteria2",
-        &["resident planner rejects this selected node shape"],
+        "pinned QUIC/H3 authenticated TCP-stream endpoints use the resident QUIC relay; UDP datagram relay and port hopping remain fail-closed",
+        &[
+            "resident_dataplane::plan admits single-port pinned Hysteria2 endpoint shapes",
+            "dae_outbound::hysteria2 exposes H3 auth and TCP stream request/response helpers",
+            "resident_dataplane::tcp opens a marked quinn UDP endpoint and relays TCP over a Hysteria2 stream",
+        ],
     ),
-    not_wired_entry(
+    tcp_wired_entry(
         "tuic",
-        &["resident planner rejects this selected node shape"],
+        "explicit-insecure QUIC authenticated TCP Connect endpoints use the resident QUIC relay; UDP packet relay remains pending",
+        &[
+            "resident_dataplane::plan admits explicit-insecure TUIC endpoint shapes",
+            "dae_outbound::tuic exposes auth stream and Connect frame runtime helpers",
+            "resident_dataplane::tcp opens a marked quinn UDP endpoint and relays TCP over a TUIC stream",
+        ],
     ),
-    not_wired_entry(
+    tcp_wired_entry(
         "juicity",
-        &["resident planner rejects this selected node shape"],
+        "pinned or explicit-insecure QUIC authenticated TCP-stream endpoints use the resident QUIC relay; UDP packet relay remains pending",
+        &[
+            "resident_dataplane::plan admits Juicity endpoint shapes with pinned certchain or explicit insecure verification",
+            "dae_outbound::juicity exposes EKM auth stream and TCP stream request helpers",
+            "resident_dataplane::tcp opens a marked quinn UDP endpoint and relays TCP over a Juicity stream",
+        ],
     ),
-    not_wired_entry(
+    tcp_tls_wired_entry(
         "anytls",
-        &["resident planner rejects this selected node shape"],
+        "session-frame TLS/TCP endpoints use the resident TLS underlay; UDP packet-stream remains pending",
+        &[
+            "resident_dataplane::plan admits AnyTLS session-frame endpoint shapes",
+            "resident_dataplane::tcp sends auth/settings/SYN/PSH frames and relays PSH payload frames",
+        ],
     ),
     tcp_wired_entry(
         "http-proxy",
@@ -217,33 +241,6 @@ const fn tcp_tls_wired_entry(
             "UDP live adapter dispatch",
             "remote 38 live matrix evidence",
             "Go outbound fallback retirement for this handler",
-        ],
-    }
-}
-
-const fn not_wired_entry(
-    formal_matrix_handler: &'static str,
-    evidence: &'static [&'static str],
-) -> ResidentLiveAdapterMatrixEntry {
-    ResidentLiveAdapterMatrixEntry {
-        handler: formal_matrix_handler,
-        formal_matrix_handler,
-        planner_admitted: false,
-        tcp_live_adapter: false,
-        udp_live_adapter: false,
-        transport_underlay: false,
-        route_group_connectivity: false,
-        selected_node_fail_closed: true,
-        fingerprint_underlay: false,
-        remote_live_matrix: false,
-        go_outbound_fallback_retired: false,
-        fingerprint_behavior: "no live resident adapter underlay is admitted yet",
-        evidence,
-        missing: &[
-            "planner admission",
-            "TCP live adapter dispatch",
-            "UDP live adapter dispatch",
-            "remote 38 live matrix evidence",
         ],
     }
 }
