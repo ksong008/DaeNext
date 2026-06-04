@@ -223,10 +223,10 @@ routing {
     assert!(report["full_matrix_open"].as_bool().unwrap());
     assert_eq!(
         report["full_matrix_admitted_row_count"].as_u64().unwrap(),
-        4
+        5
     );
     let rows = report["full_matrix_rows"].as_array().unwrap();
-    for handler in ["vless", "socks5", "http-proxy", "shadowsocks"] {
+    for handler in ["vless", "socks5", "http-proxy", "shadowsocks", "trojan"] {
         let row = rows
             .iter()
             .find(|row| row["formal_matrix_handler"].as_str().unwrap() == handler)
@@ -235,11 +235,6 @@ routing {
         assert_eq!(row["candidate_count"].as_u64().unwrap(), 1);
         assert_eq!(row["admitted_count"].as_u64().unwrap(), 1);
     }
-    let trojan = rows
-        .iter()
-        .find(|row| row["formal_matrix_handler"].as_str().unwrap() == "trojan")
-        .unwrap();
-    assert_eq!(trojan["planner_status"].as_str().unwrap(), "blocked");
     let stdout = String::from_utf8_lossy(&output.stdout);
     for secret in [
         "vless://",

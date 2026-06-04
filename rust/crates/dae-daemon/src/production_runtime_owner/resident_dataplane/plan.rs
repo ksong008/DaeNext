@@ -8,6 +8,7 @@ use dae_outbound::{
     http_proxy::{HttpProxyLink, HttpScheme},
     shadowsocks::{ShadowsocksLink, cipher_spec},
     shared_transport::{UtlsFingerprint, resolve_utls_client_hello_id},
+    trojan::{TrojanLink, TrojanTransportType},
     vless::{VLESSLink, password_to_key},
 };
 use url::Url;
@@ -68,6 +69,9 @@ pub(super) enum ResidentProxyProtocolPlan {
         cipher: String,
         password: String,
         salt_len: usize,
+    },
+    TrojanTcpTls {
+        password: String,
     },
 }
 
@@ -214,6 +218,7 @@ fn build_proxy_plan(
         "socks" | "socks5" => build_socks5_proxy_plan(config, group_name, node_tag, link),
         "http" | "https" => build_http_proxy_plan(config, group_name, node_tag, link),
         "ss" | "shadowsocks" => build_shadowsocks_proxy_plan(config, group_name, node_tag, link),
+        "trojan" | "trojan-go" => build_trojan_proxy_plan(config, group_name, node_tag, link),
         _ => Err(format!(
             "resident dataplane selected unsupported {scheme} node {node_tag}; no Rust protocol handler is admitted for this node yet, keep Go outbound for this config",
         )),
@@ -258,7 +263,7 @@ fn build_vless_proxy_plan(
                 .to_owned(),
         );
     }
-    let utls_fingerprint = resident_utls_fingerprint_plan(config, &vless)?;
+    let utls_fingerprint = resident_utls_fingerprint_plan(config, Some(&vless.fingerprint))?;
     let server_port = vless.port.parse::<u16>().map_err(|err| {
         format!(
             "invalid VLESS port {} for node {node_tag}: {err}",
@@ -416,6 +421,48 @@ fn build_shadowsocks_proxy_plan(
     })
 }
 
+fn build_trojan_proxy_plan(
+    config: &Config,
+    group_name: String,
+    node_tag: String,
+    link: String,
+) -> Result<ResidentProxyPlan, String> {
+    let parsed =
+        TrojanLink::parse(&link).map_err(|err| format!("parse Trojan node {node_tag}: {err}"))?;
+    if parsed.protocol != "trojan" || parsed.transport_kind() != TrojanTransportType::None {
+        return Err(format!(
+            "resident dataplane generic TLS/TCP handler admits only plain trojan endpoints for node {node_tag}; transport={} protocol={}",
+            parsed.transport_type, parsed.protocol
+        ));
+    }
+    if parsed.allow_insecure || config.global.allow_insecure {
+        return Err(
+            "resident dataplane generic TLS/TCP handler does not admit allow_insecure; keep Go fallback for this config"
+                .to_owned(),
+        );
+    }
+    let utls_fingerprint = resident_utls_fingerprint_plan(config, None)?;
+    Ok(ResidentProxyPlan {
+        protocol: "trojan".to_owned(),
+        group_name,
+        node_tag,
+        server_host: parsed.server,
+        server_port: parsed.port,
+        server_name: parsed.sni,
+        alpn: Vec::new(),
+        flow: String::new(),
+        net: "tcp".to_owned(),
+        tls: "tls".to_owned(),
+        allow_insecure: false,
+        utls_fingerprint,
+        handler: ResidentProxyProtocolPlan::TrojanTcpTls {
+            password: parsed.password,
+        },
+        mark: config.global.so_mark_from_dae,
+        mptcp: config.global.mptcp,
+    })
+}
+
 pub(super) fn build_resident_proxy_plan_for_node(
     config: &Config,
     group_name: String,
@@ -438,9 +485,9 @@ pub(super) fn resident_node_link_shapes(config: &Config) -> Vec<ResidentNodeLink
 
 fn resident_utls_fingerprint_plan(
     config: &Config,
-    vless: &VLESSLink,
+    link_fingerprint: Option<&str>,
 ) -> Result<Option<ResidentUtlsFingerprintPlan>, String> {
-    let link_fingerprint = vless.fingerprint.trim();
+    let link_fingerprint = link_fingerprint.unwrap_or_default().trim();
     if !link_fingerprint.is_empty() && !link_fingerprint.eq_ignore_ascii_case("unsafe") {
         return resolve_optional_resident_utls_fingerprint("link fp", link_fingerprint);
     }
@@ -855,6 +902,23 @@ mod tests {
             shadowsocks.handler,
             ResidentProxyProtocolPlan::ShadowsocksAeadTcp { salt_len: 16, .. }
         ));
+
+        let trojan = build_resident_proxy_plan_for_node(
+            &config,
+            "proxy".to_owned(),
+            "trojan_live".to_owned(),
+            "trojan://matrix-trojan-pass@203.0.113.10:28444?sni=office.example#trojan".to_owned(),
+        )
+        .unwrap();
+        assert_eq!(trojan.protocol, "trojan");
+        assert_eq!(trojan.server_host, "203.0.113.10");
+        assert_eq!(trojan.server_port, 28444);
+        assert_eq!(trojan.server_name, "office.example");
+        assert_eq!(trojan.tls, "tls");
+        assert!(matches!(
+            trojan.handler,
+            ResidentProxyProtocolPlan::TrojanTcpTls { .. }
+        ));
     }
 
     #[test]
@@ -889,6 +953,15 @@ mod tests {
         )
         .unwrap_err();
         assert!(plugin.contains("does not admit SIP003 plugin"));
+
+        let trojan_go = build_resident_proxy_plan_for_node(
+            &config,
+            "proxy".to_owned(),
+            "trojan_go".to_owned(),
+            "trojan-go://matrix-trojan-pass@203.0.113.10:28444?type=ws&sni=office.example#trojan-go".to_owned(),
+        )
+        .unwrap_err();
+        assert!(trojan_go.contains("admits only plain trojan endpoints"));
     }
 
     #[test]
