@@ -650,13 +650,30 @@ fn collect_loaded_map_ids(before_map_ids: &[u32]) -> Result<BTreeMap<String, u32
         .into_iter()
         .filter(|id| !before_map_ids.contains(id))
     {
-        let fd = dae_ebpf_support::open_map_fd(id)
-            .map_err(|err| format!("native eBPF open loaded map id {id} failed: {err}"))?;
-        let info = dae_ebpf_support::map_info(fd.as_raw_fd())
-            .map_err(|err| format!("native eBPF inspect loaded map id {id} failed: {err}"))?;
+        let fd = match dae_ebpf_support::open_map_fd(id) {
+            Ok(fd) => fd,
+            Err(err) if is_transient_missing_map_id(&err) => continue,
+            Err(err) => {
+                return Err(format!("native eBPF open loaded map id {id} failed: {err}"));
+            }
+        };
+        let info = match dae_ebpf_support::map_info(fd.as_raw_fd()) {
+            Ok(info) => info,
+            Err(err) if is_transient_missing_map_id(&err) => continue,
+            Err(err) => {
+                return Err(format!(
+                    "native eBPF inspect loaded map id {id} failed: {err}"
+                ));
+            }
+        };
         loaded_map_ids.entry(info.name).or_insert(info.id);
     }
     Ok(loaded_map_ids)
+}
+
+#[cfg(any(feature = "native-ebpf", test))]
+fn is_transient_missing_map_id(err: &std::io::Error) -> bool {
+    err.kind() == std::io::ErrorKind::NotFound
 }
 
 impl Drop for NativeEbpfRuntimeState {
@@ -829,6 +846,15 @@ mod tests {
             native_backend_for_role(NativeEbpfAttachRole::LanIngress, AttachBackend::Tcx),
             AttachBackend::Tcx
         );
+    }
+
+    #[test]
+    fn transient_missing_map_ids_are_skipped_during_native_map_collection() {
+        let err = std::io::Error::from(std::io::ErrorKind::NotFound);
+        assert!(is_transient_missing_map_id(&err));
+
+        let err = std::io::Error::from(std::io::ErrorKind::PermissionDenied);
+        assert!(!is_transient_missing_map_id(&err));
     }
 }
 

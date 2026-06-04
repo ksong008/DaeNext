@@ -8515,3 +8515,1996 @@ protected rollback state: /etc/daed/wing.db
 Rust test builds must not mutate /etc/daed/wing.db by default. If existing state
 is needed, migrate/import from wing.db into daed.db first.
 ```
+
+2026-06-03 Rust product log bridge fix:
+
+```text
+Problem:
+  WebUI log panel could appear empty or show only a few product-level entries
+  while resident dataplane events were continuously written to the resident
+  event jsonl file.
+
+Root cause:
+  Rust product backend filtered resident flow diagnostics before appending to
+  /etc/daed/logs/current.jsonl and also filtered them again when serving
+  /api/logs. This excluded high-frequency flow events such as:
+    tcp_connection_finished
+    tcp_connection_failed
+    udp_packet_finished
+
+Fix:
+  Resident flow diagnostics are now bridged into product logs instead of being
+  treated as internal-only diagnostics. Flow messages use a compact
+  peer <-> target shape and retain selected structured fields such as
+  proxy_group, node_tag, outbound_kind, dial_target, original_dst, tls_underlay,
+  byte counters, Vision transition flags, and error.
+
+Runtime behavior:
+  Debug-level flow completion logs require runtime log level debug or lower.
+  After restarting a live test binary, verify the real backend value with:
+    GET /api/runtime/log-level
+  and set it with:
+    PATCH /api/runtime/log-level {"level":"debug"}
+  before judging whether debug flow logs are missing.
+
+Validation:
+  Local:
+    cargo fmt --manifest-path rust/Cargo.toml -p dae-daemon
+    cargo test --manifest-path rust/Cargo.toml -p dae-daemon
+
+  Live 10.10.10.2:
+    deployed /usr/bin/daed sha256
+      9e1a95dbd7724f55c2157fed624945d767d9234a2395eef7f2b91e91071bdd90
+    /etc/daed/wing.db sha256 stayed unchanged
+      459156c9a1883bd9f5f4244779aa103305cbeaeb00ee741e9e5e1d676901c5a5
+    /api/logs?level=debug&limit=500 returned more than 50 entries during live
+      traffic.
+    /api/events/logs streamed repeated log.entry events.
+    Browser automation opened /#/?panel=log and observed hundreds of rendered
+      flow log markers with the log viewport scrolled near the tail.
+```
+
+Follow-up correction:
+
+```text
+The raw resident-flow bridge above is useful as diagnostic evidence that the
+backend/SSE path can roll logs, but it is not the final Go daed WebUI log
+parity target.
+
+Original Go daed/daewing WebUI task logs are logrus product/runtime/task logs.
+They should not be replaced by every transparent-proxy flow diagnostic. In
+particular, frequent tcp_connection_failed entries such as:
+  192.168.6.20 <-> www.google.com:80 failed
+  error=read inbound TCP: Connection reset by peer (os error 104)
+must not be promoted into the normal WebUI task log as warn-level noise.
+
+Final Rust product rule:
+  - product/runtime/task logs feed /etc/daed/logs/current.jsonl and WebUI.
+  - resident flow diagnostics remain debug diagnostics unless explicitly
+    requested.
+  - connection reset by peer and relay idle timeout on ordinary flow close are
+    not default task-log warnings.
+  - log formatting and filtering must be compared against the original Go daed
+    logstore/logrus hook behavior before the WebUI log work is marked done.
+```
+
+2026-06-03 Rust product RSS / heap-card audit:
+
+```text
+Live host:
+  10.10.10.2
+  /usr/bin/daed sha256
+    9e1a95dbd7724f55c2157fed624945d767d9234a2395eef7f2b91e91071bdd90
+  runtime gate:
+    DAE_RUST_RESIDENT_DATAPLANE=1
+    DAED_WEB_ROOT=/usr/share/daed/web
+
+Observed process state:
+  pid=12795
+  RSS ~= 253980 KiB
+  RssAnon ~= 239772 KiB
+  RssFile ~= 14208 KiB
+  Private_Dirty ~= 239772 KiB
+  VmData ~= 393164 KiB
+  Threads ~= 58..67
+  systemd MemoryCurrent ~= 328101888 bytes
+
+Interpretation:
+  RSS is high mostly because of private anonymous memory, not because of the
+  daed binary, shared libraries, WebUI static files, or thread stacks.
+
+  Thread stack RSS is small. Each sampled thread showed VmStk around 132 KiB,
+  so thread stacks are not the main 250 MiB RSS source.
+
+  smaps showed one full 64 MiB anonymous mapping plus many 3..7 MiB anonymous
+  mappings and an approximately 29 MiB [heap] mapping. This shape is consistent
+  with allocator arena/high-water retention in a multi-threaded process,
+  especially under live traffic, resident dataplane ownership, fingerprint-aware
+  TLS/Boring underlay state, connection/session state, and allocator behavior.
+
+  Debug flow-log streaming is not the primary explanation for the high RSS.
+  It can add allocation churn and WebUI noise, but it must be treated as a
+  secondary amplifier at most. The restored Go daed baseline was switched from
+  runtime log level error to debug for a short live check and did not show a
+  material RSS increase:
+    before debug sample:
+      RSS 89576 KiB, RssAnon 42436 KiB, Threads 12
+    after approximately 60 seconds at debug:
+      RSS 88624 KiB, RssAnon 41484 KiB, Threads 12
+  After the check, Go daed runtime log level was restored to error.
+
+  The memory did not keep growing during a short 20 second check:
+    VmRSS 255904 KiB -> 255780 KiB
+    RssAnon 241696 KiB -> 241572 KiB
+    Threads 63 -> 58
+  This supports "high-water allocator retention" as the first hypothesis, not
+  an immediately proven leak.
+
+WebUI/API metric correction:
+  Rust product currently fills heapAllocBytes from /proc/self/status RssAnon.
+  That is anonymous RSS, not true Rust live heap allocation.
+
+  Therefore the WebUI "heap memory" card can show a large value such as
+  ~240 MiB even when it is really anonymous resident memory. It must not be
+  presented as precise Rust heap live bytes.
+
+Required follow-up:
+  1. Rename or split metrics so RSS, anonymous RSS, and real allocator heap are
+     not conflated.
+  2. Avoid feeding high-frequency resident flow diagnostics into normal WebUI
+     task logs by default for log parity and UI usefulness, not because this is
+     believed to be the main RSS cause.
+  3. Test a live systemd override such as MALLOC_ARENA_MAX=2 to see whether RSS
+     drops materially under the same traffic pattern.
+  4. Add longer RSS/active-connection/log-volume sampling before calling this a
+     leak.
+  5. If precise heap is required, add allocator-aware metrics instead of using
+     RssAnon as heapAllocBytes.
+```
+
+2026-06-03 Final Rust product architecture boundary:
+
+```text
+Question:
+  The current Rust test build looks like:
+    Rust product + resident dataplane + Boring/TLS + multi-threaded allocator.
+  Is that also the intended final production shape?
+
+Answer:
+  The final architecture keeps the ownership direction, not the current
+  unoptimized implementation shape.
+
+Kept for final C10/go-free target:
+  1. Rust product ownership:
+       Rust daed owns Web/API/state/runtime/control/package by default.
+
+  2. Rust resident dataplane ownership:
+       transparent-proxy TCP/UDP handling, runtime datapath state, outbound
+       execution, runtime metrics, and control-plane integration move into the
+       Rust-owned path.
+
+  3. Fingerprint-aware TLS capability:
+       links/global config that select a valid fingerprint must use a real
+       fingerprint-aware TLS underlay. The current provider is BoringSSL through
+       the Rust boring crate.
+
+Not accepted as final shape:
+  1. Boring everywhere:
+       Boring is not the default TLS path. It is selected only when a valid
+       fingerprint is selected by node link or global fallback.
+
+  2. Unbounded multi-threaded runtime behavior:
+       tokio workers, blocking pools, helper threads, DNS/probe workers, and
+       resident dataplane tasks must have explicit limits and live evidence.
+
+  3. Unbounded allocator high-water RSS:
+       the current high anonymous RSS is not acceptable as final merely because
+       the path is Rust native. Allocator strategy and high-water behavior must
+       be measured and bounded.
+
+  4. WebUI metric conflation:
+       RssAnon must not be presented as precise Rust live heap allocation.
+
+  5. Flow diagnostics as task logs:
+       high-frequency transparent-proxy flow diagnostics are not the normal
+       WebUI task-log stream.
+
+TLS underlay selection rule:
+  - no selected valid fingerprint:
+      standard rustls path
+  - selected valid fingerprint from node link or global fallback:
+      fingerprint-aware TLS provider, currently BoringSSL/boring
+  - selected fingerprint `unsafe`:
+      standard rustls path
+  - invalid/off-like values:
+      fail closed or normalize according to the documented selection rule, but
+      do not silently claim fingerprint success
+
+Final admission must measure:
+  - RSS
+  - PSS
+  - RssAnon / anonymous RSS
+  - real allocator heap metrics if available
+  - thread count
+  - fd count
+  - active TCP connections
+  - active UDP sessions
+  - TLS underlay counts by provider
+  - resident session/buffer/cache sizes
+  - log/event buffer sizes
+
+Required comparison matrix before accepting the final memory model:
+  - Go daed at error
+  - Go daed at debug
+  - Rust native at error
+  - Rust native at debug
+  - Rust native with fingerprint-aware TLS selected
+  - Rust native without fingerprint-aware TLS selected
+  - same active connection/session range when comparing RSS/PSS
+
+Implementation direction:
+  - keep capability names generic at the top level
+  - keep Boring as an implementation detail behind the fingerprint-aware TLS
+    provider boundary
+  - keep ordinary TLS on the standard rustls path
+  - bound runtime workers and blocking pools
+  - test MALLOC_ARENA_MAX=2 or an alternate allocator under the same traffic
+    pattern
+  - reduce resident connection/session allocation churn with lifecycle audits,
+    reusable buffers, and explicit cache bounds
+
+Summary:
+  The final product is Rust-owned with a resident dataplane and conditional
+  fingerprint-aware TLS. It must not freeze the current test build's high-RSS,
+  broad-thread, Boring-heavy implementation as the production baseline.
+```
+
+2026-06-03 High-priority RSS root-cause audit summary:
+
+```text
+Priority:
+  Highest priority before further default-path promotion or feature expansion.
+
+Decision:
+  A full reproducible RSS comparison matrix is not required as the next
+  blocking step. The live gap is already large enough to justify immediate code
+  audit:
+    Rust test build:
+      RSS ~= 253 MiB
+      RssAnon ~= 239 MiB
+      Threads ~= 47..67
+    Restored Go daed:
+      RSS ~= 85 MiB
+      RssAnon ~= 39 MiB
+      Threads ~= 11
+    Go daed debug short check:
+      no material RSS/RssAnon growth
+
+  Therefore the next step is not to build a heavy baseline matrix. Use only
+  lightweight before/after live sampling to validate each concrete fix.
+
+Goal:
+  Find the concrete Rust-side sources of high private anonymous RSS and excess
+  threads. Do not accept "Rust product + resident dataplane + Boring" as an
+  explanation by itself. Identify owned objects, task models, allocator effects,
+  and lifecycle/capacity issues.
+
+Primary audit targets:
+  1. Runtime/thread model
+     - tokio worker count
+     - blocking pool usage
+     - per-connection task spawning
+     - helper/background workers
+     - Web/API/SSE/log/subscription/probe worker lifetime
+
+  2. Resident dataplane state
+     - active TCP connection objects
+     - UDP session map
+     - routing tuple/session mirrors
+     - sniffing buffers
+     - relay buffers
+     - Vision/direct transition state
+     - per-flow allocations and release timing
+
+  3. Fingerprint-aware TLS provider
+     - Boring SSL/context/session lifecycle
+     - per-connection TLS buffers
+     - provider caches
+     - ensure provider is selected only for valid fingerprint cases
+     - ordinary TLS stays on rustls
+
+  4. Product API/state/log/event retention
+     - runtime overview sample buffers
+     - log/event broadcaster queues
+     - WebUI/SSE subscriber buffers
+     - DB/cache/materialized config retention
+     - node/proxy/group plan clone size
+
+  5. Allocator behavior
+     - anonymous RSS high-water retention
+     - glibc arena count under current thread model
+     - MALLOC_ARENA_MAX=2 live check after code audit candidates
+     - alternate allocator only after object/task audit identifies remaining
+       allocator-bound RSS
+
+Search patterns for the audit:
+  - tokio::spawn
+  - spawn_blocking
+  - JoinSet
+  - channel / mpsc / broadcast / watch
+  - Arc<Mutex<...>>
+  - DashMap / HashMap / BTreeMap
+  - Vec<u8> / BytesMut / Bytes
+  - VecDeque / history / samples
+  - OnceLock / LazyLock / static caches
+  - Boring / Ssl / SslConnector / SslStream
+  - per-connection buffer allocation
+
+Immediate acceptance rule:
+  A candidate fix is useful only if it either:
+    - removes a concrete excessive allocation/retention/thread source, or
+    - adds measurement that isolates such a source, or
+    - corrects the API/WebUI metric so RSS/anonymous RSS/heap are not conflated.
+
+Non-goal:
+  Do not spend time first on a heavy benchmark matrix. Do not treat debug flow
+  logging as the main RSS explanation. Do not change top-level crate structure
+  unless the audit finds a hard ownership/dependency conflict.
+```
+
+2026-06-03 Rust native generic resource/lifecycle audit:
+
+```text
+Scope correction:
+  This audit is not a protocol-specific audit. Protocol names may appear in
+  filenames or implementation details, but the product-chain work item remains
+  generic:
+    - runtime owner resource model
+    - connection/session lifecycle
+    - outbound provider lifecycle
+    - product API/log/metrics retention
+    - package/admission truth
+
+  Do not create protocol-specific stages, work packages, feature names, or
+  default-switch gates from this RSS/root-cause work.
+
+High-confidence findings:
+
+  P0. The resident TCP dataplane uses one OS thread per accepted TCP flow.
+      Location:
+        rust/crates/dae-daemon/src/production_runtime_owner/resident_dataplane/tcp.rs
+      Evidence:
+        resident_tcp_accept_loop accepts a transparent TCP stream and calls
+        thread::spawn for each connection. The spawned thread owns the whole
+        relay until the flow ends.
+      Why it matters:
+        Thread count scales with active TCP connections. Under glibc this also
+        increases allocator arenas/high-water anonymous RSS. This matches the
+        live shape better than any individual protocol branch:
+          Rust test build: Threads ~= 47..67, active TCP ~= same order
+          Go restored daemon: Threads ~= 11
+      Required direction:
+        Replace unbounded per-flow OS thread spawning with a bounded connection
+        execution model:
+          - async runtime, or
+          - bounded worker pool with explicit max workers/queue/backpressure, or
+          - a transitional bounded thread pool with small named stack size.
+        The final model must expose active workers, queued accepts, rejected
+        accepts, and shutdown/join state.
+
+  P0. The product Web/API/SSE server uses one OS thread per HTTP connection.
+      Location:
+        rust/crates/dae-daemon/src/daed_product.rs
+      Evidence:
+        serve_forever accepts listener.incoming() and calls thread::spawn for
+        each stream. Runtime and log SSE endpoints are long-lived loops.
+      Why it matters:
+        Opening WebUI can permanently add long-lived threads for runtime/log
+        streams. This is not the main dataplane thread count source, but it is
+        still unbounded and contributes to RSS/allocator growth.
+      Required direction:
+        Use a bounded HTTP execution model and cap SSE clients. Runtime/log
+        streams should use a shared event source instead of one sleeping file
+        scanner per client.
+
+  P0. Flow worker handles are not retained, joined, or bounded.
+      Location:
+        rust/crates/dae-daemon/src/production_runtime_owner/resident_dataplane/tcp.rs
+      Evidence:
+        Per-flow thread::spawn return values are discarded. Runtime shutdown
+        only joins the resident TCP accept thread and UDP worker thread, not the
+        connection workers they created.
+      Why it matters:
+        Shutdown/reload cannot prove bounded cleanup. Panics, long idle flows,
+        and high-water per-thread allocator state are invisible to the runtime
+        owner.
+      Required direction:
+        Runtime owner must own all flow execution handles or task IDs and must
+        expose cleanup evidence for active/in-flight workers.
+
+  P1. Outbound provider/client configuration is rebuilt per connection.
+      Location:
+        rust/crates/dae-daemon/src/production_runtime_owner/resident_dataplane/client.rs
+      Evidence:
+        The current outbound client path resolves target, creates TLS/provider
+        configuration, loads roots, builds connector/client config, then opens a
+        new client per connection.
+      Why it matters:
+        Per-flow provider setup creates allocation churn and can retain
+        high-water RSS. This is provider-generic: fingerprint-aware and ordinary
+        TLS paths both need a cached plan/provider boundary.
+      Required direction:
+        Cache immutable provider config in the resident proxy plan/runtime state.
+        Per-flow state should only allocate the connection/session object.
+        The top-level capability name must remain generic.
+
+  P1. UDP is packet-exchange oriented, not session/pool oriented.
+      Location:
+        rust/crates/dae-daemon/src/production_runtime_owner/resident_dataplane/udp.rs
+      Evidence:
+        The UDP loop processes a packet synchronously, counts opened/closed per
+        packet, opens a new outbound exchange for non-DNS packets, and opens a
+        transparent reply socket for each reply.
+      Why it matters:
+        This under-reports session semantics and can produce connection/provider
+        churn under UDP traffic. It was not the main live RSS source in the last
+        observation because active UDP was low, but it is not production-grade
+        native session ownership.
+      Required direction:
+        Add a bounded UDP endpoint/session model with idle timeout, per-session
+        counters, and explicit max entries. The WebUI counter should report
+        sessions, not transient packet exchanges.
+
+  P1. Event/log bridging does synchronous per-event file and DB work.
+      Locations:
+        rust/crates/dae-daemon/src/production_runtime_owner/resident_dataplane/events.rs
+        rust/crates/dae-daemon/src/daed_product.rs
+      Evidence:
+        Each resident event appends JSON to the event file and then calls the
+        product log sink. The product log append path opens state, reads log
+        settings, scans the tail for last id, appends, and prunes on each log.
+      Why it matters:
+        This is not the main steady RSS cause, but under debug/flow-heavy
+        traffic it creates avoidable allocation and IO churn. SSE log streams
+        also rescan the file periodically.
+      Required direction:
+        Use a bounded in-memory ring/index for live WebUI logs plus append-only
+        durable writes. Prune out of band. Keep high-frequency flow diagnostics
+        out of normal task logs unless explicitly enabled.
+
+  P1. The WebUI memory metric conflates anonymous RSS with heap.
+      Location:
+        rust/crates/dae-daemon/src/daed_product.rs
+      Evidence:
+        heapAllocBytes is currently populated from /proc/self/status RssAnon,
+        with VmData fallback.
+      Why it matters:
+        The card says heap but shows anonymous RSS. It can include allocator
+        arenas, thread stacks, mmap/private pages, and other non-live-heap
+        memory.
+      Required direction:
+        Split metrics:
+          - rssBytes
+          - anonymousRssBytes
+          - fileRssBytes if available
+          - vmDataBytes
+          - heapLiveBytes only if backed by allocator/runtime evidence
+          - threadCount
+        Do not label RssAnon as heap.
+
+  P1. Runtime overview clones and embeds large runtime reports on each poll.
+      Location:
+        rust/crates/dae-daemon/src/daed_product.rs
+      Evidence:
+        ProductRuntimeManager::summary builds a fresh JSON object and embeds a
+        clone of lastReport. Runtime overview calls summary for WebUI polling.
+      Why it matters:
+        This is a polling-time allocator churn source. It is not the main
+        resident dataplane RSS source, but it worsens WebUI-open behavior.
+      Required direction:
+        Keep summary compact by default. Expose full start/admission reports
+        through separate endpoints or on-demand debug routes.
+
+  P1. Product-chain contract truth is inconsistent across crates.
+      Locations:
+        rust/crates/dae-product/src/go_free_product_chain.rs
+        rust/crates/dae-product/src/true_daemon_admission.rs
+        rust/crates/dae-daemon/src/daed_product.rs
+      Evidence:
+        dae-product still marks the go-free/default daemon contracts blocked,
+        while daed_product local reports set many product/Web/API/package-ready
+        flags to true and then keep go_free_product_chain_ready=false.
+      Why it matters:
+        C10 cannot rely on a self-generated local report to prove product-chain
+        readiness. The final gate must derive readiness from the canonical
+        product contracts and live evidence.
+      Required direction:
+        Make daed product reports consume/reflect dae-product contract state
+        instead of restating readiness independently.
+
+  P1. Native attach/report semantics still preserve fallback language.
+      Locations:
+        rust/crates/dae-daemon/src/production_runtime_owner/native_ebpf.rs
+        rust/crates/dae-daemon/src/production_runtime_owner/netns_link.rs
+      Evidence:
+        Native attach reports still include fallback_required/fallback_used and
+        native_backend_runtime_decision advertises command fallback availability.
+      Why it matters:
+        For the 100% Rust native target, CO-RE/C-object retention is not a
+        reason to preserve C. Compatibility fallback may exist during transition,
+        but C10 final reporting must not treat it as required.
+      Required direction:
+        Separate transition fallback evidence from C10 final go-free admission.
+        Do not use C/CO-RE fallback as a permanent native criterion.
+
+Secondary findings:
+
+  - The workspace currently has no alternate allocator configured. This keeps
+    glibc arena behavior relevant under high thread count.
+  - The direct path has the same generic per-flow relay shape: blocking loop,
+    sleep-based nonblocking IO, two 16 KiB per-flow buffers.
+  - DNS cache has a bounded default capacity and is not the current RSS primary
+    suspect.
+  - Control-plane domain routing trackers are legitimate runtime state and
+    should remain measured, but the current live RSS shape does not point to
+    them as the first root cause.
+
+Priority order:
+
+  1. Bound resident TCP flow execution and own all worker/task lifecycle.
+  2. Bound product HTTP/SSE execution and replace per-client log file scanning.
+  3. Add generic runtime/resource instrumentation:
+       active flow workers
+       queued accepts
+       rejected accepts
+       active outbound provider sessions
+       provider selection counts
+       product HTTP/SSE clients
+       event/log queue length
+       rss/anonymous_rss/thread_count
+  4. Cache immutable outbound provider configuration per resident plan.
+  5. Fix WebUI/process memory metric semantics.
+  6. Move log pruning and tail scanning off the hot path.
+  7. Reconcile daed local reports with dae-product canonical C10 contracts.
+  8. Only after 1-7, run allocator diagnostics such as MALLOC_ARENA_MAX=2 or an
+     alternate allocator comparison.
+
+Validation policy:
+
+  No heavy baseline matrix is required before these fixes. For each fix, use a
+  lightweight before/after sample on the same traffic shape:
+    - RSS
+    - RssAnon
+    - thread count
+    - active TCP flows
+    - product SSE client count
+    - event/log queue or file size
+
+  Acceptance must be tied to generic resource reduction or observability, not
+  to any protocol-specific success case.
+```
+
+2026-06-03 Full Rust code RSS audit matrix:
+
+```text
+Scope:
+  This is a full Rust-side RSS audit, not a protocol-specific audit.
+
+  Audited surface:
+    /root/project/dae-daex-align/rust/crates
+    22 Rust crates
+    585 Rust source files
+
+  Live product entry:
+    rust/crates/dae-daemon/src/bin/daed.rs
+      -> dae_daemon::run_daed_product_with_args_and_version(...)
+      -> daed_product.rs run command
+      -> restore runtime from state
+      -> resident runtime/dataplane
+      -> product Web/API/SSE server
+
+  Important distinction:
+    Compiled into the daemon binary is not the same as current live resident RSS
+    ownership. The audit separates:
+      - live daed run resident/product path
+      - startup/reload high-water allocation paths
+      - future/control-plane owner paths
+      - test/loopback/admission-only paths
+
+No code changes:
+  This entry records audit findings only. No source changes or live deployment
+  were made as part of this audit.
+
+Live evidence carried into the audit:
+  Rust test build on 10.10.10.2:
+    RSS ~= 253 MiB
+    RssAnon ~= 239 MiB
+    Private_Dirty ~= 239 MiB
+    Threads ~= 47..67
+
+  Restored Go daed:
+    RSS ~= 85..89 MiB
+    RssAnon ~= 39..42 MiB
+    Threads ~= 11..12
+
+  Interpretation:
+    The high RSS shape is private anonymous memory plus allocator high-water
+    retention in a multi-threaded process. It is not primarily binary size,
+    shared libraries, WebUI static files, BPF include bytes, or a single
+    protocol branch.
+
+Confirmed RSS causes / high-confidence sources:
+
+  C-RSS-1. Resident TCP flow execution is unbounded OS-thread-per-flow.
+      Location:
+        rust/crates/dae-daemon/src/production_runtime_owner/resident_dataplane/tcp.rs
+      Evidence:
+        resident_tcp_accept_loop accepts a transparent TCP stream and calls
+        thread::spawn for each connection. The JoinHandle is discarded.
+      Runtime ownership gap:
+        rust/crates/dae-daemon/src/production_runtime_owner/resident_dataplane/mod.rs
+        ResidentDataplaneRuntime stores and joins only the accept/UDP worker
+        handles, not per-flow workers.
+      RSS effect:
+        Thread count scales with active TCP flows and amplifies glibc
+        allocator arena/high-water anonymous RSS. Thread stacks alone do not
+        explain the whole RSS delta, but this model is the largest confirmed
+        resource-model cause.
+
+  C-RSS-2. Product Web/API/SSE execution is unbounded OS-thread-per-connection.
+      Location:
+        rust/crates/dae-daemon/src/daed_product.rs
+      Evidence:
+        serve_forever calls thread::spawn for every accepted HTTP stream.
+        Runtime overview SSE and log SSE are long-lived loops.
+      RSS effect:
+        WebUI tabs can add long-lived OS threads. This is smaller than the
+        dataplane flow thread source, but still unbounded and allocator-visible.
+
+  C-RSS-3. Outbound provider immutable config is rebuilt per connection.
+      Location:
+        rust/crates/dae-daemon/src/production_runtime_owner/resident_dataplane/client.rs
+      Evidence:
+        The resident outbound open path resolves target and rebuilds TLS/provider
+        config per connection. Fingerprint-aware TLS builds a new connector per
+        connection. Ordinary TLS rebuilds RootCertStore and ClientConfig per
+        connection.
+      Naming rule:
+        Treat this as a generic outbound provider lifecycle issue. Protocol
+        names may appear in function names or matrix evidence, but top-level
+        work item names must remain provider/resource generic.
+      RSS effect:
+        Repeated provider config construction creates allocation churn and
+        high-water retention. Per-flow work should allocate only session state.
+
+  C-RSS-4. Routing/geodata has duplicate materialization and resident matcher
+           retention.
+      Locations:
+        rust/crates/dae-daemon/src/production_runtime_owner/resident_routing.rs
+        rust/crates/dae-daemon/src/production_runtime_owner/resident_routing/plan.rs
+        rust/crates/dae-daemon/src/production_runtime_owner/resident_routing/geodata.rs
+        rust/crates/dae-geodata/src/wire.rs
+        rust/crates/dae-routing/src/userspace.rs
+        rust/crates/dae-routing/src/domain.rs
+      Evidence:
+        Resident routing builds a plan for map update and another plan for
+        userspace matcher construction. The matcher path converts the plan into
+        JSON fixture form and then builds RoutingMatcher from that JSON.
+        Geodata asset reads use full-file reads and decode paths clone entries.
+        RoutingMatcher retains LPM prefixes, domain patterns, compiled regexes,
+        and match sets.
+      RSS effect:
+        Startup/reload high-water source plus legitimate resident matcher state.
+        Contribution depends on geosite/geoip/routing size.
+
+  C-RSS-5. Product materializer duplicates large config/nodes/groups during
+           startup and reload.
+      Location:
+        rust/crates/dae-daemon/src/daed_product.rs
+      Evidence:
+        restore_runtime_from_state runs materialize_runtime once as dry preview
+        and once as applied materialization. materialize_runtime reads selected
+        config/dns/routing, groups, and all nodes, then renders generated config
+        and returns a JSON object containing the generated content.
+        list_all_nodes_value uses NodeListScope::All, including subscription-
+        backed nodes.
+      RSS effect:
+        Large subscriptions and generated config can create startup/reload
+        high-water allocation that remains in RSS through allocator retention.
+
+  C-RSS-6. Event/log bridge does synchronous file/DB/tail-prune work on the hot
+           path.
+      Locations:
+        rust/crates/dae-daemon/src/production_runtime_owner/resident_dataplane/events.rs
+        rust/crates/dae-daemon/src/daed_product.rs
+      Evidence:
+        resident append_event writes JSONL and calls the product log sink.
+        Product log append opens state, reads runtime log level and settings,
+        reads last id, appends one line, then prunes by reading tail bytes,
+        collecting lines, joining a new string, and rewriting the log file.
+        Log SSE scans entries after last id on a polling interval.
+      RSS effect:
+        Debug/flow-heavy logging creates avoidable allocation and IO churn.
+        It is not the main steady RSS cause in the previous live evidence, but
+        it is a confirmed amplifier and WebUI latency source.
+
+  C-RSS-7. WebUI heap metric is anonymous RSS, not true live heap.
+      Location:
+        rust/crates/dae-daemon/src/daed_product.rs
+      Evidence:
+        ProcessMetrics.heap_alloc_bytes is populated from /proc/self/status
+        RssAnon and falls back to VmData.
+      RSS effect:
+        This is an observability bug, not an allocation root cause. The UI
+        currently labels anonymous RSS as heap and can mislead debugging.
+
+Probable / situational amplifiers:
+
+  P-RSS-1. UDP is packet-exchange oriented instead of bounded session/pool
+           oriented.
+      Location:
+        rust/crates/dae-daemon/src/production_runtime_owner/resident_dataplane/udp.rs
+      Evidence:
+        Non-DNS UDP opens a fresh outbound exchange per packet and opens a
+        transparent reply socket per reply.
+      Status:
+        Not observed as the main live RSS source because UDP activity was low,
+        but the model is not production-grade native session ownership.
+
+  P-RSS-2. Direct relay uses the same per-flow blocking loop shape.
+      Location:
+        rust/crates/dae-daemon/src/production_runtime_owner/resident_dataplane/direct.rs
+      Evidence:
+        Per-flow direct relay uses two 16 KiB buffers and sleep-based
+        nonblocking IO.
+      Status:
+        Not enough by itself to explain 250 MiB RSS, but it contributes under
+        the per-flow OS thread model.
+
+  P-RSS-3. Runtime overview/report polling clones runtime JSON.
+      Locations:
+        rust/crates/dae-daemon/src/daed_product.rs
+        rust/crates/dae-daemon/src/production_runtime_owner/resident.rs
+      Evidence:
+        ProductRuntimeManager::summary clones runtime state and lastReport.
+        Resident runtime already compacts the start report, so this is mostly
+        polling-time allocation churn rather than the main resident memory root.
+
+  P-RSS-4. Control-plane owner structures are valid future C10 memory concerns.
+      Locations:
+        rust/crates/dae-control/src/routing_owned.rs
+        rust/crates/dae-control/src/domain_routing.rs
+        rust/crates/dae-control/src/connectivity_owned.rs
+      Evidence:
+        These retain routing plans, domain routing trackers, and connectivity
+        fallback maps.
+      Status:
+        They are not the first root cause for the current live product resident
+        RSS shape, but must remain measured as C10 control-plane ownership grows.
+
+Non-causes / lower priority for current RSS:
+
+  N-RSS-1. DNS cache is bounded.
+      Location:
+        rust/crates/dae-dns/src/cache.rs
+      Evidence:
+        DNS_CACHE_MAX_ENTRIES defaults to 4096 and eviction runs while entries
+        are at capacity.
+
+  N-RSS-2. Runtime traffic sample history is bounded.
+      Location:
+        rust/crates/dae-daemon/src/daed_product.rs
+      Evidence:
+        Runtime traffic samples use VecDeque and are clamped by windowSec and
+        maxPoints, with maxPoints capped at 1000.
+
+  N-RSS-3. No daemon alternate allocator is currently configured.
+      Evidence:
+        #[global_allocator] appears only in dae-bench.
+      Meaning:
+        glibc allocator behavior is relevant under high thread count, but this
+        is an allocator amplifier after resource-model issues, not the first
+        code object to fix.
+
+  N-RSS-4. Embedded BPF/include_bytes objects are not the private anonymous RSS
+           explanation.
+      Locations:
+        rust/crates/dae-daemon/src/production_runtime_owner/resident.rs
+        rust/crates/dae-aya-bpf-loader/src/lib.rs
+      Meaning:
+        They affect binary/readonly/file-backed mapping, not the observed
+        private anonymous RSS majority.
+
+Required repair order:
+
+  1. Bound resident TCP flow execution and make runtime owner own/join all
+     flow tasks or worker IDs.
+  2. Bound product HTTP/SSE execution and cap long-lived stream clients.
+  3. Add generic resource instrumentation:
+       active flow workers
+       queued accepts
+       rejected accepts
+       provider session count
+       provider selection count
+       HTTP/SSE client count
+       event/log queue or file backlog
+       RSS
+       anonymous RSS
+       thread count
+  4. Cache immutable outbound provider config per resident runtime/plan.
+  5. Fix process memory metric semantics:
+       rssBytes
+       anonymousRssBytes
+       fileRssBytes where available
+       vmDataBytes
+       threadCount
+       heapLiveBytes only with allocator-backed evidence
+  6. Move log pruning and tail scanning off the hot path. Use a bounded live
+     log ring/index for WebUI and append-only durable writes.
+  7. Reduce routing/geodata/materializer duplicate large-object construction.
+  8. Only after 1-7, compare MALLOC_ARENA_MAX=2 or an alternate allocator with
+     the same traffic shape.
+
+Validation policy:
+  Do not build a heavy baseline matrix first. The live RSS gap is already large.
+  Validate each concrete fix with lightweight before/after samples:
+    - RSS
+    - RssAnon
+    - Threads
+    - active TCP flows
+    - HTTP/SSE client count
+    - provider sessions
+    - log/event backlog
+
+Acceptance rule:
+  A fix counts only if it removes a concrete allocation/thread/retention source,
+  adds measurement that isolates such a source, or corrects misleading metrics.
+  Protocol-specific success cases are not enough.
+```
+
+2026-06-03 RSS repair worklog - bounded runtime ownership:
+
+```text
+Problem validation record:
+
+  V-RSS-1. Resident TCP flow execution is unbounded and not owned by runtime.
+      Code evidence:
+        rust/crates/dae-daemon/src/production_runtime_owner/resident_dataplane/tcp.rs
+          resident_tcp_accept_loop calls thread::spawn for every accepted TCP
+          connection and discards the JoinHandle.
+
+        rust/crates/dae-daemon/src/production_runtime_owner/resident_dataplane/mod.rs
+          ResidentDataplaneRuntime stores only the resident accept/UDP worker
+          handles. shutdown joins those handles, not the per-flow worker
+          threads created by the accept loop.
+
+      RSS relevance:
+        This is the first repair target because it is protocol-generic and
+        directly explains high thread count plus glibc allocator high-water
+        anonymous RSS under live traffic.
+
+      Acceptance requirement:
+        Replace per-connection thread::spawn with a bounded execution model.
+        Runtime owner must retain/join all worker handles, expose configured
+        worker/queue limits, and expose accept/enqueue/reject/queue-depth
+        counters.
+
+  V-RSS-2. Product Web/API/SSE execution is unbounded.
+      Code evidence:
+        rust/crates/dae-daemon/src/daed_product.rs
+          serve_forever calls thread::spawn for every accepted HTTP stream.
+          runtime/log SSE endpoints are long-lived loops.
+
+      RSS relevance:
+        This is the second repair target. It is smaller than resident TCP under
+        traffic, but WebUI can add persistent OS threads and allocator arenas.
+
+      Acceptance requirement:
+        Product HTTP execution must be bounded and report active/rejected/
+        queued worker state. Long-lived stream clients must no longer create
+        unbounded OS threads.
+
+Solution record:
+  S-RSS-1. Resident TCP flow execution is now bounded by a fixed worker queue.
+      Changed files:
+        rust/crates/dae-daemon/src/production_runtime_owner/resident_dataplane/tcp.rs
+        rust/crates/dae-daemon/src/production_runtime_owner/resident_dataplane/mod.rs
+
+      New behavior:
+        - resident_tcp_accept_loop no longer calls thread::spawn per accepted
+          TCP flow.
+        - Accepted TCP streams are submitted to a bounded sync_channel.
+        - A fixed set of resident flow workers executes handle_tcp_connection.
+        - Worker JoinHandles are stored in ResidentDataplaneRuntime handles and
+          are joined during shutdown with the rest of the dataplane workers.
+        - Queue-full accepts are rejected and counted instead of creating more
+          OS threads.
+
+      Runtime knobs:
+        DAE_RESIDENT_FLOW_WORKERS
+          configured worker count
+          default: available_parallelism * 2, clamped to 4..16
+          hard clamp: 1..128
+
+        DAE_RESIDENT_FLOW_QUEUE
+          bounded accept queue capacity
+          default: 256
+          hard clamp: 16..16384
+
+        DAE_RESIDENT_FLOW_WORKER_STACK_BYTES
+          per worker thread stack reservation
+          default: 1048576
+          hard clamp: 262144..8388608
+
+      New dataplane report/metric fields:
+        tcp_flow_worker_count
+        tcp_flow_queue_capacity
+        tcp_flow_worker_stack_bytes
+        metrics.tcpAcceptedTotal
+        metrics.tcpEnqueuedTotal
+        metrics.tcpRejectedTotal
+        metrics.tcpQueueDepth
+
+      RSS effect:
+        This removes the largest confirmed unbounded thread source. RSS can now
+        be compared against worker_count/queue_capacity instead of active TCP
+        flow count growing OS threads without bound.
+
+  S-RSS-2. Product Web/API/SSE execution is now bounded by a fixed HTTP worker
+           queue.
+      Changed file:
+        rust/crates/dae-daemon/src/daed_product.rs
+
+      New behavior:
+        - serve_forever no longer calls thread::spawn per accepted HTTP stream.
+        - HTTP streams are submitted to a bounded sync_channel.
+        - Fixed product HTTP workers call handle_stream.
+        - Runtime/log SSE remain long-lived streams, but they now occupy a
+          bounded worker slot instead of creating unbounded OS threads.
+        - Queue-full accepts return HTTP 503 and are counted.
+
+      Runtime knobs:
+        DAED_HTTP_WORKERS
+          configured product HTTP worker count
+          default: available_parallelism * 2, clamped to 4..16
+          hard clamp: 1..128
+
+        DAED_HTTP_QUEUE
+          bounded HTTP accept queue capacity
+          default: 256
+          hard clamp: 16..16384
+
+        DAED_HTTP_WORKER_STACK_BYTES
+          per worker thread stack reservation
+          default: 1048576
+          hard clamp: 262144..8388608
+
+      New runtime overview field:
+        productHttp.configuredWorkers
+        productHttp.queueCapacity
+        productHttp.workerStackBytes
+        productHttp.activeConnections
+        productHttp.acceptedTotal
+        productHttp.enqueuedTotal
+        productHttp.rejectedTotal
+        productHttp.queueDepth
+
+      RSS effect:
+        This removes the WebUI/API/SSE unbounded thread source and makes WebUI
+        contribution visible during live RSS sampling.
+
+Validation:
+  Local commands:
+    cargo fmt --manifest-path rust/Cargo.toml -p dae-daemon
+    cargo check --manifest-path rust/Cargo.toml -p dae-daemon
+    cargo test --manifest-path rust/Cargo.toml -p dae-daemon
+
+  Result:
+    cargo check passed.
+    cargo test passed: 198 daemon tests.
+
+Remaining RSS work:
+  - Live before/after sampling on the same traffic shape is still required.
+  - Outbound provider immutable config is still rebuilt per connection.
+  - Routing/geodata/materializer duplicate large-object paths are not fixed yet.
+  - Log pruning and tail scanning are not moved off the hot path yet.
+  - WebUI heap/anonymous RSS metric semantics still need the planned split.
+  - Allocator comparisons such as MALLOC_ARENA_MAX=2 should wait until the
+    resource-model fixes are live-sampled.
+```
+
+2026-06-03 Remote 38 validation - bounded runtime ownership:
+
+```text
+Host:
+  38.65.91.47:5122
+  root login used only for this validation run.
+  Credential was not recorded.
+
+Remote environment:
+  OS:
+    Debian 12 x86_64
+    kernel 6.12.86+deb12-amd64
+  Rust:
+    rustc 1.95.0
+    cargo 1.95.0
+
+Validation setup:
+  The current local workspace snapshot was copied to:
+    /tmp/daex-rss-verify/dae-daex-align
+
+  Copied content was minimal:
+    rust workspace
+    example.dae
+    control/bpf_bpfel.o
+    control/bpf_bpfeb.o
+    this memo
+
+  Excluded:
+    .git
+    rust/target
+    benchmark_artifacts
+
+Remote build dependencies:
+  Initial remote cargo build failed before code validation because boring-sys
+  required git and the remote host did not have git installed.
+
+  Installed for validation:
+    git 2.39.5
+    cmake 3.25.1
+
+  No systemd service, production binary path, netns, BPF pin, or /etc/daed state
+  was modified.
+
+Remote validation commands:
+  cargo fmt --manifest-path rust/Cargo.toml -p dae-daemon -- --check
+  cargo check --manifest-path rust/Cargo.toml -p dae-daemon
+  cargo test --manifest-path rust/Cargo.toml -p dae-daemon --quiet
+
+Results:
+  cargo fmt --check:
+    pass
+
+  cargo check:
+    pass
+
+  cargo test:
+    pass
+    198 daemon tests passed
+    additional integration/doc-test style groups also passed:
+      6 passed
+      2 passed
+      2 passed
+      2 passed
+
+Product smoke:
+  Built debug daed on remote:
+    cargo build --manifest-path rust/Cargo.toml -p dae-daemon --bin daed
+
+  Started a temporary api-only process bound to 127.0.0.1 with:
+    DAED_HTTP_WORKERS=3
+    DAED_HTTP_QUEUE=16
+
+  Queried /api/runtime/overview after creating a temporary local API user.
+
+  Verified productHttp exists and reflects configured limits:
+    product_http_smoke=pass
+    configuredWorkers=3
+    queueCapacity=16
+    activeConnections=1
+    rejectedTotal=0
+    queueDepth=0
+
+Cleanup:
+  Removed:
+    /tmp/daex-rss-verify
+
+  Confirmed:
+    tmp_exists=no
+    daed_run_processes=0
+
+## 2026-06-04 Remote 38 full RSS test - product/control/materializer/log matrix
+
+Scope:
+  Full release RSS test for the safe product/control runtime on remote 38. This
+  is not a log-only test. It covers the main Rust product resident-owner memory
+  surfaces that can be exercised without mutating host routing/tproxy state:
+    - process startup baseline
+    - HTTP worker and runtime SSE bounded ownership
+    - `/api/runtime/overview` polling
+    - DB/API CRUD with large node/group state
+    - large-state list/read APIs
+    - generated config dry materialization
+    - apply materialization with `DAED_PRODUCT_RUNTIME_FAKE_START=1`
+    - config export path
+    - product log append/list/log-SSE hot path
+    - repeated dry/apply/list stability
+    - clear/stop and remote cleanup
+
+Boundary:
+  This test intentionally did not start the real tproxy/resident dataplane on
+  remote 38, because that would mutate host networking state. Real traffic RSS
+  for resident dataplane/tproxy must be a separate authorized host-network test.
+
+Remote 38 build:
+  Host:
+    38.65.91.47:5122
+
+  Temporary source path:
+    /tmp/daex-rss-full/dae-daex-align
+
+  Build command:
+    cargo build --manifest-path rust/Cargo.toml -p dae-daemon --bin daed --release --quiet
+
+  Release binary:
+    rust/target/release/daed
+    size: 14M
+    sha256: 54eac439cbe83991051f7e197ed06e5f868b3e20d449713648f024b29777bc1d
+
+Primary full-matrix run:
+  Environment:
+    DAED_PRODUCT_RUNTIME_FAKE_START=1
+    DAED_HTTP_WORKERS=4
+    DAED_HTTP_QUEUE=64
+    --api-only
+
+  Coverage:
+    - startup idle baseline
+    - 200 `/api/runtime/overview` polls
+    - 3 active runtime SSE streams
+    - 12 runtime SSE connection attempts
+    - 500 manual nodes plus one group containing all nodes
+    - 20 large-state list/read cycles for nodes/groups/general state
+    - dry reload materialization of an 86548-byte generated config
+    - apply reload materialization with fake runtime enabled
+    - generated config export of the same 86548-byte content
+    - 180 runtime log-level writes plus log listing
+    - 3 active log SSE streams plus 60 additional log writes
+    - log clear and runtime stop
+
+  Stage samples:
+    01_start_idle:
+      VmRSS: 9384 KiB
+      RssAnon: 1528 KiB
+      RssFile: 7856 KiB
+      VmData: 9724 KiB
+      Threads: 6
+
+    02_after_200_overview_polls:
+      VmRSS: 10056 KiB
+      RssAnon: 2072 KiB
+      RssFile: 7984 KiB
+      VmData: 9988 KiB
+      Threads: 6
+
+    03_with_3_runtime_sse:
+      VmRSS: 10056 KiB
+      RssAnon: 2072 KiB
+      Threads: 6
+      productHttp.activeConnections: 4
+
+    05_with_12_runtime_sse_attempts_proc_only:
+      VmRSS: 10060 KiB
+      RssAnon: 2076 KiB
+      Threads: 6
+
+    07_after_500_nodes_and_group_crud:
+      VmRSS: 12940 KiB
+      RssAnon: 4764 KiB
+      RssFile: 8176 KiB
+      VmData: 14572 KiB
+      Threads: 6
+
+    08_after_large_state_list_reads:
+      VmRSS: 13724 KiB
+      RssAnon: 5548 KiB
+      RssFile: 8176 KiB
+      VmData: 17176 KiB
+      Threads: 6
+
+    09_after_dry_materialize_large_config:
+      VmRSS: 13952 KiB
+      RssAnon: 5712 KiB
+      RssFile: 8240 KiB
+      VmData: 17744 KiB
+      Threads: 6
+      dry_content_len: 86548
+      contentIncluded: true
+
+    10_after_apply_materialize_fake_runtime:
+      VmRSS: 14744 KiB
+      RssAnon: 6504 KiB
+      RssFile: 8240 KiB
+      VmData: 18700 KiB
+      Threads: 6
+      reloadCount: 1
+      runtime.fakeRuntime: true
+      contentIncluded: false
+      content field: absent
+
+    11_after_config_export:
+      VmRSS: 14860 KiB
+      RssAnon: 6620 KiB
+      Threads: 6
+      export_content_len: 86548
+
+    12_after_180_log_level_writes:
+      VmRSS: 14860 KiB
+      RssAnon: 6620 KiB
+      Threads: 6
+      logs_returned: 188
+
+    13_with_3_log_sse_and_log_writes:
+      VmRSS: 14860 KiB
+      RssAnon: 6620 KiB
+      Threads: 6
+      productHttp.activeConnections: 4
+
+    15_after_logs_clear_and_runtime_stop:
+      VmRSS: 14860 KiB
+      RssAnon: 6620 KiB
+      Threads: 6
+      runtime.state: stopped
+
+  API assertions:
+    - `/api/runtime/overview` exposed:
+        - `anonymousRssBytes`
+        - `fileRssBytes`
+        - `vmDataBytes`
+        - `heapLiveBytes=null`
+        - `heapMetricSource=unavailable`
+        - `heapAllocBytesSource=compat-alias-rss-anon-not-live-heap`
+    - `heapAllocBytes == anonymousRssBytes` as the compatibility alias.
+    - HTTP worker thread count stayed fixed at 6 process threads with 4 workers.
+    - Dry materialization still returned generated config content.
+    - Apply materialization did not return generated config content.
+
+Interpretation from primary matrix:
+  RSS growth is not explained by logs. In this matrix, RSS/RssAnon increases
+  came mainly from large product state and generated-config materialization:
+    - idle to 500 nodes/group:
+        RssAnon 1528 KiB -> 4764 KiB
+    - large-state list reads:
+        RssAnon 4764 KiB -> 5548 KiB
+    - dry/apply/export materialization:
+        RssAnon 5548 KiB -> 6620 KiB
+    - log writes and log SSE:
+        RssAnon stayed at 6620 KiB
+
+  The log optimization is still useful because it removes per-append tail scans,
+  per-append prune allocation, and idle log-SSE scans, but this full test shows
+  logs were not the dominant RSS source in the exercised product/control path.
+
+Repeated materialization/list stability run:
+  Environment:
+    DAED_PRODUCT_RUNTIME_FAKE_START=1
+    DAED_HTTP_WORKERS=4
+    DAED_HTTP_QUEUE=64
+    --api-only
+
+  Workload:
+    - 500 manual nodes plus one group
+    - 20 dry reload + apply reload cycles
+    - 100 large nodes/groups/general-state list cycles
+    - runtime stop
+
+  Stage samples:
+    idle:
+      VmRSS: 9584 KiB
+      RssAnon: 1520 KiB
+      RssFile: 8064 KiB
+      VmData: 9720 KiB
+      Threads: 6
+
+    after_500_nodes:
+      VmRSS: 13780 KiB
+      RssAnon: 5460 KiB
+      RssFile: 8320 KiB
+      VmData: 14352 KiB
+      Threads: 6
+
+    after_20_dry_apply_cycles:
+      VmRSS: 17228 KiB
+      RssAnon: 8780 KiB
+      RssFile: 8448 KiB
+      VmData: 19752 KiB
+      Threads: 6
+      reloadCount: 20
+
+    after_100_large_list_cycles:
+      VmRSS: 17520 KiB
+      RssAnon: 9072 KiB
+      RssFile: 8448 KiB
+      VmData: 19752 KiB
+      Threads: 6
+
+    after_stop:
+      VmRSS: 17520 KiB
+      RssAnon: 9072 KiB
+      RssFile: 8448 KiB
+      VmData: 19752 KiB
+      Threads: 6
+
+  Interpretation from repeated run:
+    - The thread count stayed fixed at 6 throughout.
+    - Repeated dry/apply materialization raised the allocator high-water mark to
+      about 17.2 MiB RSS / 8.8 MiB RssAnon.
+    - 100 additional large list cycles added only about 292 KiB RssAnon.
+    - Runtime stop did not reduce RSS because the process allocator retained
+      pages; this is high-water retention, not active log growth.
+
+Overall conclusion:
+  The current RSS high-water in the safe release product/control matrix is
+  dominated by large state rendering/materialization/listing and allocator page
+  retention. The previous bounded-worker changes prevent thread-driven RSS
+  growth. The log hot-path changes are validated but not the main RSS source in
+  this matrix.
+
+Cleanup:
+  Removed:
+    /tmp/daex-rss-full
+
+  Confirmed:
+    tmp_exists=no
+    daed_run_processes=0
+
+Validation meaning:
+  Remote 38 confirms the bounded runtime ownership changes compile, pass the
+  daemon test suite, and expose product HTTP worker metrics in a real daed
+  process.
+
+  This is not yet a live RSS before/after dataplane traffic sample. The next
+  RSS validation still needs a controlled resident dataplane run with:
+    RSS
+    RssAnon
+    Threads
+    active TCP flows
+    resident dataplane tcp queue/reject metrics
+    productHttp metrics
+```
+
+2026-06-04 Remote 38 RSS sample - product/API/SSE bounded workers:
+
+```text
+Host:
+  38.65.91.47:5122
+  root login used only for this validation run.
+  Credential was not recorded.
+
+Scope:
+  This sample measures the Rust product Web/API/SSE process in api-only mode
+  with the bounded HTTP worker model.
+
+  It does not measure resident dataplane real proxy traffic. No systemd service,
+  production binary path, /etc/daed state, netns, tproxy rule, or BPF pin was
+  modified.
+
+Remote build:
+  Snapshot copied to:
+    /tmp/daex-rss-measure/dae-daex-align
+
+  Built:
+    cargo build --manifest-path rust/Cargo.toml -p dae-daemon --bin daed --release
+
+  Release binary:
+    rust/target/release/daed
+    size: 15M
+    sha256: e9376bb13d6840423daca58759975de95ef03cc6ea53929498e75d07b436a5a0
+
+  Remote CPU count:
+    nproc=2
+
+Measurement process:
+  Started temporary api-only daed:
+    DAED_HTTP_WORKERS=4
+    DAED_HTTP_QUEUE=32
+    daed run -c /tmp/.../config --state /tmp/.../daed.db
+      --listen 127.0.0.1:32139 --api-only
+
+  Created one temporary API user inside the temporary state DB.
+  Queried /api/runtime/overview for productHttp and process counters.
+
+RSS sample 1 - idle/api overview:
+  idle_after_start:
+    VmSize: 419852 KiB
+    VmRSS: 9220 KiB
+    RssAnon: 1396 KiB
+    RssFile: 7824 KiB
+    VmData: 9720 KiB
+    Threads: 6
+
+  after_overview:
+    VmSize: 419852 KiB
+    VmRSS: 9496 KiB
+    RssAnon: 1544 KiB
+    RssFile: 7952 KiB
+    VmData: 9728 KiB
+    Threads: 6
+
+  productHttp overview:
+    configuredWorkers=4
+    queueCapacity=32
+    activeConnections=1
+    rejectedTotal=0
+    queueDepth=1
+    rssBytes ~= 9658368
+    heapAllocBytes/RssAnon ~= 1581056
+    goroutines/thread_count=6
+
+RSS sample 2 - 3 long-lived runtime SSE connections:
+  with_3_sse:
+    VmSize: 419852 KiB
+    VmRSS: 9784 KiB
+    RssAnon: 1832 KiB
+    RssFile: 7952 KiB
+    VmData: 9744 KiB
+    Threads: 6
+
+  productHttp overview:
+    configuredWorkers=4
+    queueCapacity=32
+    activeConnections=4
+    acceptedTotal=8
+    enqueuedTotal=8
+    rejectedTotal=0
+    queueDepth=1
+    rssBytes ~= 10031104
+    heapAllocBytes/RssAnon ~= 1888256
+    goroutines/thread_count=6
+
+  after_sse_closed:
+    VmSize: 419852 KiB
+    VmRSS: 9796 KiB
+    RssAnon: 1844 KiB
+    RssFile: 7952 KiB
+    VmData: 9756 KiB
+    Threads: 6
+
+RSS sample 3 - 12 runtime SSE attempts with only 4 HTTP workers:
+  idle:
+    VmSize: 353288 KiB
+    VmRSS: 9212 KiB
+    RssAnon: 1376 KiB
+    RssFile: 7836 KiB
+    VmData: 8568 KiB
+    Threads: 6
+
+  with_12_sse_attempts:
+    VmSize: 353288 KiB
+    VmRSS: 9512 KiB
+    RssAnon: 1676 KiB
+    RssFile: 7836 KiB
+    VmData: 8584 KiB
+    Threads: 6
+    curl_sse_processes=12
+
+  after_kill_sse:
+    VmSize: 353288 KiB
+    VmRSS: 9552 KiB
+    RssAnon: 1716 KiB
+    RssFile: 7836 KiB
+    VmData: 8624 KiB
+    Threads: 6
+
+Interpretation:
+  Product/API/SSE bounded worker model holds process thread count fixed at 6:
+    1 main/listener thread
+    4 configured HTTP workers
+    1 signal/control thread
+
+  With 3 active SSE streams, RSS stayed around 9.6 MiB and anonymous RSS stayed
+  below 2 MiB. With 12 SSE attempts, daed thread count still stayed fixed at 6,
+  confirming that Web/API/SSE no longer creates one OS thread per HTTP
+  connection.
+
+  This validates the product HTTP/SSE part of the RSS repair on remote 38. It
+  does not prove the resident dataplane RSS under real traffic. The next
+  resident dataplane RSS test must use a controlled real runtime with:
+    - valid daed config
+    - temporary resident dataplane enablement
+    - RSS/RssAnon/Threads
+    - active TCP flow count
+    - tcpAcceptedTotal/tcpEnqueuedTotal/tcpRejectedTotal/tcpQueueDepth
+    - productHttp metrics
+
+Cleanup:
+  Removed:
+    /tmp/daex-rss-measure
+
+  Confirmed:
+    tmp_exists=no
+    daed_run_processes=0
+```
+
+## 2026-06-04 RSS optimization completion - product/runtime hot paths
+
+Scope:
+  Finish the remaining Rust native RSS work after the bounded worker fixes. This
+  is a generic product/runtime memory pass, not a protocol-specific fix.
+
+Problem validation record:
+  - Product HTTP/SSE was already changed from per-connection OS thread spawning
+    to bounded worker ownership, and remote 38 showed fixed daed thread count
+    under multiple SSE connections.
+  - Remaining RSS/capacity risks were still visible in shared product/runtime
+    paths:
+      - `/api/runtime/overview` exposed `heapAllocBytes` as a single ambiguous
+        value backed by `/proc/self/status` RssAnon, causing WebUI cards and
+        diagnostics to confuse anonymous RSS with a live heap counter.
+      - `materialize_runtime(..., false)` returned full generated config content
+        in the apply/reload JSON report even though apply callers only need
+        metadata and the file path, duplicating large generated config strings.
+      - Product log append scanned the JSONL tail for the last id on every
+        append and ran prune on every append, so debug/task-log traffic paid
+        repeated tail reads, line allocation, join allocation, and temp-file
+        writes.
+      - Log SSE polling rescanned the JSONL file every 500 ms even when no new
+        log id existed.
+      - Resident outbound TLS/provider setup rebuilt rustls root/config objects
+        and Boring connector state for each connection instead of reusing
+        immutable per-plan client configuration.
+
+Changed files:
+  - `rust/crates/dae-daemon/src/daed_product.rs`
+  - `rust/crates/dae-daemon/src/production_runtime_owner/resident_dataplane/client.rs`
+
+Solution record:
+  - Process memory reporting now splits `/proc/self/status` into:
+      - `rssBytes`
+      - `anonymousRssBytes`
+      - `fileRssBytes`
+      - `vmDataBytes`
+      - `heapLiveBytes: null`
+      - `heapMetricSource: "unavailable"`
+      - `heapAllocBytesSource: "compat-alias-rss-anon-not-live-heap"`
+    `heapAllocBytes` remains for WebUI/API compatibility, but is explicitly a
+    compat alias for anonymous RSS rather than a Rust live heap counter.
+  - Runtime config materialization now includes `content` only for dry preview
+    and export paths. Apply/reload materialization writes the generated file and
+    returns metadata with `contentIncluded=false`, avoiding a second large JSON
+    copy of generated config content.
+  - Product log append now keeps a path-aware last-id cache. It scans the tail
+    only on first use/path change and updates the id after append.
+  - Product log prune is now gated by file size or a 256-entry interval instead
+    of running on every append. Explicit settings changes and initialization
+    still run immediate prune.
+  - Product log clear/settings prune share the same file lock as append and
+    reset the id cache, keeping JSONL ids deterministic after clear.
+  - Log SSE uses the cached last id and only scans entries when the id changes
+    or the log is reset, removing idle polling scans.
+  - Resident TLS provider setup now caches immutable client configuration:
+      - rustls `ClientConfig` keyed by flow/ALPN/fingerprint-relevant plan.
+      - Boring `SslConnector` keyed by the same generic client config key.
+    Each network connection still creates a fresh TLS session/connection; only
+    immutable setup objects are reused.
+
+Local validation:
+  - `cargo fmt --manifest-path rust/Cargo.toml -p dae-daemon`
+  - `cargo check --manifest-path rust/Cargo.toml -p dae-daemon`
+  - `cargo test --manifest-path rust/Cargo.toml -p dae-daemon --quiet`
+  - Result: pass. `dae-daemon` test run passed 198 daemon tests plus the
+    additional integration groups reported by cargo.
+
+Remote validation status:
+  Completed on remote 38.
+
+Remote 38 release build:
+  Host:
+    38.65.91.47:5122
+
+  Temporary source path:
+    /tmp/daex-rss-complete/dae-daex-align
+
+  Build command:
+    cargo build --manifest-path rust/Cargo.toml -p dae-daemon --bin daed --release --quiet
+
+  Release binary:
+    rust/target/release/daed
+    size: 14M
+    sha256: 0da4c6acedf62230fc03627c1c7e29b43bd26f1366b36d7d1d5fdeebf5732faa
+
+Remote 38 RSS/API sample:
+  Started temporary api-only daed:
+    DAED_HTTP_WORKERS=4
+    DAED_HTTP_QUEUE=32
+    daed run -c /tmp/daex-rss-complete/run/config
+      --state /tmp/daex-rss-complete/run/daed.db
+      --listen 127.0.0.1:32149
+      --api-only
+
+  idle_after_start:
+    VmSize: 419816 KiB
+    VmRSS: 9368 KiB
+    RssAnon: 1528 KiB
+    RssFile: 7840 KiB
+    VmData: 9724 KiB
+    Threads: 6
+
+  overview_after_start:
+    rssBytes=9809920
+    anonymousRssBytes=1716224
+    fileRssBytes=8093696
+    vmDataBytes=9965568
+    heapLiveBytes=null
+    heapMetricSource=unavailable
+    heapAllocBytes=1716224
+    heapAllocBytesSource=compat-alias-rss-anon-not-live-heap
+    goroutines/thread_count=6
+    productHttp.configuredWorkers=4
+    productHttp.queueCapacity=32
+    productHttp.activeConnections=1
+    productHttp.rejectedTotal=0
+    productHttp.queueDepth=0
+
+  with_3_sse:
+    VmSize: 419816 KiB
+    VmRSS: 9804 KiB
+    RssAnon: 1836 KiB
+    RssFile: 7968 KiB
+    VmData: 9752 KiB
+    Threads: 6
+
+  overview_with_3_sse:
+    rssBytes=10055680
+    anonymousRssBytes=1896448
+    fileRssBytes=8159232
+    vmDataBytes=10002432
+    heapLiveBytes=null
+    heapMetricSource=unavailable
+    heapAllocBytes=1896448
+    heapAllocBytesSource=compat-alias-rss-anon-not-live-heap
+    goroutines/thread_count=6
+    productHttp.activeConnections=4
+    productHttp.rejectedTotal=0
+    productHttp.queueDepth=1
+
+  after_3_sse_closed:
+    VmSize: 419816 KiB
+    VmRSS: 9820 KiB
+    RssAnon: 1852 KiB
+    RssFile: 7968 KiB
+    VmData: 9768 KiB
+    Threads: 6
+
+  with_12_sse_attempts:
+    VmSize: 419816 KiB
+    VmRSS: 9884 KiB
+    RssAnon: 1916 KiB
+    RssFile: 7968 KiB
+    VmData: 9832 KiB
+    Threads: 6
+    curl_sse_processes=12
+
+  after_12_sse_closed:
+    VmSize: 419816 KiB
+    VmRSS: 9904 KiB
+    RssAnon: 1936 KiB
+    RssFile: 7968 KiB
+    VmData: 9852 KiB
+    Threads: 6
+
+  overview_after_12_sse_closed:
+    rssBytes=10141696
+    anonymousRssBytes=1982464
+    fileRssBytes=8159232
+    vmDataBytes=10088448
+    heapLiveBytes=null
+    heapMetricSource=unavailable
+    heapAllocBytes=1982464
+    heapAllocBytesSource=compat-alias-rss-anon-not-live-heap
+    goroutines/thread_count=6
+    productHttp.activeConnections=1
+    productHttp.acceptedTotal=21
+    productHttp.enqueuedTotal=21
+    productHttp.rejectedTotal=0
+    productHttp.queueDepth=1
+
+Interpretation:
+  The completed RSS optimization pass holds the product/api/SSE release process
+  at 6 threads with 4 configured HTTP workers, including 12 simultaneous SSE
+  connection attempts. Anonymous RSS stayed below 2 MiB in this api-only release
+  sample. `/api/runtime/overview` now exposes the split memory fields and keeps
+  `heapAllocBytes` as an explicit RssAnon compatibility alias.
+
+Cleanup:
+  Removed:
+    /tmp/daex-rss-complete
+
+  Confirmed:
+    tmp_exists=no
+    daed_run_processes=0
+
+## 2026-06-04 Remote 38 real resident/tproxy RSS test - host-network
+
+Scope:
+  Authorized host-network RSS test on remote 38 using real Rust resident
+  dataplane/tproxy. This test did not deploy to 10.10.10.2. It intentionally
+  used temporary kernel objects only:
+    - resident runtime netns: daens
+    - resident runtime link: dae0 / dae0peer
+    - temporary client netns: rssclient
+    - temporary LAN veth: rsslan0 / rsspeer0
+    - native eBPF TCX attach and real transparent TCP/UDP listener on port 12345
+
+Boundary:
+  This is not a log-only test. Logs were already shown not to dominate RSS in
+  the product/control matrix. This host-network test covers the real resident
+  runtime, tproxy listener, native eBPF attach, LAN ingress redirection, and
+  bounded resident TCP flow workers.
+
+Remote build:
+  Host:
+    38.65.91.47:5122
+
+  Temporary source path during test:
+    /tmp/daex-rss-hostnet/dae-daex-align
+
+  Native BTF object used during test:
+    /tmp/daex-rss-hostnet/native-btf-target/bpfel-unknown-none/release/libdae_ebpf_program.so
+
+  Final patched native-ebpf daed:
+    rust/target/release/daed
+    size: 16M
+    sha256: da140cc8d62fc9bcaef2cd05885665c6922574db48844562acfb5d90b3256f52
+
+  Environment:
+    DAE_RUST_RESIDENT_DATAPLANE=1
+    DAE_RUST_NATIVE_EBPF=1
+    DAE_RUST_NATIVE_EBPF_BACKEND=tcx
+    DAE_RUST_NATIVE_BPF_OBJECT=/tmp/daex-rss-hostnet/native-btf-target/bpfel-unknown-none/release/libdae_ebpf_program.so
+    DAED_HTTP_WORKERS=4
+    DAED_HTTP_QUEUE=64
+    DAE_RESIDENT_FLOW_WORKERS=4
+    DAE_RESIDENT_FLOW_QUEUE=64
+
+  Toolchain/dependency note:
+    Remote 38 needed nightly minimal, rust-src for nightly, and bpf-linker to
+    build the BTF native object. The embedded native object in the release
+    binary was not used for this test because the previous embedded-object path
+    failed with NoBTF.
+
+Important blocker discovered and fixed:
+  A temporary LAN-flow run with rsslan0 initially exposed a native eBPF map-id
+  handoff stability bug:
+    attach-production-dae0peer-native-ebpf-program failed with:
+      native eBPF open loaded map id <id> failed: No such file or directory
+
+  Root cause:
+    native map-id collection compared before/after global BPF map snapshots.
+    The after-load snapshot can contain short-lived map ids from unrelated
+    kernel/userspace activity that disappear before they are opened. Treating
+    that ENOENT as fatal caused peer attach to fall back to tc-command; then
+    routing_tuples_map_id was unavailable and resident TCP router start failed.
+
+  Fix applied locally and synced to remote test source:
+    rust/crates/dae-daemon/src/production_runtime_owner/native_ebpf.rs
+      - collect_loaded_map_ids now skips transient NotFound/ENOENT map ids.
+      - non-NotFound errors remain fatal.
+      - if the required routing_tuples_map is genuinely missing, the later
+        resident dataplane check still fails closed.
+
+  Verification:
+    Local:
+      cargo test --manifest-path rust/Cargo.toml -p dae-daemon transient_missing_map_ids_are_skipped_during_native_map_collection --quiet
+      cargo test --manifest-path rust/Cargo.toml -p dae-daemon --features native-ebpf transient_missing_map_ids_are_skipped_during_native_map_collection --quiet
+
+    Remote:
+      cargo test --manifest-path rust/Cargo.toml -p dae-daemon --features native-ebpf transient_missing_map_ids_are_skipped_during_native_map_collection --quiet
+      cargo build --manifest-path rust/Cargo.toml -p dae-daemon --bin daed --release --features native-ebpf --quiet
+
+Test topology:
+  Runtime config:
+    global {
+      tproxy_port: "12345"
+      tproxy_port_protect: "true"
+      log_level: "debug"
+      lan_interface: "rsslan0"
+    }
+
+    dns {}
+
+    routing {
+      fallback: proxy
+    }
+
+    node:
+      vless://01234567-89ab-cdef-0123-456789abcdef@10.255.255.1:443?security=tls&type=tcp&sni=example.com&flow=xtls-rprx-vision&alpn=h2,http/1.1#hostnet_node
+
+    group:
+      proxy policy fixed(0), bound to hostnet_node
+
+  Flow injection:
+    rssclient namespace:
+      rsspeer0 172.31.255.2/24
+      default via 172.31.255.1 dev rsspeer0
+
+    host side:
+      rsslan0 172.31.255.1/24
+
+    Test flows:
+      8 concurrent TCP attempts from rssclient to 198.18.0.1:80
+      20 additional sequential TCP attempts from rssclient to 198.18.0.1:80
+
+  Expected outbound dial failure:
+    The configured proxy server 10.255.255.1:443 is intentionally unreachable.
+    The observed tcp_connection_failed warnings are expected test behavior and
+    prove that LAN ingress traffic reached resident TCP workers. They are not
+    an RSS problem and not a product log root cause.
+
+Final host-network assertions:
+  - dry reload included generated content:
+      applied=0
+      runtimeStarted=false
+      contentIncluded=true
+      contentLen=612
+
+  - real reload started actual resident runtime:
+      applied=1
+      runtimeStarted=true
+      fakeRuntime=false
+      contentIncluded=false
+      content field absent
+
+  - resident dataplane:
+      enabled=true
+      status=pass
+      attachBackend=tcx
+      netnsLinkMode=netkit
+      routing_tuple_map_id=7297
+      proxy_count=1
+      tcp_flow_worker_count=4
+      tcp_flow_queue_capacity=64
+
+  - resident LAN:
+      rsslan0 native_attached=true
+      backend=tcx
+      LAN egress backend=tcx
+      fallback_used=false
+
+  - tproxy listener:
+      daens has TCP and UDP listeners on 0.0.0.0:12345 owned by daed.
+
+  - flow counters after 28 test TCP attempts:
+      tcpAcceptedTotal=28
+      tcpEnqueuedTotal=28
+      tcpRejectedTotal=0
+      activeTcpConnections=0
+      tcpQueueDepth=1
+      uploadTotal=0
+      downloadTotal=0
+
+RSS stage samples:
+  01_idle_before_auth:
+    VmRSS: 9008 KiB
+    RssAnon: 1128 KiB
+    RssFile: 7880 KiB
+    VmData: 8448 KiB
+    Threads: 6
+
+  02_idle_after_auth:
+    VmRSS: 9328 KiB
+    RssAnon: 1384 KiB
+    RssFile: 7944 KiB
+    VmData: 8564 KiB
+    Threads: 6
+
+  03_after_resources_with_temp_lan:
+    VmRSS: 10284 KiB
+    RssAnon: 2020 KiB
+    RssFile: 8264 KiB
+    VmData: 8912 KiB
+    Threads: 6
+
+  04_after_dry_materialize:
+    VmRSS: 10436 KiB
+    RssAnon: 2044 KiB
+    RssFile: 8392 KiB
+    VmData: 8932 KiB
+    Threads: 6
+
+  05_after_real_resident_reload:
+    VmRSS: 15732 KiB
+    RssAnon: 6380 KiB
+    RssFile: 9352 KiB
+    VmData: 21572 KiB
+    Threads: 12
+
+  07_with_8_client_lan_tcp_attempts_midflight:
+    VmRSS: 15876 KiB
+    RssAnon: 6524 KiB
+    RssFile: 9352 KiB
+    VmData: 21636 KiB
+    Threads: 12
+    tcpAcceptedTotal=8
+    tcpEnqueuedTotal=8
+    tcpRejectedTotal=0
+
+  09_after_20_more_client_lan_tcp_attempts:
+    VmRSS: 15936 KiB
+    RssAnon: 6584 KiB
+    RssFile: 9352 KiB
+    VmData: 21696 KiB
+    Threads: 12
+    tcpAcceptedTotal=28
+    tcpEnqueuedTotal=28
+    tcpRejectedTotal=0
+
+  10_after_runtime_stop:
+    VmRSS: 15972 KiB
+    RssAnon: 6556 KiB
+    RssFile: 9416 KiB
+    VmData: 21716 KiB
+    Threads: 6
+
+Comparison with product/control RSS matrix:
+  Safe product/control baseline:
+    idle:
+      VmRSS 9384 KiB
+      RssAnon 1528 KiB
+      Threads 6
+
+    after 500 nodes/group:
+      VmRSS 12940 KiB
+      RssAnon 4764 KiB
+      Threads 6
+
+    after fake apply materialization:
+      VmRSS 14744 KiB
+      RssAnon 6504 KiB
+      Threads 6
+
+    repeated after 20 dry/apply cycles:
+      VmRSS 17228 KiB
+      RssAnon 8780 KiB
+      Threads 6
+
+  Real resident/tproxy deltas in this host-network run:
+    dry materialize -> real resident reload:
+      VmRSS 10436 KiB -> 15732 KiB  (+5296 KiB)
+      RssAnon 2044 KiB -> 6380 KiB  (+4336 KiB)
+      Threads 6 -> 12
+
+    real resident reload -> 28 accepted/enqueued TCP flows:
+      VmRSS 15732 KiB -> 15936 KiB  (+204 KiB)
+      RssAnon 6380 KiB -> 6584 KiB  (+204 KiB)
+      Threads stayed 12
+
+    safe fake apply vs real resident reload:
+      VmRSS 14744 KiB -> 15732 KiB  (+988 KiB)
+      RssAnon 6504 KiB -> 6380 KiB  (-124 KiB)
+      Threads 6 -> 12
+
+Interpretation:
+  The large RSS problem is not explained by logs and is also not explained by
+  the real resident/tproxy flow path under bounded worker settings. In the real
+  host-network run, starting resident/tproxy added about 5.2 MiB RSS from the
+  small dry-materialized baseline, mostly from resident runtime structures,
+  native eBPF/userspace loader state, socket/map handoff, and six additional
+  threads. After the resident runtime was already running, 28 accepted TCP
+  attempts added only about 204 KiB RSS/RssAnon.
+
+  Compared with the safe fake apply materialization stage, real resident/tproxy
+  had roughly the same anonymous RSS and about 1 MiB more total RSS, with six
+  more threads. This points back to product/control large-state
+  rendering/materialization/listing and allocator high-water retention as the
+  higher-priority RSS source, not resident flow processing and not task logs.
+
+  The WebUI/overview "goroutines" field is still the Rust process thread count
+  compatibility field. In this test it correctly moved from 6 to 12 when real
+  resident workers started, then back to 6 after runtime stop.
+
+Cleanup:
+  Removed from remote 38:
+    /tmp/daex-rss-hostnet
+    /tmp/dae-daemon-resident-runtime-*
+    dae0
+    daens
+    rsslan0
+    rssclient
+
+  Confirmed after cleanup:
+    dae0 absent
+    daens absent
+    rsslan0 absent
+    rssclient absent
+    no daed run process for the test

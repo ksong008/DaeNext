@@ -4,6 +4,8 @@ use std::io::{self, BufRead, Read, Seek, SeekFrom, Write};
 use std::net::{TcpListener, TcpStream, ToSocketAddrs};
 use std::path::{Component, Path, PathBuf};
 use std::process::Command;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::mpsc::{self, Receiver, RecvTimeoutError, TrySendError};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
@@ -47,11 +49,26 @@ const MAX_LOG_QUERY_LIMIT: usize = 2_000;
 const MAX_LOG_LINE_BYTES: usize = 16 * 1024;
 const MAX_LOG_FIELD_VALUE_LEN: usize = 1024;
 const LOG_TAIL_ID_SCAN_BYTES: u64 = 1024 * 1024;
+const LOG_PRUNE_INTERVAL: u64 = 256;
 const LOG_STREAM_POLL_INTERVAL: Duration = Duration::from_millis(500);
 const LOG_STREAM_HEARTBEAT_INTERVAL: Duration = Duration::from_secs(15);
 const LOG_STREAM_RETRY_MS: u64 = 3_000;
 const PRODUCT_LOG_DIR: &str = "logs";
 const PRODUCT_LOG_FILE: &str = "current.jsonl";
+const PRODUCT_HTTP_WORKERS_ENV: &str = "DAED_HTTP_WORKERS";
+const PRODUCT_HTTP_QUEUE_ENV: &str = "DAED_HTTP_QUEUE";
+const PRODUCT_HTTP_WORKER_STACK_BYTES_ENV: &str = "DAED_HTTP_WORKER_STACK_BYTES";
+const PRODUCT_HTTP_WORKER_DEFAULT_MIN: usize = 4;
+const PRODUCT_HTTP_WORKER_DEFAULT_MAX: usize = 16;
+const PRODUCT_HTTP_WORKER_MIN: usize = 1;
+const PRODUCT_HTTP_WORKER_MAX: usize = 128;
+const PRODUCT_HTTP_QUEUE_DEFAULT: usize = 256;
+const PRODUCT_HTTP_QUEUE_MIN: usize = 16;
+const PRODUCT_HTTP_QUEUE_MAX: usize = 16_384;
+const PRODUCT_HTTP_WORKER_STACK_BYTES_DEFAULT: usize = 1024 * 1024;
+const PRODUCT_HTTP_WORKER_STACK_BYTES_MIN: usize = 256 * 1024;
+const PRODUCT_HTTP_WORKER_STACK_BYTES_MAX: usize = 8 * 1024 * 1024;
+const PRODUCT_HTTP_WORKER_RECV_TIMEOUT: Duration = Duration::from_millis(100);
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DaedProductOutput {
@@ -102,6 +119,119 @@ struct AppState {
     web_root: PathBuf,
     api_only: bool,
     runtime: Arc<ProductRuntimeManager>,
+    http_metrics: Arc<ProductHttpMetrics>,
+}
+
+#[derive(Debug, Default)]
+struct ProductHttpMetrics {
+    configured_workers: AtomicU64,
+    queue_capacity: AtomicU64,
+    worker_stack_bytes: AtomicU64,
+    active_connections: AtomicU64,
+    accepted_total: AtomicU64,
+    enqueued_total: AtomicU64,
+    rejected_total: AtomicU64,
+    queue_depth: AtomicU64,
+}
+
+impl ProductHttpMetrics {
+    fn configure(&self, config: ProductHttpWorkerConfig) {
+        self.configured_workers
+            .store(config.worker_count as u64, Ordering::Relaxed);
+        self.queue_capacity
+            .store(config.queue_capacity as u64, Ordering::Relaxed);
+        self.worker_stack_bytes
+            .store(config.worker_stack_bytes as u64, Ordering::Relaxed);
+    }
+
+    fn accepted(&self) {
+        self.accepted_total.fetch_add(1, Ordering::Relaxed);
+    }
+
+    fn enqueued(&self) {
+        self.enqueued_total.fetch_add(1, Ordering::Relaxed);
+        self.queue_depth.fetch_add(1, Ordering::Relaxed);
+    }
+
+    fn dequeued(&self) {
+        let _ = self
+            .queue_depth
+            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |depth| {
+                Some(depth.saturating_sub(1))
+            });
+    }
+
+    fn rejected(&self) {
+        self.rejected_total.fetch_add(1, Ordering::Relaxed);
+    }
+
+    fn opened(&self) {
+        self.active_connections.fetch_add(1, Ordering::Relaxed);
+    }
+
+    fn closed(&self) {
+        self.active_connections.fetch_sub(1, Ordering::Relaxed);
+    }
+
+    fn snapshot(&self) -> Value {
+        json!({
+            "configuredWorkers": self.configured_workers.load(Ordering::Relaxed),
+            "queueCapacity": self.queue_capacity.load(Ordering::Relaxed),
+            "workerStackBytes": self.worker_stack_bytes.load(Ordering::Relaxed),
+            "activeConnections": self.active_connections.load(Ordering::Relaxed),
+            "acceptedTotal": self.accepted_total.load(Ordering::Relaxed),
+            "enqueuedTotal": self.enqueued_total.load(Ordering::Relaxed),
+            "rejectedTotal": self.rejected_total.load(Ordering::Relaxed),
+            "queueDepth": self.queue_depth.load(Ordering::Relaxed),
+        })
+    }
+}
+
+#[derive(Clone, Copy, Debug)]
+struct ProductHttpWorkerConfig {
+    worker_count: usize,
+    queue_capacity: usize,
+    worker_stack_bytes: usize,
+}
+
+impl ProductHttpWorkerConfig {
+    fn from_env() -> Self {
+        let default_workers = thread::available_parallelism()
+            .map(|parallelism| parallelism.get().saturating_mul(2))
+            .unwrap_or(PRODUCT_HTTP_WORKER_DEFAULT_MIN)
+            .clamp(
+                PRODUCT_HTTP_WORKER_DEFAULT_MIN,
+                PRODUCT_HTTP_WORKER_DEFAULT_MAX,
+            );
+        Self {
+            worker_count: env_usize(
+                PRODUCT_HTTP_WORKERS_ENV,
+                default_workers,
+                PRODUCT_HTTP_WORKER_MIN,
+                PRODUCT_HTTP_WORKER_MAX,
+            ),
+            queue_capacity: env_usize(
+                PRODUCT_HTTP_QUEUE_ENV,
+                PRODUCT_HTTP_QUEUE_DEFAULT,
+                PRODUCT_HTTP_QUEUE_MIN,
+                PRODUCT_HTTP_QUEUE_MAX,
+            ),
+            worker_stack_bytes: env_usize(
+                PRODUCT_HTTP_WORKER_STACK_BYTES_ENV,
+                PRODUCT_HTTP_WORKER_STACK_BYTES_DEFAULT,
+                PRODUCT_HTTP_WORKER_STACK_BYTES_MIN,
+                PRODUCT_HTTP_WORKER_STACK_BYTES_MAX,
+            ),
+        }
+    }
+}
+
+fn env_usize(name: &str, default: usize, min: usize, max: usize) -> usize {
+    std::env::var(name)
+        .ok()
+        .and_then(|value| value.trim().parse::<usize>().ok())
+        .unwrap_or(default)
+        .clamp(min, max)
 }
 
 #[derive(Debug)]
@@ -512,6 +642,7 @@ fn run_product_server_command(args: &[String], _version: &str) -> DaedProductOut
         web_root: options.web_root,
         api_only: options.api_only,
         runtime,
+        http_metrics: Arc::new(ProductHttpMetrics::default()),
     };
     match serve_forever(&options.listen, app) {
         Ok(()) => DaedProductOutput::ok(String::new()),
@@ -1293,18 +1424,100 @@ fn migrate_wing_db(from_wing_db: &Path, to: &Path, force: bool) -> io::Result<Va
 fn serve_forever(listen: &str, app: AppState) -> io::Result<()> {
     let listener = TcpListener::bind(listen)?;
     let app = Arc::new(app);
-    for stream in listener.incoming() {
+    let config = ProductHttpWorkerConfig::from_env();
+    app.http_metrics.configure(config);
+    let (sender, receiver) = mpsc::sync_channel(config.queue_capacity);
+    let receiver = Arc::new(Mutex::new(receiver));
+    let mut handles: Vec<thread::JoinHandle<()>> = Vec::with_capacity(config.worker_count);
+    for index in 0..config.worker_count {
+        let receiver = Arc::clone(&receiver);
         let app = Arc::clone(&app);
+        let metrics = Arc::clone(&app.http_metrics);
+        let handle = match thread::Builder::new()
+            .name(format!("daed-http-{index}"))
+            .stack_size(config.worker_stack_bytes)
+            .spawn(move || product_http_worker_loop(index, receiver, app, metrics))
+        {
+            Ok(handle) => handle,
+            Err(err) => {
+                drop(sender);
+                for handle in handles {
+                    let _ = handle.join();
+                }
+                return Err(err);
+            }
+        };
+        handles.push(handle);
+    }
+    for stream in listener.incoming() {
         match stream {
             Ok(stream) => {
-                thread::spawn(move || {
-                    let _ = handle_stream(stream, &app);
-                });
+                app.http_metrics.accepted();
+                match sender.try_send(ProductHttpJob { stream }) {
+                    Ok(()) => app.http_metrics.enqueued(),
+                    Err(TrySendError::Full(job)) => {
+                        app.http_metrics.rejected();
+                        let _ = write_http_rejected(job.stream);
+                    }
+                    Err(TrySendError::Disconnected(job)) => {
+                        app.http_metrics.rejected();
+                        let _ = write_http_rejected(job.stream);
+                        break;
+                    }
+                }
             }
-            Err(err) => return Err(err),
+            Err(err) => {
+                drop(sender);
+                for handle in handles {
+                    let _ = handle.join();
+                }
+                return Err(err);
+            }
         }
     }
+    drop(sender);
+    for handle in handles {
+        let _ = handle.join();
+    }
     Ok(())
+}
+
+struct ProductHttpJob {
+    stream: TcpStream,
+}
+
+fn product_http_worker_loop(
+    _index: usize,
+    receiver: Arc<Mutex<Receiver<ProductHttpJob>>>,
+    app: Arc<AppState>,
+    metrics: Arc<ProductHttpMetrics>,
+) {
+    loop {
+        let recv_result = {
+            let Ok(receiver) = receiver.lock() else {
+                break;
+            };
+            receiver.recv_timeout(PRODUCT_HTTP_WORKER_RECV_TIMEOUT)
+        };
+        match recv_result {
+            Ok(job) => {
+                metrics.dequeued();
+                metrics.opened();
+                let _ = handle_stream(job.stream, &app);
+                metrics.closed();
+            }
+            Err(RecvTimeoutError::Timeout) => {}
+            Err(RecvTimeoutError::Disconnected) => break,
+        }
+    }
+}
+
+fn write_http_rejected(mut stream: TcpStream) -> io::Result<()> {
+    let response = HttpResponse::json(
+        503,
+        json!({"error": "daed HTTP worker queue is full; retry later"}),
+    );
+    write_http_response(&mut stream, &response, false)
 }
 
 fn handle_stream(mut stream: TcpStream, app: &AppState) -> io::Result<()> {
@@ -1852,7 +2065,7 @@ fn api_general_interfaces(request: &HttpRequest) -> HttpResponse {
 }
 
 fn api_runtime_overview(app: &AppState, request: &HttpRequest) -> HttpResponse {
-    HttpResponse::json(200, runtime_overview_report(&app.runtime, request))
+    HttpResponse::json(200, runtime_overview_report(app, request))
 }
 
 #[derive(Debug, Default)]
@@ -1877,8 +2090,8 @@ static LAST_RUNTIME_TRAFFIC_TOTAL_SAMPLE: OnceLock<Mutex<Option<RuntimeTrafficTo
     OnceLock::new();
 static RUNTIME_TRAFFIC_RATE_SAMPLES: OnceLock<Mutex<VecDeque<(u64, u64, u64)>>> = OnceLock::new();
 
-fn runtime_overview_report(runtime: &ProductRuntimeManager, request: &HttpRequest) -> Value {
-    let runtime = runtime.summary();
+fn runtime_overview_report(app: &AppState, request: &HttpRequest) -> Value {
+    let runtime = app.runtime.summary();
     let window_sec = query_u64(request, "windowSec")
         .unwrap_or(60)
         .clamp(1, 3_600);
@@ -1900,8 +2113,15 @@ fn runtime_overview_report(runtime: &ProductRuntimeManager, request: &HttpReques
         "packetSnifferSessions": 0,
         "cpuUsagePercent": process.cpu_usage_percent,
         "rssBytes": process.rss_bytes.to_string(),
-        "heapAllocBytes": process.heap_alloc_bytes.to_string(),
+        "anonymousRssBytes": process.anonymous_rss_bytes.to_string(),
+        "fileRssBytes": process.file_rss_bytes.to_string(),
+        "vmDataBytes": process.vm_data_bytes.to_string(),
+        "heapLiveBytes": Value::Null,
+        "heapMetricSource": "unavailable",
+        "heapAllocBytes": process.heap_alloc_bytes_compat().to_string(),
+        "heapAllocBytesSource": "compat-alias-rss-anon-not-live-heap",
         "goroutines": process.thread_count,
+        "productHttp": app.http_metrics.snapshot(),
         "runtime": runtime,
         "samples": traffic.samples,
     })
@@ -2510,9 +2730,9 @@ fn normalize_runtime_log_level(level: &str) -> Option<String> {
 }
 
 fn api_runtime_events(app: &AppState, request: &HttpRequest) -> HttpResponse {
-    let full = runtime_overview_report(&app.runtime, request);
+    let full = runtime_overview_report(app, request);
     thread::sleep(Duration::from_millis(200));
-    let delta = runtime_overview_report(&app.runtime, request);
+    let delta = runtime_overview_report(app, request);
     sse_response_events(
         &[
             ("runtime.overview", full),
@@ -2532,7 +2752,7 @@ fn stream_runtime_events(
     write_sse_stream_event(
         stream,
         "runtime.overview",
-        &runtime_overview_report(&app.runtime, request),
+        &runtime_overview_report(app, request),
     )?;
     let mut last_heartbeat = Instant::now();
     loop {
@@ -2540,7 +2760,7 @@ fn stream_runtime_events(
         write_sse_stream_event(
             stream,
             "runtime.overview.delta",
-            &runtime_overview_report(&app.runtime, request),
+            &runtime_overview_report(app, request),
         )?;
         if last_heartbeat.elapsed() >= LOG_STREAM_HEARTBEAT_INTERVAL {
             stream.write_all(b": keep-alive\n\n")?;
@@ -2601,12 +2821,22 @@ fn stream_log_events(
     write!(stream, "retry: {LOG_STREAM_RETRY_MS}\n\n")?;
     stream.flush()?;
 
-    let mut last_seen_id = read_last_log_id(&product_log_file(&app.config_dir)).unwrap_or(0);
+    let log_file = product_log_file(&app.config_dir);
+    let mut last_seen_id = cached_last_log_id(&log_file).unwrap_or(0);
     let mut last_heartbeat = Instant::now();
     loop {
-        let current_last_id = read_last_log_id(&product_log_file(&app.config_dir)).unwrap_or(0);
+        let current_last_id = cached_last_log_id(&log_file).unwrap_or(0);
         if current_last_id < last_seen_id {
             last_seen_id = 0;
+        }
+        if current_last_id == last_seen_id {
+            if last_heartbeat.elapsed() >= LOG_STREAM_HEARTBEAT_INTERVAL {
+                stream.write_all(b": heartbeat\n\n")?;
+                stream.flush()?;
+                last_heartbeat = Instant::now();
+            }
+            thread::sleep(LOG_STREAM_POLL_INTERVAL);
+            continue;
         }
         let (entries, max_seen_id) =
             scan_log_entries_after_id(&app.config_dir, last_seen_id).unwrap_or_default();
@@ -5220,20 +5450,36 @@ fn materialize_runtime(state: &Path, config_dir: Option<&Path>, dry: bool) -> io
         )
         .map_err(sqlite_io_error)?;
     }
-    Ok(json!({
-        "filename": "generated.dae",
-        "path": output_path.as_ref().map(|path| path_string(path)),
-        "content": content,
-        "bytes": content.len(),
-        "generatedAt": generated_at,
-        "selected": {
+    let content_len = content.len();
+    let mut report = Map::new();
+    report.insert("filename".to_owned(), json!("generated.dae"));
+    report.insert(
+        "path".to_owned(),
+        json!(output_path.as_ref().map(|path| path_string(path))),
+    );
+    report.insert("bytes".to_owned(), json!(content_len));
+    report.insert("contentIncluded".to_owned(), json!(dry));
+    if dry {
+        report.insert("content".to_owned(), json!(content));
+    }
+    report.insert("generatedAt".to_owned(), json!(generated_at));
+    report.insert(
+        "selected".to_owned(),
+        json!({
             "configId": config.as_ref().map(|(id, _, _, _)| *id),
             "dnsId": dns.as_ref().map(|(id, _, _, _)| *id),
             "routingId": routing.as_ref().map(|(id, _, _, _)| *id),
-        },
-        "groups": groups["items"].as_array().map(Vec::len).unwrap_or(0),
-        "nodes": nodes["items"].as_array().map(Vec::len).unwrap_or(0),
-    }))
+        }),
+    );
+    report.insert(
+        "groups".to_owned(),
+        json!(groups["items"].as_array().map(Vec::len).unwrap_or(0)),
+    );
+    report.insert(
+        "nodes".to_owned(),
+        json!(nodes["items"].as_array().map(Vec::len).unwrap_or(0)),
+    );
+    Ok(Value::Object(report))
 }
 
 fn render_generated_config(
@@ -5499,6 +5745,13 @@ fn set_metadata(state: &Path, key: &str, value: &str) -> io::Result<()> {
 }
 
 static LOG_FILE_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+static LOG_LAST_ID_CACHE: OnceLock<Mutex<Option<ProductLogIdCache>>> = OnceLock::new();
+
+#[derive(Clone, Debug)]
+struct ProductLogIdCache {
+    path: PathBuf,
+    id: u64,
+}
 
 fn initialize_log_store(config_dir: &Path, state: &Path) -> io::Result<()> {
     ensure_state_schema(state)?;
@@ -5508,6 +5761,7 @@ fn initialize_log_store(config_dir: &Path, state: &Path) -> io::Result<()> {
         set_log_file_permissions(&log_file)?;
         let conn = open_state_connection(state)?;
         prune_log_file(config_dir, &conn)?;
+        reset_log_id_cache_to_last(&log_file)?;
     }
     Ok(())
 }
@@ -5533,16 +5787,13 @@ fn append_resident_event_product_log(
     let Some(event_name) = event.get("event").and_then(Value::as_str) else {
         return Ok(());
     };
-    if resident_event_is_flow_diagnostic(event_name) {
-        return Ok(());
-    }
     let level = resident_event_product_log_level(event_name);
     let fields = resident_event_product_log_fields(event_name, event);
     append_log_fields_for_config(
         config_dir,
         state,
         level,
-        &resident_event_product_log_message(event_name),
+        &resident_event_product_log_message(event_name, event),
         fields,
     )
 }
@@ -5570,13 +5821,22 @@ fn resident_event_is_flow_diagnostic(event_name: &str) -> bool {
     )
 }
 
-fn resident_event_product_log_message(event_name: &str) -> String {
+fn resident_event_product_log_message(event_name: &str, event: &Value) -> String {
+    if resident_event_is_flow_diagnostic(event_name)
+        && let Some(message) = resident_flow_event_product_log_message(event_name, event)
+    {
+        return message;
+    }
     format!("resident dataplane {}", event_name.replace('_', " "))
 }
 
 fn resident_event_product_log_fields(event_name: &str, event: &Value) -> BTreeMap<String, String> {
     let mut fields = BTreeMap::new();
     fields.insert("event".to_owned(), event_name.to_owned());
+    if resident_event_is_flow_diagnostic(event_name) {
+        append_resident_flow_event_product_log_fields(&mut fields, event);
+        return fields;
+    }
     if let Some(object) = event.as_object() {
         for (key, value) in object {
             if key == "event" {
@@ -5586,6 +5846,91 @@ fn resident_event_product_log_fields(event_name: &str, event: &Value) -> BTreeMa
         }
     }
     fields
+}
+
+fn resident_flow_event_product_log_message(event_name: &str, event: &Value) -> Option<String> {
+    let peer = resident_event_field_str(event, "peer").unwrap_or("unknown-peer");
+    let target = resident_event_first_field_str(
+        event,
+        &[
+            "dial_target",
+            "direct_target",
+            "original_dst",
+            "direct_peer_addr",
+        ],
+    )
+    .unwrap_or("unknown-target");
+    let suffix = if event_name.contains("failed")
+        || event_name.contains("error")
+        || event_name.ends_with("_skipped")
+    {
+        " failed"
+    } else {
+        ""
+    };
+    Some(format!("{peer} <-> {target}{suffix}"))
+}
+
+fn append_resident_flow_event_product_log_fields(
+    fields: &mut BTreeMap<String, String>,
+    event: &Value,
+) {
+    for key in [
+        "proxy_group",
+        "node_tag",
+        "outbound_kind",
+        "initial_outbound",
+        "final_outbound",
+        "original_dst",
+        "dial_target",
+        "sniffed_domain",
+        "sniff_error",
+        "tls_underlay",
+        "bytes_client_to_proxy",
+        "bytes_proxy_to_client",
+        "bytes_client_to_direct",
+        "bytes_direct_to_client",
+        "request_len",
+        "response_len",
+        "response_header_stripped",
+        "vision_direct_command_seen",
+        "vision_downlink_direct_active",
+        "vision_raw_direct_recovered",
+        "vision_unpadding_blocks",
+        "error",
+    ] {
+        append_resident_event_field_if_present(fields, event, key);
+    }
+}
+
+fn append_resident_event_field_if_present(
+    fields: &mut BTreeMap<String, String>,
+    event: &Value,
+    key: &str,
+) {
+    let Some(value) = event.get(key) else {
+        return;
+    };
+    if value.is_null() {
+        return;
+    }
+    let value = product_log_field_value(value);
+    if !value.is_empty() {
+        fields.insert(key.to_owned(), value);
+    }
+}
+
+fn resident_event_first_field_str<'a>(event: &'a Value, keys: &[&str]) -> Option<&'a str> {
+    keys.iter()
+        .find_map(|key| resident_event_field_str(event, key))
+}
+
+fn resident_event_field_str<'a>(event: &'a Value, key: &str) -> Option<&'a str> {
+    event
+        .get(key)
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
 }
 
 fn product_log_field_value(value: &Value) -> String {
@@ -5628,10 +5973,10 @@ fn append_log_fields_for_config(
     let _guard = lock
         .lock()
         .map_err(|_| io::Error::other("product log file lock poisoned"))?;
-    let id = read_last_log_id(&log_file)?.saturating_add(1);
+    let id = next_log_id(&log_file)?;
     let line = encode_log_entry_line(id, &level, message, fields)?;
     append_log_line(&log_file, &line)?;
-    prune_log_file_with_settings(&log_file, max_entries, max_bytes)?;
+    prune_log_file_if_needed(&log_file, max_entries, max_bytes, id)?;
     Ok(())
 }
 
@@ -5729,7 +6074,12 @@ fn product_log_file(config_dir: &Path) -> PathBuf {
 fn clear_log_file(config_dir: &Path) -> io::Result<()> {
     let log_file = product_log_file(config_dir);
     ensure_log_dir(config_dir)?;
+    let lock = LOG_FILE_LOCK.get_or_init(|| Mutex::new(()));
+    let _guard = lock
+        .lock()
+        .map_err(|_| io::Error::other("product log file lock poisoned"))?;
     fs::write(&log_file, [])?;
+    set_log_id_cache(&log_file, 0)?;
     set_log_file_permissions(&log_file)
 }
 
@@ -5876,9 +6226,6 @@ fn log_entry_matches_filter(
     level: Option<&str>,
     query: Option<&str>,
 ) -> bool {
-    if log_entry_is_internal_resident_flow_diagnostic(entry) {
-        return false;
-    }
     if level.is_some_and(|level| level != entry.level) {
         return false;
     }
@@ -5893,13 +6240,6 @@ fn log_entry_matches_filter(
     })
 }
 
-fn log_entry_is_internal_resident_flow_diagnostic(entry: &ProductLogEntry) -> bool {
-    entry
-        .fields
-        .get("event")
-        .is_some_and(|event| resident_event_is_flow_diagnostic(event))
-}
-
 fn read_last_log_id(path: &Path) -> io::Result<u64> {
     let data = match read_tail_bytes(path, LOG_TAIL_ID_SCAN_BYTES) {
         Ok(data) => data,
@@ -5912,6 +6252,60 @@ fn read_last_log_id(path: &Path) -> io::Result<u64> {
         }
     }
     Ok(0)
+}
+
+fn next_log_id(path: &Path) -> io::Result<u64> {
+    let lock = LOG_LAST_ID_CACHE.get_or_init(|| Mutex::new(None));
+    let mut cache = lock
+        .lock()
+        .map_err(|_| io::Error::other("product log id cache lock poisoned"))?;
+    if let Some(cached) = cache.as_mut()
+        && cached.path == path
+    {
+        cached.id = cached.id.saturating_add(1);
+        return Ok(cached.id);
+    }
+    let id = read_last_log_id(path)?.saturating_add(1);
+    *cache = Some(ProductLogIdCache {
+        path: path.to_path_buf(),
+        id,
+    });
+    Ok(id)
+}
+
+fn cached_last_log_id(path: &Path) -> io::Result<u64> {
+    let lock = LOG_LAST_ID_CACHE.get_or_init(|| Mutex::new(None));
+    {
+        let cache = lock
+            .lock()
+            .map_err(|_| io::Error::other("product log id cache lock poisoned"))?;
+        if let Some(cached) = cache.as_ref()
+            && cached.path == path
+        {
+            return Ok(cached.id);
+        }
+    }
+    reset_log_id_cache_to_last(path)?;
+    let cache = lock
+        .lock()
+        .map_err(|_| io::Error::other("product log id cache lock poisoned"))?;
+    Ok(cache.as_ref().map(|cached| cached.id).unwrap_or(0))
+}
+
+fn set_log_id_cache(path: &Path, id: u64) -> io::Result<()> {
+    let lock = LOG_LAST_ID_CACHE.get_or_init(|| Mutex::new(None));
+    let mut cache = lock
+        .lock()
+        .map_err(|_| io::Error::other("product log id cache lock poisoned"))?;
+    *cache = Some(ProductLogIdCache {
+        path: path.to_path_buf(),
+        id,
+    });
+    Ok(())
+}
+
+fn reset_log_id_cache_to_last(path: &Path) -> io::Result<()> {
+    set_log_id_cache(path, read_last_log_id(path)?)
 }
 
 fn scan_log_entries_after_id(
@@ -5976,7 +6370,31 @@ fn read_tail_bytes(path: &Path, max_bytes: u64) -> io::Result<String> {
 
 fn prune_log_file(config_dir: &Path, conn: &Connection) -> io::Result<()> {
     let (max_entries, max_bytes) = log_settings_tuple(conn)?;
-    prune_log_file_with_settings(&product_log_file(config_dir), max_entries, max_bytes)
+    let log_file = product_log_file(config_dir);
+    let lock = LOG_FILE_LOCK.get_or_init(|| Mutex::new(()));
+    let _guard = lock
+        .lock()
+        .map_err(|_| io::Error::other("product log file lock poisoned"))?;
+    prune_log_file_with_settings(&log_file, max_entries, max_bytes)?;
+    reset_log_id_cache_to_last(&log_file)
+}
+
+fn prune_log_file_if_needed(
+    path: &Path,
+    max_entries: i64,
+    max_bytes: i64,
+    last_id: u64,
+) -> io::Result<()> {
+    let max_bytes = normalize_log_max_bytes(max_bytes) as u64;
+    let size = match fs::metadata(path) {
+        Ok(metadata) => metadata.len(),
+        Err(err) if err.kind() == io::ErrorKind::NotFound => return Ok(()),
+        Err(err) => return Err(err),
+    };
+    if size <= max_bytes && last_id % LOG_PRUNE_INTERVAL != 0 {
+        return Ok(());
+    }
+    prune_log_file_with_settings(path, max_entries, max_bytes as i64)
 }
 
 fn prune_log_file_with_settings(path: &Path, max_entries: i64, max_bytes: i64) -> io::Result<()> {
@@ -6980,9 +7398,17 @@ fn count_table(conn: &Connection, table: &str) -> io::Result<i64> {
 #[derive(Clone, Copy, Debug, Default)]
 struct ProcessMetrics {
     rss_bytes: u64,
-    heap_alloc_bytes: u64,
+    anonymous_rss_bytes: u64,
+    file_rss_bytes: u64,
+    vm_data_bytes: u64,
     thread_count: u64,
     cpu_usage_percent: f64,
+}
+
+impl ProcessMetrics {
+    fn heap_alloc_bytes_compat(&self) -> u64 {
+        self.anonymous_rss_bytes
+    }
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -7010,20 +7436,21 @@ fn process_status_metrics() -> io::Result<ProcessMetrics> {
 
 fn process_status_metrics_from_str(status: &str) -> ProcessMetrics {
     let mut metrics = ProcessMetrics::default();
-    let mut vm_data_bytes = 0_u64;
     for line in status.lines() {
         if let Some(value) = line.strip_prefix("VmRSS:") {
             metrics.rss_bytes = proc_status_kib_value(value).saturating_mul(1024);
         } else if let Some(value) = line.strip_prefix("RssAnon:") {
-            metrics.heap_alloc_bytes = proc_status_kib_value(value).saturating_mul(1024);
+            metrics.anonymous_rss_bytes = proc_status_kib_value(value).saturating_mul(1024);
+        } else if let Some(value) = line.strip_prefix("RssFile:") {
+            metrics.file_rss_bytes = proc_status_kib_value(value).saturating_mul(1024);
         } else if let Some(value) = line.strip_prefix("VmData:") {
-            vm_data_bytes = proc_status_kib_value(value).saturating_mul(1024);
+            metrics.vm_data_bytes = proc_status_kib_value(value).saturating_mul(1024);
         } else if let Some(value) = line.strip_prefix("Threads:") {
             metrics.thread_count = value.trim().parse::<u64>().unwrap_or(0);
         }
     }
-    if metrics.heap_alloc_bytes == 0 {
-        metrics.heap_alloc_bytes = vm_data_bytes;
+    if metrics.anonymous_rss_bytes == 0 {
+        metrics.anonymous_rss_bytes = metrics.vm_data_bytes;
     }
     metrics
 }
@@ -7791,7 +8218,13 @@ fn serve_static_file(web_root: &Path, request: &HttpRequest) -> HttpResponse {
         path = web_root.join("index.html");
     }
     match fs::read(&path) {
-        Ok(body) => HttpResponse::text(200, mime_for_path(&path), body),
+        Ok(body) => {
+            let mut response = HttpResponse::text(200, mime_for_path(&path), body);
+            response
+                .extra_headers
+                .push(("Cache-Control".to_owned(), "no-cache".to_owned()));
+            response
+        }
         Err(err) => HttpResponse::json(404, json!({"error": err.to_string()})),
     }
 }
@@ -8584,6 +9017,7 @@ global {
             web_root: dir.clone(),
             api_only: true,
             runtime: Arc::new(ProductRuntimeManager::new()),
+            http_metrics: Arc::new(ProductHttpMetrics::default()),
         };
         for (raw_query, expected_len, expected_level) in [
             ("", 3, None),
@@ -8745,7 +9179,7 @@ global {
         append_resident_event_product_log(
             &dir,
             &state,
-            &json!({"event": "tcp_connection_failed", "peer": "198.51.100.20:443", "error": "sample failure"}),
+            &json!({"event": "tcp_connection_failed", "peer": "198.51.100.20:443", "dial_target": "failed.example:443", "error": "sample failure"}),
         )
         .unwrap();
         append_resident_event_product_log(
@@ -8757,7 +9191,7 @@ global {
 
         let all = list_logs_value(&dir, &state, Some("all"), None, 500).unwrap();
         let items = all["items"].as_array().unwrap();
-        assert_eq!(items.len(), 2, "{all}");
+        assert_eq!(items.len(), 3, "{all}");
         assert_eq!(
             items[0]["message"],
             json!("resident dataplane tcp worker started")
@@ -8767,22 +9201,29 @@ global {
         assert_eq!(items[0]["fields"]["proxy_count"], json!("2"));
         assert_eq!(
             items[1]["message"],
-            json!("resident dataplane tcp accept failed")
+            json!("198.51.100.20:443 <-> failed.example:443 failed")
         );
         assert_eq!(items[1]["level"], json!("warn"));
-        assert_eq!(items[1]["fields"]["error"], json!("accept failure"));
+        assert_eq!(items[1]["fields"]["event"], json!("tcp_connection_failed"));
+        assert_eq!(items[1]["fields"]["error"], json!("sample failure"));
+        assert_eq!(
+            items[2]["message"],
+            json!("resident dataplane tcp accept failed")
+        );
+        assert_eq!(items[2]["level"], json!("warn"));
+        assert_eq!(items[2]["fields"]["error"], json!("accept failure"));
 
         set_metadata(&state, "runtime_log_level", "debug").unwrap();
         append_resident_event_product_log(
             &dir,
             &state,
-            &json!({"event": "tcp_connection_finished", "peer": "198.51.100.30:443", "bytes_client_to_proxy": 256}),
+            &json!({"event": "tcp_connection_finished", "peer": "198.51.100.30:443", "dial_target": "ok.example:443", "bytes_client_to_proxy": 256, "node_tag": "node-a", "proxy_group": "proxy"}),
         )
         .unwrap();
         append_resident_event_product_log(
             &dir,
             &state,
-            &json!({"event": "udp_packet_finished", "peer": "198.51.100.40:443", "request_len": 64, "response_len": 128}),
+            &json!({"event": "udp_packet_finished", "peer": "198.51.100.40:443", "original_dst": "203.0.113.40:443", "request_len": 64, "response_len": 128}),
         )
         .unwrap();
         let mut legacy_fields = BTreeMap::new();
@@ -8798,7 +9239,26 @@ global {
         .unwrap();
         let debug = list_logs_value(&dir, &state, Some("debug"), None, 500).unwrap();
         let items = debug["items"].as_array().unwrap();
-        assert_eq!(items.len(), 0, "{debug}");
+        assert_eq!(items.len(), 3, "{debug}");
+        assert_eq!(
+            items[0]["message"],
+            json!("198.51.100.30:443 <-> ok.example:443")
+        );
+        assert_eq!(
+            items[0]["fields"]["event"],
+            json!("tcp_connection_finished")
+        );
+        assert_eq!(items[0]["fields"]["node_tag"], json!("node-a"));
+        assert_eq!(items[0]["fields"]["bytes_client_to_proxy"], json!("256"));
+        assert_eq!(
+            items[1]["message"],
+            json!("198.51.100.40:443 <-> 203.0.113.40:443")
+        );
+        assert_eq!(items[1]["fields"]["request_len"], json!("64"));
+        assert_eq!(
+            items[2]["message"],
+            json!("resident dataplane tcp connection finished")
+        );
 
         clear_resident_event_product_log_sink();
         fs::remove_dir_all(dir).unwrap();
@@ -8816,6 +9276,7 @@ global {
             web_root: dir.clone(),
             api_only: true,
             runtime: Arc::new(ProductRuntimeManager::new()),
+            http_metrics: Arc::new(ProductHttpMetrics::default()),
         };
         let request = HttpRequest {
             method: "POST".to_owned(),
@@ -8858,6 +9319,7 @@ global {
             web_root: dir.clone(),
             api_only: true,
             runtime: Arc::new(ProductRuntimeManager::new()),
+            http_metrics: Arc::new(ProductHttpMetrics::default()),
         };
         let request = HttpRequest {
             method: "GET".to_owned(),
@@ -8866,7 +9328,7 @@ global {
             headers: HashMap::new(),
             body: Vec::new(),
         };
-        let overview = runtime_overview_report(&app.runtime, &request);
+        let overview = runtime_overview_report(&app, &request);
         assert!(
             overview["rssBytes"]
                 .as_str()
@@ -8883,6 +9345,22 @@ global {
                 .unwrap()
                 > 0
         );
+        assert!(
+            overview["anonymousRssBytes"]
+                .as_str()
+                .unwrap()
+                .parse::<u64>()
+                .unwrap()
+                > 0
+        );
+        assert!(overview["fileRssBytes"].as_str().is_some());
+        assert!(overview["vmDataBytes"].as_str().is_some());
+        assert_eq!(overview["heapLiveBytes"], Value::Null);
+        assert_eq!(overview["heapMetricSource"], json!("unavailable"));
+        assert_eq!(
+            overview["heapAllocBytesSource"],
+            json!("compat-alias-rss-anon-not-live-heap")
+        );
         assert!(overview["goroutines"].as_u64().unwrap() > 0);
         assert!(overview["cpuUsagePercent"].as_f64().unwrap() >= 0.0);
 
@@ -8892,26 +9370,35 @@ global {
         assert!(body.contains("event: runtime.overview\n"));
         assert!(body.contains("event: runtime.overview.delta\n"));
         assert!(body.contains("\"heapAllocBytes\""));
+        assert!(body.contains("\"anonymousRssBytes\""));
+        assert!(body.contains("\"fileRssBytes\""));
+        assert!(body.contains("\"heapAllocBytesSource\""));
         assert!(body.contains("\"goroutines\""));
         assert!(body.contains("\"cpuUsagePercent\""));
         fs::remove_dir_all(dir).unwrap();
     }
 
     #[test]
-    fn process_status_metrics_uses_resident_anonymous_memory_for_heap_card() {
+    fn process_status_metrics_splits_rss_and_keeps_heap_compat_alias() {
         let status = "\
 Name:\tdaed\n\
 VmRSS:\t  200000 kB\n\
 RssAnon:\t  150000 kB\n\
+RssFile:\t  50000 kB\n\
 VmData:\t  260000 kB\n\
 Threads:\t38\n";
         let metrics = process_status_metrics_from_str(status);
         assert_eq!(metrics.rss_bytes, 200000 * 1024);
-        assert_eq!(metrics.heap_alloc_bytes, 150000 * 1024);
+        assert_eq!(metrics.anonymous_rss_bytes, 150000 * 1024);
+        assert_eq!(metrics.file_rss_bytes, 50000 * 1024);
+        assert_eq!(metrics.vm_data_bytes, 260000 * 1024);
+        assert_eq!(metrics.heap_alloc_bytes_compat(), 150000 * 1024);
         assert_eq!(metrics.thread_count, 38);
 
         let fallback = process_status_metrics_from_str("VmData:\t42 kB\n");
-        assert_eq!(fallback.heap_alloc_bytes, 42 * 1024);
+        assert_eq!(fallback.anonymous_rss_bytes, 42 * 1024);
+        assert_eq!(fallback.vm_data_bytes, 42 * 1024);
+        assert_eq!(fallback.heap_alloc_bytes_compat(), 42 * 1024);
     }
 
     #[test]
@@ -8951,6 +9438,9 @@ Threads:\t38\n";
 
         let report = materialize_runtime(&state, Some(&runtime_dir), false).unwrap();
         assert_eq!(report["selected"]["configId"].as_i64(), Some(1));
+        assert_eq!(report["contentIncluded"], json!(false));
+        assert!(report.get("content").is_none());
+        assert!(report["bytes"].as_u64().unwrap() > 0);
         assert!(runtime_dir.join("runtime/generated.dae").is_file());
         fs::remove_dir_all(dir).unwrap();
     }
