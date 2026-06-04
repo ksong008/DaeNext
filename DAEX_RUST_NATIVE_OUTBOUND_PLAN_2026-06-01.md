@@ -10606,3 +10606,950 @@ Rollback note:
   To restore the backed-up Go daed binary for this deployment, stop daed,
   copy the backup binary back to /usr/bin/daed, remove or disable the Rust
   native test drop-in, run systemctl daemon-reload, and start daed.
+
+## 2026-06-04 10.10.10.2 Rust native runtime proxy failure triage
+
+Runtime state:
+  Host:
+    10.10.10.2
+
+  Service:
+    daed is active with PID 59129.
+
+  Installed Rust native binary:
+    /usr/bin/daed
+    sha256: 34d83e8589a74fee178fbd0ce26c4c525263286c9b8c602ebc80eed21e8330ab
+
+  Rust native test drop-in:
+    /etc/systemd/system/daed.service.d/50-rust-native-test.conf
+
+Resident dataplane:
+  Start report:
+    resident_runtime_started=true
+    resident_dataplane.enabled=true
+    resident_dataplane.status=pass
+    resident_dataplane.proxy_count=7
+
+  Default proxy evidence:
+    proxy -> [HK]Hytron
+    protocol=vless
+    flow=xtls-rprx-vision
+    tls=tls
+    utls_fingerprint.source=link fp
+    utls_fingerprint.requested=chrome
+    utls_fingerprint.canonical=chrome_auto
+    utls_fingerprint.client=Chrome
+
+Telegram/TG evidence:
+  Routing config:
+    domain(geosite:telegram) -> TG
+    dip(geoip:telegram) -> TG
+
+  Active group selection:
+    TG traffic events use [SG]Oracle-Sg.
+
+  Boring underlay:
+    TG/Oracle-Sg events report tls_underlay=boringssl, so the current failure is
+    not a rustls fallback or missing Boring selection.
+
+  Observed TG failure shape:
+    Recent TG events from LAN peer 192.168.6.20 to Telegram IPs such as
+    91.108.56.177, 149.154.175.50, 149.154.175.53, and 149.154.171.5
+    show bytes_client_to_proxy=105 and bytes_proxy_to_client=0.
+
+    Event flags remain:
+      response_header_stripped=false
+      vision_direct_command_seen=false
+      vision_downlink_direct_active=false
+      vision_raw_direct_recovered=false
+
+    Two events also showed:
+      error="flush VLESS BoringSSL writes: [PROTOCOL_IS_SHUTDOWN]"
+
+  Interpretation:
+    Boring is selected and running for the TG path, but the TG path is not
+    healthy end-to-end. The failure is after Boring underlay selection, in the
+    resident VLESS Vision relay/state path or in the Oracle-Sg server path for
+    this Telegram/MTProto traffic shape.
+
+Host DNS evidence:
+  /etc/resolv.conf currently contains:
+    nameserver 8.8.8.8
+
+  The dae config routes public DNS addresses through proxy:
+    dip(8.8.8.8, 8.8.4.4, 1.1.1.1) -> proxy
+
+  Host self-tests using the default resolver time out before TCP proxying:
+    getent ahostsv4 cp.cloudflare.com timed out.
+
+  Explicit local resolver works immediately:
+    dig @192.168.2.11 cp.cloudflare.com A returned 104.16.132.229 with
+    query time around 1ms.
+
+  Interpretation:
+    Host-originated proxy tests are currently polluted by DNS: the host resolver
+    points to a public DNS target that the config sends into the proxy path.
+    This explains host-side "cannot proxy" symptoms, but does not explain the
+    LAN Telegram TG/TCP events because those already hit Telegram IP routing.
+
+UDP/QUIC evidence:
+  Recent resident dataplane events also show VLESS UDP response timeout for
+  UDP/443 destinations, including Google/8.8.4.4 related traffic.
+
+  Interpretation:
+    Browser traffic may look stalled because QUIC/UDP is attempted and the
+    Rust native VLESS UDP path is timing out. This is separate from the TG TCP
+    105-byte no-downlink symptom and should be triaged as its own UDP/XUDP
+    native coverage issue.
+
+Immediate triage split:
+  1. Resolver issue:
+     Fix or temporarily override host DNS to 192.168.2.11 or 192.168.2.10
+     before using host-local curl/getent as proxy evidence.
+
+  2. TG TCP issue:
+     Continue debugging resident VLESS Vision TCP relay/Boring behavior against
+     [SG]Oracle-Sg. Current evidence says Boring is active, but TG still gets no
+     server-to-client bytes.
+
+  3. UDP/QUIC issue:
+     Treat VLESS UDP response timeout as a separate Rust native dataplane gap;
+     do not use it as evidence that Boring is disabled.
+
+## 2026-06-04 10.10.10.2 rollback to Go daed
+
+Rollback time:
+  2026-06-04 09:23 CST
+
+Remote target:
+  Host:
+    10.10.10.2
+
+Restored binary:
+  Source:
+    /etc/daed/backups/daed-go-20260604-090540-b296303fc01b
+
+  Destination:
+    /usr/bin/daed
+
+  Restored sha256:
+    b296303fc01b0cd4453ab90bb7bf988d6315a952a548fd483a0a9c5bab2448bf
+
+Removed Rust native test runtime hook:
+  /etc/systemd/system/daed.service.d/50-rust-native-test.conf
+
+Systemd actions:
+  systemctl stop daed
+  install backup binary to /usr/bin/daed
+  remove Rust native test drop-in
+  systemctl daemon-reload
+  systemctl start daed
+
+Validation:
+  systemctl is-active daed:
+    active
+
+  Main PID:
+    63403
+
+  package-info probe:
+    /usr/bin/daed package-info --json returned unknown command, matching the
+    Go daed behavior observed before the Rust native test deployment.
+
+  API health:
+    GET http://127.0.0.1:2023/api/health
+    {"healthCheck":1}
+
+Cleanup:
+  Removed stale Rust resident runtime directory:
+    /tmp/dae-daemon-resident-runtime-59129
+
+## 2026-06-04 resident TCP bounded queue rollback test on 10.10.10.2
+
+Purpose:
+  Validate the hypothesis that the RSS-path resident TCP bounded worker queue
+  caused the VLESS Vision/TG regression. This test keeps the other RSS changes
+  and reverts only the resident TCP flow execution model back to per-connection
+  threads.
+
+Local code change:
+  Reverted resident dataplane TCP bounded queue code in:
+    rust/crates/dae-daemon/src/production_runtime_owner/resident_dataplane/tcp.rs
+    rust/crates/dae-daemon/src/production_runtime_owner/resident_dataplane/mod.rs
+
+  Removed:
+    ResidentTcpWorkerConfig
+    spawn_resident_tcp_flow_workers
+    ResidentTcpFlowQueue
+    DAE_RESIDENT_FLOW_WORKERS / DAE_RESIDENT_FLOW_QUEUE handling
+    resident dataplane tcpAccepted/tcpEnqueued/tcpRejected/tcpQueueDepth metrics
+
+  Restored:
+    resident TCP accept loop spawns one connection handler per accepted TCP
+    connection.
+
+Local verification:
+  cargo fmt:
+    passed
+
+  Tests:
+    cargo test -p dae-daemon resident_vless_vision --quiet
+      passed, 12 tests
+
+    cargo test -p dae-daemon proxy_failure_event_carries_relay_diagnostics --quiet
+      passed
+
+    cargo test -p dae-daemon resident_vision_raw_direct_recovery_requires_explicit_direct_command --quiet
+      passed
+
+    cargo test -p dae-daemon process_status_metrics_splits_rss_and_keeps_heap_compat_alias --quiet
+      passed
+
+Build:
+  Native eBPF object reused:
+    /tmp/dae-daex-native-btf-target/bpfel-unknown-none/release/libdae_ebpf_program.so
+
+  BTF validation:
+    readelf showed .BTF and .BTF.ext sections.
+
+  Build command:
+    DAE_RUST_NATIVE_BPF_OBJECT=/tmp/dae-daex-native-btf-target/bpfel-unknown-none/release/libdae_ebpf_program.so \
+      cargo build --manifest-path /root/project/dae-daex-align/rust/Cargo.toml \
+      -p dae-daemon --bin daed --release --features native-ebpf --quiet
+
+  Built binary:
+    /root/project/dae-daex-align/rust/target/release/daed
+    size: 16M
+    sha256: 1d7be38fab6554cc20098cc8534b082fa50ebf824d5ec42967b16711abf42d4a
+
+Deployment:
+  Host:
+    10.10.10.2
+
+  Pre-deploy current /usr/bin/daed:
+    b296303fc01b0cd4453ab90bb7bf988d6315a952a548fd483a0a9c5bab2448bf
+    This matched the Go backup at:
+      /etc/daed/backups/daed-go-20260604-090540-b296303fc01b
+
+  Installed /usr/bin/daed:
+    1d7be38fab6554cc20098cc8534b082fa50ebf824d5ec42967b16711abf42d4a
+
+  Test drop-in:
+    /etc/systemd/system/daed.service.d/50-rust-native-test.conf
+
+  Drop-in environment:
+    DAE_RUST_RESIDENT_DATAPLANE=1
+    DAE_RUST_NATIVE_EBPF=1
+    DAED_WEB_ROOT=/usr/share/daed/web
+    DAED_HTTP_WORKERS=4
+    DAED_HTTP_QUEUE=64
+
+  Intentionally not set:
+    DAE_RESIDENT_FLOW_WORKERS
+    DAE_RESIDENT_FLOW_QUEUE
+
+Runtime validation:
+  systemctl is-active daed:
+    active
+
+  Main PID:
+    65024
+
+  API health:
+    GET http://127.0.0.1:2023/api/health
+    {"healthCheck":1}
+
+  Resident runtime directory:
+    /tmp/dae-daemon-resident-runtime-65024
+
+  Resident dataplane start report:
+    resident_runtime_started=true
+    resident_dataplane.enabled=true
+    resident_dataplane.status=pass
+    resident_dataplane.proxy_count=7
+    resident_dataplane.tcp_worker_started=true
+    resident_dataplane.udp_worker_started=true
+    resident_dataplane.tcp_flow_worker_count=null
+    resident_dataplane.tcp_flow_queue_capacity=null
+
+  TCP worker event:
+    {"event":"tcp_worker_started","execution":"per-connection-thread",...}
+
+  Native attach:
+    bpftool showed tcx attachments on enp1s0 and dae0.
+
+  daens listeners:
+    udp 0.0.0.0:12345 daed
+    tcp 0.0.0.0:12345 daed
+
+RSS samples:
+  Immediately after service start, before resident runtime restored:
+    VmRSS: 12076 kB
+    RssAnon: 1460 kB
+    RssFile: 10616 kB
+    VmData: 8792 kB
+    Threads: 6
+
+  After resident runtime restored:
+    VmRSS: 79740 kB
+    RssAnon: 65700 kB
+    RssFile: 14040 kB
+    VmData: 97232 kB
+    Threads: 18
+
+  Under live traffic:
+    sample 09:36:37:
+      MemoryCurrent: 150962176
+      VmRSS: 91852 kB
+      RssAnon: 77812 kB
+      Threads: 28
+
+    sample 09:36:42:
+      MemoryCurrent: 153210880
+      VmRSS: 94116 kB
+      RssAnon: 80076 kB
+      Threads: 30
+
+    sample 09:36:52:
+      MemoryCurrent: 156520448
+      VmRSS: 96752 kB
+      RssAnon: 82712 kB
+      Threads: 32
+
+  smaps_rollup later:
+    Rss: 97176 kB
+    Pss: 93588 kB
+    Shared_Clean: 3848 kB
+    Private_Clean: 10192 kB
+    Private_Dirty: 83136 kB
+    Anonymous: 83136 kB
+
+Function signal:
+  TG/Oracle-Sg traffic no longer reproduced the earlier all-zero-downlink
+  pattern. Events showed:
+    tls_underlay=boringssl
+    proxy_group=TG
+    node_tag=[SG]Oracle-Sg
+
+  Example successful TG events:
+    91.108.56.177:443:
+      bytes_client_to_proxy=105
+      bytes_proxy_to_client=101
+      response_header_stripped=true
+      vision_unpadding_blocks=1
+
+    91.108.56.177:443:
+      bytes_client_to_proxy=7353
+      bytes_proxy_to_client=48825
+      response_header_stripped=true
+      vision_unpadding_blocks=6
+
+Interpretation:
+  The resident TCP bounded worker queue was a real regression candidate for
+  VLESS Vision/TG behavior. Removing it restored successful TG downlink evidence
+  while keeping Boring selected.
+
+  RSS did not improve versus the bounded-worker build under live traffic. It
+  rose with per-connection threads, reaching about 97 MB RSS and 31-32 threads
+  during this sample. This confirms the tradeoff: per-connection threads avoid
+  the bounded-worker head-of-line/worker starvation risk but are not the final
+  RSS optimization strategy.
+
+## 2026-06-04 testing UI scope and Go VLESS Vision execution-model check
+
+User constraint:
+  During the current Rust native testing period, do not expand the WebUI with
+  too many diagnostic fields/cards. RSS, anonymous RSS, heap-compat source,
+  allocator behavior, resident thread counts, and similar details should remain
+  primarily API/log/memo diagnostics unless the UI needs a small semantic fix.
+  The visible UI should stay close to the product surface and avoid turning
+  temporary RSS investigation data into permanent-looking cards.
+
+Current metric caveat:
+  The Rust product API still exposes `heapAllocBytes` as a compatibility alias
+  for anonymous RSS (`RssAnon`), with `heapAllocBytesSource` set to
+  `compat-alias-rss-anon-not-live-heap`. This is not a true Rust live-heap
+  metric, so UI text must not imply allocator live heap while this compatibility
+  alias remains in use.
+
+Allocator/reclaim state:
+  The current Rust product/resident daemon has no explicit allocator trim,
+  purge, background-purge, `malloc_trim`, `mallopt`, jemalloc, or mimalloc
+  recovery strategy in the production daemon path. The only `global_allocator`
+  hit is in the bench crate, not the deployed product daemon. Slow RSS growth
+  should therefore be treated as a real production-path memory ownership and
+  allocator/high-water investigation item, not as a UI-only issue.
+
+Go execution-model evidence:
+  Original Go dae does not use a fixed resident TCP worker queue for accepted
+  TCP flows. In `/root/project/dae/control/control_plane.go`, `Serve` accepts
+  TCP connections and immediately starts `go func(lconn net.Conn) { ... }`,
+  which calls `handleConn` for that accepted connection.
+
+  In `/root/project/dae/control/tcp.go`, `handleConn` routes/dials once for
+  the accepted TCP flow, then calls `RelayTCP(sniffer, rConn)`. `RelayTCP`
+  starts one goroutine for the upload copy (`lConn -> rConn`) and performs the
+  download copy (`rConn -> lConn`) in the current connection goroutine.
+
+  The VLESS Vision outbound itself is a synchronous connection wrapper. In
+  `/root/project/outbound-daex-align/protocol/vless/dialer.go`, the XRV flow
+  returns `vision.NewConn(conn, d.key)` for TCP. In
+  `/root/project/outbound-daex-align/protocol/vless/vision/vison.go` and
+  `vision/conn.go`, `NewConn`, `Read`, `Write`, and `WriteTo` wrap and drive
+  the existing connection with locks/direct-read/direct-write state; this path
+  does not start a protocol-specific goroutine or fixed worker.
+
+Conclusion:
+  "One connection one thread" is not precise for Go. It is one accepted TCP
+  connection handled by a goroutine, plus a relay goroutine for one copy
+  direction. Go goroutines are multiplexed by the Go runtime over OS threads.
+  The closest Rust-native behavioral match is therefore per-flow connection
+  ownership without a small fixed worker queue, while RSS optimization must be
+  solved separately through memory ownership, buffering, thread-stack strategy,
+  allocator policy, and resident lifecycle cleanup.
+
+## 2026-06-04 Rust async equivalence and Go memory-recovery strategy audit
+
+Rust execution-model judgment:
+  Rust can implement the original Go TCP/VLESS Vision execution model, but not
+  by treating `std::thread::spawn` as a goroutine equivalent. The current Rust
+  resident TCP path accepts a TCP flow and starts an OS thread for the whole
+  flow. That restores per-flow ownership semantics and avoids fixed-worker
+  head-of-line blocking, but it does not reproduce Go's cheap goroutine
+  scheduling model.
+
+  The Go-equivalent Rust shape is:
+    - resident TCP accept loop owns listener readiness;
+    - each accepted TCP flow becomes an async task, not an OS thread;
+    - relay is driven by readiness (`select`/poll), not `WouldBlock` plus
+      periodic sleeps;
+    - VLESS/Vision/TLS/Boring state stays per-flow and synchronous in protocol
+      semantics, but its socket I/O is driven by the async reactor;
+    - no small fixed worker queue for long-lived proxy flows.
+
+RSS expectation:
+  Async task per flow should reduce the RSS and virtual-memory growth caused by
+  per-flow OS threads, pthread stacks, and per-thread allocator caches. It is
+  not a complete baseline-RSS fix. Baseline resident RSS still needs separate
+  work for config/geodata/routing ownership, Boring/TLS caches, buffers, logs,
+  DB/WebUI/product state, and allocator policy.
+
+  A low-risk intermediate experiment is to use `std::thread::Builder` with an
+  explicit smaller stack for resident TCP flow threads. This can reduce
+  thread-stack virtual memory and may reduce RSS if the stack is touched, but it
+  is still not the final Go-equivalent model.
+
+Go memory-recovery audit:
+  Current Go dae/daed-wing does not appear to use a continuous memory budget or
+  explicit RSS trim strategy in code. Searches found no production
+  `debug.SetGCPercent`, `debug.SetMemoryLimit`, `GOGC`, `GOMEMLIMIT`, or
+  runtime memory-limit setup. The only production `runtime.GC` path found is
+  the post-startup/reload GC hook in the engine runtime.
+
+  In `/root/project/dae/engine/runtime.go`, the engine defines
+  `postStartupGC = runtime.GC` and `currentHeapAllocBytes` from
+  `runtime.ReadMemStats().HeapAlloc`. It calls `maybePostStartupGC(log, true)`
+  after the initial control plane is built, and calls
+  `maybePostStartupGC(log, false)` after a successful reload, old control-plane
+  close, and reload-scoped resource flush.
+
+  The GC decision uses:
+    - minimum interval: 5 seconds;
+    - heap-growth threshold: 64 MiB;
+    - skip if the new heap is still close to the last post-GC heap
+      (`heapBefore < lastHeapAfter + 64MiB` and `heapBefore * 2 < lastHeapAfter * 3`);
+    - forced initial GC after startup control-plane creation.
+
+  Go runtime metrics are observational, not a recovery mechanism:
+    - `/root/project/dae/control/runtime_stats.go` samples RSS from
+      `/proc/self/statm`;
+    - it samples heap from `runtime.ReadMemStats().HeapAlloc`;
+    - it samples goroutines from `runtime.NumGoroutine()`.
+
+  Go allocation-pressure control is mainly structural:
+    - protocol/sniffing/DNS/UDP code uses `github.com/daeuniverse/outbound/pool`
+      for power-of-two byte buffers up to 64 KiB;
+    - `pool.GetBuffer`/`PutBuffer` uses `sync.Pool` for bytes buffers;
+    - `sync.Pool` reduces allocation churn but may retain high-water objects
+      until GC and is not an RSS-return guarantee.
+
+  Go lifecycle cleanup is also structural:
+    - `ControlPlane.AbortConnections` closes tracked TCP connections;
+    - `ControlPlane.Close` cancels the context and closes defer/core resources;
+    - `FlushReloadScopedResources` clears global gRPC/meek/xhttp pools, UDP
+      endpoint pool, anyfrom pool, UDP task queues, and packet-sniffer sessions
+      after successful reload;
+    - UDP endpoint pool has TTL cleanup and a default max-entry cap of 4096;
+    - UDP task pool has per-key queues, a max queue count of 2048, queue reuse
+      through `sync.Pool`, and non-blocking drop on overflow;
+    - packet sniffer pool has a 3-second TTL and max-entry cap of 1024.
+
+Conclusion:
+  Go's lower observed RSS is not caused by an aggressive custom memory reclaim
+  knob. It comes from Go runtime GC/goroutine behavior, bounded/TTL-managed
+  runtime resources, buffer reuse through `sync.Pool`, and a post-startup/reload
+  `runtime.GC` to clean build/reload spikes. Rust native should therefore copy
+  the ownership/lifecycle principles, not just add a one-shot trim. The most
+  relevant Rust work items are async per-flow ownership, bounded resource
+  lifetimes, protocol buffer reuse with clear caps, reload cleanup, and then an
+  allocator/reclaim policy if anonymous RSS still remains high.
+
+Execution note:
+  Do not treat Rust RSS reduction as a UI problem or as a single allocator/trim
+  switch. The working principle is:
+    1. preserve Go-compatible per-flow ownership semantics;
+    2. replace per-flow OS threads with async tasks when the resident TCP/TLS
+       path is ready for reactor-driven I/O;
+    3. keep long-lived proxy flows out of small fixed worker queues;
+    4. add explicit TTL/cap/flush ownership for runtime resources;
+    5. reuse protocol buffers with bounded retention;
+    6. only then evaluate allocator purge/trim policy for remaining anonymous
+       RSS.
+
+## 2026-06-04 RSS optimization execution order and step 1 start
+
+整理后的后续优化顺序:
+  1. Keep the currently working per-flow resident TCP ownership model and do not
+     return long-lived proxy flows to a small fixed worker queue.
+  2. Run a low-risk per-flow thread stack-size experiment before the larger
+     async rewrite. The experiment must not change routing, protocol selection,
+     Boring/fingerprint selection, Vision handling, or WebUI scope.
+  3. Move resident TCP to async task per flow after the TCP/TLS/Boring/Vision
+     path is ready for reactor-driven I/O. This is the real Rust equivalent of
+     Go's goroutine model.
+  4. Add explicit TTL/cap/flush ownership for runtime resources, matching the
+     Go principles around UDP endpoint/task/sniffer pools and reload-scoped
+     cleanup.
+  5. Add bounded protocol buffer reuse only where it reduces churn without
+     creating permanent high-water caches.
+  6. Evaluate allocator purge/trim only after async ownership and resource
+     lifecycle issues are addressed.
+
+Step 1 implementation started:
+  Resident TCP keeps per-connection flow ownership, but accepted flow threads
+  are now created with `std::thread::Builder::stack_size`. The default test
+  stack is 512 KiB. The runtime environment knob is
+  `DAE_RESIDENT_TCP_FLOW_STACK_BYTES`, clamped between 128 KiB and 8 MiB. The
+  value is reported in the resident dataplane start report and in the
+  `tcp_worker_started` event as `tcp_flow_stack_bytes` / `flow_stack_bytes`.
+
+Expected scope of step 1:
+  This can reduce thread-stack virtual memory and may reduce RSS if resident
+  TCP flow stacks are being touched enough to commit pages. It will not fix
+  baseline RSS from config/geodata/routing/product state, Boring/TLS caches,
+  logs, DB/WebUI state, or allocator high-water retention. If functionality
+  changes, the experiment should be treated as failed and reverted before
+  continuing to async work.
+
+Step 1 local build/test:
+  Artifact:
+    `/root/project/dae-daex-align/rust/target/release/daed`
+    sha256 `0ff2b1488c7553f699fc82c1e3488fa351dde890a64688d0d949d1d61ea0c3b8`
+    size 16 MiB
+
+  Commands passed:
+    `cargo fmt --all --manifest-path rust/Cargo.toml`
+    `git diff --check`
+    `cargo test -p dae-daemon resident_vless_vision --quiet`
+    `cargo test -p dae-daemon --test service_contract --quiet`
+    `cargo check -p dae-daemon --features native-ebpf`
+    `cargo build --manifest-path rust/Cargo.toml -p dae-daemon --bin daed --release --features native-ebpf`
+
+Step 1 deployment on 10.10.10.2:
+  Installed `/usr/bin/daed` sha256
+  `0ff2b1488c7553f699fc82c1e3488fa351dde890a64688d0d949d1d61ea0c3b8`.
+  The current test drop-in explicitly sets:
+    `DAE_RUST_RESIDENT_DATAPLANE=1`
+    `DAE_RUST_NATIVE_EBPF=1`
+    `DAE_RESIDENT_TCP_FLOW_STACK_BYTES=524288`
+    `DAED_WEB_ROOT=/usr/share/daed/web`
+    `DAED_HTTP_WORKERS=4`
+    `DAED_HTTP_QUEUE=64`
+
+  Existing Go rollback backup remains untouched:
+    `/etc/daed/backups/daed-go-20260604-090540-b296303fc01b`
+
+Step 1 live evidence:
+  Service restarted successfully with PID 5146. Resident runtime report exists
+  at `/tmp/dae-daemon-resident-runtime-5146/resident-production-runtime-start.json`.
+  `resident_dataplane.status=pass`, `tcp_flow_stack_bytes=524288`, and
+  `tcp_flow_stack_bytes_env=DAE_RESIDENT_TCP_FLOW_STACK_BYTES`.
+
+  Initial post-restore sample:
+    MemoryCurrent: 149049344
+    VmRSS: 89296 kB
+    RssAnon: 75640 kB
+    RssFile: 13656 kB
+    VmData: 99384 kB
+    Threads: 27
+
+  30-second live sample under traffic:
+    sample 1:
+      MemoryCurrent: 155439104
+      VmRSS: 95440 kB
+      RssAnon: 81784 kB
+      RssFile: 13656 kB
+      VmData: 108376 kB
+      Threads: 43
+    sample 2:
+      MemoryCurrent: 158945280
+      VmRSS: 97996 kB
+      RssAnon: 84340 kB
+      RssFile: 13656 kB
+      VmData: 114636 kB
+      Threads: 52
+    sample 3:
+      MemoryCurrent: 160489472
+      VmRSS: 99820 kB
+      RssAnon: 86164 kB
+      RssFile: 13656 kB
+      VmData: 117756 kB
+      Threads: 53
+    sample 4:
+      MemoryCurrent: 161091584
+      VmRSS: 100288 kB
+      RssAnon: 86632 kB
+      RssFile: 13656 kB
+      VmData: 118300 kB
+      Threads: 51
+    sample 5:
+      MemoryCurrent: 161447936
+      VmRSS: 100432 kB
+      RssAnon: 86776 kB
+      RssFile: 13656 kB
+      VmData: 118916 kB
+      Threads: 54
+    sample 6:
+      MemoryCurrent: 161296384
+      VmRSS: 100724 kB
+      RssAnon: 87068 kB
+      RssFile: 13656 kB
+      VmData: 121520 kB
+      Threads: 57
+
+  Recent event summary over the latest 200 dataplane events:
+    `tcp_worker_started`: 1
+    `udp_worker_started`: 1
+    `tcp_connection_finished`: 131
+    `udp_packet_finished`: 2
+    `tcp_connection_failed`: 11
+    `tls_underlay=boringssl`: 138
+    top nodes: `[US]Dmit-Mabuli` 93, `[HK]Hytron` 33, `[SG]Oracle-Sg` 15
+
+  The recent failure events were the known diagnostic pattern:
+    proxy_group=`openai`, node=`[US]Dmit-Mabuli`,
+    dial_target=`www.google.com:80`,
+    error=`read inbound TCP: Connection reset by peer (os error 104)`.
+
+Interpretation:
+  Step 1 preserves function: TG/Oracle-Sg and other proxy events still show
+  `tls_underlay=boringssl`, and the resident dataplane reports pass. The 512 KiB
+  per-flow stack experiment does not by itself solve RSS growth: RSS still rises
+  with live TCP flow/thread count. It may slightly constrain stack reserve, but
+  the observed anonymous RSS remains dominated by per-flow thread count,
+  allocator/cache/high-water behavior, and resident baseline ownership. This
+  strengthens the conclusion that the real next optimization is async per-flow
+  ownership plus lifecycle/cap cleanup, not another fixed worker queue.
+
+## 2026-06-04 A-C async/allocator optimization execution log
+
+Execution discipline:
+  Work must be recorded step by step. Each step needs a code-scope note, local
+  test evidence, and, when deployed, live-host evidence. Do not merge async
+  conversion, allocator replacement, and UI metric changes into one opaque
+  change. Do not treat `spawn_blocking` or a small fixed worker queue as a valid
+  replacement for Go's goroutine-like per-flow ownership.
+
+A. Async direct TCP skeleton:
+  Convert the resident TCP accept/direct path from per-flow OS threads to
+  async tasks/reaction-driven I/O first. Scope is direct TCP relay, active-flow
+  accounting, events, shutdown, and metrics. Proxy/TLS/Vision may remain on the
+  old path only as an explicit transitional boundary while A is being validated.
+
+B. Async proxy/TLS/Vision path:
+  Move the proxy path to readiness-driven I/O. This includes standard TLS,
+  fingerprint-aware Boring underlay, VLESS request/response handling, Vision
+  uplink/downlink state, and raw-direct recovery. This step is not complete if
+  Boring/TLS is still driven by blocking I/O or by a hidden per-flow OS thread.
+
+C. Functional and RSS curve confirmation:
+  Build the release native-ebpf `daed`, deploy to 10.10.10.2 using the current
+  Rust test procedure, confirm resident dataplane pass, confirm Boring underlay
+  for fingerprinted proxy flows, confirm TG/Oracle-Sg functional events, and
+  record `/proc` RSS/RssAnon/VmData/Threads samples across idle, initial live
+  traffic, and sustained live traffic. Only after C should jemalloc/mimalloc
+  A/B be started.
+
+A implementation note:
+  A has started in code. `dae-daemon` now depends on the workspace `tokio`
+  crate. The workspace Tokio dependency enabled the `macros` feature so direct
+  relay can use `tokio::select!`; this expands `Cargo.lock` with
+  `tokio-macros` as a transitive dependency of the existing Tokio crate, not as
+  a new top-level DAEX crate.
+
+  The resident TCP listener thread now owns a current-thread Tokio runtime and
+  adopts the tproxy TCP listener as a `tokio::net::TcpListener`. The start
+  event uses:
+    `execution=async-accept-direct-v1`
+    `proxy_execution=per-connection-thread-transitional`
+
+  Direct TCP flows now run as Tokio tasks and use async relay with
+  `tokio::select!` over inbound/direct reads. This removes the per-flow OS
+  thread for direct relay. The direct connect operation still calls the existing
+  `magic_tcp_connect` through a bounded async boundary because it preserves
+  SO_MARK/MPTCP semantics; the relay itself is readiness-driven and does not use
+  the old `WouldBlock + thread::sleep` loop.
+
+  Proxy/TLS/Vision flows are deliberately still handed off to the previous
+  per-connection thread path while B is pending. The handoff is not logged as a
+  separate per-flow event to avoid doubling event-log volume; only final
+  `tcp_connection_finished` / `tcp_connection_failed` events are emitted.
+
+A local evidence so far:
+  Passed:
+    `cargo check -p dae-daemon --features native-ebpf`
+    `cargo test -p dae-daemon resident_direct --quiet`
+    `cargo test -p dae-daemon resident_vless_vision --quiet`
+
+  A is not complete until the async direct path is exercised in a live or
+  integration test and the resulting event shows `execution=async-direct-v1`.
+  B remains pending because fingerprint-aware proxy/TLS/Vision traffic is still
+  on the transitional per-connection thread path.
+
+A close-out update:
+  The async direct path no longer clones the direct TCP fd just to keep event
+  metadata alive. `handle_direct_tcp_connection_async` now takes ownership of
+  `DirectTcpConnection`, moves the single `TcpStream` into `TokioTcpStream`, and
+  carries only `TcpDirectDialReport` plus `SocketAddrV4` into the finished event.
+  This avoids holding an extra direct socket fd for the relay lifetime and keeps
+  direct connection lifetime visible for RSS/fd testing.
+
+  Added a focused async relay regression:
+    `resident_direct_async_relay_preserves_sniffed_initial_payload`
+
+  Local evidence after A close-out:
+    `cargo fmt --all --manifest-path /root/project/dae-daex-align/rust/Cargo.toml`
+    `cargo check -p dae-daemon --features native-ebpf`
+    `cargo test -p dae-daemon resident_direct --quiet`
+      result: 4 direct tests passed, including async direct relay.
+    `cargo test -p dae-daemon resident_vless_vision --quiet`
+      result: 12 tests passed.
+    `cargo test -p dae-daemon --test service_contract --quiet`
+      result: 2 tests passed.
+    `git -C /root/project/dae-daex-align diff --check`
+      result: clean.
+
+  A is locally complete for code and unit/integration-contract coverage. Live
+  `execution=async-direct-v1` evidence is deferred to C because deployment must
+  happen only after B local validation. B remains pending: proxy/TLS/Vision still
+  has a per-flow OS-thread boundary.
+
+B implementation rule update:
+  Do not hand-drive BoringSSL over `AsyncFd` in resident proxy/TLS code. The
+  fingerprint-aware TLS underlay must use `tokio-boring`; the ordinary TLS
+  underlay must use `tokio-rustls`. This keeps TLS readiness, handshake,
+  shutdown, and stream integration in maintained async TLS adapters instead of
+  embedding a custom fd-readiness loop in DAEX resident dataplane code.
+
+  New crates are allowed when they reduce maintenance risk or keep protocol/TLS
+  semantics inside maintained adapters. `tokio-boring` and `tokio-rustls` are
+  acceptable for B because they remove the need for DAEX-owned TLS readiness
+  loops and make the async proxy path easier to audit long term.
+
+B implementation update:
+  `dae-daemon` now depends on `tokio-boring` and `tokio-rustls`. The workspace
+  keeps `boring=5.1`; an initial `cargo update -p boring --precise 5.0.0`
+  proved that pinning to 5.0.0 would select a yanked `boring` release, so the
+  final dependency graph was re-resolved back to `boring=5.1.0` while still
+  compiling `tokio-boring=5.0.0`.
+
+  TCP proxy flows no longer use the transitional `dae-tcp-proxy-flow` per-flow
+  OS thread in the async accept path. The resident TCP worker start event now
+  reports:
+    `execution=async-accept-direct-v1`
+    `proxy_execution=async-proxy-tls-v1`
+
+  The new async proxy client split is:
+    ordinary TLS: `tokio-rustls`
+    fingerprint-aware TLS: `tokio-boring`
+
+  `tls_underlay` event semantics remain stable:
+    ordinary TLS reports `rustls`
+    fingerprint-aware TLS reports `boringssl`
+
+  The implementation keeps the existing synchronous `VlessTlsClient` for UDP
+  and legacy comparison code. TCP proxy path uses `AsyncVlessTlsClient`,
+  `open_async_vless_tls_client`, `drain_vision_uplink_async`, and
+  `relay_tcp_over_vless_tls_async`.
+
+  Remaining B boundary to validate live:
+    outbound socket creation still goes through the existing `magic_tcp_connect`
+    helper via a short async boundary so SO_MARK/MPTCP semantics and reports are
+    preserved. The long-lived proxy relay, TLS handshake, TLS reads/writes,
+    Vision uplink/downlink, and raw-direct mode are async TLS streams; the
+    connect boundary must be revisited later only if `/proc` evidence shows it
+    is material to RSS or latency.
+
+  Local evidence after B implementation:
+    `cargo fmt --all --manifest-path /root/project/dae-daex-align/rust/Cargo.toml`
+    `cargo check -p dae-daemon --features native-ebpf`
+      result: pass; `tokio-boring=5.0.0` and `tokio-rustls=0.26.4` compile with
+      workspace `boring=5.1.0`.
+    `cargo test -p dae-daemon resident_direct --quiet`
+      result: 4 tests passed.
+    `cargo test -p dae-daemon resident_vless_vision --quiet`
+      result: 12 tests passed.
+    `cargo test -p dae-daemon --test service_contract --quiet`
+      result: 2 tests passed.
+    `git -C /root/project/dae-daex-align diff --check`
+      result: clean.
+
+  B is code-complete locally, but real TLS/proxy behavior must be proven in C
+  with the latest native `daed` on 10.10.10.2. Do not claim RSS/function success
+  from local unit tests alone.
+
+C live deployment and evidence:
+  Built the current Rust product binary with:
+    `cargo build --manifest-path /root/project/dae-daex-align/rust/Cargo.toml -p dae-daemon --bin daed --release --features native-ebpf --quiet`
+
+  Local artifact:
+    path: `/root/project/dae-daex-align/rust/target/release/daed`
+    size: 17M
+    file: ELF 64-bit LSB pie executable, dynamically linked, not stripped
+    sha256: `7a5f6d0bb0b99f3bbb5c15dc60187f16ae9f6774e3d3bfbb3ae2ccbd6ed798f5`
+
+  10.10.10.2 deployment:
+    previous test binary hash before deploy:
+      `0ff2b1488c7553f699fc82c1e3488fa351dde890a64688d0d949d1d61ea0c3b8`
+    Go rollback backup was left untouched:
+      `/etc/daed/backups/daed-go-20260604-090540-b296303fc01b`
+      sha256 `b296303fc01b0cd4453ab90bb7bf988d6315a952a548fd483a0a9c5bab2448bf`
+    current `/usr/bin/daed` after deploy:
+      sha256 `7a5f6d0bb0b99f3bbb5c15dc60187f16ae9f6774e3d3bfbb3ae2ccbd6ed798f5`
+    service: active
+    pid: 13919
+    systemd drop-in:
+      `DAE_RUST_RESIDENT_DATAPLANE=1`
+      `DAE_RUST_NATIVE_EBPF=1`
+      `DAE_RESIDENT_TCP_FLOW_STACK_BYTES=524288`
+      `DAED_WEB_ROOT=/usr/share/daed/web`
+      `DAED_HTTP_WORKERS=4`
+      `DAED_HTTP_QUEUE=64`
+
+  Live resident runtime:
+    runtime dir: `/tmp/dae-daemon-resident-runtime-13919`
+    event file:
+      `/tmp/dae-daemon-resident-runtime-13919/resident-production-dataplane-events.jsonl`
+    `resident-production-runtime-start.json` status: pass
+    resident dataplane status: pass
+    proxy_count: 7
+    tcp_dial_mode: domain++
+    tcp_worker_started: true
+    udp_worker_started: true
+    default proxy: `[HK]Hytron`
+    default proxy TLS underlay plan:
+      protocol=vless, tls=tls, transport=tcp, flow=xtls-rprx-vision,
+      server_name=office.mitsuha.me, link fp source=`link fp`,
+      fingerprint family=`chrome`.
+
+  Worker event evidence:
+    `tcp_worker_started`:
+      `execution=async-accept-direct-v1`
+      `proxy_execution=async-proxy-tls-v1`
+      `legacy_flow_stack_bytes=524288`
+
+  Live traffic evidence:
+    Initial event sample showed real proxy events with:
+      `event=tcp_connection_finished`
+      `execution=async-proxy-tls-v1`
+      `tls_underlay=boringssl`
+      `node_tag=[HK]Hytron`
+      Vision stats including `vision_unpadding_blocks`.
+
+    TG/Oracle-Sg evidence:
+      event count by node at 10:46 sample:
+        `[HK]Hytron`: 83
+        `[US]Dmit-Mabuli`: 75
+        `[SG]Oracle-Sg`: 24
+      event count by group:
+        `proxy`: 83
+        `openai`: 75
+        `TG`: 24
+      TG events included Telegram targets such as:
+        `149.154.175.50:5222`
+        `149.154.175.53:443`
+        `149.154.171.255:443`
+        `149.154.167.35:443`
+      Each sampled TG event was:
+        `execution=async-proxy-tls-v1`
+        `tls_underlay=boringssl`
+        `node_tag=[SG]Oracle-Sg`
+        `proxy_group=TG`
+        `response_header_stripped=true`
+
+    Longer sample at 10:48:
+      total events:
+        `tcp_worker_started`: 1
+        `udp_worker_started`: 1
+        `udp_dns_packet_finished`: 6
+        `tcp_connection_finished`: 344
+        `tcp_connection_failed`: 6
+      node counts:
+        `[US]Dmit-Mabuli`: 230
+        `[HK]Hytron`: 92
+        `[SG]Oracle-Sg`: 25
+
+    Direct path evidence:
+      finished_by_kind after live traffic:
+        proxy: 365
+        direct: 10
+      direct events include `execution=async-direct-v1` with nonzero
+      `bytes_client_to_direct` and `bytes_direct_to_client`.
+
+    Proxy path evidence:
+      proxy execution counter:
+        `async-proxy-tls-v1`: 365
+      proxy TLS underlay counter:
+        `boringssl`: 365
+
+  RSS / thread samples:
+    immediately after restart before resident runtime traffic:
+      pid=13919, Threads=6, VmRSS=14236 kB, RssAnon=2932 kB,
+      VmData=10816 kB.
+
+    10:46:01, after resident runtime start and live traffic:
+      pid=13919, NLWP=23, VmRSS=86824 kB, RssAnon=72416 kB,
+      VmData=144480 kB, event lines=151.
+
+    10:46:44, after another 20 seconds:
+      pid=13919, NLWP=19, VmRSS=86900 kB, RssAnon=72492 kB,
+      VmData=144524 kB, event lines=229.
+
+    10:48:03, after another 60 seconds:
+      pid=13919, NLWP=18, VmRSS=86900 kB, RssAnon=72492 kB,
+      VmData=144516 kB, event lines=358.
+
+  Interpretation:
+    The A+B async changes materially reduced live resident RSS versus the prior
+    test runs whose systemd peak samples were around 178.9M, 205M, and 219.9M
+    on the same host. The new sample stabilized around 86.9M under active
+    traffic while events increased from 151 to 358 and thread count fell from 23
+    to 18. This is not a final leak proof, but it is strong live evidence that
+    removing long-lived proxy per-flow OS threads improved the resident RSS
+    curve.
+
+  Residual observations to keep:
+    Six TCP failures were present in 358 event lines:
+      `read inbound TCP: Connection reset by peer (os error 104)`
+      `connect VLESS server 168.138.166.160:443: Operation now in progress (os error 115)`
+      `write direct TCP payload to client: Broken pipe (os error 32)`
+      `write VLESS Vision direct payload to client: Broken pipe (os error 32)`
+      `read inbound TCP for direct relay: Connection reset by peer (os error 104)`
+      `connect VLESS server 64.186.224.7:443: Operation now in progress (os error 115)`
+
+    The broken pipe and reset events are consistent with client-side close/reset
+    behavior and should stay diagnostic unless frequency rises. The two
+    `Operation now in progress` connect errors should be watched because they
+    come from the preserved `magic_tcp_connect` connect boundary; TG still had
+    successful Oracle-Sg finished events, so this is not a current functional
+    blocker but remains a follow-up candidate if failures increase.

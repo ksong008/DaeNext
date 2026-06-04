@@ -11,6 +11,10 @@ use std::time::Instant;
 use boring::ssl::{SslConnector, SslMethod, SslStream, SslVerifyMode, SslVersion};
 use dae_datapath::{TcpDirectDialOptions, magic_tcp_connect};
 use rustls::{ClientConfig, ClientConnection, RootCertStore, pki_types::ServerName};
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::net::TcpStream as TokioTcpStream;
+use tokio::task;
+use tokio::time;
 
 use super::XTLS_RPRX_VISION;
 use super::plan::{ResidentProxyPlan, ResidentUtlsFingerprintPlan};
@@ -23,6 +27,10 @@ pub(super) struct VlessTlsClient {
     engine: VlessTlsEngine,
 }
 
+pub(super) struct AsyncVlessTlsClient {
+    engine: AsyncVlessTlsEngine,
+}
+
 enum VlessTlsEngine {
     Rustls {
         tcp: TcpStream,
@@ -32,6 +40,15 @@ enum VlessTlsEngine {
     Boring {
         tls: SslStream<TcpStream>,
         pending_plaintext: Vec<u8>,
+    },
+}
+
+enum AsyncVlessTlsEngine {
+    Rustls {
+        tls: tokio_rustls::client::TlsStream<TokioTcpStream>,
+    },
+    Boring {
+        tls: tokio_boring::SslStream<TokioTcpStream>,
     },
 }
 
@@ -157,6 +174,85 @@ impl VlessTlsClient {
     }
 }
 
+impl AsyncVlessTlsClient {
+    pub(super) async fn write_plain_all(
+        &mut self,
+        payload: &[u8],
+        label: &str,
+    ) -> Result<(), String> {
+        match &mut self.engine {
+            AsyncVlessTlsEngine::Rustls { tls } => {
+                tls.write_all(payload)
+                    .await
+                    .map_err(|err| format!("{label}: {err}"))?;
+                tls.flush()
+                    .await
+                    .map_err(|err| format!("flush {label}: {err}"))
+            }
+            AsyncVlessTlsEngine::Boring { tls } => {
+                tls.write_all(payload)
+                    .await
+                    .map_err(|err| format!("{label}: {err}"))?;
+                tls.flush()
+                    .await
+                    .map_err(|err| format!("flush {label}: {err}"))
+            }
+        }
+    }
+
+    pub(super) async fn read_plain(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+        match &mut self.engine {
+            AsyncVlessTlsEngine::Rustls { tls } => tls.read(buf).await,
+            AsyncVlessTlsEngine::Boring { tls } => tls.read(buf).await,
+        }
+    }
+
+    pub(super) async fn raw_read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+        match &mut self.engine {
+            AsyncVlessTlsEngine::Rustls { tls } => tls.get_mut().0.read(buf).await,
+            AsyncVlessTlsEngine::Boring { tls } => tls.get_mut().read(buf).await,
+        }
+    }
+
+    pub(super) async fn raw_write_all(
+        &mut self,
+        payload: &[u8],
+        label: &str,
+    ) -> Result<(), String> {
+        match &mut self.engine {
+            AsyncVlessTlsEngine::Rustls { tls } => {
+                let raw = tls.get_mut().0;
+                raw.write_all(payload)
+                    .await
+                    .map_err(|err| format!("{label}: {err}"))?;
+                raw.flush()
+                    .await
+                    .map_err(|err| format!("flush {label}: {err}"))
+            }
+            AsyncVlessTlsEngine::Boring { tls } => {
+                let raw = tls.get_mut();
+                raw.write_all(payload)
+                    .await
+                    .map_err(|err| format!("{label}: {err}"))?;
+                raw.flush()
+                    .await
+                    .map_err(|err| format!("flush {label}: {err}"))
+            }
+        }
+    }
+
+    pub(super) async fn shutdown(&mut self) {
+        match &mut self.engine {
+            AsyncVlessTlsEngine::Rustls { tls } => {
+                let _ = tls.shutdown().await;
+            }
+            AsyncVlessTlsEngine::Boring { tls } => {
+                let _ = tls.shutdown().await;
+            }
+        }
+    }
+}
+
 impl TlsRecordReader {
     fn read_one(
         &mut self,
@@ -278,6 +374,92 @@ pub(super) fn open_vless_tls_client(proxy: &ResidentProxyPlan) -> Result<VlessTl
     } else {
         open_rustls_vless_tls_client(proxy, connected.stream)
     }
+}
+
+pub(super) async fn open_async_vless_tls_client(
+    proxy: &ResidentProxyPlan,
+) -> Result<AsyncVlessTlsClient, String> {
+    let tcp = open_proxy_tcp_stream_async(proxy.clone()).await?;
+    if proxy.utls_fingerprint.is_some() {
+        open_async_boring_vless_tls_client(proxy, tcp).await
+    } else {
+        open_async_rustls_vless_tls_client(proxy, tcp).await
+    }
+}
+
+async fn open_proxy_tcp_stream_async(proxy: ResidentProxyPlan) -> Result<TokioTcpStream, String> {
+    let stream = task::spawn_blocking(move || {
+        let target = resolve_proxy_addr(&proxy)?;
+        let connected = magic_tcp_connect(
+            target,
+            &TcpDirectDialOptions {
+                mark: proxy.mark,
+                mptcp: proxy.mptcp,
+                timeout: RESIDENT_CONNECT_TIMEOUT,
+            },
+        )
+        .map_err(|err| format!("connect VLESS server {target}: {err}"))?;
+        connected
+            .stream
+            .set_read_timeout(None)
+            .map_err(|err| format!("clear VLESS TCP read timeout: {err}"))?;
+        connected
+            .stream
+            .set_write_timeout(None)
+            .map_err(|err| format!("clear VLESS TCP write timeout: {err}"))?;
+        connected
+            .stream
+            .set_nonblocking(true)
+            .map_err(|err| format!("set VLESS TCP nonblocking: {err}"))?;
+        connected
+            .stream
+            .set_nodelay(true)
+            .map_err(|err| format!("set VLESS TCP_NODELAY: {err}"))?;
+        Ok::<TcpStream, String>(connected.stream)
+    })
+    .await
+    .map_err(|err| format!("join VLESS TCP connect task: {err}"))??;
+    TokioTcpStream::from_std(stream).map_err(|err| format!("adopt async VLESS TCP stream: {err}"))
+}
+
+async fn open_async_rustls_vless_tls_client(
+    proxy: &ResidentProxyPlan,
+    tcp: TokioTcpStream,
+) -> Result<AsyncVlessTlsClient, String> {
+    let config = rustls_vless_client_config(proxy)?;
+    let server_name = ServerName::try_from(proxy.server_name.clone())
+        .map_err(|err| format!("invalid VLESS TLS server name {}: {err}", proxy.server_name))?;
+    let connector = tokio_rustls::TlsConnector::from(config);
+    let tls = time::timeout(
+        RESIDENT_CONNECT_TIMEOUT,
+        connector.connect(server_name, tcp),
+    )
+    .await
+    .map_err(|_| "VLESS tokio-rustls handshake timeout".to_owned())?
+    .map_err(|err| format!("connect VLESS tokio-rustls client: {err}"))?;
+    Ok(AsyncVlessTlsClient {
+        engine: AsyncVlessTlsEngine::Rustls { tls },
+    })
+}
+
+async fn open_async_boring_vless_tls_client(
+    proxy: &ResidentProxyPlan,
+    tcp: TokioTcpStream,
+) -> Result<AsyncVlessTlsClient, String> {
+    let connector = boring_vless_connector(proxy)?;
+    let config = connector
+        .configure()
+        .map_err(|err| format!("configure VLESS BoringSSL client: {err}"))?;
+    let tls = time::timeout(
+        RESIDENT_CONNECT_TIMEOUT,
+        tokio_boring::connect(config, &proxy.server_name, tcp),
+    )
+    .await
+    .map_err(|_| "VLESS tokio-boring handshake timeout".to_owned())?
+    .map_err(|err| format!("connect VLESS tokio-boring client: {err}"))?;
+    Ok(AsyncVlessTlsClient {
+        engine: AsyncVlessTlsEngine::Boring { tls },
+    })
 }
 
 fn open_rustls_vless_tls_client(
@@ -671,5 +853,12 @@ pub(super) fn tls_underlay_name(client: &VlessTlsClient) -> &'static str {
     match &client.engine {
         VlessTlsEngine::Rustls { .. } => "rustls",
         VlessTlsEngine::Boring { .. } => "boringssl",
+    }
+}
+
+pub(super) fn async_tls_underlay_name(client: &AsyncVlessTlsClient) -> &'static str {
+    match &client.engine {
+        AsyncVlessTlsEngine::Rustls { .. } => "rustls",
+        AsyncVlessTlsEngine::Boring { .. } => "boringssl",
     }
 }
