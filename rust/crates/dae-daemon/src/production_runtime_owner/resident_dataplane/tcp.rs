@@ -1,15 +1,17 @@
 use std::collections::BTreeMap;
+use std::env;
 use std::io::{ErrorKind, Read};
 use std::mem::size_of;
 use std::net::{IpAddr, Ipv4Addr, Shutdown, SocketAddr, SocketAddrV4, TcpListener, TcpStream};
 use std::os::fd::AsRawFd;
 use std::path::PathBuf;
 use std::slice;
+use std::sync::mpsc::{self, Receiver, RecvTimeoutError, SyncSender, TrySendError};
 use std::sync::{
     Arc, Mutex,
     atomic::{AtomicBool, Ordering},
 };
-use std::thread;
+use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
 use dae_core_types::OutboundIndex;
@@ -44,6 +46,211 @@ const BPF_L4_TCP: u8 = 6;
 const ROUTING_L4_TCP: u8 = 1;
 const ROUTING_IP_VERSION_4: u8 = 1;
 const TCP_SNIFF_BUFFER_LIMIT: usize = 64 * 1024;
+const RESIDENT_FLOW_WORKERS_ENV: &str = "DAE_RESIDENT_FLOW_WORKERS";
+const RESIDENT_FLOW_QUEUE_ENV: &str = "DAE_RESIDENT_FLOW_QUEUE";
+const RESIDENT_FLOW_WORKER_STACK_BYTES_ENV: &str = "DAE_RESIDENT_FLOW_WORKER_STACK_BYTES";
+const RESIDENT_FLOW_WORKER_DEFAULT_MIN: usize = 4;
+const RESIDENT_FLOW_WORKER_DEFAULT_MAX: usize = 16;
+const RESIDENT_FLOW_WORKER_MIN: usize = 1;
+const RESIDENT_FLOW_WORKER_MAX: usize = 128;
+const RESIDENT_FLOW_QUEUE_DEFAULT: usize = 256;
+const RESIDENT_FLOW_QUEUE_MIN: usize = 16;
+const RESIDENT_FLOW_QUEUE_MAX: usize = 16_384;
+const RESIDENT_FLOW_WORKER_STACK_BYTES_DEFAULT: usize = 1024 * 1024;
+const RESIDENT_FLOW_WORKER_STACK_BYTES_MIN: usize = 256 * 1024;
+const RESIDENT_FLOW_WORKER_STACK_BYTES_MAX: usize = 8 * 1024 * 1024;
+const RESIDENT_FLOW_RECV_TIMEOUT: Duration = Duration::from_millis(100);
+
+#[derive(Clone, Copy, Debug)]
+pub(super) struct ResidentTcpWorkerConfig {
+    worker_count: usize,
+    queue_capacity: usize,
+    worker_stack_bytes: usize,
+}
+
+impl ResidentTcpWorkerConfig {
+    pub(super) fn from_env() -> Self {
+        let default_workers = thread::available_parallelism()
+            .map(|parallelism| parallelism.get().saturating_mul(2))
+            .unwrap_or(RESIDENT_FLOW_WORKER_DEFAULT_MIN)
+            .clamp(
+                RESIDENT_FLOW_WORKER_DEFAULT_MIN,
+                RESIDENT_FLOW_WORKER_DEFAULT_MAX,
+            );
+        Self {
+            worker_count: env_usize(
+                RESIDENT_FLOW_WORKERS_ENV,
+                default_workers,
+                RESIDENT_FLOW_WORKER_MIN,
+                RESIDENT_FLOW_WORKER_MAX,
+            ),
+            queue_capacity: env_usize(
+                RESIDENT_FLOW_QUEUE_ENV,
+                RESIDENT_FLOW_QUEUE_DEFAULT,
+                RESIDENT_FLOW_QUEUE_MIN,
+                RESIDENT_FLOW_QUEUE_MAX,
+            ),
+            worker_stack_bytes: env_usize(
+                RESIDENT_FLOW_WORKER_STACK_BYTES_ENV,
+                RESIDENT_FLOW_WORKER_STACK_BYTES_DEFAULT,
+                RESIDENT_FLOW_WORKER_STACK_BYTES_MIN,
+                RESIDENT_FLOW_WORKER_STACK_BYTES_MAX,
+            ),
+        }
+    }
+
+    pub(super) fn worker_count(&self) -> usize {
+        self.worker_count
+    }
+
+    pub(super) fn queue_capacity(&self) -> usize {
+        self.queue_capacity
+    }
+
+    pub(super) fn worker_stack_bytes(&self) -> usize {
+        self.worker_stack_bytes
+    }
+}
+
+fn env_usize(name: &str, default: usize, min: usize, max: usize) -> usize {
+    env::var(name)
+        .ok()
+        .and_then(|value| value.trim().parse::<usize>().ok())
+        .unwrap_or(default)
+        .clamp(min, max)
+}
+
+#[derive(Clone)]
+pub(super) struct ResidentTcpFlowQueue {
+    sender: SyncSender<TcpFlowJob>,
+}
+
+struct TcpFlowJob {
+    stream: TcpStream,
+    peer: SocketAddr,
+}
+
+impl ResidentTcpFlowQueue {
+    fn try_submit(&self, stream: TcpStream, peer: SocketAddr) -> Result<(), TcpFlowSubmitError> {
+        match self.sender.try_send(TcpFlowJob { stream, peer }) {
+            Ok(()) => Ok(()),
+            Err(TrySendError::Full(job)) => Err(TcpFlowSubmitError::Full(job.stream)),
+            Err(TrySendError::Disconnected(job)) => {
+                Err(TcpFlowSubmitError::Disconnected(job.stream))
+            }
+        }
+    }
+}
+
+enum TcpFlowSubmitError {
+    Full(TcpStream),
+    Disconnected(TcpStream),
+}
+
+pub(super) fn spawn_resident_tcp_flow_workers(
+    config: ResidentTcpWorkerConfig,
+    router: Arc<ResidentTcpRouter>,
+    stop: Arc<AtomicBool>,
+    event_file: PathBuf,
+    event_lock: Arc<Mutex<()>>,
+    metrics: Arc<ResidentDataplaneMetrics>,
+) -> Result<(ResidentTcpFlowQueue, Vec<JoinHandle<()>>), String> {
+    let (sender, receiver) = mpsc::sync_channel(config.queue_capacity);
+    let receiver = Arc::new(Mutex::new(receiver));
+    let mut handles: Vec<JoinHandle<()>> = Vec::with_capacity(config.worker_count);
+    for index in 0..config.worker_count {
+        let receiver = Arc::clone(&receiver);
+        let router = Arc::clone(&router);
+        let worker_stop = Arc::clone(&stop);
+        let fail_stop = Arc::clone(&stop);
+        let event_file = event_file.clone();
+        let event_lock = Arc::clone(&event_lock);
+        let metrics = Arc::clone(&metrics);
+        let handle = thread::Builder::new()
+            .name(format!("dae-resident-flow-{index}"))
+            .stack_size(config.worker_stack_bytes)
+            .spawn(move || {
+                resident_tcp_flow_worker_loop(
+                    index,
+                    receiver,
+                    router,
+                    worker_stop,
+                    event_file,
+                    event_lock,
+                    metrics,
+                )
+            })
+            .map_err(|err| {
+                fail_stop.store(true, Ordering::Relaxed);
+                drop(sender.clone());
+                for handle in handles.drain(..) {
+                    let _ = handle.join();
+                }
+                format!("spawn resident TCP flow worker {index}: {err}")
+            })?;
+        handles.push(handle);
+    }
+    Ok((ResidentTcpFlowQueue { sender }, handles))
+}
+
+fn resident_tcp_flow_worker_loop(
+    index: usize,
+    receiver: Arc<Mutex<Receiver<TcpFlowJob>>>,
+    router: Arc<ResidentTcpRouter>,
+    stop: Arc<AtomicBool>,
+    event_file: PathBuf,
+    event_lock: Arc<Mutex<()>>,
+    metrics: Arc<ResidentDataplaneMetrics>,
+) {
+    append_event(
+        &event_file,
+        &event_lock,
+        json!({"event": "tcp_flow_worker_started", "worker_index": index}),
+    );
+    while !stop.load(Ordering::Relaxed) {
+        let recv_result = {
+            let Ok(receiver) = receiver.lock() else {
+                append_event(
+                    &event_file,
+                    &event_lock,
+                    json!({"event": "tcp_flow_worker_receiver_lock_failed", "worker_index": index}),
+                );
+                break;
+            };
+            receiver.recv_timeout(RESIDENT_FLOW_RECV_TIMEOUT)
+        };
+        match recv_result {
+            Ok(job) => {
+                metrics.tcp_dequeued();
+                metrics.tcp_opened();
+                let peer = job.peer;
+                let result = handle_tcp_connection(
+                    job.stream,
+                    peer,
+                    Arc::clone(&router),
+                    Arc::clone(&stop),
+                    &metrics,
+                );
+                metrics.tcp_closed();
+                match result {
+                    Ok(event) => append_event(&event_file, &event_lock, event),
+                    Err(err) => append_event(
+                        &event_file,
+                        &event_lock,
+                        json!({"event": "tcp_connection_failed", "peer": peer.to_string(), "error": err}),
+                    ),
+                }
+            }
+            Err(RecvTimeoutError::Timeout) => {}
+            Err(RecvTimeoutError::Disconnected) => break,
+        }
+    }
+    append_event(
+        &event_file,
+        &event_lock,
+        json!({"event": "tcp_flow_worker_stopped", "worker_index": index}),
+    );
+}
 
 pub(super) struct ResidentTcpRouter {
     proxies: BTreeMap<u8, ResidentProxyPlan>,
@@ -270,6 +477,7 @@ pub(super) fn resident_tcp_accept_loop(
     event_file: PathBuf,
     event_lock: Arc<Mutex<()>>,
     metrics: Arc<ResidentDataplaneMetrics>,
+    flow_queue: ResidentTcpFlowQueue,
 ) {
     if let Err(err) = listener.set_nonblocking(true) {
         append_event(
@@ -282,29 +490,29 @@ pub(super) fn resident_tcp_accept_loop(
     append_event(
         &event_file,
         &event_lock,
-        json!({"event": "tcp_worker_started", "proxy_count": router.proxy_count(), "dial_mode": router.dial_mode_name()}),
+        json!({"event": "tcp_worker_started", "proxy_count": router.proxy_count(), "dial_mode": router.dial_mode_name(), "execution": "bounded-flow-worker-queue"}),
     );
     while !stop.load(Ordering::Relaxed) {
         match listener.accept() {
             Ok((stream, peer)) => {
-                let router = Arc::clone(&router);
-                let stop = Arc::clone(&stop);
-                let event_file = event_file.clone();
-                let event_lock = Arc::clone(&event_lock);
-                let metrics = Arc::clone(&metrics);
-                thread::spawn(move || {
-                    metrics.tcp_opened();
-                    let result = handle_tcp_connection(stream, peer, router, stop, &metrics);
-                    metrics.tcp_closed();
-                    match result {
-                        Ok(event) => append_event(&event_file, &event_lock, event),
-                        Err(err) => append_event(
+                metrics.tcp_accepted();
+                match flow_queue.try_submit(stream, peer) {
+                    Ok(()) => metrics.tcp_enqueued(),
+                    Err(TcpFlowSubmitError::Full(stream)) => {
+                        metrics.tcp_rejected();
+                        let _ = stream.shutdown(Shutdown::Both);
+                    }
+                    Err(TcpFlowSubmitError::Disconnected(stream)) => {
+                        metrics.tcp_rejected();
+                        let _ = stream.shutdown(Shutdown::Both);
+                        append_event(
                             &event_file,
                             &event_lock,
-                            json!({"event": "tcp_connection_failed", "peer": peer.to_string(), "error": err}),
-                        ),
+                            json!({"event": "tcp_flow_queue_disconnected", "peer": peer.to_string()}),
+                        );
+                        break;
                     }
-                });
+                }
             }
             Err(err) if err.kind() == ErrorKind::WouldBlock => {
                 thread::sleep(RESIDENT_TCP_ACCEPT_SLEEP);

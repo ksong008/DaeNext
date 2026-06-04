@@ -390,7 +390,8 @@ pub fn kernel_program_fallback_retirement_gate_report(
         tc_command_fallback_retirement_allowed: false,
         trace_diagnostic_retirement_allowed: trace_retirement_allowed,
         c_tproxy_object_required: !admitted,
-        c_trace_object_required: trace_diagnostic.c_trace_object_required && !trace_retirement_allowed,
+        c_trace_object_required: trace_diagnostic.c_trace_object_required
+            && !trace_retirement_allowed,
         go_bpf_fallback_required: !admitted,
         go_trace_fallback_required: trace_diagnostic.go_trace_fallback_required,
         tc_command_fallback_required: true,
