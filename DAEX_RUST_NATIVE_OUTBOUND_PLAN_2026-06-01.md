@@ -12381,3 +12381,87 @@ Remote `38.65.91.47` check for this change:
     old `dae validate` parity as proven by this product binary.
   - No system binary replacement, service restart, tproxy attachment, or default
     path mutation was performed on remote 38 in this check.
+
+## 2026-06-04 resident adapter matrix read-only command
+
+New command:
+  - `daed resident-adapter-matrix -c <config.dae> [--json]`
+
+Purpose:
+  - Provides a non-mutating resident live adapter matrix assessment for a config
+    file.
+  - Reuses the real resident dataplane planner instead of implementing a second
+    parser/admission path.
+  - Reports whether the selected group/node shape is admitted, fail-closed, or
+    not applicable.
+  - Does not start daed, attach tproxy/eBPF, open outbound network sockets, or
+    mutate host state.
+  - Does not emit full node links. The report is limited to safe matrix fields
+    such as protocol, group, node tag, transport/security/flow, fingerprint
+    underlay flag, and sanitized uTLS metadata.
+
+Report schema:
+  - `resident-live-adapter-config-assessment-v1`
+
+Important report fields:
+  - `read_only=true`
+  - `host_mutation_executed=false`
+  - `network_io_executed=false`
+  - `live_traffic_executed=false`
+  - `status`
+      `admitted`, `blocked`, or `not-applicable`
+  - `planner_admitted`
+  - `selected_node_fail_closed`
+  - `resident_dataplane_enabled_by_config`
+  - `resident_live_adapter_matrix_ready`
+  - `resident_live_adapter_wired_matrix_ready`
+  - `resident_live_adapter_remote_live_matrix_ready`
+  - `default_proxy`
+  - `proxies`
+  - `blockers`
+
+Remote `38.65.91.47` non-mutating validation:
+  - Uploaded temporary candidate:
+      `/tmp/daed-native-resident-adapter-matrix-18608068`
+  - Candidate sha256:
+      `186080682ec0923657c3edd9e4e72ee02e3074443f1105ea1ef540d796199932`
+  - Ran:
+      `/tmp/daed-native-resident-adapter-matrix-18608068 resident-adapter-matrix -c /etc/dae/config.dae --json`
+  - Existing `/etc/dae/config.dae` permissions:
+      `0600`
+  - Result summary:
+      `schema='resident-live-adapter-config-assessment-v1'`,
+      `status='admitted'`,
+      `planner_admitted=True`,
+      `selected_node_fail_closed=True`,
+      `resident_dataplane_enabled_by_config=True`,
+      `resident_live_adapter_matrix_ready=False`,
+      `resident_live_adapter_wired_matrix_ready=False`,
+      `resident_live_adapter_remote_live_matrix_ready=False`,
+      `proxy_count=1`,
+      `default_protocol='vless'`,
+      `default_group='proxy'`,
+      `default_node_tag='vless_live'`,
+      `default_transport='tcp'`,
+      `default_security='tls'`,
+      `default_flow='xtls-rprx-vision'`,
+      `default_fingerprint_underlay=True`,
+      `blockers=["remote live traffic matrix not executed by this read-only assessment"]`.
+  - Remote report path:
+      `/tmp/daed-native-resident-adapter-matrix-report.json`
+  - Remote report size:
+      `3691` bytes.
+  - Remote report link/secret scan:
+      no `vless://`, no `ss://`, no sample UUID fragment, no sample SS credential
+      fragment found.
+  - No system binary replacement, service restart, tproxy/eBPF attach, or default
+    path mutation was performed.
+
+Interpretation:
+  - Remote 38 current config is admitted by the resident planner for the selected
+    VLESS Vision TCP/TLS/fingerprint-underlay shape.
+  - This is not yet the full remote live traffic matrix. It is the read-only
+    planner/config admission evidence needed before executing real traffic
+    matrix rows.
+  - The complete live adapter matrix must stay blocked until real traffic
+    evidence is recorded on remote 38 for the required matrix rows.

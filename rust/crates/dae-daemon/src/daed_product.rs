@@ -35,8 +35,10 @@ use crate::allocator::{
     AllocatorReclaimReason, allocator_live_heap_bytes, allocator_profile, allocator_reclaim,
     allocator_reclaim_snapshot_json, allocator_stats_json,
 };
+use crate::config_validate::load_config_file;
 use crate::production_runtime_owner::{
-    ResidentProductionRuntime, set_resident_event_log_sink, start_resident_production_runtime,
+    ResidentProductionRuntime, resident_live_adapter_config_assessment,
+    set_resident_event_log_sink, start_resident_production_runtime,
 };
 
 const DEFAULT_CONFIG_DIR: &str = "/etc/daed";
@@ -573,6 +575,7 @@ pub fn run_daed_product_with_args_and_version(
     match args.first().map(String::as_str) {
         Some("service-contract") => run_service_contract_command(&args[1..], version),
         Some("package-info") => run_package_info_command(&args[1..], version),
+        Some("resident-adapter-matrix") => run_resident_adapter_matrix_command(&args[1..]),
         Some("state") => run_state_command(&args[1..]),
         Some("run") => run_product_server_command(&args[1..], version),
         Some("export") => run_export_command(&args[1..]),
@@ -597,6 +600,22 @@ fn run_package_info_command(args: &[String], version: &str) -> DaedProductOutput
     DaedProductOutput::ok(format!("{}\n", daed_package_info(version)))
 }
 
+fn run_resident_adapter_matrix_command(args: &[String]) -> DaedProductOutput {
+    let config = match parse_resident_adapter_matrix_args(args) {
+        Ok(config) => config,
+        Err(err) => return DaedProductOutput::usage(err),
+    };
+    match load_config_file(&config) {
+        Ok(config_value) => DaedProductOutput::ok(format!(
+            "{}\n",
+            resident_live_adapter_config_assessment(&config_value, Some(&config))
+        )),
+        Err(err) => {
+            DaedProductOutput::error(format!("resident adapter matrix config load failed: {err}"))
+        }
+    }
+}
+
 fn run_state_command(args: &[String]) -> DaedProductOutput {
     match args.first().map(String::as_str) {
         Some("check") => match parse_state_check_args(&args[1..]) {
@@ -616,6 +635,32 @@ fn run_state_command(args: &[String]) -> DaedProductOutput {
         Some(command) => DaedProductOutput::usage(format!("unsupported state command: {command}")),
         None => DaedProductOutput::usage("state requires check or migrate"),
     }
+}
+
+fn parse_resident_adapter_matrix_args(args: &[String]) -> Result<PathBuf, String> {
+    let mut config = None;
+    let mut index = 0;
+    while index < args.len() {
+        match args[index].as_str() {
+            "-c" | "--config" => {
+                index += 1;
+                let Some(value) = args.get(index) else {
+                    return Err(
+                        "resident-adapter-matrix requires a value after -c/--config".to_owned()
+                    );
+                };
+                config = Some(PathBuf::from(value));
+            }
+            "--json" => {}
+            other => {
+                return Err(format!(
+                    "resident-adapter-matrix unsupported argument: {other}"
+                ));
+            }
+        }
+        index += 1;
+    }
+    config.ok_or_else(|| "resident-adapter-matrix requires -c/--config".to_owned())
 }
 
 fn run_product_server_command(args: &[String], _version: &str) -> DaedProductOutput {
@@ -8636,6 +8681,7 @@ fn help_text() -> String {
   daed run -c /etc/daed --listen 0.0.0.0:2023 [--api-only] [--web-root PATH]
   daed service-contract [--json]
   daed package-info [--json]
+  daed resident-adapter-matrix -c /etc/dae/config.dae [--json]
   daed state check --state /etc/daed/daed.db
   daed state migrate --from-wing-db /etc/daed/wing.db --to /etc/daed/daed.db [--force]
   daed export openapi|flatdesc|outline|package-manifest|admission-report|webui-route-audit|systemd-unit|docker-entrypoint
