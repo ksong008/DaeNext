@@ -10,6 +10,7 @@ fn go_free_product_chain_gate_blocks_current_candidate_until_go_paths_retire() {
     });
     let release_gate = json!({
         "release_default_switch_ready": true,
+        "resident_live_adapter_matrix_ready": true,
     });
     let gate = go_free_product_chain::go_free_product_chain_gate_json(
         true,
@@ -67,6 +68,7 @@ fn go_free_product_chain_gate_accepts_complete_final_contract_fixture() {
     });
     let release_gate = json!({
         "release_default_switch_ready": true,
+        "resident_live_adapter_matrix_ready": true,
     });
     let gate = go_free_product_chain::go_free_product_chain_gate_json(
         true,

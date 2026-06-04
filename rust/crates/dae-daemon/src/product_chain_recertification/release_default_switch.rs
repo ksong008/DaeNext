@@ -43,6 +43,10 @@ pub(super) fn release_default_switch_gate_json(
         outbound_production_matrix_gate["outbound_production_matrix_ready"]
             .as_bool()
             .unwrap_or(false);
+    let resident_live_adapter_matrix_ready =
+        outbound_production_matrix_gate["resident_live_adapter_matrix_ready"]
+            .as_bool()
+            .unwrap_or(false);
     let candidate_service_contract =
         resident_default_daemon_switch_gate["candidate_service_contract"].clone();
     let candidate_executed = candidate_service_contract["executed"]
@@ -140,6 +144,7 @@ pub(super) fn release_default_switch_gate_json(
         && default_switch_admission_clean
         && product_chain_switch_allowed
         && outbound_production_matrix_ready
+        && resident_live_adapter_matrix_ready
         && candidate_executed
         && candidate_passed
         && contract_ready
@@ -177,6 +182,9 @@ pub(super) fn release_default_switch_gate_json(
     }
     if !outbound_production_matrix_ready {
         blockers.push("C9 requires C8 outbound production matrix readiness".to_owned());
+    }
+    if !resident_live_adapter_matrix_ready {
+        blockers.push("C9 requires C8 resident live adapter matrix readiness".to_owned());
     }
     if !candidate_executed {
         blockers.push("C9 candidate service-contract was not executed".to_owned());
@@ -287,6 +295,10 @@ pub(super) fn release_default_switch_gate_json(
     report.insert(
         "outbound_production_matrix_ready".to_owned(),
         json!(outbound_production_matrix_ready),
+    );
+    report.insert(
+        "resident_live_adapter_matrix_ready".to_owned(),
+        json!(resident_live_adapter_matrix_ready),
     );
     report.insert(
         "candidate_service_contract".to_owned(),

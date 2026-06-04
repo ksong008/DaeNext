@@ -151,6 +151,7 @@ pub(super) fn candidate_service_contract_report(
         insert_datapath_core_contract_defaults(&mut report);
         insert_outbound_fingerprint_underlay_contract_defaults(&mut report);
         insert_outbound_production_matrix_contract_defaults(&mut report);
+        insert_resident_live_adapter_matrix_contract_defaults(&mut report);
         insert_release_default_switch_contract_defaults(&mut report);
         insert_go_free_product_chain_contract_defaults(&mut report);
         return report;
@@ -410,6 +411,11 @@ pub(super) fn candidate_service_contract_report(
                 output.status.success(),
                 &capability,
             );
+            insert_resident_live_adapter_matrix_contract_success(
+                &mut report,
+                output.status.success(),
+                &capability,
+            );
             insert_release_default_switch_contract_success(
                 &mut report,
                 output.status.success(),
@@ -455,6 +461,7 @@ pub(super) fn candidate_service_contract_report(
             insert_datapath_core_contract_defaults(&mut report);
             insert_outbound_fingerprint_underlay_contract_defaults(&mut report);
             insert_outbound_production_matrix_contract_defaults(&mut report);
+            insert_resident_live_adapter_matrix_contract_defaults(&mut report);
             insert_release_default_switch_contract_defaults(&mut report);
             insert_go_free_product_chain_contract_defaults(&mut report);
             report
@@ -751,6 +758,33 @@ const OUTBOUND_PRODUCTION_MATRIX_COPY_FIELDS: &[&str] = &[
     "outbound_production_matrix_typed_report",
 ];
 
+const RESIDENT_LIVE_ADAPTER_MATRIX_BOOL_FIELDS: &[&str] = &[
+    "resident_live_adapter_matrix_contract_ready",
+    "resident_live_adapter_matrix_ready",
+    "resident_live_adapter_matrix_runtime_state_ready",
+    "resident_live_adapter_entries_ready",
+    "resident_live_adapter_planner_admission_ready",
+    "resident_live_adapter_tcp_ready",
+    "resident_live_adapter_udp_ready",
+    "resident_live_adapter_transport_underlay_ready",
+    "resident_live_adapter_route_group_connectivity_ready",
+    "resident_live_adapter_selected_node_fail_closed_ready",
+    "resident_live_adapter_fingerprint_underlay_ready",
+    "resident_live_adapter_go_outbound_fallback_retirement_ready",
+    "resident_live_adapter_wired_matrix_ready",
+    "resident_live_adapter_remote_live_matrix_ready",
+    "resident_live_adapter_matrix_typed_report_ready",
+];
+
+const RESIDENT_LIVE_ADAPTER_MATRIX_COPY_FIELDS: &[&str] = &[
+    "resident_live_adapter_wired_handler_count",
+    "resident_live_adapter_live_ready_handler_count",
+    "resident_live_adapter_matrix_report_schema",
+    "resident_live_adapter_matrix_entries",
+    "resident_live_adapter_matrix_typed_report",
+    "resident_live_adapter_matrix_surface",
+];
+
 const RELEASE_DEFAULT_SWITCH_BOOL_FIELDS: &[&str] = &[
     "release_default_switch_contract_ready",
     "release_default_artifact_path_ready",
@@ -851,6 +885,34 @@ fn insert_outbound_production_matrix_contract_success(
         OUTBOUND_PRODUCTION_MATRIX_BOOL_FIELDS,
     );
     insert_contract_copy_fields(report, capability, OUTBOUND_PRODUCTION_MATRIX_COPY_FIELDS);
+}
+
+fn insert_resident_live_adapter_matrix_contract_defaults(report: &mut Value) {
+    insert_contract_bool_fields(
+        report,
+        false,
+        &Value::Null,
+        RESIDENT_LIVE_ADAPTER_MATRIX_BOOL_FIELDS,
+    );
+    insert_contract_copy_fields(
+        report,
+        &Value::Null,
+        RESIDENT_LIVE_ADAPTER_MATRIX_COPY_FIELDS,
+    );
+}
+
+fn insert_resident_live_adapter_matrix_contract_success(
+    report: &mut Value,
+    command_passed: bool,
+    capability: &Value,
+) {
+    insert_contract_bool_fields(
+        report,
+        command_passed,
+        capability,
+        RESIDENT_LIVE_ADAPTER_MATRIX_BOOL_FIELDS,
+    );
+    insert_contract_copy_fields(report, capability, RESIDENT_LIVE_ADAPTER_MATRIX_COPY_FIELDS);
 }
 
 fn insert_release_default_switch_contract_defaults(report: &mut Value) {
