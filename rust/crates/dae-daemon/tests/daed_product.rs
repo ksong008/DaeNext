@@ -1,6 +1,7 @@
 use std::fs;
 use std::io::{ErrorKind, Read, Write};
 use std::net::{TcpListener, TcpStream};
+use std::os::unix::fs::PermissionsExt;
 use std::path::Path;
 use std::process::{Child, Command, Stdio};
 use std::thread::{self, JoinHandle};
@@ -10,6 +11,149 @@ use serde_json::Value;
 
 fn binary() -> &'static str {
     env!("CARGO_BIN_EXE_daed")
+}
+
+#[test]
+fn daed_resident_adapter_matrix_reports_admitted_selected_node_without_links() {
+    let temp = temp_dir("resident-adapter-matrix-admitted");
+    let config = temp.join("config.dae");
+    fs::write(
+        &config,
+        r#"
+global {
+  lan_interface: daerust0
+  allow_insecure: false
+  so_mark_from_dae: 1234
+  mptcp: false
+  tls_implementation: utls
+  utls_imitate: safari
+}
+node {
+  vless_live: 'vless://01234567-89ab-cdef-0123-456789abcdef@example.com:443?security=tls&type=tcp&sni=office.example&flow=xtls-rprx-vision&fp=chrome&alpn=h2,http/1.1'
+}
+group {
+  proxy {
+    filter: name(vless_live)
+    policy: fixed(0)
+  }
+}
+routing {
+  l4proto(tcp) && dport(443) -> proxy
+  fallback: direct
+}
+"#,
+    )
+    .unwrap();
+    fs::set_permissions(&config, fs::Permissions::from_mode(0o600)).unwrap();
+
+    let output = Command::new(binary())
+        .args(["resident-adapter-matrix", "-c"])
+        .arg(&config)
+        .arg("--json")
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "stderr={}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let report: Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(
+        report["schema"].as_str().unwrap(),
+        "resident-live-adapter-config-assessment-v1"
+    );
+    assert_eq!(report["status"].as_str().unwrap(), "admitted");
+    assert!(report["read_only"].as_bool().unwrap());
+    assert!(!report["host_mutation_executed"].as_bool().unwrap());
+    assert!(!report["network_io_executed"].as_bool().unwrap());
+    assert!(report["planner_admitted"].as_bool().unwrap());
+    assert_eq!(
+        report["default_proxy"]["node_tag"].as_str().unwrap(),
+        "vless_live"
+    );
+    assert!(
+        report["default_proxy"]["fingerprint_underlay"]
+            .as_bool()
+            .unwrap()
+    );
+    assert_eq!(
+        report["default_proxy"]["utls_fingerprint"]["source"]
+            .as_str()
+            .unwrap(),
+        "link fp"
+    );
+    assert!(!String::from_utf8_lossy(&output.stdout).contains("01234567-89ab"));
+    assert!(!String::from_utf8_lossy(&output.stdout).contains("vless://"));
+    let _ = fs::remove_dir_all(temp);
+}
+
+#[test]
+fn daed_resident_adapter_matrix_reports_fail_closed_selected_node() {
+    let temp = temp_dir("resident-adapter-matrix-blocked");
+    let config = temp.join("config.dae");
+    fs::write(
+        &config,
+        r#"
+global {
+  lan_interface: daerust0
+  allow_insecure: false
+  so_mark_from_dae: 1234
+  mptcp: false
+}
+node {
+  ss_live: 'ss://2022-blake3-aes-128-gcm:MTIzNDU2Nzg5MDEyMzQ1Ng==@203.0.113.10:8388#ss2022'
+}
+group {
+  proxy {
+    filter: name(ss_live)
+    policy: fixed(0)
+  }
+}
+routing {
+  l4proto(tcp) && dport(443) -> proxy
+  fallback: direct
+}
+"#,
+    )
+    .unwrap();
+    fs::set_permissions(&config, fs::Permissions::from_mode(0o600)).unwrap();
+
+    let output = Command::new(binary())
+        .args(["resident-adapter-matrix", "--config"])
+        .arg(&config)
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "stderr={}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let report: Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(report["status"].as_str().unwrap(), "blocked");
+    assert!(!report["planner_admitted"].as_bool().unwrap());
+    assert!(report["selected_node_fail_closed"].as_bool().unwrap());
+    assert!(
+        report["planner_error"]
+            .as_str()
+            .unwrap()
+            .contains("selected unsupported ss node ss_live")
+    );
+    assert!(!String::from_utf8_lossy(&output.stdout).contains("MTIzNDU2"));
+    assert!(!String::from_utf8_lossy(&output.stdout).contains("ss://"));
+    let _ = fs::remove_dir_all(temp);
+}
+
+#[test]
+fn daed_resident_adapter_matrix_requires_config_path() {
+    let output = Command::new(binary())
+        .args(["resident-adapter-matrix"])
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(2));
+    assert!(
+        String::from_utf8_lossy(&output.stderr)
+            .contains("resident-adapter-matrix requires -c/--config")
+    );
 }
 
 #[test]
