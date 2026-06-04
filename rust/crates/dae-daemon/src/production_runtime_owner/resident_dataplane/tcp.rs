@@ -24,6 +24,7 @@ use dae_outbound::{
     http_proxy::{HttpConnectOptions, request as http_request},
     shadowsocks::{AeadStreamCodec, ShadowsocksMetadata, read_encrypted_chunk_from_stream},
     socks5::{Socks5Address, handshake},
+    trojan::packet as trojan_packet,
     vless::packet,
 };
 use dae_routing::{Query, RoutingMatcher};
@@ -32,8 +33,9 @@ use serde_json::{Value, json};
 
 use super::ResidentDataplaneMetrics;
 use super::client::{
-    AsyncVlessTlsClient, TlsDriveOutcome, VlessTlsClient, async_tls_underlay_name,
-    drive_tls_io_record_aware, open_async_vless_tls_client, open_vless_tls_client,
+    AsyncResidentTlsClient, AsyncVlessTlsClient, TlsDriveOutcome, VlessTlsClient,
+    async_resident_tls_underlay_name, async_tls_underlay_name, drive_tls_io_record_aware,
+    open_async_resident_tls_client, open_async_vless_tls_client, open_vless_tls_client,
     tls_underlay_name,
 };
 use super::direct::{
@@ -499,6 +501,20 @@ async fn handle_tcp_connection_async_or_handoff(
                     &metrics,
                 )
                 .await
+            } else if matches!(
+                selection.proxy.handler,
+                ResidentProxyProtocolPlan::TrojanTcpTls { .. }
+            ) {
+                handle_trojan_tls_tcp_connection_async(
+                    &mut inbound,
+                    peer,
+                    original_dst,
+                    selection,
+                    Arc::clone(&stop),
+                    &sniff,
+                    &metrics,
+                )
+                .await
             } else {
                 handle_first_batch_proxy_tcp_connection_async(
                     inbound,
@@ -902,6 +918,71 @@ fn handle_first_batch_proxy_tcp_connection(
             "first-batch proxy dispatcher received VLESS handler; use VLESS TLS dispatcher"
                 .to_owned(),
         ),
+        ResidentProxyProtocolPlan::TrojanTcpTls { .. } => Err(
+            "first-batch proxy dispatcher received generic TLS handler; use TLS dispatcher"
+                .to_owned(),
+        ),
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn handle_trojan_tls_tcp_connection_async(
+    inbound: &mut TokioTcpStream,
+    peer: SocketAddr,
+    original_dst: SocketAddrV4,
+    selection: TcpProxySelection,
+    stop: Arc<AtomicBool>,
+    sniff: &TcpSniffReport,
+    metrics: &ResidentDataplaneMetrics,
+) -> Result<Value, String> {
+    let ResidentProxyProtocolPlan::TrojanTcpTls { password } = &selection.proxy.handler else {
+        return Err("generic TLS dispatcher received non-Trojan handler".to_owned());
+    };
+    let mut client = open_async_resident_tls_client(&selection.proxy).await?;
+    let tls_underlay = async_resident_tls_underlay_name(&client);
+    let request = trojan_packet::tcp_request_header(
+        password,
+        "tcp",
+        &selection.route.dial_target,
+        &sniff.payload,
+    )
+    .map_err(|err| format!("build Trojan TCP request: {err}"))?;
+    client
+        .write_plain_all(&request, "write Trojan TCP request")
+        .await?;
+    let mut initial_stats = DirectTcpRelayStats::default();
+    if !sniff.payload.is_empty() {
+        initial_stats.client_to_direct += sniff.payload.len();
+        metrics.add_upload(sniff.payload.len());
+    }
+    match relay_tcp_over_resident_tls_plain_async(inbound, &mut client, stop, metrics).await {
+        Ok(mut stats) => {
+            stats.client_to_direct += initial_stats.client_to_direct;
+            let mut event = generic_proxy_tcp_finished_event(
+                peer,
+                original_dst,
+                &selection,
+                sniff,
+                "trojan",
+                &stats,
+                "async-proxy-tls-v1",
+            );
+            event["tls_underlay"] = json!(tls_underlay);
+            Ok(event)
+        }
+        Err(err) => {
+            let mut event = generic_proxy_tcp_failed_event(
+                peer,
+                original_dst,
+                &selection,
+                sniff,
+                "trojan",
+                &err,
+                "async-proxy-tls-v1",
+            );
+            event["tls_underlay"] = json!(tls_underlay);
+            Ok(event)
+        }
     }
 }
 
@@ -1058,6 +1139,72 @@ fn handle_shadowsocks_proxy_tcp_connection(
                 "first-batch-tcp-v1",
             ))
         })
+}
+
+async fn relay_tcp_over_resident_tls_plain_async(
+    inbound: &mut TokioTcpStream,
+    client: &mut AsyncResidentTlsClient,
+    stop: Arc<AtomicBool>,
+    metrics: &ResidentDataplaneMetrics,
+) -> Result<DirectTcpRelayStats, String> {
+    let mut stats = DirectTcpRelayStats::default();
+    let mut inbound_closed = false;
+    let mut proxy_closed = false;
+    let mut last_activity = Instant::now();
+    let mut inbound_buf = [0_u8; 16 * 1024];
+    let mut proxy_buf = [0_u8; 16 * 1024];
+
+    while !stop.load(Ordering::Relaxed) {
+        tokio::select! {
+            read = inbound.read(&mut inbound_buf), if !inbound_closed && !proxy_closed => {
+                match read {
+                    Ok(0) => {
+                        inbound_closed = true;
+                        client.shutdown().await;
+                        last_activity = Instant::now();
+                    }
+                    Ok(read) => {
+                        client
+                            .write_plain_all(&inbound_buf[..read], "write client payload to proxy TLS")
+                            .await?;
+                        stats.client_to_direct += read;
+                        metrics.add_upload(read);
+                        last_activity = Instant::now();
+                    }
+                    Err(err) => return Err(format!("read inbound TCP for proxy TLS relay: {err}")),
+                }
+            }
+            read = client.read_plain(&mut proxy_buf), if !proxy_closed => {
+                match read {
+                    Ok(0) => {
+                        proxy_closed = true;
+                        let _ = inbound.shutdown().await;
+                        last_activity = Instant::now();
+                    }
+                    Ok(read) => {
+                        inbound
+                            .write_all(&proxy_buf[..read])
+                            .await
+                            .map_err(|err| format!("write proxy TLS payload to client: {err}"))?;
+                        stats.direct_to_client += read;
+                        metrics.add_download(read);
+                        last_activity = Instant::now();
+                    }
+                    Err(err) => return Err(format!("read proxy TLS plaintext: {err}")),
+                }
+            }
+            _ = time::sleep(Duration::from_millis(100)) => {
+                if last_activity.elapsed() > RESIDENT_TCP_IDLE_TIMEOUT {
+                    return Err("resident proxy TLS relay idle timeout".to_owned());
+                }
+            }
+        }
+
+        if proxy_closed || (inbound_closed && proxy_closed) {
+            break;
+        }
+    }
+    Ok(stats)
 }
 
 fn open_plain_proxy_tcp_stream(proxy: &ResidentProxyPlan) -> Result<TcpStream, String> {

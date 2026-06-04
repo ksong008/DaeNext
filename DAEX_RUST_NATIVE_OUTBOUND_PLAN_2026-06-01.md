@@ -13186,3 +13186,130 @@ Follow-up live DNS resolver test:
   - Current live state after this test:
       host resolver is intentionally left at `8.8.8.8` for continued manual
       testing.
+
+## 2026-06-04 - Resident live-adapter matrix next-batch wiring
+
+Local commit checkpoint before this batch:
+  - Commit:
+      `eea26f19 resident: expand matrix and unblock UDP handling`.
+  - Scope of that checkpoint:
+      first-batch resident planner/TCP handlers,
+      UDP packet worker dispatch,
+      host-originated UDP/DNS live validation records.
+
+Matrix work resumed after the checkpoint:
+  - Formal `dae-outbound` production matrix remains the protocol parser/dataplane
+    evidence layer.
+  - Resident live-adapter matrix is the product/runtime truth for whether a
+    selected node can actually be owned by Rust resident tproxy workers.
+  - The resident matrix must keep partial states explicit:
+      planner/TCP admission is not the same as UDP admission,
+      and neither is the same as remote live matrix evidence.
+
+New local wiring:
+  - Added a generic TLS/TCP resident path for plain Trojan endpoints.
+  - Admitted shape:
+      `trojan://` plain TLS/TCP endpoint,
+      no trojan-go transport,
+      no `allow_insecure`.
+  - Still blocked:
+      trojan-go websocket/grpc/httpupgrade/inner transport combinations,
+      any shape requiring a handler-specific transport stack that is not wired
+      into resident live workers yet.
+  - The TCP dispatcher now keeps:
+      VLESS Vision on the Vision-aware TLS relay,
+      plain SOCKS5/HTTP/Shadowsocks on the first-batch TCP relay path,
+      plain Trojan on the generic TLS/plain relay path.
+  - The generic TLS/plain relay performs only bidirectional plaintext forwarding
+    after the protocol request header is sent; it does not parse VLESS response
+    headers or Vision raw-direct records.
+
+Planner and fingerprint behavior:
+  - Fingerprint planning was made protocol-generic at the helper boundary.
+  - VLESS still uses link `fp` first, then global utls fallback.
+  - Plain Trojan currently has no parsed link-level `fp` field in
+    `TrojanLink`, so it can use the global utls fallback but not a link-level
+    Trojan fingerprint until the parser exposes one.
+  - No top-level gate/stage name was made protocol-specific; protocol names
+    appear only in matrix rows, handler internals, fixtures, and evidence.
+
+Resident matrix contract update:
+  - Static resident matrix entries no longer describe the first-batch TCP rows
+    as completely unwired.
+  - `shadowsocks`, `http-proxy`, `socks5`, and `trojan` now record partial
+    resident wiring:
+      `planner_admitted=true`,
+      `tcp_live_adapter=true`,
+      `transport_underlay=true`,
+      `route_group_connectivity=true`,
+      `udp_live_adapter=false`,
+      `remote_live_matrix=false`,
+      `go_outbound_fallback_retired=false`.
+  - `wired_ready` and `live_ready` remain false for those rows until UDP/live
+    evidence and fallback retirement are actually complete.
+
+Local verification:
+  - `cargo fmt --all --manifest-path rust/Cargo.toml`: pass.
+  - `cargo test --manifest-path rust/Cargo.toml -p dae-daemon production_runtime_owner::resident_dataplane`:
+      pass, 46 tests passed.
+  - `cargo test --manifest-path rust/Cargo.toml -p dae-daemon --test daed_product resident_adapter_matrix`:
+      pass, 4 tests passed.
+
+Current matrix state after this local batch:
+  - Config assessment admitted rows for the local first-batch fixture:
+      `vless`,
+      `socks5`,
+      `http-proxy`,
+      `shadowsocks`,
+      `trojan`.
+  - Remaining rows stay fail-closed until their real resident worker path is
+    implemented and verified:
+      `vmess`,
+      `hysteria2`,
+      `tuic`,
+      `juicity`,
+      `anytls`.
+  - Remote live matrix testing still belongs on remote 38, not on `10.10.10.2`.
+
+Remote 38 read-only assessment after this batch:
+  - Built local release candidate:
+      `cargo build --manifest-path rust/Cargo.toml -p dae-daemon --bin daed --release --features native-ebpf`.
+  - Candidate:
+      size `18M`,
+      sha256 `4679c2549013b3b93f5b02e2f05c5652a3fee5cf3279e517a75da732f5a23350`.
+  - Copied temporarily to remote 38 as:
+      `/tmp/daed-native-next-batch-4679c254`.
+  - Ran only:
+      `resident-adapter-matrix -c <temporary full matrix config> --json`.
+  - No default service replacement, host networking mutation, or live tproxy
+    traffic execution was performed in this check.
+  - Result:
+      `schema=resident-live-adapter-config-assessment-v1`,
+      `status=admitted`,
+      `planner_admitted=True`,
+      `full_matrix_row_count=10`,
+      `full_matrix_present_row_count=10`,
+      `full_matrix_admitted_row_count=5`,
+      `full_matrix_complete=False`,
+      `resident_live_adapter_matrix_ready=False`,
+      `resident_live_adapter_wired_matrix_ready=False`,
+      `resident_live_adapter_remote_live_matrix_ready=False`.
+  - Row summary:
+      `vless admitted candidates=1 admitted=1 blocked=0 wired=True live=False`,
+      `shadowsocks admitted candidates=1 admitted=1 blocked=0 wired=False live=False`,
+      `trojan admitted candidates=1 admitted=1 blocked=0 wired=False live=False`,
+      `vmess blocked candidates=1 admitted=0 blocked=1 wired=False live=False`,
+      `hysteria2 blocked candidates=1 admitted=0 blocked=1 wired=False live=False`,
+      `tuic blocked candidates=1 admitted=0 blocked=1 wired=False live=False`,
+      `juicity blocked candidates=1 admitted=0 blocked=1 wired=False live=False`,
+      `anytls blocked candidates=1 admitted=0 blocked=1 wired=False live=False`,
+      `http-proxy admitted candidates=1 admitted=1 blocked=0 wired=False live=False`,
+      `socks5 admitted candidates=1 admitted=1 blocked=0 wired=False live=False`.
+  - Report leak scan:
+      pass; no raw proxy link, fixture UUID, or fixture password string was
+      present in the generated resident assessment report.
+  - Remote cleanup:
+      temporary candidate binary,
+      temporary full matrix config,
+      temporary JSON report were removed.
+      A follow-up `/tmp` check found no `daed-native-next-batch-*` leftovers.
