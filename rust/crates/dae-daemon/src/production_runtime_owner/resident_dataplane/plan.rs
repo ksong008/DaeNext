@@ -21,6 +21,13 @@ struct SelectedGroupNode {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
+pub(super) struct ResidentNodeLinkShape {
+    pub(super) tag: String,
+    pub(super) scheme: String,
+    pub(super) link: String,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub(super) struct ResidentUtlsFingerprintPlan {
     pub(super) source: &'static str,
     pub(super) requested: String,
@@ -236,6 +243,26 @@ fn build_proxy_plan(
         mark: config.global.so_mark_from_dae,
         mptcp: config.global.mptcp,
     })
+}
+
+pub(super) fn build_resident_proxy_plan_for_node(
+    config: &Config,
+    group_name: String,
+    node_tag: String,
+    link: String,
+) -> Result<ResidentProxyPlan, String> {
+    build_proxy_plan(config, group_name, node_tag, link)
+}
+
+pub(super) fn resident_node_link_shapes(config: &Config) -> Vec<ResidentNodeLinkShape> {
+    tagged_node_links(config)
+        .into_iter()
+        .map(|(tag, link)| ResidentNodeLinkShape {
+            tag,
+            scheme: link_scheme(&link).unwrap_or_default(),
+            link,
+        })
+        .collect()
 }
 
 fn resident_utls_fingerprint_plan(
