@@ -98,6 +98,9 @@ fn trace_core_sideload_gate_is_disabled_until_real_core_relocations_exist() {
     assert!(gate.rust_core_relocation_required);
     assert!(!gate.c_trace_object_required);
     assert!(!gate.go_trace_fallback_required);
-    assert!(gate.disabled_reason.contains("retired from the product default path"));
+    assert!(
+        gate.disabled_reason
+            .contains("retired from the product default path")
+    );
     assert!(gate.restore_gate.contains("core_relo_len"));
 }

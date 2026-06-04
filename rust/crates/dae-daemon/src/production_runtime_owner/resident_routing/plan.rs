@@ -216,7 +216,8 @@ pub(super) fn domain_set_json(set: &ResidentDomainSet) -> Value {
         "rule_index": set.rule_index,
         "key": &set.key,
         "value_count": set.values.len(),
-        "values": &set.values,
+        "sample_values": set.values.iter().take(8).collect::<Vec<_>>(),
+        "values_truncated": set.values.len() > 8,
     })
 }
 
