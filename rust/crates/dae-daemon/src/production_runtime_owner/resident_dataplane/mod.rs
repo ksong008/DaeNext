@@ -14,10 +14,7 @@ use serde_json::{Value, json};
 use self::events::path_string;
 pub(crate) use self::events::{ResidentEventLogSink, set_event_log_sink};
 use self::plan::build_resident_dataplane_plan;
-use self::tcp::{
-    ResidentTcpRouter, ResidentTcpWorkerConfig, resident_tcp_accept_loop,
-    spawn_resident_tcp_flow_workers,
-};
+use self::tcp::{ResidentTcpRouter, resident_tcp_accept_loop};
 use self::udp::resident_udp_loop;
 use super::resident_routing::build_resident_userspace_routing_matcher;
 
@@ -37,6 +34,10 @@ const RESIDENT_IDLE_SLEEP: Duration = Duration::from_millis(5);
 const RESIDENT_TCP_IDLE_TIMEOUT: Duration = Duration::from_secs(300);
 const RESIDENT_CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
 const RESIDENT_UDP_RESPONSE_TIMEOUT: Duration = Duration::from_secs(8);
+const RESIDENT_TCP_FLOW_STACK_BYTES_ENV: &str = "DAE_RESIDENT_TCP_FLOW_STACK_BYTES";
+const RESIDENT_TCP_FLOW_STACK_BYTES_DEFAULT: usize = 512 * 1024;
+const RESIDENT_TCP_FLOW_STACK_BYTES_MIN: usize = 128 * 1024;
+const RESIDENT_TCP_FLOW_STACK_BYTES_MAX: usize = 8 * 1024 * 1024;
 const XTLS_RPRX_VISION: &str = "xtls-rprx-vision";
 const VISION_COMMAND_CONTINUE: u8 = 0;
 const VISION_COMMAND_END: u8 = 1;
@@ -87,10 +88,6 @@ pub(super) struct ResidentDataplaneMetrics {
     download_total: AtomicU64,
     active_tcp_connections: AtomicU64,
     active_udp_sessions: AtomicU64,
-    tcp_accepted_total: AtomicU64,
-    tcp_enqueued_total: AtomicU64,
-    tcp_rejected_total: AtomicU64,
-    tcp_queue_depth: AtomicU64,
 }
 
 impl ResidentDataplaneMetrics {
@@ -100,27 +97,6 @@ impl ResidentDataplaneMetrics {
 
     pub(super) fn tcp_closed(&self) {
         self.active_tcp_connections.fetch_sub(1, Ordering::Relaxed);
-    }
-
-    pub(super) fn tcp_accepted(&self) {
-        self.tcp_accepted_total.fetch_add(1, Ordering::Relaxed);
-    }
-
-    pub(super) fn tcp_enqueued(&self) {
-        self.tcp_enqueued_total.fetch_add(1, Ordering::Relaxed);
-        self.tcp_queue_depth.fetch_add(1, Ordering::Relaxed);
-    }
-
-    pub(super) fn tcp_dequeued(&self) {
-        let _ = self
-            .tcp_queue_depth
-            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |depth| {
-                Some(depth.saturating_sub(1))
-            });
-    }
-
-    pub(super) fn tcp_rejected(&self) {
-        self.tcp_rejected_total.fetch_add(1, Ordering::Relaxed);
     }
 
     pub(super) fn udp_opened(&self) {
@@ -146,10 +122,6 @@ impl ResidentDataplaneMetrics {
             "downloadTotal": self.download_total.load(Ordering::Relaxed),
             "activeTcpConnections": self.active_tcp_connections.load(Ordering::Relaxed),
             "activeUdpSessions": self.active_udp_sessions.load(Ordering::Relaxed),
-            "tcpAcceptedTotal": self.tcp_accepted_total.load(Ordering::Relaxed),
-            "tcpEnqueuedTotal": self.tcp_enqueued_total.load(Ordering::Relaxed),
-            "tcpRejectedTotal": self.tcp_rejected_total.load(Ordering::Relaxed),
-            "tcpQueueDepth": self.tcp_queue_depth.load(Ordering::Relaxed),
         })
     }
 }
@@ -269,31 +241,8 @@ pub(super) fn start_resident_dataplane_workers(
         }
     };
     let event_lock = Arc::new(Mutex::new(()));
+    let tcp_flow_stack_bytes = resident_tcp_flow_stack_bytes();
     let mut handles = Vec::new();
-    let tcp_worker_config = ResidentTcpWorkerConfig::from_env();
-    let (tcp_flow_queue, tcp_flow_handles) = match spawn_resident_tcp_flow_workers(
-        tcp_worker_config,
-        Arc::clone(&tcp_router),
-        Arc::clone(&stop),
-        event_file.clone(),
-        Arc::clone(&event_lock),
-        Arc::clone(&metrics),
-    ) {
-        Ok(workers) => workers,
-        Err(err) => {
-            stop.store(true, Ordering::Relaxed);
-            return (
-                json!({
-                    "status": "fail",
-                    "enabled": true,
-                    "error": err,
-                    "event_file": path_string(&event_file),
-                }),
-                None,
-            );
-        }
-    };
-    handles.extend(tcp_flow_handles);
     {
         let stop = Arc::clone(&stop);
         let tcp_router = Arc::clone(&tcp_router);
@@ -308,7 +257,7 @@ pub(super) fn start_resident_dataplane_workers(
                 event_file,
                 event_lock,
                 metrics,
-                tcp_flow_queue,
+                tcp_flow_stack_bytes,
             )
         }));
     }
@@ -342,10 +291,9 @@ pub(super) fn start_resident_dataplane_workers(
         "status": "pass",
         "enabled": true,
         "tcp_worker_started": true,
-        "tcp_flow_worker_count": tcp_worker_config.worker_count(),
-        "tcp_flow_queue_capacity": tcp_worker_config.queue_capacity(),
-        "tcp_flow_worker_stack_bytes": tcp_worker_config.worker_stack_bytes(),
         "udp_worker_started": true,
+        "tcp_flow_stack_bytes": tcp_flow_stack_bytes,
+        "tcp_flow_stack_bytes_env": RESIDENT_TCP_FLOW_STACK_BYTES_ENV,
         "event_file": path_string(&event_file),
         "routing_tuple_map_id": routing_tuple_map_id,
         "tcp_dial_mode": tcp_router.dial_mode_name(),
@@ -378,4 +326,15 @@ pub(super) fn start_resident_dataplane_workers(
             metrics,
         }),
     )
+}
+
+fn resident_tcp_flow_stack_bytes() -> usize {
+    std::env::var(RESIDENT_TCP_FLOW_STACK_BYTES_ENV)
+        .ok()
+        .and_then(|value| value.trim().parse::<usize>().ok())
+        .unwrap_or(RESIDENT_TCP_FLOW_STACK_BYTES_DEFAULT)
+        .clamp(
+            RESIDENT_TCP_FLOW_STACK_BYTES_MIN,
+            RESIDENT_TCP_FLOW_STACK_BYTES_MAX,
+        )
 }

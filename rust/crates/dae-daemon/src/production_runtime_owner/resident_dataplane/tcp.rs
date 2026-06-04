@@ -1,23 +1,21 @@
 use std::collections::BTreeMap;
-use std::env;
 use std::io::{ErrorKind, Read};
 use std::mem::size_of;
 use std::net::{IpAddr, Ipv4Addr, Shutdown, SocketAddr, SocketAddrV4, TcpListener, TcpStream};
 use std::os::fd::AsRawFd;
 use std::path::PathBuf;
 use std::slice;
-use std::sync::mpsc::{self, Receiver, RecvTimeoutError, SyncSender, TrySendError};
 use std::sync::{
     Arc, Mutex,
     atomic::{AtomicBool, Ordering},
 };
-use std::thread::{self, JoinHandle};
+use std::thread;
 use std::time::{Duration, Instant};
 
 use dae_core_types::OutboundIndex;
 use dae_datapath::{
     OUTBOUND_BLOCK, OUTBOUND_CONTROL_PLANE_ROUTING, OUTBOUND_DIRECT, TcpDialMode,
-    choose_dial_target,
+    TcpDirectDialReport, choose_dial_target,
 };
 use dae_ebpf_support::{
     BpfIpBytes, BpfRoutingResult, BpfTuplesKey, lookup_map_elem_bytes, open_map_fd,
@@ -29,228 +27,34 @@ use serde_json::{Value, json};
 
 use super::ResidentDataplaneMetrics;
 use super::client::{
-    TlsDriveOutcome, VlessTlsClient, drive_tls_io_record_aware, open_vless_tls_client,
+    AsyncVlessTlsClient, TlsDriveOutcome, VlessTlsClient, async_tls_underlay_name,
+    drive_tls_io_record_aware, open_async_vless_tls_client, open_vless_tls_client,
     tls_underlay_name,
 };
-use super::direct::{open_direct_tcp_connection, relay_tcp_direct};
+use super::direct::{
+    DirectTcpConnection, DirectTcpRelayStats, open_direct_tcp_connection,
+    open_direct_tcp_connection_async, relay_tcp_direct, relay_tcp_direct_async,
+};
 use super::events::append_event;
 use super::io::write_all_nonblocking;
 use super::plan::ResidentProxyPlan;
-use super::vision::{VisionInnerTlsState, VisionUnpadder, VisionUplinkMode, drain_vision_uplink};
+use super::vision::{
+    VisionInnerTlsState, VisionUnpadder, VisionUplinkMode, drain_vision_uplink,
+    drain_vision_uplink_async,
+};
 use super::{
     RESIDENT_IDLE_SLEEP, RESIDENT_TCP_ACCEPT_SLEEP, RESIDENT_TCP_IDLE_TIMEOUT,
     TLS_RECORD_MAX_PAYLOAD_LEN, VLESS_RESPONSE_VERSION, XTLS_RPRX_VISION,
 };
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::net::{TcpListener as TokioTcpListener, TcpStream as TokioTcpStream};
+use tokio::runtime;
+use tokio::time;
 
 const BPF_L4_TCP: u8 = 6;
 const ROUTING_L4_TCP: u8 = 1;
 const ROUTING_IP_VERSION_4: u8 = 1;
 const TCP_SNIFF_BUFFER_LIMIT: usize = 64 * 1024;
-const RESIDENT_FLOW_WORKERS_ENV: &str = "DAE_RESIDENT_FLOW_WORKERS";
-const RESIDENT_FLOW_QUEUE_ENV: &str = "DAE_RESIDENT_FLOW_QUEUE";
-const RESIDENT_FLOW_WORKER_STACK_BYTES_ENV: &str = "DAE_RESIDENT_FLOW_WORKER_STACK_BYTES";
-const RESIDENT_FLOW_WORKER_DEFAULT_MIN: usize = 4;
-const RESIDENT_FLOW_WORKER_DEFAULT_MAX: usize = 16;
-const RESIDENT_FLOW_WORKER_MIN: usize = 1;
-const RESIDENT_FLOW_WORKER_MAX: usize = 128;
-const RESIDENT_FLOW_QUEUE_DEFAULT: usize = 256;
-const RESIDENT_FLOW_QUEUE_MIN: usize = 16;
-const RESIDENT_FLOW_QUEUE_MAX: usize = 16_384;
-const RESIDENT_FLOW_WORKER_STACK_BYTES_DEFAULT: usize = 1024 * 1024;
-const RESIDENT_FLOW_WORKER_STACK_BYTES_MIN: usize = 256 * 1024;
-const RESIDENT_FLOW_WORKER_STACK_BYTES_MAX: usize = 8 * 1024 * 1024;
-const RESIDENT_FLOW_RECV_TIMEOUT: Duration = Duration::from_millis(100);
-
-#[derive(Clone, Copy, Debug)]
-pub(super) struct ResidentTcpWorkerConfig {
-    worker_count: usize,
-    queue_capacity: usize,
-    worker_stack_bytes: usize,
-}
-
-impl ResidentTcpWorkerConfig {
-    pub(super) fn from_env() -> Self {
-        let default_workers = thread::available_parallelism()
-            .map(|parallelism| parallelism.get().saturating_mul(2))
-            .unwrap_or(RESIDENT_FLOW_WORKER_DEFAULT_MIN)
-            .clamp(
-                RESIDENT_FLOW_WORKER_DEFAULT_MIN,
-                RESIDENT_FLOW_WORKER_DEFAULT_MAX,
-            );
-        Self {
-            worker_count: env_usize(
-                RESIDENT_FLOW_WORKERS_ENV,
-                default_workers,
-                RESIDENT_FLOW_WORKER_MIN,
-                RESIDENT_FLOW_WORKER_MAX,
-            ),
-            queue_capacity: env_usize(
-                RESIDENT_FLOW_QUEUE_ENV,
-                RESIDENT_FLOW_QUEUE_DEFAULT,
-                RESIDENT_FLOW_QUEUE_MIN,
-                RESIDENT_FLOW_QUEUE_MAX,
-            ),
-            worker_stack_bytes: env_usize(
-                RESIDENT_FLOW_WORKER_STACK_BYTES_ENV,
-                RESIDENT_FLOW_WORKER_STACK_BYTES_DEFAULT,
-                RESIDENT_FLOW_WORKER_STACK_BYTES_MIN,
-                RESIDENT_FLOW_WORKER_STACK_BYTES_MAX,
-            ),
-        }
-    }
-
-    pub(super) fn worker_count(&self) -> usize {
-        self.worker_count
-    }
-
-    pub(super) fn queue_capacity(&self) -> usize {
-        self.queue_capacity
-    }
-
-    pub(super) fn worker_stack_bytes(&self) -> usize {
-        self.worker_stack_bytes
-    }
-}
-
-fn env_usize(name: &str, default: usize, min: usize, max: usize) -> usize {
-    env::var(name)
-        .ok()
-        .and_then(|value| value.trim().parse::<usize>().ok())
-        .unwrap_or(default)
-        .clamp(min, max)
-}
-
-#[derive(Clone)]
-pub(super) struct ResidentTcpFlowQueue {
-    sender: SyncSender<TcpFlowJob>,
-}
-
-struct TcpFlowJob {
-    stream: TcpStream,
-    peer: SocketAddr,
-}
-
-impl ResidentTcpFlowQueue {
-    fn try_submit(&self, stream: TcpStream, peer: SocketAddr) -> Result<(), TcpFlowSubmitError> {
-        match self.sender.try_send(TcpFlowJob { stream, peer }) {
-            Ok(()) => Ok(()),
-            Err(TrySendError::Full(job)) => Err(TcpFlowSubmitError::Full(job.stream)),
-            Err(TrySendError::Disconnected(job)) => {
-                Err(TcpFlowSubmitError::Disconnected(job.stream))
-            }
-        }
-    }
-}
-
-enum TcpFlowSubmitError {
-    Full(TcpStream),
-    Disconnected(TcpStream),
-}
-
-pub(super) fn spawn_resident_tcp_flow_workers(
-    config: ResidentTcpWorkerConfig,
-    router: Arc<ResidentTcpRouter>,
-    stop: Arc<AtomicBool>,
-    event_file: PathBuf,
-    event_lock: Arc<Mutex<()>>,
-    metrics: Arc<ResidentDataplaneMetrics>,
-) -> Result<(ResidentTcpFlowQueue, Vec<JoinHandle<()>>), String> {
-    let (sender, receiver) = mpsc::sync_channel(config.queue_capacity);
-    let receiver = Arc::new(Mutex::new(receiver));
-    let mut handles: Vec<JoinHandle<()>> = Vec::with_capacity(config.worker_count);
-    for index in 0..config.worker_count {
-        let receiver = Arc::clone(&receiver);
-        let router = Arc::clone(&router);
-        let worker_stop = Arc::clone(&stop);
-        let fail_stop = Arc::clone(&stop);
-        let event_file = event_file.clone();
-        let event_lock = Arc::clone(&event_lock);
-        let metrics = Arc::clone(&metrics);
-        let handle = thread::Builder::new()
-            .name(format!("dae-resident-flow-{index}"))
-            .stack_size(config.worker_stack_bytes)
-            .spawn(move || {
-                resident_tcp_flow_worker_loop(
-                    index,
-                    receiver,
-                    router,
-                    worker_stop,
-                    event_file,
-                    event_lock,
-                    metrics,
-                )
-            })
-            .map_err(|err| {
-                fail_stop.store(true, Ordering::Relaxed);
-                drop(sender.clone());
-                for handle in handles.drain(..) {
-                    let _ = handle.join();
-                }
-                format!("spawn resident TCP flow worker {index}: {err}")
-            })?;
-        handles.push(handle);
-    }
-    Ok((ResidentTcpFlowQueue { sender }, handles))
-}
-
-fn resident_tcp_flow_worker_loop(
-    index: usize,
-    receiver: Arc<Mutex<Receiver<TcpFlowJob>>>,
-    router: Arc<ResidentTcpRouter>,
-    stop: Arc<AtomicBool>,
-    event_file: PathBuf,
-    event_lock: Arc<Mutex<()>>,
-    metrics: Arc<ResidentDataplaneMetrics>,
-) {
-    append_event(
-        &event_file,
-        &event_lock,
-        json!({"event": "tcp_flow_worker_started", "worker_index": index}),
-    );
-    while !stop.load(Ordering::Relaxed) {
-        let recv_result = {
-            let Ok(receiver) = receiver.lock() else {
-                append_event(
-                    &event_file,
-                    &event_lock,
-                    json!({"event": "tcp_flow_worker_receiver_lock_failed", "worker_index": index}),
-                );
-                break;
-            };
-            receiver.recv_timeout(RESIDENT_FLOW_RECV_TIMEOUT)
-        };
-        match recv_result {
-            Ok(job) => {
-                metrics.tcp_dequeued();
-                metrics.tcp_opened();
-                let peer = job.peer;
-                let result = handle_tcp_connection(
-                    job.stream,
-                    peer,
-                    Arc::clone(&router),
-                    Arc::clone(&stop),
-                    &metrics,
-                );
-                metrics.tcp_closed();
-                match result {
-                    Ok(event) => append_event(&event_file, &event_lock, event),
-                    Err(err) => append_event(
-                        &event_file,
-                        &event_lock,
-                        json!({"event": "tcp_connection_failed", "peer": peer.to_string(), "error": err}),
-                    ),
-                }
-            }
-            Err(RecvTimeoutError::Timeout) => {}
-            Err(RecvTimeoutError::Disconnected) => break,
-        }
-    }
-    append_event(
-        &event_file,
-        &event_lock,
-        json!({"event": "tcp_flow_worker_stopped", "worker_index": index}),
-    );
-}
 
 pub(super) struct ResidentTcpRouter {
     proxies: BTreeMap<u8, ResidentProxyPlan>,
@@ -477,7 +281,7 @@ pub(super) fn resident_tcp_accept_loop(
     event_file: PathBuf,
     event_lock: Arc<Mutex<()>>,
     metrics: Arc<ResidentDataplaneMetrics>,
-    flow_queue: ResidentTcpFlowQueue,
+    flow_stack_bytes: usize,
 ) {
     if let Err(err) = listener.set_nonblocking(true) {
         append_event(
@@ -487,31 +291,318 @@ pub(super) fn resident_tcp_accept_loop(
         );
         return;
     }
+    let runtime = match runtime::Builder::new_current_thread()
+        .enable_io()
+        .enable_time()
+        .build()
+    {
+        Ok(runtime) => runtime,
+        Err(err) => {
+            append_event(
+                &event_file,
+                &event_lock,
+                json!({"event": "tcp_async_runtime_build_failed", "error": err.to_string()}),
+            );
+            return;
+        }
+    };
+    runtime.block_on(resident_tcp_accept_loop_async(
+        listener,
+        router,
+        stop,
+        event_file,
+        event_lock,
+        metrics,
+        flow_stack_bytes,
+    ));
+}
+
+async fn resident_tcp_accept_loop_async(
+    listener: TcpListener,
+    router: Arc<ResidentTcpRouter>,
+    stop: Arc<AtomicBool>,
+    event_file: PathBuf,
+    event_lock: Arc<Mutex<()>>,
+    metrics: Arc<ResidentDataplaneMetrics>,
+    flow_stack_bytes: usize,
+) {
+    let listener = match TokioTcpListener::from_std(listener) {
+        Ok(listener) => listener,
+        Err(err) => {
+            append_event(
+                &event_file,
+                &event_lock,
+                json!({"event": "tcp_async_listener_adopt_failed", "error": err.to_string()}),
+            );
+            return;
+        }
+    };
     append_event(
         &event_file,
         &event_lock,
-        json!({"event": "tcp_worker_started", "proxy_count": router.proxy_count(), "dial_mode": router.dial_mode_name(), "execution": "bounded-flow-worker-queue"}),
+        json!({
+            "event": "tcp_worker_started",
+            "proxy_count": router.proxy_count(),
+            "dial_mode": router.dial_mode_name(),
+            "execution": "async-accept-direct-v1",
+            "proxy_execution": "async-proxy-tls-v1",
+            "legacy_flow_stack_bytes": flow_stack_bytes,
+        }),
+    );
+    while !stop.load(Ordering::Relaxed) {
+        match time::timeout(RESIDENT_TCP_ACCEPT_SLEEP, listener.accept()).await {
+            Err(_) => {}
+            Ok(Ok((stream, peer))) => {
+                spawn_async_tcp_flow(
+                    stream,
+                    peer,
+                    Arc::clone(&router),
+                    Arc::clone(&stop),
+                    event_file.clone(),
+                    Arc::clone(&event_lock),
+                    Arc::clone(&metrics),
+                );
+            }
+            Ok(Err(err)) => {
+                append_event(
+                    &event_file,
+                    &event_lock,
+                    json!({"event": "tcp_accept_failed", "error": err.to_string()}),
+                );
+                time::sleep(Duration::from_millis(100)).await;
+            }
+        }
+    }
+    append_event(
+        &event_file,
+        &event_lock,
+        json!({"event": "tcp_worker_stopped"}),
+    );
+}
+
+#[allow(clippy::too_many_arguments)]
+fn spawn_async_tcp_flow(
+    stream: TokioTcpStream,
+    peer: SocketAddr,
+    router: Arc<ResidentTcpRouter>,
+    stop: Arc<AtomicBool>,
+    event_file: PathBuf,
+    event_lock: Arc<Mutex<()>>,
+    metrics: Arc<ResidentDataplaneMetrics>,
+) {
+    tokio::spawn(async move {
+        match handle_tcp_connection_async_or_handoff(
+            stream,
+            peer,
+            router,
+            stop,
+            Arc::clone(&metrics),
+        )
+        .await
+        {
+            Ok(Some(event)) => append_event(&event_file, &event_lock, event),
+            Ok(None) => {}
+            Err(err) => append_event(
+                &event_file,
+                &event_lock,
+                json!({"event": "tcp_connection_failed", "peer": peer.to_string(), "error": err}),
+            ),
+        }
+    });
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn handle_tcp_connection_async_or_handoff(
+    mut inbound: TokioTcpStream,
+    peer: SocketAddr,
+    router: Arc<ResidentTcpRouter>,
+    stop: Arc<AtomicBool>,
+    metrics: Arc<ResidentDataplaneMetrics>,
+) -> Result<Option<Value>, String> {
+    let peer_v4 = match peer {
+        SocketAddr::V4(addr) => addr,
+        SocketAddr::V6(addr) => {
+            return Err(format!(
+                "resident TCP dataplane currently supports IPv4 TCP peers only: {addr}"
+            ));
+        }
+    };
+    let original_dst = match inbound
+        .local_addr()
+        .map_err(|err| format!("read original TCP destination: {err}"))?
+    {
+        SocketAddr::V4(addr) => addr,
+        SocketAddr::V6(addr) => {
+            return Err(format!(
+                "resident TCP dataplane currently supports IPv4 original destinations only: {addr}"
+            ));
+        }
+    };
+    inbound
+        .set_nodelay(true)
+        .map_err(|err| format!("set inbound TCP_NODELAY: {err}"))?;
+    let sniff = sniff_initial_tcp_payload_async(&mut inbound, router.sniffing_timeout).await?;
+    let selection = router.select(peer_v4, original_dst, &sniff.domain)?;
+    match selection {
+        TcpSelection::Direct(selection) => {
+            metrics.tcp_opened();
+            let result = handle_direct_tcp_connection_async(
+                &mut inbound,
+                peer,
+                original_dst,
+                selection,
+                Arc::clone(&stop),
+                &sniff,
+                &metrics,
+            )
+            .await;
+            metrics.tcp_closed();
+            result.map(Some)
+        }
+        TcpSelection::Block(selection) => {
+            let _ = inbound.shutdown().await;
+            Ok(Some(json!({
+                "event": "tcp_connection_blocked",
+                "peer": peer.to_string(),
+                "original_dst": original_dst.to_string(),
+                "dial_target": &selection.route.dial_target,
+                "dial_ip": selection.route.dial_ip,
+                "initial_outbound": selection.route.initial_outbound,
+                "final_outbound": selection.route.final_outbound,
+                "final_mark": selection.route.final_mark,
+                "userspace_route_executed": selection.route.userspace_route_executed,
+                "userspace_route_must": selection.route.userspace_route_must,
+                "sniffed_domain": &sniff.domain,
+                "sniff_error": &sniff.error,
+                "execution": "async-block",
+            })))
+        }
+        TcpSelection::Proxy(selection) => {
+            metrics.tcp_opened();
+            let result = handle_proxy_tcp_connection_async(
+                &mut inbound,
+                peer,
+                original_dst,
+                selection,
+                Arc::clone(&stop),
+                &sniff,
+                &metrics,
+            )
+            .await;
+            metrics.tcp_closed();
+            result.map(Some)
+        }
+    }
+}
+
+#[allow(dead_code)]
+#[allow(clippy::too_many_arguments)]
+fn spawn_proxy_tcp_connection_thread(
+    inbound: TokioTcpStream,
+    peer: SocketAddr,
+    original_dst: SocketAddrV4,
+    selection: TcpProxySelection,
+    stop: Arc<AtomicBool>,
+    sniff: TcpSniffReport,
+    metrics: Arc<ResidentDataplaneMetrics>,
+    event_file: PathBuf,
+    event_lock: Arc<Mutex<()>>,
+    flow_stack_bytes: usize,
+) -> Result<(), String> {
+    let mut inbound = inbound
+        .into_std()
+        .map_err(|err| format!("convert async inbound TCP to std for proxy handoff: {err}"))?;
+    thread::Builder::new()
+        .name("dae-tcp-proxy-flow".to_owned())
+        .stack_size(flow_stack_bytes)
+        .spawn(move || {
+            metrics.tcp_opened();
+            let result = handle_proxy_tcp_connection(
+                &mut inbound,
+                peer,
+                original_dst,
+                selection,
+                &stop,
+                &sniff,
+                &metrics,
+            );
+            metrics.tcp_closed();
+            match result {
+                Ok(mut event) => {
+                    event["execution"] = json!("per-connection-thread-transitional");
+                    append_event(&event_file, &event_lock, event)
+                }
+                Err(err) => append_event(
+                    &event_file,
+                    &event_lock,
+                    json!({"event": "tcp_connection_failed", "peer": peer.to_string(), "error": err}),
+                ),
+            }
+        })
+        .map_err(|err| format!("spawn resident proxy TCP flow thread: {err}"))?;
+    Ok(())
+}
+
+#[allow(dead_code)]
+fn resident_tcp_accept_loop_sync_legacy(
+    listener: TcpListener,
+    router: Arc<ResidentTcpRouter>,
+    stop: Arc<AtomicBool>,
+    event_file: PathBuf,
+    event_lock: Arc<Mutex<()>>,
+    metrics: Arc<ResidentDataplaneMetrics>,
+    flow_stack_bytes: usize,
+) {
+    append_event(
+        &event_file,
+        &event_lock,
+        json!({
+            "event": "tcp_worker_started",
+            "proxy_count": router.proxy_count(),
+            "dial_mode": router.dial_mode_name(),
+            "execution": "per-connection-thread-legacy",
+            "flow_stack_bytes": flow_stack_bytes,
+        }),
     );
     while !stop.load(Ordering::Relaxed) {
         match listener.accept() {
             Ok((stream, peer)) => {
-                metrics.tcp_accepted();
-                match flow_queue.try_submit(stream, peer) {
-                    Ok(()) => metrics.tcp_enqueued(),
-                    Err(TcpFlowSubmitError::Full(stream)) => {
-                        metrics.tcp_rejected();
-                        let _ = stream.shutdown(Shutdown::Both);
-                    }
-                    Err(TcpFlowSubmitError::Disconnected(stream)) => {
-                        metrics.tcp_rejected();
-                        let _ = stream.shutdown(Shutdown::Both);
-                        append_event(
-                            &event_file,
-                            &event_lock,
-                            json!({"event": "tcp_flow_queue_disconnected", "peer": peer.to_string()}),
-                        );
-                        break;
-                    }
+                let router = Arc::clone(&router);
+                let stop = Arc::clone(&stop);
+                let connection_event_file = event_file.clone();
+                let connection_event_lock = Arc::clone(&event_lock);
+                let metrics = Arc::clone(&metrics);
+                if let Err(err) = thread::Builder::new()
+                    .name("dae-tcp-flow".to_owned())
+                    .stack_size(flow_stack_bytes)
+                    .spawn(move || {
+                        metrics.tcp_opened();
+                        let result = handle_tcp_connection(stream, peer, router, stop, &metrics);
+                        metrics.tcp_closed();
+                        match result {
+                            Ok(event) => append_event(
+                                &connection_event_file,
+                                &connection_event_lock,
+                                event,
+                            ),
+                            Err(err) => append_event(
+                                &connection_event_file,
+                                &connection_event_lock,
+                                json!({"event": "tcp_connection_failed", "peer": peer.to_string(), "error": err}),
+                            ),
+                        }
+                    })
+                {
+                    append_event(
+                        &event_file,
+                        &event_lock,
+                        json!({
+                            "event": "tcp_connection_thread_spawn_failed",
+                            "peer": peer.to_string(),
+                            "flow_stack_bytes": flow_stack_bytes,
+                            "error": err.to_string(),
+                        }),
+                    );
                 }
             }
             Err(err) if err.kind() == ErrorKind::WouldBlock => {
@@ -655,6 +746,53 @@ fn handle_proxy_tcp_connection(
     })
 }
 
+async fn handle_proxy_tcp_connection_async(
+    inbound: &mut TokioTcpStream,
+    peer: SocketAddr,
+    original_dst: SocketAddrV4,
+    selection: TcpProxySelection,
+    stop: Arc<AtomicBool>,
+    sniff: &TcpSniffReport,
+    metrics: &ResidentDataplaneMetrics,
+) -> Result<Value, String> {
+    let mut client = open_async_vless_tls_client(&selection.proxy).await?;
+    let tls_underlay = async_tls_underlay_name(&client);
+    let request = packet::first_write_bytes(
+        &selection.proxy.key,
+        &selection.proxy.flow,
+        "tcp",
+        &selection.route.dial_target,
+        false,
+        &[],
+    )
+    .map_err(|err| format!("build VLESS TCP request: {err}"))?;
+    client
+        .write_plain_all(&request, "write VLESS TCP request")
+        .await?;
+    relay_tcp_over_vless_tls_async(
+        inbound,
+        &mut client,
+        stop,
+        &selection.proxy.flow,
+        selection.proxy.key,
+        &sniff.payload,
+        metrics,
+    )
+    .await
+    .map(|stats| {
+        let mut event =
+            proxy_tcp_finished_event(peer, original_dst, &selection, sniff, tls_underlay, &stats);
+        event["execution"] = json!("async-proxy-tls-v1");
+        event
+    })
+    .or_else(|err| {
+        let mut event =
+            proxy_tcp_failed_event(peer, original_dst, &selection, sniff, tls_underlay, &err);
+        event["execution"] = json!("async-proxy-tls-v1");
+        Ok::<Value, String>(event)
+    })
+}
+
 fn proxy_tcp_finished_event(
     peer: SocketAddr,
     original_dst: SocketAddrV4,
@@ -747,7 +885,65 @@ fn handle_direct_tcp_connection(
         selection.mptcp,
     )?;
     let stats = relay_tcp_direct(inbound, &mut direct.stream, stop, &sniff.payload, metrics)?;
-    Ok(json!({
+    Ok(direct_tcp_finished_event(
+        peer,
+        original_dst,
+        &selection,
+        sniff,
+        direct.target,
+        &direct.report,
+        &stats,
+        "per-connection-thread-legacy",
+    ))
+}
+
+async fn handle_direct_tcp_connection_async(
+    inbound: &mut TokioTcpStream,
+    peer: SocketAddr,
+    original_dst: SocketAddrV4,
+    selection: TcpDirectSelection,
+    stop: Arc<AtomicBool>,
+    sniff: &TcpSniffReport,
+    metrics: &ResidentDataplaneMetrics,
+) -> Result<Value, String> {
+    let direct = open_direct_tcp_connection_async(
+        selection.route.dial_target.clone(),
+        selection.route.final_mark,
+        selection.mptcp,
+    )
+    .await?;
+    let DirectTcpConnection {
+        stream,
+        report,
+        target,
+    } = direct;
+    let mut direct_stream = TokioTcpStream::from_std(stream)
+        .map_err(|err| format!("adopt async direct TCP stream: {err}"))?;
+    let stats =
+        relay_tcp_direct_async(inbound, &mut direct_stream, stop, &sniff.payload, metrics).await?;
+    Ok(direct_tcp_finished_event(
+        peer,
+        original_dst,
+        &selection,
+        sniff,
+        target,
+        &report,
+        &stats,
+        "async-direct-v1",
+    ))
+}
+
+fn direct_tcp_finished_event(
+    peer: SocketAddr,
+    original_dst: SocketAddrV4,
+    selection: &TcpDirectSelection,
+    sniff: &TcpSniffReport,
+    direct_target: SocketAddrV4,
+    direct_report: &TcpDirectDialReport,
+    stats: &DirectTcpRelayStats,
+    execution: &'static str,
+) -> Value {
+    json!({
         "event": "tcp_connection_finished",
         "outbound_kind": "direct",
         "peer": peer.to_string(),
@@ -761,18 +957,19 @@ fn handle_direct_tcp_connection(
         "userspace_route_must": selection.route.userspace_route_must,
         "sniffed_domain": &sniff.domain,
         "sniff_error": &sniff.error,
-        "direct_target": direct.target.to_string(),
-        "direct_peer_addr": &direct.report.peer_addr,
-        "direct_local_addr": &direct.report.local_addr,
-        "direct_so_mark": direct.report.so_mark,
-        "direct_so_mark_applied": direct.report.so_mark_applied,
-        "direct_mptcp_requested": direct.report.requested_mptcp,
-        "direct_mptcp_socket_attempted": direct.report.mptcp_socket_attempted,
-        "direct_mptcp_socket_created": direct.report.mptcp_socket_created,
-        "direct_mptcp_connect_fallback_used": direct.report.mptcp_connect_fallback_used,
+        "direct_target": direct_target.to_string(),
+        "direct_peer_addr": &direct_report.peer_addr,
+        "direct_local_addr": &direct_report.local_addr,
+        "direct_so_mark": direct_report.so_mark,
+        "direct_so_mark_applied": direct_report.so_mark_applied,
+        "direct_mptcp_requested": direct_report.requested_mptcp,
+        "direct_mptcp_socket_attempted": direct_report.mptcp_socket_attempted,
+        "direct_mptcp_socket_created": direct_report.mptcp_socket_created,
+        "direct_mptcp_connect_fallback_used": direct_report.mptcp_connect_fallback_used,
         "bytes_client_to_direct": stats.client_to_direct,
         "bytes_direct_to_client": stats.direct_to_client,
-    }))
+        "execution": execution,
+    })
 }
 
 fn sniff_initial_tcp_payload(
@@ -855,6 +1052,88 @@ fn sniff_initial_tcp_payload(
             });
         }
         thread::sleep(RESIDENT_IDLE_SLEEP);
+    }
+}
+
+async fn sniff_initial_tcp_payload_async(
+    inbound: &mut TokioTcpStream,
+    timeout: Duration,
+) -> Result<TcpSniffReport, String> {
+    if timeout.is_zero() {
+        return Ok(TcpSniffReport {
+            payload: Vec::new(),
+            domain: String::new(),
+            error: None,
+        });
+    }
+
+    let deadline = time::Instant::now() + timeout;
+    let mut payload = Vec::new();
+    let mut buf = [0_u8; 4096];
+    let mut last_error = None;
+    loop {
+        let now = time::Instant::now();
+        if now >= deadline {
+            return Ok(TcpSniffReport {
+                payload,
+                domain: String::new(),
+                error: last_error.or_else(|| Some("sniffing timeout".to_owned())),
+            });
+        }
+        match time::timeout(
+            deadline.saturating_duration_since(now),
+            inbound.read(&mut buf),
+        )
+        .await
+        {
+            Ok(Ok(0)) => {
+                return Ok(TcpSniffReport {
+                    payload,
+                    domain: String::new(),
+                    error: last_error,
+                });
+            }
+            Ok(Ok(read)) => {
+                payload.extend_from_slice(&buf[..read]);
+                if payload.len() > TCP_SNIFF_BUFFER_LIMIT {
+                    return Ok(TcpSniffReport {
+                        payload,
+                        domain: String::new(),
+                        error: Some(format!(
+                            "sniffing skipped after buffered payload exceeded {TCP_SNIFF_BUFFER_LIMIT} bytes"
+                        )),
+                    });
+                }
+            }
+            Ok(Err(err)) => return Err(format!("read inbound TCP for async sniffing: {err}")),
+            Err(_) => {
+                return Ok(TcpSniffReport {
+                    payload,
+                    domain: String::new(),
+                    error: last_error.or_else(|| Some("sniffing timeout".to_owned())),
+                });
+            }
+        }
+
+        match sniff_tcp(&payload) {
+            Ok(domain) => {
+                return Ok(TcpSniffReport {
+                    payload,
+                    domain,
+                    error: None,
+                });
+            }
+            Err(err) if sniff_needs_more(&err) => {
+                last_error = Some(err.to_string());
+            }
+            Err(err) => {
+                return Ok(TcpSniffReport {
+                    payload,
+                    domain: String::new(),
+                    error: Some(err.to_string()),
+                });
+            }
+        }
     }
 }
 
@@ -1142,6 +1421,184 @@ fn relay_tcp_over_vless_tls(
             return Err(RelayError::new("resident TCP relay idle timeout", &stats));
         } else {
             thread::sleep(RESIDENT_IDLE_SLEEP);
+        }
+    }
+    Ok(stats)
+}
+
+async fn relay_tcp_over_vless_tls_async(
+    inbound: &mut TokioTcpStream,
+    client: &mut AsyncVlessTlsClient,
+    stop: Arc<AtomicBool>,
+    flow: &str,
+    user_uuid: [u8; 16],
+    initial_payload: &[u8],
+    metrics: &ResidentDataplaneMetrics,
+) -> Result<RelayStats, RelayError> {
+    let mut stats = RelayStats::default();
+    let mut stripper = VlessResponseStripper::default();
+    let vision_enabled = flow == XTLS_RPRX_VISION;
+    let mut vision = vision_enabled.then(|| VisionUnpadder::new(user_uuid));
+    let mut downlink_direct = false;
+    let mut vision_uplink_mode = VisionUplinkMode::Padding;
+    let mut vision_tls_state = VisionInnerTlsState::new();
+    let mut uplink_uuid_sent = false;
+    let mut vision_first_uplink_block = true;
+    let mut pending_vision_uplink = Vec::<u8>::new();
+    let mut inbound_closed = false;
+    let mut last_activity = Instant::now();
+    let mut inbound_buf = [0_u8; 16 * 1024];
+    let mut proxy_buf = [0_u8; 16 * 1024];
+
+    if !initial_payload.is_empty() {
+        if vision_enabled {
+            pending_vision_uplink.extend_from_slice(initial_payload);
+            drain_vision_uplink_async(
+                &mut pending_vision_uplink,
+                client,
+                &stop,
+                user_uuid,
+                &mut uplink_uuid_sent,
+                &mut vision_first_uplink_block,
+                &mut vision_uplink_mode,
+                &mut vision_tls_state,
+            )
+            .await
+            .map_err(|err| RelayError::new(err, &stats))?;
+        } else {
+            client
+                .write_plain_all(initial_payload, "write sniffed client payload to proxy TLS")
+                .await
+                .map_err(|err| RelayError::new(err, &stats))?;
+        }
+        stats.client_to_proxy += initial_payload.len();
+        metrics.add_upload(initial_payload.len());
+    }
+
+    while !stop.load(Ordering::Relaxed) {
+        tokio::select! {
+            inbound_read = inbound.read(&mut inbound_buf), if !inbound_closed => {
+                match inbound_read {
+                    Ok(0) => {
+                        inbound_closed = true;
+                        client.shutdown().await;
+                        last_activity = Instant::now();
+                    }
+                    Ok(read) => {
+                        if vision_enabled {
+                            pending_vision_uplink.extend_from_slice(&inbound_buf[..read]);
+                            if pending_vision_uplink.len() > TLS_RECORD_MAX_PAYLOAD_LEN * 4 {
+                                return Err(RelayError::new(
+                                    format!(
+                                        "pending Vision uplink payload did not form complete TLS records: {} bytes",
+                                        pending_vision_uplink.len()
+                                    ),
+                                    &stats,
+                                ));
+                            }
+                            drain_vision_uplink_async(
+                                &mut pending_vision_uplink,
+                                client,
+                                &stop,
+                                user_uuid,
+                                &mut uplink_uuid_sent,
+                                &mut vision_first_uplink_block,
+                                &mut vision_uplink_mode,
+                                &mut vision_tls_state,
+                            )
+                            .await
+                            .map_err(|err| RelayError::new(err, &stats))?;
+                        } else {
+                            client
+                                .write_plain_all(&inbound_buf[..read], "write client payload to proxy TLS")
+                                .await
+                                .map_err(|err| RelayError::new(err, &stats))?;
+                        }
+                        stats.client_to_proxy += read;
+                        metrics.add_upload(read);
+                        last_activity = Instant::now();
+                    }
+                    Err(err) => {
+                        return Err(RelayError::new(format!("read inbound TCP: {err}"), &stats));
+                    }
+                }
+            }
+            proxy_read = async {
+                if downlink_direct {
+                    client.raw_read(&mut proxy_buf).await
+                } else {
+                    client.read_plain(&mut proxy_buf).await
+                }
+            } => {
+                match proxy_read {
+                    Ok(0) => break,
+                    Ok(read) => {
+                        if downlink_direct {
+                            inbound
+                                .write_all(&proxy_buf[..read])
+                                .await
+                                .map_err(|err| RelayError::new(format!("write VLESS Vision direct payload to client: {err}"), &stats))?;
+                            stats.proxy_to_client += read;
+                            metrics.add_download(read);
+                            last_activity = Instant::now();
+                            continue;
+                        }
+
+                        let mut payload = stripper
+                            .consume(&proxy_buf[..read])
+                            .map_err(|err| RelayError::new(err, &stats))?;
+                        stats.response_header_stripped = stripper.done;
+                        if let Some(vision) = vision.as_mut()
+                            && !payload.is_empty()
+                        {
+                            payload = vision
+                                .consume(&payload)
+                                .map_err(|err| RelayError::new(err, &stats))?;
+                            vision_tls_state
+                                .observe_server_payload(&payload)
+                                .map_err(|err| RelayError::new(err, &stats))?;
+                            stats.vision_unpadding_blocks = vision.completed_blocks;
+                            stats.vision_direct_command_seen = vision.direct_command_seen;
+                            downlink_direct = vision.direct_command_seen;
+                            stats.vision_downlink_direct_active = downlink_direct;
+                            if !pending_vision_uplink.is_empty() {
+                                drain_vision_uplink_async(
+                                    &mut pending_vision_uplink,
+                                    client,
+                                    &stop,
+                                    user_uuid,
+                                    &mut uplink_uuid_sent,
+                                    &mut vision_first_uplink_block,
+                                    &mut vision_uplink_mode,
+                                    &mut vision_tls_state,
+                                )
+                                .await
+                                .map_err(|err| RelayError::new(err, &stats))?;
+                            }
+                        }
+                        if !payload.is_empty() {
+                            inbound
+                                .write_all(&payload)
+                                .await
+                                .map_err(|err| RelayError::new(format!("write VLESS payload to client: {err}"), &stats))?;
+                            stats.proxy_to_client += payload.len();
+                            metrics.add_download(payload.len());
+                        }
+                        last_activity = Instant::now();
+                    }
+                    Err(err) => {
+                        return Err(RelayError::new(format!("read VLESS TLS plaintext: {err}"), &stats));
+                    }
+                }
+            }
+            _ = time::sleep(Duration::from_millis(100)) => {
+                if inbound_closed && !downlink_direct {
+                    break;
+                }
+                if last_activity.elapsed() > RESIDENT_TCP_IDLE_TIMEOUT {
+                    return Err(RelayError::new("resident TCP relay idle timeout", &stats));
+                }
+            }
         }
     }
     Ok(stats)
