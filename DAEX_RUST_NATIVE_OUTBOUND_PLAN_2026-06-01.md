@@ -10508,3 +10508,101 @@ Cleanup:
     rsslan0 absent
     rssclient absent
     no daed run process for the test
+
+## 2026-06-04 10.10.10.2 Rust native daed deployment for manual test
+
+Local code commit used for the deployed binary:
+  edb8bda8 stabilize rust native resident rss path
+
+Build:
+  Repo:
+    /root/project/dae-daex-align/rust
+
+  Native eBPF object:
+    /tmp/dae-daex-native-btf-target/bpfel-unknown-none/release/libdae_ebpf_program.so
+
+  BTF validation:
+    readelf showed .BTF and .BTF.ext sections in the object.
+
+  Build command:
+    DAE_RUST_NATIVE_BPF_OBJECT=/tmp/dae-daex-native-btf-target/bpfel-unknown-none/release/libdae_ebpf_program.so \
+      cargo build --manifest-path Cargo.toml -p dae-daemon --bin daed --release --features native-ebpf --quiet
+
+  Built binary:
+    /root/project/dae-daex-align/rust/target/release/daed
+    size: 16M
+    sha256: 34d83e8589a74fee178fbd0ce26c4c525263286c9b8c602ebc80eed21e8330ab
+
+Remote target:
+  Host:
+    10.10.10.2
+
+Pre-deploy Go daed:
+  /usr/bin/daed
+  size: 50M
+  sha256: b296303fc01b0cd4453ab90bb7bf988d6315a952a548fd483a0a9c5bab2448bf
+  probe:
+    `daed package-info --json` returned unknown command, consistent with Go daed.
+
+Go daed backup:
+  Binary:
+    /etc/daed/backups/daed-go-20260604-090540-b296303fc01b
+
+  Hash file:
+    /etc/daed/backups/daed-go-20260604-090540-b296303fc01b.sha256
+
+  Service unit backup:
+    /etc/daed/backups/daed-go-20260604-090540-b296303fc01b.service
+
+  Backup sha256:
+    b296303fc01b0cd4453ab90bb7bf988d6315a952a548fd483a0a9c5bab2448bf
+
+Deploy result:
+  Installed:
+    /usr/bin/daed
+
+  Installed sha256:
+    34d83e8589a74fee178fbd0ce26c4c525263286c9b8c602ebc80eed21e8330ab
+
+  Installed size:
+    16M
+
+  Test drop-in:
+    /etc/systemd/system/daed.service.d/50-rust-native-test.conf
+
+  Drop-in environment:
+    DAE_RUST_RESIDENT_DATAPLANE=1
+    DAE_RUST_NATIVE_EBPF=1
+    DAED_WEB_ROOT=/usr/share/daed/web
+    DAED_HTTP_WORKERS=4
+    DAED_HTTP_QUEUE=64
+    DAE_RESIDENT_FLOW_WORKERS=4
+    DAE_RESIDENT_FLOW_QUEUE=64
+
+Post-deploy validation:
+  systemctl is-active daed:
+    active
+
+  Main PID:
+    59129
+
+  API health:
+    GET http://127.0.0.1:2023/api/health
+    {"healthCheck":1}
+
+  WebUI root:
+    GET http://127.0.0.1:2023/
+    returned /usr/share/daed/web/index.html with bundled assets.
+
+  package-info:
+    /usr/bin/daed package-info --json succeeded and reported C10 Rust product
+    package surface.
+
+Cleanup:
+  Removed remote upload staging file:
+    /tmp/daed-rust-native-34d83e8589a7
+
+Rollback note:
+  To restore the backed-up Go daed binary for this deployment, stop daed,
+  copy the backup binary back to /usr/bin/daed, remove or disable the Rust
+  native test drop-in, run systemctl daemon-reload, and start daed.
