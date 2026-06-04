@@ -11,7 +11,9 @@ use dae_config::Config;
 use dae_ebpf_support::LiveLoadedTproxyListenSocketMap;
 use serde_json::{Value, json};
 
-pub(crate) use self::adapter_matrix::resident_live_adapter_matrix_contract;
+pub(crate) use self::adapter_matrix::{
+    resident_live_adapter_matrix_contract, resident_live_adapter_matrix_entries,
+};
 use self::events::path_string;
 pub(crate) use self::events::{ResidentEventLogSink, set_event_log_sink};
 use self::plan::build_resident_dataplane_plan;
@@ -328,6 +330,116 @@ pub(super) fn start_resident_dataplane_workers(
             metrics,
         }),
     )
+}
+
+pub(crate) fn resident_live_adapter_config_assessment(
+    config: &Config,
+    config_path: Option<&Path>,
+) -> Value {
+    let matrix = resident_live_adapter_matrix_contract();
+    let matrix_entries = resident_live_adapter_matrix_entries()
+        .iter()
+        .map(|entry| {
+            json!({
+                "handler": entry.handler,
+                "formal_matrix_handler": entry.formal_matrix_handler,
+                "wired_ready": entry.wired_ready(),
+                "live_ready": entry.live_ready(),
+                "missing": entry.missing,
+            })
+        })
+        .collect::<Vec<_>>();
+    let mut report = json!({
+        "schema": "resident-live-adapter-config-assessment-v1",
+        "config": config_path.map(path_string),
+        "read_only": true,
+        "host_mutation_executed": false,
+        "network_io_executed": false,
+        "live_traffic_executed": false,
+        "matrix_schema": matrix.schema,
+        "resident_live_adapter_matrix_ready": matrix.matrix_ready,
+        "resident_live_adapter_wired_matrix_ready": matrix.wired_matrix_ready,
+        "resident_live_adapter_remote_live_matrix_ready": matrix.remote_live_matrix_ready,
+        "resident_live_adapter_entries": matrix_entries,
+    });
+
+    match build_resident_dataplane_plan(config) {
+        Ok(plan) if plan.enabled => {
+            let proxies = plan
+                .proxies
+                .iter()
+                .map(|(outbound, proxy)| {
+                    let mut proxy = resident_proxy_plan_summary_json(proxy);
+                    proxy["outbound_index"] = json!(outbound);
+                    proxy
+                })
+                .collect::<Vec<_>>();
+            let default_proxy = plan
+                .default_proxy
+                .as_ref()
+                .map(resident_proxy_plan_summary_json)
+                .unwrap_or(Value::Null);
+            report["status"] = json!("admitted");
+            report["planner_admitted"] = json!(true);
+            report["selected_node_fail_closed"] = json!(true);
+            report["resident_dataplane_enabled_by_config"] = json!(true);
+            report["proxy_count"] = json!(plan.proxies.len());
+            report["tcp_dial_mode"] = json!(plan.tcp_dial_mode.as_str());
+            report["tcp_sniffing_timeout"] = json!(format!("{:?}", plan.sniffing_timeout));
+            report["default_proxy"] = default_proxy;
+            report["proxies"] = json!(proxies);
+            report["blockers"] =
+                json!(["remote live traffic matrix not executed by this read-only assessment"]);
+        }
+        Ok(plan) => {
+            report["status"] = json!("not-applicable");
+            report["planner_admitted"] = json!(false);
+            report["selected_node_fail_closed"] = json!(true);
+            report["resident_dataplane_enabled_by_config"] = json!(false);
+            report["proxy_count"] = json!(plan.proxies.len());
+            report["unsupported_reason"] = json!(plan.unsupported_reason);
+            report["blockers"] = json!(["no selected proxy plan was admitted"]);
+        }
+        Err(err) => {
+            report["status"] = json!("blocked");
+            report["planner_admitted"] = json!(false);
+            report["selected_node_fail_closed"] = json!(true);
+            report["resident_dataplane_enabled_by_config"] = json!(false);
+            report["planner_error"] = json!(err);
+            report["blockers"] =
+                json!(["selected node shape is not admitted by the live resident adapter"]);
+        }
+    }
+    report
+}
+
+fn resident_proxy_plan_summary_json(proxy: &plan::ResidentProxyPlan) -> Value {
+    let fingerprint = proxy.utls_fingerprint.as_ref().map(|fingerprint| {
+        json!({
+            "source": fingerprint.source,
+            "requested": fingerprint.requested,
+            "canonical": fingerprint.canonical,
+            "family": fingerprint.family,
+            "client": fingerprint.client,
+            "randomized": fingerprint.randomized,
+            "alpn_policy": fingerprint.alpn_policy,
+        })
+    });
+    json!({
+        "protocol": proxy.protocol,
+        "group": proxy.group_name,
+        "node_tag": proxy.node_tag,
+        "transport": proxy.net,
+        "security": proxy.tls,
+        "flow": proxy.flow,
+        "alpn": proxy.alpn,
+        "allow_insecure": proxy.allow_insecure,
+        "fingerprint_underlay": fingerprint.is_some(),
+        "utls_fingerprint": fingerprint,
+        "server_port": proxy.server_port,
+        "server_name_present": !proxy.server_name.is_empty(),
+        "mptcp": proxy.mptcp,
+    })
 }
 
 fn resident_tcp_flow_stack_bytes() -> usize {
