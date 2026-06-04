@@ -93,9 +93,37 @@ pub(super) fn outbound_production_matrix_gate_json(
         candidate_service_contract["go_outbound_fallback_retired_candidate"]
             .as_bool()
             .unwrap_or(false);
+    let live_adapter_contract_ready =
+        candidate_service_contract["resident_live_adapter_matrix_contract_ready"]
+            .as_bool()
+            .unwrap_or(false);
+    let live_adapter_matrix_ready =
+        candidate_service_contract["resident_live_adapter_matrix_ready"]
+            .as_bool()
+            .unwrap_or(false);
+    let live_adapter_runtime_state_ready =
+        candidate_service_contract["resident_live_adapter_matrix_runtime_state_ready"]
+            .as_bool()
+            .unwrap_or(false);
+    let live_adapter_wired_matrix_ready =
+        candidate_service_contract["resident_live_adapter_wired_matrix_ready"]
+            .as_bool()
+            .unwrap_or(false);
+    let live_adapter_remote_live_matrix_ready =
+        candidate_service_contract["resident_live_adapter_remote_live_matrix_ready"]
+            .as_bool()
+            .unwrap_or(false);
+    let live_adapter_typed_report_ready =
+        candidate_service_contract["resident_live_adapter_matrix_typed_report_ready"]
+            .as_bool()
+            .unwrap_or(false);
     let matrix_entries = candidate_service_contract["outbound_production_matrix_entries"].clone();
     let typed_report =
         candidate_service_contract["outbound_production_matrix_typed_report"].clone();
+    let live_adapter_entries =
+        candidate_service_contract["resident_live_adapter_matrix_entries"].clone();
+    let live_adapter_typed_report =
+        candidate_service_contract["resident_live_adapter_matrix_typed_report"].clone();
 
     let outbound_production_matrix_ready = requested
         && outbound_fingerprint_underlay_ready
@@ -114,7 +142,13 @@ pub(super) fn outbound_production_matrix_gate_json(
         && live_smoke_ready
         && fallback_retirement_matrix_ready
         && typed_report_ready
-        && fallback_retired_candidate;
+        && fallback_retired_candidate
+        && live_adapter_contract_ready
+        && live_adapter_matrix_ready
+        && live_adapter_runtime_state_ready
+        && live_adapter_wired_matrix_ready
+        && live_adapter_remote_live_matrix_ready
+        && live_adapter_typed_report_ready;
     let go_outbound_fallback_retired_candidate = outbound_production_matrix_ready;
     let outbound_production_matrix_default_switch_admission_ready = outbound_production_matrix_ready
         && admission.production_dataplane_admitted
@@ -179,6 +213,24 @@ pub(super) fn outbound_production_matrix_gate_json(
     if !fallback_retired_candidate {
         blockers.push("C8 Go outbound fallback retired candidate is not declared".to_owned());
     }
+    if !live_adapter_contract_ready {
+        blockers.push("C8 resident live adapter matrix contract is not declared".to_owned());
+    }
+    if !live_adapter_matrix_ready {
+        blockers.push("C8 resident live adapter matrix is not ready".to_owned());
+    }
+    if !live_adapter_runtime_state_ready {
+        blockers.push("C8 resident live adapter runtime state is not ready".to_owned());
+    }
+    if !live_adapter_wired_matrix_ready {
+        blockers.push("C8 resident live adapter wired matrix is not ready".to_owned());
+    }
+    if !live_adapter_remote_live_matrix_ready {
+        blockers.push("C8 resident live adapter remote live matrix is not ready".to_owned());
+    }
+    if !live_adapter_typed_report_ready {
+        blockers.push("C8 resident live adapter typed report is not ready".to_owned());
+    }
 
     OutboundProductionMatrixGateReport {
         report: json!({
@@ -205,11 +257,19 @@ pub(super) fn outbound_production_matrix_gate_json(
             "go_outbound_fallback_retirement_matrix_ready": fallback_retirement_matrix_ready,
             "outbound_production_matrix_typed_report_ready": typed_report_ready,
             "candidate_go_outbound_fallback_retired": fallback_retired_candidate,
+            "resident_live_adapter_matrix_contract_ready": live_adapter_contract_ready,
+            "resident_live_adapter_matrix_ready": live_adapter_matrix_ready,
+            "resident_live_adapter_matrix_runtime_state_ready": live_adapter_runtime_state_ready,
+            "resident_live_adapter_wired_matrix_ready": live_adapter_wired_matrix_ready,
+            "resident_live_adapter_remote_live_matrix_ready": live_adapter_remote_live_matrix_ready,
+            "resident_live_adapter_matrix_typed_report_ready": live_adapter_typed_report_ready,
             "admission_production_dataplane_admitted": admission.production_dataplane_admitted,
             "admission_reload_runtime_parity_admitted": admission.reload_runtime_parity_admitted,
             "admission_matched_go_rust_default_daemon_benchmark_recorded": admission.matched_benchmark_recorded,
             "outbound_production_matrix_entries": matrix_entries,
             "outbound_production_matrix_typed_report": typed_report,
+            "resident_live_adapter_matrix_entries": live_adapter_entries,
+            "resident_live_adapter_matrix_typed_report": live_adapter_typed_report,
             "requires_candidate_binary": true,
             "candidate_binary_source_hint": options.resident_default_daemon_binary_source.as_ref().map(|path| path_string(path)),
             "blockers": blockers,

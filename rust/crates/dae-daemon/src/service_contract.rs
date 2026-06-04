@@ -172,6 +172,7 @@ pub fn service_contract_capabilities(version: &str) -> Value {
     insert_datapath_core_service_contract_capabilities(&mut report);
     insert_outbound_fingerprint_underlay_service_contract_capabilities(&mut report);
     insert_outbound_production_matrix_service_contract_capabilities(&mut report);
+    insert_resident_live_adapter_matrix_service_contract_capabilities(&mut report);
     insert_release_default_switch_service_contract_capabilities(&mut report);
     insert_go_free_product_chain_service_contract_capabilities(&mut report);
     report
@@ -595,6 +596,7 @@ fn insert_outbound_fingerprint_underlay_service_contract_capabilities(report: &m
                 "boring_fingerprint_underlay_ready": boring_fingerprint_underlay_ready,
                 "no_silent_fingerprint_rustls_fallback_ready": no_silent_fingerprint_rustls_fallback_ready,
                 "full_utls_parity_declared": false,
+                "wire_oracle_required_before_full_utls_parity": true,
                 "stage_report_schema": false,
             }),
         );
@@ -610,7 +612,7 @@ fn insert_outbound_fingerprint_underlay_service_contract_capabilities(report: &m
                 "unknown_fingerprint_policy": "fail-closed",
                 "no_silent_fallback_policy": "fingerprint-aware requests must not degrade to standard rustls",
                 "live_evidence_field": "resident_dataplane TCP report tls_underlay",
-                "wire_oracle_scope": "Go/uTLS ClientHello oracle comparison retained; full uTLS parity is not declared",
+                "wire_oracle_scope": "Boring-backed fingerprint evidence is sufficient for current native admission; full uTLS parity still requires wire-oracle proof and is not declared",
             }),
         );
     }
@@ -709,6 +711,155 @@ fn insert_outbound_production_matrix_service_contract_capabilities(report: &mut 
                 "live_smoke_matrix_ready": matrix.live_smoke_ready,
                 "go_outbound_fallback_retirement_matrix_ready": matrix.go_fallback_retirement_ready,
                 "stage_report_schema": false,
+            }),
+        );
+    }
+}
+
+fn insert_resident_live_adapter_matrix_service_contract_capabilities(report: &mut Value) {
+    let matrix = crate::production_runtime_owner::resident_live_adapter_matrix_contract();
+    let entries = matrix
+        .entries
+        .iter()
+        .map(|entry| {
+            json!({
+                "handler": entry.handler,
+                "formal_matrix_handler": entry.formal_matrix_handler,
+                "planner_admitted": entry.planner_admitted,
+                "tcp_live_adapter": entry.tcp_live_adapter,
+                "udp_live_adapter": entry.udp_live_adapter,
+                "transport_underlay": entry.transport_underlay,
+                "route_group_connectivity": entry.route_group_connectivity,
+                "selected_node_fail_closed": entry.selected_node_fail_closed,
+                "fingerprint_underlay": entry.fingerprint_underlay,
+                "remote_live_matrix": entry.remote_live_matrix,
+                "go_outbound_fallback_retired": entry.go_outbound_fallback_retired,
+                "wired_ready": entry.wired_ready(),
+                "live_ready": entry.live_ready(),
+                "fingerprint_behavior": entry.fingerprint_behavior,
+                "evidence": entry.evidence,
+                "missing": entry.missing,
+            })
+        })
+        .collect::<Vec<_>>();
+    let wired_handler_count = matrix
+        .entries
+        .iter()
+        .filter(|entry| entry.wired_ready())
+        .count();
+    let live_ready_handler_count = matrix
+        .entries
+        .iter()
+        .filter(|entry| entry.live_ready())
+        .count();
+
+    if let Value::Object(report) = report {
+        report.insert(
+            "resident_live_adapter_matrix_contract_ready".to_owned(),
+            json!(true),
+        );
+        report.insert(
+            "resident_live_adapter_matrix_ready".to_owned(),
+            json!(matrix.matrix_ready),
+        );
+        report.insert(
+            "resident_live_adapter_matrix_runtime_state_ready".to_owned(),
+            json!(matrix.matrix_ready),
+        );
+        report.insert(
+            "resident_live_adapter_entries_ready".to_owned(),
+            json!(!entries.is_empty()),
+        );
+        report.insert(
+            "resident_live_adapter_planner_admission_ready".to_owned(),
+            json!(matrix.planner_admission_ready),
+        );
+        report.insert(
+            "resident_live_adapter_tcp_ready".to_owned(),
+            json!(matrix.tcp_live_adapter_ready),
+        );
+        report.insert(
+            "resident_live_adapter_udp_ready".to_owned(),
+            json!(matrix.udp_live_adapter_ready),
+        );
+        report.insert(
+            "resident_live_adapter_transport_underlay_ready".to_owned(),
+            json!(matrix.transport_underlay_ready),
+        );
+        report.insert(
+            "resident_live_adapter_route_group_connectivity_ready".to_owned(),
+            json!(matrix.route_group_connectivity_ready),
+        );
+        report.insert(
+            "resident_live_adapter_selected_node_fail_closed_ready".to_owned(),
+            json!(matrix.selected_node_fail_closed_ready),
+        );
+        report.insert(
+            "resident_live_adapter_fingerprint_underlay_ready".to_owned(),
+            json!(matrix.fingerprint_underlay_ready),
+        );
+        report.insert(
+            "resident_live_adapter_go_outbound_fallback_retirement_ready".to_owned(),
+            json!(matrix.go_outbound_fallback_retirement_ready),
+        );
+        report.insert(
+            "resident_live_adapter_wired_matrix_ready".to_owned(),
+            json!(matrix.wired_matrix_ready),
+        );
+        report.insert(
+            "resident_live_adapter_remote_live_matrix_ready".to_owned(),
+            json!(matrix.remote_live_matrix_ready),
+        );
+        report.insert(
+            "resident_live_adapter_wired_handler_count".to_owned(),
+            json!(wired_handler_count),
+        );
+        report.insert(
+            "resident_live_adapter_live_ready_handler_count".to_owned(),
+            json!(live_ready_handler_count),
+        );
+        report.insert(
+            "resident_live_adapter_matrix_report_schema".to_owned(),
+            json!(matrix.schema),
+        );
+        report.insert(
+            "resident_live_adapter_matrix_entries".to_owned(),
+            json!(entries),
+        );
+        report.insert(
+            "resident_live_adapter_matrix_typed_report_ready".to_owned(),
+            json!(true),
+        );
+        report.insert(
+            "resident_live_adapter_matrix_typed_report".to_owned(),
+            json!({
+                "schema": "resident-live-adapter-matrix-typed-report-v1",
+                "status": if matrix.matrix_ready { "pass" } else { "blocked" },
+                "entry_count": entries.len(),
+                "wired_handler_count": wired_handler_count,
+                "live_ready_handler_count": live_ready_handler_count,
+                "planner_admission_ready": matrix.planner_admission_ready,
+                "tcp_live_adapter_ready": matrix.tcp_live_adapter_ready,
+                "udp_live_adapter_ready": matrix.udp_live_adapter_ready,
+                "transport_underlay_ready": matrix.transport_underlay_ready,
+                "route_group_connectivity_ready": matrix.route_group_connectivity_ready,
+                "selected_node_fail_closed_ready": matrix.selected_node_fail_closed_ready,
+                "fingerprint_underlay_ready": matrix.fingerprint_underlay_ready,
+                "go_outbound_fallback_retirement_ready": matrix.go_outbound_fallback_retirement_ready,
+                "wired_matrix_ready": matrix.wired_matrix_ready,
+                "remote_live_matrix_ready": matrix.remote_live_matrix_ready,
+                "matrix_ready": matrix.matrix_ready,
+                "stage_report_schema": false,
+            }),
+        );
+        report.insert(
+            "resident_live_adapter_matrix_surface".to_owned(),
+            json!({
+                "scope": "live resident default adapter from selected node link into TCP/UDP tproxy workers",
+                "formal_matrix_dependency": "dae-outbound production matrix remains parser/dataplane/underlay evidence; this resident matrix records which handlers are actually wired into the live default adapter",
+                "default_switch_policy": "C8/C9/C10 cannot treat the formal outbound matrix as sufficient while this matrix is not pass",
+                "live_matrix_host": "38.65.91.47",
+                "household_smoke_host": "10.10.10.2",
             }),
         );
     }
