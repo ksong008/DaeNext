@@ -31,6 +31,8 @@ pub(super) struct AsyncVlessTlsClient {
     engine: AsyncVlessTlsEngine,
 }
 
+pub(super) type AsyncResidentTlsClient = AsyncVlessTlsClient;
+
 enum VlessTlsEngine {
     Rustls {
         tcp: TcpStream,
@@ -379,6 +381,12 @@ pub(super) fn open_vless_tls_client(proxy: &ResidentProxyPlan) -> Result<VlessTl
 pub(super) async fn open_async_vless_tls_client(
     proxy: &ResidentProxyPlan,
 ) -> Result<AsyncVlessTlsClient, String> {
+    open_async_resident_tls_client(proxy).await
+}
+
+pub(super) async fn open_async_resident_tls_client(
+    proxy: &ResidentProxyPlan,
+) -> Result<AsyncResidentTlsClient, String> {
     let tcp = open_proxy_tcp_stream_async(proxy.clone()).await?;
     if proxy.utls_fingerprint.is_some() {
         open_async_boring_vless_tls_client(proxy, tcp).await
@@ -390,6 +398,7 @@ pub(super) async fn open_async_vless_tls_client(
 async fn open_proxy_tcp_stream_async(proxy: ResidentProxyPlan) -> Result<TokioTcpStream, String> {
     let stream = task::spawn_blocking(move || {
         let target = resolve_proxy_addr(&proxy)?;
+        let protocol = proxy.protocol.clone();
         let connected = magic_tcp_connect(
             target,
             &TcpDirectDialOptions {
@@ -398,28 +407,28 @@ async fn open_proxy_tcp_stream_async(proxy: ResidentProxyPlan) -> Result<TokioTc
                 timeout: RESIDENT_CONNECT_TIMEOUT,
             },
         )
-        .map_err(|err| format!("connect VLESS server {target}: {err}"))?;
+        .map_err(|err| format!("connect {protocol} server {target}: {err}"))?;
         connected
             .stream
             .set_read_timeout(None)
-            .map_err(|err| format!("clear VLESS TCP read timeout: {err}"))?;
+            .map_err(|err| format!("clear {protocol} TCP read timeout: {err}"))?;
         connected
             .stream
             .set_write_timeout(None)
-            .map_err(|err| format!("clear VLESS TCP write timeout: {err}"))?;
+            .map_err(|err| format!("clear {protocol} TCP write timeout: {err}"))?;
         connected
             .stream
             .set_nonblocking(true)
-            .map_err(|err| format!("set VLESS TCP nonblocking: {err}"))?;
+            .map_err(|err| format!("set {protocol} TCP nonblocking: {err}"))?;
         connected
             .stream
             .set_nodelay(true)
-            .map_err(|err| format!("set VLESS TCP_NODELAY: {err}"))?;
+            .map_err(|err| format!("set {protocol} TCP_NODELAY: {err}"))?;
         Ok::<TcpStream, String>(connected.stream)
     })
     .await
-    .map_err(|err| format!("join VLESS TCP connect task: {err}"))??;
-    TokioTcpStream::from_std(stream).map_err(|err| format!("adopt async VLESS TCP stream: {err}"))
+    .map_err(|err| format!("join proxy TCP connect task: {err}"))??;
+    TokioTcpStream::from_std(stream).map_err(|err| format!("adopt async proxy TCP stream: {err}"))
 }
 
 async fn open_async_rustls_vless_tls_client(
@@ -861,4 +870,8 @@ pub(super) fn async_tls_underlay_name(client: &AsyncVlessTlsClient) -> &'static 
         AsyncVlessTlsEngine::Rustls { .. } => "rustls",
         AsyncVlessTlsEngine::Boring { .. } => "boringssl",
     }
+}
+
+pub(super) fn async_resident_tls_underlay_name(client: &AsyncResidentTlsClient) -> &'static str {
+    async_tls_underlay_name(client)
 }

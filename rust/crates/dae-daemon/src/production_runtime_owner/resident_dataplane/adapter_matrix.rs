@@ -113,13 +113,21 @@ const RESIDENT_LIVE_ADAPTER_MATRIX_ENTRIES: [ResidentLiveAdapterMatrixEntry; 10]
         ],
         missing: &["remote 38 live matrix evidence not recorded"],
     },
-    not_wired_entry(
+    tcp_wired_entry(
         "shadowsocks",
-        &["resident planner rejects this selected node shape"],
+        "stage18 AEAD TCP candidate uses resident Shadowsocks AEAD stream relay; SIP003 and 2022 variants remain fail-closed",
+        &[
+            "resident_dataplane::plan admits stage18 AEAD TCP candidate shapes",
+            "resident_dataplane::tcp dispatches through the Shadowsocks AEAD stream relay",
+        ],
     ),
-    not_wired_entry(
+    tcp_tls_wired_entry(
         "trojan",
-        &["resident planner rejects this selected node shape"],
+        "plain TLS/TCP endpoints use the resident TLS underlay; trojan-go transport combinations remain fail-closed",
+        &[
+            "resident_dataplane::plan admits plain TLS/TCP endpoint shapes",
+            "resident_dataplane::tcp sends the request header then relays TLS plaintext",
+        ],
     ),
     not_wired_entry(
         "vmess",
@@ -141,15 +149,77 @@ const RESIDENT_LIVE_ADAPTER_MATRIX_ENTRIES: [ResidentLiveAdapterMatrixEntry; 10]
         "anytls",
         &["resident planner rejects this selected node shape"],
     ),
-    not_wired_entry(
+    tcp_wired_entry(
         "http-proxy",
-        &["resident planner rejects this selected node shape"],
+        "plain HTTP CONNECT endpoints use the resident TCP relay; HTTPS proxy transport remains fail-closed",
+        &[
+            "resident_dataplane::plan admits plain HTTP CONNECT endpoint shapes",
+            "resident_dataplane::tcp dispatches through the HTTP CONNECT relay",
+        ],
     ),
-    not_wired_entry(
+    tcp_wired_entry(
         "socks5",
-        &["resident planner rejects this selected node shape"],
+        "SOCKS5 CONNECT endpoints use the resident TCP relay; UDP associate is not admitted yet",
+        &[
+            "resident_dataplane::plan admits SOCKS5 endpoint shapes",
+            "resident_dataplane::tcp dispatches through the SOCKS5 CONNECT relay",
+        ],
     ),
 ];
+
+const fn tcp_wired_entry(
+    formal_matrix_handler: &'static str,
+    fingerprint_behavior: &'static str,
+    evidence: &'static [&'static str],
+) -> ResidentLiveAdapterMatrixEntry {
+    ResidentLiveAdapterMatrixEntry {
+        handler: formal_matrix_handler,
+        formal_matrix_handler,
+        planner_admitted: true,
+        tcp_live_adapter: true,
+        udp_live_adapter: false,
+        transport_underlay: true,
+        route_group_connectivity: true,
+        selected_node_fail_closed: true,
+        fingerprint_underlay: true,
+        remote_live_matrix: false,
+        go_outbound_fallback_retired: false,
+        fingerprint_behavior,
+        evidence,
+        missing: &[
+            "UDP live adapter dispatch",
+            "remote 38 live matrix evidence",
+            "Go outbound fallback retirement for this handler",
+        ],
+    }
+}
+
+const fn tcp_tls_wired_entry(
+    formal_matrix_handler: &'static str,
+    fingerprint_behavior: &'static str,
+    evidence: &'static [&'static str],
+) -> ResidentLiveAdapterMatrixEntry {
+    ResidentLiveAdapterMatrixEntry {
+        handler: formal_matrix_handler,
+        formal_matrix_handler,
+        planner_admitted: true,
+        tcp_live_adapter: true,
+        udp_live_adapter: false,
+        transport_underlay: true,
+        route_group_connectivity: true,
+        selected_node_fail_closed: true,
+        fingerprint_underlay: true,
+        remote_live_matrix: false,
+        go_outbound_fallback_retired: false,
+        fingerprint_behavior,
+        evidence,
+        missing: &[
+            "UDP live adapter dispatch",
+            "remote 38 live matrix evidence",
+            "Go outbound fallback retirement for this handler",
+        ],
+    }
+}
 
 const fn not_wired_entry(
     formal_matrix_handler: &'static str,
