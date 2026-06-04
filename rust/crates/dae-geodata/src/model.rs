@@ -48,21 +48,19 @@ impl DomainType {
 pub struct LoadResult<T> {
     pub decode_ok: bool,
     pub fallback_ok: bool,
+    pub decoded_entry_bytes: usize,
     pub value: T,
 }
 
 pub fn load_geoip_bytes(data: &[u8], code: &str) -> Result<LoadResult<GeoIp>, GeoDataError> {
     match decode_entry_bytes(data, code) {
-        Ok(entry) => Ok(LoadResult {
-            decode_ok: true,
-            fallback_ok: false,
-            value: parse_geoip_entry(&entry)?,
-        }),
+        Ok(entry) => load_geoip_entry_bytes(&entry),
         Err(err) if err.is_full_read_fallback_candidate() => {
-            let value = find_geoip_from_list(data, code)?;
+            let (value, decoded_entry_bytes) = find_geoip_from_list(data, code)?;
             Ok(LoadResult {
                 decode_ok: false,
                 fallback_ok: true,
+                decoded_entry_bytes,
                 value,
             })
         }
@@ -71,18 +69,24 @@ pub fn load_geoip_bytes(data: &[u8], code: &str) -> Result<LoadResult<GeoIp>, Ge
     }
 }
 
+pub fn load_geoip_entry_bytes(entry: &[u8]) -> Result<LoadResult<GeoIp>, GeoDataError> {
+    Ok(LoadResult {
+        decode_ok: true,
+        fallback_ok: false,
+        decoded_entry_bytes: entry.len(),
+        value: parse_geoip_entry(entry)?,
+    })
+}
+
 pub fn load_geosite_bytes(data: &[u8], code: &str) -> Result<LoadResult<GeoSite>, GeoDataError> {
     match decode_entry_bytes(data, code) {
-        Ok(entry) => Ok(LoadResult {
-            decode_ok: true,
-            fallback_ok: false,
-            value: parse_geosite_entry(&entry)?,
-        }),
+        Ok(entry) => load_geosite_entry_bytes(&entry),
         Err(err) if err.is_full_read_fallback_candidate() => {
-            let value = find_geosite_from_list(data, code)?;
+            let (value, decoded_entry_bytes) = find_geosite_from_list(data, code)?;
             Ok(LoadResult {
                 decode_ok: false,
                 fallback_ok: true,
+                decoded_entry_bytes,
                 value,
             })
         }
@@ -91,21 +95,32 @@ pub fn load_geosite_bytes(data: &[u8], code: &str) -> Result<LoadResult<GeoSite>
     }
 }
 
-fn find_geoip_from_list(data: &[u8], code: &str) -> Result<GeoIp, GeoDataError> {
+pub fn load_geosite_entry_bytes(entry: &[u8]) -> Result<LoadResult<GeoSite>, GeoDataError> {
+    Ok(LoadResult {
+        decode_ok: true,
+        fallback_ok: false,
+        decoded_entry_bytes: entry.len(),
+        value: parse_geosite_entry(entry)?,
+    })
+}
+
+fn find_geoip_from_list(data: &[u8], code: &str) -> Result<(GeoIp, usize), GeoDataError> {
     for entry in entries_from_list(data)? {
+        let decoded_entry_bytes = entry.len();
         let geoip = parse_geoip_entry(&entry)?;
         if geoip.country_code.eq_ignore_ascii_case(code) {
-            return Ok(geoip);
+            return Ok((geoip, decoded_entry_bytes));
         }
     }
     Err(GeoDataError::CountryCodeNotFound(code.to_owned()))
 }
 
-fn find_geosite_from_list(data: &[u8], code: &str) -> Result<GeoSite, GeoDataError> {
+fn find_geosite_from_list(data: &[u8], code: &str) -> Result<(GeoSite, usize), GeoDataError> {
     for entry in entries_from_list(data)? {
+        let decoded_entry_bytes = entry.len();
         let geosite = parse_geosite_entry(&entry)?;
         if geosite.country_code.eq_ignore_ascii_case(code) {
-            return Ok(geosite);
+            return Ok((geosite, decoded_entry_bytes));
         }
     }
     Err(GeoDataError::GeoSiteCodeNotFound(code.to_owned()))
