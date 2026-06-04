@@ -66,6 +66,11 @@ routing {
     assert!(report["read_only"].as_bool().unwrap());
     assert!(!report["host_mutation_executed"].as_bool().unwrap());
     assert!(!report["network_io_executed"].as_bool().unwrap());
+    assert!(report["full_matrix_open"].as_bool().unwrap());
+    assert!(
+        report["full_matrix_row_count"].as_u64().unwrap() >= 10,
+        "{report}"
+    );
     assert!(report["planner_admitted"].as_bool().unwrap());
     assert_eq!(
         report["default_proxy"]["node_tag"].as_str().unwrap(),
@@ -81,6 +86,21 @@ routing {
             .as_str()
             .unwrap(),
         "link fp"
+    );
+    let rows = report["full_matrix_rows"].as_array().unwrap();
+    let live_row = rows
+        .iter()
+        .find(|row| row["formal_matrix_handler"].as_str().unwrap() == "vless")
+        .unwrap();
+    assert_eq!(live_row["planner_status"].as_str().unwrap(), "admitted");
+    assert_eq!(live_row["admitted_count"].as_u64().unwrap(), 1);
+    let absent_row = rows
+        .iter()
+        .find(|row| row["formal_matrix_handler"].as_str().unwrap() == "trojan")
+        .unwrap();
+    assert_eq!(
+        absent_row["planner_status"].as_str().unwrap(),
+        "not-present"
     );
     assert!(!String::from_utf8_lossy(&output.stdout).contains("01234567-89ab"));
     assert!(!String::from_utf8_lossy(&output.stdout).contains("vless://"));
@@ -130,6 +150,7 @@ routing {
     );
     let report: Value = serde_json::from_slice(&output.stdout).unwrap();
     assert_eq!(report["status"].as_str().unwrap(), "blocked");
+    assert!(report["full_matrix_open"].as_bool().unwrap());
     assert!(!report["planner_admitted"].as_bool().unwrap());
     assert!(report["selected_node_fail_closed"].as_bool().unwrap());
     assert!(
@@ -138,6 +159,14 @@ routing {
             .unwrap()
             .contains("selected unsupported ss node ss_live")
     );
+    let rows = report["full_matrix_rows"].as_array().unwrap();
+    let row = rows
+        .iter()
+        .find(|row| row["formal_matrix_handler"].as_str().unwrap() == "shadowsocks")
+        .unwrap();
+    assert_eq!(row["planner_status"].as_str().unwrap(), "blocked");
+    assert_eq!(row["candidate_count"].as_u64().unwrap(), 1);
+    assert_eq!(row["blocked_count"].as_u64().unwrap(), 1);
     assert!(!String::from_utf8_lossy(&output.stdout).contains("MTIzNDU2"));
     assert!(!String::from_utf8_lossy(&output.stdout).contains("ss://"));
     let _ = fs::remove_dir_all(temp);

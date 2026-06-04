@@ -12465,3 +12465,86 @@ Interpretation:
     matrix rows.
   - The complete live adapter matrix must stay blocked until real traffic
     evidence is recorded on remote 38 for the required matrix rows.
+
+## 2026-06-04 resident adapter full matrix open
+
+Scope:
+  - Extends `daed resident-adapter-matrix -c <config.dae> [--json]` from a
+    selected-node-only assessment into a full formal-row resident adapter
+    matrix assessment.
+  - This remains a read-only C8/C10 evidence helper. It does not start daed,
+    attach tproxy/eBPF, open outbound network sockets, restart services, or
+    mutate default paths.
+  - `full_matrix_open=true` means the command enumerates all formal rows and
+    runs config/planner admission per matching node candidate.
+  - `full_matrix_open=true` is not equivalent to
+    `resident_live_adapter_matrix_ready=true`; live traffic evidence is still
+    required before the matrix can be complete.
+
+Implementation rules:
+  - The full-row assessment reuses the real resident dataplane planner through
+    `build_proxy_plan`; it does not introduce a second parser/admission path.
+  - Matrix rows report `planner_status` as:
+      `admitted`, `blocked`, or `not-present`.
+  - Candidate reports are sanitized and must not emit raw node links or link
+    credentials.
+  - Top-level field names remain protocol-generic:
+      `full_matrix_open`, `full_matrix_rows`,
+      `full_matrix_present_row_count`, `full_matrix_admitted_row_count`,
+      `full_matrix_complete`.
+  - Protocol names are allowed only as formal matrix row values, fixtures,
+    tests, handler internals, or evidence descriptions.
+
+New report fields:
+  - `full_matrix_open`
+  - `full_matrix_row_count`
+  - `full_matrix_present_row_count`
+  - `full_matrix_admitted_row_count`
+  - `full_matrix_complete`
+  - `full_matrix_completion_blocker`
+  - `full_matrix_rows`
+
+Remote `38.65.91.47` non-mutating validation:
+  - Uploaded temporary candidate:
+      `/tmp/daed-native-full-matrix-a3df5a3e`
+  - Candidate sha256:
+      `a3df5a3ed6a8c8da3dae8a50d70571949b6a0e1e238f2ef1166d7430e9d34b8b`
+  - Ran:
+      `/tmp/daed-native-full-matrix-a3df5a3e resident-adapter-matrix -c /etc/dae/config.dae --json`
+  - Result summary:
+      `schema='resident-live-adapter-config-assessment-v1'`,
+      `status='admitted'`,
+      `planner_admitted=True`,
+      `default_node_tag='vless_live'`,
+      `default_protocol='vless'`,
+      `default_fingerprint_underlay=True`,
+      `full_matrix_open=True`,
+      `full_matrix_row_count=10`,
+      `full_matrix_present_row_count=1`,
+      `full_matrix_admitted_row_count=1`,
+      `full_matrix_complete=False`.
+  - Formal row summary on the current remote config:
+      `vless admitted 1 1 0`,
+      `shadowsocks not-present 0 0 0`,
+      `trojan not-present 0 0 0`,
+      `vmess not-present 0 0 0`,
+      `hysteria2 not-present 0 0 0`,
+      `tuic not-present 0 0 0`,
+      `juicity not-present 0 0 0`,
+      `anytls not-present 0 0 0`,
+      `http-proxy not-present 0 0 0`,
+      `socks5 not-present 0 0 0`.
+  - Remote report link/secret scan:
+      no raw `vless://`, `ss://`, `trojan://`, `vmess://`,
+      `hysteria2://`, `hy2://`, `tuic://`, `juicity://`, `anytls://`,
+      sample UUID fragment, or sample SS credential fragment found.
+  - No system binary replacement, service restart, tproxy/eBPF attach, or
+    default path mutation was performed.
+
+Interpretation:
+  - The full formal matrix is now open for planner/config inspection.
+  - Current remote 38 config only supplies one present/admitted formal row, so
+    the live matrix correctly remains incomplete.
+  - The next C8/C10 evidence step is to provide a complete remote 38 live
+    fixture and run real traffic rows; do not mark unsupported, unwired, or
+    untested rows ready based only on this read-only command.
