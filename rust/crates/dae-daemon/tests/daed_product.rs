@@ -157,7 +157,7 @@ routing {
         report["planner_error"]
             .as_str()
             .unwrap()
-            .contains("selected unsupported ss node ss_live")
+            .contains("admit Shadowsocks cipher for node ss_live")
     );
     let rows = report["full_matrix_rows"].as_array().unwrap();
     let row = rows
@@ -169,6 +169,92 @@ routing {
     assert_eq!(row["blocked_count"].as_u64().unwrap(), 1);
     assert!(!String::from_utf8_lossy(&output.stdout).contains("MTIzNDU2"));
     assert!(!String::from_utf8_lossy(&output.stdout).contains("ss://"));
+    let _ = fs::remove_dir_all(temp);
+}
+
+#[test]
+fn daed_resident_adapter_matrix_reports_first_batch_rows_admitted_without_secrets() {
+    let temp = temp_dir("resident-adapter-matrix-first-batch");
+    let config = temp.join("config.dae");
+    fs::write(
+        &config,
+        r#"
+global {
+  lan_interface: daerust0
+  allow_insecure: false
+  so_mark_from_dae: 1234
+  mptcp: false
+}
+node {
+  vless_live: 'vless://01234567-89ab-cdef-0123-456789abcdef@example.com:443?security=tls&type=tcp&sni=office.example&flow=xtls-rprx-vision&fp=chrome&alpn=h2,http/1.1'
+  socks_live: 'socks5://matrix:matrix-socks-pass@example.com:28447#socks'
+  http_live: 'http://matrix:matrix-http-pass@example.com:28448#http'
+  ss_live: 'ss://aes-128-gcm:matrix-ss-pass@example.com:28446#ss'
+  trojan_live: 'trojan://matrix-trojan-pass@example.com:28444?security=tls&sni=office.example#trojan'
+}
+group {
+  proxy {
+    filter: name(vless_live)
+    policy: fixed(0)
+  }
+}
+routing {
+  l4proto(tcp) && dport(443) -> proxy
+  fallback: direct
+}
+"#,
+    )
+    .unwrap();
+    fs::set_permissions(&config, fs::Permissions::from_mode(0o600)).unwrap();
+
+    let output = Command::new(binary())
+        .args(["resident-adapter-matrix", "-c"])
+        .arg(&config)
+        .arg("--json")
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "stderr={}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let report: Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(report["status"].as_str().unwrap(), "admitted");
+    assert!(report["full_matrix_open"].as_bool().unwrap());
+    assert_eq!(
+        report["full_matrix_admitted_row_count"].as_u64().unwrap(),
+        4
+    );
+    let rows = report["full_matrix_rows"].as_array().unwrap();
+    for handler in ["vless", "socks5", "http-proxy", "shadowsocks"] {
+        let row = rows
+            .iter()
+            .find(|row| row["formal_matrix_handler"].as_str().unwrap() == handler)
+            .unwrap();
+        assert_eq!(row["planner_status"].as_str().unwrap(), "admitted");
+        assert_eq!(row["candidate_count"].as_u64().unwrap(), 1);
+        assert_eq!(row["admitted_count"].as_u64().unwrap(), 1);
+    }
+    let trojan = rows
+        .iter()
+        .find(|row| row["formal_matrix_handler"].as_str().unwrap() == "trojan")
+        .unwrap();
+    assert_eq!(trojan["planner_status"].as_str().unwrap(), "blocked");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    for secret in [
+        "vless://",
+        "socks5://",
+        "http://matrix",
+        "ss://",
+        "trojan://",
+        "matrix-socks-pass",
+        "matrix-http-pass",
+        "matrix-ss-pass",
+        "matrix-trojan-pass",
+        "01234567-89ab",
+    ] {
+        assert!(!stdout.contains(secret), "{secret} leaked in {stdout}");
+    }
     let _ = fs::remove_dir_all(temp);
 }
 

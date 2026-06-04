@@ -42,6 +42,14 @@ const RESIDENT_TCP_FLOW_STACK_BYTES_ENV: &str = "DAE_RESIDENT_TCP_FLOW_STACK_BYT
 const RESIDENT_TCP_FLOW_STACK_BYTES_DEFAULT: usize = 512 * 1024;
 const RESIDENT_TCP_FLOW_STACK_BYTES_MIN: usize = 128 * 1024;
 const RESIDENT_TCP_FLOW_STACK_BYTES_MAX: usize = 8 * 1024 * 1024;
+const RESIDENT_UDP_PACKET_WORKERS_ENV: &str = "DAE_RESIDENT_UDP_PACKET_WORKERS";
+const RESIDENT_UDP_PACKET_WORKERS_DEFAULT: usize = 64;
+const RESIDENT_UDP_PACKET_WORKERS_MIN: usize = 1;
+const RESIDENT_UDP_PACKET_WORKERS_MAX: usize = 1024;
+const RESIDENT_UDP_PACKET_STACK_BYTES_ENV: &str = "DAE_RESIDENT_UDP_PACKET_STACK_BYTES";
+const RESIDENT_UDP_PACKET_STACK_BYTES_DEFAULT: usize = 256 * 1024;
+const RESIDENT_UDP_PACKET_STACK_BYTES_MIN: usize = 128 * 1024;
+const RESIDENT_UDP_PACKET_STACK_BYTES_MAX: usize = 4 * 1024 * 1024;
 const XTLS_RPRX_VISION: &str = "xtls-rprx-vision";
 const VISION_COMMAND_CONTINUE: u8 = 0;
 const VISION_COMMAND_END: u8 = 1;
@@ -246,6 +254,8 @@ pub(super) fn start_resident_dataplane_workers(
     };
     let event_lock = Arc::new(Mutex::new(()));
     let tcp_flow_stack_bytes = resident_tcp_flow_stack_bytes();
+    let udp_packet_workers = resident_udp_packet_workers();
+    let udp_packet_stack_bytes = resident_udp_packet_stack_bytes();
     let mut handles = Vec::new();
     {
         let stop = Arc::clone(&stop);
@@ -274,7 +284,15 @@ pub(super) fn start_resident_dataplane_workers(
         let metrics = Arc::clone(&metrics);
         handles.push(thread::spawn(move || {
             resident_udp_loop(
-                udp_socket, proxy, dns, stop, event_file, event_lock, metrics,
+                udp_socket,
+                proxy,
+                dns,
+                stop,
+                event_file,
+                event_lock,
+                metrics,
+                udp_packet_workers,
+                udp_packet_stack_bytes,
             )
         }));
     }
@@ -298,6 +316,10 @@ pub(super) fn start_resident_dataplane_workers(
         "udp_worker_started": true,
         "tcp_flow_stack_bytes": tcp_flow_stack_bytes,
         "tcp_flow_stack_bytes_env": RESIDENT_TCP_FLOW_STACK_BYTES_ENV,
+        "udp_packet_workers": udp_packet_workers,
+        "udp_packet_workers_env": RESIDENT_UDP_PACKET_WORKERS_ENV,
+        "udp_packet_stack_bytes": udp_packet_stack_bytes,
+        "udp_packet_stack_bytes_env": RESIDENT_UDP_PACKET_STACK_BYTES_ENV,
         "event_file": path_string(&event_file),
         "routing_tuple_map_id": routing_tuple_map_id,
         "tcp_dial_mode": tcp_router.dial_mode_name(),
@@ -560,12 +582,36 @@ fn resident_proxy_plan_summary_json(proxy: &plan::ResidentProxyPlan) -> Value {
 }
 
 fn resident_tcp_flow_stack_bytes() -> usize {
-    std::env::var(RESIDENT_TCP_FLOW_STACK_BYTES_ENV)
+    bounded_env_usize(
+        RESIDENT_TCP_FLOW_STACK_BYTES_ENV,
+        RESIDENT_TCP_FLOW_STACK_BYTES_DEFAULT,
+        RESIDENT_TCP_FLOW_STACK_BYTES_MIN,
+        RESIDENT_TCP_FLOW_STACK_BYTES_MAX,
+    )
+}
+
+fn resident_udp_packet_workers() -> usize {
+    bounded_env_usize(
+        RESIDENT_UDP_PACKET_WORKERS_ENV,
+        RESIDENT_UDP_PACKET_WORKERS_DEFAULT,
+        RESIDENT_UDP_PACKET_WORKERS_MIN,
+        RESIDENT_UDP_PACKET_WORKERS_MAX,
+    )
+}
+
+fn resident_udp_packet_stack_bytes() -> usize {
+    bounded_env_usize(
+        RESIDENT_UDP_PACKET_STACK_BYTES_ENV,
+        RESIDENT_UDP_PACKET_STACK_BYTES_DEFAULT,
+        RESIDENT_UDP_PACKET_STACK_BYTES_MIN,
+        RESIDENT_UDP_PACKET_STACK_BYTES_MAX,
+    )
+}
+
+fn bounded_env_usize(name: &str, default: usize, min: usize, max: usize) -> usize {
+    std::env::var(name)
         .ok()
         .and_then(|value| value.trim().parse::<usize>().ok())
-        .unwrap_or(RESIDENT_TCP_FLOW_STACK_BYTES_DEFAULT)
-        .clamp(
-            RESIDENT_TCP_FLOW_STACK_BYTES_MIN,
-            RESIDENT_TCP_FLOW_STACK_BYTES_MAX,
-        )
+        .unwrap_or(default)
+        .clamp(min, max)
 }

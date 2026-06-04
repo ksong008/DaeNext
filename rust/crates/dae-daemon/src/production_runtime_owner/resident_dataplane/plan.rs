@@ -5,9 +5,12 @@ use dae_config::{Config, DynamicFunctionValue, Group};
 use dae_core_types::OutboundIndex;
 use dae_datapath::TcpDialMode;
 use dae_outbound::{
+    http_proxy::{HttpProxyLink, HttpScheme},
+    shadowsocks::{ShadowsocksLink, cipher_spec},
     shared_transport::{UtlsFingerprint, resolve_utls_client_hello_id},
     vless::{VLESSLink, password_to_key},
 };
+use url::Url;
 
 use super::{
     XTLS_RPRX_VISION,
@@ -49,6 +52,26 @@ enum GroupNodeSelection {
 }
 
 #[derive(Clone, Debug)]
+pub(super) enum ResidentProxyProtocolPlan {
+    VlessVisionTcpTls {
+        key: [u8; 16],
+    },
+    Socks5Tcp {
+        username: String,
+        password: String,
+    },
+    HttpProxyTcp {
+        username: String,
+        password: String,
+    },
+    ShadowsocksAeadTcp {
+        cipher: String,
+        password: String,
+        salt_len: usize,
+    },
+}
+
+#[derive(Clone, Debug)]
 pub(super) struct ResidentProxyPlan {
     pub(super) protocol: String,
     pub(super) group_name: String,
@@ -62,9 +85,21 @@ pub(super) struct ResidentProxyPlan {
     pub(super) tls: String,
     pub(super) allow_insecure: bool,
     pub(super) utls_fingerprint: Option<ResidentUtlsFingerprintPlan>,
-    pub(super) key: [u8; 16],
+    pub(super) handler: ResidentProxyProtocolPlan,
     pub(super) mark: u32,
     pub(super) mptcp: bool,
+}
+
+impl ResidentProxyPlan {
+    pub(super) fn vless_key(&self) -> Result<[u8; 16], String> {
+        match self.handler {
+            ResidentProxyProtocolPlan::VlessVisionTcpTls { key } => Ok(key),
+            _ => Err(format!(
+                "resident proxy {} node {} is not a VLESS handler",
+                self.protocol, self.node_tag
+            )),
+        }
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -174,11 +209,23 @@ fn build_proxy_plan(
     link: String,
 ) -> Result<ResidentProxyPlan, String> {
     let scheme = link_scheme(&link).unwrap_or_default();
-    if scheme != "vless" {
-        return Err(format!(
+    match scheme.as_str() {
+        "vless" => build_vless_proxy_plan(config, group_name, node_tag, link),
+        "socks" | "socks5" => build_socks5_proxy_plan(config, group_name, node_tag, link),
+        "http" | "https" => build_http_proxy_plan(config, group_name, node_tag, link),
+        "ss" | "shadowsocks" => build_shadowsocks_proxy_plan(config, group_name, node_tag, link),
+        _ => Err(format!(
             "resident dataplane selected unsupported {scheme} node {node_tag}; no Rust protocol handler is admitted for this node yet, keep Go outbound for this config",
-        ));
+        )),
     }
+}
+
+fn build_vless_proxy_plan(
+    config: &Config,
+    group_name: String,
+    node_tag: String,
+    link: String,
+) -> Result<ResidentProxyPlan, String> {
     let vless =
         VLESSLink::parse(&link).map_err(|err| format!("parse VLESS node {node_tag}: {err}"))?;
     vless
@@ -239,7 +286,131 @@ fn build_proxy_plan(
         tls: vless.tls,
         allow_insecure: false,
         utls_fingerprint,
-        key,
+        handler: ResidentProxyProtocolPlan::VlessVisionTcpTls { key },
+        mark: config.global.so_mark_from_dae,
+        mptcp: config.global.mptcp,
+    })
+}
+
+fn build_socks5_proxy_plan(
+    config: &Config,
+    group_name: String,
+    node_tag: String,
+    link: String,
+) -> Result<ResidentProxyPlan, String> {
+    let parsed = Url::parse(&link).map_err(|err| format!("parse SOCKS node {node_tag}: {err}"))?;
+    if !matches!(parsed.scheme(), "socks" | "socks5") {
+        return Err(format!(
+            "resident dataplane socks5 handler got unsupported scheme {} for node {node_tag}",
+            parsed.scheme()
+        ));
+    }
+    let server_host = parsed
+        .host_str()
+        .ok_or_else(|| format!("parse SOCKS node {node_tag}: missing host"))?
+        .to_owned();
+    let server_port = parsed.port().unwrap_or(1080);
+    Ok(ResidentProxyPlan {
+        protocol: "socks5".to_owned(),
+        group_name,
+        node_tag,
+        server_host,
+        server_port,
+        server_name: String::new(),
+        alpn: Vec::new(),
+        flow: String::new(),
+        net: "tcp".to_owned(),
+        tls: "none".to_owned(),
+        allow_insecure: false,
+        utls_fingerprint: None,
+        handler: ResidentProxyProtocolPlan::Socks5Tcp {
+            username: parsed.username().to_owned(),
+            password: parsed.password().unwrap_or_default().to_owned(),
+        },
+        mark: config.global.so_mark_from_dae,
+        mptcp: config.global.mptcp,
+    })
+}
+
+fn build_http_proxy_plan(
+    config: &Config,
+    group_name: String,
+    node_tag: String,
+    link: String,
+) -> Result<ResidentProxyPlan, String> {
+    let parsed = HttpProxyLink::parse(&link)
+        .map_err(|err| format!("parse HTTP proxy node {node_tag}: {err}"))?;
+    if parsed.protocol != HttpScheme::Http {
+        return Err(format!(
+            "resident dataplane first-batch HTTP proxy handler admits plain http proxy endpoints only for node {node_tag}"
+        ));
+    }
+    if parsed.transport {
+        return Err(format!(
+            "resident dataplane first-batch HTTP proxy handler does not admit HTTP transport mode for node {node_tag}"
+        ));
+    }
+    if parsed.allow_insecure {
+        return Err(format!(
+            "resident dataplane first-batch HTTP proxy handler does not admit allow_insecure for node {node_tag}"
+        ));
+    }
+    Ok(ResidentProxyPlan {
+        protocol: "http-proxy".to_owned(),
+        group_name,
+        node_tag,
+        server_host: parsed.server,
+        server_port: parsed.port,
+        server_name: String::new(),
+        alpn: Vec::new(),
+        flow: String::new(),
+        net: "tcp".to_owned(),
+        tls: "none".to_owned(),
+        allow_insecure: false,
+        utls_fingerprint: None,
+        handler: ResidentProxyProtocolPlan::HttpProxyTcp {
+            username: parsed.username,
+            password: parsed.password,
+        },
+        mark: config.global.so_mark_from_dae,
+        mptcp: config.global.mptcp,
+    })
+}
+
+fn build_shadowsocks_proxy_plan(
+    config: &Config,
+    group_name: String,
+    node_tag: String,
+    link: String,
+) -> Result<ResidentProxyPlan, String> {
+    let parsed = ShadowsocksLink::parse(&link)
+        .map_err(|err| format!("parse Shadowsocks node {node_tag}: {err}"))?;
+    if !parsed.plugin.name.is_empty() {
+        return Err(format!(
+            "resident dataplane first-batch Shadowsocks handler does not admit SIP003 plugin {} for node {node_tag}",
+            parsed.plugin.name
+        ));
+    }
+    let spec = cipher_spec(&parsed.cipher)
+        .map_err(|err| format!("admit Shadowsocks cipher for node {node_tag}: {err}"))?;
+    Ok(ResidentProxyPlan {
+        protocol: "shadowsocks".to_owned(),
+        group_name,
+        node_tag,
+        server_host: parsed.server,
+        server_port: parsed.port,
+        server_name: String::new(),
+        alpn: Vec::new(),
+        flow: String::new(),
+        net: "tcp".to_owned(),
+        tls: "aead".to_owned(),
+        allow_insecure: false,
+        utls_fingerprint: None,
+        handler: ResidentProxyProtocolPlan::ShadowsocksAeadTcp {
+            cipher: spec.cipher.to_owned(),
+            password: parsed.password,
+            salt_len: spec.salt_len,
+        },
         mark: config.global.so_mark_from_dae,
         mptcp: config.global.mptcp,
     })
@@ -597,7 +768,7 @@ mod tests {
     }
 
     #[test]
-    fn resident_dataplane_plan_rejects_non_vless_node_before_vless_parser() {
+    fn resident_dataplane_plan_rejects_unwired_shadowsocks_variant() {
         let config = parse_config(
             r#"
         global {
@@ -622,9 +793,102 @@ mod tests {
         "#,
         );
         let err = build_resident_dataplane_plan(&config).unwrap_err();
-        assert!(err.contains("selected unsupported ss node ss_live"));
-        assert!(err.contains("no Rust protocol handler is admitted"));
+        assert!(err.contains("admit Shadowsocks cipher for node ss_live"));
+        assert!(err.contains("cipher is not stage18 AEAD TCP candidate"));
         assert!(!err.contains("parse VLESS node ss_live"));
+    }
+
+    #[test]
+    fn resident_dataplane_plan_admits_first_batch_tcp_handlers() {
+        let config = parse_config(
+            r#"
+        global {
+        lan_interface: daerust0
+        allow_insecure: false
+        so_mark_from_dae: 1234
+        mptcp: false
+        }
+        routing {
+        fallback: direct
+        }
+        "#,
+        );
+        let socks = build_resident_proxy_plan_for_node(
+            &config,
+            "proxy".to_owned(),
+            "socks_live".to_owned(),
+            "socks5://matrix:matrix-socks-pass@203.0.113.10:28447#socks".to_owned(),
+        )
+        .unwrap();
+        assert_eq!(socks.protocol, "socks5");
+        assert_eq!(socks.server_host, "203.0.113.10");
+        assert_eq!(socks.server_port, 28447);
+        assert!(matches!(
+            socks.handler,
+            ResidentProxyProtocolPlan::Socks5Tcp { .. }
+        ));
+
+        let http = build_resident_proxy_plan_for_node(
+            &config,
+            "proxy".to_owned(),
+            "http_live".to_owned(),
+            "http://matrix:matrix-http-pass@203.0.113.10:28448#http".to_owned(),
+        )
+        .unwrap();
+        assert_eq!(http.protocol, "http-proxy");
+        assert_eq!(http.tls, "none");
+        assert!(matches!(
+            http.handler,
+            ResidentProxyProtocolPlan::HttpProxyTcp { .. }
+        ));
+
+        let shadowsocks = build_resident_proxy_plan_for_node(
+            &config,
+            "proxy".to_owned(),
+            "ss_live".to_owned(),
+            "ss://aes-128-gcm:matrix-ss-pass@203.0.113.10:28446#ss".to_owned(),
+        )
+        .unwrap();
+        assert_eq!(shadowsocks.protocol, "shadowsocks");
+        assert_eq!(shadowsocks.tls, "aead");
+        assert!(matches!(
+            shadowsocks.handler,
+            ResidentProxyProtocolPlan::ShadowsocksAeadTcp { salt_len: 16, .. }
+        ));
+    }
+
+    #[test]
+    fn resident_dataplane_plan_keeps_first_batch_unsupported_shapes_blocked() {
+        let config = parse_config(
+            r#"
+        global {
+        lan_interface: daerust0
+        allow_insecure: false
+        so_mark_from_dae: 1234
+        mptcp: false
+        }
+        routing {
+        fallback: direct
+        }
+        "#,
+        );
+        let https = build_resident_proxy_plan_for_node(
+            &config,
+            "proxy".to_owned(),
+            "https_live".to_owned(),
+            "https://matrix:matrix-http-pass@203.0.113.10:28448#https".to_owned(),
+        )
+        .unwrap_err();
+        assert!(https.contains("plain http proxy endpoints only"));
+
+        let plugin = build_resident_proxy_plan_for_node(
+            &config,
+            "proxy".to_owned(),
+            "ss_plugin".to_owned(),
+            "ss://aes-128-gcm:matrix-ss-pass@203.0.113.10:28446?plugin=simple-obfs%3Bobfs%3Dhttp#ss-plugin".to_owned(),
+        )
+        .unwrap_err();
+        assert!(plugin.contains("does not admit SIP003 plugin"));
     }
 
     #[test]

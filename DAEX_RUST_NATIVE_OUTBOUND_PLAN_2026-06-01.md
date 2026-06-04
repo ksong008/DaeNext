@@ -12548,3 +12548,641 @@ Interpretation:
   - The next C8/C10 evidence step is to provide a complete remote 38 live
     fixture and run real traffic rows; do not mark unsupported, unwired, or
     untested rows ready based only on this read-only command.
+
+## 2026-06-04 JP real protocol matrix fixture and remote 38 run
+
+Scope:
+  - Prepared a dedicated JP server-side protocol fixture on `156.246.90.2`.
+  - Executed the real protocol connectivity matrix from remote `38.65.91.47`.
+  - This section records endpoint/protocol evidence only. It does not claim
+    Rust resident adapter full coverage by itself.
+  - No SSH password, raw node link, UUID, or node password is recorded here.
+
+JP server fixture:
+  - New systemd services:
+      `daex-matrix-jp.service`,
+      `daex-matrix-juicity.service`.
+  - Existing services on JP were not replaced:
+      existing sing-box on `443` was left intact,
+      existing `/opt/xhttp-test-156` xray test process was left intact.
+  - `daex-matrix-jp.service` runs sing-box `1.12.21`.
+  - `daex-matrix-juicity.service` runs juicity-server `v0.5.0`.
+  - Certificate/SNI used by the fixture:
+      `lovely.moe` with existing `/root/.ssl/sing-box.crt` and key on JP.
+  - Listening rows:
+      `vless` on TCP `28443`,
+      `trojan` on TCP `28444`,
+      `vmess` on TCP `28445`,
+      `shadowsocks` on TCP `28446`,
+      `socks5` on TCP `28447`,
+      `http-proxy` on TCP `28448`,
+      `hysteria2` on UDP `28449`,
+      `tuic` on UDP `28450`,
+      `anytls` on TCP `28451`,
+      `juicity` on UDP `28452`.
+  - JP service status after setup:
+      both services active.
+
+Remote 38 real protocol connectivity matrix:
+  - Client host:
+      `38.65.91.47`.
+  - Target used for every row:
+      `http://example.com/`.
+  - Client tools:
+      temporary sing-box client for all rows except juicity,
+      temporary juicity-client for the juicity row.
+  - Method:
+      each row started a local SOCKS listener on remote 38, routed that listener
+      through the matching JP protocol endpoint, then used curl through the local
+      SOCKS listener to fetch the target URL.
+  - Result schema:
+      `daex-jp-real-protocol-matrix-v1`.
+  - Result summary:
+      `row_count=10`,
+      `pass_count=10`,
+      `all_pass=true`.
+  - Row results:
+      `vless true http_code=200`,
+      `trojan true http_code=200`,
+      `vmess true http_code=200`,
+      `shadowsocks true http_code=200`,
+      `socks5 true http_code=200`,
+      `http-proxy true http_code=200`,
+      `hysteria2 true http_code=200`,
+      `tuic true http_code=200`,
+      `anytls true http_code=200`,
+      `juicity true http_code=200`.
+
+Remote 38 Rust resident adapter assessment against the JP full fixture:
+  - Used temporary candidate:
+      `/tmp/daed-native-full-matrix-eb61d5b1`
+  - Candidate sha256:
+      `a3df5a3ed6a8c8da3dae8a50d70571949b6a0e1e238f2ef1166d7430e9d34b8b`
+  - Command:
+      `resident-adapter-matrix -c <temporary JP full fixture config> --json`
+  - Result schema:
+      `resident-live-adapter-config-assessment-v1`.
+  - Result summary:
+      `status='admitted'`,
+      `planner_admitted=True`,
+      `default_node='jp_vless'`,
+      `default_fingerprint_underlay=True`,
+      `full_matrix_open=True`,
+      `full_matrix_row_count=10`,
+      `full_matrix_present_row_count=10`,
+      `full_matrix_admitted_row_count=1`,
+      `full_matrix_complete=False`.
+  - Row summary:
+      `vless admitted 1 1 0`,
+      `shadowsocks blocked 1 0 1`,
+      `trojan blocked 1 0 1`,
+      `vmess blocked 1 0 1`,
+      `hysteria2 blocked 1 0 1`,
+      `tuic blocked 1 0 1`,
+      `juicity blocked 1 0 1`,
+      `anytls blocked 1 0 1`,
+      `http-proxy blocked 1 0 1`,
+      `socks5 blocked 1 0 1`.
+  - Report leak scan:
+      no raw proxy link, fixture UUID, or fixture password string was present in
+      the generated real-protocol or resident assessment reports.
+
+Cleanup and retained state:
+  - Remote 38 temporary client configs, raw node fixture config, temporary
+    sing-box client, temporary juicity-client, temporary daed candidate, and old
+    matrix test leftovers were removed.
+  - Remote 38 retained only:
+      `/tmp/daex-matrix-38-summary.txt`
+      with a sanitized summary.
+  - JP retains the new matrix services and their root-owned configs because
+    they are the server-side fixture for repeat matrix runs.
+
+Interpretation:
+  - The JP server-side real protocol fixture is usable for all ten formal
+    protocol rows from remote 38.
+  - This removes the previous blocker that remote 38 did not have a complete
+    server-side live fixture to test against.
+  - The Rust resident adapter still does not have full live selected-node
+    protocol coverage: with all ten JP nodes present, only the current VLESS
+    Vision TCP/TLS/fingerprint row is admitted; the other nine rows correctly
+    remain blocked by the resident planner.
+  - Therefore this evidence should be recorded as:
+      server-side/live-protocol-fixture ready,
+      current resident full-matrix config assessment complete,
+      resident adapter full protocol dispatch still pending.
+
+## 2026-06-04 resident adapter first batch admission start
+
+Scope:
+  - Starts the first resident adapter admission work item under the existing
+    C8/C10 matrix closure.
+  - This is not a new C0-C10 stage and does not introduce a protocol-specific
+    top-level gate name.
+  - Protocol names in this section are matrix row values/evidence only.
+
+First batch rows:
+  - `socks5`
+  - `http-proxy`
+  - `shadowsocks`
+
+Admission rule:
+  - A first-batch row may become `planner_status='admitted'` only when the
+    resident planner builds a protocol-specific executable Rust proxy plan and
+    the resident TCP adapter can route selected TCP flows through that plan.
+  - Do not mark a row admitted by editing only
+    `resident_dataplane/adapter_matrix.rs`.
+  - Do not mark UDP/full-live readiness for a first-batch row until UDP behavior
+    is implemented and remotely verified.
+  - Do not claim `resident_live_adapter_matrix_ready=true` while any formal row
+    still lacks required live evidence.
+
+Implementation boundary:
+  - Replace the VLESS-only `build_proxy_plan` hard gate with protocol dispatch
+    for the first-batch rows while preserving fail-closed behavior for every
+    row that is still unwired.
+  - Extend `ResidentProxyPlan` into a protocol-shaped runtime plan rather than
+    storing first-batch secrets in generic VLESS fields.
+  - Reuse existing `dae-outbound` parser/packet helpers where they exist.
+  - Keep link/global fingerprint handling on the existing fingerprint-aware TLS
+    path. First-batch plain TCP rows must not silently consume fingerprint
+    settings.
+
+Remote validation target:
+  - Use JP fixture `156.246.90.2` as the server-side matrix endpoint.
+  - Use remote `38.65.91.47` for real traffic evidence.
+  - Do not use `10.10.10.2` for this protocol/live adapter matrix.
+
+Expected first-batch completion evidence:
+  - `resident-adapter-matrix` against the full JP fixture reports the first
+    batch as present/admitted while still blocking rows that are not wired.
+  - A real TCP flow smoke from remote 38 through the Rust resident adapter
+    succeeds for each first-batch row.
+  - Event logs show the resident protocol handler used for the selected row, and
+    no Go outbound fallback was used.
+
+## 2026-06-04 resident adapter first batch read-only validation
+
+Scope:
+  - Continues the first resident adapter admission work item under existing
+    C8/C10 matrix closure.
+  - This records implementation and read-only planner evidence only.
+  - This does not mark UDP readiness, full wired readiness, or remote live
+    traffic readiness.
+  - No SSH password, raw node link, UUID, or node password is recorded here.
+
+Implementation summary:
+  - `ResidentProxyPlan` is now protocol-shaped through
+    `ResidentProxyProtocolPlan` instead of storing every handler in VLESS-only
+    fields.
+  - First-batch planner dispatch is admitted for these matrix row shapes:
+      `socks5` plain TCP,
+      `http-proxy` plain HTTP CONNECT TCP,
+      `shadowsocks` ordinary stage18 AEAD TCP.
+  - Unsupported first-batch shapes remain fail-closed:
+      HTTPS proxy endpoints,
+      HTTP transport mode,
+      HTTP proxy `allow_insecure`,
+      Shadowsocks SIP003/plugin,
+      Shadowsocks 2022/non-stage18 AEAD ciphers.
+  - Resident TCP runtime dispatch now routes first-batch selected TCP flows to
+    protocol-specific Rust handlers.
+  - VLESS Vision TCP/TLS keeps the existing fingerprint-aware TLS dispatcher.
+  - First-batch plain TCP rows do not consume link/global fingerprint settings.
+  - Shadowsocks AEAD TCP relay starts upload before waiting for response salt and
+    uses a shared stop flag so the upload relay can be joined on close/error.
+
+Local validation:
+  - `cargo fmt --manifest-path rust/Cargo.toml --all`: pass.
+  - `cargo check --manifest-path rust/Cargo.toml -p dae-daemon`: pass.
+  - `cargo test --manifest-path rust/Cargo.toml -p dae-daemon production_runtime_owner::resident_dataplane`:
+      pass, `46 passed`.
+  - `cargo test --manifest-path rust/Cargo.toml -p dae-daemon --test daed_product daed_resident_adapter_matrix`:
+      pass, `4 passed`.
+  - `cargo test --manifest-path rust/Cargo.toml -p dae-daemon`:
+      pass, `205` unit tests plus integration/doc test groups passed.
+  - `cargo build --manifest-path rust/Cargo.toml -p dae-daemon --bin daed --release --features native-ebpf`:
+      pass.
+  - `git diff --check`: pass.
+
+Release candidate used for remote read-only assessment:
+  - Local path:
+      `rust/target/release/daed`.
+  - Candidate sha256:
+      `060800e19d2bf2378ca6505fbf1f2373a6f593c8b792248538543e91e5b0e399`.
+  - Candidate size:
+      `18M`.
+
+Remote 38 read-only matrix assessment:
+  - Host:
+      `38.65.91.47`.
+  - Temporary candidate path:
+      `/tmp/daed-native-first-batch-060800e1`.
+  - Command:
+      `resident-adapter-matrix -c <temporary JP full fixture config> --json`.
+  - Result schema:
+      `resident-live-adapter-config-assessment-v1`.
+  - Result summary:
+      `status='admitted'`,
+      `planner_admitted=True`,
+      `full_matrix_open=True`,
+      `full_matrix_row_count=10`,
+      `full_matrix_present_row_count=10`,
+      `full_matrix_admitted_row_count=4`,
+      `full_matrix_complete=False`,
+      `resident_live_adapter_matrix_ready=False`,
+      `resident_live_adapter_wired_matrix_ready=False`,
+      `resident_live_adapter_remote_live_matrix_ready=False`,
+      `network_io_executed=False`,
+      `live_traffic_executed=False`.
+  - Admitted read-only planner rows:
+      `vless`,
+      `shadowsocks`,
+      `http-proxy`,
+      `socks5`.
+  - Still blocked rows:
+      `trojan`,
+      `vmess`,
+      `hysteria2`,
+      `tuic`,
+      `juicity`,
+      `anytls`.
+  - Report leak scan:
+      no raw proxy link, fixture UUID, or fixture password string was present in
+      the generated resident assessment report.
+
+Remote cleanup:
+  - Removed from remote 38:
+      temporary candidate binary,
+      temporary raw JP fixture config,
+      temporary resident assessment JSON report.
+  - Retained on remote 38:
+      `/tmp/daex-matrix-38/first-batch-summary.txt`,
+      sanitized summary only.
+
+Interpretation:
+  - The first batch is now admitted by the read-only resident planner assessment
+    when matching matrix row shapes are present in the config.
+  - This is stronger than editing only the formal adapter matrix because the
+    candidate report is produced by building executable Rust resident proxy
+    plans for the matching nodes.
+  - It is not yet full live adapter completion: remote 38 real tproxy/resident
+    traffic smoke and per-row event evidence are still pending.
+  - The remaining six formal rows are intentionally still fail-closed until
+    their Rust planner/runtime handlers are implemented and verified.
+
+## 2026-06-04 10.10.10.2 host-originated traffic DNS fix
+
+Scope:
+  - Live host:
+      `10.10.10.2`.
+  - This records a host-originated traffic issue found while the Rust native
+    test drop-in was active.
+  - No SSH password or raw node secret is recorded here.
+
+Observed live state:
+  - `daed.service` was active with test drop-in:
+      `/etc/systemd/system/daed.service.d/50-rust-native-test.conf`.
+  - The drop-in enabled:
+      `DAE_RUST_RESIDENT_DATAPLANE=1`,
+      `DAE_RUST_NATIVE_EBPF=1`.
+  - Main route table was normal:
+      default route via `10.10.10.1` on `enp1s0`.
+  - IPv4 connectivity by address was available:
+      ping to `10.10.10.1`, `1.1.1.1`, and `8.8.8.8` passed.
+  - Host resolver was wrong for this test state:
+      `/etc/resolv.conf` contained `nameserver 8.8.8.8`.
+  - NetworkManager active connection also reported:
+      `IP4.DNS[1]=8.8.8.8`.
+
+Failure shape:
+  - `getent hosts example.com` and host `curl` by domain timed out during name
+    resolution.
+  - Direct DNS to configured local resolver worked:
+      `dig @192.168.2.11 example.com A` returned immediately.
+  - DNS to gateway worked:
+      `dig @10.10.10.1 example.com A` returned immediately.
+  - UDP DNS to public resolver failed:
+      `dig @8.8.8.8 example.com A` timed out.
+  - TCP DNS to public resolver was not the failing shape; the observed host
+    resolver failure was UDP/53.
+
+Why this matters:
+  - The selected dae config uses DNS upstream:
+      `tcp+udp://192.168.2.11:53`.
+  - The selected routing config sends public DNS destinations through proxy:
+      `dip(8.8.8.8, 8.8.4.4, 1.1.1.1) -> proxy`.
+  - With Rust native test state, host-originated resolver traffic to public
+    UDP/53 is not a valid proxy evidence path and can make all host-originated
+    domain traffic look dead before TCP proxying is exercised.
+  - This is separate from resident outbound protocol failures and separate from
+    LAN Telegram TCP evidence.
+
+Live fix applied:
+  - Backed up the previous resolver file to:
+      `/etc/resolv.conf.daex-before-local-dns-fix-20260604-2008`.
+  - Persistently changed the active NetworkManager connection:
+      `ipv4.ignore-auto-dns=yes`,
+      `ipv4.dns=192.168.2.11,10.10.10.1`.
+  - Reapplied the `enp1s0` connection without replacing `daed`.
+
+Post-fix validation:
+  - `/etc/resolv.conf` now contains:
+      `nameserver 192.168.2.11`,
+      `nameserver 10.10.10.1`.
+  - NetworkManager reports:
+      `IP4.DNS[1]=192.168.2.11`,
+      `IP4.DNS[2]=10.10.10.1`.
+  - `getent hosts example.com`: pass.
+  - `dig example.com A`: pass.
+  - `curl -4 -I http://example.com/`: HTTP `200`.
+  - `curl -4 -I https://example.com/`: HTTP `200`.
+  - `curl -4 -I https://www.google.com/`: HTTP `200`.
+
+Follow-up requirement:
+  - Rust product/native test deployment must not use host-local curl/getent
+    evidence while `/etc/resolv.conf` points at a public UDP resolver that the
+    policy routes through proxy.
+  - Product runtime should either:
+      preserve/derive host resolver from the selected local DNS upstream when
+      host mutation is explicitly allowed,
+      or report a fail-closed warning that host resolver state is inconsistent
+      with selected dae DNS/routing policy.
+  - Do not use this host resolver fix as evidence that resident UDP/XUDP or
+    first-batch outbound matrix rows are complete.
+
+## 2026-06-04 10.10.10.2 host-originated routing clarification
+
+Scope:
+  - Live host:
+      `10.10.10.2`.
+  - This clarifies whether traffic generated by the daed host itself is covered
+    by Rust native routing, separate from LAN forwarded clients.
+
+Host-originated TCP evidence:
+  - Test:
+      `curl -4 -I http://1.1.1.1/`.
+  - Matching resident event:
+      `peer='10.10.10.2:<port>'`,
+      `original_dst='1.1.1.1:80'`,
+      `outbound_kind='proxy'`,
+      `proxy_group='proxy'`,
+      `node_tag='[HK]Hytron'`,
+      `userspace_route_executed=true`.
+  - Interpretation:
+      host TCP to an IP covered by `dip(1.1.1.1) -> proxy` is routed through
+      resident proxy.
+
+  - Test:
+      `curl -4 -I --resolve www.google.com:443:<ip> https://www.google.com/`.
+  - Matching resident event:
+      `peer='10.10.10.2:<port>'`,
+      `original_dst='<google-ip>:443'`,
+      `sniffed_domain='www.google.com'`,
+      `outbound_kind='proxy'`,
+      `proxy_group='openai'`,
+      `node_tag='[US]Dmit-Mabuli'`,
+      `userspace_route_executed=true`.
+  - Interpretation:
+      host TCP domain/sniff route is executed and can change the selected group
+      from the initial proxy route to the final domain route.
+
+  - Test:
+      `curl -4 -I --resolve edge.myqnapcloud.io:443:<ip> https://edge.myqnapcloud.io/`.
+  - Matching resident event:
+      `peer='10.10.10.2:<port>'`,
+      `sniffed_domain='edge.myqnapcloud.io'`,
+      `outbound_kind='direct'`,
+      `userspace_route_executed=true`,
+      `userspace_route_must=true`.
+  - Interpretation:
+      host TCP must-direct domain route is executed.
+
+Host-originated UDP evidence:
+  - Test:
+      `dig @8.8.8.8 example.com A`.
+  - Result:
+      timed out.
+  - Resident event evidence:
+      no new `peer='10.10.10.2:<port>'` UDP event was recorded in the resident
+      event file during the test window.
+
+  - Test:
+      one UDP packet to `1.1.1.1:443`.
+  - Result:
+      send completed locally, but no new host-originated resident UDP event was
+      recorded after waiting longer than the resident UDP response timeout.
+
+Interpretation:
+  - Host-originated TCP is currently covered by Rust native routing.
+  - Host-originated UDP is not yet proven covered and did not show the expected
+    resident event evidence in the live test.
+  - LAN-originated UDP events are present in the same resident event file, so
+    the UDP worker itself is running; the observed gap is specifically the
+    host-originated UDP/OUTPUT path or its handoff into resident UDP.
+  - DNS is one visible symptom of that host-originated UDP gap, but the gap is
+    broader than DNS until host-originated UDP/443 and UDP/53 both show routing
+    and resident event evidence.
+
+## 2026-06-04 host-originated UDP Go parity audit and Rust fix
+
+Scope:
+  - Repo:
+      `/root/project/dae-daex-align`.
+  - Live host used for audit:
+      `10.10.10.2`.
+  - No credentials are recorded here.
+
+User correction:
+  - The issue must not be treated as "WAN setting missing" without evidence.
+  - `10.10.10.2` WebUI/runtime settings do include WAN:
+      `wan_interface:"enp1s0"`.
+
+Live config propagation audit:
+  - Active service:
+      `/usr/bin/daed run -c /etc/daed/`.
+  - Active drop-in:
+      `/etc/systemd/system/daed.service.d/50-rust-native-test.conf`.
+  - Active generated config:
+      `/etc/daed/runtime/generated.dae`.
+  - Generated config contains:
+      `lan_interface:"enp1s0"`,
+      `wan_interface:"enp1s0"`.
+  - Current resident start report:
+      `/tmp/dae-daemon-resident-runtime-35120/resident-production-runtime-start.json`.
+  - Report confirms selected settings reached Rust resident runtime:
+      `lan_interfaces=["enp1s0"]`,
+      `wan_interfaces=["enp1s0"]`.
+  - Report confirms live attach:
+      `wan_ingress` on `enp1s0`: `status=pass`, `backend=tcx`.
+      `wan_egress` on `enp1s0`: `status=pass`, `backend=tcx`.
+      cgroup pname monitor: `status=pass`, `backend=aya`.
+      resident dataplane: `enabled=true`, `status=pass`, `udp_worker_started=true`.
+  - `bpftool net` confirms TCX attach order on the shared physical interface:
+      `enp1s0 tcx/ingress tproxy_wan_ingress_l2`
+      before `tproxy_lan_ingress_l2`.
+      `enp1s0 tcx/egress tproxy_lan_egress_l2`
+      before `tproxy_wan_egress_l2`.
+  - `daens` confirms tproxy delivery prerequisites:
+      fwmark rule `0x8000000/0x8000000 lookup 2023`.
+      table 2023 `local default dev lo`.
+      UDP/TCP listener on `0.0.0.0:12345`.
+
+Conclusion from audit:
+  - Settings are passed from product state to generated dae config and into
+    Rust resident runtime.
+  - The remaining observed failure is not a config propagation issue.
+  - Host-originated UDP packets do enter the kernel path:
+      `tproxy_wan_egress_l2` run count increased during `dig @8.8.8.8`.
+      `tproxy_dae0peer_ingress` run count also increased.
+  - Historical resident events already contain host-originated UDP/DNS:
+      `peer="10.10.10.2:<port>"`,
+      `original_dst="8.8.8.8:53"`,
+      `event="udp_dns_packet_finished"`.
+      Host UDP/443 also produced `udp_exchange_failed` timeout events.
+  - The immediate live symptom is latency/head-of-line blocking:
+      a one-second `dig @8.8.8.8 example.com A` timed out while no new event
+      appeared within two seconds.
+      The tproxy UDP socket Recv-Q was non-zero and LAN UDP VLESS timeouts were
+      present in the same event stream.
+
+Original Go/C parity finding:
+  - Go/C tproxy has host-originated UDP coverage in `do_tproxy_wan_egress`.
+  - Go/C uses cgroup sendmsg/connect hooks to populate cookie->pid/pname for
+    host UDP/TCP.
+  - Go/C UDP datapath is endpoint/goroutine based; one slow UDP exchange does
+    not serialize every following UDP packet from host and LAN.
+  - Rust resident UDP had a single `resident_udp_loop` that did:
+      `recvmsg original_dst -> DNS/VLESS exchange -> send reply`
+    inline.
+  - Therefore one VLESS UDP/XUDP timeout could block the only receiver loop
+    for up to `RESIDENT_UDP_RESPONSE_TIMEOUT`, delaying host DNS/UDP behind
+    unrelated LAN QUIC/UDP packets.
+
+Fix applied locally:
+  - `resident_udp_loop` now keeps one fast tproxy UDP receiver and dispatches
+    each received packet to a bounded packet worker.
+  - New runtime knobs:
+      `DAE_RESIDENT_UDP_PACKET_WORKERS`
+      default `64`, clamped `1..1024`.
+      `DAE_RESIDENT_UDP_PACKET_STACK_BYTES`
+      default `262144`, clamped `131072..4194304`.
+  - UDP worker start events and resident start report now include:
+      `worker_limit`,
+      `worker_stack_bytes`,
+      `udp_packet_workers`,
+      `udp_packet_stack_bytes`.
+  - If the worker cap is reached, Rust emits a structured
+    `udp_packet_dropped` event with peer/original_dst/active_workers instead of
+    silently accumulating unbounded work.
+  - Per-packet metrics are still bounded by guard-based open/close accounting,
+    and upload/download counters remain updated by packet workers.
+
+Local verification:
+  - `cargo fmt --check`: pass.
+  - `cargo test -p dae-daemon production_runtime_owner::resident_dataplane`:
+    pass, 46 tests passed.
+
+Next live verification target:
+  - Build the default jemalloc/native-ebpf Rust `daed`:
+      `cargo build --manifest-path rust/Cargo.toml -p dae-daemon --bin daed --release --features native-ebpf`.
+  - Deploy it to `10.10.10.2` over the current test binary without backing up
+    the test binary.
+  - Restart `daed`, confirm resident report shows:
+      `udp_packet_workers=64`,
+      `udp_packet_stack_bytes=262144`,
+      `wan_interfaces=["enp1s0"]`,
+      `wan_egress status=pass`.
+  - Re-test:
+      `dig @8.8.8.8 example.com A`,
+      one UDP packet to `1.1.1.1:443`,
+      confirm new resident events appear promptly with peer `10.10.10.2`.
+
+Live deployment result:
+  - Built default jemalloc/native-ebpf Rust `daed` locally:
+      `cargo build --manifest-path rust/Cargo.toml -p dae-daemon --bin daed --release --features native-ebpf`.
+  - Local and deployed binary:
+      size `18M`,
+      sha256 `e1fb01408ef31af1121d5134dd2e35c8a148d121de7db8ec76f7cd899b41d404`.
+  - Deployed to `10.10.10.2` as `/usr/bin/daed` over the current test binary.
+    No test-binary backup was made.
+  - Restarted `daed`; service is active with PID `46636`.
+  - Current resident start report:
+      `/tmp/dae-daemon-resident-runtime-46636/resident-production-runtime-start.json`.
+  - Report confirms:
+      `resident_runtime_started=true`,
+      `resident_dataplane.enabled=true`,
+      `resident_dataplane.status=pass`,
+      `udp_worker_started=true`,
+      `udp_packet_workers=64`,
+      `udp_packet_stack_bytes=262144`,
+      `wan_interfaces=["enp1s0"]`,
+      `wan_ingress status=pass backend=tcx`,
+      `wan_egress status=pass backend=tcx`,
+      cgroup monitor `status=pass backend=aya`.
+  - `bpftool net` confirms TCX attach remains:
+      `enp1s0 tcx/ingress tproxy_wan_ingress_l2`
+      `enp1s0 tcx/ingress tproxy_lan_ingress_l2`
+      `enp1s0 tcx/egress tproxy_lan_egress_l2`
+      `enp1s0 tcx/egress tproxy_wan_egress_l2`.
+
+Live host UDP validation after fix:
+  - `dig +time=3 +tries=1 @8.8.8.8 example.com A` from `10.10.10.2`:
+      pass, `Query time: 14 msec`.
+  - Immediate resident event:
+      `event="udp_dns_packet_finished"`,
+      `peer="10.10.10.2:31999"`,
+      `original_dst="8.8.8.8:53"`,
+      `request_len=52`,
+      `response_len=67`.
+  - Explicit host UDP packet:
+      `bash -c 'printf daexhostudp >/dev/udp/1.1.1.1/443'`.
+  - Resident event after the expected VLESS UDP timeout window:
+      `event="udp_exchange_failed"`,
+      `peer="10.10.10.2:25706"`,
+      `original_dst="1.1.1.1:443"`,
+      `error="VLESS UDP response timeout"`.
+  - Interpretation:
+      host-originated UDP is now demonstrably handed into resident UDP workers.
+      DNS no longer waits behind unrelated LAN UDP timeout work.
+      UDP/443 reaches its own worker and fails according to current VLESS UDP
+      behavior instead of disappearing before resident processing.
+  - Final quick health:
+      `udp_packet_dropped` count in current event file: `0`.
+      `daens` UDP `0.0.0.0:12345` Recv-Q: `0`.
+      `daed` service: active.
+
+Follow-up live DNS resolver test:
+  - User requested setting the `10.10.10.2` host resolver to public DNS
+    `8.8.8.8` to validate host-originated DNS through Rust native routing.
+  - Active NetworkManager connection:
+      `enp1s0`.
+  - Applied:
+      `ipv4.ignore-auto-dns=yes`,
+      `ipv4.dns=8.8.8.8`.
+  - Reapplied the connection with `nmcli dev reapply enp1s0`.
+  - `/etc/resolv.conf` now contains:
+      `nameserver 8.8.8.8`.
+  - `dig +time=3 +tries=1 example.com A` using the default resolver:
+      pass,
+      server `8.8.8.8#53`,
+      query time `17 msec`.
+  - `getent hosts example.com`:
+      pass.
+  - `curl -4 -I http://example.com/`:
+      pass, HTTP `200`.
+  - `curl -4 -I https://www.google.com/`:
+      pass, HTTP/2 `200`.
+  - Resident events immediately showed host-originated DNS proxying:
+      `event="udp_dns_packet_finished"`,
+      `peer="10.10.10.2:<port>"`,
+      `original_dst="8.8.8.8:53"`,
+      `proxy_group="proxy"`,
+      `node_tag="[HK]Hytron"`.
+  - Resident events also showed the subsequent host-originated TCP flows:
+      `example.com:80` through `proxy`,
+      `www.google.com:443` through `openai`.
+  - Final UDP queue check:
+      `daens` UDP `0.0.0.0:12345` Recv-Q remained `0`.
+  - Current live state after this test:
+      host resolver is intentionally left at `8.8.8.8` for continued manual
+      testing.

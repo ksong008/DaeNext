@@ -3,7 +3,7 @@ use std::net::SocketAddrV4;
 use std::path::PathBuf;
 use std::sync::{
     Arc, Mutex,
-    atomic::{AtomicBool, Ordering},
+    atomic::{AtomicBool, AtomicUsize, Ordering},
 };
 use std::thread;
 use std::time::{Duration, Instant};
@@ -13,7 +13,7 @@ use dae_outbound::vless::packet;
 use serde_json::json;
 
 use super::super::PRODUCTION_NETNS;
-use super::super::udp_io::recv_udp_with_original_dst;
+use super::super::udp_io::{UdpOriginalDstPacket, recv_udp_with_original_dst};
 use super::client::{VlessTlsClient, drive_tls_io_blocking, open_vless_tls_client};
 use super::dns::{ResidentDnsPlan, handle_resident_dns_udp};
 use super::events::append_event;
@@ -33,6 +33,8 @@ pub(super) fn resident_udp_loop(
     event_file: PathBuf,
     event_lock: Arc<Mutex<()>>,
     metrics: Arc<ResidentDataplaneMetrics>,
+    worker_limit: usize,
+    worker_stack_bytes: usize,
 ) {
     if let Err(err) = socket.set_nonblocking(true) {
         append_event(
@@ -45,8 +47,15 @@ pub(super) fn resident_udp_loop(
     append_event(
         &event_file,
         &event_lock,
-        json!({"event": "udp_worker_started", "proxy_group": proxy.group_name, "node_tag": proxy.node_tag}),
+        json!({
+            "event": "udp_worker_started",
+            "proxy_group": proxy.group_name,
+            "node_tag": proxy.node_tag,
+            "worker_limit": worker_limit,
+            "worker_stack_bytes": worker_stack_bytes,
+        }),
     );
+    let active_workers = Arc::new(AtomicUsize::new(0));
     while !stop.load(Ordering::Relaxed) {
         let packet = match recv_udp_with_original_dst(&socket, 2048) {
             Ok(packet) => packet,
@@ -75,46 +84,61 @@ pub(super) fn resident_udp_loop(
             );
             continue;
         };
-        metrics.udp_opened();
-        metrics.add_upload(packet.payload.len());
-        let exchange = if original_dst.port() == 53 {
-            handle_resident_dns_udp(&dns, original_dst, &packet.payload)
-                .map(|response| ("udp_dns_packet_finished", response))
-        } else {
-            exchange_vless_udp(&proxy, original_dst, &packet.payload)
-                .map(|response| ("udp_packet_finished", response))
-        };
-        match exchange {
-            Ok((event, response)) => match send_udp_reply(original_dst, packet.peer, &response) {
-                Ok(()) => {
-                    metrics.add_download(response.len());
-                    append_event(
-                        &event_file,
-                        &event_lock,
-                        json!({
-                            "event": event,
-                            "peer": packet.peer.to_string(),
-                            "original_dst": original_dst.to_string(),
-                            "request_len": packet.payload.len(),
-                            "response_len": response.len(),
-                            "proxy_group": proxy.group_name,
-                            "node_tag": proxy.node_tag,
-                        }),
-                    )
-                }
-                Err(err) => append_event(
-                    &event_file,
-                    &event_lock,
-                    json!({"event": "udp_reply_failed", "peer": packet.peer.to_string(), "original_dst": original_dst.to_string(), "error": err}),
-                ),
-            },
-            Err(err) => append_event(
+        let active = active_workers.load(Ordering::Relaxed);
+        if active >= worker_limit {
+            append_event(
                 &event_file,
                 &event_lock,
-                json!({"event": "udp_exchange_failed", "peer": packet.peer.to_string(), "original_dst": original_dst.to_string(), "error": err}),
-            ),
+                json!({
+                    "event": "udp_packet_dropped",
+                    "reason": "resident UDP packet worker limit reached",
+                    "peer": packet.peer.to_string(),
+                    "original_dst": original_dst.to_string(),
+                    "active_workers": active,
+                    "worker_limit": worker_limit,
+                }),
+            );
+            continue;
         }
-        metrics.udp_closed();
+
+        active_workers.fetch_add(1, Ordering::Relaxed);
+        let active_workers_for_task = Arc::clone(&active_workers);
+        let proxy = Arc::clone(&proxy);
+        let dns = Arc::clone(&dns);
+        let task_event_file = event_file.clone();
+        let task_event_lock = Arc::clone(&event_lock);
+        let metrics = Arc::clone(&metrics);
+        let spawn_peer = packet.peer.to_string();
+        let spawn_original_dst = original_dst.to_string();
+        let spawn_result = thread::Builder::new()
+            .name("dae-resident-udp-packet".to_owned())
+            .stack_size(worker_stack_bytes)
+            .spawn(move || {
+                let packet_metrics = Arc::clone(&metrics);
+                let _guard = UdpPacketWorkerGuard::new(active_workers_for_task, metrics);
+                handle_udp_packet(
+                    proxy,
+                    dns,
+                    packet,
+                    original_dst,
+                    task_event_file,
+                    task_event_lock,
+                    packet_metrics,
+                );
+            });
+        if let Err(err) = spawn_result {
+            active_workers.fetch_sub(1, Ordering::Relaxed);
+            append_event(
+                &event_file,
+                &event_lock,
+                json!({
+                    "event": "udp_worker_spawn_failed",
+                    "peer": spawn_peer,
+                    "original_dst": spawn_original_dst,
+                    "error": err.to_string(),
+                }),
+            );
+        }
     }
     append_event(
         &event_file,
@@ -123,16 +147,90 @@ pub(super) fn resident_udp_loop(
     );
 }
 
+struct UdpPacketWorkerGuard {
+    active_workers: Arc<AtomicUsize>,
+    metrics: Arc<ResidentDataplaneMetrics>,
+}
+
+impl UdpPacketWorkerGuard {
+    fn new(active_workers: Arc<AtomicUsize>, metrics: Arc<ResidentDataplaneMetrics>) -> Self {
+        metrics.udp_opened();
+        Self {
+            active_workers,
+            metrics,
+        }
+    }
+}
+
+impl Drop for UdpPacketWorkerGuard {
+    fn drop(&mut self) {
+        self.metrics.udp_closed();
+        self.active_workers.fetch_sub(1, Ordering::Relaxed);
+    }
+}
+
+fn handle_udp_packet(
+    proxy: Arc<ResidentProxyPlan>,
+    dns: Arc<ResidentDnsPlan>,
+    packet: UdpOriginalDstPacket,
+    original_dst: SocketAddrV4,
+    event_file: PathBuf,
+    event_lock: Arc<Mutex<()>>,
+    metrics: Arc<ResidentDataplaneMetrics>,
+) {
+    let request_len = packet.payload.len();
+    let peer = packet.peer;
+    metrics.add_upload(request_len);
+    let exchange = if original_dst.port() == 53 {
+        handle_resident_dns_udp(&dns, original_dst, &packet.payload)
+            .map(|response| ("udp_dns_packet_finished", response))
+    } else {
+        exchange_vless_udp(&proxy, original_dst, &packet.payload)
+            .map(|response| ("udp_packet_finished", response))
+    };
+    match exchange {
+        Ok((event, response)) => match send_udp_reply(original_dst, peer, &response) {
+            Ok(()) => {
+                metrics.add_download(response.len());
+                append_event(
+                    &event_file,
+                    &event_lock,
+                    json!({
+                        "event": event,
+                        "peer": peer.to_string(),
+                        "original_dst": original_dst.to_string(),
+                        "request_len": request_len,
+                        "response_len": response.len(),
+                        "proxy_group": proxy.group_name,
+                        "node_tag": proxy.node_tag,
+                    }),
+                )
+            }
+            Err(err) => append_event(
+                &event_file,
+                &event_lock,
+                json!({"event": "udp_reply_failed", "peer": peer.to_string(), "original_dst": original_dst.to_string(), "error": err}),
+            ),
+        },
+        Err(err) => append_event(
+            &event_file,
+            &event_lock,
+            json!({"event": "udp_exchange_failed", "peer": peer.to_string(), "original_dst": original_dst.to_string(), "error": err}),
+        ),
+    }
+}
+
 fn exchange_vless_udp(
     proxy: &ResidentProxyPlan,
     original_dst: SocketAddrV4,
     payload: &[u8],
 ) -> Result<Vec<u8>, String> {
+    let key = proxy.vless_key()?;
     let mut client = open_vless_tls_client(proxy)?;
     let request = build_vless_udp_request(proxy, original_dst, payload)?;
     client.queue_plain(&request, "queue VLESS UDP request")?;
     flush_tls_writes_for_udp(&mut client)?;
-    read_vless_udp_response(&mut client, &proxy.flow, proxy.key)
+    read_vless_udp_response(&mut client, &proxy.flow, key)
 }
 
 fn flush_tls_writes_for_udp(client: &mut VlessTlsClient) -> Result<(), String> {
@@ -145,9 +243,10 @@ fn build_vless_udp_request(
     original_dst: SocketAddrV4,
     payload: &[u8],
 ) -> Result<Vec<u8>, String> {
+    let key = proxy.vless_key()?;
     if proxy.flow != XTLS_RPRX_VISION {
         return packet::first_write_bytes(
-            &proxy.key,
+            &key,
             &proxy.flow,
             "udp",
             &original_dst.to_string(),
@@ -156,15 +255,14 @@ fn build_vless_udp_request(
         )
         .map_err(|err| format!("build VLESS UDP request: {err}"));
     }
-    let mut request =
-        packet::request_header(&proxy.key, &proxy.flow, "tcp", XUDP_MUX_TARGET, true, &[])
-            .map_err(|err| format!("build VLESS Vision XUDP mux request header: {err}"))?;
+    let mut request = packet::request_header(&key, &proxy.flow, "tcp", XUDP_MUX_TARGET, true, &[])
+        .map_err(|err| format!("build VLESS Vision XUDP mux request header: {err}"))?;
     let frame = xudp_frame(original_dst, payload)?;
     let mut uuid_sent = false;
     request.extend_from_slice(&vision_padding_block(
         &frame,
         VISION_COMMAND_CONTINUE,
-        proxy.key,
+        key,
         &mut uuid_sent,
         false,
     ));
@@ -307,6 +405,7 @@ fn parse_xudp_response_payload(input: &[u8]) -> Result<Option<Vec<u8>>, String> 
 mod tests {
     use std::net::{Ipv4Addr, SocketAddrV4};
 
+    use super::super::plan::ResidentProxyProtocolPlan;
     use super::*;
 
     #[test]
@@ -345,7 +444,7 @@ mod tests {
             tls: "tls".to_owned(),
             allow_insecure: false,
             utls_fingerprint: None,
-            key: [9_u8; 16],
+            handler: ResidentProxyProtocolPlan::VlessVisionTcpTls { key: [9_u8; 16] },
             mark: 0,
             mptcp: false,
         };
