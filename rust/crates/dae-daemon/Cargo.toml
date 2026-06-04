@@ -6,8 +6,12 @@ license.workspace = true
 repository.workspace = true
 
 [features]
-default = []
+# Default Rust-native daemon builds use the allocator selected by live RSS A/B.
+default = ["allocator-jemalloc"]
 native-ebpf = ["dae-aya-bpf-loader/native-ebpf", "dae-ebpf-support/aya-loader"]
+allocator-system = []
+allocator-mimalloc = ["dep:mimalloc", "dep:libmimalloc-sys"]
+allocator-jemalloc = ["dep:tikv-jemallocator", "dep:tikv-jemalloc-ctl"]
 
 [dependencies]
 dae-aya-bpf-loader.workspace = true
@@ -28,6 +32,8 @@ boring.workspace = true
 base64.workspace = true
 fastrand.workspace = true
 libc.workspace = true
+libmimalloc-sys = { workspace = true, optional = true }
+mimalloc = { workspace = true, optional = true }
 rusqlite = { version = "0.32", features = ["bundled"] }
 rustls.workspace = true
 regex.workspace = true
@@ -38,5 +44,7 @@ tls-parser.workspace = true
 tokio.workspace = true
 tokio-boring.workspace = true
 tokio-rustls.workspace = true
+tikv-jemallocator = { workspace = true, optional = true }
+tikv-jemalloc-ctl = { workspace = true, optional = true }
 url.workspace = true
 webpki-roots.workspace = true

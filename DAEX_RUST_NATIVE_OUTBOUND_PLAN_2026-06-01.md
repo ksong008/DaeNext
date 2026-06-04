@@ -11553,3 +11553,602 @@ C live deployment and evidence:
     come from the preserved `magic_tcp_connect` connect boundary; TG still had
     successful Oracle-Sg finished events, so this is not a current functional
     blocker but remains a follow-up candidate if failures increase.
+
+## 2026-06-04 RSS allocator/reclaim and Go structural cleanup plan
+
+Scope:
+  This is an RSS sub-plan under the existing C4-C8 Rust-owned
+  runtime/control/datapath/outbound work. It does not create a new C stage and
+  must not be used to bypass the C0-C10 phase discipline.
+
+Hard conclusions:
+  - `mimalloc` / `jemalloc` are required as formal A/B candidates for the Rust
+    product daemon. The current production daemon path has no allocator trim,
+    purge, background-purge, `malloc_trim`, `mallopt`, jemalloc, or mimalloc
+    reclaim strategy, so allocator high-water RSS remains a real product-path
+    gap.
+  - Allocator replacement is not a substitute for ownership cleanup. Rust must
+    also copy the useful Go structural memory strategies: cheap per-flow
+    ownership, reload-scoped cleanup, bounded/TTL resources, bounded buffer
+    reuse, and post-startup/reload cleanup.
+  - The Go baseline does not appear to rely on a continuous custom memory limit
+    or aggressive RSS trim knob. Prior audit found no production
+    `debug.SetGCPercent`, `debug.SetMemoryLimit`, `GOGC`, `GOMEMLIMIT`, or
+    continuous explicit RSS trim strategy. The relevant production behavior is a
+    post-startup/reload `runtime.GC` hook plus structural cleanup and bounded
+    pools.
+  - Current `/proc` evidence shows raw `geoip.dat` / `geosite.dat` file-backed
+    RSS is 0 KiB, but expanded routing/geodata structures are still anonymous
+    heap candidates and must be measured separately.
+
+Execution plan:
+  1. Preserve the A+B async baseline.
+     - Keep the async per-flow resident TCP/proxy shape as the current baseline:
+       direct `execution=async-direct-v1`, proxy `execution=async-proxy-tls-v1`,
+       fingerprint-aware flows on `tls_underlay=boringssl`.
+     - Do not reintroduce small fixed worker queues for long-lived resident TCP
+       flows as an RSS workaround.
+
+  2. Split memory metrics without adding permanent WebUI noise.
+     - Keep WebUI card changes minimal during testing.
+     - Runtime/API diagnostics must distinguish:
+         `rssBytes`,
+         `rssAnonBytes`,
+         `rssFileBytes`,
+         `heapCompatBytes`,
+         `heapCompatBytesSource`,
+         `allocatorProfile`.
+     - Only expose true allocator live heap when backed by allocator/runtime
+       evidence. Until then, `heapAllocBytes` remains a compatibility alias for
+       anonymous RSS and must be labeled internally as such.
+
+  3. Add compile-time allocator profiles.
+     - Provide mutually exclusive daemon build profiles:
+         `allocator-system`,
+         `allocator-mimalloc`,
+         `allocator-jemalloc`.
+     - Keep the system allocator profile for diagnosis and rollback comparison.
+     - Evaluate `mimalloc` first for integration simplicity and page-purge
+       behavior.
+     - Evaluate `jemalloc` for longer-term production control, stats, decay, and
+       purge diagnostics.
+     - Do not choose the default allocator by assumption; choose it only after
+       the same live traffic and reload matrix is measured.
+
+  4. Add non-hot-path allocator reclaim hooks.
+     - Add a small Rust-side reclaim abstraction with reason-tagged calls:
+         `startup_control_built`,
+         `reload_old_owner_closed`,
+         `reload_scoped_resources_flushed`,
+         `idle_after_reload`.
+     - System allocator path may use `malloc_trim(0)` only as an explicit Linux
+       diagnostic/profile option.
+     - `mimalloc` path should use its explicit collection/purge API where
+       available.
+     - `jemalloc` path should use documented mallctl/decay/purge controls only
+       after verifying the selected Rust crate API.
+     - Reclaim hooks must not run on packet, connection, DNS query, or TLS relay
+       hot paths.
+
+  5. Port Go structural cleanup semantics.
+     - Add/verify a reload-scoped resource registry that closes or drops old:
+         routing owner,
+         geodata-expanded route params,
+         matcher state,
+         outbound provider plans,
+         DNS/sniff/session state,
+         UDP endpoint state,
+         flow/task queues.
+     - Preserve Go-like lifecycle behavior:
+         abort tracked connections on stop/reload when requested,
+         close old owner after reload success,
+         flush reload-scoped resources before allocator reclaim.
+     - Record cleanup counts and bytes-estimates in diagnostics, not as noisy
+       permanent WebUI cards.
+
+  6. Implement bounded/TTL pools before blaming allocator alone.
+     - Add bounded buffer reuse for protocol/DNS/UDP/sniffing hot paths with
+       power-of-two classes up to 64 KiB, matching the useful Go pool semantics.
+     - Add caps and TTL cleanup equivalent to the Go-side behavior:
+         UDP endpoint max-entry equivalent around 4096 unless config requires
+         otherwise,
+         UDP task queue max-count equivalent around 2048,
+         packet/sniffer session TTL around 3 seconds and max-entry equivalent
+         around 1024.
+     - Record pool hit/miss, current retained bytes, high-water retained bytes,
+       evictions, and overflow drops.
+
+  7. Reduce routing/geodata/materializer duplication.
+     - Read each geodata file once per rebuild instead of once per lookup when
+       building a single owner.
+     - Cache decoded entries by generic key `(kind, file, code, attr)` during the
+       rebuild so repeated codes such as `cn` do not duplicate decode/expand
+       work unnecessarily.
+     - Prefer streaming or direct matcher construction where possible instead of
+       materializing large intermediate `Vec<Param>` copies.
+     - Drop raw dat bytes, decoded entry bytes, and temporary expanded params
+       immediately after the new matcher/owner is installed, then run the
+       non-hot-path reclaim hook.
+     - Record per-kind evidence:
+         raw file bytes,
+         decoded entry bytes,
+         expanded item count,
+         expanded string bytes,
+         matcher estimated bytes.
+
+  8. Verify with the same live matrix on 10.10.10.2.
+     - Build and test:
+         system allocator,
+         mimalloc allocator,
+         jemalloc allocator.
+     - For each build, capture:
+         idle after restart,
+         resident runtime start,
+         TG/Vision active traffic,
+         sustained traffic,
+         reload under low traffic,
+         post-reload idle.
+     - Required evidence:
+         `/proc` `VmRSS`, `RssAnon`, `RssFile`, `VmData`, `Threads`,
+         active flow counts,
+         resident event counts,
+         geodata lookup/output counts,
+         allocator profile,
+         cleanup/reclaim reason counters.
+     - Functional gates remain mandatory:
+         resident dataplane pass,
+         proxy path pass,
+         fingerprint-aware flow uses Boring underlay when required,
+         TG/Oracle-Sg functional events pass,
+         WebUI/API remains usable,
+         logs stay semantically compatible.
+
+  9. Acceptance criteria.
+     - No functional regression versus the current async/Boring test build.
+     - RSS does not exceed the current async baseline under equivalent live
+       traffic.
+     - Post-reload RSS/RssAnon either drops or stabilizes with clear allocator
+       and cleanup evidence.
+     - Geodata/routing/materializer temporary objects are proven dropped after
+       owner install.
+     - The selected allocator profile is justified by measured RSS, not by
+       assumption.
+
+Implementation order:
+  - First: memory metric split and allocator profile scaffolding.
+  - Second: non-hot-path reclaim hook wired to startup/reload cleanup points.
+  - Third: Go structural cleanup parity for reload-scoped resources and
+    bounded/TTL pools.
+  - Fourth: geodata/routing/materializer duplicate reduction and byte-level
+    diagnostics.
+  - Fifth: three-way allocator A/B on 10.10.10.2 using the same traffic and
+    reload matrix.
+
+## 2026-06-04 RSS allocator/reclaim implementation record
+
+Implementation scope:
+  This pass implements the local Rust product/runtime pieces needed for the RSS
+  allocator/reclaim plan. It does not deploy a new binary to `10.10.10.2` and
+  does not claim the live allocator A/B matrix has been completed. The live
+  matrix remains the next host-testing step after the user explicitly wants the
+  test binary deployed.
+
+Code changes:
+  1. Allocator profiles:
+     - Added daemon features:
+         `allocator-system`,
+         `allocator-mimalloc`,
+         `allocator-jemalloc`.
+     - Default build remains the system allocator unless a profile feature is
+       explicitly selected.
+     - `allocator-mimalloc` wires `mimalloc` as the global allocator and uses
+       `libmimalloc_sys::mi_collect(true)` for non-hot-path reclaim.
+     - `allocator-jemalloc` wires `tikv-jemallocator` as the global allocator,
+       enables jemalloc stats, and uses `arena.<n>.purge` plus epoch advance for
+       non-hot-path reclaim.
+     - Mutually exclusive compile gates prevent combining system/mimalloc/
+       jemalloc allocator profiles.
+
+  2. Runtime diagnostics:
+     - `/api/runtime/overview` now keeps the old compatibility fields and also
+       exposes:
+         `rssAnonBytes`,
+         `rssFileBytes`,
+         `heapCompatBytes`,
+         `heapCompatBytesSource`,
+         `allocatorProfile`,
+         `allocatorStats`,
+         `allocatorReclaim`,
+         `resourcePools`.
+     - `heapAllocBytes` remains a compatibility alias for anonymous RSS unless a
+       real allocator live-heap metric is available.
+     - With jemalloc builds, allocator live heap can be populated from
+       `stats.allocated`; system/mimalloc builds keep live heap unavailable until
+       a backed metric exists.
+
+  3. Non-hot-path reclaim hooks:
+     - Product runtime reload now records reason-tagged reclaim events:
+         `reload_old_owner_closed`,
+         `startup_control_built`,
+         `reload_scoped_resources_flushed`.
+     - Product runtime stop records:
+         `stop_runtime`.
+     - System allocator trim is intentionally disabled by default and only runs
+       if `DAED_ALLOCATOR_SYSTEM_TRIM=1` is explicitly set; otherwise it records
+       a skipped diagnostic result.
+     - Reclaim hooks are not called from packet, DNS query, connection relay, TLS
+       relay, or other hot paths.
+
+  4. Go structural cleanup policy surface:
+     - Runtime overview now reports the existing Rust-side UDP/sniffer policy
+       constants without adding permanent WebUI cards:
+         UDP endpoint max entries 4096,
+         UDP task max queues 2048,
+         packet sniffer TTL 3000 ms,
+         packet sniffer max entries 1024.
+     - The generic protocol buffer pool remains a follow-up implementation item;
+       it is recorded as planned in diagnostics rather than falsely reported as
+       live.
+
+  5. Geodata/routing duplicate reduction and byte diagnostics:
+     - `GeodataResolver` now caches geodata file bytes for the duration of a
+       single routing rebuild, so repeated lookups do not repeat `fs::read` of
+       the same `.dat`.
+     - `GeodataResolver` also caches decoded entry bytes by generic
+       `(kind, filename, code)` key for the duration of a rebuild. Repeated
+       geosite/geoip code lookups can parse the cached entry instead of scanning
+       the full `.dat` again.
+     - Fallback-format geodata still uses the original full-read fallback path.
+     - Geodata reports now include:
+         `asset_read_count`,
+         `asset_cache_hit_count`,
+         `decoded_entry_cache_hit_count`,
+         `raw_file_bytes_read`,
+         `raw_file_bytes_seen`,
+         `decoded_entry_bytes_sum`,
+         `expanded_string_bytes_sum`,
+         and per-lookup raw/decoded/expanded byte fields.
+
+Validation:
+  - `cargo fmt --manifest-path rust/Cargo.toml --all`: pass.
+  - `cargo test --manifest-path rust/Cargo.toml -p dae-daemon
+    runtime_overview_reports_process_metrics_and_stream_retry_delta`: pass.
+  - `cargo test --manifest-path rust/Cargo.toml -p dae-daemon
+    resident_routing_geodata_report_records_asset_cache_and_bytes`: pass.
+  - `cargo test --manifest-path rust/Cargo.toml -p dae-geodata`: pass.
+  - `cargo check --manifest-path rust/Cargo.toml -p dae-daemon --features
+    allocator-mimalloc`: pass.
+  - `cargo check --manifest-path rust/Cargo.toml -p dae-daemon --features
+    allocator-jemalloc`: pass.
+  - `cargo build --manifest-path rust/Cargo.toml -p dae-daemon --bin daed
+    --release --features native-ebpf`: pass.
+  - `cargo build --manifest-path rust/Cargo.toml -p dae-daemon --bin daed
+    --release --features native-ebpf,allocator-mimalloc`: pass.
+  - `cargo build --manifest-path rust/Cargo.toml -p dae-daemon --bin daed
+    --release --features native-ebpf,allocator-jemalloc`: pass.
+  - `cargo test --manifest-path rust/Cargo.toml -p dae-daemon`: pass, 201
+    unit tests.
+  - `git diff --check`: pass.
+
+Release artifact notes:
+  - Default system allocator release/native-ebpf `daed`:
+      sha256 `4f2d47d2186ae30a4eddaa7706c1f473a2cd49de1ecbe789d2bc0820baa301e6`
+      size: 17M, unstripped.
+  - Mimalloc release/native-ebpf build:
+      sha256 `364c164475cc0dd0acb2fedb0e43f066196ce1cb56634631787e0c81f39f9ab8`
+      size: 17M, unstripped.
+  - Jemalloc release/native-ebpf build:
+      sha256 `e0de0431802cf6bc46956684013b843fb0d8bf0b9df78aab22bae54e10d6c605`
+      size: 17M, unstripped.
+  - The final `target/release/daed` was rebuilt back to the default system
+    allocator artifact after allocator variant checks.
+
+Remaining live gate:
+  The implementation is ready for the planned `10.10.10.2` same-traffic matrix,
+  but that live deployment/A-B evidence has not been collected in this pass.
+  Required live matrix remains:
+    system allocator,
+    mimalloc allocator,
+    jemalloc allocator,
+    idle after restart,
+    resident runtime start,
+    TG/Vision active traffic,
+    sustained traffic,
+    reload under low traffic,
+    post-reload idle,
+    `/proc` VmRSS/RssAnon/RssFile/VmData/Threads,
+    geodata lookup/output/cache byte counters,
+    allocator reclaim counters,
+    TG/Oracle-Sg functional confirmation.
+
+## 2026-06-04 10.10.10.2 allocator A/B live deployment
+
+Preflight:
+  - Target: `10.10.10.2`.
+  - Existing Go rollback backup was verified and not overwritten:
+      `/etc/daed/backups/daed-go-20260604-090540-b296303fc01b`
+      sha256 marker remains `b296303fc01b0cd4453ab90bb7bf988d6315a952a548fd483a0a9c5bab2448bf`.
+  - Existing live test binary before A/B:
+      sha256 `7a5f6d0bb0b99f3bbb5c15dc60187f16ae9f6774e3d3bfbb3ae2ccbd6ed798f5`
+      size 17M.
+  - Existing service drop-in remained the Rust native test drop-in:
+      `DAE_RUST_RESIDENT_DATAPLANE=1`
+      `DAE_RUST_NATIVE_EBPF=1`
+      `DAE_RESIDENT_TCP_FLOW_STACK_BYTES=524288`
+      `DAED_WEB_ROOT=/usr/share/daed/web`
+      `DAED_HTTP_WORKERS=4`
+      `DAED_HTTP_QUEUE=64`
+  - Existing preflight process:
+      pid `13919`,
+      `VmRSS=89284 kB`,
+      `RssAnon=74344 kB`,
+      `RssFile=14940 kB`,
+      `VmData=128536 kB`,
+      `Threads=9`,
+      resident dataplane status `pass`.
+
+Artifacts copied to `/tmp/daed-ab-20260604` on the target:
+  - system allocator:
+      sha256 `4f2d47d2186ae30a4eddaa7706c1f473a2cd49de1ecbe789d2bc0820baa301e6`
+      size 17M.
+  - mimalloc:
+      sha256 `364c164475cc0dd0acb2fedb0e43f066196ce1cb56634631787e0c81f39f9ab8`
+      size 17M.
+  - jemalloc:
+      sha256 `e0de0431802cf6bc46956684013b843fb0d8bf0b9df78aab22bae54e10d6c605`
+      size 17M.
+
+Live A/B procedure:
+  - No new test backup was created, per test-version policy.
+  - For each variant:
+      install test binary to `/usr/bin/daed`,
+      `systemctl restart daed`,
+      collect `/proc/$pid/status`,
+      collect resident runtime start report,
+      collect resident dataplane event counters.
+  - Sample points:
+      `after_restart`,
+      `t20`,
+      `t60`.
+  - Jemalloc received additional stabilization samples:
+      `t120`,
+      `t180`.
+  - Unauthenticated local HTTP request to `/api/runtime/overview` returned HTTP
+    401, so the live evidence below uses `/proc`, runtime start JSON, and
+    resident event files rather than the Web API.
+
+Live RSS results:
+  - system allocator:
+      after_restart:
+        `VmRSS=11692 kB`, `RssAnon=1068 kB`, `Threads=6`.
+      t20:
+        `VmRSS=12028 kB`, `RssAnon=1084 kB`, `Threads=6`.
+      t60:
+        `VmRSS=146284 kB`, `RssAnon=132204 kB`, `Threads=12`,
+        events `finished=17`, `failed=0`, `tls_underlay=boringssl:12`.
+
+  - mimalloc:
+      after_restart:
+        `VmRSS=12768 kB`, `RssAnon=1680 kB`, `Threads=6`.
+      t20:
+        `VmRSS=54636 kB`, `RssAnon=40156 kB`, `Threads=10`,
+        worker events present but no finished TCP events yet.
+      t60:
+        `VmRSS=54700 kB`, `RssAnon=40220 kB`, `Threads=9`,
+        events `finished=9`, `failed=1`, `tls_underlay=boringssl:10`.
+
+  - jemalloc:
+      after_restart:
+        `VmRSS=14284 kB`, `RssAnon=3012 kB`, `Threads=6`.
+      t20:
+        `VmRSS=77688 kB`, `RssAnon=63400 kB`, `Threads=11`,
+        events `finished=4`, `failed=0`, `tls_underlay=boringssl:4`.
+      t60:
+        `VmRSS=47840 kB`, `RssAnon=33552 kB`, `Threads=11`,
+        events `finished=26`, `failed=7`, `tls_underlay=boringssl:31`.
+      t120:
+        `VmRSS=48980 kB`, `RssAnon=34692 kB`, `Threads=17`,
+        events `finished=60`, `failed=7`, `tls_underlay=boringssl:62`.
+      t180:
+        `VmRSS=51304 kB`, `RssAnon=37016 kB`, `Threads=13`,
+        events `finished=93`, `failed=32`, `tls_underlay=boringssl:118`.
+
+Geodata evidence from the new runtime start reports:
+  - `lookup_count=21`.
+  - `asset_read_count=2`.
+  - `asset_cache_hit_count=19`.
+  - `decoded_entry_cache_hit_count=2`.
+  - `raw_file_bytes_read=29787197`.
+  - `raw_file_bytes_seen=256229888`.
+  - `decoded_entry_bytes_sum=4892645`.
+  - `expanded_string_bytes_sum=4849666`.
+
+Interpretation:
+  - The old live test binary baseline before A/B was about 89M RSS / 74M
+    anonymous RSS.
+  - New system allocator build showed a large anonymous RSS spike at t60 under
+    live traffic: about 146M RSS / 132M anonymous RSS. This confirms that the
+    local geodata/read-cache improvement alone is not sufficient when the system
+    allocator retains high-water pages.
+  - Mimalloc reduced t60 RSS to about 55M / 40M anonymous RSS.
+  - Jemalloc stabilized around 48M-51M RSS / 34M-37M anonymous RSS from t60 to
+    t180 while event count increased from 39 to 144 lines and Boring underlay
+    proxy events increased from 31 to 118.
+  - On this live run, jemalloc is the current best RSS candidate. It is not yet
+    a final default decision because the traffic mix was not perfectly identical
+    across variants and Telegram/TG traffic did not appear during this sample
+    (`tg_events=0`).
+
+Current target state after A/B:
+  - `/usr/bin/daed` is left on the jemalloc test variant:
+      sha256 `e0de0431802cf6bc46956684013b843fb0d8bf0b9df78aab22bae54e10d6c605`.
+  - Service is active.
+  - Current process after A/B:
+      pid `32597`,
+      `VmRSS=52232 kB`,
+      `RssAnon=37944 kB`,
+      `RssFile=14288 kB`,
+      `VmData=284152 kB`,
+      `Threads=9`.
+  - Remote results file:
+      `/tmp/daed-ab-20260604/results.jsonl`.
+
+Follow-up:
+  - Let the user manually test TG/Oracle-Sg on the current jemalloc variant.
+  - If TG/Vision remains functional, run a longer same-variant RSS observation
+    under real use before making jemalloc the default allocator profile.
+  - Investigate the `tcp_connection_failed` rate separately; the failures were
+    not evenly comparable across variants because traffic mix and event volume
+    differed.
+
+## 2026-06-04 jemalloc promotion decision
+
+Decision:
+  - Keep jemalloc as the Rust native daemon allocator and enable it for the
+    default `dae-daemon` build.
+  - `dae-daemon` default Cargo features now include `allocator-jemalloc`.
+  - Normal native release builds such as:
+      `cargo build --manifest-path rust/Cargo.toml -p dae-daemon --bin daed --release --features native-ebpf`
+    therefore build the jemalloc-backed daemon without needing an extra
+    allocator feature flag.
+
+Operational notes:
+  - `10.10.10.2` was already left running the jemalloc test artifact from the
+    live A/B matrix.
+  - This promotion does not overwrite the verified Go rollback backup:
+      `/etc/daed/backups/daed-go-20260604-090540-b296303fc01b`.
+  - Future allocator A/B or rollback comparison builds must account for Cargo
+    feature additivity:
+      system allocator comparison:
+        `cargo build --manifest-path rust/Cargo.toml -p dae-daemon --bin daed --release --no-default-features --features native-ebpf,allocator-system`
+      mimalloc comparison:
+        `cargo build --manifest-path rust/Cargo.toml -p dae-daemon --bin daed --release --no-default-features --features native-ebpf,allocator-mimalloc`
+      jemalloc/default comparison:
+        `cargo build --manifest-path rust/Cargo.toml -p dae-daemon --bin daed --release --features native-ebpf`
+
+Guardrails:
+  - Do not call allocator reclaim from packet, connection, DNS, TLS, or other
+    hot paths.
+  - Keep allocator-specific names inside build features, diagnostics, and
+    evidence. Do not create a new protocol-specific top-level stage or gate.
+  - `tcp_connection_failed` remains a separate functional diagnostic item and is
+    not treated as an allocator conclusion without targeted evidence.
+
+Validation after promotion:
+  - `cargo fmt --manifest-path rust/Cargo.toml --all`: pass.
+  - `cargo check --manifest-path rust/Cargo.toml -p dae-daemon --features
+    native-ebpf`: pass, with default feature resolving through
+    `allocator-jemalloc`.
+  - `cargo tree --manifest-path rust/Cargo.toml -p dae-daemon -e features
+    --features native-ebpf -i tikv-jemallocator`: shows
+    `allocator-jemalloc` from `dae-daemon` default feature.
+  - `cargo tree --manifest-path rust/Cargo.toml -p dae-daemon -e features
+    --features native-ebpf -i tikv-jemalloc-ctl`: shows
+    `allocator-jemalloc` from `dae-daemon` default feature.
+  - `cargo test --manifest-path rust/Cargo.toml -p dae-daemon
+    runtime_overview_reports_process_metrics_and_stream_retry_delta`: pass after
+    making the runtime overview test allocator-profile aware.
+  - `cargo build --manifest-path rust/Cargo.toml -p dae-daemon --bin daed
+    --release --features native-ebpf`: pass.
+  - `cargo test --manifest-path rust/Cargo.toml -p dae-daemon`: pass,
+    including 202 library tests and the daemon product/service integration test
+    targets.
+  - `git diff --check`: pass.
+
+Deployment after promotion:
+  - Local default jemalloc/native-ebpf release `daed`:
+      sha256 `58353e672a7bff7fa021a9d0f415d502decabb698cde03f731bbcb13dc512f17`,
+      size 17M.
+  - Deployed this current default-jemalloc build to `10.10.10.2` as
+    `/usr/bin/daed`.
+  - No test backup was created and the verified Go rollback backup was not
+    modified.
+  - Post-deploy service state:
+      active,
+      pid `33542`,
+      `/usr/bin/daed` sha256
+      `58353e672a7bff7fa021a9d0f415d502decabb698cde03f731bbcb13dc512f17`.
+  - Early cold-start `/proc` sample after deploy:
+      `VmRSS=18988 kB`,
+      `RssAnon=7280 kB`,
+      `RssFile=11708 kB`,
+      `VmData=40608 kB`,
+      `Threads=6`.
+  - No new resident runtime start report existed during the immediate cold-start
+    check. This matches the previous A/B `after_restart` behavior and must not
+    be recorded as a completed resident dataplane functional run. Functional
+    confirmation still comes from subsequent real traffic/manual testing.
+
+## 2026-06-04 systemd restart auto-restore fix
+
+Problem observed:
+  - After replacing `/usr/bin/daed` and running `systemctl restart daed`,
+    systemd started the `daed` process automatically, but the internal proxy
+    runtime did not automatically restore until the user manually enabled it
+    from WebUI/API.
+
+Root cause:
+  - Rust product startup correctly uses `systems.running=1` from
+    `/etc/daed/daed.db` as the restore condition.
+  - The bug was the shutdown path:
+      `SIGTERM` / `SIGINT` / `SIGQUIT` called `mark_system_stopped()`.
+  - `systemctl restart daed` naturally sends `SIGTERM` to the old process.
+    Therefore a package/binary replacement restart was incorrectly persisted as
+    a user-level "stop proxy" action by updating `systems.running=0`.
+  - The next process saw `systems.running=0` and skipped startup restore.
+
+Fix:
+  - Split process-exit state from user-intended runtime state.
+  - `SIGTERM` / `SIGINT` / `SIGQUIT` now stop and clean the current runtime
+    process, but only record `runtime_running=false` metadata.
+  - They no longer modify `systems.running`.
+  - API `/runtime/stop` and applied-runtime failure rollback still call
+    `mark_system_stopped()` and keep the durable user stop behavior.
+  - Successful runtime materialization now records `runtime_running=true`
+    metadata, avoiding the old stale metadata state where `systems.running=1`
+    but `runtime_running=false`.
+
+Validation:
+  - `cargo fmt --manifest-path rust/Cargo.toml --all`: pass.
+  - `cargo test --manifest-path rust/Cargo.toml -p dae-daemon
+    runtime_process_stop_preserves_persisted_running_state`: pass.
+  - `cargo test --manifest-path rust/Cargo.toml -p dae-daemon
+    runtime_overview_reports_process_metrics_and_stream_retry_delta`: pass.
+  - `cargo build --manifest-path rust/Cargo.toml -p dae-daemon --bin daed
+    --release --features native-ebpf`: pass.
+  - `git diff --check`: pass.
+
+Live deployment and verification on `10.10.10.2`:
+  - Deployed fixed default-jemalloc/native-ebpf `daed`:
+      sha256 `0a38ad065279a87945fff8ef1f8402a1a84d4abe33f1cc61aee9381ff4303e2f`.
+  - No test backup was created and the verified Go rollback backup was not
+    modified.
+  - Transitional first restart still saw the old running process clear state:
+      before first restart `systems.running=1`,
+      after first restart `systems.running=0`.
+    This was expected because the old process still contained the bug.
+  - Repaired the intended persisted state to `systems.running=1` for the fixed
+    binary and performed a second restart.
+  - Second restart with the fixed binary:
+      service active,
+      pid `35120`,
+      `/usr/bin/daed` sha256
+      `0a38ad065279a87945fff8ef1f8402a1a84d4abe33f1cc61aee9381ff4303e2f`,
+      `systems.running=1`,
+      `runtime_running=true`,
+      new resident runtime start report
+      `/tmp/dae-daemon-resident-runtime-35120/resident-production-runtime-start.json`,
+      status `pass`.
+  - `/proc` sample after fixed auto-restore:
+      `VmRSS=76944 kB`,
+      `RssAnon=62392 kB`,
+      `RssFile=14552 kB`,
+      `VmData=278656 kB`,
+      `Threads=19`.
+
+Operational rule:
+  - Future package/binary replacement or systemd restart must preserve
+    `systems.running` and auto-restore runtime when the user-intended state is
+    running.
+  - Only WebUI/API stop, explicit state change, or failed applied-runtime
+    rollback may persist `systems.running=0`.

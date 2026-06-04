@@ -1,10 +1,15 @@
 use std::{
+    collections::BTreeMap,
     env, fs,
     path::{Path, PathBuf},
+    sync::{Arc, Mutex},
 };
 
 use dae_config::Param;
-use dae_geodata::{DomainType, load_geoip_bytes, load_geosite_bytes};
+use dae_geodata::{
+    DomainType, decode_entry_bytes, load_geoip_bytes, load_geoip_entry_bytes, load_geosite_bytes,
+    load_geosite_entry_bytes,
+};
 use serde_json::{Value, json};
 
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
@@ -22,11 +27,49 @@ pub(super) struct GeodataLookup {
     pub(super) decode_ok: bool,
     pub(super) fallback_ok: bool,
     pub(super) output_count: usize,
+    pub(super) raw_file_bytes: usize,
+    pub(super) decoded_entry_bytes: usize,
+    pub(super) expanded_string_bytes: usize,
+    pub(super) asset_cache_hit: bool,
+    pub(super) decoded_entry_cache_hit: bool,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Debug)]
 pub(super) struct GeodataResolver {
     asset_dirs: Vec<PathBuf>,
+    asset_cache: Mutex<BTreeMap<String, CachedGeodataAsset>>,
+    decoded_entry_cache: Mutex<BTreeMap<DecodedEntryCacheKey, CachedDecodedEntry>>,
+}
+
+#[derive(Clone, Debug)]
+struct CachedGeodataAsset {
+    path: PathBuf,
+    data: Arc<Vec<u8>>,
+}
+
+#[derive(Clone, Debug)]
+struct GeodataAsset {
+    path: PathBuf,
+    data: Arc<Vec<u8>>,
+    cache_hit: bool,
+}
+
+#[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd)]
+struct DecodedEntryCacheKey {
+    kind: &'static str,
+    filename: String,
+    code: String,
+}
+
+#[derive(Clone, Debug)]
+struct CachedDecodedEntry {
+    data: Arc<Vec<u8>>,
+}
+
+#[derive(Clone, Debug)]
+struct DecodedEntry {
+    data: Arc<Vec<u8>>,
+    cache_hit: bool,
 }
 
 pub(super) fn load_geoip_params(
@@ -36,26 +79,37 @@ pub(super) fn load_geoip_params(
     geodata_report: &mut GeodataResolutionReport,
 ) -> Result<Vec<Param>, String> {
     let filename = dat_filename(filename);
-    let (path, data) = resolver.read_asset(&filename)?;
-    let loaded = load_geoip_bytes(&data, code).map_err(|err| {
+    let asset = resolver.read_asset(&filename)?;
+    let decoded = resolver.decoded_entry("geoip", &filename, code, &asset)?;
+    let loaded = match decoded.as_ref() {
+        Some(entry) => load_geoip_entry_bytes(entry.data.as_slice()),
+        None => load_geoip_bytes(asset.data.as_slice(), code),
+    }
+    .map_err(|err| {
         format!(
             "load geoip {filename}:{code} from {}: {err}",
-            path.display()
+            asset.path.display()
         )
     })?;
     if loaded.value.inverse_match {
         return Err("not support inverse match yet".to_owned());
     }
     let output_count = loaded.value.cidrs.len();
+    let expanded_string_bytes = loaded.value.cidrs.iter().map(String::len).sum();
     geodata_report.lookups.push(GeodataLookup {
         kind: "geoip",
         filename,
         code: code.to_owned(),
         attr: None,
-        path: Some(path),
+        path: Some(asset.path),
         decode_ok: loaded.decode_ok,
         fallback_ok: loaded.fallback_ok,
         output_count,
+        raw_file_bytes: asset.data.len(),
+        decoded_entry_bytes: loaded.decoded_entry_bytes,
+        expanded_string_bytes,
+        asset_cache_hit: asset.cache_hit,
+        decoded_entry_cache_hit: decoded.as_ref().is_some_and(|entry| entry.cache_hit),
     });
     Ok(loaded
         .value
@@ -77,11 +131,16 @@ pub(super) fn load_geosite_params(
 ) -> Result<Vec<Param>, String> {
     let filename = dat_filename(filename);
     let (code, attr) = split_geosite_code_attr(code);
-    let (path, data) = resolver.read_asset(&filename)?;
-    let loaded = load_geosite_bytes(&data, &code).map_err(|err| {
+    let asset = resolver.read_asset(&filename)?;
+    let decoded = resolver.decoded_entry("geosite", &filename, &code, &asset)?;
+    let loaded = match decoded.as_ref() {
+        Some(entry) => load_geosite_entry_bytes(entry.data.as_slice()),
+        None => load_geosite_bytes(asset.data.as_slice(), &code),
+    }
+    .map_err(|err| {
         format!(
             "load geosite {filename}:{code} from {}: {err}",
-            path.display()
+            asset.path.display()
         )
     })?;
     let attr_filter = attr.as_deref();
@@ -109,15 +168,24 @@ pub(super) fn load_geosite_params(
             ..Param::default()
         })
         .collect::<Vec<_>>();
+    let expanded_string_bytes = params
+        .iter()
+        .map(|param| param.key.len() + param.val.len())
+        .sum();
     geodata_report.lookups.push(GeodataLookup {
         kind: "geosite",
         filename,
         code,
         attr,
-        path: Some(path),
+        path: Some(asset.path),
         decode_ok: loaded.decode_ok,
         fallback_ok: loaded.fallback_ok,
         output_count: params.len(),
+        raw_file_bytes: asset.data.len(),
+        decoded_entry_bytes: loaded.decoded_entry_bytes,
+        expanded_string_bytes,
+        asset_cache_hit: asset.cache_hit,
+        decoded_entry_cache_hit: decoded.as_ref().is_some_and(|entry| entry.cache_hit),
     });
     Ok(params)
 }
@@ -161,24 +229,38 @@ impl GeodataResolver {
             );
         }
         dirs.dedup();
-        Self { asset_dirs: dirs }
+        Self {
+            asset_dirs: dirs,
+            asset_cache: Mutex::new(BTreeMap::new()),
+            decoded_entry_cache: Mutex::new(BTreeMap::new()),
+        }
     }
 
-    fn read_asset(&self, filename: &str) -> Result<(PathBuf, Vec<u8>), String> {
+    fn read_asset(&self, filename: &str) -> Result<GeodataAsset, String> {
+        if let Some(cached) = self
+            .asset_cache
+            .lock()
+            .map_err(|_| "geodata asset cache lock poisoned".to_owned())?
+            .get(filename)
+            .cloned()
+        {
+            return Ok(GeodataAsset {
+                path: cached.path,
+                data: cached.data,
+                cache_hit: true,
+            });
+        }
+
         let filename_path = Path::new(filename);
         if filename_path.is_absolute() && filename_path.is_file() {
-            return fs::read(filename_path)
-                .map(|data| (filename_path.to_path_buf(), data))
-                .map_err(|err| format!("read geodata asset {}: {err}", filename_path.display()));
+            return self.read_uncached_asset(filename, filename_path);
         }
         for dir in &self.asset_dirs {
             let path = dir.join(filename);
             if !path.is_file() {
                 continue;
             }
-            return fs::read(&path)
-                .map(|data| (path.clone(), data))
-                .map_err(|err| format!("read geodata asset {}: {err}", path.display()));
+            return self.read_uncached_asset(filename, &path);
         }
         Err(format!(
             "geodata asset {filename} not found in [{}]",
@@ -189,11 +271,110 @@ impl GeodataResolver {
                 .join(", ")
         ))
     }
+
+    fn read_uncached_asset(&self, cache_key: &str, path: &Path) -> Result<GeodataAsset, String> {
+        let data = fs::read(path)
+            .map(Arc::new)
+            .map_err(|err| format!("read geodata asset {}: {err}", path.display()))?;
+        let cached = CachedGeodataAsset {
+            path: path.to_path_buf(),
+            data,
+        };
+        self.asset_cache
+            .lock()
+            .map_err(|_| "geodata asset cache lock poisoned".to_owned())?
+            .insert(cache_key.to_owned(), cached.clone());
+        Ok(GeodataAsset {
+            path: cached.path,
+            data: cached.data,
+            cache_hit: false,
+        })
+    }
+
+    fn decoded_entry(
+        &self,
+        kind: &'static str,
+        filename: &str,
+        code: &str,
+        asset: &GeodataAsset,
+    ) -> Result<Option<DecodedEntry>, String> {
+        let key = DecodedEntryCacheKey {
+            kind,
+            filename: filename.to_owned(),
+            code: code.to_owned(),
+        };
+        if let Some(cached) = self
+            .decoded_entry_cache
+            .lock()
+            .map_err(|_| "geodata decoded-entry cache lock poisoned".to_owned())?
+            .get(&key)
+            .cloned()
+        {
+            return Ok(Some(DecodedEntry {
+                data: cached.data,
+                cache_hit: true,
+            }));
+        }
+
+        let Ok(entry) = decode_entry_bytes(asset.data.as_slice(), code) else {
+            return Ok(None);
+        };
+        let cached = CachedDecodedEntry {
+            data: Arc::new(entry),
+        };
+        self.decoded_entry_cache
+            .lock()
+            .map_err(|_| "geodata decoded-entry cache lock poisoned".to_owned())?
+            .insert(key, cached.clone());
+        Ok(Some(DecodedEntry {
+            data: cached.data,
+            cache_hit: false,
+        }))
+    }
 }
 
 pub(super) fn geodata_report_json(report: &GeodataResolutionReport) -> Value {
+    let lookup_count = report.lookups.len();
+    let asset_cache_hit_count = report
+        .lookups
+        .iter()
+        .filter(|lookup| lookup.asset_cache_hit)
+        .count();
+    let decoded_entry_cache_hit_count = report
+        .lookups
+        .iter()
+        .filter(|lookup| lookup.decoded_entry_cache_hit)
+        .count();
+    let raw_file_bytes_read: usize = report
+        .lookups
+        .iter()
+        .filter(|lookup| !lookup.asset_cache_hit)
+        .map(|lookup| lookup.raw_file_bytes)
+        .sum();
+    let raw_file_bytes_seen: usize = report
+        .lookups
+        .iter()
+        .map(|lookup| lookup.raw_file_bytes)
+        .sum();
+    let decoded_entry_bytes_sum: usize = report
+        .lookups
+        .iter()
+        .map(|lookup| lookup.decoded_entry_bytes)
+        .sum();
+    let expanded_string_bytes_sum: usize = report
+        .lookups
+        .iter()
+        .map(|lookup| lookup.expanded_string_bytes)
+        .sum();
     json!({
-        "lookup_count": report.lookups.len(),
+        "lookup_count": lookup_count,
+        "asset_read_count": lookup_count.saturating_sub(asset_cache_hit_count),
+        "asset_cache_hit_count": asset_cache_hit_count,
+        "decoded_entry_cache_hit_count": decoded_entry_cache_hit_count,
+        "raw_file_bytes_read": raw_file_bytes_read,
+        "raw_file_bytes_seen": raw_file_bytes_seen,
+        "decoded_entry_bytes_sum": decoded_entry_bytes_sum,
+        "expanded_string_bytes_sum": expanded_string_bytes_sum,
         "lookups": report.lookups.iter().map(|lookup| {
             json!({
                 "kind": lookup.kind,
@@ -204,6 +385,11 @@ pub(super) fn geodata_report_json(report: &GeodataResolutionReport) -> Value {
                 "decode_ok": lookup.decode_ok,
                 "fallback_ok": lookup.fallback_ok,
                 "output_count": lookup.output_count,
+                "raw_file_bytes": lookup.raw_file_bytes,
+                "decoded_entry_bytes": lookup.decoded_entry_bytes,
+                "expanded_string_bytes": lookup.expanded_string_bytes,
+                "asset_cache_hit": lookup.asset_cache_hit,
+                "decoded_entry_cache_hit": lookup.decoded_entry_cache_hit,
             })
         }).collect::<Vec<_>>(),
         "source": [
