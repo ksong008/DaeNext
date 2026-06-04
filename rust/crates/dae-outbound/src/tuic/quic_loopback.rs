@@ -16,8 +16,8 @@ use super::tls::{
     build_tuic_client_config, build_tuic_server_config, normalize_alpn, selected_alpn,
 };
 pub use super::wire::{
-    TUIC_AUTH_TOKEN_LEN, TUIC_AUTHENTICATE_FRAME_LEN, TUIC_AUTHENTICATE_TYPE, TUIC_PACKET_TYPE,
-    TUIC_VERSION5,
+    TUIC_AUTH_TOKEN_LEN, TUIC_AUTHENTICATE_FRAME_LEN, TUIC_AUTHENTICATE_TYPE, TUIC_CONNECT_TYPE,
+    TUIC_PACKET_TYPE, TUIC_VERSION5,
 };
 use super::wire::{
     build_authenticate_frame, build_packet_frame, parse_authenticate_frame, parse_packet_frame,

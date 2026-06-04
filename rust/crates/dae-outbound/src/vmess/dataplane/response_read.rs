@@ -69,6 +69,69 @@ where
     Ok((18 + encrypted_header.len(), payload, chunk_len))
 }
 
+pub(super) fn read_aead_response_header<S>(
+    stream: &mut S,
+    request: &VMessAeadTcpRequest,
+) -> Result<usize, OutboundError>
+where
+    S: Read,
+{
+    let mut encrypted_len = [0_u8; 18];
+    read_exact(stream, &mut encrypted_len, "vmess response header length")?;
+    let len_plain = aes128_gcm_decrypt(
+        &kdf16(
+            &request.response_body_key,
+            &[KDF_SALT_AEAD_RESP_HEADER_LEN_KEY],
+        ),
+        &kdf12(
+            &request.response_body_iv,
+            &[KDF_SALT_AEAD_RESP_HEADER_LEN_IV],
+        ),
+        &encrypted_len,
+        &[],
+    )?;
+    if len_plain.len() != 2 {
+        return Err(OutboundError::BadVmess(format!(
+            "bad VMess response header length plaintext: {} bytes",
+            len_plain.len()
+        )));
+    }
+    let header_len = u16::from_be_bytes([len_plain[0], len_plain[1]]) as usize;
+    let mut encrypted_header = vec![0_u8; header_len + 16];
+    read_exact(stream, &mut encrypted_header, "vmess response header")?;
+    let header = aes128_gcm_decrypt(
+        &kdf16(
+            &request.response_body_key,
+            &[KDF_SALT_AEAD_RESP_HEADER_PAYLOAD_KEY],
+        ),
+        &kdf12(
+            &request.response_body_iv,
+            &[KDF_SALT_AEAD_RESP_HEADER_PAYLOAD_IV],
+        ),
+        &encrypted_header,
+        &[],
+    )?;
+    if header.len() < 4 {
+        return Err(OutboundError::BadVmess(format!(
+            "short VMess response header: {} bytes",
+            header.len()
+        )));
+    }
+    if header[0] != request.response_auth {
+        return Err(OutboundError::BadVmess(format!(
+            "unexpected VMess response auth: got {}, want {}",
+            header[0], request.response_auth
+        )));
+    }
+    if header[2] != 0 {
+        return Err(OutboundError::BadVmess(format!(
+            "unexpected VMess response command: {}",
+            header[2]
+        )));
+    }
+    Ok(18 + encrypted_header.len())
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(super) struct ParsedInstruction {
     pub(super) version: u8,
