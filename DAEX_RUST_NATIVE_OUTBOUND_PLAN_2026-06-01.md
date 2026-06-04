@@ -13313,3 +13313,31 @@ Remote 38 read-only assessment after this batch:
       temporary full matrix config,
       temporary JSON report were removed.
       A follow-up `/tmp` check found no `daed-native-next-batch-*` leftovers.
+
+Local align-chain follow-up:
+  - The `dae-daex-align` post-commit hook emitted
+      `.git/index: index file open failed: Not a directory`
+    during local commits, but the `dae` commits themselves were created
+    successfully.
+  - Manual verification showed the align chain had not moved from old
+    `dae-core` commit `0a688df7`.
+  - Manual align was completed after this matrix batch:
+      current `dae-daex-align` commit:
+        `64a8b8f821f327fc684f7d8d64b2998abb10bf7a`,
+      in-tree `daed/wing/dae-core`:
+        `64a8b8f821f327fc684f7d8d64b2998abb10bf7a`,
+      sibling `dae-wing-daex-align/dae-core`:
+        `64a8b8f821f327fc684f7d8d64b2998abb10bf7a`,
+      in-tree `daed/wing` commit:
+        `9dc1fc729c402970cdea16551b2de18fd5104382`,
+      sibling `dae-wing-daex-align` commit:
+        `9dc1fc729c402970cdea16551b2de18fd5104382`,
+      `daed-daex-align/daed` parent commit:
+        `291ac0a`.
+  - Repos were verified clean after the manual align:
+      `dae-daex-align`,
+      `daed-daex-align/daed`,
+      `daed-daex-align/daed/wing`,
+      `daed-daex-align/daed/wing/dae-core`,
+      `dae-wing-daex-align`,
+      `dae-wing-daex-align/dae-core`.
