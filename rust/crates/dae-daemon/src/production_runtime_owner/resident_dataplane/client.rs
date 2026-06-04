@@ -1,7 +1,8 @@
+use std::collections::BTreeMap;
 use std::io::{Cursor, ErrorKind, Read, Write};
 use std::net::{Ipv4Addr, SocketAddr, SocketAddrV4, TcpStream, ToSocketAddrs};
 use std::sync::{
-    Arc,
+    Arc, Mutex, OnceLock,
     atomic::{AtomicBool, Ordering},
 };
 use std::thread;
@@ -12,7 +13,7 @@ use dae_datapath::{TcpDirectDialOptions, magic_tcp_connect};
 use rustls::{ClientConfig, ClientConnection, RootCertStore, pki_types::ServerName};
 
 use super::XTLS_RPRX_VISION;
-use super::plan::ResidentProxyPlan;
+use super::plan::{ResidentProxyPlan, ResidentUtlsFingerprintPlan};
 use super::{
     RESIDENT_CONNECT_TIMEOUT, RESIDENT_IDLE_SLEEP, TLS_RECORD_HEADER_LEN,
     TLS_RECORD_MAX_PAYLOAD_LEN,
@@ -38,6 +39,33 @@ pub(super) enum TlsDriveOutcome {
     Progressed(bool),
     DecryptErrorRawRecord { record: Vec<u8>, error: String },
 }
+
+#[derive(Clone, Debug, Eq, PartialEq, Ord, PartialOrd)]
+struct ResidentTlsClientConfigKey {
+    flow: String,
+    alpn: Vec<String>,
+    allow_insecure: bool,
+    utls_fingerprint: Option<ResidentTlsFingerprintConfigKey>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Ord, PartialOrd)]
+struct ResidentTlsFingerprintConfigKey {
+    source: &'static str,
+    requested: String,
+    name: String,
+    canonical: String,
+    family: String,
+    client: String,
+    randomized: bool,
+    alpn_policy: String,
+}
+
+static RUSTLS_CLIENT_CONFIG_CACHE: OnceLock<
+    Mutex<BTreeMap<ResidentTlsClientConfigKey, Arc<ClientConfig>>>,
+> = OnceLock::new();
+static BORING_CONNECTOR_CACHE: OnceLock<
+    Mutex<BTreeMap<ResidentTlsClientConfigKey, Arc<SslConnector>>>,
+> = OnceLock::new();
 
 #[derive(Default)]
 pub(super) struct TlsRecordReader {
@@ -276,6 +304,29 @@ fn open_boring_vless_tls_client(
     proxy: &ResidentProxyPlan,
     tcp: TcpStream,
 ) -> Result<VlessTlsClient, String> {
+    let connector = boring_vless_connector(proxy)?;
+    let tls = connector
+        .connect(&proxy.server_name, tcp)
+        .map_err(|err| format!("connect VLESS BoringSSL client: {err}"))?;
+    Ok(VlessTlsClient {
+        engine: VlessTlsEngine::Boring {
+            tls,
+            pending_plaintext: Vec::new(),
+        },
+    })
+}
+
+fn boring_vless_connector(proxy: &ResidentProxyPlan) -> Result<Arc<SslConnector>, String> {
+    let key = ResidentTlsClientConfigKey::from_proxy(proxy);
+    let cache = BORING_CONNECTOR_CACHE.get_or_init(|| Mutex::new(BTreeMap::new()));
+    {
+        let cache = cache
+            .lock()
+            .map_err(|_| "VLESS BoringSSL connector cache lock poisoned".to_owned())?;
+        if let Some(connector) = cache.get(&key) {
+            return Ok(Arc::clone(connector));
+        }
+    }
     let mut builder = SslConnector::builder(SslMethod::tls())
         .map_err(|err| format!("create VLESS BoringSSL connector: {err}"))?;
     builder.set_verify(SslVerifyMode::PEER);
@@ -297,19 +348,55 @@ fn open_boring_vless_tls_client(
             .set_alpn_protos(&alpn)
             .map_err(|err| format!("set VLESS BoringSSL ALPN: {err}"))?;
     }
-    let connector = builder.build();
-    let tls = connector
-        .connect(&proxy.server_name, tcp)
-        .map_err(|err| format!("connect VLESS BoringSSL client: {err}"))?;
-    Ok(VlessTlsClient {
-        engine: VlessTlsEngine::Boring {
-            tls,
-            pending_plaintext: Vec::new(),
-        },
-    })
+    let connector = Arc::new(builder.build());
+    let mut cache = cache
+        .lock()
+        .map_err(|_| "VLESS BoringSSL connector cache lock poisoned".to_owned())?;
+    Ok(Arc::clone(
+        cache.entry(key).or_insert_with(|| Arc::clone(&connector)),
+    ))
+}
+
+impl ResidentTlsClientConfigKey {
+    fn from_proxy(proxy: &ResidentProxyPlan) -> Self {
+        Self {
+            flow: proxy.flow.clone(),
+            alpn: proxy.alpn.clone(),
+            allow_insecure: proxy.allow_insecure,
+            utls_fingerprint: proxy
+                .utls_fingerprint
+                .as_ref()
+                .map(ResidentTlsFingerprintConfigKey::from_plan),
+        }
+    }
+}
+
+impl ResidentTlsFingerprintConfigKey {
+    fn from_plan(plan: &ResidentUtlsFingerprintPlan) -> Self {
+        Self {
+            source: plan.source,
+            requested: plan.requested.clone(),
+            name: plan.name.clone(),
+            canonical: plan.canonical.clone(),
+            family: plan.family.clone(),
+            client: plan.client.clone(),
+            randomized: plan.randomized,
+            alpn_policy: plan.alpn_policy.clone(),
+        }
+    }
 }
 
 fn rustls_vless_client_config(proxy: &ResidentProxyPlan) -> Result<Arc<ClientConfig>, String> {
+    let key = ResidentTlsClientConfigKey::from_proxy(proxy);
+    let cache = RUSTLS_CLIENT_CONFIG_CACHE.get_or_init(|| Mutex::new(BTreeMap::new()));
+    {
+        let cache = cache
+            .lock()
+            .map_err(|_| "VLESS rustls client config cache lock poisoned".to_owned())?;
+        if let Some(config) = cache.get(&key) {
+            return Ok(Arc::clone(config));
+        }
+    }
     let mut roots = RootCertStore::empty();
     roots.extend(webpki_roots::TLS_SERVER_ROOTS.iter().cloned());
     let builder = if proxy.flow == XTLS_RPRX_VISION {
@@ -323,12 +410,18 @@ fn rustls_vless_client_config(proxy: &ResidentProxyPlan) -> Result<Arc<ClientCon
         .iter()
         .map(|value| value.as_bytes().to_vec())
         .collect();
-    Ok(Arc::new(config))
+    let config = Arc::new(config);
+    let mut cache = cache
+        .lock()
+        .map_err(|_| "VLESS rustls client config cache lock poisoned".to_owned())?;
+    Ok(Arc::clone(
+        cache.entry(key).or_insert_with(|| Arc::clone(&config)),
+    ))
 }
 
 fn configure_boring_fingerprint(
     builder: &mut boring::ssl::SslConnectorBuilder,
-    fingerprint: &super::plan::ResidentUtlsFingerprintPlan,
+    fingerprint: &ResidentUtlsFingerprintPlan,
 ) -> Result<(), String> {
     match fingerprint.family.as_str() {
         "firefox" => {
