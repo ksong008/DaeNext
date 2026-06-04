@@ -29,6 +29,10 @@ pub(super) fn go_free_product_chain_gate_json(
     let release_default_switch_ready = release_default_switch_gate["release_default_switch_ready"]
         .as_bool()
         .unwrap_or(false);
+    let resident_live_adapter_matrix_ready =
+        release_default_switch_gate["resident_live_adapter_matrix_ready"]
+            .as_bool()
+            .unwrap_or(false);
     let candidate_service_contract =
         resident_default_daemon_switch_gate["candidate_service_contract"].clone();
     let candidate_executed = candidate_service_contract["executed"]
@@ -90,6 +94,7 @@ pub(super) fn go_free_product_chain_gate_json(
 
     let go_free_product_chain_admission_ready = requested
         && release_default_switch_ready
+        && resident_live_adapter_matrix_ready
         && candidate_executed
         && candidate_passed
         && contract_ready
@@ -113,6 +118,9 @@ pub(super) fn go_free_product_chain_gate_json(
     let mut blockers = Vec::new();
     if !release_default_switch_ready {
         blockers.push("C10 requires C9 release default switch readiness".to_owned());
+    }
+    if !resident_live_adapter_matrix_ready {
+        blockers.push("C10 requires resident live adapter matrix readiness".to_owned());
     }
     if !candidate_executed {
         blockers.push("C10 candidate service-contract was not executed".to_owned());
@@ -193,6 +201,10 @@ pub(super) fn go_free_product_chain_gate_json(
     report.insert(
         "release_default_switch_ready".to_owned(),
         json!(release_default_switch_ready),
+    );
+    report.insert(
+        "resident_live_adapter_matrix_ready".to_owned(),
+        json!(resident_live_adapter_matrix_ready),
     );
     report.insert(
         "candidate_service_contract".to_owned(),

@@ -11,6 +11,7 @@ fn release_default_switch_gate_passes_with_complete_freeze_and_rehearsal_evidenc
     });
     let outbound_gate = json!({
         "outbound_production_matrix_ready": true,
+        "resident_live_adapter_matrix_ready": true,
     });
     let plan = json!({
         "requested": true,

@@ -11,6 +11,7 @@ use dae_config::Config;
 use dae_ebpf_support::LiveLoadedTproxyListenSocketMap;
 use serde_json::{Value, json};
 
+pub(crate) use self::adapter_matrix::resident_live_adapter_matrix_contract;
 use self::events::path_string;
 pub(crate) use self::events::{ResidentEventLogSink, set_event_log_sink};
 use self::plan::build_resident_dataplane_plan;
@@ -18,6 +19,7 @@ use self::tcp::{ResidentTcpRouter, resident_tcp_accept_loop};
 use self::udp::resident_udp_loop;
 use super::resident_routing::build_resident_userspace_routing_matcher;
 
+mod adapter_matrix;
 mod client;
 mod direct;
 mod dns;
