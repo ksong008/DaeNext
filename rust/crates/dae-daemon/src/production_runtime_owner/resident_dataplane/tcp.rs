@@ -1,5 +1,5 @@
 use std::collections::BTreeMap;
-use std::io::{ErrorKind, Read};
+use std::io::{ErrorKind, Read, Write};
 use std::mem::size_of;
 use std::net::{IpAddr, Ipv4Addr, Shutdown, SocketAddr, SocketAddrV4, TcpListener, TcpStream};
 use std::os::fd::AsRawFd;
@@ -20,7 +20,12 @@ use dae_datapath::{
 use dae_ebpf_support::{
     BpfIpBytes, BpfRoutingResult, BpfTuplesKey, lookup_map_elem_bytes, open_map_fd,
 };
-use dae_outbound::vless::packet;
+use dae_outbound::{
+    http_proxy::{HttpConnectOptions, request as http_request},
+    shadowsocks::{AeadStreamCodec, ShadowsocksMetadata, read_encrypted_chunk_from_stream},
+    socks5::{Socks5Address, handshake},
+    vless::packet,
+};
 use dae_routing::{Query, RoutingMatcher};
 use dae_sniffing::{SniffingError, sniff_tcp};
 use serde_json::{Value, json};
@@ -37,14 +42,15 @@ use super::direct::{
 };
 use super::events::append_event;
 use super::io::write_all_nonblocking;
-use super::plan::ResidentProxyPlan;
+use super::plan::{ResidentProxyPlan, ResidentProxyProtocolPlan};
 use super::vision::{
     VisionInnerTlsState, VisionUnpadder, VisionUplinkMode, drain_vision_uplink,
     drain_vision_uplink_async,
 };
 use super::{
-    RESIDENT_IDLE_SLEEP, RESIDENT_TCP_ACCEPT_SLEEP, RESIDENT_TCP_IDLE_TIMEOUT,
-    TLS_RECORD_MAX_PAYLOAD_LEN, VLESS_RESPONSE_VERSION, XTLS_RPRX_VISION,
+    RESIDENT_CONNECT_TIMEOUT, RESIDENT_IDLE_SLEEP, RESIDENT_TCP_ACCEPT_SLEEP,
+    RESIDENT_TCP_IDLE_TIMEOUT, TLS_RECORD_MAX_PAYLOAD_LEN, VLESS_RESPONSE_VERSION,
+    XTLS_RPRX_VISION,
 };
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener as TokioTcpListener, TcpStream as TokioTcpStream};
@@ -479,16 +485,32 @@ async fn handle_tcp_connection_async_or_handoff(
         }
         TcpSelection::Proxy(selection) => {
             metrics.tcp_opened();
-            let result = handle_proxy_tcp_connection_async(
-                &mut inbound,
-                peer,
-                original_dst,
-                selection,
-                Arc::clone(&stop),
-                &sniff,
-                &metrics,
-            )
-            .await;
+            let result = if matches!(
+                selection.proxy.handler,
+                ResidentProxyProtocolPlan::VlessVisionTcpTls { .. }
+            ) {
+                handle_proxy_tcp_connection_async(
+                    &mut inbound,
+                    peer,
+                    original_dst,
+                    selection,
+                    Arc::clone(&stop),
+                    &sniff,
+                    &metrics,
+                )
+                .await
+            } else {
+                handle_first_batch_proxy_tcp_connection_async(
+                    inbound,
+                    peer,
+                    original_dst,
+                    selection,
+                    Arc::clone(&stop),
+                    sniff,
+                    Arc::clone(&metrics),
+                )
+                .await
+            };
             metrics.tcp_closed();
             result.map(Some)
         }
@@ -711,7 +733,7 @@ fn handle_proxy_tcp_connection(
     let tls_underlay = tls_underlay_name(&client);
     client.set_nonblocking(true)?;
     let request = packet::first_write_bytes(
-        &selection.proxy.key,
+        &selection.proxy.vless_key()?,
         &selection.proxy.flow,
         "tcp",
         &selection.route.dial_target,
@@ -727,7 +749,7 @@ fn handle_proxy_tcp_connection(
         &mut client,
         stop,
         &selection.proxy.flow,
-        selection.proxy.key,
+        selection.proxy.vless_key()?,
         &sniff.payload,
         metrics,
     )
@@ -757,8 +779,9 @@ async fn handle_proxy_tcp_connection_async(
 ) -> Result<Value, String> {
     let mut client = open_async_vless_tls_client(&selection.proxy).await?;
     let tls_underlay = async_tls_underlay_name(&client);
+    let key = selection.proxy.vless_key()?;
     let request = packet::first_write_bytes(
-        &selection.proxy.key,
+        &key,
         &selection.proxy.flow,
         "tcp",
         &selection.route.dial_target,
@@ -774,7 +797,7 @@ async fn handle_proxy_tcp_connection_async(
         &mut client,
         stop,
         &selection.proxy.flow,
-        selection.proxy.key,
+        key,
         &sniff.payload,
         metrics,
     )
@@ -791,6 +814,527 @@ async fn handle_proxy_tcp_connection_async(
         event["execution"] = json!("async-proxy-tls-v1");
         Ok::<Value, String>(event)
     })
+}
+
+async fn handle_first_batch_proxy_tcp_connection_async(
+    inbound: TokioTcpStream,
+    peer: SocketAddr,
+    original_dst: SocketAddrV4,
+    selection: TcpProxySelection,
+    stop: Arc<AtomicBool>,
+    sniff: TcpSniffReport,
+    metrics: Arc<ResidentDataplaneMetrics>,
+) -> Result<Value, String> {
+    let mut inbound = inbound
+        .into_std()
+        .map_err(|err| format!("convert async inbound TCP to std for first-batch proxy: {err}"))?;
+    tokio::task::spawn_blocking(move || {
+        inbound
+            .set_nonblocking(false)
+            .map_err(|err| format!("set first-batch inbound blocking: {err}"))?;
+        handle_first_batch_proxy_tcp_connection(
+            &mut inbound,
+            peer,
+            original_dst,
+            selection,
+            &stop,
+            &sniff,
+            &metrics,
+        )
+    })
+    .await
+    .map_err(|err| format!("join first-batch proxy task: {err}"))?
+}
+
+fn handle_first_batch_proxy_tcp_connection(
+    inbound: &mut TcpStream,
+    peer: SocketAddr,
+    original_dst: SocketAddrV4,
+    selection: TcpProxySelection,
+    stop: &AtomicBool,
+    sniff: &TcpSniffReport,
+    metrics: &ResidentDataplaneMetrics,
+) -> Result<Value, String> {
+    match &selection.proxy.handler {
+        ResidentProxyProtocolPlan::Socks5Tcp { username, password } => {
+            handle_socks5_proxy_tcp_connection(
+                inbound,
+                peer,
+                original_dst,
+                &selection,
+                stop,
+                sniff,
+                metrics,
+                username,
+                password,
+            )
+        }
+        ResidentProxyProtocolPlan::HttpProxyTcp { username, password } => {
+            handle_http_proxy_tcp_connection(
+                inbound,
+                peer,
+                original_dst,
+                &selection,
+                stop,
+                sniff,
+                metrics,
+                username,
+                password,
+            )
+        }
+        ResidentProxyProtocolPlan::ShadowsocksAeadTcp {
+            cipher,
+            password,
+            salt_len,
+        } => handle_shadowsocks_proxy_tcp_connection(
+            inbound,
+            peer,
+            original_dst,
+            &selection,
+            stop,
+            sniff,
+            metrics,
+            cipher,
+            password,
+            *salt_len,
+        ),
+        ResidentProxyProtocolPlan::VlessVisionTcpTls { .. } => Err(
+            "first-batch proxy dispatcher received VLESS handler; use VLESS TLS dispatcher"
+                .to_owned(),
+        ),
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn handle_socks5_proxy_tcp_connection(
+    inbound: &mut TcpStream,
+    peer: SocketAddr,
+    original_dst: SocketAddrV4,
+    selection: &TcpProxySelection,
+    stop: &AtomicBool,
+    sniff: &TcpSniffReport,
+    metrics: &ResidentDataplaneMetrics,
+    username: &str,
+    password: &str,
+) -> Result<Value, String> {
+    let mut proxy = open_plain_proxy_tcp_stream(&selection.proxy)?;
+    socks5_connect(&mut proxy, &selection.route.dial_target, username, password)?;
+    proxy
+        .set_nonblocking(true)
+        .map_err(|err| format!("set SOCKS5 proxy TCP nonblocking: {err}"))?;
+    inbound
+        .set_nonblocking(true)
+        .map_err(|err| format!("set inbound TCP nonblocking after SOCKS5 handshake: {err}"))?;
+    relay_tcp_direct(inbound, &mut proxy, stop, &sniff.payload, metrics)
+        .map(|stats| {
+            generic_proxy_tcp_finished_event(
+                peer,
+                original_dst,
+                selection,
+                sniff,
+                "socks5",
+                &stats,
+                "first-batch-tcp-v1",
+            )
+        })
+        .or_else(|err| {
+            Ok::<Value, String>(generic_proxy_tcp_failed_event(
+                peer,
+                original_dst,
+                selection,
+                sniff,
+                "socks5",
+                &err,
+                "first-batch-tcp-v1",
+            ))
+        })
+}
+
+#[allow(clippy::too_many_arguments)]
+fn handle_http_proxy_tcp_connection(
+    inbound: &mut TcpStream,
+    peer: SocketAddr,
+    original_dst: SocketAddrV4,
+    selection: &TcpProxySelection,
+    stop: &AtomicBool,
+    sniff: &TcpSniffReport,
+    metrics: &ResidentDataplaneMetrics,
+    username: &str,
+    password: &str,
+) -> Result<Value, String> {
+    let mut proxy = open_plain_proxy_tcp_stream(&selection.proxy)?;
+    http_proxy_connect(&mut proxy, &selection.route.dial_target, username, password)?;
+    proxy
+        .set_nonblocking(true)
+        .map_err(|err| format!("set HTTP proxy TCP nonblocking: {err}"))?;
+    inbound
+        .set_nonblocking(true)
+        .map_err(|err| format!("set inbound TCP nonblocking after HTTP proxy CONNECT: {err}"))?;
+    relay_tcp_direct(inbound, &mut proxy, stop, &sniff.payload, metrics)
+        .map(|stats| {
+            generic_proxy_tcp_finished_event(
+                peer,
+                original_dst,
+                selection,
+                sniff,
+                "http-proxy",
+                &stats,
+                "first-batch-tcp-v1",
+            )
+        })
+        .or_else(|err| {
+            Ok::<Value, String>(generic_proxy_tcp_failed_event(
+                peer,
+                original_dst,
+                selection,
+                sniff,
+                "http-proxy",
+                &err,
+                "first-batch-tcp-v1",
+            ))
+        })
+}
+
+#[allow(clippy::too_many_arguments)]
+fn handle_shadowsocks_proxy_tcp_connection(
+    inbound: &mut TcpStream,
+    peer: SocketAddr,
+    original_dst: SocketAddrV4,
+    selection: &TcpProxySelection,
+    stop: &AtomicBool,
+    sniff: &TcpSniffReport,
+    metrics: &ResidentDataplaneMetrics,
+    cipher: &str,
+    password: &str,
+    salt_len: usize,
+) -> Result<Value, String> {
+    let mut proxy = open_plain_proxy_tcp_stream(&selection.proxy)?;
+    proxy
+        .set_nonblocking(false)
+        .map_err(|err| format!("set Shadowsocks proxy blocking: {err}"))?;
+    proxy
+        .set_read_timeout(Some(RESIDENT_TCP_IDLE_TIMEOUT))
+        .map_err(|err| format!("set Shadowsocks proxy read timeout: {err}"))?;
+    proxy
+        .set_write_timeout(Some(RESIDENT_TCP_IDLE_TIMEOUT))
+        .map_err(|err| format!("set Shadowsocks proxy write timeout: {err}"))?;
+    inbound
+        .set_read_timeout(Some(RESIDENT_TCP_IDLE_TIMEOUT))
+        .map_err(|err| format!("set Shadowsocks inbound read timeout: {err}"))?;
+    inbound
+        .set_write_timeout(Some(RESIDENT_TCP_IDLE_TIMEOUT))
+        .map_err(|err| format!("set Shadowsocks inbound write timeout: {err}"))?;
+    let stats = relay_tcp_over_shadowsocks_aead(
+        inbound,
+        &mut proxy,
+        stop,
+        &selection.route.dial_target,
+        cipher,
+        password,
+        salt_len,
+        &sniff.payload,
+        metrics,
+    );
+    stats
+        .map(|stats| {
+            generic_proxy_tcp_finished_event(
+                peer,
+                original_dst,
+                selection,
+                sniff,
+                "shadowsocks",
+                &stats,
+                "first-batch-tcp-v1",
+            )
+        })
+        .or_else(|err| {
+            Ok::<Value, String>(generic_proxy_tcp_failed_event(
+                peer,
+                original_dst,
+                selection,
+                sniff,
+                "shadowsocks",
+                &err,
+                "first-batch-tcp-v1",
+            ))
+        })
+}
+
+fn open_plain_proxy_tcp_stream(proxy: &ResidentProxyPlan) -> Result<TcpStream, String> {
+    let target = format!("{}:{}", proxy.server_host, proxy.server_port);
+    let connection = open_direct_tcp_connection(&target, proxy.mark, proxy.mptcp)?;
+    connection
+        .stream
+        .set_nonblocking(false)
+        .map_err(|err| format!("set proxy TCP blocking for handshake: {err}"))?;
+    connection
+        .stream
+        .set_read_timeout(Some(RESIDENT_CONNECT_TIMEOUT))
+        .map_err(|err| format!("set proxy TCP read timeout: {err}"))?;
+    connection
+        .stream
+        .set_write_timeout(Some(RESIDENT_CONNECT_TIMEOUT))
+        .map_err(|err| format!("set proxy TCP write timeout: {err}"))?;
+    Ok(connection.stream)
+}
+
+fn socks5_connect(
+    stream: &mut TcpStream,
+    target: &str,
+    username: &str,
+    password: &str,
+) -> Result<(), String> {
+    stream
+        .write_all(&handshake::greeting(username, password))
+        .map_err(|err| format!("write SOCKS5 greeting: {err}"))?;
+    let mut method_selection = [0_u8; 2];
+    stream
+        .read_exact(&mut method_selection)
+        .map_err(|err| format!("read SOCKS5 method selection: {err}"))?;
+    let method = handshake::parse_method_selection(&method_selection)
+        .map_err(|err| format!("parse SOCKS5 method selection: {err}"))?;
+    if method == handshake::AUTH_PASSWORD {
+        let auth = handshake::username_password_auth(username, password)
+            .map_err(|err| format!("build SOCKS5 auth: {err}"))?;
+        stream
+            .write_all(&auth)
+            .map_err(|err| format!("write SOCKS5 auth: {err}"))?;
+        let mut auth_reply = [0_u8; 2];
+        stream
+            .read_exact(&mut auth_reply)
+            .map_err(|err| format!("read SOCKS5 auth reply: {err}"))?;
+        if auth_reply[0] != handshake::PASSWORD_AUTH_VERSION || auth_reply[1] != 0 {
+            return Err(format!("SOCKS5 auth rejected: {:02x?}", auth_reply));
+        }
+    }
+    let target =
+        Socks5Address::parse(target).map_err(|err| format!("parse SOCKS5 target: {err}"))?;
+    let request = handshake::request(handshake::Socks5Command::Connect, &target)
+        .map_err(|err| format!("build SOCKS5 CONNECT: {err}"))?;
+    stream
+        .write_all(&request)
+        .map_err(|err| format!("write SOCKS5 CONNECT: {err}"))?;
+    let mut reply_head = [0_u8; 3];
+    stream
+        .read_exact(&mut reply_head)
+        .map_err(|err| format!("read SOCKS5 CONNECT reply: {err}"))?;
+    let mut reply = reply_head.to_vec();
+    reply.extend(read_socks5_address_bytes(stream).map_err(|err| err.to_string())?);
+    handshake::parse_server_reply(&reply)
+        .map_err(|err| format!("parse SOCKS5 CONNECT reply: {err}"))?;
+    Ok(())
+}
+
+fn http_proxy_connect(
+    stream: &mut TcpStream,
+    target: &str,
+    username: &str,
+    password: &str,
+) -> Result<(), String> {
+    let mut options = HttpConnectOptions::connect(target);
+    options.username = username.to_owned();
+    options.password = password.to_owned();
+    let request = http_request::connect_request(&options);
+    stream
+        .write_all(&request)
+        .map_err(|err| format!("write HTTP CONNECT request: {err}"))?;
+    let mut response = Vec::new();
+    let mut buf = [0_u8; 512];
+    loop {
+        let read = stream
+            .read(&mut buf)
+            .map_err(|err| format!("read HTTP CONNECT response: {err}"))?;
+        if read == 0 {
+            break;
+        }
+        response.extend_from_slice(&buf[..read]);
+        if response.windows(4).any(|window| window == b"\r\n\r\n") {
+            break;
+        }
+        if response.len() > 8192 {
+            return Err("HTTP CONNECT response too large".to_owned());
+        }
+    }
+    let status = http_request::parse_connect_response(&response)
+        .map_err(|err| format!("parse HTTP CONNECT response: {err}"))?;
+    if status != 200 {
+        return Err(format!("HTTP CONNECT status: {status}"));
+    }
+    Ok(())
+}
+
+fn read_socks5_address_bytes(stream: &mut TcpStream) -> std::io::Result<Vec<u8>> {
+    let mut atyp = [0_u8; 1];
+    stream.read_exact(&mut atyp)?;
+    let mut out = atyp.to_vec();
+    match atyp[0] {
+        1 => {
+            let mut rest = [0_u8; 6];
+            stream.read_exact(&mut rest)?;
+            out.extend_from_slice(&rest);
+        }
+        3 => {
+            let mut len = [0_u8; 1];
+            stream.read_exact(&mut len)?;
+            out.extend_from_slice(&len);
+            let mut rest = vec![0_u8; len[0] as usize + 2];
+            stream.read_exact(&mut rest)?;
+            out.extend_from_slice(&rest);
+        }
+        4 => {
+            let mut rest = [0_u8; 18];
+            stream.read_exact(&mut rest)?;
+            out.extend_from_slice(&rest);
+        }
+        _ => {}
+    }
+    Ok(out)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn relay_tcp_over_shadowsocks_aead(
+    inbound: &mut TcpStream,
+    proxy: &mut TcpStream,
+    stop: &AtomicBool,
+    target: &str,
+    cipher: &str,
+    password: &str,
+    salt_len: usize,
+    initial_payload: &[u8],
+    metrics: &ResidentDataplaneMetrics,
+) -> Result<DirectTcpRelayStats, String> {
+    let target_metadata = ShadowsocksMetadata::parse(target)
+        .map_err(|err| format!("parse Shadowsocks target: {err}"))?;
+    let mut first_plain = target_metadata
+        .encode()
+        .map_err(|err| format!("encode Shadowsocks target metadata: {err}"))?;
+    first_plain.extend_from_slice(initial_payload);
+    let mut client_salt = vec![0_u8; salt_len];
+    fastrand::fill(&mut client_salt);
+    let mut encoder = AeadStreamCodec::new(cipher, password, &client_salt)
+        .map_err(|err| format!("create Shadowsocks upload encoder: {err}"))?;
+    let mut initial = client_salt.clone();
+    initial.extend(
+        encoder
+            .encrypt_chunk(&first_plain)
+            .map_err(|err| format!("encode Shadowsocks initial TCP frame: {err}"))?,
+    );
+    proxy
+        .write_all(&initial)
+        .map_err(|err| format!("write Shadowsocks initial TCP frame: {err}"))?;
+    let mut stats = DirectTcpRelayStats::default();
+    if !initial_payload.is_empty() {
+        stats.client_to_direct += initial_payload.len();
+        metrics.add_upload(initial_payload.len());
+    }
+
+    let mut upload_proxy = proxy
+        .try_clone()
+        .map_err(|err| format!("clone Shadowsocks proxy stream for upload: {err}"))?;
+    let mut upload_inbound = inbound
+        .try_clone()
+        .map_err(|err| format!("clone inbound stream for Shadowsocks upload: {err}"))?;
+    upload_inbound
+        .set_read_timeout(Some(RESIDENT_CONNECT_TIMEOUT))
+        .map_err(|err| format!("set Shadowsocks upload read timeout: {err}"))?;
+    let relay_done = Arc::new(AtomicBool::new(false));
+    let upload_done = Arc::clone(&relay_done);
+    let upload = thread::spawn(move || {
+        let mut stats = 0_usize;
+        let mut buf = [0_u8; 16 * 1024];
+        loop {
+            if upload_done.load(Ordering::Relaxed) {
+                break;
+            }
+            let read = match upload_inbound.read(&mut buf) {
+                Ok(0) => break,
+                Ok(read) => read,
+                Err(err)
+                    if matches!(
+                        err.kind(),
+                        ErrorKind::TimedOut | ErrorKind::WouldBlock | ErrorKind::Interrupted
+                    ) =>
+                {
+                    continue;
+                }
+                Err(err) => return Err(format!("read inbound TCP for Shadowsocks upload: {err}")),
+            };
+            let encrypted = encoder
+                .encrypt_chunk(&buf[..read])
+                .map_err(|err| format!("encrypt Shadowsocks upload chunk: {err}"))?;
+            upload_proxy
+                .write_all(&encrypted)
+                .map_err(|err| format!("write Shadowsocks upload chunk: {err}"))?;
+            stats += read;
+        }
+        let _ = upload_proxy.shutdown(Shutdown::Write);
+        Ok::<usize, String>(stats)
+    });
+
+    let mut server_salt = vec![0_u8; salt_len];
+    if let Err(err) = proxy.read_exact(&mut server_salt) {
+        relay_done.store(true, Ordering::Relaxed);
+        let _ = inbound.shutdown(Shutdown::Read);
+        let _ = proxy.shutdown(Shutdown::Write);
+        let _ = upload.join();
+        return Err(format!("read Shadowsocks server salt: {err}"));
+    }
+    let mut decoder = match AeadStreamCodec::new(cipher, password, &server_salt) {
+        Ok(decoder) => decoder,
+        Err(err) => {
+            relay_done.store(true, Ordering::Relaxed);
+            let _ = inbound.shutdown(Shutdown::Read);
+            let _ = proxy.shutdown(Shutdown::Write);
+            let _ = upload.join();
+            return Err(format!("create Shadowsocks response decoder: {err}"));
+        }
+    };
+
+    let mut download_error = None;
+    loop {
+        if stop.load(Ordering::Relaxed) {
+            break;
+        }
+        match read_encrypted_chunk_from_stream(proxy, &mut decoder) {
+            Ok(plain) => {
+                if plain.is_empty() {
+                    continue;
+                }
+                inbound
+                    .write_all(&plain)
+                    .map_err(|err| format!("write Shadowsocks response to inbound: {err}"))?;
+                stats.direct_to_client += plain.len();
+                metrics.add_download(plain.len());
+            }
+            Err(err) => {
+                let message = err.to_string();
+                if message.contains("early eof")
+                    || message.contains("failed to fill whole buffer")
+                    || message.contains("Connection reset")
+                    || message.contains("connection reset")
+                    || message.contains("timed out")
+                {
+                    break;
+                }
+                download_error = Some(format!("read Shadowsocks response chunk: {message}"));
+                break;
+            }
+        }
+    }
+    relay_done.store(true, Ordering::Relaxed);
+    let _ = inbound.shutdown(Shutdown::Read);
+    let _ = proxy.shutdown(Shutdown::Write);
+    let upload_bytes = upload
+        .join()
+        .map_err(|_| "join Shadowsocks upload relay thread failed".to_owned())??;
+    if let Some(err) = download_error {
+        return Err(err);
+    }
+    if upload_bytes > 0 {
+        stats.client_to_direct += upload_bytes;
+        metrics.add_upload(upload_bytes);
+    }
+    Ok(stats)
 }
 
 fn proxy_tcp_finished_event(
@@ -834,6 +1378,50 @@ fn proxy_tcp_failed_event(
     event
 }
 
+fn generic_proxy_tcp_finished_event(
+    peer: SocketAddr,
+    original_dst: SocketAddrV4,
+    selection: &TcpProxySelection,
+    sniff: &TcpSniffReport,
+    handler: &'static str,
+    stats: &DirectTcpRelayStats,
+    execution: &'static str,
+) -> Value {
+    let mut event = proxy_tcp_base_event(
+        "tcp_connection_finished",
+        peer,
+        original_dst,
+        selection,
+        sniff,
+    );
+    event["resident_protocol_handler"] = json!(handler);
+    event["execution"] = json!(execution);
+    append_generic_proxy_relay_stats(&mut event, stats);
+    event
+}
+
+fn generic_proxy_tcp_failed_event(
+    peer: SocketAddr,
+    original_dst: SocketAddrV4,
+    selection: &TcpProxySelection,
+    sniff: &TcpSniffReport,
+    handler: &'static str,
+    err: &str,
+    execution: &'static str,
+) -> Value {
+    let mut event = proxy_tcp_base_event(
+        "tcp_connection_failed",
+        peer,
+        original_dst,
+        selection,
+        sniff,
+    );
+    event["resident_protocol_handler"] = json!(handler);
+    event["execution"] = json!(execution);
+    event["error"] = json!(err);
+    event
+}
+
 fn proxy_tcp_base_event(
     event_name: &str,
     peer: SocketAddr,
@@ -868,6 +1456,16 @@ fn append_proxy_relay_stats(event: &mut Value, stats: &RelayStats) {
     event["vision_direct_command_seen"] = json!(stats.vision_direct_command_seen);
     event["vision_raw_direct_recovered"] = json!(stats.vision_raw_direct_recovered);
     event["vision_downlink_direct_active"] = json!(stats.vision_downlink_direct_active);
+}
+
+fn append_generic_proxy_relay_stats(event: &mut Value, stats: &DirectTcpRelayStats) {
+    event["bytes_client_to_proxy"] = json!(stats.client_to_direct);
+    event["bytes_proxy_to_client"] = json!(stats.direct_to_client);
+    event["response_header_stripped"] = json!(false);
+    event["vision_unpadding_blocks"] = json!(0);
+    event["vision_direct_command_seen"] = json!(false);
+    event["vision_raw_direct_recovered"] = json!(false);
+    event["vision_downlink_direct_active"] = json!(false);
 }
 
 fn handle_direct_tcp_connection(
@@ -1972,7 +2570,7 @@ mod tests {
             tls: "tls".to_owned(),
             allow_insecure: false,
             utls_fingerprint: None,
-            key: [0; 16],
+            handler: ResidentProxyProtocolPlan::VlessVisionTcpTls { key: [0; 16] },
             mark: 0,
             mptcp: false,
         }
