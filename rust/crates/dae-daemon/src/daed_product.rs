@@ -1,7 +1,7 @@
 use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 use std::fs;
 use std::io::{self, BufRead, Read, Seek, SeekFrom, Write};
-use std::net::{TcpListener, TcpStream, ToSocketAddrs};
+use std::net::{SocketAddrV4, TcpListener, TcpStream, ToSocketAddrs};
 use std::path::{Component, Path, PathBuf};
 use std::process::Command;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -38,8 +38,9 @@ use crate::allocator::{
 use crate::config_validate::load_config_file;
 use crate::production_runtime_owner::{
     ResidentProductionRuntime, resident_live_adapter_config_assessment,
-    resident_runtime_defaults_contract, resident_runtime_environment_defaults,
-    set_resident_event_log_sink, start_resident_production_runtime,
+    resident_live_adapter_udp_probe, resident_runtime_defaults_contract,
+    resident_runtime_environment_defaults, set_resident_event_log_sink,
+    start_resident_production_runtime,
 };
 
 const DEFAULT_CONFIG_DIR: &str = "/etc/daed";
@@ -651,6 +652,7 @@ pub fn run_daed_product_with_args_and_version(
         Some("service-contract") => run_service_contract_command(&args[1..], version),
         Some("package-info") => run_package_info_command(&args[1..], version),
         Some("resident-adapter-matrix") => run_resident_adapter_matrix_command(&args[1..]),
+        Some("resident-adapter-udp-live") => run_resident_adapter_udp_live_command(&args[1..]),
         Some("state") => run_state_command(&args[1..]),
         Some("run") => run_product_server_command(&args[1..], version),
         Some("export") => run_export_command(&args[1..]),
@@ -688,6 +690,27 @@ fn run_resident_adapter_matrix_command(args: &[String]) -> DaedProductOutput {
         Err(err) => {
             DaedProductOutput::error(format!("resident adapter matrix config load failed: {err}"))
         }
+    }
+}
+
+fn run_resident_adapter_udp_live_command(args: &[String]) -> DaedProductOutput {
+    let (config, target, payload) = match parse_resident_adapter_udp_live_args(args) {
+        Ok(parsed) => parsed,
+        Err(err) => return DaedProductOutput::usage(err),
+    };
+    match load_config_file(&config) {
+        Ok(config_value) => DaedProductOutput::ok(format!(
+            "{}\n",
+            resident_live_adapter_udp_probe(
+                &config_value,
+                target,
+                payload.as_bytes(),
+                Some(&config)
+            )
+        )),
+        Err(err) => DaedProductOutput::error(format!(
+            "resident adapter UDP live config load failed: {err}"
+        )),
     }
 }
 
@@ -736,6 +759,63 @@ fn parse_resident_adapter_matrix_args(args: &[String]) -> Result<PathBuf, String
         index += 1;
     }
     config.ok_or_else(|| "resident-adapter-matrix requires -c/--config".to_owned())
+}
+
+fn parse_resident_adapter_udp_live_args(
+    args: &[String],
+) -> Result<(PathBuf, SocketAddrV4, String), String> {
+    let mut config = None;
+    let mut target = None;
+    let mut payload = "daex-resident-udp-live".to_owned();
+    let mut index = 0;
+    while index < args.len() {
+        match args[index].as_str() {
+            "-c" | "--config" => {
+                index += 1;
+                let Some(value) = args.get(index) else {
+                    return Err(
+                        "resident-adapter-udp-live requires a value after -c/--config".to_owned(),
+                    );
+                };
+                config = Some(PathBuf::from(value));
+            }
+            "--target" => {
+                index += 1;
+                let Some(value) = args.get(index) else {
+                    return Err(
+                        "resident-adapter-udp-live requires a value after --target".to_owned()
+                    );
+                };
+                target = Some(value.parse::<SocketAddrV4>().map_err(|err| {
+                    format!("resident-adapter-udp-live target must be IPv4 host:port: {err}")
+                })?);
+            }
+            "--payload" => {
+                index += 1;
+                let Some(value) = args.get(index) else {
+                    return Err(
+                        "resident-adapter-udp-live requires a value after --payload".to_owned()
+                    );
+                };
+                if value.is_empty() {
+                    return Err("resident-adapter-udp-live payload cannot be empty".to_owned());
+                }
+                payload = value.clone();
+            }
+            "--json" => {}
+            other => {
+                return Err(format!(
+                    "resident-adapter-udp-live unsupported argument: {other}"
+                ));
+            }
+        }
+        index += 1;
+    }
+    Ok((
+        config.ok_or_else(|| "resident-adapter-udp-live requires -c/--config".to_owned())?,
+        target.ok_or_else(|| "resident-adapter-udp-live requires --target".to_owned())?,
+        payload,
+    ))
 }
 
 fn run_product_server_command(args: &[String], _version: &str) -> DaedProductOutput {
@@ -9290,6 +9370,7 @@ fn help_text() -> String {
   daed service-contract [--json]
   daed package-info [--json]
   daed resident-adapter-matrix -c /etc/dae/config.dae [--json]
+  daed resident-adapter-udp-live -c /etc/dae/config.dae --target 127.0.0.1:5353 [--payload TEXT] [--json]
   daed state check --state /etc/daed/daed.db
   daed state migrate --from-wing-db /etc/daed/wing.db --to /etc/daed/daed.db [--force]
   daed export openapi|flatdesc|outline|package-manifest|admission-report|webui-route-audit|systemd-unit|docker-entrypoint

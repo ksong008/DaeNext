@@ -14852,3 +14852,153 @@ Remote cleanup:
       `bpftool net` showed empty xdp/tc/flow_dissector attachments,
       `ip rule` returned to local/main/default only,
       route table `2023` was empty.
+
+### 2026-06-05 C8/C10 resident UDP live adapter closure
+
+Scope:
+  - This entry stays under the existing C8/C10 resident live adapter and
+    go-free product-chain work. It does not introduce a new ad-hoc stage.
+  - Top-level work names remain protocol-generic. Protocol names below are
+    matrix row names and evidence labels only.
+
+Implementation updates:
+  - `resident_dataplane::udp` now dispatches real resident UDP exchange paths
+    for the admitted resident proxy plans:
+      VLESS/XUDP over TLS,
+      Shadowsocks AEAD UDP datagram,
+      SOCKS5 UDP ASSOCIATE,
+      Trojan UDP-over-TCP over TLS,
+      VMess AEAD UDP-over-TCP,
+      AnyTLS UDP packet stream over TLS,
+      Hysteria2 QUIC UDP datagram,
+      TUIC QUIC packet datagram,
+      Juicity QUIC stream packet.
+  - HTTP CONNECT remains explicitly protocol-closed for UDP:
+      no UDP relay semantics,
+      no Go outbound fallback,
+      status `protocol-closed` in live probe output.
+  - The resident adapter matrix now separates:
+      `udp_live_adapter=true` for real UDP relay rows,
+      `udp_semantics=protocol-closed` for HTTP CONNECT,
+      `udp_path_ready=true` when either a real UDP relay exists or the protocol
+      is intentionally closed without fallback.
+  - Added generic live probe command:
+      `daed resident-adapter-udp-live -c <config> --target <ipv4:port>`.
+    This command calls the resident UDP adapter exchange path directly, records
+    row status/underlay/execution/payload match, and does not mutate host
+    datapath state.
+  - Juicity UDP live read now decodes the stream packet response incrementally
+    instead of waiting for stream EOF. The live server keeps the stream open, so
+    `read_to_end` was the cause of the first timeout.
+  - Hysteria2 and TUIC UDP live validation no longer requires the response
+    session/packet identifiers to match the client-side randomly generated
+    identifiers. The live server may generate its own response identifiers; the
+    single-packet resident live proof validates same-connection response payload
+    correctness instead.
+
+JP fixture update:
+  - The JP sing-box Shadowsocks inbound was changed from TCP-only to the default
+    TCP+UDP behavior by removing the explicit `network=tcp` restriction.
+  - The invalid intermediate value `network=tcp_udp` was rejected by sing-box
+    and immediately corrected.
+  - Final JP listening summary for the UDP rows included:
+      Shadowsocks UDP `28446`,
+      Hysteria2 UDP `28449`,
+      TUIC UDP `28450`,
+      Juicity UDP `28452`.
+  - Temporary JP UDP echo on `127.0.0.1:28553` was used only for the live
+    matrix run and was removed after validation.
+
+Remote 38 / JP UDP live matrix result:
+  - Candidate hash:
+      `6fea29aae5badf925c084bf0b26f4538ab50094acf5564bab5f97e09a382baaf`
+  - Candidate size:
+      approximately `20M`
+  - Live target:
+      JP-local UDP echo `127.0.0.1:28553`
+  - Payload length:
+      `22`
+  - Summary schema:
+      `resident-live-adapter-udp-live-v1`
+  - `row_count=10`
+  - `pass_count=9`
+  - `protocol_closed_count=1`
+  - `failure_count=0`
+  - `matrix_pass=true`
+  - Live JSON leak check:
+      no raw proxy links,
+      no fixture passwords,
+      no UUID/link strings in the emitted summary.
+
+Per-row UDP evidence:
+  - Row `vless`:
+      status `pass`,
+      payload match `true`,
+      execution `vless-xudp-v1`,
+      TLS underlay `boringssl`.
+  - Row `shadowsocks`:
+      status `pass`,
+      payload match `true`,
+      execution `udp-datagram-aead-v1`.
+  - Row `trojan`:
+      status `pass`,
+      payload match `true`,
+      execution `tls-udp-over-tcp-v1`,
+      TLS underlay `boringssl`.
+  - Row `vmess`:
+      status `pass`,
+      payload match `true`,
+      execution `aead-udp-over-tcp-v1`.
+  - Row `hysteria2`:
+      status `pass`,
+      payload match `true`,
+      execution `quic-udp-datagram-v1`,
+      QUIC underlay `quinn-h3`.
+  - Row `tuic`:
+      status `pass`,
+      payload match `true`,
+      execution `quic-udp-datagram-v1`,
+      QUIC underlay `quinn`.
+  - Row `juicity`:
+      status `pass`,
+      payload match `true`,
+      execution `quic-udp-stream-packet-v1`,
+      QUIC underlay `quinn-h3`.
+  - Row `anytls`:
+      status `pass`,
+      payload match `true`,
+      execution `frame-tls-udp-packet-stream-v1`,
+      TLS underlay `boringssl`.
+  - Row `http-proxy`:
+      status `protocol-closed`,
+      `ok=true`,
+      `protocol_closed=true`,
+      reason: HTTP CONNECT has no UDP relay semantics and is fail-closed
+      without Go fallback.
+  - Row `socks5`:
+      status `pass`,
+      payload match `true`,
+      execution `socks5-udp-associate-v1`.
+
+Local validation:
+  - `cargo check --manifest-path rust/Cargo.toml -p dae-daemon`: pass.
+  - `cargo test --manifest-path rust/Cargo.toml -p dae-daemon --lib production_runtime_owner::resident_dataplane::udp`:
+      pass, 4 UDP tests passed.
+  - `cargo test --manifest-path rust/Cargo.toml -p dae-daemon --test daed_product resident_adapter`:
+      pass, 5 resident adapter product tests passed.
+  - `cargo test --manifest-path rust/Cargo.toml -p dae-daemon --test service_contract candidate_reports_resident_service_and_dataplane_capabilities`:
+      pass.
+  - `cargo build --manifest-path rust/Cargo.toml -p dae-daemon --bin daed --release --features native-ebpf`:
+      pass.
+
+Remote cleanup:
+  - Removed from remote 38:
+      temporary candidate binary,
+      temporary matrix config,
+      live JSON summaries,
+      temporary test directory.
+  - Removed from JP:
+      temporary UDP echo process,
+      echo PID/log/script files.
+  - Retained on JP:
+      corrected Shadowsocks fixture configuration with UDP enabled by default.
