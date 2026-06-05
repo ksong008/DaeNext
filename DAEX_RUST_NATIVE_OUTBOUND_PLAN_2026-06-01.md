@@ -14225,6 +14225,23 @@ Validation:
   - `cargo fmt --all --manifest-path rust/Cargo.toml`: pass.
   - `cargo test --manifest-path rust/Cargo.toml -p dae-daemon`: pass.
 
+Deployment follow-up:
+  - First live deployment of this log-parity change showed that copying the full
+    `allocatorReclaim` object into task-log fields makes WebUI cards too noisy
+    because jemalloc per-arena purge failures can be long.
+  - Corrected the product log field mapping to keep only summary allocator
+    fields:
+      `allocator_profile`
+      `<allocator_reclaim_scope>_status`
+      `<allocator_reclaim_scope>_reason`
+      `<allocator_reclaim_scope>_profile`
+      `<allocator_reclaim_scope>_operation`
+      `<allocator_reclaim_scope>_arenas_attempted`
+      `<allocator_reclaim_scope>_failure_count`
+      `<allocator_reclaim_scope>_epoch_after`
+  - Added unit coverage so runtime report log fields do not reintroduce the
+    full allocator reclaim object.
+
 Live deployment to 10.10.10.2:
   - Built Rust native `daed` with:
       `cargo build --manifest-path rust/Cargo.toml -p dae-daemon --bin daed --release --features native-ebpf`
