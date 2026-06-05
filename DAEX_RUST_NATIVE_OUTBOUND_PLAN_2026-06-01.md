@@ -14135,6 +14135,96 @@ Validation:
   - `cargo test --manifest-path rust/Cargo.toml -p dae-daemon`: pass,
     209 unit tests plus integration/doc test suites passed.
 
+## 2026-06-05 10:03 +0800 - Go daed startup/reload log parity audit
+
+Scope:
+  - Re-check the original Go `daed` / `dae` runtime startup and reload log
+    behavior before treating the Rust product lifecycle logs as complete.
+  - Keep the result protocol-generic: this is product/runtime lifecycle parity,
+    not a protocol-matrix item.
+
+Original Go behavior:
+  - Go `daed` initializes `wing/logstore` from `cmd/run.go` and attaches it as a
+    global `logrus` hook:
+      `logrus.AddHook(logstore.Default())`
+    Therefore ordinary `logrus` startup/reload logs written by the Go product
+    shell and the embedded Go `dae` runtime also appear in WebUI task logs.
+  - Go API reload (`POST /api/runtime/reload`) does not have a separate
+    explicit product-level "received API reload request" task-log write. It
+    calls `orchestrator.Run`, which calls `engine.Default().ReloadContext`.
+    The detailed reload log entries normally come from the Go `dae` runtime.
+  - Go SIGHUP reload writes product-shell reload logs:
+      `[Reload] Received SIGHUP; prepare to reload`
+      `[Reload] Finished`
+      `[Reload] Failed to reload`
+  - Go `dae` runtime startup logs include stable generic messages:
+      `[Startup] phase completed`
+      `[Startup] phase failed`
+      `[Startup] post-startup gc decision`
+      `Ready`
+    The phase name is stored in fields, not in the message. Important phase
+    values observed in source:
+      `control-plane.create.total`
+      `control-plane.core`
+      `listen.ready`
+      `startup.total`
+      `wait-for-network`
+      `subscription.resolve`
+      `post-startup.gc`
+  - Go `dae` runtime reload logs include stable generic messages:
+      `[Reload] Received reload signal; prepare to reload`
+      `[Reload] Load new control plane`
+      `[Reload] Stopped old control plane`
+      `[Reload] Serve`
+      `[Reload] Finished`
+    Failure/rollback messages include:
+      `[Reload] Failed to reload; try to roll back configuration`
+      `[Reload] Last reload failed; rolled back configuration`
+      `[Reload] Failed to roll back configuration`
+      `[Reload] Failed to close old control plane`
+
+Rust product parity adjustment:
+  - Rust product lifecycle logs remain resident and bypass `runtime_log_level`.
+    Normal flow/task diagnostics still respect `runtime_log_level`.
+  - Added Go-compatible startup phase logs in Rust product:
+      message: `[Startup] phase completed`
+      fields: `phase`, `elapsed`, plus generic runtime/materialization fields.
+  - Added Rust startup phase values that map to product-native work without
+    pretending to be Go internals:
+      `runtime.materialize.preview`
+      `runtime.config.build`
+      `runtime.materialize.applied`
+      `control-plane.core`
+      `control-plane.create.total`
+      `startup.total`
+      `product.http-listener`
+      `post-startup.gc`
+  - Mapped Rust allocator reclaim report into the Go-compatible message:
+      `[Startup] post-startup gc decision`
+    Fields use generic allocator/runtime names such as `allocator_profile`,
+    `allocator_startup_control_built`, and
+    `allocator_reload_scoped_resources_flushed`.
+  - Moved Rust `[Startup] HTTP listener ready` so it is written only after
+    `TcpListener::bind` succeeds and HTTP workers are spawned.
+  - Signal reload no longer reuses startup-only log semantics. It now calls the
+    runtime restore path in reload mode.
+  - Non-dry API reload now emits Go-compatible runtime reload messages:
+      `[Reload] Load new control plane`
+      `[Reload] Stopped old control plane`
+      `[Reload] Serve`
+    while still keeping Rust product detail logs:
+      `[Reload] Received reload request`
+      `[Reload] Runtime config preview materialized`
+      `[Reload] Runtime config built`
+      `[Reload] Runtime owner reload finished`
+      `[Reload] Finished`
+  - Dry preview reload remains preview-only and does not emit control-plane
+    replacement messages.
+
+Validation:
+  - `cargo fmt --all --manifest-path rust/Cargo.toml`: pass.
+  - `cargo test --manifest-path rust/Cargo.toml -p dae-daemon`: pass.
+
 Live deployment to 10.10.10.2:
   - Built Rust native `daed` with:
       `cargo build --manifest-path rust/Cargo.toml -p dae-daemon --bin daed --release --features native-ebpf`
