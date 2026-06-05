@@ -80,6 +80,95 @@ dae-control/native route result
   -> relay / UDP endpoint
 ```
 
+2026-06-05 Rust product RSS follow-up remaining 1-4 completed:
+
+```text
+Context:
+  The previous implementation batch explicitly completed item 5:
+    Go daed log/API/WebUI display parity and generic resident flow log fields.
+
+  This batch completed the remaining items 1-4 from the RSS follow-up list.
+
+1. Service/package runtime memory defaults are now explicit:
+  - daed product service contract now reports `rust_product_runtime_defaults`.
+  - package-info and package-manifest expose runtime defaults under their
+    runtime/defaults surfaces.
+  - exported systemd unit and docker entrypoint now make the fixed defaults
+    visible through environment lines/exports.
+  - HTTP worker count remains dynamic when DAED_HTTP_WORKERS is unset:
+      available_parallelism * 2 clamped to 4..16.
+    It is documented as a policy instead of being forced to a fixed value.
+  - Fixed defaults exposed:
+      MALLOC_ARENA_MAX=2
+      MALLOC_CONF=background_thread:true,dirty_decay_ms:1000,muzzy_decay_ms:1000,narenas:2
+      DAED_HTTP_QUEUE=256
+      DAED_HTTP_WORKER_STACK_BYTES=1048576
+      DAE_RESIDENT_TCP_FLOW_STACK_BYTES=524288
+      DAE_RESIDENT_UDP_PACKET_WORKERS=64
+      DAE_RESIDENT_UDP_PACKET_STACK_BYTES=262144
+  - UDP exposure is only the current test/runtime limit. It is not a final
+    fixed-worker design; the target remains a Tokio UDP readiness/task-queue
+    model, not fixed OS-thread fanout and not one thread per packet.
+
+2. Resident dataplane group node selection now avoids large transient clones:
+  - fixed-policy selection no longer builds a cloned candidate Vec for every
+    matching node.
+  - The selector keeps only first-match and fixed-index-match references, then
+    clones only the selected tag/link.
+  - Explicit name filter failure semantics are unchanged: unresolved names do
+    not fall back to unrelated static nodes.
+  - Added a generic fixed-policy order test with non-protocol-specific fixture
+    names.
+
+3. Rust native production routing no longer needs daemon-side JSON fixture
+   round-trip:
+  - The resident production path is now:
+      Config -> typed ResidentRoutingPlan -> eBPF maps + typed userspace matcher.
+  - The old production path:
+      typed ResidentRoutingPlan -> JSON fixture -> RoutingMatcher
+    has been removed.
+  - dae-routing now provides typed matcher input:
+      RoutingDomainSet
+      RoutingLpmSet
+      RoutingMatchSet
+      RoutingMatchKind
+      RoutingMatcher::from_typed_sets(...)
+  - IpPrefix now has `IpPrefix::new(addr, bits)` so resident routing can pass
+    prefixes without string formatting/parsing.
+  - JSON fixture API remains in dae-routing for test/benchmark/golden corpus
+    compatibility, but Rust native runtime does not depend on it.
+  - The unused daemon-side userspace matcher fixture generator was removed.
+
+4. Runtime overview/log streaming is lighter:
+  - /api/events/runtime still sends a full `runtime.overview` first.
+  - Periodic `runtime.overview.delta` now uses a lightweight payload and omits
+    heavy/static trees such as:
+      allocatorStats
+      allocatorReclaim
+      resourcePools
+      runtime summary
+  - If reloadCount changes, the stream sends a new full `runtime.overview`
+    boundary snapshot instead of continuing with stale static state.
+  - resident event-file traffic fallback no longer scans the whole event file
+    every tick. It now keeps an offset cache and aggregates recent traffic by
+    timestamp second, with a 3600-second retention cap matching the API window
+    clamp.
+  - /api/events/logs was already tail/cached-id based after the prior log
+    parity work; no extra log-file full-scan behavior was added.
+
+Validation:
+  - `cargo fmt --all --manifest-path rust/Cargo.toml`: pass.
+  - `cargo test --manifest-path rust/Cargo.toml -p dae-routing userspace`:
+      pass, 3 tests passed.
+  - `cargo test --manifest-path rust/Cargo.toml -p dae-daemon --lib`:
+      pass, 208 tests passed.
+
+JSON fixture rule:
+  Rust native production paths must not require JSON fixtures. Fixtures may
+  remain only for tests, benchmarks, golden corpus compatibility, debug exports,
+  or external tooling that explicitly consumes fixture-shaped data.
+```
+
 核心 trait 建议：
 
 ```text
@@ -10016,6 +10105,93 @@ Cleanup:
     daed_run_processes=0
 ```
 
+2026-06-04 10.10.10.2 memory accounting note - Cockpit vs btop:
+
+```text
+Host:
+  10.10.10.2
+
+Observed symptom:
+  Cockpit showed daed memory around 168 MiB, while btop showed daed around
+  56 MiB. This is a metric-scope mismatch, not evidence that the Rust live heap
+  is 168 MiB.
+
+Live process sample:
+  daed pid: 1002
+  command: /usr/bin/daed run -c /etc/daed/
+
+Process /proc view:
+  ps RSS: 65268 KiB
+  VmRSS: 65268 KiB
+  Pss: 61631 KiB
+  RssAnon: 50960 KiB
+  RssFile: 14308 KiB
+  Private_Dirty: 50960 KiB
+  Threads: 37
+
+systemd / cgroup view:
+  daed.service cgroup: /system.slice/daed.service
+  MainPID: 1002
+  MemoryCurrent: 177532928 bytes (~169.3 MiB)
+  MemoryPeak: 236756992 bytes (~225.8 MiB)
+  MemorySwapCurrent: 0
+  TasksCurrent: 37
+
+cgroup memory.stat selected:
+  anon: 48689152 bytes (~46.4 MiB)
+  file: 54501376 bytes (~52.0 MiB)
+  kernel: 69394432 bytes (~66.2 MiB)
+  vmalloc: 65490944 bytes (~62.5 MiB)
+  slab: 2926384 bytes (~2.8 MiB)
+  sock: 4096 bytes
+  swap: 0
+
+Interpretation:
+  btop / ps is showing the daed process RSS/RES scope, roughly 60..64 MiB in
+  this sample.
+
+  Cockpit follows the systemd/cgroup MemoryCurrent scope for daed.service. That
+  includes process RSS plus memory charged to the service cgroup, especially
+  kernel/vmalloc memory and file cache.
+
+  The 100+ MiB difference is mainly:
+    - about 62.5 MiB kernel/vmalloc, matching resident eBPF map allocation;
+    - about 52.0 MiB cgroup file/page cache, only about 14 MiB of which was
+      mapped into the process RSS as RssFile at the sampled moment;
+    - small slab/pagetable/kernel overhead.
+
+bpftool evidence:
+  The big BPF maps charged to daed(1002) include:
+    routing_tuples_map  ~18 MiB memlock
+    udp_conn_state_map  ~16 MiB memlock
+    domain_routing_map  ~13 MiB memlock
+    redirect_track      ~7.5 MiB memlock
+    cookie_pid_map      ~6 MiB memlock
+    fast_sock           ~1 MiB memlock
+    tgid_pname_map      ~0.7 MiB memlock
+
+Operational rule:
+  Do not compare Cockpit MemoryCurrent directly with btop process RSS as if they
+  are the same metric.
+
+  For Rust process-body memory, inspect:
+    /proc/<pid>/smaps_rollup Rss/Pss/Private_Dirty/Anonymous
+    /proc/<pid>/status VmRSS/RssAnon/RssFile/Threads
+
+  For total service memory pressure, inspect:
+    systemctl show daed -p MemoryCurrent -p MemoryPeak
+    /sys/fs/cgroup/system.slice/daed.service/memory.current
+    /sys/fs/cgroup/system.slice/daed.service/memory.stat
+
+Optimization implication:
+  - To reduce btop/RSS: continue optimizing Rust resident process anonymous RSS,
+    allocator behavior, logs, connection/session objects, and runtime ownership.
+  - To reduce Cockpit/systemd MemoryCurrent: audit eBPF map max_entries, duplicate
+    map allocation, feature/backend-specific map sizing, and possible lazy or
+    scaled map allocation.
+  - The current Cockpit-vs-btop delta is not a Rust heap regression by itself.
+```
+
 ## 2026-06-04 RSS optimization completion - product/runtime hot paths
 
 Scope:
@@ -13456,3 +13632,273 @@ Current matrix caveat:
       real live traffic evidence plus the remaining UDP live adapters and Go
       outbound fallback retirement must be finished before the resident live
       adapter matrix is complete.
+
+## 2026-06-05 Rust Product RSS and Log Parity Follow-up
+
+Scope:
+  - Continue under the existing C10 Rust product/native-owned path; do not
+    create an ad hoc phase or protocol-specific stage.
+  - The Rust process memory work should prioritize generic product/runtime
+    structures rather than a single protocol branch.
+
+Accepted optimization work items:
+  - Keep the service/package memory defaults explicit for Rust native product
+    tests: allocator decay/arena policy, HTTP worker count/stack size, and
+    resident UDP task limits must be visible in the unit or equivalent package
+    runtime environment.
+  - Reduce resident dataplane plan cloning for large node/subscription sets:
+    only process groups referenced by routing, avoid cloning all node links
+    into transient candidate vectors, and keep fixed-policy selection
+    iterator-based.
+  - Remove the resident routing JSON-fixture round trip from production code:
+    one compiled routing/geodata plan should feed both the eBPF map update and
+    the userspace routing matcher.
+  - Keep runtime overview/log streaming lightweight: full snapshots are for
+    first load or reload boundaries; periodic deltas should avoid rebuilding
+    large JSON trees or scanning full log/event files.
+
+UDP dataplane rule:
+  - Do not replace resident UDP packet handling with a fixed worker model.
+  - The prior TCP queue experience showed fixed bounded worker queues can
+    break live behavior under real routing/proxy load.
+  - UDP should move toward a Tokio UDP task queue/readiness model, with
+    backpressure and bounded per-packet state, not a fixed OS-thread pool and
+    not one OS thread per packet.
+
+Go daed log parity requirement:
+  - Before changing the Rust product log/WebUI behavior, collect live Go daed
+    evidence on `10.10.10.2` across runtime log-level and query-level
+    combinations.
+  - Evidence must include API output shape, emitted task-log content, filtering
+    semantics, and WebUI rendering behavior.
+  - Rust product log changes should then match Go daed semantics instead of
+    tuning only the Rust implementation in isolation.
+
+Live Go daed evidence from `10.10.10.2`:
+  - Current baseline was `/usr/bin/daed run -c /etc/daed/` with the Go daed
+    backend and no Rust-owned test drop-in.
+  - The control API listened on `:2023` and `/api/health` returned
+    `{"healthCheck":1}`.
+  - The live log cache was `/etc/daed/logs/current.jsonl`.
+  - The current log cache held 13 entries: 12 `info` and 1 `warn`.
+  - The current runtime log level before and after the matrix was `error`.
+  - Current `/api/logs/settings` on the host returned:
+      `maxEntries=500`,
+      `maxBytes=5242880`,
+      `minMaxEntries=500`,
+      `maxMaxEntries=50000`,
+      `minMaxBytes=5242880`,
+      `maxMaxBytes=209715200`.
+
+Go `/api/logs` query semantics:
+  - `level=` and `level=all` are unfiltered.
+  - Level parsing is case-insensitive.
+  - `level=warning` canonicalizes to `warn`.
+  - `level=全部` and `level=调试` return HTTP 400; localized labels must never
+    be sent as API semantic values.
+  - Query filtering is exact by canonical level, not a severity threshold:
+      `all -> 13 entries`,
+      `warn -> 1 entry`,
+      `info -> 12 entries`,
+      `error/debug/trace -> 0 entries`.
+  - The query result is the newest matching tail, returned in chronological
+    order.
+  - `limit <= 0` uses the default query limit.
+  - `limit=4` returned the newest four entries, not a page size hint for the
+    WebUI.
+  - Large limits are capped by the Go logstore max query limit.
+
+Go `/api/runtime/log-level` semantics:
+  - Runtime level changes are immediate and do not require reload.
+  - `PATCH {"level":"error|warn|info|debug|trace"}` returns the canonical level.
+  - `PATCH {"level":"warning"}` returns `{"level":"warn"}`.
+  - `PATCH {"level":"debug "}` trims and returns `{"level":"debug"}`.
+  - `PATCH {"level":"all"}` and localized values such as `全部` return HTTP
+    400; runtime level must always be a concrete log level.
+  - Changing the runtime level does not refilter or rewrite the historical
+    `/api/logs` response; it only controls future log emission.
+
+Go `/api/events/logs` SSE semantics:
+  - The stream starts with `retry: 3000`.
+  - It is a live stream, not a history replay endpoint.
+  - It accepts normal Bearer auth.
+  - It also accepts the `access_token` query fallback used by browser
+    `EventSource`.
+  - Invalid localized level values return the same HTTP 400 JSON error as
+    `/api/logs`.
+
+Go WebUI log rendering behavior:
+  - The WebUI initializes log rows from `/api/logs?level=<value>&q=&limit=500`
+    and then appends live rows from `/api/events/logs`.
+  - With Chinese UI labels, the controls displayed:
+      runtime level `错误`,
+      query level `全部`.
+  - The browser still sent semantic API values, not localized labels:
+      `level=all`,
+      `level=warn`,
+      `level=info`,
+      `level=error`,
+      `level=debug`,
+      `level=trace`.
+  - The live WebUI rendered:
+      `全部 -> 13 rows`,
+      `警告 -> 1 row`,
+      `信息 -> 12 rows`,
+      `错误/调试/追踪 -> empty state`.
+  - Row display format is compact and task-log oriented:
+      `HH:MM:SS LEVEL message fields...`
+    where the visible level is the canonical uppercase level text such as
+    `INFO` or `WARN`, not the localized label.
+
+Rust product log parity changes applied:
+  - Removed localized API level aliases from the Rust product log API.
+    Localized UI labels such as `全部`, `调试`, `警告`, `错误`, `信息`, and
+    `追踪` are display-only and now return HTTP 400 if sent as `level=...`.
+  - Removed non-Go aliases such as `level=any`, `level=*`, and `level=err`.
+  - Kept Go/logrus-compatible parsing:
+      empty level and `all` are unfiltered,
+      case-insensitive concrete levels are accepted,
+      `warning` canonicalizes to `warn`,
+      `panic` and `fatal` are valid concrete levels.
+  - Fixed `limit=0` so it uses the default query limit instead of returning
+    one row.
+  - Kept newest-tail chronological ordering for limited `/api/logs` queries.
+  - Changed the internal non-streaming `/events/logs` fallback to emit only the
+    SSE retry preface, matching Go's live-stream behavior instead of replaying
+    one historical log entry.
+  - Removed the Rust-only `runtime log level set to ...` product log entry from
+    `PATCH /api/runtime/log-level`; changing runtime level remains immediate
+    and controls only future log emission.
+
+Local verification after Rust product log parity changes:
+  - `cargo fmt --all --manifest-path rust/Cargo.toml`: pass.
+  - `cargo test --manifest-path rust/Cargo.toml -p dae-daemon logs_filter_level_all_case_insensitive_query_and_sse_event_name`:
+      pass.
+  - `cargo test --manifest-path rust/Cargo.toml -p dae-daemon --test daed_product`:
+      pass, 10 tests passed.
+  - `cargo test --manifest-path rust/Cargo.toml -p dae-daemon`:
+      pass, 205 lib tests, 10 product tests, 2 reload owner benchmark tests,
+      2 reload owner handoff tests, and 2 service contract tests passed.
+
+2026-06-05 Go daed source log-field parity alignment:
+
+```text
+Go source compared:
+  daed/wing/dae-core/control/tcp.go
+    TCP routing log:
+      level: info
+      message: RefineSourceToShow(src, dst.Addr()) <-> dialTarget
+      fields:
+        network
+        outbound
+        policy
+        dialer
+        sniffed
+        ip
+        pid
+        dscp
+        pname
+        mac
+
+  daed/wing/dae-core/control/udp.go
+    UDP fast-path log:
+      level: trace
+      fields: network=udp(fp), outbound, policy, dialer, sniffed, ip,
+              pid, dscp, pname, mac
+
+    UDP new endpoint log:
+      level: info for new endpoint, debug for existing endpoint when debug is enabled
+      fields: network, outbound, policy, dialer, sniffed, ip, pid, dscp,
+              pname, mac
+
+  daed/wing/dae-core/control/utils.go
+    ProcessName2String trims trailing NUL bytes.
+    Mac2String renders lower-case hex with ':' separators.
+
+  daed/wing/dae-core/control/control_plane.go
+    Built-in direct and block outbounds use policy=fixed.
+
+Rust product alignment implemented:
+  - ResidentProxyPlan now carries group_policy from the config group policy
+    function name, e.g. fixed(0) -> fixed. The field is plan-level and protocol
+    generic; no protocol-specific naming was added.
+
+  - Resident TCP route selection now carries BPF routing metadata required by
+    Go-compatible log fields:
+      pid
+      dscp
+      pname
+      mac
+
+  - Resident TCP events now add Go-style flow fields when the data is known:
+      network=tcp4
+      outbound=<group/direct/block>
+      policy=<group policy or fixed for built-ins>
+      dialer=<node tag/direct/block>
+      sniffed=<sniffed domain>
+      ip=<original destination>
+      pid/dscp/pname/mac from BPF routing result
+
+  - Resident UDP events now add the Go-style fields that the current UDP path
+    can truthfully provide:
+      network=udp4
+      outbound=<proxy group>
+      policy=<group policy>
+      dialer=<node tag>
+      sniffed=
+      ip=<original destination>
+
+    Current UDP resident packet events still do not carry BPF pid/pname/mac/dscp
+    metadata, so those fields are not fabricated. Full UDP parity needs the UDP
+    task-queue/routing-result ownership work to attach the same metadata source
+    that Go uses.
+
+  - Rust product log mapping for resident flow diagnostics now emits the Go
+    primary field names instead of internal diagnostic names:
+      proxy_group -> outbound
+      node_tag -> dialer
+      group_policy -> policy
+      sniffed_domain -> sniffed
+      original_dst -> ip
+
+    Product log fields keep only the Go primary fields plus error/reason for
+    failures. Internal fields such as bytes_client_to_proxy, tls_underlay,
+    vision_* and final_outbound remain in resident event diagnostics, not in the
+    normal WebUI task-log field chips.
+
+  - tcp_connection_finished and tcp_connection_blocked are promoted to info only
+    when the event has real route context. Legacy/minimal synthetic events
+    without outbound/original_dst context stay debug to avoid info-level
+    unknown-target noise.
+
+WebUI alignment implemented in daed-daex-align:
+  - apps/web/src/pages/Orchestrate/Logs.tsx no longer renders log fields as one
+    inline "key=value key=value" string.
+  - The page restores the prior field-chip layout from the historical WebUI log
+    rendering change while preserving current SSE batching, deduplication, and
+    max-rendered-entry behavior.
+  - Empty field values render as "-" in the UI; API/storage values remain
+    unchanged.
+
+Validation:
+  - `cargo fmt --all --manifest-path rust/Cargo.toml`: pass.
+  - `cargo test --manifest-path rust/Cargo.toml -p dae-daemon resident_events_are_bridged_to_product_logs_with_runtime_level_filter`: pass.
+  - `cargo test --manifest-path rust/Cargo.toml -p dae-daemon logs_filter_level_all_case_insensitive_query_and_sse_event_name`: pass.
+  - `cargo test --manifest-path rust/Cargo.toml -p dae-daemon --lib`: pass, 205 tests passed.
+  - `pnpm --dir /root/project/daed-daex-align/daed --filter daed check-types`: pass.
+    Note: the local command printed a Node engine warning because the shell had
+    Node v18.20.4 while package.json wants >=22.12.0.
+
+Correction after review:
+  - Product-log parity tests must use generic fixture values such as
+    flow-source, flow-destination, flow-outbound, flow-dialer and flow-process.
+  - Do not put realistic node names, process names, server names, public-looking
+    endpoints, or protocol-specific labels into protocol-generic product-log
+    mapping tests.
+  - Protocol-specific values are acceptable only inside protocol-specific
+    handler tests where the protocol shape is the subject under test.
+  - Revalidated after replacing concrete-looking log fixture values:
+      `cargo fmt --all --manifest-path rust/Cargo.toml`: pass.
+      `cargo test --manifest-path rust/Cargo.toml -p dae-daemon resident_events_are_bridged_to_product_logs_with_runtime_level_filter`: pass.
+      `cargo test --manifest-path rust/Cargo.toml -p dae-daemon proxy_failure_event_carries_relay_diagnostics`: pass.
+```
