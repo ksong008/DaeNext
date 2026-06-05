@@ -2338,14 +2338,18 @@ fn relay_tcp_over_shadowsocks_aead(
                 {
                     continue;
                 }
+                Err(err) if is_graceful_stream_close_error(&err) => break,
                 Err(err) => return Err(format!("read inbound TCP for Shadowsocks upload: {err}")),
             };
             let encrypted = encoder
                 .encrypt_chunk(&buf[..read])
                 .map_err(|err| format!("encrypt Shadowsocks upload chunk: {err}"))?;
-            upload_proxy
-                .write_all(&encrypted)
-                .map_err(|err| format!("write Shadowsocks upload chunk: {err}"))?;
+            if let Err(err) = upload_proxy.write_all(&encrypted) {
+                if is_graceful_stream_close_error(&err) {
+                    break;
+                }
+                return Err(format!("write Shadowsocks upload chunk: {err}"));
+            }
             stats += read;
         }
         let _ = upload_proxy.shutdown(Shutdown::Write);
@@ -2456,14 +2460,18 @@ fn relay_tcp_over_vmess_aead(
                 {
                     continue;
                 }
+                Err(err) if is_graceful_stream_close_error(&err) => break,
                 Err(err) => return Err(format!("read inbound TCP for VMess upload: {err}")),
             };
             let encrypted = upload_codec
                 .seal_chunk(&buf[..read])
                 .map_err(|err| format!("encode VMess upload chunk: {err}"))?;
-            upload_proxy
-                .write_all(&encrypted)
-                .map_err(|err| format!("write VMess upload chunk: {err}"))?;
+            if let Err(err) = upload_proxy.write_all(&encrypted) {
+                if is_graceful_stream_close_error(&err) {
+                    break;
+                }
+                return Err(format!("write VMess upload chunk: {err}"));
+            }
             stats += read;
         }
         let _ = upload_proxy.shutdown(Shutdown::Write);
@@ -2527,6 +2535,16 @@ fn relay_tcp_over_vmess_aead(
         metrics.add_upload(upload_bytes);
     }
     Ok(stats)
+}
+
+fn is_graceful_stream_close_error(err: &std::io::Error) -> bool {
+    matches!(
+        err.kind(),
+        ErrorKind::BrokenPipe
+            | ErrorKind::ConnectionAborted
+            | ErrorKind::ConnectionReset
+            | ErrorKind::NotConnected
+    )
 }
 
 fn proxy_tcp_finished_event(
@@ -3484,6 +3502,22 @@ mod tests {
     const FLOW_PROCESS: &str = "flow-process";
     const FLOW_MAC: &str = "flow-mac";
     const FLOW_SNIFFED_DOMAIN: &str = "flow-sniffed-domain";
+
+    #[test]
+    fn resident_upload_relay_treats_peer_close_as_graceful_end() {
+        assert!(is_graceful_stream_close_error(&std::io::Error::from(
+            ErrorKind::BrokenPipe
+        )));
+        assert!(is_graceful_stream_close_error(&std::io::Error::from(
+            ErrorKind::ConnectionReset
+        )));
+        assert!(is_graceful_stream_close_error(&std::io::Error::from(
+            ErrorKind::ConnectionAborted
+        )));
+        assert!(!is_graceful_stream_close_error(&std::io::Error::from(
+            ErrorKind::TimedOut
+        )));
+    }
 
     #[test]
     fn resident_vless_response_stripper_handles_split_header() {

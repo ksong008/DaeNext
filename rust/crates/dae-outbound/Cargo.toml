@@ -13,6 +13,7 @@ blake3.workspace = true
 bytes.workspace = true
 chacha20poly1305.workspace = true
 dae-core-types.workspace = true
+fastrand.workspace = true
 h3.workspace = true
 h3-quinn.workspace = true
 http.workspace = true

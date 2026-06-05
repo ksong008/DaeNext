@@ -375,7 +375,7 @@ fn candidate_reports_resident_service_and_dataplane_capabilities() {
         report["resident_live_adapter_live_ready_handler_count"]
             .as_u64()
             .unwrap(),
-        0
+        1
     );
     assert_eq!(
         report["resident_live_adapter_matrix_report_schema"]
@@ -391,7 +391,7 @@ fn candidate_reports_resident_service_and_dataplane_capabilities() {
             .any(
                 |entry| entry["handler"].as_str().unwrap() == "vless-vision-tcp-tls"
                     && entry["wired_ready"].as_bool().unwrap()
-                    && !entry["live_ready"].as_bool().unwrap()
+                    && entry["live_ready"].as_bool().unwrap()
             )
     );
     assert_eq!(
