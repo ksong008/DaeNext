@@ -1,4 +1,5 @@
 use std::fs;
+use std::net::SocketAddrV4;
 use std::path::{Path, PathBuf};
 use std::sync::{
     Arc, Mutex,
@@ -18,7 +19,7 @@ use self::events::path_string;
 pub(crate) use self::events::{ResidentEventLogSink, set_event_log_sink};
 use self::plan::build_resident_dataplane_plan;
 use self::tcp::{ResidentTcpRouter, resident_tcp_accept_loop};
-use self::udp::resident_udp_loop;
+use self::udp::{probe_resident_proxy_udp, resident_udp_loop};
 use super::resident_routing::build_resident_userspace_routing_matcher;
 
 mod adapter_matrix;
@@ -411,6 +412,8 @@ pub(crate) fn resident_live_adapter_config_assessment(
             json!({
                 "handler": entry.handler,
                 "formal_matrix_handler": entry.formal_matrix_handler,
+                "udp_semantics": entry.udp_semantics,
+                "udp_path_ready": entry.udp_path_ready(),
                 "wired_ready": entry.wired_ready(),
                 "live_ready": entry.live_ready(),
                 "missing": entry.missing,
@@ -497,6 +500,90 @@ pub(crate) fn resident_live_adapter_config_assessment(
     report
 }
 
+pub(crate) fn resident_live_adapter_udp_probe(
+    config: &Config,
+    target: SocketAddrV4,
+    payload: &[u8],
+    config_path: Option<&Path>,
+) -> Value {
+    let started = std::time::Instant::now();
+    let node_shapes = plan::resident_node_link_shapes(config);
+    let rows = resident_live_adapter_matrix_entries()
+        .iter()
+        .map(|entry| {
+            let schemes = matrix_row_schemes(entry.formal_matrix_handler);
+            let candidates = node_shapes
+                .iter()
+                .filter(|node| schemes.iter().any(|scheme| *scheme == node.scheme))
+                .collect::<Vec<_>>();
+            let mut blocked = Vec::new();
+            for node in &candidates {
+                match plan::build_resident_proxy_plan_for_node(
+                    config,
+                    entry.formal_matrix_handler.to_owned(),
+                    node.tag.clone(),
+                    node.link.clone(),
+                ) {
+                    Ok(proxy) => {
+                        let mut probe = probe_resident_proxy_udp(&proxy, target, payload);
+                        probe["formal_matrix_handler"] = json!(entry.formal_matrix_handler);
+                        probe["node_tag"] = json!(node.tag);
+                        probe["udp_live_adapter"] = json!(entry.udp_live_adapter);
+                        probe["udp_semantics"] = json!(entry.udp_semantics);
+                        probe["udp_path_ready"] = json!(entry.udp_path_ready());
+                        return probe;
+                    }
+                    Err(err) => blocked.push(json!({
+                        "node_tag": node.tag,
+                        "scheme": node.scheme,
+                        "error": sanitize_matrix_error(&err),
+                    })),
+                }
+            }
+            json!({
+                "formal_matrix_handler": entry.formal_matrix_handler,
+                "status": if candidates.is_empty() { "not-present" } else { "blocked" },
+                "ok": false,
+                "protocol_closed": false,
+                "candidate_count": candidates.len(),
+                "udp_live_adapter": entry.udp_live_adapter,
+                "udp_semantics": entry.udp_semantics,
+                "udp_path_ready": entry.udp_path_ready(),
+                "blocked": blocked,
+            })
+        })
+        .collect::<Vec<_>>();
+    let pass_count = rows
+        .iter()
+        .filter(|row| row["status"].as_str() == Some("pass"))
+        .count();
+    let protocol_closed_count = rows
+        .iter()
+        .filter(|row| row["status"].as_str() == Some("protocol-closed"))
+        .count();
+    let failure_count = rows
+        .iter()
+        .filter(|row| row["ok"].as_bool() != Some(true))
+        .count();
+    let matrix = resident_live_adapter_matrix_contract();
+    json!({
+        "schema": "resident-live-adapter-udp-live-v1",
+        "config": config_path.map(path_string),
+        "target": target.to_string(),
+        "payload_len": payload.len(),
+        "network_io_executed": true,
+        "host_mutation_executed": false,
+        "matrix_schema": matrix.schema,
+        "row_count": rows.len(),
+        "pass_count": pass_count,
+        "protocol_closed_count": protocol_closed_count,
+        "failure_count": failure_count,
+        "matrix_pass": failure_count == 0 && rows.len() == matrix.entries.len(),
+        "elapsed_ms": started.elapsed().as_millis(),
+        "rows": rows,
+    })
+}
+
 fn resident_full_matrix_config_rows(
     config: &Config,
     nodes: &[plan::ResidentNodeLinkShape],
@@ -536,6 +623,9 @@ fn resident_full_matrix_config_rows(
                 "wired_ready": entry.wired_ready(),
                 "live_ready": entry.live_ready(),
                 "remote_live_matrix": entry.remote_live_matrix,
+                "udp_live_adapter": entry.udp_live_adapter,
+                "udp_semantics": entry.udp_semantics,
+                "udp_path_ready": entry.udp_path_ready(),
                 "candidate_count": candidates.len(),
                 "admitted_count": admitted_count,
                 "blocked_count": blocked_count,
