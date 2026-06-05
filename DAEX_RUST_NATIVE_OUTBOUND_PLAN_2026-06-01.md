@@ -261,9 +261,99 @@ Post-deploy validation:
     added.
 
 Scope note:
-  This deployment replaced the product binary. WebUI source changes in
-  daed-daex-align/daed are committed, but static WebUI assets on 10.10.10.2
-  were not rebuilt/copied in this binary-only deployment.
+  The first pass replaced the product binary. WebUI source changes in
+  daed-daex-align/daed were already committed and were synchronized in the
+  follow-up WebUI static resource pass below.
+```
+
+2026-06-05 10.10.10.2 WebUI static resource sync:
+
+```text
+Source commit:
+  daed-daex-align/daed:
+    881e1a5 Align task log field rendering
+
+Build environment:
+  node:
+    /root/.local/node-v22.12.0-linux-x64/bin/node
+    v22.12.0
+
+  pnpm:
+    10.24.0
+
+Build command:
+  cwd:
+    /root/project/daed-daex-align/daed
+
+  command:
+    PATH=/root/.local/node-v22.12.0-linux-x64/bin:$PATH pnpm --filter daed build
+
+  result:
+    pass
+
+Build output:
+  path:
+    /root/project/daed-daex-align/daed/apps/web/dist
+
+  size:
+    28M
+
+  file count:
+    480
+
+  index.html sha256:
+    cbb404fadf974e41fca6106bad2c44906c5eb6c7ebf88aa0457fef23d142e2bd
+
+  main assets from index.html:
+    ./assets/index-D6BRl2SC.js
+    ./assets/index-B1ZEZIZ_.css
+
+Transfer artifact:
+  /tmp/daed-web-dist-20260605.tgz
+  sha256: ed818c1a230bd3b8e8be38dcab8d9a9851610c6c78a1ce3426a292cf442a2a1a
+
+Remote install:
+  target:
+    10.10.10.2
+
+  web root:
+    /usr/share/daed/web
+
+  rollback anchor:
+    /usr/share/daed/web-daex-align-webui-cpu-20260601
+    This stable rollback directory was created only if missing. No per-test
+    rolling WebUI backup was added.
+
+  installed output:
+    file count: 480
+    size: 28M
+    index.html sha256:
+      cbb404fadf974e41fca6106bad2c44906c5eb6c7ebf88aa0457fef23d142e2bd
+
+HTTP validation through Rust daed:
+  service:
+    ActiveState=active
+    SubState=running
+    MainPID=42308
+    ExecMainStatus=0
+
+  GET /:
+    returned index.html with sha256
+      cbb404fadf974e41fca6106bad2c44906c5eb6c7ebf88aa0457fef23d142e2bd
+
+  GET /assets/index-D6BRl2SC.js:
+    returned JavaScript content beginning with `const __vite__mapDeps=...`
+
+  GET /assets/index-B1ZEZIZ_.css:
+    returned CSS content beginning with Tailwind header.
+
+  GET /api/health:
+    {"healthCheck":1}
+
+Note:
+  HEAD requests for static assets returned HTTP 200 but Content-Length: 0 under
+  the current Rust static-file serving path. GET returned real content, so this
+  is a HEAD metadata behavior, not an empty asset deployment.
 ```
 
 核心 trait 建议：
