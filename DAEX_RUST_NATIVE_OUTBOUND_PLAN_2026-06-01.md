@@ -14135,6 +14135,50 @@ Validation:
   - `cargo test --manifest-path rust/Cargo.toml -p dae-daemon`: pass,
     209 unit tests plus integration/doc test suites passed.
 
+## 2026-06-05 11:40 +0800 - compact startup evidence log correction
+
+Reason:
+  - The lifecycle log shrink kept `[Startup] Finished`, phase elapsed time, and
+    `[Reload] Finished`, but removed startup evidence that is operationally
+    important for judging whether the Rust native owner actually loaded and
+    attached the datapath.
+  - Go daed startup logs expose key evidence such as the BPF loading memory
+    warning, Rust/Aya loader object source, loaded programs/maps, each attach
+    binding, and routing match-set capacity. Rust product logs must keep this
+    evidence without restoring the full verbose resident runtime report.
+
+Correction principle:
+  - Keep the evidence protocol-generic and interface-generic.
+  - Do not hardcode `dae0`, `dae0peer`, a physical NIC name, a node name, or a
+    test host into the log writer.
+  - Generate startup evidence from the resident runtime report:
+      `executed_steps[].native_attach.program_name`
+      `executed_steps[].native_attach.iface`
+      `executed_steps[].native_attach.backend`
+      `resident_lan_routing[].routing_map_update.match_set_count`
+      `resident_lan_routing[].routing_map_update.map.max_entries`
+  - Test fixtures must use generic program/interface names such as
+    `program_ingress` and `if_test0`; no service/node-specific fixture data.
+
+Expected Rust startup resident task logs:
+  - `The loading process takes about 120MB free memory, which will be released
+    after loading. Insufficient memory will cause loading failure.`
+  - `Rust/Aya BPF loader loaded`
+      fields: `object_source`, `default_object_source`,
+      `kernel_ebpf_program_rewrite`
+  - `Loaded eBPF programs and maps`
+      fields: `program_count`, `map_count`
+  - `Bind <program> via Rust/Aya <backend> on <interface>`
+      fields: `role`, `direction`, `priority`, `handle`
+  - `Routing match set len: <len>/<max_entries>`
+      fields: `interface`, `map`, `map_id`
+
+Boundary:
+  - These logs are lifecycle/startup evidence and bypass `runtime_log_level`,
+    like the existing compact startup/reload success logs.
+  - High-frequency resident flow diagnostics remain runtime-level gated and
+    should not be reintroduced as normal task-log noise.
+
 ## 2026-06-05 10:03 +0800 - Go daed startup/reload log parity audit
 
 Scope:

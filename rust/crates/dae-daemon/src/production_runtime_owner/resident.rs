@@ -110,6 +110,7 @@ impl ResidentProductionRuntime {
             "fakeRuntime": false,
             "residentRuntimeStarted": self.start_report["resident_runtime_started"].as_bool().unwrap_or(false),
             "residentDataplane": resident_dataplane,
+            "startupEvidence": self.start_report["startupEvidence"].clone(),
             "artifactDir": self.start_report["artifact_dir"].clone(),
             "startFile": self.start_report["start_file"].clone(),
             "cleanupFile": self.start_report["cleanup_file"].clone(),
@@ -798,6 +799,7 @@ fn compact_start_report_for_runtime(start_report: &Value) -> Value {
             .and_then(Value::as_str)
             .map(str::to_owned)
     });
+    let startup_evidence = startup_evidence_from_report(start_report);
     json!({
         "name": start_report["name"].clone(),
         "status": start_report["status"].clone(),
@@ -809,9 +811,117 @@ fn compact_start_report_for_runtime(start_report: &Value) -> Value {
         "resident_dataplane": start_report["resident_dataplane"].clone(),
         "attachBackend": attach_backend,
         "netnsLinkMode": netns_link_mode,
+        "startupEvidence": startup_evidence,
         "stored_summary_only": true,
         "full_start_report_file": start_report["start_file"].clone(),
     })
+}
+
+fn startup_evidence_from_report(start_report: &Value) -> Value {
+    let native_object = start_report
+        .get("native_object")
+        .filter(|value| !value.is_null());
+    let bpf_loader = native_object.map(|object| {
+        let kernel_rewrite = start_report
+            .pointer("/native_param_image/rewritten_param_matches")
+            .and_then(Value::as_bool)
+            .unwrap_or(true);
+        json!({
+            "objectSource": "rust-aya-skeleton",
+            "defaultObjectSource": if cfg!(feature = "native-ebpf") {
+                "rust-aya-skeleton"
+            } else {
+                "c-aya"
+            },
+            "kernelEbpfProgramRewrite": kernel_rewrite,
+            "objectPath": object,
+            "paramObjectPath": start_report["native_param_object"].clone(),
+        })
+    });
+    let bindings = startup_attach_bindings(start_report);
+    let loaded_map_count = start_report
+        .pointer("/loaded_map_handoff/new_map_ids")
+        .and_then(Value::as_array)
+        .map(Vec::len)
+        .unwrap_or_else(|| {
+            start_report
+                .get("discovered_map_id")
+                .filter(|value| !value.is_null())
+                .map(|_| 1)
+                .unwrap_or(0)
+                + start_report
+                    .get("discovered_routing_map_ids")
+                    .and_then(Value::as_array)
+                    .map(|ids| ids.iter().filter(|id| !id.is_null()).count())
+                    .unwrap_or(0)
+        });
+    json!({
+        "bpfLoader": bpf_loader,
+        "loadedEbpf": {
+            "status": if start_report["status"].as_str() == Some("pass") { "pass" } else { "fail" },
+            "programCount": bindings.len(),
+            "mapCount": loaded_map_count,
+        },
+        "bindings": bindings,
+        "routingMatchSets": startup_routing_match_sets(start_report),
+    })
+}
+
+fn startup_attach_bindings(start_report: &Value) -> Vec<Value> {
+    let Some(steps) = start_report.get("executed_steps").and_then(Value::as_array) else {
+        return Vec::new();
+    };
+    steps
+        .iter()
+        .filter(|step| step["status"].as_str() == Some("pass"))
+        .filter_map(|step| {
+            let native_attach = step.get("native_attach")?;
+            let program_name = native_attach.get("program_name").and_then(Value::as_str)?;
+            let interface = native_attach
+                .get("iface")
+                .and_then(Value::as_str)
+                .or_else(|| step.get("interface").and_then(Value::as_str))?;
+            let backend = native_attach
+                .get("backend")
+                .and_then(Value::as_str)
+                .or_else(|| step.get("backend").and_then(Value::as_str))
+                .unwrap_or("aya");
+            Some(json!({
+                "programName": program_name,
+                "interface": interface,
+                "backend": backend,
+                "role": step["role"].clone(),
+                "direction": native_attach["direction"].clone(),
+                "priority": native_attach["priority"].clone(),
+                "handle": native_attach["handle"].clone(),
+                "linkLayer": step["link_layer"].clone(),
+            }))
+        })
+        .collect()
+}
+
+fn startup_routing_match_sets(start_report: &Value) -> Vec<Value> {
+    let Some(routings) = start_report
+        .get("resident_lan_routing")
+        .and_then(Value::as_array)
+    else {
+        return Vec::new();
+    };
+    routings
+        .iter()
+        .filter_map(|routing| {
+            let update = routing.get("routing_map_update")?;
+            let map = update.get("map")?;
+            Some(json!({
+                "interface": routing["interface"].clone(),
+                "status": update["status"].clone(),
+                "len": update["match_set_count"].clone(),
+                "maxEntries": map["max_entries"].clone(),
+                "mapId": map["id"].clone(),
+                "mapName": map["name"].clone(),
+            }))
+        })
+        .collect()
 }
 
 fn selected_netns_link_mode(start_report: &Value) -> Option<String> {
