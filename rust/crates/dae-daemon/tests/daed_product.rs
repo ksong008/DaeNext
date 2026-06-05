@@ -518,6 +518,21 @@ fn daed_product_contract_reports_c10_first_batch_state_paths() {
 }
 
 #[test]
+fn daed_version_command_supports_package_smoke_test() {
+    let output = Command::new(binary())
+        .env("DAE_DAEMON_VERSION", "c10-smoke")
+        .arg("--version")
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "stderr={}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(String::from_utf8_lossy(&output.stdout), "c10-smoke\n");
+}
+
+#[test]
 fn daed_validate_accepts_config_file_and_config_dir_without_state_mutation() {
     let temp = temp_dir("validate");
     let config_file = temp.join("empty.dae");
