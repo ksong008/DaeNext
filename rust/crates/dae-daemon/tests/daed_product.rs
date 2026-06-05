@@ -744,7 +744,8 @@ fn daed_run_serves_c10_resource_runtime_log_latency_and_bundle_surface() {
 
     let (probe_port, probe_handle) = spawn_tcp_probe_server();
     let (subscription_port, subscription_handle) = spawn_text_server(&format!(
-        "http://127.0.0.1:{probe_port}/sub-node#subscription-node\n"
+        "http://127.0.0.1:{probe_port}/selected#selected-sub-node\n\
+         http://127.0.0.1:{probe_port}/ignored#ignored-sub-node\n"
     ));
 
     let config = http_request(
@@ -832,7 +833,7 @@ fn daed_run_serves_c10_resource_runtime_log_latency_and_bundle_surface() {
     );
     assert!(subscription.contains("201 Created"), "{subscription}");
     assert!(
-        subscription.contains("subscription-node"),
+        subscription.contains("selected-sub-node") && subscription.contains("ignored-sub-node"),
         "subscription fetch did not import local node: {subscription}"
     );
     subscription_handle.join().unwrap();
@@ -895,7 +896,7 @@ fn daed_run_serves_c10_resource_runtime_log_latency_and_bundle_surface() {
         "POST",
         &format!("/api/groups/{group_id}/subscriptions"),
         Some(&format!(
-            r#"{{"subscriptionIds":[{subscription_id}],"nameFilterRegex":"n.*"}}"#
+            r#"{{"subscriptionIds":[{subscription_id}],"nameFilterRegex":"^selected-"}}"#
         )),
         Some(&token),
     );
@@ -915,6 +916,22 @@ fn daed_run_serves_c10_resource_runtime_log_latency_and_bundle_surface() {
     assert_eq!(
         groups["items"][0]["nodes"][0]["id"].as_i64().unwrap(),
         node_id
+    );
+    let subscription_binding = &groups["items"][0]["subscriptions"][0];
+    assert_eq!(subscription_binding["matchedCount"].as_i64().unwrap(), 1);
+    assert_eq!(
+        subscription_binding["matchedNodes"][0]["name"]
+            .as_str()
+            .unwrap(),
+        "selected-sub-node"
+    );
+    assert!(
+        !subscription_binding["matchedNodes"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|node| node["name"].as_str() == Some("ignored-sub-node")),
+        "{subscription_binding}"
     );
 
     let latency = http_request(
@@ -976,6 +993,14 @@ fn daed_run_serves_c10_resource_runtime_log_latency_and_bundle_surface() {
     assert!(generated.contains("group {"), "{generated}");
     assert!(
         generated.contains("filter: name('n1-renamed'"),
+        "{generated}"
+    );
+    assert!(
+        generated.contains("filter: name('n1-renamed', 'selected-sub-node')"),
+        "{generated}"
+    );
+    assert!(
+        !generated.contains("filter: name('n1-renamed', 'ignored-sub-node')"),
         "{generated}"
     );
 
