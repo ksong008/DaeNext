@@ -728,6 +728,8 @@ fn insert_resident_live_adapter_matrix_service_contract_capabilities(report: &mu
                 "planner_admitted": entry.planner_admitted,
                 "tcp_live_adapter": entry.tcp_live_adapter,
                 "udp_live_adapter": entry.udp_live_adapter,
+                "udp_semantics": entry.udp_semantics,
+                "udp_path_ready": entry.udp_path_ready(),
                 "transport_underlay": entry.transport_underlay,
                 "route_group_connectivity": entry.route_group_connectivity,
                 "selected_node_fail_closed": entry.selected_node_fail_closed,

@@ -1817,7 +1817,7 @@ async fn relay_tcp_over_quic_stream_async(
     Ok(stats)
 }
 
-fn open_marked_quic_endpoint(mark: u32) -> Result<quinn::Endpoint, String> {
+pub(super) fn open_marked_quic_endpoint(mark: u32) -> Result<quinn::Endpoint, String> {
     let socket = UdpSocket::bind(SocketAddr::new(IpAddr::V4(Ipv4Addr::UNSPECIFIED), 0))
         .map_err(|err| format!("bind QUIC UDP socket: {err}"))?;
     if mark != 0 {
@@ -1830,7 +1830,7 @@ fn open_marked_quic_endpoint(mark: u32) -> Result<quinn::Endpoint, String> {
         .map_err(|err| format!("create QUIC endpoint: {err}"))
 }
 
-fn resolve_proxy_udp_addr(proxy: &ResidentProxyPlan) -> Result<SocketAddr, String> {
+pub(super) fn resolve_proxy_udp_addr(proxy: &ResidentProxyPlan) -> Result<SocketAddr, String> {
     let target = format!("{}:{}", proxy.server_host, proxy.server_port);
     target
         .to_socket_addrs()
@@ -1839,7 +1839,7 @@ fn resolve_proxy_udp_addr(proxy: &ResidentProxyPlan) -> Result<SocketAddr, Strin
         .ok_or_else(|| format!("resolve QUIC endpoint {target}: no address"))
 }
 
-fn set_socket_mark(fd: i32, mark: u32) -> std::io::Result<()> {
+pub(super) fn set_socket_mark(fd: i32, mark: u32) -> std::io::Result<()> {
     let mark = mark as libc::c_int;
     let status = unsafe {
         libc::setsockopt(
