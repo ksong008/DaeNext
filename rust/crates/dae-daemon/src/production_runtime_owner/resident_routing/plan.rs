@@ -8,6 +8,10 @@ use std::{
 use dae_config::{Config, DynamicFunctionValue, Function, Param, RoutingRule};
 use dae_core_types::OutboundIndex;
 use dae_ebpf_support::MAX_MATCH_SET_LEN;
+use dae_routing::{
+    DomainKey, IpPrefix as RoutingIpPrefix, RoutingDomainSet, RoutingLpmSet, RoutingMatchKind,
+    RoutingMatchSet,
+};
 use serde_json::{Value, json};
 
 use super::geodata::{
@@ -221,96 +225,99 @@ pub(super) fn domain_set_json(set: &ResidentDomainSet) -> Value {
     })
 }
 
-pub(super) fn userspace_matcher_fixture_json(plan: &ResidentRoutingPlan) -> Value {
-    json!({
-        "domain_sets": plan.domain_sets.iter().map(|set| {
-            json!({
-                "bit": set.rule_index,
-                "key": &set.key,
-                "patterns": &set.values,
+pub(super) fn userspace_matcher_typed_sets(
+    plan: &ResidentRoutingPlan,
+) -> Result<
+    (
+        Vec<RoutingDomainSet>,
+        Vec<RoutingLpmSet>,
+        Vec<RoutingMatchSet>,
+    ),
+    String,
+> {
+    let domain_sets = plan
+        .domain_sets
+        .iter()
+        .map(|set| {
+            let key = DomainKey::try_from(set.key.as_str())
+                .map_err(|err| format!("domain set {} key: {err}", set.rule_index))?;
+            Ok(RoutingDomainSet {
+                bit: set.rule_index,
+                key,
+                patterns: set.values.clone(),
             })
-        }).collect::<Vec<_>>(),
-        "lpm_sets": plan.lpm_sets.iter().enumerate().map(|(index, prefixes)| {
-            json!({
-                "index": index,
-                "prefixes": prefixes.iter().map(ip_prefix_string).collect::<Vec<_>>(),
-            })
-        }).collect::<Vec<_>>(),
-        "matches": plan.matches.iter().map(match_set_fixture_json).collect::<Vec<_>>(),
-    })
-}
-
-fn match_set_fixture_json(set: &MatchSetBytes) -> Value {
-    let mut item = json!({
-        "type": match set.bytes[17] {
-            MATCH_TYPE_DOMAIN_SET => "domain_set",
-            MATCH_TYPE_IP_SET => "ip_set",
-            MATCH_TYPE_SOURCE_IP_SET => "source_ip_set",
-            MATCH_TYPE_PORT => "port",
-            MATCH_TYPE_SOURCE_PORT => "source_port",
-            MATCH_TYPE_L4_PROTO => "l4proto",
-            MATCH_TYPE_IP_VERSION => "ipversion",
-            MATCH_TYPE_MAC => "mac",
-            MATCH_TYPE_PROCESS_NAME => "process_name",
-            MATCH_TYPE_DSCP => "dscp",
-            MATCH_TYPE_FALLBACK => "fallback",
-            _ => "unknown",
-        },
-        "outbound": outbound_fixture_name(set.outbound),
-    });
-    if set.bytes[16] != 0 {
-        item["not"] = json!(true);
-    }
-    if set.mark != 0 {
-        item["mark"] = json!(set.mark);
-    }
-    if set.must {
-        item["must"] = json!(true);
-    }
-    match set.bytes[17] {
-        MATCH_TYPE_IP_SET | MATCH_TYPE_SOURCE_IP_SET | MATCH_TYPE_MAC => {
-            item["lpm_index"] = json!(u32::from_le_bytes([
-                set.bytes[0],
-                set.bytes[1],
-                set.bytes[2],
-                set.bytes[3],
-            ]));
-        }
-        MATCH_TYPE_PORT | MATCH_TYPE_SOURCE_PORT => {
-            item["port_start"] = json!(u16::from_le_bytes([set.bytes[0], set.bytes[1]]));
-            item["port_end"] = json!(u16::from_le_bytes([set.bytes[2], set.bytes[3]]));
-        }
-        MATCH_TYPE_L4_PROTO | MATCH_TYPE_IP_VERSION => {
-            item["value"] = json!(set.bytes[0]);
-        }
-        MATCH_TYPE_PROCESS_NAME => {
-            let end = set.bytes[..16]
+        })
+        .collect::<Result<Vec<_>, String>>()?;
+    let lpm_sets = plan
+        .lpm_sets
+        .iter()
+        .enumerate()
+        .map(|(index, prefixes)| {
+            let prefixes = prefixes
                 .iter()
-                .position(|byte| *byte == 0)
-                .unwrap_or(16);
-            item["process_name"] = json!(String::from_utf8_lossy(&set.bytes[..end]).into_owned());
-        }
-        MATCH_TYPE_DSCP => {
-            item["dscp"] = json!(set.bytes[0]);
-        }
-        _ => {}
-    }
-    item
+                .map(|prefix| {
+                    RoutingIpPrefix::new(prefix.addr, prefix.bits)
+                        .map_err(|err| format!("lpm set {index}: {err}"))
+                })
+                .collect::<Result<Vec<_>, String>>()?;
+            Ok(RoutingLpmSet {
+                index: index as u32,
+                prefixes,
+            })
+        })
+        .collect::<Result<Vec<_>, String>>()?;
+    let matches = plan
+        .matches
+        .iter()
+        .map(match_set_typed)
+        .collect::<Result<Vec<_>, String>>()?;
+    Ok((domain_sets, lpm_sets, matches))
 }
 
-fn outbound_fixture_name(outbound: u8) -> String {
-    match OutboundIndex(outbound) {
-        OutboundIndex::DIRECT => "direct".to_owned(),
-        OutboundIndex::BLOCK => "block".to_owned(),
-        OutboundIndex::MUST_RULES => "must_rules".to_owned(),
-        OutboundIndex::LOGICAL_OR => "logical_or".to_owned(),
-        OutboundIndex::LOGICAL_AND => "logical_and".to_owned(),
-        _ => format!("index:{outbound}"),
-    }
-}
-
-fn ip_prefix_string(prefix: &IpPrefix) -> String {
-    format!("{}/{}", prefix.addr, prefix.bits)
+fn match_set_typed(set: &MatchSetBytes) -> Result<RoutingMatchSet, String> {
+    let kind = match set.bytes[17] {
+        MATCH_TYPE_DOMAIN_SET => RoutingMatchKind::DomainSet,
+        MATCH_TYPE_IP_SET => RoutingMatchKind::IpSet {
+            lpm_index: u32::from_le_bytes([set.bytes[0], set.bytes[1], set.bytes[2], set.bytes[3]]),
+        },
+        MATCH_TYPE_SOURCE_IP_SET => RoutingMatchKind::SourceIpSet {
+            lpm_index: u32::from_le_bytes([set.bytes[0], set.bytes[1], set.bytes[2], set.bytes[3]]),
+        },
+        MATCH_TYPE_PORT => RoutingMatchKind::Port {
+            start: u16::from_le_bytes([set.bytes[0], set.bytes[1]]),
+            end: u16::from_le_bytes([set.bytes[2], set.bytes[3]]),
+        },
+        MATCH_TYPE_SOURCE_PORT => RoutingMatchKind::SourcePort {
+            start: u16::from_le_bytes([set.bytes[0], set.bytes[1]]),
+            end: u16::from_le_bytes([set.bytes[2], set.bytes[3]]),
+        },
+        MATCH_TYPE_L4_PROTO => RoutingMatchKind::L4Proto {
+            value: set.bytes[0],
+        },
+        MATCH_TYPE_IP_VERSION => RoutingMatchKind::IpVersion {
+            value: set.bytes[0],
+        },
+        MATCH_TYPE_MAC => RoutingMatchKind::Mac {
+            lpm_index: u32::from_le_bytes([set.bytes[0], set.bytes[1], set.bytes[2], set.bytes[3]]),
+        },
+        MATCH_TYPE_PROCESS_NAME => {
+            let mut value = [0_u8; 16];
+            value.copy_from_slice(&set.bytes[..16]);
+            RoutingMatchKind::ProcessName { value }
+        }
+        MATCH_TYPE_DSCP => RoutingMatchKind::Dscp {
+            value: set.bytes[0],
+        },
+        MATCH_TYPE_FALLBACK => RoutingMatchKind::Fallback,
+        other => return Err(format!("unknown resident routing match type: {other}")),
+    };
+    Ok(RoutingMatchSet {
+        kind,
+        outbound: OutboundIndex(set.outbound),
+        not: set.bytes[16] != 0,
+        mark: set.mark,
+        must: set.must,
+    })
 }
 
 fn compile_rule(

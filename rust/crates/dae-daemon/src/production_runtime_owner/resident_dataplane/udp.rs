@@ -202,7 +202,14 @@ fn handle_udp_packet(
                         "request_len": request_len,
                         "response_len": response.len(),
                         "proxy_group": proxy.group_name,
+                        "group_policy": proxy.group_policy,
                         "node_tag": proxy.node_tag,
+                        "network": "udp4",
+                        "outbound": proxy.group_name,
+                        "policy": proxy.group_policy,
+                        "dialer": proxy.node_tag,
+                        "sniffed": "",
+                        "ip": original_dst.to_string(),
                     }),
                 )
             }
@@ -434,6 +441,7 @@ mod tests {
         let proxy = ResidentProxyPlan {
             protocol: "vless".to_owned(),
             group_name: "proxy".to_owned(),
+            group_policy: "fixed".to_owned(),
             node_tag: "vless_live".to_owned(),
             server_host: "156.246.90.2".to_owned(),
             server_port: 443,

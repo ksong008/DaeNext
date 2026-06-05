@@ -206,6 +206,7 @@ impl ResidentTcpRouter {
             userspace_route_must,
             dial_target: final_choose.dial_target.clone(),
             dial_ip: final_choose.dial_ip,
+            log_metadata: TcpRoutingLogMetadata::from_bpf(&initial),
         };
         match final_outbound {
             OUTBOUND_DIRECT => Ok(TcpSelection::Direct(TcpDirectSelection {
@@ -269,6 +270,26 @@ struct TcpRouteSelection {
     userspace_route_must: bool,
     dial_target: String,
     dial_ip: bool,
+    log_metadata: TcpRoutingLogMetadata,
+}
+
+#[derive(Debug)]
+struct TcpRoutingLogMetadata {
+    pid: u32,
+    dscp: u8,
+    pname: String,
+    mac: String,
+}
+
+impl TcpRoutingLogMetadata {
+    fn from_bpf(result: &BpfRoutingResult) -> Self {
+        Self {
+            pid: result.pid,
+            dscp: result.dscp,
+            pname: process_name(&result.pname).unwrap_or_default(),
+            mac: mac_string(&result.mac),
+        }
+    }
 }
 
 #[derive(Debug)]
@@ -488,8 +509,9 @@ async fn handle_tcp_connection_async_or_handoff(
         }
         TcpSelection::Block(selection) => {
             let _ = inbound.shutdown().await;
-            Ok(Some(json!({
+            let mut event = json!({
                 "event": "tcp_connection_blocked",
+                "outbound_kind": "block",
                 "peer": peer.to_string(),
                 "original_dst": original_dst.to_string(),
                 "dial_target": &selection.route.dial_target,
@@ -502,7 +524,9 @@ async fn handle_tcp_connection_async_or_handoff(
                 "sniffed_domain": &sniff.domain,
                 "sniff_error": &sniff.error,
                 "execution": "async-block",
-            })))
+            });
+            append_tcp_route_log_fields(&mut event, &selection.route, "block", "fixed", "block");
+            Ok(Some(event))
         }
         TcpSelection::Proxy(selection) => {
             metrics.tcp_opened();
@@ -754,8 +778,9 @@ fn handle_tcp_connection(
         ),
         TcpSelection::Block(selection) => {
             let _ = inbound.shutdown(Shutdown::Both);
-            Ok(json!({
+            let mut event = json!({
                 "event": "tcp_connection_blocked",
+                "outbound_kind": "block",
                 "peer": peer.to_string(),
                 "original_dst": original_dst.to_string(),
                 "dial_target": &selection.route.dial_target,
@@ -767,7 +792,9 @@ fn handle_tcp_connection(
                 "userspace_route_must": selection.route.userspace_route_must,
                 "sniffed_domain": &sniff.domain,
                 "sniff_error": &sniff.error,
-            }))
+            });
+            append_tcp_route_log_fields(&mut event, &selection.route, "block", "fixed", "block");
+            Ok(event)
         }
     }
 }
@@ -2594,7 +2621,7 @@ fn proxy_tcp_base_event(
     selection: &TcpProxySelection,
     sniff: &TcpSniffReport,
 ) -> Value {
-    json!({
+    let mut event = json!({
         "event": event_name,
         "outbound_kind": "proxy",
         "peer": peer.to_string(),
@@ -2609,8 +2636,17 @@ fn proxy_tcp_base_event(
         "sniffed_domain": &sniff.domain,
         "sniff_error": &sniff.error,
         "proxy_group": &selection.proxy.group_name,
+        "group_policy": &selection.proxy.group_policy,
         "node_tag": &selection.proxy.node_tag,
-    })
+    });
+    append_tcp_route_log_fields(
+        &mut event,
+        &selection.route,
+        &selection.proxy.group_name,
+        &selection.proxy.group_policy,
+        &selection.proxy.node_tag,
+    );
+    event
 }
 
 fn append_proxy_relay_stats(event: &mut Value, stats: &RelayStats) {
@@ -2706,7 +2742,7 @@ fn direct_tcp_finished_event(
     stats: &DirectTcpRelayStats,
     execution: &'static str,
 ) -> Value {
-    json!({
+    let mut event = json!({
         "event": "tcp_connection_finished",
         "outbound_kind": "direct",
         "peer": peer.to_string(),
@@ -2732,7 +2768,28 @@ fn direct_tcp_finished_event(
         "bytes_client_to_direct": stats.client_to_direct,
         "bytes_direct_to_client": stats.direct_to_client,
         "execution": execution,
-    })
+    });
+    append_tcp_route_log_fields(&mut event, &selection.route, "direct", "fixed", "direct");
+    event
+}
+
+fn append_tcp_route_log_fields(
+    event: &mut Value,
+    route: &TcpRouteSelection,
+    outbound: &str,
+    policy: &str,
+    dialer: &str,
+) {
+    event["network"] = json!("tcp4");
+    event["outbound"] = json!(outbound);
+    event["policy"] = json!(policy);
+    event["dialer"] = json!(dialer);
+    event["sniffed"] = event["sniffed_domain"].clone();
+    event["ip"] = event["original_dst"].clone();
+    event["pid"] = json!(route.log_metadata.pid);
+    event["dscp"] = json!(route.log_metadata.dscp);
+    event["pname"] = json!(&route.log_metadata.pname);
+    event["mac"] = json!(&route.log_metadata.mac);
 }
 
 fn sniff_initial_tcp_payload(
@@ -2907,6 +2964,13 @@ fn sniff_needs_more(err: &SniffingError) -> bool {
 fn process_name(raw: &[u8; 16]) -> Option<String> {
     let end = raw.iter().position(|byte| *byte == 0).unwrap_or(raw.len());
     (end > 0).then(|| String::from_utf8_lossy(&raw[..end]).into_owned())
+}
+
+fn mac_string(raw: &[u8; 6]) -> String {
+    format!(
+        "{:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x}",
+        raw[0], raw[1], raw[2], raw[3], raw[4], raw[5]
+    )
 }
 
 fn ipv4_mapped_ip_bytes(addr: Ipv4Addr) -> BpfIpBytes {
@@ -3413,6 +3477,14 @@ mod tests {
     use super::*;
     use serde_json::json;
 
+    const FLOW_DIAL_TARGET: &str = "flow-dial-target";
+    const FLOW_OUTBOUND: &str = "flow-outbound";
+    const FLOW_POLICY: &str = "fixed";
+    const FLOW_DIALER: &str = "flow-dialer";
+    const FLOW_PROCESS: &str = "flow-process";
+    const FLOW_MAC: &str = "flow-mac";
+    const FLOW_SNIFFED_DOMAIN: &str = "flow-sniffed-domain";
+
     #[test]
     fn resident_vless_response_stripper_handles_split_header() {
         let mut stripper = VlessResponseStripper::default();
@@ -3432,14 +3504,20 @@ mod tests {
                 final_mark: 0x55,
                 userspace_route_executed: true,
                 userspace_route_must: false,
-                dial_target: "203.0.113.10:443".to_owned(),
+                dial_target: FLOW_DIAL_TARGET.to_owned(),
                 dial_ip: false,
+                log_metadata: TcpRoutingLogMetadata {
+                    pid: 1,
+                    dscp: 2,
+                    pname: FLOW_PROCESS.to_owned(),
+                    mac: FLOW_MAC.to_owned(),
+                },
             },
             proxy: dummy_proxy_plan(),
         };
         let sniff = TcpSniffReport {
             payload: Vec::new(),
-            domain: "service.example".to_owned(),
+            domain: FLOW_SNIFFED_DOMAIN.to_owned(),
             error: None,
         };
         let stats = RelayStats {
@@ -3472,9 +3550,10 @@ mod tests {
         assert_eq!(event["vision_direct_command_seen"], false);
         assert_eq!(event["vision_raw_direct_recovered"], false);
         assert_eq!(event["vision_downlink_direct_active"], false);
-        assert_eq!(event["proxy_group"], "proxy");
-        assert_eq!(event["node_tag"], "node");
-        assert_eq!(event["sniffed_domain"], "service.example");
+        assert_eq!(event["proxy_group"], FLOW_OUTBOUND);
+        assert_eq!(event["group_policy"], FLOW_POLICY);
+        assert_eq!(event["node_tag"], FLOW_DIALER);
+        assert_eq!(event["sniffed_domain"], FLOW_SNIFFED_DOMAIN);
     }
 
     #[test]
@@ -3724,8 +3803,9 @@ mod tests {
     fn dummy_proxy_plan() -> ResidentProxyPlan {
         ResidentProxyPlan {
             protocol: "vless".to_owned(),
-            group_name: "proxy".to_owned(),
-            node_tag: "node".to_owned(),
+            group_name: FLOW_OUTBOUND.to_owned(),
+            group_policy: FLOW_POLICY.to_owned(),
+            node_tag: FLOW_DIALER.to_owned(),
             server_host: "127.0.0.1".to_owned(),
             server_port: 443,
             server_name: "example.com".to_owned(),
