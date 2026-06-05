@@ -649,6 +649,9 @@ pub fn run_daed_product_with_args_and_version(
 ) -> DaedProductOutput {
     let args = args.into_iter().map(Into::into).collect::<Vec<_>>();
     match args.first().map(String::as_str) {
+        Some("version") | Some("--version") | Some("-V") => {
+            run_version_command(&args[1..], version)
+        }
         Some("service-contract") => run_service_contract_command(&args[1..], version),
         Some("package-info") => run_package_info_command(&args[1..], version),
         Some("validate") => run_validate_command(&args[1..]),
@@ -662,6 +665,13 @@ pub fn run_daed_product_with_args_and_version(
         Some(command) => DaedProductOutput::usage(format!("unsupported daed command: {command}")),
         None => DaedProductOutput::usage("missing daed command"),
     }
+}
+
+fn run_version_command(args: &[String], version: &str) -> DaedProductOutput {
+    if !args.is_empty() {
+        return DaedProductOutput::usage("version accepts no arguments");
+    }
+    DaedProductOutput::ok(format!("{version}\n"))
 }
 
 fn run_service_contract_command(args: &[String], version: &str) -> DaedProductOutput {
@@ -9513,6 +9523,7 @@ fn status_reason(status: u16) -> &'static str {
 
 fn help_text() -> String {
     r#"daed Rust native product commands:
+  daed --version
   daed run -c /etc/daed --listen 0.0.0.0:2023 [--api-only] [--web-root PATH]
   daed validate -c /etc/daed/|/etc/dae/config.dae [--json]
   daed service-contract [--json]
