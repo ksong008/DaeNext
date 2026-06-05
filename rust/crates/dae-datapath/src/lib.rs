@@ -27,7 +27,7 @@ pub use active_handoff::{
     ActiveHandoffDecision, ActiveHandoffKey, ActiveHandoffState, ActiveL4, ActiveTcpHandoffInput,
     ActiveUdpHandoffInput,
 };
-pub use dial::{magic_network, magic_network_bytes};
+pub use dial::{magic_network, magic_network_bytes, magic_network_len, write_magic_network_bytes};
 pub use packet_sniffer::{PACKET_SNIFFER_POOL_MAX_ENTRIES, PACKET_SNIFFER_TTL_MS};
 pub use route::{RouteLoopResult, RouteRule, route_loop};
 pub use tcp_direct::{

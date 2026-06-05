@@ -35,7 +35,9 @@ pub use connectivity::{ConnectivityMap, OutboundConnectivityKey};
 pub use dialer::{Collection, Dialer};
 pub use direct::{DirectOption, ResolverChoice, select_direct_resolver};
 pub use error::OutboundError;
-pub use filter::{DialerSet, Filter, FilterParam, MatchedDialer};
+pub use filter::{
+    CompiledFilterGroups, DialerSet, Filter, FilterParam, MatchedDialer, MatchedDialerRef,
+};
 pub use group::{DialerGroup, SelectedDialer};
 pub use group_override::{GroupOverrideCloneCache, HealthProfile, string_slice_profile_key};
 pub use http_proxy::{HttpConnectOptions, HttpProxyLink, HttpScheme, HttpTransportMode};

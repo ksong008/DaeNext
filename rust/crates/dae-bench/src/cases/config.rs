@@ -4,7 +4,7 @@ use std::path::PathBuf;
 use dae_config::marshal::marshal_config;
 use dae_config::merger::merge_config_file;
 use dae_config::parser::parse_config;
-use dae_config::schema::build_config;
+use dae_config::schema::build_config_owned;
 
 use crate::{BenchCase, Measurement, measure};
 
@@ -50,7 +50,7 @@ fn bench_config_schema_example(iters: u64, warmup: u64) -> Result<Measurement, S
     Ok(measure(
         || {
             let sections = parse_config(black_box(example)).expect("parse example.dae");
-            let config = build_config(&sections).expect("build example.dae config");
+            let config = build_config_owned(sections).expect("build example.dae config");
             black_box(config.global.tproxy_port as u64 ^ config.routing.rules.len() as u64)
         },
         iters,
@@ -77,7 +77,7 @@ fn bench_config_marshal_roundtrip_example(iters: u64, warmup: u64) -> Result<Mea
     example_tree.write_mode("example.dae", example, 0o640);
     let merged = merge_config_file(example_tree.path("example.dae"))
         .map_err(|err| format!("merge example.dae failed: {err}"))?;
-    let config = build_config(&merged.sections)
+    let config = build_config_owned(merged.sections)
         .map_err(|err| format!("build example.dae config failed: {err}"))?;
 
     Ok(measure(
@@ -85,7 +85,7 @@ fn bench_config_marshal_roundtrip_example(iters: u64, warmup: u64) -> Result<Mea
             let text = marshal_config(black_box(&config), 2).expect("marshal example config");
             let sections = parse_config(black_box(&text)).expect("parse marshaled example config");
             let roundtrip =
-                build_config(&sections).expect("build marshaled example config roundtrip");
+                build_config_owned(sections).expect("build marshaled example config roundtrip");
             black_box(text.len() as u64 ^ roundtrip.routing.rules.len() as u64)
         },
         iters,

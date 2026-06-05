@@ -1,7 +1,7 @@
 use dae_config::ast::Function;
 use dae_config::dynamic::DynamicFunctionValue;
 use dae_config::parser::parse_config;
-use dae_config::schema::{Config, Routing, build_config};
+use dae_config::schema::{Config, Routing, build_config_owned};
 
 use crate::EngineError;
 
@@ -15,7 +15,7 @@ pub const EMPTY_GLOBAL_SECTION: &str = "global {}";
 pub fn empty_config() -> Result<Config, EngineError> {
     let sections =
         parse_config("global{} routing{}").map_err(|err| EngineError::Parse(err.to_string()))?;
-    build_config(&sections).map_err(|err| EngineError::Parse(err.to_string()))
+    build_config_owned(sections).map_err(|err| EngineError::Parse(err.to_string()))
 }
 
 pub fn parse_config_sections(
@@ -23,17 +23,24 @@ pub fn parse_config_sections(
     dns_section: Option<&str>,
     routing_section: Option<&str>,
 ) -> Result<Config, EngineError> {
-    let text = [
+    let sections = [
         global_section.unwrap_or(EMPTY_GLOBAL_SECTION),
         dns_section.unwrap_or(EMPTY_DNS_SECTION),
         routing_section.unwrap_or(EMPTY_ROUTING_SECTION),
         EMPTY_GROUP_SECTION,
         EMPTY_SUBSCRIPTION_SECTION,
         EMPTY_NODE_SECTION,
-    ]
-    .join("\n");
+    ];
+    let mut text =
+        String::with_capacity(sections.iter().map(|section| section.len()).sum::<usize>() + 5);
+    for (index, section) in sections.iter().enumerate() {
+        if index > 0 {
+            text.push('\n');
+        }
+        text.push_str(section);
+    }
     let sections = parse_config(&text).map_err(|err| EngineError::Parse(err.to_string()))?;
-    build_config(&sections).map_err(|err| EngineError::Parse(err.to_string()))
+    build_config_owned(sections).map_err(|err| EngineError::Parse(err.to_string()))
 }
 
 pub fn necessary_outbounds(routing: &Routing) -> Vec<String> {

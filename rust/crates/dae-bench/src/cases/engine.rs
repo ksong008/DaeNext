@@ -163,9 +163,10 @@ fn bench_engine_read_config_file_minimal(iters: u64, warmup: u64) -> Result<Meas
         || {
             let merged = dae_config::merger::merge_config_file(black_box(&path))
                 .expect("merge minimal config");
-            let config =
-                dae_config::schema::build_config(&merged.sections).expect("build minimal config");
-            black_box(config.global.log_level.len() as u64 ^ merged.entries.len() as u64)
+            let entries_len = merged.entries.len();
+            let config = dae_config::schema::build_config_owned(merged.sections)
+                .expect("build minimal config");
+            black_box(config.global.log_level.len() as u64 ^ entries_len as u64)
         },
         iters,
         warmup,

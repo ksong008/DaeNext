@@ -259,6 +259,8 @@ func BenchmarkVMessNativeOptInParseLink(b *testing.B) {
 	}
 }
 
+var vmessNativeOptInBenchmarkSink int
+
 func BenchmarkVMessNativeOptInMetadataBytes(b *testing.B) {
 	meta, err := outboundprotocol.ParseMetadata("example.com:443")
 	if err != nil {
@@ -268,7 +270,8 @@ func BenchmarkVMessNativeOptInMetadataBytes(b *testing.B) {
 	buf := make([]byte, vmessMeta.AddrLen())
 	b.ReportAllocs()
 	for i := 0; i < b.N; i++ {
-		_ = vmessMeta.PutAddr(buf)
+		n := vmessMeta.PutAddr(buf)
+		vmessNativeOptInBenchmarkSink ^= n ^ int(buf[0])
 	}
 }
 
