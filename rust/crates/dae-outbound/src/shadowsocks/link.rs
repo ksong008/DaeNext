@@ -131,6 +131,10 @@ impl Sip003Opts {
 }
 
 fn parse_direct(raw: &str) -> Result<ShadowsocksLink, OutboundError> {
+    if let Ok(parsed) = parse_direct_fast(raw) {
+        return Ok(parsed);
+    }
+
     let url = Url::parse(raw).map_err(|err| OutboundError::BadShadowsocks(err.to_string()))?;
     match url.scheme() {
         "ss" | "shadowsocks" => {}
@@ -161,6 +165,39 @@ fn parse_direct(raw: &str) -> Result<ShadowsocksLink, OutboundError> {
         cipher,
         udp: plugin.name.is_empty(),
         plugin,
+        protocol: "shadowsocks".to_owned(),
+    })
+}
+
+fn parse_direct_fast(raw: &str) -> Result<ShadowsocksLink, OutboundError> {
+    let content = raw
+        .strip_prefix("ss://")
+        .or_else(|| raw.strip_prefix("shadowsocks://"))
+        .ok_or_else(|| OutboundError::BadShadowsocks("missing scheme".to_owned()))?;
+    let (without_fragment, name) = content.split_once('#').unwrap_or((content, ""));
+    let (authority, query) = without_fragment
+        .split_once('?')
+        .unwrap_or((without_fragment, ""));
+    if !query.is_empty() {
+        return Err(OutboundError::BadShadowsocks(
+            "query requires full parser".to_owned(),
+        ));
+    }
+    let (userinfo, server_port) = authority
+        .rsplit_once('@')
+        .ok_or_else(|| OutboundError::BadShadowsocks("missing userinfo".to_owned()))?;
+    let (cipher, password) = userinfo.split_once(':').ok_or_else(|| {
+        OutboundError::BadShadowsocks("missing cipher/password separator".to_owned())
+    })?;
+    let (server, port) = split_host_port(server_port)?;
+    Ok(ShadowsocksLink {
+        name: name.to_owned(),
+        server: server.to_owned(),
+        port,
+        password: percent_decode(password)?,
+        cipher: percent_decode(cipher)?.to_ascii_lowercase(),
+        udp: true,
+        plugin: Sip003::default(),
         protocol: "shadowsocks".to_owned(),
     })
 }
@@ -200,6 +237,26 @@ fn parse_base64_wrapped(raw: &str) -> Result<ShadowsocksLink, OutboundError> {
         rebuilt.push_str(fragment);
     }
     parse_direct(&rebuilt)
+}
+
+fn split_host_port(input: &str) -> Result<(&str, u16), OutboundError> {
+    let (host, port) = if input.starts_with('[') {
+        let (host, rest) = input.split_once(']').ok_or_else(|| {
+            OutboundError::BadShadowsocks("missing IPv6 closing bracket".to_owned())
+        })?;
+        let port = rest
+            .strip_prefix(':')
+            .ok_or_else(|| OutboundError::BadShadowsocks("missing port".to_owned()))?;
+        (&host[1..], port)
+    } else {
+        input
+            .rsplit_once(':')
+            .ok_or_else(|| OutboundError::BadShadowsocks("missing port".to_owned()))?
+    };
+    let port = port
+        .parse::<u16>()
+        .map_err(|_| OutboundError::BadShadowsocks(format!("invalid port: {port}")))?;
+    Ok((host, port))
 }
 
 fn decode_base64_url(input: &str) -> Result<Vec<u8>, OutboundError> {

@@ -428,13 +428,17 @@ func rustShadowsocksCapabilityLabel(cipher string) string {
 	return "shadowsocks"
 }
 
+var shadowsocksNativeOptInBenchmarkSink int
+
 func BenchmarkShadowsocksNativeOptInParseLink(b *testing.B) {
 	link := stage15SS2022Link("bench", stage15SSPSK128+":"+stage15SSPSK128)
 	b.ReportAllocs()
 	for i := 0; i < b.N; i++ {
-		if _, err := outboundssdialer.ParseSSURL(link); err != nil {
+		parsed, err := outboundssdialer.ParseSSURL(link)
+		if err != nil {
 			b.Fatal(err)
 		}
+		shadowsocksNativeOptInBenchmarkSink ^= len(parsed.Server) ^ parsed.Port ^ len(parsed.Password)
 	}
 }
 

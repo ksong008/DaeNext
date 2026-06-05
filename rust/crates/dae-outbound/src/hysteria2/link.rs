@@ -1,3 +1,5 @@
+use std::borrow::Cow;
+
 use crate::error::OutboundError;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -75,25 +77,25 @@ impl Hysteria2Link {
         }
         out.push('@');
         out.push_str(&self.server);
-        let mut query = Vec::<(String, String)>::new();
+        let mut query = Vec::<(&str, Cow<'_, str>)>::new();
         if self.insecure {
-            query.push(("insecure".to_owned(), "1".to_owned()));
+            query.push(("insecure", Cow::Borrowed("1")));
         }
         if !self.sni.is_empty() {
-            query.push(("sni".to_owned(), self.sni.clone()));
+            query.push(("sni", Cow::Borrowed(&self.sni)));
         }
         if !self.pin_sha256.is_empty() {
-            query.push(("pinSHA256".to_owned(), self.pin_sha256.clone()));
+            query.push(("pinSHA256", Cow::Borrowed(&self.pin_sha256)));
         }
         if self.max_tx > 0 && self.max_rx > 0 {
-            query.push(("maxTx".to_owned(), self.max_tx.to_string()));
-            query.push(("maxRx".to_owned(), self.max_rx.to_string()));
+            query.push(("maxTx", Cow::Owned(self.max_tx.to_string())));
+            query.push(("maxRx", Cow::Owned(self.max_rx.to_string())));
         }
-        query.sort_by(|a, b| a.0.cmp(&b.0).then_with(|| a.1.cmp(&b.1)));
+        query.sort_by(|a, b| a.0.cmp(b.0).then_with(|| a.1.as_ref().cmp(b.1.as_ref())));
         if !query.is_empty() {
             let mut serializer = url::form_urlencoded::Serializer::new(String::new());
             for (key, value) in query {
-                serializer.append_pair(&key, &value);
+                serializer.append_pair(key, value.as_ref());
             }
             out.push('?');
             out.push_str(&serializer.finish());

@@ -3,15 +3,28 @@ pub fn magic_network(network: &str, mark: u32, mptcp: bool) -> String {
 }
 
 pub fn magic_network_bytes(network: &str, mark: u32, mptcp: bool) -> Vec<u8> {
+    let mut bytes = Vec::with_capacity(magic_network_len(network, mark, mptcp));
+    write_magic_network_bytes(network, mark, mptcp, &mut bytes);
+    bytes
+}
+
+pub fn write_magic_network_bytes(network: &str, mark: u32, mptcp: bool, out: &mut Vec<u8>) {
     if mark == 0 && !mptcp {
-        return network.as_bytes().to_vec();
+        out.extend_from_slice(network.as_bytes());
+        return;
     }
     assert!(network.len() <= u8::MAX as usize, "network too long");
-    let mut bytes = Vec::with_capacity(2 + network.len() + 4 + 1);
-    bytes.push(0);
-    bytes.push(network.len() as u8);
-    bytes.extend_from_slice(network.as_bytes());
-    bytes.extend_from_slice(&mark.to_be_bytes());
-    bytes.push(u8::from(mptcp));
-    bytes
+    out.push(0);
+    out.push(network.len() as u8);
+    out.extend_from_slice(network.as_bytes());
+    out.extend_from_slice(&mark.to_be_bytes());
+    out.push(u8::from(mptcp));
+}
+
+pub fn magic_network_len(network: &str, mark: u32, mptcp: bool) -> usize {
+    if mark == 0 && !mptcp {
+        network.len()
+    } else {
+        2 + network.len() + 4 + 1
+    }
 }

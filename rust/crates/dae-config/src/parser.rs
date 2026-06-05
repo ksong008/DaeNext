@@ -279,12 +279,13 @@ impl<'a> Parser<'a> {
     }
 
     fn parse_literal_expr(&mut self) -> Result<String, ConfigError> {
-        let mut values = vec![self.expect_literal("literal")?];
+        let mut value = self.expect_literal("literal")?;
         while self.at(TokenKindName::Comma) {
             self.expect(TokenKindName::Comma)?;
-            values.push(self.expect_literal("literal")?);
+            value.push(',');
+            value.push_str(&self.expect_literal("literal")?);
         }
-        Ok(values.join(","))
+        Ok(value)
     }
 
     fn parse_function_expr(&mut self) -> Result<Vec<Function>, ConfigError> {
@@ -346,10 +347,10 @@ impl<'a> Parser<'a> {
         let mut value = String::new();
         let mut has_literal = false;
         loop {
-            match self.peek().kind.clone() {
+            match &self.peek().kind {
                 TokenKind::Literal(part) => {
+                    value.push_str(part);
                     self.pos += 1;
-                    value.push_str(&part);
                     has_literal = true;
                 }
                 TokenKind::Colon => {
@@ -403,12 +404,16 @@ impl<'a> Parser<'a> {
     }
 
     fn expect_literal(&mut self, expected: &str) -> Result<String, ConfigError> {
-        match self.peek().kind.clone() {
+        let pos = self.pos;
+        match std::mem::replace(&mut self.tokens[pos].kind, TokenKind::Eof) {
             TokenKind::Literal(value) => {
                 self.pos += 1;
                 Ok(value)
             }
-            _ => Err(self.error_here(&format!("expected {expected}"))),
+            other => {
+                self.tokens[pos].kind = other;
+                Err(self.error_here(&format!("expected {expected}")))
+            }
         }
     }
 
