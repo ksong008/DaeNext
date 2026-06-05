@@ -420,6 +420,11 @@ fn daed_product_contract_reports_c10_first_batch_state_paths() {
     );
     assert!(report["wing_db_import_supported"].as_bool().unwrap());
     assert!(
+        report["rust_daed_validate_command_ready"]
+            .as_bool()
+            .unwrap()
+    );
+    assert!(
         report["rust_daed_setup_auth_user_storage_api_ready"]
             .as_bool()
             .unwrap()
@@ -504,7 +509,78 @@ fn daed_product_contract_reports_c10_first_batch_state_paths() {
             .as_bool()
             .unwrap()
     );
+    assert!(
+        package["current_batch_ready"]["validate_command"]
+            .as_bool()
+            .unwrap()
+    );
     assert!(!package["webui"]["leptos_considered"].as_bool().unwrap());
+}
+
+#[test]
+fn daed_validate_accepts_config_file_and_config_dir_without_state_mutation() {
+    let temp = temp_dir("validate");
+    let config_file = temp.join("empty.dae");
+    fs::write(&config_file, "global {} routing {}").unwrap();
+    fs::set_permissions(&config_file, fs::Permissions::from_mode(0o600)).unwrap();
+
+    let output = Command::new(binary())
+        .args(["validate", "-c"])
+        .arg(&config_file)
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "stderr={}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(output.stdout.is_empty());
+
+    let json_output = Command::new(binary())
+        .args(["validate", "-c"])
+        .arg(&config_file)
+        .arg("--json")
+        .output()
+        .unwrap();
+    assert!(json_output.status.success());
+    let report: Value = serde_json::from_slice(&json_output.stdout).unwrap();
+    assert_eq!(report["status"].as_str().unwrap(), "pass");
+    assert_eq!(report["kind"].as_str().unwrap(), "dae-config-file");
+    assert!(!report["mutationExecuted"].as_bool().unwrap());
+
+    let config_dir = temp.join("config-dir");
+    fs::create_dir_all(&config_dir).unwrap();
+    let dir_output = Command::new(binary())
+        .args(["validate", "-c"])
+        .arg(&config_dir)
+        .arg("--json")
+        .output()
+        .unwrap();
+    assert!(
+        dir_output.status.success(),
+        "stderr={}",
+        String::from_utf8_lossy(&dir_output.stderr)
+    );
+    let dir_report: Value = serde_json::from_slice(&dir_output.stdout).unwrap();
+    assert_eq!(dir_report["kind"].as_str().unwrap(), "daed-config-dir");
+    assert!(!dir_report["statePresent"].as_bool().unwrap());
+    assert!(dir_report["freshInstallStateOptional"].as_bool().unwrap());
+    assert!(!config_dir.join("daed.db").exists());
+
+    let bad_config = temp.join("bad.dae");
+    fs::write(&bad_config, "this is not dae config").unwrap();
+    let bad = Command::new(binary())
+        .args(["validate", "-c"])
+        .arg(&bad_config)
+        .output()
+        .unwrap();
+    assert!(!bad.status.success());
+    assert!(
+        String::from_utf8_lossy(&bad.stderr).contains("validate failed"),
+        "stderr={}",
+        String::from_utf8_lossy(&bad.stderr)
+    );
+    let _ = fs::remove_dir_all(temp);
 }
 
 #[test]
@@ -1008,12 +1084,24 @@ fn daed_export_commands_report_c10_package_surface() {
     let route_audit: Value = serde_json::from_slice(&route_audit.stdout).unwrap();
     assert!(route_audit["pass"].as_bool().unwrap());
     assert!(route_audit["missing"].as_array().unwrap().is_empty());
+    let manifest = Command::new(binary())
+        .args(["export", "package-manifest"])
+        .output()
+        .unwrap();
+    let manifest: Value = serde_json::from_slice(&manifest.stdout).unwrap();
+    assert_eq!(
+        manifest["binary"]["validateArgs"][0].as_str().unwrap(),
+        "validate"
+    );
 
     let systemd = Command::new(binary())
         .args(["export", "systemd-unit"])
         .output()
         .unwrap();
     assert!(systemd.status.success());
+    assert!(
+        String::from_utf8_lossy(&systemd.stdout).contains("ExecStartPre=/usr/bin/daed validate")
+    );
     assert!(String::from_utf8_lossy(&systemd.stdout).contains("ExecStart=/usr/bin/daed run"));
 
     let docker = Command::new(binary())
@@ -1021,6 +1109,7 @@ fn daed_export_commands_report_c10_package_surface() {
         .output()
         .unwrap();
     assert!(docker.status.success());
+    assert!(String::from_utf8_lossy(&docker.stdout).contains("/usr/bin/daed validate"));
     assert!(String::from_utf8_lossy(&docker.stdout).contains("exec /usr/bin/daed run"));
 }
 

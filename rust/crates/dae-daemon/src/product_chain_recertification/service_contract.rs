@@ -27,13 +27,19 @@ pub(super) fn service_contract_json(path: &Path) -> Value {
     let uses_rust_optin = text.contains("dae-daemon-optin");
     let dae_service_contract_preserved =
         dae_exec_start_pre && dae_exec_start && dae_exec_reload && !uses_rust_optin;
-    let daed_exec_start = text.contains("ExecStart=/usr/bin/daed run -c /etc/daed/");
+    let daed_exec_start_pre = text.contains("ExecStartPre=/usr/bin/daed validate -c /etc/daed/")
+        || text.contains("ExecStartPre=/usr/bin/daed validate -c /etc/daed");
+    let daed_exec_start = text.contains("ExecStart=/usr/bin/daed run -c /etc/daed/")
+        || text.contains("ExecStart=/usr/bin/daed run -c /etc/daed");
     let daed_exec_reload_signal = text.contains("ExecReload=/bin/kill -HUP $MAINPID");
     let daed_type_simple = text.contains("Type=simple");
     let daed_user_root = text.contains("User=root");
     let daed_optional_env_file = text.contains("EnvironmentFile=-/etc/default/daed");
-    let daed_service_contract_preserved =
-        daed_exec_start && daed_exec_reload_signal && daed_type_simple && daed_user_root;
+    let daed_service_contract_preserved = daed_exec_start_pre
+        && daed_exec_start
+        && daed_exec_reload_signal
+        && daed_type_simple
+        && daed_user_root;
     let service_contract_preserved =
         dae_service_contract_preserved || daed_service_contract_preserved;
     let service_contract_kind = if daed_service_contract_preserved {
@@ -53,6 +59,7 @@ pub(super) fn service_contract_json(path: &Path) -> Value {
         "optional_env_file_for_backend_rollbacks": dae_optional_env_file,
         "rust_optin_binary_referenced": uses_rust_optin,
         "dae_service_contract_preserved": dae_service_contract_preserved,
+        "daed_exec_start_pre_validate_preserved": daed_exec_start_pre,
         "daed_exec_start_run_config_dir_preserved": daed_exec_start,
         "daed_exec_reload_hup_preserved": daed_exec_reload_signal,
         "daed_type_simple_preserved": daed_type_simple,
@@ -146,6 +153,7 @@ pub(super) fn candidate_service_contract_report(
             "resident_runtime_resource_limits": Value::Null,
             "resident_runtime_resource_observation_fields": [],
             "service_contract_report_size_bytes": 0,
+            "rust_daed_validate_command_ready": false,
         });
         insert_control_plane_contract_defaults(&mut report);
         insert_datapath_core_contract_defaults(&mut report);
@@ -213,6 +221,9 @@ pub(super) fn candidate_service_contract_report(
                 capability["resident_runtime_resource_gate_ready"]
                     .as_bool()
                     .unwrap_or(false);
+            let rust_daed_validate_command_ready = capability["rust_daed_validate_command_ready"]
+                .as_bool()
+                .unwrap_or(false);
             let control_plane_owner_contract_ready =
                 capability["control_plane_owner_contract_ready"]
                     .as_bool()
@@ -359,6 +370,7 @@ pub(super) fn candidate_service_contract_report(
                 "resident_runtime_resource_limits": capability["resident_runtime_resource_limits"].clone(),
                 "resident_runtime_resource_observation_fields": capability["resident_runtime_resource_observation_fields"].clone(),
                 "service_contract_report_size_bytes": output.stdout.len(),
+                "rust_daed_validate_command_ready": output.status.success() && rust_daed_validate_command_ready,
                 "capability": capability_for_report,
             });
             insert_control_plane_contract_success(
@@ -456,6 +468,7 @@ pub(super) fn candidate_service_contract_report(
             "resident_runtime_resource_limits": Value::Null,
             "resident_runtime_resource_observation_fields": [],
             "service_contract_report_size_bytes": 0,
+            "rust_daed_validate_command_ready": false,
             });
             insert_control_plane_contract_defaults(&mut report);
             insert_datapath_core_contract_defaults(&mut report);

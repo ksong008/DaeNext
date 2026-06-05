@@ -12,12 +12,18 @@ fn go_free_product_chain_gate_blocks_current_candidate_until_go_paths_retire() {
         "release_default_switch_ready": true,
         "resident_live_adapter_matrix_ready": true,
     });
+    let default_product_package_scan = json!({
+        "default_product_package_go_free": false,
+        "go_product_shell_retired_from_default_package": false,
+        "blockers": ["C10 default product package source scan is not go-free"],
+    });
     let gate = go_free_product_chain::go_free_product_chain_gate_json(
         true,
         &release_gate,
         &resident_gate,
         true,
         true,
+        &default_product_package_scan,
     )
     .report;
 
@@ -70,12 +76,18 @@ fn go_free_product_chain_gate_accepts_complete_final_contract_fixture() {
         "release_default_switch_ready": true,
         "resident_live_adapter_matrix_ready": true,
     });
+    let default_product_package_scan = json!({
+        "default_product_package_go_free": true,
+        "go_product_shell_retired_from_default_package": true,
+        "blockers": [],
+    });
     let gate = go_free_product_chain::go_free_product_chain_gate_json(
         true,
         &release_gate,
         &resident_gate,
         true,
         true,
+        &default_product_package_scan,
     )
     .report;
 
