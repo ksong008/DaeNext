@@ -17,5 +17,5 @@ mod utils;
 #[cfg(test)]
 mod tests;
 
-pub use build::build_config;
+pub use build::{build_config, build_config_owned};
 pub use types::*;

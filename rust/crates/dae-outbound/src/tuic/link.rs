@@ -1,3 +1,5 @@
+use std::borrow::Cow;
+
 use url::Url;
 
 use crate::error::OutboundError;
@@ -99,20 +101,20 @@ impl TuicLink {
     }
 
     pub fn export_url(&self) -> String {
-        let mut query = Vec::<(String, String)>::new();
+        let mut query = Vec::<(&str, Cow<'_, str>)>::new();
         if self.allow_insecure {
-            query.push(("allow_insecure".to_owned(), "1".to_owned()));
+            query.push(("allow_insecure", Cow::Borrowed("1")));
         }
         push_if_non_empty(&mut query, "sni", &self.sni);
         if self.disable_sni {
-            query.push(("disable_sni".to_owned(), "1".to_owned()));
+            query.push(("disable_sni", Cow::Borrowed("1")));
         }
         push_if_non_empty(&mut query, "congestion_control", &self.congestion_control);
         if !self.alpn.is_empty() {
-            query.push(("alpn".to_owned(), self.alpn.join(",")));
+            query.push(("alpn", Cow::Owned(self.alpn.join(","))));
         }
         push_if_non_empty(&mut query, "udp_relay_mode", &self.udp_relay_mode);
-        query.sort_by(|a, b| a.0.cmp(&b.0).then_with(|| a.1.cmp(&b.1)));
+        query.sort_by(|a, b| a.0.cmp(b.0).then_with(|| a.1.as_ref().cmp(b.1.as_ref())));
 
         let mut out = String::new();
         out.push_str("tuic://");
@@ -120,11 +122,11 @@ impl TuicLink {
         out.push(':');
         out.push_str(&escape_userinfo(&self.password));
         out.push('@');
-        out.push_str(&self.address());
+        push_authority(&mut out, &self.server, self.port);
         if !query.is_empty() {
             let mut serializer = url::form_urlencoded::Serializer::new(String::new());
             for (key, value) in query {
-                serializer.append_pair(&key, &value);
+                serializer.append_pair(key, value.as_ref());
             }
             out.push('?');
             out.push_str(&serializer.finish());
@@ -233,18 +235,32 @@ fn parse_bool(input: &str) -> Option<bool> {
     }
 }
 
-fn push_if_non_empty(query: &mut Vec<(String, String)>, key: &str, value: &str) {
+fn push_if_non_empty<'a>(
+    query: &mut Vec<(&'static str, Cow<'a, str>)>,
+    key: &'static str,
+    value: &'a str,
+) {
     if !value.is_empty() {
-        query.push((key.to_owned(), value.to_owned()));
+        query.push((key, Cow::Borrowed(value)));
     }
 }
 
 fn format_authority(host: &str, port: u16) -> String {
+    let mut out = String::new();
+    push_authority(&mut out, host, port);
+    out
+}
+
+fn push_authority(out: &mut String, host: &str, port: u16) {
     if host.contains(':') && !host.starts_with('[') {
-        format!("[{host}]:{port}")
+        out.push('[');
+        out.push_str(host);
+        out.push_str("]:");
     } else {
-        format!("{host}:{port}")
+        out.push_str(host);
+        out.push(':');
     }
+    out.push_str(&port.to_string());
 }
 
 fn escape_userinfo(input: &str) -> String {

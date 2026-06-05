@@ -801,16 +801,18 @@ func BenchmarkRebuildStage7DomainRoutingOwnerMerge(b *testing.B) {
 	}
 }
 
+var rebuildStage7BenchmarkSink int
+
 func BenchmarkRebuildStage7MagicNetworkMarkMptcp(b *testing.B) {
 	b.ReportAllocs()
 	for i := 0; i < b.N; i++ {
-		_ = common.MagicNetwork("tcp", consts.TproxyMark, true)
+		rebuildStage7BenchmarkSink ^= len(common.MagicNetwork("tcp", consts.TproxyMark, true))
 	}
 }
 
 func BenchmarkRebuildStage7UdpEndpointTrimTarget(b *testing.B) {
 	b.ReportAllocs()
 	for i := 0; i < b.N; i++ {
-		_ = udpEndpointPoolTrimTarget(4096)
+		rebuildStage7BenchmarkSink ^= udpEndpointPoolTrimTarget(4096)
 	}
 }

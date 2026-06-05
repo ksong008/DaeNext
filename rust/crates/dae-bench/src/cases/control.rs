@@ -6,8 +6,8 @@ use dae_control::{
     DomainRoutingSyncPlan, OutboundConnectivityOwner, OutboundConnectivityState,
 };
 use dae_datapath::{
-    OUTBOUND_DIRECT, OUTBOUND_USER_DEFINED_MIN, TcpDialMode, choose_dial_target,
-    magic_network_bytes, udp_endpoint_pool_trim_target,
+    OUTBOUND_DIRECT, OUTBOUND_USER_DEFINED_MIN, TcpDialMode, choose_dial_target, magic_network_len,
+    udp_endpoint_pool_trim_target, write_magic_network_bytes,
 };
 use dae_ebpf_support::{ConnectivityEvent, ConnectivityKey};
 
@@ -70,9 +70,11 @@ pub(crate) fn cases() -> Vec<BenchCase> {
 
 fn bench_magic_network_mark_mptcp(iters: u64, warmup: u64) -> Result<Measurement, String> {
     const TPROXY_MARK: u32 = 0x0800_0000;
+    let mut network = Vec::with_capacity(magic_network_len("tcp", TPROXY_MARK, true));
     Ok(measure(
         || {
-            let network = magic_network_bytes(black_box("tcp"), black_box(TPROXY_MARK), true);
+            network.clear();
+            write_magic_network_bytes(black_box("tcp"), black_box(TPROXY_MARK), true, &mut network);
             black_box(network.len() as u64)
         },
         iters,

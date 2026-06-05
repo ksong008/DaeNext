@@ -18,7 +18,7 @@ impl Marshaller {
     fn new(indent_space: usize) -> Self {
         Self {
             indent_space,
-            out: String::new(),
+            out: String::with_capacity(4096),
         }
     }
 
@@ -157,17 +157,20 @@ impl Marshaller {
     where
         F: FnOnce(&mut Self) -> Result<(), ConfigError>,
     {
-        self.write_line(depth, &format!("{name} {{"));
+        self.write_indent(depth);
+        self.out.push_str(name);
+        self.out.push_str(" {\n");
         f(self)?;
         self.write_line(depth, "}");
         Ok(())
     }
 
     fn leaf(&mut self, key: &str, value: impl ToString, depth: usize) {
-        self.write_line(
-            depth,
-            &format!("{key}:{}", quote_string(&value.to_string())),
-        );
+        self.write_indent(depth);
+        self.out.push_str(key);
+        self.out.push(':');
+        self.out.push_str(&quote_string(&value.to_string()));
+        self.out.push('\n');
     }
 
     fn string_slice_leaf(&mut self, key: &str, values: &[String], depth: usize) {
@@ -203,10 +206,12 @@ impl Marshaller {
                 Ok(())
             }
             DynamicFunctionValue::Function(function) => {
-                self.write_line(
-                    depth,
-                    &format!("{key}:{}", function.to_config_string(true, true, false)),
-                );
+                self.write_indent(depth);
+                self.out.push_str(key);
+                self.out.push(':');
+                self.out
+                    .push_str(&function.to_config_string(true, true, false));
+                self.out.push('\n');
                 Ok(())
             }
             DynamicFunctionValue::FunctionList(functions) => {
@@ -217,12 +222,17 @@ impl Marshaller {
     }
 
     fn function_list_leaf(&mut self, key: &str, functions: &[Function], depth: usize) {
-        let value = functions
-            .iter()
-            .map(|function| function.to_config_string(true, true, false))
-            .collect::<Vec<_>>()
-            .join("&&");
-        self.write_line(depth, &format!("{key}:{value}"));
+        self.write_indent(depth);
+        self.out.push_str(key);
+        self.out.push(':');
+        for (index, function) in functions.iter().enumerate() {
+            if index > 0 {
+                self.out.push_str("&&");
+            }
+            self.out
+                .push_str(&function.to_config_string(true, true, false));
+        }
+        self.out.push('\n');
     }
 
     fn routing_rule(&mut self, rule: &RoutingRule, depth: usize) {
@@ -240,10 +250,15 @@ impl Marshaller {
     }
 
     fn write_line(&mut self, depth: usize, line: &str) {
-        self.out
-            .extend(std::iter::repeat_n(' ', depth * self.indent_space));
+        self.write_indent(depth);
         self.out.push_str(line);
         self.out.push('\n');
+    }
+
+    fn write_indent(&mut self, depth: usize) {
+        for _ in 0..depth * self.indent_space {
+            self.out.push(' ');
+        }
     }
 }
 

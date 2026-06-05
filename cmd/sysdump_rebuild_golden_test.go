@@ -178,10 +178,12 @@ func rebuildGoldenSysdumpCollectorBestEffort() any {
 	}
 }
 
+var sysdumpEnumBenchmarkSink int
+
 func BenchmarkRebuildStage8SysdumpEnumStrings(b *testing.B) {
 	for i := 0; i < b.N; i++ {
-		_ = scopeToString(netlink.Scope(unix.RT_SCOPE_LINK))
-		_ = protocolToString(unix.RTPROT_STATIC)
-		_ = typeToString(unix.RTN_UNICAST)
+		sysdumpEnumBenchmarkSink ^= len(scopeToString(netlink.Scope(unix.RT_SCOPE_LINK)))
+		sysdumpEnumBenchmarkSink ^= len(protocolToString(unix.RTPROT_STATIC))
+		sysdumpEnumBenchmarkSink ^= len(typeToString(unix.RTN_UNICAST))
 	}
 }

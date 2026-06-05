@@ -320,11 +320,11 @@ fn bench_vmess_parse_link(iters: u64, warmup: u64) -> Result<Measurement, String
 fn bench_vmess_metadata_bytes(iters: u64, warmup: u64) -> Result<Measurement, String> {
     let metadata = VMessMetadata::parse("tcp", "example.com:443")
         .map_err(|err| format!("vmess metadata parse failed: {err}"))?;
+    let mut encoded = [0_u8; 256];
     Ok(measure(
         || {
-            let mut encoded = [0_u8; 256];
             let len = metadata
-                .write_addr_to_slice(&mut encoded)
+                .write_addr_to_slice(black_box(&mut encoded))
                 .expect("vmess metadata encode");
             black_box(len as u64 ^ encoded[0] as u64)
         },
@@ -359,7 +359,9 @@ fn bench_shadowsocks_parse_link(iters: u64, warmup: u64) -> Result<Measurement, 
     Ok(measure(
         || {
             let parsed = ShadowsocksLink::parse(black_box(&link)).expect("shadowsocks parse link");
-            black_box(parsed.address().len() as u64 ^ parsed.password.len() as u64)
+            black_box(
+                parsed.server.len() as u64 ^ parsed.port as u64 ^ parsed.password.len() as u64,
+            )
         },
         iters,
         warmup,
