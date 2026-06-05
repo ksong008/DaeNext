@@ -6788,17 +6788,17 @@ fn extend_runtime_report_log_fields(fields: &mut BTreeMap<String, String>, repor
     insert_log_value(fields, "fake_runtime", report.get("fakeRuntime"));
     insert_log_value(fields, "allocator_profile", report.get("allocatorProfile"));
     if let Some(reclaim) = report.get("allocatorReclaim").and_then(Value::as_object) {
-        insert_log_value(
+        extend_allocator_reclaim_log_fields(
             fields,
             "allocator_old_owner_closed",
             reclaim.get("oldOwnerClosed"),
         );
-        insert_log_value(
+        extend_allocator_reclaim_log_fields(
             fields,
             "allocator_startup_control_built",
             reclaim.get("startupControlBuilt"),
         );
-        insert_log_value(
+        extend_allocator_reclaim_log_fields(
             fields,
             "allocator_reload_scoped_resources_flushed",
             reclaim.get("reloadScopedResourcesFlushed"),
@@ -6827,6 +6827,46 @@ fn extend_runtime_report_log_fields(fields: &mut BTreeMap<String, String>, repor
             dataplane.get("udp_packet_workers"),
         );
     }
+}
+
+fn extend_allocator_reclaim_log_fields(
+    fields: &mut BTreeMap<String, String>,
+    prefix: &str,
+    reclaim: Option<&Value>,
+) {
+    let Some(reclaim) = reclaim.and_then(Value::as_object) else {
+        return;
+    };
+    insert_log_value(fields, &format!("{prefix}_status"), reclaim.get("status"));
+    insert_log_value(fields, &format!("{prefix}_reason"), reclaim.get("reason"));
+    insert_log_value(fields, &format!("{prefix}_profile"), reclaim.get("profile"));
+    let Some(detail) = reclaim.get("detail").and_then(Value::as_object) else {
+        return;
+    };
+    insert_log_value(
+        fields,
+        &format!("{prefix}_operation"),
+        detail.get("operation"),
+    );
+    insert_log_value(
+        fields,
+        &format!("{prefix}_arenas_attempted"),
+        detail.get("arenasAttempted"),
+    );
+    if let Some(failures) = detail.get("failures").and_then(Value::as_array) {
+        fields.insert(
+            format!("{prefix}_failure_count"),
+            failures.len().to_string(),
+        );
+    }
+    insert_log_value(
+        fields,
+        &format!("{prefix}_epoch_after"),
+        detail.get("epochAfter"),
+    );
+    insert_log_value(fields, &format!("{prefix}_error"), detail.get("error"));
+    insert_log_value(fields, &format!("{prefix}_result"), detail.get("result"));
+    insert_log_value(fields, &format!("{prefix}_force"), detail.get("force"));
 }
 
 fn append_startup_reclaim_decision_log_for_config(
@@ -10376,6 +10416,44 @@ global {
         assert_eq!(items[3]["fields"]["applied"], json!("false"));
 
         fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn runtime_report_log_fields_summarize_allocator_reclaim() {
+        let mut fields = BTreeMap::new();
+        extend_runtime_report_log_fields(
+            &mut fields,
+            &json!({
+                "status": "pass",
+                "runtimeControl": "resident-production-runtime-manager",
+                "allocatorProfile": "jemalloc",
+                "allocatorReclaim": {
+                    "startupControlBuilt": {
+                        "reason": "startup_control_built",
+                        "profile": "jemalloc",
+                        "status": "partial",
+                        "detail": {
+                            "operation": "jemalloc_arena_purge",
+                            "arenasAttempted": 2,
+                            "failures": [
+                                {"arena": 0, "error": "sample"},
+                                {"arena": 1, "error": "sample"}
+                            ],
+                            "epochAfter": 7
+                        }
+                    }
+                }
+            }),
+        );
+
+        assert_eq!(fields["allocator_profile"], "jemalloc");
+        assert_eq!(fields["allocator_startup_control_built_status"], "partial");
+        assert_eq!(
+            fields["allocator_startup_control_built_operation"],
+            "jemalloc_arena_purge"
+        );
+        assert_eq!(fields["allocator_startup_control_built_failure_count"], "2");
+        assert!(!fields.contains_key("allocator_startup_control_built"));
     }
 
     #[test]
