@@ -39,6 +39,7 @@ use super::{
     ProductionRuntimeOwnerOptions,
 };
 
+#[cfg(not(feature = "native-ebpf"))]
 const EMBEDDED_SOURCE_OBJECT: &[u8] = include_bytes!("../../../../../control/bpf_bpfel.o");
 #[cfg(feature = "native-ebpf")]
 const EMBEDDED_NATIVE_OBJECT: &[u8] =
@@ -193,8 +194,11 @@ pub fn start_resident_production_runtime(
         )
     })?;
 
-    let source_object = resolve_source_object(&artifact_dir)?;
     let native_object = resolve_native_object(&artifact_dir)?;
+    let source_object = match native_object.as_ref() {
+        Some(path) => path.clone(),
+        None => resolve_source_object(&artifact_dir)?,
+    };
     let native_ebpf_opt_in = native_object.is_some();
     let native_ebpf_backend = resolve_native_backend()?;
     let netns_link_mode = resolve_netns_link_mode_from_env()?;
@@ -338,24 +342,35 @@ fn start_with_options(
         if let (true, Some(dae0_mac)) = (ok, dae0_mac) {
             ok &= setup_production_ipv4_datapath(&mut executed_steps, dae0_mac);
         }
-        let param_image = match (dae0_ifindex, dae0peer_mac) {
-            (Some(dae0_ifindex), Some(dae0peer_mac)) => write_param_image(
-                &options,
-                &param_object,
-                dae0_ifindex,
-                dae0peer_mac,
-                dae_netns_id,
-            ),
-            _ => json!({
+        let param_image = if options.native_ebpf_opt_in {
+            json!({
                 "status": "skipped",
                 "path": path_string(&param_object),
-                "reason": "topology runtime PARAM values were not available",
-            }),
+                "reason": "native Aya object is selected; legacy C eBPF PARAM image is not used by Rust resident",
+                "source_object": path_string(&options.source_object),
+            })
+        } else {
+            match (dae0_ifindex, dae0peer_mac) {
+                (Some(dae0_ifindex), Some(dae0peer_mac)) => write_param_image(
+                    &options,
+                    &param_object,
+                    dae0_ifindex,
+                    dae0peer_mac,
+                    dae_netns_id,
+                ),
+                _ => json!({
+                    "status": "skipped",
+                    "path": path_string(&param_object),
+                    "reason": "topology runtime PARAM values were not available",
+                }),
+            }
         };
-        ok &= param_image["status"].as_str() == Some("pass")
-            && param_image["rewritten_param_matches"]
-                .as_bool()
-                .unwrap_or(false);
+        if !options.native_ebpf_opt_in {
+            ok &= param_image["status"].as_str() == Some("pass")
+                && param_image["rewritten_param_matches"]
+                    .as_bool()
+                    .unwrap_or(false);
+        }
         let (selected_native_param_object, native_param_image) = match (dae0_ifindex, dae0peer_mac)
         {
             (Some(dae0_ifindex), Some(dae0peer_mac)) => prepare_native_param_object(
@@ -1005,20 +1020,30 @@ fn resolve_source_object(artifact_dir: &Path) -> Result<PathBuf, String> {
     if repo_relative.is_file() {
         return Ok(repo_relative);
     }
-    let embedded = artifact_dir.join("bpf_bpfel.embedded.o");
-    fs::write(&embedded, EMBEDDED_SOURCE_OBJECT).map_err(|err| {
-        format!(
-            "failed to write embedded resident source object {}: {err}",
-            path_string(&embedded)
-        )
-    })?;
-    fs::set_permissions(&embedded, fs::Permissions::from_mode(0o644)).map_err(|err| {
-        format!(
-            "failed to chmod embedded resident source object {}: {err}",
-            path_string(&embedded)
-        )
-    })?;
-    Ok(embedded)
+    #[cfg(feature = "native-ebpf")]
+    {
+        let _ = artifact_dir;
+        return Err(
+            "legacy C eBPF source object is unavailable in native-ebpf resident build".to_owned(),
+        );
+    }
+    #[cfg(not(feature = "native-ebpf"))]
+    {
+        let embedded = artifact_dir.join("bpf_bpfel.embedded.o");
+        fs::write(&embedded, EMBEDDED_SOURCE_OBJECT).map_err(|err| {
+            format!(
+                "failed to write embedded resident source object {}: {err}",
+                path_string(&embedded)
+            )
+        })?;
+        fs::set_permissions(&embedded, fs::Permissions::from_mode(0o644)).map_err(|err| {
+            format!(
+                "failed to chmod embedded resident source object {}: {err}",
+                path_string(&embedded)
+            )
+        })?;
+        Ok(embedded)
+    }
 }
 
 #[cfg(feature = "native-ebpf")]

@@ -589,14 +589,13 @@ pub(super) fn attach_peer_program(
         param_object,
         options.peer_section.clone(),
     );
-    if native_runtime.attach_program(
+    if let Some(native_ok) = native_runtime.attach_program(
         steps,
         options,
         native_param_object,
         NativeEbpfAttachRole::PeerIngress,
-    ) == Some(true)
-    {
-        return true;
+    ) {
+        return native_ok;
     }
     let mut ok = true;
     ok &= run_step(
@@ -627,14 +626,13 @@ pub(super) fn attach_host_program(
         param_object,
         options.host_section.clone(),
     );
-    if native_runtime.attach_program(
+    if let Some(native_ok) = native_runtime.attach_program(
         steps,
         options,
         native_param_object,
         NativeEbpfAttachRole::HostIngress,
-    ) == Some(true)
-    {
-        return true;
+    ) {
+        return native_ok;
     }
     let mut ok = true;
     ok &= run_step(
