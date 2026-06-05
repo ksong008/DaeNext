@@ -1,7 +1,8 @@
 use std::hint::black_box;
 
 use dae_outbound::{
-    Annotation, Dialer, DialerGroup, DialerSet, Filter, FilterParam, NetworkType, SelectionPolicy,
+    Annotation, CompiledFilterGroups, Dialer, DialerGroup, DialerSet, Filter, FilterParam,
+    MatchedDialerRef, NetworkType, SelectionPolicy,
 };
 
 use crate::{BenchCase, Measurement, measure};
@@ -59,12 +60,18 @@ fn bench_outbound_filter_annotate_regex(iters: u64, warmup: u64) -> Result<Measu
         Filter::new("subtag", vec![FilterParam::new("regex", "^bench-")]),
     ]];
     let annotations = vec![Annotation::default()];
+    let compiled = CompiledFilterGroups::compile(&filters)
+        .map_err(|err| format!("compile filters failed: {err}"))?;
+    let mut matched = Vec::<MatchedDialerRef<'_>>::with_capacity(set.dialers.len());
 
     Ok(measure(
         || {
-            let matched = set
-                .filter_and_annotate(black_box(&filters), black_box(&annotations))
-                .expect("filter and annotate");
+            set.filter_and_annotate_compiled_into(
+                black_box(&compiled),
+                black_box(&annotations),
+                &mut matched,
+            )
+            .expect("filter and annotate");
             black_box(matched.len() as u64 ^ matched[0].index as u64)
         },
         iters,

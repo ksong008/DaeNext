@@ -23,14 +23,12 @@ pub fn merge_config_file(entry: impl Into<PathBuf>) -> Result<MergeOutput, Confi
         entry_to_section_map: BTreeMap::new(),
     };
     merger.dfs_merge(&entry, None)?;
-    let sections = merger.convert_map_to_sections(
-        merger
-            .entry_to_section_map
-            .get(&entry)
-            .cloned()
-            .unwrap_or_default(),
-    );
     let entries = merger.entry_to_section_map.keys().cloned().collect();
+    let section_map = merger
+        .entry_to_section_map
+        .remove(&entry)
+        .unwrap_or_default();
+    let sections = merger.convert_map_to_sections(section_map);
     Ok(MergeOutput { sections, entries })
 }
 
@@ -125,8 +123,8 @@ impl Merger {
             .entry_to_section_map
             .get(entry)
             .and_then(|section_map| section_map.get("include"))
-            .cloned()
-            .unwrap_or_default();
+            .map(Vec::as_slice)
+            .unwrap_or(&[]);
         let mut patterns = Vec::new();
         for include in include_items {
             match include {
