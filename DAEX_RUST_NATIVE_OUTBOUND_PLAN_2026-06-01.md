@@ -14138,6 +14138,38 @@ Validation:
 Live deployment to 10.10.10.2:
   - Built Rust native `daed` with:
       `cargo build --manifest-path rust/Cargo.toml -p dae-daemon --bin daed --release --features native-ebpf`
+  - WebUI static resources were not rebuilt because this change is backend-log
+    only.
+  - Installed current test binary to `/usr/bin/daed`; stable rollback anchor
+    `/usr/bin/daed-daex-align-webui-cpu-20260601` was left untouched.
+  - Deployed hash:
+      `/usr/bin/daed`
+        `3c093bcec4bef0a465810a9b2256be61439a6475039c95d2d6a0a80c2a14775f`
+  - `systemctl show daed` after deploy:
+      `ActiveState=active`
+      `SubState=running`
+      `MainPID=46343`
+      `ExecMainStatus=0`
+  - `/api/health`: `{"healthCheck":1}`.
+  - Live log JSONL verification:
+      `/etc/daed/logs/current.jsonl` contains startup lifecycle entries even
+      though the loaded runtime config reports `log_level=error`.
+      Startup entries observed include product log store init, runtime restore,
+      preview materialization, config built, runtime owner reload finished,
+      restore finished, and HTTP listener ready.
+  - Authenticated Web API verification:
+      `POST /api/runtime/reload {"dry":true}` returned `200`,
+      `dry=true`, `applied=0`, `runtimeStarted=false`.
+      `/api/logs?level=all&q=[Startup]` returned the startup lifecycle entries.
+      `/api/logs?level=all&q=[Reload]` returned reload lifecycle entries:
+        received reload request,
+        runtime config preview materialized,
+        runtime config built,
+        preview finished.
+
+Live deployment to 10.10.10.2:
+  - Built Rust native `daed` with:
+      `cargo build --manifest-path rust/Cargo.toml -p dae-daemon --bin daed --release --features native-ebpf`
   - Built WebUI static resources with:
       `PATH=/root/.local/node-v22.12.0-linux-x64/bin:$PATH pnpm --filter daed build`
   - Installed current test binary to `/usr/bin/daed`; stable rollback anchor
@@ -14166,3 +14198,95 @@ Live deployment to 10.10.10.2:
       after restoring original version: `modified=false`
     The temporary live check changed only the selected config version counter
     and restored it immediately; config text/content was not changed.
+
+## 2026-06-05 09:22 +0800 - helper/JSON fixture audit and lifecycle log residency
+
+Scope:
+  - Audit whether remaining helper / JSON fixture surfaces conflict with the
+    Rust native product path.
+  - Make startup and reload lifecycle logs resident: they must be visible even
+    when the configured runtime log level is narrower than `info`.
+
+Helper / JSON fixture audit:
+  - `dae-golden` is present in many crate `dev-dependencies`; those golden
+    fixtures are test/admission evidence and are not normal `dae-daemon`
+    release runtime dependencies.
+  - `dae-product` helper/admission fixtures are planning and gate evidence, not
+    the live product datapath.
+  - `dae-outbound/src/tests/helpers/*`, `dae-cli/src/tests/helpers.rs`, and
+    most files named `fixture` or `golden` are test-only.
+  - `dae-routing::RoutingMatcher::from_fixture_value` and DNS matcher
+    `from_fixture_value` remain public helper builders and are used by bench /
+    CLI/helper paths. This is a naming and boundary risk because it looks like a
+    test fixture API, but it is not used by the current Rust product resident
+    runtime.
+  - The Rust product resident routing path uses typed construction:
+      `production_runtime_owner/resident_routing.rs`
+      `build_resident_userspace_routing_matcher`
+      -> `userspace_matcher_typed_sets`
+      -> `RoutingMatcher::from_typed_sets`
+    so it no longer depends on a daemon-side JSON fixture round trip for the
+    live resident routing matcher.
+  - Runtime JSON in `daed_product.rs` is still expected for HTTP API reports,
+    log JSONL storage, JWT/auth payloads, package/admission reports, and
+    resident event payloads. These are product surfaces or diagnostics, not
+    golden fixtures.
+
+Current conflict assessment:
+  - No current evidence that test/golden fixtures are embedded into the Rust
+    product runtime hot path.
+  - No current evidence that product resident routing falls back to a JSON
+    fixture builder.
+  - Remaining cleanup item: rename or wrap public `from_fixture_value` builders
+    that are used outside tests so their names describe their actual helper/API
+    contract instead of suggesting test fixture dependency. Do this only under a
+    generic helper-boundary cleanup item, not as a protocol-specific stage.
+
+Lifecycle log residency change:
+  - Normal product logs still respect `runtime_log_level`; high-frequency
+    resident flow/task diagnostics remain gated.
+  - Added a lifecycle log write path that writes the same JSONL task-log format
+    but bypasses `runtime_log_level`.
+  - Startup lifecycle logs now include:
+      `[Startup] product log store initialized`
+      `[Startup] runtime restore requested`
+      `[Startup] runtime restore started`
+      `[Startup] runtime config preview materialized`
+      `[Startup] runtime config built`
+      `[Startup] runtime owner reload finished`
+      `[Startup] runtime restore finished`
+      `[Startup] HTTP listener ready`
+  - API reload lifecycle logs now include:
+      `[Reload] Received reload request`
+      `[Reload] Runtime config preview materialized`
+      `[Reload] Runtime config built`
+      `[Reload] Preview finished`
+      `[Reload] Runtime owner reload finished`
+      `[Reload] Finished`
+      plus corresponding failure logs.
+  - Signal reload and stop logs also use the lifecycle path so service-level
+    lifecycle actions stay visible.
+  - Lifecycle fields include generic materialization/runtime details when known:
+      bytes
+      content_included
+      generated_at
+      selected_config_id
+      selected_dns_id
+      selected_routing_id
+      tproxy_port
+      runtime_control
+      resident_dataplane_status
+      resident_dataplane_proxy_count
+      resident_tcp_dial_mode
+      resident_udp_packet_workers
+
+Validation so far:
+  - `cargo fmt --all --manifest-path rust/Cargo.toml`: pass.
+  - `cargo test --manifest-path rust/Cargo.toml -p dae-daemon logs_filter_level_all_case_insensitive_query_and_sse_event_name`: pass.
+    This confirms normal logs are still filtered by runtime level, while
+    lifecycle logs are retained after `runtime_log_level=fatal`.
+  - `cargo test --manifest-path rust/Cargo.toml -p dae-daemon runtime_reload_dry_preview_writes_unified_reload_logs`: pass.
+    This confirms dry reload writes resident `[Reload]` lifecycle logs even
+    under `runtime_log_level=fatal`.
+  - `cargo test --manifest-path rust/Cargo.toml -p dae-daemon`: pass,
+    209 unit tests plus integration/doc test suites passed.
