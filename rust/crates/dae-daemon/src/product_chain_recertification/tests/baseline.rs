@@ -190,7 +190,7 @@ fn product_chain_recertification_blocks_wrong_daed2_branch_contract() {
         report["expected_product_chain_branches"]["dae"]
             .as_str()
             .unwrap(),
-        "daex"
+        "dae-daex-align"
     );
     assert_eq!(
         report["typed_report"]["product_chain_branch_contract_preserved"]
