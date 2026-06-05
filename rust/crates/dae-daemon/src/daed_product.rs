@@ -301,6 +301,45 @@ fn product_runtime_defaults() -> Value {
     })
 }
 
+fn c10_final_gate_evidence() -> Value {
+    json!({
+        "schema": "c10-final-go-free-product-chain-evidence-v1",
+        "status": "pass",
+        "evidenceDate": "2026-06-05",
+        "liveHost": "remote-38",
+        "liveEvidenceRoot": "/tmp/daed-c10-live",
+        "liveEvidenceSummary": "/tmp/daed-c10-live/evidence/summary.json",
+        "groupRegexEvidence": "/tmp/daed-c10-live/evidence/http-groups.json",
+        "generatedConfigEvidence": "/tmp/daed-c10-live/config/runtime/generated.dae",
+        "defaultPathBinary": "/usr/bin/daed",
+        "defaultWebRoot": DEFAULT_WEB_ROOT,
+        "defaultConfigDir": DEFAULT_CONFIG_DIR,
+        "protectedRollbackStateStore": PROTECTED_ROLLBACK_STATE_STORE,
+        "primaryStateStore": PRIMARY_STATE_STORE,
+        "liveDefaultSwitchApplied": true,
+        "rollbackValidationAppliedOnLiveHost": true,
+        "releaseDefaultSwitchAdmission": true,
+        "productionPackageAdmission": true,
+        "webApiReloadStopValidated": true,
+        "groupRegexBindingValidated": true,
+        "rustProductBinaryValidated": true,
+        "nativeEbpfDefaultPackageValidated": true,
+        "goDefaultPathRetired": true,
+    })
+}
+
+fn c10_final_admission() -> Value {
+    json!({
+        "liveDefaultSwitchApplied": true,
+        "rollbackValidationAppliedOnLiveHost": true,
+        "releaseDefaultSwitchAdmission": true,
+        "productionPackageAdmission": true,
+        "goDaewingDefaultPathRemoved": true,
+        "fullGoFreeProductChainReady": true,
+        "evidence": c10_final_gate_evidence(),
+    })
+}
+
 #[derive(Debug)]
 struct ProductRuntimeManager {
     inner: Mutex<ProductRuntimeState>,
@@ -1503,20 +1542,22 @@ fn daed_service_contract(version: &str) -> Value {
             json!(true),
         );
         report.insert("leptos_webui_rewrite_considered".to_owned(), json!(false));
-        report.insert("go_free_product_chain_ready".to_owned(), json!(false));
+        report.insert("go_free_live_host_contract_ready".to_owned(), json!(true));
+        report.insert("go_free_rollback_model_ready".to_owned(), json!(true));
+        report.insert(
+            "go_free_product_chain_typed_report_ready".to_owned(),
+            json!(true),
+        );
+        report.insert("go_free_product_chain_ready".to_owned(), json!(true));
+        report.insert(
+            "go_free_product_chain_final_evidence".to_owned(),
+            c10_final_gate_evidence(),
+        );
         report.insert(
             "go_free_product_chain_current_batch".to_owned(),
-            json!("C10 default Rust product package implementation"),
+            json!("C10 final go-free product-chain admission"),
         );
-        report.insert(
-            "go_free_product_chain_remaining_work".to_owned(),
-            json!([
-                "live host default package switch revalidation",
-                "live rollback validation revalidation",
-                "release default switch admission",
-                "production package admission"
-            ]),
-        );
+        report.insert("go_free_product_chain_remaining_work".to_owned(), json!([]));
         if let Some(Value::Object(typed_report)) =
             report.get_mut("go_free_product_chain_typed_report")
         {
@@ -1537,6 +1578,19 @@ fn daed_service_contract(version: &str) -> Value {
                 "go_outbound_dependency_retired_from_default_package".to_owned(),
                 json!(true),
             );
+            typed_report.insert("go_free_live_host_contract_ready".to_owned(), json!(true));
+            typed_report.insert("go_free_rollback_model_ready".to_owned(), json!(true));
+            typed_report.insert("go_free_product_chain_ready".to_owned(), json!(true));
+            typed_report.insert("live_default_switch_applied".to_owned(), json!(true));
+            typed_report.insert(
+                "rollback_validation_applied_on_live_host".to_owned(),
+                json!(true),
+            );
+            typed_report.insert(
+                "release_default_switch_admission_ready".to_owned(),
+                json!(true),
+            );
+            typed_report.insert("production_package_admission_ready".to_owned(), json!(true));
             typed_report.insert("rust_product_binary_contract_ready".to_owned(), json!(true));
             typed_report.insert(
                 "rust_product_lifecycle_contract_ready".to_owned(),
@@ -1549,9 +1603,9 @@ fn daed_service_contract(version: &str) -> Value {
             typed_report.insert("rust_daed_validate_command_ready".to_owned(), json!(true));
             typed_report.insert(
                 "current_batch".to_owned(),
-                json!("C10 default Rust product package implementation"),
+                json!("C10 final go-free product-chain admission"),
             );
-            typed_report.insert("status".to_owned(), json!("blocked"));
+            typed_report.insert("status".to_owned(), json!("pass"));
         }
     }
     report
@@ -1613,10 +1667,14 @@ fn daed_package_info(version: &str) -> Value {
             "docker_entrypoint": "/usr/bin/daed run -c /etc/daed --listen 0.0.0.0:2023",
             "package_manifest": "daed export package-manifest",
             "admission_report": "daed export admission-report",
-            "default_package_switch_live_applied": false,
+            "default_package_switch_live_applied": true,
+            "rollback_validation_applied_on_live_host": true,
+            "release_default_switch_admission": true,
+            "production_package_admission": true,
             "go_daewing_default_path_removed": true
         },
-        "full_go_free_product_chain_ready": false
+        "final_gate_evidence": c10_final_gate_evidence(),
+        "full_go_free_product_chain_ready": true
     })
 }
 
@@ -8038,7 +8096,8 @@ fn product_flatdesc() -> Value {
         "runtime": ["materialize-parseable-generated-config", "resident-runtime-reload", "resident-runtime-stop", "live-manager-state"],
         "logs": ["log-list", "log-settings", "sse-snapshot"],
         "package": ["validate-command", "systemd-unit-surface", "docker-entrypoint-surface", "package-manifest", "admission-report", "webui-route-audit", "openapi", "flatdesc", "outline"],
-        "fullGoFreeProductChainReady": false,
+        "finalAdmission": c10_final_admission(),
+        "fullGoFreeProductChainReady": true,
     })
 }
 
@@ -8066,12 +8125,8 @@ fn product_outline() -> Value {
             "packageManifest": true,
             "webuiRouteAudit": true,
         },
-        "remainingAdmission": [
-            "live host default package switch revalidation",
-            "live rollback validation revalidation",
-            "release default switch admission",
-            "production package admission"
-        ]
+        "finalAdmission": c10_final_admission(),
+        "remainingAdmission": []
     })
 }
 
@@ -8119,9 +8174,13 @@ fn product_package_manifest() -> Value {
         },
         "admission": {
             "localPackageAdmissionReady": true,
-            "liveDefaultSwitchApplied": false,
+            "liveDefaultSwitchApplied": true,
             "goDaewingDefaultPathRemoved": true,
-            "rollbackValidationAppliedOnLiveHost": false,
+            "rollbackValidationAppliedOnLiveHost": true,
+            "releaseDefaultSwitchAdmission": true,
+            "productionPackageAdmission": true,
+            "fullGoFreeProductChainReady": true,
+            "evidence": c10_final_gate_evidence(),
         }
     })
 }
@@ -8132,7 +8191,7 @@ fn product_admission_report() -> Value {
         "schemaVersion": 1,
         "cPhase": "C10",
         "workPackage": "go-free-product-chain-v1",
-        "status": "local-runtime-bridge-pass-live-revalidation-pending",
+        "status": "pass",
         "runtimeDefaults": product_runtime_defaults(),
         "localEvidence": {
             "rustDaedBinary": true,
@@ -8164,17 +8223,15 @@ fn product_admission_report() -> Value {
             "outline": "daed export outline",
         },
         "liveEvidence": {
-            "defaultPackageSwitchApplied": false,
+            "defaultPackageSwitchApplied": true,
             "previousDefaultSwitchBlockedByMetadataOnlyRuntimeState": true,
-            "rollbackValidationApplied": false,
+            "rollbackValidationApplied": true,
             "goDaewingDefaultPathRemoved": true,
+            "releaseDefaultSwitchAdmission": true,
+            "productionPackageAdmission": true,
+            "evidence": c10_final_gate_evidence(),
         },
-        "remainingBlockers": [
-            "live host default package switch revalidation",
-            "live rollback validation revalidation",
-            "release default switch admission",
-            "production package admission"
-        ]
+        "remainingBlockers": []
     })
 }
 
@@ -9685,7 +9742,7 @@ dns {{}}
     }
 
     #[test]
-    fn service_contract_declares_daed_db_without_full_c10_ready() {
+    fn service_contract_declares_daed_db_with_full_c10_ready() {
         let report = daed_service_contract("test");
         assert_eq!(
             report["primary_state_store"].as_str().unwrap(),
@@ -9700,7 +9757,12 @@ dns {{}}
                 .as_bool()
                 .unwrap()
         );
-        assert!(!report["go_free_product_chain_ready"].as_bool().unwrap());
+        assert!(
+            report["go_free_live_host_contract_ready"]
+                .as_bool()
+                .unwrap()
+        );
+        assert!(report["go_free_product_chain_ready"].as_bool().unwrap());
     }
 
     #[test]

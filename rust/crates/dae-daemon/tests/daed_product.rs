@@ -490,9 +490,15 @@ fn daed_product_contract_reports_c10_first_batch_state_paths() {
         report["go_free_product_chain_typed_report"]["status"]
             .as_str()
             .unwrap(),
-        "blocked"
+        "pass"
     );
-    assert!(!report["go_free_product_chain_ready"].as_bool().unwrap());
+    assert!(
+        report["go_free_live_host_contract_ready"]
+            .as_bool()
+            .unwrap()
+    );
+    assert!(report["go_free_rollback_model_ready"].as_bool().unwrap());
+    assert!(report["go_free_product_chain_ready"].as_bool().unwrap());
 
     let package = Command::new(binary())
         .args(["package-info", "--json"])
@@ -511,6 +517,31 @@ fn daed_product_contract_reports_c10_first_batch_state_paths() {
     );
     assert!(
         package["current_batch_ready"]["validate_command"]
+            .as_bool()
+            .unwrap()
+    );
+    assert!(
+        package["package_surface"]["default_package_switch_live_applied"]
+            .as_bool()
+            .unwrap()
+    );
+    assert!(
+        package["package_surface"]["rollback_validation_applied_on_live_host"]
+            .as_bool()
+            .unwrap()
+    );
+    assert!(
+        package["package_surface"]["release_default_switch_admission"]
+            .as_bool()
+            .unwrap()
+    );
+    assert!(
+        package["package_surface"]["production_package_admission"]
+            .as_bool()
+            .unwrap()
+    );
+    assert!(
+        package["full_go_free_product_chain_ready"]
             .as_bool()
             .unwrap()
     );
@@ -1132,6 +1163,29 @@ fn daed_export_commands_report_c10_package_surface() {
     assert_eq!(
         manifest["binary"]["validateArgs"][0].as_str().unwrap(),
         "validate"
+    );
+    assert!(
+        manifest["admission"]["fullGoFreeProductChainReady"]
+            .as_bool()
+            .unwrap()
+    );
+    assert!(
+        manifest["admission"]["rollbackValidationAppliedOnLiveHost"]
+            .as_bool()
+            .unwrap()
+    );
+
+    let admission = Command::new(binary())
+        .args(["export", "admission-report"])
+        .output()
+        .unwrap();
+    let admission: Value = serde_json::from_slice(&admission.stdout).unwrap();
+    assert_eq!(admission["status"].as_str().unwrap(), "pass");
+    assert!(
+        admission["remainingBlockers"]
+            .as_array()
+            .unwrap()
+            .is_empty()
     );
 
     let systemd = Command::new(binary())
