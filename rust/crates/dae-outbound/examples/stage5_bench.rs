@@ -13,12 +13,12 @@ fn main() {
 
     let filter_set = DialerSet {
         dialers: (0..1000)
-            .map(|index| Dialer::new(format!("HK-Node-{index:04}"), "premium-sub"))
+            .map(|index| Dialer::new(format!("bench-node-{index:04}"), "bench-sub"))
             .collect(),
     };
     let filters = vec![vec![
-        Filter::new("name", vec![FilterParam::new("regex", "^HK-Node-")]),
-        Filter::new("subtag", vec![FilterParam::new("regex", "^premium-")]),
+        Filter::new("name", vec![FilterParam::new("regex", "^bench-node-")]),
+        Filter::new("subtag", vec![FilterParam::new("regex", "^bench-")]),
     ]];
     let annotations = vec![Annotation::default()];
     bench("outbound_filter_regex_1000", iters.min(10_000), || {
