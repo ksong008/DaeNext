@@ -550,6 +550,7 @@ fn start_product_runtime_instance(
         "fakeRuntime": false,
         "tproxyPort": config.global.tproxy_port,
         "residentDataplane": state["residentDataplane"].clone(),
+        "residentStartupEvidence": state["startupEvidence"].clone(),
     });
     Ok((ProductRuntimeInstance::Resident(runtime), report))
 }
@@ -808,6 +809,8 @@ fn restore_runtime_from_state(
     let control_plane_started_at = Instant::now();
     let outcome = runtime.reload(config, source)?;
     if log_mode.is_startup() {
+        let _ =
+            append_startup_runtime_evidence_logs_for_config(log_config_dir, state, &outcome.report);
         let _ = append_startup_reclaim_decision_log_for_config(
             log_config_dir,
             state,
@@ -6496,6 +6499,135 @@ fn append_startup_phase_failed_for_config(
     )
 }
 
+fn append_startup_runtime_evidence_logs_for_config(
+    config_dir: &Path,
+    state: &Path,
+    report: &Value,
+) -> io::Result<()> {
+    let evidence = report
+        .get("residentStartupEvidence")
+        .or_else(|| report.get("startupEvidence"))
+        .unwrap_or(&Value::Null);
+    let bpf_loader = evidence.get("bpfLoader").filter(|value| !value.is_null());
+    if let Some(loader) = bpf_loader {
+        append_lifecycle_log_for_config(
+            config_dir,
+            state,
+            "info",
+            "The loading process takes about 120MB free memory, which will be released after loading. Insufficient memory will cause loading failure.",
+        )?;
+        let mut fields = BTreeMap::new();
+        insert_json_log_field(&mut fields, "object_source", loader.get("objectSource"));
+        insert_json_log_field(
+            &mut fields,
+            "default_object_source",
+            loader.get("defaultObjectSource"),
+        );
+        insert_json_log_field(
+            &mut fields,
+            "kernel_ebpf_program_rewrite",
+            loader.get("kernelEbpfProgramRewrite"),
+        );
+        append_lifecycle_log_fields_for_config(
+            config_dir,
+            state,
+            "info",
+            "Rust/Aya BPF loader loaded",
+            fields,
+        )?;
+    }
+
+    if let Some(loaded) = evidence.get("loadedEbpf").filter(|loaded| {
+        json_scalar_to_u64(loaded.get("programCount")).unwrap_or(0) > 0
+            || json_scalar_to_u64(loaded.get("mapCount")).unwrap_or(0) > 0
+    }) {
+        let mut fields = BTreeMap::new();
+        insert_json_log_field(&mut fields, "program_count", loaded.get("programCount"));
+        insert_json_log_field(&mut fields, "map_count", loaded.get("mapCount"));
+        append_lifecycle_log_fields_for_config(
+            config_dir,
+            state,
+            "info",
+            "Loaded eBPF programs and maps",
+            fields,
+        )?;
+    }
+
+    if let Some(bindings) = evidence.get("bindings").and_then(Value::as_array) {
+        for binding in bindings {
+            let Some(program) = binding.get("programName").and_then(Value::as_str) else {
+                continue;
+            };
+            let Some(interface) = binding.get("interface").and_then(Value::as_str) else {
+                continue;
+            };
+            let backend = binding
+                .get("backend")
+                .and_then(Value::as_str)
+                .unwrap_or("aya");
+            let mut fields = BTreeMap::new();
+            insert_json_log_field(&mut fields, "role", binding.get("role"));
+            insert_json_log_field(&mut fields, "direction", binding.get("direction"));
+            insert_json_log_field(&mut fields, "priority", binding.get("priority"));
+            insert_json_log_field(&mut fields, "handle", binding.get("handle"));
+            append_lifecycle_log_fields_for_config(
+                config_dir,
+                state,
+                "info",
+                &format!("Bind {program} via Rust/Aya {backend} on {interface}"),
+                fields,
+            )?;
+        }
+    }
+
+    if let Some(routing_sets) = evidence.get("routingMatchSets").and_then(Value::as_array) {
+        for routing in routing_sets {
+            let Some(len) = json_scalar_to_string(routing.get("len")) else {
+                continue;
+            };
+            let Some(max_entries) = json_scalar_to_string(routing.get("maxEntries")) else {
+                continue;
+            };
+            let mut fields = BTreeMap::new();
+            insert_json_log_field(&mut fields, "interface", routing.get("interface"));
+            insert_json_log_field(&mut fields, "map", routing.get("mapName"));
+            insert_json_log_field(&mut fields, "map_id", routing.get("mapId"));
+            append_lifecycle_log_fields_for_config(
+                config_dir,
+                state,
+                "info",
+                &format!("Routing match set len: {len}/{max_entries}"),
+                fields,
+            )?;
+        }
+    }
+
+    Ok(())
+}
+
+fn insert_json_log_field(fields: &mut BTreeMap<String, String>, key: &str, value: Option<&Value>) {
+    if let Some(value) = json_scalar_to_string(value) {
+        fields.insert(key.to_owned(), value);
+    }
+}
+
+fn json_scalar_to_string(value: Option<&Value>) -> Option<String> {
+    match value? {
+        Value::String(value) if !value.is_empty() => Some(value.clone()),
+        Value::Number(value) => Some(value.to_string()),
+        Value::Bool(value) => Some(value.to_string()),
+        _ => None,
+    }
+}
+
+fn json_scalar_to_u64(value: Option<&Value>) -> Option<u64> {
+    match value? {
+        Value::Number(value) => value.as_u64(),
+        Value::String(value) => value.parse().ok(),
+        _ => None,
+    }
+}
+
 fn append_log_fields_for_config_with_policy(
     config_dir: &Path,
     state: &Path,
@@ -10056,6 +10188,76 @@ global {
         assert_eq!(items[0]["fields"]["dry"], json!("true"));
         assert_eq!(items[0]["fields"]["applied"], json!("false"));
         assert!(items[0]["fields"]["elapsed"].as_str().is_some());
+
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn startup_runtime_evidence_logs_report_interfaces_generically() {
+        let dir = std::env::temp_dir().join(format!("daed-product-test-{}", fastrand::u64(..)));
+        let state = dir.join("daed.db");
+        ensure_state_schema(&state).unwrap();
+        initialize_log_store(&dir, &state).unwrap();
+        set_metadata(&state, "runtime_log_level", "fatal").unwrap();
+        let report = json!({
+            "residentStartupEvidence": {
+                "bpfLoader": {
+                    "objectSource": "rust-aya-skeleton",
+                    "defaultObjectSource": "rust-aya-skeleton",
+                    "kernelEbpfProgramRewrite": true
+                },
+                "loadedEbpf": {
+                    "programCount": 1,
+                    "mapCount": 2
+                },
+                "bindings": [{
+                    "programName": "program_ingress",
+                    "interface": "if_test0",
+                    "backend": "tcx",
+                    "role": "ingress",
+                    "direction": "ingress",
+                    "priority": 1,
+                    "handle": 2
+                }],
+                "routingMatchSets": [{
+                    "interface": "if_test0",
+                    "len": 3,
+                    "maxEntries": 1024,
+                    "mapId": 4,
+                    "mapName": "routing_map"
+                }]
+            }
+        });
+
+        append_startup_runtime_evidence_logs_for_config(&dir, &state, &report).unwrap();
+
+        let logs = list_logs_value(&dir, &state, Some("all"), None, 500).unwrap();
+        let items = logs["items"].as_array().unwrap();
+        assert_eq!(items.len(), 5, "{logs}");
+        assert_eq!(
+            items[0]["message"],
+            json!(
+                "The loading process takes about 120MB free memory, which will be released after loading. Insufficient memory will cause loading failure."
+            )
+        );
+        assert_eq!(items[1]["message"], json!("Rust/Aya BPF loader loaded"));
+        assert_eq!(
+            items[1]["fields"]["object_source"],
+            json!("rust-aya-skeleton")
+        );
+        assert_eq!(
+            items[1]["fields"]["kernel_ebpf_program_rewrite"],
+            json!("true")
+        );
+        assert_eq!(items[2]["message"], json!("Loaded eBPF programs and maps"));
+        assert_eq!(items[2]["fields"]["program_count"], json!("1"));
+        assert_eq!(
+            items[3]["message"],
+            json!("Bind program_ingress via Rust/Aya tcx on if_test0")
+        );
+        assert_eq!(items[3]["fields"]["role"], json!("ingress"));
+        assert_eq!(items[4]["message"], json!("Routing match set len: 3/1024"));
+        assert_eq!(items[4]["fields"]["interface"], json!("if_test0"));
 
         fs::remove_dir_all(dir).unwrap();
     }
