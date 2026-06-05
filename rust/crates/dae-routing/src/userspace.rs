@@ -110,6 +110,43 @@ pub struct RoutingMatcher {
 }
 
 #[derive(Clone, Debug)]
+pub struct RoutingDomainSet {
+    pub bit: usize,
+    pub key: DomainKey,
+    pub patterns: Vec<String>,
+}
+
+#[derive(Clone, Debug)]
+pub struct RoutingLpmSet {
+    pub index: u32,
+    pub prefixes: Vec<IpPrefix>,
+}
+
+#[derive(Clone, Debug)]
+pub struct RoutingMatchSet {
+    pub kind: RoutingMatchKind,
+    pub outbound: OutboundIndex,
+    pub not: bool,
+    pub mark: u32,
+    pub must: bool,
+}
+
+#[derive(Clone, Debug)]
+pub enum RoutingMatchKind {
+    DomainSet,
+    IpSet { lpm_index: u32 },
+    SourceIpSet { lpm_index: u32 },
+    Port { start: u16, end: u16 },
+    SourcePort { start: u16, end: u16 },
+    L4Proto { value: u8 },
+    IpVersion { value: u8 },
+    Mac { lpm_index: u32 },
+    ProcessName { value: [u8; 16] },
+    Dscp { value: u8 },
+    Fallback,
+}
+
+#[derive(Clone, Debug)]
 struct MatchSet {
     match_type: MatchType,
     outbound: OutboundIndex,
@@ -139,8 +176,32 @@ enum MatchType {
 }
 
 impl RoutingMatcher {
+    pub fn from_typed_sets(
+        domain_sets: Vec<RoutingDomainSet>,
+        lpm_sets: Vec<RoutingLpmSet>,
+        matches: Vec<RoutingMatchSet>,
+    ) -> Result<Self, RoutingError> {
+        let max_domain_bit = domain_sets.iter().map(|set| set.bit + 1).max().unwrap_or(0);
+        let mut domain_matcher = DomainMatcher::new(max_domain_bit.max(matches.len()).max(1));
+        for set in domain_sets {
+            domain_matcher.add_set(set.bit, set.patterns, set.key)?;
+        }
+        let lpm_sets = lpm_sets
+            .into_iter()
+            .map(|set| (set.index, set.prefixes))
+            .collect::<BTreeMap<_, _>>();
+        let matches = matches
+            .into_iter()
+            .map(MatchSet::from_typed_set)
+            .collect::<Vec<_>>();
+        Ok(Self {
+            lpm_sets,
+            domain_matcher,
+            matches,
+        })
+    }
+
     pub fn from_fixture_value(value: &Value) -> Result<Self, RoutingError> {
-        let mut max_domain_bit = 0_usize;
         let mut domain_sets = Vec::new();
         for set in value
             .get("domain_sets")
@@ -158,22 +219,16 @@ impl RoutingMatcher {
                     })
                 })
                 .collect::<Result<Vec<_>, _>>()?;
-            max_domain_bit = max_domain_bit.max(bit + 1);
-            domain_sets.push((bit, key, patterns));
+            domain_sets.push(RoutingDomainSet { bit, key, patterns });
         }
 
         let matches_json = required_array(value, "matches")?;
         let mut matches = Vec::with_capacity(matches_json.len());
         for item in matches_json {
-            matches.push(MatchSet::from_fixture_value(item)?);
+            matches.push(RoutingMatchSet::from_fixture_value(item)?);
         }
 
-        let mut domain_matcher = DomainMatcher::new(max_domain_bit.max(matches.len()).max(1));
-        for (bit, key, patterns) in domain_sets {
-            domain_matcher.add_set(bit, patterns, key)?;
-        }
-
-        let mut lpm_sets = BTreeMap::new();
+        let mut lpm_sets = Vec::new();
         for set in value
             .get("lpm_sets")
             .and_then(Value::as_array)
@@ -190,14 +245,10 @@ impl RoutingMatcher {
                     IpPrefix::parse(prefix)
                 })
                 .collect::<Result<Vec<_>, _>>()?;
-            lpm_sets.insert(index, prefixes);
+            lpm_sets.push(RoutingLpmSet { index, prefixes });
         }
 
-        Ok(Self {
-            lpm_sets,
-            domain_matcher,
-            matches,
-        })
+        Self::from_typed_sets(domain_sets, lpm_sets, matches)
     }
 
     pub fn match_query(&self, query: &Query) -> Result<OutboundIndex, RoutingError> {
@@ -303,33 +354,83 @@ impl RoutingMatcher {
     }
 }
 
-impl MatchSet {
+impl RoutingMatchSet {
     fn from_fixture_value(value: &Value) -> Result<Self, RoutingError> {
         let match_type = MatchType::try_from(required_str(value, "type")?)?;
         Ok(Self {
-            match_type,
+            kind: routing_match_kind_from_fixture(match_type, value)?,
             outbound: outbound_from_fixture(required_str(value, "outbound")?)?,
             not: value.get("not").and_then(Value::as_bool).unwrap_or(false),
             mark: value.get("mark").and_then(Value::as_u64).unwrap_or(0) as u32,
             must: value.get("must").and_then(Value::as_bool).unwrap_or(false),
-            lpm_index: value
-                .get("lpm_index")
-                .and_then(Value::as_u64)
-                .map(|value| value as u32),
-            port_start: value
-                .get("port_start")
-                .and_then(Value::as_u64)
-                .map(|value| value as u16),
-            port_end: value
-                .get("port_end")
-                .and_then(Value::as_u64)
-                .map(|value| value as u16),
-            value_u8: optional_match_u8_value(value)?,
-            process_name: value
-                .get("process_name")
-                .and_then(Value::as_str)
-                .map(process_name_bytes),
         })
+    }
+}
+
+impl MatchSet {
+    fn from_typed_set(set: RoutingMatchSet) -> Self {
+        let RoutingMatchSet {
+            kind,
+            outbound,
+            not,
+            mark,
+            must,
+        } = set;
+        let mut out = Self {
+            match_type: MatchType::Fallback,
+            outbound,
+            not,
+            mark,
+            must,
+            lpm_index: None,
+            port_start: None,
+            port_end: None,
+            value_u8: None,
+            process_name: None,
+        };
+        match kind {
+            RoutingMatchKind::DomainSet => out.match_type = MatchType::DomainSet,
+            RoutingMatchKind::IpSet { lpm_index } => {
+                out.match_type = MatchType::IpSet;
+                out.lpm_index = Some(lpm_index);
+            }
+            RoutingMatchKind::SourceIpSet { lpm_index } => {
+                out.match_type = MatchType::SourceIpSet;
+                out.lpm_index = Some(lpm_index);
+            }
+            RoutingMatchKind::Port { start, end } => {
+                out.match_type = MatchType::Port;
+                out.port_start = Some(start);
+                out.port_end = Some(end);
+            }
+            RoutingMatchKind::SourcePort { start, end } => {
+                out.match_type = MatchType::SourcePort;
+                out.port_start = Some(start);
+                out.port_end = Some(end);
+            }
+            RoutingMatchKind::L4Proto { value } => {
+                out.match_type = MatchType::L4Proto;
+                out.value_u8 = Some(value);
+            }
+            RoutingMatchKind::IpVersion { value } => {
+                out.match_type = MatchType::IpVersion;
+                out.value_u8 = Some(value);
+            }
+            RoutingMatchKind::Mac { lpm_index } => {
+                out.match_type = MatchType::Mac;
+                out.lpm_index = Some(lpm_index);
+            }
+            RoutingMatchKind::ProcessName { value } => {
+                out.match_type = MatchType::ProcessName;
+                out.process_name = Some(value);
+            }
+            RoutingMatchKind::Dscp { value } => {
+                out.match_type = MatchType::Dscp;
+                out.value_u8 = Some(value);
+            }
+            RoutingMatchKind::Fallback => out.match_type = MatchType::Fallback,
+        }
+        out
     }
 
     fn matches(
@@ -435,6 +536,65 @@ fn outbound_from_fixture(value: &str) -> Result<OutboundIndex, RoutingError> {
             .map_err(|_| RoutingError::UnknownOutbound(value.to_owned())),
         _ => Err(RoutingError::UnknownOutbound(value.to_owned())),
     }
+}
+
+fn routing_match_kind_from_fixture(
+    match_type: MatchType,
+    value: &Value,
+) -> Result<RoutingMatchKind, RoutingError> {
+    Ok(match match_type {
+        MatchType::DomainSet => RoutingMatchKind::DomainSet,
+        MatchType::IpSet => RoutingMatchKind::IpSet {
+            lpm_index: required_u64(value, "lpm_index")? as u32,
+        },
+        MatchType::SourceIpSet => RoutingMatchKind::SourceIpSet {
+            lpm_index: required_u64(value, "lpm_index")? as u32,
+        },
+        MatchType::Port => {
+            let start = value.get("port_start").and_then(Value::as_u64).unwrap_or(0) as u16;
+            let end = value
+                .get("port_end")
+                .and_then(Value::as_u64)
+                .unwrap_or(start as u64) as u16;
+            RoutingMatchKind::Port { start, end }
+        }
+        MatchType::SourcePort => {
+            let start = value.get("port_start").and_then(Value::as_u64).unwrap_or(0) as u16;
+            let end = value
+                .get("port_end")
+                .and_then(Value::as_u64)
+                .unwrap_or(start as u64) as u16;
+            RoutingMatchKind::SourcePort { start, end }
+        }
+        MatchType::L4Proto => RoutingMatchKind::L4Proto {
+            value: optional_match_u8_value(value)?.ok_or_else(|| {
+                RoutingError::InvalidFixture("l4proto match value is missing".to_owned())
+            })?,
+        },
+        MatchType::IpVersion => RoutingMatchKind::IpVersion {
+            value: optional_match_u8_value(value)?.ok_or_else(|| {
+                RoutingError::InvalidFixture("ipversion match value is missing".to_owned())
+            })?,
+        },
+        MatchType::Mac => RoutingMatchKind::Mac {
+            lpm_index: required_u64(value, "lpm_index")? as u32,
+        },
+        MatchType::ProcessName => RoutingMatchKind::ProcessName {
+            value: value
+                .get("process_name")
+                .and_then(Value::as_str)
+                .map(process_name_bytes)
+                .ok_or_else(|| {
+                    RoutingError::InvalidFixture("process_name match value is missing".to_owned())
+                })?,
+        },
+        MatchType::Dscp => RoutingMatchKind::Dscp {
+            value: optional_match_u8_value(value)?.ok_or_else(|| {
+                RoutingError::InvalidFixture("dscp match value is missing".to_owned())
+            })?,
+        },
+        MatchType::Fallback => RoutingMatchKind::Fallback,
+    })
 }
 
 fn optional_match_u8_value(value: &Value) -> Result<Option<u8>, RoutingError> {

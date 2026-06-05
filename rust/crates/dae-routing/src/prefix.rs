@@ -10,6 +10,17 @@ pub struct IpPrefix {
 }
 
 impl IpPrefix {
+    pub fn new(addr: IpAddr, bits: u8) -> Result<Self, RoutingError> {
+        let max = if addr.is_ipv4() { 32 } else { 128 };
+        if bits > max {
+            return Err(RoutingError::InvalidPrefixBits {
+                input: format!("{addr}/{bits}"),
+                bits,
+            });
+        }
+        Ok(Self { addr, bits })
+    }
+
     pub fn parse(input: &str) -> Result<Self, RoutingError> {
         let Some((addr, bits)) = input.split_once('/') else {
             let addr = IpAddr::from_str(input)
