@@ -14242,6 +14242,80 @@ Deployment follow-up:
   - Added unit coverage so runtime report log fields do not reintroduce the
     full allocator reclaim object.
 
+## 2026-06-05 11:20 +0800 - Go live log sampling and lifecycle log shrink
+
+Scope:
+  - Temporarily switched `10.10.10.2` from the current Rust test binary back to
+    the stable Go rollback anchor:
+      `/usr/bin/daed-daex-align-webui-cpu-20260601`
+  - Captured Go startup and API reload WebUI task-log behavior, then changed
+    Rust product logs to stop flooding the WebUI with internal state fields.
+
+Go live startup sample:
+  - Startup under current config produced compact runtime logs:
+      `dae netns link mode: netkit`
+      `Loading eBPF programs and maps into the kernel...`
+      `Loaded eBPF programs and maps`
+      `Bind ... via Rust/Aya tcx ...`
+      `Routing match set len: ...`
+      `[Startup] phase completed`
+        fields: `phase=control-plane.core`, `elapsed=...`
+      `[Startup] phase completed`
+        fields: `phase=control-plane.create.total`, `elapsed=...`
+      `[Startup] post-startup gc decision`
+        fields: `force`, `heapBefore`, `heapAfter`
+      `[Startup] phase completed`
+        fields: `phase=post-startup.gc`, `elapsed=...`
+  - Go does not put selected config IDs, generated config byte counts, resident
+    dataplane proxy counts, allocator per-arena details, or HTTP worker details
+    into normal startup task-log cards.
+
+Go live API reload sample:
+  - Authenticated `POST /api/runtime/reload {"dry":false}` returned:
+      `{"applied":1,"dry":false}`
+  - Under current selected config `global.log_level=error`, Go API reload did
+    not append visible WebUI task logs. The detailed Go reload logs are runtime
+    logger entries and are filtered by the config log level.
+  - This confirms Rust product should keep a small resident success log for
+    reload completion and elapsed time, but should not emit a long resident
+    report on every successful reload.
+
+Rust product change:
+  - Removed resident lifecycle success logs that were too verbose:
+      `[Startup] product log store initialized`
+      `[Startup] runtime restore requested`
+      `[Startup] runtime restore started`
+      `[Startup] runtime config preview materialized`
+      `[Startup] runtime config built`
+      `[Startup] runtime owner reload finished`
+      `[Startup] runtime restore finished`
+      `[Startup] HTTP listener ready`
+      `[Reload] Received reload request`
+      `[Reload] Runtime config preview materialized`
+      `[Reload] Runtime config built`
+      `[Reload] Runtime owner reload finished`
+      `[Reload] Stopped old control plane`
+      `[Reload] Serve`
+  - Startup phase logs now keep Go-style fields only:
+      `phase`
+      `elapsed`
+  - Startup success now appends:
+      `[Startup] Finished`
+      fields: `elapsed`
+  - Reload success now appends:
+      `[Reload] Finished`
+      fields: `source`, `dry`, `applied`, `elapsed`
+  - Dry reload preview now appends only:
+      `[Reload] Preview finished`
+      fields: `source`, `dry`, `applied`, `elapsed`
+  - Startup GC decision keeps only small fields:
+      `force`
+      `allocator_profile`
+
+Validation:
+  - `cargo fmt --all --manifest-path rust/Cargo.toml`: pass.
+  - `cargo test --manifest-path rust/Cargo.toml -p dae-daemon`: pass.
+
 Live deployment to 10.10.10.2:
   - Built Rust native `daed` with:
       `cargo build --manifest-path rust/Cargo.toml -p dae-daemon --bin daed --release --features native-ebpf`
