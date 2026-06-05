@@ -38,6 +38,7 @@ use crate::allocator::{
 use crate::config_validate::load_config_file;
 use crate::production_runtime_owner::{
     ResidentProductionRuntime, resident_live_adapter_config_assessment,
+    resident_runtime_defaults_contract, resident_runtime_environment_defaults,
     set_resident_event_log_sink, start_resident_production_runtime,
 };
 
@@ -80,6 +81,11 @@ const PRODUCT_HTTP_WORKER_STACK_BYTES_DEFAULT: usize = 1024 * 1024;
 const PRODUCT_HTTP_WORKER_STACK_BYTES_MIN: usize = 256 * 1024;
 const PRODUCT_HTTP_WORKER_STACK_BYTES_MAX: usize = 8 * 1024 * 1024;
 const PRODUCT_HTTP_WORKER_RECV_TIMEOUT: Duration = Duration::from_millis(100);
+const PRODUCT_MALLOC_ARENA_MAX_ENV: &str = "MALLOC_ARENA_MAX";
+const PRODUCT_MALLOC_ARENA_MAX_DEFAULT: &str = "2";
+const PRODUCT_JEMALLOC_CONF_ENV: &str = "MALLOC_CONF";
+const PRODUCT_JEMALLOC_CONF_DEFAULT: &str =
+    "background_thread:true,dirty_decay_ms:1000,muzzy_decay_ms:1000,narenas:2";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DaedProductOutput {
@@ -243,6 +249,55 @@ fn env_usize(name: &str, default: usize, min: usize, max: usize) -> usize {
         .and_then(|value| value.trim().parse::<usize>().ok())
         .unwrap_or(default)
         .clamp(min, max)
+}
+
+fn product_runtime_defaults() -> Value {
+    json!({
+        "allocator": {
+            "profile": allocator_profile(),
+            "systemAllocatorArenaCap": {
+                "env": PRODUCT_MALLOC_ARENA_MAX_ENV,
+                "default": PRODUCT_MALLOC_ARENA_MAX_DEFAULT,
+                "scope": "glibc/system allocator compatibility; ignored by jemalloc builds",
+            },
+            "jemallocPolicy": {
+                "env": PRODUCT_JEMALLOC_CONF_ENV,
+                "default": PRODUCT_JEMALLOC_CONF_DEFAULT,
+                "scope": "jemalloc builds; keeps background purging and bounded arenas explicit",
+            },
+            "reclaim": {
+                "startupControlBuilt": true,
+                "reloadOldOwnerClosed": true,
+                "reloadScopedResourcesFlushed": true,
+                "idleAfterReload": true,
+                "stopRuntime": true,
+            },
+        },
+        "http": {
+            "workers": {
+                "env": PRODUCT_HTTP_WORKERS_ENV,
+                "defaultPolicy": format!(
+                    "available_parallelism * 2 clamped to {}..{}",
+                    PRODUCT_HTTP_WORKER_DEFAULT_MIN, PRODUCT_HTTP_WORKER_DEFAULT_MAX
+                ),
+                "min": PRODUCT_HTTP_WORKER_MIN,
+                "max": PRODUCT_HTTP_WORKER_MAX,
+            },
+            "queue": {
+                "env": PRODUCT_HTTP_QUEUE_ENV,
+                "default": PRODUCT_HTTP_QUEUE_DEFAULT,
+                "min": PRODUCT_HTTP_QUEUE_MIN,
+                "max": PRODUCT_HTTP_QUEUE_MAX,
+            },
+            "workerStackBytes": {
+                "env": PRODUCT_HTTP_WORKER_STACK_BYTES_ENV,
+                "default": PRODUCT_HTTP_WORKER_STACK_BYTES_DEFAULT,
+                "min": PRODUCT_HTTP_WORKER_STACK_BYTES_MIN,
+                "max": PRODUCT_HTTP_WORKER_STACK_BYTES_MAX,
+            },
+        },
+        "residentDataplane": resident_runtime_defaults_contract(),
+    })
 }
 
 #[derive(Debug)]
@@ -1138,6 +1193,10 @@ fn daed_service_contract(version: &str) -> Value {
         );
         report.insert("daed_db_primary_required".to_owned(), json!(true));
         report.insert("var_lib_daed_required_by_default".to_owned(), json!(false));
+        report.insert(
+            "rust_product_runtime_defaults".to_owned(),
+            product_runtime_defaults(),
+        );
         report.insert("rust_product_binary_contract_ready".to_owned(), json!(true));
         report.insert(
             "rust_product_lifecycle_contract_ready".to_owned(),
@@ -1243,6 +1302,7 @@ fn daed_package_info(version: &str) -> Value {
         "wing_db_import_destructive_by_default": false,
         "daed_db_primary_required": true,
         "var_lib_daed_required_by_default": false,
+        "runtime_defaults": product_runtime_defaults(),
         "webui": {
             "framework": "current React/Vite dist",
             "served_by": "Rust daed static file server",
@@ -2175,9 +2235,28 @@ struct RuntimeTrafficTotalSample {
     observed_at: Instant,
 }
 
+#[derive(Clone, Copy, Debug, Default)]
+struct RuntimeTrafficSecond {
+    upload: u64,
+    download: u64,
+    active_connections: u64,
+    udp_sessions: u64,
+}
+
+#[derive(Debug, Default)]
+struct RuntimeTrafficEventFileCache {
+    path: String,
+    offset: u64,
+    upload_total: u64,
+    download_total: u64,
+    seconds: BTreeMap<u64, RuntimeTrafficSecond>,
+}
+
 static LAST_RUNTIME_TRAFFIC_TOTAL_SAMPLE: OnceLock<Mutex<Option<RuntimeTrafficTotalSample>>> =
     OnceLock::new();
 static RUNTIME_TRAFFIC_RATE_SAMPLES: OnceLock<Mutex<VecDeque<(u64, u64, u64)>>> = OnceLock::new();
+static RUNTIME_TRAFFIC_EVENT_FILE_CACHE: OnceLock<Mutex<RuntimeTrafficEventFileCache>> =
+    OnceLock::new();
 
 fn runtime_overview_report(app: &AppState, request: &HttpRequest) -> Value {
     let runtime = app.runtime.summary();
@@ -2221,6 +2300,44 @@ fn runtime_overview_report(app: &AppState, request: &HttpRequest) -> Value {
         "goroutines": process.thread_count,
         "productHttp": app.http_metrics.snapshot(),
         "runtime": runtime,
+        "samples": traffic.samples,
+    })
+}
+
+fn runtime_overview_delta_report(app: &AppState, request: &HttpRequest) -> Value {
+    let runtime = app.runtime.summary();
+    let window_sec = query_u64(request, "windowSec")
+        .unwrap_or(60)
+        .clamp(1, 3_600);
+    let max_points = query_usize(request, "maxPoints")
+        .unwrap_or(120)
+        .clamp(1, 1_000);
+    let traffic = resident_runtime_traffic_stats(&runtime, window_sec, max_points);
+    let process = current_process_metrics();
+    let allocator_live_heap = allocator_live_heap_bytes();
+    json!({
+        "updatedAt": now_text(),
+        "uploadRate": traffic.upload_rate.to_string(),
+        "downloadRate": traffic.download_rate.to_string(),
+        "uploadTotal": traffic.upload_total.to_string(),
+        "downloadTotal": traffic.download_total.to_string(),
+        "activeConnections": traffic.active_connections,
+        "udpSessions": traffic.udp_sessions,
+        "cpuUsagePercent": process.cpu_usage_percent,
+        "rssBytes": process.rss_bytes.to_string(),
+        "rssAnonBytes": process.anonymous_rss_bytes.to_string(),
+        "rssFileBytes": process.file_rss_bytes.to_string(),
+        "anonymousRssBytes": process.anonymous_rss_bytes.to_string(),
+        "fileRssBytes": process.file_rss_bytes.to_string(),
+        "vmDataBytes": process.vm_data_bytes.to_string(),
+        "heapLiveBytes": allocator_live_heap.map(|bytes| json!(bytes.to_string())).unwrap_or(Value::Null),
+        "heapMetricSource": if allocator_live_heap.is_some() { "allocator-stats" } else { "unavailable" },
+        "heapCompatBytes": process.heap_alloc_bytes_compat().to_string(),
+        "heapCompatBytesSource": "compat-alias-rss-anon-not-live-heap",
+        "heapAllocBytes": process.heap_alloc_bytes_compat().to_string(),
+        "heapAllocBytesSource": "compat-alias-rss-anon-not-live-heap",
+        "goroutines": process.thread_count,
+        "reloadCount": runtime["reloadCount"].clone(),
         "samples": traffic.samples,
     })
 }
@@ -2272,57 +2389,100 @@ fn resident_runtime_traffic_stats(
     else {
         return RuntimeTrafficStats::default();
     };
-    let Ok(file) = fs::File::open(event_file) else {
-        return RuntimeTrafficStats::default();
-    };
-    let now = unix_now();
-    let window_start = now.saturating_sub(window_sec);
-    let rate_window_start = now.saturating_sub(5);
-    let mut stats = RuntimeTrafficStats::default();
-    let mut samples: BTreeMap<u64, (u64, u64)> = BTreeMap::new();
-    for line in io::BufReader::new(file).lines().map_while(Result::ok) {
+    resident_event_file_traffic_stats(event_file, window_sec, max_points).unwrap_or_default()
+}
+
+fn resident_event_file_traffic_stats(
+    event_file: &str,
+    window_sec: u64,
+    max_points: usize,
+) -> io::Result<RuntimeTrafficStats> {
+    let mut file = fs::File::open(event_file)?;
+    let len = file.metadata()?.len();
+    let cache_lock = RUNTIME_TRAFFIC_EVENT_FILE_CACHE
+        .get_or_init(|| Mutex::new(RuntimeTrafficEventFileCache::default()));
+    let mut cache = cache_lock.lock().map_err(|_| {
+        io::Error::new(
+            io::ErrorKind::Other,
+            "runtime traffic event file cache lock poisoned",
+        )
+    })?;
+    if cache.path != event_file || len < cache.offset {
+        *cache = RuntimeTrafficEventFileCache {
+            path: event_file.to_owned(),
+            ..RuntimeTrafficEventFileCache::default()
+        };
+    }
+    file.seek(SeekFrom::Start(cache.offset))?;
+    let mut reader = io::BufReader::new(file);
+    let mut line = String::new();
+    loop {
+        line.clear();
+        let read = reader.read_line(&mut line)?;
+        if read == 0 {
+            break;
+        }
+        cache.offset = cache.offset.saturating_add(read as u64);
         let Ok(event) = serde_json::from_str::<Value>(&line) else {
             continue;
         };
         let (upload, download) = event_traffic_bytes(&event);
-        stats.upload_total = stats.upload_total.saturating_add(upload);
-        stats.download_total = stats.download_total.saturating_add(download);
-        let timestamp = event["timestampUnix"].as_u64();
-        if let Some(timestamp) = timestamp {
-            if timestamp >= window_start {
-                let entry = samples.entry(timestamp).or_insert((0, 0));
-                entry.0 = entry.0.saturating_add(upload);
-                entry.1 = entry.1.saturating_add(download);
-                if is_tcp_connection_event(&event) {
-                    stats.active_connections = stats.active_connections.saturating_add(1);
-                }
-                if is_udp_session_event(&event) {
-                    stats.udp_sessions = stats.udp_sessions.saturating_add(1);
-                }
-            }
-            if timestamp >= rate_window_start {
-                stats.upload_rate = stats.upload_rate.saturating_add(upload);
-                stats.download_rate = stats.download_rate.saturating_add(download);
-            }
+        cache.upload_total = cache.upload_total.saturating_add(upload);
+        cache.download_total = cache.download_total.saturating_add(download);
+        let Some(timestamp) = event["timestampUnix"].as_u64() else {
+            continue;
+        };
+        let entry = cache.seconds.entry(timestamp).or_default();
+        entry.upload = entry.upload.saturating_add(upload);
+        entry.download = entry.download.saturating_add(download);
+        if is_tcp_connection_event(&event) {
+            entry.active_connections = entry.active_connections.saturating_add(1);
         }
+        if is_udp_session_event(&event) {
+            entry.udp_sessions = entry.udp_sessions.saturating_add(1);
+        }
+    }
+    let now = unix_now();
+    let max_retained_window = 3_600_u64;
+    let retain_start = now.saturating_sub(max_retained_window);
+    let old_keys = cache
+        .seconds
+        .keys()
+        .copied()
+        .take_while(|timestamp| *timestamp < retain_start)
+        .collect::<Vec<_>>();
+    for timestamp in old_keys {
+        cache.seconds.remove(&timestamp);
+    }
+
+    let window_start = now.saturating_sub(window_sec);
+    let rate_window_start = now.saturating_sub(5);
+    let mut stats = RuntimeTrafficStats::default();
+    stats.upload_total = cache.upload_total;
+    stats.download_total = cache.download_total;
+    let mut sample_values = Vec::new();
+    for (timestamp, second) in cache.seconds.range(window_start..) {
+        stats.active_connections = stats
+            .active_connections
+            .saturating_add(second.active_connections);
+        stats.udp_sessions = stats.udp_sessions.saturating_add(second.udp_sessions);
+        if *timestamp >= rate_window_start {
+            stats.upload_rate = stats.upload_rate.saturating_add(second.upload);
+            stats.download_rate = stats.download_rate.saturating_add(second.download);
+        }
+        sample_values.push(json!({
+            "timestamp": iso8601_utc(*timestamp),
+            "uploadRate": second.upload.to_string(),
+            "downloadRate": second.download.to_string(),
+        }));
     }
     stats.upload_rate /= 5;
     stats.download_rate /= 5;
-    let mut sample_values = samples
-        .into_iter()
-        .map(|(timestamp, (upload, download))| {
-            json!({
-                "timestamp": iso8601_utc(timestamp),
-                "uploadRate": upload.to_string(),
-                "downloadRate": download.to_string(),
-            })
-        })
-        .collect::<Vec<_>>();
     if sample_values.len() > max_points {
         sample_values = sample_values.split_off(sample_values.len() - max_points);
     }
     stats.samples = sample_values;
-    stats
+    Ok(stats)
 }
 
 fn resident_live_runtime_traffic_stats(
@@ -2843,15 +3003,6 @@ fn api_set_runtime_log_level(app: &AppState, request: &HttpRequest) -> HttpRespo
     if let Err(err) = set_metadata(&app.state, "runtime_log_level", &level) {
         return HttpResponse::json(500, json!({"error": err.to_string()}));
     }
-    let mut fields = BTreeMap::new();
-    fields.insert("level".to_owned(), level.clone());
-    let _ = append_log_fields_for_config(
-        &app.config_dir,
-        &app.state,
-        &level,
-        &format!("runtime log level set to {level}"),
-        fields,
-    );
     HttpResponse::json(200, json!({"level": level}))
 }
 
@@ -2862,7 +3013,7 @@ fn normalize_runtime_log_level(level: &str) -> Option<String> {
 fn api_runtime_events(app: &AppState, request: &HttpRequest) -> HttpResponse {
     let full = runtime_overview_report(app, request);
     thread::sleep(Duration::from_millis(200));
-    let delta = runtime_overview_report(app, request);
+    let delta = runtime_overview_delta_report(app, request);
     sse_response_events(
         &[
             ("runtime.overview", full),
@@ -2879,19 +3030,27 @@ fn stream_runtime_events(
 ) -> io::Result<()> {
     write_sse_stream_headers(stream)?;
     write!(stream, "retry: {LOG_STREAM_RETRY_MS}\n\n")?;
-    write_sse_stream_event(
-        stream,
-        "runtime.overview",
-        &runtime_overview_report(app, request),
-    )?;
+    let first = runtime_overview_report(app, request);
+    let mut last_reload_count = first
+        .pointer("/runtime/reloadCount")
+        .and_then(Value::as_u64)
+        .unwrap_or(0);
+    write_sse_stream_event(stream, "runtime.overview", &first)?;
     let mut last_heartbeat = Instant::now();
     loop {
         thread::sleep(Duration::from_secs(1));
-        write_sse_stream_event(
-            stream,
-            "runtime.overview.delta",
-            &runtime_overview_report(app, request),
-        )?;
+        let delta = runtime_overview_delta_report(app, request);
+        let reload_count = delta["reloadCount"].as_u64().unwrap_or(last_reload_count);
+        if reload_count != last_reload_count {
+            let full = runtime_overview_report(app, request);
+            last_reload_count = full
+                .pointer("/runtime/reloadCount")
+                .and_then(Value::as_u64)
+                .unwrap_or(reload_count);
+            write_sse_stream_event(stream, "runtime.overview", &full)?;
+        } else {
+            write_sse_stream_event(stream, "runtime.overview.delta", &delta)?;
+        }
         if last_heartbeat.elapsed() >= LOG_STREAM_HEARTBEAT_INTERVAL {
             stream.write_all(b": keep-alive\n\n")?;
             stream.flush()?;
@@ -2900,33 +3059,11 @@ fn stream_runtime_events(
     }
 }
 
-fn api_log_events(app: &AppState, request: &HttpRequest) -> HttpResponse {
-    let level = match log_level_filter_from_request(request) {
-        Ok(level) => level,
+fn api_log_events(_app: &AppState, request: &HttpRequest) -> HttpResponse {
+    match log_level_filter_from_request(request) {
+        Ok(_) => sse_response_events(&[], Some(LOG_STREAM_RETRY_MS)),
         Err(err) => return HttpResponse::json(400, json!({"error": err})),
-    };
-    let query = request
-        .query
-        .get("q")
-        .and_then(|values| values.first())
-        .filter(|value| !value.trim().is_empty())
-        .cloned();
-    let logs = list_logs_value(
-        &app.config_dir,
-        &app.state,
-        level.as_deref(),
-        query.as_deref(),
-        1,
-    )
-    .unwrap_or_else(|_| json!({"items": []}));
-    let Some(entry) = logs["items"]
-        .as_array()
-        .and_then(|items| items.first())
-        .cloned()
-    else {
-        return sse_response("log.ready", json!({}));
-    };
-    sse_response("log.entry", entry)
+    }
 }
 
 fn stream_log_events(
@@ -3003,6 +3140,7 @@ fn api_logs(app: &AppState, request: &HttpRequest) -> HttpResponse {
         .get("limit")
         .and_then(|values| values.first())
         .and_then(|value| value.parse::<usize>().ok())
+        .filter(|limit| *limit > 0)
         .unwrap_or(DEFAULT_LOG_QUERY_LIMIT);
     match list_logs_value(
         &app.config_dir,
@@ -5923,7 +6061,7 @@ fn append_resident_event_product_log(
     let Some(event_name) = event.get("event").and_then(Value::as_str) else {
         return Ok(());
     };
-    let level = resident_event_product_log_level(event_name);
+    let level = resident_event_product_log_level(event_name, event);
     let fields = resident_event_product_log_fields(event_name, event);
     append_log_fields_for_config(
         config_dir,
@@ -5934,9 +6072,16 @@ fn append_resident_event_product_log(
     )
 }
 
-fn resident_event_product_log_level(event_name: &str) -> &'static str {
+fn resident_event_product_log_level(event_name: &str, event: &Value) -> &'static str {
     if event_name.contains("failed") || event_name.contains("error") {
         return "warn";
+    }
+    if matches!(
+        event_name,
+        "tcp_connection_finished" | "tcp_connection_blocked"
+    ) && resident_event_has_route_log_context(event)
+    {
+        return "info";
     }
     if event_name.ends_with("_started") || event_name.ends_with("_stopped") {
         return "info";
@@ -5944,11 +6089,24 @@ fn resident_event_product_log_level(event_name: &str) -> &'static str {
     "debug"
 }
 
+fn resident_event_has_route_log_context(event: &Value) -> bool {
+    [
+        "network",
+        "outbound",
+        "proxy_group",
+        "outbound_kind",
+        "original_dst",
+    ]
+    .iter()
+    .any(|key| event.get(key).is_some_and(|value| !value.is_null()))
+}
+
 fn resident_event_is_flow_diagnostic(event_name: &str) -> bool {
     matches!(
         event_name,
         "tcp_connection_finished"
             | "tcp_connection_failed"
+            | "tcp_connection_blocked"
             | "udp_packet_finished"
             | "udp_dns_packet_finished"
             | "udp_packet_skipped"
@@ -5968,11 +6126,11 @@ fn resident_event_product_log_message(event_name: &str, event: &Value) -> String
 
 fn resident_event_product_log_fields(event_name: &str, event: &Value) -> BTreeMap<String, String> {
     let mut fields = BTreeMap::new();
-    fields.insert("event".to_owned(), event_name.to_owned());
     if resident_event_is_flow_diagnostic(event_name) {
         append_resident_flow_event_product_log_fields(&mut fields, event);
         return fields;
     }
+    fields.insert("event".to_owned(), event_name.to_owned());
     if let Some(object) = event.as_object() {
         for (key, value) in object {
             if key == "event" {
@@ -6011,32 +6169,70 @@ fn append_resident_flow_event_product_log_fields(
     fields: &mut BTreeMap<String, String>,
     event: &Value,
 ) {
-    for key in [
-        "proxy_group",
-        "node_tag",
-        "outbound_kind",
-        "initial_outbound",
-        "final_outbound",
-        "original_dst",
-        "dial_target",
-        "sniffed_domain",
-        "sniff_error",
-        "tls_underlay",
-        "bytes_client_to_proxy",
-        "bytes_proxy_to_client",
-        "bytes_client_to_direct",
-        "bytes_direct_to_client",
-        "request_len",
-        "response_len",
-        "response_header_stripped",
-        "vision_direct_command_seen",
-        "vision_downlink_direct_active",
-        "vision_raw_direct_recovered",
-        "vision_unpadding_blocks",
-        "error",
-    ] {
+    append_resident_flow_network_field(fields, event);
+    append_resident_event_first_field_if_present(
+        fields,
+        event,
+        "outbound",
+        &["outbound", "proxy_group", "outbound_kind"],
+    );
+    append_resident_event_first_field_if_present(
+        fields,
+        event,
+        "policy",
+        &["policy", "group_policy"],
+    );
+    append_resident_event_first_field_if_present(
+        fields,
+        event,
+        "dialer",
+        &["dialer", "node_tag", "outbound_kind"],
+    );
+    append_resident_event_first_field_if_present(
+        fields,
+        event,
+        "sniffed",
+        &["sniffed", "sniffed_domain"],
+    );
+    append_resident_event_first_field_if_present(
+        fields,
+        event,
+        "ip",
+        &["ip", "original_dst", "direct_target"],
+    );
+    for key in ["pid", "dscp", "pname", "mac", "error", "reason"] {
         append_resident_event_field_if_present(fields, event, key);
     }
+}
+
+fn append_resident_flow_network_field(fields: &mut BTreeMap<String, String>, event: &Value) {
+    if let Some(network) = resident_event_field_value(event, "network") {
+        fields.insert("network".to_owned(), network);
+        return;
+    }
+    let Some(event_name) = resident_event_field_str(event, "event") else {
+        return;
+    };
+    if event_name.starts_with("tcp_") {
+        fields.insert("network".to_owned(), "tcp4".to_owned());
+    } else if event_name.starts_with("udp_") {
+        fields.insert("network".to_owned(), "udp4".to_owned());
+    }
+}
+
+fn append_resident_event_first_field_if_present(
+    fields: &mut BTreeMap<String, String>,
+    event: &Value,
+    output_key: &str,
+    input_keys: &[&str],
+) {
+    let Some(value) = input_keys
+        .iter()
+        .find_map(|key| resident_event_field_value(event, key))
+    else {
+        return;
+    };
+    fields.insert(output_key.to_owned(), value);
 }
 
 fn append_resident_event_field_if_present(
@@ -6054,6 +6250,11 @@ fn append_resident_event_field_if_present(
     if !value.is_empty() {
         fields.insert(key.to_owned(), value);
     }
+}
+
+fn resident_event_field_value(event: &Value, key: &str) -> Option<String> {
+    let value = event.get(key)?;
+    (!value.is_null()).then(|| product_log_field_value(value))
 }
 
 fn resident_event_first_field_str<'a>(event: &'a Value, keys: &[&str]) -> Option<&'a str> {
@@ -6124,7 +6325,11 @@ fn list_logs_value(
     limit: usize,
 ) -> io::Result<Value> {
     ensure_state_schema(state)?;
-    let limit = limit.clamp(1, MAX_LOG_QUERY_LIMIT);
+    let limit = if limit == 0 {
+        DEFAULT_LOG_QUERY_LIMIT
+    } else {
+        limit.min(MAX_LOG_QUERY_LIMIT)
+    };
     let level = normalize_log_level_filter(level)?;
     let query = query
         .map(str::trim)
@@ -6617,36 +6822,24 @@ fn normalize_log_level_filter(level: Option<&str>) -> io::Result<Option<String>>
         return Ok(None);
     };
     let level = level.trim();
-    if level.is_empty() || is_all_log_level_filter(level) {
+    if level.is_empty() || level.eq_ignore_ascii_case("all") {
         return Ok(None);
     }
-    normalize_log_level_name(level)
-        .map(Some)
-        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "invalid log level"))
-}
-
-fn is_all_log_level_filter(level: &str) -> bool {
-    matches!(
-        level.trim().to_ascii_lowercase().as_str(),
-        "all" | "*" | "any"
-    ) || matches!(level.trim(), "全部" | "所有")
+    normalize_log_level_name(level).map(Some).ok_or_else(|| {
+        io::Error::new(
+            io::ErrorKind::InvalidInput,
+            format!("not a valid logrus Level: {level:?}"),
+        )
+    })
 }
 
 fn normalize_log_level_name(level: &str) -> Option<String> {
     let level = level.trim().to_ascii_lowercase();
     match level.as_str() {
         "panic" | "fatal" | "error" | "warn" | "info" | "debug" | "trace" => Some(level),
-        "err" | "错误" => Some("error".to_owned()),
-        "warning" | "警告" => Some("warn".to_owned()),
-        "信息" => Some("info".to_owned()),
-        "调试" => Some("debug".to_owned()),
-        "跟踪" => Some("trace".to_owned()),
+        "warning" => Some("warn".to_owned()),
         _ => None,
     }
-}
-
-fn sse_response(event: &str, payload: Value) -> HttpResponse {
-    sse_response_events(&[(event, payload)], None)
 }
 
 fn sse_response_events(events: &[(&str, Value)], retry_ms: Option<u64>) -> HttpResponse {
@@ -7315,6 +7508,7 @@ fn product_package_manifest() -> Value {
             "owner": "resident-production-runtime-manager",
             "state": "GET /api/general/state reports live manager state",
             "metadataOnlyRunningState": false,
+            "defaults": product_runtime_defaults(),
         },
         "systemd": {
             "unitName": "daed.service",
@@ -7341,6 +7535,7 @@ fn product_admission_report() -> Value {
         "cPhase": "C10",
         "workPackage": "go-free-product-chain-v1",
         "status": "local-runtime-bridge-pass-live-revalidation-pending",
+        "runtimeDefaults": product_runtime_defaults(),
         "localEvidence": {
             "rustDaedBinary": true,
             "primaryStateStore": PRIMARY_STATE_STORE,
@@ -7359,6 +7554,7 @@ fn product_admission_report() -> Value {
             "resetpassParity": true,
             "packageManifest": true,
             "webuiRouteAuditPass": route_audit["pass"].as_bool().unwrap_or(false),
+            "runtimeDefaultsExplicit": true,
         },
         "packageArtifacts": {
             "manifest": "daed export package-manifest",
@@ -7485,30 +7681,77 @@ fn webui_route_patterns() -> Vec<(&'static str, &'static str)> {
     ]
 }
 
+fn package_runtime_environment_defaults() -> Vec<(&'static str, String)> {
+    let mut defaults = vec![
+        (
+            PRODUCT_MALLOC_ARENA_MAX_ENV,
+            PRODUCT_MALLOC_ARENA_MAX_DEFAULT.to_owned(),
+        ),
+        (
+            PRODUCT_JEMALLOC_CONF_ENV,
+            PRODUCT_JEMALLOC_CONF_DEFAULT.to_owned(),
+        ),
+        (
+            PRODUCT_HTTP_QUEUE_ENV,
+            PRODUCT_HTTP_QUEUE_DEFAULT.to_string(),
+        ),
+        (
+            PRODUCT_HTTP_WORKER_STACK_BYTES_ENV,
+            PRODUCT_HTTP_WORKER_STACK_BYTES_DEFAULT.to_string(),
+        ),
+    ];
+    defaults.extend(
+        resident_runtime_environment_defaults()
+            .into_iter()
+            .map(|(name, value)| (name, value.to_string())),
+    );
+    defaults
+}
+
+fn systemd_runtime_environment_lines() -> String {
+    package_runtime_environment_defaults()
+        .into_iter()
+        .map(|(name, value)| format!("Environment=\"{name}={value}\"\n"))
+        .collect::<String>()
+}
+
+fn docker_runtime_environment_exports() -> String {
+    package_runtime_environment_defaults()
+        .into_iter()
+        .map(|(name, value)| format!("export {name}=\"${{{name}:-{value}}}\"\n"))
+        .collect::<String>()
+}
+
 fn systemd_unit_text() -> String {
-    r#"[Unit]
+    format!(
+        r#"[Unit]
 Description=daed Rust native service
 After=network-online.target
 Wants=network-online.target
 
 [Service]
 Type=simple
-ExecStart=/usr/bin/daed run -c /etc/daed
+# {PRODUCT_HTTP_WORKERS_ENV} unset uses available_parallelism * 2 clamped to {PRODUCT_HTTP_WORKER_DEFAULT_MIN}..{PRODUCT_HTTP_WORKER_DEFAULT_MAX}.
+{}ExecStart=/usr/bin/daed run -c /etc/daed
 Restart=on-failure
 RestartSec=3s
 
 [Install]
 WantedBy=multi-user.target
-"#
-    .to_owned()
+"#,
+        systemd_runtime_environment_lines()
+    )
 }
 
 fn docker_entrypoint_text() -> String {
-    r#"#!/bin/sh
+    format!(
+        r#"#!/bin/sh
 set -eu
-exec /usr/bin/daed run -c /etc/daed --listen "${DAED_LISTEN:-0.0.0.0:2023}" "$@"
-"#
-    .to_owned()
+# {PRODUCT_HTTP_WORKERS_ENV} unset uses available_parallelism * 2 clamped to {PRODUCT_HTTP_WORKER_DEFAULT_MIN}..{PRODUCT_HTTP_WORKER_DEFAULT_MAX}.
+{}exec /usr/bin/daed run -c /etc/daed --listen "${{DAED_LISTEN:-0.0.0.0:2023}}" "$@"
+"#,
+        docker_runtime_environment_exports()
+    )
 }
 
 fn count_table(conn: &Connection, table: &str) -> io::Result<i64> {
@@ -8738,6 +8981,39 @@ mod tests {
     }
 
     #[test]
+    fn product_package_reports_runtime_memory_defaults() {
+        let contract = daed_service_contract("test");
+        let defaults = &contract["rust_product_runtime_defaults"];
+        assert_eq!(
+            defaults["allocator"]["profile"].as_str().unwrap(),
+            allocator_profile()
+        );
+        assert_eq!(
+            defaults["http"]["queue"]["env"].as_str().unwrap(),
+            PRODUCT_HTTP_QUEUE_ENV
+        );
+        assert_eq!(
+            defaults["residentDataplane"]["tcpFlow"]["stackBytes"]["env"]
+                .as_str()
+                .unwrap(),
+            "DAE_RESIDENT_TCP_FLOW_STACK_BYTES"
+        );
+
+        let manifest = product_package_manifest();
+        assert_eq!(
+            manifest["runtime"]["defaults"]["http"]["workerStackBytes"]["default"]
+                .as_u64()
+                .unwrap(),
+            PRODUCT_HTTP_WORKER_STACK_BYTES_DEFAULT as u64
+        );
+
+        let unit = systemd_unit_text();
+        assert!(unit.contains("Environment=\"DAED_HTTP_QUEUE=256\""));
+        assert!(unit.contains("Environment=\"DAE_RESIDENT_UDP_PACKET_WORKERS=64\""));
+        assert!(unit.contains("DAED_HTTP_WORKERS unset uses available_parallelism"));
+    }
+
+    #[test]
     fn parsed_global_reads_dae_text_and_json_storage_shapes() {
         let text = r#"
 global {
@@ -8801,6 +9077,59 @@ global {
         assert_eq!(stats.active_connections, 1);
         assert_eq!(stats.udp_sessions, 1);
         assert_eq!(stats.samples.len(), 1);
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn runtime_traffic_stats_event_file_cache_reads_new_tail() {
+        let dir = std::env::temp_dir().join(format!("daed-product-test-{}", fastrand::u64(..)));
+        fs::create_dir_all(&dir).unwrap();
+        let event_file = dir.join("events.jsonl");
+        let now = unix_now();
+        fs::write(
+            &event_file,
+            format!(
+                "{{\"event\":\"tcp_connection_finished\",\"timestampUnix\":{now},\"bytes_client_to_proxy\":100,\"bytes_proxy_to_client\":200}}\n"
+            ),
+        )
+        .unwrap();
+        let runtime = json!({
+            "residentDataplane": {
+                "event_file": path_string(&event_file)
+            }
+        });
+
+        let first = resident_runtime_traffic_stats(&runtime, 60, 10);
+        assert_eq!(first.upload_total, 100);
+        let offset_after_first = RUNTIME_TRAFFIC_EVENT_FILE_CACHE
+            .get_or_init(|| Mutex::new(RuntimeTrafficEventFileCache::default()))
+            .lock()
+            .unwrap()
+            .offset;
+        let second = resident_runtime_traffic_stats(&runtime, 60, 10);
+        assert_eq!(second.upload_total, 100);
+        assert_eq!(
+            RUNTIME_TRAFFIC_EVENT_FILE_CACHE
+                .get_or_init(|| Mutex::new(RuntimeTrafficEventFileCache::default()))
+                .lock()
+                .unwrap()
+                .offset,
+            offset_after_first
+        );
+
+        let mut file = fs::OpenOptions::new()
+            .append(true)
+            .open(&event_file)
+            .unwrap();
+        writeln!(
+            file,
+            "{{\"event\":\"udp_packet_finished\",\"timestampUnix\":{now},\"request_len\":30,\"response_len\":40}}"
+        )
+        .unwrap();
+        let third = resident_runtime_traffic_stats(&runtime, 60, 10);
+        assert_eq!(third.upload_total, 130);
+        assert_eq!(third.download_total, 240);
+        assert_eq!(third.udp_sessions, 1);
         fs::remove_dir_all(dir).unwrap();
     }
 
@@ -9135,8 +9464,12 @@ global {
 
         let field = list_logs_value(&dir, &state, Some("all"), Some("DAILY"), 500).unwrap();
         assert_eq!(field["items"].as_array().unwrap().len(), 1);
-        let cn_all = list_logs_value(&dir, &state, Some("全部"), Some("proxy"), 500).unwrap();
-        assert_eq!(cn_all["items"].as_array().unwrap().len(), 1);
+        assert!(list_logs_value(&dir, &state, Some("not-a-level"), Some("proxy"), 500).is_err());
+        let limit_zero = list_logs_value(&dir, &state, Some("all"), None, 0).unwrap();
+        assert_eq!(limit_zero["items"].as_array().unwrap().len(), 3);
+        let limit_one = list_logs_value(&dir, &state, Some("all"), None, 1).unwrap();
+        assert_eq!(limit_one["items"].as_array().unwrap().len(), 1);
+        assert_eq!(limit_one["items"][0]["message"], json!("Dial failed"));
 
         let mut query = HashMap::new();
         query.insert("level".to_owned(), vec!["all".to_owned()]);
@@ -9161,25 +9494,17 @@ global {
             ("level=", 3, None),
             ("level=all", 3, None),
             ("level=ALL", 3, None),
-            ("level=any", 3, None),
-            ("level=*", 3, None),
-            ("level=%E5%85%A8%E9%83%A8", 3, None),
-            ("level=%E6%89%80%E6%9C%89", 3, None),
             ("level=info", 1, Some("info")),
             ("level=INFO", 1, Some("info")),
-            ("level=%E4%BF%A1%E6%81%AF", 1, Some("info")),
             ("level=warn", 1, Some("warn")),
             ("level=warning", 1, Some("warn")),
-            ("level=%E8%AD%A6%E5%91%8A", 1, Some("warn")),
             ("level=error", 1, Some("error")),
-            ("level=err", 1, Some("error")),
-            ("level=%E9%94%99%E8%AF%AF", 1, Some("error")),
             ("level=debug", 0, None),
-            ("level=%E8%B0%83%E8%AF%95", 0, None),
             ("level=trace", 0, None),
-            ("level=%E8%B7%9F%E8%B8%AA", 0, None),
             ("level=fatal", 0, None),
             ("level=panic", 0, None),
+            ("level=all&limit=0", 3, None),
+            ("level=all&limit=1", 1, Some("error")),
         ] {
             let raw_path = if raw_query.is_empty() {
                 "/api/logs".to_owned()
@@ -9207,22 +9532,24 @@ global {
         }
         let response = api_log_events(&app, &request);
         let body = String::from_utf8(response.body).unwrap();
-        assert!(body.contains("event: log.entry"));
-        assert!(body.contains("Dial failed"));
+        assert!(body.contains("retry: 3000"));
+        assert!(!body.contains("event: log.entry"));
+        assert!(!body.contains("Dial failed"));
 
-        let mut invalid_query = HashMap::new();
-        invalid_query.insert("level".to_owned(), vec!["invalid".to_owned()]);
-        let invalid = api_logs(
-            &app,
-            &HttpRequest {
-                method: "GET".to_owned(),
-                path: "/api/logs".to_owned(),
-                query: invalid_query,
-                headers: HashMap::new(),
-                body: Vec::new(),
-            },
-        );
-        assert_eq!(invalid.status, 400);
+        for raw_query in ["level=any", "level=*", "level=invalid", "level=err"] {
+            let (path, query) = split_path_query(&format!("/api/logs?{raw_query}"));
+            let invalid = api_logs(
+                &app,
+                &HttpRequest {
+                    method: "GET".to_owned(),
+                    path,
+                    query,
+                    headers: HashMap::new(),
+                    body: Vec::new(),
+                },
+            );
+            assert_eq!(invalid.status, 400, "{raw_query}");
+        }
 
         let request = HttpRequest {
             method: "PATCH".to_owned(),
@@ -9235,14 +9562,9 @@ global {
         assert_eq!(response.status, 200);
         append_log_for_config(&dir, &state, "debug", "debug runtime detail").unwrap();
         let debug = list_logs_value(&dir, &state, Some("debug"), None, 500).unwrap();
-        assert_eq!(debug["items"].as_array().unwrap().len(), 2);
+        assert_eq!(debug["items"].as_array().unwrap().len(), 1);
         assert_eq!(debug["items"][0]["level"], json!("debug"));
-        assert_eq!(
-            debug["items"][0]["message"],
-            json!("runtime log level set to debug")
-        );
-        assert_eq!(debug["items"][1]["level"], json!("debug"));
-        assert_eq!(debug["items"][1]["message"], json!("debug runtime detail"));
+        assert_eq!(debug["items"][0]["message"], json!("debug runtime detail"));
 
         let cleared = api_clear_logs(&app);
         assert_eq!(cleared.status, 200);
@@ -9296,6 +9618,21 @@ global {
 
     #[test]
     fn resident_events_are_bridged_to_product_logs_with_runtime_level_filter() {
+        const FLOW_SOURCE: &str = "flow-source";
+        const FLOW_DESTINATION: &str = "flow-destination";
+        const FLOW_DIAL_TARGET: &str = "flow-dial-target";
+        const FLOW_FAILED_SOURCE: &str = "flow-failed-source";
+        const FLOW_FAILED_TARGET: &str = "flow-failed-target";
+        const FLOW_OUTBOUND: &str = "flow-outbound";
+        const FLOW_POLICY: &str = "fixed";
+        const FLOW_DIALER: &str = "flow-dialer";
+        const FLOW_PID: u32 = 1;
+        const FLOW_DSCP: u8 = 2;
+        const FLOW_PROCESS: &str = "flow-process";
+        const FLOW_MAC: &str = "flow-mac";
+        const UDP_FLOW_SOURCE: &str = "udp-flow-source";
+        const UDP_FLOW_DESTINATION: &str = "udp-flow-destination";
+
         let dir = std::env::temp_dir().join(format!("daed-product-test-{}", fastrand::u64(..)));
         let state = dir.join("daed.db");
         ensure_state_schema(&state).unwrap();
@@ -9310,13 +9647,18 @@ global {
         append_resident_event_product_log(
             &dir,
             &state,
-            &json!({"event": "tcp_connection_finished", "peer": "198.51.100.10:443", "bytes_client_to_proxy": 128}),
+            &json!({"event": "tcp_connection_finished", "peer": "ignored-flow-source", "bytes_client_to_proxy": 128}),
         )
         .unwrap();
         append_resident_event_product_log(
             &dir,
             &state,
-            &json!({"event": "tcp_connection_failed", "peer": "198.51.100.20:443", "dial_target": "failed.example:443", "error": "sample failure"}),
+            &json!({
+                "event": "tcp_connection_failed",
+                "peer": FLOW_FAILED_SOURCE,
+                "dial_target": FLOW_FAILED_TARGET,
+                "error": "sample failure"
+            }),
         )
         .unwrap();
         append_resident_event_product_log(
@@ -9338,11 +9680,14 @@ global {
         assert_eq!(items[0]["fields"]["proxy_count"], json!("2"));
         assert_eq!(
             items[1]["message"],
-            json!("198.51.100.20:443 <-> failed.example:443 failed")
+            json!(format!(
+                "{FLOW_FAILED_SOURCE} <-> {FLOW_FAILED_TARGET} failed"
+            ))
         );
         assert_eq!(items[1]["level"], json!("warn"));
-        assert_eq!(items[1]["fields"]["event"], json!("tcp_connection_failed"));
         assert_eq!(items[1]["fields"]["error"], json!("sample failure"));
+        assert_eq!(items[1]["fields"]["network"], json!("tcp4"));
+        assert!(items[1]["fields"].get("event").is_none());
         assert_eq!(
             items[2]["message"],
             json!("resident dataplane tcp accept failed")
@@ -9354,18 +9699,57 @@ global {
         append_resident_event_product_log(
             &dir,
             &state,
-            &json!({"event": "tcp_connection_finished", "peer": "198.51.100.30:443", "dial_target": "ok.example:443", "bytes_client_to_proxy": 256, "node_tag": "node-a", "proxy_group": "proxy"}),
+            &json!({
+                "event": "tcp_connection_finished",
+                "peer": FLOW_SOURCE,
+                "original_dst": FLOW_DESTINATION,
+                "dial_target": FLOW_DIAL_TARGET,
+                "sniffed_domain": "",
+                "bytes_client_to_proxy": 256,
+                "node_tag": FLOW_DIALER,
+                "proxy_group": FLOW_OUTBOUND,
+                "group_policy": FLOW_POLICY,
+                "pid": FLOW_PID,
+                "dscp": FLOW_DSCP,
+                "pname": FLOW_PROCESS,
+                "mac": FLOW_MAC
+            }),
         )
         .unwrap();
         append_resident_event_product_log(
             &dir,
             &state,
-            &json!({"event": "udp_packet_finished", "peer": "198.51.100.40:443", "original_dst": "203.0.113.40:443", "request_len": 64, "response_len": 128}),
+            &json!({
+                "event": "udp_packet_finished",
+                "peer": UDP_FLOW_SOURCE,
+                "original_dst": UDP_FLOW_DESTINATION,
+                "request_len": 64,
+                "response_len": 128
+            }),
         )
         .unwrap();
+        let info = list_logs_value(&dir, &state, Some("info"), None, 500).unwrap();
+        let info_items = info["items"].as_array().unwrap();
+        let tcp = info_items.last().unwrap();
+        assert_eq!(
+            tcp["message"],
+            json!(format!("{FLOW_SOURCE} <-> {FLOW_DIAL_TARGET}"))
+        );
+        assert!(tcp["fields"].get("event").is_none());
+        assert_eq!(tcp["fields"]["network"], json!("tcp4"));
+        assert_eq!(tcp["fields"]["outbound"], json!(FLOW_OUTBOUND));
+        assert_eq!(tcp["fields"]["policy"], json!(FLOW_POLICY));
+        assert_eq!(tcp["fields"]["dialer"], json!(FLOW_DIALER));
+        assert_eq!(tcp["fields"]["ip"], json!(FLOW_DESTINATION));
+        assert_eq!(tcp["fields"]["sniffed"], json!(""));
+        assert_eq!(tcp["fields"]["pid"], json!(FLOW_PID.to_string()));
+        assert_eq!(tcp["fields"]["dscp"], json!(FLOW_DSCP.to_string()));
+        assert_eq!(tcp["fields"]["pname"], json!(FLOW_PROCESS));
+        assert_eq!(tcp["fields"]["mac"], json!(FLOW_MAC));
+
         let mut legacy_fields = BTreeMap::new();
         legacy_fields.insert("event".to_owned(), "tcp_connection_finished".to_owned());
-        legacy_fields.insert("peer".to_owned(), "198.51.100.50:443".to_owned());
+        legacy_fields.insert("peer".to_owned(), "legacy-flow-source".to_owned());
         append_log_fields_for_config(
             &dir,
             &state,
@@ -9376,24 +9760,16 @@ global {
         .unwrap();
         let debug = list_logs_value(&dir, &state, Some("debug"), None, 500).unwrap();
         let items = debug["items"].as_array().unwrap();
-        assert_eq!(items.len(), 3, "{debug}");
+        assert_eq!(items.len(), 2, "{debug}");
         assert_eq!(
             items[0]["message"],
-            json!("198.51.100.30:443 <-> ok.example:443")
+            json!(format!("{UDP_FLOW_SOURCE} <-> {UDP_FLOW_DESTINATION}"))
         );
-        assert_eq!(
-            items[0]["fields"]["event"],
-            json!("tcp_connection_finished")
-        );
-        assert_eq!(items[0]["fields"]["node_tag"], json!("node-a"));
-        assert_eq!(items[0]["fields"]["bytes_client_to_proxy"], json!("256"));
+        assert_eq!(items[0]["fields"]["network"], json!("udp4"));
+        assert_eq!(items[0]["fields"]["ip"], json!(UDP_FLOW_DESTINATION));
+        assert!(items[0]["fields"].get("request_len").is_none());
         assert_eq!(
             items[1]["message"],
-            json!("198.51.100.40:443 <-> 203.0.113.40:443")
-        );
-        assert_eq!(items[1]["fields"]["request_len"], json!("64"));
-        assert_eq!(
-            items[2]["message"],
             json!("resident dataplane tcp connection finished")
         );
 
@@ -9527,6 +9903,16 @@ global {
         );
         assert!(overview["goroutines"].as_u64().unwrap() > 0);
         assert!(overview["cpuUsagePercent"].as_f64().unwrap() >= 0.0);
+
+        let delta = runtime_overview_delta_report(&app, &request);
+        assert!(delta["uploadRate"].as_str().is_some());
+        assert!(delta["rssBytes"].as_str().is_some());
+        assert!(delta["heapAllocBytes"].as_str().is_some());
+        assert!(delta["goroutines"].as_u64().is_some());
+        assert!(delta.get("allocatorStats").is_none());
+        assert!(delta.get("allocatorReclaim").is_none());
+        assert!(delta.get("resourcePools").is_none());
+        assert!(delta.get("runtime").is_none());
 
         let response = api_runtime_events(&app, &request);
         let body = String::from_utf8(response.body).unwrap();

@@ -106,6 +106,7 @@ pub(super) enum ResidentProxyProtocolPlan {
 pub(super) struct ResidentProxyPlan {
     pub(super) protocol: String,
     pub(super) group_name: String,
+    pub(super) group_policy: String,
     pub(super) node_tag: String,
     pub(super) server_host: String,
     pub(super) server_port: u16,
@@ -226,7 +227,8 @@ fn resident_proxy_plans(
                 return Err(reason);
             }
         };
-        let proxy = build_proxy_plan(config, group.name.clone(), node.tag, node.link)?;
+        let mut proxy = build_proxy_plan(config, group.name.clone(), node.tag, node.link)?;
+        proxy.group_policy = group_policy_name(&group.policy);
         default_outbound.get_or_insert(outbound_index);
         proxies.insert(outbound_index, proxy);
     }
@@ -313,6 +315,7 @@ fn build_vless_proxy_plan(
     Ok(ResidentProxyPlan {
         protocol: "vless".to_owned(),
         group_name,
+        group_policy: String::new(),
         node_tag,
         server_host: vless.add,
         server_port,
@@ -350,6 +353,7 @@ fn build_socks5_proxy_plan(
     Ok(ResidentProxyPlan {
         protocol: "socks5".to_owned(),
         group_name,
+        group_policy: String::new(),
         node_tag,
         server_host,
         server_port,
@@ -395,6 +399,7 @@ fn build_http_proxy_plan(
     Ok(ResidentProxyPlan {
         protocol: "http-proxy".to_owned(),
         group_name,
+        group_policy: String::new(),
         node_tag,
         server_host: parsed.server,
         server_port: parsed.port,
@@ -433,6 +438,7 @@ fn build_shadowsocks_proxy_plan(
     Ok(ResidentProxyPlan {
         protocol: "shadowsocks".to_owned(),
         group_name,
+        group_policy: String::new(),
         node_tag,
         server_host: parsed.server,
         server_port: parsed.port,
@@ -477,6 +483,7 @@ fn build_trojan_proxy_plan(
     Ok(ResidentProxyPlan {
         protocol: "trojan".to_owned(),
         group_name,
+        group_policy: String::new(),
         node_tag,
         server_host: parsed.server,
         server_port: parsed.port,
@@ -520,6 +527,7 @@ fn build_anytls_proxy_plan(
     Ok(ResidentProxyPlan {
         protocol: "anytls".to_owned(),
         group_name,
+        group_policy: String::new(),
         node_tag,
         server_host,
         server_port,
@@ -570,6 +578,7 @@ fn build_tuic_proxy_plan(
     Ok(ResidentProxyPlan {
         protocol: "tuic".to_owned(),
         group_name,
+        group_policy: String::new(),
         node_tag,
         server_host: parsed.server,
         server_port: parsed.port,
@@ -640,6 +649,7 @@ fn build_hysteria2_proxy_plan(
     Ok(ResidentProxyPlan {
         protocol: "hysteria2".to_owned(),
         group_name,
+        group_policy: String::new(),
         node_tag,
         server_host: server.host,
         server_port,
@@ -690,6 +700,7 @@ fn build_juicity_proxy_plan(
     Ok(ResidentProxyPlan {
         protocol: "juicity".to_owned(),
         group_name,
+        group_policy: String::new(),
         node_tag,
         server_host: parsed.server,
         server_port: parsed.port,
@@ -752,6 +763,7 @@ fn build_vmess_proxy_plan(
     Ok(ResidentProxyPlan {
         protocol: "vmess".to_owned(),
         group_name,
+        group_policy: String::new(),
         node_tag,
         server_host: parsed.add,
         server_port,
@@ -915,9 +927,12 @@ fn select_group_node(
     group: &Group,
     node_links: &BTreeMap<String, String>,
 ) -> Result<GroupNodeSelection, String> {
-    let mut candidates = Vec::<String>::new();
     let mut unresolved_names = Vec::<String>::new();
     let mut explicit_name_filter = false;
+    let fixed_index = fixed_policy_index(&group.policy).unwrap_or(0);
+    let mut matching_index = 0_usize;
+    let mut first_match = None::<&str>;
+    let mut fixed_match = None::<&str>;
     for filter in &group.filter {
         for function in filter {
             if function.name == "name" && !function.not {
@@ -925,7 +940,11 @@ fn select_group_node(
                 for param in &function.params {
                     if param.key.is_empty() {
                         if node_links.contains_key(&param.val) {
-                            candidates.push(param.val.clone());
+                            first_match.get_or_insert(param.val.as_str());
+                            if matching_index == fixed_index {
+                                fixed_match = Some(param.val.as_str());
+                            }
+                            matching_index += 1;
                         } else {
                             unresolved_names.push(param.val.clone());
                         }
@@ -934,38 +953,27 @@ fn select_group_node(
             }
         }
     }
-    if candidates.is_empty() {
-        if explicit_name_filter {
-            return Ok(GroupNodeSelection::NoCandidate {
-                explicit_name_filter,
-                unresolved_names,
-            });
-        }
-        candidates.extend(node_links.keys().cloned());
-    }
-    if candidates.is_empty() {
-        return Ok(GroupNodeSelection::NoCandidate {
-            explicit_name_filter,
-            unresolved_names,
-        });
-    }
-    let fixed_index = fixed_policy_index(&group.policy).unwrap_or(0);
-    let Some(tag) = candidates
-        .get(fixed_index)
-        .or_else(|| candidates.first())
-        .cloned()
-    else {
+    let tag = if explicit_name_filter {
+        fixed_match.or(first_match)
+    } else {
+        node_links
+            .keys()
+            .nth(fixed_index)
+            .or_else(|| node_links.keys().next())
+            .map(String::as_str)
+    };
+    let Some(tag) = tag else {
         return Ok(GroupNodeSelection::NoCandidate {
             explicit_name_filter,
             unresolved_names,
         });
     };
     let link = node_links
-        .get(&tag)
+        .get(tag)
         .ok_or_else(|| format!("group {} selected missing node {tag}", group.name))?
         .clone();
     Ok(GroupNodeSelection::Selected(SelectedGroupNode {
-        tag,
+        tag: tag.to_owned(),
         link,
     }))
 }
@@ -983,6 +991,18 @@ fn fixed_policy_index(policy: &DynamicFunctionValue) -> Option<usize> {
         .params
         .first()
         .and_then(|param| param.val.parse::<usize>().ok())
+}
+
+fn group_policy_name(policy: &DynamicFunctionValue) -> String {
+    match policy {
+        DynamicFunctionValue::Function(function) => function.name.clone(),
+        DynamicFunctionValue::FunctionList(functions) => functions
+            .first()
+            .map(|function| function.name.clone())
+            .unwrap_or_default(),
+        DynamicFunctionValue::String(value) => value.clone(),
+        DynamicFunctionValue::Nil => String::new(),
+    }
 }
 
 fn tagged_node_links(config: &Config) -> BTreeMap<String, String> {
@@ -1086,6 +1106,40 @@ mod tests {
         assert_eq!(proxy.flow, "xtls-rprx-vision");
         assert_eq!(proxy.alpn, ["h2", "http/1.1"]);
         assert_eq!(proxy.mark, 1234);
+    }
+
+    #[test]
+    fn group_node_selection_keeps_fixed_policy_order() {
+        let config = parse_config(
+            r#"
+        global {
+        lan_interface: daerust0
+        }
+        node {
+        node_a: 'socks://127.0.0.1:1080'
+        node_b: 'socks://127.0.0.1:1081'
+        }
+        group {
+        proxy {
+            filter: name(node_a, node_b)
+            policy: fixed(1)
+        }
+        }
+        routing {
+        l4proto(tcp) -> proxy
+        fallback: direct
+        }
+        "#,
+        );
+        let links = tagged_node_links(&config);
+        let selected = select_group_node(&config.group[0], &links).unwrap();
+        match selected {
+            GroupNodeSelection::Selected(node) => {
+                assert_eq!(node.tag, "node_b");
+                assert_eq!(node.link, "socks://127.0.0.1:1081");
+            }
+            GroupNodeSelection::NoCandidate { .. } => panic!("expected selected node"),
+        }
     }
 
     #[test]

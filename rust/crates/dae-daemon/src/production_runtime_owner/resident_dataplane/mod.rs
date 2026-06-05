@@ -61,6 +61,51 @@ const XUDP_COMMAND_NEW: u8 = 1;
 const XUDP_OPTION_DATA: u8 = 1;
 const XUDP_NETWORK_UDP: u8 = 2;
 
+pub(crate) fn resident_runtime_defaults_contract() -> Value {
+    json!({
+        "tcpFlow": {
+            "stackBytes": {
+                "env": RESIDENT_TCP_FLOW_STACK_BYTES_ENV,
+                "default": RESIDENT_TCP_FLOW_STACK_BYTES_DEFAULT,
+                "min": RESIDENT_TCP_FLOW_STACK_BYTES_MIN,
+                "max": RESIDENT_TCP_FLOW_STACK_BYTES_MAX,
+            },
+        },
+        "udpPacketTasks": {
+            "limit": {
+                "env": RESIDENT_UDP_PACKET_WORKERS_ENV,
+                "default": RESIDENT_UDP_PACKET_WORKERS_DEFAULT,
+                "min": RESIDENT_UDP_PACKET_WORKERS_MIN,
+                "max": RESIDENT_UDP_PACKET_WORKERS_MAX,
+            },
+            "stackBytes": {
+                "env": RESIDENT_UDP_PACKET_STACK_BYTES_ENV,
+                "default": RESIDENT_UDP_PACKET_STACK_BYTES_DEFAULT,
+                "min": RESIDENT_UDP_PACKET_STACK_BYTES_MIN,
+                "max": RESIDENT_UDP_PACKET_STACK_BYTES_MAX,
+            },
+            "model": "current bounded task fanout; scheduled to move toward Tokio UDP readiness/task queue",
+        },
+    })
+}
+
+pub(crate) fn resident_runtime_environment_defaults() -> Vec<(&'static str, usize)> {
+    vec![
+        (
+            RESIDENT_TCP_FLOW_STACK_BYTES_ENV,
+            RESIDENT_TCP_FLOW_STACK_BYTES_DEFAULT,
+        ),
+        (
+            RESIDENT_UDP_PACKET_WORKERS_ENV,
+            RESIDENT_UDP_PACKET_WORKERS_DEFAULT,
+        ),
+        (
+            RESIDENT_UDP_PACKET_STACK_BYTES_ENV,
+            RESIDENT_UDP_PACKET_STACK_BYTES_DEFAULT,
+        ),
+    ]
+}
+
 #[derive(Debug)]
 pub(super) struct ResidentDataplaneRuntime {
     stop: Arc<AtomicBool>,
