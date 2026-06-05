@@ -5065,7 +5065,7 @@ fn replace_subscription_nodes(
     let mut candidates = Vec::<(String, ParsedNodeLink)>::new();
     let mut incoming_name_counts = HashMap::<String, usize>::new();
     for link in links {
-        let parsed = parse_node_link(link, None);
+        let parsed = parse_node_link(link.as_str(), None);
         *incoming_name_counts.entry(parsed.name.clone()).or_default() += 1;
         candidates.push((link.clone(), parsed));
     }
@@ -8873,6 +8873,38 @@ fn ensure_default_resources(state: &Path, body: &Value) -> io::Result<Value> {
             .map_err(sqlite_io_error)?;
         }
     }
+    if body.get("nodeIds").is_some() {
+        conn.execute(
+            "DELETE FROM group_nodes WHERE group_id = ?1",
+            params![group_id],
+        )
+        .map_err(sqlite_io_error)?;
+        apply_group_node_ids(&conn, group_id, &integer_array(body, "nodeIds"), true)?;
+    }
+    if body.get("subscriptionIds").is_some() {
+        conn.execute(
+            "DELETE FROM group_subscriptions WHERE group_id = ?1",
+            params![group_id],
+        )
+        .map_err(sqlite_io_error)?;
+        apply_group_subscription_ids(
+            &conn,
+            group_id,
+            &integer_array(body, "subscriptionIds"),
+            body.get("nameFilterRegex").and_then(Value::as_str),
+            true,
+        )?;
+    }
+    if body.get("nodeIds").is_some()
+        || body.get("subscriptionIds").is_some()
+        || body.get("policyParams").is_some()
+    {
+        conn.execute(
+            "UPDATE groups SET version = version + 1 WHERE id = ?1",
+            params![group_id],
+        )
+        .map_err(sqlite_io_error)?;
+    }
     Ok(json!({
         "defaultConfigID": config_id.to_string(),
         "defaultRoutingID": routing_id.to_string(),
@@ -8917,6 +8949,11 @@ fn upsert_group(conn: &Connection, name: &str, policy: &str) -> io::Result<i64> 
         .optional()
         .map_err(sqlite_io_error)?
     {
+        conn.execute(
+            "UPDATE groups SET policy = ?2, version = CASE WHEN policy <> ?2 THEN version + 1 ELSE version END WHERE id = ?1",
+            params![id, policy],
+        )
+        .map_err(sqlite_io_error)?;
         return Ok(id);
     }
     conn.execute(
@@ -9541,6 +9578,87 @@ fn help_text() -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use dae_config::DynamicFunctionValue;
+    use dae_config::Item;
+
+    fn test_config_with_node(node_name: &str, link: &str, group_name: &str) -> String {
+        format!(
+            r#"
+global {{}}
+node {{
+    {node_name}: '{link}'
+}}
+group {{
+    {group_name} {{
+        filter: name({node_name})
+        policy: random
+    }}
+}}
+routing {{
+    fallback: direct
+}}
+dns {{}}
+"#
+        )
+    }
+
+    fn node_link_from_config(content: &str, node_name: &str) -> String {
+        let sections = parse_config(content).unwrap();
+        sections
+            .iter()
+            .find(|section| section.name == "node")
+            .and_then(|section| {
+                section.items.iter().find_map(|item| {
+                    let Item::Param(param) = item else {
+                        return None;
+                    };
+                    (param.key == node_name).then(|| param.val.clone())
+                })
+            })
+            .unwrap_or_else(|| panic!("node {node_name} not found in test config"))
+    }
+
+    fn config_node_value(id: i64, node_name: &str, link: &str) -> Value {
+        let content = test_config_with_node(node_name, link, "egress");
+        build_runtime_config_from_content(&content).unwrap();
+        let link = node_link_from_config(&content, node_name);
+        let parsed = parse_node_link(&link, Some(node_name));
+        json!({
+            "id": id,
+            "link": link,
+            "name": parsed.name,
+            "address": parsed.address,
+            "protocol": parsed.protocol,
+            "tag": node_name
+        })
+    }
+
+    fn insert_config_node(
+        conn: &Connection,
+        id: i64,
+        node_name: &str,
+        link: &str,
+        subscription_id: Option<i64>,
+    ) {
+        let content = test_config_with_node(node_name, link, "egress");
+        build_runtime_config_from_content(&content).unwrap();
+        let link = node_link_from_config(&content, node_name);
+        let parsed = parse_node_link(&link, Some(node_name));
+        conn.execute(
+            "INSERT INTO nodes(id, link, name, address, protocol, tag, subscription_id)
+             VALUES(?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+            params![
+                id,
+                link,
+                parsed.name,
+                parsed.address,
+                parsed.protocol,
+                node_name,
+                subscription_id
+            ],
+        )
+        .unwrap();
+    }
 
     #[test]
     fn storage_paths_match_first_batch_contract() {
@@ -9786,21 +9904,26 @@ global {
 
     #[test]
     fn node_labels_decode_uri_fragments_without_special_casing_nodes() {
-        let parsed = parse_node_link(
-            "vless://01234567-89ab-cdef-0123-456789abcdef@example.com:443?security=tls#%5BHK%5DAki-Hk",
-            None,
+        let content = test_config_with_node(
+            "resource_node",
+            "http://127.0.0.1:9/resource#%5Blabel%5Dresource-node",
+            "egress",
         );
-        assert_eq!(parsed.name, "[HK]Aki-Hk");
-        assert_eq!(decode_node_label("%5BHK%5DAki-Hk"), "[HK]Aki-Hk");
+        let link = node_link_from_config(&content, "resource_node");
+        let parsed = parse_node_link(&link, None);
+        assert_eq!(parsed.name, "[label]resource-node");
+        assert_eq!(
+            decode_node_label("%5Blabel%5Dresource-node"),
+            "[label]resource-node"
+        );
         assert_eq!(decode_node_label("literal+plus"), "literal+plus");
 
         let node = json!({
             "id": 1,
-            "name": "[HK]Aki-Hk",
-            "runtimeTag": "%5BHK%5DAki-Hk",
-            "link": "scheme://example.invalid:443#%5BHK%5DAki-Hk"
+            "name": parsed.name,
+            "link": link
         });
-        assert_eq!(runtime_node_tag(&node), "%5BHK%5DAki-Hk");
+        assert_eq!(runtime_node_tag(&node), "[label]resource-node");
     }
 
     #[test]
@@ -9809,26 +9932,37 @@ global {
         let state = dir.join("daed.db");
         ensure_state_schema(&state).unwrap();
         let conn = open_state_connection(&state).unwrap();
-        conn.execute_batch(
-            r#"
-            INSERT INTO subscriptions(id, updated_at, link, status, info, tag)
-                VALUES(7, 'now', 'https://subscription.invalid/list', 'fetched', '', 'sub-a');
-            INSERT INTO nodes(id, link, name, address, protocol, tag, subscription_id)
-                VALUES(1, 'scheme://manual.invalid:443#manual', 'manual', 'manual.invalid', 'scheme', 'manual-tag', NULL);
-            INSERT INTO nodes(id, link, name, address, protocol, tag, subscription_id)
-                VALUES(2, 'scheme://sub.invalid:443#%5BHK%5DSub', '%5BHK%5DSub', 'sub.invalid', 'scheme', NULL, 7);
-            "#,
+        conn.execute(
+            "INSERT INTO subscriptions(id, updated_at, link, status, info, tag)
+             VALUES(7, 'now', 'https://subscription.invalid/list', 'fetched', '', 'sub-a')",
+            [],
+        )
+        .unwrap();
+        insert_config_node(
+            &conn,
+            1,
+            "manual_node",
+            "http://127.0.0.1:9/manual-node#manual-node",
+            None,
+        );
+        replace_subscription_nodes(
+            &conn,
+            7,
+            &["http://127.0.0.1:9/subscription-node#subscription-node".to_owned()],
         )
         .unwrap();
 
         let manual = list_nodes_value(&state, None).unwrap();
         assert_eq!(manual["totalCount"], json!(1));
-        assert_eq!(manual["items"][0]["name"], json!("manual"));
+        assert_eq!(manual["items"][0]["name"], json!("manual_node"));
 
         let subscription = list_nodes_value(&state, Some(7)).unwrap();
         assert_eq!(subscription["totalCount"], json!(1));
-        assert_eq!(subscription["items"][0]["name"], json!("[HK]Sub"));
-        assert_eq!(subscription["items"][0]["runtimeTag"], json!("%5BHK%5DSub"));
+        assert_eq!(subscription["items"][0]["name"], json!("subscription-node"));
+        assert_eq!(
+            subscription["items"][0]["runtimeTag"],
+            json!("subscription-node")
+        );
 
         let runtime = list_all_nodes_value(&state).unwrap();
         assert_eq!(runtime["totalCount"], json!(2));
@@ -9845,15 +9979,20 @@ global {
             r#"
             INSERT INTO subscriptions(id, updated_at, link, status, info, tag)
                 VALUES(7, 'now', 'https://subscription.invalid/list', 'fetched', '', 'sub-a');
-            INSERT INTO nodes(id, link, name, address, protocol, tag, subscription_id)
-                VALUES(2, 'scheme://sub1.invalid:443#Oracle-Sg', 'Oracle-Sg', 'sub1.invalid', 'scheme', NULL, 7);
-            INSERT INTO nodes(id, link, name, address, protocol, tag, subscription_id)
-                VALUES(3, 'scheme://sub2.invalid:443#Hytron', 'Hytron', 'sub2.invalid', 'scheme', NULL, 7);
             INSERT INTO groups(id, name, policy, version)
-                VALUES(9, 'TG', 'fixed(0)', 1);
+                VALUES(9, 'resource_group', 'random', 1);
             INSERT INTO group_subscriptions(group_id, subscription_id, name_filter_regex)
-                VALUES(9, 7, 'Oracle');
+                VALUES(9, 7, 'candidate-alpha');
             "#,
+        )
+        .unwrap();
+        replace_subscription_nodes(
+            &conn,
+            7,
+            &[
+                "http://127.0.0.1:9/candidate-alpha#candidate-alpha".to_owned(),
+                "http://127.0.0.1:9/candidate-beta#candidate-beta".to_owned(),
+            ],
         )
         .unwrap();
 
@@ -9861,7 +10000,7 @@ global {
         assert_eq!(group["subscriptions"][0]["matchedCount"], json!(1));
         assert_eq!(
             group["subscriptions"][0]["matchedNodes"][0]["name"],
-            json!("Oracle-Sg")
+            json!("candidate-alpha")
         );
         fs::remove_dir_all(dir).unwrap();
     }
@@ -9876,14 +10015,37 @@ global {
             r#"
             INSERT INTO subscriptions(id, updated_at, link, status, info, tag)
                 VALUES(7, 'now', 'https://subscription.invalid/list', 'fetched', '', 'sub-a');
-            INSERT INTO nodes(id, link, name, address, protocol, tag, subscription_id)
-                VALUES(2, 'scheme://old.invalid:443#keep', 'keep', 'old.invalid', 'scheme', NULL, 7);
-            INSERT INTO nodes(id, link, name, address, protocol, tag, subscription_id)
-                VALUES(3, 'scheme://remove.invalid:443#drop', 'drop', 'remove.invalid', 'scheme', NULL, 7);
             INSERT INTO groups(id, name, policy, version)
-                VALUES(9, 'TG', 'fixed(0)', 1);
-            INSERT INTO group_nodes(group_id, node_id) VALUES(9, 2);
+                VALUES(9, 'resource_group', 'random', 1);
             "#,
+        )
+        .unwrap();
+        replace_subscription_nodes(
+            &conn,
+            7,
+            &[
+                "http://127.0.0.1:9/previous-resource#stable-resource".to_owned(),
+                "http://127.0.0.1:9/removed-resource#removed-resource".to_owned(),
+            ],
+        )
+        .unwrap();
+        let stable_node_id: i64 = conn
+            .query_row(
+                "SELECT id FROM nodes WHERE subscription_id = 7 AND name = 'stable-resource'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        let removed_node_id: i64 = conn
+            .query_row(
+                "SELECT id FROM nodes WHERE subscription_id = 7 AND name = 'removed-resource'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        conn.execute(
+            "INSERT INTO group_nodes(group_id, node_id) VALUES(9, ?1)",
+            params![stable_node_id],
         )
         .unwrap();
 
@@ -9891,28 +10053,37 @@ global {
             &conn,
             7,
             &[
-                "scheme://new.invalid:443#keep".to_owned(),
-                "scheme://other.invalid:443#other".to_owned(),
+                "http://127.0.0.1:9/updated-resource#stable-resource".to_owned(),
+                "http://127.0.0.1:9/other-resource#other-resource".to_owned(),
             ],
         )
         .unwrap();
         assert_eq!(report.len(), 2);
         let kept_link: String = conn
-            .query_row("SELECT link FROM nodes WHERE id = 2", [], |row| row.get(0))
+            .query_row(
+                "SELECT link FROM nodes WHERE id = ?1",
+                params![stable_node_id],
+                |row| row.get(0),
+            )
             .unwrap();
-        assert_eq!(kept_link, "scheme://new.invalid:443#keep");
+        assert_eq!(
+            kept_link,
+            "http://127.0.0.1:9/updated-resource#stable-resource"
+        );
         let group_binding_count: i64 = conn
             .query_row(
-                "SELECT COUNT(*) FROM group_nodes WHERE group_id = 9 AND node_id = 2",
-                [],
+                "SELECT COUNT(*) FROM group_nodes WHERE group_id = 9 AND node_id = ?1",
+                params![stable_node_id],
                 |row| row.get(0),
             )
             .unwrap();
         assert_eq!(group_binding_count, 1);
         let removed_count: i64 = conn
-            .query_row("SELECT COUNT(*) FROM nodes WHERE id = 3", [], |row| {
-                row.get(0)
-            })
+            .query_row(
+                "SELECT COUNT(*) FROM nodes WHERE id = ?1",
+                params![removed_node_id],
+                |row| row.get(0),
+            )
             .unwrap();
         assert_eq!(removed_count, 0);
         fs::remove_dir_all(dir).unwrap();
@@ -9920,45 +10091,37 @@ global {
 
     #[test]
     fn generated_runtime_config_renders_parseable_nodes_and_groups() {
+        let source_config = test_config_with_node(
+            "resource_node",
+            "http://127.0.0.1:9/node-under-test#resource-node",
+            "egress",
+        );
+        let parsed_source = build_runtime_config_from_content(&source_config).unwrap();
+        let egress_name = parsed_source.group[0].name.clone();
+        let alternate_name = "alternate_egress".to_owned();
+        let node = config_node_value(
+            1,
+            "resource_node",
+            "http://127.0.0.1:9/node-under-test#resource-node",
+        );
         let groups = json!({
             "items": [
                 {
-                    "name": "proxy",
-                    "policy": "fixed(0)",
-                    "nodes": [
-                        {
-                            "id": 1,
-                            "tag": "[edge]sample",
-                            "name": "[edge]sample",
-                            "link": "scheme://example.invalid:443#sample"
-                        }
-                    ],
+                    "name": egress_name,
+                    "policy": "random",
+                    "nodes": [node.clone()],
                     "subscriptions": []
                 },
                 {
-                    "name": "egress",
-                    "policy": "fixed(0)",
-                    "nodes": [
-                        {
-                            "id": 1,
-                            "tag": "[edge]sample",
-                            "name": "[edge]sample",
-                            "link": "scheme://example.invalid:443#sample"
-                        }
-                    ],
+                    "name": alternate_name,
+                    "policy": "random",
+                    "nodes": [node.clone()],
                     "subscriptions": []
                 }
             ]
         });
         let nodes = json!({
-            "items": [
-                {
-                    "id": 1,
-                    "tag": "[edge]sample",
-                    "name": "[edge]sample",
-                    "link": "scheme://example.invalid:443#sample"
-                }
-            ]
+            "items": [node]
         });
         let content = render_generated_config(
             "test",
@@ -9967,7 +10130,7 @@ global {
             Some(&(
                 1,
                 "routing".to_owned(),
-                "routing {\n    sample(scope:sample-set:alpha-!beta, suffix:example.invalid) -> egress\n    fallback: proxy\n}\n".to_owned(),
+                "routing {\n    sample(scope:sample-set:alpha-!beta, suffix:resource.invalid) -> alternate_egress\n    fallback: egress\n}\n".to_owned(),
                 1,
             )),
             &groups,
@@ -9975,11 +10138,11 @@ global {
         )
         .unwrap();
         assert!(content.contains("node {"));
-        assert!(content.contains("'[edge]sample':"));
-        assert!(content.contains("filter: name('[edge]sample')"));
+        assert!(content.contains("resource_node:"));
+        assert!(content.contains("filter: name('resource_node')"));
         let config = build_runtime_config_from_content(&content).unwrap();
         assert_eq!(config.node.len(), 1);
-        assert_eq!(config.group[0].name, "proxy");
+        assert_eq!(config.group[0].name, "egress");
         assert_eq!(
             config.routing.rules[0].and_functions[0].params[0].val,
             "sample-set:alpha-!beta"
@@ -9987,12 +10150,93 @@ global {
     }
 
     #[test]
-    fn generated_runtime_config_rejects_empty_group_filters() {
+    fn generated_runtime_config_parses_selected_global_dns_and_routing_sections() {
+        let source_config = test_config_with_node(
+            "resource_node",
+            "http://127.0.0.1:9/node-under-test#resource-node",
+            "egress",
+        );
+        let parsed_source = build_runtime_config_from_content(&source_config).unwrap();
+        let node = config_node_value(
+            1,
+            "resource_node",
+            "http://127.0.0.1:9/node-under-test#resource-node",
+        );
         let groups = json!({
             "items": [
                 {
-                    "name": "proxy",
-                    "policy": "fixed(0)",
+                    "name": parsed_source.group[0].name.clone(),
+                    "policy": "random",
+                    "nodes": [node.clone()],
+                    "subscriptions": []
+                }
+            ]
+        });
+        let nodes = json!({"items": [node]});
+        let content = render_generated_config(
+            "test",
+            Some(&(
+                1,
+                "global".to_owned(),
+                "global {\n    log_level: debug\n    lan_interface: if_test0\n    wan_interface: if_test1\n}\n"
+                    .to_owned(),
+                1,
+            )),
+            Some(&(
+                1,
+                "dns".to_owned(),
+                "dns {\n    bind: '127.0.0.1:5353'\n    upstream {\n        primary: 'udp://127.0.0.1:5300'\n    }\n}\n"
+                    .to_owned(),
+                1,
+            )),
+            Some(&(
+                1,
+                "routing".to_owned(),
+                "routing {\n    domain(suffix:example.test) -> egress\n    fallback: egress\n}\n"
+                    .to_owned(),
+                1,
+            )),
+            &groups,
+            &nodes,
+        )
+        .unwrap();
+
+        let config = build_runtime_config_from_content(&content).unwrap();
+        assert_eq!(config.global.log_level, "debug");
+        assert_eq!(
+            config.global.lan_interface.as_deref(),
+            Some(&["if_test0".to_owned()][..])
+        );
+        assert_eq!(
+            config.global.wan_interface.as_deref(),
+            Some(&["if_test1".to_owned()][..])
+        );
+        assert_eq!(config.dns.bind, "127.0.0.1:5353");
+        assert_eq!(
+            config.dns.upstream.as_slice(),
+            ["primary:udp://127.0.0.1:5300"]
+        );
+        assert_eq!(config.routing.rules.len(), 1);
+        match &config.routing.fallback {
+            DynamicFunctionValue::String(value) => assert_eq!(value, "egress"),
+            other => panic!("unexpected routing fallback: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn generated_runtime_config_rejects_empty_group_filters() {
+        let source_config = test_config_with_node(
+            "resource_node",
+            "http://127.0.0.1:9/node-under-test#resource-node",
+            "egress",
+        );
+        let parsed_source = build_runtime_config_from_content(&source_config).unwrap();
+        let egress_name = parsed_source.group[0].name.clone();
+        let groups = json!({
+            "items": [
+                {
+                    "name": egress_name,
+                    "policy": "random",
                     "nodes": [],
                     "subscriptions": []
                 }
@@ -10006,14 +10250,17 @@ global {
             Some(&(
                 1,
                 "routing".to_owned(),
-                "routing { fallback: proxy }\n".to_owned(),
+                "routing { fallback: egress }\n".to_owned(),
                 1,
             )),
             &groups,
             &nodes,
         )
         .unwrap_err();
-        assert!(err.to_string().contains("group proxy has no matched nodes"));
+        assert!(
+            err.to_string()
+                .contains("group egress has no matched nodes")
+        );
     }
 
     #[test]
@@ -10032,7 +10279,7 @@ global {
             .unwrap();
         assert!(log_entries_table.is_none());
 
-        append_log_for_config(&dir, &state, "info", "Runtime proxy started").unwrap();
+        append_log_for_config(&dir, &state, "info", "Runtime started").unwrap();
         let mut fields = BTreeMap::new();
         fields.insert("subscription".to_owned(), "daily".to_owned());
         append_log_fields_for_config(&dir, &state, "warning", "Policy changed", fields).unwrap();
@@ -10058,7 +10305,7 @@ global {
             );
         }
 
-        let all = list_logs_value(&dir, &state, Some("all"), Some("PROXY"), 500).unwrap();
+        let all = list_logs_value(&dir, &state, Some("all"), Some("RUNTIME"), 500).unwrap();
         assert_eq!(all["items"].as_array().unwrap().len(), 1);
         assert_eq!(all["items"][0]["level"], json!("info"));
 
@@ -10069,7 +10316,7 @@ global {
 
         let field = list_logs_value(&dir, &state, Some("all"), Some("DAILY"), 500).unwrap();
         assert_eq!(field["items"].as_array().unwrap().len(), 1);
-        assert!(list_logs_value(&dir, &state, Some("not-a-level"), Some("proxy"), 500).is_err());
+        assert!(list_logs_value(&dir, &state, Some("not-a-level"), Some("runtime"), 500).is_err());
         let limit_zero = list_logs_value(&dir, &state, Some("all"), None, 0).unwrap();
         assert_eq!(limit_zero["items"].as_array().unwrap().len(), 3);
         let limit_one = list_logs_value(&dir, &state, Some("all"), None, 1).unwrap();
@@ -10676,9 +10923,9 @@ Threads:\t38\n";
             INSERT INTO dns(id, name, dns, selected, version)
                 VALUES(1, 'dns', 'dns {}', 1, 1);
             INSERT INTO routings(id, name, routing, selected, version)
-                VALUES(1, 'routing', 'routing { fallback: proxy }', 1, 1);
+                VALUES(1, 'routing', 'routing { fallback: egress }', 1, 1);
             INSERT INTO groups(id, name, policy, version)
-                VALUES(1, 'proxy', 'fixed(0)', 1);
+                VALUES(1, 'egress', 'random', 1);
             INSERT INTO systems(
                 running,
                 running_config_version,
@@ -10727,16 +10974,29 @@ Threads:\t38\n";
             INSERT INTO dns(id, name, dns, selected, version)
                 VALUES(1, 'dns', 'dns {}', 1, 1);
             INSERT INTO routings(id, name, routing, selected, version)
-                VALUES(1, 'routing', 'routing { fallback: proxy }', 1, 1);
+                VALUES(1, 'routing', 'routing { fallback: egress }', 1, 1);
             INSERT INTO groups(id, name, policy, version)
-                VALUES(1, 'proxy', 'fixed(0)', 1);
-            INSERT INTO nodes(id, link, name, address, protocol, tag)
-                VALUES(1, 'scheme://example.invalid:443#sample', 'sample', 'example.invalid', 'sample', 'sample');
-            INSERT INTO group_nodes(group_id, node_id) VALUES(1, 1);
-            INSERT INTO group_nodes(group_id, node_id) VALUES(1, 9999);
+                VALUES(1, 'egress', 'random', 1);
             INSERT INTO systems(running, running_config_version, running_dns_version, running_routing_version, running_group_version_sum, running_group_ids)
                 VALUES(1, 0, 0, 0, 0, '');
             "#,
+        )
+        .unwrap();
+        insert_config_node(
+            &conn,
+            1,
+            "resource_node",
+            "http://127.0.0.1:9/node-under-test#resource-node",
+            None,
+        );
+        conn.execute(
+            "INSERT INTO group_nodes(group_id, node_id) VALUES(1, 1)",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO group_nodes(group_id, node_id) VALUES(1, 9999)",
+            [],
         )
         .unwrap();
 
@@ -10746,6 +11006,39 @@ Threads:\t38\n";
         assert!(report.get("content").is_none());
         assert!(report["bytes"].as_u64().unwrap() > 0);
         assert!(runtime_dir.join("runtime/generated.dae").is_file());
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn default_resources_bind_supplied_node_ids_to_group() {
+        let dir = std::env::temp_dir().join(format!("daed-product-test-{}", fastrand::u64(..)));
+        let state = dir.join("daed.db");
+        ensure_state_schema(&state).unwrap();
+        let conn = open_state_connection(&state).unwrap();
+        insert_config_node(
+            &conn,
+            1,
+            "resource_node",
+            "http://127.0.0.1:9/node-under-test#resource-node",
+            None,
+        );
+        drop(conn);
+
+        let response = ensure_default_resources(&state, &json!({"nodeIds": [1]})).unwrap();
+        let group_id = response["defaultGroupID"]
+            .as_str()
+            .unwrap()
+            .parse::<i64>()
+            .unwrap();
+        let conn = open_state_connection(&state).unwrap();
+        let bound_count = conn
+            .query_row(
+                "SELECT COUNT(*) FROM group_nodes WHERE group_id = ?1 AND node_id = ?2",
+                params![group_id, 1_i64],
+                |row| row.get::<_, i64>(0),
+            )
+            .unwrap();
+        assert_eq!(bound_count, 1);
         fs::remove_dir_all(dir).unwrap();
     }
 }

@@ -877,7 +877,7 @@ fn daed_run_serves_c10_resource_runtime_log_latency_and_bundle_surface() {
         port,
         "POST",
         "/api/groups",
-        Some(r#"{"name":"proxy","policy":"min","policyParams":[{"key":"interval","val":"30s"}]}"#),
+        Some(r#"{"name":"egress","policy":"min","policyParams":[{"key":"interval","val":"30s"}]}"#),
         Some(&token),
     );
     assert!(group.contains("201 Created"), "{group}");
