@@ -14679,3 +14679,176 @@ Outcome:
   - This does not mark UDP readiness or full remaining-matrix completion.
   - Later rows that are still blocked/admission-gated must continue to use the
     same remote 38 / JP live evidence standard before being called live-ready.
+
+## 2026-06-05 13:44 +0800 - C8/C10 second-batch live matrix and UDP dispatch boundary
+
+Scope:
+  - Complete the pending 1-3 work items under the existing C8/C10 resident live
+    adapter matrix closure.
+  - This remains protocol-matrix evidence, not a new C-stage and not a
+    protocol-specific top-level gate.
+  - Live matrix execution used remote 38 plus the JP fixture only. `10.10.10.2`
+    was not used for protocol matrix coverage.
+  - No SSH password, raw node link, UUID, fixture account, or fixture password is
+    recorded here.
+
+Implementation updates:
+  - VMess AEAD TCP runtime sessions now use per-session randomized AEAD material
+    instead of deterministic default material. The deterministic helper material
+    remains available for tests/golden builders.
+  - VMess AEAD TCP no longer sends an empty encrypted body chunk when the
+    sniffed initial payload is empty; runtime writes the VMess request header
+    only, and the first real client bytes are sent by the upload codec.
+  - AEAD upload relays now treat upload-side peer-close errors such as
+    BrokenPipe, ConnectionReset, ConnectionAborted, and NotConnected as graceful
+    relay end conditions instead of converting an already successful page load
+    into a `tcp_connection_failed` task event.
+  - Resident UDP dispatch is no longer VLESS-by-default:
+      DNS UDP still goes through the resident DNS handler,
+      VLESS Vision keeps the existing VLESS/XUDP path,
+      other selected resident handlers fail closed with an
+      `unsupported_udp_handler` error that includes the handler/protocol.
+    This is a generic dispatch boundary, not completion of every protocol UDP
+    live adapter.
+
+Remote 38 / JP live validation:
+  - Candidate build command:
+      `cargo build --manifest-path rust/Cargo.toml -p dae-daemon --bin daed --release --features native-ebpf`
+  - Final candidate hash:
+      `2c18e3facb906752ab8fe2152c45fdae5cf180716c22d6a7cae802d0e4d93363`
+  - Candidate size:
+      `20M`
+  - Live target requirements were unchanged:
+      `http://example.com/` body >= 100 bytes,
+      `https://www.google.com/` body >= 10000 bytes,
+      `https://www.youtube.com/` body >= 100000 bytes.
+  - Target-domain failed resident events remain a hard failure condition.
+
+VMess blocker evidence:
+  - Pre-fix candidate `19dc3255d934bf9700ad4742bba33aa12a2d32da0468b1be5433a7535d2732b7`
+    failed the second-batch matrix on VMess while the other five rows passed.
+  - After the empty-initial-payload fix, candidate
+    `70fb8749756a87b49984ef22d03b196edfaafb2cd0a066d18ea9a29b7f372177`
+    improved behavior but still showed intermittent Google/YouTube VMess resets.
+  - The root cause was deterministic VMess AEAD runtime material: multiple
+    connections in the same second could reuse the same EAuthID shape and be
+    rejected by the server. Runtime random material fixed that reset pattern.
+  - Candidate `ae39030c1c359de762bb9d4bec50c327321ca33d666c355c833b64200e0f9033`
+    loaded all VMess target bodies but still produced one target-domain failed
+    event:
+      `write VMess upload chunk: Broken pipe`.
+    This was a relay-close accounting bug, not a page-load failure.
+  - Final candidate `2c18e3facb906752ab8fe2152c45fdae5cf180716c22d6a7cae802d0e4d93363`
+    passed the VMess retest:
+      row `vmess`,
+      target bodies `example=200/528`, `google=200/81397`,
+      `youtube=200/718366`,
+      target resident events finished `3`, failed `0`,
+      target event download bytes `257035`,
+      execution `first-batch-aead-tcp-v1`.
+
+Second-batch live matrix result:
+  - Summary schema:
+      `daex-second-batch-live-resident-matrix-v1`
+  - Candidate hash:
+      `2c18e3facb906752ab8fe2152c45fdae5cf180716c22d6a7cae802d0e4d93363`
+  - `row_count=6`
+  - `pass_count=6`
+  - `all_pass=true`
+
+Per-row evidence:
+  - Row `trojan`:
+      planner: admitted
+      result: pass
+      target bodies: `example=200/528`, `google=200/81315`,
+        `youtube=200/714723`
+      target resident events: finished `3`, failed `0`
+      target event download bytes: `254949`
+      execution evidence: `async-proxy-tls-v1`
+      TLS underlay evidence: `boringssl`
+  - Row `vmess`:
+      planner: admitted
+      result: pass
+      target bodies: `example=200/528`, `google=200/81378`,
+        `youtube=200/718286`
+      target resident events: finished `3`, failed `0`
+      target event download bytes: `257626`
+      execution evidence: `first-batch-aead-tcp-v1`
+  - Row `anytls`:
+      planner: admitted
+      result: pass
+      target bodies: `example=200/528`, `google=200/81385`,
+        `youtube=200/714506`
+      target resident events: finished `3`, failed `0`
+      target event download bytes: `255635`
+      execution evidence: `async-proxy-frame-tls-v1`
+      TLS underlay evidence: `boringssl`
+  - Row `hysteria2`:
+      planner: admitted
+      result: pass
+      target bodies: `example=200/528`, `google=200/81310`,
+        `youtube=200/719060`
+      target resident events: finished `3`, failed `0`
+      target event download bytes: `257880`
+      execution evidence: `async-proxy-quic-tcp-v1`
+      QUIC underlay evidence: `quinn-h3`
+  - Row `tuic`:
+      planner: admitted
+      result: pass
+      target bodies: `example=200/528`, `google=200/81346`,
+        `youtube=200/717745`
+      target resident events: finished `3`, failed `0`
+      target event download bytes: `255716`
+      execution evidence: `async-proxy-quic-tcp-v1`
+      QUIC underlay evidence: `quinn`
+  - Row `juicity`:
+      planner: admitted
+      result: pass
+      target bodies: `example=200/528`, `google=200/81305`,
+        `youtube=200/718329`
+      target resident events: finished `3`, failed `0`
+      target event download bytes: `256015`
+      execution evidence: `async-proxy-quic-tcp-v1`
+      QUIC underlay evidence: `quinn-h3`
+
+Matrix contract update:
+  - Remote live evidence is now recorded in the resident adapter matrix for all
+    ten formal rows.
+  - The formal matrix still intentionally reports incomplete:
+      non-VLESS rows have `udp_live_adapter=false`,
+      non-VLESS rows have `go_outbound_fallback_retired=false`,
+      `resident_live_adapter_remote_live_matrix_ready=false` because live-ready
+      requires both remote evidence and an empty `missing` list.
+  - Remaining blockers are therefore real UDP live adapter implementation and
+    final Go outbound fallback retirement, not remote TCP live page-load
+    evidence.
+
+Local validation:
+  - `cargo test --manifest-path rust/Cargo.toml -p dae-outbound vmess`: pass,
+    28 VMess/VLESS related tests passed.
+  - `cargo test --manifest-path rust/Cargo.toml -p dae-daemon production_runtime_owner::resident_dataplane::udp`:
+      pass, 3 UDP tests passed.
+  - `cargo test --manifest-path rust/Cargo.toml -p dae-daemon production_runtime_owner::resident_dataplane::tcp::tests::resident_upload_relay_treats_peer_close_as_graceful_end`:
+      pass.
+  - `cargo test --manifest-path rust/Cargo.toml -p dae-daemon --test daed_product resident_adapter_matrix`:
+      pass.
+  - `cargo test --manifest-path rust/Cargo.toml -p dae-daemon --test service_contract candidate_reports_resident_service_and_dataplane_capabilities`:
+      pass.
+
+Remote cleanup:
+  - Removed from remote 38:
+      temporary candidate binary,
+      temporary full fixture file,
+      temporary runner scripts,
+      VMess retest scratch summaries,
+      `/tmp/dae-daemon-resident-runtime-*` runtime directories.
+  - Retained on remote 38:
+      first-batch and second-batch sanitized summary txt/json files only.
+  - Final cleanup check:
+      no test `daed` process,
+      no test `dae*` link,
+      no `daens` namespace,
+      no matching BPF pin directory,
+      `bpftool net` showed empty xdp/tc/flow_dissector attachments,
+      `ip rule` returned to local/main/default only,
+      route table `2023` was empty.
