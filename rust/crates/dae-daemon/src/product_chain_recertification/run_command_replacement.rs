@@ -6,6 +6,7 @@ use serde_json::{Map, Value, json};
 use super::host_write_safety::{
     production_run_command_apply_plan_blockers_json, production_run_command_execution_blockers_json,
 };
+use super::product_layout::ProductPathLayout;
 use super::rollback_model::{make_user_executable, rollback_script_content};
 use super::{ProductChainRecertificationOptions, path_string};
 
@@ -32,12 +33,14 @@ pub(super) fn production_run_command_replacement_plan_json(
     let host_mutation_allow_requested = options.host_default_path_mutation_allow_requested;
     let host_mutation_allowed = host_mutation_allow_requested && admitted;
     let execute_allowed = execute_requested && admitted && host_mutation_allowed;
+    let layout = ProductPathLayout::from_service_file(&options.service_file);
     let apply_plan = production_run_command_replacement_apply_plan_json(
         apply_plan_requested,
         admitted,
         execute_requested,
         host_mutation_allowed,
         artifact_dir,
+        layout,
     );
     let execution_blockers = production_run_command_execution_blockers_json(
         execute_requested,
@@ -141,28 +144,32 @@ pub(super) fn production_run_command_replacement_plan_json(
     );
     plan.insert(
         "current_exec_start_pre".to_owned(),
-        json!("/usr/bin/dae validate -c /etc/dae/config.dae"),
+        json!(layout.current_exec_start_pre),
     );
     plan.insert(
         "current_exec_start".to_owned(),
-        json!("/usr/bin/dae run --disable-timestamp -c /etc/dae/config.dae"),
+        json!(layout.current_exec_start),
     );
     plan.insert(
         "current_exec_reload".to_owned(),
-        json!("/usr/bin/dae reload $MAINPID"),
+        json!(layout.current_exec_reload),
     );
-    plan.insert("target_run_binary".to_owned(), json!("dae-daemon-optin"));
+    plan.insert("product_layout_kind".to_owned(), json!(layout.kind));
+    plan.insert(
+        "target_run_binary".to_owned(),
+        json!(layout.target_run_binary),
+    );
     plan.insert(
         "target_exec_start_pre".to_owned(),
-        json!("dae-daemon-optin validate -c /etc/dae/config.dae"),
+        json!(layout.target_exec_start_pre),
     );
     plan.insert(
         "target_exec_start".to_owned(),
-        json!("dae-daemon-optin run --disable-timestamp -c /etc/dae/config.dae"),
+        json!(layout.target_exec_start),
     );
     plan.insert(
         "target_exec_reload".to_owned(),
-        json!("dae-daemon-optin reload $MAINPID"),
+        json!(layout.target_exec_reload),
     );
     plan.insert("backup_required".to_owned(), json!(true));
     plan.insert("rollback_required".to_owned(), json!(true));
@@ -193,11 +200,15 @@ pub(super) fn production_run_command_replacement_plan_json(
     );
     plan.insert(
         "backup_service_file".to_owned(),
-        json!(path_string(&backup_artifact_dir.join("dae.service"))),
+        json!(path_string(
+            &backup_artifact_dir.join(layout.backup_service_file_name)
+        )),
     );
     plan.insert(
-        "backup_usr_bin_dae".to_owned(),
-        json!(path_string(&backup_artifact_dir.join("usr-bin-dae"))),
+        "backup_binary".to_owned(),
+        json!(path_string(
+            &backup_artifact_dir.join(layout.backup_binary_file_name)
+        )),
     );
     plan.insert(
         "rollback_script".to_owned(),
@@ -209,25 +220,33 @@ pub(super) fn production_run_command_replacement_plan_json(
         "rollback_commands".to_owned(),
         json!([
             "restore backup service file if service was changed",
-            "restore backup /usr/bin/dae if binary was changed",
+            format!(
+                "restore backup {} if binary was changed",
+                layout.binary_target
+            ),
             "systemctl daemon-reload",
-            "systemctl restart dae.service only after rollback validation is explicit",
+            format!(
+                "systemctl restart {} only after rollback validation is explicit",
+                layout.service_name
+            ),
         ]),
     );
+    let post_smoke_commands = layout.post_smoke_commands();
     plan.insert(
         "post_replacement_smoke_commands".to_owned(),
         json!([
-            "dae-daemon-optin validate -c /etc/dae/config.dae",
-            "dae-daemon-optin run --disable-timestamp -c /etc/dae/config.dae --exit-after-ready",
-            "dae-daemon-optin reload $MAINPID",
+            post_smoke_commands[0],
+            post_smoke_commands[1],
+            post_smoke_commands[2],
         ]),
     );
+    let service_manager_commands = layout.service_manager_commands();
     plan.insert(
         "service_manager_commands".to_owned(),
         json!([
-            "systemctl daemon-reload",
-            "systemctl restart dae.service",
-            "systemctl status dae.service --no-pager",
+            service_manager_commands[0],
+            service_manager_commands[1],
+            service_manager_commands[2],
         ]),
     );
     plan.insert(
@@ -243,12 +262,12 @@ pub(super) fn production_run_command_replacement_plan_json(
     plan.insert("production_run_command_replaced".to_owned(), json!(false));
     plan.insert("read_only".to_owned(), json!(true));
     plan.insert(
-        "installed_usr_bin_dae_exists".to_owned(),
-        json!(Path::new("/usr/bin/dae").exists()),
+        "installed_binary_target_exists".to_owned(),
+        json!(Path::new(layout.binary_target).exists()),
     );
     plan.insert(
-        "installed_usr_local_bin_dae_exists".to_owned(),
-        json!(Path::new("/usr/local/bin/dae").exists()),
+        "installed_local_binary_target_exists".to_owned(),
+        json!(Path::new(layout.local_binary_target).exists()),
     );
     plan.insert(
         "evidence_class".to_owned(),
@@ -263,6 +282,7 @@ fn production_run_command_replacement_apply_plan_json(
     execute_requested: bool,
     host_mutation_allowed: bool,
     artifact_dir: &Path,
+    layout: ProductPathLayout,
 ) -> Value {
     let admitted =
         requested && replacement_plan_admitted && execute_requested && host_mutation_allowed;
@@ -292,12 +312,13 @@ fn production_run_command_replacement_apply_plan_json(
         "apply_manifest_materialized": false,
         "service_diff_file": path_string(&service_diff_file),
         "service_diff_materialized": false,
-        "current_exec_start_pre": "/usr/bin/dae validate -c /etc/dae/config.dae",
-        "current_exec_start": "/usr/bin/dae run --disable-timestamp -c /etc/dae/config.dae",
-        "current_exec_reload": "/usr/bin/dae reload $MAINPID",
-        "target_exec_start_pre": "dae-daemon-optin validate -c /etc/dae/config.dae",
-        "target_exec_start": "dae-daemon-optin run --disable-timestamp -c /etc/dae/config.dae",
-        "target_exec_reload": "dae-daemon-optin reload $MAINPID",
+        "product_layout_kind": layout.kind,
+        "current_exec_start_pre": layout.current_exec_start_pre,
+        "current_exec_start": layout.current_exec_start,
+        "current_exec_reload": layout.current_exec_reload,
+        "target_exec_start_pre": layout.target_exec_start_pre,
+        "target_exec_start": layout.target_exec_start,
+        "target_exec_reload": layout.target_exec_reload,
         "read_only": true,
     })
 }
@@ -321,8 +342,9 @@ pub(super) fn materialize_production_run_command_replacement_artifacts(
     let backup_manifest_file = backup_artifact_dir.join("backup-manifest.json");
     let apply_manifest_file = artifact_dir.join("production-run-command-replacement-apply.json");
     let service_diff_file = artifact_dir.join("production-run-command-replacement-service.diff");
-    let backup_service_file = backup_artifact_dir.join("dae.service");
-    let backup_usr_bin_dae = backup_artifact_dir.join("usr-bin-dae");
+    let layout = ProductPathLayout::from_service_file(&options.service_file);
+    let backup_service_file = backup_artifact_dir.join(layout.backup_service_file_name);
+    let backup_binary = backup_artifact_dir.join(layout.backup_binary_file_name);
     let rollback_script = artifact_dir.join("rollback-production-run-command-replacement.sh");
     fs::create_dir_all(&backup_artifact_dir).map_err(|err| {
         format!(
@@ -337,18 +359,19 @@ pub(super) fn materialize_production_run_command_replacement_artifacts(
         "executed": true,
         "backup_artifact_dir": path_string(&backup_artifact_dir),
         "backup_manifest_file": path_string(&backup_manifest_file),
+        "product_layout_kind": layout.kind,
         "service_file": path_string(&options.service_file),
         "backup_service_file": path_string(&backup_service_file),
-        "usr_bin_dae": {
-            "path": "/usr/bin/dae",
-            "exists": Path::new("/usr/bin/dae").exists(),
-            "backup_file": path_string(&backup_usr_bin_dae),
+        "binary_target": {
+            "path": layout.binary_target,
+            "exists": Path::new(layout.binary_target).exists(),
+            "backup_file": path_string(&backup_binary),
             "backup_copy_executed": false,
         },
-        "usr_local_bin_dae": {
-            "path": "/usr/local/bin/dae",
-            "exists": Path::new("/usr/local/bin/dae").exists(),
-            "backup_file": path_string(&backup_artifact_dir.join("usr-local-bin-dae")),
+        "local_binary_target": {
+            "path": layout.local_binary_target,
+            "exists": Path::new(layout.local_binary_target).exists(),
+            "backup_file": path_string(&backup_artifact_dir.join(layout.backup_local_binary_file_name)),
             "backup_copy_executed": false,
         },
         "backup_copy_executed": false,
@@ -373,7 +396,8 @@ pub(super) fn materialize_production_run_command_replacement_artifacts(
     let rollback_script_content = rollback_script_content(
         &options.service_file,
         &backup_service_file,
-        &backup_usr_bin_dae,
+        layout.binary_target,
+        &backup_binary,
         &backup_manifest_file,
     );
     fs::write(&rollback_script, rollback_script_content).map_err(|err| {
@@ -455,6 +479,7 @@ fn materialize_production_run_command_apply_plan_artifacts(
         }));
     }
 
+    let layout = ProductPathLayout::from_service_file(&options.service_file);
     let diff = production_run_command_service_diff(&options.service_file);
     fs::write(service_diff_file, diff).map_err(|err| {
         format!(
@@ -469,27 +494,28 @@ fn materialize_production_run_command_apply_plan_artifacts(
         "admitted": apply_plan["admitted"].as_bool().unwrap_or(false),
         "execution_blockers": apply_plan["execution_blockers"].clone(),
         "execution_mode": "read-only-apply-plan",
+        "product_layout_kind": layout.kind,
         "service_file": path_string(&options.service_file),
         "service_diff_file": path_string(service_diff_file),
         "apply_manifest_file": path_string(apply_manifest_file),
-        "current_exec_start_pre": "/usr/bin/dae validate -c /etc/dae/config.dae",
-        "current_exec_start": "/usr/bin/dae run --disable-timestamp -c /etc/dae/config.dae",
-        "current_exec_reload": "/usr/bin/dae reload $MAINPID",
-        "target_exec_start_pre": "dae-daemon-optin validate -c /etc/dae/config.dae",
-        "target_exec_start": "dae-daemon-optin run --disable-timestamp -c /etc/dae/config.dae",
-        "target_exec_reload": "dae-daemon-optin reload $MAINPID",
+        "current_exec_start_pre": layout.current_exec_start_pre,
+        "current_exec_start": layout.current_exec_start,
+        "current_exec_reload": layout.current_exec_reload,
+        "target_exec_start_pre": layout.target_exec_start_pre,
+        "target_exec_start": layout.target_exec_start,
+        "target_exec_reload": layout.target_exec_reload,
         "host_write_allowed": false,
         "actual_host_write_executed": false,
         "actual_mutation_executed": false,
         "production_run_command_replaced": false,
         "requires_unimplemented_host_write_flag": "--execute-production-run-command-host-write",
         "post_apply_required_checks": [
-            "dae-daemon-optin validate -c /etc/dae/config.dae",
-            "dae-daemon-optin run --disable-timestamp -c /etc/dae/config.dae --exit-after-ready",
-            "dae-daemon-optin reload $MAINPID",
-            "systemctl daemon-reload",
-            "systemctl restart dae.service",
-            "systemctl status dae.service --no-pager"
+            layout.post_smoke_commands()[0],
+            layout.post_smoke_commands()[1],
+            layout.post_smoke_commands()[2],
+            layout.service_manager_commands()[0],
+            layout.service_manager_commands()[1],
+            layout.service_manager_commands()[2]
         ],
         "read_only": true,
     });
@@ -506,6 +532,7 @@ fn materialize_production_run_command_apply_plan_artifacts(
         "status": "pass",
         "requested": true,
         "executed": true,
+        "product_layout_kind": layout.kind,
         "apply_manifest_file": path_string(apply_manifest_file),
         "apply_manifest_materialized": apply_manifest_file.exists(),
         "service_diff_file": path_string(service_diff_file),
@@ -519,10 +546,8 @@ fn materialize_production_run_command_apply_plan_artifacts(
 }
 
 fn production_run_command_service_diff(service_file: &Path) -> String {
-    format!(
-        "--- {service_file}.current\n+++ {service_file}.target\n@@ production run command replacement\n-ExecStartPre=/usr/bin/dae validate -c /etc/dae/config.dae\n+ExecStartPre=dae-daemon-optin validate -c /etc/dae/config.dae\n-ExecStart=/usr/bin/dae run --disable-timestamp -c /etc/dae/config.dae\n+ExecStart=dae-daemon-optin run --disable-timestamp -c /etc/dae/config.dae\n-ExecReload=/usr/bin/dae reload $MAINPID\n+ExecReload=dae-daemon-optin reload $MAINPID\n",
-        service_file = path_string(service_file),
-    )
+    let layout = ProductPathLayout::from_service_file(service_file);
+    format!("{}", layout.service_diff(&path_string(service_file)),)
 }
 
 pub(super) fn attach_production_run_command_replacement_artifacts(
