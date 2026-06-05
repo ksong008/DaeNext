@@ -385,3 +385,67 @@ fn product_chain_run_command_replacement_materializes_apply_plan_artifacts() {
     assert!(service_diff.contains("+ExecStart=dae-daemon-optin run"));
     let _ = std::fs::remove_dir_all(root);
 }
+
+#[test]
+fn product_chain_run_command_replacement_keeps_daed_and_dae_paths_split() {
+    let root = std::env::temp_dir().join(format!(
+        "dae-daemon-product-chain-daed-layout-artifacts-{}",
+        std::process::id()
+    ));
+    let artifact_dir = root.join("artifact");
+    let service_file = root.join("daed.service");
+    std::fs::create_dir_all(&root).unwrap();
+    std::fs::write(
+        &service_file,
+        "ExecStartPre=/usr/bin/daed validate -c /etc/daed/\nExecStart=/usr/bin/daed run -c /etc/daed/\nExecReload=/bin/kill -HUP $MAINPID\n",
+    )
+    .unwrap();
+    let options = ProductChainRecertificationOptions {
+        service_file: service_file.clone(),
+        ..ProductChainRecertificationOptions::default()
+    };
+    let report = json!({
+        "production_run_command_replacement_plan": {
+            "requested": true,
+            "apply_plan": {
+                "requested": true,
+                "admitted": true,
+                "execution_blockers": []
+            }
+        }
+    });
+    let artifacts =
+        materialize_production_run_command_replacement_artifacts(&options, &report, &artifact_dir)
+            .unwrap();
+    assert_eq!(
+        artifacts["apply_plan_artifacts"]["product_layout_kind"]
+            .as_str()
+            .unwrap(),
+        "daed"
+    );
+
+    let backup_manifest_file = artifact_dir
+        .join("production-run-command-replacement-backup")
+        .join("backup-manifest.json");
+    let backup_manifest: Value =
+        serde_json::from_slice(&std::fs::read(&backup_manifest_file).unwrap()).unwrap();
+    assert_eq!(
+        backup_manifest["binary_target"]["path"].as_str().unwrap(),
+        "/usr/bin/daed"
+    );
+
+    let apply_manifest_file = artifact_dir.join("production-run-command-replacement-apply.json");
+    let apply_manifest: Value =
+        serde_json::from_slice(&std::fs::read(&apply_manifest_file).unwrap()).unwrap();
+    assert_eq!(
+        apply_manifest["target_exec_start"].as_str().unwrap(),
+        "/usr/bin/daed run -c /etc/daed/"
+    );
+
+    let service_diff_file = artifact_dir.join("production-run-command-replacement-service.diff");
+    let service_diff = std::fs::read_to_string(&service_diff_file).unwrap();
+    assert!(service_diff.contains("ExecStart=/usr/bin/daed run -c /etc/daed/"));
+    assert!(!service_diff.contains("dae-daemon-optin"));
+    assert!(!service_diff.contains("/usr/bin/dae run"));
+    let _ = std::fs::remove_dir_all(root);
+}
