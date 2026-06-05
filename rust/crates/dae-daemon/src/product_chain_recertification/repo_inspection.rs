@@ -7,7 +7,7 @@ use super::path_string;
 
 pub(super) fn expected_product_chain_branch(name: &str) -> &'static str {
     match name {
-        "dae" => "daex",
+        "dae" => "dae-daex-align",
         "daed" => "daed2-daex-align",
         "dae-wing" | "daed-wing" => "daewing2-daex-align",
         "outbound" => "outbound-daex-align",
@@ -152,7 +152,7 @@ mod tests {
 
     #[test]
     fn product_chain_expected_branches_are_formal_daed2_chain() {
-        assert_eq!(expected_product_chain_branch("dae"), "daex");
+        assert_eq!(expected_product_chain_branch("dae"), "dae-daex-align");
         assert_eq!(
             expected_product_chain_branch("daed-wing"),
             "daewing2-daex-align"
