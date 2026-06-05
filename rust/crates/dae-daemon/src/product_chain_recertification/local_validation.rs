@@ -6,6 +6,7 @@ use std::path::{Path, PathBuf};
 
 use serde_json::{Value, json};
 
+use super::product_layout::ProductPathLayout;
 use super::service_contract::{candidate_service_contract_report, candidate_validate_report};
 use super::{ProductChainRecertificationOptions, path_string};
 
@@ -19,10 +20,17 @@ pub(super) fn materialize_local_validation_fresh_install_plan(
     let config_source = options.local_validation_config_source.as_deref();
     let binary_source = options.local_validation_binary_source.as_deref();
     let service_source = options.service_file.as_path();
+    let layout = ProductPathLayout::from_report(report);
     let host_inventory = &report["production_replacement_readiness"]["host_inventory"];
-    let usr_bin_dae_exists = host_inventory["usr_bin_dae_exists"]
+    let layout_binary_exists = match layout.kind {
+        "daed" => host_inventory["usr_bin_daed_exists"].as_bool(),
+        _ => host_inventory["usr_bin_dae_exists"].as_bool(),
+    }
+    .unwrap_or(false);
+    let binary_target_exists = host_inventory["binary_target_exists"]
         .as_bool()
-        .unwrap_or(false);
+        .unwrap_or(false)
+        || layout_binary_exists;
     let installed_system_service_exists = host_inventory["installed_system_service_exists"]
         .as_bool()
         .unwrap_or(false);
@@ -30,7 +38,7 @@ pub(super) fn materialize_local_validation_fresh_install_plan(
         .as_bool()
         .unwrap_or(false);
     let fresh_install_host_state_confirmed =
-        !usr_bin_dae_exists && !installed_system_service_exists && !runtime_config_exists;
+        !binary_target_exists && !installed_system_service_exists && !runtime_config_exists;
     let config_source_exists = config_source.is_some_and(Path::is_file);
     let binary_source_exists = binary_source.is_some_and(Path::is_file);
     let service_source_exists = service_source.is_file();
@@ -83,52 +91,72 @@ pub(super) fn materialize_local_validation_fresh_install_plan(
             .as_bool()
             .unwrap_or(false);
 
-    let mut blockers = Vec::new();
+    let mut blockers: Vec<String> = Vec::new();
     if requested && !fresh_install_host_state_confirmed {
-        blockers.push("local validation fresh install requires an initially uninstalled host");
+        blockers.push(
+            "local validation fresh install requires an initially uninstalled host".to_owned(),
+        );
     }
     if requested && !config_source_exists {
-        blockers.push("local validation config source is absent");
+        blockers.push("local validation config source is absent".to_owned());
     }
     if requested && !binary_source_exists {
-        blockers.push("local validation Rust binary source is absent");
+        blockers.push("local validation Rust binary source is absent".to_owned());
     }
     if requested && !service_source_exists {
-        blockers.push("local validation service template source is absent");
+        blockers.push("local validation service template source is absent".to_owned());
     }
     if requested && !service_contract_preserved {
-        blockers.push("local validation service template does not preserve /usr/bin/dae contract");
+        blockers.push(format!(
+            "local validation service template does not preserve {} contract",
+            layout.binary_target
+        ));
     }
     if requested && !product_chain_clean {
-        blockers.push("product-chain recertification is not clean");
+        blockers.push("product-chain recertification is not clean".to_owned());
     }
     if requested && !rehearsal_passed {
-        blockers.push("daed2.0 product-chain switch rehearsal is not pass");
+        blockers.push("daed2.0 product-chain switch rehearsal is not pass".to_owned());
     }
     if requested && !no_host_write_executed {
-        blockers.push("host write was already executed");
+        blockers.push("host write was already executed".to_owned());
     }
     if requested && !candidate_validate_passed {
-        blockers.push("local validation Rust binary cannot validate the staged 0600 config input");
+        blockers.push(
+            "local validation Rust binary cannot validate the staged 0600 config input".to_owned(),
+        );
     }
     if requested && !resident_run_service_contract_ready {
-        blockers.push("resident run service contract is not implemented by dae-daemon-optin");
+        blockers.push(format!(
+            "resident run service contract is not implemented by {}",
+            layout.target_run_binary
+        ));
     }
     if requested && !reload_command_service_contract_ready {
-        blockers.push("reload command service contract is not implemented by dae-daemon-optin");
+        blockers.push(format!(
+            "reload command service contract is not implemented by {}",
+            layout.target_run_binary
+        ));
     }
     if requested && !resident_production_dataplane_ready {
-        blockers.push("resident default service path does not admit production dataplane");
+        blockers
+            .push("resident default service path does not admit production dataplane".to_owned());
     }
     if requested && !reload_failure_rollback_supported {
-        blockers.push("resident reload failure rollback is not implemented by dae-daemon-optin");
+        blockers.push(format!(
+            "resident reload failure rollback is not implemented by {}",
+            layout.target_run_binary
+        ));
     }
     if requested && !invalid_runtime_config_rejected_before_current_swap {
-        blockers.push("resident reload does not reject invalid runtime config before swap");
+        blockers
+            .push("resident reload does not reject invalid runtime config before swap".to_owned());
     }
     if requested && !reload_start_failure_attempts_previous_runtime_restore {
-        blockers
-            .push("resident reload does not attempt previous runtime restore after start failure");
+        blockers.push(
+            "resident reload does not attempt previous runtime restore after start failure"
+                .to_owned(),
+        );
     }
     let pass = requested && blockers.is_empty();
     let plan = json!({
@@ -172,24 +200,25 @@ pub(super) fn materialize_local_validation_fresh_install_plan(
             "staged_validate_config_mode": "0600",
         },
         "installation_targets": {
-            "binary_target": "/usr/bin/dae",
-            "service_target": "/etc/systemd/system/dae.service",
-            "config_target": "/etc/dae/config.dae",
+            "product_layout_kind": layout.kind,
+            "binary_target": layout.binary_target,
+            "service_target": layout.service_target,
+            "config_target": layout.config_target,
             "config_target_mode": "0600",
-            "preserved_external_command_contract": "/usr/bin/dae validate/run/reload",
+            "preserved_external_command_contract": format!("{} validate/run/reload", layout.binary_target),
         },
         "execution_checklist": [
             "require explicit authorization before local validation host write",
-            "copy the frozen Rust binary source only to /usr/bin/dae",
-            "copy install/dae.service only to /etc/systemd/system/dae.service",
-            "install example.dae only to /etc/dae/config.dae with mode 0600 and label it local validation only",
+            format!("copy the frozen Rust binary source only to {}", layout.binary_target),
+            format!("copy service template only to {}", layout.service_target),
+            format!("install product config only to {} with mode 0600 and label it local validation only", layout.config_target),
             "run systemctl actions only within explicit authorization",
             "run validation and resource cleanup checks immediately"
         ],
         "rollback_checklist": [
-            "remove /usr/bin/dae only if created by this local validation installation",
-            "remove /etc/systemd/system/dae.service only if created by this local validation installation",
-            "remove /etc/dae/config.dae only if copied from example.dae by this execution",
+            format!("remove {} only if created by this local validation installation", layout.binary_target),
+            format!("remove {} only if created by this local validation installation", layout.service_target),
+            format!("remove {} only if copied by this execution", layout.config_target),
             "run systemctl daemon-reload only if service target was installed and rollback is authorized",
             "confirm the pre-install absent state is restored",
             "rerun daed2.0 product-chain validation after rollback"
