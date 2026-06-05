@@ -14089,3 +14089,80 @@ Correction after review:
       `cargo test --manifest-path rust/Cargo.toml -p dae-daemon resident_events_are_bridged_to_product_logs_with_runtime_level_filter`: pass.
       `cargo test --manifest-path rust/Cargo.toml -p dae-daemon proxy_failure_event_carries_relay_diagnostics`: pass.
 ```
+
+## 2026-06-05 09:09 +0800 - Rust product WebUI time policy and reload-needed parity
+
+Scope:
+  - Fix task-log time display strategy.
+  - Restore the historical hidden reload button behavior: the button should
+    appear automatically when the running runtime no longer matches the selected
+    resources.
+
+Go daed parity source:
+  - `/root/project/daed/wing/orchestrator/general_state.go`
+    `runtimeModified` only reports modified while the runtime is running.
+  - It compares selected config/DNS/routing ID+version and running group version
+    summary/group IDs against the runtime snapshot recorded during reload.
+  - If a required selected config/DNS/routing row is missing while running, Go
+    treats the runtime as modified and asks for reload.
+
+Rust product change:
+  - `/api/general/state` no longer reports `modified=false` unconditionally.
+  - `general_state_report` now computes `modified` from the existing Rust
+    `systems.running_*` snapshot columns:
+      - selected config id/version
+      - selected DNS id/version
+      - selected routing id/version
+      - group version sum
+      - group id list
+  - The comparison is product-surface generic and does not introduce any
+    protocol-specific or outbound-specific dirty flag.
+  - `running=false` still reports `modified=false`, matching Go daed's hidden
+    reload-button semantics.
+
+WebUI change:
+  - Backend log timestamps remain API/stored UTC strings such as
+    `2026-06-05T01:00:58Z`; this stays machine-comparable and avoids server
+    timezone ambiguity.
+  - `apps/web/src/pages/Orchestrate/Logs.tsx` now converts valid timestamps to
+    browser-local `HH:mm:ss` for display.
+  - The previous UI behavior sliced the UTC string directly, causing a host in
+    `+08:00` to display `01:00:58` instead of the expected local `09:00:58`.
+
+Validation:
+  - `PATH=/root/.local/node-v22.12.0-linux-x64/bin:$PATH pnpm --filter daed check-types`: pass.
+  - `cargo fmt --all --manifest-path rust/Cargo.toml`: pass.
+  - `cargo test --manifest-path rust/Cargo.toml -p dae-daemon`: pass,
+    209 unit tests plus integration/doc test suites passed.
+
+Live deployment to 10.10.10.2:
+  - Built Rust native `daed` with:
+      `cargo build --manifest-path rust/Cargo.toml -p dae-daemon --bin daed --release --features native-ebpf`
+  - Built WebUI static resources with:
+      `PATH=/root/.local/node-v22.12.0-linux-x64/bin:$PATH pnpm --filter daed build`
+  - Installed current test binary to `/usr/bin/daed`; stable rollback anchor
+    `/usr/bin/daed-daex-align-webui-cpu-20260601` was present and untouched.
+  - Installed current WebUI static resources to `/usr/share/daed/web`; stable
+    rollback anchor `/usr/share/daed/web-daex-align-webui-cpu-20260601` was
+    present and untouched.
+  - Deployed hashes:
+      `/usr/bin/daed`
+        `69548bb2d67f73ba723cb1569ea00627784054a586258071913cd5f72c1d1351`
+      `/usr/share/daed/web/index.html`
+        `abf54e49278feb1d71b3bfc6a403cb532952f06bdb14c0ba16b8b17b423ab5a2`
+  - `systemctl show daed` after deploy:
+      `ActiveState=active`
+      `SubState=running`
+      `ExecMainStatus=0`
+  - `/api/health`: `{"healthCheck":1}`.
+  - Authenticated `/api/general/state` live check:
+      `running=true`
+      `modified=false`
+      `attachBackend=tcx`
+      `netnsLinkMode=netkit`
+  - Minimal reversible dirty matrix:
+      before selected config version bump: `modified=false`
+      during temporary selected config version bump: `modified=true`
+      after restoring original version: `modified=false`
+    The temporary live check changed only the selected config version counter
+    and restored it immediately; config text/content was not changed.
