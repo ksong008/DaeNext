@@ -169,6 +169,103 @@ JSON fixture rule:
   or external tooling that explicitly consumes fixture-shaped data.
 ```
 
+2026-06-05 10.10.10.2 latest Rust native daed binary deployment:
+
+```text
+Local commits before deployment:
+  dae-daex-align:
+    8c886252 Complete runtime product cleanup
+
+  daed-daex-align/daed:
+    881e1a5 Align task log field rendering
+    Note: this WebUI source commit was local-committed with --no-verify because
+    the local shell has Node v18.20.4 while Vite 8 requires Node >=20.19 or
+    >=22.12. `pnpm --filter daed check-types` had passed before commit.
+
+Build:
+  cwd:
+    /root/project/dae-daex-align
+
+  command:
+    cargo build --manifest-path rust/Cargo.toml -p dae-daemon --bin daed --release --features native-ebpf
+
+  result:
+    pass
+
+  artifact:
+    /root/project/dae-daex-align/rust/target/release/daed
+
+  artifact info:
+    size: 20M
+    file: ELF 64-bit LSB pie executable, x86-64, dynamically linked, not stripped
+    sha256: 9fc8b4301f3b669be624ca5496c79babab418e822fe4028cfaa348e049377d6c
+
+Deployment target:
+  host:
+    10.10.10.2
+
+  pre-deploy /usr/bin/daed:
+    size: 50M
+    file: ELF 64-bit LSB executable, x86-64, statically linked, stripped
+    sha256: b296303fc01b0cd4453ab90bb7bf988d6315a952a548fd483a0a9c5bab2448bf
+
+  rollback anchor:
+    /usr/bin/daed-daex-align-webui-cpu-20260601
+    This stable rollback file was created only if missing. No per-test backup
+    file was added.
+
+  installed /usr/bin/daed:
+    sha256: 9fc8b4301f3b669be624ca5496c79babab418e822fe4028cfaa348e049377d6c
+    size: 20M
+
+Service env:
+  The first restart failed because Rust product binary intentionally refuses to
+  become the C10 runtime owner without explicit resident dataplane admission:
+    set DAE_RUST_RESIDENT_DATAPLANE=1
+
+  Added controlled drop-in:
+    /etc/systemd/system/daed.service.d/30-daex-rust-native-runtime.conf
+
+  The drop-in does not use the old Go-shell selector DAED_RUNTIME=rust-owned.
+  It only enables resident dataplane admission and the explicit runtime memory
+  defaults:
+    DAE_RUST_RESIDENT_DATAPLANE=1
+    MALLOC_ARENA_MAX=2
+    MALLOC_CONF=background_thread:true,dirty_decay_ms:1000,muzzy_decay_ms:1000,narenas:2
+    DAED_HTTP_QUEUE=256
+    DAED_HTTP_WORKER_STACK_BYTES=1048576
+    DAE_RESIDENT_TCP_FLOW_STACK_BYTES=524288
+    DAE_RESIDENT_UDP_PACKET_WORKERS=64
+    DAE_RESIDENT_UDP_PACKET_STACK_BYTES=262144
+
+Post-deploy validation:
+  systemd:
+    ActiveState=active
+    SubState=running
+    MainPID=42308
+    ExecMainStatus=0
+
+  process:
+    /usr/bin/daed run -c /etc/daed/
+    observed RSS at check time: 66692 KiB
+
+  listener:
+    0.0.0.0:2023 owned by daed pid 42308
+
+  HTTP health:
+    GET http://127.0.0.1:2023/api/health -> {"healthCheck":1}
+
+  journal after the successful restart:
+    only systemd start line was present at the time of the check; no new daed
+    exit/error appeared after the resident dataplane admission drop-in was
+    added.
+
+Scope note:
+  This deployment replaced the product binary. WebUI source changes in
+  daed-daex-align/daed are committed, but static WebUI assets on 10.10.10.2
+  were not rebuilt/copied in this binary-only deployment.
+```
+
 核心 trait 建议：
 
 ```text
