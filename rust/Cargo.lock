@@ -577,6 +577,7 @@ version = "0.1.0"
 dependencies = [
  "base64",
  "boring",
+ "bytes",
  "dae-aya-bpf-loader",
  "dae-config",
  "dae-control",

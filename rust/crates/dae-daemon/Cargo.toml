@@ -30,6 +30,7 @@ dae-routing.workspace = true
 dae-sniffing.workspace = true
 boring.workspace = true
 base64.workspace = true
+bytes.workspace = true
 fastrand.workspace = true
 libc.workspace = true
 libmimalloc-sys = { workspace = true, optional = true }
