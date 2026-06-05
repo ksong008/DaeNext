@@ -4,6 +4,7 @@ use std::path::Path;
 use serde_json::{Value, json};
 
 use super::path_string;
+use super::product_layout::ProductPathLayout;
 
 pub(super) fn materialize_production_replacement_readiness_report(
     report: &Value,
@@ -91,18 +92,16 @@ pub(super) fn materialize_production_replacement_readiness_report(
         blockers.push("host write or production run command replacement was already executed");
     }
 
-    let installed_system_service_files: Vec<String> = [
-        Path::new("/etc/systemd/system/dae.service"),
-        Path::new("/usr/lib/systemd/system/dae.service"),
-        Path::new("/lib/systemd/system/dae.service"),
-    ]
-    .into_iter()
-    .filter(|path| path.exists())
-    .map(path_string)
-    .collect();
+    let layout = ProductPathLayout::from_report(report);
+    let installed_system_service_files: Vec<String> = layout
+        .service_paths
+        .iter()
+        .map(Path::new)
+        .filter(|path| path.exists())
+        .map(path_string)
+        .collect();
     let installed_system_service_exists = !installed_system_service_files.is_empty();
-    let installed_runtime_config_file = Path::new("/etc/dae/config.dae");
-    let installed_runtime_config_exists = installed_runtime_config_file.exists();
+    let installed_runtime_config_exists = Path::new(layout.config_target).exists();
     let ready_for_manual_authorization = requested && blockers.is_empty();
     let readiness = json!({
         "status": if ready_for_manual_authorization { "pass" } else if requested { "blocked" } else { "not-requested" },
@@ -140,13 +139,23 @@ pub(super) fn materialize_production_replacement_readiness_report(
             "product_chain_switch_allowed": report["product_chain_switch_allowed"].clone(),
         },
         "host_inventory": {
+            "product_layout_kind": layout.kind,
+            "binary_target": layout.binary_target,
+            "binary_target_exists": Path::new(layout.binary_target).exists(),
+            "local_binary_target": layout.local_binary_target,
+            "local_binary_target_exists": Path::new(layout.local_binary_target).exists(),
+            "service_target": layout.service_target,
+            "service_name": layout.service_name,
+            "runtime_config_target": layout.config_target,
+            "usr_bin_daed_exists": Path::new("/usr/bin/daed").exists(),
+            "usr_local_bin_daed_exists": Path::new("/usr/local/bin/daed").exists(),
             "usr_bin_dae_exists": Path::new("/usr/bin/dae").exists(),
             "usr_local_bin_dae_exists": Path::new("/usr/local/bin/dae").exists(),
             "service_file": report["paths"]["service_file"].clone(),
             "repository_service_template_file": report["paths"]["service_file"].clone(),
             "installed_system_service_exists": installed_system_service_exists,
             "installed_system_service_files": installed_system_service_files,
-            "runtime_config_file": path_string(installed_runtime_config_file),
+            "runtime_config_file": layout.config_target,
             "runtime_config_exists": installed_runtime_config_exists,
         },
         "manual_authorization_conditions": [
@@ -160,7 +169,7 @@ pub(super) fn materialize_production_replacement_readiness_report(
         ],
         "source": [
             "DAEX_RUST_REBUILD_PLAN_2026-05-16.md:后续阶段 1",
-            "DAENEW_RUST_REBUILD_MEMO_2026-05-16.md:install/dae.service",
+            "DAENEW_RUST_REBUILD_MEMO_2026-05-16.md:product-service-contract",
             "DAENEW_RUST_REBUILD_MEMO_2026-05-16.md:pid-progress-reload-contract"
         ],
     });

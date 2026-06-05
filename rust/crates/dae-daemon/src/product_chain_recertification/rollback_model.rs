@@ -6,7 +6,8 @@ use super::path_string;
 pub(super) fn rollback_script_content(
     service_file: &Path,
     backup_service_file: &Path,
-    backup_usr_bin_dae: &Path,
+    target_binary: &str,
+    backup_binary: &Path,
     backup_manifest_file: &Path,
 ) -> String {
     format!(
@@ -24,8 +25,8 @@ if [ -f {backup_service_file} ]; then
   cp {backup_service_file} {service_file}
 fi
 
-if [ -f {backup_usr_bin_dae} ]; then
-  cp {backup_usr_bin_dae} /usr/bin/dae
+if [ -f {backup_binary} ]; then
+  cp {backup_binary} {target_binary}
 fi
 
 systemctl daemon-reload
@@ -33,12 +34,17 @@ systemctl daemon-reload
         backup_manifest_file = shell_quote_path(backup_manifest_file),
         backup_service_file = shell_quote_path(backup_service_file),
         service_file = shell_quote_path(service_file),
-        backup_usr_bin_dae = shell_quote_path(backup_usr_bin_dae),
+        backup_binary = shell_quote_path(backup_binary),
+        target_binary = shell_quote_literal(target_binary),
     )
 }
 
 fn shell_quote_path(path: &Path) -> String {
     let raw = path_string(path);
+    shell_quote_literal(&raw)
+}
+
+fn shell_quote_literal(raw: &str) -> String {
     format!("'{}'", raw.replace('\'', "'\\''"))
 }
 

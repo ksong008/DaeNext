@@ -14,6 +14,7 @@ mod local_validation;
 mod native_owned_entry_gates;
 mod outbound_fingerprint_underlay;
 mod outbound_production_matrix;
+mod product_layout;
 mod readiness;
 mod release_default_switch;
 mod repo_inspection;

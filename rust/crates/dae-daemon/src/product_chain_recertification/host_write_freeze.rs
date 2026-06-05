@@ -4,6 +4,7 @@ use std::path::Path;
 use serde_json::{Value, json};
 
 use super::path_string;
+use super::product_layout::ProductPathLayout;
 
 pub(super) fn materialize_production_host_write_plan_freeze_report(
     report: &Value,
@@ -26,10 +27,17 @@ pub(super) fn materialize_production_host_write_plan_freeze_report(
         && !rehearsal["actual_host_write_executed"]
             .as_bool()
             .unwrap_or(true);
+    let layout = ProductPathLayout::from_report(report);
     let host_inventory = &readiness["host_inventory"];
-    let usr_bin_dae_exists = host_inventory["usr_bin_dae_exists"]
+    let layout_binary_exists = match layout.kind {
+        "daed" => host_inventory["usr_bin_daed_exists"].as_bool(),
+        _ => host_inventory["usr_bin_dae_exists"].as_bool(),
+    }
+    .unwrap_or(false);
+    let binary_target_exists = host_inventory["binary_target_exists"]
         .as_bool()
-        .unwrap_or(false);
+        .unwrap_or(false)
+        || layout_binary_exists;
     let installed_system_service_exists = host_inventory["installed_system_service_exists"]
         .as_bool()
         .unwrap_or(false);
@@ -40,51 +48,65 @@ pub(super) fn materialize_production_host_write_plan_freeze_report(
     let local_validation_fresh_install_plan_passed = local_validation_fresh_install_plan["pass"]
         .as_bool()
         .unwrap_or(false);
-    let fresh_install_required = !usr_bin_dae_exists && !installed_system_service_exists;
+    let fresh_install_required = !binary_target_exists && !installed_system_service_exists;
     let operation_mode = if fresh_install_required {
         "fresh-install"
     } else {
         "replacement"
     };
-    let mut blockers = Vec::new();
+    let mut blockers: Vec<String> = Vec::new();
     if !readiness_passed {
-        blockers.push("production replacement readiness is not pass");
+        blockers.push("production replacement readiness is not pass".to_owned());
     }
     if !resident_default_daemon_switch_ready {
-        blockers.push("resident default service path does not admit production dataplane");
+        blockers
+            .push("resident default service path does not admit production dataplane".to_owned());
     }
     if !rehearsal_passed {
-        blockers.push("daed2.0 product-chain switch rehearsal is not pass");
+        blockers.push("daed2.0 product-chain switch rehearsal is not pass".to_owned());
     }
     if !no_host_write_executed {
-        blockers.push("host write was already executed");
+        blockers.push("host write was already executed".to_owned());
     }
     if fresh_install_required {
-        if local_validation_fresh_install_plan_passed {
+        if !local_validation_fresh_install_plan_passed {
             blockers.push(
-                "fresh install is frozen for local validation only; production host write requires production configuration and explicit authorization",
+                "fresh install requires a separately frozen binary, service, config, and removal rollback plan".to_owned(),
             );
-        } else {
-            blockers.push(
-                "fresh install requires a separately frozen binary, service, config, and removal rollback plan",
-            );
+            if !runtime_config_exists {
+                blockers.push(format!(
+                    "required runtime config {} is absent",
+                    layout.config_target
+                ));
+            }
             if local_validation_fresh_install_plan["requested"]
                 .as_bool()
                 .unwrap_or(false)
             {
                 blockers.push(
-                    "local validation fresh-install plan is blocked by candidate service command contract",
+                    "local validation fresh-install plan is blocked by candidate service command contract".to_owned(),
                 );
             }
         }
-    } else if !usr_bin_dae_exists {
-        blockers.push("installed /usr/bin/dae target is absent for the replacement plan");
-    }
-    if !installed_system_service_exists {
-        blockers.push("installed dae.service target is absent for the frozen service change");
-    }
-    if !runtime_config_exists {
-        blockers.push("required runtime config /etc/dae/config.dae is absent");
+    } else {
+        if !binary_target_exists {
+            blockers.push(format!(
+                "installed {} target is absent for the replacement plan",
+                layout.binary_target
+            ));
+        }
+        if !installed_system_service_exists {
+            blockers.push(format!(
+                "installed {} target is absent for the frozen service change",
+                layout.service_name
+            ));
+        }
+        if !runtime_config_exists {
+            blockers.push(format!(
+                "required runtime config {} is absent",
+                layout.config_target
+            ));
+        }
     }
     let pass = blockers.is_empty();
     let frozen_execution_checklist = if fresh_install_required {
@@ -92,7 +114,10 @@ pub(super) fn materialize_production_host_write_plan_freeze_report(
             "confirm user explicitly authorized controlled production fresh installation",
             "confirm production-host-write-plan-freeze.json is regenerated as pass before any write",
             "freeze the production Rust binary source and absolute installed binary target",
-            "freeze the installed dae.service target and materialized /etc/dae/config.dae source",
+            format!(
+                "freeze the installed {} target and materialized {} source",
+                layout.service_name, layout.config_target
+            ),
             "create a removal rollback manifest that preserves the pre-install absence state",
             "apply only the frozen binary, service, and config installation targets",
             "run post-write validation immediately"
@@ -112,7 +137,10 @@ pub(super) fn materialize_production_host_write_plan_freeze_report(
     let frozen_rollback_checklist = if fresh_install_required {
         json!([
             "use the real installation manifest produced during controlled host write",
-            "remove only newly installed dae.service files if installation fails",
+            format!(
+                "remove only newly installed {} files if installation fails",
+                layout.service_name
+            ),
             "remove only the newly installed default daemon binary if installation fails",
             "remove only the newly installed runtime config if it was created by this execution",
             "run systemctl daemon-reload only after rollback is explicitly authorized",
@@ -122,17 +150,22 @@ pub(super) fn materialize_production_host_write_plan_freeze_report(
         json!([
             "use the real backup artifact produced during controlled host write",
             "restore service file if changed",
-            "restore /usr/bin/dae or target binary if changed",
+            format!("restore {} if binary was changed", layout.binary_target),
             "run systemctl daemon-reload only after rollback is explicitly authorized",
-            "restart dae.service only after rollback validation is explicit",
+            format!(
+                "restart {} only after rollback validation is explicit",
+                layout.service_name
+            ),
             "rerun daed2.0 product-chain validation after rollback"
         ])
     };
+    let validation_intro = layout.validation_checklist();
+    let post_smoke_commands = layout.post_smoke_commands();
     let frozen_validation_checklist = if fresh_install_required {
         json!([
-            "validate using the frozen installed daemon target and materialized /etc/dae/config.dae",
-            "run ready using the frozen installed daemon target and materialized /etc/dae/config.dae",
-            "validate reload against the newly installed service process",
+            validation_intro[0],
+            validation_intro[1],
+            validation_intro[2],
             "active TCP relay smoke and benchmark",
             "active UDP smoke and benchmark",
             "active DNS smoke and benchmark",
@@ -142,9 +175,9 @@ pub(super) fn materialize_production_host_write_plan_freeze_report(
         ])
     } else {
         json!([
-            "dae-daemon-optin validate -c /etc/dae/config.dae",
-            "dae-daemon-optin run --disable-timestamp -c /etc/dae/config.dae --exit-after-ready",
-            "dae-daemon-optin reload $MAINPID",
+            post_smoke_commands[0],
+            post_smoke_commands[1],
+            post_smoke_commands[2],
             "active TCP relay smoke and benchmark",
             "active UDP smoke and benchmark",
             "active DNS smoke and benchmark",
@@ -172,7 +205,8 @@ pub(super) fn materialize_production_host_write_plan_freeze_report(
             "resident_default_daemon_switch_ready": resident_default_daemon_switch_ready,
             "daed2_product_chain_switch_rehearsal_passed": rehearsal_passed,
             "no_host_write_executed": no_host_write_executed,
-            "installed_usr_bin_dae_exists": usr_bin_dae_exists,
+            "product_layout_kind": layout.kind,
+            "installed_binary_target_exists": binary_target_exists,
             "installed_system_service_exists": installed_system_service_exists,
             "runtime_config_exists": runtime_config_exists,
             "local_validation_fresh_install_plan_passed": local_validation_fresh_install_plan_passed,
