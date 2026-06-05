@@ -49,7 +49,7 @@ pub fn aead_tcp_client_session_start(
     target: &str,
     payload: &[u8],
 ) -> Result<VMessAeadTcpClientSessionStart, OutboundError> {
-    let material = VMessAeadMaterial::default();
+    let material = VMessAeadMaterial::random();
     let normalized_uuid = normalize_vmess_uuid(uuid);
     let cmd_key = vmess_cmd_key_from_uuid(&normalized_uuid)?;
     let eauth_id = put_eauth_id(&cmd_key, unix_timestamp_now()?, material.eauth_random)?;
@@ -66,7 +66,11 @@ pub fn aead_tcp_client_session_start(
         parsed.request_body_iv,
         parsed.request_options,
     )?;
-    let chunk = codec.seal_chunk(payload)?;
+    let chunk = if payload.is_empty() {
+        Vec::new()
+    } else {
+        codec.seal_chunk(payload)?
+    };
     let mut first_write = Vec::with_capacity(header.len() + chunk.len());
     first_write.extend_from_slice(&header);
     first_write.extend_from_slice(&chunk);

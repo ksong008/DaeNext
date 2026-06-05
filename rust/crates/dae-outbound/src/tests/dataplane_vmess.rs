@@ -36,6 +36,22 @@ fn stage65_vmess_aead_tcp_dataplane_echoes_payload() {
 }
 
 #[test]
+fn vmess_aead_tcp_session_empty_initial_payload_writes_header_only() {
+    let uuid = "7c12c745-63a5-433d-9e60-022e469b5bd4";
+    let target = "stage65-vmess-empty.example:443";
+    let session = vmess::aead_tcp_client_session_start(uuid, target, &[]).unwrap();
+
+    assert_eq!(session.request.target, target);
+    assert_eq!(session.request.payload, b"");
+    assert_eq!(session.request.request_chunk_len, 0);
+    assert_eq!(
+        session.first_write.len(),
+        session.request.request_header_len,
+        "empty initial payload must not emit an empty VMess body chunk"
+    );
+}
+
+#[test]
 fn stage66_vmess_aead_udp_over_tcp_dataplane_echoes_payload() {
     let uuid = "7c12c745-63a5-433d-9e60-022e469b5bd4";
     let target = "1.2.3.4:53";
