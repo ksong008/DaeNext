@@ -12614,6 +12614,8 @@ Required next C10 work:
       reload/restart,
       task logs,
       traffic counters,
+      large-page open/load smoke for Google and YouTube over the selected
+      resident adapter path,
       RSS behavior.
   - Do not run the protocol/live adapter matrix on `10.10.10.2`. Keep
     `10.10.10.2` for the current household/default-path smoke checks, WebUI
@@ -13080,8 +13082,16 @@ Expected first-batch completion evidence:
     batch as present/admitted while still blocking rows that are not wired.
   - A real TCP flow smoke from remote 38 through the Rust resident adapter
     succeeds for each first-batch row.
+  - For every row claimed live-ready, remote 38 must also open/load large pages
+    through the Rust resident adapter path:
+      `https://www.google.com/`
+      `https://www.youtube.com/`
+    This must be a real body/page load, not only `HEAD`, DNS-only, or
+    `example.com` small-page evidence.
   - Event logs show the resident protocol handler used for the selected row, and
     no Go outbound fallback was used.
+  - Traffic counters and resident events must reflect the Google/YouTube
+    transfer bytes for the selected row.
 
 ## 2026-06-04 resident adapter first batch read-only validation
 
