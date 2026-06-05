@@ -14553,3 +14553,129 @@ Validation so far:
     under `runtime_log_level=fatal`.
   - `cargo test --manifest-path rust/Cargo.toml -p dae-daemon`: pass,
     209 unit tests plus integration/doc test suites passed.
+
+## 2026-06-05 13:04 +0800 - C8/C10 first-batch live resident adapter matrix
+
+Scope:
+  - Complete the previously recorded first-batch live resident adapter evidence
+    under the existing C8/C10 matrix closure work.
+  - This is remote 38 / JP fixture evidence only. `10.10.10.2` was not used for
+    this protocol/live adapter matrix.
+  - No SSH password, raw node link, UUID, fixture account, or fixture password is
+    recorded here.
+
+Build and hosts:
+  - Candidate binary:
+      `/tmp/daex-live-matrix/daed`
+      `fa9c9bb064f654fdfc70cb68d87f4b41237af11d5a7b3b5fd1536c1a3832de28`
+  - Candidate build command:
+      `cargo build --manifest-path rust/Cargo.toml -p dae-daemon --bin daed --release --features native-ebpf`
+  - JP fixture host:
+      `156.246.90.2`
+      `daex-matrix-jp.service`: active
+      `daex-matrix-juicity.service`: active
+      first-batch TCP fixture ports were listening on `28443`, `28446`,
+      `28447`, `28448`.
+  - Remote traffic host:
+      `38.65.91.47:5122`
+      isolated run root: `/tmp/daex-live-matrix`
+      each row used its own temporary `daed.db` under the run root.
+
+Runner notes:
+  - Runtime env enabled the Rust resident dataplane and Rust native eBPF path:
+      `DAE_RUST_RESIDENT_DATAPLANE=1`
+      `DAE_RUST_NATIVE_EBPF=1`
+  - The test runner started `daed run` in API-only mode with an isolated state
+    DB and selected one matrix row at a time.
+  - Routing directly exempted only the JP fixture endpoint and the SSH controller
+    endpoint; fallback traffic used the selected proxy group.
+  - Live target requirements were:
+      `http://example.com/` body >= 100 bytes
+      `https://www.google.com/` body >= 10000 bytes
+      `https://www.youtube.com/` body >= 100000 bytes
+    Google and YouTube checks were real body downloads, not `HEAD` or DNS-only.
+  - Event pass/fail accounting was restricted to the three target domains above.
+    Non-target resident events are still recorded as ignored evidence, because a
+    previous run showed a non-target `192.0.2.1` reset event that did not belong
+    to the page-load targets. Target-domain failures still fail the row.
+
+Live matrix result:
+  - Summary schema:
+      `daex-first-batch-live-resident-matrix-v1`
+  - Candidate hash:
+      `fa9c9bb064f654fdfc70cb68d87f4b41237af11d5a7b3b5fd1536c1a3832de28`
+  - `row_count=4`
+  - `pass_count=4`
+  - `all_pass=true`
+
+Per-row evidence:
+  - Row `vless`:
+      planner: admitted
+      result: pass
+      target bodies: `example=200/528`, `google=200/81281`,
+        `youtube=200/720957`
+      target resident events: finished `3`, failed `0`
+      target event download bytes: `256648`
+      target domains: `example.com`, `www.google.com`, `www.youtube.com`
+      execution evidence: `async-proxy-tls-v1`
+      TLS underlay evidence: `boringssl`
+      RSS: `VmRSS 66184 kB / RssAnon 54484 kB` ->
+        `VmRSS 67500 kB / RssAnon 54584 kB`
+      threads: `8` -> `11`
+  - Row `socks5`:
+      planner: admitted
+      result: pass
+      target bodies: `example=200/528`, `google=200/81293`,
+        `youtube=200/716972`
+      target resident events: finished `3`, failed `0`
+      ignored non-target events: `1`, ignored failed events: `1`
+      target event download bytes: `256917`
+      target domains: `example.com`, `www.google.com`, `www.youtube.com`
+      execution evidence: `first-batch-tcp-v1`
+      resident handler evidence: `socks5`
+      RSS: `VmRSS 65436 kB / RssAnon 53936 kB` ->
+        `VmRSS 69612 kB / RssAnon 57920 kB`
+      threads: `8` -> `47`
+  - Row `http-proxy`:
+      planner: admitted
+      result: pass
+      target bodies: `example=200/528`, `google=200/81269`,
+        `youtube=200/716895`
+      target resident events: finished `3`, failed `0`
+      target event download bytes: `255775`
+      target domains: `example.com`, `www.google.com`, `www.youtube.com`
+      execution evidence: `first-batch-tcp-v1`
+      resident handler evidence: `http-proxy`
+      RSS: `VmRSS 66152 kB / RssAnon 54488 kB` ->
+        `VmRSS 64348 kB / RssAnon 52492 kB`
+      threads: `8` -> `43`
+  - Row `shadowsocks`:
+      planner: admitted
+      result: pass
+      target bodies: `example=200/528`, `google=200/81286`,
+        `youtube=200/717903`
+      target resident events: finished `3`, failed `0`
+      target event download bytes: `256775`
+      target domains: `example.com`, `www.google.com`, `www.youtube.com`
+      execution evidence: `first-batch-tcp-v1`
+      resident handler evidence: `shadowsocks`
+      RSS: `VmRSS 68192 kB / RssAnon 56532 kB` ->
+        `VmRSS 66768 kB / RssAnon 54852 kB`
+      threads: `8` -> `26`
+
+Cleanup evidence on remote 38:
+  - No `/tmp/daex-live-matrix/daed` or `daed run` process remained after the
+    test.
+  - No `dae*` link remained.
+  - No `daens` network namespace remained.
+  - No `dae-native-runtime-*` BPF pin directory remained.
+  - `bpftool net` showed no xdp/tc/flow_dissector attachment from the test.
+  - `ip rule` returned to local/main/default only.
+  - route table `2023` was empty.
+
+Outcome:
+  - The first-batch live resident TCP adapter evidence is complete for the four
+    rows above.
+  - This does not mark UDP readiness or full remaining-matrix completion.
+  - Later rows that are still blocked/admission-gated must continue to use the
+    same remote 38 / JP live evidence standard before being called live-ready.
