@@ -333,6 +333,25 @@ struct RuntimeStartOutcome {
     report: Value,
 }
 
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+enum ProductRuntimeLifecycleLogMode {
+    StartupRestore,
+    ReloadSignal,
+}
+
+impl ProductRuntimeLifecycleLogMode {
+    fn source(self) -> &'static str {
+        match self {
+            Self::StartupRestore => "startup-restore",
+            Self::ReloadSignal => "signal",
+        }
+    }
+
+    fn is_startup(self) -> bool {
+        matches!(self, Self::StartupRestore)
+    }
+}
+
 const PRODUCT_RUNTIME_FAKE_START_ENV: &str = "DAED_PRODUCT_RUNTIME_FAKE_START";
 
 impl ProductRuntimeManager {
@@ -758,9 +777,12 @@ fn run_product_server_command(args: &[String], _version: &str) -> DaedProductOut
             "info",
             "[Startup] runtime restore requested",
         );
-        if let Err(err) =
-            restore_runtime_from_state(&runtime, &options.state, Some(&options.config_dir))
-        {
+        if let Err(err) = restore_runtime_from_state(
+            &runtime,
+            &options.state,
+            Some(&options.config_dir),
+            ProductRuntimeLifecycleLogMode::StartupRestore,
+        ) {
             let _ = append_lifecycle_log_for_config(
                 &options.config_dir,
                 &options.state,
@@ -771,16 +793,6 @@ fn run_product_server_command(args: &[String], _version: &str) -> DaedProductOut
         }
     }
     start_subscription_scheduler(options.state.clone(), options.config_dir.clone());
-    let mut fields = BTreeMap::new();
-    fields.insert("listen".to_owned(), options.listen.clone());
-    fields.insert("api_only".to_owned(), options.api_only.to_string());
-    let _ = append_lifecycle_log_fields_for_config(
-        &options.config_dir,
-        &options.state,
-        "info",
-        "[Startup] HTTP listener ready",
-        fields,
-    );
     let app = AppState {
         config_dir: options.config_dir,
         state: options.state,
@@ -799,32 +811,54 @@ fn restore_runtime_from_state(
     runtime: &ProductRuntimeManager,
     state: &Path,
     config_dir: Option<&Path>,
+    log_mode: ProductRuntimeLifecycleLogMode,
 ) -> Result<Value, String> {
     let log_config_dir =
         config_dir.unwrap_or_else(|| state.parent().unwrap_or(Path::new(DEFAULT_CONFIG_DIR)));
+    let lifecycle_started_at = Instant::now();
+    let source = log_mode.source();
     let _ = append_lifecycle_log_for_config(
         log_config_dir,
         state,
         "info",
-        "[Startup] runtime restore started",
+        if log_mode.is_startup() {
+            "[Startup] runtime restore started"
+        } else {
+            "[Reload] Runtime restore started"
+        },
     );
+    let materialize_started_at = Instant::now();
     let preview = materialize_runtime(state, config_dir, true).map_err(|err| err.to_string())?;
     let mut fields = BTreeMap::new();
-    fields.insert("source".to_owned(), "startup-restore".to_owned());
+    fields.insert("source".to_owned(), source.to_owned());
     extend_runtime_materialization_log_fields(&mut fields, &preview);
     let _ = append_lifecycle_log_fields_for_config(
         log_config_dir,
         state,
         "info",
-        "[Startup] runtime config preview materialized",
-        fields,
+        if log_mode.is_startup() {
+            "[Startup] runtime config preview materialized"
+        } else {
+            "[Reload] Runtime config preview materialized"
+        },
+        fields.clone(),
     );
+    if log_mode.is_startup() {
+        let _ = append_startup_phase_completed_for_config(
+            log_config_dir,
+            state,
+            "runtime.materialize.preview",
+            materialize_started_at,
+            fields,
+        );
+    }
     let content = preview["content"]
         .as_str()
         .ok_or_else(|| "runtime materializer did not return content".to_owned())?;
+    let config_build_started_at = Instant::now();
     let config = build_runtime_config_from_content(content)?;
     let mut fields = BTreeMap::new();
-    fields.insert("source".to_owned(), "startup-restore".to_owned());
+    fields.insert("source".to_owned(), source.to_owned());
     fields.insert(
         "tproxy_port".to_owned(),
         config.global.tproxy_port.to_string(),
@@ -837,31 +871,119 @@ fn restore_runtime_from_state(
         log_config_dir,
         state,
         "info",
-        "[Startup] runtime config built",
-        fields,
+        if log_mode.is_startup() {
+            "[Startup] runtime config built"
+        } else {
+            "[Reload] Runtime config built"
+        },
+        fields.clone(),
     );
+    if log_mode.is_startup() {
+        let _ = append_startup_phase_completed_for_config(
+            log_config_dir,
+            state,
+            "runtime.config.build",
+            config_build_started_at,
+            fields,
+        );
+    } else {
+        let _ = append_lifecycle_log_fields_for_config(
+            log_config_dir,
+            state,
+            "warn",
+            "[Reload] Load new control plane",
+            fields,
+        );
+    }
     set_runtime_log_level_from_config(state, &config).map_err(|err| err.to_string())?;
-    let outcome = runtime.reload(config, "startup-restore")?;
+    let control_plane_started_at = Instant::now();
+    let outcome = runtime.reload(config, source)?;
     let mut fields = BTreeMap::new();
-    fields.insert("source".to_owned(), "startup-restore".to_owned());
+    fields.insert("source".to_owned(), source.to_owned());
     extend_runtime_report_log_fields(&mut fields, &outcome.report);
     let _ = append_lifecycle_log_fields_for_config(
         log_config_dir,
         state,
         "info",
-        "[Startup] runtime owner reload finished",
-        fields,
+        if log_mode.is_startup() {
+            "[Startup] runtime owner reload finished"
+        } else {
+            "[Reload] Runtime owner reload finished"
+        },
+        fields.clone(),
     );
+    if log_mode.is_startup() {
+        let _ = append_startup_reclaim_decision_log_for_config(
+            log_config_dir,
+            state,
+            &outcome.report,
+            true,
+        );
+        let _ = append_startup_phase_completed_for_config(
+            log_config_dir,
+            state,
+            "post-startup.gc",
+            control_plane_started_at,
+            fields.clone(),
+        );
+        let _ = append_startup_phase_completed_for_config(
+            log_config_dir,
+            state,
+            "control-plane.core",
+            control_plane_started_at,
+            fields.clone(),
+        );
+    } else {
+        let _ = append_lifecycle_log_fields_for_config(
+            log_config_dir,
+            state,
+            "warn",
+            "[Reload] Stopped old control plane",
+            fields.clone(),
+        );
+        let _ = append_lifecycle_log_fields_for_config(
+            log_config_dir,
+            state,
+            "warn",
+            "[Reload] Serve",
+            fields,
+        );
+    }
+    let apply_materialize_started_at = Instant::now();
     let applied = match materialize_runtime(state, config_dir, false) {
         Ok(applied) => applied,
         Err(err) => {
+            let mut fields = BTreeMap::new();
+            fields.insert("source".to_owned(), source.to_owned());
+            fields.insert("error".to_owned(), err.to_string());
+            if log_mode.is_startup() {
+                let _ = append_startup_phase_failed_for_config(
+                    log_config_dir,
+                    state,
+                    "control-plane.create.total",
+                    lifecycle_started_at,
+                    &err.to_string(),
+                    fields.clone(),
+                );
+            }
+            let _ = append_lifecycle_log_fields_for_config(
+                log_config_dir,
+                state,
+                "error",
+                if log_mode.is_startup() {
+                    "[Startup] runtime restore failed"
+                } else {
+                    "[Reload] Failed to materialize applied runtime config"
+                },
+                fields,
+            );
             let _ = runtime.stop();
             let _ = mark_system_stopped(state);
             return Err(err.to_string());
         }
     };
     let mut fields = BTreeMap::new();
-    fields.insert("source".to_owned(), "startup-restore".to_owned());
+    fields.insert("source".to_owned(), source.to_owned());
     fields.insert("applied".to_owned(), "true".to_owned());
     if let Some(status) = outcome.report.get("status").and_then(Value::as_str) {
         fields.insert("status".to_owned(), status.to_owned());
@@ -877,9 +999,37 @@ fn restore_runtime_from_state(
         log_config_dir,
         state,
         "info",
-        "[Startup] runtime restore finished",
-        fields,
+        if log_mode.is_startup() {
+            "[Startup] runtime restore finished"
+        } else {
+            "[Reload] Runtime restore finished"
+        },
+        fields.clone(),
     );
+    if log_mode.is_startup() {
+        let _ = append_startup_phase_completed_for_config(
+            log_config_dir,
+            state,
+            "runtime.materialize.applied",
+            apply_materialize_started_at,
+            fields.clone(),
+        );
+        let _ = append_startup_phase_completed_for_config(
+            log_config_dir,
+            state,
+            "control-plane.create.total",
+            lifecycle_started_at,
+            fields.clone(),
+        );
+        let _ = append_startup_phase_completed_for_config(
+            log_config_dir,
+            state,
+            "startup.total",
+            lifecycle_started_at,
+            fields,
+        );
+        let _ = append_lifecycle_log_for_config(log_config_dir, state, "info", "Ready");
+    }
     Ok(json!({
         "restored": true,
         "runtime": outcome.report,
@@ -929,7 +1079,12 @@ fn install_product_signal_thread(
                         );
                         continue;
                     }
-                    let result = restore_runtime_from_state(&runtime, &state, Some(&config_dir));
+                    let result = restore_runtime_from_state(
+                        &runtime,
+                        &state,
+                        Some(&config_dir),
+                        ProductRuntimeLifecycleLogMode::ReloadSignal,
+                    );
                     match result {
                         Ok(_) => {
                             let mut fields = BTreeMap::new();
@@ -1610,6 +1765,7 @@ fn migrate_wing_db(from_wing_db: &Path, to: &Path, force: bool) -> io::Result<Va
 }
 
 fn serve_forever(listen: &str, app: AppState) -> io::Result<()> {
+    let listen_started_at = Instant::now();
     let listener = TcpListener::bind(listen)?;
     let app = Arc::new(app);
     let config = ProductHttpWorkerConfig::from_env();
@@ -1637,6 +1793,35 @@ fn serve_forever(listen: &str, app: AppState) -> io::Result<()> {
         };
         handles.push(handle);
     }
+    let mut fields = BTreeMap::new();
+    fields.insert("listen".to_owned(), listen.to_owned());
+    if let Ok(local_addr) = listener.local_addr() {
+        fields.insert("local_addr".to_owned(), local_addr.to_string());
+    }
+    fields.insert("api_only".to_owned(), app.api_only.to_string());
+    fields.insert("http_workers".to_owned(), config.worker_count.to_string());
+    fields.insert(
+        "http_queue_capacity".to_owned(),
+        config.queue_capacity.to_string(),
+    );
+    fields.insert(
+        "http_worker_stack_bytes".to_owned(),
+        config.worker_stack_bytes.to_string(),
+    );
+    let _ = append_lifecycle_log_fields_for_config(
+        &app.config_dir,
+        &app.state,
+        "info",
+        "[Startup] HTTP listener ready",
+        fields.clone(),
+    );
+    let _ = append_startup_phase_completed_for_config(
+        &app.config_dir,
+        &app.state,
+        "product.http-listener",
+        listen_started_at,
+        fields,
+    );
     for stream in listener.incoming() {
         match stream {
             Ok(stream) => {
@@ -2930,8 +3115,17 @@ fn api_runtime_reload(app: &AppState, request: &HttpRequest) -> HttpResponse {
         &app.state,
         "info",
         "[Reload] Runtime config built",
-        fields,
+        fields.clone(),
     );
+    if !dry {
+        let _ = append_lifecycle_log_fields_for_config(
+            &app.config_dir,
+            &app.state,
+            "warn",
+            "[Reload] Load new control plane",
+            fields,
+        );
+    }
     if dry {
         let mut fields = BTreeMap::new();
         fields.insert("source".to_owned(), "api".to_owned());
@@ -2990,6 +3184,20 @@ fn api_runtime_reload(app: &AppState, request: &HttpRequest) -> HttpResponse {
         &app.state,
         "info",
         "[Reload] Runtime owner reload finished",
+        fields.clone(),
+    );
+    let _ = append_lifecycle_log_fields_for_config(
+        &app.config_dir,
+        &app.state,
+        "warn",
+        "[Reload] Stopped old control plane",
+        fields.clone(),
+    );
+    let _ = append_lifecycle_log_fields_for_config(
+        &app.config_dir,
+        &app.state,
+        "warn",
+        "[Reload] Serve",
         fields,
     );
     match materialize_runtime(&app.state, Some(&app.config_dir), false) {
@@ -6488,6 +6696,44 @@ fn append_lifecycle_log_fields_for_config(
     append_log_fields_for_config_with_policy(config_dir, state, level, message, fields, false)
 }
 
+fn append_startup_phase_completed_for_config(
+    config_dir: &Path,
+    state: &Path,
+    phase: &str,
+    started_at: Instant,
+    mut fields: BTreeMap<String, String>,
+) -> io::Result<()> {
+    fields.insert("phase".to_owned(), phase.to_owned());
+    fields.insert("elapsed".to_owned(), format!("{:?}", started_at.elapsed()));
+    append_lifecycle_log_fields_for_config(
+        config_dir,
+        state,
+        "info",
+        "[Startup] phase completed",
+        fields,
+    )
+}
+
+fn append_startup_phase_failed_for_config(
+    config_dir: &Path,
+    state: &Path,
+    phase: &str,
+    started_at: Instant,
+    error: &str,
+    mut fields: BTreeMap<String, String>,
+) -> io::Result<()> {
+    fields.insert("phase".to_owned(), phase.to_owned());
+    fields.insert("elapsed".to_owned(), format!("{:?}", started_at.elapsed()));
+    fields.insert("error".to_owned(), error.to_owned());
+    append_lifecycle_log_fields_for_config(
+        config_dir,
+        state,
+        "warn",
+        "[Startup] phase failed",
+        fields,
+    )
+}
+
 fn append_log_fields_for_config_with_policy(
     config_dir: &Path,
     state: &Path,
@@ -6540,6 +6786,24 @@ fn extend_runtime_report_log_fields(fields: &mut BTreeMap<String, String>, repor
     insert_log_value(fields, "runtime_control", report.get("runtimeControl"));
     insert_log_value(fields, "tproxy_port", report.get("tproxyPort"));
     insert_log_value(fields, "fake_runtime", report.get("fakeRuntime"));
+    insert_log_value(fields, "allocator_profile", report.get("allocatorProfile"));
+    if let Some(reclaim) = report.get("allocatorReclaim").and_then(Value::as_object) {
+        insert_log_value(
+            fields,
+            "allocator_old_owner_closed",
+            reclaim.get("oldOwnerClosed"),
+        );
+        insert_log_value(
+            fields,
+            "allocator_startup_control_built",
+            reclaim.get("startupControlBuilt"),
+        );
+        insert_log_value(
+            fields,
+            "allocator_reload_scoped_resources_flushed",
+            reclaim.get("reloadScopedResourcesFlushed"),
+        );
+    }
     if let Some(dataplane) = report.get("residentDataplane").and_then(Value::as_object) {
         insert_log_value(
             fields,
@@ -6563,6 +6827,24 @@ fn extend_runtime_report_log_fields(fields: &mut BTreeMap<String, String>, repor
             dataplane.get("udp_packet_workers"),
         );
     }
+}
+
+fn append_startup_reclaim_decision_log_for_config(
+    config_dir: &Path,
+    state: &Path,
+    report: &Value,
+    force: bool,
+) -> io::Result<()> {
+    let mut fields = BTreeMap::new();
+    fields.insert("force".to_owned(), force.to_string());
+    extend_runtime_report_log_fields(&mut fields, report);
+    append_lifecycle_log_fields_for_config(
+        config_dir,
+        state,
+        "info",
+        "[Startup] post-startup gc decision",
+        fields,
+    )
 }
 
 fn insert_log_value(fields: &mut BTreeMap<String, String>, key: &str, value: Option<&Value>) {
