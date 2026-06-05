@@ -735,11 +735,12 @@ fn run_product_server_command(args: &[String], _version: &str) -> DaedProductOut
     fields.insert("state".to_owned(), path_string(&options.state));
     fields.insert("web_root".to_owned(), path_string(&options.web_root));
     fields.insert("api_only".to_owned(), options.api_only.to_string());
-    let _ = append_log_fields_for_config(
+    fields.insert("pid".to_owned(), std::process::id().to_string());
+    let _ = append_lifecycle_log_fields_for_config(
         &options.config_dir,
         &options.state,
         "info",
-        "Rust daed product log store initialized",
+        "[Startup] product log store initialized",
         fields,
     );
     let runtime = Arc::new(ProductRuntimeManager::new());
@@ -751,20 +752,20 @@ fn run_product_server_command(args: &[String], _version: &str) -> DaedProductOut
         return DaedProductOutput::error(format!("install signal control failed: {err}"));
     }
     if should_restore_runtime_on_start(&options.state).unwrap_or(false) {
-        let _ = append_log_for_config(
+        let _ = append_lifecycle_log_for_config(
             &options.config_dir,
             &options.state,
             "info",
-            "startup runtime restore started by Rust daed",
+            "[Startup] runtime restore requested",
         );
         if let Err(err) =
             restore_runtime_from_state(&runtime, &options.state, Some(&options.config_dir))
         {
-            let _ = append_log_for_config(
+            let _ = append_lifecycle_log_for_config(
                 &options.config_dir,
                 &options.state,
                 "error",
-                &format!("startup runtime restore failed: {err}"),
+                &format!("[Startup] runtime restore failed: {err}"),
             );
             return DaedProductOutput::error(format!("startup runtime restore failed: {err}"));
         }
@@ -773,11 +774,11 @@ fn run_product_server_command(args: &[String], _version: &str) -> DaedProductOut
     let mut fields = BTreeMap::new();
     fields.insert("listen".to_owned(), options.listen.clone());
     fields.insert("api_only".to_owned(), options.api_only.to_string());
-    let _ = append_log_fields_for_config(
+    let _ = append_lifecycle_log_fields_for_config(
         &options.config_dir,
         &options.state,
         "info",
-        &format!("Listen on http://{}", options.listen),
+        "[Startup] HTTP listener ready",
         fields,
     );
     let app = AppState {
@@ -801,19 +802,56 @@ fn restore_runtime_from_state(
 ) -> Result<Value, String> {
     let log_config_dir =
         config_dir.unwrap_or_else(|| state.parent().unwrap_or(Path::new(DEFAULT_CONFIG_DIR)));
-    let _ = append_log_for_config(
+    let _ = append_lifecycle_log_for_config(
         log_config_dir,
         state,
         "info",
         "[Startup] runtime restore started",
     );
     let preview = materialize_runtime(state, config_dir, true).map_err(|err| err.to_string())?;
+    let mut fields = BTreeMap::new();
+    fields.insert("source".to_owned(), "startup-restore".to_owned());
+    extend_runtime_materialization_log_fields(&mut fields, &preview);
+    let _ = append_lifecycle_log_fields_for_config(
+        log_config_dir,
+        state,
+        "info",
+        "[Startup] runtime config preview materialized",
+        fields,
+    );
     let content = preview["content"]
         .as_str()
         .ok_or_else(|| "runtime materializer did not return content".to_owned())?;
     let config = build_runtime_config_from_content(content)?;
+    let mut fields = BTreeMap::new();
+    fields.insert("source".to_owned(), "startup-restore".to_owned());
+    fields.insert(
+        "tproxy_port".to_owned(),
+        config.global.tproxy_port.to_string(),
+    );
+    fields.insert(
+        "log_level".to_owned(),
+        normalize_runtime_log_level(&config.global.log_level).unwrap_or_else(|| "info".to_owned()),
+    );
+    let _ = append_lifecycle_log_fields_for_config(
+        log_config_dir,
+        state,
+        "info",
+        "[Startup] runtime config built",
+        fields,
+    );
     set_runtime_log_level_from_config(state, &config).map_err(|err| err.to_string())?;
     let outcome = runtime.reload(config, "startup-restore")?;
+    let mut fields = BTreeMap::new();
+    fields.insert("source".to_owned(), "startup-restore".to_owned());
+    extend_runtime_report_log_fields(&mut fields, &outcome.report);
+    let _ = append_lifecycle_log_fields_for_config(
+        log_config_dir,
+        state,
+        "info",
+        "[Startup] runtime owner reload finished",
+        fields,
+    );
     let applied = match materialize_runtime(state, config_dir, false) {
         Ok(applied) => applied,
         Err(err) => {
@@ -834,7 +872,8 @@ fn restore_runtime_from_state(
             product_log_field_value(tproxy_port),
         );
     }
-    let _ = append_log_fields_for_config(
+    extend_runtime_materialization_log_fields(&mut fields, &applied);
+    let _ = append_lifecycle_log_fields_for_config(
         log_config_dir,
         state,
         "info",
@@ -874,7 +913,7 @@ fn install_product_signal_thread(
                     let mut fields = BTreeMap::new();
                     fields.insert("signal".to_owned(), signal.to_string());
                     fields.insert("source".to_owned(), "signal".to_owned());
-                    let _ = append_log_fields_for_config(
+                    let _ = append_lifecycle_log_fields_for_config(
                         &config_dir,
                         &state,
                         "info",
@@ -882,11 +921,11 @@ fn install_product_signal_thread(
                         fields,
                     );
                     if !should_restore_runtime_on_start(&state).unwrap_or(false) {
-                        let _ = append_log_for_config(
+                        let _ = append_lifecycle_log_for_config(
                             &config_dir,
                             &state,
                             "info",
-                            "runtime signal reload skipped because persisted running state is false",
+                            "[Reload] signal reload skipped because persisted running state is false",
                         );
                         continue;
                     }
@@ -896,7 +935,7 @@ fn install_product_signal_thread(
                             let mut fields = BTreeMap::new();
                             fields.insert("source".to_owned(), "signal".to_owned());
                             fields.insert("applied".to_owned(), "true".to_owned());
-                            let _ = append_log_fields_for_config(
+                            let _ = append_lifecycle_log_fields_for_config(
                                 &config_dir,
                                 &state,
                                 "info",
@@ -908,7 +947,7 @@ fn install_product_signal_thread(
                             let mut fields = BTreeMap::new();
                             fields.insert("source".to_owned(), "signal".to_owned());
                             fields.insert("error".to_owned(), err.clone());
-                            let _ = append_log_fields_for_config(
+                            let _ = append_lifecycle_log_fields_for_config(
                                 &config_dir,
                                 &state,
                                 "error",
@@ -921,11 +960,11 @@ fn install_product_signal_thread(
                 libc::SIGTERM | libc::SIGINT | libc::SIGQUIT => {
                     let _ = runtime.stop();
                     let _ = mark_runtime_process_stopped(&state);
-                    let _ = append_log_for_config(
+                    let _ = append_lifecycle_log_for_config(
                         &config_dir,
                         &state,
                         "info",
-                        "runtime process stopped by signal",
+                        "[Stop] runtime process stopped by signal",
                     );
                     std::process::exit(0);
                 }
@@ -2800,7 +2839,7 @@ fn api_runtime_reload(app: &AppState, request: &HttpRequest) -> HttpResponse {
     let mut request_fields = BTreeMap::new();
     request_fields.insert("source".to_owned(), "api".to_owned());
     request_fields.insert("dry".to_owned(), dry.to_string());
-    let _ = append_log_fields_for_config(
+    let _ = append_lifecycle_log_fields_for_config(
         &app.config_dir,
         &app.state,
         "info",
@@ -2814,7 +2853,7 @@ fn api_runtime_reload(app: &AppState, request: &HttpRequest) -> HttpResponse {
             fields.insert("source".to_owned(), "api".to_owned());
             fields.insert("dry".to_owned(), dry.to_string());
             fields.insert("error".to_owned(), err.to_string());
-            let _ = append_log_fields_for_config(
+            let _ = append_lifecycle_log_fields_for_config(
                 &app.config_dir,
                 &app.state,
                 "error",
@@ -2824,6 +2863,17 @@ fn api_runtime_reload(app: &AppState, request: &HttpRequest) -> HttpResponse {
             return HttpResponse::json(400, json!({"error": err.to_string()}));
         }
     };
+    let mut fields = BTreeMap::new();
+    fields.insert("source".to_owned(), "api".to_owned());
+    fields.insert("dry".to_owned(), dry.to_string());
+    extend_runtime_materialization_log_fields(&mut fields, &preview);
+    let _ = append_lifecycle_log_fields_for_config(
+        &app.config_dir,
+        &app.state,
+        "info",
+        "[Reload] Runtime config preview materialized",
+        fields,
+    );
     let content = match preview.get("content").and_then(Value::as_str) {
         Some(content) => content,
         None => {
@@ -2834,7 +2884,7 @@ fn api_runtime_reload(app: &AppState, request: &HttpRequest) -> HttpResponse {
                 "error".to_owned(),
                 "runtime materializer did not return content".to_owned(),
             );
-            let _ = append_log_fields_for_config(
+            let _ = append_lifecycle_log_fields_for_config(
                 &app.config_dir,
                 &app.state,
                 "error",
@@ -2854,7 +2904,7 @@ fn api_runtime_reload(app: &AppState, request: &HttpRequest) -> HttpResponse {
             fields.insert("source".to_owned(), "api".to_owned());
             fields.insert("dry".to_owned(), dry.to_string());
             fields.insert("error".to_owned(), err.clone());
-            let _ = append_log_fields_for_config(
+            let _ = append_lifecycle_log_fields_for_config(
                 &app.config_dir,
                 &app.state,
                 "error",
@@ -2864,12 +2914,30 @@ fn api_runtime_reload(app: &AppState, request: &HttpRequest) -> HttpResponse {
             return HttpResponse::json(400, json!({"error": err}));
         }
     };
+    let mut fields = BTreeMap::new();
+    fields.insert("source".to_owned(), "api".to_owned());
+    fields.insert("dry".to_owned(), dry.to_string());
+    fields.insert(
+        "tproxy_port".to_owned(),
+        config.global.tproxy_port.to_string(),
+    );
+    fields.insert(
+        "log_level".to_owned(),
+        normalize_runtime_log_level(&config.global.log_level).unwrap_or_else(|| "info".to_owned()),
+    );
+    let _ = append_lifecycle_log_fields_for_config(
+        &app.config_dir,
+        &app.state,
+        "info",
+        "[Reload] Runtime config built",
+        fields,
+    );
     if dry {
         let mut fields = BTreeMap::new();
         fields.insert("source".to_owned(), "api".to_owned());
         fields.insert("dry".to_owned(), "true".to_owned());
         fields.insert("applied".to_owned(), "false".to_owned());
-        let _ = append_log_fields_for_config(
+        let _ = append_lifecycle_log_fields_for_config(
             &app.config_dir,
             &app.state,
             "info",
@@ -2887,7 +2955,7 @@ fn api_runtime_reload(app: &AppState, request: &HttpRequest) -> HttpResponse {
         fields.insert("source".to_owned(), "api".to_owned());
         fields.insert("dry".to_owned(), "false".to_owned());
         fields.insert("error".to_owned(), err.to_string());
-        let _ = append_log_fields_for_config(
+        let _ = append_lifecycle_log_fields_for_config(
             &app.config_dir,
             &app.state,
             "error",
@@ -2903,7 +2971,7 @@ fn api_runtime_reload(app: &AppState, request: &HttpRequest) -> HttpResponse {
             fields.insert("source".to_owned(), "api".to_owned());
             fields.insert("dry".to_owned(), "false".to_owned());
             fields.insert("error".to_owned(), err.clone());
-            let _ = append_log_fields_for_config(
+            let _ = append_lifecycle_log_fields_for_config(
                 &app.config_dir,
                 &app.state,
                 "error",
@@ -2913,6 +2981,17 @@ fn api_runtime_reload(app: &AppState, request: &HttpRequest) -> HttpResponse {
             return HttpResponse::json(500, json!({"error": err}));
         }
     };
+    let mut fields = BTreeMap::new();
+    fields.insert("source".to_owned(), "api".to_owned());
+    fields.insert("dry".to_owned(), "false".to_owned());
+    extend_runtime_report_log_fields(&mut fields, &runtime);
+    let _ = append_lifecycle_log_fields_for_config(
+        &app.config_dir,
+        &app.state,
+        "info",
+        "[Reload] Runtime owner reload finished",
+        fields,
+    );
     match materialize_runtime(&app.state, Some(&app.config_dir), false) {
         Ok(report) => {
             let mut fields = BTreeMap::new();
@@ -2928,7 +3007,8 @@ fn api_runtime_reload(app: &AppState, request: &HttpRequest) -> HttpResponse {
                     product_log_field_value(tproxy_port),
                 );
             }
-            let _ = append_log_fields_for_config(
+            extend_runtime_materialization_log_fields(&mut fields, &report);
+            let _ = append_lifecycle_log_fields_for_config(
                 &app.config_dir,
                 &app.state,
                 "info",
@@ -2949,7 +3029,7 @@ fn api_runtime_reload(app: &AppState, request: &HttpRequest) -> HttpResponse {
             fields.insert("source".to_owned(), "api".to_owned());
             fields.insert("dry".to_owned(), "false".to_owned());
             fields.insert("error".to_owned(), err.to_string());
-            let _ = append_log_fields_for_config(
+            let _ = append_lifecycle_log_fields_for_config(
                 &app.config_dir,
                 &app.state,
                 "error",
@@ -2967,11 +3047,11 @@ fn api_runtime_stop(app: &AppState) -> HttpResponse {
             if let Err(err) = mark_system_stopped(&app.state) {
                 return HttpResponse::json(500, json!({"error": err.to_string()}));
             }
-            let _ = append_log_for_config(
+            let _ = append_lifecycle_log_for_config(
                 &app.config_dir,
                 &app.state,
                 "info",
-                "runtime stopped by Rust daed",
+                "[Stop] runtime stopped by Rust daed",
             );
             if let Value::Object(map) = &mut report {
                 map.insert("runtime".to_owned(), app.runtime.summary());
@@ -6379,6 +6459,15 @@ fn append_log_for_config(
     append_log_fields_for_config(config_dir, state, level, message, BTreeMap::new())
 }
 
+fn append_lifecycle_log_for_config(
+    config_dir: &Path,
+    state: &Path,
+    level: &str,
+    message: &str,
+) -> io::Result<()> {
+    append_lifecycle_log_fields_for_config(config_dir, state, level, message, BTreeMap::new())
+}
+
 fn append_log_fields_for_config(
     config_dir: &Path,
     state: &Path,
@@ -6386,12 +6475,35 @@ fn append_log_fields_for_config(
     message: &str,
     fields: BTreeMap<String, String>,
 ) -> io::Result<()> {
+    append_log_fields_for_config_with_policy(config_dir, state, level, message, fields, true)
+}
+
+fn append_lifecycle_log_fields_for_config(
+    config_dir: &Path,
+    state: &Path,
+    level: &str,
+    message: &str,
+    fields: BTreeMap<String, String>,
+) -> io::Result<()> {
+    append_log_fields_for_config_with_policy(config_dir, state, level, message, fields, false)
+}
+
+fn append_log_fields_for_config_with_policy(
+    config_dir: &Path,
+    state: &Path,
+    level: &str,
+    message: &str,
+    fields: BTreeMap<String, String>,
+    respect_runtime_log_level: bool,
+) -> io::Result<()> {
     let Some(level) = normalize_log_level_name(level) else {
         return Ok(());
     };
-    let runtime_level = current_runtime_log_level(state)?;
-    if !log_level_enabled(&level, &runtime_level) {
-        return Ok(());
+    if respect_runtime_log_level {
+        let runtime_level = current_runtime_log_level(state)?;
+        if !log_level_enabled(&level, &runtime_level) {
+            return Ok(());
+        }
     }
     ensure_state_schema(state)?;
     let conn = open_state_connection(state)?;
@@ -6407,6 +6519,60 @@ fn append_log_fields_for_config(
     append_log_line(&log_file, &line)?;
     prune_log_file_if_needed(&log_file, max_entries, max_bytes, id)?;
     Ok(())
+}
+
+fn extend_runtime_materialization_log_fields(
+    fields: &mut BTreeMap<String, String>,
+    report: &Value,
+) {
+    insert_log_value(fields, "bytes", report.get("bytes"));
+    insert_log_value(fields, "content_included", report.get("contentIncluded"));
+    insert_log_value(fields, "generated_at", report.get("generatedAt"));
+    if let Some(selected) = report.get("selected").and_then(Value::as_object) {
+        insert_log_value(fields, "selected_config_id", selected.get("configId"));
+        insert_log_value(fields, "selected_dns_id", selected.get("dnsId"));
+        insert_log_value(fields, "selected_routing_id", selected.get("routingId"));
+    }
+}
+
+fn extend_runtime_report_log_fields(fields: &mut BTreeMap<String, String>, report: &Value) {
+    insert_log_value(fields, "status", report.get("status"));
+    insert_log_value(fields, "runtime_control", report.get("runtimeControl"));
+    insert_log_value(fields, "tproxy_port", report.get("tproxyPort"));
+    insert_log_value(fields, "fake_runtime", report.get("fakeRuntime"));
+    if let Some(dataplane) = report.get("residentDataplane").and_then(Value::as_object) {
+        insert_log_value(
+            fields,
+            "resident_dataplane_enabled",
+            dataplane.get("enabled"),
+        );
+        insert_log_value(fields, "resident_dataplane_status", dataplane.get("status"));
+        insert_log_value(
+            fields,
+            "resident_dataplane_proxy_count",
+            dataplane.get("proxy_count"),
+        );
+        insert_log_value(
+            fields,
+            "resident_tcp_dial_mode",
+            dataplane.get("tcp_dial_mode"),
+        );
+        insert_log_value(
+            fields,
+            "resident_udp_packet_workers",
+            dataplane.get("udp_packet_workers"),
+        );
+    }
+}
+
+fn insert_log_value(fields: &mut BTreeMap<String, String>, key: &str, value: Option<&Value>) {
+    let Some(value) = value else {
+        return;
+    };
+    if value.is_null() {
+        return;
+    }
+    fields.insert(key.to_owned(), product_log_field_value(value));
 }
 
 fn list_logs_value(
@@ -9663,9 +9829,17 @@ global {
         let empty = list_logs_value(&dir, &state, Some("all"), None, 500).unwrap();
         assert_eq!(empty["items"].as_array().unwrap().len(), 0);
 
-        append_log_for_config(&dir, &state, "info", "after clear").unwrap();
+        set_metadata(&state, "runtime_log_level", "fatal").unwrap();
+        append_log_for_config(&dir, &state, "info", "filtered after clear").unwrap();
+        append_lifecycle_log_for_config(&dir, &state, "info", "[Startup] lifecycle after clear")
+            .unwrap();
         let after_clear = list_logs_value(&dir, &state, Some("all"), None, 500).unwrap();
+        assert_eq!(after_clear["items"].as_array().unwrap().len(), 1);
         assert_eq!(after_clear["items"][0]["id"], json!(1));
+        assert_eq!(
+            after_clear["items"][0]["message"],
+            json!("[Startup] lifecycle after clear")
+        );
         fs::remove_dir_all(dir).unwrap();
     }
 
@@ -9883,6 +10057,7 @@ global {
             runtime: Arc::new(ProductRuntimeManager::new()),
             http_metrics: Arc::new(ProductHttpMetrics::default()),
         };
+        set_metadata(&state, "runtime_log_level", "fatal").unwrap();
         let request = HttpRequest {
             method: "POST".to_owned(),
             path: "/api/runtime/reload".to_owned(),
@@ -9900,15 +10075,23 @@ global {
         );
         let logs = list_logs_value(&dir, &state, Some("all"), Some("[Reload]"), 500).unwrap();
         let items = logs["items"].as_array().unwrap();
-        assert_eq!(items.len(), 2, "{logs}");
+        assert_eq!(items.len(), 4, "{logs}");
         assert_eq!(
             items[0]["message"],
             json!("[Reload] Received reload request")
         );
         assert_eq!(items[0]["fields"]["source"], json!("api"));
         assert_eq!(items[0]["fields"]["dry"], json!("true"));
-        assert_eq!(items[1]["message"], json!("[Reload] Preview finished"));
-        assert_eq!(items[1]["fields"]["applied"], json!("false"));
+        assert_eq!(
+            items[1]["message"],
+            json!("[Reload] Runtime config preview materialized")
+        );
+        assert_eq!(items[1]["fields"]["content_included"], json!("true"));
+        assert!(items[1]["fields"]["bytes"].as_str().is_some());
+        assert_eq!(items[2]["message"], json!("[Reload] Runtime config built"));
+        assert_eq!(items[2]["fields"]["log_level"], json!("info"));
+        assert_eq!(items[3]["message"], json!("[Reload] Preview finished"));
+        assert_eq!(items[3]["fields"]["applied"], json!("false"));
 
         fs::remove_dir_all(dir).unwrap();
     }
