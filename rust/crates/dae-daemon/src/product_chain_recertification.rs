@@ -34,7 +34,8 @@ use daed2_rehearsal::{
 use datapath_core::datapath_core_gate_json;
 use dependency_boundary::go_mod_dependency_boundary_json;
 use go_free_product_chain::{
-    attach_go_free_product_chain_gate_from_report, go_free_product_chain_gate_json,
+    attach_go_free_product_chain_gate_from_report, default_product_package_scan_json,
+    go_free_product_chain_gate_json,
 };
 use host_write_freeze::{
     attach_production_host_write_plan_freeze, materialize_production_host_write_plan_freeze_report,
@@ -713,12 +714,14 @@ fn report_value(
         release_default_switch_gate["release_default_switch_admission_ready"]
             .as_bool()
             .unwrap_or(false);
+    let default_product_package_scan = default_product_package_scan_json(options);
     let go_free_product_chain_gate = go_free_product_chain_gate_json(
         executed,
         &release_default_switch_gate,
         &resident_default_daemon_switch_gate,
         dependency_boundary_preserved,
         product_chain_branch_contract_preserved,
+        &default_product_package_scan,
     )
     .report;
     let go_free_product_chain_ready = go_free_product_chain_gate["go_free_product_chain_ready"]
@@ -826,6 +829,7 @@ fn report_value(
         "service": service,
         "go_mod": go_mod,
         "runtime_control_api_source_contract": runtime_control_api,
+        "default_product_package_scan": default_product_package_scan,
         "sibling_repos": repos,
         "dirty_sibling_repos": dirty_repos,
         "missing_sibling_repos": missing_repos,
