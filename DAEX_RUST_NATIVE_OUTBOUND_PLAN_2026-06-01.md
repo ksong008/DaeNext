@@ -14179,6 +14179,34 @@ Boundary:
   - High-frequency resident flow diagnostics remain runtime-level gated and
     should not be reintroduced as normal task-log noise.
 
+Validation and deployment:
+  - Local validation:
+      `cargo fmt --all --manifest-path rust/Cargo.toml`
+      `cargo test --manifest-path rust/Cargo.toml -p dae-daemon`
+      `cargo build --manifest-path rust/Cargo.toml -p dae-daemon --bin daed
+       --release --features native-ebpf`
+  - Local commit:
+      `390e3744 Restore compact startup datapath evidence logs`
+  - Align chain commits:
+      daed/wing and sibling wing: `b8acb90 daex: align dae core head`
+      daed parent: `5661659 daex: align wing submodule head`
+  - Deployed `/usr/bin/daed` on `10.10.10.2`:
+      `fa9c9bb064f654fdfc70cb68d87f4b41237af11d5a7b3b5fd1536c1a3832de28`
+  - Stable Go rollback anchor remained untouched:
+      `/usr/bin/daed-daex-align-webui-cpu-20260601`
+  - Remote service validation:
+      `ActiveState=active`
+      `SubState=running`
+      `/api/health -> {"healthCheck":1}`
+      `/api/general/state -> running=true, modified=false,
+       attachBackend=tcx, netnsLinkMode=netkit`
+  - Remote startup task logs observed:
+      BPF memory warning
+      `Rust/Aya BPF loader loaded`
+      `Loaded eBPF programs and maps` with `program_count=6`, `map_count=13`
+      six generic bind entries generated from runtime report interfaces
+      `Routing match set len: 61/1024`
+
 ## 2026-06-05 10:03 +0800 - Go daed startup/reload log parity audit
 
 Scope:
