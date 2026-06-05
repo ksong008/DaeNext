@@ -738,6 +738,7 @@ fn parse_resident_adapter_matrix_args(args: &[String]) -> Result<PathBuf, String
 }
 
 fn run_product_server_command(args: &[String], _version: &str) -> DaedProductOutput {
+    let startup_started_at = Instant::now();
     let options = match parse_run_args(args) {
         Ok(options) => options,
         Err(err) => return DaedProductOutput::usage(err),
@@ -749,19 +750,6 @@ fn run_product_server_command(args: &[String], _version: &str) -> DaedProductOut
         return DaedProductOutput::error(format!("init log store failed: {err}"));
     }
     register_resident_event_product_log_sink(&options.config_dir, &options.state);
-    let mut fields = BTreeMap::new();
-    fields.insert("config_dir".to_owned(), path_string(&options.config_dir));
-    fields.insert("state".to_owned(), path_string(&options.state));
-    fields.insert("web_root".to_owned(), path_string(&options.web_root));
-    fields.insert("api_only".to_owned(), options.api_only.to_string());
-    fields.insert("pid".to_owned(), std::process::id().to_string());
-    let _ = append_lifecycle_log_fields_for_config(
-        &options.config_dir,
-        &options.state,
-        "info",
-        "[Startup] product log store initialized",
-        fields,
-    );
     let runtime = Arc::new(ProductRuntimeManager::new());
     if let Err(err) = install_product_signal_thread(
         Arc::clone(&runtime),
@@ -771,12 +759,6 @@ fn run_product_server_command(args: &[String], _version: &str) -> DaedProductOut
         return DaedProductOutput::error(format!("install signal control failed: {err}"));
     }
     if should_restore_runtime_on_start(&options.state).unwrap_or(false) {
-        let _ = append_lifecycle_log_for_config(
-            &options.config_dir,
-            &options.state,
-            "info",
-            "[Startup] runtime restore requested",
-        );
         if let Err(err) = restore_runtime_from_state(
             &runtime,
             &options.state,
@@ -801,7 +783,7 @@ fn run_product_server_command(args: &[String], _version: &str) -> DaedProductOut
         runtime,
         http_metrics: Arc::new(ProductHttpMetrics::default()),
     };
-    match serve_forever(&options.listen, app) {
+    match serve_forever(&options.listen, app, startup_started_at) {
         Ok(()) => DaedProductOutput::ok(String::new()),
         Err(err) => DaedProductOutput::error(format!("run failed: {err}")),
     }
@@ -817,101 +799,14 @@ fn restore_runtime_from_state(
         config_dir.unwrap_or_else(|| state.parent().unwrap_or(Path::new(DEFAULT_CONFIG_DIR)));
     let lifecycle_started_at = Instant::now();
     let source = log_mode.source();
-    let _ = append_lifecycle_log_for_config(
-        log_config_dir,
-        state,
-        "info",
-        if log_mode.is_startup() {
-            "[Startup] runtime restore started"
-        } else {
-            "[Reload] Runtime restore started"
-        },
-    );
-    let materialize_started_at = Instant::now();
     let preview = materialize_runtime(state, config_dir, true).map_err(|err| err.to_string())?;
-    let mut fields = BTreeMap::new();
-    fields.insert("source".to_owned(), source.to_owned());
-    extend_runtime_materialization_log_fields(&mut fields, &preview);
-    let _ = append_lifecycle_log_fields_for_config(
-        log_config_dir,
-        state,
-        "info",
-        if log_mode.is_startup() {
-            "[Startup] runtime config preview materialized"
-        } else {
-            "[Reload] Runtime config preview materialized"
-        },
-        fields.clone(),
-    );
-    if log_mode.is_startup() {
-        let _ = append_startup_phase_completed_for_config(
-            log_config_dir,
-            state,
-            "runtime.materialize.preview",
-            materialize_started_at,
-            fields,
-        );
-    }
     let content = preview["content"]
         .as_str()
         .ok_or_else(|| "runtime materializer did not return content".to_owned())?;
-    let config_build_started_at = Instant::now();
     let config = build_runtime_config_from_content(content)?;
-    let mut fields = BTreeMap::new();
-    fields.insert("source".to_owned(), source.to_owned());
-    fields.insert(
-        "tproxy_port".to_owned(),
-        config.global.tproxy_port.to_string(),
-    );
-    fields.insert(
-        "log_level".to_owned(),
-        normalize_runtime_log_level(&config.global.log_level).unwrap_or_else(|| "info".to_owned()),
-    );
-    let _ = append_lifecycle_log_fields_for_config(
-        log_config_dir,
-        state,
-        "info",
-        if log_mode.is_startup() {
-            "[Startup] runtime config built"
-        } else {
-            "[Reload] Runtime config built"
-        },
-        fields.clone(),
-    );
-    if log_mode.is_startup() {
-        let _ = append_startup_phase_completed_for_config(
-            log_config_dir,
-            state,
-            "runtime.config.build",
-            config_build_started_at,
-            fields,
-        );
-    } else {
-        let _ = append_lifecycle_log_fields_for_config(
-            log_config_dir,
-            state,
-            "warn",
-            "[Reload] Load new control plane",
-            fields,
-        );
-    }
     set_runtime_log_level_from_config(state, &config).map_err(|err| err.to_string())?;
     let control_plane_started_at = Instant::now();
     let outcome = runtime.reload(config, source)?;
-    let mut fields = BTreeMap::new();
-    fields.insert("source".to_owned(), source.to_owned());
-    extend_runtime_report_log_fields(&mut fields, &outcome.report);
-    let _ = append_lifecycle_log_fields_for_config(
-        log_config_dir,
-        state,
-        "info",
-        if log_mode.is_startup() {
-            "[Startup] runtime owner reload finished"
-        } else {
-            "[Reload] Runtime owner reload finished"
-        },
-        fields.clone(),
-    );
     if log_mode.is_startup() {
         let _ = append_startup_reclaim_decision_log_for_config(
             log_config_dir,
@@ -924,32 +819,16 @@ fn restore_runtime_from_state(
             state,
             "post-startup.gc",
             control_plane_started_at,
-            fields.clone(),
+            BTreeMap::new(),
         );
         let _ = append_startup_phase_completed_for_config(
             log_config_dir,
             state,
             "control-plane.core",
             control_plane_started_at,
-            fields.clone(),
-        );
-    } else {
-        let _ = append_lifecycle_log_fields_for_config(
-            log_config_dir,
-            state,
-            "warn",
-            "[Reload] Stopped old control plane",
-            fields.clone(),
-        );
-        let _ = append_lifecycle_log_fields_for_config(
-            log_config_dir,
-            state,
-            "warn",
-            "[Reload] Serve",
-            fields,
+            BTreeMap::new(),
         );
     }
-    let apply_materialize_started_at = Instant::now();
     let applied = match materialize_runtime(state, config_dir, false) {
         Ok(applied) => applied,
         Err(err) => {
@@ -982,53 +861,14 @@ fn restore_runtime_from_state(
             return Err(err.to_string());
         }
     };
-    let mut fields = BTreeMap::new();
-    fields.insert("source".to_owned(), source.to_owned());
-    fields.insert("applied".to_owned(), "true".to_owned());
-    if let Some(status) = outcome.report.get("status").and_then(Value::as_str) {
-        fields.insert("status".to_owned(), status.to_owned());
-    }
-    if let Some(tproxy_port) = outcome.report.get("tproxyPort") {
-        fields.insert(
-            "tproxy_port".to_owned(),
-            product_log_field_value(tproxy_port),
-        );
-    }
-    extend_runtime_materialization_log_fields(&mut fields, &applied);
-    let _ = append_lifecycle_log_fields_for_config(
-        log_config_dir,
-        state,
-        "info",
-        if log_mode.is_startup() {
-            "[Startup] runtime restore finished"
-        } else {
-            "[Reload] Runtime restore finished"
-        },
-        fields.clone(),
-    );
     if log_mode.is_startup() {
-        let _ = append_startup_phase_completed_for_config(
-            log_config_dir,
-            state,
-            "runtime.materialize.applied",
-            apply_materialize_started_at,
-            fields.clone(),
-        );
         let _ = append_startup_phase_completed_for_config(
             log_config_dir,
             state,
             "control-plane.create.total",
             lifecycle_started_at,
-            fields.clone(),
+            BTreeMap::new(),
         );
-        let _ = append_startup_phase_completed_for_config(
-            log_config_dir,
-            state,
-            "startup.total",
-            lifecycle_started_at,
-            fields,
-        );
-        let _ = append_lifecycle_log_for_config(log_config_dir, state, "info", "Ready");
     }
     Ok(json!({
         "restored": true,
@@ -1060,6 +900,7 @@ fn install_product_signal_thread(
         while let Ok(signal) = wait_product_signal() {
             match signal {
                 libc::SIGHUP | libc::SIGUSR1 => {
+                    let reload_started_at = Instant::now();
                     let mut fields = BTreeMap::new();
                     fields.insert("signal".to_owned(), signal.to_string());
                     fields.insert("source".to_owned(), "signal".to_owned());
@@ -1090,6 +931,10 @@ fn install_product_signal_thread(
                             let mut fields = BTreeMap::new();
                             fields.insert("source".to_owned(), "signal".to_owned());
                             fields.insert("applied".to_owned(), "true".to_owned());
+                            fields.insert(
+                                "elapsed".to_owned(),
+                                format!("{:?}", reload_started_at.elapsed()),
+                            );
                             let _ = append_lifecycle_log_fields_for_config(
                                 &config_dir,
                                 &state,
@@ -1764,7 +1609,7 @@ fn migrate_wing_db(from_wing_db: &Path, to: &Path, force: bool) -> io::Result<Va
     }))
 }
 
-fn serve_forever(listen: &str, app: AppState) -> io::Result<()> {
+fn serve_forever(listen: &str, app: AppState, startup_started_at: Instant) -> io::Result<()> {
     let listen_started_at = Instant::now();
     let listener = TcpListener::bind(listen)?;
     let app = Arc::new(app);
@@ -1793,33 +1638,23 @@ fn serve_forever(listen: &str, app: AppState) -> io::Result<()> {
         };
         handles.push(handle);
     }
-    let mut fields = BTreeMap::new();
-    fields.insert("listen".to_owned(), listen.to_owned());
-    if let Ok(local_addr) = listener.local_addr() {
-        fields.insert("local_addr".to_owned(), local_addr.to_string());
-    }
-    fields.insert("api_only".to_owned(), app.api_only.to_string());
-    fields.insert("http_workers".to_owned(), config.worker_count.to_string());
-    fields.insert(
-        "http_queue_capacity".to_owned(),
-        config.queue_capacity.to_string(),
-    );
-    fields.insert(
-        "http_worker_stack_bytes".to_owned(),
-        config.worker_stack_bytes.to_string(),
-    );
-    let _ = append_lifecycle_log_fields_for_config(
-        &app.config_dir,
-        &app.state,
-        "info",
-        "[Startup] HTTP listener ready",
-        fields.clone(),
-    );
     let _ = append_startup_phase_completed_for_config(
         &app.config_dir,
         &app.state,
         "product.http-listener",
         listen_started_at,
+        BTreeMap::new(),
+    );
+    let mut fields = BTreeMap::new();
+    fields.insert(
+        "elapsed".to_owned(),
+        format!("{:?}", startup_started_at.elapsed()),
+    );
+    let _ = append_lifecycle_log_fields_for_config(
+        &app.config_dir,
+        &app.state,
+        "info",
+        "[Startup] Finished",
         fields,
     );
     for stream in listener.incoming() {
@@ -3019,18 +2854,9 @@ fn sysfs_interfaces(
 }
 
 fn api_runtime_reload(app: &AppState, request: &HttpRequest) -> HttpResponse {
+    let reload_started_at = Instant::now();
     let body = json_body(request).unwrap_or_else(|_| json!({}));
     let dry = body.get("dry").and_then(Value::as_bool).unwrap_or(false);
-    let mut request_fields = BTreeMap::new();
-    request_fields.insert("source".to_owned(), "api".to_owned());
-    request_fields.insert("dry".to_owned(), dry.to_string());
-    let _ = append_lifecycle_log_fields_for_config(
-        &app.config_dir,
-        &app.state,
-        "info",
-        "[Reload] Received reload request",
-        request_fields,
-    );
     let preview = match materialize_runtime(&app.state, Some(&app.config_dir), true) {
         Ok(report) => report,
         Err(err) => {
@@ -3048,17 +2874,6 @@ fn api_runtime_reload(app: &AppState, request: &HttpRequest) -> HttpResponse {
             return HttpResponse::json(400, json!({"error": err.to_string()}));
         }
     };
-    let mut fields = BTreeMap::new();
-    fields.insert("source".to_owned(), "api".to_owned());
-    fields.insert("dry".to_owned(), dry.to_string());
-    extend_runtime_materialization_log_fields(&mut fields, &preview);
-    let _ = append_lifecycle_log_fields_for_config(
-        &app.config_dir,
-        &app.state,
-        "info",
-        "[Reload] Runtime config preview materialized",
-        fields,
-    );
     let content = match preview.get("content").and_then(Value::as_str) {
         Some(content) => content,
         None => {
@@ -3099,38 +2914,15 @@ fn api_runtime_reload(app: &AppState, request: &HttpRequest) -> HttpResponse {
             return HttpResponse::json(400, json!({"error": err}));
         }
     };
-    let mut fields = BTreeMap::new();
-    fields.insert("source".to_owned(), "api".to_owned());
-    fields.insert("dry".to_owned(), dry.to_string());
-    fields.insert(
-        "tproxy_port".to_owned(),
-        config.global.tproxy_port.to_string(),
-    );
-    fields.insert(
-        "log_level".to_owned(),
-        normalize_runtime_log_level(&config.global.log_level).unwrap_or_else(|| "info".to_owned()),
-    );
-    let _ = append_lifecycle_log_fields_for_config(
-        &app.config_dir,
-        &app.state,
-        "info",
-        "[Reload] Runtime config built",
-        fields.clone(),
-    );
-    if !dry {
-        let _ = append_lifecycle_log_fields_for_config(
-            &app.config_dir,
-            &app.state,
-            "warn",
-            "[Reload] Load new control plane",
-            fields,
-        );
-    }
     if dry {
         let mut fields = BTreeMap::new();
         fields.insert("source".to_owned(), "api".to_owned());
         fields.insert("dry".to_owned(), "true".to_owned());
         fields.insert("applied".to_owned(), "false".to_owned());
+        fields.insert(
+            "elapsed".to_owned(),
+            format!("{:?}", reload_started_at.elapsed()),
+        );
         let _ = append_lifecycle_log_fields_for_config(
             &app.config_dir,
             &app.state,
@@ -3178,44 +2970,13 @@ fn api_runtime_reload(app: &AppState, request: &HttpRequest) -> HttpResponse {
     let mut fields = BTreeMap::new();
     fields.insert("source".to_owned(), "api".to_owned());
     fields.insert("dry".to_owned(), "false".to_owned());
-    extend_runtime_report_log_fields(&mut fields, &runtime);
-    let _ = append_lifecycle_log_fields_for_config(
-        &app.config_dir,
-        &app.state,
-        "info",
-        "[Reload] Runtime owner reload finished",
-        fields.clone(),
-    );
-    let _ = append_lifecycle_log_fields_for_config(
-        &app.config_dir,
-        &app.state,
-        "warn",
-        "[Reload] Stopped old control plane",
-        fields.clone(),
-    );
-    let _ = append_lifecycle_log_fields_for_config(
-        &app.config_dir,
-        &app.state,
-        "warn",
-        "[Reload] Serve",
-        fields,
+    fields.insert("applied".to_owned(), "true".to_owned());
+    fields.insert(
+        "elapsed".to_owned(),
+        format!("{:?}", reload_started_at.elapsed()),
     );
     match materialize_runtime(&app.state, Some(&app.config_dir), false) {
         Ok(report) => {
-            let mut fields = BTreeMap::new();
-            fields.insert("source".to_owned(), "api".to_owned());
-            fields.insert("dry".to_owned(), "false".to_owned());
-            fields.insert("applied".to_owned(), "true".to_owned());
-            if let Some(status) = runtime.get("status").and_then(Value::as_str) {
-                fields.insert("status".to_owned(), status.to_owned());
-            }
-            if let Some(tproxy_port) = runtime.get("tproxyPort") {
-                fields.insert(
-                    "tproxy_port".to_owned(),
-                    product_log_field_value(tproxy_port),
-                );
-            }
-            extend_runtime_materialization_log_fields(&mut fields, &report);
             let _ = append_lifecycle_log_fields_for_config(
                 &app.config_dir,
                 &app.state,
@@ -6701,8 +6462,9 @@ fn append_startup_phase_completed_for_config(
     state: &Path,
     phase: &str,
     started_at: Instant,
-    mut fields: BTreeMap<String, String>,
+    _fields: BTreeMap<String, String>,
 ) -> io::Result<()> {
+    let mut fields = BTreeMap::new();
     fields.insert("phase".to_owned(), phase.to_owned());
     fields.insert("elapsed".to_owned(), format!("{:?}", started_at.elapsed()));
     append_lifecycle_log_fields_for_config(
@@ -6767,117 +6529,18 @@ fn append_log_fields_for_config_with_policy(
     Ok(())
 }
 
-fn extend_runtime_materialization_log_fields(
-    fields: &mut BTreeMap<String, String>,
-    report: &Value,
-) {
-    insert_log_value(fields, "bytes", report.get("bytes"));
-    insert_log_value(fields, "content_included", report.get("contentIncluded"));
-    insert_log_value(fields, "generated_at", report.get("generatedAt"));
-    if let Some(selected) = report.get("selected").and_then(Value::as_object) {
-        insert_log_value(fields, "selected_config_id", selected.get("configId"));
-        insert_log_value(fields, "selected_dns_id", selected.get("dnsId"));
-        insert_log_value(fields, "selected_routing_id", selected.get("routingId"));
-    }
-}
-
-fn extend_runtime_report_log_fields(fields: &mut BTreeMap<String, String>, report: &Value) {
-    insert_log_value(fields, "status", report.get("status"));
-    insert_log_value(fields, "runtime_control", report.get("runtimeControl"));
-    insert_log_value(fields, "tproxy_port", report.get("tproxyPort"));
-    insert_log_value(fields, "fake_runtime", report.get("fakeRuntime"));
-    insert_log_value(fields, "allocator_profile", report.get("allocatorProfile"));
-    if let Some(reclaim) = report.get("allocatorReclaim").and_then(Value::as_object) {
-        extend_allocator_reclaim_log_fields(
-            fields,
-            "allocator_old_owner_closed",
-            reclaim.get("oldOwnerClosed"),
-        );
-        extend_allocator_reclaim_log_fields(
-            fields,
-            "allocator_startup_control_built",
-            reclaim.get("startupControlBuilt"),
-        );
-        extend_allocator_reclaim_log_fields(
-            fields,
-            "allocator_reload_scoped_resources_flushed",
-            reclaim.get("reloadScopedResourcesFlushed"),
-        );
-    }
-    if let Some(dataplane) = report.get("residentDataplane").and_then(Value::as_object) {
-        insert_log_value(
-            fields,
-            "resident_dataplane_enabled",
-            dataplane.get("enabled"),
-        );
-        insert_log_value(fields, "resident_dataplane_status", dataplane.get("status"));
-        insert_log_value(
-            fields,
-            "resident_dataplane_proxy_count",
-            dataplane.get("proxy_count"),
-        );
-        insert_log_value(
-            fields,
-            "resident_tcp_dial_mode",
-            dataplane.get("tcp_dial_mode"),
-        );
-        insert_log_value(
-            fields,
-            "resident_udp_packet_workers",
-            dataplane.get("udp_packet_workers"),
-        );
-    }
-}
-
-fn extend_allocator_reclaim_log_fields(
-    fields: &mut BTreeMap<String, String>,
-    prefix: &str,
-    reclaim: Option<&Value>,
-) {
-    let Some(reclaim) = reclaim.and_then(Value::as_object) else {
-        return;
-    };
-    insert_log_value(fields, &format!("{prefix}_status"), reclaim.get("status"));
-    insert_log_value(fields, &format!("{prefix}_reason"), reclaim.get("reason"));
-    insert_log_value(fields, &format!("{prefix}_profile"), reclaim.get("profile"));
-    let Some(detail) = reclaim.get("detail").and_then(Value::as_object) else {
-        return;
-    };
-    insert_log_value(
-        fields,
-        &format!("{prefix}_operation"),
-        detail.get("operation"),
-    );
-    insert_log_value(
-        fields,
-        &format!("{prefix}_arenas_attempted"),
-        detail.get("arenasAttempted"),
-    );
-    if let Some(failures) = detail.get("failures").and_then(Value::as_array) {
-        fields.insert(
-            format!("{prefix}_failure_count"),
-            failures.len().to_string(),
-        );
-    }
-    insert_log_value(
-        fields,
-        &format!("{prefix}_epoch_after"),
-        detail.get("epochAfter"),
-    );
-    insert_log_value(fields, &format!("{prefix}_error"), detail.get("error"));
-    insert_log_value(fields, &format!("{prefix}_result"), detail.get("result"));
-    insert_log_value(fields, &format!("{prefix}_force"), detail.get("force"));
-}
-
 fn append_startup_reclaim_decision_log_for_config(
     config_dir: &Path,
     state: &Path,
-    report: &Value,
+    _report: &Value,
     force: bool,
 ) -> io::Result<()> {
     let mut fields = BTreeMap::new();
     fields.insert("force".to_owned(), force.to_string());
-    extend_runtime_report_log_fields(&mut fields, report);
+    fields.insert(
+        "allocator_profile".to_owned(),
+        allocator_profile().to_owned(),
+    );
     append_lifecycle_log_fields_for_config(
         config_dir,
         state,
@@ -6885,16 +6548,6 @@ fn append_startup_reclaim_decision_log_for_config(
         "[Startup] post-startup gc decision",
         fields,
     )
-}
-
-fn insert_log_value(fields: &mut BTreeMap<String, String>, key: &str, value: Option<&Value>) {
-    let Some(value) = value else {
-        return;
-    };
-    if value.is_null() {
-        return;
-    }
-    fields.insert(key.to_owned(), product_log_field_value(value));
 }
 
 fn list_logs_value(
@@ -10397,63 +10050,14 @@ global {
         );
         let logs = list_logs_value(&dir, &state, Some("all"), Some("[Reload]"), 500).unwrap();
         let items = logs["items"].as_array().unwrap();
-        assert_eq!(items.len(), 4, "{logs}");
-        assert_eq!(
-            items[0]["message"],
-            json!("[Reload] Received reload request")
-        );
+        assert_eq!(items.len(), 1, "{logs}");
+        assert_eq!(items[0]["message"], json!("[Reload] Preview finished"));
         assert_eq!(items[0]["fields"]["source"], json!("api"));
         assert_eq!(items[0]["fields"]["dry"], json!("true"));
-        assert_eq!(
-            items[1]["message"],
-            json!("[Reload] Runtime config preview materialized")
-        );
-        assert_eq!(items[1]["fields"]["content_included"], json!("true"));
-        assert!(items[1]["fields"]["bytes"].as_str().is_some());
-        assert_eq!(items[2]["message"], json!("[Reload] Runtime config built"));
-        assert_eq!(items[2]["fields"]["log_level"], json!("info"));
-        assert_eq!(items[3]["message"], json!("[Reload] Preview finished"));
-        assert_eq!(items[3]["fields"]["applied"], json!("false"));
+        assert_eq!(items[0]["fields"]["applied"], json!("false"));
+        assert!(items[0]["fields"]["elapsed"].as_str().is_some());
 
         fs::remove_dir_all(dir).unwrap();
-    }
-
-    #[test]
-    fn runtime_report_log_fields_summarize_allocator_reclaim() {
-        let mut fields = BTreeMap::new();
-        extend_runtime_report_log_fields(
-            &mut fields,
-            &json!({
-                "status": "pass",
-                "runtimeControl": "resident-production-runtime-manager",
-                "allocatorProfile": "jemalloc",
-                "allocatorReclaim": {
-                    "startupControlBuilt": {
-                        "reason": "startup_control_built",
-                        "profile": "jemalloc",
-                        "status": "partial",
-                        "detail": {
-                            "operation": "jemalloc_arena_purge",
-                            "arenasAttempted": 2,
-                            "failures": [
-                                {"arena": 0, "error": "sample"},
-                                {"arena": 1, "error": "sample"}
-                            ],
-                            "epochAfter": 7
-                        }
-                    }
-                }
-            }),
-        );
-
-        assert_eq!(fields["allocator_profile"], "jemalloc");
-        assert_eq!(fields["allocator_startup_control_built_status"], "partial");
-        assert_eq!(
-            fields["allocator_startup_control_built_operation"],
-            "jemalloc_arena_purge"
-        );
-        assert_eq!(fields["allocator_startup_control_built_failure_count"], "2");
-        assert!(!fields.contains_key("allocator_startup_control_built"));
     }
 
     #[test]
