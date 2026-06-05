@@ -209,6 +209,7 @@ fn write_c0_c3_fixture(dae: &Path, daed: &Path, wing: &Path, outbound: &Path, qu
         "[Service]\n\
          Type=simple\n\
          User=root\n\
+         ExecStartPre=/usr/bin/daed validate -c /etc/daed/\n\
          ExecStart=/usr/bin/daed run -c /etc/daed/\n\
          ExecReload=/bin/kill -HUP $MAINPID\n",
     );

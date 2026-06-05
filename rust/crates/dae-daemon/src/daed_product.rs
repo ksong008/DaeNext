@@ -21,7 +21,7 @@ use dae_datapath::{
     UDP_TASK_POOL_MAX_QUEUES, UDP_TASK_QUEUE_LENGTH, udp_endpoint_pool_trim_target,
 };
 use regex::Regex;
-use rusqlite::{Connection, OptionalExtension, params};
+use rusqlite::{Connection, OpenFlags, OptionalExtension, params};
 use rustls::pki_types::ServerName;
 use rustls::{ClientConfig, ClientConnection, RootCertStore};
 use serde_json::{Map, Value, json};
@@ -35,7 +35,7 @@ use crate::allocator::{
     AllocatorReclaimReason, allocator_live_heap_bytes, allocator_profile, allocator_reclaim,
     allocator_reclaim_snapshot_json, allocator_stats_json,
 };
-use crate::config_validate::load_config_file;
+use crate::config_validate::{load_config_file, validate_config_file};
 use crate::production_runtime_owner::{
     ResidentProductionRuntime, resident_live_adapter_config_assessment,
     resident_live_adapter_udp_probe, resident_runtime_defaults_contract,
@@ -651,6 +651,7 @@ pub fn run_daed_product_with_args_and_version(
     match args.first().map(String::as_str) {
         Some("service-contract") => run_service_contract_command(&args[1..], version),
         Some("package-info") => run_package_info_command(&args[1..], version),
+        Some("validate") => run_validate_command(&args[1..]),
         Some("resident-adapter-matrix") => run_resident_adapter_matrix_command(&args[1..]),
         Some("resident-adapter-udp-live") => run_resident_adapter_udp_live_command(&args[1..]),
         Some("state") => run_state_command(&args[1..]),
@@ -675,6 +676,18 @@ fn run_package_info_command(args: &[String], version: &str) -> DaedProductOutput
         return DaedProductOutput::usage("package-info accepts only optional --json");
     }
     DaedProductOutput::ok(format!("{}\n", daed_package_info(version)))
+}
+
+fn run_validate_command(args: &[String]) -> DaedProductOutput {
+    let (path, json_output) = match parse_validate_args(args) {
+        Ok(parsed) => parsed,
+        Err(err) => return DaedProductOutput::usage(err),
+    };
+    match validate_product_config_path(&path) {
+        Ok(report) if json_output => DaedProductOutput::ok(format!("{report}\n")),
+        Ok(_) => DaedProductOutput::ok(String::new()),
+        Err(err) => DaedProductOutput::error(format!("validate failed: {err}")),
+    }
 }
 
 fn run_resident_adapter_matrix_command(args: &[String]) -> DaedProductOutput {
@@ -733,6 +746,94 @@ fn run_state_command(args: &[String]) -> DaedProductOutput {
         Some(command) => DaedProductOutput::usage(format!("unsupported state command: {command}")),
         None => DaedProductOutput::usage("state requires check or migrate"),
     }
+}
+
+fn parse_validate_args(args: &[String]) -> Result<(PathBuf, bool), String> {
+    let mut config = None;
+    let mut json_output = false;
+    let mut iter = args.iter();
+    while let Some(arg) = iter.next() {
+        match arg.as_str() {
+            "-c" | "--config" => {
+                let Some(value) = iter.next() else {
+                    return Err("missing validate --config value".to_owned());
+                };
+                config = Some(PathBuf::from(value));
+            }
+            _ if arg.starts_with("--config=") => {
+                config = arg.split_once('=').map(|(_, value)| PathBuf::from(value));
+            }
+            "--json" => json_output = true,
+            other => return Err(format!("unsupported validate argument: {other}")),
+        }
+    }
+    Ok((
+        config.ok_or_else(|| "validate requires -c/--config".to_owned())?,
+        json_output,
+    ))
+}
+
+fn validate_product_config_path(path: &Path) -> Result<Value, String> {
+    if path.is_file() {
+        let entries = validate_config_file(path)?;
+        return Ok(json!({
+            "status": "pass",
+            "kind": "dae-config-file",
+            "path": path_string(path),
+            "entries": entries,
+            "readOnly": true,
+            "mutationExecuted": false,
+        }));
+    }
+    if path.is_dir() {
+        return validate_product_config_dir(path);
+    }
+    Err(format!(
+        "config path is neither file nor directory: {}",
+        path_string(path)
+    ))
+}
+
+fn validate_product_config_dir(config_dir: &Path) -> Result<Value, String> {
+    let state = config_dir.join("daed.db");
+    let state_present = state.is_file();
+    let mut tables = Vec::new();
+    let mut schema_ready = false;
+    let mut user_count = Value::Null;
+    if state_present {
+        let conn = Connection::open_with_flags(&state, OpenFlags::SQLITE_OPEN_READ_ONLY)
+            .map_err(|err| format!("failed to open state read-only: {err}"))?;
+        tables = list_tables(&conn).map_err(|err| format!("failed to list state tables: {err}"))?;
+        schema_ready = tables.iter().any(|name| name == "daed_product_metadata")
+            && tables.iter().any(|name| name == "daed_schema_migrations")
+            && tables.iter().any(|name| name == "users");
+        if !schema_ready {
+            return Err(format!(
+                "state schema is not ready for read-only validation: {}",
+                path_string(&state)
+            ));
+        }
+        let users = conn
+            .query_row("SELECT COUNT(*) FROM users", [], |row| row.get::<_, i64>(0))
+            .map_err(|err| format!("failed to count users: {err}"))?;
+        user_count = json!(users);
+    }
+    Ok(json!({
+        "status": "pass",
+        "kind": "daed-config-dir",
+        "path": path_string(config_dir),
+        "state": path_string(&state),
+        "statePresent": state_present,
+        "stateSchemaReady": schema_ready,
+        "freshInstallStateOptional": !state_present,
+        "userCount": user_count,
+        "tables": tables,
+        "primaryStateStore": PRIMARY_STATE_STORE,
+        "protectedRollbackStateStore": PROTECTED_ROLLBACK_STATE_STORE,
+        "rustDaedWritesWingDbByDefault": false,
+        "readOnly": true,
+        "mutationExecuted": false,
+    }))
 }
 
 fn parse_resident_adapter_matrix_args(args: &[String]) -> Result<PathBuf, String> {
@@ -1333,6 +1434,7 @@ fn daed_service_contract(version: &str) -> Value {
             "rust_daed_non_destructive_wing_db_import_ready".to_owned(),
             json!(true),
         );
+        report.insert("rust_daed_validate_command_ready".to_owned(), json!(true));
         report.insert(
             "rust_daed_setup_auth_user_storage_api_ready".to_owned(),
             json!(true),
@@ -1373,24 +1475,58 @@ fn daed_service_contract(version: &str) -> Value {
             "rust_daed_local_package_admission_ready".to_owned(),
             json!(true),
         );
+        report.insert("default_product_package_go_free".to_owned(), json!(true));
+        report.insert(
+            "go_product_shell_retired_from_default_package".to_owned(),
+            json!(true),
+        );
+        report.insert(
+            "go_orchestration_retired_from_default_package".to_owned(),
+            json!(true),
+        );
+        report.insert(
+            "go_control_runtime_api_service_release_retired_from_default_package".to_owned(),
+            json!(true),
+        );
+        report.insert(
+            "go_outbound_dependency_retired_from_default_package".to_owned(),
+            json!(true),
+        );
         report.insert("leptos_webui_rewrite_considered".to_owned(), json!(false));
         report.insert("go_free_product_chain_ready".to_owned(), json!(false));
         report.insert(
             "go_free_product_chain_current_batch".to_owned(),
-            json!("C10 resident runtime bridge implementation"),
+            json!("C10 default Rust product package implementation"),
         );
         report.insert(
             "go_free_product_chain_remaining_work".to_owned(),
             json!([
                 "live host default package switch revalidation",
                 "live rollback validation revalidation",
-                "remove Go daewing from default package path",
+                "release default switch admission",
                 "production package admission"
             ]),
         );
         if let Some(Value::Object(typed_report)) =
             report.get_mut("go_free_product_chain_typed_report")
         {
+            typed_report.insert("default_product_package_go_free".to_owned(), json!(true));
+            typed_report.insert(
+                "go_product_shell_retired_from_default_package".to_owned(),
+                json!(true),
+            );
+            typed_report.insert(
+                "go_orchestration_retired_from_default_package".to_owned(),
+                json!(true),
+            );
+            typed_report.insert(
+                "go_control_runtime_api_service_release_retired_from_default_package".to_owned(),
+                json!(true),
+            );
+            typed_report.insert(
+                "go_outbound_dependency_retired_from_default_package".to_owned(),
+                json!(true),
+            );
             typed_report.insert("rust_product_binary_contract_ready".to_owned(), json!(true));
             typed_report.insert(
                 "rust_product_lifecycle_contract_ready".to_owned(),
@@ -1400,9 +1536,10 @@ fn daed_service_contract(version: &str) -> Value {
                 "rust_product_web_api_package_release_contract_ready".to_owned(),
                 json!(true),
             );
+            typed_report.insert("rust_daed_validate_command_ready".to_owned(), json!(true));
             typed_report.insert(
                 "current_batch".to_owned(),
-                json!("C10 resident runtime bridge implementation"),
+                json!("C10 default Rust product package implementation"),
             );
             typed_report.insert("status".to_owned(), json!("blocked"));
         }
@@ -1441,6 +1578,7 @@ fn daed_package_info(version: &str) -> Value {
         },
         "current_batch_ready": {
             "product_binary_skeleton": true,
+            "validate_command": true,
             "state_check": true,
             "wing_db_non_destructive_import": true,
             "setup_auth_user_storage_api": true,
@@ -1460,12 +1598,13 @@ fn daed_package_info(version: &str) -> Value {
             "local_package_admission": true
         },
         "package_surface": {
-            "systemd_unit": "daed.service uses /usr/bin/daed run -c /etc/daed",
+            "validate": "daed validate -c /etc/daed/",
+            "systemd_unit": "daed.service validates then uses /usr/bin/daed run -c /etc/daed/",
             "docker_entrypoint": "/usr/bin/daed run -c /etc/daed --listen 0.0.0.0:2023",
             "package_manifest": "daed export package-manifest",
             "admission_report": "daed export admission-report",
             "default_package_switch_live_applied": false,
-            "go_daewing_default_path_removed": false
+            "go_daewing_default_path_removed": true
         },
         "full_go_free_product_chain_ready": false
     })
@@ -7888,7 +8027,7 @@ fn product_flatdesc() -> Value {
         "resources": ["configs", "dns", "routings", "nodes", "subscriptions", "groups"],
         "runtime": ["materialize-parseable-generated-config", "resident-runtime-reload", "resident-runtime-stop", "live-manager-state"],
         "logs": ["log-list", "log-settings", "sse-snapshot"],
-        "package": ["systemd-unit-surface", "docker-entrypoint-surface", "package-manifest", "admission-report", "webui-route-audit", "openapi", "flatdesc", "outline"],
+        "package": ["validate-command", "systemd-unit-surface", "docker-entrypoint-surface", "package-manifest", "admission-report", "webui-route-audit", "openapi", "flatdesc", "outline"],
         "fullGoFreeProductChainReady": false,
     })
 }
@@ -7904,6 +8043,7 @@ fn product_outline() -> Value {
         "workPackage": "go-free-product-chain-v1",
         "localC10Surface": {
             "webApi": true,
+            "validateCommand": true,
             "staticWebui": true,
             "materializer": true,
             "realRuntimeBridge": true,
@@ -7919,7 +8059,7 @@ fn product_outline() -> Value {
         "remainingAdmission": [
             "live host default package switch revalidation",
             "live rollback validation revalidation",
-            "remove Go daewing from default package path",
+            "release default switch admission",
             "production package admission"
         ]
     })
@@ -7934,7 +8074,8 @@ fn product_package_manifest() -> Value {
         "binary": {
             "path": "/usr/bin/daed",
             "source": "rust/crates/dae-daemon/src/bin/daed.rs",
-            "defaultArgs": ["run", "-c", DEFAULT_CONFIG_DIR],
+            "defaultArgs": ["run", "-c", "/etc/daed/"],
+            "validateArgs": ["validate", "-c", "/etc/daed/"],
         },
         "state": {
             "primary": PRIMARY_STATE_STORE,
@@ -7957,7 +8098,9 @@ fn product_package_manifest() -> Value {
         },
         "systemd": {
             "unitName": "daed.service",
-            "execStart": "/usr/bin/daed run -c /etc/daed",
+            "execStartPre": "/usr/bin/daed validate -c /etc/daed/",
+            "execStart": "/usr/bin/daed run -c /etc/daed/",
+            "execReload": "/bin/kill -HUP $MAINPID",
             "export": "daed export systemd-unit",
         },
         "docker": {
@@ -7967,7 +8110,7 @@ fn product_package_manifest() -> Value {
         "admission": {
             "localPackageAdmissionReady": true,
             "liveDefaultSwitchApplied": false,
-            "goDaewingDefaultPathRemoved": false,
+            "goDaewingDefaultPathRemoved": true,
             "rollbackValidationAppliedOnLiveHost": false,
         }
     })
@@ -7983,6 +8126,7 @@ fn product_admission_report() -> Value {
         "runtimeDefaults": product_runtime_defaults(),
         "localEvidence": {
             "rustDaedBinary": true,
+            "validateCommand": true,
             "primaryStateStore": PRIMARY_STATE_STORE,
             "protectedRollbackStateStore": PROTECTED_ROLLBACK_STATE_STORE,
             "rustDaedWritesWingDbByDefault": false,
@@ -8013,12 +8157,12 @@ fn product_admission_report() -> Value {
             "defaultPackageSwitchApplied": false,
             "previousDefaultSwitchBlockedByMetadataOnlyRuntimeState": true,
             "rollbackValidationApplied": false,
-            "goDaewingDefaultPathRemoved": false,
+            "goDaewingDefaultPathRemoved": true,
         },
         "remainingBlockers": [
             "live host default package switch revalidation",
             "live rollback validation revalidation",
-            "remove Go daewing from default package path",
+            "release default switch admission",
             "production package admission"
         ]
     })
@@ -8177,7 +8321,9 @@ Wants=network-online.target
 [Service]
 Type=simple
 # {PRODUCT_HTTP_WORKERS_ENV} unset uses available_parallelism * 2 clamped to {PRODUCT_HTTP_WORKER_DEFAULT_MIN}..{PRODUCT_HTTP_WORKER_DEFAULT_MAX}.
-{}ExecStart=/usr/bin/daed run -c /etc/daed
+ExecStartPre=/usr/bin/daed validate -c /etc/daed/
+{}ExecStart=/usr/bin/daed run -c /etc/daed/
+ExecReload=/bin/kill -HUP $MAINPID
 Restart=on-failure
 RestartSec=3s
 
@@ -8193,7 +8339,8 @@ fn docker_entrypoint_text() -> String {
         r#"#!/bin/sh
 set -eu
 # {PRODUCT_HTTP_WORKERS_ENV} unset uses available_parallelism * 2 clamped to {PRODUCT_HTTP_WORKER_DEFAULT_MIN}..{PRODUCT_HTTP_WORKER_DEFAULT_MAX}.
-{}exec /usr/bin/daed run -c /etc/daed --listen "${{DAED_LISTEN:-0.0.0.0:2023}}" "$@"
+{}/usr/bin/daed validate -c /etc/daed/ >/dev/null
+exec /usr/bin/daed run -c /etc/daed --listen "${{DAED_LISTEN:-0.0.0.0:2023}}" "$@"
 "#,
         docker_runtime_environment_exports()
     )
@@ -9367,6 +9514,7 @@ fn status_reason(status: u16) -> &'static str {
 fn help_text() -> String {
     r#"daed Rust native product commands:
   daed run -c /etc/daed --listen 0.0.0.0:2023 [--api-only] [--web-root PATH]
+  daed validate -c /etc/daed/|/etc/dae/config.dae [--json]
   daed service-contract [--json]
   daed package-info [--json]
   daed resident-adapter-matrix -c /etc/dae/config.dae [--json]

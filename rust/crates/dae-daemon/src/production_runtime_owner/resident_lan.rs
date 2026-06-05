@@ -58,17 +58,15 @@ pub(super) fn attach_resident_lan_program(
         link_layer,
     );
     if let Some(outcome) = native_attach {
-        if outcome.ok {
-            return ResidentLanAttachResult {
-                ok: true,
-                native_attached: true,
-                backend: outcome.backend.as_str(),
-                fallback_used: outcome.fallback_used,
-                native_backend_attempted: true,
-                native_backend: Some(outcome.backend.as_str()),
-                link_layer,
-            };
-        }
+        return ResidentLanAttachResult {
+            ok: outcome.ok,
+            native_attached: outcome.ok,
+            backend: outcome.backend.as_str(),
+            fallback_used: outcome.fallback_used,
+            native_backend_attempted: true,
+            native_backend: Some(outcome.backend.as_str()),
+            link_layer,
+        };
     }
     let _ = run_observation_step(
         steps,
