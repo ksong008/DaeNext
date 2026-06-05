@@ -51,12 +51,12 @@ fn bench_outbound_select_min_latency(iters: u64, warmup: u64) -> Result<Measurem
 fn bench_outbound_filter_annotate_regex(iters: u64, warmup: u64) -> Result<Measurement, String> {
     let set = DialerSet {
         dialers: (0..1000)
-            .map(|index| Dialer::new(format!("HK-Node-{index:04}"), "premium-sub"))
+            .map(|index| Dialer::new(format!("bench-node-{index:04}"), "bench-sub"))
             .collect(),
     };
     let filters = vec![vec![
-        Filter::new("name", vec![FilterParam::new("regex", "^HK-Node-")]),
-        Filter::new("subtag", vec![FilterParam::new("regex", "^premium-")]),
+        Filter::new("name", vec![FilterParam::new("regex", "^bench-node-")]),
+        Filter::new("subtag", vec![FilterParam::new("regex", "^bench-")]),
     ]];
     let annotations = vec![Annotation::default()];
 
