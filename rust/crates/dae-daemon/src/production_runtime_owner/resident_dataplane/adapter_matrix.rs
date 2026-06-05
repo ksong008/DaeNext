@@ -102,7 +102,7 @@ const RESIDENT_LIVE_ADAPTER_MATRIX_ENTRIES: [ResidentLiveAdapterMatrixEntry; 10]
         route_group_connectivity: true,
         selected_node_fail_closed: true,
         fingerprint_underlay: true,
-        remote_live_matrix: false,
+        remote_live_matrix: true,
         go_outbound_fallback_retired: true,
         fingerprint_behavior: "link fingerprint selects the fingerprint-aware underlay, global fingerprint is fallback, no fingerprint uses the standard TLS underlay",
         evidence: &[
@@ -110,88 +110,98 @@ const RESIDENT_LIVE_ADAPTER_MATRIX_ENTRIES: [ResidentLiveAdapterMatrixEntry; 10]
             "resident_dataplane::tcp opens the fingerprint-aware VLESS/TLS client",
             "resident_dataplane::udp uses the same admitted proxy plan for XUDP",
             "resident dataplane event field tls_underlay records boring/rustls underlay choice",
+            "remote 38 / JP live matrix loaded example, Google, and YouTube page bodies through this resident adapter row",
         ],
-        missing: &["remote 38 live matrix evidence not recorded"],
+        missing: &[],
     },
-    tcp_wired_entry(
+    tcp_remote_live_entry(
         "shadowsocks",
         "stage18 AEAD TCP candidate uses resident Shadowsocks AEAD stream relay; SIP003 and 2022 variants remain fail-closed",
         &[
             "resident_dataplane::plan admits stage18 AEAD TCP candidate shapes",
             "resident_dataplane::tcp dispatches through the Shadowsocks AEAD stream relay",
+            "remote 38 / JP live matrix loaded example, Google, and YouTube page bodies through this resident adapter row",
         ],
     ),
-    tcp_tls_wired_entry(
+    tcp_remote_live_entry(
         "trojan",
         "plain TLS/TCP endpoints use the resident TLS underlay; trojan-go transport combinations remain fail-closed",
         &[
             "resident_dataplane::plan admits plain TLS/TCP endpoint shapes",
             "resident_dataplane::tcp sends the request header then relays TLS plaintext",
+            "remote 38 / JP live matrix loaded example, Google, and YouTube page bodies through this resident adapter row",
         ],
     ),
-    tcp_wired_entry(
+    tcp_remote_live_entry(
         "vmess",
         "AEAD plain TCP endpoints use the resident TCP relay; TLS and transport combinations remain fail-closed",
         &[
             "resident_dataplane::plan admits VMess AEAD plain TCP endpoint shapes",
             "dae_outbound::vmess exposes reusable AEAD session/chunk codecs for resident relay",
             "resident_dataplane::tcp sends VMess header/chunks and relays response chunks",
+            "remote 38 / JP live matrix loaded example, Google, and YouTube page bodies through this resident adapter row",
         ],
     ),
-    tcp_wired_entry(
+    tcp_remote_live_entry(
         "hysteria2",
         "pinned QUIC/H3 authenticated TCP-stream endpoints use the resident QUIC relay; UDP datagram relay and port hopping remain fail-closed",
         &[
             "resident_dataplane::plan admits single-port pinned Hysteria2 endpoint shapes",
             "dae_outbound::hysteria2 exposes H3 auth and TCP stream request/response helpers",
             "resident_dataplane::tcp opens a marked quinn UDP endpoint and relays TCP over a Hysteria2 stream",
+            "remote 38 / JP live matrix loaded example, Google, and YouTube page bodies through this resident adapter row",
         ],
     ),
-    tcp_wired_entry(
+    tcp_remote_live_entry(
         "tuic",
         "explicit-insecure QUIC authenticated TCP Connect endpoints use the resident QUIC relay; UDP packet relay remains pending",
         &[
             "resident_dataplane::plan admits explicit-insecure TUIC endpoint shapes",
             "dae_outbound::tuic exposes auth stream and Connect frame runtime helpers",
             "resident_dataplane::tcp opens a marked quinn UDP endpoint and relays TCP over a TUIC stream",
+            "remote 38 / JP live matrix loaded example, Google, and YouTube page bodies through this resident adapter row",
         ],
     ),
-    tcp_wired_entry(
+    tcp_remote_live_entry(
         "juicity",
         "pinned or explicit-insecure QUIC authenticated TCP-stream endpoints use the resident QUIC relay; UDP packet relay remains pending",
         &[
             "resident_dataplane::plan admits Juicity endpoint shapes with pinned certchain or explicit insecure verification",
             "dae_outbound::juicity exposes EKM auth stream and TCP stream request helpers",
             "resident_dataplane::tcp opens a marked quinn UDP endpoint and relays TCP over a Juicity stream",
+            "remote 38 / JP live matrix loaded example, Google, and YouTube page bodies through this resident adapter row",
         ],
     ),
-    tcp_tls_wired_entry(
+    tcp_remote_live_entry(
         "anytls",
         "session-frame TLS/TCP endpoints use the resident TLS underlay; UDP packet-stream remains pending",
         &[
             "resident_dataplane::plan admits AnyTLS session-frame endpoint shapes",
             "resident_dataplane::tcp sends auth/settings/SYN/PSH frames and relays PSH payload frames",
+            "remote 38 / JP live matrix loaded example, Google, and YouTube page bodies through this resident adapter row",
         ],
     ),
-    tcp_wired_entry(
+    tcp_remote_live_entry(
         "http-proxy",
         "plain HTTP CONNECT endpoints use the resident TCP relay; HTTPS proxy transport remains fail-closed",
         &[
             "resident_dataplane::plan admits plain HTTP CONNECT endpoint shapes",
             "resident_dataplane::tcp dispatches through the HTTP CONNECT relay",
+            "remote 38 / JP live matrix loaded example, Google, and YouTube page bodies through this resident adapter row",
         ],
     ),
-    tcp_wired_entry(
+    tcp_remote_live_entry(
         "socks5",
         "SOCKS5 CONNECT endpoints use the resident TCP relay; UDP associate is not admitted yet",
         &[
             "resident_dataplane::plan admits SOCKS5 endpoint shapes",
             "resident_dataplane::tcp dispatches through the SOCKS5 CONNECT relay",
+            "remote 38 / JP live matrix loaded example, Google, and YouTube page bodies through this resident adapter row",
         ],
     ),
 ];
 
-const fn tcp_wired_entry(
+const fn tcp_remote_live_entry(
     formal_matrix_handler: &'static str,
     fingerprint_behavior: &'static str,
     evidence: &'static [&'static str],
@@ -206,40 +216,12 @@ const fn tcp_wired_entry(
         route_group_connectivity: true,
         selected_node_fail_closed: true,
         fingerprint_underlay: true,
-        remote_live_matrix: false,
+        remote_live_matrix: true,
         go_outbound_fallback_retired: false,
         fingerprint_behavior,
         evidence,
         missing: &[
             "UDP live adapter dispatch",
-            "remote 38 live matrix evidence",
-            "Go outbound fallback retirement for this handler",
-        ],
-    }
-}
-
-const fn tcp_tls_wired_entry(
-    formal_matrix_handler: &'static str,
-    fingerprint_behavior: &'static str,
-    evidence: &'static [&'static str],
-) -> ResidentLiveAdapterMatrixEntry {
-    ResidentLiveAdapterMatrixEntry {
-        handler: formal_matrix_handler,
-        formal_matrix_handler,
-        planner_admitted: true,
-        tcp_live_adapter: true,
-        udp_live_adapter: false,
-        transport_underlay: true,
-        route_group_connectivity: true,
-        selected_node_fail_closed: true,
-        fingerprint_underlay: true,
-        remote_live_matrix: false,
-        go_outbound_fallback_retired: false,
-        fingerprint_behavior,
-        evidence,
-        missing: &[
-            "UDP live adapter dispatch",
-            "remote 38 live matrix evidence",
             "Go outbound fallback retirement for this handler",
         ],
     }

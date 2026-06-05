@@ -17,7 +17,7 @@ use super::super::udp_io::{UdpOriginalDstPacket, recv_udp_with_original_dst};
 use super::client::{VlessTlsClient, drive_tls_io_blocking, open_vless_tls_client};
 use super::dns::{ResidentDnsPlan, handle_resident_dns_udp};
 use super::events::append_event;
-use super::plan::ResidentProxyPlan;
+use super::plan::{ResidentProxyPlan, ResidentProxyProtocolPlan};
 use super::vision::{VisionUnpadState, VisionUnpadder, vision_padding_block};
 use super::{
     RESIDENT_IDLE_SLEEP, RESIDENT_UDP_RESPONSE_TIMEOUT, ResidentDataplaneMetrics,
@@ -185,7 +185,7 @@ fn handle_udp_packet(
         handle_resident_dns_udp(&dns, original_dst, &packet.payload)
             .map(|response| ("udp_dns_packet_finished", response))
     } else {
-        exchange_vless_udp(&proxy, original_dst, &packet.payload)
+        exchange_proxy_udp(&proxy, original_dst, &packet.payload)
             .map(|response| ("udp_packet_finished", response))
     };
     match exchange {
@@ -219,11 +219,61 @@ fn handle_udp_packet(
                 json!({"event": "udp_reply_failed", "peer": peer.to_string(), "original_dst": original_dst.to_string(), "error": err}),
             ),
         },
-        Err(err) => append_event(
-            &event_file,
-            &event_lock,
-            json!({"event": "udp_exchange_failed", "peer": peer.to_string(), "original_dst": original_dst.to_string(), "error": err}),
-        ),
+        Err(err) => {
+            let handler = resident_udp_handler_name(&proxy.handler);
+            append_event(
+                &event_file,
+                &event_lock,
+                json!({
+                    "event": "udp_exchange_failed",
+                    "peer": peer.to_string(),
+                    "original_dst": original_dst.to_string(),
+                    "error": err,
+                    "protocol": proxy.protocol,
+                    "handler": handler,
+                    "proxy_group": proxy.group_name,
+                    "group_policy": proxy.group_policy,
+                    "node_tag": proxy.node_tag,
+                    "network": "udp4",
+                    "outbound": proxy.group_name,
+                    "policy": proxy.group_policy,
+                    "dialer": proxy.node_tag,
+                    "ip": original_dst.to_string(),
+                }),
+            )
+        }
+    }
+}
+
+fn exchange_proxy_udp(
+    proxy: &ResidentProxyPlan,
+    original_dst: SocketAddrV4,
+    payload: &[u8],
+) -> Result<Vec<u8>, String> {
+    match &proxy.handler {
+        ResidentProxyProtocolPlan::VlessVisionTcpTls { .. } => {
+            exchange_vless_udp(proxy, original_dst, payload)
+        }
+        _ => Err(format!(
+            "unsupported_udp_handler: resident UDP adapter dispatch selected handler {} for protocol {}; this handler is not wired for UDP yet and is fail-closed",
+            resident_udp_handler_name(&proxy.handler),
+            proxy.protocol
+        )),
+    }
+}
+
+fn resident_udp_handler_name(handler: &ResidentProxyProtocolPlan) -> &'static str {
+    match handler {
+        ResidentProxyProtocolPlan::VlessVisionTcpTls { .. } => "vless-vision-tcp-tls",
+        ResidentProxyProtocolPlan::Socks5Tcp { .. } => "socks5-tcp",
+        ResidentProxyProtocolPlan::HttpProxyTcp { .. } => "http-proxy-tcp",
+        ResidentProxyProtocolPlan::ShadowsocksAeadTcp { .. } => "shadowsocks-aead-tcp",
+        ResidentProxyProtocolPlan::TrojanTcpTls { .. } => "trojan-tcp-tls",
+        ResidentProxyProtocolPlan::AnyTlsTcpTls { .. } => "anytls-tcp-tls",
+        ResidentProxyProtocolPlan::VmessAeadTcp { .. } => "vmess-aead-tcp",
+        ResidentProxyProtocolPlan::Hysteria2QuicTcp { .. } => "hysteria2-quic-tcp",
+        ResidentProxyProtocolPlan::TuicQuicTcp { .. } => "tuic-quic-tcp",
+        ResidentProxyProtocolPlan::JuicityQuicTcp { .. } => "juicity-quic-tcp",
     }
 }
 
@@ -466,5 +516,39 @@ mod tests {
         assert_eq!(&request[1..17], &[9_u8; 16]);
         assert!(request.windows(16).any(|window| window == [9_u8; 16]));
         assert!(request.windows(2).any(|window| window == [0xde, 0xad]));
+    }
+
+    #[test]
+    fn resident_udp_dispatch_fails_closed_for_unwired_handler() {
+        let proxy = ResidentProxyPlan {
+            protocol: "http-proxy".to_owned(),
+            group_name: "proxy".to_owned(),
+            group_policy: "fixed".to_owned(),
+            node_tag: "plain-http-connect".to_owned(),
+            server_host: "127.0.0.1".to_owned(),
+            server_port: 8080,
+            server_name: String::new(),
+            alpn: vec![],
+            flow: String::new(),
+            net: "tcp".to_owned(),
+            tls: String::new(),
+            allow_insecure: false,
+            utls_fingerprint: None,
+            handler: ResidentProxyProtocolPlan::HttpProxyTcp {
+                username: String::new(),
+                password: String::new(),
+            },
+            mark: 0,
+            mptcp: false,
+        };
+        let err = exchange_proxy_udp(
+            &proxy,
+            SocketAddrV4::new(Ipv4Addr::new(8, 8, 8, 8), 53),
+            &[0xde, 0xad],
+        )
+        .unwrap_err();
+        assert!(err.contains("unsupported_udp_handler"));
+        assert!(err.contains("http-proxy-tcp"));
+        assert!(err.contains("http-proxy"));
     }
 }

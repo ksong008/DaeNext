@@ -336,3 +336,25 @@ impl Default for VMessAeadMaterial {
         }
     }
 }
+
+impl VMessAeadMaterial {
+    pub(super) fn random() -> Self {
+        let mut request_body_iv = [0_u8; 16];
+        let mut request_body_key = [0_u8; 16];
+        let mut eauth_random = [0_u8; 4];
+        let mut connection_nonce = [0_u8; 8];
+        let mut response_auth = [0_u8; 1];
+        fastrand::fill(&mut request_body_iv);
+        fastrand::fill(&mut request_body_key);
+        fastrand::fill(&mut eauth_random);
+        fastrand::fill(&mut connection_nonce);
+        fastrand::fill(&mut response_auth);
+        Self {
+            request_body_iv,
+            request_body_key,
+            response_auth: response_auth[0],
+            eauth_random,
+            connection_nonce,
+        }
+    }
+}
