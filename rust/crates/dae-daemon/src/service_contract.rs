@@ -985,6 +985,7 @@ fn insert_release_default_switch_service_contract_capabilities(report: &mut Valu
 
 fn insert_go_free_product_chain_service_contract_capabilities(report: &mut Value) {
     let contract = dae_product::go_free_product_chain_contract();
+    let evidence = crate::c10_go_free_evidence::c10_go_free_product_chain_evidence_from_env();
     if let Value::Object(report) = report {
         report.insert(
             "go_free_product_chain_contract_ready".to_owned(),
@@ -992,55 +993,55 @@ fn insert_go_free_product_chain_service_contract_capabilities(report: &mut Value
         );
         report.insert(
             "default_product_package_go_free".to_owned(),
-            json!(contract.default_product_package_go_free),
+            json!(evidence.default_product_package_go_free),
         );
         report.insert(
             "go_product_shell_retired_from_default_package".to_owned(),
-            json!(contract.go_product_shell_retired),
+            json!(evidence.go_product_shell_retired),
         );
         report.insert(
             "go_orchestration_retired_from_default_package".to_owned(),
-            json!(contract.go_orchestration_retired),
+            json!(evidence.go_orchestration_retired),
         );
         report.insert(
             "go_control_runtime_api_service_release_retired_from_default_package".to_owned(),
-            json!(contract.go_control_runtime_api_service_release_retired),
+            json!(evidence.go_control_runtime_api_service_release_retired),
         );
         report.insert(
             "go_outbound_dependency_retired_from_default_package".to_owned(),
-            json!(contract.go_outbound_dependency_retired),
+            json!(evidence.go_outbound_dependency_retired),
         );
         report.insert(
             "go_compat_oracle_boundary_ready".to_owned(),
-            json!(contract.go_compat_oracle_boundary_ready),
+            json!(evidence.go_compat_oracle_boundary_ready),
         );
         report.insert(
             "rust_product_binary_contract_ready".to_owned(),
-            json!(contract.rust_product_binary_contract_ready),
+            json!(evidence.rust_product_binary_contract_ready),
         );
         report.insert(
             "rust_product_lifecycle_contract_ready".to_owned(),
-            json!(contract.rust_product_lifecycle_contract_ready),
+            json!(evidence.rust_product_lifecycle_contract_ready),
         );
         report.insert(
             "rust_product_web_api_package_release_contract_ready".to_owned(),
-            json!(contract.rust_product_web_api_package_release_contract_ready),
+            json!(evidence.rust_product_web_api_package_release_contract_ready),
         );
         report.insert(
             "go_free_live_host_contract_ready".to_owned(),
-            json!(contract.live_host_contract_ready),
+            json!(evidence.live_host_contract_ready),
         );
         report.insert(
             "go_free_rollback_model_ready".to_owned(),
-            json!(contract.rollback_model_ready),
+            json!(evidence.rollback_model_ready),
         );
         report.insert(
             "go_free_product_chain_typed_report_ready".to_owned(),
-            json!(contract.contract_ready),
+            json!(evidence.typed_report_ready),
         );
         report.insert(
             "go_free_product_chain_ready".to_owned(),
-            json!(contract.ready),
+            json!(evidence.ready),
         );
         report.insert(
             "go_free_product_chain_report_schema".to_owned(),
@@ -1062,14 +1063,26 @@ fn insert_go_free_product_chain_service_contract_capabilities(report: &mut Value
             "go_free_product_chain_typed_report".to_owned(),
             json!({
                 "schema": "go-free-product-chain-typed-report",
-                "status": if contract.ready { "pass" } else { "blocked" },
+                "status": if evidence.ready { "pass" } else { "blocked" },
                 "c_phase": contract.c_phase,
                 "prior_gate": contract.prior_gate,
-                "default_product_package_go_free": contract.default_product_package_go_free,
-                "go_product_shell_retired_from_default_package": contract.go_product_shell_retired,
-                "go_outbound_dependency_retired_from_default_package": contract.go_outbound_dependency_retired,
-                "rust_product_binary_contract_ready": contract.rust_product_binary_contract_ready,
-                "live_host_contract_ready": contract.live_host_contract_ready,
+                "default_product_package_go_free": evidence.default_product_package_go_free,
+                "go_product_shell_retired_from_default_package": evidence.go_product_shell_retired,
+                "go_orchestration_retired_from_default_package": evidence.go_orchestration_retired,
+                "go_control_runtime_api_service_release_retired_from_default_package": evidence.go_control_runtime_api_service_release_retired,
+                "go_outbound_dependency_retired_from_default_package": evidence.go_outbound_dependency_retired,
+                "go_compat_oracle_boundary_ready": evidence.go_compat_oracle_boundary_ready,
+                "userland_ffi_c_abi_retired_from_default_path": evidence.userland_ffi_c_abi_retired,
+                "go_oracle_default_dependency_retired_from_default_path": evidence.go_oracle_default_dependency_retired,
+                "rust_internal_fallback_normalized_for_default_path": evidence.rust_internal_fallback_normalized,
+                "rust_product_binary_contract_ready": evidence.rust_product_binary_contract_ready,
+                "rust_product_lifecycle_contract_ready": evidence.rust_product_lifecycle_contract_ready,
+                "rust_product_web_api_package_release_contract_ready": evidence.rust_product_web_api_package_release_contract_ready,
+                "live_host_contract_ready": evidence.live_host_contract_ready,
+                "rollback_model_ready": evidence.rollback_model_ready,
+                "go_free_product_chain_ready": evidence.ready,
+                "blockers": evidence.blockers.clone(),
+                "final_evidence": evidence.report.clone(),
                 "stage_report_schema": false,
             }),
         );
