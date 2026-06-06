@@ -495,7 +495,7 @@ const SOURCE_SHAPE_REGISTRY_ROWS: [SourceShapeRegistryRow; 23] = [
     blocked_row(
         "stream-wrapper-websocket",
         "multi-protocol",
-        &["vless", "vmess", "trojan"],
+        &["vless", "vmess", "trojan", "trojan-go"],
         "standard-or-fingerprint-aware-tls",
         "websocket",
         "udp-over-stream-or-datagram",
@@ -513,7 +513,7 @@ const SOURCE_SHAPE_REGISTRY_ROWS: [SourceShapeRegistryRow; 23] = [
     blocked_row(
         "stream-wrapper-grpc",
         "multi-protocol",
-        &["vless", "vmess", "trojan"],
+        &["vless", "vmess", "trojan", "trojan-go"],
         "standard-or-fingerprint-aware-tls",
         "grpc",
         "udp-over-stream-or-datagram",
@@ -531,7 +531,7 @@ const SOURCE_SHAPE_REGISTRY_ROWS: [SourceShapeRegistryRow; 23] = [
     blocked_row(
         "stream-wrapper-httpupgrade",
         "multi-protocol",
-        &["vless", "vmess"],
+        &["vless", "vmess", "trojan-go"],
         "standard-or-fingerprint-aware-tls",
         "httpupgrade",
         "udp-over-stream-or-datagram",
