@@ -11,7 +11,9 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use dae_config::Config;
 use dae_ebpf_support::LiveLoadedTproxyListenSocketMap;
-use dae_outbound::NetworkType;
+use dae_outbound::{
+    NetworkType, SourceShapeRegistryRow, source_shape_registry_contract, source_shape_registry_rows,
+};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 
@@ -1219,6 +1221,28 @@ pub(crate) fn resident_live_adapter_config_assessment(
         .iter()
         .filter(|row| row["planner_status"].as_str() == Some("admitted"))
         .count();
+    let source_shape_registry = source_shape_registry_contract();
+    let expanded_source_matrix_rows =
+        resident_expanded_source_matrix_rows(&node_shapes, &full_matrix_rows);
+    let expanded_source_matrix_status_counts =
+        resident_matrix_status_counts(&expanded_source_matrix_rows);
+    let expanded_source_matrix_complete = false;
+    let matrix_scope = "current-config-formal-handler-matrix";
+    let matrix_scope_contract = json!({
+        "schemaVersion": 1,
+        "scope": matrix_scope,
+        "currentConfigMatrixOpen": true,
+        "currentAdmittedBaselineOpen": true,
+        "sourceShapeRegistryOpen": source_shape_registry.source_shape_registry_open,
+        "expandedSourceMatrixOpen": source_shape_registry.expanded_source_matrix_open,
+        "expandedSourceMatrixComplete": expanded_source_matrix_complete,
+        "currentConfigRows": full_matrix_rows.len(),
+        "currentConfigPresentRows": full_matrix_present_rows,
+        "currentConfigAdmittedRows": full_matrix_admitted_rows,
+        "formalHandlerRows": resident_live_adapter_matrix_entries().len(),
+        "releaseGateMayUseAsSourceMatrix": false,
+        "c10MayUseAsExpandedSourceMatrix": false,
+    });
     let mut report = json!({
         "schema": "resident-live-adapter-config-assessment",
         "config": config_path.map(path_string),
@@ -1244,14 +1268,44 @@ pub(crate) fn resident_live_adapter_config_assessment(
             "error": live_evidence.error,
         },
         "resident_live_adapter_entries": matrix_entries,
-        "full_matrix_open": true,
-        "full_matrix_row_count": full_matrix_rows.len(),
-        "full_matrix_present_row_count": full_matrix_present_rows,
-        "full_matrix_admitted_row_count": full_matrix_admitted_rows,
-        "full_matrix_complete": matrix.matrix_ready,
-        "full_matrix_completion_blocker": if matrix.matrix_ready { Value::Null } else { json!("real live traffic evidence is required before the resident live adapter matrix can be complete") },
-        "full_matrix_rows": full_matrix_rows,
     });
+    report["matrix_scope"] = json!(matrix_scope);
+    report["current_config_matrix_open"] = json!(true);
+    report["current_admitted_baseline_open"] = json!(true);
+    report["source_shape_registry_open"] = json!(source_shape_registry.source_shape_registry_open);
+    report["expanded_source_matrix_open"] =
+        json!(source_shape_registry.expanded_source_matrix_open);
+    report["expanded_source_matrix_complete"] = json!(expanded_source_matrix_complete);
+    report["matrix_scope_contract"] = matrix_scope_contract;
+    report["full_matrix_open"] = json!(true);
+    report["full_matrix_scope"] = json!(matrix_scope);
+    report["full_matrix_is_expanded_source_matrix"] = json!(false);
+    report["full_matrix_release_gate_source_ready"] = json!(false);
+    report["full_matrix_c10_expanded_source_ready"] = json!(false);
+    report["full_matrix_row_count"] = json!(full_matrix_rows.len());
+    report["full_matrix_present_row_count"] = json!(full_matrix_present_rows);
+    report["full_matrix_admitted_row_count"] = json!(full_matrix_admitted_rows);
+    report["full_matrix_complete"] = json!(matrix.matrix_ready);
+    report["full_matrix_completion_blocker"] = if matrix.matrix_ready {
+        Value::Null
+    } else {
+        json!(
+            "real live traffic evidence is required before the resident live adapter matrix can be complete"
+        )
+    };
+    report["source_shape_registry_schema"] = json!(source_shape_registry.schema);
+    report["source_shape_registry_schema_version"] = json!(source_shape_registry.schema_version);
+    report["source_shape_registry_row_count"] = json!(source_shape_registry.rows.len());
+    report["source_shape_registry_contract"] = source_shape_registry.to_value();
+    report["expanded_source_matrix_row_count"] = json!(expanded_source_matrix_rows.len());
+    report["expanded_source_matrix_status_counts"] = expanded_source_matrix_status_counts;
+    report["expanded_source_matrix_release_gate_ready"] = json!(false);
+    report["expanded_source_matrix_c10_ready"] = json!(false);
+    report["source_matrix_completion_blocker"] = json!(
+        "expanded source matrix has fail-closed rows and requires live host, benchmark, and rollback evidence"
+    );
+    report["expanded_source_matrix_rows"] = json!(expanded_source_matrix_rows);
+    report["full_matrix_rows"] = json!(full_matrix_rows);
 
     match build_resident_dataplane_plan(config) {
         Ok(plan) if plan.enabled => {
@@ -1444,8 +1498,12 @@ fn resident_full_matrix_config_rows(
             json!({
                 "handler": entry.handler,
                 "formal_matrix_handler": entry.formal_matrix_handler,
+                "matrix_scope": "current-config-formal-handler-matrix",
                 "opened": true,
                 "source_supported": true,
+                "source_supported_scope": "formal-handler-baseline",
+                "source_shape_registry_status": "open",
+                "expanded_source_matrix_state": "generated",
                 "planner_status": planner_status,
                 "wired_ready": entry.wired_ready(),
                 "runtime_components_ready": runtime_components_ready,
@@ -1467,6 +1525,97 @@ fn resident_full_matrix_config_rows(
             })
         })
         .collect()
+}
+
+fn resident_expanded_source_matrix_rows(
+    nodes: &[plan::ResidentNodeLinkShape],
+    current_config_rows: &[Value],
+) -> Vec<Value> {
+    source_shape_registry_rows()
+        .iter()
+        .map(|row| resident_expanded_source_matrix_row(row, nodes, current_config_rows))
+        .collect()
+}
+
+fn resident_expanded_source_matrix_row(
+    row: &SourceShapeRegistryRow,
+    nodes: &[plan::ResidentNodeLinkShape],
+    current_config_rows: &[Value],
+) -> Value {
+    let candidate_count = nodes
+        .iter()
+        .filter(|node| {
+            row.link_schemes
+                .iter()
+                .any(|scheme| *scheme == node.scheme.as_str())
+        })
+        .count();
+    let current_config_row = current_config_rows.iter().find(|current| {
+        current["formal_matrix_handler"].as_str() == Some(row.protocol_family)
+            || current["handler"].as_str() == Some(row.protocol_family)
+    });
+    let current_config_status = current_config_row
+        .and_then(|current| current["planner_status"].as_str())
+        .unwrap_or("not-present");
+    let planner_status = match (row.source_support, row.resident_status) {
+        ("not-source-supported", _) => "not-source-supported",
+        ("source-supported", "blocked") => "blocked",
+        ("source-supported", "admitted-baseline") if candidate_count == 0 => "not-present",
+        ("source-supported", "admitted-baseline") => current_config_status,
+        _ => "blocked",
+    };
+    let capability_reason_id = match planner_status {
+        "admitted" | "not-present" => Value::Null,
+        "not-source-supported" => json!("unsupported-source-policy"),
+        _ => json!(row.blocker_id.unwrap_or("materialization-mismatch")),
+    };
+    let redacted_detail = match planner_status {
+        "admitted" => "current config candidate is admitted by resident planner",
+        "not-present" => "shape is source-supported but absent from current config",
+        "not-source-supported" => "shape is rejected by Rust native source policy",
+        _ => "shape remains fail-closed until its capability evidence is complete",
+    };
+
+    json!({
+        "schemaVersion": 1,
+        "shapeId": row.shape_id,
+        "sourceSupport": row.source_support,
+        "protocolFamily": row.protocol_family,
+        "linkSchemes": row.link_schemes,
+        "planner_status": planner_status,
+        "candidate_count": candidate_count,
+        "currentConfigStatus": current_config_status,
+        "residentStatus": row.resident_status,
+        "blockerId": row.blocker_id,
+        "capabilityReasonId": capability_reason_id,
+        "redactedDetail": redacted_detail,
+        "redactedIdentity": row.redacted_identity,
+        "endpoint": row.endpoint,
+        "securityUnderlay": row.security_underlay,
+        "streamWrapper": row.stream_wrapper,
+        "packetSemantics": row.packet_semantics,
+        "chainShape": row.chain_shape,
+        "policySurface": row.policy_surface,
+        "reloadLifecycle": row.reload_lifecycle,
+        "parserCoverage": row.parser_coverage,
+        "evidenceRequirements": row.evidence_requirements,
+        "shapeStateLedger": row.state_ledger.to_value(),
+        "componentExecutorProof": row.executor_proof.to_value(),
+        "runtimeSelectionLedger": row.runtime_selection.to_value(),
+        "capabilityLedger": row.capability.to_value(),
+        "expandedLiveMatrixLedger": row.expanded_live_matrix.to_value(),
+        "releaseGateReconciliation": row.release_gate.to_value(),
+        "sourceRegistryRow": (*row).to_value(),
+    })
+}
+
+fn resident_matrix_status_counts(rows: &[Value]) -> Value {
+    let mut counts: BTreeMap<String, usize> = BTreeMap::new();
+    for row in rows {
+        let status = row["planner_status"].as_str().unwrap_or("unknown");
+        *counts.entry(status.to_owned()).or_default() += 1;
+    }
+    json!(counts)
 }
 
 fn resident_matrix_solver_value(

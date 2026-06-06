@@ -277,8 +277,19 @@ fn candidate_service_contract_value(resident_dataplane_ready: bool) -> Value {
         "go_outbound_fallback_retirement_matrix_ready",
         "outbound_production_matrix_typed_report_ready",
         "go_outbound_fallback_retired_candidate",
+        "source_shape_registry_contract_ready",
+        "source_shape_registry_open",
+        "expanded_source_matrix_open",
+        "expanded_source_matrix_blocked_rows_visible",
     ] {
         report.insert(key.to_owned(), json!(true));
+    }
+    for key in [
+        "expanded_source_matrix_complete",
+        "expanded_source_matrix_release_gate_ready",
+        "expanded_source_matrix_c10_ready",
+    ] {
+        report.insert(key.to_owned(), json!(false));
     }
     report.insert(
         "outbound_production_matrix_report_schema".to_owned(),
@@ -305,6 +316,45 @@ fn candidate_service_contract_value(resident_dataplane_ready: bool) -> Value {
         json!({
             "schema": "outbound-production-matrix-typed-report",
             "status": "pass",
+            "stage_report_schema": false,
+        }),
+    );
+    report.insert(
+        "source_shape_registry_report_schema".to_owned(),
+        json!("outbound-source-shape-registry"),
+    );
+    report.insert("source_shape_registry_schema_version".to_owned(), json!(1));
+    report.insert("source_shape_registry_row_count".to_owned(), json!(3));
+    report.insert(
+        "source_shape_registry_rows".to_owned(),
+        json!([
+            {"shapeId": "baseline-tls-vision-endpoint", "residentStatus": "admitted-baseline"},
+            {"shapeId": "stream-wrapper-websocket", "residentStatus": "blocked", "blockerId": "missing-stream-wrapper"},
+            {"shapeId": "foreign-abi-outbound-shape", "residentStatus": "not-source-supported", "blockerId": "unsupported-source-policy"}
+        ]),
+    );
+    report.insert(
+        "expanded_source_matrix_status_counts".to_owned(),
+        json!({
+            "admitted": 1,
+            "blocked": 1,
+            "not-source-supported": 1,
+        }),
+    );
+    report.insert(
+        "expanded_source_matrix_completion_blocker".to_owned(),
+        json!(
+            "expanded source matrix has fail-closed rows and requires live host, benchmark, and rollback evidence"
+        ),
+    );
+    report.insert(
+        "expanded_source_matrix_typed_report".to_owned(),
+        json!({
+            "schema": "expanded-source-matrix-typed-report",
+            "status": "blocked",
+            "expanded_source_matrix_complete": false,
+            "release_gate_ready": false,
+            "c10_ready": false,
             "stage_report_schema": false,
         }),
     );

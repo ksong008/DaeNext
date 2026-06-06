@@ -259,6 +259,10 @@ pub(super) fn go_free_product_chain_gate_json(
     let candidate_go_free_ready = candidate_service_contract["go_free_product_chain_ready"]
         .as_bool()
         .unwrap_or(false);
+    let expanded_source_matrix_c10_ready =
+        candidate_service_contract["expanded_source_matrix_c10_ready"]
+            .as_bool()
+            .unwrap_or(false);
     let default_product_package_scan_ready =
         default_product_package_scan["default_product_package_go_free"]
             .as_bool()
@@ -288,6 +292,7 @@ pub(super) fn go_free_product_chain_gate_json(
         && live_host_contract_ready
         && rollback_model_ready
         && typed_report_ready
+        && expanded_source_matrix_c10_ready
         && default_product_package_scan_ready;
     let go_free_product_chain_ready =
         go_free_product_chain_admission_ready && candidate_go_free_ready;
@@ -360,6 +365,10 @@ pub(super) fn go_free_product_chain_gate_json(
     }
     if !candidate_go_free_ready {
         blockers.push("C10 candidate does not declare go-free product-chain readiness".to_owned());
+    }
+    if !expanded_source_matrix_c10_ready {
+        blockers
+            .push("C10 expanded source matrix is not ready for final go-free release".to_owned());
     }
     blockers.extend(
         default_product_package_scan["blockers"]
@@ -464,6 +473,14 @@ pub(super) fn go_free_product_chain_gate_json(
     report.insert(
         "candidate_go_free_product_chain_ready".to_owned(),
         json!(candidate_go_free_ready),
+    );
+    report.insert(
+        "expanded_source_matrix_c10_ready".to_owned(),
+        json!(expanded_source_matrix_c10_ready),
+    );
+    report.insert(
+        "expanded_source_matrix_typed_report".to_owned(),
+        candidate_service_contract["expanded_source_matrix_typed_report"].clone(),
     );
     report.insert(
         "dependency_boundary_preserved".to_owned(),
