@@ -778,6 +778,10 @@ const OUTBOUND_PRODUCTION_MATRIX_BOOL_FIELDS: &[&str] = &[
     "expanded_source_matrix_blocked_rows_visible",
     "expanded_source_matrix_release_gate_ready",
     "expanded_source_matrix_c10_ready",
+    "stream_wrapper_capability_contract_ready",
+    "websocket_wss_loopback_ready",
+    "stream_wrapper_resident_source_admission_ready",
+    "expanded_stream_wrapper_complete",
 ];
 
 const OUTBOUND_PRODUCTION_MATRIX_COPY_FIELDS: &[&str] = &[
@@ -791,6 +795,10 @@ const OUTBOUND_PRODUCTION_MATRIX_COPY_FIELDS: &[&str] = &[
     "expanded_source_matrix_status_counts",
     "expanded_source_matrix_completion_blocker",
     "expanded_source_matrix_typed_report",
+    "stream_wrapper_capability_report_schema",
+    "stream_wrapper_capability_row_count",
+    "stream_wrapper_capability_rows",
+    "stream_wrapper_capability_typed_report",
 ];
 
 const RESIDENT_LIVE_ADAPTER_MATRIX_BOOL_FIELDS: &[&str] = &[

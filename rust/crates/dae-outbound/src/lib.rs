@@ -20,6 +20,7 @@ pub mod shadowsocks;
 pub mod shared_transport;
 pub mod socks5;
 pub mod source_shape_registry;
+pub mod stream_wrapper_capability;
 pub mod surface;
 pub mod trojan;
 pub mod tuic;
@@ -64,6 +65,10 @@ pub use source_shape_registry::{
     CapabilityLedger, ComponentExecutorProof, ExpandedLiveMatrixLedger, ReleaseGateReconciliation,
     RuntimeSelectionLedger, ShapeStateLedger, SourceShapeRegistryContract, SourceShapeRegistryRow,
     capability_reason_taxonomy, source_shape_registry_contract, source_shape_registry_rows,
+};
+pub use stream_wrapper_capability::{
+    StreamWrapperCapabilityContract, StreamWrapperCapabilityRow,
+    stream_wrapper_capability_contract, stream_wrapper_capability_rows,
 };
 pub use surface::{
     OutboundDependencyBoundary, OutboundDependencyContract, OutboundModuleContract,

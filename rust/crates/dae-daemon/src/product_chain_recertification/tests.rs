@@ -315,6 +315,8 @@ fn candidate_service_contract_value(resident_dataplane_ready: bool) -> Value {
         "source_shape_registry_open",
         "expanded_source_matrix_open",
         "expanded_source_matrix_blocked_rows_visible",
+        "stream_wrapper_capability_contract_ready",
+        "websocket_wss_loopback_ready",
     ] {
         report.insert(key.to_owned(), json!(true));
     }
@@ -322,6 +324,8 @@ fn candidate_service_contract_value(resident_dataplane_ready: bool) -> Value {
         "expanded_source_matrix_complete",
         "expanded_source_matrix_release_gate_ready",
         "expanded_source_matrix_c10_ready",
+        "stream_wrapper_resident_source_admission_ready",
+        "expanded_stream_wrapper_complete",
     ] {
         report.insert(key.to_owned(), json!(false));
     }
@@ -389,6 +393,33 @@ fn candidate_service_contract_value(resident_dataplane_ready: bool) -> Value {
             "expanded_source_matrix_complete": false,
             "release_gate_ready": false,
             "c10_ready": false,
+            "stage_report_schema": false,
+        }),
+    );
+    report.insert(
+        "stream_wrapper_capability_report_schema".to_owned(),
+        json!("stream-wrapper-capability"),
+    );
+    report.insert("stream_wrapper_capability_row_count".to_owned(), json!(1));
+    report.insert(
+        "stream_wrapper_capability_rows".to_owned(),
+        json!([
+            {
+                "wrapperId": "websocket-wss-first-row",
+                "status": "loopback-admitted",
+                "sourceAdmission": "blocked-until-resident-materialization",
+                "blockerId": "missing-live-evidence"
+            }
+        ]),
+    );
+    report.insert(
+        "stream_wrapper_capability_typed_report".to_owned(),
+        json!({
+            "schema": "stream-wrapper-capability-typed-report",
+            "status": "partial",
+            "websocket_wss_loopback_ready": true,
+            "resident_source_admission_ready": false,
+            "expanded_stream_wrapper_complete": false,
             "stage_report_schema": false,
         }),
     );
