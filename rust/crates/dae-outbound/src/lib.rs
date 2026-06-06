@@ -13,6 +13,7 @@ pub mod hysteria2;
 pub mod juicity;
 pub mod latency;
 pub mod link_parser;
+pub mod matrix_extension_capability;
 pub mod policy;
 pub mod production_matrix;
 pub mod security_underlay_capability;
@@ -48,6 +49,15 @@ pub use hysteria2::Hysteria2Link;
 pub use juicity::JuicityLink;
 pub use latency::LatenciesN;
 pub use link_parser::{LinkNode, LinkParseResult, parse_link_chain};
+pub use matrix_extension_capability::{
+    ExpandedLiveMatrixValidationBoundaryContract, ExtensionLayerCapabilityContract,
+    ExtensionLayerCapabilityRow, PacketSemanticsCapabilityContract, PacketSemanticsCapabilityRow,
+    TransportOptionCapabilityContract, TransportOptionCapabilityRow,
+    expanded_live_matrix_validation_boundary_contract, extension_layer_capability_contract,
+    extension_layer_capability_rows, packet_semantics_capability_contract,
+    packet_semantics_capability_rows, transport_option_capability_contract,
+    transport_option_capability_rows,
+};
 pub use policy::SelectionPolicy;
 pub use production_matrix::{
     OutboundProductionMatrixContract, OutboundProductionMatrixEntry,

@@ -116,6 +116,14 @@ pub(super) fn tcp_execution_descriptor(label: &str) -> RuntimeExecutionDescripto
             RuntimeExecutionDescriptor::new(label, "tcp-relay", "stream-transport", "tcp")
                 .with_transport_underlay("tcp")
         }
+        "async-proxy-websocket-tls" => RuntimeExecutionDescriptor::new(
+            label,
+            "wrapped-stream-relay",
+            "stream-transport",
+            "tcp",
+        )
+        .with_stream_wrapper("websocket")
+        .with_transport_underlay("tcp"),
         "async-proxy-frame-tls" => {
             RuntimeExecutionDescriptor::new(label, "frame-stream-relay", "stream-transport", "tcp")
                 .with_stream_wrapper("frame-stream")
@@ -139,6 +147,14 @@ pub(super) fn tcp_execution_descriptor(label: &str) -> RuntimeExecutionDescripto
             RuntimeExecutionDescriptor::new(label, "aead-tcp-relay", "stream-transport", "tcp")
                 .with_transport_underlay("tcp")
         }
+        "first-batch-websocket-aead" => RuntimeExecutionDescriptor::new(
+            label,
+            "wrapped-stream-relay",
+            "stream-transport",
+            "tcp",
+        )
+        .with_stream_wrapper("websocket")
+        .with_transport_underlay("tcp"),
         "per-connection-thread-transitional" | "per-connection-thread-legacy" => {
             RuntimeExecutionDescriptor::new(
                 label,

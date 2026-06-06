@@ -1,7 +1,7 @@
 use super::*;
 
 #[test]
-fn stream_wrapper_capability_opens_websocket_loopback_but_not_source_admission() {
+fn stream_wrapper_capability_records_websocket_live_partial_but_not_source_admission() {
     let contract = stream_wrapper_capability_contract();
 
     assert_eq!(contract.schema, "stream-wrapper-capability");
@@ -15,13 +15,13 @@ fn stream_wrapper_capability_opens_websocket_loopback_but_not_source_admission()
         .iter()
         .find(|row| row.wrapper_id == "websocket-wss-first-row")
         .unwrap();
-    assert_eq!(websocket.status, "loopback-admitted");
+    assert_eq!(websocket.status, "resident-live-partial");
     assert_eq!(
         websocket.source_admission,
-        "blocked-until-resident-materialization"
+        "blocked-until-multi-handler-benchmark-rollback"
     );
-    assert_eq!(websocket.provider, "shared-websocket-frame-executor");
-    assert_eq!(websocket.blocker_id, Some("missing-live-evidence"));
+    assert_eq!(websocket.provider, "resident-websocket-binary-frame");
+    assert_eq!(websocket.blocker_id, Some("incomplete-wrapper-coverage"));
 }
 
 #[test]
