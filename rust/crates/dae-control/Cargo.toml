@@ -6,7 +6,11 @@ license.workspace = true
 repository.workspace = true
 
 [lib]
-crate-type = ["rlib", "staticlib"]
+crate-type = ["rlib"]
+
+[features]
+default = []
+ffi-compat = []
 
 [dependencies]
 dae-core-types.workspace = true
