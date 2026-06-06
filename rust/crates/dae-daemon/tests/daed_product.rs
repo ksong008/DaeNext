@@ -22,6 +22,34 @@ fn binary() -> &'static str {
     env!("CARGO_BIN_EXE_daed")
 }
 
+fn assert_protocol_matrix_source_uses_generic_semantics(source: &str) {
+    let forbidden = [
+        ["matrix", "-", "socks", "-", "pass"].concat(),
+        ["matrix", "-", "http", "-", "pass"].concat(),
+        ["matrix", "-", "ss", "-", "pass"].concat(),
+        ["matrix", "-", "trojan", "-", "pass"].concat(),
+        ["matrix", "-", "anytls", "-", "pass"].concat(),
+        ["matrix", "-", "hy2", "-", "auth"].concat(),
+        ["matrix", "-", "tuic", "-", "pass"].concat(),
+        ["matrix", "-", "juicity", "-", "pass"].concat(),
+        ["socks5://", "matrix"].concat(),
+        ["http://", "matrix"].concat(),
+        ["trojan-go://", "matrix"].concat(),
+        ["anytls://", "matrix"].concat(),
+    ];
+    for needle in forbidden {
+        assert!(
+            !source.contains(&needle),
+            "protocol matrix source fixtures must use protocol-generic semantics, found {needle}"
+        );
+    }
+}
+
+#[test]
+fn daed_product_protocol_matrix_source_fixtures_use_generic_semantics() {
+    assert_protocol_matrix_source_uses_generic_semantics(include_str!("daed_product.rs"));
+}
+
 fn vmess_fixture_url(ps: &str, add: &str, port: u16, net: &str) -> String {
     VMessLink {
         ps: ps.to_owned(),
@@ -48,7 +76,7 @@ fn shadowsocks_fixture_url(ps: &str, add: &str, port: u16) -> String {
         name: ps.to_owned(),
         server: add.to_owned(),
         port,
-        password: "matrix-ss-pass".to_owned(),
+        password: "ss-password".to_owned(),
         cipher: "aes-128-gcm".to_owned(),
         plugin: Sip003::default(),
         udp: true,
@@ -88,7 +116,7 @@ fn trojan_fixture_url(ps: &str, add: &str, port: u16) -> String {
         name: ps.to_owned(),
         server: add.to_owned(),
         port,
-        password: "matrix-trojan-pass".to_owned(),
+        password: "trojan-password".to_owned(),
         sni: "office.example".to_owned(),
         transport_type: String::new(),
         encryption: String::new(),
@@ -104,7 +132,7 @@ fn trojan_fixture_url(ps: &str, add: &str, port: u16) -> String {
 fn hysteria2_fixture_url(ps: &str, add: &str, port: u16) -> String {
     Hysteria2Link {
         name: ps.to_owned(),
-        user: "matrix-hy2-auth".to_owned(),
+        user: "hy2-auth".to_owned(),
         password: String::new(),
         server: format!("{add}:{port}"),
         insecure: false,
@@ -120,7 +148,7 @@ fn tuic_fixture_url(ps: &str, add: &str, port: u16) -> String {
     TuicLink {
         name: ps.to_owned(),
         user: "01234567-89ab-cdef-0123-456789abcdef".to_owned(),
-        password: "matrix-tuic-pass".to_owned(),
+        password: "tuic-password".to_owned(),
         server: add.to_owned(),
         port,
         sni: "office.example".to_owned(),
@@ -138,7 +166,7 @@ fn juicity_fixture_url(ps: &str, add: &str, port: u16) -> String {
     JuicityLink {
         name: ps.to_owned(),
         user: "01234567-89ab-cdef-0123-456789abcdef".to_owned(),
-        password: "matrix-juicity-pass".to_owned(),
+        password: "juicity-password".to_owned(),
         server: add.to_owned(),
         port,
         sni: "office.example".to_owned(),
@@ -543,11 +571,11 @@ global {
 }
 node {
   vless_live: '__VLESS_LIVE__'
-  socks_live: 'socks5://matrix:matrix-socks-pass@example.com:28447#socks'
-  http_live: 'http://matrix:matrix-http-pass@example.com:28448#http'
+  socks_live: 'socks5://user:socks-password@example.com:28447#socks'
+  http_live: 'http://user:http-password@example.com:28448#http'
   ss_live: '__SS_LIVE__'
   trojan_live: '__TROJAN_LIVE__'
-  anytls_live: 'anytls://matrix-anytls-pass@example.com:28451?sni=office.example#anytls'
+  anytls_live: 'anytls://anytls-password@example.com:28451?sni=office.example#anytls'
   vmess_live: '__VMESS_LIVE__'
   hy2_live: '__HY2_LIVE__'
   tuic_live: '__TUIC_LIVE__'
@@ -678,7 +706,7 @@ routing {
     for secret in [
         "vless://",
         "socks5://",
-        "http://matrix",
+        "http://user",
         "ss://",
         "trojan://",
         "anytls://",
@@ -686,14 +714,14 @@ routing {
         "hy2://",
         "tuic://",
         "juicity://",
-        "matrix-socks-pass",
-        "matrix-http-pass",
-        "matrix-ss-pass",
-        "matrix-trojan-pass",
-        "matrix-anytls-pass",
-        "matrix-hy2-auth",
-        "matrix-tuic-pass",
-        "matrix-juicity-pass",
+        "socks-password",
+        "http-password",
+        "ss-password",
+        "trojan-password",
+        "anytls-password",
+        "hy2-auth",
+        "tuic-password",
+        "juicity-password",
         "01234567-89ab",
     ] {
         assert!(!stdout.contains(secret), "{secret} leaked in {stdout}");
