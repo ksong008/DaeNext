@@ -16,7 +16,9 @@ use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 
 pub(crate) use self::adapter_matrix::{
+    resident_live_adapter_entry_missing, resident_live_adapter_entry_remote_live_matrix_ready,
     resident_live_adapter_matrix_contract, resident_live_adapter_matrix_entries,
+    resident_live_matrix_evidence_from_env,
 };
 pub(crate) use self::events::{ResidentEventLogSink, set_event_log_sink};
 use self::events::{append_event, path_string};
@@ -1188,18 +1190,23 @@ pub(crate) fn resident_live_adapter_config_assessment(
     config_path: Option<&Path>,
 ) -> Value {
     let matrix = resident_live_adapter_matrix_contract();
+    let live_evidence = resident_live_matrix_evidence_from_env();
     let node_shapes = plan::resident_node_link_shapes(config);
     let matrix_entries = resident_live_adapter_matrix_entries()
         .iter()
         .map(|entry| {
+            let remote_live_matrix =
+                resident_live_adapter_entry_remote_live_matrix_ready(entry, &live_evidence);
+            let missing = resident_live_adapter_entry_missing(entry, &live_evidence);
             json!({
                 "handler": entry.handler,
                 "formal_matrix_handler": entry.formal_matrix_handler,
                 "udp_semantics": entry.udp_semantics,
                 "udp_path_ready": entry.udp_path_ready(),
                 "wired_ready": entry.wired_ready(),
-                "live_ready": entry.live_ready(),
-                "missing": entry.missing,
+                "remote_live_matrix": remote_live_matrix,
+                "live_ready": entry.wired_ready() && remote_live_matrix && missing.is_empty(),
+                "missing": missing,
             })
         })
         .collect::<Vec<_>>();
@@ -1223,6 +1230,19 @@ pub(crate) fn resident_live_adapter_config_assessment(
         "resident_live_adapter_matrix_ready": matrix.matrix_ready,
         "resident_live_adapter_wired_matrix_ready": matrix.wired_matrix_ready,
         "resident_live_adapter_remote_live_matrix_ready": matrix.remote_live_matrix_ready,
+        "resident_live_adapter_remote_live_matrix_evidence": {
+            "env": live_evidence.env,
+            "source": live_evidence.source,
+            "schema": live_evidence.schema,
+            "schemaVersion": live_evidence.schema_version,
+            "candidateSha256": live_evidence.candidate_sha256,
+            "rowCount": live_evidence.row_count,
+            "passCount": live_evidence.pass_count,
+            "allPass": live_evidence.all_pass,
+            "valid": live_evidence.valid,
+            "readyHandlers": live_evidence.ready_handlers.iter().cloned().collect::<Vec<_>>(),
+            "error": live_evidence.error,
+        },
         "resident_live_adapter_entries": matrix_entries,
         "full_matrix_open": true,
         "full_matrix_row_count": full_matrix_rows.len(),
@@ -1376,9 +1396,13 @@ fn resident_full_matrix_config_rows(
     config: &Config,
     nodes: &[plan::ResidentNodeLinkShape],
 ) -> Vec<Value> {
+    let live_evidence = resident_live_matrix_evidence_from_env();
     resident_live_adapter_matrix_entries()
         .iter()
         .map(|entry| {
+            let remote_live_matrix =
+                resident_live_adapter_entry_remote_live_matrix_ready(entry, &live_evidence);
+            let missing = resident_live_adapter_entry_missing(entry, &live_evidence);
             let schemes = matrix_row_schemes(entry.formal_matrix_handler);
             let candidates = nodes
                 .iter()
@@ -1412,6 +1436,8 @@ fn resident_full_matrix_config_rows(
                 admitted_count,
                 blocked_count,
                 runtime_components_ready,
+                remote_live_matrix,
+                missing.is_empty(),
             );
             let default_ready = generated_solver["defaultReady"].clone();
             let go_free_ready = generated_solver["goFreeReady"].clone();
@@ -1423,8 +1449,8 @@ fn resident_full_matrix_config_rows(
                 "planner_status": planner_status,
                 "wired_ready": entry.wired_ready(),
                 "runtime_components_ready": runtime_components_ready,
-                "live_ready": entry.live_ready(),
-                "remote_live_matrix": entry.remote_live_matrix,
+                "live_ready": entry.wired_ready() && remote_live_matrix && missing.is_empty(),
+                "remote_live_matrix": remote_live_matrix,
                 "udp_live_adapter": entry.udp_live_adapter,
                 "udp_semantics": entry.udp_semantics,
                 "udp_path_ready": entry.udp_path_ready(),
@@ -1436,7 +1462,7 @@ fn resident_full_matrix_config_rows(
                 "generated_solver": generated_solver,
                 "default_ready": default_ready,
                 "go_free_ready": go_free_ready,
-                "missing": entry.missing,
+                "missing": missing,
                 "candidates": candidate_reports,
             })
         })
@@ -1449,6 +1475,8 @@ fn resident_matrix_solver_value(
     admitted_count: usize,
     blocked_count: usize,
     runtime_components_ready: bool,
+    remote_live_matrix: bool,
+    remote_live_matrix_complete: bool,
 ) -> Value {
     let parser_covered = candidate_count > 0;
     let normalized_graph_ready = admitted_count > 0;
@@ -1459,7 +1487,7 @@ fn resident_matrix_solver_value(
     let udp_loopback_ready = executable_graph_ready && entry.udp_path_ready();
     let reload_cleanup_ready = executable_graph_ready;
     let benchmark_ready = false;
-    let live_ready = executable_graph_ready && entry.remote_live_matrix && entry.missing.is_empty();
+    let live_ready = executable_graph_ready && remote_live_matrix && remote_live_matrix_complete;
     let default_ready = live_ready && benchmark_ready;
     let go_free_ready = default_ready && entry.go_outbound_fallback_retired;
     let blockers = resident_matrix_solver_blockers(

@@ -1,3 +1,14 @@
+use std::collections::BTreeSet;
+use std::fs;
+
+use serde_json::Value;
+
+pub(crate) const RESIDENT_LIVE_MATRIX_EVIDENCE_ENV: &str = "DAE_RESIDENT_LIVE_MATRIX_EVIDENCE";
+
+const REMOTE_LIVE_MATRIX_MISSING: &str =
+    "remote live matrix evidence not recorded by live-evidence-ledger";
+const REMOTE_LIVE_MATRIX_INVALID: &str = "remote live matrix evidence is invalid or incomplete";
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) struct ResidentLiveAdapterMatrixEntry {
     pub(crate) handler: &'static str,
@@ -32,9 +43,58 @@ impl ResidentLiveAdapterMatrixEntry {
             && self.fingerprint_underlay
             && self.go_outbound_fallback_retired
     }
+}
 
-    pub(crate) fn live_ready(self) -> bool {
-        self.wired_ready() && self.remote_live_matrix && self.missing.is_empty()
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct ResidentLiveMatrixEvidence {
+    pub(crate) env: &'static str,
+    pub(crate) source: Option<String>,
+    pub(crate) schema: Option<String>,
+    pub(crate) schema_version: Option<i64>,
+    pub(crate) candidate_sha256: Option<String>,
+    pub(crate) row_count: usize,
+    pub(crate) pass_count: usize,
+    pub(crate) all_pass: bool,
+    pub(crate) valid: bool,
+    pub(crate) ready_handlers: BTreeSet<String>,
+    pub(crate) error: Option<String>,
+}
+
+impl ResidentLiveMatrixEvidence {
+    fn missing() -> Self {
+        Self {
+            env: RESIDENT_LIVE_MATRIX_EVIDENCE_ENV,
+            source: None,
+            schema: None,
+            schema_version: None,
+            candidate_sha256: None,
+            row_count: 0,
+            pass_count: 0,
+            all_pass: false,
+            valid: false,
+            ready_handlers: BTreeSet::new(),
+            error: Some(REMOTE_LIVE_MATRIX_MISSING.to_owned()),
+        }
+    }
+
+    fn invalid(source: String, error: impl Into<String>) -> Self {
+        Self {
+            env: RESIDENT_LIVE_MATRIX_EVIDENCE_ENV,
+            source: Some(source),
+            schema: None,
+            schema_version: None,
+            candidate_sha256: None,
+            row_count: 0,
+            pass_count: 0,
+            all_pass: false,
+            valid: false,
+            ready_handlers: BTreeSet::new(),
+            error: Some(error.into()),
+        }
+    }
+
+    pub(crate) fn handler_ready(&self, handler: &str) -> bool {
+        self.valid && self.ready_handlers.contains(handler)
     }
 }
 
@@ -57,6 +117,7 @@ pub(crate) struct ResidentLiveAdapterMatrixContract {
 
 pub(crate) fn resident_live_adapter_matrix_contract() -> ResidentLiveAdapterMatrixContract {
     let entries = resident_live_adapter_matrix_entries();
+    let evidence = resident_live_matrix_evidence_from_env();
     let planner_admission_ready = entries.iter().all(|entry| entry.planner_admitted);
     let tcp_live_adapter_ready = entries.iter().all(|entry| entry.tcp_live_adapter);
     let udp_live_adapter_ready = entries.iter().all(|entry| entry.udp_path_ready());
@@ -72,7 +133,7 @@ pub(crate) fn resident_live_adapter_matrix_contract() -> ResidentLiveAdapterMatr
     let remote_live_matrix_ready = !entries.is_empty()
         && entries
             .iter()
-            .all(|entry| entry.remote_live_matrix && entry.missing.is_empty());
+            .all(|entry| resident_live_adapter_entry_remote_live_matrix_ready(entry, &evidence));
     let matrix_ready = wired_matrix_ready && remote_live_matrix_ready;
 
     ResidentLiveAdapterMatrixContract {
@@ -90,6 +151,164 @@ pub(crate) fn resident_live_adapter_matrix_contract() -> ResidentLiveAdapterMatr
         remote_live_matrix_ready,
         matrix_ready,
     }
+}
+
+pub(crate) fn resident_live_matrix_evidence_from_env() -> ResidentLiveMatrixEvidence {
+    let Ok(source) = std::env::var(RESIDENT_LIVE_MATRIX_EVIDENCE_ENV) else {
+        return ResidentLiveMatrixEvidence::missing();
+    };
+    let source = source.trim().to_owned();
+    if source.is_empty() {
+        return ResidentLiveMatrixEvidence::missing();
+    }
+    let text = match fs::read_to_string(&source) {
+        Ok(text) => text,
+        Err(err) => {
+            return ResidentLiveMatrixEvidence::invalid(
+                source,
+                format!("read remote live matrix evidence: {err}"),
+            );
+        }
+    };
+    let root: Value = match serde_json::from_str(&text) {
+        Ok(root) => root,
+        Err(err) => {
+            return ResidentLiveMatrixEvidence::invalid(
+                source,
+                format!("parse remote live matrix evidence: {err}"),
+            );
+        }
+    };
+    resident_live_matrix_evidence_from_value(Some(source), &root)
+}
+
+pub(crate) fn resident_live_matrix_evidence_from_value(
+    source: Option<String>,
+    root: &Value,
+) -> ResidentLiveMatrixEvidence {
+    let source_for_error = source.clone().unwrap_or_else(|| "<inline>".to_owned());
+    let schema = root["schema"].as_str().map(str::to_owned);
+    let schema_version = root["schemaVersion"].as_i64();
+    let candidate_sha256 = root["candidateSha256"].as_str().map(str::to_owned);
+    let row_count = root["rowCount"].as_u64().unwrap_or(0) as usize;
+    let pass_count = root["passCount"].as_u64().unwrap_or(0) as usize;
+    let all_pass = root["allPass"].as_bool().unwrap_or(false);
+    let Some(rows) = root["rows"].as_array() else {
+        return ResidentLiveMatrixEvidence {
+            env: RESIDENT_LIVE_MATRIX_EVIDENCE_ENV,
+            source,
+            schema,
+            schema_version,
+            candidate_sha256,
+            row_count,
+            pass_count,
+            all_pass,
+            valid: false,
+            ready_handlers: BTreeSet::new(),
+            error: Some(format!(
+                "{REMOTE_LIVE_MATRIX_INVALID}: rows array missing in {source_for_error}"
+            )),
+        };
+    };
+    let mut ready_handlers = BTreeSet::new();
+    for row in rows {
+        let Some(name) = row["row"].as_str() else {
+            continue;
+        };
+        if resident_live_matrix_row_passes(name, row) {
+            ready_handlers.insert(name.to_owned());
+        }
+    }
+    let required_handlers = resident_live_adapter_matrix_entries()
+        .iter()
+        .map(|entry| entry.formal_matrix_handler)
+        .collect::<BTreeSet<_>>();
+    let all_handlers_ready = required_handlers
+        .iter()
+        .all(|handler| ready_handlers.contains(*handler));
+    let valid = schema.as_deref() == Some("daex-current-live-resident-matrix")
+        && schema_version == Some(1)
+        && all_pass
+        && row_count == required_handlers.len()
+        && pass_count == required_handlers.len()
+        && rows.len() == required_handlers.len()
+        && all_handlers_ready;
+    let error = if valid {
+        None
+    } else {
+        Some(format!(
+            "{REMOTE_LIVE_MATRIX_INVALID}: schema={schema:?} schemaVersion={schema_version:?} rowCount={row_count} passCount={pass_count} allPass={all_pass} readyHandlers={}",
+            ready_handlers.len()
+        ))
+    };
+    ResidentLiveMatrixEvidence {
+        env: RESIDENT_LIVE_MATRIX_EVIDENCE_ENV,
+        source,
+        schema,
+        schema_version,
+        candidate_sha256,
+        row_count,
+        pass_count,
+        all_pass,
+        valid,
+        ready_handlers,
+        error,
+    }
+}
+
+fn resident_live_matrix_row_passes(name: &str, row: &Value) -> bool {
+    row["pass"].as_bool() == Some(true)
+        && row["ready"].as_bool() == Some(true)
+        && target_large_page_passes(row, "google", 10_000)
+        && target_large_page_passes(row, "youtube", 100_000)
+        && proxy_evidence_passes(row, "www.google.com")
+        && proxy_evidence_passes(row, "www.youtube.com")
+        && row["targetFailures"]
+            .as_array()
+            .is_none_or(|failures| failures.is_empty())
+        && resident_live_adapter_matrix_entries()
+            .iter()
+            .any(|entry| entry.formal_matrix_handler == name)
+}
+
+fn target_large_page_passes(row: &Value, target: &str, min_size: u64) -> bool {
+    let target = &row["targets"][target];
+    target["http_code"].as_u64() == Some(200)
+        && target["largePagePass"].as_bool() == Some(true)
+        && target["size"].as_u64().is_some_and(|size| size >= min_size)
+}
+
+fn proxy_evidence_passes(row: &Value, domain: &str) -> bool {
+    row["proxyEvidence"][domain].as_bool() == Some(true)
+}
+
+pub(crate) fn resident_live_adapter_entry_remote_live_matrix_ready(
+    entry: &ResidentLiveAdapterMatrixEntry,
+    evidence: &ResidentLiveMatrixEvidence,
+) -> bool {
+    entry.remote_live_matrix || evidence.handler_ready(entry.formal_matrix_handler)
+}
+
+pub(crate) fn resident_live_adapter_entry_missing(
+    entry: &ResidentLiveAdapterMatrixEntry,
+    evidence: &ResidentLiveMatrixEvidence,
+) -> Vec<String> {
+    if resident_live_adapter_entry_remote_live_matrix_ready(entry, evidence) {
+        return Vec::new();
+    }
+    if evidence.source.is_some() {
+        return vec![
+            evidence
+                .error
+                .clone()
+                .unwrap_or_else(|| REMOTE_LIVE_MATRIX_INVALID.to_owned()),
+        ];
+    }
+    entry
+        .missing
+        .iter()
+        .map(|missing| (*missing).to_owned())
+        .collect()
 }
 
 pub(crate) fn resident_live_adapter_matrix_entries() -> &'static [ResidentLiveAdapterMatrixEntry] {
@@ -270,5 +489,99 @@ const fn protocol_closed_remote_live_entry(
         fingerprint_behavior,
         evidence,
         missing: &["remote live matrix evidence not recorded by live-evidence-ledger"],
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use serde_json::{Value, json};
+
+    use super::{
+        resident_live_adapter_entry_missing, resident_live_adapter_entry_remote_live_matrix_ready,
+        resident_live_adapter_matrix_entries, resident_live_matrix_evidence_from_value,
+    };
+
+    #[test]
+    fn remote_live_matrix_evidence_admits_all_rows_only_when_large_pages_are_proxied() {
+        let rows = resident_live_adapter_matrix_entries()
+            .iter()
+            .map(|entry| live_row(entry.formal_matrix_handler))
+            .collect::<Vec<_>>();
+        let evidence = resident_live_matrix_evidence_from_value(
+            Some("/tmp/current-live-summary.json".to_owned()),
+            &json!({
+                "schema": "daex-current-live-resident-matrix",
+                "schemaVersion": 1,
+                "candidateSha256": "abc",
+                "rowCount": rows.len(),
+                "passCount": rows.len(),
+                "allPass": true,
+                "rows": rows,
+                "directControlNotCounted": {
+                    "google": {"http_code": 200, "size": 90000},
+                    "youtube": {"http_code": 200, "size": 700000}
+                }
+            }),
+        );
+
+        assert!(evidence.valid);
+        for entry in resident_live_adapter_matrix_entries() {
+            assert!(resident_live_adapter_entry_remote_live_matrix_ready(
+                entry, &evidence
+            ));
+            assert!(resident_live_adapter_entry_missing(entry, &evidence).is_empty());
+        }
+    }
+
+    #[test]
+    fn remote_live_matrix_evidence_rejects_missing_proxy_evidence() {
+        let mut rows = resident_live_adapter_matrix_entries()
+            .iter()
+            .map(|entry| live_row(entry.formal_matrix_handler))
+            .collect::<Vec<_>>();
+        rows[0]["proxyEvidence"]["www.youtube.com"] = json!(false);
+        let evidence = resident_live_matrix_evidence_from_value(
+            Some("/tmp/current-live-summary.json".to_owned()),
+            &json!({
+                "schema": "daex-current-live-resident-matrix",
+                "schemaVersion": 1,
+                "rowCount": rows.len(),
+                "passCount": rows.len(),
+                "allPass": true,
+                "rows": rows
+            }),
+        );
+
+        assert!(!evidence.valid);
+        let first = &resident_live_adapter_matrix_entries()[0];
+        assert!(!resident_live_adapter_entry_remote_live_matrix_ready(
+            first, &evidence
+        ));
+        assert!(!resident_live_adapter_entry_missing(first, &evidence).is_empty());
+    }
+
+    fn live_row(row: &str) -> Value {
+        json!({
+            "row": row,
+            "pass": true,
+            "ready": true,
+            "targets": {
+                "google": {
+                    "http_code": 200,
+                    "size": 82_000,
+                    "largePagePass": true
+                },
+                "youtube": {
+                    "http_code": 200,
+                    "size": 712_000,
+                    "largePagePass": true
+                }
+            },
+            "proxyEvidence": {
+                "www.google.com": true,
+                "www.youtube.com": true
+            },
+            "targetFailures": []
+        })
     }
 }
