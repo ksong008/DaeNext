@@ -56,6 +56,27 @@ fn contract_names_do_not_use_retired_version_suffix_or_stage_ids() {
     assert!(offenders.is_empty(), "{}", offenders.join("\n"));
 }
 
+#[test]
+fn userland_ffi_c_abi_is_not_in_default_control_crate_path() {
+    let repo_root = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../../..")
+        .canonicalize()
+        .unwrap();
+    let cargo_toml =
+        std::fs::read_to_string(repo_root.join("rust/crates/dae-control/Cargo.toml")).unwrap();
+    let control_lib =
+        std::fs::read_to_string(repo_root.join("rust/crates/dae-control/src/lib.rs")).unwrap();
+
+    assert!(
+        !cargo_toml.contains("staticlib"),
+        "dae-control must not expose a default userland C ABI staticlib"
+    );
+    assert!(
+        control_lib.contains("#[cfg(feature = \"ffi-compat\")]\npub mod ffi;"),
+        "dae-control ffi module must be behind explicit ffi-compat"
+    );
+}
+
 fn collect_contract_name_scan_files(root: &std::path::Path, files: &mut Vec<std::path::PathBuf>) {
     if !root.exists() {
         return;

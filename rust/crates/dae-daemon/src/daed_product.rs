@@ -301,57 +301,25 @@ fn product_runtime_defaults() -> Value {
     })
 }
 
-fn c10_final_blockers() -> Vec<&'static str> {
-    vec![
-        "generated protocol matrix live evidence is not recorded",
-        "default-ready benchmark evidence is not recorded",
-        "go-free artifact build-chain scan has not passed for the default package",
-        "userland FFI/C ABI retirement is not proven for the default path",
-        "Go oracle/default dependency retirement is not proven for the default path",
-        "Rust internal fallback normalization is not proven for the default path",
-    ]
+fn c10_final_blockers() -> Vec<String> {
+    crate::c10_go_free_evidence::c10_go_free_product_chain_evidence_from_env().blockers
 }
 
 fn c10_final_gate_evidence() -> Value {
-    json!({
-        "schema": "c10-final-go-free-product-chain-evidence",
-        "status": "blocked",
-        "evidenceDate": Value::Null,
-        "liveHost": "remote-38",
-        "liveEvidenceRoot": "/tmp/daed-c10-live",
-        "liveEvidenceSummary": "/tmp/daed-c10-live/evidence/summary.json",
-        "groupRegexEvidence": "/tmp/daed-c10-live/evidence/http-groups.json",
-        "generatedConfigEvidence": "/tmp/daed-c10-live/config/runtime/generated.dae",
-        "defaultPathBinary": "/usr/bin/daed",
-        "defaultWebRoot": DEFAULT_WEB_ROOT,
-        "defaultConfigDir": DEFAULT_CONFIG_DIR,
-        "protectedRollbackStateStore": PROTECTED_ROLLBACK_STATE_STORE,
-        "primaryStateStore": PRIMARY_STATE_STORE,
-        "productSurfaceEvidenceRecorded": true,
-        "protocolMatrixLiveEvidenceRecorded": false,
-        "liveDefaultSwitchApplied": false,
-        "rollbackValidationAppliedOnLiveHost": false,
-        "releaseDefaultSwitchAdmission": false,
-        "productionPackageAdmission": false,
-        "webApiReloadStopValidated": true,
-        "groupRegexBindingValidated": true,
-        "rustProductBinaryValidated": true,
-        "nativeEbpfDefaultPackageValidated": false,
-        "goDefaultPathRetired": false,
-        "blockers": c10_final_blockers(),
-    })
+    crate::c10_go_free_evidence::c10_go_free_product_chain_evidence_from_env().report
 }
 
 fn c10_final_admission() -> Value {
+    let evidence = crate::c10_go_free_evidence::c10_go_free_product_chain_evidence_from_env();
     json!({
-        "liveDefaultSwitchApplied": false,
-        "rollbackValidationAppliedOnLiveHost": false,
-        "releaseDefaultSwitchAdmission": false,
-        "productionPackageAdmission": false,
-        "goDaewingDefaultPathRemoved": false,
-        "fullGoFreeProductChainReady": false,
-        "evidence": c10_final_gate_evidence(),
-        "blockers": c10_final_blockers(),
+        "liveDefaultSwitchApplied": evidence.report["liveDefaultSwitchApplied"].as_bool().unwrap_or(false),
+        "rollbackValidationAppliedOnLiveHost": evidence.report["rollbackValidationAppliedOnLiveHost"].as_bool().unwrap_or(false),
+        "releaseDefaultSwitchAdmission": evidence.report["releaseDefaultSwitchAdmission"].as_bool().unwrap_or(false),
+        "productionPackageAdmission": evidence.report["productionPackageAdmission"].as_bool().unwrap_or(false),
+        "goDaewingDefaultPathRemoved": evidence.report["goDaewingDefaultPathRemoved"].as_bool().unwrap_or(false),
+        "fullGoFreeProductChainReady": evidence.ready,
+        "evidence": evidence.report,
+        "blockers": evidence.blockers,
     })
 }
 
@@ -1488,6 +1456,7 @@ fn parse_state_migrate_args(args: &[String]) -> Result<(PathBuf, PathBuf, bool),
 
 fn daed_service_contract(version: &str) -> Value {
     let mut report = crate::service_contract::service_contract_capabilities(version);
+    let c10_evidence = crate::c10_go_free_evidence::c10_go_free_product_chain_evidence_from_env();
     if let Value::Object(report) = &mut report {
         report.insert("product_binary".to_owned(), json!("daed"));
         report.insert("product_entry".to_owned(), json!("/usr/bin/daed"));
@@ -1571,80 +1540,129 @@ fn daed_service_contract(version: &str) -> Value {
             "rust_daed_local_package_admission_ready".to_owned(),
             json!(true),
         );
-        report.insert("default_product_package_go_free".to_owned(), json!(false));
+        report.insert(
+            "default_product_package_go_free".to_owned(),
+            json!(c10_evidence.default_product_package_go_free),
+        );
         report.insert(
             "go_product_shell_retired_from_default_package".to_owned(),
-            json!(false),
+            json!(c10_evidence.go_product_shell_retired),
         );
         report.insert(
             "go_orchestration_retired_from_default_package".to_owned(),
-            json!(false),
+            json!(c10_evidence.go_orchestration_retired),
         );
         report.insert(
             "go_control_runtime_api_service_release_retired_from_default_package".to_owned(),
-            json!(false),
+            json!(c10_evidence.go_control_runtime_api_service_release_retired),
         );
         report.insert(
             "go_outbound_dependency_retired_from_default_package".to_owned(),
-            json!(false),
+            json!(c10_evidence.go_outbound_dependency_retired),
         );
         report.insert("leptos_webui_rewrite_considered".to_owned(), json!(false));
-        report.insert("go_free_live_host_contract_ready".to_owned(), json!(false));
-        report.insert("go_free_rollback_model_ready".to_owned(), json!(true));
+        report.insert(
+            "go_compat_oracle_boundary_ready".to_owned(),
+            json!(c10_evidence.go_compat_oracle_boundary_ready),
+        );
+        report.insert(
+            "go_free_live_host_contract_ready".to_owned(),
+            json!(c10_evidence.live_host_contract_ready),
+        );
+        report.insert(
+            "go_free_rollback_model_ready".to_owned(),
+            json!(c10_evidence.rollback_model_ready),
+        );
         report.insert(
             "go_free_product_chain_typed_report_ready".to_owned(),
-            json!(true),
+            json!(c10_evidence.typed_report_ready),
         );
-        report.insert("go_free_product_chain_ready".to_owned(), json!(false));
+        report.insert(
+            "go_free_product_chain_ready".to_owned(),
+            json!(c10_evidence.ready),
+        );
         report.insert(
             "go_free_product_chain_final_evidence".to_owned(),
-            c10_final_gate_evidence(),
+            c10_evidence.report.clone(),
         );
         report.insert(
             "go_free_product_chain_current_batch".to_owned(),
-            json!(
+            json!(if c10_evidence.ready {
+                "C10 final go-free product-chain evidence admitted"
+            } else {
                 "C10 final go-free product-chain blocked pending live matrix and artifact evidence"
-            ),
+            }),
         );
         report.insert(
             "go_free_product_chain_remaining_work".to_owned(),
-            json!(c10_final_blockers()),
+            json!(c10_evidence.blockers.clone()),
         );
         if let Some(Value::Object(typed_report)) =
             report.get_mut("go_free_product_chain_typed_report")
         {
-            typed_report.insert("default_product_package_go_free".to_owned(), json!(false));
+            typed_report.insert(
+                "default_product_package_go_free".to_owned(),
+                json!(c10_evidence.default_product_package_go_free),
+            );
             typed_report.insert(
                 "go_product_shell_retired_from_default_package".to_owned(),
-                json!(false),
+                json!(c10_evidence.go_product_shell_retired),
             );
             typed_report.insert(
                 "go_orchestration_retired_from_default_package".to_owned(),
-                json!(false),
+                json!(c10_evidence.go_orchestration_retired),
             );
             typed_report.insert(
                 "go_control_runtime_api_service_release_retired_from_default_package".to_owned(),
-                json!(false),
+                json!(c10_evidence.go_control_runtime_api_service_release_retired),
             );
             typed_report.insert(
                 "go_outbound_dependency_retired_from_default_package".to_owned(),
-                json!(false),
+                json!(c10_evidence.go_outbound_dependency_retired),
             );
-            typed_report.insert("go_free_live_host_contract_ready".to_owned(), json!(false));
-            typed_report.insert("go_free_rollback_model_ready".to_owned(), json!(true));
-            typed_report.insert("go_free_product_chain_ready".to_owned(), json!(false));
-            typed_report.insert("live_default_switch_applied".to_owned(), json!(false));
+            typed_report.insert(
+                "go_compat_oracle_boundary_ready".to_owned(),
+                json!(c10_evidence.go_compat_oracle_boundary_ready),
+            );
+            typed_report.insert(
+                "userland_ffi_c_abi_retired_from_default_path".to_owned(),
+                json!(c10_evidence.userland_ffi_c_abi_retired),
+            );
+            typed_report.insert(
+                "go_oracle_default_dependency_retired_from_default_path".to_owned(),
+                json!(c10_evidence.go_oracle_default_dependency_retired),
+            );
+            typed_report.insert(
+                "rust_internal_fallback_normalized_for_default_path".to_owned(),
+                json!(c10_evidence.rust_internal_fallback_normalized),
+            );
+            typed_report.insert(
+                "go_free_live_host_contract_ready".to_owned(),
+                json!(c10_evidence.live_host_contract_ready),
+            );
+            typed_report.insert(
+                "go_free_rollback_model_ready".to_owned(),
+                json!(c10_evidence.rollback_model_ready),
+            );
+            typed_report.insert(
+                "go_free_product_chain_ready".to_owned(),
+                json!(c10_evidence.ready),
+            );
+            typed_report.insert(
+                "live_default_switch_applied".to_owned(),
+                c10_evidence.report["liveDefaultSwitchApplied"].clone(),
+            );
             typed_report.insert(
                 "rollback_validation_applied_on_live_host".to_owned(),
-                json!(false),
+                c10_evidence.report["rollbackValidationAppliedOnLiveHost"].clone(),
             );
             typed_report.insert(
                 "release_default_switch_admission_ready".to_owned(),
-                json!(false),
+                c10_evidence.report["releaseDefaultSwitchAdmission"].clone(),
             );
             typed_report.insert(
                 "production_package_admission_ready".to_owned(),
-                json!(false),
+                c10_evidence.report["productionPackageAdmission"].clone(),
             );
             typed_report.insert("rust_product_binary_contract_ready".to_owned(), json!(true));
             typed_report.insert(
@@ -1658,10 +1676,22 @@ fn daed_service_contract(version: &str) -> Value {
             typed_report.insert("rust_daed_validate_command_ready".to_owned(), json!(true));
             typed_report.insert(
                 "current_batch".to_owned(),
-                json!("C10 final go-free product-chain blocked pending live matrix and artifact evidence"),
+                json!(if c10_evidence.ready {
+                    "C10 final go-free product-chain evidence admitted"
+                } else {
+                    "C10 final go-free product-chain blocked pending live matrix and artifact evidence"
+                }),
             );
-            typed_report.insert("status".to_owned(), json!("blocked"));
-            typed_report.insert("blockers".to_owned(), json!(c10_final_blockers()));
+            typed_report.insert(
+                "status".to_owned(),
+                json!(if c10_evidence.ready {
+                    "pass"
+                } else {
+                    "blocked"
+                }),
+            );
+            typed_report.insert("blockers".to_owned(), json!(c10_evidence.blockers.clone()));
+            typed_report.insert("final_evidence".to_owned(), c10_evidence.report.clone());
         }
     }
     report
