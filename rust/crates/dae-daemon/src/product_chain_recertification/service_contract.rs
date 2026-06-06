@@ -742,12 +742,20 @@ const OUTBOUND_FINGERPRINT_UNDERLAY_BOOL_FIELDS: &[&str] = &[
     "outbound_fingerprint_underlay_typed_report_ready",
     "go_fingerprint_underlay_fallback_retirement_contract_ready",
     "go_fingerprint_underlay_fallback_retired_candidate",
+    "security_underlay_capability_contract_ready",
+    "common_security_underlay_ready",
+    "expanded_security_underlay_complete",
+    "security_underlay_release_gate_ready",
 ];
 
 const OUTBOUND_FINGERPRINT_UNDERLAY_COPY_FIELDS: &[&str] = &[
     "outbound_fingerprint_underlay_report_schema",
     "outbound_fingerprint_underlay_surface",
     "outbound_fingerprint_underlay_typed_report",
+    "security_underlay_capability_report_schema",
+    "security_underlay_capability_row_count",
+    "security_underlay_capability_rows",
+    "security_underlay_capability_typed_report",
 ];
 
 const OUTBOUND_PRODUCTION_MATRIX_BOOL_FIELDS: &[&str] = &[

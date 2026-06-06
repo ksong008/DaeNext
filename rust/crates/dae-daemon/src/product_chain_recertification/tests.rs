@@ -239,8 +239,16 @@ fn candidate_service_contract_value(resident_dataplane_ready: bool) -> Value {
         "outbound_fingerprint_underlay_typed_report_ready",
         "go_fingerprint_underlay_fallback_retirement_contract_ready",
         "go_fingerprint_underlay_fallback_retired_candidate",
+        "security_underlay_capability_contract_ready",
+        "common_security_underlay_ready",
     ] {
         report.insert(key.to_owned(), json!(true));
+    }
+    for key in [
+        "expanded_security_underlay_complete",
+        "security_underlay_release_gate_ready",
+    ] {
+        report.insert(key.to_owned(), json!(false));
     }
     report.insert(
         "outbound_fingerprint_underlay_report_schema".to_owned(),
@@ -261,6 +269,32 @@ fn candidate_service_contract_value(resident_dataplane_ready: bool) -> Value {
         json!({
             "schema": "outbound-fingerprint-underlay-typed-report",
             "status": "pass",
+            "stage_report_schema": false,
+        }),
+    );
+    report.insert(
+        "security_underlay_capability_report_schema".to_owned(),
+        json!("security-underlay-capability"),
+    );
+    report.insert(
+        "security_underlay_capability_row_count".to_owned(),
+        json!(2),
+    );
+    report.insert(
+        "security_underlay_capability_rows".to_owned(),
+        json!([
+            {"capabilityId": "standard-tls-common-underlay", "status": "admitted"},
+            {"capabilityId": "reality-security-underlay", "status": "blocked", "blockerId": "missing-security-underlay"}
+        ]),
+    );
+    report.insert(
+        "security_underlay_capability_typed_report".to_owned(),
+        json!({
+            "schema": "security-underlay-capability-typed-report",
+            "status": "pass",
+            "common_security_underlay_ready": true,
+            "expanded_security_underlay_complete": false,
+            "release_gate_ready": false,
             "stage_report_schema": false,
         }),
     );

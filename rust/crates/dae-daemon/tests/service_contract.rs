@@ -293,6 +293,48 @@ fn candidate_reports_resident_service_and_dataplane_capabilities() {
             .unwrap()
     );
     assert!(
+        report["security_underlay_capability_contract_ready"]
+            .as_bool()
+            .unwrap()
+    );
+    assert!(report["common_security_underlay_ready"].as_bool().unwrap());
+    assert!(
+        !report["expanded_security_underlay_complete"]
+            .as_bool()
+            .unwrap()
+    );
+    assert!(
+        !report["security_underlay_release_gate_ready"]
+            .as_bool()
+            .unwrap()
+    );
+    assert_eq!(
+        report["security_underlay_capability_report_schema"]
+            .as_str()
+            .unwrap(),
+        "security-underlay-capability"
+    );
+    assert!(
+        report["security_underlay_capability_rows"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|row| row["capabilityId"].as_str().unwrap()
+                == "fingerprint-aware-tls-common-underlay"
+                && row["provider"].as_str().unwrap() == "boringssl"
+                && row["status"].as_str().unwrap() == "admitted")
+    );
+    assert!(
+        report["security_underlay_capability_rows"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(
+                |row| row["capabilityId"].as_str().unwrap() == "reality-security-underlay"
+                    && row["status"].as_str().unwrap() == "blocked"
+            )
+    );
+    assert!(
         report["outbound_production_matrix_contract_ready"]
             .as_bool()
             .unwrap()
