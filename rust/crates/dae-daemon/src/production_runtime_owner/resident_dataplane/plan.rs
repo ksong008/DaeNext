@@ -564,6 +564,45 @@ pub(super) fn build_resident_dataplane_plan(
     })
 }
 
+pub(super) fn build_resident_manual_probe_plans(
+    config: &Config,
+) -> BTreeMap<String, Result<ResidentProxyProbePlan, String>> {
+    let mut plans = BTreeMap::new();
+    for (node_tag, link) in tagged_node_links(config) {
+        let plan = build_resident_manual_probe_plan(config, node_tag, link.clone());
+        plans.entry(link).or_insert(plan);
+    }
+    plans
+}
+
+fn build_resident_manual_probe_plan(
+    config: &Config,
+    node_tag: String,
+    link: String,
+) -> Result<ResidentProxyProbePlan, String> {
+    let group_name = "__manual_native_probe".to_owned();
+    let mut proxy = build_proxy_plan(config, group_name.clone(), node_tag.clone(), link.clone())?;
+    proxy.group_policy = "manual_probe".to_owned();
+    let group = Group {
+        name: group_name,
+        filter: Vec::new(),
+        filter_annotation: Vec::new(),
+        policy: DynamicFunctionValue::Nil,
+        tcp_check_url: None,
+        tcp_check_http_method: String::new(),
+        udp_check_dns: None,
+        check_interval: Default::default(),
+        check_tolerance: Default::default(),
+    };
+    Ok(ResidentProxyProbePlan {
+        node_tag,
+        link,
+        tcp_check: group_tcp_check_plan(config, &group)?,
+        udp_check: group_udp_check_plan(config, &group)?,
+        proxy,
+    })
+}
+
 fn resident_proxy_plans(
     config: &Config,
     node_links: &BTreeMap<String, String>,
@@ -2088,6 +2127,50 @@ mod tests {
         assert_eq!(probes[0].tcp_check.target, "203.0.113.7:443");
         assert_eq!(probes[0].tcp_check.host, "check.example");
         assert_eq!(probes[0].tcp_check.path, "/generate_204");
+    }
+
+    #[test]
+    fn resident_manual_probe_plans_cover_all_admitted_config_nodes() {
+        let config = parse_config(
+            r#"
+        global {
+        lan_interface: daerust0
+        tcp_check_url: 'http://check.example/generate_204,203.0.113.7'
+        tcp_check_http_method: GET
+        }
+        node {
+        grouped: 'socks://127.0.0.1:1080'
+        orphan: 'socks://127.0.0.1:1081'
+        unsupported: 'wireguard://198.51.100.2:51820'
+        }
+        group {
+        proxy {
+            filter: name(grouped)
+            policy: fixed
+        }
+        }
+        routing {
+        l4proto(tcp) -> proxy
+        fallback: direct
+        }
+        "#,
+        );
+        let plans = build_resident_manual_probe_plans(&config);
+        let orphan = plans
+            .get("socks://127.0.0.1:1081")
+            .expect("orphan node should be indexed")
+            .as_ref()
+            .expect("orphan socks node should be admitted");
+        assert_eq!(orphan.node_tag, "orphan");
+        assert_eq!(orphan.tcp_check.method, "GET");
+        assert_eq!(orphan.tcp_check.target, "203.0.113.7:80");
+        assert_eq!(orphan.tcp_check.host, "check.example");
+        assert!(
+            plans
+                .get("wireguard://198.51.100.2:51820")
+                .expect("unsupported node should be indexed")
+                .is_err()
+        );
     }
 
     #[test]
