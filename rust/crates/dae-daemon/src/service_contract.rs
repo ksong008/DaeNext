@@ -491,6 +491,12 @@ fn insert_datapath_core_service_contract_capabilities(report: &mut Value) {
 }
 
 fn insert_outbound_fingerprint_underlay_service_contract_capabilities(report: &mut Value) {
+    let security_underlay_capability = dae_outbound::security_underlay_capability_contract();
+    let security_underlay_rows = security_underlay_capability
+        .rows
+        .iter()
+        .map(|row| (*row).to_value())
+        .collect::<Vec<_>>();
     let supported_fingerprints = dae_outbound::shared_transport::supported_utls_fingerprint_count();
     let link_fingerprint_plan_ready =
         dae_outbound::shared_transport::resolve_utls_client_hello_id("chrome").is_ok();
@@ -581,6 +587,49 @@ fn insert_outbound_fingerprint_underlay_service_contract_capabilities(report: &m
         report.insert(
             "go_fingerprint_underlay_fallback_retired_candidate".to_owned(),
             json!(contract_ready),
+        );
+        report.insert(
+            "security_underlay_capability_contract_ready".to_owned(),
+            json!(security_underlay_capability.common_security_underlay_ready),
+        );
+        report.insert(
+            "common_security_underlay_ready".to_owned(),
+            json!(security_underlay_capability.common_security_underlay_ready),
+        );
+        report.insert(
+            "expanded_security_underlay_complete".to_owned(),
+            json!(security_underlay_capability.expanded_security_underlay_complete),
+        );
+        report.insert(
+            "security_underlay_release_gate_ready".to_owned(),
+            json!(security_underlay_capability.release_gate_ready),
+        );
+        report.insert(
+            "security_underlay_capability_report_schema".to_owned(),
+            json!(security_underlay_capability.schema),
+        );
+        report.insert(
+            "security_underlay_capability_row_count".to_owned(),
+            json!(security_underlay_capability.rows.len()),
+        );
+        report.insert(
+            "security_underlay_capability_rows".to_owned(),
+            json!(security_underlay_rows),
+        );
+        report.insert(
+            "security_underlay_capability_typed_report".to_owned(),
+            json!({
+                "schema": "security-underlay-capability-typed-report",
+                "status": if security_underlay_capability.common_security_underlay_ready { "pass" } else { "blocked" },
+                "common_security_underlay_ready": security_underlay_capability.common_security_underlay_ready,
+                "expanded_security_underlay_complete": security_underlay_capability.expanded_security_underlay_complete,
+                "release_gate_ready": security_underlay_capability.release_gate_ready,
+                "standard_tls_underlay_contract_ready": standard_tls_underlay_contract_ready,
+                "fingerprint_aware_tls_underlay_contract_ready": fingerprint_aware_tls_underlay_contract_ready,
+                "no_silent_fingerprint_rustls_fallback_ready": no_silent_fingerprint_rustls_fallback_ready,
+                "blocked_rows_visible": true,
+                "stage_report_schema": false,
+            }),
         );
         report.insert(
             "outbound_fingerprint_underlay_report_schema".to_owned(),

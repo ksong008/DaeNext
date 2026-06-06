@@ -68,6 +68,7 @@ mod protocol_modern;
 mod protocol_shadowsocks_trojan;
 mod protocol_socks_http;
 mod protocol_vmess_vless;
+mod security_underlay_capability;
 mod shared_transport_contract;
 mod shared_transport_dataplane;
 mod shared_transport_tls_stage81;
