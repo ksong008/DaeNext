@@ -33,9 +33,9 @@ pub struct TrueDefaultDaemonAdmissionRow {
 
 pub fn true_default_daemon_admission_contract() -> TrueDefaultDaemonAdmissionContract {
     TrueDefaultDaemonAdmissionContract {
-        name: "stage23-true-default-daemon-admission",
+        name: "true-default-daemon-admission",
         stage: "stage23",
-        prior_gate: "stage23-product-chain-admission",
+        prior_gate: "product-chain-admission",
         gate_complete: true,
         default_switch_allowed: false,
         default_path_mutation_allowed: false,

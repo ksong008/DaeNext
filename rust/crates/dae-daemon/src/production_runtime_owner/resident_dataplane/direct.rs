@@ -134,6 +134,11 @@ pub(super) fn relay_tcp_direct(
                         err.kind(),
                         ErrorKind::WouldBlock | ErrorKind::TimedOut | ErrorKind::Interrupted
                     ) => {}
+                Err(err) if is_graceful_stream_close_error(&err) => {
+                    inbound_closed = true;
+                    let _ = direct.shutdown(Shutdown::Write);
+                    progressed = true;
+                }
                 Err(err) => return Err(format!("read inbound TCP for direct relay: {err}")),
             }
         }
@@ -146,12 +151,16 @@ pub(super) fn relay_tcp_direct(
                     progressed = true;
                 }
                 Ok(read) => {
-                    write_all_nonblocking(
+                    match write_all_nonblocking(
                         inbound,
                         &direct_buf[..read],
                         stop,
                         "write direct TCP payload to client",
-                    )?;
+                    ) {
+                        Ok(()) => {}
+                        Err(err) if is_graceful_stream_close_message(&err) => break,
+                        Err(err) => return Err(err),
+                    }
                     stats.direct_to_client += read;
                     metrics.add_download(read);
                     progressed = true;
@@ -177,6 +186,27 @@ pub(super) fn relay_tcp_direct(
         }
     }
     Ok(stats)
+}
+
+fn is_graceful_stream_close_error(err: &std::io::Error) -> bool {
+    matches!(
+        err.kind(),
+        ErrorKind::BrokenPipe
+            | ErrorKind::ConnectionAborted
+            | ErrorKind::ConnectionReset
+            | ErrorKind::NotConnected
+    )
+}
+
+fn is_graceful_stream_close_message(message: &str) -> bool {
+    message.contains("Broken pipe")
+        || message.contains("Connection reset")
+        || message.contains("Connection aborted")
+        || message.contains("Not connected")
+        || message.contains("broken pipe")
+        || message.contains("connection reset")
+        || message.contains("connection aborted")
+        || message.contains("not connected")
 }
 
 pub(super) async fn relay_tcp_direct_async(

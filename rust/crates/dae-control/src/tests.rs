@@ -410,7 +410,7 @@ fn reload_dns_cache_plan_restores_only_when_dns_config_is_unchanged() {
 #[test]
 fn control_api_typed_report_covers_formal_surfaces_without_stage_schema() {
     let report = ControlApiTypedReport::formal_runtime_control_api();
-    assert_eq!(report.schema, "control-api-typed-report-v1");
+    assert_eq!(report.schema, "control-api-typed-report");
     assert_eq!(report.status, ControlApiReportStatus::Pass);
     assert_eq!(report.status.as_str(), "pass");
     assert!(report.runtime_overview_available);

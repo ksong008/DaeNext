@@ -4,9 +4,9 @@ use super::*;
 fn release_default_switch_contract_is_c9_and_not_final_go_free() {
     let contract = release_default_switch_contract();
 
-    assert_eq!(contract.name, "release-default-switch-v1");
+    assert_eq!(contract.name, "release-default-switch");
     assert_eq!(contract.c_phase, "C9");
-    assert_eq!(contract.prior_gate, "outbound-production-matrix-v1");
+    assert_eq!(contract.prior_gate, "outbound-production-matrix");
     assert!(contract.contract_ready);
     assert!(contract.default_artifact_path_ready);
     assert!(contract.default_runtime_selector_ready);

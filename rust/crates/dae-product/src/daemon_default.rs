@@ -17,7 +17,7 @@ pub struct DaemonDefaultReadinessContract {
 
 pub fn daemon_default_readiness_contract() -> DaemonDefaultReadinessContract {
     DaemonDefaultReadinessContract {
-        name: "stage16-daemon-default-readiness",
+        name: "daemon-default-readiness",
         stage: "stage16",
         stage16_gate_complete: true,
         default_switch_allowed: false,

@@ -255,7 +255,7 @@ fn product_chain_clean_baseline_records_runtime_control_api_regression_without_s
     );
     assert_eq!(
         report["typed_report"]["schema"].as_str().unwrap(),
-        "product-chain-recertification-typed-report-v1"
+        "product-chain-recertification-typed-report"
     );
     assert_eq!(report["typed_report"]["status"].as_str().unwrap(), "pass");
     assert!(

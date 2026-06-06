@@ -13,6 +13,7 @@ use dae_config::Config;
 use dae_ebpf_support::LiveLoadedTproxyListenSocketMap;
 use dae_outbound::NetworkType;
 use serde_json::{Value, json};
+use sha2::{Digest, Sha256};
 
 pub(crate) use self::adapter_matrix::{
     resident_live_adapter_matrix_contract, resident_live_adapter_matrix_entries,
@@ -29,6 +30,7 @@ mod client;
 mod direct;
 mod dns;
 mod events;
+mod execution;
 mod io;
 mod plan;
 mod tcp;
@@ -64,6 +66,7 @@ const XUDP_MUX_TARGET: &str = "v1.mux.cool:666";
 const XUDP_COMMAND_NEW: u8 = 1;
 const XUDP_OPTION_DATA: u8 = 1;
 const XUDP_NETWORK_UDP: u8 = 2;
+static RESIDENT_RELOAD_GENERATION: AtomicU64 = AtomicU64::new(1);
 
 pub(crate) fn resident_runtime_defaults_contract() -> Value {
     json!({
@@ -88,7 +91,7 @@ pub(crate) fn resident_runtime_defaults_contract() -> Value {
                 "min": RESIDENT_UDP_PACKET_STACK_BYTES_MIN,
                 "max": RESIDENT_UDP_PACKET_STACK_BYTES_MAX,
             },
-            "model": "current bounded task fanout; scheduled to move toward Tokio UDP readiness/task queue",
+            "model": "bounded resident packet session manager keyed by graph id, outbound, peer, original destination, and packet semantics",
         },
     })
 }
@@ -115,6 +118,7 @@ pub(super) struct ResidentDataplaneRuntime {
     stop: Arc<AtomicBool>,
     handles: Vec<JoinHandle<()>>,
     event_file: PathBuf,
+    reload_generation: u64,
     metrics: Arc<ResidentDataplaneMetrics>,
     groups: Vec<Arc<plan::ResidentProxyGroupPlan>>,
     manual_probe_plans: BTreeMap<String, Result<plan::ResidentProxyProbePlan, String>>,
@@ -122,15 +126,23 @@ pub(super) struct ResidentDataplaneRuntime {
 
 impl ResidentDataplaneRuntime {
     pub(super) fn metrics_snapshot(&self) -> Value {
-        self.metrics.snapshot()
+        let mut snapshot = self.metrics.snapshot();
+        snapshot["reloadGeneration"] = json!(self.reload_generation);
+        snapshot["packetSessionManager"] = json!({
+            "schemaVersion": 1,
+            "manager": "bounded-resident-packet-session",
+            "reloadGeneration": self.reload_generation,
+        });
+        snapshot
     }
 
     pub(super) fn node_latency_snapshots(&self) -> Vec<Value> {
+        let reload_generation = self.reload_generation;
         preferred_latency_snapshots(
             self.groups
                 .iter()
                 .flat_map(|group| group.latency_snapshots())
-                .map(resident_latency_snapshot_json),
+                .map(|snapshot| resident_latency_snapshot_json(snapshot, reload_generation)),
         )
     }
 
@@ -158,23 +170,30 @@ impl ResidentDataplaneRuntime {
                     "native outbound probe not admitted for this node",
                     err,
                     checked_at,
+                    self.reload_generation,
                 )),
                 None => snapshots.push(manual_probe_unavailable_snapshot(
                     &link,
                     "node is not present in the current runtime config",
                     "materialize/reload runtime before testing this node",
                     checked_at,
+                    self.reload_generation,
                 )),
             }
         }
 
         for chunk in tasks.chunks(RESIDENT_MANUAL_LATENCY_PROBE_CONCURRENCY) {
+            let reload_generation = self.reload_generation;
             let mut chunk_snapshots = thread::scope(|scope| {
                 let mut handles = Vec::new();
                 for candidate in chunk.iter().cloned() {
                     let groups = &self.groups;
                     handles.push(scope.spawn(move || {
-                        probe_resident_candidate_tcp_latency_snapshot(groups, candidate)
+                        probe_resident_candidate_tcp_latency_snapshot(
+                            groups,
+                            candidate,
+                            reload_generation,
+                        )
                     }));
                 }
                 handles
@@ -351,6 +370,7 @@ pub(super) fn start_resident_dataplane_workers(
     };
 
     let stop = Arc::new(AtomicBool::new(false));
+    let reload_generation = RESIDENT_RELOAD_GENERATION.fetch_add(1, Ordering::Relaxed);
     let metrics = Arc::new(ResidentDataplaneMetrics::default());
     let proxy = Arc::new(default_proxy);
     let proxy_group = Arc::new(default_group);
@@ -474,6 +494,7 @@ pub(super) fn start_resident_dataplane_workers(
         "udp_packet_stack_bytes": udp_packet_stack_bytes,
         "udp_packet_stack_bytes_env": RESIDENT_UDP_PACKET_STACK_BYTES_ENV,
         "event_file": path_string(&event_file),
+        "reload_generation": reload_generation,
         "routing_tuple_map_id": routing_tuple_map_id,
         "tcp_dial_mode": tcp_router.dial_mode_name(),
         "tcp_sniffing_timeout": format!("{:?}", tcp_router.sniffing_timeout()),
@@ -508,6 +529,8 @@ pub(super) fn start_resident_dataplane_workers(
             "utls_fingerprint": default_proxy_utls,
             "mark": proxy.mark,
             "mptcp": proxy.mptcp,
+            "executableGraph": proxy.executable_graph_value_for_reload_generation(reload_generation),
+            "runtimeComponents": proxy.runtime_component_evidence_value_for_reload_generation(reload_generation),
         },
         "scope": "resident worker consumes live tproxy TCP/UDP sockets and relays through admitted Rust proxy handlers; unsupported protocols fail explicitly instead of faking proxy success",
     });
@@ -517,6 +540,7 @@ pub(super) fn start_resident_dataplane_workers(
             stop,
             handles,
             event_file,
+            reload_generation,
             metrics,
             groups: runtime_groups,
             manual_probe_plans,
@@ -586,6 +610,7 @@ fn run_resident_group_health_checks(
 fn probe_resident_candidate_tcp_latency_snapshot(
     groups: &[Arc<plan::ResidentProxyGroupPlan>],
     candidate: plan::ResidentProxyProbePlan,
+    reload_generation: u64,
 ) -> Value {
     let checked_at = unix_now_secs();
     let probe = probe_resident_candidate_tcp_endpoint(&candidate);
@@ -595,9 +620,21 @@ fn probe_resident_candidate_tcp_latency_snapshot(
         let _ =
             group.record_check_result_for_link(&link, NetworkType::TCP4, latency_ms, checked_at);
     }
+    let display_name = candidate.node_tag.as_str();
+    let graph_id = candidate.proxy.graph_id.as_str();
+    let link_hash = candidate.link_hash.as_str();
+    let redacted_source = candidate.redacted_link_source.as_str();
     json!({
-        "name": candidate.node_tag,
-        "link": link,
+        "name": display_name,
+        "displayName": display_name,
+        "graphId": graph_id,
+        "reloadGeneration": reload_generation,
+        "linkHash": link_hash,
+        "linkIdentity": latency_link_identity_value(display_name, link_hash, redacted_source),
+        "probeExecutor": resident_probe_executor_value(graph_id, reload_generation),
+        "runtimeComponents": candidate
+            .proxy
+            .runtime_component_evidence_value_for_reload_generation(reload_generation),
         "latencyMs": latency_ms,
         "alive": latency_ms.is_some(),
         "checkedAtUnix": checked_at,
@@ -611,10 +648,24 @@ fn manual_probe_unavailable_snapshot(
     reason: &str,
     detail: &str,
     checked_at: i64,
+    reload_generation: u64,
 ) -> Value {
+    let display_name = display_name_from_link(link);
+    let link_hash = link_hash(link);
+    let graph_id = graph_id_from_link_hash(&link_hash);
+    let redacted_source = redacted_link_source(link);
     json!({
-        "name": "",
-        "link": link,
+        "name": display_name,
+        "displayName": display_name,
+        "graphId": graph_id,
+        "reloadGeneration": reload_generation,
+        "linkHash": link_hash,
+        "linkIdentity": latency_link_identity_value(&display_name, &link_hash, &redacted_source),
+        "probeExecutor": resident_probe_executor_value(&graph_id, reload_generation),
+        "admission": {
+            "status": "fail-closed",
+            "unsupportedReason": detail,
+        },
         "latencyMs": Value::Null,
         "alive": false,
         "checkedAtUnix": checked_at,
@@ -623,10 +674,22 @@ fn manual_probe_unavailable_snapshot(
     })
 }
 
-fn resident_latency_snapshot_json(snapshot: plan::ResidentProxyLatencySnapshot) -> Value {
+fn resident_latency_snapshot_json(
+    snapshot: plan::ResidentProxyLatencySnapshot,
+    reload_generation: u64,
+) -> Value {
+    let display_name = snapshot.node_tag.as_str();
+    let graph_id = snapshot.graph_id.as_str();
+    let link_hash = snapshot.link_hash.as_str();
+    let redacted_source = snapshot.redacted_link_source.as_str();
     json!({
-        "name": snapshot.node_tag,
-        "link": snapshot.link,
+        "name": display_name,
+        "displayName": display_name,
+        "graphId": graph_id,
+        "reloadGeneration": reload_generation,
+        "linkHash": link_hash,
+        "linkIdentity": latency_link_identity_value(display_name, link_hash, redacted_source),
+        "probeExecutor": resident_probe_executor_value(graph_id, reload_generation),
         "latencyMs": snapshot.latency_ms,
         "alive": snapshot.alive,
         "checkedAtUnix": snapshot.checked_at_unix,
@@ -634,24 +697,42 @@ fn resident_latency_snapshot_json(snapshot: plan::ResidentProxyLatencySnapshot) 
     })
 }
 
+fn resident_probe_executor_value(graph_id: &str, reload_generation: u64) -> Value {
+    json!({
+        "schemaVersion": 1,
+        "executor": "resident-executable-graph",
+        "graphId": graph_id,
+        "reloadGeneration": reload_generation,
+        "sharesTrafficExecutor": true,
+    })
+}
+
 fn preferred_latency_snapshots(values: impl IntoIterator<Item = Value>) -> Vec<Value> {
-    let mut by_link = BTreeMap::<String, Value>::new();
+    let mut by_link_hash = BTreeMap::<String, Value>::new();
     for value in values {
-        let Some(link) = value.get("link").and_then(Value::as_str) else {
+        let Some(link_hash) = latency_snapshot_link_hash(&value) else {
             continue;
         };
-        if link.is_empty() {
+        if link_hash.is_empty() {
             continue;
         }
-        let replace = by_link
-            .get(link)
+        let replace = by_link_hash
+            .get(link_hash)
             .map(|current| prefer_latency_snapshot(&value, current))
             .unwrap_or(true);
         if replace {
-            by_link.insert(link.to_owned(), value);
+            by_link_hash.insert(link_hash.to_owned(), value);
         }
     }
-    by_link.into_values().collect()
+    by_link_hash.into_values().collect()
+}
+
+fn latency_snapshot_link_hash(value: &Value) -> Option<&str> {
+    value.get("linkHash").and_then(Value::as_str).or_else(|| {
+        value
+            .pointer("/linkIdentity/linkHash")
+            .and_then(Value::as_str)
+    })
 }
 
 fn prefer_latency_snapshot(next: &Value, current: &Value) -> bool {
@@ -671,6 +752,58 @@ fn prefer_latency_snapshot(next: &Value, current: &Value) -> bool {
                     .unwrap_or(0)
         }
     }
+}
+
+fn latency_link_identity_value(
+    display_name: &str,
+    link_hash: &str,
+    redacted_source: &str,
+) -> Value {
+    json!({
+        "schemaVersion": 1,
+        "displayName": display_name,
+        "linkHash": link_hash,
+        "redactedSource": redacted_source,
+    })
+}
+
+pub(super) fn link_hash(link: &str) -> String {
+    format!("sha256:{}", hex_encode(&Sha256::digest(link.as_bytes())))
+}
+
+fn graph_id_from_link_hash(link_hash: &str) -> String {
+    let graph_hash = link_hash.trim_start_matches("sha256:");
+    format!("resident-graph:{}", &graph_hash[..16.min(graph_hash.len())])
+}
+
+pub(super) fn redacted_link_source(link: &str) -> String {
+    let Ok(url) = url::Url::parse(link) else {
+        return "link:<redacted>".to_owned();
+    };
+    let mut value = format!("{}:<redacted>", url.scheme());
+    if let Some(fragment) = url.fragment().filter(|fragment| !fragment.is_empty()) {
+        value.push('#');
+        value.push_str(fragment);
+    }
+    value
+}
+
+fn display_name_from_link(link: &str) -> String {
+    url::Url::parse(link)
+        .ok()
+        .and_then(|url| url.fragment().map(str::to_owned))
+        .filter(|fragment| !fragment.is_empty())
+        .unwrap_or_else(|| "<redacted>".to_owned())
+}
+
+fn hex_encode(bytes: &[u8]) -> String {
+    const HEX: &[u8; 16] = b"0123456789abcdef";
+    let mut out = String::with_capacity(bytes.len() * 2);
+    for byte in bytes {
+        out.push(HEX[(byte >> 4) as usize] as char);
+        out.push(HEX[(byte & 0x0f) as usize] as char);
+    }
+    out
 }
 
 fn probe_resident_candidate_tcp_endpoint(
@@ -1080,7 +1213,7 @@ pub(crate) fn resident_live_adapter_config_assessment(
         .filter(|row| row["planner_status"].as_str() == Some("admitted"))
         .count();
     let mut report = json!({
-        "schema": "resident-live-adapter-config-assessment-v1",
+        "schema": "resident-live-adapter-config-assessment",
         "config": config_path.map(path_string),
         "read_only": true,
         "host_mutation_executed": false,
@@ -1222,7 +1355,7 @@ pub(crate) fn resident_live_adapter_udp_probe(
         .count();
     let matrix = resident_live_adapter_matrix_contract();
     json!({
-        "schema": "resident-live-adapter-udp-live-v1",
+        "schema": "resident-live-adapter-udp-live",
         "config": config_path.map(path_string),
         "target": target.to_string(),
         "payload_len": payload.len(),
@@ -1270,12 +1403,26 @@ fn resident_full_matrix_config_rows(
             } else {
                 "blocked"
             };
+            let runtime_components_ready = candidate_reports
+                .iter()
+                .any(resident_matrix_candidate_runtime_components_ready);
+            let generated_solver = resident_matrix_solver_value(
+                entry,
+                candidates.len(),
+                admitted_count,
+                blocked_count,
+                runtime_components_ready,
+            );
+            let default_ready = generated_solver["defaultReady"].clone();
+            let go_free_ready = generated_solver["goFreeReady"].clone();
             json!({
                 "handler": entry.handler,
                 "formal_matrix_handler": entry.formal_matrix_handler,
                 "opened": true,
+                "source_supported": true,
                 "planner_status": planner_status,
                 "wired_ready": entry.wired_ready(),
+                "runtime_components_ready": runtime_components_ready,
                 "live_ready": entry.live_ready(),
                 "remote_live_matrix": entry.remote_live_matrix,
                 "udp_live_adapter": entry.udp_live_adapter,
@@ -1286,11 +1433,117 @@ fn resident_full_matrix_config_rows(
                 "blocked_count": blocked_count,
                 "selected_node_fail_closed": entry.selected_node_fail_closed,
                 "fingerprint_behavior": entry.fingerprint_behavior,
+                "generated_solver": generated_solver,
+                "default_ready": default_ready,
+                "go_free_ready": go_free_ready,
                 "missing": entry.missing,
                 "candidates": candidate_reports,
             })
         })
         .collect()
+}
+
+fn resident_matrix_solver_value(
+    entry: &adapter_matrix::ResidentLiveAdapterMatrixEntry,
+    candidate_count: usize,
+    admitted_count: usize,
+    blocked_count: usize,
+    runtime_components_ready: bool,
+) -> Value {
+    let parser_covered = candidate_count > 0;
+    let normalized_graph_ready = admitted_count > 0;
+    let executable_graph_ready =
+        normalized_graph_ready && entry.wired_ready() && runtime_components_ready;
+    let admission_fail_closed = blocked_count > 0 || candidate_count == admitted_count;
+    let tcp_loopback_ready = executable_graph_ready && entry.tcp_live_adapter;
+    let udp_loopback_ready = executable_graph_ready && entry.udp_path_ready();
+    let reload_cleanup_ready = executable_graph_ready;
+    let benchmark_ready = false;
+    let live_ready = executable_graph_ready && entry.remote_live_matrix && entry.missing.is_empty();
+    let default_ready = live_ready && benchmark_ready;
+    let go_free_ready = default_ready && entry.go_outbound_fallback_retired;
+    let blockers = resident_matrix_solver_blockers(
+        parser_covered,
+        normalized_graph_ready,
+        runtime_components_ready,
+        executable_graph_ready,
+        live_ready,
+        benchmark_ready,
+    );
+    json!({
+        "schemaVersion": 1,
+        "sourceShape": entry.formal_matrix_handler,
+        "parserCovered": parser_covered,
+        "normalizedGraphReady": normalized_graph_ready,
+        "runtimeComponentsReady": runtime_components_ready,
+        "executableGraphReady": executable_graph_ready,
+        "admissionFailClosed": admission_fail_closed,
+        "tcpLoopbackReady": tcp_loopback_ready,
+        "udpLoopbackReady": udp_loopback_ready,
+        "reloadCleanupReady": reload_cleanup_ready,
+        "benchmarkReady": benchmark_ready,
+        "liveReady": live_ready,
+        "defaultReady": default_ready,
+        "goFreeReady": go_free_ready,
+        "blockers": blockers,
+    })
+}
+
+fn resident_matrix_solver_blockers(
+    parser_covered: bool,
+    normalized_graph_ready: bool,
+    runtime_components_ready: bool,
+    executable_graph_ready: bool,
+    live_ready: bool,
+    benchmark_ready: bool,
+) -> Vec<&'static str> {
+    let mut blockers = Vec::new();
+    if !parser_covered {
+        blockers.push("no source-supported candidate is present in this config");
+    }
+    if !normalized_graph_ready {
+        blockers.push("no normalized resident graph was admitted");
+    }
+    if !runtime_components_ready {
+        blockers.push("runtime component factory/session/probe evidence is missing or fail-closed");
+    }
+    if !executable_graph_ready {
+        blockers.push("executable graph evidence is missing");
+    }
+    if !live_ready {
+        blockers.push("remote live matrix evidence is missing or incomplete");
+    }
+    if !benchmark_ready {
+        blockers.push("matched benchmark evidence is missing");
+    }
+    blockers
+}
+
+fn resident_matrix_candidate_runtime_components_ready(candidate: &Value) -> bool {
+    if candidate["planner_status"].as_str() != Some("admitted") {
+        return false;
+    }
+    let components = &candidate["runtimeComponents"];
+    component_status_is_admitted(&components["underlayFactory"])
+        && component_status_is_admitted(&components["streamWrapperFactory"])
+        && component_status_is_admitted(&components["chainExecutor"])
+        && generation_cache_contract_ready(&components["generationCache"])
+        && component_status_is_admitted(&components["packetSessionManager"])
+        && component_status_is_admitted(&components["probeExecutor"])
+}
+
+fn component_status_is_admitted(component: &Value) -> bool {
+    component["status"].as_str() == Some("admitted")
+}
+
+fn generation_cache_contract_ready(component: &Value) -> bool {
+    component["schemaVersion"].as_i64() == Some(1)
+        && component["graphId"]
+            .as_str()
+            .is_some_and(|graph| !graph.is_empty())
+        && component["owner"].as_str() == Some("resident-dataplane-runtime")
+        && component["cacheScope"].as_str() == Some("graph-and-reload-generation")
+        && component["cleanupPolicy"].as_str() == Some("drop-on-graph-diff-or-runtime-stop")
 }
 
 fn resident_matrix_candidate_report(
@@ -1308,12 +1561,22 @@ fn resident_matrix_candidate_report(
             let mut summary = resident_proxy_plan_summary_json(&proxy);
             summary["planner_status"] = json!("admitted");
             summary["scheme"] = json!(&node.scheme);
+            summary["admission"] = json!({
+                "status": "admitted",
+                "failClosed": true,
+                "unsupportedReason": Value::Null,
+            });
             summary
         }
         Err(err) => json!({
             "planner_status": "blocked",
             "node_tag": &node.tag,
             "scheme": &node.scheme,
+            "admission": {
+                "status": "fail-closed",
+                "failClosed": true,
+                "unsupportedReason": sanitize_matrix_error(&err),
+            },
             "error": sanitize_matrix_error(&err),
         }),
     }
@@ -1369,6 +1632,8 @@ fn resident_proxy_plan_summary_json(proxy: &plan::ResidentProxyPlan) -> Value {
         "server_port": proxy.server_port,
         "server_name_present": !proxy.server_name.is_empty(),
         "mptcp": proxy.mptcp,
+        "executableGraph": proxy.executable_graph_value(),
+        "runtimeComponents": proxy.runtime_component_evidence_value(),
     })
 }
 

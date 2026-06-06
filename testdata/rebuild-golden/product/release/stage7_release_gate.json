@@ -66,7 +66,7 @@
   "go_bpf_loader_restored": false,
   "go_default_path_preserved": true,
   "go_runtime_outbound_fallback_required": true,
-  "name": "stage7-release-product-chain-live-gate",
+  "name": "release-product-chain-live-gate",
   "prior_gate": "fixed-queue-complete-release-gates",
   "product_chain_switch_allowed": false,
   "release_gate_open": false,

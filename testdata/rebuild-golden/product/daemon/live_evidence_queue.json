@@ -6,8 +6,8 @@
   "go_fallback_required": true,
   "live_daemon_started": true,
   "live_evidence_complete": true,
-  "name": "stage22-daemon-live-evidence-queue",
-  "prior_gate": "stage22-daemon-gray-switch-gate",
+  "name": "daemon-live-evidence-queue",
+  "prior_gate": "daemon-gray-switch-gate",
   "queue_decision": "stage22 local live evidence recorded through opt-in helpers; keep dae run default on Go until true Rust default daemon and product chain are admitted",
   "queue_rows": [
     {

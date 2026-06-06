@@ -24,7 +24,7 @@
     "Shadowsocks AEAD TCP loopback"
   ],
   "go_default_path_preserved": true,
-  "name": "stage17-protocol-dataplane-admission",
+  "name": "protocol-dataplane-admission",
   "protocols": [
     {
       "blockers": [

@@ -17,7 +17,7 @@ pub(super) fn resident_runtime_platform_gate_json(
     if !executed {
         return ResidentRuntimePlatformGateReport {
             report: json!({
-                "name": "resident-runtime-platform-v1",
+                "name": "resident-runtime-platform",
                 "status": "not-executed",
                 "requested": false,
                 "resident_runtime_platform_ready": false,
@@ -207,7 +207,7 @@ pub(super) fn resident_runtime_platform_gate_json(
 
     ResidentRuntimePlatformGateReport {
         report: json!({
-            "name": "resident-runtime-platform-v1",
+            "name": "resident-runtime-platform",
             "status": if resident_runtime_platform_ready { "pass" } else { "blocked" },
             "requested": requested,
             "resident_runtime_platform_ready": resident_runtime_platform_ready,

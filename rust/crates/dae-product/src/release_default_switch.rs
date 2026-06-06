@@ -19,9 +19,9 @@ pub struct ReleaseDefaultSwitchContract {
 
 pub fn release_default_switch_contract() -> ReleaseDefaultSwitchContract {
     ReleaseDefaultSwitchContract {
-        name: "release-default-switch-v1",
+        name: "release-default-switch",
         c_phase: "C9",
-        prior_gate: "outbound-production-matrix-v1",
+        prior_gate: "outbound-production-matrix",
         contract_ready: true,
         default_artifact_path_ready: true,
         default_runtime_selector_ready: true,

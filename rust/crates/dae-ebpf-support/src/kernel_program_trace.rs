@@ -121,7 +121,7 @@ pub fn trace_target_discovery_contract() -> TraceTargetDiscoveryContract {
 
 pub fn trace_core_sideload_gate_report() -> TraceCoreSideloadGateReport {
     TraceCoreSideloadGateReport {
-        schema: "trace-core-sideload-gate-v1",
+        schema: "trace-core-sideload-gate",
         enabled: false,
         go_trace_adoption_ready: false,
         default_daemon_path: false,

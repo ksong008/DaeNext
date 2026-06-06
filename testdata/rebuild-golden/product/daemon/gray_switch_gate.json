@@ -15,8 +15,8 @@
   "go_default_path_preserved": true,
   "go_fallback_required": true,
   "gray_switch_decision": "blocked_for_default_path; continue opt-in evidence collection only",
-  "name": "stage22-daemon-gray-switch-gate",
-  "prior_gate": "stage16-daemon-default-readiness",
+  "name": "daemon-gray-switch-gate",
+  "prior_gate": "daemon-default-readiness",
   "readiness_rows": [
     {
       "area": "engine runtime facade",

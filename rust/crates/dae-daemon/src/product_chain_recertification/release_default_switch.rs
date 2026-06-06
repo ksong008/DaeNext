@@ -23,7 +23,7 @@ pub(super) fn release_default_switch_gate_json(
     if !executed {
         return ReleaseDefaultSwitchGateReport {
             report: json!({
-                "name": "release-default-switch-v1",
+                "name": "release-default-switch",
                 "status": "not-executed",
                 "requested": false,
                 "release_default_switch_admission_ready": false,
@@ -270,7 +270,7 @@ pub(super) fn release_default_switch_gate_json(
         "blocked"
     };
     let mut report = Map::new();
-    report.insert("name".to_owned(), json!("release-default-switch-v1"));
+    report.insert("name".to_owned(), json!("release-default-switch"));
     report.insert("status".to_owned(), json!(status));
     report.insert("requested".to_owned(), json!(requested));
     report.insert("read_only".to_owned(), json!(true));

@@ -113,7 +113,7 @@ pub fn service_contract_capabilities(version: &str) -> Value {
         "resident_runtime_platform_contract_ready": true,
         "resident_runtime_typed_report_ready": true,
         "resident_runtime_resource_gate_ready": true,
-        "resident_runtime_report_schema": "resident-runtime-platform-report-v1",
+        "resident_runtime_report_schema": "resident-runtime-platform-report",
         "resident_runtime_lifecycle_contract": {
             "pid_file": PID_FILE_PATH,
             "progress_file": PROGRESS_FILE_PATH,
@@ -253,7 +253,7 @@ fn insert_control_plane_service_contract_capabilities(
         );
         report.insert(
             "control_plane_report_schema".to_owned(),
-            json!("control-plane-owner-v1"),
+            json!("control-plane-owner"),
         );
         report.insert(
             "control_plane_c_tproxy_oracle_retained_until_datapath_core".to_owned(),
@@ -388,7 +388,7 @@ fn insert_datapath_core_service_contract_capabilities(report: &mut Value) {
         report.insert(
             "datapath_core_typed_report".to_owned(),
             json!({
-                "schema": "datapath-core-typed-report-v1",
+                "schema": "datapath-core-typed-report",
                 "status": if datapath_core_contract_ready { "pass" } else { "fail" },
                 "tcp_tproxy_datapath_ready": tcp_tproxy_datapath_ready,
                 "tcp_route_sniff_direct_block_proxy_ready": tcp_route_sniff_direct_block_proxy_ready,
@@ -468,7 +468,7 @@ fn insert_datapath_core_service_contract_capabilities(report: &mut Value) {
         );
         report.insert(
             "datapath_core_report_schema".to_owned(),
-            json!("datapath-core-v1"),
+            json!("datapath-core"),
         );
         report.insert(
             "no_go_userspace_datapath_fallback_contract_ready".to_owned(),
@@ -583,12 +583,12 @@ fn insert_outbound_fingerprint_underlay_service_contract_capabilities(report: &m
         );
         report.insert(
             "outbound_fingerprint_underlay_report_schema".to_owned(),
-            json!("outbound-fingerprint-underlay-v1"),
+            json!("outbound-fingerprint-underlay"),
         );
         report.insert(
             "outbound_fingerprint_underlay_typed_report".to_owned(),
             json!({
-                "schema": "outbound-fingerprint-underlay-typed-report-v1",
+                "schema": "outbound-fingerprint-underlay-typed-report",
                 "status": if contract_ready { "pass" } else { "fail" },
                 "standard_tls_underlay_contract_ready": standard_tls_underlay_contract_ready,
                 "fingerprint_aware_tls_underlay_contract_ready": fingerprint_aware_tls_underlay_contract_ready,
@@ -700,7 +700,7 @@ fn insert_outbound_production_matrix_service_contract_capabilities(report: &mut 
         report.insert(
             "outbound_production_matrix_typed_report".to_owned(),
             json!({
-                "schema": "outbound-production-matrix-typed-report-v1",
+                "schema": "outbound-production-matrix-typed-report",
                 "status": if contract_ready { "pass" } else { "fail" },
                 "entry_count": entries.len(),
                 "parser_export_metadata_matrix_ready": matrix.parser_export_metadata_ready,
@@ -835,7 +835,7 @@ fn insert_resident_live_adapter_matrix_service_contract_capabilities(report: &mu
         report.insert(
             "resident_live_adapter_matrix_typed_report".to_owned(),
             json!({
-                "schema": "resident-live-adapter-matrix-typed-report-v1",
+                "schema": "resident-live-adapter-matrix-typed-report",
                 "status": if matrix.matrix_ready { "pass" } else { "blocked" },
                 "entry_count": entries.len(),
                 "wired_handler_count": wired_handler_count,
@@ -929,7 +929,7 @@ fn insert_release_default_switch_service_contract_capabilities(report: &mut Valu
         report.insert(
             "release_default_switch_typed_report".to_owned(),
             json!({
-                "schema": "release-default-switch-typed-report-v1",
+                "schema": "release-default-switch-typed-report",
                 "status": "pass",
                 "c_phase": contract.c_phase,
                 "prior_gate": contract.prior_gate,
@@ -1022,7 +1022,7 @@ fn insert_go_free_product_chain_service_contract_capabilities(report: &mut Value
         report.insert(
             "go_free_product_chain_typed_report".to_owned(),
             json!({
-                "schema": "go-free-product-chain-typed-report-v1",
+                "schema": "go-free-product-chain-typed-report",
                 "status": if contract.ready { "pass" } else { "blocked" },
                 "c_phase": contract.c_phase,
                 "prior_gate": contract.prior_gate,

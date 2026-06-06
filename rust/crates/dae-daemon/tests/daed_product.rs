@@ -60,7 +60,7 @@ routing {
     let report: Value = serde_json::from_slice(&output.stdout).unwrap();
     assert_eq!(
         report["schema"].as_str().unwrap(),
-        "resident-live-adapter-config-assessment-v1"
+        "resident-live-adapter-config-assessment"
     );
     assert_eq!(report["status"].as_str().unwrap(), "admitted");
     assert!(report["read_only"].as_bool().unwrap());
@@ -94,6 +94,36 @@ routing {
         .unwrap();
     assert_eq!(live_row["planner_status"].as_str().unwrap(), "admitted");
     assert_eq!(live_row["admitted_count"].as_u64().unwrap(), 1);
+    assert_eq!(
+        live_row["generated_solver"]["executableGraphReady"]
+            .as_bool()
+            .unwrap(),
+        true
+    );
+    assert_eq!(
+        live_row["generated_solver"]["runtimeComponentsReady"]
+            .as_bool()
+            .unwrap(),
+        true
+    );
+    assert_eq!(
+        live_row["generated_solver"]["defaultReady"]
+            .as_bool()
+            .unwrap(),
+        false
+    );
+    assert_eq!(
+        live_row["generated_solver"]["goFreeReady"]
+            .as_bool()
+            .unwrap(),
+        false
+    );
+    assert_eq!(
+        live_row["candidates"][0]["runtimeComponents"]["probeExecutor"]["executor"]
+            .as_str()
+            .unwrap(),
+        "resident-executable-graph"
+    );
     let absent_row = rows
         .iter()
         .find(|row| row["formal_matrix_handler"].as_str().unwrap() == "trojan")
@@ -167,6 +197,34 @@ routing {
     assert_eq!(row["planner_status"].as_str().unwrap(), "blocked");
     assert_eq!(row["candidate_count"].as_u64().unwrap(), 1);
     assert_eq!(row["blocked_count"].as_u64().unwrap(), 1);
+    assert_eq!(
+        row["generated_solver"]["admissionFailClosed"]
+            .as_bool()
+            .unwrap(),
+        true
+    );
+    assert_eq!(
+        row["generated_solver"]["runtimeComponentsReady"]
+            .as_bool()
+            .unwrap(),
+        false
+    );
+    assert!(
+        row["generated_solver"]["blockers"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|blocker| blocker
+                .as_str()
+                .unwrap()
+                .contains("runtime component factory"))
+    );
+    assert_eq!(
+        row["candidates"][0]["admission"]["status"]
+            .as_str()
+            .unwrap(),
+        "fail-closed"
+    );
     assert!(!String::from_utf8_lossy(&output.stdout).contains("MTIzNDU2"));
     assert!(!String::from_utf8_lossy(&output.stdout).contains("ss://"));
     let _ = fs::remove_dir_all(temp);
@@ -250,6 +308,14 @@ routing {
         assert_eq!(row["planner_status"].as_str().unwrap(), "admitted");
         assert_eq!(row["candidate_count"].as_u64().unwrap(), 1);
         assert_eq!(row["admitted_count"].as_u64().unwrap(), 1);
+        assert_eq!(
+            row["generated_solver"]["defaultReady"].as_bool().unwrap(),
+            false
+        );
+        assert_eq!(
+            row["generated_solver"]["goFreeReady"].as_bool().unwrap(),
+            false
+        );
     }
     for handler in [
         "vless",
@@ -267,13 +333,13 @@ routing {
             .iter()
             .find(|row| row["formal_matrix_handler"].as_str().unwrap() == handler)
             .unwrap();
-        assert_eq!(row["remote_live_matrix"].as_bool().unwrap(), true);
+        assert_eq!(row["remote_live_matrix"].as_bool().unwrap(), false);
     }
     assert_eq!(
         report["resident_live_adapter_remote_live_matrix_ready"]
             .as_bool()
             .unwrap(),
-        true
+        false
     );
     let http_row = rows
         .iter()
@@ -285,6 +351,12 @@ routing {
         "protocol-closed"
     );
     assert_eq!(http_row["udp_path_ready"].as_bool().unwrap(), true);
+    assert_eq!(
+        http_row["generated_solver"]["udpLoopbackReady"]
+            .as_bool()
+            .unwrap(),
+        true
+    );
     let stdout = String::from_utf8_lossy(&output.stdout);
     for secret in [
         "vless://",
@@ -364,7 +436,7 @@ routing {
     let report: Value = serde_json::from_slice(&output.stdout).unwrap();
     assert_eq!(
         report["schema"].as_str().unwrap(),
-        "resident-live-adapter-udp-live-v1"
+        "resident-live-adapter-udp-live"
     );
     let rows = report["rows"].as_array().unwrap();
     let http_row = rows
@@ -376,6 +448,16 @@ routing {
     assert_eq!(http_row["protocol_closed"].as_bool().unwrap(), true);
     assert_eq!(
         http_row["udp_semantics"].as_str().unwrap(),
+        "protocol-closed"
+    );
+    assert_eq!(
+        http_row["packetSession"]["manager"].as_str().unwrap(),
+        "bounded-resident-packet-session"
+    );
+    assert_eq!(
+        http_row["packetSession"]["packetSemantics"]
+            .as_str()
+            .unwrap(),
         "protocol-closed"
     );
     let stdout = String::from_utf8_lossy(&output.stdout);
@@ -490,15 +572,15 @@ fn daed_product_contract_reports_c10_first_batch_state_paths() {
         report["go_free_product_chain_typed_report"]["status"]
             .as_str()
             .unwrap(),
-        "pass"
+        "blocked"
     );
     assert!(
-        report["go_free_live_host_contract_ready"]
+        !report["go_free_live_host_contract_ready"]
             .as_bool()
             .unwrap()
     );
     assert!(report["go_free_rollback_model_ready"].as_bool().unwrap());
-    assert!(report["go_free_product_chain_ready"].as_bool().unwrap());
+    assert!(!report["go_free_product_chain_ready"].as_bool().unwrap());
 
     let package = Command::new(binary())
         .args(["package-info", "--json"])
@@ -521,27 +603,27 @@ fn daed_product_contract_reports_c10_first_batch_state_paths() {
             .unwrap()
     );
     assert!(
-        package["package_surface"]["default_package_switch_live_applied"]
+        !package["package_surface"]["default_package_switch_live_applied"]
             .as_bool()
             .unwrap()
     );
     assert!(
-        package["package_surface"]["rollback_validation_applied_on_live_host"]
+        !package["package_surface"]["rollback_validation_applied_on_live_host"]
             .as_bool()
             .unwrap()
     );
     assert!(
-        package["package_surface"]["release_default_switch_admission"]
+        !package["package_surface"]["release_default_switch_admission"]
             .as_bool()
             .unwrap()
     );
     assert!(
-        package["package_surface"]["production_package_admission"]
+        !package["package_surface"]["production_package_admission"]
             .as_bool()
             .unwrap()
     );
     assert!(
-        package["full_go_free_product_chain_ready"]
+        !package["full_go_free_product_chain_ready"]
             .as_bool()
             .unwrap()
     );
@@ -1128,7 +1210,7 @@ fn daed_export_commands_report_c10_package_surface() {
             String::from_utf8_lossy(&output.stderr)
         );
         let value: Value = serde_json::from_slice(&output.stdout).unwrap();
-        assert!(value.to_string().contains("go-free-product-chain-v1"));
+        assert!(value.to_string().contains("go-free-product-chain"));
     }
     for command in ["package-manifest", "admission-report", "webui-route-audit"] {
         let output = Command::new(binary())
@@ -1141,7 +1223,7 @@ fn daed_export_commands_report_c10_package_surface() {
             String::from_utf8_lossy(&output.stderr)
         );
         let value: Value = serde_json::from_slice(&output.stdout).unwrap();
-        assert!(value.to_string().contains("go-free-product-chain-v1"));
+        assert!(value.to_string().contains("go-free-product-chain"));
     }
     let route_audit = Command::new(binary())
         .args(["export", "webui-route-audit"])
@@ -1160,12 +1242,12 @@ fn daed_export_commands_report_c10_package_surface() {
         "validate"
     );
     assert!(
-        manifest["admission"]["fullGoFreeProductChainReady"]
+        !manifest["admission"]["fullGoFreeProductChainReady"]
             .as_bool()
             .unwrap()
     );
     assert!(
-        manifest["admission"]["rollbackValidationAppliedOnLiveHost"]
+        !manifest["admission"]["rollbackValidationAppliedOnLiveHost"]
             .as_bool()
             .unwrap()
     );
@@ -1175,9 +1257,9 @@ fn daed_export_commands_report_c10_package_surface() {
         .output()
         .unwrap();
     let admission: Value = serde_json::from_slice(&admission.stdout).unwrap();
-    assert_eq!(admission["status"].as_str().unwrap(), "pass");
+    assert_eq!(admission["status"].as_str().unwrap(), "blocked");
     assert!(
-        admission["remainingBlockers"]
+        !admission["remainingBlockers"]
             .as_array()
             .unwrap()
             .is_empty()

@@ -54,6 +54,30 @@ enum AsyncVlessTlsEngine {
     },
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum ResidentTlsProvider {
+    StandardRustls,
+    FingerprintAwareBoring,
+}
+
+impl ResidentTlsProvider {
+    fn from_proxy(proxy: &ResidentProxyPlan) -> Result<Self, String> {
+        match proxy.tls.as_str() {
+            "tls" => {
+                if proxy.utls_fingerprint.is_some() {
+                    Ok(Self::FingerprintAwareBoring)
+                } else {
+                    Ok(Self::StandardRustls)
+                }
+            }
+            other => Err(format!(
+                "resident TLS factory cannot open security underlay {other} for protocol {}",
+                proxy.protocol
+            )),
+        }
+    }
+}
+
 pub(super) enum TlsDriveOutcome {
     Progressed(bool),
     DecryptErrorRawRecord { record: Vec<u8>, error: String },
@@ -349,6 +373,12 @@ fn hex_prefix(bytes: &[u8], limit: usize) -> String {
 }
 
 pub(super) fn open_vless_tls_client(proxy: &ResidentProxyPlan) -> Result<VlessTlsClient, String> {
+    open_resident_tls_client(proxy)
+}
+
+pub(super) fn open_resident_tls_client(
+    proxy: &ResidentProxyPlan,
+) -> Result<VlessTlsClient, String> {
     let target = resolve_proxy_addr(proxy)?;
     let connected = magic_tcp_connect(
         target,
@@ -371,10 +401,13 @@ pub(super) fn open_vless_tls_client(proxy: &ResidentProxyPlan) -> Result<VlessTl
         .stream
         .set_nodelay(true)
         .map_err(|err| format!("set VLESS TCP_NODELAY: {err}"))?;
-    if proxy.utls_fingerprint.is_some() {
-        open_boring_vless_tls_client(proxy, connected.stream)
-    } else {
-        open_rustls_vless_tls_client(proxy, connected.stream)
+    match ResidentTlsProvider::from_proxy(proxy)? {
+        ResidentTlsProvider::FingerprintAwareBoring => {
+            open_boring_resident_tls_client(proxy, connected.stream)
+        }
+        ResidentTlsProvider::StandardRustls => {
+            open_rustls_resident_tls_client(proxy, connected.stream)
+        }
     }
 }
 
@@ -388,10 +421,13 @@ pub(super) async fn open_async_resident_tls_client(
     proxy: &ResidentProxyPlan,
 ) -> Result<AsyncResidentTlsClient, String> {
     let tcp = open_proxy_tcp_stream_async(proxy.clone()).await?;
-    if proxy.utls_fingerprint.is_some() {
-        open_async_boring_vless_tls_client(proxy, tcp).await
-    } else {
-        open_async_rustls_vless_tls_client(proxy, tcp).await
+    match ResidentTlsProvider::from_proxy(proxy)? {
+        ResidentTlsProvider::FingerprintAwareBoring => {
+            open_async_boring_resident_tls_client(proxy, tcp).await
+        }
+        ResidentTlsProvider::StandardRustls => {
+            open_async_rustls_resident_tls_client(proxy, tcp).await
+        }
     }
 }
 
@@ -431,7 +467,7 @@ async fn open_proxy_tcp_stream_async(proxy: ResidentProxyPlan) -> Result<TokioTc
     TokioTcpStream::from_std(stream).map_err(|err| format!("adopt async proxy TCP stream: {err}"))
 }
 
-async fn open_async_rustls_vless_tls_client(
+async fn open_async_rustls_resident_tls_client(
     proxy: &ResidentProxyPlan,
     tcp: TokioTcpStream,
 ) -> Result<AsyncVlessTlsClient, String> {
@@ -451,7 +487,7 @@ async fn open_async_rustls_vless_tls_client(
     })
 }
 
-async fn open_async_boring_vless_tls_client(
+async fn open_async_boring_resident_tls_client(
     proxy: &ResidentProxyPlan,
     tcp: TokioTcpStream,
 ) -> Result<AsyncVlessTlsClient, String> {
@@ -471,7 +507,7 @@ async fn open_async_boring_vless_tls_client(
     })
 }
 
-fn open_rustls_vless_tls_client(
+fn open_rustls_resident_tls_client(
     proxy: &ResidentProxyPlan,
     tcp: TcpStream,
 ) -> Result<VlessTlsClient, String> {
@@ -491,7 +527,7 @@ fn open_rustls_vless_tls_client(
     Ok(client)
 }
 
-fn open_boring_vless_tls_client(
+fn open_boring_resident_tls_client(
     proxy: &ResidentProxyPlan,
     tcp: TcpStream,
 ) -> Result<VlessTlsClient, String> {

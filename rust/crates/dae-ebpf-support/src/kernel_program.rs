@@ -298,7 +298,7 @@ pub fn kernel_program_parity_admission_report(
         .collect::<Vec<_>>();
     let admitted = missing_checks.is_empty();
     KernelProgramParityAdmissionReport {
-        schema: "kernel-program-parity-admission-v1",
+        schema: "kernel-program-parity-admission",
         admitted,
         default_switch_allowed: false,
         c_tproxy_object_deletion_allowed: false,
@@ -322,7 +322,7 @@ pub fn tproxy_dataplane_admission_report(
         .collect::<Vec<_>>();
     let admitted = missing_checks.is_empty();
     TproxyDataplaneAdmissionReport {
-        schema: "tproxy-dataplane-admission-v1",
+        schema: "tproxy-dataplane-admission",
         admitted,
         default_candidate_allowed: admitted,
         go_bpf_loader_retirement_candidate: admitted,
@@ -342,7 +342,7 @@ pub fn trace_diagnostic_gate_report(
     trace_gate: &TraceCoreSideloadGateReport,
 ) -> TraceDiagnosticGateReport {
     TraceDiagnosticGateReport {
-        schema: "trace-diagnostic-gate-v1",
+        schema: "trace-diagnostic-gate",
         status: "retired_from_product_default",
         participates_in_tproxy_default_candidate: false,
         c_trace_object_required: trace_gate.c_trace_object_required,
@@ -381,7 +381,7 @@ pub fn kernel_program_fallback_retirement_gate_report(
     let admitted = blockers.is_empty();
     let trace_retirement_allowed = admitted && trace_diagnostic.fallback_retirement_allowed;
     KernelProgramFallbackRetirementGateReport {
-        schema: "kernel-program-fallback-retirement-gate-v1",
+        schema: "kernel-program-fallback-retirement-gate",
         admitted,
         default_switch_allowed: admitted,
         c_tproxy_object_retirement_allowed: admitted,
@@ -712,7 +712,7 @@ pub fn kernel_program_feasibility_report() -> KernelProgramFeasibilityReport {
         .filter(|line| line.status == KernelProgramCoverageStatus::RustNativeAdmitted)
         .count();
     KernelProgramFeasibilityReport {
-        schema: "kernel-program-feasibility-v1",
+        schema: "kernel-program-feasibility",
         tproxy_classifier_total: TPROXY_CLASSIFIER_COVERAGE.len(),
         rust_tproxy_classifier_covered,
         tproxy_cgroup_total: TPROXY_CGROUP_COVERAGE.len(),

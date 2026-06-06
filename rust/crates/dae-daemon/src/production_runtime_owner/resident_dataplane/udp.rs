@@ -37,6 +37,7 @@ use super::client::{
 use super::direct::open_direct_tcp_connection;
 use super::dns::{ResidentDnsPlan, handle_resident_dns_udp};
 use super::events::append_event;
+use super::execution::{append_runtime_execution_descriptor, udp_execution_descriptor};
 use super::plan::{ResidentProxyGroupPlan, ResidentProxyPlan, ResidentProxyProtocolPlan};
 use super::tcp::{open_marked_quic_endpoint, resolve_proxy_udp_addr, set_socket_mark};
 use super::vision::{VisionUnpadState, VisionUnpadder, vision_padding_block};
@@ -76,6 +77,12 @@ pub(super) fn resident_udp_loop(
             "admitted_candidate_count": proxy_group.admitted_candidate_count(),
             "worker_limit": worker_limit,
             "worker_stack_bytes": worker_stack_bytes,
+            "packetSessionManager": {
+                "schemaVersion": 1,
+                "manager": "bounded-resident-packet-session",
+                "workerLimit": worker_limit,
+                "keyFields": ["graphId", "outbound", "peer", "originalDestination", "packetSemantics"],
+            },
         }),
     );
     let active_workers = Arc::new(AtomicUsize::new(0));
@@ -195,16 +202,16 @@ impl Drop for UdpPacketWorkerGuard {
 #[derive(Debug)]
 struct UdpExchangeResult {
     payload: Vec<u8>,
-    execution: &'static str,
+    legacy_execution: &'static str,
     tls_underlay: Option<&'static str>,
     quic_underlay: Option<&'static str>,
 }
 
 impl UdpExchangeResult {
-    fn new(payload: Vec<u8>, execution: &'static str) -> Self {
+    fn new(payload: Vec<u8>, legacy_execution: &'static str) -> Self {
         Self {
             payload,
-            execution,
+            legacy_execution,
             tls_underlay: None,
             quic_underlay: None,
         }
@@ -218,6 +225,24 @@ impl UdpExchangeResult {
     fn with_quic_underlay(mut self, quic_underlay: &'static str) -> Self {
         self.quic_underlay = Some(quic_underlay);
         self
+    }
+
+    fn append_execution_fields(
+        &self,
+        value: &mut serde_json::Value,
+        protocol_framing: &str,
+        graph_id: &str,
+    ) {
+        let mut descriptor = udp_execution_descriptor(self.legacy_execution)
+            .with_protocol_framing(protocol_framing)
+            .with_graph_id(graph_id);
+        if let Some(tls_underlay) = self.tls_underlay {
+            descriptor = descriptor.with_security_underlay(tls_underlay);
+        }
+        if let Some(quic_underlay) = self.quic_underlay {
+            descriptor = descriptor.with_transport_underlay(quic_underlay);
+        }
+        append_runtime_execution_descriptor(value, descriptor);
     }
 }
 
@@ -258,7 +283,7 @@ fn handle_udp_packet(
         handle_resident_dns_udp(&dns, original_dst, &packet.payload).map(|response| {
             (
                 "udp_dns_packet_finished",
-                UdpExchangeResult::new(response, "resident-dns-udp-v1"),
+                UdpExchangeResult::new(response, "resident-dns-udp"),
             )
         })
     } else {
@@ -287,8 +312,10 @@ fn handle_udp_packet(
                     "ip": original_dst.to_string(),
                     "protocol": proxy.protocol,
                     "handler": handler,
-                    "execution": response.execution,
+                    "graphId": proxy.graph_id,
+                    "packetSession": udp_packet_session_value(&proxy, &peer.to_string(), &original_dst.to_string(), handler),
                 });
+                response.append_execution_fields(&mut event_json, handler, &proxy.graph_id);
                 if let Some(tls_underlay) = response.tls_underlay {
                     event_json["tls_underlay"] = json!(tls_underlay);
                 }
@@ -323,6 +350,8 @@ fn handle_udp_packet(
                     "policy": proxy.group_policy,
                     "dialer": proxy.node_tag,
                     "ip": original_dst.to_string(),
+                    "graphId": proxy.graph_id,
+                    "packetSession": udp_packet_session_value(&proxy, &peer.to_string(), &original_dst.to_string(), handler),
                 }),
             )
         }
@@ -402,12 +431,14 @@ pub(super) fn probe_resident_proxy_udp(
                 "ok": payload_match,
                 "protocol_closed": false,
                 "handler": handler,
-                "execution": response.execution,
                 "request_len": payload.len(),
                 "response_len": response.payload.len(),
                 "payload_match": payload_match,
                 "elapsed_ms": started.elapsed().as_millis(),
+                "graphId": proxy.graph_id,
+                "packetSession": udp_packet_session_value(proxy, "probe", &original_dst.to_string(), handler),
             });
+            response.append_execution_fields(&mut report, handler, &proxy.graph_id);
             if let Some(tls_underlay) = response.tls_underlay {
                 report["tls_underlay"] = json!(tls_underlay);
             }
@@ -432,6 +463,8 @@ pub(super) fn probe_resident_proxy_udp(
                 "payload_match": false,
                 "elapsed_ms": started.elapsed().as_millis(),
                 "error": err,
+                "graphId": proxy.graph_id,
+                "packetSession": udp_packet_session_value(proxy, "probe", &original_dst.to_string(), handler),
             })
         }
         Err(err) => json!({
@@ -443,6 +476,8 @@ pub(super) fn probe_resident_proxy_udp(
             "response_len": 0,
             "payload_match": false,
             "elapsed_ms": started.elapsed().as_millis(),
+            "graphId": proxy.graph_id,
+            "packetSession": udp_packet_session_value(proxy, "probe", &original_dst.to_string(), handler),
             "error": err,
         }),
     }
@@ -596,6 +631,40 @@ fn resident_udp_handler_name(handler: &ResidentProxyProtocolPlan) -> &'static st
     }
 }
 
+fn udp_packet_session_value(
+    proxy: &ResidentProxyPlan,
+    peer: &str,
+    original_dst: &str,
+    handler: &str,
+) -> serde_json::Value {
+    json!({
+        "schemaVersion": 1,
+        "manager": "bounded-resident-packet-session",
+        "graphId": proxy.graph_id,
+        "outbound": proxy.group_name,
+        "peer": peer,
+        "originalDestination": original_dst,
+        "packetSemantics": udp_packet_semantics(&proxy.handler),
+        "handler": handler,
+        "limitSource": "resident-udp-packet-worker-limit",
+    })
+}
+
+fn udp_packet_semantics(handler: &ResidentProxyProtocolPlan) -> &'static str {
+    match handler {
+        ResidentProxyProtocolPlan::VlessVisionTcpTls { .. } => "xudp",
+        ResidentProxyProtocolPlan::Socks5Tcp { .. } => "udp-associate",
+        ResidentProxyProtocolPlan::HttpProxyTcp { .. } => "protocol-closed",
+        ResidentProxyProtocolPlan::ShadowsocksAeadTcp { .. } => "datagram-aead",
+        ResidentProxyProtocolPlan::TrojanTcpTls { .. }
+        | ResidentProxyProtocolPlan::AnyTlsTcpTls { .. }
+        | ResidentProxyProtocolPlan::VmessAeadTcp { .. } => "udp-over-stream",
+        ResidentProxyProtocolPlan::Hysteria2QuicTcp { .. } => "quic-datagram",
+        ResidentProxyProtocolPlan::TuicQuicTcp { .. } => "quic-packet",
+        ResidentProxyProtocolPlan::JuicityQuicTcp { .. } => "quic-stream-packet",
+    }
+}
+
 fn exchange_vless_udp(
     proxy: &ResidentProxyPlan,
     original_dst: SocketAddrV4,
@@ -608,7 +677,7 @@ fn exchange_vless_udp(
     client.queue_plain(&request, "queue VLESS UDP request")?;
     flush_tls_writes_for_udp(&mut client)?;
     read_vless_udp_response(&mut client, &proxy.flow, key).map(|payload| {
-        UdpExchangeResult::new(payload, "vless-xudp-v1").with_tls_underlay(tls_underlay)
+        UdpExchangeResult::new(payload, "vless-xudp").with_tls_underlay(tls_underlay)
     })
 }
 
@@ -627,10 +696,7 @@ fn exchange_shadowsocks_udp(
     let response = exchange_udp_datagram_with_proxy(proxy, &request, "Shadowsocks")?;
     let decoded = decode_shadowsocks_udp_packet(cipher, password, &response)
         .map_err(|err| format!("decode Shadowsocks UDP packet: {err}"))?;
-    Ok(UdpExchangeResult::new(
-        decoded.payload,
-        "udp-datagram-aead-v1",
-    ))
+    Ok(UdpExchangeResult::new(decoded.payload, "udp-datagram-aead"))
 }
 
 fn exchange_socks5_udp(
@@ -657,7 +723,7 @@ fn exchange_socks5_udp(
         udp_packet::unwrap(&response).map_err(|err| format!("unwrap SOCKS5 UDP packet: {err}"))?;
     Ok(UdpExchangeResult::new(
         decoded.payload,
-        "socks5-udp-associate-v1",
+        "socks5-udp-associate",
     ))
 }
 
@@ -679,7 +745,7 @@ fn exchange_trojan_udp(
         decode_trojan_udp_packet(buffer).map(|packet| packet.payload)
     })
     .map(|payload| {
-        UdpExchangeResult::new(payload, "tls-udp-over-tcp-v1").with_tls_underlay(tls_underlay)
+        UdpExchangeResult::new(payload, "tls-udp-over-tcp").with_tls_underlay(tls_underlay)
     })
 }
 
@@ -700,7 +766,7 @@ fn exchange_vmess_udp(
     .map_err(|err| format!("VMess AEAD UDP-over-TCP exchange: {err}"))?;
     Ok(UdpExchangeResult::new(
         report.echoed_payload,
-        "aead-udp-over-tcp-v1",
+        "aead-udp-over-tcp",
     ))
 }
 
@@ -750,7 +816,7 @@ fn exchange_anytls_udp(
     wait_anytls_udp_synack(&mut client)?;
     let response = read_anytls_udp_payload(&mut client)?;
     Ok(
-        UdpExchangeResult::new(response, "frame-tls-udp-packet-stream-v1")
+        UdpExchangeResult::new(response, "frame-tls-udp-packet-stream")
             .with_tls_underlay(tls_underlay),
     )
 }
@@ -800,10 +866,8 @@ fn exchange_hysteria2_udp(
         let parsed = parse_hysteria2_udp_message(&response)?;
         connection.close(0_u32.into(), b"resident hysteria2 udp done");
         endpoint.wait_idle().await;
-        Ok(
-            UdpExchangeResult::new(parsed.payload, "quic-udp-datagram-v1")
-                .with_quic_underlay("quinn-h3"),
-        )
+        Ok(UdpExchangeResult::new(parsed.payload, "quic-udp-datagram")
+            .with_quic_underlay("quinn-h3"))
     })
 }
 
@@ -842,10 +906,7 @@ fn exchange_tuic_udp(
         let parsed = parse_tuic_packet_frame(&response)?;
         connection.close(0_u32.into(), b"resident tuic udp done");
         endpoint.wait_idle().await;
-        Ok(
-            UdpExchangeResult::new(parsed.payload, "quic-udp-datagram-v1")
-                .with_quic_underlay("quinn"),
-        )
+        Ok(UdpExchangeResult::new(parsed.payload, "quic-udp-datagram").with_quic_underlay("quinn"))
     })
 }
 
@@ -899,7 +960,7 @@ fn exchange_juicity_udp(
         connection.close(0_u32.into(), b"resident juicity udp done");
         endpoint.wait_idle().await;
         Ok(
-            UdpExchangeResult::new(parsed.payload, "quic-udp-stream-packet-v1")
+            UdpExchangeResult::new(parsed.payload, "quic-udp-stream-packet")
                 .with_quic_underlay("quinn-h3"),
         )
     })
@@ -1646,6 +1707,9 @@ mod tests {
     #[test]
     fn resident_vless_vision_udp_request_uses_xudp_mux_target() {
         let proxy = ResidentProxyPlan {
+            graph_id: "resident-graph:test-vless".to_owned(),
+            graph_link_hash: "sha256:test-vless".to_owned(),
+            redacted_link_source: "vless:<redacted>#vless_live".to_owned(),
             protocol: "vless".to_owned(),
             group_name: "proxy".to_owned(),
             group_policy: "fixed".to_owned(),
@@ -1678,6 +1742,9 @@ mod tests {
     #[test]
     fn resident_udp_dispatch_fails_closed_for_protocol_closed_handler() {
         let proxy = ResidentProxyPlan {
+            graph_id: "resident-graph:test-http".to_owned(),
+            graph_link_hash: "sha256:test-http".to_owned(),
+            redacted_link_source: "http:<redacted>#plain-http-connect".to_owned(),
             protocol: "http-proxy".to_owned(),
             group_name: "proxy".to_owned(),
             group_policy: "fixed".to_owned(),

@@ -20,7 +20,7 @@ fn native_backend_opt_in_default_is_fallback_only() {
         native_backend_admission_report(NativeBackendAdmissionEvidence::report_only(), true);
     let decision =
         native_backend_opt_in_decision(NativeBackendOptInRequest::report_only(admission));
-    assert_eq!(decision.schema, "native-ebpf-backend-opt-in-v1");
+    assert_eq!(decision.schema, "native-ebpf-backend-opt-in");
     assert!(!decision.opt_in_enabled);
     assert_eq!(decision.requested_backend, AttachBackend::Auto);
     assert!(!decision.admission_admitted);
