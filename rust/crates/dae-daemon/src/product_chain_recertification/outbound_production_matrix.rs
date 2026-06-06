@@ -18,7 +18,7 @@ pub(super) fn outbound_production_matrix_gate_json(
     if !executed {
         return OutboundProductionMatrixGateReport {
             report: json!({
-                "name": "outbound-production-matrix-v1",
+                "name": "outbound-production-matrix",
                 "status": "not-executed",
                 "requested": false,
                 "outbound_production_matrix_ready": false,
@@ -234,7 +234,7 @@ pub(super) fn outbound_production_matrix_gate_json(
 
     OutboundProductionMatrixGateReport {
         report: json!({
-            "name": "outbound-production-matrix-v1",
+            "name": "outbound-production-matrix",
             "status": if outbound_production_matrix_ready { "pass" } else { "blocked" },
             "requested": requested,
             "outbound_production_matrix_ready": outbound_production_matrix_ready,

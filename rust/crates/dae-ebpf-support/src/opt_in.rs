@@ -71,7 +71,7 @@ pub fn native_backend_opt_in_decision(
         .then_some(AttachBackend::TcCommandFallback);
     if !request.tc_command_fallback_available {
         return NativeBackendOptInDecision {
-            schema: "native-ebpf-backend-opt-in-v1",
+            schema: "native-ebpf-backend-opt-in",
             opt_in_enabled: request.opt_in_enabled,
             requested_backend: request.requested_backend,
             admission_admitted: request.admission_report.admitted,
@@ -115,7 +115,7 @@ pub fn native_backend_opt_in_decision(
     };
 
     NativeBackendOptInDecision {
-        schema: "native-ebpf-backend-opt-in-v1",
+        schema: "native-ebpf-backend-opt-in",
         opt_in_enabled: request.opt_in_enabled,
         requested_backend: request.requested_backend,
         admission_admitted: request.admission_report.admitted,
@@ -136,7 +136,7 @@ fn fallback_decision(
     reason: NativeBackendOptInReason,
 ) -> NativeBackendOptInDecision {
     NativeBackendOptInDecision {
-        schema: "native-ebpf-backend-opt-in-v1",
+        schema: "native-ebpf-backend-opt-in",
         opt_in_enabled: request.opt_in_enabled,
         requested_backend: request.requested_backend,
         admission_admitted: request.admission_report.admitted,

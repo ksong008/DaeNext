@@ -140,8 +140,8 @@ pub(super) fn deep_area_surface_count() -> usize {
 
 pub(super) fn datapath_outbound_ebpf_deep_area_summary_json() -> Value {
     json!({
-        "schema": "datapath-outbound-ebpf-deep-area-v1",
-        "formal_surface": "stage6-datapath-outbound-ebpf-deep-area",
+        "schema": "datapath-outbound-ebpf-deep-area",
+        "formal_surface": "datapath-outbound-ebpf-deep-area",
         "fixed_queue_stage": 6,
         "fixed_queue_completed": true,
         "owner_boundary": "dae-daemon",
@@ -199,7 +199,7 @@ mod tests {
         let summary = datapath_outbound_ebpf_deep_area_summary_json();
         assert_eq!(
             summary["schema"].as_str().unwrap(),
-            "datapath-outbound-ebpf-deep-area-v1"
+            "datapath-outbound-ebpf-deep-area"
         );
         assert!(summary["fixed_queue_completed"].as_bool().unwrap());
         assert_eq!(

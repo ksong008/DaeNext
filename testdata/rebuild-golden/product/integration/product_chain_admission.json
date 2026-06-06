@@ -48,8 +48,8 @@
   "default_switch_allowed": false,
   "go_default_path_preserved": true,
   "go_fallback_required": true,
-  "name": "stage23-product-chain-admission",
-  "prior_gate": "stage22-daemon-live-evidence-queue",
+  "name": "product-chain-admission",
+  "prior_gate": "daemon-live-evidence-queue",
   "product_chain_switch_allowed": false,
   "queue_complete": true,
   "rollback_controls": [

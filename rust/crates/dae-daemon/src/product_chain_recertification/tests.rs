@@ -74,7 +74,7 @@ fn candidate_service_contract_value(resident_dataplane_ready: bool) -> Value {
     );
     report.insert(
         "resident_runtime_report_schema".to_owned(),
-        json!("resident-runtime-platform-report-v1"),
+        json!("resident-runtime-platform-report"),
     );
     report.insert(
         "resident_runtime_lifecycle_contract".to_owned(),
@@ -142,7 +142,7 @@ fn candidate_service_contract_value(resident_dataplane_ready: bool) -> Value {
     report.insert(
         "control_plane_typed_report".to_owned(),
         json!({
-            "schema": "control-api-typed-report-v1",
+            "schema": "control-api-typed-report",
             "status": "pass",
             "runtime_overview_available": true,
             "reload_core_state_available": true,
@@ -166,7 +166,7 @@ fn candidate_service_contract_value(resident_dataplane_ready: bool) -> Value {
     );
     report.insert(
         "control_plane_report_schema".to_owned(),
-        json!("control-plane-owner-v1"),
+        json!("control-plane-owner"),
     );
     report.insert(
         "control_plane_c_tproxy_oracle_retained_until_datapath_core".to_owned(),
@@ -204,7 +204,7 @@ fn candidate_service_contract_value(resident_dataplane_ready: bool) -> Value {
     report.insert(
         "datapath_core_typed_report".to_owned(),
         json!({
-            "schema": "datapath-core-typed-report-v1",
+            "schema": "datapath-core-typed-report",
             "status": "pass",
             "stage_report_schema": false,
         }),
@@ -221,7 +221,7 @@ fn candidate_service_contract_value(resident_dataplane_ready: bool) -> Value {
     );
     report.insert(
         "datapath_core_report_schema".to_owned(),
-        json!("datapath-core-v1"),
+        json!("datapath-core"),
     );
     for key in [
         "outbound_fingerprint_underlay_contract_ready",
@@ -244,7 +244,7 @@ fn candidate_service_contract_value(resident_dataplane_ready: bool) -> Value {
     }
     report.insert(
         "outbound_fingerprint_underlay_report_schema".to_owned(),
-        json!("outbound-fingerprint-underlay-v1"),
+        json!("outbound-fingerprint-underlay"),
     );
     report.insert(
         "outbound_fingerprint_underlay_surface".to_owned(),
@@ -259,7 +259,7 @@ fn candidate_service_contract_value(resident_dataplane_ready: bool) -> Value {
     report.insert(
         "outbound_fingerprint_underlay_typed_report".to_owned(),
         json!({
-            "schema": "outbound-fingerprint-underlay-typed-report-v1",
+            "schema": "outbound-fingerprint-underlay-typed-report",
             "status": "pass",
             "stage_report_schema": false,
         }),
@@ -282,7 +282,7 @@ fn candidate_service_contract_value(resident_dataplane_ready: bool) -> Value {
     }
     report.insert(
         "outbound_production_matrix_report_schema".to_owned(),
-        json!("outbound-production-matrix-v1"),
+        json!("outbound-production-matrix"),
     );
     report.insert(
         "outbound_production_matrix_entries".to_owned(),
@@ -303,7 +303,7 @@ fn candidate_service_contract_value(resident_dataplane_ready: bool) -> Value {
     report.insert(
         "outbound_production_matrix_typed_report".to_owned(),
         json!({
-            "schema": "outbound-production-matrix-typed-report-v1",
+            "schema": "outbound-production-matrix-typed-report",
             "status": "pass",
             "stage_report_schema": false,
         }),
@@ -337,7 +337,7 @@ fn candidate_service_contract_value(resident_dataplane_ready: bool) -> Value {
     );
     report.insert(
         "resident_live_adapter_matrix_report_schema".to_owned(),
-        json!("resident-live-adapter-matrix-v1"),
+        json!("resident-live-adapter-matrix"),
     );
     report.insert(
         "resident_live_adapter_matrix_entries".to_owned(),
@@ -363,7 +363,7 @@ fn candidate_service_contract_value(resident_dataplane_ready: bool) -> Value {
     report.insert(
         "resident_live_adapter_matrix_typed_report".to_owned(),
         json!({
-            "schema": "resident-live-adapter-matrix-typed-report-v1",
+            "schema": "resident-live-adapter-matrix-typed-report",
             "status": "pass",
             "entry_count": 10,
             "wired_handler_count": 10,
@@ -401,7 +401,7 @@ fn candidate_service_contract_value(resident_dataplane_ready: bool) -> Value {
     );
     report.insert(
         "release_default_switch_report_schema".to_owned(),
-        json!("release-default-switch-v1"),
+        json!("release-default-switch"),
     );
     report.insert(
         "release_default_switch_required_live_hosts".to_owned(),
@@ -421,7 +421,7 @@ fn candidate_service_contract_value(resident_dataplane_ready: bool) -> Value {
     report.insert(
         "release_default_switch_typed_report".to_owned(),
         json!({
-            "schema": "release-default-switch-typed-report-v1",
+            "schema": "release-default-switch-typed-report",
             "status": "pass",
             "stage_report_schema": false,
         }),
@@ -469,7 +469,7 @@ fn candidate_service_contract_value(resident_dataplane_ready: bool) -> Value {
     report.insert("go_free_product_chain_ready".to_owned(), json!(false));
     report.insert(
         "go_free_product_chain_report_schema".to_owned(),
-        json!("go-free-product-chain-v1"),
+        json!("go-free-product-chain"),
     );
     report.insert(
         "go_free_product_chain_default_dependency_policy".to_owned(),
@@ -495,7 +495,7 @@ fn candidate_service_contract_value(resident_dataplane_ready: bool) -> Value {
     report.insert(
         "go_free_product_chain_typed_report".to_owned(),
         json!({
-            "schema": "go-free-product-chain-typed-report-v1",
+            "schema": "go-free-product-chain-typed-report",
             "status": "blocked",
             "stage_report_schema": false,
         }),
@@ -614,7 +614,7 @@ fn clean_product_chain_evidence() -> ProductChainEvidence {
         }),
         native_owned_entry_gate_blockers: Vec::new(),
         resident_runtime_platform_gate: json!({
-            "name": "resident-runtime-platform-v1",
+            "name": "resident-runtime-platform",
             "status": "pass",
             "requested": true,
             "resident_runtime_platform_ready": true,
@@ -640,7 +640,7 @@ fn clean_product_chain_evidence() -> ProductChainEvidence {
         }),
         resident_runtime_platform_gate_blockers: Vec::new(),
         control_plane_owner_gate: json!({
-            "name": "control-plane-owner-v1",
+            "name": "control-plane-owner",
             "status": "pass",
             "requested": true,
             "control_plane_owner_ready": true,
@@ -662,7 +662,7 @@ fn clean_product_chain_evidence() -> ProductChainEvidence {
         }),
         control_plane_owner_gate_blockers: Vec::new(),
         datapath_core_gate: json!({
-            "name": "datapath-core-v1",
+            "name": "datapath-core",
             "status": "pass",
             "requested": true,
             "datapath_core_ready": true,
@@ -691,7 +691,7 @@ fn clean_product_chain_evidence() -> ProductChainEvidence {
         }),
         datapath_core_gate_blockers: Vec::new(),
         outbound_fingerprint_underlay_gate: json!({
-            "name": "outbound-fingerprint-underlay-v1",
+            "name": "outbound-fingerprint-underlay",
             "status": "pass",
             "requested": true,
             "outbound_fingerprint_underlay_ready": true,
@@ -715,7 +715,7 @@ fn clean_product_chain_evidence() -> ProductChainEvidence {
         }),
         outbound_fingerprint_underlay_gate_blockers: Vec::new(),
         outbound_production_matrix_gate: json!({
-            "name": "outbound-production-matrix-v1",
+            "name": "outbound-production-matrix",
             "status": "pass",
             "requested": true,
             "outbound_production_matrix_ready": true,

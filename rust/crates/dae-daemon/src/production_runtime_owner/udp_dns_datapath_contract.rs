@@ -33,7 +33,7 @@ pub(super) fn classify_udp_packet_for_contract(
 
 pub(super) fn udp_dns_datapath_contract_json() -> Value {
     json!({
-        "schema": "generic-udp-dns-datapath-contract-v1",
+        "schema": "generic-udp-dns-datapath-contract",
         "scope": "all-configs-go-daenew-parity-not-test-machine-config",
         "source_of_truth": [
             "DAEX_RUST_REBUILD_PLAN_2026-05-16.md:stage7-control-datapath-ebpf-tproxy-netns",

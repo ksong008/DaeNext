@@ -135,7 +135,7 @@ impl ProductChainTypedReportSummary {
         let mut report = Map::new();
         report.insert(
             "schema".to_owned(),
-            json!("product-chain-recertification-typed-report-v1"),
+            json!("product-chain-recertification-typed-report"),
         );
         report.insert("formal_surface".to_owned(), json!("product-chain"));
         report.insert("status".to_owned(), json!(self.status().as_str()));

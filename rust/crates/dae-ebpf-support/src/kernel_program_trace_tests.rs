@@ -90,7 +90,7 @@ fn trace_kprobe_evidence_queue_keeps_native_trace_missing_until_real_skb_core_re
 #[test]
 fn trace_core_sideload_gate_is_disabled_until_real_core_relocations_exist() {
     let gate = trace_core_sideload_gate_report();
-    assert_eq!(gate.schema, "trace-core-sideload-gate-v1");
+    assert_eq!(gate.schema, "trace-core-sideload-gate");
     assert!(!gate.enabled);
     assert!(!gate.go_trace_adoption_ready);
     assert!(!gate.default_daemon_path);

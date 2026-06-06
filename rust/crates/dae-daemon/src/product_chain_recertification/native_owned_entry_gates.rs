@@ -29,10 +29,10 @@ pub(super) fn native_owned_entry_gates_json(
                 "explicit_go_rollback_only": false,
                 "runtime_selector_matrix_recorded": false,
                 "daed_service_contract_ready": false,
-                "c0_product_chain_topology_lock": not_executed_gate("product-chain-topology-lock-v1"),
-                "c1_default_bundle_boundary": not_executed_gate("default-bundle-boundary-v1"),
-                "c2_default_runtime_selector": not_executed_gate("default-runtime-selector-v1"),
-                "c3_daed_service_contract": not_executed_gate("daed-service-contract-v1"),
+                "c0_product_chain_topology_lock": not_executed_gate("product-chain-topology-lock"),
+                "c1_default_bundle_boundary": not_executed_gate("default-bundle-boundary"),
+                "c2_default_runtime_selector": not_executed_gate("default-runtime-selector"),
+                "c3_daed_service_contract": not_executed_gate("daed-service-contract"),
             }),
             blockers: Vec::new(),
         };
@@ -153,7 +153,7 @@ fn c0_product_chain_topology_lock(
     }
 
     json!({
-        "name": "product-chain-topology-lock-v1",
+        "name": "product-chain-topology-lock",
         "status": if product_chain_topology_locked { "pass" } else { "blocked" },
         "chain": "daed-daex-align -> daed/wing submodule -> dae-daex-align -> outbound-daex-align -> quic-go-daex-align",
         "build_truth": "daed/wing-submodule",
@@ -240,7 +240,7 @@ fn c1_default_bundle_boundary(options: &ProductChainRecertificationOptions) -> V
     }
 
     json!({
-        "name": "default-bundle-boundary-v1",
+        "name": "default-bundle-boundary",
         "status": if default_bundle_boundary_clean { "pass" } else { "blocked" },
         "makefile": path_string(&makefile),
         "makefile_readable": makefile_readable,
@@ -307,7 +307,7 @@ fn c2_default_runtime_selector(options: &ProductChainRecertificationOptions) -> 
     }
 
     json!({
-        "name": "default-runtime-selector-v1",
+        "name": "default-runtime-selector",
         "status": if ready { "pass" } else { "blocked" },
         "runtime_mode_file": path_string(&runtime_mode),
         "runtime_mode_readable": runtime_mode_readable,
@@ -363,7 +363,7 @@ fn c3_daed_service_contract(
     }
 
     json!({
-        "name": "daed-service-contract-v1",
+        "name": "daed-service-contract",
         "status": if daed_service_contract_ready { "pass" } else { "blocked" },
         "daed_service_contract_ready": daed_service_contract_ready,
         "service": service,

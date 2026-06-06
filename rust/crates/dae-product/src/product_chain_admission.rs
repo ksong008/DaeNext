@@ -28,9 +28,9 @@ pub struct ProductChainAdmissionRow {
 
 pub fn product_chain_admission_contract() -> ProductChainAdmissionContract {
     ProductChainAdmissionContract {
-        name: "stage23-product-chain-admission",
+        name: "product-chain-admission",
         stage: "stage23",
-        prior_gate: "stage22-daemon-live-evidence-queue",
+        prior_gate: "daemon-live-evidence-queue",
         queue_complete: true,
         product_chain_switch_allowed: false,
         default_switch_allowed: false,

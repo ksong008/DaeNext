@@ -99,8 +99,8 @@
   "gate_complete": true,
   "go_default_path_preserved": true,
   "go_fallback_required": true,
-  "name": "stage23-true-default-daemon-admission",
-  "prior_gate": "stage23-product-chain-admission",
+  "name": "true-default-daemon-admission",
+  "prior_gate": "product-chain-admission",
   "product_chain_admission_defined": true,
   "product_chain_switch_allowed": false,
   "required_benchmarks": [

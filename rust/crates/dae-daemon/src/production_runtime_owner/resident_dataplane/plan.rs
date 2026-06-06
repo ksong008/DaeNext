@@ -19,11 +19,13 @@ use dae_outbound::{
     vless::{VLESSLink, password_to_key},
     vmess::VMessLink,
 };
+use serde_json::{Value, json};
 use url::Url;
 
 use super::{
     XTLS_RPRX_VISION,
     dns::{ResidentDnsPlan, build_resident_dns_plan},
+    link_hash, redacted_link_source,
 };
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -109,6 +111,9 @@ pub(super) enum ResidentProxyProtocolPlan {
 
 #[derive(Clone, Debug)]
 pub(super) struct ResidentProxyPlan {
+    pub(super) graph_id: String,
+    pub(super) graph_link_hash: String,
+    pub(super) redacted_link_source: String,
     pub(super) protocol: String,
     pub(super) group_name: String,
     pub(super) group_policy: String,
@@ -128,6 +133,35 @@ pub(super) struct ResidentProxyPlan {
 }
 
 impl ResidentProxyPlan {
+    pub(super) fn executable_graph_descriptor(&self) -> ResidentExecutableGraphDescriptor {
+        ResidentExecutableGraphDescriptor::from_proxy(self)
+    }
+
+    pub(super) fn executable_graph_value(&self) -> Value {
+        self.executable_graph_descriptor().to_value()
+    }
+
+    pub(super) fn executable_graph_value_for_reload_generation(
+        &self,
+        reload_generation: u64,
+    ) -> Value {
+        self.executable_graph_descriptor()
+            .to_value_for_reload_generation(reload_generation)
+    }
+
+    pub(super) fn runtime_component_evidence_value(&self) -> Value {
+        self.executable_graph_descriptor()
+            .runtime_component_evidence_value()
+    }
+
+    pub(super) fn runtime_component_evidence_value_for_reload_generation(
+        &self,
+        reload_generation: u64,
+    ) -> Value {
+        self.executable_graph_descriptor()
+            .runtime_component_evidence_value_for_reload_generation(reload_generation)
+    }
+
     pub(super) fn vless_key(&self) -> Result<[u8; 16], String> {
         match self.handler {
             ResidentProxyProtocolPlan::VlessVisionTcpTls { key } => Ok(key),
@@ -139,11 +173,335 @@ impl ResidentProxyPlan {
     }
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(super) struct ResidentExecutableGraphDescriptor {
+    graph_id: String,
+    link_hash: String,
+    redacted_link_source: String,
+    protocol_framing: String,
+    endpoint_host_hash: String,
+    endpoint_port: u16,
+    transport_underlay: String,
+    security_underlay: String,
+    stream_wrapper: String,
+    packet_semantics: String,
+    flow: String,
+    alpn: Vec<String>,
+    allow_insecure: bool,
+    utls_fingerprint: Option<ResidentUtlsFingerprintPlan>,
+    mark: u32,
+    mptcp: bool,
+}
+
+impl ResidentExecutableGraphDescriptor {
+    fn from_proxy(proxy: &ResidentProxyPlan) -> Self {
+        Self {
+            graph_id: proxy.graph_id.clone(),
+            link_hash: proxy.graph_link_hash.clone(),
+            redacted_link_source: proxy.redacted_link_source.clone(),
+            protocol_framing: proxy.protocol.clone(),
+            endpoint_host_hash: link_hash(&proxy.server_host),
+            endpoint_port: proxy.server_port,
+            transport_underlay: graph_transport_underlay(proxy),
+            security_underlay: graph_security_underlay(proxy),
+            stream_wrapper: graph_stream_wrapper(proxy),
+            packet_semantics: graph_packet_semantics(proxy),
+            flow: proxy.flow.clone(),
+            alpn: proxy.alpn.clone(),
+            allow_insecure: proxy.allow_insecure,
+            utls_fingerprint: proxy.utls_fingerprint.clone(),
+            mark: proxy.mark,
+            mptcp: proxy.mptcp,
+        }
+    }
+
+    pub(super) fn to_value(&self) -> Value {
+        self.to_value_with_reload_generation(None)
+    }
+
+    pub(super) fn to_value_for_reload_generation(&self, reload_generation: u64) -> Value {
+        self.to_value_with_reload_generation(Some(reload_generation))
+    }
+
+    fn to_value_with_reload_generation(&self, reload_generation: Option<u64>) -> Value {
+        let underlay_factory = self.underlay_factory_value();
+        let stream_wrapper_factory = self.stream_wrapper_factory_value();
+        let chain_executor = self.chain_executor_value();
+        let generation_cache = self.generation_cache_value(reload_generation);
+        let packet_session_manager = self.packet_session_manager_value();
+        let probe_executor = self.probe_executor_value(reload_generation);
+        json!({
+            "schemaVersion": 1,
+            "graphId": self.graph_id,
+            "linkIdentity": {
+                "schemaVersion": 1,
+                "linkHash": self.link_hash,
+                "redactedSource": self.redacted_link_source,
+            },
+            "endpoint": {
+                "hostHash": self.endpoint_host_hash,
+                "port": self.endpoint_port,
+            },
+            "transportUnderlay": self.transport_underlay,
+            "securityUnderlay": self.security_underlay,
+            "streamWrapper": self.stream_wrapper,
+            "protocolFraming": self.protocol_framing,
+            "packetSemantics": self.packet_semantics,
+            "chain": {
+                "mode": "none",
+                "parentCount": 0,
+                "flattened": false,
+            },
+            "routing": {
+                "mark": self.mark,
+                "mptcp": self.mptcp,
+            },
+            "admission": {
+                "status": "admitted",
+                "source": "resident-plan",
+                "unsupportedReason": Value::Null,
+            },
+            "runtimeComponents": {
+                "underlayFactory": underlay_factory,
+                "streamWrapperFactory": stream_wrapper_factory,
+                "chainExecutor": chain_executor,
+                "generationCache": generation_cache,
+                "packetSessionManager": packet_session_manager,
+                "probeExecutor": probe_executor,
+            },
+            "evidenceState": "compiled-resident-graph",
+        })
+    }
+
+    pub(super) fn runtime_component_evidence_value(&self) -> Value {
+        self.runtime_component_evidence_value_with_reload_generation(None)
+    }
+
+    pub(super) fn runtime_component_evidence_value_for_reload_generation(
+        &self,
+        reload_generation: u64,
+    ) -> Value {
+        self.runtime_component_evidence_value_with_reload_generation(Some(reload_generation))
+    }
+
+    fn runtime_component_evidence_value_with_reload_generation(
+        &self,
+        reload_generation: Option<u64>,
+    ) -> Value {
+        json!({
+            "schemaVersion": 1,
+            "graphId": self.graph_id,
+            "underlayFactory": self.underlay_factory_value(),
+            "streamWrapperFactory": self.stream_wrapper_factory_value(),
+            "chainExecutor": self.chain_executor_value(),
+            "generationCache": self.generation_cache_value(reload_generation),
+            "packetSessionManager": self.packet_session_manager_value(),
+            "probeExecutor": self.probe_executor_value(reload_generation),
+        })
+    }
+
+    fn underlay_factory_value(&self) -> Value {
+        let fingerprint = self.utls_fingerprint.as_ref().map(|fingerprint| {
+            json!({
+                "source": fingerprint.source,
+                "requested": &fingerprint.requested,
+                "canonical": &fingerprint.canonical,
+                "family": &fingerprint.family,
+                "client": &fingerprint.client,
+                "randomized": fingerprint.randomized,
+                "alpnPolicy": &fingerprint.alpn_policy,
+            })
+        });
+        let provider = match self.security_underlay.as_str() {
+            "fingerprint-aware-tls" => "boringssl",
+            "standard-tls" => "rustls",
+            "quic-tls" => "quinn-rustls",
+            "aead" => "protocol-aead-codec",
+            "none" => "plain",
+            _ => "unsupported",
+        };
+        let status = if provider == "unsupported" {
+            "fail-closed"
+        } else {
+            "admitted"
+        };
+        let unsupported_reason = if provider == "unsupported" {
+            json!("security underlay is not backed by a resident runtime factory")
+        } else {
+            Value::Null
+        };
+        json!({
+            "schemaVersion": 1,
+            "status": status,
+            "provider": provider,
+            "transportUnderlay": self.transport_underlay,
+            "securityUnderlay": self.security_underlay,
+            "verificationPolicy": if self.allow_insecure { "explicit-insecure" } else { "system-roots" },
+            "allowInsecure": self.allow_insecure,
+            "alpn": self.alpn,
+            "flow": self.flow,
+            "fingerprint": fingerprint,
+            "unsupportedReason": unsupported_reason,
+        })
+    }
+
+    fn stream_wrapper_factory_value(&self) -> Value {
+        let (status, provider, unsupported_reason) = match self.stream_wrapper.as_str() {
+            "none" => ("admitted", "none", Value::Null),
+            "frame-stream" => ("admitted", "resident-frame-stream", Value::Null),
+            "quic-stream" => ("admitted", "resident-quic-stream", Value::Null),
+            "packet-stream" => ("admitted", "resident-packet-stream", Value::Null),
+            _ => (
+                "fail-closed",
+                "unsupported",
+                json!("stream wrapper is not backed by a resident runtime factory"),
+            ),
+        };
+        json!({
+            "schemaVersion": 1,
+            "status": status,
+            "wrapper": self.stream_wrapper,
+            "provider": provider,
+            "protocolFraming": self.protocol_framing,
+            "unsupportedReason": unsupported_reason,
+        })
+    }
+
+    fn chain_executor_value(&self) -> Value {
+        json!({
+            "schemaVersion": 1,
+            "status": "admitted",
+            "mode": "none",
+            "parentCount": 0,
+            "flattened": false,
+            "executor": "single-resident-graph",
+            "unsupportedReason": Value::Null,
+        })
+    }
+
+    fn generation_cache_value(&self, reload_generation: Option<u64>) -> Value {
+        json!({
+            "schemaVersion": 1,
+            "graphId": self.graph_id,
+            "reloadGeneration": reload_generation,
+            "materialized": reload_generation.is_some(),
+            "generationSource": if reload_generation.is_some() { "resident-runtime" } else { "resident-plan" },
+            "owner": "resident-dataplane-runtime",
+            "cacheScope": "graph-and-reload-generation",
+            "survivesReload": false,
+            "cleanupPolicy": "drop-on-graph-diff-or-runtime-stop",
+            "sharedProviderCaches": [
+                "tls-client-config",
+                "fingerprint-aware-tls-connector",
+                "quic-client-config"
+            ],
+        })
+    }
+
+    fn packet_session_manager_value(&self) -> Value {
+        json!({
+            "schemaVersion": 1,
+            "status": "admitted",
+            "manager": "bounded-resident-packet-session",
+            "graphId": self.graph_id,
+            "packetSemantics": self.packet_semantics,
+            "keyFields": [
+                "graphId",
+                "outbound",
+                "peer",
+                "originalDestination",
+                "packetSemantics"
+            ],
+            "limitSource": "resident-udp-packet-worker-limit",
+            "transientExchangeCompatible": true,
+        })
+    }
+
+    fn probe_executor_value(&self, reload_generation: Option<u64>) -> Value {
+        json!({
+            "schemaVersion": 1,
+            "status": "admitted",
+            "executor": "resident-executable-graph",
+            "graphId": self.graph_id,
+            "reloadGeneration": reload_generation,
+            "materialized": reload_generation.is_some(),
+            "sharesTrafficExecutor": true,
+            "latencyState": "group-selector",
+            "unsupportedReason": Value::Null,
+        })
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct ResidentGraphIdentity {
+    graph_id: String,
+    link_hash: String,
+    redacted_link_source: String,
+}
+
+fn resident_graph_identity(link: &str) -> ResidentGraphIdentity {
+    let link_hash = link_hash(link);
+    let graph_hash = link_hash.trim_start_matches("sha256:");
+    ResidentGraphIdentity {
+        graph_id: format!("resident-graph:{}", &graph_hash[..16.min(graph_hash.len())]),
+        redacted_link_source: redacted_link_source(link),
+        link_hash,
+    }
+}
+
+fn graph_transport_underlay(proxy: &ResidentProxyPlan) -> String {
+    match proxy.tls.as_str() {
+        "quic" => "quic".to_owned(),
+        _ => "tcp".to_owned(),
+    }
+}
+
+fn graph_security_underlay(proxy: &ResidentProxyPlan) -> String {
+    if proxy.utls_fingerprint.is_some() {
+        "fingerprint-aware-tls".to_owned()
+    } else {
+        match proxy.tls.as_str() {
+            "" | "none" => "none".to_owned(),
+            "aead" => "aead".to_owned(),
+            "quic" => "quic-tls".to_owned(),
+            "tls" => "standard-tls".to_owned(),
+            other => other.to_owned(),
+        }
+    }
+}
+
+fn graph_stream_wrapper(proxy: &ResidentProxyPlan) -> String {
+    match proxy.handler {
+        ResidentProxyProtocolPlan::AnyTlsTcpTls { .. } => return "frame-stream".to_owned(),
+        ResidentProxyProtocolPlan::Hysteria2QuicTcp { .. }
+        | ResidentProxyProtocolPlan::TuicQuicTcp { .. }
+        | ResidentProxyProtocolPlan::JuicityQuicTcp { .. } => return "quic-stream".to_owned(),
+        _ => {}
+    }
+    match proxy.net.as_str() {
+        "" | "tcp" | "udp" => "none".to_owned(),
+        other => other.to_owned(),
+    }
+}
+
+fn graph_packet_semantics(proxy: &ResidentProxyPlan) -> String {
+    match proxy.handler {
+        ResidentProxyProtocolPlan::Socks5Tcp { .. } => "udp-associate".to_owned(),
+        ResidentProxyProtocolPlan::VlessVisionTcpTls { .. } => "xudp".to_owned(),
+        ResidentProxyProtocolPlan::Hysteria2QuicTcp { .. }
+        | ResidentProxyProtocolPlan::TuicQuicTcp { .. }
+        | ResidentProxyProtocolPlan::JuicityQuicTcp { .. } => "quic-datagram-or-stream".to_owned(),
+        _ => "udp-over-stream-or-datagram".to_owned(),
+    }
+}
+
 #[derive(Clone, Debug)]
 pub(super) struct ResidentProxyCandidatePlan {
     pub(super) match_index: usize,
     pub(super) annotation_add_latency_ms: i64,
     pub(super) link: String,
+    pub(super) link_hash: String,
+    pub(super) redacted_link_source: String,
     pub(super) proxy: ResidentProxyPlan,
 }
 
@@ -151,6 +509,8 @@ pub(super) struct ResidentProxyCandidatePlan {
 pub(super) struct ResidentProxyProbePlan {
     pub(super) node_tag: String,
     pub(super) link: String,
+    pub(super) link_hash: String,
+    pub(super) redacted_link_source: String,
     pub(super) tcp_check: ResidentTcpCheckPlan,
     pub(super) udp_check: ResidentUdpCheckPlan,
     pub(super) proxy: ResidentProxyPlan,
@@ -175,7 +535,9 @@ pub(super) struct ResidentUdpCheckPlan {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(super) struct ResidentProxyLatencySnapshot {
     pub(super) node_tag: String,
-    pub(super) link: String,
+    pub(super) graph_id: String,
+    pub(super) link_hash: String,
+    pub(super) redacted_link_source: String,
     pub(super) latency_ms: Option<i64>,
     pub(super) alive: bool,
     pub(super) checked_at_unix: i64,
@@ -294,6 +656,8 @@ impl ResidentProxyGroupPlan {
             .map(|candidate| ResidentProxyProbePlan {
                 node_tag: candidate.proxy.node_tag.clone(),
                 link: candidate.link.clone(),
+                link_hash: candidate.link_hash.clone(),
+                redacted_link_source: candidate.redacted_link_source.clone(),
                 tcp_check: self.tcp_check.clone(),
                 udp_check: self.udp_check.clone(),
                 proxy: candidate.proxy.clone(),
@@ -316,7 +680,9 @@ impl ResidentProxyGroupPlan {
                     .unwrap_or((0, false, 0, false));
                 ResidentProxyLatencySnapshot {
                     node_tag: candidate.proxy.node_tag.clone(),
-                    link: candidate.link.clone(),
+                    graph_id: candidate.proxy.graph_id.clone(),
+                    link_hash: candidate.link_hash.clone(),
+                    redacted_link_source: candidate.redacted_link_source.clone(),
                     latency_ms: ok.then_some(latency_ms),
                     alive: ok && alive,
                     checked_at_unix,
@@ -468,6 +834,8 @@ impl ResidentProxyGroupPlan {
                 match_index: 0,
                 annotation_add_latency_ms: 0,
                 link: proxy.node_tag.clone(),
+                link_hash: link_hash(&proxy.node_tag),
+                redacted_link_source: redacted_link_source(&proxy.node_tag),
                 proxy,
             }],
             selector: Arc::new(Mutex::new(DialerGroup::new(
@@ -596,6 +964,8 @@ fn build_resident_manual_probe_plan(
     };
     Ok(ResidentProxyProbePlan {
         node_tag,
+        link_hash: link_hash(&link),
+        redacted_link_source: redacted_link_source(&link),
         link,
         tcp_check: group_tcp_check_plan(config, &group)?,
         udp_check: group_udp_check_plan(config, &group)?,
@@ -675,6 +1045,8 @@ fn resident_proxy_plans(
             candidates.push(ResidentProxyCandidatePlan {
                 match_index: node.match_index,
                 annotation_add_latency_ms: node.annotation_add_latency_ms,
+                link_hash: link_hash(&link),
+                redacted_link_source: redacted_link_source(&link),
                 link,
                 proxy,
             });
@@ -941,6 +1313,11 @@ fn build_proxy_plan(
     node_tag: String,
     link: String,
 ) -> Result<ResidentProxyPlan, String> {
+    if link.contains(" -> ") || link.contains("->") {
+        return Err(format!(
+            "resident dataplane does not flatten chained node {node_tag}; nested chain execution is fail-closed until a resident chain executor is available"
+        ));
+    }
     let scheme = link_scheme(&link).unwrap_or_default();
     match scheme.as_str() {
         "vless" => build_vless_proxy_plan(config, group_name, node_tag, link),
@@ -1012,7 +1389,11 @@ fn build_vless_proxy_plan(
         vless.sni.clone()
     };
     let alpn = split_alpn(&vless.alpn);
+    let graph = resident_graph_identity(&link);
     Ok(ResidentProxyPlan {
+        graph_id: graph.graph_id,
+        graph_link_hash: graph.link_hash,
+        redacted_link_source: graph.redacted_link_source,
         protocol: "vless".to_owned(),
         group_name,
         group_policy: String::new(),
@@ -1050,7 +1431,11 @@ fn build_socks5_proxy_plan(
         .ok_or_else(|| format!("parse SOCKS node {node_tag}: missing host"))?
         .to_owned();
     let server_port = parsed.port().unwrap_or(1080);
+    let graph = resident_graph_identity(&link);
     Ok(ResidentProxyPlan {
+        graph_id: graph.graph_id,
+        graph_link_hash: graph.link_hash,
+        redacted_link_source: graph.redacted_link_source,
         protocol: "socks5".to_owned(),
         group_name,
         group_policy: String::new(),
@@ -1096,7 +1481,11 @@ fn build_http_proxy_plan(
             "resident dataplane first-batch HTTP proxy handler does not admit allow_insecure for node {node_tag}"
         ));
     }
+    let graph = resident_graph_identity(&link);
     Ok(ResidentProxyPlan {
+        graph_id: graph.graph_id,
+        graph_link_hash: graph.link_hash,
+        redacted_link_source: graph.redacted_link_source,
         protocol: "http-proxy".to_owned(),
         group_name,
         group_policy: String::new(),
@@ -1135,7 +1524,11 @@ fn build_shadowsocks_proxy_plan(
     }
     let spec = cipher_spec(&parsed.cipher)
         .map_err(|err| format!("admit Shadowsocks cipher for node {node_tag}: {err}"))?;
+    let graph = resident_graph_identity(&link);
     Ok(ResidentProxyPlan {
+        graph_id: graph.graph_id,
+        graph_link_hash: graph.link_hash,
+        redacted_link_source: graph.redacted_link_source,
         protocol: "shadowsocks".to_owned(),
         group_name,
         group_policy: String::new(),
@@ -1180,7 +1573,11 @@ fn build_trojan_proxy_plan(
         );
     }
     let utls_fingerprint = resident_utls_fingerprint_plan(config, None)?;
+    let graph = resident_graph_identity(&link);
     Ok(ResidentProxyPlan {
+        graph_id: graph.graph_id,
+        graph_link_hash: graph.link_hash,
+        redacted_link_source: graph.redacted_link_source,
         protocol: "trojan".to_owned(),
         group_name,
         group_policy: String::new(),
@@ -1224,7 +1621,11 @@ fn build_anytls_proxy_plan(
         .to_owned();
     let server_port = url.port().unwrap_or(443);
     let utls_fingerprint = resident_utls_fingerprint_plan(config, None)?;
+    let graph = resident_graph_identity(&link);
     Ok(ResidentProxyPlan {
+        graph_id: graph.graph_id,
+        graph_link_hash: graph.link_hash,
+        redacted_link_source: graph.redacted_link_source,
         protocol: "anytls".to_owned(),
         group_name,
         group_policy: String::new(),
@@ -1275,7 +1676,11 @@ fn build_tuic_proxy_plan(
     } else {
         parsed.alpn.clone()
     };
+    let graph = resident_graph_identity(&link);
     Ok(ResidentProxyPlan {
+        graph_id: graph.graph_id,
+        graph_link_hash: graph.link_hash,
+        redacted_link_source: graph.redacted_link_source,
         protocol: "tuic".to_owned(),
         group_name,
         group_policy: String::new(),
@@ -1346,7 +1751,11 @@ fn build_hysteria2_proxy_plan(
     } else {
         parsed.sni.clone()
     };
+    let graph = resident_graph_identity(&link);
     Ok(ResidentProxyPlan {
+        graph_id: graph.graph_id,
+        graph_link_hash: graph.link_hash,
+        redacted_link_source: graph.redacted_link_source,
         protocol: "hysteria2".to_owned(),
         group_name,
         group_policy: String::new(),
@@ -1397,7 +1806,11 @@ fn build_juicity_proxy_plan(
     } else {
         parsed.sni.clone()
     };
+    let graph = resident_graph_identity(&link);
     Ok(ResidentProxyPlan {
+        graph_id: graph.graph_id,
+        graph_link_hash: graph.link_hash,
+        redacted_link_source: graph.redacted_link_source,
         protocol: "juicity".to_owned(),
         group_name,
         group_policy: String::new(),
@@ -1460,7 +1873,11 @@ fn build_vmess_proxy_plan(
             parsed.port
         )
     })?;
+    let graph = resident_graph_identity(&link);
     Ok(ResidentProxyPlan {
+        graph_id: graph.graph_id,
+        graph_link_hash: graph.link_hash,
+        redacted_link_source: graph.redacted_link_source,
         protocol: "vmess".to_owned(),
         group_name,
         group_policy: String::new(),
@@ -2651,6 +3068,108 @@ mod tests {
             juicity.handler,
             ResidentProxyProtocolPlan::JuicityQuicTcp { .. }
         ));
+
+        for proxy in [
+            &socks,
+            &http,
+            &shadowsocks,
+            &trojan,
+            &anytls,
+            &vmess,
+            &hysteria2,
+            &tuic,
+            &juicity,
+        ] {
+            let graph = proxy.executable_graph_value();
+            assert_eq!(graph["schemaVersion"], 1);
+            assert!(
+                graph["graphId"]
+                    .as_str()
+                    .unwrap()
+                    .starts_with("resident-graph:")
+            );
+            assert_eq!(graph["admission"]["status"], "admitted");
+            assert_eq!(graph["chain"]["flattened"], false);
+            assert_eq!(
+                graph["runtimeComponents"]["underlayFactory"]["status"],
+                "admitted"
+            );
+            assert_eq!(
+                graph["runtimeComponents"]["streamWrapperFactory"]["status"],
+                "admitted"
+            );
+            assert_eq!(
+                graph["runtimeComponents"]["chainExecutor"]["executor"],
+                "single-resident-graph"
+            );
+            assert_eq!(
+                graph["runtimeComponents"]["generationCache"]["cacheScope"],
+                "graph-and-reload-generation"
+            );
+            assert_eq!(
+                graph["runtimeComponents"]["generationCache"]["materialized"],
+                false
+            );
+            assert!(graph["runtimeComponents"]["generationCache"]["reloadGeneration"].is_null());
+            let materialized = proxy.executable_graph_value_for_reload_generation(42);
+            assert_eq!(
+                materialized["runtimeComponents"]["generationCache"]["reloadGeneration"],
+                42
+            );
+            assert_eq!(
+                materialized["runtimeComponents"]["generationCache"]["materialized"],
+                true
+            );
+            assert_eq!(
+                materialized["runtimeComponents"]["probeExecutor"]["reloadGeneration"],
+                42
+            );
+            assert_eq!(
+                graph["runtimeComponents"]["packetSessionManager"]["manager"],
+                "bounded-resident-packet-session"
+            );
+            assert_eq!(
+                graph["runtimeComponents"]["probeExecutor"]["executor"],
+                "resident-executable-graph"
+            );
+            assert!(
+                graph["linkIdentity"]["linkHash"]
+                    .as_str()
+                    .unwrap()
+                    .starts_with("sha256:")
+            );
+            assert!(
+                !graph.to_string().contains("matrix-"),
+                "graph leaked raw credential-bearing link: {graph}"
+            );
+        }
+    }
+
+    #[test]
+    fn resident_dataplane_plan_rejects_chain_flattening() {
+        let config = parse_config(
+            r#"
+        global {
+        lan_interface: daerust0
+        allow_insecure: false
+        so_mark_from_dae: 1234
+        mptcp: false
+        }
+        routing {
+        fallback: direct
+        }
+        "#,
+        );
+        let err = build_resident_proxy_plan_for_node(
+            &config,
+            "proxy".to_owned(),
+            "chained_live".to_owned(),
+            "socks5://user:pass@203.0.113.10:28447 -> http://user:pass@203.0.113.10:28448"
+                .to_owned(),
+        )
+        .unwrap_err();
+        assert!(err.contains("does not flatten chained node chained_live"));
+        assert!(err.contains("fail-closed"));
     }
 
     #[test]
