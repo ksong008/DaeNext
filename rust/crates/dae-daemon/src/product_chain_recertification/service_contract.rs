@@ -763,12 +763,26 @@ const OUTBOUND_PRODUCTION_MATRIX_BOOL_FIELDS: &[&str] = &[
     "go_outbound_fallback_retirement_matrix_ready",
     "outbound_production_matrix_typed_report_ready",
     "go_outbound_fallback_retired_candidate",
+    "source_shape_registry_contract_ready",
+    "source_shape_registry_open",
+    "expanded_source_matrix_open",
+    "expanded_source_matrix_complete",
+    "expanded_source_matrix_blocked_rows_visible",
+    "expanded_source_matrix_release_gate_ready",
+    "expanded_source_matrix_c10_ready",
 ];
 
 const OUTBOUND_PRODUCTION_MATRIX_COPY_FIELDS: &[&str] = &[
     "outbound_production_matrix_report_schema",
     "outbound_production_matrix_entries",
     "outbound_production_matrix_typed_report",
+    "source_shape_registry_report_schema",
+    "source_shape_registry_schema_version",
+    "source_shape_registry_row_count",
+    "source_shape_registry_rows",
+    "expanded_source_matrix_status_counts",
+    "expanded_source_matrix_completion_blocker",
+    "expanded_source_matrix_typed_report",
 ];
 
 const RESIDENT_LIVE_ADAPTER_MATRIX_BOOL_FIELDS: &[&str] = &[

@@ -13,6 +13,78 @@ fn binary() -> &'static str {
     env!("CARGO_BIN_EXE_daed")
 }
 
+fn assert_current_config_matrix_scope_contract(report: &Value) {
+    assert_eq!(
+        report["matrix_scope"].as_str().unwrap(),
+        "current-config-formal-handler-matrix"
+    );
+    assert!(report["current_config_matrix_open"].as_bool().unwrap());
+    assert!(report["current_admitted_baseline_open"].as_bool().unwrap());
+    assert!(report["source_shape_registry_open"].as_bool().unwrap());
+    assert!(report["expanded_source_matrix_open"].as_bool().unwrap());
+    assert!(!report["expanded_source_matrix_complete"].as_bool().unwrap());
+    assert_eq!(
+        report["full_matrix_scope"].as_str().unwrap(),
+        "current-config-formal-handler-matrix"
+    );
+    assert!(
+        !report["full_matrix_is_expanded_source_matrix"]
+            .as_bool()
+            .unwrap()
+    );
+    assert!(
+        !report["full_matrix_release_gate_source_ready"]
+            .as_bool()
+            .unwrap()
+    );
+    assert!(
+        !report["full_matrix_c10_expanded_source_ready"]
+            .as_bool()
+            .unwrap()
+    );
+    assert_eq!(
+        report["source_matrix_completion_blocker"].as_str().unwrap(),
+        "expanded source matrix has fail-closed rows and requires live host, benchmark, and rollback evidence"
+    );
+    assert!(
+        report["source_shape_registry_row_count"].as_u64().unwrap() >= 20,
+        "{report}"
+    );
+    assert!(
+        report["expanded_source_matrix_row_count"].as_u64().unwrap() >= 20,
+        "{report}"
+    );
+
+    let contract = &report["matrix_scope_contract"];
+    assert_eq!(contract["schemaVersion"].as_u64().unwrap(), 1);
+    assert_eq!(
+        contract["scope"].as_str().unwrap(),
+        "current-config-formal-handler-matrix"
+    );
+    assert!(contract["currentConfigMatrixOpen"].as_bool().unwrap());
+    assert!(contract["currentAdmittedBaselineOpen"].as_bool().unwrap());
+    assert!(contract["sourceShapeRegistryOpen"].as_bool().unwrap());
+    assert!(contract["expandedSourceMatrixOpen"].as_bool().unwrap());
+    assert!(!contract["expandedSourceMatrixComplete"].as_bool().unwrap());
+    assert!(
+        !contract["releaseGateMayUseAsSourceMatrix"]
+            .as_bool()
+            .unwrap()
+    );
+    assert!(
+        !contract["c10MayUseAsExpandedSourceMatrix"]
+            .as_bool()
+            .unwrap()
+    );
+    let status_counts = &report["expanded_source_matrix_status_counts"];
+    assert!(status_counts["blocked"].as_u64().unwrap() >= 1);
+    assert!(status_counts["not-source-supported"].as_u64().unwrap() >= 1);
+    assert!(
+        status_counts["admitted"].as_u64().unwrap_or(0) >= 1
+            || status_counts["not-present"].as_u64().unwrap_or(0) >= 1
+    );
+}
+
 #[test]
 fn daed_resident_adapter_matrix_reports_admitted_selected_node_without_links() {
     let temp = temp_dir("resident-adapter-matrix-admitted");
@@ -67,6 +139,7 @@ routing {
     assert!(!report["host_mutation_executed"].as_bool().unwrap());
     assert!(!report["network_io_executed"].as_bool().unwrap());
     assert!(report["full_matrix_open"].as_bool().unwrap());
+    assert_current_config_matrix_scope_contract(&report);
     assert!(
         report["full_matrix_row_count"].as_u64().unwrap() >= 10,
         "{report}"
@@ -92,6 +165,22 @@ routing {
         .iter()
         .find(|row| row["formal_matrix_handler"].as_str().unwrap() == "vless")
         .unwrap();
+    assert_eq!(
+        live_row["matrix_scope"].as_str().unwrap(),
+        "current-config-formal-handler-matrix"
+    );
+    assert_eq!(
+        live_row["source_supported_scope"].as_str().unwrap(),
+        "formal-handler-baseline"
+    );
+    assert_eq!(
+        live_row["source_shape_registry_status"].as_str().unwrap(),
+        "open"
+    );
+    assert_eq!(
+        live_row["expanded_source_matrix_state"].as_str().unwrap(),
+        "generated"
+    );
     assert_eq!(live_row["planner_status"].as_str().unwrap(), "admitted");
     assert_eq!(live_row["admitted_count"].as_u64().unwrap(), 1);
     assert_eq!(
@@ -181,6 +270,7 @@ routing {
     let report: Value = serde_json::from_slice(&output.stdout).unwrap();
     assert_eq!(report["status"].as_str().unwrap(), "blocked");
     assert!(report["full_matrix_open"].as_bool().unwrap());
+    assert_current_config_matrix_scope_contract(&report);
     assert!(!report["planner_admitted"].as_bool().unwrap());
     assert!(report["selected_node_fail_closed"].as_bool().unwrap());
     assert!(
@@ -284,6 +374,7 @@ routing {
     let report: Value = serde_json::from_slice(&output.stdout).unwrap();
     assert_eq!(report["status"].as_str().unwrap(), "admitted");
     assert!(report["full_matrix_open"].as_bool().unwrap());
+    assert_current_config_matrix_scope_contract(&report);
     assert_eq!(
         report["full_matrix_admitted_row_count"].as_u64().unwrap(),
         10
@@ -305,6 +396,18 @@ routing {
             .iter()
             .find(|row| row["formal_matrix_handler"].as_str().unwrap() == handler)
             .unwrap();
+        assert_eq!(
+            row["matrix_scope"].as_str().unwrap(),
+            "current-config-formal-handler-matrix"
+        );
+        assert_eq!(
+            row["source_shape_registry_status"].as_str().unwrap(),
+            "open"
+        );
+        assert_eq!(
+            row["expanded_source_matrix_state"].as_str().unwrap(),
+            "generated"
+        );
         assert_eq!(row["planner_status"].as_str().unwrap(), "admitted");
         assert_eq!(row["candidate_count"].as_u64().unwrap(), 1);
         assert_eq!(row["admitted_count"].as_u64().unwrap(), 1);
