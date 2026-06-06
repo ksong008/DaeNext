@@ -1,4 +1,4 @@
-use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet, VecDeque};
 use std::fs;
 use std::io::{self, BufRead, Read, Seek, SeekFrom, Write};
 use std::net::{SocketAddrV4, TcpListener, TcpStream, ToSocketAddrs};
@@ -12,9 +12,9 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use base64::Engine;
 use base64::engine::general_purpose::{STANDARD, URL_SAFE_NO_PAD};
-use dae_config::Config;
 use dae_config::parser::parse_config;
 use dae_config::schema::build_config;
+use dae_config::{Config, Function, Param};
 use dae_datapath::{
     ANYFROM_TIMEOUT_MS, DEFAULT_NAT_TIMEOUT_MS, DEFAULT_UDP_ENDPOINT_POOL_MAX_ENTRIES,
     DNS_NAT_TIMEOUT_MS, MAX_RETRY, PACKET_SNIFFER_POOL_MAX_ENTRIES, PACKET_SNIFFER_TTL_MS,
@@ -377,6 +377,7 @@ struct RuntimeStartOutcome {
 enum ProductRuntimeLifecycleLogMode {
     StartupRestore,
     ReloadSignal,
+    ReloadSubscriptionRefresh,
 }
 
 impl ProductRuntimeLifecycleLogMode {
@@ -384,6 +385,7 @@ impl ProductRuntimeLifecycleLogMode {
         match self {
             Self::StartupRestore => "startup-restore",
             Self::ReloadSignal => "signal",
+            Self::ReloadSubscriptionRefresh => "subscription-refresh",
         }
     }
 
@@ -544,6 +546,26 @@ impl ProductRuntimeManager {
                 "stopCount": inner.stop_count,
                 "lastReport": inner.last_report,
             }),
+        }
+    }
+
+    fn snapshot_node_latencies(&self) -> Vec<Value> {
+        let Ok(inner) = self.inner.lock() else {
+            return Vec::new();
+        };
+        match inner.runtime.as_ref() {
+            Some(ProductRuntimeInstance::Resident(runtime)) => runtime.snapshot_node_latencies(),
+            Some(ProductRuntimeInstance::Fake(_)) | None => Vec::new(),
+        }
+    }
+
+    fn probe_node_latencies(&self, links: &[String]) -> Vec<Value> {
+        let Ok(inner) = self.inner.lock() else {
+            return Vec::new();
+        };
+        match inner.runtime.as_ref() {
+            Some(ProductRuntimeInstance::Resident(runtime)) => runtime.probe_node_latencies(links),
+            Some(ProductRuntimeInstance::Fake(_)) | None => Vec::new(),
         }
     }
 }
@@ -1806,6 +1828,9 @@ fn apply_state_schema(conn: &Connection) -> io::Result<()> {
             id TEXT PRIMARY KEY,
             applied_at TEXT NOT NULL
         );
+        DELETE FROM group_policy_params
+            WHERE group_id IS NULL
+               OR group_id NOT IN (SELECT id FROM groups);
         INSERT OR IGNORE INTO daed_schema_migrations(id, applied_at)
             VALUES('c10-first-batch-daed-product-schema-v1', datetime('now'));
         INSERT OR IGNORE INTO daed_schema_migrations(id, applied_at)
@@ -2477,7 +2502,7 @@ fn api_subscriptions(app: &AppState, request: &HttpRequest, api_path: &str) -> H
     }
     if parts.len() == 2 && parts[1] == "refresh" {
         return match request.method.as_str() {
-            "POST" => refresh_subscription(&app.state, &app.config_dir, id),
+            "POST" => refresh_subscription(&app.state, &app.config_dir, &app.runtime, id),
             _ => HttpResponse::json(405, json!({"error": "method not allowed"})),
         };
     }
@@ -3550,7 +3575,7 @@ fn api_set_log_settings(app: &AppState, request: &HttpRequest) -> HttpResponse {
 }
 
 fn api_get_node_latencies(app: &AppState) -> HttpResponse {
-    match list_node_latencies_value(&app.state) {
+    match list_node_latencies_value(&app.state, &app.runtime) {
         Ok(value) => HttpResponse::json(200, value),
         Err(err) => HttpResponse::json(500, json!({"error": err.to_string()})),
     }
@@ -3559,7 +3584,7 @@ fn api_get_node_latencies(app: &AppState) -> HttpResponse {
 fn api_test_node_latencies(app: &AppState, request: &HttpRequest) -> HttpResponse {
     let body = json_body(request).unwrap_or_else(|_| json!({}));
     let ids = integer_array(&body, "ids");
-    match update_node_latencies(&app.state, &app.config_dir, &ids) {
+    match update_node_latencies(&app.state, &app.config_dir, &app.runtime, &ids) {
         Ok(value) => HttpResponse::json(200, value),
         Err(err) => HttpResponse::json(500, json!({"error": err.to_string()})),
     }
@@ -4961,7 +4986,12 @@ fn update_subscription(state: &Path, request: &HttpRequest, id: i64) -> HttpResp
     get_subscription(state, id)
 }
 
-fn refresh_subscription(state: &Path, config_dir: &Path, id: i64) -> HttpResponse {
+fn refresh_subscription(
+    state: &Path,
+    config_dir: &Path,
+    runtime: &ProductRuntimeManager,
+    id: i64,
+) -> HttpResponse {
     match refresh_subscription_from_remote(state, id) {
         Ok(mut report) => {
             let _ = append_log_for_config(
@@ -4970,6 +5000,20 @@ fn refresh_subscription(state: &Path, config_dir: &Path, id: i64) -> HttpRespons
                 "info",
                 &format!("subscription {id} refreshed"),
             );
+            match reload_runtime_after_subscription_refresh(state, config_dir, runtime) {
+                Ok(Some(reload_report)) => {
+                    if let Value::Object(map) = &mut report {
+                        map.insert("runtimeReloaded".to_owned(), json!(true));
+                        map.insert("runtimeReload".to_owned(), reload_report);
+                    }
+                }
+                Ok(None) => {
+                    if let Value::Object(map) = &mut report {
+                        map.insert("runtimeReloaded".to_owned(), json!(false));
+                    }
+                }
+                Err(err) => return HttpResponse::json(500, json!({"error": err})),
+            }
             if let Some(subscription) = get_subscription_value(state, id)
                 .ok()
                 .flatten()
@@ -4987,6 +5031,62 @@ fn refresh_subscription(state: &Path, config_dir: &Path, id: i64) -> HttpRespons
             HttpResponse::json(404, json!({"error": err.to_string()}))
         }
         Err(err) => HttpResponse::json(400, json!({"error": err.to_string()})),
+    }
+}
+
+fn reload_runtime_after_subscription_refresh(
+    state: &Path,
+    config_dir: &Path,
+    runtime: &ProductRuntimeManager,
+) -> Result<Option<Value>, String> {
+    if !should_restore_runtime_on_start(state).map_err(|err| err.to_string())? {
+        return Ok(None);
+    }
+    let conn = open_state_connection(state).map_err(|err| err.to_string())?;
+    if !runtime_modified(&conn, true).map_err(|err| err.to_string())? {
+        return Ok(None);
+    }
+    drop(conn);
+
+    let reload_started_at = Instant::now();
+    match restore_runtime_from_state(
+        runtime,
+        state,
+        Some(config_dir),
+        ProductRuntimeLifecycleLogMode::ReloadSubscriptionRefresh,
+    ) {
+        Ok(report) => {
+            let mut fields = BTreeMap::new();
+            fields.insert("source".to_owned(), "subscription-refresh".to_owned());
+            fields.insert("applied".to_owned(), "true".to_owned());
+            fields.insert(
+                "elapsed".to_owned(),
+                format!("{:?}", reload_started_at.elapsed()),
+            );
+            let _ = append_lifecycle_log_fields_for_config(
+                config_dir,
+                state,
+                "info",
+                "[Reload] Finished",
+                fields,
+            );
+            Ok(Some(report))
+        }
+        Err(err) => {
+            let mut fields = BTreeMap::new();
+            fields.insert("source".to_owned(), "subscription-refresh".to_owned());
+            fields.insert("error".to_owned(), err.clone());
+            let _ = append_lifecycle_log_fields_for_config(
+                config_dir,
+                state,
+                "error",
+                "[Reload] Failed to reload",
+                fields,
+            );
+            Err(format!(
+                "failed to reload runtime after subscription refresh: {err}"
+            ))
+        }
     }
 }
 
@@ -5158,6 +5258,14 @@ fn replace_subscription_nodes(
         {
             if let Some(preserved) = preserved_by_name.get(&parsed.name) {
                 if reused_preserved.insert(preserved.id) {
+                    if !subscription_node_changed(preserved, &link, &parsed) {
+                        out.push(json!({
+                            "link": link,
+                            "error": Value::Null,
+                            "node": {"id": preserved.id}
+                        }));
+                        continue;
+                    }
                     match conn.execute(
                         "UPDATE nodes
                          SET link = ?1,
@@ -5237,7 +5345,21 @@ fn replace_subscription_nodes(
 #[derive(Clone)]
 struct ExistingSubscriptionNode {
     id: i64,
+    link: String,
     name: String,
+    address: String,
+    protocol: String,
+}
+
+fn subscription_node_changed(
+    current: &ExistingSubscriptionNode,
+    next_link: &str,
+    next: &ParsedNodeLink,
+) -> bool {
+    current.link != next_link
+        || current.name != next.name
+        || current.address != next.address
+        || current.protocol != next.protocol
 }
 
 fn existing_subscription_nodes(
@@ -5256,7 +5378,10 @@ fn existing_subscription_nodes(
         .query_map(params![subscription_id], |row| {
             Ok(ExistingSubscriptionNode {
                 id: row.get(0)?,
+                link: row.get(1)?,
                 name: row.get(2)?,
+                address: row.get(3)?,
+                protocol: row.get(4)?,
             })
         })
         .map_err(sqlite_io_error)?;
@@ -6269,17 +6394,56 @@ fn render_group_section(groups: &Value) -> io::Result<String> {
             .collect::<Vec<_>>()
             .join(", ");
         out.push_str(&format!("        filter: name({names})\n"));
-        let policy = group
-            .get("policy")
-            .and_then(Value::as_str)
-            .map(str::trim)
-            .filter(|policy| !policy.is_empty())
-            .unwrap_or("fixed(0)");
+        let policy = render_group_policy(group);
         out.push_str(&format!("        policy: {policy}\n"));
         out.push_str("    }\n");
     }
     out.push_str("}\n");
     Ok(out)
+}
+
+fn render_group_policy(group: &Value) -> String {
+    let policy = group
+        .get("policy")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|policy| !policy.is_empty())
+        .unwrap_or("fixed");
+    let params = group
+        .get("policyParams")
+        .and_then(Value::as_array)
+        .map(|items| {
+            items
+                .iter()
+                .map(|item| Param {
+                    key: item
+                        .get("key")
+                        .and_then(Value::as_str)
+                        .unwrap_or("")
+                        .to_owned(),
+                    val: item
+                        .get("val")
+                        .or_else(|| item.get("value"))
+                        .and_then(Value::as_str)
+                        .unwrap_or("")
+                        .to_owned(),
+                    and_functions: Vec::new(),
+                    annotation: Vec::new(),
+                })
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+
+    if params.is_empty() {
+        return policy.to_owned();
+    }
+
+    Function {
+        name: policy.to_owned(),
+        not: false,
+        params,
+    }
+    .to_config_string(true, true, false)
 }
 
 fn runtime_group_node_tags(group: &Value) -> Vec<String> {
@@ -7530,9 +7694,10 @@ fn write_sse_stream_event(stream: &mut TcpStream, event: &str, payload: &Value) 
     stream.flush()
 }
 
-fn list_node_latencies_value(state: &Path) -> io::Result<Value> {
+fn list_node_latencies_value(state: &Path, runtime: &ProductRuntimeManager) -> io::Result<Value> {
     ensure_state_schema(state)?;
     let conn = open_state_connection(state)?;
+    sync_runtime_node_latency_results(&conn, runtime)?;
     let mut stmt = conn
         .prepare(
             "SELECT n.id, l.latency_ms, COALESCE(l.alive, 0), COALESCE(l.tested_at, ''), l.message
@@ -7543,12 +7708,20 @@ fn list_node_latencies_value(state: &Path) -> io::Result<Value> {
         .map_err(sqlite_io_error)?;
     let rows = stmt
         .query_map([], |row| {
+            let latency_ms = row.get::<_, Option<i64>>(1)?;
+            let alive = row.get::<_, i64>(2)? != 0;
+            let message = if alive && latency_ms.is_some() {
+                None
+            } else {
+                row.get::<_, Option<String>>(4)?
+                    .filter(|value| !value.is_empty())
+            };
             Ok(json!({
                 "id": row.get::<_, i64>(0)?,
-                "latencyMs": row.get::<_, Option<i64>>(1)?,
-                "alive": row.get::<_, i64>(2)? != 0,
+                "latencyMs": latency_ms,
+                "alive": alive,
                 "testedAt": row.get::<_, String>(3)?,
-                "message": row.get::<_, Option<String>>(4)?,
+                "message": message,
             }))
         })
         .map_err(sqlite_io_error)?;
@@ -7559,7 +7732,12 @@ fn list_node_latencies_value(state: &Path) -> io::Result<Value> {
     Ok(json!({"items": items}))
 }
 
-fn update_node_latencies(state: &Path, config_dir: &Path, ids: &[i64]) -> io::Result<Value> {
+fn update_node_latencies(
+    state: &Path,
+    config_dir: &Path,
+    runtime: &ProductRuntimeManager,
+    ids: &[i64],
+) -> io::Result<Value> {
     ensure_state_schema(state)?;
     let conn = open_state_connection(state)?;
     let target_ids = if ids.is_empty() {
@@ -7567,31 +7745,54 @@ fn update_node_latencies(state: &Path, config_dir: &Path, ids: &[i64]) -> io::Re
     } else {
         ids.to_vec()
     };
-    let tested_at = now_text();
-    for id in &target_ids {
-        let node: Option<(String, String)> = conn
+    let mut nodes = Vec::new();
+    for id in target_ids {
+        let node: Option<(i64, String, String)> = conn
             .query_row(
-                "SELECT link, address FROM nodes WHERE id = ?1",
+                "SELECT id, link, address FROM nodes WHERE id = ?1",
                 params![id],
-                |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)),
+                |row| {
+                    Ok((
+                        row.get::<_, i64>(0)?,
+                        row.get::<_, String>(1)?,
+                        row.get::<_, String>(2)?,
+                    ))
+                },
             )
             .optional()
             .map_err(sqlite_io_error)?;
-        let Some((link, address)) = node else {
+        if let Some(node) = node {
+            nodes.push(node);
+        }
+    }
+
+    let links = nodes
+        .iter()
+        .map(|(_, link, _)| link.clone())
+        .collect::<Vec<_>>();
+    let runtime_snapshots = runtime.probe_node_latencies(&links);
+    let (runtime_results, runtime_tested_ids) =
+        runtime_node_latency_results_for_nodes(&nodes, &runtime_snapshots);
+    for result in &runtime_results {
+        store_node_latency_result(&conn, result)?;
+    }
+
+    let tested_at = now_text();
+    for (id, link, address) in &nodes {
+        if runtime_tested_ids.contains(id) {
             continue;
-        };
+        }
         let probe = tcp_probe_node(&link, &address);
-        conn.execute(
-            "INSERT OR REPLACE INTO node_latency_results(node_id, latency_ms, alive, tested_at, message, updated_at)
-             VALUES(?1, ?2, 1, ?3, ?4, ?3)",
-            params![id, probe.latency_ms, tested_at, probe.message],
-        )
-        .map_err(sqlite_io_error)?;
-        conn.execute(
-            "UPDATE node_latency_results SET alive = ?1 WHERE node_id = ?2",
-            params![probe.alive as i64, id],
-        )
-        .map_err(sqlite_io_error)?;
+        store_node_latency_result(
+            &conn,
+            &NodeLatencyWrite {
+                node_id: *id,
+                latency_ms: probe.latency_ms,
+                alive: probe.alive,
+                tested_at: tested_at.clone(),
+                message: probe.message,
+            },
+        )?;
     }
     append_log_for_config(
         config_dir,
@@ -7599,14 +7800,115 @@ fn update_node_latencies(state: &Path, config_dir: &Path, ids: &[i64]) -> io::Re
         "info",
         "node latency probe updated by Rust daed",
     )?;
-    list_node_latencies_value(state)
+    list_node_latencies_value(state, runtime)
+}
+
+#[derive(Clone, Debug)]
+struct NodeLatencyWrite {
+    node_id: i64,
+    latency_ms: Option<i64>,
+    alive: bool,
+    tested_at: String,
+    message: Option<String>,
+}
+
+fn sync_runtime_node_latency_results(
+    conn: &Connection,
+    runtime: &ProductRuntimeManager,
+) -> io::Result<()> {
+    let snapshots = runtime.snapshot_node_latencies();
+    let nodes = all_latency_probe_nodes(conn)?;
+    let (results, _) = runtime_node_latency_results_for_nodes(&nodes, &snapshots);
+    for result in &results {
+        store_node_latency_result(conn, result)?;
+    }
+    Ok(())
+}
+
+fn runtime_node_latency_results_for_nodes(
+    nodes: &[(i64, String, String)],
+    snapshots: &[Value],
+) -> (Vec<NodeLatencyWrite>, HashSet<i64>) {
+    let mut results = Vec::new();
+    let mut tested_ids = HashSet::new();
+    for snapshot in snapshots {
+        if !runtime_latency_snapshot_has_result(snapshot) {
+            continue;
+        }
+        let Some(link) = snapshot.get("link").and_then(Value::as_str) else {
+            continue;
+        };
+        let matched_ids = nodes
+            .iter()
+            .filter_map(|(id, node_link, _)| (node_link == link).then_some(*id))
+            .collect::<Vec<_>>();
+        if matched_ids.is_empty() {
+            continue;
+        }
+        let checked_at = snapshot
+            .get("checkedAtUnix")
+            .and_then(Value::as_i64)
+            .filter(|checked_at| *checked_at > 0)
+            .map(|checked_at| iso8601_utc(checked_at as u64))
+            .unwrap_or_else(now_text);
+        let latency_ms = snapshot.get("latencyMs").and_then(Value::as_i64);
+        let alive = snapshot
+            .get("alive")
+            .and_then(Value::as_bool)
+            .unwrap_or(false);
+        let message = snapshot
+            .get("message")
+            .and_then(Value::as_str)
+            .filter(|message| !message.is_empty())
+            .map(str::to_owned);
+        for node_id in matched_ids {
+            tested_ids.insert(node_id);
+            results.push(NodeLatencyWrite {
+                node_id,
+                latency_ms,
+                alive,
+                tested_at: checked_at.clone(),
+                message: message.clone(),
+            });
+        }
+    }
+    (results, tested_ids)
+}
+
+fn runtime_latency_snapshot_has_result(snapshot: &Value) -> bool {
+    let latency = snapshot.get("latencyMs").and_then(Value::as_i64);
+    let checked_at = snapshot
+        .get("checkedAtUnix")
+        .and_then(Value::as_i64)
+        .unwrap_or(0);
+    let message = snapshot
+        .get("message")
+        .and_then(Value::as_str)
+        .unwrap_or("");
+    latency.is_some() || checked_at > 0 || message != "no latency result"
+}
+
+fn store_node_latency_result(conn: &Connection, result: &NodeLatencyWrite) -> io::Result<()> {
+    conn.execute(
+        "INSERT OR REPLACE INTO node_latency_results(node_id, latency_ms, alive, tested_at, message, updated_at)
+         VALUES(?1, ?2, ?3, ?4, ?5, ?4)",
+        params![
+            result.node_id,
+            result.latency_ms,
+            result.alive as i64,
+            result.tested_at,
+            result.message
+        ],
+    )
+    .map_err(sqlite_io_error)?;
+    Ok(())
 }
 
 #[derive(Debug)]
 struct TcpProbeResult {
     latency_ms: Option<i64>,
     alive: bool,
-    message: String,
+    message: Option<String>,
 }
 
 fn tcp_probe_node(link: &str, fallback_address: &str) -> TcpProbeResult {
@@ -7618,13 +7920,13 @@ fn tcp_probe_node(link: &str, fallback_address: &str) -> TcpProbeResult {
             TcpProbeResult {
                 latency_ms: Some(started.elapsed().as_millis().min(i64::MAX as u128) as i64),
                 alive: true,
-                message: format!("tcp connect {host}:{port}"),
+                message: None,
             }
         }
         Err(err) => TcpProbeResult {
             latency_ms: None,
             alive: false,
-            message: format!("tcp connect {host}:{port} failed: {err}"),
+            message: Some(format!("tcp connect {host}:{port} failed: {err}")),
         },
     }
 }
@@ -7651,6 +7953,26 @@ fn default_node_port(scheme: &str) -> Option<u16> {
         "https" | "vless" | "trojan" | "vmess" | "ss" | "hysteria2" | "hy2" => Some(443),
         _ => None,
     }
+}
+
+fn all_latency_probe_nodes(conn: &Connection) -> io::Result<Vec<(i64, String, String)>> {
+    let mut stmt = conn
+        .prepare("SELECT id, link, address FROM nodes ORDER BY id")
+        .map_err(sqlite_io_error)?;
+    let rows = stmt
+        .query_map([], |row| {
+            Ok((
+                row.get::<_, i64>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, String>(2)?,
+            ))
+        })
+        .map_err(sqlite_io_error)?;
+    let mut nodes = Vec::new();
+    for row in rows {
+        nodes.push(row.map_err(sqlite_io_error)?);
+    }
+    Ok(nodes)
 }
 
 fn all_node_ids(conn: &Connection) -> io::Result<Vec<i64>> {
@@ -8882,7 +9204,7 @@ fn ensure_default_resources(state: &Path, body: &Value) -> io::Result<Value> {
         .and_then(Value::as_str)
         .unwrap_or("")
         .to_owned();
-    let config_id = upsert_named_resource(
+    let config = upsert_named_resource(
         &conn,
         "configs",
         "global",
@@ -8891,7 +9213,7 @@ fn ensure_default_resources(state: &Path, body: &Value) -> io::Result<Value> {
         "selected, version",
         "0, 0",
     )?;
-    let dns_id = upsert_named_resource(
+    let dns = upsert_named_resource(
         &conn,
         "dns",
         "dns",
@@ -8900,7 +9222,7 @@ fn ensure_default_resources(state: &Path, body: &Value) -> io::Result<Value> {
         "selected, version",
         "0, 0",
     )?;
-    let routing_id = upsert_named_resource(
+    let routing = upsert_named_resource(
         &conn,
         "routings",
         "routing",
@@ -8909,53 +9231,73 @@ fn ensure_default_resources(state: &Path, body: &Value) -> io::Result<Value> {
         "selected, version",
         "0, 0",
     )?;
-    let group_id = upsert_group(&conn, group_name, policy)?;
-    conn.execute(
-        "DELETE FROM group_policy_params WHERE group_id = ?1",
-        params![group_id],
-    )
-    .map_err(sqlite_io_error)?;
-    if let Some(params_value) = body.get("policyParams").and_then(Value::as_array) {
-        for item in params_value {
-            let key = item.get("key").and_then(Value::as_str).unwrap_or("");
-            let value = item
-                .get("val")
-                .or_else(|| item.get("value"))
+    let group = upsert_group(&conn, group_name, policy)?;
+    let group_id = group.id;
+    let mut group_changed = false;
+    if group.created {
+        if let Some(params_value) = body.get("policyParams").and_then(Value::as_array) {
+            let desired = desired_policy_params(params_value);
+            if group_policy_param_pairs(&conn, group_id)? != desired {
+                conn.execute(
+                    "DELETE FROM group_policy_params WHERE group_id = ?1",
+                    params![group_id],
+                )
+                .map_err(sqlite_io_error)?;
+                for (key, value) in &desired {
+                    conn.execute(
+                        "INSERT INTO group_policy_params(key, value, group_id) VALUES(?1, ?2, ?3)",
+                        params![key, value, group_id],
+                    )
+                    .map_err(sqlite_io_error)?;
+                }
+                group_changed = true;
+            }
+        }
+        if body.get("nodeIds").is_some() {
+            let desired = integer_array(body, "nodeIds")
+                .into_iter()
+                .collect::<BTreeSet<_>>();
+            if group_node_id_set(&conn, group_id)? != desired {
+                conn.execute(
+                    "DELETE FROM group_nodes WHERE group_id = ?1",
+                    params![group_id],
+                )
+                .map_err(sqlite_io_error)?;
+                let desired_ids = desired.iter().copied().collect::<Vec<_>>();
+                apply_group_node_ids(&conn, group_id, &desired_ids, true)?;
+                group_changed = true;
+            }
+        }
+        if body.get("subscriptionIds").is_some() {
+            let ids = integer_array(body, "subscriptionIds");
+            let name_filter_regex = body
+                .get("nameFilterRegex")
                 .and_then(Value::as_str)
-                .unwrap_or("");
-            conn.execute(
-                "INSERT INTO group_policy_params(key, value, group_id) VALUES(?1, ?2, ?3)",
-                params![key, value, group_id],
-            )
-            .map_err(sqlite_io_error)?;
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .map(str::to_owned);
+            let desired = ids
+                .iter()
+                .map(|id| (*id, name_filter_regex.clone()))
+                .collect::<BTreeSet<_>>();
+            if group_subscription_binding_set(&conn, group_id)? != desired {
+                conn.execute(
+                    "DELETE FROM group_subscriptions WHERE group_id = ?1",
+                    params![group_id],
+                )
+                .map_err(sqlite_io_error)?;
+                apply_group_subscription_ids(
+                    &conn,
+                    group_id,
+                    &ids,
+                    name_filter_regex.as_deref(),
+                    true,
+                )?;
+                group_changed = true;
+            }
         }
     }
-    if body.get("nodeIds").is_some() {
-        conn.execute(
-            "DELETE FROM group_nodes WHERE group_id = ?1",
-            params![group_id],
-        )
-        .map_err(sqlite_io_error)?;
-        apply_group_node_ids(&conn, group_id, &integer_array(body, "nodeIds"), true)?;
-    }
-    if body.get("subscriptionIds").is_some() {
-        conn.execute(
-            "DELETE FROM group_subscriptions WHERE group_id = ?1",
-            params![group_id],
-        )
-        .map_err(sqlite_io_error)?;
-        apply_group_subscription_ids(
-            &conn,
-            group_id,
-            &integer_array(body, "subscriptionIds"),
-            body.get("nameFilterRegex").and_then(Value::as_str),
-            true,
-        )?;
-    }
-    if body.get("nodeIds").is_some()
-        || body.get("subscriptionIds").is_some()
-        || body.get("policyParams").is_some()
-    {
+    if group_changed {
         conn.execute(
             "UPDATE groups SET version = version + 1 WHERE id = ?1",
             params![group_id],
@@ -8963,12 +9305,93 @@ fn ensure_default_resources(state: &Path, body: &Value) -> io::Result<Value> {
         .map_err(sqlite_io_error)?;
     }
     Ok(json!({
-        "defaultConfigID": config_id.to_string(),
-        "defaultRoutingID": routing_id.to_string(),
-        "defaultDNSID": dns_id.to_string(),
+        "defaultConfigID": config.id.to_string(),
+        "defaultRoutingID": routing.id.to_string(),
+        "defaultDNSID": dns.id.to_string(),
         "defaultGroupID": group_id.to_string(),
         "mode": mode,
     }))
+}
+
+fn desired_policy_params(items: &[Value]) -> Vec<(String, String)> {
+    items
+        .iter()
+        .map(|item| {
+            let key = item
+                .get("key")
+                .and_then(Value::as_str)
+                .unwrap_or("")
+                .to_owned();
+            let value = item
+                .get("val")
+                .or_else(|| item.get("value"))
+                .and_then(Value::as_str)
+                .unwrap_or("")
+                .to_owned();
+            (key, value)
+        })
+        .collect()
+}
+
+fn group_policy_param_pairs(conn: &Connection, group_id: i64) -> io::Result<Vec<(String, String)>> {
+    let mut stmt = conn
+        .prepare("SELECT key, value FROM group_policy_params WHERE group_id = ?1 ORDER BY id")
+        .map_err(sqlite_io_error)?;
+    let rows = stmt
+        .query_map(params![group_id], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+        })
+        .map_err(sqlite_io_error)?;
+    let mut out = Vec::new();
+    for row in rows {
+        out.push(row.map_err(sqlite_io_error)?);
+    }
+    Ok(out)
+}
+
+fn group_node_id_set(conn: &Connection, group_id: i64) -> io::Result<BTreeSet<i64>> {
+    let mut stmt = conn
+        .prepare("SELECT node_id FROM group_nodes WHERE group_id = ?1")
+        .map_err(sqlite_io_error)?;
+    let rows = stmt
+        .query_map(params![group_id], |row| row.get::<_, i64>(0))
+        .map_err(sqlite_io_error)?;
+    let mut out = BTreeSet::new();
+    for row in rows {
+        out.insert(row.map_err(sqlite_io_error)?);
+    }
+    Ok(out)
+}
+
+fn group_subscription_binding_set(
+    conn: &Connection,
+    group_id: i64,
+) -> io::Result<BTreeSet<(i64, Option<String>)>> {
+    let mut stmt = conn
+        .prepare(
+            "SELECT subscription_id, name_filter_regex FROM group_subscriptions WHERE group_id = ?1",
+        )
+        .map_err(sqlite_io_error)?;
+    let rows = stmt
+        .query_map(params![group_id], |row| {
+            Ok((
+                row.get::<_, i64>(0)?,
+                row.get::<_, Option<String>>(1)?
+                    .map(|value| value.trim().to_owned())
+                    .filter(|value| !value.is_empty()),
+            ))
+        })
+        .map_err(sqlite_io_error)?;
+    let mut out = BTreeSet::new();
+    for row in rows {
+        out.insert(row.map_err(sqlite_io_error)?);
+    }
+    Ok(out)
+}
+
+struct EnsuredResource {
+    id: i64,
+    created: bool,
 }
 
 fn upsert_named_resource(
@@ -8979,24 +9402,27 @@ fn upsert_named_resource(
     value: &str,
     extra_columns: &str,
     extra_values: &str,
-) -> io::Result<i64> {
+) -> io::Result<EnsuredResource> {
     let select_sql = format!("SELECT id FROM {table} WHERE name = ?1 LIMIT 1");
     if let Some(id) = conn
         .query_row(&select_sql, params![name], |row| row.get::<_, i64>(0))
         .optional()
         .map_err(sqlite_io_error)?
     {
-        return Ok(id);
+        return Ok(EnsuredResource { id, created: false });
     }
     let insert_sql = format!(
         "INSERT INTO {table}(name, {value_column}, {extra_columns}) VALUES(?1, ?2, {extra_values})"
     );
     conn.execute(&insert_sql, params![name, value])
         .map_err(sqlite_io_error)?;
-    Ok(conn.last_insert_rowid())
+    Ok(EnsuredResource {
+        id: conn.last_insert_rowid(),
+        created: true,
+    })
 }
 
-fn upsert_group(conn: &Connection, name: &str, policy: &str) -> io::Result<i64> {
+fn upsert_group(conn: &Connection, name: &str, policy: &str) -> io::Result<EnsuredResource> {
     if let Some(id) = conn
         .query_row(
             "SELECT id FROM groups WHERE name = ?1 LIMIT 1",
@@ -9006,19 +9432,17 @@ fn upsert_group(conn: &Connection, name: &str, policy: &str) -> io::Result<i64> 
         .optional()
         .map_err(sqlite_io_error)?
     {
-        conn.execute(
-            "UPDATE groups SET policy = ?2, version = CASE WHEN policy <> ?2 THEN version + 1 ELSE version END WHERE id = ?1",
-            params![id, policy],
-        )
-        .map_err(sqlite_io_error)?;
-        return Ok(id);
+        return Ok(EnsuredResource { id, created: false });
     }
     conn.execute(
         "INSERT INTO groups(name, policy, version) VALUES(?1, ?2, 0)",
         params![name, policy],
     )
     .map_err(sqlite_io_error)?;
-    Ok(conn.last_insert_rowid())
+    Ok(EnsuredResource {
+        id: conn.last_insert_rowid(),
+        created: true,
+    })
 }
 
 fn signed_token(user: &UserRecord) -> io::Result<String> {
@@ -9718,6 +10142,73 @@ dns {{}}
     }
 
     #[test]
+    fn runtime_latency_snapshots_map_to_node_ids_by_link() {
+        let nodes = vec![
+            (
+                11,
+                "socks://127.0.0.1:1080#one".to_owned(),
+                "127.0.0.1:1080".to_owned(),
+            ),
+            (
+                12,
+                "socks://127.0.0.1:1081#two".to_owned(),
+                "127.0.0.1:1081".to_owned(),
+            ),
+        ];
+        let snapshots = vec![
+            json!({
+                "name": "one",
+                "link": "socks://127.0.0.1:1080#one",
+                "latencyMs": 37,
+                "alive": true,
+                "checkedAtUnix": 42,
+                "message": "37ms",
+            }),
+            json!({
+                "name": "two",
+                "link": "socks://127.0.0.1:1081#two",
+                "latencyMs": null,
+                "alive": false,
+                "checkedAtUnix": 0,
+                "message": "no latency result",
+            }),
+        ];
+        let (results, tested_ids) = runtime_node_latency_results_for_nodes(&nodes, &snapshots);
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].node_id, 11);
+        assert_eq!(results[0].latency_ms, Some(37));
+        assert!(results[0].alive);
+        assert_eq!(results[0].tested_at, iso8601_utc(42));
+        assert!(tested_ids.contains(&11));
+        assert!(!tested_ids.contains(&12));
+    }
+
+    #[test]
+    fn runtime_latency_failure_snapshot_is_tested_with_message() {
+        let nodes = vec![(
+            21,
+            "socks://127.0.0.1:1080#one".to_owned(),
+            "127.0.0.1:1080".to_owned(),
+        )];
+        let snapshots = vec![json!({
+            "name": "one",
+            "link": "socks://127.0.0.1:1080#one",
+            "latencyMs": null,
+            "alive": false,
+            "checkedAtUnix": 84,
+            "message": "connect failed",
+        })];
+        let (results, tested_ids) = runtime_node_latency_results_for_nodes(&nodes, &snapshots);
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].node_id, 21);
+        assert_eq!(results[0].latency_ms, None);
+        assert!(!results[0].alive);
+        assert_eq!(results[0].message.as_deref(), Some("connect failed"));
+        assert_eq!(results[0].tested_at, iso8601_utc(84));
+        assert!(tested_ids.contains(&21));
+    }
+
+    #[test]
     fn storage_paths_match_first_batch_contract() {
         let mut storage = "{}".to_owned();
         let paths = vec!["ui.sidebar".to_owned()];
@@ -10152,6 +10643,74 @@ global {
     }
 
     #[test]
+    fn subscription_refresh_keeps_group_version_when_preserved_node_is_unchanged() {
+        let dir = std::env::temp_dir().join(format!("daed-product-test-{}", fastrand::u64(..)));
+        let state = dir.join("daed.db");
+        ensure_state_schema(&state).unwrap();
+        let conn = open_state_connection(&state).unwrap();
+        conn.execute_batch(
+            r#"
+            INSERT INTO subscriptions(id, updated_at, link, status, info, tag)
+                VALUES(7, 'now', 'https://subscription.invalid/list', 'fetched', '', 'sub-a');
+            INSERT INTO groups(id, name, policy, version)
+                VALUES(9, 'resource_group', 'random', 1);
+            "#,
+        )
+        .unwrap();
+        replace_subscription_nodes(
+            &conn,
+            7,
+            &["http://127.0.0.1:9/stable-node#stable-node".to_owned()],
+        )
+        .unwrap();
+        let node_id: i64 = conn
+            .query_row(
+                "SELECT id FROM nodes WHERE subscription_id = 7 LIMIT 1",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        conn.execute(
+            "INSERT INTO group_nodes(group_id, node_id) VALUES(9, ?1)",
+            params![node_id],
+        )
+        .unwrap();
+        let version_after_bind: i64 = conn
+            .query_row("SELECT version FROM groups WHERE id = 9", [], |row| {
+                row.get(0)
+            })
+            .unwrap();
+
+        replace_subscription_nodes(
+            &conn,
+            7,
+            &["http://127.0.0.1:9/stable-node#stable-node".to_owned()],
+        )
+        .unwrap();
+        let version_after_same_refresh: i64 = conn
+            .query_row("SELECT version FROM groups WHERE id = 9", [], |row| {
+                row.get(0)
+            })
+            .unwrap();
+        assert_eq!(version_after_same_refresh, version_after_bind);
+
+        replace_subscription_nodes(
+            &conn,
+            7,
+            &["http://127.0.0.1:10/stable-node#stable-node".to_owned()],
+        )
+        .unwrap();
+        let version_after_changed_refresh: i64 = conn
+            .query_row("SELECT version FROM groups WHERE id = 9", [], |row| {
+                row.get(0)
+            })
+            .unwrap();
+        assert_eq!(version_after_changed_refresh, version_after_bind + 1);
+
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
     fn generated_runtime_config_renders_parseable_nodes_and_groups() {
         let source_config = test_config_with_node(
             "resource_node",
@@ -10209,6 +10768,51 @@ global {
             config.routing.rules[0].and_functions[0].params[0].val,
             "sample-set:alpha-!beta"
         );
+    }
+
+    #[test]
+    fn generated_runtime_config_preserves_group_policy_params() {
+        let node = config_node_value(1, "node_a", "http://127.0.0.1:9/node-under-test#node-a");
+        let groups = json!({
+            "items": [
+                {
+                    "name": "proxy",
+                    "policy": "fixed",
+                    "policyParams": [{"key": "", "val": "1"}],
+                    "nodes": [node.clone()],
+                    "subscriptions": []
+                }
+            ]
+        });
+        let nodes = json!({"items": [node]});
+        let content = render_generated_config(
+            "test",
+            Some(&(1, "global".to_owned(), "global {}\n".to_owned(), 1)),
+            Some(&(1, "dns".to_owned(), "dns {}\n".to_owned(), 1)),
+            Some(&(
+                1,
+                "routing".to_owned(),
+                "routing {\n    fallback: proxy\n}\n".to_owned(),
+                1,
+            )),
+            &groups,
+            &nodes,
+        )
+        .unwrap();
+
+        assert!(content.contains("policy: fixed("));
+        let config = build_runtime_config_from_content(&content).unwrap();
+        match &config.group[0].policy {
+            DynamicFunctionValue::Function(function) => {
+                assert_eq!(function.name, "fixed");
+                assert_eq!(function.params[0].val, "1");
+            }
+            DynamicFunctionValue::FunctionList(functions) if functions.len() == 1 => {
+                assert_eq!(functions[0].name, "fixed");
+                assert_eq!(functions[0].params[0].val, "1");
+            }
+            other => panic!("unexpected group policy: {other:?}"),
+        }
     }
 
     #[test]
@@ -11101,6 +11705,102 @@ Threads:\t38\n";
             )
             .unwrap();
         assert_eq!(bound_count, 1);
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn default_resources_are_idempotent_for_empty_policy_params() {
+        let dir = std::env::temp_dir().join(format!("daed-product-test-{}", fastrand::u64(..)));
+        let state = dir.join("daed.db");
+        ensure_state_schema(&state).unwrap();
+        let body = json!({
+            "configName": "global",
+            "global": "global {}",
+            "dnsName": "default",
+            "dns": "dns {}",
+            "routingName": "default",
+            "routing": "routing { fallback: proxy }",
+            "groupName": "proxy",
+            "policy": "random",
+            "policyParams": [],
+            "mode": "rule"
+        });
+
+        let first = ensure_default_resources(&state, &body).unwrap();
+        let group_id = first["defaultGroupID"]
+            .as_str()
+            .unwrap()
+            .parse::<i64>()
+            .unwrap();
+        let conn = open_state_connection(&state).unwrap();
+        let first_version: i64 = conn
+            .query_row(
+                "SELECT version FROM groups WHERE id = ?1",
+                params![group_id],
+                |row| row.get(0),
+            )
+            .unwrap();
+        drop(conn);
+
+        ensure_default_resources(&state, &body).unwrap();
+        let conn = open_state_connection(&state).unwrap();
+        let second_version: i64 = conn
+            .query_row(
+                "SELECT version FROM groups WHERE id = ?1",
+                params![group_id],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(second_version, first_version);
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn default_resources_do_not_overwrite_existing_group_policy() {
+        let dir = std::env::temp_dir().join(format!("daed-product-test-{}", fastrand::u64(..)));
+        let state = dir.join("daed.db");
+        ensure_state_schema(&state).unwrap();
+        let conn = open_state_connection(&state).unwrap();
+        conn.execute(
+            "INSERT INTO groups(id, name, policy, version) VALUES(1, 'proxy', 'fixed', 7)",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO group_policy_params(key, value, group_id) VALUES('', '1', 1)",
+            [],
+        )
+        .unwrap();
+        drop(conn);
+
+        let response = ensure_default_resources(
+            &state,
+            &json!({
+                "groupName": "proxy",
+                "policy": "min_moving_avg",
+                "policyParams": [],
+            }),
+        )
+        .unwrap();
+        assert_eq!(response["defaultGroupID"], json!("1"));
+
+        let conn = open_state_connection(&state).unwrap();
+        let group: (String, i64) = conn
+            .query_row(
+                "SELECT policy, version FROM groups WHERE id = 1",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .unwrap();
+        let param: (String, String) = conn
+            .query_row(
+                "SELECT key, value FROM group_policy_params WHERE group_id = 1",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!(group, ("fixed".to_owned(), 7));
+        assert_eq!(param, ("".to_owned(), "1".to_owned()));
         fs::remove_dir_all(dir).unwrap();
     }
 }

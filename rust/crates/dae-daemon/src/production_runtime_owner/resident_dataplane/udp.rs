@@ -37,7 +37,7 @@ use super::client::{
 use super::direct::open_direct_tcp_connection;
 use super::dns::{ResidentDnsPlan, handle_resident_dns_udp};
 use super::events::append_event;
-use super::plan::{ResidentProxyPlan, ResidentProxyProtocolPlan};
+use super::plan::{ResidentProxyGroupPlan, ResidentProxyPlan, ResidentProxyProtocolPlan};
 use super::tcp::{open_marked_quic_endpoint, resolve_proxy_udp_addr, set_socket_mark};
 use super::vision::{VisionUnpadState, VisionUnpadder, vision_padding_block};
 use super::{
@@ -48,7 +48,7 @@ use super::{
 
 pub(super) fn resident_udp_loop(
     socket: std::net::UdpSocket,
-    proxy: Arc<ResidentProxyPlan>,
+    proxy_group: Arc<ResidentProxyGroupPlan>,
     dns: Arc<ResidentDnsPlan>,
     stop: Arc<AtomicBool>,
     event_file: PathBuf,
@@ -70,8 +70,10 @@ pub(super) fn resident_udp_loop(
         &event_lock,
         json!({
             "event": "udp_worker_started",
-            "proxy_group": proxy.group_name,
-            "node_tag": proxy.node_tag,
+            "proxy_group": proxy_group.group_name,
+            "group_policy": proxy_group.group_policy_name(),
+            "candidate_count": proxy_group.candidate_count(),
+            "admitted_candidate_count": proxy_group.admitted_candidate_count(),
             "worker_limit": worker_limit,
             "worker_stack_bytes": worker_stack_bytes,
         }),
@@ -124,7 +126,7 @@ pub(super) fn resident_udp_loop(
 
         active_workers.fetch_add(1, Ordering::Relaxed);
         let active_workers_for_task = Arc::clone(&active_workers);
-        let proxy = Arc::clone(&proxy);
+        let proxy_group = Arc::clone(&proxy_group);
         let dns = Arc::clone(&dns);
         let task_event_file = event_file.clone();
         let task_event_lock = Arc::clone(&event_lock);
@@ -138,7 +140,7 @@ pub(super) fn resident_udp_loop(
                 let packet_metrics = Arc::clone(&metrics);
                 let _guard = UdpPacketWorkerGuard::new(active_workers_for_task, metrics);
                 handle_udp_packet(
-                    proxy,
+                    proxy_group,
                     dns,
                     packet,
                     original_dst,
@@ -220,7 +222,7 @@ impl UdpExchangeResult {
 }
 
 fn handle_udp_packet(
-    proxy: Arc<ResidentProxyPlan>,
+    proxy_group: Arc<ResidentProxyGroupPlan>,
     dns: Arc<ResidentDnsPlan>,
     packet: UdpOriginalDstPacket,
     original_dst: SocketAddrV4,
@@ -231,6 +233,27 @@ fn handle_udp_packet(
     let request_len = packet.payload.len();
     let peer = packet.peer;
     metrics.add_upload(request_len);
+    let proxy = match proxy_group.select_proxy_for_udp() {
+        Ok(proxy) => proxy,
+        Err(err) => {
+            append_event(
+                &event_file,
+                &event_lock,
+                json!({
+                    "event": "udp_exchange_failed",
+                    "peer": peer.to_string(),
+                    "original_dst": original_dst.to_string(),
+                    "error": err,
+                    "proxy_group": proxy_group.group_name,
+                    "group_policy": proxy_group.group_policy_name(),
+                    "network": "udp4",
+                    "outbound": proxy_group.group_name,
+                    "policy": proxy_group.group_policy_name(),
+                }),
+            );
+            return;
+        }
+    };
     let exchange = if original_dst.port() == 53 {
         handle_resident_dns_udp(&dns, original_dst, &packet.payload).map(|response| {
             (
@@ -422,6 +445,139 @@ pub(super) fn probe_resident_proxy_udp(
             "elapsed_ms": started.elapsed().as_millis(),
             "error": err,
         }),
+    }
+}
+
+pub(super) fn probe_resident_proxy_dns_udp(
+    proxy: &ResidentProxyPlan,
+    original_dst: SocketAddrV4,
+    lookup_host: &str,
+) -> Result<(), String> {
+    let id = fastrand::u16(0..=u16::MAX);
+    let query = build_dns_a_query(id, lookup_host)?;
+    let response = exchange_proxy_udp(proxy, original_dst, &query)?;
+    dns_a_response_has_answer(id, &response.payload)
+}
+
+fn build_dns_a_query(id: u16, lookup_host: &str) -> Result<Vec<u8>, String> {
+    let mut query = Vec::with_capacity(64);
+    query.extend_from_slice(&id.to_be_bytes());
+    query.extend_from_slice(&0x0100_u16.to_be_bytes());
+    query.extend_from_slice(&1_u16.to_be_bytes());
+    query.extend_from_slice(&0_u16.to_be_bytes());
+    query.extend_from_slice(&0_u16.to_be_bytes());
+    query.extend_from_slice(&0_u16.to_be_bytes());
+    encode_dns_qname(&mut query, lookup_host)?;
+    query.extend_from_slice(&1_u16.to_be_bytes());
+    query.extend_from_slice(&1_u16.to_be_bytes());
+    Ok(query)
+}
+
+fn encode_dns_qname(out: &mut Vec<u8>, lookup_host: &str) -> Result<(), String> {
+    let lookup_host = lookup_host.trim_end_matches('.');
+    if lookup_host.is_empty() {
+        out.push(0);
+        return Ok(());
+    }
+    for label in lookup_host.split('.') {
+        if label.is_empty() {
+            return Err(format!(
+                "invalid DNS lookup host {lookup_host}: empty label"
+            ));
+        }
+        if label.len() > 63 {
+            return Err(format!(
+                "invalid DNS lookup host {lookup_host}: label exceeds 63 bytes"
+            ));
+        }
+        out.push(label.len() as u8);
+        out.extend_from_slice(label.as_bytes());
+    }
+    out.push(0);
+    Ok(())
+}
+
+fn dns_a_response_has_answer(query_id: u16, response: &[u8]) -> Result<(), String> {
+    if response.len() < 12 {
+        return Err(format!("DNS response too short: {} bytes", response.len()));
+    }
+    let response_id = u16::from_be_bytes([response[0], response[1]]);
+    if response_id != query_id {
+        return Err(format!(
+            "DNS response id mismatch: got {response_id}, expected {query_id}"
+        ));
+    }
+    let flags = u16::from_be_bytes([response[2], response[3]]);
+    if flags & 0x8000 == 0 {
+        return Err("DNS response is not a response packet".to_owned());
+    }
+    let rcode = flags & 0x000f;
+    if rcode != 0 {
+        return Err(format!("DNS response rcode={rcode}"));
+    }
+    let qdcount = u16::from_be_bytes([response[4], response[5]]) as usize;
+    let ancount = u16::from_be_bytes([response[6], response[7]]) as usize;
+    if ancount == 0 {
+        return Err("DNS response has no answer records".to_owned());
+    }
+    let mut offset = 12_usize;
+    for _ in 0..qdcount {
+        skip_dns_name(response, &mut offset)?;
+        if response.len().saturating_sub(offset) < 4 {
+            return Err("DNS response question section truncated".to_owned());
+        }
+        offset += 4;
+    }
+    for _ in 0..ancount {
+        skip_dns_name(response, &mut offset)?;
+        if response.len().saturating_sub(offset) < 10 {
+            return Err("DNS response answer section truncated".to_owned());
+        }
+        let record_type = u16::from_be_bytes([response[offset], response[offset + 1]]);
+        let class = u16::from_be_bytes([response[offset + 2], response[offset + 3]]);
+        let rdlen = u16::from_be_bytes([response[offset + 8], response[offset + 9]]) as usize;
+        offset += 10;
+        if response.len().saturating_sub(offset) < rdlen {
+            return Err("DNS response answer data truncated".to_owned());
+        }
+        if record_type == 1 && class == 1 && rdlen == 4 {
+            return Ok(());
+        }
+        offset += rdlen;
+    }
+    Err("DNS response has no A answer records".to_owned())
+}
+
+fn skip_dns_name(packet: &[u8], offset: &mut usize) -> Result<(), String> {
+    let mut jumps = 0_usize;
+    loop {
+        if *offset >= packet.len() {
+            return Err("DNS name truncated".to_owned());
+        }
+        let len = packet[*offset];
+        if len & 0xc0 == 0xc0 {
+            if packet.len().saturating_sub(*offset) < 2 {
+                return Err("DNS compressed name pointer truncated".to_owned());
+            }
+            *offset += 2;
+            return Ok(());
+        }
+        if len & 0xc0 != 0 {
+            return Err(format!("unsupported DNS name label marker: 0x{len:02x}"));
+        }
+        *offset += 1;
+        if len == 0 {
+            return Ok(());
+        }
+        let len = len as usize;
+        if packet.len().saturating_sub(*offset) < len {
+            return Err("DNS name label truncated".to_owned());
+        }
+        *offset += len;
+        jumps += 1;
+        if jumps > 128 {
+            return Err("DNS name too deep".to_owned());
+        }
     }
 }
 
@@ -1553,6 +1709,49 @@ mod tests {
         assert!(err.contains("without Go fallback"));
         assert!(err.contains("http-proxy-tcp"));
         assert!(err.contains("http-proxy"));
+    }
+
+    #[test]
+    fn resident_dns_udp_check_accepts_a_answer() {
+        let id = 0x1234;
+        let query = build_dns_a_query(id, "connectivitycheck.gstatic.com.").unwrap();
+        let mut response = Vec::new();
+        response.extend_from_slice(&id.to_be_bytes());
+        response.extend_from_slice(&0x8180_u16.to_be_bytes());
+        response.extend_from_slice(&1_u16.to_be_bytes());
+        response.extend_from_slice(&1_u16.to_be_bytes());
+        response.extend_from_slice(&0_u16.to_be_bytes());
+        response.extend_from_slice(&0_u16.to_be_bytes());
+        response.extend_from_slice(&query[12..]);
+        response.extend_from_slice(&[0xc0, 0x0c]);
+        response.extend_from_slice(&1_u16.to_be_bytes());
+        response.extend_from_slice(&1_u16.to_be_bytes());
+        response.extend_from_slice(&0_u32.to_be_bytes());
+        response.extend_from_slice(&4_u16.to_be_bytes());
+        response.extend_from_slice(&[142, 250, 72, 238]);
+        dns_a_response_has_answer(id, &response).unwrap();
+    }
+
+    #[test]
+    fn resident_dns_udp_check_rejects_response_without_a_answer() {
+        let id = 0x3456;
+        let query = build_dns_a_query(id, "connectivitycheck.gstatic.com.").unwrap();
+        let mut response = Vec::new();
+        response.extend_from_slice(&id.to_be_bytes());
+        response.extend_from_slice(&0x8180_u16.to_be_bytes());
+        response.extend_from_slice(&1_u16.to_be_bytes());
+        response.extend_from_slice(&1_u16.to_be_bytes());
+        response.extend_from_slice(&0_u16.to_be_bytes());
+        response.extend_from_slice(&0_u16.to_be_bytes());
+        response.extend_from_slice(&query[12..]);
+        response.extend_from_slice(&[0xc0, 0x0c]);
+        response.extend_from_slice(&28_u16.to_be_bytes());
+        response.extend_from_slice(&1_u16.to_be_bytes());
+        response.extend_from_slice(&0_u32.to_be_bytes());
+        response.extend_from_slice(&16_u16.to_be_bytes());
+        response.extend_from_slice(&[0; 16]);
+        let err = dns_a_response_has_answer(id, &response).unwrap_err();
+        assert!(err.contains("no A answer"));
     }
 
     #[test]
