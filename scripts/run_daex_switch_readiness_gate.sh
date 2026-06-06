@@ -67,6 +67,9 @@ product_chain_outbound_repo="${PRODUCT_CHAIN_OUTBOUND_REPO:-/root/project/outbou
 product_chain_quic_go_repo="${PRODUCT_CHAIN_QUIC_GO_REPO:-/root/project/quic-go-daex-align}"
 product_chain_service_file="${PRODUCT_CHAIN_SERVICE_FILE:-${product_chain_daed_repo}/install/daed.service}"
 product_chain_go_mod_file="${PRODUCT_CHAIN_GO_MOD_FILE:-${product_chain_dae_repo}/go.mod}"
+product_chain_resident_default_daemon_binary_source="${PRODUCT_CHAIN_RESIDENT_DEFAULT_DAEMON_BINARY_SOURCE:-$candidate_binary}"
+product_chain_fresh_install_binary_source="${PRODUCT_CHAIN_FRESH_INSTALL_BINARY_SOURCE:-$candidate_binary}"
+plan_local_validation_fresh_install="${PLAN_LOCAL_VALIDATION_FRESH_INSTALL:-0}"
 
 case "$gate_root" in
   /tmp/dae-daex-switch-readiness-gate*) ;;
@@ -243,31 +246,49 @@ echo "product-chain outbound repo: $product_chain_outbound_repo"
 echo "product-chain quic-go repo: $product_chain_quic_go_repo"
 echo "product-chain service file: $product_chain_service_file"
 echo "product-chain go.mod file: $product_chain_go_mod_file"
-if ! "$candidate_binary" run \
-  --config "$config_file" \
-  --root "$product_run_root" \
-  --disable-timestamp \
-  --disable-sudo \
-  --no-listener-smoke \
-  --no-reload-smoke \
-  --execute-product-chain-recertification \
-  --product-chain-admission-evidence "$admission_file" \
-  --request-default-path-mutation \
-  --plan-production-run-command-replacement \
-  --execute-production-run-command-replacement \
-  --plan-production-run-command-apply \
-  --allow-host-default-path-mutation \
-  --product-chain-resident-default-daemon-binary-source "$candidate_binary" \
-  --product-chain-fresh-install-binary-source "$candidate_binary" \
-  --product-chain-dae-repo "$product_chain_dae_repo" \
-  --product-chain-dae-wing-repo "$product_chain_dae_wing_repo" \
-  --product-chain-daed-repo "$product_chain_daed_repo" \
-  --product-chain-outbound-repo "$product_chain_outbound_repo" \
-  --product-chain-quic-go-repo "$product_chain_quic_go_repo" \
-  --product-chain-service-file "$product_chain_service_file" \
-  --product-chain-go-mod-file "$product_chain_go_mod_file" \
-  --ack-root-gate \
-  --exit-after-ready >"$product_log" 2>&1; then
+echo "product-chain resident default daemon source: $product_chain_resident_default_daemon_binary_source"
+echo "product-chain fresh-install binary source: $product_chain_fresh_install_binary_source"
+product_args=(
+  run
+  --config "$config_file"
+  --root "$product_run_root"
+  --disable-timestamp
+  --disable-sudo
+  --no-listener-smoke
+  --no-reload-smoke
+  --execute-product-chain-recertification
+  --product-chain-admission-evidence "$admission_file"
+  --request-default-path-mutation
+  --plan-production-run-command-replacement
+  --execute-production-run-command-replacement
+  --plan-production-run-command-apply
+  --allow-host-default-path-mutation
+  --product-chain-resident-default-daemon-binary-source "$product_chain_resident_default_daemon_binary_source"
+  --product-chain-fresh-install-binary-source "$product_chain_fresh_install_binary_source"
+  --product-chain-dae-repo "$product_chain_dae_repo"
+  --product-chain-dae-wing-repo "$product_chain_dae_wing_repo"
+  --product-chain-daed-repo "$product_chain_daed_repo"
+  --product-chain-outbound-repo "$product_chain_outbound_repo"
+  --product-chain-quic-go-repo "$product_chain_quic_go_repo"
+  --product-chain-service-file "$product_chain_service_file"
+  --product-chain-go-mod-file "$product_chain_go_mod_file"
+  --ack-root-gate
+)
+case "$plan_local_validation_fresh_install" in
+  1 | true | TRUE | yes | YES)
+    echo "product-chain local fresh-install validation plan: enabled"
+    product_args+=(--plan-local-validation-fresh-install)
+    ;;
+  0 | false | FALSE | no | NO | "")
+    echo "product-chain local fresh-install validation plan: disabled"
+    ;;
+  *)
+    echo "PLAN_LOCAL_VALIDATION_FRESH_INSTALL must be 0/1, true/false, or yes/no: $plan_local_validation_fresh_install" >&2
+    exit 2
+    ;;
+esac
+product_args+=(--exit-after-ready)
+if ! "$candidate_binary" "${product_args[@]}" >"$product_log" 2>&1; then
   echo "daed2.0 product-chain recertification failed; tail follows" >&2
   tail -c 20000 "$product_log" >&2 || true
   exit 1
