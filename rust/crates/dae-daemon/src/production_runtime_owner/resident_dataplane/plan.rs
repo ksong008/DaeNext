@@ -1,11 +1,14 @@
 use std::collections::BTreeMap;
+use std::net::{Ipv4Addr, SocketAddr, SocketAddrV4, ToSocketAddrs};
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use dae_config::{Config, DynamicFunctionValue, Group};
+use dae_config::{Config, DynamicFunctionValue, Function, Group, Param};
 use dae_core_types::OutboundIndex;
 use dae_datapath::TcpDialMode;
 use dae_outbound::{
-    AnyTLSLink,
+    Annotation, AnyTLSLink, Dialer, DialerGroup, DialerSet, Filter, FilterParam, NetworkType,
+    SelectionPolicy,
     http_proxy::{HttpProxyLink, HttpScheme},
     hysteria2::{Hysteria2Link, server_contract as hysteria2_server_contract},
     juicity::JuicityLink,
@@ -25,8 +28,10 @@ use super::{
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 struct SelectedGroupNode {
+    match_index: usize,
     tag: String,
     link: String,
+    annotation_add_latency_ms: i64,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -50,7 +55,7 @@ pub(super) struct ResidentUtlsFingerprintPlan {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 enum GroupNodeSelection {
-    Selected(SelectedGroupNode),
+    Selected(Vec<SelectedGroupNode>),
     NoCandidate {
         explicit_name_filter: bool,
         unresolved_names: Vec<String>,
@@ -135,14 +140,392 @@ impl ResidentProxyPlan {
 }
 
 #[derive(Clone, Debug)]
+pub(super) struct ResidentProxyCandidatePlan {
+    pub(super) match_index: usize,
+    pub(super) annotation_add_latency_ms: i64,
+    pub(super) link: String,
+    pub(super) proxy: ResidentProxyPlan,
+}
+
+#[derive(Clone, Debug)]
+pub(super) struct ResidentProxyProbePlan {
+    pub(super) node_tag: String,
+    pub(super) link: String,
+    pub(super) tcp_check: ResidentTcpCheckPlan,
+    pub(super) udp_check: ResidentUdpCheckPlan,
+    pub(super) proxy: ResidentProxyPlan,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(super) struct ResidentTcpCheckPlan {
+    pub(super) scheme: String,
+    pub(super) target: String,
+    pub(super) host: String,
+    pub(super) path: String,
+    pub(super) method: String,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(super) struct ResidentUdpCheckPlan {
+    pub(super) target: SocketAddrV4,
+    pub(super) host: String,
+    pub(super) lookup_host: String,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(super) struct ResidentProxyLatencySnapshot {
+    pub(super) node_tag: String,
+    pub(super) link: String,
+    pub(super) latency_ms: Option<i64>,
+    pub(super) alive: bool,
+    pub(super) checked_at_unix: i64,
+    pub(super) message: String,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(super) enum ResidentGroupPolicyPlan {
+    Fixed { index: usize },
+    Random,
+    MinLastLatency,
+    MinAverage10,
+    MinMovingAverage,
+}
+
+impl ResidentGroupPolicyPlan {
+    pub(super) fn as_str(&self) -> &'static str {
+        match self {
+            Self::Fixed { .. } => "fixed",
+            Self::Random => "random",
+            Self::MinLastLatency => "min",
+            Self::MinAverage10 => "min_avg10",
+            Self::MinMovingAverage => "min_moving_avg",
+        }
+    }
+
+    pub(super) fn fixed_index(&self) -> Option<usize> {
+        match self {
+            Self::Fixed { index } => Some(*index),
+            _ => None,
+        }
+    }
+
+    pub(super) fn needs_latency_state(&self) -> bool {
+        matches!(
+            self,
+            Self::MinLastLatency | Self::MinAverage10 | Self::MinMovingAverage
+        )
+    }
+
+    pub(super) fn needs_alive_state(&self) -> bool {
+        !matches!(self, Self::Fixed { .. })
+    }
+}
+
+#[derive(Clone, Debug)]
+pub(super) struct ResidentProxyGroupPlan {
+    pub(super) group_name: String,
+    pub(super) group_policy: ResidentGroupPolicyPlan,
+    matched_candidate_count: usize,
+    candidates: Vec<ResidentProxyCandidatePlan>,
+    selector: Arc<Mutex<DialerGroup>>,
+    check_interval: Duration,
+    tcp_check: ResidentTcpCheckPlan,
+    udp_check: ResidentUdpCheckPlan,
+}
+
+impl ResidentProxyGroupPlan {
+    pub(super) fn group_policy_name(&self) -> &'static str {
+        self.group_policy.as_str()
+    }
+
+    pub(super) fn candidate_count(&self) -> usize {
+        self.matched_candidate_count
+    }
+
+    pub(super) fn admitted_candidate_count(&self) -> usize {
+        self.candidates.len()
+    }
+
+    pub(super) fn annotation_latency_offset_count(&self) -> usize {
+        self.candidates
+            .iter()
+            .filter(|candidate| candidate.annotation_add_latency_ms != 0)
+            .count()
+    }
+
+    pub(super) fn latency_state_wired(&self) -> bool {
+        if !self.group_policy.needs_latency_state() {
+            return true;
+        }
+        self.selector
+            .lock()
+            .ok()
+            .and_then(|selector| selector.alive_set(NetworkType::TCP4).cloned())
+            .map(|alive_set| alive_set.latency_state_allocated)
+            .unwrap_or(false)
+    }
+
+    pub(super) fn alive_state_wired(&self) -> bool {
+        if !self.group_policy.needs_alive_state() {
+            return true;
+        }
+        self.selector
+            .lock()
+            .map(|selector| selector.has_alive_state())
+            .unwrap_or(false)
+    }
+
+    pub(super) fn default_proxy_snapshot(&self) -> Option<ResidentProxyPlan> {
+        self.snapshot_candidate()
+            .map(|candidate| candidate.proxy.clone())
+    }
+
+    pub(super) fn needs_background_checks(&self) -> bool {
+        self.group_policy.needs_alive_state()
+    }
+
+    pub(super) fn check_interval(&self) -> Duration {
+        self.check_interval
+    }
+
+    pub(super) fn probe_candidates(&self) -> Vec<ResidentProxyProbePlan> {
+        self.candidates
+            .iter()
+            .map(|candidate| ResidentProxyProbePlan {
+                node_tag: candidate.proxy.node_tag.clone(),
+                link: candidate.link.clone(),
+                tcp_check: self.tcp_check.clone(),
+                udp_check: self.udp_check.clone(),
+                proxy: candidate.proxy.clone(),
+            })
+            .collect()
+    }
+
+    pub(super) fn latency_snapshots(&self) -> Vec<ResidentProxyLatencySnapshot> {
+        let Ok(selector) = self.selector.lock() else {
+            return Vec::new();
+        };
+        self.candidates
+            .iter()
+            .enumerate()
+            .map(|(index, candidate)| {
+                let (latency_ms, alive, checked_at_unix, ok) = selector
+                    .dialers
+                    .get(index)
+                    .map(|dialer| dialer.last_latency_snapshot(NetworkType::TCP4))
+                    .unwrap_or((0, false, 0, false));
+                ResidentProxyLatencySnapshot {
+                    node_tag: candidate.proxy.node_tag.clone(),
+                    link: candidate.link.clone(),
+                    latency_ms: ok.then_some(latency_ms),
+                    alive: ok && alive,
+                    checked_at_unix,
+                    message: resident_latency_message(ok, alive, latency_ms),
+                }
+            })
+            .collect()
+    }
+
+    pub(super) fn select_proxy_for_tcp(&self) -> Result<ResidentProxyPlan, String> {
+        self.select_proxy_for_network("tcp4")
+    }
+
+    pub(super) fn select_proxy_for_udp(&self) -> Result<ResidentProxyPlan, String> {
+        self.select_proxy_for_network("udp4")
+    }
+
+    fn select_proxy_for_network(&self, network: &str) -> Result<ResidentProxyPlan, String> {
+        self.select_candidate(network)
+            .map(|candidate| candidate.proxy.clone())
+    }
+
+    fn snapshot_candidate(&self) -> Option<&ResidentProxyCandidatePlan> {
+        match self.group_policy {
+            ResidentGroupPolicyPlan::Fixed { index } => self
+                .candidates
+                .iter()
+                .find(|candidate| candidate.match_index == index),
+            ResidentGroupPolicyPlan::Random
+            | ResidentGroupPolicyPlan::MinLastLatency
+            | ResidentGroupPolicyPlan::MinAverage10
+            | ResidentGroupPolicyPlan::MinMovingAverage => self.candidates.first(),
+        }
+    }
+
+    fn select_candidate(&self, network: &str) -> Result<&ResidentProxyCandidatePlan, String> {
+        if self.candidates.is_empty() {
+            return Err(format!(
+                "resident dataplane group {} has no admitted candidate for {network}",
+                self.group_name
+            ));
+        }
+        match self.group_policy {
+            ResidentGroupPolicyPlan::Fixed { index } => self
+                .candidates
+                .iter()
+                .find(|candidate| candidate.match_index == index)
+                .ok_or_else(|| {
+                    format!(
+                        "resident dataplane group {} fixed policy index {} is not admitted for {network}",
+                        self.group_name, index
+                    )
+                }),
+            ResidentGroupPolicyPlan::MinLastLatency
+            | ResidentGroupPolicyPlan::MinAverage10
+            | ResidentGroupPolicyPlan::MinMovingAverage
+            | ResidentGroupPolicyPlan::Random => {
+                let network_type = resident_selector_network_type(network)?;
+                let selected = self
+                    .selector
+                    .lock()
+                    .map_err(|_| {
+                        format!(
+                            "resident dataplane group {} selector lock is poisoned",
+                            self.group_name
+                        )
+                    })?
+                    .select(network_type, false)
+                    .map_err(|err| {
+                        format!(
+                            "resident dataplane group {} selector failed for {network}: {err}",
+                            self.group_name
+                        )
+                    })?;
+                self.candidates.get(selected.index).ok_or_else(|| {
+                    format!(
+                        "resident dataplane group {} selector returned missing candidate {} for {network}",
+                        self.group_name, selected.index
+                    )
+                })
+            }
+        }
+    }
+
+    pub(super) fn record_check_result(
+        &self,
+        node_tag: &str,
+        network_type: NetworkType,
+        latency_ms: Option<i64>,
+        checked_at_unix: i64,
+    ) -> Result<(), String> {
+        let Some(index) = self
+            .candidates
+            .iter()
+            .position(|candidate| candidate.proxy.node_tag == node_tag)
+        else {
+            return Err(format!(
+                "resident dataplane group {} has no admitted candidate named {node_tag}",
+                self.group_name
+            ));
+        };
+        self.selector
+            .lock()
+            .map_err(|_| {
+                format!(
+                    "resident dataplane group {} selector lock is poisoned",
+                    self.group_name
+                )
+            })?
+            .record_check_result(index, network_type, latency_ms, checked_at_unix);
+        Ok(())
+    }
+
+    pub(super) fn record_check_result_for_link(
+        &self,
+        link: &str,
+        network_type: NetworkType,
+        latency_ms: Option<i64>,
+        checked_at_unix: i64,
+    ) -> Result<usize, String> {
+        let indexes = self
+            .candidates
+            .iter()
+            .enumerate()
+            .filter_map(|(index, candidate)| (candidate.link == link).then_some(index))
+            .collect::<Vec<_>>();
+        if indexes.is_empty() {
+            return Ok(0);
+        }
+        let mut selector = self.selector.lock().map_err(|_| {
+            format!(
+                "resident dataplane group {} selector lock is poisoned",
+                self.group_name
+            )
+        })?;
+        for index in &indexes {
+            selector.record_check_result(*index, network_type, latency_ms, checked_at_unix);
+        }
+        Ok(indexes.len())
+    }
+
+    #[cfg(test)]
+    pub(super) fn fixed_single_for_test(proxy: ResidentProxyPlan) -> Self {
+        Self {
+            group_name: proxy.group_name.clone(),
+            group_policy: ResidentGroupPolicyPlan::Fixed { index: 0 },
+            matched_candidate_count: 1,
+            candidates: vec![ResidentProxyCandidatePlan {
+                match_index: 0,
+                annotation_add_latency_ms: 0,
+                link: proxy.node_tag.clone(),
+                proxy,
+            }],
+            selector: Arc::new(Mutex::new(DialerGroup::new(
+                "test",
+                vec![Dialer::new("test", "")],
+                vec![Annotation::default()],
+                SelectionPolicy::Fixed { index: 0 },
+                true,
+                0,
+            ))),
+            check_interval: Duration::from_secs(30),
+            tcp_check: ResidentTcpCheckPlan {
+                scheme: "http".to_owned(),
+                target: "cp.cloudflare.com:80".to_owned(),
+                host: "cp.cloudflare.com".to_owned(),
+                path: "/".to_owned(),
+                method: "HEAD".to_owned(),
+            },
+            udp_check: ResidentUdpCheckPlan {
+                target: SocketAddrV4::new(Ipv4Addr::new(8, 8, 8, 8), 53),
+                host: "dns.google".to_owned(),
+                lookup_host: "connectivitycheck.gstatic.com.".to_owned(),
+            },
+        }
+    }
+}
+
+fn resident_latency_message(ok: bool, alive: bool, latency_ms: i64) -> String {
+    if !ok {
+        "no latency result".to_owned()
+    } else if alive {
+        format!("{latency_ms}ms")
+    } else {
+        "unavailable".to_owned()
+    }
+}
+
+#[derive(Clone, Debug)]
 pub(super) struct ResidentDataplanePlan {
     pub(super) enabled: bool,
     pub(super) unsupported_reason: Option<String>,
-    pub(super) proxies: BTreeMap<u8, ResidentProxyPlan>,
-    pub(super) default_proxy: Option<ResidentProxyPlan>,
+    pub(super) proxies: BTreeMap<u8, ResidentProxyGroupPlan>,
+    pub(super) default_outbound: Option<u8>,
     pub(super) tcp_dial_mode: TcpDialMode,
     pub(super) sniffing_timeout: Duration,
     pub(super) dns: ResidentDnsPlan,
+}
+
+impl ResidentDataplanePlan {
+    pub(super) fn default_proxy_group(&self) -> Option<&ResidentProxyGroupPlan> {
+        self.default_outbound
+            .and_then(|outbound| self.proxies.get(&outbound))
+    }
+
+    pub(super) fn default_proxy_snapshot(&self) -> Option<ResidentProxyPlan> {
+        self.default_proxy_group()
+            .and_then(ResidentProxyGroupPlan::default_proxy_snapshot)
+    }
 }
 
 pub(super) fn build_resident_dataplane_plan(
@@ -150,15 +533,18 @@ pub(super) fn build_resident_dataplane_plan(
 ) -> Result<ResidentDataplanePlan, String> {
     let node_links = tagged_node_links(config);
     let (proxies, default_outbound) = resident_proxy_plans(config, &node_links)?;
-    let Some(default_proxy) = default_outbound.and_then(|outbound| proxies.get(&outbound).cloned())
-    else {
+    if default_outbound
+        .and_then(|outbound| proxies.get(&outbound))
+        .and_then(ResidentProxyGroupPlan::default_proxy_snapshot)
+        .is_none()
+    {
         return Ok(ResidentDataplanePlan {
             enabled: false,
             unsupported_reason: Some(
                 "no user-defined routing outbound with a resolvable node link was found".to_owned(),
             ),
             proxies,
-            default_proxy: None,
+            default_outbound: None,
             tcp_dial_mode: parse_tcp_dial_mode(config)?,
             sniffing_timeout: Duration::ZERO,
             dns: ResidentDnsPlan::asis(config.global.so_mark_from_dae),
@@ -171,7 +557,7 @@ pub(super) fn build_resident_dataplane_plan(
         enabled: true,
         unsupported_reason: None,
         proxies,
-        default_proxy: Some(default_proxy),
+        default_outbound,
         tcp_dial_mode,
         sniffing_timeout,
         dns,
@@ -181,7 +567,7 @@ pub(super) fn build_resident_dataplane_plan(
 fn resident_proxy_plans(
     config: &Config,
     node_links: &BTreeMap<String, String>,
-) -> Result<(BTreeMap<u8, ResidentProxyPlan>, Option<u8>), String> {
+) -> Result<(BTreeMap<u8, ResidentProxyGroupPlan>, Option<u8>), String> {
     let mut proxies = BTreeMap::new();
     let mut default_outbound = None;
     for outbound in referenced_user_outbounds(config) {
@@ -202,8 +588,10 @@ fn resident_proxy_plans(
         if proxies.contains_key(&outbound_index) {
             continue;
         }
-        let node = match select_group_node(group, node_links)? {
-            GroupNodeSelection::Selected(node) => node,
+        let group_policy = parse_group_policy(&group.policy)
+            .map_err(|err| format!("resident dataplane group {} policy: {err}", group.name))?;
+        let matched_nodes = match select_group_nodes(group, node_links)? {
+            GroupNodeSelection::Selected(nodes) => nodes,
             GroupNodeSelection::NoCandidate {
                 explicit_name_filter,
                 unresolved_names,
@@ -227,12 +615,285 @@ fn resident_proxy_plans(
                 return Err(reason);
             }
         };
-        let mut proxy = build_proxy_plan(config, group.name.clone(), node.tag, node.link)?;
-        proxy.group_policy = group_policy_name(&group.policy);
+        let matched_candidate_count = matched_nodes.len();
+        let build_nodes = if let Some(index) = group_policy.fixed_index() {
+            let Some(node) = matched_nodes.get(index) else {
+                return Err(format!(
+                    "resident dataplane group {} fixed policy index {} is out of range for {} matched node(s)",
+                    group.name, index, matched_candidate_count
+                ));
+            };
+            vec![node.clone()]
+        } else {
+            matched_nodes
+        };
+        let mut candidates = Vec::with_capacity(build_nodes.len());
+        for node in build_nodes {
+            let link = node.link.clone();
+            let mut proxy =
+                build_proxy_plan(config, group.name.clone(), node.tag.clone(), node.link)?;
+            proxy.group_policy = group_policy.as_str().to_owned();
+            candidates.push(ResidentProxyCandidatePlan {
+                match_index: node.match_index,
+                annotation_add_latency_ms: node.annotation_add_latency_ms,
+                link,
+                proxy,
+            });
+        }
+        if candidates.is_empty() {
+            return Err(format!(
+                "resident dataplane cannot resolve any admitted candidate for referenced group {}",
+                group.name
+            ));
+        }
+        let selector = build_resident_group_selector(
+            &group.name,
+            &group_policy,
+            &candidates,
+            group_check_tolerance_ms(config, group),
+        );
+        let group_plan = ResidentProxyGroupPlan {
+            group_name: group.name.clone(),
+            group_policy,
+            matched_candidate_count,
+            selector: Arc::new(Mutex::new(selector)),
+            candidates,
+            check_interval: group_check_interval(config, group),
+            tcp_check: group_tcp_check_plan(config, group)?,
+            udp_check: group_udp_check_plan(config, group)?,
+        };
         default_outbound.get_or_insert(outbound_index);
-        proxies.insert(outbound_index, proxy);
+        proxies.insert(outbound_index, group_plan);
     }
     Ok((proxies, default_outbound))
+}
+
+fn build_resident_group_selector(
+    group_name: &str,
+    group_policy: &ResidentGroupPolicyPlan,
+    candidates: &[ResidentProxyCandidatePlan],
+    check_tolerance_ms: i64,
+) -> DialerGroup {
+    let selector_policy = match group_policy {
+        ResidentGroupPolicyPlan::Fixed { .. } => SelectionPolicy::Fixed { index: 0 },
+        ResidentGroupPolicyPlan::Random => SelectionPolicy::Random,
+        ResidentGroupPolicyPlan::MinLastLatency => SelectionPolicy::MinLastLatency,
+        ResidentGroupPolicyPlan::MinAverage10 => SelectionPolicy::MinAverage10,
+        ResidentGroupPolicyPlan::MinMovingAverage => SelectionPolicy::MinMovingAverage,
+    };
+    DialerGroup::new(
+        group_name,
+        candidates
+            .iter()
+            .map(|candidate| {
+                Dialer::new(candidate.proxy.node_tag.clone(), "").with_link(candidate.link.clone())
+            })
+            .collect(),
+        candidates
+            .iter()
+            .map(|candidate| Annotation {
+                add_latency_ms: candidate.annotation_add_latency_ms,
+            })
+            .collect(),
+        selector_policy,
+        true,
+        check_tolerance_ms,
+    )
+}
+
+fn group_check_tolerance_ms(config: &Config, group: &Group) -> i64 {
+    let nanos = if group.check_tolerance.as_nanos() != 0 {
+        group.check_tolerance.as_nanos()
+    } else {
+        config.global.check_tolerance.as_nanos()
+    };
+    duration_nanos_to_millis(nanos)
+}
+
+fn group_check_interval(config: &Config, group: &Group) -> Duration {
+    let nanos = if group.check_interval.as_nanos() != 0 {
+        group.check_interval.as_nanos()
+    } else {
+        config.global.check_interval.as_nanos()
+    };
+    duration_nanos_to_duration(nanos)
+}
+
+fn duration_nanos_to_duration(nanos: i64) -> Duration {
+    if nanos <= 0 {
+        return Duration::ZERO;
+    }
+    Duration::from_nanos(nanos as u64)
+}
+
+fn group_tcp_check_plan(config: &Config, group: &Group) -> Result<ResidentTcpCheckPlan, String> {
+    let urls = group
+        .tcp_check_url
+        .as_ref()
+        .filter(|urls| !urls.is_empty())
+        .unwrap_or(&config.global.tcp_check_url);
+    let raw = urls
+        .first()
+        .filter(|raw| !raw.is_empty())
+        .map(String::as_str)
+        .unwrap_or("http://cp.cloudflare.com");
+    let url = Url::parse(raw).map_err(|err| {
+        format!(
+            "resident dataplane group {} tcp_check_url {raw}: {err}",
+            group.name
+        )
+    })?;
+    if !matches!(url.scheme(), "http" | "https") {
+        return Err(format!(
+            "resident dataplane group {} tcp_check_url supports http or https check targets, got scheme {}",
+            group.name,
+            url.scheme()
+        ));
+    }
+    let host = url.host_str().ok_or_else(|| {
+        format!(
+            "resident dataplane group {} tcp_check_url {raw} has no host",
+            group.name
+        )
+    })?;
+    let port = url.port_or_known_default().unwrap_or(80);
+    let mut path = url.path().to_owned();
+    if path.is_empty() {
+        path = "/".to_owned();
+    }
+    if let Some(query) = url.query()
+        && !query.is_empty()
+    {
+        path.push('?');
+        path.push_str(query);
+    }
+    let method = if !group.tcp_check_http_method.is_empty() {
+        group.tcp_check_http_method.clone()
+    } else if !config.global.tcp_check_http_method.is_empty() {
+        config.global.tcp_check_http_method.clone()
+    } else {
+        "HEAD".to_owned()
+    };
+    let explicit_addresses = if urls.len() > 1 { &urls[1..] } else { &[] };
+    Ok(ResidentTcpCheckPlan {
+        scheme: url.scheme().to_owned(),
+        target: tcp_check_target(host, port, explicit_addresses),
+        host: host.to_owned(),
+        path,
+        method,
+    })
+}
+
+fn group_udp_check_plan(config: &Config, group: &Group) -> Result<ResidentUdpCheckPlan, String> {
+    let values = group
+        .udp_check_dns
+        .as_ref()
+        .filter(|values| !values.is_empty())
+        .unwrap_or(&config.global.udp_check_dns);
+    let raw = values
+        .first()
+        .filter(|raw| !raw.is_empty())
+        .map(String::as_str)
+        .unwrap_or("dns.google:53");
+    let (host, port) = split_check_host_port(raw).map_err(|err| {
+        format!(
+            "resident dataplane group {} udp_check_dns {raw}: {err}",
+            group.name
+        )
+    })?;
+    let explicit_addresses = if values.len() > 1 { &values[1..] } else { &[] };
+    let target = explicit_or_resolved_ipv4(&host, port, explicit_addresses).map_err(|err| {
+        format!(
+            "resident dataplane group {} udp_check_dns {raw}: {err}",
+            group.name
+        )
+    })?;
+    Ok(ResidentUdpCheckPlan {
+        target,
+        host,
+        lookup_host: "connectivitycheck.gstatic.com.".to_owned(),
+    })
+}
+
+fn split_check_host_port(raw: &str) -> Result<(String, u16), String> {
+    let raw = raw.trim();
+    if raw.is_empty() {
+        return Err("empty host:port".to_owned());
+    }
+    if let Some(rest) = raw.strip_prefix('[') {
+        let Some((host, after_host)) = rest.split_once(']') else {
+            return Err("missing closing bracket for IPv6 host".to_owned());
+        };
+        let port = after_host
+            .strip_prefix(':')
+            .ok_or_else(|| "missing port after IPv6 host".to_owned())?;
+        return Ok((host.to_owned(), parse_check_port(port)?));
+    }
+    let Some((host, port)) = raw.rsplit_once(':') else {
+        return Err("expected host:port".to_owned());
+    };
+    if host.is_empty() {
+        return Err("empty host".to_owned());
+    }
+    Ok((host.to_owned(), parse_check_port(port)?))
+}
+
+fn parse_check_port(raw: &str) -> Result<u16, String> {
+    raw.parse::<u16>()
+        .map_err(|err| format!("invalid port {raw}: {err}"))
+}
+
+fn tcp_check_target(host: &str, port: u16, explicit_addresses: &[String]) -> String {
+    for raw in explicit_addresses {
+        let raw = raw.trim();
+        if raw.parse::<Ipv4Addr>().is_ok() {
+            return format!("{raw}:{port}");
+        }
+    }
+    format!("{host}:{port}")
+}
+
+fn explicit_or_resolved_ipv4(
+    host: &str,
+    port: u16,
+    explicit_addresses: &[String],
+) -> Result<SocketAddrV4, String> {
+    for raw in explicit_addresses {
+        let raw = raw.trim();
+        if raw.is_empty() {
+            continue;
+        }
+        if let Ok(ip) = raw.parse::<Ipv4Addr>() {
+            return Ok(SocketAddrV4::new(ip, port));
+        }
+    }
+    if let Ok(ip) = host.parse::<Ipv4Addr>() {
+        return Ok(SocketAddrV4::new(ip, port));
+    }
+    let authority = format!("{host}:{port}");
+    authority
+        .to_socket_addrs()
+        .map_err(|err| format!("resolve {authority}: {err}"))?
+        .find_map(|addr| match addr {
+            SocketAddr::V4(addr) => Some(addr),
+            SocketAddr::V6(_) => None,
+        })
+        .ok_or_else(|| format!("resolve {authority}: no IPv4 address"))
+}
+
+fn duration_nanos_to_millis(nanos: i64) -> i64 {
+    if nanos <= 0 {
+        return 0;
+    }
+    (nanos + 999_999) / 1_000_000
+}
+
+fn resident_selector_network_type(network: &str) -> Result<NetworkType, String> {
+    match network {
+        "tcp4" => Ok(NetworkType::TCP4),
+        "udp4" => Ok(NetworkType::DNS_UDP4),
+        other => Err(format!("unsupported resident selector network: {other}")),
+    }
 }
 
 fn build_proxy_plan(
@@ -923,85 +1584,187 @@ fn push_user_outbound(outbounds: &mut Vec<String>, name: &str) {
     }
 }
 
-fn select_group_node(
+fn select_group_nodes(
     group: &Group,
     node_links: &BTreeMap<String, String>,
 ) -> Result<GroupNodeSelection, String> {
-    let mut unresolved_names = Vec::<String>::new();
-    let mut explicit_name_filter = false;
-    let fixed_index = fixed_policy_index(&group.policy).unwrap_or(0);
-    let mut matching_index = 0_usize;
-    let mut first_match = None::<&str>;
-    let mut fixed_match = None::<&str>;
-    for filter in &group.filter {
-        for function in filter {
-            if function.name == "name" && !function.not {
-                explicit_name_filter = true;
-                for param in &function.params {
-                    if param.key.is_empty() {
-                        if node_links.contains_key(&param.val) {
-                            first_match.get_or_insert(param.val.as_str());
-                            if matching_index == fixed_index {
-                                fixed_match = Some(param.val.as_str());
-                            }
-                            matching_index += 1;
-                        } else {
-                            unresolved_names.push(param.val.clone());
-                        }
-                    }
-                }
-            }
-        }
-    }
-    let tag = if explicit_name_filter {
-        fixed_match.or(first_match)
-    } else {
-        node_links
-            .keys()
-            .nth(fixed_index)
-            .or_else(|| node_links.keys().next())
-            .map(String::as_str)
+    let (explicit_name_filter, unresolved_names) =
+        unresolved_positive_name_filters(group, node_links);
+    let filter_groups = outbound_filter_groups(group);
+    let annotations = outbound_filter_annotations(group)?;
+    let dialer_set = DialerSet {
+        dialers: node_links
+            .iter()
+            .map(|(tag, link)| Dialer::new(tag.clone(), "").with_link(link.clone()))
+            .collect(),
     };
-    let Some(tag) = tag else {
+    let matched = dialer_set
+        .filter_and_annotate(&filter_groups, &annotations)
+        .map_err(|err| format!("resident dataplane group {} filter: {err}", group.name))?;
+    if matched.is_empty() {
         return Ok(GroupNodeSelection::NoCandidate {
             explicit_name_filter,
             unresolved_names,
         });
-    };
-    let link = node_links
-        .get(tag)
-        .ok_or_else(|| format!("group {} selected missing node {tag}", group.name))?
-        .clone();
-    Ok(GroupNodeSelection::Selected(SelectedGroupNode {
-        tag: tag.to_owned(),
-        link,
-    }))
-}
-
-fn fixed_policy_index(policy: &DynamicFunctionValue) -> Option<usize> {
-    let function = match policy {
-        DynamicFunctionValue::Function(function) => function,
-        DynamicFunctionValue::FunctionList(functions) if functions.len() == 1 => &functions[0],
-        _ => return None,
-    };
-    if function.name != "fixed" {
-        return None;
     }
-    function
-        .params
-        .first()
-        .and_then(|param| param.val.parse::<usize>().ok())
+    let mut nodes = Vec::with_capacity(matched.len());
+    for (match_index, matched) in matched.into_iter().enumerate() {
+        let link = node_links
+            .get(&matched.name)
+            .ok_or_else(|| {
+                format!(
+                    "group {} selected missing node {}",
+                    group.name, matched.name
+                )
+            })?
+            .clone();
+        nodes.push(SelectedGroupNode {
+            match_index,
+            tag: matched.name,
+            link,
+            annotation_add_latency_ms: matched.annotation.add_latency_ms,
+        });
+    }
+    Ok(GroupNodeSelection::Selected(nodes))
 }
 
-fn group_policy_name(policy: &DynamicFunctionValue) -> String {
+fn unresolved_positive_name_filters(
+    group: &Group,
+    node_links: &BTreeMap<String, String>,
+) -> (bool, Vec<String>) {
+    let mut unresolved_names = Vec::<String>::new();
+    let mut explicit_name_filter = false;
+    for filter in &group.filter {
+        for function in filter {
+            if function.name != "name" || function.not {
+                continue;
+            }
+            explicit_name_filter = true;
+            for param in &function.params {
+                if param.key.is_empty() && !node_links.contains_key(&param.val) {
+                    unresolved_names.push(param.val.clone());
+                }
+            }
+        }
+    }
+    (explicit_name_filter, unresolved_names)
+}
+
+fn outbound_filter_groups(group: &Group) -> Vec<Vec<Filter>> {
+    group
+        .filter
+        .iter()
+        .map(|filters| filters.iter().map(outbound_filter).collect())
+        .collect()
+}
+
+fn outbound_filter(function: &Function) -> Filter {
+    Filter {
+        name: function.name.clone(),
+        not: function.not,
+        params: function
+            .params
+            .iter()
+            .map(|param| FilterParam::new(param.key.clone(), param.val.clone()))
+            .collect(),
+    }
+}
+
+fn outbound_filter_annotations(group: &Group) -> Result<Vec<Annotation>, String> {
+    if group.filter.is_empty() {
+        return Ok(Vec::new());
+    }
+    if group.filter_annotation.is_empty() {
+        return Ok(vec![Annotation::default(); group.filter.len()]);
+    }
+    if group.filter_annotation.len() != group.filter.len() {
+        return Err(format!(
+            "unmatched filter annotation length: {} filters and {} annotations",
+            group.filter.len(),
+            group.filter_annotation.len()
+        ));
+    }
+    group
+        .filter_annotation
+        .iter()
+        .map(|params| match params {
+            Some(params) => annotation_from_params(params),
+            None => Ok(Annotation::default()),
+        })
+        .collect()
+}
+
+fn annotation_from_params(params: &[Param]) -> Result<Annotation, String> {
+    let pairs = params
+        .iter()
+        .map(|param| (param.key.as_str(), param.val.as_str()))
+        .collect::<Vec<_>>();
+    Annotation::from_params(&pairs).map_err(|err| err.to_string())
+}
+
+fn parse_group_policy(policy: &DynamicFunctionValue) -> Result<ResidentGroupPolicyPlan, String> {
     match policy {
-        DynamicFunctionValue::Function(function) => function.name.clone(),
-        DynamicFunctionValue::FunctionList(functions) => functions
-            .first()
-            .map(|function| function.name.clone())
-            .unwrap_or_default(),
-        DynamicFunctionValue::String(value) => value.clone(),
-        DynamicFunctionValue::Nil => String::new(),
+        DynamicFunctionValue::Nil => Ok(ResidentGroupPolicyPlan::Fixed { index: 0 }),
+        DynamicFunctionValue::String(value) => parse_group_policy_string(value),
+        DynamicFunctionValue::Function(function) => parse_group_policy_function(function),
+        DynamicFunctionValue::FunctionList(functions) if functions.len() == 1 => {
+            parse_group_policy_function(&functions[0])
+        }
+        DynamicFunctionValue::FunctionList(functions) => Err(format!(
+            "policy should be exact 1 function: got {}",
+            functions.len()
+        )),
+    }
+}
+
+fn parse_group_policy_string(value: &str) -> Result<ResidentGroupPolicyPlan, String> {
+    let value = value.trim();
+    if value.is_empty() {
+        return Ok(ResidentGroupPolicyPlan::Fixed { index: 0 });
+    }
+    if let Some(raw) = value
+        .strip_prefix("fixed(")
+        .and_then(|rest| rest.strip_suffix(')'))
+    {
+        let index = raw
+            .trim()
+            .parse::<usize>()
+            .map_err(|err| format!("invalid fixed policy index {raw}: {err}"))?;
+        return Ok(ResidentGroupPolicyPlan::Fixed { index });
+    }
+    match value {
+        "fixed" => Ok(ResidentGroupPolicyPlan::Fixed { index: 0 }),
+        "random" => Ok(ResidentGroupPolicyPlan::Random),
+        "min" => Ok(ResidentGroupPolicyPlan::MinLastLatency),
+        "min_avg10" | "min_average10" => Ok(ResidentGroupPolicyPlan::MinAverage10),
+        "min_moving_avg" => Ok(ResidentGroupPolicyPlan::MinMovingAverage),
+        other => Err(format!("unexpected policy: {other}")),
+    }
+}
+
+fn parse_group_policy_function(function: &Function) -> Result<ResidentGroupPolicyPlan, String> {
+    match function.name.as_str() {
+        "fixed" => {
+            if function.not {
+                return Err("policy param does not support not operator: !fixed()".to_owned());
+            }
+            let Some(param) = function.params.first() else {
+                return Ok(ResidentGroupPolicyPlan::Fixed { index: 0 });
+            };
+            if param.key != "" {
+                return Err(r#"invalid "fixed" param format"#.to_owned());
+            }
+            let index = param
+                .val
+                .parse::<usize>()
+                .map_err(|err| format!(r#"invalid "fixed" param format: {err}"#))?;
+            Ok(ResidentGroupPolicyPlan::Fixed { index })
+        }
+        "random" => Ok(ResidentGroupPolicyPlan::Random),
+        "min" => Ok(ResidentGroupPolicyPlan::MinLastLatency),
+        "min_avg10" | "min_average10" => Ok(ResidentGroupPolicyPlan::MinAverage10),
+        "min_moving_avg" => Ok(ResidentGroupPolicyPlan::MinMovingAverage),
+        other => Err(format!("unexpected policy: {other}")),
     }
 }
 
@@ -1095,7 +1858,7 @@ mod tests {
         "#,
         );
         let plan = build_resident_dataplane_plan(&config).unwrap();
-        let proxy = plan.default_proxy.unwrap();
+        let proxy = plan.default_proxy_snapshot().unwrap();
         assert!(plan.enabled);
         assert_eq!(plan.proxies.len(), 1);
         assert_eq!(proxy.group_name, "proxy");
@@ -1132,14 +1895,451 @@ mod tests {
         "#,
         );
         let links = tagged_node_links(&config);
-        let selected = select_group_node(&config.group[0], &links).unwrap();
+        let selected = select_group_nodes(&config.group[0], &links).unwrap();
         match selected {
-            GroupNodeSelection::Selected(node) => {
-                assert_eq!(node.tag, "node_b");
-                assert_eq!(node.link, "socks://127.0.0.1:1081");
+            GroupNodeSelection::Selected(nodes) => {
+                assert_eq!(nodes.len(), 2);
+                assert_eq!(nodes[0].tag, "node_a");
+                assert_eq!(nodes[0].link, "socks://127.0.0.1:1080");
+                assert_eq!(nodes[1].tag, "node_b");
+                assert_eq!(nodes[1].link, "socks://127.0.0.1:1081");
             }
             GroupNodeSelection::NoCandidate { .. } => panic!("expected selected node"),
         }
+        let plan = build_resident_dataplane_plan(&config).unwrap();
+        let proxy = plan.default_proxy_snapshot().unwrap();
+        assert_eq!(proxy.node_tag, "node_b");
+        assert_eq!(plan.default_proxy_group().unwrap().candidate_count(), 2);
+    }
+
+    #[test]
+    fn group_node_selection_supports_generic_name_filters() {
+        let config = parse_config(
+            r#"
+        global {
+        lan_interface: daerust0
+        }
+        node {
+        node_a: 'socks://127.0.0.1:1080'
+        node_b: 'socks://127.0.0.1:1081'
+        node_c: 'socks://127.0.0.1:1082'
+        }
+        group {
+        proxy {
+            filter: name(regex: "^node_[ab]$") && !name(node_b)
+            policy: random
+        }
+        }
+        routing {
+        l4proto(tcp) -> proxy
+        fallback: direct
+        }
+        "#,
+        );
+        let links = tagged_node_links(&config);
+        let selected = select_group_nodes(&config.group[0], &links).unwrap();
+        match selected {
+            GroupNodeSelection::Selected(nodes) => {
+                assert_eq!(nodes.len(), 1);
+                assert_eq!(nodes[0].tag, "node_a");
+            }
+            GroupNodeSelection::NoCandidate { .. } => panic!("expected selected node"),
+        }
+    }
+
+    #[test]
+    fn resident_dataplane_plan_keeps_non_fixed_group_candidates() {
+        let config = parse_config(
+            r#"
+        global {
+        lan_interface: daerust0
+        allow_insecure: false
+        so_mark_from_dae: 1234
+        mptcp: false
+        }
+        node {
+        node_a: 'socks://127.0.0.1:1080'
+        node_b: 'socks://127.0.0.1:1081'
+        }
+        group {
+        proxy {
+            filter: name(node_a, node_b)
+            policy: random
+        }
+        }
+        routing {
+        l4proto(tcp) -> proxy
+        fallback: direct
+        }
+        "#,
+        );
+        let plan = build_resident_dataplane_plan(&config).unwrap();
+        let group = plan.default_proxy_group().unwrap();
+        assert_eq!(group.group_policy, ResidentGroupPolicyPlan::Random);
+        assert_eq!(group.candidate_count(), 2);
+        assert_eq!(group.admitted_candidate_count(), 2);
+        assert!(group.alive_state_wired());
+        let selected = group.select_proxy_for_tcp().unwrap();
+        assert!(matches!(selected.node_tag.as_str(), "node_a" | "node_b"));
+    }
+
+    #[test]
+    fn resident_dataplane_plan_wires_min_policy_latency_state() {
+        let config = parse_config(
+            r#"
+        global {
+        lan_interface: daerust0
+        allow_insecure: false
+        so_mark_from_dae: 1234
+        mptcp: false
+        }
+        node {
+        node_a: 'socks://127.0.0.1:1080'
+        node_b: 'socks://127.0.0.1:1081'
+        }
+        group {
+        proxy {
+            filter: name(node_a, node_b)
+            policy: min_moving_avg
+        }
+        }
+        routing {
+        l4proto(tcp) -> proxy
+        fallback: direct
+        }
+        "#,
+        );
+        let plan = build_resident_dataplane_plan(&config).unwrap();
+        let group = plan.default_proxy_group().unwrap();
+        assert_eq!(
+            group.group_policy,
+            ResidentGroupPolicyPlan::MinMovingAverage
+        );
+        assert_eq!(group.candidate_count(), 2);
+        assert_eq!(group.admitted_candidate_count(), 2);
+        assert!(group.alive_state_wired());
+        assert!(group.latency_state_wired());
+        assert_eq!(group.select_proxy_for_tcp().unwrap().node_tag, "node_a");
+    }
+
+    #[test]
+    fn resident_dataplane_group_tcp_check_uses_group_override() {
+        let config = parse_config(
+            r#"
+        global {
+        lan_interface: daerust0
+        tcp_check_url: 'http://global.example/generate_204'
+        tcp_check_http_method: GET
+        }
+        node {
+        node_a: 'socks://127.0.0.1:1080'
+        node_b: 'socks://127.0.0.1:1081'
+        }
+        group {
+        proxy {
+            filter: name(node_a, node_b)
+            policy: min
+            tcp_check_url: 'http://group.example/check?q=1'
+            tcp_check_http_method: HEAD
+        }
+        }
+        routing {
+        l4proto(tcp) -> proxy
+        fallback: direct
+        }
+        "#,
+        );
+        let plan = build_resident_dataplane_plan(&config).unwrap();
+        let group = plan.default_proxy_group().unwrap();
+        let probes = group.probe_candidates();
+        assert_eq!(probes[0].tcp_check.scheme, "http");
+        assert_eq!(probes[0].tcp_check.target, "group.example:80");
+        assert_eq!(probes[0].tcp_check.host, "group.example");
+        assert_eq!(probes[0].tcp_check.path, "/check?q=1");
+        assert_eq!(probes[0].tcp_check.method, "HEAD");
+    }
+
+    #[test]
+    fn resident_dataplane_group_tcp_check_accepts_https() {
+        let config = parse_config(
+            r#"
+        global {
+        lan_interface: daerust0
+        }
+        node {
+        node_a: 'socks://127.0.0.1:1080'
+        }
+        group {
+        proxy {
+            filter: name(node_a)
+            policy: min
+            tcp_check_url: 'https://check.example/generate_204,203.0.113.7'
+        }
+        }
+        routing {
+        l4proto(tcp) -> proxy
+        fallback: direct
+        }
+        "#,
+        );
+        let plan = build_resident_dataplane_plan(&config).unwrap();
+        let probes = plan.default_proxy_group().unwrap().probe_candidates();
+        assert_eq!(probes[0].tcp_check.scheme, "https");
+        assert_eq!(probes[0].tcp_check.target, "203.0.113.7:443");
+        assert_eq!(probes[0].tcp_check.host, "check.example");
+        assert_eq!(probes[0].tcp_check.path, "/generate_204");
+    }
+
+    #[test]
+    fn resident_dataplane_group_udp_check_uses_group_override_ipv4() {
+        let config = parse_config(
+            r#"
+        global {
+        lan_interface: daerust0
+        udp_check_dns: 'dns.global:53,8.8.8.8'
+        }
+        node {
+        node_a: 'socks://127.0.0.1:1080'
+        }
+        group {
+        proxy {
+            filter: name(node_a)
+            policy: min
+            udp_check_dns: 'dns.group:5353,8.8.4.4'
+        }
+        }
+        routing {
+        l4proto(udp) -> proxy
+        fallback: direct
+        }
+        "#,
+        );
+        let plan = build_resident_dataplane_plan(&config).unwrap();
+        let probes = plan.default_proxy_group().unwrap().probe_candidates();
+        assert_eq!(
+            probes[0].udp_check.target,
+            SocketAddrV4::new(Ipv4Addr::new(8, 8, 4, 4), 5353)
+        );
+        assert_eq!(probes[0].udp_check.host, "dns.group");
+        assert_eq!(
+            probes[0].udp_check.lookup_host,
+            "connectivitycheck.gstatic.com."
+        );
+    }
+
+    #[test]
+    fn resident_dataplane_min_policy_selects_checked_lowest_last_latency() {
+        let config = parse_config(
+            r#"
+        global {
+        lan_interface: daerust0
+        }
+        node {
+        node_a: 'socks://127.0.0.1:1080'
+        node_b: 'socks://127.0.0.1:1081'
+        }
+        group {
+        proxy {
+            filter: name(node_a, node_b)
+            policy: min
+        }
+        }
+        routing {
+        l4proto(tcp) -> proxy
+        fallback: direct
+        }
+        "#,
+        );
+        let plan = build_resident_dataplane_plan(&config).unwrap();
+        let group = plan.default_proxy_group().unwrap();
+        group
+            .record_check_result("node_a", NetworkType::TCP4, Some(200), 1)
+            .unwrap();
+        group
+            .record_check_result("node_b", NetworkType::TCP4, Some(50), 2)
+            .unwrap();
+        assert_eq!(group.select_proxy_for_tcp().unwrap().node_tag, "node_b");
+    }
+
+    #[test]
+    fn resident_dataplane_min_avg10_policy_uses_latency_history() {
+        let config = parse_config(
+            r#"
+        global {
+        lan_interface: daerust0
+        }
+        node {
+        node_a: 'socks://127.0.0.1:1080'
+        node_b: 'socks://127.0.0.1:1081'
+        }
+        group {
+        proxy {
+            filter: name(node_a, node_b)
+            policy: min_avg10
+        }
+        }
+        routing {
+        l4proto(tcp) -> proxy
+        fallback: direct
+        }
+        "#,
+        );
+        let plan = build_resident_dataplane_plan(&config).unwrap();
+        let group = plan.default_proxy_group().unwrap();
+        for latency in [300, 300, 300] {
+            group
+                .record_check_result("node_a", NetworkType::TCP4, Some(latency), 1)
+                .unwrap();
+        }
+        for latency in [120, 120, 120] {
+            group
+                .record_check_result("node_b", NetworkType::TCP4, Some(latency), 2)
+                .unwrap();
+        }
+        assert_eq!(group.select_proxy_for_tcp().unwrap().node_tag, "node_b");
+    }
+
+    #[test]
+    fn resident_dataplane_min_moving_avg_policy_uses_moving_average() {
+        let config = parse_config(
+            r#"
+        global {
+        lan_interface: daerust0
+        }
+        node {
+        node_a: 'socks://127.0.0.1:1080'
+        node_b: 'socks://127.0.0.1:1081'
+        }
+        group {
+        proxy {
+            filter: name(node_a, node_b)
+            policy: min_moving_avg
+        }
+        }
+        routing {
+        l4proto(tcp) -> proxy
+        fallback: direct
+        }
+        "#,
+        );
+        let plan = build_resident_dataplane_plan(&config).unwrap();
+        let group = plan.default_proxy_group().unwrap();
+        group
+            .record_check_result("node_a", NetworkType::TCP4, Some(240), 1)
+            .unwrap();
+        group
+            .record_check_result("node_b", NetworkType::TCP4, Some(80), 2)
+            .unwrap();
+        assert_eq!(group.select_proxy_for_tcp().unwrap().node_tag, "node_b");
+    }
+
+    #[test]
+    fn resident_dataplane_min_policy_honors_group_check_tolerance() {
+        let config = parse_config(
+            r#"
+        global {
+        lan_interface: daerust0
+        check_tolerance: 10ms
+        }
+        node {
+        node_a: 'socks://127.0.0.1:1080'
+        node_b: 'socks://127.0.0.1:1081'
+        }
+        group {
+        proxy {
+            filter: name(node_a, node_b)
+            policy: min
+            check_tolerance: 50ms
+        }
+        }
+        routing {
+        l4proto(tcp) -> proxy
+        fallback: direct
+        }
+        "#,
+        );
+        let plan = build_resident_dataplane_plan(&config).unwrap();
+        let group = plan.default_proxy_group().unwrap();
+        group
+            .record_check_result("node_a", NetworkType::TCP4, Some(100), 1)
+            .unwrap();
+        group
+            .record_check_result("node_b", NetworkType::TCP4, Some(80), 2)
+            .unwrap();
+        assert_eq!(group.select_proxy_for_tcp().unwrap().node_tag, "node_a");
+        group
+            .record_check_result("node_b", NetworkType::TCP4, Some(40), 3)
+            .unwrap();
+        assert_eq!(group.select_proxy_for_tcp().unwrap().node_tag, "node_b");
+    }
+
+    #[test]
+    fn resident_dataplane_min_policy_applies_add_latency_to_sorting_only() {
+        let config = parse_config(
+            r#"
+        global {
+        lan_interface: daerust0
+        }
+        node {
+        node_a: 'socks://127.0.0.1:1080'
+        node_b: 'socks://127.0.0.1:1081'
+        }
+        group {
+        proxy {
+            filter: name(node_a) [add_latency: 100ms]
+            filter: name(node_b)
+            policy: min
+        }
+        }
+        routing {
+        l4proto(tcp) -> proxy
+        fallback: direct
+        }
+        "#,
+        );
+        let plan = build_resident_dataplane_plan(&config).unwrap();
+        let group = plan.default_proxy_group().unwrap();
+        assert_eq!(group.annotation_latency_offset_count(), 1);
+        group
+            .record_check_result("node_a", NetworkType::TCP4, Some(50), 1)
+            .unwrap();
+        group
+            .record_check_result("node_b", NetworkType::TCP4, Some(90), 2)
+            .unwrap();
+        assert_eq!(group.select_proxy_for_tcp().unwrap().node_tag, "node_b");
+    }
+
+    #[test]
+    fn resident_dataplane_plan_keeps_fixed_from_building_unselected_candidate() {
+        let config = parse_config(
+            r#"
+        global {
+        lan_interface: daerust0
+        allow_insecure: false
+        so_mark_from_dae: 1234
+        mptcp: false
+        }
+        node {
+        node_a: 'socks://127.0.0.1:1080'
+        unsupported: 'vless://01234567-89ab-cdef-0123-456789abcdef@example.com:443?security=tls&type=xhttp&sni=office.example&path=%2Fxhttp&mode=packet-up&alpn=h3'
+        }
+        group {
+        proxy {
+            filter: name(node_a, unsupported)
+            policy: fixed(0)
+        }
+        }
+        routing {
+        l4proto(tcp) -> proxy
+        fallback: direct
+        }
+        "#,
+        );
+        let plan = build_resident_dataplane_plan(&config).unwrap();
+        let group = plan.default_proxy_group().unwrap();
+        assert_eq!(group.candidate_count(), 2);
+        assert_eq!(group.admitted_candidate_count(), 1);
+        assert_eq!(group.select_proxy_for_tcp().unwrap().node_tag, "node_a");
     }
 
     #[test]
@@ -1508,10 +2708,22 @@ mod tests {
         let plan = build_resident_dataplane_plan(&config).unwrap();
         assert!(plan.enabled);
         assert_eq!(plan.tcp_dial_mode, TcpDialMode::DomainPlusPlus);
-        assert_eq!(plan.proxies.get(&2).unwrap().group_name, "proxy");
-        assert_eq!(plan.proxies.get(&2).unwrap().node_tag, "hk");
-        assert_eq!(plan.proxies.get(&3).unwrap().group_name, "openai");
-        assert_eq!(plan.proxies.get(&3).unwrap().node_tag, "us");
+        let proxy = plan
+            .proxies
+            .get(&2)
+            .unwrap()
+            .default_proxy_snapshot()
+            .unwrap();
+        let openai = plan
+            .proxies
+            .get(&3)
+            .unwrap()
+            .default_proxy_snapshot()
+            .unwrap();
+        assert_eq!(proxy.group_name, "proxy");
+        assert_eq!(proxy.node_tag, "hk");
+        assert_eq!(openai.group_name, "openai");
+        assert_eq!(openai.node_tag, "us");
     }
 
     #[test]
@@ -1572,7 +2784,7 @@ mod tests {
         "#,
         );
         let plan = build_resident_dataplane_plan(&config).unwrap();
-        let proxy = plan.default_proxy.unwrap();
+        let proxy = plan.default_proxy_snapshot().unwrap();
         let utls = proxy.utls_fingerprint.unwrap();
         assert_eq!(utls.source, "link fp");
         assert_eq!(utls.requested, "firefox_105");
@@ -1606,7 +2818,7 @@ mod tests {
         "#,
         );
         let plan = build_resident_dataplane_plan(&config).unwrap();
-        let proxy = plan.default_proxy.unwrap();
+        let proxy = plan.default_proxy_snapshot().unwrap();
         assert!(plan.enabled);
         assert_eq!(proxy.node_tag, "vless_live");
         assert_eq!(proxy.flow, XTLS_RPRX_VISION);
@@ -1642,7 +2854,7 @@ mod tests {
         "#,
         );
         let plan = build_resident_dataplane_plan(&config).unwrap();
-        let proxy = plan.default_proxy.unwrap();
+        let proxy = plan.default_proxy_snapshot().unwrap();
         assert!(proxy.utls_fingerprint.is_none());
     }
 
@@ -1672,7 +2884,7 @@ mod tests {
         "#,
         );
         let plan = build_resident_dataplane_plan(&config).unwrap();
-        let proxy = plan.default_proxy.unwrap();
+        let proxy = plan.default_proxy_snapshot().unwrap();
         assert!(proxy.utls_fingerprint.is_none());
     }
 
@@ -1702,7 +2914,7 @@ mod tests {
         "#,
         );
         let plan = build_resident_dataplane_plan(&config).unwrap();
-        let proxy = plan.default_proxy.unwrap();
+        let proxy = plan.default_proxy_snapshot().unwrap();
         assert!(proxy.utls_fingerprint.is_none());
     }
 
@@ -1734,7 +2946,7 @@ mod tests {
         "#,
         );
         let plan = build_resident_dataplane_plan(&config).unwrap();
-        let proxy = plan.default_proxy.unwrap();
+        let proxy = plan.default_proxy_snapshot().unwrap();
         let utls = proxy.utls_fingerprint.unwrap();
         assert_eq!(utls.source, "global utls_imitate");
         assert_eq!(utls.requested, "safari");
@@ -1770,7 +2982,7 @@ mod tests {
         "#,
         );
         let plan = build_resident_dataplane_plan(&config).unwrap();
-        let proxy = plan.default_proxy.unwrap();
+        let proxy = plan.default_proxy_snapshot().unwrap();
         let utls = proxy.utls_fingerprint.unwrap();
         assert_eq!(utls.source, "global utls_imitate");
         assert_eq!(utls.requested, "edge");
@@ -1806,7 +3018,7 @@ mod tests {
         "#,
         );
         let plan = build_resident_dataplane_plan(&config).unwrap();
-        let proxy = plan.default_proxy.unwrap();
+        let proxy = plan.default_proxy_snapshot().unwrap();
         let utls = proxy.utls_fingerprint.unwrap();
         assert_eq!(utls.source, "default fingerprint");
         assert_eq!(utls.requested, "chrome");

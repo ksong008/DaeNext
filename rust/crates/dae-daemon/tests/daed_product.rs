@@ -975,13 +975,8 @@ fn daed_run_serves_c10_resource_runtime_log_latency_and_bundle_surface() {
     let latency = json_body(&latency);
     assert_eq!(latency["items"][0]["id"].as_i64().unwrap(), node_id);
     assert!(latency["items"][0]["alive"].as_bool().unwrap());
-    assert!(
-        latency["items"][0]["message"]
-            .as_str()
-            .unwrap()
-            .contains("tcp connect"),
-        "{latency}"
-    );
+    assert!(latency["items"][0]["latencyMs"].is_number(), "{latency}");
+    assert!(latency["items"][0]["message"].is_null(), "{latency}");
     probe_handle.join().unwrap();
 
     let settings = http_request(
