@@ -118,6 +118,20 @@ impl ResidentProductionRuntime {
         })
     }
 
+    pub fn snapshot_node_latencies(&self) -> Vec<Value> {
+        self.dataplane
+            .as_ref()
+            .map(ResidentDataplaneRuntime::node_latency_snapshots)
+            .unwrap_or_default()
+    }
+
+    pub fn probe_node_latencies(&self, links: &[String]) -> Vec<Value> {
+        self.dataplane
+            .as_ref()
+            .map(|dataplane| dataplane.probe_node_latencies(links))
+            .unwrap_or_default()
+    }
+
     pub fn cleanup(&mut self) {
         if self.cleaned {
             return;

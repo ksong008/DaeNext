@@ -15,7 +15,6 @@ pub struct AliveDialerSet {
     min_index: Option<usize>,
     min_latency_ms: i64,
     tolerance_ms: i64,
-    next_random_cursor: usize,
 }
 
 impl AliveDialerSet {
@@ -34,6 +33,11 @@ impl AliveDialerSet {
             .collect();
         let latency_offset_allocated =
             latency_state_allocated && latency_offsets_ms.iter().any(|offset| *offset != 0);
+        let min_index = if set_alive && policy.needs_latency_state() && !dialers.is_empty() {
+            Some(0)
+        } else {
+            None
+        };
         Self {
             network_type,
             policy,
@@ -42,10 +46,9 @@ impl AliveDialerSet {
             alive: vec![set_alive; dialers.len()],
             latencies_ms: vec![None; dialers.len()],
             latency_offsets_ms,
-            min_index: None,
+            min_index,
             min_latency_ms: i64::MAX / 4,
             tolerance_ms,
-            next_random_cursor: 0,
         }
     }
 
@@ -70,7 +73,11 @@ impl AliveDialerSet {
         };
 
         let Some(raw_latency) = raw_latency else {
+            if alive && self.policy.needs_latency_state() && self.min_index.is_none() {
+                self.min_index = Some(index);
+            }
             if !alive && self.min_index == Some(index) {
+                self.min_index = None;
                 self.recalc_min();
             }
             return;
@@ -101,15 +108,19 @@ impl AliveDialerSet {
     }
 
     pub fn get_rand(&mut self) -> Option<usize> {
-        if self.alive.is_empty() {
+        let alive_count = self.alive_count();
+        if alive_count == 0 {
             return None;
         }
-        for _ in 0..self.alive.len() {
-            let index = self.next_random_cursor % self.alive.len();
-            self.next_random_cursor = (self.next_random_cursor + 1) % self.alive.len();
-            if self.alive[index] {
+        let mut selected_alive = fastrand::usize(..alive_count);
+        for (index, alive) in self.alive.iter().enumerate() {
+            if !*alive {
+                continue;
+            }
+            if selected_alive == 0 {
                 return Some(index);
             }
+            selected_alive -= 1;
         }
         None
     }
