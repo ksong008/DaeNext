@@ -18,6 +18,7 @@ pub mod production_matrix;
 pub mod shadowsocks;
 pub mod shared_transport;
 pub mod socks5;
+pub mod source_shape_registry;
 pub mod surface;
 pub mod trojan;
 pub mod tuic;
@@ -54,6 +55,11 @@ pub use shadowsocks::{
     CipherFamily, CipherInfo, ShadowsocksLink, ShadowsocksMetadata, Sip003, Sip003Opts,
 };
 pub use socks5::{AddressKind, ServerReply, Socks5Address, Socks5Command, Socks5UdpDatagram};
+pub use source_shape_registry::{
+    CapabilityLedger, ComponentExecutorProof, ExpandedLiveMatrixLedger, ReleaseGateReconciliation,
+    RuntimeSelectionLedger, ShapeStateLedger, SourceShapeRegistryContract, SourceShapeRegistryRow,
+    capability_reason_taxonomy, source_shape_registry_contract, source_shape_registry_rows,
+};
 pub use surface::{
     OutboundDependencyBoundary, OutboundDependencyContract, OutboundModuleContract,
     OutboundSplitDecision, OutboundSurface, RuntimeOwnerSurface, RuntimeOwnership,

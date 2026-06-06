@@ -39,11 +39,18 @@ fn go_free_product_chain_gate_blocks_current_candidate_until_go_paths_retire() {
             .as_bool()
             .unwrap()
     );
+    assert!(!gate["expanded_source_matrix_c10_ready"].as_bool().unwrap());
     assert!(gate["blockers"].as_array().unwrap().iter().any(|blocker| {
         blocker
             .as_str()
             .unwrap()
             .contains("Go product shell is not retired")
+    }));
+    assert!(gate["blockers"].as_array().unwrap().iter().any(|blocker| {
+        blocker
+            .as_str()
+            .unwrap()
+            .contains("expanded source matrix is not ready")
     }));
 }
 
@@ -66,9 +73,20 @@ fn go_free_product_chain_gate_accepts_complete_final_contract_fixture() {
         "go_free_rollback_model_ready",
         "go_free_product_chain_typed_report_ready",
         "go_free_product_chain_ready",
+        "expanded_source_matrix_complete",
+        "expanded_source_matrix_release_gate_ready",
+        "expanded_source_matrix_c10_ready",
     ] {
         candidate_service_contract[key] = json!(true);
     }
+    candidate_service_contract["expanded_source_matrix_typed_report"] = json!({
+        "schema": "expanded-source-matrix-typed-report",
+        "status": "pass",
+        "expanded_source_matrix_complete": true,
+        "release_gate_ready": true,
+        "c10_ready": true,
+        "stage_report_schema": false,
+    });
     let resident_gate = json!({
         "candidate_service_contract": candidate_service_contract,
     });
@@ -98,5 +116,6 @@ fn go_free_product_chain_gate_accepts_complete_final_contract_fixture() {
             .unwrap()
     );
     assert!(gate["go_free_product_chain_ready"].as_bool().unwrap());
+    assert!(gate["expanded_source_matrix_c10_ready"].as_bool().unwrap());
     assert!(gate["blockers"].as_array().unwrap().is_empty());
 }

@@ -1,3 +1,4 @@
+use std::collections::BTreeMap;
 use std::env;
 use std::fs;
 use std::io;
@@ -620,6 +621,7 @@ fn insert_outbound_fingerprint_underlay_service_contract_capabilities(report: &m
 
 fn insert_outbound_production_matrix_service_contract_capabilities(report: &mut Value) {
     let matrix = dae_outbound::outbound_production_matrix_contract();
+    let source_registry = dae_outbound::source_shape_registry_contract();
     let entries = matrix
         .entries
         .iter()
@@ -638,7 +640,16 @@ fn insert_outbound_production_matrix_service_contract_capabilities(report: &mut 
             })
         })
         .collect::<Vec<_>>();
+    let source_registry_rows = source_registry
+        .rows
+        .iter()
+        .map(|row| (*row).to_value())
+        .collect::<Vec<_>>();
+    let source_registry_status_counts = source_shape_registry_status_counts(source_registry.rows);
     let contract_ready = matrix.matrix_ready;
+    let expanded_source_matrix_complete = source_registry.expanded_source_matrix_complete;
+    let expanded_source_matrix_release_gate_ready = expanded_source_matrix_complete;
+    let expanded_source_matrix_c10_ready = expanded_source_matrix_complete;
 
     if let Value::Object(report) = report {
         report.insert(
@@ -713,7 +724,88 @@ fn insert_outbound_production_matrix_service_contract_capabilities(report: &mut 
                 "stage_report_schema": false,
             }),
         );
+        report.insert(
+            "source_shape_registry_contract_ready".to_owned(),
+            json!(source_registry.source_shape_registry_open),
+        );
+        report.insert(
+            "source_shape_registry_open".to_owned(),
+            json!(source_registry.source_shape_registry_open),
+        );
+        report.insert(
+            "source_shape_registry_report_schema".to_owned(),
+            json!(source_registry.schema),
+        );
+        report.insert(
+            "source_shape_registry_schema_version".to_owned(),
+            json!(source_registry.schema_version),
+        );
+        report.insert(
+            "source_shape_registry_row_count".to_owned(),
+            json!(source_registry.rows.len()),
+        );
+        report.insert(
+            "source_shape_registry_rows".to_owned(),
+            json!(source_registry_rows),
+        );
+        report.insert(
+            "expanded_source_matrix_open".to_owned(),
+            json!(source_registry.expanded_source_matrix_open),
+        );
+        report.insert(
+            "expanded_source_matrix_complete".to_owned(),
+            json!(expanded_source_matrix_complete),
+        );
+        report.insert(
+            "expanded_source_matrix_blocked_rows_visible".to_owned(),
+            json!(true),
+        );
+        report.insert(
+            "expanded_source_matrix_release_gate_ready".to_owned(),
+            json!(expanded_source_matrix_release_gate_ready),
+        );
+        report.insert(
+            "expanded_source_matrix_c10_ready".to_owned(),
+            json!(expanded_source_matrix_c10_ready),
+        );
+        report.insert(
+            "expanded_source_matrix_status_counts".to_owned(),
+            source_registry_status_counts,
+        );
+        report.insert(
+            "expanded_source_matrix_completion_blocker".to_owned(),
+            json!(
+                "expanded source matrix has fail-closed rows and requires live host, benchmark, and rollback evidence"
+            ),
+        );
+        report.insert(
+            "expanded_source_matrix_typed_report".to_owned(),
+            json!({
+                "schema": "expanded-source-matrix-typed-report",
+                "status": if expanded_source_matrix_complete { "pass" } else { "blocked" },
+                "source_shape_registry_open": source_registry.source_shape_registry_open,
+                "expanded_source_matrix_open": source_registry.expanded_source_matrix_open,
+                "expanded_source_matrix_complete": expanded_source_matrix_complete,
+                "release_gate_ready": expanded_source_matrix_release_gate_ready,
+                "c10_ready": expanded_source_matrix_c10_ready,
+                "blocked_rows_visible": true,
+                "status_counts": source_shape_registry_status_counts(source_registry.rows),
+                "stage_report_schema": false,
+            }),
+        );
     }
+}
+
+fn source_shape_registry_status_counts(rows: &[dae_outbound::SourceShapeRegistryRow]) -> Value {
+    let mut counts: BTreeMap<String, usize> = BTreeMap::new();
+    for row in rows {
+        let status = match row.resident_status {
+            "admitted-baseline" => "admitted",
+            other => other,
+        };
+        *counts.entry(status.to_owned()).or_default() += 1;
+    }
+    json!(counts)
 }
 
 fn insert_resident_live_adapter_matrix_service_contract_capabilities(report: &mut Value) {
