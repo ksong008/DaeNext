@@ -1,4 +1,4 @@
-use serde_json::{Value, json};
+use serde_json::{Map, Value, json};
 
 use super::{ProductChainAdmissionEvidence, ProductChainRecertificationOptions, path_string};
 
@@ -93,6 +93,32 @@ pub(super) fn outbound_production_matrix_gate_json(
         candidate_service_contract["go_outbound_fallback_retired_candidate"]
             .as_bool()
             .unwrap_or(false);
+    let source_shape_registry_contract_ready =
+        candidate_service_contract["source_shape_registry_contract_ready"]
+            .as_bool()
+            .unwrap_or(false);
+    let source_shape_registry_open = candidate_service_contract["source_shape_registry_open"]
+        .as_bool()
+        .unwrap_or(false);
+    let expanded_source_matrix_open = candidate_service_contract["expanded_source_matrix_open"]
+        .as_bool()
+        .unwrap_or(false);
+    let expanded_source_matrix_complete =
+        candidate_service_contract["expanded_source_matrix_complete"]
+            .as_bool()
+            .unwrap_or(false);
+    let expanded_source_matrix_blocked_rows_visible =
+        candidate_service_contract["expanded_source_matrix_blocked_rows_visible"]
+            .as_bool()
+            .unwrap_or(false);
+    let expanded_source_matrix_release_gate_ready =
+        candidate_service_contract["expanded_source_matrix_release_gate_ready"]
+            .as_bool()
+            .unwrap_or(false);
+    let expanded_source_matrix_c10_ready =
+        candidate_service_contract["expanded_source_matrix_c10_ready"]
+            .as_bool()
+            .unwrap_or(false);
     let live_adapter_contract_ready =
         candidate_service_contract["resident_live_adapter_matrix_contract_ready"]
             .as_bool()
@@ -120,6 +146,12 @@ pub(super) fn outbound_production_matrix_gate_json(
     let matrix_entries = candidate_service_contract["outbound_production_matrix_entries"].clone();
     let typed_report =
         candidate_service_contract["outbound_production_matrix_typed_report"].clone();
+    let source_shape_registry_rows =
+        candidate_service_contract["source_shape_registry_rows"].clone();
+    let expanded_source_matrix_status_counts =
+        candidate_service_contract["expanded_source_matrix_status_counts"].clone();
+    let expanded_source_matrix_typed_report =
+        candidate_service_contract["expanded_source_matrix_typed_report"].clone();
     let live_adapter_entries =
         candidate_service_contract["resident_live_adapter_matrix_entries"].clone();
     let live_adapter_typed_report =
@@ -232,48 +264,200 @@ pub(super) fn outbound_production_matrix_gate_json(
         blockers.push("C8 resident live adapter typed report is not ready".to_owned());
     }
 
-    OutboundProductionMatrixGateReport {
-        report: json!({
-            "name": "outbound-production-matrix",
-            "status": if outbound_production_matrix_ready { "pass" } else { "blocked" },
-            "requested": requested,
-            "outbound_production_matrix_ready": outbound_production_matrix_ready,
-            "go_outbound_fallback_retired_candidate": go_outbound_fallback_retired_candidate,
-            "outbound_production_matrix_default_switch_admission_ready": outbound_production_matrix_default_switch_admission_ready,
-            "outbound_fingerprint_underlay_ready": outbound_fingerprint_underlay_ready,
-            "binary_source": binary_source,
-            "binary_source_provided": binary_source_provided,
-            "binary_source_exists": binary_source_exists,
-            "candidate_service_contract": candidate_service_contract,
-            "outbound_production_matrix_contract_ready": contract_ready,
-            "outbound_production_matrix_runtime_state_ready": runtime_state_ready,
-            "outbound_matrix_entries_ready": matrix_entries_ready,
-            "parser_export_metadata_matrix_ready": parser_export_metadata_ready,
-            "tcp_udp_dataplane_matrix_ready": tcp_udp_dataplane_ready,
-            "transport_underlay_matrix_ready": transport_underlay_ready,
-            "route_group_connectivity_matrix_ready": route_group_connectivity_ready,
-            "reload_behavior_matrix_ready": reload_behavior_ready,
-            "live_smoke_matrix_ready": live_smoke_ready,
-            "go_outbound_fallback_retirement_matrix_ready": fallback_retirement_matrix_ready,
-            "outbound_production_matrix_typed_report_ready": typed_report_ready,
-            "candidate_go_outbound_fallback_retired": fallback_retired_candidate,
-            "resident_live_adapter_matrix_contract_ready": live_adapter_contract_ready,
-            "resident_live_adapter_matrix_ready": live_adapter_matrix_ready,
-            "resident_live_adapter_matrix_runtime_state_ready": live_adapter_runtime_state_ready,
-            "resident_live_adapter_wired_matrix_ready": live_adapter_wired_matrix_ready,
-            "resident_live_adapter_remote_live_matrix_ready": live_adapter_remote_live_matrix_ready,
-            "resident_live_adapter_matrix_typed_report_ready": live_adapter_typed_report_ready,
-            "admission_production_dataplane_admitted": admission.production_dataplane_admitted,
-            "admission_reload_runtime_parity_admitted": admission.reload_runtime_parity_admitted,
-            "admission_matched_go_rust_default_daemon_benchmark_recorded": admission.matched_benchmark_recorded,
-            "outbound_production_matrix_entries": matrix_entries,
-            "outbound_production_matrix_typed_report": typed_report,
-            "resident_live_adapter_matrix_entries": live_adapter_entries,
-            "resident_live_adapter_matrix_typed_report": live_adapter_typed_report,
-            "requires_candidate_binary": true,
-            "candidate_binary_source_hint": options.resident_default_daemon_binary_source.as_ref().map(|path| path_string(path)),
-            "blockers": blockers,
+    let mut report = Map::new();
+    report.insert("name".to_owned(), json!("outbound-production-matrix"));
+    report.insert(
+        "status".to_owned(),
+        json!(if outbound_production_matrix_ready {
+            "pass"
+        } else {
+            "blocked"
         }),
+    );
+    report.insert("requested".to_owned(), json!(requested));
+    report.insert(
+        "outbound_production_matrix_ready".to_owned(),
+        json!(outbound_production_matrix_ready),
+    );
+    report.insert(
+        "go_outbound_fallback_retired_candidate".to_owned(),
+        json!(go_outbound_fallback_retired_candidate),
+    );
+    report.insert(
+        "outbound_production_matrix_default_switch_admission_ready".to_owned(),
+        json!(outbound_production_matrix_default_switch_admission_ready),
+    );
+    report.insert(
+        "outbound_fingerprint_underlay_ready".to_owned(),
+        json!(outbound_fingerprint_underlay_ready),
+    );
+    report.insert("binary_source".to_owned(), binary_source);
+    report.insert(
+        "binary_source_provided".to_owned(),
+        json!(binary_source_provided),
+    );
+    report.insert(
+        "binary_source_exists".to_owned(),
+        json!(binary_source_exists),
+    );
+    report.insert(
+        "candidate_service_contract".to_owned(),
+        candidate_service_contract,
+    );
+    report.insert(
+        "outbound_production_matrix_contract_ready".to_owned(),
+        json!(contract_ready),
+    );
+    report.insert(
+        "outbound_production_matrix_runtime_state_ready".to_owned(),
+        json!(runtime_state_ready),
+    );
+    report.insert(
+        "outbound_matrix_entries_ready".to_owned(),
+        json!(matrix_entries_ready),
+    );
+    report.insert(
+        "parser_export_metadata_matrix_ready".to_owned(),
+        json!(parser_export_metadata_ready),
+    );
+    report.insert(
+        "tcp_udp_dataplane_matrix_ready".to_owned(),
+        json!(tcp_udp_dataplane_ready),
+    );
+    report.insert(
+        "transport_underlay_matrix_ready".to_owned(),
+        json!(transport_underlay_ready),
+    );
+    report.insert(
+        "route_group_connectivity_matrix_ready".to_owned(),
+        json!(route_group_connectivity_ready),
+    );
+    report.insert(
+        "reload_behavior_matrix_ready".to_owned(),
+        json!(reload_behavior_ready),
+    );
+    report.insert(
+        "live_smoke_matrix_ready".to_owned(),
+        json!(live_smoke_ready),
+    );
+    report.insert(
+        "go_outbound_fallback_retirement_matrix_ready".to_owned(),
+        json!(fallback_retirement_matrix_ready),
+    );
+    report.insert(
+        "outbound_production_matrix_typed_report_ready".to_owned(),
+        json!(typed_report_ready),
+    );
+    report.insert(
+        "candidate_go_outbound_fallback_retired".to_owned(),
+        json!(fallback_retired_candidate),
+    );
+    report.insert(
+        "source_shape_registry_contract_ready".to_owned(),
+        json!(source_shape_registry_contract_ready),
+    );
+    report.insert(
+        "source_shape_registry_open".to_owned(),
+        json!(source_shape_registry_open),
+    );
+    report.insert(
+        "source_shape_registry_rows".to_owned(),
+        source_shape_registry_rows,
+    );
+    report.insert(
+        "expanded_source_matrix_open".to_owned(),
+        json!(expanded_source_matrix_open),
+    );
+    report.insert(
+        "expanded_source_matrix_complete".to_owned(),
+        json!(expanded_source_matrix_complete),
+    );
+    report.insert(
+        "expanded_source_matrix_blocked_rows_visible".to_owned(),
+        json!(expanded_source_matrix_blocked_rows_visible),
+    );
+    report.insert(
+        "expanded_source_matrix_release_gate_ready".to_owned(),
+        json!(expanded_source_matrix_release_gate_ready),
+    );
+    report.insert(
+        "expanded_source_matrix_c10_ready".to_owned(),
+        json!(expanded_source_matrix_c10_ready),
+    );
+    report.insert(
+        "expanded_source_matrix_status_counts".to_owned(),
+        expanded_source_matrix_status_counts,
+    );
+    report.insert(
+        "expanded_source_matrix_typed_report".to_owned(),
+        expanded_source_matrix_typed_report,
+    );
+    report.insert(
+        "resident_live_adapter_matrix_contract_ready".to_owned(),
+        json!(live_adapter_contract_ready),
+    );
+    report.insert(
+        "resident_live_adapter_matrix_ready".to_owned(),
+        json!(live_adapter_matrix_ready),
+    );
+    report.insert(
+        "resident_live_adapter_matrix_runtime_state_ready".to_owned(),
+        json!(live_adapter_runtime_state_ready),
+    );
+    report.insert(
+        "resident_live_adapter_wired_matrix_ready".to_owned(),
+        json!(live_adapter_wired_matrix_ready),
+    );
+    report.insert(
+        "resident_live_adapter_remote_live_matrix_ready".to_owned(),
+        json!(live_adapter_remote_live_matrix_ready),
+    );
+    report.insert(
+        "resident_live_adapter_matrix_typed_report_ready".to_owned(),
+        json!(live_adapter_typed_report_ready),
+    );
+    report.insert(
+        "admission_production_dataplane_admitted".to_owned(),
+        json!(admission.production_dataplane_admitted),
+    );
+    report.insert(
+        "admission_reload_runtime_parity_admitted".to_owned(),
+        json!(admission.reload_runtime_parity_admitted),
+    );
+    report.insert(
+        "admission_matched_go_rust_default_daemon_benchmark_recorded".to_owned(),
+        json!(admission.matched_benchmark_recorded),
+    );
+    report.insert(
+        "outbound_production_matrix_entries".to_owned(),
+        matrix_entries,
+    );
+    report.insert(
+        "outbound_production_matrix_typed_report".to_owned(),
+        typed_report,
+    );
+    report.insert(
+        "resident_live_adapter_matrix_entries".to_owned(),
+        live_adapter_entries,
+    );
+    report.insert(
+        "resident_live_adapter_matrix_typed_report".to_owned(),
+        live_adapter_typed_report,
+    );
+    report.insert("requires_candidate_binary".to_owned(), json!(true));
+    report.insert(
+        "candidate_binary_source_hint".to_owned(),
+        json!(
+            options
+                .resident_default_daemon_binary_source
+                .as_ref()
+                .map(|path| path_string(path))
+        ),
+    );
+    report.insert("blockers".to_owned(), json!(blockers.clone()));
+
+    OutboundProductionMatrixGateReport {
+        report: Value::Object(report),
         blockers,
     }
 }
