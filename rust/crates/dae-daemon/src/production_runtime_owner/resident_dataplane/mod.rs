@@ -53,6 +53,7 @@ const RESIDENT_UDP_PACKET_STACK_BYTES_ENV: &str = "DAE_RESIDENT_UDP_PACKET_STACK
 const RESIDENT_UDP_PACKET_STACK_BYTES_DEFAULT: usize = 256 * 1024;
 const RESIDENT_UDP_PACKET_STACK_BYTES_MIN: usize = 128 * 1024;
 const RESIDENT_UDP_PACKET_STACK_BYTES_MAX: usize = 4 * 1024 * 1024;
+const RESIDENT_MANUAL_LATENCY_PROBE_CONCURRENCY: usize = 8;
 const XTLS_RPRX_VISION: &str = "xtls-rprx-vision";
 const VISION_COMMAND_CONTINUE: u8 = 0;
 const VISION_COMMAND_END: u8 = 1;
@@ -116,6 +117,7 @@ pub(super) struct ResidentDataplaneRuntime {
     event_file: PathBuf,
     metrics: Arc<ResidentDataplaneMetrics>,
     groups: Vec<Arc<plan::ResidentProxyGroupPlan>>,
+    manual_probe_plans: BTreeMap<String, Result<plan::ResidentProxyProbePlan, String>>,
 }
 
 impl ResidentDataplaneRuntime {
@@ -145,52 +147,42 @@ impl ResidentDataplaneRuntime {
             return Vec::new();
         }
 
-        let mut plans_by_link = BTreeMap::<String, plan::ResidentProxyProbePlan>::new();
-        for group in &self.groups {
-            for candidate in group.probe_candidates() {
-                if requested.contains(&candidate.link) {
-                    plans_by_link
-                        .entry(candidate.link.clone())
-                        .or_insert(candidate);
-                }
+        let checked_at = unix_now_secs();
+        let mut snapshots = Vec::new();
+        let mut tasks = Vec::new();
+        for link in requested {
+            match self.manual_probe_plans.get(&link) {
+                Some(Ok(candidate)) => tasks.push(candidate.clone()),
+                Some(Err(err)) => snapshots.push(manual_probe_unavailable_snapshot(
+                    &link,
+                    "native outbound probe not admitted for this node",
+                    err,
+                    checked_at,
+                )),
+                None => snapshots.push(manual_probe_unavailable_snapshot(
+                    &link,
+                    "node is not present in the current runtime config",
+                    "materialize/reload runtime before testing this node",
+                    checked_at,
+                )),
             }
         }
 
-        let mut snapshots = Vec::new();
-        for (link, candidate) in plans_by_link {
-            let checked_at = unix_now_secs();
-            let probe = probe_resident_candidate_tcp_endpoint(&candidate);
-            let latency_ms = probe.as_ref().ok().copied();
-            for group in &self.groups {
-                let _ = group.record_check_result_for_link(
-                    &link,
-                    NetworkType::TCP4,
-                    latency_ms,
-                    checked_at,
-                );
-            }
-            let udp_checked_at = unix_now_secs();
-            let udp_latency_ms = probe_resident_candidate_udp_endpoint(&candidate).ok();
-            for group in &self.groups {
-                let _ = group.record_check_result_for_link(
-                    &link,
-                    NetworkType::DNS_UDP4,
-                    udp_latency_ms,
-                    udp_checked_at,
-                );
-            }
-            snapshots.push(json!({
-                "name": candidate.node_tag,
-                "link": link,
-                "latencyMs": latency_ms,
-                "alive": latency_ms.is_some(),
-                "checkedAtUnix": checked_at,
-                "message": match probe {
-                    Ok(latency_ms) => format!("{latency_ms}ms"),
-                    Err(err) => err,
-                },
-                "scope": "proxy-tcp-check",
-            }));
+        for chunk in tasks.chunks(RESIDENT_MANUAL_LATENCY_PROBE_CONCURRENCY) {
+            let mut chunk_snapshots = thread::scope(|scope| {
+                let mut handles = Vec::new();
+                for candidate in chunk.iter().cloned() {
+                    let groups = &self.groups;
+                    handles.push(scope.spawn(move || {
+                        probe_resident_candidate_tcp_latency_snapshot(groups, candidate)
+                    }));
+                }
+                handles
+                    .into_iter()
+                    .filter_map(|handle| handle.join().ok())
+                    .collect::<Vec<_>>()
+            });
+            snapshots.append(&mut chunk_snapshots);
         }
         preferred_latency_snapshots(snapshots)
     }
@@ -362,6 +354,14 @@ pub(super) fn start_resident_dataplane_workers(
     let metrics = Arc::new(ResidentDataplaneMetrics::default());
     let proxy = Arc::new(default_proxy);
     let proxy_group = Arc::new(default_group);
+    let manual_probe_plans = plan::build_resident_manual_probe_plans(config);
+    let manual_probe_plan_count = manual_probe_plans
+        .values()
+        .filter(|plan| plan.is_ok())
+        .count();
+    let manual_probe_unavailable_count = manual_probe_plans
+        .len()
+        .saturating_sub(manual_probe_plan_count);
     let runtime_groups = plan
         .proxies
         .values()
@@ -479,6 +479,8 @@ pub(super) fn start_resident_dataplane_workers(
         "tcp_sniffing_timeout": format!("{:?}", tcp_router.sniffing_timeout()),
         "proxy_count": tcp_router.proxy_count(),
         "health_check_worker_count": health_groups.len(),
+        "manual_probe_plan_count": manual_probe_plan_count,
+        "manual_probe_unavailable_count": manual_probe_unavailable_count,
         "default_group": {
             "group": proxy_group.group_name,
             "group_policy": proxy_group.group_policy_name(),
@@ -517,6 +519,7 @@ pub(super) fn start_resident_dataplane_workers(
             event_file,
             metrics,
             groups: runtime_groups,
+            manual_probe_plans,
         }),
     )
 }
@@ -578,6 +581,46 @@ fn run_resident_group_health_checks(
             udp_checked_at,
         );
     }
+}
+
+fn probe_resident_candidate_tcp_latency_snapshot(
+    groups: &[Arc<plan::ResidentProxyGroupPlan>],
+    candidate: plan::ResidentProxyProbePlan,
+) -> Value {
+    let checked_at = unix_now_secs();
+    let probe = probe_resident_candidate_tcp_endpoint(&candidate);
+    let latency_ms = probe.as_ref().ok().copied();
+    let link = candidate.link.clone();
+    for group in groups {
+        let _ =
+            group.record_check_result_for_link(&link, NetworkType::TCP4, latency_ms, checked_at);
+    }
+    json!({
+        "name": candidate.node_tag,
+        "link": link,
+        "latencyMs": latency_ms,
+        "alive": latency_ms.is_some(),
+        "checkedAtUnix": checked_at,
+        "message": probe.err(),
+        "scope": "proxy-tcp-check",
+    })
+}
+
+fn manual_probe_unavailable_snapshot(
+    link: &str,
+    reason: &str,
+    detail: &str,
+    checked_at: i64,
+) -> Value {
+    json!({
+        "name": "",
+        "link": link,
+        "latencyMs": Value::Null,
+        "alive": false,
+        "checkedAtUnix": checked_at,
+        "message": format!("{reason}: {detail}"),
+        "scope": "proxy-tcp-check",
+    })
 }
 
 fn resident_latency_snapshot_json(snapshot: plan::ResidentProxyLatencySnapshot) -> Value {
