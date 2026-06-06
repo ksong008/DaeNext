@@ -672,6 +672,10 @@ fn insert_outbound_production_matrix_service_contract_capabilities(report: &mut 
     let matrix = dae_outbound::outbound_production_matrix_contract();
     let source_registry = dae_outbound::source_shape_registry_contract();
     let stream_wrapper = dae_outbound::stream_wrapper_capability_contract();
+    let packet_semantics = dae_outbound::packet_semantics_capability_contract();
+    let extension_layer = dae_outbound::extension_layer_capability_contract();
+    let transport_option = dae_outbound::transport_option_capability_contract();
+    let live_boundary = dae_outbound::expanded_live_matrix_validation_boundary_contract();
     let entries = matrix
         .entries
         .iter()
@@ -697,6 +701,21 @@ fn insert_outbound_production_matrix_service_contract_capabilities(report: &mut 
         .collect::<Vec<_>>();
     let source_registry_status_counts = source_shape_registry_status_counts(source_registry.rows);
     let stream_wrapper_rows = stream_wrapper
+        .rows
+        .iter()
+        .map(|row| (*row).to_value())
+        .collect::<Vec<_>>();
+    let packet_semantics_rows = packet_semantics
+        .rows
+        .iter()
+        .map(|row| (*row).to_value())
+        .collect::<Vec<_>>();
+    let extension_layer_rows = extension_layer
+        .rows
+        .iter()
+        .map(|row| (*row).to_value())
+        .collect::<Vec<_>>();
+    let transport_option_rows = transport_option
         .rows
         .iter()
         .map(|row| (*row).to_value())
@@ -885,6 +904,186 @@ fn insert_outbound_production_matrix_service_contract_capabilities(report: &mut 
                 "resident_source_admission_ready": stream_wrapper.resident_source_admission_ready,
                 "expanded_stream_wrapper_complete": stream_wrapper.expanded_stream_wrapper_complete,
                 "blocked_rows_visible": true,
+                "stage_report_schema": false,
+            }),
+        );
+        report.insert(
+            "packet_semantics_capability_contract_ready".to_owned(),
+            json!(packet_semantics.common_packet_semantics_ready),
+        );
+        report.insert(
+            "common_packet_semantics_ready".to_owned(),
+            json!(packet_semantics.common_packet_semantics_ready),
+        );
+        report.insert(
+            "packet_semantics_resident_source_admission_ready".to_owned(),
+            json!(packet_semantics.resident_source_admission_ready),
+        );
+        report.insert(
+            "expanded_packet_semantics_complete".to_owned(),
+            json!(packet_semantics.expanded_packet_semantics_complete),
+        );
+        report.insert(
+            "packet_semantics_capability_report_schema".to_owned(),
+            json!(packet_semantics.schema),
+        );
+        report.insert(
+            "packet_semantics_capability_row_count".to_owned(),
+            json!(packet_semantics.rows.len()),
+        );
+        report.insert(
+            "packet_semantics_capability_rows".to_owned(),
+            json!(packet_semantics_rows),
+        );
+        report.insert(
+            "packet_semantics_capability_typed_report".to_owned(),
+            json!({
+                "schema": "packet-semantics-capability-typed-report",
+                "status": if packet_semantics.common_packet_semantics_ready { "partial" } else { "blocked" },
+                "common_packet_semantics_ready": packet_semantics.common_packet_semantics_ready,
+                "resident_source_admission_ready": packet_semantics.resident_source_admission_ready,
+                "expanded_packet_semantics_complete": packet_semantics.expanded_packet_semantics_complete,
+                "blocked_rows_visible": true,
+                "stage_report_schema": false,
+            }),
+        );
+        report.insert(
+            "extension_layer_capability_contract_ready".to_owned(),
+            json!(extension_layer.no_plugin_baseline_ready),
+        );
+        report.insert(
+            "no_plugin_baseline_ready".to_owned(),
+            json!(extension_layer.no_plugin_baseline_ready),
+        );
+        report.insert(
+            "plugin_wrapper_resident_source_admission_ready".to_owned(),
+            json!(extension_layer.plugin_wrapper_resident_source_admission_ready),
+        );
+        report.insert(
+            "legacy_layer_resident_source_admission_ready".to_owned(),
+            json!(extension_layer.legacy_layer_resident_source_admission_ready),
+        );
+        report.insert(
+            "expanded_extension_layer_complete".to_owned(),
+            json!(extension_layer.expanded_extension_layer_complete),
+        );
+        report.insert(
+            "extension_layer_capability_report_schema".to_owned(),
+            json!(extension_layer.schema),
+        );
+        report.insert(
+            "extension_layer_capability_row_count".to_owned(),
+            json!(extension_layer.rows.len()),
+        );
+        report.insert(
+            "extension_layer_capability_rows".to_owned(),
+            json!(extension_layer_rows),
+        );
+        report.insert(
+            "extension_layer_capability_typed_report".to_owned(),
+            json!({
+                "schema": "extension-layer-capability-typed-report",
+                "status": if extension_layer.no_plugin_baseline_ready { "partial" } else { "blocked" },
+                "no_plugin_baseline_ready": extension_layer.no_plugin_baseline_ready,
+                "plugin_wrapper_resident_source_admission_ready": extension_layer.plugin_wrapper_resident_source_admission_ready,
+                "legacy_layer_resident_source_admission_ready": extension_layer.legacy_layer_resident_source_admission_ready,
+                "expanded_extension_layer_complete": extension_layer.expanded_extension_layer_complete,
+                "blocked_rows_visible": true,
+                "stage_report_schema": false,
+            }),
+        );
+        report.insert(
+            "transport_option_capability_contract_ready".to_owned(),
+            json!(transport_option.baseline_transport_options_ready),
+        );
+        report.insert(
+            "baseline_transport_options_ready".to_owned(),
+            json!(transport_option.baseline_transport_options_ready),
+        );
+        report.insert(
+            "quic_option_resident_source_admission_ready".to_owned(),
+            json!(transport_option.quic_option_resident_source_admission_ready),
+        );
+        report.insert(
+            "secure_endpoint_resident_source_admission_ready".to_owned(),
+            json!(transport_option.secure_endpoint_resident_source_admission_ready),
+        );
+        report.insert(
+            "expanded_transport_option_complete".to_owned(),
+            json!(transport_option.expanded_transport_option_complete),
+        );
+        report.insert(
+            "transport_option_capability_report_schema".to_owned(),
+            json!(transport_option.schema),
+        );
+        report.insert(
+            "transport_option_capability_row_count".to_owned(),
+            json!(transport_option.rows.len()),
+        );
+        report.insert(
+            "transport_option_capability_rows".to_owned(),
+            json!(transport_option_rows),
+        );
+        report.insert(
+            "transport_option_capability_typed_report".to_owned(),
+            json!({
+                "schema": "transport-option-capability-typed-report",
+                "status": if transport_option.baseline_transport_options_ready { "partial" } else { "blocked" },
+                "baseline_transport_options_ready": transport_option.baseline_transport_options_ready,
+                "quic_option_resident_source_admission_ready": transport_option.quic_option_resident_source_admission_ready,
+                "secure_endpoint_resident_source_admission_ready": transport_option.secure_endpoint_resident_source_admission_ready,
+                "expanded_transport_option_complete": transport_option.expanded_transport_option_complete,
+                "blocked_rows_visible": true,
+                "stage_report_schema": false,
+            }),
+        );
+        report.insert(
+            "expanded_live_matrix_validation_boundary_ready".to_owned(),
+            json!(true),
+        );
+        report.insert(
+            "expanded_live_matrix_complete".to_owned(),
+            json!(live_boundary.expanded_live_matrix_complete),
+        );
+        report.insert(
+            "expanded_live_matrix_proxy_path_required".to_owned(),
+            json!(live_boundary.proxy_path_required),
+        );
+        report.insert(
+            "expanded_live_matrix_direct_control_excluded".to_owned(),
+            json!(live_boundary.direct_control_excluded),
+        );
+        report.insert(
+            "expanded_live_matrix_benchmark_required".to_owned(),
+            json!(live_boundary.benchmark_required),
+        );
+        report.insert(
+            "expanded_live_matrix_rollback_artifact_required".to_owned(),
+            json!(live_boundary.rollback_artifact_required),
+        );
+        report.insert(
+            "expanded_live_matrix_blocked_rows_reduce_pass_threshold".to_owned(),
+            json!(live_boundary.blocked_rows_reduce_pass_threshold),
+        );
+        report.insert(
+            "expanded_live_matrix_validation_boundary_report_schema".to_owned(),
+            json!(live_boundary.schema),
+        );
+        report.insert(
+            "expanded_live_matrix_validation_boundary_typed_report".to_owned(),
+            json!({
+                "schema": "expanded-live-matrix-validation-boundary-typed-report",
+                "status": if live_boundary.expanded_live_matrix_complete { "pass" } else { "blocked" },
+                "evidence_host": live_boundary.evidence_host,
+                "upstream_host": live_boundary.upstream_host,
+                "google_min_bytes": live_boundary.google_min_bytes,
+                "youtube_min_bytes": live_boundary.youtube_min_bytes,
+                "proxy_path_required": live_boundary.proxy_path_required,
+                "direct_control_excluded": live_boundary.direct_control_excluded,
+                "benchmark_required": live_boundary.benchmark_required,
+                "rollback_artifact_required": live_boundary.rollback_artifact_required,
+                "blocked_rows_reduce_pass_threshold": live_boundary.blocked_rows_reduce_pass_threshold,
+                "expanded_live_matrix_complete": live_boundary.expanded_live_matrix_complete,
                 "stage_report_schema": false,
             }),
         );

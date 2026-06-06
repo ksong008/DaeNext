@@ -7,10 +7,147 @@ use std::process::{Child, Command, Stdio};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
+use dae_outbound::{
+    hysteria2::Hysteria2Link,
+    juicity::JuicityLink,
+    shadowsocks::{ShadowsocksLink, Sip003},
+    trojan::TrojanLink,
+    tuic::TuicLink,
+    vless::VLESSLink,
+    vmess::VMessLink,
+};
 use serde_json::Value;
 
 fn binary() -> &'static str {
     env!("CARGO_BIN_EXE_daed")
+}
+
+fn vmess_fixture_url(ps: &str, add: &str, port: u16, net: &str) -> String {
+    VMessLink {
+        ps: ps.to_owned(),
+        add: add.to_owned(),
+        port: port.to_string(),
+        id: "01234567-89ab-cdef-0123-456789abcdef".to_owned(),
+        aid: "0".to_owned(),
+        net: net.to_owned(),
+        r#type: "none".to_owned(),
+        host: String::new(),
+        sni: String::new(),
+        path: String::new(),
+        tls: String::new(),
+        allow_insecure: false,
+        fingerprint: String::new(),
+        v: "2".to_owned(),
+        protocol: "vmess".to_owned(),
+    }
+    .export_url()
+}
+
+fn shadowsocks_fixture_url(ps: &str, add: &str, port: u16) -> String {
+    ShadowsocksLink {
+        name: ps.to_owned(),
+        server: add.to_owned(),
+        port,
+        password: "matrix-ss-pass".to_owned(),
+        cipher: "aes-128-gcm".to_owned(),
+        plugin: Sip003::default(),
+        udp: true,
+        protocol: "shadowsocks".to_owned(),
+    }
+    .export_url()
+}
+
+fn vless_fixture_url(ps: &str, add: &str, port: u16) -> String {
+    VLESSLink {
+        ps: ps.to_owned(),
+        add: add.to_owned(),
+        port: port.to_string(),
+        id: "01234567-89ab-cdef-0123-456789abcdef".to_owned(),
+        net: "tcp".to_owned(),
+        r#type: "none".to_owned(),
+        host: String::new(),
+        sni: "office.example".to_owned(),
+        path: String::new(),
+        xhttp_mode: String::new(),
+        xhttp_extra: String::new(),
+        tls: "tls".to_owned(),
+        flow: "xtls-rprx-vision".to_owned(),
+        alpn: "h2,http/1.1".to_owned(),
+        allow_insecure: false,
+        fingerprint: "chrome".to_owned(),
+        public_key: String::new(),
+        short_id: String::new(),
+        spider_x: String::new(),
+        protocol: "vless".to_owned(),
+    }
+    .export_url()
+}
+
+fn trojan_fixture_url(ps: &str, add: &str, port: u16) -> String {
+    TrojanLink {
+        name: ps.to_owned(),
+        server: add.to_owned(),
+        port,
+        password: "matrix-trojan-pass".to_owned(),
+        sni: "office.example".to_owned(),
+        transport_type: String::new(),
+        encryption: String::new(),
+        host: String::new(),
+        path: String::new(),
+        service_name: String::new(),
+        allow_insecure: false,
+        protocol: "trojan".to_owned(),
+    }
+    .export_url()
+}
+
+fn hysteria2_fixture_url(ps: &str, add: &str, port: u16) -> String {
+    Hysteria2Link {
+        name: ps.to_owned(),
+        user: "matrix-hy2-auth".to_owned(),
+        password: String::new(),
+        server: format!("{add}:{port}"),
+        insecure: false,
+        sni: "office.example".to_owned(),
+        pin_sha256: "AA-BB-CC".to_owned(),
+        max_tx: 0,
+        max_rx: 0,
+    }
+    .export_url()
+}
+
+fn tuic_fixture_url(ps: &str, add: &str, port: u16) -> String {
+    TuicLink {
+        name: ps.to_owned(),
+        user: "01234567-89ab-cdef-0123-456789abcdef".to_owned(),
+        password: "matrix-tuic-pass".to_owned(),
+        server: add.to_owned(),
+        port,
+        sni: "office.example".to_owned(),
+        allow_insecure: true,
+        disable_sni: false,
+        congestion_control: String::new(),
+        alpn: vec!["h3".to_owned()],
+        udp_relay_mode: String::new(),
+        protocol: "tuic".to_owned(),
+    }
+    .export_url()
+}
+
+fn juicity_fixture_url(ps: &str, add: &str, port: u16) -> String {
+    JuicityLink {
+        name: ps.to_owned(),
+        user: "01234567-89ab-cdef-0123-456789abcdef".to_owned(),
+        password: "matrix-juicity-pass".to_owned(),
+        server: add.to_owned(),
+        port,
+        sni: "office.example".to_owned(),
+        allow_insecure: true,
+        congestion_control: String::new(),
+        pinned_certchain_sha256: String::new(),
+        protocol: "juicity".to_owned(),
+    }
+    .export_url()
 }
 
 fn assert_current_config_matrix_scope_contract(report: &Value) {
@@ -368,7 +505,7 @@ routing {
         report["planner_error"]
             .as_str()
             .unwrap()
-            .contains("supports tcp transport only, got websocket")
+            .contains("websocket handler admits only empty flow")
     );
 
     let rows = report["expanded_source_matrix_rows"].as_array().unwrap();
@@ -390,9 +527,14 @@ routing {
 fn daed_resident_adapter_matrix_reports_first_batch_rows_admitted_without_secrets() {
     let temp = temp_dir("resident-adapter-matrix-first-batch");
     let config = temp.join("config.dae");
-    fs::write(
-        &config,
-        r#"
+    let vless_live = vless_fixture_url("vless", "example.com", 443);
+    let ss_live = shadowsocks_fixture_url("ss", "example.com", 28446);
+    let trojan_live = trojan_fixture_url("trojan", "example.com", 28444);
+    let vmess_live = vmess_fixture_url("vmess", "example.com", 28452, "tcp");
+    let hy2_live = hysteria2_fixture_url("hy2", "example.com", 28453);
+    let tuic_live = tuic_fixture_url("tuic", "example.com", 28454);
+    let juicity_live = juicity_fixture_url("juicity", "example.com", 28455);
+    let config_text = r#"
 global {
   lan_interface: daerust0
   allow_insecure: false
@@ -400,16 +542,16 @@ global {
   mptcp: false
 }
 node {
-  vless_live: 'vless://01234567-89ab-cdef-0123-456789abcdef@example.com:443?security=tls&type=tcp&sni=office.example&flow=xtls-rprx-vision&fp=chrome&alpn=h2,http/1.1'
+  vless_live: '__VLESS_LIVE__'
   socks_live: 'socks5://matrix:matrix-socks-pass@example.com:28447#socks'
   http_live: 'http://matrix:matrix-http-pass@example.com:28448#http'
-  ss_live: 'ss://aes-128-gcm:matrix-ss-pass@example.com:28446#ss'
-  trojan_live: 'trojan://matrix-trojan-pass@example.com:28444?security=tls&sni=office.example#trojan'
+  ss_live: '__SS_LIVE__'
+  trojan_live: '__TROJAN_LIVE__'
   anytls_live: 'anytls://matrix-anytls-pass@example.com:28451?sni=office.example#anytls'
-  vmess_live: 'vmess://eyJ2IjoiMiIsInBzIjoidm1lc3MiLCJhZGQiOiJleGFtcGxlLmNvbSIsInBvcnQiOiIyODQ1MiIsImlkIjoiMDEyMzQ1NjctODlhYi1jZGVmLTAxMjMtNDU2Nzg5YWJjZGVmIiwiYWlkIjoiMCIsIm5ldCI6InRjcCIsInR5cGUiOiJub25lIiwiaG9zdCI6IiIsInBhdGgiOiIiLCJ0bHMiOiIifQ=='
-  hy2_live: 'hy2://matrix-hy2-auth@example.com:28453?sni=office.example&pinSHA256=AA-BB-CC#hy2'
-  tuic_live: 'tuic://01234567-89ab-cdef-0123-456789abcdef:matrix-tuic-pass@example.com:28454?allow_insecure=1&sni=office.example&alpn=h3#tuic'
-  juicity_live: 'juicity://01234567-89ab-cdef-0123-456789abcdef:matrix-juicity-pass@example.com:28455?allow_insecure=1&sni=office.example#juicity'
+  vmess_live: '__VMESS_LIVE__'
+  hy2_live: '__HY2_LIVE__'
+  tuic_live: '__TUIC_LIVE__'
+  juicity_live: '__JUICITY_LIVE__'
 }
 group {
   proxy {
@@ -421,9 +563,15 @@ routing {
   l4proto(tcp) && dport(443) -> proxy
   fallback: direct
 }
-"#,
-    )
-    .unwrap();
+"#
+    .replace("__VLESS_LIVE__", &vless_live)
+    .replace("__SS_LIVE__", &ss_live)
+    .replace("__TROJAN_LIVE__", &trojan_live)
+    .replace("__VMESS_LIVE__", &vmess_live)
+    .replace("__HY2_LIVE__", &hy2_live)
+    .replace("__TUIC_LIVE__", &tuic_live)
+    .replace("__JUICITY_LIVE__", &juicity_live);
+    fs::write(&config, config_text).unwrap();
     fs::set_permissions(&config, fs::Permissions::from_mode(0o600)).unwrap();
 
     let output = Command::new(binary())
