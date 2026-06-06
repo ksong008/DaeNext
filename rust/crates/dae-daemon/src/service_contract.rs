@@ -671,6 +671,7 @@ fn insert_outbound_fingerprint_underlay_service_contract_capabilities(report: &m
 fn insert_outbound_production_matrix_service_contract_capabilities(report: &mut Value) {
     let matrix = dae_outbound::outbound_production_matrix_contract();
     let source_registry = dae_outbound::source_shape_registry_contract();
+    let stream_wrapper = dae_outbound::stream_wrapper_capability_contract();
     let entries = matrix
         .entries
         .iter()
@@ -695,6 +696,11 @@ fn insert_outbound_production_matrix_service_contract_capabilities(report: &mut 
         .map(|row| (*row).to_value())
         .collect::<Vec<_>>();
     let source_registry_status_counts = source_shape_registry_status_counts(source_registry.rows);
+    let stream_wrapper_rows = stream_wrapper
+        .rows
+        .iter()
+        .map(|row| (*row).to_value())
+        .collect::<Vec<_>>();
     let contract_ready = matrix.matrix_ready;
     let expanded_source_matrix_complete = source_registry.expanded_source_matrix_complete;
     let expanded_source_matrix_release_gate_ready = expanded_source_matrix_complete;
@@ -839,6 +845,46 @@ fn insert_outbound_production_matrix_service_contract_capabilities(report: &mut 
                 "c10_ready": expanded_source_matrix_c10_ready,
                 "blocked_rows_visible": true,
                 "status_counts": source_shape_registry_status_counts(source_registry.rows),
+                "stage_report_schema": false,
+            }),
+        );
+        report.insert(
+            "stream_wrapper_capability_contract_ready".to_owned(),
+            json!(stream_wrapper.websocket_wss_loopback_ready),
+        );
+        report.insert(
+            "websocket_wss_loopback_ready".to_owned(),
+            json!(stream_wrapper.websocket_wss_loopback_ready),
+        );
+        report.insert(
+            "stream_wrapper_resident_source_admission_ready".to_owned(),
+            json!(stream_wrapper.resident_source_admission_ready),
+        );
+        report.insert(
+            "expanded_stream_wrapper_complete".to_owned(),
+            json!(stream_wrapper.expanded_stream_wrapper_complete),
+        );
+        report.insert(
+            "stream_wrapper_capability_report_schema".to_owned(),
+            json!(stream_wrapper.schema),
+        );
+        report.insert(
+            "stream_wrapper_capability_row_count".to_owned(),
+            json!(stream_wrapper.rows.len()),
+        );
+        report.insert(
+            "stream_wrapper_capability_rows".to_owned(),
+            json!(stream_wrapper_rows),
+        );
+        report.insert(
+            "stream_wrapper_capability_typed_report".to_owned(),
+            json!({
+                "schema": "stream-wrapper-capability-typed-report",
+                "status": if stream_wrapper.websocket_wss_loopback_ready { "partial" } else { "blocked" },
+                "websocket_wss_loopback_ready": stream_wrapper.websocket_wss_loopback_ready,
+                "resident_source_admission_ready": stream_wrapper.resident_source_admission_ready,
+                "expanded_stream_wrapper_complete": stream_wrapper.expanded_stream_wrapper_complete,
+                "blocked_rows_visible": true,
                 "stage_report_schema": false,
             }),
         );

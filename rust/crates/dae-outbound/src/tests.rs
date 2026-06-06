@@ -73,3 +73,4 @@ mod shared_transport_contract;
 mod shared_transport_dataplane;
 mod shared_transport_tls_stage81;
 mod source_shape_registry;
+mod stream_wrapper_capability;

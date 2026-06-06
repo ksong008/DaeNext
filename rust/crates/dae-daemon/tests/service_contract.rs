@@ -426,6 +426,40 @@ fn candidate_reports_resident_service_and_dataplane_capabilities() {
         "blocked"
     );
     assert!(
+        report["stream_wrapper_capability_contract_ready"]
+            .as_bool()
+            .unwrap()
+    );
+    assert!(report["websocket_wss_loopback_ready"].as_bool().unwrap());
+    assert!(
+        !report["stream_wrapper_resident_source_admission_ready"]
+            .as_bool()
+            .unwrap()
+    );
+    assert!(
+        !report["expanded_stream_wrapper_complete"]
+            .as_bool()
+            .unwrap()
+    );
+    assert_eq!(
+        report["stream_wrapper_capability_report_schema"]
+            .as_str()
+            .unwrap(),
+        "stream-wrapper-capability"
+    );
+    assert!(
+        report["stream_wrapper_capability_rows"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(
+                |row| row["wrapperId"].as_str().unwrap() == "websocket-wss-first-row"
+                    && row["status"].as_str().unwrap() == "loopback-admitted"
+                    && row["sourceAdmission"].as_str().unwrap()
+                        == "blocked-until-resident-materialization"
+            )
+    );
+    assert!(
         report["resident_live_adapter_matrix_contract_ready"]
             .as_bool()
             .unwrap()
