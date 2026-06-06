@@ -1,5 +1,6 @@
 pub mod allocator;
 pub mod bpf_loader;
+mod c10_go_free_evidence;
 pub mod config_validate;
 pub mod control_plane;
 pub mod control_plane_entrypoint;
