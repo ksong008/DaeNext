@@ -353,10 +353,10 @@ const RESIDENT_LIVE_ADAPTER_MATRIX_ENTRIES: [ResidentLiveAdapterMatrixEntry; 10]
     ),
     udp_remote_live_entry(
         "trojan",
-        "plain TLS/TCP endpoints use the resident TLS underlay and UDP-over-TCP packet stream; trojan-go transport combinations remain fail-closed",
+        "plain TLS/TCP endpoints and trojan-go WebSocket endpoints use the resident TLS underlay; other trojan-go transport combinations remain fail-closed",
         &[
-            "resident_dataplane::plan admits plain TLS/TCP endpoint shapes",
-            "resident_dataplane::tcp sends the request header then relays TLS plaintext",
+            "resident_dataplane::plan admits plain TLS/TCP and trojan-go WebSocket endpoint shapes",
+            "resident_dataplane::tcp sends the request header then relays TLS plaintext or WebSocket binary frames",
             "resident_dataplane::udp dispatches through the Trojan UDP-over-TCP packet stream",
             "live-evidence-ledger must record a remote UDP matrix echo before this row is live-ready",
             "live-evidence-ledger must record remote TCP/page-load evidence before this row is live-ready",

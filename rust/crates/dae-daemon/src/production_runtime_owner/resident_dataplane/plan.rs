@@ -1630,10 +1630,18 @@ fn build_trojan_proxy_plan(
 ) -> Result<ResidentProxyPlan, String> {
     let parsed =
         TrojanLink::parse(&link).map_err(|err| format!("parse Trojan node {node_tag}: {err}"))?;
-    if parsed.protocol != "trojan" || parsed.transport_kind() != TrojanTransportType::None {
+    let transport_kind = parsed.transport_kind();
+    let websocket = parsed.protocol == "trojan-go" && transport_kind == TrojanTransportType::Ws;
+    let plain = parsed.protocol == "trojan" && transport_kind == TrojanTransportType::None;
+    if !plain && !websocket {
         return Err(format!(
-            "resident dataplane generic TLS/TCP handler admits only plain trojan endpoints for node {node_tag}; transport={} protocol={}",
+            "resident dataplane generic TLS/TCP handler admits only plain trojan and trojan-go websocket endpoints for node {node_tag}; transport={} protocol={}",
             parsed.transport_type, parsed.protocol
+        ));
+    }
+    if websocket && !parsed.encryption.is_empty() {
+        return Err(format!(
+            "resident dataplane trojan websocket handler does not admit inner encryption for node {node_tag}; keep Go fallback for this config"
         ));
     }
     if parsed.allow_insecure || config.global.allow_insecure {
@@ -1643,6 +1651,17 @@ fn build_trojan_proxy_plan(
         );
     }
     let utls_fingerprint = resident_utls_fingerprint_plan(config, None)?;
+    let net = if websocket { "websocket" } else { "tcp" }.to_owned();
+    let stream_host = if websocket {
+        resident_stream_host(&parsed.host, &parsed.sni)
+    } else {
+        String::new()
+    };
+    let stream_path = if websocket {
+        resident_stream_path(&parsed.path)
+    } else {
+        String::new()
+    };
     let graph = resident_graph_identity(&link);
     Ok(ResidentProxyPlan {
         graph_id: graph.graph_id,
@@ -1657,9 +1676,9 @@ fn build_trojan_proxy_plan(
         server_name: parsed.sni,
         alpn: Vec::new(),
         flow: String::new(),
-        net: "tcp".to_owned(),
-        stream_host: String::new(),
-        stream_path: String::new(),
+        net,
+        stream_host,
+        stream_path,
         tls: "tls".to_owned(),
         allow_insecure: false,
         utls_fingerprint,
@@ -2388,6 +2407,34 @@ mod tests {
     use super::*;
     use dae_outbound::shadowsocks::Sip003;
 
+    fn assert_protocol_matrix_source_uses_generic_semantics(source: &str) {
+        let forbidden = [
+            ["matrix", "-", "socks", "-", "pass"].concat(),
+            ["matrix", "-", "http", "-", "pass"].concat(),
+            ["matrix", "-", "ss", "-", "pass"].concat(),
+            ["matrix", "-", "trojan", "-", "pass"].concat(),
+            ["matrix", "-", "anytls", "-", "pass"].concat(),
+            ["matrix", "-", "hy2", "-", "auth"].concat(),
+            ["matrix", "-", "tuic", "-", "pass"].concat(),
+            ["matrix", "-", "juicity", "-", "pass"].concat(),
+            ["socks5://", "matrix"].concat(),
+            ["http://", "matrix"].concat(),
+            ["trojan-go://", "matrix"].concat(),
+            ["anytls://", "matrix"].concat(),
+        ];
+        for needle in forbidden {
+            assert!(
+                !source.contains(&needle),
+                "protocol matrix source fixtures must use protocol-generic semantics, found {needle}"
+            );
+        }
+    }
+
+    #[test]
+    fn protocol_matrix_source_fixtures_use_generic_semantics() {
+        assert_protocol_matrix_source_uses_generic_semantics(include_str!("plan.rs"));
+    }
+
     fn parse_config(input: &str) -> Config {
         let sections = dae_config::parser::parse_config(input).unwrap();
         dae_config::schema::build_config(&sections).unwrap()
@@ -2398,7 +2445,7 @@ mod tests {
             name: ps.to_owned(),
             server: add.to_owned(),
             port,
-            password: "matrix-ss-pass".to_owned(),
+            password: "ss-password".to_owned(),
             cipher: "aes-128-gcm".to_owned(),
             plugin: Sip003::default(),
             udp: true,
@@ -2412,7 +2459,7 @@ mod tests {
             name: ps.to_owned(),
             server: add.to_owned(),
             port,
-            password: "matrix-ss-pass".to_owned(),
+            password: "ss-password".to_owned(),
             cipher: "aes-128-gcm".to_owned(),
             plugin: Sip003::parse("simple-obfs;obfs=http"),
             udp: false,
@@ -2462,7 +2509,7 @@ mod tests {
             name: ps.to_owned(),
             server: add.to_owned(),
             port,
-            password: "matrix-trojan-pass".to_owned(),
+            password: "trojan-password".to_owned(),
             sni: "office.example".to_owned(),
             transport_type: String::new(),
             encryption: String::new(),
@@ -2475,6 +2522,24 @@ mod tests {
         .export_url()
     }
 
+    fn trojan_websocket_fixture_url(ps: &str, add: &str, port: u16) -> String {
+        TrojanLink {
+            name: ps.to_owned(),
+            server: add.to_owned(),
+            port,
+            password: "trojan-password".to_owned(),
+            sni: "office.example".to_owned(),
+            transport_type: "ws".to_owned(),
+            encryption: String::new(),
+            host: "front.example".to_owned(),
+            path: "/trojan".to_owned(),
+            service_name: String::new(),
+            allow_insecure: false,
+            protocol: "trojan-go".to_owned(),
+        }
+        .export_url()
+    }
+
     fn hysteria2_fixture_url(ps: &str, add: &str, port: u16) -> String {
         hysteria2_fixture_url_with_pin(ps, &format!("{add}:{port}"), "AA-BB-CC")
     }
@@ -2482,7 +2547,7 @@ mod tests {
     fn hysteria2_fixture_url_with_pin(ps: &str, server: &str, pin_sha256: &str) -> String {
         Hysteria2Link {
             name: ps.to_owned(),
-            user: "matrix-hy2-auth".to_owned(),
+            user: "hy2-auth".to_owned(),
             password: String::new(),
             server: server.to_owned(),
             insecure: false,
@@ -2498,7 +2563,7 @@ mod tests {
         TuicLink {
             name: ps.to_owned(),
             user: "01234567-89ab-cdef-0123-456789abcdef".to_owned(),
-            password: "matrix-tuic-pass".to_owned(),
+            password: "tuic-password".to_owned(),
             server: add.to_owned(),
             port,
             sni: "office.example".to_owned(),
@@ -2516,7 +2581,7 @@ mod tests {
         JuicityLink {
             name: ps.to_owned(),
             user: "01234567-89ab-cdef-0123-456789abcdef".to_owned(),
-            password: "matrix-juicity-pass".to_owned(),
+            password: "juicity-password".to_owned(),
             server: add.to_owned(),
             port,
             sni: "office.example".to_owned(),
@@ -2559,15 +2624,15 @@ mod tests {
 
     #[test]
     fn resident_admitted_source_fixtures_use_common_canonical_formats() {
-        let socks = "socks5://matrix:matrix-socks-pass@203.0.113.10:28447#socks";
+        let socks = "socks5://user:socks-password@203.0.113.10:28447#socks";
         let parsed_socks = Url::parse(socks).unwrap();
         assert_eq!(parsed_socks.scheme(), "socks5");
-        assert_eq!(parsed_socks.username(), "matrix");
-        assert_eq!(parsed_socks.password(), Some("matrix-socks-pass"));
+        assert_eq!(parsed_socks.username(), "user");
+        assert_eq!(parsed_socks.password(), Some("socks-password"));
         assert_eq!(parsed_socks.host_str(), Some("203.0.113.10"));
         assert_eq!(parsed_socks.port(), Some(28447));
 
-        let http = "http://matrix:matrix-http-pass@203.0.113.10:28448#http";
+        let http = "http://user:http-password@203.0.113.10:28448#http";
         assert_eq!(HttpProxyLink::parse(http).unwrap().export_url(), http);
 
         let shadowsocks = shadowsocks_fixture_url("ss", "203.0.113.10", 28446);
@@ -2575,12 +2640,18 @@ mod tests {
             ShadowsocksLink::parse(&shadowsocks).unwrap().export_url(),
             shadowsocks
         );
-        assert!(!shadowsocks.contains("aes-128-gcm:matrix-ss-pass"));
+        assert!(!shadowsocks.contains("aes-128-gcm:ss-password"));
 
         let trojan = trojan_fixture_url("trojan", "203.0.113.10", 28444);
         assert_eq!(TrojanLink::parse(&trojan).unwrap().export_url(), trojan);
 
-        let anytls = "anytls://matrix-anytls-pass@203.0.113.10:28451?sni=office.example#anytls";
+        let trojan_websocket = trojan_websocket_fixture_url("trojan-ws", "203.0.113.10", 28456);
+        assert_eq!(
+            TrojanLink::parse(&trojan_websocket).unwrap().export_url(),
+            trojan_websocket
+        );
+
+        let anytls = "anytls://anytls-password@203.0.113.10:28451?sni=office.example#anytls";
         assert_eq!(AnyTLSLink::parse(anytls).unwrap().export_url(), anytls);
 
         let vmess = vmess_fixture_url("vmess", "203.0.113.10", 28452, "tcp", "", "", "");
@@ -2636,6 +2707,7 @@ mod tests {
             anytls,
             &shadowsocks,
             &trojan,
+            &trojan_websocket,
             &vmess,
             &vmess_websocket,
             &vless_websocket,
@@ -3283,7 +3355,7 @@ mod tests {
             &config,
             "proxy".to_owned(),
             "socks_live".to_owned(),
-            "socks5://matrix:matrix-socks-pass@203.0.113.10:28447#socks".to_owned(),
+            "socks5://user:socks-password@203.0.113.10:28447#socks".to_owned(),
         )
         .unwrap();
         assert_eq!(socks.protocol, "socks5");
@@ -3298,7 +3370,7 @@ mod tests {
             &config,
             "proxy".to_owned(),
             "http_live".to_owned(),
-            "http://matrix:matrix-http-pass@203.0.113.10:28448#http".to_owned(),
+            "http://user:http-password@203.0.113.10:28448#http".to_owned(),
         )
         .unwrap();
         assert_eq!(http.protocol, "http-proxy");
@@ -3339,11 +3411,49 @@ mod tests {
             ResidentProxyProtocolPlan::TrojanTcpTls { .. }
         ));
 
+        let trojan_websocket = build_resident_proxy_plan_for_node(
+            &config,
+            "proxy".to_owned(),
+            "trojan_ws_live".to_owned(),
+            trojan_websocket_fixture_url("trojan-ws", "203.0.113.10", 28456),
+        )
+        .unwrap();
+        assert_eq!(trojan_websocket.protocol, "trojan");
+        assert_eq!(trojan_websocket.server_host, "203.0.113.10");
+        assert_eq!(trojan_websocket.server_port, 28456);
+        assert_eq!(trojan_websocket.server_name, "office.example");
+        assert_eq!(trojan_websocket.net, "websocket");
+        assert_eq!(trojan_websocket.stream_host, "front.example");
+        assert_eq!(trojan_websocket.stream_path, "/trojan");
+        assert_eq!(trojan_websocket.tls, "tls");
+        assert!(matches!(
+            trojan_websocket.handler,
+            ResidentProxyProtocolPlan::TrojanTcpTls { .. }
+        ));
+        let trojan_websocket_graph = trojan_websocket.executable_graph_value();
+        assert_eq!(trojan_websocket_graph["protocolFraming"], "trojan");
+        assert_eq!(trojan_websocket_graph["streamWrapper"], "websocket");
+        assert_eq!(
+            trojan_websocket_graph["runtimeComponents"]["streamWrapperFactory"]["provider"],
+            "resident-websocket-binary-frame"
+        );
+        assert!(
+            trojan_websocket_graph["streamWrapperEndpoint"]["hostHash"]
+                .as_str()
+                .unwrap()
+                .starts_with("sha256:")
+        );
+        assert_eq!(
+            trojan_websocket_graph["streamWrapperEndpoint"]["path"],
+            "/trojan"
+        );
+        assert!(!trojan_websocket_graph.to_string().contains("front.example"));
+
         let anytls = build_resident_proxy_plan_for_node(
             &config,
             "proxy".to_owned(),
             "anytls_live".to_owned(),
-            "anytls://matrix-anytls-pass@203.0.113.10:28451?sni=office.example#anytls".to_owned(),
+            "anytls://anytls-password@203.0.113.10:28451?sni=office.example#anytls".to_owned(),
         )
         .unwrap();
         assert_eq!(anytls.protocol, "anytls");
@@ -3517,6 +3627,7 @@ mod tests {
             &http,
             &shadowsocks,
             &trojan,
+            &trojan_websocket,
             &anytls,
             &vmess,
             &vmess_websocket,
@@ -3583,10 +3694,22 @@ mod tests {
                     .unwrap()
                     .starts_with("sha256:")
             );
-            assert!(
-                !graph.to_string().contains("matrix-"),
-                "graph leaked raw credential-bearing link: {graph}"
-            );
+            let graph_text = graph.to_string();
+            for secret in [
+                "socks-password",
+                "http-password",
+                "ss-password",
+                "trojan-password",
+                "anytls-password",
+                "hy2-auth",
+                "tuic-password",
+                "juicity-password",
+            ] {
+                assert!(
+                    !graph_text.contains(secret),
+                    "graph leaked raw credential-bearing link: {graph}"
+                );
+            }
         }
     }
 
@@ -3636,7 +3759,7 @@ mod tests {
             &config,
             "proxy".to_owned(),
             "https_live".to_owned(),
-            "https://matrix:matrix-http-pass@203.0.113.10:28448#https".to_owned(),
+            "https://user:http-password@203.0.113.10:28448#https".to_owned(),
         )
         .unwrap_err();
         assert!(https.contains("plain http proxy endpoints only"));
@@ -3650,20 +3773,31 @@ mod tests {
         .unwrap_err();
         assert!(plugin.contains("does not admit SIP003 plugin"));
 
-        let trojan_go = build_resident_proxy_plan_for_node(
+        let trojan_go_grpc = build_resident_proxy_plan_for_node(
             &config,
             "proxy".to_owned(),
-            "trojan_go".to_owned(),
-            "trojan-go://matrix-trojan-pass@203.0.113.10:28444?type=ws&sni=office.example#trojan-go".to_owned(),
+            "trojan_go_grpc".to_owned(),
+            "trojan-go://trojan-password@203.0.113.10:28444?type=grpc&sni=office.example&serviceName=grpc#trojan-go".to_owned(),
         )
         .unwrap_err();
-        assert!(trojan_go.contains("admits only plain trojan endpoints"));
+        assert!(
+            trojan_go_grpc.contains("admits only plain trojan and trojan-go websocket endpoints")
+        );
+
+        let trojan_go_inner_encryption = build_resident_proxy_plan_for_node(
+            &config,
+            "proxy".to_owned(),
+            "trojan_go_inner_encryption".to_owned(),
+            "trojan-go://trojan-password@203.0.113.10:28444?type=ws&sni=office.example&encryption=ss%3Baes-128-gcm%3Apass#trojan-go".to_owned(),
+        )
+        .unwrap_err();
+        assert!(trojan_go_inner_encryption.contains("does not admit inner encryption"));
 
         let anytls_insecure = build_resident_proxy_plan_for_node(
             &config,
             "proxy".to_owned(),
             "anytls_insecure".to_owned(),
-            "anytls://matrix-anytls-pass@203.0.113.10:28451?insecure=1&sni=office.example#anytls"
+            "anytls://anytls-password@203.0.113.10:28451?insecure=1&sni=office.example#anytls"
                 .to_owned(),
         )
         .unwrap_err();

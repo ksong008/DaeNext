@@ -1394,17 +1394,31 @@ async fn handle_frame_tls_tcp_connection_async(
     match &selection.proxy.handler {
         ResidentProxyProtocolPlan::TrojanTcpTls { password } => {
             let password = password.clone();
-            handle_trojan_tls_tcp_connection_async(
-                inbound,
-                peer,
-                original_dst,
-                selection,
-                stop,
-                sniff,
-                metrics,
-                &password,
-            )
-            .await
+            if selection.proxy.net == "websocket" {
+                handle_trojan_websocket_tls_tcp_connection_async(
+                    inbound,
+                    peer,
+                    original_dst,
+                    selection,
+                    stop,
+                    sniff,
+                    metrics,
+                    &password,
+                )
+                .await
+            } else {
+                handle_trojan_tls_tcp_connection_async(
+                    inbound,
+                    peer,
+                    original_dst,
+                    selection,
+                    stop,
+                    sniff,
+                    metrics,
+                    &password,
+                )
+                .await
+            }
         }
         ResidentProxyProtocolPlan::AnyTlsTcpTls { auth } => {
             let auth = auth.clone();
@@ -1421,6 +1435,88 @@ async fn handle_frame_tls_tcp_connection_async(
             .await
         }
         _ => Err("frame TLS dispatcher received unsupported handler".to_owned()),
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn handle_trojan_websocket_tls_tcp_connection_async(
+    inbound: &mut TokioTcpStream,
+    peer: SocketAddr,
+    original_dst: SocketAddrV4,
+    selection: TcpProxySelection,
+    stop: Arc<AtomicBool>,
+    sniff: &TcpSniffReport,
+    metrics: &ResidentDataplaneMetrics,
+    password: &str,
+) -> Result<Value, String> {
+    let mut client = open_async_resident_tls_client(&selection.proxy).await?;
+    let tls_underlay = async_resident_tls_underlay_name(&client);
+    let options =
+        HttpUpgradeOptions::new(&selection.proxy.stream_host, &selection.proxy.stream_path);
+    websocket_handshake_over_resident_tls_async(&mut client, &options).await?;
+    let request = trojan_packet::tcp_request_header(
+        password,
+        "tcp",
+        &selection.route.dial_target,
+        &sniff.payload,
+    )
+    .map_err(|err| format!("build Trojan WebSocket TCP request: {err}"))?;
+    write_websocket_binary_frame_over_resident_tls_async(
+        &mut client,
+        &request,
+        "write Trojan websocket request",
+    )
+    .await?;
+    let mut initial_stats = DirectTcpRelayStats::default();
+    if !sniff.payload.is_empty() {
+        initial_stats.client_to_direct += sniff.payload.len();
+        metrics.add_upload(sniff.payload.len());
+    }
+
+    match relay_tcp_over_trojan_websocket_tls_async(inbound, &mut client, stop, metrics).await {
+        Ok(mut stats) => {
+            stats.client_to_direct += initial_stats.client_to_direct;
+            let mut event = generic_proxy_tcp_finished_event(
+                peer,
+                original_dst,
+                &selection,
+                sniff,
+                "trojan",
+                &stats,
+                "async-proxy-websocket-tls",
+            );
+            event["tls_underlay"] = json!(tls_underlay);
+            event["stream_wrapper"] = json!("websocket");
+            append_proxy_tcp_execution_fields(
+                &mut event,
+                "async-proxy-websocket-tls",
+                "trojan",
+                Some(tls_underlay),
+                None,
+            );
+            Ok(event)
+        }
+        Err(err) => {
+            let mut event = generic_proxy_tcp_failed_event(
+                peer,
+                original_dst,
+                &selection,
+                sniff,
+                "trojan",
+                &err,
+                "async-proxy-websocket-tls",
+            );
+            event["tls_underlay"] = json!(tls_underlay);
+            event["stream_wrapper"] = json!("websocket");
+            append_proxy_tcp_execution_fields(
+                &mut event,
+                "async-proxy-websocket-tls",
+                "trojan",
+                Some(tls_underlay),
+                None,
+            );
+            Ok(event)
+        }
     }
 }
 
@@ -4360,6 +4456,97 @@ async fn relay_tcp_over_vless_websocket_tls_async(
         }
     }
     stats.client_to_proxy += initial_payload_len;
+    Ok(stats)
+}
+
+async fn relay_tcp_over_trojan_websocket_tls_async(
+    inbound: &mut TokioTcpStream,
+    client: &mut AsyncResidentTlsClient,
+    stop: Arc<AtomicBool>,
+    metrics: &ResidentDataplaneMetrics,
+) -> Result<DirectTcpRelayStats, String> {
+    let mut stats = DirectTcpRelayStats::default();
+    let mut ws_decoder = WebSocketBinaryFrameDecoder::default();
+    let mut inbound_closed = false;
+    let mut proxy_closed = false;
+    let mut last_activity = Instant::now();
+    let mut inbound_buf = [0_u8; 16 * 1024];
+    let mut proxy_buf = [0_u8; 16 * 1024];
+
+    while !stop.load(Ordering::Relaxed) {
+        tokio::select! {
+            inbound_read = inbound.read(&mut inbound_buf), if !inbound_closed && !proxy_closed => {
+                match inbound_read {
+                    Ok(0) => {
+                        inbound_closed = true;
+                        client.shutdown().await;
+                        last_activity = Instant::now();
+                    }
+                    Ok(read) => {
+                        write_websocket_binary_frame_over_resident_tls_async(
+                            client,
+                            &inbound_buf[..read],
+                            "write client payload websocket frame",
+                        )
+                        .await?;
+                        stats.client_to_direct += read;
+                        metrics.add_upload(read);
+                        last_activity = Instant::now();
+                    }
+                    Err(err) if is_graceful_stream_close_error(&err) => {
+                        inbound_closed = true;
+                        client.shutdown().await;
+                        last_activity = Instant::now();
+                    }
+                    Err(err) => return Err(format!("read inbound TCP for Trojan websocket relay: {err}")),
+                }
+            }
+            proxy_read = client.read_plain(&mut proxy_buf), if !proxy_closed => {
+                match proxy_read {
+                    Ok(0) => {
+                        proxy_closed = true;
+                        let _ = inbound.shutdown().await;
+                        last_activity = Instant::now();
+                    }
+                    Ok(read) => {
+                        let frames = ws_decoder
+                            .push(&proxy_buf[..read])
+                            .map_err(|err| format!("decode Trojan websocket frame: {err}"))?;
+                        for payload in frames {
+                            if !payload.is_empty() {
+                                if let Err(err) = inbound.write_all(&payload).await {
+                                    if is_graceful_stream_close_error(&err) {
+                                        break;
+                                    }
+                                    return Err(format!("write Trojan websocket payload to client: {err}"));
+                                }
+                                stats.direct_to_client += payload.len();
+                                metrics.add_download(payload.len());
+                            }
+                        }
+                        if ws_decoder.is_closed() {
+                            proxy_closed = true;
+                            let _ = inbound.shutdown().await;
+                        }
+                        last_activity = Instant::now();
+                    }
+                    Err(err) => return Err(format!("read Trojan websocket TLS plaintext: {err}")),
+                }
+            }
+            _ = time::sleep(Duration::from_millis(100)) => {
+                if proxy_closed || inbound_closed {
+                    break;
+                }
+                if last_activity.elapsed() > RESIDENT_TCP_IDLE_TIMEOUT {
+                    return Err("resident Trojan websocket relay idle timeout".to_owned());
+                }
+            }
+        }
+
+        if proxy_closed || (inbound_closed && proxy_closed) {
+            break;
+        }
+    }
     Ok(stats)
 }
 
