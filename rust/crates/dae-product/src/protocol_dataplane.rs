@@ -26,7 +26,7 @@ pub struct ProtocolDataplaneAdmissionRow {
 
 pub fn protocol_dataplane_admission_contract() -> ProtocolDataplaneAdmissionContract {
     ProtocolDataplaneAdmissionContract {
-        name: "stage17-protocol-dataplane-admission",
+        name: "protocol-dataplane-admission",
         stage: "stage17",
         queue_complete: true,
         default_switch_allowed: false,

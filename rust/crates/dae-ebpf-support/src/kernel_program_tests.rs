@@ -3,7 +3,7 @@ use crate::*;
 #[test]
 fn kernel_program_feasibility_keeps_a4_as_evaluation_not_default_switch() {
     let report = kernel_program_feasibility_report();
-    assert_eq!(report.schema, "kernel-program-feasibility-v1");
+    assert_eq!(report.schema, "kernel-program-feasibility");
     assert_eq!(report.tproxy_classifier_total, 10);
     assert_eq!(report.rust_tproxy_classifier_covered, 10);
     assert_eq!(report.tproxy_cgroup_total, 6);
@@ -80,7 +80,7 @@ fn kernel_program_parity_admission_blocks_fallback_deletion_after_feasibility_on
     let feasibility = kernel_program_feasibility_report();
     let evidence = KernelProgramParityEvidence::from_feasibility(&feasibility);
     let report = kernel_program_parity_admission_report(evidence);
-    assert_eq!(report.schema, "kernel-program-parity-admission-v1");
+    assert_eq!(report.schema, "kernel-program-parity-admission");
     assert!(!report.admitted);
     assert!(!report.default_switch_allowed);
     assert!(!report.c_tproxy_object_deletion_allowed);
@@ -188,7 +188,7 @@ fn tproxy_dataplane_admission_excludes_trace_diagnostic_gate() {
     let evidence = KernelProgramParityEvidence::from_feasibility(&feasibility);
     let report = tproxy_dataplane_admission_report(evidence);
 
-    assert_eq!(report.schema, "tproxy-dataplane-admission-v1");
+    assert_eq!(report.schema, "tproxy-dataplane-admission");
     assert!(report.admitted);
     assert!(report.default_candidate_allowed);
     assert!(report.go_bpf_loader_retirement_candidate);
@@ -220,7 +220,7 @@ fn tproxy_dataplane_admission_excludes_trace_diagnostic_gate() {
 fn trace_diagnostic_gate_is_retired_outside_tproxy_default_candidate() {
     let report = trace_diagnostic_gate_report(&trace_core_sideload_gate_report());
 
-    assert_eq!(report.schema, "trace-diagnostic-gate-v1");
+    assert_eq!(report.schema, "trace-diagnostic-gate");
     assert_eq!(report.status, "retired_from_product_default");
     assert!(!report.participates_in_tproxy_default_candidate);
     assert!(!report.c_trace_object_required);
@@ -247,7 +247,7 @@ fn kernel_program_fallback_retirement_gate_blocks_current_incomplete_state() {
         KernelProgramFallbackRetirementEvidence::read_only(),
     );
 
-    assert_eq!(gate.schema, "kernel-program-fallback-retirement-gate-v1");
+    assert_eq!(gate.schema, "kernel-program-fallback-retirement-gate");
     assert!(!gate.admitted);
     assert!(!gate.default_switch_allowed);
     assert!(!gate.c_tproxy_object_retirement_allowed);

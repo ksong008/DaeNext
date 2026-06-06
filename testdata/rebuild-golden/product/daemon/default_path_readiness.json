@@ -14,7 +14,7 @@
   "default_switch_decision": "blocked_until_true_rust_dataplane_revalidation_passes",
   "go_default_path_preserved": true,
   "go_fallback_required": true,
-  "name": "stage16-daemon-default-readiness",
+  "name": "daemon-default-readiness",
   "optin_surfaces": [
     "DAE_RUST_CONFIG_OPTIN",
     "DAE_RUST_API_ONLY_OPTIN",

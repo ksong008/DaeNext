@@ -29,9 +29,9 @@ pub struct DaemonLiveEvidenceQueueRow {
 
 pub fn daemon_live_evidence_queue_contract() -> DaemonLiveEvidenceQueueContract {
     DaemonLiveEvidenceQueueContract {
-        name: "stage22-daemon-live-evidence-queue",
+        name: "daemon-live-evidence-queue",
         stage: "stage22",
-        prior_gate: "stage22-daemon-gray-switch-gate",
+        prior_gate: "daemon-gray-switch-gate",
         evidence_class: "recorded-local-live-runtime-evidence",
         live_evidence_complete: true,
         default_switch_allowed: false,

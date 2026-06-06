@@ -23,9 +23,9 @@ pub struct GoFreeProductChainContract {
 
 pub fn go_free_product_chain_contract() -> GoFreeProductChainContract {
     GoFreeProductChainContract {
-        name: "go-free-product-chain-v1",
+        name: "go-free-product-chain",
         c_phase: "C10",
-        prior_gate: "release-default-switch-v1",
+        prior_gate: "release-default-switch",
         contract_ready: true,
         default_product_package_go_free: false,
         go_product_shell_retired: false,

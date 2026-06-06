@@ -114,7 +114,7 @@
   ],
   "gate_complete": true,
   "go_fallback_required": true,
-  "name": "stage19-complex-dataplane-gate",
+  "name": "complex-dataplane-gate",
   "reopen_requirements": [
     "each complex protocol must have a live loopback or real server/client smoke",
     "reload must close or safely reuse protocol transports and global caches",

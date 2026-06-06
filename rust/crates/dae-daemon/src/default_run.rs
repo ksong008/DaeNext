@@ -891,8 +891,8 @@ fn default_daemon_live_matrix_json(
         .collect::<Vec<_>>();
 
     json!({
-        "schema": "default-daemon-live-matrix-v1",
-        "formal_surface": "stage7-default-daemon-live-matrix",
+        "schema": "default-daemon-live-matrix",
+        "formal_surface": "default-daemon-live-matrix",
         "matrix_complete": matrix_complete,
         "release_gate_input": true,
         "default_switch_allowed_by_this_matrix": false,
@@ -1053,8 +1053,8 @@ fn release_product_chain_live_gate_json(
     }
 
     json!({
-        "schema": "release-product-chain-live-gate-v1",
-        "formal_surface": "stage7-release-product-chain-live-gate",
+        "schema": "release-product-chain-live-gate",
+        "formal_surface": "release-product-chain-live-gate",
         "fixed_queue_range": "stage1-stage6",
         "fixed_queue_completed": fixed_queue_completed,
         "stage6_deep_area_recorded": stage6_deep_area_recorded,

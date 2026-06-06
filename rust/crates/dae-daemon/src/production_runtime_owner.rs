@@ -845,7 +845,7 @@ mod tests {
         assert!(!report["reload_runtime_parity_admitted"].as_bool().unwrap());
         assert_eq!(
             report["typed_report"]["schema"].as_str().unwrap(),
-            "production-runtime-owner-typed-report-v1"
+            "production-runtime-owner-typed-report"
         );
         assert_eq!(
             report["typed_report"]["status"].as_str().unwrap(),
@@ -860,7 +860,7 @@ mod tests {
             report["typed_report"]["daemon_runtime_native_owner_schema"]
                 .as_str()
                 .unwrap(),
-            "daemon-runtime-native-owner-v1"
+            "daemon-runtime-native-owner"
         );
         assert!(
             report["typed_report"]["daemon_runtime_native_owner_admitted"]
@@ -876,7 +876,7 @@ mod tests {
             report["typed_report"]["datapath_outbound_ebpf_deep_area_schema"]
                 .as_str()
                 .unwrap(),
-            "datapath-outbound-ebpf-deep-area-v1"
+            "datapath-outbound-ebpf-deep-area"
         );
         assert!(
             report["typed_report"]["datapath_outbound_ebpf_deep_area_completed"]
@@ -892,7 +892,7 @@ mod tests {
             report["daemon_runtime_native_owner"]["schema"]
                 .as_str()
                 .unwrap(),
-            "daemon-runtime-native-owner-v1"
+            "daemon-runtime-native-owner"
         );
         assert!(
             !report["daemon_runtime_native_owner"]["default_switch_allowed"]
@@ -939,7 +939,7 @@ mod tests {
             report["datapath_outbound_ebpf_deep_area"]["schema"]
                 .as_str()
                 .unwrap(),
-            "datapath-outbound-ebpf-deep-area-v1"
+            "datapath-outbound-ebpf-deep-area"
         );
         assert!(
             report["datapath_outbound_ebpf_deep_area"]["fixed_queue_completed"]
@@ -980,7 +980,7 @@ mod tests {
             report["ebpf_backend_capabilities"]["schema"]
                 .as_str()
                 .unwrap(),
-            "ebpf-backend-capability-report-v1"
+            "ebpf-backend-capability-report"
         );
         assert!(
             report["ebpf_backend_capabilities"]["report_only"]
@@ -1054,7 +1054,7 @@ mod tests {
             report["ebpf_backend_capabilities"]["native_backend_admission"]["schema"]
                 .as_str()
                 .unwrap(),
-            "native-ebpf-backend-admission-v1"
+            "native-ebpf-backend-admission"
         );
         assert!(
             report["ebpf_backend_capabilities"]["native_backend_admission"]["report_only"]
@@ -1081,7 +1081,7 @@ mod tests {
             report["ebpf_backend_capabilities"]["native_backend_opt_in"]["schema"]
                 .as_str()
                 .unwrap(),
-            "native-ebpf-backend-opt-in-v1"
+            "native-ebpf-backend-opt-in"
         );
         assert!(
             !report["ebpf_backend_capabilities"]["native_backend_opt_in"]["opt_in_enabled"]
@@ -1136,7 +1136,7 @@ mod tests {
             report["ebpf_backend_capabilities"]["kernel_program_feasibility"]["schema"]
                 .as_str()
                 .unwrap(),
-            "kernel-program-feasibility-v1"
+            "kernel-program-feasibility"
         );
         assert_eq!(
             report["ebpf_backend_capabilities"]["kernel_program_feasibility"]
@@ -1181,7 +1181,7 @@ mod tests {
             report["ebpf_backend_capabilities"]["kernel_program_parity_admission"]["schema"]
                 .as_str()
                 .unwrap(),
-            "kernel-program-parity-admission-v1"
+            "kernel-program-parity-admission"
         );
         assert!(
             !report["ebpf_backend_capabilities"]["kernel_program_parity_admission"]["admitted"]
@@ -1212,7 +1212,7 @@ mod tests {
             report["ebpf_backend_capabilities"]["tproxy_dataplane_admission"]["schema"]
                 .as_str()
                 .unwrap(),
-            "tproxy-dataplane-admission-v1"
+            "tproxy-dataplane-admission"
         );
         assert!(
             report["ebpf_backend_capabilities"]["tproxy_dataplane_admission"]["admitted"]
@@ -1285,7 +1285,7 @@ mod tests {
             report["ebpf_backend_capabilities"]["trace_diagnostic_gate"]["schema"]
                 .as_str()
                 .unwrap(),
-            "trace-diagnostic-gate-v1"
+            "trace-diagnostic-gate"
         );
         assert_eq!(
             report["ebpf_backend_capabilities"]["trace_diagnostic_gate"]["status"]
@@ -1332,7 +1332,7 @@ mod tests {
             report["ebpf_backend_capabilities"]["trace_core_sideload_gate"]["schema"]
                 .as_str()
                 .unwrap(),
-            "trace-core-sideload-gate-v1"
+            "trace-core-sideload-gate"
         );
         assert!(
             !report["ebpf_backend_capabilities"]["trace_core_sideload_gate"]["enabled"]
@@ -1361,7 +1361,7 @@ mod tests {
             report["ebpf_backend_capabilities"]["kernel_program_fallback_retirement_gate"]["schema"]
                 .as_str()
                 .unwrap(),
-            "kernel-program-fallback-retirement-gate-v1"
+            "kernel-program-fallback-retirement-gate"
         );
         assert!(
             !report["ebpf_backend_capabilities"]["kernel_program_fallback_retirement_gate"]

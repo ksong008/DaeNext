@@ -78,7 +78,7 @@ fn candidate_reports_resident_service_and_dataplane_capabilities() {
     );
     assert_eq!(
         report["resident_runtime_report_schema"].as_str().unwrap(),
-        "resident-runtime-platform-report-v1"
+        "resident-runtime-platform-report"
     );
     assert!(
         report["resident_runtime_resource_limits"]["max_rss_bytes"]
@@ -155,7 +155,7 @@ fn candidate_reports_resident_service_and_dataplane_capabilities() {
         report["control_plane_typed_report"]["schema"]
             .as_str()
             .unwrap(),
-        "control-api-typed-report-v1"
+        "control-api-typed-report"
     );
     assert!(
         report["control_plane_runtime_state_report"]["ready_for_default_control_plane"]
@@ -216,13 +216,13 @@ fn candidate_reports_resident_service_and_dataplane_capabilities() {
     );
     assert_eq!(
         report["datapath_core_report_schema"].as_str().unwrap(),
-        "datapath-core-v1"
+        "datapath-core"
     );
     assert_eq!(
         report["datapath_core_typed_report"]["schema"]
             .as_str()
             .unwrap(),
-        "datapath-core-typed-report-v1"
+        "datapath-core-typed-report"
     );
     assert!(
         report["no_go_userspace_datapath_fallback_contract_ready"]
@@ -285,7 +285,7 @@ fn candidate_reports_resident_service_and_dataplane_capabilities() {
         report["outbound_fingerprint_underlay_report_schema"]
             .as_str()
             .unwrap(),
-        "outbound-fingerprint-underlay-v1"
+        "outbound-fingerprint-underlay"
     );
     assert!(
         report["go_fingerprint_underlay_fallback_retired_candidate"]
@@ -321,7 +321,7 @@ fn candidate_reports_resident_service_and_dataplane_capabilities() {
         report["outbound_production_matrix_report_schema"]
             .as_str()
             .unwrap(),
-        "outbound-production-matrix-v1"
+        "outbound-production-matrix"
     );
     assert!(
         report["outbound_production_matrix_entries"]
@@ -341,12 +341,12 @@ fn candidate_reports_resident_service_and_dataplane_capabilities() {
             .unwrap()
     );
     assert!(
-        report["resident_live_adapter_matrix_ready"]
+        !report["resident_live_adapter_matrix_ready"]
             .as_bool()
             .unwrap()
     );
     assert!(
-        report["resident_live_adapter_matrix_runtime_state_ready"]
+        !report["resident_live_adapter_matrix_runtime_state_ready"]
             .as_bool()
             .unwrap()
     );
@@ -361,7 +361,7 @@ fn candidate_reports_resident_service_and_dataplane_capabilities() {
             .unwrap()
     );
     assert!(
-        report["resident_live_adapter_remote_live_matrix_ready"]
+        !report["resident_live_adapter_remote_live_matrix_ready"]
             .as_bool()
             .unwrap()
     );
@@ -375,30 +375,31 @@ fn candidate_reports_resident_service_and_dataplane_capabilities() {
         report["resident_live_adapter_live_ready_handler_count"]
             .as_u64()
             .unwrap(),
-        10
+        0
     );
     assert_eq!(
         report["resident_live_adapter_matrix_report_schema"]
             .as_str()
             .unwrap(),
-        "resident-live-adapter-matrix-v1"
+        "resident-live-adapter-matrix"
     );
     assert!(
         report["resident_live_adapter_matrix_entries"]
             .as_array()
             .unwrap()
             .iter()
-            .any(
-                |entry| entry["handler"].as_str().unwrap() == "vless-vision-tcp-tls"
+            .any(|entry| {
+                entry["handler"].as_str().unwrap() == "vless-vision-tcp-tls"
                     && entry["wired_ready"].as_bool().unwrap()
-                    && entry["live_ready"].as_bool().unwrap()
-            )
+                    && !entry["live_ready"].as_bool().unwrap()
+                    && !entry["missing"].as_array().unwrap().is_empty()
+            })
     );
     assert_eq!(
         report["resident_live_adapter_matrix_typed_report"]["status"]
             .as_str()
             .unwrap(),
-        "pass"
+        "blocked"
     );
     assert!(
         report["release_default_switch_contract_ready"]
@@ -450,7 +451,7 @@ fn candidate_reports_resident_service_and_dataplane_capabilities() {
         report["release_default_switch_report_schema"]
             .as_str()
             .unwrap(),
-        "release-default-switch-v1"
+        "release-default-switch"
     );
     assert!(
         report["go_free_product_chain_contract_ready"]
@@ -479,7 +480,7 @@ fn candidate_reports_resident_service_and_dataplane_capabilities() {
         report["go_free_product_chain_report_schema"]
             .as_str()
             .unwrap(),
-        "go-free-product-chain-v1"
+        "go-free-product-chain"
     );
     assert_eq!(
         report["resident_dataplane_env"].as_str().unwrap(),

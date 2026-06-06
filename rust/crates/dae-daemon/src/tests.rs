@@ -9,6 +9,138 @@ use crate::{
 };
 
 #[test]
+fn contract_names_do_not_use_retired_version_suffix_or_stage_ids() {
+    let repo_root = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../../..")
+        .canonicalize()
+        .unwrap();
+    let mut files = Vec::new();
+    for relative in ["rust/crates", "scripts", "testdata/rebuild-golden"] {
+        collect_contract_name_scan_files(&repo_root.join(relative), &mut files);
+    }
+
+    let retired_suffix = String::from_utf8(vec![b'-', b'v', b'1']).unwrap();
+    let retired_stage_ids = [
+        retired_stage_id("23", "product-chain-admission"),
+        retired_stage_id("22", "daemon-live-evidence-queue"),
+        retired_stage_id("19", "complex-dataplane-gate"),
+        retired_stage_id("17", "protocol-dataplane-admission"),
+        retired_stage_id("16", "daemon-default-readiness"),
+        retired_stage_id("22", "daemon-gray-switch-gate"),
+        retired_stage_id("23", "true-default-daemon-admission"),
+        retired_stage_id("7", "release-product-chain-live-gate"),
+        retired_stage_id("6", "datapath-outbound-ebpf-deep-area"),
+        retired_stage_id("7", "default-daemon-live-matrix"),
+    ];
+
+    let mut offenders = Vec::new();
+    for file in files {
+        let text = std::fs::read_to_string(&file).unwrap();
+        let relative = file.strip_prefix(&repo_root).unwrap_or(&file);
+        if text.contains(&retired_suffix) {
+            offenders.push(format!(
+                "{} contains retired hyphen-version suffix",
+                relative.display()
+            ));
+        }
+        for retired_id in &retired_stage_ids {
+            if text.contains(retired_id) {
+                offenders.push(format!(
+                    "{} contains retired active stage contract id {retired_id}",
+                    relative.display()
+                ));
+            }
+        }
+    }
+
+    assert!(offenders.is_empty(), "{}", offenders.join("\n"));
+}
+
+fn collect_contract_name_scan_files(root: &std::path::Path, files: &mut Vec<std::path::PathBuf>) {
+    if !root.exists() {
+        return;
+    }
+    let entries = std::fs::read_dir(root).unwrap();
+    for entry in entries {
+        let path = entry.unwrap().path();
+        if path.is_dir() {
+            collect_contract_name_scan_files(&path, files);
+        } else if matches!(
+            path.extension().and_then(|extension| extension.to_str()),
+            Some("rs" | "sh" | "json")
+        ) {
+            files.push(path);
+        }
+    }
+}
+
+fn retired_stage_id(stage: &str, name: &str) -> String {
+    format!("{}{}-{}", "stage", stage, name)
+}
+
+#[test]
+fn resident_dataplane_events_do_not_emit_legacy_execution_fields() {
+    let repo_root = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../../..")
+        .canonicalize()
+        .unwrap();
+    let mut files = Vec::new();
+    collect_contract_name_scan_files(
+        &repo_root.join("rust/crates/dae-daemon/src/production_runtime_owner/resident_dataplane"),
+        &mut files,
+    );
+
+    let forbidden = [
+        format!("\"{}\":", "execution"),
+        format!("\"{}\":", "proxy_execution"),
+        format!("[\"{}\"] =", "execution"),
+        format!("[\"{}\"] =", "proxy_execution"),
+    ];
+    let mut offenders = Vec::new();
+    for file in files {
+        let text = std::fs::read_to_string(&file).unwrap();
+        let relative = file.strip_prefix(&repo_root).unwrap_or(&file);
+        for pattern in &forbidden {
+            if text.contains(pattern) {
+                offenders.push(format!(
+                    "{} emits retired runtime execution field pattern {pattern}",
+                    relative.display()
+                ));
+            }
+        }
+    }
+
+    assert!(offenders.is_empty(), "{}", offenders.join("\n"));
+}
+
+#[test]
+fn resident_dataplane_latency_snapshots_do_not_emit_raw_link_fields() {
+    let repo_root = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../../..")
+        .canonicalize()
+        .unwrap();
+    let mut files = Vec::new();
+    collect_contract_name_scan_files(
+        &repo_root.join("rust/crates/dae-daemon/src/production_runtime_owner/resident_dataplane"),
+        &mut files,
+    );
+
+    let mut offenders = Vec::new();
+    for file in files {
+        let text = std::fs::read_to_string(&file).unwrap();
+        let relative = file.strip_prefix(&repo_root).unwrap_or(&file);
+        if text.contains("\"link\":") {
+            offenders.push(format!(
+                "{} emits raw runtime link field",
+                relative.display()
+            ));
+        }
+    }
+
+    assert!(offenders.is_empty(), "{}", offenders.join("\n"));
+}
+
+#[test]
 fn daemon_identity_is_opt_in_and_not_default() {
     let report = daemon_identity("test-version");
     assert_eq!(report["name"].as_str().unwrap(), "dae-daemon-optin");
@@ -84,7 +216,7 @@ fn daemon_runner_bpf_loader_contract_outputs_json() {
     let json: Value = serde_json::from_str(&output.stdout).unwrap();
     assert_eq!(
         json["name"].as_str().unwrap(),
-        "rust-aya-bpf-loader-go-adoption-contract-v1"
+        "rust-aya-bpf-loader-go-adoption-contract"
     );
     assert!(
         json["go_bpf_loader_removed_when_opted_in"]
@@ -480,7 +612,7 @@ fn run_default_optin_report_executes_bounded_lifecycle_and_smokes() {
         report["default_daemon_live_matrix"]["schema"]
             .as_str()
             .unwrap(),
-        "default-daemon-live-matrix-v1"
+        "default-daemon-live-matrix"
     );
     assert!(
         !report["default_daemon_live_matrix"]["matrix_complete"]
@@ -503,7 +635,7 @@ fn run_default_optin_report_executes_bounded_lifecycle_and_smokes() {
         report["release_product_chain_live_gate"]["schema"]
             .as_str()
             .unwrap(),
-        "release-product-chain-live-gate-v1"
+        "release-product-chain-live-gate"
     );
     assert!(
         report["release_product_chain_live_gate"]["fixed_queue_completed"]
@@ -1216,13 +1348,15 @@ fn daemon_runner_product_chain_accepts_fallback_retirement_without_release_switc
             .as_bool()
             .unwrap()
     );
-    assert!(
+    let dae_branch_mismatch =
         json["product_chain_recertification"]["branch_mismatched_sibling_repos"]
             .as_array()
             .unwrap()
             .iter()
-            .any(|entry| entry.as_str().unwrap().contains("dae:master!=daex"))
-    );
+            .map(|entry| entry.as_str().unwrap())
+            .find(|entry| entry.starts_with("dae:"))
+            .unwrap();
+    assert!(dae_branch_mismatch.ends_with("!=dae-daex-align"));
     assert!(
         !json["product_chain_default_switch_admission_clean"]
             .as_bool()

@@ -63,6 +63,7 @@ use super::direct::{
     open_direct_tcp_connection_async, relay_tcp_direct, relay_tcp_direct_async,
 };
 use super::events::append_event;
+use super::execution::{append_runtime_execution_descriptor, tcp_execution_descriptor};
 use super::io::write_all_nonblocking;
 use super::plan::{ResidentProxyGroupPlan, ResidentProxyPlan, ResidentProxyProtocolPlan};
 use super::vision::{
@@ -83,6 +84,7 @@ const BPF_L4_TCP: u8 = 6;
 const ROUTING_L4_TCP: u8 = 1;
 const ROUTING_IP_VERSION_4: u8 = 1;
 const TCP_SNIFF_BUFFER_LIMIT: usize = 64 * 1024;
+const ANYTLS_LOCAL_CLOSE_DRAIN_TIMEOUT: Duration = Duration::from_millis(500);
 
 pub(super) struct ResidentTcpRouter {
     proxies: BTreeMap<u8, ResidentProxyGroupPlan>,
@@ -636,18 +638,16 @@ async fn resident_tcp_accept_loop_async(
             return;
         }
     };
-    append_event(
-        &event_file,
-        &event_lock,
-        json!({
+    let mut event = json!({
             "event": "tcp_worker_started",
             "proxy_count": router.proxy_count(),
             "dial_mode": router.dial_mode_name(),
-            "execution": "async-accept-direct-v1",
-            "proxy_execution": "async-proxy-tls-v1",
             "legacy_flow_stack_bytes": flow_stack_bytes,
-        }),
-    );
+    });
+    append_tcp_execution_fields(&mut event, "async-accept-direct");
+    event["legacyProxyExecution"] = json!("async-proxy-tls");
+    event["proxyExecutionDescriptor"] = tcp_execution_descriptor("async-proxy-tls").to_value();
+    append_event(&event_file, &event_lock, event);
     while !stop.load(Ordering::Relaxed) {
         match time::timeout(RESIDENT_TCP_ACCEPT_SLEEP, listener.accept()).await {
             Err(_) => {}
@@ -774,8 +774,8 @@ async fn handle_tcp_connection_async_or_handoff(
                 "userspace_route_must": selection.route.userspace_route_must,
                 "sniffed_domain": &sniff.domain,
                 "sniff_error": &sniff.error,
-                "execution": "async-block",
             });
+            append_tcp_execution_fields(&mut event, "async-block");
             append_tcp_route_log_fields(&mut event, &selection.route, "block", "fixed", "block");
             Ok(Some(event))
         }
@@ -878,7 +878,7 @@ fn spawn_proxy_tcp_connection_thread(
             metrics.tcp_closed();
             match result {
                 Ok(mut event) => {
-                    event["execution"] = json!("per-connection-thread-transitional");
+                    append_tcp_execution_fields(&mut event, "per-connection-thread-transitional");
                     append_event(&event_file, &event_lock, event)
                 }
                 Err(err) => append_event(
@@ -902,17 +902,14 @@ fn resident_tcp_accept_loop_sync_legacy(
     metrics: Arc<ResidentDataplaneMetrics>,
     flow_stack_bytes: usize,
 ) {
-    append_event(
-        &event_file,
-        &event_lock,
-        json!({
+    let mut event = json!({
             "event": "tcp_worker_started",
             "proxy_count": router.proxy_count(),
             "dial_mode": router.dial_mode_name(),
-            "execution": "per-connection-thread-legacy",
             "flow_stack_bytes": flow_stack_bytes,
-        }),
-    );
+    });
+    append_tcp_execution_fields(&mut event, "per-connection-thread-legacy");
+    append_event(&event_file, &event_lock, event);
     while !stop.load(Ordering::Relaxed) {
         match listener.accept() {
             Ok((stream, peer)) => {
@@ -1084,7 +1081,15 @@ fn handle_proxy_tcp_connection(
         metrics,
     )
     .map(|stats| {
-        proxy_tcp_finished_event(peer, original_dst, &selection, sniff, tls_underlay, &stats)
+        proxy_tcp_finished_event(
+            peer,
+            original_dst,
+            &selection,
+            sniff,
+            tls_underlay,
+            &stats,
+            "per-connection-thread-legacy",
+        )
     })
     .or_else(|err| {
         Ok::<Value, String>(proxy_tcp_failed_event(
@@ -1094,6 +1099,7 @@ fn handle_proxy_tcp_connection(
             sniff,
             tls_underlay,
             &err,
+            "per-connection-thread-legacy",
         ))
     })
 }
@@ -1133,15 +1139,27 @@ async fn handle_proxy_tcp_connection_async(
     )
     .await
     .map(|stats| {
-        let mut event =
-            proxy_tcp_finished_event(peer, original_dst, &selection, sniff, tls_underlay, &stats);
-        event["execution"] = json!("async-proxy-tls-v1");
+        let event = proxy_tcp_finished_event(
+            peer,
+            original_dst,
+            &selection,
+            sniff,
+            tls_underlay,
+            &stats,
+            "async-proxy-tls",
+        );
         event
     })
     .or_else(|err| {
-        let mut event =
-            proxy_tcp_failed_event(peer, original_dst, &selection, sniff, tls_underlay, &err);
-        event["execution"] = json!("async-proxy-tls-v1");
+        let event = proxy_tcp_failed_event(
+            peer,
+            original_dst,
+            &selection,
+            sniff,
+            tls_underlay,
+            &err,
+            "async-proxy-tls",
+        );
         Ok::<Value, String>(event)
     })
 }
@@ -1343,9 +1361,16 @@ async fn handle_trojan_tls_tcp_connection_async(
                 sniff,
                 "trojan",
                 &stats,
-                "async-proxy-tls-v1",
+                "async-proxy-tls",
             );
             event["tls_underlay"] = json!(tls_underlay);
+            append_proxy_tcp_execution_fields(
+                &mut event,
+                "async-proxy-tls",
+                "trojan",
+                Some(tls_underlay),
+                None,
+            );
             Ok(event)
         }
         Err(err) => {
@@ -1356,9 +1381,16 @@ async fn handle_trojan_tls_tcp_connection_async(
                 sniff,
                 "trojan",
                 &err,
-                "async-proxy-tls-v1",
+                "async-proxy-tls",
             );
             event["tls_underlay"] = json!(tls_underlay);
+            append_proxy_tcp_execution_fields(
+                &mut event,
+                "async-proxy-tls",
+                "trojan",
+                Some(tls_underlay),
+                None,
+            );
             Ok(event)
         }
     }
@@ -1433,9 +1465,16 @@ async fn handle_anytls_tls_tcp_connection_async(
                 sniff,
                 "anytls",
                 &stats,
-                "async-proxy-frame-tls-v1",
+                "async-proxy-frame-tls",
             );
             event["tls_underlay"] = json!(tls_underlay);
+            append_proxy_tcp_execution_fields(
+                &mut event,
+                "async-proxy-frame-tls",
+                "anytls",
+                Some(tls_underlay),
+                None,
+            );
             Ok(event)
         }
         Err(err) => {
@@ -1446,9 +1485,16 @@ async fn handle_anytls_tls_tcp_connection_async(
                 sniff,
                 "anytls",
                 &err,
-                "async-proxy-frame-tls-v1",
+                "async-proxy-frame-tls",
             );
             event["tls_underlay"] = json!(tls_underlay);
+            append_proxy_tcp_execution_fields(
+                &mut event,
+                "async-proxy-frame-tls",
+                "anytls",
+                Some(tls_underlay),
+                None,
+            );
             Ok(event)
         }
     }
@@ -1509,6 +1555,7 @@ async fn relay_tcp_over_anytls_async(
     let mut stats = DirectTcpRelayStats::default();
     let mut inbound_closed = false;
     let mut proxy_closed = false;
+    let mut inbound_close_started = None;
     let mut last_activity = Instant::now();
     let mut inbound_buf = [0_u8; 16 * 1024];
 
@@ -1518,6 +1565,9 @@ async fn relay_tcp_over_anytls_async(
                 match read {
                     Ok(0) => {
                         inbound_closed = true;
+                        if inbound_close_started.is_none() {
+                            inbound_close_started = Some(Instant::now());
+                        }
                         let _ = write_anytls_frame(
                             client,
                             anytls_contract::CMD_FIN,
@@ -1541,6 +1591,21 @@ async fn relay_tcp_over_anytls_async(
                         metrics.add_upload(read);
                         last_activity = Instant::now();
                     }
+                    Err(err) if is_graceful_stream_close_error(&err) => {
+                        inbound_closed = true;
+                        if inbound_close_started.is_none() {
+                            inbound_close_started = Some(Instant::now());
+                        }
+                        let _ = write_anytls_frame(
+                            client,
+                            anytls_contract::CMD_FIN,
+                            sid,
+                            &[],
+                            "write AnyTLS FIN after client close",
+                        )
+                        .await;
+                        last_activity = Instant::now();
+                    }
                     Err(err) => return Err(format!("read inbound TCP for AnyTLS relay: {err}")),
                 }
             }
@@ -1549,10 +1614,12 @@ async fn relay_tcp_over_anytls_async(
                 match frame.cmd {
                     cmd if cmd == anytls_contract::CMD_PSH && frame.sid == sid => {
                         if !frame.data.is_empty() {
-                            inbound
-                                .write_all(&frame.data)
-                                .await
-                                .map_err(|err| format!("write AnyTLS payload to client: {err}"))?;
+                            if let Err(err) = inbound.write_all(&frame.data).await {
+                                if is_graceful_stream_close_error(&err) {
+                                    break;
+                                }
+                                return Err(format!("write AnyTLS payload to client: {err}"));
+                            }
                             stats.direct_to_client += frame.data.len();
                             metrics.add_download(frame.data.len());
                         }
@@ -1586,6 +1653,11 @@ async fn relay_tcp_over_anytls_async(
             }
             _ = time::sleep(Duration::from_millis(100)) => {
                 if inbound_closed && proxy_closed {
+                    break;
+                }
+                if let Some(started) = inbound_close_started
+                    && started.elapsed() >= ANYTLS_LOCAL_CLOSE_DRAIN_TIMEOUT
+                {
                     break;
                 }
                 if last_activity.elapsed() > RESIDENT_TCP_IDLE_TIMEOUT {
@@ -1749,15 +1821,24 @@ async fn handle_hysteria2_quic_tcp_connection_async(
         .map_err(|err| format!("authenticate Hysteria2 QUIC connection: {err}"))?;
     if !auth_report.auth_ok {
         connection.close(0x101_u32.into(), b"resident hysteria2 auth failed");
-        return Ok(generic_proxy_tcp_failed_event(
+        let mut event = generic_proxy_tcp_failed_event(
             peer,
             original_dst,
             &selection,
             sniff,
             "hysteria2",
             &format!("Hysteria2 auth status {}", auth_report.status),
-            "async-proxy-quic-tcp-v1",
-        ));
+            "async-proxy-quic-tcp",
+        );
+        event["quic_underlay"] = json!("quinn-h3");
+        append_proxy_tcp_execution_fields(
+            &mut event,
+            "async-proxy-quic-tcp",
+            "hysteria2",
+            None,
+            Some("quinn-h3"),
+        );
+        return Ok(event);
     }
     let (mut send, mut recv) = connection
         .open_bi()
@@ -1771,15 +1852,24 @@ async fn handle_hysteria2_quic_tcp_connection_async(
         .map_err(|err| format!("read Hysteria2 TCP response: {err}"))?;
     if !response.ok {
         connection.close(0x101_u32.into(), b"resident hysteria2 tcp response failed");
-        return Ok(generic_proxy_tcp_failed_event(
+        let mut event = generic_proxy_tcp_failed_event(
             peer,
             original_dst,
             &selection,
             sniff,
             "hysteria2",
             &format!("Hysteria2 TCP response rejected: {}", response.message),
-            "async-proxy-quic-tcp-v1",
-        ));
+            "async-proxy-quic-tcp",
+        );
+        event["quic_underlay"] = json!("quinn-h3");
+        append_proxy_tcp_execution_fields(
+            &mut event,
+            "async-proxy-quic-tcp",
+            "hysteria2",
+            None,
+            Some("quinn-h3"),
+        );
+        return Ok(event);
     }
     let mut initial_stats = DirectTcpRelayStats::default();
     if !sniff.payload.is_empty() {
@@ -1805,9 +1895,16 @@ async fn handle_hysteria2_quic_tcp_connection_async(
                 sniff,
                 "hysteria2",
                 &stats,
-                "async-proxy-quic-tcp-v1",
+                "async-proxy-quic-tcp",
             );
             event["quic_underlay"] = json!("quinn-h3");
+            append_proxy_tcp_execution_fields(
+                &mut event,
+                "async-proxy-quic-tcp",
+                "hysteria2",
+                None,
+                Some("quinn-h3"),
+            );
             event["hysteria2_udp_enabled"] = json!(auth_report.udp_enabled);
             Ok(event)
         }
@@ -1821,9 +1918,16 @@ async fn handle_hysteria2_quic_tcp_connection_async(
                 sniff,
                 "hysteria2",
                 &err,
-                "async-proxy-quic-tcp-v1",
+                "async-proxy-quic-tcp",
             );
             event["quic_underlay"] = json!("quinn-h3");
+            append_proxy_tcp_execution_fields(
+                &mut event,
+                "async-proxy-quic-tcp",
+                "hysteria2",
+                None,
+                Some("quinn-h3"),
+            );
             event["hysteria2_udp_enabled"] = json!(auth_report.udp_enabled);
             Ok(event)
         }
@@ -1888,9 +1992,16 @@ async fn handle_tuic_quic_tcp_connection_async(
                 sniff,
                 "tuic",
                 &stats,
-                "async-proxy-quic-tcp-v1",
+                "async-proxy-quic-tcp",
             );
             event["quic_underlay"] = json!("quinn");
+            append_proxy_tcp_execution_fields(
+                &mut event,
+                "async-proxy-quic-tcp",
+                "tuic",
+                None,
+                Some("quinn"),
+            );
             event["tuic_auth_token_nonzero"] = json!(auth_report.auth_token_nonzero);
             Ok(event)
         }
@@ -1904,9 +2015,16 @@ async fn handle_tuic_quic_tcp_connection_async(
                 sniff,
                 "tuic",
                 &err,
-                "async-proxy-quic-tcp-v1",
+                "async-proxy-quic-tcp",
             );
             event["quic_underlay"] = json!("quinn");
+            append_proxy_tcp_execution_fields(
+                &mut event,
+                "async-proxy-quic-tcp",
+                "tuic",
+                None,
+                Some("quinn"),
+            );
             event["tuic_auth_token_nonzero"] = json!(auth_report.auth_token_nonzero);
             Ok(event)
         }
@@ -1968,9 +2086,16 @@ async fn handle_juicity_quic_tcp_connection_async(
                 sniff,
                 "juicity",
                 &stats,
-                "async-proxy-quic-tcp-v1",
+                "async-proxy-quic-tcp",
             );
             event["quic_underlay"] = json!("quinn-h3");
+            append_proxy_tcp_execution_fields(
+                &mut event,
+                "async-proxy-quic-tcp",
+                "juicity",
+                None,
+                Some("quinn-h3"),
+            );
             event["juicity_auth_token_nonzero"] = json!(auth_report.auth_token_nonzero);
             event["juicity_certchain_pinned"] = json!(!pinned_certchain_sha256.is_empty());
             event["juicity_allow_insecure"] = json!(allow_insecure);
@@ -1987,9 +2112,16 @@ async fn handle_juicity_quic_tcp_connection_async(
                 sniff,
                 "juicity",
                 &err,
-                "async-proxy-quic-tcp-v1",
+                "async-proxy-quic-tcp",
             );
             event["quic_underlay"] = json!("quinn-h3");
+            append_proxy_tcp_execution_fields(
+                &mut event,
+                "async-proxy-quic-tcp",
+                "juicity",
+                None,
+                Some("quinn-h3"),
+            );
             event["juicity_auth_token_nonzero"] = json!(auth_report.auth_token_nonzero);
             event["juicity_certchain_pinned"] = json!(!pinned_certchain_sha256.is_empty());
             event["juicity_allow_insecure"] = json!(allow_insecure);
@@ -2032,6 +2164,11 @@ async fn relay_tcp_over_quic_stream_async(
                         metrics.add_upload(read);
                         last_activity = Instant::now();
                     }
+                    Err(err) if is_graceful_stream_close_error(&err) => {
+                        inbound_closed = true;
+                        let _ = send.finish();
+                        last_activity = Instant::now();
+                    }
                     Err(err) => return Err(format!("read inbound TCP for QUIC stream relay: {err}")),
                 }
             }
@@ -2043,10 +2180,12 @@ async fn relay_tcp_over_quic_stream_async(
                         last_activity = Instant::now();
                     }
                     Ok(Some(read)) => {
-                        inbound
-                            .write_all(&proxy_buf[..read])
-                            .await
-                            .map_err(|err| format!("write QUIC stream payload to client: {err}"))?;
+                        if let Err(err) = inbound.write_all(&proxy_buf[..read]).await {
+                            if is_graceful_stream_close_error(&err) {
+                                break;
+                            }
+                            return Err(format!("write QUIC stream payload to client: {err}"));
+                        }
                         stats.direct_to_client += read;
                         metrics.add_download(read);
                         last_activity = Instant::now();
@@ -2136,7 +2275,7 @@ fn handle_socks5_proxy_tcp_connection(
                 sniff,
                 "socks5",
                 &stats,
-                "first-batch-tcp-v1",
+                "first-batch-tcp",
             )
         })
         .or_else(|err| {
@@ -2147,7 +2286,7 @@ fn handle_socks5_proxy_tcp_connection(
                 sniff,
                 "socks5",
                 &err,
-                "first-batch-tcp-v1",
+                "first-batch-tcp",
             ))
         })
 }
@@ -2181,7 +2320,7 @@ fn handle_http_proxy_tcp_connection(
                 sniff,
                 "http-proxy",
                 &stats,
-                "first-batch-tcp-v1",
+                "first-batch-tcp",
             )
         })
         .or_else(|err| {
@@ -2192,7 +2331,7 @@ fn handle_http_proxy_tcp_connection(
                 sniff,
                 "http-proxy",
                 &err,
-                "first-batch-tcp-v1",
+                "first-batch-tcp",
             ))
         })
 }
@@ -2246,7 +2385,7 @@ fn handle_shadowsocks_proxy_tcp_connection(
                 sniff,
                 "shadowsocks",
                 &stats,
-                "first-batch-tcp-v1",
+                "first-batch-tcp",
             )
         })
         .or_else(|err| {
@@ -2257,7 +2396,7 @@ fn handle_shadowsocks_proxy_tcp_connection(
                 sniff,
                 "shadowsocks",
                 &err,
-                "first-batch-tcp-v1",
+                "first-batch-tcp",
             ))
         })
 }
@@ -2310,7 +2449,7 @@ fn handle_vmess_proxy_tcp_connection(
                 sniff,
                 "vmess",
                 &stats,
-                "first-batch-aead-tcp-v1",
+                "first-batch-aead-tcp",
             )
         })
         .or_else(|err| {
@@ -2321,7 +2460,7 @@ fn handle_vmess_proxy_tcp_connection(
                 sniff,
                 "vmess",
                 &err,
-                "first-batch-aead-tcp-v1",
+                "first-batch-aead-tcp",
             ))
         })
 }
@@ -2356,6 +2495,11 @@ async fn relay_tcp_over_resident_tls_plain_async(
                         metrics.add_upload(read);
                         last_activity = Instant::now();
                     }
+                    Err(err) if is_graceful_stream_close_error(&err) => {
+                        inbound_closed = true;
+                        client.shutdown().await;
+                        last_activity = Instant::now();
+                    }
                     Err(err) => return Err(format!("read inbound TCP for proxy TLS relay: {err}")),
                 }
             }
@@ -2367,10 +2511,12 @@ async fn relay_tcp_over_resident_tls_plain_async(
                         last_activity = Instant::now();
                     }
                     Ok(read) => {
-                        inbound
-                            .write_all(&proxy_buf[..read])
-                            .await
-                            .map_err(|err| format!("write proxy TLS payload to client: {err}"))?;
+                        if let Err(err) = inbound.write_all(&proxy_buf[..read]).await {
+                            if is_graceful_stream_close_error(&err) {
+                                break;
+                            }
+                            return Err(format!("write proxy TLS payload to client: {err}"));
+                        }
                         stats.direct_to_client += read;
                         metrics.add_download(read);
                         last_activity = Instant::now();
@@ -2798,6 +2944,45 @@ fn is_graceful_stream_close_error(err: &std::io::Error) -> bool {
     )
 }
 
+fn is_graceful_stream_close_message(message: &str) -> bool {
+    message.contains("Broken pipe")
+        || message.contains("Connection reset")
+        || message.contains("Connection aborted")
+        || message.contains("Not connected")
+        || message.contains("broken pipe")
+        || message.contains("connection reset")
+        || message.contains("connection aborted")
+        || message.contains("not connected")
+}
+
+fn append_tcp_execution_fields(event: &mut Value, execution: &str) {
+    append_runtime_execution_descriptor(event, tcp_execution_descriptor(execution));
+}
+
+fn append_proxy_tcp_execution_fields(
+    event: &mut Value,
+    execution: &str,
+    handler: &str,
+    tls_underlay: Option<&str>,
+    quic_underlay: Option<&str>,
+) {
+    let mut descriptor = tcp_execution_descriptor(execution).with_protocol_framing(handler);
+    let graph_id = event
+        .get("graphId")
+        .and_then(Value::as_str)
+        .map(str::to_owned);
+    if let Some(graph_id) = graph_id.as_deref() {
+        descriptor = descriptor.with_graph_id(graph_id);
+    }
+    if let Some(tls_underlay) = tls_underlay {
+        descriptor = descriptor.with_security_underlay(tls_underlay);
+    }
+    if let Some(quic_underlay) = quic_underlay {
+        descriptor = descriptor.with_transport_underlay(quic_underlay);
+    }
+    append_runtime_execution_descriptor(event, descriptor);
+}
+
 fn proxy_tcp_finished_event(
     peer: SocketAddr,
     original_dst: SocketAddrV4,
@@ -2805,6 +2990,7 @@ fn proxy_tcp_finished_event(
     sniff: &TcpSniffReport,
     tls_underlay: &'static str,
     stats: &RelayStats,
+    execution: &'static str,
 ) -> Value {
     let mut event = proxy_tcp_base_event(
         "tcp_connection_finished",
@@ -2814,6 +3000,8 @@ fn proxy_tcp_finished_event(
         sniff,
     );
     event["tls_underlay"] = json!(tls_underlay);
+    event["resident_protocol_handler"] = json!("vless");
+    append_proxy_tcp_execution_fields(&mut event, execution, "vless", Some(tls_underlay), None);
     append_proxy_relay_stats(&mut event, stats);
     event
 }
@@ -2825,6 +3013,7 @@ fn proxy_tcp_failed_event(
     sniff: &TcpSniffReport,
     tls_underlay: &'static str,
     err: &RelayError,
+    execution: &'static str,
 ) -> Value {
     let mut event = proxy_tcp_base_event(
         "tcp_connection_failed",
@@ -2835,6 +3024,8 @@ fn proxy_tcp_failed_event(
     );
     event["error"] = json!(&err.message);
     event["tls_underlay"] = json!(tls_underlay);
+    event["resident_protocol_handler"] = json!("vless");
+    append_proxy_tcp_execution_fields(&mut event, execution, "vless", Some(tls_underlay), None);
     append_proxy_relay_stats(&mut event, &err.stats);
     event
 }
@@ -2856,7 +3047,7 @@ fn generic_proxy_tcp_finished_event(
         sniff,
     );
     event["resident_protocol_handler"] = json!(handler);
-    event["execution"] = json!(execution);
+    append_proxy_tcp_execution_fields(&mut event, execution, handler, None, None);
     append_generic_proxy_relay_stats(&mut event, stats);
     event
 }
@@ -2878,7 +3069,7 @@ fn generic_proxy_tcp_failed_event(
         sniff,
     );
     event["resident_protocol_handler"] = json!(handler);
-    event["execution"] = json!(execution);
+    append_proxy_tcp_execution_fields(&mut event, execution, handler, None, None);
     event["error"] = json!(err);
     event
 }
@@ -2907,6 +3098,7 @@ fn proxy_tcp_base_event(
         "proxy_group": &selection.proxy.group_name,
         "group_policy": &selection.proxy.group_policy,
         "node_tag": &selection.proxy.node_tag,
+        "graphId": &selection.proxy.graph_id,
     });
     append_tcp_route_log_fields(
         &mut event,
@@ -2997,7 +3189,7 @@ async fn handle_direct_tcp_connection_async(
         target,
         &report,
         &stats,
-        "async-direct-v1",
+        "async-direct",
     ))
 }
 
@@ -3036,8 +3228,8 @@ fn direct_tcp_finished_event(
         "direct_mptcp_connect_fallback_used": direct_report.mptcp_connect_fallback_used,
         "bytes_client_to_direct": stats.client_to_direct,
         "bytes_direct_to_client": stats.direct_to_client,
-        "execution": execution,
     });
+    append_tcp_execution_fields(&mut event, execution);
     append_tcp_route_log_fields(&mut event, &selection.route, "direct", "fixed", "direct");
     event
 }
@@ -3375,6 +3567,11 @@ fn relay_tcp_over_vless_tls(
                         err.kind(),
                         ErrorKind::WouldBlock | ErrorKind::TimedOut | ErrorKind::Interrupted
                     ) => {}
+                Err(err) if is_graceful_stream_close_error(&err) => {
+                    inbound_closed = true;
+                    client.send_close_notify();
+                    progressed = true;
+                }
                 Err(err) => {
                     return Err(RelayError::new(format!("read inbound TCP: {err}"), &stats));
                 }
@@ -3387,13 +3584,16 @@ fn relay_tcp_over_vless_tls(
                     break;
                 }
                 Ok(read) => {
-                    write_all_nonblocking(
+                    match write_all_nonblocking(
                         inbound,
                         &proxy_buf[..read],
                         stop,
                         "write VLESS Vision direct payload to client",
-                    )
-                    .map_err(|err| RelayError::new(err, &stats))?;
+                    ) {
+                        Ok(()) => {}
+                        Err(err) if is_graceful_stream_close_message(&err) => break,
+                        Err(err) => return Err(RelayError::new(err, &stats)),
+                    }
                     stats.proxy_to_client += read;
                     metrics.add_download(read);
                     progressed = true;
@@ -3614,6 +3814,11 @@ async fn relay_tcp_over_vless_tls_async(
                         metrics.add_upload(read);
                         last_activity = Instant::now();
                     }
+                    Err(err) if is_graceful_stream_close_error(&err) => {
+                        inbound_closed = true;
+                        client.shutdown().await;
+                        last_activity = Instant::now();
+                    }
                     Err(err) => {
                         return Err(RelayError::new(format!("read inbound TCP: {err}"), &stats));
                     }
@@ -3630,10 +3835,15 @@ async fn relay_tcp_over_vless_tls_async(
                     Ok(0) => break,
                     Ok(read) => {
                         if downlink_direct {
-                            inbound
-                                .write_all(&proxy_buf[..read])
-                                .await
-                                .map_err(|err| RelayError::new(format!("write VLESS Vision direct payload to client: {err}"), &stats))?;
+                            if let Err(err) = inbound.write_all(&proxy_buf[..read]).await {
+                                if is_graceful_stream_close_error(&err) {
+                                    break;
+                                }
+                                return Err(RelayError::new(
+                                    format!("write VLESS Vision direct payload to client: {err}"),
+                                    &stats,
+                                ));
+                            }
                             stats.proxy_to_client += read;
                             metrics.add_download(read);
                             last_activity = Instant::now();
@@ -3845,10 +4055,29 @@ mod tests {
             &sniff,
             "boringssl",
             &err,
+            "async-proxy-tls",
         );
 
         assert_eq!(event["event"], "tcp_connection_failed");
         assert_eq!(event["tls_underlay"], "boringssl");
+        assert_eq!(event["legacyExecution"], "async-proxy-tls");
+        assert!(event.get("execution").is_none());
+        assert_eq!(event["executionDescriptor"]["schemaVersion"], 1);
+        assert_eq!(event["executionDescriptor"]["executor"], "tcp-relay");
+        assert_eq!(
+            event["executionDescriptor"]["capability"],
+            "stream-transport"
+        );
+        assert_eq!(event["executionDescriptor"]["network"], "tcp");
+        assert_eq!(
+            event["executionDescriptor"]["securityUnderlay"],
+            "boringssl"
+        );
+        assert_eq!(event["executionDescriptor"]["protocolFraming"], "vless");
+        assert_eq!(
+            event["executionDescriptor"]["graphId"],
+            "resident-graph:test-flow"
+        );
         assert_eq!(event["error"], "read proxy plaintext: sample failure");
         assert_eq!(event["bytes_client_to_proxy"], 128);
         assert_eq!(event["bytes_proxy_to_client"], 64);
@@ -4112,6 +4341,9 @@ mod tests {
 
     fn dummy_proxy_plan() -> ResidentProxyPlan {
         ResidentProxyPlan {
+            graph_id: "resident-graph:test-flow".to_owned(),
+            graph_link_hash: "sha256:test-flow".to_owned(),
+            redacted_link_source: "vless:<redacted>#flow".to_owned(),
             protocol: "vless".to_owned(),
             group_name: FLOW_OUTBOUND.to_owned(),
             group_policy: FLOW_POLICY.to_owned(),

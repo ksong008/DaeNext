@@ -23,7 +23,7 @@ pub struct ComplexDataplaneGateRow {
 
 pub fn complex_dataplane_gate_contract() -> ComplexDataplaneGateContract {
     ComplexDataplaneGateContract {
-        name: "stage19-complex-dataplane-gate",
+        name: "complex-dataplane-gate",
         stage: "stage19",
         gate_complete: true,
         default_switch_allowed: false,

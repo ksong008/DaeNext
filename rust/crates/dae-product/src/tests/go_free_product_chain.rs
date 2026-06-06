@@ -4,9 +4,9 @@ use super::*;
 fn go_free_product_chain_contract_is_c10_fail_closed_until_product_shell_retires() {
     let contract = go_free_product_chain_contract();
 
-    assert_eq!(contract.name, "go-free-product-chain-v1");
+    assert_eq!(contract.name, "go-free-product-chain");
     assert_eq!(contract.c_phase, "C10");
-    assert_eq!(contract.prior_gate, "release-default-switch-v1");
+    assert_eq!(contract.prior_gate, "release-default-switch");
     assert!(contract.contract_ready);
     assert!(!contract.default_product_package_go_free);
     assert!(!contract.go_product_shell_retired);

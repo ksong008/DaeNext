@@ -125,7 +125,7 @@ pub(super) fn default_product_package_scan_json(
     }
 
     json!({
-        "name": "default-product-package-scan-v1",
+        "name": "default-product-package-scan",
         "status": if default_product_package_go_free { "pass" } else { "blocked" },
         "default_product_package_go_free": default_product_package_go_free,
         "go_product_shell_retired_from_default_package": go_product_shell_retired_from_default_package,
@@ -183,7 +183,7 @@ pub(super) fn go_free_product_chain_gate_json(
     if !executed {
         return GoFreeProductChainGateReport {
             report: json!({
-                "name": "go-free-product-chain-v1",
+                "name": "go-free-product-chain",
                 "status": "not-executed",
                 "requested": false,
                 "go_free_product_chain_ready": false,
@@ -371,7 +371,7 @@ pub(super) fn go_free_product_chain_gate_json(
     );
 
     let mut report = Map::new();
-    report.insert("name".to_owned(), json!("go-free-product-chain-v1"));
+    report.insert("name".to_owned(), json!("go-free-product-chain"));
     report.insert(
         "status".to_owned(),
         json!(if go_free_product_chain_ready {
@@ -506,7 +506,7 @@ pub(super) fn attach_go_free_product_chain_gate_from_report(report: &mut Value) 
         .cloned()
         .unwrap_or_else(|| {
             json!({
-                "name": "default-product-package-scan-v1",
+                "name": "default-product-package-scan",
                 "status": "not-recorded",
                 "default_product_package_go_free": false,
                 "go_product_shell_retired_from_default_package": false,

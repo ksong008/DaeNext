@@ -142,7 +142,7 @@ pub fn native_backend_admission_report(
             None
         };
     NativeBackendAdmissionReport {
-        schema: "native-ebpf-backend-admission-v1",
+        schema: "native-ebpf-backend-admission",
         report_only,
         admitted,
         default_enable_allowed: false,

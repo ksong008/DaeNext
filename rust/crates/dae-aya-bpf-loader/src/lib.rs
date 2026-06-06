@@ -347,7 +347,7 @@ fn run_contract() -> LoaderOutput {
     LoaderOutput::ok(format!(
         "{}\n",
         json!({
-            "name": "rust-aya-bpf-loader-go-adoption-contract-v1",
+            "name": "rust-aya-bpf-loader-go-adoption-contract",
             "binary": "dae-aya-bpf-loader",
             "compiled_native_ebpf": cfg!(feature = "native-ebpf"),
             "scope": "Rust/Aya loads a selected daemon eBPF object and pins all maps/programs for Go control-plane adoption",
@@ -412,7 +412,7 @@ fn run_cgroup_monitor_contract() -> LoaderOutput {
     LoaderOutput::ok(format!(
         "{}\n",
         json!({
-            "name": "rust-cgroup-pname-monitor-attach-contract-v1",
+            "name": "rust-cgroup-pname-monitor-attach-contract",
             "binary": "dae-aya-bpf-loader",
             "scope": "Rust attaches pinned cgroup pname monitor programs and pins bpf_link objects for Go control-plane lifetime ownership",
             "go_pname_routing_semantics_remain_authoritative": true,
@@ -449,7 +449,7 @@ fn run_tc_attach_contract() -> LoaderOutput {
     LoaderOutput::ok(format!(
         "{}\n",
         json!({
-            "name": "rust-tc-tcx-attach-pin-contract-v1",
+            "name": "rust-tc-tcx-attach-pin-contract",
             "binary": "dae-aya-bpf-loader",
             "scope": "Rust/Aya attaches pinned TC sched classifier programs for LAN/WAN/dae0/dae0peer and pins TCX bpf_link lifetime for Go control-plane cleanup",
             "go_userspace_outbound_remains_authoritative": true,
@@ -478,7 +478,7 @@ fn run_tproxy_listener_contract() -> LoaderOutput {
     LoaderOutput::ok(format!(
         "{}\n",
         json!({
-            "name": "rust-tproxy-listener-sockmap-handoff-contract-v1",
+            "name": "rust-tproxy-listener-sockmap-handoff-contract",
             "binary": "dae-aya-bpf-loader",
             "scope": "Rust opens TCP/UDP tproxy listeners in the caller netns, writes listen_socket_map key 0/1, and hands listener fds back to Go userspace handlers",
             "go_userspace_tcp_udp_handlers_remain_authoritative": true,
@@ -729,7 +729,7 @@ fn run_trace_loader_contract() -> LoaderOutput {
     LoaderOutput::ok(format!(
         "{}\n",
         json!({
-            "name": "rust-aya-trace-loader-contract-v1",
+            "name": "rust-aya-trace-loader-contract",
             "binary": "dae-aya-bpf-loader",
             "compiled_native_ebpf": cfg!(feature = "native-ebpf"),
             "scope": "Rust/Aya trace CO-RE side-load contract is retained for audit but temporarily disabled",
@@ -2442,7 +2442,7 @@ mod tests {
         let json: Value = serde_json::from_str(&output.stdout).unwrap();
         assert_eq!(
             json["name"].as_str().unwrap(),
-            "rust-aya-bpf-loader-go-adoption-contract-v1"
+            "rust-aya-bpf-loader-go-adoption-contract"
         );
         assert_eq!(json["binary"].as_str().unwrap(), "dae-aya-bpf-loader");
         assert!(
@@ -2539,7 +2539,7 @@ mod tests {
         let json: Value = serde_json::from_str(&output.stdout).unwrap();
         assert_eq!(
             json["name"].as_str().unwrap(),
-            "rust-aya-trace-loader-contract-v1"
+            "rust-aya-trace-loader-contract"
         );
         assert!(!json["core_sideload_enabled"].as_bool().unwrap());
         assert!(!json["go_trace_adoption_ready"].as_bool().unwrap());
@@ -2656,7 +2656,7 @@ mod tests {
         let json: Value = serde_json::from_str(&output.stdout).unwrap();
         assert_eq!(
             json["name"].as_str().unwrap(),
-            "rust-cgroup-pname-monitor-attach-contract-v1"
+            "rust-cgroup-pname-monitor-attach-contract"
         );
         assert!(
             json["go_pname_routing_semantics_remain_authoritative"]
@@ -2708,7 +2708,7 @@ mod tests {
         let json: Value = serde_json::from_str(&output.stdout).unwrap();
         assert_eq!(
             json["name"].as_str().unwrap(),
-            "rust-tc-tcx-attach-pin-contract-v1"
+            "rust-tc-tcx-attach-pin-contract"
         );
         assert!(
             json["go_routing_dns_sniff_group_remain_authoritative"]
@@ -2759,7 +2759,7 @@ mod tests {
         let json: Value = serde_json::from_str(&output.stdout).unwrap();
         assert_eq!(
             json["name"].as_str().unwrap(),
-            "rust-tproxy-listener-sockmap-handoff-contract-v1"
+            "rust-tproxy-listener-sockmap-handoff-contract"
         );
         assert!(
             json["go_userspace_tcp_udp_handlers_remain_authoritative"]
