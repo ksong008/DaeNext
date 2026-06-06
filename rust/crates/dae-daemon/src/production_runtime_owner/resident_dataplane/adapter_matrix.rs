@@ -76,7 +76,7 @@ pub(crate) fn resident_live_adapter_matrix_contract() -> ResidentLiveAdapterMatr
     let matrix_ready = wired_matrix_ready && remote_live_matrix_ready;
 
     ResidentLiveAdapterMatrixContract {
-        schema: "resident-live-adapter-matrix-v1",
+        schema: "resident-live-adapter-matrix",
         entries,
         planner_admission_ready,
         tcp_live_adapter_ready,
@@ -108,7 +108,7 @@ const RESIDENT_LIVE_ADAPTER_MATRIX_ENTRIES: [ResidentLiveAdapterMatrixEntry; 10]
         route_group_connectivity: true,
         selected_node_fail_closed: true,
         fingerprint_underlay: true,
-        remote_live_matrix: true,
+        remote_live_matrix: false,
         go_outbound_fallback_retired: true,
         fingerprint_behavior: "link fingerprint selects the fingerprint-aware underlay, global fingerprint is fallback, no fingerprint uses the standard TLS underlay",
         evidence: &[
@@ -116,10 +116,10 @@ const RESIDENT_LIVE_ADAPTER_MATRIX_ENTRIES: [ResidentLiveAdapterMatrixEntry; 10]
             "resident_dataplane::tcp opens the fingerprint-aware VLESS/TLS client",
             "resident_dataplane::udp uses the same admitted proxy plan for XUDP",
             "resident dataplane event field tls_underlay records boring/rustls underlay choice",
-            "remote 38 / JP UDP live matrix echoed a real datagram through this resident adapter row",
-            "remote 38 / JP live matrix loaded example, Google, and YouTube page bodies through this resident adapter row",
+            "live-evidence-ledger must record a remote UDP matrix echo before this row is live-ready",
+            "live-evidence-ledger must record remote TCP/page-load evidence before this row is live-ready",
         ],
-        missing: &[],
+        missing: &["remote live matrix evidence not recorded by live-evidence-ledger"],
     },
     udp_remote_live_entry(
         "shadowsocks",
@@ -128,8 +128,8 @@ const RESIDENT_LIVE_ADAPTER_MATRIX_ENTRIES: [ResidentLiveAdapterMatrixEntry; 10]
             "resident_dataplane::plan admits stage18 AEAD TCP candidate shapes",
             "resident_dataplane::tcp dispatches through the Shadowsocks AEAD stream relay",
             "resident_dataplane::udp dispatches through the Shadowsocks AEAD UDP datagram relay",
-            "remote 38 / JP UDP live matrix echoed a real datagram through this resident adapter row",
-            "remote 38 / JP live matrix loaded example, Google, and YouTube page bodies through this resident adapter row",
+            "live-evidence-ledger must record a remote UDP matrix echo before this row is live-ready",
+            "live-evidence-ledger must record remote TCP/page-load evidence before this row is live-ready",
         ],
     ),
     udp_remote_live_entry(
@@ -139,8 +139,8 @@ const RESIDENT_LIVE_ADAPTER_MATRIX_ENTRIES: [ResidentLiveAdapterMatrixEntry; 10]
             "resident_dataplane::plan admits plain TLS/TCP endpoint shapes",
             "resident_dataplane::tcp sends the request header then relays TLS plaintext",
             "resident_dataplane::udp dispatches through the Trojan UDP-over-TCP packet stream",
-            "remote 38 / JP UDP live matrix echoed a real datagram through this resident adapter row",
-            "remote 38 / JP live matrix loaded example, Google, and YouTube page bodies through this resident adapter row",
+            "live-evidence-ledger must record a remote UDP matrix echo before this row is live-ready",
+            "live-evidence-ledger must record remote TCP/page-load evidence before this row is live-ready",
         ],
     ),
     udp_remote_live_entry(
@@ -151,8 +151,8 @@ const RESIDENT_LIVE_ADAPTER_MATRIX_ENTRIES: [ResidentLiveAdapterMatrixEntry; 10]
             "dae_outbound::vmess exposes reusable AEAD session/chunk codecs for resident relay",
             "resident_dataplane::tcp sends VMess header/chunks and relays response chunks",
             "resident_dataplane::udp dispatches through the VMess AEAD UDP-over-TCP exchange",
-            "remote 38 / JP UDP live matrix echoed a real datagram through this resident adapter row",
-            "remote 38 / JP live matrix loaded example, Google, and YouTube page bodies through this resident adapter row",
+            "live-evidence-ledger must record a remote UDP matrix echo before this row is live-ready",
+            "live-evidence-ledger must record remote TCP/page-load evidence before this row is live-ready",
         ],
     ),
     udp_remote_live_entry(
@@ -163,8 +163,8 @@ const RESIDENT_LIVE_ADAPTER_MATRIX_ENTRIES: [ResidentLiveAdapterMatrixEntry; 10]
             "dae_outbound::hysteria2 exposes H3 auth and TCP stream request/response helpers",
             "resident_dataplane::tcp opens a marked quinn UDP endpoint and relays TCP over a Hysteria2 stream",
             "resident_dataplane::udp sends and parses Hysteria2 UDP datagrams over the marked QUIC endpoint",
-            "remote 38 / JP UDP live matrix echoed a real datagram through this resident adapter row",
-            "remote 38 / JP live matrix loaded example, Google, and YouTube page bodies through this resident adapter row",
+            "live-evidence-ledger must record a remote UDP matrix echo before this row is live-ready",
+            "live-evidence-ledger must record remote TCP/page-load evidence before this row is live-ready",
         ],
     ),
     udp_remote_live_entry(
@@ -175,8 +175,8 @@ const RESIDENT_LIVE_ADAPTER_MATRIX_ENTRIES: [ResidentLiveAdapterMatrixEntry; 10]
             "dae_outbound::tuic exposes auth stream and Connect frame runtime helpers",
             "resident_dataplane::tcp opens a marked quinn UDP endpoint and relays TCP over a TUIC stream",
             "resident_dataplane::udp sends and parses TUIC packet datagrams over the marked QUIC endpoint",
-            "remote 38 / JP UDP live matrix echoed a real datagram through this resident adapter row",
-            "remote 38 / JP live matrix loaded example, Google, and YouTube page bodies through this resident adapter row",
+            "live-evidence-ledger must record a remote UDP matrix echo before this row is live-ready",
+            "live-evidence-ledger must record remote TCP/page-load evidence before this row is live-ready",
         ],
     ),
     udp_remote_live_entry(
@@ -187,8 +187,8 @@ const RESIDENT_LIVE_ADAPTER_MATRIX_ENTRIES: [ResidentLiveAdapterMatrixEntry; 10]
             "dae_outbound::juicity exposes EKM auth stream and TCP stream request helpers",
             "resident_dataplane::tcp opens a marked quinn UDP endpoint and relays TCP over a Juicity stream",
             "resident_dataplane::udp sends and parses Juicity stream packet frames over the marked QUIC endpoint",
-            "remote 38 / JP UDP live matrix echoed a real datagram through this resident adapter row",
-            "remote 38 / JP live matrix loaded example, Google, and YouTube page bodies through this resident adapter row",
+            "live-evidence-ledger must record a remote UDP matrix echo before this row is live-ready",
+            "live-evidence-ledger must record remote TCP/page-load evidence before this row is live-ready",
         ],
     ),
     udp_remote_live_entry(
@@ -198,8 +198,8 @@ const RESIDENT_LIVE_ADAPTER_MATRIX_ENTRIES: [ResidentLiveAdapterMatrixEntry; 10]
             "resident_dataplane::plan admits AnyTLS session-frame endpoint shapes",
             "resident_dataplane::tcp sends auth/settings/SYN/PSH frames and relays PSH payload frames",
             "resident_dataplane::udp sends auth/settings/SYN/PSH frames and decodes UDP packet stream responses",
-            "remote 38 / JP UDP live matrix echoed a real datagram through this resident adapter row",
-            "remote 38 / JP live matrix loaded example, Google, and YouTube page bodies through this resident adapter row",
+            "live-evidence-ledger must record a remote UDP matrix echo before this row is live-ready",
+            "live-evidence-ledger must record remote TCP/page-load evidence before this row is live-ready",
         ],
     ),
     protocol_closed_remote_live_entry(
@@ -209,7 +209,7 @@ const RESIDENT_LIVE_ADAPTER_MATRIX_ENTRIES: [ResidentLiveAdapterMatrixEntry; 10]
             "resident_dataplane::plan admits plain HTTP CONNECT endpoint shapes",
             "resident_dataplane::tcp dispatches through the HTTP CONNECT relay",
             "resident_dataplane::udp returns an explicit protocol-closed fail-closed result for HTTP CONNECT",
-            "remote 38 / JP live matrix loaded example, Google, and YouTube page bodies through this resident adapter row",
+            "live-evidence-ledger must record remote TCP/page-load evidence before this row is live-ready",
         ],
     ),
     udp_remote_live_entry(
@@ -219,8 +219,8 @@ const RESIDENT_LIVE_ADAPTER_MATRIX_ENTRIES: [ResidentLiveAdapterMatrixEntry; 10]
             "resident_dataplane::plan admits SOCKS5 endpoint shapes",
             "resident_dataplane::tcp dispatches through the SOCKS5 CONNECT relay",
             "resident_dataplane::udp dispatches through SOCKS5 UDP ASSOCIATE",
-            "remote 38 / JP UDP live matrix echoed a real datagram through this resident adapter row",
-            "remote 38 / JP live matrix loaded example, Google, and YouTube page bodies through this resident adapter row",
+            "live-evidence-ledger must record a remote UDP matrix echo before this row is live-ready",
+            "live-evidence-ledger must record remote TCP/page-load evidence before this row is live-ready",
         ],
     ),
 ];
@@ -241,11 +241,11 @@ const fn udp_remote_live_entry(
         route_group_connectivity: true,
         selected_node_fail_closed: true,
         fingerprint_underlay: true,
-        remote_live_matrix: true,
+        remote_live_matrix: false,
         go_outbound_fallback_retired: true,
         fingerprint_behavior,
         evidence,
-        missing: &[],
+        missing: &["remote live matrix evidence not recorded by live-evidence-ledger"],
     }
 }
 
@@ -265,10 +265,10 @@ const fn protocol_closed_remote_live_entry(
         route_group_connectivity: true,
         selected_node_fail_closed: true,
         fingerprint_underlay: true,
-        remote_live_matrix: true,
+        remote_live_matrix: false,
         go_outbound_fallback_retired: true,
         fingerprint_behavior,
         evidence,
-        missing: &[],
+        missing: &["remote live matrix evidence not recorded by live-evidence-ledger"],
     }
 }

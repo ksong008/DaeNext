@@ -27,9 +27,9 @@ pub struct DaemonGraySwitchReadinessRow {
 
 pub fn daemon_gray_switch_gate_contract() -> DaemonGraySwitchGateContract {
     DaemonGraySwitchGateContract {
-        name: "stage22-daemon-gray-switch-gate",
+        name: "daemon-gray-switch-gate",
         stage: "stage22",
-        prior_gate: "stage16-daemon-default-readiness",
+        prior_gate: "daemon-default-readiness",
         stage21_harness_complete: true,
         default_switch_allowed: false,
         go_default_path_preserved: true,

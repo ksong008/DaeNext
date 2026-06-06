@@ -31,7 +31,7 @@ pub struct Stage7ReleaseGateRow {
 
 pub fn stage7_release_gate_contract() -> Stage7ReleaseGateContract {
     Stage7ReleaseGateContract {
-        name: "stage7-release-product-chain-live-gate",
+        name: "release-product-chain-live-gate",
         stage: "stage7",
         prior_gate: "fixed-queue-complete-release-gates",
         fixed_queue_range: "stage1-stage6",

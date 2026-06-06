@@ -3,7 +3,7 @@ use super::*;
 #[test]
 fn outbound_production_matrix_contract_covers_current_native_handlers() {
     let contract = outbound_production_matrix_contract();
-    assert_eq!(contract.schema, "outbound-production-matrix-v1");
+    assert_eq!(contract.schema, "outbound-production-matrix");
     assert!(contract.matrix_ready);
     assert!(contract.parser_export_metadata_ready);
     assert!(contract.tcp_udp_dataplane_ready);

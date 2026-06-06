@@ -456,7 +456,7 @@ if execute_reload:
 blockers = [name for name, passed in checks.items() if passed is not True]
 summary = {
     "name": "daex-production-semantic-probe",
-    "schema": "daex-production-semantic-probe-v1",
+    "schema": "daex-production-semantic-probe",
     "status": "pass" if not blockers else "blocked",
     "probe_netns": probe_netns,
     "checks": checks,

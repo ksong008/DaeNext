@@ -18,7 +18,7 @@ pub(super) fn outbound_fingerprint_underlay_gate_json(
     if !executed {
         return OutboundFingerprintUnderlayGateReport {
             report: json!({
-                "name": "outbound-fingerprint-underlay-v1",
+                "name": "outbound-fingerprint-underlay",
                 "status": "not-executed",
                 "requested": false,
                 "outbound_fingerprint_underlay_ready": false,
@@ -210,7 +210,7 @@ pub(super) fn outbound_fingerprint_underlay_gate_json(
 
     OutboundFingerprintUnderlayGateReport {
         report: json!({
-            "name": "outbound-fingerprint-underlay-v1",
+            "name": "outbound-fingerprint-underlay",
             "status": if outbound_fingerprint_underlay_ready { "pass" } else { "blocked" },
             "requested": requested,
             "outbound_fingerprint_underlay_ready": outbound_fingerprint_underlay_ready,

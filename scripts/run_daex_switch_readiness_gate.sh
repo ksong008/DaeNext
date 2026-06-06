@@ -224,7 +224,7 @@ admission = {
     "resident_dataplane_default_switch_ready": resident_dataplane_ready,
     "native_ebpf_runtime_gate_manifest": native_manifest,
     "matched_default_benchmark_manifest": matched_manifest,
-    "evidence_class": "daex-switch-readiness-combined-admission-v1",
+    "evidence_class": "daex-switch-readiness-combined-admission",
 }
 with open(admission_file, "w", encoding="utf-8") as fh:
     json.dump(admission, fh, indent=2, ensure_ascii=False)
@@ -347,7 +347,7 @@ core_switch_readiness_passed = (
 )
 summary = {
     "name": "daex-switch-readiness-gate",
-    "schema": "daex-switch-readiness-gate-v1",
+    "schema": "daex-switch-readiness-gate",
     "status": "pass" if core_switch_readiness_passed else "blocked",
     "core_switch_readiness_passed": core_switch_readiness_passed,
     "ready_for_manual_switch_authorization": core_switch_readiness_passed,

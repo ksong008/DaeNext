@@ -4,7 +4,7 @@ use crate::*;
 fn report_only_native_backend_admission_keeps_fallback_required() {
     let report =
         native_backend_admission_report(NativeBackendAdmissionEvidence::report_only(), true);
-    assert_eq!(report.schema, "native-ebpf-backend-admission-v1");
+    assert_eq!(report.schema, "native-ebpf-backend-admission");
     assert!(report.report_only);
     assert!(!report.admitted);
     assert!(!report.default_enable_allowed);

@@ -18,7 +18,7 @@ pub(super) fn datapath_core_gate_json(
     if !executed {
         return DatapathCoreGateReport {
             report: json!({
-                "name": "datapath-core-v1",
+                "name": "datapath-core",
                 "status": "not-executed",
                 "requested": false,
                 "datapath_core_ready": false,
@@ -218,7 +218,7 @@ pub(super) fn datapath_core_gate_json(
 
     DatapathCoreGateReport {
         report: json!({
-            "name": "datapath-core-v1",
+            "name": "datapath-core",
             "status": if datapath_core_ready { "pass" } else { "blocked" },
             "requested": requested,
             "datapath_core_ready": datapath_core_ready,

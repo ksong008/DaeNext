@@ -39,7 +39,7 @@ pub struct ControlApiTypedReport {
 impl ControlApiTypedReport {
     pub fn formal_runtime_control_api() -> Self {
         Self {
-            schema: "control-api-typed-report-v1",
+            schema: "control-api-typed-report",
             status: ControlApiReportStatus::Pass,
             runtime_overview_available: true,
             reload_core_state_available: true,

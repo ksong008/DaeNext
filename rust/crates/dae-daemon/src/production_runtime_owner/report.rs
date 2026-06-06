@@ -64,7 +64,7 @@ impl ProductionRuntimeTypedReport {
 
     fn to_json(self) -> Value {
         json!({
-            "schema": "production-runtime-owner-typed-report-v1",
+            "schema": "production-runtime-owner-typed-report",
             "formal_surface": "daemon-runtime-owner",
             "status": self.status().as_str(),
             "execute": self.executed,
@@ -79,11 +79,11 @@ impl ProductionRuntimeTypedReport {
             "default_switch_allowed": false,
             "product_chain_switch_allowed": false,
             "stage_report_schema": false,
-            "daemon_runtime_native_owner_schema": "daemon-runtime-native-owner-v1",
+            "daemon_runtime_native_owner_schema": "daemon-runtime-native-owner",
             "daemon_runtime_native_owner_admitted": true,
             "daemon_runtime_native_owner_group_count": native_assets::runtime_native_group_count(),
             "daemon_runtime_native_owner_default_switch_allowed": false,
-            "datapath_outbound_ebpf_deep_area_schema": "datapath-outbound-ebpf-deep-area-v1",
+            "datapath_outbound_ebpf_deep_area_schema": "datapath-outbound-ebpf-deep-area",
             "datapath_outbound_ebpf_deep_area_completed": true,
             "datapath_outbound_ebpf_deep_area_surface_count": deep_area::deep_area_surface_count(),
             "datapath_outbound_ebpf_deep_area_default_switch_allowed": false,
@@ -850,7 +850,7 @@ fn ebpf_backend_capability_json(
         },
     );
     json!({
-        "schema": "ebpf-backend-capability-report-v1",
+        "schema": "ebpf-backend-capability-report",
         "report_only": report.report_only,
         "aya_userspace_available": report.aya_userspace_available,
         "tc_netlink_available": report.tc_netlink_available,

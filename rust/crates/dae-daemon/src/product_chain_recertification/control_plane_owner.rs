@@ -18,7 +18,7 @@ pub(super) fn control_plane_owner_gate_json(
     if !executed {
         return ControlPlaneOwnerGateReport {
             report: json!({
-                "name": "control-plane-owner-v1",
+                "name": "control-plane-owner",
                 "status": "not-executed",
                 "requested": false,
                 "control_plane_owner_ready": false,
@@ -186,7 +186,7 @@ pub(super) fn control_plane_owner_gate_json(
 
     ControlPlaneOwnerGateReport {
         report: json!({
-            "name": "control-plane-owner-v1",
+            "name": "control-plane-owner",
             "status": if control_plane_owner_ready && go_control_plane_fallback_retired_candidate {
                 "pass"
             } else {

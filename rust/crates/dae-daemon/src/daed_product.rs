@@ -301,11 +301,22 @@ fn product_runtime_defaults() -> Value {
     })
 }
 
+fn c10_final_blockers() -> Vec<&'static str> {
+    vec![
+        "generated protocol matrix live evidence is not recorded",
+        "default-ready benchmark evidence is not recorded",
+        "go-free artifact build-chain scan has not passed for the default package",
+        "userland FFI/C ABI retirement is not proven for the default path",
+        "Go oracle/default dependency retirement is not proven for the default path",
+        "Rust internal fallback normalization is not proven for the default path",
+    ]
+}
+
 fn c10_final_gate_evidence() -> Value {
     json!({
-        "schema": "c10-final-go-free-product-chain-evidence-v1",
-        "status": "pass",
-        "evidenceDate": "2026-06-05",
+        "schema": "c10-final-go-free-product-chain-evidence",
+        "status": "blocked",
+        "evidenceDate": Value::Null,
         "liveHost": "remote-38",
         "liveEvidenceRoot": "/tmp/daed-c10-live",
         "liveEvidenceSummary": "/tmp/daed-c10-live/evidence/summary.json",
@@ -316,27 +327,31 @@ fn c10_final_gate_evidence() -> Value {
         "defaultConfigDir": DEFAULT_CONFIG_DIR,
         "protectedRollbackStateStore": PROTECTED_ROLLBACK_STATE_STORE,
         "primaryStateStore": PRIMARY_STATE_STORE,
-        "liveDefaultSwitchApplied": true,
-        "rollbackValidationAppliedOnLiveHost": true,
-        "releaseDefaultSwitchAdmission": true,
-        "productionPackageAdmission": true,
+        "productSurfaceEvidenceRecorded": true,
+        "protocolMatrixLiveEvidenceRecorded": false,
+        "liveDefaultSwitchApplied": false,
+        "rollbackValidationAppliedOnLiveHost": false,
+        "releaseDefaultSwitchAdmission": false,
+        "productionPackageAdmission": false,
         "webApiReloadStopValidated": true,
         "groupRegexBindingValidated": true,
         "rustProductBinaryValidated": true,
-        "nativeEbpfDefaultPackageValidated": true,
-        "goDefaultPathRetired": true,
+        "nativeEbpfDefaultPackageValidated": false,
+        "goDefaultPathRetired": false,
+        "blockers": c10_final_blockers(),
     })
 }
 
 fn c10_final_admission() -> Value {
     json!({
-        "liveDefaultSwitchApplied": true,
-        "rollbackValidationAppliedOnLiveHost": true,
-        "releaseDefaultSwitchAdmission": true,
-        "productionPackageAdmission": true,
-        "goDaewingDefaultPathRemoved": true,
-        "fullGoFreeProductChainReady": true,
+        "liveDefaultSwitchApplied": false,
+        "rollbackValidationAppliedOnLiveHost": false,
+        "releaseDefaultSwitchAdmission": false,
+        "productionPackageAdmission": false,
+        "goDaewingDefaultPathRemoved": false,
+        "fullGoFreeProductChainReady": false,
         "evidence": c10_final_gate_evidence(),
+        "blockers": c10_final_blockers(),
     })
 }
 
@@ -366,6 +381,12 @@ enum ProductRuntimeInstance {
 struct FakeProductRuntime {
     started_at: String,
     tproxy_port: u16,
+}
+
+impl FakeProductRuntime {
+    fn probe_node_latencies(&self, links: &[String]) -> Vec<Value> {
+        fake_runtime_probe_node_latencies(links)
+    }
 }
 
 #[derive(Debug)]
@@ -565,7 +586,11 @@ impl ProductRuntimeManager {
         };
         match inner.runtime.as_ref() {
             Some(ProductRuntimeInstance::Resident(runtime)) => runtime.probe_node_latencies(links),
-            Some(ProductRuntimeInstance::Fake(_)) | None => Vec::new(),
+            Some(ProductRuntimeInstance::Fake(fake)) => fake.probe_node_latencies(links),
+            None if product_runtime_fake_start_enabled() => {
+                fake_runtime_probe_node_latencies(links)
+            }
+            None => Vec::new(),
         }
     }
 }
@@ -1469,7 +1494,7 @@ fn daed_service_contract(version: &str) -> Value {
         report.insert("c_phase".to_owned(), json!("C10"));
         report.insert(
             "c10_work_package".to_owned(),
-            json!("go-free-product-chain-v1"),
+            json!("go-free-product-chain"),
         );
         report.insert("primary_state_store".to_owned(), json!(PRIMARY_STATE_STORE));
         report.insert(
@@ -1546,73 +1571,81 @@ fn daed_service_contract(version: &str) -> Value {
             "rust_daed_local_package_admission_ready".to_owned(),
             json!(true),
         );
-        report.insert("default_product_package_go_free".to_owned(), json!(true));
+        report.insert("default_product_package_go_free".to_owned(), json!(false));
         report.insert(
             "go_product_shell_retired_from_default_package".to_owned(),
-            json!(true),
+            json!(false),
         );
         report.insert(
             "go_orchestration_retired_from_default_package".to_owned(),
-            json!(true),
+            json!(false),
         );
         report.insert(
             "go_control_runtime_api_service_release_retired_from_default_package".to_owned(),
-            json!(true),
+            json!(false),
         );
         report.insert(
             "go_outbound_dependency_retired_from_default_package".to_owned(),
-            json!(true),
+            json!(false),
         );
         report.insert("leptos_webui_rewrite_considered".to_owned(), json!(false));
-        report.insert("go_free_live_host_contract_ready".to_owned(), json!(true));
+        report.insert("go_free_live_host_contract_ready".to_owned(), json!(false));
         report.insert("go_free_rollback_model_ready".to_owned(), json!(true));
         report.insert(
             "go_free_product_chain_typed_report_ready".to_owned(),
             json!(true),
         );
-        report.insert("go_free_product_chain_ready".to_owned(), json!(true));
+        report.insert("go_free_product_chain_ready".to_owned(), json!(false));
         report.insert(
             "go_free_product_chain_final_evidence".to_owned(),
             c10_final_gate_evidence(),
         );
         report.insert(
             "go_free_product_chain_current_batch".to_owned(),
-            json!("C10 final go-free product-chain admission"),
+            json!(
+                "C10 final go-free product-chain blocked pending live matrix and artifact evidence"
+            ),
         );
-        report.insert("go_free_product_chain_remaining_work".to_owned(), json!([]));
+        report.insert(
+            "go_free_product_chain_remaining_work".to_owned(),
+            json!(c10_final_blockers()),
+        );
         if let Some(Value::Object(typed_report)) =
             report.get_mut("go_free_product_chain_typed_report")
         {
-            typed_report.insert("default_product_package_go_free".to_owned(), json!(true));
+            typed_report.insert("default_product_package_go_free".to_owned(), json!(false));
             typed_report.insert(
                 "go_product_shell_retired_from_default_package".to_owned(),
-                json!(true),
+                json!(false),
             );
             typed_report.insert(
                 "go_orchestration_retired_from_default_package".to_owned(),
-                json!(true),
+                json!(false),
             );
             typed_report.insert(
                 "go_control_runtime_api_service_release_retired_from_default_package".to_owned(),
-                json!(true),
+                json!(false),
             );
             typed_report.insert(
                 "go_outbound_dependency_retired_from_default_package".to_owned(),
-                json!(true),
+                json!(false),
             );
-            typed_report.insert("go_free_live_host_contract_ready".to_owned(), json!(true));
+            typed_report.insert("go_free_live_host_contract_ready".to_owned(), json!(false));
             typed_report.insert("go_free_rollback_model_ready".to_owned(), json!(true));
-            typed_report.insert("go_free_product_chain_ready".to_owned(), json!(true));
-            typed_report.insert("live_default_switch_applied".to_owned(), json!(true));
+            typed_report.insert("go_free_product_chain_ready".to_owned(), json!(false));
+            typed_report.insert("live_default_switch_applied".to_owned(), json!(false));
             typed_report.insert(
                 "rollback_validation_applied_on_live_host".to_owned(),
-                json!(true),
+                json!(false),
             );
             typed_report.insert(
                 "release_default_switch_admission_ready".to_owned(),
-                json!(true),
+                json!(false),
             );
-            typed_report.insert("production_package_admission_ready".to_owned(), json!(true));
+            typed_report.insert(
+                "production_package_admission_ready".to_owned(),
+                json!(false),
+            );
             typed_report.insert("rust_product_binary_contract_ready".to_owned(), json!(true));
             typed_report.insert(
                 "rust_product_lifecycle_contract_ready".to_owned(),
@@ -1625,9 +1658,10 @@ fn daed_service_contract(version: &str) -> Value {
             typed_report.insert("rust_daed_validate_command_ready".to_owned(), json!(true));
             typed_report.insert(
                 "current_batch".to_owned(),
-                json!("C10 final go-free product-chain admission"),
+                json!("C10 final go-free product-chain blocked pending live matrix and artifact evidence"),
             );
-            typed_report.insert("status".to_owned(), json!("pass"));
+            typed_report.insert("status".to_owned(), json!("blocked"));
+            typed_report.insert("blockers".to_owned(), json!(c10_final_blockers()));
         }
     }
     report
@@ -1639,7 +1673,7 @@ fn daed_package_info(version: &str) -> Value {
         "version": version,
         "binary": "/usr/bin/daed",
         "c_phase": "C10",
-        "work_package": "go-free-product-chain-v1",
+        "work_package": "go-free-product-chain",
         "primary_state_store": PRIMARY_STATE_STORE,
         "protected_rollback_state_store": PROTECTED_ROLLBACK_STATE_STORE,
         "rust_daed_writes_wing_db_by_default": false,
@@ -1689,14 +1723,15 @@ fn daed_package_info(version: &str) -> Value {
             "docker_entrypoint": "/usr/bin/daed run -c /etc/daed --listen 0.0.0.0:2023",
             "package_manifest": "daed export package-manifest",
             "admission_report": "daed export admission-report",
-            "default_package_switch_live_applied": true,
-            "rollback_validation_applied_on_live_host": true,
-            "release_default_switch_admission": true,
-            "production_package_admission": true,
-            "go_daewing_default_path_removed": true
+            "default_package_switch_live_applied": false,
+            "rollback_validation_applied_on_live_host": false,
+            "release_default_switch_admission": false,
+            "production_package_admission": false,
+            "go_daewing_default_path_removed": false
         },
         "final_gate_evidence": c10_final_gate_evidence(),
-        "full_go_free_product_chain_ready": true
+        "full_go_free_product_chain_ready": false,
+        "remaining_admission": c10_final_blockers()
     })
 }
 
@@ -1832,9 +1867,9 @@ fn apply_state_schema(conn: &Connection) -> io::Result<()> {
             WHERE group_id IS NULL
                OR group_id NOT IN (SELECT id FROM groups);
         INSERT OR IGNORE INTO daed_schema_migrations(id, applied_at)
-            VALUES('c10-first-batch-daed-product-schema-v1', datetime('now'));
+            VALUES('c10-first-batch-daed-product-schema', datetime('now'));
         INSERT OR IGNORE INTO daed_schema_migrations(id, applied_at)
-            VALUES('c10-local-product-surface-v2', datetime('now'));
+            VALUES('c10-local-product-surface', datetime('now'));
         INSERT OR IGNORE INTO log_settings(id, max_entries, max_bytes)
             VALUES(1, 10000, 52428800);
         INSERT OR IGNORE INTO daed_product_metadata(key, value)
@@ -7228,6 +7263,34 @@ fn append_resident_flow_event_product_log_fields(
     for key in ["pid", "dscp", "pname", "mac", "error", "reason"] {
         append_resident_event_field_if_present(fields, event, key);
     }
+    append_resident_execution_descriptor_fields(fields, event);
+}
+
+fn append_resident_execution_descriptor_fields(
+    fields: &mut BTreeMap<String, String>,
+    event: &Value,
+) {
+    let Some(descriptor) = event.get("executionDescriptor").and_then(Value::as_object) else {
+        return;
+    };
+    for key in [
+        "executor",
+        "capability",
+        "packetSemantics",
+        "securityUnderlay",
+        "streamWrapper",
+        "protocolFraming",
+        "transportUnderlay",
+        "graphId",
+    ] {
+        let Some(value) = descriptor.get(key) else {
+            continue;
+        };
+        let value = product_log_field_value(value);
+        if !value.is_empty() {
+            fields.insert(key.to_owned(), value);
+        }
+    }
 }
 
 fn append_resident_flow_network_field(fields: &mut BTreeMap<String, String>, event: &Value) {
@@ -8225,6 +8288,98 @@ fn update_node_latencies(
     list_node_latencies_value(state, runtime)
 }
 
+fn fake_runtime_probe_node_latencies(links: &[String]) -> Vec<Value> {
+    links
+        .iter()
+        .filter(|link| !link.is_empty())
+        .map(|link| fake_runtime_tcp_latency_snapshot(link))
+        .collect()
+}
+
+fn fake_runtime_tcp_latency_snapshot(link: &str) -> Value {
+    let checked_at = unix_now() as i64;
+    let started = Instant::now();
+    let probe = fake_runtime_tcp_connect(link);
+    let latency_ms = probe
+        .as_ref()
+        .ok()
+        .map(|_| started.elapsed().as_millis() as i64);
+    let display_name = node_name_from_link(link);
+    let link_hash = runtime_link_hash(link);
+    let redacted_source = runtime_redacted_link_source(link);
+    json!({
+        "name": display_name.as_str(),
+        "displayName": display_name.as_str(),
+        "linkHash": link_hash.as_str(),
+        "linkIdentity": runtime_link_identity_value(&display_name, &link_hash, &redacted_source),
+        "latencyMs": latency_ms,
+        "alive": latency_ms.is_some(),
+        "checkedAtUnix": checked_at,
+        "message": probe.err(),
+        "scope": "fake-runtime-tcp-check",
+    })
+}
+
+fn fake_runtime_tcp_connect(link: &str) -> Result<(), String> {
+    let url = url::Url::parse(link).map_err(|err| format!("parse node link: {err}"))?;
+    let host = url
+        .host_str()
+        .ok_or_else(|| "node link does not contain a host".to_owned())?;
+    let port = url
+        .port_or_known_default()
+        .ok_or_else(|| "node link does not contain a port".to_owned())?;
+    let addrs = (host, port)
+        .to_socket_addrs()
+        .map_err(|err| format!("resolve node endpoint: {err}"))?;
+    let mut last_error = None;
+    for addr in addrs {
+        match TcpStream::connect_timeout(&addr, Duration::from_millis(500)) {
+            Ok(_) => return Ok(()),
+            Err(err) => last_error = Some(err),
+        }
+    }
+    Err(last_error
+        .map(|err| format!("connect node endpoint: {err}"))
+        .unwrap_or_else(|| "node endpoint resolved to no socket addresses".to_owned()))
+}
+
+fn node_name_from_link(link: &str) -> String {
+    url::Url::parse(link)
+        .ok()
+        .and_then(|url| url.fragment().map(str::to_owned))
+        .filter(|fragment| !fragment.is_empty())
+        .unwrap_or_default()
+}
+
+fn runtime_link_identity_value(
+    display_name: &str,
+    link_hash: &str,
+    redacted_source: &str,
+) -> Value {
+    json!({
+        "schemaVersion": 1,
+        "displayName": display_name,
+        "linkHash": link_hash,
+        "redactedSource": redacted_source,
+    })
+}
+
+fn runtime_link_hash(link: &str) -> String {
+    format!("sha256:{}", hex_encode(&Sha256::digest(link.as_bytes())))
+}
+
+fn runtime_redacted_link_source(link: &str) -> String {
+    let Ok(url) = url::Url::parse(link) else {
+        return "link:<redacted>".to_owned();
+    };
+    let mut value = format!("{}:<redacted>", url.scheme());
+    if let Some(fragment) = url.fragment().filter(|fragment| !fragment.is_empty()) {
+        value.push('#');
+        value.push_str(fragment);
+    }
+    value
+}
+
 #[derive(Clone, Debug)]
 struct NodeLatencyWrite {
     node_id: i64,
@@ -8253,17 +8408,24 @@ fn runtime_node_latency_results_for_nodes(
 ) -> (Vec<NodeLatencyWrite>, HashSet<i64>) {
     let mut results = Vec::new();
     let mut tested_ids = HashSet::new();
+    let mut node_ids_by_link_hash = BTreeMap::<String, Vec<i64>>::new();
+    for (id, node_link, _) in nodes {
+        node_ids_by_link_hash
+            .entry(runtime_link_hash(node_link))
+            .or_default()
+            .push(*id);
+    }
     for snapshot in snapshots {
         if !runtime_latency_snapshot_has_result(snapshot) {
             continue;
         }
-        let Some(link) = snapshot.get("link").and_then(Value::as_str) else {
+        let Some(link_hash) = runtime_latency_snapshot_link_hash(snapshot) else {
             continue;
         };
-        let matched_ids = nodes
-            .iter()
-            .filter_map(|(id, node_link, _)| (node_link == link).then_some(*id))
-            .collect::<Vec<_>>();
+        let matched_ids = node_ids_by_link_hash
+            .get(link_hash)
+            .cloned()
+            .unwrap_or_default();
         if matched_ids.is_empty() {
             continue;
         }
@@ -8299,6 +8461,17 @@ fn runtime_node_latency_results_for_nodes(
         }
     }
     (results, tested_ids)
+}
+
+fn runtime_latency_snapshot_link_hash(snapshot: &Value) -> Option<&str> {
+    snapshot
+        .get("linkHash")
+        .and_then(Value::as_str)
+        .or_else(|| {
+            snapshot
+                .pointer("/linkIdentity/linkHash")
+                .and_then(Value::as_str)
+        })
 }
 
 fn runtime_latency_snapshot_has_result(snapshot: &Value) -> bool {
@@ -8775,7 +8948,7 @@ fn product_openapi_skeleton() -> Value {
             "version": crate::version::version_from_env(),
         },
         "x-c-phase": "C10",
-        "x-work-package": "go-free-product-chain-v1",
+        "x-work-package": "go-free-product-chain",
         "paths": {
             "/api/health": {"get": {"summary": "health"}},
             "/api/auth/status": {"get": {"summary": "setup/auth status"}},
@@ -8805,7 +8978,7 @@ fn product_flatdesc() -> Value {
     json!({
         "schemaVersion": 1,
         "cPhase": "C10",
-        "workPackage": "go-free-product-chain-v1",
+        "workPackage": "go-free-product-chain",
         "stateStore": PRIMARY_STATE_STORE,
         "protectedRollbackStore": PROTECTED_ROLLBACK_STATE_STORE,
         "resources": ["configs", "dns", "routings", "nodes", "subscriptions", "groups"],
@@ -8813,7 +8986,7 @@ fn product_flatdesc() -> Value {
         "logs": ["log-list", "log-settings", "sse-snapshot"],
         "package": ["validate-command", "systemd-unit-surface", "docker-entrypoint-surface", "package-manifest", "admission-report", "webui-route-audit", "openapi", "flatdesc", "outline"],
         "finalAdmission": c10_final_admission(),
-        "fullGoFreeProductChainReady": true,
+        "fullGoFreeProductChainReady": false,
     })
 }
 
@@ -8825,7 +8998,7 @@ fn product_outline() -> Value {
             "state": PRIMARY_STATE_STORE,
             "webRoot": DEFAULT_WEB_ROOT,
         },
-        "workPackage": "go-free-product-chain-v1",
+        "workPackage": "go-free-product-chain",
         "localC10Surface": {
             "webApi": true,
             "validateCommand": true,
@@ -8842,7 +9015,7 @@ fn product_outline() -> Value {
             "webuiRouteAudit": true,
         },
         "finalAdmission": c10_final_admission(),
-        "remainingAdmission": []
+        "remainingAdmission": c10_final_blockers()
     })
 }
 
@@ -8851,7 +9024,7 @@ fn product_package_manifest() -> Value {
         "schemaVersion": 1,
         "name": "daed",
         "cPhase": "C10",
-        "workPackage": "go-free-product-chain-v1",
+        "workPackage": "go-free-product-chain",
         "binary": {
             "path": "/usr/bin/daed",
             "source": "rust/crates/dae-daemon/src/bin/daed.rs",
@@ -8890,13 +9063,14 @@ fn product_package_manifest() -> Value {
         },
         "admission": {
             "localPackageAdmissionReady": true,
-            "liveDefaultSwitchApplied": true,
-            "goDaewingDefaultPathRemoved": true,
-            "rollbackValidationAppliedOnLiveHost": true,
-            "releaseDefaultSwitchAdmission": true,
-            "productionPackageAdmission": true,
-            "fullGoFreeProductChainReady": true,
+            "liveDefaultSwitchApplied": false,
+            "goDaewingDefaultPathRemoved": false,
+            "rollbackValidationAppliedOnLiveHost": false,
+            "releaseDefaultSwitchAdmission": false,
+            "productionPackageAdmission": false,
+            "fullGoFreeProductChainReady": false,
             "evidence": c10_final_gate_evidence(),
+            "remainingAdmission": c10_final_blockers(),
         }
     })
 }
@@ -8906,8 +9080,8 @@ fn product_admission_report() -> Value {
     json!({
         "schemaVersion": 1,
         "cPhase": "C10",
-        "workPackage": "go-free-product-chain-v1",
-        "status": "pass",
+        "workPackage": "go-free-product-chain",
+        "status": "blocked",
         "runtimeDefaults": product_runtime_defaults(),
         "localEvidence": {
             "rustDaedBinary": true,
@@ -8939,15 +9113,15 @@ fn product_admission_report() -> Value {
             "outline": "daed export outline",
         },
         "liveEvidence": {
-            "defaultPackageSwitchApplied": true,
+            "defaultPackageSwitchApplied": false,
             "previousDefaultSwitchBlockedByMetadataOnlyRuntimeState": true,
-            "rollbackValidationApplied": true,
-            "goDaewingDefaultPathRemoved": true,
-            "releaseDefaultSwitchAdmission": true,
-            "productionPackageAdmission": true,
+            "rollbackValidationApplied": false,
+            "goDaewingDefaultPathRemoved": false,
+            "releaseDefaultSwitchAdmission": false,
+            "productionPackageAdmission": false,
             "evidence": c10_final_gate_evidence(),
         },
-        "remainingBlockers": []
+        "remainingBlockers": c10_final_blockers()
     })
 }
 
@@ -8958,7 +9132,7 @@ fn webui_route_audit_report() -> Value {
         .collect::<Vec<_>>();
     json!({
         "schemaVersion": 1,
-        "workPackage": "go-free-product-chain-v1",
+        "workPackage": "go-free-product-chain",
         "source": "daed/apps/web/src/apis",
         "rustServer": "rust/crates/dae-daemon/src/daed_product.rs",
         "pass": true,
@@ -10552,7 +10726,13 @@ dns {{}}
         let snapshots = vec![
             json!({
                 "name": "one",
-                "link": "socks://127.0.0.1:1080#one",
+                "linkHash": runtime_link_hash("socks://127.0.0.1:1080#one"),
+                "linkIdentity": {
+                    "schemaVersion": 1,
+                    "displayName": "one",
+                    "linkHash": runtime_link_hash("socks://127.0.0.1:1080#one"),
+                    "redactedSource": "socks:<redacted>#one",
+                },
                 "latencyMs": 37,
                 "alive": true,
                 "checkedAtUnix": 42,
@@ -10560,13 +10740,24 @@ dns {{}}
             }),
             json!({
                 "name": "two",
-                "link": "socks://127.0.0.1:1081#two",
+                "linkHash": runtime_link_hash("socks://127.0.0.1:1081#two"),
+                "linkIdentity": {
+                    "schemaVersion": 1,
+                    "displayName": "two",
+                    "linkHash": runtime_link_hash("socks://127.0.0.1:1081#two"),
+                    "redactedSource": "socks:<redacted>#two",
+                },
                 "latencyMs": null,
                 "alive": false,
                 "checkedAtUnix": 0,
                 "message": "no latency result",
             }),
         ];
+        assert!(
+            snapshots
+                .iter()
+                .all(|snapshot| snapshot.get("link").is_none())
+        );
         let (results, tested_ids) = runtime_node_latency_results_for_nodes(&nodes, &snapshots);
         assert_eq!(results.len(), 1);
         assert_eq!(results[0].node_id, 11);
@@ -10587,12 +10778,19 @@ dns {{}}
         )];
         let snapshots = vec![json!({
             "name": "one",
-            "link": "socks://127.0.0.1:1080#one",
+            "linkHash": runtime_link_hash("socks://127.0.0.1:1080#one"),
+            "linkIdentity": {
+                "schemaVersion": 1,
+                "displayName": "one",
+                "linkHash": runtime_link_hash("socks://127.0.0.1:1080#one"),
+                "redactedSource": "socks:<redacted>#one",
+            },
             "latencyMs": null,
             "alive": false,
             "checkedAtUnix": 84,
             "message": "connect failed",
         })];
+        assert!(snapshots[0].get("link").is_none());
         let (results, tested_ids) = runtime_node_latency_results_for_nodes(&nodes, &snapshots);
         assert_eq!(results.len(), 1);
         assert_eq!(results[0].node_id, 21);
@@ -10601,6 +10799,22 @@ dns {{}}
         assert_eq!(results[0].message.as_deref(), Some("connect failed"));
         assert_eq!(results[0].tested_at, iso8601_utc(84));
         assert!(tested_ids.contains(&21));
+    }
+
+    #[test]
+    fn fake_runtime_latency_snapshot_redacts_raw_link() {
+        let raw_link = "http://user:secret@127.0.0.1:1/node?token=secret#demo";
+        let snapshot = fake_runtime_tcp_latency_snapshot(raw_link);
+        assert!(snapshot.get("link").is_none(), "{snapshot}");
+        assert_eq!(snapshot["name"], "demo");
+        assert_eq!(snapshot["displayName"], "demo");
+        assert_eq!(snapshot["linkHash"], runtime_link_hash(raw_link));
+        assert_eq!(
+            snapshot["linkIdentity"]["redactedSource"],
+            "http:<redacted>#demo"
+        );
+        assert!(!snapshot.to_string().contains("user:secret"));
+        assert!(!snapshot.to_string().contains("token=secret"));
     }
 
     #[test]
@@ -10628,7 +10842,7 @@ dns {{}}
     }
 
     #[test]
-    fn service_contract_declares_daed_db_with_full_c10_ready() {
+    fn service_contract_declares_daed_db_with_final_go_free_blocked() {
         let report = daed_service_contract("test");
         assert_eq!(
             report["primary_state_store"].as_str().unwrap(),
@@ -10644,11 +10858,17 @@ dns {{}}
                 .unwrap()
         );
         assert!(
-            report["go_free_live_host_contract_ready"]
+            !report["go_free_live_host_contract_ready"]
                 .as_bool()
                 .unwrap()
         );
-        assert!(report["go_free_product_chain_ready"].as_bool().unwrap());
+        assert!(!report["go_free_product_chain_ready"].as_bool().unwrap());
+        assert!(
+            !report["go_free_product_chain_remaining_work"]
+                .as_array()
+                .unwrap()
+                .is_empty()
+        );
     }
 
     #[test]
@@ -11702,7 +11922,18 @@ global {
                 "pid": FLOW_PID,
                 "dscp": FLOW_DSCP,
                 "pname": FLOW_PROCESS,
-                "mac": FLOW_MAC
+                "mac": FLOW_MAC,
+                "executionDescriptor": {
+                    "schemaVersion": 1,
+                    "executor": "tcp-relay",
+                    "capability": "stream-transport",
+                    "network": "tcp",
+                    "securityUnderlay": "boringssl",
+                    "protocolFraming": "vless",
+                    "transportUnderlay": "tcp",
+                    "graphId": "resident-graph:tcp-sample"
+                },
+                "legacyExecution": "async-proxy-tls"
             }),
         )
         .unwrap();
@@ -11714,7 +11945,19 @@ global {
                 "peer": UDP_FLOW_SOURCE,
                 "original_dst": UDP_FLOW_DESTINATION,
                 "request_len": 64,
-                "response_len": 128
+                "response_len": 128,
+                "executionDescriptor": {
+                    "schemaVersion": 1,
+                    "executor": "packet-relay",
+                    "capability": "packet-transport",
+                    "network": "udp",
+                    "packetSemantics": "xudp",
+                    "securityUnderlay": "boringssl",
+                    "protocolFraming": "vless",
+                    "transportUnderlay": "tcp",
+                    "graphId": "resident-graph:udp-sample"
+                },
+                "legacyExecution": "vless-xudp"
             }),
         )
         .unwrap();
@@ -11736,6 +11979,13 @@ global {
         assert_eq!(tcp["fields"]["dscp"], json!(FLOW_DSCP.to_string()));
         assert_eq!(tcp["fields"]["pname"], json!(FLOW_PROCESS));
         assert_eq!(tcp["fields"]["mac"], json!(FLOW_MAC));
+        assert_eq!(tcp["fields"]["executor"], json!("tcp-relay"));
+        assert_eq!(tcp["fields"]["capability"], json!("stream-transport"));
+        assert_eq!(tcp["fields"]["securityUnderlay"], json!("boringssl"));
+        assert_eq!(tcp["fields"]["protocolFraming"], json!("vless"));
+        assert_eq!(tcp["fields"]["transportUnderlay"], json!("tcp"));
+        assert_eq!(tcp["fields"]["graphId"], json!("resident-graph:tcp-sample"));
+        assert!(tcp["fields"].get("legacyExecution").is_none());
 
         let mut legacy_fields = BTreeMap::new();
         legacy_fields.insert("event".to_owned(), "tcp_connection_finished".to_owned());
@@ -11757,6 +12007,13 @@ global {
         );
         assert_eq!(items[0]["fields"]["network"], json!("udp4"));
         assert_eq!(items[0]["fields"]["ip"], json!(UDP_FLOW_DESTINATION));
+        assert_eq!(items[0]["fields"]["executor"], json!("packet-relay"));
+        assert_eq!(items[0]["fields"]["capability"], json!("packet-transport"));
+        assert_eq!(items[0]["fields"]["packetSemantics"], json!("xudp"));
+        assert_eq!(
+            items[0]["fields"]["graphId"],
+            json!("resident-graph:udp-sample")
+        );
         assert!(items[0]["fields"].get("request_len").is_none());
         assert_eq!(
             items[1]["message"],

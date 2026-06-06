@@ -143,7 +143,7 @@ pub(super) fn runtime_native_group_count() -> usize {
 
 pub(super) fn daemon_runtime_native_owner_summary_json() -> Value {
     json!({
-        "schema": "daemon-runtime-native-owner-v1",
+        "schema": "daemon-runtime-native-owner",
         "formal_surface": "daemon-runtime-native-owner",
         "owner_boundary": "dae-daemon",
         "accepted_native_group_count": RUNTIME_NATIVE_GROUPS.len(),
@@ -199,7 +199,7 @@ mod tests {
         let summary = daemon_runtime_native_owner_summary_json();
         assert_eq!(
             summary["schema"].as_str().unwrap(),
-            "daemon-runtime-native-owner-v1"
+            "daemon-runtime-native-owner"
         );
         assert_eq!(
             summary["accepted_native_group_count"].as_u64().unwrap(),

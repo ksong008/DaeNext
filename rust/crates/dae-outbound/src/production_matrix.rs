@@ -47,7 +47,7 @@ pub fn outbound_production_matrix_contract() -> OutboundProductionMatrixContract
         && go_fallback_retirement_ready;
 
     OutboundProductionMatrixContract {
-        schema: "outbound-production-matrix-v1",
+        schema: "outbound-production-matrix",
         entries,
         parser_export_metadata_ready,
         tcp_udp_dataplane_ready,
