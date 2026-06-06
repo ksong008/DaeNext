@@ -718,10 +718,21 @@ fn insert_outbound_production_matrix_service_contract_capabilities(report: &mut 
 
 fn insert_resident_live_adapter_matrix_service_contract_capabilities(report: &mut Value) {
     let matrix = crate::production_runtime_owner::resident_live_adapter_matrix_contract();
+    let live_evidence = crate::production_runtime_owner::resident_live_matrix_evidence_from_env();
     let entries = matrix
         .entries
         .iter()
         .map(|entry| {
+            let remote_live_matrix =
+                crate::production_runtime_owner::resident_live_adapter_entry_remote_live_matrix_ready(
+                    entry,
+                    &live_evidence,
+                );
+            let missing =
+                crate::production_runtime_owner::resident_live_adapter_entry_missing(
+                    entry,
+                    &live_evidence,
+                );
             json!({
                 "handler": entry.handler,
                 "formal_matrix_handler": entry.formal_matrix_handler,
@@ -734,13 +745,13 @@ fn insert_resident_live_adapter_matrix_service_contract_capabilities(report: &mu
                 "route_group_connectivity": entry.route_group_connectivity,
                 "selected_node_fail_closed": entry.selected_node_fail_closed,
                 "fingerprint_underlay": entry.fingerprint_underlay,
-                "remote_live_matrix": entry.remote_live_matrix,
+                "remote_live_matrix": remote_live_matrix,
                 "go_outbound_fallback_retired": entry.go_outbound_fallback_retired,
                 "wired_ready": entry.wired_ready(),
-                "live_ready": entry.live_ready(),
+                "live_ready": entry.wired_ready() && remote_live_matrix && missing.is_empty(),
                 "fingerprint_behavior": entry.fingerprint_behavior,
                 "evidence": entry.evidence,
-                "missing": entry.missing,
+                "missing": missing,
             })
         })
         .collect::<Vec<_>>();
@@ -752,7 +763,19 @@ fn insert_resident_live_adapter_matrix_service_contract_capabilities(report: &mu
     let live_ready_handler_count = matrix
         .entries
         .iter()
-        .filter(|entry| entry.live_ready())
+        .filter(|entry| {
+            let remote_live_matrix =
+                crate::production_runtime_owner::resident_live_adapter_entry_remote_live_matrix_ready(
+                    entry,
+                    &live_evidence,
+                );
+            let missing =
+                crate::production_runtime_owner::resident_live_adapter_entry_missing(
+                    entry,
+                    &live_evidence,
+                );
+            entry.wired_ready() && remote_live_matrix && missing.is_empty()
+        })
         .count();
 
     if let Value::Object(report) = report {
@@ -811,6 +834,22 @@ fn insert_resident_live_adapter_matrix_service_contract_capabilities(report: &mu
         report.insert(
             "resident_live_adapter_remote_live_matrix_ready".to_owned(),
             json!(matrix.remote_live_matrix_ready),
+        );
+        report.insert(
+            "resident_live_adapter_remote_live_matrix_evidence".to_owned(),
+            json!({
+                "env": live_evidence.env,
+                "source": live_evidence.source,
+                "schema": live_evidence.schema,
+                "schemaVersion": live_evidence.schema_version,
+                "candidateSha256": live_evidence.candidate_sha256,
+                "rowCount": live_evidence.row_count,
+                "passCount": live_evidence.pass_count,
+                "allPass": live_evidence.all_pass,
+                "valid": live_evidence.valid,
+                "readyHandlers": live_evidence.ready_handlers.iter().cloned().collect::<Vec<_>>(),
+                "error": live_evidence.error,
+            }),
         );
         report.insert(
             "resident_live_adapter_wired_handler_count".to_owned(),
