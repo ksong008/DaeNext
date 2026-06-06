@@ -63,6 +63,7 @@ mod dataplane_vless_vmess_stage140;
 mod dataplane_vless_vmess_stage141;
 mod dataplane_vmess;
 mod group_policy;
+mod matrix_extension_capability;
 mod production_matrix;
 mod protocol_modern;
 mod protocol_shadowsocks_trojan;

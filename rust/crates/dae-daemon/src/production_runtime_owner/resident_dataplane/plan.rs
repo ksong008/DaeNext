@@ -124,6 +124,8 @@ pub(super) struct ResidentProxyPlan {
     pub(super) alpn: Vec<String>,
     pub(super) flow: String,
     pub(super) net: String,
+    pub(super) stream_host: String,
+    pub(super) stream_path: String,
     pub(super) tls: String,
     pub(super) allow_insecure: bool,
     pub(super) utls_fingerprint: Option<ResidentUtlsFingerprintPlan>,
@@ -184,6 +186,8 @@ pub(super) struct ResidentExecutableGraphDescriptor {
     transport_underlay: String,
     security_underlay: String,
     stream_wrapper: String,
+    stream_host_hash: Option<String>,
+    stream_path: String,
     packet_semantics: String,
     flow: String,
     alpn: Vec<String>,
@@ -205,6 +209,12 @@ impl ResidentExecutableGraphDescriptor {
             transport_underlay: graph_transport_underlay(proxy),
             security_underlay: graph_security_underlay(proxy),
             stream_wrapper: graph_stream_wrapper(proxy),
+            stream_host_hash: if proxy.stream_host.is_empty() {
+                None
+            } else {
+                Some(link_hash(&proxy.stream_host))
+            },
+            stream_path: proxy.stream_path.clone(),
             packet_semantics: graph_packet_semantics(proxy),
             flow: proxy.flow.clone(),
             alpn: proxy.alpn.clone(),
@@ -245,6 +255,10 @@ impl ResidentExecutableGraphDescriptor {
             "transportUnderlay": self.transport_underlay,
             "securityUnderlay": self.security_underlay,
             "streamWrapper": self.stream_wrapper,
+            "streamWrapperEndpoint": {
+                "hostHash": self.stream_host_hash,
+                "path": self.stream_path,
+            },
             "protocolFraming": self.protocol_framing,
             "packetSemantics": self.packet_semantics,
             "chain": {
@@ -351,6 +365,7 @@ impl ResidentExecutableGraphDescriptor {
             "frame-stream" => ("admitted", "resident-frame-stream", Value::Null),
             "quic-stream" => ("admitted", "resident-quic-stream", Value::Null),
             "packet-stream" => ("admitted", "resident-packet-stream", Value::Null),
+            "websocket" => ("admitted", "resident-websocket-binary-frame", Value::Null),
             _ => (
                 "fail-closed",
                 "unsupported",
@@ -362,6 +377,10 @@ impl ResidentExecutableGraphDescriptor {
             "status": status,
             "wrapper": self.stream_wrapper,
             "provider": provider,
+            "endpoint": {
+                "hostHash": self.stream_host_hash,
+                "path": self.stream_path,
+            },
             "protocolFraming": self.protocol_framing,
             "unsupportedReason": unsupported_reason,
         })
@@ -492,6 +511,30 @@ fn graph_packet_semantics(proxy: &ResidentProxyPlan) -> String {
         | ResidentProxyProtocolPlan::TuicQuicTcp { .. }
         | ResidentProxyProtocolPlan::JuicityQuicTcp { .. } => "quic-datagram-or-stream".to_owned(),
         _ => "udp-over-stream-or-datagram".to_owned(),
+    }
+}
+
+fn canonical_resident_vless_net(net: &str) -> String {
+    match net {
+        "" | "tcp" => "tcp".to_owned(),
+        "ws" | "websocket" => "websocket".to_owned(),
+        other => other.to_owned(),
+    }
+}
+
+fn resident_stream_host(host: &str, server_name: &str) -> String {
+    if host.is_empty() {
+        server_name.to_owned()
+    } else {
+        host.to_owned()
+    }
+}
+
+fn resident_stream_path(path: &str) -> String {
+    if path.is_empty() {
+        "/".to_owned()
+    } else {
+        path.to_owned()
     }
 }
 
@@ -1350,17 +1393,26 @@ fn build_vless_proxy_plan(
     vless
         .validate_transport_contract()
         .map_err(|err| format!("validate VLESS transport for {node_tag}: {err}"))?;
-    if vless.flow != XTLS_RPRX_VISION {
-        return Err(format!(
-            "resident dataplane vless native experiment admits only flow={XTLS_RPRX_VISION}, got '{}' for node {node_tag}; keep Go outbound for this config",
-            vless.flow
-        ));
-    }
-    if vless.net != "tcp" {
-        return Err(format!(
-            "resident dataplane vless handler currently supports tcp transport only, got {} for node {node_tag}",
-            vless.net
-        ));
+    let net = canonical_resident_vless_net(&vless.net);
+    match net.as_str() {
+        "tcp" if vless.flow != XTLS_RPRX_VISION => {
+            return Err(format!(
+                "resident dataplane vless native experiment admits tcp flow={XTLS_RPRX_VISION}, got '{}' for node {node_tag}; keep Go outbound for this config",
+                vless.flow
+            ));
+        }
+        "websocket" if !vless.flow.is_empty() => {
+            return Err(format!(
+                "resident dataplane vless websocket handler admits only empty flow, got '{}' for node {node_tag}; keep Go outbound for this config",
+                vless.flow
+            ));
+        }
+        "tcp" | "websocket" => {}
+        other => {
+            return Err(format!(
+                "resident dataplane vless handler currently supports tcp and websocket transports only, got {other} for node {node_tag}"
+            ));
+        }
     }
     if vless.tls != "tls" {
         return Err(format!(
@@ -1389,6 +1441,16 @@ fn build_vless_proxy_plan(
         vless.sni.clone()
     };
     let alpn = split_alpn(&vless.alpn);
+    let stream_host = if net == "websocket" {
+        resident_stream_host(&vless.host, &server_name)
+    } else {
+        String::new()
+    };
+    let stream_path = if net == "websocket" {
+        resident_stream_path(&vless.path)
+    } else {
+        String::new()
+    };
     let graph = resident_graph_identity(&link);
     Ok(ResidentProxyPlan {
         graph_id: graph.graph_id,
@@ -1403,7 +1465,9 @@ fn build_vless_proxy_plan(
         server_name,
         alpn,
         flow: vless.flow,
-        net: vless.net,
+        net,
+        stream_host,
+        stream_path,
         tls: vless.tls,
         allow_insecure: false,
         utls_fingerprint,
@@ -1446,6 +1510,8 @@ fn build_socks5_proxy_plan(
         alpn: Vec::new(),
         flow: String::new(),
         net: "tcp".to_owned(),
+        stream_host: String::new(),
+        stream_path: String::new(),
         tls: "none".to_owned(),
         allow_insecure: false,
         utls_fingerprint: None,
@@ -1496,6 +1562,8 @@ fn build_http_proxy_plan(
         alpn: Vec::new(),
         flow: String::new(),
         net: "tcp".to_owned(),
+        stream_host: String::new(),
+        stream_path: String::new(),
         tls: "none".to_owned(),
         allow_insecure: false,
         utls_fingerprint: None,
@@ -1539,6 +1607,8 @@ fn build_shadowsocks_proxy_plan(
         alpn: Vec::new(),
         flow: String::new(),
         net: "tcp".to_owned(),
+        stream_host: String::new(),
+        stream_path: String::new(),
         tls: "aead".to_owned(),
         allow_insecure: false,
         utls_fingerprint: None,
@@ -1588,6 +1658,8 @@ fn build_trojan_proxy_plan(
         alpn: Vec::new(),
         flow: String::new(),
         net: "tcp".to_owned(),
+        stream_host: String::new(),
+        stream_path: String::new(),
         tls: "tls".to_owned(),
         allow_insecure: false,
         utls_fingerprint,
@@ -1636,6 +1708,8 @@ fn build_anytls_proxy_plan(
         alpn: Vec::new(),
         flow: String::new(),
         net: "tcp".to_owned(),
+        stream_host: String::new(),
+        stream_path: String::new(),
         tls: "tls".to_owned(),
         allow_insecure: false,
         utls_fingerprint,
@@ -1691,6 +1765,8 @@ fn build_tuic_proxy_plan(
         alpn: alpn.clone(),
         flow: String::new(),
         net: "udp".to_owned(),
+        stream_host: String::new(),
+        stream_path: String::new(),
         tls: "quic".to_owned(),
         allow_insecure: true,
         utls_fingerprint: None,
@@ -1766,6 +1842,8 @@ fn build_hysteria2_proxy_plan(
         alpn: vec!["h3".to_owned()],
         flow: String::new(),
         net: "udp".to_owned(),
+        stream_host: String::new(),
+        stream_path: String::new(),
         tls: "quic".to_owned(),
         allow_insecure: false,
         utls_fingerprint: None,
@@ -1821,6 +1899,8 @@ fn build_juicity_proxy_plan(
         alpn: vec!["h3".to_owned()],
         flow: String::new(),
         net: "udp".to_owned(),
+        stream_host: String::new(),
+        stream_path: String::new(),
         tls: "quic".to_owned(),
         allow_insecure,
         utls_fingerprint: None,
@@ -1849,15 +1929,28 @@ fn build_vmess_proxy_plan(
     parsed
         .validate_transport()
         .map_err(|err| format!("validate VMess transport for {node_tag}: {err}"))?;
-    if parsed.net != "tcp" {
-        return Err(format!(
-            "resident dataplane generic AEAD TCP handler admits only VMess net=tcp endpoints for node {node_tag}; got {}",
-            parsed.net
-        ));
+    let net = match parsed.net.as_str() {
+        "" | "tcp" => "tcp".to_owned(),
+        "ws" | "websocket" => "websocket".to_owned(),
+        other => other.to_owned(),
+    };
+    match net.as_str() {
+        "tcp" | "websocket" => {}
+        other => {
+            return Err(format!(
+                "resident dataplane generic AEAD TCP handler admits only VMess tcp and websocket endpoints for node {node_tag}; got {other}"
+            ));
+        }
     }
-    if !parsed.tls.is_empty() && parsed.tls != "none" {
+    if net == "tcp" && !parsed.tls.is_empty() && parsed.tls != "none" {
         return Err(format!(
             "resident dataplane generic AEAD TCP handler admits only plain VMess TCP endpoints for node {node_tag}; got tls={}",
+            parsed.tls
+        ));
+    }
+    if net == "websocket" && !parsed.tls.is_empty() && parsed.tls != "none" {
+        return Err(format!(
+            "resident dataplane VMess websocket handler currently admits plain WebSocket only for node {node_tag}; got tls={}",
             parsed.tls
         ));
     }
@@ -1873,6 +1966,16 @@ fn build_vmess_proxy_plan(
             parsed.port
         )
     })?;
+    let stream_host = if net == "websocket" {
+        resident_stream_host(&parsed.host, &parsed.add)
+    } else {
+        String::new()
+    };
+    let stream_path = if net == "websocket" {
+        resident_stream_path(&parsed.path)
+    } else {
+        String::new()
+    };
     let graph = resident_graph_identity(&link);
     Ok(ResidentProxyPlan {
         graph_id: graph.graph_id,
@@ -1887,7 +1990,9 @@ fn build_vmess_proxy_plan(
         server_name: String::new(),
         alpn: Vec::new(),
         flow: String::new(),
-        net: "tcp".to_owned(),
+        net,
+        stream_host,
+        stream_path,
         tls: "none".to_owned(),
         allow_insecure: false,
         utls_fingerprint: None,
@@ -2281,10 +2386,265 @@ fn split_alpn(raw: &str) -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use dae_outbound::shadowsocks::Sip003;
 
     fn parse_config(input: &str) -> Config {
         let sections = dae_config::parser::parse_config(input).unwrap();
         dae_config::schema::build_config(&sections).unwrap()
+    }
+
+    fn shadowsocks_fixture_url(ps: &str, add: &str, port: u16) -> String {
+        ShadowsocksLink {
+            name: ps.to_owned(),
+            server: add.to_owned(),
+            port,
+            password: "matrix-ss-pass".to_owned(),
+            cipher: "aes-128-gcm".to_owned(),
+            plugin: Sip003::default(),
+            udp: true,
+            protocol: "shadowsocks".to_owned(),
+        }
+        .export_url()
+    }
+
+    fn shadowsocks_plugin_fixture_url(ps: &str, add: &str, port: u16) -> String {
+        ShadowsocksLink {
+            name: ps.to_owned(),
+            server: add.to_owned(),
+            port,
+            password: "matrix-ss-pass".to_owned(),
+            cipher: "aes-128-gcm".to_owned(),
+            plugin: Sip003::parse("simple-obfs;obfs=http"),
+            udp: false,
+            protocol: "shadowsocks".to_owned(),
+        }
+        .export_url()
+    }
+
+    fn vless_fixture_url(
+        ps: &str,
+        add: &str,
+        port: u16,
+        net: &str,
+        host: &str,
+        path: &str,
+        sni: &str,
+        flow: &str,
+        fingerprint: &str,
+    ) -> String {
+        VLESSLink {
+            ps: ps.to_owned(),
+            add: add.to_owned(),
+            port: port.to_string(),
+            id: "01234567-89ab-cdef-0123-456789abcdef".to_owned(),
+            net: net.to_owned(),
+            r#type: "none".to_owned(),
+            host: host.to_owned(),
+            sni: sni.to_owned(),
+            path: path.to_owned(),
+            xhttp_mode: String::new(),
+            xhttp_extra: String::new(),
+            tls: "tls".to_owned(),
+            flow: flow.to_owned(),
+            alpn: String::new(),
+            allow_insecure: false,
+            fingerprint: fingerprint.to_owned(),
+            public_key: String::new(),
+            short_id: String::new(),
+            spider_x: String::new(),
+            protocol: "vless".to_owned(),
+        }
+        .export_url()
+    }
+
+    fn trojan_fixture_url(ps: &str, add: &str, port: u16) -> String {
+        TrojanLink {
+            name: ps.to_owned(),
+            server: add.to_owned(),
+            port,
+            password: "matrix-trojan-pass".to_owned(),
+            sni: "office.example".to_owned(),
+            transport_type: String::new(),
+            encryption: String::new(),
+            host: String::new(),
+            path: String::new(),
+            service_name: String::new(),
+            allow_insecure: false,
+            protocol: "trojan".to_owned(),
+        }
+        .export_url()
+    }
+
+    fn hysteria2_fixture_url(ps: &str, add: &str, port: u16) -> String {
+        hysteria2_fixture_url_with_pin(ps, &format!("{add}:{port}"), "AA-BB-CC")
+    }
+
+    fn hysteria2_fixture_url_with_pin(ps: &str, server: &str, pin_sha256: &str) -> String {
+        Hysteria2Link {
+            name: ps.to_owned(),
+            user: "matrix-hy2-auth".to_owned(),
+            password: String::new(),
+            server: server.to_owned(),
+            insecure: false,
+            sni: "office.example".to_owned(),
+            pin_sha256: pin_sha256.to_owned(),
+            max_tx: 0,
+            max_rx: 0,
+        }
+        .export_url()
+    }
+
+    fn tuic_fixture_url(ps: &str, add: &str, port: u16, allow_insecure: bool) -> String {
+        TuicLink {
+            name: ps.to_owned(),
+            user: "01234567-89ab-cdef-0123-456789abcdef".to_owned(),
+            password: "matrix-tuic-pass".to_owned(),
+            server: add.to_owned(),
+            port,
+            sni: "office.example".to_owned(),
+            allow_insecure,
+            disable_sni: false,
+            congestion_control: String::new(),
+            alpn: vec!["h3".to_owned()],
+            udp_relay_mode: String::new(),
+            protocol: "tuic".to_owned(),
+        }
+        .export_url()
+    }
+
+    fn juicity_fixture_url(ps: &str, add: &str, port: u16, allow_insecure: bool) -> String {
+        JuicityLink {
+            name: ps.to_owned(),
+            user: "01234567-89ab-cdef-0123-456789abcdef".to_owned(),
+            password: "matrix-juicity-pass".to_owned(),
+            server: add.to_owned(),
+            port,
+            sni: "office.example".to_owned(),
+            allow_insecure,
+            congestion_control: String::new(),
+            pinned_certchain_sha256: String::new(),
+            protocol: "juicity".to_owned(),
+        }
+        .export_url()
+    }
+
+    fn vmess_fixture_url(
+        ps: &str,
+        add: &str,
+        port: u16,
+        net: &str,
+        host: &str,
+        path: &str,
+        tls: &str,
+    ) -> String {
+        VMessLink {
+            ps: ps.to_owned(),
+            add: add.to_owned(),
+            port: port.to_string(),
+            id: "01234567-89ab-cdef-0123-456789abcdef".to_owned(),
+            aid: "0".to_owned(),
+            net: net.to_owned(),
+            r#type: "none".to_owned(),
+            host: host.to_owned(),
+            sni: String::new(),
+            path: path.to_owned(),
+            tls: tls.to_owned(),
+            allow_insecure: false,
+            fingerprint: String::new(),
+            v: "2".to_owned(),
+            protocol: "vmess".to_owned(),
+        }
+        .export_url()
+    }
+
+    #[test]
+    fn resident_admitted_source_fixtures_use_common_canonical_formats() {
+        let socks = "socks5://matrix:matrix-socks-pass@203.0.113.10:28447#socks";
+        let parsed_socks = Url::parse(socks).unwrap();
+        assert_eq!(parsed_socks.scheme(), "socks5");
+        assert_eq!(parsed_socks.username(), "matrix");
+        assert_eq!(parsed_socks.password(), Some("matrix-socks-pass"));
+        assert_eq!(parsed_socks.host_str(), Some("203.0.113.10"));
+        assert_eq!(parsed_socks.port(), Some(28447));
+
+        let http = "http://matrix:matrix-http-pass@203.0.113.10:28448#http";
+        assert_eq!(HttpProxyLink::parse(http).unwrap().export_url(), http);
+
+        let shadowsocks = shadowsocks_fixture_url("ss", "203.0.113.10", 28446);
+        assert_eq!(
+            ShadowsocksLink::parse(&shadowsocks).unwrap().export_url(),
+            shadowsocks
+        );
+        assert!(!shadowsocks.contains("aes-128-gcm:matrix-ss-pass"));
+
+        let trojan = trojan_fixture_url("trojan", "203.0.113.10", 28444);
+        assert_eq!(TrojanLink::parse(&trojan).unwrap().export_url(), trojan);
+
+        let anytls = "anytls://matrix-anytls-pass@203.0.113.10:28451?sni=office.example#anytls";
+        assert_eq!(AnyTLSLink::parse(anytls).unwrap().export_url(), anytls);
+
+        let vmess = vmess_fixture_url("vmess", "203.0.113.10", 28452, "tcp", "", "", "");
+        assert_eq!(VMessLink::parse(&vmess).unwrap().export_url(), vmess);
+        assert!(!vmess.contains('#'));
+
+        let vmess_websocket = vmess_fixture_url(
+            "vmess-ws",
+            "203.0.113.10",
+            28454,
+            "ws",
+            "front.example",
+            "/vmess",
+            "",
+        );
+        assert_eq!(
+            VMessLink::parse(&vmess_websocket).unwrap().export_url(),
+            vmess_websocket
+        );
+        assert!(!vmess_websocket.contains('#'));
+
+        let vless_websocket = vless_fixture_url(
+            "vless-ws",
+            "203.0.113.10",
+            28443,
+            "ws",
+            "front.example",
+            "/ws",
+            "office.example",
+            "",
+            "",
+        );
+        assert_eq!(
+            VLESSLink::parse(&vless_websocket).unwrap().export_url(),
+            vless_websocket
+        );
+
+        let hysteria2 = hysteria2_fixture_url("hy2", "203.0.113.10", 28453);
+        assert_eq!(
+            Hysteria2Link::parse(&hysteria2).unwrap().export_url(),
+            hysteria2
+        );
+
+        let tuic = tuic_fixture_url("tuic", "203.0.113.10", 28454, true);
+        assert_eq!(TuicLink::parse(&tuic).unwrap().export_url(), tuic);
+
+        let juicity = juicity_fixture_url("juicity", "203.0.113.10", 28455, true);
+        assert_eq!(JuicityLink::parse(&juicity).unwrap().export_url(), juicity);
+
+        for link in [
+            socks,
+            http,
+            anytls,
+            &shadowsocks,
+            &trojan,
+            &vmess,
+            &vmess_websocket,
+            &vless_websocket,
+            &hysteria2,
+            &tuic,
+            &juicity,
+        ] {
+            assert!(!link.contains("example.invalid-test-format"));
+        }
     }
 
     #[test]
@@ -2952,7 +3312,7 @@ mod tests {
             &config,
             "proxy".to_owned(),
             "ss_live".to_owned(),
-            "ss://aes-128-gcm:matrix-ss-pass@203.0.113.10:28446#ss".to_owned(),
+            shadowsocks_fixture_url("ss", "203.0.113.10", 28446),
         )
         .unwrap();
         assert_eq!(shadowsocks.protocol, "shadowsocks");
@@ -2966,7 +3326,7 @@ mod tests {
             &config,
             "proxy".to_owned(),
             "trojan_live".to_owned(),
-            "trojan://matrix-trojan-pass@203.0.113.10:28444?sni=office.example#trojan".to_owned(),
+            trojan_fixture_url("trojan", "203.0.113.10", 28444),
         )
         .unwrap();
         assert_eq!(trojan.protocol, "trojan");
@@ -3000,7 +3360,7 @@ mod tests {
             &config,
             "proxy".to_owned(),
             "vmess_live".to_owned(),
-            "vmess://eyJ2IjoiMiIsInBzIjoidm1lc3MiLCJhZGQiOiIyMDMuMC4xMTMuMTAiLCJwb3J0IjoiMjg0NTIiLCJpZCI6IjAxMjM0NTY3LTg5YWItY2RlZi0wMTIzLTQ1Njc4OWFiY2RlZiIsImFpZCI6IjAiLCJuZXQiOiJ0Y3AiLCJ0eXBlIjoibm9uZSIsImhvc3QiOiIiLCJwYXRoIjoiIiwidGxzIjoiIn0=".to_owned(),
+            vmess_fixture_url("vmess", "203.0.113.10", 28452, "tcp", "", "", ""),
         )
         .unwrap();
         assert_eq!(vmess.protocol, "vmess");
@@ -3012,12 +3372,97 @@ mod tests {
             ResidentProxyProtocolPlan::VmessAeadTcp { .. }
         ));
 
+        let vmess_websocket = build_resident_proxy_plan_for_node(
+            &config,
+            "proxy".to_owned(),
+            "vmess_ws_live".to_owned(),
+            vmess_fixture_url(
+                "vmess-ws",
+                "203.0.113.10",
+                28454,
+                "ws",
+                "front.example",
+                "/vmess",
+                "",
+            ),
+        )
+        .unwrap();
+        assert_eq!(vmess_websocket.protocol, "vmess");
+        assert_eq!(vmess_websocket.net, "websocket");
+        assert_eq!(vmess_websocket.stream_host, "front.example");
+        assert_eq!(vmess_websocket.stream_path, "/vmess");
+        assert_eq!(vmess_websocket.tls, "none");
+        assert!(matches!(
+            vmess_websocket.handler,
+            ResidentProxyProtocolPlan::VmessAeadTcp { .. }
+        ));
+        let vmess_websocket_graph = vmess_websocket.executable_graph_value();
+        assert_eq!(vmess_websocket_graph["streamWrapper"], "websocket");
+        assert_eq!(vmess_websocket_graph["securityUnderlay"], "none");
+        assert_eq!(
+            vmess_websocket_graph["runtimeComponents"]["streamWrapperFactory"]["provider"],
+            "resident-websocket-binary-frame"
+        );
+        assert!(
+            vmess_websocket_graph["streamWrapperEndpoint"]["hostHash"]
+                .as_str()
+                .unwrap()
+                .starts_with("sha256:")
+        );
+        assert!(!vmess_websocket_graph.to_string().contains("front.example"));
+
+        let vless_websocket = build_resident_proxy_plan_for_node(
+            &config,
+            "proxy".to_owned(),
+            "vless_ws_live".to_owned(),
+            vless_fixture_url(
+                "vless-ws",
+                "203.0.113.10",
+                28443,
+                "ws",
+                "front.example",
+                "/ws",
+                "office.example",
+                "",
+                "",
+            ),
+        )
+        .unwrap();
+        assert_eq!(vless_websocket.protocol, "vless");
+        assert_eq!(vless_websocket.server_host, "203.0.113.10");
+        assert_eq!(vless_websocket.server_port, 28443);
+        assert_eq!(vless_websocket.server_name, "office.example");
+        assert_eq!(vless_websocket.net, "websocket");
+        assert_eq!(vless_websocket.stream_host, "front.example");
+        assert_eq!(vless_websocket.stream_path, "/ws");
+        assert_eq!(vless_websocket.flow, "");
+        assert!(matches!(
+            vless_websocket.handler,
+            ResidentProxyProtocolPlan::VlessVisionTcpTls { .. }
+        ));
+        let vless_websocket_graph = vless_websocket.executable_graph_value();
+        assert_eq!(vless_websocket_graph["streamWrapper"], "websocket");
+        assert_eq!(
+            vless_websocket_graph["runtimeComponents"]["streamWrapperFactory"]["provider"],
+            "resident-websocket-binary-frame"
+        );
+        assert!(
+            vless_websocket_graph["streamWrapperEndpoint"]["hostHash"]
+                .as_str()
+                .unwrap()
+                .starts_with("sha256:")
+        );
+        assert_eq!(
+            vless_websocket_graph["streamWrapperEndpoint"]["path"],
+            "/ws"
+        );
+        assert!(!vless_websocket_graph.to_string().contains("front.example"));
+
         let hysteria2 = build_resident_proxy_plan_for_node(
             &config,
             "proxy".to_owned(),
             "hy2_live".to_owned(),
-            "hy2://matrix-hy2-auth@203.0.113.10:28453?sni=office.example&pinSHA256=AA-BB-CC#hy2"
-                .to_owned(),
+            hysteria2_fixture_url("hy2", "203.0.113.10", 28453),
         )
         .unwrap();
         assert_eq!(hysteria2.protocol, "hysteria2");
@@ -3035,8 +3480,7 @@ mod tests {
             &config,
             "proxy".to_owned(),
             "tuic_live".to_owned(),
-            "tuic://01234567-89ab-cdef-0123-456789abcdef:matrix-tuic-pass@203.0.113.10:28454?allow_insecure=1&sni=office.example&alpn=h3#tuic"
-                .to_owned(),
+            tuic_fixture_url("tuic", "203.0.113.10", 28454, true),
         )
         .unwrap();
         assert_eq!(tuic.protocol, "tuic");
@@ -3054,8 +3498,7 @@ mod tests {
             &config,
             "proxy".to_owned(),
             "juicity_live".to_owned(),
-            "juicity://01234567-89ab-cdef-0123-456789abcdef:matrix-juicity-pass@203.0.113.10:28455?allow_insecure=1&sni=office.example#juicity"
-                .to_owned(),
+            juicity_fixture_url("juicity", "203.0.113.10", 28455, true),
         )
         .unwrap();
         assert_eq!(juicity.protocol, "juicity");
@@ -3076,6 +3519,8 @@ mod tests {
             &trojan,
             &anytls,
             &vmess,
+            &vmess_websocket,
+            &vless_websocket,
             &hysteria2,
             &tuic,
             &juicity,
@@ -3200,7 +3645,7 @@ mod tests {
             &config,
             "proxy".to_owned(),
             "ss_plugin".to_owned(),
-            "ss://aes-128-gcm:matrix-ss-pass@203.0.113.10:28446?plugin=simple-obfs%3Bobfs%3Dhttp#ss-plugin".to_owned(),
+            shadowsocks_plugin_fixture_url("ss-plugin", "203.0.113.10", 28446),
         )
         .unwrap_err();
         assert!(plugin.contains("does not admit SIP003 plugin"));
@@ -3228,7 +3673,7 @@ mod tests {
             &config,
             "proxy".to_owned(),
             "vmess_tls".to_owned(),
-            "vmess://eyJ2IjoiMiIsInBzIjoidm1lc3MtdGxzIiwiYWRkIjoiMjAzLjAuMTEzLjEwIiwicG9ydCI6IjI4NDUyIiwiaWQiOiIwMTIzNDU2Ny04OWFiLWNkZWYtMDEyMy00NTY3ODlhYmNkZWYiLCJhaWQiOiIwIiwibmV0IjoidGNwIiwidHlwZSI6Im5vbmUiLCJob3N0IjoiIiwicGF0aCI6IiIsInRscyI6InRscyJ9".to_owned(),
+            vmess_fixture_url("vmess-tls", "203.0.113.10", 28452, "tcp", "", "", "tls"),
         )
         .unwrap_err();
         assert!(vmess_tls.contains("admits only plain VMess TCP endpoints"));
@@ -3237,7 +3682,7 @@ mod tests {
             &config,
             "proxy".to_owned(),
             "hy2_no_pin".to_owned(),
-            "hy2://matrix-hy2-auth@203.0.113.10:28453?sni=office.example#hy2".to_owned(),
+            hysteria2_fixture_url_with_pin("hy2", "203.0.113.10:28453", ""),
         )
         .unwrap_err();
         assert!(hy2_no_pin.contains("requires Hysteria2 pinSHA256"));
@@ -3246,8 +3691,7 @@ mod tests {
             &config,
             "proxy".to_owned(),
             "hy2_hopping".to_owned(),
-            "hy2://matrix-hy2-auth@example.com:443,8443-8445?sni=office.example&pinSHA256=AA-BB-CC#hy2"
-                .to_owned(),
+            hysteria2_fixture_url_with_pin("hy2", "example.com:443,8443-8445", "AA-BB-CC"),
         )
         .unwrap_err();
         assert!(hy2_hopping.contains("single-port Hysteria2 endpoints"));
@@ -3256,8 +3700,7 @@ mod tests {
             &config,
             "proxy".to_owned(),
             "tuic_without_insecure".to_owned(),
-            "tuic://01234567-89ab-cdef-0123-456789abcdef:matrix-tuic-pass@203.0.113.10:28454?sni=office.example&alpn=h3#tuic"
-                .to_owned(),
+            tuic_fixture_url("tuic", "203.0.113.10", 28454, false),
         )
         .unwrap_err();
         assert!(tuic_without_insecure.contains("allow_insecure is explicit"));
@@ -3266,8 +3709,7 @@ mod tests {
             &config,
             "proxy".to_owned(),
             "juicity_without_verification".to_owned(),
-            "juicity://01234567-89ab-cdef-0123-456789abcdef:matrix-juicity-pass@203.0.113.10:28455?sni=office.example#juicity"
-                .to_owned(),
+            juicity_fixture_url("juicity", "203.0.113.10", 28455, false),
         )
         .unwrap_err();
         assert!(
@@ -3354,7 +3796,7 @@ mod tests {
         "#,
         );
         let err = build_resident_dataplane_plan(&config).unwrap_err();
-        assert!(err.contains("admits only flow=xtls-rprx-vision"));
+        assert!(err.contains("admits tcp flow=xtls-rprx-vision"));
         assert!(err.contains("keep Go outbound"));
     }
 

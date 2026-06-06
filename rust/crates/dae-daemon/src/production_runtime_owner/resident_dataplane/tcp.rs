@@ -1,4 +1,4 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, VecDeque};
 use std::io::{ErrorKind, Read, Write};
 use std::mem::size_of;
 use std::net::{
@@ -35,6 +35,10 @@ use dae_outbound::{
         write_juicity_tcp_request,
     },
     shadowsocks::{AeadStreamCodec, ShadowsocksMetadata, read_encrypted_chunk_from_stream},
+    shared_transport::{
+        DEFAULT_WS_KEY, HttpUpgradeOptions, WS_MASK_KEY, read_http_head, validate_http_status,
+        websocket_client_binary_frame, websocket_handshake_request,
+    },
     socks5::{Socks5Address, handshake},
     trojan::packet as trojan_packet,
     tuic::{
@@ -1113,6 +1117,18 @@ async fn handle_proxy_tcp_connection_async(
     sniff: &TcpSniffReport,
     metrics: &ResidentDataplaneMetrics,
 ) -> Result<Value, String> {
+    if selection.proxy.net == "websocket" {
+        return handle_vless_websocket_tcp_connection_async(
+            inbound,
+            peer,
+            original_dst,
+            selection,
+            stop,
+            sniff,
+            metrics,
+        )
+        .await;
+    }
     let mut client = open_async_vless_tls_client(&selection.proxy).await?;
     let tls_underlay = async_tls_underlay_name(&client);
     let key = selection.proxy.vless_key()?;
@@ -1160,6 +1176,76 @@ async fn handle_proxy_tcp_connection_async(
             &err,
             "async-proxy-tls",
         );
+        Ok::<Value, String>(event)
+    })
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn handle_vless_websocket_tcp_connection_async(
+    inbound: &mut TokioTcpStream,
+    peer: SocketAddr,
+    original_dst: SocketAddrV4,
+    selection: TcpProxySelection,
+    stop: Arc<AtomicBool>,
+    sniff: &TcpSniffReport,
+    metrics: &ResidentDataplaneMetrics,
+) -> Result<Value, String> {
+    let mut client = open_async_vless_tls_client(&selection.proxy).await?;
+    let tls_underlay = async_tls_underlay_name(&client);
+    let key = selection.proxy.vless_key()?;
+    let options =
+        HttpUpgradeOptions::new(&selection.proxy.stream_host, &selection.proxy.stream_path);
+    websocket_handshake_over_resident_tls_async(&mut client, &options).await?;
+    let request = packet::first_write_bytes(
+        &key,
+        &selection.proxy.flow,
+        "tcp",
+        &selection.route.dial_target,
+        false,
+        &sniff.payload,
+    )
+    .map_err(|err| format!("build VLESS WebSocket TCP request: {err}"))?;
+    write_websocket_binary_frame_over_resident_tls_async(
+        &mut client,
+        &request,
+        "write VLESS websocket request",
+    )
+    .await?;
+    if !sniff.payload.is_empty() {
+        metrics.add_upload(sniff.payload.len());
+    }
+    relay_tcp_over_vless_websocket_tls_async(
+        inbound,
+        &mut client,
+        stop,
+        sniff.payload.len(),
+        metrics,
+    )
+    .await
+    .map(|stats| {
+        let mut event = proxy_tcp_finished_event(
+            peer,
+            original_dst,
+            &selection,
+            sniff,
+            tls_underlay,
+            &stats,
+            "async-proxy-websocket-tls",
+        );
+        event["stream_wrapper"] = json!("websocket");
+        event
+    })
+    .or_else(|err| {
+        let mut event = proxy_tcp_failed_event(
+            peer,
+            original_dst,
+            &selection,
+            sniff,
+            tls_underlay,
+            &err,
+            "async-proxy-websocket-tls",
+        );
+        event["stream_wrapper"] = json!("websocket");
         Ok::<Value, String>(event)
     })
 }
@@ -1246,16 +1332,31 @@ fn handle_first_batch_proxy_tcp_connection(
             password,
             *salt_len,
         ),
-        ResidentProxyProtocolPlan::VmessAeadTcp { id } => handle_vmess_proxy_tcp_connection(
-            inbound,
-            peer,
-            original_dst,
-            &selection,
-            stop,
-            sniff,
-            metrics,
-            id,
-        ),
+        ResidentProxyProtocolPlan::VmessAeadTcp { id } => {
+            if selection.proxy.net == "websocket" {
+                handle_vmess_websocket_proxy_tcp_connection(
+                    inbound,
+                    peer,
+                    original_dst,
+                    &selection,
+                    stop,
+                    sniff,
+                    metrics,
+                    id,
+                )
+            } else {
+                handle_vmess_proxy_tcp_connection(
+                    inbound,
+                    peer,
+                    original_dst,
+                    &selection,
+                    stop,
+                    sniff,
+                    metrics,
+                    id,
+                )
+            }
+        }
         ResidentProxyProtocolPlan::VlessVisionTcpTls { .. } => Err(
             "first-batch proxy dispatcher received VLESS handler; use VLESS TLS dispatcher"
                 .to_owned(),
@@ -2465,6 +2566,79 @@ fn handle_vmess_proxy_tcp_connection(
         })
 }
 
+#[allow(clippy::too_many_arguments)]
+fn handle_vmess_websocket_proxy_tcp_connection(
+    inbound: &mut TcpStream,
+    peer: SocketAddr,
+    original_dst: SocketAddrV4,
+    selection: &TcpProxySelection,
+    stop: &AtomicBool,
+    sniff: &TcpSniffReport,
+    metrics: &ResidentDataplaneMetrics,
+    id: &str,
+) -> Result<Value, String> {
+    let mut proxy = open_plain_proxy_tcp_stream(&selection.proxy)?;
+    proxy
+        .set_nonblocking(false)
+        .map_err(|err| format!("set VMess WebSocket proxy blocking: {err}"))?;
+    proxy
+        .set_read_timeout(Some(RESIDENT_TCP_IDLE_TIMEOUT))
+        .map_err(|err| format!("set VMess WebSocket proxy read timeout: {err}"))?;
+    proxy
+        .set_write_timeout(Some(RESIDENT_TCP_IDLE_TIMEOUT))
+        .map_err(|err| format!("set VMess WebSocket proxy write timeout: {err}"))?;
+    inbound
+        .set_read_timeout(Some(RESIDENT_TCP_IDLE_TIMEOUT))
+        .map_err(|err| format!("set VMess WebSocket inbound read timeout: {err}"))?;
+    inbound
+        .set_write_timeout(Some(RESIDENT_TCP_IDLE_TIMEOUT))
+        .map_err(|err| format!("set VMess WebSocket inbound write timeout: {err}"))?;
+
+    let options =
+        HttpUpgradeOptions::new(&selection.proxy.stream_host, &selection.proxy.stream_path);
+    websocket_handshake_over_plain_stream(&mut proxy, &options)?;
+    let session = aead_tcp_client_session_start(id, &selection.route.dial_target, &sniff.payload)
+        .map_err(|err| format!("build VMess WebSocket AEAD TCP session: {err}"))?;
+    write_websocket_binary_frame_to_stream(
+        &mut proxy,
+        &session.first_write,
+        "write VMess websocket request",
+    )?;
+    let mut initial_stats = DirectTcpRelayStats::default();
+    if !sniff.payload.is_empty() {
+        initial_stats.client_to_direct += sniff.payload.len();
+        metrics.add_upload(sniff.payload.len());
+    }
+
+    relay_tcp_over_vmess_websocket_aead(inbound, &mut proxy, stop, session, initial_stats, metrics)
+        .map(|stats| {
+            let mut event = generic_proxy_tcp_finished_event(
+                peer,
+                original_dst,
+                selection,
+                sniff,
+                "vmess",
+                &stats,
+                "first-batch-websocket-aead",
+            );
+            event["stream_wrapper"] = json!("websocket");
+            event
+        })
+        .or_else(|err| {
+            let mut event = generic_proxy_tcp_failed_event(
+                peer,
+                original_dst,
+                selection,
+                sniff,
+                "vmess",
+                &err,
+                "first-batch-websocket-aead",
+            );
+            event["stream_wrapper"] = json!("websocket");
+            Ok::<Value, String>(event)
+        })
+}
+
 async fn relay_tcp_over_resident_tls_plain_async(
     inbound: &mut TokioTcpStream,
     client: &mut AsyncResidentTlsClient,
@@ -2927,6 +3101,125 @@ fn relay_tcp_over_vmess_aead(
     if let Some(err) = download_error {
         return Err(err);
     }
+    if upload_bytes > 0 {
+        stats.client_to_direct += upload_bytes;
+        metrics.add_upload(upload_bytes);
+    }
+    Ok(stats)
+}
+
+fn relay_tcp_over_vmess_websocket_aead(
+    inbound: &mut TcpStream,
+    proxy: &mut TcpStream,
+    stop: &AtomicBool,
+    session: VMessAeadTcpClientSessionStart,
+    mut stats: DirectTcpRelayStats,
+    metrics: &ResidentDataplaneMetrics,
+) -> Result<DirectTcpRelayStats, String> {
+    let mut upload_proxy = proxy
+        .try_clone()
+        .map_err(|err| format!("clone VMess WebSocket proxy stream for upload: {err}"))?;
+    let mut upload_inbound = inbound
+        .try_clone()
+        .map_err(|err| format!("clone inbound stream for VMess WebSocket upload: {err}"))?;
+    upload_inbound
+        .set_read_timeout(Some(RESIDENT_CONNECT_TIMEOUT))
+        .map_err(|err| format!("set VMess WebSocket upload read timeout: {err}"))?;
+    let relay_done = Arc::new(AtomicBool::new(false));
+    let upload_done = Arc::clone(&relay_done);
+    let mut upload_codec = session.upload;
+    let upload = thread::spawn(move || {
+        let mut stats = 0_usize;
+        let mut buf = [0_u8; 16 * 1024];
+        loop {
+            if upload_done.load(Ordering::Relaxed) {
+                break;
+            }
+            let read = match upload_inbound.read(&mut buf) {
+                Ok(0) => break,
+                Ok(read) => read,
+                Err(err)
+                    if matches!(
+                        err.kind(),
+                        ErrorKind::TimedOut | ErrorKind::WouldBlock | ErrorKind::Interrupted
+                    ) =>
+                {
+                    continue;
+                }
+                Err(err) if is_graceful_stream_close_error(&err) => break,
+                Err(err) => {
+                    return Err(format!(
+                        "read inbound TCP for VMess WebSocket upload: {err}"
+                    ));
+                }
+            };
+            let encrypted = upload_codec
+                .seal_chunk(&buf[..read])
+                .map_err(|err| format!("encode VMess WebSocket upload chunk: {err}"))?;
+            write_websocket_binary_frame_to_stream(
+                &mut upload_proxy,
+                &encrypted,
+                "write VMess websocket upload frame",
+            )?;
+            stats += read;
+        }
+        let _ = upload_proxy.shutdown(Shutdown::Write);
+        Ok::<usize, String>(stats)
+    });
+
+    let download_result = {
+        let mut ws_reader = WebSocketPayloadReader::new(proxy);
+        let mut response =
+            aead_tcp_response_reader_from_stream(&mut ws_reader, &session.request)
+                .map_err(|err| format!("read VMess WebSocket AEAD response header: {err}"))?;
+        let _response_header_len = response.response_header_len;
+
+        let mut download_error = None;
+        loop {
+            if stop.load(Ordering::Relaxed) {
+                break;
+            }
+            match response.read_chunk_from_stream(&mut ws_reader) {
+                Ok(plain) => {
+                    if plain.is_empty() {
+                        continue;
+                    }
+                    inbound.write_all(&plain).map_err(|err| {
+                        format!("write VMess WebSocket response to inbound: {err}")
+                    })?;
+                    stats.direct_to_client += plain.len();
+                    metrics.add_download(plain.len());
+                }
+                Err(err) => {
+                    let message = err.to_string();
+                    if message.contains("early eof")
+                        || message.contains("failed to fill whole buffer")
+                        || message.contains("Connection reset")
+                        || message.contains("connection reset")
+                        || message.contains("timed out")
+                    {
+                        break;
+                    }
+                    download_error =
+                        Some(format!("read VMess WebSocket response chunk: {message}"));
+                    break;
+                }
+            }
+        }
+        if let Some(err) = download_error {
+            Err(err)
+        } else {
+            Ok(())
+        }
+    };
+
+    relay_done.store(true, Ordering::Relaxed);
+    let _ = inbound.shutdown(Shutdown::Read);
+    let _ = proxy.shutdown(Shutdown::Write);
+    let upload_bytes = upload
+        .join()
+        .map_err(|_| "join VMess WebSocket upload relay thread failed".to_owned())??;
+    download_result?;
     if upload_bytes > 0 {
         stats.client_to_direct += upload_bytes;
         metrics.add_upload(upload_bytes);
@@ -3910,6 +4203,166 @@ async fn relay_tcp_over_vless_tls_async(
     Ok(stats)
 }
 
+async fn websocket_handshake_over_resident_tls_async(
+    client: &mut AsyncVlessTlsClient,
+    options: &HttpUpgradeOptions,
+) -> Result<(), String> {
+    let request = websocket_handshake_request(options, DEFAULT_WS_KEY);
+    client
+        .write_plain_all(&request, "write websocket handshake")
+        .await?;
+    let response =
+        read_http_head_over_resident_tls_async(client, "read websocket handshake").await?;
+    validate_http_status(&response, 101).map_err(|err| format!("validate websocket upgrade: {err}"))
+}
+
+fn websocket_handshake_over_plain_stream(
+    stream: &mut TcpStream,
+    options: &HttpUpgradeOptions,
+) -> Result<(), String> {
+    let request = websocket_handshake_request(options, DEFAULT_WS_KEY);
+    stream
+        .write_all(&request)
+        .map_err(|err| format!("write websocket handshake: {err}"))?;
+    let response =
+        read_http_head(stream).map_err(|err| format!("read websocket handshake: {err}"))?;
+    validate_http_status(&response, 101).map_err(|err| format!("validate websocket upgrade: {err}"))
+}
+
+fn write_websocket_binary_frame_to_stream(
+    stream: &mut TcpStream,
+    payload: &[u8],
+    label: &str,
+) -> Result<(), String> {
+    let frame = websocket_client_binary_frame(payload, WS_MASK_KEY)
+        .map_err(|err| format!("{label}: {err}"))?;
+    stream
+        .write_all(&frame)
+        .map_err(|err| format!("{label}: {err}"))
+}
+
+async fn read_http_head_over_resident_tls_async(
+    client: &mut AsyncVlessTlsClient,
+    label: &str,
+) -> Result<Vec<u8>, String> {
+    let mut response = Vec::new();
+    let mut buf = [0_u8; 512];
+    loop {
+        let read = time::timeout(RESIDENT_CONNECT_TIMEOUT, client.read_plain(&mut buf))
+            .await
+            .map_err(|_| format!("{label}: timeout"))?
+            .map_err(|err| format!("{label}: {err}"))?;
+        if read == 0 {
+            return Err(format!("{label}: early eof"));
+        }
+        response.extend_from_slice(&buf[..read]);
+        if response.windows(4).any(|window| window == b"\r\n\r\n") {
+            return Ok(response);
+        }
+        if response.len() > 16 * 1024 {
+            return Err(format!("{label}: response head too large"));
+        }
+    }
+}
+
+async fn write_websocket_binary_frame_over_resident_tls_async(
+    client: &mut AsyncVlessTlsClient,
+    payload: &[u8],
+    label: &str,
+) -> Result<(), String> {
+    let frame = websocket_client_binary_frame(payload, WS_MASK_KEY)
+        .map_err(|err| format!("{label}: {err}"))?;
+    client.write_plain_all(&frame, label).await
+}
+
+async fn relay_tcp_over_vless_websocket_tls_async(
+    inbound: &mut TokioTcpStream,
+    client: &mut AsyncVlessTlsClient,
+    stop: Arc<AtomicBool>,
+    initial_payload_len: usize,
+    metrics: &ResidentDataplaneMetrics,
+) -> Result<RelayStats, RelayError> {
+    let mut stats = RelayStats::default();
+    let mut stripper = VlessResponseStripper::default();
+    let mut ws_decoder = WebSocketBinaryFrameDecoder::default();
+    let mut inbound_closed = false;
+    let mut last_activity = Instant::now();
+    let mut inbound_buf = [0_u8; 16 * 1024];
+    let mut proxy_buf = [0_u8; 16 * 1024];
+
+    while !stop.load(Ordering::Relaxed) {
+        tokio::select! {
+            inbound_read = inbound.read(&mut inbound_buf), if !inbound_closed => {
+                match inbound_read {
+                    Ok(0) => {
+                        inbound_closed = true;
+                        client.shutdown().await;
+                        last_activity = Instant::now();
+                    }
+                    Ok(read) => {
+                        write_websocket_binary_frame_over_resident_tls_async(
+                            client,
+                            &inbound_buf[..read],
+                            "write client payload websocket frame",
+                        )
+                        .await
+                        .map_err(|err| RelayError::new(err, &stats))?;
+                        stats.client_to_proxy += read;
+                        metrics.add_upload(read);
+                        last_activity = Instant::now();
+                    }
+                    Err(err) if is_graceful_stream_close_error(&err) => {
+                        inbound_closed = true;
+                        client.shutdown().await;
+                        last_activity = Instant::now();
+                    }
+                    Err(err) => {
+                        return Err(RelayError::new(format!("read inbound TCP: {err}"), &stats));
+                    }
+                }
+            }
+            proxy_read = client.read_plain(&mut proxy_buf) => {
+                match proxy_read {
+                    Ok(0) => break,
+                    Ok(read) => {
+                        let frames = ws_decoder
+                            .push(&proxy_buf[..read])
+                            .map_err(|err| RelayError::new(err, &stats))?;
+                        for frame in frames {
+                            let payload = stripper
+                                .consume(&frame)
+                                .map_err(|err| RelayError::new(err, &stats))?;
+                            stats.response_header_stripped = stripper.done;
+                            if !payload.is_empty() {
+                                inbound
+                                    .write_all(&payload)
+                                    .await
+                                    .map_err(|err| RelayError::new(format!("write VLESS websocket payload to client: {err}"), &stats))?;
+                                stats.proxy_to_client += payload.len();
+                                metrics.add_download(payload.len());
+                            }
+                        }
+                        last_activity = Instant::now();
+                    }
+                    Err(err) => {
+                        return Err(RelayError::new(format!("read websocket TLS plaintext: {err}"), &stats));
+                    }
+                }
+            }
+            _ = time::sleep(Duration::from_millis(100)) => {
+                if inbound_closed {
+                    break;
+                }
+                if last_activity.elapsed() > RESIDENT_TCP_IDLE_TIMEOUT {
+                    return Err(RelayError::new("resident websocket relay idle timeout", &stats));
+                }
+            }
+        }
+    }
+    stats.client_to_proxy += initial_payload_len;
+    Ok(stats)
+}
+
 fn can_recover_vision_raw_direct_after_tls_error(
     vision_enabled: bool,
     response_header_stripped: bool,
@@ -3947,6 +4400,125 @@ impl VlessResponseStripper {
         }
         self.done = true;
         Ok(self.header.split_off(header_len))
+    }
+}
+
+#[derive(Default)]
+struct WebSocketBinaryFrameDecoder {
+    pending: Vec<u8>,
+    closed: bool,
+}
+
+impl WebSocketBinaryFrameDecoder {
+    fn push(&mut self, input: &[u8]) -> Result<Vec<Vec<u8>>, String> {
+        if self.closed {
+            return Ok(Vec::new());
+        }
+        self.pending.extend_from_slice(input);
+        let mut frames = Vec::new();
+        loop {
+            if self.pending.len() < 2 {
+                break;
+            }
+            let fin = self.pending[0] & 0x80 != 0;
+            let opcode = self.pending[0] & 0x0f;
+            if !fin || !matches!(opcode, 2 | 8) {
+                return Err(format!(
+                    "unexpected websocket frame: fin={fin} opcode={opcode}"
+                ));
+            }
+            let masked = self.pending[1] & 0x80 != 0;
+            let mut len = (self.pending[1] & 0x7f) as usize;
+            let mut header_len = 2_usize;
+            if len == 126 {
+                if self.pending.len() < 4 {
+                    break;
+                }
+                len = u16::from_be_bytes([self.pending[2], self.pending[3]]) as usize;
+                header_len = 4;
+            } else if len == 127 {
+                return Err("websocket 64-bit length unsupported in resident relay".to_owned());
+            }
+            let mask_key = if masked {
+                if self.pending.len() < header_len + 4 {
+                    break;
+                }
+                let key = [
+                    self.pending[header_len],
+                    self.pending[header_len + 1],
+                    self.pending[header_len + 2],
+                    self.pending[header_len + 3],
+                ];
+                header_len += 4;
+                Some(key)
+            } else {
+                None
+            };
+            if self.pending.len() < header_len + len {
+                break;
+            }
+            let mut payload = self.pending[header_len..header_len + len].to_vec();
+            if let Some(mask_key) = mask_key {
+                for (index, byte) in payload.iter_mut().enumerate() {
+                    *byte ^= mask_key[index % 4];
+                }
+            }
+            self.pending.drain(..header_len + len);
+            if opcode == 8 {
+                self.closed = true;
+                break;
+            }
+            frames.push(payload);
+        }
+        Ok(frames)
+    }
+
+    fn is_closed(&self) -> bool {
+        self.closed
+    }
+}
+
+struct WebSocketPayloadReader<'a> {
+    stream: &'a mut TcpStream,
+    decoder: WebSocketBinaryFrameDecoder,
+    pending: VecDeque<u8>,
+    buffer: [u8; 16 * 1024],
+}
+
+impl<'a> WebSocketPayloadReader<'a> {
+    fn new(stream: &'a mut TcpStream) -> Self {
+        Self {
+            stream,
+            decoder: WebSocketBinaryFrameDecoder::default(),
+            pending: VecDeque::new(),
+            buffer: [0_u8; 16 * 1024],
+        }
+    }
+}
+
+impl Read for WebSocketPayloadReader<'_> {
+    fn read(&mut self, out: &mut [u8]) -> std::io::Result<usize> {
+        while self.pending.is_empty() {
+            if self.decoder.is_closed() {
+                return Ok(0);
+            }
+            let read = self.stream.read(&mut self.buffer)?;
+            if read == 0 {
+                return Ok(0);
+            }
+            let frames = self
+                .decoder
+                .push(&self.buffer[..read])
+                .map_err(|err| std::io::Error::new(ErrorKind::InvalidData, err))?;
+            for frame in frames {
+                self.pending.extend(frame);
+            }
+        }
+        let len = out.len().min(self.pending.len());
+        for byte in &mut out[..len] {
+            *byte = self.pending.pop_front().unwrap_or_default();
+        }
+        Ok(len)
     }
 }
 
@@ -4010,6 +4582,22 @@ mod tests {
         assert_eq!(stripper.consume(b"bcOK").unwrap(), b"OK");
         assert!(stripper.done);
         assert_eq!(stripper.consume(b"NEXT").unwrap(), b"NEXT");
+    }
+
+    #[test]
+    fn resident_websocket_decoder_treats_close_frame_as_eof() {
+        let mut decoder = WebSocketBinaryFrameDecoder::default();
+        let frames = decoder
+            .push(&[0x82, 0x03, b'o', b'n', b'e', 0x88, 0x00])
+            .unwrap();
+        assert_eq!(frames, vec![b"one".to_vec()]);
+        assert!(decoder.is_closed());
+        assert!(
+            decoder
+                .push(&[0x82, 0x03, b't', b'w', b'o'])
+                .unwrap()
+                .is_empty()
+        );
     }
 
     #[test]
@@ -4354,6 +4942,8 @@ mod tests {
             alpn: Vec::new(),
             flow: String::new(),
             net: "tcp".to_owned(),
+            stream_host: String::new(),
+            stream_path: String::new(),
             tls: "tls".to_owned(),
             allow_insecure: false,
             utls_fingerprint: None,

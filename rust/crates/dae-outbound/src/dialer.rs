@@ -39,7 +39,7 @@ impl Dialer {
     pub fn new(name: impl Into<String>, subscription_tag: impl Into<String>) -> Self {
         let name = name.into();
         Self {
-            link: format!("test://{name}"),
+            link: String::new(),
             name,
             subscription_tag: subscription_tag.into(),
             collections: vec![None, None, None, None, None, None],

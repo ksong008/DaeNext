@@ -454,10 +454,173 @@ fn candidate_reports_resident_service_and_dataplane_capabilities() {
             .iter()
             .any(
                 |row| row["wrapperId"].as_str().unwrap() == "websocket-wss-first-row"
-                    && row["status"].as_str().unwrap() == "loopback-admitted"
+                    && row["status"].as_str().unwrap() == "resident-live-partial"
                     && row["sourceAdmission"].as_str().unwrap()
-                        == "blocked-until-resident-materialization"
+                        == "blocked-until-multi-handler-benchmark-rollback"
             )
+    );
+    assert!(
+        report["packet_semantics_capability_contract_ready"]
+            .as_bool()
+            .unwrap()
+    );
+    assert!(report["common_packet_semantics_ready"].as_bool().unwrap());
+    assert!(
+        !report["packet_semantics_resident_source_admission_ready"]
+            .as_bool()
+            .unwrap()
+    );
+    assert!(
+        !report["expanded_packet_semantics_complete"]
+            .as_bool()
+            .unwrap()
+    );
+    assert_eq!(
+        report["packet_semantics_capability_report_schema"]
+            .as_str()
+            .unwrap(),
+        "packet-semantics-capability"
+    );
+    assert!(
+        report["packet_semantics_capability_rows"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(
+                |row| row["semanticsId"].as_str().unwrap() == "wrapper-packet-transport"
+                    && row["status"].as_str().unwrap() == "blocked"
+                    && row["blockerId"].as_str().unwrap() == "missing-packet-semantics"
+                    && row["noDirectFallback"].as_bool().unwrap()
+            )
+    );
+    assert!(
+        report["extension_layer_capability_contract_ready"]
+            .as_bool()
+            .unwrap()
+    );
+    assert!(report["no_plugin_baseline_ready"].as_bool().unwrap());
+    assert!(
+        !report["plugin_wrapper_resident_source_admission_ready"]
+            .as_bool()
+            .unwrap()
+    );
+    assert!(
+        !report["legacy_layer_resident_source_admission_ready"]
+            .as_bool()
+            .unwrap()
+    );
+    assert!(
+        !report["expanded_extension_layer_complete"]
+            .as_bool()
+            .unwrap()
+    );
+    assert_eq!(
+        report["extension_layer_capability_report_schema"]
+            .as_str()
+            .unwrap(),
+        "extension-layer-capability"
+    );
+    assert!(
+        report["extension_layer_capability_rows"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(
+                |row| row["layerId"].as_str().unwrap() == "plugin-wrapper-layer"
+                    && row["status"].as_str().unwrap() == "blocked"
+                    && row["noInheritedAdmission"].as_bool().unwrap()
+            )
+    );
+    assert!(
+        report["transport_option_capability_contract_ready"]
+            .as_bool()
+            .unwrap()
+    );
+    assert!(
+        report["baseline_transport_options_ready"]
+            .as_bool()
+            .unwrap()
+    );
+    assert!(
+        !report["quic_option_resident_source_admission_ready"]
+            .as_bool()
+            .unwrap()
+    );
+    assert!(
+        !report["secure_endpoint_resident_source_admission_ready"]
+            .as_bool()
+            .unwrap()
+    );
+    assert!(
+        !report["expanded_transport_option_complete"]
+            .as_bool()
+            .unwrap()
+    );
+    assert_eq!(
+        report["transport_option_capability_report_schema"]
+            .as_str()
+            .unwrap(),
+        "transport-option-capability"
+    );
+    assert!(
+        report["transport_option_capability_rows"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(
+                |row| row["optionId"].as_str().unwrap() == "secure-proxy-endpoint"
+                    && row["status"].as_str().unwrap() == "blocked"
+                    && row["blockerId"].as_str().unwrap() == "missing-security-underlay"
+            )
+    );
+    assert!(
+        report["expanded_live_matrix_validation_boundary_ready"]
+            .as_bool()
+            .unwrap()
+    );
+    assert!(!report["expanded_live_matrix_complete"].as_bool().unwrap());
+    assert!(
+        report["expanded_live_matrix_proxy_path_required"]
+            .as_bool()
+            .unwrap()
+    );
+    assert!(
+        report["expanded_live_matrix_direct_control_excluded"]
+            .as_bool()
+            .unwrap()
+    );
+    assert!(
+        report["expanded_live_matrix_benchmark_required"]
+            .as_bool()
+            .unwrap()
+    );
+    assert!(
+        report["expanded_live_matrix_rollback_artifact_required"]
+            .as_bool()
+            .unwrap()
+    );
+    assert!(
+        !report["expanded_live_matrix_blocked_rows_reduce_pass_threshold"]
+            .as_bool()
+            .unwrap()
+    );
+    assert_eq!(
+        report["expanded_live_matrix_validation_boundary_report_schema"]
+            .as_str()
+            .unwrap(),
+        "expanded-live-matrix-validation-boundary"
+    );
+    assert_eq!(
+        report["expanded_live_matrix_validation_boundary_typed_report"]["evidence_host"]
+            .as_str()
+            .unwrap(),
+        "remote-38"
+    );
+    assert_eq!(
+        report["expanded_live_matrix_validation_boundary_typed_report"]["upstream_host"]
+            .as_str()
+            .unwrap(),
+        "jp"
     );
     assert!(
         report["resident_live_adapter_matrix_contract_ready"]
