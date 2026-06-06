@@ -15,6 +15,7 @@ pub mod latency;
 pub mod link_parser;
 pub mod policy;
 pub mod production_matrix;
+pub mod security_underlay_capability;
 pub mod shadowsocks;
 pub mod shared_transport;
 pub mod socks5;
@@ -50,6 +51,10 @@ pub use policy::SelectionPolicy;
 pub use production_matrix::{
     OutboundProductionMatrixContract, OutboundProductionMatrixEntry,
     outbound_production_matrix_contract, production_matrix_entries,
+};
+pub use security_underlay_capability::{
+    SecurityUnderlayCapabilityContract, SecurityUnderlayCapabilityRow,
+    security_underlay_capability_contract, security_underlay_capability_rows,
 };
 pub use shadowsocks::{
     CipherFamily, CipherInfo, ShadowsocksLink, ShadowsocksMetadata, Sip003, Sip003Opts,
