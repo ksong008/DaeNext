@@ -3753,12 +3753,14 @@ impl SectionKind {
 fn api_section_preview(request: &HttpRequest, api_path: &str) -> HttpResponse {
     let body = json_body(request).unwrap_or_else(|_| json!({}));
     if api_path == "/configs/parsed" {
-        let global = body
-            .get("global")
-            .and_then(Value::as_str)
-            .map(str::to_owned)
-            .or_else(|| body.get("parsedGlobal").map(Value::to_string))
-            .unwrap_or_else(|| "global {}".to_owned());
+        let global = if let Some(parsed_global) = body.get("parsedGlobal") {
+            render_global_config_text(parsed_global)
+        } else {
+            body.get("global")
+                .and_then(Value::as_str)
+                .map(str::to_owned)
+                .unwrap_or_else(|| "global {}".to_owned())
+        };
         return HttpResponse::json(
             200,
             json!({
@@ -3933,16 +3935,14 @@ fn select_section(state: &Path, kind: SectionKind, id: i64) -> HttpResponse {
 }
 
 fn section_request_value(kind: SectionKind, body: &Value) -> String {
+    if kind == SectionKind::Config
+        && let Some(parsed_global) = body.get("parsedGlobal")
+    {
+        return render_global_config_text(parsed_global);
+    }
     body.get(kind.request_value_key())
         .and_then(Value::as_str)
         .map(str::to_owned)
-        .or_else(|| {
-            if kind == SectionKind::Config {
-                body.get("parsedGlobal").map(Value::to_string)
-            } else {
-                None
-            }
-        })
         .unwrap_or_default()
 }
 
@@ -3958,7 +3958,7 @@ fn section_resource(
         SectionKind::Config => json!({
             "id": id,
             "name": name,
-            "global": raw,
+            "global": display_global_config_text(&raw),
             "selected": selected,
             "version": version,
             "parsedGlobal": normalize_global_value(Some(&raw)),
@@ -4001,6 +4001,369 @@ fn normalize_global_value(raw: Option<&str>) -> Value {
     value
 }
 
+fn display_global_config_text(raw: &str) -> String {
+    let raw = raw.trim();
+    if raw.is_empty() {
+        return "global {}\n".to_owned();
+    }
+    match serde_json::from_str::<Value>(raw) {
+        Ok(Value::Object(map)) => render_global_config_text(&Value::Object(map)),
+        _ => raw.to_owned(),
+    }
+}
+
+fn render_global_config_text(source: &Value) -> String {
+    if let Some(raw) = source.as_str() {
+        return display_global_config_text(raw);
+    }
+    let normalized = normalize_global_value(Some(&source.to_string()));
+    let mut lines = Vec::new();
+    push_global_u64_field(
+        &mut lines,
+        &normalized,
+        source,
+        "tproxyPort",
+        "tproxy_port",
+        &["tproxyPort", "tproxy_port"],
+    );
+    push_global_bool_field(
+        &mut lines,
+        &normalized,
+        source,
+        "tproxyPortProtect",
+        "tproxy_port_protect",
+        &["tproxyPortProtect", "tproxy_port_protect"],
+    );
+    push_global_u64_field(
+        &mut lines,
+        &normalized,
+        source,
+        "soMarkFromDae",
+        "so_mark_from_dae",
+        &["soMarkFromDae", "so_mark_from_dae"],
+    );
+    push_global_string_field(
+        &mut lines,
+        &normalized,
+        source,
+        "logLevel",
+        "log_level",
+        &["logLevel", "log_level"],
+    );
+    push_global_array_field(
+        &mut lines,
+        &normalized,
+        source,
+        "tcpCheckUrl",
+        "tcp_check_url",
+        &["tcpCheckUrl", "tcp_check_url"],
+    );
+    push_global_string_field(
+        &mut lines,
+        &normalized,
+        source,
+        "tcpCheckHttpMethod",
+        "tcp_check_http_method",
+        &["tcpCheckHttpMethod", "tcp_check_http_method"],
+    );
+    push_global_array_field(
+        &mut lines,
+        &normalized,
+        source,
+        "udpCheckDns",
+        "udp_check_dns",
+        &["udpCheckDns", "udp_check_dns"],
+    );
+    push_global_string_field(
+        &mut lines,
+        &normalized,
+        source,
+        "checkInterval",
+        "check_interval",
+        &["checkInterval", "check_interval"],
+    );
+    push_global_string_field(
+        &mut lines,
+        &normalized,
+        source,
+        "checkTolerance",
+        "check_tolerance",
+        &["checkTolerance", "check_tolerance"],
+    );
+    push_global_u64_field(
+        &mut lines,
+        &normalized,
+        source,
+        "udpEndpointPoolSize",
+        "udp_endpoint_pool_size",
+        &["udpEndpointPoolSize", "udp_endpoint_pool_size"],
+    );
+    push_global_array_field(
+        &mut lines,
+        &normalized,
+        source,
+        "lanInterface",
+        "lan_interface",
+        &["lanInterface", "lan_interface"],
+    );
+    push_global_array_field(
+        &mut lines,
+        &normalized,
+        source,
+        "wanInterface",
+        "wan_interface",
+        &["wanInterface", "wan_interface"],
+    );
+    push_global_bool_field(
+        &mut lines,
+        &normalized,
+        source,
+        "allowInsecure",
+        "allow_insecure",
+        &["allowInsecure", "allow_insecure"],
+    );
+    push_global_string_field(
+        &mut lines,
+        &normalized,
+        source,
+        "dialMode",
+        "dial_mode",
+        &["dialMode", "dial_mode"],
+    );
+    push_global_bool_field(
+        &mut lines,
+        &normalized,
+        source,
+        "disableWaitingNetwork",
+        "disable_waiting_network",
+        &["disableWaitingNetwork", "disable_waiting_network"],
+    );
+    push_global_bool_field(
+        &mut lines,
+        &normalized,
+        source,
+        "enableLocalTcpFastRedirect",
+        "enable_local_tcp_fast_redirect",
+        &[
+            "enableLocalTcpFastRedirect",
+            "enable_local_tcp_fast_redirect",
+        ],
+    );
+    push_global_bool_field(
+        &mut lines,
+        &normalized,
+        source,
+        "autoConfigKernelParameter",
+        "auto_config_kernel_parameter",
+        &["autoConfigKernelParameter", "auto_config_kernel_parameter"],
+    );
+    push_global_bool_field(
+        &mut lines,
+        &normalized,
+        source,
+        "autoConfigFirewallRule",
+        "auto_config_firewall_rule",
+        &["autoConfigFirewallRule", "auto_config_firewall_rule"],
+    );
+    push_global_string_field(
+        &mut lines,
+        &normalized,
+        source,
+        "sniffingTimeout",
+        "sniffing_timeout",
+        &["sniffingTimeout", "sniffing_timeout"],
+    );
+    push_global_string_field(
+        &mut lines,
+        &normalized,
+        source,
+        "tlsImplementation",
+        "tls_implementation",
+        &["tlsImplementation", "tls_implementation"],
+    );
+    push_global_string_field(
+        &mut lines,
+        &normalized,
+        source,
+        "utlsImitate",
+        "utls_imitate",
+        &["utlsImitate", "utls_imitate"],
+    );
+    push_global_bool_field(
+        &mut lines,
+        &normalized,
+        source,
+        "tlsFragment",
+        "tls_fragment",
+        &["tlsFragment", "tls_fragment"],
+    );
+    push_global_string_field(
+        &mut lines,
+        &normalized,
+        source,
+        "tlsFragmentLength",
+        "tls_fragment_length",
+        &["tlsFragmentLength", "tls_fragment_length"],
+    );
+    push_global_string_field(
+        &mut lines,
+        &normalized,
+        source,
+        "tlsFragmentInterval",
+        "tls_fragment_interval",
+        &["tlsFragmentInterval", "tls_fragment_interval"],
+    );
+    push_global_u64_field(
+        &mut lines,
+        &normalized,
+        source,
+        "pprofPort",
+        "pprof_port",
+        &["pprofPort", "pprof_port"],
+    );
+    push_global_bool_field(
+        &mut lines,
+        &normalized,
+        source,
+        "mptcp",
+        "mptcp",
+        &["mptcp"],
+    );
+    push_global_string_field(
+        &mut lines,
+        &normalized,
+        source,
+        "fallbackResolver",
+        "fallback_resolver",
+        &["fallbackResolver", "fallback_resolver"],
+    );
+    push_global_string_field(
+        &mut lines,
+        &normalized,
+        source,
+        "bandwidthMaxTx",
+        "bandwidth_max_tx",
+        &["bandwidthMaxTx", "bandwidth_max_tx"],
+    );
+    push_global_string_field(
+        &mut lines,
+        &normalized,
+        source,
+        "bandwidthMaxRx",
+        "bandwidth_max_rx",
+        &["bandwidthMaxRx", "bandwidth_max_rx"],
+    );
+    push_global_string_field(
+        &mut lines,
+        &normalized,
+        source,
+        "udphopInterval",
+        "udphop_interval",
+        &["udphopInterval", "udphop_interval"],
+    );
+
+    if lines.is_empty() {
+        return "global {}\n".to_owned();
+    }
+    let mut out = String::from("global {\n");
+    for line in lines {
+        out.push_str("  ");
+        out.push_str(&line);
+        out.push('\n');
+    }
+    out.push_str("}\n");
+    out
+}
+
+fn push_global_string_field(
+    lines: &mut Vec<String>,
+    normalized: &Value,
+    source: &Value,
+    json_key: &str,
+    config_key: &str,
+    aliases: &[&str],
+) {
+    let value = normalized
+        .get(json_key)
+        .and_then(Value::as_str)
+        .unwrap_or("");
+    if global_source_has_key(source, aliases) || !value.is_empty() {
+        lines.push(format!("{config_key}:{}", dae_string_literal(value)));
+    }
+}
+
+fn push_global_array_field(
+    lines: &mut Vec<String>,
+    normalized: &Value,
+    source: &Value,
+    json_key: &str,
+    config_key: &str,
+    aliases: &[&str],
+) {
+    let values = normalized
+        .get(json_key)
+        .and_then(Value::as_array)
+        .map(|values| {
+            values
+                .iter()
+                .filter_map(Value::as_str)
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+    if global_source_has_key(source, aliases) || !values.is_empty() {
+        lines.push(format!(
+            "{config_key}:{}",
+            dae_string_literal(&values.join(","))
+        ));
+    }
+}
+
+fn push_global_bool_field(
+    lines: &mut Vec<String>,
+    normalized: &Value,
+    source: &Value,
+    json_key: &str,
+    config_key: &str,
+    aliases: &[&str],
+) {
+    let value = normalized
+        .get(json_key)
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    if global_source_has_key(source, aliases) || value {
+        lines.push(format!(
+            "{config_key}:{}",
+            dae_string_literal(&value.to_string())
+        ));
+    }
+}
+
+fn push_global_u64_field(
+    lines: &mut Vec<String>,
+    normalized: &Value,
+    source: &Value,
+    json_key: &str,
+    config_key: &str,
+    aliases: &[&str],
+) {
+    let value = normalized
+        .get(json_key)
+        .and_then(Value::as_u64)
+        .unwrap_or(0);
+    if global_source_has_key(source, aliases) || value != 0 {
+        lines.push(format!(
+            "{config_key}:{}",
+            dae_string_literal(&value.to_string())
+        ));
+    }
+}
+
+fn global_source_has_key(source: &Value, aliases: &[&str]) -> bool {
+    aliases.iter().any(|alias| source.get(*alias).is_some())
+}
+
 fn default_global_value() -> Value {
     json!({
         "logLevel": "",
@@ -4015,11 +4378,16 @@ fn default_global_value() -> Value {
         "fallbackResolver": "",
         "dialMode": "",
         "tcpCheckHttpMethod": "",
+        "udpEndpointPoolSize": 0,
         "disableWaitingNetwork": false,
         "autoConfigKernelParameter": false,
+        "autoConfigFirewallRule": false,
         "sniffingTimeout": "",
         "tlsImplementation": "",
         "utlsImitate": "",
+        "tlsFragment": false,
+        "tlsFragmentLength": "",
+        "tlsFragmentInterval": "",
         "tproxyPortProtect": false,
         "soMarkFromDae": 0,
         "pprofPort": 0,
@@ -4027,6 +4395,7 @@ fn default_global_value() -> Value {
         "mptcp": false,
         "bandwidthMaxTx": "",
         "bandwidthMaxRx": "",
+        "udphopInterval": "",
     })
 }
 
@@ -4091,6 +4460,11 @@ fn merge_global_json_value(target: &mut Value, source: &Value) {
         "tcpCheckHttpMethod",
         json_string(source, &["tcpCheckHttpMethod", "tcp_check_http_method"]),
     );
+    set_global_u64(
+        target,
+        "udpEndpointPoolSize",
+        json_u64(source, &["udpEndpointPoolSize", "udp_endpoint_pool_size"]),
+    );
     set_global_bool(
         target,
         "disableWaitingNetwork",
@@ -4107,6 +4481,14 @@ fn merge_global_json_value(target: &mut Value, source: &Value) {
             &["autoConfigKernelParameter", "auto_config_kernel_parameter"],
         ),
     );
+    set_global_bool(
+        target,
+        "autoConfigFirewallRule",
+        json_bool(
+            source,
+            &["autoConfigFirewallRule", "auto_config_firewall_rule"],
+        ),
+    );
     set_global_string(
         target,
         "sniffingTimeout",
@@ -4121,6 +4503,21 @@ fn merge_global_json_value(target: &mut Value, source: &Value) {
         target,
         "utlsImitate",
         json_string(source, &["utlsImitate", "utls_imitate"]),
+    );
+    set_global_bool(
+        target,
+        "tlsFragment",
+        json_bool(source, &["tlsFragment", "tls_fragment"]),
+    );
+    set_global_string(
+        target,
+        "tlsFragmentLength",
+        json_string(source, &["tlsFragmentLength", "tls_fragment_length"]),
+    );
+    set_global_string(
+        target,
+        "tlsFragmentInterval",
+        json_string(source, &["tlsFragmentInterval", "tls_fragment_interval"]),
     );
     set_global_bool(
         target,
@@ -4158,6 +4555,11 @@ fn merge_global_json_value(target: &mut Value, source: &Value) {
         target,
         "bandwidthMaxRx",
         json_string(source, &["bandwidthMaxRx", "bandwidth_max_rx"]),
+    );
+    set_global_string(
+        target,
+        "udphopInterval",
+        json_string(source, &["udphopInterval", "udphop_interval"]),
     );
 }
 
@@ -4222,6 +4624,11 @@ fn merge_global_directives(target: &mut Value, directives: &HashMap<String, Stri
         "tcpCheckHttpMethod",
         directive_string(directives, "tcp_check_http_method"),
     );
+    set_global_u64(
+        target,
+        "udpEndpointPoolSize",
+        directive_u64(directives, "udp_endpoint_pool_size"),
+    );
     set_global_bool(
         target,
         "disableWaitingNetwork",
@@ -4231,6 +4638,11 @@ fn merge_global_directives(target: &mut Value, directives: &HashMap<String, Stri
         target,
         "autoConfigKernelParameter",
         directive_bool(directives, "auto_config_kernel_parameter"),
+    );
+    set_global_bool(
+        target,
+        "autoConfigFirewallRule",
+        directive_bool(directives, "auto_config_firewall_rule"),
     );
     set_global_string(
         target,
@@ -4246,6 +4658,21 @@ fn merge_global_directives(target: &mut Value, directives: &HashMap<String, Stri
         target,
         "utlsImitate",
         directive_string(directives, "utls_imitate"),
+    );
+    set_global_bool(
+        target,
+        "tlsFragment",
+        directive_bool(directives, "tls_fragment"),
+    );
+    set_global_string(
+        target,
+        "tlsFragmentLength",
+        directive_string(directives, "tls_fragment_length"),
+    );
+    set_global_string(
+        target,
+        "tlsFragmentInterval",
+        directive_string(directives, "tls_fragment_interval"),
     );
     set_global_bool(
         target,
@@ -4273,6 +4700,11 @@ fn merge_global_directives(target: &mut Value, directives: &HashMap<String, Stri
         target,
         "bandwidthMaxRx",
         directive_string(directives, "bandwidth_max_rx"),
+    );
+    set_global_string(
+        target,
+        "udphopInterval",
+        directive_string(directives, "udphop_interval"),
     );
 }
 
@@ -6324,12 +6756,10 @@ fn render_generated_config(
     out.push_str("# generated by Rust daed C10 local product surface\n");
     out.push_str(&format!("# generated_at: {generated_at}\n\n"));
     out.push_str("# selected config\n");
-    out.push_str(
-        config
-            .map(|(_, _, raw, _)| raw.as_str())
-            .filter(|raw| !raw.trim().is_empty())
-            .unwrap_or("global {}\n"),
-    );
+    let config_text = config
+        .map(|(_, _, raw, _)| display_global_config_text(raw))
+        .unwrap_or_else(|| "global {}\n".to_owned());
+    out.push_str(&config_text);
     out.push_str("\n\n# selected dns\n");
     out.push_str(
         dns.map(|(_, _, raw, _)| raw.as_str())
@@ -7778,21 +8208,13 @@ fn update_node_latencies(
     }
 
     let tested_at = now_text();
-    for (id, link, address) in &nodes {
-        if runtime_tested_ids.contains(id) {
-            continue;
-        }
-        let probe = tcp_probe_node(&link, &address);
-        store_node_latency_result(
-            &conn,
-            &NodeLatencyWrite {
-                node_id: *id,
-                latency_ms: probe.latency_ms,
-                alive: probe.alive,
-                tested_at: tested_at.clone(),
-                message: probe.message,
-            },
-        )?;
+    let fallback_nodes = nodes
+        .iter()
+        .filter(|(id, _, _)| !runtime_tested_ids.contains(id))
+        .cloned()
+        .collect::<Vec<_>>();
+    for result in native_probe_unavailable_results(&fallback_nodes, &tested_at) {
+        store_node_latency_result(&conn, &result)?;
     }
     append_log_for_config(
         config_dir,
@@ -7868,7 +8290,11 @@ fn runtime_node_latency_results_for_nodes(
                 latency_ms,
                 alive,
                 tested_at: checked_at.clone(),
-                message: message.clone(),
+                message: if latency_ms.is_some() {
+                    None
+                } else {
+                    message.clone()
+                },
             });
         }
     }
@@ -7904,55 +8330,23 @@ fn store_node_latency_result(conn: &Connection, result: &NodeLatencyWrite) -> io
     Ok(())
 }
 
-#[derive(Debug)]
-struct TcpProbeResult {
-    latency_ms: Option<i64>,
-    alive: bool,
-    message: Option<String>,
-}
-
-fn tcp_probe_node(link: &str, fallback_address: &str) -> TcpProbeResult {
-    let (host, port) = node_probe_target(link, fallback_address);
-    let started = Instant::now();
-    match connect_tcp(&host, port, Duration::from_secs(3)) {
-        Ok(stream) => {
-            let _ = stream.shutdown(std::net::Shutdown::Both);
-            TcpProbeResult {
-                latency_ms: Some(started.elapsed().as_millis().min(i64::MAX as u128) as i64),
-                alive: true,
-                message: None,
-            }
-        }
-        Err(err) => TcpProbeResult {
+fn native_probe_unavailable_results(
+    nodes: &[(i64, String, String)],
+    tested_at: &str,
+) -> Vec<NodeLatencyWrite> {
+    nodes
+        .iter()
+        .map(|(id, _, _)| NodeLatencyWrite {
+            node_id: *id,
             latency_ms: None,
             alive: false,
-            message: Some(format!("tcp connect {host}:{port} failed: {err}")),
-        },
-    }
-}
-
-fn node_probe_target(link: &str, fallback_address: &str) -> (String, u16) {
-    if let Ok(url) = url::Url::parse(link) {
-        let host = url
-            .host_str()
-            .map(str::to_owned)
-            .filter(|value| !value.is_empty())
-            .unwrap_or_else(|| fallback_address.to_owned());
-        let port = url
-            .port()
-            .or_else(|| default_node_port(url.scheme()))
-            .unwrap_or(443);
-        return (host, port);
-    }
-    (fallback_address.to_owned(), 443)
-}
-
-fn default_node_port(scheme: &str) -> Option<u16> {
-    match scheme {
-        "http" => Some(80),
-        "https" | "vless" | "trojan" | "vmess" | "ss" | "hysteria2" | "hy2" => Some(443),
-        _ => None,
-    }
+            tested_at: tested_at.to_owned(),
+            message: Some(
+                "native outbound probe unavailable; materialize/reload Rust runtime before testing this node"
+                    .to_owned(),
+            ),
+        })
+        .collect()
 }
 
 fn all_latency_probe_nodes(conn: &Connection) -> io::Result<Vec<(i64, String, String)>> {
@@ -10178,6 +10572,7 @@ dns {{}}
         assert_eq!(results[0].node_id, 11);
         assert_eq!(results[0].latency_ms, Some(37));
         assert!(results[0].alive);
+        assert_eq!(results[0].message, None);
         assert_eq!(results[0].tested_at, iso8601_utc(42));
         assert!(tested_ids.contains(&11));
         assert!(!tested_ids.contains(&12));
@@ -10327,6 +10722,75 @@ global {
         assert_eq!(parsed["tproxyPort"], json!(12345));
         assert_eq!(parsed["wanInterface"], json!(["auto"]));
         assert_eq!(parsed["dialMode"], json!("domain"));
+    }
+
+    #[test]
+    fn parsed_global_request_renders_dae_global_text_for_webui_fields() {
+        let parsed_global = json!({
+            "logLevel": "debug",
+            "tproxyPort": 12345,
+            "tproxyPortProtect": false,
+            "pprofPort": 0,
+            "soMarkFromDae": 7,
+            "allowInsecure": false,
+            "checkInterval": "10s",
+            "checkTolerance": "500ms",
+            "sniffingTimeout": "250ms",
+            "lanInterface": ["br-lan"],
+            "wanInterface": ["auto", "eth0"],
+            "udpCheckDns": ["dns.google:53", "8.8.8.8"],
+            "tcpCheckUrl": ["http://cp.cloudflare.com/generate_204", "1.1.1.1"],
+            "dialMode": "domain++",
+            "tcpCheckHttpMethod": "GET",
+            "disableWaitingNetwork": true,
+            "autoConfigKernelParameter": true,
+            "tlsImplementation": "tls",
+            "utlsImitate": "chrome_auto",
+            "fallbackResolver": "8.8.8.8:53",
+            "mptcp": true,
+            "enableLocalTcpFastRedirect": true,
+            "bandwidthMaxTx": "200 mbps",
+            "bandwidthMaxRx": "1 gbps"
+        });
+        let rendered = render_global_config_text(&parsed_global);
+        assert!(rendered.starts_with("global {\n"));
+        assert!(rendered.contains("tcp_check_http_method:'GET'"));
+        assert!(rendered.contains("tproxy_port_protect:'false'"));
+        assert!(rendered.contains("wan_interface:'auto,eth0'"));
+        assert!(rendered.contains("enable_local_tcp_fast_redirect:'true'"));
+        assert!(!rendered.trim_start().starts_with('{'));
+
+        let sections =
+            parse_config(&format!("{rendered}\nrouting {{ fallback: direct }}\n")).unwrap();
+        let config = build_config(&sections).unwrap();
+        assert_eq!(config.global.tcp_check_http_method, "GET");
+        assert_eq!(
+            config.global.tcp_check_url[0],
+            "http://cp.cloudflare.com/generate_204"
+        );
+        assert_eq!(config.global.tcp_check_url[1], "1.1.1.1");
+        assert_eq!(config.global.tproxy_port, 12345);
+        assert!(!config.global.tproxy_port_protect);
+        assert!(config.global.disable_waiting_network);
+        assert!(config.global.enable_local_tcp_fast_redirect);
+
+        let body = json!({
+            "global": "global { tcp_check_http_method:'HEAD' }",
+            "parsedGlobal": parsed_global,
+        });
+        let stored = section_request_value(SectionKind::Config, &body);
+        assert!(stored.contains("tcp_check_http_method:'GET'"));
+        assert!(!stored.contains("tcp_check_http_method:'HEAD'"));
+    }
+
+    #[test]
+    fn materialized_global_text_converts_legacy_json_storage() {
+        let raw = r#"{"tcpCheckHttpMethod":"GET","tcpCheckUrl":["http://check.example","203.0.113.1"],"wanInterface":["auto"],"tproxyPort":12345}"#;
+        let rendered = display_global_config_text(raw);
+        assert!(rendered.starts_with("global {\n"));
+        assert!(rendered.contains("tcp_check_http_method:'GET'"));
+        assert!(rendered.contains("tcp_check_url:'http://check.example,203.0.113.1'"));
+        assert!(!rendered.contains("allow_insecure:'false'"));
     }
 
     #[test]
