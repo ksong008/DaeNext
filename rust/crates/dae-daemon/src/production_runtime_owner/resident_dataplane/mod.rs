@@ -1763,7 +1763,7 @@ fn matrix_row_schemes(formal_matrix_handler: &str) -> &'static [&'static str] {
     match formal_matrix_handler {
         "vless" => &["vless"],
         "shadowsocks" => &["ss", "shadowsocks"],
-        "trojan" => &["trojan"],
+        "trojan" => &["trojan", "trojan-go"],
         "vmess" => &["vmess"],
         "hysteria2" => &["hysteria2", "hy2"],
         "tuic" => &["tuic"],
