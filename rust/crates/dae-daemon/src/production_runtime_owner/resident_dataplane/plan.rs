@@ -12,8 +12,9 @@ use dae_outbound::{
     http_proxy::{HttpProxyLink, HttpScheme},
     hysteria2::{Hysteria2Link, server_contract as hysteria2_server_contract},
     juicity::JuicityLink,
+    parse_link_chain,
     shadowsocks::{ShadowsocksLink, cipher_spec},
-    shared_transport::{UtlsFingerprint, resolve_utls_client_hello_id},
+    shared_transport::{MeekRoundTripOptions, UtlsFingerprint, ir, resolve_utls_client_hello_id},
     trojan::{TrojanLink, TrojanTransportType},
     tuic::TuicLink,
     vless::{VLESSLink, password_to_key},
@@ -82,6 +83,13 @@ pub(super) enum ResidentProxyProtocolPlan {
         password: String,
         salt_len: usize,
     },
+    ShadowsocksSimpleObfsHttpTcp {
+        cipher: String,
+        password: String,
+        salt_len: usize,
+        host: String,
+        path: String,
+    },
     TrojanTcpTls {
         password: String,
     },
@@ -130,6 +138,7 @@ pub(super) struct ResidentProxyPlan {
     pub(super) allow_insecure: bool,
     pub(super) utls_fingerprint: Option<ResidentUtlsFingerprintPlan>,
     pub(super) handler: ResidentProxyProtocolPlan,
+    pub(super) chain_parent: Option<Box<ResidentProxyPlan>>,
     pub(super) mark: u32,
     pub(super) mptcp: bool,
 }
@@ -193,6 +202,7 @@ pub(super) struct ResidentExecutableGraphDescriptor {
     alpn: Vec<String>,
     allow_insecure: bool,
     utls_fingerprint: Option<ResidentUtlsFingerprintPlan>,
+    chain_parent_count: usize,
     mark: u32,
     mptcp: bool,
 }
@@ -220,6 +230,7 @@ impl ResidentExecutableGraphDescriptor {
             alpn: proxy.alpn.clone(),
             allow_insecure: proxy.allow_insecure,
             utls_fingerprint: proxy.utls_fingerprint.clone(),
+            chain_parent_count: usize::from(proxy.chain_parent.is_some()),
             mark: proxy.mark,
             mptcp: proxy.mptcp,
         }
@@ -262,8 +273,8 @@ impl ResidentExecutableGraphDescriptor {
             "protocolFraming": self.protocol_framing,
             "packetSemantics": self.packet_semantics,
             "chain": {
-                "mode": "none",
-                "parentCount": 0,
+                "mode": if self.chain_parent_count > 0 { "parent-proxy" } else { "none" },
+                "parentCount": self.chain_parent_count,
                 "flattened": false,
             },
             "routing": {
@@ -368,6 +379,9 @@ impl ResidentExecutableGraphDescriptor {
             "websocket" => ("admitted", "resident-websocket-binary-frame", Value::Null),
             "httpupgrade" => ("admitted", "resident-http-upgrade-stream", Value::Null),
             "grpc" => ("admitted", "resident-grpc-h2-stream", Value::Null),
+            "meek" => ("admitted", "resident-meek-polling", Value::Null),
+            "xhttp" => ("admitted", "resident-xhttp-h2-packet-up", Value::Null),
+            "simple-obfs-http" => ("admitted", "resident-simple-obfs-http", Value::Null),
             _ => (
                 "fail-closed",
                 "unsupported",
@@ -389,13 +403,18 @@ impl ResidentExecutableGraphDescriptor {
     }
 
     fn chain_executor_value(&self) -> Value {
+        let (mode, executor) = if self.chain_parent_count > 0 {
+            ("parent-proxy", "resident-parent-connect-chain")
+        } else {
+            ("none", "single-resident-graph")
+        };
         json!({
             "schemaVersion": 1,
             "status": "admitted",
-            "mode": "none",
-            "parentCount": 0,
+            "mode": mode,
+            "parentCount": self.chain_parent_count,
             "flattened": false,
-            "executor": "single-resident-graph",
+            "executor": executor,
             "unsupportedReason": Value::Null,
         })
     }
@@ -525,6 +544,7 @@ fn canonical_resident_vless_net(net: &str) -> String {
         "ws" | "websocket" => "websocket".to_owned(),
         "httpupgrade" => "httpupgrade".to_owned(),
         "grpc" => "grpc".to_owned(),
+        "xhttp" => "xhttp".to_owned(),
         other => other.to_owned(),
     }
 }
@@ -543,6 +563,32 @@ fn resident_stream_path(path: &str) -> String {
     } else {
         path.to_owned()
     }
+}
+
+fn resident_csv_values(raw: &str) -> Vec<String> {
+    raw.split(',')
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_owned)
+        .collect()
+}
+
+fn resident_xhttp_stream_path(path: &str) -> String {
+    let normalized = ir::normalize_xhttp_path_and_query(path);
+    if normalized.query.is_empty() {
+        normalized.path
+    } else {
+        format!("{}?{}", normalized.path, normalized.query)
+    }
+}
+
+fn resident_xhttp_extra_is_empty(extra: &str) -> bool {
+    let extra = extra.trim();
+    if extra.is_empty() {
+        return true;
+    }
+    serde_json::from_str::<Value>(extra)
+        .is_ok_and(|value| value.as_object().is_some_and(|object| object.is_empty()))
 }
 
 fn resident_grpc_service_name(service_name: &str) -> String {
@@ -1372,9 +1418,7 @@ fn build_proxy_plan(
     link: String,
 ) -> Result<ResidentProxyPlan, String> {
     if link.contains(" -> ") || link.contains("->") {
-        return Err(format!(
-            "resident dataplane does not flatten chained node {node_tag}; nested chain execution is fail-closed until a resident chain executor is available"
-        ));
+        return build_chained_proxy_plan(config, group_name, node_tag, link);
     }
     let scheme = link_scheme(&link).unwrap_or_default();
     match scheme.as_str() {
@@ -1391,6 +1435,70 @@ fn build_proxy_plan(
         _ => Err(format!(
             "resident dataplane selected unsupported {scheme} node {node_tag}; no Rust protocol handler is admitted for this node yet, keep Go outbound for this config",
         )),
+    }
+}
+
+fn build_chained_proxy_plan(
+    config: &Config,
+    group_name: String,
+    node_tag: String,
+    link: String,
+) -> Result<ResidentProxyPlan, String> {
+    let parsed =
+        parse_link_chain(&link).map_err(|err| format!("parse chained node {node_tag}: {err}"))?;
+    if parsed.nodes.len() != 2 {
+        return Err(format!(
+            "resident dataplane nested chain executor admits two-node chains only for node {node_tag}; got {} node(s)",
+            parsed.nodes.len()
+        ));
+    }
+    let parent_node = parsed.nodes[0].clone();
+    let child_node = parsed.nodes[1].clone();
+    let parent = build_proxy_plan(
+        config,
+        group_name.clone(),
+        format!("{node_tag}:parent"),
+        parent_node.raw,
+    )?;
+    let mut child = build_proxy_plan(config, group_name, node_tag.clone(), child_node.raw)?;
+    if !resident_chain_parent_supported(&parent) {
+        return Err(format!(
+            "resident dataplane nested chain executor admits plain SOCKS5/HTTP CONNECT parent only for node {node_tag}; got {}",
+            parent.protocol
+        ));
+    }
+    if !resident_chain_child_supported(&child) {
+        return Err(format!(
+            "resident dataplane nested chain executor admits first-batch TCP child handlers only for node {node_tag}; got {}/{}",
+            child.protocol, child.net
+        ));
+    }
+    let graph = resident_graph_identity(&link);
+    child.graph_id = graph.graph_id;
+    child.graph_link_hash = graph.link_hash;
+    child.redacted_link_source = graph.redacted_link_source;
+    child.chain_parent = Some(Box::new(parent));
+    Ok(child)
+}
+
+fn resident_chain_parent_supported(parent: &ResidentProxyPlan) -> bool {
+    match &parent.handler {
+        ResidentProxyProtocolPlan::Socks5Tcp { .. } => parent.tls == "none",
+        ResidentProxyProtocolPlan::HttpProxyTcp { .. } => parent.tls == "none",
+        _ => false,
+    }
+}
+
+fn resident_chain_child_supported(child: &ResidentProxyPlan) -> bool {
+    match &child.handler {
+        ResidentProxyProtocolPlan::Socks5Tcp { .. } => true,
+        ResidentProxyProtocolPlan::HttpProxyTcp { .. } => child.tls == "none",
+        ResidentProxyProtocolPlan::ShadowsocksAeadTcp { .. }
+        | ResidentProxyProtocolPlan::ShadowsocksSimpleObfsHttpTcp { .. } => true,
+        ResidentProxyProtocolPlan::VmessAeadTcp { .. } => {
+            matches!(child.net.as_str(), "tcp" | "websocket" | "httpupgrade") && child.tls == "none"
+        }
+        _ => false,
     }
 }
 
@@ -1416,16 +1524,16 @@ fn build_vless_proxy_plan(
                 vless.flow
             ));
         }
-        "websocket" | "httpupgrade" | "grpc" if !vless.flow.is_empty() => {
+        "websocket" | "httpupgrade" | "grpc" | "xhttp" | "meek" if !vless.flow.is_empty() => {
             return Err(format!(
                 "resident dataplane vless wrapped-stream handler admits only empty flow, got '{}' for node {node_tag}; keep Go outbound for this config",
                 vless.flow
             ));
         }
-        "tcp" | "websocket" | "httpupgrade" | "grpc" => {}
+        "tcp" | "websocket" | "httpupgrade" | "grpc" | "xhttp" | "meek" => {}
         other => {
             return Err(format!(
-                "resident dataplane vless handler currently supports tcp, websocket, httpupgrade, and grpc transports only, got {other} for node {node_tag}"
+                "resident dataplane vless handler currently supports tcp, websocket, httpupgrade, grpc, xhttp, and meek transports only, got {other} for node {node_tag}"
             ));
         }
     }
@@ -1441,6 +1549,49 @@ fn build_vless_proxy_plan(
                 .to_owned(),
         );
     }
+    if net == "xhttp" {
+        let mode = ir::normalize_xhttp_mode(&vless.xhttp_mode, "https", &vless.tls, false);
+        if !mode.ok {
+            return Err(format!(
+                "resident dataplane vless xHTTP transport rejected mode for node {node_tag}: {}",
+                mode.error_contains
+            ));
+        }
+        if mode.normalized != "packet-up" {
+            return Err(format!(
+                "resident dataplane vless xHTTP transport admits packet-up mode only, got {} for node {node_tag}; keep Go outbound for this config",
+                mode.normalized
+            ));
+        }
+        let alpn_result = ir::validate_xhttp_alpn(&vless.tls, &vless.alpn);
+        if !alpn_result.ok {
+            return Err(format!(
+                "resident dataplane vless xHTTP transport rejected ALPN for node {node_tag}: {}",
+                alpn_result.error_contains
+            ));
+        }
+        if alpn_result.use_h3 {
+            return Err(format!(
+                "resident dataplane vless xHTTP transport admits HTTP/2 packet-up only, got h3 for node {node_tag}; keep Go outbound for this config"
+            ));
+        }
+        if !resident_xhttp_extra_is_empty(&vless.xhttp_extra) {
+            return Err(format!(
+                "resident dataplane vless xHTTP transport admits default extra settings only for node {node_tag}; keep Go outbound for this config"
+            ));
+        }
+    }
+    let meek_options = if net == "meek" {
+        Some(
+            MeekRoundTripOptions::from_https_url(&vless.path, Vec::new()).map_err(|err| {
+                format!(
+                    "resident dataplane vless Meek transport requires a standard https url for node {node_tag}: {err}"
+                )
+            })?,
+        )
+    } else {
+        None
+    };
     let utls_fingerprint = resident_utls_fingerprint_plan(config, Some(&vless.fingerprint))?;
     let server_port = vless.port.parse::<u16>().map_err(|err| {
         format!(
@@ -1455,18 +1606,24 @@ fn build_vless_proxy_plan(
     } else {
         vless.sni.clone()
     };
-    let alpn = if net == "grpc" && vless.alpn.is_empty() {
+    let alpn = if matches!(net.as_str(), "grpc" | "xhttp") && vless.alpn.is_empty() {
         vec!["h2".to_owned()]
     } else {
         split_alpn(&vless.alpn)
     };
-    let stream_host = if matches!(net.as_str(), "websocket" | "httpupgrade" | "grpc") {
+    let stream_host = if let Some(meek_options) = &meek_options {
+        meek_options.host.clone()
+    } else if matches!(net.as_str(), "websocket" | "httpupgrade" | "grpc" | "xhttp") {
         resident_stream_host(&vless.host, &server_name)
     } else {
         String::new()
     };
     let stream_path = if net == "grpc" {
         resident_grpc_service_name(&vless.path)
+    } else if let Some(meek_options) = &meek_options {
+        meek_options.path.clone()
+    } else if net == "xhttp" {
+        resident_xhttp_stream_path(&vless.path)
     } else if matches!(net.as_str(), "websocket" | "httpupgrade") {
         resident_stream_path(&vless.path)
     } else {
@@ -1493,6 +1650,7 @@ fn build_vless_proxy_plan(
         allow_insecure: false,
         utls_fingerprint,
         handler: ResidentProxyProtocolPlan::VlessVisionTcpTls { key },
+        chain_parent: None,
         mark: config.global.so_mark_from_dae,
         mptcp: config.global.mptcp,
     })
@@ -1540,6 +1698,7 @@ fn build_socks5_proxy_plan(
             username: parsed.username().to_owned(),
             password: parsed.password().unwrap_or_default().to_owned(),
         },
+        chain_parent: None,
         mark: config.global.so_mark_from_dae,
         mptcp: config.global.mptcp,
     })
@@ -1553,21 +1712,34 @@ fn build_http_proxy_plan(
 ) -> Result<ResidentProxyPlan, String> {
     let parsed = HttpProxyLink::parse(&link)
         .map_err(|err| format!("parse HTTP proxy node {node_tag}: {err}"))?;
-    if parsed.protocol != HttpScheme::Http {
-        return Err(format!(
-            "resident dataplane first-batch HTTP proxy handler admits plain http proxy endpoints only for node {node_tag}"
-        ));
-    }
     if parsed.transport {
         return Err(format!(
             "resident dataplane first-batch HTTP proxy handler does not admit HTTP transport mode for node {node_tag}"
         ));
     }
-    if parsed.allow_insecure {
+    if parsed.allow_insecure || config.global.allow_insecure {
         return Err(format!(
             "resident dataplane first-batch HTTP proxy handler does not admit allow_insecure for node {node_tag}"
         ));
     }
+    if parsed.protocol == HttpScheme::Https && !parsed.utls_imitate.is_empty() {
+        return Err(format!(
+            "resident dataplane HTTPS proxy handler does not admit fingerprint/utls imitation for node {node_tag}"
+        ));
+    }
+    if parsed.protocol == HttpScheme::Https && parsed.tls_implementation != "tls" {
+        return Err(format!(
+            "resident dataplane HTTPS proxy handler admits standard tlsImplementation only for node {node_tag}"
+        ));
+    }
+    let (tls, server_name, alpn) = match parsed.protocol {
+        HttpScheme::Http => ("none".to_owned(), String::new(), Vec::new()),
+        HttpScheme::Https => (
+            "tls".to_owned(),
+            parsed.effective_sni(),
+            resident_csv_values(&parsed.alpn),
+        ),
+    };
     let graph = resident_graph_identity(&link);
     Ok(ResidentProxyPlan {
         graph_id: graph.graph_id,
@@ -1579,19 +1751,20 @@ fn build_http_proxy_plan(
         node_tag,
         server_host: parsed.server,
         server_port: parsed.port,
-        server_name: String::new(),
-        alpn: Vec::new(),
+        server_name,
+        alpn,
         flow: String::new(),
         net: "tcp".to_owned(),
         stream_host: String::new(),
         stream_path: String::new(),
-        tls: "none".to_owned(),
+        tls,
         allow_insecure: false,
         utls_fingerprint: None,
         handler: ResidentProxyProtocolPlan::HttpProxyTcp {
             username: parsed.username,
             password: parsed.password,
         },
+        chain_parent: None,
         mark: config.global.so_mark_from_dae,
         mptcp: config.global.mptcp,
     })
@@ -1605,14 +1778,54 @@ fn build_shadowsocks_proxy_plan(
 ) -> Result<ResidentProxyPlan, String> {
     let parsed = ShadowsocksLink::parse(&link)
         .map_err(|err| format!("parse Shadowsocks node {node_tag}: {err}"))?;
-    if !parsed.plugin.name.is_empty() {
+    let plugin = parsed.plugin.clone();
+    if !plugin.name.is_empty()
+        && !(plugin.name == "simple-obfs"
+            && plugin.opts.obfs == "http"
+            && plugin.opts.tls.is_empty())
+    {
         return Err(format!(
-            "resident dataplane first-batch Shadowsocks handler does not admit SIP003 plugin {} for node {node_tag}",
-            parsed.plugin.name
+            "resident dataplane Shadowsocks plugin wrapper admits simple-obfs obfs=http only for node {node_tag}; got {}",
+            plugin.name
         ));
     }
     let spec = cipher_spec(&parsed.cipher)
         .map_err(|err| format!("admit Shadowsocks cipher for node {node_tag}: {err}"))?;
+    let (net, stream_host, stream_path, handler) = if plugin.name == "simple-obfs" {
+        let stream_host = if plugin.opts.host.is_empty() {
+            parsed.server.clone()
+        } else {
+            plugin.opts.host.clone()
+        };
+        let stream_path = if plugin.opts.path.is_empty() {
+            "/".to_owned()
+        } else {
+            plugin.opts.path.clone()
+        };
+        (
+            "simple-obfs-http".to_owned(),
+            stream_host.clone(),
+            stream_path.clone(),
+            ResidentProxyProtocolPlan::ShadowsocksSimpleObfsHttpTcp {
+                cipher: spec.cipher.to_owned(),
+                password: parsed.password.clone(),
+                salt_len: spec.salt_len,
+                host: stream_host,
+                path: stream_path,
+            },
+        )
+    } else {
+        (
+            "tcp".to_owned(),
+            String::new(),
+            String::new(),
+            ResidentProxyProtocolPlan::ShadowsocksAeadTcp {
+                cipher: spec.cipher.to_owned(),
+                password: parsed.password.clone(),
+                salt_len: spec.salt_len,
+            },
+        )
+    };
     let graph = resident_graph_identity(&link);
     Ok(ResidentProxyPlan {
         graph_id: graph.graph_id,
@@ -1627,17 +1840,14 @@ fn build_shadowsocks_proxy_plan(
         server_name: String::new(),
         alpn: Vec::new(),
         flow: String::new(),
-        net: "tcp".to_owned(),
-        stream_host: String::new(),
-        stream_path: String::new(),
+        net,
+        stream_host,
+        stream_path,
         tls: "aead".to_owned(),
         allow_insecure: false,
         utls_fingerprint: None,
-        handler: ResidentProxyProtocolPlan::ShadowsocksAeadTcp {
-            cipher: spec.cipher.to_owned(),
-            password: parsed.password,
-            salt_len: spec.salt_len,
-        },
+        handler,
+        chain_parent: None,
         mark: config.global.so_mark_from_dae,
         mptcp: config.global.mptcp,
     })
@@ -1724,6 +1934,7 @@ fn build_trojan_proxy_plan(
         handler: ResidentProxyProtocolPlan::TrojanTcpTls {
             password: parsed.password,
         },
+        chain_parent: None,
         mark: config.global.so_mark_from_dae,
         mptcp: config.global.mptcp,
     })
@@ -1772,6 +1983,7 @@ fn build_anytls_proxy_plan(
         allow_insecure: false,
         utls_fingerprint,
         handler: ResidentProxyProtocolPlan::AnyTlsTcpTls { auth: parsed.auth },
+        chain_parent: None,
         mark: config.global.so_mark_from_dae,
         mptcp: config.global.mptcp,
     })
@@ -1833,6 +2045,7 @@ fn build_tuic_proxy_plan(
             password: parsed.password,
             alpn,
         },
+        chain_parent: None,
         mark: config.global.so_mark_from_dae,
         mptcp: config.global.mptcp,
     })
@@ -1910,6 +2123,7 @@ fn build_hysteria2_proxy_plan(
             pin_sha256: parsed.pin_sha256,
             max_rx: parsed.max_rx,
         },
+        chain_parent: None,
         mark: config.global.so_mark_from_dae,
         mptcp: config.global.mptcp,
     })
@@ -1968,6 +2182,7 @@ fn build_juicity_proxy_plan(
             allow_insecure,
             pinned_certchain_sha256: parsed.pinned_certchain_sha256,
         },
+        chain_parent: None,
         mark: config.global.so_mark_from_dae,
         mptcp: config.global.mptcp,
     })
@@ -2095,6 +2310,7 @@ fn build_vmess_proxy_plan(
         allow_insecure: false,
         utls_fingerprint,
         handler: ResidentProxyProtocolPlan::VmessAeadTcp { id: parsed.id },
+        chain_parent: None,
         mark: config.global.so_mark_from_dae,
         mptcp: config.global.mptcp,
     })
@@ -2487,41 +2703,19 @@ mod tests {
     use dae_outbound::shadowsocks::Sip003;
 
     fn assert_protocol_matrix_source_uses_generic_semantics(source: &str) {
-        let forbidden = [
-            ["matrix", "-", "socks"].concat(),
-            ["matrix", "-", "http"].concat(),
-            ["matrix", "-", "ss"].concat(),
-            ["matrix", "-", "shadowsocks"].concat(),
-            ["matrix", "-", "trojan"].concat(),
-            ["matrix", "-", "vmess"].concat(),
-            ["matrix", "-", "vless"].concat(),
-            ["matrix", "-", "anytls"].concat(),
-            ["matrix", "-", "hy2"].concat(),
-            ["matrix", "-", "hysteria"].concat(),
-            ["matrix", "-", "tuic"].concat(),
-            ["matrix", "-", "juicity"].concat(),
-            ["matrix", "-", "socks", "-", "pass"].concat(),
-            ["matrix", "-", "http", "-", "pass"].concat(),
-            ["matrix", "-", "ss", "-", "pass"].concat(),
-            ["matrix", "-", "trojan", "-", "pass"].concat(),
-            ["matrix", "-", "anytls", "-", "pass"].concat(),
-            ["matrix", "-", "hy2", "-", "auth"].concat(),
-            ["matrix", "-", "tuic", "-", "pass"].concat(),
-            ["matrix", "-", "juicity", "-", "pass"].concat(),
-            ["socks5://", "matrix"].concat(),
-            ["http://", "matrix"].concat(),
-            ["trojan-go://", "matrix"].concat(),
-            ["anytls://", "matrix"].concat(),
-            ["/", "matrix", "-"].concat(),
-            ["#", "matrix", "-"].concat(),
-            ["tag=", "matrix", "-"].concat(),
-            ["name=", "matrix", "-"].concat(),
+        let lower = source.to_ascii_lowercase();
+        let forbidden_terms = [
+            ["matrix", "-"].concat(),
+            ["invalid", "-", "test", "-", "format"].concat(),
         ];
-        for needle in forbidden {
+        for forbidden in forbidden_terms {
             assert!(
-                !source.contains(&needle),
-                "protocol matrix source fixtures must use protocol-generic semantics, found {needle}"
+                !lower.contains(&forbidden),
+                "protocol matrix source fixtures must use protocol-generic semantics, found {forbidden}"
             );
+        }
+        for link in url_like_source_literals(source) {
+            assert_resident_source_fixture_uses_generic_semantics(&link);
         }
     }
 
@@ -2530,17 +2724,82 @@ mod tests {
         assert_protocol_matrix_source_uses_generic_semantics(include_str!("plan.rs"));
     }
 
+    fn url_like_source_literals(source: &str) -> Vec<String> {
+        let mut links = Vec::new();
+        let mut offset = 0;
+        while let Some(relative_pos) = source[offset..].find("://") {
+            let scheme_end = offset + relative_pos;
+            let mut start = scheme_end;
+            while start > 0 {
+                let previous = source.as_bytes()[start - 1];
+                if previous.is_ascii_alphanumeric() || matches!(previous, b'+' | b'-' | b'.') {
+                    start -= 1;
+                } else {
+                    break;
+                }
+            }
+
+            let mut end = scheme_end + 3;
+            while end < source.len() {
+                let next = source.as_bytes()[end];
+                if next.is_ascii_whitespace()
+                    || matches!(next, b'"' | b'\'' | b'`' | b'<' | b'>' | b')' | b']')
+                {
+                    break;
+                }
+                end += 1;
+            }
+
+            links.push(source[start..end].to_owned());
+            offset = end;
+        }
+        links
+    }
+
+    fn assert_resident_source_fixture_uses_generic_semantics(link: &str) {
+        let lower = link.to_ascii_lowercase();
+        let forbidden_terms = [
+            ["matrix", "-"].concat(),
+            ["invalid", "-", "test", "-", "format"].concat(),
+        ];
+        for forbidden in forbidden_terms {
+            assert!(
+                !lower.contains(&forbidden),
+                "source fixture must use common import semantics, found {forbidden} in {link}"
+            );
+        }
+        assert!(
+            !link.contains('#'),
+            "source fixture must not use fragment labels as matrix evidence: {link}"
+        );
+        if let Some(userinfo) = source_link_userinfo(link) {
+            let lower_userinfo = userinfo.to_ascii_lowercase();
+            for forbidden in ["matrix", "-password", "-auth"] {
+                assert!(
+                    !lower_userinfo.contains(forbidden),
+                    "source fixture userinfo must be protocol-generic, found {forbidden} in {link}"
+                );
+            }
+        }
+    }
+
+    fn source_link_userinfo(link: &str) -> Option<&str> {
+        let authority = link.split_once("://")?.1;
+        let authority = authority.split(['/', '?', '#']).next().unwrap_or(authority);
+        authority.rsplit_once('@').map(|(userinfo, _)| userinfo)
+    }
+
     fn parse_config(input: &str) -> Config {
         let sections = dae_config::parser::parse_config(input).unwrap();
         dae_config::schema::build_config(&sections).unwrap()
     }
 
-    fn shadowsocks_fixture_url(ps: &str, add: &str, port: u16) -> String {
+    fn shadowsocks_fixture_url(_ps: &str, add: &str, port: u16) -> String {
         ShadowsocksLink {
-            name: ps.to_owned(),
+            name: String::new(),
             server: add.to_owned(),
             port,
-            password: "ss-password".to_owned(),
+            password: "password".to_owned(),
             cipher: "aes-128-gcm".to_owned(),
             plugin: Sip003::default(),
             udp: true,
@@ -2549,12 +2808,12 @@ mod tests {
         .export_url()
     }
 
-    fn shadowsocks_plugin_fixture_url(ps: &str, add: &str, port: u16) -> String {
+    fn shadowsocks_plugin_fixture_url(_ps: &str, add: &str, port: u16) -> String {
         ShadowsocksLink {
-            name: ps.to_owned(),
+            name: String::new(),
             server: add.to_owned(),
             port,
-            password: "ss-password".to_owned(),
+            password: "password".to_owned(),
             cipher: "aes-128-gcm".to_owned(),
             plugin: Sip003::parse("simple-obfs;obfs=http"),
             udp: false,
@@ -2563,8 +2822,22 @@ mod tests {
         .export_url()
     }
 
+    fn shadowsocks_unsupported_plugin_fixture_url(_ps: &str, add: &str, port: u16) -> String {
+        ShadowsocksLink {
+            name: String::new(),
+            server: add.to_owned(),
+            port,
+            password: "password".to_owned(),
+            cipher: "aes-128-gcm".to_owned(),
+            plugin: Sip003::parse("simple-obfs;obfs=tls"),
+            udp: false,
+            protocol: "shadowsocks".to_owned(),
+        }
+        .export_url()
+    }
+
     fn vless_fixture_url(
-        ps: &str,
+        _ps: &str,
         add: &str,
         port: u16,
         net: &str,
@@ -2575,7 +2848,7 @@ mod tests {
         fingerprint: &str,
     ) -> String {
         VLESSLink {
-            ps: ps.to_owned(),
+            ps: String::new(),
             add: add.to_owned(),
             port: port.to_string(),
             id: "01234567-89ab-cdef-0123-456789abcdef".to_owned(),
@@ -2599,12 +2872,38 @@ mod tests {
         .export_url()
     }
 
-    fn trojan_fixture_url(ps: &str, add: &str, port: u16) -> String {
+    fn vless_xhttp_parser_fixture_url(mode: &str, alpn: &str, extra: &str) -> String {
+        VLESSLink {
+            ps: String::new(),
+            add: "198.51.100.10".to_owned(),
+            port: "443".to_owned(),
+            id: "7c12c745-63a5-433d-9e60-022e469b5bd4".to_owned(),
+            net: "xhttp".to_owned(),
+            r#type: "none".to_owned(),
+            host: "edge.transport.invalid".to_owned(),
+            sni: "edge.transport.invalid".to_owned(),
+            path: "/resource?ed=2048".to_owned(),
+            xhttp_mode: mode.to_owned(),
+            xhttp_extra: extra.to_owned(),
+            tls: "tls".to_owned(),
+            flow: String::new(),
+            alpn: alpn.to_owned(),
+            allow_insecure: false,
+            fingerprint: String::new(),
+            public_key: String::new(),
+            short_id: String::new(),
+            spider_x: String::new(),
+            protocol: "vless".to_owned(),
+        }
+        .export_url()
+    }
+
+    fn trojan_fixture_url(_ps: &str, add: &str, port: u16) -> String {
         TrojanLink {
-            name: ps.to_owned(),
+            name: String::new(),
             server: add.to_owned(),
             port,
-            password: "trojan-password".to_owned(),
+            password: "password".to_owned(),
             sni: "office.example".to_owned(),
             transport_type: String::new(),
             encryption: String::new(),
@@ -2617,12 +2916,12 @@ mod tests {
         .export_url()
     }
 
-    fn trojan_websocket_fixture_url(ps: &str, add: &str, port: u16) -> String {
+    fn trojan_websocket_fixture_url(_ps: &str, add: &str, port: u16) -> String {
         TrojanLink {
-            name: ps.to_owned(),
+            name: String::new(),
             server: add.to_owned(),
             port,
-            password: "trojan-password".to_owned(),
+            password: "password".to_owned(),
             sni: "office.example".to_owned(),
             transport_type: "ws".to_owned(),
             encryption: String::new(),
@@ -2635,12 +2934,12 @@ mod tests {
         .export_url()
     }
 
-    fn trojan_httpupgrade_fixture_url(ps: &str, add: &str, port: u16) -> String {
+    fn trojan_httpupgrade_fixture_url(_ps: &str, add: &str, port: u16) -> String {
         TrojanLink {
-            name: ps.to_owned(),
+            name: String::new(),
             server: add.to_owned(),
             port,
-            password: "trojan-password".to_owned(),
+            password: "password".to_owned(),
             sni: "office.example".to_owned(),
             transport_type: "httpupgrade".to_owned(),
             encryption: String::new(),
@@ -2653,12 +2952,12 @@ mod tests {
         .export_url()
     }
 
-    fn trojan_grpc_fixture_url(ps: &str, add: &str, port: u16) -> String {
+    fn trojan_grpc_fixture_url(_ps: &str, add: &str, port: u16) -> String {
         TrojanLink {
-            name: ps.to_owned(),
+            name: String::new(),
             server: add.to_owned(),
             port,
-            password: "trojan-password".to_owned(),
+            password: "password".to_owned(),
             sni: "office.example".to_owned(),
             transport_type: "grpc".to_owned(),
             encryption: String::new(),
@@ -2671,14 +2970,14 @@ mod tests {
         .export_url()
     }
 
-    fn hysteria2_fixture_url(ps: &str, add: &str, port: u16) -> String {
-        hysteria2_fixture_url_with_pin(ps, &format!("{add}:{port}"), "AA-BB-CC")
+    fn hysteria2_fixture_url(_ps: &str, add: &str, port: u16) -> String {
+        hysteria2_fixture_url_with_pin("", &format!("{add}:{port}"), "AA-BB-CC")
     }
 
-    fn hysteria2_fixture_url_with_pin(ps: &str, server: &str, pin_sha256: &str) -> String {
+    fn hysteria2_fixture_url_with_pin(_ps: &str, server: &str, pin_sha256: &str) -> String {
         Hysteria2Link {
-            name: ps.to_owned(),
-            user: "hy2-auth".to_owned(),
+            name: String::new(),
+            user: "auth-token".to_owned(),
             password: String::new(),
             server: server.to_owned(),
             insecure: false,
@@ -2690,11 +2989,11 @@ mod tests {
         .export_url()
     }
 
-    fn tuic_fixture_url(ps: &str, add: &str, port: u16, allow_insecure: bool) -> String {
+    fn tuic_fixture_url(_ps: &str, add: &str, port: u16, allow_insecure: bool) -> String {
         TuicLink {
-            name: ps.to_owned(),
+            name: String::new(),
             user: "01234567-89ab-cdef-0123-456789abcdef".to_owned(),
-            password: "tuic-password".to_owned(),
+            password: "password".to_owned(),
             server: add.to_owned(),
             port,
             sni: "office.example".to_owned(),
@@ -2708,11 +3007,11 @@ mod tests {
         .export_url()
     }
 
-    fn juicity_fixture_url(ps: &str, add: &str, port: u16, allow_insecure: bool) -> String {
+    fn juicity_fixture_url(_ps: &str, add: &str, port: u16, allow_insecure: bool) -> String {
         JuicityLink {
-            name: ps.to_owned(),
+            name: String::new(),
             user: "01234567-89ab-cdef-0123-456789abcdef".to_owned(),
-            password: "juicity-password".to_owned(),
+            password: "password".to_owned(),
             server: add.to_owned(),
             port,
             sni: "office.example".to_owned(),
@@ -2725,7 +3024,7 @@ mod tests {
     }
 
     fn vmess_fixture_url(
-        ps: &str,
+        _ps: &str,
         add: &str,
         port: u16,
         net: &str,
@@ -2734,7 +3033,7 @@ mod tests {
         tls: &str,
     ) -> String {
         VMessLink {
-            ps: ps.to_owned(),
+            ps: String::new(),
             add: add.to_owned(),
             port: port.to_string(),
             id: "01234567-89ab-cdef-0123-456789abcdef".to_owned(),
@@ -2753,101 +3052,134 @@ mod tests {
         .export_url()
     }
 
+    fn vmess_legacy_fixture_url() -> String {
+        "vmess://YXV0bzowMTIzNDU2Ny04OWFiLWNkZWYtMDEyMy00NTY3ODlhYmNkZWZAMjAzLjAuMTEzLjEwOjI4NDUy?alterId=0&obfs=tcp"
+            .to_owned()
+    }
+
+    fn resident_admitted_source_fixture_links() -> Vec<String> {
+        vec![
+            "socks5://user:password@proxy.example.net:1080".to_owned(),
+            "http://user:password@proxy.example.net:80".to_owned(),
+            "https://user:password@secure-proxy.example.net:443".to_owned(),
+            shadowsocks_fixture_url("ss", "203.0.113.10", 28446),
+            shadowsocks_plugin_fixture_url("ss-plugin", "203.0.113.10", 28447),
+            trojan_fixture_url("trojan", "203.0.113.10", 28444),
+            trojan_websocket_fixture_url("trojan-ws", "203.0.113.10", 28456),
+            "anytls://password@secure-stream.example.net:443?sni=secure-stream.example.net"
+                .to_owned(),
+            vmess_fixture_url("vmess", "203.0.113.10", 28452, "tcp", "", "", ""),
+            vmess_fixture_url(
+                "vmess-ws",
+                "203.0.113.10",
+                28454,
+                "ws",
+                "front.example",
+                "/vmess",
+                "",
+            ),
+            vless_fixture_url(
+                "vless-ws",
+                "203.0.113.10",
+                28443,
+                "ws",
+                "front.example",
+                "/ws",
+                "office.example",
+                "",
+                "",
+            ),
+            hysteria2_fixture_url("hy2", "203.0.113.10", 28453),
+            tuic_fixture_url("tuic", "203.0.113.10", 28454, true),
+            juicity_fixture_url("juicity", "203.0.113.10", 28455, true),
+        ]
+    }
+
+    fn assert_common_source_import_round_trips(link: &str) {
+        let scheme = link
+            .split_once("://")
+            .map(|(scheme, _)| scheme)
+            .unwrap_or_default();
+        match scheme {
+            "socks" | "socks5" => {
+                let parsed = Url::parse(link).unwrap();
+                assert!(parsed.has_host(), "{link}");
+                assert!(parsed.port().is_some(), "{link}");
+                assert!(!parsed.username().is_empty(), "{link}");
+            }
+            "http" | "https" => {
+                assert_eq!(HttpProxyLink::parse(link).unwrap().export_url(), link);
+            }
+            "ss" => {
+                assert_eq!(ShadowsocksLink::parse(link).unwrap().export_url(), link);
+            }
+            "trojan" | "trojan-go" => {
+                assert_eq!(TrojanLink::parse(link).unwrap().export_url(), link);
+            }
+            "anytls" => {
+                assert_eq!(AnyTLSLink::parse(link).unwrap().export_url(), link);
+            }
+            "vmess" => {
+                assert_eq!(VMessLink::parse(link).unwrap().export_url(), link);
+            }
+            "vless" => {
+                assert_eq!(VLESSLink::parse(link).unwrap().export_url(), link);
+            }
+            "hysteria2" | "hy2" => {
+                assert_eq!(Hysteria2Link::parse(link).unwrap().export_url(), link);
+            }
+            "tuic" => {
+                assert_eq!(TuicLink::parse(link).unwrap().export_url(), link);
+            }
+            "juicity" => {
+                assert_eq!(JuicityLink::parse(link).unwrap().export_url(), link);
+            }
+            other => panic!("unexpected resident source fixture scheme {other}: {link}"),
+        }
+    }
+
     #[test]
     fn resident_admitted_source_fixtures_use_common_canonical_formats() {
-        let socks = "socks5://user:socks-password@203.0.113.10:28447#socks";
-        let parsed_socks = Url::parse(socks).unwrap();
-        assert_eq!(parsed_socks.scheme(), "socks5");
-        assert_eq!(parsed_socks.username(), "user");
-        assert_eq!(parsed_socks.password(), Some("socks-password"));
-        assert_eq!(parsed_socks.host_str(), Some("203.0.113.10"));
-        assert_eq!(parsed_socks.port(), Some(28447));
-
-        let http = "http://user:http-password@203.0.113.10:28448#http";
-        assert_eq!(HttpProxyLink::parse(http).unwrap().export_url(), http);
-
-        let shadowsocks = shadowsocks_fixture_url("ss", "203.0.113.10", 28446);
-        assert_eq!(
-            ShadowsocksLink::parse(&shadowsocks).unwrap().export_url(),
-            shadowsocks
-        );
-        assert!(!shadowsocks.contains("aes-128-gcm:ss-password"));
-
-        let trojan = trojan_fixture_url("trojan", "203.0.113.10", 28444);
-        assert_eq!(TrojanLink::parse(&trojan).unwrap().export_url(), trojan);
-
-        let trojan_websocket = trojan_websocket_fixture_url("trojan-ws", "203.0.113.10", 28456);
-        assert_eq!(
-            TrojanLink::parse(&trojan_websocket).unwrap().export_url(),
-            trojan_websocket
-        );
-
-        let anytls = "anytls://anytls-password@203.0.113.10:28451?sni=office.example#anytls";
-        assert_eq!(AnyTLSLink::parse(anytls).unwrap().export_url(), anytls);
-
-        let vmess = vmess_fixture_url("vmess", "203.0.113.10", 28452, "tcp", "", "", "");
-        assert_eq!(VMessLink::parse(&vmess).unwrap().export_url(), vmess);
-        assert!(!vmess.contains('#'));
-
-        let vmess_websocket = vmess_fixture_url(
-            "vmess-ws",
-            "203.0.113.10",
-            28454,
-            "ws",
-            "front.example",
-            "/vmess",
-            "",
-        );
-        assert_eq!(
-            VMessLink::parse(&vmess_websocket).unwrap().export_url(),
-            vmess_websocket
-        );
-        assert!(!vmess_websocket.contains('#'));
-
-        let vless_websocket = vless_fixture_url(
-            "vless-ws",
-            "203.0.113.10",
-            28443,
-            "ws",
-            "front.example",
-            "/ws",
-            "office.example",
-            "",
-            "",
-        );
-        assert_eq!(
-            VLESSLink::parse(&vless_websocket).unwrap().export_url(),
-            vless_websocket
-        );
-
-        let hysteria2 = hysteria2_fixture_url("hy2", "203.0.113.10", 28453);
-        assert_eq!(
-            Hysteria2Link::parse(&hysteria2).unwrap().export_url(),
-            hysteria2
-        );
-
-        let tuic = tuic_fixture_url("tuic", "203.0.113.10", 28454, true);
-        assert_eq!(TuicLink::parse(&tuic).unwrap().export_url(), tuic);
-
-        let juicity = juicity_fixture_url("juicity", "203.0.113.10", 28455, true);
-        assert_eq!(JuicityLink::parse(&juicity).unwrap().export_url(), juicity);
-
-        for link in [
-            socks,
-            http,
-            anytls,
-            &shadowsocks,
-            &trojan,
-            &trojan_websocket,
-            &vmess,
-            &vmess_websocket,
-            &vless_websocket,
-            &hysteria2,
-            &tuic,
-            &juicity,
-        ] {
-            assert!(!link.contains("example.invalid-test-format"));
+        let links = resident_admitted_source_fixture_links();
+        assert!(links.len() >= 10);
+        for link in links {
+            assert_resident_source_fixture_uses_generic_semantics(&link);
+            assert_common_source_import_round_trips(&link);
         }
+    }
+
+    #[test]
+    fn resident_legacy_import_normalizes_to_current_executor() {
+        let config = parse_config(
+            r#"
+        global {
+        lan_interface: daerust0
+        allow_insecure: false
+        so_mark_from_dae: 1234
+        mptcp: false
+        }
+        routing {
+        fallback: direct
+        }
+        "#,
+        );
+        let legacy = vmess_legacy_fixture_url();
+        assert_resident_source_fixture_uses_generic_semantics(&legacy);
+        let normalized = VMessLink::parse(&legacy).unwrap().export_url();
+        assert_ne!(normalized, legacy);
+        let proxy = build_resident_proxy_plan_for_node(
+            &config,
+            "proxy".to_owned(),
+            "legacy_import".to_owned(),
+            legacy,
+        )
+        .unwrap();
+        assert_eq!(proxy.protocol, "vmess");
+        assert_eq!(proxy.net, "tcp");
+        assert!(matches!(
+            proxy.handler,
+            ResidentProxyProtocolPlan::VmessAeadTcp { .. }
+        ));
     }
 
     #[test]
@@ -3374,8 +3706,8 @@ mod tests {
 
     #[test]
     fn resident_dataplane_plan_keeps_fixed_from_building_unselected_candidate() {
-        let config = parse_config(
-            r#"
+        let unsupported = vless_xhttp_parser_fixture_url("packet-up", "h3", "");
+        let config_text = r#"
         global {
         lan_interface: daerust0
         allow_insecure: false
@@ -3384,7 +3716,7 @@ mod tests {
         }
         node {
         node_a: 'socks://127.0.0.1:1080'
-        unsupported: 'vless://01234567-89ab-cdef-0123-456789abcdef@example.com:443?security=tls&type=xhttp&sni=office.example&path=%2Fxhttp&mode=packet-up&alpn=h3'
+        unsupported: '__UNSUPPORTED_SOURCE__'
         }
         group {
         proxy {
@@ -3396,8 +3728,9 @@ mod tests {
         l4proto(tcp) -> proxy
         fallback: direct
         }
-        "#,
-        );
+        "#
+        .replace("__UNSUPPORTED_SOURCE__", &unsupported);
+        let config = parse_config(&config_text);
         let plan = build_resident_dataplane_plan(&config).unwrap();
         let group = plan.default_proxy_group().unwrap();
         assert_eq!(group.candidate_count(), 2);
@@ -3407,8 +3740,8 @@ mod tests {
 
     #[test]
     fn resident_dataplane_plan_does_not_fallback_unresolved_name_filter_to_static_ss_node() {
-        let config = parse_config(
-            r#"
+        let candidate = vless_xhttp_parser_fixture_url("packet-up", "h3", "");
+        let config_text = r#"
         global {
         lan_interface: daerust0
         allow_insecure: false
@@ -3416,8 +3749,8 @@ mod tests {
         mptcp: false
         }
         node {
-        _022: 'ss://2022-blake3-aes-128-gcm:MTIzNDU2Nzg5MDEyMzQ1Ng==@217.116.171.227:25868#ss2022'
-        xhttp: 'vless://01234567-89ab-cdef-0123-456789abcdef@example.com:443?security=tls&type=xhttp&sni=office.example&path=%2Fxhttp&mode=packet-up&alpn=h3'
+        _022: 'ss://2022-blake3-aes-128-gcm:MTIzNDU2Nzg5MDEyMzQ1Ng==@217.116.171.227:25868'
+        candidate: '__CANDIDATE_SOURCE__'
         }
         group {
         proxy {
@@ -3429,8 +3762,9 @@ mod tests {
         l4proto(tcp) && dport(443) -> proxy
         fallback: direct
         }
-        "#,
-        );
+        "#
+        .replace("__CANDIDATE_SOURCE__", &candidate);
+        let config = parse_config(&config_text);
         let err = build_resident_dataplane_plan(&config).unwrap_err();
         assert!(err.contains("cannot resolve group proxy name filter node(s): node_17"));
         assert!(!err.contains("parse VLESS node _022"));
@@ -3447,7 +3781,7 @@ mod tests {
         mptcp: false
         }
         node {
-        ss_live: 'ss://2022-blake3-aes-128-gcm:MTIzNDU2Nzg5MDEyMzQ1Ng==@217.116.171.227:25868#ss2022'
+        ss_live: 'ss://2022-blake3-aes-128-gcm:MTIzNDU2Nzg5MDEyMzQ1Ng==@217.116.171.227:25868'
         }
         group {
         proxy {
@@ -3486,12 +3820,12 @@ mod tests {
             &config,
             "proxy".to_owned(),
             "socks_live".to_owned(),
-            "socks5://user:socks-password@203.0.113.10:28447#socks".to_owned(),
+            "socks5://user:password@proxy.example.net:1080".to_owned(),
         )
         .unwrap();
         assert_eq!(socks.protocol, "socks5");
-        assert_eq!(socks.server_host, "203.0.113.10");
-        assert_eq!(socks.server_port, 28447);
+        assert_eq!(socks.server_host, "proxy.example.net");
+        assert_eq!(socks.server_port, 1080);
         assert!(matches!(
             socks.handler,
             ResidentProxyProtocolPlan::Socks5Tcp { .. }
@@ -3501,15 +3835,43 @@ mod tests {
             &config,
             "proxy".to_owned(),
             "http_live".to_owned(),
-            "http://user:http-password@203.0.113.10:28448#http".to_owned(),
+            "http://user:password@proxy.example.net:80".to_owned(),
         )
         .unwrap();
         assert_eq!(http.protocol, "http-proxy");
+        assert_eq!(http.server_host, "proxy.example.net");
+        assert_eq!(http.server_port, 80);
         assert_eq!(http.tls, "none");
         assert!(matches!(
             http.handler,
             ResidentProxyProtocolPlan::HttpProxyTcp { .. }
         ));
+
+        let https = build_resident_proxy_plan_for_node(
+            &config,
+            "proxy".to_owned(),
+            "https_live".to_owned(),
+            "https://user:password@secure-proxy.example.net:443".to_owned(),
+        )
+        .unwrap();
+        assert_eq!(https.protocol, "http-proxy");
+        assert_eq!(https.server_host, "secure-proxy.example.net");
+        assert_eq!(https.server_port, 443);
+        assert_eq!(https.server_name, "secure-proxy.example.net");
+        assert_eq!(https.tls, "tls");
+        assert_eq!(https.alpn, vec!["h2".to_owned(), "http/1.1".to_owned()]);
+        assert!(matches!(
+            https.handler,
+            ResidentProxyProtocolPlan::HttpProxyTcp { .. }
+        ));
+        let https_graph = https.executable_graph_value();
+        assert_eq!(https_graph["protocolFraming"], "http-proxy");
+        assert_eq!(https_graph["securityUnderlay"], "standard-tls");
+        assert_eq!(https_graph["packetSemantics"], "protocol-closed");
+        assert_eq!(
+            https_graph["runtimeComponents"]["underlayFactory"]["provider"],
+            "rustls"
+        );
 
         let shadowsocks = build_resident_proxy_plan_for_node(
             &config,
@@ -3523,6 +3885,20 @@ mod tests {
         assert!(matches!(
             shadowsocks.handler,
             ResidentProxyProtocolPlan::ShadowsocksAeadTcp { salt_len: 16, .. }
+        ));
+
+        let shadowsocks_plugin = build_resident_proxy_plan_for_node(
+            &config,
+            "proxy".to_owned(),
+            "ss_plugin_live".to_owned(),
+            shadowsocks_plugin_fixture_url("ss-plugin", "203.0.113.10", 28447),
+        )
+        .unwrap();
+        assert_eq!(shadowsocks_plugin.protocol, "shadowsocks");
+        assert_eq!(shadowsocks_plugin.net, "simple-obfs-http");
+        assert!(matches!(
+            shadowsocks_plugin.handler,
+            ResidentProxyProtocolPlan::ShadowsocksSimpleObfsHttpTcp { .. }
         ));
 
         let trojan = build_resident_proxy_plan_for_node(
@@ -3664,13 +4040,14 @@ mod tests {
             &config,
             "proxy".to_owned(),
             "anytls_live".to_owned(),
-            "anytls://anytls-password@203.0.113.10:28451?sni=office.example#anytls".to_owned(),
+            "anytls://password@secure-stream.example.net:443?sni=secure-stream.example.net"
+                .to_owned(),
         )
         .unwrap();
         assert_eq!(anytls.protocol, "anytls");
-        assert_eq!(anytls.server_host, "203.0.113.10");
-        assert_eq!(anytls.server_port, 28451);
-        assert_eq!(anytls.server_name, "office.example");
+        assert_eq!(anytls.server_host, "secure-stream.example.net");
+        assert_eq!(anytls.server_port, 443);
+        assert_eq!(anytls.server_name, "secure-stream.example.net");
         assert_eq!(anytls.tls, "tls");
         assert!(matches!(
             anytls.handler,
@@ -3973,7 +4350,9 @@ mod tests {
         for proxy in [
             &socks,
             &http,
+            &https,
             &shadowsocks,
+            &shadowsocks_plugin,
             &trojan,
             &trojan_websocket,
             &trojan_httpupgrade,
@@ -4046,16 +4425,7 @@ mod tests {
                     .starts_with("sha256:")
             );
             let graph_text = graph.to_string();
-            for secret in [
-                "socks-password",
-                "http-password",
-                "ss-password",
-                "trojan-password",
-                "anytls-password",
-                "hy2-auth",
-                "tuic-password",
-                "juicity-password",
-            ] {
+            for secret in ["user:password", ":password@", "auth-token"] {
                 assert!(
                     !graph_text.contains(secret),
                     "graph leaked raw credential-bearing link: {graph}"
@@ -4065,7 +4435,7 @@ mod tests {
     }
 
     #[test]
-    fn resident_dataplane_plan_rejects_chain_flattening() {
+    fn resident_dataplane_plan_admits_nested_chain_without_flattening() {
         let config = parse_config(
             r#"
         global {
@@ -4079,16 +4449,34 @@ mod tests {
         }
         "#,
         );
-        let err = build_resident_proxy_plan_for_node(
+        let proxy = build_resident_proxy_plan_for_node(
             &config,
             "proxy".to_owned(),
             "chained_live".to_owned(),
-            "socks5://user:pass@203.0.113.10:28447 -> http://user:pass@203.0.113.10:28448"
+            "socks5://user:password@proxy-a.example.net:1080 -> http://user:password@proxy-b.example.net:80"
+                .to_owned(),
+        )
+        .unwrap();
+        assert!(proxy.chain_parent.is_some());
+        assert_eq!(proxy.server_host, "proxy-b.example.net");
+        let graph = proxy.executable_graph_value();
+        assert_eq!(graph["chain"]["mode"], "parent-proxy");
+        assert_eq!(graph["chain"]["parentCount"], 1);
+        assert_eq!(graph["chain"]["flattened"], false);
+        assert_eq!(
+            graph["runtimeComponents"]["chainExecutor"]["executor"],
+            "resident-parent-connect-chain"
+        );
+
+        let err = build_resident_proxy_plan_for_node(
+            &config,
+            "proxy".to_owned(),
+            "too_deep".to_owned(),
+            "socks5://user:password@proxy-a.example.net:1080 -> http://user:password@proxy-b.example.net:80 -> http://user:password@proxy-c.example.net:80"
                 .to_owned(),
         )
         .unwrap_err();
-        assert!(err.contains("does not flatten chained node chained_live"));
-        assert!(err.contains("fail-closed"));
+        assert!(err.contains("admits two-node chains only"));
     }
 
     #[test]
@@ -4106,23 +4494,32 @@ mod tests {
         }
         "#,
         );
-        let https = build_resident_proxy_plan_for_node(
+        let https_insecure = build_resident_proxy_plan_for_node(
             &config,
             "proxy".to_owned(),
-            "https_live".to_owned(),
-            "https://user:http-password@203.0.113.10:28448#https".to_owned(),
+            "https_insecure".to_owned(),
+            "https://user:password@secure-proxy.example.net:443?allowInsecure=1".to_owned(),
         )
         .unwrap_err();
-        assert!(https.contains("plain http proxy endpoints only"));
+        assert!(https_insecure.contains("does not admit allow_insecure"));
+
+        let https_utls = build_resident_proxy_plan_for_node(
+            &config,
+            "proxy".to_owned(),
+            "https_utls".to_owned(),
+            "https://user:password@secure-proxy.example.net:443?utlsImitate=chrome".to_owned(),
+        )
+        .unwrap_err();
+        assert!(https_utls.contains("does not admit fingerprint/utls imitation"));
 
         let plugin = build_resident_proxy_plan_for_node(
             &config,
             "proxy".to_owned(),
             "ss_plugin".to_owned(),
-            shadowsocks_plugin_fixture_url("ss-plugin", "203.0.113.10", 28446),
+            shadowsocks_unsupported_plugin_fixture_url("ss-plugin", "203.0.113.10", 28446),
         )
         .unwrap_err();
-        assert!(plugin.contains("does not admit SIP003 plugin"));
+        assert!(plugin.contains("admits simple-obfs obfs=http only"));
 
         let vmess_grpc = build_resident_proxy_plan_for_node(
             &config,
@@ -4147,7 +4544,7 @@ mod tests {
             &config,
             "proxy".to_owned(),
             "trojan_go_inner_encryption".to_owned(),
-            "trojan-go://trojan-password@203.0.113.10:28444?type=ws&sni=office.example&encryption=ss%3Baes-128-gcm%3Apass#trojan-go".to_owned(),
+            "trojan-go://password@secure-stream.example.net:443?type=ws&sni=secure-stream.example.net&encryption=ss%3Baes-128-gcm%3Apass".to_owned(),
         )
         .unwrap_err();
         assert!(trojan_go_inner_encryption.contains("does not admit inner encryption"));
@@ -4156,7 +4553,7 @@ mod tests {
             &config,
             "proxy".to_owned(),
             "anytls_insecure".to_owned(),
-            "anytls://anytls-password@203.0.113.10:28451?insecure=1&sni=office.example#anytls"
+            "anytls://password@secure-stream.example.net:443?insecure=1&sni=secure-stream.example.net"
                 .to_owned(),
         )
         .unwrap_err();
@@ -4291,6 +4688,92 @@ mod tests {
         let err = build_resident_dataplane_plan(&config).unwrap_err();
         assert!(err.contains("admits tcp flow=xtls-rprx-vision"));
         assert!(err.contains("keep Go outbound"));
+    }
+
+    #[test]
+    fn resident_dataplane_plan_admits_vless_xhttp_h2_packet_up() {
+        let config = parse_config(
+            r#"
+        global {
+        lan_interface: daerust0
+        allow_insecure: false
+        so_mark_from_dae: 1234
+        mptcp: false
+        }
+        routing {
+        fallback: direct
+        }
+        "#,
+        );
+        let proxy = build_resident_proxy_plan_for_node(
+            &config,
+            "proxy".to_owned(),
+            "standard_import".to_owned(),
+            vless_xhttp_parser_fixture_url("auto", "h2", ""),
+        )
+        .unwrap();
+
+        assert_eq!(proxy.protocol, "vless");
+        assert_eq!(proxy.net, "xhttp");
+        assert_eq!(proxy.alpn, vec!["h2".to_owned()]);
+        assert_eq!(proxy.stream_host, "edge.transport.invalid");
+        assert_eq!(proxy.stream_path, "/resource/?ed=2048");
+        let graph = proxy.executable_graph_value();
+        assert_eq!(graph["streamWrapper"], "xhttp");
+        assert_eq!(
+            graph["runtimeComponents"]["streamWrapperFactory"]["provider"],
+            "resident-xhttp-h2-packet-up"
+        );
+    }
+
+    #[test]
+    fn resident_dataplane_plan_rejects_unimplemented_vless_xhttp_shapes() {
+        let config = parse_config(
+            r#"
+        global {
+        lan_interface: daerust0
+        allow_insecure: false
+        so_mark_from_dae: 1234
+        mptcp: false
+        }
+        routing {
+        fallback: direct
+        }
+        "#,
+        );
+        for (tag, link, expected) in [
+            (
+                "xhttp_h3",
+                vless_xhttp_parser_fixture_url("packet-up", "h3", ""),
+                "admits HTTP/2 packet-up only",
+            ),
+            (
+                "xhttp_stream_up",
+                vless_xhttp_parser_fixture_url("stream-up", "h2", ""),
+                "admits packet-up mode only",
+            ),
+            (
+                "xhttp_extra",
+                vless_xhttp_parser_fixture_url(
+                    "packet-up",
+                    "h2",
+                    r#"{"xmux":{"maxConnections":2}}"#,
+                ),
+                "admits default extra settings only",
+            ),
+        ] {
+            let err = build_resident_proxy_plan_for_node(
+                &config,
+                "proxy".to_owned(),
+                tag.to_owned(),
+                link,
+            )
+            .unwrap_err();
+            assert!(
+                err.contains(expected),
+                "{tag} rejected with unexpected error: {err}"
+            );
+        }
     }
 
     #[test]

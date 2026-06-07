@@ -372,6 +372,11 @@ fn exchange_proxy_udp(
             password,
             salt_len,
         } => exchange_shadowsocks_udp(proxy, original_dst, payload, cipher, password, *salt_len),
+        ResidentProxyProtocolPlan::ShadowsocksSimpleObfsHttpTcp { .. } => Err(format!(
+            "unsupported_udp_handler: resident UDP adapter dispatch selected handler {} for protocol {}; SIP003 simple-obfs HTTP is a TCP stream wrapper and UDP remains fail-closed without Go fallback",
+            resident_udp_handler_name(&proxy.handler),
+            proxy.protocol
+        )),
         ResidentProxyProtocolPlan::Socks5Tcp { username, password } => {
             exchange_socks5_udp(proxy, original_dst, payload, username, password)
         }
@@ -622,6 +627,9 @@ fn resident_udp_handler_name(handler: &ResidentProxyProtocolPlan) -> &'static st
         ResidentProxyProtocolPlan::Socks5Tcp { .. } => "socks5-tcp",
         ResidentProxyProtocolPlan::HttpProxyTcp { .. } => "http-proxy-tcp",
         ResidentProxyProtocolPlan::ShadowsocksAeadTcp { .. } => "shadowsocks-aead-tcp",
+        ResidentProxyProtocolPlan::ShadowsocksSimpleObfsHttpTcp { .. } => {
+            "shadowsocks-simple-obfs-http-tcp"
+        }
         ResidentProxyProtocolPlan::TrojanTcpTls { .. } => "trojan-tcp-tls",
         ResidentProxyProtocolPlan::AnyTlsTcpTls { .. } => "anytls-tcp-tls",
         ResidentProxyProtocolPlan::VmessAeadTcp { .. } => "vmess-aead-tcp",
@@ -656,6 +664,7 @@ fn udp_packet_semantics(handler: &ResidentProxyProtocolPlan) -> &'static str {
         ResidentProxyProtocolPlan::Socks5Tcp { .. } => "udp-associate",
         ResidentProxyProtocolPlan::HttpProxyTcp { .. } => "protocol-closed",
         ResidentProxyProtocolPlan::ShadowsocksAeadTcp { .. } => "datagram-aead",
+        ResidentProxyProtocolPlan::ShadowsocksSimpleObfsHttpTcp { .. } => "plugin-wrapper-stream",
         ResidentProxyProtocolPlan::TrojanTcpTls { .. }
         | ResidentProxyProtocolPlan::AnyTlsTcpTls { .. }
         | ResidentProxyProtocolPlan::VmessAeadTcp { .. } => "udp-over-stream",
@@ -1726,6 +1735,7 @@ mod tests {
             allow_insecure: false,
             utls_fingerprint: None,
             handler: ResidentProxyProtocolPlan::VlessVisionTcpTls { key: [9_u8; 16] },
+            chain_parent: None,
             mark: 0,
             mptcp: false,
         };
@@ -1766,6 +1776,7 @@ mod tests {
                 username: String::new(),
                 password: String::new(),
             },
+            chain_parent: None,
             mark: 0,
             mptcp: false,
         };

@@ -37,11 +37,14 @@ use dae_outbound::{
         authenticate_juicity_connection, build_juicity_runtime_client_config,
         write_juicity_tcp_request,
     },
-    shadowsocks::{AeadStreamCodec, ShadowsocksMetadata, read_encrypted_chunk_from_stream},
+    shadowsocks::{
+        AeadStreamCodec, ShadowsocksMetadata, Sip003SimpleObfsHttpOptions,
+        read_encrypted_chunk_from_stream, simple_obfs_http_request_with_body,
+    },
     shared_transport::{
-        DEFAULT_WS_KEY, HttpUpgradeOptions, WS_MASK_KEY, grpc_hunk_frame, grpc_hunk_payload,
-        http_upgrade_request, read_http_head, validate_http_status, websocket_client_binary_frame,
-        websocket_handshake_request,
+        DEFAULT_WS_KEY, HttpUpgradeOptions, MeekRoundTripOptions, WS_MASK_KEY, grpc_hunk_frame,
+        grpc_hunk_payload, http_upgrade_request, ir, meek_http_request, read_http_head,
+        validate_http_status, websocket_client_binary_frame, websocket_handshake_request,
     },
     socks5::{Socks5Address, handshake},
     trojan::packet as trojan_packet,
@@ -1157,6 +1160,30 @@ async fn handle_proxy_tcp_connection_async(
         )
         .await;
     }
+    if selection.proxy.net == "meek" {
+        return handle_vless_meek_tcp_connection_async(
+            inbound,
+            peer,
+            original_dst,
+            selection,
+            stop,
+            sniff,
+            metrics,
+        )
+        .await;
+    }
+    if selection.proxy.net == "xhttp" {
+        return handle_vless_xhttp_h2_tcp_connection_async(
+            inbound,
+            peer,
+            original_dst,
+            selection,
+            stop,
+            sniff,
+            metrics,
+        )
+        .await;
+    }
     let mut client = open_async_vless_tls_client(&selection.proxy).await?;
     let tls_underlay = async_tls_underlay_name(&client);
     let key = selection.proxy.vless_key()?;
@@ -1345,6 +1372,201 @@ async fn handle_vless_httpupgrade_tcp_connection_async(
 }
 
 #[allow(clippy::too_many_arguments)]
+async fn handle_vless_meek_tcp_connection_async(
+    inbound: &mut TokioTcpStream,
+    peer: SocketAddr,
+    original_dst: SocketAddrV4,
+    selection: TcpProxySelection,
+    stop: Arc<AtomicBool>,
+    sniff: &TcpSniffReport,
+    metrics: &ResidentDataplaneMetrics,
+) -> Result<Value, String> {
+    let tls_underlay = if selection.proxy.utls_fingerprint.is_some() {
+        "boringssl"
+    } else {
+        "rustls"
+    };
+    let key = selection.proxy.vless_key()?;
+    let options = meek_options_from_proxy(&selection, peer, original_dst);
+    let first_payload = packet::first_write_bytes(
+        &key,
+        "",
+        "tcp",
+        &selection.route.dial_target,
+        false,
+        &sniff.payload,
+    )
+    .map_err(|err| format!("build VLESS Meek TCP request: {err}"))?;
+    let mut stats = DirectTcpRelayStats::default();
+    if !sniff.payload.is_empty() {
+        stats.client_to_direct += sniff.payload.len();
+        metrics.add_upload(sniff.payload.len());
+    }
+    let mut stripper = VlessResponseStripper::default();
+    let mut next_body = Some(first_payload);
+    let mut inbound_closed = false;
+    let mut last_activity = Instant::now();
+    let mut empty_poll_count = 0_usize;
+
+    while !stop.load(Ordering::Relaxed) {
+        let body = if let Some(body) = next_body.take() {
+            body
+        } else {
+            let mut buf = [0_u8; 16 * 1024];
+            match time::timeout(Duration::from_millis(150), inbound.read(&mut buf)).await {
+                Ok(Ok(0)) => {
+                    inbound_closed = true;
+                    Vec::new()
+                }
+                Ok(Ok(read)) => {
+                    stats.client_to_direct += read;
+                    metrics.add_upload(read);
+                    last_activity = Instant::now();
+                    empty_poll_count = 0;
+                    buf[..read].to_vec()
+                }
+                Ok(Err(err)) if is_graceful_stream_close_error(&err) => {
+                    inbound_closed = true;
+                    Vec::new()
+                }
+                Ok(Err(err)) => return Err(format!("read inbound TCP for Meek relay: {err}")),
+                Err(_) => Vec::new(),
+            }
+        };
+
+        if body.is_empty() {
+            empty_poll_count = empty_poll_count.saturating_add(1);
+        }
+        let response = meek_round_trip_async(&selection.proxy, &options, &body).await?;
+        let response_payload = stripper.consume(&response)?;
+        if !response_payload.is_empty() {
+            inbound
+                .write_all(&response_payload)
+                .await
+                .map_err(|err| format!("write Meek response payload to client: {err}"))?;
+            stats.direct_to_client += response_payload.len();
+            metrics.add_download(response_payload.len());
+            last_activity = Instant::now();
+            empty_poll_count = 0;
+        }
+        if inbound_closed && response_payload.is_empty() {
+            break;
+        }
+        if empty_poll_count >= 3 && last_activity.elapsed() > RESIDENT_TCP_IDLE_TIMEOUT {
+            break;
+        }
+    }
+
+    let mut event = generic_proxy_tcp_finished_event(
+        peer,
+        original_dst,
+        &selection,
+        sniff,
+        "vless",
+        &stats,
+        "async-proxy-meek-tls",
+    );
+    event["tls_underlay"] = json!(tls_underlay);
+    event["stream_wrapper"] = json!("meek");
+    event["meek_polling"] = json!(true);
+    append_proxy_tcp_execution_fields(
+        &mut event,
+        "async-proxy-meek-tls",
+        "vless",
+        Some(tls_underlay),
+        None,
+    );
+    Ok(event)
+}
+
+fn meek_options_from_proxy(
+    selection: &TcpProxySelection,
+    peer: SocketAddr,
+    original_dst: SocketAddrV4,
+) -> MeekRoundTripOptions {
+    MeekRoundTripOptions {
+        url: format!(
+            "https://{}{}",
+            selection.proxy.stream_host, selection.proxy.stream_path
+        ),
+        host: selection.proxy.stream_host.clone(),
+        path: selection.proxy.stream_path.clone(),
+        session_tag: format!("{}|{}|{}", selection.proxy.graph_id, peer, original_dst).into_bytes(),
+    }
+}
+
+async fn meek_round_trip_async(
+    proxy: &ResidentProxyPlan,
+    options: &MeekRoundTripOptions,
+    body: &[u8],
+) -> Result<Vec<u8>, String> {
+    let mut client = open_async_resident_tls_client(proxy).await?;
+    let request = meek_http_request(options, body);
+    client
+        .write_plain_all(&request, "write Meek polling request")
+        .await?;
+    let response = read_meek_http_response_body_async(&mut client).await;
+    client.shutdown().await;
+    response
+}
+
+async fn read_meek_http_response_body_async(
+    client: &mut AsyncResidentTlsClient,
+) -> Result<Vec<u8>, String> {
+    let mut data = Vec::new();
+    let mut buf = [0_u8; 1024];
+    let head_end = loop {
+        let read = time::timeout(RESIDENT_CONNECT_TIMEOUT, client.read_plain(&mut buf))
+            .await
+            .map_err(|_| "read Meek response head timeout".to_owned())?
+            .map_err(|err| format!("read Meek response head: {err}"))?;
+        if read == 0 {
+            return Err("Meek response closed before header".to_owned());
+        }
+        data.extend_from_slice(&buf[..read]);
+        if let Some(index) = data.windows(4).position(|window| window == b"\r\n\r\n") {
+            break index + 4;
+        }
+        if data.len() > 8192 {
+            return Err("Meek response header too large".to_owned());
+        }
+    };
+    let head = data[..head_end].to_vec();
+    validate_http_status(&head, 200).map_err(|err| format!("validate Meek response: {err}"))?;
+    let content_length = http_content_length(&head)?;
+    let mut body = data[head_end..].to_vec();
+    while body.len() < content_length {
+        let read = time::timeout(RESIDENT_CONNECT_TIMEOUT, client.read_plain(&mut buf))
+            .await
+            .map_err(|_| "read Meek response body timeout".to_owned())?
+            .map_err(|err| format!("read Meek response body: {err}"))?;
+        if read == 0 {
+            break;
+        }
+        body.extend_from_slice(&buf[..read]);
+    }
+    body.truncate(content_length);
+    Ok(body)
+}
+
+fn http_content_length(head: &[u8]) -> Result<usize, String> {
+    let text =
+        std::str::from_utf8(head).map_err(|err| format!("Meek response head utf8: {err}"))?;
+    for line in text.split("\r\n") {
+        let Some((name, value)) = line.split_once(':') else {
+            continue;
+        };
+        if name.eq_ignore_ascii_case("content-length") {
+            return value
+                .trim()
+                .parse::<usize>()
+                .map_err(|err| format!("parse Meek response Content-Length: {err}"));
+        }
+    }
+    Ok(0)
+}
+
+#[allow(clippy::too_many_arguments)]
 async fn handle_vless_grpc_tcp_connection_async(
     inbound: &mut TokioTcpStream,
     peer: SocketAddr,
@@ -1430,6 +1652,113 @@ async fn handle_vless_grpc_tcp_connection_async(
         })
 }
 
+#[allow(clippy::too_many_arguments)]
+async fn handle_vless_xhttp_h2_tcp_connection_async(
+    inbound: &mut TokioTcpStream,
+    peer: SocketAddr,
+    original_dst: SocketAddrV4,
+    selection: TcpProxySelection,
+    stop: Arc<AtomicBool>,
+    sniff: &TcpSniffReport,
+    metrics: &ResidentDataplaneMetrics,
+) -> Result<Value, String> {
+    let client = open_async_vless_tls_client(&selection.proxy).await?;
+    let tls_underlay = async_tls_underlay_name(&client);
+    let key = selection.proxy.vless_key()?;
+    let session_id = new_xhttp_session_id();
+    let (mut h2_send, mut h2_recv, connection_task) =
+        open_xhttp_h2_packet_up_session(client, &selection.proxy, &session_id).await?;
+    let request = packet::first_write_bytes(
+        &key,
+        &selection.proxy.flow,
+        "tcp",
+        &selection.route.dial_target,
+        false,
+        &sniff.payload,
+    )
+    .map_err(|err| format!("build VLESS xHTTP TCP request: {err}"))?;
+
+    let mut initial_stats = DirectTcpRelayStats::default();
+    initial_stats.client_to_direct += sniff.payload.len();
+    if !sniff.payload.is_empty() {
+        metrics.add_upload(sniff.payload.len());
+    }
+    let result = async {
+        let mut seq = 0_u64;
+        send_xhttp_h2_packet_up_request(
+            &mut h2_send,
+            &selection.proxy,
+            &session_id,
+            seq,
+            Bytes::from(request),
+        )
+        .await?;
+        seq = seq.saturating_add(1);
+        relay_tcp_over_xhttp_h2_packet_up(
+            inbound,
+            &mut h2_send,
+            &mut h2_recv,
+            &selection.proxy,
+            &session_id,
+            seq,
+            stop,
+            initial_stats,
+            metrics,
+        )
+        .await
+    }
+    .await;
+    connection_task.abort();
+
+    result
+        .map(|stats| {
+            let mut event = generic_proxy_tcp_finished_event(
+                peer,
+                original_dst,
+                &selection,
+                sniff,
+                "vless",
+                &stats,
+                "async-proxy-xhttp-h2-tls",
+            );
+            event["tls_underlay"] = json!(tls_underlay);
+            event["stream_wrapper"] = json!("xhttp");
+            event["xhttp_mode"] = json!("packet-up");
+            event["xhttp_alpn"] = json!("h2");
+            append_proxy_tcp_execution_fields(
+                &mut event,
+                "async-proxy-xhttp-h2-tls",
+                "vless",
+                Some(tls_underlay),
+                None,
+            );
+            event
+        })
+        .or_else(|err| {
+            let mut event = generic_proxy_tcp_failed_event(
+                peer,
+                original_dst,
+                &selection,
+                sniff,
+                "vless",
+                &err,
+                "async-proxy-xhttp-h2-tls",
+            );
+            event["tls_underlay"] = json!(tls_underlay);
+            event["stream_wrapper"] = json!("xhttp");
+            event["xhttp_mode"] = json!("packet-up");
+            event["xhttp_alpn"] = json!("h2");
+            append_proxy_tcp_execution_fields(
+                &mut event,
+                "async-proxy-xhttp-h2-tls",
+                "vless",
+                Some(tls_underlay),
+                None,
+            );
+            Ok::<Value, String>(event)
+        })
+}
+
 async fn handle_first_batch_proxy_tcp_connection_async(
     mut inbound: TokioTcpStream,
     peer: SocketAddr,
@@ -1452,6 +1781,24 @@ async fn handle_first_batch_proxy_tcp_connection_async(
             &sniff,
             &metrics,
             &id,
+        )
+        .await;
+    }
+    if let ResidentProxyProtocolPlan::HttpProxyTcp { username, password } = &selection.proxy.handler
+        && selection.proxy.tls == "tls"
+    {
+        let username = username.clone();
+        let password = password.clone();
+        return handle_https_proxy_tcp_connection_async(
+            &mut inbound,
+            peer,
+            original_dst,
+            selection,
+            stop,
+            &sniff,
+            &metrics,
+            &username,
+            &password,
         )
         .await;
     }
@@ -1527,6 +1874,26 @@ fn handle_first_batch_proxy_tcp_connection(
             cipher,
             password,
             *salt_len,
+        ),
+        ResidentProxyProtocolPlan::ShadowsocksSimpleObfsHttpTcp {
+            cipher,
+            password,
+            salt_len,
+            host,
+            path,
+        } => handle_shadowsocks_simple_obfs_http_proxy_tcp_connection(
+            inbound,
+            peer,
+            original_dst,
+            &selection,
+            stop,
+            sniff,
+            metrics,
+            cipher,
+            password,
+            *salt_len,
+            host,
+            path,
         ),
         ResidentProxyProtocolPlan::VmessAeadTcp { id } => {
             if selection.proxy.net == "websocket" {
@@ -2934,6 +3301,113 @@ fn handle_http_proxy_tcp_connection(
 }
 
 #[allow(clippy::too_many_arguments)]
+async fn handle_https_proxy_tcp_connection_async(
+    inbound: &mut TokioTcpStream,
+    peer: SocketAddr,
+    original_dst: SocketAddrV4,
+    selection: TcpProxySelection,
+    stop: Arc<AtomicBool>,
+    sniff: &TcpSniffReport,
+    metrics: &ResidentDataplaneMetrics,
+    username: &str,
+    password: &str,
+) -> Result<Value, String> {
+    let mut proxy = open_async_resident_tls_client(&selection.proxy).await?;
+    let tls_underlay = async_resident_tls_underlay_name(&proxy);
+    http_proxy_connect_async(&mut proxy, &selection.route.dial_target, username, password).await?;
+    if !sniff.payload.is_empty() {
+        proxy
+            .write_plain_all(&sniff.payload, "write HTTPS proxy initial payload")
+            .await?;
+        metrics.add_upload(sniff.payload.len());
+    }
+    relay_tcp_over_resident_tls_plain_async(inbound, &mut proxy, stop, metrics)
+        .await
+        .map(|mut stats| {
+            stats.client_to_direct += sniff.payload.len();
+            let mut event = generic_proxy_tcp_finished_event(
+                peer,
+                original_dst,
+                &selection,
+                sniff,
+                "http-proxy",
+                &stats,
+                "async-secure-endpoint-connect",
+            );
+            event["tls_underlay"] = json!(tls_underlay);
+            event["secure_endpoint"] = json!(true);
+            append_proxy_tcp_execution_fields(
+                &mut event,
+                "async-secure-endpoint-connect",
+                "http-proxy",
+                Some(tls_underlay),
+                None,
+            );
+            event
+        })
+        .or_else(|err| {
+            let mut event = generic_proxy_tcp_failed_event(
+                peer,
+                original_dst,
+                &selection,
+                sniff,
+                "http-proxy",
+                &err,
+                "async-secure-endpoint-connect",
+            );
+            event["tls_underlay"] = json!(tls_underlay);
+            event["secure_endpoint"] = json!(true);
+            append_proxy_tcp_execution_fields(
+                &mut event,
+                "async-secure-endpoint-connect",
+                "http-proxy",
+                Some(tls_underlay),
+                None,
+            );
+            Ok::<Value, String>(event)
+        })
+}
+
+async fn http_proxy_connect_async(
+    stream: &mut AsyncResidentTlsClient,
+    target: &str,
+    username: &str,
+    password: &str,
+) -> Result<(), String> {
+    let mut options = HttpConnectOptions::connect(target);
+    options.username = username.to_owned();
+    options.password = password.to_owned();
+    let request = http_request::connect_request(&options);
+    stream
+        .write_plain_all(&request, "write HTTPS proxy CONNECT request")
+        .await?;
+    let mut response = Vec::new();
+    let mut buf = [0_u8; 512];
+    loop {
+        let read = time::timeout(RESIDENT_CONNECT_TIMEOUT, stream.read_plain(&mut buf))
+            .await
+            .map_err(|_| "read HTTPS proxy CONNECT response timeout".to_owned())?
+            .map_err(|err| format!("read HTTPS proxy CONNECT response: {err}"))?;
+        if read == 0 {
+            break;
+        }
+        response.extend_from_slice(&buf[..read]);
+        if response.windows(4).any(|window| window == b"\r\n\r\n") {
+            break;
+        }
+        if response.len() > 8192 {
+            return Err("HTTPS proxy CONNECT response too large".to_owned());
+        }
+    }
+    let status = http_request::parse_connect_response(&response)
+        .map_err(|err| format!("parse HTTPS proxy CONNECT response: {err}"))?;
+    if status != 200 {
+        return Err(format!("HTTPS proxy CONNECT status: {status}"));
+    }
+    Ok(())
+}
+
+#[allow(clippy::too_many_arguments)]
 fn handle_shadowsocks_proxy_tcp_connection(
     inbound: &mut TcpStream,
     peer: SocketAddr,
@@ -2995,6 +3469,93 @@ fn handle_shadowsocks_proxy_tcp_connection(
                 &err,
                 "first-batch-tcp",
             ))
+        })
+}
+
+#[allow(clippy::too_many_arguments)]
+fn handle_shadowsocks_simple_obfs_http_proxy_tcp_connection(
+    inbound: &mut TcpStream,
+    peer: SocketAddr,
+    original_dst: SocketAddrV4,
+    selection: &TcpProxySelection,
+    stop: &AtomicBool,
+    sniff: &TcpSniffReport,
+    metrics: &ResidentDataplaneMetrics,
+    cipher: &str,
+    password: &str,
+    salt_len: usize,
+    host: &str,
+    path: &str,
+) -> Result<Value, String> {
+    let mut proxy = open_plain_proxy_tcp_stream(&selection.proxy)?;
+    proxy
+        .set_nonblocking(false)
+        .map_err(|err| format!("set Shadowsocks simple-obfs proxy blocking: {err}"))?;
+    proxy
+        .set_read_timeout(Some(RESIDENT_TCP_IDLE_TIMEOUT))
+        .map_err(|err| format!("set Shadowsocks simple-obfs proxy read timeout: {err}"))?;
+    proxy
+        .set_write_timeout(Some(RESIDENT_TCP_IDLE_TIMEOUT))
+        .map_err(|err| format!("set Shadowsocks simple-obfs proxy write timeout: {err}"))?;
+    inbound
+        .set_read_timeout(Some(RESIDENT_TCP_IDLE_TIMEOUT))
+        .map_err(|err| format!("set Shadowsocks simple-obfs inbound read timeout: {err}"))?;
+    inbound
+        .set_write_timeout(Some(RESIDENT_TCP_IDLE_TIMEOUT))
+        .map_err(|err| format!("set Shadowsocks simple-obfs inbound write timeout: {err}"))?;
+    let stats = relay_tcp_over_shadowsocks_simple_obfs_http(
+        inbound,
+        &mut proxy,
+        stop,
+        &selection.route.dial_target,
+        cipher,
+        password,
+        salt_len,
+        &sniff.payload,
+        metrics,
+        host,
+        path,
+    );
+    stats
+        .map(|stats| {
+            let mut event = generic_proxy_tcp_finished_event(
+                peer,
+                original_dst,
+                selection,
+                sniff,
+                "shadowsocks",
+                &stats,
+                "first-batch-tcp",
+            );
+            event["plugin_wrapper"] = json!("simple-obfs-http");
+            append_proxy_tcp_execution_fields(
+                &mut event,
+                "first-batch-tcp",
+                "shadowsocks",
+                Some("aead"),
+                None,
+            );
+            event
+        })
+        .or_else(|err| {
+            let mut event = generic_proxy_tcp_failed_event(
+                peer,
+                original_dst,
+                selection,
+                sniff,
+                "shadowsocks",
+                &err,
+                "first-batch-tcp",
+            );
+            event["plugin_wrapper"] = json!("simple-obfs-http");
+            append_proxy_tcp_execution_fields(
+                &mut event,
+                "first-batch-tcp",
+                "shadowsocks",
+                Some("aead"),
+                None,
+            );
+            Ok::<Value, String>(event)
         })
 }
 
@@ -3352,6 +3913,170 @@ fn grpc_request_path(service_name: &str) -> String {
     format!("/{service_name}/Tun")
 }
 
+async fn open_xhttp_h2_packet_up_session(
+    client: AsyncResidentTlsClient,
+    proxy: &ResidentProxyPlan,
+    session_id: &str,
+) -> Result<
+    (
+        h2::client::SendRequest<Bytes>,
+        h2::RecvStream,
+        tokio::task::JoinHandle<()>,
+    ),
+    String,
+> {
+    let (mut sender, connection) =
+        time::timeout(RESIDENT_CONNECT_TIMEOUT, h2::client::handshake(client))
+            .await
+            .map_err(|_| "xHTTP HTTP/2 handshake timeout".to_owned())?
+            .map_err(|err| format!("xHTTP HTTP/2 client handshake: {err}"))?;
+    let connection_task = tokio::spawn(async move {
+        let _ = connection.await;
+    });
+    let request = xhttp_h2_request(
+        http::Method::GET,
+        proxy,
+        &xhttp_session_path_suffix(session_id, None),
+        false,
+    )?;
+    let (response, _send_stream) = sender
+        .send_request(request, true)
+        .map_err(|err| format!("send xHTTP HTTP/2 download request headers: {err}"))?;
+    let response = time::timeout(RESIDENT_CONNECT_TIMEOUT, response)
+        .await
+        .map_err(|_| "xHTTP HTTP/2 download response headers timeout".to_owned())?
+        .map_err(|err| format!("read xHTTP HTTP/2 download response headers: {err}"))?;
+    if !response.status().is_success() {
+        connection_task.abort();
+        return Err(format!(
+            "xHTTP HTTP/2 download response status {}",
+            response.status()
+        ));
+    }
+    Ok((sender, response.into_body(), connection_task))
+}
+
+async fn send_xhttp_h2_packet_up_request(
+    sender: &mut h2::client::SendRequest<Bytes>,
+    proxy: &ResidentProxyPlan,
+    session_id: &str,
+    seq: u64,
+    payload: Bytes,
+) -> Result<(), String> {
+    let request = xhttp_h2_request(
+        http::Method::POST,
+        proxy,
+        &xhttp_session_path_suffix(session_id, Some(seq)),
+        true,
+    )?;
+    let (response, mut send_stream) = sender
+        .send_request(request, false)
+        .map_err(|err| format!("send xHTTP HTTP/2 packet-up request headers: {err}"))?;
+    send_h2_data_with_context(&mut send_stream, payload, true, "xHTTP HTTP/2 packet-up").await?;
+    let response = time::timeout(RESIDENT_CONNECT_TIMEOUT, response)
+        .await
+        .map_err(|_| "xHTTP HTTP/2 packet-up response headers timeout".to_owned())?
+        .map_err(|err| format!("read xHTTP HTTP/2 packet-up response headers: {err}"))?;
+    if !response.status().is_success() {
+        return Err(format!(
+            "xHTTP HTTP/2 packet-up response status {}",
+            response.status()
+        ));
+    }
+    drain_xhttp_h2_response_body(response.into_body()).await
+}
+
+fn xhttp_h2_request(
+    method: http::Method,
+    proxy: &ResidentProxyPlan,
+    path_suffix: &str,
+    has_body: bool,
+) -> Result<http::Request<()>, String> {
+    let uri = xhttp_uri(proxy, path_suffix);
+    let referer = xhttp_padding_referer(&xhttp_uri(proxy, ""));
+    let mut builder = http::Request::builder()
+        .method(method)
+        .uri(uri)
+        .header(http::header::USER_AGENT, "Mozilla/5.0")
+        .header(http::header::ACCEPT, "*/*")
+        .header(http::header::ACCEPT_LANGUAGE, "en-US,en;q=0.9")
+        .header(http::header::CACHE_CONTROL, "no-cache")
+        .header("pragma", "no-cache")
+        .header(http::header::REFERER, referer);
+    if has_body {
+        builder = builder.header(http::header::CONTENT_TYPE, "application/grpc");
+    }
+    builder
+        .body(())
+        .map_err(|err| format!("build xHTTP HTTP/2 request: {err}"))
+}
+
+fn xhttp_uri(proxy: &ResidentProxyPlan, path_suffix: &str) -> String {
+    let normalized = ir::normalize_xhttp_path_and_query(&proxy.stream_path);
+    let mut path = normalized.path;
+    path.push_str(path_suffix);
+    let mut uri = format!("https://{}{}", xhttp_authority(proxy), path);
+    if !normalized.query.is_empty() {
+        uri.push('?');
+        uri.push_str(&normalized.query);
+    }
+    uri
+}
+
+fn xhttp_padding_referer(base_uri: &str) -> String {
+    const DEFAULT_PADDING_LEN: usize = 128;
+    let base_without_query = base_uri.split_once('?').map_or(base_uri, |(base, _)| base);
+    format!(
+        "{base_without_query}?x_padding={}",
+        "X".repeat(DEFAULT_PADDING_LEN)
+    )
+}
+
+fn xhttp_authority(proxy: &ResidentProxyPlan) -> String {
+    if proxy.stream_host.is_empty() {
+        proxy.server_name.clone()
+    } else {
+        proxy.stream_host.clone()
+    }
+}
+
+fn xhttp_session_path_suffix(session_id: &str, seq: Option<u64>) -> String {
+    match seq {
+        Some(seq) => format!("{session_id}/{seq}"),
+        None => session_id.to_owned(),
+    }
+}
+
+fn new_xhttp_session_id() -> String {
+    let high = fastrand::u64(..);
+    let low = fastrand::u64(..);
+    let value = ((high as u128) << 64) | low as u128;
+    format!(
+        "{:08x}-{:04x}-{:04x}-{:04x}-{:012x}",
+        (value >> 96) as u32,
+        ((value >> 80) & 0xffff) as u16,
+        ((value >> 64) & 0xffff) as u16,
+        ((value >> 48) & 0xffff) as u16,
+        value & 0xffff_ffff_ffff
+    )
+}
+
+async fn drain_xhttp_h2_response_body(mut body: h2::RecvStream) -> Result<(), String> {
+    loop {
+        let data = time::timeout(RESIDENT_CONNECT_TIMEOUT, body.data())
+            .await
+            .map_err(|_| "xHTTP HTTP/2 packet-up response body timeout".to_owned())?;
+        let Some(data) = data else {
+            return Ok(());
+        };
+        let bytes =
+            data.map_err(|err| format!("read xHTTP HTTP/2 packet-up response body: {err}"))?;
+        body.flow_control()
+            .release_capacity(bytes.len())
+            .map_err(|err| format!("release xHTTP HTTP/2 packet-up response capacity: {err}"))?;
+    }
+}
+
 async fn send_grpc_hunk(
     send_stream: &mut h2::SendStream<Bytes>,
     payload: &[u8],
@@ -3366,21 +4091,30 @@ async fn send_h2_data(
     data: Bytes,
     end_stream: bool,
 ) -> Result<(), String> {
+    send_h2_data_with_context(send_stream, data, end_stream, "gRPC HTTP/2").await
+}
+
+async fn send_h2_data_with_context(
+    send_stream: &mut h2::SendStream<Bytes>,
+    data: Bytes,
+    end_stream: bool,
+    context: &str,
+) -> Result<(), String> {
     let required = data.len();
     if required > 0 {
         send_stream.reserve_capacity(required);
         while send_stream.capacity() < required {
             let Some(capacity) = poll_fn(|cx| send_stream.poll_capacity(cx)).await else {
-                return Err(
-                    "gRPC HTTP/2 send stream closed before capacity became available".to_owned(),
-                );
+                return Err(format!(
+                    "{context} send stream closed before capacity became available"
+                ));
             };
-            capacity.map_err(|err| format!("reserve gRPC HTTP/2 send capacity: {err}"))?;
+            capacity.map_err(|err| format!("reserve {context} send capacity: {err}"))?;
         }
     }
     send_stream
         .send_data(data, end_stream)
-        .map_err(|err| format!("send gRPC HTTP/2 data: {err}"))
+        .map_err(|err| format!("send {context} data: {err}"))
 }
 
 async fn relay_tcp_over_grpc_h2(
@@ -3460,6 +4194,92 @@ async fn relay_tcp_over_grpc_h2(
             _ = time::sleep(RESIDENT_IDLE_SLEEP) => {
                 if (inbound_closed && response_closed) || last_activity.elapsed() > RESIDENT_TCP_IDLE_TIMEOUT {
                     break;
+                }
+            }
+        }
+    }
+    Ok(stats)
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn relay_tcp_over_xhttp_h2_packet_up(
+    inbound: &mut TokioTcpStream,
+    sender: &mut h2::client::SendRequest<Bytes>,
+    recv_stream: &mut h2::RecvStream,
+    proxy: &ResidentProxyPlan,
+    session_id: &str,
+    mut seq: u64,
+    stop: Arc<AtomicBool>,
+    mut stats: DirectTcpRelayStats,
+    metrics: &ResidentDataplaneMetrics,
+) -> Result<DirectTcpRelayStats, String> {
+    let mut inbound_closed = false;
+    let mut response_closed = false;
+    let mut last_activity = Instant::now();
+    let mut inbound_buf = [0_u8; 16 * 1024];
+    let mut response_stripper = VlessResponseStripper::default();
+
+    while !stop.load(Ordering::Relaxed) {
+        tokio::select! {
+            read = inbound.read(&mut inbound_buf), if !inbound_closed => {
+                match read {
+                    Ok(0) => {
+                        inbound_closed = true;
+                        last_activity = Instant::now();
+                    }
+                    Ok(read) => {
+                        send_xhttp_h2_packet_up_request(
+                            sender,
+                            proxy,
+                            session_id,
+                            seq,
+                            Bytes::copy_from_slice(&inbound_buf[..read]),
+                        )
+                        .await?;
+                        seq = seq.saturating_add(1);
+                        stats.client_to_direct += read;
+                        metrics.add_upload(read);
+                        last_activity = Instant::now();
+                    }
+                    Err(err) if is_graceful_stream_close_error(&err) => {
+                        inbound_closed = true;
+                        last_activity = Instant::now();
+                    }
+                    Err(err) => return Err(format!("read inbound TCP for xHTTP relay: {err}")),
+                }
+            }
+            data = recv_stream.data(), if !response_closed => {
+                match data {
+                    Some(Ok(bytes)) => {
+                        recv_stream
+                            .flow_control()
+                            .release_capacity(bytes.len())
+                            .map_err(|err| format!("release xHTTP HTTP/2 download capacity: {err}"))?;
+                        let payload = response_stripper.consume(&bytes)?;
+                        if !payload.is_empty() {
+                            inbound
+                                .write_all(&payload)
+                                .await
+                                .map_err(|err| format!("write xHTTP response to inbound: {err}"))?;
+                            stats.direct_to_client += payload.len();
+                            metrics.add_download(payload.len());
+                        }
+                        last_activity = Instant::now();
+                    }
+                    Some(Err(err)) => return Err(format!("read xHTTP HTTP/2 download data: {err}")),
+                    None => {
+                        response_closed = true;
+                        let _ = inbound.shutdown().await;
+                        last_activity = Instant::now();
+                    }
+                }
+            }
+            _ = time::sleep(RESIDENT_IDLE_SLEEP) => {
+                if response_closed || (inbound_closed && response_closed) {
+                    break;
+                }
+                if last_activity.elapsed() > RESIDENT_TCP_IDLE_TIMEOUT {
+                    return Err("resident xHTTP HTTP/2 relay idle timeout".to_owned());
                 }
             }
         }
@@ -3830,6 +4650,11 @@ async fn relay_tcp_over_resident_tls_plain_async(
                         metrics.add_download(read);
                         last_activity = Instant::now();
                     }
+                    Err(err) if is_graceful_tls_plain_close_error(&err) => {
+                        proxy_closed = true;
+                        let _ = inbound.shutdown().await;
+                        last_activity = Instant::now();
+                    }
                     Err(err) => return Err(format!("read proxy TLS plaintext: {err}")),
                 }
             }
@@ -3848,6 +4673,9 @@ async fn relay_tcp_over_resident_tls_plain_async(
 }
 
 fn open_plain_proxy_tcp_stream(proxy: &ResidentProxyPlan) -> Result<TcpStream, String> {
+    if let Some(parent) = proxy.chain_parent.as_deref() {
+        return open_plain_proxy_tcp_stream_through_parent(proxy, parent);
+    }
     let target = format!("{}:{}", proxy.server_host, proxy.server_port);
     let connection = open_direct_tcp_connection(&target, proxy.mark, proxy.mptcp)?;
     connection
@@ -3863,6 +4691,112 @@ fn open_plain_proxy_tcp_stream(proxy: &ResidentProxyPlan) -> Result<TcpStream, S
         .set_write_timeout(Some(RESIDENT_CONNECT_TIMEOUT))
         .map_err(|err| format!("set proxy TCP write timeout: {err}"))?;
     Ok(connection.stream)
+}
+
+fn open_plain_proxy_tcp_stream_through_parent(
+    proxy: &ResidentProxyPlan,
+    parent: &ResidentProxyPlan,
+) -> Result<TcpStream, String> {
+    let parent_target = format!("{}:{}", parent.server_host, parent.server_port);
+    let connection = open_direct_tcp_connection(&parent_target, parent.mark, parent.mptcp)?;
+    connection
+        .stream
+        .set_nonblocking(false)
+        .map_err(|err| format!("set parent proxy TCP blocking for chain handshake: {err}"))?;
+    connection
+        .stream
+        .set_read_timeout(Some(RESIDENT_CONNECT_TIMEOUT))
+        .map_err(|err| format!("set parent proxy TCP read timeout: {err}"))?;
+    connection
+        .stream
+        .set_write_timeout(Some(RESIDENT_CONNECT_TIMEOUT))
+        .map_err(|err| format!("set parent proxy TCP write timeout: {err}"))?;
+    let mut stream = connection.stream;
+    let child_target = format!("{}:{}", proxy.server_host, proxy.server_port);
+    match &parent.handler {
+        ResidentProxyProtocolPlan::Socks5Tcp { username, password } => {
+            socks5_connect(&mut stream, &child_target, username, password)?;
+        }
+        ResidentProxyProtocolPlan::HttpProxyTcp { username, password } if parent.tls == "none" => {
+            http_proxy_connect(&mut stream, &child_target, username, password)?;
+        }
+        _ => {
+            return Err(format!(
+                "resident chain parent {} is not backed by a plain parent CONNECT executor",
+                parent.protocol
+            ));
+        }
+    }
+    stream
+        .set_read_timeout(Some(RESIDENT_CONNECT_TIMEOUT))
+        .map_err(|err| format!("set chained child TCP read timeout: {err}"))?;
+    stream
+        .set_write_timeout(Some(RESIDENT_CONNECT_TIMEOUT))
+        .map_err(|err| format!("set chained child TCP write timeout: {err}"))?;
+    Ok(stream)
+}
+
+fn read_http_head_and_leftover_from_stream(
+    stream: &mut impl Read,
+) -> Result<(Vec<u8>, Vec<u8>), String> {
+    let mut response = Vec::new();
+    let mut buf = [0_u8; 256];
+    loop {
+        let n = stream
+            .read(&mut buf)
+            .map_err(|err| format!("read http head: {err}"))?;
+        if n == 0 {
+            break;
+        }
+        response.extend_from_slice(&buf[..n]);
+        if let Some(index) = response.windows(4).position(|window| window == b"\r\n\r\n") {
+            let leftover = response[index + 4..].to_vec();
+            response.truncate(index + 4);
+            return Ok((response, leftover));
+        }
+        if response.len() > 8192 {
+            return Err("http response header too large".to_owned());
+        }
+    }
+    Err("incomplete http response header".to_owned())
+}
+
+struct PrefixTcpReader<'a> {
+    prefix: VecDeque<u8>,
+    stream: &'a mut TcpStream,
+}
+
+impl<'a> PrefixTcpReader<'a> {
+    fn new(prefix: Vec<u8>, stream: &'a mut TcpStream) -> Self {
+        Self {
+            prefix: VecDeque::from(prefix),
+            stream,
+        }
+    }
+
+    fn shutdown_write(&mut self) -> std::io::Result<()> {
+        self.stream.shutdown(Shutdown::Write)
+    }
+}
+
+impl Read for PrefixTcpReader<'_> {
+    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+        if buf.is_empty() {
+            return Ok(0);
+        }
+        let mut written = 0;
+        while written < buf.len() {
+            let Some(byte) = self.prefix.pop_front() else {
+                break;
+            };
+            buf[written] = byte;
+            written += 1;
+        }
+        if written > 0 {
+            return Ok(written);
+        }
+        self.stream.read(buf)
+    }
 }
 
 fn socks5_connect(
@@ -4128,6 +5062,172 @@ fn relay_tcp_over_shadowsocks_aead(
     Ok(stats)
 }
 
+#[allow(clippy::too_many_arguments)]
+fn relay_tcp_over_shadowsocks_simple_obfs_http(
+    inbound: &mut TcpStream,
+    proxy: &mut TcpStream,
+    stop: &AtomicBool,
+    target: &str,
+    cipher: &str,
+    password: &str,
+    salt_len: usize,
+    initial_payload: &[u8],
+    metrics: &ResidentDataplaneMetrics,
+    host: &str,
+    path: &str,
+) -> Result<DirectTcpRelayStats, String> {
+    let target_metadata = ShadowsocksMetadata::parse(target)
+        .map_err(|err| format!("parse Shadowsocks simple-obfs target: {err}"))?;
+    let mut first_plain = target_metadata
+        .encode()
+        .map_err(|err| format!("encode Shadowsocks simple-obfs target metadata: {err}"))?;
+    first_plain.extend_from_slice(initial_payload);
+    let mut client_salt = vec![0_u8; salt_len];
+    fastrand::fill(&mut client_salt);
+    let mut encoder = AeadStreamCodec::new(cipher, password, &client_salt)
+        .map_err(|err| format!("create Shadowsocks simple-obfs upload encoder: {err}"))?;
+    let mut encrypted_initial = client_salt.clone();
+    encrypted_initial.extend(
+        encoder
+            .encrypt_chunk(&first_plain)
+            .map_err(|err| format!("encode Shadowsocks simple-obfs initial frame: {err}"))?,
+    );
+    let options = Sip003SimpleObfsHttpOptions::new(host, path);
+    let obfs_request = simple_obfs_http_request_with_body(&options, &encrypted_initial);
+    proxy
+        .write_all(&obfs_request)
+        .map_err(|err| format!("write Shadowsocks simple-obfs request: {err}"))?;
+    let (response_head, response_leftover) = read_http_head_and_leftover_from_stream(proxy)
+        .map_err(|err| format!("read Shadowsocks simple-obfs response head: {err}"))?;
+    validate_http_status(&response_head, 200)
+        .map_err(|err| format!("validate Shadowsocks simple-obfs response status: {err}"))?;
+
+    let mut stats = DirectTcpRelayStats::default();
+    if !initial_payload.is_empty() {
+        stats.client_to_direct += initial_payload.len();
+        metrics.add_upload(initial_payload.len());
+    }
+
+    let mut upload_proxy = proxy
+        .try_clone()
+        .map_err(|err| format!("clone Shadowsocks simple-obfs stream for upload: {err}"))?;
+    let mut upload_inbound = inbound
+        .try_clone()
+        .map_err(|err| format!("clone inbound stream for Shadowsocks simple-obfs upload: {err}"))?;
+    upload_inbound
+        .set_read_timeout(Some(RESIDENT_CONNECT_TIMEOUT))
+        .map_err(|err| format!("set Shadowsocks simple-obfs upload read timeout: {err}"))?;
+    let relay_done = Arc::new(AtomicBool::new(false));
+    let upload_done = Arc::clone(&relay_done);
+    let upload = thread::spawn(move || {
+        let mut stats = 0_usize;
+        let mut buf = [0_u8; 16 * 1024];
+        loop {
+            if upload_done.load(Ordering::Relaxed) {
+                break;
+            }
+            let read = match upload_inbound.read(&mut buf) {
+                Ok(0) => break,
+                Ok(read) => read,
+                Err(err)
+                    if matches!(
+                        err.kind(),
+                        ErrorKind::TimedOut | ErrorKind::WouldBlock | ErrorKind::Interrupted
+                    ) =>
+                {
+                    continue;
+                }
+                Err(err) if is_graceful_stream_close_error(&err) => break,
+                Err(err) => {
+                    return Err(format!(
+                        "read inbound TCP for Shadowsocks simple-obfs upload: {err}"
+                    ));
+                }
+            };
+            let encrypted = encoder
+                .encrypt_chunk(&buf[..read])
+                .map_err(|err| format!("encrypt Shadowsocks simple-obfs upload chunk: {err}"))?;
+            if let Err(err) = upload_proxy.write_all(&encrypted) {
+                if is_graceful_stream_close_error(&err) {
+                    break;
+                }
+                return Err(format!("write Shadowsocks simple-obfs upload chunk: {err}"));
+            }
+            stats += read;
+        }
+        let _ = upload_proxy.shutdown(Shutdown::Write);
+        Ok::<usize, String>(stats)
+    });
+
+    let mut proxy_reader = PrefixTcpReader::new(response_leftover, proxy);
+    let mut server_salt = vec![0_u8; salt_len];
+    if let Err(err) = proxy_reader.read_exact(&mut server_salt) {
+        relay_done.store(true, Ordering::Relaxed);
+        let _ = inbound.shutdown(Shutdown::Read);
+        let _ = proxy_reader.shutdown_write();
+        let _ = upload.join();
+        return Err(format!("read Shadowsocks simple-obfs server salt: {err}"));
+    }
+    let mut decoder = match AeadStreamCodec::new(cipher, password, &server_salt) {
+        Ok(decoder) => decoder,
+        Err(err) => {
+            relay_done.store(true, Ordering::Relaxed);
+            let _ = inbound.shutdown(Shutdown::Read);
+            let _ = proxy_reader.shutdown_write();
+            let _ = upload.join();
+            return Err(format!(
+                "create Shadowsocks simple-obfs response decoder: {err}"
+            ));
+        }
+    };
+
+    let mut download_error = None;
+    loop {
+        if stop.load(Ordering::Relaxed) {
+            break;
+        }
+        match read_encrypted_chunk_from_stream(&mut proxy_reader, &mut decoder) {
+            Ok(plain) => {
+                if plain.is_empty() {
+                    continue;
+                }
+                inbound
+                    .write_all(&plain)
+                    .map_err(|err| format!("write Shadowsocks simple-obfs response: {err}"))?;
+                stats.direct_to_client += plain.len();
+                metrics.add_download(plain.len());
+            }
+            Err(err) => {
+                let message = err.to_string();
+                if message.contains("early eof")
+                    || message.contains("failed to fill whole buffer")
+                    || message.contains("Connection reset")
+                    || message.contains("connection reset")
+                    || message.contains("timed out")
+                {
+                    break;
+                }
+                download_error = Some(format!("read Shadowsocks simple-obfs response: {message}"));
+                break;
+            }
+        }
+    }
+    relay_done.store(true, Ordering::Relaxed);
+    let _ = inbound.shutdown(Shutdown::Read);
+    let _ = proxy_reader.shutdown_write();
+    let upload_bytes = upload
+        .join()
+        .map_err(|_| "join Shadowsocks simple-obfs upload relay thread failed".to_owned())??;
+    if let Some(err) = download_error {
+        return Err(err);
+    }
+    if upload_bytes > 0 {
+        stats.client_to_direct += upload_bytes;
+        metrics.add_upload(upload_bytes);
+    }
+    Ok(stats)
+}
+
 fn relay_tcp_over_vmess_aead(
     inbound: &mut TcpStream,
     proxy: &mut TcpStream,
@@ -4381,6 +5481,16 @@ fn is_graceful_stream_close_message(message: &str) -> bool {
         || message.contains("connection reset")
         || message.contains("connection aborted")
         || message.contains("not connected")
+}
+
+fn is_graceful_tls_plain_close_error(err: &std::io::Error) -> bool {
+    if is_graceful_stream_close_error(err) {
+        return true;
+    }
+    let message = err.to_string();
+    is_graceful_stream_close_message(&message)
+        || message.contains("peer closed connection without sending TLS close_notify")
+        || message.contains("without sending TLS close_notify")
 }
 
 fn append_tcp_execution_fields(event: &mut Value, execution: &str) {
@@ -5802,6 +6912,9 @@ mod tests {
         assert!(!is_graceful_stream_close_error(&std::io::Error::from(
             ErrorKind::TimedOut
         )));
+        assert!(is_graceful_tls_plain_close_error(&std::io::Error::other(
+            "peer closed connection without sending TLS close_notify",
+        )));
     }
 
     #[test]
@@ -5824,6 +6937,55 @@ mod tests {
         assert!(resident_tcp_probe_status_ok("/", 204));
         assert!(resident_tcp_probe_status_ok("/", 404));
         assert!(!resident_tcp_probe_status_ok("/", 500));
+    }
+
+    #[test]
+    fn xhttp_h2_uri_uses_path_session_placement() {
+        let mut proxy = dummy_proxy_plan();
+        proxy.net = "xhttp".to_owned();
+        proxy.server_name = "tls.name.invalid".to_owned();
+        proxy.stream_host = "edge.transport.invalid".to_owned();
+        proxy.stream_path = "/resource?ed=2048".to_owned();
+
+        assert_eq!(
+            xhttp_uri(&proxy, &xhttp_session_path_suffix("session-id", None)),
+            "https://edge.transport.invalid/resource/session-id?ed=2048"
+        );
+        assert_eq!(
+            xhttp_uri(&proxy, &xhttp_session_path_suffix("session-id", Some(7))),
+            "https://edge.transport.invalid/resource/session-id/7?ed=2048"
+        );
+    }
+
+    #[test]
+    fn xhttp_h2_request_uses_default_referer_padding() {
+        let mut proxy = dummy_proxy_plan();
+        proxy.net = "xhttp".to_owned();
+        proxy.server_name = "tls.name.invalid".to_owned();
+        proxy.stream_host = "edge.transport.invalid".to_owned();
+        proxy.stream_path = "/resource?ed=2048".to_owned();
+
+        let request = xhttp_h2_request(
+            http::Method::GET,
+            &proxy,
+            &xhttp_session_path_suffix("session-id", None),
+            false,
+        )
+        .unwrap();
+        assert_eq!(
+            request.uri().to_string(),
+            "https://edge.transport.invalid/resource/session-id?ed=2048"
+        );
+        let referer = request
+            .headers()
+            .get(http::header::REFERER)
+            .unwrap()
+            .to_str()
+            .unwrap();
+        assert!(referer.starts_with("https://edge.transport.invalid/resource/?x_padding="));
+        let padding = referer.split_once("x_padding=").unwrap().1;
+        assert_eq!(padding.len(), 128);
+        assert!(padding.bytes().all(|byte| byte == b'X'));
     }
 
     #[test]
@@ -6200,6 +7362,7 @@ mod tests {
             allow_insecure: false,
             utls_fingerprint: None,
             handler: ResidentProxyProtocolPlan::VlessVisionTcpTls { key: [0; 16] },
+            chain_parent: None,
             mark: 0,
             mptcp: false,
         }

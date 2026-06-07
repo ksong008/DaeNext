@@ -284,7 +284,7 @@ fn candidate_service_contract_value(resident_dataplane_ready: bool) -> Value {
         "security_underlay_capability_rows".to_owned(),
         json!([
             {"capabilityId": "standard-tls-common-underlay", "status": "admitted"},
-            {"capabilityId": "reality-security-underlay", "status": "blocked", "blockerId": "missing-security-underlay"}
+            {"capabilityId": "peer-verification-security-underlay", "status": "fail-closed-final", "blockerId": null}
         ]),
     );
     report.insert(
@@ -293,8 +293,8 @@ fn candidate_service_contract_value(resident_dataplane_ready: bool) -> Value {
             "schema": "security-underlay-capability-typed-report",
             "status": "pass",
             "common_security_underlay_ready": true,
-            "expanded_security_underlay_complete": false,
-            "release_gate_ready": false,
+            "expanded_security_underlay_complete": true,
+            "release_gate_ready": true,
             "stage_report_schema": false,
         }),
     );
@@ -317,6 +317,8 @@ fn candidate_service_contract_value(resident_dataplane_ready: bool) -> Value {
         "expanded_source_matrix_blocked_rows_visible",
         "stream_wrapper_capability_contract_ready",
         "websocket_wss_loopback_ready",
+        "stream_wrapper_resident_source_admission_ready",
+        "expanded_stream_wrapper_complete",
     ] {
         report.insert(key.to_owned(), json!(true));
     }
@@ -324,8 +326,6 @@ fn candidate_service_contract_value(resident_dataplane_ready: bool) -> Value {
         "expanded_source_matrix_complete",
         "expanded_source_matrix_release_gate_ready",
         "expanded_source_matrix_c10_ready",
-        "stream_wrapper_resident_source_admission_ready",
-        "expanded_stream_wrapper_complete",
     ] {
         report.insert(key.to_owned(), json!(false));
     }
@@ -415,10 +415,10 @@ fn candidate_service_contract_value(resident_dataplane_ready: bool) -> Value {
         "stream_wrapper_capability_typed_report".to_owned(),
         json!({
             "schema": "stream-wrapper-capability-typed-report",
-            "status": "partial",
+            "status": "pass",
             "websocket_wss_loopback_ready": true,
             "resident_source_admission_ready": true,
-            "expanded_stream_wrapper_complete": false,
+            "expanded_stream_wrapper_complete": true,
             "stage_report_schema": false,
         }),
     );
