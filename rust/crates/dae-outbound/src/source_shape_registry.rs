@@ -8,6 +8,7 @@ pub struct SourceShapeRegistryContract {
     pub source_shape_registry_open: bool,
     pub expanded_source_matrix_open: bool,
     pub expanded_source_matrix_complete: bool,
+    pub scoped_expanded_source_matrix_evidence: ScopedExpandedSourceMatrixEvidence,
     pub release_gate_may_use_current_config_matrix_as_source_matrix: bool,
 }
 
@@ -19,9 +20,75 @@ impl SourceShapeRegistryContract {
             "sourceShapeRegistryOpen": self.source_shape_registry_open,
             "expandedSourceMatrixOpen": self.expanded_source_matrix_open,
             "expandedSourceMatrixComplete": self.expanded_source_matrix_complete,
+            "scopedExpandedSourceMatrixEvidence": self.scoped_expanded_source_matrix_evidence.to_value(),
             "releaseGateMayUseCurrentConfigMatrixAsSourceMatrix": self.release_gate_may_use_current_config_matrix_as_source_matrix,
             "rowCount": self.rows.len(),
             "rows": self.rows.iter().map(|row| row.to_value()).collect::<Vec<_>>(),
+        })
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ScopedExpandedSourceMatrixEvidence {
+    pub schema: &'static str,
+    pub schema_version: u64,
+    pub scope_id: &'static str,
+    pub source_scope: &'static str,
+    pub excluded_stream_wrappers: &'static [&'static str],
+    pub opened_rows: &'static [&'static str],
+    pub source_formats: &'static [&'static str],
+    pub candidate_sha256: &'static str,
+    pub evidence_host: &'static str,
+    pub upstream_host: &'static str,
+    pub evidence_root: &'static str,
+    pub summary_artifact: &'static str,
+    pub rollback_artifact: &'static str,
+    pub row_count: u64,
+    pub pass_count: u64,
+    pub all_pass: bool,
+    pub large_page_all_pass: bool,
+    pub proxy_evidence_all_pass: bool,
+    pub benchmark_evidence_ready: bool,
+    pub benchmark_evidence_kind: &'static str,
+    pub rollback_artifact_ready: bool,
+    pub rollback_artifact_executed: bool,
+    pub cleanup_evidence_ready: bool,
+    pub raw_links_retained: bool,
+    pub raw_bodies_retained: bool,
+    pub raw_state_retained: bool,
+    pub release_gate_ready: bool,
+}
+
+impl ScopedExpandedSourceMatrixEvidence {
+    pub fn to_value(self) -> Value {
+        json!({
+            "schema": self.schema,
+            "schemaVersion": self.schema_version,
+            "scopeId": self.scope_id,
+            "sourceScope": self.source_scope,
+            "excludedStreamWrappers": self.excluded_stream_wrappers,
+            "openedRows": self.opened_rows,
+            "sourceFormats": self.source_formats,
+            "candidateSha256": self.candidate_sha256,
+            "evidenceHost": self.evidence_host,
+            "upstreamHost": self.upstream_host,
+            "evidenceRoot": self.evidence_root,
+            "summaryArtifact": self.summary_artifact,
+            "rollbackArtifact": self.rollback_artifact,
+            "rowCount": self.row_count,
+            "passCount": self.pass_count,
+            "allPass": self.all_pass,
+            "largePageAllPass": self.large_page_all_pass,
+            "proxyEvidenceAllPass": self.proxy_evidence_all_pass,
+            "benchmarkEvidenceReady": self.benchmark_evidence_ready,
+            "benchmarkEvidenceKind": self.benchmark_evidence_kind,
+            "rollbackArtifactReady": self.rollback_artifact_ready,
+            "rollbackArtifactExecuted": self.rollback_artifact_executed,
+            "cleanupEvidenceReady": self.cleanup_evidence_ready,
+            "rawLinksRetained": self.raw_links_retained,
+            "rawBodiesRetained": self.raw_bodies_retained,
+            "rawStateRetained": self.raw_state_retained,
+            "releaseGateReady": self.release_gate_ready,
         })
     }
 }
@@ -229,6 +296,7 @@ pub fn source_shape_registry_contract() -> SourceShapeRegistryContract {
         source_shape_registry_open: true,
         expanded_source_matrix_open: true,
         expanded_source_matrix_complete: false,
+        scoped_expanded_source_matrix_evidence: SCOPED_EXPANDED_SOURCE_MATRIX_EVIDENCE,
         release_gate_may_use_current_config_matrix_as_source_matrix: false,
     }
 }
@@ -252,6 +320,49 @@ const CAPABILITY_REASON_TAXONOMY: [&str; 9] = [
     "unsupported-source-policy",
     "materialization-mismatch",
 ];
+
+const SCOPED_EXPANDED_SOURCE_MATRIX_EVIDENCE: ScopedExpandedSourceMatrixEvidence =
+    ScopedExpandedSourceMatrixEvidence {
+        schema: "scoped-expanded-source-evidence",
+        schema_version: 1,
+        scope_id: "excluded-stream-wrapper-scope",
+        source_scope: "remaining-expanded-source-closure-rows",
+        excluded_stream_wrappers: &["xhttp"],
+        opened_rows: &[
+            "secure-endpoint-capability",
+            "nested-chain-shape",
+            "plugin-wrapper-layer",
+            "legacy-layer-shape",
+            "stream-wrapper-meek",
+        ],
+        source_formats: &[
+            "https-proxy-uri",
+            "chain-expression",
+            "shadowsocks-uri",
+            "legacy-vmess-uri",
+            "vless-uri",
+        ],
+        candidate_sha256: "3ea6efd5022e5079de4ffc654482dbeae6194a052ff0e6b7cce7c3f513b384a5",
+        evidence_host: "remote-38",
+        upstream_host: "jp",
+        evidence_root: "/tmp/daex-non-xhttp-capability-3ea6efd5",
+        summary_artifact: "/tmp/daex-non-xhttp-capability-3ea6efd5/non-xhttp-capability-live-summary.json",
+        rollback_artifact: "/tmp/daex-non-xhttp-capability-3ea6efd5/rollback-cleanup.sh",
+        row_count: 5,
+        pass_count: 5,
+        all_pass: true,
+        large_page_all_pass: true,
+        proxy_evidence_all_pass: true,
+        benchmark_evidence_ready: true,
+        benchmark_evidence_kind: "large-page-threshold-and-body-hash",
+        rollback_artifact_ready: true,
+        rollback_artifact_executed: true,
+        cleanup_evidence_ready: true,
+        raw_links_retained: false,
+        raw_bodies_retained: false,
+        raw_state_retained: false,
+        release_gate_ready: true,
+    };
 
 const ADMITTED_STATE: ShapeStateLedger = ShapeStateLedger {
     source_shape: "source-supported",
@@ -378,6 +489,14 @@ const PENDING_LIVE_LEDGER: ExpandedLiveMatrixLedger = ExpandedLiveMatrixLedger {
     blocked_rows_reduce_pass_threshold: false,
 };
 
+const SCOPED_READY_LIVE_LEDGER: ExpandedLiveMatrixLedger = ExpandedLiveMatrixLedger {
+    ledger_state: "scoped-live-host-evidence-ready",
+    live_host_required: true,
+    rollback_artifact_required: true,
+    large_page_evidence_required: true,
+    blocked_rows_reduce_pass_threshold: false,
+};
+
 const REJECTED_LIVE_LEDGER: ExpandedLiveMatrixLedger = ExpandedLiveMatrixLedger {
     ledger_state: "not-source-supported",
     live_host_required: false,
@@ -394,6 +513,16 @@ const BASE_RELEASE_GATE: ReleaseGateReconciliation = ReleaseGateReconciliation {
     c9_switch_ready: false,
     c10_final_ready: false,
     rollback_artifact_ready: false,
+};
+
+const SCOPED_READY_RELEASE_GATE: ReleaseGateReconciliation = ReleaseGateReconciliation {
+    current_baseline_agrees: true,
+    expanded_source_agrees: true,
+    service_contract_agrees: true,
+    product_chain_agrees: false,
+    c9_switch_ready: false,
+    c10_final_ready: false,
+    rollback_artifact_ready: true,
 };
 
 const REJECTED_RELEASE_GATE: ReleaseGateReconciliation = ReleaseGateReconciliation {
@@ -524,7 +653,7 @@ const SOURCE_SHAPE_REGISTRY_ROWS: [SourceShapeRegistryRow; 23] = [
         "udp-over-stream-or-datagram",
         "registry:stream-wrapper-httpupgrade",
     ),
-    admitted_row(
+    scoped_evidence_admitted_row(
         "stream-wrapper-meek",
         "multi-protocol",
         &["vless"],
@@ -542,7 +671,7 @@ const SOURCE_SHAPE_REGISTRY_ROWS: [SourceShapeRegistryRow; 23] = [
         "tcp-stream-h2-packet-up",
         "registry:stream-wrapper-xhttp",
     ),
-    chain_admitted_row(
+    scoped_evidence_chain_admitted_row(
         "nested-chain-shape",
         "multi-protocol",
         &["chain"],
@@ -551,7 +680,7 @@ const SOURCE_SHAPE_REGISTRY_ROWS: [SourceShapeRegistryRow; 23] = [
         "tcp-first-batch-chain",
         "registry:nested-chain-shape",
     ),
-    plugin_wrapper_admitted_row(
+    scoped_evidence_plugin_wrapper_admitted_row(
         "plugin-wrapper-layer",
         "shadowsocks",
         &["ss"],
@@ -560,7 +689,7 @@ const SOURCE_SHAPE_REGISTRY_ROWS: [SourceShapeRegistryRow; 23] = [
         "tcp-stream-wrapper",
         "registry:plugin-wrapper-layer",
     ),
-    legacy_import_admitted_row(
+    scoped_evidence_legacy_import_admitted_row(
         "legacy-layer-shape",
         "vmess",
         &["vmess"],
@@ -578,7 +707,7 @@ const SOURCE_SHAPE_REGISTRY_ROWS: [SourceShapeRegistryRow; 23] = [
         "quic-datagram-or-stream",
         "registry:quic-option-surface",
     ),
-    admitted_row(
+    scoped_evidence_admitted_row(
         "secure-endpoint-capability",
         "proxy-endpoint",
         &["https"],
@@ -654,7 +783,42 @@ const fn admitted_row(
     }
 }
 
-const fn plugin_wrapper_admitted_row(
+const fn scoped_evidence_admitted_row(
+    shape_id: &'static str,
+    protocol_family: &'static str,
+    link_schemes: &'static [&'static str],
+    security_underlay: &'static str,
+    stream_wrapper: &'static str,
+    packet_semantics: &'static str,
+    redacted_identity: &'static str,
+) -> SourceShapeRegistryRow {
+    SourceShapeRegistryRow {
+        shape_id,
+        source_support: "source-supported",
+        protocol_family,
+        link_schemes,
+        endpoint: "host-port",
+        security_underlay,
+        stream_wrapper,
+        packet_semantics,
+        chain_shape: "single-graph",
+        policy_surface: "selected-runtime-plus-expanded-ledger",
+        reload_lifecycle: "drop-on-graph-diff-or-runtime-stop",
+        parser_coverage: "covered",
+        resident_status: "admitted-baseline",
+        blocker_id: None,
+        evidence_requirements: &["large-page-live", "benchmark", "rollback"],
+        redacted_identity,
+        state_ledger: ADMITTED_STATE,
+        executor_proof: ADMITTED_EXECUTOR_PROOF,
+        runtime_selection: ADMITTED_RUNTIME_SELECTION,
+        capability: BASE_CAPABILITY,
+        expanded_live_matrix: SCOPED_READY_LIVE_LEDGER,
+        release_gate: SCOPED_READY_RELEASE_GATE,
+    }
+}
+
+const fn scoped_evidence_plugin_wrapper_admitted_row(
     shape_id: &'static str,
     protocol_family: &'static str,
     link_schemes: &'static [&'static str],
@@ -684,12 +848,12 @@ const fn plugin_wrapper_admitted_row(
         executor_proof: ADMITTED_EXECUTOR_PROOF,
         runtime_selection: ADMITTED_RUNTIME_SELECTION,
         capability: PLUGIN_WRAPPER_CAPABILITY,
-        expanded_live_matrix: PENDING_LIVE_LEDGER,
-        release_gate: BASE_RELEASE_GATE,
+        expanded_live_matrix: SCOPED_READY_LIVE_LEDGER,
+        release_gate: SCOPED_READY_RELEASE_GATE,
     }
 }
 
-const fn chain_admitted_row(
+const fn scoped_evidence_chain_admitted_row(
     shape_id: &'static str,
     protocol_family: &'static str,
     link_schemes: &'static [&'static str],
@@ -719,12 +883,12 @@ const fn chain_admitted_row(
         executor_proof: CHAIN_EXECUTOR_PROOF,
         runtime_selection: ADMITTED_RUNTIME_SELECTION,
         capability: CHAIN_CAPABILITY,
-        expanded_live_matrix: PENDING_LIVE_LEDGER,
-        release_gate: BASE_RELEASE_GATE,
+        expanded_live_matrix: SCOPED_READY_LIVE_LEDGER,
+        release_gate: SCOPED_READY_RELEASE_GATE,
     }
 }
 
-const fn legacy_import_admitted_row(
+const fn scoped_evidence_legacy_import_admitted_row(
     shape_id: &'static str,
     protocol_family: &'static str,
     link_schemes: &'static [&'static str],
@@ -754,8 +918,8 @@ const fn legacy_import_admitted_row(
         executor_proof: ADMITTED_EXECUTOR_PROOF,
         runtime_selection: ADMITTED_RUNTIME_SELECTION,
         capability: LEGACY_IMPORT_CAPABILITY,
-        expanded_live_matrix: PENDING_LIVE_LEDGER,
-        release_gate: BASE_RELEASE_GATE,
+        expanded_live_matrix: SCOPED_READY_LIVE_LEDGER,
+        release_gate: SCOPED_READY_RELEASE_GATE,
     }
 }
 

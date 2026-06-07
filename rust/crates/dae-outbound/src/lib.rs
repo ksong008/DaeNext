@@ -73,8 +73,9 @@ pub use shadowsocks::{
 pub use socks5::{AddressKind, ServerReply, Socks5Address, Socks5Command, Socks5UdpDatagram};
 pub use source_shape_registry::{
     CapabilityLedger, ComponentExecutorProof, ExpandedLiveMatrixLedger, ReleaseGateReconciliation,
-    RuntimeSelectionLedger, ShapeStateLedger, SourceShapeRegistryContract, SourceShapeRegistryRow,
-    capability_reason_taxonomy, source_shape_registry_contract, source_shape_registry_rows,
+    RuntimeSelectionLedger, ScopedExpandedSourceMatrixEvidence, ShapeStateLedger,
+    SourceShapeRegistryContract, SourceShapeRegistryRow, capability_reason_taxonomy,
+    source_shape_registry_contract, source_shape_registry_rows,
 };
 pub use stream_wrapper_capability::{
     StreamWrapperCapabilityContract, StreamWrapperCapabilityRow,

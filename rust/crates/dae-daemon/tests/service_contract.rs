@@ -397,6 +397,21 @@ fn candidate_reports_resident_service_and_dataplane_capabilities() {
             .as_bool()
             .unwrap()
     );
+    assert!(
+        report["scoped_expanded_source_matrix_complete"]
+            .as_bool()
+            .unwrap()
+    );
+    assert!(
+        report["scoped_expanded_source_matrix_release_gate_ready"]
+            .as_bool()
+            .unwrap()
+    );
+    assert!(
+        !report["scoped_expanded_source_matrix_c10_ready"]
+            .as_bool()
+            .unwrap()
+    );
     assert_eq!(
         report["source_shape_registry_report_schema"]
             .as_str()
@@ -421,6 +436,75 @@ fn candidate_reports_resident_service_and_dataplane_capabilities() {
             .as_str()
             .unwrap(),
         "blocked"
+    );
+    assert!(
+        report["expanded_source_matrix_typed_report"]["scoped_release_gate_ready"]
+            .as_bool()
+            .unwrap()
+    );
+    assert_eq!(
+        report["scoped_expanded_source_matrix_evidence_report_schema"]
+            .as_str()
+            .unwrap(),
+        "scoped-expanded-source-evidence"
+    );
+    assert_eq!(
+        report["scoped_expanded_source_matrix_typed_report"]["status"]
+            .as_str()
+            .unwrap(),
+        "pass"
+    );
+    assert_eq!(
+        report["scoped_expanded_source_matrix_typed_report"]["row_count"]
+            .as_u64()
+            .unwrap(),
+        5
+    );
+    assert_eq!(
+        report["scoped_expanded_source_matrix_typed_report"]["pass_count"]
+            .as_u64()
+            .unwrap(),
+        5
+    );
+    assert!(
+        report["scoped_expanded_source_matrix_typed_report"]["large_page_all_pass"]
+            .as_bool()
+            .unwrap()
+    );
+    assert!(
+        report["scoped_expanded_source_matrix_typed_report"]["proxy_evidence_all_pass"]
+            .as_bool()
+            .unwrap()
+    );
+    assert!(
+        report["scoped_expanded_source_matrix_typed_report"]["benchmark_evidence_ready"]
+            .as_bool()
+            .unwrap()
+    );
+    assert!(
+        report["scoped_expanded_source_matrix_typed_report"]["rollback_artifact_executed"]
+            .as_bool()
+            .unwrap()
+    );
+    assert!(
+        !report["scoped_expanded_source_matrix_typed_report"]["raw_links_retained"]
+            .as_bool()
+            .unwrap()
+    );
+    assert!(
+        !report["scoped_expanded_source_matrix_typed_report"]["raw_bodies_retained"]
+            .as_bool()
+            .unwrap()
+    );
+    assert!(
+        !report["scoped_expanded_source_matrix_typed_report"]["raw_state_retained"]
+            .as_bool()
+            .unwrap()
+    );
+    assert!(
+        !report["scoped_expanded_source_matrix_typed_report"]["c10_ready"]
+            .as_bool()
+            .unwrap()
     );
     assert!(
         report["stream_wrapper_capability_contract_ready"]
