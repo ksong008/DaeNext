@@ -123,7 +123,11 @@ impl TrojanLink {
             push_if_non_empty(&mut query, "host", &self.host);
             push_if_non_empty(&mut query, "encryption", &self.encryption);
             push_if_non_empty(&mut query, "type", &self.transport_type);
-            push_if_non_empty(&mut query, "path", &self.path);
+            if self.transport_type == "grpc" {
+                push_if_non_empty(&mut query, "serviceName", &self.service_name);
+            } else {
+                push_if_non_empty(&mut query, "path", &self.path);
+            }
         }
         query.sort_by(|a, b| a.0.cmp(&b.0).then_with(|| a.1.cmp(&b.1)));
         if !query.is_empty() {

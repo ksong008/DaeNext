@@ -1,4 +1,5 @@
 use std::collections::{BTreeMap, VecDeque};
+use std::future::poll_fn;
 use std::io::{ErrorKind, Read, Write};
 use std::mem::size_of;
 use std::net::{
@@ -9,12 +10,14 @@ use std::os::fd::AsRawFd;
 use std::path::PathBuf;
 use std::slice;
 use std::sync::{
-    Arc, Mutex, OnceLock,
+    Arc, Condvar, Mutex, OnceLock,
     atomic::{AtomicBool, Ordering},
+    mpsc,
 };
 use std::thread;
 use std::time::{Duration, Instant};
 
+use bytes::Bytes;
 use dae_core_types::OutboundIndex;
 use dae_datapath::{
     OUTBOUND_BLOCK, OUTBOUND_CONTROL_PLANE_ROUTING, OUTBOUND_DIRECT, TcpDialMode,
@@ -36,8 +39,9 @@ use dae_outbound::{
     },
     shadowsocks::{AeadStreamCodec, ShadowsocksMetadata, read_encrypted_chunk_from_stream},
     shared_transport::{
-        DEFAULT_WS_KEY, HttpUpgradeOptions, WS_MASK_KEY, read_http_head, validate_http_status,
-        websocket_client_binary_frame, websocket_handshake_request,
+        DEFAULT_WS_KEY, HttpUpgradeOptions, WS_MASK_KEY, grpc_hunk_frame, grpc_hunk_payload,
+        http_upgrade_request, read_http_head, validate_http_status, websocket_client_binary_frame,
+        websocket_handshake_request,
     },
     socks5::{Socks5Address, handshake},
     trojan::packet as trojan_packet,
@@ -1129,6 +1133,30 @@ async fn handle_proxy_tcp_connection_async(
         )
         .await;
     }
+    if selection.proxy.net == "httpupgrade" {
+        return handle_vless_httpupgrade_tcp_connection_async(
+            inbound,
+            peer,
+            original_dst,
+            selection,
+            stop,
+            sniff,
+            metrics,
+        )
+        .await;
+    }
+    if selection.proxy.net == "grpc" {
+        return handle_vless_grpc_tcp_connection_async(
+            inbound,
+            peer,
+            original_dst,
+            selection,
+            stop,
+            sniff,
+            metrics,
+        )
+        .await;
+    }
     let mut client = open_async_vless_tls_client(&selection.proxy).await?;
     let tls_underlay = async_tls_underlay_name(&client);
     let key = selection.proxy.vless_key()?;
@@ -1250,8 +1278,160 @@ async fn handle_vless_websocket_tcp_connection_async(
     })
 }
 
+#[allow(clippy::too_many_arguments)]
+async fn handle_vless_httpupgrade_tcp_connection_async(
+    inbound: &mut TokioTcpStream,
+    peer: SocketAddr,
+    original_dst: SocketAddrV4,
+    selection: TcpProxySelection,
+    stop: Arc<AtomicBool>,
+    sniff: &TcpSniffReport,
+    metrics: &ResidentDataplaneMetrics,
+) -> Result<Value, String> {
+    let mut client = open_async_vless_tls_client(&selection.proxy).await?;
+    let tls_underlay = async_tls_underlay_name(&client);
+    let key = selection.proxy.vless_key()?;
+    let options =
+        HttpUpgradeOptions::new(&selection.proxy.stream_host, &selection.proxy.stream_path);
+    httpupgrade_handshake_over_resident_tls_async(&mut client, &options).await?;
+    let request = packet::first_write_bytes(
+        &key,
+        &selection.proxy.flow,
+        "tcp",
+        &selection.route.dial_target,
+        false,
+        &[],
+    )
+    .map_err(|err| format!("build VLESS HTTP Upgrade TCP request: {err}"))?;
+    client
+        .write_plain_all(&request, "write VLESS HTTP Upgrade TCP request")
+        .await?;
+    relay_tcp_over_vless_tls_async(
+        inbound,
+        &mut client,
+        stop,
+        &selection.proxy.flow,
+        key,
+        &sniff.payload,
+        metrics,
+    )
+    .await
+    .map(|stats| {
+        let mut event = proxy_tcp_finished_event(
+            peer,
+            original_dst,
+            &selection,
+            sniff,
+            tls_underlay,
+            &stats,
+            "async-proxy-httpupgrade-tls",
+        );
+        event["stream_wrapper"] = json!("httpupgrade");
+        event
+    })
+    .or_else(|err| {
+        let mut event = proxy_tcp_failed_event(
+            peer,
+            original_dst,
+            &selection,
+            sniff,
+            tls_underlay,
+            &err,
+            "async-proxy-httpupgrade-tls",
+        );
+        event["stream_wrapper"] = json!("httpupgrade");
+        Ok::<Value, String>(event)
+    })
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn handle_vless_grpc_tcp_connection_async(
+    inbound: &mut TokioTcpStream,
+    peer: SocketAddr,
+    original_dst: SocketAddrV4,
+    selection: TcpProxySelection,
+    stop: Arc<AtomicBool>,
+    sniff: &TcpSniffReport,
+    metrics: &ResidentDataplaneMetrics,
+) -> Result<Value, String> {
+    let client = open_async_vless_tls_client(&selection.proxy).await?;
+    let tls_underlay = async_tls_underlay_name(&client);
+    let key = selection.proxy.vless_key()?;
+    let request = packet::first_write_bytes(
+        &key,
+        &selection.proxy.flow,
+        "tcp",
+        &selection.route.dial_target,
+        false,
+        &sniff.payload,
+    )
+    .map_err(|err| format!("build VLESS gRPC TCP request: {err}"))?;
+    let (mut h2_send, mut h2_recv, connection_task) =
+        open_grpc_h2_stream(client, &selection.proxy, &request).await?;
+    let mut initial_stats = DirectTcpRelayStats::default();
+    if !sniff.payload.is_empty() {
+        initial_stats.client_to_direct += sniff.payload.len();
+        metrics.add_upload(sniff.payload.len());
+    }
+
+    let result = relay_tcp_over_grpc_h2(
+        inbound,
+        &mut h2_send,
+        &mut h2_recv,
+        stop,
+        initial_stats,
+        metrics,
+        true,
+    )
+    .await;
+    connection_task.abort();
+    result
+        .map(|stats| {
+            let mut event = generic_proxy_tcp_finished_event(
+                peer,
+                original_dst,
+                &selection,
+                sniff,
+                "vless",
+                &stats,
+                "async-proxy-grpc-tls",
+            );
+            event["tls_underlay"] = json!(tls_underlay);
+            event["stream_wrapper"] = json!("grpc");
+            append_proxy_tcp_execution_fields(
+                &mut event,
+                "async-proxy-grpc-tls",
+                "vless",
+                Some(tls_underlay),
+                None,
+            );
+            event
+        })
+        .or_else(|err| {
+            let mut event = generic_proxy_tcp_failed_event(
+                peer,
+                original_dst,
+                &selection,
+                sniff,
+                "vless",
+                &err,
+                "async-proxy-grpc-tls",
+            );
+            event["tls_underlay"] = json!(tls_underlay);
+            event["stream_wrapper"] = json!("grpc");
+            append_proxy_tcp_execution_fields(
+                &mut event,
+                "async-proxy-grpc-tls",
+                "vless",
+                Some(tls_underlay),
+                None,
+            );
+            Ok::<Value, String>(event)
+        })
+}
+
 async fn handle_first_batch_proxy_tcp_connection_async(
-    inbound: TokioTcpStream,
+    mut inbound: TokioTcpStream,
     peer: SocketAddr,
     original_dst: SocketAddrV4,
     selection: TcpProxySelection,
@@ -1259,6 +1439,22 @@ async fn handle_first_batch_proxy_tcp_connection_async(
     sniff: TcpSniffReport,
     metrics: Arc<ResidentDataplaneMetrics>,
 ) -> Result<Value, String> {
+    if let ResidentProxyProtocolPlan::VmessAeadTcp { id } = &selection.proxy.handler
+        && selection.proxy.net == "grpc"
+    {
+        let id = id.clone();
+        return handle_vmess_grpc_proxy_tcp_connection_async(
+            &mut inbound,
+            peer,
+            original_dst,
+            selection,
+            stop,
+            &sniff,
+            &metrics,
+            &id,
+        )
+        .await;
+    }
     let mut inbound = inbound
         .into_std()
         .map_err(|err| format!("convert async inbound TCP to std for first-batch proxy: {err}"))?;
@@ -1344,6 +1540,22 @@ fn handle_first_batch_proxy_tcp_connection(
                     metrics,
                     id,
                 )
+            } else if selection.proxy.net == "httpupgrade" {
+                handle_vmess_httpupgrade_proxy_tcp_connection(
+                    inbound,
+                    peer,
+                    original_dst,
+                    &selection,
+                    stop,
+                    sniff,
+                    metrics,
+                    id,
+                )
+            } else if selection.proxy.net == "grpc" {
+                Err(
+                    "first-batch VMess gRPC handler must use async TLS HTTP/2 dispatcher"
+                        .to_owned(),
+                )
             } else {
                 handle_vmess_proxy_tcp_connection(
                     inbound,
@@ -1396,6 +1608,30 @@ async fn handle_frame_tls_tcp_connection_async(
             let password = password.clone();
             if selection.proxy.net == "websocket" {
                 handle_trojan_websocket_tls_tcp_connection_async(
+                    inbound,
+                    peer,
+                    original_dst,
+                    selection,
+                    stop,
+                    sniff,
+                    metrics,
+                    &password,
+                )
+                .await
+            } else if selection.proxy.net == "httpupgrade" {
+                handle_trojan_httpupgrade_tls_tcp_connection_async(
+                    inbound,
+                    peer,
+                    original_dst,
+                    selection,
+                    stop,
+                    sniff,
+                    metrics,
+                    &password,
+                )
+                .await
+            } else if selection.proxy.net == "grpc" {
+                handle_trojan_grpc_tls_tcp_connection_async(
                     inbound,
                     peer,
                     original_dst,
@@ -1511,6 +1747,170 @@ async fn handle_trojan_websocket_tls_tcp_connection_async(
             append_proxy_tcp_execution_fields(
                 &mut event,
                 "async-proxy-websocket-tls",
+                "trojan",
+                Some(tls_underlay),
+                None,
+            );
+            Ok(event)
+        }
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn handle_trojan_httpupgrade_tls_tcp_connection_async(
+    inbound: &mut TokioTcpStream,
+    peer: SocketAddr,
+    original_dst: SocketAddrV4,
+    selection: TcpProxySelection,
+    stop: Arc<AtomicBool>,
+    sniff: &TcpSniffReport,
+    metrics: &ResidentDataplaneMetrics,
+    password: &str,
+) -> Result<Value, String> {
+    let mut client = open_async_resident_tls_client(&selection.proxy).await?;
+    let tls_underlay = async_resident_tls_underlay_name(&client);
+    let options =
+        HttpUpgradeOptions::new(&selection.proxy.stream_host, &selection.proxy.stream_path);
+    httpupgrade_handshake_over_resident_tls_async(&mut client, &options).await?;
+    let request = trojan_packet::tcp_request_header(
+        password,
+        "tcp",
+        &selection.route.dial_target,
+        &sniff.payload,
+    )
+    .map_err(|err| format!("build Trojan HTTP Upgrade TCP request: {err}"))?;
+    client
+        .write_plain_all(&request, "write Trojan HTTP Upgrade TCP request")
+        .await?;
+    let mut initial_stats = DirectTcpRelayStats::default();
+    if !sniff.payload.is_empty() {
+        initial_stats.client_to_direct += sniff.payload.len();
+        metrics.add_upload(sniff.payload.len());
+    }
+
+    match relay_tcp_over_resident_tls_plain_async(inbound, &mut client, stop, metrics).await {
+        Ok(mut stats) => {
+            stats.client_to_direct += initial_stats.client_to_direct;
+            let mut event = generic_proxy_tcp_finished_event(
+                peer,
+                original_dst,
+                &selection,
+                sniff,
+                "trojan",
+                &stats,
+                "async-proxy-httpupgrade-tls",
+            );
+            event["tls_underlay"] = json!(tls_underlay);
+            event["stream_wrapper"] = json!("httpupgrade");
+            append_proxy_tcp_execution_fields(
+                &mut event,
+                "async-proxy-httpupgrade-tls",
+                "trojan",
+                Some(tls_underlay),
+                None,
+            );
+            Ok(event)
+        }
+        Err(err) => {
+            let mut event = generic_proxy_tcp_failed_event(
+                peer,
+                original_dst,
+                &selection,
+                sniff,
+                "trojan",
+                &err,
+                "async-proxy-httpupgrade-tls",
+            );
+            event["tls_underlay"] = json!(tls_underlay);
+            event["stream_wrapper"] = json!("httpupgrade");
+            append_proxy_tcp_execution_fields(
+                &mut event,
+                "async-proxy-httpupgrade-tls",
+                "trojan",
+                Some(tls_underlay),
+                None,
+            );
+            Ok(event)
+        }
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn handle_trojan_grpc_tls_tcp_connection_async(
+    inbound: &mut TokioTcpStream,
+    peer: SocketAddr,
+    original_dst: SocketAddrV4,
+    selection: TcpProxySelection,
+    stop: Arc<AtomicBool>,
+    sniff: &TcpSniffReport,
+    metrics: &ResidentDataplaneMetrics,
+    password: &str,
+) -> Result<Value, String> {
+    let client = open_async_resident_tls_client(&selection.proxy).await?;
+    let tls_underlay = async_resident_tls_underlay_name(&client);
+    let request = trojan_packet::tcp_request_header(
+        password,
+        "tcp",
+        &selection.route.dial_target,
+        &sniff.payload,
+    )
+    .map_err(|err| format!("build Trojan gRPC TCP request: {err}"))?;
+    let (mut h2_send, mut h2_recv, connection_task) =
+        open_grpc_h2_stream(client, &selection.proxy, &request).await?;
+    let mut initial_stats = DirectTcpRelayStats::default();
+    if !sniff.payload.is_empty() {
+        initial_stats.client_to_direct += sniff.payload.len();
+        metrics.add_upload(sniff.payload.len());
+    }
+
+    let result = relay_tcp_over_grpc_h2(
+        inbound,
+        &mut h2_send,
+        &mut h2_recv,
+        stop,
+        initial_stats,
+        metrics,
+        false,
+    )
+    .await;
+    connection_task.abort();
+    match result {
+        Ok(stats) => {
+            let mut event = generic_proxy_tcp_finished_event(
+                peer,
+                original_dst,
+                &selection,
+                sniff,
+                "trojan",
+                &stats,
+                "async-proxy-grpc-tls",
+            );
+            event["tls_underlay"] = json!(tls_underlay);
+            event["stream_wrapper"] = json!("grpc");
+            append_proxy_tcp_execution_fields(
+                &mut event,
+                "async-proxy-grpc-tls",
+                "trojan",
+                Some(tls_underlay),
+                None,
+            );
+            Ok(event)
+        }
+        Err(err) => {
+            let mut event = generic_proxy_tcp_failed_event(
+                peer,
+                original_dst,
+                &selection,
+                sniff,
+                "trojan",
+                &err,
+                "async-proxy-grpc-tls",
+            );
+            event["tls_underlay"] = json!(tls_underlay);
+            event["stream_wrapper"] = json!("grpc");
+            append_proxy_tcp_execution_fields(
+                &mut event,
+                "async-proxy-grpc-tls",
                 "trojan",
                 Some(tls_underlay),
                 None,
@@ -2733,6 +3133,645 @@ fn handle_vmess_websocket_proxy_tcp_connection(
             event["stream_wrapper"] = json!("websocket");
             Ok::<Value, String>(event)
         })
+}
+
+#[allow(clippy::too_many_arguments)]
+fn handle_vmess_httpupgrade_proxy_tcp_connection(
+    inbound: &mut TcpStream,
+    peer: SocketAddr,
+    original_dst: SocketAddrV4,
+    selection: &TcpProxySelection,
+    stop: &AtomicBool,
+    sniff: &TcpSniffReport,
+    metrics: &ResidentDataplaneMetrics,
+    id: &str,
+) -> Result<Value, String> {
+    let mut proxy = open_plain_proxy_tcp_stream(&selection.proxy)?;
+    proxy
+        .set_nonblocking(false)
+        .map_err(|err| format!("set VMess HTTP Upgrade proxy blocking: {err}"))?;
+    proxy
+        .set_read_timeout(Some(RESIDENT_TCP_IDLE_TIMEOUT))
+        .map_err(|err| format!("set VMess HTTP Upgrade proxy read timeout: {err}"))?;
+    proxy
+        .set_write_timeout(Some(RESIDENT_TCP_IDLE_TIMEOUT))
+        .map_err(|err| format!("set VMess HTTP Upgrade proxy write timeout: {err}"))?;
+    inbound
+        .set_read_timeout(Some(RESIDENT_TCP_IDLE_TIMEOUT))
+        .map_err(|err| format!("set VMess HTTP Upgrade inbound read timeout: {err}"))?;
+    inbound
+        .set_write_timeout(Some(RESIDENT_TCP_IDLE_TIMEOUT))
+        .map_err(|err| format!("set VMess HTTP Upgrade inbound write timeout: {err}"))?;
+
+    let options =
+        HttpUpgradeOptions::new(&selection.proxy.stream_host, &selection.proxy.stream_path);
+    httpupgrade_handshake_over_plain_stream(&mut proxy, &options)?;
+    let session = aead_tcp_client_session_start(id, &selection.route.dial_target, &sniff.payload)
+        .map_err(|err| format!("build VMess HTTP Upgrade AEAD TCP session: {err}"))?;
+    proxy
+        .write_all(&session.first_write)
+        .map_err(|err| format!("write VMess HTTP Upgrade request: {err}"))?;
+    let mut initial_stats = DirectTcpRelayStats::default();
+    if !sniff.payload.is_empty() {
+        initial_stats.client_to_direct += sniff.payload.len();
+        metrics.add_upload(sniff.payload.len());
+    }
+
+    relay_tcp_over_vmess_aead(inbound, &mut proxy, stop, session, initial_stats, metrics)
+        .map(|stats| {
+            let mut event = generic_proxy_tcp_finished_event(
+                peer,
+                original_dst,
+                selection,
+                sniff,
+                "vmess",
+                &stats,
+                "first-batch-httpupgrade-aead",
+            );
+            event["stream_wrapper"] = json!("httpupgrade");
+            event
+        })
+        .or_else(|err| {
+            let mut event = generic_proxy_tcp_failed_event(
+                peer,
+                original_dst,
+                selection,
+                sniff,
+                "vmess",
+                &err,
+                "first-batch-httpupgrade-aead",
+            );
+            event["stream_wrapper"] = json!("httpupgrade");
+            Ok::<Value, String>(event)
+        })
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn handle_vmess_grpc_proxy_tcp_connection_async(
+    inbound: &mut TokioTcpStream,
+    peer: SocketAddr,
+    original_dst: SocketAddrV4,
+    selection: TcpProxySelection,
+    stop: Arc<AtomicBool>,
+    sniff: &TcpSniffReport,
+    metrics: &ResidentDataplaneMetrics,
+    id: &str,
+) -> Result<Value, String> {
+    let client = open_async_resident_tls_client(&selection.proxy).await?;
+    let tls_underlay = async_resident_tls_underlay_name(&client);
+    let session = aead_tcp_client_session_start(id, &selection.route.dial_target, &sniff.payload)
+        .map_err(|err| format!("build VMess gRPC AEAD TCP session: {err}"))?;
+    let (mut h2_send, mut h2_recv, connection_task) =
+        open_grpc_h2_stream(client, &selection.proxy, &session.first_write).await?;
+    let mut initial_stats = DirectTcpRelayStats::default();
+    if !sniff.payload.is_empty() {
+        initial_stats.client_to_direct += sniff.payload.len();
+        metrics.add_upload(sniff.payload.len());
+    }
+
+    let result = relay_tcp_over_vmess_grpc_h2(
+        inbound,
+        &mut h2_send,
+        &mut h2_recv,
+        stop,
+        session,
+        initial_stats,
+        metrics,
+    )
+    .await;
+    connection_task.abort();
+    result
+        .map(|stats| {
+            let mut event = generic_proxy_tcp_finished_event(
+                peer,
+                original_dst,
+                &selection,
+                sniff,
+                "vmess",
+                &stats,
+                "first-batch-grpc-aead",
+            );
+            event["tls_underlay"] = json!(tls_underlay);
+            event["stream_wrapper"] = json!("grpc");
+            append_proxy_tcp_execution_fields(
+                &mut event,
+                "first-batch-grpc-aead",
+                "vmess",
+                Some(tls_underlay),
+                None,
+            );
+            event
+        })
+        .or_else(|err| {
+            let mut event = generic_proxy_tcp_failed_event(
+                peer,
+                original_dst,
+                &selection,
+                sniff,
+                "vmess",
+                &err,
+                "first-batch-grpc-aead",
+            );
+            event["tls_underlay"] = json!(tls_underlay);
+            event["stream_wrapper"] = json!("grpc");
+            append_proxy_tcp_execution_fields(
+                &mut event,
+                "first-batch-grpc-aead",
+                "vmess",
+                Some(tls_underlay),
+                None,
+            );
+            Ok::<Value, String>(event)
+        })
+}
+
+async fn open_grpc_h2_stream(
+    client: AsyncResidentTlsClient,
+    proxy: &ResidentProxyPlan,
+    first_payload: &[u8],
+) -> Result<
+    (
+        h2::SendStream<Bytes>,
+        h2::RecvStream,
+        tokio::task::JoinHandle<()>,
+    ),
+    String,
+> {
+    let (mut sender, connection) =
+        time::timeout(RESIDENT_CONNECT_TIMEOUT, h2::client::handshake(client))
+            .await
+            .map_err(|_| "gRPC HTTP/2 handshake timeout".to_owned())?
+            .map_err(|err| format!("gRPC HTTP/2 client handshake: {err}"))?;
+    let connection_task = tokio::spawn(async move {
+        let _ = connection.await;
+    });
+    let authority = grpc_authority(proxy);
+    let uri = format!(
+        "https://{}{}",
+        authority,
+        grpc_request_path(&proxy.stream_path)
+    );
+    let request = http::Request::builder()
+        .method(http::Method::POST)
+        .uri(uri)
+        .header(http::header::CONTENT_TYPE, "application/grpc")
+        .header("te", "trailers")
+        .header(http::header::USER_AGENT, "dae-rust-native-resident")
+        .body(())
+        .map_err(|err| format!("build gRPC HTTP/2 request: {err}"))?;
+    let (response, send_stream) = sender
+        .send_request(request, false)
+        .map_err(|err| format!("send gRPC HTTP/2 request headers: {err}"))?;
+    let mut send_stream = send_stream;
+    send_grpc_hunk(&mut send_stream, first_payload, false).await?;
+    let response = time::timeout(RESIDENT_CONNECT_TIMEOUT, response)
+        .await
+        .map_err(|_| "gRPC HTTP/2 response headers timeout".to_owned())?
+        .map_err(|err| format!("read gRPC HTTP/2 response headers: {err}"))?;
+    if !response.status().is_success() {
+        connection_task.abort();
+        return Err(format!("gRPC HTTP/2 response status {}", response.status()));
+    }
+    Ok((send_stream, response.into_body(), connection_task))
+}
+
+fn grpc_authority(proxy: &ResidentProxyPlan) -> String {
+    if proxy.stream_host.is_empty() {
+        proxy.server_name.clone()
+    } else {
+        proxy.stream_host.clone()
+    }
+}
+
+fn grpc_request_path(service_name: &str) -> String {
+    let service_name = if service_name.is_empty() {
+        "GunService"
+    } else {
+        service_name.trim_start_matches('/')
+    };
+    format!("/{service_name}/Tun")
+}
+
+async fn send_grpc_hunk(
+    send_stream: &mut h2::SendStream<Bytes>,
+    payload: &[u8],
+    end_stream: bool,
+) -> Result<(), String> {
+    let hunk = grpc_hunk_frame(payload).map_err(|err| format!("build gRPC hunk: {err}"))?;
+    send_h2_data(send_stream, Bytes::from(hunk), end_stream).await
+}
+
+async fn send_h2_data(
+    send_stream: &mut h2::SendStream<Bytes>,
+    data: Bytes,
+    end_stream: bool,
+) -> Result<(), String> {
+    let required = data.len();
+    if required > 0 {
+        send_stream.reserve_capacity(required);
+        while send_stream.capacity() < required {
+            let Some(capacity) = poll_fn(|cx| send_stream.poll_capacity(cx)).await else {
+                return Err(
+                    "gRPC HTTP/2 send stream closed before capacity became available".to_owned(),
+                );
+            };
+            capacity.map_err(|err| format!("reserve gRPC HTTP/2 send capacity: {err}"))?;
+        }
+    }
+    send_stream
+        .send_data(data, end_stream)
+        .map_err(|err| format!("send gRPC HTTP/2 data: {err}"))
+}
+
+async fn relay_tcp_over_grpc_h2(
+    inbound: &mut TokioTcpStream,
+    send_stream: &mut h2::SendStream<Bytes>,
+    recv_stream: &mut h2::RecvStream,
+    stop: Arc<AtomicBool>,
+    mut stats: DirectTcpRelayStats,
+    metrics: &ResidentDataplaneMetrics,
+    strip_vless_response_header: bool,
+) -> Result<DirectTcpRelayStats, String> {
+    let mut inbound_closed = false;
+    let mut response_closed = false;
+    let mut last_activity = Instant::now();
+    let mut inbound_buf = [0_u8; 16 * 1024];
+    let mut response_buf = Vec::new();
+    let mut vless_response_stripper =
+        strip_vless_response_header.then(VlessResponseStripper::default);
+
+    while !stop.load(Ordering::Relaxed) {
+        tokio::select! {
+            read = inbound.read(&mut inbound_buf), if !inbound_closed => {
+                match read {
+                    Ok(0) => {
+                        inbound_closed = true;
+                        send_h2_data(send_stream, Bytes::new(), true).await?;
+                        last_activity = Instant::now();
+                    }
+                    Ok(read) => {
+                        send_grpc_hunk(send_stream, &inbound_buf[..read], false).await?;
+                        stats.client_to_direct += read;
+                        metrics.add_upload(read);
+                        last_activity = Instant::now();
+                    }
+                    Err(err) if is_graceful_stream_close_error(&err) => {
+                        inbound_closed = true;
+                        send_h2_data(send_stream, Bytes::new(), true).await?;
+                    }
+                    Err(err) => return Err(format!("read inbound TCP for gRPC relay: {err}")),
+                }
+            }
+            data = recv_stream.data(), if !response_closed => {
+                match data {
+                    Some(Ok(bytes)) => {
+                        recv_stream
+                            .flow_control()
+                            .release_capacity(bytes.len())
+                            .map_err(|err| format!("release gRPC HTTP/2 response capacity: {err}"))?;
+                        response_buf.extend_from_slice(&bytes);
+                        while let Some(payload) = pop_grpc_hunk_payload(&mut response_buf)? {
+                            let payload = if let Some(stripper) = vless_response_stripper.as_mut() {
+                                stripper.consume(&payload)?
+                            } else {
+                                payload
+                            };
+                            if !payload.is_empty() {
+                                inbound
+                                    .write_all(&payload)
+                                    .await
+                                    .map_err(|err| format!("write gRPC response to inbound: {err}"))?;
+                                stats.direct_to_client += payload.len();
+                                metrics.add_download(payload.len());
+                            }
+                        }
+                        last_activity = Instant::now();
+                    }
+                    Some(Err(err)) => return Err(format!("read gRPC HTTP/2 response data: {err}")),
+                    None => {
+                        response_closed = true;
+                        if !response_buf.is_empty() {
+                            return Err("gRPC response stream ended with partial hunk".to_owned());
+                        }
+                        last_activity = Instant::now();
+                    }
+                }
+            }
+            _ = time::sleep(RESIDENT_IDLE_SLEEP) => {
+                if (inbound_closed && response_closed) || last_activity.elapsed() > RESIDENT_TCP_IDLE_TIMEOUT {
+                    break;
+                }
+            }
+        }
+    }
+    Ok(stats)
+}
+
+async fn relay_tcp_over_vmess_grpc_h2(
+    inbound: &mut TokioTcpStream,
+    send_stream: &mut h2::SendStream<Bytes>,
+    recv_stream: &mut h2::RecvStream,
+    stop: Arc<AtomicBool>,
+    session: VMessAeadTcpClientSessionStart,
+    mut stats: DirectTcpRelayStats,
+    metrics: &ResidentDataplaneMetrics,
+) -> Result<DirectTcpRelayStats, String> {
+    let encrypted_queue = Arc::new(VmessGrpcEncryptedQueue::default());
+    let (decrypted_tx, decrypted_rx) = mpsc::channel();
+    let request = session.request.clone();
+    let decoder_queue = VmessGrpcEncryptedReader::new(Arc::clone(&encrypted_queue));
+    let decoder = thread::spawn(move || {
+        decode_vmess_grpc_response_stream(decoder_queue, request, decrypted_tx)
+    });
+    let mut upload_codec = session.upload;
+    let mut inbound_closed = false;
+    let mut response_closed = false;
+    let mut decoder_disconnected = false;
+    let mut last_activity = Instant::now();
+    let mut inbound_buf = [0_u8; 16 * 1024];
+    let mut response_buf = Vec::new();
+    let mut decode_error = None;
+
+    while !stop.load(Ordering::Relaxed) {
+        tokio::select! {
+            read = inbound.read(&mut inbound_buf), if !inbound_closed => {
+                match read {
+                    Ok(0) => {
+                        inbound_closed = true;
+                        send_h2_data(send_stream, Bytes::new(), true).await?;
+                        last_activity = Instant::now();
+                    }
+                    Ok(read) => {
+                        let encrypted = upload_codec
+                            .seal_chunk(&inbound_buf[..read])
+                            .map_err(|err| format!("encode VMess gRPC upload chunk: {err}"))?;
+                        send_grpc_hunk(send_stream, &encrypted, false).await?;
+                        stats.client_to_direct += read;
+                        metrics.add_upload(read);
+                        last_activity = Instant::now();
+                    }
+                    Err(err) if is_graceful_stream_close_error(&err) => {
+                        inbound_closed = true;
+                        send_h2_data(send_stream, Bytes::new(), true).await?;
+                        last_activity = Instant::now();
+                    }
+                    Err(err) => return Err(format!("read inbound TCP for VMess gRPC relay: {err}")),
+                }
+            }
+            data = recv_stream.data(), if !response_closed => {
+                match data {
+                    Some(Ok(bytes)) => {
+                        recv_stream
+                            .flow_control()
+                            .release_capacity(bytes.len())
+                            .map_err(|err| format!("release VMess gRPC HTTP/2 response capacity: {err}"))?;
+                        response_buf.extend_from_slice(&bytes);
+                        while let Some(payload) = pop_grpc_hunk_payload(&mut response_buf)? {
+                            if !payload.is_empty() {
+                                encrypted_queue.push(&payload);
+                            }
+                        }
+                        let (plain_chunks, disconnected) = collect_vmess_grpc_decrypted(
+                            &decrypted_rx,
+                            &mut decode_error,
+                        );
+                        decoder_disconnected = disconnected;
+                        write_vmess_grpc_decrypted(
+                            inbound,
+                            &mut stats,
+                            metrics,
+                            plain_chunks,
+                        )
+                        .await?;
+                        last_activity = Instant::now();
+                    }
+                    Some(Err(err)) => return Err(format!("read VMess gRPC HTTP/2 response data: {err}")),
+                    None => {
+                        response_closed = true;
+                        encrypted_queue.close();
+                        if !response_buf.is_empty() {
+                            return Err("VMess gRPC response stream ended with partial hunk".to_owned());
+                        }
+                        let (plain_chunks, disconnected) = collect_vmess_grpc_decrypted(
+                            &decrypted_rx,
+                            &mut decode_error,
+                        );
+                        decoder_disconnected = disconnected;
+                        write_vmess_grpc_decrypted(
+                            inbound,
+                            &mut stats,
+                            metrics,
+                            plain_chunks,
+                        )
+                        .await?;
+                        last_activity = Instant::now();
+                    }
+                }
+            }
+            _ = time::sleep(RESIDENT_IDLE_SLEEP) => {
+                let (plain_chunks, disconnected) = collect_vmess_grpc_decrypted(
+                    &decrypted_rx,
+                    &mut decode_error,
+                );
+                decoder_disconnected = disconnected;
+                write_vmess_grpc_decrypted(
+                    inbound,
+                    &mut stats,
+                    metrics,
+                    plain_chunks,
+                )
+                .await?;
+                if inbound_closed && response_closed && decoder_disconnected {
+                    break;
+                }
+                if last_activity.elapsed() > RESIDENT_TCP_IDLE_TIMEOUT {
+                    break;
+                }
+            }
+        }
+
+        if let Some(err) = decode_error.take() {
+            encrypted_queue.close();
+            let _ = decoder.join();
+            return Err(err);
+        }
+        if inbound_closed && response_closed && decoder_disconnected {
+            break;
+        }
+    }
+    encrypted_queue.close();
+    let decoder_result = decoder
+        .join()
+        .map_err(|_| "join VMess gRPC response decoder failed".to_owned())?;
+    if let Err(err) = decoder_result {
+        return Err(err);
+    }
+    Ok(stats)
+}
+
+fn collect_vmess_grpc_decrypted(
+    decrypted_rx: &mpsc::Receiver<Result<Vec<u8>, String>>,
+    decode_error: &mut Option<String>,
+) -> (Vec<Vec<u8>>, bool) {
+    let mut chunks = Vec::new();
+    loop {
+        match decrypted_rx.try_recv() {
+            Ok(Ok(plain)) => {
+                chunks.push(plain);
+            }
+            Ok(Err(err)) => {
+                *decode_error = Some(err);
+                return (chunks, false);
+            }
+            Err(mpsc::TryRecvError::Empty) => return (chunks, false),
+            Err(mpsc::TryRecvError::Disconnected) => return (chunks, true),
+        }
+    }
+}
+
+async fn write_vmess_grpc_decrypted(
+    inbound: &mut TokioTcpStream,
+    stats: &mut DirectTcpRelayStats,
+    metrics: &ResidentDataplaneMetrics,
+    chunks: Vec<Vec<u8>>,
+) -> Result<(), String> {
+    for plain in chunks {
+        if !plain.is_empty() {
+            inbound
+                .write_all(&plain)
+                .await
+                .map_err(|err| format!("write VMess gRPC response to inbound: {err}"))?;
+            stats.direct_to_client += plain.len();
+            metrics.add_download(plain.len());
+        }
+    }
+    Ok(())
+}
+
+fn decode_vmess_grpc_response_stream(
+    mut reader: VmessGrpcEncryptedReader,
+    request: dae_outbound::vmess::VMessAeadTcpRequest,
+    decrypted_tx: mpsc::Sender<Result<Vec<u8>, String>>,
+) -> Result<(), String> {
+    let mut response = match aead_tcp_response_reader_from_stream(&mut reader, &request) {
+        Ok(response) => response,
+        Err(err) => {
+            let message = err.to_string();
+            if is_vmess_grpc_graceful_decode_close(&message) {
+                return Ok(());
+            }
+            let _ = decrypted_tx.send(Err(format!(
+                "read VMess gRPC AEAD response header: {message}"
+            )));
+            return Ok(());
+        }
+    };
+    loop {
+        match response.read_chunk_from_stream(&mut reader) {
+            Ok(plain) => {
+                if decrypted_tx.send(Ok(plain)).is_err() {
+                    return Ok(());
+                }
+            }
+            Err(err) => {
+                let message = err.to_string();
+                if is_vmess_grpc_graceful_decode_close(&message) {
+                    return Ok(());
+                }
+                let _ =
+                    decrypted_tx.send(Err(format!("read VMess gRPC response chunk: {message}")));
+                return Ok(());
+            }
+        }
+    }
+}
+
+fn is_vmess_grpc_graceful_decode_close(message: &str) -> bool {
+    message.contains("early eof")
+        || message.contains("failed to fill whole buffer")
+        || message.contains("Connection reset")
+        || message.contains("connection reset")
+        || message.contains("timed out")
+}
+
+#[derive(Default)]
+struct VmessGrpcEncryptedQueue {
+    inner: Mutex<VmessGrpcEncryptedQueueInner>,
+    ready: Condvar,
+}
+
+#[derive(Default)]
+struct VmessGrpcEncryptedQueueInner {
+    bytes: VecDeque<u8>,
+    closed: bool,
+}
+
+impl VmessGrpcEncryptedQueue {
+    fn push(&self, payload: &[u8]) {
+        if payload.is_empty() {
+            return;
+        }
+        let mut inner = self.inner.lock().expect("VMess gRPC queue poisoned");
+        inner.bytes.extend(payload);
+        self.ready.notify_all();
+    }
+
+    fn close(&self) {
+        let mut inner = self.inner.lock().expect("VMess gRPC queue poisoned");
+        inner.closed = true;
+        self.ready.notify_all();
+    }
+}
+
+struct VmessGrpcEncryptedReader {
+    queue: Arc<VmessGrpcEncryptedQueue>,
+}
+
+impl VmessGrpcEncryptedReader {
+    fn new(queue: Arc<VmessGrpcEncryptedQueue>) -> Self {
+        Self { queue }
+    }
+}
+
+impl Read for VmessGrpcEncryptedReader {
+    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+        let mut inner = self
+            .queue
+            .inner
+            .lock()
+            .map_err(|_| std::io::Error::other("VMess gRPC encrypted queue lock poisoned"))?;
+        while inner.bytes.is_empty() && !inner.closed {
+            inner =
+                self.queue.ready.wait(inner).map_err(|_| {
+                    std::io::Error::other("VMess gRPC encrypted queue wait poisoned")
+                })?;
+        }
+        if inner.bytes.is_empty() && inner.closed {
+            return Ok(0);
+        }
+        let read = buf.len().min(inner.bytes.len());
+        for slot in &mut buf[..read] {
+            *slot = inner.bytes.pop_front().expect("queue length checked");
+        }
+        Ok(read)
+    }
+}
+
+fn pop_grpc_hunk_payload(buffer: &mut Vec<u8>) -> Result<Option<Vec<u8>>, String> {
+    if buffer.len() < 5 {
+        return Ok(None);
+    }
+    if buffer[0] != 0 {
+        return Err("compressed gRPC hunk is not admitted by resident relay".to_owned());
+    }
+    let len = u32::from_be_bytes([buffer[1], buffer[2], buffer[3], buffer[4]]) as usize;
+    if buffer.len() < 5 + len {
+        return Ok(None);
+    }
+    let payload = grpc_hunk_payload(&buffer[5..5 + len])
+        .map_err(|err| format!("decode gRPC Hunk protobuf payload: {err}"))?;
+    buffer.drain(..5 + len);
+    Ok(Some(payload))
 }
 
 async fn relay_tcp_over_resident_tls_plain_async(
@@ -4312,6 +5351,19 @@ async fn websocket_handshake_over_resident_tls_async(
     validate_http_status(&response, 101).map_err(|err| format!("validate websocket upgrade: {err}"))
 }
 
+async fn httpupgrade_handshake_over_resident_tls_async(
+    client: &mut AsyncVlessTlsClient,
+    options: &HttpUpgradeOptions,
+) -> Result<(), String> {
+    let request = http_upgrade_request(options);
+    client
+        .write_plain_all(&request, "write HTTP Upgrade handshake")
+        .await?;
+    let response =
+        read_http_head_over_resident_tls_async(client, "read HTTP Upgrade handshake").await?;
+    validate_http_status(&response, 101).map_err(|err| format!("validate HTTP Upgrade: {err}"))
+}
+
 fn websocket_handshake_over_plain_stream(
     stream: &mut TcpStream,
     options: &HttpUpgradeOptions,
@@ -4323,6 +5375,19 @@ fn websocket_handshake_over_plain_stream(
     let response =
         read_http_head(stream).map_err(|err| format!("read websocket handshake: {err}"))?;
     validate_http_status(&response, 101).map_err(|err| format!("validate websocket upgrade: {err}"))
+}
+
+fn httpupgrade_handshake_over_plain_stream(
+    stream: &mut TcpStream,
+    options: &HttpUpgradeOptions,
+) -> Result<(), String> {
+    let request = http_upgrade_request(options);
+    stream
+        .write_all(&request)
+        .map_err(|err| format!("write HTTP Upgrade handshake: {err}"))?;
+    let response =
+        read_http_head(stream).map_err(|err| format!("read HTTP Upgrade handshake: {err}"))?;
+    validate_http_status(&response, 101).map_err(|err| format!("validate HTTP Upgrade: {err}"))
 }
 
 fn write_websocket_binary_frame_to_stream(

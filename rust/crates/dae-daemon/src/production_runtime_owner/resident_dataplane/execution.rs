@@ -124,6 +124,22 @@ pub(super) fn tcp_execution_descriptor(label: &str) -> RuntimeExecutionDescripto
         )
         .with_stream_wrapper("websocket")
         .with_transport_underlay("tcp"),
+        "async-proxy-httpupgrade-tls" => RuntimeExecutionDescriptor::new(
+            label,
+            "wrapped-stream-relay",
+            "stream-transport",
+            "tcp",
+        )
+        .with_stream_wrapper("httpupgrade")
+        .with_transport_underlay("tcp"),
+        "async-proxy-grpc-tls" => RuntimeExecutionDescriptor::new(
+            label,
+            "wrapped-stream-relay",
+            "stream-transport",
+            "tcp",
+        )
+        .with_stream_wrapper("grpc")
+        .with_transport_underlay("tcp"),
         "async-proxy-frame-tls" => {
             RuntimeExecutionDescriptor::new(label, "frame-stream-relay", "stream-transport", "tcp")
                 .with_stream_wrapper("frame-stream")
@@ -154,6 +170,22 @@ pub(super) fn tcp_execution_descriptor(label: &str) -> RuntimeExecutionDescripto
             "tcp",
         )
         .with_stream_wrapper("websocket")
+        .with_transport_underlay("tcp"),
+        "first-batch-httpupgrade-aead" => RuntimeExecutionDescriptor::new(
+            label,
+            "wrapped-stream-relay",
+            "stream-transport",
+            "tcp",
+        )
+        .with_stream_wrapper("httpupgrade")
+        .with_transport_underlay("tcp"),
+        "first-batch-grpc-aead" => RuntimeExecutionDescriptor::new(
+            label,
+            "wrapped-stream-relay",
+            "stream-transport",
+            "tcp",
+        )
+        .with_stream_wrapper("grpc")
         .with_transport_underlay("tcp"),
         "per-connection-thread-transitional" | "per-connection-thread-legacy" => {
             RuntimeExecutionDescriptor::new(
