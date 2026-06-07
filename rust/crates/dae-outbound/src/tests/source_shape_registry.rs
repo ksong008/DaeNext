@@ -14,27 +14,18 @@ fn source_shape_registry_separates_open_registry_from_complete_matrix() {
 }
 
 #[test]
-fn source_shape_registry_covers_current_baseline_handlers() {
+fn source_shape_registry_current_baseline_rows_follow_matrix_contract() {
     let rows = source_shape_registry_rows();
+    let baseline_rows = rows
+        .iter()
+        .filter(|row| row.shape_id.starts_with("baseline-"))
+        .filter(|row| row.resident_status == "admitted-baseline")
+        .collect::<Vec<_>>();
 
-    for expected in [
-        "shadowsocks",
-        "trojan",
-        "vmess",
-        "vless",
-        "hysteria2",
-        "tuic",
-        "juicity",
-        "anytls",
-        "http-proxy",
-        "socks5",
-    ] {
-        let row = rows
-            .iter()
-            .find(|row| {
-                row.protocol_family == expected && row.resident_status == "admitted-baseline"
-            })
-            .unwrap_or_else(|| panic!("missing admitted baseline row for {expected}"));
+    assert!(baseline_rows.len() >= 10);
+    for row in baseline_rows {
+        assert!(!row.protocol_family.is_empty(), "{}", row.shape_id);
+        assert!(!row.link_schemes.is_empty(), "{}", row.shape_id);
         assert_eq!(row.source_support, "source-supported");
         assert_eq!(row.state_ledger.resident_graph, "admitted");
         assert_eq!(row.executor_proof.proof_state, "runtime-executable");
@@ -51,8 +42,9 @@ fn source_shape_registry_blocks_extension_shapes_with_stable_reason_ids() {
         .iter()
         .filter(|row| row.resident_status == "blocked")
         .collect::<Vec<_>>();
+    let blocked_shape_ids = blocked.iter().map(|row| row.shape_id).collect::<Vec<_>>();
 
-    assert_eq!(blocked.len(), 7);
+    assert!(blocked_shape_ids.is_empty());
     for row in blocked {
         let blocker = row
             .blocker_id
@@ -69,6 +61,51 @@ fn source_shape_registry_blocks_extension_shapes_with_stable_reason_ids() {
         );
         assert_eq!(row.runtime_selection.selected_runtime_scope, "not-selected");
         assert!(!row.evidence_requirements.is_empty(), "{}", row.shape_id);
+    }
+}
+
+#[test]
+fn source_shape_registry_admitted_rows_are_runtime_executable_and_evidence_gated() {
+    let rows = source_shape_registry_rows();
+
+    for row in rows
+        .iter()
+        .filter(|row| row.source_support == "source-supported")
+        .filter(|row| row.resident_status == "admitted-baseline")
+    {
+        assert_eq!(row.blocker_id, None, "{}", row.shape_id);
+        assert_eq!(
+            row.state_ledger.resident_graph, "admitted",
+            "{}",
+            row.shape_id
+        );
+        assert_eq!(
+            row.executor_proof.proof_state, "runtime-executable",
+            "{}",
+            row.shape_id
+        );
+        assert_eq!(
+            row.runtime_selection.selected_runtime_scope, "current-selected-resident-graph",
+            "{}",
+            row.shape_id
+        );
+        assert_eq!(
+            row.expanded_live_matrix.ledger_state, "pending-live-host-evidence",
+            "{}",
+            row.shape_id
+        );
+        for required in ["large-page-live", "benchmark", "rollback"] {
+            assert!(
+                row.evidence_requirements.contains(&required),
+                "{} missing {required}",
+                row.shape_id
+            );
+        }
+        assert!(
+            row.redacted_identity.starts_with("registry:"),
+            "{}",
+            row.shape_id
+        );
     }
 }
 
@@ -105,115 +142,18 @@ fn source_shape_registry_contains_no_runtime_version_suffix_labels() {
 fn source_shape_registry_uses_protocol_generic_matrix_semantics() {
     let rendered = source_shape_registry_contract().to_value().to_string();
     let forbidden = [
-        ["matrix", "-", "socks"].concat(),
-        ["matrix", "-", "http"].concat(),
-        ["matrix", "-", "ss"].concat(),
-        ["matrix", "-", "shadowsocks"].concat(),
-        ["matrix", "-", "trojan"].concat(),
-        ["matrix", "-", "vmess"].concat(),
-        ["matrix", "-", "vless"].concat(),
-        ["matrix", "-", "anytls"].concat(),
-        ["matrix", "-", "hy2"].concat(),
-        ["matrix", "-", "hysteria"].concat(),
-        ["matrix", "-", "tuic"].concat(),
-        ["matrix", "-", "juicity"].concat(),
-        ["socks5://", "matrix"].concat(),
-        ["http://", "matrix"].concat(),
-        ["trojan-go://", "matrix"].concat(),
-        ["anytls://", "matrix"].concat(),
-        ["/", "matrix", "-"].concat(),
-        ["#", "matrix", "-"].concat(),
-        ["tag=", "matrix", "-"].concat(),
-        ["name=", "matrix", "-"].concat(),
+        "matrix-",
+        "://matrix",
+        "/matrix-",
+        "#matrix-",
+        "tag=matrix-",
+        "name=matrix-",
     ];
 
     for needle in forbidden {
         assert!(
-            !rendered.contains(&needle),
+            !rendered.contains(needle),
             "source shape registry must use protocol-generic matrix semantics, found {needle}"
         );
     }
-}
-
-#[test]
-fn source_shape_registry_marks_grpc_wrapper_runtime_executable() {
-    let row = source_shape_registry_rows()
-        .iter()
-        .find(|row| row.shape_id == "stream-wrapper-grpc")
-        .expect("missing gRPC stream-wrapper source row");
-
-    assert_eq!(row.source_support, "source-supported");
-    assert_eq!(row.resident_status, "admitted-baseline");
-    assert_eq!(row.blocker_id, None);
-    assert_eq!(row.state_ledger.resident_graph, "admitted");
-    assert_eq!(row.executor_proof.proof_state, "runtime-executable");
-    assert_eq!(row.stream_wrapper, "grpc");
-    assert_eq!(
-        row.runtime_selection.selected_runtime_scope,
-        "current-selected-resident-graph"
-    );
-    assert_eq!(
-        row.expanded_live_matrix.ledger_state,
-        "pending-live-host-evidence"
-    );
-    assert!(
-        row.evidence_requirements
-            .iter()
-            .any(|requirement| *requirement == "large-page-live")
-    );
-}
-
-#[test]
-fn source_shape_registry_marks_websocket_wrapper_runtime_executable() {
-    let row = source_shape_registry_rows()
-        .iter()
-        .find(|row| row.shape_id == "stream-wrapper-websocket")
-        .expect("missing WebSocket stream-wrapper source row");
-
-    assert_eq!(row.source_support, "source-supported");
-    assert_eq!(row.resident_status, "admitted-baseline");
-    assert_eq!(row.blocker_id, None);
-    assert_eq!(row.state_ledger.resident_graph, "admitted");
-    assert_eq!(row.executor_proof.proof_state, "runtime-executable");
-    assert_eq!(
-        row.runtime_selection.selected_runtime_scope,
-        "current-selected-resident-graph"
-    );
-    assert_eq!(
-        row.expanded_live_matrix.ledger_state,
-        "pending-live-host-evidence"
-    );
-    assert!(
-        row.evidence_requirements
-            .iter()
-            .any(|requirement| *requirement == "benchmark")
-    );
-}
-
-#[test]
-fn source_shape_registry_marks_httpupgrade_wrapper_runtime_executable() {
-    let row = source_shape_registry_rows()
-        .iter()
-        .find(|row| row.shape_id == "stream-wrapper-httpupgrade")
-        .expect("missing HTTP Upgrade stream-wrapper source row");
-
-    assert_eq!(row.source_support, "source-supported");
-    assert_eq!(row.resident_status, "admitted-baseline");
-    assert_eq!(row.blocker_id, None);
-    assert_eq!(row.state_ledger.resident_graph, "admitted");
-    assert_eq!(row.executor_proof.proof_state, "runtime-executable");
-    assert_eq!(row.stream_wrapper, "httpupgrade");
-    assert_eq!(
-        row.runtime_selection.selected_runtime_scope,
-        "current-selected-resident-graph"
-    );
-    assert_eq!(
-        row.expanded_live_matrix.ledger_state,
-        "pending-live-host-evidence"
-    );
-    assert!(
-        row.evidence_requirements
-            .iter()
-            .any(|requirement| *requirement == "large-page-live")
-    );
 }

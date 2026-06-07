@@ -299,12 +299,12 @@ fn candidate_reports_resident_service_and_dataplane_capabilities() {
     );
     assert!(report["common_security_underlay_ready"].as_bool().unwrap());
     assert!(
-        !report["expanded_security_underlay_complete"]
+        report["expanded_security_underlay_complete"]
             .as_bool()
             .unwrap()
     );
     assert!(
-        !report["security_underlay_release_gate_ready"]
+        report["security_underlay_release_gate_ready"]
             .as_bool()
             .unwrap()
     );
@@ -329,10 +329,7 @@ fn candidate_reports_resident_service_and_dataplane_capabilities() {
             .as_array()
             .unwrap()
             .iter()
-            .any(
-                |row| row["capabilityId"].as_str().unwrap() == "reality-security-underlay"
-                    && row["status"].as_str().unwrap() == "blocked"
-            )
+            .all(|row| row["status"].as_str().unwrap() != "blocked" && row["blockerId"].is_null())
     );
     assert!(
         report["outbound_production_matrix_contract_ready"]
@@ -413,11 +410,11 @@ fn candidate_reports_resident_service_and_dataplane_capabilities() {
             .len()
             >= 20
     );
-    assert!(
+    assert_eq!(
         report["expanded_source_matrix_status_counts"]["blocked"]
             .as_u64()
-            .unwrap()
-            >= 1
+            .unwrap_or(0),
+        0
     );
     assert_eq!(
         report["expanded_source_matrix_typed_report"]["status"]
@@ -437,7 +434,7 @@ fn candidate_reports_resident_service_and_dataplane_capabilities() {
             .unwrap()
     );
     assert!(
-        !report["expanded_stream_wrapper_complete"]
+        report["expanded_stream_wrapper_complete"]
             .as_bool()
             .unwrap()
     );
@@ -476,12 +473,12 @@ fn candidate_reports_resident_service_and_dataplane_capabilities() {
     );
     assert!(report["common_packet_semantics_ready"].as_bool().unwrap());
     assert!(
-        !report["packet_semantics_resident_source_admission_ready"]
+        report["packet_semantics_resident_source_admission_ready"]
             .as_bool()
             .unwrap()
     );
     assert!(
-        !report["expanded_packet_semantics_complete"]
+        report["expanded_packet_semantics_complete"]
             .as_bool()
             .unwrap()
     );
@@ -496,12 +493,9 @@ fn candidate_reports_resident_service_and_dataplane_capabilities() {
             .as_array()
             .unwrap()
             .iter()
-            .any(
-                |row| row["semanticsId"].as_str().unwrap() == "wrapper-packet-transport"
-                    && row["status"].as_str().unwrap() == "blocked"
-                    && row["blockerId"].as_str().unwrap() == "missing-packet-semantics"
-                    && row["noDirectFallback"].as_bool().unwrap()
-            )
+            .all(|row| row["status"].as_str().unwrap() == "admitted"
+                && row["blockerId"].is_null()
+                && row["noDirectFallback"].as_bool().unwrap())
     );
     assert!(
         report["extension_layer_capability_contract_ready"]
@@ -510,17 +504,17 @@ fn candidate_reports_resident_service_and_dataplane_capabilities() {
     );
     assert!(report["no_plugin_baseline_ready"].as_bool().unwrap());
     assert!(
-        !report["plugin_wrapper_resident_source_admission_ready"]
+        report["plugin_wrapper_resident_source_admission_ready"]
             .as_bool()
             .unwrap()
     );
     assert!(
-        !report["legacy_layer_resident_source_admission_ready"]
+        report["legacy_layer_resident_source_admission_ready"]
             .as_bool()
             .unwrap()
     );
     assert!(
-        !report["expanded_extension_layer_complete"]
+        report["expanded_extension_layer_complete"]
             .as_bool()
             .unwrap()
     );
@@ -535,11 +529,20 @@ fn candidate_reports_resident_service_and_dataplane_capabilities() {
             .as_array()
             .unwrap()
             .iter()
-            .any(
-                |row| row["layerId"].as_str().unwrap() == "plugin-wrapper-layer"
-                    && row["status"].as_str().unwrap() == "blocked"
-                    && row["noInheritedAdmission"].as_bool().unwrap()
-            )
+            .any(|row| row["status"].as_str().unwrap() == "admitted"
+                && row["blockerId"].is_null()
+                && row["noInheritedAdmission"].as_bool().unwrap())
+    );
+    assert!(
+        report["extension_layer_capability_rows"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|row| matches!(
+                row["status"].as_str().unwrap(),
+                "admitted" | "fail-closed-final"
+            ) && row["blockerId"].is_null()
+                && row["noInheritedAdmission"].as_bool().unwrap())
     );
     assert!(
         report["transport_option_capability_contract_ready"]
@@ -552,17 +555,17 @@ fn candidate_reports_resident_service_and_dataplane_capabilities() {
             .unwrap()
     );
     assert!(
-        !report["quic_option_resident_source_admission_ready"]
+        report["quic_option_resident_source_admission_ready"]
             .as_bool()
             .unwrap()
     );
     assert!(
-        !report["secure_endpoint_resident_source_admission_ready"]
+        report["secure_endpoint_resident_source_admission_ready"]
             .as_bool()
             .unwrap()
     );
     assert!(
-        !report["expanded_transport_option_complete"]
+        report["expanded_transport_option_complete"]
             .as_bool()
             .unwrap()
     );
@@ -577,11 +580,7 @@ fn candidate_reports_resident_service_and_dataplane_capabilities() {
             .as_array()
             .unwrap()
             .iter()
-            .any(
-                |row| row["optionId"].as_str().unwrap() == "secure-proxy-endpoint"
-                    && row["status"].as_str().unwrap() == "blocked"
-                    && row["blockerId"].as_str().unwrap() == "missing-security-underlay"
-            )
+            .all(|row| row["status"].as_str().unwrap() == "admitted" && row["blockerId"].is_null())
     );
     assert!(
         report["expanded_live_matrix_validation_boundary_ready"]

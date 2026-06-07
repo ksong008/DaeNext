@@ -262,15 +262,6 @@ const ADMITTED_STATE: ShapeStateLedger = ShapeStateLedger {
     go_free: "not-ready",
 };
 
-const BLOCKED_STATE: ShapeStateLedger = ShapeStateLedger {
-    source_shape: "source-supported",
-    parser: "covered-or-source-declared",
-    resident_graph: "blocked",
-    live: "blocked",
-    default_switch: "blocked",
-    go_free: "blocked",
-};
-
 const NOT_SOURCE_SUPPORTED_STATE: ShapeStateLedger = ShapeStateLedger {
     source_shape: "not-source-supported",
     parser: "rejected",
@@ -285,6 +276,16 @@ const ADMITTED_EXECUTOR_PROOF: ComponentExecutorProof = ComponentExecutorProof {
     stream_wrapper_factory: "proved",
     packet_semantics_factory: "proved",
     chain_executor: "single-graph-proved",
+    probe_executor: "proved",
+    reload_lifecycle: "proved",
+    proof_state: "runtime-executable",
+};
+
+const CHAIN_EXECUTOR_PROOF: ComponentExecutorProof = ComponentExecutorProof {
+    underlay_factory: "proved",
+    stream_wrapper_factory: "proved",
+    packet_semantics_factory: "proved",
+    chain_executor: "parent-connect-proved",
     probe_executor: "proved",
     reload_lifecycle: "proved",
     proof_state: "runtime-executable",
@@ -325,15 +326,37 @@ const BASE_CAPABILITY: CapabilityLedger = CapabilityLedger {
     secure_endpoint: "plain-or-native-underlay",
 };
 
-const BLOCKED_CAPABILITY: CapabilityLedger = CapabilityLedger {
-    graph_composition: "blocked-until-executor-proof",
-    security_underlay: "blocked-until-underlay-proof",
-    stream_wrapper: "blocked-until-wrapper-proof",
-    packet_semantics: "blocked-until-packet-proof",
-    plugin_wrapper: "blocked-until-wrapper-proof",
-    legacy_layer: "blocked-until-legacy-proof",
-    quic_option: "blocked-until-option-proof",
-    secure_endpoint: "blocked-until-underlay-proof",
+const PLUGIN_WRAPPER_CAPABILITY: CapabilityLedger = CapabilityLedger {
+    graph_composition: "single-graph-admitted",
+    security_underlay: "baseline-admitted",
+    stream_wrapper: "resident-simple-obfs-http",
+    packet_semantics: "tcp-stream-wrapper",
+    plugin_wrapper: "resident-simple-obfs-http",
+    legacy_layer: "none",
+    quic_option: "baseline-admitted",
+    secure_endpoint: "plain-or-native-underlay",
+};
+
+const CHAIN_CAPABILITY: CapabilityLedger = CapabilityLedger {
+    graph_composition: "parent-connect-chain-admitted",
+    security_underlay: "baseline-admitted",
+    stream_wrapper: "baseline-admitted",
+    packet_semantics: "tcp-first-batch-chain",
+    plugin_wrapper: "none",
+    legacy_layer: "none",
+    quic_option: "baseline-admitted",
+    secure_endpoint: "plain-or-native-underlay",
+};
+
+const LEGACY_IMPORT_CAPABILITY: CapabilityLedger = CapabilityLedger {
+    graph_composition: "single-graph-admitted",
+    security_underlay: "baseline-admitted",
+    stream_wrapper: "baseline-admitted",
+    packet_semantics: "baseline-admitted",
+    plugin_wrapper: "none",
+    legacy_layer: "legacy-import-normalizer",
+    quic_option: "baseline-admitted",
+    secure_endpoint: "plain-or-native-underlay",
 };
 
 const NOT_SUPPORTED_CAPABILITY: CapabilityLedger = CapabilityLedger {
@@ -355,14 +378,6 @@ const PENDING_LIVE_LEDGER: ExpandedLiveMatrixLedger = ExpandedLiveMatrixLedger {
     blocked_rows_reduce_pass_threshold: false,
 };
 
-const BLOCKED_LIVE_LEDGER: ExpandedLiveMatrixLedger = ExpandedLiveMatrixLedger {
-    ledger_state: "blocked-before-live",
-    live_host_required: true,
-    rollback_artifact_required: true,
-    large_page_evidence_required: true,
-    blocked_rows_reduce_pass_threshold: false,
-};
-
 const REJECTED_LIVE_LEDGER: ExpandedLiveMatrixLedger = ExpandedLiveMatrixLedger {
     ledger_state: "not-source-supported",
     live_host_required: false,
@@ -374,16 +389,6 @@ const REJECTED_LIVE_LEDGER: ExpandedLiveMatrixLedger = ExpandedLiveMatrixLedger 
 const BASE_RELEASE_GATE: ReleaseGateReconciliation = ReleaseGateReconciliation {
     current_baseline_agrees: true,
     expanded_source_agrees: false,
-    service_contract_agrees: false,
-    product_chain_agrees: false,
-    c9_switch_ready: false,
-    c10_final_ready: false,
-    rollback_artifact_ready: false,
-};
-
-const BLOCKED_RELEASE_GATE: ReleaseGateReconciliation = ReleaseGateReconciliation {
-    current_baseline_agrees: false,
-    expanded_source_agrees: true,
     service_contract_agrees: false,
     product_chain_agrees: false,
     c9_switch_ready: false,
@@ -519,124 +524,67 @@ const SOURCE_SHAPE_REGISTRY_ROWS: [SourceShapeRegistryRow; 23] = [
         "udp-over-stream-or-datagram",
         "registry:stream-wrapper-httpupgrade",
     ),
-    blocked_row(
+    admitted_row(
         "stream-wrapper-meek",
         "multi-protocol",
-        &["vless", "vmess"],
+        &["vless"],
         "standard-or-fingerprint-aware-tls",
         "meek",
         "udp-over-stream-or-datagram",
-        "missing-stream-wrapper",
-        &[
-            "wrapper-cache-lifecycle",
-            "cancellation",
-            "loopback",
-            "large-page-live",
-            "benchmark",
-            "rollback",
-        ],
         "registry:stream-wrapper-meek",
     ),
-    blocked_row(
+    admitted_row(
         "stream-wrapper-xhttp",
         "multi-protocol",
         &["vless"],
         "standard-or-fingerprint-aware-tls",
         "xhttp",
-        "udp-over-stream-or-datagram",
-        "missing-stream-wrapper",
-        &[
-            "wrapper-cache-lifecycle",
-            "cancellation",
-            "loopback",
-            "large-page-live",
-            "benchmark",
-            "rollback",
-        ],
+        "tcp-stream-h2-packet-up",
         "registry:stream-wrapper-xhttp",
     ),
-    blocked_row(
+    chain_admitted_row(
         "nested-chain-shape",
         "multi-protocol",
         &["chain"],
-        "composed",
-        "composed",
-        "composed",
-        "missing-chain-executor",
-        &[
-            "nested-graph-executor",
-            "no-endpoint-flattening",
-            "large-page-live",
-            "benchmark",
-            "rollback",
-        ],
+        "plain-parent-connect",
+        "baseline-or-plugin-wrapper",
+        "tcp-first-batch-chain",
         "registry:nested-chain-shape",
     ),
-    blocked_row(
+    plugin_wrapper_admitted_row(
         "plugin-wrapper-layer",
-        "multi-protocol",
-        &["ss", "shadowsocks"],
+        "shadowsocks",
+        &["ss"],
         "aead",
-        "plugin-wrapper",
-        "udp-over-stream-or-datagram",
-        "missing-stream-wrapper",
-        &[
-            "plugin-process-lifecycle",
-            "cache-cleanup",
-            "large-page-live",
-            "benchmark",
-            "rollback",
-        ],
+        "simple-obfs-http",
+        "tcp-stream-wrapper",
         "registry:plugin-wrapper-layer",
     ),
-    blocked_row(
+    legacy_import_admitted_row(
         "legacy-layer-shape",
-        "multi-protocol",
-        &["ss", "shadowsocks", "vmess"],
-        "legacy-security",
-        "legacy-obfs",
+        "vmess",
+        &["vmess"],
+        "aead",
+        "baseline-admitted",
         "udp-over-stream-or-datagram",
-        "missing-security-underlay",
-        &[
-            "encryption-auth-tests",
-            "tcp-udp-live",
-            "benchmark",
-            "rollback",
-        ],
         "registry:legacy-layer-shape",
     ),
-    blocked_row(
+    admitted_row(
         "quic-option-surface",
         "quic-family",
         &["hysteria2", "hy2", "tuic", "juicity"],
         "quic-tls",
         "quic-stream",
         "quic-datagram-or-stream",
-        "missing-benchmark-evidence",
-        &[
-            "handshake",
-            "packet-relay",
-            "congestion-option",
-            "cleanup",
-            "benchmark",
-            "large-page-live",
-            "rollback",
-        ],
         "registry:quic-option-surface",
     ),
-    blocked_row(
+    admitted_row(
         "secure-endpoint-capability",
         "proxy-endpoint",
         &["https"],
         "standard-tls",
         "none",
         "protocol-closed",
-        "missing-security-underlay",
-        &[
-            "generic-underlay-admission",
-            "large-page-connect-live",
-            "rollback",
-        ],
         "registry:secure-endpoint-capability",
     ),
     not_supported_row(
@@ -706,15 +654,13 @@ const fn admitted_row(
     }
 }
 
-const fn blocked_row(
+const fn plugin_wrapper_admitted_row(
     shape_id: &'static str,
     protocol_family: &'static str,
     link_schemes: &'static [&'static str],
     security_underlay: &'static str,
     stream_wrapper: &'static str,
     packet_semantics: &'static str,
-    blocker_id: &'static str,
-    evidence_requirements: &'static [&'static str],
     redacted_identity: &'static str,
 ) -> SourceShapeRegistryRow {
     SourceShapeRegistryRow {
@@ -726,20 +672,90 @@ const fn blocked_row(
         security_underlay,
         stream_wrapper,
         packet_semantics,
-        chain_shape: "single-or-composed-graph",
-        policy_surface: "expanded-ledger-only-until-executor-proof",
-        reload_lifecycle: "requires-proof",
-        parser_coverage: "covered-or-source-declared",
-        resident_status: "blocked",
-        blocker_id: Some(blocker_id),
-        evidence_requirements,
+        chain_shape: "single-graph",
+        policy_surface: "selected-runtime-plus-expanded-ledger",
+        reload_lifecycle: "drop-on-graph-diff-or-runtime-stop",
+        parser_coverage: "covered",
+        resident_status: "admitted-baseline",
+        blocker_id: None,
+        evidence_requirements: &["large-page-live", "benchmark", "rollback"],
         redacted_identity,
-        state_ledger: BLOCKED_STATE,
-        executor_proof: BLOCKED_EXECUTOR_PROOF,
-        runtime_selection: BLOCKED_RUNTIME_SELECTION,
-        capability: BLOCKED_CAPABILITY,
-        expanded_live_matrix: BLOCKED_LIVE_LEDGER,
-        release_gate: BLOCKED_RELEASE_GATE,
+        state_ledger: ADMITTED_STATE,
+        executor_proof: ADMITTED_EXECUTOR_PROOF,
+        runtime_selection: ADMITTED_RUNTIME_SELECTION,
+        capability: PLUGIN_WRAPPER_CAPABILITY,
+        expanded_live_matrix: PENDING_LIVE_LEDGER,
+        release_gate: BASE_RELEASE_GATE,
+    }
+}
+
+const fn chain_admitted_row(
+    shape_id: &'static str,
+    protocol_family: &'static str,
+    link_schemes: &'static [&'static str],
+    security_underlay: &'static str,
+    stream_wrapper: &'static str,
+    packet_semantics: &'static str,
+    redacted_identity: &'static str,
+) -> SourceShapeRegistryRow {
+    SourceShapeRegistryRow {
+        shape_id,
+        source_support: "source-supported",
+        protocol_family,
+        link_schemes,
+        endpoint: "host-port",
+        security_underlay,
+        stream_wrapper,
+        packet_semantics,
+        chain_shape: "parent-connect-chain",
+        policy_surface: "selected-runtime-plus-expanded-ledger",
+        reload_lifecycle: "drop-on-graph-diff-or-runtime-stop",
+        parser_coverage: "covered",
+        resident_status: "admitted-baseline",
+        blocker_id: None,
+        evidence_requirements: &["large-page-live", "benchmark", "rollback"],
+        redacted_identity,
+        state_ledger: ADMITTED_STATE,
+        executor_proof: CHAIN_EXECUTOR_PROOF,
+        runtime_selection: ADMITTED_RUNTIME_SELECTION,
+        capability: CHAIN_CAPABILITY,
+        expanded_live_matrix: PENDING_LIVE_LEDGER,
+        release_gate: BASE_RELEASE_GATE,
+    }
+}
+
+const fn legacy_import_admitted_row(
+    shape_id: &'static str,
+    protocol_family: &'static str,
+    link_schemes: &'static [&'static str],
+    security_underlay: &'static str,
+    stream_wrapper: &'static str,
+    packet_semantics: &'static str,
+    redacted_identity: &'static str,
+) -> SourceShapeRegistryRow {
+    SourceShapeRegistryRow {
+        shape_id,
+        source_support: "source-supported",
+        protocol_family,
+        link_schemes,
+        endpoint: "host-port",
+        security_underlay,
+        stream_wrapper,
+        packet_semantics,
+        chain_shape: "single-graph",
+        policy_surface: "selected-runtime-plus-expanded-ledger",
+        reload_lifecycle: "drop-on-graph-diff-or-runtime-stop",
+        parser_coverage: "covered",
+        resident_status: "admitted-baseline",
+        blocker_id: None,
+        evidence_requirements: &["large-page-live", "benchmark", "rollback"],
+        redacted_identity,
+        state_ledger: ADMITTED_STATE,
+        executor_proof: ADMITTED_EXECUTOR_PROOF,
+        runtime_selection: ADMITTED_RUNTIME_SELECTION,
+        capability: LEGACY_IMPORT_CAPABILITY,
+        expanded_live_matrix: PENDING_LIVE_LEDGER,
+        release_gate: BASE_RELEASE_GATE,
     }
 }
 

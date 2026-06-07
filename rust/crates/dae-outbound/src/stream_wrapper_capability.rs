@@ -66,7 +66,7 @@ pub fn stream_wrapper_capability_contract() -> StreamWrapperCapabilityContract {
         rows: stream_wrapper_capability_rows(),
         websocket_wss_loopback_ready: true,
         resident_source_admission_ready: true,
-        expanded_stream_wrapper_complete: false,
+        expanded_stream_wrapper_complete: true,
     }
 }
 
@@ -117,34 +117,32 @@ const STREAM_WRAPPER_CAPABILITY_ROWS: [StreamWrapperCapabilityRow; 5] = [
         blocker_id: None,
         evidence_requirements: &["large-page-live", "benchmark", "rollback"],
     },
-    blocked_row("meek-wrapper", "meek", "missing-stream-wrapper"),
-    blocked_row("xhttp-wrapper", "xhttp", "missing-stream-wrapper"),
-];
-
-const fn blocked_row(
-    wrapper_id: &'static str,
-    wrapper: &'static str,
-    blocker_id: &'static str,
-) -> StreamWrapperCapabilityRow {
     StreamWrapperCapabilityRow {
-        wrapper_id,
-        wrapper,
-        status: "blocked",
-        source_admission: "blocked",
-        provider: "pending",
-        security_underlay: "pending",
-        packet_semantics: "pending",
-        cache_lifecycle: "pending",
-        cancellation: "pending",
-        reload_cleanup: "pending",
-        blocker_id: Some(blocker_id),
-        evidence_requirements: &[
-            "loopback",
-            "cancellation",
-            "reload-cleanup",
-            "large-page-live",
-            "benchmark",
-            "rollback",
-        ],
-    }
-}
+        wrapper_id: "meek-wrapper",
+        wrapper: "meek",
+        status: "resident-live-final",
+        source_admission: "admitted",
+        provider: "resident-meek-polling",
+        security_underlay: "standard-or-fingerprint-aware-tls",
+        packet_semantics: "tcp-stream-meek-polling",
+        cache_lifecycle: "per-session",
+        cancellation: "session-close",
+        reload_cleanup: "drop-on-graph-diff-or-runtime-stop",
+        blocker_id: None,
+        evidence_requirements: &["large-page-live", "benchmark", "rollback"],
+    },
+    StreamWrapperCapabilityRow {
+        wrapper_id: "xhttp-wrapper",
+        wrapper: "xhttp",
+        status: "resident-live-final",
+        source_admission: "admitted",
+        provider: "resident-xhttp-h2-packet-up",
+        security_underlay: "standard-or-fingerprint-aware-tls",
+        packet_semantics: "tcp-stream-h2-packet-up",
+        cache_lifecycle: "per-session",
+        cancellation: "session-close",
+        reload_cleanup: "drop-on-graph-diff-or-runtime-stop",
+        blocker_id: None,
+        evidence_requirements: &["large-page-live", "benchmark", "rollback"],
+    },
+];
