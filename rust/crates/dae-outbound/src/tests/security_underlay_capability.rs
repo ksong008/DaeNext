@@ -7,8 +7,8 @@ fn security_underlay_capability_admits_common_underlays_only() {
     assert_eq!(contract.schema, "security-underlay-capability");
     assert_eq!(contract.schema_version, 1);
     assert!(contract.common_security_underlay_ready);
-    assert!(!contract.expanded_security_underlay_complete);
-    assert!(!contract.release_gate_ready);
+    assert!(contract.expanded_security_underlay_complete);
+    assert!(contract.release_gate_ready);
 
     for expected in [
         "standard-tls-common-underlay",
@@ -29,23 +29,24 @@ fn security_underlay_capability_admits_common_underlays_only() {
 }
 
 #[test]
-fn security_underlay_capability_blocks_deferred_or_unsafe_variants() {
+fn security_underlay_capability_closes_non_xhttp_boundaries() {
     let contract = security_underlay_capability_contract();
 
-    for expected in [
-        ("reality-security-underlay", "missing-security-underlay"),
-        ("explicit-insecure-live-variant", "missing-live-evidence"),
-        ("unknown-fingerprint-request", "missing-security-underlay"),
-    ] {
-        let row = contract
-            .rows
-            .iter()
-            .find(|row| row.capability_id == expected.0)
-            .unwrap_or_else(|| panic!("missing blocked underlay row {}", expected.0));
-        assert_eq!(row.status, "blocked");
-        assert_eq!(row.blocker_id, Some(expected.1));
-        assert_eq!(row.executor_proof, "fail-closed-pending-evidence");
+    for row in contract.rows {
+        assert!(
+            matches!(row.status, "admitted" | "fail-closed-final"),
+            "{}",
+            row.capability_id
+        );
+        assert_eq!(row.blocker_id, None, "{}", row.capability_id);
         assert!(row.no_silent_fallback);
+        assert!(!row.evidence_requirements.is_empty());
+        if row.status == "fail-closed-final" {
+            assert_eq!(row.executor_proof, "negative-boundary-proved");
+            assert!(row.evidence_requirements.contains(&"negative-fixture"));
+        } else {
+            assert_eq!(row.executor_proof, "runtime-executable");
+        }
     }
 }
 
@@ -63,10 +64,11 @@ fn security_underlay_capability_keeps_fingerprint_away_from_rustls_fallback() {
 
     let unknown = rows
         .iter()
-        .find(|row| row.capability_id == "unknown-fingerprint-request")
+        .find(|row| row.capability_id == "fingerprint-registry-boundary")
         .unwrap();
-    assert_eq!(unknown.status, "blocked");
-    assert_eq!(unknown.provider, "fail-closed");
+    assert_eq!(unknown.status, "fail-closed-final");
+    assert_eq!(unknown.provider, "resident-fingerprint-policy");
+    assert_eq!(unknown.blocker_id, None);
 }
 
 #[test]

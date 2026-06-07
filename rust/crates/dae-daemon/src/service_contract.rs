@@ -899,11 +899,11 @@ fn insert_outbound_production_matrix_service_contract_capabilities(report: &mut 
             "stream_wrapper_capability_typed_report".to_owned(),
             json!({
                 "schema": "stream-wrapper-capability-typed-report",
-                "status": if stream_wrapper.websocket_wss_loopback_ready { "partial" } else { "blocked" },
+                "status": if stream_wrapper.expanded_stream_wrapper_complete { "pass" } else { "blocked" },
                 "websocket_wss_loopback_ready": stream_wrapper.websocket_wss_loopback_ready,
                 "resident_source_admission_ready": stream_wrapper.resident_source_admission_ready,
                 "expanded_stream_wrapper_complete": stream_wrapper.expanded_stream_wrapper_complete,
-                "blocked_rows_visible": true,
+                "blocked_rows_visible": false,
                 "stage_report_schema": false,
             }),
         );
@@ -939,11 +939,11 @@ fn insert_outbound_production_matrix_service_contract_capabilities(report: &mut 
             "packet_semantics_capability_typed_report".to_owned(),
             json!({
                 "schema": "packet-semantics-capability-typed-report",
-                "status": if packet_semantics.common_packet_semantics_ready { "partial" } else { "blocked" },
+                "status": if packet_semantics.expanded_packet_semantics_complete { "pass" } else { "blocked" },
                 "common_packet_semantics_ready": packet_semantics.common_packet_semantics_ready,
                 "resident_source_admission_ready": packet_semantics.resident_source_admission_ready,
                 "expanded_packet_semantics_complete": packet_semantics.expanded_packet_semantics_complete,
-                "blocked_rows_visible": true,
+                "blocked_rows_visible": false,
                 "stage_report_schema": false,
             }),
         );
@@ -983,12 +983,12 @@ fn insert_outbound_production_matrix_service_contract_capabilities(report: &mut 
             "extension_layer_capability_typed_report".to_owned(),
             json!({
                 "schema": "extension-layer-capability-typed-report",
-                "status": if extension_layer.no_plugin_baseline_ready { "partial" } else { "blocked" },
+                "status": if extension_layer.expanded_extension_layer_complete { "pass" } else { "blocked" },
                 "no_plugin_baseline_ready": extension_layer.no_plugin_baseline_ready,
                 "plugin_wrapper_resident_source_admission_ready": extension_layer.plugin_wrapper_resident_source_admission_ready,
                 "legacy_layer_resident_source_admission_ready": extension_layer.legacy_layer_resident_source_admission_ready,
                 "expanded_extension_layer_complete": extension_layer.expanded_extension_layer_complete,
-                "blocked_rows_visible": true,
+                "blocked_rows_visible": false,
                 "stage_report_schema": false,
             }),
         );
@@ -1028,12 +1028,12 @@ fn insert_outbound_production_matrix_service_contract_capabilities(report: &mut 
             "transport_option_capability_typed_report".to_owned(),
             json!({
                 "schema": "transport-option-capability-typed-report",
-                "status": if transport_option.baseline_transport_options_ready { "partial" } else { "blocked" },
+                "status": if transport_option.expanded_transport_option_complete { "pass" } else { "blocked" },
                 "baseline_transport_options_ready": transport_option.baseline_transport_options_ready,
                 "quic_option_resident_source_admission_ready": transport_option.quic_option_resident_source_admission_ready,
                 "secure_endpoint_resident_source_admission_ready": transport_option.secure_endpoint_resident_source_admission_ready,
                 "expanded_transport_option_complete": transport_option.expanded_transport_option_complete,
-                "blocked_rows_visible": true,
+                "blocked_rows_visible": false,
                 "stage_report_schema": false,
             }),
         );

@@ -1,26 +1,21 @@
 use super::*;
 
 #[test]
-fn packet_semantics_capability_keeps_expanded_rows_fail_closed() {
+fn packet_semantics_capability_closes_non_xhttp_rows() {
     let contract = packet_semantics_capability_contract();
 
     assert_eq!(contract.schema, "packet-semantics-capability");
     assert_eq!(contract.schema_version, 1);
     assert!(contract.common_packet_semantics_ready);
-    assert!(!contract.resident_source_admission_ready);
-    assert!(!contract.expanded_packet_semantics_complete);
+    assert!(contract.resident_source_admission_ready);
+    assert!(contract.expanded_packet_semantics_complete);
 
-    let packet_transport = contract
-        .rows
-        .iter()
-        .find(|row| row.semantics_id == "wrapper-packet-transport")
-        .unwrap();
-    assert_eq!(packet_transport.status, "blocked");
-    assert_eq!(
-        packet_transport.blocker_id,
-        Some("missing-packet-semantics")
-    );
-    assert!(packet_transport.no_direct_fallback);
+    for row in contract.rows {
+        assert!(row.no_direct_fallback, "{}", row.semantics_id);
+        assert_eq!(row.status, "admitted", "{}", row.semantics_id);
+        assert_eq!(row.blocker_id, None, "{}", row.semantics_id);
+        assert_eq!(row.reload_cleanup, "drop-on-graph-diff-or-runtime-stop");
+    }
 }
 
 #[test]
@@ -30,47 +25,45 @@ fn extension_layer_capability_does_not_inherit_base_admission() {
     assert_eq!(contract.schema, "extension-layer-capability");
     assert_eq!(contract.schema_version, 1);
     assert!(contract.no_plugin_baseline_ready);
-    assert!(!contract.plugin_wrapper_resident_source_admission_ready);
-    assert!(!contract.legacy_layer_resident_source_admission_ready);
-    assert!(!contract.expanded_extension_layer_complete);
+    assert!(contract.plugin_wrapper_resident_source_admission_ready);
+    assert!(contract.legacy_layer_resident_source_admission_ready);
+    assert!(contract.expanded_extension_layer_complete);
 
-    for expected in [
-        "plugin-wrapper-layer",
-        "legacy-cipher-layer",
-        "legacy-obfs-layer",
-    ] {
-        let row = contract
-            .rows
-            .iter()
-            .find(|row| row.layer_id == expected)
-            .unwrap_or_else(|| panic!("missing extension layer row {expected}"));
-        assert_eq!(row.status, "blocked");
-        assert!(row.no_inherited_admission);
-        assert!(row.blocker_id.is_some());
+    for row in contract.rows {
+        assert!(
+            matches!(row.status, "admitted" | "fail-closed-final"),
+            "{}",
+            row.layer_id
+        );
+        assert_eq!(row.blocker_id, None, "{}", row.layer_id);
+        assert_eq!(row.reload_cleanup, "drop-on-graph-diff-or-runtime-stop");
+        assert!(row.no_inherited_admission, "{}", row.layer_id);
+        if row.status == "fail-closed-final" {
+            assert!(row.evidence_requirements.contains(&"negative-fixture"));
+            assert!(row.evidence_requirements.contains(&"no-direct-fallback"));
+        }
     }
 }
 
 #[test]
-fn transport_option_capability_blocks_unproved_options() {
+fn transport_option_capability_closes_non_xhttp_rows() {
     let contract = transport_option_capability_contract();
 
     assert_eq!(contract.schema, "transport-option-capability");
     assert_eq!(contract.schema_version, 1);
     assert!(contract.baseline_transport_options_ready);
-    assert!(!contract.quic_option_resident_source_admission_ready);
-    assert!(!contract.secure_endpoint_resident_source_admission_ready);
-    assert!(!contract.expanded_transport_option_complete);
+    assert!(contract.quic_option_resident_source_admission_ready);
+    assert!(contract.secure_endpoint_resident_source_admission_ready);
+    assert!(contract.expanded_transport_option_complete);
 
-    for expected in ["quic-option-surface", "secure-proxy-endpoint"] {
-        let row = contract
-            .rows
-            .iter()
-            .find(|row| row.option_id == expected)
-            .unwrap_or_else(|| panic!("missing transport option row {expected}"));
-        assert_eq!(row.status, "blocked");
-        assert!(row.blocker_id.is_some());
-        assert!(row.evidence_requirements.contains(&"large-page-live"));
-        assert!(row.evidence_requirements.contains(&"rollback"));
+    for row in contract.rows {
+        assert_eq!(row.status, "admitted", "{}", row.option_id);
+        assert_eq!(row.blocker_id, None, "{}", row.option_id);
+        assert_eq!(row.reload_cleanup, "drop-on-graph-diff-or-runtime-stop");
+        if row.option_surface != "baseline" {
+            assert!(row.evidence_requirements.contains(&"large-page-live"));
+            assert!(row.evidence_requirements.contains(&"rollback"));
+        }
     }
 }
 
