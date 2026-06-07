@@ -120,32 +120,32 @@ pub fn run_client_integration_smoke(
 ) -> Result<JuicityClientIntegrationReport, OutboundError> {
     if options.auth_iterations == 0 {
         return Err(bad_client_integration(
-            "stage128 --auth-iters must be greater than zero",
+            "Juicity client integration --auth-iters must be greater than zero",
         ));
     }
     if options.transport_iterations == 0 {
         return Err(bad_client_integration(
-            "stage128 --transport-iters must be greater than zero",
+            "Juicity client integration --transport-iters must be greater than zero",
         ));
     }
     if options.stream_iterations == 0 {
         return Err(bad_client_integration(
-            "stage128 --stream-iters must be greater than zero",
+            "Juicity client integration --stream-iters must be greater than zero",
         ));
     }
     if options.congestion_iterations == 0 {
         return Err(bad_client_integration(
-            "stage128 --congestion-iters must be greater than zero",
+            "Juicity client integration --congestion-iters must be greater than zero",
         ));
     }
     if options.max_in_flight_streams == 0 {
         return Err(bad_client_integration(
-            "stage128 --max-in-flight-streams must be greater than zero",
+            "Juicity client integration --max-in-flight-streams must be greater than zero",
         ));
     }
     if options.auth_targets.is_empty() {
         return Err(bad_client_integration(
-            "stage128 auth target list cannot be empty",
+            "Juicity client integration auth target list cannot be empty",
         ));
     }
 
@@ -237,7 +237,7 @@ fn build_client_integration_report(
         + options.congestion_iterations;
     if total_exchange_count == 0 {
         return Err(bad_client_integration(
-            "stage128 total exchange count cannot be zero",
+            "Juicity client integration total exchange count cannot be zero",
         ));
     }
 

@@ -10,8 +10,8 @@ use super::quic_loopback::{
 };
 use super::underlay::{Hysteria2UnderlayContract, underlay_contract};
 
-pub const DEFAULT_TRUE_QUIC_LINK: &str = "hysteria2://stage130-auth:stage130-pass@stage130.example:443,8443-8444?insecure=1&sni=localhost&maxTx=1048576&maxRx=2097152#stage130-hy2";
-pub const DEFAULT_TRUE_QUIC_SUBSCRIPTION_TAG: &str = "stage130-sub";
+pub const DEFAULT_TRUE_QUIC_LINK: &str = "hysteria2://hysteria2-auth:hysteria2-pass@hysteria2-loopback.example:443,8443-8444?insecure=1&sni=localhost&maxTx=1048576&maxRx=2097152#hysteria2-loopback";
+pub const DEFAULT_TRUE_QUIC_SUBSCRIPTION_TAG: &str = "hysteria2-loopback-subscription";
 pub const DEFAULT_TRUE_QUIC_UNDERLAY_MARK: u32 = 130;
 pub const DEFAULT_TRUE_QUIC_UDP_HOP_INTERVAL_MS: u64 = 30_000;
 pub const DEFAULT_TRUE_QUIC_PORT_HOP_ITERATIONS: usize = 4;
@@ -87,7 +87,7 @@ pub fn run_true_quic_dataplane_smoke(
     let start = Instant::now();
     if options.udp_hop_interval_ms == 0 {
         return Err(bad_dataplane(
-            "stage130 UDP hop interval must be greater than zero",
+            "Hysteria2 UDP hop interval must be greater than zero",
         ));
     }
     let link = Hysteria2Link::parse(&options.link)?;
@@ -95,7 +95,7 @@ pub fn run_true_quic_dataplane_smoke(
     let node = chain
         .nodes
         .first()
-        .ok_or_else(|| bad_dataplane("stage130 Hysteria2 link chain has no nodes"))?;
+        .ok_or_else(|| bad_dataplane("Hysteria2 link chain has no nodes"))?;
     let underlay = underlay_contract(
         "tcp",
         &link.server,
@@ -196,7 +196,7 @@ fn parse_hysteria2_chain(raw: &str) -> Result<LinkParseResult, OutboundError> {
     let chain = parse_link_chain(raw)?;
     if chain.property_protocol != "hysteria2" {
         return Err(bad_dataplane(format!(
-            "stage130 expected hysteria2 property protocol, got {}",
+            "expected hysteria2 property protocol, got {}",
             chain.property_protocol
         )));
     }

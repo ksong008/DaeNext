@@ -65,6 +65,7 @@ mod dataplane_vmess;
 mod group_policy;
 mod matrix_extension_capability;
 mod production_matrix;
+mod protocol_fixture_semantics;
 mod protocol_modern;
 mod protocol_shadowsocks_trojan;
 mod protocol_socks_http;

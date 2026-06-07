@@ -18,7 +18,7 @@ pub(super) fn run_tuic_contract() -> RunnerOutput {
     RunnerOutput::ok(format!(
         "{}\n",
         json!({
-            "name": "stage15-tuic-native-optin",
+            "name": "tuic-native-optin",
             "default_go_path": tuic::contract::DEFAULT_GO_PATH,
             "rust_adapter_mode": tuic::contract::ADAPTER_MODE,
             "protocol_scope": tuic::contract::PROTOCOL_SCOPE,

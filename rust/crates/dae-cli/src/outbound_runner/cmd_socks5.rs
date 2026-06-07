@@ -21,7 +21,7 @@ pub(super) fn run_socks5_contract() -> RunnerOutput {
     RunnerOutput::ok(format!(
         "{}\n",
         json!({
-            "name": "stage15-socks5-native-optin",
+            "name": "socks5-native-optin",
             "default_go_path": socks5::contract::DEFAULT_GO_PATH,
             "rust_adapter_mode": socks5::contract::ADAPTER_MODE,
             "protocol_scope": socks5::contract::PROTOCOL_SCOPE,

@@ -13,12 +13,12 @@ import (
 )
 
 type fixture struct {
-	Name       string   `json:"name"`
-	Stage      string   `json:"stage"`
-	Source     []string `json:"source"`
-	ServerName string   `json:"server_name"`
-	ALPN       []string `json:"alpn"`
-	Samples    []sample `json:"samples"`
+	Name          string   `json:"name"`
+	ProfileFamily string   `json:"profile_family"`
+	Source        []string `json:"source"`
+	ServerName    string   `json:"server_name"`
+	ALPN          []string `json:"alpn"`
+	Samples       []sample `json:"samples"`
 }
 
 type sample struct {
@@ -49,7 +49,7 @@ type profile struct {
 }
 
 func main() {
-	serverName := "stage139-utls.example"
+	serverName := "utls-profiles.example"
 	alpn := []string{"h2", "http/1.1"}
 	names := []string{
 		"chrome_102",
@@ -60,10 +60,10 @@ func main() {
 		"android_11_okhttp",
 	}
 	out := fixture{
-		Name:       "stage139-go-utls-clienthello-profile-fixture",
-		Stage:      "stage139",
-		ServerName: serverName,
-		ALPN:       alpn,
+		Name:          "utls-clienthello-profile-fixture",
+		ProfileFamily: "utls-clienthello",
+		ServerName:    serverName,
+		ALPN:          alpn,
 		Source: []string{
 			"/root/project/outbound/transport/tls/utls.go",
 			"/root/project/outbound/transport/tls/tls.go",

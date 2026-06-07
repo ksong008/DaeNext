@@ -4,7 +4,7 @@ use std::time::Instant;
 use dae_outbound::shadowsocks::{ShadowsocksLink, ShadowsocksMetadata, ss2022};
 
 fn main() {
-    let iters = std::env::var("DAE_STAGE15_SHADOWSOCKS_BENCH_ITERS")
+    let iters = std::env::var("DAE_SHADOWSOCKS_NATIVE_OPTIN_BENCH_ITERS")
         .ok()
         .and_then(|value| value.parse::<u64>().ok())
         .unwrap_or(200_000);

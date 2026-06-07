@@ -96,7 +96,7 @@
       "network": "udp"
     }
   ],
-  "name": "stage15-socks5-native-optin",
+  "name": "socks5-native-optin",
   "protocol_scope": [
     "socks5"
   ],

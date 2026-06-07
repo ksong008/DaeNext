@@ -7,7 +7,7 @@ use super::*;
 
 #[test]
 fn stage141_synthetic_reality_utls_raw_mutation_preserves_profiles() {
-    let fixture = fixture("outbound/protocol/stage139_go_utls_clienthello_profile.json");
+    let fixture = fixture("outbound/protocol/utls_clienthello_profile.json");
     let samples = fixture["samples"].as_array().unwrap();
     let mut report_count = 0;
     for sample in samples {

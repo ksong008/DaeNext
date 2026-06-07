@@ -4,7 +4,7 @@ use std::time::Instant;
 use dae_outbound::socks5::{Socks5Address, handshake, udp_packet};
 
 fn main() {
-    let iters = std::env::var("DAE_STAGE15_BENCH_ITERS")
+    let iters = std::env::var("DAE_SOCKS5_NATIVE_OPTIN_BENCH_ITERS")
         .ok()
         .and_then(|value| value.parse::<u64>().ok())
         .unwrap_or(200_000);

@@ -75,6 +75,7 @@ pub use source_shape_registry::{
     CapabilityLedger, ComponentExecutorProof, ExpandedLiveMatrixLedger, ReleaseGateReconciliation,
     RuntimeSelectionLedger, ScopedExpandedSourceMatrixEvidence, ShapeStateLedger,
     SourceShapeRegistryContract, SourceShapeRegistryRow, capability_reason_taxonomy,
+    official_common_fixture_requirements, official_common_source_shape_ids,
     source_shape_registry_contract, source_shape_registry_rows,
 };
 pub use stream_wrapper_capability::{

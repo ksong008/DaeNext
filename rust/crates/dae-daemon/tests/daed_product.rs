@@ -59,6 +59,19 @@ fn assert_protocol_matrix_source_uses_generic_semantics(source: &str) {
             "protocol matrix source fixtures must use protocol-generic semantics, found {needle}"
         );
     }
+    for digit in '0'..='9' {
+        let needle = format!("{}{}", "stage", digit);
+        assert!(
+            !source.contains(&needle),
+            "protocol matrix source fixtures must not use staged semantics, found {needle}"
+        );
+    }
+    for needle in [["#", "stage"].concat(), ["stage", "-"].concat()] {
+        assert!(
+            !source.contains(&needle),
+            "protocol matrix source fixtures must not use staged semantics, found {needle}"
+        );
+    }
 }
 
 #[test]
@@ -408,8 +421,8 @@ routing {
 }
 
 #[test]
-fn daed_resident_adapter_matrix_reports_fail_closed_selected_node() {
-    let temp = temp_dir("resident-adapter-matrix-blocked");
+fn daed_resident_adapter_matrix_reports_shadowsocks_2022_admitted() {
+    let temp = temp_dir("resident-adapter-admitted-cipher-family");
     let config = temp.join("config.dae");
     fs::write(
         &config,
@@ -421,7 +434,7 @@ global {
   mptcp: false
 }
 node {
-  ss_live: 'ss://2022-blake3-aes-128-gcm:MTIzNDU2Nzg5MDEyMzQ1Ng==@203.0.113.10:8388#ss2022'
+  ss_live: 'ss://2022-blake3-aes-128-gcm:MTIzNDU2Nzg5MDEyMzQ1Ng==@203.0.113.10:8388'
 }
 group {
   proxy {
@@ -449,52 +462,35 @@ routing {
         String::from_utf8_lossy(&output.stderr)
     );
     let report: Value = serde_json::from_slice(&output.stdout).unwrap();
-    assert_eq!(report["status"].as_str().unwrap(), "blocked");
+    assert_eq!(report["status"].as_str().unwrap(), "admitted");
     assert!(report["full_matrix_open"].as_bool().unwrap());
     assert_current_config_matrix_scope_contract(&report);
-    assert!(!report["planner_admitted"].as_bool().unwrap());
+    assert!(report["planner_admitted"].as_bool().unwrap());
     assert!(report["selected_node_fail_closed"].as_bool().unwrap());
-    assert!(
-        report["planner_error"]
+    assert!(report.get("planner_error").is_none());
+    assert_eq!(
+        report["default_proxy"]["security"].as_str().unwrap(),
+        "aead-2022"
+    );
+    assert_eq!(
+        report["default_proxy"]["executableGraph"]["packetSemantics"]
             .as_str()
-            .unwrap()
-            .contains("admit Shadowsocks cipher for node ss_live")
+            .unwrap(),
+        "datagram-aead-2022"
     );
     let rows = report["full_matrix_rows"].as_array().unwrap();
     let row = rows
         .iter()
         .find(|row| row["formal_matrix_handler"].as_str().unwrap() == "shadowsocks")
         .unwrap();
-    assert_eq!(row["planner_status"].as_str().unwrap(), "blocked");
+    assert_eq!(row["planner_status"].as_str().unwrap(), "admitted");
     assert_eq!(row["candidate_count"].as_u64().unwrap(), 1);
-    assert_eq!(row["blocked_count"].as_u64().unwrap(), 1);
-    assert_eq!(
-        row["generated_solver"]["admissionFailClosed"]
-            .as_bool()
-            .unwrap(),
-        true
-    );
-    assert_eq!(
-        row["generated_solver"]["runtimeComponentsReady"]
-            .as_bool()
-            .unwrap(),
-        false
-    );
-    assert!(
-        row["generated_solver"]["blockers"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .any(|blocker| blocker
-                .as_str()
-                .unwrap()
-                .contains("runtime component factory"))
-    );
+    assert_eq!(row["blocked_count"].as_u64().unwrap(), 0);
     assert_eq!(
         row["candidates"][0]["admission"]["status"]
             .as_str()
             .unwrap(),
-        "fail-closed"
+        "admitted"
     );
     assert!(!String::from_utf8_lossy(&output.stdout).contains("MTIzNDU2"));
     assert!(!String::from_utf8_lossy(&output.stdout).contains("ss://"));
@@ -549,7 +545,7 @@ routing {
         report["planner_error"]
             .as_str()
             .unwrap()
-            .contains("websocket handler admits only empty flow")
+            .contains("wrapped-stream handler admits only empty flow")
     );
 
     let rows = report["expanded_source_matrix_rows"].as_array().unwrap();
@@ -736,8 +732,8 @@ routing {
 }
 
 #[test]
-fn daed_resident_adapter_matrix_reports_first_batch_rows_admitted_without_secrets() {
-    let temp = temp_dir("resident-adapter-matrix-first-batch");
+fn daed_resident_adapter_matrix_reports_initial_rows_admitted_without_secrets() {
+    let temp = temp_dir("resident-adapter-matrix-initial-rows");
     let config = temp.join("config.dae");
     let vless_live = vless_fixture_url("vless", "example.com", 443);
     let ss_live = shadowsocks_fixture_url("ss", "example.com", 28446);
@@ -1009,7 +1005,7 @@ fn daed_resident_adapter_matrix_requires_config_path() {
 }
 
 #[test]
-fn daed_product_contract_reports_c10_first_batch_state_paths() {
+fn daed_product_contract_reports_c10_initial_state_paths() {
     let output = Command::new(binary())
         .args(["service-contract", "--json"])
         .output()
@@ -1108,7 +1104,17 @@ fn daed_product_contract_reports_c10_first_batch_state_paths() {
             .as_bool()
             .unwrap()
     );
-    assert!(report["go_free_rollback_model_ready"].as_bool().unwrap());
+    assert!(!report["go_free_rollback_model_ready"].as_bool().unwrap());
+    assert!(
+        report["go_free_product_chain_typed_report"]["blockers"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|blocker| blocker
+                .as_str()
+                .unwrap()
+                .contains("rollback artifact validation is not recorded"))
+    );
     assert!(!report["go_free_product_chain_ready"].as_bool().unwrap());
 
     let package = Command::new(binary())

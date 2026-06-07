@@ -4,12 +4,15 @@ use super::*;
 
 #[test]
 fn stage139_go_utls_clienthello_fixture_profiles_parse_exactly() {
-    let fixture = fixture("outbound/protocol/stage139_go_utls_clienthello_profile.json");
+    let fixture = fixture("outbound/protocol/utls_clienthello_profile.json");
     assert_eq!(
         fixture["name"].as_str().unwrap(),
-        "stage139-go-utls-clienthello-profile-fixture"
+        "utls-clienthello-profile-fixture"
     );
-    assert_eq!(fixture["stage"].as_str().unwrap(), "stage139");
+    assert_eq!(
+        fixture["profile_family"].as_str().unwrap(),
+        "utls-clienthello"
+    );
 
     let samples = fixture["samples"].as_array().unwrap();
     assert_eq!(samples.len(), 6);
@@ -114,7 +117,7 @@ fn stage139_go_utls_clienthello_fixture_profiles_parse_exactly() {
 
 #[test]
 fn stage139_go_utls_clienthello_parser_rejects_truncated_record() {
-    let fixture = fixture("outbound/protocol/stage139_go_utls_clienthello_profile.json");
+    let fixture = fixture("outbound/protocol/utls_clienthello_profile.json");
     let record_hex = fixture["samples"][0]["record_hex"].as_str().unwrap();
     let truncated = &record_hex[..record_hex.len() - 2];
     let err = parse_utls_client_hello_record_hex(truncated).unwrap_err();

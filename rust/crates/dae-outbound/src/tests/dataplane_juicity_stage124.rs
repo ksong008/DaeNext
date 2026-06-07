@@ -22,11 +22,11 @@ fn stage124_juicity_auth_lifecycle_preserves_channel_order_and_finish_boundary()
     assert!(report.server_ekm_token_exported);
     assert_eq!(report.authenticate_header_len, 50);
     assert_eq!(report.record_count, 3);
-    assert_eq!(report.dialauth_record_lens, vec![91, 91, 91]);
+    assert_eq!(report.dialauth_record_lens, vec![90, 90, 90]);
     assert_eq!(report.auth_header_offset, 0);
     assert_eq!(report.first_dialauth_record_offset, 50);
     assert_eq!(report.last_dialauth_record_end, report.transcript_len);
-    assert_eq!(report.transcript_len, 323);
+    assert_eq!(report.transcript_len, 320);
     assert_eq!(report.underlay_auth_channel_capacity, 64);
     assert_eq!(report.channel_enqueue_count, 3);
     assert_eq!(report.channel_receive_count, 3);

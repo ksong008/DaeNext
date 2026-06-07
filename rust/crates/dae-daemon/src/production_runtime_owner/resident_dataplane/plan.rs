@@ -10,9 +10,14 @@ use dae_outbound::{
     Annotation, AnyTLSLink, Dialer, DialerGroup, DialerSet, Filter, FilterParam, NetworkType,
     SelectionPolicy,
     http_proxy::{HttpProxyLink, HttpScheme},
-    hysteria2::{Hysteria2Link, server_contract as hysteria2_server_contract},
+    hysteria2::{
+        DEFAULT_TRUE_QUIC_UDP_HOP_INTERVAL_MS, Hysteria2Link, build_port_hop_schedule,
+        server_contract as hysteria2_server_contract,
+    },
     juicity::JuicityLink,
     parse_link_chain,
+    shadowsocks::ss2022::{cipher_conf, validate_psk_list},
+    shadowsocks::{CipherFamily, classify_cipher},
     shadowsocks::{ShadowsocksLink, cipher_spec},
     shared_transport::{MeekRoundTripOptions, UtlsFingerprint, ir, resolve_utls_client_hello_id},
     trojan::{TrojanLink, TrojanTransportType},
@@ -77,11 +82,20 @@ pub(super) enum ResidentProxyProtocolPlan {
     HttpProxyTcp {
         username: String,
         password: String,
+        transport: bool,
+        transport_host: String,
+        transport_path: String,
     },
     ShadowsocksAeadTcp {
         cipher: String,
         password: String,
         salt_len: usize,
+    },
+    Shadowsocks2022Tcp {
+        cipher: String,
+        password: String,
+        salt_len: usize,
+        packet_nonce_len: usize,
     },
     ShadowsocksSimpleObfsHttpTcp {
         cipher: String,
@@ -90,8 +104,33 @@ pub(super) enum ResidentProxyProtocolPlan {
         host: String,
         path: String,
     },
+    ShadowsocksSimpleObfsTlsTcp {
+        cipher: String,
+        password: String,
+        salt_len: usize,
+        host: String,
+    },
+    ShadowsocksV2rayPluginTlsWsTcp {
+        cipher: String,
+        password: String,
+        salt_len: usize,
+        host: String,
+        path: String,
+    },
+    Shadowsocks2022SimpleObfsHttpTcp {
+        cipher: String,
+        password: String,
+        salt_len: usize,
+        host: String,
+        path: String,
+    },
     TrojanTcpTls {
         password: String,
+    },
+    TrojanInnerShadowsocksTcpTls {
+        password: String,
+        inner_cipher: String,
+        inner_password: String,
     },
     AnyTlsTcpTls {
         auth: String,
@@ -103,11 +142,13 @@ pub(super) enum ResidentProxyProtocolPlan {
         auth: String,
         pin_sha256: String,
         max_rx: u64,
+        port_hop_ports: Vec<u16>,
     },
     TuicQuicTcp {
         uuid: String,
         password: String,
         alpn: Vec<String>,
+        allow_insecure: bool,
     },
     JuicityQuicTcp {
         uuid: String,
@@ -342,6 +383,7 @@ impl ResidentExecutableGraphDescriptor {
             "standard-tls" => "rustls",
             "quic-tls" => "quinn-rustls",
             "aead" => "protocol-aead-codec",
+            "aead-2022" => "protocol-aead-2022-codec",
             "none" => "plain",
             _ => "unsupported",
         };
@@ -382,6 +424,12 @@ impl ResidentExecutableGraphDescriptor {
             "meek" => ("admitted", "resident-meek-polling", Value::Null),
             "xhttp" => ("admitted", "resident-xhttp-h2-packet-up", Value::Null),
             "simple-obfs-http" => ("admitted", "resident-simple-obfs-http", Value::Null),
+            "simple-obfs-tls" => ("admitted", "resident-simple-obfs-tls", Value::Null),
+            "v2ray-plugin-tls-websocket" => (
+                "admitted",
+                "resident-v2ray-plugin-tls-websocket",
+                Value::Null,
+            ),
             _ => (
                 "fail-closed",
                 "unsupported",
@@ -531,6 +579,14 @@ fn graph_packet_semantics(proxy: &ResidentProxyPlan) -> String {
         ResidentProxyProtocolPlan::Socks5Tcp { .. } => "udp-associate".to_owned(),
         ResidentProxyProtocolPlan::HttpProxyTcp { .. } => "protocol-closed".to_owned(),
         ResidentProxyProtocolPlan::VlessVisionTcpTls { .. } => "xudp".to_owned(),
+        ResidentProxyProtocolPlan::ShadowsocksAeadTcp { .. } => "datagram-aead".to_owned(),
+        ResidentProxyProtocolPlan::Shadowsocks2022Tcp { .. } => "datagram-aead-2022".to_owned(),
+        ResidentProxyProtocolPlan::ShadowsocksSimpleObfsHttpTcp { .. }
+        | ResidentProxyProtocolPlan::ShadowsocksSimpleObfsTlsTcp { .. }
+        | ResidentProxyProtocolPlan::ShadowsocksV2rayPluginTlsWsTcp { .. }
+        | ResidentProxyProtocolPlan::Shadowsocks2022SimpleObfsHttpTcp { .. } => {
+            "plugin-wrapper-stream".to_owned()
+        }
         ResidentProxyProtocolPlan::Hysteria2QuicTcp { .. }
         | ResidentProxyProtocolPlan::TuicQuicTcp { .. }
         | ResidentProxyProtocolPlan::JuicityQuicTcp { .. } => "quic-datagram-or-stream".to_owned(),
@@ -1433,7 +1489,7 @@ fn build_proxy_plan(
         "tuic" => build_tuic_proxy_plan(config, group_name, node_tag, link),
         "juicity" => build_juicity_proxy_plan(config, group_name, node_tag, link),
         _ => Err(format!(
-            "resident dataplane selected unsupported {scheme} node {node_tag}; no Rust protocol handler is admitted for this node yet, keep Go outbound for this config",
+            "resident dataplane selected unsupported {scheme} node {node_tag}; no resident executor is admitted for this node shape; shape remains fail-closed for this config",
         )),
     }
 }
@@ -1469,7 +1525,7 @@ fn build_chained_proxy_plan(
     }
     if !resident_chain_child_supported(&child) {
         return Err(format!(
-            "resident dataplane nested chain executor admits first-batch TCP child handlers only for node {node_tag}; got {}/{}",
+            "resident dataplane nested chain executor admits resident TCP child handlers only for node {node_tag}; got {}/{}",
             child.protocol, child.net
         ));
     }
@@ -1494,7 +1550,11 @@ fn resident_chain_child_supported(child: &ResidentProxyPlan) -> bool {
         ResidentProxyProtocolPlan::Socks5Tcp { .. } => true,
         ResidentProxyProtocolPlan::HttpProxyTcp { .. } => child.tls == "none",
         ResidentProxyProtocolPlan::ShadowsocksAeadTcp { .. }
-        | ResidentProxyProtocolPlan::ShadowsocksSimpleObfsHttpTcp { .. } => true,
+        | ResidentProxyProtocolPlan::Shadowsocks2022Tcp { .. }
+        | ResidentProxyProtocolPlan::ShadowsocksSimpleObfsHttpTcp { .. }
+        | ResidentProxyProtocolPlan::ShadowsocksSimpleObfsTlsTcp { .. }
+        | ResidentProxyProtocolPlan::ShadowsocksV2rayPluginTlsWsTcp { .. }
+        | ResidentProxyProtocolPlan::Shadowsocks2022SimpleObfsHttpTcp { .. } => true,
         ResidentProxyProtocolPlan::VmessAeadTcp { .. } => {
             matches!(child.net.as_str(), "tcp" | "websocket" | "httpupgrade") && child.tls == "none"
         }
@@ -1520,13 +1580,13 @@ fn build_vless_proxy_plan(
     match net.as_str() {
         "tcp" if vless.flow != XTLS_RPRX_VISION => {
             return Err(format!(
-                "resident dataplane vless native experiment admits tcp flow={XTLS_RPRX_VISION}, got '{}' for node {node_tag}; keep Go outbound for this config",
+                "resident dataplane vless native experiment admits tcp flow={XTLS_RPRX_VISION}, got '{}' for node {node_tag}; resident shape remains fail-closed for this config",
                 vless.flow
             ));
         }
         "websocket" | "httpupgrade" | "grpc" | "xhttp" | "meek" if !vless.flow.is_empty() => {
             return Err(format!(
-                "resident dataplane vless wrapped-stream handler admits only empty flow, got '{}' for node {node_tag}; keep Go outbound for this config",
+                "resident dataplane vless wrapped-stream handler admits only empty flow, got '{}' for node {node_tag}; resident shape remains fail-closed for this config",
                 vless.flow
             ));
         }
@@ -1545,7 +1605,7 @@ fn build_vless_proxy_plan(
     }
     if vless.allow_insecure || config.global.allow_insecure {
         return Err(
-            "resident dataplane vless TLS handler does not admit allow_insecure; keep Go fallback for this config"
+            "resident dataplane vless TLS handler does not admit allow_insecure; resident shape remains fail-closed for this config"
                 .to_owned(),
         );
     }
@@ -1559,7 +1619,7 @@ fn build_vless_proxy_plan(
         }
         if mode.normalized != "packet-up" {
             return Err(format!(
-                "resident dataplane vless xHTTP transport admits packet-up mode only, got {} for node {node_tag}; keep Go outbound for this config",
+                "resident dataplane vless xHTTP transport admits packet-up mode only, got {} for node {node_tag}; resident shape remains fail-closed for this config",
                 mode.normalized
             ));
         }
@@ -1572,12 +1632,12 @@ fn build_vless_proxy_plan(
         }
         if alpn_result.use_h3 {
             return Err(format!(
-                "resident dataplane vless xHTTP transport admits HTTP/2 packet-up only, got h3 for node {node_tag}; keep Go outbound for this config"
+                "resident dataplane vless xHTTP transport admits HTTP/2 packet-up only, got h3 for node {node_tag}; resident shape remains fail-closed for this config"
             ));
         }
         if !resident_xhttp_extra_is_empty(&vless.xhttp_extra) {
             return Err(format!(
-                "resident dataplane vless xHTTP transport admits default extra settings only for node {node_tag}; keep Go outbound for this config"
+                "resident dataplane vless xHTTP transport admits default extra settings only for node {node_tag}; resident shape remains fail-closed for this config"
             ));
         }
     }
@@ -1712,14 +1772,9 @@ fn build_http_proxy_plan(
 ) -> Result<ResidentProxyPlan, String> {
     let parsed = HttpProxyLink::parse(&link)
         .map_err(|err| format!("parse HTTP proxy node {node_tag}: {err}"))?;
-    if parsed.transport {
-        return Err(format!(
-            "resident dataplane first-batch HTTP proxy handler does not admit HTTP transport mode for node {node_tag}"
-        ));
-    }
     if parsed.allow_insecure || config.global.allow_insecure {
         return Err(format!(
-            "resident dataplane first-batch HTTP proxy handler does not admit allow_insecure for node {node_tag}"
+            "resident dataplane HTTP proxy handler does not admit allow_insecure for node {node_tag}"
         ));
     }
     if parsed.protocol == HttpScheme::Https && !parsed.utls_imitate.is_empty() {
@@ -1754,15 +1809,22 @@ fn build_http_proxy_plan(
         server_name,
         alpn,
         flow: String::new(),
-        net: "tcp".to_owned(),
-        stream_host: String::new(),
-        stream_path: String::new(),
+        net: if parsed.transport {
+            "http-transport".to_owned()
+        } else {
+            "tcp".to_owned()
+        },
+        stream_host: parsed.host.clone(),
+        stream_path: parsed.path.clone(),
         tls,
         allow_insecure: false,
         utls_fingerprint: None,
         handler: ResidentProxyProtocolPlan::HttpProxyTcp {
             username: parsed.username,
             password: parsed.password,
+            transport: parsed.transport,
+            transport_host: parsed.host,
+            transport_path: parsed.path,
         },
         chain_parent: None,
         mark: config.global.so_mark_from_dae,
@@ -1779,52 +1841,164 @@ fn build_shadowsocks_proxy_plan(
     let parsed = ShadowsocksLink::parse(&link)
         .map_err(|err| format!("parse Shadowsocks node {node_tag}: {err}"))?;
     let plugin = parsed.plugin.clone();
-    if !plugin.name.is_empty()
-        && !(plugin.name == "simple-obfs"
-            && plugin.opts.obfs == "http"
-            && plugin.opts.tls.is_empty())
-    {
+    if !resident_shadowsocks_plugin_supported(&plugin.name, &plugin.opts.obfs, &plugin.opts.tls) {
         return Err(format!(
-            "resident dataplane Shadowsocks plugin wrapper admits simple-obfs obfs=http only for node {node_tag}; got {}",
-            plugin.name
+            "resident dataplane Shadowsocks plugin wrapper admits simple-obfs http/tls and v2ray-plugin tls websocket only for node {node_tag}; got {}",
+            resident_shadowsocks_plugin_display(&plugin.name, &plugin.opts.obfs, &plugin.opts.tls)
         ));
     }
-    let spec = cipher_spec(&parsed.cipher)
+    let cipher_info = classify_cipher(&parsed.cipher)
         .map_err(|err| format!("admit Shadowsocks cipher for node {node_tag}: {err}"))?;
-    let (net, stream_host, stream_path, handler) = if plugin.name == "simple-obfs" {
-        let stream_host = if plugin.opts.host.is_empty() {
-            parsed.server.clone()
-        } else {
-            plugin.opts.host.clone()
-        };
-        let stream_path = if plugin.opts.path.is_empty() {
-            "/".to_owned()
-        } else {
-            plugin.opts.path.clone()
-        };
-        (
-            "simple-obfs-http".to_owned(),
-            stream_host.clone(),
-            stream_path.clone(),
-            ResidentProxyProtocolPlan::ShadowsocksSimpleObfsHttpTcp {
-                cipher: spec.cipher.to_owned(),
-                password: parsed.password.clone(),
-                salt_len: spec.salt_len,
-                host: stream_host,
-                path: stream_path,
-            },
-        )
-    } else {
-        (
-            "tcp".to_owned(),
-            String::new(),
-            String::new(),
-            ResidentProxyProtocolPlan::ShadowsocksAeadTcp {
-                cipher: spec.cipher.to_owned(),
-                password: parsed.password.clone(),
-                salt_len: spec.salt_len,
-            },
-        )
+    let (net, stream_host, stream_path, tls, handler) = match cipher_info.family {
+        CipherFamily::Aead => {
+            let spec = cipher_spec(&parsed.cipher)
+                .map_err(|err| format!("admit Shadowsocks cipher for node {node_tag}: {err}"))?;
+            if plugin.name == "simple-obfs" {
+                let stream_host = if plugin.opts.host.is_empty() {
+                    parsed.server.clone()
+                } else {
+                    plugin.opts.host.clone()
+                };
+                if plugin.opts.obfs == "tls" {
+                    (
+                        "simple-obfs-tls".to_owned(),
+                        stream_host.clone(),
+                        String::new(),
+                        "aead".to_owned(),
+                        ResidentProxyProtocolPlan::ShadowsocksSimpleObfsTlsTcp {
+                            cipher: spec.cipher.to_owned(),
+                            password: parsed.password.clone(),
+                            salt_len: spec.salt_len,
+                            host: stream_host,
+                        },
+                    )
+                } else {
+                    let stream_path = if plugin.opts.path.is_empty() {
+                        "/".to_owned()
+                    } else {
+                        plugin.opts.path.clone()
+                    };
+                    (
+                        "simple-obfs-http".to_owned(),
+                        stream_host.clone(),
+                        stream_path.clone(),
+                        "aead".to_owned(),
+                        ResidentProxyProtocolPlan::ShadowsocksSimpleObfsHttpTcp {
+                            cipher: spec.cipher.to_owned(),
+                            password: parsed.password.clone(),
+                            salt_len: spec.salt_len,
+                            host: stream_host,
+                            path: stream_path,
+                        },
+                    )
+                }
+            } else if plugin.name == "v2ray-plugin" {
+                let stream_host = if plugin.opts.host.is_empty() {
+                    parsed.server.clone()
+                } else {
+                    plugin.opts.host.clone()
+                };
+                let stream_path = if plugin.opts.path.is_empty() {
+                    "/".to_owned()
+                } else {
+                    plugin.opts.path.clone()
+                };
+                (
+                    "v2ray-plugin-tls-websocket".to_owned(),
+                    stream_host.clone(),
+                    stream_path.clone(),
+                    "tls".to_owned(),
+                    ResidentProxyProtocolPlan::ShadowsocksV2rayPluginTlsWsTcp {
+                        cipher: spec.cipher.to_owned(),
+                        password: parsed.password.clone(),
+                        salt_len: spec.salt_len,
+                        host: stream_host,
+                        path: stream_path,
+                    },
+                )
+            } else {
+                (
+                    "tcp".to_owned(),
+                    String::new(),
+                    String::new(),
+                    "aead".to_owned(),
+                    ResidentProxyProtocolPlan::ShadowsocksAeadTcp {
+                        cipher: spec.cipher.to_owned(),
+                        password: parsed.password.clone(),
+                        salt_len: spec.salt_len,
+                    },
+                )
+            }
+        }
+        CipherFamily::Aead2022 => {
+            if !plugin.name.is_empty() {
+                if !(plugin.name == "simple-obfs"
+                    && plugin.opts.obfs == "http"
+                    && plugin.opts.tls.is_empty())
+                {
+                    return Err(format!(
+                        "resident dataplane Shadowsocks 2022 plugin wrapper admits simple-obfs http only for node {node_tag}; got {}",
+                        resident_shadowsocks_plugin_display(
+                            &plugin.name,
+                            &plugin.opts.obfs,
+                            &plugin.opts.tls
+                        )
+                    ));
+                }
+            }
+            validate_psk_list(&cipher_info.cipher, &parsed.password)
+                .map_err(|err| format!("admit Shadowsocks 2022 PSK for node {node_tag}: {err}"))?;
+            let conf = cipher_conf(&cipher_info.cipher).ok_or_else(|| {
+                format!(
+                    "admit Shadowsocks 2022 cipher for node {node_tag}: unsupported shadowsocks 2022 cipher: {}",
+                    cipher_info.cipher
+                )
+            })?;
+            if plugin.name == "simple-obfs" {
+                let stream_host = if plugin.opts.host.is_empty() {
+                    parsed.server.clone()
+                } else {
+                    plugin.opts.host.clone()
+                };
+                let stream_path = if plugin.opts.path.is_empty() {
+                    "/".to_owned()
+                } else {
+                    plugin.opts.path.clone()
+                };
+                (
+                    "simple-obfs-http".to_owned(),
+                    stream_host.clone(),
+                    stream_path.clone(),
+                    "aead-2022".to_owned(),
+                    ResidentProxyProtocolPlan::Shadowsocks2022SimpleObfsHttpTcp {
+                        cipher: conf.cipher.to_owned(),
+                        password: parsed.password.clone(),
+                        salt_len: conf.salt_len,
+                        host: stream_host,
+                        path: stream_path,
+                    },
+                )
+            } else {
+                (
+                    "tcp".to_owned(),
+                    String::new(),
+                    String::new(),
+                    "aead-2022".to_owned(),
+                    ResidentProxyProtocolPlan::Shadowsocks2022Tcp {
+                        cipher: conf.cipher.to_owned(),
+                        password: parsed.password.clone(),
+                        salt_len: conf.salt_len,
+                        packet_nonce_len: conf.packet_nonce_len,
+                    },
+                )
+            }
+        }
+        CipherFamily::Stream => {
+            return Err(format!(
+                "admit Shadowsocks cipher for node {node_tag}: cipher family is not resident Shadowsocks packet-capable cipher: {}",
+                cipher_info.cipher
+            ));
+        }
     };
     let graph = resident_graph_identity(&link);
     Ok(ResidentProxyPlan {
@@ -1837,13 +2011,21 @@ fn build_shadowsocks_proxy_plan(
         node_tag,
         server_host: parsed.server,
         server_port: parsed.port,
-        server_name: String::new(),
-        alpn: Vec::new(),
+        server_name: if tls == "tls" {
+            stream_host.clone()
+        } else {
+            String::new()
+        },
+        alpn: if tls == "tls" {
+            vec!["http/1.1".to_owned()]
+        } else {
+            Vec::new()
+        },
         flow: String::new(),
         net,
         stream_host,
         stream_path,
-        tls: "aead".to_owned(),
+        tls,
         allow_insecure: false,
         utls_fingerprint: None,
         handler,
@@ -1851,6 +2033,26 @@ fn build_shadowsocks_proxy_plan(
         mark: config.global.so_mark_from_dae,
         mptcp: config.global.mptcp,
     })
+}
+
+fn resident_shadowsocks_plugin_supported(name: &str, obfs: &str, tls: &str) -> bool {
+    name.is_empty()
+        || (name == "simple-obfs" && matches!(obfs, "http" | "tls") && tls.is_empty())
+        || (name == "v2ray-plugin" && obfs.is_empty() && tls == "tls")
+}
+
+fn resident_shadowsocks_plugin_display(name: &str, obfs: &str, tls: &str) -> String {
+    if name.is_empty() {
+        return "none".to_owned();
+    }
+    let mut fields = vec![name.to_owned()];
+    if !obfs.is_empty() {
+        fields.push(format!("obfs={obfs}"));
+    }
+    if !tls.is_empty() {
+        fields.push("tls".to_owned());
+    }
+    fields.join(";")
 }
 
 fn build_trojan_proxy_plan(
@@ -1873,14 +2075,15 @@ fn build_trojan_proxy_plan(
             parsed.transport_type, parsed.protocol
         ));
     }
-    if (websocket || httpupgrade || grpc) && !parsed.encryption.is_empty() {
+    let inner_shadowsocks = parse_trojan_go_inner_shadowsocks(&parsed.encryption, &node_tag)?;
+    if inner_shadowsocks.is_some() && !websocket {
         return Err(format!(
-            "resident dataplane trojan wrapped-stream handler does not admit inner encryption for node {node_tag}; keep Go fallback for this config"
+            "resident dataplane trojan inner Shadowsocks layer admits WebSocket transport only for node {node_tag}; resident shape remains fail-closed for this config"
         ));
     }
     if parsed.allow_insecure || config.global.allow_insecure {
         return Err(
-            "resident dataplane generic TLS/TCP handler does not admit allow_insecure; keep Go fallback for this config"
+            "resident dataplane generic TLS/TCP handler does not admit allow_insecure; resident shape remains fail-closed for this config"
                 .to_owned(),
         );
     }
@@ -1931,13 +2134,63 @@ fn build_trojan_proxy_plan(
         tls: "tls".to_owned(),
         allow_insecure: false,
         utls_fingerprint,
-        handler: ResidentProxyProtocolPlan::TrojanTcpTls {
-            password: parsed.password,
+        handler: if let Some((inner_cipher, inner_password)) = inner_shadowsocks {
+            ResidentProxyProtocolPlan::TrojanInnerShadowsocksTcpTls {
+                password: parsed.password,
+                inner_cipher,
+                inner_password,
+            }
+        } else {
+            ResidentProxyProtocolPlan::TrojanTcpTls {
+                password: parsed.password,
+            }
         },
         chain_parent: None,
         mark: config.global.so_mark_from_dae,
         mptcp: config.global.mptcp,
     })
+}
+
+fn parse_trojan_go_inner_shadowsocks(
+    encryption: &str,
+    node_tag: &str,
+) -> Result<Option<(String, String)>, String> {
+    if encryption.is_empty() {
+        return Ok(None);
+    }
+    let mut fields = encryption.split(';');
+    let Some(kind) = fields.next() else {
+        return Ok(None);
+    };
+    if kind != "ss" {
+        return Err(format!(
+            "resident dataplane trojan inner encryption admits Shadowsocks only for node {node_tag}; got {kind}"
+        ));
+    }
+    let Some(cipher_or_pair) = fields.next() else {
+        return Err(format!(
+            "resident dataplane trojan inner Shadowsocks encryption requires cipher for node {node_tag}"
+        ));
+    };
+    let (cipher, password) = if let Some((cipher, password)) = cipher_or_pair.split_once(':') {
+        (cipher.to_owned(), password.to_owned())
+    } else {
+        let Some(password) = fields.next() else {
+            return Err(format!(
+                "resident dataplane trojan inner Shadowsocks encryption requires password for node {node_tag}"
+            ));
+        };
+        (cipher_or_pair.to_owned(), password.to_owned())
+    };
+    let spec = cipher_spec(&cipher).map_err(|err| {
+        format!("admit Trojan-Go inner Shadowsocks cipher for node {node_tag}: {err}")
+    })?;
+    if password.is_empty() {
+        return Err(format!(
+            "resident dataplane trojan inner Shadowsocks encryption requires non-empty password for node {node_tag}"
+        ));
+    }
+    Ok(Some((spec.cipher.to_owned(), password)))
 }
 
 fn build_anytls_proxy_plan(
@@ -1950,7 +2203,7 @@ fn build_anytls_proxy_plan(
         AnyTLSLink::parse(&link).map_err(|err| format!("parse AnyTLS node {node_tag}: {err}"))?;
     if parsed.insecure || config.global.allow_insecure {
         return Err(
-            "resident dataplane generic TLS/TCP handler does not admit AnyTLS insecure mode; keep Go fallback for this config"
+            "resident dataplane generic TLS/TCP handler does not admit AnyTLS insecure mode; resident shape remains fail-closed for this config"
                 .to_owned(),
         );
     }
@@ -2000,14 +2253,9 @@ fn build_tuic_proxy_plan(
     parsed
         .validate_uuid()
         .map_err(|err| format!("validate TUIC UUID for {node_tag}: {err}"))?;
-    if !(parsed.allow_insecure || config.global.allow_insecure || parsed.disable_sni) {
-        return Err(format!(
-            "resident dataplane generic QUIC handler admits TUIC only when allow_insecure is explicit for node {node_tag}; keep Go fallback for this config"
-        ));
-    }
     if parsed.password.is_empty() {
         return Err(format!(
-            "resident dataplane generic QUIC handler requires TUIC password for node {node_tag}; keep Go fallback for this config"
+            "resident dataplane generic QUIC handler requires TUIC password for node {node_tag}; resident shape remains fail-closed for this config"
         ));
     }
     let server_name = if parsed.sni.is_empty() {
@@ -2020,6 +2268,8 @@ fn build_tuic_proxy_plan(
     } else {
         parsed.alpn.clone()
     };
+    let allow_insecure =
+        parsed.allow_insecure || config.global.allow_insecure || parsed.disable_sni;
     let graph = resident_graph_identity(&link);
     Ok(ResidentProxyPlan {
         graph_id: graph.graph_id,
@@ -2038,12 +2288,13 @@ fn build_tuic_proxy_plan(
         stream_host: String::new(),
         stream_path: String::new(),
         tls: "quic".to_owned(),
-        allow_insecure: true,
+        allow_insecure,
         utls_fingerprint: None,
         handler: ResidentProxyProtocolPlan::TuicQuicTcp {
             uuid: parsed.user,
             password: parsed.password,
             alpn,
+            allow_insecure,
         },
         chain_parent: None,
         mark: config.global.so_mark_from_dae,
@@ -2061,13 +2312,13 @@ fn build_hysteria2_proxy_plan(
         .map_err(|err| format!("parse Hysteria2 node {node_tag}: {err}"))?;
     if parsed.insecure || config.global.allow_insecure {
         return Err(
-            "resident dataplane generic QUIC handler does not admit Hysteria2 insecure mode; keep Go fallback for this config"
+            "resident dataplane generic QUIC handler does not admit Hysteria2 insecure mode; resident shape remains fail-closed for this config"
                 .to_owned(),
         );
     }
     if parsed.pin_sha256.is_empty() {
         return Err(format!(
-            "resident dataplane generic QUIC handler requires Hysteria2 pinSHA256 for node {node_tag}; keep Go fallback for this config"
+            "resident dataplane generic QUIC handler requires Hysteria2 pinSHA256 for node {node_tag}; resident shape remains fail-closed for this config"
         ));
     }
     let auth = if parsed.password.is_empty() {
@@ -2077,22 +2328,29 @@ fn build_hysteria2_proxy_plan(
     };
     if auth.is_empty() {
         return Err(format!(
-            "resident dataplane generic QUIC handler requires Hysteria2 auth for node {node_tag}; keep Go fallback for this config"
+            "resident dataplane generic QUIC handler requires Hysteria2 auth for node {node_tag}; resident shape remains fail-closed for this config"
         ));
     }
     let server = hysteria2_server_contract(&parsed.server);
-    if server.port_hopping {
-        return Err(format!(
-            "resident dataplane generic QUIC handler admits only single-port Hysteria2 endpoints for node {node_tag}; got {}",
-            parsed.server
-        ));
-    }
-    let server_port = server.port.parse::<u16>().map_err(|err| {
-        format!(
-            "invalid Hysteria2 port {} for node {node_tag}: {err}",
-            server.port
-        )
-    })?;
+    let (server_port, port_hop_ports) = if server.port_hopping {
+        let schedule =
+            build_port_hop_schedule(&parsed.server, DEFAULT_TRUE_QUIC_UDP_HOP_INTERVAL_MS, 1)
+                .map_err(|err| {
+                    format!("admit Hysteria2 port hopping for node {node_tag}: {err}")
+                })?;
+        let server_port = *schedule.selected_ports.first().ok_or_else(|| {
+            format!("admit Hysteria2 port hopping for node {node_tag}: no selected port")
+        })?;
+        (server_port, schedule.normalized_ports)
+    } else {
+        let server_port = server.port.parse::<u16>().map_err(|err| {
+            format!(
+                "invalid Hysteria2 port {} for node {node_tag}: {err}",
+                server.port
+            )
+        })?;
+        (server_port, Vec::new())
+    };
     let server_name = if parsed.sni.is_empty() {
         server.host.clone()
     } else {
@@ -2122,6 +2380,7 @@ fn build_hysteria2_proxy_plan(
             auth,
             pin_sha256: parsed.pin_sha256,
             max_rx: parsed.max_rx,
+            port_hop_ports,
         },
         chain_parent: None,
         mark: config.global.so_mark_from_dae,
@@ -2142,13 +2401,13 @@ fn build_juicity_proxy_plan(
         .map_err(|err| format!("validate Juicity UUID for {node_tag}: {err}"))?;
     if parsed.password.is_empty() {
         return Err(format!(
-            "resident dataplane generic QUIC handler requires Juicity password for node {node_tag}; keep Go fallback for this config"
+            "resident dataplane generic QUIC handler requires Juicity password for node {node_tag}; resident shape remains fail-closed for this config"
         ));
     }
     let allow_insecure = parsed.allow_insecure || config.global.allow_insecure;
     if !allow_insecure && parsed.pinned_certchain_sha256.is_empty() {
         return Err(format!(
-            "resident dataplane generic QUIC handler requires Juicity allow_insecure or pinned_certchain_sha256 for node {node_tag}; keep Go fallback for this config"
+            "resident dataplane generic QUIC handler requires Juicity allow_insecure or pinned_certchain_sha256 for node {node_tag}; resident shape remains fail-closed for this config"
         ));
     }
     let server_name = if parsed.sni.is_empty() {
@@ -2223,15 +2482,15 @@ fn build_vmess_proxy_plan(
             parsed.tls
         ));
     }
-    if net == "websocket" && !parsed.tls.is_empty() && parsed.tls != "none" {
+    if net == "websocket" && !matches!(parsed.tls.as_str(), "" | "none" | "tls") {
         return Err(format!(
-            "resident dataplane VMess websocket handler currently admits plain WebSocket only for node {node_tag}; got tls={}",
+            "resident dataplane VMess websocket handler admits only plain WebSocket or TLS WebSocket for node {node_tag}; got tls={}",
             parsed.tls
         ));
     }
-    if net == "httpupgrade" && !parsed.tls.is_empty() && parsed.tls != "none" {
+    if net == "httpupgrade" && !matches!(parsed.tls.as_str(), "" | "none" | "tls") {
         return Err(format!(
-            "resident dataplane VMess httpupgrade handler currently admits plain HTTP Upgrade only for node {node_tag}; got tls={}",
+            "resident dataplane VMess httpupgrade handler admits only plain HTTP Upgrade or TLS HTTP Upgrade for node {node_tag}; got tls={}",
             parsed.tls
         ));
     }
@@ -2247,7 +2506,7 @@ fn build_vmess_proxy_plan(
     }
     if parsed.allow_insecure || config.global.allow_insecure {
         return Err(
-            "resident dataplane generic AEAD TCP handler does not admit allow_insecure; keep Go fallback for this config"
+            "resident dataplane generic AEAD TCP handler does not admit allow_insecure; resident shape remains fail-closed for this config"
                 .to_owned(),
         );
     }
@@ -2269,8 +2528,14 @@ fn build_vmess_proxy_plan(
     } else {
         String::new()
     };
-    let tls = if net == "grpc" { "tls" } else { "none" };
-    let server_name = if net == "grpc" {
+    let tls = if net == "grpc"
+        || (matches!(net.as_str(), "websocket" | "httpupgrade") && parsed.tls == "tls")
+    {
+        "tls"
+    } else {
+        "none"
+    };
+    let server_name = if tls == "tls" {
         if parsed.sni.is_empty() {
             parsed.add.clone()
         } else {
@@ -2284,7 +2549,7 @@ fn build_vmess_proxy_plan(
     } else {
         Vec::new()
     };
-    let utls_fingerprint = if net == "grpc" {
+    let utls_fingerprint = if tls == "tls" {
         resident_utls_fingerprint_plan(config, Some(parsed.fingerprint.as_str()))?
     } else {
         None
@@ -2822,7 +3087,7 @@ mod tests {
         .export_url()
     }
 
-    fn shadowsocks_unsupported_plugin_fixture_url(_ps: &str, add: &str, port: u16) -> String {
+    fn shadowsocks_simple_obfs_tls_fixture_url(_ps: &str, add: &str, port: u16) -> String {
         ShadowsocksLink {
             name: String::new(),
             server: add.to_owned(),
@@ -2834,6 +3099,22 @@ mod tests {
             protocol: "shadowsocks".to_owned(),
         }
         .export_url()
+    }
+
+    fn shadowsocks_v2ray_plugin_tls_fixture_url(_ps: &str, add: &str, port: u16) -> String {
+        format!(
+            "ss://aes-128-gcm:password@{add}:{port}?plugin=v2ray-plugin%3Btls%3Bobfs-host%3Dfront.example%3Bobfs-uri%3D%2Fss"
+        )
+    }
+
+    fn shadowsocks_2022_simple_obfs_http_fixture_url(_ps: &str, add: &str, port: u16) -> String {
+        format!(
+            "ss://2022-blake3-aes-128-gcm:MTIzNDU2Nzg5MDEyMzQ1Ng%3D%3D@{add}:{port}?plugin=simple-obfs%3Bobfs%3Dhttp%3Bobfs-host%3Dfront.example%3Bobfs-uri%3D%2F"
+        )
+    }
+
+    fn shadowsocks_unsupported_plugin_fixture_url(_ps: &str, add: &str, port: u16) -> String {
+        format!("ss://aes-128-gcm:password@{add}:{port}?plugin=unknown-plugin")
     }
 
     fn vless_fixture_url(
@@ -3032,6 +3313,18 @@ mod tests {
         path: &str,
         tls: &str,
     ) -> String {
+        vmess_fixture_url_with_sni(add, port, net, host, path, tls, "")
+    }
+
+    fn vmess_fixture_url_with_sni(
+        add: &str,
+        port: u16,
+        net: &str,
+        host: &str,
+        path: &str,
+        tls: &str,
+        sni: &str,
+    ) -> String {
         VMessLink {
             ps: String::new(),
             add: add.to_owned(),
@@ -3041,7 +3334,7 @@ mod tests {
             net: net.to_owned(),
             r#type: "none".to_owned(),
             host: host.to_owned(),
-            sni: String::new(),
+            sni: sni.to_owned(),
             path: path.to_owned(),
             tls: tls.to_owned(),
             allow_insecure: false,
@@ -3078,6 +3371,24 @@ mod tests {
                 "/vmess",
                 "",
             ),
+            vmess_fixture_url_with_sni(
+                "203.0.113.10",
+                28454,
+                "ws",
+                "front.example",
+                "/vmess",
+                "tls",
+                "office.example",
+            ),
+            vmess_fixture_url_with_sni(
+                "203.0.113.10",
+                28460,
+                "httpupgrade",
+                "front.example",
+                "/vmess-upgrade",
+                "tls",
+                "office.example",
+            ),
             vless_fixture_url(
                 "vless-ws",
                 "203.0.113.10",
@@ -3090,7 +3401,9 @@ mod tests {
                 "",
             ),
             hysteria2_fixture_url("hy2", "203.0.113.10", 28453),
+            hysteria2_fixture_url_with_pin("hy2-hop", "203.0.113.10:28453,28454-28455", "AA-BB-CC"),
             tuic_fixture_url("tuic", "203.0.113.10", 28454, true),
+            tuic_fixture_url("tuic-verified", "203.0.113.10", 28454, false),
             juicity_fixture_url("juicity", "203.0.113.10", 28455, true),
         ]
     }
@@ -3771,7 +4084,7 @@ mod tests {
     }
 
     #[test]
-    fn resident_dataplane_plan_rejects_unwired_shadowsocks_variant() {
+    fn resident_dataplane_plan_admits_shadowsocks_2022_cipher_family() {
         let config = parse_config(
             r#"
         global {
@@ -3795,14 +4108,31 @@ mod tests {
         }
         "#,
         );
-        let err = build_resident_dataplane_plan(&config).unwrap_err();
-        assert!(err.contains("admit Shadowsocks cipher for node ss_live"));
-        assert!(err.contains("cipher is not stage18 AEAD TCP candidate"));
-        assert!(!err.contains("parse VLESS node ss_live"));
+        let plan = build_resident_dataplane_plan(&config).unwrap();
+        let proxy = plan
+            .default_proxy_group()
+            .unwrap()
+            .select_proxy_for_tcp()
+            .unwrap();
+        assert_eq!(proxy.node_tag, "ss_live");
+        assert_eq!(proxy.protocol, "shadowsocks");
+        assert_eq!(proxy.tls, "aead-2022");
+        assert_eq!(
+            proxy.executable_graph_value()["packetSemantics"],
+            "datagram-aead-2022"
+        );
+        assert!(matches!(
+            proxy.handler,
+            ResidentProxyProtocolPlan::Shadowsocks2022Tcp {
+                salt_len: 16,
+                packet_nonce_len: 0,
+                ..
+            }
+        ));
     }
 
     #[test]
-    fn resident_dataplane_plan_admits_first_batch_tcp_handlers() {
+    fn resident_dataplane_plan_admits_resident_tcp_handlers() {
         let config = parse_config(
             r#"
         global {
@@ -3873,6 +4203,28 @@ mod tests {
             "rustls"
         );
 
+        let http_transport = build_resident_proxy_plan_for_node(
+            &config,
+            "proxy".to_owned(),
+            "http_transport_live".to_owned(),
+            "http://user:password@proxy.example.net:80/relay?transport=1&host=front.example"
+                .to_owned(),
+        )
+        .unwrap();
+        assert_eq!(http_transport.protocol, "http-proxy");
+        assert_eq!(http_transport.net, "http-transport");
+        assert_eq!(http_transport.stream_host, "front.example");
+        assert_eq!(http_transport.stream_path, "/relay");
+        assert!(matches!(
+            http_transport.handler,
+            ResidentProxyProtocolPlan::HttpProxyTcp {
+                transport: true,
+                ref transport_host,
+                ref transport_path,
+                ..
+            } if transport_host == "front.example" && transport_path == "/relay"
+        ));
+
         let shadowsocks = build_resident_proxy_plan_for_node(
             &config,
             "proxy".to_owned(),
@@ -3887,6 +4239,28 @@ mod tests {
             ResidentProxyProtocolPlan::ShadowsocksAeadTcp { salt_len: 16, .. }
         ));
 
+        let shadowsocks_2022 = build_resident_proxy_plan_for_node(
+            &config,
+            "proxy".to_owned(),
+            "ss2022_live".to_owned(),
+            "ss://2022-blake3-aes-128-gcm:MTIzNDU2Nzg5MDEyMzQ1Ng==@203.0.113.10:28448".to_owned(),
+        )
+        .unwrap();
+        assert_eq!(shadowsocks_2022.protocol, "shadowsocks");
+        assert_eq!(shadowsocks_2022.tls, "aead-2022");
+        assert_eq!(
+            shadowsocks_2022.executable_graph_value()["packetSemantics"],
+            "datagram-aead-2022"
+        );
+        assert!(matches!(
+            shadowsocks_2022.handler,
+            ResidentProxyProtocolPlan::Shadowsocks2022Tcp {
+                salt_len: 16,
+                packet_nonce_len: 0,
+                ..
+            }
+        ));
+
         let shadowsocks_plugin = build_resident_proxy_plan_for_node(
             &config,
             "proxy".to_owned(),
@@ -3899,6 +4273,56 @@ mod tests {
         assert!(matches!(
             shadowsocks_plugin.handler,
             ResidentProxyProtocolPlan::ShadowsocksSimpleObfsHttpTcp { .. }
+        ));
+
+        let shadowsocks_obfs_tls = build_resident_proxy_plan_for_node(
+            &config,
+            "proxy".to_owned(),
+            "ss_obfs_tls_live".to_owned(),
+            shadowsocks_simple_obfs_tls_fixture_url("ss-plugin-tls", "203.0.113.10", 28448),
+        )
+        .unwrap();
+        assert_eq!(shadowsocks_obfs_tls.protocol, "shadowsocks");
+        assert_eq!(shadowsocks_obfs_tls.net, "simple-obfs-tls");
+        assert_eq!(
+            shadowsocks_obfs_tls.executable_graph_value()["streamWrapper"],
+            "simple-obfs-tls"
+        );
+        assert!(matches!(
+            shadowsocks_obfs_tls.handler,
+            ResidentProxyProtocolPlan::ShadowsocksSimpleObfsTlsTcp { .. }
+        ));
+
+        let shadowsocks_v2ray_plugin = build_resident_proxy_plan_for_node(
+            &config,
+            "proxy".to_owned(),
+            "ss_v2ray_plugin_live".to_owned(),
+            shadowsocks_v2ray_plugin_tls_fixture_url("ss-plugin-v2ray", "203.0.113.10", 28449),
+        )
+        .unwrap();
+        assert_eq!(shadowsocks_v2ray_plugin.protocol, "shadowsocks");
+        assert_eq!(shadowsocks_v2ray_plugin.net, "v2ray-plugin-tls-websocket");
+        assert_eq!(shadowsocks_v2ray_plugin.tls, "tls");
+        assert_eq!(shadowsocks_v2ray_plugin.server_name, "front.example");
+        assert_eq!(shadowsocks_v2ray_plugin.alpn, vec!["http/1.1".to_owned()]);
+        assert!(matches!(
+            shadowsocks_v2ray_plugin.handler,
+            ResidentProxyProtocolPlan::ShadowsocksV2rayPluginTlsWsTcp { .. }
+        ));
+
+        let shadowsocks_2022_plugin = build_resident_proxy_plan_for_node(
+            &config,
+            "proxy".to_owned(),
+            "ss2022_plugin_live".to_owned(),
+            shadowsocks_2022_simple_obfs_http_fixture_url("ss2022-plugin", "203.0.113.10", 28450),
+        )
+        .unwrap();
+        assert_eq!(shadowsocks_2022_plugin.protocol, "shadowsocks");
+        assert_eq!(shadowsocks_2022_plugin.net, "simple-obfs-http");
+        assert_eq!(shadowsocks_2022_plugin.tls, "aead-2022");
+        assert!(matches!(
+            shadowsocks_2022_plugin.handler,
+            ResidentProxyProtocolPlan::Shadowsocks2022SimpleObfsHttpTcp { .. }
         ));
 
         let trojan = build_resident_proxy_plan_for_node(
@@ -4109,6 +4533,46 @@ mod tests {
         );
         assert!(!vmess_websocket_graph.to_string().contains("front.example"));
 
+        let vmess_websocket_tls = build_resident_proxy_plan_for_node(
+            &config,
+            "proxy".to_owned(),
+            "vmess_ws_tls_live".to_owned(),
+            vmess_fixture_url_with_sni(
+                "203.0.113.10",
+                28454,
+                "ws",
+                "front.example",
+                "/vmess",
+                "tls",
+                "office.example",
+            ),
+        )
+        .unwrap();
+        assert_eq!(vmess_websocket_tls.protocol, "vmess");
+        assert_eq!(vmess_websocket_tls.net, "websocket");
+        assert_eq!(vmess_websocket_tls.server_name, "office.example");
+        assert_eq!(vmess_websocket_tls.stream_host, "front.example");
+        assert_eq!(vmess_websocket_tls.stream_path, "/vmess");
+        assert_eq!(vmess_websocket_tls.tls, "tls");
+        assert!(matches!(
+            vmess_websocket_tls.handler,
+            ResidentProxyProtocolPlan::VmessAeadTcp { .. }
+        ));
+        let vmess_websocket_tls_graph = vmess_websocket_tls.executable_graph_value();
+        assert_eq!(vmess_websocket_tls_graph["streamWrapper"], "websocket");
+        assert_eq!(
+            vmess_websocket_tls_graph["securityUnderlay"],
+            "standard-tls"
+        );
+        assert_eq!(
+            vmess_websocket_tls_graph["runtimeComponents"]["streamWrapperFactory"]["provider"],
+            "resident-websocket-binary-frame"
+        );
+        assert_eq!(
+            vmess_websocket_tls_graph["runtimeComponents"]["underlayFactory"]["provider"],
+            "rustls"
+        );
+
         let vmess_httpupgrade = build_resident_proxy_plan_for_node(
             &config,
             "proxy".to_owned(),
@@ -4150,6 +4614,46 @@ mod tests {
             !vmess_httpupgrade_graph
                 .to_string()
                 .contains("front.example")
+        );
+
+        let vmess_httpupgrade_tls = build_resident_proxy_plan_for_node(
+            &config,
+            "proxy".to_owned(),
+            "vmess_httpupgrade_tls_live".to_owned(),
+            vmess_fixture_url_with_sni(
+                "203.0.113.10",
+                28460,
+                "httpupgrade",
+                "front.example",
+                "/vmess-upgrade",
+                "tls",
+                "office.example",
+            ),
+        )
+        .unwrap();
+        assert_eq!(vmess_httpupgrade_tls.protocol, "vmess");
+        assert_eq!(vmess_httpupgrade_tls.net, "httpupgrade");
+        assert_eq!(vmess_httpupgrade_tls.server_name, "office.example");
+        assert_eq!(vmess_httpupgrade_tls.stream_host, "front.example");
+        assert_eq!(vmess_httpupgrade_tls.stream_path, "/vmess-upgrade");
+        assert_eq!(vmess_httpupgrade_tls.tls, "tls");
+        assert!(matches!(
+            vmess_httpupgrade_tls.handler,
+            ResidentProxyProtocolPlan::VmessAeadTcp { .. }
+        ));
+        let vmess_httpupgrade_tls_graph = vmess_httpupgrade_tls.executable_graph_value();
+        assert_eq!(vmess_httpupgrade_tls_graph["streamWrapper"], "httpupgrade");
+        assert_eq!(
+            vmess_httpupgrade_tls_graph["securityUnderlay"],
+            "standard-tls"
+        );
+        assert_eq!(
+            vmess_httpupgrade_tls_graph["runtimeComponents"]["streamWrapperFactory"]["provider"],
+            "resident-http-upgrade-stream"
+        );
+        assert_eq!(
+            vmess_httpupgrade_tls_graph["runtimeComponents"]["underlayFactory"]["provider"],
+            "rustls"
         );
 
         let vmess_grpc = build_resident_proxy_plan_for_node(
@@ -4311,6 +4815,24 @@ mod tests {
             ResidentProxyProtocolPlan::Hysteria2QuicTcp { .. }
         ));
 
+        let hysteria2_hopping = build_resident_proxy_plan_for_node(
+            &config,
+            "proxy".to_owned(),
+            "hy2_hopping_live".to_owned(),
+            hysteria2_fixture_url_with_pin("hy2", "203.0.113.10:28453,28454-28455", "AA-BB-CC"),
+        )
+        .unwrap();
+        assert_eq!(hysteria2_hopping.protocol, "hysteria2");
+        assert_eq!(hysteria2_hopping.server_host, "203.0.113.10");
+        assert_eq!(hysteria2_hopping.server_port, 28453);
+        assert!(matches!(
+            hysteria2_hopping.handler,
+            ResidentProxyProtocolPlan::Hysteria2QuicTcp {
+                ref port_hop_ports,
+                ..
+            } if port_hop_ports == &vec![28453, 28454, 28455]
+        ));
+
         let tuic = build_resident_proxy_plan_for_node(
             &config,
             "proxy".to_owned(),
@@ -4324,10 +4846,37 @@ mod tests {
         assert_eq!(tuic.server_name, "office.example");
         assert_eq!(tuic.net, "udp");
         assert_eq!(tuic.tls, "quic");
+        assert!(tuic.allow_insecure);
         assert!(matches!(
             tuic.handler,
-            ResidentProxyProtocolPlan::TuicQuicTcp { .. }
+            ResidentProxyProtocolPlan::TuicQuicTcp {
+                allow_insecure: true,
+                ..
+            }
         ));
+
+        let tuic_verified = build_resident_proxy_plan_for_node(
+            &config,
+            "proxy".to_owned(),
+            "tuic_verified_live".to_owned(),
+            tuic_fixture_url("tuic", "203.0.113.10", 28454, false),
+        )
+        .unwrap();
+        assert_eq!(tuic_verified.protocol, "tuic");
+        assert_eq!(tuic_verified.server_name, "office.example");
+        assert_eq!(tuic_verified.tls, "quic");
+        assert!(!tuic_verified.allow_insecure);
+        assert!(matches!(
+            tuic_verified.handler,
+            ResidentProxyProtocolPlan::TuicQuicTcp {
+                allow_insecure: false,
+                ..
+            }
+        ));
+        assert_eq!(
+            tuic_verified.executable_graph_value()["runtimeComponents"]["underlayFactory"]["verificationPolicy"],
+            "system-roots"
+        );
 
         let juicity = build_resident_proxy_plan_for_node(
             &config,
@@ -4480,7 +5029,7 @@ mod tests {
     }
 
     #[test]
-    fn resident_dataplane_plan_keeps_first_batch_unsupported_shapes_blocked() {
+    fn resident_dataplane_plan_keeps_deferred_unsupported_shapes_blocked() {
         let config = parse_config(
             r#"
         global {
@@ -4519,7 +5068,7 @@ mod tests {
             shadowsocks_unsupported_plugin_fixture_url("ss-plugin", "203.0.113.10", 28446),
         )
         .unwrap_err();
-        assert!(plugin.contains("admits simple-obfs obfs=http only"));
+        assert!(plugin.contains("admits simple-obfs http/tls and v2ray-plugin tls websocket only"));
 
         let vmess_grpc = build_resident_proxy_plan_for_node(
             &config,
@@ -4546,8 +5095,13 @@ mod tests {
             "trojan_go_inner_encryption".to_owned(),
             "trojan-go://password@secure-stream.example.net:443?type=ws&sni=secure-stream.example.net&encryption=ss%3Baes-128-gcm%3Apass".to_owned(),
         )
-        .unwrap_err();
-        assert!(trojan_go_inner_encryption.contains("does not admit inner encryption"));
+        .unwrap();
+        assert_eq!(trojan_go_inner_encryption.protocol, "trojan");
+        assert_eq!(trojan_go_inner_encryption.net, "websocket");
+        assert!(matches!(
+            trojan_go_inner_encryption.handler,
+            ResidentProxyProtocolPlan::TrojanInnerShadowsocksTcpTls { .. }
+        ));
 
         let anytls_insecure = build_resident_proxy_plan_for_node(
             &config,
@@ -4583,17 +5137,24 @@ mod tests {
             "hy2_hopping".to_owned(),
             hysteria2_fixture_url_with_pin("hy2", "example.com:443,8443-8445", "AA-BB-CC"),
         )
-        .unwrap_err();
-        assert!(hy2_hopping.contains("single-port Hysteria2 endpoints"));
+        .unwrap();
+        assert_eq!(hy2_hopping.server_port, 443);
+        assert!(matches!(
+            hy2_hopping.handler,
+            ResidentProxyProtocolPlan::Hysteria2QuicTcp {
+                ref port_hop_ports,
+                ..
+            } if port_hop_ports == &vec![443, 8443, 8444, 8445]
+        ));
 
-        let tuic_without_insecure = build_resident_proxy_plan_for_node(
+        let tuic_verified = build_resident_proxy_plan_for_node(
             &config,
             "proxy".to_owned(),
-            "tuic_without_insecure".to_owned(),
+            "tuic_verified".to_owned(),
             tuic_fixture_url("tuic", "203.0.113.10", 28454, false),
         )
-        .unwrap_err();
-        assert!(tuic_without_insecure.contains("allow_insecure is explicit"));
+        .unwrap();
+        assert!(!tuic_verified.allow_insecure);
 
         let juicity_without_verification = build_resident_proxy_plan_for_node(
             &config,
@@ -4687,7 +5248,7 @@ mod tests {
         );
         let err = build_resident_dataplane_plan(&config).unwrap_err();
         assert!(err.contains("admits tcp flow=xtls-rprx-vision"));
-        assert!(err.contains("keep Go outbound"));
+        assert!(err.contains("resident shape remains fail-closed"));
     }
 
     #[test]

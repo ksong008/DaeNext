@@ -19,7 +19,7 @@ pub(super) fn run_juicity_contract() -> RunnerOutput {
     RunnerOutput::ok(format!(
         "{}\n",
         json!({
-            "name": "stage15-juicity-native-optin",
+            "name": "juicity-native-optin",
             "default_go_path": juicity::contract::DEFAULT_GO_PATH,
             "rust_adapter_mode": juicity::contract::ADAPTER_MODE,
             "protocol_scope": juicity::contract::PROTOCOL_SCOPE,

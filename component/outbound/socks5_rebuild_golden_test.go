@@ -32,11 +32,11 @@ const outboundGoldenUpdateEnv = "DAE_UPDATE_REBUILD_GOLDEN"
 func TestWriteSocks5NativeOptInGoldenFixture(t *testing.T) {
 	writeOrCheckOutboundGolden(t,
 		"../../testdata/rebuild-golden/outbound/protocol/socks5_native_optin.json",
-		rebuildGoldenStage15Socks5NativeOptIn(t),
+		rebuildGoldenNativeSocks5NativeOptIn(t),
 	)
 }
 
-func rebuildGoldenStage15Socks5NativeOptIn(t testing.TB) any {
+func rebuildGoldenNativeSocks5NativeOptIn(t testing.TB) any {
 	t.Helper()
 
 	link := "manual-name:socks5://user:pass@127.0.0.1:1080#outer -> socks://127.0.0.2:1081#inner"
@@ -51,7 +51,7 @@ func rebuildGoldenStage15Socks5NativeOptIn(t testing.TB) any {
 	}
 
 	return map[string]any{
-		"name": "stage15-socks5-native-optin",
+		"name": "socks5-native-optin",
 		"source": []string{
 			"DAENEW_RUST_REBUILD_MEMO_2026-05-16.md:26.1",
 			"DAENEW_RUST_REBUILD_MEMO_2026-05-16.md:26.3",

@@ -37,11 +37,11 @@ var anytlsDefaultPaddingScheme = []byte(`stop=8
 func TestWriteAnyTLSNativeOptInGoldenFixture(t *testing.T) {
 	writeOrCheckOutboundGolden(t,
 		"../../testdata/rebuild-golden/outbound/protocol/anytls_native_optin.json",
-		rebuildGoldenStage15AnyTLSNativeOptIn(t),
+		rebuildGoldenNativeAnyTLSNativeOptIn(t),
 	)
 }
 
-func rebuildGoldenStage15AnyTLSNativeOptIn(t testing.TB) any {
+func rebuildGoldenNativeAnyTLSNativeOptIn(t testing.TB) any {
 	t.Helper()
 
 	basic := "anytls://auth@example.com:443?insecure=1&sni=sni.example#basic"
@@ -49,7 +49,7 @@ func rebuildGoldenStage15AnyTLSNativeOptIn(t testing.TB) any {
 	defaultSni := "anytls://auth@example.com:443#default-sni"
 
 	return map[string]any{
-		"name": "stage15-anytls-native-optin",
+		"name": "anytls-native-optin",
 		"source": []string{
 			"DAENEW_RUST_REBUILD_MEMO_2026-05-16.md:26.17",
 			"/root/project/outbound/dialer/anytls/anytls.go",

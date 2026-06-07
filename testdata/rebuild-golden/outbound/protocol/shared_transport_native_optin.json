@@ -60,7 +60,7 @@
     "new_conn_wraps_net_conn": true,
     "request_header_hex": "01020304"
   },
-  "name": "stage15-shared-transport-native-optin",
+  "name": "shared-transport-native-optin",
   "protocol_scope": [
     "transport-combos"
   ],

@@ -6,7 +6,7 @@ use super::*;
 
 #[test]
 fn stage140_synthetic_utls_clienthello_builder_roundtrips_fixture_profiles() {
-    let fixture = fixture("outbound/protocol/stage139_go_utls_clienthello_profile.json");
+    let fixture = fixture("outbound/protocol/utls_clienthello_profile.json");
     let samples = fixture["samples"].as_array().unwrap();
     let mut synthetic_count = 0;
 
@@ -38,7 +38,7 @@ fn stage140_synthetic_utls_clienthello_builder_roundtrips_fixture_profiles() {
 
 #[test]
 fn stage140_synthetic_utls_clienthello_builder_rejects_profiles_without_padding_room() {
-    let fixture = fixture("outbound/protocol/stage139_go_utls_clienthello_profile.json");
+    let fixture = fixture("outbound/protocol/utls_clienthello_profile.json");
     let sample = fixture["samples"][0]["record_hex"].as_str().unwrap();
     let mut profile = parse_utls_client_hello_record_hex(sample).unwrap();
     profile

@@ -187,7 +187,7 @@
     "local parser smoke for VLESS xHTTP TLS and REALITY",
     "local VLESS key/request-header contract smoke"
   ],
-  "name": "stage15-vless-native-optin",
+  "name": "vless-native-optin",
   "protocol_scope": [
     "vless"
   ],

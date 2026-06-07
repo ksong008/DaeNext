@@ -4,7 +4,7 @@ use std::time::Instant;
 use dae_outbound::shared_transport::{contract, ir};
 
 fn main() {
-    let iters = std::env::var("DAE_STAGE15_SHARED_TRANSPORT_BENCH_ITERS")
+    let iters = std::env::var("DAE_SHARED_TRANSPORT_NATIVE_OPTIN_BENCH_ITERS")
         .ok()
         .and_then(|value| value.parse::<u64>().ok())
         .unwrap_or(200_000);

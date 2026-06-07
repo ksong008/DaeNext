@@ -4,7 +4,7 @@ use std::time::Instant;
 use dae_outbound::http_proxy::{HttpConnectOptions, HttpProxyLink, request};
 
 fn main() {
-    let iters = std::env::var("DAE_STAGE15_HTTP_BENCH_ITERS")
+    let iters = std::env::var("DAE_HTTP_NATIVE_OPTIN_BENCH_ITERS")
         .ok()
         .and_then(|value| value.parse::<u64>().ok())
         .unwrap_or(200_000);

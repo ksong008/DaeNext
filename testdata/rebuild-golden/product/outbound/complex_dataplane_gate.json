@@ -93,7 +93,7 @@
     },
     {
       "blocker_class": "foundation-blocker",
-      "next_allowed_step": "make shared transport the Stage 19 foundation work item before complex protocols",
+      "next_allowed_step": "make shared transport the foundation work item before complex protocols",
       "protocol": "shared transport",
       "required_before_true_dataplane": [
         "TLS and uTLS handshake live smoke",
@@ -123,16 +123,16 @@
     "default switch remains blocked until daemon readiness is re-opened with true data-plane evidence"
   ],
   "source": [
-    "DAEX_RUST_REBUILD_PLAN_2026-05-16.md:stage19",
-    "DAEX_RUST_REBUILD_PLAN_2026-05-16.md:stage17-item125",
-    "DAEX_RUST_REBUILD_PLAN_2026-05-16.md:stage18",
+    "DAEX_RUST_REBUILD_PLAN_2026-05-16.md:complex-protocol-live-smoke",
+    "DAEX_RUST_REBUILD_PLAN_2026-05-16.md:protocol-parser-export-metadata",
+    "DAEX_RUST_REBUILD_PLAN_2026-05-16.md:base-dataplane-evidence",
     "DAENEW_RUST_REBUILD_MEMO_2026-05-16.md:26",
     "DAENEW_RUST_REBUILD_MEMO_2026-05-16.md:29",
     "DAENEW_RUST_REBUILD_MEMO_2026-05-16.md:33",
     "rust/crates/dae-outbound/src/shared_transport",
     "rust/crates/dae-product/src/protocol_dataplane.rs"
   ],
-  "stage": "stage19",
+  "stage": "complex-protocol-dataplane",
   "validation_commands": [
     "cargo test --manifest-path rust/Cargo.toml -p dae-product complex_dataplane_gate_contract_matches_golden_fixture -- --nocapture",
     "cargo test --manifest-path rust/Cargo.toml --workspace",

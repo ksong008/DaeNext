@@ -389,7 +389,7 @@ fn push_hpack_literal_new_name(out: &mut Vec<u8>, name: &[u8], value: &[u8]) {
 fn push_hpack_string(out: &mut Vec<u8>, value: &[u8]) {
     assert!(
         value.len() < 128,
-        "stage97 hpack helper only supports short literals"
+        "grpc hpack helper only supports short literals"
     );
     out.push(value.len() as u8);
     out.extend_from_slice(value);

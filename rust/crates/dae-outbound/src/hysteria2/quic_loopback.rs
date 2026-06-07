@@ -21,12 +21,12 @@ use super::wire::{
     parse_tcp_request_stream, parse_tcp_response_stream, parse_udp_message,
 };
 
-pub const DEFAULT_HYSTERIA2_TCP_TARGET: &str = "stage130-tcp.example:443";
-pub const DEFAULT_HYSTERIA2_UDP_TARGET: &str = "stage130-udp.example:5353";
-pub const DEFAULT_HYSTERIA2_TCP_PAYLOAD: &[u8] = b"stage130-hysteria2-tcp-ping";
-pub const DEFAULT_HYSTERIA2_TCP_RESPONSE: &[u8] = b"stage130-hysteria2-tcp-pong";
-pub const DEFAULT_HYSTERIA2_UDP_PAYLOAD: &[u8] = b"stage130-hysteria2-udp-ping";
-pub const DEFAULT_HYSTERIA2_UDP_RESPONSE: &[u8] = b"stage130-hysteria2-udp-pong";
+pub const DEFAULT_HYSTERIA2_TCP_TARGET: &str = "hysteria2-loopback-tcp.example:443";
+pub const DEFAULT_HYSTERIA2_UDP_TARGET: &str = "hysteria2-loopback-udp.example:5353";
+pub const DEFAULT_HYSTERIA2_TCP_PAYLOAD: &[u8] = b"hysteria2-loopback-tcp-ping";
+pub const DEFAULT_HYSTERIA2_TCP_RESPONSE: &[u8] = b"hysteria2-loopback-tcp-pong";
+pub const DEFAULT_HYSTERIA2_UDP_PAYLOAD: &[u8] = b"hysteria2-loopback-udp-ping";
+pub const DEFAULT_HYSTERIA2_UDP_RESPONSE: &[u8] = b"hysteria2-loopback-udp-pong";
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Hysteria2QuicLoopbackOptions {
@@ -119,18 +119,16 @@ pub fn run_hysteria2_quic_loopback_smoke(
 ) -> Result<Hysteria2QuicLoopbackReport, OutboundError> {
     if options.stream_iterations == 0 {
         return Err(bad_quic_loopback(
-            "stage130 --stream-iters must be greater than zero",
+            "Hysteria2 loopback --stream-iters must be greater than zero",
         ));
     }
     if options.datagram_iterations == 0 {
         return Err(bad_quic_loopback(
-            "stage130 --datagram-iters must be greater than zero",
+            "Hysteria2 loopback --datagram-iters must be greater than zero",
         ));
     }
     if options.tcp_payload.is_empty() || options.udp_payload.is_empty() {
-        return Err(bad_quic_loopback(
-            "stage130 Hysteria2 payloads cannot be empty",
-        ));
+        return Err(bad_quic_loopback("Hysteria2 payloads cannot be empty"));
     }
     let runtime = tokio::runtime::Builder::new_current_thread()
         .enable_io()
@@ -143,7 +141,7 @@ pub fn run_hysteria2_quic_loopback_smoke(
             run_hysteria2_quic_loopback_smoke_async(options),
         )
         .await
-        .map_err(|_| bad_quic_loopback("stage130 Hysteria2 true QUIC loopback timed out"))?
+        .map_err(|_| bad_quic_loopback("Hysteria2 true QUIC loopback timed out"))?
     })
 }
 
@@ -275,7 +273,7 @@ async fn run_hysteria2_quic_loopback_smoke_async(
         }
     }
     let elapsed_ns = start.elapsed().as_nanos();
-    client_connection.close(0_u32.into(), b"stage130 done");
+    client_connection.close(0_u32.into(), b"hysteria2-loopback done");
     client_endpoint.wait_idle().await;
 
     let server = server_task

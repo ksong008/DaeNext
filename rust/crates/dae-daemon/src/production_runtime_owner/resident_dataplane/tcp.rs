@@ -8,12 +8,14 @@ use std::net::{
 };
 use std::os::fd::AsRawFd;
 use std::path::PathBuf;
+use std::pin::Pin;
 use std::slice;
 use std::sync::{
     Arc, Condvar, Mutex, OnceLock,
     atomic::{AtomicBool, Ordering},
     mpsc,
 };
+use std::task::{Context, Poll};
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -39,12 +41,20 @@ use dae_outbound::{
     },
     shadowsocks::{
         AeadStreamCodec, ShadowsocksMetadata, Sip003SimpleObfsHttpOptions,
+        Sip003SimpleObfsTlsOptions, cipher_spec, read_encrypted_chunk_from_async_stream,
         read_encrypted_chunk_from_stream, simple_obfs_http_request_with_body,
+        simple_obfs_tls_client_hello_with_body, ss2022_tcp_client_stream_encoder,
+        ss2022_tcp_server_stream_decoder, ss2022_tcp_unix_timestamp_now,
+    },
+    shared_transport::mux::{
+        MuxFrameOptions, OPTION_DATA, SESSION_STATUS_END, SESSION_STATUS_KEEP,
+        SESSION_STATUS_KEEPALIVE,
     },
     shared_transport::{
         DEFAULT_WS_KEY, HttpUpgradeOptions, MeekRoundTripOptions, WS_MASK_KEY, grpc_hunk_frame,
-        grpc_hunk_payload, http_upgrade_request, ir, meek_http_request, read_http_head,
-        validate_http_status, websocket_client_binary_frame, websocket_handshake_request,
+        grpc_hunk_payload, http_upgrade_request, ir, meek_http_request, mux_data_frame,
+        mux_end_frame, mux_new_frame, read_http_head, validate_http_status,
+        websocket_client_binary_frame, websocket_handshake_request,
     },
     socks5::{Socks5Address, handshake},
     trojan::packet as trojan_packet,
@@ -54,7 +64,7 @@ use dae_outbound::{
     vless::packet,
     vmess::{
         VMessAeadTcpClientSessionStart, aead_tcp_client_session_start,
-        aead_tcp_response_reader_from_stream,
+        aead_tcp_response_reader_from_async_stream, aead_tcp_response_reader_from_stream,
     },
 };
 use dae_routing::{Query, RoutingMatcher};
@@ -86,7 +96,7 @@ use super::{
     RESIDENT_TCP_IDLE_TIMEOUT, TLS_RECORD_MAX_PAYLOAD_LEN, VLESS_RESPONSE_VERSION,
     XTLS_RPRX_VISION,
 };
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::io::{AsyncRead, AsyncReadExt, AsyncWriteExt, ReadBuf};
 use tokio::net::{TcpListener as TokioTcpListener, TcpStream as TokioTcpStream};
 use tokio::runtime;
 use tokio::time;
@@ -425,6 +435,7 @@ pub(super) fn probe_resident_proxy_tcp(
                 } else if matches!(
                     selection.proxy.handler,
                     ResidentProxyProtocolPlan::TrojanTcpTls { .. }
+                        | ResidentProxyProtocolPlan::TrojanInnerShadowsocksTcpTls { .. }
                         | ResidentProxyProtocolPlan::AnyTlsTcpTls { .. }
                 ) {
                     handle_frame_tls_tcp_connection_async(
@@ -454,7 +465,7 @@ pub(super) fn probe_resident_proxy_tcp(
                     )
                     .await
                 } else {
-                    handle_first_batch_proxy_tcp_connection_async(
+                    handle_resident_proxy_tcp_connection_async(
                         inbound,
                         peer,
                         original_dst,
@@ -809,6 +820,7 @@ async fn handle_tcp_connection_async_or_handoff(
             } else if matches!(
                 selection.proxy.handler,
                 ResidentProxyProtocolPlan::TrojanTcpTls { .. }
+                    | ResidentProxyProtocolPlan::TrojanInnerShadowsocksTcpTls { .. }
                     | ResidentProxyProtocolPlan::AnyTlsTcpTls { .. }
             ) {
                 handle_frame_tls_tcp_connection_async(
@@ -838,7 +850,7 @@ async fn handle_tcp_connection_async_or_handoff(
                 )
                 .await
             } else {
-                handle_first_batch_proxy_tcp_connection_async(
+                handle_resident_proxy_tcp_connection_async(
                     inbound,
                     peer,
                     original_dst,
@@ -1759,7 +1771,7 @@ async fn handle_vless_xhttp_h2_tcp_connection_async(
         })
 }
 
-async fn handle_first_batch_proxy_tcp_connection_async(
+async fn handle_resident_proxy_tcp_connection_async(
     mut inbound: TokioTcpStream,
     peer: SocketAddr,
     original_dst: SocketAddrV4,
@@ -1784,11 +1796,54 @@ async fn handle_first_batch_proxy_tcp_connection_async(
         )
         .await;
     }
-    if let ResidentProxyProtocolPlan::HttpProxyTcp { username, password } = &selection.proxy.handler
+    if let ResidentProxyProtocolPlan::VmessAeadTcp { id } = &selection.proxy.handler
+        && selection.proxy.net == "websocket"
+        && selection.proxy.tls == "tls"
+    {
+        let id = id.clone();
+        return handle_vmess_websocket_tls_proxy_tcp_connection_async(
+            &mut inbound,
+            peer,
+            original_dst,
+            selection,
+            stop,
+            &sniff,
+            &metrics,
+            &id,
+        )
+        .await;
+    }
+    if let ResidentProxyProtocolPlan::VmessAeadTcp { id } = &selection.proxy.handler
+        && selection.proxy.net == "httpupgrade"
+        && selection.proxy.tls == "tls"
+    {
+        let id = id.clone();
+        return handle_vmess_httpupgrade_tls_proxy_tcp_connection_async(
+            &mut inbound,
+            peer,
+            original_dst,
+            selection,
+            stop,
+            &sniff,
+            &metrics,
+            &id,
+        )
+        .await;
+    }
+    if let ResidentProxyProtocolPlan::HttpProxyTcp {
+        username,
+        password,
+        transport,
+        transport_host,
+        transport_path,
+    } = &selection.proxy.handler
         && selection.proxy.tls == "tls"
     {
         let username = username.clone();
         let password = password.clone();
+        let transport = *transport;
+        let transport_host = transport_host.clone();
+        let transport_path = transport_path.clone();
         return handle_https_proxy_tcp_connection_async(
             &mut inbound,
             peer,
@@ -1799,17 +1854,49 @@ async fn handle_first_batch_proxy_tcp_connection_async(
             &metrics,
             &username,
             &password,
+            transport,
+            &transport_host,
+            &transport_path,
+        )
+        .await;
+    }
+    if let ResidentProxyProtocolPlan::ShadowsocksV2rayPluginTlsWsTcp {
+        cipher,
+        password,
+        salt_len,
+        host,
+        path,
+    } = &selection.proxy.handler
+    {
+        let cipher = cipher.clone();
+        let password = password.clone();
+        let salt_len = *salt_len;
+        let host = host.clone();
+        let path = path.clone();
+        return handle_shadowsocks_v2ray_plugin_tls_ws_proxy_tcp_connection_async(
+            &mut inbound,
+            peer,
+            original_dst,
+            selection,
+            stop,
+            &sniff,
+            &metrics,
+            &cipher,
+            &password,
+            salt_len,
+            &host,
+            &path,
         )
         .await;
     }
     let mut inbound = inbound
         .into_std()
-        .map_err(|err| format!("convert async inbound TCP to std for first-batch proxy: {err}"))?;
+        .map_err(|err| format!("convert async inbound TCP to std for resident proxy: {err}"))?;
     tokio::task::spawn_blocking(move || {
         inbound
             .set_nonblocking(false)
-            .map_err(|err| format!("set first-batch inbound blocking: {err}"))?;
-        handle_first_batch_proxy_tcp_connection(
+            .map_err(|err| format!("set resident proxy inbound blocking: {err}"))?;
+        handle_resident_proxy_tcp_connection(
             &mut inbound,
             peer,
             original_dst,
@@ -1820,10 +1907,10 @@ async fn handle_first_batch_proxy_tcp_connection_async(
         )
     })
     .await
-    .map_err(|err| format!("join first-batch proxy task: {err}"))?
+    .map_err(|err| format!("join resident proxy task: {err}"))?
 }
 
-fn handle_first_batch_proxy_tcp_connection(
+fn handle_resident_proxy_tcp_connection(
     inbound: &mut TcpStream,
     peer: SocketAddr,
     original_dst: SocketAddrV4,
@@ -1846,24 +1933,48 @@ fn handle_first_batch_proxy_tcp_connection(
                 password,
             )
         }
-        ResidentProxyProtocolPlan::HttpProxyTcp { username, password } => {
-            handle_http_proxy_tcp_connection(
-                inbound,
-                peer,
-                original_dst,
-                &selection,
-                stop,
-                sniff,
-                metrics,
-                username,
-                password,
-            )
-        }
+        ResidentProxyProtocolPlan::HttpProxyTcp {
+            username,
+            password,
+            transport,
+            transport_host,
+            transport_path,
+        } => handle_http_proxy_tcp_connection(
+            inbound,
+            peer,
+            original_dst,
+            &selection,
+            stop,
+            sniff,
+            metrics,
+            username,
+            password,
+            *transport,
+            transport_host,
+            transport_path,
+        ),
         ResidentProxyProtocolPlan::ShadowsocksAeadTcp {
             cipher,
             password,
             salt_len,
         } => handle_shadowsocks_proxy_tcp_connection(
+            inbound,
+            peer,
+            original_dst,
+            &selection,
+            stop,
+            sniff,
+            metrics,
+            cipher,
+            password,
+            *salt_len,
+        ),
+        ResidentProxyProtocolPlan::Shadowsocks2022Tcp {
+            cipher,
+            password,
+            salt_len,
+            ..
+        } => handle_shadowsocks_2022_proxy_tcp_connection(
             inbound,
             peer,
             original_dst,
@@ -1882,6 +1993,48 @@ fn handle_first_batch_proxy_tcp_connection(
             host,
             path,
         } => handle_shadowsocks_simple_obfs_http_proxy_tcp_connection(
+            inbound,
+            peer,
+            original_dst,
+            &selection,
+            stop,
+            sniff,
+            metrics,
+            cipher,
+            password,
+            *salt_len,
+            host,
+            path,
+        ),
+        ResidentProxyProtocolPlan::ShadowsocksSimpleObfsTlsTcp {
+            cipher,
+            password,
+            salt_len,
+            host,
+        } => handle_shadowsocks_simple_obfs_tls_proxy_tcp_connection(
+            inbound,
+            peer,
+            original_dst,
+            &selection,
+            stop,
+            sniff,
+            metrics,
+            cipher,
+            password,
+            *salt_len,
+            host,
+        ),
+        ResidentProxyProtocolPlan::ShadowsocksV2rayPluginTlsWsTcp { .. } => Err(
+            "resident Shadowsocks v2ray-plugin TLS/WebSocket handler must use async TLS dispatcher"
+                .to_owned(),
+        ),
+        ResidentProxyProtocolPlan::Shadowsocks2022SimpleObfsHttpTcp {
+            cipher,
+            password,
+            salt_len,
+            host,
+            path,
+        } => handle_shadowsocks_2022_simple_obfs_http_proxy_tcp_connection(
             inbound,
             peer,
             original_dst,
@@ -1919,10 +2072,7 @@ fn handle_first_batch_proxy_tcp_connection(
                     id,
                 )
             } else if selection.proxy.net == "grpc" {
-                Err(
-                    "first-batch VMess gRPC handler must use async TLS HTTP/2 dispatcher"
-                        .to_owned(),
-                )
+                Err("resident VMess gRPC handler must use async TLS HTTP/2 dispatcher".to_owned())
             } else {
                 handle_vmess_proxy_tcp_connection(
                     inbound,
@@ -1937,26 +2087,27 @@ fn handle_first_batch_proxy_tcp_connection(
             }
         }
         ResidentProxyProtocolPlan::VlessVisionTcpTls { .. } => Err(
-            "first-batch proxy dispatcher received VLESS handler; use VLESS TLS dispatcher"
-                .to_owned(),
+            "resident proxy dispatcher received VLESS handler; use VLESS TLS dispatcher".to_owned(),
         ),
         ResidentProxyProtocolPlan::TrojanTcpTls { .. } => Err(
-            "first-batch proxy dispatcher received generic TLS handler; use TLS dispatcher"
+            "resident proxy dispatcher received generic TLS handler; use TLS dispatcher".to_owned(),
+        ),
+        ResidentProxyProtocolPlan::TrojanInnerShadowsocksTcpTls { .. } => Err(
+            "resident proxy dispatcher received inner-encryption TLS handler; use TLS dispatcher"
                 .to_owned(),
         ),
         ResidentProxyProtocolPlan::AnyTlsTcpTls { .. } => Err(
-            "first-batch proxy dispatcher received frame TLS handler; use TLS dispatcher"
-                .to_owned(),
+            "resident proxy dispatcher received frame TLS handler; use TLS dispatcher".to_owned(),
         ),
-        ResidentProxyProtocolPlan::Hysteria2QuicTcp { .. } => Err(
-            "first-batch proxy dispatcher received QUIC handler; use QUIC dispatcher".to_owned(),
-        ),
-        ResidentProxyProtocolPlan::TuicQuicTcp { .. } => Err(
-            "first-batch proxy dispatcher received QUIC handler; use QUIC dispatcher".to_owned(),
-        ),
-        ResidentProxyProtocolPlan::JuicityQuicTcp { .. } => Err(
-            "first-batch proxy dispatcher received QUIC handler; use QUIC dispatcher".to_owned(),
-        ),
+        ResidentProxyProtocolPlan::Hysteria2QuicTcp { .. } => {
+            Err("resident proxy dispatcher received QUIC handler; use QUIC dispatcher".to_owned())
+        }
+        ResidentProxyProtocolPlan::TuicQuicTcp { .. } => {
+            Err("resident proxy dispatcher received QUIC handler; use QUIC dispatcher".to_owned())
+        }
+        ResidentProxyProtocolPlan::JuicityQuicTcp { .. } => {
+            Err("resident proxy dispatcher received QUIC handler; use QUIC dispatcher".to_owned())
+        }
     }
 }
 
@@ -2022,6 +2173,34 @@ async fn handle_frame_tls_tcp_connection_async(
                 )
                 .await
             }
+        }
+        ResidentProxyProtocolPlan::TrojanInnerShadowsocksTcpTls {
+            password,
+            inner_cipher,
+            inner_password,
+        } => {
+            let password = password.clone();
+            let inner_cipher = inner_cipher.clone();
+            let inner_password = inner_password.clone();
+            if selection.proxy.net != "websocket" {
+                return Err(
+                    "trojan inner Shadowsocks dispatcher admits WebSocket transport only"
+                        .to_owned(),
+                );
+            }
+            handle_trojan_websocket_inner_shadowsocks_tls_tcp_connection_async(
+                inbound,
+                peer,
+                original_dst,
+                selection,
+                stop,
+                sniff,
+                metrics,
+                &password,
+                &inner_cipher,
+                &inner_password,
+            )
+            .await
         }
         ResidentProxyProtocolPlan::AnyTlsTcpTls { auth } => {
             let auth = auth.clone();
@@ -2121,6 +2300,83 @@ async fn handle_trojan_websocket_tls_tcp_connection_async(
             Ok(event)
         }
     }
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn handle_trojan_websocket_inner_shadowsocks_tls_tcp_connection_async(
+    inbound: &mut TokioTcpStream,
+    peer: SocketAddr,
+    original_dst: SocketAddrV4,
+    selection: TcpProxySelection,
+    stop: Arc<AtomicBool>,
+    sniff: &TcpSniffReport,
+    metrics: &ResidentDataplaneMetrics,
+    password: &str,
+    inner_cipher: &str,
+    inner_password: &str,
+) -> Result<Value, String> {
+    let mut client = open_async_resident_tls_client(&selection.proxy).await?;
+    let tls_underlay = async_resident_tls_underlay_name(&client);
+    let options =
+        HttpUpgradeOptions::new(&selection.proxy.stream_host, &selection.proxy.stream_path);
+    websocket_handshake_over_resident_tls_async(&mut client, &options).await?;
+    let stats = relay_tcp_over_trojan_websocket_inner_shadowsocks_tls(
+        inbound,
+        &mut client,
+        stop,
+        &selection.route.dial_target,
+        password,
+        inner_cipher,
+        inner_password,
+        &sniff.payload,
+        metrics,
+    )
+    .await;
+    stats
+        .map(|stats| {
+            let mut event = generic_proxy_tcp_finished_event(
+                peer,
+                original_dst,
+                &selection,
+                sniff,
+                "trojan",
+                &stats,
+                "inner-encryption-websocket-aead",
+            );
+            event["tls_underlay"] = json!(tls_underlay);
+            event["stream_wrapper"] = json!("websocket");
+            event["inner_encryption"] = json!("shadowsocks");
+            append_proxy_tcp_execution_fields(
+                &mut event,
+                "inner-encryption-websocket-aead",
+                "trojan",
+                Some(tls_underlay),
+                None,
+            );
+            event
+        })
+        .or_else(|err| {
+            let mut event = generic_proxy_tcp_failed_event(
+                peer,
+                original_dst,
+                &selection,
+                sniff,
+                "trojan",
+                &err,
+                "inner-encryption-websocket-aead",
+            );
+            event["tls_underlay"] = json!(tls_underlay);
+            event["stream_wrapper"] = json!("websocket");
+            event["inner_encryption"] = json!("shadowsocks");
+            append_proxy_tcp_execution_fields(
+                &mut event,
+                "inner-encryption-websocket-aead",
+                "trojan",
+                Some(tls_underlay),
+                None,
+            );
+            Ok::<Value, String>(event)
+        })
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -2687,10 +2943,12 @@ async fn handle_quic_tcp_connection_async(
             auth,
             pin_sha256,
             max_rx,
+            port_hop_ports,
         } => {
             let auth = auth.clone();
             let pin_sha256 = pin_sha256.clone();
             let max_rx = *max_rx;
+            let port_hop_ports = port_hop_ports.clone();
             handle_hysteria2_quic_tcp_connection_async(
                 inbound,
                 peer,
@@ -2702,6 +2960,7 @@ async fn handle_quic_tcp_connection_async(
                 &auth,
                 &pin_sha256,
                 max_rx,
+                &port_hop_ports,
             )
             .await
         }
@@ -2709,10 +2968,12 @@ async fn handle_quic_tcp_connection_async(
             uuid,
             password,
             alpn,
+            allow_insecure,
         } => {
             let uuid = uuid.clone();
             let password = password.clone();
             let alpn = alpn.clone();
+            let allow_insecure = *allow_insecure;
             handle_tuic_quic_tcp_connection_async(
                 inbound,
                 peer,
@@ -2724,6 +2985,7 @@ async fn handle_quic_tcp_connection_async(
                 &uuid,
                 &password,
                 &alpn,
+                allow_insecure,
             )
             .await
         }
@@ -2768,13 +3030,15 @@ async fn handle_hysteria2_quic_tcp_connection_async(
     auth: &str,
     pin_sha256: &str,
     max_rx: u64,
+    port_hop_ports: &[u16],
 ) -> Result<Value, String> {
     let mut endpoint = open_marked_quic_endpoint(selection.proxy.mark)?;
     endpoint.set_default_client_config(
         build_hysteria2_pinned_client_config(pin_sha256.to_owned())
             .map_err(|err| format!("build Hysteria2 QUIC client config: {err}"))?,
     );
-    let remote = resolve_proxy_udp_addr(&selection.proxy)?;
+    let remote = resolve_hysteria2_quic_remote(&selection.proxy, port_hop_ports)?;
+    let port_hopping = !port_hop_ports.is_empty();
     let connection = endpoint
         .connect(remote, &selection.proxy.server_name)
         .map_err(|err| format!("connect Hysteria2 QUIC endpoint: {err}"))?
@@ -2795,6 +3059,8 @@ async fn handle_hysteria2_quic_tcp_connection_async(
             "async-proxy-quic-tcp",
         );
         event["quic_underlay"] = json!("quinn-h3");
+        event["hysteria2_port_hopping"] = json!(port_hopping);
+        event["hysteria2_selected_port"] = json!(remote.port());
         append_proxy_tcp_execution_fields(
             &mut event,
             "async-proxy-quic-tcp",
@@ -2826,6 +3092,8 @@ async fn handle_hysteria2_quic_tcp_connection_async(
             "async-proxy-quic-tcp",
         );
         event["quic_underlay"] = json!("quinn-h3");
+        event["hysteria2_port_hopping"] = json!(port_hopping);
+        event["hysteria2_selected_port"] = json!(remote.port());
         append_proxy_tcp_execution_fields(
             &mut event,
             "async-proxy-quic-tcp",
@@ -2862,6 +3130,8 @@ async fn handle_hysteria2_quic_tcp_connection_async(
                 "async-proxy-quic-tcp",
             );
             event["quic_underlay"] = json!("quinn-h3");
+            event["hysteria2_port_hopping"] = json!(port_hopping);
+            event["hysteria2_selected_port"] = json!(remote.port());
             append_proxy_tcp_execution_fields(
                 &mut event,
                 "async-proxy-quic-tcp",
@@ -2885,6 +3155,8 @@ async fn handle_hysteria2_quic_tcp_connection_async(
                 "async-proxy-quic-tcp",
             );
             event["quic_underlay"] = json!("quinn-h3");
+            event["hysteria2_port_hopping"] = json!(port_hopping);
+            event["hysteria2_selected_port"] = json!(remote.port());
             append_proxy_tcp_execution_fields(
                 &mut event,
                 "async-proxy-quic-tcp",
@@ -2910,10 +3182,11 @@ async fn handle_tuic_quic_tcp_connection_async(
     uuid: &str,
     password: &str,
     alpn: &[String],
+    allow_insecure: bool,
 ) -> Result<Value, String> {
     let mut endpoint = open_marked_quic_endpoint(selection.proxy.mark)?;
     endpoint.set_default_client_config(
-        build_tuic_runtime_client_config(alpn)
+        build_tuic_runtime_client_config(alpn, allow_insecure)
             .map_err(|err| format!("build TUIC QUIC client config: {err}"))?,
     );
     let remote = resolve_proxy_udp_addr(&selection.proxy)?;
@@ -3193,6 +3466,23 @@ pub(super) fn resolve_proxy_udp_addr(proxy: &ResidentProxyPlan) -> Result<Socket
         .ok_or_else(|| format!("resolve QUIC endpoint {target}: no address"))
 }
 
+pub(super) fn resolve_hysteria2_quic_remote(
+    proxy: &ResidentProxyPlan,
+    port_hop_ports: &[u16],
+) -> Result<SocketAddr, String> {
+    let selected_port = if port_hop_ports.is_empty() {
+        proxy.server_port
+    } else {
+        port_hop_ports[fastrand::usize(..port_hop_ports.len())]
+    };
+    let target = format!("{}:{selected_port}", proxy.server_host);
+    target
+        .to_socket_addrs()
+        .map_err(|err| format!("resolve Hysteria2 QUIC endpoint {target}: {err}"))?
+        .next()
+        .ok_or_else(|| format!("resolve Hysteria2 QUIC endpoint {target}: no address"))
+}
+
 pub(super) fn set_socket_mark(fd: i32, mark: u32) -> std::io::Result<()> {
     let mark = mark as libc::c_int;
     let status = unsafe {
@@ -3239,7 +3529,7 @@ fn handle_socks5_proxy_tcp_connection(
                 sniff,
                 "socks5",
                 &stats,
-                "first-batch-tcp",
+                "plain-tcp-relay",
             )
         })
         .or_else(|err| {
@@ -3250,7 +3540,7 @@ fn handle_socks5_proxy_tcp_connection(
                 sniff,
                 "socks5",
                 &err,
-                "first-batch-tcp",
+                "plain-tcp-relay",
             ))
         })
 }
@@ -3266,9 +3556,20 @@ fn handle_http_proxy_tcp_connection(
     metrics: &ResidentDataplaneMetrics,
     username: &str,
     password: &str,
+    transport: bool,
+    transport_host: &str,
+    transport_path: &str,
 ) -> Result<Value, String> {
     let mut proxy = open_plain_proxy_tcp_stream(&selection.proxy)?;
-    http_proxy_connect(&mut proxy, &selection.route.dial_target, username, password)?;
+    http_proxy_connect(
+        &mut proxy,
+        &selection.route.dial_target,
+        username,
+        password,
+        transport,
+        transport_host,
+        transport_path,
+    )?;
     proxy
         .set_nonblocking(true)
         .map_err(|err| format!("set HTTP proxy TCP nonblocking: {err}"))?;
@@ -3284,7 +3585,7 @@ fn handle_http_proxy_tcp_connection(
                 sniff,
                 "http-proxy",
                 &stats,
-                "first-batch-tcp",
+                "plain-tcp-relay",
             )
         })
         .or_else(|err| {
@@ -3295,7 +3596,7 @@ fn handle_http_proxy_tcp_connection(
                 sniff,
                 "http-proxy",
                 &err,
-                "first-batch-tcp",
+                "plain-tcp-relay",
             ))
         })
 }
@@ -3311,10 +3612,22 @@ async fn handle_https_proxy_tcp_connection_async(
     metrics: &ResidentDataplaneMetrics,
     username: &str,
     password: &str,
+    transport: bool,
+    transport_host: &str,
+    transport_path: &str,
 ) -> Result<Value, String> {
     let mut proxy = open_async_resident_tls_client(&selection.proxy).await?;
     let tls_underlay = async_resident_tls_underlay_name(&proxy);
-    http_proxy_connect_async(&mut proxy, &selection.route.dial_target, username, password).await?;
+    http_proxy_connect_async(
+        &mut proxy,
+        &selection.route.dial_target,
+        username,
+        password,
+        transport,
+        transport_host,
+        transport_path,
+    )
+    .await?;
     if !sniff.payload.is_empty() {
         proxy
             .write_plain_all(&sniff.payload, "write HTTPS proxy initial payload")
@@ -3373,10 +3686,16 @@ async fn http_proxy_connect_async(
     target: &str,
     username: &str,
     password: &str,
+    transport: bool,
+    transport_host: &str,
+    transport_path: &str,
 ) -> Result<(), String> {
     let mut options = HttpConnectOptions::connect(target);
     options.username = username.to_owned();
     options.password = password.to_owned();
+    options.transport.enabled = transport;
+    options.host_override = transport_host.to_owned();
+    options.transport.path = transport_path.to_owned();
     let request = http_request::connect_request(&options);
     stream
         .write_plain_all(&request, "write HTTPS proxy CONNECT request")
@@ -3456,7 +3775,7 @@ fn handle_shadowsocks_proxy_tcp_connection(
                 sniff,
                 "shadowsocks",
                 &stats,
-                "first-batch-tcp",
+                "plain-tcp-relay",
             )
         })
         .or_else(|err| {
@@ -3467,8 +3786,89 @@ fn handle_shadowsocks_proxy_tcp_connection(
                 sniff,
                 "shadowsocks",
                 &err,
-                "first-batch-tcp",
+                "plain-tcp-relay",
             ))
+        })
+}
+
+#[allow(clippy::too_many_arguments)]
+fn handle_shadowsocks_2022_proxy_tcp_connection(
+    inbound: &mut TcpStream,
+    peer: SocketAddr,
+    original_dst: SocketAddrV4,
+    selection: &TcpProxySelection,
+    stop: &AtomicBool,
+    sniff: &TcpSniffReport,
+    metrics: &ResidentDataplaneMetrics,
+    cipher: &str,
+    password: &str,
+    salt_len: usize,
+) -> Result<Value, String> {
+    let mut proxy = open_plain_proxy_tcp_stream(&selection.proxy)?;
+    proxy
+        .set_nonblocking(false)
+        .map_err(|err| format!("set Shadowsocks 2022 proxy blocking: {err}"))?;
+    proxy
+        .set_read_timeout(Some(RESIDENT_TCP_IDLE_TIMEOUT))
+        .map_err(|err| format!("set Shadowsocks 2022 proxy read timeout: {err}"))?;
+    proxy
+        .set_write_timeout(Some(RESIDENT_TCP_IDLE_TIMEOUT))
+        .map_err(|err| format!("set Shadowsocks 2022 proxy write timeout: {err}"))?;
+    inbound
+        .set_read_timeout(Some(RESIDENT_TCP_IDLE_TIMEOUT))
+        .map_err(|err| format!("set Shadowsocks 2022 inbound read timeout: {err}"))?;
+    inbound
+        .set_write_timeout(Some(RESIDENT_TCP_IDLE_TIMEOUT))
+        .map_err(|err| format!("set Shadowsocks 2022 inbound write timeout: {err}"))?;
+    let stats = relay_tcp_over_shadowsocks_2022(
+        inbound,
+        &mut proxy,
+        stop,
+        &selection.route.dial_target,
+        cipher,
+        password,
+        salt_len,
+        &sniff.payload,
+        metrics,
+    );
+    stats
+        .map(|stats| {
+            let mut event = generic_proxy_tcp_finished_event(
+                peer,
+                original_dst,
+                selection,
+                sniff,
+                "shadowsocks",
+                &stats,
+                "shadowsocks-2022-tcp",
+            );
+            append_proxy_tcp_execution_fields(
+                &mut event,
+                "shadowsocks-2022-tcp",
+                "shadowsocks",
+                Some("aead-2022"),
+                None,
+            );
+            event
+        })
+        .or_else(|err| {
+            let mut event = generic_proxy_tcp_failed_event(
+                peer,
+                original_dst,
+                selection,
+                sniff,
+                "shadowsocks",
+                &err,
+                "shadowsocks-2022-tcp",
+            );
+            append_proxy_tcp_execution_fields(
+                &mut event,
+                "shadowsocks-2022-tcp",
+                "shadowsocks",
+                Some("aead-2022"),
+                None,
+            );
+            Ok::<Value, String>(event)
         })
 }
 
@@ -3525,12 +3925,12 @@ fn handle_shadowsocks_simple_obfs_http_proxy_tcp_connection(
                 sniff,
                 "shadowsocks",
                 &stats,
-                "first-batch-tcp",
+                "plain-tcp-relay",
             );
             event["plugin_wrapper"] = json!("simple-obfs-http");
             append_proxy_tcp_execution_fields(
                 &mut event,
-                "first-batch-tcp",
+                "plain-tcp-relay",
                 "shadowsocks",
                 Some("aead"),
                 None,
@@ -3545,14 +3945,264 @@ fn handle_shadowsocks_simple_obfs_http_proxy_tcp_connection(
                 sniff,
                 "shadowsocks",
                 &err,
-                "first-batch-tcp",
+                "plain-tcp-relay",
             );
             event["plugin_wrapper"] = json!("simple-obfs-http");
             append_proxy_tcp_execution_fields(
                 &mut event,
-                "first-batch-tcp",
+                "plain-tcp-relay",
                 "shadowsocks",
                 Some("aead"),
+                None,
+            );
+            Ok::<Value, String>(event)
+        })
+}
+
+#[allow(clippy::too_many_arguments)]
+fn handle_shadowsocks_simple_obfs_tls_proxy_tcp_connection(
+    inbound: &mut TcpStream,
+    peer: SocketAddr,
+    original_dst: SocketAddrV4,
+    selection: &TcpProxySelection,
+    stop: &AtomicBool,
+    sniff: &TcpSniffReport,
+    metrics: &ResidentDataplaneMetrics,
+    cipher: &str,
+    password: &str,
+    salt_len: usize,
+    host: &str,
+) -> Result<Value, String> {
+    let mut proxy = open_plain_proxy_tcp_stream(&selection.proxy)?;
+    proxy
+        .set_nonblocking(false)
+        .map_err(|err| format!("set Shadowsocks simple-obfs TLS proxy blocking: {err}"))?;
+    proxy
+        .set_read_timeout(Some(RESIDENT_TCP_IDLE_TIMEOUT))
+        .map_err(|err| format!("set Shadowsocks simple-obfs TLS proxy read timeout: {err}"))?;
+    proxy
+        .set_write_timeout(Some(RESIDENT_TCP_IDLE_TIMEOUT))
+        .map_err(|err| format!("set Shadowsocks simple-obfs TLS proxy write timeout: {err}"))?;
+    inbound
+        .set_read_timeout(Some(RESIDENT_TCP_IDLE_TIMEOUT))
+        .map_err(|err| format!("set Shadowsocks simple-obfs TLS inbound read timeout: {err}"))?;
+    inbound
+        .set_write_timeout(Some(RESIDENT_TCP_IDLE_TIMEOUT))
+        .map_err(|err| format!("set Shadowsocks simple-obfs TLS inbound write timeout: {err}"))?;
+    let stats = relay_tcp_over_shadowsocks_simple_obfs_tls(
+        inbound,
+        &mut proxy,
+        stop,
+        &selection.route.dial_target,
+        cipher,
+        password,
+        salt_len,
+        &sniff.payload,
+        metrics,
+        host,
+    );
+    stats
+        .map(|stats| {
+            let mut event = generic_proxy_tcp_finished_event(
+                peer,
+                original_dst,
+                selection,
+                sniff,
+                "shadowsocks",
+                &stats,
+                "plugin-wrapper-aead",
+            );
+            event["plugin_wrapper"] = json!("simple-obfs-tls");
+            append_proxy_tcp_execution_fields(
+                &mut event,
+                "plugin-wrapper-aead",
+                "shadowsocks",
+                Some("aead"),
+                None,
+            );
+            event
+        })
+        .or_else(|err| {
+            let mut event = generic_proxy_tcp_failed_event(
+                peer,
+                original_dst,
+                selection,
+                sniff,
+                "shadowsocks",
+                &err,
+                "plugin-wrapper-aead",
+            );
+            event["plugin_wrapper"] = json!("simple-obfs-tls");
+            append_proxy_tcp_execution_fields(
+                &mut event,
+                "plugin-wrapper-aead",
+                "shadowsocks",
+                Some("aead"),
+                None,
+            );
+            Ok::<Value, String>(event)
+        })
+}
+
+#[allow(clippy::too_many_arguments)]
+fn handle_shadowsocks_2022_simple_obfs_http_proxy_tcp_connection(
+    inbound: &mut TcpStream,
+    peer: SocketAddr,
+    original_dst: SocketAddrV4,
+    selection: &TcpProxySelection,
+    stop: &AtomicBool,
+    sniff: &TcpSniffReport,
+    metrics: &ResidentDataplaneMetrics,
+    cipher: &str,
+    password: &str,
+    salt_len: usize,
+    host: &str,
+    path: &str,
+) -> Result<Value, String> {
+    let mut proxy = open_plain_proxy_tcp_stream(&selection.proxy)?;
+    proxy
+        .set_nonblocking(false)
+        .map_err(|err| format!("set Shadowsocks 2022 simple-obfs proxy blocking: {err}"))?;
+    proxy
+        .set_read_timeout(Some(RESIDENT_TCP_IDLE_TIMEOUT))
+        .map_err(|err| format!("set Shadowsocks 2022 simple-obfs proxy read timeout: {err}"))?;
+    proxy
+        .set_write_timeout(Some(RESIDENT_TCP_IDLE_TIMEOUT))
+        .map_err(|err| format!("set Shadowsocks 2022 simple-obfs proxy write timeout: {err}"))?;
+    inbound
+        .set_read_timeout(Some(RESIDENT_TCP_IDLE_TIMEOUT))
+        .map_err(|err| format!("set Shadowsocks 2022 simple-obfs inbound read timeout: {err}"))?;
+    inbound
+        .set_write_timeout(Some(RESIDENT_TCP_IDLE_TIMEOUT))
+        .map_err(|err| format!("set Shadowsocks 2022 simple-obfs inbound write timeout: {err}"))?;
+    let stats = relay_tcp_over_shadowsocks_2022_simple_obfs_http(
+        inbound,
+        &mut proxy,
+        stop,
+        &selection.route.dial_target,
+        cipher,
+        password,
+        salt_len,
+        &sniff.payload,
+        metrics,
+        host,
+        path,
+    );
+    stats
+        .map(|stats| {
+            let mut event = generic_proxy_tcp_finished_event(
+                peer,
+                original_dst,
+                selection,
+                sniff,
+                "shadowsocks",
+                &stats,
+                "plugin-wrapper-aead-2022",
+            );
+            event["plugin_wrapper"] = json!("simple-obfs-http");
+            append_proxy_tcp_execution_fields(
+                &mut event,
+                "plugin-wrapper-aead-2022",
+                "shadowsocks",
+                Some("aead-2022"),
+                None,
+            );
+            event
+        })
+        .or_else(|err| {
+            let mut event = generic_proxy_tcp_failed_event(
+                peer,
+                original_dst,
+                selection,
+                sniff,
+                "shadowsocks",
+                &err,
+                "plugin-wrapper-aead-2022",
+            );
+            event["plugin_wrapper"] = json!("simple-obfs-http");
+            append_proxy_tcp_execution_fields(
+                &mut event,
+                "plugin-wrapper-aead-2022",
+                "shadowsocks",
+                Some("aead-2022"),
+                None,
+            );
+            Ok::<Value, String>(event)
+        })
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn handle_shadowsocks_v2ray_plugin_tls_ws_proxy_tcp_connection_async(
+    inbound: &mut TokioTcpStream,
+    peer: SocketAddr,
+    original_dst: SocketAddrV4,
+    selection: TcpProxySelection,
+    stop: Arc<AtomicBool>,
+    sniff: &TcpSniffReport,
+    metrics: &ResidentDataplaneMetrics,
+    cipher: &str,
+    password: &str,
+    salt_len: usize,
+    host: &str,
+    path: &str,
+) -> Result<Value, String> {
+    let mut client = open_async_resident_tls_client(&selection.proxy).await?;
+    let tls_underlay = async_resident_tls_underlay_name(&client);
+    let options = HttpUpgradeOptions::new(host, path);
+    websocket_handshake_over_resident_tls_async(&mut client, &options).await?;
+    let stats = relay_tcp_over_shadowsocks_v2ray_plugin_tls_ws(
+        inbound,
+        &mut client,
+        stop,
+        &selection.route.dial_target,
+        cipher,
+        password,
+        salt_len,
+        &sniff.payload,
+        metrics,
+    )
+    .await;
+    stats
+        .map(|stats| {
+            let mut event = generic_proxy_tcp_finished_event(
+                peer,
+                original_dst,
+                &selection,
+                sniff,
+                "shadowsocks",
+                &stats,
+                "plugin-wrapper-tls-websocket-aead",
+            );
+            event["tls_underlay"] = json!(tls_underlay);
+            event["plugin_wrapper"] = json!("v2ray-plugin-tls-websocket");
+            event["stream_wrapper"] = json!("websocket");
+            append_proxy_tcp_execution_fields(
+                &mut event,
+                "plugin-wrapper-tls-websocket-aead",
+                "shadowsocks",
+                Some(tls_underlay),
+                None,
+            );
+            event
+        })
+        .or_else(|err| {
+            let mut event = generic_proxy_tcp_failed_event(
+                peer,
+                original_dst,
+                &selection,
+                sniff,
+                "shadowsocks",
+                &err,
+                "plugin-wrapper-tls-websocket-aead",
+            );
+            event["tls_underlay"] = json!(tls_underlay);
+            event["plugin_wrapper"] = json!("v2ray-plugin-tls-websocket");
+            event["stream_wrapper"] = json!("websocket");
+            append_proxy_tcp_execution_fields(
+                &mut event,
+                "plugin-wrapper-tls-websocket-aead",
+                "shadowsocks",
+                Some(tls_underlay),
                 None,
             );
             Ok::<Value, String>(event)
@@ -3607,7 +4257,7 @@ fn handle_vmess_proxy_tcp_connection(
                 sniff,
                 "vmess",
                 &stats,
-                "first-batch-aead-tcp",
+                "aead-tcp-relay",
             )
         })
         .or_else(|err| {
@@ -3618,7 +4268,7 @@ fn handle_vmess_proxy_tcp_connection(
                 sniff,
                 "vmess",
                 &err,
-                "first-batch-aead-tcp",
+                "aead-tcp-relay",
             ))
         })
 }
@@ -3676,7 +4326,7 @@ fn handle_vmess_websocket_proxy_tcp_connection(
                 sniff,
                 "vmess",
                 &stats,
-                "first-batch-websocket-aead",
+                "wrapped-websocket-aead",
             );
             event["stream_wrapper"] = json!("websocket");
             event
@@ -3689,7 +4339,7 @@ fn handle_vmess_websocket_proxy_tcp_connection(
                 sniff,
                 "vmess",
                 &err,
-                "first-batch-websocket-aead",
+                "wrapped-websocket-aead",
             );
             event["stream_wrapper"] = json!("websocket");
             Ok::<Value, String>(event)
@@ -3747,7 +4397,7 @@ fn handle_vmess_httpupgrade_proxy_tcp_connection(
                 sniff,
                 "vmess",
                 &stats,
-                "first-batch-httpupgrade-aead",
+                "wrapped-httpupgrade-aead",
             );
             event["stream_wrapper"] = json!("httpupgrade");
             event
@@ -3760,9 +4410,165 @@ fn handle_vmess_httpupgrade_proxy_tcp_connection(
                 sniff,
                 "vmess",
                 &err,
-                "first-batch-httpupgrade-aead",
+                "wrapped-httpupgrade-aead",
             );
             event["stream_wrapper"] = json!("httpupgrade");
+            Ok::<Value, String>(event)
+        })
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn handle_vmess_websocket_tls_proxy_tcp_connection_async(
+    inbound: &mut TokioTcpStream,
+    peer: SocketAddr,
+    original_dst: SocketAddrV4,
+    selection: TcpProxySelection,
+    stop: Arc<AtomicBool>,
+    sniff: &TcpSniffReport,
+    metrics: &ResidentDataplaneMetrics,
+    id: &str,
+) -> Result<Value, String> {
+    let mut client = open_async_resident_tls_client(&selection.proxy).await?;
+    let tls_underlay = async_resident_tls_underlay_name(&client);
+    let options =
+        HttpUpgradeOptions::new(&selection.proxy.stream_host, &selection.proxy.stream_path);
+    websocket_handshake_over_resident_tls_async(&mut client, &options).await?;
+    let session = aead_tcp_client_session_start(id, &selection.route.dial_target, &sniff.payload)
+        .map_err(|err| format!("build VMess TLS WebSocket AEAD TCP session: {err}"))?;
+    write_websocket_binary_frame_over_resident_tls_async(
+        &mut client,
+        &session.first_write,
+        "write VMess TLS websocket request",
+    )
+    .await?;
+    let mut initial_stats = DirectTcpRelayStats::default();
+    if !sniff.payload.is_empty() {
+        initial_stats.client_to_direct += sniff.payload.len();
+        metrics.add_upload(sniff.payload.len());
+    }
+
+    relay_tcp_over_vmess_websocket_tls_aead_async(
+        inbound,
+        &mut client,
+        stop,
+        session,
+        initial_stats,
+        metrics,
+    )
+    .await
+    .map(|stats| {
+        let mut event = generic_proxy_tcp_finished_event(
+            peer,
+            original_dst,
+            &selection,
+            sniff,
+            "vmess",
+            &stats,
+            "wrapped-websocket-aead",
+        );
+        event["tls_underlay"] = json!(tls_underlay);
+        event["stream_wrapper"] = json!("websocket");
+        append_proxy_tcp_execution_fields(
+            &mut event,
+            "wrapped-websocket-aead",
+            "vmess",
+            Some(tls_underlay),
+            None,
+        );
+        event
+    })
+    .or_else(|err| {
+        let mut event = generic_proxy_tcp_failed_event(
+            peer,
+            original_dst,
+            &selection,
+            sniff,
+            "vmess",
+            &err,
+            "wrapped-websocket-aead",
+        );
+        event["tls_underlay"] = json!(tls_underlay);
+        event["stream_wrapper"] = json!("websocket");
+        append_proxy_tcp_execution_fields(
+            &mut event,
+            "wrapped-websocket-aead",
+            "vmess",
+            Some(tls_underlay),
+            None,
+        );
+        Ok::<Value, String>(event)
+    })
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn handle_vmess_httpupgrade_tls_proxy_tcp_connection_async(
+    inbound: &mut TokioTcpStream,
+    peer: SocketAddr,
+    original_dst: SocketAddrV4,
+    selection: TcpProxySelection,
+    stop: Arc<AtomicBool>,
+    sniff: &TcpSniffReport,
+    metrics: &ResidentDataplaneMetrics,
+    id: &str,
+) -> Result<Value, String> {
+    let mut client = open_async_resident_tls_client(&selection.proxy).await?;
+    let tls_underlay = async_resident_tls_underlay_name(&client);
+    let options =
+        HttpUpgradeOptions::new(&selection.proxy.stream_host, &selection.proxy.stream_path);
+    httpupgrade_handshake_over_resident_tls_async(&mut client, &options).await?;
+    let session = aead_tcp_client_session_start(id, &selection.route.dial_target, &sniff.payload)
+        .map_err(|err| format!("build VMess TLS HTTP Upgrade AEAD TCP session: {err}"))?;
+    client
+        .write_plain_all(&session.first_write, "write VMess TLS HTTP Upgrade request")
+        .await?;
+    let mut initial_stats = DirectTcpRelayStats::default();
+    if !sniff.payload.is_empty() {
+        initial_stats.client_to_direct += sniff.payload.len();
+        metrics.add_upload(sniff.payload.len());
+    }
+
+    relay_tcp_over_vmess_tls_aead_async(inbound, &mut client, stop, session, initial_stats, metrics)
+        .await
+        .map(|stats| {
+            let mut event = generic_proxy_tcp_finished_event(
+                peer,
+                original_dst,
+                &selection,
+                sniff,
+                "vmess",
+                &stats,
+                "wrapped-httpupgrade-aead",
+            );
+            event["tls_underlay"] = json!(tls_underlay);
+            event["stream_wrapper"] = json!("httpupgrade");
+            append_proxy_tcp_execution_fields(
+                &mut event,
+                "wrapped-httpupgrade-aead",
+                "vmess",
+                Some(tls_underlay),
+                None,
+            );
+            event
+        })
+        .or_else(|err| {
+            let mut event = generic_proxy_tcp_failed_event(
+                peer,
+                original_dst,
+                &selection,
+                sniff,
+                "vmess",
+                &err,
+                "wrapped-httpupgrade-aead",
+            );
+            event["tls_underlay"] = json!(tls_underlay);
+            event["stream_wrapper"] = json!("httpupgrade");
+            append_proxy_tcp_execution_fields(
+                &mut event,
+                "wrapped-httpupgrade-aead",
+                "vmess",
+                Some(tls_underlay),
+                None,
+            );
             Ok::<Value, String>(event)
         })
 }
@@ -3810,13 +4616,13 @@ async fn handle_vmess_grpc_proxy_tcp_connection_async(
                 sniff,
                 "vmess",
                 &stats,
-                "first-batch-grpc-aead",
+                "wrapped-grpc-aead",
             );
             event["tls_underlay"] = json!(tls_underlay);
             event["stream_wrapper"] = json!("grpc");
             append_proxy_tcp_execution_fields(
                 &mut event,
-                "first-batch-grpc-aead",
+                "wrapped-grpc-aead",
                 "vmess",
                 Some(tls_underlay),
                 None,
@@ -3831,13 +4637,13 @@ async fn handle_vmess_grpc_proxy_tcp_connection_async(
                 sniff,
                 "vmess",
                 &err,
-                "first-batch-grpc-aead",
+                "wrapped-grpc-aead",
             );
             event["tls_underlay"] = json!(tls_underlay);
             event["stream_wrapper"] = json!("grpc");
             append_proxy_tcp_execution_fields(
                 &mut event,
-                "first-batch-grpc-aead",
+                "wrapped-grpc-aead",
                 "vmess",
                 Some(tls_underlay),
                 None,
@@ -4717,8 +5523,18 @@ fn open_plain_proxy_tcp_stream_through_parent(
         ResidentProxyProtocolPlan::Socks5Tcp { username, password } => {
             socks5_connect(&mut stream, &child_target, username, password)?;
         }
-        ResidentProxyProtocolPlan::HttpProxyTcp { username, password } if parent.tls == "none" => {
-            http_proxy_connect(&mut stream, &child_target, username, password)?;
+        ResidentProxyProtocolPlan::HttpProxyTcp {
+            username, password, ..
+        } if parent.tls == "none" => {
+            http_proxy_connect(
+                &mut stream,
+                &child_target,
+                username,
+                password,
+                false,
+                "",
+                "",
+            )?;
         }
         _ => {
             return Err(format!(
@@ -4761,6 +5577,48 @@ fn read_http_head_and_leftover_from_stream(
     Err("incomplete http response header".to_owned())
 }
 
+fn validate_simple_obfs_http_response_status(response_head: &[u8]) -> Result<(), String> {
+    if validate_http_status(response_head, 200).is_ok()
+        || validate_http_status(response_head, 101).is_ok()
+    {
+        return Ok(());
+    }
+    validate_http_status(response_head, 200).map_err(|err| err.to_string())
+}
+
+fn read_simple_obfs_tls_response_payload_from_stream(
+    stream: &mut impl Read,
+) -> Result<Vec<u8>, String> {
+    let mut discard = vec![0_u8; 105];
+    stream
+        .read_exact(&mut discard)
+        .map_err(|err| format!("read simple-obfs TLS response prefix: {err}"))?;
+    let mut len = [0_u8; 2];
+    stream
+        .read_exact(&mut len)
+        .map_err(|err| format!("read simple-obfs TLS response payload length: {err}"))?;
+    let payload_len = u16::from_be_bytes(len) as usize;
+    let mut payload = vec![0_u8; payload_len];
+    stream
+        .read_exact(&mut payload)
+        .map_err(|err| format!("read simple-obfs TLS response payload: {err}"))?;
+    Ok(payload)
+}
+
+fn simple_obfs_tls_application_data_frame(payload: &[u8]) -> Result<Vec<u8>, String> {
+    let len = u16::try_from(payload.len()).map_err(|_| {
+        format!(
+            "simple-obfs TLS application data too large: {}",
+            payload.len()
+        )
+    })?;
+    let mut out = Vec::with_capacity(5 + payload.len());
+    out.extend_from_slice(&[0x17, 0x03, 0x03]);
+    out.extend_from_slice(&len.to_be_bytes());
+    out.extend_from_slice(payload);
+    Ok(out)
+}
+
 struct PrefixTcpReader<'a> {
     prefix: VecDeque<u8>,
     stream: &'a mut TcpStream,
@@ -4796,6 +5654,77 @@ impl Read for PrefixTcpReader<'_> {
             return Ok(written);
         }
         self.stream.read(buf)
+    }
+}
+
+struct SimpleObfsTlsAppDataReader<'a> {
+    prefix: VecDeque<u8>,
+    frame: VecDeque<u8>,
+    stream: &'a mut TcpStream,
+}
+
+impl<'a> SimpleObfsTlsAppDataReader<'a> {
+    fn new(prefix: Vec<u8>, stream: &'a mut TcpStream) -> Self {
+        Self {
+            prefix: VecDeque::from(prefix),
+            frame: VecDeque::new(),
+            stream,
+        }
+    }
+
+    fn shutdown_write(&mut self) -> std::io::Result<()> {
+        self.stream.shutdown(Shutdown::Write)
+    }
+
+    fn fill_frame(&mut self) -> std::io::Result<()> {
+        let mut header = [0_u8; 5];
+        self.stream.read_exact(&mut header)?;
+        if header[..3] != [0x17, 0x03, 0x03] {
+            return Err(std::io::Error::new(
+                ErrorKind::InvalidData,
+                format!(
+                    "simple-obfs TLS application data header mismatch: {:02x?}",
+                    &header[..3]
+                ),
+            ));
+        }
+        let len = u16::from_be_bytes([header[3], header[4]]) as usize;
+        if len > 16 * 1024 {
+            return Err(std::io::Error::new(
+                ErrorKind::InvalidData,
+                format!("simple-obfs TLS application data too large: {len}"),
+            ));
+        }
+        let mut payload = vec![0_u8; len];
+        self.stream.read_exact(&mut payload)?;
+        self.frame = VecDeque::from(payload);
+        Ok(())
+    }
+}
+
+impl Read for SimpleObfsTlsAppDataReader<'_> {
+    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+        if buf.is_empty() {
+            return Ok(0);
+        }
+        let mut written = 0;
+        while written < buf.len() {
+            if let Some(byte) = self.prefix.pop_front() {
+                buf[written] = byte;
+                written += 1;
+                continue;
+            }
+            if let Some(byte) = self.frame.pop_front() {
+                buf[written] = byte;
+                written += 1;
+                continue;
+            }
+            if written > 0 {
+                return Ok(written);
+            }
+            self.fill_frame()?;
+        }
+        Ok(written)
     }
 }
 
@@ -4851,10 +5780,16 @@ fn http_proxy_connect(
     target: &str,
     username: &str,
     password: &str,
+    transport: bool,
+    transport_host: &str,
+    transport_path: &str,
 ) -> Result<(), String> {
     let mut options = HttpConnectOptions::connect(target);
     options.username = username.to_owned();
     options.password = password.to_owned();
+    options.transport.enabled = transport;
+    options.host_override = transport_host.to_owned();
+    options.transport.path = transport_path.to_owned();
     let request = http_request::connect_request(&options);
     stream
         .write_all(&request)
@@ -5063,6 +5998,162 @@ fn relay_tcp_over_shadowsocks_aead(
 }
 
 #[allow(clippy::too_many_arguments)]
+fn relay_tcp_over_shadowsocks_2022(
+    inbound: &mut TcpStream,
+    proxy: &mut TcpStream,
+    stop: &AtomicBool,
+    target: &str,
+    cipher: &str,
+    password: &str,
+    salt_len: usize,
+    initial_payload: &[u8],
+    metrics: &ResidentDataplaneMetrics,
+) -> Result<DirectTcpRelayStats, String> {
+    let mut client_salt = vec![0_u8; salt_len];
+    fastrand::fill(&mut client_salt);
+    let (mut encoder, initial) = ss2022_tcp_client_stream_encoder(
+        cipher,
+        password,
+        &client_salt,
+        target,
+        initial_payload,
+        ss2022_tcp_unix_timestamp_now(),
+    )
+    .map_err(|err| format!("encode Shadowsocks 2022 initial TCP frame: {err}"))?;
+    proxy
+        .write_all(&initial)
+        .map_err(|err| format!("write Shadowsocks 2022 initial TCP frame: {err}"))?;
+    let mut stats = DirectTcpRelayStats::default();
+    if !initial_payload.is_empty() {
+        stats.client_to_direct += initial_payload.len();
+        metrics.add_upload(initial_payload.len());
+    }
+
+    let mut upload_proxy = proxy
+        .try_clone()
+        .map_err(|err| format!("clone Shadowsocks 2022 proxy stream for upload: {err}"))?;
+    let mut upload_inbound = inbound
+        .try_clone()
+        .map_err(|err| format!("clone inbound stream for Shadowsocks 2022 upload: {err}"))?;
+    upload_inbound
+        .set_read_timeout(Some(RESIDENT_CONNECT_TIMEOUT))
+        .map_err(|err| format!("set Shadowsocks 2022 upload read timeout: {err}"))?;
+    let relay_done = Arc::new(AtomicBool::new(false));
+    let upload_done = Arc::clone(&relay_done);
+    let upload = thread::spawn(move || {
+        let mut stats = 0_usize;
+        let mut buf = [0_u8; 16 * 1024];
+        loop {
+            if upload_done.load(Ordering::Relaxed) {
+                break;
+            }
+            let read = match upload_inbound.read(&mut buf) {
+                Ok(0) => break,
+                Ok(read) => read,
+                Err(err)
+                    if matches!(
+                        err.kind(),
+                        ErrorKind::TimedOut | ErrorKind::WouldBlock | ErrorKind::Interrupted
+                    ) =>
+                {
+                    continue;
+                }
+                Err(err) if is_graceful_stream_close_error(&err) => break,
+                Err(err) => {
+                    return Err(format!(
+                        "read inbound TCP for Shadowsocks 2022 upload: {err}"
+                    ));
+                }
+            };
+            let encrypted = encoder
+                .encode_chunk(&buf[..read])
+                .map_err(|err| format!("encrypt Shadowsocks 2022 upload chunk: {err}"))?;
+            if let Err(err) = upload_proxy.write_all(&encrypted) {
+                if is_graceful_stream_close_error(&err) {
+                    break;
+                }
+                return Err(format!("write Shadowsocks 2022 upload chunk: {err}"));
+            }
+            stats += read;
+        }
+        let _ = upload_proxy.shutdown(Shutdown::Write);
+        Ok::<usize, String>(stats)
+    });
+
+    let (mut decoder, start) =
+        match ss2022_tcp_server_stream_decoder(proxy, cipher, password, &client_salt) {
+            Ok(decoder) => decoder,
+            Err(err) => {
+                relay_done.store(true, Ordering::Relaxed);
+                let _ = inbound.shutdown(Shutdown::Read);
+                let _ = proxy.shutdown(Shutdown::Write);
+                let _ = upload.join();
+                return Err(format!("read Shadowsocks 2022 server stream header: {err}"));
+            }
+        };
+    if !start.request_salt_echo_validated {
+        relay_done.store(true, Ordering::Relaxed);
+        let _ = inbound.shutdown(Shutdown::Read);
+        let _ = proxy.shutdown(Shutdown::Write);
+        let _ = upload.join();
+        return Err("Shadowsocks 2022 server response did not echo request salt".to_owned());
+    }
+    if !start.payload.is_empty() {
+        inbound
+            .write_all(&start.payload)
+            .map_err(|err| format!("write Shadowsocks 2022 initial response to inbound: {err}"))?;
+        stats.direct_to_client += start.payload.len();
+        metrics.add_download(start.payload.len());
+    }
+
+    let mut download_error = None;
+    loop {
+        if stop.load(Ordering::Relaxed) {
+            break;
+        }
+        match decoder.read_next_chunk(proxy) {
+            Ok(plain) => {
+                if plain.is_empty() {
+                    continue;
+                }
+                inbound
+                    .write_all(&plain)
+                    .map_err(|err| format!("write Shadowsocks 2022 response to inbound: {err}"))?;
+                stats.direct_to_client += plain.len();
+                metrics.add_download(plain.len());
+            }
+            Err(err) => {
+                let message = err.to_string();
+                if message.contains("early eof")
+                    || message.contains("failed to fill whole buffer")
+                    || message.contains("Connection reset")
+                    || message.contains("connection reset")
+                    || message.contains("timed out")
+                {
+                    break;
+                }
+                download_error = Some(format!("read Shadowsocks 2022 response chunk: {message}"));
+                break;
+            }
+        }
+    }
+    relay_done.store(true, Ordering::Relaxed);
+    let _ = inbound.shutdown(Shutdown::Read);
+    let _ = proxy.shutdown(Shutdown::Write);
+    let upload_bytes = upload
+        .join()
+        .map_err(|_| "join Shadowsocks 2022 upload relay thread failed".to_owned())??;
+    if let Some(err) = download_error {
+        return Err(err);
+    }
+    if upload_bytes > 0 {
+        stats.client_to_direct += upload_bytes;
+        metrics.add_upload(upload_bytes);
+    }
+    Ok(stats)
+}
+
+#[allow(clippy::too_many_arguments)]
 fn relay_tcp_over_shadowsocks_simple_obfs_http(
     inbound: &mut TcpStream,
     proxy: &mut TcpStream,
@@ -5099,7 +6190,7 @@ fn relay_tcp_over_shadowsocks_simple_obfs_http(
         .map_err(|err| format!("write Shadowsocks simple-obfs request: {err}"))?;
     let (response_head, response_leftover) = read_http_head_and_leftover_from_stream(proxy)
         .map_err(|err| format!("read Shadowsocks simple-obfs response head: {err}"))?;
-    validate_http_status(&response_head, 200)
+    validate_simple_obfs_http_response_status(&response_head)
         .map_err(|err| format!("validate Shadowsocks simple-obfs response status: {err}"))?;
 
     let mut stats = DirectTcpRelayStats::default();
@@ -5218,6 +6309,351 @@ fn relay_tcp_over_shadowsocks_simple_obfs_http(
     let upload_bytes = upload
         .join()
         .map_err(|_| "join Shadowsocks simple-obfs upload relay thread failed".to_owned())??;
+    if let Some(err) = download_error {
+        return Err(err);
+    }
+    if upload_bytes > 0 {
+        stats.client_to_direct += upload_bytes;
+        metrics.add_upload(upload_bytes);
+    }
+    Ok(stats)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn relay_tcp_over_shadowsocks_simple_obfs_tls(
+    inbound: &mut TcpStream,
+    proxy: &mut TcpStream,
+    stop: &AtomicBool,
+    target: &str,
+    cipher: &str,
+    password: &str,
+    salt_len: usize,
+    initial_payload: &[u8],
+    metrics: &ResidentDataplaneMetrics,
+    host: &str,
+) -> Result<DirectTcpRelayStats, String> {
+    let target_metadata = ShadowsocksMetadata::parse(target)
+        .map_err(|err| format!("parse Shadowsocks simple-obfs TLS target: {err}"))?;
+    let mut first_plain = target_metadata
+        .encode()
+        .map_err(|err| format!("encode Shadowsocks simple-obfs TLS target metadata: {err}"))?;
+    first_plain.extend_from_slice(initial_payload);
+    let mut client_salt = vec![0_u8; salt_len];
+    fastrand::fill(&mut client_salt);
+    let mut encoder = AeadStreamCodec::new(cipher, password, &client_salt)
+        .map_err(|err| format!("create Shadowsocks simple-obfs TLS upload encoder: {err}"))?;
+    let mut encrypted_initial = client_salt.clone();
+    encrypted_initial.extend(
+        encoder
+            .encrypt_chunk(&first_plain)
+            .map_err(|err| format!("encode Shadowsocks simple-obfs TLS initial frame: {err}"))?,
+    );
+    let options = Sip003SimpleObfsTlsOptions::new(host);
+    let obfs_request = simple_obfs_tls_client_hello_with_body(&options, &encrypted_initial)
+        .map_err(|err| format!("build Shadowsocks simple-obfs TLS request: {err}"))?;
+    proxy
+        .write_all(&obfs_request)
+        .map_err(|err| format!("write Shadowsocks simple-obfs TLS request: {err}"))?;
+    let response_payload = read_simple_obfs_tls_response_payload_from_stream(proxy)
+        .map_err(|err| format!("read Shadowsocks simple-obfs TLS response: {err}"))?;
+
+    let mut stats = DirectTcpRelayStats::default();
+    if !initial_payload.is_empty() {
+        stats.client_to_direct += initial_payload.len();
+        metrics.add_upload(initial_payload.len());
+    }
+
+    let mut upload_proxy = proxy
+        .try_clone()
+        .map_err(|err| format!("clone Shadowsocks simple-obfs TLS stream for upload: {err}"))?;
+    let mut upload_inbound = inbound.try_clone().map_err(|err| {
+        format!("clone inbound stream for Shadowsocks simple-obfs TLS upload: {err}")
+    })?;
+    upload_inbound
+        .set_read_timeout(Some(RESIDENT_CONNECT_TIMEOUT))
+        .map_err(|err| format!("set Shadowsocks simple-obfs TLS upload read timeout: {err}"))?;
+    let relay_done = Arc::new(AtomicBool::new(false));
+    let upload_done = Arc::clone(&relay_done);
+    let upload = thread::spawn(move || {
+        let mut stats = 0_usize;
+        let mut buf = [0_u8; 16 * 1024];
+        loop {
+            if upload_done.load(Ordering::Relaxed) {
+                break;
+            }
+            let read = match upload_inbound.read(&mut buf) {
+                Ok(0) => break,
+                Ok(read) => read,
+                Err(err)
+                    if matches!(
+                        err.kind(),
+                        ErrorKind::TimedOut | ErrorKind::WouldBlock | ErrorKind::Interrupted
+                    ) =>
+                {
+                    continue;
+                }
+                Err(err) if is_graceful_stream_close_error(&err) => break,
+                Err(err) => {
+                    return Err(format!(
+                        "read inbound TCP for Shadowsocks simple-obfs TLS upload: {err}"
+                    ));
+                }
+            };
+            let encrypted = encoder.encrypt_chunk(&buf[..read]).map_err(|err| {
+                format!("encrypt Shadowsocks simple-obfs TLS upload chunk: {err}")
+            })?;
+            let frame = simple_obfs_tls_application_data_frame(&encrypted)?;
+            if let Err(err) = upload_proxy.write_all(&frame) {
+                if is_graceful_stream_close_error(&err) {
+                    break;
+                }
+                return Err(format!(
+                    "write Shadowsocks simple-obfs TLS upload chunk: {err}"
+                ));
+            }
+            stats += read;
+        }
+        let _ = upload_proxy.shutdown(Shutdown::Write);
+        Ok::<usize, String>(stats)
+    });
+
+    let mut proxy_reader = SimpleObfsTlsAppDataReader::new(response_payload, proxy);
+    let mut server_salt = vec![0_u8; salt_len];
+    if let Err(err) = proxy_reader.read_exact(&mut server_salt) {
+        relay_done.store(true, Ordering::Relaxed);
+        let _ = inbound.shutdown(Shutdown::Read);
+        let _ = proxy_reader.shutdown_write();
+        let _ = upload.join();
+        return Err(format!(
+            "read Shadowsocks simple-obfs TLS server salt: {err}"
+        ));
+    }
+    let mut decoder = match AeadStreamCodec::new(cipher, password, &server_salt) {
+        Ok(decoder) => decoder,
+        Err(err) => {
+            relay_done.store(true, Ordering::Relaxed);
+            let _ = inbound.shutdown(Shutdown::Read);
+            let _ = proxy_reader.shutdown_write();
+            let _ = upload.join();
+            return Err(format!(
+                "create Shadowsocks simple-obfs TLS response decoder: {err}"
+            ));
+        }
+    };
+
+    let mut download_error = None;
+    loop {
+        if stop.load(Ordering::Relaxed) {
+            break;
+        }
+        match read_encrypted_chunk_from_stream(&mut proxy_reader, &mut decoder) {
+            Ok(plain) => {
+                if plain.is_empty() {
+                    continue;
+                }
+                inbound
+                    .write_all(&plain)
+                    .map_err(|err| format!("write Shadowsocks simple-obfs TLS response: {err}"))?;
+                stats.direct_to_client += plain.len();
+                metrics.add_download(plain.len());
+            }
+            Err(err) => {
+                let message = err.to_string();
+                if message.contains("early eof")
+                    || message.contains("failed to fill whole buffer")
+                    || message.contains("Connection reset")
+                    || message.contains("connection reset")
+                    || message.contains("timed out")
+                {
+                    break;
+                }
+                download_error = Some(format!(
+                    "read Shadowsocks simple-obfs TLS response: {message}"
+                ));
+                break;
+            }
+        }
+    }
+    relay_done.store(true, Ordering::Relaxed);
+    let _ = inbound.shutdown(Shutdown::Read);
+    let _ = proxy_reader.shutdown_write();
+    let upload_bytes = upload
+        .join()
+        .map_err(|_| "join Shadowsocks simple-obfs TLS upload relay thread failed".to_owned())??;
+    if let Some(err) = download_error {
+        return Err(err);
+    }
+    if upload_bytes > 0 {
+        stats.client_to_direct += upload_bytes;
+        metrics.add_upload(upload_bytes);
+    }
+    Ok(stats)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn relay_tcp_over_shadowsocks_2022_simple_obfs_http(
+    inbound: &mut TcpStream,
+    proxy: &mut TcpStream,
+    stop: &AtomicBool,
+    target: &str,
+    cipher: &str,
+    password: &str,
+    salt_len: usize,
+    initial_payload: &[u8],
+    metrics: &ResidentDataplaneMetrics,
+    host: &str,
+    path: &str,
+) -> Result<DirectTcpRelayStats, String> {
+    let mut client_salt = vec![0_u8; salt_len];
+    fastrand::fill(&mut client_salt);
+    let (mut encoder, initial) = ss2022_tcp_client_stream_encoder(
+        cipher,
+        password,
+        &client_salt,
+        target,
+        initial_payload,
+        ss2022_tcp_unix_timestamp_now(),
+    )
+    .map_err(|err| format!("encode Shadowsocks 2022 simple-obfs initial TCP frame: {err}"))?;
+    let options = Sip003SimpleObfsHttpOptions::new(host, path);
+    let obfs_request = simple_obfs_http_request_with_body(&options, &initial);
+    proxy
+        .write_all(&obfs_request)
+        .map_err(|err| format!("write Shadowsocks 2022 simple-obfs request: {err}"))?;
+    let (response_head, response_leftover) = read_http_head_and_leftover_from_stream(proxy)
+        .map_err(|err| format!("read Shadowsocks 2022 simple-obfs response head: {err}"))?;
+    validate_simple_obfs_http_response_status(&response_head)
+        .map_err(|err| format!("validate Shadowsocks 2022 simple-obfs response status: {err}"))?;
+
+    let mut stats = DirectTcpRelayStats::default();
+    if !initial_payload.is_empty() {
+        stats.client_to_direct += initial_payload.len();
+        metrics.add_upload(initial_payload.len());
+    }
+
+    let mut upload_proxy = proxy
+        .try_clone()
+        .map_err(|err| format!("clone Shadowsocks 2022 simple-obfs stream for upload: {err}"))?;
+    let mut upload_inbound = inbound.try_clone().map_err(|err| {
+        format!("clone inbound stream for Shadowsocks 2022 simple-obfs upload: {err}")
+    })?;
+    upload_inbound
+        .set_read_timeout(Some(RESIDENT_CONNECT_TIMEOUT))
+        .map_err(|err| format!("set Shadowsocks 2022 simple-obfs upload read timeout: {err}"))?;
+    let relay_done = Arc::new(AtomicBool::new(false));
+    let upload_done = Arc::clone(&relay_done);
+    let upload = thread::spawn(move || {
+        let mut stats = 0_usize;
+        let mut buf = [0_u8; 16 * 1024];
+        loop {
+            if upload_done.load(Ordering::Relaxed) {
+                break;
+            }
+            let read = match upload_inbound.read(&mut buf) {
+                Ok(0) => break,
+                Ok(read) => read,
+                Err(err)
+                    if matches!(
+                        err.kind(),
+                        ErrorKind::TimedOut | ErrorKind::WouldBlock | ErrorKind::Interrupted
+                    ) =>
+                {
+                    continue;
+                }
+                Err(err) if is_graceful_stream_close_error(&err) => break,
+                Err(err) => {
+                    return Err(format!(
+                        "read inbound TCP for Shadowsocks 2022 simple-obfs upload: {err}"
+                    ));
+                }
+            };
+            let encrypted = encoder.encode_chunk(&buf[..read]).map_err(|err| {
+                format!("encrypt Shadowsocks 2022 simple-obfs upload chunk: {err}")
+            })?;
+            if let Err(err) = upload_proxy.write_all(&encrypted) {
+                if is_graceful_stream_close_error(&err) {
+                    break;
+                }
+                return Err(format!(
+                    "write Shadowsocks 2022 simple-obfs upload chunk: {err}"
+                ));
+            }
+            stats += read;
+        }
+        let _ = upload_proxy.shutdown(Shutdown::Write);
+        Ok::<usize, String>(stats)
+    });
+
+    let mut proxy_reader = PrefixTcpReader::new(response_leftover, proxy);
+    let (mut decoder, start) =
+        match ss2022_tcp_server_stream_decoder(&mut proxy_reader, cipher, password, &client_salt) {
+            Ok(decoder) => decoder,
+            Err(err) => {
+                relay_done.store(true, Ordering::Relaxed);
+                let _ = inbound.shutdown(Shutdown::Read);
+                let _ = proxy_reader.shutdown_write();
+                let _ = upload.join();
+                return Err(format!(
+                    "read Shadowsocks 2022 simple-obfs server stream header: {err}"
+                ));
+            }
+        };
+    if !start.request_salt_echo_validated {
+        relay_done.store(true, Ordering::Relaxed);
+        let _ = inbound.shutdown(Shutdown::Read);
+        let _ = proxy_reader.shutdown_write();
+        let _ = upload.join();
+        return Err(
+            "Shadowsocks 2022 simple-obfs server response did not echo request salt".to_owned(),
+        );
+    }
+    if !start.payload.is_empty() {
+        inbound.write_all(&start.payload).map_err(|err| {
+            format!("write Shadowsocks 2022 simple-obfs initial response to inbound: {err}")
+        })?;
+        stats.direct_to_client += start.payload.len();
+        metrics.add_download(start.payload.len());
+    }
+
+    let mut download_error = None;
+    loop {
+        if stop.load(Ordering::Relaxed) {
+            break;
+        }
+        match decoder.read_next_chunk(&mut proxy_reader) {
+            Ok(plain) => {
+                if plain.is_empty() {
+                    continue;
+                }
+                inbound.write_all(&plain).map_err(|err| {
+                    format!("write Shadowsocks 2022 simple-obfs response to inbound: {err}")
+                })?;
+                stats.direct_to_client += plain.len();
+                metrics.add_download(plain.len());
+            }
+            Err(err) => {
+                let message = err.to_string();
+                if message.contains("early eof")
+                    || message.contains("failed to fill whole buffer")
+                    || message.contains("Connection reset")
+                    || message.contains("connection reset")
+                    || message.contains("timed out")
+                {
+                    break;
+                }
+                download_error = Some(format!(
+                    "read Shadowsocks 2022 simple-obfs response chunk: {message}"
+                ));
+                break;
+            }
+        }
+    }
+    relay_done.store(true, Ordering::Relaxed);
+    let _ = inbound.shutdown(Shutdown::Read);
+    let _ = proxy_reader.shutdown_write();
+    let upload_bytes = upload
+        .join()
+        .map_err(|_| "join Shadowsocks 2022 simple-obfs upload relay thread failed".to_owned())??;
     if let Some(err) = download_error {
         return Err(err);
     }
@@ -5460,6 +6896,793 @@ fn relay_tcp_over_vmess_websocket_aead(
         metrics.add_upload(upload_bytes);
     }
     Ok(stats)
+}
+
+async fn relay_tcp_over_vmess_tls_aead_async(
+    inbound: &mut TokioTcpStream,
+    client: &mut AsyncResidentTlsClient,
+    stop: Arc<AtomicBool>,
+    session: VMessAeadTcpClientSessionStart,
+    mut stats: DirectTcpRelayStats,
+    metrics: &ResidentDataplaneMetrics,
+) -> Result<DirectTcpRelayStats, String> {
+    let mut upload_codec = session.upload;
+    let mut response = aead_tcp_response_reader_from_async_stream(client, &session.request)
+        .await
+        .map_err(|err| format!("read VMess TLS AEAD response header: {err}"))?;
+    let _response_header_len = response.response_header_len;
+    let mut inbound_closed = false;
+    let mut last_activity = Instant::now();
+    let mut inbound_buf = [0_u8; 16 * 1024];
+
+    while !stop.load(Ordering::Relaxed) {
+        tokio::select! {
+            inbound_read = inbound.read(&mut inbound_buf), if !inbound_closed => {
+                match inbound_read {
+                    Ok(0) => {
+                        inbound_closed = true;
+                        client.shutdown().await;
+                        last_activity = Instant::now();
+                    }
+                    Ok(read) => {
+                        let encrypted = upload_codec
+                            .seal_chunk(&inbound_buf[..read])
+                            .map_err(|err| format!("encode VMess TLS upload chunk: {err}"))?;
+                        client
+                            .write_plain_all(&encrypted, "write VMess TLS upload chunk")
+                            .await?;
+                        stats.client_to_direct += read;
+                        metrics.add_upload(read);
+                        last_activity = Instant::now();
+                    }
+                    Err(err) if is_graceful_stream_close_error(&err) => {
+                        inbound_closed = true;
+                        client.shutdown().await;
+                        last_activity = Instant::now();
+                    }
+                    Err(err) => return Err(format!("read inbound TCP for VMess TLS upload: {err}")),
+                }
+            }
+            proxy_chunk = response.read_chunk_from_async_stream(client) => {
+                match proxy_chunk {
+                    Ok(plain) => {
+                        if !plain.is_empty() {
+                            inbound
+                                .write_all(&plain)
+                                .await
+                                .map_err(|err| format!("write VMess TLS response to inbound: {err}"))?;
+                            stats.direct_to_client += plain.len();
+                            metrics.add_download(plain.len());
+                        }
+                        last_activity = Instant::now();
+                    }
+                    Err(err) => {
+                        let message = err.to_string();
+                        if is_graceful_vmess_response_message(&message) {
+                            break;
+                        }
+                        return Err(format!("read VMess TLS response chunk: {message}"));
+                    }
+                }
+            }
+            _ = time::sleep(Duration::from_millis(100)) => {
+                if inbound_closed {
+                    break;
+                }
+                if last_activity.elapsed() > RESIDENT_TCP_IDLE_TIMEOUT {
+                    return Err("resident VMess TLS relay idle timeout".to_owned());
+                }
+            }
+        }
+    }
+    Ok(stats)
+}
+
+async fn relay_tcp_over_vmess_websocket_tls_aead_async(
+    inbound: &mut TokioTcpStream,
+    client: &mut AsyncResidentTlsClient,
+    stop: Arc<AtomicBool>,
+    session: VMessAeadTcpClientSessionStart,
+    mut stats: DirectTcpRelayStats,
+    metrics: &ResidentDataplaneMetrics,
+) -> Result<DirectTcpRelayStats, String> {
+    let mut upload_codec = session.upload;
+    let mut ws_state = AsyncWebSocketPayloadState::default();
+    let mut response = {
+        let mut reader = AsyncWebSocketPayloadReader::new(client, &mut ws_state);
+        aead_tcp_response_reader_from_async_stream(&mut reader, &session.request)
+            .await
+            .map_err(|err| format!("read VMess TLS WebSocket AEAD response header: {err}"))?
+    };
+    let _response_header_len = response.response_header_len;
+    let mut inbound_closed = false;
+    let mut last_activity = Instant::now();
+    let mut inbound_buf = [0_u8; 16 * 1024];
+
+    while !stop.load(Ordering::Relaxed) {
+        tokio::select! {
+            inbound_read = inbound.read(&mut inbound_buf), if !inbound_closed => {
+                match inbound_read {
+                    Ok(0) => {
+                        inbound_closed = true;
+                        client.shutdown().await;
+                        last_activity = Instant::now();
+                    }
+                    Ok(read) => {
+                        let encrypted = upload_codec
+                            .seal_chunk(&inbound_buf[..read])
+                            .map_err(|err| format!("encode VMess TLS WebSocket upload chunk: {err}"))?;
+                        write_websocket_binary_frame_over_resident_tls_async(
+                            client,
+                            &encrypted,
+                            "write VMess TLS websocket upload frame",
+                        )
+                        .await?;
+                        stats.client_to_direct += read;
+                        metrics.add_upload(read);
+                        last_activity = Instant::now();
+                    }
+                    Err(err) if is_graceful_stream_close_error(&err) => {
+                        inbound_closed = true;
+                        client.shutdown().await;
+                        last_activity = Instant::now();
+                    }
+                    Err(err) => {
+                        return Err(format!("read inbound TCP for VMess TLS WebSocket upload: {err}"));
+                    }
+                }
+            }
+            proxy_chunk = read_vmess_websocket_tls_response_chunk(client, &mut ws_state, &mut response) => {
+                match proxy_chunk {
+                    Ok(plain) => {
+                        if !plain.is_empty() {
+                            inbound
+                                .write_all(&plain)
+                                .await
+                                .map_err(|err| format!("write VMess TLS WebSocket response to inbound: {err}"))?;
+                            stats.direct_to_client += plain.len();
+                            metrics.add_download(plain.len());
+                        }
+                        last_activity = Instant::now();
+                    }
+                    Err(err) => {
+                        if is_graceful_vmess_response_message(&err) {
+                            break;
+                        }
+                        return Err(err);
+                    }
+                }
+            }
+            _ = time::sleep(Duration::from_millis(100)) => {
+                if inbound_closed {
+                    break;
+                }
+                if last_activity.elapsed() > RESIDENT_TCP_IDLE_TIMEOUT {
+                    return Err("resident VMess TLS WebSocket relay idle timeout".to_owned());
+                }
+            }
+        }
+    }
+    Ok(stats)
+}
+
+async fn read_vmess_websocket_tls_response_chunk(
+    client: &mut AsyncResidentTlsClient,
+    state: &mut AsyncWebSocketPayloadState,
+    response: &mut dae_outbound::vmess::VMessAeadTcpResponseReader,
+) -> Result<Vec<u8>, String> {
+    let mut reader = AsyncWebSocketPayloadReader::new(client, state);
+    response
+        .read_chunk_from_async_stream(&mut reader)
+        .await
+        .map_err(|err| format!("read VMess TLS WebSocket response chunk: {err}"))
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn relay_tcp_over_shadowsocks_v2ray_plugin_tls_ws(
+    inbound: &mut TokioTcpStream,
+    client: &mut AsyncResidentTlsClient,
+    stop: Arc<AtomicBool>,
+    target: &str,
+    cipher: &str,
+    password: &str,
+    salt_len: usize,
+    initial_payload: &[u8],
+    metrics: &ResidentDataplaneMetrics,
+) -> Result<DirectTcpRelayStats, String> {
+    let target_metadata = ShadowsocksMetadata::parse(target)
+        .map_err(|err| format!("parse Shadowsocks v2ray-plugin target: {err}"))?;
+    let mut first_plain = target_metadata
+        .encode()
+        .map_err(|err| format!("encode Shadowsocks v2ray-plugin target metadata: {err}"))?;
+    first_plain.extend_from_slice(initial_payload);
+    let mut client_salt = vec![0_u8; salt_len];
+    fastrand::fill(&mut client_salt);
+    let mut upload_encoder = AeadStreamCodec::new(cipher, password, &client_salt)
+        .map_err(|err| format!("create Shadowsocks v2ray-plugin upload encoder: {err}"))?;
+    let mut encrypted_initial = client_salt.clone();
+    encrypted_initial.extend(
+        upload_encoder
+            .encrypt_chunk(&first_plain)
+            .map_err(|err| format!("encode Shadowsocks v2ray-plugin initial frame: {err}"))?,
+    );
+    let mux_id = [0_u8, 0_u8];
+    let mux_options = MuxFrameOptions::new(mux_id, "127.0.0.1", 0, "tcp");
+    let mut mux_payload = mux_new_frame(&mux_options);
+    mux_payload.extend(
+        mux_data_frame(mux_id, &encrypted_initial)
+            .map_err(|err| format!("build v2ray-plugin mux data frame: {err}"))?,
+    );
+    write_websocket_binary_frame_over_resident_tls_async(
+        client,
+        &mux_payload,
+        "write Shadowsocks v2ray-plugin initial frame",
+    )
+    .await?;
+
+    let mut stats = DirectTcpRelayStats::default();
+    if !initial_payload.is_empty() {
+        stats.client_to_direct += initial_payload.len();
+        metrics.add_upload(initial_payload.len());
+    }
+
+    let mut mux_state = AsyncV2rayPluginMuxPayloadState::default();
+    let mut download_decoder = None;
+    let mut inbound_closed = false;
+    let mut proxy_closed = false;
+    let mut last_activity = Instant::now();
+    let mut inbound_buf = [0_u8; 16 * 1024];
+
+    while !stop.load(Ordering::Relaxed) {
+        tokio::select! {
+            inbound_read = inbound.read(&mut inbound_buf), if !inbound_closed && !proxy_closed => {
+                match inbound_read {
+                    Ok(0) => {
+                        inbound_closed = true;
+                        let end_frame = mux_end_frame(mux_id);
+                        let _ = write_websocket_binary_frame_over_resident_tls_async(
+                            client,
+                            &end_frame,
+                            "write Shadowsocks v2ray-plugin mux end frame",
+                        )
+                        .await;
+                        last_activity = Instant::now();
+                    }
+                    Ok(read) => {
+                        let encrypted = upload_encoder
+                            .encrypt_chunk(&inbound_buf[..read])
+                            .map_err(|err| format!("encrypt Shadowsocks v2ray-plugin upload chunk: {err}"))?;
+                        let mux_frame = mux_data_frame(mux_id, &encrypted)
+                            .map_err(|err| format!("build Shadowsocks v2ray-plugin upload mux frame: {err}"))?;
+                        write_websocket_binary_frame_over_resident_tls_async(
+                            client,
+                            &mux_frame,
+                            "write Shadowsocks v2ray-plugin upload frame",
+                        )
+                        .await?;
+                        stats.client_to_direct += read;
+                        metrics.add_upload(read);
+                        last_activity = Instant::now();
+                    }
+                    Err(err) if is_graceful_stream_close_error(&err) => {
+                        inbound_closed = true;
+                        let end_frame = mux_end_frame(mux_id);
+                        let _ = write_websocket_binary_frame_over_resident_tls_async(
+                            client,
+                            &end_frame,
+                            "write Shadowsocks v2ray-plugin mux end frame",
+                        )
+                        .await;
+                        last_activity = Instant::now();
+                    }
+                    Err(err) => {
+                        return Err(format!("read inbound TCP for Shadowsocks v2ray-plugin upload: {err}"));
+                    }
+                }
+            }
+            proxy_chunk = read_shadowsocks_aead_chunk_from_v2ray_plugin_mux(
+                client,
+                &mut mux_state,
+                mux_id,
+                &mut download_decoder,
+                cipher,
+                password,
+                salt_len,
+            ), if !proxy_closed => {
+                match proxy_chunk {
+                    Ok(plain) => {
+                        if !plain.is_empty() {
+                            inbound
+                                .write_all(&plain)
+                                .await
+                                .map_err(|err| format!("write Shadowsocks v2ray-plugin response to inbound: {err}"))?;
+                            stats.direct_to_client += plain.len();
+                            metrics.add_download(plain.len());
+                        }
+                        last_activity = Instant::now();
+                    }
+                    Err(err) => {
+                        if is_graceful_shadowsocks_response_message(&err) {
+                            proxy_closed = true;
+                            let _ = inbound.shutdown().await;
+                            last_activity = Instant::now();
+                        } else {
+                            return Err(err);
+                        }
+                    }
+                }
+            }
+            _ = time::sleep(Duration::from_millis(100)) => {
+                if proxy_closed {
+                    break;
+                }
+                if last_activity.elapsed() > RESIDENT_TCP_IDLE_TIMEOUT {
+                    return Err("resident Shadowsocks v2ray-plugin relay idle timeout".to_owned());
+                }
+            }
+        }
+        if proxy_closed || (inbound_closed && proxy_closed) {
+            break;
+        }
+    }
+    Ok(stats)
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn relay_tcp_over_trojan_websocket_inner_shadowsocks_tls(
+    inbound: &mut TokioTcpStream,
+    client: &mut AsyncResidentTlsClient,
+    stop: Arc<AtomicBool>,
+    target: &str,
+    trojan_password: &str,
+    inner_cipher: &str,
+    inner_password: &str,
+    initial_payload: &[u8],
+    metrics: &ResidentDataplaneMetrics,
+) -> Result<DirectTcpRelayStats, String> {
+    let spec = cipher_spec(inner_cipher)
+        .map_err(|err| format!("resolve Trojan-Go inner Shadowsocks cipher: {err}"))?;
+    let request =
+        trojan_packet::tcp_request_header(trojan_password, "tcp", target, initial_payload)
+            .map_err(|err| format!("build Trojan-Go inner Shadowsocks TCP request: {err}"))?;
+    let mut client_salt = vec![0_u8; spec.salt_len];
+    fastrand::fill(&mut client_salt);
+    let mut upload_encoder = AeadStreamCodec::new(inner_cipher, inner_password, &client_salt)
+        .map_err(|err| format!("create Trojan-Go inner Shadowsocks upload encoder: {err}"))?;
+    let mut encrypted_initial = client_salt;
+    encrypted_initial.extend(
+        upload_encoder
+            .encrypt_chunk(&request)
+            .map_err(|err| format!("encode Trojan-Go inner Shadowsocks request: {err}"))?,
+    );
+    write_websocket_binary_frame_over_resident_tls_async(
+        client,
+        &encrypted_initial,
+        "write Trojan-Go inner Shadowsocks websocket request",
+    )
+    .await?;
+
+    let mut stats = DirectTcpRelayStats::default();
+    if !initial_payload.is_empty() {
+        stats.client_to_direct += initial_payload.len();
+        metrics.add_upload(initial_payload.len());
+    }
+
+    let mut ws_state = AsyncWebSocketPayloadState::default();
+    let mut download_decoder = None;
+    let mut inbound_closed = false;
+    let mut proxy_closed = false;
+    let mut last_activity = Instant::now();
+    let mut inbound_buf = [0_u8; 16 * 1024];
+
+    while !stop.load(Ordering::Relaxed) {
+        tokio::select! {
+            inbound_read = inbound.read(&mut inbound_buf), if !inbound_closed && !proxy_closed => {
+                match inbound_read {
+                    Ok(0) => {
+                        inbound_closed = true;
+                        client.shutdown().await;
+                        last_activity = Instant::now();
+                    }
+                    Ok(read) => {
+                        let encrypted = upload_encoder
+                            .encrypt_chunk(&inbound_buf[..read])
+                            .map_err(|err| format!("encrypt Trojan-Go inner Shadowsocks upload chunk: {err}"))?;
+                        write_websocket_binary_frame_over_resident_tls_async(
+                            client,
+                            &encrypted,
+                            "write Trojan-Go inner Shadowsocks upload frame",
+                        )
+                        .await?;
+                        stats.client_to_direct += read;
+                        metrics.add_upload(read);
+                        last_activity = Instant::now();
+                    }
+                    Err(err) if is_graceful_stream_close_error(&err) => {
+                        inbound_closed = true;
+                        client.shutdown().await;
+                        last_activity = Instant::now();
+                    }
+                    Err(err) => {
+                        return Err(format!("read inbound TCP for Trojan-Go inner Shadowsocks upload: {err}"));
+                    }
+                }
+            }
+            proxy_chunk = read_shadowsocks_aead_chunk_from_websocket_tls(
+                client,
+                &mut ws_state,
+                &mut download_decoder,
+                inner_cipher,
+                inner_password,
+                spec.salt_len,
+            ), if !proxy_closed => {
+                match proxy_chunk {
+                    Ok(plain) => {
+                        if !plain.is_empty() {
+                            inbound
+                                .write_all(&plain)
+                                .await
+                                .map_err(|err| format!("write Trojan-Go inner Shadowsocks response to inbound: {err}"))?;
+                            stats.direct_to_client += plain.len();
+                            metrics.add_download(plain.len());
+                        }
+                        last_activity = Instant::now();
+                    }
+                    Err(err) => {
+                        if is_graceful_shadowsocks_response_message(&err) {
+                            proxy_closed = true;
+                            let _ = inbound.shutdown().await;
+                            last_activity = Instant::now();
+                        } else {
+                            return Err(err);
+                        }
+                    }
+                }
+            }
+            _ = time::sleep(Duration::from_millis(100)) => {
+                if proxy_closed || inbound_closed {
+                    break;
+                }
+                if last_activity.elapsed() > RESIDENT_TCP_IDLE_TIMEOUT {
+                    return Err("resident Trojan-Go inner Shadowsocks relay idle timeout".to_owned());
+                }
+            }
+        }
+        if proxy_closed || (inbound_closed && proxy_closed) {
+            break;
+        }
+    }
+    Ok(stats)
+}
+
+async fn read_shadowsocks_aead_chunk_from_websocket_tls(
+    client: &mut AsyncResidentTlsClient,
+    state: &mut AsyncWebSocketPayloadState,
+    decoder: &mut Option<AeadStreamCodec>,
+    cipher: &str,
+    password: &str,
+    salt_len: usize,
+) -> Result<Vec<u8>, String> {
+    let mut reader = AsyncWebSocketPayloadReader::new(client, state);
+    read_shadowsocks_aead_chunk_from_async_reader(&mut reader, decoder, cipher, password, salt_len)
+        .await
+}
+
+async fn read_shadowsocks_aead_chunk_from_v2ray_plugin_mux(
+    client: &mut AsyncResidentTlsClient,
+    state: &mut AsyncV2rayPluginMuxPayloadState,
+    mux_id: [u8; 2],
+    decoder: &mut Option<AeadStreamCodec>,
+    cipher: &str,
+    password: &str,
+    salt_len: usize,
+) -> Result<Vec<u8>, String> {
+    let mut reader = AsyncV2rayPluginMuxPayloadReader::new(client, state, mux_id);
+    read_shadowsocks_aead_chunk_from_async_reader(&mut reader, decoder, cipher, password, salt_len)
+        .await
+}
+
+async fn read_shadowsocks_aead_chunk_from_async_reader<R>(
+    reader: &mut R,
+    decoder: &mut Option<AeadStreamCodec>,
+    cipher: &str,
+    password: &str,
+    salt_len: usize,
+) -> Result<Vec<u8>, String>
+where
+    R: AsyncRead + Unpin,
+{
+    if decoder.is_none() {
+        let mut server_salt = vec![0_u8; salt_len];
+        reader
+            .read_exact(&mut server_salt)
+            .await
+            .map_err(|err| format!("read Shadowsocks server salt: {err}"))?;
+        *decoder = Some(
+            AeadStreamCodec::new(cipher, password, &server_salt)
+                .map_err(|err| format!("create Shadowsocks response decoder: {err}"))?,
+        );
+    }
+    let decoder = decoder
+        .as_mut()
+        .ok_or_else(|| "missing Shadowsocks response decoder".to_owned())?;
+    read_encrypted_chunk_from_async_stream(reader, decoder)
+        .await
+        .map_err(|err| format!("read Shadowsocks response chunk: {err}"))
+}
+
+fn is_graceful_shadowsocks_response_message(message: &str) -> bool {
+    message.contains("early eof")
+        || message.contains("failed to fill whole buffer")
+        || message.contains("Connection reset")
+        || message.contains("connection reset")
+        || message.contains("timed out")
+        || message.contains("broken pipe")
+        || message.contains("close_notify")
+}
+
+#[derive(Default)]
+struct AsyncWebSocketPayloadState {
+    decoder: WebSocketBinaryFrameDecoder,
+    pending: VecDeque<u8>,
+}
+
+struct AsyncWebSocketPayloadReader<'a, 'b> {
+    client: &'a mut AsyncResidentTlsClient,
+    state: &'b mut AsyncWebSocketPayloadState,
+}
+
+#[derive(Default)]
+struct AsyncV2rayPluginMuxPayloadState {
+    ws_decoder: WebSocketBinaryFrameDecoder,
+    mux_bytes: VecDeque<u8>,
+    pending_payload: VecDeque<u8>,
+    closed: bool,
+}
+
+struct AsyncV2rayPluginMuxPayloadReader<'a, 'b> {
+    client: &'a mut AsyncResidentTlsClient,
+    state: &'b mut AsyncV2rayPluginMuxPayloadState,
+    mux_id: [u8; 2],
+}
+
+impl<'a, 'b> AsyncV2rayPluginMuxPayloadReader<'a, 'b> {
+    fn new(
+        client: &'a mut AsyncResidentTlsClient,
+        state: &'b mut AsyncV2rayPluginMuxPayloadState,
+        mux_id: [u8; 2],
+    ) -> Self {
+        Self {
+            client,
+            state,
+            mux_id,
+        }
+    }
+}
+
+impl AsyncRead for AsyncV2rayPluginMuxPayloadReader<'_, '_> {
+    fn poll_read(
+        mut self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+        out: &mut ReadBuf<'_>,
+    ) -> Poll<std::io::Result<()>> {
+        if drain_v2ray_plugin_mux_payload(self.state, out)? || out.remaining() == 0 {
+            return Poll::Ready(Ok(()));
+        }
+        if self.state.closed {
+            return Poll::Ready(Ok(()));
+        }
+
+        loop {
+            let mux_id = self.mux_id;
+            if parse_pending_v2ray_plugin_mux_frames(self.state, mux_id)? {
+                if drain_v2ray_plugin_mux_payload(self.state, out)? || out.remaining() == 0 {
+                    return Poll::Ready(Ok(()));
+                }
+            }
+            if self.state.closed {
+                return Poll::Ready(Ok(()));
+            }
+
+            let mut buf = [0_u8; 8192];
+            let mut read_buf = ReadBuf::new(&mut buf);
+            match Pin::new(&mut *self.client).poll_read(cx, &mut read_buf) {
+                Poll::Ready(Ok(())) => {
+                    let read = read_buf.filled();
+                    if read.is_empty() {
+                        self.state.closed = true;
+                        return Poll::Ready(Ok(()));
+                    }
+                    let frames = self
+                        .state
+                        .ws_decoder
+                        .push(read)
+                        .map_err(std::io::Error::other)?;
+                    for frame in frames {
+                        self.state.mux_bytes.extend(frame);
+                    }
+                    continue;
+                }
+                Poll::Ready(Err(err)) => return Poll::Ready(Err(err)),
+                Poll::Pending => return Poll::Pending,
+            }
+        }
+    }
+}
+
+impl<'a, 'b> AsyncWebSocketPayloadReader<'a, 'b> {
+    fn new(
+        client: &'a mut AsyncResidentTlsClient,
+        state: &'b mut AsyncWebSocketPayloadState,
+    ) -> Self {
+        Self { client, state }
+    }
+}
+
+impl AsyncRead for AsyncWebSocketPayloadReader<'_, '_> {
+    fn poll_read(
+        mut self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+        out: &mut ReadBuf<'_>,
+    ) -> Poll<std::io::Result<()>> {
+        if drain_async_websocket_payload(self.state, out) || out.remaining() == 0 {
+            return Poll::Ready(Ok(()));
+        }
+
+        loop {
+            let mut buf = [0_u8; 8192];
+            let mut read_buf = ReadBuf::new(&mut buf);
+            match Pin::new(&mut *self.client).poll_read(cx, &mut read_buf) {
+                Poll::Ready(Ok(())) => {
+                    let read = read_buf.filled();
+                    if read.is_empty() {
+                        return Poll::Ready(Ok(()));
+                    }
+                    let frames = self
+                        .state
+                        .decoder
+                        .push(read)
+                        .map_err(std::io::Error::other)?;
+                    for frame in frames {
+                        self.state.pending.extend(frame);
+                    }
+                    if drain_async_websocket_payload(self.state, out) || out.remaining() == 0 {
+                        return Poll::Ready(Ok(()));
+                    }
+                }
+                Poll::Ready(Err(err)) => return Poll::Ready(Err(err)),
+                Poll::Pending => return Poll::Pending,
+            }
+        }
+    }
+}
+
+fn drain_async_websocket_payload(
+    state: &mut AsyncWebSocketPayloadState,
+    out: &mut ReadBuf<'_>,
+) -> bool {
+    let mut copied = false;
+    while out.remaining() > 0 {
+        let Some(byte) = state.pending.pop_front() else {
+            break;
+        };
+        out.put_slice(&[byte]);
+        copied = true;
+    }
+    copied
+}
+
+fn drain_v2ray_plugin_mux_payload(
+    state: &mut AsyncV2rayPluginMuxPayloadState,
+    out: &mut ReadBuf<'_>,
+) -> std::io::Result<bool> {
+    let mut copied = false;
+    while out.remaining() > 0 {
+        let Some(byte) = state.pending_payload.pop_front() else {
+            break;
+        };
+        out.put_slice(&[byte]);
+        copied = true;
+    }
+    Ok(copied)
+}
+
+fn parse_pending_v2ray_plugin_mux_frames(
+    state: &mut AsyncV2rayPluginMuxPayloadState,
+    mux_id: [u8; 2],
+) -> std::io::Result<bool> {
+    let mut progressed = false;
+    loop {
+        if state.mux_bytes.len() < 2 {
+            break;
+        }
+        let metadata_len = u16::from_be_bytes([state.mux_bytes[0], state.mux_bytes[1]]) as usize;
+        if !(4..=512).contains(&metadata_len) {
+            return Err(std::io::Error::new(
+                ErrorKind::InvalidData,
+                "invalid v2ray-plugin mux metadata length",
+            ));
+        }
+        if state.mux_bytes.len() < 2 + metadata_len {
+            break;
+        }
+
+        let status = state.mux_bytes[4];
+        let option = state.mux_bytes[5];
+        let payload_len = if option == OPTION_DATA {
+            if state.mux_bytes.len() < 2 + metadata_len + 2 {
+                break;
+            }
+            u16::from_be_bytes([
+                state.mux_bytes[2 + metadata_len],
+                state.mux_bytes[2 + metadata_len + 1],
+            ]) as usize
+        } else {
+            0
+        };
+        let total_len = 2
+            + metadata_len
+            + if option == OPTION_DATA {
+                2 + payload_len
+            } else {
+                0
+            };
+        if state.mux_bytes.len() < total_len {
+            break;
+        }
+
+        let mut frame = Vec::with_capacity(total_len);
+        for _ in 0..total_len {
+            frame.push(
+                state
+                    .mux_bytes
+                    .pop_front()
+                    .expect("mux frame length checked"),
+            );
+        }
+
+        let metadata = &frame[2..2 + metadata_len];
+        let frame_id = [metadata[0], metadata[1]];
+        if frame_id != mux_id {
+            return Err(std::io::Error::new(
+                ErrorKind::InvalidData,
+                "v2ray-plugin mux frame id mismatch",
+            ));
+        }
+        if status == SESSION_STATUS_KEEPALIVE {
+            progressed = true;
+            continue;
+        }
+        if status == SESSION_STATUS_END {
+            state.closed = true;
+            progressed = true;
+            break;
+        }
+        if status != SESSION_STATUS_KEEP || option != OPTION_DATA {
+            return Err(std::io::Error::new(
+                ErrorKind::InvalidData,
+                "v2ray-plugin mux frame status/option mismatch",
+            ));
+        }
+        let payload_start = 2 + metadata_len + 2;
+        state.pending_payload.extend(
+            frame[payload_start..payload_start + payload_len]
+                .iter()
+                .copied(),
+        );
+        progressed = true;
+    }
+    Ok(progressed)
+}
+
+fn is_graceful_vmess_response_message(message: &str) -> bool {
+    message.contains("early eof")
+        || message.contains("failed to fill whole buffer")
+        || message.contains("Connection reset")
+        || message.contains("connection reset")
+        || message.contains("timed out")
+        || message.contains("unexpected EOF")
+        || message.contains("peer closed connection")
 }
 
 fn is_graceful_stream_close_error(err: &std::io::Error) -> bool {
@@ -6937,6 +9160,35 @@ mod tests {
         assert!(resident_tcp_probe_status_ok("/", 204));
         assert!(resident_tcp_probe_status_ok("/", 404));
         assert!(!resident_tcp_probe_status_ok("/", 500));
+    }
+
+    #[test]
+    fn simple_obfs_http_status_accepts_ok_or_switching_protocols() {
+        assert!(validate_simple_obfs_http_response_status(b"HTTP/1.1 200 OK\r\n\r\n").is_ok());
+        assert!(
+            validate_simple_obfs_http_response_status(b"HTTP/1.1 101 Switching Protocols\r\n\r\n")
+                .is_ok()
+        );
+        assert!(
+            validate_simple_obfs_http_response_status(b"HTTP/1.1 404 Not Found\r\n\r\n").is_err()
+        );
+    }
+
+    #[test]
+    fn simple_obfs_tls_app_data_reader_unwraps_followup_frames() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        let handle = thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            let frame = simple_obfs_tls_application_data_frame(b"tail").unwrap();
+            stream.write_all(&frame).unwrap();
+        });
+        let mut stream = TcpStream::connect(addr).unwrap();
+        let mut reader = SimpleObfsTlsAppDataReader::new(b"head".to_vec(), &mut stream);
+        let mut out = [0_u8; 8];
+        reader.read_exact(&mut out).unwrap();
+        assert_eq!(&out, b"headtail");
+        handle.join().unwrap();
     }
 
     #[test]

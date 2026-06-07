@@ -23,11 +23,11 @@ import (
 func TestWriteVLESSNativeOptInGoldenFixture(t *testing.T) {
 	writeOrCheckOutboundGolden(t,
 		"../../testdata/rebuild-golden/outbound/protocol/vless_native_optin.json",
-		rebuildGoldenStage15VLESSNativeOptIn(t),
+		rebuildGoldenNativeVLESSNativeOptIn(t),
 	)
 }
 
-func rebuildGoldenStage15VLESSNativeOptIn(t testing.TB) any {
+func rebuildGoldenNativeVLESSNativeOptIn(t testing.TB) any {
 	t.Helper()
 
 	tcpVision := (&outboundv2ray.V2Ray{
@@ -87,7 +87,7 @@ func rebuildGoldenStage15VLESSNativeOptIn(t testing.TB) any {
 	}).ExportToURL()
 
 	return map[string]any{
-		"name": "stage15-vless-native-optin",
+		"name": "vless-native-optin",
 		"source": []string{
 			"DAENEW_RUST_REBUILD_MEMO_2026-05-16.md:26.4",
 			"DAENEW_RUST_REBUILD_MEMO_2026-05-16.md:26.5",

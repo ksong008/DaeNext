@@ -60,7 +60,7 @@ fn outbound_production_matrix_gate_accepts_complete_candidate_contract() {
             .unwrap()
     );
     assert!(
-        gate["excluded_stream_wrapper_source_matrix_release_gate_ready"]
+        !gate["excluded_stream_wrapper_source_matrix_release_gate_ready"]
             .as_bool()
             .unwrap()
     );
@@ -73,18 +73,23 @@ fn outbound_production_matrix_gate_accepts_complete_candidate_contract() {
         gate["excluded_stream_wrapper_source_matrix_typed_report"]["status"]
             .as_str()
             .unwrap(),
-        "pass"
-    );
-    assert_eq!(
-        gate["excluded_stream_wrapper_source_matrix_typed_report"]["source_supported_row_count"]
-            .as_u64()
-            .unwrap(),
-        19
+        "blocked"
     );
     assert!(
-        gate["excluded_stream_wrapper_source_matrix_typed_report"]["all_protocol_rows_open"]
+        gate["excluded_stream_wrapper_source_matrix_typed_report"]["source_supported_row_count"]
+            .as_u64()
+            .unwrap()
+            >= 21
+    );
+    assert!(
+        !gate["excluded_stream_wrapper_source_matrix_typed_report"]["all_protocol_rows_open"]
             .as_bool()
             .unwrap()
+    );
+    assert!(
+        gate["excluded_stream_wrapper_source_matrix_typed_report"]["explicit_fail_closed_row_count"]
+            .as_u64()
+            .unwrap() > 0
     );
     assert!(
         !gate["excluded_stream_wrapper_source_matrix_typed_report"]["c10_ready"]

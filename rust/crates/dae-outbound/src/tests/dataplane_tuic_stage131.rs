@@ -8,8 +8,8 @@ fn stage131_tuic_true_quic_dataplane_smoke_admits_tuic_only() {
     let outcome = tuic::run_true_quic_dataplane_smoke(&options).unwrap();
 
     assert_eq!(outcome.property_protocol, "tuic");
-    assert_eq!(outcome.property_name, "stage131-tuic");
-    assert_eq!(outcome.property_address, "stage131.example:443");
+    assert_eq!(outcome.property_name, "tuic-loopback");
+    assert_eq!(outcome.property_address, "tuic-loopback.example:443");
     assert_eq!(outcome.chain_adapter_mode, "native-opt-in");
     assert!(outcome.chain_parent_dialer_non_nil);
     assert_eq!(outcome.user, tuic::DEFAULT_TUIC_UUID);

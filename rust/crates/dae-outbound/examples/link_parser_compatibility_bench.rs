@@ -6,7 +6,7 @@ use dae_outbound::{
 };
 
 fn main() {
-    let iters = std::env::var("DAE_STAGE5_BENCH_ITERS")
+    let iters = std::env::var("DAE_LINK_PARSER_COMPATIBILITY_BENCH_ITERS")
         .ok()
         .and_then(|value| value.parse::<u64>().ok())
         .unwrap_or(100_000);

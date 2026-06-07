@@ -9,7 +9,7 @@ fn stage122_juicity_live_auth_stream_harness_sends_transcript_over_uni_stream() 
     })
     .unwrap();
 
-    assert_eq!(report.target, "stage122-zero.example:0");
+    assert_eq!(report.target, "juicity-auth-stream.example:0");
     assert_eq!(report.alpn_protocol, "h3");
     assert_eq!(report.client_selected_alpn, "h3");
     assert_eq!(report.server_selected_alpn, "h3");
@@ -23,13 +23,13 @@ fn stage122_juicity_live_auth_stream_harness_sends_transcript_over_uni_stream() 
     assert_eq!(report.server_received_count, 1);
     assert_eq!(report.server_transcript_match_count, 1);
     assert_eq!(report.authenticate_header_len, 50);
-    assert_eq!(report.dialauth_record_len, 89);
-    assert_eq!(report.transcript_len, 139);
+    assert_eq!(report.dialauth_record_len, 95);
+    assert_eq!(report.transcript_len, 145);
     assert_eq!(report.server_received_len, report.transcript_len);
     assert_eq!(report.auth_header_offset, 0);
     assert_eq!(report.dialauth_record_offset, 50);
     assert!(report.auth_header_written_first);
-    assert!(report.dialauth_record_matches_stage121);
+    assert!(report.dialauth_record_matches_auth_stream_contract);
     assert!(report.live_auth_uni_stream_write_order_validated);
     assert!(report.quic_handshake_validated);
     assert!(report.juicity_authenticate_header_layout_admitted);

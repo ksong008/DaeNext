@@ -5,14 +5,14 @@ use dae_outbound::shadowsocks;
 use dae_outbound::socks5::{Socks5Address, Socks5Command, handshake};
 
 fn main() {
-    let iters = std::env::var("DAE_STAGE18_FIRST_BATCH_BENCH_ITERS")
+    let iters = std::env::var("DAE_BASE_DATAPLANE_BENCH_ITERS")
         .ok()
         .and_then(|value| value.parse::<usize>().ok())
         .unwrap_or(200_000);
-    let payload = b"stage18-ping";
+    let payload = b"base-dataplane-ping";
 
     let target = Socks5Address::parse("example.com:443").unwrap();
-    bench("stage18_socks5_connect_payload_frame", iters, || {
+    bench("base_socks5_connect_payload_frame", iters, || {
         let mut frame = handshake::request(Socks5Command::Connect, &target).unwrap();
         frame.extend_from_slice(payload);
         frame.len()
@@ -22,7 +22,7 @@ fn main() {
     options.username = "user".to_owned();
     options.password = "pass".to_owned();
     options.host_override = "front.example".to_owned();
-    bench("stage18_http_connect_payload_frame", iters, || {
+    bench("base_http_connect_payload_frame", iters, || {
         let mut frame = http_request::connect_request(&options);
         frame.extend_from_slice(payload);
         frame.len()
@@ -37,16 +37,17 @@ fn main() {
         out.extend_from_slice(payload);
         out
     };
-    bench("stage18_shadowsocks_aead_initial_roundtrip", iters, || {
+    bench("base_shadowsocks_aead_initial_roundtrip", iters, || {
         let frame = shadowsocks::encode_client_initial(
             "aes-128-gcm",
-            "stage18-password",
+            "base-dataplane-password",
             &client_salt,
             &target_payload,
         )
         .unwrap();
         let (_, decoded) =
-            shadowsocks::decode_client_initial("aes-128-gcm", "stage18-password", &frame).unwrap();
+            shadowsocks::decode_client_initial("aes-128-gcm", "base-dataplane-password", &frame)
+                .unwrap();
         decoded.len()
     });
 }

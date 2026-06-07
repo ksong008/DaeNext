@@ -1,12 +1,13 @@
 use std::env;
 use std::fs;
+use std::os::fd::AsRawFd;
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 
 use dae_config::Config;
 use dae_ebpf_support::{
-    AttachBackend, LiveLoadedTproxyListenSocketMap, map_ids,
-    open_live_loaded_tproxy_listen_socket_map_in_netns,
+    AttachBackend, LiveLoadedTproxyListenSocketMap, map_ids, map_info,
+    open_live_loaded_tproxy_listen_socket_map_in_netns, open_map_fd,
 };
 use serde_json::{Value, json};
 
@@ -52,6 +53,14 @@ const DEFAULT_NATIVE_EBPF_ENV: &str = "DAE_RUST_NATIVE_EBPF";
 #[cfg(feature = "native-ebpf")]
 const DEFAULT_NATIVE_BACKEND_ENV: &str = "DAE_RUST_NATIVE_EBPF_BACKEND";
 const DEFAULT_RESIDENT_DATAPLANE_ENV: &str = "DAE_RUST_RESIDENT_DATAPLANE";
+const ROUTING_TUPLES_MAP_NAME: &str = "routing_tuples_map";
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct RoutingTupleMapDiscovery {
+    id: Option<u32>,
+    source: &'static str,
+    candidate_map_ids: Vec<u32>,
+}
 
 #[derive(Debug)]
 pub struct ResidentProductionRuntime {
@@ -662,19 +671,38 @@ fn start_with_options(
                 })
             } else {
                 match live_handoff.as_ref() {
-                    Some(handoff) => {
-                        let routing_tuple_map_id =
-                            native_runtime.loaded_map_id("routing_tuples_map");
-                        let (value, runtime) = start_resident_dataplane_workers(
-                            handoff,
-                            config,
-                            &artifact_dir,
-                            routing_tuple_map_id,
-                        );
-                        ok &= value["status"].as_str() == Some("pass");
-                        dataplane = runtime;
-                        value
-                    }
+                    Some(handoff) => match discover_routing_tuple_map(&native_runtime, handoff) {
+                        Ok(discovery) => {
+                            let (mut value, runtime) = start_resident_dataplane_workers(
+                                handoff,
+                                config,
+                                &artifact_dir,
+                                discovery.id,
+                            );
+                            if let Value::Object(map) = &mut value {
+                                map.insert(
+                                    "routing_tuple_map_source".to_owned(),
+                                    json!(discovery.source),
+                                );
+                                map.insert(
+                                    "routing_tuple_candidate_map_ids".to_owned(),
+                                    json!(discovery.candidate_map_ids),
+                                );
+                            }
+                            ok &= value["status"].as_str() == Some("pass");
+                            dataplane = runtime;
+                            value
+                        }
+                        Err(err) => {
+                            ok = false;
+                            json!({
+                                "status": "fail",
+                                "enabled": true,
+                                "error": err,
+                                "routing_tuple_map_source": "discovery-error",
+                            })
+                        }
+                    },
                     None => {
                         ok = false;
                         json!({
@@ -844,6 +872,114 @@ fn compact_start_report_for_runtime(start_report: &Value) -> Value {
         "stored_summary_only": true,
         "full_start_report_file": start_report["start_file"].clone(),
     })
+}
+
+fn discover_routing_tuple_map(
+    native_runtime: &NativeEbpfRuntimeState,
+    handoff: &LiveLoadedTproxyListenSocketMap,
+) -> Result<RoutingTupleMapDiscovery, String> {
+    if let Some(id) = native_runtime.loaded_map_id(ROUTING_TUPLES_MAP_NAME) {
+        return Ok(RoutingTupleMapDiscovery {
+            id: Some(id),
+            source: "native-runtime",
+            candidate_map_ids: Vec::new(),
+        });
+    }
+    let id = loaded_map_id_by_name(&handoff.new_map_ids, ROUTING_TUPLES_MAP_NAME)?;
+    if let Some(id) = id {
+        return Ok(RoutingTupleMapDiscovery {
+            id: Some(id),
+            source: "loaded-map-handoff",
+            candidate_map_ids: handoff.new_map_ids.clone(),
+        });
+    }
+    let current_map_ids =
+        map_ids().map_err(|err| format!("resident routing tuple map snapshot failed: {err}"))?;
+    if let Some(id) = latest_loaded_map_id_by_name(&current_map_ids, ROUTING_TUPLES_MAP_NAME)? {
+        return Ok(RoutingTupleMapDiscovery {
+            id: Some(id),
+            source: "runtime-map-snapshot",
+            candidate_map_ids: vec![id],
+        });
+    }
+    Ok(RoutingTupleMapDiscovery {
+        id: None,
+        source: "missing",
+        candidate_map_ids: handoff.new_map_ids.clone(),
+    })
+}
+
+fn loaded_map_id_by_name(candidate_map_ids: &[u32], name: &str) -> Result<Option<u32>, String> {
+    for id in candidate_map_ids {
+        let fd = match open_map_fd(*id) {
+            Ok(fd) => fd,
+            Err(err) if is_transient_missing_map_id(&err) => continue,
+            Err(err) => {
+                return Err(format!(
+                    "open loaded BPF map id {id} while finding {name}: {err}"
+                ));
+            }
+        };
+        let info = match map_info(fd.as_raw_fd()) {
+            Ok(info) => info,
+            Err(err) if is_transient_missing_map_id(&err) => continue,
+            Err(err) => {
+                return Err(format!(
+                    "inspect loaded BPF map id {id} while finding {name}: {err}"
+                ));
+            }
+        };
+        if kernel_visible_map_name_matches(&info.name, name) {
+            return Ok(Some(info.id));
+        }
+    }
+    Ok(None)
+}
+
+fn latest_loaded_map_id_by_name(
+    candidate_map_ids: &[u32],
+    name: &str,
+) -> Result<Option<u32>, String> {
+    let mut selected = None;
+    for id in candidate_map_ids {
+        let fd = match open_map_fd(*id) {
+            Ok(fd) => fd,
+            Err(err) if is_transient_missing_map_id(&err) => continue,
+            Err(err) => {
+                return Err(format!(
+                    "open loaded BPF map id {id} while finding latest {name}: {err}"
+                ));
+            }
+        };
+        let info = match map_info(fd.as_raw_fd()) {
+            Ok(info) => info,
+            Err(err) if is_transient_missing_map_id(&err) => continue,
+            Err(err) => {
+                return Err(format!(
+                    "inspect loaded BPF map id {id} while finding latest {name}: {err}"
+                ));
+            }
+        };
+        if kernel_visible_map_name_matches(&info.name, name)
+            && selected.is_none_or(|selected_id| info.id > selected_id)
+        {
+            selected = Some(info.id);
+        }
+    }
+    Ok(selected)
+}
+
+fn kernel_visible_map_name_matches(actual: &str, expected: &str) -> bool {
+    actual == expected || actual == truncated_bpf_name(expected)
+}
+
+fn truncated_bpf_name(name: &str) -> String {
+    const BPF_OBJ_NAME_MAX_VISIBLE_LEN: usize = 15;
+    name.chars().take(BPF_OBJ_NAME_MAX_VISIBLE_LEN).collect()
+}
+
+fn is_transient_missing_map_id(err: &std::io::Error) -> bool {
+    err.kind() == std::io::ErrorKind::NotFound
 }
 
 fn startup_evidence_from_report(start_report: &Value) -> Value {
@@ -1269,6 +1405,22 @@ mod tests {
             actual_resident_attach_backend(&report).as_deref(),
             Some("tcx")
         );
+    }
+
+    #[test]
+    fn resident_routing_tuple_map_name_matches_kernel_visible_name() {
+        assert!(kernel_visible_map_name_matches(
+            "routing_tuples_map",
+            ROUTING_TUPLES_MAP_NAME
+        ));
+        assert!(kernel_visible_map_name_matches(
+            "routing_tuples_",
+            ROUTING_TUPLES_MAP_NAME
+        ));
+        assert!(!kernel_visible_map_name_matches(
+            "routing_map",
+            ROUTING_TUPLES_MAP_NAME
+        ));
     }
 
     #[cfg(feature = "native-ebpf")]

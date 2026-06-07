@@ -14,8 +14,9 @@ pub struct TuicAuthReport {
 
 pub fn build_tuic_runtime_client_config(
     alpn: &[String],
+    allow_insecure: bool,
 ) -> Result<quinn::ClientConfig, OutboundError> {
-    build_tuic_client_config(&normalize_alpn(alpn))
+    build_tuic_client_config(&normalize_alpn(alpn), allow_insecure)
 }
 
 pub async fn authenticate_tuic_connection(

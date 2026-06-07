@@ -9,7 +9,7 @@ fn stage123_juicity_live_ekm_auth_token_matches_across_quic_connection() {
     })
     .unwrap();
 
-    assert_eq!(report.target, "stage123-zero.example:0");
+    assert_eq!(report.target, "juicity-ekm-auth.example:0");
     assert_eq!(report.client_selected_alpn, "h3");
     assert_eq!(report.server_selected_alpn, "h3");
     assert_eq!(report.ekm_label_len, 16);
@@ -21,8 +21,8 @@ fn stage123_juicity_live_ekm_auth_token_matches_across_quic_connection() {
     assert!(report.client_ekm_token_nonzero);
     assert!(report.server_ekm_token_exported);
     assert_eq!(report.authenticate_header_len, 50);
-    assert_eq!(report.dialauth_record_len, 89);
-    assert_eq!(report.transcript_len, 139);
+    assert_eq!(report.dialauth_record_len, 92);
+    assert_eq!(report.transcript_len, 142);
     assert_eq!(report.open_uni_stream_count, 1);
     assert_eq!(report.uni_stream_finish_count, 1);
     assert_eq!(report.uni_stream_acked_count, 1);

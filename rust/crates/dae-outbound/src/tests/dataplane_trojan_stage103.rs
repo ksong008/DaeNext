@@ -40,7 +40,7 @@ fn stage103_wss_inner_shadowsocks_frame_roundtrip_decodes_trojanc_request() {
 fn stage103_wss_inner_shadowsocks_response_frame_is_websocket_binary_payload() {
     let cipher = "aes-128-gcm";
     let ss_password = "stage103-ss-password";
-    let response_metadata_target = "stage103-response.example:8443";
+    let response_metadata_target = "";
     let payload = b"stage103-wss-inner-ss-response";
     let server_salt = [0x91; 16];
 

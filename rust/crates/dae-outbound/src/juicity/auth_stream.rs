@@ -42,7 +42,7 @@ pub struct JuicityAuthStreamTranscript {
     pub dialauth_record_offset: usize,
     pub transcript: Vec<u8>,
     pub auth_header_written_first: bool,
-    pub dialauth_record_matches_stage120: bool,
+    pub dialauth_record_matches_packet_state_contract: bool,
     pub dialauth_record_order_valid: bool,
 }
 
@@ -64,7 +64,7 @@ pub struct JuicityAuthStreamSmokeReport {
     pub auth_header_offset: usize,
     pub dialauth_record_offset: usize,
     pub auth_header_written_first: bool,
-    pub dialauth_record_matches_stage120: bool,
+    pub dialauth_record_matches_packet_state_contract: bool,
     pub dialauth_record_order_valid: bool,
     pub juicity_authenticate_header_layout_admitted: bool,
     pub juicity_auth_uni_stream_write_order_admitted: bool,
@@ -120,12 +120,12 @@ pub fn build_auth_stream_transcript(
     let dialauth_record_offset = header.encoded.len();
     let auth_header_written_first =
         transcript.get(..header.encoded.len()) == Some(header.encoded.as_slice());
-    let dialauth_record_matches_stage120 = transcript
+    let dialauth_record_matches_packet_state_contract = transcript
         .get(dialauth_record_offset..dialauth_record_offset + dialauth.packed.len())
         == Some(dialauth.packed.as_slice());
     let dialauth_record_order_valid = dialauth_record_offset == JUICITY_AUTHENTICATE_HEADER_LEN
         && transcript.len() == header.encoded.len() + dialauth.packed.len()
-        && dialauth_record_matches_stage120;
+        && dialauth_record_matches_packet_state_contract;
 
     JuicityAuthStreamTranscript {
         target: dialauth.target.clone(),
@@ -136,7 +136,7 @@ pub fn build_auth_stream_transcript(
         dialauth_record_offset,
         transcript,
         auth_header_written_first,
-        dialauth_record_matches_stage120,
+        dialauth_record_matches_packet_state_contract,
         dialauth_record_order_valid,
     }
 }
@@ -153,7 +153,7 @@ pub fn auth_stream_smoke(target: &str) -> Result<JuicityAuthStreamSmokeReport, O
         && transcript.dialauth_record_offset == header.encoded.len()
         && transcript.dialauth_record_order_valid;
     let dialauth_record_over_auth_stream_admitted = auth_uni_stream_write_order_admitted
-        && transcript.dialauth_record_matches_stage120
+        && transcript.dialauth_record_matches_packet_state_contract
         && dialauth.iv_zero_prefix_valid
         && dialauth.packed.len()
             == JUICITY_UNDERLAY_AUTH_IV_LEN + JUICITY_UNDERLAY_AUTH_PSK_LEN + dialauth.metadata_len;
@@ -175,7 +175,8 @@ pub fn auth_stream_smoke(target: &str) -> Result<JuicityAuthStreamSmokeReport, O
         auth_header_offset: transcript.auth_header_offset,
         dialauth_record_offset: transcript.dialauth_record_offset,
         auth_header_written_first: transcript.auth_header_written_first,
-        dialauth_record_matches_stage120: transcript.dialauth_record_matches_stage120,
+        dialauth_record_matches_packet_state_contract: transcript
+            .dialauth_record_matches_packet_state_contract,
         dialauth_record_order_valid: transcript.dialauth_record_order_valid,
         juicity_authenticate_header_layout_admitted: authenticate_header_layout_admitted,
         juicity_auth_uni_stream_write_order_admitted: auth_uni_stream_write_order_admitted,

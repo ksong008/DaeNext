@@ -55,7 +55,20 @@ fn source_shape_registry_blocks_extension_shapes_with_stable_reason_ids() {
         .collect::<Vec<_>>();
     let blocked_shape_ids = blocked.iter().map(|row| row.shape_id).collect::<Vec<_>>();
 
-    assert!(blocked_shape_ids.is_empty());
+    for expected in [
+        "reality-security-underlay",
+        "insecure-secure-endpoint-underlay",
+        "fingerprint-secure-endpoint-underlay",
+        "insecure-frame-stream-underlay",
+        "full-utls-security-underlay",
+        "tls-fragment-security-underlay",
+        "shared-reality-security-underlay",
+        "mux-transport-wrapper",
+        "passthrough-udp-transport",
+        "legacy-cipher-protocol-shape",
+    ] {
+        assert!(blocked_shape_ids.contains(&expected), "{expected}");
+    }
     for row in blocked {
         let blocker = row
             .blocker_id
@@ -72,6 +85,46 @@ fn source_shape_registry_blocks_extension_shapes_with_stable_reason_ids() {
         );
         assert_eq!(row.runtime_selection.selected_runtime_scope, "not-selected");
         assert!(!row.evidence_requirements.is_empty(), "{}", row.shape_id);
+    }
+}
+
+#[test]
+fn source_shape_registry_represents_official_common_fixture_shapes() {
+    let rows = source_shape_registry_rows();
+    let row_shape_ids = rows.iter().map(|row| row.shape_id).collect::<Vec<_>>();
+    let official_common_shape_ids = official_common_source_shape_ids();
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../../testdata/rebuild-golden/outbound/protocol");
+
+    for shape_id in official_common_shape_ids {
+        assert!(
+            row_shape_ids.contains(shape_id),
+            "official/common shape {shape_id} is absent from source registry"
+        );
+    }
+
+    for requirement in official_common_fixture_requirements() {
+        assert!(
+            official_common_shape_ids.contains(&requirement.shape_id),
+            "fixture requirement {} points to non-official/common shape {}",
+            requirement.marker,
+            requirement.shape_id
+        );
+        assert!(
+            row_shape_ids.contains(&requirement.shape_id),
+            "fixture requirement {} points to absent registry row {}",
+            requirement.marker,
+            requirement.shape_id
+        );
+        let fixture = root.join(requirement.fixture);
+        let text = std::fs::read_to_string(&fixture)
+            .unwrap_or_else(|err| panic!("read {}: {err}", fixture.display()));
+        assert!(
+            text.contains(requirement.marker),
+            "{} must retain marker {} for source registry coverage",
+            requirement.fixture,
+            requirement.marker
+        );
     }
 }
 
@@ -146,8 +199,8 @@ fn source_shape_registry_records_scoped_release_gate_evidence() {
     );
     assert_eq!(evidence.evidence_host, "remote-38");
     assert_eq!(evidence.upstream_host, "jp");
-    assert_eq!(evidence.row_count, 5);
-    assert_eq!(evidence.pass_count, 5);
+    assert_eq!(evidence.row_count, 14);
+    assert_eq!(evidence.pass_count, 14);
     assert!(evidence.all_pass);
     assert!(evidence.large_page_all_pass);
     assert!(evidence.proxy_evidence_all_pass);
@@ -169,6 +222,15 @@ fn source_shape_registry_records_scoped_release_gate_evidence() {
         "plugin-wrapper-layer",
         "legacy-layer-shape",
         "stream-wrapper-meek",
+        "secure-websocket-framed-endpoint",
+        "secure-httpupgrade-framed-endpoint",
+        "verified-quic-security-underlay",
+        "quic-port-hopping-surface",
+        "inner-encryption-stream-wrapper",
+        "obfs-tls-plugin-wrapper",
+        "tls-websocket-plugin-wrapper",
+        "aead-2022-plugin-wrapper",
+        "proxy-transport-mode",
     ] {
         assert!(evidence.opened_rows.contains(&expected), "{expected}");
     }
@@ -219,6 +281,13 @@ fn source_shape_registry_uses_protocol_generic_matrix_semantics() {
         assert!(
             !rendered.contains(needle),
             "source shape registry must use protocol-generic matrix semantics, found {needle}"
+        );
+    }
+    for digit in '0'..='9' {
+        let needle = format!("{}{}", "stage", digit);
+        assert!(
+            !rendered.contains(&needle),
+            "source shape registry must use protocol-generic stage-free semantics, found {needle}"
         );
     }
 }

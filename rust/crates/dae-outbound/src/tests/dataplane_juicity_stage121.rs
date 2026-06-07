@@ -51,7 +51,7 @@ fn stage121_juicity_auth_stream_transcript_writes_header_before_dialauth_record(
         dialauth.packed.as_slice()
     );
     assert!(transcript.auth_header_written_first);
-    assert!(transcript.dialauth_record_matches_stage120);
+    assert!(transcript.dialauth_record_matches_packet_state_contract);
     assert!(transcript.dialauth_record_order_valid);
 }
 
@@ -86,7 +86,7 @@ fn stage121_juicity_auth_stream_smoke_admits_only_local_transcript_contract() {
     );
     assert!(report.authenticate_header_layout_valid);
     assert!(report.auth_header_written_first);
-    assert!(report.dialauth_record_matches_stage120);
+    assert!(report.dialauth_record_matches_packet_state_contract);
     assert!(report.dialauth_record_order_valid);
     assert!(report.juicity_authenticate_header_layout_admitted);
     assert!(report.juicity_auth_uni_stream_write_order_admitted);

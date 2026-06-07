@@ -1,8 +1,7 @@
 use std::io::{Cursor, Read, Write};
 
 use crate::error::OutboundError;
-use crate::shadowsocks::{self, AeadTcpSalts, ShadowsocksMetadata};
-use crate::socks5::Socks5Address;
+use crate::shadowsocks::{self, AeadTcpSalts};
 
 use super::dataplane::{TrojanTcpRequest, read_tcp_request_from_stream};
 use super::metadata::{TrojanMetadata, TrojanNetwork};
@@ -48,7 +47,7 @@ pub fn tcp_exchange_over_inner_shadowsocks_stream<S>(
     shadowsocks_password: &str,
     trojan_password: &str,
     target: &str,
-    response_metadata_target: &str,
+    _response_metadata_target: &str,
     payload: &[u8],
     salts: AeadTcpSalts<'_>,
 ) -> Result<TrojanGoInnerShadowsocksTcpExchangeReport, OutboundError>
@@ -84,20 +83,11 @@ where
     }
     let mut decoder =
         shadowsocks::AeadStreamCodec::new(cipher, shadowsocks_password, &server_salt)?;
-    let plain = shadowsocks::read_encrypted_chunk_from_stream(stream, &mut decoder)?;
-    let (response_metadata, consumed) = Socks5Address::decode(&plain)?;
-    let echoed_payload = plain[consumed..].to_vec();
+    let echoed_payload = shadowsocks::read_encrypted_chunk_from_stream(stream, &mut decoder)?;
     if echoed_payload != payload {
         return Err(OutboundError::BadTrojan(
             "trojan-go inner shadowsocks payload response mismatch".to_owned(),
         ));
-    }
-    if response_metadata.authority() != response_metadata_target {
-        return Err(OutboundError::BadTrojan(format!(
-            "trojan-go inner shadowsocks response metadata mismatch: got {}, want {}",
-            response_metadata.authority(),
-            response_metadata_target
-        )));
     }
 
     Ok(TrojanGoInnerShadowsocksTcpExchangeReport {
@@ -108,12 +98,12 @@ where
         server_salt_len: server_salt.len(),
         inner_shadowsocks_is_client: false,
         inner_shadowsocks_request_metadata_present: false,
-        server_response_metadata: response_metadata.authority(),
+        server_response_metadata: String::new(),
         password_sha224_hex: packet::password_sha224_hex(trojan_password),
         command: TrojanNetwork::Tcp.byte(),
         trojan_request_header_len,
         shadowsocks_request_len: shadowsocks_request.len(),
-        shadowsocks_response_metadata_len: consumed,
+        shadowsocks_response_metadata_len: 0,
         payload_len: payload.len(),
         echoed_payload,
         shadowsocks_chunk_validated: true,
@@ -162,15 +152,12 @@ pub fn encode_inner_shadowsocks_response(
     cipher: &str,
     shadowsocks_password: &str,
     salt: &[u8],
-    response_metadata_target: &str,
+    _response_metadata_target: &str,
     payload: &[u8],
 ) -> Result<Vec<u8>, OutboundError> {
-    let metadata = ShadowsocksMetadata::parse(response_metadata_target)?;
-    let mut plain = metadata.encode()?;
-    plain.extend_from_slice(payload);
     let mut codec = shadowsocks::AeadStreamCodec::new(cipher, shadowsocks_password, salt)?;
-    let mut out = Vec::with_capacity(salt.len() + plain.len() + 2 + shadowsocks::TAG_LEN * 2);
+    let mut out = Vec::with_capacity(salt.len() + payload.len() + 2 + shadowsocks::TAG_LEN * 2);
     out.extend_from_slice(salt);
-    out.extend_from_slice(&codec.encrypt_chunk(&plain)?);
+    out.extend_from_slice(&codec.encrypt_chunk(payload)?);
     Ok(out)
 }

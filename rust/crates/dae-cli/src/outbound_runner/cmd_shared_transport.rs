@@ -21,7 +21,7 @@ pub(super) fn run_transport_contract() -> RunnerOutput {
     RunnerOutput::ok(format!(
         "{}\n",
         json!({
-            "name": "stage15-shared-transport-native-optin",
+            "name": "shared-transport-native-optin",
             "default_go_path": shared_transport::contract::DEFAULT_GO_PATH,
             "rust_adapter_mode": shared_transport::contract::ADAPTER_MODE,
             "protocol_scope": shared_transport::contract::PROTOCOL_SCOPE,

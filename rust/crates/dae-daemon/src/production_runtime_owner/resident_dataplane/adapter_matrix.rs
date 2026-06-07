@@ -342,11 +342,13 @@ const RESIDENT_LIVE_ADAPTER_MATRIX_ENTRIES: [ResidentLiveAdapterMatrixEntry; 10]
     },
     udp_remote_live_entry(
         "shadowsocks",
-        "stage18 AEAD TCP candidate uses resident Shadowsocks AEAD stream/UDP relay; SIP003 and 2022 variants remain fail-closed",
+        "resident Shadowsocks cipher families use resident AEAD and AEAD-2022 stream/UDP relays; plugin wrappers are separate capability rows",
         &[
-            "resident_dataplane::plan admits stage18 AEAD TCP candidate shapes",
+            "resident_dataplane::plan admits resident Shadowsocks AEAD and AEAD-2022 cipher families",
             "resident_dataplane::tcp dispatches through the Shadowsocks AEAD stream relay",
+            "resident_dataplane::tcp dispatches through the Shadowsocks 2022 stream relay",
             "resident_dataplane::udp dispatches through the Shadowsocks AEAD UDP datagram relay",
+            "resident_dataplane::udp dispatches through the Shadowsocks 2022 UDP datagram relay",
             "live-evidence-ledger must record a remote UDP matrix echo before this row is live-ready",
             "live-evidence-ledger must record remote TCP/page-load evidence before this row is live-ready",
         ],
@@ -423,7 +425,7 @@ const RESIDENT_LIVE_ADAPTER_MATRIX_ENTRIES: [ResidentLiveAdapterMatrixEntry; 10]
     ),
     protocol_closed_remote_live_entry(
         "http-proxy",
-        "plain HTTP CONNECT endpoints use the resident TCP relay; UDP has no HTTP CONNECT relay semantics and is fail-closed without Go fallback",
+        "plain HTTP CONNECT endpoints use the resident TCP relay; UDP has no HTTP CONNECT relay semantics and is fail-closed without fallback execution",
         &[
             "resident_dataplane::plan admits plain HTTP CONNECT endpoint shapes",
             "resident_dataplane::tcp dispatches through the HTTP CONNECT relay",

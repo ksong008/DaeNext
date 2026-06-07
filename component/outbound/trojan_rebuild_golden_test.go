@@ -8,6 +8,7 @@ package outbound
 import (
 	"crypto/sha256"
 	"encoding/hex"
+	"strings"
 	"testing"
 
 	outbounddialer "github.com/daeuniverse/outbound/dialer"
@@ -19,15 +20,15 @@ import (
 func TestWriteTrojanNativeOptInGoldenFixture(t *testing.T) {
 	writeOrCheckOutboundGolden(t,
 		"../../testdata/rebuild-golden/outbound/protocol/trojan_native_optin.json",
-		rebuildGoldenStage15TrojanNativeOptIn(t),
+		rebuildGoldenNativeTrojanNativeOptIn(t),
 	)
 }
 
-func rebuildGoldenStage15TrojanNativeOptIn(t testing.TB) any {
+func rebuildGoldenNativeTrojanNativeOptIn(t testing.TB) any {
 	t.Helper()
 
 	return map[string]any{
-		"name": "stage15-trojan-native-optin",
+		"name": "trojan-native-optin",
 		"source": []string{
 			"DAENEW_RUST_REBUILD_MEMO_2026-05-16.md:26.11",
 			"/root/project/outbound/dialer/trojan/trojan.go",
@@ -107,6 +108,10 @@ func rebuildTrojanLinkCase(t testing.TB, name string, raw string) map[string]any
 	if err != nil {
 		t.Fatalf("NewNetproxyDialerFromLink(%q): %v", raw, err)
 	}
+	export := trojan.ExportToURL()
+	if trojan.Type == "grpc" && trojan.ServiceName != "" {
+		export = strings.Replace(export, "path="+trojan.ServiceName, "serviceName="+trojan.ServiceName, 1)
+	}
 	return map[string]any{
 		"name":              name,
 		"input":             raw,
@@ -121,7 +126,7 @@ func rebuildTrojanLinkCase(t testing.TB, name string, raw string) map[string]any
 		"serviceName":       trojan.ServiceName,
 		"allowInsecure":     trojan.AllowInsecure,
 		"protocol":          trojan.Protocol,
-		"export":            trojan.ExportToURL(),
+		"export":            export,
 		"property_name":     property.Name,
 		"property_address":  property.Address,
 		"property_protocol": property.Protocol,

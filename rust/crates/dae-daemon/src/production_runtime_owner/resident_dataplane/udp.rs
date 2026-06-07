@@ -18,7 +18,10 @@ use dae_outbound::{
         authenticate_juicity_connection, build_juicity_runtime_client_config,
         decode_stream_packet_frame, seal_stream_packet_frame,
     },
-    shadowsocks::{decode_udp_packet as decode_shadowsocks_udp_packet, encode_udp_packet},
+    shadowsocks::{
+        Ss2022UdpCodec, decode_udp_packet as decode_shadowsocks_udp_packet, encode_udp_packet,
+        ss2022_udp_unix_timestamp_now,
+    },
     socks5::{Socks5Address, udp_associate_control_over_stream, udp_packet},
     trojan::{decode_udp_packet as decode_trojan_udp_packet, packet as trojan_packet},
     tuic::{authenticate_tuic_connection, build_tuic_runtime_client_config},
@@ -39,7 +42,10 @@ use super::dns::{ResidentDnsPlan, handle_resident_dns_udp};
 use super::events::append_event;
 use super::execution::{append_runtime_execution_descriptor, udp_execution_descriptor};
 use super::plan::{ResidentProxyGroupPlan, ResidentProxyPlan, ResidentProxyProtocolPlan};
-use super::tcp::{open_marked_quic_endpoint, resolve_proxy_udp_addr, set_socket_mark};
+use super::tcp::{
+    open_marked_quic_endpoint, resolve_hysteria2_quic_remote, resolve_proxy_udp_addr,
+    set_socket_mark,
+};
 use super::vision::{VisionUnpadState, VisionUnpadder, vision_padding_block};
 use super::{
     RESIDENT_CONNECT_TIMEOUT, RESIDENT_IDLE_SLEEP, RESIDENT_UDP_RESPONSE_TIMEOUT,
@@ -372,8 +378,24 @@ fn exchange_proxy_udp(
             password,
             salt_len,
         } => exchange_shadowsocks_udp(proxy, original_dst, payload, cipher, password, *salt_len),
-        ResidentProxyProtocolPlan::ShadowsocksSimpleObfsHttpTcp { .. } => Err(format!(
-            "unsupported_udp_handler: resident UDP adapter dispatch selected handler {} for protocol {}; SIP003 simple-obfs HTTP is a TCP stream wrapper and UDP remains fail-closed without Go fallback",
+        ResidentProxyProtocolPlan::Shadowsocks2022Tcp {
+            cipher,
+            password,
+            packet_nonce_len,
+            ..
+        } => exchange_shadowsocks_2022_udp(
+            proxy,
+            original_dst,
+            payload,
+            cipher,
+            password,
+            *packet_nonce_len,
+        ),
+        ResidentProxyProtocolPlan::ShadowsocksSimpleObfsHttpTcp { .. }
+        | ResidentProxyProtocolPlan::ShadowsocksSimpleObfsTlsTcp { .. }
+        | ResidentProxyProtocolPlan::ShadowsocksV2rayPluginTlsWsTcp { .. }
+        | ResidentProxyProtocolPlan::Shadowsocks2022SimpleObfsHttpTcp { .. } => Err(format!(
+            "unsupported_udp_handler: resident UDP adapter dispatch selected handler {} for protocol {}; SIP003 plugin wrappers are TCP stream wrappers and UDP remains fail-closed without fallback execution",
             resident_udp_handler_name(&proxy.handler),
             proxy.protocol
         )),
@@ -383,6 +405,11 @@ fn exchange_proxy_udp(
         ResidentProxyProtocolPlan::TrojanTcpTls { password } => {
             exchange_trojan_udp(proxy, original_dst, payload, password)
         }
+        ResidentProxyProtocolPlan::TrojanInnerShadowsocksTcpTls { .. } => Err(format!(
+            "unsupported_udp_handler: resident UDP adapter dispatch selected handler {} for protocol {}; Trojan-Go inner encryption is admitted for TCP stream relay only and UDP remains fail-closed without fallback execution",
+            resident_udp_handler_name(&proxy.handler),
+            proxy.protocol
+        )),
         ResidentProxyProtocolPlan::VmessAeadTcp { id } => {
             exchange_vmess_udp(proxy, original_dst, payload, id)
         }
@@ -393,12 +420,30 @@ fn exchange_proxy_udp(
             auth,
             pin_sha256,
             max_rx,
-        } => exchange_hysteria2_udp(proxy, original_dst, payload, auth, pin_sha256, *max_rx),
+            port_hop_ports,
+        } => exchange_hysteria2_udp(
+            proxy,
+            original_dst,
+            payload,
+            auth,
+            pin_sha256,
+            *max_rx,
+            port_hop_ports,
+        ),
         ResidentProxyProtocolPlan::TuicQuicTcp {
             uuid,
             password,
             alpn,
-        } => exchange_tuic_udp(proxy, original_dst, payload, uuid, password, alpn),
+            allow_insecure,
+        } => exchange_tuic_udp(
+            proxy,
+            original_dst,
+            payload,
+            uuid,
+            password,
+            alpn,
+            *allow_insecure,
+        ),
         ResidentProxyProtocolPlan::JuicityQuicTcp {
             uuid,
             password,
@@ -414,7 +459,7 @@ fn exchange_proxy_udp(
             pinned_certchain_sha256,
         ),
         ResidentProxyProtocolPlan::HttpProxyTcp { .. } => Err(format!(
-            "unsupported_udp_handler: resident UDP adapter dispatch selected handler {} for protocol {}; HTTP CONNECT has no UDP relay semantics and is fail-closed without Go fallback",
+            "unsupported_udp_handler: resident UDP adapter dispatch selected handler {} for protocol {}; HTTP CONNECT has no UDP relay semantics and is fail-closed without fallback execution",
             resident_udp_handler_name(&proxy.handler),
             proxy.protocol
         )),
@@ -627,10 +672,23 @@ fn resident_udp_handler_name(handler: &ResidentProxyProtocolPlan) -> &'static st
         ResidentProxyProtocolPlan::Socks5Tcp { .. } => "socks5-tcp",
         ResidentProxyProtocolPlan::HttpProxyTcp { .. } => "http-proxy-tcp",
         ResidentProxyProtocolPlan::ShadowsocksAeadTcp { .. } => "shadowsocks-aead-tcp",
+        ResidentProxyProtocolPlan::Shadowsocks2022Tcp { .. } => "shadowsocks-2022-tcp",
         ResidentProxyProtocolPlan::ShadowsocksSimpleObfsHttpTcp { .. } => {
             "shadowsocks-simple-obfs-http-tcp"
         }
+        ResidentProxyProtocolPlan::ShadowsocksSimpleObfsTlsTcp { .. } => {
+            "shadowsocks-simple-obfs-tls-tcp"
+        }
+        ResidentProxyProtocolPlan::ShadowsocksV2rayPluginTlsWsTcp { .. } => {
+            "shadowsocks-v2ray-plugin-tls-websocket-tcp"
+        }
+        ResidentProxyProtocolPlan::Shadowsocks2022SimpleObfsHttpTcp { .. } => {
+            "shadowsocks-2022-simple-obfs-http-tcp"
+        }
         ResidentProxyProtocolPlan::TrojanTcpTls { .. } => "trojan-tcp-tls",
+        ResidentProxyProtocolPlan::TrojanInnerShadowsocksTcpTls { .. } => {
+            "trojan-inner-shadowsocks-tcp-tls"
+        }
         ResidentProxyProtocolPlan::AnyTlsTcpTls { .. } => "anytls-tcp-tls",
         ResidentProxyProtocolPlan::VmessAeadTcp { .. } => "vmess-aead-tcp",
         ResidentProxyProtocolPlan::Hysteria2QuicTcp { .. } => "hysteria2-quic-tcp",
@@ -664,8 +722,15 @@ fn udp_packet_semantics(handler: &ResidentProxyProtocolPlan) -> &'static str {
         ResidentProxyProtocolPlan::Socks5Tcp { .. } => "udp-associate",
         ResidentProxyProtocolPlan::HttpProxyTcp { .. } => "protocol-closed",
         ResidentProxyProtocolPlan::ShadowsocksAeadTcp { .. } => "datagram-aead",
-        ResidentProxyProtocolPlan::ShadowsocksSimpleObfsHttpTcp { .. } => "plugin-wrapper-stream",
+        ResidentProxyProtocolPlan::Shadowsocks2022Tcp { .. } => "datagram-aead-2022",
+        ResidentProxyProtocolPlan::ShadowsocksSimpleObfsHttpTcp { .. }
+        | ResidentProxyProtocolPlan::ShadowsocksSimpleObfsTlsTcp { .. }
+        | ResidentProxyProtocolPlan::ShadowsocksV2rayPluginTlsWsTcp { .. }
+        | ResidentProxyProtocolPlan::Shadowsocks2022SimpleObfsHttpTcp { .. } => {
+            "plugin-wrapper-stream"
+        }
         ResidentProxyProtocolPlan::TrojanTcpTls { .. }
+        | ResidentProxyProtocolPlan::TrojanInnerShadowsocksTcpTls { .. }
         | ResidentProxyProtocolPlan::AnyTlsTcpTls { .. }
         | ResidentProxyProtocolPlan::VmessAeadTcp { .. } => "udp-over-stream",
         ResidentProxyProtocolPlan::Hysteria2QuicTcp { .. } => "quic-datagram",
@@ -706,6 +771,44 @@ fn exchange_shadowsocks_udp(
     let decoded = decode_shadowsocks_udp_packet(cipher, password, &response)
         .map_err(|err| format!("decode Shadowsocks UDP packet: {err}"))?;
     Ok(UdpExchangeResult::new(decoded.payload, "udp-datagram-aead"))
+}
+
+fn exchange_shadowsocks_2022_udp(
+    proxy: &ResidentProxyPlan,
+    original_dst: SocketAddrV4,
+    payload: &[u8],
+    cipher: &str,
+    password: &str,
+    packet_nonce_len: usize,
+) -> Result<UdpExchangeResult, String> {
+    let mut session_id = [0_u8; 8];
+    fastrand::fill(&mut session_id);
+    let mut codec = Ss2022UdpCodec::new(cipher, password, session_id)
+        .map_err(|err| format!("create Shadowsocks 2022 UDP codec: {err}"))?;
+    let mut packet_nonce = vec![0_u8; packet_nonce_len];
+    if packet_nonce_len > 0 {
+        fastrand::fill(&mut packet_nonce);
+    }
+    let request = codec
+        .encode_client_packet(
+            &original_dst.to_string(),
+            payload,
+            ss2022_udp_unix_timestamp_now(),
+            if packet_nonce_len > 0 {
+                Some(packet_nonce.as_slice())
+            } else {
+                None
+            },
+        )
+        .map_err(|err| format!("encode Shadowsocks 2022 UDP packet: {err}"))?;
+    let response = exchange_udp_datagram_with_proxy(proxy, &request.wire, "Shadowsocks 2022")?;
+    let decoded = codec
+        .decode_server_packet(&response, ss2022_udp_unix_timestamp_now())
+        .map_err(|err| format!("decode Shadowsocks 2022 UDP packet: {err}"))?;
+    Ok(UdpExchangeResult::new(
+        decoded.payload,
+        "udp-datagram-aead-2022",
+    ))
 }
 
 fn exchange_socks5_udp(
@@ -837,6 +940,7 @@ fn exchange_hysteria2_udp(
     auth: &str,
     pin_sha256: &str,
     max_rx: u64,
+    port_hop_ports: &[u16],
 ) -> Result<UdpExchangeResult, String> {
     run_quic_udp_exchange("Hysteria2 UDP", async move {
         let mut endpoint = open_marked_quic_endpoint(proxy.mark)?;
@@ -844,7 +948,7 @@ fn exchange_hysteria2_udp(
             build_hysteria2_pinned_client_config(pin_sha256.to_owned())
                 .map_err(|err| format!("build Hysteria2 QUIC client config: {err}"))?,
         );
-        let remote = resolve_proxy_udp_addr(proxy)?;
+        let remote = resolve_hysteria2_quic_remote(proxy, port_hop_ports)?;
         let connection = endpoint
             .connect(remote, &proxy.server_name)
             .map_err(|err| format!("connect Hysteria2 QUIC endpoint: {err}"))?
@@ -887,11 +991,12 @@ fn exchange_tuic_udp(
     uuid: &str,
     password: &str,
     alpn: &[String],
+    allow_insecure: bool,
 ) -> Result<UdpExchangeResult, String> {
     run_quic_udp_exchange("TUIC UDP", async move {
         let mut endpoint = open_marked_quic_endpoint(proxy.mark)?;
         endpoint.set_default_client_config(
-            build_tuic_runtime_client_config(alpn)
+            build_tuic_runtime_client_config(alpn, allow_insecure)
                 .map_err(|err| format!("build TUIC QUIC client config: {err}"))?,
         );
         let remote = resolve_proxy_udp_addr(proxy)?;
@@ -1775,6 +1880,9 @@ mod tests {
             handler: ResidentProxyProtocolPlan::HttpProxyTcp {
                 username: String::new(),
                 password: String::new(),
+                transport: false,
+                transport_host: String::new(),
+                transport_path: String::new(),
             },
             chain_parent: None,
             mark: 0,
@@ -1788,7 +1896,7 @@ mod tests {
         .unwrap_err();
         assert!(err.contains("unsupported_udp_handler"));
         assert!(err.contains("no UDP relay semantics"));
-        assert!(err.contains("without Go fallback"));
+        assert!(err.contains("without fallback execution"));
         assert!(err.contains("http-proxy-tcp"));
         assert!(err.contains("http-proxy"));
     }

@@ -100,7 +100,7 @@
     "local fake HTTP proxy CONNECT with Basic auth",
     "local fake HTTP transport PUT request"
   ],
-  "name": "stage15-http-native-optin",
+  "name": "http-native-optin",
   "protocol_scope": [
     "http",
     "https"

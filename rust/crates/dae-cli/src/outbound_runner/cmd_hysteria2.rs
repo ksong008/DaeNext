@@ -18,7 +18,7 @@ pub(super) fn run_hysteria2_contract() -> RunnerOutput {
     RunnerOutput::ok(format!(
         "{}\n",
         json!({
-            "name": "stage15-hysteria2-native-optin",
+            "name": "hysteria2-native-optin",
             "default_go_path": hysteria2::contract::DEFAULT_GO_PATH,
             "rust_adapter_mode": hysteria2::contract::ADAPTER_MODE,
             "protocol_scope": hysteria2::contract::PROTOCOL_SCOPE,

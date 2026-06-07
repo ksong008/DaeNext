@@ -122,6 +122,7 @@ pub(super) fn tcp_execution_descriptor(label: &str) -> RuntimeExecutionDescripto
             "stream-transport",
             "tcp",
         )
+        .with_packet_semantics("udp-over-stream-or-datagram")
         .with_stream_wrapper("websocket")
         .with_transport_underlay("tcp"),
         "async-proxy-httpupgrade-tls" => RuntimeExecutionDescriptor::new(
@@ -130,6 +131,7 @@ pub(super) fn tcp_execution_descriptor(label: &str) -> RuntimeExecutionDescripto
             "stream-transport",
             "tcp",
         )
+        .with_packet_semantics("udp-over-stream-or-datagram")
         .with_stream_wrapper("httpupgrade")
         .with_transport_underlay("tcp"),
         "async-proxy-grpc-tls" => RuntimeExecutionDescriptor::new(
@@ -138,6 +140,7 @@ pub(super) fn tcp_execution_descriptor(label: &str) -> RuntimeExecutionDescripto
             "stream-transport",
             "tcp",
         )
+        .with_packet_semantics("udp-over-stream-or-datagram")
         .with_stream_wrapper("grpc")
         .with_transport_underlay("tcp"),
         "async-proxy-meek-tls" => RuntimeExecutionDescriptor::new(
@@ -177,18 +180,20 @@ pub(super) fn tcp_execution_descriptor(label: &str) -> RuntimeExecutionDescripto
         .with_packet_semantics("protocol-closed")
         .with_security_underlay("standard-tls")
         .with_transport_underlay("tcp"),
-        "first-batch-tcp" => RuntimeExecutionDescriptor::new(
-            label,
-            "tcp-first-batch-relay",
-            "stream-transport",
-            "tcp",
-        )
-        .with_transport_underlay("tcp"),
-        "first-batch-aead-tcp" => {
+        "plain-tcp-relay" => {
+            RuntimeExecutionDescriptor::new(label, "tcp-relay", "stream-transport", "tcp")
+                .with_transport_underlay("tcp")
+        }
+        "aead-tcp-relay" => {
             RuntimeExecutionDescriptor::new(label, "aead-tcp-relay", "stream-transport", "tcp")
                 .with_transport_underlay("tcp")
         }
-        "first-batch-websocket-aead" => RuntimeExecutionDescriptor::new(
+        "shadowsocks-2022-tcp" => {
+            RuntimeExecutionDescriptor::new(label, "aead-2022-tcp-relay", "stream-transport", "tcp")
+                .with_security_underlay("aead-2022")
+                .with_transport_underlay("tcp")
+        }
+        "wrapped-websocket-aead" => RuntimeExecutionDescriptor::new(
             label,
             "wrapped-stream-relay",
             "stream-transport",
@@ -196,7 +201,7 @@ pub(super) fn tcp_execution_descriptor(label: &str) -> RuntimeExecutionDescripto
         )
         .with_stream_wrapper("websocket")
         .with_transport_underlay("tcp"),
-        "first-batch-httpupgrade-aead" => RuntimeExecutionDescriptor::new(
+        "wrapped-httpupgrade-aead" => RuntimeExecutionDescriptor::new(
             label,
             "wrapped-stream-relay",
             "stream-transport",
@@ -204,13 +209,71 @@ pub(super) fn tcp_execution_descriptor(label: &str) -> RuntimeExecutionDescripto
         )
         .with_stream_wrapper("httpupgrade")
         .with_transport_underlay("tcp"),
-        "first-batch-grpc-aead" => RuntimeExecutionDescriptor::new(
+        "wrapped-secure-websocket-aead" => RuntimeExecutionDescriptor::new(
+            label,
+            "wrapped-stream-relay",
+            "stream-transport",
+            "tcp",
+        )
+        .with_packet_semantics("udp-over-stream-or-datagram")
+        .with_stream_wrapper("websocket")
+        .with_transport_underlay("tcp"),
+        "wrapped-secure-httpupgrade-aead" => RuntimeExecutionDescriptor::new(
+            label,
+            "wrapped-stream-relay",
+            "stream-transport",
+            "tcp",
+        )
+        .with_packet_semantics("udp-over-stream-or-datagram")
+        .with_stream_wrapper("httpupgrade")
+        .with_transport_underlay("tcp"),
+        "wrapped-grpc-aead" => RuntimeExecutionDescriptor::new(
             label,
             "wrapped-stream-relay",
             "stream-transport",
             "tcp",
         )
         .with_stream_wrapper("grpc")
+        .with_transport_underlay("tcp"),
+        "plugin-wrapper-aead" => RuntimeExecutionDescriptor::new(
+            label,
+            "wrapped-stream-relay",
+            "stream-transport",
+            "tcp",
+        )
+        .with_packet_semantics("plugin-wrapper-stream")
+        .with_stream_wrapper("plugin-wrapper")
+        .with_security_underlay("aead")
+        .with_transport_underlay("tcp"),
+        "plugin-wrapper-aead-2022" => RuntimeExecutionDescriptor::new(
+            label,
+            "wrapped-stream-relay",
+            "stream-transport",
+            "tcp",
+        )
+        .with_packet_semantics("plugin-wrapper-stream")
+        .with_stream_wrapper("plugin-wrapper")
+        .with_security_underlay("aead-2022")
+        .with_transport_underlay("tcp"),
+        "plugin-wrapper-tls-websocket-aead" => RuntimeExecutionDescriptor::new(
+            label,
+            "wrapped-stream-relay",
+            "stream-transport",
+            "tcp",
+        )
+        .with_packet_semantics("plugin-wrapper-stream")
+        .with_stream_wrapper("plugin-wrapper")
+        .with_security_underlay("standard-tls")
+        .with_transport_underlay("tcp"),
+        "inner-encryption-websocket-aead" => RuntimeExecutionDescriptor::new(
+            label,
+            "wrapped-stream-relay",
+            "stream-transport",
+            "tcp",
+        )
+        .with_packet_semantics("inner-encryption-stream")
+        .with_stream_wrapper("websocket")
+        .with_security_underlay("standard-tls")
         .with_transport_underlay("tcp"),
         "per-connection-thread-transitional" | "per-connection-thread-legacy" => {
             RuntimeExecutionDescriptor::new(
@@ -239,6 +302,11 @@ pub(super) fn udp_execution_descriptor(label: &str) -> RuntimeExecutionDescripto
         "udp-datagram-aead" => {
             RuntimeExecutionDescriptor::new(label, "packet-relay", "packet-transport", "udp")
                 .with_packet_semantics("datagram-aead")
+        }
+        "udp-datagram-aead-2022" => {
+            RuntimeExecutionDescriptor::new(label, "packet-relay", "packet-transport", "udp")
+                .with_packet_semantics("datagram-aead-2022")
+                .with_security_underlay("aead-2022")
         }
         "socks5-udp-associate" => {
             RuntimeExecutionDescriptor::new(label, "udp-associate", "packet-transport", "udp")

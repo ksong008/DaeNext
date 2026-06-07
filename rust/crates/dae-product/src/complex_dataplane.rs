@@ -24,7 +24,7 @@ pub struct ComplexDataplaneGateRow {
 pub fn complex_dataplane_gate_contract() -> ComplexDataplaneGateContract {
     ComplexDataplaneGateContract {
         name: "complex-dataplane-gate",
-        stage: "stage19",
+        stage: "complex-protocol-dataplane",
         gate_complete: true,
         default_switch_allowed: false,
         go_fallback_required: true,
@@ -137,7 +137,7 @@ pub fn complex_dataplane_gate_contract() -> ComplexDataplaneGateContract {
                     "Meek polling RoundTripper lifecycle smoke",
                     "Mux true multiplexing smoke",
                 ],
-                next_allowed_step: "make shared transport the Stage 19 foundation work item before complex protocols",
+                next_allowed_step: "make shared transport the foundation work item before complex protocols",
             },
         ],
         reopen_requirements: vec![
@@ -154,9 +154,9 @@ pub fn complex_dataplane_gate_contract() -> ComplexDataplaneGateContract {
             "git diff --check",
         ],
         source: vec![
-            "DAEX_RUST_REBUILD_PLAN_2026-05-16.md:stage19",
-            "DAEX_RUST_REBUILD_PLAN_2026-05-16.md:stage17-item125",
-            "DAEX_RUST_REBUILD_PLAN_2026-05-16.md:stage18",
+            "DAEX_RUST_REBUILD_PLAN_2026-05-16.md:complex-protocol-live-smoke",
+            "DAEX_RUST_REBUILD_PLAN_2026-05-16.md:protocol-parser-export-metadata",
+            "DAEX_RUST_REBUILD_PLAN_2026-05-16.md:base-dataplane-evidence",
             "DAENEW_RUST_REBUILD_MEMO_2026-05-16.md:26",
             "DAENEW_RUST_REBUILD_MEMO_2026-05-16.md:29",
             "DAENEW_RUST_REBUILD_MEMO_2026-05-16.md:33",

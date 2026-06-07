@@ -20,7 +20,7 @@ pub(super) fn run_anytls_contract() -> RunnerOutput {
     RunnerOutput::ok(format!(
         "{}\n",
         json!({
-            "name": "stage15-anytls-native-optin",
+            "name": "anytls-native-optin",
             "default_go_path": anytls::contract::DEFAULT_GO_PATH,
             "rust_adapter_mode": anytls::contract::ADAPTER_MODE,
             "protocol_scope": anytls::contract::PROTOCOL_SCOPE,

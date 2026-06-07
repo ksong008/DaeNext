@@ -10,7 +10,7 @@ fn stage125_juicity_transport_packet_conn_encrypts_and_roundtrips_udp_payload() 
         })
         .unwrap();
 
-    assert_eq!(report.target, "stage125-zero.example:0");
+    assert_eq!(report.target, "juicity-packet-zero.example:0");
     assert_eq!(report.cipher, "chacha20-poly1305");
     assert_eq!(report.reused_info_raw, "juicity-reused-info");
     assert_eq!(report.reused_info_len, "juicity-reused-info".len());
