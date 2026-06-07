@@ -315,6 +315,9 @@ fn candidate_service_contract_value(resident_dataplane_ready: bool) -> Value {
         "source_shape_registry_open",
         "expanded_source_matrix_open",
         "expanded_source_matrix_blocked_rows_visible",
+        "excluded_stream_wrapper_source_matrix_open",
+        "excluded_stream_wrapper_source_matrix_complete",
+        "excluded_stream_wrapper_source_matrix_release_gate_ready",
         "scoped_expanded_source_matrix_complete",
         "scoped_expanded_source_matrix_release_gate_ready",
         "stream_wrapper_capability_contract_ready",
@@ -328,6 +331,7 @@ fn candidate_service_contract_value(resident_dataplane_ready: bool) -> Value {
         "expanded_source_matrix_complete",
         "expanded_source_matrix_release_gate_ready",
         "expanded_source_matrix_c10_ready",
+        "excluded_stream_wrapper_source_matrix_c10_ready",
         "scoped_expanded_source_matrix_c10_ready",
     ] {
         report.insert(key.to_owned(), json!(false));
@@ -396,6 +400,39 @@ fn candidate_service_contract_value(resident_dataplane_ready: bool) -> Value {
             "release_gate_ready": false,
             "c10_ready": false,
             "scoped_release_gate_ready": true,
+            "excluded_stream_wrapper_source_matrix_release_gate_ready": true,
+            "stage_report_schema": false,
+        }),
+    );
+    report.insert(
+        "excluded_stream_wrapper_source_matrix_report_schema".to_owned(),
+        json!("excluded-stream-wrapper-source-report"),
+    );
+    report.insert(
+        "excluded_stream_wrapper_source_matrix_typed_report".to_owned(),
+        json!({
+            "schema": "excluded-stream-wrapper-source-report",
+            "status": "pass",
+            "open": true,
+            "complete": true,
+            "release_gate_ready": true,
+            "c10_ready": false,
+            "source_scope": "source-supported-rows-excluding-stream-wrapper",
+            "excluded_stream_wrappers": ["xhttp"],
+            "excluded_shape_ids": ["stream-wrapper-xhttp"],
+            "source_supported_row_count": 19,
+            "admitted_row_count": 19,
+            "all_source_supported_rows_admitted": true,
+            "all_protocol_rows_open": true,
+            "policy_rejected_row_count": 3,
+            "policy_rejected_shape_ids": [
+                "foreign-abi-outbound-shape",
+                "external-oracle-dependent-shape",
+                "internal-fallback-dependent-shape"
+            ],
+            "policy_rejected_rows_fail_closed": true,
+            "scoped_closure_evidence_ready": true,
+            "full_expanded_source_matrix_complete": false,
             "stage_report_schema": false,
         }),
     );

@@ -60,7 +60,34 @@ fn outbound_production_matrix_gate_accepts_complete_candidate_contract() {
             .unwrap()
     );
     assert!(
+        gate["excluded_stream_wrapper_source_matrix_release_gate_ready"]
+            .as_bool()
+            .unwrap()
+    );
+    assert!(
         !gate["expanded_source_matrix_release_gate_ready"]
+            .as_bool()
+            .unwrap()
+    );
+    assert_eq!(
+        gate["excluded_stream_wrapper_source_matrix_typed_report"]["status"]
+            .as_str()
+            .unwrap(),
+        "pass"
+    );
+    assert_eq!(
+        gate["excluded_stream_wrapper_source_matrix_typed_report"]["source_supported_row_count"]
+            .as_u64()
+            .unwrap(),
+        19
+    );
+    assert!(
+        gate["excluded_stream_wrapper_source_matrix_typed_report"]["all_protocol_rows_open"]
+            .as_bool()
+            .unwrap()
+    );
+    assert!(
+        !gate["excluded_stream_wrapper_source_matrix_typed_report"]["c10_ready"]
             .as_bool()
             .unwrap()
     );

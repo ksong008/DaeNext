@@ -398,6 +398,26 @@ fn candidate_reports_resident_service_and_dataplane_capabilities() {
             .unwrap()
     );
     assert!(
+        report["excluded_stream_wrapper_source_matrix_open"]
+            .as_bool()
+            .unwrap()
+    );
+    assert!(
+        report["excluded_stream_wrapper_source_matrix_complete"]
+            .as_bool()
+            .unwrap()
+    );
+    assert!(
+        report["excluded_stream_wrapper_source_matrix_release_gate_ready"]
+            .as_bool()
+            .unwrap()
+    );
+    assert!(
+        !report["excluded_stream_wrapper_source_matrix_c10_ready"]
+            .as_bool()
+            .unwrap()
+    );
+    assert!(
         report["scoped_expanded_source_matrix_complete"]
             .as_bool()
             .unwrap()
@@ -439,6 +459,85 @@ fn candidate_reports_resident_service_and_dataplane_capabilities() {
     );
     assert!(
         report["expanded_source_matrix_typed_report"]["scoped_release_gate_ready"]
+            .as_bool()
+            .unwrap()
+    );
+    assert!(
+        report["expanded_source_matrix_typed_report"]
+            ["excluded_stream_wrapper_source_matrix_release_gate_ready"]
+            .as_bool()
+            .unwrap()
+    );
+    assert_eq!(
+        report["excluded_stream_wrapper_source_matrix_report_schema"]
+            .as_str()
+            .unwrap(),
+        "excluded-stream-wrapper-source-report"
+    );
+    assert_eq!(
+        report["excluded_stream_wrapper_source_matrix_typed_report"]["status"]
+            .as_str()
+            .unwrap(),
+        "pass"
+    );
+    assert_eq!(
+        report["excluded_stream_wrapper_source_matrix_typed_report"]["source_supported_row_count"]
+            .as_u64()
+            .unwrap(),
+        19
+    );
+    assert_eq!(
+        report["excluded_stream_wrapper_source_matrix_typed_report"]["admitted_row_count"]
+            .as_u64()
+            .unwrap(),
+        19
+    );
+    assert!(
+        report["excluded_stream_wrapper_source_matrix_typed_report"]
+            ["all_source_supported_rows_admitted"]
+            .as_bool()
+            .unwrap()
+    );
+    assert!(
+        report["excluded_stream_wrapper_source_matrix_typed_report"]["all_protocol_rows_open"]
+            .as_bool()
+            .unwrap()
+    );
+    assert_eq!(
+        report["excluded_stream_wrapper_source_matrix_typed_report"]["excluded_stream_wrappers"]
+            .as_array()
+            .unwrap()[0]
+            .as_str()
+            .unwrap(),
+        "xhttp"
+    );
+    assert!(
+        report["excluded_stream_wrapper_source_matrix_typed_report"]["excluded_shape_ids"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|shape| shape.as_str().unwrap() == "stream-wrapper-xhttp")
+    );
+    assert_eq!(
+        report["excluded_stream_wrapper_source_matrix_typed_report"]["policy_rejected_row_count"]
+            .as_u64()
+            .unwrap(),
+        3
+    );
+    assert!(
+        report["excluded_stream_wrapper_source_matrix_typed_report"]
+            ["policy_rejected_rows_fail_closed"]
+            .as_bool()
+            .unwrap()
+    );
+    assert!(
+        !report["excluded_stream_wrapper_source_matrix_typed_report"]
+            ["full_expanded_source_matrix_complete"]
+            .as_bool()
+            .unwrap()
+    );
+    assert!(
+        !report["excluded_stream_wrapper_source_matrix_typed_report"]["c10_ready"]
             .as_bool()
             .unwrap()
     );

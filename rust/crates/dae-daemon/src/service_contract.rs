@@ -738,6 +738,24 @@ fn insert_outbound_production_matrix_service_contract_capabilities(report: &mut 
         && !scoped_source_evidence.raw_state_retained;
     let scoped_expanded_source_matrix_release_gate_ready = scoped_expanded_source_matrix_complete;
     let scoped_expanded_source_matrix_c10_ready = false;
+    let excluded_stream_wrapper_source_matrix_typed_report =
+        excluded_stream_wrapper_source_matrix_typed_report(
+            source_registry.rows,
+            &["xhttp"],
+            scoped_expanded_source_matrix_release_gate_ready,
+        );
+    let excluded_stream_wrapper_source_matrix_complete =
+        excluded_stream_wrapper_source_matrix_typed_report["complete"]
+            .as_bool()
+            .unwrap_or(false);
+    let excluded_stream_wrapper_source_matrix_release_gate_ready =
+        excluded_stream_wrapper_source_matrix_typed_report["release_gate_ready"]
+            .as_bool()
+            .unwrap_or(false);
+    let excluded_stream_wrapper_source_matrix_c10_ready =
+        excluded_stream_wrapper_source_matrix_typed_report["c10_ready"]
+            .as_bool()
+            .unwrap_or(false);
 
     if let Value::Object(report) = report {
         report.insert(
@@ -861,6 +879,30 @@ fn insert_outbound_production_matrix_service_contract_capabilities(report: &mut 
             source_registry_status_counts,
         );
         report.insert(
+            "excluded_stream_wrapper_source_matrix_open".to_owned(),
+            json!(source_registry.expanded_source_matrix_open),
+        );
+        report.insert(
+            "excluded_stream_wrapper_source_matrix_complete".to_owned(),
+            json!(excluded_stream_wrapper_source_matrix_complete),
+        );
+        report.insert(
+            "excluded_stream_wrapper_source_matrix_release_gate_ready".to_owned(),
+            json!(excluded_stream_wrapper_source_matrix_release_gate_ready),
+        );
+        report.insert(
+            "excluded_stream_wrapper_source_matrix_c10_ready".to_owned(),
+            json!(excluded_stream_wrapper_source_matrix_c10_ready),
+        );
+        report.insert(
+            "excluded_stream_wrapper_source_matrix_report_schema".to_owned(),
+            json!("excluded-stream-wrapper-source-report"),
+        );
+        report.insert(
+            "excluded_stream_wrapper_source_matrix_typed_report".to_owned(),
+            excluded_stream_wrapper_source_matrix_typed_report,
+        );
+        report.insert(
             "expanded_source_matrix_completion_blocker".to_owned(),
             json!(
                 "full expanded source matrix is not complete until unscoped live evidence is aggregated and final policy boundaries remain fail-closed"
@@ -928,6 +970,7 @@ fn insert_outbound_production_matrix_service_contract_capabilities(report: &mut 
                 "release_gate_ready": expanded_source_matrix_release_gate_ready,
                 "c10_ready": expanded_source_matrix_c10_ready,
                 "scoped_release_gate_ready": scoped_expanded_source_matrix_release_gate_ready,
+                "excluded_stream_wrapper_source_matrix_release_gate_ready": excluded_stream_wrapper_source_matrix_release_gate_ready,
                 "blocked_rows_visible": true,
                 "status_counts": source_shape_registry_status_counts(source_registry.rows),
                 "stage_report_schema": false,
@@ -1166,6 +1209,81 @@ fn source_shape_registry_status_counts(rows: &[dae_outbound::SourceShapeRegistry
         *counts.entry(status.to_owned()).or_default() += 1;
     }
     json!(counts)
+}
+
+fn excluded_stream_wrapper_source_matrix_typed_report(
+    rows: &[dae_outbound::SourceShapeRegistryRow],
+    excluded_stream_wrappers: &[&str],
+    scoped_closure_evidence_ready: bool,
+) -> Value {
+    let source_supported = rows
+        .iter()
+        .filter(|row| row.source_support == "source-supported")
+        .collect::<Vec<_>>();
+    let included_source_supported = source_supported
+        .iter()
+        .copied()
+        .filter(|row| !excluded_stream_wrappers.contains(&row.stream_wrapper))
+        .collect::<Vec<_>>();
+    let admitted = included_source_supported
+        .iter()
+        .copied()
+        .filter(|row| {
+            row.resident_status == "admitted-baseline"
+                && row.state_ledger.resident_graph == "admitted"
+                && row.executor_proof.proof_state == "runtime-executable"
+                && row.blocker_id.is_none()
+        })
+        .collect::<Vec<_>>();
+    let excluded_shape_ids = source_supported
+        .iter()
+        .copied()
+        .filter(|row| excluded_stream_wrappers.contains(&row.stream_wrapper))
+        .map(|row| row.shape_id)
+        .collect::<Vec<_>>();
+    let opened_shape_ids = admitted.iter().map(|row| row.shape_id).collect::<Vec<_>>();
+    let policy_rejected_rows = rows
+        .iter()
+        .filter(|row| row.source_support == "not-source-supported")
+        .collect::<Vec<_>>();
+    let policy_rejected_shape_ids = policy_rejected_rows
+        .iter()
+        .map(|row| row.shape_id)
+        .collect::<Vec<_>>();
+    let policy_rejected_rows_fail_closed = policy_rejected_rows.iter().all(|row| {
+        row.resident_status == "not-source-supported"
+            && row.blocker_id == Some("unsupported-source-policy")
+            && row.state_ledger.resident_graph == "blocked"
+            && row.executor_proof.proof_state == "descriptor-only-fail-closed"
+    });
+    let all_source_supported_rows_admitted =
+        admitted.len() == included_source_supported.len() && !included_source_supported.is_empty();
+    let complete = all_source_supported_rows_admitted
+        && policy_rejected_rows_fail_closed
+        && scoped_closure_evidence_ready;
+
+    json!({
+        "schema": "excluded-stream-wrapper-source-report",
+        "status": if complete { "pass" } else { "blocked" },
+        "open": true,
+        "complete": complete,
+        "release_gate_ready": complete,
+        "c10_ready": false,
+        "source_scope": "source-supported-rows-excluding-stream-wrapper",
+        "excluded_stream_wrappers": excluded_stream_wrappers,
+        "excluded_shape_ids": excluded_shape_ids,
+        "source_supported_row_count": included_source_supported.len(),
+        "admitted_row_count": admitted.len(),
+        "all_source_supported_rows_admitted": all_source_supported_rows_admitted,
+        "all_protocol_rows_open": all_source_supported_rows_admitted,
+        "opened_shape_ids": opened_shape_ids,
+        "policy_rejected_row_count": policy_rejected_rows.len(),
+        "policy_rejected_shape_ids": policy_rejected_shape_ids,
+        "policy_rejected_rows_fail_closed": policy_rejected_rows_fail_closed,
+        "scoped_closure_evidence_ready": scoped_closure_evidence_ready,
+        "full_expanded_source_matrix_complete": false,
+        "stage_report_schema": false,
+    })
 }
 
 fn insert_resident_live_adapter_matrix_service_contract_capabilities(report: &mut Value) {

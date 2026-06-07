@@ -119,6 +119,22 @@ pub(super) fn outbound_production_matrix_gate_json(
         candidate_service_contract["expanded_source_matrix_c10_ready"]
             .as_bool()
             .unwrap_or(false);
+    let excluded_stream_wrapper_source_matrix_open =
+        candidate_service_contract["excluded_stream_wrapper_source_matrix_open"]
+            .as_bool()
+            .unwrap_or(false);
+    let excluded_stream_wrapper_source_matrix_complete =
+        candidate_service_contract["excluded_stream_wrapper_source_matrix_complete"]
+            .as_bool()
+            .unwrap_or(false);
+    let excluded_stream_wrapper_source_matrix_release_gate_ready =
+        candidate_service_contract["excluded_stream_wrapper_source_matrix_release_gate_ready"]
+            .as_bool()
+            .unwrap_or(false);
+    let excluded_stream_wrapper_source_matrix_c10_ready =
+        candidate_service_contract["excluded_stream_wrapper_source_matrix_c10_ready"]
+            .as_bool()
+            .unwrap_or(false);
     let scoped_expanded_source_matrix_complete =
         candidate_service_contract["scoped_expanded_source_matrix_complete"]
             .as_bool()
@@ -164,6 +180,10 @@ pub(super) fn outbound_production_matrix_gate_json(
         candidate_service_contract["expanded_source_matrix_status_counts"].clone();
     let expanded_source_matrix_typed_report =
         candidate_service_contract["expanded_source_matrix_typed_report"].clone();
+    let excluded_stream_wrapper_source_matrix_report_schema =
+        candidate_service_contract["excluded_stream_wrapper_source_matrix_report_schema"].clone();
+    let excluded_stream_wrapper_source_matrix_typed_report =
+        candidate_service_contract["excluded_stream_wrapper_source_matrix_typed_report"].clone();
     let scoped_expanded_source_matrix_evidence_report_schema =
         candidate_service_contract["scoped_expanded_source_matrix_evidence_report_schema"].clone();
     let scoped_expanded_source_matrix_evidence =
@@ -403,6 +423,22 @@ pub(super) fn outbound_production_matrix_gate_json(
         json!(expanded_source_matrix_c10_ready),
     );
     report.insert(
+        "excluded_stream_wrapper_source_matrix_open".to_owned(),
+        json!(excluded_stream_wrapper_source_matrix_open),
+    );
+    report.insert(
+        "excluded_stream_wrapper_source_matrix_complete".to_owned(),
+        json!(excluded_stream_wrapper_source_matrix_complete),
+    );
+    report.insert(
+        "excluded_stream_wrapper_source_matrix_release_gate_ready".to_owned(),
+        json!(excluded_stream_wrapper_source_matrix_release_gate_ready),
+    );
+    report.insert(
+        "excluded_stream_wrapper_source_matrix_c10_ready".to_owned(),
+        json!(excluded_stream_wrapper_source_matrix_c10_ready),
+    );
+    report.insert(
         "scoped_expanded_source_matrix_complete".to_owned(),
         json!(scoped_expanded_source_matrix_complete),
     );
@@ -421,6 +457,14 @@ pub(super) fn outbound_production_matrix_gate_json(
     report.insert(
         "expanded_source_matrix_typed_report".to_owned(),
         expanded_source_matrix_typed_report,
+    );
+    report.insert(
+        "excluded_stream_wrapper_source_matrix_report_schema".to_owned(),
+        excluded_stream_wrapper_source_matrix_report_schema,
+    );
+    report.insert(
+        "excluded_stream_wrapper_source_matrix_typed_report".to_owned(),
+        excluded_stream_wrapper_source_matrix_typed_report,
     );
     report.insert(
         "scoped_expanded_source_matrix_evidence_report_schema".to_owned(),
