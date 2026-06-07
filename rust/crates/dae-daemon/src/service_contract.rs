@@ -724,6 +724,20 @@ fn insert_outbound_production_matrix_service_contract_capabilities(report: &mut 
     let expanded_source_matrix_complete = source_registry.expanded_source_matrix_complete;
     let expanded_source_matrix_release_gate_ready = expanded_source_matrix_complete;
     let expanded_source_matrix_c10_ready = expanded_source_matrix_complete;
+    let scoped_source_evidence = source_registry.scoped_expanded_source_matrix_evidence;
+    let scoped_expanded_source_matrix_complete = scoped_source_evidence.release_gate_ready
+        && scoped_source_evidence.all_pass
+        && scoped_source_evidence.large_page_all_pass
+        && scoped_source_evidence.proxy_evidence_all_pass
+        && scoped_source_evidence.benchmark_evidence_ready
+        && scoped_source_evidence.rollback_artifact_ready
+        && scoped_source_evidence.rollback_artifact_executed
+        && scoped_source_evidence.cleanup_evidence_ready
+        && !scoped_source_evidence.raw_links_retained
+        && !scoped_source_evidence.raw_bodies_retained
+        && !scoped_source_evidence.raw_state_retained;
+    let scoped_expanded_source_matrix_release_gate_ready = scoped_expanded_source_matrix_complete;
+    let scoped_expanded_source_matrix_c10_ready = false;
 
     if let Value::Object(report) = report {
         report.insert(
@@ -849,8 +863,59 @@ fn insert_outbound_production_matrix_service_contract_capabilities(report: &mut 
         report.insert(
             "expanded_source_matrix_completion_blocker".to_owned(),
             json!(
-                "expanded source matrix has fail-closed rows and requires live host, benchmark, and rollback evidence"
+                "full expanded source matrix is not complete until unscoped live evidence is aggregated and final policy boundaries remain fail-closed"
             ),
+        );
+        report.insert(
+            "scoped_expanded_source_matrix_complete".to_owned(),
+            json!(scoped_expanded_source_matrix_complete),
+        );
+        report.insert(
+            "scoped_expanded_source_matrix_release_gate_ready".to_owned(),
+            json!(scoped_expanded_source_matrix_release_gate_ready),
+        );
+        report.insert(
+            "scoped_expanded_source_matrix_c10_ready".to_owned(),
+            json!(scoped_expanded_source_matrix_c10_ready),
+        );
+        report.insert(
+            "scoped_expanded_source_matrix_evidence_report_schema".to_owned(),
+            json!(scoped_source_evidence.schema),
+        );
+        report.insert(
+            "scoped_expanded_source_matrix_evidence".to_owned(),
+            scoped_source_evidence.to_value(),
+        );
+        report.insert(
+            "scoped_expanded_source_matrix_typed_report".to_owned(),
+            json!({
+                "schema": "scoped-expanded-source-typed-report",
+                "status": if scoped_expanded_source_matrix_complete { "pass" } else { "blocked" },
+                "scope_id": scoped_source_evidence.scope_id,
+                "source_scope": scoped_source_evidence.source_scope,
+                "excluded_stream_wrappers": scoped_source_evidence.excluded_stream_wrappers,
+                "opened_rows": scoped_source_evidence.opened_rows,
+                "source_formats": scoped_source_evidence.source_formats,
+                "candidate_sha256": scoped_source_evidence.candidate_sha256,
+                "evidence_host": scoped_source_evidence.evidence_host,
+                "upstream_host": scoped_source_evidence.upstream_host,
+                "row_count": scoped_source_evidence.row_count,
+                "pass_count": scoped_source_evidence.pass_count,
+                "all_pass": scoped_source_evidence.all_pass,
+                "large_page_all_pass": scoped_source_evidence.large_page_all_pass,
+                "proxy_evidence_all_pass": scoped_source_evidence.proxy_evidence_all_pass,
+                "benchmark_evidence_ready": scoped_source_evidence.benchmark_evidence_ready,
+                "benchmark_evidence_kind": scoped_source_evidence.benchmark_evidence_kind,
+                "rollback_artifact_ready": scoped_source_evidence.rollback_artifact_ready,
+                "rollback_artifact_executed": scoped_source_evidence.rollback_artifact_executed,
+                "cleanup_evidence_ready": scoped_source_evidence.cleanup_evidence_ready,
+                "raw_links_retained": scoped_source_evidence.raw_links_retained,
+                "raw_bodies_retained": scoped_source_evidence.raw_bodies_retained,
+                "raw_state_retained": scoped_source_evidence.raw_state_retained,
+                "release_gate_ready": scoped_expanded_source_matrix_release_gate_ready,
+                "c10_ready": scoped_expanded_source_matrix_c10_ready,
+                "stage_report_schema": false,
+            }),
         );
         report.insert(
             "expanded_source_matrix_typed_report".to_owned(),
@@ -862,6 +927,7 @@ fn insert_outbound_production_matrix_service_contract_capabilities(report: &mut 
                 "expanded_source_matrix_complete": expanded_source_matrix_complete,
                 "release_gate_ready": expanded_source_matrix_release_gate_ready,
                 "c10_ready": expanded_source_matrix_c10_ready,
+                "scoped_release_gate_ready": scoped_expanded_source_matrix_release_gate_ready,
                 "blocked_rows_visible": true,
                 "status_counts": source_shape_registry_status_counts(source_registry.rows),
                 "stage_report_schema": false,

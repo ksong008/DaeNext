@@ -55,6 +55,27 @@ fn outbound_production_matrix_gate_accepts_complete_candidate_contract() {
     assert!(gate["transport_underlay_matrix_ready"].as_bool().unwrap());
     assert!(gate["live_smoke_matrix_ready"].as_bool().unwrap());
     assert!(
+        gate["scoped_expanded_source_matrix_release_gate_ready"]
+            .as_bool()
+            .unwrap()
+    );
+    assert!(
+        !gate["expanded_source_matrix_release_gate_ready"]
+            .as_bool()
+            .unwrap()
+    );
+    assert_eq!(
+        gate["scoped_expanded_source_matrix_typed_report"]["status"]
+            .as_str()
+            .unwrap(),
+        "pass"
+    );
+    assert!(
+        !gate["scoped_expanded_source_matrix_typed_report"]["c10_ready"]
+            .as_bool()
+            .unwrap()
+    );
+    assert!(
         report["c8_outbound_production_matrix"]["outbound_production_matrix_ready"]
             .as_bool()
             .unwrap()

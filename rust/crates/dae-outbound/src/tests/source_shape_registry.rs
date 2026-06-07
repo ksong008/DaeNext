@@ -11,6 +11,17 @@ fn source_shape_registry_separates_open_registry_from_complete_matrix() {
     assert!(!contract.expanded_source_matrix_complete);
     assert!(!contract.release_gate_may_use_current_config_matrix_as_source_matrix);
     assert!(contract.rows.len() >= 20);
+    assert!(
+        contract
+            .scoped_expanded_source_matrix_evidence
+            .release_gate_ready
+    );
+    assert_eq!(
+        contract
+            .scoped_expanded_source_matrix_evidence
+            .excluded_stream_wrappers,
+        &["xhttp"]
+    );
 }
 
 #[test]
@@ -67,6 +78,7 @@ fn source_shape_registry_blocks_extension_shapes_with_stable_reason_ids() {
 #[test]
 fn source_shape_registry_admitted_rows_are_runtime_executable_and_evidence_gated() {
     let rows = source_shape_registry_rows();
+    let scoped_evidence = source_shape_registry_contract().scoped_expanded_source_matrix_evidence;
 
     for row in rows
         .iter()
@@ -89,11 +101,23 @@ fn source_shape_registry_admitted_rows_are_runtime_executable_and_evidence_gated
             "{}",
             row.shape_id
         );
-        assert_eq!(
-            row.expanded_live_matrix.ledger_state, "pending-live-host-evidence",
-            "{}",
-            row.shape_id
-        );
+        if scoped_evidence.opened_rows.contains(&row.shape_id) {
+            assert_eq!(
+                row.expanded_live_matrix.ledger_state, "scoped-live-host-evidence-ready",
+                "{}",
+                row.shape_id
+            );
+            assert!(row.release_gate.expanded_source_agrees, "{}", row.shape_id);
+            assert!(row.release_gate.service_contract_agrees, "{}", row.shape_id);
+            assert!(row.release_gate.rollback_artifact_ready, "{}", row.shape_id);
+            assert!(!row.release_gate.c10_final_ready, "{}", row.shape_id);
+        } else {
+            assert_eq!(
+                row.expanded_live_matrix.ledger_state, "pending-live-host-evidence",
+                "{}",
+                row.shape_id
+            );
+        }
         for required in ["large-page-live", "benchmark", "rollback"] {
             assert!(
                 row.evidence_requirements.contains(&required),
@@ -106,6 +130,47 @@ fn source_shape_registry_admitted_rows_are_runtime_executable_and_evidence_gated
             "{}",
             row.shape_id
         );
+    }
+}
+
+#[test]
+fn source_shape_registry_records_scoped_release_gate_evidence() {
+    let evidence = source_shape_registry_contract().scoped_expanded_source_matrix_evidence;
+
+    assert_eq!(evidence.schema, "scoped-expanded-source-evidence");
+    assert_eq!(evidence.schema_version, 1);
+    assert_eq!(evidence.scope_id, "excluded-stream-wrapper-scope");
+    assert_eq!(
+        evidence.source_scope,
+        "remaining-expanded-source-closure-rows"
+    );
+    assert_eq!(evidence.evidence_host, "remote-38");
+    assert_eq!(evidence.upstream_host, "jp");
+    assert_eq!(evidence.row_count, 5);
+    assert_eq!(evidence.pass_count, 5);
+    assert!(evidence.all_pass);
+    assert!(evidence.large_page_all_pass);
+    assert!(evidence.proxy_evidence_all_pass);
+    assert!(evidence.benchmark_evidence_ready);
+    assert_eq!(
+        evidence.benchmark_evidence_kind,
+        "large-page-threshold-and-body-hash"
+    );
+    assert!(evidence.rollback_artifact_ready);
+    assert!(evidence.rollback_artifact_executed);
+    assert!(evidence.cleanup_evidence_ready);
+    assert!(!evidence.raw_links_retained);
+    assert!(!evidence.raw_bodies_retained);
+    assert!(!evidence.raw_state_retained);
+    assert!(evidence.release_gate_ready);
+    for expected in [
+        "secure-endpoint-capability",
+        "nested-chain-shape",
+        "plugin-wrapper-layer",
+        "legacy-layer-shape",
+        "stream-wrapper-meek",
+    ] {
+        assert!(evidence.opened_rows.contains(&expected), "{expected}");
     }
 }
 

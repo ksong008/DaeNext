@@ -119,6 +119,18 @@ pub(super) fn outbound_production_matrix_gate_json(
         candidate_service_contract["expanded_source_matrix_c10_ready"]
             .as_bool()
             .unwrap_or(false);
+    let scoped_expanded_source_matrix_complete =
+        candidate_service_contract["scoped_expanded_source_matrix_complete"]
+            .as_bool()
+            .unwrap_or(false);
+    let scoped_expanded_source_matrix_release_gate_ready =
+        candidate_service_contract["scoped_expanded_source_matrix_release_gate_ready"]
+            .as_bool()
+            .unwrap_or(false);
+    let scoped_expanded_source_matrix_c10_ready =
+        candidate_service_contract["scoped_expanded_source_matrix_c10_ready"]
+            .as_bool()
+            .unwrap_or(false);
     let live_adapter_contract_ready =
         candidate_service_contract["resident_live_adapter_matrix_contract_ready"]
             .as_bool()
@@ -152,6 +164,12 @@ pub(super) fn outbound_production_matrix_gate_json(
         candidate_service_contract["expanded_source_matrix_status_counts"].clone();
     let expanded_source_matrix_typed_report =
         candidate_service_contract["expanded_source_matrix_typed_report"].clone();
+    let scoped_expanded_source_matrix_evidence_report_schema =
+        candidate_service_contract["scoped_expanded_source_matrix_evidence_report_schema"].clone();
+    let scoped_expanded_source_matrix_evidence =
+        candidate_service_contract["scoped_expanded_source_matrix_evidence"].clone();
+    let scoped_expanded_source_matrix_typed_report =
+        candidate_service_contract["scoped_expanded_source_matrix_typed_report"].clone();
     let live_adapter_entries =
         candidate_service_contract["resident_live_adapter_matrix_entries"].clone();
     let live_adapter_typed_report =
@@ -385,12 +403,36 @@ pub(super) fn outbound_production_matrix_gate_json(
         json!(expanded_source_matrix_c10_ready),
     );
     report.insert(
+        "scoped_expanded_source_matrix_complete".to_owned(),
+        json!(scoped_expanded_source_matrix_complete),
+    );
+    report.insert(
+        "scoped_expanded_source_matrix_release_gate_ready".to_owned(),
+        json!(scoped_expanded_source_matrix_release_gate_ready),
+    );
+    report.insert(
+        "scoped_expanded_source_matrix_c10_ready".to_owned(),
+        json!(scoped_expanded_source_matrix_c10_ready),
+    );
+    report.insert(
         "expanded_source_matrix_status_counts".to_owned(),
         expanded_source_matrix_status_counts,
     );
     report.insert(
         "expanded_source_matrix_typed_report".to_owned(),
         expanded_source_matrix_typed_report,
+    );
+    report.insert(
+        "scoped_expanded_source_matrix_evidence_report_schema".to_owned(),
+        scoped_expanded_source_matrix_evidence_report_schema,
+    );
+    report.insert(
+        "scoped_expanded_source_matrix_evidence".to_owned(),
+        scoped_expanded_source_matrix_evidence,
+    );
+    report.insert(
+        "scoped_expanded_source_matrix_typed_report".to_owned(),
+        scoped_expanded_source_matrix_typed_report,
     );
     report.insert(
         "resident_live_adapter_matrix_contract_ready".to_owned(),
