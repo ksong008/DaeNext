@@ -91,7 +91,7 @@ pub(in crate::tests) fn read_grpc_hunk_frame_for_test(
         assert!(n > 0);
         data.extend_from_slice(&buf[..n]);
     }
-    data[5..5 + payload_len].to_vec()
+    shared_transport::grpc_hunk_payload(&data[5..5 + payload_len]).unwrap()
 }
 
 pub(in crate::tests) fn content_length_for_test(request: &str) -> usize {

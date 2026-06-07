@@ -366,6 +366,8 @@ impl ResidentExecutableGraphDescriptor {
             "quic-stream" => ("admitted", "resident-quic-stream", Value::Null),
             "packet-stream" => ("admitted", "resident-packet-stream", Value::Null),
             "websocket" => ("admitted", "resident-websocket-binary-frame", Value::Null),
+            "httpupgrade" => ("admitted", "resident-http-upgrade-stream", Value::Null),
+            "grpc" => ("admitted", "resident-grpc-h2-stream", Value::Null),
             _ => (
                 "fail-closed",
                 "unsupported",
@@ -499,6 +501,8 @@ fn graph_stream_wrapper(proxy: &ResidentProxyPlan) -> String {
     }
     match proxy.net.as_str() {
         "" | "tcp" | "udp" => "none".to_owned(),
+        "grpc" => "grpc".to_owned(),
+        "httpupgrade" => "httpupgrade".to_owned(),
         other => other.to_owned(),
     }
 }
@@ -506,6 +510,7 @@ fn graph_stream_wrapper(proxy: &ResidentProxyPlan) -> String {
 fn graph_packet_semantics(proxy: &ResidentProxyPlan) -> String {
     match proxy.handler {
         ResidentProxyProtocolPlan::Socks5Tcp { .. } => "udp-associate".to_owned(),
+        ResidentProxyProtocolPlan::HttpProxyTcp { .. } => "protocol-closed".to_owned(),
         ResidentProxyProtocolPlan::VlessVisionTcpTls { .. } => "xudp".to_owned(),
         ResidentProxyProtocolPlan::Hysteria2QuicTcp { .. }
         | ResidentProxyProtocolPlan::TuicQuicTcp { .. }
@@ -518,6 +523,8 @@ fn canonical_resident_vless_net(net: &str) -> String {
     match net {
         "" | "tcp" => "tcp".to_owned(),
         "ws" | "websocket" => "websocket".to_owned(),
+        "httpupgrade" => "httpupgrade".to_owned(),
+        "grpc" => "grpc".to_owned(),
         other => other.to_owned(),
     }
 }
@@ -535,6 +542,14 @@ fn resident_stream_path(path: &str) -> String {
         "/".to_owned()
     } else {
         path.to_owned()
+    }
+}
+
+fn resident_grpc_service_name(service_name: &str) -> String {
+    if service_name.is_empty() {
+        "GunService".to_owned()
+    } else {
+        service_name.trim_start_matches('/').to_owned()
     }
 }
 
@@ -1401,16 +1416,16 @@ fn build_vless_proxy_plan(
                 vless.flow
             ));
         }
-        "websocket" if !vless.flow.is_empty() => {
+        "websocket" | "httpupgrade" | "grpc" if !vless.flow.is_empty() => {
             return Err(format!(
-                "resident dataplane vless websocket handler admits only empty flow, got '{}' for node {node_tag}; keep Go outbound for this config",
+                "resident dataplane vless wrapped-stream handler admits only empty flow, got '{}' for node {node_tag}; keep Go outbound for this config",
                 vless.flow
             ));
         }
-        "tcp" | "websocket" => {}
+        "tcp" | "websocket" | "httpupgrade" | "grpc" => {}
         other => {
             return Err(format!(
-                "resident dataplane vless handler currently supports tcp and websocket transports only, got {other} for node {node_tag}"
+                "resident dataplane vless handler currently supports tcp, websocket, httpupgrade, and grpc transports only, got {other} for node {node_tag}"
             ));
         }
     }
@@ -1440,13 +1455,19 @@ fn build_vless_proxy_plan(
     } else {
         vless.sni.clone()
     };
-    let alpn = split_alpn(&vless.alpn);
-    let stream_host = if net == "websocket" {
+    let alpn = if net == "grpc" && vless.alpn.is_empty() {
+        vec!["h2".to_owned()]
+    } else {
+        split_alpn(&vless.alpn)
+    };
+    let stream_host = if matches!(net.as_str(), "websocket" | "httpupgrade" | "grpc") {
         resident_stream_host(&vless.host, &server_name)
     } else {
         String::new()
     };
-    let stream_path = if net == "websocket" {
+    let stream_path = if net == "grpc" {
+        resident_grpc_service_name(&vless.path)
+    } else if matches!(net.as_str(), "websocket" | "httpupgrade") {
         resident_stream_path(&vless.path)
     } else {
         String::new()
@@ -1632,16 +1653,19 @@ fn build_trojan_proxy_plan(
         TrojanLink::parse(&link).map_err(|err| format!("parse Trojan node {node_tag}: {err}"))?;
     let transport_kind = parsed.transport_kind();
     let websocket = parsed.protocol == "trojan-go" && transport_kind == TrojanTransportType::Ws;
+    let httpupgrade =
+        parsed.protocol == "trojan-go" && transport_kind == TrojanTransportType::HttpUpgrade;
+    let grpc = parsed.protocol == "trojan-go" && transport_kind == TrojanTransportType::Grpc;
     let plain = parsed.protocol == "trojan" && transport_kind == TrojanTransportType::None;
-    if !plain && !websocket {
+    if !plain && !websocket && !httpupgrade && !grpc {
         return Err(format!(
-            "resident dataplane generic TLS/TCP handler admits only plain trojan and trojan-go websocket endpoints for node {node_tag}; transport={} protocol={}",
+            "resident dataplane generic TLS/TCP handler admits only plain trojan, trojan-go websocket, trojan-go httpupgrade, and trojan-go grpc endpoints for node {node_tag}; transport={} protocol={}",
             parsed.transport_type, parsed.protocol
         ));
     }
-    if websocket && !parsed.encryption.is_empty() {
+    if (websocket || httpupgrade || grpc) && !parsed.encryption.is_empty() {
         return Err(format!(
-            "resident dataplane trojan websocket handler does not admit inner encryption for node {node_tag}; keep Go fallback for this config"
+            "resident dataplane trojan wrapped-stream handler does not admit inner encryption for node {node_tag}; keep Go fallback for this config"
         ));
     }
     if parsed.allow_insecure || config.global.allow_insecure {
@@ -1651,13 +1675,24 @@ fn build_trojan_proxy_plan(
         );
     }
     let utls_fingerprint = resident_utls_fingerprint_plan(config, None)?;
-    let net = if websocket { "websocket" } else { "tcp" }.to_owned();
-    let stream_host = if websocket {
+    let net = if websocket {
+        "websocket"
+    } else if httpupgrade {
+        "httpupgrade"
+    } else if grpc {
+        "grpc"
+    } else {
+        "tcp"
+    }
+    .to_owned();
+    let stream_host = if websocket || httpupgrade || grpc {
         resident_stream_host(&parsed.host, &parsed.sni)
     } else {
         String::new()
     };
-    let stream_path = if websocket {
+    let stream_path = if grpc {
+        resident_grpc_service_name(&parsed.service_name)
+    } else if websocket || httpupgrade {
         resident_stream_path(&parsed.path)
     } else {
         String::new()
@@ -1674,7 +1709,11 @@ fn build_trojan_proxy_plan(
         server_host: parsed.server,
         server_port: parsed.port,
         server_name: parsed.sni,
-        alpn: Vec::new(),
+        alpn: if grpc {
+            vec!["h2".to_owned()]
+        } else {
+            Vec::new()
+        },
         flow: String::new(),
         net,
         stream_host,
@@ -1951,13 +1990,15 @@ fn build_vmess_proxy_plan(
     let net = match parsed.net.as_str() {
         "" | "tcp" => "tcp".to_owned(),
         "ws" | "websocket" => "websocket".to_owned(),
+        "httpupgrade" => "httpupgrade".to_owned(),
+        "grpc" => "grpc".to_owned(),
         other => other.to_owned(),
     };
     match net.as_str() {
-        "tcp" | "websocket" => {}
+        "tcp" | "websocket" | "httpupgrade" | "grpc" => {}
         other => {
             return Err(format!(
-                "resident dataplane generic AEAD TCP handler admits only VMess tcp and websocket endpoints for node {node_tag}; got {other}"
+                "resident dataplane generic AEAD TCP handler admits only VMess tcp, websocket, httpupgrade, and grpc endpoints for node {node_tag}; got {other}"
             ));
         }
     }
@@ -1973,6 +2014,22 @@ fn build_vmess_proxy_plan(
             parsed.tls
         ));
     }
+    if net == "httpupgrade" && !parsed.tls.is_empty() && parsed.tls != "none" {
+        return Err(format!(
+            "resident dataplane VMess httpupgrade handler currently admits plain HTTP Upgrade only for node {node_tag}; got tls={}",
+            parsed.tls
+        ));
+    }
+    if net == "grpc" && parsed.tls != "tls" {
+        return Err(format!(
+            "resident dataplane VMess grpc handler admits TLS HTTP/2 endpoints only for node {node_tag}; got tls={}",
+            if parsed.tls.is_empty() {
+                "none"
+            } else {
+                parsed.tls.as_str()
+            }
+        ));
+    }
     if parsed.allow_insecure || config.global.allow_insecure {
         return Err(
             "resident dataplane generic AEAD TCP handler does not admit allow_insecure; keep Go fallback for this config"
@@ -1985,15 +2042,37 @@ fn build_vmess_proxy_plan(
             parsed.port
         )
     })?;
-    let stream_host = if net == "websocket" {
+    let stream_host = if matches!(net.as_str(), "websocket" | "httpupgrade" | "grpc") {
         resident_stream_host(&parsed.host, &parsed.add)
     } else {
         String::new()
     };
-    let stream_path = if net == "websocket" {
+    let stream_path = if net == "grpc" {
+        resident_grpc_service_name(&parsed.path)
+    } else if matches!(net.as_str(), "websocket" | "httpupgrade") {
         resident_stream_path(&parsed.path)
     } else {
         String::new()
+    };
+    let tls = if net == "grpc" { "tls" } else { "none" };
+    let server_name = if net == "grpc" {
+        if parsed.sni.is_empty() {
+            parsed.add.clone()
+        } else {
+            parsed.sni.clone()
+        }
+    } else {
+        String::new()
+    };
+    let alpn = if net == "grpc" {
+        vec!["h2".to_owned()]
+    } else {
+        Vec::new()
+    };
+    let utls_fingerprint = if net == "grpc" {
+        resident_utls_fingerprint_plan(config, Some(parsed.fingerprint.as_str()))?
+    } else {
+        None
     };
     let graph = resident_graph_identity(&link);
     Ok(ResidentProxyPlan {
@@ -2006,15 +2085,15 @@ fn build_vmess_proxy_plan(
         node_tag,
         server_host: parsed.add,
         server_port,
-        server_name: String::new(),
-        alpn: Vec::new(),
+        server_name,
+        alpn,
         flow: String::new(),
         net,
         stream_host,
         stream_path,
-        tls: "none".to_owned(),
+        tls: tls.to_owned(),
         allow_insecure: false,
-        utls_fingerprint: None,
+        utls_fingerprint,
         handler: ResidentProxyProtocolPlan::VmessAeadTcp { id: parsed.id },
         mark: config.global.so_mark_from_dae,
         mptcp: config.global.mptcp,
@@ -2550,6 +2629,42 @@ mod tests {
             host: "front.example".to_owned(),
             path: "/trojan".to_owned(),
             service_name: String::new(),
+            allow_insecure: false,
+            protocol: "trojan-go".to_owned(),
+        }
+        .export_url()
+    }
+
+    fn trojan_httpupgrade_fixture_url(ps: &str, add: &str, port: u16) -> String {
+        TrojanLink {
+            name: ps.to_owned(),
+            server: add.to_owned(),
+            port,
+            password: "trojan-password".to_owned(),
+            sni: "office.example".to_owned(),
+            transport_type: "httpupgrade".to_owned(),
+            encryption: String::new(),
+            host: "front.example".to_owned(),
+            path: "/trojan-upgrade".to_owned(),
+            service_name: String::new(),
+            allow_insecure: false,
+            protocol: "trojan-go".to_owned(),
+        }
+        .export_url()
+    }
+
+    fn trojan_grpc_fixture_url(ps: &str, add: &str, port: u16) -> String {
+        TrojanLink {
+            name: ps.to_owned(),
+            server: add.to_owned(),
+            port,
+            password: "trojan-password".to_owned(),
+            sni: "office.example".to_owned(),
+            transport_type: "grpc".to_owned(),
+            encryption: String::new(),
+            host: "front.example".to_owned(),
+            path: String::new(),
+            service_name: "TrojanGunService".to_owned(),
             allow_insecure: false,
             protocol: "trojan-go".to_owned(),
         }
@@ -3465,6 +3580,86 @@ mod tests {
         );
         assert!(!trojan_websocket_graph.to_string().contains("front.example"));
 
+        let trojan_httpupgrade = build_resident_proxy_plan_for_node(
+            &config,
+            "proxy".to_owned(),
+            "trojan_httpupgrade_live".to_owned(),
+            trojan_httpupgrade_fixture_url("trojan-httpupgrade", "203.0.113.10", 28459),
+        )
+        .unwrap();
+        assert_eq!(trojan_httpupgrade.protocol, "trojan");
+        assert_eq!(trojan_httpupgrade.server_host, "203.0.113.10");
+        assert_eq!(trojan_httpupgrade.server_port, 28459);
+        assert_eq!(trojan_httpupgrade.server_name, "office.example");
+        assert_eq!(trojan_httpupgrade.net, "httpupgrade");
+        assert_eq!(trojan_httpupgrade.stream_host, "front.example");
+        assert_eq!(trojan_httpupgrade.stream_path, "/trojan-upgrade");
+        assert_eq!(trojan_httpupgrade.tls, "tls");
+        assert!(matches!(
+            trojan_httpupgrade.handler,
+            ResidentProxyProtocolPlan::TrojanTcpTls { .. }
+        ));
+        let trojan_httpupgrade_graph = trojan_httpupgrade.executable_graph_value();
+        assert_eq!(trojan_httpupgrade_graph["protocolFraming"], "trojan");
+        assert_eq!(trojan_httpupgrade_graph["streamWrapper"], "httpupgrade");
+        assert_eq!(
+            trojan_httpupgrade_graph["runtimeComponents"]["streamWrapperFactory"]["provider"],
+            "resident-http-upgrade-stream"
+        );
+        assert!(
+            trojan_httpupgrade_graph["streamWrapperEndpoint"]["hostHash"]
+                .as_str()
+                .unwrap()
+                .starts_with("sha256:")
+        );
+        assert_eq!(
+            trojan_httpupgrade_graph["streamWrapperEndpoint"]["path"],
+            "/trojan-upgrade"
+        );
+        assert!(
+            !trojan_httpupgrade_graph
+                .to_string()
+                .contains("front.example")
+        );
+
+        let trojan_grpc = build_resident_proxy_plan_for_node(
+            &config,
+            "proxy".to_owned(),
+            "trojan_grpc_live".to_owned(),
+            trojan_grpc_fixture_url("trojan-grpc", "203.0.113.10", 28461),
+        )
+        .unwrap();
+        assert_eq!(trojan_grpc.protocol, "trojan");
+        assert_eq!(trojan_grpc.server_host, "203.0.113.10");
+        assert_eq!(trojan_grpc.server_port, 28461);
+        assert_eq!(trojan_grpc.server_name, "office.example");
+        assert_eq!(trojan_grpc.net, "grpc");
+        assert_eq!(trojan_grpc.stream_host, "front.example");
+        assert_eq!(trojan_grpc.stream_path, "TrojanGunService");
+        assert_eq!(trojan_grpc.alpn, vec!["h2".to_owned()]);
+        assert!(matches!(
+            trojan_grpc.handler,
+            ResidentProxyProtocolPlan::TrojanTcpTls { .. }
+        ));
+        let trojan_grpc_graph = trojan_grpc.executable_graph_value();
+        assert_eq!(trojan_grpc_graph["protocolFraming"], "trojan");
+        assert_eq!(trojan_grpc_graph["streamWrapper"], "grpc");
+        assert_eq!(
+            trojan_grpc_graph["runtimeComponents"]["streamWrapperFactory"]["provider"],
+            "resident-grpc-h2-stream"
+        );
+        assert!(
+            trojan_grpc_graph["streamWrapperEndpoint"]["hostHash"]
+                .as_str()
+                .unwrap()
+                .starts_with("sha256:")
+        );
+        assert_eq!(
+            trojan_grpc_graph["streamWrapperEndpoint"]["path"],
+            "TrojanGunService"
+        );
+        assert!(!trojan_grpc_graph.to_string().contains("front.example"));
+
         let anytls = build_resident_proxy_plan_for_node(
             &config,
             "proxy".to_owned(),
@@ -3537,6 +3732,92 @@ mod tests {
         );
         assert!(!vmess_websocket_graph.to_string().contains("front.example"));
 
+        let vmess_httpupgrade = build_resident_proxy_plan_for_node(
+            &config,
+            "proxy".to_owned(),
+            "vmess_httpupgrade_live".to_owned(),
+            vmess_fixture_url(
+                "vmess-httpupgrade",
+                "203.0.113.10",
+                28460,
+                "httpupgrade",
+                "front.example",
+                "/vmess-upgrade",
+                "",
+            ),
+        )
+        .unwrap();
+        assert_eq!(vmess_httpupgrade.protocol, "vmess");
+        assert_eq!(vmess_httpupgrade.net, "httpupgrade");
+        assert_eq!(vmess_httpupgrade.stream_host, "front.example");
+        assert_eq!(vmess_httpupgrade.stream_path, "/vmess-upgrade");
+        assert_eq!(vmess_httpupgrade.tls, "none");
+        assert!(matches!(
+            vmess_httpupgrade.handler,
+            ResidentProxyProtocolPlan::VmessAeadTcp { .. }
+        ));
+        let vmess_httpupgrade_graph = vmess_httpupgrade.executable_graph_value();
+        assert_eq!(vmess_httpupgrade_graph["streamWrapper"], "httpupgrade");
+        assert_eq!(vmess_httpupgrade_graph["securityUnderlay"], "none");
+        assert_eq!(
+            vmess_httpupgrade_graph["runtimeComponents"]["streamWrapperFactory"]["provider"],
+            "resident-http-upgrade-stream"
+        );
+        assert!(
+            vmess_httpupgrade_graph["streamWrapperEndpoint"]["hostHash"]
+                .as_str()
+                .unwrap()
+                .starts_with("sha256:")
+        );
+        assert!(
+            !vmess_httpupgrade_graph
+                .to_string()
+                .contains("front.example")
+        );
+
+        let vmess_grpc = build_resident_proxy_plan_for_node(
+            &config,
+            "proxy".to_owned(),
+            "vmess_grpc_live".to_owned(),
+            vmess_fixture_url(
+                "vmess-grpc",
+                "203.0.113.10",
+                28462,
+                "grpc",
+                "front.example",
+                "GunService",
+                "tls",
+            ),
+        )
+        .unwrap();
+        assert_eq!(vmess_grpc.protocol, "vmess");
+        assert_eq!(vmess_grpc.net, "grpc");
+        assert_eq!(vmess_grpc.server_host, "203.0.113.10");
+        assert_eq!(vmess_grpc.server_port, 28462);
+        assert_eq!(vmess_grpc.server_name, "203.0.113.10");
+        assert_eq!(vmess_grpc.stream_host, "front.example");
+        assert_eq!(vmess_grpc.stream_path, "GunService");
+        assert_eq!(vmess_grpc.tls, "tls");
+        assert_eq!(vmess_grpc.alpn, vec!["h2".to_owned()]);
+        assert!(matches!(
+            vmess_grpc.handler,
+            ResidentProxyProtocolPlan::VmessAeadTcp { .. }
+        ));
+        let vmess_grpc_graph = vmess_grpc.executable_graph_value();
+        assert_eq!(vmess_grpc_graph["streamWrapper"], "grpc");
+        assert_eq!(vmess_grpc_graph["securityUnderlay"], "standard-tls");
+        assert_eq!(
+            vmess_grpc_graph["runtimeComponents"]["streamWrapperFactory"]["provider"],
+            "resident-grpc-h2-stream"
+        );
+        assert!(
+            vmess_grpc_graph["streamWrapperEndpoint"]["hostHash"]
+                .as_str()
+                .unwrap()
+                .starts_with("sha256:")
+        );
+        assert!(!vmess_grpc_graph.to_string().contains("front.example"));
+
         let vless_websocket = build_resident_proxy_plan_for_node(
             &config,
             "proxy".to_owned(),
@@ -3583,6 +3864,57 @@ mod tests {
             "/ws"
         );
         assert!(!vless_websocket_graph.to_string().contains("front.example"));
+
+        let vless_httpupgrade = build_resident_proxy_plan_for_node(
+            &config,
+            "proxy".to_owned(),
+            "vless_httpupgrade_live".to_owned(),
+            vless_fixture_url(
+                "vless-httpupgrade",
+                "203.0.113.10",
+                28461,
+                "httpupgrade",
+                "front.example",
+                "/vless-upgrade",
+                "office.example",
+                "",
+                "",
+            ),
+        )
+        .unwrap();
+        assert_eq!(vless_httpupgrade.protocol, "vless");
+        assert_eq!(vless_httpupgrade.server_host, "203.0.113.10");
+        assert_eq!(vless_httpupgrade.server_port, 28461);
+        assert_eq!(vless_httpupgrade.server_name, "office.example");
+        assert_eq!(vless_httpupgrade.net, "httpupgrade");
+        assert_eq!(vless_httpupgrade.stream_host, "front.example");
+        assert_eq!(vless_httpupgrade.stream_path, "/vless-upgrade");
+        assert_eq!(vless_httpupgrade.flow, "");
+        assert!(matches!(
+            vless_httpupgrade.handler,
+            ResidentProxyProtocolPlan::VlessVisionTcpTls { .. }
+        ));
+        let vless_httpupgrade_graph = vless_httpupgrade.executable_graph_value();
+        assert_eq!(vless_httpupgrade_graph["streamWrapper"], "httpupgrade");
+        assert_eq!(
+            vless_httpupgrade_graph["runtimeComponents"]["streamWrapperFactory"]["provider"],
+            "resident-http-upgrade-stream"
+        );
+        assert!(
+            vless_httpupgrade_graph["streamWrapperEndpoint"]["hostHash"]
+                .as_str()
+                .unwrap()
+                .starts_with("sha256:")
+        );
+        assert_eq!(
+            vless_httpupgrade_graph["streamWrapperEndpoint"]["path"],
+            "/vless-upgrade"
+        );
+        assert!(
+            !vless_httpupgrade_graph
+                .to_string()
+                .contains("front.example")
+        );
 
         let hysteria2 = build_resident_proxy_plan_for_node(
             &config,
@@ -3644,10 +3976,13 @@ mod tests {
             &shadowsocks,
             &trojan,
             &trojan_websocket,
+            &trojan_httpupgrade,
             &anytls,
             &vmess,
             &vmess_websocket,
+            &vmess_httpupgrade,
             &vless_websocket,
+            &vless_httpupgrade,
             &hysteria2,
             &tuic,
             &juicity,
@@ -3789,36 +4124,6 @@ mod tests {
         .unwrap_err();
         assert!(plugin.contains("does not admit SIP003 plugin"));
 
-        let trojan_go_grpc = build_resident_proxy_plan_for_node(
-            &config,
-            "proxy".to_owned(),
-            "trojan_go_grpc".to_owned(),
-            "trojan-go://trojan-password@203.0.113.10:28444?type=grpc&sni=office.example&serviceName=grpc#trojan-go".to_owned(),
-        )
-        .unwrap_err();
-        assert!(
-            trojan_go_grpc.contains("admits only plain trojan and trojan-go websocket endpoints")
-        );
-
-        let vless_grpc = build_resident_proxy_plan_for_node(
-            &config,
-            "proxy".to_owned(),
-            "vless_grpc".to_owned(),
-            vless_fixture_url(
-                "vless-grpc",
-                "203.0.113.10",
-                28457,
-                "grpc",
-                "",
-                "grpc-service",
-                "office.example",
-                "",
-                "chrome",
-            ),
-        )
-        .unwrap_err();
-        assert!(vless_grpc.contains("supports tcp and websocket transports only, got grpc"));
-
         let vmess_grpc = build_resident_proxy_plan_for_node(
             &config,
             "proxy".to_owned(),
@@ -3835,7 +4140,7 @@ mod tests {
         )
         .unwrap_err();
         assert!(vmess_grpc.contains(
-            "admits only VMess tcp and websocket endpoints for node vmess_grpc; got grpc"
+            "VMess grpc handler admits TLS HTTP/2 endpoints only for node vmess_grpc; got tls=none"
         ));
 
         let trojan_go_inner_encryption = build_resident_proxy_plan_for_node(

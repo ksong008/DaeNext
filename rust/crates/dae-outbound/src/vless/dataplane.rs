@@ -5,11 +5,11 @@ use crate::error::OutboundError;
 use crate::http_proxy::{HttpConnectOptions, request as http_proxy_request};
 use crate::shared_transport::{
     DEFAULT_WS_KEY, GrpcLifecycleOptions, HttpUpgradeOptions, MeekRoundTripOptions,
-    MuxFrameOptions, WS_MASK_KEY, XHttpLifecycleOptions, grpc_hunk_frame, grpc_stream_preface,
-    http_upgrade_request, meek_http_request, mux, mux_data_frame, mux_end_frame, mux_new_frame,
-    read_grpc_hunk_frame, read_http_head, read_websocket_binary_frame, validate_http_status,
-    websocket_client_binary_frame, websocket_handshake_request, xhttp_packet_request,
-    xhttp_request_path,
+    MuxFrameOptions, WS_MASK_KEY, XHttpLifecycleOptions, grpc_hunk_frame, grpc_hunk_frame_len,
+    grpc_stream_preface, http_upgrade_request, meek_http_request, mux, mux_data_frame,
+    mux_end_frame, mux_new_frame, read_grpc_hunk_frame, read_http_head,
+    read_websocket_binary_frame, validate_http_status, websocket_client_binary_frame,
+    websocket_handshake_request, xhttp_packet_request, xhttp_request_path,
 };
 use crate::vmess::{VMessMetadata, VMessNetwork};
 
@@ -285,7 +285,7 @@ where
         .map_err(|err| OutboundError::BadVless(err.to_string()))?;
 
     let response_payload = read_grpc_hunk_frame(stream)?;
-    let grpc_response_hunk_len = response_payload.len() + 5;
+    let grpc_response_hunk_len = grpc_hunk_frame_len(&response_payload)?;
     let (response_header_len, echoed_payload) = decode_response_payload(&response_payload)?;
     if echoed_payload != payload {
         return Err(OutboundError::BadVless(
@@ -629,7 +629,7 @@ where
     S: Read,
 {
     let payload = read_grpc_hunk_frame(stream)?;
-    let grpc_request_hunk_len = payload.len() + 5;
+    let grpc_request_hunk_len = grpc_hunk_frame_len(&payload)?;
     let mut cursor = Cursor::new(&payload);
     let request = read_tcp_request_from_stream(&mut cursor, payload_len)?;
     if cursor.position() as usize != payload.len() {
