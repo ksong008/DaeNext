@@ -2409,6 +2409,18 @@ mod tests {
 
     fn assert_protocol_matrix_source_uses_generic_semantics(source: &str) {
         let forbidden = [
+            ["matrix", "-", "socks"].concat(),
+            ["matrix", "-", "http"].concat(),
+            ["matrix", "-", "ss"].concat(),
+            ["matrix", "-", "shadowsocks"].concat(),
+            ["matrix", "-", "trojan"].concat(),
+            ["matrix", "-", "vmess"].concat(),
+            ["matrix", "-", "vless"].concat(),
+            ["matrix", "-", "anytls"].concat(),
+            ["matrix", "-", "hy2"].concat(),
+            ["matrix", "-", "hysteria"].concat(),
+            ["matrix", "-", "tuic"].concat(),
+            ["matrix", "-", "juicity"].concat(),
             ["matrix", "-", "socks", "-", "pass"].concat(),
             ["matrix", "-", "http", "-", "pass"].concat(),
             ["matrix", "-", "ss", "-", "pass"].concat(),
@@ -2421,6 +2433,10 @@ mod tests {
             ["http://", "matrix"].concat(),
             ["trojan-go://", "matrix"].concat(),
             ["anytls://", "matrix"].concat(),
+            ["/", "matrix", "-"].concat(),
+            ["#", "matrix", "-"].concat(),
+            ["tag=", "matrix", "-"].concat(),
+            ["name=", "matrix", "-"].concat(),
         ];
         for needle in forbidden {
             assert!(
