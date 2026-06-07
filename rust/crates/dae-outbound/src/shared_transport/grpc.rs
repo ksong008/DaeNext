@@ -122,16 +122,100 @@ pub fn grpc_stream_preface(service_name: &str) -> Vec<u8> {
 }
 
 pub fn grpc_hunk_frame(payload: &[u8]) -> Result<Vec<u8>, OutboundError> {
-    if payload.len() > u32::MAX as usize {
+    let message = grpc_hunk_message(payload)?;
+    if message.len() > u32::MAX as usize {
         return Err(OutboundError::BadSharedTransport(
             "grpc hunk too large".to_owned(),
         ));
     }
-    let mut frame = Vec::with_capacity(payload.len() + 5);
+    let mut frame = Vec::with_capacity(message.len() + 5);
     frame.push(0);
-    frame.extend_from_slice(&(payload.len() as u32).to_be_bytes());
-    frame.extend_from_slice(payload);
+    frame.extend_from_slice(&(message.len() as u32).to_be_bytes());
+    frame.extend_from_slice(&message);
     Ok(frame)
+}
+
+pub fn grpc_hunk_frame_len(payload: &[u8]) -> Result<usize, OutboundError> {
+    Ok(grpc_hunk_frame(payload)?.len())
+}
+
+pub fn grpc_hunk_message(payload: &[u8]) -> Result<Vec<u8>, OutboundError> {
+    let mut message = Vec::with_capacity(1 + grpc_varint_len(payload.len() as u64) + payload.len());
+    message.push(0x0a);
+    push_grpc_varint(payload.len() as u64, &mut message);
+    message.extend_from_slice(payload);
+    Ok(message)
+}
+
+pub fn grpc_hunk_payload(message: &[u8]) -> Result<Vec<u8>, OutboundError> {
+    let mut cursor = 0;
+    let mut data = None;
+    while cursor < message.len() {
+        let tag = read_grpc_varint(message, &mut cursor)?;
+        let field = tag >> 3;
+        let wire_type = tag & 0x07;
+        match (field, wire_type) {
+            (1, 2) => {
+                let len = grpc_len_as_usize(read_grpc_varint(message, &mut cursor)?)?;
+                let end = cursor.checked_add(len).ok_or_else(|| {
+                    OutboundError::BadSharedTransport("grpc Hunk data length overflows".to_owned())
+                })?;
+                if end > message.len() {
+                    return Err(OutboundError::BadSharedTransport(
+                        "grpc Hunk data is truncated".to_owned(),
+                    ));
+                }
+                data = Some(message[cursor..end].to_vec());
+                cursor = end;
+            }
+            (_, 0) => {
+                let _ = read_grpc_varint(message, &mut cursor)?;
+            }
+            (_, 1) => {
+                cursor = cursor.checked_add(8).ok_or_else(|| {
+                    OutboundError::BadSharedTransport(
+                        "grpc Hunk fixed64 field length overflows".to_owned(),
+                    )
+                })?;
+                if cursor > message.len() {
+                    return Err(OutboundError::BadSharedTransport(
+                        "grpc Hunk fixed64 field is truncated".to_owned(),
+                    ));
+                }
+            }
+            (_, 2) => {
+                let len = grpc_len_as_usize(read_grpc_varint(message, &mut cursor)?)?;
+                cursor = cursor.checked_add(len).ok_or_else(|| {
+                    OutboundError::BadSharedTransport(
+                        "grpc Hunk length-delimited field overflows".to_owned(),
+                    )
+                })?;
+                if cursor > message.len() {
+                    return Err(OutboundError::BadSharedTransport(
+                        "grpc Hunk length-delimited field is truncated".to_owned(),
+                    ));
+                }
+            }
+            (_, 5) => {
+                cursor = cursor.checked_add(4).ok_or_else(|| {
+                    OutboundError::BadSharedTransport(
+                        "grpc Hunk fixed32 field length overflows".to_owned(),
+                    )
+                })?;
+                if cursor > message.len() {
+                    return Err(OutboundError::BadSharedTransport(
+                        "grpc Hunk fixed32 field is truncated".to_owned(),
+                    ));
+                }
+            }
+            (_, _) => {
+                return Err(OutboundError::BadSharedTransport(format!(
+                    "unsupported grpc Hunk protobuf wire type {wire_type}"
+                )));
+            }
+        }
+    }
+    Ok(data.unwrap_or_default())
 }
 
 pub fn read_grpc_hunk_frame(stream: &mut impl Read) -> Result<Vec<u8>, OutboundError> {
@@ -141,15 +225,15 @@ pub fn read_grpc_hunk_frame(stream: &mut impl Read) -> Result<Vec<u8>, OutboundE
         .map_err(|err| OutboundError::BadSharedTransport(err.to_string()))?;
     if head[0] != 0 {
         return Err(OutboundError::BadSharedTransport(
-            "compressed grpc hunk unsupported in stage21 harness".to_owned(),
+            "compressed grpc hunk unsupported by resident matrix harness".to_owned(),
         ));
     }
     let len = u32::from_be_bytes([head[1], head[2], head[3], head[4]]) as usize;
-    let mut payload = vec![0_u8; len];
+    let mut message = vec![0_u8; len];
     stream
-        .read_exact(&mut payload)
+        .read_exact(&mut message)
         .map_err(|err| OutboundError::BadSharedTransport(err.to_string()))?;
-    Ok(payload)
+    grpc_hunk_payload(&message)
 }
 
 pub fn grpc_hunk_exchange(
@@ -191,4 +275,47 @@ fn set_timeout(stream: &TcpStream, timeout: Duration) -> Result<(), OutboundErro
     stream
         .set_write_timeout(Some(timeout))
         .map_err(|err| OutboundError::BadSharedTransport(err.to_string()))
+}
+
+fn push_grpc_varint(mut value: u64, out: &mut Vec<u8>) {
+    while value >= 0x80 {
+        out.push((value as u8 & 0x7f) | 0x80);
+        value >>= 7;
+    }
+    out.push(value as u8);
+}
+
+fn read_grpc_varint(input: &[u8], cursor: &mut usize) -> Result<u64, OutboundError> {
+    let mut value = 0_u64;
+    for shift in (0..64).step_by(7) {
+        if *cursor >= input.len() {
+            return Err(OutboundError::BadSharedTransport(
+                "grpc Hunk protobuf varint is truncated".to_owned(),
+            ));
+        }
+        let byte = input[*cursor];
+        *cursor += 1;
+        value |= u64::from(byte & 0x7f) << shift;
+        if byte & 0x80 == 0 {
+            return Ok(value);
+        }
+    }
+    Err(OutboundError::BadSharedTransport(
+        "grpc Hunk protobuf varint overflows u64".to_owned(),
+    ))
+}
+
+fn grpc_varint_len(mut value: u64) -> usize {
+    let mut len = 1;
+    while value >= 0x80 {
+        value >>= 7;
+        len += 1;
+    }
+    len
+}
+
+fn grpc_len_as_usize(value: u64) -> Result<usize, OutboundError> {
+    usize::try_from(value).map_err(|_| {
+        OutboundError::BadSharedTransport("grpc Hunk protobuf length exceeds usize".to_owned())
+    })
 }

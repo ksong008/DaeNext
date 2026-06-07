@@ -1223,7 +1223,7 @@ pub(crate) fn resident_live_adapter_config_assessment(
         .count();
     let source_shape_registry = source_shape_registry_contract();
     let expanded_source_matrix_rows =
-        resident_expanded_source_matrix_rows(&node_shapes, &full_matrix_rows);
+        resident_expanded_source_matrix_rows(config, &node_shapes, &full_matrix_rows);
     let expanded_source_matrix_status_counts =
         resident_matrix_status_counts(&expanded_source_matrix_rows);
     let expanded_source_matrix_complete = false;
@@ -1528,27 +1528,42 @@ fn resident_full_matrix_config_rows(
 }
 
 fn resident_expanded_source_matrix_rows(
+    config: &Config,
     nodes: &[plan::ResidentNodeLinkShape],
     current_config_rows: &[Value],
 ) -> Vec<Value> {
     source_shape_registry_rows()
         .iter()
-        .map(|row| resident_expanded_source_matrix_row(row, nodes, current_config_rows))
+        .map(|row| resident_expanded_source_matrix_row(config, row, nodes, current_config_rows))
         .collect()
 }
 
 fn resident_expanded_source_matrix_row(
+    config: &Config,
     row: &SourceShapeRegistryRow,
     nodes: &[plan::ResidentNodeLinkShape],
     current_config_rows: &[Value],
 ) -> Value {
-    let candidate_count = nodes
+    let candidate_nodes = nodes
         .iter()
         .filter(|node| {
             row.link_schemes
                 .iter()
                 .any(|scheme| *scheme == node.scheme.as_str())
         })
+        .collect::<Vec<_>>();
+    let candidate_count = candidate_nodes.len();
+    let candidate_reports = candidate_nodes
+        .iter()
+        .map(|node| resident_source_shape_candidate_report(config, row, node))
+        .collect::<Vec<_>>();
+    let admitted_count = candidate_reports
+        .iter()
+        .filter(|candidate| candidate["planner_status"].as_str() == Some("admitted"))
+        .count();
+    let blocked_count = candidate_reports
+        .iter()
+        .filter(|candidate| candidate["planner_status"].as_str() == Some("blocked"))
         .count();
     let current_config_row = current_config_rows.iter().find(|current| {
         current["formal_matrix_handler"].as_str() == Some(row.protocol_family)
@@ -1561,6 +1576,8 @@ fn resident_expanded_source_matrix_row(
         ("not-source-supported", _) => "not-source-supported",
         ("source-supported", "blocked") => "blocked",
         ("source-supported", "admitted-baseline") if candidate_count == 0 => "not-present",
+        ("source-supported", "admitted-baseline") if admitted_count > 0 => "admitted",
+        ("source-supported", "admitted-baseline") if blocked_count > 0 => "blocked",
         ("source-supported", "admitted-baseline") => current_config_status,
         _ => "blocked",
     };
@@ -1584,6 +1601,8 @@ fn resident_expanded_source_matrix_row(
         "linkSchemes": row.link_schemes,
         "planner_status": planner_status,
         "candidate_count": candidate_count,
+        "admitted_count": admitted_count,
+        "blocked_count": blocked_count,
         "currentConfigStatus": current_config_status,
         "residentStatus": row.resident_status,
         "blockerId": row.blocker_id,
@@ -1605,8 +1624,104 @@ fn resident_expanded_source_matrix_row(
         "capabilityLedger": row.capability.to_value(),
         "expandedLiveMatrixLedger": row.expanded_live_matrix.to_value(),
         "releaseGateReconciliation": row.release_gate.to_value(),
+        "candidates": candidate_reports,
         "sourceRegistryRow": (*row).to_value(),
     })
+}
+
+fn resident_source_shape_candidate_report(
+    config: &Config,
+    row: &SourceShapeRegistryRow,
+    node: &plan::ResidentNodeLinkShape,
+) -> Value {
+    match plan::build_resident_proxy_plan_for_node(
+        config,
+        row.protocol_family.to_owned(),
+        node.tag.clone(),
+        node.link.clone(),
+    ) {
+        Ok(proxy) => {
+            let mut summary = resident_proxy_plan_summary_json(&proxy);
+            summary["scheme"] = json!(&node.scheme);
+            if resident_proxy_matches_source_shape(row, &proxy, &summary["executableGraph"]) {
+                summary["planner_status"] = json!("admitted");
+                summary["admission"] = json!({
+                    "status": "admitted",
+                    "failClosed": true,
+                    "unsupportedReason": Value::Null,
+                });
+            } else {
+                summary["planner_status"] = json!("blocked");
+                summary["admission"] = json!({
+                    "status": "fail-closed",
+                    "failClosed": true,
+                    "unsupportedReason": "materialized resident graph does not match the source shape capability row",
+                });
+                summary["error"] = json!(
+                    "materialized resident graph does not match the source shape capability row"
+                );
+            }
+            summary
+        }
+        Err(err) => json!({
+            "planner_status": "blocked",
+            "node_tag": &node.tag,
+            "scheme": &node.scheme,
+            "admission": {
+                "status": "fail-closed",
+                "failClosed": true,
+                "unsupportedReason": sanitize_matrix_error(&err),
+            },
+            "error": sanitize_matrix_error(&err),
+        }),
+    }
+}
+
+fn resident_proxy_matches_source_shape(
+    row: &SourceShapeRegistryRow,
+    proxy: &plan::ResidentProxyPlan,
+    graph: &Value,
+) -> bool {
+    source_shape_protocol_matches(row.protocol_family, &proxy.protocol)
+        && source_shape_field_matches(row.security_underlay, graph["securityUnderlay"].as_str())
+        && source_shape_field_matches(row.stream_wrapper, graph["streamWrapper"].as_str())
+        && source_shape_field_matches(row.packet_semantics, graph["packetSemantics"].as_str())
+}
+
+fn source_shape_protocol_matches(row_family: &str, proxy_protocol: &str) -> bool {
+    match row_family {
+        "multi-protocol" => matches!(proxy_protocol, "vless" | "vmess" | "trojan"),
+        "quic-family" => matches!(proxy_protocol, "hysteria2" | "tuic" | "juicity"),
+        other => other == proxy_protocol,
+    }
+}
+
+fn source_shape_field_matches(expected: &str, actual: Option<&str>) -> bool {
+    let Some(actual) = actual else {
+        return false;
+    };
+    if expected == actual {
+        return true;
+    }
+    match expected {
+        "standard-or-fingerprint-aware-tls" => {
+            matches!(actual, "standard-tls" | "fingerprint-aware-tls")
+        }
+        "udp-over-stream-or-datagram" => {
+            matches!(
+                actual,
+                "udp-over-stream-or-datagram" | "udp-over-stream" | "datagram-aead" | "xudp"
+            )
+        }
+        "quic-datagram-or-stream" => {
+            matches!(
+                actual,
+                "quic-datagram-or-stream" | "quic-datagram" | "stream-packet"
+            )
+        }
+        "plain-or-native-underlay" => matches!(actual, "none" | "standard-tls" | "quic-tls"),
+        _ => false,
+    }
 }
 
 fn resident_matrix_status_counts(rows: &[Value]) -> Value {

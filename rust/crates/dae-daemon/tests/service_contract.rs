@@ -432,7 +432,7 @@ fn candidate_reports_resident_service_and_dataplane_capabilities() {
     );
     assert!(report["websocket_wss_loopback_ready"].as_bool().unwrap());
     assert!(
-        !report["stream_wrapper_resident_source_admission_ready"]
+        report["stream_wrapper_resident_source_admission_ready"]
             .as_bool()
             .unwrap()
     );
@@ -454,9 +454,19 @@ fn candidate_reports_resident_service_and_dataplane_capabilities() {
             .iter()
             .any(
                 |row| row["wrapperId"].as_str().unwrap() == "websocket-wss-first-row"
-                    && row["status"].as_str().unwrap() == "resident-live-partial"
-                    && row["sourceAdmission"].as_str().unwrap()
-                        == "blocked-until-multi-handler-benchmark-rollback"
+                    && row["status"].as_str().unwrap() == "resident-live-final"
+                    && row["sourceAdmission"].as_str().unwrap() == "admitted"
+            )
+    );
+    assert!(
+        report["stream_wrapper_capability_rows"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(
+                |row| row["wrapperId"].as_str().unwrap() == "httpupgrade-wrapper"
+                    && row["status"].as_str().unwrap() == "resident-live-final"
+                    && row["sourceAdmission"].as_str().unwrap() == "admitted"
             )
     );
     assert!(

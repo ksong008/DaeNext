@@ -2,7 +2,8 @@ use std::io::{Cursor, Read, Write};
 
 use crate::error::OutboundError;
 use crate::shared_transport::{
-    GrpcLifecycleOptions, grpc_hunk_frame, grpc_stream_preface, read_grpc_hunk_frame,
+    GrpcLifecycleOptions, grpc_hunk_frame, grpc_hunk_frame_len, grpc_stream_preface,
+    read_grpc_hunk_frame,
 };
 
 use super::dataplane::{TrojanTcpRequest, read_tcp_request_from_stream};
@@ -83,7 +84,7 @@ where
         .map_err(|err| OutboundError::BadTrojan(err.to_string()))?;
 
     let response_payload = read_grpc_hunk_frame(stream)?;
-    let grpc_response_hunk_len = response_payload.len() + 5;
+    let grpc_response_hunk_len = grpc_hunk_frame_len(&response_payload)?;
     if response_payload != payload {
         return Err(OutboundError::BadTrojan(
             "trojan-go grpc hunk payload response mismatch".to_owned(),
@@ -123,7 +124,7 @@ where
     S: Read,
 {
     let payload = read_grpc_hunk_frame(stream)?;
-    let grpc_request_hunk_len = payload.len() + 5;
+    let grpc_request_hunk_len = grpc_hunk_frame_len(&payload)?;
     let mut cursor = Cursor::new(&payload);
     let request = read_tcp_request_from_stream(&mut cursor, payload_len)?;
     if cursor.position() as usize != payload.len() {

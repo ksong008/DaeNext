@@ -27,7 +27,8 @@ pub use dataplane::{
 };
 pub use grpc::{
     GrpcCacheReport, GrpcLifecycleCache, GrpcLifecycleOptions, GrpcLifecycleReport,
-    grpc_hunk_exchange, grpc_hunk_frame, grpc_stream_preface, read_grpc_hunk_frame,
+    grpc_hunk_exchange, grpc_hunk_frame, grpc_hunk_frame_len, grpc_hunk_message, grpc_hunk_payload,
+    grpc_stream_preface, read_grpc_hunk_frame,
 };
 pub use grpc_cache::{
     GrpcCacheCancellationStressReport, GrpcDetachedStreamCancellationReport,

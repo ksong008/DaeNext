@@ -96,7 +96,7 @@
     {
       "allowInsecure": false,
       "encryption": "",
-      "export": "trojan-go://password@example.com:443?path=GunPath\u0026sni=sni.example\u0026type=grpc#grpc",
+      "export": "trojan-go://password@example.com:443?serviceName=GunPath\u0026sni=sni.example\u0026type=grpc#grpc",
       "host": "",
       "input": "trojan://password@example.com:443?type=grpc\u0026path=GunPath\u0026sni=sni.example#grpc",
       "name": "trojan-type-forces-trojan-go-grpc",
