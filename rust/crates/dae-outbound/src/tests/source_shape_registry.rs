@@ -100,3 +100,37 @@ fn source_shape_registry_contains_no_runtime_version_suffix_labels() {
         "source shape registry must not expose runtime version suffix labels"
     );
 }
+
+#[test]
+fn source_shape_registry_uses_protocol_generic_matrix_semantics() {
+    let rendered = source_shape_registry_contract().to_value().to_string();
+    let forbidden = [
+        ["matrix", "-", "socks"].concat(),
+        ["matrix", "-", "http"].concat(),
+        ["matrix", "-", "ss"].concat(),
+        ["matrix", "-", "shadowsocks"].concat(),
+        ["matrix", "-", "trojan"].concat(),
+        ["matrix", "-", "vmess"].concat(),
+        ["matrix", "-", "vless"].concat(),
+        ["matrix", "-", "anytls"].concat(),
+        ["matrix", "-", "hy2"].concat(),
+        ["matrix", "-", "hysteria"].concat(),
+        ["matrix", "-", "tuic"].concat(),
+        ["matrix", "-", "juicity"].concat(),
+        ["socks5://", "matrix"].concat(),
+        ["http://", "matrix"].concat(),
+        ["trojan-go://", "matrix"].concat(),
+        ["anytls://", "matrix"].concat(),
+        ["/", "matrix", "-"].concat(),
+        ["#", "matrix", "-"].concat(),
+        ["tag=", "matrix", "-"].concat(),
+        ["name=", "matrix", "-"].concat(),
+    ];
+
+    for needle in forbidden {
+        assert!(
+            !rendered.contains(&needle),
+            "source shape registry must use protocol-generic matrix semantics, found {needle}"
+        );
+    }
+}
