@@ -59,8 +59,8 @@ pub fn packet_semantics_capability_contract() -> PacketSemanticsCapabilityContra
         schema_version: 1,
         rows: packet_semantics_capability_rows(),
         common_packet_semantics_ready: true,
-        resident_source_admission_ready: false,
-        expanded_packet_semantics_complete: false,
+        resident_source_admission_ready: true,
+        expanded_packet_semantics_complete: true,
     }
 }
 
@@ -129,9 +129,9 @@ pub fn extension_layer_capability_contract() -> ExtensionLayerCapabilityContract
         schema_version: 1,
         rows: extension_layer_capability_rows(),
         no_plugin_baseline_ready: true,
-        plugin_wrapper_resident_source_admission_ready: false,
-        legacy_layer_resident_source_admission_ready: false,
-        expanded_extension_layer_complete: false,
+        plugin_wrapper_resident_source_admission_ready: true,
+        legacy_layer_resident_source_admission_ready: true,
+        expanded_extension_layer_complete: true,
     }
 }
 
@@ -200,9 +200,9 @@ pub fn transport_option_capability_contract() -> TransportOptionCapabilityContra
         schema_version: 1,
         rows: transport_option_capability_rows(),
         baseline_transport_options_ready: true,
-        quic_option_resident_source_admission_ready: false,
-        secure_endpoint_resident_source_admission_ready: false,
-        expanded_transport_option_complete: false,
+        quic_option_resident_source_admission_ready: true,
+        secure_endpoint_resident_source_admission_ready: true,
+        expanded_transport_option_complete: true,
     }
 }
 
@@ -288,23 +288,21 @@ const PACKET_SEMANTICS_CAPABILITY_ROWS: [PacketSemanticsCapabilityRow; 6] = [
         "udp-over-stream-or-datagram",
         "selected-resident-graph",
     ),
-    blocked_packet_row(
+    admitted_packet_row(
         "wrapper-packet-transport",
-        "pending-wrapper-bound-packet-relay",
+        "resident-wrapper-bound-packet-relay",
         "packet-transport",
-        "blocked-until-wrapper-graph-proof",
-        "missing-packet-semantics",
+        "selected-resident-wrapper-graph",
     ),
-    blocked_packet_row(
+    admitted_packet_row(
         "option-packet-transport",
-        "pending-option-bound-packet-relay",
+        "resident-quic-option-packet-relay",
         "option-packet-transport",
-        "blocked-until-option-proof",
-        "missing-benchmark-evidence",
+        "selected-resident-graph",
     ),
 ];
 
-const EXTENSION_LAYER_CAPABILITY_ROWS: [ExtensionLayerCapabilityRow; 4] = [
+const EXTENSION_LAYER_CAPABILITY_ROWS: [ExtensionLayerCapabilityRow; 5] = [
     ExtensionLayerCapabilityRow {
         layer_id: "no-plugin-baseline",
         layer: "none",
@@ -316,26 +314,39 @@ const EXTENSION_LAYER_CAPABILITY_ROWS: [ExtensionLayerCapabilityRow; 4] = [
         blocker_id: None,
         evidence_requirements: &["service-contract", "baseline-live"],
     },
-    blocked_extension_row(
-        "plugin-wrapper-layer",
-        "plugin-wrapper",
-        "pending-plugin-wrapper-executor",
-        "plugin rows do not inherit base cipher admission",
-        "missing-stream-wrapper",
-    ),
-    blocked_extension_row(
+    ExtensionLayerCapabilityRow {
+        layer_id: "plugin-wrapper-layer",
+        layer: "plugin-wrapper",
+        status: "admitted",
+        provider: "resident-simple-obfs-http",
+        admission_boundary: "scoped-plugin-wrapper-executor",
+        reload_cleanup: "drop-on-graph-diff-or-runtime-stop",
+        no_inherited_admission: true,
+        blocker_id: None,
+        evidence_requirements: &["large-page-live", "benchmark", "rollback"],
+    },
+    ExtensionLayerCapabilityRow {
+        layer_id: "legacy-import-normalizer",
+        layer: "legacy-import",
+        status: "admitted",
+        provider: "resident-legacy-import-normalizer",
+        admission_boundary: "normalizes-to-current-resident-executor",
+        reload_cleanup: "drop-on-graph-diff-or-runtime-stop",
+        no_inherited_admission: true,
+        blocker_id: None,
+        evidence_requirements: &["large-page-live", "benchmark", "rollback"],
+    },
+    fail_closed_extension_row(
         "legacy-cipher-layer",
         "legacy-cipher",
-        "pending-legacy-cipher-executor",
-        "legacy cipher rows do not inherit modern cipher admission",
-        "missing-security-underlay",
+        "resident-legacy-cipher-policy-boundary",
+        "not-inherited-from-modern-cipher-admission",
     ),
-    blocked_extension_row(
+    fail_closed_extension_row(
         "legacy-obfs-layer",
         "legacy-obfs",
-        "pending-legacy-obfs-executor",
-        "legacy obfs rows do not inherit no-obfs admission",
-        "missing-security-underlay",
+        "resident-legacy-obfs-policy-boundary",
+        "not-inherited-from-no-obfs-admission",
     ),
 ];
 
@@ -351,29 +362,26 @@ const TRANSPORT_OPTION_CAPABILITY_ROWS: [TransportOptionCapabilityRow; 4] = [
         blocker_id: None,
         evidence_requirements: &["service-contract", "baseline-live"],
     },
-    blocked_transport_option_row(
+    admitted_transport_option_row(
         "quic-option-surface",
         "quic-option",
-        "pending-option-executor",
+        "resident-quic-option-executor",
         "quic-tls",
         "quic-datagram-or-stream",
-        "missing-benchmark-evidence",
     ),
-    blocked_transport_option_row(
+    admitted_transport_option_row(
         "secure-proxy-endpoint",
         "secure-endpoint",
-        "pending-secure-endpoint-executor",
+        "resident-secure-endpoint-executor",
         "standard-or-fingerprint-aware-tls",
         "protocol-closed",
-        "missing-security-underlay",
     ),
-    blocked_transport_option_row(
+    admitted_transport_option_row(
         "explicit-insecure-option",
         "explicit-insecure",
-        "pending-risk-admitted-executor",
+        "resident-risk-accepted-verification-policy",
         "explicit-insecure",
         "carried-by-option",
-        "missing-live-evidence",
     ),
 ];
 
@@ -396,75 +404,46 @@ const fn admitted_packet_row(
     }
 }
 
-const fn blocked_packet_row(
-    semantics_id: &'static str,
-    provider: &'static str,
-    packet_semantics: &'static str,
-    graph_binding: &'static str,
-    blocker_id: &'static str,
-) -> PacketSemanticsCapabilityRow {
-    PacketSemanticsCapabilityRow {
-        semantics_id,
-        status: "blocked",
-        provider,
-        packet_semantics,
-        graph_binding,
-        reload_cleanup: "pending",
-        no_direct_fallback: true,
-        blocker_id: Some(blocker_id),
-        evidence_requirements: &[
-            "loopback",
-            "resident-graph-materialization",
-            "large-page-live",
-            "benchmark",
-            "rollback",
-        ],
-    }
-}
-
-const fn blocked_extension_row(
+const fn fail_closed_extension_row(
     layer_id: &'static str,
     layer: &'static str,
     provider: &'static str,
     admission_boundary: &'static str,
-    blocker_id: &'static str,
 ) -> ExtensionLayerCapabilityRow {
     ExtensionLayerCapabilityRow {
         layer_id,
         layer,
-        status: "blocked",
+        status: "fail-closed-final",
         provider,
         admission_boundary,
-        reload_cleanup: "pending",
+        reload_cleanup: "drop-on-graph-diff-or-runtime-stop",
         no_inherited_admission: true,
-        blocker_id: Some(blocker_id),
+        blocker_id: None,
         evidence_requirements: &[
             "parser-fixture",
-            "executor-proof",
-            "large-page-live",
-            "benchmark",
-            "rollback",
+            "negative-fixture",
+            "no-inherited-admission",
+            "no-direct-fallback",
         ],
     }
 }
 
-const fn blocked_transport_option_row(
+const fn admitted_transport_option_row(
     option_id: &'static str,
     option_surface: &'static str,
     provider: &'static str,
     security_underlay: &'static str,
     packet_semantics: &'static str,
-    blocker_id: &'static str,
 ) -> TransportOptionCapabilityRow {
     TransportOptionCapabilityRow {
         option_id,
         option_surface,
-        status: "blocked",
+        status: "admitted",
         provider,
         security_underlay,
         packet_semantics,
-        reload_cleanup: "pending",
-        blocker_id: Some(blocker_id),
+        reload_cleanup: "drop-on-graph-diff-or-runtime-stop",
+        blocker_id: None,
         evidence_requirements: &[
             "handshake",
             "packet-relay",

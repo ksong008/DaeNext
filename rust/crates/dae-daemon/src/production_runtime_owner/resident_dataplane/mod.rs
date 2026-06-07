@@ -1692,6 +1692,7 @@ fn source_shape_protocol_matches(row_family: &str, proxy_protocol: &str) -> bool
     match row_family {
         "multi-protocol" => matches!(proxy_protocol, "vless" | "vmess" | "trojan"),
         "quic-family" => matches!(proxy_protocol, "hysteria2" | "tuic" | "juicity"),
+        "proxy-endpoint" => proxy_protocol == "http-proxy",
         other => other == proxy_protocol,
     }
 }

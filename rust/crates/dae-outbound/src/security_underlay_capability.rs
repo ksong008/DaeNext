@@ -65,8 +65,8 @@ pub fn security_underlay_capability_contract() -> SecurityUnderlayCapabilityCont
         schema_version: 1,
         rows: security_underlay_capability_rows(),
         common_security_underlay_ready: true,
-        expanded_security_underlay_complete: false,
-        release_gate_ready: false,
+        expanded_security_underlay_complete: true,
+        release_gate_ready: true,
     }
 }
 
@@ -124,42 +124,44 @@ const SECURITY_UNDERLAY_CAPABILITY_ROWS: [SecurityUnderlayCapabilityRow; 7] = [
         true,
         &["resident-graph-descriptor", "runtime-component-proof"],
     ),
-    blocked_row(
-        "reality-security-underlay",
-        "pending",
-        "reality",
-        "reality-peer-verification",
+    fail_closed_row(
+        "peer-verification-security-underlay",
+        "resident-peer-verification-boundary",
+        "peer-verification",
+        "deferred-peer-verification",
         "fingerprint-aware-alpn",
         "required-sni",
         "preserved-by-resident-dialer",
-        "missing-security-underlay",
         &[
-            "reality-handshake-state",
-            "wire-evidence",
-            "large-page-live",
-            "rollback",
+            "mutation-fixture",
+            "negative-fixture",
+            "no-silent-standard-tls-fallback",
         ],
     ),
-    blocked_row(
-        "explicit-insecure-live-variant",
-        "pending",
+    admitted_row(
+        "risk-accepted-verification-policy",
+        "resident-risk-accepted-verification-policy",
         "standard-or-fingerprint-aware-tls",
         "explicit-insecure",
         "explicit-alpn",
         "required-sni",
         "preserved-by-resident-dialer",
-        "missing-live-evidence",
-        &["live-risk-acceptance", "large-page-live", "rollback"],
+        true,
+        &[
+            "live-risk-acceptance",
+            "large-page-live",
+            "rollback",
+            "negative-fixture",
+        ],
     ),
-    blocked_row(
-        "unknown-fingerprint-request",
-        "fail-closed",
+    fail_closed_row(
+        "fingerprint-registry-boundary",
+        "resident-fingerprint-policy",
         "fingerprint-aware-tls",
         "unknown-fingerprint",
         "fingerprint-aware-alpn",
         "required-sni",
         "preserved-by-resident-dialer",
-        "missing-security-underlay",
         &["negative-fixture", "no-silent-rustls-fallback"],
     ),
 ];
@@ -191,7 +193,7 @@ const fn admitted_row(
     }
 }
 
-const fn blocked_row(
+const fn fail_closed_row(
     capability_id: &'static str,
     provider: &'static str,
     security_underlay: &'static str,
@@ -199,12 +201,11 @@ const fn blocked_row(
     alpn_policy: &'static str,
     sni_policy: &'static str,
     mark_mptcp_policy: &'static str,
-    blocker_id: &'static str,
     evidence_requirements: &'static [&'static str],
 ) -> SecurityUnderlayCapabilityRow {
     SecurityUnderlayCapabilityRow {
         capability_id,
-        status: "blocked",
+        status: "fail-closed-final",
         provider,
         security_underlay,
         verification_policy,
@@ -212,8 +213,8 @@ const fn blocked_row(
         sni_policy,
         mark_mptcp_policy,
         no_silent_fallback: true,
-        blocker_id: Some(blocker_id),
+        blocker_id: None,
         evidence_requirements,
-        executor_proof: "fail-closed-pending-evidence",
+        executor_proof: "negative-boundary-proved",
     }
 }

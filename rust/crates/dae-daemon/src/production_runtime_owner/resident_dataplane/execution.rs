@@ -140,6 +140,22 @@ pub(super) fn tcp_execution_descriptor(label: &str) -> RuntimeExecutionDescripto
         )
         .with_stream_wrapper("grpc")
         .with_transport_underlay("tcp"),
+        "async-proxy-meek-tls" => RuntimeExecutionDescriptor::new(
+            label,
+            "wrapped-stream-relay",
+            "stream-transport",
+            "tcp",
+        )
+        .with_stream_wrapper("meek")
+        .with_transport_underlay("tcp"),
+        "async-proxy-xhttp-h2-tls" => RuntimeExecutionDescriptor::new(
+            label,
+            "wrapped-stream-relay",
+            "stream-transport",
+            "tcp",
+        )
+        .with_stream_wrapper("xhttp")
+        .with_transport_underlay("tcp"),
         "async-proxy-frame-tls" => {
             RuntimeExecutionDescriptor::new(label, "frame-stream-relay", "stream-transport", "tcp")
                 .with_stream_wrapper("frame-stream")
@@ -152,6 +168,15 @@ pub(super) fn tcp_execution_descriptor(label: &str) -> RuntimeExecutionDescripto
             "tcp",
         )
         .with_transport_underlay("quic"),
+        "async-secure-endpoint-connect" => RuntimeExecutionDescriptor::new(
+            label,
+            "secure-endpoint-connect",
+            "stream-transport",
+            "tcp",
+        )
+        .with_packet_semantics("protocol-closed")
+        .with_security_underlay("standard-tls")
+        .with_transport_underlay("tcp"),
         "first-batch-tcp" => RuntimeExecutionDescriptor::new(
             label,
             "tcp-first-batch-relay",
