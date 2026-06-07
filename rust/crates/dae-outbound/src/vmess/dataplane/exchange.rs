@@ -466,7 +466,7 @@ where
         .map_err(|err| OutboundError::BadVmess(err.to_string()))?;
 
     let response_payload = read_grpc_hunk_frame(stream)?;
-    let grpc_response_hunk_len = response_payload.len() + 5;
+    let grpc_response_hunk_len = grpc_hunk_frame_len(&response_payload)?;
     let mut response_cursor = Cursor::new(&response_payload);
     let (response_header_len, echoed_payload, response_chunk_len) =
         read_aead_response_header_and_chunk(&mut response_cursor, &packet.request)?;

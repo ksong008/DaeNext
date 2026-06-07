@@ -1,17 +1,19 @@
 use std::collections::BTreeMap;
 use std::io::{Cursor, ErrorKind, Read, Write};
 use std::net::{Ipv4Addr, SocketAddr, SocketAddrV4, TcpStream, ToSocketAddrs};
+use std::pin::Pin;
 use std::sync::{
     Arc, Mutex, OnceLock,
     atomic::{AtomicBool, Ordering},
 };
+use std::task::{Context, Poll};
 use std::thread;
 use std::time::Instant;
 
 use boring::ssl::{SslConnector, SslMethod, SslStream, SslVerifyMode, SslVersion};
 use dae_datapath::{TcpDirectDialOptions, magic_tcp_connect};
 use rustls::{ClientConfig, ClientConnection, RootCertStore, pki_types::ServerName};
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, ReadBuf};
 use tokio::net::TcpStream as TokioTcpStream;
 use tokio::task;
 use tokio::time;
@@ -275,6 +277,46 @@ impl AsyncVlessTlsClient {
             AsyncVlessTlsEngine::Boring { tls } => {
                 let _ = tls.shutdown().await;
             }
+        }
+    }
+}
+
+impl AsyncRead for AsyncVlessTlsClient {
+    fn poll_read(
+        mut self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+        buf: &mut ReadBuf<'_>,
+    ) -> Poll<std::io::Result<()>> {
+        match &mut self.engine {
+            AsyncVlessTlsEngine::Rustls { tls } => Pin::new(tls).poll_read(cx, buf),
+            AsyncVlessTlsEngine::Boring { tls } => Pin::new(tls).poll_read(cx, buf),
+        }
+    }
+}
+
+impl AsyncWrite for AsyncVlessTlsClient {
+    fn poll_write(
+        mut self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+        buf: &[u8],
+    ) -> Poll<std::io::Result<usize>> {
+        match &mut self.engine {
+            AsyncVlessTlsEngine::Rustls { tls } => Pin::new(tls).poll_write(cx, buf),
+            AsyncVlessTlsEngine::Boring { tls } => Pin::new(tls).poll_write(cx, buf),
+        }
+    }
+
+    fn poll_flush(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<std::io::Result<()>> {
+        match &mut self.engine {
+            AsyncVlessTlsEngine::Rustls { tls } => Pin::new(tls).poll_flush(cx),
+            AsyncVlessTlsEngine::Boring { tls } => Pin::new(tls).poll_flush(cx),
+        }
+    }
+
+    fn poll_shutdown(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<std::io::Result<()>> {
+        match &mut self.engine {
+            AsyncVlessTlsEngine::Rustls { tls } => Pin::new(tls).poll_shutdown(cx),
+            AsyncVlessTlsEngine::Boring { tls } => Pin::new(tls).poll_shutdown(cx),
         }
     }
 }

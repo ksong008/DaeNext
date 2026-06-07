@@ -367,15 +367,14 @@ fn candidate_service_contract_value(resident_dataplane_ready: bool) -> Value {
         "source_shape_registry_rows".to_owned(),
         json!([
             {"shapeId": "baseline-tls-vision-endpoint", "residentStatus": "admitted-baseline"},
-            {"shapeId": "stream-wrapper-websocket", "residentStatus": "blocked", "blockerId": "missing-stream-wrapper"},
+            {"shapeId": "stream-wrapper-websocket", "residentStatus": "admitted-baseline", "blockerId": null},
             {"shapeId": "foreign-abi-outbound-shape", "residentStatus": "not-source-supported", "blockerId": "unsupported-source-policy"}
         ]),
     );
     report.insert(
         "expanded_source_matrix_status_counts".to_owned(),
         json!({
-            "admitted": 1,
-            "blocked": 1,
+            "admitted": 2,
             "not-source-supported": 1,
         }),
     );
@@ -406,9 +405,9 @@ fn candidate_service_contract_value(resident_dataplane_ready: bool) -> Value {
         json!([
             {
                 "wrapperId": "websocket-wss-first-row",
-                "status": "loopback-admitted",
-                "sourceAdmission": "blocked-until-resident-materialization",
-                "blockerId": "missing-live-evidence"
+                "status": "resident-live-final",
+                "sourceAdmission": "admitted",
+                "blockerId": null
             }
         ]),
     );
@@ -418,7 +417,7 @@ fn candidate_service_contract_value(resident_dataplane_ready: bool) -> Value {
             "schema": "stream-wrapper-capability-typed-report",
             "status": "partial",
             "websocket_wss_loopback_ready": true,
-            "resident_source_admission_ready": false,
+            "resident_source_admission_ready": true,
             "expanded_stream_wrapper_complete": false,
             "stage_report_schema": false,
         }),

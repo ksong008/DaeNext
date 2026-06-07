@@ -132,7 +132,7 @@ where
     S: Read,
 {
     let payload = read_grpc_hunk_frame(stream)?;
-    let grpc_request_hunk_len = payload.len() + 5;
+    let grpc_request_hunk_len = grpc_hunk_frame_len(&payload)?;
     let mut cursor = Cursor::new(&payload);
     let request = read_aead_tcp_request_from_stream(&mut cursor, uuid)?;
     if cursor.position() as usize != payload.len() {

@@ -52,7 +52,7 @@ fn source_shape_registry_blocks_extension_shapes_with_stable_reason_ids() {
         .filter(|row| row.resident_status == "blocked")
         .collect::<Vec<_>>();
 
-    assert!(blocked.len() >= 8);
+    assert_eq!(blocked.len(), 7);
     for row in blocked {
         let blocker = row
             .blocker_id
@@ -136,22 +136,81 @@ fn source_shape_registry_uses_protocol_generic_matrix_semantics() {
 }
 
 #[test]
-fn source_shape_registry_keeps_grpc_wrapper_fail_closed_until_runtime_proof() {
+fn source_shape_registry_marks_grpc_wrapper_runtime_executable() {
     let row = source_shape_registry_rows()
         .iter()
         .find(|row| row.shape_id == "stream-wrapper-grpc")
         .expect("missing gRPC stream-wrapper source row");
 
     assert_eq!(row.source_support, "source-supported");
-    assert_eq!(row.resident_status, "blocked");
-    assert_eq!(row.blocker_id, Some("missing-stream-wrapper"));
-    assert_eq!(row.state_ledger.resident_graph, "blocked");
+    assert_eq!(row.resident_status, "admitted-baseline");
+    assert_eq!(row.blocker_id, None);
+    assert_eq!(row.state_ledger.resident_graph, "admitted");
+    assert_eq!(row.executor_proof.proof_state, "runtime-executable");
+    assert_eq!(row.stream_wrapper, "grpc");
     assert_eq!(
-        row.executor_proof.proof_state,
-        "descriptor-only-fail-closed"
+        row.runtime_selection.selected_runtime_scope,
+        "current-selected-resident-graph"
     );
-    assert_eq!(row.runtime_selection.selected_runtime_scope, "not-selected");
-    assert_eq!(row.expanded_live_matrix.ledger_state, "blocked-before-live");
+    assert_eq!(
+        row.expanded_live_matrix.ledger_state,
+        "pending-live-host-evidence"
+    );
+    assert!(
+        row.evidence_requirements
+            .iter()
+            .any(|requirement| *requirement == "large-page-live")
+    );
+}
+
+#[test]
+fn source_shape_registry_marks_websocket_wrapper_runtime_executable() {
+    let row = source_shape_registry_rows()
+        .iter()
+        .find(|row| row.shape_id == "stream-wrapper-websocket")
+        .expect("missing WebSocket stream-wrapper source row");
+
+    assert_eq!(row.source_support, "source-supported");
+    assert_eq!(row.resident_status, "admitted-baseline");
+    assert_eq!(row.blocker_id, None);
+    assert_eq!(row.state_ledger.resident_graph, "admitted");
+    assert_eq!(row.executor_proof.proof_state, "runtime-executable");
+    assert_eq!(
+        row.runtime_selection.selected_runtime_scope,
+        "current-selected-resident-graph"
+    );
+    assert_eq!(
+        row.expanded_live_matrix.ledger_state,
+        "pending-live-host-evidence"
+    );
+    assert!(
+        row.evidence_requirements
+            .iter()
+            .any(|requirement| *requirement == "benchmark")
+    );
+}
+
+#[test]
+fn source_shape_registry_marks_httpupgrade_wrapper_runtime_executable() {
+    let row = source_shape_registry_rows()
+        .iter()
+        .find(|row| row.shape_id == "stream-wrapper-httpupgrade")
+        .expect("missing HTTP Upgrade stream-wrapper source row");
+
+    assert_eq!(row.source_support, "source-supported");
+    assert_eq!(row.resident_status, "admitted-baseline");
+    assert_eq!(row.blocker_id, None);
+    assert_eq!(row.state_ledger.resident_graph, "admitted");
+    assert_eq!(row.executor_proof.proof_state, "runtime-executable");
+    assert_eq!(row.stream_wrapper, "httpupgrade");
+    assert_eq!(
+        row.runtime_selection.selected_runtime_scope,
+        "current-selected-resident-graph"
+    );
+    assert_eq!(
+        row.expanded_live_matrix.ledger_state,
+        "pending-live-host-evidence"
+    );
     assert!(
         row.evidence_requirements
             .iter()
