@@ -3800,6 +3800,44 @@ mod tests {
             trojan_go_grpc.contains("admits only plain trojan and trojan-go websocket endpoints")
         );
 
+        let vless_grpc = build_resident_proxy_plan_for_node(
+            &config,
+            "proxy".to_owned(),
+            "vless_grpc".to_owned(),
+            vless_fixture_url(
+                "vless-grpc",
+                "203.0.113.10",
+                28457,
+                "grpc",
+                "",
+                "grpc-service",
+                "office.example",
+                "",
+                "chrome",
+            ),
+        )
+        .unwrap_err();
+        assert!(vless_grpc.contains("supports tcp and websocket transports only, got grpc"));
+
+        let vmess_grpc = build_resident_proxy_plan_for_node(
+            &config,
+            "proxy".to_owned(),
+            "vmess_grpc".to_owned(),
+            vmess_fixture_url(
+                "vmess-grpc",
+                "203.0.113.10",
+                28458,
+                "grpc",
+                "",
+                "grpc-service",
+                "",
+            ),
+        )
+        .unwrap_err();
+        assert!(vmess_grpc.contains(
+            "admits only VMess tcp and websocket endpoints for node vmess_grpc; got grpc"
+        ));
+
         let trojan_go_inner_encryption = build_resident_proxy_plan_for_node(
             &config,
             "proxy".to_owned(),
