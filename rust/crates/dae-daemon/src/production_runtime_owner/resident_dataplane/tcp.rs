@@ -8,14 +8,12 @@ use std::net::{
 };
 use std::os::fd::AsRawFd;
 use std::path::PathBuf;
-use std::pin::Pin;
 use std::slice;
 use std::sync::{
     Arc, Condvar, Mutex, OnceLock,
     atomic::{AtomicBool, Ordering},
     mpsc,
 };
-use std::task::{Context, Poll};
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -41,20 +39,15 @@ use dae_outbound::{
     },
     shadowsocks::{
         AeadStreamCodec, ShadowsocksMetadata, Sip003SimpleObfsHttpOptions,
-        Sip003SimpleObfsTlsOptions, cipher_spec, read_encrypted_chunk_from_async_stream,
-        read_encrypted_chunk_from_stream, simple_obfs_http_request_with_body,
-        simple_obfs_tls_client_hello_with_body, ss2022_tcp_client_stream_encoder,
-        ss2022_tcp_server_stream_decoder, ss2022_tcp_unix_timestamp_now,
+        Sip003SimpleObfsTlsOptions, cipher_spec, read_encrypted_chunk_from_stream,
+        simple_obfs_http_request_with_body, simple_obfs_tls_client_hello_with_body,
+        ss2022_tcp_client_stream_encoder, ss2022_tcp_server_stream_decoder,
+        ss2022_tcp_unix_timestamp_now,
     },
-    shared_transport::mux::{
-        MuxFrameOptions, OPTION_DATA, SESSION_STATUS_END, SESSION_STATUS_KEEP,
-        SESSION_STATUS_KEEPALIVE,
-    },
+    shared_transport::mux::MuxFrameOptions,
     shared_transport::{
-        DEFAULT_WS_KEY, HttpUpgradeOptions, MeekRoundTripOptions, WS_MASK_KEY, grpc_hunk_frame,
-        grpc_hunk_payload, http_upgrade_request, ir, meek_http_request, mux_data_frame,
-        mux_end_frame, mux_new_frame, read_http_head, validate_http_status,
-        websocket_client_binary_frame, websocket_handshake_request,
+        HttpUpgradeOptions, MeekRoundTripOptions, grpc_hunk_frame, grpc_hunk_payload, ir,
+        meek_http_request, mux_data_frame, mux_end_frame, mux_new_frame, validate_http_status,
     },
     socks5::{Socks5Address, handshake},
     trojan::packet as trojan_packet,
@@ -96,10 +89,25 @@ use super::{
     RESIDENT_TCP_IDLE_TIMEOUT, TLS_RECORD_MAX_PAYLOAD_LEN, VLESS_RESPONSE_VERSION,
     XTLS_RPRX_VISION,
 };
-use tokio::io::{AsyncRead, AsyncReadExt, AsyncWriteExt, ReadBuf};
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener as TokioTcpListener, TcpStream as TokioTcpStream};
 use tokio::runtime;
 use tokio::time;
+
+mod shadowsocks_stream;
+mod websocket;
+
+use shadowsocks_stream::{
+    AsyncV2rayPluginMuxPayloadState, AsyncWebSocketPayloadReader, AsyncWebSocketPayloadState,
+    read_shadowsocks_aead_chunk_from_v2ray_plugin_mux,
+    read_shadowsocks_aead_chunk_from_websocket_tls,
+};
+use websocket::{
+    WebSocketBinaryFrameDecoder, WebSocketPayloadReader, httpupgrade_handshake_over_plain_stream,
+    httpupgrade_handshake_over_resident_tls_async, websocket_handshake_over_plain_stream,
+    websocket_handshake_over_resident_tls_async,
+    write_websocket_binary_frame_over_resident_tls_async, write_websocket_binary_frame_to_stream,
+};
 
 const BPF_L4_TCP: u8 = 6;
 const ROUTING_L4_TCP: u8 = 1;
@@ -7355,62 +7363,6 @@ async fn relay_tcp_over_trojan_websocket_inner_shadowsocks_tls(
     Ok(stats)
 }
 
-async fn read_shadowsocks_aead_chunk_from_websocket_tls(
-    client: &mut AsyncResidentTlsClient,
-    state: &mut AsyncWebSocketPayloadState,
-    decoder: &mut Option<AeadStreamCodec>,
-    cipher: &str,
-    password: &str,
-    salt_len: usize,
-) -> Result<Vec<u8>, String> {
-    let mut reader = AsyncWebSocketPayloadReader::new(client, state);
-    read_shadowsocks_aead_chunk_from_async_reader(&mut reader, decoder, cipher, password, salt_len)
-        .await
-}
-
-async fn read_shadowsocks_aead_chunk_from_v2ray_plugin_mux(
-    client: &mut AsyncResidentTlsClient,
-    state: &mut AsyncV2rayPluginMuxPayloadState,
-    mux_id: [u8; 2],
-    decoder: &mut Option<AeadStreamCodec>,
-    cipher: &str,
-    password: &str,
-    salt_len: usize,
-) -> Result<Vec<u8>, String> {
-    let mut reader = AsyncV2rayPluginMuxPayloadReader::new(client, state, mux_id);
-    read_shadowsocks_aead_chunk_from_async_reader(&mut reader, decoder, cipher, password, salt_len)
-        .await
-}
-
-async fn read_shadowsocks_aead_chunk_from_async_reader<R>(
-    reader: &mut R,
-    decoder: &mut Option<AeadStreamCodec>,
-    cipher: &str,
-    password: &str,
-    salt_len: usize,
-) -> Result<Vec<u8>, String>
-where
-    R: AsyncRead + Unpin,
-{
-    if decoder.is_none() {
-        let mut server_salt = vec![0_u8; salt_len];
-        reader
-            .read_exact(&mut server_salt)
-            .await
-            .map_err(|err| format!("read Shadowsocks server salt: {err}"))?;
-        *decoder = Some(
-            AeadStreamCodec::new(cipher, password, &server_salt)
-                .map_err(|err| format!("create Shadowsocks response decoder: {err}"))?,
-        );
-    }
-    let decoder = decoder
-        .as_mut()
-        .ok_or_else(|| "missing Shadowsocks response decoder".to_owned())?;
-    read_encrypted_chunk_from_async_stream(reader, decoder)
-        .await
-        .map_err(|err| format!("read Shadowsocks response chunk: {err}"))
-}
-
 fn is_graceful_shadowsocks_response_message(message: &str) -> bool {
     message.contains("early eof")
         || message.contains("failed to fill whole buffer")
@@ -7419,260 +7371,6 @@ fn is_graceful_shadowsocks_response_message(message: &str) -> bool {
         || message.contains("timed out")
         || message.contains("broken pipe")
         || message.contains("close_notify")
-}
-
-#[derive(Default)]
-struct AsyncWebSocketPayloadState {
-    decoder: WebSocketBinaryFrameDecoder,
-    pending: VecDeque<u8>,
-}
-
-struct AsyncWebSocketPayloadReader<'a, 'b> {
-    client: &'a mut AsyncResidentTlsClient,
-    state: &'b mut AsyncWebSocketPayloadState,
-}
-
-#[derive(Default)]
-struct AsyncV2rayPluginMuxPayloadState {
-    ws_decoder: WebSocketBinaryFrameDecoder,
-    mux_bytes: VecDeque<u8>,
-    pending_payload: VecDeque<u8>,
-    closed: bool,
-}
-
-struct AsyncV2rayPluginMuxPayloadReader<'a, 'b> {
-    client: &'a mut AsyncResidentTlsClient,
-    state: &'b mut AsyncV2rayPluginMuxPayloadState,
-    mux_id: [u8; 2],
-}
-
-impl<'a, 'b> AsyncV2rayPluginMuxPayloadReader<'a, 'b> {
-    fn new(
-        client: &'a mut AsyncResidentTlsClient,
-        state: &'b mut AsyncV2rayPluginMuxPayloadState,
-        mux_id: [u8; 2],
-    ) -> Self {
-        Self {
-            client,
-            state,
-            mux_id,
-        }
-    }
-}
-
-impl AsyncRead for AsyncV2rayPluginMuxPayloadReader<'_, '_> {
-    fn poll_read(
-        mut self: Pin<&mut Self>,
-        cx: &mut Context<'_>,
-        out: &mut ReadBuf<'_>,
-    ) -> Poll<std::io::Result<()>> {
-        if drain_v2ray_plugin_mux_payload(self.state, out)? || out.remaining() == 0 {
-            return Poll::Ready(Ok(()));
-        }
-        if self.state.closed {
-            return Poll::Ready(Ok(()));
-        }
-
-        loop {
-            let mux_id = self.mux_id;
-            if parse_pending_v2ray_plugin_mux_frames(self.state, mux_id)? {
-                if drain_v2ray_plugin_mux_payload(self.state, out)? || out.remaining() == 0 {
-                    return Poll::Ready(Ok(()));
-                }
-            }
-            if self.state.closed {
-                return Poll::Ready(Ok(()));
-            }
-
-            let mut buf = [0_u8; 8192];
-            let mut read_buf = ReadBuf::new(&mut buf);
-            match Pin::new(&mut *self.client).poll_read(cx, &mut read_buf) {
-                Poll::Ready(Ok(())) => {
-                    let read = read_buf.filled();
-                    if read.is_empty() {
-                        self.state.closed = true;
-                        return Poll::Ready(Ok(()));
-                    }
-                    let frames = self
-                        .state
-                        .ws_decoder
-                        .push(read)
-                        .map_err(std::io::Error::other)?;
-                    for frame in frames {
-                        self.state.mux_bytes.extend(frame);
-                    }
-                    continue;
-                }
-                Poll::Ready(Err(err)) => return Poll::Ready(Err(err)),
-                Poll::Pending => return Poll::Pending,
-            }
-        }
-    }
-}
-
-impl<'a, 'b> AsyncWebSocketPayloadReader<'a, 'b> {
-    fn new(
-        client: &'a mut AsyncResidentTlsClient,
-        state: &'b mut AsyncWebSocketPayloadState,
-    ) -> Self {
-        Self { client, state }
-    }
-}
-
-impl AsyncRead for AsyncWebSocketPayloadReader<'_, '_> {
-    fn poll_read(
-        mut self: Pin<&mut Self>,
-        cx: &mut Context<'_>,
-        out: &mut ReadBuf<'_>,
-    ) -> Poll<std::io::Result<()>> {
-        if drain_async_websocket_payload(self.state, out) || out.remaining() == 0 {
-            return Poll::Ready(Ok(()));
-        }
-
-        loop {
-            let mut buf = [0_u8; 8192];
-            let mut read_buf = ReadBuf::new(&mut buf);
-            match Pin::new(&mut *self.client).poll_read(cx, &mut read_buf) {
-                Poll::Ready(Ok(())) => {
-                    let read = read_buf.filled();
-                    if read.is_empty() {
-                        return Poll::Ready(Ok(()));
-                    }
-                    let frames = self
-                        .state
-                        .decoder
-                        .push(read)
-                        .map_err(std::io::Error::other)?;
-                    for frame in frames {
-                        self.state.pending.extend(frame);
-                    }
-                    if drain_async_websocket_payload(self.state, out) || out.remaining() == 0 {
-                        return Poll::Ready(Ok(()));
-                    }
-                }
-                Poll::Ready(Err(err)) => return Poll::Ready(Err(err)),
-                Poll::Pending => return Poll::Pending,
-            }
-        }
-    }
-}
-
-fn drain_async_websocket_payload(
-    state: &mut AsyncWebSocketPayloadState,
-    out: &mut ReadBuf<'_>,
-) -> bool {
-    let mut copied = false;
-    while out.remaining() > 0 {
-        let Some(byte) = state.pending.pop_front() else {
-            break;
-        };
-        out.put_slice(&[byte]);
-        copied = true;
-    }
-    copied
-}
-
-fn drain_v2ray_plugin_mux_payload(
-    state: &mut AsyncV2rayPluginMuxPayloadState,
-    out: &mut ReadBuf<'_>,
-) -> std::io::Result<bool> {
-    let mut copied = false;
-    while out.remaining() > 0 {
-        let Some(byte) = state.pending_payload.pop_front() else {
-            break;
-        };
-        out.put_slice(&[byte]);
-        copied = true;
-    }
-    Ok(copied)
-}
-
-fn parse_pending_v2ray_plugin_mux_frames(
-    state: &mut AsyncV2rayPluginMuxPayloadState,
-    mux_id: [u8; 2],
-) -> std::io::Result<bool> {
-    let mut progressed = false;
-    loop {
-        if state.mux_bytes.len() < 2 {
-            break;
-        }
-        let metadata_len = u16::from_be_bytes([state.mux_bytes[0], state.mux_bytes[1]]) as usize;
-        if !(4..=512).contains(&metadata_len) {
-            return Err(std::io::Error::new(
-                ErrorKind::InvalidData,
-                "invalid v2ray-plugin mux metadata length",
-            ));
-        }
-        if state.mux_bytes.len() < 2 + metadata_len {
-            break;
-        }
-
-        let status = state.mux_bytes[4];
-        let option = state.mux_bytes[5];
-        let payload_len = if option == OPTION_DATA {
-            if state.mux_bytes.len() < 2 + metadata_len + 2 {
-                break;
-            }
-            u16::from_be_bytes([
-                state.mux_bytes[2 + metadata_len],
-                state.mux_bytes[2 + metadata_len + 1],
-            ]) as usize
-        } else {
-            0
-        };
-        let total_len = 2
-            + metadata_len
-            + if option == OPTION_DATA {
-                2 + payload_len
-            } else {
-                0
-            };
-        if state.mux_bytes.len() < total_len {
-            break;
-        }
-
-        let mut frame = Vec::with_capacity(total_len);
-        for _ in 0..total_len {
-            frame.push(
-                state
-                    .mux_bytes
-                    .pop_front()
-                    .expect("mux frame length checked"),
-            );
-        }
-
-        let metadata = &frame[2..2 + metadata_len];
-        let frame_id = [metadata[0], metadata[1]];
-        if frame_id != mux_id {
-            return Err(std::io::Error::new(
-                ErrorKind::InvalidData,
-                "v2ray-plugin mux frame id mismatch",
-            ));
-        }
-        if status == SESSION_STATUS_KEEPALIVE {
-            progressed = true;
-            continue;
-        }
-        if status == SESSION_STATUS_END {
-            state.closed = true;
-            progressed = true;
-            break;
-        }
-        if status != SESSION_STATUS_KEEP || option != OPTION_DATA {
-            return Err(std::io::Error::new(
-                ErrorKind::InvalidData,
-                "v2ray-plugin mux frame status/option mismatch",
-            ));
-        }
-        let payload_start = 2 + metadata_len + 2;
-        state.pending_payload.extend(
-            frame[payload_start..payload_start + payload_len]
-                .iter()
-                .copied(),
-        );
-        progressed = true;
-    }
-    Ok(progressed)
 }
 
 fn is_graceful_vmess_response_message(message: &str) -> bool {
@@ -8671,104 +8369,6 @@ async fn relay_tcp_over_vless_tls_async(
     Ok(stats)
 }
 
-async fn websocket_handshake_over_resident_tls_async(
-    client: &mut AsyncVlessTlsClient,
-    options: &HttpUpgradeOptions,
-) -> Result<(), String> {
-    let request = websocket_handshake_request(options, DEFAULT_WS_KEY);
-    client
-        .write_plain_all(&request, "write websocket handshake")
-        .await?;
-    let response =
-        read_http_head_over_resident_tls_async(client, "read websocket handshake").await?;
-    validate_http_status(&response, 101).map_err(|err| format!("validate websocket upgrade: {err}"))
-}
-
-async fn httpupgrade_handshake_over_resident_tls_async(
-    client: &mut AsyncVlessTlsClient,
-    options: &HttpUpgradeOptions,
-) -> Result<(), String> {
-    let request = http_upgrade_request(options);
-    client
-        .write_plain_all(&request, "write HTTP Upgrade handshake")
-        .await?;
-    let response =
-        read_http_head_over_resident_tls_async(client, "read HTTP Upgrade handshake").await?;
-    validate_http_status(&response, 101).map_err(|err| format!("validate HTTP Upgrade: {err}"))
-}
-
-fn websocket_handshake_over_plain_stream(
-    stream: &mut TcpStream,
-    options: &HttpUpgradeOptions,
-) -> Result<(), String> {
-    let request = websocket_handshake_request(options, DEFAULT_WS_KEY);
-    stream
-        .write_all(&request)
-        .map_err(|err| format!("write websocket handshake: {err}"))?;
-    let response =
-        read_http_head(stream).map_err(|err| format!("read websocket handshake: {err}"))?;
-    validate_http_status(&response, 101).map_err(|err| format!("validate websocket upgrade: {err}"))
-}
-
-fn httpupgrade_handshake_over_plain_stream(
-    stream: &mut TcpStream,
-    options: &HttpUpgradeOptions,
-) -> Result<(), String> {
-    let request = http_upgrade_request(options);
-    stream
-        .write_all(&request)
-        .map_err(|err| format!("write HTTP Upgrade handshake: {err}"))?;
-    let response =
-        read_http_head(stream).map_err(|err| format!("read HTTP Upgrade handshake: {err}"))?;
-    validate_http_status(&response, 101).map_err(|err| format!("validate HTTP Upgrade: {err}"))
-}
-
-fn write_websocket_binary_frame_to_stream(
-    stream: &mut TcpStream,
-    payload: &[u8],
-    label: &str,
-) -> Result<(), String> {
-    let frame = websocket_client_binary_frame(payload, WS_MASK_KEY)
-        .map_err(|err| format!("{label}: {err}"))?;
-    stream
-        .write_all(&frame)
-        .map_err(|err| format!("{label}: {err}"))
-}
-
-async fn read_http_head_over_resident_tls_async(
-    client: &mut AsyncVlessTlsClient,
-    label: &str,
-) -> Result<Vec<u8>, String> {
-    let mut response = Vec::new();
-    let mut buf = [0_u8; 512];
-    loop {
-        let read = time::timeout(RESIDENT_CONNECT_TIMEOUT, client.read_plain(&mut buf))
-            .await
-            .map_err(|_| format!("{label}: timeout"))?
-            .map_err(|err| format!("{label}: {err}"))?;
-        if read == 0 {
-            return Err(format!("{label}: early eof"));
-        }
-        response.extend_from_slice(&buf[..read]);
-        if response.windows(4).any(|window| window == b"\r\n\r\n") {
-            return Ok(response);
-        }
-        if response.len() > 16 * 1024 {
-            return Err(format!("{label}: response head too large"));
-        }
-    }
-}
-
-async fn write_websocket_binary_frame_over_resident_tls_async(
-    client: &mut AsyncVlessTlsClient,
-    payload: &[u8],
-    label: &str,
-) -> Result<(), String> {
-    let frame = websocket_client_binary_frame(payload, WS_MASK_KEY)
-        .map_err(|err| format!("{label}: {err}"))?;
-    client.write_plain_all(&frame, label).await
-}
-
 async fn relay_tcp_over_vless_websocket_tls_async(
     inbound: &mut TokioTcpStream,
     client: &mut AsyncVlessTlsClient,
@@ -8985,125 +8585,6 @@ impl VlessResponseStripper {
         }
         self.done = true;
         Ok(self.header.split_off(header_len))
-    }
-}
-
-#[derive(Default)]
-struct WebSocketBinaryFrameDecoder {
-    pending: Vec<u8>,
-    closed: bool,
-}
-
-impl WebSocketBinaryFrameDecoder {
-    fn push(&mut self, input: &[u8]) -> Result<Vec<Vec<u8>>, String> {
-        if self.closed {
-            return Ok(Vec::new());
-        }
-        self.pending.extend_from_slice(input);
-        let mut frames = Vec::new();
-        loop {
-            if self.pending.len() < 2 {
-                break;
-            }
-            let fin = self.pending[0] & 0x80 != 0;
-            let opcode = self.pending[0] & 0x0f;
-            if !fin || !matches!(opcode, 2 | 8) {
-                return Err(format!(
-                    "unexpected websocket frame: fin={fin} opcode={opcode}"
-                ));
-            }
-            let masked = self.pending[1] & 0x80 != 0;
-            let mut len = (self.pending[1] & 0x7f) as usize;
-            let mut header_len = 2_usize;
-            if len == 126 {
-                if self.pending.len() < 4 {
-                    break;
-                }
-                len = u16::from_be_bytes([self.pending[2], self.pending[3]]) as usize;
-                header_len = 4;
-            } else if len == 127 {
-                return Err("websocket 64-bit length unsupported in resident relay".to_owned());
-            }
-            let mask_key = if masked {
-                if self.pending.len() < header_len + 4 {
-                    break;
-                }
-                let key = [
-                    self.pending[header_len],
-                    self.pending[header_len + 1],
-                    self.pending[header_len + 2],
-                    self.pending[header_len + 3],
-                ];
-                header_len += 4;
-                Some(key)
-            } else {
-                None
-            };
-            if self.pending.len() < header_len + len {
-                break;
-            }
-            let mut payload = self.pending[header_len..header_len + len].to_vec();
-            if let Some(mask_key) = mask_key {
-                for (index, byte) in payload.iter_mut().enumerate() {
-                    *byte ^= mask_key[index % 4];
-                }
-            }
-            self.pending.drain(..header_len + len);
-            if opcode == 8 {
-                self.closed = true;
-                break;
-            }
-            frames.push(payload);
-        }
-        Ok(frames)
-    }
-
-    fn is_closed(&self) -> bool {
-        self.closed
-    }
-}
-
-struct WebSocketPayloadReader<'a> {
-    stream: &'a mut TcpStream,
-    decoder: WebSocketBinaryFrameDecoder,
-    pending: VecDeque<u8>,
-    buffer: [u8; 16 * 1024],
-}
-
-impl<'a> WebSocketPayloadReader<'a> {
-    fn new(stream: &'a mut TcpStream) -> Self {
-        Self {
-            stream,
-            decoder: WebSocketBinaryFrameDecoder::default(),
-            pending: VecDeque::new(),
-            buffer: [0_u8; 16 * 1024],
-        }
-    }
-}
-
-impl Read for WebSocketPayloadReader<'_> {
-    fn read(&mut self, out: &mut [u8]) -> std::io::Result<usize> {
-        while self.pending.is_empty() {
-            if self.decoder.is_closed() {
-                return Ok(0);
-            }
-            let read = self.stream.read(&mut self.buffer)?;
-            if read == 0 {
-                return Ok(0);
-            }
-            let frames = self
-                .decoder
-                .push(&self.buffer[..read])
-                .map_err(|err| std::io::Error::new(ErrorKind::InvalidData, err))?;
-            for frame in frames {
-                self.pending.extend(frame);
-            }
-        }
-        let len = out.len().min(self.pending.len());
-        for byte in &mut out[..len] {
-            *byte = self.pending.pop_front().unwrap_or_default();
-        }
-        Ok(len)
     }
 }
 
