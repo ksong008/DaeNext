@@ -134,3 +134,27 @@ fn source_shape_registry_uses_protocol_generic_matrix_semantics() {
         );
     }
 }
+
+#[test]
+fn source_shape_registry_keeps_grpc_wrapper_fail_closed_until_runtime_proof() {
+    let row = source_shape_registry_rows()
+        .iter()
+        .find(|row| row.shape_id == "stream-wrapper-grpc")
+        .expect("missing gRPC stream-wrapper source row");
+
+    assert_eq!(row.source_support, "source-supported");
+    assert_eq!(row.resident_status, "blocked");
+    assert_eq!(row.blocker_id, Some("missing-stream-wrapper"));
+    assert_eq!(row.state_ledger.resident_graph, "blocked");
+    assert_eq!(
+        row.executor_proof.proof_state,
+        "descriptor-only-fail-closed"
+    );
+    assert_eq!(row.runtime_selection.selected_runtime_scope, "not-selected");
+    assert_eq!(row.expanded_live_matrix.ledger_state, "blocked-before-live");
+    assert!(
+        row.evidence_requirements
+            .iter()
+            .any(|requirement| *requirement == "large-page-live")
+    );
+}
