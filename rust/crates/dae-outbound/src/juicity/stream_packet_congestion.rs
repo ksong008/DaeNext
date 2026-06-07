@@ -16,9 +16,9 @@ use super::packet::{
     JuicityStreamPacketFrame, decode_stream_packet_frame, seal_stream_packet_frame,
 };
 
-pub const DEFAULT_STREAM_PACKET_CONGESTION_TARGET: &str = "stage127-congestion.example:5353";
+pub const DEFAULT_STREAM_PACKET_CONGESTION_TARGET: &str = "juicity-congestion.example:5353";
 pub const DEFAULT_STREAM_PACKET_CONGESTION_RESPONSE_TARGET: &str =
-    "stage127-congestion-response.example:5353";
+    "juicity-congestion-response.example:5353";
 pub const DEFAULT_STREAM_PACKET_CONGESTION_PAYLOAD_LEN: usize = 4096;
 pub const DEFAULT_STREAM_PACKET_CONGESTION_RESPONSE_LEN: usize = 1024;
 pub const DEFAULT_STREAM_PACKET_CONGESTION_ITERATIONS: usize = 16;
@@ -152,22 +152,22 @@ pub fn run_stream_packet_congestion_smoke(
 ) -> Result<JuicityStreamPacketCongestionReport, OutboundError> {
     if options.iterations == 0 {
         return Err(bad_stream_packet_congestion(
-            "stage127 stream packet congestion iterations must be greater than zero",
+            "Juicity stream packet congestion iterations must be greater than zero",
         ));
     }
     if options.max_in_flight_streams == 0 {
         return Err(bad_stream_packet_congestion(
-            "stage127 --max-in-flight-streams must be greater than zero",
+            "Juicity stream packet congestion --max-in-flight-streams must be greater than zero",
         ));
     }
     if options.payload.is_empty() {
         return Err(bad_stream_packet_congestion(
-            "stage127 stream packet congestion payload cannot be empty",
+            "Juicity stream packet congestion payload cannot be empty",
         ));
     }
     if options.response_payload.is_empty() {
         return Err(bad_stream_packet_congestion(
-            "stage127 stream packet congestion response payload cannot be empty",
+            "Juicity stream packet congestion response payload cannot be empty",
         ));
     }
     let runtime = tokio::runtime::Builder::new_current_thread()
@@ -181,7 +181,7 @@ pub fn run_stream_packet_congestion_smoke(
             run_stream_packet_congestion_smoke_async(options),
         )
         .await
-        .map_err(|_| bad_stream_packet_congestion("stage127 stream packet congestion timed out"))?
+        .map_err(|_| bad_stream_packet_congestion("Juicity stream packet congestion timed out"))?
     })
 }
 
@@ -290,7 +290,7 @@ async fn run_stream_packet_congestion_smoke_async(
 
     let elapsed_ns = start.elapsed().as_nanos();
     let client_stats_after = client_connection.stats();
-    client_connection.close(0_u32.into(), b"stage127 done");
+    client_connection.close(0_u32.into(), b"juicity-congestion done");
     client_endpoint.wait_idle().await;
 
     let server = server_task.await.map_err(|err| {

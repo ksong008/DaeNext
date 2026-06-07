@@ -85,7 +85,7 @@
     "local pinSHA256 normalize smoke",
     "local UDP underlay / port hopping contract smoke"
   ],
-  "name": "stage15-hysteria2-native-optin",
+  "name": "hysteria2-native-optin",
   "pin_sha256": [
     {
       "input": "AA:BB-cc",

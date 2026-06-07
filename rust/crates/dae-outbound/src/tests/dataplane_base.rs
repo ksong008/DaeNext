@@ -1,8 +1,8 @@
 use super::*;
 
 #[test]
-fn stage18_socks5_tcp_dataplane_echoes_payload() {
-    let fixture = fixture("outbound/protocol/stage18_first_batch_dataplane.json");
+fn base_socks5_tcp_dataplane_echoes_payload() {
+    let fixture = fixture("outbound/protocol/base_dataplane.json");
     let payload = fixture["payload_ascii"].as_str().unwrap().as_bytes();
     let (proxy, handle) = spawn_socks5_echo_proxy();
     let report = socks5::tcp_connect_exchange(
@@ -27,8 +27,8 @@ fn stage18_socks5_tcp_dataplane_echoes_payload() {
 }
 
 #[test]
-fn stage18_http_connect_dataplane_echoes_payload() {
-    let fixture = fixture("outbound/protocol/stage18_first_batch_dataplane.json");
+fn base_http_connect_dataplane_echoes_payload() {
+    let fixture = fixture("outbound/protocol/base_dataplane.json");
     let payload = fixture["payload_ascii"].as_str().unwrap().as_bytes();
     let (proxy, handle) = spawn_http_connect_echo_proxy();
     let mut options =
@@ -50,8 +50,8 @@ fn stage18_http_connect_dataplane_echoes_payload() {
 }
 
 #[test]
-fn stage18_shadowsocks_aead_tcp_dataplane_echoes_payload() {
-    let fixture = fixture("outbound/protocol/stage18_first_batch_dataplane.json");
+fn base_shadowsocks_aead_tcp_dataplane_echoes_payload() {
+    let fixture = fixture("outbound/protocol/base_dataplane.json");
     let payload = fixture["payload_ascii"].as_str().unwrap().as_bytes();
     let cipher = fixture["shadowsocks"]["cipher"].as_str().unwrap();
     let password = fixture["shadowsocks"]["password"].as_str().unwrap();

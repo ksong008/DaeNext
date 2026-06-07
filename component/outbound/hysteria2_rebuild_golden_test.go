@@ -16,11 +16,11 @@ import (
 func TestWriteHysteria2NativeOptInGoldenFixture(t *testing.T) {
 	writeOrCheckOutboundGolden(t,
 		"../../testdata/rebuild-golden/outbound/protocol/hysteria2_native_optin.json",
-		rebuildGoldenStage15Hysteria2NativeOptIn(t),
+		rebuildGoldenNativeHysteria2NativeOptIn(t),
 	)
 }
 
-func rebuildGoldenStage15Hysteria2NativeOptIn(t testing.TB) any {
+func rebuildGoldenNativeHysteria2NativeOptIn(t testing.TB) any {
 	t.Helper()
 
 	basic := "hysteria2://user:pass@127.0.0.1:8443?insecure=1&sni=sni.example&pinSHA256=AA:BB-cc&maxTx=1000&maxRx=2000#basic"
@@ -29,7 +29,7 @@ func rebuildGoldenStage15Hysteria2NativeOptIn(t testing.TB) any {
 	partialBandwidth := "hysteria2://user@example.com:443?maxTx=1000&sni=sni.example#partial"
 
 	return map[string]any{
-		"name": "stage15-hysteria2-native-optin",
+		"name": "hysteria2-native-optin",
 		"source": []string{
 			"DAENEW_RUST_REBUILD_MEMO_2026-05-16.md:26.14",
 			"/root/project/outbound/dialer/hysteria2/hysteria2.go",

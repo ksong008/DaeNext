@@ -4,7 +4,7 @@ use std::time::Instant;
 use dae_outbound::vless::{VLESSLink, packet, password_to_key};
 
 fn main() {
-    let iters = std::env::var("DAE_STAGE15_VLESS_BENCH_ITERS")
+    let iters = std::env::var("DAE_VLESS_NATIVE_OPTIN_BENCH_ITERS")
         .ok()
         .and_then(|value| value.parse::<u64>().ok())
         .unwrap_or(200_000);

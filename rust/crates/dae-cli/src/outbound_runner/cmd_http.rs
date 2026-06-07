@@ -18,7 +18,7 @@ pub(super) fn run_http_contract() -> RunnerOutput {
     RunnerOutput::ok(format!(
         "{}\n",
         json!({
-            "name": "stage15-http-native-optin",
+            "name": "http-native-optin",
             "default_go_path": http_proxy::contract::DEFAULT_GO_PATH,
             "rust_adapter_mode": http_proxy::contract::ADAPTER_MODE,
             "protocol_scope": http_proxy::contract::PROTOCOL_SCOPE,

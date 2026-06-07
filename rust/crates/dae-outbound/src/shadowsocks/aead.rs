@@ -8,6 +8,7 @@ use chacha20poly1305::ChaCha20Poly1305;
 use hkdf::Hkdf;
 use md5::{Digest, Md5};
 use sha1::Sha1;
+use tokio::io::{AsyncRead, AsyncReadExt};
 
 use crate::error::OutboundError;
 use crate::socks5::Socks5Address;
@@ -44,7 +45,7 @@ pub fn cipher_spec(cipher: &str) -> Result<AeadCipherSpec, OutboundError> {
     let info = classify_cipher(cipher)?;
     if info.family != CipherFamily::Aead {
         return Err(OutboundError::BadShadowsocks(format!(
-            "cipher is not stage18 AEAD TCP candidate: {}",
+            "cipher family is not resident Shadowsocks AEAD stream cipher: {}",
             info.cipher
         )));
     }
@@ -207,6 +208,33 @@ where
     S: Read,
 {
     read_encrypted_chunk(stream, decoder)
+}
+
+pub async fn read_encrypted_chunk_from_async_stream<S>(
+    stream: &mut S,
+    decoder: &mut AeadStreamCodec,
+) -> Result<Vec<u8>, OutboundError>
+where
+    S: AsyncRead + Unpin,
+{
+    let mut encrypted_len = [0_u8; 2 + TAG_LEN];
+    stream
+        .read_exact(&mut encrypted_len)
+        .await
+        .map_err(|err| OutboundError::BadShadowsocks(err.to_string()))?;
+    let len_plain = decoder.decrypt_next(&encrypted_len)?;
+    if len_plain.len() != 2 {
+        return Err(OutboundError::BadShadowsocks(
+            "bad decrypted chunk length".to_owned(),
+        ));
+    }
+    let payload_len = u16::from_be_bytes([len_plain[0], len_plain[1]]) as usize;
+    let mut encrypted_payload = vec![0_u8; payload_len + TAG_LEN];
+    stream
+        .read_exact(&mut encrypted_payload)
+        .await
+        .map_err(|err| OutboundError::BadShadowsocks(err.to_string()))?;
+    decoder.decrypt_next(&encrypted_payload)
 }
 
 pub fn encode_server_payload(

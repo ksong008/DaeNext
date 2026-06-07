@@ -4,7 +4,7 @@ use std::time::Instant;
 use dae_outbound::tuic::{TuicLink, link};
 
 fn main() {
-    let iters = std::env::var("DAE_STAGE15_TUIC_BENCH_ITERS")
+    let iters = std::env::var("DAE_TUIC_NATIVE_OPTIN_BENCH_ITERS")
         .ok()
         .and_then(|value| value.parse::<u64>().ok())
         .unwrap_or(200_000);

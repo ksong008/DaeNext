@@ -12,6 +12,13 @@ pub struct SourceShapeRegistryContract {
     pub release_gate_may_use_current_config_matrix_as_source_matrix: bool,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct OfficialCommonSourceShapeRequirement {
+    pub fixture: &'static str,
+    pub marker: &'static str,
+    pub shape_id: &'static str,
+}
+
 impl SourceShapeRegistryContract {
     pub fn to_value(self) -> Value {
         json!({
@@ -302,7 +309,15 @@ pub fn source_shape_registry_contract() -> SourceShapeRegistryContract {
 }
 
 pub fn source_shape_registry_rows() -> &'static [SourceShapeRegistryRow] {
-    &SOURCE_SHAPE_REGISTRY_ROWS
+    SOURCE_SHAPE_REGISTRY_ROWS
+}
+
+pub fn official_common_source_shape_ids() -> &'static [&'static str] {
+    OFFICIAL_COMMON_SOURCE_SHAPE_IDS
+}
+
+pub fn official_common_fixture_requirements() -> &'static [OfficialCommonSourceShapeRequirement] {
+    OFFICIAL_COMMON_FIXTURE_REQUIREMENTS
 }
 
 pub fn capability_reason_taxonomy() -> &'static [&'static str] {
@@ -334,6 +349,15 @@ const SCOPED_EXPANDED_SOURCE_MATRIX_EVIDENCE: ScopedExpandedSourceMatrixEvidence
             "plugin-wrapper-layer",
             "legacy-layer-shape",
             "stream-wrapper-meek",
+            "secure-websocket-framed-endpoint",
+            "secure-httpupgrade-framed-endpoint",
+            "verified-quic-security-underlay",
+            "quic-port-hopping-surface",
+            "inner-encryption-stream-wrapper",
+            "obfs-tls-plugin-wrapper",
+            "tls-websocket-plugin-wrapper",
+            "aead-2022-plugin-wrapper",
+            "proxy-transport-mode",
         ],
         source_formats: &[
             "https-proxy-uri",
@@ -341,15 +365,24 @@ const SCOPED_EXPANDED_SOURCE_MATRIX_EVIDENCE: ScopedExpandedSourceMatrixEvidence
             "shadowsocks-uri",
             "legacy-vmess-uri",
             "vless-uri",
+            "vmess-wss-uri",
+            "vmess-httpupgrade-uri",
+            "tuic-uri",
+            "hysteria2-port-hopping-uri",
+            "trojan-go-uri",
+            "shadowsocks-sip003-simple-obfs-tls-uri",
+            "shadowsocks-sip003-v2ray-plugin-uri",
+            "shadowsocks-2022-sip003-simple-obfs-http-uri",
+            "http-proxy-transport-uri",
         ],
-        candidate_sha256: "3ea6efd5022e5079de4ffc654482dbeae6194a052ff0e6b7cce7c3f513b384a5",
+        candidate_sha256: "multi-batch:3ea6efd5022e5079de4ffc654482dbeae6194a052ff0e6b7cce7c3f513b384a5+12a1622fdff29d95e954ba80a865c01fbb17dcacb345eb7468dae0ac818bab0b+3e33e9d1d620ce21d9f76976855297d7a42d9c82a26ab4adba78370ff9b83817",
         evidence_host: "remote-38",
         upstream_host: "jp",
-        evidence_root: "/tmp/daex-non-xhttp-capability-3ea6efd5",
-        summary_artifact: "/tmp/daex-non-xhttp-capability-3ea6efd5/non-xhttp-capability-live-summary.json",
-        rollback_artifact: "/tmp/daex-non-xhttp-capability-3ea6efd5/rollback-cleanup.sh",
-        row_count: 5,
-        pass_count: 5,
+        evidence_root: "remote-38:/tmp/daex-non-xhttp-capability-3ea6efd5;/opt/daex-batch1-38/artifacts;/opt/daex-batch2-38/artifacts",
+        summary_artifact: "remote-38:/tmp/daex-non-xhttp-capability-3ea6efd5/non-xhttp-capability-live-summary.json;/opt/daex-batch1-38/artifacts/batch1-live-evidence.json;/opt/daex-batch2-38/artifacts/batch2-live-evidence.json",
+        rollback_artifact: "remote-38:/tmp/daex-non-xhttp-capability-3ea6efd5/rollback-cleanup.sh;/opt/daex-batch1-38/artifacts/rollback-cleanup.sh;/opt/daex-batch2-38/artifacts/rollback-cleanup.sh",
+        row_count: 14,
+        pass_count: 14,
         all_pass: true,
         large_page_all_pass: true,
         proxy_evidence_all_pass: true,
@@ -371,6 +404,15 @@ const ADMITTED_STATE: ShapeStateLedger = ShapeStateLedger {
     live: "requires-expanded-live-evidence",
     default_switch: "not-ready",
     go_free: "not-ready",
+};
+
+const BLOCKED_STATE: ShapeStateLedger = ShapeStateLedger {
+    source_shape: "source-supported",
+    parser: "covered",
+    resident_graph: "blocked",
+    live: "blocked",
+    default_switch: "blocked",
+    go_free: "blocked",
 };
 
 const NOT_SOURCE_SUPPORTED_STATE: ShapeStateLedger = ShapeStateLedger {
@@ -448,11 +490,77 @@ const PLUGIN_WRAPPER_CAPABILITY: CapabilityLedger = CapabilityLedger {
     secure_endpoint: "plain-or-native-underlay",
 };
 
+const INNER_ENCRYPTION_STREAM_CAPABILITY: CapabilityLedger = CapabilityLedger {
+    graph_composition: "single-graph-admitted",
+    security_underlay: "baseline-admitted",
+    stream_wrapper: "websocket",
+    packet_semantics: "inner-encryption-stream",
+    plugin_wrapper: "none",
+    legacy_layer: "none",
+    quic_option: "baseline-admitted",
+    secure_endpoint: "plain-or-native-underlay",
+};
+
+const PLUGIN_WRAPPER_STREAM_CAPABILITY: CapabilityLedger = CapabilityLedger {
+    graph_composition: "single-graph-admitted",
+    security_underlay: "aead-or-aead-2022",
+    stream_wrapper: "resident-plugin-wrapper",
+    packet_semantics: "tcp-stream-wrapper",
+    plugin_wrapper: "resident-plugin-wrapper",
+    legacy_layer: "none",
+    quic_option: "baseline-admitted",
+    secure_endpoint: "plain-or-native-underlay",
+};
+
+const PROXY_TRANSPORT_CAPABILITY: CapabilityLedger = CapabilityLedger {
+    graph_composition: "single-graph-admitted",
+    security_underlay: "plain-or-standard-tls",
+    stream_wrapper: "http-proxy-transport",
+    packet_semantics: "tcp-stream",
+    plugin_wrapper: "none",
+    legacy_layer: "none",
+    quic_option: "baseline-admitted",
+    secure_endpoint: "plain-or-native-underlay",
+};
+
+const SECURE_FRAME_STREAM_CAPABILITY: CapabilityLedger = CapabilityLedger {
+    graph_composition: "single-graph-admitted",
+    security_underlay: "standard-tls",
+    stream_wrapper: "secure-frame-stream",
+    packet_semantics: "udp-over-stream-or-datagram",
+    plugin_wrapper: "none",
+    legacy_layer: "none",
+    quic_option: "baseline-admitted",
+    secure_endpoint: "standard-tls-underlay",
+};
+
+const VERIFIED_QUIC_CAPABILITY: CapabilityLedger = CapabilityLedger {
+    graph_composition: "single-graph-admitted",
+    security_underlay: "verified-quic-tls",
+    stream_wrapper: "quic-stream",
+    packet_semantics: "quic-datagram-or-stream",
+    plugin_wrapper: "none",
+    legacy_layer: "none",
+    quic_option: "verified-quic-admitted",
+    secure_endpoint: "plain-or-native-underlay",
+};
+
+const QUIC_PORT_HOPPING_CAPABILITY: CapabilityLedger = CapabilityLedger {
+    graph_composition: "single-graph-admitted",
+    security_underlay: "quic-tls",
+    stream_wrapper: "quic-port-hopping",
+    packet_semantics: "quic-datagram-or-stream",
+    plugin_wrapper: "none",
+    legacy_layer: "none",
+    quic_option: "port-hopping-admitted",
+    secure_endpoint: "plain-or-native-underlay",
+};
+
 const CHAIN_CAPABILITY: CapabilityLedger = CapabilityLedger {
     graph_composition: "parent-connect-chain-admitted",
     security_underlay: "baseline-admitted",
     stream_wrapper: "baseline-admitted",
-    packet_semantics: "tcp-first-batch-chain",
+    packet_semantics: "tcp-resident-chain",
     plugin_wrapper: "none",
     legacy_layer: "none",
     quic_option: "baseline-admitted",
@@ -481,6 +589,17 @@ const NOT_SUPPORTED_CAPABILITY: CapabilityLedger = CapabilityLedger {
     secure_endpoint: "rejected",
 };
 
+const DEFERRED_CAPABILITY: CapabilityLedger = CapabilityLedger {
+    graph_composition: "single-graph-blocked",
+    security_underlay: "pending-or-policy-blocked",
+    stream_wrapper: "pending-or-policy-blocked",
+    packet_semantics: "pending-or-policy-blocked",
+    plugin_wrapper: "pending-or-policy-blocked",
+    legacy_layer: "pending-or-policy-blocked",
+    quic_option: "pending-or-policy-blocked",
+    secure_endpoint: "pending-or-policy-blocked",
+};
+
 const PENDING_LIVE_LEDGER: ExpandedLiveMatrixLedger = ExpandedLiveMatrixLedger {
     ledger_state: "pending-live-host-evidence",
     live_host_required: true,
@@ -502,6 +621,14 @@ const REJECTED_LIVE_LEDGER: ExpandedLiveMatrixLedger = ExpandedLiveMatrixLedger 
     live_host_required: false,
     rollback_artifact_required: false,
     large_page_evidence_required: false,
+    blocked_rows_reduce_pass_threshold: false,
+};
+
+const BLOCKED_LIVE_LEDGER: ExpandedLiveMatrixLedger = ExpandedLiveMatrixLedger {
+    ledger_state: "explicit-fail-closed",
+    live_host_required: true,
+    rollback_artifact_required: true,
+    large_page_evidence_required: true,
     blocked_rows_reduce_pass_threshold: false,
 };
 
@@ -535,15 +662,24 @@ const REJECTED_RELEASE_GATE: ReleaseGateReconciliation = ReleaseGateReconciliati
     rollback_artifact_ready: false,
 };
 
-const SOURCE_SHAPE_REGISTRY_ROWS: [SourceShapeRegistryRow; 23] = [
+static SOURCE_SHAPE_REGISTRY_ROWS: &[SourceShapeRegistryRow] = &[
     admitted_row(
         "baseline-aead-cipher-endpoint",
         "shadowsocks",
         &["ss"],
         "aead",
         "none",
-        "udp-over-stream-or-datagram",
+        "datagram-aead",
         "registry:baseline-aead-cipher-endpoint",
+    ),
+    admitted_row(
+        "baseline-aead-2022-cipher-endpoint",
+        "shadowsocks",
+        &["ss"],
+        "aead-2022",
+        "none",
+        "datagram-aead-2022",
+        "registry:baseline-aead-2022-cipher-endpoint",
     ),
     admitted_row(
         "baseline-tls-auth-endpoint",
@@ -629,11 +765,20 @@ const SOURCE_SHAPE_REGISTRY_ROWS: [SourceShapeRegistryRow; 23] = [
     admitted_row(
         "stream-wrapper-websocket",
         "multi-protocol",
-        &["vless", "vmess", "trojan", "trojan-go"],
+        &["vless", "trojan", "trojan-go"],
         "standard-or-fingerprint-aware-tls",
         "websocket",
         "udp-over-stream-or-datagram",
         "registry:stream-wrapper-websocket",
+    ),
+    admitted_row(
+        "plain-websocket-framed-endpoint",
+        "vmess",
+        &["vmess"],
+        "aead",
+        "websocket",
+        "udp-over-stream-or-datagram",
+        "registry:plain-websocket-framed-endpoint",
     ),
     admitted_row(
         "stream-wrapper-grpc",
@@ -647,11 +792,20 @@ const SOURCE_SHAPE_REGISTRY_ROWS: [SourceShapeRegistryRow; 23] = [
     admitted_row(
         "stream-wrapper-httpupgrade",
         "multi-protocol",
-        &["vless", "vmess", "trojan-go"],
+        &["vless", "trojan-go"],
         "standard-or-fingerprint-aware-tls",
         "httpupgrade",
         "udp-over-stream-or-datagram",
         "registry:stream-wrapper-httpupgrade",
+    ),
+    admitted_row(
+        "plain-httpupgrade-framed-endpoint",
+        "vmess",
+        &["vmess"],
+        "aead",
+        "httpupgrade",
+        "udp-over-stream-or-datagram",
+        "registry:plain-httpupgrade-framed-endpoint",
     ),
     scoped_evidence_admitted_row(
         "stream-wrapper-meek",
@@ -677,7 +831,7 @@ const SOURCE_SHAPE_REGISTRY_ROWS: [SourceShapeRegistryRow; 23] = [
         &["chain"],
         "plain-parent-connect",
         "baseline-or-plugin-wrapper",
-        "tcp-first-batch-chain",
+        "tcp-resident-chain",
         "registry:nested-chain-shape",
     ),
     scoped_evidence_plugin_wrapper_admitted_row(
@@ -716,6 +870,216 @@ const SOURCE_SHAPE_REGISTRY_ROWS: [SourceShapeRegistryRow; 23] = [
         "protocol-closed",
         "registry:secure-endpoint-capability",
     ),
+    scoped_evidence_capability_admitted_row(
+        "secure-websocket-framed-endpoint",
+        "vmess",
+        &["vmess"],
+        "standard-tls",
+        "websocket",
+        "udp-over-stream-or-datagram",
+        "registry:secure-websocket-framed-endpoint",
+        SECURE_FRAME_STREAM_CAPABILITY,
+    ),
+    scoped_evidence_capability_admitted_row(
+        "secure-httpupgrade-framed-endpoint",
+        "vmess",
+        &["vmess"],
+        "standard-tls",
+        "httpupgrade",
+        "udp-over-stream-or-datagram",
+        "registry:secure-httpupgrade-framed-endpoint",
+        SECURE_FRAME_STREAM_CAPABILITY,
+    ),
+    blocked_row(
+        "reality-security-underlay",
+        "vless",
+        &["vless"],
+        "reality",
+        "none-or-stream-wrapper",
+        "xudp",
+        "missing-security-underlay",
+        "registry:reality-security-underlay",
+    ),
+    scoped_evidence_capability_admitted_row(
+        "quic-port-hopping-surface",
+        "hysteria2",
+        &["hysteria2", "hy2"],
+        "quic-tls",
+        "quic-port-hopping",
+        "quic-datagram-or-stream",
+        "registry:quic-port-hopping-surface",
+        QUIC_PORT_HOPPING_CAPABILITY,
+    ),
+    scoped_evidence_capability_admitted_row(
+        "verified-quic-security-underlay",
+        "tuic",
+        &["tuic"],
+        "verified-quic-tls",
+        "quic-stream",
+        "quic-datagram-or-stream",
+        "registry:verified-quic-security-underlay",
+        VERIFIED_QUIC_CAPABILITY,
+    ),
+    scoped_evidence_capability_admitted_row(
+        "inner-encryption-stream-wrapper",
+        "trojan-go",
+        &["trojan-go"],
+        "standard-tls",
+        "websocket-or-httpupgrade-or-grpc",
+        "udp-over-stream-or-datagram",
+        "registry:inner-encryption-stream-wrapper",
+        INNER_ENCRYPTION_STREAM_CAPABILITY,
+    ),
+    scoped_evidence_capability_admitted_row(
+        "tls-websocket-plugin-wrapper",
+        "shadowsocks",
+        &["ss"],
+        "aead",
+        "tls-websocket-plugin",
+        "tcp-stream-wrapper",
+        "registry:tls-websocket-plugin-wrapper",
+        PLUGIN_WRAPPER_STREAM_CAPABILITY,
+    ),
+    scoped_evidence_capability_admitted_row(
+        "obfs-tls-plugin-wrapper",
+        "shadowsocks",
+        &["ss"],
+        "aead",
+        "obfs-tls",
+        "tcp-stream-wrapper",
+        "registry:obfs-tls-plugin-wrapper",
+        PLUGIN_WRAPPER_STREAM_CAPABILITY,
+    ),
+    scoped_evidence_capability_admitted_row(
+        "aead-2022-plugin-wrapper",
+        "shadowsocks",
+        &["ss"],
+        "aead-2022",
+        "plugin-wrapper",
+        "tcp-stream-wrapper",
+        "registry:aead-2022-plugin-wrapper",
+        PLUGIN_WRAPPER_STREAM_CAPABILITY,
+    ),
+    scoped_evidence_capability_admitted_row(
+        "proxy-transport-mode",
+        "http-proxy",
+        &["http", "https"],
+        "plain-or-standard-tls",
+        "http-transport",
+        "protocol-closed",
+        "registry:proxy-transport-mode",
+        PROXY_TRANSPORT_CAPABILITY,
+    ),
+    blocked_row(
+        "insecure-secure-endpoint-underlay",
+        "proxy-endpoint",
+        &["https"],
+        "insecure-tls",
+        "none",
+        "protocol-closed",
+        "missing-security-underlay",
+        "registry:insecure-secure-endpoint-underlay",
+    ),
+    blocked_row(
+        "fingerprint-secure-endpoint-underlay",
+        "proxy-endpoint",
+        &["https"],
+        "fingerprint-aware-tls",
+        "none",
+        "protocol-closed",
+        "missing-security-underlay",
+        "registry:fingerprint-secure-endpoint-underlay",
+    ),
+    blocked_row(
+        "insecure-frame-stream-underlay",
+        "anytls",
+        &["anytls"],
+        "insecure-tls",
+        "frame-stream",
+        "udp-over-stream-or-datagram",
+        "missing-security-underlay",
+        "registry:insecure-frame-stream-underlay",
+    ),
+    blocked_row(
+        "full-utls-security-underlay",
+        "shared-transport",
+        &["utls"],
+        "full-utls",
+        "none-or-stream-wrapper",
+        "udp-over-stream-or-datagram",
+        "missing-security-underlay",
+        "registry:full-utls-security-underlay",
+    ),
+    blocked_row(
+        "tls-fragment-security-underlay",
+        "shared-transport",
+        &["tls"],
+        "tls-fragment",
+        "none-or-stream-wrapper",
+        "udp-over-stream-or-datagram",
+        "missing-security-underlay",
+        "registry:tls-fragment-security-underlay",
+    ),
+    blocked_row(
+        "shared-reality-security-underlay",
+        "shared-transport",
+        &["reality"],
+        "reality",
+        "none-or-stream-wrapper",
+        "udp-over-stream-or-datagram",
+        "missing-security-underlay",
+        "registry:shared-reality-security-underlay",
+    ),
+    blocked_row(
+        "mux-transport-wrapper",
+        "shared-transport",
+        &["mux"],
+        "plain-or-standard-tls",
+        "mux",
+        "multiplexed-stream",
+        "missing-stream-wrapper",
+        "registry:mux-transport-wrapper",
+    ),
+    blocked_row(
+        "passthrough-udp-transport",
+        "shared-transport",
+        &["passthrough-udp"],
+        "plain-or-standard-tls",
+        "none-or-stream-wrapper",
+        "passthrough-udp",
+        "missing-packet-semantics",
+        "registry:passthrough-udp-transport",
+    ),
+    blocked_row(
+        "legacy-cipher-protocol-shape",
+        "legacy-protocol",
+        &["ssr"],
+        "legacy-cipher",
+        "legacy-obfs",
+        "udp-over-stream-or-datagram",
+        "materialization-mismatch",
+        "registry:legacy-cipher-protocol-shape",
+    ),
+    blocked_row(
+        "xhttp-h3-wrapper",
+        "multi-protocol",
+        &["vless"],
+        "standard-or-fingerprint-aware-tls",
+        "xhttp",
+        "tcp-stream-h3-packet-up",
+        "missing-stream-wrapper",
+        "registry:xhttp-h3-wrapper",
+    ),
+    blocked_row(
+        "xhttp-extended-settings-wrapper",
+        "multi-protocol",
+        &["vless"],
+        "standard-or-fingerprint-aware-tls-or-reality",
+        "xhttp",
+        "extended-xhttp",
+        "missing-stream-wrapper",
+        "registry:xhttp-extended-settings-wrapper",
+    ),
     not_supported_row(
         "foreign-abi-outbound-shape",
         "foreign-runtime",
@@ -746,6 +1110,216 @@ const SOURCE_SHAPE_REGISTRY_ROWS: [SourceShapeRegistryRow; 23] = [
         "unsupported-source-policy",
         "registry:internal-fallback-dependent-shape",
     ),
+];
+
+static OFFICIAL_COMMON_SOURCE_SHAPE_IDS: &[&str] = &[
+    "baseline-aead-cipher-endpoint",
+    "baseline-aead-2022-cipher-endpoint",
+    "baseline-tls-auth-endpoint",
+    "baseline-aead-framed-endpoint",
+    "baseline-tls-vision-endpoint",
+    "baseline-quic-auth-endpoint",
+    "baseline-quic-uuid-endpoint",
+    "baseline-quic-password-endpoint",
+    "baseline-frame-stream-endpoint",
+    "baseline-connect-endpoint",
+    "baseline-socks-endpoint",
+    "stream-wrapper-websocket",
+    "plain-websocket-framed-endpoint",
+    "stream-wrapper-grpc",
+    "stream-wrapper-httpupgrade",
+    "plain-httpupgrade-framed-endpoint",
+    "stream-wrapper-meek",
+    "stream-wrapper-xhttp",
+    "nested-chain-shape",
+    "plugin-wrapper-layer",
+    "legacy-layer-shape",
+    "quic-option-surface",
+    "secure-endpoint-capability",
+    "secure-websocket-framed-endpoint",
+    "secure-httpupgrade-framed-endpoint",
+    "reality-security-underlay",
+    "quic-port-hopping-surface",
+    "verified-quic-security-underlay",
+    "inner-encryption-stream-wrapper",
+    "tls-websocket-plugin-wrapper",
+    "obfs-tls-plugin-wrapper",
+    "aead-2022-plugin-wrapper",
+    "proxy-transport-mode",
+    "insecure-secure-endpoint-underlay",
+    "fingerprint-secure-endpoint-underlay",
+    "insecure-frame-stream-underlay",
+    "full-utls-security-underlay",
+    "tls-fragment-security-underlay",
+    "shared-reality-security-underlay",
+    "mux-transport-wrapper",
+    "passthrough-udp-transport",
+    "legacy-cipher-protocol-shape",
+    "xhttp-h3-wrapper",
+    "xhttp-extended-settings-wrapper",
+];
+
+static OFFICIAL_COMMON_FIXTURE_REQUIREMENTS: &[OfficialCommonSourceShapeRequirement] = &[
+    OfficialCommonSourceShapeRequirement {
+        fixture: "shadowsocks_native_optin.json",
+        marker: "sip002-aead-base64-userinfo",
+        shape_id: "baseline-aead-cipher-endpoint",
+    },
+    OfficialCommonSourceShapeRequirement {
+        fixture: "shadowsocks_native_optin.json",
+        marker: "ss2022-plain-userinfo",
+        shape_id: "baseline-aead-2022-cipher-endpoint",
+    },
+    OfficialCommonSourceShapeRequirement {
+        fixture: "trojan_native_optin.json",
+        marker: "trojan-default-sni",
+        shape_id: "baseline-tls-auth-endpoint",
+    },
+    OfficialCommonSourceShapeRequirement {
+        fixture: "vmess_native_optin.json",
+        marker: "domain-tcp",
+        shape_id: "baseline-aead-framed-endpoint",
+    },
+    OfficialCommonSourceShapeRequirement {
+        fixture: "vless_native_optin.json",
+        marker: "tcp-tls-vision",
+        shape_id: "baseline-tls-vision-endpoint",
+    },
+    OfficialCommonSourceShapeRequirement {
+        fixture: "hysteria2_native_optin.json",
+        marker: "basic",
+        shape_id: "baseline-quic-auth-endpoint",
+    },
+    OfficialCommonSourceShapeRequirement {
+        fixture: "tuic_native_optin.json",
+        marker: "basic-quic-flag",
+        shape_id: "baseline-quic-uuid-endpoint",
+    },
+    OfficialCommonSourceShapeRequirement {
+        fixture: "juicity_native_optin.json",
+        marker: "basic-urlbase64-pin",
+        shape_id: "baseline-quic-password-endpoint",
+    },
+    OfficialCommonSourceShapeRequirement {
+        fixture: "anytls_native_optin.json",
+        marker: "default-sni",
+        shape_id: "baseline-frame-stream-endpoint",
+    },
+    OfficialCommonSourceShapeRequirement {
+        fixture: "http_native_optin.json",
+        marker: "connect-no-auth",
+        shape_id: "baseline-connect-endpoint",
+    },
+    OfficialCommonSourceShapeRequirement {
+        fixture: "socks5_native_optin.json",
+        marker: "socks5",
+        shape_id: "baseline-socks-endpoint",
+    },
+    OfficialCommonSourceShapeRequirement {
+        fixture: "vmess_native_optin.json",
+        marker: "json-aead-ws-tls",
+        shape_id: "secure-websocket-framed-endpoint",
+    },
+    OfficialCommonSourceShapeRequirement {
+        fixture: "vmess_native_optin.json",
+        marker: "legacy-websocket-tls",
+        shape_id: "secure-websocket-framed-endpoint",
+    },
+    OfficialCommonSourceShapeRequirement {
+        fixture: "vless_native_optin.json",
+        marker: "xhttp-reality-contract",
+        shape_id: "reality-security-underlay",
+    },
+    OfficialCommonSourceShapeRequirement {
+        fixture: "hysteria2_native_optin.json",
+        marker: "port-hopping",
+        shape_id: "quic-port-hopping-surface",
+    },
+    OfficialCommonSourceShapeRequirement {
+        fixture: "tuic_native_optin.json",
+        marker: "basic-quic-flag",
+        shape_id: "verified-quic-security-underlay",
+    },
+    OfficialCommonSourceShapeRequirement {
+        fixture: "trojan_native_optin.json",
+        marker: "trojan-go-ss-encryption",
+        shape_id: "inner-encryption-stream-wrapper",
+    },
+    OfficialCommonSourceShapeRequirement {
+        fixture: "shadowsocks_native_optin.json",
+        marker: "simple-obfs-plugin",
+        shape_id: "plugin-wrapper-layer",
+    },
+    OfficialCommonSourceShapeRequirement {
+        fixture: "shadowsocks_native_optin.json",
+        marker: "simple-obfs-tls-plugin",
+        shape_id: "obfs-tls-plugin-wrapper",
+    },
+    OfficialCommonSourceShapeRequirement {
+        fixture: "shadowsocks_native_optin.json",
+        marker: "v2ray-plugin-tls",
+        shape_id: "tls-websocket-plugin-wrapper",
+    },
+    OfficialCommonSourceShapeRequirement {
+        fixture: "shadowsocks_native_optin.json",
+        marker: "ss2022-simple-obfs-http-plugin",
+        shape_id: "aead-2022-plugin-wrapper",
+    },
+    OfficialCommonSourceShapeRequirement {
+        fixture: "shadowsocks_native_optin.json",
+        marker: "shadowsocksr",
+        shape_id: "legacy-cipher-protocol-shape",
+    },
+    OfficialCommonSourceShapeRequirement {
+        fixture: "http_native_optin.json",
+        marker: "transport-put-path",
+        shape_id: "proxy-transport-mode",
+    },
+    OfficialCommonSourceShapeRequirement {
+        fixture: "http_native_optin.json",
+        marker: "https-flags",
+        shape_id: "insecure-secure-endpoint-underlay",
+    },
+    OfficialCommonSourceShapeRequirement {
+        fixture: "anytls_native_optin.json",
+        marker: "basic-insecure",
+        shape_id: "insecure-frame-stream-underlay",
+    },
+    OfficialCommonSourceShapeRequirement {
+        fixture: "shared_transport_native_optin.json",
+        marker: "utls",
+        shape_id: "full-utls-security-underlay",
+    },
+    OfficialCommonSourceShapeRequirement {
+        fixture: "shared_transport_native_optin.json",
+        marker: "global_tls_fragment",
+        shape_id: "tls-fragment-security-underlay",
+    },
+    OfficialCommonSourceShapeRequirement {
+        fixture: "shared_transport_native_optin.json",
+        marker: "reality_transport",
+        shape_id: "shared-reality-security-underlay",
+    },
+    OfficialCommonSourceShapeRequirement {
+        fixture: "shared_transport_native_optin.json",
+        marker: "mux_transport",
+        shape_id: "mux-transport-wrapper",
+    },
+    OfficialCommonSourceShapeRequirement {
+        fixture: "shared_transport_native_optin.json",
+        marker: "passthroughUdp",
+        shape_id: "passthrough-udp-transport",
+    },
+    OfficialCommonSourceShapeRequirement {
+        fixture: "vless_native_optin.json",
+        marker: "xhttp-h3-packet-up",
+        shape_id: "xhttp-h3-wrapper",
+    },
+    OfficialCommonSourceShapeRequirement {
+        fixture: "shared_transport_native_optin.json",
+        marker: "downloadSettings",
+        shape_id: "xhttp-extended-settings-wrapper",
+    },
 ];
 
 const fn admitted_row(
@@ -783,6 +1357,42 @@ const fn admitted_row(
     }
 }
 
+const fn blocked_row(
+    shape_id: &'static str,
+    protocol_family: &'static str,
+    link_schemes: &'static [&'static str],
+    security_underlay: &'static str,
+    stream_wrapper: &'static str,
+    packet_semantics: &'static str,
+    blocker_id: &'static str,
+    redacted_identity: &'static str,
+) -> SourceShapeRegistryRow {
+    SourceShapeRegistryRow {
+        shape_id,
+        source_support: "source-supported",
+        protocol_family,
+        link_schemes,
+        endpoint: "host-port",
+        security_underlay,
+        stream_wrapper,
+        packet_semantics,
+        chain_shape: "single-graph",
+        policy_surface: "selected-runtime-plus-expanded-ledger",
+        reload_lifecycle: "drop-on-graph-diff-or-runtime-stop",
+        parser_coverage: "covered",
+        resident_status: "blocked",
+        blocker_id: Some(blocker_id),
+        evidence_requirements: &["executor", "large-page-live", "benchmark", "rollback"],
+        redacted_identity,
+        state_ledger: BLOCKED_STATE,
+        executor_proof: BLOCKED_EXECUTOR_PROOF,
+        runtime_selection: BLOCKED_RUNTIME_SELECTION,
+        capability: DEFERRED_CAPABILITY,
+        expanded_live_matrix: BLOCKED_LIVE_LEDGER,
+        release_gate: REJECTED_RELEASE_GATE,
+    }
+}
+
 const fn scoped_evidence_admitted_row(
     shape_id: &'static str,
     protocol_family: &'static str,
@@ -813,6 +1423,42 @@ const fn scoped_evidence_admitted_row(
         executor_proof: ADMITTED_EXECUTOR_PROOF,
         runtime_selection: ADMITTED_RUNTIME_SELECTION,
         capability: BASE_CAPABILITY,
+        expanded_live_matrix: SCOPED_READY_LIVE_LEDGER,
+        release_gate: SCOPED_READY_RELEASE_GATE,
+    }
+}
+
+const fn scoped_evidence_capability_admitted_row(
+    shape_id: &'static str,
+    protocol_family: &'static str,
+    link_schemes: &'static [&'static str],
+    security_underlay: &'static str,
+    stream_wrapper: &'static str,
+    packet_semantics: &'static str,
+    redacted_identity: &'static str,
+    capability: CapabilityLedger,
+) -> SourceShapeRegistryRow {
+    SourceShapeRegistryRow {
+        shape_id,
+        source_support: "source-supported",
+        protocol_family,
+        link_schemes,
+        endpoint: "host-port",
+        security_underlay,
+        stream_wrapper,
+        packet_semantics,
+        chain_shape: "single-graph",
+        policy_surface: "selected-runtime-plus-expanded-ledger",
+        reload_lifecycle: "drop-on-graph-diff-or-runtime-stop",
+        parser_coverage: "covered",
+        resident_status: "admitted-baseline",
+        blocker_id: None,
+        evidence_requirements: &["large-page-live", "benchmark", "rollback"],
+        redacted_identity,
+        state_ledger: ADMITTED_STATE,
+        executor_proof: ADMITTED_EXECUTOR_PROOF,
+        runtime_selection: ADMITTED_RUNTIME_SELECTION,
+        capability,
         expanded_live_matrix: SCOPED_READY_LIVE_LEDGER,
         release_gate: SCOPED_READY_RELEASE_GATE,
     }

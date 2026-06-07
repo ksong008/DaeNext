@@ -22,12 +22,12 @@ pub fn build_port_hop_schedule(
 ) -> Result<Hysteria2PortHopSchedule, OutboundError> {
     if selection_count == 0 {
         return Err(bad_port_hopping(
-            "stage130 port hopping selection count must be greater than zero",
+            "Hysteria2 port hopping selection count must be greater than zero",
         ));
     }
     if udp_hop_interval_ms == 0 {
         return Err(bad_port_hopping(
-            "stage130 UDP hop interval must be greater than zero",
+            "Hysteria2 UDP hop interval must be greater than zero",
         ));
     }
     let contract = server_contract(server);

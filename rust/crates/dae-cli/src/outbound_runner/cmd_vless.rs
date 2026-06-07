@@ -18,7 +18,7 @@ pub(super) fn run_vless_contract() -> RunnerOutput {
     RunnerOutput::ok(format!(
         "{}\n",
         json!({
-            "name": "stage15-vless-native-optin",
+            "name": "vless-native-optin",
             "default_go_path": vless::contract::DEFAULT_GO_PATH,
             "rust_adapter_mode": vless::contract::ADAPTER_MODE,
             "protocol_scope": vless::contract::PROTOCOL_SCOPE,

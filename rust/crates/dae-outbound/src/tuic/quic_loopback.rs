@@ -25,10 +25,10 @@ use super::wire::{
 };
 
 pub const DEFAULT_TUIC_UUID: &str = "01234567-89ab-cdef-0123-456789abcdef";
-pub const DEFAULT_TUIC_PASSWORD: &str = "stage131-tuic-password";
-pub const DEFAULT_TUIC_UDP_TARGET: &str = "stage131-udp.example:5353";
-pub const DEFAULT_TUIC_UDP_PAYLOAD: &[u8] = b"stage131-tuic-udp-ping";
-pub const DEFAULT_TUIC_UDP_RESPONSE: &[u8] = b"stage131-tuic-udp-pong";
+pub const DEFAULT_TUIC_PASSWORD: &str = "tuic-loopback-password";
+pub const DEFAULT_TUIC_UDP_TARGET: &str = "tuic-loopback-udp.example:5353";
+pub const DEFAULT_TUIC_UDP_PAYLOAD: &[u8] = b"tuic-loopback-udp-ping";
+pub const DEFAULT_TUIC_UDP_RESPONSE: &[u8] = b"tuic-loopback-udp-pong";
 pub const DEFAULT_TUIC_CONGESTION_CONTROL: &str = "bbr";
 pub const DEFAULT_TUIC_CWND: usize = 10;
 pub const DEFAULT_TUIC_ASSOC_ID: u16 = 0x1310;
@@ -128,14 +128,14 @@ pub fn run_tuic_quic_loopback_smoke(
 ) -> Result<TuicQuicLoopbackReport, OutboundError> {
     if options.datagram_iterations == 0 {
         return Err(bad_quic_loopback(
-            "stage131 --datagram-iters must be greater than zero",
+            "TUIC loopback --datagram-iters must be greater than zero",
         ));
     }
     if options.password.is_empty()
         || options.udp_payload.is_empty()
         || options.udp_response_payload.is_empty()
     {
-        return Err(bad_quic_loopback("stage131 TUIC payloads cannot be empty"));
+        return Err(bad_quic_loopback("TUIC loopback payloads cannot be empty"));
     }
     let runtime = tokio::runtime::Builder::new_current_thread()
         .enable_io()
@@ -145,7 +145,7 @@ pub fn run_tuic_quic_loopback_smoke(
     runtime.block_on(async {
         tokio::time::timeout(options.timeout, run_tuic_quic_loopback_smoke_async(options))
             .await
-            .map_err(|_| bad_quic_loopback("stage131 TUIC true QUIC loopback timed out"))?
+            .map_err(|_| bad_quic_loopback("TUIC true QUIC loopback timed out"))?
     })
 }
 
@@ -169,7 +169,7 @@ async fn run_tuic_quic_loopback_smoke_async(
     let mut client_endpoint =
         quinn::Endpoint::client(SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0))
             .map_err(|err| bad_quic_loopback(format!("create TUIC client endpoint: {err}")))?;
-    client_endpoint.set_default_client_config(build_tuic_client_config(&alpn)?);
+    client_endpoint.set_default_client_config(build_tuic_client_config(&alpn, true)?);
     let client_connection = client_endpoint
         .connect(loopback_addr, &options.server_name)
         .map_err(|err| bad_quic_loopback(format!("connect TUIC loopback: {err}")))?
@@ -240,7 +240,7 @@ async fn run_tuic_quic_loopback_smoke_async(
         }
     }
     let elapsed_ns = start.elapsed().as_nanos();
-    client_connection.close(0_u32.into(), b"stage131 done");
+    client_connection.close(0_u32.into(), b"tuic-loopback done");
     client_endpoint.wait_idle().await;
 
     let server = server_task

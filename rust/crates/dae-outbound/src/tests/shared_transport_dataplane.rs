@@ -2,7 +2,7 @@ use super::*;
 
 #[test]
 fn stage20_httpupgrade_dataplane_echoes_payload() {
-    let fixture = fixture("outbound/protocol/stage20_shared_transport_foundation.json");
+    let fixture = fixture("outbound/protocol/shared_transport_foundation.json");
     let payload = fixture["payload_ascii"].as_str().unwrap().as_bytes();
     let (endpoint, handle) = spawn_httpupgrade_echo_server();
     let options = shared_transport::HttpUpgradeOptions::new(
@@ -26,7 +26,7 @@ fn stage20_httpupgrade_dataplane_echoes_payload() {
 
 #[test]
 fn stage20_websocket_dataplane_echoes_binary_frame() {
-    let fixture = fixture("outbound/protocol/stage20_shared_transport_foundation.json");
+    let fixture = fixture("outbound/protocol/shared_transport_foundation.json");
     let payload = fixture["payload_ascii"].as_str().unwrap().as_bytes();
     let (endpoint, handle) = spawn_websocket_echo_server();
     let options = shared_transport::HttpUpgradeOptions::new(
@@ -46,7 +46,7 @@ fn stage20_websocket_dataplane_echoes_binary_frame() {
 
 #[test]
 fn stage20_simpleobfs_http_dataplane_echoes_payload() {
-    let fixture = fixture("outbound/protocol/stage20_shared_transport_foundation.json");
+    let fixture = fixture("outbound/protocol/shared_transport_foundation.json");
     let payload = fixture["payload_ascii"].as_str().unwrap().as_bytes();
     let (endpoint, handle) = spawn_simpleobfs_http_echo_server();
     let options = shared_transport::SimpleObfsHttpOptions::new(
@@ -70,7 +70,7 @@ fn stage20_simpleobfs_http_dataplane_echoes_payload() {
 
 #[test]
 fn stage21_reality_mutation_harness_echoes_payload() {
-    let fixture = fixture("outbound/protocol/stage21_deep_transport_harness.json");
+    let fixture = fixture("outbound/protocol/shared_transport_deep_harness.json");
     let payload = fixture["payload_ascii"].as_str().unwrap().as_bytes();
     let reality = &fixture["reality"];
     let options = shared_transport::RealityMutationOptions::new(
@@ -115,7 +115,7 @@ fn stage21_reality_mutation_harness_echoes_payload() {
 
 #[test]
 fn stage21_xhttp_packet_lifecycle_harness_echoes_payload() {
-    let fixture = fixture("outbound/protocol/stage21_deep_transport_harness.json");
+    let fixture = fixture("outbound/protocol/shared_transport_deep_harness.json");
     let payload = fixture["payload_ascii"].as_str().unwrap().as_bytes();
     let xhttp = &fixture["xhttp"];
     let options = shared_transport::XHttpLifecycleOptions::new(
@@ -162,7 +162,7 @@ fn stage21_xhttp_packet_lifecycle_harness_echoes_payload() {
 
 #[test]
 fn stage21_grpc_cache_and_stream_lifecycle_harness_echoes_payload() {
-    let fixture = fixture("outbound/protocol/stage21_deep_transport_harness.json");
+    let fixture = fixture("outbound/protocol/shared_transport_deep_harness.json");
     let payload = fixture["payload_ascii"].as_str().unwrap().as_bytes();
     let grpc = &fixture["grpc"];
     let options = shared_transport::GrpcLifecycleOptions::new(
@@ -203,7 +203,7 @@ fn stage21_grpc_cache_and_stream_lifecycle_harness_echoes_payload() {
 
 #[test]
 fn stage21_meek_polling_roundtripper_harness_echoes_payload() {
-    let fixture = fixture("outbound/protocol/stage21_deep_transport_harness.json");
+    let fixture = fixture("outbound/protocol/shared_transport_deep_harness.json");
     let payload = fixture["payload_ascii"].as_str().unwrap().as_bytes();
     let meek = &fixture["meek"];
     let options = shared_transport::MeekRoundTripOptions::from_https_url(
@@ -242,7 +242,7 @@ fn stage21_meek_polling_roundtripper_harness_echoes_payload() {
 
 #[test]
 fn stage21_mux_frame_lifecycle_harness_echoes_payload() {
-    let fixture = fixture("outbound/protocol/stage21_deep_transport_harness.json");
+    let fixture = fixture("outbound/protocol/shared_transport_deep_harness.json");
     let payload = fixture["payload_ascii"].as_str().unwrap().as_bytes();
     let mux = &fixture["mux"];
     let id = [0_u8, 0_u8];
@@ -285,7 +285,7 @@ fn stage21_mux_frame_lifecycle_harness_echoes_payload() {
 
 #[test]
 fn stage21_quic_h3_datagram_harness_echoes_payload() {
-    let fixture = fixture("outbound/protocol/stage21_deep_transport_harness.json");
+    let fixture = fixture("outbound/protocol/shared_transport_deep_harness.json");
     let payload = fixture["payload_ascii"].as_str().unwrap().as_bytes();
     let quic = &fixture["quic_h3"];
     let options = shared_transport::QuicH3HarnessOptions::new(

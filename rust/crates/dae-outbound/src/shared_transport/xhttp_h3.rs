@@ -273,7 +273,7 @@ async fn run_xhttp_h3_loopback_async(
     }
     let elapsed_ns = start.elapsed().as_nanos();
     drop(client);
-    client_connection.close(0_u32.into(), b"stage137 done");
+    client_connection.close(0_u32.into(), b"xhttp-h3 done");
     client_endpoint.wait_idle().await;
     let _ = driver_task.await;
     let server = server_task

@@ -1,4 +1,5 @@
 use super::*;
+use tokio::io::AsyncReadExt as _;
 
 pub(super) struct BodyCodec {
     pub(super) cipher: Aes128Gcm,
@@ -20,7 +21,7 @@ impl BodyCodec {
     pub(super) fn seal_chunk(&mut self, payload: &[u8]) -> Result<Vec<u8>, OutboundError> {
         if payload.len() > MAX_CHUNK_SIZE {
             return Err(OutboundError::BadVmess(format!(
-                "VMess payload too large for one stage65 chunk: {} bytes",
+                "VMess payload too large for one VMess AEAD chunk: {} bytes",
                 payload.len()
             )));
         }
@@ -60,6 +61,41 @@ impl BodyCodec {
         }
         let mut chunk = vec![0_u8; size];
         read_exact(stream, &mut chunk, "vmess encrypted chunk")?;
+        let encrypted_len = size - padding_len;
+        let payload = self
+            .cipher
+            .decrypt(
+                Nonce::from_slice(&self.nonce.next()),
+                &chunk[..encrypted_len],
+            )
+            .map_err(|err| OutboundError::BadVmess(err.to_string()))?;
+        Ok((payload, 2 + size))
+    }
+
+    pub(super) async fn open_chunk_async<S>(
+        &mut self,
+        stream: &mut S,
+    ) -> Result<(Vec<u8>, usize), OutboundError>
+    where
+        S: tokio::io::AsyncRead + Unpin,
+    {
+        let mut size_buf = [0_u8; 2];
+        stream
+            .read_exact(&mut size_buf)
+            .await
+            .map_err(|err| OutboundError::BadVmess(format!("read vmess chunk size: {err}")))?;
+        let padding_len = self.size.next_padding_len() as usize;
+        let size = self.size.decode_size(size_buf) as usize;
+        if size < padding_len + 16 {
+            return Err(OutboundError::BadVmess(format!(
+                "bad VMess chunk size {size} with padding {padding_len}"
+            )));
+        }
+        let mut chunk = vec![0_u8; size];
+        stream
+            .read_exact(&mut chunk)
+            .await
+            .map_err(|err| OutboundError::BadVmess(format!("read vmess encrypted chunk: {err}")))?;
         let encrypted_len = size - padding_len;
         let payload = self
             .cipher

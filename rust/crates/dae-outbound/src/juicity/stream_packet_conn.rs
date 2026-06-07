@@ -14,10 +14,10 @@ use super::packet::{
     JuicityStreamPacketFrame, decode_stream_packet_frame, seal_stream_packet_frame,
 };
 
-pub const DEFAULT_STREAM_PACKET_CONN_TARGET: &str = "stage126-stream.example:5353";
-pub const DEFAULT_STREAM_PACKET_CONN_RESPONSE_TARGET: &str = "stage126-response.example:5353";
-pub const DEFAULT_STREAM_PACKET_CONN_PAYLOAD: &[u8] = b"stage126-juicity-stream-ping";
-pub const DEFAULT_STREAM_PACKET_CONN_RESPONSE: &[u8] = b"stage126-juicity-stream-pong";
+pub const DEFAULT_STREAM_PACKET_CONN_TARGET: &str = "juicity-stream.example:5353";
+pub const DEFAULT_STREAM_PACKET_CONN_RESPONSE_TARGET: &str = "juicity-stream-response.example:5353";
+pub const DEFAULT_STREAM_PACKET_CONN_PAYLOAD: &[u8] = b"juicity-stream-ping";
+pub const DEFAULT_STREAM_PACKET_CONN_RESPONSE: &[u8] = b"juicity-stream-pong";
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct JuicityStreamPacketConnOptions {
@@ -97,17 +97,17 @@ pub fn run_stream_packet_conn_smoke(
 ) -> Result<JuicityStreamPacketConnReport, OutboundError> {
     if options.iterations == 0 {
         return Err(bad_stream_packet_conn(
-            "stage126 stream packet conn iterations must be greater than zero",
+            "Juicity stream packet conn iterations must be greater than zero",
         ));
     }
     if options.payload.is_empty() {
         return Err(bad_stream_packet_conn(
-            "stage126 stream packet conn payload cannot be empty",
+            "Juicity stream packet conn payload cannot be empty",
         ));
     }
     if options.response_payload.is_empty() {
         return Err(bad_stream_packet_conn(
-            "stage126 stream packet conn response payload cannot be empty",
+            "Juicity stream packet conn response payload cannot be empty",
         ));
     }
     let runtime = tokio::runtime::Builder::new_current_thread()
@@ -118,7 +118,7 @@ pub fn run_stream_packet_conn_smoke(
     runtime.block_on(async {
         tokio::time::timeout(options.timeout, run_stream_packet_conn_smoke_async(options))
             .await
-            .map_err(|_| bad_stream_packet_conn("stage126 stream packet conn timed out"))?
+            .map_err(|_| bad_stream_packet_conn("Juicity stream packet conn timed out"))?
     })
 }
 
@@ -206,7 +206,7 @@ async fn run_stream_packet_conn_smoke_async(
         }
     }
     let elapsed_ns = start.elapsed().as_nanos();
-    client_connection.close(0_u32.into(), b"stage126 done");
+    client_connection.close(0_u32.into(), b"juicity-stream done");
     client_endpoint.wait_idle().await;
 
     let server = server_task.await.map_err(|err| {

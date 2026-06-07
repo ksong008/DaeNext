@@ -328,8 +328,8 @@ pub(super) struct VMessAeadMaterial {
 impl Default for VMessAeadMaterial {
     fn default() -> Self {
         Self {
-            request_body_iv: *b"dae-stage65-iv!!",
-            request_body_key: *b"dae-stage65-key!",
+            request_body_iv: *b"dae-vmess-aead!!",
+            request_body_key: *b"dae-vmess-key!!!",
             response_auth: 0x65,
             eauth_random: [0xda, 0xee, 0x65, 0x01],
             connection_nonce: *b"dae65cn!",

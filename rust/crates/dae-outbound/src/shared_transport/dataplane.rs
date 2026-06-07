@@ -193,7 +193,7 @@ pub fn read_websocket_binary_frame(stream: &mut impl Read) -> Result<Vec<u8>, Ou
         len = u16::from_be_bytes(ext) as usize;
     } else if len == 127 {
         return Err(OutboundError::BadSharedTransport(
-            "websocket 64-bit length unsupported in stage20 harness".to_owned(),
+            "websocket 64-bit length unsupported in shared transport harness".to_owned(),
         ));
     }
     let mut mask_key = [0_u8; 4];
@@ -221,7 +221,7 @@ fn websocket_frame(
 ) -> Result<Vec<u8>, OutboundError> {
     if payload.len() > u16::MAX as usize {
         return Err(OutboundError::BadSharedTransport(
-            "stage20 websocket frame too large".to_owned(),
+            "websocket frame too large".to_owned(),
         ));
     }
     let mut out = Vec::with_capacity(payload.len() + 8);

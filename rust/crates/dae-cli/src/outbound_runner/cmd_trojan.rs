@@ -19,7 +19,7 @@ pub(super) fn run_trojan_contract() -> RunnerOutput {
     RunnerOutput::ok(format!(
         "{}\n",
         json!({
-            "name": "stage15-trojan-native-optin",
+            "name": "trojan-native-optin",
             "default_go_path": trojan::contract::DEFAULT_GO_PATH,
             "rust_adapter_mode": trojan::contract::ADAPTER_MODE,
             "protocol_scope": trojan::contract::PROTOCOL_SCOPE,

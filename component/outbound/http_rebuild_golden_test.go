@@ -20,15 +20,15 @@ import (
 func TestWriteHTTPNativeOptInGoldenFixture(t *testing.T) {
 	writeOrCheckOutboundGolden(t,
 		"../../testdata/rebuild-golden/outbound/protocol/http_native_optin.json",
-		rebuildGoldenStage15HTTPNativeOptIn(t),
+		rebuildGoldenNativeHTTPNativeOptIn(t),
 	)
 }
 
-func rebuildGoldenStage15HTTPNativeOptIn(t testing.TB) any {
+func rebuildGoldenNativeHTTPNativeOptIn(t testing.TB) any {
 	t.Helper()
 
 	return map[string]any{
-		"name": "stage15-http-native-optin",
+		"name": "http-native-optin",
 		"source": []string{
 			"DAENEW_RUST_REBUILD_MEMO_2026-05-16.md:26.1",
 			"DAENEW_RUST_REBUILD_MEMO_2026-05-16.md:26.2",

@@ -165,7 +165,7 @@
       "type": 3
     }
   ],
-  "name": "stage15-vmess-native-optin",
+  "name": "vmess-native-optin",
   "protocol_scope": [
     "vmess"
   ],

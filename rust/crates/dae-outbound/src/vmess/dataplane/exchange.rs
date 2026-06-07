@@ -113,6 +113,19 @@ impl VMessAeadTcpResponseReader {
     {
         self.codec.open_chunk(stream).map(|(payload, _)| payload)
     }
+
+    pub async fn read_chunk_from_async_stream<S>(
+        &mut self,
+        stream: &mut S,
+    ) -> Result<Vec<u8>, OutboundError>
+    where
+        S: tokio::io::AsyncRead + Unpin,
+    {
+        self.codec
+            .open_chunk_async(stream)
+            .await
+            .map(|(payload, _)| payload)
+    }
 }
 
 pub fn aead_tcp_response_reader_from_stream<S>(
@@ -123,6 +136,25 @@ where
     S: Read,
 {
     let response_header_len = read_aead_response_header(stream, request)?;
+    let codec = BodyCodec::new(
+        request.response_body_key,
+        request.response_body_iv,
+        request.request_options,
+    )?;
+    Ok(VMessAeadTcpResponseReader {
+        response_header_len,
+        codec,
+    })
+}
+
+pub async fn aead_tcp_response_reader_from_async_stream<S>(
+    stream: &mut S,
+    request: &VMessAeadTcpRequest,
+) -> Result<VMessAeadTcpResponseReader, OutboundError>
+where
+    S: tokio::io::AsyncRead + Unpin,
+{
+    let response_header_len = read_aead_response_header_async(stream, request).await?;
     let codec = BodyCodec::new(
         request.response_body_key,
         request.response_body_iv,

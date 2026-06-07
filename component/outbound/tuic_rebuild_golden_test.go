@@ -23,11 +23,11 @@ import (
 func TestWriteTuicNativeOptInGoldenFixture(t *testing.T) {
 	writeOrCheckOutboundGolden(t,
 		"../../testdata/rebuild-golden/outbound/protocol/tuic_native_optin.json",
-		rebuildGoldenStage15TuicNativeOptIn(t),
+		rebuildGoldenNativeTuicNativeOptIn(t),
 	)
 }
 
-func rebuildGoldenStage15TuicNativeOptIn(t testing.TB) any {
+func rebuildGoldenNativeTuicNativeOptIn(t testing.TB) any {
 	t.Helper()
 
 	basic := "tuic://7c12c745-63a5-433d-9e60-022e469b5bd4:pass@example.com:443?congestion_control=bbr&alpn=h3,h2&udp_relay_mode=quic#basic"
@@ -35,7 +35,7 @@ func rebuildGoldenStage15TuicNativeOptIn(t testing.TB) any {
 	disableSni := "tuic://7c12c745-63a5-433d-9e60-022e469b5bd4:pass@example.com:443?disable_sni=true&sni=sni.example#no-sni"
 
 	return map[string]any{
-		"name": "stage15-tuic-native-optin",
+		"name": "tuic-native-optin",
 		"source": []string{
 			"DAENEW_RUST_REBUILD_MEMO_2026-05-16.md:26.15",
 			"DAENEW_RUST_REBUILD_MEMO_2026-05-16.md:26.21",

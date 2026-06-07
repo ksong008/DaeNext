@@ -200,12 +200,12 @@ fn validate_supported_stack(
 ) -> Result<(), OutboundError> {
     if cipher != "aes-128-cfb" {
         return Err(OutboundError::BadShadowsocks(format!(
-            "stage95 SSR harness supports aes-128-cfb, got {cipher}"
+            "SSR http_simple/origin fixture supports aes-128-cfb, got {cipher}"
         )));
     }
     if options.obfs != "http_simple" || options.protocol != "origin" {
         return Err(OutboundError::BadShadowsocks(format!(
-            "stage95 SSR harness supports http_simple/origin, got {}/{}",
+            "SSR fixture supports http_simple/origin, got {}/{}",
             options.obfs, options.protocol
         )));
     }
@@ -218,7 +218,7 @@ fn http_simple_obfs_request(
 ) -> Result<Vec<u8>, OutboundError> {
     let encoded = percent_encode(stream_payload);
     Ok(format!(
-        "GET /{encoded} HTTP/1.1\r\nHost: {}:{}\r\nUser-Agent: Mozilla/5.0 (dae stage95)\r\nAccept: text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8\r\nAccept-Language: en-US,en;q=0.8\r\nAccept-Encoding: gzip, deflate\r\nDNT: 1\r\nConnection: keep-alive\r\n\r\n",
+        "GET /{encoded} HTTP/1.1\r\nHost: {}:{}\r\nUser-Agent: Mozilla/5.0 (dae ssr-fixture)\r\nAccept: text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8\r\nAccept-Language: en-US,en;q=0.8\r\nAccept-Encoding: gzip, deflate\r\nDNT: 1\r\nConnection: keep-alive\r\n\r\n",
         options.obfs_host, options.obfs_port
     )
     .into_bytes())

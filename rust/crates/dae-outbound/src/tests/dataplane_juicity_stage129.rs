@@ -21,7 +21,7 @@ fn stage129_juicity_outbound_dataplane_selects_alive_group_and_runs_client_smoke
         outcome.group_name,
         juicity::DEFAULT_OUTBOUND_DATAPLANE_GROUP_NAME
     );
-    assert_eq!(outcome.subscription_tag, "stage129-sub");
+    assert_eq!(outcome.subscription_tag, "juicity-subscription");
     assert_eq!(outcome.policy, "min");
     assert_eq!(outcome.network_type, "tcp4");
     assert_eq!(outcome.raw_link_count, 3);
@@ -37,7 +37,7 @@ fn stage129_juicity_outbound_dataplane_selects_alive_group_and_runs_client_smoke
         vec!["slow.example:443", "fast.example:8443"]
     );
     assert_eq!(outcome.selected_index, 1);
-    assert_eq!(outcome.selected_name, "stage129-fast");
+    assert_eq!(outcome.selected_name, "juicity-fast");
     assert_eq!(outcome.selected_address, "fast.example:8443");
     assert_eq!(outcome.selected_protocol, "juicity");
     assert_eq!(outcome.selected_latency_ms, 52);

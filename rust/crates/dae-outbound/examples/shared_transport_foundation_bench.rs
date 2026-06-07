@@ -6,27 +6,27 @@ use dae_outbound::shared_transport::{
 };
 
 fn main() {
-    let iters = std::env::var("DAE_STAGE20_SHARED_TRANSPORT_BENCH_ITERS")
+    let iters = std::env::var("DAE_SHARED_TRANSPORT_FOUNDATION_BENCH_ITERS")
         .ok()
         .and_then(|value| value.parse::<usize>().ok())
         .unwrap_or(200_000);
-    let payload = b"stage20-transport-ping";
+    let payload = b"shared-transport-ping";
     let upgrade = HttpUpgradeOptions::new("upgrade.example", "/upgrade");
     let websocket = HttpUpgradeOptions::new("ws.example", "/ws");
     let simpleobfs = SimpleObfsHttpOptions::new("obfs.example", "/");
 
-    bench("stage20_httpupgrade_request", iters, || {
+    bench("shared_transport_httpupgrade_request", iters, || {
         http_upgrade_request(&upgrade).len()
     });
-    bench("stage20_websocket_handshake", iters, || {
+    bench("shared_transport_websocket_handshake", iters, || {
         websocket_handshake_request(&websocket, "dGhlIHNhbXBsZSBub25jZQ==").len()
     });
-    bench("stage20_websocket_binary_frame", iters, || {
+    bench("shared_transport_websocket_binary_frame", iters, || {
         websocket_client_binary_frame(payload, [0x11, 0x22, 0x33, 0x44])
             .unwrap()
             .len()
     });
-    bench("stage20_simpleobfs_http_request", iters, || {
+    bench("shared_transport_simpleobfs_http_request", iters, || {
         simpleobfs_http_request(&simpleobfs).len()
     });
 }

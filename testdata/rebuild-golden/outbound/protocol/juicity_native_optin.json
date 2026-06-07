@@ -110,7 +110,7 @@
     "local pinned certchain decode smoke",
     "local QUIC/underlay contract smoke"
   ],
-  "name": "stage15-juicity-native-optin",
+  "name": "juicity-native-optin",
   "pinned_certchain_sha256": [
     {
       "decoded_hex": "fbfffefaefeeabcd0123456789abcdeffbfffefaefeeabcd0123456789abcdef",

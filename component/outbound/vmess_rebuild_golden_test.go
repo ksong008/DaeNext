@@ -20,11 +20,11 @@ import (
 func TestWriteVMessNativeOptInGoldenFixture(t *testing.T) {
 	writeOrCheckOutboundGolden(t,
 		"../../testdata/rebuild-golden/outbound/protocol/vmess_native_optin.json",
-		rebuildGoldenStage15VMessNativeOptIn(t),
+		rebuildGoldenNativeVMessNativeOptIn(t),
 	)
 }
 
-func rebuildGoldenStage15VMessNativeOptIn(t testing.TB) any {
+func rebuildGoldenNativeVMessNativeOptIn(t testing.TB) any {
 	t.Helper()
 
 	jsonLink := (&outboundv2ray.V2Ray{
@@ -73,7 +73,7 @@ func rebuildGoldenStage15VMessNativeOptIn(t testing.TB) any {
 	}).ExportToURL()
 
 	return map[string]any{
-		"name": "stage15-vmess-native-optin",
+		"name": "vmess-native-optin",
 		"source": []string{
 			"DAENEW_RUST_REBUILD_MEMO_2026-05-16.md:26.4",
 			"DAENEW_RUST_REBUILD_MEMO_2026-05-16.md:26.5",

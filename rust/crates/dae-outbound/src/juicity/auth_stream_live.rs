@@ -17,7 +17,7 @@ use super::h3_loopback::{
 };
 use super::packet::build_dialauth_record_for_port_zero;
 
-pub const DEFAULT_LIVE_AUTH_STREAM_TARGET: &str = "stage122-zero.example:0";
+pub const DEFAULT_LIVE_AUTH_STREAM_TARGET: &str = "juicity-auth-stream.example:0";
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct JuicityLiveAuthStreamOptions {
@@ -65,7 +65,7 @@ pub struct JuicityLiveAuthStreamReport {
     pub server_received_len: usize,
     pub server_transcript_match_count: usize,
     pub auth_header_written_first: bool,
-    pub dialauth_record_matches_stage121: bool,
+    pub dialauth_record_matches_auth_stream_contract: bool,
     pub live_auth_uni_stream_write_order_validated: bool,
     pub quic_handshake_validated: bool,
     pub juicity_authenticate_header_layout_admitted: bool,
@@ -145,7 +145,7 @@ pub fn run_live_auth_stream_smoke(
 ) -> Result<JuicityLiveAuthStreamReport, OutboundError> {
     if options.iterations == 0 {
         return Err(OutboundError::BadJuicity(
-            "stage122 live auth stream iterations must be greater than zero".to_owned(),
+            "Juicity live auth stream iterations must be greater than zero".to_owned(),
         ));
     }
     let runtime = tokio::runtime::Builder::new_current_thread()
@@ -156,7 +156,7 @@ pub fn run_live_auth_stream_smoke(
     runtime.block_on(async {
         tokio::time::timeout(options.timeout, run_live_auth_stream_smoke_async(options))
             .await
-            .map_err(|_| bad_live_auth_stream("stage122 live auth stream timed out"))?
+            .map_err(|_| bad_live_auth_stream("Juicity live auth stream timed out"))?
     })
 }
 
@@ -223,7 +223,7 @@ async fn run_live_auth_stream_smoke_async(
         }
     }
     let elapsed_ns = start.elapsed().as_nanos();
-    client_connection.close(0_u32.into(), b"stage122 done");
+    client_connection.close(0_u32.into(), b"juicity-auth-stream done");
     client_endpoint.wait_idle().await;
 
     let server = server_task.await.map_err(|err| {
@@ -238,7 +238,7 @@ async fn run_live_auth_stream_smoke_async(
         && server.transcript_match_count == options.iterations;
     let live_write_order_admitted = live_harness_admitted
         && transcript.auth_header_written_first
-        && transcript.dialauth_record_matches_stage120
+        && transcript.dialauth_record_matches_packet_state_contract
         && transcript.dialauth_record_order_valid;
 
     Ok(JuicityLiveAuthStreamReport {
@@ -267,14 +267,15 @@ async fn run_live_auth_stream_smoke_async(
         server_received_len: server.last_received_len,
         server_transcript_match_count: server.transcript_match_count,
         auth_header_written_first: transcript.auth_header_written_first,
-        dialauth_record_matches_stage121: transcript.dialauth_record_matches_stage120,
+        dialauth_record_matches_auth_stream_contract: transcript
+            .dialauth_record_matches_packet_state_contract,
         live_auth_uni_stream_write_order_validated: live_write_order_admitted,
         quic_handshake_validated,
         juicity_authenticate_header_layout_admitted: header.layout_valid(),
         juicity_auth_uni_stream_write_order_admitted: transcript.auth_header_written_first
             && transcript.dialauth_record_order_valid,
         juicity_dialauth_record_over_auth_stream_admitted: transcript
-            .dialauth_record_matches_stage120,
+            .dialauth_record_matches_packet_state_contract,
         juicity_live_auth_uni_stream_harness_admitted: live_harness_admitted,
         juicity_live_auth_uni_stream_write_order_admitted: live_write_order_admitted,
         juicity_auth_token_live_ekm_admitted: false,

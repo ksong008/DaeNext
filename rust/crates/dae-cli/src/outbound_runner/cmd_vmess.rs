@@ -18,7 +18,7 @@ pub(super) fn run_vmess_contract() -> RunnerOutput {
     RunnerOutput::ok(format!(
         "{}\n",
         json!({
-            "name": "stage15-vmess-native-optin",
+            "name": "vmess-native-optin",
             "default_go_path": vmess::contract::DEFAULT_GO_PATH,
             "rust_adapter_mode": vmess::contract::ADAPTER_MODE,
             "protocol_scope": vmess::contract::PROTOCOL_SCOPE,

@@ -29,23 +29,23 @@ import (
 )
 
 const (
-	stage15SSPassword = "password"
-	stage15SSPSK128   = "MTIzNDU2Nzg5MDEyMzQ1Ng=="
-	stage15SSPSK256   = "MTIzNDU2Nzg5MDEyMzQ1NjEyMzQ1Njc4OTAxMjM0NTY="
+	nativeSSPassword = "password"
+	nativeSSPSK128   = "MTIzNDU2Nzg5MDEyMzQ1Ng=="
+	nativeSSPSK256   = "MTIzNDU2Nzg5MDEyMzQ1NjEyMzQ1Njc4OTAxMjM0NTY="
 )
 
 func TestWriteShadowsocksNativeOptInGoldenFixture(t *testing.T) {
 	writeOrCheckOutboundGolden(t,
 		"../../testdata/rebuild-golden/outbound/protocol/shadowsocks_native_optin.json",
-		rebuildGoldenStage15ShadowsocksNativeOptIn(t),
+		rebuildGoldenNativeShadowsocksNativeOptIn(t),
 	)
 }
 
-func rebuildGoldenStage15ShadowsocksNativeOptIn(t testing.TB) any {
+func rebuildGoldenNativeShadowsocksNativeOptIn(t testing.TB) any {
 	t.Helper()
 
 	return map[string]any{
-		"name": "stage15-shadowsocks-native-optin",
+		"name": "shadowsocks-native-optin",
 		"source": []string{
 			"DAENEW_RUST_REBUILD_MEMO_2026-05-16.md:12.5",
 			"DAENEW_RUST_REBUILD_MEMO_2026-05-16.md:26.9",
@@ -75,17 +75,17 @@ func rebuildGoldenStage15ShadowsocksNativeOptIn(t testing.TB) any {
 			"transport-combos",
 		},
 		"link_parser": []map[string]any{
-			rebuildShadowsocksLinkCase(t, "sip002-aead-base64-userinfo", stage15SSAeadLink("node")),
-			rebuildShadowsocksLinkCase(t, "ss2022-plain-userinfo", stage15SS2022Link("ss2022", stage15SSPSK128)),
-			rebuildShadowsocksLinkCase(t, "ss2022-multi-psk", stage15SS2022Link("multi", stage15SSPSK128+":"+stage15SSPSK128)),
-			rebuildShadowsocksLinkCase(t, "simple-obfs-plugin", stage15SSPluginLink("simple")),
-			rebuildShadowsocksLinkCase(t, "v2ray-plugin-tls", stage15SSV2RayPluginLink("v2ray")),
+			rebuildShadowsocksLinkCase(t, "sip002-aead-base64-userinfo", nativeSSAeadLink("node")),
+			rebuildShadowsocksLinkCase(t, "ss2022-plain-userinfo", nativeSS2022Link("ss2022", nativeSSPSK128)),
+			rebuildShadowsocksLinkCase(t, "ss2022-multi-psk", nativeSS2022Link("multi", nativeSSPSK128+":"+nativeSSPSK128)),
+			rebuildShadowsocksLinkCase(t, "simple-obfs-plugin", nativeSSPluginLink("simple")),
+			rebuildShadowsocksLinkCase(t, "v2ray-plugin-tls", nativeSSV2RayPluginLink("v2ray")),
 		},
 		"cipher_dispatch": []map[string]any{
-			rebuildShadowsocksCipherCase(t, "aead", "aes-128-gcm", stage15SSPassword),
-			rebuildShadowsocksCipherCase(t, "ss2022-aes128", "2022-blake3-aes-128-gcm", stage15SSPSK128),
-			rebuildShadowsocksCipherCase(t, "ss2022-chacha20", "2022-blake3-chacha20-poly1305", stage15SSPSK256),
-			rebuildShadowsocksCipherCase(t, "stream-legacy", "aes-128-cfb", stage15SSPassword),
+			rebuildShadowsocksCipherCase(t, "aead", "aes-128-gcm", nativeSSPassword),
+			rebuildShadowsocksCipherCase(t, "ss2022-aes128", "2022-blake3-aes-128-gcm", nativeSSPSK128),
+			rebuildShadowsocksCipherCase(t, "ss2022-chacha20", "2022-blake3-chacha20-poly1305", nativeSSPSK256),
+			rebuildShadowsocksCipherCase(t, "stream-legacy", "aes-128-cfb", nativeSSPassword),
 		},
 		"metadata": []map[string]any{
 			rebuildShadowsocksMetadataCase(t, "domain", "example.com:443"),
@@ -99,9 +99,9 @@ func rebuildGoldenStage15ShadowsocksNativeOptIn(t testing.TB) any {
 				rebuildShadowsocks2022CipherConf("2022-blake3-chacha20-poly1305"),
 			},
 			"psk": []map[string]any{
-				rebuildShadowsocks2022PSKCase(t, "single-aes128", "2022-blake3-aes-128-gcm", stage15SSPSK128),
-				rebuildShadowsocks2022PSKCase(t, "multi-aes128", "2022-blake3-aes-128-gcm", stage15SSPSK128+":"+stage15SSPSK128),
-				rebuildShadowsocks2022PSKCase(t, "single-chacha20", "2022-blake3-chacha20-poly1305", stage15SSPSK256),
+				rebuildShadowsocks2022PSKCase(t, "single-aes128", "2022-blake3-aes-128-gcm", nativeSSPSK128),
+				rebuildShadowsocks2022PSKCase(t, "multi-aes128", "2022-blake3-aes-128-gcm", nativeSSPSK128+":"+nativeSSPSK128),
+				rebuildShadowsocks2022PSKCase(t, "single-chacha20", "2022-blake3-chacha20-poly1305", nativeSSPSK256),
 			},
 			"tcp_header":    rebuildShadowsocks2022TCPHeaderContract(t),
 			"udp_packet_id": rebuildShadowsocks2022UDPPacketIDContract(t),
@@ -296,7 +296,7 @@ func rebuildShadowsocks2022UDPPacketIDContract(t testing.TB) map[string]any {
 	t.Helper()
 
 	conf := ciphers.Aead2022CiphersConf["2022-blake3-aes-128-gcm"]
-	uPSK, err := ciphers.ValidateBase64PSK(stage15SSPSK128, conf.KeyLen)
+	uPSK, err := ciphers.ValidateBase64PSK(nativeSSPSK128, conf.KeyLen)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -304,7 +304,7 @@ func rebuildShadowsocks2022UDPPacketIDContract(t testing.TB) map[string]any {
 	if err != nil {
 		t.Fatal(err)
 	}
-	conn := &stage15PacketBufferConn{}
+	conn := &nativePacketBufferConn{}
 	udpConn, err := outboundss2022.NewUdpConn(conn, "1.1.1.1:53", conf, block, block, [][]byte{uPSK}, uPSK, nil)
 	if err != nil {
 		t.Fatal(err)
@@ -346,35 +346,35 @@ func rebuildShadowsocks2022ReplayContract() map[string]any {
 	}
 }
 
-type stage15PacketBufferConn struct {
+type nativePacketBufferConn struct {
 	read  *bytes.Reader
 	write bytes.Buffer
 }
 
-func (c *stage15PacketBufferConn) Read(p []byte) (int, error) {
+func (c *nativePacketBufferConn) Read(p []byte) (int, error) {
 	if c.read == nil {
 		return 0, net.ErrClosed
 	}
 	return c.read.Read(p)
 }
 
-func (c *stage15PacketBufferConn) Write(p []byte) (int, error) {
+func (c *nativePacketBufferConn) Write(p []byte) (int, error) {
 	return c.write.Write(p)
 }
 
-func (c *stage15PacketBufferConn) Close() error                     { return nil }
-func (c *stage15PacketBufferConn) SetDeadline(time.Time) error      { return nil }
-func (c *stage15PacketBufferConn) SetReadDeadline(time.Time) error  { return nil }
-func (c *stage15PacketBufferConn) SetWriteDeadline(time.Time) error { return nil }
+func (c *nativePacketBufferConn) Close() error                     { return nil }
+func (c *nativePacketBufferConn) SetDeadline(time.Time) error      { return nil }
+func (c *nativePacketBufferConn) SetReadDeadline(time.Time) error  { return nil }
+func (c *nativePacketBufferConn) SetWriteDeadline(time.Time) error { return nil }
 
-var _ netproxy.Conn = (*stage15PacketBufferConn)(nil)
+var _ netproxy.Conn = (*nativePacketBufferConn)(nil)
 
-func stage15SSAeadLink(name string) string {
-	user := strings.TrimSuffix(base64.URLEncoding.EncodeToString([]byte("aes-128-gcm:"+stage15SSPassword)), "=")
+func nativeSSAeadLink(name string) string {
+	user := strings.TrimSuffix(base64.URLEncoding.EncodeToString([]byte("aes-128-gcm:"+nativeSSPassword)), "=")
 	return "ss://" + user + "@example.com:8388#" + name
 }
 
-func stage15SS2022Link(name string, password string) string {
+func nativeSS2022Link(name string, password string) string {
 	u := &url.URL{
 		Scheme:   "ss",
 		Host:     "example.com:443",
@@ -384,26 +384,26 @@ func stage15SS2022Link(name string, password string) string {
 	return u.String()
 }
 
-func stage15SSPluginLink(name string) string {
+func nativeSSPluginLink(name string) string {
 	u := &url.URL{
 		Scheme:   "ss",
 		Host:     "example.com:8388",
 		Fragment: name,
 	}
-	u.User = url.User(strings.TrimSuffix(base64.URLEncoding.EncodeToString([]byte("aes-128-gcm:"+stage15SSPassword)), "="))
+	u.User = url.User(strings.TrimSuffix(base64.URLEncoding.EncodeToString([]byte("aes-128-gcm:"+nativeSSPassword)), "="))
 	q := u.Query()
 	q.Set("plugin", "simpleobfs;obfs=http;obfs-host=front.example;obfs-uri=abc")
 	u.RawQuery = q.Encode()
 	return u.String()
 }
 
-func stage15SSV2RayPluginLink(name string) string {
+func nativeSSV2RayPluginLink(name string) string {
 	u := &url.URL{
 		Scheme:   "ss",
 		Host:     "example.com:8388",
 		Fragment: name,
 	}
-	u.User = url.User(strings.TrimSuffix(base64.URLEncoding.EncodeToString([]byte("aes-128-gcm:"+stage15SSPassword)), "="))
+	u.User = url.User(strings.TrimSuffix(base64.URLEncoding.EncodeToString([]byte("aes-128-gcm:"+nativeSSPassword)), "="))
 	q := u.Query()
 	q.Set("plugin", "v2ray-plugin;tls;host=front.example")
 	u.RawQuery = q.Encode()
@@ -431,7 +431,7 @@ func rustShadowsocksCapabilityLabel(cipher string) string {
 var shadowsocksNativeOptInBenchmarkSink int
 
 func BenchmarkShadowsocksNativeOptInParseLink(b *testing.B) {
-	link := stage15SS2022Link("bench", stage15SSPSK128+":"+stage15SSPSK128)
+	link := nativeSS2022Link("bench", nativeSSPSK128+":"+nativeSSPSK128)
 	b.ReportAllocs()
 	for i := 0; i < b.N; i++ {
 		parsed, err := outboundssdialer.ParseSSURL(link)
@@ -457,7 +457,7 @@ func BenchmarkShadowsocksNativeOptInMetadataBytes(b *testing.B) {
 }
 
 func BenchmarkShadowsocksNativeOptInSS2022PSKSplit(b *testing.B) {
-	password := stage15SSPSK128 + ":" + stage15SSPSK128
+	password := nativeSSPSK128 + ":" + nativeSSPSK128
 	conf := ciphers.Aead2022CiphersConf["2022-blake3-aes-128-gcm"]
 	b.ReportAllocs()
 	for i := 0; i < b.N; i++ {

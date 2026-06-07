@@ -28,11 +28,11 @@ import (
 func TestWriteJuicityNativeOptInGoldenFixture(t *testing.T) {
 	writeOrCheckOutboundGolden(t,
 		"../../testdata/rebuild-golden/outbound/protocol/juicity_native_optin.json",
-		rebuildGoldenStage15JuicityNativeOptIn(t),
+		rebuildGoldenNativeJuicityNativeOptIn(t),
 	)
 }
 
-func rebuildGoldenStage15JuicityNativeOptIn(t testing.TB) any {
+func rebuildGoldenNativeJuicityNativeOptIn(t testing.TB) any {
 	t.Helper()
 
 	pinBytes := []byte{
@@ -49,7 +49,7 @@ func rebuildGoldenStage15JuicityNativeOptIn(t testing.TB) any {
 	pinnedHex := "juicity://7c12c745-63a5-433d-9e60-022e469b5bd4:pass@example.com:443?sni=pin.example&pinned_certchain_sha256=" + hexPin + "#hex-pin"
 
 	return map[string]any{
-		"name": "stage15-juicity-native-optin",
+		"name": "juicity-native-optin",
 		"source": []string{
 			"DAENEW_RUST_REBUILD_MEMO_2026-05-16.md:26.16",
 			"DAENEW_RUST_REBUILD_MEMO_2026-05-16.md:26.21",

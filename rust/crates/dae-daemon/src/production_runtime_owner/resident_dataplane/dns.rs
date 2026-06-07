@@ -49,13 +49,13 @@ enum ResidentDnsUpstreamScheme {
 pub(super) fn build_resident_dns_plan(config: &Config) -> Result<ResidentDnsPlan, String> {
     if !config.dns.routing.request.rules.is_empty() {
         return Err(
-            "resident DNS controller currently admits fallback-only request routing; keep Go DNS controller for configs with dns.routing.request rules"
+            "resident DNS controller currently admits fallback-only request routing; resident DNS shape remains fail-closed for configs with dns.routing.request rules"
                 .to_owned(),
         );
     }
     if !config.dns.routing.response.rules.is_empty() {
         return Err(
-            "resident DNS controller currently admits accept-only response routing; keep Go DNS controller for configs with dns.routing.response rules"
+            "resident DNS controller currently admits accept-only response routing; resident DNS shape remains fail-closed for configs with dns.routing.response rules"
                 .to_owned(),
         );
     }
@@ -169,7 +169,7 @@ fn parse_dns_upstream(tag: &str, link: &str) -> Result<ResidentDnsUpstream, Stri
         "tcp+udp" | "udp+tcp" => ResidentDnsUpstreamScheme::TcpUdp,
         other => {
             return Err(format!(
-                "resident DNS upstream {tag} uses unsupported scheme {other}; keep Go DNS controller until this scheme is admitted"
+                "resident DNS upstream {tag} uses unsupported scheme {other}; resident DNS upstream shape remains fail-closed until this scheme is admitted"
             ));
         }
     };

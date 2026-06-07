@@ -403,12 +403,12 @@ fn candidate_reports_resident_service_and_dataplane_capabilities() {
             .unwrap()
     );
     assert!(
-        report["excluded_stream_wrapper_source_matrix_complete"]
+        !report["excluded_stream_wrapper_source_matrix_complete"]
             .as_bool()
             .unwrap()
     );
     assert!(
-        report["excluded_stream_wrapper_source_matrix_release_gate_ready"]
+        !report["excluded_stream_wrapper_source_matrix_release_gate_ready"]
             .as_bool()
             .unwrap()
     );
@@ -445,11 +445,11 @@ fn candidate_reports_resident_service_and_dataplane_capabilities() {
             .len()
             >= 20
     );
-    assert_eq!(
+    assert!(
         report["expanded_source_matrix_status_counts"]["blocked"]
             .as_u64()
-            .unwrap_or(0),
-        0
+            .unwrap_or(0)
+            > 0
     );
     assert_eq!(
         report["expanded_source_matrix_typed_report"]["status"]
@@ -463,7 +463,7 @@ fn candidate_reports_resident_service_and_dataplane_capabilities() {
             .unwrap()
     );
     assert!(
-        report["expanded_source_matrix_typed_report"]
+        !report["expanded_source_matrix_typed_report"]
             ["excluded_stream_wrapper_source_matrix_release_gate_ready"]
             .as_bool()
             .unwrap()
@@ -478,30 +478,106 @@ fn candidate_reports_resident_service_and_dataplane_capabilities() {
         report["excluded_stream_wrapper_source_matrix_typed_report"]["status"]
             .as_str()
             .unwrap(),
-        "pass"
+        "blocked"
     );
-    assert_eq!(
+    assert!(
         report["excluded_stream_wrapper_source_matrix_typed_report"]["source_supported_row_count"]
             .as_u64()
-            .unwrap(),
-        19
+            .unwrap()
+            > 20
     );
-    assert_eq!(
+    assert!(
         report["excluded_stream_wrapper_source_matrix_typed_report"]["admitted_row_count"]
             .as_u64()
-            .unwrap(),
-        19
+            .unwrap()
+            < report["excluded_stream_wrapper_source_matrix_typed_report"]
+                ["source_supported_row_count"]
+                .as_u64()
+                .unwrap()
     );
     assert!(
         report["excluded_stream_wrapper_source_matrix_typed_report"]
+            ["explicit_fail_closed_row_count"]
+            .as_u64()
+            .unwrap()
+            > 0
+    );
+    assert!(
+        !report["excluded_stream_wrapper_source_matrix_typed_report"]
             ["all_source_supported_rows_admitted"]
             .as_bool()
             .unwrap()
     );
     assert!(
-        report["excluded_stream_wrapper_source_matrix_typed_report"]["all_protocol_rows_open"]
+        !report["excluded_stream_wrapper_source_matrix_typed_report"]["all_protocol_rows_open"]
             .as_bool()
             .unwrap()
+    );
+    assert!(
+        report["excluded_stream_wrapper_source_matrix_typed_report"]["protocol_variant_row_count"]
+            .as_u64()
+            .unwrap()
+            > 20
+    );
+    assert!(
+        report["excluded_stream_wrapper_source_matrix_typed_report"]
+            ["all_required_protocol_variants_present"]
+            .as_bool()
+            .unwrap()
+    );
+    assert_eq!(
+        report["excluded_stream_wrapper_source_matrix_typed_report"]
+            ["blocked_protocol_variant_count"]
+            .as_u64()
+            .unwrap(),
+        report["excluded_stream_wrapper_source_matrix_typed_report"]
+            ["explicit_fail_closed_row_count"]
+            .as_u64()
+            .unwrap()
+    );
+    assert_eq!(
+        report["excluded_stream_wrapper_source_matrix_typed_report"]
+            ["absent_official_common_source_shape_count"]
+            .as_u64()
+            .unwrap(),
+        0
+    );
+    assert!(
+        report["excluded_stream_wrapper_source_matrix_typed_report"]
+            ["official_common_source_shapes_fully_represented"]
+            .as_bool()
+            .unwrap()
+    );
+    assert!(
+        !report["excluded_stream_wrapper_source_matrix_typed_report"]
+            ["official_common_source_shapes_all_resolved"]
+            .as_bool()
+            .unwrap()
+    );
+    assert!(
+        report["excluded_stream_wrapper_source_matrix_typed_report"]["blocked_protocol_variant_ids"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|shape| shape.as_str().unwrap() == "reality-security-underlay")
+    );
+    assert!(
+        report["excluded_stream_wrapper_source_matrix_typed_report"]["blocked_protocol_variant_ids"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|shape| shape.as_str().unwrap() == "secure-websocket-framed-endpoint")
+    );
+    assert!(
+        report["excluded_stream_wrapper_source_matrix_typed_report"]["protocol_variant_rows"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(
+                |row| row["variantId"].as_str().unwrap() == "baseline-aead-2022-cipher-endpoint"
+                    && row["residentStatus"].as_str().unwrap() == "admitted"
+                    && row["securityUnderlay"].as_str().unwrap() == "aead-2022"
+            )
     );
     assert_eq!(
         report["excluded_stream_wrapper_source_matrix_typed_report"]["excluded_stream_wrappers"]

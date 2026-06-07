@@ -13,9 +13,9 @@ use super::packet::{
     build_dialauth_record_for_port_zero,
 };
 
-pub const DEFAULT_TRANSPORT_PACKET_CONN_TARGET: &str = "stage125-zero.example:0";
-pub const DEFAULT_TRANSPORT_PACKET_CONN_PAYLOAD: &[u8] = b"stage125-juicity-transport-ping";
-pub const DEFAULT_TRANSPORT_PACKET_CONN_RESPONSE: &[u8] = b"stage125-juicity-transport-pong";
+pub const DEFAULT_TRANSPORT_PACKET_CONN_TARGET: &str = "juicity-packet-zero.example:0";
+pub const DEFAULT_TRANSPORT_PACKET_CONN_PAYLOAD: &[u8] = b"juicity-transport-packet-ping";
+pub const DEFAULT_TRANSPORT_PACKET_CONN_RESPONSE: &[u8] = b"juicity-transport-packet-pong";
 pub const JUICITY_TRANSPORT_PACKET_CONN_CIPHER: &str = "chacha20-poly1305";
 pub const JUICITY_TRANSPORT_PACKET_CONN_REUSED_INFO_RAW: &str = "juicity-reused-info";
 pub const JUICITY_TRANSPORT_PACKET_CONN_NONCE_LEN: usize = 12;
@@ -90,17 +90,17 @@ pub fn run_transport_packet_conn_smoke(
 ) -> Result<JuicityTransportPacketConnReport, OutboundError> {
     if options.iterations == 0 {
         return Err(bad_transport_packet_conn(
-            "stage125 transport packet conn iterations must be greater than zero",
+            "Juicity transport packet conn iterations must be greater than zero",
         ));
     }
     if options.payload.is_empty() {
         return Err(bad_transport_packet_conn(
-            "stage125 transport packet conn payload cannot be empty",
+            "Juicity transport packet conn payload cannot be empty",
         ));
     }
     if options.response_payload.is_empty() {
         return Err(bad_transport_packet_conn(
-            "stage125 transport packet conn response payload cannot be empty",
+            "Juicity transport packet conn response payload cannot be empty",
         ));
     }
 

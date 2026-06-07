@@ -7,11 +7,11 @@ use dae_outbound::shared_transport::{
 };
 
 fn main() {
-    let iters = std::env::var("DAE_STAGE21_DEEP_TRANSPORT_BENCH_ITERS")
+    let iters = std::env::var("DAE_SHARED_TRANSPORT_DEEP_BENCH_ITERS")
         .ok()
         .and_then(|value| value.parse::<usize>().ok())
         .unwrap_or(200_000);
-    let payload = b"stage21-deep-ping";
+    let payload = b"shared-transport-deep-ping";
     let reality = RealityMutationOptions::new(
         "reality.example",
         "chrome",
@@ -28,7 +28,7 @@ fn main() {
         "packet-up",
         "tls",
         "h3",
-        "sess-stage21",
+        "session-shared-transport",
         7,
     )
     .unwrap();
@@ -36,7 +36,7 @@ fn main() {
         "grpc.example:443",
         "GunService",
         "grpc-sni.example",
-        "dialer-stage21",
+        "dialer-shared-transport",
         true,
         1234,
         true,
@@ -52,22 +52,22 @@ fn main() {
     let mux = MuxFrameOptions::new([0, 0], "127.0.0.1", 0, "tcp");
     let quic = QuicH3HarnessOptions::new(7, 11, "h3", 1234, false);
 
-    bench("stage21_reality_session_id", iters, || {
+    bench("shared_transport_reality_session_id", iters, || {
         reality_session_id(&reality).len()
     });
-    bench("stage21_xhttp_packet_request", iters, || {
+    bench("shared_transport_xhttp_packet_request", iters, || {
         xhttp_packet_request(&xhttp, payload).len()
     });
-    bench("stage21_grpc_hunk_frame", iters, || {
+    bench("shared_transport_grpc_hunk_frame", iters, || {
         grpc_hunk_frame(payload).unwrap().len() ^ grpc.cache_key().len()
     });
-    bench("stage21_meek_http_request", iters, || {
+    bench("shared_transport_meek_http_request", iters, || {
         meek_http_request(&meek, payload).len()
     });
-    bench("stage21_mux_data_frame", iters, || {
+    bench("shared_transport_mux_data_frame", iters, || {
         mux_data_frame(mux.id, payload).unwrap().len()
     });
-    bench("stage21_quic_h3_datagram_packet", iters, || {
+    bench("shared_transport_quic_h3_datagram_packet", iters, || {
         quic_h3_datagram_packet(&quic, payload).unwrap().len()
     });
 }

@@ -70,7 +70,7 @@ const PRODUCTION_MATRIX_ENTRIES: [OutboundProductionMatrixEntry; 10] = [
         &[
             "shadowsocks::link",
             "shadowsocks::*_dataplane",
-            "tests::dataplane_shadowsocks_stage88..95",
+            "tests::dataplane_shadowsocks_ss2022_and_legacy",
         ],
     ),
     matrix_entry(
@@ -78,7 +78,7 @@ const PRODUCTION_MATRIX_ENTRIES: [OutboundProductionMatrixEntry; 10] = [
         &[
             "trojan::link",
             "trojan::*_dataplane",
-            "tests::dataplane_trojan_stage83..103",
+            "tests::dataplane_trojan_tls_and_websocket",
         ],
     ),
     matrix_entry(
@@ -87,7 +87,7 @@ const PRODUCTION_MATRIX_ENTRIES: [OutboundProductionMatrixEntry; 10] = [
             "vmess::link",
             "vmess::dataplane",
             "tests::dataplane_vmess",
-            "tests::dataplane_vless_vmess_stage134..141",
+            "tests::dataplane_vless_vmess_stream_wrappers",
         ],
     ),
     matrix_entry(
@@ -96,7 +96,7 @@ const PRODUCTION_MATRIX_ENTRIES: [OutboundProductionMatrixEntry; 10] = [
             "vless::link",
             "vless::dataplane",
             "tests::dataplane_vless",
-            "tests::dataplane_vless_vmess_stage134..141",
+            "tests::dataplane_vless_vmess_stream_wrappers",
         ],
     ),
     matrix_entry(
@@ -105,7 +105,7 @@ const PRODUCTION_MATRIX_ENTRIES: [OutboundProductionMatrixEntry; 10] = [
             "hysteria2::link",
             "hysteria2::dataplane",
             "hysteria2::quic_loopback",
-            "tests::dataplane_hysteria2_stage109,130",
+            "tests::dataplane_hysteria2_quic",
         ],
     ),
     matrix_entry(
@@ -114,7 +114,7 @@ const PRODUCTION_MATRIX_ENTRIES: [OutboundProductionMatrixEntry; 10] = [
             "tuic::link",
             "tuic::dataplane",
             "tuic::quic_loopback",
-            "tests::dataplane_tuic_stage112,131",
+            "tests::dataplane_tuic_quic",
         ],
     ),
     matrix_entry(
@@ -123,7 +123,7 @@ const PRODUCTION_MATRIX_ENTRIES: [OutboundProductionMatrixEntry; 10] = [
             "juicity::link",
             "juicity::outbound_dataplane",
             "juicity::*live*",
-            "tests::dataplane_juicity_stage115..129",
+            "tests::dataplane_juicity_quic",
         ],
     ),
     matrix_entry(
@@ -131,7 +131,7 @@ const PRODUCTION_MATRIX_ENTRIES: [OutboundProductionMatrixEntry; 10] = [
         &[
             "anytls::link",
             "anytls::dataplane",
-            "tests::dataplane_anytls_stage104..106",
+            "tests::dataplane_anytls_frame_stream",
         ],
     ),
     matrix_entry(
@@ -139,7 +139,7 @@ const PRODUCTION_MATRIX_ENTRIES: [OutboundProductionMatrixEntry; 10] = [
         &[
             "http_proxy::link",
             "http_proxy::dataplane",
-            "tests::dataplane_http_stage82",
+            "tests::dataplane_http_connect",
         ],
     ),
     matrix_entry(

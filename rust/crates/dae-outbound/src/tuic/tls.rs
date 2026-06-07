@@ -5,7 +5,7 @@ use quinn::crypto::rustls::{HandshakeData, QuicClientConfig, QuicServerConfig};
 use rcgen::generate_simple_self_signed;
 use rustls::client::danger::{HandshakeSignatureValid, ServerCertVerified, ServerCertVerifier};
 use rustls::pki_types::{CertificateDer, PrivateKeyDer, PrivatePkcs8KeyDer, ServerName, UnixTime};
-use rustls::{DigitallySignedStruct, SignatureScheme};
+use rustls::{DigitallySignedStruct, RootCertStore, SignatureScheme};
 
 use crate::error::OutboundError;
 
@@ -104,12 +104,20 @@ pub(super) fn build_tuic_server_config(
 
 pub(super) fn build_tuic_client_config(
     alpn: &[String],
+    allow_insecure: bool,
 ) -> Result<quinn::ClientConfig, OutboundError> {
-    let mut crypto =
+    let mut crypto = if allow_insecure {
         rustls::ClientConfig::builder_with_protocol_versions(&[&rustls::version::TLS13])
             .dangerous()
             .with_custom_certificate_verifier(AcceptAnyServerCertVerifier::new())
-            .with_no_client_auth();
+            .with_no_client_auth()
+    } else {
+        let mut roots = RootCertStore::empty();
+        roots.extend(webpki_roots::TLS_SERVER_ROOTS.iter().cloned());
+        rustls::ClientConfig::builder_with_protocol_versions(&[&rustls::version::TLS13])
+            .with_root_certificates(roots)
+            .with_no_client_auth()
+    };
     crypto.alpn_protocols = alpn_protocols(alpn);
     let mut config = quinn::ClientConfig::new(Arc::new(
         QuicClientConfig::try_from(crypto)

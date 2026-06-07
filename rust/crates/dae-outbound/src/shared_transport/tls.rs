@@ -7,7 +7,7 @@ use rustls::{ClientConfig, ClientConnection, RootCertStore, ServerConfig, Server
 
 use crate::error::OutboundError;
 
-pub const DEFAULT_TLS_SERVER_NAME: &str = "stage81-shared-tls.example";
+pub const DEFAULT_TLS_SERVER_NAME: &str = "shared-tls.example";
 pub const DEFAULT_TLS_ALPN: &str = "http/1.1";
 
 #[derive(Clone, Debug, Eq, PartialEq)]

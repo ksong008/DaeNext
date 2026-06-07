@@ -10,9 +10,9 @@ use super::quic_loopback::{
 };
 use super::underlay::{TuicUnderlayAdmissionContract, admission_contract};
 
-pub const DEFAULT_TRUE_QUIC_LINK: &str = "tuic://01234567-89ab-cdef-0123-456789abcdef:stage131-tuic-password@stage131.example:443?allow_insecure=1&sni=localhost&alpn=h3&congestion_control=bbr&udp_relay_mode=quic#stage131-tuic";
-pub const DEFAULT_DISABLE_SNI_PROBE_LINK: &str = "tuic://01234567-89ab-cdef-0123-456789abcdef:stage131-tuic-password@stage131.example:443?disable_sni=1#stage131-disable-sni";
-pub const DEFAULT_TRUE_QUIC_SUBSCRIPTION_TAG: &str = "stage131-sub";
+pub const DEFAULT_TRUE_QUIC_LINK: &str = "tuic://01234567-89ab-cdef-0123-456789abcdef:tuic-loopback-password@tuic-loopback.example:443?allow_insecure=1&sni=localhost&alpn=h3&congestion_control=bbr&udp_relay_mode=quic#tuic-loopback";
+pub const DEFAULT_DISABLE_SNI_PROBE_LINK: &str = "tuic://01234567-89ab-cdef-0123-456789abcdef:tuic-loopback-password@tuic-loopback.example:443?disable_sni=1#tuic-disable-sni";
+pub const DEFAULT_TRUE_QUIC_SUBSCRIPTION_TAG: &str = "tuic-loopback-subscription";
 pub const DEFAULT_TRUE_QUIC_UNDERLAY_MARK: u32 = 131;
 
 #[derive(Clone, Debug, PartialEq)]
@@ -97,7 +97,7 @@ pub fn run_true_quic_dataplane_smoke(
     let node = chain
         .nodes
         .first()
-        .ok_or_else(|| bad_dataplane("stage131 TUIC link chain has no nodes"))?;
+        .ok_or_else(|| bad_dataplane("TUIC link chain has no nodes"))?;
     let underlay = admission_contract(options.underlay_mark, options.underlay_mptcp);
     let mut quic_options = options.quic.clone();
     quic_options.uuid = link.user.clone();
@@ -213,7 +213,7 @@ fn parse_tuic_chain(raw: &str) -> Result<LinkParseResult, OutboundError> {
     let chain = parse_link_chain(raw)?;
     if chain.property_protocol != "tuic" {
         return Err(bad_dataplane(format!(
-            "stage131 expected tuic property protocol, got {}",
+            "expected tuic property protocol, got {}",
             chain.property_protocol
         )));
     }

@@ -2,12 +2,15 @@ use super::*;
 
 #[test]
 fn stage130_hysteria2_port_hopping_scheduler_normalizes_and_rotates_ports() {
-    let schedule =
-        hysteria2::build_port_hop_schedule("stage130.example:8444,443,8443-8445", 30_000, 5)
-            .unwrap();
+    let schedule = hysteria2::build_port_hop_schedule(
+        "hysteria2-loopback.example:8444,443,8443-8445",
+        30_000,
+        5,
+    )
+    .unwrap();
 
     assert!(schedule.port_hopping);
-    assert_eq!(schedule.host, "stage130.example");
+    assert_eq!(schedule.host, "hysteria2-loopback.example");
     assert_eq!(schedule.normalized_ports, vec![443, 8443, 8444, 8445]);
     assert_eq!(schedule.selected_ports, vec![443, 8443, 8444, 8445, 443]);
     assert_eq!(schedule.udp_hop_interval_ms, 30_000);
@@ -23,8 +26,11 @@ fn stage130_hysteria2_true_quic_dataplane_smoke_admits_hysteria2_only() {
     let outcome = hysteria2::run_true_quic_dataplane_smoke(&options).unwrap();
 
     assert_eq!(outcome.property_protocol, "hysteria2");
-    assert_eq!(outcome.property_name, "stage130-hy2");
-    assert_eq!(outcome.property_address, "stage130.example:443,8443-8444");
+    assert_eq!(outcome.property_name, "hysteria2-loopback");
+    assert_eq!(
+        outcome.property_address,
+        "hysteria2-loopback.example:443,8443-8444"
+    );
     assert_eq!(outcome.chain_adapter_mode, "native-opt-in");
     assert!(outcome.chain_parent_dialer_non_nil);
     assert_eq!(outcome.underlay.underlay_network, "udp");

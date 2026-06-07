@@ -6,7 +6,7 @@ fn stage87_trojan_go_inner_shadowsocks_wraps_raw_trojanc_without_ss_request_meta
     let shadowsocks_password = "stage87-ss-password";
     let trojan_password = "stage87-trojan-password";
     let target = "stage87-trojan-go-inner-ss.example:443";
-    let response_metadata_target = "stage87-inner-ss-response.example:9443";
+    let response_metadata_target = "";
     let payload = b"stage87-trojan-go-inner-shadowsocks-ping".to_vec();
     let spec = shadowsocks::cipher_spec(cipher).unwrap();
     let client_salt = salt_for(spec.salt_len, 0x31);
@@ -70,7 +70,7 @@ fn stage87_trojan_go_inner_shadowsocks_wraps_raw_trojanc_without_ss_request_meta
     assert_eq!(report.server_salt_len, spec.salt_len);
     assert!(!report.inner_shadowsocks_is_client);
     assert!(!report.inner_shadowsocks_request_metadata_present);
-    assert_eq!(report.server_response_metadata, response_metadata_target);
+    assert_eq!(report.server_response_metadata, "");
     assert_eq!(
         report.password_sha224_hex,
         trojan::packet::password_sha224_hex(trojan_password)
@@ -81,7 +81,7 @@ fn stage87_trojan_go_inner_shadowsocks_wraps_raw_trojanc_without_ss_request_meta
     assert_eq!(report.echoed_payload, payload);
     assert!(report.shadowsocks_chunk_validated);
     assert!(report.shadowsocks_request_len > report.trojan_request_header_len);
-    assert!(report.shadowsocks_response_metadata_len > 0);
+    assert_eq!(report.shadowsocks_response_metadata_len, 0);
     assert_eq!(accepted.request.payload, payload);
     assert!(!accepted.inner_shadowsocks_request_metadata_present);
 }

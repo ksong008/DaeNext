@@ -21,7 +21,7 @@ pub const DEFAULT_H3_SERVER_NAME: &str = "localhost";
 pub const DEFAULT_H3_ALPN: &str = "h3";
 pub const DEFAULT_H3_KEEPALIVE_SECS: u64 = 5;
 pub const DEFAULT_H3_HANDSHAKE_IDLE_TIMEOUT_SECS: u64 = 8;
-pub const DEFAULT_H3_LOOPBACK_PAYLOAD: &[u8] = b"stage118-juicity-h3-loopback-ping";
+pub const DEFAULT_H3_LOOPBACK_PAYLOAD: &[u8] = b"juicity-h3-loopback-ping";
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct JuicityH3LoopbackOptions {
@@ -197,12 +197,12 @@ pub fn run_h3_loopback_smoke(
 ) -> Result<JuicityH3LoopbackReport, OutboundError> {
     if options.iterations == 0 {
         return Err(OutboundError::BadJuicity(
-            "stage118 h3 loopback iterations must be greater than zero".to_owned(),
+            "Juicity h3 loopback iterations must be greater than zero".to_owned(),
         ));
     }
     if options.payload.is_empty() {
         return Err(OutboundError::BadJuicity(
-            "stage118 h3 loopback payload cannot be empty".to_owned(),
+            "Juicity h3 loopback payload cannot be empty".to_owned(),
         ));
     }
     let runtime = tokio::runtime::Builder::new_current_thread()
@@ -213,7 +213,7 @@ pub fn run_h3_loopback_smoke(
     runtime.block_on(async {
         tokio::time::timeout(options.timeout, run_h3_loopback_smoke_async(options))
             .await
-            .map_err(|_| bad_loopback("stage118 h3 loopback timed out"))?
+            .map_err(|_| bad_loopback("Juicity h3 loopback timed out"))?
     })
 }
 
@@ -263,9 +263,12 @@ async fn run_h3_loopback_smoke_async(
     for _ in 0..options.iterations {
         let mut request_stream = client
             .send_request(
-                Request::post(format!("https://{}/stage118", options.server_name))
-                    .body(())
-                    .map_err(|err| bad_loopback(format!("build h3 request: {err}")))?,
+                Request::post(format!(
+                    "https://{}/juicity-h3-loopback",
+                    options.server_name
+                ))
+                .body(())
+                .map_err(|err| bad_loopback(format!("build h3 request: {err}")))?,
             )
             .await
             .map_err(|err| bad_loopback(format!("send h3 request: {err:?}")))?;
@@ -294,7 +297,7 @@ async fn run_h3_loopback_smoke_async(
     }
     let elapsed_ns = start.elapsed().as_nanos();
     drop(client);
-    client_connection.close(0_u32.into(), b"stage118 done");
+    client_connection.close(0_u32.into(), b"juicity-h3-loopback done");
     client_endpoint.wait_idle().await;
     let _ = driver_task.await;
     let (server_selected_alpn, server_h3_request_count, server_h3_echo_count) = server_task

@@ -9,12 +9,12 @@ use super::client_integration::{
 };
 use super::link::{JuicityLink, decode_pinned_certchain};
 
-pub const DEFAULT_OUTBOUND_DATAPLANE_GROUP_NAME: &str = "stage129-juicity";
-pub const DEFAULT_OUTBOUND_DATAPLANE_SUBSCRIPTION_TAG: &str = "stage129-sub";
+pub const DEFAULT_OUTBOUND_DATAPLANE_GROUP_NAME: &str = "juicity-outbound";
+pub const DEFAULT_OUTBOUND_DATAPLANE_SUBSCRIPTION_TAG: &str = "juicity-subscription";
 pub const DEFAULT_OUTBOUND_DATAPLANE_LINKS: [&str; 3] = [
-    "juicity://7c12c745-63a5-433d-9e60-022e469b5bd4:pass@slow.example:443?allowInsecure=true&congestion_control=bbr#stage129-slow",
-    "juicity://7c12c745-63a5-433d-9e60-022e469b5bd4:pass@fast.example:8443?sni=fast.example&peer=fast-peer.example&congestion_control=bbr&pinned_certchain_sha256=ababababababababababababababababababababababababababababababababab#stage129-fast",
-    "unknown://stage129-skip.example:443#stage129-skip",
+    "juicity://7c12c745-63a5-433d-9e60-022e469b5bd4:pass@slow.example:443?allowInsecure=true&congestion_control=bbr#juicity-slow",
+    "juicity://7c12c745-63a5-433d-9e60-022e469b5bd4:pass@fast.example:8443?sni=fast.example&peer=fast-peer.example&congestion_control=bbr&pinned_certchain_sha256=ababababababababababababababababababababababababababababababababab#juicity-fast",
+    "unknown://juicity-skip.example:443#juicity-skip",
 ];
 pub const DEFAULT_OUTBOUND_DATAPLANE_HEALTH_LATENCIES_MS: [i64; 2] = [82, 37];
 pub const DEFAULT_OUTBOUND_DATAPLANE_ADD_LATENCY_MS: [i64; 2] = [0, 15];
@@ -115,26 +115,26 @@ pub fn run_outbound_dataplane_smoke(
     let (parsed, dialers, skipped_link_errors) = build_juicity_dialer_pool(options)?;
     if parsed.is_empty() {
         return Err(bad_outbound_dataplane(
-            "stage129 requires at least one valid juicity dialer",
+            "Juicity outbound dataplane requires at least one valid juicity dialer",
         ));
     }
     if options.health_latencies_ms.len() != parsed.len() {
         return Err(bad_outbound_dataplane(format!(
-            "stage129 health latency count mismatch: got {}, valid dialers {}",
+            "Juicity outbound dataplane health latency count mismatch: got {}, valid dialers {}",
             options.health_latencies_ms.len(),
             parsed.len()
         )));
     }
     if options.annotation_add_latency_ms.len() != parsed.len() {
         return Err(bad_outbound_dataplane(format!(
-            "stage129 annotation latency count mismatch: got {}, valid dialers {}",
+            "Juicity outbound dataplane annotation latency count mismatch: got {}, valid dialers {}",
             options.annotation_add_latency_ms.len(),
             parsed.len()
         )));
     }
     if options.alive.len() != parsed.len() {
         return Err(bad_outbound_dataplane(format!(
-            "stage129 alive count mismatch: got {}, valid dialers {}",
+            "Juicity outbound dataplane alive count mismatch: got {}, valid dialers {}",
             options.alive.len(),
             parsed.len()
         )));
@@ -187,11 +187,9 @@ pub fn run_outbound_dataplane_smoke(
         .iter()
         .map(|parsed| parsed.chain.property_name.clone())
         .collect::<Vec<_>>();
-    let selected_node = selected_parsed
-        .chain
-        .nodes
-        .first()
-        .ok_or_else(|| bad_outbound_dataplane("stage129 selected chain has no nodes"))?;
+    let selected_node = selected_parsed.chain.nodes.first().ok_or_else(|| {
+        bad_outbound_dataplane("Juicity outbound dataplane selected chain has no nodes")
+    })?;
 
     let registry_admitted = parsed.len() >= 2
         && skipped_link_errors.len() == options.links.len().saturating_sub(parsed.len())
@@ -297,7 +295,7 @@ fn parse_juicity_link(raw: &str) -> Result<ParsedJuicityDialer, OutboundError> {
     }
     if chain.property_protocol != "juicity" {
         return Err(bad_outbound_dataplane(format!(
-            "stage129 expected juicity property protocol, got {}",
+            "expected juicity property protocol, got {}",
             chain.property_protocol
         )));
     }

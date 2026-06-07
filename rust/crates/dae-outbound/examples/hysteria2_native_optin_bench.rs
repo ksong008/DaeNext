@@ -4,7 +4,7 @@ use std::time::Instant;
 use dae_outbound::hysteria2::{Hysteria2Link, link};
 
 fn main() {
-    let iters = std::env::var("DAE_STAGE15_HYSTERIA2_BENCH_ITERS")
+    let iters = std::env::var("DAE_HYSTERIA2_NATIVE_OPTIN_BENCH_ITERS")
         .ok()
         .and_then(|value| value.parse::<u64>().ok())
         .unwrap_or(200_000);

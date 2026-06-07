@@ -16,8 +16,8 @@ pub use aead::{
     AeadCipherSpec, AeadStreamCodec, AeadTcpSalts, ShadowsocksAeadTcpExchangeReport,
     ShadowsocksAeadUdpPacket, TAG_LEN, cipher_spec, decode_client_initial, decode_udp_packet,
     encode_client_initial, encode_server_payload, encode_udp_packet,
-    read_client_initial_from_stream, read_encrypted_chunk_from_stream, tcp_exchange,
-    tcp_exchange_over_stream,
+    read_client_initial_from_stream, read_encrypted_chunk_from_async_stream,
+    read_encrypted_chunk_from_stream, tcp_exchange, tcp_exchange_over_stream,
 };
 pub use cipher::{CipherFamily, CipherInfo, classify_cipher};
 pub use link::{ShadowsocksLink, Sip003, Sip003Opts};
@@ -40,16 +40,19 @@ pub use sip003_v2ray_plugin_dataplane::{
     v2ray_plugin_tls_ws_mux_shadowsocks_aead_exchange_over_stream,
 };
 pub use ss2022_tcp_dataplane::{
-    Ss2022TcpClientRequest, Ss2022TcpExchangeReport, Ss2022TcpSalts, decode_client_request,
+    Ss2022TcpClientRequest, Ss2022TcpClientStreamEncoder, Ss2022TcpExchangeReport, Ss2022TcpSalts,
+    Ss2022TcpServerStreamDecoder, Ss2022TcpServerStreamStart,
+    client_stream_encoder as ss2022_tcp_client_stream_encoder, decode_client_request,
     encode_client_initial as encode_ss2022_tcp_client_initial,
     encode_multi_psk_client_initial as encode_ss2022_tcp_multi_psk_client_initial,
     encode_multi_psk_server_response as encode_ss2022_tcp_multi_psk_server_response,
     encode_server_response as encode_ss2022_tcp_server_response,
     read_client_request_from_stream as read_ss2022_tcp_client_request_from_stream,
     read_multi_psk_client_request_from_stream as read_ss2022_tcp_multi_psk_client_request_from_stream,
-    tcp_exchange as ss2022_tcp_exchange,
+    server_stream_decoder as ss2022_tcp_server_stream_decoder, tcp_exchange as ss2022_tcp_exchange,
     tcp_exchange_over_stream as ss2022_tcp_exchange_over_stream,
     tcp_multi_psk_exchange_over_stream as ss2022_tcp_multi_psk_exchange_over_stream,
+    unix_timestamp_now as ss2022_tcp_unix_timestamp_now,
 };
 pub use ss2022_udp_dataplane::{
     Ss2022UdpCodec, Ss2022UdpDecodedPacket, Ss2022UdpEncodedPacket, Ss2022UdpReplayTracker,

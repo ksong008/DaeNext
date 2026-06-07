@@ -1,7 +1,7 @@
 {
-  "name": "stage18-first-batch-true-dataplane-loopback",
+  "name": "base-true-dataplane-loopback",
   "default_go_path": true,
-  "payload_ascii": "stage18-ping",
+  "payload_ascii": "base-dataplane-ping",
   "socks5": {
     "target": "example.com:443",
     "username": "user",
@@ -18,7 +18,7 @@
   },
   "shadowsocks": {
     "cipher": "aes-128-gcm",
-    "password": "stage18-password",
+    "password": "base-dataplane-password",
     "target": "example.com:443",
     "client_salt_hex": "000102030405060708090a0b0c0d0e0f",
     "server_salt_hex": "101112131415161718191a1b1c1d1e1f",

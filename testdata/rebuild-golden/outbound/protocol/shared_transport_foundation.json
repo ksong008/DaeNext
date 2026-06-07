@@ -1,7 +1,7 @@
 {
-  "name": "stage20-shared-transport-foundation-loopback",
+  "name": "shared-transport-foundation-loopback",
   "default_go_path": true,
-  "payload_ascii": "stage20-transport-ping",
+  "payload_ascii": "shared-transport-ping",
   "httpupgrade": {
     "host": "upgrade.example",
     "path": "/upgrade",

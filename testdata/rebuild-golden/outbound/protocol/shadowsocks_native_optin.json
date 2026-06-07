@@ -140,6 +140,50 @@
     },
     {
       "cipher": "aes-128-gcm",
+      "export": "ss://YWVzLTEyOC1nY206cGFzc3dvcmQ@example.com:8388?plugin=simple-obfs%3Bobfs%3Dtls%3Bobfs-host%3Dfront.example#shadowsocks-simple-obfs-tls",
+      "input": "ss://YWVzLTEyOC1nY206cGFzc3dvcmQ@example.com:8388?plugin=simple-obfs%3Bobfs%3Dtls%3Bobfs-host%3Dfront.example#shadowsocks-simple-obfs-tls",
+      "name": "simple-obfs-tls-plugin",
+      "password": "password",
+      "plugin": {
+        "host": "front.example",
+        "name": "simple-obfs",
+        "obfs": "tls",
+        "path": "",
+        "tls": ""
+      },
+      "port": 8388,
+      "property_address": "example.com:8388",
+      "property_link": "ss://YWVzLTEyOC1nY206cGFzc3dvcmQ@example.com:8388?plugin=simple-obfs%3Bobfs%3Dtls%3Bobfs-host%3Dfront.example#shadowsocks-simple-obfs-tls",
+      "property_name": "shadowsocks-simple-obfs-tls",
+      "property_protocol": "shadowsocks",
+      "protocol": "shadowsocks",
+      "server": "example.com",
+      "udp": false
+    },
+    {
+      "cipher": "2022-blake3-aes-128-gcm",
+      "export": "ss://2022-blake3-aes-128-gcm:MTIzNDU2Nzg5MDEyMzQ1Ng==@example.com:443?plugin=simple-obfs%3Bobfs%3Dhttp%3Bobfs-host%3Dfront.example%3Bobfs-uri%3D%2F#shadowsocks-2022-simple-obfs-http",
+      "input": "ss://2022-blake3-aes-128-gcm:MTIzNDU2Nzg5MDEyMzQ1Ng==@example.com:443?plugin=simple-obfs%3Bobfs%3Dhttp%3Bobfs-host%3Dfront.example%3Bobfs-uri%3D%2F#shadowsocks-2022-simple-obfs-http",
+      "name": "ss2022-simple-obfs-http-plugin",
+      "password": "MTIzNDU2Nzg5MDEyMzQ1Ng==",
+      "plugin": {
+        "host": "front.example",
+        "name": "simple-obfs",
+        "obfs": "http",
+        "path": "/",
+        "tls": ""
+      },
+      "port": 443,
+      "property_address": "example.com:443",
+      "property_link": "ss://2022-blake3-aes-128-gcm:MTIzNDU2Nzg5MDEyMzQ1Ng==@example.com:443?plugin=simple-obfs%3Bobfs%3Dhttp%3Bobfs-host%3Dfront.example%3Bobfs-uri%3D%2F#shadowsocks-2022-simple-obfs-http",
+      "property_name": "shadowsocks-2022-simple-obfs-http",
+      "property_protocol": "shadowsocks",
+      "protocol": "shadowsocks",
+      "server": "example.com",
+      "udp": false
+    },
+    {
+      "cipher": "aes-128-gcm",
       "export": "ss://YWVzLTEyOC1nY206cGFzc3dvcmQ@example.com:8388?plugin=v2ray-plugin%3Bobfs-host%3Dfront.example#v2ray",
       "input": "ss://YWVzLTEyOC1nY206cGFzc3dvcmQ@example.com:8388?plugin=v2ray-plugin%3Btls%3Bhost%3Dfront.example#v2ray",
       "name": "v2ray-plugin-tls",
@@ -193,7 +237,7 @@
       "type": 4
     }
   ],
-  "name": "stage15-shadowsocks-native-optin",
+  "name": "shadowsocks-native-optin",
   "protocol_scope": [
     "shadowsocks",
     "shadowsocks-2022"

@@ -11,7 +11,6 @@ use crate::shared_transport::{
     read_http_head, read_websocket_binary_frame, validate_http_status,
     websocket_client_binary_frame, websocket_handshake_request, websocket_server_binary_frame,
 };
-use crate::socks5::Socks5Address;
 
 use super::inner_shadowsocks_dataplane::{
     TrojanGoInnerShadowsocksRequest, encode_inner_shadowsocks_response,
@@ -58,7 +57,7 @@ pub fn tcp_exchange_over_wss_inner_shadowsocks_stream<S>(
     shadowsocks_password: &str,
     trojan_password: &str,
     target: &str,
-    response_metadata_target: &str,
+    _response_metadata_target: &str,
     ws_host: &str,
     ws_path: &str,
     payload: &[u8],
@@ -111,16 +110,7 @@ where
     }
     let mut decoder =
         shadowsocks::AeadStreamCodec::new(cipher, shadowsocks_password, &server_salt)?;
-    let plain = shadowsocks::read_encrypted_chunk_from_stream(&mut cursor, &mut decoder)?;
-    let (response_metadata, consumed) = Socks5Address::decode(&plain)?;
-    let echoed_payload = plain[consumed..].to_vec();
-    if response_metadata.authority() != response_metadata_target {
-        return Err(OutboundError::BadTrojan(format!(
-            "trojan-go wss inner shadowsocks response metadata mismatch: got {}, want {}",
-            response_metadata.authority(),
-            response_metadata_target
-        )));
-    }
+    let echoed_payload = shadowsocks::read_encrypted_chunk_from_stream(&mut cursor, &mut decoder)?;
     if echoed_payload != payload {
         return Err(OutboundError::BadTrojan(
             "trojan-go wss inner shadowsocks payload mismatch".to_owned(),
@@ -142,7 +132,7 @@ where
         cipher: spec.cipher.to_owned(),
         client_salt_len: salts.client.len(),
         server_salt_len: server_salt.len(),
-        response_metadata: response_metadata.authority(),
+        response_metadata: String::new(),
         password_sha224_hex: packet::password_sha224_hex(trojan_password),
         command: TrojanNetwork::Tcp.byte(),
         payload_len: payload.len(),
@@ -181,16 +171,11 @@ pub fn trojan_go_wss_inner_shadowsocks_response_frame(
     cipher: &str,
     shadowsocks_password: &str,
     salt: &[u8],
-    response_metadata_target: &str,
+    _response_metadata_target: &str,
     payload: &[u8],
 ) -> Result<Vec<u8>, OutboundError> {
-    let response = encode_inner_shadowsocks_response(
-        cipher,
-        shadowsocks_password,
-        salt,
-        response_metadata_target,
-        payload,
-    )?;
+    let response =
+        encode_inner_shadowsocks_response(cipher, shadowsocks_password, salt, "", payload)?;
     websocket_server_binary_frame(&response)
 }
 

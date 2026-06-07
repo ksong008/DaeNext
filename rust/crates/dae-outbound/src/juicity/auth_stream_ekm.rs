@@ -14,8 +14,8 @@ use super::h3_loopback::{
 };
 use super::packet::build_dialauth_record_for_port_zero;
 
-pub const DEFAULT_LIVE_EKM_AUTH_TARGET: &str = "stage123-zero.example:0";
-pub const DEFAULT_LIVE_EKM_AUTH_PASSWORD: &str = "stage123-live-ekm-password";
+pub const DEFAULT_LIVE_EKM_AUTH_TARGET: &str = "juicity-ekm-auth.example:0";
+pub const DEFAULT_LIVE_EKM_AUTH_PASSWORD: &str = "juicity-live-ekm-password";
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct JuicityLiveEkmAuthOptions {
@@ -83,12 +83,12 @@ pub fn run_live_ekm_auth_smoke(
 ) -> Result<JuicityLiveEkmAuthReport, OutboundError> {
     if options.iterations == 0 {
         return Err(OutboundError::BadJuicity(
-            "stage123 live ekm auth iterations must be greater than zero".to_owned(),
+            "Juicity live ekm auth iterations must be greater than zero".to_owned(),
         ));
     }
     if options.password.is_empty() {
         return Err(OutboundError::BadJuicity(
-            "stage123 live ekm auth password cannot be empty".to_owned(),
+            "Juicity live ekm auth password cannot be empty".to_owned(),
         ));
     }
     let runtime = tokio::runtime::Builder::new_current_thread()
@@ -99,7 +99,7 @@ pub fn run_live_ekm_auth_smoke(
     runtime.block_on(async {
         tokio::time::timeout(options.timeout, run_live_ekm_auth_smoke_async(options))
             .await
-            .map_err(|_| bad_live_ekm_auth("stage123 live ekm auth timed out"))?
+            .map_err(|_| bad_live_ekm_auth("Juicity live ekm auth timed out"))?
     })
 }
 
@@ -175,7 +175,7 @@ async fn run_live_ekm_auth_smoke_async(
         }
     }
     let elapsed_ns = start.elapsed().as_nanos();
-    client_connection.close(0_u32.into(), b"stage123 done");
+    client_connection.close(0_u32.into(), b"juicity-ekm-auth done");
     client_endpoint.wait_idle().await;
 
     let server = server_task

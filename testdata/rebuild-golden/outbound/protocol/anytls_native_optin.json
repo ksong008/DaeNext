@@ -83,7 +83,7 @@
     "local auth key / frame contract smoke",
     "local UDP magic domain / underlay contract smoke"
   ],
-  "name": "stage15-anytls-native-optin",
+  "name": "anytls-native-optin",
   "packet_stream": {
     "first_write_hex": "01030b6578616d706c652e636f6d0035000470696e67",
     "next_write_hex": "000470696e67",

@@ -101,7 +101,7 @@
     "local UUID validation smoke",
     "local QUIC/underlay contract smoke"
   ],
-  "name": "stage15-tuic-native-optin",
+  "name": "tuic-native-optin",
   "protocol_scope": [
     "tuic"
   ],

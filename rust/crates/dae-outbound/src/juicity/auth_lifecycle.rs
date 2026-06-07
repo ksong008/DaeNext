@@ -22,9 +22,9 @@ use super::packet::{
 };
 
 pub const DEFAULT_AUTH_LIFECYCLE_TARGETS: [&str; 3] = [
-    "stage124-zero-a.example:0",
-    "stage124-zero-b.example:0",
-    "stage124-zero-c.example:0",
+    "juicity-auth-a.example:0",
+    "juicity-auth-b.example:0",
+    "juicity-auth-c.example:0",
 ];
 pub const DEFAULT_AUTH_LIFECYCLE_RECORD_COUNT: usize = DEFAULT_AUTH_LIFECYCLE_TARGETS.len();
 
@@ -129,22 +129,22 @@ pub fn run_auth_lifecycle_smoke(
 ) -> Result<JuicityAuthLifecycleReport, OutboundError> {
     if options.iterations == 0 {
         return Err(bad_auth_lifecycle(
-            "stage124 auth lifecycle iterations must be greater than zero",
+            "Juicity auth lifecycle iterations must be greater than zero",
         ));
     }
     if options.password.is_empty() {
         return Err(bad_auth_lifecycle(
-            "stage124 auth lifecycle password cannot be empty",
+            "Juicity auth lifecycle password cannot be empty",
         ));
     }
     if options.targets.is_empty() {
         return Err(bad_auth_lifecycle(
-            "stage124 auth lifecycle requires at least one DialAuth target",
+            "Juicity auth lifecycle requires at least one DialAuth target",
         ));
     }
     if options.targets.len() > UNDERLAY_AUTH_CHANNEL_CAPACITY as usize {
         return Err(bad_auth_lifecycle(format!(
-            "stage124 auth lifecycle targets exceed channel capacity: got {}, capacity {}",
+            "Juicity auth lifecycle targets exceed channel capacity: got {}, capacity {}",
             options.targets.len(),
             UNDERLAY_AUTH_CHANNEL_CAPACITY
         )));
@@ -157,7 +157,7 @@ pub fn run_auth_lifecycle_smoke(
     runtime.block_on(async {
         tokio::time::timeout(options.timeout, run_auth_lifecycle_smoke_async(options))
             .await
-            .map_err(|_| bad_auth_lifecycle("stage124 auth lifecycle timed out"))?
+            .map_err(|_| bad_auth_lifecycle("Juicity auth lifecycle timed out"))?
     })
 }
 
@@ -231,7 +231,7 @@ async fn run_auth_lifecycle_smoke_async(
             write.record_targets == transcript.targets && write.stream_finished;
     }
     let elapsed_ns = start.elapsed().as_nanos();
-    client_connection.close(0_u32.into(), b"stage124 done");
+    client_connection.close(0_u32.into(), b"juicity-auth-lifecycle done");
     client_endpoint.wait_idle().await;
 
     let server = server_task

@@ -9,8 +9,11 @@ fn stage126_juicity_stream_packet_conn_relays_nonzero_udp_over_live_stream() {
     })
     .unwrap();
 
-    assert_eq!(report.target, "stage126-stream.example:5353");
-    assert_eq!(report.response_target, "stage126-response.example:5353");
+    assert_eq!(report.target, "juicity-stream.example:5353");
+    assert_eq!(
+        report.response_target,
+        "juicity-stream-response.example:5353"
+    );
     assert_eq!(report.client_selected_alpn, "h3");
     assert_eq!(report.server_selected_alpn, "h3");
     assert_eq!(report.connection_network_byte, 3);

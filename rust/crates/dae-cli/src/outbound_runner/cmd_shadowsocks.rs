@@ -20,7 +20,7 @@ pub(super) fn run_shadowsocks_contract() -> RunnerOutput {
     RunnerOutput::ok(format!(
         "{}\n",
         json!({
-            "name": "stage15-shadowsocks-native-optin",
+            "name": "shadowsocks-native-optin",
             "default_go_path": shadowsocks::contract::DEFAULT_GO_PATH,
             "rust_adapter_mode": shadowsocks::contract::ADAPTER_MODE,
             "protocol_scope": shadowsocks::contract::PROTOCOL_SCOPE,
