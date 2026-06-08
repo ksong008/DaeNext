@@ -6,8 +6,9 @@ license.workspace = true
 repository.workspace = true
 
 [features]
-# Default Rust-native daemon builds use the allocator selected by live RSS A/B.
-default = ["allocator-jemalloc"]
+# Default Rust-native daemon builds include the native Aya/eBPF loader and use
+# the allocator selected by live RSS A/B.
+default = ["native-ebpf", "allocator-jemalloc"]
 native-ebpf = ["dae-aya-bpf-loader/native-ebpf", "dae-ebpf-support/aya-loader"]
 allocator-system = []
 allocator-mimalloc = ["dep:mimalloc", "dep:libmimalloc-sys"]
