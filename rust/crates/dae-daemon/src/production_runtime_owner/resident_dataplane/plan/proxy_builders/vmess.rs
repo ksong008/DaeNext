@@ -131,6 +131,7 @@ pub(crate) fn build_vmess_proxy_plan(
             None
         },
         utls_fingerprint,
+        reality: None,
         handler: ResidentProxyProtocolPlan::VmessAeadTcp { id: parsed.id },
         chain_parent: None,
         mark: config.global.so_mark_from_dae,

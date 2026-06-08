@@ -7,6 +7,11 @@ pub(crate) fn drive_tls_io_record_aware(
             tcp,
             conn,
             tls_records,
+        }
+        | VlessTlsEngine::RealityRustls {
+            tcp,
+            conn,
+            tls_records,
         } => {
             let mut progressed = false;
             while conn.wants_write() {
@@ -46,7 +51,8 @@ pub(crate) fn flush_tls_writes(
     stop: &AtomicBool,
 ) -> Result<(), String> {
     match &mut client.engine {
-        VlessTlsEngine::Rustls { tcp, conn, .. } => flush_rustls_writes(tcp, conn, stop),
+        VlessTlsEngine::Rustls { tcp, conn, .. }
+        | VlessTlsEngine::RealityRustls { tcp, conn, .. } => flush_rustls_writes(tcp, conn, stop),
         VlessTlsEngine::Boring {
             tls,
             pending_plaintext,
@@ -137,7 +143,8 @@ pub(crate) fn flush_boring_writes_nonblocking(
 
 pub(crate) fn drive_tls_io_blocking(client: &mut VlessTlsClient) -> Result<(), String> {
     match &mut client.engine {
-        VlessTlsEngine::Rustls { tcp, conn, .. } => {
+        VlessTlsEngine::Rustls { tcp, conn, .. }
+        | VlessTlsEngine::RealityRustls { tcp, conn, .. } => {
             let started = Instant::now();
             loop {
                 match conn.complete_io(tcp) {
@@ -162,6 +169,7 @@ pub(crate) fn drive_tls_io_blocking(client: &mut VlessTlsClient) -> Result<(), S
 pub(crate) fn tls_underlay_name(client: &VlessTlsClient) -> &'static str {
     match &client.engine {
         VlessTlsEngine::Rustls { .. } => "rustls",
+        VlessTlsEngine::RealityRustls { .. } => "reality",
         VlessTlsEngine::Boring { .. } => "boringssl",
     }
 }
@@ -169,6 +177,7 @@ pub(crate) fn tls_underlay_name(client: &VlessTlsClient) -> &'static str {
 pub(crate) fn async_tls_underlay_name(client: &AsyncVlessTlsClient) -> &'static str {
     match &client.engine {
         AsyncVlessTlsEngine::Rustls { .. } => "rustls",
+        AsyncVlessTlsEngine::RealityRustls { .. } => "reality",
         AsyncVlessTlsEngine::Boring { .. } => "boringssl",
     }
 }

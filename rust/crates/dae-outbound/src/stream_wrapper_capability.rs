@@ -74,7 +74,7 @@ pub fn stream_wrapper_capability_rows() -> &'static [StreamWrapperCapabilityRow]
     &STREAM_WRAPPER_CAPABILITY_ROWS
 }
 
-const STREAM_WRAPPER_CAPABILITY_ROWS: [StreamWrapperCapabilityRow; 5] = [
+const STREAM_WRAPPER_CAPABILITY_ROWS: [StreamWrapperCapabilityRow; 6] = [
     StreamWrapperCapabilityRow {
         wrapper_id: "websocket-wss-first-row",
         wrapper: "websocket-or-wss",
@@ -127,6 +127,20 @@ const STREAM_WRAPPER_CAPABILITY_ROWS: [StreamWrapperCapabilityRow; 5] = [
         packet_semantics: "tcp-stream-meek-polling",
         cache_lifecycle: "per-session",
         cancellation: "session-close",
+        reload_cleanup: "drop-on-graph-diff-or-runtime-stop",
+        blocker_id: None,
+        evidence_requirements: &["large-page-live", "benchmark", "rollback"],
+    },
+    StreamWrapperCapabilityRow {
+        wrapper_id: "mux-wrapper",
+        wrapper: "mux",
+        status: "resident-live-final",
+        source_admission: "admitted",
+        provider: "resident-shared-mux-stream",
+        security_underlay: "plain-or-standard-tls",
+        packet_semantics: "multiplexed-stream",
+        cache_lifecycle: "per-session",
+        cancellation: "mux-end-frame",
         reload_cleanup: "drop-on-graph-diff-or-runtime-stop",
         blocker_id: None,
         evidence_requirements: &["large-page-live", "benchmark", "rollback"],

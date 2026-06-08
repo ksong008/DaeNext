@@ -45,7 +45,10 @@ use dae_outbound::{
         ss2022_tcp_client_stream_encoder, ss2022_tcp_server_stream_decoder,
         ss2022_tcp_unix_timestamp_now,
     },
-    shared_transport::mux::MuxFrameOptions,
+    shared_transport::mux::{
+        MuxFrameOptions, OPTION_DATA, SESSION_STATUS_END, SESSION_STATUS_KEEP,
+        SESSION_STATUS_KEEPALIVE,
+    },
     shared_transport::{
         HttpUpgradeOptions, MeekRoundTripOptions, grpc_hunk_frame, grpc_hunk_payload, ir,
         meek_http_request, mux_data_frame, mux_end_frame, mux_new_frame, validate_http_status,
@@ -57,7 +60,7 @@ use dae_outbound::{
     },
     vless::packet,
     vmess::{
-        VMessAeadTcpClientSessionStart, aead_tcp_client_session_start,
+        VMessAeadTcpClientSessionStart, VMessMetadata, aead_tcp_client_session_start,
         aead_tcp_response_reader_from_async_stream, aead_tcp_response_reader_from_stream,
     },
 };

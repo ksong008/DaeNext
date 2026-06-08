@@ -37,6 +37,7 @@ pub(crate) fn build_anytls_proxy_plan(
         allow_insecure,
         tls_fragment: resident_tls_fragment_plan(config)?,
         utls_fingerprint,
+        reality: None,
         handler: ResidentProxyProtocolPlan::AnyTlsTcpTls { auth: parsed.auth },
         chain_parent: None,
         mark: config.global.so_mark_from_dae,

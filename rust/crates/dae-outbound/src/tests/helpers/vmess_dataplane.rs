@@ -91,7 +91,7 @@ pub(in crate::tests) fn spawn_vmess_aead_mux_echo_server(
             port.parse::<u16>().unwrap(),
             "tcp",
         );
-        let expected_new = shared_transport::mux_new_frame(&options);
+        let expected_new = shared_transport::mux_new_frame(&options).unwrap();
         assert_eq!(request.new_frame.metadata, expected_new[2..]);
         assert_eq!(request.data_frame.id, expected_id);
         assert_eq!(

@@ -235,17 +235,34 @@ pub(super) fn resident_proxy_matches_source_shape(
     proxy: &plan::ResidentProxyPlan,
     graph: &Value,
 ) -> bool {
-    source_shape_protocol_matches(row.protocol_family, &proxy.protocol)
+    source_shape_protocol_matches(row.protocol_family, row.link_schemes, &proxy.protocol)
         && source_shape_field_matches(row.security_underlay, graph["securityUnderlay"].as_str())
         && source_shape_field_matches(row.stream_wrapper, graph["streamWrapper"].as_str())
         && source_shape_field_matches(row.packet_semantics, graph["packetSemantics"].as_str())
 }
 
-pub(super) fn source_shape_protocol_matches(row_family: &str, proxy_protocol: &str) -> bool {
+pub(super) fn source_shape_protocol_matches(
+    row_family: &str,
+    row_link_schemes: &[&str],
+    proxy_protocol: &str,
+) -> bool {
     match row_family {
         "multi-protocol" => matches!(proxy_protocol, "vless" | "vmess" | "trojan"),
         "quic-family" => matches!(proxy_protocol, "hysteria2" | "tuic" | "juicity"),
         "proxy-endpoint" => proxy_protocol == "http-proxy",
+        "shared-transport" => row_link_schemes
+            .iter()
+            .any(|scheme| source_shape_scheme_matches_protocol(scheme, proxy_protocol)),
+        other => other == proxy_protocol,
+    }
+}
+
+pub(super) fn source_shape_scheme_matches_protocol(scheme: &str, proxy_protocol: &str) -> bool {
+    match scheme {
+        "ss" | "shadowsocks" => proxy_protocol == "shadowsocks",
+        "https" | "http" => proxy_protocol == "http-proxy",
+        "hy2" | "hysteria2" => proxy_protocol == "hysteria2",
+        "trojan" | "trojan-go" => matches!(proxy_protocol, "trojan" | "trojan-go"),
         other => other == proxy_protocol,
     }
 }
@@ -261,19 +278,43 @@ pub(super) fn source_shape_field_matches(expected: &str, actual: Option<&str>) -
         "standard-or-fingerprint-aware-tls" => {
             matches!(actual, "standard-tls" | "fingerprint-aware-tls")
         }
+        "plain-or-standard-tls" => matches!(actual, "none" | "standard-tls"),
+        "none-or-stream-wrapper" => matches!(
+            actual,
+            "none"
+                | "websocket"
+                | "httpupgrade"
+                | "grpc"
+                | "meek"
+                | "mux"
+                | "frame-stream"
+                | "packet-stream"
+        ),
         "udp-over-stream-or-datagram" => {
             matches!(
                 actual,
                 "udp-over-stream-or-datagram" | "udp-over-stream" | "datagram-aead" | "xudp"
             )
         }
+        "passthrough-udp" => matches!(
+            actual,
+            "passthrough-udp"
+                | "udp-over-stream-or-datagram"
+                | "udp-over-stream"
+                | "datagram-aead"
+                | "datagram-aead-2022"
+                | "xudp"
+        ),
         "quic-datagram-or-stream" => {
             matches!(
                 actual,
                 "quic-datagram-or-stream" | "quic-datagram" | "stream-packet"
             )
         }
-        "plain-or-native-underlay" => matches!(actual, "none" | "standard-tls" | "quic-tls"),
+        "plain-or-native-underlay" => matches!(
+            actual,
+            "none" | "standard-tls" | "quic-tls" | "aead" | "aead-2022"
+        ),
         _ => false,
     }
 }

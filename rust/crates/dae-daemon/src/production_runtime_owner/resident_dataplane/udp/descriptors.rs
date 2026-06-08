@@ -2,6 +2,7 @@ use super::*;
 pub(super) fn resident_udp_handler_name(handler: &ResidentProxyProtocolPlan) -> &'static str {
     match handler {
         ResidentProxyProtocolPlan::VlessVisionTcpTls { .. } => "vless-vision-tcp-tls",
+        ResidentProxyProtocolPlan::VlessMuxTcpTls { .. } => "vless-mux-tcp-tls",
         ResidentProxyProtocolPlan::Socks5Tcp { .. } => "socks5-tcp",
         ResidentProxyProtocolPlan::HttpProxyTcp { .. } => "http-proxy-tcp",
         ResidentProxyProtocolPlan::ShadowsocksAeadTcp { .. } => "shadowsocks-aead-tcp",
@@ -55,6 +56,7 @@ pub(super) fn udp_packet_session_value(
 pub(super) fn udp_packet_semantics(handler: &ResidentProxyProtocolPlan) -> &'static str {
     match handler {
         ResidentProxyProtocolPlan::VlessVisionTcpTls { .. } => "xudp",
+        ResidentProxyProtocolPlan::VlessMuxTcpTls { .. } => "multiplexed-stream",
         ResidentProxyProtocolPlan::Socks5Tcp { .. } => "udp-associate",
         ResidentProxyProtocolPlan::HttpProxyTcp { .. } => "protocol-closed",
         ResidentProxyProtocolPlan::ShadowsocksAeadTcp { .. } => "datagram-aead",

@@ -88,7 +88,7 @@ where
         .write_all(&header)
         .map_err(|err| OutboundError::BadVless(err.to_string()))?;
     stream
-        .write_all(&mux_new_frame(&options))
+        .write_all(&mux_new_frame(&options)?)
         .map_err(|err| OutboundError::BadVless(err.to_string()))?;
     stream
         .write_all(&mux_data_frame(mux_id, payload)?)

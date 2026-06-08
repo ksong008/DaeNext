@@ -30,6 +30,7 @@ pub(crate) fn vless_fixture_url(
         public_key: String::new(),
         short_id: String::new(),
         spider_x: String::new(),
+        mux: false,
         protocol: "vless".to_owned(),
     }
     .export_url()
@@ -56,6 +57,7 @@ pub(crate) fn vless_vision_fixture_url(fingerprint: &str) -> String {
         public_key: String::new(),
         short_id: String::new(),
         spider_x: String::new(),
+        mux: false,
         protocol: "vless".to_owned(),
     }
     .export_url()
@@ -81,6 +83,67 @@ pub(crate) fn vless_vision_empty_fingerprint_fixture_url() -> String {
     url.to_string()
 }
 
+pub(crate) fn vless_reality_fixture_url() -> String {
+    let public_key = base64::engine::general_purpose::URL_SAFE_NO_PAD
+        .encode([FixtureEndpoint::Authority.slot() as u8; 32]);
+    let short_id = [FixtureEndpoint::Primary.slot() as u8; 4]
+        .into_iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect::<Vec<_>>()
+        .join("");
+    VLESSLink {
+        ps: String::new(),
+        add: fixture_host(FixtureEndpoint::Primary),
+        port: fixture_authority_port().to_string(),
+        id: fixture_client_id(),
+        net: "tcp".to_owned(),
+        r#type: "none".to_owned(),
+        host: String::new(),
+        sni: fixture_host(FixtureEndpoint::Authority),
+        path: String::new(),
+        xhttp_mode: String::new(),
+        xhttp_extra: String::new(),
+        tls: "reality".to_owned(),
+        flow: "xtls-rprx-vision".to_owned(),
+        alpn: "h2,http/1.1".to_owned(),
+        allow_insecure: false,
+        fingerprint: String::new(),
+        public_key,
+        short_id,
+        spider_x: "/".to_owned(),
+        mux: false,
+        protocol: "vless".to_owned(),
+    }
+    .export_url()
+}
+
+pub(crate) fn vless_mux_fixture_url() -> String {
+    VLESSLink {
+        ps: String::new(),
+        add: fixture_host(FixtureEndpoint::Primary),
+        port: fixture_authority_port().to_string(),
+        id: fixture_client_id(),
+        net: "tcp".to_owned(),
+        r#type: "none".to_owned(),
+        host: String::new(),
+        sni: fixture_host(FixtureEndpoint::Authority),
+        path: String::new(),
+        xhttp_mode: String::new(),
+        xhttp_extra: String::new(),
+        tls: "tls".to_owned(),
+        flow: String::new(),
+        alpn: "h2,http/1.1".to_owned(),
+        allow_insecure: false,
+        fingerprint: String::new(),
+        public_key: String::new(),
+        short_id: String::new(),
+        spider_x: String::new(),
+        mux: true,
+        protocol: "vless".to_owned(),
+    }
+    .export_url()
+}
+
 pub(crate) fn vless_xhttp_parser_fixture_url(mode: &str, alpn: &str, extra: &str) -> String {
     VLESSLink {
         ps: String::new(),
@@ -102,6 +165,7 @@ pub(crate) fn vless_xhttp_parser_fixture_url(mode: &str, alpn: &str, extra: &str
         public_key: String::new(),
         short_id: String::new(),
         spider_x: String::new(),
+        mux: false,
         protocol: "vless".to_owned(),
     }
     .export_url()

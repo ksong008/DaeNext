@@ -38,6 +38,7 @@ pub(crate) fn build_socks5_proxy_plan(
         allow_insecure: false,
         tls_fragment: None,
         utls_fingerprint: None,
+        reality: None,
         handler: ResidentProxyProtocolPlan::Socks5Tcp {
             username: parsed.username().to_owned(),
             password: parsed.password().unwrap_or_default().to_owned(),
@@ -118,6 +119,7 @@ pub(crate) fn build_http_proxy_plan(
         allow_insecure,
         tls_fragment,
         utls_fingerprint,
+        reality: None,
         handler: ResidentProxyProtocolPlan::HttpProxyTcp {
             username: parsed.username,
             password: parsed.password,

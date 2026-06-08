@@ -74,7 +74,7 @@ pub fn security_underlay_capability_rows() -> &'static [SecurityUnderlayCapabili
     &SECURITY_UNDERLAY_CAPABILITY_ROWS
 }
 
-const SECURITY_UNDERLAY_CAPABILITY_ROWS: [SecurityUnderlayCapabilityRow; 7] = [
+const SECURITY_UNDERLAY_CAPABILITY_ROWS: [SecurityUnderlayCapabilityRow; 8] = [
     admitted_row(
         "standard-tls-common-underlay",
         "rustls",
@@ -99,6 +99,21 @@ const SECURITY_UNDERLAY_CAPABILITY_ROWS: [SecurityUnderlayCapabilityRow; 7] = [
             "fingerprint-resolution",
             "boring-runtime-factory",
             "no-silent-rustls-fallback",
+            "large-page-live",
+        ],
+    ),
+    admitted_row(
+        "reality-common-underlay",
+        "rustls-reality",
+        "reality",
+        "reality-peer-verification",
+        "explicit-alpn",
+        "required-sni",
+        "preserved-by-resident-dialer",
+        true,
+        &[
+            "reality-client-config",
+            "no-silent-standard-tls-fallback",
             "large-page-live",
         ],
     ),

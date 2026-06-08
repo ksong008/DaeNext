@@ -227,15 +227,15 @@ pub(super) static SOURCE_SHAPE_REGISTRY_ROWS: &[SourceShapeRegistryRow] = &[
         "registry:secure-httpupgrade-framed-endpoint",
         SECURE_FRAME_STREAM_CAPABILITY,
     ),
-    blocked_row(
+    scoped_evidence_capability_admitted_row(
         "reality-security-underlay",
         "vless",
         &["vless"],
         "reality",
         "none-or-stream-wrapper",
         "xudp",
-        "missing-security-underlay",
         "registry:reality-security-underlay",
+        REALITY_SECURITY_UNDERLAY_CAPABILITY,
     ),
     scoped_evidence_capability_admitted_row(
         "quic-port-hopping-surface",
@@ -357,35 +357,35 @@ pub(super) static SOURCE_SHAPE_REGISTRY_ROWS: &[SourceShapeRegistryRow] = &[
         "registry:tls-fragment-security-underlay",
         TLS_FRAGMENT_SECURITY_UNDERLAY_CAPABILITY,
     ),
-    blocked_row(
+    scoped_evidence_capability_admitted_row(
         "shared-reality-security-underlay",
         "shared-transport",
         &["vless"],
         "reality",
         "none-or-stream-wrapper",
         "udp-over-stream-or-datagram",
-        "missing-security-underlay",
         "registry:shared-reality-security-underlay",
+        REALITY_SECURITY_UNDERLAY_CAPABILITY,
     ),
-    blocked_row(
+    scoped_evidence_capability_admitted_row(
         "mux-transport-wrapper",
         "shared-transport",
         &["vless", "vmess"],
         "plain-or-standard-tls",
         "mux",
         "multiplexed-stream",
-        "missing-stream-wrapper",
         "registry:mux-transport-wrapper",
+        MUX_TRANSPORT_CAPABILITY,
     ),
-    blocked_row(
+    scoped_evidence_capability_admitted_row(
         "passthrough-udp-transport",
         "shared-transport",
         &["ss", "vless", "vmess", "trojan", "trojan-go"],
-        "plain-or-standard-tls",
+        "plain-or-native-underlay",
         "none-or-stream-wrapper",
         "passthrough-udp",
-        "missing-packet-semantics",
         "registry:passthrough-udp-transport",
+        PASSTHROUGH_UDP_CAPABILITY,
     ),
     scoped_evidence_capability_admitted_row(
         "legacy-cipher-protocol-shape",

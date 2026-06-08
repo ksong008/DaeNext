@@ -51,6 +51,7 @@ pub(crate) fn build_shadowsocksr_proxy_plan(
         allow_insecure: false,
         tls_fragment: None,
         utls_fingerprint: None,
+        reality: None,
         handler: ResidentProxyProtocolPlan::ShadowsocksRHttpSimpleTcp {
             cipher: parsed.cipher,
             password: parsed.password,

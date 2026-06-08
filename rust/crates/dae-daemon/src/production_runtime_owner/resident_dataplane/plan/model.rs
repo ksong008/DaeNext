@@ -27,6 +27,13 @@ pub(crate) struct ResidentUtlsFingerprintPlan {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct ResidentRealityUnderlayPlan {
+    pub(in crate::production_runtime_owner::resident_dataplane) public_key: [u8; 32],
+    pub(in crate::production_runtime_owner::resident_dataplane) short_id: Vec<u8>,
+    pub(in crate::production_runtime_owner::resident_dataplane) spider_x: String,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) enum GroupNodeSelection {
     Selected(Vec<SelectedGroupNode>),
     NoCandidate {
@@ -38,6 +45,9 @@ pub(crate) enum GroupNodeSelection {
 #[derive(Clone, Debug)]
 pub(crate) enum ResidentProxyProtocolPlan {
     VlessVisionTcpTls {
+        key: [u8; 16],
+    },
+    VlessMuxTcpTls {
         key: [u8; 16],
     },
     Socks5Tcp {
@@ -152,6 +162,8 @@ pub(crate) struct ResidentProxyPlan {
         Option<TlsFragmentOptions>,
     pub(in crate::production_runtime_owner::resident_dataplane) utls_fingerprint:
         Option<ResidentUtlsFingerprintPlan>,
+    pub(in crate::production_runtime_owner::resident_dataplane) reality:
+        Option<ResidentRealityUnderlayPlan>,
     pub(in crate::production_runtime_owner::resident_dataplane) handler: ResidentProxyProtocolPlan,
     pub(in crate::production_runtime_owner::resident_dataplane) chain_parent:
         Option<Box<ResidentProxyPlan>>,
@@ -199,7 +211,8 @@ impl ResidentProxyPlan {
         &self,
     ) -> Result<[u8; 16], String> {
         match self.handler {
-            ResidentProxyProtocolPlan::VlessVisionTcpTls { key } => Ok(key),
+            ResidentProxyProtocolPlan::VlessVisionTcpTls { key }
+            | ResidentProxyProtocolPlan::VlessMuxTcpTls { key } => Ok(key),
             _ => Err(format!(
                 "resident proxy {} node {} is not a VLESS handler",
                 self.protocol, self.node_tag

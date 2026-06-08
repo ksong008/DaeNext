@@ -56,7 +56,7 @@ impl MuxFrameOptions {
     }
 }
 
-pub fn mux_new_frame(options: &MuxFrameOptions) -> Vec<u8> {
+pub fn mux_new_frame(options: &MuxFrameOptions) -> Result<Vec<u8>, OutboundError> {
     let mut metadata = Vec::new();
     metadata.extend_from_slice(&options.id);
     metadata.push(SESSION_STATUS_NEW);
@@ -73,11 +73,17 @@ pub fn mux_new_frame(options: &MuxFrameOptions) -> Vec<u8> {
             metadata.extend_from_slice(&ip.octets());
         }
         Err(_) => {
+            if options.host.len() > u8::MAX as usize {
+                return Err(OutboundError::BadSharedTransport(
+                    "mux domain address too long".to_owned(),
+                ));
+            }
             metadata.push(0x02);
+            metadata.push(options.host.len() as u8);
             metadata.extend_from_slice(options.host.as_bytes());
         }
     }
-    length_prefixed(metadata)
+    Ok(length_prefixed(metadata))
 }
 
 pub fn mux_data_frame(id: [u8; 2], payload: &[u8]) -> Result<Vec<u8>, OutboundError> {
@@ -160,7 +166,7 @@ pub fn mux_frame_exchange(
         .map_err(|err| OutboundError::BadSharedTransport(err.to_string()))?;
     set_timeout(&stream, timeout)?;
     stream
-        .write_all(&mux_new_frame(options))
+        .write_all(&mux_new_frame(options)?)
         .map_err(|err| OutboundError::BadSharedTransport(err.to_string()))?;
     stream
         .write_all(&mux_data_frame(options.id, payload)?)

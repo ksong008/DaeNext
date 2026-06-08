@@ -15,6 +15,11 @@ pub(crate) enum VlessTlsEngine {
         conn: ClientConnection,
         tls_records: TlsRecordReader,
     },
+    RealityRustls {
+        tcp: ResidentTcpStream,
+        conn: ClientConnection,
+        tls_records: TlsRecordReader,
+    },
     Boring {
         tls: SslStream<TcpStream>,
         pending_plaintext: Vec<u8>,
@@ -25,6 +30,9 @@ pub(crate) enum AsyncVlessTlsEngine {
     Rustls {
         tls: tokio_rustls::client::TlsStream<AsyncResidentTcpStream>,
     },
+    RealityRustls {
+        tls: tokio_rustls::client::TlsStream<AsyncResidentTcpStream>,
+    },
     Boring {
         tls: tokio_boring::SslStream<TokioTcpStream>,
     },
@@ -33,6 +41,7 @@ pub(crate) enum AsyncVlessTlsEngine {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum ResidentTlsProvider {
     StandardRustls,
+    RealityRustls,
     FingerprintAwareBoring,
 }
 
@@ -46,6 +55,7 @@ impl ResidentTlsProvider {
                     Ok(Self::StandardRustls)
                 }
             }
+            "reality" => Ok(Self::RealityRustls),
             other => Err(format!(
                 "resident TLS factory cannot open security underlay {other} for protocol {}",
                 proxy.protocol
@@ -65,6 +75,7 @@ pub(crate) struct ResidentTlsClientConfigKey {
     pub(super) alpn: Vec<String>,
     pub(super) allow_insecure: bool,
     pub(super) utls_fingerprint: Option<ResidentTlsFingerprintConfigKey>,
+    pub(super) reality: Option<ResidentRealityConfigKey>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Ord, PartialOrd)]
@@ -77,6 +88,12 @@ pub(crate) struct ResidentTlsFingerprintConfigKey {
     pub(super) client: String,
     pub(super) randomized: bool,
     pub(super) alpn_policy: String,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Ord, PartialOrd)]
+pub(crate) struct ResidentRealityConfigKey {
+    pub(super) public_key: [u8; 32],
+    pub(super) short_id: Vec<u8>,
 }
 
 pub(crate) static RUSTLS_CLIENT_CONFIG_CACHE: OnceLock<

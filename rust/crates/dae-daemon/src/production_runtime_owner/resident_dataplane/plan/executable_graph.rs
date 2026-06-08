@@ -159,6 +159,7 @@ impl ResidentExecutableGraphDescriptor {
         });
         let provider = match self.security_underlay.as_str() {
             "fingerprint-aware-tls" => "boringssl",
+            "reality" => "rustls-reality",
             "insecure-tls" => "rustls",
             "tls-fragment" => "rustls",
             "standard-tls" => "rustls",
@@ -204,6 +205,7 @@ impl ResidentExecutableGraphDescriptor {
             "httpupgrade" => ("admitted", "resident-http-upgrade-stream", Value::Null),
             "grpc" => ("admitted", "resident-grpc-h2-stream", Value::Null),
             "meek" => ("admitted", "resident-meek-polling", Value::Null),
+            "mux" => ("admitted", "resident-shared-mux-stream", Value::Null),
             "xhttp" => ("admitted", "resident-xhttp-h2-packet-up", Value::Null),
             "simple-obfs-http" => ("admitted", "resident-simple-obfs-http", Value::Null),
             "simple-obfs-tls" => ("admitted", "resident-simple-obfs-tls", Value::Null),
@@ -346,6 +348,7 @@ fn graph_security_underlay(proxy: &ResidentProxyPlan) -> String {
 fn graph_stream_wrapper(proxy: &ResidentProxyPlan) -> String {
     match proxy.handler {
         ResidentProxyProtocolPlan::AnyTlsTcpTls { .. } => return "frame-stream".to_owned(),
+        ResidentProxyProtocolPlan::VlessMuxTcpTls { .. } => return "mux".to_owned(),
         ResidentProxyProtocolPlan::Hysteria2QuicTcp { .. }
         | ResidentProxyProtocolPlan::TuicQuicTcp { .. }
         | ResidentProxyProtocolPlan::JuicityQuicTcp { .. } => return "quic-stream".to_owned(),
@@ -364,6 +367,7 @@ fn graph_packet_semantics(proxy: &ResidentProxyPlan) -> String {
         ResidentProxyProtocolPlan::Socks5Tcp { .. } => "udp-associate".to_owned(),
         ResidentProxyProtocolPlan::HttpProxyTcp { .. } => "protocol-closed".to_owned(),
         ResidentProxyProtocolPlan::VlessVisionTcpTls { .. } => "xudp".to_owned(),
+        ResidentProxyProtocolPlan::VlessMuxTcpTls { .. } => "multiplexed-stream".to_owned(),
         ResidentProxyProtocolPlan::ShadowsocksAeadTcp { .. } => "datagram-aead".to_owned(),
         ResidentProxyProtocolPlan::Shadowsocks2022Tcp { .. } => "datagram-aead-2022".to_owned(),
         ResidentProxyProtocolPlan::ShadowsocksSimpleObfsHttpTcp { .. }

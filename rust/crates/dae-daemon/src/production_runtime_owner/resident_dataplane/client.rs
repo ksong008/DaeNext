@@ -13,6 +13,7 @@ use std::time::{Duration, Instant};
 use boring::ssl::{SslConnector, SslMethod, SslStream, SslVerifyMode, SslVersion};
 use dae_datapath::{TcpDirectDialOptions, magic_tcp_connect};
 use dae_outbound::shared_transport::{TlsFragmentOptions, fragment_tls_write};
+use rustls::client::RealityConfig;
 use rustls::client::danger::{HandshakeSignatureValid, ServerCertVerified, ServerCertVerifier};
 use rustls::pki_types::{CertificateDer, ServerName, UnixTime};
 use rustls::{
@@ -24,7 +25,7 @@ use tokio::task;
 use tokio::time;
 
 use super::XTLS_RPRX_VISION;
-use super::plan::{ResidentProxyPlan, ResidentUtlsFingerprintPlan};
+use super::plan::{ResidentProxyPlan, ResidentRealityUnderlayPlan, ResidentUtlsFingerprintPlan};
 use super::{
     RESIDENT_CONNECT_TIMEOUT, RESIDENT_IDLE_SLEEP, TLS_RECORD_HEADER_LEN,
     TLS_RECORD_MAX_PAYLOAD_LEN,

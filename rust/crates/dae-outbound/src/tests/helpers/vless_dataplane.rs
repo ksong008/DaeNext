@@ -62,7 +62,7 @@ pub(in crate::tests) fn spawn_vless_mux_echo_server(
             "tcp",
         );
         let new_frame = shared_transport::mux::read_mux_frame(&mut stream).unwrap();
-        let expected_new = shared_transport::mux_new_frame(&options);
+        let expected_new = shared_transport::mux_new_frame(&options).unwrap();
         assert_eq!(new_frame.metadata, expected_new[2..]);
         let data_frame = shared_transport::mux::read_mux_frame(&mut stream).unwrap();
         assert_eq!(data_frame.id, expected_id);

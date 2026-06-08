@@ -48,6 +48,7 @@ pub(crate) fn build_tuic_proxy_plan(
         allow_insecure,
         tls_fragment: None,
         utls_fingerprint: None,
+        reality: None,
         handler: ResidentProxyProtocolPlan::TuicQuicTcp {
             uuid: parsed.user,
             password: parsed.password,
@@ -135,6 +136,7 @@ pub(crate) fn build_hysteria2_proxy_plan(
         allow_insecure: false,
         tls_fragment: None,
         utls_fingerprint: None,
+        reality: None,
         handler: ResidentProxyProtocolPlan::Hysteria2QuicTcp {
             auth,
             pin_sha256: parsed.pin_sha256,
@@ -195,6 +197,7 @@ pub(crate) fn build_juicity_proxy_plan(
         allow_insecure,
         tls_fragment: None,
         utls_fingerprint: None,
+        reality: None,
         handler: ResidentProxyProtocolPlan::JuicityQuicTcp {
             uuid: parsed.user,
             password: parsed.password,

@@ -8,6 +8,10 @@ pub(super) fn exchange_proxy_udp(
         ResidentProxyProtocolPlan::VlessVisionTcpTls { .. } => {
             exchange_vless_udp(proxy, original_dst, payload)
         }
+        ResidentProxyProtocolPlan::VlessMuxTcpTls { .. } => Err(
+            "resident VLESS mux handler does not admit UDP packets; mux row is TCP stream scoped"
+                .to_owned(),
+        ),
         ResidentProxyProtocolPlan::ShadowsocksAeadTcp {
             cipher,
             password,
