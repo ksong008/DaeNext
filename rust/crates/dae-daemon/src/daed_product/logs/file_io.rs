@@ -24,6 +24,32 @@ pub(crate) fn clear_log_file(config_dir: &Path) -> io::Result<()> {
     set_log_file_permissions(&log_file)
 }
 
+pub(crate) fn clear_log_file_preserving_startup_reload_logs(config_dir: &Path) -> io::Result<()> {
+    let log_file = product_log_file(config_dir);
+    ensure_log_dir(config_dir)?;
+    let lock = LOG_FILE_LOCK.get_or_init(|| Mutex::new(()));
+    let _guard = lock
+        .lock()
+        .map_err(|_| io::Error::other("product log file lock poisoned"))?;
+    let data = match fs::read_to_string(&log_file) {
+        Ok(data) => data,
+        Err(err) if err.kind() == io::ErrorKind::NotFound => String::new(),
+        Err(err) => return Err(err),
+    };
+    let mut retained = data
+        .lines()
+        .filter(|line| startup_reload_lifecycle_log_line(line))
+        .map(str::to_owned)
+        .collect::<Vec<_>>()
+        .join("\n");
+    if !retained.is_empty() {
+        retained.push('\n');
+    }
+    fs::write(&log_file, retained)?;
+    set_log_file_permissions(&log_file)?;
+    reset_log_id_cache_to_last(&log_file)
+}
+
 pub(crate) fn append_log_line(path: &Path, line: &[u8]) -> io::Result<()> {
     let mut file = fs::OpenOptions::new()
         .create(true)
@@ -150,6 +176,37 @@ pub(crate) fn parse_log_entry_line(line: &str) -> Option<ProductLogEntry> {
         message,
         fields,
     })
+}
+
+pub(crate) fn startup_reload_lifecycle_log_kind(message: &str) -> Option<&'static str> {
+    if message.starts_with("[Startup]") {
+        return Some("startup");
+    }
+    if message.starts_with("[Reload]") {
+        return Some("reload");
+    }
+    if matches!(
+        message,
+        "The loading process takes about 120MB free memory, which will be released after loading. Insufficient memory will cause loading failure."
+            | "Rust/Aya BPF loader loaded"
+            | "Loaded eBPF programs and maps"
+    ) || (message.starts_with("Bind ") && message.contains(" via Rust/Aya "))
+        || message.starts_with("Routing match set len:")
+    {
+        return Some("startup");
+    }
+    None
+}
+
+fn startup_reload_lifecycle_log_line(line: &str) -> bool {
+    parse_log_entry_line(line).is_some_and(|entry| startup_reload_lifecycle_log_entry(&entry))
+}
+
+fn startup_reload_lifecycle_log_entry(entry: &ProductLogEntry) -> bool {
+    matches!(
+        entry.fields.get("lifecycle").map(String::as_str),
+        Some("startup" | "reload")
+    ) || startup_reload_lifecycle_log_kind(&entry.message).is_some()
 }
 
 pub(crate) fn log_entry_value(entry: ProductLogEntry) -> Value {

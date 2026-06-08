@@ -61,7 +61,7 @@ pub(crate) fn restore_runtime_from_state(
         config_dir.unwrap_or_else(|| state.parent().unwrap_or(Path::new(DEFAULT_CONFIG_DIR)));
     let lifecycle_started_at = Instant::now();
     let source = log_mode.source();
-    refresh_log_policy_and_reset_logs(log_config_dir, state, Some(runtime))
+    refresh_log_policy_and_reset_runtime_cycle_logs(log_config_dir, state, Some(runtime))
         .map_err(|err| err.to_string())?;
     let preview = materialize_runtime(state, config_dir, true).map_err(|err| err.to_string())?;
     let content = preview["content"]
@@ -69,7 +69,7 @@ pub(crate) fn restore_runtime_from_state(
         .ok_or_else(|| "runtime materializer did not return content".to_owned())?;
     let config = build_runtime_config_from_content(content)?;
     set_runtime_log_level_from_config(state, &config).map_err(|err| err.to_string())?;
-    refresh_log_policy_and_reset_logs(log_config_dir, state, Some(runtime))
+    refresh_log_policy_and_reset_runtime_cycle_logs(log_config_dir, state, Some(runtime))
         .map_err(|err| err.to_string())?;
     let control_plane_started_at = Instant::now();
     let outcome = runtime.reload(config, source)?;
