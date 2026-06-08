@@ -11,7 +11,7 @@ pub(crate) type AsyncResidentTlsClient = AsyncVlessTlsClient;
 
 pub(crate) enum VlessTlsEngine {
     Rustls {
-        tcp: TcpStream,
+        tcp: ResidentTcpStream,
         conn: ClientConnection,
         tls_records: TlsRecordReader,
     },
@@ -23,7 +23,7 @@ pub(crate) enum VlessTlsEngine {
 
 pub(crate) enum AsyncVlessTlsEngine {
     Rustls {
-        tls: tokio_rustls::client::TlsStream<TokioTcpStream>,
+        tls: tokio_rustls::client::TlsStream<AsyncResidentTcpStream>,
     },
     Boring {
         tls: tokio_boring::SslStream<TokioTcpStream>,

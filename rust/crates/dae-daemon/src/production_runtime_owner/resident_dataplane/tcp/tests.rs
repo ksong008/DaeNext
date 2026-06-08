@@ -498,6 +498,7 @@ fn dummy_proxy_plan() -> ResidentProxyPlan {
         stream_path: String::new(),
         tls: "tls".to_owned(),
         allow_insecure: false,
+        tls_fragment: None,
         utls_fingerprint: None,
         handler: ResidentProxyProtocolPlan::VlessVisionTcpTls { key: [0; 16] },
         chain_parent: None,

@@ -307,55 +307,55 @@ pub(super) static SOURCE_SHAPE_REGISTRY_ROWS: &[SourceShapeRegistryRow] = &[
         "registry:proxy-transport-mode",
         PROXY_TRANSPORT_CAPABILITY,
     ),
-    blocked_row(
+    capability_admitted_row(
         "insecure-secure-endpoint-underlay",
         "proxy-endpoint",
         &["https"],
         "insecure-tls",
         "none",
         "protocol-closed",
-        "missing-security-underlay",
         "registry:insecure-secure-endpoint-underlay",
+        INSECURE_SECURITY_UNDERLAY_CAPABILITY,
     ),
-    blocked_row(
+    capability_admitted_row(
         "fingerprint-secure-endpoint-underlay",
         "proxy-endpoint",
         &["https"],
         "fingerprint-aware-tls",
         "none",
         "protocol-closed",
-        "missing-security-underlay",
         "registry:fingerprint-secure-endpoint-underlay",
+        FINGERPRINT_SECURITY_UNDERLAY_CAPABILITY,
     ),
-    blocked_row(
+    capability_admitted_row(
         "insecure-frame-stream-underlay",
         "anytls",
         &["anytls"],
         "insecure-tls",
         "frame-stream",
         "udp-over-stream-or-datagram",
-        "missing-security-underlay",
         "registry:insecure-frame-stream-underlay",
+        INSECURE_SECURITY_UNDERLAY_CAPABILITY,
     ),
-    blocked_row(
+    capability_admitted_row(
         "full-utls-security-underlay",
         "shared-transport",
         &["utls"],
         "full-utls",
         "none-or-stream-wrapper",
         "udp-over-stream-or-datagram",
-        "missing-security-underlay",
         "registry:full-utls-security-underlay",
+        FINGERPRINT_SECURITY_UNDERLAY_CAPABILITY,
     ),
-    blocked_row(
+    capability_admitted_row(
         "tls-fragment-security-underlay",
         "shared-transport",
         &["tls"],
         "tls-fragment",
         "none-or-stream-wrapper",
         "udp-over-stream-or-datagram",
-        "missing-security-underlay",
         "registry:tls-fragment-security-underlay",
+        TLS_FRAGMENT_SECURITY_UNDERLAY_CAPABILITY,
     ),
     blocked_row(
         "shared-reality-security-underlay",
@@ -387,15 +387,15 @@ pub(super) static SOURCE_SHAPE_REGISTRY_ROWS: &[SourceShapeRegistryRow] = &[
         "missing-packet-semantics",
         "registry:passthrough-udp-transport",
     ),
-    blocked_row(
+    capability_admitted_row(
         "legacy-cipher-protocol-shape",
         "legacy-protocol",
         &["ssr"],
         "legacy-cipher",
         "legacy-obfs",
         "udp-over-stream-or-datagram",
-        "materialization-mismatch",
         "registry:legacy-cipher-protocol-shape",
+        LEGACY_STREAM_CAPABILITY,
     ),
     blocked_row(
         "xhttp-h3-wrapper",

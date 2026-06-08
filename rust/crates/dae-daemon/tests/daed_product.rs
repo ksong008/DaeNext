@@ -7,10 +7,14 @@ use std::process::{Child, Command, Stdio};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
+use base64::Engine;
 use dae_outbound::{
     hysteria2::Hysteria2Link,
     juicity::JuicityLink,
-    shadowsocks::{ShadowsocksLink, Sip003},
+    shadowsocks::{
+        ShadowsocksLink, Sip003, aead_cipher_specs,
+        ss2022::{CipherConf2022, cipher_confs},
+    },
     trojan::TrojanLink,
     tuic::TuicLink,
     vless::VLESSLink,

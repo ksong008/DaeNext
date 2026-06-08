@@ -1,6 +1,8 @@
 use super::*;
 mod imports;
 pub(super) use self::imports::*;
+mod generic_fixtures;
+pub(super) use self::generic_fixtures::*;
 mod semantic_assertions;
 pub(super) use self::semantic_assertions::*;
 mod config;

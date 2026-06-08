@@ -81,7 +81,7 @@ pub(crate) fn flush_tls_writes(
 }
 
 pub(crate) fn flush_rustls_writes(
-    tcp: &mut TcpStream,
+    tcp: &mut ResidentTcpStream,
     conn: &mut ClientConnection,
     stop: &AtomicBool,
 ) -> Result<(), String> {

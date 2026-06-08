@@ -104,6 +104,7 @@ pub(crate) async fn open_async_rustls_resident_tls_client(
     let server_name = ServerName::try_from(proxy.server_name.clone())
         .map_err(|err| format!("invalid VLESS TLS server name {}: {err}", proxy.server_name))?;
     let connector = tokio_rustls::TlsConnector::from(config);
+    let tcp = AsyncResidentTcpStream::new(tcp, proxy.tls_fragment.clone());
     let tls = time::timeout(
         RESIDENT_CONNECT_TIMEOUT,
         connector.connect(server_name, tcp),
@@ -145,6 +146,7 @@ pub(crate) fn open_rustls_resident_tls_client(
         .map_err(|err| format!("invalid VLESS TLS server name {}: {err}", proxy.server_name))?;
     let conn = ClientConnection::new(config, server_name)
         .map_err(|err| format!("create VLESS rustls client: {err}"))?;
+    let tcp = ResidentTcpStream::new(tcp, proxy.tls_fragment.clone());
     let mut client = VlessTlsClient {
         engine: VlessTlsEngine::Rustls {
             tcp,

@@ -3,13 +3,17 @@ use super::*;
 pub(crate) fn daed_resident_adapter_matrix_reports_initial_rows_admitted_without_secrets() {
     let temp = temp_dir("resident-adapter-matrix-initial-rows");
     let config = temp.join("config.dae");
-    let vless_live = vless_fixture_url("vless", "example.com", 443);
-    let ss_live = shadowsocks_fixture_url("ss", "example.com", 28446);
-    let trojan_live = trojan_fixture_url("trojan", "example.com", 28444);
-    let vmess_live = vmess_fixture_url("vmess", "example.com", 28452, "tcp");
-    let hy2_live = hysteria2_fixture_url("hy2", "example.com", 28453);
-    let tuic_live = tuic_fixture_url("tuic", "example.com", 28454);
-    let juicity_live = juicity_fixture_url("juicity", "example.com", 28455);
+    let primary_host = fixture_host(FixtureEndpoint::Primary);
+    let vless_live = vless_fixture_url("", &primary_host, fixture_port(1));
+    let socks_live = socks5_fixture_url(&primary_host, fixture_port(2));
+    let http_live = http_proxy_fixture_url(&primary_host, fixture_port(3));
+    let ss_live = shadowsocks_fixture_url("", &primary_host, fixture_port(4));
+    let trojan_live = trojan_fixture_url("", &primary_host, fixture_port(5));
+    let anytls_live = anytls_fixture_url(&primary_host, fixture_port(6));
+    let vmess_live = vmess_fixture_url("", &primary_host, fixture_port(7), "tcp");
+    let hy2_live = hysteria2_fixture_url("", &primary_host, fixture_port(8));
+    let tuic_live = tuic_fixture_url("", &primary_host, fixture_port(9));
+    let juicity_live = juicity_fixture_url("", &primary_host, fixture_port(10));
     let config_text = r#"
 global {
   lan_interface: daerust0
@@ -19,11 +23,11 @@ global {
 }
 node {
   vless_live: '__VLESS_LIVE__'
-  socks_live: 'socks5://user:socks-password@example.com:28447#socks'
-  http_live: 'http://user:http-password@example.com:28448#http'
+  socks_live: '__SOCKS_LIVE__'
+  http_live: '__HTTP_LIVE__'
   ss_live: '__SS_LIVE__'
   trojan_live: '__TROJAN_LIVE__'
-  anytls_live: 'anytls://anytls-password@example.com:28451?sni=office.example#anytls'
+  anytls_live: '__ANYTLS_LIVE__'
   vmess_live: '__VMESS_LIVE__'
   hy2_live: '__HY2_LIVE__'
   tuic_live: '__TUIC_LIVE__'
@@ -41,8 +45,11 @@ routing {
 }
 "#
     .replace("__VLESS_LIVE__", &vless_live)
+    .replace("__SOCKS_LIVE__", &socks_live)
+    .replace("__HTTP_LIVE__", &http_live)
     .replace("__SS_LIVE__", &ss_live)
     .replace("__TROJAN_LIVE__", &trojan_live)
+    .replace("__ANYTLS_LIVE__", &anytls_live)
     .replace("__VMESS_LIVE__", &vmess_live)
     .replace("__HY2_LIVE__", &hy2_live)
     .replace("__TUIC_LIVE__", &tuic_live)
@@ -152,27 +159,20 @@ routing {
     );
     let stdout = String::from_utf8_lossy(&output.stdout);
     for secret in [
-        "vless://",
-        "socks5://",
-        "http://user",
-        "ss://",
-        "trojan://",
-        "anytls://",
-        "vmess://",
-        "hy2://",
-        "tuic://",
-        "juicity://",
-        "socks-password",
-        "http-password",
-        "ss-password",
-        "trojan-password",
-        "anytls-password",
-        "hy2-auth",
-        "tuic-password",
-        "juicity-password",
-        "01234567-89ab",
+        ["vless", "://"].concat(),
+        ["socks5", "://"].concat(),
+        ["http", "://", &fixture_user()].concat(),
+        ["ss", "://"].concat(),
+        ["trojan", "://"].concat(),
+        ["anytls", "://"].concat(),
+        ["vmess", "://"].concat(),
+        ["hy2", "://"].concat(),
+        ["tuic", "://"].concat(),
+        ["juicity", "://"].concat(),
+        fixture_secret(),
+        fixture_client_id(),
     ] {
-        assert!(!stdout.contains(secret), "{secret} leaked in {stdout}");
+        assert!(!stdout.contains(&secret), "{secret} leaked in {stdout}");
     }
     let _ = fs::remove_dir_all(temp);
 }

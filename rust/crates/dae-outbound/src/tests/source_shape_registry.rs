@@ -57,15 +57,9 @@ fn source_shape_registry_blocks_extension_shapes_with_stable_reason_ids() {
 
     for expected in [
         "reality-security-underlay",
-        "insecure-secure-endpoint-underlay",
-        "fingerprint-secure-endpoint-underlay",
-        "insecure-frame-stream-underlay",
-        "full-utls-security-underlay",
-        "tls-fragment-security-underlay",
         "shared-reality-security-underlay",
         "mux-transport-wrapper",
         "passthrough-udp-transport",
-        "legacy-cipher-protocol-shape",
     ] {
         assert!(blocked_shape_ids.contains(&expected), "{expected}");
     }
@@ -85,6 +79,31 @@ fn source_shape_registry_blocks_extension_shapes_with_stable_reason_ids() {
         );
         assert_eq!(row.runtime_selection.selected_runtime_scope, "not-selected");
         assert!(!row.evidence_requirements.is_empty(), "{}", row.shape_id);
+    }
+}
+
+#[test]
+fn source_shape_registry_admits_supported_security_underlay_rows_without_live_evidence() {
+    let rows = source_shape_registry_rows();
+    for expected in [
+        "insecure-secure-endpoint-underlay",
+        "fingerprint-secure-endpoint-underlay",
+        "insecure-frame-stream-underlay",
+        "full-utls-security-underlay",
+        "tls-fragment-security-underlay",
+        "legacy-cipher-protocol-shape",
+    ] {
+        let row = rows
+            .iter()
+            .find(|row| row.shape_id == expected)
+            .unwrap_or_else(|| panic!("missing admitted underlay row {expected}"));
+        assert_eq!(row.resident_status, "admitted-baseline", "{expected}");
+        assert_eq!(row.blocker_id, None, "{expected}");
+        assert_eq!(
+            row.expanded_live_matrix.ledger_state, "pending-live-host-evidence",
+            "{expected}"
+        );
+        assert!(!row.release_gate.expanded_source_agrees, "{expected}");
     }
 }
 

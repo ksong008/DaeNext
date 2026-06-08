@@ -46,6 +46,7 @@ mod tests {
             stream_path: String::new(),
             tls: "tls".to_owned(),
             allow_insecure: false,
+            tls_fragment: None,
             utls_fingerprint: None,
             handler: ResidentProxyProtocolPlan::VlessVisionTcpTls { key: [9_u8; 16] },
             chain_parent: None,
@@ -84,6 +85,7 @@ mod tests {
             stream_path: String::new(),
             tls: String::new(),
             allow_insecure: false,
+            tls_fragment: None,
             utls_fingerprint: None,
             handler: ResidentProxyProtocolPlan::HttpProxyTcp {
                 username: String::new(),

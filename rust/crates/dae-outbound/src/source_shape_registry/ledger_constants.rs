@@ -198,6 +198,39 @@ pub(super) const PROXY_TRANSPORT_CAPABILITY: CapabilityLedger = CapabilityLedger
     secure_endpoint: "plain-or-native-underlay",
 };
 
+pub(super) const FINGERPRINT_SECURITY_UNDERLAY_CAPABILITY: CapabilityLedger = CapabilityLedger {
+    graph_composition: "single-graph-admitted",
+    security_underlay: "fingerprint-aware-tls",
+    stream_wrapper: "baseline-or-stream-wrapper",
+    packet_semantics: "tcp-stream-or-packet-wrapper",
+    plugin_wrapper: "none",
+    legacy_layer: "none",
+    quic_option: "baseline-admitted",
+    secure_endpoint: "fingerprint-aware-underlay",
+};
+
+pub(super) const INSECURE_SECURITY_UNDERLAY_CAPABILITY: CapabilityLedger = CapabilityLedger {
+    graph_composition: "single-graph-admitted",
+    security_underlay: "explicit-insecure-tls",
+    stream_wrapper: "baseline-or-frame-stream",
+    packet_semantics: "tcp-stream-or-packet-wrapper",
+    plugin_wrapper: "none",
+    legacy_layer: "none",
+    quic_option: "baseline-admitted",
+    secure_endpoint: "explicit-insecure-underlay",
+};
+
+pub(super) const TLS_FRAGMENT_SECURITY_UNDERLAY_CAPABILITY: CapabilityLedger = CapabilityLedger {
+    graph_composition: "single-graph-admitted",
+    security_underlay: "tls-fragment",
+    stream_wrapper: "baseline-or-stream-wrapper",
+    packet_semantics: "tcp-stream-or-packet-wrapper",
+    plugin_wrapper: "none",
+    legacy_layer: "none",
+    quic_option: "baseline-admitted",
+    secure_endpoint: "standard-tls-fragment-underlay",
+};
+
 pub(super) const SECURE_FRAME_STREAM_CAPABILITY: CapabilityLedger = CapabilityLedger {
     graph_composition: "single-graph-admitted",
     security_underlay: "standard-tls",
@@ -249,6 +282,17 @@ pub(super) const LEGACY_IMPORT_CAPABILITY: CapabilityLedger = CapabilityLedger {
     packet_semantics: "baseline-admitted",
     plugin_wrapper: "none",
     legacy_layer: "legacy-import-normalizer",
+    quic_option: "baseline-admitted",
+    secure_endpoint: "plain-or-native-underlay",
+};
+
+pub(super) const LEGACY_STREAM_CAPABILITY: CapabilityLedger = CapabilityLedger {
+    graph_composition: "single-graph-admitted",
+    security_underlay: "legacy-cipher",
+    stream_wrapper: "resident-legacy-obfs-http-simple",
+    packet_semantics: "tcp-stream",
+    plugin_wrapper: "none",
+    legacy_layer: "resident-legacy-stream-codec",
     quic_option: "baseline-admitted",
     secure_endpoint: "plain-or-native-underlay",
 };

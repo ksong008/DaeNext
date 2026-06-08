@@ -145,6 +145,7 @@ pub(crate) fn build_vless_proxy_plan(
         stream_path,
         tls: vless.tls,
         allow_insecure: false,
+        tls_fragment: resident_tls_fragment_plan(config)?,
         utls_fingerprint,
         handler: ResidentProxyProtocolPlan::VlessVisionTcpTls { key },
         chain_parent: None,

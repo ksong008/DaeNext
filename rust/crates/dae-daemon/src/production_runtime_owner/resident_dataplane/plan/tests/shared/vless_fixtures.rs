@@ -14,7 +14,7 @@ pub(crate) fn vless_fixture_url(
         ps: String::new(),
         add: add.to_owned(),
         port: port.to_string(),
-        id: "01234567-89ab-cdef-0123-456789abcdef".to_owned(),
+        id: fixture_client_id(),
         net: net.to_owned(),
         r#type: "none".to_owned(),
         host: host.to_owned(),
@@ -35,16 +35,50 @@ pub(crate) fn vless_fixture_url(
     .export_url()
 }
 
+pub(crate) fn vless_vision_fixture_url(fingerprint: &str) -> String {
+    vless_fixture_url(
+        "",
+        &fixture_host(FixtureEndpoint::Primary),
+        fixture_authority_port(),
+        "tcp",
+        "",
+        "",
+        &fixture_host(FixtureEndpoint::Authority),
+        "xtls-rprx-vision",
+        fingerprint,
+    )
+}
+
+pub(crate) fn vless_vision_without_flow_fixture_url(fingerprint: &str) -> String {
+    vless_fixture_url(
+        "",
+        &fixture_host(FixtureEndpoint::Primary),
+        fixture_authority_port(),
+        "tcp",
+        "",
+        "",
+        &fixture_host(FixtureEndpoint::Authority),
+        "",
+        fingerprint,
+    )
+}
+
+pub(crate) fn vless_vision_empty_fingerprint_fixture_url() -> String {
+    let mut url = Url::parse(&vless_vision_fixture_url("")).unwrap();
+    url.query_pairs_mut().append_pair("fp", "");
+    url.to_string()
+}
+
 pub(crate) fn vless_xhttp_parser_fixture_url(mode: &str, alpn: &str, extra: &str) -> String {
     VLESSLink {
         ps: String::new(),
-        add: "198.51.100.10".to_owned(),
-        port: "443".to_owned(),
-        id: "7c12c745-63a5-433d-9e60-022e469b5bd4".to_owned(),
+        add: fixture_host(FixtureEndpoint::Primary),
+        port: fixture_authority_port().to_string(),
+        id: fixture_client_id(),
         net: "xhttp".to_owned(),
         r#type: "none".to_owned(),
-        host: "edge.transport.invalid".to_owned(),
-        sni: "edge.transport.invalid".to_owned(),
+        host: fixture_host(FixtureEndpoint::Authority),
+        sni: fixture_host(FixtureEndpoint::Authority),
         path: "/resource?ed=2048".to_owned(),
         xhttp_mode: mode.to_owned(),
         xhttp_extra: extra.to_owned(),

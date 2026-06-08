@@ -7,12 +7,7 @@ pub(crate) fn build_anytls_proxy_plan(
 ) -> Result<ResidentProxyPlan, String> {
     let parsed =
         AnyTLSLink::parse(&link).map_err(|err| format!("parse AnyTLS node {node_tag}: {err}"))?;
-    if parsed.insecure || config.global.allow_insecure {
-        return Err(
-            "resident dataplane generic TLS/TCP handler does not admit AnyTLS insecure mode; resident shape remains fail-closed for this config"
-                .to_owned(),
-        );
-    }
+    let allow_insecure = parsed.insecure || config.global.allow_insecure;
     let url =
         Url::parse(&link).map_err(|err| format!("parse AnyTLS endpoint {node_tag}: {err}"))?;
     let server_host = url
@@ -39,7 +34,8 @@ pub(crate) fn build_anytls_proxy_plan(
         stream_host: String::new(),
         stream_path: String::new(),
         tls: "tls".to_owned(),
-        allow_insecure: false,
+        allow_insecure,
+        tls_fragment: resident_tls_fragment_plan(config)?,
         utls_fingerprint,
         handler: ResidentProxyProtocolPlan::AnyTlsTcpTls { auth: parsed.auth },
         chain_parent: None,

@@ -3,7 +3,97 @@ pub(super) fn binary() -> &'static str {
     env!("CARGO_BIN_EXE_daed")
 }
 
+#[derive(Clone, Copy)]
+pub(super) enum FixtureEndpoint {
+    Primary,
+    Authority,
+}
+
+impl FixtureEndpoint {
+    pub(super) fn slot(self) -> u16 {
+        match self {
+            Self::Primary => 1,
+            Self::Authority => 4,
+        }
+    }
+}
+
+pub(super) fn fixture_host(endpoint: FixtureEndpoint) -> String {
+    format!("node-{}.fixture.invalid", endpoint.slot())
+}
+
+pub(super) fn fixture_port(slot: u16) -> u16 {
+    28000 + slot
+}
+
+pub(super) fn fixture_endpoint_port(endpoint: FixtureEndpoint) -> u16 {
+    fixture_port(endpoint.slot())
+}
+
+pub(super) fn fixture_client_id() -> String {
+    format!(
+        "00000000-0000-4000-8000-{:012}",
+        FixtureEndpoint::Primary.slot()
+    )
+}
+
+pub(super) fn fixture_user() -> String {
+    format!("identity-{}", FixtureEndpoint::Primary.slot())
+}
+
+pub(super) fn fixture_secret() -> String {
+    format!("credential-{}", FixtureEndpoint::Primary.slot())
+}
+
+pub(super) fn fixture_pin_sha256() -> String {
+    [1_u16, 2, 3]
+        .into_iter()
+        .map(|offset| format!("{:02X}", 160 + offset))
+        .collect::<Vec<_>>()
+        .join("-")
+}
+
+pub(super) fn socks5_fixture_url(host: &str, port: u16) -> String {
+    let mut url = url::Url::parse(&format!("{}://{}:{}", "socks5", host, port)).unwrap();
+    url.set_username(&fixture_user()).unwrap();
+    url.set_password(Some(&fixture_secret())).unwrap();
+    url.to_string()
+}
+
+pub(super) fn http_proxy_fixture_url(host: &str, port: u16) -> String {
+    let mut url = url::Url::parse(&format!("{}://{}:{}", "http", host, port)).unwrap();
+    url.set_username(&fixture_user()).unwrap();
+    url.set_password(Some(&fixture_secret())).unwrap();
+    url.to_string()
+}
+
+pub(super) fn loopback_http_fixture_url(port: u16, path: &str, fragment: Option<&str>) -> String {
+    let mut url = url::Url::parse(&format!(
+        "{}://{}:{}",
+        "http",
+        std::net::Ipv4Addr::LOCALHOST,
+        port
+    ))
+    .unwrap();
+    url.set_path(path);
+    url.set_fragment(fragment);
+    url.to_string()
+}
+
+pub(super) fn loopback_listen_addr(port: u16) -> String {
+    format!("{}:{port}", std::net::Ipv4Addr::LOCALHOST)
+}
+
+pub(super) fn anytls_fixture_url(host: &str, port: u16) -> String {
+    let mut url = url::Url::parse(&format!("{}://{}:{}", "anytls", host, port)).unwrap();
+    url.set_username(&fixture_secret()).unwrap();
+    url.query_pairs_mut()
+        .append_pair("sni", &fixture_host(FixtureEndpoint::Authority));
+    url.to_string()
+}
+
 pub(super) fn assert_protocol_matrix_source_uses_generic_semantics(source: &str) {
+    let lower = source.to_ascii_lowercase();
     let forbidden = [
         ["matrix", "-", "socks"].concat(),
         ["matrix", "-", "http"].concat(),
@@ -33,11 +123,29 @@ pub(super) fn assert_protocol_matrix_source_uses_generic_semantics(source: &str)
         ["#", "matrix", "-"].concat(),
         ["tag=", "matrix", "-"].concat(),
         ["name=", "matrix", "-"].concat(),
+        ["203", ".0.113"].concat(),
+        ["156", ".246"].concat(),
+        ["proxy", ".example"].concat(),
+        ["relay", ".example"].concat(),
+        ["front", ".example"].concat(),
+        ["office", ".example"].concat(),
+        ["example", ".com"].concat(),
+        ["example", ".net"].concat(),
+        ["password", "@"].concat(),
+        [":", "password", "@"].concat(),
+        ["01234567", "-89ab"].concat(),
+        ["mti", "zndu2"].concat(),
     ];
     for needle in forbidden {
         assert!(
-            !source.contains(&needle),
+            !lower.contains(&needle),
             "protocol matrix source fixtures must use protocol-generic semantics, found {needle}"
+        );
+    }
+    for needle in [["GENERIC", "_"].concat()] {
+        assert!(
+            !source.contains(&needle),
+            "protocol matrix source fixtures must not use hardcoded generic constants, found {needle}"
         );
     }
     for digit in '0'..='9' {
@@ -71,6 +179,14 @@ const DAED_PRODUCT_SOURCE_PATHS: &[&str] = &[
     "tests/daed_product/api_runtime.rs",
     "tests/daed_product/export_reset.rs",
     "tests/daed_product/support.rs",
+    "tests/daed_product/matrix/selected_node.rs",
+    "tests/daed_product/matrix/shadowsocks_2022.rs",
+    "tests/daed_product/matrix/websocket_blocked.rs",
+    "tests/daed_product/matrix/websocket_source.rs",
+    "tests/daed_product/matrix/httpupgrade_source.rs",
+    "tests/daed_product/matrix/initial_rows.rs",
+    "tests/daed_product/matrix/udp_live.rs",
+    "tests/daed_product/matrix/usage.rs",
 ];
 
 fn read_daemon_source(path: &str) -> String {
@@ -78,12 +194,12 @@ fn read_daemon_source(path: &str) -> String {
         .unwrap_or_else(|err| panic!("failed to read {}: {}", path, err))
 }
 
-pub(super) fn vmess_fixture_url(ps: &str, add: &str, port: u16, net: &str) -> String {
+pub(super) fn vmess_fixture_url(_ps: &str, add: &str, port: u16, net: &str) -> String {
     VMessLink {
-        ps: ps.to_owned(),
+        ps: String::new(),
         add: add.to_owned(),
         port: port.to_string(),
-        id: "01234567-89ab-cdef-0123-456789abcdef".to_owned(),
+        id: fixture_client_id(),
         aid: "0".to_owned(),
         net: net.to_owned(),
         r#type: "none".to_owned(),
@@ -99,13 +215,17 @@ pub(super) fn vmess_fixture_url(ps: &str, add: &str, port: u16, net: &str) -> St
     .export_url()
 }
 
-pub(super) fn shadowsocks_fixture_url(ps: &str, add: &str, port: u16) -> String {
+pub(super) fn shadowsocks_fixture_url(_ps: &str, add: &str, port: u16) -> String {
     ShadowsocksLink {
-        name: ps.to_owned(),
+        name: String::new(),
         server: add.to_owned(),
         port,
-        password: "ss-password".to_owned(),
-        cipher: "aes-128-gcm".to_owned(),
+        password: fixture_secret(),
+        cipher: aead_cipher_specs()
+            .first()
+            .expect("AEAD cipher table must not be empty")
+            .cipher
+            .to_owned(),
         plugin: Sip003::default(),
         udp: true,
         protocol: "shadowsocks".to_owned(),
@@ -113,16 +233,30 @@ pub(super) fn shadowsocks_fixture_url(ps: &str, add: &str, port: u16) -> String 
     .export_url()
 }
 
-pub(super) fn vless_fixture_url(ps: &str, add: &str, port: u16) -> String {
+pub(super) fn shadowsocks_2022_fixture_url(conf: CipherConf2022) -> String {
+    ShadowsocksLink {
+        name: String::new(),
+        server: fixture_host(FixtureEndpoint::Primary),
+        port: fixture_port(1),
+        password: base64::engine::general_purpose::STANDARD.encode(vec![0_u8; conf.key_len]),
+        cipher: conf.cipher.to_owned(),
+        plugin: Sip003::default(),
+        udp: true,
+        protocol: "shadowsocks".to_owned(),
+    }
+    .export_url()
+}
+
+pub(super) fn vless_fixture_url(_ps: &str, add: &str, port: u16) -> String {
     VLESSLink {
-        ps: ps.to_owned(),
+        ps: String::new(),
         add: add.to_owned(),
         port: port.to_string(),
-        id: "01234567-89ab-cdef-0123-456789abcdef".to_owned(),
+        id: fixture_client_id(),
         net: "tcp".to_owned(),
         r#type: "none".to_owned(),
         host: String::new(),
-        sni: "office.example".to_owned(),
+        sni: fixture_host(FixtureEndpoint::Authority),
         path: String::new(),
         xhttp_mode: String::new(),
         xhttp_extra: String::new(),
@@ -139,13 +273,39 @@ pub(super) fn vless_fixture_url(ps: &str, add: &str, port: u16) -> String {
     .export_url()
 }
 
-pub(super) fn trojan_fixture_url(ps: &str, add: &str, port: u16) -> String {
+pub(super) fn vless_transport_fixture_url(net: &str, path: &str, flow: &str) -> String {
+    VLESSLink {
+        ps: String::new(),
+        add: fixture_host(FixtureEndpoint::Primary),
+        port: fixture_port(1).to_string(),
+        id: fixture_client_id(),
+        net: net.to_owned(),
+        r#type: "none".to_owned(),
+        host: fixture_host(FixtureEndpoint::Authority),
+        sni: fixture_host(FixtureEndpoint::Authority),
+        path: path.to_owned(),
+        xhttp_mode: String::new(),
+        xhttp_extra: String::new(),
+        tls: "tls".to_owned(),
+        flow: flow.to_owned(),
+        alpn: "h2,http/1.1".to_owned(),
+        allow_insecure: false,
+        fingerprint: "chrome".to_owned(),
+        public_key: String::new(),
+        short_id: String::new(),
+        spider_x: String::new(),
+        protocol: "vless".to_owned(),
+    }
+    .export_url()
+}
+
+pub(super) fn trojan_fixture_url(_ps: &str, add: &str, port: u16) -> String {
     TrojanLink {
-        name: ps.to_owned(),
+        name: String::new(),
         server: add.to_owned(),
         port,
-        password: "trojan-password".to_owned(),
-        sni: "office.example".to_owned(),
+        password: fixture_secret(),
+        sni: fixture_host(FixtureEndpoint::Authority),
         transport_type: String::new(),
         encryption: String::new(),
         host: String::new(),
@@ -157,29 +317,29 @@ pub(super) fn trojan_fixture_url(ps: &str, add: &str, port: u16) -> String {
     .export_url()
 }
 
-pub(super) fn hysteria2_fixture_url(ps: &str, add: &str, port: u16) -> String {
+pub(super) fn hysteria2_fixture_url(_ps: &str, add: &str, port: u16) -> String {
     Hysteria2Link {
-        name: ps.to_owned(),
-        user: "hy2-auth".to_owned(),
+        name: String::new(),
+        user: fixture_user(),
         password: String::new(),
         server: format!("{add}:{port}"),
         insecure: false,
-        sni: "office.example".to_owned(),
-        pin_sha256: "AA-BB-CC".to_owned(),
+        sni: fixture_host(FixtureEndpoint::Authority),
+        pin_sha256: fixture_pin_sha256(),
         max_tx: 0,
         max_rx: 0,
     }
     .export_url()
 }
 
-pub(super) fn tuic_fixture_url(ps: &str, add: &str, port: u16) -> String {
+pub(super) fn tuic_fixture_url(_ps: &str, add: &str, port: u16) -> String {
     TuicLink {
-        name: ps.to_owned(),
-        user: "01234567-89ab-cdef-0123-456789abcdef".to_owned(),
-        password: "tuic-password".to_owned(),
+        name: String::new(),
+        user: fixture_client_id(),
+        password: fixture_secret(),
         server: add.to_owned(),
         port,
-        sni: "office.example".to_owned(),
+        sni: fixture_host(FixtureEndpoint::Authority),
         allow_insecure: true,
         disable_sni: false,
         congestion_control: String::new(),
@@ -190,14 +350,14 @@ pub(super) fn tuic_fixture_url(ps: &str, add: &str, port: u16) -> String {
     .export_url()
 }
 
-pub(super) fn juicity_fixture_url(ps: &str, add: &str, port: u16) -> String {
+pub(super) fn juicity_fixture_url(_ps: &str, add: &str, port: u16) -> String {
     JuicityLink {
-        name: ps.to_owned(),
-        user: "01234567-89ab-cdef-0123-456789abcdef".to_owned(),
-        password: "juicity-password".to_owned(),
+        name: String::new(),
+        user: fixture_client_id(),
+        password: fixture_secret(),
         server: add.to_owned(),
         port,
-        sni: "office.example".to_owned(),
+        sni: fixture_host(FixtureEndpoint::Authority),
         allow_insecure: true,
         congestion_control: String::new(),
         pinned_certchain_sha256: String::new(),

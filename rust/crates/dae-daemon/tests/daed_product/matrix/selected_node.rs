@@ -3,6 +3,8 @@ use super::*;
 pub(crate) fn daed_resident_adapter_matrix_reports_admitted_selected_node_without_links() {
     let temp = temp_dir("resident-adapter-matrix-admitted");
     let config = temp.join("config.dae");
+    let primary_host = fixture_host(FixtureEndpoint::Primary);
+    let source = vless_fixture_url("", &primary_host, fixture_port(1));
     fs::write(
         &config,
         r#"
@@ -15,7 +17,7 @@ global {
   utls_imitate: safari
 }
 node {
-  vless_live: 'vless://01234567-89ab-cdef-0123-456789abcdef@example.com:443?security=tls&type=tcp&sni=office.example&flow=xtls-rprx-vision&fp=chrome&alpn=h2,http/1.1'
+  vless_live: '__SOURCE__'
 }
 group {
   proxy {
@@ -27,7 +29,8 @@ routing {
   l4proto(tcp) && dport(443) -> proxy
   fallback: direct
 }
-"#,
+"#
+        .replace("__SOURCE__", &source),
     )
     .unwrap();
     fs::set_permissions(&config, fs::Permissions::from_mode(0o600)).unwrap();
@@ -135,7 +138,8 @@ routing {
         absent_row["planner_status"].as_str().unwrap(),
         "not-present"
     );
-    assert!(!String::from_utf8_lossy(&output.stdout).contains("01234567-89ab"));
-    assert!(!String::from_utf8_lossy(&output.stdout).contains("vless://"));
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(!stdout.contains(&fixture_client_id()));
+    assert!(!stdout.contains(&["vless", "://"].concat()));
     let _ = fs::remove_dir_all(temp);
 }

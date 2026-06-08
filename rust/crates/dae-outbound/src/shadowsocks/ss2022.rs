@@ -53,6 +53,10 @@ pub const CIPHER_CONFS: &[CipherConf2022] = &[
     },
 ];
 
+pub fn cipher_confs() -> &'static [CipherConf2022] {
+    CIPHER_CONFS
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct PskInfo {
     pub cipher: String,
@@ -93,7 +97,7 @@ pub struct SlidingWindowFilter {
 }
 
 pub fn cipher_conf(cipher: &str) -> Option<CipherConf2022> {
-    CIPHER_CONFS
+    cipher_confs()
         .iter()
         .copied()
         .find(|conf| conf.cipher == cipher)

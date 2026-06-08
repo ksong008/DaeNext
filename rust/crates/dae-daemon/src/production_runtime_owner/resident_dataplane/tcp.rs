@@ -38,8 +38,9 @@ use dae_outbound::{
         write_juicity_tcp_request,
     },
     shadowsocks::{
-        AeadStreamCodec, ShadowsocksMetadata, Sip003SimpleObfsHttpOptions,
-        Sip003SimpleObfsTlsOptions, cipher_spec, read_encrypted_chunk_from_stream,
+        AeadStreamCodec, ShadowsocksMetadata, ShadowsocksRStreamDecoder, ShadowsocksRStreamEncoder,
+        Sip003SimpleObfsHttpOptions, Sip003SimpleObfsTlsOptions, cipher_spec,
+        read_encrypted_chunk_from_stream, shadowsocksr_http_simple_origin_request,
         simple_obfs_http_request_with_body, simple_obfs_tls_client_hello_with_body,
         ss2022_tcp_client_stream_encoder, ss2022_tcp_server_stream_decoder,
         ss2022_tcp_unix_timestamp_now,
@@ -129,6 +130,8 @@ mod stream_helpers;
 use self::stream_helpers::*;
 mod shadowsocks_relay;
 use self::shadowsocks_relay::*;
+mod shadowsocksr_relay;
+use self::shadowsocksr_relay::*;
 mod vmess_relay;
 use self::vmess_relay::*;
 mod event_builders;

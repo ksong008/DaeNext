@@ -11,11 +11,12 @@ pub mod ss2022_tcp_dataplane;
 pub mod ss2022_udp_dataplane;
 pub mod ssr_dataplane;
 pub mod ssr_link;
+pub mod ssr_stream;
 
 pub use aead::{
     AeadCipherSpec, AeadStreamCodec, AeadTcpSalts, ShadowsocksAeadTcpExchangeReport,
-    ShadowsocksAeadUdpPacket, TAG_LEN, cipher_spec, decode_client_initial, decode_udp_packet,
-    encode_client_initial, encode_server_payload, encode_udp_packet,
+    ShadowsocksAeadUdpPacket, TAG_LEN, aead_cipher_specs, cipher_spec, decode_client_initial,
+    decode_udp_packet, encode_client_initial, encode_server_payload, encode_udp_packet,
     read_client_initial_from_stream, read_encrypted_chunk_from_async_stream,
     read_encrypted_chunk_from_stream, tcp_exchange, tcp_exchange_over_stream,
 };
@@ -66,3 +67,8 @@ pub use ssr_dataplane::{
     read_shadowsocksr_http_simple_request, shadowsocksr_three_layer_tcp_exchange_over_stream,
 };
 pub use ssr_link::ShadowsocksRLink;
+pub use ssr_stream::{
+    ShadowsocksRStreamCipherSpec, ShadowsocksRStreamDecoder, ShadowsocksRStreamEncoder,
+    shadowsocksr_http_simple_origin_request, shadowsocksr_stream_cipher_specs,
+    shadowsocksr_stream_cipher_supported,
+};

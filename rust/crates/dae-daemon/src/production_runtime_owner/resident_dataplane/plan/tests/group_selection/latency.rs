@@ -1,25 +1,39 @@
 use super::*;
-#[test]
-pub(super) fn resident_dataplane_min_policy_selects_checked_lowest_last_latency() {
-    let config = parse_config(
+
+fn two_node_latency_config(global_extra: &str, group_body: &str) -> Config {
+    let node_a = socks5_endpoint_fixture_url(FixtureEndpoint::Primary);
+    let node_b = socks5_endpoint_fixture_url(FixtureEndpoint::Secondary);
+    let config_text = format!(
         r#"
-        global {
+        global {{
         lan_interface: daerust0
-        }
-        node {
-        node_a: 'socks://127.0.0.1:1080'
-        node_b: 'socks://127.0.0.1:1081'
-        }
-        group {
-        proxy {
-            filter: name(node_a, node_b)
-            policy: min
-        }
-        }
-        routing {
+        {global_extra}
+        }}
+        node {{
+        node_a: '{node_a}'
+        node_b: '{node_b}'
+        }}
+        group {{
+        proxy {{
+            {group_body}
+        }}
+        }}
+        routing {{
         l4proto(tcp) -> proxy
         fallback: direct
-        }
+        }}
+        "#
+    );
+    parse_config(&config_text)
+}
+
+#[test]
+pub(super) fn resident_dataplane_min_policy_selects_checked_lowest_last_latency() {
+    let config = two_node_latency_config(
+        "",
+        r#"
+        filter: name(node_a, node_b)
+        policy: min
         "#,
     );
     let plan = build_resident_dataplane_plan(&config).unwrap();
@@ -35,25 +49,11 @@ pub(super) fn resident_dataplane_min_policy_selects_checked_lowest_last_latency(
 
 #[test]
 pub(super) fn resident_dataplane_min_avg10_policy_uses_latency_history() {
-    let config = parse_config(
+    let config = two_node_latency_config(
+        "",
         r#"
-        global {
-        lan_interface: daerust0
-        }
-        node {
-        node_a: 'socks://127.0.0.1:1080'
-        node_b: 'socks://127.0.0.1:1081'
-        }
-        group {
-        proxy {
-            filter: name(node_a, node_b)
-            policy: min_avg10
-        }
-        }
-        routing {
-        l4proto(tcp) -> proxy
-        fallback: direct
-        }
+        filter: name(node_a, node_b)
+        policy: min_avg10
         "#,
     );
     let plan = build_resident_dataplane_plan(&config).unwrap();
@@ -73,25 +73,11 @@ pub(super) fn resident_dataplane_min_avg10_policy_uses_latency_history() {
 
 #[test]
 pub(super) fn resident_dataplane_min_moving_avg_policy_uses_moving_average() {
-    let config = parse_config(
+    let config = two_node_latency_config(
+        "",
         r#"
-        global {
-        lan_interface: daerust0
-        }
-        node {
-        node_a: 'socks://127.0.0.1:1080'
-        node_b: 'socks://127.0.0.1:1081'
-        }
-        group {
-        proxy {
-            filter: name(node_a, node_b)
-            policy: min_moving_avg
-        }
-        }
-        routing {
-        l4proto(tcp) -> proxy
-        fallback: direct
-        }
+        filter: name(node_a, node_b)
+        policy: min_moving_avg
         "#,
     );
     let plan = build_resident_dataplane_plan(&config).unwrap();
@@ -107,27 +93,12 @@ pub(super) fn resident_dataplane_min_moving_avg_policy_uses_moving_average() {
 
 #[test]
 pub(super) fn resident_dataplane_min_policy_honors_group_check_tolerance() {
-    let config = parse_config(
+    let config = two_node_latency_config(
+        "check_tolerance: 10ms",
         r#"
-        global {
-        lan_interface: daerust0
-        check_tolerance: 10ms
-        }
-        node {
-        node_a: 'socks://127.0.0.1:1080'
-        node_b: 'socks://127.0.0.1:1081'
-        }
-        group {
-        proxy {
-            filter: name(node_a, node_b)
-            policy: min
-            check_tolerance: 50ms
-        }
-        }
-        routing {
-        l4proto(tcp) -> proxy
-        fallback: direct
-        }
+        filter: name(node_a, node_b)
+        policy: min
+        check_tolerance: 50ms
         "#,
     );
     let plan = build_resident_dataplane_plan(&config).unwrap();
@@ -147,26 +118,12 @@ pub(super) fn resident_dataplane_min_policy_honors_group_check_tolerance() {
 
 #[test]
 pub(super) fn resident_dataplane_min_policy_applies_add_latency_to_sorting_only() {
-    let config = parse_config(
+    let config = two_node_latency_config(
+        "",
         r#"
-        global {
-        lan_interface: daerust0
-        }
-        node {
-        node_a: 'socks://127.0.0.1:1080'
-        node_b: 'socks://127.0.0.1:1081'
-        }
-        group {
-        proxy {
-            filter: name(node_a) [add_latency: 100ms]
-            filter: name(node_b)
-            policy: min
-        }
-        }
-        routing {
-        l4proto(tcp) -> proxy
-        fallback: direct
-        }
+        filter: name(node_a) [add_latency: 100ms]
+        filter: name(node_b)
+        policy: min
         "#,
     );
     let plan = build_resident_dataplane_plan(&config).unwrap();

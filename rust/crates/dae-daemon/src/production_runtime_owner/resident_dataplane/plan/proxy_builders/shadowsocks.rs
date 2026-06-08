@@ -192,8 +192,13 @@ pub(crate) fn build_shadowsocks_proxy_plan(
         net,
         stream_host,
         stream_path,
-        tls,
+        tls: tls.clone(),
         allow_insecure: false,
+        tls_fragment: if tls == "tls" {
+            resident_tls_fragment_plan(config)?
+        } else {
+            None
+        },
         utls_fingerprint: None,
         handler,
         chain_parent: None,

@@ -1,58 +1,73 @@
 use super::*;
 pub(crate) fn resident_admitted_source_fixture_links() -> Vec<String> {
+    let primary_host = fixture_host(FixtureEndpoint::Primary);
+    let authority_host = fixture_host(FixtureEndpoint::Authority);
     vec![
-        "socks5://user:password@proxy.example.net:1080".to_owned(),
-        "http://user:password@proxy.example.net:80".to_owned(),
-        "https://user:password@secure-proxy.example.net:443".to_owned(),
-        shadowsocks_fixture_url("ss", "203.0.113.10", 28446),
-        shadowsocks_plugin_fixture_url("ss-plugin", "203.0.113.10", 28447),
-        trojan_fixture_url("trojan", "203.0.113.10", 28444),
-        trojan_websocket_fixture_url("trojan-ws", "203.0.113.10", 28456),
-        "anytls://password@secure-stream.example.net:443?sni=secure-stream.example.net".to_owned(),
-        vmess_fixture_url("vmess", "203.0.113.10", 28452, "tcp", "", "", ""),
+        socks5_fixture_url(&primary_host, fixture_port(1)),
+        http_proxy_fixture_url(&primary_host, fixture_port(1)),
+        https_proxy_fixture_url(&primary_host, fixture_port(1)),
+        shadowsocks_fixture_url("", &primary_host, fixture_port(1)),
+        shadowsocks_plugin_fixture_url("", &primary_host, fixture_port(2)),
+        shadowsocksr_http_simple_fixture_url(
+            shadowsocksr_stream_cipher_specs()
+                .first()
+                .expect("ShadowsocksR stream cipher table must not be empty")
+                .cipher,
+        ),
+        trojan_fixture_url("", &primary_host, fixture_port(1)),
+        trojan_websocket_fixture_url("", &primary_host, fixture_port(2)),
+        anytls_fixture_url(&primary_host, fixture_port(1)),
+        vmess_fixture_url("", &primary_host, fixture_port(2), "tcp", "", "", ""),
         vmess_fixture_url(
-            "vmess-ws",
-            "203.0.113.10",
-            28454,
+            "",
+            &primary_host,
+            fixture_port(3),
             "ws",
-            "front.example",
+            &authority_host,
             "/vmess",
             "",
         ),
         vmess_fixture_url_with_sni(
-            "203.0.113.10",
-            28454,
+            &primary_host,
+            fixture_port(3),
             "ws",
-            "front.example",
+            &authority_host,
             "/vmess",
             "tls",
-            "office.example",
+            &authority_host,
         ),
         vmess_fixture_url_with_sni(
-            "203.0.113.10",
-            28460,
+            &primary_host,
+            fixture_port(4),
             "httpupgrade",
-            "front.example",
+            &authority_host,
             "/vmess-upgrade",
             "tls",
-            "office.example",
+            &authority_host,
         ),
         vless_fixture_url(
-            "vless-ws",
-            "203.0.113.10",
-            28443,
+            "",
+            &primary_host,
+            fixture_port(5),
             "ws",
-            "front.example",
+            &authority_host,
             "/ws",
-            "office.example",
+            &authority_host,
             "",
             "",
         ),
-        hysteria2_fixture_url("hy2", "203.0.113.10", 28453),
-        hysteria2_fixture_url_with_pin("hy2-hop", "203.0.113.10:28453,28454-28455", "AA-BB-CC"),
-        tuic_fixture_url("tuic", "203.0.113.10", 28454, true),
-        tuic_fixture_url("tuic-verified", "203.0.113.10", 28454, false),
-        juicity_fixture_url("juicity", "203.0.113.10", 28455, true),
+        hysteria2_fixture_url("", &primary_host, fixture_port(6)),
+        hysteria2_fixture_url_with_pin(
+            "",
+            &fixture_hop_server(
+                fixture_port(6),
+                &format!(",{}-{}", fixture_port(7), fixture_port(8)),
+            ),
+            &fixture_pin_sha256(),
+        ),
+        tuic_fixture_url("", &primary_host, fixture_port(7), true),
+        tuic_fixture_url("", &primary_host, fixture_port(7), false),
+        juicity_fixture_url("", &primary_host, fixture_port(8), true),
     ]
 }
 
@@ -73,6 +88,16 @@ pub(crate) fn assert_common_source_import_round_trips(link: &str) {
         }
         "ss" => {
             assert_eq!(ShadowsocksLink::parse(link).unwrap().export_url(), link);
+        }
+        "ssr" => {
+            let parsed = ShadowsocksRLink::parse(link).unwrap();
+            assert_eq!(parsed.protocol, "shadowsocksr");
+            assert!(!parsed.server.is_empty(), "{link}");
+            assert!(parsed.port > 0, "{link}");
+            assert!(!parsed.password.is_empty(), "{link}");
+            assert!(!parsed.cipher.is_empty(), "{link}");
+            assert_eq!(parsed.proto, "origin");
+            assert_eq!(parsed.obfs, "http_simple");
         }
         "trojan" | "trojan-go" => {
             assert_eq!(TrojanLink::parse(link).unwrap().export_url(), link);

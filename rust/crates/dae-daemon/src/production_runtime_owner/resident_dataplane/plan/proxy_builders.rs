@@ -7,6 +7,8 @@ mod basic_tcp;
 pub(super) use self::basic_tcp::*;
 mod shadowsocks;
 pub(super) use self::shadowsocks::*;
+mod shadowsocksr;
+pub(super) use self::shadowsocksr::*;
 mod trojan;
 pub(super) use self::trojan::*;
 mod anytls;

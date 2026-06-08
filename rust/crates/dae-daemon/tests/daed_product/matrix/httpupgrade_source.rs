@@ -3,6 +3,7 @@ use super::*;
 pub(crate) fn daed_resident_adapter_matrix_admits_httpupgrade_source_shape() {
     let temp = temp_dir("resident-adapter-source-httpupgrade-admitted");
     let config = temp.join("config.dae");
+    let source = vless_transport_fixture_url("httpupgrade", "/resource", "");
     fs::write(
         &config,
         r#"
@@ -13,7 +14,7 @@ global {
   mptcp: false
 }
 node {
-  vless_httpupgrade: 'vless://01234567-89ab-cdef-0123-456789abcdef@example.com:443?security=tls&type=httpupgrade&sni=office.example&host=front.example&path=%2Fvless-upgrade&fp=chrome#vless-httpupgrade-resident'
+  vless_httpupgrade: '__SOURCE__'
 }
 group {
   proxy {
@@ -25,7 +26,8 @@ routing {
   l4proto(tcp) && dport(443) -> proxy
   fallback: direct
 }
-"#,
+"#
+        .replace("__SOURCE__", &source),
     )
     .unwrap();
     fs::set_permissions(&config, fs::Permissions::from_mode(0o600)).unwrap();
@@ -77,7 +79,8 @@ routing {
             .unwrap(),
         "vless"
     );
-    assert!(!String::from_utf8_lossy(&output.stdout).contains("vless://"));
-    assert!(!String::from_utf8_lossy(&output.stdout).contains("01234567-89ab"));
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(!stdout.contains(&["vless", "://"].concat()));
+    assert!(!stdout.contains(&fixture_client_id()));
     let _ = fs::remove_dir_all(temp);
 }

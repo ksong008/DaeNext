@@ -30,6 +30,20 @@ pub(super) fn resident_utls_fingerprint_plan(
     Ok(None)
 }
 
+pub(super) fn resident_tls_fragment_plan(
+    config: &Config,
+) -> Result<Option<TlsFragmentOptions>, String> {
+    if !config.global.tls_fragment {
+        return Ok(None);
+    }
+    TlsFragmentOptions::from_ranges(
+        config.global.tls_fragment_length.trim(),
+        config.global.tls_fragment_interval.trim(),
+    )
+    .map(Some)
+    .map_err(|err| format!("resident dataplane tls_fragment: {err}"))
+}
+
 pub(super) fn resolve_optional_resident_utls_fingerprint(
     source: &'static str,
     requested: &str,

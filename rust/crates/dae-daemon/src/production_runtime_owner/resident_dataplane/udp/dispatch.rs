@@ -29,8 +29,9 @@ pub(super) fn exchange_proxy_udp(
         ResidentProxyProtocolPlan::ShadowsocksSimpleObfsHttpTcp { .. }
         | ResidentProxyProtocolPlan::ShadowsocksSimpleObfsTlsTcp { .. }
         | ResidentProxyProtocolPlan::ShadowsocksV2rayPluginTlsWsTcp { .. }
-        | ResidentProxyProtocolPlan::Shadowsocks2022SimpleObfsHttpTcp { .. } => Err(format!(
-            "unsupported_udp_handler: resident UDP adapter dispatch selected handler {} for protocol {}; SIP003 plugin wrappers are TCP stream wrappers and UDP remains fail-closed without fallback execution",
+        | ResidentProxyProtocolPlan::Shadowsocks2022SimpleObfsHttpTcp { .. }
+        | ResidentProxyProtocolPlan::ShadowsocksRHttpSimpleTcp { .. } => Err(format!(
+            "unsupported_udp_handler: resident UDP adapter dispatch selected handler {} for protocol {}; stream wrappers are TCP relay shapes and UDP remains fail-closed without fallback execution",
             resident_udp_handler_name(&proxy.handler),
             proxy.protocol
         )),

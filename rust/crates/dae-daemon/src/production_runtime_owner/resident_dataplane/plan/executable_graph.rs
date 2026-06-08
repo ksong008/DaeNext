@@ -4,7 +4,8 @@ use super::super::{link_hash, redacted_link_source};
 use super::{ResidentProxyPlan, ResidentProxyProtocolPlan, ResidentUtlsFingerprintPlan};
 
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub(super) struct ResidentExecutableGraphDescriptor {
+pub(in crate::production_runtime_owner::resident_dataplane) struct ResidentExecutableGraphDescriptor
+{
     graph_id: String,
     link_hash: String,
     redacted_link_source: String,
@@ -158,10 +159,13 @@ impl ResidentExecutableGraphDescriptor {
         });
         let provider = match self.security_underlay.as_str() {
             "fingerprint-aware-tls" => "boringssl",
+            "insecure-tls" => "rustls",
+            "tls-fragment" => "rustls",
             "standard-tls" => "rustls",
             "quic-tls" => "quinn-rustls",
             "aead" => "protocol-aead-codec",
             "aead-2022" => "protocol-aead-2022-codec",
+            "legacy-cipher" => "protocol-legacy-stream-codec",
             "none" => "plain",
             _ => "unsupported",
         };
@@ -203,6 +207,7 @@ impl ResidentExecutableGraphDescriptor {
             "xhttp" => ("admitted", "resident-xhttp-h2-packet-up", Value::Null),
             "simple-obfs-http" => ("admitted", "resident-simple-obfs-http", Value::Null),
             "simple-obfs-tls" => ("admitted", "resident-simple-obfs-tls", Value::Null),
+            "legacy-obfs" => ("admitted", "resident-legacy-obfs-http-simple", Value::Null),
             "v2ray-plugin-tls-websocket" => (
                 "admitted",
                 "resident-v2ray-plugin-tls-websocket",
@@ -330,6 +335,8 @@ fn graph_security_underlay(proxy: &ResidentProxyPlan) -> String {
             "" | "none" => "none".to_owned(),
             "aead" => "aead".to_owned(),
             "quic" => "quic-tls".to_owned(),
+            "tls" if proxy.allow_insecure => "insecure-tls".to_owned(),
+            "tls" if proxy.tls_fragment.is_some() => "tls-fragment".to_owned(),
             "tls" => "standard-tls".to_owned(),
             other => other.to_owned(),
         }
@@ -362,7 +369,8 @@ fn graph_packet_semantics(proxy: &ResidentProxyPlan) -> String {
         ResidentProxyProtocolPlan::ShadowsocksSimpleObfsHttpTcp { .. }
         | ResidentProxyProtocolPlan::ShadowsocksSimpleObfsTlsTcp { .. }
         | ResidentProxyProtocolPlan::ShadowsocksV2rayPluginTlsWsTcp { .. }
-        | ResidentProxyProtocolPlan::Shadowsocks2022SimpleObfsHttpTcp { .. } => {
+        | ResidentProxyProtocolPlan::Shadowsocks2022SimpleObfsHttpTcp { .. }
+        | ResidentProxyProtocolPlan::ShadowsocksRHttpSimpleTcp { .. } => {
             "plugin-wrapper-stream".to_owned()
         }
         ResidentProxyProtocolPlan::Hysteria2QuicTcp { .. }

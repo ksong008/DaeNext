@@ -36,6 +36,7 @@ pub(crate) fn build_socks5_proxy_plan(
         stream_path: String::new(),
         tls: "none".to_owned(),
         allow_insecure: false,
+        tls_fragment: None,
         utls_fingerprint: None,
         handler: ResidentProxyProtocolPlan::Socks5Tcp {
             username: parsed.username().to_owned(),
@@ -55,21 +56,35 @@ pub(crate) fn build_http_proxy_plan(
 ) -> Result<ResidentProxyPlan, String> {
     let parsed = HttpProxyLink::parse(&link)
         .map_err(|err| format!("parse HTTP proxy node {node_tag}: {err}"))?;
-    if parsed.allow_insecure || config.global.allow_insecure {
+    let tls_implementation = parsed.tls_implementation.trim();
+    if parsed.protocol == HttpScheme::Https
+        && !tls_implementation.eq_ignore_ascii_case("tls")
+        && !tls_implementation.eq_ignore_ascii_case("utls")
+    {
         return Err(format!(
-            "resident dataplane HTTP proxy handler does not admit allow_insecure for node {node_tag}"
+            "resident dataplane HTTPS proxy handler admits tls or utls tlsImplementation for node {node_tag}"
         ));
     }
-    if parsed.protocol == HttpScheme::Https && !parsed.utls_imitate.is_empty() {
-        return Err(format!(
-            "resident dataplane HTTPS proxy handler does not admit fingerprint/utls imitation for node {node_tag}"
-        ));
-    }
-    if parsed.protocol == HttpScheme::Https && parsed.tls_implementation != "tls" {
-        return Err(format!(
-            "resident dataplane HTTPS proxy handler admits standard tlsImplementation only for node {node_tag}"
-        ));
-    }
+    let allow_insecure = parsed.protocol == HttpScheme::Https
+        && (parsed.allow_insecure || config.global.allow_insecure);
+    let utls_fingerprint = match parsed.protocol {
+        HttpScheme::Http => None,
+        HttpScheme::Https if !parsed.utls_imitate.trim().is_empty() => {
+            resolve_optional_resident_utls_fingerprint(
+                "HTTPS proxy utlsImitate",
+                parsed.utls_imitate.trim(),
+            )?
+        }
+        HttpScheme::Https if tls_implementation.eq_ignore_ascii_case("utls") => {
+            resolve_resident_utls_fingerprint("HTTPS proxy tlsImplementation", "chrome")
+                .map(Some)?
+        }
+        HttpScheme::Https => resident_utls_fingerprint_plan(config, None)?,
+    };
+    let tls_fragment = match parsed.protocol {
+        HttpScheme::Http => None,
+        HttpScheme::Https => resident_tls_fragment_plan(config)?,
+    };
     let (tls, server_name, alpn) = match parsed.protocol {
         HttpScheme::Http => ("none".to_owned(), String::new(), Vec::new()),
         HttpScheme::Https => (
@@ -100,8 +115,9 @@ pub(crate) fn build_http_proxy_plan(
         stream_host: parsed.host.clone(),
         stream_path: parsed.path.clone(),
         tls,
-        allow_insecure: false,
-        utls_fingerprint: None,
+        allow_insecure,
+        tls_fragment,
+        utls_fingerprint,
         handler: ResidentProxyProtocolPlan::HttpProxyTcp {
             username: parsed.username,
             password: parsed.password,

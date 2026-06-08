@@ -46,6 +46,7 @@ pub(crate) fn build_tuic_proxy_plan(
         stream_path: String::new(),
         tls: "quic".to_owned(),
         allow_insecure,
+        tls_fragment: None,
         utls_fingerprint: None,
         handler: ResidentProxyProtocolPlan::TuicQuicTcp {
             uuid: parsed.user,
@@ -132,6 +133,7 @@ pub(crate) fn build_hysteria2_proxy_plan(
         stream_path: String::new(),
         tls: "quic".to_owned(),
         allow_insecure: false,
+        tls_fragment: None,
         utls_fingerprint: None,
         handler: ResidentProxyProtocolPlan::Hysteria2QuicTcp {
             auth,
@@ -191,6 +193,7 @@ pub(crate) fn build_juicity_proxy_plan(
         stream_path: String::new(),
         tls: "quic".to_owned(),
         allow_insecure,
+        tls_fragment: None,
         utls_fingerprint: None,
         handler: ResidentProxyProtocolPlan::JuicityQuicTcp {
             uuid: parsed.user,
