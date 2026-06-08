@@ -1,4 +1,5 @@
-fn ensure_safe_run_root(root: &Path) -> Result<(), String> {
+use super::*;
+pub(super) fn ensure_safe_run_root(root: &Path) -> Result<(), String> {
     if !root.is_absolute() {
         return Err(format!("run root must be absolute: {}", path_string(root)));
     }
@@ -11,7 +12,7 @@ fn ensure_safe_run_root(root: &Path) -> Result<(), String> {
     Ok(())
 }
 
-fn ensure_safe_output_path(path: &Path, root: &Path, label: &str) -> Result<(), String> {
+pub(super) fn ensure_safe_output_path(path: &Path, root: &Path, label: &str) -> Result<(), String> {
     if !path.is_absolute() && !path.starts_with(root) {
         return Err(format!("{label} must be absolute or under run root"));
     }
@@ -24,7 +25,7 @@ fn ensure_safe_output_path(path: &Path, root: &Path, label: &str) -> Result<(), 
     Ok(())
 }
 
-fn derived_support_root(prefix: &str, root: &Path) -> PathBuf {
+pub(super) fn derived_support_root(prefix: &str, root: &Path) -> PathBuf {
     let suffix = root
         .file_name()
         .and_then(|name| name.to_str())
@@ -34,13 +35,13 @@ fn derived_support_root(prefix: &str, root: &Path) -> PathBuf {
 
 #[allow(clippy::too_many_arguments)]
 
-fn write_progress(path: &Path, byte: u8, suffix: &str) -> Result<(), String> {
+pub(super) fn write_progress(path: &Path, byte: u8, suffix: &str) -> Result<(), String> {
     let mut content = vec![byte];
     content.extend_from_slice(suffix.as_bytes());
     fs::write(path, content).map_err(|err| format!("failed to write progress file: {err}"))
 }
 
-fn required_bool(value: &Value, key: &str, source: &Path) -> Result<bool, String> {
+pub(super) fn required_bool(value: &Value, key: &str, source: &Path) -> Result<bool, String> {
     value[key].as_bool().ok_or_else(|| {
         format!(
             "product-chain admission evidence {} is missing boolean field {key}",
@@ -49,6 +50,6 @@ fn required_bool(value: &Value, key: &str, source: &Path) -> Result<bool, String
     })
 }
 
-fn path_string(path: &Path) -> String {
+pub(super) fn path_string(path: &Path) -> String {
     path.display().to_string()
 }

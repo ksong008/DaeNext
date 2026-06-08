@@ -1,12 +1,13 @@
-const DEFAULT_SOURCE_OBJECT: &str = "control/bpf_bpfel.o";
-const DEFAULT_PEER_SECTION: &str = "tc/dae0peer_ingress";
-const DEFAULT_HOST_SECTION: &str = "tc/dae0_ingress";
-const DEFAULT_TPROXY_PORT: u16 = 12345;
-const DEFAULT_DAE_NETNS_ID: u32 = 49;
-const FILTER_PREF: &str = "49491";
-const PRODUCTION_NETNS: &str = "daens";
-const PRODUCTION_HOST_IFACE: &str = "dae0";
-const PRODUCTION_PEER_IFACE: &str = "dae0peer";
+use super::*;
+pub(super) const DEFAULT_SOURCE_OBJECT: &str = "control/bpf_bpfel.o";
+pub(super) const DEFAULT_PEER_SECTION: &str = "tc/dae0peer_ingress";
+pub(super) const DEFAULT_HOST_SECTION: &str = "tc/dae0_ingress";
+pub(super) const DEFAULT_TPROXY_PORT: u16 = 12345;
+pub(super) const DEFAULT_DAE_NETNS_ID: u32 = 49;
+pub(super) const FILTER_PREF: &str = "49491";
+pub(super) const PRODUCTION_NETNS: &str = "daens";
+pub(super) const PRODUCTION_HOST_IFACE: &str = "dae0";
+pub(super) const PRODUCTION_PEER_IFACE: &str = "dae0peer";
 
 pub(crate) fn set_resident_event_log_sink(sink: Option<ResidentEventLogSink>) {
     resident_dataplane::set_event_log_sink(sink);

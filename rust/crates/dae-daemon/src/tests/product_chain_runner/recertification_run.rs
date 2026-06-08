@@ -1,0 +1,245 @@
+use super::*;
+#[test]
+pub(crate) fn daemon_runner_run_command_records_product_chain_recertification() {
+    let root = std::env::temp_dir().join(format!(
+        "dae-daemon-run-product-chain-test-{}",
+        std::process::id()
+    ));
+    let fixture = std::env::temp_dir().join(format!(
+        "dae-daemon-product-chain-runner-fixture-{}",
+        std::process::id()
+    ));
+    let config = root.join("config").join("run.dae");
+    std::fs::create_dir_all(config.parent().unwrap()).unwrap();
+    std::fs::create_dir_all(&fixture).unwrap();
+    std::fs::write(
+        &config,
+        "global {\n  log_level: info\n}\n\nrouting {\n  pname(NetworkManager) -> direct\n}\n",
+    )
+    .unwrap();
+    let service = fixture.join("dae.service");
+    let go_mod = fixture.join("go.mod");
+    let fresh_install_binary = fixture.join("dae-daemon-optin");
+    std::fs::write(
+        &service,
+        "ExecStartPre=/usr/bin/dae validate -c /etc/dae/config.dae\nExecStart=/usr/bin/dae run --disable-timestamp -c /etc/dae/config.dae\nExecReload=/usr/bin/dae reload $MAINPID\n",
+    )
+    .unwrap();
+    std::fs::write(
+        &go_mod,
+        "replace github.com/daeuniverse/outbound => github.com/ksong008/outbound v0.0.0\nreplace github.com/daeuniverse/quic-go => github.com/ksong008/quic-go v0.0.0\n",
+    )
+    .unwrap();
+    std::fs::write(
+        &fresh_install_binary,
+        "#!/bin/sh\n[ \"$1\" = \"validate\" ] && exit 0\nexit 2\n",
+    )
+    .unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(
+            &fresh_install_binary,
+            std::fs::Permissions::from_mode(0o755),
+        )
+        .unwrap();
+    }
+    for repo in ["dae", "dae-wing", "daed", "outbound", "quic-go"] {
+        let repo_dir = fixture.join(repo);
+        std::fs::create_dir_all(&repo_dir).unwrap();
+        assert!(
+            std::process::Command::new("git")
+                .args(["init", "--quiet"])
+                .current_dir(&repo_dir)
+                .status()
+                .unwrap()
+                .success()
+        );
+    }
+
+    let output = run_with_args_and_version(
+        [
+            "run".to_owned(),
+            "--config".to_owned(),
+            config.display().to_string(),
+            "--root".to_owned(),
+            root.display().to_string(),
+            "--disable-timestamp".to_owned(),
+            "--disable-sudo".to_owned(),
+            "--execute-product-chain-recertification".to_owned(),
+            "--request-default-path-mutation".to_owned(),
+            "--plan-production-run-command-replacement".to_owned(),
+            "--execute-production-run-command-replacement".to_owned(),
+            "--plan-production-run-command-apply".to_owned(),
+            "--allow-host-default-path-mutation".to_owned(),
+            "--plan-local-validation-fresh-install".to_owned(),
+            "--product-chain-fresh-install-binary-source".to_owned(),
+            fresh_install_binary.display().to_string(),
+            "--product-chain-dae-repo".to_owned(),
+            fixture.join("dae").display().to_string(),
+            "--product-chain-dae-wing-repo".to_owned(),
+            fixture.join("dae-wing").display().to_string(),
+            "--product-chain-daed-repo".to_owned(),
+            fixture.join("daed").display().to_string(),
+            "--product-chain-outbound-repo".to_owned(),
+            fixture.join("outbound").display().to_string(),
+            "--product-chain-quic-go-repo".to_owned(),
+            fixture.join("quic-go").display().to_string(),
+            "--product-chain-service-file".to_owned(),
+            service.display().to_string(),
+            "--product-chain-go-mod-file".to_owned(),
+            go_mod.display().to_string(),
+            "--exit-after-ready".to_owned(),
+        ],
+        "test-version",
+    );
+    assert_eq!(output.exit_code, 0, "{}", output.stderr);
+    assert_eq!(output.stderr, "");
+    let json: Value = serde_json::from_str(&output.stdout).unwrap();
+    assert!(
+        json["product_chain_recertification_executed"]
+            .as_bool()
+            .unwrap()
+    );
+    assert!(
+        !json["product_chain_recertification_clean"]
+            .as_bool()
+            .unwrap()
+    );
+    assert!(
+        json["product_chain_recertification"]["service_contract_preserved"]
+            .as_bool()
+            .unwrap()
+    );
+    assert!(
+        json["product_chain_recertification"]["outbound_quic_go_dependency_boundary_preserved"]
+            .as_bool()
+            .unwrap()
+    );
+    assert!(
+        json["product_chain_recertification"]["sibling_repo_status_available"]
+            .as_bool()
+            .unwrap()
+    );
+    assert!(
+        !json["product_chain_recertification"]["daed_wing_runtime_control_api_regression_recorded"]
+            .as_bool()
+            .unwrap()
+    );
+    assert!(
+        json["product_chain_recertification"]["default_path_mutation_requested"]
+            .as_bool()
+            .unwrap()
+    );
+    assert!(
+        !json["product_chain_recertification"]["default_path_mutation_allowed"]
+            .as_bool()
+            .unwrap()
+    );
+    assert!(
+        json["product_chain_recertification"]["production_run_command_replacement_plan"]
+            ["requested"]
+            .as_bool()
+            .unwrap()
+    );
+    assert!(
+        !json["product_chain_recertification"]["production_run_command_replacement_plan"]
+            ["admitted"]
+            .as_bool()
+            .unwrap()
+    );
+    assert!(
+        json["product_chain_recertification"]["production_run_command_replacement_plan"]
+            ["execute_requested"]
+            .as_bool()
+            .unwrap()
+    );
+    assert!(
+        json["product_chain_recertification"]["production_run_command_replacement_plan"]
+            ["apply_plan_requested"]
+            .as_bool()
+            .unwrap()
+    );
+    assert!(
+        json["product_chain_recertification"]["production_run_command_replacement_plan"]
+            ["apply_plan"]["requested"]
+            .as_bool()
+            .unwrap()
+    );
+    assert!(
+        !json["product_chain_recertification"]["production_run_command_replacement_plan"]
+            ["apply_plan"]["admitted"]
+            .as_bool()
+            .unwrap()
+    );
+    assert!(
+        !json["product_chain_recertification"]["production_run_command_replacement_plan"]
+            ["apply_plan"]["host_write_allowed"]
+            .as_bool()
+            .unwrap()
+    );
+    assert!(
+        json["product_chain_recertification"]["production_run_command_replacement_plan"]
+            ["host_mutation_allow_requested"]
+            .as_bool()
+            .unwrap()
+    );
+    assert!(
+        !json["product_chain_recertification"]["production_run_command_replacement_plan"]
+            ["host_mutation_allowed"]
+            .as_bool()
+            .unwrap()
+    );
+    assert!(
+        !json["product_chain_recertification"]["production_run_command_replacement_plan"]
+            ["execute_allowed"]
+            .as_bool()
+            .unwrap()
+    );
+    assert!(
+        !json["product_chain_recertification"]["production_run_command_replacement_plan"]
+            ["actual_mutation_executed"]
+            .as_bool()
+            .unwrap()
+    );
+    assert!(
+        json["product_chain_recertification"]["local_validation_fresh_install_plan"]["requested"]
+            .as_bool()
+            .unwrap()
+    );
+    assert_eq!(
+        json["product_chain_recertification"]["local_validation_fresh_install_plan"]["inputs"]
+            ["config_source"]
+            .as_str()
+            .unwrap(),
+        config.display().to_string()
+    );
+    assert_eq!(
+        json["product_chain_recertification"]["local_validation_fresh_install_plan"]["inputs"]
+            ["binary_source"]
+            .as_str()
+            .unwrap(),
+        fresh_install_binary.display().to_string()
+    );
+    assert!(
+        !json["product_chain_recertification"]["local_validation_fresh_install_plan"]
+            ["candidate_validate"]["executed"]
+            .as_bool()
+            .unwrap()
+    );
+    assert!(
+        !json["product_chain_recertification"]["local_validation_fresh_install_plan"]["pass"]
+            .as_bool()
+            .unwrap()
+    );
+    assert!(
+        !json["product_chain_recertification"]["local_validation_fresh_install_plan"]["checks"]
+            ["resident_run_service_contract_ready"]
+            .as_bool()
+            .unwrap()
+    );
+    assert!(!json["default_switch_allowed"].as_bool().unwrap());
+    assert!(!json["product_chain_switch_allowed"].as_bool().unwrap());
+    let _ = std::fs::remove_dir_all(root);
+    let _ = std::fs::remove_dir_all(fixture);
+}

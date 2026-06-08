@@ -1,4 +1,5 @@
-fn ensure_state_schema(path: &Path) -> io::Result<()> {
+use super::*;
+pub(super) fn ensure_state_schema(path: &Path) -> io::Result<()> {
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent)?;
     }
@@ -7,14 +8,14 @@ fn ensure_state_schema(path: &Path) -> io::Result<()> {
     Ok(())
 }
 
-fn open_state_connection(path: &Path) -> io::Result<Connection> {
+pub(super) fn open_state_connection(path: &Path) -> io::Result<Connection> {
     let conn = Connection::open(path).map_err(sqlite_io_error)?;
     conn.execute_batch("PRAGMA foreign_keys = OFF;")
         .map_err(sqlite_io_error)?;
     Ok(conn)
 }
 
-fn apply_state_schema(conn: &Connection) -> io::Result<()> {
+pub(super) fn apply_state_schema(conn: &Connection) -> io::Result<()> {
     conn.execute_batch(
         r#"
         PRAGMA foreign_keys = OFF;
@@ -142,7 +143,7 @@ fn apply_state_schema(conn: &Connection) -> io::Result<()> {
     .map_err(sqlite_io_error)
 }
 
-fn state_check_report(state: &Path) -> io::Result<Value> {
+pub(super) fn state_check_report(state: &Path) -> io::Result<Value> {
     let existed_before = state.exists();
     ensure_state_schema(state)?;
     let conn = open_state_connection(state)?;
@@ -168,7 +169,7 @@ fn state_check_report(state: &Path) -> io::Result<Value> {
     }))
 }
 
-fn migrate_wing_db(from_wing_db: &Path, to: &Path, force: bool) -> io::Result<Value> {
+pub(super) fn migrate_wing_db(from_wing_db: &Path, to: &Path, force: bool) -> io::Result<Value> {
     if !from_wing_db.is_file() {
         return Err(io::Error::new(
             io::ErrorKind::NotFound,

@@ -1,4 +1,5 @@
-fn handle_resident_proxy_tcp_connection(
+use super::*;
+pub(crate) fn handle_resident_proxy_tcp_connection(
     inbound: &mut TcpStream,
     peer: SocketAddr,
     original_dst: SocketAddrV4,
@@ -198,7 +199,7 @@ fn handle_resident_proxy_tcp_connection(
         }
     }
 }
-async fn handle_frame_tls_tcp_connection_async(
+pub(crate) async fn handle_frame_tls_tcp_connection_async(
     inbound: &mut TokioTcpStream,
     peer: SocketAddr,
     original_dst: SocketAddrV4,

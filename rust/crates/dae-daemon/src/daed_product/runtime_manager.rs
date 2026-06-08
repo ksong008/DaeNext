@@ -1,51 +1,52 @@
+use super::*;
 #[derive(Debug)]
-struct ProductRuntimeManager {
-    inner: Mutex<ProductRuntimeState>,
+pub(super) struct ProductRuntimeManager {
+    pub(super) inner: Mutex<ProductRuntimeState>,
 }
 
 #[derive(Debug, Default)]
-struct ProductRuntimeState {
-    runtime: Option<ProductRuntimeInstance>,
-    config: Option<Config>,
-    last_error: Option<String>,
-    last_transition_at: Option<String>,
-    last_report: Option<Value>,
-    reload_count: u64,
-    stop_count: u64,
+pub(super) struct ProductRuntimeState {
+    pub(super) runtime: Option<ProductRuntimeInstance>,
+    pub(super) config: Option<Config>,
+    pub(super) last_error: Option<String>,
+    pub(super) last_transition_at: Option<String>,
+    pub(super) last_report: Option<Value>,
+    pub(super) reload_count: u64,
+    pub(super) stop_count: u64,
 }
 
 #[derive(Debug)]
-enum ProductRuntimeInstance {
+pub(super) enum ProductRuntimeInstance {
     Resident(ResidentProductionRuntime),
     Fake(FakeProductRuntime),
 }
 
 #[derive(Debug)]
-struct FakeProductRuntime {
-    started_at: String,
-    tproxy_port: u16,
+pub(super) struct FakeProductRuntime {
+    pub(super) started_at: String,
+    pub(super) tproxy_port: u16,
 }
 
 impl FakeProductRuntime {
-    fn probe_node_latencies(&self, links: &[String]) -> Vec<Value> {
+    pub(super) fn probe_node_latencies(&self, links: &[String]) -> Vec<Value> {
         fake_runtime_probe_node_latencies(links)
     }
 }
 
 #[derive(Debug)]
-struct RuntimeStartOutcome {
-    report: Value,
+pub(super) struct RuntimeStartOutcome {
+    pub(super) report: Value,
 }
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
-enum ProductRuntimeLifecycleLogMode {
+pub(super) enum ProductRuntimeLifecycleLogMode {
     StartupRestore,
     ReloadSignal,
     ReloadSubscriptionRefresh,
 }
 
 impl ProductRuntimeLifecycleLogMode {
-    fn source(self) -> &'static str {
+    pub(super) fn source(self) -> &'static str {
         match self {
             Self::StartupRestore => "startup-restore",
             Self::ReloadSignal => "signal",
@@ -53,21 +54,25 @@ impl ProductRuntimeLifecycleLogMode {
         }
     }
 
-    fn is_startup(self) -> bool {
+    pub(super) fn is_startup(self) -> bool {
         matches!(self, Self::StartupRestore)
     }
 }
 
-const PRODUCT_RUNTIME_FAKE_START_ENV: &str = "DAED_PRODUCT_RUNTIME_FAKE_START";
+pub(super) const PRODUCT_RUNTIME_FAKE_START_ENV: &str = "DAED_PRODUCT_RUNTIME_FAKE_START";
 
 impl ProductRuntimeManager {
-    fn new() -> Self {
+    pub(super) fn new() -> Self {
         Self {
             inner: Mutex::new(ProductRuntimeState::default()),
         }
     }
 
-    fn reload(&self, config: Config, source: &str) -> Result<RuntimeStartOutcome, String> {
+    pub(super) fn reload(
+        &self,
+        config: Config,
+        source: &str,
+    ) -> Result<RuntimeStartOutcome, String> {
         let mut inner = self
             .inner
             .lock()
@@ -137,7 +142,7 @@ impl ProductRuntimeManager {
         }
     }
 
-    fn stop(&self) -> Result<Value, String> {
+    pub(super) fn stop(&self) -> Result<Value, String> {
         let mut inner = self
             .inner
             .lock()
@@ -159,7 +164,7 @@ impl ProductRuntimeManager {
         }))
     }
 
-    fn summary(&self) -> Value {
+    pub(super) fn summary(&self) -> Value {
         let Ok(inner) = self.inner.lock() else {
             return json!({
                 "running": false,
@@ -213,7 +218,7 @@ impl ProductRuntimeManager {
         }
     }
 
-    fn snapshot_node_latencies(&self) -> Vec<Value> {
+    pub(super) fn snapshot_node_latencies(&self) -> Vec<Value> {
         let Ok(inner) = self.inner.lock() else {
             return Vec::new();
         };
@@ -223,7 +228,7 @@ impl ProductRuntimeManager {
         }
     }
 
-    fn probe_node_latencies(&self, links: &[String]) -> Vec<Value> {
+    pub(super) fn probe_node_latencies(&self, links: &[String]) -> Vec<Value> {
         let Ok(inner) = self.inner.lock() else {
             return Vec::new();
         };
@@ -238,7 +243,7 @@ impl ProductRuntimeManager {
     }
 }
 
-fn start_product_runtime_instance(
+pub(super) fn start_product_runtime_instance(
     config: &Config,
     source: &str,
 ) -> Result<(ProductRuntimeInstance, Value), String> {
@@ -285,7 +290,7 @@ fn start_product_runtime_instance(
     Ok((ProductRuntimeInstance::Resident(runtime), report))
 }
 
-fn product_runtime_fake_start_enabled() -> bool {
+pub(super) fn product_runtime_fake_start_enabled() -> bool {
     std::env::var(PRODUCT_RUNTIME_FAKE_START_ENV)
         .map(|value| {
             matches!(
@@ -296,7 +301,7 @@ fn product_runtime_fake_start_enabled() -> bool {
         .unwrap_or(false)
 }
 
-fn append_runtime_reclaim_report(
+pub(super) fn append_runtime_reclaim_report(
     report: &mut Value,
     old_owner_reclaim: Option<Value>,
     startup_reclaim: Value,

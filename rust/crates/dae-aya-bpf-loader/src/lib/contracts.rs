@@ -1,4 +1,5 @@
-fn run_contract() -> LoaderOutput {
+use super::*;
+pub(super) fn run_contract() -> LoaderOutput {
     let tc_matrix =
         dae_ebpf_support::dae_tc_attach_matrix(dae_ebpf_support::DaeTcAttachMatrixInput {
             object: "runtime-pinned-program".to_owned(),
@@ -76,7 +77,7 @@ fn run_contract() -> LoaderOutput {
     ))
 }
 
-fn run_cgroup_monitor_contract() -> LoaderOutput {
+pub(super) fn run_cgroup_monitor_contract() -> LoaderOutput {
     LoaderOutput::ok(format!(
         "{}\n",
         json!({
@@ -101,7 +102,7 @@ fn run_cgroup_monitor_contract() -> LoaderOutput {
     ))
 }
 
-fn run_tc_attach_contract() -> LoaderOutput {
+pub(super) fn run_tc_attach_contract() -> LoaderOutput {
     let matrix = dae_ebpf_support::dae_tc_attach_matrix(dae_ebpf_support::DaeTcAttachMatrixInput {
         object: "runtime-pinned-program".to_owned(),
         lan_iface: "lan".to_owned(),
@@ -142,7 +143,7 @@ fn run_tc_attach_contract() -> LoaderOutput {
     ))
 }
 
-fn run_tproxy_listener_contract() -> LoaderOutput {
+pub(super) fn run_tproxy_listener_contract() -> LoaderOutput {
     LoaderOutput::ok(format!(
         "{}\n",
         json!({

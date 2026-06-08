@@ -1,5 +1,6 @@
+use super::*;
 #[test]
-fn run_default_optin_report_executes_bounded_lifecycle_and_smokes() {
+pub(super) fn run_default_optin_report_executes_bounded_lifecycle_and_smokes() {
     let root =
         std::env::temp_dir().join(format!("dae-daemon-run-report-test-{}", std::process::id()));
     let config = root.join("config").join("run.dae");
@@ -156,7 +157,7 @@ fn run_default_optin_report_executes_bounded_lifecycle_and_smokes() {
 }
 
 #[test]
-fn daemon_runner_run_command_outputs_json() {
+pub(super) fn daemon_runner_run_command_outputs_json() {
     let root =
         std::env::temp_dir().join(format!("dae-daemon-run-runner-test-{}", std::process::id()));
     let config = root.join("config").join("run.dae");

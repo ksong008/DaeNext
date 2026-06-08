@@ -1,4 +1,5 @@
-pub(super) fn probe_resident_proxy_tcp(
+use super::*;
+pub(crate) fn probe_resident_proxy_tcp(
     proxy: &ResidentProxyPlan,
     scheme: &str,
     target: &str,
@@ -154,7 +155,7 @@ pub(super) fn probe_resident_proxy_tcp(
     }
 }
 
-fn resident_tcp_probe_http_request(method: &str, path: &str, host: &str) -> Vec<u8> {
+pub(crate) fn resident_tcp_probe_http_request(method: &str, path: &str, host: &str) -> Vec<u8> {
     let method = if method.is_empty() { "HEAD" } else { method };
     let path = if path.is_empty() { "/" } else { path };
     format!(
@@ -163,7 +164,7 @@ fn resident_tcp_probe_http_request(method: &str, path: &str, host: &str) -> Vec<
     .into_bytes()
 }
 
-fn read_resident_tcp_probe_https_response(
+pub(crate) fn read_resident_tcp_probe_https_response(
     stream: &mut TcpStream,
     host: &str,
     path: &str,
@@ -183,7 +184,7 @@ fn read_resident_tcp_probe_https_response(
     read_resident_tcp_probe_response(&mut tls, path)
 }
 
-fn resident_tcp_probe_tls_config() -> Arc<ClientConfig> {
+pub(crate) fn resident_tcp_probe_tls_config() -> Arc<ClientConfig> {
     static CONFIG: OnceLock<Arc<ClientConfig>> = OnceLock::new();
     Arc::clone(CONFIG.get_or_init(|| {
         let mut roots = RootCertStore::empty();
@@ -196,7 +197,10 @@ fn resident_tcp_probe_tls_config() -> Arc<ClientConfig> {
     }))
 }
 
-fn read_resident_tcp_probe_response(stream: &mut impl Read, path: &str) -> Result<(), String> {
+pub(crate) fn read_resident_tcp_probe_response(
+    stream: &mut impl Read,
+    path: &str,
+) -> Result<(), String> {
     let mut response = Vec::new();
     let mut buf = [0_u8; 256];
     while response.len() < 8192 {
@@ -231,7 +235,7 @@ fn read_resident_tcp_probe_response(stream: &mut impl Read, path: &str) -> Resul
     }
 }
 
-fn resident_tcp_probe_status_ok(path: &str, status: u16) -> bool {
+pub(crate) fn resident_tcp_probe_status_ok(path: &str, status: u16) -> bool {
     let page = path.rsplit('/').next().unwrap_or("");
     if let Some(expected) = page.strip_prefix("generate_")
         && let Ok(expected) = expected.parse::<u16>()
@@ -241,7 +245,7 @@ fn resident_tcp_probe_status_ok(path: &str, status: u16) -> bool {
     (200..500).contains(&status)
 }
 
-fn sanitize_probe_event(event: Value) -> String {
+pub(crate) fn sanitize_probe_event(event: Value) -> String {
     event
         .get("event")
         .and_then(Value::as_str)

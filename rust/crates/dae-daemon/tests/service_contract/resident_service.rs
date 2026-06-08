@@ -1,5 +1,6 @@
+use super::*;
 #[test]
-fn resident_service_notifies_reloads_rejects_bad_config_and_cleans_pid() {
+pub(super) fn resident_service_notifies_reloads_rejects_bad_config_and_cleans_pid() {
     let root = std::env::temp_dir().join(format!(
         "dae-daemon-service-contract-integration-{}",
         std::process::id()
@@ -109,7 +110,7 @@ fn resident_service_notifies_reloads_rejects_bad_config_and_cleans_pid() {
     let _ = fs::remove_dir_all(&root);
 }
 
-fn reload_child(
+pub(super) fn reload_child(
     pid: u32,
     progress_file: &Path,
     abort_file: &Path,
@@ -130,7 +131,7 @@ fn reload_child(
     command.output().unwrap()
 }
 
-fn write_valid_config(path: &Path) {
+pub(super) fn write_valid_config(path: &Path) {
     fs::write(
         path,
         "global {\n  log_level: info\n}\n\nrouting {\n  pname(NetworkManager, systemd-resolved, dnsmasq) -> must_direct\n}\n",
@@ -139,7 +140,7 @@ fn write_valid_config(path: &Path) {
     fs::set_permissions(path, fs::Permissions::from_mode(0o600)).unwrap();
 }
 
-fn write_missing_interface_config(path: &Path) {
+pub(super) fn write_missing_interface_config(path: &Path) {
     fs::write(
         path,
         "global {\n  log_level: info\n  lan_interface: dae-missing-a4-interface\n}\n\nrouting {\n  pname(NetworkManager, systemd-resolved, dnsmasq) -> must_direct\n}\n",
@@ -148,7 +149,7 @@ fn write_missing_interface_config(path: &Path) {
     fs::set_permissions(path, fs::Permissions::from_mode(0o600)).unwrap();
 }
 
-fn wait_for_file(path: &PathBuf) {
+pub(super) fn wait_for_file(path: &PathBuf) {
     let deadline = Instant::now() + Duration::from_secs(15);
     while !path.exists() && Instant::now() < deadline {
         thread::sleep(Duration::from_millis(10));
@@ -156,7 +157,7 @@ fn wait_for_file(path: &PathBuf) {
     assert!(path.exists(), "{} was not written", path.display());
 }
 
-fn recv_notify(socket: &UnixDatagram) -> String {
+pub(super) fn recv_notify(socket: &UnixDatagram) -> String {
     let mut bytes = [0_u8; 128];
     let deadline = Instant::now() + Duration::from_secs(15);
     loop {
@@ -176,7 +177,7 @@ fn recv_notify(socket: &UnixDatagram) -> String {
     }
 }
 
-struct ChildGuard {
+pub(super) struct ChildGuard {
     inner: Child,
     reaped: bool,
 }

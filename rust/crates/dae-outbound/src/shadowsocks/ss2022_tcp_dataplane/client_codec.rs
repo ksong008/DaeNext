@@ -1,4 +1,5 @@
-fn encode_client_initial_with_timestamp(
+use super::*;
+pub(super) fn encode_client_initial_with_timestamp(
     conf: &CipherConf2022,
     psk: &[u8],
     salt: &[u8],
@@ -9,7 +10,7 @@ fn encode_client_initial_with_timestamp(
     encode_client_initial_with_psks(conf, &[psk.to_vec()], salt, target, payload, timestamp)
 }
 
-fn encode_client_initial_with_psks(
+pub(super) fn encode_client_initial_with_psks(
     conf: &CipherConf2022,
     psk_list: &[Vec<u8>],
     salt: &[u8],
@@ -56,7 +57,7 @@ fn encode_client_initial_with_psks(
     Ok(out)
 }
 
-fn decode_client_request_after_salt<S>(
+pub(super) fn decode_client_request_after_salt<S>(
     stream: &mut S,
     conf: &CipherConf2022,
     psk: &[u8],
@@ -75,7 +76,7 @@ where
     )
 }
 
-fn decode_client_request_after_salt_with_psks<S>(
+pub(super) fn decode_client_request_after_salt_with_psks<S>(
     stream: &mut S,
     conf: &CipherConf2022,
     psk_list: &[Vec<u8>],

@@ -1,5 +1,6 @@
+use super::*;
 #[test]
-fn daemon_runner_validate_command_accepts_a_valid_restricted_config() {
+pub(super) fn daemon_runner_validate_command_accepts_a_valid_restricted_config() {
     #[cfg(unix)]
     use std::os::unix::fs::PermissionsExt;
 
@@ -31,21 +32,21 @@ fn daemon_runner_validate_command_accepts_a_valid_restricted_config() {
 }
 
 #[test]
-fn daemon_runner_validate_command_rejects_missing_config_argument() {
+pub(super) fn daemon_runner_validate_command_rejects_missing_config_argument() {
     let output = run_with_args_and_version(["validate"], "test-version");
     assert_eq!(output.exit_code, 2);
     assert!(output.stderr.contains("validate requires -c/--config"));
 }
 
 #[test]
-fn daemon_runner_run_command_requires_config() {
+pub(super) fn daemon_runner_run_command_requires_config() {
     let output = run_with_args_and_version(["run"], "test-version");
     assert_eq!(output.exit_code, 2);
     assert!(output.stderr.contains("run requires -c/--config"));
 }
 
 #[test]
-fn daemon_runner_run_command_rejects_missing_config_file() {
+pub(super) fn daemon_runner_run_command_rejects_missing_config_file() {
     let root = std::env::temp_dir().join(format!("dae-daemon-run-missing-{}", std::process::id()));
     let output = run_with_args_and_version(
         [
@@ -63,7 +64,7 @@ fn daemon_runner_run_command_rejects_missing_config_file() {
 }
 
 #[test]
-fn daemon_runner_run_command_requires_ack_for_production_dataplane_smoke() {
+pub(super) fn daemon_runner_run_command_requires_ack_for_production_dataplane_smoke() {
     let root = std::env::temp_dir().join(format!(
         "dae-daemon-run-dataplane-noack-{}",
         std::process::id()
@@ -89,7 +90,7 @@ fn daemon_runner_run_command_requires_ack_for_production_dataplane_smoke() {
 }
 
 #[test]
-fn daemon_runner_run_command_requires_ack_for_production_runtime_owner() {
+pub(super) fn daemon_runner_run_command_requires_ack_for_production_runtime_owner() {
     let root = std::env::temp_dir().join(format!(
         "dae-daemon-run-production-runtime-noack-{}",
         std::process::id()
@@ -115,7 +116,7 @@ fn daemon_runner_run_command_requires_ack_for_production_runtime_owner() {
 }
 
 #[test]
-fn daemon_runner_run_command_rejects_active_tcp_without_owner() {
+pub(super) fn daemon_runner_run_command_rejects_active_tcp_without_owner() {
     let root = std::env::temp_dir().join(format!(
         "dae-daemon-run-active-tcp-without-owner-{}",
         std::process::id()
@@ -142,7 +143,7 @@ fn daemon_runner_run_command_rejects_active_tcp_without_owner() {
 }
 
 #[test]
-fn daemon_runner_run_command_rejects_reload_parity_without_active_tcp() {
+pub(super) fn daemon_runner_run_command_rejects_reload_parity_without_active_tcp() {
     let root = std::env::temp_dir().join(format!(
         "dae-daemon-run-reload-parity-without-tcp-{}",
         std::process::id()
@@ -174,7 +175,7 @@ fn daemon_runner_run_command_rejects_reload_parity_without_active_tcp() {
 }
 
 #[test]
-fn daemon_runner_run_command_rejects_active_udp_without_active_tcp() {
+pub(super) fn daemon_runner_run_command_rejects_active_udp_without_active_tcp() {
     let root = std::env::temp_dir().join(format!(
         "dae-daemon-run-active-udp-without-tcp-{}",
         std::process::id()
@@ -206,7 +207,7 @@ fn daemon_runner_run_command_rejects_active_udp_without_active_tcp() {
 }
 
 #[test]
-fn daemon_runner_run_command_rejects_active_dns_without_active_udp() {
+pub(super) fn daemon_runner_run_command_rejects_active_dns_without_active_udp() {
     let root = std::env::temp_dir().join(format!(
         "dae-daemon-run-active-dns-without-udp-{}",
         std::process::id()
@@ -239,7 +240,7 @@ fn daemon_runner_run_command_rejects_active_dns_without_active_udp() {
 }
 
 #[test]
-fn daemon_runner_run_command_requires_ack_for_matched_default_benchmark() {
+pub(super) fn daemon_runner_run_command_requires_ack_for_matched_default_benchmark() {
     let root = std::env::temp_dir().join(format!(
         "dae-daemon-run-matched-benchmark-noack-{}",
         std::process::id()

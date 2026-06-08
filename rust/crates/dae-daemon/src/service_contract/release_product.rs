@@ -1,4 +1,5 @@
-fn insert_release_default_switch_service_contract_capabilities(report: &mut Value) {
+use super::*;
+pub(crate) fn insert_release_default_switch_service_contract_capabilities(report: &mut Value) {
     let contract = dae_product::release_default_switch_contract();
     if let Value::Object(report) = report {
         report.insert(
@@ -75,7 +76,7 @@ fn insert_release_default_switch_service_contract_capabilities(report: &mut Valu
     }
 }
 
-fn insert_go_free_product_chain_service_contract_capabilities(report: &mut Value) {
+pub(crate) fn insert_go_free_product_chain_service_contract_capabilities(report: &mut Value) {
     let contract = dae_product::go_free_product_chain_contract();
     let evidence = crate::c10_go_free_evidence::c10_go_free_product_chain_evidence_from_env();
     if let Value::Object(report) = report {

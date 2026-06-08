@@ -1,4 +1,5 @@
-fn resident_utls_fingerprint_plan(
+use super::*;
+pub(super) fn resident_utls_fingerprint_plan(
     config: &Config,
     link_fingerprint: Option<&str>,
 ) -> Result<Option<ResidentUtlsFingerprintPlan>, String> {
@@ -29,7 +30,7 @@ fn resident_utls_fingerprint_plan(
     Ok(None)
 }
 
-fn resolve_optional_resident_utls_fingerprint(
+pub(super) fn resolve_optional_resident_utls_fingerprint(
     source: &'static str,
     requested: &str,
 ) -> Result<Option<ResidentUtlsFingerprintPlan>, String> {
@@ -39,7 +40,7 @@ fn resolve_optional_resident_utls_fingerprint(
     resolve_resident_utls_fingerprint(source, requested).map(Some)
 }
 
-fn resolve_resident_utls_fingerprint(
+pub(super) fn resolve_resident_utls_fingerprint(
     source: &'static str,
     requested: &str,
 ) -> Result<ResidentUtlsFingerprintPlan, String> {
@@ -52,7 +53,7 @@ fn resolve_resident_utls_fingerprint(
     ))
 }
 
-fn resident_utls_fingerprint_plan_from(
+pub(super) fn resident_utls_fingerprint_plan_from(
     source: &'static str,
     requested: &str,
     fingerprint: UtlsFingerprint,
@@ -69,7 +70,7 @@ fn resident_utls_fingerprint_plan_from(
     }
 }
 
-fn parse_tcp_dial_mode(config: &Config) -> Result<TcpDialMode, String> {
+pub(super) fn parse_tcp_dial_mode(config: &Config) -> Result<TcpDialMode, String> {
     config
         .global
         .dial_mode
@@ -77,7 +78,7 @@ fn parse_tcp_dial_mode(config: &Config) -> Result<TcpDialMode, String> {
         .map_err(|err| format!("resident dataplane dial_mode: {err}"))
 }
 
-fn tcp_sniffing_timeout(config: &Config, dial_mode: TcpDialMode) -> Duration {
+pub(super) fn tcp_sniffing_timeout(config: &Config, dial_mode: TcpDialMode) -> Duration {
     if dial_mode == TcpDialMode::Ip {
         return Duration::ZERO;
     }

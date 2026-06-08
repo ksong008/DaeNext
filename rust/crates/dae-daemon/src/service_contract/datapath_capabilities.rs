@@ -1,4 +1,5 @@
-fn insert_datapath_core_service_contract_capabilities(report: &mut Value) {
+use super::*;
+pub(super) fn insert_datapath_core_service_contract_capabilities(report: &mut Value) {
     let tcp_topology = dae_datapath::active_tcp_topology_contract();
     let tcp_routing =
         dae_datapath::active_tcp_routing_map_contract(dae_datapath::ACTIVE_TCP_DEFAULT_SO_MARK);

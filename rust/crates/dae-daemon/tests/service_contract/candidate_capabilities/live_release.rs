@@ -1,4 +1,5 @@
-fn assert_live_release_and_default_switch_contract(report: &Value) {
+use super::*;
+pub(crate) fn assert_live_release_and_default_switch_contract(report: &Value) {
     assert!(
         report["resident_live_adapter_matrix_contract_ready"]
             .as_bool()

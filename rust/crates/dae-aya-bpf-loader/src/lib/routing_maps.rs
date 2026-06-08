@@ -1,3 +1,4 @@
+use super::*;
 pub fn run_routing_map_apply_json(input: &str) -> LoaderOutput {
     let request = match parse_routing_map_apply_request(input) {
         Ok(request) => request,
@@ -89,7 +90,7 @@ where
     Ok(())
 }
 
-fn handle_domain_routing_map_serve_line(line: &str) -> String {
+pub(super) fn handle_domain_routing_map_serve_line(line: &str) -> String {
     let output = run_domain_routing_map_apply_json(line);
     if output.exit_code == 0 {
         return output.stdout.trim_end().to_owned();
@@ -103,7 +104,7 @@ fn handle_domain_routing_map_serve_line(line: &str) -> String {
     .to_string()
 }
 
-fn handle_domain_routing_map_owner_serve_line(
+pub(super) fn handle_domain_routing_map_owner_serve_line(
     owner: &mut dae_control::DomainRoutingOwner,
     line: &str,
 ) -> String {
@@ -123,23 +124,23 @@ fn handle_domain_routing_map_owner_serve_line(
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
-struct RoutingMapApplyRequest {
-    routing_map_id: u32,
-    lpm_array_map_id: u32,
-    routing_entries: Vec<dae_ebpf_support::RoutingMapEntry>,
-    lpm_entries: Vec<dae_ebpf_support::LpmArrayMapEntry>,
-    lpm_maps: Vec<dae_ebpf_support::LpmMapBuildSpec>,
+pub(super) struct RoutingMapApplyRequest {
+    pub(super) routing_map_id: u32,
+    pub(super) lpm_array_map_id: u32,
+    pub(super) routing_entries: Vec<dae_ebpf_support::RoutingMapEntry>,
+    pub(super) lpm_entries: Vec<dae_ebpf_support::LpmArrayMapEntry>,
+    pub(super) lpm_maps: Vec<dae_ebpf_support::LpmMapBuildSpec>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
-struct DomainRoutingMapApplyRequest {
-    map_id: u32,
-    updates: Vec<dae_ebpf_support::DomainRoutingMapEntry>,
-    deletes: Vec<[u32; 4]>,
+pub(super) struct DomainRoutingMapApplyRequest {
+    pub(super) map_id: u32,
+    pub(super) updates: Vec<dae_ebpf_support::DomainRoutingMapEntry>,
+    pub(super) deletes: Vec<[u32; 4]>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
-enum DomainRoutingOwnerRequest {
+pub(super) enum DomainRoutingOwnerRequest {
     SyncOwner {
         map_id: u32,
         owner_key: String,
@@ -152,7 +153,9 @@ enum DomainRoutingOwnerRequest {
     },
 }
 
-fn parse_routing_map_apply_request(input: &str) -> Result<RoutingMapApplyRequest, String> {
+pub(super) fn parse_routing_map_apply_request(
+    input: &str,
+) -> Result<RoutingMapApplyRequest, String> {
     let value: Value =
         serde_json::from_str(input).map_err(|err| format!("bad routing-map request: {err}"))?;
     let object = value
@@ -179,7 +182,7 @@ fn parse_routing_map_apply_request(input: &str) -> Result<RoutingMapApplyRequest
     })
 }
 
-fn parse_domain_routing_map_apply_request(
+pub(super) fn parse_domain_routing_map_apply_request(
     input: &str,
 ) -> Result<DomainRoutingMapApplyRequest, String> {
     let value: Value = serde_json::from_str(input)
@@ -202,7 +205,7 @@ fn parse_domain_routing_map_apply_request(
     })
 }
 
-fn parse_domain_routing_map_owner_request(
+pub(super) fn parse_domain_routing_map_owner_request(
     input: &str,
 ) -> Result<DomainRoutingOwnerRequest, String> {
     let value: Value = serde_json::from_str(input)
@@ -242,7 +245,7 @@ fn parse_domain_routing_map_owner_request(
     }
 }
 
-fn apply_domain_routing_map_owner_request(
+pub(super) fn apply_domain_routing_map_owner_request(
     owner: &mut dae_control::DomainRoutingOwner,
     request: DomainRoutingOwnerRequest,
 ) -> Result<Value, String> {
@@ -299,7 +302,9 @@ fn apply_domain_routing_map_owner_request(
     }
 }
 
-fn parse_routing_map_entry(value: &Value) -> Result<dae_ebpf_support::RoutingMapEntry, String> {
+pub(super) fn parse_routing_map_entry(
+    value: &Value,
+) -> Result<dae_ebpf_support::RoutingMapEntry, String> {
     let object = value
         .as_object()
         .ok_or_else(|| "bad routing entry: expected JSON object".to_owned())?;
@@ -313,7 +318,9 @@ fn parse_routing_map_entry(value: &Value) -> Result<dae_ebpf_support::RoutingMap
     })
 }
 
-fn parse_lpm_array_map_entry(value: &Value) -> Result<dae_ebpf_support::LpmArrayMapEntry, String> {
+pub(super) fn parse_lpm_array_map_entry(
+    value: &Value,
+) -> Result<dae_ebpf_support::LpmArrayMapEntry, String> {
     let object = value
         .as_object()
         .ok_or_else(|| "bad lpm entry: expected JSON object".to_owned())?;
@@ -323,7 +330,9 @@ fn parse_lpm_array_map_entry(value: &Value) -> Result<dae_ebpf_support::LpmArray
     })
 }
 
-fn parse_lpm_map_build_spec(value: &Value) -> Result<dae_ebpf_support::LpmMapBuildSpec, String> {
+pub(super) fn parse_lpm_map_build_spec(
+    value: &Value,
+) -> Result<dae_ebpf_support::LpmMapBuildSpec, String> {
     let object = value
         .as_object()
         .ok_or_else(|| "bad lpm map build spec: expected JSON object".to_owned())?;
@@ -341,7 +350,7 @@ fn parse_lpm_map_build_spec(value: &Value) -> Result<dae_ebpf_support::LpmMapBui
     })
 }
 
-fn parse_lpm_map_entry(value: &Value) -> Result<dae_ebpf_support::LpmMapEntry, String> {
+pub(super) fn parse_lpm_map_entry(value: &Value) -> Result<dae_ebpf_support::LpmMapEntry, String> {
     let object = value
         .as_object()
         .ok_or_else(|| "bad lpm map entry: expected JSON object".to_owned())?;
@@ -358,7 +367,7 @@ fn parse_lpm_map_entry(value: &Value) -> Result<dae_ebpf_support::LpmMapEntry, S
     })
 }
 
-fn parse_domain_routing_map_entry(
+pub(super) fn parse_domain_routing_map_entry(
     value: &Value,
 ) -> Result<dae_ebpf_support::DomainRoutingMapEntry, String> {
     let object = value
@@ -372,7 +381,7 @@ fn parse_domain_routing_map_entry(
     })
 }
 
-fn parse_bpf_match_set(value: &Value) -> Result<dae_ebpf_support::BpfMatchSet, String> {
+pub(super) fn parse_bpf_match_set(value: &Value) -> Result<dae_ebpf_support::BpfMatchSet, String> {
     let object = value
         .as_object()
         .ok_or_else(|| "bad match set: expected JSON object".to_owned())?;
@@ -389,13 +398,16 @@ fn parse_bpf_match_set(value: &Value) -> Result<dae_ebpf_support::BpfMatchSet, S
     })
 }
 
-fn json_array<'a>(value: Option<&'a Value>, name: &str) -> Result<&'a Vec<Value>, String> {
+pub(super) fn json_array<'a>(
+    value: Option<&'a Value>,
+    name: &str,
+) -> Result<&'a Vec<Value>, String> {
     value
         .and_then(Value::as_array)
         .ok_or_else(|| format!("missing or non-array field: {name}"))
 }
 
-fn optional_json_array(value: Option<&Value>) -> Result<Vec<Value>, String> {
+pub(super) fn optional_json_array(value: Option<&Value>) -> Result<Vec<Value>, String> {
     match value {
         Some(value) => value
             .as_array()
@@ -405,14 +417,14 @@ fn optional_json_array(value: Option<&Value>) -> Result<Vec<Value>, String> {
     }
 }
 
-fn json_string(value: Option<&Value>, name: &str) -> Result<String, String> {
+pub(super) fn json_string(value: Option<&Value>, name: &str) -> Result<String, String> {
     value
         .and_then(Value::as_str)
         .map(str::to_owned)
         .ok_or_else(|| format!("missing or non-string field: {name}"))
 }
 
-fn json_u32_array_4(value: Option<&Value>, name: &str) -> Result<[u32; 4], String> {
+pub(super) fn json_u32_array_4(value: Option<&Value>, name: &str) -> Result<[u32; 4], String> {
     let values = json_array(value, name)?;
     if values.len() != 4 {
         return Err(format!("bad {name}: got {} values, want 4", values.len()));
@@ -424,7 +436,7 @@ fn json_u32_array_4(value: Option<&Value>, name: &str) -> Result<[u32; 4], Strin
     Ok(out)
 }
 
-fn json_u32_array_32(value: Option<&Value>, name: &str) -> Result<[u32; 32], String> {
+pub(super) fn json_u32_array_32(value: Option<&Value>, name: &str) -> Result<[u32; 32], String> {
     let values = json_array(value, name)?;
     if values.len() != 32 {
         return Err(format!("bad {name}: got {} values, want 32", values.len()));
@@ -436,7 +448,7 @@ fn json_u32_array_32(value: Option<&Value>, name: &str) -> Result<[u32; 32], Str
     Ok(out)
 }
 
-fn json_u8_array_16(value: Option<&Value>, name: &str) -> Result<[u8; 16], String> {
+pub(super) fn json_u8_array_16(value: Option<&Value>, name: &str) -> Result<[u8; 16], String> {
     let values = json_array(value, name)?;
     if values.len() != 16 {
         return Err(format!("bad {name}: got {} values, want 16", values.len()));

@@ -1,4 +1,5 @@
-fn expected_product_chain_branches_json() -> Value {
+use super::*;
+pub(super) fn expected_product_chain_branches_json() -> Value {
     json!({
         "dae": expected_product_chain_branch("dae"),
         "daed": expected_product_chain_branch("daed"),
@@ -8,7 +9,9 @@ fn expected_product_chain_branches_json() -> Value {
     })
 }
 
-fn resident_default_daemon_switch_gate_json(options: &ProductChainRecertificationOptions) -> Value {
+pub(super) fn resident_default_daemon_switch_gate_json(
+    options: &ProductChainRecertificationOptions,
+) -> Value {
     let requested = options.default_path_mutation_requested
         || options.production_run_command_replacement_dry_run_requested
         || options.production_run_command_replacement_execute_requested

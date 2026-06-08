@@ -1,4 +1,7 @@
-fn kernel_program_parity_admission_json(report: &KernelProgramParityAdmissionReport) -> Value {
+use super::*;
+pub(super) fn kernel_program_parity_admission_json(
+    report: &KernelProgramParityAdmissionReport,
+) -> Value {
     json!({
         "schema": report.schema,
         "admitted": report.admitted,
@@ -31,7 +34,7 @@ fn kernel_program_parity_admission_json(report: &KernelProgramParityAdmissionRep
     })
 }
 
-fn tproxy_dataplane_admission_json(report: &TproxyDataplaneAdmissionReport) -> Value {
+pub(super) fn tproxy_dataplane_admission_json(report: &TproxyDataplaneAdmissionReport) -> Value {
     json!({
         "schema": report.schema,
         "admitted": report.admitted,
@@ -67,7 +70,7 @@ fn tproxy_dataplane_admission_json(report: &TproxyDataplaneAdmissionReport) -> V
     })
 }
 
-fn trace_diagnostic_gate_json(report: &TraceDiagnosticGateReport) -> Value {
+pub(super) fn trace_diagnostic_gate_json(report: &TraceDiagnosticGateReport) -> Value {
     json!({
         "schema": report.schema,
         "status": report.status,
@@ -96,7 +99,7 @@ fn trace_diagnostic_gate_json(report: &TraceDiagnosticGateReport) -> Value {
     })
 }
 
-fn kernel_program_fallback_retirement_gate_json(
+pub(super) fn kernel_program_fallback_retirement_gate_json(
     report: &KernelProgramFallbackRetirementGateReport,
 ) -> Value {
     json!({
@@ -131,7 +134,7 @@ fn kernel_program_fallback_retirement_gate_json(
     })
 }
 
-fn native_backend_admission_json(report: &NativeBackendAdmissionReport) -> Value {
+pub(super) fn native_backend_admission_json(report: &NativeBackendAdmissionReport) -> Value {
     json!({
         "schema": report.schema,
         "report_only": report.report_only,
@@ -154,12 +157,12 @@ fn native_backend_admission_json(report: &NativeBackendAdmissionReport) -> Value
     })
 }
 
-fn attach_backend_value(backend: Option<AttachBackend>) -> Value {
+pub(super) fn attach_backend_value(backend: Option<AttachBackend>) -> Value {
     backend
         .map(|backend| json!(backend.as_str()))
         .unwrap_or(Value::Null)
 }
 
-fn loader_backend_str(backend: LoaderBackend) -> &'static str {
+pub(super) fn loader_backend_str(backend: LoaderBackend) -> &'static str {
     backend.as_str()
 }

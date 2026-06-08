@@ -1,4 +1,5 @@
-async fn handle_trojan_websocket_tls_tcp_connection_async(
+use super::*;
+pub(crate) async fn handle_trojan_websocket_tls_tcp_connection_async(
     inbound: &mut TokioTcpStream,
     peer: SocketAddr,
     original_dst: SocketAddrV4,
@@ -78,7 +79,7 @@ async fn handle_trojan_websocket_tls_tcp_connection_async(
         }
     }
 }
-async fn handle_trojan_websocket_inner_shadowsocks_tls_tcp_connection_async(
+pub(crate) async fn handle_trojan_websocket_inner_shadowsocks_tls_tcp_connection_async(
     inbound: &mut TokioTcpStream,
     peer: SocketAddr,
     original_dst: SocketAddrV4,
@@ -155,7 +156,7 @@ async fn handle_trojan_websocket_inner_shadowsocks_tls_tcp_connection_async(
 }
 
 #[allow(clippy::too_many_arguments)]
-async fn handle_trojan_httpupgrade_tls_tcp_connection_async(
+pub(crate) async fn handle_trojan_httpupgrade_tls_tcp_connection_async(
     inbound: &mut TokioTcpStream,
     peer: SocketAddr,
     original_dst: SocketAddrV4,
@@ -234,7 +235,7 @@ async fn handle_trojan_httpupgrade_tls_tcp_connection_async(
 }
 
 #[allow(clippy::too_many_arguments)]
-async fn handle_trojan_grpc_tls_tcp_connection_async(
+pub(crate) async fn handle_trojan_grpc_tls_tcp_connection_async(
     inbound: &mut TokioTcpStream,
     peer: SocketAddr,
     original_dst: SocketAddrV4,
@@ -319,7 +320,7 @@ async fn handle_trojan_grpc_tls_tcp_connection_async(
 }
 
 #[allow(clippy::too_many_arguments)]
-async fn handle_trojan_tls_tcp_connection_async(
+pub(crate) async fn handle_trojan_tls_tcp_connection_async(
     inbound: &mut TokioTcpStream,
     peer: SocketAddr,
     original_dst: SocketAddrV4,

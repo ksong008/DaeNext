@@ -8,10 +8,17 @@ use crate::{
     rust_native_control_plane_admission_report, signal_control_plane_smoke_report,
 };
 
-include!("tests/contract_scans.rs");
-include!("tests/identity_runner.rs");
-include!("tests/run_command_basic.rs");
-include!("tests/bounded_run.rs");
-include!("tests/product_chain_runner.rs");
-include!("tests/lifecycle_control.rs");
-include!("tests/listener_preflight.rs");
+mod contract_scans;
+use self::contract_scans::*;
+mod identity_runner;
+use self::identity_runner::*;
+mod run_command_basic;
+use self::run_command_basic::*;
+mod bounded_run;
+use self::bounded_run::*;
+mod product_chain_runner;
+use self::product_chain_runner::*;
+mod lifecycle_control;
+use self::lifecycle_control::*;
+mod listener_preflight;
+use self::listener_preflight::*;

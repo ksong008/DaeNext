@@ -1,4 +1,5 @@
-fn build_resident_group_selector(
+use super::*;
+pub(super) fn build_resident_group_selector(
     group_name: &str,
     group_policy: &ResidentGroupPolicyPlan,
     candidates: &[ResidentProxyCandidatePlan],

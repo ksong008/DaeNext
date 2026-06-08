@@ -23,8 +23,13 @@ use super::{
     ProductionRuntimeOwnerOptions,
 };
 
-include!("report/typed_report.rs");
-include!("report/report_value.rs");
-include!("report/ebpf_backend.rs");
-include!("report/admission_json.rs");
-include!("report/live_handoff.rs");
+mod typed_report;
+use self::typed_report::*;
+mod report_value;
+pub(super) use self::report_value::*;
+mod ebpf_backend;
+use self::ebpf_backend::*;
+mod admission_json;
+use self::admission_json::*;
+mod live_handoff;
+pub(super) use self::live_handoff::*;

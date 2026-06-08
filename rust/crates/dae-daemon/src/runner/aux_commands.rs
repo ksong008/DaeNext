@@ -1,4 +1,5 @@
-fn parse_attach_backend(value: &str) -> Option<AttachBackend> {
+use super::*;
+pub(super) fn parse_attach_backend(value: &str) -> Option<AttachBackend> {
     match value {
         "auto" => Some(AttachBackend::Auto),
         "tcx" => Some(AttachBackend::Tcx),
@@ -8,7 +9,7 @@ fn parse_attach_backend(value: &str) -> Option<AttachBackend> {
     }
 }
 
-fn run_rust_native_control_plane_admission_command(args: &[String]) -> DaemonOutput {
+pub(super) fn run_rust_native_control_plane_admission_command(args: &[String]) -> DaemonOutput {
     let mut root = default_rust_native_control_plane_admission_root();
     let mut iterations = 10_000_u32;
     let mut iter = args.iter();
@@ -67,7 +68,7 @@ fn run_rust_native_control_plane_admission_command(args: &[String]) -> DaemonOut
     }
 }
 
-fn run_reload_owner_benchmark_command(args: &[String]) -> DaemonOutput {
+pub(super) fn run_reload_owner_benchmark_command(args: &[String]) -> DaemonOutput {
     let mut root = default_reload_owner_benchmark_root();
     let mut iterations = 3_u32;
     let mut iter = args.iter();
@@ -124,7 +125,7 @@ fn run_reload_owner_benchmark_command(args: &[String]) -> DaemonOutput {
     }
 }
 
-fn run_reload_owner_handoff_smoke_command(args: &[String]) -> DaemonOutput {
+pub(super) fn run_reload_owner_handoff_smoke_command(args: &[String]) -> DaemonOutput {
     let mut root = default_reload_owner_handoff_root();
     let mut iter = args.iter();
     while let Some(arg) = iter.next() {
@@ -155,7 +156,7 @@ fn run_reload_owner_handoff_smoke_command(args: &[String]) -> DaemonOutput {
     }
 }
 
-fn run_listener_ebpf_preflight_command(args: &[String]) -> DaemonOutput {
+pub(super) fn run_listener_ebpf_preflight_command(args: &[String]) -> DaemonOutput {
     let mut root = default_listener_ebpf_preflight_root();
     let mut iter = args.iter();
     while let Some(arg) = iter.next() {
@@ -186,7 +187,7 @@ fn run_listener_ebpf_preflight_command(args: &[String]) -> DaemonOutput {
     }
 }
 
-fn run_control_plane_entrypoint_admission_command(args: &[String]) -> DaemonOutput {
+pub(super) fn run_control_plane_entrypoint_admission_command(args: &[String]) -> DaemonOutput {
     let mut root = default_control_plane_entrypoint_admission_root();
     let mut iter = args.iter();
     while let Some(arg) = iter.next() {
@@ -219,7 +220,7 @@ fn run_control_plane_entrypoint_admission_command(args: &[String]) -> DaemonOutp
     }
 }
 
-fn run_default_run_identity_admission_command(args: &[String]) -> DaemonOutput {
+pub(super) fn run_default_run_identity_admission_command(args: &[String]) -> DaemonOutput {
     let mut opts =
         DefaultRunIdentityAdmissionOptions::under_root(default_run_identity_admission_root());
     let mut iter = args.iter();
@@ -279,7 +280,7 @@ fn run_default_run_identity_admission_command(args: &[String]) -> DaemonOutput {
     }
 }
 
-fn run_run_entrypoint_preflight_command(args: &[String]) -> DaemonOutput {
+pub(super) fn run_run_entrypoint_preflight_command(args: &[String]) -> DaemonOutput {
     let mut root = default_run_entrypoint_preflight_root();
     let mut iter = args.iter();
     while let Some(arg) = iter.next() {
@@ -310,7 +311,7 @@ fn run_run_entrypoint_preflight_command(args: &[String]) -> DaemonOutput {
     }
 }
 
-fn run_signal_control_plane_smoke_command(args: &[String]) -> DaemonOutput {
+pub(super) fn run_signal_control_plane_smoke_command(args: &[String]) -> DaemonOutput {
     let mut root = default_signal_control_plane_smoke_root();
     let mut iter = args.iter();
     while let Some(arg) = iter.next() {
@@ -341,7 +342,7 @@ fn run_signal_control_plane_smoke_command(args: &[String]) -> DaemonOutput {
     }
 }
 
-fn run_lifecycle_smoke_command(args: &[String]) -> DaemonOutput {
+pub(super) fn run_lifecycle_smoke_command(args: &[String]) -> DaemonOutput {
     let mut root = default_lifecycle_smoke_root();
     let mut iter = args.iter();
     while let Some(arg) = iter.next() {
@@ -370,7 +371,7 @@ fn run_lifecycle_smoke_command(args: &[String]) -> DaemonOutput {
     }
 }
 
-fn run_control_plane_owner_preflight_command(args: &[String]) -> DaemonOutput {
+pub(super) fn run_control_plane_owner_preflight_command(args: &[String]) -> DaemonOutput {
     let mut root = default_control_plane_owner_preflight_root();
     let mut iter = args.iter();
     while let Some(arg) = iter.next() {

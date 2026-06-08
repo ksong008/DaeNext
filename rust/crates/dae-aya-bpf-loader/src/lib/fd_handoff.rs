@@ -1,4 +1,5 @@
-fn send_fd_handoff(socket_fd: i32, payload: &[u8], fds: &[i32]) -> Result<(), String> {
+use super::*;
+pub(super) fn send_fd_handoff(socket_fd: i32, payload: &[u8], fds: &[i32]) -> Result<(), String> {
     if payload.is_empty() {
         return Err("fd handoff payload must not be empty".to_owned());
     }
@@ -49,7 +50,7 @@ fn send_fd_handoff(socket_fd: i32, payload: &[u8], fds: &[i32]) -> Result<(), St
 }
 
 #[cfg(feature = "native-ebpf")]
-fn mac_string(mac: [u8; 6]) -> String {
+pub(super) fn mac_string(mac: [u8; 6]) -> String {
     mac.iter()
         .map(|byte| format!("{byte:02x}"))
         .collect::<Vec<_>>()

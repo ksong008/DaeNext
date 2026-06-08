@@ -1,5 +1,6 @@
+use super::*;
 #[test]
-fn daed_product_contract_reports_c10_initial_state_paths() {
+pub(super) fn daed_product_contract_reports_c10_initial_state_paths() {
     let output = Command::new(binary())
         .args(["service-contract", "--json"])
         .output()
@@ -160,7 +161,7 @@ fn daed_product_contract_reports_c10_initial_state_paths() {
 }
 
 #[test]
-fn daed_version_command_supports_package_smoke_test() {
+pub(super) fn daed_version_command_supports_package_smoke_test() {
     let output = Command::new(binary())
         .env("DAE_DAEMON_VERSION", "c10-smoke")
         .arg("--version")
@@ -175,7 +176,7 @@ fn daed_version_command_supports_package_smoke_test() {
 }
 
 #[test]
-fn daed_validate_accepts_config_file_and_config_dir_without_state_mutation() {
+pub(super) fn daed_validate_accepts_config_file_and_config_dir_without_state_mutation() {
     let temp = temp_dir("validate");
     let config_file = temp.join("empty.dae");
     fs::write(&config_file, "global {} routing {}").unwrap();
@@ -241,7 +242,7 @@ fn daed_validate_accepts_config_file_and_config_dir_without_state_mutation() {
 }
 
 #[test]
-fn daed_state_migrate_does_not_modify_wing_db() {
+pub(super) fn daed_state_migrate_does_not_modify_wing_db() {
     let temp = temp_dir("state-migrate");
     let wing = temp.join("wing.db");
     let daed = temp.join("daed.db");

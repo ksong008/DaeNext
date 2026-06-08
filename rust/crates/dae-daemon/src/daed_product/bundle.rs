@@ -1,4 +1,5 @@
-fn export_bundle(state: &Path, user: &UserRecord) -> io::Result<Value> {
+use super::*;
+pub(super) fn export_bundle(state: &Path, user: &UserRecord) -> io::Result<Value> {
     ensure_state_schema(state)?;
     let conn = open_state_connection(state)?;
     let storage = serde_json::from_str::<Value>(&user.json_storage).unwrap_or_else(|_| json!({}));
@@ -26,7 +27,7 @@ fn export_bundle(state: &Path, user: &UserRecord) -> io::Result<Value> {
     }))
 }
 
-fn import_bundle(
+pub(super) fn import_bundle(
     state: &Path,
     config_dir: &Path,
     body: &Value,
@@ -101,7 +102,7 @@ fn import_bundle(
     Ok(true)
 }
 
-fn bundle_sections(conn: &Connection, kind: SectionKind) -> io::Result<Vec<Value>> {
+pub(super) fn bundle_sections(conn: &Connection, kind: SectionKind) -> io::Result<Vec<Value>> {
     let sql = format!(
         "SELECT id, name, {} FROM {} ORDER BY id",
         kind.value_column(),
@@ -127,7 +128,7 @@ fn bundle_sections(conn: &Connection, kind: SectionKind) -> io::Result<Vec<Value
     Ok(items)
 }
 
-fn bundle_subscriptions(conn: &Connection) -> io::Result<Vec<Value>> {
+pub(super) fn bundle_subscriptions(conn: &Connection) -> io::Result<Vec<Value>> {
     let mut stmt = conn
         .prepare(
             "SELECT id, updated_at, link, cron_exp, cron_enable, status, info, tag FROM subscriptions ORDER BY id",
@@ -143,7 +144,7 @@ fn bundle_subscriptions(conn: &Connection) -> io::Result<Vec<Value>> {
     Ok(items)
 }
 
-fn bundle_nodes(conn: &Connection) -> io::Result<Vec<Value>> {
+pub(super) fn bundle_nodes(conn: &Connection) -> io::Result<Vec<Value>> {
     let mut stmt = conn
         .prepare(
             "SELECT id, link, name, address, protocol, tag, subscription_id FROM nodes ORDER BY id",
@@ -159,7 +160,7 @@ fn bundle_nodes(conn: &Connection) -> io::Result<Vec<Value>> {
     Ok(items)
 }
 
-fn bundle_groups(conn: &Connection) -> io::Result<Vec<Value>> {
+pub(super) fn bundle_groups(conn: &Connection) -> io::Result<Vec<Value>> {
     let mut stmt = conn
         .prepare("SELECT id, name, policy FROM groups ORDER BY id")
         .map_err(sqlite_io_error)?;
@@ -187,7 +188,7 @@ fn bundle_groups(conn: &Connection) -> io::Result<Vec<Value>> {
     Ok(groups)
 }
 
-fn group_node_ids(conn: &Connection, group_id: i64) -> io::Result<Vec<i64>> {
+pub(super) fn group_node_ids(conn: &Connection, group_id: i64) -> io::Result<Vec<i64>> {
     let mut stmt = conn
         .prepare("SELECT node_id FROM group_nodes WHERE group_id = ?1 ORDER BY node_id")
         .map_err(sqlite_io_error)?;
@@ -201,7 +202,10 @@ fn group_node_ids(conn: &Connection, group_id: i64) -> io::Result<Vec<i64>> {
     Ok(ids)
 }
 
-fn group_subscription_bindings(conn: &Connection, group_id: i64) -> io::Result<Vec<Value>> {
+pub(super) fn group_subscription_bindings(
+    conn: &Connection,
+    group_id: i64,
+) -> io::Result<Vec<Value>> {
     let mut stmt = conn
         .prepare(
             "SELECT subscription_id, name_filter_regex FROM group_subscriptions WHERE group_id = ?1 ORDER BY subscription_id",
@@ -222,7 +226,7 @@ fn group_subscription_bindings(conn: &Connection, group_id: i64) -> io::Result<V
     Ok(items)
 }
 
-fn import_bundle_sections(
+pub(super) fn import_bundle_sections(
     conn: &Connection,
     sections: Option<&Value>,
     kind: SectionKind,
@@ -252,7 +256,10 @@ fn import_bundle_sections(
     Ok(())
 }
 
-fn import_bundle_subscriptions(conn: &Connection, subscriptions: Option<&Value>) -> io::Result<()> {
+pub(super) fn import_bundle_subscriptions(
+    conn: &Connection,
+    subscriptions: Option<&Value>,
+) -> io::Result<()> {
     if let Some(items) = subscriptions.and_then(Value::as_array) {
         for item in items {
             let Some(id) = item.get("id").and_then(Value::as_i64) else {
@@ -287,7 +294,7 @@ fn import_bundle_subscriptions(conn: &Connection, subscriptions: Option<&Value>)
     Ok(())
 }
 
-fn import_bundle_nodes(conn: &Connection, nodes: Option<&Value>) -> io::Result<()> {
+pub(super) fn import_bundle_nodes(conn: &Connection, nodes: Option<&Value>) -> io::Result<()> {
     if let Some(items) = nodes.and_then(Value::as_array) {
         for item in items {
             let Some(id) = item.get("id").and_then(Value::as_i64) else {
@@ -320,7 +327,7 @@ fn import_bundle_nodes(conn: &Connection, nodes: Option<&Value>) -> io::Result<(
     Ok(())
 }
 
-fn import_bundle_groups(conn: &Connection, groups: Option<&Value>) -> io::Result<()> {
+pub(super) fn import_bundle_groups(conn: &Connection, groups: Option<&Value>) -> io::Result<()> {
     if let Some(items) = groups.and_then(Value::as_array) {
         for item in items {
             let Some(id) = item.get("id").and_then(Value::as_i64) else {
@@ -359,7 +366,7 @@ fn import_bundle_groups(conn: &Connection, groups: Option<&Value>) -> io::Result
     Ok(())
 }
 
-fn set_selected_from_bundle(
+pub(super) fn set_selected_from_bundle(
     conn: &Connection,
     selected: &Value,
     key: &str,
@@ -375,7 +382,7 @@ fn set_selected_from_bundle(
     Ok(())
 }
 
-fn numeric_storage_value(storage: &Value, key: &str) -> Option<i64> {
+pub(super) fn numeric_storage_value(storage: &Value, key: &str) -> Option<i64> {
     storage
         .get(key)
         .and_then(Value::as_str)

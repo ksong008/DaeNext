@@ -1,4 +1,5 @@
-pub(super) fn resident_udp_loop(
+use super::*;
+pub(crate) fn resident_udp_loop(
     socket: std::net::UdpSocket,
     proxy_group: Arc<ResidentProxyGroupPlan>,
     dns: Arc<ResidentDnsPlan>,
@@ -128,13 +129,16 @@ pub(super) fn resident_udp_loop(
     );
 }
 
-struct UdpPacketWorkerGuard {
-    active_workers: Arc<AtomicUsize>,
-    metrics: Arc<ResidentDataplaneMetrics>,
+pub(crate) struct UdpPacketWorkerGuard {
+    pub(super) active_workers: Arc<AtomicUsize>,
+    pub(super) metrics: Arc<ResidentDataplaneMetrics>,
 }
 
 impl UdpPacketWorkerGuard {
-    fn new(active_workers: Arc<AtomicUsize>, metrics: Arc<ResidentDataplaneMetrics>) -> Self {
+    pub(super) fn new(
+        active_workers: Arc<AtomicUsize>,
+        metrics: Arc<ResidentDataplaneMetrics>,
+    ) -> Self {
         metrics.udp_opened();
         Self {
             active_workers,

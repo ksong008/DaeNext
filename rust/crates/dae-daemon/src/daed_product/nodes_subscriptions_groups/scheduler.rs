@@ -1,4 +1,5 @@
-fn start_subscription_scheduler(state: PathBuf, config_dir: PathBuf) {
+use super::*;
+pub(crate) fn start_subscription_scheduler(state: PathBuf, config_dir: PathBuf) {
     thread::spawn(move || {
         let _ = ensure_state_schema(&state);
         let _ = set_metadata(&state, "subscription_scheduler_started_at", &now_text());

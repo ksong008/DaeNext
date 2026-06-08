@@ -1,4 +1,5 @@
-fn build_tuic_proxy_plan(
+use super::*;
+pub(crate) fn build_tuic_proxy_plan(
     config: &Config,
     group_name: String,
     node_tag: String,
@@ -58,7 +59,7 @@ fn build_tuic_proxy_plan(
     })
 }
 
-fn build_hysteria2_proxy_plan(
+pub(crate) fn build_hysteria2_proxy_plan(
     config: &Config,
     group_name: String,
     node_tag: String,
@@ -144,7 +145,7 @@ fn build_hysteria2_proxy_plan(
     })
 }
 
-fn build_juicity_proxy_plan(
+pub(crate) fn build_juicity_proxy_plan(
     config: &Config,
     group_name: String,
     node_tag: String,

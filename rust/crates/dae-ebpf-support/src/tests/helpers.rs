@@ -1,12 +1,18 @@
-fn load(path: &str) -> Value {
+use super::*;
+pub(super) fn load(path: &str) -> Value {
     dae_golden::load_json(path).unwrap()
 }
 
-fn temp_path(name: &str) -> PathBuf {
+pub(super) fn temp_path(name: &str) -> PathBuf {
     std::env::temp_dir().join(format!("{}-{name}", std::process::id()))
 }
 
-fn assert_layout<T>(fixture: &Value, name: &str, expected_size: usize, expected_align: usize) {
+pub(super) fn assert_layout<T>(
+    fixture: &Value,
+    name: &str,
+    expected_size: usize,
+    expected_align: usize,
+) {
     let item = fixture_struct(fixture, name);
     assert_eq!(size_of::<T>(), expected_size);
     assert_eq!(align_of::<T>(), expected_align);
@@ -14,7 +20,12 @@ fn assert_layout<T>(fixture: &Value, name: &str, expected_size: usize, expected_
     assert_eq!(item["align"].as_u64().unwrap() as usize, align_of::<T>());
 }
 
-fn assert_offset<T>(fixture: &Value, struct_name: &str, field_name: &str, offset: usize) {
+pub(super) fn assert_offset<T>(
+    fixture: &Value,
+    struct_name: &str,
+    field_name: &str,
+    offset: usize,
+) {
     let item = fixture_struct(fixture, struct_name);
     let offsets = item["offsets"].as_array().unwrap();
     let expected = offsets
@@ -24,7 +35,7 @@ fn assert_offset<T>(fixture: &Value, struct_name: &str, field_name: &str, offset
     assert_eq!(expected["offset"].as_u64().unwrap() as usize, offset);
 }
 
-fn fixture_struct<'a>(fixture: &'a Value, name: &str) -> &'a Value {
+pub(super) fn fixture_struct<'a>(fixture: &'a Value, name: &str) -> &'a Value {
     fixture["structs"]
         .as_array()
         .unwrap()
@@ -33,7 +44,7 @@ fn fixture_struct<'a>(fixture: &'a Value, name: &str) -> &'a Value {
         .unwrap()
 }
 
-fn parse_go_version(input: &str) -> Version {
+pub(super) fn parse_go_version(input: &str) -> Version {
     let trimmed = input.trim_start_matches('v');
     let parts = trimmed
         .split('.')

@@ -1,4 +1,5 @@
-fn with_optional_netns<T>(
+use super::*;
+pub(super) fn with_optional_netns<T>(
     netns: Option<&str>,
     f: impl FnOnce() -> Result<T, String>,
 ) -> Result<T, String> {
@@ -18,13 +19,13 @@ fn with_optional_netns<T>(
     }
 }
 
-struct NetnsGuard {
-    original: fs::File,
-    restored: bool,
+pub(super) struct NetnsGuard {
+    pub(super) original: fs::File,
+    pub(super) restored: bool,
 }
 
 impl NetnsGuard {
-    fn enter(netns: &str) -> Result<Self, String> {
+    pub(super) fn enter(netns: &str) -> Result<Self, String> {
         let original = fs::File::open("/proc/self/ns/net")
             .map_err(|err| format!("open current netns failed: {err}"))?;
         let target_path = netns_path(netns);
@@ -38,7 +39,7 @@ impl NetnsGuard {
         })
     }
 
-    fn restore(&mut self) -> Result<(), String> {
+    pub(super) fn restore(&mut self) -> Result<(), String> {
         if self.restored {
             return Ok(());
         }
@@ -55,7 +56,7 @@ impl Drop for NetnsGuard {
     }
 }
 
-fn netns_path(netns: &str) -> PathBuf {
+pub(super) fn netns_path(netns: &str) -> PathBuf {
     let path = Path::new(netns);
     if path.is_absolute() {
         path.to_owned()
@@ -64,7 +65,7 @@ fn netns_path(netns: &str) -> PathBuf {
     }
 }
 
-fn setns(fd: i32) -> io::Result<()> {
+pub(super) fn setns(fd: i32) -> io::Result<()> {
     let status = unsafe { libc::setns(fd, libc::CLONE_NEWNET) };
     if status < 0 {
         Err(io::Error::last_os_error())
@@ -73,7 +74,7 @@ fn setns(fd: i32) -> io::Result<()> {
     }
 }
 
-fn add_clsact_or_accept_existing(iface: &str) -> Result<(), String> {
+pub(super) fn add_clsact_or_accept_existing(iface: &str) -> Result<(), String> {
     match tc::qdisc_add_clsact(iface) {
         Ok(()) => Ok(()),
         Err(err)

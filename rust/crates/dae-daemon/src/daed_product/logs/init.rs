@@ -1,13 +1,14 @@
-static LOG_FILE_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
-static LOG_LAST_ID_CACHE: OnceLock<Mutex<Option<ProductLogIdCache>>> = OnceLock::new();
+use super::*;
+pub(crate) static LOG_FILE_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+pub(crate) static LOG_LAST_ID_CACHE: OnceLock<Mutex<Option<ProductLogIdCache>>> = OnceLock::new();
 
 #[derive(Clone, Debug)]
-struct ProductLogIdCache {
-    path: PathBuf,
-    id: u64,
+pub(crate) struct ProductLogIdCache {
+    pub(super) path: PathBuf,
+    pub(super) id: u64,
 }
 
-fn initialize_log_store(config_dir: &Path, state: &Path) -> io::Result<()> {
+pub(crate) fn initialize_log_store(config_dir: &Path, state: &Path) -> io::Result<()> {
     ensure_state_schema(state)?;
     ensure_log_dir(config_dir)?;
     let log_file = product_log_file(config_dir);
@@ -20,7 +21,7 @@ fn initialize_log_store(config_dir: &Path, state: &Path) -> io::Result<()> {
     Ok(())
 }
 
-fn register_resident_event_product_log_sink(config_dir: &Path, state: &Path) {
+pub(crate) fn register_resident_event_product_log_sink(config_dir: &Path, state: &Path) {
     let config_dir = config_dir.to_path_buf();
     let state = state.to_path_buf();
     set_resident_event_log_sink(Some(Arc::new(move |event| {
@@ -29,6 +30,6 @@ fn register_resident_event_product_log_sink(config_dir: &Path, state: &Path) {
 }
 
 #[cfg(test)]
-fn clear_resident_event_product_log_sink() {
+pub(crate) fn clear_resident_event_product_log_sink() {
     set_resident_event_log_sink(None);
 }

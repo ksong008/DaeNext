@@ -1,4 +1,5 @@
-fn insert_datapath_core_contract_defaults(report: &mut Value) {
+use super::*;
+pub(super) fn insert_datapath_core_contract_defaults(report: &mut Value) {
     insert_datapath_core_contract_success(
         report,
         false, // command_passed
@@ -24,7 +25,7 @@ fn insert_datapath_core_contract_defaults(report: &mut Value) {
 }
 
 #[allow(clippy::too_many_arguments)]
-fn insert_datapath_core_contract_success(
+pub(super) fn insert_datapath_core_contract_success(
     report: &mut Value,
     command_passed: bool,
     datapath_core_contract_ready: bool,

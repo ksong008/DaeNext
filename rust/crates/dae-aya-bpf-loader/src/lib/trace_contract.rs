@@ -1,4 +1,5 @@
-fn run_trace_loader_contract() -> LoaderOutput {
+use super::*;
+pub(super) fn run_trace_loader_contract() -> LoaderOutput {
     let gate = dae_ebpf_support::trace_core_sideload_gate_report();
     LoaderOutput::ok(format!(
         "{}\n",

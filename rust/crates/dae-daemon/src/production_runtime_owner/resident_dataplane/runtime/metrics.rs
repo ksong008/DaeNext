@@ -1,9 +1,10 @@
+use super::*;
 #[derive(Debug, Default)]
-pub(super) struct ResidentDataplaneMetrics {
-    upload_total: AtomicU64,
-    download_total: AtomicU64,
-    active_tcp_connections: AtomicU64,
-    active_udp_sessions: AtomicU64,
+pub(crate) struct ResidentDataplaneMetrics {
+    pub(super) upload_total: AtomicU64,
+    pub(super) download_total: AtomicU64,
+    pub(super) active_tcp_connections: AtomicU64,
+    pub(super) active_udp_sessions: AtomicU64,
 }
 
 impl ResidentDataplaneMetrics {
@@ -32,7 +33,7 @@ impl ResidentDataplaneMetrics {
             .fetch_add(bytes as u64, Ordering::Relaxed);
     }
 
-    fn snapshot(&self) -> Value {
+    pub(super) fn snapshot(&self) -> Value {
         json!({
             "uploadTotal": self.upload_total.load(Ordering::Relaxed),
             "downloadTotal": self.download_total.load(Ordering::Relaxed),

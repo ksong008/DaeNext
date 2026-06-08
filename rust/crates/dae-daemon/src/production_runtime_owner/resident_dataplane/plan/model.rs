@@ -1,32 +1,33 @@
+use super::*;
 #[derive(Clone, Debug, Eq, PartialEq)]
-struct SelectedGroupNode {
-    match_index: usize,
-    tag: String,
-    link: String,
-    annotation_add_latency_ms: i64,
+pub(crate) struct SelectedGroupNode {
+    pub(in crate::production_runtime_owner::resident_dataplane) match_index: usize,
+    pub(in crate::production_runtime_owner::resident_dataplane) tag: String,
+    pub(in crate::production_runtime_owner::resident_dataplane) link: String,
+    pub(in crate::production_runtime_owner::resident_dataplane) annotation_add_latency_ms: i64,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub(super) struct ResidentNodeLinkShape {
-    pub(super) tag: String,
-    pub(super) scheme: String,
-    pub(super) link: String,
+pub(crate) struct ResidentNodeLinkShape {
+    pub(in crate::production_runtime_owner::resident_dataplane) tag: String,
+    pub(in crate::production_runtime_owner::resident_dataplane) scheme: String,
+    pub(in crate::production_runtime_owner::resident_dataplane) link: String,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub(super) struct ResidentUtlsFingerprintPlan {
-    pub(super) source: &'static str,
-    pub(super) requested: String,
-    pub(super) name: String,
-    pub(super) canonical: String,
-    pub(super) family: String,
-    pub(super) client: String,
-    pub(super) randomized: bool,
-    pub(super) alpn_policy: String,
+pub(crate) struct ResidentUtlsFingerprintPlan {
+    pub(in crate::production_runtime_owner::resident_dataplane) source: &'static str,
+    pub(in crate::production_runtime_owner::resident_dataplane) requested: String,
+    pub(in crate::production_runtime_owner::resident_dataplane) name: String,
+    pub(in crate::production_runtime_owner::resident_dataplane) canonical: String,
+    pub(in crate::production_runtime_owner::resident_dataplane) family: String,
+    pub(in crate::production_runtime_owner::resident_dataplane) client: String,
+    pub(in crate::production_runtime_owner::resident_dataplane) randomized: bool,
+    pub(in crate::production_runtime_owner::resident_dataplane) alpn_policy: String,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
-enum GroupNodeSelection {
+pub(crate) enum GroupNodeSelection {
     Selected(Vec<SelectedGroupNode>),
     NoCandidate {
         explicit_name_filter: bool,
@@ -35,7 +36,7 @@ enum GroupNodeSelection {
 }
 
 #[derive(Clone, Debug)]
-pub(super) enum ResidentProxyProtocolPlan {
+pub(crate) enum ResidentProxyProtocolPlan {
     VlessVisionTcpTls {
         key: [u8; 16],
     },
@@ -123,41 +124,47 @@ pub(super) enum ResidentProxyProtocolPlan {
 }
 
 #[derive(Clone, Debug)]
-pub(super) struct ResidentProxyPlan {
-    pub(super) graph_id: String,
-    pub(super) graph_link_hash: String,
-    pub(super) redacted_link_source: String,
-    pub(super) protocol: String,
-    pub(super) group_name: String,
-    pub(super) group_policy: String,
-    pub(super) node_tag: String,
-    pub(super) server_host: String,
-    pub(super) server_port: u16,
-    pub(super) server_name: String,
-    pub(super) alpn: Vec<String>,
-    pub(super) flow: String,
-    pub(super) net: String,
-    pub(super) stream_host: String,
-    pub(super) stream_path: String,
-    pub(super) tls: String,
-    pub(super) allow_insecure: bool,
-    pub(super) utls_fingerprint: Option<ResidentUtlsFingerprintPlan>,
-    pub(super) handler: ResidentProxyProtocolPlan,
-    pub(super) chain_parent: Option<Box<ResidentProxyPlan>>,
-    pub(super) mark: u32,
-    pub(super) mptcp: bool,
+pub(crate) struct ResidentProxyPlan {
+    pub(in crate::production_runtime_owner::resident_dataplane) graph_id: String,
+    pub(in crate::production_runtime_owner::resident_dataplane) graph_link_hash: String,
+    pub(in crate::production_runtime_owner::resident_dataplane) redacted_link_source: String,
+    pub(in crate::production_runtime_owner::resident_dataplane) protocol: String,
+    pub(in crate::production_runtime_owner::resident_dataplane) group_name: String,
+    pub(in crate::production_runtime_owner::resident_dataplane) group_policy: String,
+    pub(in crate::production_runtime_owner::resident_dataplane) node_tag: String,
+    pub(in crate::production_runtime_owner::resident_dataplane) server_host: String,
+    pub(in crate::production_runtime_owner::resident_dataplane) server_port: u16,
+    pub(in crate::production_runtime_owner::resident_dataplane) server_name: String,
+    pub(in crate::production_runtime_owner::resident_dataplane) alpn: Vec<String>,
+    pub(in crate::production_runtime_owner::resident_dataplane) flow: String,
+    pub(in crate::production_runtime_owner::resident_dataplane) net: String,
+    pub(in crate::production_runtime_owner::resident_dataplane) stream_host: String,
+    pub(in crate::production_runtime_owner::resident_dataplane) stream_path: String,
+    pub(in crate::production_runtime_owner::resident_dataplane) tls: String,
+    pub(in crate::production_runtime_owner::resident_dataplane) allow_insecure: bool,
+    pub(in crate::production_runtime_owner::resident_dataplane) utls_fingerprint:
+        Option<ResidentUtlsFingerprintPlan>,
+    pub(in crate::production_runtime_owner::resident_dataplane) handler: ResidentProxyProtocolPlan,
+    pub(in crate::production_runtime_owner::resident_dataplane) chain_parent:
+        Option<Box<ResidentProxyPlan>>,
+    pub(in crate::production_runtime_owner::resident_dataplane) mark: u32,
+    pub(in crate::production_runtime_owner::resident_dataplane) mptcp: bool,
 }
 
 impl ResidentProxyPlan {
-    fn executable_graph_descriptor(&self) -> ResidentExecutableGraphDescriptor {
+    pub(in crate::production_runtime_owner::resident_dataplane) fn executable_graph_descriptor(
+        &self,
+    ) -> ResidentExecutableGraphDescriptor {
         ResidentExecutableGraphDescriptor::from_proxy(self)
     }
 
-    pub(super) fn executable_graph_value(&self) -> Value {
+    pub(in crate::production_runtime_owner::resident_dataplane) fn executable_graph_value(
+        &self,
+    ) -> Value {
         self.executable_graph_descriptor().to_value()
     }
 
-    pub(super) fn executable_graph_value_for_reload_generation(
+    pub(in crate::production_runtime_owner::resident_dataplane) fn executable_graph_value_for_reload_generation(
         &self,
         reload_generation: u64,
     ) -> Value {
@@ -165,12 +172,14 @@ impl ResidentProxyPlan {
             .to_value_for_reload_generation(reload_generation)
     }
 
-    pub(super) fn runtime_component_evidence_value(&self) -> Value {
+    pub(in crate::production_runtime_owner::resident_dataplane) fn runtime_component_evidence_value(
+        &self,
+    ) -> Value {
         self.executable_graph_descriptor()
             .runtime_component_evidence_value()
     }
 
-    pub(super) fn runtime_component_evidence_value_for_reload_generation(
+    pub(in crate::production_runtime_owner::resident_dataplane) fn runtime_component_evidence_value_for_reload_generation(
         &self,
         reload_generation: u64,
     ) -> Value {
@@ -178,7 +187,9 @@ impl ResidentProxyPlan {
             .runtime_component_evidence_value_for_reload_generation(reload_generation)
     }
 
-    pub(super) fn vless_key(&self) -> Result<[u8; 16], String> {
+    pub(in crate::production_runtime_owner::resident_dataplane) fn vless_key(
+        &self,
+    ) -> Result<[u8; 16], String> {
         match self.handler {
             ResidentProxyProtocolPlan::VlessVisionTcpTls { key } => Ok(key),
             _ => Err(format!(

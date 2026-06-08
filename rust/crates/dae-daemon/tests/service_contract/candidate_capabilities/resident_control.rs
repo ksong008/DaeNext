@@ -1,4 +1,5 @@
-fn assert_resident_and_control_plane_contract(report: &Value) {
+use super::*;
+pub(crate) fn assert_resident_and_control_plane_contract(report: &Value) {
     assert_eq!(
         report["primary_state_store"].as_str().unwrap(),
         "/etc/daed/daed.db"

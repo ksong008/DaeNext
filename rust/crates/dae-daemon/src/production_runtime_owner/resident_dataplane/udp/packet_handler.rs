@@ -1,13 +1,14 @@
+use super::*;
 #[derive(Debug)]
-struct UdpExchangeResult {
-    payload: Vec<u8>,
-    legacy_execution: &'static str,
-    tls_underlay: Option<&'static str>,
-    quic_underlay: Option<&'static str>,
+pub(super) struct UdpExchangeResult {
+    pub(super) payload: Vec<u8>,
+    pub(super) legacy_execution: &'static str,
+    pub(super) tls_underlay: Option<&'static str>,
+    pub(super) quic_underlay: Option<&'static str>,
 }
 
 impl UdpExchangeResult {
-    fn new(payload: Vec<u8>, legacy_execution: &'static str) -> Self {
+    pub(super) fn new(payload: Vec<u8>, legacy_execution: &'static str) -> Self {
         Self {
             payload,
             legacy_execution,
@@ -16,17 +17,17 @@ impl UdpExchangeResult {
         }
     }
 
-    fn with_tls_underlay(mut self, tls_underlay: &'static str) -> Self {
+    pub(super) fn with_tls_underlay(mut self, tls_underlay: &'static str) -> Self {
         self.tls_underlay = Some(tls_underlay);
         self
     }
 
-    fn with_quic_underlay(mut self, quic_underlay: &'static str) -> Self {
+    pub(super) fn with_quic_underlay(mut self, quic_underlay: &'static str) -> Self {
         self.quic_underlay = Some(quic_underlay);
         self
     }
 
-    fn append_execution_fields(
+    pub(super) fn append_execution_fields(
         &self,
         value: &mut serde_json::Value,
         protocol_framing: &str,
@@ -45,7 +46,7 @@ impl UdpExchangeResult {
     }
 }
 
-fn handle_udp_packet(
+pub(super) fn handle_udp_packet(
     proxy_group: Arc<ResidentProxyGroupPlan>,
     dns: Arc<ResidentDnsPlan>,
     packet: UdpOriginalDstPacket,

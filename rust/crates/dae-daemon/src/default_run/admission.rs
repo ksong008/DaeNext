@@ -1,3 +1,4 @@
+use super::*;
 pub fn product_chain_admission_from_run_report(
     path: &Path,
 ) -> Result<ProductChainAdmissionEvidence, String> {

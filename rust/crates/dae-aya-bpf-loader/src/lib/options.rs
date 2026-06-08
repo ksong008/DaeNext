@@ -1,3 +1,4 @@
+use super::*;
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LoaderOutput {
     pub stdout: String,
@@ -6,7 +7,7 @@ pub struct LoaderOutput {
 }
 
 impl LoaderOutput {
-    fn ok(stdout: String) -> Self {
+    pub(super) fn ok(stdout: String) -> Self {
         Self {
             stdout,
             stderr: String::new(),
@@ -14,7 +15,7 @@ impl LoaderOutput {
         }
     }
 
-    fn usage(message: impl Into<String>) -> Self {
+    pub(super) fn usage(message: impl Into<String>) -> Self {
         Self {
             stdout: String::new(),
             stderr: format!("{}\n", message.into()),
@@ -22,7 +23,7 @@ impl LoaderOutput {
         }
     }
 
-    fn error(message: impl Into<String>) -> Self {
+    pub(super) fn error(message: impl Into<String>) -> Self {
         Self {
             stdout: String::new(),
             stderr: format!("{}\n", message.into()),
@@ -32,33 +33,33 @@ impl LoaderOutput {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
-struct BpfLoaderLoadPinOptions {
-    object: Option<PathBuf>,
-    object_source: Option<BpfObjectSource>,
-    pin_root: PathBuf,
-    tproxy_port: u16,
-    control_plane_pid: u32,
-    dae0_ifindex: u32,
-    dae_netns_id: u32,
-    dae0peer_mac: [u8; 6],
-    has_bpf_get_current_task: bool,
+pub(super) struct BpfLoaderLoadPinOptions {
+    pub(super) object: Option<PathBuf>,
+    pub(super) object_source: Option<BpfObjectSource>,
+    pub(super) pin_root: PathBuf,
+    pub(super) tproxy_port: u16,
+    pub(super) control_plane_pid: u32,
+    pub(super) dae0_ifindex: u32,
+    pub(super) dae_netns_id: u32,
+    pub(super) dae0peer_mac: [u8; 6],
+    pub(super) has_bpf_get_current_task: bool,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum BpfObjectSource {
+pub(super) enum BpfObjectSource {
     CAya,
     RustAyaSkeleton,
 }
 
 impl BpfObjectSource {
-    const fn as_str(self) -> &'static str {
+    pub(super) const fn as_str(self) -> &'static str {
         match self {
             Self::CAya => "c-aya",
             Self::RustAyaSkeleton => "rust-aya-skeleton",
         }
     }
 
-    fn parse(value: &str) -> Result<Self, String> {
+    pub(super) fn parse(value: &str) -> Result<Self, String> {
         match value {
             "c-aya" => Ok(Self::CAya),
             "rust-aya-skeleton" => Ok(Self::RustAyaSkeleton),
@@ -70,29 +71,29 @@ impl BpfObjectSource {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
-struct MapStatsCountRequest {
-    name: String,
-    id: u32,
+pub(super) struct MapStatsCountRequest {
+    pub(super) name: String,
+    pub(super) id: u32,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
-struct TraceLoaderLoadPinOptions {
-    object: PathBuf,
-    pin_root: PathBuf,
-    ip_version: u8,
-    l4_proto: u16,
-    port: u16,
-    ringbuf_size: u32,
+pub(super) struct TraceLoaderLoadPinOptions {
+    pub(super) object: PathBuf,
+    pub(super) pin_root: PathBuf,
+    pub(super) ip_version: u8,
+    pub(super) l4_proto: u16,
+    pub(super) port: u16,
+    pub(super) ringbuf_size: u32,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum TraceLoaderAttachSmokeTrigger {
+pub(super) enum TraceLoaderAttachSmokeTrigger {
     LoopbackUdp,
     OpenProcSelfStat,
 }
 
 impl TraceLoaderAttachSmokeTrigger {
-    fn parse(value: &str) -> Result<Self, String> {
+    pub(super) fn parse(value: &str) -> Result<Self, String> {
         match value {
             "loopback-udp" => Ok(Self::LoopbackUdp),
             "open-proc-self-stat" => Ok(Self::OpenProcSelfStat),
@@ -104,61 +105,61 @@ impl TraceLoaderAttachSmokeTrigger {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
-struct TraceLoaderAttachRingbufSmokeOptions {
-    object: PathBuf,
-    target: String,
-    program_name: String,
-    ip_version: u8,
-    l4_proto: u16,
-    port: u16,
-    ringbuf_size: u32,
-    trigger: TraceLoaderAttachSmokeTrigger,
-    trigger_count: u32,
-    poll_attempts: u32,
+pub(super) struct TraceLoaderAttachRingbufSmokeOptions {
+    pub(super) object: PathBuf,
+    pub(super) target: String,
+    pub(super) program_name: String,
+    pub(super) ip_version: u8,
+    pub(super) l4_proto: u16,
+    pub(super) port: u16,
+    pub(super) ringbuf_size: u32,
+    pub(super) trigger: TraceLoaderAttachSmokeTrigger,
+    pub(super) trigger_count: u32,
+    pub(super) poll_attempts: u32,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
-struct ConnectivityMapUpdateOptions {
-    map_id: u32,
-    outbound: u8,
-    l4_proto: u8,
-    ip_version: u8,
-    alive: bool,
-    is_init: bool,
-    dryrun: bool,
+pub(super) struct ConnectivityMapUpdateOptions {
+    pub(super) map_id: u32,
+    pub(super) outbound: u8,
+    pub(super) l4_proto: u8,
+    pub(super) ip_version: u8,
+    pub(super) alive: bool,
+    pub(super) is_init: bool,
+    pub(super) dryrun: bool,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
-struct CgroupMonitorAttachPinOptions {
-    program_root: PathBuf,
-    link_root: PathBuf,
-    cgroup_path: PathBuf,
+pub(super) struct CgroupMonitorAttachPinOptions {
+    pub(super) program_root: PathBuf,
+    pub(super) link_root: PathBuf,
+    pub(super) cgroup_path: PathBuf,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
-struct TcAttachPinOptions {
-    program_root: PathBuf,
-    link_root: PathBuf,
-    program_name: String,
-    iface: String,
-    netns: Option<String>,
-    direction: dae_ebpf_support::TcAttachDirection,
-    priority: u16,
-    handle: u32,
-    backend: dae_ebpf_support::AttachBackend,
-    filter_name: Option<String>,
+pub(super) struct TcAttachPinOptions {
+    pub(super) program_root: PathBuf,
+    pub(super) link_root: PathBuf,
+    pub(super) program_name: String,
+    pub(super) iface: String,
+    pub(super) netns: Option<String>,
+    pub(super) direction: dae_ebpf_support::TcAttachDirection,
+    pub(super) priority: u16,
+    pub(super) handle: u32,
+    pub(super) backend: dae_ebpf_support::AttachBackend,
+    pub(super) filter_name: Option<String>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
-struct TproxyListenerOpenHandoffOptions {
-    map_id: u32,
-    port: u16,
-    handoff_fd: i32,
+pub(super) struct TproxyListenerOpenHandoffOptions {
+    pub(super) map_id: u32,
+    pub(super) port: u16,
+    pub(super) handoff_fd: i32,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
-struct TproxyListenerUpdateMapOptions {
-    map_id: u32,
-    tcp_fd: i32,
-    udp_fd: i32,
+pub(super) struct TproxyListenerUpdateMapOptions {
+    pub(super) map_id: u32,
+    pub(super) tcp_fd: i32,
+    pub(super) udp_fd: i32,
 }

@@ -1,4 +1,5 @@
-fn append_log_for_config(
+use super::*;
+pub(crate) fn append_log_for_config(
     config_dir: &Path,
     state: &Path,
     level: &str,
@@ -7,7 +8,7 @@ fn append_log_for_config(
     append_log_fields_for_config(config_dir, state, level, message, BTreeMap::new())
 }
 
-fn append_lifecycle_log_for_config(
+pub(crate) fn append_lifecycle_log_for_config(
     config_dir: &Path,
     state: &Path,
     level: &str,
@@ -16,7 +17,7 @@ fn append_lifecycle_log_for_config(
     append_lifecycle_log_fields_for_config(config_dir, state, level, message, BTreeMap::new())
 }
 
-fn append_log_fields_for_config(
+pub(crate) fn append_log_fields_for_config(
     config_dir: &Path,
     state: &Path,
     level: &str,
@@ -26,7 +27,7 @@ fn append_log_fields_for_config(
     append_log_fields_for_config_with_policy(config_dir, state, level, message, fields, true)
 }
 
-fn append_lifecycle_log_fields_for_config(
+pub(crate) fn append_lifecycle_log_fields_for_config(
     config_dir: &Path,
     state: &Path,
     level: &str,
@@ -36,7 +37,7 @@ fn append_lifecycle_log_fields_for_config(
     append_log_fields_for_config_with_policy(config_dir, state, level, message, fields, false)
 }
 
-fn append_startup_phase_completed_for_config(
+pub(crate) fn append_startup_phase_completed_for_config(
     config_dir: &Path,
     state: &Path,
     phase: &str,
@@ -55,7 +56,7 @@ fn append_startup_phase_completed_for_config(
     )
 }
 
-fn append_startup_phase_failed_for_config(
+pub(crate) fn append_startup_phase_failed_for_config(
     config_dir: &Path,
     state: &Path,
     phase: &str,
@@ -75,7 +76,7 @@ fn append_startup_phase_failed_for_config(
     )
 }
 
-fn append_startup_runtime_evidence_logs_for_config(
+pub(crate) fn append_startup_runtime_evidence_logs_for_config(
     config_dir: &Path,
     state: &Path,
     report: &Value,
@@ -181,13 +182,17 @@ fn append_startup_runtime_evidence_logs_for_config(
     Ok(())
 }
 
-fn insert_json_log_field(fields: &mut BTreeMap<String, String>, key: &str, value: Option<&Value>) {
+pub(crate) fn insert_json_log_field(
+    fields: &mut BTreeMap<String, String>,
+    key: &str,
+    value: Option<&Value>,
+) {
     if let Some(value) = json_scalar_to_string(value) {
         fields.insert(key.to_owned(), value);
     }
 }
 
-fn json_scalar_to_string(value: Option<&Value>) -> Option<String> {
+pub(crate) fn json_scalar_to_string(value: Option<&Value>) -> Option<String> {
     match value? {
         Value::String(value) if !value.is_empty() => Some(value.clone()),
         Value::Number(value) => Some(value.to_string()),
@@ -196,7 +201,7 @@ fn json_scalar_to_string(value: Option<&Value>) -> Option<String> {
     }
 }
 
-fn json_scalar_to_u64(value: Option<&Value>) -> Option<u64> {
+pub(crate) fn json_scalar_to_u64(value: Option<&Value>) -> Option<u64> {
     match value? {
         Value::Number(value) => value.as_u64(),
         Value::String(value) => value.parse().ok(),
@@ -204,7 +209,7 @@ fn json_scalar_to_u64(value: Option<&Value>) -> Option<u64> {
     }
 }
 
-fn append_log_fields_for_config_with_policy(
+pub(crate) fn append_log_fields_for_config_with_policy(
     config_dir: &Path,
     state: &Path,
     level: &str,
@@ -237,7 +242,7 @@ fn append_log_fields_for_config_with_policy(
     Ok(())
 }
 
-fn append_startup_reclaim_decision_log_for_config(
+pub(crate) fn append_startup_reclaim_decision_log_for_config(
     config_dir: &Path,
     state: &Path,
     _report: &Value,

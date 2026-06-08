@@ -1,5 +1,6 @@
+use super::*;
 #[test]
-fn dae_param_packs_big_endian_tproxy_port() {
+pub(super) fn dae_param_packs_big_endian_tproxy_port() {
     let param = build_dae_param(DaeParamInput {
         tproxy_port: 12345,
         control_plane_pid: 77,
@@ -15,7 +16,7 @@ fn dae_param_packs_big_endian_tproxy_port() {
 }
 
 #[test]
-fn param_aware_loader_gate_requires_real_loader_and_runtime_values() {
+pub(super) fn param_aware_loader_gate_requires_real_loader_and_runtime_values() {
     let input = DaeParamInput {
         tproxy_port: 12345,
         control_plane_pid: 77,
@@ -51,7 +52,7 @@ fn param_aware_loader_gate_requires_real_loader_and_runtime_values() {
 }
 
 #[test]
-fn dae_param_requirements_match_memo_fields() {
+pub(super) fn dae_param_requirements_match_memo_fields() {
     let fields = dae_param_requirements()
         .iter()
         .map(|requirement| requirement.field)
@@ -70,7 +71,7 @@ fn dae_param_requirements_match_memo_fields() {
 }
 
 #[test]
-fn param_object_rewriter_updates_real_dae_object_param_symbol() {
+pub(super) fn param_object_rewriter_updates_real_dae_object_param_symbol() {
     let root = dae_golden::repo_root_from_manifest().unwrap();
     let source = root.join("control/bpf_bpfel.o");
     let output = temp_path("dae-stage41-param-object-test.o");
@@ -102,7 +103,7 @@ fn param_object_rewriter_updates_real_dae_object_param_symbol() {
 }
 
 #[test]
-fn param_object_bytes_roundtrip_layout() {
+pub(super) fn param_object_bytes_roundtrip_layout() {
     let param = build_dae_param(DaeParamInput {
         tproxy_port: 12345,
         control_plane_pid: 77,

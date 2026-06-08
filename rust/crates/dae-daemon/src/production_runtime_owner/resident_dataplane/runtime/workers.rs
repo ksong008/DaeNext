@@ -1,4 +1,5 @@
-pub(super) fn start_resident_dataplane_workers(
+use super::*;
+pub(crate) fn start_resident_dataplane_workers(
     handoff: &LiveLoadedTproxyListenSocketMap,
     config: &Config,
     artifact_dir: &Path,

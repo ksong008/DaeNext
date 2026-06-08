@@ -1,5 +1,6 @@
+use super::*;
 #[test]
-fn bpf_abi_layout_matches_golden_fixture() {
+pub(super) fn bpf_abi_layout_matches_golden_fixture() {
     let fixture = load("ebpf/abi/layout.json");
     assert_eq!(
         TASK_COMM_LEN,
@@ -55,7 +56,7 @@ fn bpf_abi_layout_matches_golden_fixture() {
 }
 
 #[test]
-fn map_catalog_matches_golden_fixture() {
+pub(super) fn map_catalog_matches_golden_fixture() {
     let fixture = load("ebpf/maps/catalog.json");
     let maps = fixture["maps"].as_array().unwrap();
     assert_eq!(map_catalog().len(), maps.len());
@@ -94,7 +95,7 @@ fn map_catalog_matches_golden_fixture() {
 }
 
 #[test]
-fn ebpf_runtime_contracts_keep_abi_maps_and_loader_boundaries_explicit() {
+pub(super) fn ebpf_runtime_contracts_keep_abi_maps_and_loader_boundaries_explicit() {
     let abi = bpf_abi_contract();
     assert_eq!(abi.dae_param_size, size_of::<BpfDaeParam>());
     assert_eq!(abi.task_comm_len, TASK_COMM_LEN);
@@ -128,7 +129,7 @@ fn ebpf_runtime_contracts_keep_abi_maps_and_loader_boundaries_explicit() {
 }
 
 #[test]
-fn attach_backend_plan_keeps_command_fallback_until_native_attach_is_available() {
+pub(super) fn attach_backend_plan_keeps_command_fallback_until_native_attach_is_available() {
     let fallback = plan_attach_backend(
         AttachBackend::Auto,
         Some(Version::new(6, 6, 0)),
@@ -160,7 +161,7 @@ fn attach_backend_plan_keeps_command_fallback_until_native_attach_is_available()
 }
 
 #[test]
-fn report_only_backend_capability_keeps_default_command_fallback() {
+pub(super) fn report_only_backend_capability_keeps_default_command_fallback() {
     let report = report_only_ebpf_backend_capability(Some(Version::new(6, 6, 0)));
     assert!(report.report_only);
     assert_eq!(report.aya_userspace_available, cfg!(feature = "aya-loader"));

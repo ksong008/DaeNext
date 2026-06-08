@@ -1,4 +1,5 @@
-fn run_candidate_command(
+use super::*;
+pub(super) fn run_candidate_command(
     binary_source: &Path,
     args: &[&str],
     path_arg: Option<&Path>,
@@ -20,7 +21,7 @@ fn run_candidate_command(
     unreachable!("candidate command retry loop always returns")
 }
 
-fn bounded_command_output(bytes: &[u8]) -> String {
+pub(super) fn bounded_command_output(bytes: &[u8]) -> String {
     const MAX_OUTPUT_BYTES: usize = 4000;
     String::from_utf8_lossy(&bytes[..bytes.len().min(MAX_OUTPUT_BYTES)]).into_owned()
 }

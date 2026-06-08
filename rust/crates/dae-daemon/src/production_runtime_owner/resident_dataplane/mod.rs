@@ -41,11 +41,27 @@ mod tcp;
 mod udp;
 mod vision;
 
-include!("runtime/defaults.rs");
-include!("runtime/runtime.rs");
-include!("runtime/metrics.rs");
-include!("runtime/workers.rs");
-include!("runtime/health_checks.rs");
-include!("runtime/remote_strategy_live_tests.rs");
-include!("runtime/matrix.rs");
-include!("runtime/env.rs");
+#[path = "runtime/defaults.rs"]
+mod defaults;
+pub(crate) use self::defaults::*;
+#[path = "runtime/runtime.rs"]
+mod runtime;
+pub(super) use self::runtime::*;
+#[path = "runtime/metrics.rs"]
+mod metrics;
+pub(super) use self::metrics::*;
+#[path = "runtime/workers.rs"]
+mod workers;
+pub(super) use self::workers::*;
+#[path = "runtime/health_checks.rs"]
+mod health_checks;
+pub(super) use self::health_checks::*;
+#[path = "runtime/remote_strategy_live_tests.rs"]
+mod remote_strategy_live_tests;
+pub(crate) use self::remote_strategy_live_tests::*;
+#[path = "runtime/matrix.rs"]
+mod matrix;
+use self::matrix::*;
+#[path = "runtime/env.rs"]
+mod env;
+use self::env::*;

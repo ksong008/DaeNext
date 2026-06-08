@@ -1,4 +1,5 @@
-fn compact_start_report_for_runtime(start_report: &Value) -> Value {
+use super::*;
+pub(super) fn compact_start_report_for_runtime(start_report: &Value) -> Value {
     let attach_backend = actual_resident_attach_backend(start_report).or_else(|| {
         start_report
             .pointer("/resident_interface_backend_policy/effective_backend")

@@ -1,3 +1,4 @@
+use super::*;
 pub fn prepin_lpm_array_map(pin_root: &Path) -> io::Result<AyaMapInMapPinReport> {
     fs::create_dir_all(pin_root)?;
     let pin_path = pin_root.join(LPM_ARRAY_MAP_NAME);
@@ -45,17 +46,17 @@ pub fn prepin_lpm_array_map(pin_root: &Path) -> io::Result<AyaMapInMapPinReport>
 }
 
 #[derive(Clone, Copy, Debug)]
-struct CreateBpfMapSpec {
-    name: &'static str,
-    map_type: u32,
-    key_size: u32,
-    value_size: u32,
-    max_entries: u32,
-    map_flags: u32,
-    inner_map_fd: i32,
+pub(super) struct CreateBpfMapSpec {
+    pub(super) name: &'static str,
+    pub(super) map_type: u32,
+    pub(super) key_size: u32,
+    pub(super) value_size: u32,
+    pub(super) max_entries: u32,
+    pub(super) map_flags: u32,
+    pub(super) inner_map_fd: i32,
 }
 
-fn create_bpf_map(spec: CreateBpfMapSpec) -> io::Result<OwnedFd> {
+pub(super) fn create_bpf_map(spec: CreateBpfMapSpec) -> io::Result<OwnedFd> {
     let mut attr = BpfMapCreateAttr {
         map_type: spec.map_type,
         key_size: spec.key_size,
@@ -82,7 +83,7 @@ fn create_bpf_map(spec: CreateBpfMapSpec) -> io::Result<OwnedFd> {
     Ok(unsafe { OwnedFd::from_raw_fd(fd as i32) })
 }
 
-fn pin_obj(fd: i32, path: &Path) -> io::Result<()> {
+pub(super) fn pin_obj(fd: i32, path: &Path) -> io::Result<()> {
     let path = c_path(path)?;
     let attr = BpfObjAttr {
         pathname: path.as_ptr() as u64,
@@ -103,7 +104,7 @@ fn pin_obj(fd: i32, path: &Path) -> io::Result<()> {
     Ok(())
 }
 
-fn c_path(path: &Path) -> io::Result<CString> {
+pub(super) fn c_path(path: &Path) -> io::Result<CString> {
     CString::new(path.as_os_str().as_bytes()).map_err(|err| {
         io::Error::new(
             io::ErrorKind::InvalidInput,
@@ -114,27 +115,27 @@ fn c_path(path: &Path) -> io::Result<CString> {
 
 #[repr(C)]
 #[derive(Clone, Copy, Debug, Default)]
-struct BpfMapCreateAttr {
-    map_type: u32,
-    key_size: u32,
-    value_size: u32,
-    max_entries: u32,
-    map_flags: u32,
-    inner_map_fd: u32,
-    numa_node: u32,
-    map_name: [u8; 16],
-    map_ifindex: u32,
-    btf_fd: u32,
-    btf_key_type_id: u32,
-    btf_value_type_id: u32,
-    btf_vmlinux_value_type_id: u32,
-    map_extra: u64,
+pub(super) struct BpfMapCreateAttr {
+    pub(super) map_type: u32,
+    pub(super) key_size: u32,
+    pub(super) value_size: u32,
+    pub(super) max_entries: u32,
+    pub(super) map_flags: u32,
+    pub(super) inner_map_fd: u32,
+    pub(super) numa_node: u32,
+    pub(super) map_name: [u8; 16],
+    pub(super) map_ifindex: u32,
+    pub(super) btf_fd: u32,
+    pub(super) btf_key_type_id: u32,
+    pub(super) btf_value_type_id: u32,
+    pub(super) btf_vmlinux_value_type_id: u32,
+    pub(super) map_extra: u64,
 }
 
 #[repr(C)]
 #[derive(Clone, Copy, Debug, Default)]
-struct BpfObjAttr {
-    pathname: u64,
-    bpf_fd: u32,
-    file_flags: u32,
+pub(super) struct BpfObjAttr {
+    pub(super) pathname: u64,
+    pub(super) bpf_fd: u32,
+    pub(super) file_flags: u32,
 }

@@ -1,3 +1,4 @@
+use super::*;
 pub fn service_contract_capabilities(version: &str) -> Value {
     let control_plane_runtime_state = dae_control::RuntimeStateReport::rust_owned_control_plane();
     let control_plane_runtime_state_ready =
@@ -97,7 +98,7 @@ pub fn service_contract_capabilities(version: &str) -> Value {
     report
 }
 
-fn insert_control_plane_service_contract_capabilities(
+pub(super) fn insert_control_plane_service_contract_capabilities(
     report: &mut Value,
     control_plane_runtime_state: dae_control::RuntimeStateReport,
     control_plane_runtime_state_ready: bool,

@@ -40,12 +40,23 @@ use super::{
     ProductionRuntimeOwnerOptions,
 };
 
-include!("resident/constants.rs");
-include!("resident/runtime_handle.rs");
-include!("resident/start_entry.rs");
-include!("resident/interface_policy.rs");
-include!("resident/start_flow.rs");
-include!("resident/startup_report.rs");
-include!("resident/routing_map_discovery.rs");
-include!("resident/artifact_env.rs");
-include!("resident/tests.rs");
+mod constants;
+use self::constants::*;
+mod runtime_handle;
+pub use self::runtime_handle::*;
+mod start_entry;
+pub use self::start_entry::*;
+mod interface_policy;
+use self::interface_policy::*;
+mod start_flow;
+use self::start_flow::*;
+mod startup_report;
+use self::startup_report::*;
+mod routing_map_discovery;
+use self::routing_map_discovery::*;
+mod artifact_env;
+use self::artifact_env::*;
+#[cfg(test)]
+mod tests;
+#[cfg(test)]
+use self::tests::*;

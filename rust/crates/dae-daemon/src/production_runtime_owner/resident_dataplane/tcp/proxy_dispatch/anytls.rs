@@ -1,5 +1,6 @@
+use super::*;
 #[allow(clippy::too_many_arguments)]
-async fn handle_anytls_tls_tcp_connection_async(
+pub(crate) async fn handle_anytls_tls_tcp_connection_async(
     inbound: &mut TokioTcpStream,
     peer: SocketAddr,
     original_dst: SocketAddrV4,
@@ -102,7 +103,7 @@ async fn handle_anytls_tls_tcp_connection_async(
     }
 }
 
-async fn write_anytls_frame(
+pub(crate) async fn write_anytls_frame(
     client: &mut AsyncResidentTlsClient,
     cmd: u8,
     sid: u32,
@@ -113,7 +114,10 @@ async fn write_anytls_frame(
     client.write_plain_all(&frame, label).await
 }
 
-async fn wait_anytls_synack(client: &mut AsyncResidentTlsClient, sid: u32) -> Result<(), String> {
+pub(crate) async fn wait_anytls_synack(
+    client: &mut AsyncResidentTlsClient,
+    sid: u32,
+) -> Result<(), String> {
     loop {
         let frame = read_anytls_frame(client).await?;
         match frame.cmd {
@@ -147,7 +151,7 @@ async fn wait_anytls_synack(client: &mut AsyncResidentTlsClient, sid: u32) -> Re
     }
 }
 
-async fn relay_tcp_over_anytls_async(
+pub(crate) async fn relay_tcp_over_anytls_async(
     inbound: &mut TokioTcpStream,
     client: &mut AsyncResidentTlsClient,
     stop: Arc<AtomicBool>,
@@ -275,7 +279,9 @@ async fn relay_tcp_over_anytls_async(
     Ok(stats)
 }
 
-async fn read_anytls_frame(client: &mut AsyncResidentTlsClient) -> Result<AnyTlsFrame, String> {
+pub(crate) async fn read_anytls_frame(
+    client: &mut AsyncResidentTlsClient,
+) -> Result<AnyTlsFrame, String> {
     let mut header = [0_u8; anytls_contract::HEADER_OVERHEAD_SIZE];
     read_resident_tls_plain_exact(client, &mut header, "read AnyTLS frame header").await?;
     let len = u16::from_be_bytes([header[5], header[6]]) as usize;
@@ -288,7 +294,7 @@ async fn read_anytls_frame(client: &mut AsyncResidentTlsClient) -> Result<AnyTls
     })
 }
 
-async fn read_resident_tls_plain_exact(
+pub(crate) async fn read_resident_tls_plain_exact(
     client: &mut AsyncResidentTlsClient,
     buf: &mut [u8],
     label: &str,

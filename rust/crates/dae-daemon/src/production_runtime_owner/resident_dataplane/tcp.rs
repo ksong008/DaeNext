@@ -109,18 +109,35 @@ use websocket::{
     write_websocket_binary_frame_over_resident_tls_async, write_websocket_binary_frame_to_stream,
 };
 
-include!("tcp/router.rs");
-include!("tcp/probe.rs");
-include!("tcp/accept_loop.rs");
-include!("tcp/vless_handlers.rs");
-include!("tcp/proxy_dispatch.rs");
-include!("tcp/plain_handlers.rs");
-include!("tcp/vmess_handlers.rs");
-include!("tcp/transport_helpers.rs");
-include!("tcp/stream_helpers.rs");
-include!("tcp/shadowsocks_relay.rs");
-include!("tcp/vmess_relay.rs");
-include!("tcp/event_builders.rs");
-include!("tcp/direct_sniffing.rs");
-include!("tcp/vless_relay.rs");
-include!("tcp/tests.rs");
+mod router;
+pub(super) use self::router::*;
+mod probe;
+pub(super) use self::probe::*;
+mod accept_loop;
+pub(super) use self::accept_loop::*;
+mod vless_handlers;
+use self::vless_handlers::*;
+mod proxy_dispatch;
+pub(super) use self::proxy_dispatch::*;
+mod plain_handlers;
+use self::plain_handlers::*;
+mod vmess_handlers;
+use self::vmess_handlers::*;
+mod transport_helpers;
+use self::transport_helpers::*;
+mod stream_helpers;
+use self::stream_helpers::*;
+mod shadowsocks_relay;
+use self::shadowsocks_relay::*;
+mod vmess_relay;
+use self::vmess_relay::*;
+mod event_builders;
+use self::event_builders::*;
+mod direct_sniffing;
+use self::direct_sniffing::*;
+mod vless_relay;
+use self::vless_relay::*;
+#[cfg(test)]
+mod tests;
+#[cfg(test)]
+use self::tests::*;

@@ -1,17 +1,18 @@
+use super::*;
 #[derive(Debug)]
 pub struct ResidentProductionRuntime {
-    live_handoff: Option<LiveLoadedTproxyListenSocketMap>,
-    native_runtime: NativeEbpfRuntimeState,
-    dataplane: Option<ResidentDataplaneRuntime>,
-    start_report: Value,
-    lan_ifaces: Vec<String>,
-    native_lan_ifaces: Vec<String>,
-    cleanup_steps: Vec<Value>,
-    discovered_map_id: Option<u32>,
-    discovered_routing_map_ids: Vec<Option<u32>>,
-    before_pin_snapshot: Vec<String>,
-    cleanup_file: PathBuf,
-    cleaned: bool,
+    pub(super) live_handoff: Option<LiveLoadedTproxyListenSocketMap>,
+    pub(super) native_runtime: NativeEbpfRuntimeState,
+    pub(super) dataplane: Option<ResidentDataplaneRuntime>,
+    pub(super) start_report: Value,
+    pub(super) lan_ifaces: Vec<String>,
+    pub(super) native_lan_ifaces: Vec<String>,
+    pub(super) cleanup_steps: Vec<Value>,
+    pub(super) discovered_map_id: Option<u32>,
+    pub(super) discovered_routing_map_ids: Vec<Option<u32>>,
+    pub(super) before_pin_snapshot: Vec<String>,
+    pub(super) cleanup_file: PathBuf,
+    pub(super) cleaned: bool,
 }
 
 impl ResidentProductionRuntime {

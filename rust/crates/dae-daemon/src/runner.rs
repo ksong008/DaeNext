@@ -31,8 +31,13 @@ use dae_ebpf_support::AttachBackend;
 use std::path::PathBuf;
 use std::time::Duration;
 
-include!("runner/output.rs");
-include!("runner/command_router.rs");
-include!("runner/basic_commands.rs");
-include!("runner/default_optin.rs");
-include!("runner/aux_commands.rs");
+mod output;
+pub use self::output::*;
+mod command_router;
+pub use self::command_router::*;
+mod basic_commands;
+use self::basic_commands::*;
+mod default_optin;
+use self::default_optin::*;
+mod aux_commands;
+use self::aux_commands::*;

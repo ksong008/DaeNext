@@ -1,4 +1,7 @@
-fn run_cgroup_monitor_attach_pin(options: CgroupMonitorAttachPinOptions) -> LoaderOutput {
+use super::*;
+pub(crate) fn run_cgroup_monitor_attach_pin(
+    options: CgroupMonitorAttachPinOptions,
+) -> LoaderOutput {
     let reports = match dae_ebpf_support::attach_pin_cgroup_monitor(
         dae_ebpf_support::PinnedCgroupAttachOptions {
             program_root: &options.program_root,
@@ -34,7 +37,7 @@ fn run_cgroup_monitor_attach_pin(options: CgroupMonitorAttachPinOptions) -> Load
 }
 
 #[cfg(feature = "native-ebpf")]
-fn run_tc_attach_pin(options: TcAttachPinOptions) -> LoaderOutput {
+pub(crate) fn run_tc_attach_pin(options: TcAttachPinOptions) -> LoaderOutput {
     let spec = dae_ebpf_support::TcNativeAttachSpec {
         target: dae_ebpf_support::TcAttachTarget {
             iface: options.iface.clone(),
@@ -102,11 +105,13 @@ fn run_tc_attach_pin(options: TcAttachPinOptions) -> LoaderOutput {
 }
 
 #[cfg(not(feature = "native-ebpf"))]
-fn run_tc_attach_pin(_options: TcAttachPinOptions) -> LoaderOutput {
+pub(crate) fn run_tc_attach_pin(_options: TcAttachPinOptions) -> LoaderOutput {
     LoaderOutput::error("tc-attach attach-pin requires dae-aya-bpf-loader feature native-ebpf")
 }
 
-fn run_tproxy_listener_open_handoff(options: TproxyListenerOpenHandoffOptions) -> LoaderOutput {
+pub(crate) fn run_tproxy_listener_open_handoff(
+    options: TproxyListenerOpenHandoffOptions,
+) -> LoaderOutput {
     let handoff = match dae_ebpf_support::open_tproxy_listener_set_and_update_sockmap_by_id(
         options.map_id,
         options.port,
@@ -156,7 +161,9 @@ fn run_tproxy_listener_open_handoff(options: TproxyListenerOpenHandoffOptions) -
     LoaderOutput::ok(payload)
 }
 
-fn run_tproxy_listener_update_map(options: TproxyListenerUpdateMapOptions) -> LoaderOutput {
+pub(crate) fn run_tproxy_listener_update_map(
+    options: TproxyListenerUpdateMapOptions,
+) -> LoaderOutput {
     let map = match dae_ebpf_support::update_listen_socket_map_by_id(
         options.map_id,
         options.tcp_fd,

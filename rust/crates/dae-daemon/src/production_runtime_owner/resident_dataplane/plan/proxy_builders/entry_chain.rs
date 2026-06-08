@@ -1,4 +1,5 @@
-fn build_proxy_plan(
+use super::*;
+pub(crate) fn build_proxy_plan(
     config: &Config,
     group_name: String,
     node_tag: String,
@@ -25,7 +26,7 @@ fn build_proxy_plan(
     }
 }
 
-fn build_chained_proxy_plan(
+pub(crate) fn build_chained_proxy_plan(
     config: &Config,
     group_name: String,
     node_tag: String,
@@ -68,7 +69,7 @@ fn build_chained_proxy_plan(
     Ok(child)
 }
 
-fn resident_chain_parent_supported(parent: &ResidentProxyPlan) -> bool {
+pub(crate) fn resident_chain_parent_supported(parent: &ResidentProxyPlan) -> bool {
     match &parent.handler {
         ResidentProxyProtocolPlan::Socks5Tcp { .. } => parent.tls == "none",
         ResidentProxyProtocolPlan::HttpProxyTcp { .. } => parent.tls == "none",
@@ -76,7 +77,7 @@ fn resident_chain_parent_supported(parent: &ResidentProxyPlan) -> bool {
     }
 }
 
-fn resident_chain_child_supported(child: &ResidentProxyPlan) -> bool {
+pub(crate) fn resident_chain_child_supported(child: &ResidentProxyPlan) -> bool {
     match &child.handler {
         ResidentProxyProtocolPlan::Socks5Tcp { .. } => true,
         ResidentProxyProtocolPlan::HttpProxyTcp { .. } => child.tls == "none",

@@ -1,4 +1,5 @@
-pub(super) fn resident_tcp_accept_loop(
+use super::*;
+pub(crate) fn resident_tcp_accept_loop(
     listener: TcpListener,
     router: Arc<ResidentTcpRouter>,
     stop: Arc<AtomicBool>,
@@ -41,7 +42,7 @@ pub(super) fn resident_tcp_accept_loop(
     ));
 }
 
-async fn resident_tcp_accept_loop_async(
+pub(crate) async fn resident_tcp_accept_loop_async(
     listener: TcpListener,
     router: Arc<ResidentTcpRouter>,
     stop: Arc<AtomicBool>,
@@ -103,7 +104,7 @@ async fn resident_tcp_accept_loop_async(
 }
 
 #[allow(clippy::too_many_arguments)]
-fn spawn_async_tcp_flow(
+pub(crate) fn spawn_async_tcp_flow(
     stream: TokioTcpStream,
     peer: SocketAddr,
     router: Arc<ResidentTcpRouter>,
@@ -134,7 +135,7 @@ fn spawn_async_tcp_flow(
 }
 
 #[allow(clippy::too_many_arguments)]
-async fn handle_tcp_connection_async_or_handoff(
+pub(crate) async fn handle_tcp_connection_async_or_handoff(
     mut inbound: TokioTcpStream,
     peer: SocketAddr,
     router: Arc<ResidentTcpRouter>,
@@ -270,7 +271,7 @@ async fn handle_tcp_connection_async_or_handoff(
 
 #[allow(dead_code)]
 #[allow(clippy::too_many_arguments)]
-fn spawn_proxy_tcp_connection_thread(
+pub(crate) fn spawn_proxy_tcp_connection_thread(
     inbound: TokioTcpStream,
     peer: SocketAddr,
     original_dst: SocketAddrV4,
@@ -317,7 +318,7 @@ fn spawn_proxy_tcp_connection_thread(
 }
 
 #[allow(dead_code)]
-fn resident_tcp_accept_loop_sync_legacy(
+pub(crate) fn resident_tcp_accept_loop_sync_legacy(
     listener: TcpListener,
     router: Arc<ResidentTcpRouter>,
     stop: Arc<AtomicBool>,
@@ -395,7 +396,7 @@ fn resident_tcp_accept_loop_sync_legacy(
     );
 }
 
-fn handle_tcp_connection(
+pub(crate) fn handle_tcp_connection(
     mut inbound: TcpStream,
     peer: SocketAddr,
     router: Arc<ResidentTcpRouter>,

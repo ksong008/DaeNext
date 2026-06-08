@@ -1,3 +1,4 @@
+use super::*;
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct SourceShapeRegistryContract {
     pub schema: &'static str,

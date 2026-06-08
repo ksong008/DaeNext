@@ -1,4 +1,5 @@
-const CAPABILITY_REASON_TAXONOMY: [&str; 9] = [
+use super::*;
+pub(super) const CAPABILITY_REASON_TAXONOMY: [&str; 9] = [
     "missing-security-underlay",
     "missing-stream-wrapper",
     "missing-packet-semantics",
@@ -10,7 +11,7 @@ const CAPABILITY_REASON_TAXONOMY: [&str; 9] = [
     "materialization-mismatch",
 ];
 
-const SCOPED_EXPANDED_SOURCE_MATRIX_EVIDENCE: ScopedExpandedSourceMatrixEvidence =
+pub(super) const SCOPED_EXPANDED_SOURCE_MATRIX_EVIDENCE: ScopedExpandedSourceMatrixEvidence =
     ScopedExpandedSourceMatrixEvidence {
         schema: "scoped-expanded-source-evidence",
         schema_version: 1,
@@ -71,7 +72,7 @@ const SCOPED_EXPANDED_SOURCE_MATRIX_EVIDENCE: ScopedExpandedSourceMatrixEvidence
         release_gate_ready: true,
     };
 
-const ADMITTED_STATE: ShapeStateLedger = ShapeStateLedger {
+pub(super) const ADMITTED_STATE: ShapeStateLedger = ShapeStateLedger {
     source_shape: "source-supported",
     parser: "covered",
     resident_graph: "admitted",
@@ -80,7 +81,7 @@ const ADMITTED_STATE: ShapeStateLedger = ShapeStateLedger {
     go_free: "not-ready",
 };
 
-const BLOCKED_STATE: ShapeStateLedger = ShapeStateLedger {
+pub(super) const BLOCKED_STATE: ShapeStateLedger = ShapeStateLedger {
     source_shape: "source-supported",
     parser: "covered",
     resident_graph: "blocked",
@@ -89,7 +90,7 @@ const BLOCKED_STATE: ShapeStateLedger = ShapeStateLedger {
     go_free: "blocked",
 };
 
-const NOT_SOURCE_SUPPORTED_STATE: ShapeStateLedger = ShapeStateLedger {
+pub(super) const NOT_SOURCE_SUPPORTED_STATE: ShapeStateLedger = ShapeStateLedger {
     source_shape: "not-source-supported",
     parser: "rejected",
     resident_graph: "blocked",
@@ -98,7 +99,7 @@ const NOT_SOURCE_SUPPORTED_STATE: ShapeStateLedger = ShapeStateLedger {
     go_free: "blocked",
 };
 
-const ADMITTED_EXECUTOR_PROOF: ComponentExecutorProof = ComponentExecutorProof {
+pub(super) const ADMITTED_EXECUTOR_PROOF: ComponentExecutorProof = ComponentExecutorProof {
     underlay_factory: "proved",
     stream_wrapper_factory: "proved",
     packet_semantics_factory: "proved",
@@ -108,7 +109,7 @@ const ADMITTED_EXECUTOR_PROOF: ComponentExecutorProof = ComponentExecutorProof {
     proof_state: "runtime-executable",
 };
 
-const CHAIN_EXECUTOR_PROOF: ComponentExecutorProof = ComponentExecutorProof {
+pub(super) const CHAIN_EXECUTOR_PROOF: ComponentExecutorProof = ComponentExecutorProof {
     underlay_factory: "proved",
     stream_wrapper_factory: "proved",
     packet_semantics_factory: "proved",
@@ -118,7 +119,7 @@ const CHAIN_EXECUTOR_PROOF: ComponentExecutorProof = ComponentExecutorProof {
     proof_state: "runtime-executable",
 };
 
-const BLOCKED_EXECUTOR_PROOF: ComponentExecutorProof = ComponentExecutorProof {
+pub(super) const BLOCKED_EXECUTOR_PROOF: ComponentExecutorProof = ComponentExecutorProof {
     underlay_factory: "pending",
     stream_wrapper_factory: "pending",
     packet_semantics_factory: "pending",
@@ -128,21 +129,21 @@ const BLOCKED_EXECUTOR_PROOF: ComponentExecutorProof = ComponentExecutorProof {
     proof_state: "descriptor-only-fail-closed",
 };
 
-const ADMITTED_RUNTIME_SELECTION: RuntimeSelectionLedger = RuntimeSelectionLedger {
+pub(super) const ADMITTED_RUNTIME_SELECTION: RuntimeSelectionLedger = RuntimeSelectionLedger {
     selected_runtime_scope: "current-selected-resident-graph",
     unselected_source_scope: "expanded-source-ledger",
     fixed_policy_preserved: true,
     masks_expanded_source_coverage: false,
 };
 
-const BLOCKED_RUNTIME_SELECTION: RuntimeSelectionLedger = RuntimeSelectionLedger {
+pub(super) const BLOCKED_RUNTIME_SELECTION: RuntimeSelectionLedger = RuntimeSelectionLedger {
     selected_runtime_scope: "not-selected",
     unselected_source_scope: "expanded-source-ledger",
     fixed_policy_preserved: true,
     masks_expanded_source_coverage: false,
 };
 
-const BASE_CAPABILITY: CapabilityLedger = CapabilityLedger {
+pub(super) const BASE_CAPABILITY: CapabilityLedger = CapabilityLedger {
     graph_composition: "single-graph-admitted",
     security_underlay: "baseline-admitted",
     stream_wrapper: "baseline-admitted",
@@ -153,7 +154,7 @@ const BASE_CAPABILITY: CapabilityLedger = CapabilityLedger {
     secure_endpoint: "plain-or-native-underlay",
 };
 
-const PLUGIN_WRAPPER_CAPABILITY: CapabilityLedger = CapabilityLedger {
+pub(super) const PLUGIN_WRAPPER_CAPABILITY: CapabilityLedger = CapabilityLedger {
     graph_composition: "single-graph-admitted",
     security_underlay: "baseline-admitted",
     stream_wrapper: "resident-simple-obfs-http",
@@ -164,7 +165,7 @@ const PLUGIN_WRAPPER_CAPABILITY: CapabilityLedger = CapabilityLedger {
     secure_endpoint: "plain-or-native-underlay",
 };
 
-const INNER_ENCRYPTION_STREAM_CAPABILITY: CapabilityLedger = CapabilityLedger {
+pub(super) const INNER_ENCRYPTION_STREAM_CAPABILITY: CapabilityLedger = CapabilityLedger {
     graph_composition: "single-graph-admitted",
     security_underlay: "baseline-admitted",
     stream_wrapper: "websocket",
@@ -175,7 +176,7 @@ const INNER_ENCRYPTION_STREAM_CAPABILITY: CapabilityLedger = CapabilityLedger {
     secure_endpoint: "plain-or-native-underlay",
 };
 
-const PLUGIN_WRAPPER_STREAM_CAPABILITY: CapabilityLedger = CapabilityLedger {
+pub(super) const PLUGIN_WRAPPER_STREAM_CAPABILITY: CapabilityLedger = CapabilityLedger {
     graph_composition: "single-graph-admitted",
     security_underlay: "aead-or-aead-2022",
     stream_wrapper: "resident-plugin-wrapper",
@@ -186,7 +187,7 @@ const PLUGIN_WRAPPER_STREAM_CAPABILITY: CapabilityLedger = CapabilityLedger {
     secure_endpoint: "plain-or-native-underlay",
 };
 
-const PROXY_TRANSPORT_CAPABILITY: CapabilityLedger = CapabilityLedger {
+pub(super) const PROXY_TRANSPORT_CAPABILITY: CapabilityLedger = CapabilityLedger {
     graph_composition: "single-graph-admitted",
     security_underlay: "plain-or-standard-tls",
     stream_wrapper: "http-proxy-transport",
@@ -197,7 +198,7 @@ const PROXY_TRANSPORT_CAPABILITY: CapabilityLedger = CapabilityLedger {
     secure_endpoint: "plain-or-native-underlay",
 };
 
-const SECURE_FRAME_STREAM_CAPABILITY: CapabilityLedger = CapabilityLedger {
+pub(super) const SECURE_FRAME_STREAM_CAPABILITY: CapabilityLedger = CapabilityLedger {
     graph_composition: "single-graph-admitted",
     security_underlay: "standard-tls",
     stream_wrapper: "secure-frame-stream",
@@ -208,7 +209,7 @@ const SECURE_FRAME_STREAM_CAPABILITY: CapabilityLedger = CapabilityLedger {
     secure_endpoint: "standard-tls-underlay",
 };
 
-const VERIFIED_QUIC_CAPABILITY: CapabilityLedger = CapabilityLedger {
+pub(super) const VERIFIED_QUIC_CAPABILITY: CapabilityLedger = CapabilityLedger {
     graph_composition: "single-graph-admitted",
     security_underlay: "verified-quic-tls",
     stream_wrapper: "quic-stream",
@@ -219,7 +220,7 @@ const VERIFIED_QUIC_CAPABILITY: CapabilityLedger = CapabilityLedger {
     secure_endpoint: "plain-or-native-underlay",
 };
 
-const QUIC_PORT_HOPPING_CAPABILITY: CapabilityLedger = CapabilityLedger {
+pub(super) const QUIC_PORT_HOPPING_CAPABILITY: CapabilityLedger = CapabilityLedger {
     graph_composition: "single-graph-admitted",
     security_underlay: "quic-tls",
     stream_wrapper: "quic-port-hopping",
@@ -230,7 +231,7 @@ const QUIC_PORT_HOPPING_CAPABILITY: CapabilityLedger = CapabilityLedger {
     secure_endpoint: "plain-or-native-underlay",
 };
 
-const CHAIN_CAPABILITY: CapabilityLedger = CapabilityLedger {
+pub(super) const CHAIN_CAPABILITY: CapabilityLedger = CapabilityLedger {
     graph_composition: "parent-connect-chain-admitted",
     security_underlay: "baseline-admitted",
     stream_wrapper: "baseline-admitted",
@@ -241,7 +242,7 @@ const CHAIN_CAPABILITY: CapabilityLedger = CapabilityLedger {
     secure_endpoint: "plain-or-native-underlay",
 };
 
-const LEGACY_IMPORT_CAPABILITY: CapabilityLedger = CapabilityLedger {
+pub(super) const LEGACY_IMPORT_CAPABILITY: CapabilityLedger = CapabilityLedger {
     graph_composition: "single-graph-admitted",
     security_underlay: "baseline-admitted",
     stream_wrapper: "baseline-admitted",
@@ -252,7 +253,7 @@ const LEGACY_IMPORT_CAPABILITY: CapabilityLedger = CapabilityLedger {
     secure_endpoint: "plain-or-native-underlay",
 };
 
-const NOT_SUPPORTED_CAPABILITY: CapabilityLedger = CapabilityLedger {
+pub(super) const NOT_SUPPORTED_CAPABILITY: CapabilityLedger = CapabilityLedger {
     graph_composition: "rejected",
     security_underlay: "rejected",
     stream_wrapper: "rejected",
@@ -263,7 +264,7 @@ const NOT_SUPPORTED_CAPABILITY: CapabilityLedger = CapabilityLedger {
     secure_endpoint: "rejected",
 };
 
-const DEFERRED_CAPABILITY: CapabilityLedger = CapabilityLedger {
+pub(super) const DEFERRED_CAPABILITY: CapabilityLedger = CapabilityLedger {
     graph_composition: "single-graph-blocked",
     security_underlay: "pending-or-policy-blocked",
     stream_wrapper: "pending-or-policy-blocked",
@@ -274,7 +275,7 @@ const DEFERRED_CAPABILITY: CapabilityLedger = CapabilityLedger {
     secure_endpoint: "pending-or-policy-blocked",
 };
 
-const PENDING_LIVE_LEDGER: ExpandedLiveMatrixLedger = ExpandedLiveMatrixLedger {
+pub(super) const PENDING_LIVE_LEDGER: ExpandedLiveMatrixLedger = ExpandedLiveMatrixLedger {
     ledger_state: "pending-live-host-evidence",
     live_host_required: true,
     rollback_artifact_required: true,
@@ -282,7 +283,7 @@ const PENDING_LIVE_LEDGER: ExpandedLiveMatrixLedger = ExpandedLiveMatrixLedger {
     blocked_rows_reduce_pass_threshold: false,
 };
 
-const SCOPED_READY_LIVE_LEDGER: ExpandedLiveMatrixLedger = ExpandedLiveMatrixLedger {
+pub(super) const SCOPED_READY_LIVE_LEDGER: ExpandedLiveMatrixLedger = ExpandedLiveMatrixLedger {
     ledger_state: "scoped-live-host-evidence-ready",
     live_host_required: true,
     rollback_artifact_required: true,
@@ -290,7 +291,7 @@ const SCOPED_READY_LIVE_LEDGER: ExpandedLiveMatrixLedger = ExpandedLiveMatrixLed
     blocked_rows_reduce_pass_threshold: false,
 };
 
-const REJECTED_LIVE_LEDGER: ExpandedLiveMatrixLedger = ExpandedLiveMatrixLedger {
+pub(super) const REJECTED_LIVE_LEDGER: ExpandedLiveMatrixLedger = ExpandedLiveMatrixLedger {
     ledger_state: "not-source-supported",
     live_host_required: false,
     rollback_artifact_required: false,
@@ -298,7 +299,7 @@ const REJECTED_LIVE_LEDGER: ExpandedLiveMatrixLedger = ExpandedLiveMatrixLedger 
     blocked_rows_reduce_pass_threshold: false,
 };
 
-const BLOCKED_LIVE_LEDGER: ExpandedLiveMatrixLedger = ExpandedLiveMatrixLedger {
+pub(super) const BLOCKED_LIVE_LEDGER: ExpandedLiveMatrixLedger = ExpandedLiveMatrixLedger {
     ledger_state: "explicit-fail-closed",
     live_host_required: true,
     rollback_artifact_required: true,
@@ -306,7 +307,7 @@ const BLOCKED_LIVE_LEDGER: ExpandedLiveMatrixLedger = ExpandedLiveMatrixLedger {
     blocked_rows_reduce_pass_threshold: false,
 };
 
-const BASE_RELEASE_GATE: ReleaseGateReconciliation = ReleaseGateReconciliation {
+pub(super) const BASE_RELEASE_GATE: ReleaseGateReconciliation = ReleaseGateReconciliation {
     current_baseline_agrees: true,
     expanded_source_agrees: false,
     service_contract_agrees: false,
@@ -316,7 +317,7 @@ const BASE_RELEASE_GATE: ReleaseGateReconciliation = ReleaseGateReconciliation {
     rollback_artifact_ready: false,
 };
 
-const SCOPED_READY_RELEASE_GATE: ReleaseGateReconciliation = ReleaseGateReconciliation {
+pub(super) const SCOPED_READY_RELEASE_GATE: ReleaseGateReconciliation = ReleaseGateReconciliation {
     current_baseline_agrees: true,
     expanded_source_agrees: true,
     service_contract_agrees: true,
@@ -326,7 +327,7 @@ const SCOPED_READY_RELEASE_GATE: ReleaseGateReconciliation = ReleaseGateReconcil
     rollback_artifact_ready: true,
 };
 
-const REJECTED_RELEASE_GATE: ReleaseGateReconciliation = ReleaseGateReconciliation {
+pub(super) const REJECTED_RELEASE_GATE: ReleaseGateReconciliation = ReleaseGateReconciliation {
     current_baseline_agrees: true,
     expanded_source_agrees: true,
     service_contract_agrees: true,

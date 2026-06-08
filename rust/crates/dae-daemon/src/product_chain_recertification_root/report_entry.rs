@@ -1,3 +1,4 @@
+use super::*;
 pub fn product_chain_recertification_report(
     run_root: &Path,
     options: &ProductChainRecertificationOptions,

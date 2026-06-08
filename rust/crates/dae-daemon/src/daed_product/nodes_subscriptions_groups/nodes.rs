@@ -1,11 +1,12 @@
-fn list_nodes(state: &Path, subscription_id: Option<i64>) -> HttpResponse {
+use super::*;
+pub(crate) fn list_nodes(state: &Path, subscription_id: Option<i64>) -> HttpResponse {
     match list_nodes_value(state, subscription_id) {
         Ok(value) => HttpResponse::json(200, value),
         Err(err) => HttpResponse::json(500, json!({"error": err.to_string()})),
     }
 }
 
-fn list_nodes_for_request(state: &Path, request: &HttpRequest) -> HttpResponse {
+pub(crate) fn list_nodes_for_request(state: &Path, request: &HttpRequest) -> HttpResponse {
     let subscription_id = request
         .query
         .get("subscriptionId")
@@ -32,25 +33,25 @@ fn list_nodes_for_request(state: &Path, request: &HttpRequest) -> HttpResponse {
 }
 
 #[derive(Clone, Copy)]
-enum NodeListScope {
+pub(crate) enum NodeListScope {
     Independent,
     SubscriptionBacked,
     Subscription(i64),
     All,
 }
 
-fn list_nodes_value(state: &Path, subscription_id: Option<i64>) -> io::Result<Value> {
+pub(crate) fn list_nodes_value(state: &Path, subscription_id: Option<i64>) -> io::Result<Value> {
     let scope = subscription_id
         .map(NodeListScope::Subscription)
         .unwrap_or(NodeListScope::Independent);
     list_nodes_by_scope(state, scope)
 }
 
-fn list_all_nodes_value(state: &Path) -> io::Result<Value> {
+pub(crate) fn list_all_nodes_value(state: &Path) -> io::Result<Value> {
     list_nodes_by_scope(state, NodeListScope::All)
 }
 
-fn list_nodes_by_scope(state: &Path, scope: NodeListScope) -> io::Result<Value> {
+pub(crate) fn list_nodes_by_scope(state: &Path, scope: NodeListScope) -> io::Result<Value> {
     let conn = open_state_connection(state)?;
     let mut items = Vec::new();
     match scope {
@@ -125,7 +126,7 @@ fn list_nodes_by_scope(state: &Path, scope: NodeListScope) -> io::Result<Value> 
     }))
 }
 
-fn get_node(state: &Path, id: i64) -> HttpResponse {
+pub(crate) fn get_node(state: &Path, id: i64) -> HttpResponse {
     match get_node_value(state, id) {
         Ok(Some(value)) => HttpResponse::json(200, value),
         Ok(None) => HttpResponse::json(404, json!({"error": "node not found"})),
@@ -133,7 +134,7 @@ fn get_node(state: &Path, id: i64) -> HttpResponse {
     }
 }
 
-fn get_node_value(state: &Path, id: i64) -> io::Result<Option<Value>> {
+pub(crate) fn get_node_value(state: &Path, id: i64) -> io::Result<Option<Value>> {
     let conn = open_state_connection(state)?;
     conn.query_row(
         "SELECT id, link, name, address, protocol, tag, subscription_id FROM nodes WHERE id = ?1",
@@ -144,7 +145,11 @@ fn get_node_value(state: &Path, id: i64) -> io::Result<Option<Value>> {
     .map_err(sqlite_io_error)
 }
 
-fn import_nodes(state: &Path, request: &HttpRequest, subscription_id: Option<i64>) -> HttpResponse {
+pub(crate) fn import_nodes(
+    state: &Path,
+    request: &HttpRequest,
+    subscription_id: Option<i64>,
+) -> HttpResponse {
     let body = match json_body(request) {
         Ok(body) => body,
         Err(err) => return HttpResponse::json(400, json!({"error": err})),
@@ -185,7 +190,7 @@ fn import_nodes(state: &Path, request: &HttpRequest, subscription_id: Option<i64
     HttpResponse::json(200, json!({"items": items}))
 }
 
-fn update_node(state: &Path, request: &HttpRequest, id: i64) -> HttpResponse {
+pub(crate) fn update_node(state: &Path, request: &HttpRequest, id: i64) -> HttpResponse {
     let body = match json_body(request) {
         Ok(body) => body,
         Err(err) => return HttpResponse::json(400, json!({"error": err})),
@@ -228,7 +233,7 @@ fn update_node(state: &Path, request: &HttpRequest, id: i64) -> HttpResponse {
     }
 }
 
-fn delete_nodes(state: &Path, request: &HttpRequest) -> HttpResponse {
+pub(crate) fn delete_nodes(state: &Path, request: &HttpRequest) -> HttpResponse {
     let body = json_body(request).unwrap_or_else(|_| json!({}));
     let ids = integer_array(&body, "ids");
     let mut removed = 0_usize;
@@ -240,14 +245,14 @@ fn delete_nodes(state: &Path, request: &HttpRequest) -> HttpResponse {
     HttpResponse::json(200, json!({"removed": removed}))
 }
 
-fn delete_node_by_id(state: &Path, id: i64) -> HttpResponse {
+pub(crate) fn delete_node_by_id(state: &Path, id: i64) -> HttpResponse {
     match delete_node(state, id) {
         Ok(removed) => HttpResponse::json(200, json!({"removed": removed})),
         Err(err) => HttpResponse::json(500, json!({"error": err.to_string()})),
     }
 }
 
-fn delete_node(state: &Path, id: i64) -> io::Result<usize> {
+pub(crate) fn delete_node(state: &Path, id: i64) -> io::Result<usize> {
     let conn = open_state_connection(state)?;
     conn.execute("DELETE FROM group_nodes WHERE node_id = ?1", params![id])
         .map_err(sqlite_io_error)?;
@@ -261,13 +266,13 @@ fn delete_node(state: &Path, id: i64) -> io::Result<usize> {
 }
 
 #[derive(Clone, Debug)]
-struct ParsedNodeLink {
-    name: String,
-    address: String,
-    protocol: String,
+pub(crate) struct ParsedNodeLink {
+    pub(in crate::daed_product) name: String,
+    pub(in crate::daed_product) address: String,
+    pub(in crate::daed_product) protocol: String,
 }
 
-fn parse_node_link(link: &str, tag: Option<&str>) -> ParsedNodeLink {
+pub(crate) fn parse_node_link(link: &str, tag: Option<&str>) -> ParsedNodeLink {
     let protocol = link
         .split_once("://")
         .map(|(value, _)| value)
@@ -301,11 +306,11 @@ fn parse_node_link(link: &str, tag: Option<&str>) -> ParsedNodeLink {
     }
 }
 
-fn decode_node_label(value: &str) -> String {
+pub(crate) fn decode_node_label(value: &str) -> String {
     decode_percent_escapes(value.trim())
 }
 
-fn decode_percent_escapes(value: &str) -> String {
+pub(crate) fn decode_percent_escapes(value: &str) -> String {
     let mut out = Vec::with_capacity(value.len());
     let bytes = value.as_bytes();
     let mut changed = false;
@@ -329,7 +334,7 @@ fn decode_percent_escapes(value: &str) -> String {
     }
 }
 
-fn node_row_value(row: &rusqlite::Row<'_>) -> rusqlite::Result<Value> {
+pub(crate) fn node_row_value(row: &rusqlite::Row<'_>) -> rusqlite::Result<Value> {
     let subscription_id: Option<i64> = row.get(6)?;
     let name = row.get::<_, String>(2)?;
     let tag = row.get::<_, Option<String>>(5)?;

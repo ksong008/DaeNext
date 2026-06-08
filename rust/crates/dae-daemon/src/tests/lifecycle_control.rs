@@ -1,5 +1,6 @@
+use super::*;
 #[test]
-fn lifecycle_smoke_uses_isolated_paths() {
+pub(super) fn lifecycle_smoke_uses_isolated_paths() {
     let root = std::env::temp_dir().join(format!(
         "dae-lifecycle-smoke-daemon-test-{}",
         std::process::id()
@@ -22,7 +23,7 @@ fn lifecycle_smoke_uses_isolated_paths() {
 }
 
 #[test]
-fn daemon_runner_lifecycle_smoke_command_outputs_json() {
+pub(super) fn daemon_runner_lifecycle_smoke_command_outputs_json() {
     let root = std::env::temp_dir().join(format!(
         "dae-lifecycle-smoke-runner-test-{}",
         std::process::id()
@@ -48,7 +49,7 @@ fn daemon_runner_lifecycle_smoke_command_outputs_json() {
 }
 
 #[test]
-fn control_plane_owner_preflight_uses_isolated_paths() {
+pub(super) fn control_plane_owner_preflight_uses_isolated_paths() {
     let root = std::env::temp_dir().join(format!(
         "dae-control-plane-owner-daemon-test-{}",
         std::process::id()
@@ -92,7 +93,7 @@ fn control_plane_owner_preflight_uses_isolated_paths() {
 }
 
 #[test]
-fn daemon_runner_control_plane_owner_command_outputs_json() {
+pub(super) fn daemon_runner_control_plane_owner_command_outputs_json() {
     let root = std::env::temp_dir().join(format!(
         "dae-control-plane-owner-runner-test-{}",
         std::process::id()
@@ -123,7 +124,7 @@ fn daemon_runner_control_plane_owner_command_outputs_json() {
 }
 
 #[test]
-fn signal_control_plane_smoke_uses_isolated_paths() {
+pub(super) fn signal_control_plane_smoke_uses_isolated_paths() {
     let root = std::env::temp_dir().join(format!(
         "dae-signal-control-plane-daemon-test-{}",
         std::process::id()
@@ -158,7 +159,7 @@ fn signal_control_plane_smoke_uses_isolated_paths() {
 }
 
 #[test]
-fn daemon_runner_signal_control_plane_command_outputs_json() {
+pub(super) fn daemon_runner_signal_control_plane_command_outputs_json() {
     let root = std::env::temp_dir().join(format!(
         "dae-signal-control-plane-runner-test-{}",
         std::process::id()
@@ -193,7 +194,7 @@ fn daemon_runner_signal_control_plane_command_outputs_json() {
 }
 
 #[test]
-fn run_entrypoint_preflight_composes_prior_smokes() {
+pub(super) fn run_entrypoint_preflight_composes_prior_smokes() {
     let root = std::env::temp_dir().join(format!(
         "dae-run-entrypoint-daemon-test-{}",
         std::process::id()
@@ -231,7 +232,7 @@ fn run_entrypoint_preflight_composes_prior_smokes() {
 }
 
 #[test]
-fn daemon_runner_run_entrypoint_command_outputs_json() {
+pub(super) fn daemon_runner_run_entrypoint_command_outputs_json() {
     let root = std::env::temp_dir().join(format!(
         "dae-run-entrypoint-runner-test-{}",
         std::process::id()
@@ -263,7 +264,7 @@ fn daemon_runner_run_entrypoint_command_outputs_json() {
 }
 
 #[test]
-fn default_run_identity_admits_optin_identity_only() {
+pub(super) fn default_run_identity_admits_optin_identity_only() {
     let root = std::env::temp_dir().join(format!(
         "dae-default-run-identity-daemon-test-{}",
         std::process::id()
@@ -298,7 +299,7 @@ fn default_run_identity_admits_optin_identity_only() {
 }
 
 #[test]
-fn daemon_runner_default_run_identity_command_outputs_json() {
+pub(super) fn daemon_runner_default_run_identity_command_outputs_json() {
     let root = std::env::temp_dir().join(format!(
         "dae-default-run-identity-runner-test-{}",
         std::process::id()
@@ -333,7 +334,7 @@ fn daemon_runner_default_run_identity_command_outputs_json() {
 }
 
 #[test]
-fn control_plane_entrypoint_admits_optin_contract_only() {
+pub(super) fn control_plane_entrypoint_admits_optin_contract_only() {
     let root = std::env::temp_dir().join(format!(
         "dae-control-plane-entrypoint-daemon-test-{}",
         std::process::id()
@@ -368,7 +369,7 @@ fn control_plane_entrypoint_admits_optin_contract_only() {
 }
 
 #[test]
-fn daemon_runner_control_plane_entrypoint_command_outputs_json() {
+pub(super) fn daemon_runner_control_plane_entrypoint_command_outputs_json() {
     let root = std::env::temp_dir().join(format!(
         "dae-control-plane-entrypoint-runner-test-{}",
         std::process::id()
@@ -403,7 +404,7 @@ fn daemon_runner_control_plane_entrypoint_command_outputs_json() {
 }
 
 #[test]
-fn rust_native_control_plane_admission_records_no_cgo_hot_path() {
+pub(super) fn rust_native_control_plane_admission_records_no_cgo_hot_path() {
     let root = std::env::temp_dir().join(format!(
         "dae-rust-native-control-plane-daemon-test-{}",
         std::process::id()
@@ -457,7 +458,7 @@ fn rust_native_control_plane_admission_records_no_cgo_hot_path() {
 }
 
 #[test]
-fn daemon_runner_rust_native_control_plane_command_outputs_json() {
+pub(super) fn daemon_runner_rust_native_control_plane_command_outputs_json() {
     let root = std::env::temp_dir().join(format!(
         "dae-rust-native-control-plane-runner-test-{}",
         std::process::id()

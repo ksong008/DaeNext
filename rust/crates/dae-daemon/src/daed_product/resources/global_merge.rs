@@ -1,4 +1,5 @@
-fn default_global_value() -> Value {
+use super::*;
+pub(crate) fn default_global_value() -> Value {
     json!({
         "logLevel": "",
         "tproxyPort": 0,
@@ -33,7 +34,7 @@ fn default_global_value() -> Value {
     })
 }
 
-fn merge_global_json_value(target: &mut Value, source: &Value) {
+pub(crate) fn merge_global_json_value(target: &mut Value, source: &Value) {
     set_global_string(
         target,
         "logLevel",
@@ -197,7 +198,7 @@ fn merge_global_json_value(target: &mut Value, source: &Value) {
     );
 }
 
-fn merge_global_directives(target: &mut Value, directives: &HashMap<String, String>) {
+pub(crate) fn merge_global_directives(target: &mut Value, directives: &HashMap<String, String>) {
     set_global_string(
         target,
         "logLevel",

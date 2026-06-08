@@ -1,4 +1,5 @@
-fn remove_existing_pin(path: &Path) -> Result<(), String> {
+use super::*;
+pub(super) fn remove_existing_pin(path: &Path) -> Result<(), String> {
     if !path.exists() {
         return Ok(());
     }

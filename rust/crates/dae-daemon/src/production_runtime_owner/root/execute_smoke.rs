@@ -1,29 +1,30 @@
+use super::*;
 #[derive(Default)]
-struct ExecutionEvidence {
-    executed_steps: Vec<Value>,
-    cleanup_steps: Vec<Value>,
-    topology_values: Value,
-    param_image: Value,
-    peer_attach_show: Value,
-    host_attach_show: Value,
-    native_param_image: Value,
-    loaded_map_handoff: Value,
-    before_map_ids: Vec<u32>,
-    after_map_ids: Vec<u32>,
-    discovered_map_id: Option<u32>,
-    discovered_routing_map_id: Option<u32>,
-    loaded_map_cleaned: bool,
-    leftovers_after_cleanup: Vec<String>,
-    sys_fs_bpf_dae_mutated: bool,
-    socket_options_verified: bool,
-    active_tcp: ActiveTcpEvidence,
-    active_udp: ActiveUdpEvidence,
-    active_dns: ActiveDnsEvidence,
-    reload_runtime: ReloadRuntimeEvidence,
-    owner_smoke_passed: bool,
+pub(super) struct ExecutionEvidence {
+    pub(super) executed_steps: Vec<Value>,
+    pub(super) cleanup_steps: Vec<Value>,
+    pub(super) topology_values: Value,
+    pub(super) param_image: Value,
+    pub(super) peer_attach_show: Value,
+    pub(super) host_attach_show: Value,
+    pub(super) native_param_image: Value,
+    pub(super) loaded_map_handoff: Value,
+    pub(super) before_map_ids: Vec<u32>,
+    pub(super) after_map_ids: Vec<u32>,
+    pub(super) discovered_map_id: Option<u32>,
+    pub(super) discovered_routing_map_id: Option<u32>,
+    pub(super) loaded_map_cleaned: bool,
+    pub(super) leftovers_after_cleanup: Vec<String>,
+    pub(super) sys_fs_bpf_dae_mutated: bool,
+    pub(super) socket_options_verified: bool,
+    pub(super) active_tcp: ActiveTcpEvidence,
+    pub(super) active_udp: ActiveUdpEvidence,
+    pub(super) active_dns: ActiveDnsEvidence,
+    pub(super) reload_runtime: ReloadRuntimeEvidence,
+    pub(super) owner_smoke_passed: bool,
 }
 
-fn execute_owner_smoke(
+pub(super) fn execute_owner_smoke(
     options: &ProductionRuntimeOwnerOptions,
     param_object: &Path,
 ) -> Result<ExecutionEvidence, String> {

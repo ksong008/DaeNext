@@ -1,4 +1,5 @@
-fn assert_domain_view(got: &DomainRoutingView, expected: &Value) {
+use super::*;
+pub(super) fn assert_domain_view(got: &DomainRoutingView, expected: &Value) {
     assert_eq!(got.step, expected["step"].as_str().unwrap());
     assert_eq!(got.owners, string_array(&expected["owners"]));
     let expected_ips = expected["ips"].as_array().unwrap();
@@ -19,7 +20,7 @@ fn assert_domain_view(got: &DomainRoutingView, expected: &Value) {
     }
 }
 
-fn assert_reload_state(step: &str, got: &ReloadCoreState, expected: &Value) {
+pub(super) fn assert_reload_state(step: &str, got: &ReloadCoreState, expected: &Value) {
     assert_eq!(step, expected["step"].as_str().unwrap());
     assert_eq!(got.is_reload, expected["is_reload"].as_bool().unwrap());
     assert_eq!(got.bpf_ejected, expected["bpf_ejected"].as_bool().unwrap());
@@ -30,7 +31,7 @@ fn assert_reload_state(step: &str, got: &ReloadCoreState, expected: &Value) {
     assert_eq!(got.flip, expected["flip"].as_u64().unwrap() as u8);
 }
 
-fn string_array(value: &Value) -> Vec<String> {
+pub(super) fn string_array(value: &Value) -> Vec<String> {
     value
         .as_array()
         .unwrap()
@@ -39,13 +40,13 @@ fn string_array(value: &Value) -> Vec<String> {
         .collect()
 }
 
-fn bitmap<const N: usize>(words: [u32; N]) -> [u32; 32] {
+pub(super) fn bitmap<const N: usize>(words: [u32; N]) -> [u32; 32] {
     let mut bitmap = [0; 32];
     bitmap[..N].copy_from_slice(&words);
     bitmap
 }
 
-fn connectivity_event(
+pub(super) fn connectivity_event(
     key: ConnectivityKey,
     alive: bool,
     is_init: bool,
@@ -59,6 +60,6 @@ fn connectivity_event(
     }
 }
 
-fn load(path: &str) -> Value {
+pub(super) fn load(path: &str) -> Value {
     dae_golden::load_json(path).unwrap()
 }

@@ -1,5 +1,6 @@
+use super::*;
 #[test]
-fn contract_names_do_not_use_retired_version_suffix_or_stage_ids() {
+pub(super) fn contract_names_do_not_use_retired_version_suffix_or_stage_ids() {
     let repo_root = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("../../..")
         .canonicalize()
@@ -47,7 +48,7 @@ fn contract_names_do_not_use_retired_version_suffix_or_stage_ids() {
 }
 
 #[test]
-fn userland_ffi_c_abi_is_not_in_default_control_crate_path() {
+pub(super) fn userland_ffi_c_abi_is_not_in_default_control_crate_path() {
     let repo_root = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("../../..")
         .canonicalize()
@@ -67,7 +68,10 @@ fn userland_ffi_c_abi_is_not_in_default_control_crate_path() {
     );
 }
 
-fn collect_contract_name_scan_files(root: &std::path::Path, files: &mut Vec<std::path::PathBuf>) {
+pub(super) fn collect_contract_name_scan_files(
+    root: &std::path::Path,
+    files: &mut Vec<std::path::PathBuf>,
+) {
     if !root.exists() {
         return;
     }
@@ -85,12 +89,12 @@ fn collect_contract_name_scan_files(root: &std::path::Path, files: &mut Vec<std:
     }
 }
 
-fn retired_stage_id(stage: &str, name: &str) -> String {
+pub(super) fn retired_stage_id(stage: &str, name: &str) -> String {
     format!("{}{}-{}", "stage", stage, name)
 }
 
 #[test]
-fn resident_dataplane_events_do_not_emit_legacy_execution_fields() {
+pub(super) fn resident_dataplane_events_do_not_emit_legacy_execution_fields() {
     let repo_root = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("../../..")
         .canonicalize()
@@ -125,7 +129,7 @@ fn resident_dataplane_events_do_not_emit_legacy_execution_fields() {
 }
 
 #[test]
-fn resident_dataplane_latency_snapshots_do_not_emit_raw_link_fields() {
+pub(super) fn resident_dataplane_latency_snapshots_do_not_emit_raw_link_fields() {
     let repo_root = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("../../..")
         .canonicalize()

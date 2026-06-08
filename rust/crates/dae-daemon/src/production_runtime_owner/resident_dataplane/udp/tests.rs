@@ -2,8 +2,8 @@
 mod tests {
     use std::net::{Ipv4Addr, SocketAddrV4};
 
-    use super::super::plan::ResidentProxyProtocolPlan;
-    use super::*;
+    use super::super::super::plan::ResidentProxyProtocolPlan;
+    use super::super::*;
 
     #[test]
     fn resident_vless_udp_response_parser_handles_vision_payload() {

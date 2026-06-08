@@ -1,4 +1,5 @@
-fn send_udp_reply(
+use super::*;
+pub(super) fn send_udp_reply(
     original_dst: SocketAddrV4,
     peer: SocketAddrV4,
     payload: &[u8],
@@ -14,7 +15,7 @@ fn send_udp_reply(
     Ok(())
 }
 
-fn read_vless_udp_response(
+pub(super) fn read_vless_udp_response(
     client: &mut VlessTlsClient,
     flow: &str,
     user_uuid: [u8; 16],
@@ -49,7 +50,7 @@ fn read_vless_udp_response(
     }
 }
 
-fn parse_vless_udp_response(
+pub(super) fn parse_vless_udp_response(
     input: &[u8],
     flow: &str,
     user_uuid: [u8; 16],
@@ -87,7 +88,7 @@ fn parse_vless_udp_response(
     ))
 }
 
-fn parse_xudp_response_payload(input: &[u8]) -> Result<Option<Vec<u8>>, String> {
+pub(super) fn parse_xudp_response_payload(input: &[u8]) -> Result<Option<Vec<u8>>, String> {
     if input.len() < 2 {
         return Ok(None);
     }

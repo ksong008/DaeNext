@@ -1,4 +1,8 @@
-fn list_node_latencies_value(state: &Path, runtime: &ProductRuntimeManager) -> io::Result<Value> {
+use super::*;
+pub(crate) fn list_node_latencies_value(
+    state: &Path,
+    runtime: &ProductRuntimeManager,
+) -> io::Result<Value> {
     ensure_state_schema(state)?;
     let conn = open_state_connection(state)?;
     sync_runtime_node_latency_results(&conn, runtime)?;
@@ -36,7 +40,7 @@ fn list_node_latencies_value(state: &Path, runtime: &ProductRuntimeManager) -> i
     Ok(json!({"items": items}))
 }
 
-fn update_node_latencies(
+pub(crate) fn update_node_latencies(
     state: &Path,
     config_dir: &Path,
     runtime: &ProductRuntimeManager,
@@ -99,7 +103,7 @@ fn update_node_latencies(
     list_node_latencies_value(state, runtime)
 }
 
-fn fake_runtime_probe_node_latencies(links: &[String]) -> Vec<Value> {
+pub(crate) fn fake_runtime_probe_node_latencies(links: &[String]) -> Vec<Value> {
     links
         .iter()
         .filter(|link| !link.is_empty())
@@ -107,7 +111,7 @@ fn fake_runtime_probe_node_latencies(links: &[String]) -> Vec<Value> {
         .collect()
 }
 
-fn fake_runtime_tcp_latency_snapshot(link: &str) -> Value {
+pub(crate) fn fake_runtime_tcp_latency_snapshot(link: &str) -> Value {
     let checked_at = unix_now() as i64;
     let started = Instant::now();
     let probe = fake_runtime_tcp_connect(link);
@@ -131,7 +135,7 @@ fn fake_runtime_tcp_latency_snapshot(link: &str) -> Value {
     })
 }
 
-fn fake_runtime_tcp_connect(link: &str) -> Result<(), String> {
+pub(crate) fn fake_runtime_tcp_connect(link: &str) -> Result<(), String> {
     let url = url::Url::parse(link).map_err(|err| format!("parse node link: {err}"))?;
     let host = url
         .host_str()
@@ -154,7 +158,7 @@ fn fake_runtime_tcp_connect(link: &str) -> Result<(), String> {
         .unwrap_or_else(|| "node endpoint resolved to no socket addresses".to_owned()))
 }
 
-fn node_name_from_link(link: &str) -> String {
+pub(crate) fn node_name_from_link(link: &str) -> String {
     url::Url::parse(link)
         .ok()
         .and_then(|url| url.fragment().map(str::to_owned))
@@ -162,7 +166,7 @@ fn node_name_from_link(link: &str) -> String {
         .unwrap_or_default()
 }
 
-fn runtime_link_identity_value(
+pub(crate) fn runtime_link_identity_value(
     display_name: &str,
     link_hash: &str,
     redacted_source: &str,
@@ -175,11 +179,11 @@ fn runtime_link_identity_value(
     })
 }
 
-fn runtime_link_hash(link: &str) -> String {
+pub(crate) fn runtime_link_hash(link: &str) -> String {
     format!("sha256:{}", hex_encode(&Sha256::digest(link.as_bytes())))
 }
 
-fn runtime_redacted_link_source(link: &str) -> String {
+pub(crate) fn runtime_redacted_link_source(link: &str) -> String {
     let Ok(url) = url::Url::parse(link) else {
         return "link:<redacted>".to_owned();
     };
@@ -192,15 +196,15 @@ fn runtime_redacted_link_source(link: &str) -> String {
 }
 
 #[derive(Clone, Debug)]
-struct NodeLatencyWrite {
-    node_id: i64,
-    latency_ms: Option<i64>,
-    alive: bool,
-    tested_at: String,
-    message: Option<String>,
+pub(crate) struct NodeLatencyWrite {
+    pub(super) node_id: i64,
+    pub(super) latency_ms: Option<i64>,
+    pub(super) alive: bool,
+    pub(super) tested_at: String,
+    pub(super) message: Option<String>,
 }
 
-fn sync_runtime_node_latency_results(
+pub(crate) fn sync_runtime_node_latency_results(
     conn: &Connection,
     runtime: &ProductRuntimeManager,
 ) -> io::Result<()> {
@@ -213,7 +217,7 @@ fn sync_runtime_node_latency_results(
     Ok(())
 }
 
-fn runtime_node_latency_results_for_nodes(
+pub(crate) fn runtime_node_latency_results_for_nodes(
     nodes: &[(i64, String, String)],
     snapshots: &[Value],
 ) -> (Vec<NodeLatencyWrite>, HashSet<i64>) {
@@ -274,7 +278,7 @@ fn runtime_node_latency_results_for_nodes(
     (results, tested_ids)
 }
 
-fn runtime_latency_snapshot_link_hash(snapshot: &Value) -> Option<&str> {
+pub(crate) fn runtime_latency_snapshot_link_hash(snapshot: &Value) -> Option<&str> {
     snapshot
         .get("linkHash")
         .and_then(Value::as_str)
@@ -285,7 +289,7 @@ fn runtime_latency_snapshot_link_hash(snapshot: &Value) -> Option<&str> {
         })
 }
 
-fn runtime_latency_snapshot_has_result(snapshot: &Value) -> bool {
+pub(crate) fn runtime_latency_snapshot_has_result(snapshot: &Value) -> bool {
     let latency = snapshot.get("latencyMs").and_then(Value::as_i64);
     let checked_at = snapshot
         .get("checkedAtUnix")
@@ -298,7 +302,10 @@ fn runtime_latency_snapshot_has_result(snapshot: &Value) -> bool {
     latency.is_some() || checked_at > 0 || message != "no latency result"
 }
 
-fn store_node_latency_result(conn: &Connection, result: &NodeLatencyWrite) -> io::Result<()> {
+pub(crate) fn store_node_latency_result(
+    conn: &Connection,
+    result: &NodeLatencyWrite,
+) -> io::Result<()> {
     conn.execute(
         "INSERT OR REPLACE INTO node_latency_results(node_id, latency_ms, alive, tested_at, message, updated_at)
          VALUES(?1, ?2, ?3, ?4, ?5, ?4)",
@@ -314,7 +321,7 @@ fn store_node_latency_result(conn: &Connection, result: &NodeLatencyWrite) -> io
     Ok(())
 }
 
-fn native_probe_unavailable_results(
+pub(crate) fn native_probe_unavailable_results(
     nodes: &[(i64, String, String)],
     tested_at: &str,
 ) -> Vec<NodeLatencyWrite> {
@@ -333,7 +340,7 @@ fn native_probe_unavailable_results(
         .collect()
 }
 
-fn all_latency_probe_nodes(conn: &Connection) -> io::Result<Vec<(i64, String, String)>> {
+pub(crate) fn all_latency_probe_nodes(conn: &Connection) -> io::Result<Vec<(i64, String, String)>> {
     let mut stmt = conn
         .prepare("SELECT id, link, address FROM nodes ORDER BY id")
         .map_err(sqlite_io_error)?;
@@ -353,7 +360,7 @@ fn all_latency_probe_nodes(conn: &Connection) -> io::Result<Vec<(i64, String, St
     Ok(nodes)
 }
 
-fn all_node_ids(conn: &Connection) -> io::Result<Vec<i64>> {
+pub(crate) fn all_node_ids(conn: &Connection) -> io::Result<Vec<i64>> {
     let mut stmt = conn
         .prepare("SELECT id FROM nodes ORDER BY id")
         .map_err(sqlite_io_error)?;

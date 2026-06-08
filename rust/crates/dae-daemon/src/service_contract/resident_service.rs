@@ -1,3 +1,4 @@
+use super::*;
 pub fn run_resident_service(options: &ResidentRunOptions) -> Result<(), String> {
     if options.disable_sudo && unsafe { libc::geteuid() } != 0 {
         return Err("auto-sudo is disabled and current user is not root".to_owned());
@@ -50,9 +51,9 @@ pub fn run_resident_service(options: &ResidentRunOptions) -> Result<(), String> 
     }
 }
 
-struct ResidentServiceState {
-    runtime: Option<ResidentProductionRuntime>,
-    config: Config,
+pub(super) struct ResidentServiceState {
+    pub(super) runtime: Option<ResidentProductionRuntime>,
+    pub(super) config: Config,
 }
 
 pub fn reload_resident_service(options: &ReloadOptions) -> Result<String, String> {
@@ -96,7 +97,7 @@ pub fn reload_resident_service(options: &ReloadOptions) -> Result<String, String
     }
 }
 
-fn handle_reload(
+pub(super) fn handle_reload(
     options: &ResidentRunOptions,
     state: &mut ResidentServiceState,
 ) -> Result<(), String> {
@@ -136,7 +137,7 @@ fn handle_reload(
     notify_systemd("READY=1")
 }
 
-fn validate_resident_runtime_reload_config(config: &Config) -> Result<(), String> {
+pub(super) fn validate_resident_runtime_reload_config(config: &Config) -> Result<(), String> {
     for iface in config
         .global
         .lan_interface
@@ -158,7 +159,7 @@ fn validate_resident_runtime_reload_config(config: &Config) -> Result<(), String
     Ok(())
 }
 
-fn swap_runtime_with_rollback<R>(
+pub(super) fn swap_runtime_with_rollback<R>(
     runtime: &mut Option<R>,
     current_config: &mut Config,
     next_config: Config,
@@ -187,7 +188,7 @@ fn swap_runtime_with_rollback<R>(
     }
 }
 
-fn handle_suspend_compatibility(options: &ResidentRunOptions) -> Result<(), String> {
+pub(super) fn handle_suspend_compatibility(options: &ResidentRunOptions) -> Result<(), String> {
     notify_systemd("RELOADING=1")?;
     write_progress(&options.progress_file, RELOAD_PROCESSING, "")?;
     let _ = fs::remove_file(&options.abort_file);
@@ -200,13 +201,13 @@ fn handle_suspend_compatibility(options: &ResidentRunOptions) -> Result<(), Stri
     notify_systemd("READY=1")
 }
 
-fn write_progress(path: &Path, byte: u8, suffix: &str) -> Result<(), String> {
+pub(super) fn write_progress(path: &Path, byte: u8, suffix: &str) -> Result<(), String> {
     let mut bytes = vec![byte];
     bytes.extend_from_slice(suffix.as_bytes());
     write_bytes_file(path, &bytes, 0o644)
 }
 
-fn read_progress(path: &Path) -> Result<(u8, String), String> {
+pub(super) fn read_progress(path: &Path) -> Result<(u8, String), String> {
     let bytes =
         fs::read(path).map_err(|err| format!("failed to read {}: {err}", path.display()))?;
     let Some(code) = bytes.first().copied() else {
@@ -218,7 +219,7 @@ fn read_progress(path: &Path) -> Result<(u8, String), String> {
     Ok((code, content))
 }
 
-fn read_pid_file(path: &Path) -> Result<i32, String> {
+pub(super) fn read_pid_file(path: &Path) -> Result<i32, String> {
     let text = fs::read_to_string(path)
         .map_err(|err| format!("failed to read pid file {}: {err}", path.display()))?;
     text.trim()
@@ -226,7 +227,7 @@ fn read_pid_file(path: &Path) -> Result<i32, String> {
         .map_err(|err| format!("failed to parse pid file {}: {err}", path.display()))
 }
 
-fn log_event(options: &ResidentRunOptions, message: &str) -> Result<(), String> {
+pub(super) fn log_event(options: &ResidentRunOptions, message: &str) -> Result<(), String> {
     let Some(path) = &options.logfile else {
         return Ok(());
     };
@@ -249,11 +250,11 @@ fn log_event(options: &ResidentRunOptions, message: &str) -> Result<(), String> 
         .map_err(|err| format!("failed to write log {}: {err}", path.display()))
 }
 
-fn write_text_file(path: &Path, content: &str, mode: u32) -> Result<(), String> {
+pub(super) fn write_text_file(path: &Path, content: &str, mode: u32) -> Result<(), String> {
     write_bytes_file(path, content.as_bytes(), mode)
 }
 
-fn write_bytes_file(path: &Path, content: &[u8], mode: u32) -> Result<(), String> {
+pub(super) fn write_bytes_file(path: &Path, content: &[u8], mode: u32) -> Result<(), String> {
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent)
             .map_err(|err| format!("failed to create path {}: {err}", parent.display()))?;
@@ -263,7 +264,7 @@ fn write_bytes_file(path: &Path, content: &[u8], mode: u32) -> Result<(), String
         .map_err(|err| format!("failed to chmod {}: {err}", path.display()))
 }
 
-fn notify_systemd(state: &str) -> Result<(), String> {
+pub(super) fn notify_systemd(state: &str) -> Result<(), String> {
     let Ok(address) = env::var("NOTIFY_SOCKET") else {
         return Ok(());
     };
@@ -291,7 +292,7 @@ fn notify_systemd(state: &str) -> Result<(), String> {
     Ok(())
 }
 
-fn block_service_signals() -> Result<(), String> {
+pub(super) fn block_service_signals() -> Result<(), String> {
     let mut signals = unsafe { std::mem::zeroed::<libc::sigset_t>() };
     unsafe {
         libc::sigemptyset(&mut signals);
@@ -312,7 +313,7 @@ fn block_service_signals() -> Result<(), String> {
     Ok(())
 }
 
-fn wait_service_signal() -> Result<i32, String> {
+pub(super) fn wait_service_signal() -> Result<i32, String> {
     let mut signals = unsafe { std::mem::zeroed::<libc::sigset_t>() };
     let mut received = 0_i32;
     unsafe {

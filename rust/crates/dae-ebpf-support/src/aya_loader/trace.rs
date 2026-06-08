@@ -1,3 +1,4 @@
+use super::*;
 pub fn load_pin_aya_trace_object(
     options: AyaTraceLoaderOptions<'_>,
 ) -> Result<AyaTraceLoadPinReport, String> {
@@ -178,7 +179,10 @@ pub fn attach_ringbuf_smoke_aya_trace_object(
     })
 }
 
-fn ensure_program_loaded_for_go_adoption(name: &str, program: &mut Program) -> Result<(), String> {
+pub(super) fn ensure_program_loaded_for_go_adoption(
+    name: &str,
+    program: &mut Program,
+) -> Result<(), String> {
     if program.fd().is_ok() {
         return Ok(());
     }
@@ -199,7 +203,7 @@ fn ensure_program_loaded_for_go_adoption(name: &str, program: &mut Program) -> R
     }
 }
 
-fn ensure_trace_program_loaded(name: &str, program: &mut Program) -> Result<(), String> {
+pub(super) fn ensure_trace_program_loaded(name: &str, program: &mut Program) -> Result<(), String> {
     if program.fd().is_ok() {
         return Ok(());
     }
@@ -214,7 +218,7 @@ fn ensure_trace_program_loaded(name: &str, program: &mut Program) -> Result<(), 
     }
 }
 
-fn trigger_trace_smoke(
+pub(super) fn trigger_trace_smoke(
     trigger: AyaTraceAttachSmokeTrigger,
     trigger_count: u32,
 ) -> Result<(), String> {
@@ -240,7 +244,7 @@ fn trigger_trace_smoke(
     }
 }
 
-fn read_ne_u64(bytes: &[u8], offset: usize) -> Option<u64> {
+pub(super) fn read_ne_u64(bytes: &[u8], offset: usize) -> Option<u64> {
     let bytes = bytes.get(offset..offset + mem::size_of::<u64>())?;
     let mut out = [0_u8; mem::size_of::<u64>()];
     out.copy_from_slice(bytes);

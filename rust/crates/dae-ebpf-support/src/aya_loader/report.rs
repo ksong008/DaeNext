@@ -1,3 +1,4 @@
+use super::*;
 pub fn aya_userspace_load_report(
     object: &Path,
     param_global_set: bool,

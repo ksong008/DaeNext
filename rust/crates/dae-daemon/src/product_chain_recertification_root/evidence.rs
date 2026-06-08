@@ -1,29 +1,30 @@
+use super::*;
 #[derive(Default)]
-struct ProductChainEvidence {
-    topology: Value,
-    service: Value,
-    go_mod: Value,
-    repos: Vec<Value>,
-    runtime_control_api: Value,
-    native_owned_entry_gates: Value,
-    native_owned_entry_gate_blockers: Vec<String>,
-    resident_runtime_platform_gate: Value,
-    resident_runtime_platform_gate_blockers: Vec<String>,
-    control_plane_owner_gate: Value,
-    control_plane_owner_gate_blockers: Vec<String>,
-    datapath_core_gate: Value,
-    datapath_core_gate_blockers: Vec<String>,
-    outbound_fingerprint_underlay_gate: Value,
-    outbound_fingerprint_underlay_gate_blockers: Vec<String>,
-    outbound_production_matrix_gate: Value,
-    outbound_production_matrix_gate_blockers: Vec<String>,
-    dirty_repos: Vec<String>,
-    missing_repos: Vec<String>,
-    unavailable_repos: Vec<String>,
-    branch_mismatched_repos: Vec<String>,
+pub(super) struct ProductChainEvidence {
+    pub(super) topology: Value,
+    pub(super) service: Value,
+    pub(super) go_mod: Value,
+    pub(super) repos: Vec<Value>,
+    pub(super) runtime_control_api: Value,
+    pub(super) native_owned_entry_gates: Value,
+    pub(super) native_owned_entry_gate_blockers: Vec<String>,
+    pub(super) resident_runtime_platform_gate: Value,
+    pub(super) resident_runtime_platform_gate_blockers: Vec<String>,
+    pub(super) control_plane_owner_gate: Value,
+    pub(super) control_plane_owner_gate_blockers: Vec<String>,
+    pub(super) datapath_core_gate: Value,
+    pub(super) datapath_core_gate_blockers: Vec<String>,
+    pub(super) outbound_fingerprint_underlay_gate: Value,
+    pub(super) outbound_fingerprint_underlay_gate_blockers: Vec<String>,
+    pub(super) outbound_production_matrix_gate: Value,
+    pub(super) outbound_production_matrix_gate_blockers: Vec<String>,
+    pub(super) dirty_repos: Vec<String>,
+    pub(super) missing_repos: Vec<String>,
+    pub(super) unavailable_repos: Vec<String>,
+    pub(super) branch_mismatched_repos: Vec<String>,
 }
 
-fn collect_evidence(
+pub(super) fn collect_evidence(
     options: &ProductChainRecertificationOptions,
     admission: ProductChainAdmissionEvidence,
 ) -> ProductChainEvidence {

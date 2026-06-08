@@ -1,4 +1,5 @@
-fn product_openapi_skeleton() -> Value {
+use super::*;
+pub(super) fn product_openapi_skeleton() -> Value {
     json!({
         "openapi": "3.1.0",
         "info": {
@@ -32,7 +33,7 @@ fn product_openapi_skeleton() -> Value {
     })
 }
 
-fn product_flatdesc() -> Value {
+pub(super) fn product_flatdesc() -> Value {
     json!({
         "schemaVersion": 1,
         "cPhase": "C10",
@@ -48,7 +49,7 @@ fn product_flatdesc() -> Value {
     })
 }
 
-fn product_outline() -> Value {
+pub(super) fn product_outline() -> Value {
     json!({
         "daed": {
             "binary": "/usr/bin/daed",
@@ -77,7 +78,7 @@ fn product_outline() -> Value {
     })
 }
 
-fn product_package_manifest() -> Value {
+pub(super) fn product_package_manifest() -> Value {
     json!({
         "schemaVersion": 1,
         "name": "daed",
@@ -133,7 +134,7 @@ fn product_package_manifest() -> Value {
     })
 }
 
-fn product_admission_report() -> Value {
+pub(super) fn product_admission_report() -> Value {
     let route_audit = webui_route_audit_report();
     json!({
         "schemaVersion": 1,
@@ -183,7 +184,7 @@ fn product_admission_report() -> Value {
     })
 }
 
-fn webui_route_audit_report() -> Value {
+pub(super) fn webui_route_audit_report() -> Value {
     let covered = webui_route_patterns()
         .into_iter()
         .map(|(method, path)| json!({"method": method, "path": path, "covered": true}))
@@ -204,7 +205,7 @@ fn webui_route_audit_report() -> Value {
     })
 }
 
-fn webui_route_patterns() -> Vec<(&'static str, &'static str)> {
+pub(super) fn webui_route_patterns() -> Vec<(&'static str, &'static str)> {
     vec![
         ("GET", "/api/health"),
         ("GET", "/api/auth/status"),
@@ -285,7 +286,7 @@ fn webui_route_patterns() -> Vec<(&'static str, &'static str)> {
     ]
 }
 
-fn package_runtime_environment_defaults() -> Vec<(&'static str, String)> {
+pub(super) fn package_runtime_environment_defaults() -> Vec<(&'static str, String)> {
     let mut defaults = vec![
         (
             PRODUCT_MALLOC_ARENA_MAX_ENV,
@@ -312,21 +313,21 @@ fn package_runtime_environment_defaults() -> Vec<(&'static str, String)> {
     defaults
 }
 
-fn systemd_runtime_environment_lines() -> String {
+pub(super) fn systemd_runtime_environment_lines() -> String {
     package_runtime_environment_defaults()
         .into_iter()
         .map(|(name, value)| format!("Environment=\"{name}={value}\"\n"))
         .collect::<String>()
 }
 
-fn docker_runtime_environment_exports() -> String {
+pub(super) fn docker_runtime_environment_exports() -> String {
     package_runtime_environment_defaults()
         .into_iter()
         .map(|(name, value)| format!("export {name}=\"${{{name}:-{value}}}\"\n"))
         .collect::<String>()
 }
 
-fn systemd_unit_text() -> String {
+pub(super) fn systemd_unit_text() -> String {
     format!(
         r#"[Unit]
 Description=daed Rust native service
@@ -349,7 +350,7 @@ WantedBy=multi-user.target
     )
 }
 
-fn docker_entrypoint_text() -> String {
+pub(super) fn docker_entrypoint_text() -> String {
     format!(
         r#"#!/bin/sh
 set -eu
@@ -361,7 +362,7 @@ exec /usr/bin/daed run -c /etc/daed --listen "${{DAED_LISTEN:-0.0.0.0:2023}}" "$
     )
 }
 
-fn count_table(conn: &Connection, table: &str) -> io::Result<i64> {
+pub(super) fn count_table(conn: &Connection, table: &str) -> io::Result<i64> {
     let sql = match table {
         "configs" => "SELECT COUNT(*) FROM configs",
         "dns" => "SELECT COUNT(*) FROM dns",

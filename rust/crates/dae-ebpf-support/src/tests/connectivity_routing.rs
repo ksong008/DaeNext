@@ -1,5 +1,6 @@
+use super::*;
 #[test]
-fn kernel_feature_gates_match_golden_fixture() {
+pub(super) fn kernel_feature_gates_match_golden_fixture() {
     let fixture = load("ebpf/kernel_features/basic.json");
     for feature in fixture["features"].as_array().unwrap() {
         let version = match feature["name"].as_str().unwrap() {
@@ -34,7 +35,7 @@ fn kernel_feature_gates_match_golden_fixture() {
 }
 
 #[test]
-fn connectivity_dryrun_matches_golden_fixture() {
+pub(super) fn connectivity_dryrun_matches_golden_fixture() {
     let fixture = load("control/outbound_connectivity/dryrun.json");
     let mut map = ConnectivityMap::default();
     for event in fixture["events"].as_array().unwrap() {
@@ -67,7 +68,7 @@ fn connectivity_dryrun_matches_golden_fixture() {
 }
 
 #[test]
-fn connectivity_state_dedupes_known_and_legacy_udp_keys() {
+pub(super) fn connectivity_state_dedupes_known_and_legacy_udp_keys() {
     let mut map = ConnectivityMap::default();
     let udp_legacy = ConnectivityKey {
         outbound: 2,
@@ -95,7 +96,7 @@ fn connectivity_state_dedupes_known_and_legacy_udp_keys() {
 }
 
 #[test]
-fn connectivity_fd_cache_skips_dryrun_without_opening_map() {
+pub(super) fn connectivity_fd_cache_skips_dryrun_without_opening_map() {
     let mut cache = ConnectivityMapFdCache::default();
     let plan = cache
         .update_by_id(
@@ -117,7 +118,7 @@ fn connectivity_fd_cache_skips_dryrun_without_opening_map() {
 }
 
 #[test]
-fn routing_map_apply_models_report_counts() {
+pub(super) fn routing_map_apply_models_report_counts() {
     let routing = [RoutingMapEntry {
         index: 0,
         value: BpfMatchSet {
@@ -151,7 +152,7 @@ fn routing_map_apply_models_report_counts() {
 }
 
 #[test]
-fn domain_routing_map_apply_models_bitmap_shape() {
+pub(super) fn domain_routing_map_apply_models_bitmap_shape() {
     let entry = DomainRoutingMapEntry {
         key: [0, 0, 0, 1],
         value: BpfDomainRouting { bitmap: [0x40; 32] },

@@ -1,5 +1,6 @@
+use super::*;
 #[allow(clippy::too_many_arguments)]
-async fn handle_quic_tcp_connection_async(
+pub(crate) async fn handle_quic_tcp_connection_async(
     inbound: &mut TokioTcpStream,
     peer: SocketAddr,
     original_dst: SocketAddrV4,
@@ -89,7 +90,7 @@ async fn handle_quic_tcp_connection_async(
 }
 
 #[allow(clippy::too_many_arguments)]
-async fn handle_hysteria2_quic_tcp_connection_async(
+pub(crate) async fn handle_hysteria2_quic_tcp_connection_async(
     inbound: &mut TokioTcpStream,
     peer: SocketAddr,
     original_dst: SocketAddrV4,
@@ -241,7 +242,7 @@ async fn handle_hysteria2_quic_tcp_connection_async(
 }
 
 #[allow(clippy::too_many_arguments)]
-async fn handle_tuic_quic_tcp_connection_async(
+pub(crate) async fn handle_tuic_quic_tcp_connection_async(
     inbound: &mut TokioTcpStream,
     peer: SocketAddr,
     original_dst: SocketAddrV4,
@@ -339,7 +340,7 @@ async fn handle_tuic_quic_tcp_connection_async(
 }
 
 #[allow(clippy::too_many_arguments)]
-async fn handle_juicity_quic_tcp_connection_async(
+pub(crate) async fn handle_juicity_quic_tcp_connection_async(
     inbound: &mut TokioTcpStream,
     peer: SocketAddr,
     original_dst: SocketAddrV4,

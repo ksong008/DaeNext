@@ -74,11 +74,21 @@ use typed_report::{
     value_string_array,
 };
 
-include!("product_chain_recertification_root/options.rs");
-include!("product_chain_recertification_root/report_entry.rs");
-include!("product_chain_recertification_root/evidence.rs");
-include!("product_chain_recertification_root/report_value.rs");
-include!("product_chain_recertification_root/gate_helpers.rs");
+#[path = "product_chain_recertification_root/options.rs"]
+mod options;
+pub use self::options::*;
+#[path = "product_chain_recertification_root/report_entry.rs"]
+mod report_entry;
+pub use self::report_entry::*;
+#[path = "product_chain_recertification_root/evidence.rs"]
+mod evidence;
+use self::evidence::*;
+#[path = "product_chain_recertification_root/report_value.rs"]
+mod report_value;
+use self::report_value::*;
+#[path = "product_chain_recertification_root/gate_helpers.rs"]
+mod gate_helpers;
+use self::gate_helpers::*;
 
 #[cfg(test)]
 mod tests;

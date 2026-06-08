@@ -38,15 +38,29 @@ mod executable_graph;
 
 use executable_graph::{ResidentExecutableGraphDescriptor, resident_graph_identity};
 
-include!("plan/model.rs");
-include!("plan/transport_defaults.rs");
-include!("plan/group_plan.rs");
-include!("plan/dataplane_builder.rs");
-include!("plan/group_selector.rs");
-include!("plan/check_plans.rs");
-include!("plan/proxy_builders.rs");
-include!("plan/public_helpers.rs");
-include!("plan/fingerprint_dial.rs");
-include!("plan/selection_policy.rs");
-include!("plan/link_parsing.rs");
-include!("plan/tests.rs");
+mod model;
+pub(super) use self::model::*;
+mod transport_defaults;
+use self::transport_defaults::*;
+mod group_plan;
+pub(super) use self::group_plan::*;
+mod dataplane_builder;
+pub(super) use self::dataplane_builder::*;
+mod group_selector;
+use self::group_selector::*;
+mod check_plans;
+use self::check_plans::*;
+mod proxy_builders;
+use self::proxy_builders::*;
+mod public_helpers;
+pub(super) use self::public_helpers::*;
+mod fingerprint_dial;
+use self::fingerprint_dial::*;
+mod selection_policy;
+use self::selection_policy::*;
+mod link_parsing;
+use self::link_parsing::*;
+#[cfg(test)]
+mod tests;
+#[cfg(test)]
+use self::tests::*;

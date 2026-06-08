@@ -1,66 +1,23 @@
+use super::*;
+mod workspace;
+pub(super) use self::workspace::*;
+mod log;
+pub(super) use self::log::*;
+mod blockers;
+pub(super) use self::blockers::*;
+
 pub fn run_default_optin_report(options: &RunOptions, version: &str) -> Result<Value, String> {
-    ensure_safe_run_root(&options.root)?;
-    ensure_safe_output_path(&options.logfile, &options.root, "logfile")?;
-    if !options.config.is_file() {
-        return Err(format!(
-            "run config does not exist or is not a file: {}",
-            path_string(&options.config)
-        ));
-    }
-
-    let config = fs::read_to_string(&options.config).map_err(|err| {
-        format!(
-            "failed to read run config {}: {err}",
-            path_string(&options.config)
-        )
-    })?;
-    if config.trim().is_empty() {
-        return Err(format!(
-            "run config must not be empty: {}",
-            path_string(&options.config)
-        ));
-    }
-
-    if options.root.exists() {
-        fs::remove_dir_all(&options.root).map_err(|err| {
-            format!(
-                "failed to remove existing run root {}: {err}",
-                path_string(&options.root)
-            )
-        })?;
-    }
-
-    let run_dir = options.root.join("run");
-    let manifest_file = run_dir.join("dae-daemon-optin-run.json");
-    let run_config_file = run_dir.join("input-config.dae");
-    let pid_file = run_dir.join("dae-daemon-optin.pid");
-    let progress_file = run_dir.join("dae-daemon-optin.progress");
-    let sdnotify_file = run_dir.join("sdnotify.ready");
-    fs::create_dir_all(&run_dir)
-        .map_err(|err| format!("failed to create run dir {}: {err}", path_string(&run_dir)))?;
-    if let Some(parent) = options.logfile.parent() {
-        fs::create_dir_all(parent).map_err(|err| {
-            format!(
-                "failed to create run log dir {}: {err}",
-                path_string(parent)
-            )
-        })?;
-    }
-
-    if !options.disable_pidfile {
-        fs::write(&pid_file, format!("{}\n", std::process::id()))
-            .map_err(|err| format!("failed to write run pid file: {err}"))?;
-    }
-    fs::write(&run_config_file, &config)
-        .map_err(|err| format!("failed to write run input config copy: {err}"))?;
-    fs::set_permissions(&run_config_file, fs::Permissions::from_mode(0o600))
-        .map_err(|err| format!("failed to chmod run input config copy: {err}"))?;
-    write_progress(&progress_file, RELOAD_DONE, "")?;
-    fs::write(&sdnotify_file, "READY=1\n")
-        .map_err(|err| format!("failed to write run sdnotify ready file: {err}"))?;
-
-    let listener_root = derived_support_root("/tmp/dae-listener-ebpf-preflight-run", &options.root);
-    let reload_root = derived_support_root("/tmp/dae-reload-owner-handoff-run", &options.root);
+    let DefaultRunWorkspace {
+        config,
+        run_dir,
+        manifest_file,
+        run_config_file,
+        pid_file,
+        progress_file,
+        sdnotify_file,
+        listener_root,
+        reload_root,
+    } = prepare_default_run_workspace(options)?;
     let listener = if options.listener_smoke {
         listener_ebpf_preflight_report(&listener_root)?
     } else {
@@ -295,37 +252,32 @@ pub fn run_default_optin_report(options: &RunOptions, version: &str) -> Result<V
             .as_bool()
             .unwrap_or(false);
 
-    fs::write(
-        &options.logfile,
-        format!(
-            "dae-daemon-optin run: config={} bytes={} listener_smoke_passed={} reload_smoke_passed={} production_runtime_owner_executed={} production_runtime_owner_passed={} production_runtime_active_tcp_executed={} production_runtime_active_tcp_passed={} active_tcp_relay_executed={} active_tcp_relay_passed={} active_tcp_relay_benchmark_recorded={} production_runtime_active_udp_executed={} active_udp_admitted={} production_runtime_active_dns_executed={} active_dns_admitted={} reload_runtime_parity_executed={} reload_runtime_parity_passed={} production_dataplane_admitted={} production_dataplane_harness_executed={} production_dataplane_harness_passed={} matched_benchmark_recorded={} true_rust_default_daemon_admitted={} product_chain_recertification_executed={} product_chain_recertification_clean={}\n",
-            path_string(&options.config),
-            config.len(),
-            listener_smoke_passed,
-            reload_smoke_passed,
-            production_runtime_owner_executed,
-            production_runtime_owner_passed,
-            production_runtime_active_tcp_executed,
-            production_runtime_active_tcp_passed,
-            active_tcp_relay_executed,
-            active_tcp_relay_passed,
-            active_tcp_relay_benchmark_recorded,
-            production_runtime_active_udp_executed,
-            active_udp_admitted,
-            production_runtime_active_dns_executed,
-            active_dns_admitted,
-            reload_runtime_parity_executed,
-            reload_runtime_parity_passed,
-            production_dataplane_admitted,
-            production_dataplane_harness_executed,
-            production_dataplane_harness_passed,
-            matched_benchmark_recorded,
-            true_rust_default_daemon_admitted,
-            product_chain_recertification_executed,
-            product_chain_recertification_clean
-        ),
-    )
-    .map_err(|err| format!("failed to write run log file: {err}"))?;
+    write_default_run_log(DefaultRunLogFields {
+        options,
+        config_len: config.len(),
+        listener_smoke_passed,
+        reload_smoke_passed,
+        production_runtime_owner_executed,
+        production_runtime_owner_passed,
+        production_runtime_active_tcp_executed,
+        production_runtime_active_tcp_passed,
+        active_tcp_relay_executed,
+        active_tcp_relay_passed,
+        active_tcp_relay_benchmark_recorded,
+        production_runtime_active_udp_executed,
+        active_udp_admitted,
+        production_runtime_active_dns_executed,
+        active_dns_admitted,
+        reload_runtime_parity_executed,
+        reload_runtime_parity_passed,
+        production_dataplane_admitted,
+        production_dataplane_harness_executed,
+        production_dataplane_harness_passed,
+        matched_benchmark_recorded,
+        true_rust_default_daemon_admitted,
+        product_chain_recertification_executed,
+        product_chain_recertification_clean,
+    })?;
 
     let mut report = json!({
         "name": "dae-daemon-optin-run",
@@ -586,82 +538,22 @@ pub fn run_default_optin_report(options: &RunOptions, version: &str) -> Result<V
     } else {
         "not-executed"
     });
-    let mut remaining_blockers =
-        vec!["opt-in run now exists, but it still uses isolated pid/progress paths"];
-    if !matched_benchmark_recorded {
-        remaining_blockers.push("matched Go/Rust default daemon benchmark remains blocked");
-    }
-    if !resident_dataplane_default_switch_ready {
-        remaining_blockers.push(
-            "resident userspace dataplane is not enabled; default switch would redirect tproxy TCP/UDP payloads without the required Rust worker",
-        );
-    }
-    if true_rust_default_daemon_admitted {
-        if release_gate_product_chain_switch_allowed {
-            remaining_blockers.push(
-                "default path mutation request is admitted by clean product-chain recertification; production run command replacement is still not executed",
-            );
-        } else if product_chain_switch_allowed {
-            remaining_blockers.push(
-                "product-chain recertification admits its local default path mutation inputs, but the stage 7 release gate remains closed until the default daemon live matrix is complete",
-            );
-        } else if !resident_default_daemon_switch_ready {
-            remaining_blockers.push(
-                "resident default service path does not admit production dataplane; dae-daemon-optin run -c ... is still service-contract-only",
-            );
-        } else {
-            remaining_blockers.push(
-            "true Rust default daemon admission is recorded for the daemon-owned opt-in path; default/product switch stays closed pending clean production path mutation and dae-wing/daed recertification",
-        );
-        }
-    } else if production_dataplane_admitted {
-        remaining_blockers.push(
-            "production active TCP/UDP/DNS dataplane is admitted inside the daemon-owned opt-in run, but reload parity and matched benchmark must both be present before true Rust default daemon admission",
-        );
-    } else if production_dataplane_harness_passed {
-        remaining_blockers.push(
-            "production dataplane evidence is integrated into run, but still harness-only and not default daemon owned",
-        );
-    } else if reload_runtime_parity_passed {
-        remaining_blockers.push(
-            "production owner lifecycle now proves listener reuse, BPF/map owner handoff, DNS cache migration guard, bounded close, RuntimeOverview fields, rollback, and post-reload active TCP; active UDP/DNS dataplane or default path mutation remain unproven",
-        );
-    } else if active_tcp_relay_passed {
-        remaining_blockers.push(
-            "production tproxy listener, tc/eBPF attach, active TCP ingress, and bounded TCP relay are proven inside this run, but full route-table RouteDialTcp, active UDP/DNS dataplane, and reload/runtime parity remain unproven",
-        );
-    } else if production_runtime_active_tcp_passed {
-        remaining_blockers.push(
-            "production tproxy listener, tc/eBPF attach, and active TCP ingress are proven inside this run, but active TCP relay plus UDP/DNS dataplane remain unproven",
-        );
-    } else {
-        remaining_blockers.push(
-            "production tproxy listener, tc/eBPF attach, and active TCP/UDP/DNS dataplane are not yet proven inside this run",
-        );
-    }
-    if production_runtime_owner_passed && !reload_runtime_parity_passed {
-        remaining_blockers.push(
-            "daemon-owned production runtime owner smoke passed, but active TCP relay, active UDP/DNS dataplane, and production reload/runtime parity may still be incomplete",
-        );
-    } else if production_runtime_owner_passed && !true_rust_default_daemon_admitted {
-        remaining_blockers.push(
-            "daemon-owned production runtime owner and reload/runtime parity passed, but full active UDP/DNS dataplane plus matched benchmark are required for true default daemon admission",
-        );
-    }
-    if active_tcp_relay_passed {
-        remaining_blockers.push(
-            "active TCP relay observed MagicNetwork mark/mptcp on a real outbound socket, but full route-table RouteDialTcp control-plane reroute remains unverified",
-        );
-    } else if production_runtime_active_tcp_passed {
-        remaining_blockers.push(
-            "active TCP tproxy ingress reached the transparent listener, but RouteDialTcp MagicNetwork mark/mptcp relay parity remains unverified",
-        );
-    }
-    if product_chain_recertification_executed && !product_chain_recertification_clean {
-        remaining_blockers.push(
-            "product-chain recertification was recorded but is not clean; default/product switch remains closed",
-        );
-    }
+    let remaining_blockers = default_run_remaining_blockers(DefaultRunRemainingBlockerFields {
+        matched_benchmark_recorded,
+        resident_dataplane_default_switch_ready,
+        true_rust_default_daemon_admitted,
+        release_gate_product_chain_switch_allowed,
+        product_chain_switch_allowed,
+        resident_default_daemon_switch_ready,
+        production_dataplane_admitted,
+        production_dataplane_harness_passed,
+        reload_runtime_parity_passed,
+        active_tcp_relay_passed,
+        production_runtime_active_tcp_passed,
+        production_runtime_owner_passed,
+        product_chain_recertification_executed,
+        product_chain_recertification_clean,
+    });
     report["remaining_blockers"] = json!(remaining_blockers);
 
     let manifest = serde_json::to_vec_pretty(&report)

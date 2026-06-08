@@ -1,5 +1,6 @@
+use super::*;
 #[test]
-fn reload_bpf_ownership_matches_golden_fixture() {
+pub(super) fn reload_bpf_ownership_matches_golden_fixture() {
     let fixture = load("control/reload_bpf_ownership/eject_inject.json");
     let steps = fixture["steps"].as_array().unwrap();
     let mut flip = CoreFlip::default();
@@ -17,7 +18,7 @@ fn reload_bpf_ownership_matches_golden_fixture() {
 }
 
 #[test]
-fn runtime_dependency_plan_keeps_stage7_env_gates() {
+pub(super) fn runtime_dependency_plan_keeps_stage7_env_gates() {
     let plan = RuntimeDependencyPlan::stage7_default();
     let gates = plan.gates.iter().map(|gate| gate.name).collect::<Vec<_>>();
     assert_eq!(
@@ -33,7 +34,7 @@ fn runtime_dependency_plan_keeps_stage7_env_gates() {
 }
 
 #[test]
-fn reload_dns_cache_plan_restores_only_when_dns_config_is_unchanged() {
+pub(super) fn reload_dns_cache_plan_restores_only_when_dns_config_is_unchanged() {
     let restore = ReloadDnsCachePlan::decide(true, true, 2);
     assert!(restore.restore_cache);
     assert!(restore.clear_domain_routing_map);
@@ -49,7 +50,7 @@ fn reload_dns_cache_plan_restores_only_when_dns_config_is_unchanged() {
 }
 
 #[test]
-fn control_api_typed_report_covers_formal_surfaces_without_stage_schema() {
+pub(super) fn control_api_typed_report_covers_formal_surfaces_without_stage_schema() {
     let report = ControlApiTypedReport::formal_runtime_control_api();
     assert_eq!(report.schema, "control-api-typed-report");
     assert_eq!(report.status, ControlApiReportStatus::Pass);
@@ -62,7 +63,7 @@ fn control_api_typed_report_covers_formal_surfaces_without_stage_schema() {
 }
 
 #[test]
-fn runtime_state_report_requires_all_rust_owned_surfaces_for_default_control_plane() {
+pub(super) fn runtime_state_report_requires_all_rust_owned_surfaces_for_default_control_plane() {
     let empty = RuntimeStateReport::new();
     assert!(empty.api_compatible);
     assert!(!empty.ready_for_default_control_plane());
@@ -77,7 +78,7 @@ fn runtime_state_report_requires_all_rust_owned_surfaces_for_default_control_pla
 }
 
 #[test]
-fn control_plane_default_admission_keeps_c_tproxy_oracle_until_full_gate_passes() {
+pub(super) fn control_plane_default_admission_keeps_c_tproxy_oracle_until_full_gate_passes() {
     let ready = RuntimeStateReport::rust_owned_control_plane();
     let admission = ControlPlaneDefaultAdmission {
         runtime: ready,

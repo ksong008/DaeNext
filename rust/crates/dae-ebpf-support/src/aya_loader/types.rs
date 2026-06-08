@@ -1,10 +1,11 @@
-const BPF_MAP_CREATE: libc::c_uint = 0;
-const BPF_OBJ_PIN: libc::c_uint = 6;
-const BPF_MAP_TYPE_LPM_TRIE: u32 = 11;
-const BPF_MAP_TYPE_ARRAY_OF_MAPS: u32 = 12;
-const BPF_F_NO_PREALLOC: u32 = 1;
-const LPM_ARRAY_MAP_NAME: &str = "lpm_array_map";
-const UNUSED_LPM_TYPE_NAME: &str = "unused_lpm_type";
+use super::*;
+pub(super) const BPF_MAP_CREATE: libc::c_uint = 0;
+pub(super) const BPF_OBJ_PIN: libc::c_uint = 6;
+pub(super) const BPF_MAP_TYPE_LPM_TRIE: u32 = 11;
+pub(super) const BPF_MAP_TYPE_ARRAY_OF_MAPS: u32 = 12;
+pub(super) const BPF_F_NO_PREALLOC: u32 = 1;
+pub(super) const LPM_ARRAY_MAP_NAME: &str = "lpm_array_map";
+pub(super) const UNUSED_LPM_TYPE_NAME: &str = "unused_lpm_type";
 pub const TRACE_CORE_SIDELOAD_ENABLED: bool = false;
 
 unsafe impl aya::Pod for BpfDaeParam {}

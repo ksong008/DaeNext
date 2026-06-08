@@ -1,4 +1,5 @@
-fn parse_global_directives(raw: &str) -> HashMap<String, String> {
+use super::*;
+pub(crate) fn parse_global_directives(raw: &str) -> HashMap<String, String> {
     let body = global_block_body(raw).unwrap_or(raw);
     let mut directives = HashMap::new();
     for line in body.lines() {
@@ -18,7 +19,7 @@ fn parse_global_directives(raw: &str) -> HashMap<String, String> {
     directives
 }
 
-fn global_block_body(raw: &str) -> Option<&str> {
+pub(crate) fn global_block_body(raw: &str) -> Option<&str> {
     let start = raw.find("global")?;
     let open = raw[start..].find('{')? + start;
     let bytes = raw.as_bytes();
@@ -40,7 +41,7 @@ fn global_block_body(raw: &str) -> Option<&str> {
     close.and_then(|close| raw.get(open + 1..close))
 }
 
-fn strip_line_comment(line: &str) -> &str {
+pub(crate) fn strip_line_comment(line: &str) -> &str {
     let mut quote = None;
     for (idx, ch) in line.char_indices() {
         match ch {
@@ -53,7 +54,7 @@ fn strip_line_comment(line: &str) -> &str {
     line
 }
 
-fn clean_global_scalar(value: &str) -> String {
+pub(crate) fn clean_global_scalar(value: &str) -> String {
     let value = value.trim().trim_end_matches(',').trim();
     let value = value
         .strip_prefix('"')
@@ -67,31 +68,34 @@ fn clean_global_scalar(value: &str) -> String {
     value.trim().to_owned()
 }
 
-fn directive_string(directives: &HashMap<String, String>, key: &str) -> Option<String> {
+pub(crate) fn directive_string(directives: &HashMap<String, String>, key: &str) -> Option<String> {
     directives
         .get(key)
         .cloned()
         .filter(|value| !value.is_empty())
 }
 
-fn directive_bool(directives: &HashMap<String, String>, key: &str) -> Option<bool> {
+pub(crate) fn directive_bool(directives: &HashMap<String, String>, key: &str) -> Option<bool> {
     directives.get(key).and_then(|value| parse_boolish(value))
 }
 
-fn directive_u64(directives: &HashMap<String, String>, key: &str) -> Option<u64> {
+pub(crate) fn directive_u64(directives: &HashMap<String, String>, key: &str) -> Option<u64> {
     directives
         .get(key)
         .and_then(|value| value.trim().parse::<u64>().ok())
 }
 
-fn directive_array(directives: &HashMap<String, String>, key: &str) -> Option<Vec<String>> {
+pub(crate) fn directive_array(
+    directives: &HashMap<String, String>,
+    key: &str,
+) -> Option<Vec<String>> {
     directives
         .get(key)
         .map(|value| split_global_list(value))
         .filter(|values| !values.is_empty())
 }
 
-fn split_global_list(value: &str) -> Vec<String> {
+pub(crate) fn split_global_list(value: &str) -> Vec<String> {
     value
         .split(',')
         .map(str::trim)
@@ -100,11 +104,11 @@ fn split_global_list(value: &str) -> Vec<String> {
         .collect()
 }
 
-fn json_value_by_keys<'a>(source: &'a Value, keys: &[&str]) -> Option<&'a Value> {
+pub(crate) fn json_value_by_keys<'a>(source: &'a Value, keys: &[&str]) -> Option<&'a Value> {
     keys.iter().find_map(|key| source.get(*key))
 }
 
-fn json_string(source: &Value, keys: &[&str]) -> Option<String> {
+pub(crate) fn json_string(source: &Value, keys: &[&str]) -> Option<String> {
     json_value_by_keys(source, keys).and_then(|value| match value {
         Value::String(value) if !value.is_empty() => Some(value.clone()),
         Value::Number(value) => Some(value.to_string()),
@@ -113,7 +117,7 @@ fn json_string(source: &Value, keys: &[&str]) -> Option<String> {
     })
 }
 
-fn json_bool(source: &Value, keys: &[&str]) -> Option<bool> {
+pub(crate) fn json_bool(source: &Value, keys: &[&str]) -> Option<bool> {
     json_value_by_keys(source, keys).and_then(|value| match value {
         Value::Bool(value) => Some(*value),
         Value::String(value) => parse_boolish(value),
@@ -121,7 +125,7 @@ fn json_bool(source: &Value, keys: &[&str]) -> Option<bool> {
     })
 }
 
-fn json_u64(source: &Value, keys: &[&str]) -> Option<u64> {
+pub(crate) fn json_u64(source: &Value, keys: &[&str]) -> Option<u64> {
     json_value_by_keys(source, keys).and_then(|value| match value {
         Value::Number(value) => value.as_u64(),
         Value::String(value) => value.trim().parse::<u64>().ok(),
@@ -129,7 +133,7 @@ fn json_u64(source: &Value, keys: &[&str]) -> Option<u64> {
     })
 }
 
-fn json_array_or_split_string(source: &Value, keys: &[&str]) -> Option<Vec<String>> {
+pub(crate) fn json_array_or_split_string(source: &Value, keys: &[&str]) -> Option<Vec<String>> {
     json_value_by_keys(source, keys).and_then(|value| match value {
         Value::Array(values) => {
             let out = values
@@ -149,7 +153,7 @@ fn json_array_or_split_string(source: &Value, keys: &[&str]) -> Option<Vec<Strin
     })
 }
 
-fn parse_boolish(value: &str) -> Option<bool> {
+pub(crate) fn parse_boolish(value: &str) -> Option<bool> {
     match value.trim().to_ascii_lowercase().as_str() {
         "1" | "true" | "on" | "yes" => Some(true),
         "0" | "false" | "off" | "no" => Some(false),
@@ -157,25 +161,25 @@ fn parse_boolish(value: &str) -> Option<bool> {
     }
 }
 
-fn set_global_string(target: &mut Value, key: &str, value: Option<String>) {
+pub(crate) fn set_global_string(target: &mut Value, key: &str, value: Option<String>) {
     if let (Some(map), Some(value)) = (target.as_object_mut(), value) {
         map.insert(key.to_owned(), json!(value));
     }
 }
 
-fn set_global_bool(target: &mut Value, key: &str, value: Option<bool>) {
+pub(crate) fn set_global_bool(target: &mut Value, key: &str, value: Option<bool>) {
     if let (Some(map), Some(value)) = (target.as_object_mut(), value) {
         map.insert(key.to_owned(), json!(value));
     }
 }
 
-fn set_global_u64(target: &mut Value, key: &str, value: Option<u64>) {
+pub(crate) fn set_global_u64(target: &mut Value, key: &str, value: Option<u64>) {
     if let (Some(map), Some(value)) = (target.as_object_mut(), value) {
         map.insert(key.to_owned(), json!(value));
     }
 }
 
-fn set_global_array(target: &mut Value, key: &str, value: Option<Vec<String>>) {
+pub(crate) fn set_global_array(target: &mut Value, key: &str, value: Option<Vec<String>>) {
     if let (Some(map), Some(value)) = (target.as_object_mut(), value) {
         map.insert(key.to_owned(), json!(value));
     }

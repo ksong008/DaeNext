@@ -53,14 +53,27 @@ use super::{
     XUDP_COMMAND_NEW, XUDP_MUX_TARGET, XUDP_NETWORK_UDP, XUDP_OPTION_DATA,
 };
 
-include!("udp/worker.rs");
-include!("udp/packet_handler.rs");
-include!("udp/dispatch.rs");
-include!("udp/probe_dns.rs");
-include!("udp/descriptors.rs");
-include!("udp/protocol_exchanges.rs");
-include!("udp/stream_helpers.rs");
-include!("udp/quic_helpers.rs");
-include!("udp/vless_xudp.rs");
-include!("udp/reply.rs");
-include!("udp/tests.rs");
+mod worker;
+pub(super) use self::worker::*;
+mod packet_handler;
+use self::packet_handler::*;
+mod dispatch;
+use self::dispatch::*;
+mod probe_dns;
+pub(super) use self::probe_dns::*;
+mod descriptors;
+use self::descriptors::*;
+mod protocol_exchanges;
+use self::protocol_exchanges::*;
+mod stream_helpers;
+use self::stream_helpers::*;
+mod quic_helpers;
+use self::quic_helpers::*;
+mod vless_xudp;
+use self::vless_xudp::*;
+mod reply;
+use self::reply::*;
+#[cfg(test)]
+mod tests;
+#[cfg(test)]
+use self::tests::*;

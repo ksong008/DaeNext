@@ -1,8 +1,9 @@
-fn append_tcp_execution_fields(event: &mut Value, execution: &str) {
+use super::*;
+pub(super) fn append_tcp_execution_fields(event: &mut Value, execution: &str) {
     append_runtime_execution_descriptor(event, tcp_execution_descriptor(execution));
 }
 
-fn append_proxy_tcp_execution_fields(
+pub(super) fn append_proxy_tcp_execution_fields(
     event: &mut Value,
     execution: &str,
     handler: &str,
@@ -26,7 +27,7 @@ fn append_proxy_tcp_execution_fields(
     append_runtime_execution_descriptor(event, descriptor);
 }
 
-fn proxy_tcp_finished_event(
+pub(super) fn proxy_tcp_finished_event(
     peer: SocketAddr,
     original_dst: SocketAddrV4,
     selection: &TcpProxySelection,
@@ -49,7 +50,7 @@ fn proxy_tcp_finished_event(
     event
 }
 
-fn proxy_tcp_failed_event(
+pub(super) fn proxy_tcp_failed_event(
     peer: SocketAddr,
     original_dst: SocketAddrV4,
     selection: &TcpProxySelection,
@@ -73,7 +74,7 @@ fn proxy_tcp_failed_event(
     event
 }
 
-fn generic_proxy_tcp_finished_event(
+pub(super) fn generic_proxy_tcp_finished_event(
     peer: SocketAddr,
     original_dst: SocketAddrV4,
     selection: &TcpProxySelection,
@@ -95,7 +96,7 @@ fn generic_proxy_tcp_finished_event(
     event
 }
 
-fn generic_proxy_tcp_failed_event(
+pub(super) fn generic_proxy_tcp_failed_event(
     peer: SocketAddr,
     original_dst: SocketAddrV4,
     selection: &TcpProxySelection,
@@ -117,7 +118,7 @@ fn generic_proxy_tcp_failed_event(
     event
 }
 
-fn proxy_tcp_base_event(
+pub(super) fn proxy_tcp_base_event(
     event_name: &str,
     peer: SocketAddr,
     original_dst: SocketAddrV4,
@@ -153,7 +154,7 @@ fn proxy_tcp_base_event(
     event
 }
 
-fn append_proxy_relay_stats(event: &mut Value, stats: &RelayStats) {
+pub(super) fn append_proxy_relay_stats(event: &mut Value, stats: &RelayStats) {
     event["bytes_client_to_proxy"] = json!(stats.client_to_proxy);
     event["bytes_proxy_to_client"] = json!(stats.proxy_to_client);
     event["response_header_stripped"] = json!(stats.response_header_stripped);
@@ -163,7 +164,7 @@ fn append_proxy_relay_stats(event: &mut Value, stats: &RelayStats) {
     event["vision_downlink_direct_active"] = json!(stats.vision_downlink_direct_active);
 }
 
-fn append_generic_proxy_relay_stats(event: &mut Value, stats: &DirectTcpRelayStats) {
+pub(super) fn append_generic_proxy_relay_stats(event: &mut Value, stats: &DirectTcpRelayStats) {
     event["bytes_client_to_proxy"] = json!(stats.client_to_direct);
     event["bytes_proxy_to_client"] = json!(stats.direct_to_client);
     event["response_header_stripped"] = json!(false);

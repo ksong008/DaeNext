@@ -1,5 +1,6 @@
+use super::*;
 #[test]
-fn routing_native_plan_builds_kernel_lpm_abi_without_helper_boundary() {
+pub(super) fn routing_native_plan_builds_kernel_lpm_abi_without_helper_boundary() {
     let rules = vec![
         RoutingNativeRule::new(RoutingNativeMatch::DomainSet, OutboundIndex(2)),
         RoutingNativeRule::new(
@@ -77,7 +78,7 @@ fn routing_native_plan_builds_kernel_lpm_abi_without_helper_boundary() {
 }
 
 #[test]
-fn routing_native_plan_rejects_invalid_fallback_and_lpm_template() {
+pub(super) fn routing_native_plan_rejects_invalid_fallback_and_lpm_template() {
     let invalid = RoutingNativeBuildPlan {
         routing_entries: vec![RoutingMapEntry {
             index: 0,
@@ -117,7 +118,7 @@ fn routing_native_plan_rejects_invalid_fallback_and_lpm_template() {
 }
 
 #[test]
-fn routing_map_owner_replays_on_map_change_and_skips_same_snapshot() {
+pub(super) fn routing_map_owner_replays_on_map_change_and_skips_same_snapshot() {
     let plan = build_routing_native_plan(
         &[
             RoutingNativeRule::new(
@@ -222,7 +223,7 @@ fn routing_map_owner_replays_on_map_change_and_skips_same_snapshot() {
 }
 
 #[test]
-fn routing_rule_owner_builds_generic_rule_state_and_preserves_noop_replay() {
+pub(super) fn routing_rule_owner_builds_generic_rule_state_and_preserves_noop_replay() {
     let mut pname = [0_u8; 16];
     pname[..4].copy_from_slice(b"curl");
     let state = RoutingRuleState::new(

@@ -1,3 +1,4 @@
+use super::*;
 pub fn server_stream_decoder<S>(
     stream: &mut S,
     cipher: &str,

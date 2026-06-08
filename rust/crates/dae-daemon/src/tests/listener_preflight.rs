@@ -1,5 +1,6 @@
+use super::*;
 #[test]
-fn listener_ebpf_preflight_uses_temporary_loopback_scope() {
+pub(super) fn listener_ebpf_preflight_uses_temporary_loopback_scope() {
     let root = std::env::temp_dir().join(format!(
         "dae-listener-ebpf-preflight-daemon-test-{}",
         std::process::id()
@@ -46,7 +47,7 @@ fn listener_ebpf_preflight_uses_temporary_loopback_scope() {
 }
 
 #[test]
-fn daemon_runner_listener_ebpf_preflight_command_outputs_json() {
+pub(super) fn daemon_runner_listener_ebpf_preflight_command_outputs_json() {
     let root = std::env::temp_dir().join(format!(
         "dae-listener-ebpf-preflight-runner-test-{}",
         std::process::id()

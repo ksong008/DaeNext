@@ -1,4 +1,5 @@
-fn refresh_subscription_from_remote(state: &Path, id: i64) -> io::Result<Value> {
+use super::*;
+pub(crate) fn refresh_subscription_from_remote(state: &Path, id: i64) -> io::Result<Value> {
     ensure_state_schema(state)?;
     let conn = open_state_connection(state)?;
     let Some(link) = conn
@@ -57,7 +58,7 @@ fn refresh_subscription_from_remote(state: &Path, id: i64) -> io::Result<Value> 
     }
 }
 
-fn replace_subscription_nodes(
+pub(crate) fn replace_subscription_nodes(
     conn: &Connection,
     subscription_id: i64,
     links: &[String],
@@ -197,15 +198,15 @@ fn replace_subscription_nodes(
 }
 
 #[derive(Clone)]
-struct ExistingSubscriptionNode {
-    id: i64,
-    link: String,
-    name: String,
-    address: String,
-    protocol: String,
+pub(crate) struct ExistingSubscriptionNode {
+    pub(super) id: i64,
+    pub(super) link: String,
+    pub(super) name: String,
+    pub(super) address: String,
+    pub(super) protocol: String,
 }
 
-fn subscription_node_changed(
+pub(crate) fn subscription_node_changed(
     current: &ExistingSubscriptionNode,
     next_link: &str,
     next: &ParsedNodeLink,
@@ -216,7 +217,7 @@ fn subscription_node_changed(
         || current.protocol != next.protocol
 }
 
-fn existing_subscription_nodes(
+pub(crate) fn existing_subscription_nodes(
     conn: &Connection,
     subscription_id: i64,
 ) -> io::Result<Vec<ExistingSubscriptionNode>> {
@@ -246,7 +247,7 @@ fn existing_subscription_nodes(
     Ok(out)
 }
 
-fn preserved_subscription_node_ids(
+pub(crate) fn preserved_subscription_node_ids(
     conn: &Connection,
     subscription_id: i64,
 ) -> io::Result<HashSet<i64>> {
@@ -268,7 +269,7 @@ fn preserved_subscription_node_ids(
     Ok(out)
 }
 
-fn subscription_node_link_exists(
+pub(crate) fn subscription_node_link_exists(
     conn: &Connection,
     subscription_id: i64,
     link: &str,
@@ -282,7 +283,7 @@ fn subscription_node_link_exists(
     .map_err(sqlite_io_error)
 }
 
-fn bump_group_versions_for_node(conn: &Connection, node_id: i64) -> io::Result<()> {
+pub(crate) fn bump_group_versions_for_node(conn: &Connection, node_id: i64) -> io::Result<()> {
     conn.execute(
         "UPDATE groups
          SET version = version + 1
@@ -293,7 +294,10 @@ fn bump_group_versions_for_node(conn: &Connection, node_id: i64) -> io::Result<(
     Ok(())
 }
 
-fn bump_group_versions_for_subscription(conn: &Connection, subscription_id: i64) -> io::Result<()> {
+pub(crate) fn bump_group_versions_for_subscription(
+    conn: &Connection,
+    subscription_id: i64,
+) -> io::Result<()> {
     conn.execute(
         "UPDATE groups
          SET version = version + 1
@@ -306,7 +310,7 @@ fn bump_group_versions_for_subscription(conn: &Connection, subscription_id: i64)
     Ok(())
 }
 
-fn subscription_links_from_content(content: &str) -> Vec<String> {
+pub(crate) fn subscription_links_from_content(content: &str) -> Vec<String> {
     let direct = node_links_from_text(content);
     if !direct.is_empty() {
         return direct;
@@ -328,7 +332,7 @@ fn subscription_links_from_content(content: &str) -> Vec<String> {
     Vec::new()
 }
 
-fn node_links_from_text(text: &str) -> Vec<String> {
+pub(crate) fn node_links_from_text(text: &str) -> Vec<String> {
     text.lines()
         .map(str::trim)
         .filter(|line| !line.is_empty() && !line.starts_with('#'))
@@ -337,7 +341,7 @@ fn node_links_from_text(text: &str) -> Vec<String> {
         .collect()
 }
 
-fn fetch_subscription_content(link: &str) -> io::Result<String> {
+pub(crate) fn fetch_subscription_content(link: &str) -> io::Result<String> {
     let url = url::Url::parse(link)
         .map_err(|err| io::Error::new(io::ErrorKind::InvalidInput, err.to_string()))?;
     match url.scheme() {
@@ -350,7 +354,7 @@ fn fetch_subscription_content(link: &str) -> io::Result<String> {
     }
 }
 
-fn fetch_http_url(url: &url::Url, tls: bool) -> io::Result<String> {
+pub(crate) fn fetch_http_url(url: &url::Url, tls: bool) -> io::Result<String> {
     let host = url
         .host_str()
         .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "missing host"))?;
@@ -404,7 +408,7 @@ fn fetch_http_url(url: &url::Url, tls: bool) -> io::Result<String> {
     http_response_body(&response)
 }
 
-fn http_response_body(response: &[u8]) -> io::Result<String> {
+pub(crate) fn http_response_body(response: &[u8]) -> io::Result<String> {
     let split = find_subsequence(response, b"\r\n\r\n")
         .or_else(|| find_subsequence(response, b"\n\n"))
         .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "missing http headers"))?;
@@ -435,7 +439,7 @@ fn http_response_body(response: &[u8]) -> io::Result<String> {
     Ok(String::from_utf8_lossy(&body).into_owned())
 }
 
-fn decode_chunked_body(body: &[u8]) -> io::Result<Vec<u8>> {
+pub(crate) fn decode_chunked_body(body: &[u8]) -> io::Result<Vec<u8>> {
     let mut index = 0;
     let mut out = Vec::new();
     while index < body.len() {
@@ -469,7 +473,7 @@ fn decode_chunked_body(body: &[u8]) -> io::Result<Vec<u8>> {
     Ok(out)
 }
 
-fn connect_tcp(host: &str, port: u16, timeout: Duration) -> io::Result<TcpStream> {
+pub(crate) fn connect_tcp(host: &str, port: u16, timeout: Duration) -> io::Result<TcpStream> {
     let mut last_err = None;
     for addr in (host, port).to_socket_addrs()? {
         match TcpStream::connect_timeout(&addr, timeout) {

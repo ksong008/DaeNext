@@ -1,5 +1,6 @@
+use super::*;
 #[test]
-fn domain_routing_owner_tracker_matches_golden_fixture() {
+pub(super) fn domain_routing_owner_tracker_matches_golden_fixture() {
     let fixture = load("control/domain_routing_tracker/basic.json");
     let mut tracker = DomainRoutingTracker::default();
     let steps = fixture["steps"].as_array().unwrap();
@@ -30,7 +31,7 @@ fn domain_routing_owner_tracker_matches_golden_fixture() {
 }
 
 #[test]
-fn domain_routing_owner_plans_delta_and_replay_without_helper_boundary() {
+pub(super) fn domain_routing_owner_plans_delta_and_replay_without_helper_boundary() {
     let mut owner = DomainRoutingOwner::default();
     let owner_a = DomainRoutingOwnerSnapshot::new(&[0x1], &["192.0.2.1", "2001:db8::1"]);
     let owner_b = DomainRoutingOwnerSnapshot::new(&[0x2], &["192.0.2.1", "198.51.100.7"]);
@@ -113,7 +114,7 @@ fn domain_routing_owner_plans_delta_and_replay_without_helper_boundary() {
 }
 
 #[test]
-fn domain_routing_owner_clears_reused_map_before_reload_restore() {
+pub(super) fn domain_routing_owner_clears_reused_map_before_reload_restore() {
     let mut owner = DomainRoutingOwner::default();
     owner.install_map(77);
     owner.apply_owner_snapshot(
@@ -170,7 +171,7 @@ fn domain_routing_owner_clears_reused_map_before_reload_restore() {
 }
 
 #[test]
-fn domain_routing_owner_applies_after_map_write_and_skips_duplicate_snapshot() {
+pub(super) fn domain_routing_owner_applies_after_map_write_and_skips_duplicate_snapshot() {
     let mut owner = DomainRoutingOwner::default();
     let owner_a = DomainRoutingOwnerSnapshot::new(&[0x1], &["192.0.2.1", "2001:db8::1"]);
     let mut applied = Vec::new();
@@ -235,7 +236,7 @@ fn domain_routing_owner_applies_after_map_write_and_skips_duplicate_snapshot() {
 }
 
 #[test]
-fn domain_routing_dns_event_is_normalized_in_rust_and_preserves_multi_owner_delete() {
+pub(super) fn domain_routing_dns_event_is_normalized_in_rust_and_preserves_multi_owner_delete() {
     let mut owner = DomainRoutingOwner::default();
     let ip = parse_ip_key("192.0.2.1").unwrap();
     let mut applied = Vec::new();
@@ -308,7 +309,7 @@ fn domain_routing_dns_event_is_normalized_in_rust_and_preserves_multi_owner_dele
 }
 
 #[test]
-fn domain_routing_owner_does_not_commit_when_map_apply_fails() {
+pub(super) fn domain_routing_owner_does_not_commit_when_map_apply_fails() {
     let mut owner = DomainRoutingOwner::default();
     let snapshot = DomainRoutingOwnerSnapshot::new(&[0x1], &["192.0.2.1"]);
     let err = owner
@@ -323,7 +324,7 @@ fn domain_routing_owner_does_not_commit_when_map_apply_fails() {
 }
 
 #[test]
-fn domain_routing_owner_reload_clear_applies_before_state_reset() {
+pub(super) fn domain_routing_owner_reload_clear_applies_before_state_reset() {
     let mut owner = DomainRoutingOwner::default();
     owner
         .apply_owner_snapshot_with(
