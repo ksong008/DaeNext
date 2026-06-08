@@ -69,7 +69,6 @@ use dae_sniffing::{SniffingError, sniff_tcp};
 use rustls::{ClientConfig, ClientConnection, RootCertStore, pki_types::ServerName};
 use serde_json::{Value, json};
 
-use super::ResidentDataplaneMetrics;
 use super::client::{
     AsyncResidentTlsClient, AsyncVlessTlsClient, TlsDriveOutcome, VlessTlsClient,
     async_resident_tls_underlay_name, async_tls_underlay_name, drive_tls_io_record_aware,
@@ -93,6 +92,7 @@ use super::{
     RESIDENT_TCP_IDLE_TIMEOUT, TLS_RECORD_MAX_PAYLOAD_LEN, VLESS_RESPONSE_VERSION,
     XTLS_RPRX_VISION,
 };
+use super::{ResidentDataplaneMetrics, ResidentTcpConnectionGuard};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener as TokioTcpListener, TcpStream as TokioTcpStream};
 use tokio::runtime;

@@ -42,3 +42,35 @@ impl ResidentDataplaneMetrics {
         })
     }
 }
+
+pub(crate) struct ResidentTcpConnectionGuard {
+    metrics: Arc<ResidentDataplaneMetrics>,
+}
+
+impl ResidentTcpConnectionGuard {
+    pub(super) fn new(metrics: Arc<ResidentDataplaneMetrics>) -> Self {
+        metrics.tcp_opened();
+        Self { metrics }
+    }
+}
+
+impl Drop for ResidentTcpConnectionGuard {
+    fn drop(&mut self) {
+        self.metrics.tcp_closed();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn tcp_connection_guard_closes_on_drop() {
+        let metrics = Arc::new(ResidentDataplaneMetrics::default());
+        {
+            let _guard = ResidentTcpConnectionGuard::new(Arc::clone(&metrics));
+            assert_eq!(metrics.active_tcp_connections.load(Ordering::Relaxed), 1);
+        }
+        assert_eq!(metrics.active_tcp_connections.load(Ordering::Relaxed), 0);
+    }
+}

@@ -149,6 +149,7 @@ pub(crate) fn start_resident_dataplane_workers(
     let tcp_flow_stack_bytes = resident_tcp_flow_stack_bytes();
     let udp_packet_workers = resident_udp_packet_workers();
     let udp_packet_stack_bytes = resident_udp_packet_stack_bytes();
+    let udp_packet_workers_active = Arc::new(AtomicUsize::new(0));
     let mut handles = Vec::new();
     {
         let stop = Arc::clone(&stop);
@@ -175,6 +176,7 @@ pub(crate) fn start_resident_dataplane_workers(
         let event_file = event_file.clone();
         let event_lock = Arc::clone(&event_lock);
         let metrics = Arc::clone(&metrics);
+        let active_workers = Arc::clone(&udp_packet_workers_active);
         handles.push(thread::spawn(move || {
             resident_udp_loop(
                 udp_socket,
@@ -184,6 +186,7 @@ pub(crate) fn start_resident_dataplane_workers(
                 event_file,
                 event_lock,
                 metrics,
+                active_workers,
                 udp_packet_workers,
                 udp_packet_stack_bytes,
             )
@@ -272,6 +275,7 @@ pub(crate) fn start_resident_dataplane_workers(
             event_lock,
             reload_generation,
             metrics,
+            udp_packet_workers_active,
             groups: runtime_groups,
             manual_probe_plans,
         }),

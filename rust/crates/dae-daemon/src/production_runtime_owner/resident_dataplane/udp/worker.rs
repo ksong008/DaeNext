@@ -7,6 +7,7 @@ pub(crate) fn resident_udp_loop(
     event_file: PathBuf,
     event_lock: Arc<Mutex<()>>,
     metrics: Arc<ResidentDataplaneMetrics>,
+    active_workers: Arc<AtomicUsize>,
     worker_limit: usize,
     worker_stack_bytes: usize,
 ) {
@@ -37,7 +38,6 @@ pub(crate) fn resident_udp_loop(
             },
         }),
     );
-    let active_workers = Arc::new(AtomicUsize::new(0));
     while !stop.load(Ordering::Relaxed) {
         let packet = match recv_udp_with_original_dst(&socket, 2048) {
             Ok(packet) => packet,
@@ -45,6 +45,7 @@ pub(crate) fn resident_udp_loop(
                 if err.contains("WouldBlock")
                     || err.contains("Resource temporarily unavailable") =>
             {
+                thread::sleep(RESIDENT_IDLE_SLEEP);
                 continue;
             }
             Err(err) => {
