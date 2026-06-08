@@ -34,12 +34,20 @@ pub(crate) fn append_lifecycle_log_fields_for_config(
     message: &str,
     mut fields: BTreeMap<String, String>,
 ) -> io::Result<()> {
-    if let Some(kind) = startup_reload_lifecycle_log_kind(message) {
+    let kind = startup_reload_lifecycle_log_kind(message);
+    if let Some(kind) = kind {
         fields
             .entry("lifecycle".to_owned())
             .or_insert_with(|| kind.to_owned());
     }
-    append_log_fields_for_config_with_policy(config_dir, state, level, message, fields, true)
+    append_log_fields_for_config_with_policy(
+        config_dir,
+        state,
+        level,
+        message,
+        fields,
+        kind.is_none(),
+    )
 }
 
 pub(crate) fn append_startup_phase_completed_for_config(

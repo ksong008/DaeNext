@@ -227,10 +227,19 @@ pub(crate) fn logs_filter_level_all_case_insensitive_query_and_sse_event_name() 
         .unwrap();
     append_log_for_config(&dir, &state, "fatal", "fatal after clear").unwrap();
     let after_clear = list_logs_value(&dir, &state, Some("all"), None, 500).unwrap();
-    assert_eq!(after_clear["items"].as_array().unwrap().len(), 1);
+    assert_eq!(after_clear["items"].as_array().unwrap().len(), 2);
     assert_eq!(after_clear["items"][0]["id"], json!(1));
     assert_eq!(
         after_clear["items"][0]["message"],
+        json!("[Startup] lifecycle after clear")
+    );
+    assert_eq!(
+        after_clear["items"][0]["fields"]["lifecycle"],
+        json!("startup")
+    );
+    assert_eq!(after_clear["items"][1]["id"], json!(2));
+    assert_eq!(
+        after_clear["items"][1]["message"],
         json!("fatal after clear")
     );
     fs::remove_dir_all(dir).unwrap();
@@ -293,8 +302,8 @@ pub(crate) fn runtime_cycle_log_reset_preserves_startup_and_reload_logs() {
     let state = dir.join("daed.db");
     ensure_state_schema(&state).unwrap();
     initialize_log_store(&dir, &state).unwrap();
-    set_metadata(&state, "runtime_log_level", "info").unwrap();
-    append_log_for_config(&dir, &state, "info", "ordinary runtime log").unwrap();
+    set_metadata(&state, "runtime_log_level", "error").unwrap();
+    append_log_for_config(&dir, &state, "error", "ordinary runtime log").unwrap();
     append_lifecycle_log_for_config(&dir, &state, "info", "[Startup] Finished").unwrap();
     append_lifecycle_log_for_config(
         &dir,
