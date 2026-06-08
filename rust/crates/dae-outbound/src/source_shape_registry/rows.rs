@@ -307,7 +307,7 @@ pub(super) static SOURCE_SHAPE_REGISTRY_ROWS: &[SourceShapeRegistryRow] = &[
         "registry:proxy-transport-mode",
         PROXY_TRANSPORT_CAPABILITY,
     ),
-    capability_admitted_row(
+    scoped_evidence_capability_admitted_row(
         "insecure-secure-endpoint-underlay",
         "proxy-endpoint",
         &["https"],
@@ -317,7 +317,7 @@ pub(super) static SOURCE_SHAPE_REGISTRY_ROWS: &[SourceShapeRegistryRow] = &[
         "registry:insecure-secure-endpoint-underlay",
         INSECURE_SECURITY_UNDERLAY_CAPABILITY,
     ),
-    capability_admitted_row(
+    scoped_evidence_capability_admitted_row(
         "fingerprint-secure-endpoint-underlay",
         "proxy-endpoint",
         &["https"],
@@ -327,7 +327,7 @@ pub(super) static SOURCE_SHAPE_REGISTRY_ROWS: &[SourceShapeRegistryRow] = &[
         "registry:fingerprint-secure-endpoint-underlay",
         FINGERPRINT_SECURITY_UNDERLAY_CAPABILITY,
     ),
-    capability_admitted_row(
+    scoped_evidence_capability_admitted_row(
         "insecure-frame-stream-underlay",
         "anytls",
         &["anytls"],
@@ -337,20 +337,20 @@ pub(super) static SOURCE_SHAPE_REGISTRY_ROWS: &[SourceShapeRegistryRow] = &[
         "registry:insecure-frame-stream-underlay",
         INSECURE_SECURITY_UNDERLAY_CAPABILITY,
     ),
-    capability_admitted_row(
+    scoped_evidence_capability_admitted_row(
         "full-utls-security-underlay",
         "shared-transport",
-        &["utls"],
+        &["https", "vless", "vmess", "trojan", "trojan-go", "anytls"],
         "full-utls",
         "none-or-stream-wrapper",
         "udp-over-stream-or-datagram",
         "registry:full-utls-security-underlay",
         FINGERPRINT_SECURITY_UNDERLAY_CAPABILITY,
     ),
-    capability_admitted_row(
+    scoped_evidence_capability_admitted_row(
         "tls-fragment-security-underlay",
         "shared-transport",
-        &["tls"],
+        &["https", "vless", "vmess", "trojan", "trojan-go", "anytls"],
         "tls-fragment",
         "none-or-stream-wrapper",
         "udp-over-stream-or-datagram",
@@ -360,7 +360,7 @@ pub(super) static SOURCE_SHAPE_REGISTRY_ROWS: &[SourceShapeRegistryRow] = &[
     blocked_row(
         "shared-reality-security-underlay",
         "shared-transport",
-        &["reality"],
+        &["vless"],
         "reality",
         "none-or-stream-wrapper",
         "udp-over-stream-or-datagram",
@@ -370,7 +370,7 @@ pub(super) static SOURCE_SHAPE_REGISTRY_ROWS: &[SourceShapeRegistryRow] = &[
     blocked_row(
         "mux-transport-wrapper",
         "shared-transport",
-        &["mux"],
+        &["vless", "vmess"],
         "plain-or-standard-tls",
         "mux",
         "multiplexed-stream",
@@ -380,14 +380,14 @@ pub(super) static SOURCE_SHAPE_REGISTRY_ROWS: &[SourceShapeRegistryRow] = &[
     blocked_row(
         "passthrough-udp-transport",
         "shared-transport",
-        &["passthrough-udp"],
+        &["ss", "vless", "vmess", "trojan", "trojan-go"],
         "plain-or-standard-tls",
         "none-or-stream-wrapper",
         "passthrough-udp",
         "missing-packet-semantics",
         "registry:passthrough-udp-transport",
     ),
-    capability_admitted_row(
+    scoped_evidence_capability_admitted_row(
         "legacy-cipher-protocol-shape",
         "legacy-protocol",
         &["ssr"],
