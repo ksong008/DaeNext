@@ -11,7 +11,9 @@ pub(crate) struct ProductLogIdCache {
 pub(crate) fn initialize_log_store(config_dir: &Path, state: &Path) -> io::Result<()> {
     ensure_state_schema(state)?;
     ensure_log_dir(config_dir)?;
-    clear_log_file(config_dir)
+    clear_log_file_preserving_startup_reload_logs(config_dir)?;
+    let conn = open_state_connection(state)?;
+    prune_log_file(config_dir, &conn)
 }
 
 pub(crate) fn register_resident_event_product_log_sink(config_dir: &Path, state: &Path) {
@@ -52,6 +54,22 @@ pub(crate) fn refresh_log_policy_and_reset_logs(
 ) -> io::Result<()> {
     refresh_resident_event_log_policy(state)?;
     clear_log_file(config_dir)?;
+    if let Some(runtime) = runtime {
+        runtime.clear_resident_event_log()?;
+    }
+    Ok(())
+}
+
+pub(crate) fn refresh_log_policy_and_reset_runtime_cycle_logs(
+    config_dir: &Path,
+    state: &Path,
+    runtime: Option<&ProductRuntimeManager>,
+) -> io::Result<()> {
+    refresh_resident_event_log_policy(state)?;
+    clear_log_file_preserving_startup_reload_logs(config_dir)?;
+    ensure_state_schema(state)?;
+    let conn = open_state_connection(state)?;
+    prune_log_file(config_dir, &conn)?;
     if let Some(runtime) = runtime {
         runtime.clear_resident_event_log()?;
     }

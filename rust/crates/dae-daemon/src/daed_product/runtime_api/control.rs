@@ -8,8 +8,11 @@ pub(in crate::daed_product) fn api_runtime_reload(
     let body = json_body(request).unwrap_or_else(|_| json!({}));
     let dry = body.get("dry").and_then(Value::as_bool).unwrap_or(false);
     if !dry
-        && let Err(err) =
-            refresh_log_policy_and_reset_logs(&app.config_dir, &app.state, Some(&app.runtime))
+        && let Err(err) = refresh_log_policy_and_reset_runtime_cycle_logs(
+            &app.config_dir,
+            &app.state,
+            Some(&app.runtime),
+        )
     {
         return HttpResponse::json(500, json!({"error": err.to_string()}));
     }
@@ -106,9 +109,11 @@ pub(in crate::daed_product) fn api_runtime_reload(
         );
         return HttpResponse::json(500, json!({"error": err.to_string()}));
     }
-    if let Err(err) =
-        refresh_log_policy_and_reset_logs(&app.config_dir, &app.state, Some(&app.runtime))
-    {
+    if let Err(err) = refresh_log_policy_and_reset_runtime_cycle_logs(
+        &app.config_dir,
+        &app.state,
+        Some(&app.runtime),
+    ) {
         return HttpResponse::json(500, json!({"error": err.to_string()}));
     }
     let runtime = match app.runtime.reload(config, "api-runtime-reload") {

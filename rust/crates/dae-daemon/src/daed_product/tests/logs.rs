@@ -245,7 +245,9 @@ pub(crate) fn log_store_initialization_repairs_existing_jsonl_permissions() {
     let log_file = product_log_file(&dir);
     fs::write(
         &log_file,
-        "{\"id\":1,\"ts\":\"2026-06-03T00:00:00Z\",\"level\":\"info\",\"message\":\"existing\"}\n",
+        "{\"id\":1,\"ts\":\"2026-06-03T00:00:00Z\",\"level\":\"info\",\"message\":\"existing\"}\n\
+         {\"id\":2,\"ts\":\"2026-06-03T00:00:01Z\",\"level\":\"info\",\"message\":\"[Startup] Finished\"}\n\
+         {\"id\":3,\"ts\":\"2026-06-03T00:00:02Z\",\"level\":\"info\",\"message\":\"[Reload] Finished\"}\n",
     )
     .unwrap();
     #[cfg(unix)]
@@ -256,7 +258,16 @@ pub(crate) fn log_store_initialization_repairs_existing_jsonl_permissions() {
 
     initialize_log_store(&dir, &state).unwrap();
 
-    assert_eq!(fs::read_to_string(&log_file).unwrap(), "");
+    let retained = fs::read_to_string(&log_file).unwrap();
+    assert!(!retained.contains("\"message\":\"existing\""), "{retained}");
+    assert!(
+        retained.contains("\"message\":\"[Startup] Finished\""),
+        "{retained}"
+    );
+    assert!(
+        retained.contains("\"message\":\"[Reload] Finished\""),
+        "{retained}"
+    );
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
@@ -273,6 +284,38 @@ pub(crate) fn log_store_initialization_repairs_existing_jsonl_permissions() {
             0o600
         );
     }
+    fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+pub(crate) fn runtime_cycle_log_reset_preserves_startup_and_reload_logs() {
+    let dir = std::env::temp_dir().join(format!("daed-product-test-{}", fastrand::u64(..)));
+    let state = dir.join("daed.db");
+    ensure_state_schema(&state).unwrap();
+    initialize_log_store(&dir, &state).unwrap();
+    set_metadata(&state, "runtime_log_level", "info").unwrap();
+    append_log_for_config(&dir, &state, "info", "ordinary runtime log").unwrap();
+    append_lifecycle_log_for_config(&dir, &state, "info", "[Startup] Finished").unwrap();
+    append_lifecycle_log_for_config(
+        &dir,
+        &state,
+        "info",
+        "[Reload] Received signal reload request",
+    )
+    .unwrap();
+
+    refresh_log_policy_and_reset_runtime_cycle_logs(&dir, &state, None).unwrap();
+
+    let logs = list_logs_value(&dir, &state, Some("all"), None, 500).unwrap();
+    let items = logs["items"].as_array().unwrap();
+    assert_eq!(items.len(), 2, "{logs}");
+    assert_eq!(items[0]["message"], json!("[Startup] Finished"));
+    assert_eq!(items[0]["fields"]["lifecycle"], json!("startup"));
+    assert_eq!(
+        items[1]["message"],
+        json!("[Reload] Received signal reload request")
+    );
+    assert_eq!(items[1]["fields"]["lifecycle"], json!("reload"));
     fs::remove_dir_all(dir).unwrap();
 }
 
