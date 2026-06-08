@@ -13,6 +13,7 @@ fn security_underlay_capability_admits_common_underlays_only() {
     for expected in [
         "standard-tls-common-underlay",
         "fingerprint-aware-tls-common-underlay",
+        "reality-common-underlay",
         "verification-policy-surface",
         "underlay-routing-options",
     ] {

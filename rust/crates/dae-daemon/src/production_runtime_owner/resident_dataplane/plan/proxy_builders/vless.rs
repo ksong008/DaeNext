@@ -14,7 +14,13 @@ pub(crate) fn build_vless_proxy_plan(
         .validate_transport_contract()
         .map_err(|err| format!("validate VLESS transport for {node_tag}: {err}"))?;
     let net = canonical_resident_vless_net(&vless.net);
+    if vless.mux && net != "tcp" {
+        return Err(format!(
+            "resident dataplane vless mux transport admits tcp carrier only for node {node_tag}; got {net}"
+        ));
+    }
     match net.as_str() {
+        "tcp" if vless.mux && vless.flow.is_empty() => {}
         "tcp" if vless.flow != XTLS_RPRX_VISION => {
             return Err(format!(
                 "resident dataplane vless native experiment admits tcp flow={XTLS_RPRX_VISION}, got '{}' for node {node_tag}; resident shape remains fail-closed for this config",
@@ -34,9 +40,15 @@ pub(crate) fn build_vless_proxy_plan(
             ));
         }
     }
-    if vless.tls != "tls" {
+    if !matches!(vless.tls.as_str(), "tls" | "reality") {
         return Err(format!(
-            "resident dataplane vless handler currently supports security=tls only, got {} for node {node_tag}",
+            "resident dataplane vless handler currently supports security=tls or security=reality only, got {} for node {node_tag}",
+            vless.tls
+        ));
+    }
+    if vless.mux && vless.tls != "tls" {
+        return Err(format!(
+            "resident dataplane vless mux transport admits standard tls underlay only for node {node_tag}; got {}",
             vless.tls
         ));
     }
@@ -89,7 +101,18 @@ pub(crate) fn build_vless_proxy_plan(
     } else {
         None
     };
-    let utls_fingerprint = resident_utls_fingerprint_plan(config, Some(&vless.fingerprint))?;
+    let reality = resident_reality_underlay_plan(&vless)
+        .map_err(|err| format!("validate VLESS Reality for {node_tag}: {err}"))?;
+    let tls_fragment = if reality.is_some() {
+        None
+    } else {
+        resident_tls_fragment_plan(config)?
+    };
+    let utls_fingerprint = if reality.is_some() {
+        None
+    } else {
+        resident_utls_fingerprint_plan(config, Some(&vless.fingerprint))?
+    };
     let server_port = vless.port.parse::<u16>().map_err(|err| {
         format!(
             "invalid VLESS port {} for node {node_tag}: {err}",
@@ -127,6 +150,11 @@ pub(crate) fn build_vless_proxy_plan(
         String::new()
     };
     let graph = resident_graph_identity(&link);
+    let handler = if vless.mux {
+        ResidentProxyProtocolPlan::VlessMuxTcpTls { key }
+    } else {
+        ResidentProxyProtocolPlan::VlessVisionTcpTls { key }
+    };
     Ok(ResidentProxyPlan {
         graph_id: graph.graph_id,
         graph_link_hash: graph.link_hash,
@@ -145,11 +173,33 @@ pub(crate) fn build_vless_proxy_plan(
         stream_path,
         tls: vless.tls,
         allow_insecure: false,
-        tls_fragment: resident_tls_fragment_plan(config)?,
+        tls_fragment,
         utls_fingerprint,
-        handler: ResidentProxyProtocolPlan::VlessVisionTcpTls { key },
+        reality,
+        handler,
         chain_parent: None,
         mark: config.global.so_mark_from_dae,
         mptcp: config.global.mptcp,
     })
+}
+
+fn resident_reality_underlay_plan(
+    vless: &VLESSLink,
+) -> Result<Option<ResidentRealityUnderlayPlan>, String> {
+    if vless.tls != "reality" {
+        return Ok(None);
+    }
+    if vless.public_key.is_empty() {
+        return Err("Reality public key is required".to_owned());
+    }
+    let public_key = ir::reality_pbk_decode(&vless.public_key)
+        .map_err(|err| err.to_string())?
+        .try_into()
+        .map_err(|_| "Reality public key must decode to 32 bytes".to_owned())?;
+    let short_id = ir::reality_short_id_decode(&vless.short_id).map_err(|err| err.to_string())?;
+    Ok(Some(ResidentRealityUnderlayPlan {
+        public_key,
+        short_id,
+        spider_x: vless.spider_x.clone(),
+    }))
 }

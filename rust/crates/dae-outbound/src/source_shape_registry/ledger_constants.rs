@@ -38,6 +38,10 @@ pub(super) const SCOPED_EXPANDED_SOURCE_MATRIX_EVIDENCE: ScopedExpandedSourceMat
             "insecure-frame-stream-underlay",
             "full-utls-security-underlay",
             "tls-fragment-security-underlay",
+            "reality-security-underlay",
+            "shared-reality-security-underlay",
+            "mux-transport-wrapper",
+            "passthrough-udp-transport",
             "legacy-cipher-protocol-shape",
         ],
         source_formats: &[
@@ -60,16 +64,20 @@ pub(super) const SCOPED_EXPANDED_SOURCE_MATRIX_EVIDENCE: ScopedExpandedSourceMat
             "anytls-insecure-uri",
             "vless-tls-global-utls-uri",
             "https-proxy-tls-fragment-uri",
+            "vless-reality-uri",
+            "shared-vless-reality-underlay-uri",
+            "vless-mux-uri",
+            "resident-udp-passthrough-source-shape",
             "shadowsocksr-origin-http-simple-uri",
         ],
-        candidate_sha256: "multi-batch:3ea6efd5022e5079de4ffc654482dbeae6194a052ff0e6b7cce7c3f513b384a5+12a1622fdff29d95e954ba80a865c01fbb17dcacb345eb7468dae0ac818bab0b+3e33e9d1d620ce21d9f76976855297d7a42d9c82a26ab4adba78370ff9b83817+544198ea15e00a2e92ec56d35c816e1e7c7a44073842b9253eca44a448806912",
+        candidate_sha256: "multi-batch:3ea6efd5022e5079de4ffc654482dbeae6194a052ff0e6b7cce7c3f513b384a5+12a1622fdff29d95e954ba80a865c01fbb17dcacb345eb7468dae0ac818bab0b+3e33e9d1d620ce21d9f76976855297d7a42d9c82a26ab4adba78370ff9b83817+544198ea15e00a2e92ec56d35c816e1e7c7a44073842b9253eca44a448806912+aae0b211392a04f23b444a7097527b0ea8dd1e96955c2ef4a0ee3a13a8dea759",
         evidence_host: "remote-38",
         upstream_host: "jp",
-        evidence_root: "remote-38:/tmp/daex-non-xhttp-capability-3ea6efd5;/opt/daex-batch1-38/artifacts;/opt/daex-batch2-38/artifacts;/opt/daex-batch34-38/artifacts",
-        summary_artifact: "remote-38:/tmp/daex-non-xhttp-capability-3ea6efd5/non-xhttp-capability-live-summary.json;/opt/daex-batch1-38/artifacts/batch1-live-evidence.json;/opt/daex-batch2-38/artifacts/batch2-live-evidence.json;/opt/daex-batch34-38/artifacts/batch34-live-evidence.json",
-        rollback_artifact: "remote-38:/tmp/daex-non-xhttp-capability-3ea6efd5/rollback-cleanup.sh;/opt/daex-batch1-38/artifacts/rollback-cleanup.sh;/opt/daex-batch2-38/artifacts/rollback-cleanup.sh;/opt/daex-batch34-38/artifacts/rollback-cleanup.sh",
-        row_count: 20,
-        pass_count: 20,
+        evidence_root: "remote-38:/tmp/daex-non-xhttp-capability-3ea6efd5;/opt/daex-batch1-38/artifacts;/opt/daex-batch2-38/artifacts;/opt/daex-batch34-38/artifacts;/opt/daex-remaining-38/artifacts",
+        summary_artifact: "remote-38:/tmp/daex-non-xhttp-capability-3ea6efd5/non-xhttp-capability-live-summary.json;/opt/daex-batch1-38/artifacts/batch1-live-evidence.json;/opt/daex-batch2-38/artifacts/batch2-live-evidence.json;/opt/daex-batch34-38/artifacts/batch34-live-evidence.json;/opt/daex-remaining-38/artifacts/remaining-live-evidence.json",
+        rollback_artifact: "remote-38:/tmp/daex-non-xhttp-capability-3ea6efd5/rollback-cleanup.sh;/opt/daex-batch1-38/artifacts/rollback-cleanup.sh;/opt/daex-batch2-38/artifacts/rollback-cleanup.sh;/opt/daex-batch34-38/artifacts/rollback-cleanup.sh;/opt/daex-remaining-38/artifacts/rollback-cleanup.sh",
+        row_count: 24,
+        pass_count: 24,
         all_pass: true,
         large_page_all_pass: true,
         proxy_evidence_all_pass: true,
@@ -241,6 +249,39 @@ pub(super) const TLS_FRAGMENT_SECURITY_UNDERLAY_CAPABILITY: CapabilityLedger = C
     legacy_layer: "none",
     quic_option: "baseline-admitted",
     secure_endpoint: "standard-tls-fragment-underlay",
+};
+
+pub(super) const REALITY_SECURITY_UNDERLAY_CAPABILITY: CapabilityLedger = CapabilityLedger {
+    graph_composition: "single-graph-admitted",
+    security_underlay: "reality",
+    stream_wrapper: "baseline-or-stream-wrapper",
+    packet_semantics: "tcp-stream-or-packet-wrapper",
+    plugin_wrapper: "none",
+    legacy_layer: "none",
+    quic_option: "baseline-admitted",
+    secure_endpoint: "reality-underlay",
+};
+
+pub(super) const MUX_TRANSPORT_CAPABILITY: CapabilityLedger = CapabilityLedger {
+    graph_composition: "single-graph-admitted",
+    security_underlay: "plain-or-standard-tls",
+    stream_wrapper: "resident-shared-mux-stream",
+    packet_semantics: "multiplexed-stream",
+    plugin_wrapper: "none",
+    legacy_layer: "none",
+    quic_option: "baseline-admitted",
+    secure_endpoint: "plain-or-native-underlay",
+};
+
+pub(super) const PASSTHROUGH_UDP_CAPABILITY: CapabilityLedger = CapabilityLedger {
+    graph_composition: "single-graph-admitted",
+    security_underlay: "plain-or-native-underlay",
+    stream_wrapper: "baseline-or-stream-wrapper",
+    packet_semantics: "resident-passthrough-udp",
+    plugin_wrapper: "none",
+    legacy_layer: "none",
+    quic_option: "baseline-admitted",
+    secure_endpoint: "plain-or-native-underlay",
 };
 
 pub(super) const SECURE_FRAME_STREAM_CAPABILITY: CapabilityLedger = CapabilityLedger {

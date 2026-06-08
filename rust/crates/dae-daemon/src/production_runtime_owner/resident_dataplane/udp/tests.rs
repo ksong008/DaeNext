@@ -48,6 +48,7 @@ mod tests {
             allow_insecure: false,
             tls_fragment: None,
             utls_fingerprint: None,
+            reality: None,
             handler: ResidentProxyProtocolPlan::VlessVisionTcpTls { key: [9_u8; 16] },
             chain_parent: None,
             mark: 0,
@@ -87,6 +88,7 @@ mod tests {
             allow_insecure: false,
             tls_fragment: None,
             utls_fingerprint: None,
+            reality: None,
             handler: ResidentProxyProtocolPlan::HttpProxyTcp {
                 username: String::new(),
                 password: String::new(),

@@ -6,7 +6,7 @@ impl AsyncVlessTlsClient {
         label: &str,
     ) -> Result<(), String> {
         match &mut self.engine {
-            AsyncVlessTlsEngine::Rustls { tls } => {
+            AsyncVlessTlsEngine::Rustls { tls } | AsyncVlessTlsEngine::RealityRustls { tls } => {
                 tls.write_all(payload)
                     .await
                     .map_err(|err| format!("{label}: {err}"))?;
@@ -30,7 +30,9 @@ impl AsyncVlessTlsClient {
         buf: &mut [u8],
     ) -> std::io::Result<usize> {
         match &mut self.engine {
-            AsyncVlessTlsEngine::Rustls { tls } => tls.read(buf).await,
+            AsyncVlessTlsEngine::Rustls { tls } | AsyncVlessTlsEngine::RealityRustls { tls } => {
+                tls.read(buf).await
+            }
             AsyncVlessTlsEngine::Boring { tls } => tls.read(buf).await,
         }
     }
@@ -40,7 +42,9 @@ impl AsyncVlessTlsClient {
         buf: &mut [u8],
     ) -> std::io::Result<usize> {
         match &mut self.engine {
-            AsyncVlessTlsEngine::Rustls { tls } => tls.get_mut().0.read(buf).await,
+            AsyncVlessTlsEngine::Rustls { tls } | AsyncVlessTlsEngine::RealityRustls { tls } => {
+                tls.get_mut().0.read(buf).await
+            }
             AsyncVlessTlsEngine::Boring { tls } => tls.get_mut().read(buf).await,
         }
     }
@@ -51,7 +55,7 @@ impl AsyncVlessTlsClient {
         label: &str,
     ) -> Result<(), String> {
         match &mut self.engine {
-            AsyncVlessTlsEngine::Rustls { tls } => {
+            AsyncVlessTlsEngine::Rustls { tls } | AsyncVlessTlsEngine::RealityRustls { tls } => {
                 let raw = tls.get_mut().0;
                 let raw = raw.raw_mut();
                 raw.write_all(payload)
@@ -75,7 +79,7 @@ impl AsyncVlessTlsClient {
 
     pub(in crate::production_runtime_owner::resident_dataplane) async fn shutdown(&mut self) {
         match &mut self.engine {
-            AsyncVlessTlsEngine::Rustls { tls } => {
+            AsyncVlessTlsEngine::Rustls { tls } | AsyncVlessTlsEngine::RealityRustls { tls } => {
                 let _ = tls.shutdown().await;
             }
             AsyncVlessTlsEngine::Boring { tls } => {
@@ -92,7 +96,9 @@ impl AsyncRead for AsyncVlessTlsClient {
         buf: &mut ReadBuf<'_>,
     ) -> Poll<std::io::Result<()>> {
         match &mut self.engine {
-            AsyncVlessTlsEngine::Rustls { tls } => Pin::new(tls).poll_read(cx, buf),
+            AsyncVlessTlsEngine::Rustls { tls } | AsyncVlessTlsEngine::RealityRustls { tls } => {
+                Pin::new(tls).poll_read(cx, buf)
+            }
             AsyncVlessTlsEngine::Boring { tls } => Pin::new(tls).poll_read(cx, buf),
         }
     }
@@ -105,21 +111,27 @@ impl AsyncWrite for AsyncVlessTlsClient {
         buf: &[u8],
     ) -> Poll<std::io::Result<usize>> {
         match &mut self.engine {
-            AsyncVlessTlsEngine::Rustls { tls } => Pin::new(tls).poll_write(cx, buf),
+            AsyncVlessTlsEngine::Rustls { tls } | AsyncVlessTlsEngine::RealityRustls { tls } => {
+                Pin::new(tls).poll_write(cx, buf)
+            }
             AsyncVlessTlsEngine::Boring { tls } => Pin::new(tls).poll_write(cx, buf),
         }
     }
 
     fn poll_flush(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<std::io::Result<()>> {
         match &mut self.engine {
-            AsyncVlessTlsEngine::Rustls { tls } => Pin::new(tls).poll_flush(cx),
+            AsyncVlessTlsEngine::Rustls { tls } | AsyncVlessTlsEngine::RealityRustls { tls } => {
+                Pin::new(tls).poll_flush(cx)
+            }
             AsyncVlessTlsEngine::Boring { tls } => Pin::new(tls).poll_flush(cx),
         }
     }
 
     fn poll_shutdown(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<std::io::Result<()>> {
         match &mut self.engine {
-            AsyncVlessTlsEngine::Rustls { tls } => Pin::new(tls).poll_shutdown(cx),
+            AsyncVlessTlsEngine::Rustls { tls } | AsyncVlessTlsEngine::RealityRustls { tls } => {
+                Pin::new(tls).poll_shutdown(cx)
+            }
             AsyncVlessTlsEngine::Boring { tls } => Pin::new(tls).poll_shutdown(cx),
         }
     }

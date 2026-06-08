@@ -74,6 +74,7 @@ pub(crate) fn probe_resident_proxy_tcp(
                 if matches!(
                     selection.proxy.handler,
                     ResidentProxyProtocolPlan::VlessVisionTcpTls { .. }
+                        | ResidentProxyProtocolPlan::VlessMuxTcpTls { .. }
                 ) {
                     handle_proxy_tcp_connection_async(
                         &mut inbound,

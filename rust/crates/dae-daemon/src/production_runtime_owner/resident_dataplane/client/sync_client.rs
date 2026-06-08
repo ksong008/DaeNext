@@ -15,10 +15,11 @@ impl VlessTlsClient {
         label: &str,
     ) -> Result<(), String> {
         match &mut self.engine {
-            VlessTlsEngine::Rustls { conn, .. } => conn
-                .writer()
-                .write_all(payload)
-                .map_err(|err| format!("{label}: {err}")),
+            VlessTlsEngine::Rustls { conn, .. } | VlessTlsEngine::RealityRustls { conn, .. } => {
+                conn.writer()
+                    .write_all(payload)
+                    .map_err(|err| format!("{label}: {err}"))
+            }
             VlessTlsEngine::Boring {
                 pending_plaintext, ..
             } => {
@@ -33,7 +34,9 @@ impl VlessTlsClient {
         buf: &mut [u8],
     ) -> std::io::Result<usize> {
         match &mut self.engine {
-            VlessTlsEngine::Rustls { conn, .. } => conn.reader().read(buf),
+            VlessTlsEngine::Rustls { conn, .. } | VlessTlsEngine::RealityRustls { conn, .. } => {
+                conn.reader().read(buf)
+            }
             VlessTlsEngine::Boring { tls, .. } => tls.read(buf),
         }
     }
@@ -71,7 +74,9 @@ impl VlessTlsClient {
 
     pub(in crate::production_runtime_owner::resident_dataplane) fn send_close_notify(&mut self) {
         match &mut self.engine {
-            VlessTlsEngine::Rustls { conn, .. } => conn.send_close_notify(),
+            VlessTlsEngine::Rustls { conn, .. } | VlessTlsEngine::RealityRustls { conn, .. } => {
+                conn.send_close_notify()
+            }
             VlessTlsEngine::Boring { tls, .. } => {
                 let _ = tls.shutdown();
             }
@@ -82,7 +87,9 @@ impl VlessTlsClient {
         &self,
     ) -> bool {
         match &self.engine {
-            VlessTlsEngine::Rustls { conn, .. } => !conn.wants_write() && !conn.wants_read(),
+            VlessTlsEngine::Rustls { conn, .. } | VlessTlsEngine::RealityRustls { conn, .. } => {
+                !conn.wants_write() && !conn.wants_read()
+            }
             VlessTlsEngine::Boring {
                 pending_plaintext, ..
             } => pending_plaintext.is_empty(),
@@ -93,7 +100,9 @@ impl VlessTlsClient {
         &mut self,
     ) -> &mut TcpStream {
         match &mut self.engine {
-            VlessTlsEngine::Rustls { tcp, .. } => tcp.raw_mut(),
+            VlessTlsEngine::Rustls { tcp, .. } | VlessTlsEngine::RealityRustls { tcp, .. } => {
+                tcp.raw_mut()
+            }
             VlessTlsEngine::Boring { tls, .. } => tls.get_mut(),
         }
     }

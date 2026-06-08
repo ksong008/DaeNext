@@ -29,7 +29,8 @@ pub(crate) async fn relay_tcp_over_shadowsocks_v2ray_plugin_tls_ws(
     );
     let mux_id = [0_u8, 0_u8];
     let mux_options = MuxFrameOptions::new(mux_id, "127.0.0.1", 0, "tcp");
-    let mut mux_payload = mux_new_frame(&mux_options);
+    let mut mux_payload = mux_new_frame(&mux_options)
+        .map_err(|err| format!("build v2ray-plugin mux new frame: {err}"))?;
     mux_payload.extend(
         mux_data_frame(mux_id, &encrypted_initial)
             .map_err(|err| format!("build v2ray-plugin mux data frame: {err}"))?,

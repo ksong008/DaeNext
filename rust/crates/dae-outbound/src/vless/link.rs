@@ -26,6 +26,7 @@ pub struct VLESSLink {
     pub public_key: String,
     pub short_id: String,
     pub spider_x: String,
+    pub mux: bool,
     pub protocol: String,
 }
 
@@ -62,6 +63,7 @@ impl VLESSLink {
             public_key: query_value(&query, "pbk").unwrap_or_default(),
             short_id: query_value(&query, "sid").unwrap_or_default(),
             spider_x: query_value(&query, "spx").unwrap_or_default(),
+            mux: parse_mux_enabled(&query),
             protocol: "vless".to_owned(),
         };
         if parsed.net.is_empty() {
@@ -159,6 +161,9 @@ impl VLESSLink {
                 push_if_non_empty(&mut query, "spx", &self.spider_x);
             }
         }
+        if self.mux {
+            query.push(("mux".to_owned(), "1".to_owned()));
+        }
         query.sort_by(|a, b| a.0.cmp(&b.0).then_with(|| a.1.cmp(&b.1)));
         let mut out = String::new();
         out.push_str("vless://");
@@ -179,6 +184,12 @@ impl VLESSLink {
         }
         out
     }
+}
+
+fn parse_mux_enabled(query: &[(std::borrow::Cow<'_, str>, std::borrow::Cow<'_, str>)]) -> bool {
+    query_value(query, "mux")
+        .or_else(|| query_value(query, "muxEnabled"))
+        .is_some_and(|value| matches!(value.as_str(), "1" | "true" | "yes" | "on"))
 }
 
 fn canonical_flow(flow: &str) -> String {

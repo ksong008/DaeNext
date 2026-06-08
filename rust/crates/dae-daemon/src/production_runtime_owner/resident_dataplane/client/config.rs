@@ -1,4 +1,6 @@
 use super::*;
+
+const REALITY_COMPAT_CLIENT_VERSION: [u8; 3] = [26, 6, 1];
 pub(super) fn boring_vless_connector(
     proxy: &ResidentProxyPlan,
 ) -> Result<Arc<SslConnector>, String> {
@@ -56,6 +58,10 @@ impl ResidentTlsClientConfigKey {
                 .utls_fingerprint
                 .as_ref()
                 .map(ResidentTlsFingerprintConfigKey::from_plan),
+            reality: proxy
+                .reality
+                .as_ref()
+                .map(ResidentRealityConfigKey::from_plan),
         }
     }
 }
@@ -75,6 +81,15 @@ impl ResidentTlsFingerprintConfigKey {
     }
 }
 
+impl ResidentRealityConfigKey {
+    pub(super) fn from_plan(plan: &ResidentRealityUnderlayPlan) -> Self {
+        Self {
+            public_key: plan.public_key,
+            short_id: plan.short_id.clone(),
+        }
+    }
+}
+
 pub(super) fn rustls_vless_client_config(
     proxy: &ResidentProxyPlan,
 ) -> Result<Arc<ClientConfig>, String> {
@@ -88,7 +103,13 @@ pub(super) fn rustls_vless_client_config(
             return Ok(Arc::clone(config));
         }
     }
-    let builder = if proxy.flow == XTLS_RPRX_VISION {
+    let builder = if proxy.reality.is_some() {
+        let mut provider = rustls::crypto::aws_lc_rs::default_provider();
+        provider.kx_groups = vec![rustls::crypto::aws_lc_rs::kx_group::X25519];
+        ClientConfig::builder_with_provider(Arc::new(provider))
+            .with_protocol_versions(&[&rustls::version::TLS13])
+            .map_err(|err| format!("create VLESS Reality rustls provider: {err}"))?
+    } else if proxy.flow == XTLS_RPRX_VISION {
         ClientConfig::builder_with_protocol_versions(&[&rustls::version::TLS13])
     } else {
         ClientConfig::builder()
@@ -97,6 +118,16 @@ pub(super) fn rustls_vless_client_config(
         builder
             .dangerous()
             .with_custom_certificate_verifier(ResidentInsecureCertVerifier::new())
+            .with_no_client_auth()
+    } else if let Some(reality) = &proxy.reality {
+        let mut roots = RootCertStore::empty();
+        roots.extend(webpki_roots::TLS_SERVER_ROOTS.iter().cloned());
+        let reality_config = RealityConfig::new(reality.public_key, reality.short_id.clone())
+            .map_err(|err| format!("create VLESS Reality config: {err}"))?
+            .with_client_version(REALITY_COMPAT_CLIENT_VERSION);
+        builder
+            .with_root_certificates(roots)
+            .with_reality(reality_config)
             .with_no_client_auth()
     } else {
         let mut roots = RootCertStore::empty();

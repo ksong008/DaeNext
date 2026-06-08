@@ -128,7 +128,7 @@ where
     let mut request_payload = target_metadata.encode()?;
     request_payload.extend_from_slice(payload);
     let inner_request = encode_client_initial(cipher, password, salts.client, &request_payload)?;
-    let mut mux_payload = mux_new_frame(&options.mux);
+    let mut mux_payload = mux_new_frame(&options.mux)?;
     mux_payload.extend_from_slice(&mux_data_frame(options.mux.id, &inner_request)?);
     let request_frame = websocket_client_binary_frame(&mux_payload, WS_MASK_KEY)?;
     tls.write_all(&request_frame)

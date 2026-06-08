@@ -29,12 +29,12 @@ pub(crate) fn assert_source_stream_packet_and_transport_contract(report: &Value)
             .unwrap()
     );
     assert!(
-        !report["excluded_stream_wrapper_source_matrix_complete"]
+        report["excluded_stream_wrapper_source_matrix_complete"]
             .as_bool()
             .unwrap()
     );
     assert!(
-        !report["excluded_stream_wrapper_source_matrix_release_gate_ready"]
+        report["excluded_stream_wrapper_source_matrix_release_gate_ready"]
             .as_bool()
             .unwrap()
     );
@@ -104,7 +104,7 @@ pub(crate) fn assert_source_stream_packet_and_transport_contract(report: &Value)
         report["excluded_stream_wrapper_source_matrix_typed_report"]["status"]
             .as_str()
             .unwrap(),
-        "blocked"
+        "pass"
     );
     assert!(
         report["excluded_stream_wrapper_source_matrix_typed_report"]["source_supported_row_count"]
@@ -112,30 +112,29 @@ pub(crate) fn assert_source_stream_packet_and_transport_contract(report: &Value)
             .unwrap()
             > 20
     );
-    assert!(
+    assert_eq!(
         report["excluded_stream_wrapper_source_matrix_typed_report"]["admitted_row_count"]
             .as_u64()
+            .unwrap(),
+        report["excluded_stream_wrapper_source_matrix_typed_report"]["source_supported_row_count"]
+            .as_u64()
             .unwrap()
-            < report["excluded_stream_wrapper_source_matrix_typed_report"]
-                ["source_supported_row_count"]
-                .as_u64()
-                .unwrap()
     );
-    assert!(
+    assert_eq!(
         report["excluded_stream_wrapper_source_matrix_typed_report"]
             ["explicit_fail_closed_row_count"]
             .as_u64()
-            .unwrap()
-            > 0
+            .unwrap(),
+        0
     );
     assert!(
-        !report["excluded_stream_wrapper_source_matrix_typed_report"]
+        report["excluded_stream_wrapper_source_matrix_typed_report"]
             ["all_source_supported_rows_admitted"]
             .as_bool()
             .unwrap()
     );
     assert!(
-        !report["excluded_stream_wrapper_source_matrix_typed_report"]["all_protocol_rows_open"]
+        report["excluded_stream_wrapper_source_matrix_typed_report"]["all_protocol_rows_open"]
             .as_bool()
             .unwrap()
     );
@@ -156,10 +155,7 @@ pub(crate) fn assert_source_stream_packet_and_transport_contract(report: &Value)
             ["blocked_protocol_variant_count"]
             .as_u64()
             .unwrap(),
-        report["excluded_stream_wrapper_source_matrix_typed_report"]
-            ["explicit_fail_closed_row_count"]
-            .as_u64()
-            .unwrap()
+        0
     );
     assert_eq!(
         report["excluded_stream_wrapper_source_matrix_typed_report"]
@@ -184,8 +180,7 @@ pub(crate) fn assert_source_stream_packet_and_transport_contract(report: &Value)
         report["excluded_stream_wrapper_source_matrix_typed_report"]["blocked_protocol_variant_ids"]
             .as_array()
             .unwrap()
-            .iter()
-            .any(|shape| shape.as_str().unwrap() == "reality-security-underlay")
+            .is_empty()
     );
     for admitted_underlay in [
         "insecure-secure-endpoint-underlay",
@@ -193,6 +188,10 @@ pub(crate) fn assert_source_stream_packet_and_transport_contract(report: &Value)
         "insecure-frame-stream-underlay",
         "full-utls-security-underlay",
         "tls-fragment-security-underlay",
+        "reality-security-underlay",
+        "shared-reality-security-underlay",
+        "mux-transport-wrapper",
+        "passthrough-udp-transport",
         "legacy-cipher-protocol-shape",
     ] {
         assert!(

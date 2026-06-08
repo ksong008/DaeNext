@@ -200,6 +200,7 @@ pub(crate) fn build_shadowsocks_proxy_plan(
             None
         },
         utls_fingerprint: None,
+        reality: None,
         handler,
         chain_parent: None,
         mark: config.global.so_mark_from_dae,

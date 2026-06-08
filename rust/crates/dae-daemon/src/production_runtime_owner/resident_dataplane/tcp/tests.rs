@@ -500,6 +500,7 @@ fn dummy_proxy_plan() -> ResidentProxyPlan {
         allow_insecure: false,
         tls_fragment: None,
         utls_fingerprint: None,
+        reality: None,
         handler: ResidentProxyProtocolPlan::VlessVisionTcpTls { key: [0; 16] },
         chain_parent: None,
         mark: 0,

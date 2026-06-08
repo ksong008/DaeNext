@@ -46,6 +46,16 @@ pub fn reality_sid_decode(input: &str) -> Result<[u8; 8], OutboundError> {
     Ok(out)
 }
 
+pub fn reality_short_id_decode(input: &str) -> Result<Vec<u8>, OutboundError> {
+    let decoded = hex_decode(input)?;
+    if decoded.len() > 8 {
+        return Err(OutboundError::BadSharedTransport(
+            "invalid reality short id".to_owned(),
+        ));
+    }
+    Ok(decoded)
+}
+
 pub fn reality_pbk_decode(input: &str) -> Result<Vec<u8>, OutboundError> {
     let decoded = general_purpose::URL_SAFE_NO_PAD
         .decode(input)

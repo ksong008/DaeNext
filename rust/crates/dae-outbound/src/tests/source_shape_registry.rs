@@ -89,7 +89,7 @@ fn source_shape_registry_link_schemes_are_common_import_carriers() {
 }
 
 #[test]
-fn source_shape_registry_blocks_extension_shapes_with_stable_reason_ids() {
+fn source_shape_registry_keeps_only_xhttp_shapes_fail_closed_with_stable_reason_ids() {
     let taxonomy = capability_reason_taxonomy();
     let rows = source_shape_registry_rows();
     let blocked = rows
@@ -98,15 +98,15 @@ fn source_shape_registry_blocks_extension_shapes_with_stable_reason_ids() {
         .collect::<Vec<_>>();
     let blocked_shape_ids = blocked.iter().map(|row| row.shape_id).collect::<Vec<_>>();
 
-    for expected in [
-        "reality-security-underlay",
-        "shared-reality-security-underlay",
-        "mux-transport-wrapper",
-        "passthrough-udp-transport",
-    ] {
+    for expected in ["xhttp-h3-wrapper", "xhttp-extended-settings-wrapper"] {
         assert!(blocked_shape_ids.contains(&expected), "{expected}");
     }
     for row in blocked {
+        assert_eq!(
+            row.stream_wrapper, "xhttp",
+            "{} is non-xHTTP but still blocked",
+            row.shape_id
+        );
         let blocker = row
             .blocker_id
             .unwrap_or_else(|| panic!("missing blocker for {}", row.shape_id));
@@ -134,6 +134,10 @@ fn source_shape_registry_marks_batch34_rows_with_scoped_live_evidence() {
         "insecure-frame-stream-underlay",
         "full-utls-security-underlay",
         "tls-fragment-security-underlay",
+        "reality-security-underlay",
+        "shared-reality-security-underlay",
+        "mux-transport-wrapper",
+        "passthrough-udp-transport",
         "legacy-cipher-protocol-shape",
     ] {
         let row = rows
@@ -263,8 +267,8 @@ fn source_shape_registry_records_scoped_release_gate_evidence() {
     );
     assert_eq!(evidence.evidence_host, "remote-38");
     assert_eq!(evidence.upstream_host, "jp");
-    assert_eq!(evidence.row_count, 20);
-    assert_eq!(evidence.pass_count, 20);
+    assert_eq!(evidence.row_count, 24);
+    assert_eq!(evidence.pass_count, 24);
     assert!(evidence.all_pass);
     assert!(evidence.large_page_all_pass);
     assert!(evidence.proxy_evidence_all_pass);
@@ -300,6 +304,10 @@ fn source_shape_registry_records_scoped_release_gate_evidence() {
         "insecure-frame-stream-underlay",
         "full-utls-security-underlay",
         "tls-fragment-security-underlay",
+        "reality-security-underlay",
+        "shared-reality-security-underlay",
+        "mux-transport-wrapper",
+        "passthrough-udp-transport",
         "legacy-cipher-protocol-shape",
     ] {
         assert!(evidence.opened_rows.contains(&expected), "{expected}");

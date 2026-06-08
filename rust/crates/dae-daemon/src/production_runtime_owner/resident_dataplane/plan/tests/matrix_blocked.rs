@@ -80,6 +80,13 @@ pub(super) fn resident_dataplane_plan_keeps_deferred_unsupported_shapes_blocked(
             "rustls",
             true,
         ),
+        (
+            "vless_reality",
+            vless_reality_fixture_url(),
+            "reality",
+            "rustls-reality",
+            false,
+        ),
     ];
     for (tag, link, security_underlay, provider, allow_insecure) in admitted_secure_underlays {
         let proxy = build_resident_proxy_plan_for_node(
@@ -97,6 +104,25 @@ pub(super) fn resident_dataplane_plan_keeps_deferred_unsupported_shapes_blocked(
         );
         assert_eq!(proxy.allow_insecure, allow_insecure, "{tag}");
     }
+
+    let mux_proxy = build_resident_proxy_plan_for_node(
+        &config,
+        "proxy".to_owned(),
+        "shared_transport_mux".to_owned(),
+        vless_mux_fixture_url(),
+    )
+    .unwrap();
+    assert!(matches!(
+        mux_proxy.handler,
+        ResidentProxyProtocolPlan::VlessMuxTcpTls { .. }
+    ));
+    let mux_graph = mux_proxy.executable_graph_value();
+    assert_eq!(mux_graph["streamWrapper"], "mux");
+    assert_eq!(mux_graph["packetSemantics"], "multiplexed-stream");
+    assert_eq!(
+        mux_graph["runtimeComponents"]["streamWrapperFactory"]["provider"],
+        "resident-shared-mux-stream"
+    );
 
     let tls_fragment_config = parse_config(
         r#"

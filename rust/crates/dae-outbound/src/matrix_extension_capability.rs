@@ -263,7 +263,7 @@ pub fn expanded_live_matrix_validation_boundary_contract()
     }
 }
 
-const PACKET_SEMANTICS_CAPABILITY_ROWS: [PacketSemanticsCapabilityRow; 6] = [
+const PACKET_SEMANTICS_CAPABILITY_ROWS: [PacketSemanticsCapabilityRow; 8] = [
     admitted_packet_row(
         "tcp-stream-relay",
         "resident-tcp-relay",
@@ -293,6 +293,18 @@ const PACKET_SEMANTICS_CAPABILITY_ROWS: [PacketSemanticsCapabilityRow; 6] = [
         "resident-wrapper-bound-packet-relay",
         "packet-transport",
         "selected-resident-wrapper-graph",
+    ),
+    admitted_packet_row(
+        "multiplexed-stream",
+        "resident-shared-mux-stream",
+        "multiplexed-stream",
+        "selected-resident-wrapper-graph",
+    ),
+    admitted_packet_row(
+        "passthrough-udp",
+        "resident-protocol-udp-passthrough",
+        "passthrough-udp",
+        "selected-resident-graph",
     ),
     admitted_packet_row(
         "option-packet-transport",

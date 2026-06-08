@@ -208,6 +208,7 @@ pub(crate) async fn handle_tcp_connection_async_or_handoff(
             let result = if matches!(
                 selection.proxy.handler,
                 ResidentProxyProtocolPlan::VlessVisionTcpTls { .. }
+                    | ResidentProxyProtocolPlan::VlessMuxTcpTls { .. }
             ) {
                 handle_proxy_tcp_connection_async(
                     &mut inbound,

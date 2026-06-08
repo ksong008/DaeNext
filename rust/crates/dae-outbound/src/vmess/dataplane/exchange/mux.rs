@@ -14,7 +14,7 @@ where
     let request_target = "0.0.0.0:0";
     let metadata = VMessMetadata::parse(network, mux_target)?;
     let options = MuxFrameOptions::new(mux_id, metadata.hostname(), metadata.port(), network);
-    let new_frame = mux_new_frame(&options);
+    let new_frame = mux_new_frame(&options)?;
     let data_frame = mux_data_frame(mux_id, payload)?;
     let end_frame = mux_end_frame(mux_id);
     let packet = build_aead_request_chunks(

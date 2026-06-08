@@ -196,6 +196,10 @@ pub(crate) fn handle_resident_proxy_tcp_connection(
         ResidentProxyProtocolPlan::VlessVisionTcpTls { .. } => Err(
             "resident proxy dispatcher received VLESS handler; use VLESS TLS dispatcher".to_owned(),
         ),
+        ResidentProxyProtocolPlan::VlessMuxTcpTls { .. } => Err(
+            "resident proxy dispatcher received VLESS mux handler; use VLESS TLS dispatcher"
+                .to_owned(),
+        ),
         ResidentProxyProtocolPlan::TrojanTcpTls { .. } => Err(
             "resident proxy dispatcher received generic TLS handler; use TLS dispatcher".to_owned(),
         ),

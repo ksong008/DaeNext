@@ -32,6 +32,9 @@ pub(crate) fn open_resident_tls_client(
         ResidentTlsProvider::FingerprintAwareBoring => {
             open_boring_resident_tls_client(proxy, connected.stream)
         }
+        ResidentTlsProvider::RealityRustls => {
+            open_reality_rustls_resident_tls_client(proxy, connected.stream)
+        }
         ResidentTlsProvider::StandardRustls => {
             open_rustls_resident_tls_client(proxy, connected.stream)
         }
@@ -51,6 +54,9 @@ pub(crate) async fn open_async_resident_tls_client(
     match ResidentTlsProvider::from_proxy(proxy)? {
         ResidentTlsProvider::FingerprintAwareBoring => {
             open_async_boring_resident_tls_client(proxy, tcp).await
+        }
+        ResidentTlsProvider::RealityRustls => {
+            open_async_reality_rustls_resident_tls_client(proxy, tcp).await
         }
         ResidentTlsProvider::StandardRustls => {
             open_async_rustls_resident_tls_client(proxy, tcp).await
@@ -117,6 +123,31 @@ pub(crate) async fn open_async_rustls_resident_tls_client(
     })
 }
 
+pub(crate) async fn open_async_reality_rustls_resident_tls_client(
+    proxy: &ResidentProxyPlan,
+    tcp: TokioTcpStream,
+) -> Result<AsyncVlessTlsClient, String> {
+    let config = rustls_vless_client_config(proxy)?;
+    let server_name = ServerName::try_from(proxy.server_name.clone()).map_err(|err| {
+        format!(
+            "invalid VLESS Reality server name {}: {err}",
+            proxy.server_name
+        )
+    })?;
+    let connector = tokio_rustls::TlsConnector::from(config);
+    let tcp = AsyncResidentTcpStream::new(tcp, proxy.tls_fragment.clone());
+    let tls = time::timeout(
+        RESIDENT_CONNECT_TIMEOUT,
+        connector.connect(server_name, tcp),
+    )
+    .await
+    .map_err(|_| "VLESS Reality tokio-rustls handshake timeout".to_owned())?
+    .map_err(|err| format!("connect VLESS Reality tokio-rustls client: {err}"))?;
+    Ok(AsyncVlessTlsClient {
+        engine: AsyncVlessTlsEngine::RealityRustls { tls },
+    })
+}
+
 pub(crate) async fn open_async_boring_resident_tls_client(
     proxy: &ResidentProxyPlan,
     tcp: TokioTcpStream,
@@ -149,6 +180,31 @@ pub(crate) fn open_rustls_resident_tls_client(
     let tcp = ResidentTcpStream::new(tcp, proxy.tls_fragment.clone());
     let mut client = VlessTlsClient {
         engine: VlessTlsEngine::Rustls {
+            tcp,
+            conn,
+            tls_records: TlsRecordReader::default(),
+        },
+    };
+    drive_tls_io_blocking(&mut client)?;
+    Ok(client)
+}
+
+pub(crate) fn open_reality_rustls_resident_tls_client(
+    proxy: &ResidentProxyPlan,
+    tcp: TcpStream,
+) -> Result<VlessTlsClient, String> {
+    let config = rustls_vless_client_config(proxy)?;
+    let server_name = ServerName::try_from(proxy.server_name.clone()).map_err(|err| {
+        format!(
+            "invalid VLESS Reality server name {}: {err}",
+            proxy.server_name
+        )
+    })?;
+    let conn = ClientConnection::new(config, server_name)
+        .map_err(|err| format!("create VLESS Reality rustls client: {err}"))?;
+    let tcp = ResidentTcpStream::new(tcp, proxy.tls_fragment.clone());
+    let mut client = VlessTlsClient {
+        engine: VlessTlsEngine::RealityRustls {
             tcp,
             conn,
             tls_records: TlsRecordReader::default(),

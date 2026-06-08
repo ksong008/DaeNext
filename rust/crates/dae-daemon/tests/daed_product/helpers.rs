@@ -268,6 +268,7 @@ pub(super) fn vless_fixture_url(_ps: &str, add: &str, port: u16) -> String {
         public_key: String::new(),
         short_id: String::new(),
         spider_x: String::new(),
+        mux: false,
         protocol: "vless".to_owned(),
     }
     .export_url()
@@ -294,6 +295,7 @@ pub(super) fn vless_transport_fixture_url(net: &str, path: &str, flow: &str) -> 
         public_key: String::new(),
         short_id: String::new(),
         spider_x: String::new(),
+        mux: false,
         protocol: "vless".to_owned(),
     }
     .export_url()

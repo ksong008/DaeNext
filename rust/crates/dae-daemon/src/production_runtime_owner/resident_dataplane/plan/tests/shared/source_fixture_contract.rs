@@ -56,6 +56,8 @@ pub(crate) fn resident_admitted_source_fixture_links() -> Vec<String> {
             "",
             "",
         ),
+        vless_reality_fixture_url(),
+        vless_mux_fixture_url(),
         hysteria2_fixture_url("", &primary_host, fixture_port(6)),
         hysteria2_fixture_url_with_pin(
             "",
