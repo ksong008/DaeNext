@@ -22,7 +22,11 @@ pub(crate) use self::adapter_matrix::{
     resident_live_adapter_matrix_contract, resident_live_adapter_matrix_entries,
     resident_live_matrix_evidence_from_env,
 };
-pub(crate) use self::events::{ResidentEventLogSink, set_event_log_sink};
+pub(crate) use self::events::{
+    ResidentEventLogDecision, ResidentEventLogPolicy, ResidentEventLogSink,
+    clear_resident_event_log_file, prune_resident_event_log_file, set_event_log_policy,
+    set_event_log_sink,
+};
 use self::events::{append_event, path_string};
 use self::plan::build_resident_dataplane_plan;
 use self::tcp::{ResidentTcpRouter, probe_resident_proxy_tcp, resident_tcp_accept_loop};

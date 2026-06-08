@@ -269,6 +269,7 @@ pub(crate) fn start_resident_dataplane_workers(
             stop,
             handles,
             event_file,
+            event_lock,
             reload_generation,
             metrics,
             groups: runtime_groups,

@@ -6,6 +6,7 @@ pub fn start_resident_production_runtime(
         "/tmp/dae-daemon-resident-runtime-{}",
         std::process::id()
     ));
+    cleanup_stale_resident_runtime_artifacts(&artifact_dir);
     if artifact_dir.exists() {
         fs::remove_dir_all(&artifact_dir).map_err(|err| {
             format!(
@@ -58,4 +59,29 @@ pub fn start_resident_production_runtime(
         lan_ifaces,
         wan_ifaces,
     )
+}
+
+fn cleanup_stale_resident_runtime_artifacts(current_artifact_dir: &Path) {
+    let Ok(entries) = fs::read_dir("/tmp") else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path == current_artifact_dir {
+            continue;
+        }
+        let Some(name) = path.file_name().and_then(|name| name.to_str()) else {
+            continue;
+        };
+        let Some(pid) = name
+            .strip_prefix("dae-daemon-resident-runtime-")
+            .and_then(|pid| pid.parse::<u32>().ok())
+        else {
+            continue;
+        };
+        if Path::new(&format!("/proc/{pid}")).exists() {
+            continue;
+        }
+        let _ = fs::remove_dir_all(path);
+    }
 }

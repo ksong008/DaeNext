@@ -241,6 +241,28 @@ impl ProductRuntimeManager {
             None => Vec::new(),
         }
     }
+
+    pub(super) fn prune_resident_event_log(&self) -> io::Result<()> {
+        let inner = self
+            .inner
+            .lock()
+            .map_err(|_| io::Error::other("product runtime manager lock poisoned"))?;
+        if let Some(ProductRuntimeInstance::Resident(runtime)) = inner.runtime.as_ref() {
+            runtime.prune_event_log()?;
+        }
+        Ok(())
+    }
+
+    pub(super) fn clear_resident_event_log(&self) -> io::Result<()> {
+        let inner = self
+            .inner
+            .lock()
+            .map_err(|_| io::Error::other("product runtime manager lock poisoned"))?;
+        if let Some(ProductRuntimeInstance::Resident(runtime)) = inner.runtime.as_ref() {
+            runtime.clear_event_log()?;
+        }
+        Ok(())
+    }
 }
 
 pub(super) fn start_product_runtime_instance(
