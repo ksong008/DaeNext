@@ -4,6 +4,7 @@ pub(crate) struct ResidentDataplaneRuntime {
     pub(in crate::production_runtime_owner) stop: Arc<AtomicBool>,
     pub(in crate::production_runtime_owner) handles: Vec<JoinHandle<()>>,
     pub(in crate::production_runtime_owner) event_file: PathBuf,
+    pub(in crate::production_runtime_owner) event_lock: Arc<Mutex<()>>,
     pub(in crate::production_runtime_owner) reload_generation: u64,
     pub(in crate::production_runtime_owner) metrics: Arc<ResidentDataplaneMetrics>,
     pub(in crate::production_runtime_owner) groups: Vec<Arc<plan::ResidentProxyGroupPlan>>,
@@ -21,6 +22,22 @@ impl ResidentDataplaneRuntime {
             "reloadGeneration": self.reload_generation,
         });
         snapshot
+    }
+
+    pub(in crate::production_runtime_owner) fn prune_event_log(&self) -> std::io::Result<()> {
+        let _guard = self
+            .event_lock
+            .lock()
+            .map_err(|_| std::io::Error::other("resident event log lock poisoned"))?;
+        prune_resident_event_log_file(&self.event_file)
+    }
+
+    pub(in crate::production_runtime_owner) fn clear_event_log(&self) -> std::io::Result<()> {
+        let _guard = self
+            .event_lock
+            .lock()
+            .map_err(|_| std::io::Error::other("resident event log lock poisoned"))?;
+        clear_resident_event_log_file(&self.event_file)
     }
 
     pub(in crate::production_runtime_owner) fn node_latency_snapshots(&self) -> Vec<Value> {

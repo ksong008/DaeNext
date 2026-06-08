@@ -7,6 +7,12 @@ pub(in crate::daed_product) fn api_runtime_reload(
     let reload_started_at = Instant::now();
     let body = json_body(request).unwrap_or_else(|_| json!({}));
     let dry = body.get("dry").and_then(Value::as_bool).unwrap_or(false);
+    if !dry
+        && let Err(err) =
+            refresh_log_policy_and_reset_logs(&app.config_dir, &app.state, Some(&app.runtime))
+    {
+        return HttpResponse::json(500, json!({"error": err.to_string()}));
+    }
     let preview = match materialize_runtime(&app.state, Some(&app.config_dir), true) {
         Ok(report) => report,
         Err(err) => {
@@ -98,6 +104,11 @@ pub(in crate::daed_product) fn api_runtime_reload(
             "[Reload] Failed to apply runtime log level",
             fields,
         );
+        return HttpResponse::json(500, json!({"error": err.to_string()}));
+    }
+    if let Err(err) =
+        refresh_log_policy_and_reset_logs(&app.config_dir, &app.state, Some(&app.runtime))
+    {
         return HttpResponse::json(500, json!({"error": err.to_string()}));
     }
     let runtime = match app.runtime.reload(config, "api-runtime-reload") {
@@ -203,6 +214,11 @@ pub(in crate::daed_product) fn api_set_runtime_log_level(
         return HttpResponse::json(400, json!({"error": "invalid log level"}));
     };
     if let Err(err) = set_metadata(&app.state, "runtime_log_level", &level) {
+        return HttpResponse::json(500, json!({"error": err.to_string()}));
+    }
+    if let Err(err) =
+        refresh_log_policy_and_reset_logs(&app.config_dir, &app.state, Some(&app.runtime))
+    {
         return HttpResponse::json(500, json!({"error": err.to_string()}));
     }
     HttpResponse::json(200, json!({"level": level}))

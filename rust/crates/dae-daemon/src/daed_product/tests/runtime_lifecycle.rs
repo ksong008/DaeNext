@@ -14,7 +14,7 @@ pub(crate) fn runtime_reload_dry_preview_writes_unified_reload_logs() {
         runtime: Arc::new(ProductRuntimeManager::new()),
         http_metrics: Arc::new(ProductHttpMetrics::default()),
     };
-    set_metadata(&state, "runtime_log_level", "fatal").unwrap();
+    set_metadata(&state, "runtime_log_level", "info").unwrap();
     let request = HttpRequest {
         method: "POST".to_owned(),
         path: "/api/runtime/reload".to_owned(),
@@ -48,7 +48,7 @@ pub(crate) fn startup_runtime_evidence_logs_report_interfaces_generically() {
     let state = dir.join("daed.db");
     ensure_state_schema(&state).unwrap();
     initialize_log_store(&dir, &state).unwrap();
-    set_metadata(&state, "runtime_log_level", "fatal").unwrap();
+    set_metadata(&state, "runtime_log_level", "info").unwrap();
     let report = json!({
         "residentStartupEvidence": {
             "bpfLoader": {

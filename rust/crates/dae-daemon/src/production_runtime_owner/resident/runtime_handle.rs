@@ -78,6 +78,22 @@ impl ResidentProductionRuntime {
             .unwrap_or_default()
     }
 
+    pub fn prune_event_log(&self) -> std::io::Result<()> {
+        if let Some(dataplane) = self.dataplane.as_ref() {
+            dataplane.prune_event_log()
+        } else {
+            Ok(())
+        }
+    }
+
+    pub fn clear_event_log(&self) -> std::io::Result<()> {
+        if let Some(dataplane) = self.dataplane.as_ref() {
+            dataplane.clear_event_log()
+        } else {
+            Ok(())
+        }
+    }
+
     pub fn cleanup(&mut self) {
         if self.cleaned {
             return;

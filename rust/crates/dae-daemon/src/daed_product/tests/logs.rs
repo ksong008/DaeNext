@@ -149,11 +149,72 @@ pub(crate) fn logs_filter_level_all_case_insensitive_query_and_sse_event_name() 
     };
     let response = api_set_runtime_log_level(&app, &request);
     assert_eq!(response.status, 200);
+    let after_debug_reset = list_logs_value(&dir, &state, Some("all"), None, 500).unwrap();
+    assert_eq!(after_debug_reset["items"].as_array().unwrap().len(), 0);
     append_log_for_config(&dir, &state, "debug", "debug runtime detail").unwrap();
     let debug = list_logs_value(&dir, &state, Some("debug"), None, 500).unwrap();
     assert_eq!(debug["items"].as_array().unwrap().len(), 1);
+    assert_eq!(debug["items"][0]["id"], json!(1));
     assert_eq!(debug["items"][0]["level"], json!("debug"));
     assert_eq!(debug["items"][0]["message"], json!("debug runtime detail"));
+
+    append_log_for_config(&dir, &state, "info", "info before stricter level").unwrap();
+    append_log_for_config(&dir, &state, "error", "error before stricter level").unwrap();
+    let request = HttpRequest {
+        method: "PATCH".to_owned(),
+        path: "/api/runtime/log-level".to_owned(),
+        query: HashMap::new(),
+        headers: HashMap::new(),
+        body: br#"{"level":"error"}"#.to_vec(),
+    };
+    let response = api_set_runtime_log_level(&app, &request);
+    assert_eq!(response.status, 200);
+    let after_level_change = list_logs_value(&dir, &state, Some("all"), None, 500).unwrap();
+    let after_level_items = after_level_change["items"].as_array().unwrap();
+    assert_eq!(after_level_items.len(), 0, "{after_level_change}");
+    append_log_for_config(&dir, &state, "error", "error after stricter level").unwrap();
+    let after_stricter_write = list_logs_value(&dir, &state, Some("all"), None, 500).unwrap();
+    assert_eq!(after_stricter_write["items"].as_array().unwrap().len(), 1);
+    assert_eq!(after_stricter_write["items"][0]["id"], json!(1));
+    assert_eq!(
+        after_stricter_write["items"][0]["message"],
+        json!("error after stricter level")
+    );
+
+    let request = HttpRequest {
+        method: "PATCH".to_owned(),
+        path: "/api/runtime/log-level".to_owned(),
+        query: HashMap::new(),
+        headers: HashMap::new(),
+        body: br#"{"level":"debug"}"#.to_vec(),
+    };
+    let response = api_set_runtime_log_level(&app, &request);
+    assert_eq!(response.status, 200);
+    append_log_for_config(&dir, &state, "info", "info before config level").unwrap();
+    append_log_for_config(&dir, &state, "warn", "warn before config level").unwrap();
+    append_log_for_config(&dir, &state, "error", "error before config level").unwrap();
+    let config_content = test_config_with_node(
+        "config_level_node",
+        "http://127.0.0.1:9/node-under-test#config-level",
+        "egress",
+    )
+    .replace("global {}", "global { log_level: error }");
+    let config = build_runtime_config_from_content(&config_content).unwrap();
+    set_runtime_log_level_from_config(&state, &config).unwrap();
+    refresh_log_policy_and_reset_logs(&dir, &state, Some(&app.runtime)).unwrap();
+    assert_eq!(current_runtime_log_level(&state).unwrap(), "error");
+    let after_config_level = list_logs_value(&dir, &state, Some("all"), None, 500).unwrap();
+    let config_items = after_config_level["items"].as_array().unwrap();
+    assert_eq!(config_items.len(), 0, "{after_config_level}");
+    append_log_for_config(&dir, &state, "info", "filtered after config level").unwrap();
+    append_log_for_config(&dir, &state, "error", "error after config level").unwrap();
+    let after_config_write = list_logs_value(&dir, &state, Some("all"), None, 500).unwrap();
+    assert_eq!(after_config_write["items"].as_array().unwrap().len(), 1);
+    assert_eq!(after_config_write["items"][0]["id"], json!(1));
+    assert_eq!(
+        after_config_write["items"][0]["message"],
+        json!("error after config level")
+    );
 
     let cleared = api_clear_logs(&app);
     assert_eq!(cleared.status, 200);
@@ -164,12 +225,13 @@ pub(crate) fn logs_filter_level_all_case_insensitive_query_and_sse_event_name() 
     append_log_for_config(&dir, &state, "info", "filtered after clear").unwrap();
     append_lifecycle_log_for_config(&dir, &state, "info", "[Startup] lifecycle after clear")
         .unwrap();
+    append_log_for_config(&dir, &state, "fatal", "fatal after clear").unwrap();
     let after_clear = list_logs_value(&dir, &state, Some("all"), None, 500).unwrap();
     assert_eq!(after_clear["items"].as_array().unwrap().len(), 1);
     assert_eq!(after_clear["items"][0]["id"], json!(1));
     assert_eq!(
         after_clear["items"][0]["message"],
-        json!("[Startup] lifecycle after clear")
+        json!("fatal after clear")
     );
     fs::remove_dir_all(dir).unwrap();
 }
@@ -194,6 +256,7 @@ pub(crate) fn log_store_initialization_repairs_existing_jsonl_permissions() {
 
     initialize_log_store(&dir, &state).unwrap();
 
+    assert_eq!(fs::read_to_string(&log_file).unwrap(), "");
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;

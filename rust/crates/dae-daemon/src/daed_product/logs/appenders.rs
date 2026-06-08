@@ -34,7 +34,7 @@ pub(crate) fn append_lifecycle_log_fields_for_config(
     message: &str,
     fields: BTreeMap<String, String>,
 ) -> io::Result<()> {
-    append_log_fields_for_config_with_policy(config_dir, state, level, message, fields, false)
+    append_log_fields_for_config_with_policy(config_dir, state, level, message, fields, true)
 }
 
 pub(crate) fn append_startup_phase_completed_for_config(

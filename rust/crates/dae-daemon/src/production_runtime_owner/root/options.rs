@@ -13,6 +13,10 @@ pub(crate) fn set_resident_event_log_sink(sink: Option<ResidentEventLogSink>) {
     resident_dataplane::set_event_log_sink(sink);
 }
 
+pub(crate) fn set_resident_event_log_policy(policy: Option<ResidentEventLogPolicy>) {
+    resident_dataplane::set_event_log_policy(policy);
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ProductionRuntimeOwnerOptions {
     pub execute: bool,

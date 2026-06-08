@@ -42,7 +42,7 @@ pub(in crate::daed_product) fn log_level_filter_from_request(
 }
 
 pub(in crate::daed_product) fn api_clear_logs(app: &AppState) -> HttpResponse {
-    match clear_log_file(&app.config_dir) {
+    match clear_log_file(&app.config_dir).and_then(|()| app.runtime.clear_resident_event_log()) {
         Ok(()) => HttpResponse::json(200, json!({"cleared": true})),
         Err(err) => HttpResponse::json(500, json!({"error": err.to_string()})),
     }
@@ -80,7 +80,8 @@ pub(in crate::daed_product) fn api_set_log_settings(
             params![max_entries, max_bytes],
         )
         .map_err(sqlite_io_error)?;
-        prune_log_file(&app.config_dir, &conn)?;
+        drop(conn);
+        refresh_log_policy_and_apply_log_limits(&app.config_dir, &app.state, Some(&app.runtime))?;
         Ok(())
     }) {
         Ok(()) => match log_settings_value(&app.state) {
