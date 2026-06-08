@@ -60,6 +60,7 @@ impl ProductRuntimeLifecycleLogMode {
 }
 
 pub(super) const PRODUCT_RUNTIME_FAKE_START_ENV: &str = "DAED_PRODUCT_RUNTIME_FAKE_START";
+const POST_RELOAD_IDLE_RECLAIM_DELAY: Duration = Duration::from_millis(250);
 
 impl ProductRuntimeManager {
     pub(super) fn new() -> Self {
@@ -91,11 +92,16 @@ impl ProductRuntimeManager {
                 let scoped_reclaim = had_previous_runtime.then(|| {
                     allocator_reclaim(AllocatorReclaimReason::ReloadScopedResourcesFlushed)
                 });
+                let idle_reclaim = had_previous_runtime.then(|| {
+                    thread::sleep(POST_RELOAD_IDLE_RECLAIM_DELAY);
+                    allocator_reclaim(AllocatorReclaimReason::IdleAfterReload)
+                });
                 append_runtime_reclaim_report(
                     &mut report,
                     old_owner_reclaim,
                     startup_reclaim,
                     scoped_reclaim,
+                    idle_reclaim,
                 );
                 inner.runtime = Some(runtime);
                 inner.config = Some(config);
@@ -328,6 +334,7 @@ pub(super) fn append_runtime_reclaim_report(
     old_owner_reclaim: Option<Value>,
     startup_reclaim: Value,
     scoped_reclaim: Option<Value>,
+    idle_reclaim: Option<Value>,
 ) {
     if let Value::Object(map) = report {
         map.insert("allocatorProfile".to_owned(), json!(allocator_profile()));
@@ -337,6 +344,7 @@ pub(super) fn append_runtime_reclaim_report(
                 "oldOwnerClosed": old_owner_reclaim,
                 "startupControlBuilt": startup_reclaim,
                 "reloadScopedResourcesFlushed": scoped_reclaim,
+                "idleAfterReload": idle_reclaim,
             }),
         );
     }

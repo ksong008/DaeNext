@@ -168,7 +168,7 @@ pub(crate) async fn handle_tcp_connection_async_or_handoff(
     let selection = router.select(peer_v4, original_dst, &sniff.domain)?;
     match selection {
         TcpSelection::Direct(selection) => {
-            metrics.tcp_opened();
+            let _tcp_guard = ResidentTcpConnectionGuard::new(Arc::clone(&metrics));
             let result = handle_direct_tcp_connection_async(
                 &mut inbound,
                 peer,
@@ -179,7 +179,6 @@ pub(crate) async fn handle_tcp_connection_async_or_handoff(
                 &metrics,
             )
             .await;
-            metrics.tcp_closed();
             result.map(Some)
         }
         TcpSelection::Block(selection) => {
@@ -204,7 +203,7 @@ pub(crate) async fn handle_tcp_connection_async_or_handoff(
             Ok(Some(event))
         }
         TcpSelection::Proxy(selection) => {
-            metrics.tcp_opened();
+            let _tcp_guard = ResidentTcpConnectionGuard::new(Arc::clone(&metrics));
             let result = if matches!(
                 selection.proxy.handler,
                 ResidentProxyProtocolPlan::VlessVisionTcpTls { .. }
@@ -264,7 +263,6 @@ pub(crate) async fn handle_tcp_connection_async_or_handoff(
                 )
                 .await
             };
-            metrics.tcp_closed();
             result.map(Some)
         }
     }
@@ -291,7 +289,7 @@ pub(crate) fn spawn_proxy_tcp_connection_thread(
         .name("dae-tcp-proxy-flow".to_owned())
         .stack_size(flow_stack_bytes)
         .spawn(move || {
-            metrics.tcp_opened();
+            let _tcp_guard = ResidentTcpConnectionGuard::new(Arc::clone(&metrics));
             let result = handle_proxy_tcp_connection(
                 &mut inbound,
                 peer,
@@ -301,7 +299,6 @@ pub(crate) fn spawn_proxy_tcp_connection_thread(
                 &sniff,
                 &metrics,
             );
-            metrics.tcp_closed();
             match result {
                 Ok(mut event) => {
                     append_tcp_execution_fields(&mut event, "per-connection-thread-transitional");
@@ -348,9 +345,8 @@ pub(crate) fn resident_tcp_accept_loop_sync_legacy(
                     .name("dae-tcp-flow".to_owned())
                     .stack_size(flow_stack_bytes)
                     .spawn(move || {
-                        metrics.tcp_opened();
+                        let _tcp_guard = ResidentTcpConnectionGuard::new(Arc::clone(&metrics));
                         let result = handle_tcp_connection(stream, peer, router, stop, &metrics);
-                        metrics.tcp_closed();
                         match result {
                             Ok(event) => append_event(
                                 &connection_event_file,

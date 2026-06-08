@@ -225,6 +225,24 @@ pub(crate) fn runtime_overview_reports_process_metrics_and_stream_retry_delta() 
 }
 
 #[test]
+pub(crate) fn runtime_reclaim_report_includes_post_reload_idle_reclaim() {
+    let mut report = json!({});
+    append_runtime_reclaim_report(
+        &mut report,
+        Some(json!({"reason": "reload_old_owner_closed"})),
+        json!({"reason": "startup_control_built"}),
+        Some(json!({"reason": "reload_scoped_resources_flushed"})),
+        Some(json!({"reason": "idle_after_reload"})),
+    );
+
+    assert_eq!(
+        report["allocatorReclaim"]["idleAfterReload"]["reason"],
+        json!("idle_after_reload")
+    );
+    assert_eq!(report["allocatorProfile"], json!(allocator_profile()));
+}
+
+#[test]
 pub(crate) fn process_status_metrics_splits_rss_and_keeps_heap_compat_alias() {
     let status = "\
 Name:\tdaed\n\
