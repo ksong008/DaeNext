@@ -87,7 +87,7 @@ impl AsyncResidentTcpStream {
     pub(super) fn raw_mut(&mut self) -> &mut TokioTcpStream {
         match self {
             Self::Plain(tcp) => tcp,
-            Self::Fragmenting(stream) => &mut stream.tcp,
+            Self::Fragmenting(stream) => stream.raw_mut(),
         }
     }
 }
@@ -133,26 +133,44 @@ impl AsyncWrite for AsyncResidentTcpStream {
 }
 
 pub(in crate::production_runtime_owner::resident_dataplane) struct AsyncTlsFragmentingTcpStream {
-    tcp: TokioTcpStream,
-    options: TlsFragmentOptions,
-    pending: Vec<u8>,
-    pending_offset: usize,
+    inner: AsyncTlsFragmentingWriter<TokioTcpStream>,
 }
 
 impl AsyncTlsFragmentingTcpStream {
     fn new(tcp: TokioTcpStream, options: TlsFragmentOptions) -> Self {
         Self {
-            tcp,
+            inner: AsyncTlsFragmentingWriter::new(tcp, options),
+        }
+    }
+
+    fn raw_mut(&mut self) -> &mut TokioTcpStream {
+        &mut self.inner.inner
+    }
+}
+
+pub(in crate::production_runtime_owner::resident_dataplane) struct AsyncTlsFragmentingWriter<S> {
+    inner: S,
+    options: TlsFragmentOptions,
+    pending: Vec<u8>,
+    pending_offset: usize,
+}
+
+impl<S> AsyncTlsFragmentingWriter<S> {
+    fn new(inner: S, options: TlsFragmentOptions) -> Self {
+        Self {
+            inner,
             options,
             pending: Vec::new(),
             pending_offset: 0,
         }
     }
+}
 
+impl<S: AsyncWrite + Unpin> AsyncTlsFragmentingWriter<S> {
     fn poll_flush_pending(&mut self, cx: &mut Context<'_>) -> Poll<std::io::Result<()>> {
         while self.pending_offset < self.pending.len() {
             let chunk = &self.pending[self.pending_offset..];
-            match Pin::new(&mut self.tcp).poll_write(cx, chunk) {
+            match Pin::new(&mut self.inner).poll_write(cx, chunk) {
                 Poll::Ready(Ok(0)) => {
                     return Poll::Ready(Err(std::io::Error::new(
                         std::io::ErrorKind::WriteZero,
@@ -172,17 +190,17 @@ impl AsyncTlsFragmentingTcpStream {
     }
 }
 
-impl AsyncRead for AsyncTlsFragmentingTcpStream {
+impl<S: AsyncRead + Unpin> AsyncRead for AsyncTlsFragmentingWriter<S> {
     fn poll_read(
         mut self: Pin<&mut Self>,
         cx: &mut Context<'_>,
         buf: &mut ReadBuf<'_>,
     ) -> Poll<std::io::Result<()>> {
-        Pin::new(&mut self.tcp).poll_read(cx, buf)
+        Pin::new(&mut self.inner).poll_read(cx, buf)
     }
 }
 
-impl AsyncWrite for AsyncTlsFragmentingTcpStream {
+impl<S: AsyncWrite + Unpin> AsyncWrite for AsyncTlsFragmentingWriter<S> {
     fn poll_write(
         mut self: Pin<&mut Self>,
         cx: &mut Context<'_>,
@@ -205,21 +223,52 @@ impl AsyncWrite for AsyncTlsFragmentingTcpStream {
         match self.poll_flush_pending(cx) {
             Poll::Ready(Ok(())) => Poll::Ready(Ok(buf.len())),
             Poll::Ready(Err(err)) => Poll::Ready(Err(err)),
-            Poll::Pending => Poll::Pending,
+            Poll::Pending => Poll::Ready(Ok(buf.len())),
         }
     }
 
     fn poll_flush(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<std::io::Result<()>> {
         match self.poll_flush_pending(cx) {
-            Poll::Ready(Ok(())) => Pin::new(&mut self.tcp).poll_flush(cx),
+            Poll::Ready(Ok(())) => Pin::new(&mut self.inner).poll_flush(cx),
             other => other,
         }
     }
 
     fn poll_shutdown(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<std::io::Result<()>> {
         match self.poll_flush_pending(cx) {
-            Poll::Ready(Ok(())) => Pin::new(&mut self.tcp).poll_shutdown(cx),
+            Poll::Ready(Ok(())) => Pin::new(&mut self.inner).poll_shutdown(cx),
             other => other,
         }
     }
 }
+
+impl AsyncRead for AsyncTlsFragmentingTcpStream {
+    fn poll_read(
+        mut self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+        buf: &mut ReadBuf<'_>,
+    ) -> Poll<std::io::Result<()>> {
+        Pin::new(&mut self.inner).poll_read(cx, buf)
+    }
+}
+
+impl AsyncWrite for AsyncTlsFragmentingTcpStream {
+    fn poll_write(
+        mut self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+        buf: &[u8],
+    ) -> Poll<std::io::Result<usize>> {
+        Pin::new(&mut self.inner).poll_write(cx, buf)
+    }
+
+    fn poll_flush(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<std::io::Result<()>> {
+        Pin::new(&mut self.inner).poll_flush(cx)
+    }
+
+    fn poll_shutdown(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<std::io::Result<()>> {
+        Pin::new(&mut self.inner).poll_shutdown(cx)
+    }
+}
+
+#[cfg(test)]
+mod tests;

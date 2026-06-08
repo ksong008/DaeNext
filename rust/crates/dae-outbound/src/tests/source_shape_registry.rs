@@ -46,6 +46,49 @@ fn source_shape_registry_current_baseline_rows_follow_matrix_contract() {
 }
 
 #[test]
+fn source_shape_registry_link_schemes_are_common_import_carriers() {
+    let allowed_schemes = [
+        "anytls",
+        "chain",
+        "http",
+        "https",
+        "hy2",
+        "hysteria2",
+        "juicity",
+        "ss",
+        "socks",
+        "socks5",
+        "ssr",
+        "trojan",
+        "trojan-go",
+        "tuic",
+        "vless",
+        "vmess",
+    ];
+    let transport_only_labels = ["tls", "utls", "reality", "mux", "passthrough-udp"];
+
+    for row in source_shape_registry_rows() {
+        if row.source_support != "source-supported" {
+            continue;
+        }
+        for scheme in row.link_schemes {
+            assert!(
+                allowed_schemes.contains(scheme),
+                "{} uses non-import link scheme {}",
+                row.shape_id,
+                scheme
+            );
+            assert!(
+                !transport_only_labels.contains(scheme),
+                "{} must describe transport capabilities outside link_schemes: {}",
+                row.shape_id,
+                scheme
+            );
+        }
+    }
+}
+
+#[test]
 fn source_shape_registry_blocks_extension_shapes_with_stable_reason_ids() {
     let taxonomy = capability_reason_taxonomy();
     let rows = source_shape_registry_rows();
@@ -83,7 +126,7 @@ fn source_shape_registry_blocks_extension_shapes_with_stable_reason_ids() {
 }
 
 #[test]
-fn source_shape_registry_admits_supported_security_underlay_rows_without_live_evidence() {
+fn source_shape_registry_marks_batch34_rows_with_scoped_live_evidence() {
     let rows = source_shape_registry_rows();
     for expected in [
         "insecure-secure-endpoint-underlay",
@@ -100,10 +143,12 @@ fn source_shape_registry_admits_supported_security_underlay_rows_without_live_ev
         assert_eq!(row.resident_status, "admitted-baseline", "{expected}");
         assert_eq!(row.blocker_id, None, "{expected}");
         assert_eq!(
-            row.expanded_live_matrix.ledger_state, "pending-live-host-evidence",
+            row.expanded_live_matrix.ledger_state, "scoped-live-host-evidence-ready",
             "{expected}"
         );
-        assert!(!row.release_gate.expanded_source_agrees, "{expected}");
+        assert!(row.release_gate.expanded_source_agrees, "{expected}");
+        assert!(row.release_gate.service_contract_agrees, "{expected}");
+        assert!(row.release_gate.rollback_artifact_ready, "{expected}");
     }
 }
 
@@ -218,8 +263,8 @@ fn source_shape_registry_records_scoped_release_gate_evidence() {
     );
     assert_eq!(evidence.evidence_host, "remote-38");
     assert_eq!(evidence.upstream_host, "jp");
-    assert_eq!(evidence.row_count, 14);
-    assert_eq!(evidence.pass_count, 14);
+    assert_eq!(evidence.row_count, 20);
+    assert_eq!(evidence.pass_count, 20);
     assert!(evidence.all_pass);
     assert!(evidence.large_page_all_pass);
     assert!(evidence.proxy_evidence_all_pass);
@@ -250,6 +295,12 @@ fn source_shape_registry_records_scoped_release_gate_evidence() {
         "tls-websocket-plugin-wrapper",
         "aead-2022-plugin-wrapper",
         "proxy-transport-mode",
+        "insecure-secure-endpoint-underlay",
+        "fingerprint-secure-endpoint-underlay",
+        "insecure-frame-stream-underlay",
+        "full-utls-security-underlay",
+        "tls-fragment-security-underlay",
+        "legacy-cipher-protocol-shape",
     ] {
         assert!(evidence.opened_rows.contains(&expected), "{expected}");
     }
