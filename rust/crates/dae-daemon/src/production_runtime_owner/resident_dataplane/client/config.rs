@@ -14,7 +14,11 @@ pub(super) fn boring_vless_connector(
     }
     let mut builder = SslConnector::builder(SslMethod::tls())
         .map_err(|err| format!("create VLESS BoringSSL connector: {err}"))?;
-    builder.set_verify(SslVerifyMode::PEER);
+    builder.set_verify(if proxy.allow_insecure {
+        SslVerifyMode::NONE
+    } else {
+        SslVerifyMode::PEER
+    });
     builder.set_read_ahead(false);
     if proxy.flow == XTLS_RPRX_VISION {
         builder
@@ -84,14 +88,21 @@ pub(super) fn rustls_vless_client_config(
             return Ok(Arc::clone(config));
         }
     }
-    let mut roots = RootCertStore::empty();
-    roots.extend(webpki_roots::TLS_SERVER_ROOTS.iter().cloned());
     let builder = if proxy.flow == XTLS_RPRX_VISION {
         ClientConfig::builder_with_protocol_versions(&[&rustls::version::TLS13])
     } else {
         ClientConfig::builder()
     };
-    let mut config = builder.with_root_certificates(roots).with_no_client_auth();
+    let mut config = if proxy.allow_insecure {
+        builder
+            .dangerous()
+            .with_custom_certificate_verifier(ResidentInsecureCertVerifier::new())
+            .with_no_client_auth()
+    } else {
+        let mut roots = RootCertStore::empty();
+        roots.extend(webpki_roots::TLS_SERVER_ROOTS.iter().cloned());
+        builder.with_root_certificates(roots).with_no_client_auth()
+    };
     config.alpn_protocols = proxy
         .alpn
         .iter()
@@ -104,6 +115,66 @@ pub(super) fn rustls_vless_client_config(
     Ok(Arc::clone(
         cache.entry(key).or_insert_with(|| Arc::clone(&config)),
     ))
+}
+
+#[derive(Debug)]
+pub(super) struct ResidentInsecureCertVerifier {
+    provider: Arc<rustls::crypto::CryptoProvider>,
+}
+
+impl ResidentInsecureCertVerifier {
+    fn new() -> Arc<Self> {
+        Arc::new(Self {
+            provider: Arc::new(rustls::crypto::aws_lc_rs::default_provider()),
+        })
+    }
+}
+
+impl ServerCertVerifier for ResidentInsecureCertVerifier {
+    fn verify_server_cert(
+        &self,
+        _end_entity: &CertificateDer<'_>,
+        _intermediates: &[CertificateDer<'_>],
+        _server_name: &ServerName<'_>,
+        _ocsp: &[u8],
+        _now: UnixTime,
+    ) -> Result<ServerCertVerified, rustls::Error> {
+        Ok(ServerCertVerified::assertion())
+    }
+
+    fn verify_tls12_signature(
+        &self,
+        message: &[u8],
+        cert: &CertificateDer<'_>,
+        dss: &DigitallySignedStruct,
+    ) -> Result<HandshakeSignatureValid, rustls::Error> {
+        rustls::crypto::verify_tls12_signature(
+            message,
+            cert,
+            dss,
+            &self.provider.signature_verification_algorithms,
+        )
+    }
+
+    fn verify_tls13_signature(
+        &self,
+        message: &[u8],
+        cert: &CertificateDer<'_>,
+        dss: &DigitallySignedStruct,
+    ) -> Result<HandshakeSignatureValid, rustls::Error> {
+        rustls::crypto::verify_tls13_signature(
+            message,
+            cert,
+            dss,
+            &self.provider.signature_verification_algorithms,
+        )
+    }
+
+    fn supported_verify_schemes(&self) -> Vec<SignatureScheme> {
+        self.provider
+            .signature_verification_algorithms
+            .supported_schemes()
+    }
 }
 
 pub(super) fn configure_boring_fingerprint(

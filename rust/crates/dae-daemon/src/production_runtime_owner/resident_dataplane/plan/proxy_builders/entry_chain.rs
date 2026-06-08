@@ -14,6 +14,7 @@ pub(crate) fn build_proxy_plan(
         "socks" | "socks5" => build_socks5_proxy_plan(config, group_name, node_tag, link),
         "http" | "https" => build_http_proxy_plan(config, group_name, node_tag, link),
         "ss" | "shadowsocks" => build_shadowsocks_proxy_plan(config, group_name, node_tag, link),
+        "ssr" | "shadowsocksr" => build_shadowsocksr_proxy_plan(config, group_name, node_tag, link),
         "trojan" | "trojan-go" => build_trojan_proxy_plan(config, group_name, node_tag, link),
         "anytls" => build_anytls_proxy_plan(config, group_name, node_tag, link),
         "vmess" => build_vmess_proxy_plan(config, group_name, node_tag, link),

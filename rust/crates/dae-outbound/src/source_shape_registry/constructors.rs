@@ -141,6 +141,42 @@ pub(super) const fn scoped_evidence_capability_admitted_row(
     }
 }
 
+pub(super) const fn capability_admitted_row(
+    shape_id: &'static str,
+    protocol_family: &'static str,
+    link_schemes: &'static [&'static str],
+    security_underlay: &'static str,
+    stream_wrapper: &'static str,
+    packet_semantics: &'static str,
+    redacted_identity: &'static str,
+    capability: CapabilityLedger,
+) -> SourceShapeRegistryRow {
+    SourceShapeRegistryRow {
+        shape_id,
+        source_support: "source-supported",
+        protocol_family,
+        link_schemes,
+        endpoint: "host-port",
+        security_underlay,
+        stream_wrapper,
+        packet_semantics,
+        chain_shape: "single-graph",
+        policy_surface: "selected-runtime-plus-expanded-ledger",
+        reload_lifecycle: "drop-on-graph-diff-or-runtime-stop",
+        parser_coverage: "covered",
+        resident_status: "admitted-baseline",
+        blocker_id: None,
+        evidence_requirements: &["large-page-live", "benchmark", "rollback"],
+        redacted_identity,
+        state_ledger: ADMITTED_STATE,
+        executor_proof: ADMITTED_EXECUTOR_PROOF,
+        runtime_selection: ADMITTED_RUNTIME_SELECTION,
+        capability,
+        expanded_live_matrix: PENDING_LIVE_LEDGER,
+        release_gate: BASE_RELEASE_GATE,
+    }
+}
+
 pub(super) const fn scoped_evidence_plugin_wrapper_admitted_row(
     shape_id: &'static str,
     protocol_family: &'static str,

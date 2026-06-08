@@ -137,6 +137,24 @@ pub(crate) fn handle_resident_proxy_tcp_connection(
             host,
             path,
         ),
+        ResidentProxyProtocolPlan::ShadowsocksRHttpSimpleTcp {
+            cipher,
+            password,
+            obfs_host,
+            obfs_port,
+        } => handle_shadowsocksr_http_simple_proxy_tcp_connection(
+            inbound,
+            peer,
+            original_dst,
+            &selection,
+            stop,
+            sniff,
+            metrics,
+            cipher,
+            password,
+            obfs_host,
+            *obfs_port,
+        ),
         ResidentProxyProtocolPlan::VmessAeadTcp { id } => {
             if selection.proxy.net == "websocket" {
                 handle_vmess_websocket_proxy_tcp_connection(

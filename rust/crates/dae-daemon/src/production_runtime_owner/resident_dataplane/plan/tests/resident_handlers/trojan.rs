@@ -1,16 +1,19 @@
 use super::*;
 pub(super) fn assert_trojan_handlers(config: &Config) -> Vec<ResidentProxyPlan> {
+    let primary_host = fixture_host(FixtureEndpoint::Primary);
+    let authority_host = fixture_host(FixtureEndpoint::Authority);
+    let primary_port = fixture_port(1);
     let trojan = build_resident_proxy_plan_for_node(
         &config,
         "proxy".to_owned(),
         "trojan_live".to_owned(),
-        trojan_fixture_url("trojan", "203.0.113.10", 28444),
+        trojan_fixture_url("trojan", &primary_host, primary_port),
     )
     .unwrap();
     assert_eq!(trojan.protocol, "trojan");
-    assert_eq!(trojan.server_host, "203.0.113.10");
-    assert_eq!(trojan.server_port, 28444);
-    assert_eq!(trojan.server_name, "office.example");
+    assert_eq!(trojan.server_host, primary_host);
+    assert_eq!(trojan.server_port, primary_port);
+    assert_eq!(trojan.server_name, authority_host);
     assert_eq!(trojan.tls, "tls");
     assert!(matches!(
         trojan.handler,
@@ -21,16 +24,16 @@ pub(super) fn assert_trojan_handlers(config: &Config) -> Vec<ResidentProxyPlan> 
         &config,
         "proxy".to_owned(),
         "trojan_ws_live".to_owned(),
-        trojan_websocket_fixture_url("trojan-ws", "203.0.113.10", 28456),
+        trojan_websocket_fixture_url("trojan-ws", &primary_host, fixture_port(2)),
     )
     .unwrap();
     assert_eq!(trojan_websocket.protocol, "trojan");
-    assert_eq!(trojan_websocket.server_host, "203.0.113.10");
-    assert_eq!(trojan_websocket.server_port, 28456);
-    assert_eq!(trojan_websocket.server_name, "office.example");
+    assert_eq!(trojan_websocket.server_host, primary_host);
+    assert_eq!(trojan_websocket.server_port, fixture_port(2));
+    assert_eq!(trojan_websocket.server_name, authority_host);
     assert_eq!(trojan_websocket.net, "websocket");
-    assert_eq!(trojan_websocket.stream_host, "front.example");
-    assert_eq!(trojan_websocket.stream_path, "/trojan");
+    assert_eq!(trojan_websocket.stream_host, authority_host);
+    assert_eq!(trojan_websocket.stream_path, "/resource");
     assert_eq!(trojan_websocket.tls, "tls");
     assert!(matches!(
         trojan_websocket.handler,
@@ -51,24 +54,24 @@ pub(super) fn assert_trojan_handlers(config: &Config) -> Vec<ResidentProxyPlan> 
     );
     assert_eq!(
         trojan_websocket_graph["streamWrapperEndpoint"]["path"],
-        "/trojan"
+        "/resource"
     );
-    assert!(!trojan_websocket_graph.to_string().contains("front.example"));
+    assert!(!trojan_websocket_graph.to_string().contains(&authority_host));
 
     let trojan_httpupgrade = build_resident_proxy_plan_for_node(
         &config,
         "proxy".to_owned(),
         "trojan_httpupgrade_live".to_owned(),
-        trojan_httpupgrade_fixture_url("trojan-httpupgrade", "203.0.113.10", 28459),
+        trojan_httpupgrade_fixture_url("trojan-httpupgrade", &primary_host, fixture_port(3)),
     )
     .unwrap();
     assert_eq!(trojan_httpupgrade.protocol, "trojan");
-    assert_eq!(trojan_httpupgrade.server_host, "203.0.113.10");
-    assert_eq!(trojan_httpupgrade.server_port, 28459);
-    assert_eq!(trojan_httpupgrade.server_name, "office.example");
+    assert_eq!(trojan_httpupgrade.server_host, primary_host);
+    assert_eq!(trojan_httpupgrade.server_port, fixture_port(3));
+    assert_eq!(trojan_httpupgrade.server_name, authority_host);
     assert_eq!(trojan_httpupgrade.net, "httpupgrade");
-    assert_eq!(trojan_httpupgrade.stream_host, "front.example");
-    assert_eq!(trojan_httpupgrade.stream_path, "/trojan-upgrade");
+    assert_eq!(trojan_httpupgrade.stream_host, authority_host);
+    assert_eq!(trojan_httpupgrade.stream_path, "/resource");
     assert_eq!(trojan_httpupgrade.tls, "tls");
     assert!(matches!(
         trojan_httpupgrade.handler,
@@ -89,28 +92,28 @@ pub(super) fn assert_trojan_handlers(config: &Config) -> Vec<ResidentProxyPlan> 
     );
     assert_eq!(
         trojan_httpupgrade_graph["streamWrapperEndpoint"]["path"],
-        "/trojan-upgrade"
+        "/resource"
     );
     assert!(
         !trojan_httpupgrade_graph
             .to_string()
-            .contains("front.example")
+            .contains(&authority_host)
     );
 
     let trojan_grpc = build_resident_proxy_plan_for_node(
         &config,
         "proxy".to_owned(),
         "trojan_grpc_live".to_owned(),
-        trojan_grpc_fixture_url("trojan-grpc", "203.0.113.10", 28461),
+        trojan_grpc_fixture_url("trojan-grpc", &primary_host, fixture_port(4)),
     )
     .unwrap();
     assert_eq!(trojan_grpc.protocol, "trojan");
-    assert_eq!(trojan_grpc.server_host, "203.0.113.10");
-    assert_eq!(trojan_grpc.server_port, 28461);
-    assert_eq!(trojan_grpc.server_name, "office.example");
+    assert_eq!(trojan_grpc.server_host, primary_host);
+    assert_eq!(trojan_grpc.server_port, fixture_port(4));
+    assert_eq!(trojan_grpc.server_name, authority_host);
     assert_eq!(trojan_grpc.net, "grpc");
-    assert_eq!(trojan_grpc.stream_host, "front.example");
-    assert_eq!(trojan_grpc.stream_path, "TrojanGunService");
+    assert_eq!(trojan_grpc.stream_host, authority_host);
+    assert_eq!(trojan_grpc.stream_path, "ServiceEndpoint");
     assert_eq!(trojan_grpc.alpn, vec!["h2".to_owned()]);
     assert!(matches!(
         trojan_grpc.handler,
@@ -131,9 +134,9 @@ pub(super) fn assert_trojan_handlers(config: &Config) -> Vec<ResidentProxyPlan> 
     );
     assert_eq!(
         trojan_grpc_graph["streamWrapperEndpoint"]["path"],
-        "TrojanGunService"
+        "ServiceEndpoint"
     );
-    assert!(!trojan_grpc_graph.to_string().contains("front.example"));
+    assert!(!trojan_grpc_graph.to_string().contains(&authority_host));
 
     vec![trojan, trojan_websocket, trojan_httpupgrade]
 }

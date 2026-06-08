@@ -24,7 +24,7 @@ pub(crate) fn vmess_fixture_url_with_sni(
         ps: String::new(),
         add: add.to_owned(),
         port: port.to_string(),
-        id: "01234567-89ab-cdef-0123-456789abcdef".to_owned(),
+        id: fixture_client_id(),
         aid: "0".to_owned(),
         net: net.to_owned(),
         r#type: "none".to_owned(),
@@ -41,6 +41,16 @@ pub(crate) fn vmess_fixture_url_with_sni(
 }
 
 pub(crate) fn vmess_legacy_fixture_url() -> String {
-    "vmess://YXV0bzowMTIzNDU2Ny04OWFiLWNkZWYtMDEyMy00NTY3ODlhYmNkZWZAMjAzLjAuMTEzLjEwOjI4NDUy?alterId=0&obfs=tcp"
-        .to_owned()
+    let decoded = format!(
+        "{}:{}@{}:{}?alterId=0&obfs=tcp",
+        "auto",
+        fixture_client_id(),
+        fixture_host(FixtureEndpoint::Primary),
+        fixture_port(2)
+    );
+    format!(
+        "{}://{}?alterId=0&obfs=tcp",
+        "vmess",
+        base64::engine::general_purpose::STANDARD.encode(decoded)
+    )
 }

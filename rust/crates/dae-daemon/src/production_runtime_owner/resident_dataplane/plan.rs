@@ -18,8 +18,12 @@ use dae_outbound::{
     parse_link_chain,
     shadowsocks::ss2022::{cipher_conf, validate_psk_list},
     shadowsocks::{CipherFamily, classify_cipher},
-    shadowsocks::{ShadowsocksLink, cipher_spec},
-    shared_transport::{MeekRoundTripOptions, UtlsFingerprint, ir, resolve_utls_client_hello_id},
+    shadowsocks::{
+        ShadowsocksLink, ShadowsocksRLink, cipher_spec, shadowsocksr_stream_cipher_supported,
+    },
+    shared_transport::{
+        MeekRoundTripOptions, TlsFragmentOptions, UtlsFingerprint, ir, resolve_utls_client_hello_id,
+    },
     trojan::{TrojanLink, TrojanTransportType},
     tuic::TuicLink,
     vless::{VLESSLink, password_to_key},

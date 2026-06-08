@@ -3,7 +3,7 @@ impl TlsRecordReader {
     pub(super) fn read_one(
         &mut self,
         conn: &mut ClientConnection,
-        tcp: &mut TcpStream,
+        tcp: &mut ResidentTcpStream,
     ) -> Result<TlsDriveOutcome, String> {
         let mut progressed = false;
         while self.header.len() < TLS_RECORD_HEADER_LEN {

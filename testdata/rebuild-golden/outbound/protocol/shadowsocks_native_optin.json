@@ -184,7 +184,7 @@
     },
     {
       "cipher": "aes-128-gcm",
-      "export": "ss://YWVzLTEyOC1nY206cGFzc3dvcmQ@example.com:8388?plugin=v2ray-plugin%3Bobfs-host%3Dfront.example#v2ray",
+      "export": "ss://YWVzLTEyOC1nY206cGFzc3dvcmQ@example.com:8388?plugin=v2ray-plugin%3Btls%3Bobfs-host%3Dfront.example#v2ray",
       "input": "ss://YWVzLTEyOC1nY206cGFzc3dvcmQ@example.com:8388?plugin=v2ray-plugin%3Btls%3Bhost%3Dfront.example#v2ray",
       "name": "v2ray-plugin-tls",
       "password": "password",

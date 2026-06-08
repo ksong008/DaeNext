@@ -1,6 +1,7 @@
 use super::*;
 #[test]
 pub(super) fn resident_dataplane_plan_keeps_fixed_from_building_unselected_candidate() {
+    let node_a = socks5_endpoint_fixture_url(FixtureEndpoint::Primary);
     let unsupported = vless_xhttp_parser_fixture_url("packet-up", "h3", "");
     let config_text = r#"
         global {
@@ -10,7 +11,7 @@ pub(super) fn resident_dataplane_plan_keeps_fixed_from_building_unselected_candi
         mptcp: false
         }
         node {
-        node_a: 'socks://127.0.0.1:1080'
+        node_a: '__NODE_A__'
         unsupported: '__UNSUPPORTED_SOURCE__'
         }
         group {
@@ -24,6 +25,7 @@ pub(super) fn resident_dataplane_plan_keeps_fixed_from_building_unselected_candi
         fallback: direct
         }
         "#
+    .replace("__NODE_A__", &node_a)
     .replace("__UNSUPPORTED_SOURCE__", &unsupported);
     let config = parse_config(&config_text);
     let plan = build_resident_dataplane_plan(&config).unwrap();
@@ -36,6 +38,17 @@ pub(super) fn resident_dataplane_plan_keeps_fixed_from_building_unselected_candi
 #[test]
 pub(super) fn resident_dataplane_plan_does_not_fallback_unresolved_name_filter_to_static_ss_node() {
     let candidate = vless_xhttp_parser_fixture_url("packet-up", "h3", "");
+    let shadowsocks_2022 = ShadowsocksLink {
+        name: String::new(),
+        server: fixture_host(FixtureEndpoint::Primary),
+        port: fixture_port(1),
+        password: psk_for_conf(default_shadowsocks_2022_conf()),
+        cipher: default_shadowsocks_2022_conf().cipher.to_owned(),
+        plugin: Sip003::default(),
+        udp: true,
+        protocol: "shadowsocks".to_owned(),
+    }
+    .export_url();
     let config_text = r#"
         global {
         lan_interface: daerust0
@@ -44,7 +57,7 @@ pub(super) fn resident_dataplane_plan_does_not_fallback_unresolved_name_filter_t
         mptcp: false
         }
         node {
-        _022: 'ss://2022-blake3-aes-128-gcm:MTIzNDU2Nzg5MDEyMzQ1Ng==@217.116.171.227:25868'
+        _022: '__SHADOWSOCKS_2022_SOURCE__'
         candidate: '__CANDIDATE_SOURCE__'
         }
         group {
@@ -58,6 +71,7 @@ pub(super) fn resident_dataplane_plan_does_not_fallback_unresolved_name_filter_t
         fallback: direct
         }
         "#
+    .replace("__SHADOWSOCKS_2022_SOURCE__", &shadowsocks_2022)
     .replace("__CANDIDATE_SOURCE__", &candidate);
     let config = parse_config(&config_text);
     let err = build_resident_dataplane_plan(&config).unwrap_err();

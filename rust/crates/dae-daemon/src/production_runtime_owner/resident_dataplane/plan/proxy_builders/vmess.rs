@@ -125,6 +125,11 @@ pub(crate) fn build_vmess_proxy_plan(
         stream_path,
         tls: tls.to_owned(),
         allow_insecure: false,
+        tls_fragment: if tls == "tls" {
+            resident_tls_fragment_plan(config)?
+        } else {
+            None
+        },
         utls_fingerprint,
         handler: ResidentProxyProtocolPlan::VmessAeadTcp { id: parsed.id },
         chain_parent: None,

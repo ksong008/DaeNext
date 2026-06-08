@@ -1,8 +1,8 @@
 use super::*;
 #[test]
 pub(super) fn resident_dataplane_plan_selects_vless_group_node() {
-    let config = parse_config(
-        r#"
+    let source = vless_vision_fixture_url("");
+    let config_source = r#"
         global {
         lan_interface: daerust0
         allow_insecure: false
@@ -10,7 +10,7 @@ pub(super) fn resident_dataplane_plan_selects_vless_group_node() {
         mptcp: false
         }
         node {
-        vless_live: 'vless://01234567-89ab-cdef-0123-456789abcdef@156.246.90.2:443?security=tls&type=tcp&sni=office.example&flow=xtls-rprx-vision&alpn=h2,http/1.1'
+        vless_live: '__SOURCE__'
         }
         group {
         proxy {
@@ -23,17 +23,18 @@ pub(super) fn resident_dataplane_plan_selects_vless_group_node() {
         l4proto(tcp) && dport(443) -> proxy
         fallback: direct
         }
-        "#,
-    );
+        "#
+    .replace("__SOURCE__", &source);
+    let config = parse_config(&config_source);
     let plan = build_resident_dataplane_plan(&config).unwrap();
     let proxy = plan.default_proxy_snapshot().unwrap();
     assert!(plan.enabled);
     assert_eq!(plan.proxies.len(), 1);
     assert_eq!(proxy.group_name, "proxy");
     assert_eq!(proxy.node_tag, "vless_live");
-    assert_eq!(proxy.server_host, "156.246.90.2");
-    assert_eq!(proxy.server_port, 443);
-    assert_eq!(proxy.server_name, "office.example");
+    assert_eq!(proxy.server_host, fixture_host(FixtureEndpoint::Primary));
+    assert_eq!(proxy.server_port, fixture_authority_port());
+    assert_eq!(proxy.server_name, fixture_host(FixtureEndpoint::Authority));
     assert_eq!(proxy.flow, "xtls-rprx-vision");
     assert_eq!(proxy.alpn, ["h2", "http/1.1"]);
     assert_eq!(proxy.mark, 1234);
@@ -41,14 +42,15 @@ pub(super) fn resident_dataplane_plan_selects_vless_group_node() {
 
 #[test]
 pub(super) fn group_node_selection_keeps_fixed_policy_order() {
-    let config = parse_config(
-        r#"
+    let node_a = socks5_endpoint_fixture_url(FixtureEndpoint::Primary);
+    let node_b = socks5_endpoint_fixture_url(FixtureEndpoint::Secondary);
+    let config_text = r#"
         global {
         lan_interface: daerust0
         }
         node {
-        node_a: 'socks://127.0.0.1:1080'
-        node_b: 'socks://127.0.0.1:1081'
+        node_a: '__NODE_A__'
+        node_b: '__NODE_B__'
         }
         group {
         proxy {
@@ -60,17 +62,19 @@ pub(super) fn group_node_selection_keeps_fixed_policy_order() {
         l4proto(tcp) -> proxy
         fallback: direct
         }
-        "#,
-    );
+        "#
+    .replace("__NODE_A__", &node_a)
+    .replace("__NODE_B__", &node_b);
+    let config = parse_config(&config_text);
     let links = tagged_node_links(&config);
     let selected = select_group_nodes(&config.group[0], &links).unwrap();
     match selected {
         GroupNodeSelection::Selected(nodes) => {
             assert_eq!(nodes.len(), 2);
             assert_eq!(nodes[0].tag, "node_a");
-            assert_eq!(nodes[0].link, "socks://127.0.0.1:1080");
+            assert_eq!(nodes[0].link, node_a);
             assert_eq!(nodes[1].tag, "node_b");
-            assert_eq!(nodes[1].link, "socks://127.0.0.1:1081");
+            assert_eq!(nodes[1].link, node_b);
         }
         GroupNodeSelection::NoCandidate { .. } => panic!("expected selected node"),
     }
@@ -82,15 +86,17 @@ pub(super) fn group_node_selection_keeps_fixed_policy_order() {
 
 #[test]
 pub(super) fn group_node_selection_supports_generic_name_filters() {
-    let config = parse_config(
-        r#"
+    let node_a = socks5_endpoint_fixture_url(FixtureEndpoint::Primary);
+    let node_b = socks5_endpoint_fixture_url(FixtureEndpoint::Secondary);
+    let node_c = socks5_endpoint_fixture_url(FixtureEndpoint::Tertiary);
+    let config_text = r#"
         global {
         lan_interface: daerust0
         }
         node {
-        node_a: 'socks://127.0.0.1:1080'
-        node_b: 'socks://127.0.0.1:1081'
-        node_c: 'socks://127.0.0.1:1082'
+        node_a: '__NODE_A__'
+        node_b: '__NODE_B__'
+        node_c: '__NODE_C__'
         }
         group {
         proxy {
@@ -102,8 +108,11 @@ pub(super) fn group_node_selection_supports_generic_name_filters() {
         l4proto(tcp) -> proxy
         fallback: direct
         }
-        "#,
-    );
+        "#
+    .replace("__NODE_A__", &node_a)
+    .replace("__NODE_B__", &node_b)
+    .replace("__NODE_C__", &node_c);
+    let config = parse_config(&config_text);
     let links = tagged_node_links(&config);
     let selected = select_group_nodes(&config.group[0], &links).unwrap();
     match selected {
@@ -117,8 +126,9 @@ pub(super) fn group_node_selection_supports_generic_name_filters() {
 
 #[test]
 pub(super) fn resident_dataplane_plan_keeps_non_fixed_group_candidates() {
-    let config = parse_config(
-        r#"
+    let node_a = socks5_endpoint_fixture_url(FixtureEndpoint::Primary);
+    let node_b = socks5_endpoint_fixture_url(FixtureEndpoint::Secondary);
+    let config_text = r#"
         global {
         lan_interface: daerust0
         allow_insecure: false
@@ -126,8 +136,8 @@ pub(super) fn resident_dataplane_plan_keeps_non_fixed_group_candidates() {
         mptcp: false
         }
         node {
-        node_a: 'socks://127.0.0.1:1080'
-        node_b: 'socks://127.0.0.1:1081'
+        node_a: '__NODE_A__'
+        node_b: '__NODE_B__'
         }
         group {
         proxy {
@@ -139,8 +149,10 @@ pub(super) fn resident_dataplane_plan_keeps_non_fixed_group_candidates() {
         l4proto(tcp) -> proxy
         fallback: direct
         }
-        "#,
-    );
+        "#
+    .replace("__NODE_A__", &node_a)
+    .replace("__NODE_B__", &node_b);
+    let config = parse_config(&config_text);
     let plan = build_resident_dataplane_plan(&config).unwrap();
     let group = plan.default_proxy_group().unwrap();
     assert_eq!(group.group_policy, ResidentGroupPolicyPlan::Random);
@@ -153,8 +165,9 @@ pub(super) fn resident_dataplane_plan_keeps_non_fixed_group_candidates() {
 
 #[test]
 pub(super) fn resident_dataplane_plan_wires_min_policy_latency_state() {
-    let config = parse_config(
-        r#"
+    let node_a = socks5_endpoint_fixture_url(FixtureEndpoint::Primary);
+    let node_b = socks5_endpoint_fixture_url(FixtureEndpoint::Secondary);
+    let config_text = r#"
         global {
         lan_interface: daerust0
         allow_insecure: false
@@ -162,8 +175,8 @@ pub(super) fn resident_dataplane_plan_wires_min_policy_latency_state() {
         mptcp: false
         }
         node {
-        node_a: 'socks://127.0.0.1:1080'
-        node_b: 'socks://127.0.0.1:1081'
+        node_a: '__NODE_A__'
+        node_b: '__NODE_B__'
         }
         group {
         proxy {
@@ -175,8 +188,10 @@ pub(super) fn resident_dataplane_plan_wires_min_policy_latency_state() {
         l4proto(tcp) -> proxy
         fallback: direct
         }
-        "#,
-    );
+        "#
+    .replace("__NODE_A__", &node_a)
+    .replace("__NODE_B__", &node_b);
+    let config = parse_config(&config_text);
     let plan = build_resident_dataplane_plan(&config).unwrap();
     let group = plan.default_proxy_group().unwrap();
     assert_eq!(

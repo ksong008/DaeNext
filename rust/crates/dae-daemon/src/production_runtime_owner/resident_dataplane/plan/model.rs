@@ -89,6 +89,12 @@ pub(crate) enum ResidentProxyProtocolPlan {
         host: String,
         path: String,
     },
+    ShadowsocksRHttpSimpleTcp {
+        cipher: String,
+        password: String,
+        obfs_host: String,
+        obfs_port: u16,
+    },
     TrojanTcpTls {
         password: String,
     },
@@ -142,6 +148,8 @@ pub(crate) struct ResidentProxyPlan {
     pub(in crate::production_runtime_owner::resident_dataplane) stream_path: String,
     pub(in crate::production_runtime_owner::resident_dataplane) tls: String,
     pub(in crate::production_runtime_owner::resident_dataplane) allow_insecure: bool,
+    pub(in crate::production_runtime_owner::resident_dataplane) tls_fragment:
+        Option<TlsFragmentOptions>,
     pub(in crate::production_runtime_owner::resident_dataplane) utls_fingerprint:
         Option<ResidentUtlsFingerprintPlan>,
     pub(in crate::production_runtime_owner::resident_dataplane) handler: ResidentProxyProtocolPlan,

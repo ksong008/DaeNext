@@ -187,13 +187,24 @@ pub(crate) fn assert_source_stream_packet_and_transport_contract(report: &Value)
             .iter()
             .any(|shape| shape.as_str().unwrap() == "reality-security-underlay")
     );
-    assert!(
-        report["excluded_stream_wrapper_source_matrix_typed_report"]["blocked_protocol_variant_ids"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .any(|shape| shape.as_str().unwrap() == "insecure-secure-endpoint-underlay")
-    );
+    for admitted_underlay in [
+        "insecure-secure-endpoint-underlay",
+        "fingerprint-secure-endpoint-underlay",
+        "insecure-frame-stream-underlay",
+        "full-utls-security-underlay",
+        "tls-fragment-security-underlay",
+        "legacy-cipher-protocol-shape",
+    ] {
+        assert!(
+            !report["excluded_stream_wrapper_source_matrix_typed_report"]
+                ["blocked_protocol_variant_ids"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|shape| shape.as_str().unwrap() == admitted_underlay),
+            "{admitted_underlay}"
+        );
+    }
     assert!(
         report["excluded_stream_wrapper_source_matrix_typed_report"]["protocol_variant_rows"]
             .as_array()

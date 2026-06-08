@@ -18,6 +18,9 @@ pub(super) fn resident_udp_handler_name(handler: &ResidentProxyProtocolPlan) -> 
         ResidentProxyProtocolPlan::Shadowsocks2022SimpleObfsHttpTcp { .. } => {
             "shadowsocks-2022-simple-obfs-http-tcp"
         }
+        ResidentProxyProtocolPlan::ShadowsocksRHttpSimpleTcp { .. } => {
+            "shadowsocksr-http-simple-tcp"
+        }
         ResidentProxyProtocolPlan::TrojanTcpTls { .. } => "trojan-tcp-tls",
         ResidentProxyProtocolPlan::TrojanInnerShadowsocksTcpTls { .. } => {
             "trojan-inner-shadowsocks-tcp-tls"
@@ -59,9 +62,8 @@ pub(super) fn udp_packet_semantics(handler: &ResidentProxyProtocolPlan) -> &'sta
         ResidentProxyProtocolPlan::ShadowsocksSimpleObfsHttpTcp { .. }
         | ResidentProxyProtocolPlan::ShadowsocksSimpleObfsTlsTcp { .. }
         | ResidentProxyProtocolPlan::ShadowsocksV2rayPluginTlsWsTcp { .. }
-        | ResidentProxyProtocolPlan::Shadowsocks2022SimpleObfsHttpTcp { .. } => {
-            "plugin-wrapper-stream"
-        }
+        | ResidentProxyProtocolPlan::Shadowsocks2022SimpleObfsHttpTcp { .. }
+        | ResidentProxyProtocolPlan::ShadowsocksRHttpSimpleTcp { .. } => "plugin-wrapper-stream",
         ResidentProxyProtocolPlan::TrojanTcpTls { .. }
         | ResidentProxyProtocolPlan::TrojanInnerShadowsocksTcpTls { .. }
         | ResidentProxyProtocolPlan::AnyTlsTcpTls { .. }

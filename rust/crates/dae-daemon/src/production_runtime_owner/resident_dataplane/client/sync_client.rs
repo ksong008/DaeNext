@@ -93,7 +93,7 @@ impl VlessTlsClient {
         &mut self,
     ) -> &mut TcpStream {
         match &mut self.engine {
-            VlessTlsEngine::Rustls { tcp, .. } => tcp,
+            VlessTlsEngine::Rustls { tcp, .. } => tcp.raw_mut(),
             VlessTlsEngine::Boring { tls, .. } => tls.get_mut(),
         }
     }

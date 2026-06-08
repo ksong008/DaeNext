@@ -4,11 +4,37 @@ pub(crate) fn assert_protocol_matrix_source_uses_generic_semantics(source: &str)
     let forbidden_terms = [
         ["matrix", "-"].concat(),
         ["invalid", "-", "test", "-", "format"].concat(),
+        ["203", ".0.113"].concat(),
+        ["198", ".51.100"].concat(),
+        ["156", ".246"].concat(),
+        ["127", ".0.0.1"].concat(),
+        ["8", ".8.8"].concat(),
+        ["proxy", ".example"].concat(),
+        ["relay", ".example"].concat(),
+        ["front", ".example"].concat(),
+        ["office", ".example"].concat(),
+        ["check", ".example"].concat(),
+        ["global", ".example"].concat(),
+        ["group", ".example"].concat(),
+        ["dns", ".global"].concat(),
+        ["dns", ".group"].concat(),
+        ["example", ".com"].concat(),
+        ["example", ".net"].concat(),
+        ["password", "@"].concat(),
+        [":", "password", "@"].concat(),
+        ["01234567", "-89ab"].concat(),
+        ["mti", "zndu2"].concat(),
     ];
     for forbidden in forbidden_terms {
         assert!(
             !lower.contains(&forbidden),
             "protocol matrix source fixtures must use protocol-generic semantics, found {forbidden}"
+        );
+    }
+    for forbidden in [["GENERIC", "_"].concat()] {
+        assert!(
+            !source.contains(&forbidden),
+            "protocol matrix source fixtures must not use hardcoded generic constants, found {forbidden}"
         );
     }
     for link in url_like_source_literals(source) {
@@ -44,6 +70,7 @@ const PROTOCOL_MATRIX_SOURCE_PATHS: &[&str] = &[
     "src/production_runtime_owner/resident_dataplane/plan/tests/matrix_blocked.rs",
     "src/production_runtime_owner/resident_dataplane/plan/tests/fingerprint.rs",
     "src/production_runtime_owner/resident_dataplane/plan/tests/shared/imports.rs",
+    "src/production_runtime_owner/resident_dataplane/plan/tests/shared/generic_fixtures.rs",
     "src/production_runtime_owner/resident_dataplane/plan/tests/shared/semantic_assertions.rs",
     "src/production_runtime_owner/resident_dataplane/plan/tests/shared/config.rs",
     "src/production_runtime_owner/resident_dataplane/plan/tests/shared/shadowsocks_fixtures.rs",
@@ -52,6 +79,10 @@ const PROTOCOL_MATRIX_SOURCE_PATHS: &[&str] = &[
     "src/production_runtime_owner/resident_dataplane/plan/tests/shared/quic_fixtures.rs",
     "src/production_runtime_owner/resident_dataplane/plan/tests/shared/vmess_fixtures.rs",
     "src/production_runtime_owner/resident_dataplane/plan/tests/shared/source_fixture_contract.rs",
+    "src/production_runtime_owner/resident_dataplane/plan/tests/group_selection/selection.rs",
+    "src/production_runtime_owner/resident_dataplane/plan/tests/group_selection/probes.rs",
+    "src/production_runtime_owner/resident_dataplane/plan/tests/group_selection/latency.rs",
+    "src/production_runtime_owner/resident_dataplane/plan/tests/group_selection/fail_closed.rs",
 ];
 
 fn read_daemon_source(path: &str) -> String {
@@ -96,6 +127,26 @@ pub(crate) fn assert_resident_source_fixture_uses_generic_semantics(link: &str) 
     let forbidden_terms = [
         ["matrix", "-"].concat(),
         ["invalid", "-", "test", "-", "format"].concat(),
+        ["203", ".0.113"].concat(),
+        ["198", ".51.100"].concat(),
+        ["156", ".246"].concat(),
+        ["127", ".0.0.1"].concat(),
+        ["8", ".8.8"].concat(),
+        ["proxy", ".example"].concat(),
+        ["relay", ".example"].concat(),
+        ["front", ".example"].concat(),
+        ["office", ".example"].concat(),
+        ["check", ".example"].concat(),
+        ["global", ".example"].concat(),
+        ["group", ".example"].concat(),
+        ["dns", ".global"].concat(),
+        ["dns", ".group"].concat(),
+        ["example", ".com"].concat(),
+        ["example", ".net"].concat(),
+        ["password", "@"].concat(),
+        [":", "password", "@"].concat(),
+        ["01234567", "-89ab"].concat(),
+        ["mti", "zndu2"].concat(),
     ];
     for forbidden in forbidden_terms {
         assert!(

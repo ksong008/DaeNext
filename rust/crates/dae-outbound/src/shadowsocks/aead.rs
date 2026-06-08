@@ -24,6 +24,7 @@ pub const MAX_CHUNK_LEN: usize = 0x3fff;
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct AeadCipherSpec {
     pub cipher: &'static str,
+    pub aliases: &'static [&'static str],
     pub key_len: usize,
     pub salt_len: usize,
 }
@@ -41,6 +42,31 @@ pub struct ShadowsocksAeadTcpExchangeReport {
     pub default_go_path: bool,
 }
 
+pub const AEAD_CIPHER_SPECS: &[AeadCipherSpec] = &[
+    AeadCipherSpec {
+        cipher: "aes-128-gcm",
+        aliases: &[],
+        key_len: 16,
+        salt_len: 16,
+    },
+    AeadCipherSpec {
+        cipher: "aes-256-gcm",
+        aliases: &[],
+        key_len: 32,
+        salt_len: 32,
+    },
+    AeadCipherSpec {
+        cipher: "chacha20-ietf-poly1305",
+        aliases: &["chacha20-poly1305"],
+        key_len: 32,
+        salt_len: 32,
+    },
+];
+
+pub fn aead_cipher_specs() -> &'static [AeadCipherSpec] {
+    AEAD_CIPHER_SPECS
+}
+
 pub fn cipher_spec(cipher: &str) -> Result<AeadCipherSpec, OutboundError> {
     let info = classify_cipher(cipher)?;
     if info.family != CipherFamily::Aead {
@@ -49,30 +75,13 @@ pub fn cipher_spec(cipher: &str) -> Result<AeadCipherSpec, OutboundError> {
             info.cipher
         )));
     }
-    let spec = match info.cipher.as_str() {
-        "aes-128-gcm" => AeadCipherSpec {
-            cipher: "aes-128-gcm",
-            key_len: 16,
-            salt_len: 16,
-        },
-        "aes-256-gcm" => AeadCipherSpec {
-            cipher: "aes-256-gcm",
-            key_len: 32,
-            salt_len: 32,
-        },
-        "chacha20-poly1305" | "chacha20-ietf-poly1305" => AeadCipherSpec {
-            cipher: "chacha20-ietf-poly1305",
-            key_len: 32,
-            salt_len: 32,
-        },
-        _ => {
-            return Err(OutboundError::BadShadowsocks(format!(
-                "unsupported AEAD cipher: {}",
-                info.cipher
-            )));
-        }
-    };
-    Ok(spec)
+    aead_cipher_specs()
+        .iter()
+        .copied()
+        .find(|spec| spec.cipher == info.cipher || spec.aliases.contains(&info.cipher.as_str()))
+        .ok_or_else(|| {
+            OutboundError::BadShadowsocks(format!("unsupported AEAD cipher: {}", info.cipher))
+        })
 }
 
 pub fn tcp_exchange(
@@ -459,7 +468,8 @@ enum AeadCipher {
 
 impl AeadCipher {
     fn new(cipher: &str, key: &[u8]) -> Result<Self, OutboundError> {
-        match cipher {
+        let spec = cipher_spec(cipher)?;
+        match spec.cipher {
             "aes-128-gcm" => Ok(Self::Aes128(Box::new(
                 Aes128Gcm::new_from_slice(key)
                     .map_err(|_| OutboundError::BadShadowsocks("bad aes-128 key".to_owned()))?,
@@ -472,8 +482,8 @@ impl AeadCipher {
                 ChaCha20Poly1305::new_from_slice(key)
                     .map_err(|_| OutboundError::BadShadowsocks("bad chacha key".to_owned()))?,
             ))),
-            _ => Err(OutboundError::BadShadowsocks(format!(
-                "unsupported AEAD cipher: {cipher}"
+            other => Err(OutboundError::BadShadowsocks(format!(
+                "unsupported AEAD cipher: {other}"
             ))),
         }
     }

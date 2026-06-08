@@ -6,7 +6,7 @@ pub(super) fn daed_run_serves_minimal_api_and_static_webui() {
     fs::create_dir_all(&web).unwrap();
     fs::write(web.join("index.html"), "<!doctype html><title>daed</title>").unwrap();
     let port = free_port();
-    let listen = format!("127.0.0.1:{port}");
+    let listen = loopback_listen_addr(port);
     let mut child = Command::new(binary())
         .args(["run", "-c"])
         .arg(&temp)
@@ -77,7 +77,7 @@ pub(super) fn daed_run_serves_c10_resource_runtime_log_latency_and_bundle_surfac
     fs::create_dir_all(&web).unwrap();
     fs::write(web.join("index.html"), "<!doctype html><title>daed</title>").unwrap();
     let port = free_port();
-    let listen = format!("127.0.0.1:{port}");
+    let listen = loopback_listen_addr(port);
     let mut child = Command::new(binary())
         .args(["run", "-c"])
         .arg(&temp)
@@ -102,10 +102,15 @@ pub(super) fn daed_run_serves_c10_resource_runtime_log_latency_and_bundle_surfac
     let token = json_body(&create)["token"].as_str().unwrap().to_owned();
 
     let (probe_port, probe_handle) = spawn_tcp_probe_server();
-    let (subscription_port, subscription_handle) = spawn_text_server(&format!(
-        "http://127.0.0.1:{probe_port}/selected#selected-sub-node\n\
-         http://127.0.0.1:{probe_port}/ignored#ignored-sub-node\n"
-    ));
+    let selected_subscription_node =
+        loopback_http_fixture_url(probe_port, "/selected", Some("selected-sub-node"));
+    let ignored_subscription_node =
+        loopback_http_fixture_url(probe_port, "/ignored", Some("ignored-sub-node"));
+    let subscription_source = format!(
+        "{selected_subscription_node}\n\
+         {ignored_subscription_node}\n"
+    );
+    let (subscription_port, subscription_handle) = spawn_text_server(&subscription_source);
 
     let config = http_request(
         port,
@@ -165,7 +170,8 @@ pub(super) fn daed_run_serves_c10_resource_runtime_log_latency_and_bundle_surfac
         "POST",
         "/api/nodes",
         Some(&format!(
-            r#"{{"args":[{{"link":"http://127.0.0.1:{probe_port}/node#n1","tag":"n1"}}]}}"#
+            r#"{{"args":[{{"link":"{}","tag":"n1"}}]}}"#,
+            loopback_http_fixture_url(probe_port, "/node", Some("n1"))
         )),
         Some(&token),
     );
@@ -186,7 +192,8 @@ pub(super) fn daed_run_serves_c10_resource_runtime_log_latency_and_bundle_surfac
         "POST",
         "/api/subscriptions",
         Some(&format!(
-            r#"{{"link":"http://127.0.0.1:{subscription_port}/sub","tag":"sub1"}}"#
+            r#"{{"link":"{}","tag":"sub1"}}"#,
+            loopback_http_fixture_url(subscription_port, "/sub", None)
         )),
         Some(&token),
     );

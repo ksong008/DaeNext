@@ -1,16 +1,18 @@
 use super::*;
 pub(super) fn assert_vmess_vless_handlers(config: &Config) -> Vec<ResidentProxyPlan> {
+    let primary_host = fixture_host(FixtureEndpoint::Primary);
+    let authority_host = fixture_host(FixtureEndpoint::Authority);
     let anytls = build_resident_proxy_plan_for_node(
         &config,
         "proxy".to_owned(),
         "anytls_live".to_owned(),
-        "anytls://password@secure-stream.example.net:443?sni=secure-stream.example.net".to_owned(),
+        anytls_fixture_url(&primary_host, fixture_port(1)),
     )
     .unwrap();
     assert_eq!(anytls.protocol, "anytls");
-    assert_eq!(anytls.server_host, "secure-stream.example.net");
-    assert_eq!(anytls.server_port, 443);
-    assert_eq!(anytls.server_name, "secure-stream.example.net");
+    assert_eq!(anytls.server_host, primary_host);
+    assert_eq!(anytls.server_port, fixture_port(1));
+    assert_eq!(anytls.server_name, primary_host);
     assert_eq!(anytls.tls, "tls");
     assert!(matches!(
         anytls.handler,
@@ -21,12 +23,12 @@ pub(super) fn assert_vmess_vless_handlers(config: &Config) -> Vec<ResidentProxyP
         &config,
         "proxy".to_owned(),
         "vmess_live".to_owned(),
-        vmess_fixture_url("vmess", "203.0.113.10", 28452, "tcp", "", "", ""),
+        vmess_fixture_url("vmess", &primary_host, fixture_port(2), "tcp", "", "", ""),
     )
     .unwrap();
     assert_eq!(vmess.protocol, "vmess");
-    assert_eq!(vmess.server_host, "203.0.113.10");
-    assert_eq!(vmess.server_port, 28452);
+    assert_eq!(vmess.server_host, primary_host);
+    assert_eq!(vmess.server_port, fixture_port(2));
     assert_eq!(vmess.tls, "none");
     assert!(matches!(
         vmess.handler,
@@ -39,10 +41,10 @@ pub(super) fn assert_vmess_vless_handlers(config: &Config) -> Vec<ResidentProxyP
         "vmess_ws_live".to_owned(),
         vmess_fixture_url(
             "vmess-ws",
-            "203.0.113.10",
-            28454,
+            &primary_host,
+            fixture_port(3),
             "ws",
-            "front.example",
+            &authority_host,
             "/vmess",
             "",
         ),
@@ -50,7 +52,7 @@ pub(super) fn assert_vmess_vless_handlers(config: &Config) -> Vec<ResidentProxyP
     .unwrap();
     assert_eq!(vmess_websocket.protocol, "vmess");
     assert_eq!(vmess_websocket.net, "websocket");
-    assert_eq!(vmess_websocket.stream_host, "front.example");
+    assert_eq!(vmess_websocket.stream_host, authority_host);
     assert_eq!(vmess_websocket.stream_path, "/vmess");
     assert_eq!(vmess_websocket.tls, "none");
     assert!(matches!(
@@ -70,27 +72,27 @@ pub(super) fn assert_vmess_vless_handlers(config: &Config) -> Vec<ResidentProxyP
             .unwrap()
             .starts_with("sha256:")
     );
-    assert!(!vmess_websocket_graph.to_string().contains("front.example"));
+    assert!(!vmess_websocket_graph.to_string().contains(&authority_host));
 
     let vmess_websocket_tls = build_resident_proxy_plan_for_node(
         &config,
         "proxy".to_owned(),
         "vmess_ws_tls_live".to_owned(),
         vmess_fixture_url_with_sni(
-            "203.0.113.10",
-            28454,
+            &primary_host,
+            fixture_port(3),
             "ws",
-            "front.example",
+            &authority_host,
             "/vmess",
             "tls",
-            "office.example",
+            &authority_host,
         ),
     )
     .unwrap();
     assert_eq!(vmess_websocket_tls.protocol, "vmess");
     assert_eq!(vmess_websocket_tls.net, "websocket");
-    assert_eq!(vmess_websocket_tls.server_name, "office.example");
-    assert_eq!(vmess_websocket_tls.stream_host, "front.example");
+    assert_eq!(vmess_websocket_tls.server_name, authority_host);
+    assert_eq!(vmess_websocket_tls.stream_host, authority_host);
     assert_eq!(vmess_websocket_tls.stream_path, "/vmess");
     assert_eq!(vmess_websocket_tls.tls, "tls");
     assert!(matches!(
@@ -118,10 +120,10 @@ pub(super) fn assert_vmess_vless_handlers(config: &Config) -> Vec<ResidentProxyP
         "vmess_httpupgrade_live".to_owned(),
         vmess_fixture_url(
             "vmess-httpupgrade",
-            "203.0.113.10",
-            28460,
+            &primary_host,
+            fixture_port(4),
             "httpupgrade",
-            "front.example",
+            &authority_host,
             "/vmess-upgrade",
             "",
         ),
@@ -129,7 +131,7 @@ pub(super) fn assert_vmess_vless_handlers(config: &Config) -> Vec<ResidentProxyP
     .unwrap();
     assert_eq!(vmess_httpupgrade.protocol, "vmess");
     assert_eq!(vmess_httpupgrade.net, "httpupgrade");
-    assert_eq!(vmess_httpupgrade.stream_host, "front.example");
+    assert_eq!(vmess_httpupgrade.stream_host, authority_host);
     assert_eq!(vmess_httpupgrade.stream_path, "/vmess-upgrade");
     assert_eq!(vmess_httpupgrade.tls, "none");
     assert!(matches!(
@@ -152,7 +154,7 @@ pub(super) fn assert_vmess_vless_handlers(config: &Config) -> Vec<ResidentProxyP
     assert!(
         !vmess_httpupgrade_graph
             .to_string()
-            .contains("front.example")
+            .contains(&authority_host)
     );
 
     let vmess_httpupgrade_tls = build_resident_proxy_plan_for_node(
@@ -160,20 +162,20 @@ pub(super) fn assert_vmess_vless_handlers(config: &Config) -> Vec<ResidentProxyP
         "proxy".to_owned(),
         "vmess_httpupgrade_tls_live".to_owned(),
         vmess_fixture_url_with_sni(
-            "203.0.113.10",
-            28460,
+            &primary_host,
+            fixture_port(4),
             "httpupgrade",
-            "front.example",
+            &authority_host,
             "/vmess-upgrade",
             "tls",
-            "office.example",
+            &authority_host,
         ),
     )
     .unwrap();
     assert_eq!(vmess_httpupgrade_tls.protocol, "vmess");
     assert_eq!(vmess_httpupgrade_tls.net, "httpupgrade");
-    assert_eq!(vmess_httpupgrade_tls.server_name, "office.example");
-    assert_eq!(vmess_httpupgrade_tls.stream_host, "front.example");
+    assert_eq!(vmess_httpupgrade_tls.server_name, authority_host);
+    assert_eq!(vmess_httpupgrade_tls.stream_host, authority_host);
     assert_eq!(vmess_httpupgrade_tls.stream_path, "/vmess-upgrade");
     assert_eq!(vmess_httpupgrade_tls.tls, "tls");
     assert!(matches!(
@@ -201,10 +203,10 @@ pub(super) fn assert_vmess_vless_handlers(config: &Config) -> Vec<ResidentProxyP
         "vmess_grpc_live".to_owned(),
         vmess_fixture_url(
             "vmess-grpc",
-            "203.0.113.10",
-            28462,
+            &primary_host,
+            fixture_port(5),
             "grpc",
-            "front.example",
+            &authority_host,
             "GunService",
             "tls",
         ),
@@ -212,10 +214,10 @@ pub(super) fn assert_vmess_vless_handlers(config: &Config) -> Vec<ResidentProxyP
     .unwrap();
     assert_eq!(vmess_grpc.protocol, "vmess");
     assert_eq!(vmess_grpc.net, "grpc");
-    assert_eq!(vmess_grpc.server_host, "203.0.113.10");
-    assert_eq!(vmess_grpc.server_port, 28462);
-    assert_eq!(vmess_grpc.server_name, "203.0.113.10");
-    assert_eq!(vmess_grpc.stream_host, "front.example");
+    assert_eq!(vmess_grpc.server_host, primary_host);
+    assert_eq!(vmess_grpc.server_port, fixture_port(5));
+    assert_eq!(vmess_grpc.server_name, primary_host);
+    assert_eq!(vmess_grpc.stream_host, authority_host);
     assert_eq!(vmess_grpc.stream_path, "GunService");
     assert_eq!(vmess_grpc.tls, "tls");
     assert_eq!(vmess_grpc.alpn, vec!["h2".to_owned()]);
@@ -236,7 +238,7 @@ pub(super) fn assert_vmess_vless_handlers(config: &Config) -> Vec<ResidentProxyP
             .unwrap()
             .starts_with("sha256:")
     );
-    assert!(!vmess_grpc_graph.to_string().contains("front.example"));
+    assert!(!vmess_grpc_graph.to_string().contains(&authority_host));
 
     let vless_websocket = build_resident_proxy_plan_for_node(
         &config,
@@ -244,23 +246,23 @@ pub(super) fn assert_vmess_vless_handlers(config: &Config) -> Vec<ResidentProxyP
         "vless_ws_live".to_owned(),
         vless_fixture_url(
             "vless-ws",
-            "203.0.113.10",
-            28443,
+            &primary_host,
+            fixture_port(6),
             "ws",
-            "front.example",
+            &authority_host,
             "/ws",
-            "office.example",
+            &authority_host,
             "",
             "",
         ),
     )
     .unwrap();
     assert_eq!(vless_websocket.protocol, "vless");
-    assert_eq!(vless_websocket.server_host, "203.0.113.10");
-    assert_eq!(vless_websocket.server_port, 28443);
-    assert_eq!(vless_websocket.server_name, "office.example");
+    assert_eq!(vless_websocket.server_host, primary_host);
+    assert_eq!(vless_websocket.server_port, fixture_port(6));
+    assert_eq!(vless_websocket.server_name, authority_host);
     assert_eq!(vless_websocket.net, "websocket");
-    assert_eq!(vless_websocket.stream_host, "front.example");
+    assert_eq!(vless_websocket.stream_host, authority_host);
     assert_eq!(vless_websocket.stream_path, "/ws");
     assert_eq!(vless_websocket.flow, "");
     assert!(matches!(
@@ -283,7 +285,7 @@ pub(super) fn assert_vmess_vless_handlers(config: &Config) -> Vec<ResidentProxyP
         vless_websocket_graph["streamWrapperEndpoint"]["path"],
         "/ws"
     );
-    assert!(!vless_websocket_graph.to_string().contains("front.example"));
+    assert!(!vless_websocket_graph.to_string().contains(&authority_host));
 
     let vless_httpupgrade = build_resident_proxy_plan_for_node(
         &config,
@@ -291,23 +293,23 @@ pub(super) fn assert_vmess_vless_handlers(config: &Config) -> Vec<ResidentProxyP
         "vless_httpupgrade_live".to_owned(),
         vless_fixture_url(
             "vless-httpupgrade",
-            "203.0.113.10",
-            28461,
+            &primary_host,
+            fixture_port(7),
             "httpupgrade",
-            "front.example",
+            &authority_host,
             "/vless-upgrade",
-            "office.example",
+            &authority_host,
             "",
             "",
         ),
     )
     .unwrap();
     assert_eq!(vless_httpupgrade.protocol, "vless");
-    assert_eq!(vless_httpupgrade.server_host, "203.0.113.10");
-    assert_eq!(vless_httpupgrade.server_port, 28461);
-    assert_eq!(vless_httpupgrade.server_name, "office.example");
+    assert_eq!(vless_httpupgrade.server_host, primary_host);
+    assert_eq!(vless_httpupgrade.server_port, fixture_port(7));
+    assert_eq!(vless_httpupgrade.server_name, authority_host);
     assert_eq!(vless_httpupgrade.net, "httpupgrade");
-    assert_eq!(vless_httpupgrade.stream_host, "front.example");
+    assert_eq!(vless_httpupgrade.stream_host, authority_host);
     assert_eq!(vless_httpupgrade.stream_path, "/vless-upgrade");
     assert_eq!(vless_httpupgrade.flow, "");
     assert!(matches!(
@@ -333,7 +335,7 @@ pub(super) fn assert_vmess_vless_handlers(config: &Config) -> Vec<ResidentProxyP
     assert!(
         !vless_httpupgrade_graph
             .to_string()
-            .contains("front.example")
+            .contains(&authority_host)
     );
 
     vec![

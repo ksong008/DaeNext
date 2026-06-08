@@ -60,9 +60,13 @@ pub(super) fn assert_common_resident_graph_contracts(proxies: &[ResidentProxyPla
                 .starts_with("sha256:")
         );
         let graph_text = graph.to_string();
-        for secret in ["user:password", ":password@", "auth-token"] {
+        for secret in [
+            format!("{}:{}", fixture_user(), fixture_secret()),
+            format!(":{}@", fixture_secret()),
+            fixture_client_id(),
+        ] {
             assert!(
-                !graph_text.contains(secret),
+                !graph_text.contains(&secret),
                 "graph leaked raw credential-bearing link: {graph}"
             );
         }

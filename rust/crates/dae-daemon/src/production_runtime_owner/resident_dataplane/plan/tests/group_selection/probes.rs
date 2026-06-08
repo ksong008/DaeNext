@@ -1,22 +1,36 @@
 use super::*;
 #[test]
 pub(super) fn resident_dataplane_group_tcp_check_uses_group_override() {
-    let config = parse_config(
-        r#"
+    let node_a = socks5_endpoint_fixture_url(FixtureEndpoint::Primary);
+    let node_b = socks5_endpoint_fixture_url(FixtureEndpoint::Secondary);
+    let global_check = tcp_check_fixture_url(
+        HttpScheme::Http,
+        FixtureEndpoint::Tertiary,
+        "/generate_204",
+        None,
+    );
+    let group_check = tcp_check_fixture_url(
+        HttpScheme::Http,
+        FixtureEndpoint::Authority,
+        "/check?q=1",
+        None,
+    );
+    let group_host = fixture_host(FixtureEndpoint::Authority);
+    let config_text = r#"
         global {
         lan_interface: daerust0
-        tcp_check_url: 'http://global.example/generate_204'
+        tcp_check_url: '__GLOBAL_CHECK__'
         tcp_check_http_method: GET
         }
         node {
-        node_a: 'socks://127.0.0.1:1080'
-        node_b: 'socks://127.0.0.1:1081'
+        node_a: '__NODE_A__'
+        node_b: '__NODE_B__'
         }
         group {
         proxy {
             filter: name(node_a, node_b)
             policy: min
-            tcp_check_url: 'http://group.example/check?q=1'
+            tcp_check_url: '__GROUP_CHECK__'
             tcp_check_http_method: HEAD
         }
         }
@@ -24,62 +38,86 @@ pub(super) fn resident_dataplane_group_tcp_check_uses_group_override() {
         l4proto(tcp) -> proxy
         fallback: direct
         }
-        "#,
-    );
+        "#
+    .replace("__GLOBAL_CHECK__", &global_check)
+    .replace("__GROUP_CHECK__", &group_check)
+    .replace("__NODE_A__", &node_a)
+    .replace("__NODE_B__", &node_b);
+    let config = parse_config(&config_text);
     let plan = build_resident_dataplane_plan(&config).unwrap();
     let group = plan.default_proxy_group().unwrap();
     let probes = group.probe_candidates();
     assert_eq!(probes[0].tcp_check.scheme, "http");
-    assert_eq!(probes[0].tcp_check.target, "group.example:80");
-    assert_eq!(probes[0].tcp_check.host, "group.example");
+    assert_eq!(probes[0].tcp_check.target, format!("{group_host}:80"));
+    assert_eq!(probes[0].tcp_check.host, group_host);
     assert_eq!(probes[0].tcp_check.path, "/check?q=1");
     assert_eq!(probes[0].tcp_check.method, "HEAD");
 }
 
 #[test]
 pub(super) fn resident_dataplane_group_tcp_check_accepts_https() {
-    let config = parse_config(
-        r#"
+    let node_a = socks5_endpoint_fixture_url(FixtureEndpoint::Primary);
+    let probe_target = Ipv4Addr::LOCALHOST.to_string();
+    let check = tcp_check_fixture_url(
+        HttpScheme::Https,
+        FixtureEndpoint::Authority,
+        "/generate_204",
+        Some(&probe_target),
+    );
+    let check_host = fixture_host(FixtureEndpoint::Authority);
+    let config_source = r#"
         global {
         lan_interface: daerust0
         }
         node {
-        node_a: 'socks://127.0.0.1:1080'
+        node_a: '__NODE_A__'
         }
         group {
         proxy {
             filter: name(node_a)
             policy: min
-            tcp_check_url: 'https://check.example/generate_204,203.0.113.7'
+            tcp_check_url: '__CHECK__'
         }
         }
         routing {
         l4proto(tcp) -> proxy
         fallback: direct
         }
-        "#,
-    );
+        "#
+    .replace("__NODE_A__", &node_a)
+    .replace("__CHECK__", &check);
+    let config = parse_config(&config_source);
     let plan = build_resident_dataplane_plan(&config).unwrap();
     let probes = plan.default_proxy_group().unwrap().probe_candidates();
     assert_eq!(probes[0].tcp_check.scheme, "https");
-    assert_eq!(probes[0].tcp_check.target, "203.0.113.7:443");
-    assert_eq!(probes[0].tcp_check.host, "check.example");
+    assert_eq!(probes[0].tcp_check.target, format!("{probe_target}:443"));
+    assert_eq!(probes[0].tcp_check.host, check_host);
     assert_eq!(probes[0].tcp_check.path, "/generate_204");
 }
 
 #[test]
 pub(super) fn resident_manual_probe_plans_cover_all_admitted_config_nodes() {
-    let config = parse_config(
-        r#"
+    let grouped = socks5_endpoint_fixture_url(FixtureEndpoint::Primary);
+    let orphan_source = socks5_endpoint_fixture_url(FixtureEndpoint::Secondary);
+    let unsupported_source = unsupported_endpoint_fixture_url(FixtureEndpoint::Tertiary);
+    let probe_target = Ipv4Addr::LOCALHOST.to_string();
+    let check = tcp_check_fixture_url(
+        HttpScheme::Http,
+        FixtureEndpoint::Authority,
+        "/generate_204",
+        Some(&probe_target),
+    );
+    let check_host = fixture_host(FixtureEndpoint::Authority);
+    let config_source = r#"
         global {
         lan_interface: daerust0
-        tcp_check_url: 'http://check.example/generate_204,203.0.113.7'
+        tcp_check_url: '__CHECK__'
         tcp_check_http_method: GET
         }
         node {
-        grouped: 'socks://127.0.0.1:1080'
-        orphan: 'socks://127.0.0.1:1081'
-        unsupported: 'wireguard://198.51.100.2:51820'
+        grouped: '__GROUPED__'
+        orphan: '__ORPHAN__'
+        unsupported: '__UNSUPPORTED__'
         }
         group {
         proxy {
@@ -91,21 +129,25 @@ pub(super) fn resident_manual_probe_plans_cover_all_admitted_config_nodes() {
         l4proto(tcp) -> proxy
         fallback: direct
         }
-        "#,
-    );
+        "#
+    .replace("__CHECK__", &check)
+    .replace("__GROUPED__", &grouped)
+    .replace("__ORPHAN__", &orphan_source)
+    .replace("__UNSUPPORTED__", &unsupported_source);
+    let config = parse_config(&config_source);
     let plans = build_resident_manual_probe_plans(&config);
     let orphan = plans
-        .get("socks://127.0.0.1:1081")
+        .get(&orphan_source)
         .expect("orphan node should be indexed")
         .as_ref()
         .expect("orphan socks node should be admitted");
     assert_eq!(orphan.node_tag, "orphan");
     assert_eq!(orphan.tcp_check.method, "GET");
-    assert_eq!(orphan.tcp_check.target, "203.0.113.7:80");
-    assert_eq!(orphan.tcp_check.host, "check.example");
+    assert_eq!(orphan.tcp_check.target, format!("{probe_target}:80"));
+    assert_eq!(orphan.tcp_check.host, check_host);
     assert!(
         plans
-            .get("wireguard://198.51.100.2:51820")
+            .get(&unsupported_source)
             .expect("unsupported node should be indexed")
             .is_err()
     );
@@ -113,35 +155,50 @@ pub(super) fn resident_manual_probe_plans_cover_all_admitted_config_nodes() {
 
 #[test]
 pub(super) fn resident_dataplane_group_udp_check_uses_group_override_ipv4() {
-    let config = parse_config(
-        r#"
+    let node_a = socks5_endpoint_fixture_url(FixtureEndpoint::Primary);
+    let global_dns_host = fixture_host(FixtureEndpoint::Tertiary);
+    let group_dns_host = fixture_host(FixtureEndpoint::Authority);
+    let global_dns_target = Ipv4Addr::LOCALHOST;
+    let group_dns_target = Ipv4Addr::LOCALHOST;
+    let global_dns = format!(
+        "{}:{},{}",
+        global_dns_host,
+        fixture_endpoint_port(FixtureEndpoint::Tertiary),
+        global_dns_target
+    );
+    let group_dns_port = fixture_endpoint_port(FixtureEndpoint::Authority);
+    let group_dns = format!("{}:{},{}", group_dns_host, group_dns_port, group_dns_target);
+    let config_text = r#"
         global {
         lan_interface: daerust0
-        udp_check_dns: 'dns.global:53,8.8.8.8'
+        udp_check_dns: '__GLOBAL_DNS__'
         }
         node {
-        node_a: 'socks://127.0.0.1:1080'
+        node_a: '__NODE_A__'
         }
         group {
         proxy {
             filter: name(node_a)
             policy: min
-            udp_check_dns: 'dns.group:5353,8.8.4.4'
+            udp_check_dns: '__GROUP_DNS__'
         }
         }
         routing {
         l4proto(udp) -> proxy
         fallback: direct
         }
-        "#,
-    );
+        "#
+    .replace("__GLOBAL_DNS__", &global_dns)
+    .replace("__GROUP_DNS__", &group_dns)
+    .replace("__NODE_A__", &node_a);
+    let config = parse_config(&config_text);
     let plan = build_resident_dataplane_plan(&config).unwrap();
     let probes = plan.default_proxy_group().unwrap().probe_candidates();
     assert_eq!(
         probes[0].udp_check.target,
-        SocketAddrV4::new(Ipv4Addr::new(8, 8, 4, 4), 5353)
+        SocketAddrV4::new(group_dns_target, group_dns_port)
     );
-    assert_eq!(probes[0].udp_check.host, "dns.group");
+    assert_eq!(probes[0].udp_check.host, group_dns_host);
     assert_eq!(
         probes[0].udp_check.lookup_host,
         "connectivitycheck.gstatic.com."

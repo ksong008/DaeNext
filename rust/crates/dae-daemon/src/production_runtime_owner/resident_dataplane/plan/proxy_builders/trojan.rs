@@ -77,6 +77,7 @@ pub(crate) fn build_trojan_proxy_plan(
         stream_path,
         tls: "tls".to_owned(),
         allow_insecure: false,
+        tls_fragment: resident_tls_fragment_plan(config)?,
         utls_fingerprint,
         handler: if let Some((inner_cipher, inner_password)) = inner_shadowsocks {
             ResidentProxyProtocolPlan::TrojanInnerShadowsocksTcpTls {

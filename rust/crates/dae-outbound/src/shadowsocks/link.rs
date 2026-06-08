@@ -91,6 +91,9 @@ impl Sip003 {
 
     pub fn to_go_string(&self) -> String {
         let mut list = vec![self.name.clone()];
+        if !self.opts.tls.is_empty() {
+            list.push(self.opts.tls.clone());
+        }
         if !self.opts.obfs.is_empty() {
             list.push(format!("obfs={}", self.opts.obfs));
         }

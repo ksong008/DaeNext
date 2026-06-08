@@ -8,11 +8,16 @@ use std::sync::{
 };
 use std::task::{Context, Poll};
 use std::thread;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use boring::ssl::{SslConnector, SslMethod, SslStream, SslVerifyMode, SslVersion};
 use dae_datapath::{TcpDirectDialOptions, magic_tcp_connect};
-use rustls::{ClientConfig, ClientConnection, RootCertStore, pki_types::ServerName};
+use dae_outbound::shared_transport::{TlsFragmentOptions, fragment_tls_write};
+use rustls::client::danger::{HandshakeSignatureValid, ServerCertVerified, ServerCertVerifier};
+use rustls::pki_types::{CertificateDer, ServerName, UnixTime};
+use rustls::{
+    ClientConfig, ClientConnection, DigitallySignedStruct, RootCertStore, SignatureScheme,
+};
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, ReadBuf};
 use tokio::net::TcpStream as TokioTcpStream;
 use tokio::task;
@@ -41,3 +46,5 @@ mod resolve;
 use self::resolve::*;
 mod drive;
 pub(super) use self::drive::*;
+mod tls_fragment;
+use self::tls_fragment::*;

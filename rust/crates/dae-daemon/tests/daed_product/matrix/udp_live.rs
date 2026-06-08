@@ -3,9 +3,14 @@ use super::*;
 pub(crate) fn daed_resident_adapter_udp_live_reports_protocol_closed_without_secrets() {
     let temp = temp_dir("resident-adapter-udp-live-http");
     let config = temp.join("config.dae");
-    fs::write(
-        &config,
-        r#"
+    let http_live =
+        http_proxy_fixture_url(&fixture_host(FixtureEndpoint::Primary), fixture_port(1));
+    let udp_target = format!(
+        "{}:{}",
+        std::net::Ipv4Addr::LOCALHOST,
+        fixture_endpoint_port(FixtureEndpoint::Authority)
+    );
+    let config_text = r#"
 global {
   lan_interface: daerust0
   allow_insecure: false
@@ -13,7 +18,7 @@ global {
   mptcp: false
 }
 node {
-  http_live: 'http://fixture-user:fixture-credential@example.com:28448#http'
+  http_live: '__HTTP_LIVE__'
 }
 group {
   proxy {
@@ -25,9 +30,9 @@ routing {
   l4proto(tcp) && dport(443) -> proxy
   fallback: direct
 }
-"#,
-    )
-    .unwrap();
+"#
+    .replace("__HTTP_LIVE__", &http_live);
+    fs::write(&config, config_text).unwrap();
     fs::set_permissions(&config, fs::Permissions::from_mode(0o600)).unwrap();
 
     let output = Command::new(binary())
@@ -36,7 +41,7 @@ routing {
             "-c",
             config.to_str().unwrap(),
             "--target",
-            "127.0.0.1:5353",
+            &udp_target,
             "--payload",
             "probe",
             "--json",
@@ -76,7 +81,7 @@ routing {
         "protocol-closed"
     );
     let stdout = String::from_utf8_lossy(&output.stdout);
-    assert!(!stdout.contains("http://fixture-user"));
-    assert!(!stdout.contains("fixture-credential"));
+    assert!(!stdout.contains(&fixture_user()));
+    assert!(!stdout.contains(&fixture_secret()));
     let _ = fs::remove_dir_all(temp);
 }

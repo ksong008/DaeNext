@@ -53,6 +53,7 @@ impl AsyncVlessTlsClient {
         match &mut self.engine {
             AsyncVlessTlsEngine::Rustls { tls } => {
                 let raw = tls.get_mut().0;
+                let raw = raw.raw_mut();
                 raw.write_all(payload)
                     .await
                     .map_err(|err| format!("{label}: {err}"))?;

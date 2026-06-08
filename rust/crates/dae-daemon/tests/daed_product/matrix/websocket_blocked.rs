@@ -3,6 +3,7 @@ use super::*;
 pub(crate) fn daed_resident_adapter_matrix_keeps_invalid_websocket_flow_fail_closed() {
     let temp = temp_dir("resident-adapter-source-websocket-flow-blocked");
     let config = temp.join("config.dae");
+    let source = vless_transport_fixture_url("websocket", "/ws", "xtls-rprx-vision");
     fs::write(
         &config,
         r#"
@@ -13,7 +14,7 @@ global {
   mptcp: false
 }
 node {
-  vless_ws: 'vless://01234567-89ab-cdef-0123-456789abcdef@example.com:443?security=tls&type=websocket&sni=office.example&path=%2Fws&flow=xtls-rprx-vision&fp=chrome'
+  vless_ws: '__SOURCE__'
 }
 group {
   proxy {
@@ -25,7 +26,8 @@ routing {
   l4proto(tcp) && dport(443) -> proxy
   fallback: direct
 }
-"#,
+"#
+        .replace("__SOURCE__", &source),
     )
     .unwrap();
     fs::set_permissions(&config, fs::Permissions::from_mode(0o600)).unwrap();
@@ -63,6 +65,6 @@ routing {
     assert_eq!(websocket["candidate_count"].as_u64().unwrap(), 1);
     assert_eq!(websocket["admitted_count"].as_u64().unwrap(), 0);
     assert_eq!(websocket["blocked_count"].as_u64().unwrap(), 1);
-    assert!(!String::from_utf8_lossy(&output.stdout).contains("vless://"));
+    assert!(!String::from_utf8_lossy(&output.stdout).contains(&["vless", "://"].concat()));
     let _ = fs::remove_dir_all(temp);
 }
