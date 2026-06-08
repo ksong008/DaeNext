@@ -1,3 +1,4 @@
+use super::*;
 pub fn load_aya_userspace_object(
     options: AyaUserspaceLoaderOptions<'_>,
 ) -> Result<AyaUserspaceLoadedObject, String> {

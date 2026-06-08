@@ -1,11 +1,12 @@
-fn run_load_pin_command(args: &[String]) -> LoaderOutput {
+use super::*;
+pub(super) fn run_load_pin_command(args: &[String]) -> LoaderOutput {
     match parse_load_pin_options(args) {
         Ok(options) => run_load_pin(options),
         Err(err) => LoaderOutput::usage(err),
     }
 }
 
-fn run_map_stats_count(requests: Vec<MapStatsCountRequest>) -> LoaderOutput {
+pub(super) fn run_map_stats_count(requests: Vec<MapStatsCountRequest>) -> LoaderOutput {
     if requests.is_empty() {
         return LoaderOutput::usage("map-stats count requires at least one --map name:id");
     }

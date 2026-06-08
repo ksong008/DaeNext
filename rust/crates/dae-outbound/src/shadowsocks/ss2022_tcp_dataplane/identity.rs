@@ -1,11 +1,12 @@
+use super::*;
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-struct IdentityHeaderValidation {
-    count: usize,
-    bytes_len: usize,
-    validated: bool,
+pub(super) struct IdentityHeaderValidation {
+    pub(super) count: usize,
+    pub(super) bytes_len: usize,
+    pub(super) validated: bool,
 }
 
-fn encode_identity_headers(
+pub(super) fn encode_identity_headers(
     conf: &CipherConf2022,
     psk_list: &[Vec<u8>],
     salt: &[u8],
@@ -20,7 +21,7 @@ fn encode_identity_headers(
     Ok(out)
 }
 
-fn read_and_validate_identity_headers<S>(
+pub(super) fn read_and_validate_identity_headers<S>(
     stream: &mut S,
     conf: &CipherConf2022,
     psk_list: &[Vec<u8>],
@@ -57,7 +58,7 @@ where
     })
 }
 
-fn encode_identity_header(
+pub(super) fn encode_identity_header(
     conf: &CipherConf2022,
     current_psk: &[u8],
     next_psk: &[u8],
@@ -71,7 +72,7 @@ fn encode_identity_header(
     encrypt_aes_block(&identity_subkey, &next_hash[..16])
 }
 
-fn encrypt_aes_block(key: &[u8], plaintext: &[u8]) -> Result<[u8; 16], OutboundError> {
+pub(super) fn encrypt_aes_block(key: &[u8], plaintext: &[u8]) -> Result<[u8; 16], OutboundError> {
     let mut block = aes::cipher::generic_array::GenericArray::clone_from_slice(plaintext);
     match key.len() {
         16 => {

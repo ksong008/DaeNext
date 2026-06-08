@@ -1,5 +1,6 @@
+use super::*;
 impl HttpResponse {
-    fn with_status(mut self, status: u16) -> Self {
+    pub(in crate::daed_product) fn with_status(mut self, status: u16) -> Self {
         self.status = status;
         self
     }

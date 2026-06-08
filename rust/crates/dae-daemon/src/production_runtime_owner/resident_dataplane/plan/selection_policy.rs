@@ -1,4 +1,5 @@
-fn referenced_user_outbounds(config: &Config) -> Vec<String> {
+use super::*;
+pub(super) fn referenced_user_outbounds(config: &Config) -> Vec<String> {
     let mut outbounds = Vec::new();
     for rule in &config.routing.rules {
         push_user_outbound(&mut outbounds, &rule.outbound.name);
@@ -18,7 +19,7 @@ fn referenced_user_outbounds(config: &Config) -> Vec<String> {
     outbounds
 }
 
-fn push_user_outbound(outbounds: &mut Vec<String>, name: &str) {
+pub(super) fn push_user_outbound(outbounds: &mut Vec<String>, name: &str) {
     if matches!(
         name,
         "direct" | "block" | "must_rules" | "logical_or" | "logical_and"
@@ -30,7 +31,7 @@ fn push_user_outbound(outbounds: &mut Vec<String>, name: &str) {
     }
 }
 
-fn select_group_nodes(
+pub(super) fn select_group_nodes(
     group: &Group,
     node_links: &BTreeMap<String, String>,
 ) -> Result<GroupNodeSelection, String> {
@@ -74,7 +75,7 @@ fn select_group_nodes(
     Ok(GroupNodeSelection::Selected(nodes))
 }
 
-fn unresolved_positive_name_filters(
+pub(super) fn unresolved_positive_name_filters(
     group: &Group,
     node_links: &BTreeMap<String, String>,
 ) -> (bool, Vec<String>) {
@@ -96,7 +97,7 @@ fn unresolved_positive_name_filters(
     (explicit_name_filter, unresolved_names)
 }
 
-fn outbound_filter_groups(group: &Group) -> Vec<Vec<Filter>> {
+pub(super) fn outbound_filter_groups(group: &Group) -> Vec<Vec<Filter>> {
     group
         .filter
         .iter()
@@ -104,7 +105,7 @@ fn outbound_filter_groups(group: &Group) -> Vec<Vec<Filter>> {
         .collect()
 }
 
-fn outbound_filter(function: &Function) -> Filter {
+pub(super) fn outbound_filter(function: &Function) -> Filter {
     Filter {
         name: function.name.clone(),
         not: function.not,
@@ -116,7 +117,7 @@ fn outbound_filter(function: &Function) -> Filter {
     }
 }
 
-fn outbound_filter_annotations(group: &Group) -> Result<Vec<Annotation>, String> {
+pub(super) fn outbound_filter_annotations(group: &Group) -> Result<Vec<Annotation>, String> {
     if group.filter.is_empty() {
         return Ok(Vec::new());
     }
@@ -140,7 +141,7 @@ fn outbound_filter_annotations(group: &Group) -> Result<Vec<Annotation>, String>
         .collect()
 }
 
-fn annotation_from_params(params: &[Param]) -> Result<Annotation, String> {
+pub(super) fn annotation_from_params(params: &[Param]) -> Result<Annotation, String> {
     let pairs = params
         .iter()
         .map(|param| (param.key.as_str(), param.val.as_str()))
@@ -148,7 +149,9 @@ fn annotation_from_params(params: &[Param]) -> Result<Annotation, String> {
     Annotation::from_params(&pairs).map_err(|err| err.to_string())
 }
 
-fn parse_group_policy(policy: &DynamicFunctionValue) -> Result<ResidentGroupPolicyPlan, String> {
+pub(super) fn parse_group_policy(
+    policy: &DynamicFunctionValue,
+) -> Result<ResidentGroupPolicyPlan, String> {
     match policy {
         DynamicFunctionValue::Nil => Ok(ResidentGroupPolicyPlan::Fixed { index: 0 }),
         DynamicFunctionValue::String(value) => parse_group_policy_string(value),
@@ -163,7 +166,7 @@ fn parse_group_policy(policy: &DynamicFunctionValue) -> Result<ResidentGroupPoli
     }
 }
 
-fn parse_group_policy_string(value: &str) -> Result<ResidentGroupPolicyPlan, String> {
+pub(super) fn parse_group_policy_string(value: &str) -> Result<ResidentGroupPolicyPlan, String> {
     let value = value.trim();
     if value.is_empty() {
         return Ok(ResidentGroupPolicyPlan::Fixed { index: 0 });
@@ -188,7 +191,9 @@ fn parse_group_policy_string(value: &str) -> Result<ResidentGroupPolicyPlan, Str
     }
 }
 
-fn parse_group_policy_function(function: &Function) -> Result<ResidentGroupPolicyPlan, String> {
+pub(super) fn parse_group_policy_function(
+    function: &Function,
+) -> Result<ResidentGroupPolicyPlan, String> {
     match function.name.as_str() {
         "fixed" => {
             if function.not {

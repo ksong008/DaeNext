@@ -1,4 +1,5 @@
-fn default_daemon_live_matrix_json(
+use super::*;
+pub(super) fn default_daemon_live_matrix_json(
     listener_smoke_executed: bool,
     listener_smoke_passed: bool,
     reload_owner_handoff_executed: bool,
@@ -140,7 +141,7 @@ fn default_daemon_live_matrix_json(
     })
 }
 
-fn live_matrix_row_json(
+pub(super) fn live_matrix_row_json(
     area: &'static str,
     executed: bool,
     passed: bool,
@@ -159,7 +160,7 @@ fn live_matrix_row_json(
 }
 
 #[allow(clippy::too_many_arguments)]
-fn release_product_chain_live_gate_json(
+pub(super) fn release_product_chain_live_gate_json(
     production_dataplane_admitted: bool,
     reload_runtime_parity_admitted: bool,
     matched_benchmark_recorded: bool,

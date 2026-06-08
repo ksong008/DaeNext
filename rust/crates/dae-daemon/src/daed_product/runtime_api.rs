@@ -1,4 +1,5 @@
-fn api_runtime_reload(app: &AppState, request: &HttpRequest) -> HttpResponse {
+use super::*;
+pub(super) fn api_runtime_reload(app: &AppState, request: &HttpRequest) -> HttpResponse {
     let reload_started_at = Instant::now();
     let body = json_body(request).unwrap_or_else(|_| json!({}));
     let dry = body.get("dry").and_then(Value::as_bool).unwrap_or(false);
@@ -155,7 +156,7 @@ fn api_runtime_reload(app: &AppState, request: &HttpRequest) -> HttpResponse {
     }
 }
 
-fn api_runtime_stop(app: &AppState) -> HttpResponse {
+pub(super) fn api_runtime_stop(app: &AppState) -> HttpResponse {
     match app.runtime.stop() {
         Ok(mut report) => {
             if let Err(err) = mark_system_stopped(&app.state) {
@@ -176,7 +177,7 @@ fn api_runtime_stop(app: &AppState) -> HttpResponse {
     }
 }
 
-fn api_get_runtime_log_level(app: &AppState) -> HttpResponse {
+pub(super) fn api_get_runtime_log_level(app: &AppState) -> HttpResponse {
     let level = get_metadata(&app.state, "runtime_log_level")
         .unwrap_or_else(|_| Some("info".to_owned()))
         .unwrap_or_else(|| "info".to_owned());
@@ -184,7 +185,7 @@ fn api_get_runtime_log_level(app: &AppState) -> HttpResponse {
     HttpResponse::json(200, json!({"level": level}))
 }
 
-fn api_set_runtime_log_level(app: &AppState, request: &HttpRequest) -> HttpResponse {
+pub(super) fn api_set_runtime_log_level(app: &AppState, request: &HttpRequest) -> HttpResponse {
     let body = match json_body(request) {
         Ok(body) => body,
         Err(err) => return HttpResponse::json(400, json!({"error": err})),
@@ -200,11 +201,11 @@ fn api_set_runtime_log_level(app: &AppState, request: &HttpRequest) -> HttpRespo
     HttpResponse::json(200, json!({"level": level}))
 }
 
-fn normalize_runtime_log_level(level: &str) -> Option<String> {
+pub(super) fn normalize_runtime_log_level(level: &str) -> Option<String> {
     normalize_log_level_name(level)
 }
 
-fn api_runtime_events(app: &AppState, request: &HttpRequest) -> HttpResponse {
+pub(super) fn api_runtime_events(app: &AppState, request: &HttpRequest) -> HttpResponse {
     let full = runtime_overview_report(app, request);
     thread::sleep(Duration::from_millis(200));
     let delta = runtime_overview_delta_report(app, request);
@@ -217,7 +218,7 @@ fn api_runtime_events(app: &AppState, request: &HttpRequest) -> HttpResponse {
     )
 }
 
-fn stream_runtime_events(
+pub(super) fn stream_runtime_events(
     stream: &mut TcpStream,
     app: &AppState,
     request: &HttpRequest,
@@ -253,14 +254,14 @@ fn stream_runtime_events(
     }
 }
 
-fn api_log_events(_app: &AppState, request: &HttpRequest) -> HttpResponse {
+pub(super) fn api_log_events(_app: &AppState, request: &HttpRequest) -> HttpResponse {
     match log_level_filter_from_request(request) {
         Ok(_) => sse_response_events(&[], Some(LOG_STREAM_RETRY_MS)),
         Err(err) => return HttpResponse::json(400, json!({"error": err})),
     }
 }
 
-fn stream_log_events(
+pub(super) fn stream_log_events(
     stream: &mut TcpStream,
     app: &AppState,
     request: &HttpRequest,
@@ -318,7 +319,7 @@ fn stream_log_events(
     }
 }
 
-fn api_logs(app: &AppState, request: &HttpRequest) -> HttpResponse {
+pub(super) fn api_logs(app: &AppState, request: &HttpRequest) -> HttpResponse {
     let level = match log_level_filter_from_request(request) {
         Ok(level) => level,
         Err(err) => return HttpResponse::json(400, json!({"error": err})),
@@ -348,7 +349,9 @@ fn api_logs(app: &AppState, request: &HttpRequest) -> HttpResponse {
     }
 }
 
-fn log_level_filter_from_request(request: &HttpRequest) -> Result<Option<String>, String> {
+pub(super) fn log_level_filter_from_request(
+    request: &HttpRequest,
+) -> Result<Option<String>, String> {
     let level = request
         .query
         .get("level")
@@ -357,21 +360,21 @@ fn log_level_filter_from_request(request: &HttpRequest) -> Result<Option<String>
     normalize_log_level_filter(level).map_err(|err| err.to_string())
 }
 
-fn api_clear_logs(app: &AppState) -> HttpResponse {
+pub(super) fn api_clear_logs(app: &AppState) -> HttpResponse {
     match clear_log_file(&app.config_dir) {
         Ok(()) => HttpResponse::json(200, json!({"cleared": true})),
         Err(err) => HttpResponse::json(500, json!({"error": err.to_string()})),
     }
 }
 
-fn api_get_log_settings(app: &AppState) -> HttpResponse {
+pub(super) fn api_get_log_settings(app: &AppState) -> HttpResponse {
     match log_settings_value(&app.state) {
         Ok(value) => HttpResponse::json(200, value),
         Err(err) => HttpResponse::json(500, json!({"error": err.to_string()})),
     }
 }
 
-fn api_set_log_settings(app: &AppState, request: &HttpRequest) -> HttpResponse {
+pub(super) fn api_set_log_settings(app: &AppState, request: &HttpRequest) -> HttpResponse {
     let body = match json_body(request) {
         Ok(body) => body,
         Err(err) => return HttpResponse::json(400, json!({"error": err})),
@@ -404,14 +407,14 @@ fn api_set_log_settings(app: &AppState, request: &HttpRequest) -> HttpResponse {
     }
 }
 
-fn api_get_node_latencies(app: &AppState) -> HttpResponse {
+pub(super) fn api_get_node_latencies(app: &AppState) -> HttpResponse {
     match list_node_latencies_value(&app.state, &app.runtime) {
         Ok(value) => HttpResponse::json(200, value),
         Err(err) => HttpResponse::json(500, json!({"error": err.to_string()})),
     }
 }
 
-fn api_test_node_latencies(app: &AppState, request: &HttpRequest) -> HttpResponse {
+pub(super) fn api_test_node_latencies(app: &AppState, request: &HttpRequest) -> HttpResponse {
     let body = json_body(request).unwrap_or_else(|_| json!({}));
     let ids = integer_array(&body, "ids");
     match update_node_latencies(&app.state, &app.config_dir, &app.runtime, &ids) {
@@ -420,14 +423,18 @@ fn api_test_node_latencies(app: &AppState, request: &HttpRequest) -> HttpRespons
     }
 }
 
-fn api_get_bundle(app: &AppState, user: &UserRecord) -> HttpResponse {
+pub(super) fn api_get_bundle(app: &AppState, user: &UserRecord) -> HttpResponse {
     match export_bundle(&app.state, user) {
         Ok(value) => HttpResponse::json(200, value),
         Err(err) => HttpResponse::json(500, json!({"error": err.to_string()})),
     }
 }
 
-fn api_put_bundle(app: &AppState, request: &HttpRequest, user: &UserRecord) -> HttpResponse {
+pub(super) fn api_put_bundle(
+    app: &AppState,
+    request: &HttpRequest,
+    user: &UserRecord,
+) -> HttpResponse {
     let body = match json_body(request) {
         Ok(body) => body,
         Err(err) => return HttpResponse::json(400, json!({"error": err})),
@@ -438,7 +445,7 @@ fn api_put_bundle(app: &AppState, request: &HttpRequest, user: &UserRecord) -> H
     }
 }
 
-fn api_get_dae_config_file(app: &AppState) -> HttpResponse {
+pub(super) fn api_get_dae_config_file(app: &AppState) -> HttpResponse {
     match materialize_runtime(&app.state, None, true) {
         Ok(report) => HttpResponse::json(
             200,
@@ -452,7 +459,7 @@ fn api_get_dae_config_file(app: &AppState) -> HttpResponse {
     }
 }
 
-fn api_put_dae_config_file(
+pub(super) fn api_put_dae_config_file(
     app: &AppState,
     request: &HttpRequest,
     user: &UserRecord,
@@ -496,7 +503,7 @@ fn api_put_dae_config_file(
     }
 }
 
-fn api_preview_dae_config_file(
+pub(super) fn api_preview_dae_config_file(
     app: &AppState,
     request: &HttpRequest,
     user: &UserRecord,

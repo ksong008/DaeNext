@@ -1,4 +1,5 @@
-pub(super) fn probe_resident_proxy_udp(
+use super::*;
+pub(crate) fn probe_resident_proxy_udp(
     proxy: &ResidentProxyPlan,
     original_dst: SocketAddrV4,
     payload: &[u8],
@@ -65,7 +66,7 @@ pub(super) fn probe_resident_proxy_udp(
     }
 }
 
-pub(super) fn probe_resident_proxy_dns_udp(
+pub(crate) fn probe_resident_proxy_dns_udp(
     proxy: &ResidentProxyPlan,
     original_dst: SocketAddrV4,
     lookup_host: &str,
@@ -76,7 +77,7 @@ pub(super) fn probe_resident_proxy_dns_udp(
     dns_a_response_has_answer(id, &response.payload)
 }
 
-fn build_dns_a_query(id: u16, lookup_host: &str) -> Result<Vec<u8>, String> {
+pub(crate) fn build_dns_a_query(id: u16, lookup_host: &str) -> Result<Vec<u8>, String> {
     let mut query = Vec::with_capacity(64);
     query.extend_from_slice(&id.to_be_bytes());
     query.extend_from_slice(&0x0100_u16.to_be_bytes());
@@ -90,7 +91,7 @@ fn build_dns_a_query(id: u16, lookup_host: &str) -> Result<Vec<u8>, String> {
     Ok(query)
 }
 
-fn encode_dns_qname(out: &mut Vec<u8>, lookup_host: &str) -> Result<(), String> {
+pub(crate) fn encode_dns_qname(out: &mut Vec<u8>, lookup_host: &str) -> Result<(), String> {
     let lookup_host = lookup_host.trim_end_matches('.');
     if lookup_host.is_empty() {
         out.push(0);
@@ -114,7 +115,7 @@ fn encode_dns_qname(out: &mut Vec<u8>, lookup_host: &str) -> Result<(), String> 
     Ok(())
 }
 
-fn dns_a_response_has_answer(query_id: u16, response: &[u8]) -> Result<(), String> {
+pub(crate) fn dns_a_response_has_answer(query_id: u16, response: &[u8]) -> Result<(), String> {
     if response.len() < 12 {
         return Err(format!("DNS response too short: {} bytes", response.len()));
     }
@@ -165,7 +166,7 @@ fn dns_a_response_has_answer(query_id: u16, response: &[u8]) -> Result<(), Strin
     Err("DNS response has no A answer records".to_owned())
 }
 
-fn skip_dns_name(packet: &[u8], offset: &mut usize) -> Result<(), String> {
+pub(crate) fn skip_dns_name(packet: &[u8], offset: &mut usize) -> Result<(), String> {
     let mut jumps = 0_usize;
     loop {
         if *offset >= packet.len() {

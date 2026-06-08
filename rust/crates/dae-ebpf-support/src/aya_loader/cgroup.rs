@@ -1,3 +1,4 @@
+use super::*;
 pub fn load_attach_detach_aya_cgroup_program(
     loaded: &mut AyaUserspaceLoadedObject,
     line: &DaeCgroupAttachLine,
@@ -14,7 +15,7 @@ pub fn load_attach_aya_cgroup_program(
     load_attach_aya_cgroup_program_with_mode(loaded, line, cgroup_path, false)
 }
 
-fn load_attach_aya_cgroup_program_with_mode(
+pub(super) fn load_attach_aya_cgroup_program_with_mode(
     loaded: &mut AyaUserspaceLoadedObject,
     line: &DaeCgroupAttachLine,
     cgroup_path: &Path,

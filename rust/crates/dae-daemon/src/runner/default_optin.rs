@@ -1,3 +1,7 @@
-include!("default_optin/parsed_args.rs");
-include!("default_optin/parser.rs");
-include!("default_optin/run.rs");
+use super::*;
+mod parsed_args;
+pub(super) use self::parsed_args::*;
+mod parser;
+pub(super) use self::parser::*;
+mod run;
+pub(super) use self::run::*;

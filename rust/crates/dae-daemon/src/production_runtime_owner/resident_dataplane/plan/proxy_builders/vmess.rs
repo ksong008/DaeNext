@@ -1,4 +1,5 @@
-fn build_vmess_proxy_plan(
+use super::*;
+pub(crate) fn build_vmess_proxy_plan(
     config: &Config,
     group_name: String,
     node_tag: String,

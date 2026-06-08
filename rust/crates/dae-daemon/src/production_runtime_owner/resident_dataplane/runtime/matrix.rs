@@ -1,4 +1,5 @@
-fn resident_full_matrix_config_rows(
+use super::*;
+pub(super) fn resident_full_matrix_config_rows(
     config: &Config,
     nodes: &[plan::ResidentNodeLinkShape],
 ) -> Vec<Value> {
@@ -79,7 +80,7 @@ fn resident_full_matrix_config_rows(
         .collect()
 }
 
-fn resident_expanded_source_matrix_rows(
+pub(super) fn resident_expanded_source_matrix_rows(
     config: &Config,
     nodes: &[plan::ResidentNodeLinkShape],
     current_config_rows: &[Value],
@@ -90,7 +91,7 @@ fn resident_expanded_source_matrix_rows(
         .collect()
 }
 
-fn resident_expanded_source_matrix_row(
+pub(super) fn resident_expanded_source_matrix_row(
     config: &Config,
     row: &SourceShapeRegistryRow,
     nodes: &[plan::ResidentNodeLinkShape],
@@ -181,7 +182,7 @@ fn resident_expanded_source_matrix_row(
     })
 }
 
-fn resident_source_shape_candidate_report(
+pub(super) fn resident_source_shape_candidate_report(
     config: &Config,
     row: &SourceShapeRegistryRow,
     node: &plan::ResidentNodeLinkShape,
@@ -229,7 +230,7 @@ fn resident_source_shape_candidate_report(
     }
 }
 
-fn resident_proxy_matches_source_shape(
+pub(super) fn resident_proxy_matches_source_shape(
     row: &SourceShapeRegistryRow,
     proxy: &plan::ResidentProxyPlan,
     graph: &Value,
@@ -240,7 +241,7 @@ fn resident_proxy_matches_source_shape(
         && source_shape_field_matches(row.packet_semantics, graph["packetSemantics"].as_str())
 }
 
-fn source_shape_protocol_matches(row_family: &str, proxy_protocol: &str) -> bool {
+pub(super) fn source_shape_protocol_matches(row_family: &str, proxy_protocol: &str) -> bool {
     match row_family {
         "multi-protocol" => matches!(proxy_protocol, "vless" | "vmess" | "trojan"),
         "quic-family" => matches!(proxy_protocol, "hysteria2" | "tuic" | "juicity"),
@@ -249,7 +250,7 @@ fn source_shape_protocol_matches(row_family: &str, proxy_protocol: &str) -> bool
     }
 }
 
-fn source_shape_field_matches(expected: &str, actual: Option<&str>) -> bool {
+pub(super) fn source_shape_field_matches(expected: &str, actual: Option<&str>) -> bool {
     let Some(actual) = actual else {
         return false;
     };
@@ -277,7 +278,7 @@ fn source_shape_field_matches(expected: &str, actual: Option<&str>) -> bool {
     }
 }
 
-fn resident_matrix_status_counts(rows: &[Value]) -> Value {
+pub(super) fn resident_matrix_status_counts(rows: &[Value]) -> Value {
     let mut counts: BTreeMap<String, usize> = BTreeMap::new();
     for row in rows {
         let status = row["planner_status"].as_str().unwrap_or("unknown");
@@ -286,7 +287,7 @@ fn resident_matrix_status_counts(rows: &[Value]) -> Value {
     json!(counts)
 }
 
-fn resident_matrix_solver_value(
+pub(super) fn resident_matrix_solver_value(
     entry: &adapter_matrix::ResidentLiveAdapterMatrixEntry,
     candidate_count: usize,
     admitted_count: usize,
@@ -334,7 +335,7 @@ fn resident_matrix_solver_value(
     })
 }
 
-fn resident_matrix_solver_blockers(
+pub(super) fn resident_matrix_solver_blockers(
     parser_covered: bool,
     normalized_graph_ready: bool,
     runtime_components_ready: bool,
@@ -364,7 +365,7 @@ fn resident_matrix_solver_blockers(
     blockers
 }
 
-fn resident_matrix_candidate_runtime_components_ready(candidate: &Value) -> bool {
+pub(super) fn resident_matrix_candidate_runtime_components_ready(candidate: &Value) -> bool {
     if candidate["planner_status"].as_str() != Some("admitted") {
         return false;
     }
@@ -377,11 +378,11 @@ fn resident_matrix_candidate_runtime_components_ready(candidate: &Value) -> bool
         && component_status_is_admitted(&components["probeExecutor"])
 }
 
-fn component_status_is_admitted(component: &Value) -> bool {
+pub(super) fn component_status_is_admitted(component: &Value) -> bool {
     component["status"].as_str() == Some("admitted")
 }
 
-fn generation_cache_contract_ready(component: &Value) -> bool {
+pub(super) fn generation_cache_contract_ready(component: &Value) -> bool {
     component["schemaVersion"].as_i64() == Some(1)
         && component["graphId"]
             .as_str()
@@ -391,7 +392,7 @@ fn generation_cache_contract_ready(component: &Value) -> bool {
         && component["cleanupPolicy"].as_str() == Some("drop-on-graph-diff-or-runtime-stop")
 }
 
-fn resident_matrix_candidate_report(
+pub(super) fn resident_matrix_candidate_report(
     config: &Config,
     entry: &adapter_matrix::ResidentLiveAdapterMatrixEntry,
     node: &plan::ResidentNodeLinkShape,
@@ -427,7 +428,7 @@ fn resident_matrix_candidate_report(
     }
 }
 
-fn matrix_row_schemes(formal_matrix_handler: &str) -> &'static [&'static str] {
+pub(super) fn matrix_row_schemes(formal_matrix_handler: &str) -> &'static [&'static str] {
     match formal_matrix_handler {
         "vless" => &["vless"],
         "shadowsocks" => &["ss", "shadowsocks"],
@@ -443,14 +444,14 @@ fn matrix_row_schemes(formal_matrix_handler: &str) -> &'static [&'static str] {
     }
 }
 
-fn sanitize_matrix_error(error: &str) -> String {
+pub(super) fn sanitize_matrix_error(error: &str) -> String {
     if error.contains("://") {
         return "planner error contained a raw link and was redacted".to_owned();
     }
     error.to_owned()
 }
 
-fn resident_proxy_plan_summary_json(proxy: &plan::ResidentProxyPlan) -> Value {
+pub(super) fn resident_proxy_plan_summary_json(proxy: &plan::ResidentProxyPlan) -> Value {
     let fingerprint = proxy.utls_fingerprint.as_ref().map(|fingerprint| {
         json!({
             "source": fingerprint.source,
@@ -482,7 +483,9 @@ fn resident_proxy_plan_summary_json(proxy: &plan::ResidentProxyPlan) -> Value {
     })
 }
 
-fn resident_proxy_group_plan_summary_json(group: &plan::ResidentProxyGroupPlan) -> Value {
+pub(super) fn resident_proxy_group_plan_summary_json(
+    group: &plan::ResidentProxyGroupPlan,
+) -> Value {
     let mut summary = group
         .default_proxy_snapshot()
         .as_ref()

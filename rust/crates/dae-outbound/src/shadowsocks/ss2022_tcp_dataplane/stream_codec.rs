@@ -1,11 +1,16 @@
-struct Ss2022StreamCodec {
-    cipher: Ss2022AeadCipher,
-    nonce: Vec<u8>,
-    tag_len: usize,
+use super::*;
+pub(super) struct Ss2022StreamCodec {
+    pub(super) cipher: Ss2022AeadCipher,
+    pub(super) nonce: Vec<u8>,
+    pub(super) tag_len: usize,
 }
 
 impl Ss2022StreamCodec {
-    fn new(conf: &CipherConf2022, psk: &[u8], salt: &[u8]) -> Result<Self, OutboundError> {
+    pub(super) fn new(
+        conf: &CipherConf2022,
+        psk: &[u8],
+        salt: &[u8],
+    ) -> Result<Self, OutboundError> {
         let subkey = derive_subkey(psk, salt, conf.key_len, SESSION_SUBKEY_CONTEXT);
         Ok(Self {
             cipher: Ss2022AeadCipher::new(conf.cipher, &subkey)?,
@@ -14,27 +19,27 @@ impl Ss2022StreamCodec {
         })
     }
 
-    fn encrypt_next(&mut self, plaintext: &[u8]) -> Result<Vec<u8>, OutboundError> {
+    pub(super) fn encrypt_next(&mut self, plaintext: &[u8]) -> Result<Vec<u8>, OutboundError> {
         let encrypted = self.cipher.encrypt(&self.nonce, plaintext)?;
         increment_nonce_le(&mut self.nonce);
         Ok(encrypted)
     }
 
-    fn decrypt_next(&mut self, ciphertext: &[u8]) -> Result<Vec<u8>, OutboundError> {
+    pub(super) fn decrypt_next(&mut self, ciphertext: &[u8]) -> Result<Vec<u8>, OutboundError> {
         let plain = self.cipher.decrypt(&self.nonce, ciphertext)?;
         increment_nonce_le(&mut self.nonce);
         Ok(plain)
     }
 }
 
-enum Ss2022AeadCipher {
+pub(super) enum Ss2022AeadCipher {
     Aes128(Box<Aes128Gcm>),
     Aes256(Box<Aes256Gcm>),
     ChaCha(Box<ChaCha20Poly1305>),
 }
 
 impl Ss2022AeadCipher {
-    fn new(cipher: &str, key: &[u8]) -> Result<Self, OutboundError> {
+    pub(super) fn new(cipher: &str, key: &[u8]) -> Result<Self, OutboundError> {
         match cipher {
             "2022-blake3-aes-128-gcm" => Ok(Self::Aes128(Box::new(
                 Aes128Gcm::new_from_slice(key).map_err(|_| {
@@ -57,7 +62,7 @@ impl Ss2022AeadCipher {
         }
     }
 
-    fn encrypt(&self, nonce: &[u8], plaintext: &[u8]) -> Result<Vec<u8>, OutboundError> {
+    pub(super) fn encrypt(&self, nonce: &[u8], plaintext: &[u8]) -> Result<Vec<u8>, OutboundError> {
         match self {
             Self::Aes128(cipher) => cipher
                 .encrypt(aes_gcm::Nonce::from_slice(nonce), plaintext)
@@ -71,7 +76,11 @@ impl Ss2022AeadCipher {
         }
     }
 
-    fn decrypt(&self, nonce: &[u8], ciphertext: &[u8]) -> Result<Vec<u8>, OutboundError> {
+    pub(super) fn decrypt(
+        &self,
+        nonce: &[u8],
+        ciphertext: &[u8],
+    ) -> Result<Vec<u8>, OutboundError> {
         match self {
             Self::Aes128(cipher) => cipher
                 .decrypt(aes_gcm::Nonce::from_slice(nonce), ciphertext)

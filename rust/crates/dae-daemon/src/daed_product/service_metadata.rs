@@ -1,4 +1,5 @@
-fn daed_service_contract(version: &str) -> Value {
+use super::*;
+pub(super) fn daed_service_contract(version: &str) -> Value {
     let mut report = crate::service_contract::service_contract_capabilities(version);
     let c10_evidence = crate::c10_go_free_evidence::c10_go_free_product_chain_evidence_from_env();
     if let Value::Object(report) = &mut report {
@@ -241,7 +242,7 @@ fn daed_service_contract(version: &str) -> Value {
     report
 }
 
-fn daed_package_info(version: &str) -> Value {
+pub(super) fn daed_package_info(version: &str) -> Value {
     json!({
         "name": "daed",
         "version": version,

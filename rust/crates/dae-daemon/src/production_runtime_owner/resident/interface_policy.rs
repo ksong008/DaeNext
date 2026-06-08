@@ -1,4 +1,5 @@
-fn resident_interface_attach_options(
+use super::*;
+pub(super) fn resident_interface_attach_options(
     options: &ProductionRuntimeOwnerOptions,
     lan_ifaces: &[String],
     wan_ifaces: &[String],
@@ -44,7 +45,7 @@ fn resident_interface_attach_options(
     )
 }
 
-fn overlapping_interfaces(lan_ifaces: &[String], wan_ifaces: &[String]) -> Vec<String> {
+pub(super) fn overlapping_interfaces(lan_ifaces: &[String], wan_ifaces: &[String]) -> Vec<String> {
     let mut overlaps = Vec::new();
     for lan in lan_ifaces {
         let lan = lan.trim();

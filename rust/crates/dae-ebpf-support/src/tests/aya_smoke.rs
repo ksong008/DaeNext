@@ -1,6 +1,7 @@
+use super::*;
 #[cfg(feature = "aya-loader")]
 #[test]
-fn aya_userspace_load_report_records_catalog_and_fallback_boundaries() {
+pub(super) fn aya_userspace_load_report_records_catalog_and_fallback_boundaries() {
     let object = PathBuf::from("/tmp/bpf_bpfel.param.o");
     let pin_path = PathBuf::from("/sys/fs/bpf/dae");
     let loaded_maps = map_catalog()
@@ -43,7 +44,7 @@ fn aya_userspace_load_report_records_catalog_and_fallback_boundaries() {
 
 #[cfg(feature = "aya-loader")]
 #[test]
-fn aya_userspace_real_object_load_smoke_is_env_gated() {
+pub(super) fn aya_userspace_real_object_load_smoke_is_env_gated() {
     if std::env::var_os("DAE_RUN_AYA_LOAD_SMOKE").is_none() {
         return;
     }
@@ -101,7 +102,7 @@ fn aya_userspace_real_object_load_smoke_is_env_gated() {
 
 #[cfg(feature = "aya-loader")]
 #[test]
-fn aya_tc_attach_detach_smoke_is_env_gated() {
+pub(super) fn aya_tc_attach_detach_smoke_is_env_gated() {
     if std::env::var_os("DAE_RUN_AYA_TC_ATTACH_SMOKE").is_none() {
         return;
     }
@@ -117,7 +118,7 @@ fn aya_tc_attach_detach_smoke_is_env_gated() {
 
 #[cfg(feature = "aya-loader")]
 #[test]
-fn aya_tcx_attach_detach_smoke_is_env_gated() {
+pub(super) fn aya_tcx_attach_detach_smoke_is_env_gated() {
     if std::env::var_os("DAE_RUN_AYA_TCX_ATTACH_SMOKE").is_none() {
         return;
     }
@@ -142,7 +143,7 @@ fn aya_tcx_attach_detach_smoke_is_env_gated() {
 
 #[cfg(feature = "aya-loader")]
 #[test]
-fn aya_tc_netns_attach_detach_smoke_is_env_gated() {
+pub(super) fn aya_tc_netns_attach_detach_smoke_is_env_gated() {
     if std::env::var_os("DAE_RUN_AYA_TC_NETNS_ATTACH_SMOKE").is_none() {
         return;
     }
@@ -246,7 +247,7 @@ fn aya_tc_netns_attach_detach_smoke_is_env_gated() {
 }
 
 #[cfg(feature = "aya-loader")]
-fn run_aya_host_veth_attach_detach_smoke(
+pub(super) fn run_aya_host_veth_attach_detach_smoke(
     backend: AttachBackend,
     object_name: &str,
     pin_stem: &str,
@@ -345,7 +346,7 @@ fn run_aya_host_veth_attach_detach_smoke(
 }
 
 #[cfg(feature = "aya-loader")]
-fn kernel_supports_tcx_optional_smoke() -> bool {
+pub(super) fn kernel_supports_tcx_optional_smoke() -> bool {
     let Ok(release) = std::fs::read_to_string("/proc/sys/kernel/osrelease") else {
         return false;
     };
@@ -360,7 +361,7 @@ fn kernel_supports_tcx_optional_smoke() -> bool {
 }
 
 #[cfg(feature = "aya-loader")]
-fn tcx_optional_attach_unsupported(err: &str) -> bool {
+pub(super) fn tcx_optional_attach_unsupported(err: &str) -> bool {
     let err = err.to_ascii_lowercase();
     err.contains("operation not supported")
         || err.contains("not supported")
@@ -368,7 +369,7 @@ fn tcx_optional_attach_unsupported(err: &str) -> bool {
 }
 
 #[cfg(feature = "aya-loader")]
-fn build_aya_compatible_bpf_object(root: &std::path::Path, output: &std::path::Path) {
+pub(super) fn build_aya_compatible_bpf_object(root: &std::path::Path, output: &std::path::Path) {
     let clang = std::env::var("DAE_BPF_CLANG").unwrap_or_else(|_| "clang".to_owned());
     let include_dir = root.join("control/kern/headers");
     let source = root.join("control/kern/tproxy.c");
@@ -402,7 +403,7 @@ fn build_aya_compatible_bpf_object(root: &std::path::Path, output: &std::path::P
 }
 
 #[cfg(feature = "aya-loader")]
-fn run_host_command<const N: usize>(program: &str, args: [&str; N]) {
+pub(super) fn run_host_command<const N: usize>(program: &str, args: [&str; N]) {
     let output = std::process::Command::new(program)
         .args(args)
         .output()
@@ -419,7 +420,7 @@ fn run_host_command<const N: usize>(program: &str, args: [&str; N]) {
 }
 
 #[cfg(feature = "aya-loader")]
-fn cleanup_host_iface(iface: &str) {
+pub(super) fn cleanup_host_iface(iface: &str) {
     let _ = std::process::Command::new("ip")
         .args(["link", "del", iface])
         .stdout(std::process::Stdio::null())
@@ -428,7 +429,7 @@ fn cleanup_host_iface(iface: &str) {
 }
 
 #[cfg(feature = "aya-loader")]
-fn cleanup_netns(netns: &str) {
+pub(super) fn cleanup_netns(netns: &str) {
     let _ = std::process::Command::new("ip")
         .args(["netns", "del", netns])
         .stdout(std::process::Stdio::null())
@@ -437,7 +438,7 @@ fn cleanup_netns(netns: &str) {
 }
 
 #[cfg(feature = "aya-loader")]
-fn iface_index(iface: &str) -> u32 {
+pub(super) fn iface_index(iface: &str) -> u32 {
     std::fs::read_to_string(format!("/sys/class/net/{iface}/ifindex"))
         .unwrap()
         .trim()

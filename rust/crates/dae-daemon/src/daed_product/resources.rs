@@ -1,5 +1,11 @@
-include!("resources/sections.rs");
-include!("resources/global_render.rs");
-include!("resources/global_merge.rs");
-include!("resources/global_parse_helpers.rs");
-include!("resources/section_parsers.rs");
+use super::*;
+mod sections;
+pub(super) use self::sections::*;
+mod global_render;
+pub(super) use self::global_render::*;
+mod global_merge;
+pub(super) use self::global_merge::*;
+mod global_parse_helpers;
+pub(super) use self::global_parse_helpers::*;
+mod section_parsers;
+pub(super) use self::section_parsers::*;

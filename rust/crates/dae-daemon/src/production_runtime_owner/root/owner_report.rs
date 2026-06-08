@@ -1,3 +1,4 @@
+use super::*;
 pub fn production_runtime_owner_report(
     run_root: &Path,
     options: &ProductionRuntimeOwnerOptions,
@@ -86,7 +87,7 @@ pub fn datapath_outbound_ebpf_deep_area_summary_json() -> Value {
     deep_area::datapath_outbound_ebpf_deep_area_summary_json()
 }
 
-fn validate_options(options: &ProductionRuntimeOwnerOptions) -> Result<(), String> {
+pub(super) fn validate_options(options: &ProductionRuntimeOwnerOptions) -> Result<(), String> {
     if options.tproxy_port == 0 {
         return Err("production runtime owner tproxy port must be non-zero".to_owned());
     }

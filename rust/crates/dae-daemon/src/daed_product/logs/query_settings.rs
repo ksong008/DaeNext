@@ -1,4 +1,5 @@
-fn list_logs_value(
+use super::*;
+pub(crate) fn list_logs_value(
     config_dir: &Path,
     state: &Path,
     level: Option<&str>,
@@ -48,7 +49,7 @@ fn list_logs_value(
     Ok(json!({"items": items}))
 }
 
-fn log_settings_value(state: &Path) -> io::Result<Value> {
+pub(crate) fn log_settings_value(state: &Path) -> io::Result<Value> {
     ensure_state_schema(state)?;
     let conn = open_state_connection(state)?;
     let (max_entries, max_bytes) = log_settings_tuple(&conn)?;
@@ -62,7 +63,7 @@ fn log_settings_value(state: &Path) -> io::Result<Value> {
     }))
 }
 
-fn log_settings_tuple(conn: &Connection) -> io::Result<(i64, i64)> {
+pub(crate) fn log_settings_tuple(conn: &Connection) -> io::Result<(i64, i64)> {
     conn.query_row(
         "SELECT max_entries, max_bytes FROM log_settings WHERE id = 1",
         [],

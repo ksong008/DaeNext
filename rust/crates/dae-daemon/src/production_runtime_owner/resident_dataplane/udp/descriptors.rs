@@ -1,4 +1,5 @@
-fn resident_udp_handler_name(handler: &ResidentProxyProtocolPlan) -> &'static str {
+use super::*;
+pub(super) fn resident_udp_handler_name(handler: &ResidentProxyProtocolPlan) -> &'static str {
     match handler {
         ResidentProxyProtocolPlan::VlessVisionTcpTls { .. } => "vless-vision-tcp-tls",
         ResidentProxyProtocolPlan::Socks5Tcp { .. } => "socks5-tcp",
@@ -29,7 +30,7 @@ fn resident_udp_handler_name(handler: &ResidentProxyProtocolPlan) -> &'static st
     }
 }
 
-fn udp_packet_session_value(
+pub(super) fn udp_packet_session_value(
     proxy: &ResidentProxyPlan,
     peer: &str,
     original_dst: &str,
@@ -48,7 +49,7 @@ fn udp_packet_session_value(
     })
 }
 
-fn udp_packet_semantics(handler: &ResidentProxyProtocolPlan) -> &'static str {
+pub(super) fn udp_packet_semantics(handler: &ResidentProxyProtocolPlan) -> &'static str {
     match handler {
         ResidentProxyProtocolPlan::VlessVisionTcpTls { .. } => "xudp",
         ResidentProxyProtocolPlan::Socks5Tcp { .. } => "udp-associate",

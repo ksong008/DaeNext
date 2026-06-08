@@ -1,9 +1,10 @@
-fn flush_tls_writes_for_udp(client: &mut VlessTlsClient) -> Result<(), String> {
+use super::*;
+pub(super) fn flush_tls_writes_for_udp(client: &mut VlessTlsClient) -> Result<(), String> {
     let stop = AtomicBool::new(false);
-    super::client::flush_tls_writes(client, &stop)
+    super::super::client::flush_tls_writes(client, &stop)
 }
 
-fn build_vless_udp_request(
+pub(super) fn build_vless_udp_request(
     proxy: &ResidentProxyPlan,
     original_dst: SocketAddrV4,
     payload: &[u8],
@@ -34,7 +35,7 @@ fn build_vless_udp_request(
     Ok(request)
 }
 
-fn xudp_frame(original_dst: SocketAddrV4, payload: &[u8]) -> Result<Vec<u8>, String> {
+pub(super) fn xudp_frame(original_dst: SocketAddrV4, payload: &[u8]) -> Result<Vec<u8>, String> {
     if payload.len() > u16::MAX as usize {
         return Err(format!("XUDP payload too large: {} bytes", payload.len()));
     }

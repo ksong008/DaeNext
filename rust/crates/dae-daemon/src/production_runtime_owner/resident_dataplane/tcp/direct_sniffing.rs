@@ -1,4 +1,5 @@
-fn handle_direct_tcp_connection(
+use super::*;
+pub(super) fn handle_direct_tcp_connection(
     inbound: &mut TcpStream,
     peer: SocketAddr,
     original_dst: SocketAddrV4,
@@ -25,7 +26,7 @@ fn handle_direct_tcp_connection(
     ))
 }
 
-async fn handle_direct_tcp_connection_async(
+pub(super) async fn handle_direct_tcp_connection_async(
     inbound: &mut TokioTcpStream,
     peer: SocketAddr,
     original_dst: SocketAddrV4,
@@ -61,7 +62,7 @@ async fn handle_direct_tcp_connection_async(
     ))
 }
 
-fn direct_tcp_finished_event(
+pub(super) fn direct_tcp_finished_event(
     peer: SocketAddr,
     original_dst: SocketAddrV4,
     selection: &TcpDirectSelection,
@@ -102,7 +103,7 @@ fn direct_tcp_finished_event(
     event
 }
 
-fn append_tcp_route_log_fields(
+pub(super) fn append_tcp_route_log_fields(
     event: &mut Value,
     route: &TcpRouteSelection,
     outbound: &str,
@@ -121,7 +122,7 @@ fn append_tcp_route_log_fields(
     event["mac"] = json!(&route.log_metadata.mac);
 }
 
-fn sniff_initial_tcp_payload(
+pub(super) fn sniff_initial_tcp_payload(
     inbound: &mut TcpStream,
     timeout: Duration,
 ) -> Result<TcpSniffReport, String> {
@@ -204,7 +205,7 @@ fn sniff_initial_tcp_payload(
     }
 }
 
-async fn sniff_initial_tcp_payload_async(
+pub(super) async fn sniff_initial_tcp_payload_async(
     inbound: &mut TokioTcpStream,
     timeout: Duration,
 ) -> Result<TcpSniffReport, String> {
@@ -286,23 +287,23 @@ async fn sniff_initial_tcp_payload_async(
     }
 }
 
-fn sniff_needs_more(err: &SniffingError) -> bool {
+pub(super) fn sniff_needs_more(err: &SniffingError) -> bool {
     matches!(err, SniffingError::NeedMore) || err.to_string().contains("need more")
 }
 
-fn process_name(raw: &[u8; 16]) -> Option<String> {
+pub(super) fn process_name(raw: &[u8; 16]) -> Option<String> {
     let end = raw.iter().position(|byte| *byte == 0).unwrap_or(raw.len());
     (end > 0).then(|| String::from_utf8_lossy(&raw[..end]).into_owned())
 }
 
-fn mac_string(raw: &[u8; 6]) -> String {
+pub(super) fn mac_string(raw: &[u8; 6]) -> String {
     format!(
         "{:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x}",
         raw[0], raw[1], raw[2], raw[3], raw[4], raw[5]
     )
 }
 
-fn ipv4_mapped_ip_bytes(addr: Ipv4Addr) -> BpfIpBytes {
+pub(super) fn ipv4_mapped_ip_bytes(addr: Ipv4Addr) -> BpfIpBytes {
     let mut out = [0_u8; 16];
     out[10] = 0xff;
     out[11] = 0xff;
@@ -310,10 +311,10 @@ fn ipv4_mapped_ip_bytes(addr: Ipv4Addr) -> BpfIpBytes {
     BpfIpBytes { u6_addr8: out }
 }
 
-fn bytes_of<T>(value: &T) -> &[u8] {
+pub(super) fn bytes_of<T>(value: &T) -> &[u8] {
     unsafe { slice::from_raw_parts((value as *const T).cast::<u8>(), size_of::<T>()) }
 }
 
-fn bytes_of_mut<T>(value: &mut T) -> &mut [u8] {
+pub(super) fn bytes_of_mut<T>(value: &mut T) -> &mut [u8] {
     unsafe { slice::from_raw_parts_mut((value as *mut T).cast::<u8>(), size_of::<T>()) }
 }

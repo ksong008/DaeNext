@@ -5,8 +5,13 @@ use dae_core_types::OutboundIndex;
 use dae_ebpf_support::{BpfMatchSet, ConnectivityEvent, ConnectivityKey, RoutingMapEntry};
 use dae_routing::IpPrefix;
 
-include!("tests/domain_routing.rs");
-include!("tests/reload_control.rs");
-include!("tests/outbound_connectivity.rs");
-include!("tests/routing_owner.rs");
-include!("tests/helpers.rs");
+mod domain_routing;
+use self::domain_routing::*;
+mod reload_control;
+use self::reload_control::*;
+mod outbound_connectivity;
+use self::outbound_connectivity::*;
+mod routing_owner;
+use self::routing_owner::*;
+mod helpers;
+use self::helpers::*;

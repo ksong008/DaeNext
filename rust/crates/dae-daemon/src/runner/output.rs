@@ -1,3 +1,4 @@
+use super::*;
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DaemonOutput {
     pub stdout: String,

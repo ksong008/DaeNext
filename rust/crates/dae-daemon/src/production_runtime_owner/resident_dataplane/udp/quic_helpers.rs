@@ -1,4 +1,5 @@
-fn run_quic_udp_exchange<F>(label: &str, future: F) -> Result<UdpExchangeResult, String>
+use super::*;
+pub(super) fn run_quic_udp_exchange<F>(label: &str, future: F) -> Result<UdpExchangeResult, String>
 where
     F: std::future::Future<Output = Result<UdpExchangeResult, String>>,
 {
@@ -18,13 +19,13 @@ where
 }
 
 #[allow(dead_code)]
-struct Hysteria2UdpMessage {
-    session_id: u32,
-    packet_id: u16,
-    payload: Vec<u8>,
+pub(super) struct Hysteria2UdpMessage {
+    pub(super) session_id: u32,
+    pub(super) packet_id: u16,
+    pub(super) payload: Vec<u8>,
 }
 
-fn build_hysteria2_udp_message(
+pub(super) fn build_hysteria2_udp_message(
     session_id: u32,
     packet_id: u16,
     target: &str,
@@ -47,7 +48,7 @@ fn build_hysteria2_udp_message(
     Ok(out)
 }
 
-fn parse_hysteria2_udp_message(input: &[u8]) -> Result<Hysteria2UdpMessage, String> {
+pub(super) fn parse_hysteria2_udp_message(input: &[u8]) -> Result<Hysteria2UdpMessage, String> {
     if input.len() < 9 {
         return Err("short Hysteria2 UDP message".to_owned());
     }
@@ -75,13 +76,13 @@ fn parse_hysteria2_udp_message(input: &[u8]) -> Result<Hysteria2UdpMessage, Stri
 }
 
 #[allow(dead_code)]
-struct TuicPacketFrame {
-    assoc_id: u16,
-    packet_id: u16,
-    payload: Vec<u8>,
+pub(super) struct TuicPacketFrame {
+    pub(super) assoc_id: u16,
+    pub(super) packet_id: u16,
+    pub(super) payload: Vec<u8>,
 }
 
-fn build_tuic_packet_frame(
+pub(super) fn build_tuic_packet_frame(
     assoc_id: u16,
     packet_id: u16,
     target: &str,
@@ -107,7 +108,7 @@ fn build_tuic_packet_frame(
     Ok(out)
 }
 
-fn parse_tuic_packet_frame(input: &[u8]) -> Result<TuicPacketFrame, String> {
+pub(super) fn parse_tuic_packet_frame(input: &[u8]) -> Result<TuicPacketFrame, String> {
     if input.len() < 10 {
         return Err("short TUIC packet frame".to_owned());
     }
@@ -136,7 +137,7 @@ fn parse_tuic_packet_frame(input: &[u8]) -> Result<TuicPacketFrame, String> {
     })
 }
 
-fn write_tuic_address(address: &Socks5Address, out: &mut Vec<u8>) -> Result<(), String> {
+pub(super) fn write_tuic_address(address: &Socks5Address, out: &mut Vec<u8>) -> Result<(), String> {
     match address {
         Socks5Address::Ipv4 { addr, port } => {
             out.push(1);
@@ -161,7 +162,7 @@ fn write_tuic_address(address: &Socks5Address, out: &mut Vec<u8>) -> Result<(), 
     Ok(())
 }
 
-fn read_tuic_address(input: &[u8], offset: usize) -> Result<usize, String> {
+pub(super) fn read_tuic_address(input: &[u8], offset: usize) -> Result<usize, String> {
     let Some(&atyp) = input.get(offset) else {
         return Err("missing TUIC address type".to_owned());
     };
@@ -184,7 +185,10 @@ fn read_tuic_address(input: &[u8], offset: usize) -> Result<usize, String> {
     Ok(cursor + 2)
 }
 
-fn build_juicity_stream_packet_request(target: &str, frame: &[u8]) -> Result<Vec<u8>, String> {
+pub(super) fn build_juicity_stream_packet_request(
+    target: &str,
+    frame: &[u8],
+) -> Result<Vec<u8>, String> {
     let metadata = dae_outbound::trojan::TrojanMetadata::parse("udp", target)
         .map_err(|err| format!("build Juicity UDP metadata: {err}"))?;
     let metadata = metadata
@@ -197,7 +201,7 @@ fn build_juicity_stream_packet_request(target: &str, frame: &[u8]) -> Result<Vec
     Ok(out)
 }
 
-fn append_quic_varint(out: &mut Vec<u8>, value: u64) -> Result<(), String> {
+pub(super) fn append_quic_varint(out: &mut Vec<u8>, value: u64) -> Result<(), String> {
     match value {
         0..=63 => out.push(value as u8),
         64..=16_383 => {
@@ -215,7 +219,7 @@ fn append_quic_varint(out: &mut Vec<u8>, value: u64) -> Result<(), String> {
     Ok(())
 }
 
-fn read_quic_varint(input: &[u8], offset: usize) -> Result<(u64, usize), String> {
+pub(super) fn read_quic_varint(input: &[u8], offset: usize) -> Result<(u64, usize), String> {
     let Some(&first) = input.get(offset) else {
         return Err("missing QUIC varint".to_owned());
     };

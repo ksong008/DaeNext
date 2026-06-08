@@ -1,8 +1,9 @@
-fn binary() -> &'static str {
+use super::*;
+pub(crate) fn binary() -> &'static str {
     env!("CARGO_BIN_EXE_dae-daemon-optin")
 }
 
-fn candidate_service_contract_report() -> Value {
+pub(crate) fn candidate_service_contract_report() -> Value {
     let output = Command::new(binary())
         .arg("service-contract")
         .output()
@@ -13,7 +14,7 @@ fn candidate_service_contract_report() -> Value {
 }
 
 #[test]
-fn candidate_reports_resident_service_and_dataplane_capabilities() {
+pub(crate) fn candidate_reports_resident_service_and_dataplane_capabilities() {
     let report = candidate_service_contract_report();
     assert_resident_and_control_plane_contract(&report);
     assert_datapath_and_outbound_underlay_contract(&report);

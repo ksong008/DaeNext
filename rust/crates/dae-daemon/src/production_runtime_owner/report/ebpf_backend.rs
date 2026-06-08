@@ -1,4 +1,5 @@
-fn ebpf_backend_capability_json(
+use super::*;
+pub(super) fn ebpf_backend_capability_json(
     report: &EbpfBackendCapabilityReport,
     options: &ProductionRuntimeOwnerOptions,
 ) -> Value {

@@ -1,4 +1,7 @@
-fn source_shape_registry_status_counts(rows: &[dae_outbound::SourceShapeRegistryRow]) -> Value {
+use super::*;
+pub(super) fn source_shape_registry_status_counts(
+    rows: &[dae_outbound::SourceShapeRegistryRow],
+) -> Value {
     let mut counts: BTreeMap<String, usize> = BTreeMap::new();
     for row in rows {
         let status = match row.resident_status {
@@ -10,11 +13,11 @@ fn source_shape_registry_status_counts(rows: &[dae_outbound::SourceShapeRegistry
     json!(counts)
 }
 
-fn required_protocol_variant_shape_ids() -> &'static [&'static str] {
+pub(super) fn required_protocol_variant_shape_ids() -> &'static [&'static str] {
     dae_outbound::official_common_source_shape_ids()
 }
 
-fn excluded_stream_wrapper_source_matrix_typed_report(
+pub(super) fn excluded_stream_wrapper_source_matrix_typed_report(
     rows: &[dae_outbound::SourceShapeRegistryRow],
     excluded_stream_wrappers: &[&str],
     scoped_closure_evidence_ready: bool,

@@ -16,12 +16,21 @@ use super::ss2022::{
     TCP_CHUNK_MAX_LEN, cipher_conf, validate_base64_psk,
 };
 
-include!("ss2022_tcp_dataplane/types.rs");
-include!("ss2022_tcp_dataplane/exchanges.rs");
-include!("ss2022_tcp_dataplane/client_api.rs");
-include!("ss2022_tcp_dataplane/server_api.rs");
-include!("ss2022_tcp_dataplane/client_codec.rs");
-include!("ss2022_tcp_dataplane/server_codec.rs");
-include!("ss2022_tcp_dataplane/identity.rs");
-include!("ss2022_tcp_dataplane/stream_codec.rs");
-include!("ss2022_tcp_dataplane/keys.rs");
+mod types;
+pub use self::types::*;
+mod exchanges;
+pub use self::exchanges::*;
+mod client_api;
+pub use self::client_api::*;
+mod server_api;
+pub use self::server_api::*;
+mod client_codec;
+use self::client_codec::*;
+mod server_codec;
+use self::server_codec::*;
+mod identity;
+use self::identity::*;
+mod stream_codec;
+use self::stream_codec::*;
+mod keys;
+pub use self::keys::*;

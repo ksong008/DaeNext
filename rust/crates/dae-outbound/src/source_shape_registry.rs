@@ -1,8 +1,14 @@
 use serde_json::{Value, json};
 
-include!("source_shape_registry/types.rs");
-include!("source_shape_registry/api.rs");
-include!("source_shape_registry/ledger_constants.rs");
-include!("source_shape_registry/rows.rs");
-include!("source_shape_registry/official_common.rs");
-include!("source_shape_registry/constructors.rs");
+mod types;
+pub use self::types::*;
+mod api;
+pub use self::api::*;
+mod ledger_constants;
+use self::ledger_constants::*;
+mod rows;
+use self::rows::*;
+mod official_common;
+use self::official_common::*;
+mod constructors;
+use self::constructors::*;

@@ -1,4 +1,5 @@
-fn discover_routing_tuple_map(
+use super::*;
+pub(super) fn discover_routing_tuple_map(
     native_runtime: &NativeEbpfRuntimeState,
     handoff: &LiveLoadedTproxyListenSocketMap,
 ) -> Result<RoutingTupleMapDiscovery, String> {
@@ -33,7 +34,10 @@ fn discover_routing_tuple_map(
     })
 }
 
-fn loaded_map_id_by_name(candidate_map_ids: &[u32], name: &str) -> Result<Option<u32>, String> {
+pub(super) fn loaded_map_id_by_name(
+    candidate_map_ids: &[u32],
+    name: &str,
+) -> Result<Option<u32>, String> {
     for id in candidate_map_ids {
         let fd = match open_map_fd(*id) {
             Ok(fd) => fd,
@@ -60,7 +64,7 @@ fn loaded_map_id_by_name(candidate_map_ids: &[u32], name: &str) -> Result<Option
     Ok(None)
 }
 
-fn latest_loaded_map_id_by_name(
+pub(super) fn latest_loaded_map_id_by_name(
     candidate_map_ids: &[u32],
     name: &str,
 ) -> Result<Option<u32>, String> {
@@ -93,20 +97,20 @@ fn latest_loaded_map_id_by_name(
     Ok(selected)
 }
 
-fn kernel_visible_map_name_matches(actual: &str, expected: &str) -> bool {
+pub(super) fn kernel_visible_map_name_matches(actual: &str, expected: &str) -> bool {
     actual == expected || actual == truncated_bpf_name(expected)
 }
 
-fn truncated_bpf_name(name: &str) -> String {
+pub(super) fn truncated_bpf_name(name: &str) -> String {
     const BPF_OBJ_NAME_MAX_VISIBLE_LEN: usize = 15;
     name.chars().take(BPF_OBJ_NAME_MAX_VISIBLE_LEN).collect()
 }
 
-fn is_transient_missing_map_id(err: &std::io::Error) -> bool {
+pub(super) fn is_transient_missing_map_id(err: &std::io::Error) -> bool {
     err.kind() == std::io::ErrorKind::NotFound
 }
 
-fn startup_evidence_from_report(start_report: &Value) -> Value {
+pub(super) fn startup_evidence_from_report(start_report: &Value) -> Value {
     let native_object = start_report
         .get("native_object")
         .filter(|value| !value.is_null());
@@ -156,7 +160,7 @@ fn startup_evidence_from_report(start_report: &Value) -> Value {
     })
 }
 
-fn startup_attach_bindings(start_report: &Value) -> Vec<Value> {
+pub(super) fn startup_attach_bindings(start_report: &Value) -> Vec<Value> {
     let Some(steps) = start_report.get("executed_steps").and_then(Value::as_array) else {
         return Vec::new();
     };
@@ -189,7 +193,7 @@ fn startup_attach_bindings(start_report: &Value) -> Vec<Value> {
         .collect()
 }
 
-fn startup_routing_match_sets(start_report: &Value) -> Vec<Value> {
+pub(super) fn startup_routing_match_sets(start_report: &Value) -> Vec<Value> {
     let Some(routings) = start_report
         .get("resident_lan_routing")
         .and_then(Value::as_array)
@@ -213,7 +217,7 @@ fn startup_routing_match_sets(start_report: &Value) -> Vec<Value> {
         .collect()
 }
 
-fn selected_netns_link_mode(start_report: &Value) -> Option<String> {
+pub(super) fn selected_netns_link_mode(start_report: &Value) -> Option<String> {
     start_report["executed_steps"]
         .as_array()?
         .iter()
@@ -223,7 +227,7 @@ fn selected_netns_link_mode(start_report: &Value) -> Option<String> {
         .map(str::to_owned)
 }
 
-fn actual_resident_attach_backend(start_report: &Value) -> Option<String> {
+pub(super) fn actual_resident_attach_backend(start_report: &Value) -> Option<String> {
     let mut saw_tcx = false;
     let mut saw_tc = false;
     for backend in resident_actual_backend_values(start_report) {
@@ -246,7 +250,7 @@ fn actual_resident_attach_backend(start_report: &Value) -> Option<String> {
     }
 }
 
-fn resident_actual_backend_values(start_report: &Value) -> Vec<&str> {
+pub(super) fn resident_actual_backend_values(start_report: &Value) -> Vec<&str> {
     let mut out = Vec::new();
     if let Some(wan) = start_report["resident_wan_attach"].as_array() {
         for attach in wan {

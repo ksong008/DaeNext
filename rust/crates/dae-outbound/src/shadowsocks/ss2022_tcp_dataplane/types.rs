@@ -1,5 +1,6 @@
-const SESSION_SUBKEY_CONTEXT: &str = "shadowsocks 2022 session subkey";
-const IDENTITY_SUBKEY_CONTEXT: &str = "shadowsocks 2022 identity subkey";
+use super::*;
+pub(super) const SESSION_SUBKEY_CONTEXT: &str = "shadowsocks 2022 session subkey";
+pub(super) const IDENTITY_SUBKEY_CONTEXT: &str = "shadowsocks 2022 identity subkey";
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Ss2022TcpSalts<'a> {
@@ -53,7 +54,7 @@ pub struct Ss2022TcpClientRequest {
 }
 
 pub struct Ss2022TcpClientStreamEncoder {
-    codec: Ss2022StreamCodec,
+    pub(super) codec: Ss2022StreamCodec,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -65,7 +66,7 @@ pub struct Ss2022TcpServerStreamStart {
 }
 
 pub struct Ss2022TcpServerStreamDecoder {
-    codec: Ss2022StreamCodec,
+    pub(super) codec: Ss2022StreamCodec,
 }
 
 impl Ss2022TcpClientStreamEncoder {

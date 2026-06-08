@@ -1,5 +1,6 @@
+use super::*;
 #[test]
-fn tc_attach_backend_report_keeps_native_attach_non_default() {
+pub(super) fn tc_attach_backend_report_keeps_native_attach_non_default() {
     let peer = TcBpfAttachSpec::new(
         TcAttachTarget::netns("daens", "dae0peer", TcAttachDirection::Ingress),
         "49491",
@@ -43,7 +44,7 @@ fn tc_attach_backend_report_keeps_native_attach_non_default() {
 }
 
 #[test]
-fn dae_tc_attach_matrix_matches_go_control_plane_core_values() {
+pub(super) fn dae_tc_attach_matrix_matches_go_control_plane_core_values() {
     let matrix = dae_tc_attach_matrix(DaeTcAttachMatrixInput {
         object: "/tmp/bpf_bpfel.param.o".to_owned(),
         lan_iface: "lan0".to_owned(),
@@ -139,7 +140,7 @@ fn dae_tc_attach_matrix_matches_go_control_plane_core_values() {
 }
 
 #[test]
-fn dae_tc_attach_matrix_supports_l3_and_aya_classifier_sections() {
+pub(super) fn dae_tc_attach_matrix_supports_l3_and_aya_classifier_sections() {
     let matrix = dae_tc_attach_matrix(DaeTcAttachMatrixInput {
         object: "/tmp/dae-aya-bpf_bpfel.o".to_owned(),
         lan_iface: "lan0".to_owned(),
@@ -175,7 +176,7 @@ fn dae_tc_attach_matrix_supports_l3_and_aya_classifier_sections() {
     );
 }
 
-fn attach_line(matrix: &[DaeTcAttachLine], role: DaeTcAttachRole) -> &DaeTcAttachLine {
+pub(super) fn attach_line(matrix: &[DaeTcAttachLine], role: DaeTcAttachRole) -> &DaeTcAttachLine {
     matrix
         .iter()
         .find(|line| line.role == role)
@@ -183,7 +184,7 @@ fn attach_line(matrix: &[DaeTcAttachLine], role: DaeTcAttachRole) -> &DaeTcAttac
 }
 
 #[test]
-fn tc_attach_contract_generates_existing_command_fallback_shape() {
+pub(super) fn tc_attach_contract_generates_existing_command_fallback_shape() {
     let peer = TcBpfAttachSpec::new(
         TcAttachTarget::netns("daens", "dae0peer", TcAttachDirection::Ingress),
         "49491",

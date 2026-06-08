@@ -1,4 +1,5 @@
-fn parsed_dns_value(raw: &str) -> Value {
+use super::*;
+pub(crate) fn parsed_dns_value(raw: &str) -> Value {
     json!({
         "dns": raw,
         "parsedDns": {
@@ -11,7 +12,7 @@ fn parsed_dns_value(raw: &str) -> Value {
     })
 }
 
-fn parsed_routing_value(raw: &str) -> Value {
+pub(crate) fn parsed_routing_value(raw: &str) -> Value {
     json!({
         "routing": raw,
         "parsedRouting": {

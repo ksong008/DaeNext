@@ -1,0 +1,84 @@
+use super::*;
+pub(crate) fn runtime_overview_report(app: &AppState, request: &HttpRequest) -> Value {
+    let runtime = app.runtime.summary();
+    let window_sec = query_u64(request, "windowSec")
+        .unwrap_or(60)
+        .clamp(1, 3_600);
+    let max_points = query_usize(request, "maxPoints")
+        .unwrap_or(120)
+        .clamp(1, 1_000);
+    let traffic = resident_runtime_traffic_stats(&runtime, window_sec, max_points);
+    let process = current_process_metrics();
+    let allocator_live_heap = allocator_live_heap_bytes();
+    json!({
+        "updatedAt": now_text(),
+        "uploadRate": traffic.upload_rate.to_string(),
+        "downloadRate": traffic.download_rate.to_string(),
+        "uploadTotal": traffic.upload_total.to_string(),
+        "downloadTotal": traffic.download_total.to_string(),
+        "activeConnections": traffic.active_connections,
+        "udpSessions": traffic.udp_sessions,
+        "udpTaskQueues": 0,
+        "udpTaskDropTotal": "0",
+        "packetSnifferSessions": 0,
+        "cpuUsagePercent": process.cpu_usage_percent,
+        "rssBytes": process.rss_bytes.to_string(),
+        "rssAnonBytes": process.anonymous_rss_bytes.to_string(),
+        "rssFileBytes": process.file_rss_bytes.to_string(),
+        "anonymousRssBytes": process.anonymous_rss_bytes.to_string(),
+        "fileRssBytes": process.file_rss_bytes.to_string(),
+        "vmDataBytes": process.vm_data_bytes.to_string(),
+        "heapLiveBytes": allocator_live_heap.map(|bytes| json!(bytes.to_string())).unwrap_or(Value::Null),
+        "heapMetricSource": if allocator_live_heap.is_some() { "allocator-stats" } else { "unavailable" },
+        "heapCompatBytes": process.heap_alloc_bytes_compat().to_string(),
+        "heapCompatBytesSource": "compat-alias-rss-anon-not-live-heap",
+        "heapAllocBytes": process.heap_alloc_bytes_compat().to_string(),
+        "heapAllocBytesSource": "compat-alias-rss-anon-not-live-heap",
+        "allocatorProfile": allocator_profile(),
+        "allocatorStats": allocator_stats_json(),
+        "allocatorReclaim": allocator_reclaim_snapshot_json(),
+        "resourcePools": resource_pool_policy_json(),
+        "goroutines": process.thread_count,
+        "productHttp": app.http_metrics.snapshot(),
+        "runtime": runtime,
+        "samples": traffic.samples,
+    })
+}
+
+pub(crate) fn runtime_overview_delta_report(app: &AppState, request: &HttpRequest) -> Value {
+    let runtime = app.runtime.summary();
+    let window_sec = query_u64(request, "windowSec")
+        .unwrap_or(60)
+        .clamp(1, 3_600);
+    let max_points = query_usize(request, "maxPoints")
+        .unwrap_or(120)
+        .clamp(1, 1_000);
+    let traffic = resident_runtime_traffic_stats(&runtime, window_sec, max_points);
+    let process = current_process_metrics();
+    let allocator_live_heap = allocator_live_heap_bytes();
+    json!({
+        "updatedAt": now_text(),
+        "uploadRate": traffic.upload_rate.to_string(),
+        "downloadRate": traffic.download_rate.to_string(),
+        "uploadTotal": traffic.upload_total.to_string(),
+        "downloadTotal": traffic.download_total.to_string(),
+        "activeConnections": traffic.active_connections,
+        "udpSessions": traffic.udp_sessions,
+        "cpuUsagePercent": process.cpu_usage_percent,
+        "rssBytes": process.rss_bytes.to_string(),
+        "rssAnonBytes": process.anonymous_rss_bytes.to_string(),
+        "rssFileBytes": process.file_rss_bytes.to_string(),
+        "anonymousRssBytes": process.anonymous_rss_bytes.to_string(),
+        "fileRssBytes": process.file_rss_bytes.to_string(),
+        "vmDataBytes": process.vm_data_bytes.to_string(),
+        "heapLiveBytes": allocator_live_heap.map(|bytes| json!(bytes.to_string())).unwrap_or(Value::Null),
+        "heapMetricSource": if allocator_live_heap.is_some() { "allocator-stats" } else { "unavailable" },
+        "heapCompatBytes": process.heap_alloc_bytes_compat().to_string(),
+        "heapCompatBytesSource": "compat-alias-rss-anon-not-live-heap",
+        "heapAllocBytes": process.heap_alloc_bytes_compat().to_string(),
+        "heapAllocBytesSource": "compat-alias-rss-anon-not-live-heap",
+        "goroutines": process.thread_count,
+        "reloadCount": runtime["reloadCount"].clone(),
+        "samples": traffic.samples,
+    })
+}

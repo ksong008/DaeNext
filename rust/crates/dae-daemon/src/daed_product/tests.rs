@@ -1,10 +1,29 @@
+use super::*;
 #[cfg(test)]
-mod tests {
-    include!("tests/latency.rs");
-    include!("tests/product_resources.rs");
-    include!("tests/nodes_subscriptions.rs");
-    include!("tests/runtime_config.rs");
-    include!("tests/logs.rs");
-    include!("tests/runtime_lifecycle.rs");
-    include!("tests/default_resources.rs");
-}
+mod latency;
+#[cfg(test)]
+pub(super) use self::latency::*;
+#[cfg(test)]
+mod product_resources;
+#[cfg(test)]
+pub(super) use self::product_resources::*;
+#[cfg(test)]
+mod nodes_subscriptions;
+#[cfg(test)]
+pub(super) use self::nodes_subscriptions::*;
+#[cfg(test)]
+mod runtime_config;
+#[cfg(test)]
+pub(super) use self::runtime_config::*;
+#[cfg(test)]
+mod logs;
+#[cfg(test)]
+pub(super) use self::logs::*;
+#[cfg(test)]
+mod runtime_lifecycle;
+#[cfg(test)]
+pub(super) use self::runtime_lifecycle::*;
+#[cfg(test)]
+mod default_resources;
+#[cfg(test)]
+pub(super) use self::default_resources::*;

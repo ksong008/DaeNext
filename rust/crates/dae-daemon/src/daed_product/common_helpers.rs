@@ -1,4 +1,5 @@
-fn integer_array(body: &Value, key: &str) -> Vec<i64> {
+use super::*;
+pub(super) fn integer_array(body: &Value, key: &str) -> Vec<i64> {
     body.get(key)
         .and_then(Value::as_array)
         .map(|values| {
@@ -14,11 +15,11 @@ fn integer_array(body: &Value, key: &str) -> Vec<i64> {
         .unwrap_or_default()
 }
 
-fn now_text() -> String {
+pub(super) fn now_text() -> String {
     iso8601_utc(unix_now())
 }
 
-fn iso8601_utc(timestamp: u64) -> String {
+pub(super) fn iso8601_utc(timestamp: u64) -> String {
     let seconds = timestamp as i64;
     let days = seconds.div_euclid(86_400);
     let rem = seconds.rem_euclid(86_400);
@@ -29,7 +30,7 @@ fn iso8601_utc(timestamp: u64) -> String {
     format!("{year:04}-{month:02}-{day:02}T{hour:02}:{minute:02}:{second:02}Z")
 }
 
-fn civil_from_days(days: i64) -> (i64, i64, i64) {
+pub(super) fn civil_from_days(days: i64) -> (i64, i64, i64) {
     let z = days + 719_468;
     let era = if z >= 0 { z } else { z - 146_096 } / 146_097;
     let doe = z - era * 146_097;
@@ -43,7 +44,7 @@ fn civil_from_days(days: i64) -> (i64, i64, i64) {
     (year, month, day)
 }
 
-fn reset_all_user_passwords(state: &Path) -> io::Result<Value> {
+pub(super) fn reset_all_user_passwords(state: &Path) -> io::Result<Value> {
     ensure_state_schema(state)?;
     let conn = open_state_connection(state)?;
     let mut stmt = conn
@@ -79,7 +80,7 @@ fn reset_all_user_passwords(state: &Path) -> io::Result<Value> {
     }))
 }
 
-fn random_recovery_password() -> String {
+pub(super) fn random_recovery_password() -> String {
     const LETTERS: &[u8] = b"abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ";
     const DIGITS: &[u8] = b"0123456789";
     const ALL: &[u8] = b"abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
@@ -93,14 +94,14 @@ fn random_recovery_password() -> String {
     String::from_utf8(out).unwrap_or_else(|_| "a1fallback".to_owned())
 }
 
-fn user_count(state: &Path) -> io::Result<i64> {
+pub(super) fn user_count(state: &Path) -> io::Result<i64> {
     ensure_state_schema(state)?;
     let conn = open_state_connection(state)?;
     conn.query_row("SELECT COUNT(*) FROM users", [], |row| row.get(0))
         .map_err(sqlite_io_error)
 }
 
-fn create_user(state: &Path, username: &str, password: &str) -> io::Result<String> {
+pub(super) fn create_user(state: &Path, username: &str, password: &str) -> io::Result<String> {
     validate_password_strength(password)
         .map_err(|err| io::Error::new(io::ErrorKind::InvalidInput, err))?;
     ensure_state_schema(state)?;
@@ -127,7 +128,7 @@ fn create_user(state: &Path, username: &str, password: &str) -> io::Result<Strin
     signed_token(&user)
 }
 
-fn issue_token(state: &Path, username: &str, password: &str) -> io::Result<String> {
+pub(super) fn issue_token(state: &Path, username: &str, password: &str) -> io::Result<String> {
     let Some(user) = load_user_by_username(state, username)? else {
         return Err(io::Error::new(
             io::ErrorKind::PermissionDenied,
@@ -144,7 +145,7 @@ fn issue_token(state: &Path, username: &str, password: &str) -> io::Result<Strin
     signed_token(&user)
 }
 
-fn authenticate_request(app: &AppState, request: &HttpRequest) -> Option<UserRecord> {
+pub(super) fn authenticate_request(app: &AppState, request: &HttpRequest) -> Option<UserRecord> {
     let token = request
         .headers
         .get("authorization")

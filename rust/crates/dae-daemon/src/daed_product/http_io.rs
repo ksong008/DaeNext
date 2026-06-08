@@ -1,4 +1,5 @@
-fn serve_static_file(web_root: &Path, request: &HttpRequest) -> HttpResponse {
+use super::*;
+pub(super) fn serve_static_file(web_root: &Path, request: &HttpRequest) -> HttpResponse {
     if request.method != "GET" && request.method != "HEAD" {
         return HttpResponse::json(405, json!({"error": "method should be GET or HEAD"}));
     }
@@ -24,7 +25,7 @@ fn serve_static_file(web_root: &Path, request: &HttpRequest) -> HttpResponse {
     }
 }
 
-fn safe_static_path(web_root: &Path, request_path: &str) -> Option<PathBuf> {
+pub(super) fn safe_static_path(web_root: &Path, request_path: &str) -> Option<PathBuf> {
     let decoded = percent_decode(request_path);
     let trimmed = decoded.trim_start_matches('/');
     let mut path = PathBuf::from(web_root);
@@ -38,7 +39,7 @@ fn safe_static_path(web_root: &Path, request_path: &str) -> Option<PathBuf> {
     Some(path)
 }
 
-fn mime_for_path(path: &Path) -> &'static str {
+pub(super) fn mime_for_path(path: &Path) -> &'static str {
     match path
         .extension()
         .and_then(|value| value.to_str())
@@ -58,7 +59,7 @@ fn mime_for_path(path: &Path) -> &'static str {
     }
 }
 
-fn read_http_request(stream: &mut TcpStream) -> io::Result<HttpRequest> {
+pub(super) fn read_http_request(stream: &mut TcpStream) -> io::Result<HttpRequest> {
     let mut buffer = Vec::new();
     let mut temp = [0_u8; 4096];
     let header_end = loop {
@@ -134,7 +135,7 @@ fn read_http_request(stream: &mut TcpStream) -> io::Result<HttpRequest> {
     })
 }
 
-fn write_http_response(
+pub(super) fn write_http_response(
     stream: &mut TcpStream,
     response: &HttpResponse,
     head_only: bool,
@@ -158,7 +159,7 @@ fn write_http_response(
     stream.flush()
 }
 
-fn split_path_query(raw: &str) -> (String, HashMap<String, Vec<String>>) {
+pub(super) fn split_path_query(raw: &str) -> (String, HashMap<String, Vec<String>>) {
     let (path, query) = raw.split_once('?').unwrap_or((raw, ""));
     let mut out = HashMap::new();
     for pair in query.split('&').filter(|pair| !pair.is_empty()) {
@@ -170,7 +171,7 @@ fn split_path_query(raw: &str) -> (String, HashMap<String, Vec<String>>) {
     (percent_decode(path), out)
 }
 
-fn percent_decode(value: &str) -> String {
+pub(super) fn percent_decode(value: &str) -> String {
     let mut out = Vec::with_capacity(value.len());
     let bytes = value.as_bytes();
     let mut i = 0;
@@ -199,26 +200,26 @@ fn percent_decode(value: &str) -> String {
     String::from_utf8_lossy(&out).into_owned()
 }
 
-fn find_subsequence(haystack: &[u8], needle: &[u8]) -> Option<usize> {
+pub(super) fn find_subsequence(haystack: &[u8], needle: &[u8]) -> Option<usize> {
     haystack
         .windows(needle.len())
         .position(|window| window == needle)
 }
 
-fn json_body(request: &HttpRequest) -> Result<Value, String> {
+pub(super) fn json_body(request: &HttpRequest) -> Result<Value, String> {
     if request.body.is_empty() {
         return Ok(json!({}));
     }
     serde_json::from_slice(&request.body).map_err(|err| format!("invalid json body: {err}"))
 }
 
-fn required_str<'a>(body: &'a Value, key: &str) -> Option<&'a str> {
+pub(super) fn required_str<'a>(body: &'a Value, key: &str) -> Option<&'a str> {
     body.get(key)
         .and_then(Value::as_str)
         .filter(|value| !value.is_empty())
 }
 
-fn string_array(body: &Value, key: &str) -> Vec<String> {
+pub(super) fn string_array(body: &Value, key: &str) -> Vec<String> {
     body.get(key)
         .and_then(Value::as_array)
         .map(|values| {
@@ -231,7 +232,7 @@ fn string_array(body: &Value, key: &str) -> Vec<String> {
         .unwrap_or_default()
 }
 
-fn list_tables(conn: &Connection) -> io::Result<Vec<String>> {
+pub(super) fn list_tables(conn: &Connection) -> io::Result<Vec<String>> {
     let mut stmt = conn
         .prepare(
             "SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%' ORDER BY name",
@@ -247,7 +248,7 @@ fn list_tables(conn: &Connection) -> io::Result<Vec<String>> {
     Ok(tables)
 }
 
-fn sha256_file_hex(path: &Path) -> io::Result<String> {
+pub(super) fn sha256_file_hex(path: &Path) -> io::Result<String> {
     let mut file = fs::File::open(path)?;
     let mut hasher = Sha256::new();
     let mut buf = [0_u8; 8192];
@@ -261,7 +262,7 @@ fn sha256_file_hex(path: &Path) -> io::Result<String> {
     Ok(hex_encode(&hasher.finalize()))
 }
 
-fn set_private_db_permissions(path: &Path) -> io::Result<()> {
+pub(super) fn set_private_db_permissions(path: &Path) -> io::Result<()> {
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
@@ -274,7 +275,7 @@ fn set_private_db_permissions(path: &Path) -> io::Result<()> {
     Ok(())
 }
 
-fn set_private_runtime_file_permissions(path: &Path) -> io::Result<()> {
+pub(super) fn set_private_runtime_file_permissions(path: &Path) -> io::Result<()> {
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
@@ -287,11 +288,11 @@ fn set_private_runtime_file_permissions(path: &Path) -> io::Result<()> {
     Ok(())
 }
 
-fn sqlite_io_error(err: rusqlite::Error) -> io::Error {
+pub(super) fn sqlite_io_error(err: rusqlite::Error) -> io::Error {
     io::Error::other(err)
 }
 
-fn hex_encode(bytes: &[u8]) -> String {
+pub(super) fn hex_encode(bytes: &[u8]) -> String {
     const HEX: &[u8; 16] = b"0123456789abcdef";
     let mut out = String::with_capacity(bytes.len() * 2);
     for byte in bytes {
@@ -301,7 +302,7 @@ fn hex_encode(bytes: &[u8]) -> String {
     out
 }
 
-fn hex_value(byte: u8) -> Option<u8> {
+pub(super) fn hex_value(byte: u8) -> Option<u8> {
     match byte {
         b'0'..=b'9' => Some(byte - b'0'),
         b'a'..=b'f' => Some(byte - b'a' + 10),
@@ -310,18 +311,18 @@ fn hex_value(byte: u8) -> Option<u8> {
     }
 }
 
-fn unix_now() -> u64 {
+pub(super) fn unix_now() -> u64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .unwrap_or_default()
         .as_secs()
 }
 
-fn path_string(path: &Path) -> String {
+pub(super) fn path_string(path: &Path) -> String {
     path.to_string_lossy().into_owned()
 }
 
-fn status_reason(status: u16) -> &'static str {
+pub(super) fn status_reason(status: u16) -> &'static str {
     match status {
         200 => "OK",
         201 => "Created",
@@ -335,7 +336,7 @@ fn status_reason(status: u16) -> &'static str {
     }
 }
 
-fn help_text() -> String {
+pub(super) fn help_text() -> String {
     r#"daed Rust native product commands:
   daed --version
   daed run -c /etc/daed --listen 0.0.0.0:2023 [--api-only] [--web-root PATH]

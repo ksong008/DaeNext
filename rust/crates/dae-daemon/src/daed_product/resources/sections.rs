@@ -1,12 +1,13 @@
+use super::*;
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum SectionKind {
+pub(crate) enum SectionKind {
     Config,
     Dns,
     Routing,
 }
 
 impl SectionKind {
-    fn from_path(path: &str) -> Option<Self> {
+    pub(in crate::daed_product) fn from_path(path: &str) -> Option<Self> {
         if path == "/configs" || path.starts_with("/configs/") {
             Some(Self::Config)
         } else if path == "/dns" || path.starts_with("/dns/") {
@@ -18,7 +19,7 @@ impl SectionKind {
         }
     }
 
-    fn prefix(self) -> &'static str {
+    pub(in crate::daed_product) fn prefix(self) -> &'static str {
         match self {
             Self::Config => "/configs",
             Self::Dns => "/dns",
@@ -26,7 +27,7 @@ impl SectionKind {
         }
     }
 
-    fn table(self) -> &'static str {
+    pub(in crate::daed_product) fn table(self) -> &'static str {
         match self {
             Self::Config => "configs",
             Self::Dns => "dns",
@@ -34,7 +35,7 @@ impl SectionKind {
         }
     }
 
-    fn value_column(self) -> &'static str {
+    pub(in crate::daed_product) fn value_column(self) -> &'static str {
         match self {
             Self::Config => "global",
             Self::Dns => "dns",
@@ -42,7 +43,7 @@ impl SectionKind {
         }
     }
 
-    fn request_value_key(self) -> &'static str {
+    pub(in crate::daed_product) fn request_value_key(self) -> &'static str {
         match self {
             Self::Config => "global",
             Self::Dns => "dns",
@@ -50,7 +51,7 @@ impl SectionKind {
         }
     }
 
-    fn default_name(self) -> &'static str {
+    pub(in crate::daed_product) fn default_name(self) -> &'static str {
         match self {
             Self::Config => "global",
             Self::Dns => "dns",
@@ -59,7 +60,7 @@ impl SectionKind {
     }
 }
 
-fn api_section_preview(request: &HttpRequest, api_path: &str) -> HttpResponse {
+pub(crate) fn api_section_preview(request: &HttpRequest, api_path: &str) -> HttpResponse {
     let body = json_body(request).unwrap_or_else(|_| json!({}));
     if api_path == "/configs/parsed" {
         let global = if let Some(parsed_global) = body.get("parsedGlobal") {
@@ -86,14 +87,14 @@ fn api_section_preview(request: &HttpRequest, api_path: &str) -> HttpResponse {
     HttpResponse::json(200, parsed_routing_value(raw))
 }
 
-fn list_sections(state: &Path, kind: SectionKind) -> HttpResponse {
+pub(crate) fn list_sections(state: &Path, kind: SectionKind) -> HttpResponse {
     match list_sections_value(state, kind) {
         Ok(value) => HttpResponse::json(200, value),
         Err(err) => HttpResponse::json(500, json!({"error": err.to_string()})),
     }
 }
 
-fn list_sections_value(state: &Path, kind: SectionKind) -> io::Result<Value> {
+pub(crate) fn list_sections_value(state: &Path, kind: SectionKind) -> io::Result<Value> {
     let conn = open_state_connection(state)?;
     let sql = format!(
         "SELECT id, name, {}, selected, version FROM {} ORDER BY id",
@@ -121,7 +122,7 @@ fn list_sections_value(state: &Path, kind: SectionKind) -> io::Result<Value> {
     Ok(json!({"items": items}))
 }
 
-fn get_section(state: &Path, kind: SectionKind, id: i64) -> HttpResponse {
+pub(crate) fn get_section(state: &Path, kind: SectionKind, id: i64) -> HttpResponse {
     match get_section_value(state, kind, id) {
         Ok(Some(value)) => HttpResponse::json(200, value),
         Ok(None) => HttpResponse::json(404, json!({"error": "resource not found"})),
@@ -129,7 +130,11 @@ fn get_section(state: &Path, kind: SectionKind, id: i64) -> HttpResponse {
     }
 }
 
-fn get_section_value(state: &Path, kind: SectionKind, id: i64) -> io::Result<Option<Value>> {
+pub(crate) fn get_section_value(
+    state: &Path,
+    kind: SectionKind,
+    id: i64,
+) -> io::Result<Option<Value>> {
     let conn = open_state_connection(state)?;
     let sql = format!(
         "SELECT id, name, {}, selected, version FROM {} WHERE id = ?1",
@@ -151,7 +156,11 @@ fn get_section_value(state: &Path, kind: SectionKind, id: i64) -> io::Result<Opt
     .map_err(sqlite_io_error)
 }
 
-fn create_section(state: &Path, request: &HttpRequest, kind: SectionKind) -> HttpResponse {
+pub(crate) fn create_section(
+    state: &Path,
+    request: &HttpRequest,
+    kind: SectionKind,
+) -> HttpResponse {
     let body = match json_body(request) {
         Ok(body) => body,
         Err(err) => return HttpResponse::json(400, json!({"error": err})),
@@ -177,7 +186,12 @@ fn create_section(state: &Path, request: &HttpRequest, kind: SectionKind) -> Htt
     get_section(state, kind, id).with_status(201)
 }
 
-fn update_section(state: &Path, request: &HttpRequest, kind: SectionKind, id: i64) -> HttpResponse {
+pub(crate) fn update_section(
+    state: &Path,
+    request: &HttpRequest,
+    kind: SectionKind,
+    id: i64,
+) -> HttpResponse {
     let body = match json_body(request) {
         Ok(body) => body,
         Err(err) => return HttpResponse::json(400, json!({"error": err})),
@@ -211,7 +225,7 @@ fn update_section(state: &Path, request: &HttpRequest, kind: SectionKind, id: i6
     get_section(state, kind, id)
 }
 
-fn delete_section(state: &Path, kind: SectionKind, id: i64) -> HttpResponse {
+pub(crate) fn delete_section(state: &Path, kind: SectionKind, id: i64) -> HttpResponse {
     let conn = match open_state_connection(state) {
         Ok(conn) => conn,
         Err(err) => return HttpResponse::json(500, json!({"error": err.to_string()})),
@@ -223,7 +237,7 @@ fn delete_section(state: &Path, kind: SectionKind, id: i64) -> HttpResponse {
     }
 }
 
-fn select_section(state: &Path, kind: SectionKind, id: i64) -> HttpResponse {
+pub(crate) fn select_section(state: &Path, kind: SectionKind, id: i64) -> HttpResponse {
     let conn = match open_state_connection(state) {
         Ok(conn) => conn,
         Err(err) => return HttpResponse::json(500, json!({"error": err.to_string()})),
@@ -243,7 +257,7 @@ fn select_section(state: &Path, kind: SectionKind, id: i64) -> HttpResponse {
     }
 }
 
-fn section_request_value(kind: SectionKind, body: &Value) -> String {
+pub(crate) fn section_request_value(kind: SectionKind, body: &Value) -> String {
     if kind == SectionKind::Config
         && let Some(parsed_global) = body.get("parsedGlobal")
     {
@@ -255,7 +269,7 @@ fn section_request_value(kind: SectionKind, body: &Value) -> String {
         .unwrap_or_default()
 }
 
-fn section_resource(
+pub(crate) fn section_resource(
     kind: SectionKind,
     id: i64,
     name: String,

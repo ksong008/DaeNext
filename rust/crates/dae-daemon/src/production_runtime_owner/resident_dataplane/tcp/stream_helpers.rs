@@ -1,4 +1,5 @@
-fn open_plain_proxy_tcp_stream(proxy: &ResidentProxyPlan) -> Result<TcpStream, String> {
+use super::*;
+pub(super) fn open_plain_proxy_tcp_stream(proxy: &ResidentProxyPlan) -> Result<TcpStream, String> {
     if let Some(parent) = proxy.chain_parent.as_deref() {
         return open_plain_proxy_tcp_stream_through_parent(proxy, parent);
     }
@@ -19,7 +20,7 @@ fn open_plain_proxy_tcp_stream(proxy: &ResidentProxyPlan) -> Result<TcpStream, S
     Ok(connection.stream)
 }
 
-fn open_plain_proxy_tcp_stream_through_parent(
+pub(super) fn open_plain_proxy_tcp_stream_through_parent(
     proxy: &ResidentProxyPlan,
     parent: &ResidentProxyPlan,
 ) -> Result<TcpStream, String> {
@@ -72,7 +73,7 @@ fn open_plain_proxy_tcp_stream_through_parent(
     Ok(stream)
 }
 
-fn read_http_head_and_leftover_from_stream(
+pub(super) fn read_http_head_and_leftover_from_stream(
     stream: &mut impl Read,
 ) -> Result<(Vec<u8>, Vec<u8>), String> {
     let mut response = Vec::new();
@@ -97,7 +98,9 @@ fn read_http_head_and_leftover_from_stream(
     Err("incomplete http response header".to_owned())
 }
 
-fn validate_simple_obfs_http_response_status(response_head: &[u8]) -> Result<(), String> {
+pub(super) fn validate_simple_obfs_http_response_status(
+    response_head: &[u8],
+) -> Result<(), String> {
     if validate_http_status(response_head, 200).is_ok()
         || validate_http_status(response_head, 101).is_ok()
     {
@@ -106,7 +109,7 @@ fn validate_simple_obfs_http_response_status(response_head: &[u8]) -> Result<(),
     validate_http_status(response_head, 200).map_err(|err| err.to_string())
 }
 
-fn read_simple_obfs_tls_response_payload_from_stream(
+pub(super) fn read_simple_obfs_tls_response_payload_from_stream(
     stream: &mut impl Read,
 ) -> Result<Vec<u8>, String> {
     let mut discard = vec![0_u8; 105];
@@ -125,7 +128,7 @@ fn read_simple_obfs_tls_response_payload_from_stream(
     Ok(payload)
 }
 
-fn simple_obfs_tls_application_data_frame(payload: &[u8]) -> Result<Vec<u8>, String> {
+pub(super) fn simple_obfs_tls_application_data_frame(payload: &[u8]) -> Result<Vec<u8>, String> {
     let len = u16::try_from(payload.len()).map_err(|_| {
         format!(
             "simple-obfs TLS application data too large: {}",
@@ -139,20 +142,20 @@ fn simple_obfs_tls_application_data_frame(payload: &[u8]) -> Result<Vec<u8>, Str
     Ok(out)
 }
 
-struct PrefixTcpReader<'a> {
-    prefix: VecDeque<u8>,
-    stream: &'a mut TcpStream,
+pub(super) struct PrefixTcpReader<'a> {
+    pub(super) prefix: VecDeque<u8>,
+    pub(super) stream: &'a mut TcpStream,
 }
 
 impl<'a> PrefixTcpReader<'a> {
-    fn new(prefix: Vec<u8>, stream: &'a mut TcpStream) -> Self {
+    pub(super) fn new(prefix: Vec<u8>, stream: &'a mut TcpStream) -> Self {
         Self {
             prefix: VecDeque::from(prefix),
             stream,
         }
     }
 
-    fn shutdown_write(&mut self) -> std::io::Result<()> {
+    pub(super) fn shutdown_write(&mut self) -> std::io::Result<()> {
         self.stream.shutdown(Shutdown::Write)
     }
 }
@@ -177,14 +180,14 @@ impl Read for PrefixTcpReader<'_> {
     }
 }
 
-struct SimpleObfsTlsAppDataReader<'a> {
-    prefix: VecDeque<u8>,
-    frame: VecDeque<u8>,
-    stream: &'a mut TcpStream,
+pub(super) struct SimpleObfsTlsAppDataReader<'a> {
+    pub(super) prefix: VecDeque<u8>,
+    pub(super) frame: VecDeque<u8>,
+    pub(super) stream: &'a mut TcpStream,
 }
 
 impl<'a> SimpleObfsTlsAppDataReader<'a> {
-    fn new(prefix: Vec<u8>, stream: &'a mut TcpStream) -> Self {
+    pub(super) fn new(prefix: Vec<u8>, stream: &'a mut TcpStream) -> Self {
         Self {
             prefix: VecDeque::from(prefix),
             frame: VecDeque::new(),
@@ -192,11 +195,11 @@ impl<'a> SimpleObfsTlsAppDataReader<'a> {
         }
     }
 
-    fn shutdown_write(&mut self) -> std::io::Result<()> {
+    pub(super) fn shutdown_write(&mut self) -> std::io::Result<()> {
         self.stream.shutdown(Shutdown::Write)
     }
 
-    fn fill_frame(&mut self) -> std::io::Result<()> {
+    pub(super) fn fill_frame(&mut self) -> std::io::Result<()> {
         let mut header = [0_u8; 5];
         self.stream.read_exact(&mut header)?;
         if header[..3] != [0x17, 0x03, 0x03] {
@@ -248,7 +251,7 @@ impl Read for SimpleObfsTlsAppDataReader<'_> {
     }
 }
 
-fn socks5_connect(
+pub(super) fn socks5_connect(
     stream: &mut TcpStream,
     target: &str,
     username: &str,
@@ -295,7 +298,7 @@ fn socks5_connect(
     Ok(())
 }
 
-fn http_proxy_connect(
+pub(super) fn http_proxy_connect(
     stream: &mut TcpStream,
     target: &str,
     username: &str,
@@ -339,7 +342,7 @@ fn http_proxy_connect(
     Ok(())
 }
 
-fn read_socks5_address_bytes(stream: &mut TcpStream) -> std::io::Result<Vec<u8>> {
+pub(super) fn read_socks5_address_bytes(stream: &mut TcpStream) -> std::io::Result<Vec<u8>> {
     let mut atyp = [0_u8; 1];
     stream.read_exact(&mut atyp)?;
     let mut out = atyp.to_vec();

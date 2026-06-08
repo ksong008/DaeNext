@@ -1,27 +1,33 @@
+use super::*;
 #[derive(Clone, Debug)]
-pub(super) struct ResidentDataplanePlan {
-    pub(super) enabled: bool,
-    pub(super) unsupported_reason: Option<String>,
-    pub(super) proxies: BTreeMap<u8, ResidentProxyGroupPlan>,
-    pub(super) default_outbound: Option<u8>,
-    pub(super) tcp_dial_mode: TcpDialMode,
-    pub(super) sniffing_timeout: Duration,
-    pub(super) dns: ResidentDnsPlan,
+pub(crate) struct ResidentDataplanePlan {
+    pub(in crate::production_runtime_owner::resident_dataplane) enabled: bool,
+    pub(in crate::production_runtime_owner::resident_dataplane) unsupported_reason: Option<String>,
+    pub(in crate::production_runtime_owner::resident_dataplane) proxies:
+        BTreeMap<u8, ResidentProxyGroupPlan>,
+    pub(in crate::production_runtime_owner::resident_dataplane) default_outbound: Option<u8>,
+    pub(in crate::production_runtime_owner::resident_dataplane) tcp_dial_mode: TcpDialMode,
+    pub(in crate::production_runtime_owner::resident_dataplane) sniffing_timeout: Duration,
+    pub(in crate::production_runtime_owner::resident_dataplane) dns: ResidentDnsPlan,
 }
 
 impl ResidentDataplanePlan {
-    pub(super) fn default_proxy_group(&self) -> Option<&ResidentProxyGroupPlan> {
+    pub(in crate::production_runtime_owner::resident_dataplane) fn default_proxy_group(
+        &self,
+    ) -> Option<&ResidentProxyGroupPlan> {
         self.default_outbound
             .and_then(|outbound| self.proxies.get(&outbound))
     }
 
-    pub(super) fn default_proxy_snapshot(&self) -> Option<ResidentProxyPlan> {
+    pub(in crate::production_runtime_owner::resident_dataplane) fn default_proxy_snapshot(
+        &self,
+    ) -> Option<ResidentProxyPlan> {
         self.default_proxy_group()
             .and_then(ResidentProxyGroupPlan::default_proxy_snapshot)
     }
 }
 
-pub(super) fn build_resident_dataplane_plan(
+pub(crate) fn build_resident_dataplane_plan(
     config: &Config,
 ) -> Result<ResidentDataplanePlan, String> {
     let node_links = tagged_node_links(config);
@@ -57,7 +63,7 @@ pub(super) fn build_resident_dataplane_plan(
     })
 }
 
-pub(super) fn build_resident_manual_probe_plans(
+pub(crate) fn build_resident_manual_probe_plans(
     config: &Config,
 ) -> BTreeMap<String, Result<ResidentProxyProbePlan, String>> {
     let mut plans = BTreeMap::new();
@@ -68,7 +74,7 @@ pub(super) fn build_resident_manual_probe_plans(
     plans
 }
 
-fn build_resident_manual_probe_plan(
+pub(crate) fn build_resident_manual_probe_plan(
     config: &Config,
     node_tag: String,
     link: String,
@@ -98,7 +104,7 @@ fn build_resident_manual_probe_plan(
     })
 }
 
-fn resident_proxy_plans(
+pub(crate) fn resident_proxy_plans(
     config: &Config,
     node_links: &BTreeMap<String, String>,
 ) -> Result<(BTreeMap<u8, ResidentProxyGroupPlan>, Option<u8>), String> {

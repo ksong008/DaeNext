@@ -1,4 +1,5 @@
-static OFFICIAL_COMMON_SOURCE_SHAPE_IDS: &[&str] = &[
+use super::*;
+pub(super) static OFFICIAL_COMMON_SOURCE_SHAPE_IDS: &[&str] = &[
     "baseline-aead-cipher-endpoint",
     "baseline-aead-2022-cipher-endpoint",
     "baseline-tls-auth-endpoint",
@@ -45,7 +46,7 @@ static OFFICIAL_COMMON_SOURCE_SHAPE_IDS: &[&str] = &[
     "xhttp-extended-settings-wrapper",
 ];
 
-static OFFICIAL_COMMON_FIXTURE_REQUIREMENTS: &[OfficialCommonSourceShapeRequirement] = &[
+pub(super) static OFFICIAL_COMMON_FIXTURE_REQUIREMENTS: &[OfficialCommonSourceShapeRequirement] = &[
     OfficialCommonSourceShapeRequirement {
         fixture: "shadowsocks_native_optin.json",
         marker: "sip002-aead-base64-userinfo",

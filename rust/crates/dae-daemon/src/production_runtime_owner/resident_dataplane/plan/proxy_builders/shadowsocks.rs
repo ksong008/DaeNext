@@ -1,4 +1,5 @@
-fn build_shadowsocks_proxy_plan(
+use super::*;
+pub(crate) fn build_shadowsocks_proxy_plan(
     config: &Config,
     group_name: String,
     node_tag: String,
@@ -201,13 +202,13 @@ fn build_shadowsocks_proxy_plan(
     })
 }
 
-fn resident_shadowsocks_plugin_supported(name: &str, obfs: &str, tls: &str) -> bool {
+pub(crate) fn resident_shadowsocks_plugin_supported(name: &str, obfs: &str, tls: &str) -> bool {
     name.is_empty()
         || (name == "simple-obfs" && matches!(obfs, "http" | "tls") && tls.is_empty())
         || (name == "v2ray-plugin" && obfs.is_empty() && tls == "tls")
 }
 
-fn resident_shadowsocks_plugin_display(name: &str, obfs: &str, tls: &str) -> String {
+pub(crate) fn resident_shadowsocks_plugin_display(name: &str, obfs: &str, tls: &str) -> String {
     if name.is_empty() {
         return "none".to_owned();
     }

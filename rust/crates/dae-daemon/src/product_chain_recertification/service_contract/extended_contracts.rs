@@ -1,4 +1,5 @@
-const OUTBOUND_FINGERPRINT_UNDERLAY_BOOL_FIELDS: &[&str] = &[
+use super::*;
+pub(super) const OUTBOUND_FINGERPRINT_UNDERLAY_BOOL_FIELDS: &[&str] = &[
     "outbound_fingerprint_underlay_contract_ready",
     "standard_tls_underlay_contract_ready",
     "fingerprint_aware_tls_underlay_contract_ready",
@@ -20,7 +21,7 @@ const OUTBOUND_FINGERPRINT_UNDERLAY_BOOL_FIELDS: &[&str] = &[
     "security_underlay_release_gate_ready",
 ];
 
-const OUTBOUND_FINGERPRINT_UNDERLAY_COPY_FIELDS: &[&str] = &[
+pub(super) const OUTBOUND_FINGERPRINT_UNDERLAY_COPY_FIELDS: &[&str] = &[
     "outbound_fingerprint_underlay_report_schema",
     "outbound_fingerprint_underlay_surface",
     "outbound_fingerprint_underlay_typed_report",
@@ -30,7 +31,7 @@ const OUTBOUND_FINGERPRINT_UNDERLAY_COPY_FIELDS: &[&str] = &[
     "security_underlay_capability_typed_report",
 ];
 
-const OUTBOUND_PRODUCTION_MATRIX_BOOL_FIELDS: &[&str] = &[
+pub(super) const OUTBOUND_PRODUCTION_MATRIX_BOOL_FIELDS: &[&str] = &[
     "outbound_production_matrix_contract_ready",
     "outbound_production_matrix_runtime_state_ready",
     "outbound_matrix_entries_ready",
@@ -84,7 +85,7 @@ const OUTBOUND_PRODUCTION_MATRIX_BOOL_FIELDS: &[&str] = &[
     "expanded_live_matrix_blocked_rows_reduce_pass_threshold",
 ];
 
-const OUTBOUND_PRODUCTION_MATRIX_COPY_FIELDS: &[&str] = &[
+pub(super) const OUTBOUND_PRODUCTION_MATRIX_COPY_FIELDS: &[&str] = &[
     "outbound_production_matrix_report_schema",
     "outbound_production_matrix_entries",
     "outbound_production_matrix_typed_report",
@@ -120,7 +121,7 @@ const OUTBOUND_PRODUCTION_MATRIX_COPY_FIELDS: &[&str] = &[
     "expanded_live_matrix_validation_boundary_typed_report",
 ];
 
-const RESIDENT_LIVE_ADAPTER_MATRIX_BOOL_FIELDS: &[&str] = &[
+pub(super) const RESIDENT_LIVE_ADAPTER_MATRIX_BOOL_FIELDS: &[&str] = &[
     "resident_live_adapter_matrix_contract_ready",
     "resident_live_adapter_matrix_ready",
     "resident_live_adapter_matrix_runtime_state_ready",
@@ -138,7 +139,7 @@ const RESIDENT_LIVE_ADAPTER_MATRIX_BOOL_FIELDS: &[&str] = &[
     "resident_live_adapter_matrix_typed_report_ready",
 ];
 
-const RESIDENT_LIVE_ADAPTER_MATRIX_COPY_FIELDS: &[&str] = &[
+pub(super) const RESIDENT_LIVE_ADAPTER_MATRIX_COPY_FIELDS: &[&str] = &[
     "resident_live_adapter_wired_handler_count",
     "resident_live_adapter_live_ready_handler_count",
     "resident_live_adapter_matrix_report_schema",
@@ -147,7 +148,7 @@ const RESIDENT_LIVE_ADAPTER_MATRIX_COPY_FIELDS: &[&str] = &[
     "resident_live_adapter_matrix_surface",
 ];
 
-const RELEASE_DEFAULT_SWITCH_BOOL_FIELDS: &[&str] = &[
+pub(super) const RELEASE_DEFAULT_SWITCH_BOOL_FIELDS: &[&str] = &[
     "release_default_switch_contract_ready",
     "release_default_artifact_path_ready",
     "default_runtime_selector_no_env_rust_owned_ready",
@@ -161,14 +162,14 @@ const RELEASE_DEFAULT_SWITCH_BOOL_FIELDS: &[&str] = &[
     "release_default_switch_typed_report_ready",
 ];
 
-const RELEASE_DEFAULT_SWITCH_COPY_FIELDS: &[&str] = &[
+pub(super) const RELEASE_DEFAULT_SWITCH_COPY_FIELDS: &[&str] = &[
     "release_default_switch_report_schema",
     "release_default_switch_required_live_hosts",
     "release_default_switch_surface",
     "release_default_switch_typed_report",
 ];
 
-const GO_FREE_PRODUCT_CHAIN_BOOL_FIELDS: &[&str] = &[
+pub(super) const GO_FREE_PRODUCT_CHAIN_BOOL_FIELDS: &[&str] = &[
     "go_free_product_chain_contract_ready",
     "default_product_package_go_free",
     "go_product_shell_retired_from_default_package",
@@ -185,7 +186,7 @@ const GO_FREE_PRODUCT_CHAIN_BOOL_FIELDS: &[&str] = &[
     "go_free_product_chain_ready",
 ];
 
-const GO_FREE_PRODUCT_CHAIN_COPY_FIELDS: &[&str] = &[
+pub(super) const GO_FREE_PRODUCT_CHAIN_COPY_FIELDS: &[&str] = &[
     "go_free_product_chain_report_schema",
     "go_free_product_chain_default_dependency_policy",
     "go_free_product_chain_retained_go_scope",
@@ -193,7 +194,7 @@ const GO_FREE_PRODUCT_CHAIN_COPY_FIELDS: &[&str] = &[
     "go_free_product_chain_typed_report",
 ];
 
-fn insert_outbound_fingerprint_underlay_contract_defaults(report: &mut Value) {
+pub(super) fn insert_outbound_fingerprint_underlay_contract_defaults(report: &mut Value) {
     insert_contract_bool_fields(
         report,
         false,
@@ -207,7 +208,7 @@ fn insert_outbound_fingerprint_underlay_contract_defaults(report: &mut Value) {
     );
 }
 
-fn insert_outbound_fingerprint_underlay_contract_success(
+pub(super) fn insert_outbound_fingerprint_underlay_contract_success(
     report: &mut Value,
     command_passed: bool,
     capability: &Value,
@@ -225,7 +226,7 @@ fn insert_outbound_fingerprint_underlay_contract_success(
     );
 }
 
-fn insert_outbound_production_matrix_contract_defaults(report: &mut Value) {
+pub(super) fn insert_outbound_production_matrix_contract_defaults(report: &mut Value) {
     insert_contract_bool_fields(
         report,
         false,
@@ -235,7 +236,7 @@ fn insert_outbound_production_matrix_contract_defaults(report: &mut Value) {
     insert_contract_copy_fields(report, &Value::Null, OUTBOUND_PRODUCTION_MATRIX_COPY_FIELDS);
 }
 
-fn insert_outbound_production_matrix_contract_success(
+pub(super) fn insert_outbound_production_matrix_contract_success(
     report: &mut Value,
     command_passed: bool,
     capability: &Value,
@@ -249,7 +250,7 @@ fn insert_outbound_production_matrix_contract_success(
     insert_contract_copy_fields(report, capability, OUTBOUND_PRODUCTION_MATRIX_COPY_FIELDS);
 }
 
-fn insert_resident_live_adapter_matrix_contract_defaults(report: &mut Value) {
+pub(super) fn insert_resident_live_adapter_matrix_contract_defaults(report: &mut Value) {
     insert_contract_bool_fields(
         report,
         false,
@@ -263,7 +264,7 @@ fn insert_resident_live_adapter_matrix_contract_defaults(report: &mut Value) {
     );
 }
 
-fn insert_resident_live_adapter_matrix_contract_success(
+pub(super) fn insert_resident_live_adapter_matrix_contract_success(
     report: &mut Value,
     command_passed: bool,
     capability: &Value,
@@ -277,7 +278,7 @@ fn insert_resident_live_adapter_matrix_contract_success(
     insert_contract_copy_fields(report, capability, RESIDENT_LIVE_ADAPTER_MATRIX_COPY_FIELDS);
 }
 
-fn insert_release_default_switch_contract_defaults(report: &mut Value) {
+pub(super) fn insert_release_default_switch_contract_defaults(report: &mut Value) {
     insert_contract_bool_fields(
         report,
         false,
@@ -287,7 +288,7 @@ fn insert_release_default_switch_contract_defaults(report: &mut Value) {
     insert_contract_copy_fields(report, &Value::Null, RELEASE_DEFAULT_SWITCH_COPY_FIELDS);
 }
 
-fn insert_release_default_switch_contract_success(
+pub(super) fn insert_release_default_switch_contract_success(
     report: &mut Value,
     command_passed: bool,
     capability: &Value,
@@ -301,7 +302,7 @@ fn insert_release_default_switch_contract_success(
     insert_contract_copy_fields(report, capability, RELEASE_DEFAULT_SWITCH_COPY_FIELDS);
 }
 
-fn insert_go_free_product_chain_contract_defaults(report: &mut Value) {
+pub(super) fn insert_go_free_product_chain_contract_defaults(report: &mut Value) {
     insert_contract_bool_fields(
         report,
         false,
@@ -311,7 +312,7 @@ fn insert_go_free_product_chain_contract_defaults(report: &mut Value) {
     insert_contract_copy_fields(report, &Value::Null, GO_FREE_PRODUCT_CHAIN_COPY_FIELDS);
 }
 
-fn insert_go_free_product_chain_contract_success(
+pub(super) fn insert_go_free_product_chain_contract_success(
     report: &mut Value,
     command_passed: bool,
     capability: &Value,
@@ -325,7 +326,7 @@ fn insert_go_free_product_chain_contract_success(
     insert_contract_copy_fields(report, capability, GO_FREE_PRODUCT_CHAIN_COPY_FIELDS);
 }
 
-fn insert_contract_bool_fields(
+pub(super) fn insert_contract_bool_fields(
     report: &mut Value,
     command_passed: bool,
     capability: &Value,
@@ -341,7 +342,7 @@ fn insert_contract_bool_fields(
     }
 }
 
-fn insert_contract_copy_fields(report: &mut Value, capability: &Value, fields: &[&str]) {
+pub(super) fn insert_contract_copy_fields(report: &mut Value, capability: &Value, fields: &[&str]) {
     if let Value::Object(report) = report {
         for field in fields {
             report.insert((*field).to_owned(), capability[*field].clone());

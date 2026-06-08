@@ -1,10 +1,11 @@
-fn temp_dir(name: &str) -> std::path::PathBuf {
+use super::*;
+pub(super) fn temp_dir(name: &str) -> std::path::PathBuf {
     let path = std::env::temp_dir().join(format!("daed-product-{name}-{}", fastrand::u64(..)));
     fs::create_dir_all(&path).unwrap();
     path
 }
 
-fn spawn_text_server(body: &str) -> (u16, JoinHandle<()>) {
+pub(super) fn spawn_text_server(body: &str) -> (u16, JoinHandle<()>) {
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
     let port = listener.local_addr().unwrap().port();
     let body = body.to_owned();
@@ -23,7 +24,7 @@ fn spawn_text_server(body: &str) -> (u16, JoinHandle<()>) {
     (port, handle)
 }
 
-fn spawn_tcp_probe_server() -> (u16, JoinHandle<()>) {
+pub(super) fn spawn_tcp_probe_server() -> (u16, JoinHandle<()>) {
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
     let port = listener.local_addr().unwrap().port();
     let handle = thread::spawn(move || {
@@ -32,7 +33,7 @@ fn spawn_tcp_probe_server() -> (u16, JoinHandle<()>) {
     (port, handle)
 }
 
-fn free_port() -> u16 {
+pub(super) fn free_port() -> u16 {
     TcpListener::bind("127.0.0.1:0")
         .unwrap()
         .local_addr()
@@ -40,7 +41,7 @@ fn free_port() -> u16 {
         .port()
 }
 
-fn wait_for_http(port: u16, path: &str, child: &mut Child) {
+pub(super) fn wait_for_http(port: u16, path: &str, child: &mut Child) {
     let deadline = Instant::now() + Duration::from_secs(10);
     loop {
         if let Ok(Some(status)) = child.try_wait() {
@@ -60,7 +61,7 @@ fn wait_for_http(port: u16, path: &str, child: &mut Child) {
     }
 }
 
-fn http_request(
+pub(super) fn http_request(
     port: u16,
     method: &str,
     path: &str,
@@ -70,7 +71,7 @@ fn http_request(
     try_http_request(port, method, path, body, token).unwrap()
 }
 
-fn try_http_request(
+pub(super) fn try_http_request(
     port: u16,
     method: &str,
     path: &str,
@@ -102,7 +103,7 @@ fn try_http_request(
     Ok(response)
 }
 
-fn http_request_until(
+pub(super) fn http_request_until(
     port: u16,
     method: &str,
     path: &str,
@@ -164,12 +165,12 @@ fn http_request_until(
     response
 }
 
-fn json_body(response: &str) -> Value {
+pub(super) fn json_body(response: &str) -> Value {
     let (_, body) = response.split_once("\r\n\r\n").unwrap();
     serde_json::from_str(body).unwrap()
 }
 
-fn sha256(path: &Path) -> String {
+pub(super) fn sha256(path: &Path) -> String {
     let output = Command::new("sha256sum").arg(path).output().unwrap();
     assert!(output.status.success());
     String::from_utf8_lossy(&output.stdout)

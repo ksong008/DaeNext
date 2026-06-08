@@ -17,13 +17,25 @@ use crate::production_runtime_owner::{
     ResidentProductionRuntime, start_resident_production_runtime,
 };
 
-include!("service_contract/types.rs");
-include!("service_contract/base_capabilities.rs");
-include!("service_contract/datapath_capabilities.rs");
-include!("service_contract/outbound_fingerprint.rs");
-include!("service_contract/outbound_matrix.rs");
-include!("service_contract/source_shapes.rs");
-include!("service_contract/resident_live_adapter.rs");
-include!("service_contract/release_product.rs");
-include!("service_contract/resident_service.rs");
-include!("service_contract/tests.rs");
+mod types;
+pub use self::types::*;
+mod base_capabilities;
+pub use self::base_capabilities::*;
+mod datapath_capabilities;
+use self::datapath_capabilities::*;
+mod outbound_fingerprint;
+use self::outbound_fingerprint::*;
+mod outbound_matrix;
+use self::outbound_matrix::*;
+mod source_shapes;
+use self::source_shapes::*;
+mod resident_live_adapter;
+use self::resident_live_adapter::*;
+mod release_product;
+pub(crate) use self::release_product::*;
+mod resident_service;
+pub use self::resident_service::*;
+#[cfg(test)]
+mod tests;
+#[cfg(test)]
+use self::tests::*;

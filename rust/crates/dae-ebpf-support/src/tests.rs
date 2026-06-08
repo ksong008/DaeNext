@@ -5,9 +5,15 @@ use serde_json::Value;
 
 use crate::*;
 
-include!("tests/abi_maps.rs");
-include!("tests/aya_smoke.rs");
-include!("tests/tc_attach.rs");
-include!("tests/connectivity_routing.rs");
-include!("tests/param.rs");
-include!("tests/helpers.rs");
+mod abi_maps;
+use self::abi_maps::*;
+mod aya_smoke;
+use self::aya_smoke::*;
+mod tc_attach;
+use self::tc_attach::*;
+mod connectivity_routing;
+use self::connectivity_routing::*;
+mod param;
+use self::param::*;
+mod helpers;
+use self::helpers::*;

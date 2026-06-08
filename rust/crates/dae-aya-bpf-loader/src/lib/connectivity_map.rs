@@ -1,4 +1,5 @@
-fn run_connectivity_map_update(options: ConnectivityMapUpdateOptions) -> LoaderOutput {
+use super::*;
+pub(super) fn run_connectivity_map_update(options: ConnectivityMapUpdateOptions) -> LoaderOutput {
     let event = dae_ebpf_support::ConnectivityEvent {
         key: dae_ebpf_support::ConnectivityKey {
             outbound: options.outbound,
@@ -57,7 +58,7 @@ where
     }
 }
 
-fn handle_connectivity_map_serve_binary_request(
+pub(super) fn handle_connectivity_map_serve_binary_request(
     owner: &mut dae_control::OutboundConnectivityMapOwner,
     request: [u8; 8],
 ) -> [u8; 8] {
@@ -89,7 +90,7 @@ fn handle_connectivity_map_serve_binary_request(
     response
 }
 
-fn handle_connectivity_map_serve_line(
+pub(super) fn handle_connectivity_map_serve_line(
     owner: &mut dae_control::OutboundConnectivityMapOwner,
     line: &str,
 ) -> String {
@@ -118,7 +119,7 @@ fn handle_connectivity_map_serve_line(
     }
 }
 
-fn connectivity_map_owner_pass_response(
+pub(super) fn connectivity_map_owner_pass_response(
     map_id: u32,
     event: dae_ebpf_support::ConnectivityEvent,
     report: dae_control::ConnectivityOwnerApplyReport,
@@ -146,7 +147,7 @@ fn connectivity_map_owner_pass_response(
     })
 }
 
-fn connectivity_map_pass_response(
+pub(super) fn connectivity_map_pass_response(
     map_id: u32,
     plan: dae_ebpf_support::ConnectivityWritePlan,
     dryrun: bool,
@@ -170,7 +171,7 @@ fn connectivity_map_pass_response(
     })
 }
 
-fn connectivity_map_error_response(message: impl Into<String>) -> Value {
+pub(super) fn connectivity_map_error_response(message: impl Into<String>) -> Value {
     json!({
         "status": "error",
         "loader": "rust",
@@ -179,7 +180,7 @@ fn connectivity_map_error_response(message: impl Into<String>) -> Value {
     })
 }
 
-fn parse_connectivity_map_serve_request(
+pub(super) fn parse_connectivity_map_serve_request(
     line: &str,
 ) -> Result<ConnectivityMapUpdateOptions, String> {
     let value: Value =
@@ -204,19 +205,19 @@ fn parse_connectivity_map_serve_request(
     })
 }
 
-fn json_u32(value: Option<&Value>, name: &str) -> Result<u32, String> {
+pub(super) fn json_u32(value: Option<&Value>, name: &str) -> Result<u32, String> {
     let raw = value
         .and_then(Value::as_u64)
         .ok_or_else(|| format!("missing or non-u32 connectivity-map field: {name}"))?;
     u32::try_from(raw).map_err(|_| format!("connectivity-map field out of u32 range: {name}"))
 }
 
-fn json_u8(value: Option<&Value>, name: &str) -> Result<u8, String> {
+pub(super) fn json_u8(value: Option<&Value>, name: &str) -> Result<u8, String> {
     let raw = json_u32(value, name)?;
     u8::try_from(raw).map_err(|_| format!("connectivity-map field out of u8 range: {name}"))
 }
 
-fn json_bool(value: Option<&Value>, name: &str) -> Result<bool, String> {
+pub(super) fn json_bool(value: Option<&Value>, name: &str) -> Result<bool, String> {
     value
         .and_then(Value::as_bool)
         .ok_or_else(|| format!("missing or non-bool connectivity-map field: {name}"))

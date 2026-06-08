@@ -1,4 +1,5 @@
-fn resident_group_health_check_loop(
+use super::*;
+pub(crate) fn resident_group_health_check_loop(
     group: Arc<plan::ResidentProxyGroupPlan>,
     stop: Arc<AtomicBool>,
     event_file: PathBuf,
@@ -33,7 +34,7 @@ fn resident_group_health_check_loop(
     }
 }
 
-fn run_resident_group_health_checks(
+pub(crate) fn run_resident_group_health_checks(
     group: &plan::ResidentProxyGroupPlan,
     candidates: &[plan::ResidentProxyProbePlan],
 ) {
@@ -57,7 +58,7 @@ fn run_resident_group_health_checks(
     }
 }
 
-fn probe_resident_candidate_tcp_latency_snapshot(
+pub(crate) fn probe_resident_candidate_tcp_latency_snapshot(
     groups: &[Arc<plan::ResidentProxyGroupPlan>],
     candidate: plan::ResidentProxyProbePlan,
     reload_generation: u64,
@@ -93,7 +94,7 @@ fn probe_resident_candidate_tcp_latency_snapshot(
     })
 }
 
-fn manual_probe_unavailable_snapshot(
+pub(crate) fn manual_probe_unavailable_snapshot(
     link: &str,
     reason: &str,
     detail: &str,
@@ -124,7 +125,7 @@ fn manual_probe_unavailable_snapshot(
     })
 }
 
-fn resident_latency_snapshot_json(
+pub(crate) fn resident_latency_snapshot_json(
     snapshot: plan::ResidentProxyLatencySnapshot,
     reload_generation: u64,
 ) -> Value {
@@ -147,7 +148,7 @@ fn resident_latency_snapshot_json(
     })
 }
 
-fn resident_probe_executor_value(graph_id: &str, reload_generation: u64) -> Value {
+pub(crate) fn resident_probe_executor_value(graph_id: &str, reload_generation: u64) -> Value {
     json!({
         "schemaVersion": 1,
         "executor": "resident-executable-graph",
@@ -157,7 +158,7 @@ fn resident_probe_executor_value(graph_id: &str, reload_generation: u64) -> Valu
     })
 }
 
-fn preferred_latency_snapshots(values: impl IntoIterator<Item = Value>) -> Vec<Value> {
+pub(crate) fn preferred_latency_snapshots(values: impl IntoIterator<Item = Value>) -> Vec<Value> {
     let mut by_link_hash = BTreeMap::<String, Value>::new();
     for value in values {
         let Some(link_hash) = latency_snapshot_link_hash(&value) else {
@@ -177,7 +178,7 @@ fn preferred_latency_snapshots(values: impl IntoIterator<Item = Value>) -> Vec<V
     by_link_hash.into_values().collect()
 }
 
-fn latency_snapshot_link_hash(value: &Value) -> Option<&str> {
+pub(crate) fn latency_snapshot_link_hash(value: &Value) -> Option<&str> {
     value.get("linkHash").and_then(Value::as_str).or_else(|| {
         value
             .pointer("/linkIdentity/linkHash")
@@ -185,7 +186,7 @@ fn latency_snapshot_link_hash(value: &Value) -> Option<&str> {
     })
 }
 
-fn prefer_latency_snapshot(next: &Value, current: &Value) -> bool {
+pub(crate) fn prefer_latency_snapshot(next: &Value, current: &Value) -> bool {
     let next_latency = next.get("latencyMs").and_then(Value::as_i64);
     let current_latency = current.get("latencyMs").and_then(Value::as_i64);
     match (next_latency, current_latency) {
@@ -204,7 +205,7 @@ fn prefer_latency_snapshot(next: &Value, current: &Value) -> bool {
     }
 }
 
-fn latency_link_identity_value(
+pub(crate) fn latency_link_identity_value(
     display_name: &str,
     link_hash: &str,
     redacted_source: &str,
@@ -217,16 +218,16 @@ fn latency_link_identity_value(
     })
 }
 
-pub(super) fn link_hash(link: &str) -> String {
+pub(crate) fn link_hash(link: &str) -> String {
     format!("sha256:{}", hex_encode(&Sha256::digest(link.as_bytes())))
 }
 
-fn graph_id_from_link_hash(link_hash: &str) -> String {
+pub(crate) fn graph_id_from_link_hash(link_hash: &str) -> String {
     let graph_hash = link_hash.trim_start_matches("sha256:");
     format!("resident-graph:{}", &graph_hash[..16.min(graph_hash.len())])
 }
 
-pub(super) fn redacted_link_source(link: &str) -> String {
+pub(crate) fn redacted_link_source(link: &str) -> String {
     let Ok(url) = url::Url::parse(link) else {
         return "link:<redacted>".to_owned();
     };
@@ -238,7 +239,7 @@ pub(super) fn redacted_link_source(link: &str) -> String {
     value
 }
 
-fn display_name_from_link(link: &str) -> String {
+pub(crate) fn display_name_from_link(link: &str) -> String {
     url::Url::parse(link)
         .ok()
         .and_then(|url| url.fragment().map(str::to_owned))
@@ -246,7 +247,7 @@ fn display_name_from_link(link: &str) -> String {
         .unwrap_or_else(|| "<redacted>".to_owned())
 }
 
-fn hex_encode(bytes: &[u8]) -> String {
+pub(crate) fn hex_encode(bytes: &[u8]) -> String {
     const HEX: &[u8; 16] = b"0123456789abcdef";
     let mut out = String::with_capacity(bytes.len() * 2);
     for byte in bytes {
@@ -256,7 +257,7 @@ fn hex_encode(bytes: &[u8]) -> String {
     out
 }
 
-fn probe_resident_candidate_tcp_endpoint(
+pub(crate) fn probe_resident_candidate_tcp_endpoint(
     candidate: &plan::ResidentProxyProbePlan,
 ) -> Result<i64, String> {
     let started = Instant::now();
@@ -272,7 +273,7 @@ fn probe_resident_candidate_tcp_endpoint(
     Ok(elapsed_millis(started.elapsed()))
 }
 
-fn probe_resident_candidate_udp_endpoint(
+pub(crate) fn probe_resident_candidate_udp_endpoint(
     candidate: &plan::ResidentProxyProbePlan,
 ) -> Result<i64, String> {
     let started = Instant::now();
@@ -284,18 +285,18 @@ fn probe_resident_candidate_udp_endpoint(
     Ok(elapsed_millis(started.elapsed()))
 }
 
-fn elapsed_millis(elapsed: Duration) -> i64 {
+pub(crate) fn elapsed_millis(elapsed: Duration) -> i64 {
     elapsed.as_millis().min(i64::MAX as u128) as i64
 }
 
-fn unix_now_secs() -> i64 {
+pub(crate) fn unix_now_secs() -> i64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map(|duration| duration.as_secs().min(i64::MAX as u64) as i64)
         .unwrap_or(0)
 }
 
-fn sleep_until_stopped(stop: &AtomicBool, duration: Duration) -> bool {
+pub(crate) fn sleep_until_stopped(stop: &AtomicBool, duration: Duration) -> bool {
     if duration.is_zero() {
         return stop.load(Ordering::Relaxed);
     }

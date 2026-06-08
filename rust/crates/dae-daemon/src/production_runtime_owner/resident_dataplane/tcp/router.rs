@@ -1,21 +1,23 @@
-const BPF_L4_TCP: u8 = 6;
-const ROUTING_L4_TCP: u8 = 1;
-const ROUTING_IP_VERSION_4: u8 = 1;
-const TCP_SNIFF_BUFFER_LIMIT: usize = 64 * 1024;
-const ANYTLS_LOCAL_CLOSE_DRAIN_TIMEOUT: Duration = Duration::from_millis(500);
+use super::*;
+pub(crate) const BPF_L4_TCP: u8 = 6;
+pub(crate) const ROUTING_L4_TCP: u8 = 1;
+pub(crate) const ROUTING_IP_VERSION_4: u8 = 1;
+pub(crate) const TCP_SNIFF_BUFFER_LIMIT: usize = 64 * 1024;
+pub(crate) const ANYTLS_LOCAL_CLOSE_DRAIN_TIMEOUT: Duration = Duration::from_millis(500);
 
-pub(super) struct ResidentTcpRouter {
-    proxies: BTreeMap<u8, ResidentProxyGroupPlan>,
-    routing_tuple_map_id: u32,
-    routing_matcher: RoutingMatcher,
-    dial_mode: TcpDialMode,
-    sniffing_timeout: Duration,
-    so_mark_from_dae: u32,
-    mptcp: bool,
+pub(crate) struct ResidentTcpRouter {
+    pub(in crate::production_runtime_owner::resident_dataplane) proxies:
+        BTreeMap<u8, ResidentProxyGroupPlan>,
+    pub(in crate::production_runtime_owner::resident_dataplane) routing_tuple_map_id: u32,
+    pub(in crate::production_runtime_owner::resident_dataplane) routing_matcher: RoutingMatcher,
+    pub(in crate::production_runtime_owner::resident_dataplane) dial_mode: TcpDialMode,
+    pub(in crate::production_runtime_owner::resident_dataplane) sniffing_timeout: Duration,
+    pub(in crate::production_runtime_owner::resident_dataplane) so_mark_from_dae: u32,
+    pub(in crate::production_runtime_owner::resident_dataplane) mptcp: bool,
 }
 
 impl ResidentTcpRouter {
-    pub(super) fn new(
+    pub(in crate::production_runtime_owner::resident_dataplane) fn new(
         proxies: BTreeMap<u8, ResidentProxyGroupPlan>,
         routing_tuple_map_id: Option<u32>,
         routing_matcher: RoutingMatcher,
@@ -42,19 +44,23 @@ impl ResidentTcpRouter {
         })
     }
 
-    pub(super) fn proxy_count(&self) -> usize {
+    pub(in crate::production_runtime_owner::resident_dataplane) fn proxy_count(&self) -> usize {
         self.proxies.len()
     }
 
-    pub(super) fn dial_mode_name(&self) -> &'static str {
+    pub(in crate::production_runtime_owner::resident_dataplane) fn dial_mode_name(
+        &self,
+    ) -> &'static str {
         self.dial_mode.as_str()
     }
 
-    pub(super) fn sniffing_timeout(&self) -> Duration {
+    pub(in crate::production_runtime_owner::resident_dataplane) fn sniffing_timeout(
+        &self,
+    ) -> Duration {
         self.sniffing_timeout
     }
 
-    fn select(
+    pub(in crate::production_runtime_owner::resident_dataplane) fn select(
         &self,
         peer: SocketAddrV4,
         original_dst: SocketAddrV4,
@@ -64,7 +70,7 @@ impl ResidentTcpRouter {
         self.select_from_routing_result(peer, original_dst, sniffed_domain, initial)
     }
 
-    fn select_from_routing_result(
+    pub(in crate::production_runtime_owner::resident_dataplane) fn select_from_routing_result(
         &self,
         peer: SocketAddrV4,
         original_dst: SocketAddrV4,
@@ -150,7 +156,7 @@ impl ResidentTcpRouter {
         }
     }
 
-    fn lookup_routing_result(
+    pub(in crate::production_runtime_owner::resident_dataplane) fn lookup_routing_result(
         &self,
         peer: SocketAddrV4,
         original_dst: SocketAddrV4,
@@ -183,27 +189,29 @@ impl ResidentTcpRouter {
 }
 
 #[derive(Debug)]
-struct TcpRouteSelection {
-    initial_outbound: u8,
-    final_outbound: u8,
-    final_mark: u32,
-    userspace_route_executed: bool,
-    userspace_route_must: bool,
-    dial_target: String,
-    dial_ip: bool,
-    log_metadata: TcpRoutingLogMetadata,
+pub(crate) struct TcpRouteSelection {
+    pub(in crate::production_runtime_owner::resident_dataplane) initial_outbound: u8,
+    pub(in crate::production_runtime_owner::resident_dataplane) final_outbound: u8,
+    pub(in crate::production_runtime_owner::resident_dataplane) final_mark: u32,
+    pub(in crate::production_runtime_owner::resident_dataplane) userspace_route_executed: bool,
+    pub(in crate::production_runtime_owner::resident_dataplane) userspace_route_must: bool,
+    pub(in crate::production_runtime_owner::resident_dataplane) dial_target: String,
+    pub(in crate::production_runtime_owner::resident_dataplane) dial_ip: bool,
+    pub(in crate::production_runtime_owner::resident_dataplane) log_metadata: TcpRoutingLogMetadata,
 }
 
 #[derive(Debug)]
-struct TcpRoutingLogMetadata {
-    pid: u32,
-    dscp: u8,
-    pname: String,
-    mac: String,
+pub(crate) struct TcpRoutingLogMetadata {
+    pub(in crate::production_runtime_owner::resident_dataplane) pid: u32,
+    pub(in crate::production_runtime_owner::resident_dataplane) dscp: u8,
+    pub(in crate::production_runtime_owner::resident_dataplane) pname: String,
+    pub(in crate::production_runtime_owner::resident_dataplane) mac: String,
 }
 
 impl TcpRoutingLogMetadata {
-    fn from_bpf(result: &BpfRoutingResult) -> Self {
+    pub(in crate::production_runtime_owner::resident_dataplane) fn from_bpf(
+        result: &BpfRoutingResult,
+    ) -> Self {
         Self {
             pid: result.pid,
             dscp: result.dscp,
@@ -214,31 +222,31 @@ impl TcpRoutingLogMetadata {
 }
 
 #[derive(Debug)]
-struct TcpProxySelection {
-    route: TcpRouteSelection,
-    proxy: ResidentProxyPlan,
+pub(crate) struct TcpProxySelection {
+    pub(in crate::production_runtime_owner::resident_dataplane) route: TcpRouteSelection,
+    pub(in crate::production_runtime_owner::resident_dataplane) proxy: ResidentProxyPlan,
 }
 
 #[derive(Debug)]
-struct TcpDirectSelection {
-    route: TcpRouteSelection,
-    mptcp: bool,
+pub(crate) struct TcpDirectSelection {
+    pub(in crate::production_runtime_owner::resident_dataplane) route: TcpRouteSelection,
+    pub(in crate::production_runtime_owner::resident_dataplane) mptcp: bool,
 }
 
 #[derive(Debug)]
-struct TcpBlockSelection {
-    route: TcpRouteSelection,
+pub(crate) struct TcpBlockSelection {
+    pub(in crate::production_runtime_owner::resident_dataplane) route: TcpRouteSelection,
 }
 
 #[derive(Debug)]
-enum TcpSelection {
+pub(crate) enum TcpSelection {
     Proxy(TcpProxySelection),
     Direct(TcpDirectSelection),
     Block(TcpBlockSelection),
 }
 
-struct TcpSniffReport {
-    payload: Vec<u8>,
-    domain: String,
-    error: Option<String>,
+pub(crate) struct TcpSniffReport {
+    pub(in crate::production_runtime_owner::resident_dataplane) payload: Vec<u8>,
+    pub(in crate::production_runtime_owner::resident_dataplane) domain: String,
+    pub(in crate::production_runtime_owner::resident_dataplane) error: Option<String>,
 }

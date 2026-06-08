@@ -1,17 +1,18 @@
+use super::*;
 #[derive(Debug)]
-struct ProductLogEntry {
-    id: u64,
-    ts: String,
-    level: String,
-    message: String,
-    fields: BTreeMap<String, String>,
+pub(crate) struct ProductLogEntry {
+    pub(super) id: u64,
+    pub(super) ts: String,
+    pub(super) level: String,
+    pub(super) message: String,
+    pub(super) fields: BTreeMap<String, String>,
 }
 
-fn product_log_file(config_dir: &Path) -> PathBuf {
+pub(crate) fn product_log_file(config_dir: &Path) -> PathBuf {
     config_dir.join(PRODUCT_LOG_DIR).join(PRODUCT_LOG_FILE)
 }
 
-fn clear_log_file(config_dir: &Path) -> io::Result<()> {
+pub(crate) fn clear_log_file(config_dir: &Path) -> io::Result<()> {
     let log_file = product_log_file(config_dir);
     ensure_log_dir(config_dir)?;
     let lock = LOG_FILE_LOCK.get_or_init(|| Mutex::new(()));
@@ -23,7 +24,7 @@ fn clear_log_file(config_dir: &Path) -> io::Result<()> {
     set_log_file_permissions(&log_file)
 }
 
-fn append_log_line(path: &Path, line: &[u8]) -> io::Result<()> {
+pub(crate) fn append_log_line(path: &Path, line: &[u8]) -> io::Result<()> {
     let mut file = fs::OpenOptions::new()
         .create(true)
         .append(true)
@@ -33,19 +34,19 @@ fn append_log_line(path: &Path, line: &[u8]) -> io::Result<()> {
     set_log_file_permissions(path)
 }
 
-fn set_log_file_permissions(path: &Path) -> io::Result<()> {
+pub(crate) fn set_log_file_permissions(path: &Path) -> io::Result<()> {
     use std::os::unix::fs::PermissionsExt;
     fs::set_permissions(path, fs::Permissions::from_mode(0o600))
 }
 
-fn ensure_log_dir(config_dir: &Path) -> io::Result<()> {
+pub(crate) fn ensure_log_dir(config_dir: &Path) -> io::Result<()> {
     use std::os::unix::fs::PermissionsExt;
     let log_dir = config_dir.join(PRODUCT_LOG_DIR);
     fs::create_dir_all(&log_dir)?;
     fs::set_permissions(log_dir, fs::Permissions::from_mode(0o750))
 }
 
-fn encode_log_entry_line(
+pub(crate) fn encode_log_entry_line(
     id: u64,
     level: &str,
     message: &str,
@@ -67,7 +68,7 @@ fn encode_log_entry_line(
     Ok(line)
 }
 
-fn encode_log_entry_json_line(
+pub(crate) fn encode_log_entry_json_line(
     id: u64,
     level: &str,
     message: &str,
@@ -87,7 +88,7 @@ fn encode_log_entry_json_line(
     Ok(data)
 }
 
-fn trim_log_fields(
+pub(crate) fn trim_log_fields(
     fields: BTreeMap<String, String>,
     max_value_len: usize,
 ) -> BTreeMap<String, String> {
@@ -97,7 +98,7 @@ fn trim_log_fields(
         .collect()
 }
 
-fn trim_log_string(value: &str, max_len: usize) -> String {
+pub(crate) fn trim_log_string(value: &str, max_len: usize) -> String {
     if max_len == 0 || value.len() <= max_len {
         return value.to_owned();
     }
@@ -114,7 +115,7 @@ fn trim_log_string(value: &str, max_len: usize) -> String {
     format!("{}...", &value[..boundary])
 }
 
-fn parse_log_entry_line(line: &str) -> Option<ProductLogEntry> {
+pub(crate) fn parse_log_entry_line(line: &str) -> Option<ProductLogEntry> {
     let value = serde_json::from_str::<Value>(line).ok()?;
     let id = value.get("id").and_then(|value| {
         value
@@ -151,7 +152,7 @@ fn parse_log_entry_line(line: &str) -> Option<ProductLogEntry> {
     })
 }
 
-fn log_entry_value(entry: ProductLogEntry) -> Value {
+pub(crate) fn log_entry_value(entry: ProductLogEntry) -> Value {
     let mut object = Map::new();
     object.insert("id".to_owned(), json!(entry.id));
     object.insert("ts".to_owned(), json!(entry.ts));
@@ -161,7 +162,7 @@ fn log_entry_value(entry: ProductLogEntry) -> Value {
     Value::Object(object)
 }
 
-fn log_entry_matches_filter(
+pub(crate) fn log_entry_matches_filter(
     entry: &ProductLogEntry,
     level: Option<&str>,
     query: Option<&str>,
@@ -180,7 +181,7 @@ fn log_entry_matches_filter(
     })
 }
 
-fn read_last_log_id(path: &Path) -> io::Result<u64> {
+pub(crate) fn read_last_log_id(path: &Path) -> io::Result<u64> {
     let data = match read_tail_bytes(path, LOG_TAIL_ID_SCAN_BYTES) {
         Ok(data) => data,
         Err(err) if err.kind() == io::ErrorKind::NotFound => return Ok(0),
@@ -194,7 +195,7 @@ fn read_last_log_id(path: &Path) -> io::Result<u64> {
     Ok(0)
 }
 
-fn next_log_id(path: &Path) -> io::Result<u64> {
+pub(crate) fn next_log_id(path: &Path) -> io::Result<u64> {
     let lock = LOG_LAST_ID_CACHE.get_or_init(|| Mutex::new(None));
     let mut cache = lock
         .lock()
@@ -213,7 +214,7 @@ fn next_log_id(path: &Path) -> io::Result<u64> {
     Ok(id)
 }
 
-fn cached_last_log_id(path: &Path) -> io::Result<u64> {
+pub(crate) fn cached_last_log_id(path: &Path) -> io::Result<u64> {
     let lock = LOG_LAST_ID_CACHE.get_or_init(|| Mutex::new(None));
     {
         let cache = lock
@@ -232,7 +233,7 @@ fn cached_last_log_id(path: &Path) -> io::Result<u64> {
     Ok(cache.as_ref().map(|cached| cached.id).unwrap_or(0))
 }
 
-fn set_log_id_cache(path: &Path, id: u64) -> io::Result<()> {
+pub(crate) fn set_log_id_cache(path: &Path, id: u64) -> io::Result<()> {
     let lock = LOG_LAST_ID_CACHE.get_or_init(|| Mutex::new(None));
     let mut cache = lock
         .lock()
@@ -244,11 +245,11 @@ fn set_log_id_cache(path: &Path, id: u64) -> io::Result<()> {
     Ok(())
 }
 
-fn reset_log_id_cache_to_last(path: &Path) -> io::Result<()> {
+pub(crate) fn reset_log_id_cache_to_last(path: &Path) -> io::Result<()> {
     set_log_id_cache(path, read_last_log_id(path)?)
 }
 
-fn scan_log_entries_after_id(
+pub(crate) fn scan_log_entries_after_id(
     config_dir: &Path,
     after_id: u64,
 ) -> io::Result<(Vec<ProductLogEntry>, u64)> {
@@ -274,7 +275,7 @@ fn scan_log_entries_after_id(
     Ok((entries, max_seen_id))
 }
 
-fn count_log_file_entries(config_dir: &Path) -> io::Result<i64> {
+pub(crate) fn count_log_file_entries(config_dir: &Path) -> io::Result<i64> {
     let log_file = product_log_file(config_dir);
     let file = match fs::File::open(&log_file) {
         Ok(file) => file,
@@ -290,7 +291,7 @@ fn count_log_file_entries(config_dir: &Path) -> io::Result<i64> {
     Ok(count)
 }
 
-fn read_tail_bytes(path: &Path, max_bytes: u64) -> io::Result<String> {
+pub(crate) fn read_tail_bytes(path: &Path, max_bytes: u64) -> io::Result<String> {
     let mut file = fs::File::open(path)?;
     let size = file.metadata()?.len();
     if size == 0 {
@@ -308,7 +309,7 @@ fn read_tail_bytes(path: &Path, max_bytes: u64) -> io::Result<String> {
     Ok(String::from_utf8_lossy(&data).into_owned())
 }
 
-fn prune_log_file(config_dir: &Path, conn: &Connection) -> io::Result<()> {
+pub(crate) fn prune_log_file(config_dir: &Path, conn: &Connection) -> io::Result<()> {
     let (max_entries, max_bytes) = log_settings_tuple(conn)?;
     let log_file = product_log_file(config_dir);
     let lock = LOG_FILE_LOCK.get_or_init(|| Mutex::new(()));
@@ -319,7 +320,7 @@ fn prune_log_file(config_dir: &Path, conn: &Connection) -> io::Result<()> {
     reset_log_id_cache_to_last(&log_file)
 }
 
-fn prune_log_file_if_needed(
+pub(crate) fn prune_log_file_if_needed(
     path: &Path,
     max_entries: i64,
     max_bytes: i64,
@@ -337,7 +338,11 @@ fn prune_log_file_if_needed(
     prune_log_file_with_settings(path, max_entries, max_bytes as i64)
 }
 
-fn prune_log_file_with_settings(path: &Path, max_entries: i64, max_bytes: i64) -> io::Result<()> {
+pub(crate) fn prune_log_file_with_settings(
+    path: &Path,
+    max_entries: i64,
+    max_bytes: i64,
+) -> io::Result<()> {
     let max_entries = normalize_log_max_entries(max_entries) as usize;
     let max_bytes = normalize_log_max_bytes(max_bytes) as u64;
     let data = match read_tail_bytes(path, max_bytes) {

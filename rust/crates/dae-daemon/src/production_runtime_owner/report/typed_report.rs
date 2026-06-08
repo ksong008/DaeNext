@@ -1,12 +1,13 @@
+use super::*;
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum TypedReportStatus {
+pub(super) enum TypedReportStatus {
     Pass,
     Fail,
     NotExecuted,
 }
 
 impl TypedReportStatus {
-    fn as_str(self) -> &'static str {
+    pub(super) fn as_str(self) -> &'static str {
         match self {
             Self::Pass => "pass",
             Self::Fail => "fail",
@@ -16,18 +17,18 @@ impl TypedReportStatus {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-struct ProductionRuntimeTypedReport {
-    executed: bool,
-    owner_smoke_passed: bool,
-    production_dataplane_admitted: bool,
-    reload_runtime_parity_admitted: bool,
-    active_tcp_relay_benchmark_recorded: bool,
-    active_udp_tproxy_benchmark_recorded: bool,
-    active_dns_tproxy_benchmark_recorded: bool,
+pub(super) struct ProductionRuntimeTypedReport {
+    pub(super) executed: bool,
+    pub(super) owner_smoke_passed: bool,
+    pub(super) production_dataplane_admitted: bool,
+    pub(super) reload_runtime_parity_admitted: bool,
+    pub(super) active_tcp_relay_benchmark_recorded: bool,
+    pub(super) active_udp_tproxy_benchmark_recorded: bool,
+    pub(super) active_dns_tproxy_benchmark_recorded: bool,
 }
 
 impl ProductionRuntimeTypedReport {
-    fn status(self) -> TypedReportStatus {
+    pub(super) fn status(self) -> TypedReportStatus {
         if !self.executed {
             TypedReportStatus::NotExecuted
         } else if self.production_dataplane_admitted && self.reload_runtime_parity_admitted {
@@ -37,7 +38,7 @@ impl ProductionRuntimeTypedReport {
         }
     }
 
-    fn to_json(self) -> Value {
+    pub(super) fn to_json(self) -> Value {
         json!({
             "schema": "production-runtime-owner-typed-report",
             "formal_surface": "daemon-runtime-owner",

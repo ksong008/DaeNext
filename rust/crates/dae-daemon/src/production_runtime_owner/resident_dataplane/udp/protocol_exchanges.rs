@@ -1,4 +1,5 @@
-fn exchange_vless_udp(
+use super::*;
+pub(super) fn exchange_vless_udp(
     proxy: &ResidentProxyPlan,
     original_dst: SocketAddrV4,
     payload: &[u8],
@@ -14,7 +15,7 @@ fn exchange_vless_udp(
     })
 }
 
-fn exchange_shadowsocks_udp(
+pub(super) fn exchange_shadowsocks_udp(
     proxy: &ResidentProxyPlan,
     original_dst: SocketAddrV4,
     payload: &[u8],
@@ -32,7 +33,7 @@ fn exchange_shadowsocks_udp(
     Ok(UdpExchangeResult::new(decoded.payload, "udp-datagram-aead"))
 }
 
-fn exchange_shadowsocks_2022_udp(
+pub(super) fn exchange_shadowsocks_2022_udp(
     proxy: &ResidentProxyPlan,
     original_dst: SocketAddrV4,
     payload: &[u8],
@@ -70,7 +71,7 @@ fn exchange_shadowsocks_2022_udp(
     ))
 }
 
-fn exchange_socks5_udp(
+pub(super) fn exchange_socks5_udp(
     proxy: &ResidentProxyPlan,
     original_dst: SocketAddrV4,
     payload: &[u8],
@@ -98,7 +99,7 @@ fn exchange_socks5_udp(
     ))
 }
 
-fn exchange_trojan_udp(
+pub(super) fn exchange_trojan_udp(
     proxy: &ResidentProxyPlan,
     original_dst: SocketAddrV4,
     payload: &[u8],
@@ -120,7 +121,7 @@ fn exchange_trojan_udp(
     })
 }
 
-fn exchange_vmess_udp(
+pub(super) fn exchange_vmess_udp(
     proxy: &ResidentProxyPlan,
     original_dst: SocketAddrV4,
     payload: &[u8],
@@ -141,7 +142,7 @@ fn exchange_vmess_udp(
     ))
 }
 
-fn exchange_anytls_udp(
+pub(super) fn exchange_anytls_udp(
     proxy: &ResidentProxyPlan,
     original_dst: SocketAddrV4,
     payload: &[u8],
@@ -192,7 +193,7 @@ fn exchange_anytls_udp(
     )
 }
 
-fn exchange_hysteria2_udp(
+pub(super) fn exchange_hysteria2_udp(
     proxy: &ResidentProxyPlan,
     original_dst: SocketAddrV4,
     payload: &[u8],
@@ -243,7 +244,7 @@ fn exchange_hysteria2_udp(
     })
 }
 
-fn exchange_tuic_udp(
+pub(super) fn exchange_tuic_udp(
     proxy: &ResidentProxyPlan,
     original_dst: SocketAddrV4,
     payload: &[u8],
@@ -283,7 +284,7 @@ fn exchange_tuic_udp(
     })
 }
 
-fn exchange_juicity_udp(
+pub(super) fn exchange_juicity_udp(
     proxy: &ResidentProxyPlan,
     original_dst: SocketAddrV4,
     payload: &[u8],
@@ -339,7 +340,7 @@ fn exchange_juicity_udp(
     })
 }
 
-async fn read_juicity_stream_packet_response(
+pub(super) async fn read_juicity_stream_packet_response(
     recv: &mut quinn::RecvStream,
 ) -> Result<Vec<u8>, String> {
     let mut response = Vec::new();

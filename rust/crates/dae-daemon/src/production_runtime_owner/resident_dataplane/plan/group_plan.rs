@@ -1,54 +1,55 @@
+use super::*;
 #[derive(Clone, Debug)]
-pub(super) struct ResidentProxyCandidatePlan {
-    pub(super) match_index: usize,
-    pub(super) annotation_add_latency_ms: i64,
-    pub(super) link: String,
-    pub(super) link_hash: String,
-    pub(super) redacted_link_source: String,
-    pub(super) proxy: ResidentProxyPlan,
+pub(crate) struct ResidentProxyCandidatePlan {
+    pub(in crate::production_runtime_owner::resident_dataplane) match_index: usize,
+    pub(in crate::production_runtime_owner::resident_dataplane) annotation_add_latency_ms: i64,
+    pub(in crate::production_runtime_owner::resident_dataplane) link: String,
+    pub(in crate::production_runtime_owner::resident_dataplane) link_hash: String,
+    pub(in crate::production_runtime_owner::resident_dataplane) redacted_link_source: String,
+    pub(in crate::production_runtime_owner::resident_dataplane) proxy: ResidentProxyPlan,
 }
 
 #[derive(Clone, Debug)]
-pub(super) struct ResidentProxyProbePlan {
-    pub(super) node_tag: String,
-    pub(super) link: String,
-    pub(super) link_hash: String,
-    pub(super) redacted_link_source: String,
-    pub(super) tcp_check: ResidentTcpCheckPlan,
-    pub(super) udp_check: ResidentUdpCheckPlan,
-    pub(super) proxy: ResidentProxyPlan,
+pub(crate) struct ResidentProxyProbePlan {
+    pub(in crate::production_runtime_owner::resident_dataplane) node_tag: String,
+    pub(in crate::production_runtime_owner::resident_dataplane) link: String,
+    pub(in crate::production_runtime_owner::resident_dataplane) link_hash: String,
+    pub(in crate::production_runtime_owner::resident_dataplane) redacted_link_source: String,
+    pub(in crate::production_runtime_owner::resident_dataplane) tcp_check: ResidentTcpCheckPlan,
+    pub(in crate::production_runtime_owner::resident_dataplane) udp_check: ResidentUdpCheckPlan,
+    pub(in crate::production_runtime_owner::resident_dataplane) proxy: ResidentProxyPlan,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub(super) struct ResidentTcpCheckPlan {
-    pub(super) scheme: String,
-    pub(super) target: String,
-    pub(super) host: String,
-    pub(super) path: String,
-    pub(super) method: String,
+pub(crate) struct ResidentTcpCheckPlan {
+    pub(in crate::production_runtime_owner::resident_dataplane) scheme: String,
+    pub(in crate::production_runtime_owner::resident_dataplane) target: String,
+    pub(in crate::production_runtime_owner::resident_dataplane) host: String,
+    pub(in crate::production_runtime_owner::resident_dataplane) path: String,
+    pub(in crate::production_runtime_owner::resident_dataplane) method: String,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub(super) struct ResidentUdpCheckPlan {
-    pub(super) target: SocketAddrV4,
-    pub(super) host: String,
-    pub(super) lookup_host: String,
+pub(crate) struct ResidentUdpCheckPlan {
+    pub(in crate::production_runtime_owner::resident_dataplane) target: SocketAddrV4,
+    pub(in crate::production_runtime_owner::resident_dataplane) host: String,
+    pub(in crate::production_runtime_owner::resident_dataplane) lookup_host: String,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub(super) struct ResidentProxyLatencySnapshot {
-    pub(super) node_tag: String,
-    pub(super) graph_id: String,
-    pub(super) link_hash: String,
-    pub(super) redacted_link_source: String,
-    pub(super) latency_ms: Option<i64>,
-    pub(super) alive: bool,
-    pub(super) checked_at_unix: i64,
-    pub(super) message: String,
+pub(crate) struct ResidentProxyLatencySnapshot {
+    pub(in crate::production_runtime_owner::resident_dataplane) node_tag: String,
+    pub(in crate::production_runtime_owner::resident_dataplane) graph_id: String,
+    pub(in crate::production_runtime_owner::resident_dataplane) link_hash: String,
+    pub(in crate::production_runtime_owner::resident_dataplane) redacted_link_source: String,
+    pub(in crate::production_runtime_owner::resident_dataplane) latency_ms: Option<i64>,
+    pub(in crate::production_runtime_owner::resident_dataplane) alive: bool,
+    pub(in crate::production_runtime_owner::resident_dataplane) checked_at_unix: i64,
+    pub(in crate::production_runtime_owner::resident_dataplane) message: String,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub(super) enum ResidentGroupPolicyPlan {
+pub(crate) enum ResidentGroupPolicyPlan {
     Fixed { index: usize },
     Random,
     MinLastLatency,
@@ -57,7 +58,7 @@ pub(super) enum ResidentGroupPolicyPlan {
 }
 
 impl ResidentGroupPolicyPlan {
-    pub(super) fn as_str(&self) -> &'static str {
+    pub(in crate::production_runtime_owner::resident_dataplane) fn as_str(&self) -> &'static str {
         match self {
             Self::Fixed { .. } => "fixed",
             Self::Random => "random",
@@ -67,58 +68,74 @@ impl ResidentGroupPolicyPlan {
         }
     }
 
-    pub(super) fn fixed_index(&self) -> Option<usize> {
+    pub(in crate::production_runtime_owner::resident_dataplane) fn fixed_index(
+        &self,
+    ) -> Option<usize> {
         match self {
             Self::Fixed { index } => Some(*index),
             _ => None,
         }
     }
 
-    pub(super) fn needs_latency_state(&self) -> bool {
+    pub(in crate::production_runtime_owner::resident_dataplane) fn needs_latency_state(
+        &self,
+    ) -> bool {
         matches!(
             self,
             Self::MinLastLatency | Self::MinAverage10 | Self::MinMovingAverage
         )
     }
 
-    pub(super) fn needs_alive_state(&self) -> bool {
+    pub(in crate::production_runtime_owner::resident_dataplane) fn needs_alive_state(
+        &self,
+    ) -> bool {
         !matches!(self, Self::Fixed { .. })
     }
 }
 
 #[derive(Clone, Debug)]
-pub(super) struct ResidentProxyGroupPlan {
-    pub(super) group_name: String,
-    pub(super) group_policy: ResidentGroupPolicyPlan,
-    matched_candidate_count: usize,
-    candidates: Vec<ResidentProxyCandidatePlan>,
-    selector: Arc<Mutex<DialerGroup>>,
-    check_interval: Duration,
-    tcp_check: ResidentTcpCheckPlan,
-    udp_check: ResidentUdpCheckPlan,
+pub(crate) struct ResidentProxyGroupPlan {
+    pub(in crate::production_runtime_owner::resident_dataplane) group_name: String,
+    pub(in crate::production_runtime_owner::resident_dataplane) group_policy:
+        ResidentGroupPolicyPlan,
+    pub(in crate::production_runtime_owner::resident_dataplane) matched_candidate_count: usize,
+    pub(in crate::production_runtime_owner::resident_dataplane) candidates:
+        Vec<ResidentProxyCandidatePlan>,
+    pub(in crate::production_runtime_owner::resident_dataplane) selector: Arc<Mutex<DialerGroup>>,
+    pub(in crate::production_runtime_owner::resident_dataplane) check_interval: Duration,
+    pub(in crate::production_runtime_owner::resident_dataplane) tcp_check: ResidentTcpCheckPlan,
+    pub(in crate::production_runtime_owner::resident_dataplane) udp_check: ResidentUdpCheckPlan,
 }
 
 impl ResidentProxyGroupPlan {
-    pub(super) fn group_policy_name(&self) -> &'static str {
+    pub(in crate::production_runtime_owner::resident_dataplane) fn group_policy_name(
+        &self,
+    ) -> &'static str {
         self.group_policy.as_str()
     }
 
-    pub(super) fn candidate_count(&self) -> usize {
+    pub(in crate::production_runtime_owner::resident_dataplane) fn candidate_count(&self) -> usize {
         self.matched_candidate_count
     }
 
-    pub(super) fn admitted_candidate_count(&self) -> usize {
+    pub(in crate::production_runtime_owner::resident_dataplane) fn admitted_candidate_count(
+        &self,
+    ) -> usize {
         self.candidates.len()
     }
 
-    pub(super) fn annotation_latency_offset_count(&self) -> usize {
+    pub(in crate::production_runtime_owner::resident_dataplane) fn annotation_latency_offset_count(
+        &self,
+    ) -> usize {
         self.candidates
             .iter()
             .filter(|candidate| candidate.annotation_add_latency_ms != 0)
             .count()
     }
 
-    pub(super) fn latency_state_wired(&self) -> bool {
+    pub(in crate::production_runtime_owner::resident_dataplane) fn latency_state_wired(
+        &self,
+    ) -> bool {
         if !self.group_policy.needs_latency_state() {
             return true;
         }
@@ -130,7 +147,9 @@ impl ResidentProxyGroupPlan {
             .unwrap_or(false)
     }
 
-    pub(super) fn alive_state_wired(&self) -> bool {
+    pub(in crate::production_runtime_owner::resident_dataplane) fn alive_state_wired(
+        &self,
+    ) -> bool {
         if !self.group_policy.needs_alive_state() {
             return true;
         }
@@ -140,20 +159,28 @@ impl ResidentProxyGroupPlan {
             .unwrap_or(false)
     }
 
-    pub(super) fn default_proxy_snapshot(&self) -> Option<ResidentProxyPlan> {
+    pub(in crate::production_runtime_owner::resident_dataplane) fn default_proxy_snapshot(
+        &self,
+    ) -> Option<ResidentProxyPlan> {
         self.snapshot_candidate()
             .map(|candidate| candidate.proxy.clone())
     }
 
-    pub(super) fn needs_background_checks(&self) -> bool {
+    pub(in crate::production_runtime_owner::resident_dataplane) fn needs_background_checks(
+        &self,
+    ) -> bool {
         self.group_policy.needs_alive_state()
     }
 
-    pub(super) fn check_interval(&self) -> Duration {
+    pub(in crate::production_runtime_owner::resident_dataplane) fn check_interval(
+        &self,
+    ) -> Duration {
         self.check_interval
     }
 
-    pub(super) fn probe_candidates(&self) -> Vec<ResidentProxyProbePlan> {
+    pub(in crate::production_runtime_owner::resident_dataplane) fn probe_candidates(
+        &self,
+    ) -> Vec<ResidentProxyProbePlan> {
         self.candidates
             .iter()
             .map(|candidate| ResidentProxyProbePlan {
@@ -168,7 +195,9 @@ impl ResidentProxyGroupPlan {
             .collect()
     }
 
-    pub(super) fn latency_snapshots(&self) -> Vec<ResidentProxyLatencySnapshot> {
+    pub(in crate::production_runtime_owner::resident_dataplane) fn latency_snapshots(
+        &self,
+    ) -> Vec<ResidentProxyLatencySnapshot> {
         let Ok(selector) = self.selector.lock() else {
             return Vec::new();
         };
@@ -195,20 +224,29 @@ impl ResidentProxyGroupPlan {
             .collect()
     }
 
-    pub(super) fn select_proxy_for_tcp(&self) -> Result<ResidentProxyPlan, String> {
+    pub(in crate::production_runtime_owner::resident_dataplane) fn select_proxy_for_tcp(
+        &self,
+    ) -> Result<ResidentProxyPlan, String> {
         self.select_proxy_for_network("tcp4")
     }
 
-    pub(super) fn select_proxy_for_udp(&self) -> Result<ResidentProxyPlan, String> {
+    pub(in crate::production_runtime_owner::resident_dataplane) fn select_proxy_for_udp(
+        &self,
+    ) -> Result<ResidentProxyPlan, String> {
         self.select_proxy_for_network("udp4")
     }
 
-    fn select_proxy_for_network(&self, network: &str) -> Result<ResidentProxyPlan, String> {
+    pub(in crate::production_runtime_owner::resident_dataplane) fn select_proxy_for_network(
+        &self,
+        network: &str,
+    ) -> Result<ResidentProxyPlan, String> {
         self.select_candidate(network)
             .map(|candidate| candidate.proxy.clone())
     }
 
-    fn snapshot_candidate(&self) -> Option<&ResidentProxyCandidatePlan> {
+    pub(in crate::production_runtime_owner::resident_dataplane) fn snapshot_candidate(
+        &self,
+    ) -> Option<&ResidentProxyCandidatePlan> {
         match self.group_policy {
             ResidentGroupPolicyPlan::Fixed { index } => self
                 .candidates
@@ -221,7 +259,10 @@ impl ResidentProxyGroupPlan {
         }
     }
 
-    fn select_candidate(&self, network: &str) -> Result<&ResidentProxyCandidatePlan, String> {
+    pub(in crate::production_runtime_owner::resident_dataplane) fn select_candidate(
+        &self,
+        network: &str,
+    ) -> Result<&ResidentProxyCandidatePlan, String> {
         if self.candidates.is_empty() {
             return Err(format!(
                 "resident dataplane group {} has no admitted candidate for {network}",
@@ -270,7 +311,7 @@ impl ResidentProxyGroupPlan {
         }
     }
 
-    pub(super) fn record_check_result(
+    pub(in crate::production_runtime_owner::resident_dataplane) fn record_check_result(
         &self,
         node_tag: &str,
         network_type: NetworkType,
@@ -299,7 +340,7 @@ impl ResidentProxyGroupPlan {
         Ok(())
     }
 
-    pub(super) fn record_check_result_for_link(
+    pub(in crate::production_runtime_owner::resident_dataplane) fn record_check_result_for_link(
         &self,
         link: &str,
         network_type: NetworkType,
@@ -328,7 +369,9 @@ impl ResidentProxyGroupPlan {
     }
 
     #[cfg(test)]
-    pub(super) fn fixed_single_for_test(proxy: ResidentProxyPlan) -> Self {
+    pub(in crate::production_runtime_owner::resident_dataplane) fn fixed_single_for_test(
+        proxy: ResidentProxyPlan,
+    ) -> Self {
         Self {
             group_name: proxy.group_name.clone(),
             group_policy: ResidentGroupPolicyPlan::Fixed { index: 0 },
@@ -366,7 +409,7 @@ impl ResidentProxyGroupPlan {
     }
 }
 
-fn resident_latency_message(ok: bool, alive: bool, latency_ms: i64) -> String {
+pub(crate) fn resident_latency_message(ok: bool, alive: bool, latency_ms: i64) -> String {
     if !ok {
         "no latency result".to_owned()
     } else if alive {

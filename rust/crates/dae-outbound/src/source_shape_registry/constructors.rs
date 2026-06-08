@@ -1,4 +1,5 @@
-const fn admitted_row(
+use super::*;
+pub(super) const fn admitted_row(
     shape_id: &'static str,
     protocol_family: &'static str,
     link_schemes: &'static [&'static str],
@@ -33,7 +34,7 @@ const fn admitted_row(
     }
 }
 
-const fn blocked_row(
+pub(super) const fn blocked_row(
     shape_id: &'static str,
     protocol_family: &'static str,
     link_schemes: &'static [&'static str],
@@ -69,7 +70,7 @@ const fn blocked_row(
     }
 }
 
-const fn scoped_evidence_admitted_row(
+pub(super) const fn scoped_evidence_admitted_row(
     shape_id: &'static str,
     protocol_family: &'static str,
     link_schemes: &'static [&'static str],
@@ -104,7 +105,7 @@ const fn scoped_evidence_admitted_row(
     }
 }
 
-const fn scoped_evidence_capability_admitted_row(
+pub(super) const fn scoped_evidence_capability_admitted_row(
     shape_id: &'static str,
     protocol_family: &'static str,
     link_schemes: &'static [&'static str],
@@ -140,7 +141,7 @@ const fn scoped_evidence_capability_admitted_row(
     }
 }
 
-const fn scoped_evidence_plugin_wrapper_admitted_row(
+pub(super) const fn scoped_evidence_plugin_wrapper_admitted_row(
     shape_id: &'static str,
     protocol_family: &'static str,
     link_schemes: &'static [&'static str],
@@ -175,7 +176,7 @@ const fn scoped_evidence_plugin_wrapper_admitted_row(
     }
 }
 
-const fn scoped_evidence_chain_admitted_row(
+pub(super) const fn scoped_evidence_chain_admitted_row(
     shape_id: &'static str,
     protocol_family: &'static str,
     link_schemes: &'static [&'static str],
@@ -210,7 +211,7 @@ const fn scoped_evidence_chain_admitted_row(
     }
 }
 
-const fn scoped_evidence_legacy_import_admitted_row(
+pub(super) const fn scoped_evidence_legacy_import_admitted_row(
     shape_id: &'static str,
     protocol_family: &'static str,
     link_schemes: &'static [&'static str],
@@ -245,7 +246,7 @@ const fn scoped_evidence_legacy_import_admitted_row(
     }
 }
 
-const fn not_supported_row(
+pub(super) const fn not_supported_row(
     shape_id: &'static str,
     protocol_family: &'static str,
     link_schemes: &'static [&'static str],

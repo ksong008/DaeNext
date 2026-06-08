@@ -1,8 +1,9 @@
-fn binary() -> &'static str {
+use super::*;
+pub(super) fn binary() -> &'static str {
     env!("CARGO_BIN_EXE_daed")
 }
 
-fn assert_protocol_matrix_source_uses_generic_semantics(source: &str) {
+pub(super) fn assert_protocol_matrix_source_uses_generic_semantics(source: &str) {
     let forbidden = [
         ["matrix", "-", "socks"].concat(),
         ["matrix", "-", "http"].concat(),
@@ -55,21 +56,29 @@ fn assert_protocol_matrix_source_uses_generic_semantics(source: &str) {
 }
 
 #[test]
-fn daed_product_protocol_matrix_source_fixtures_use_generic_semantics() {
-    for source in [
-        include_str!("../daed_product.rs"),
-        include_str!("helpers.rs"),
-        include_str!("matrix.rs"),
-        include_str!("contract_cli.rs"),
-        include_str!("api_runtime.rs"),
-        include_str!("export_reset.rs"),
-        include_str!("support.rs"),
-    ] {
-        assert_protocol_matrix_source_uses_generic_semantics(source);
+pub(super) fn daed_product_protocol_matrix_source_fixtures_use_generic_semantics() {
+    for path in DAED_PRODUCT_SOURCE_PATHS {
+        let source = read_daemon_source(path);
+        assert_protocol_matrix_source_uses_generic_semantics(&source);
     }
 }
 
-fn vmess_fixture_url(ps: &str, add: &str, port: u16, net: &str) -> String {
+const DAED_PRODUCT_SOURCE_PATHS: &[&str] = &[
+    "tests/daed_product.rs",
+    "tests/daed_product/helpers.rs",
+    "tests/daed_product/matrix.rs",
+    "tests/daed_product/contract_cli.rs",
+    "tests/daed_product/api_runtime.rs",
+    "tests/daed_product/export_reset.rs",
+    "tests/daed_product/support.rs",
+];
+
+fn read_daemon_source(path: &str) -> String {
+    std::fs::read_to_string(std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join(path))
+        .unwrap_or_else(|err| panic!("failed to read {}: {}", path, err))
+}
+
+pub(super) fn vmess_fixture_url(ps: &str, add: &str, port: u16, net: &str) -> String {
     VMessLink {
         ps: ps.to_owned(),
         add: add.to_owned(),
@@ -90,7 +99,7 @@ fn vmess_fixture_url(ps: &str, add: &str, port: u16, net: &str) -> String {
     .export_url()
 }
 
-fn shadowsocks_fixture_url(ps: &str, add: &str, port: u16) -> String {
+pub(super) fn shadowsocks_fixture_url(ps: &str, add: &str, port: u16) -> String {
     ShadowsocksLink {
         name: ps.to_owned(),
         server: add.to_owned(),
@@ -104,7 +113,7 @@ fn shadowsocks_fixture_url(ps: &str, add: &str, port: u16) -> String {
     .export_url()
 }
 
-fn vless_fixture_url(ps: &str, add: &str, port: u16) -> String {
+pub(super) fn vless_fixture_url(ps: &str, add: &str, port: u16) -> String {
     VLESSLink {
         ps: ps.to_owned(),
         add: add.to_owned(),
@@ -130,7 +139,7 @@ fn vless_fixture_url(ps: &str, add: &str, port: u16) -> String {
     .export_url()
 }
 
-fn trojan_fixture_url(ps: &str, add: &str, port: u16) -> String {
+pub(super) fn trojan_fixture_url(ps: &str, add: &str, port: u16) -> String {
     TrojanLink {
         name: ps.to_owned(),
         server: add.to_owned(),
@@ -148,7 +157,7 @@ fn trojan_fixture_url(ps: &str, add: &str, port: u16) -> String {
     .export_url()
 }
 
-fn hysteria2_fixture_url(ps: &str, add: &str, port: u16) -> String {
+pub(super) fn hysteria2_fixture_url(ps: &str, add: &str, port: u16) -> String {
     Hysteria2Link {
         name: ps.to_owned(),
         user: "hy2-auth".to_owned(),
@@ -163,7 +172,7 @@ fn hysteria2_fixture_url(ps: &str, add: &str, port: u16) -> String {
     .export_url()
 }
 
-fn tuic_fixture_url(ps: &str, add: &str, port: u16) -> String {
+pub(super) fn tuic_fixture_url(ps: &str, add: &str, port: u16) -> String {
     TuicLink {
         name: ps.to_owned(),
         user: "01234567-89ab-cdef-0123-456789abcdef".to_owned(),
@@ -181,7 +190,7 @@ fn tuic_fixture_url(ps: &str, add: &str, port: u16) -> String {
     .export_url()
 }
 
-fn juicity_fixture_url(ps: &str, add: &str, port: u16) -> String {
+pub(super) fn juicity_fixture_url(ps: &str, add: &str, port: u16) -> String {
     JuicityLink {
         name: ps.to_owned(),
         user: "01234567-89ab-cdef-0123-456789abcdef".to_owned(),
@@ -197,7 +206,7 @@ fn juicity_fixture_url(ps: &str, add: &str, port: u16) -> String {
     .export_url()
 }
 
-fn assert_current_config_matrix_scope_contract(report: &Value) {
+pub(super) fn assert_current_config_matrix_scope_contract(report: &Value) {
     assert_eq!(
         report["matrix_scope"].as_str().unwrap(),
         "current-config-formal-handler-matrix"

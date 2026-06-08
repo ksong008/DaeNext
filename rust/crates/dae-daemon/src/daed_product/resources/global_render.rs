@@ -1,4 +1,5 @@
-fn normalize_global_value(raw: Option<&str>) -> Value {
+use super::*;
+pub(crate) fn normalize_global_value(raw: Option<&str>) -> Value {
     let mut value = default_global_value();
     let Some(raw) = raw.map(str::trim).filter(|raw| !raw.is_empty()) else {
         return value;
@@ -11,7 +12,7 @@ fn normalize_global_value(raw: Option<&str>) -> Value {
     value
 }
 
-fn display_global_config_text(raw: &str) -> String {
+pub(crate) fn display_global_config_text(raw: &str) -> String {
     let raw = raw.trim();
     if raw.is_empty() {
         return "global {}\n".to_owned();
@@ -22,7 +23,7 @@ fn display_global_config_text(raw: &str) -> String {
     }
 }
 
-fn render_global_config_text(source: &Value) -> String {
+pub(crate) fn render_global_config_text(source: &Value) -> String {
     if let Some(raw) = source.as_str() {
         return display_global_config_text(raw);
     }
@@ -285,7 +286,7 @@ fn render_global_config_text(source: &Value) -> String {
     out
 }
 
-fn push_global_string_field(
+pub(crate) fn push_global_string_field(
     lines: &mut Vec<String>,
     normalized: &Value,
     source: &Value,
@@ -302,7 +303,7 @@ fn push_global_string_field(
     }
 }
 
-fn push_global_array_field(
+pub(crate) fn push_global_array_field(
     lines: &mut Vec<String>,
     normalized: &Value,
     source: &Value,
@@ -330,7 +331,7 @@ fn push_global_array_field(
     }
 }
 
-fn push_global_bool_field(
+pub(crate) fn push_global_bool_field(
     lines: &mut Vec<String>,
     normalized: &Value,
     source: &Value,
@@ -350,7 +351,7 @@ fn push_global_bool_field(
     }
 }
 
-fn push_global_u64_field(
+pub(crate) fn push_global_u64_field(
     lines: &mut Vec<String>,
     normalized: &Value,
     source: &Value,
@@ -370,6 +371,6 @@ fn push_global_u64_field(
     }
 }
 
-fn global_source_has_key(source: &Value, aliases: &[&str]) -> bool {
+pub(crate) fn global_source_has_key(source: &Value, aliases: &[&str]) -> bool {
     aliases.iter().any(|alias| source.get(*alias).is_some())
 }

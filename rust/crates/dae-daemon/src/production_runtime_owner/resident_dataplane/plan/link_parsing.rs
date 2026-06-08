@@ -1,4 +1,5 @@
-fn tagged_node_links(config: &Config) -> BTreeMap<String, String> {
+use super::*;
+pub(super) fn tagged_node_links(config: &Config) -> BTreeMap<String, String> {
     let mut out = BTreeMap::new();
     for raw in &config.node {
         let (tag, link) = split_keyable_link(raw);
@@ -10,12 +11,12 @@ fn tagged_node_links(config: &Config) -> BTreeMap<String, String> {
     out
 }
 
-fn link_scheme(link: &str) -> Option<String> {
+pub(super) fn link_scheme(link: &str) -> Option<String> {
     link.split_once("://")
         .map(|(scheme, _)| scheme.to_ascii_lowercase())
 }
 
-fn split_keyable_link(raw: &str) -> (Option<String>, String) {
+pub(super) fn split_keyable_link(raw: &str) -> (Option<String>, String) {
     let trimmed = raw.trim();
     let Some(scheme_pos) = trimmed.find("://") else {
         return (None, unquote_config_value(trimmed));
@@ -31,7 +32,7 @@ fn split_keyable_link(raw: &str) -> (Option<String>, String) {
     (None, unquote_config_value(trimmed))
 }
 
-fn unquote_config_value(value: &str) -> String {
+pub(super) fn unquote_config_value(value: &str) -> String {
     let value = value.trim();
     if value.len() >= 2 {
         let bytes = value.as_bytes();
@@ -44,7 +45,7 @@ fn unquote_config_value(value: &str) -> String {
     value.to_owned()
 }
 
-fn split_alpn(raw: &str) -> Vec<String> {
+pub(super) fn split_alpn(raw: &str) -> Vec<String> {
     raw.split(',')
         .map(str::trim)
         .filter(|item| !item.is_empty())

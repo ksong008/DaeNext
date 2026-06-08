@@ -1,5 +1,11 @@
+pub(super) use super::*;
 #[cfg(test)]
-mod tests {
-    include!("tests/read_only_report.rs");
-    include!("tests/gates_and_options.rs");
-}
+#[path = "tests/read_only_report.rs"]
+mod read_only_report;
+#[cfg(test)]
+pub(super) use self::read_only_report::*;
+#[cfg(test)]
+#[path = "tests/gates_and_options.rs"]
+mod gates_and_options;
+#[cfg(test)]
+pub(super) use self::gates_and_options::*;

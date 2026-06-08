@@ -1,4 +1,5 @@
-fn exchange_proxy_udp(
+use super::*;
+pub(super) fn exchange_proxy_udp(
     proxy: &ResidentProxyPlan,
     original_dst: SocketAddrV4,
     payload: &[u8],

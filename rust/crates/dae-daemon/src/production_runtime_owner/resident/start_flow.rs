@@ -1,4 +1,5 @@
-fn start_with_options(
+use super::*;
+pub(super) fn start_with_options(
     options: ProductionRuntimeOwnerOptions,
     artifact_dir: PathBuf,
     start_file: PathBuf,

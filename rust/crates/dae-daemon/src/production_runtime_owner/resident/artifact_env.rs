@@ -1,11 +1,12 @@
-fn setup_runtime_topology(
+use super::*;
+pub(super) fn setup_runtime_topology(
     executed_steps: &mut Vec<Value>,
     options: &ProductionRuntimeOwnerOptions,
 ) -> bool {
-    super::topology::setup_production_topology(executed_steps, options)
+    super::super::topology::setup_production_topology(executed_steps, options)
 }
 
-fn resolve_source_object(artifact_dir: &Path) -> Result<PathBuf, String> {
+pub(super) fn resolve_source_object(artifact_dir: &Path) -> Result<PathBuf, String> {
     if let Ok(path) = env::var(DEFAULT_SOURCE_OBJECT_ENV) {
         let path = PathBuf::from(path);
         if path.is_file() {
@@ -47,7 +48,7 @@ fn resolve_source_object(artifact_dir: &Path) -> Result<PathBuf, String> {
 }
 
 #[cfg(feature = "native-ebpf")]
-fn resolve_native_object(artifact_dir: &Path) -> Result<Option<PathBuf>, String> {
+pub(super) fn resolve_native_object(artifact_dir: &Path) -> Result<Option<PathBuf>, String> {
     if !resident_native_ebpf_enabled() {
         return Ok(None);
     }
@@ -78,12 +79,12 @@ fn resolve_native_object(artifact_dir: &Path) -> Result<Option<PathBuf>, String>
 }
 
 #[cfg(not(feature = "native-ebpf"))]
-fn resolve_native_object(_artifact_dir: &Path) -> Result<Option<PathBuf>, String> {
+pub(super) fn resolve_native_object(_artifact_dir: &Path) -> Result<Option<PathBuf>, String> {
     Ok(None)
 }
 
 #[cfg(feature = "native-ebpf")]
-fn resident_native_ebpf_enabled() -> bool {
+pub(super) fn resident_native_ebpf_enabled() -> bool {
     env::var(DEFAULT_NATIVE_EBPF_ENV)
         .map(|value| {
             !matches!(
@@ -94,7 +95,7 @@ fn resident_native_ebpf_enabled() -> bool {
         .unwrap_or(true)
 }
 
-fn resident_dataplane_enabled() -> bool {
+pub(super) fn resident_dataplane_enabled() -> bool {
     env::var(DEFAULT_RESIDENT_DATAPLANE_ENV)
         .map(|value| {
             matches!(
@@ -106,7 +107,7 @@ fn resident_dataplane_enabled() -> bool {
 }
 
 #[cfg(feature = "native-ebpf")]
-fn resolve_native_backend() -> Result<AttachBackend, String> {
+pub(super) fn resolve_native_backend() -> Result<AttachBackend, String> {
     let Ok(raw) = env::var(DEFAULT_NATIVE_BACKEND_ENV) else {
         return Ok(default_native_backend());
     };
@@ -118,17 +119,17 @@ fn resolve_native_backend() -> Result<AttachBackend, String> {
 }
 
 #[cfg(feature = "native-ebpf")]
-fn default_native_backend() -> AttachBackend {
+pub(super) fn default_native_backend() -> AttachBackend {
     AttachBackend::Auto
 }
 
 #[cfg(not(feature = "native-ebpf"))]
-fn resolve_native_backend() -> Result<AttachBackend, String> {
+pub(super) fn resolve_native_backend() -> Result<AttachBackend, String> {
     Ok(AttachBackend::TcNetlink)
 }
 
 #[cfg(feature = "native-ebpf")]
-fn parse_native_backend(value: &str) -> Option<AttachBackend> {
+pub(super) fn parse_native_backend(value: &str) -> Option<AttachBackend> {
     match value {
         "auto" => Some(AttachBackend::Auto),
         "tcx" => Some(AttachBackend::Tcx),
@@ -138,7 +139,7 @@ fn parse_native_backend(value: &str) -> Option<AttachBackend> {
     }
 }
 
-fn write_json_file(path: &Path, label: &str, value: Value) -> Result<(), String> {
+pub(super) fn write_json_file(path: &Path, label: &str, value: Value) -> Result<(), String> {
     let encoded = serde_json::to_vec_pretty(&value)
         .map_err(|err| format!("failed to encode {label}: {err}"))?;
     fs::write(path, encoded).map_err(|err| format!("failed to write {}: {err}", path_string(path)))

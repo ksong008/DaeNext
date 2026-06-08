@@ -1,4 +1,9 @@
-fn serve_forever(listen: &str, app: AppState, startup_started_at: Instant) -> io::Result<()> {
+use super::*;
+pub(super) fn serve_forever(
+    listen: &str,
+    app: AppState,
+    startup_started_at: Instant,
+) -> io::Result<()> {
     let listen_started_at = Instant::now();
     let listener = TcpListener::bind(listen)?;
     let app = Arc::new(app);
@@ -79,11 +84,11 @@ fn serve_forever(listen: &str, app: AppState, startup_started_at: Instant) -> io
     Ok(())
 }
 
-struct ProductHttpJob {
-    stream: TcpStream,
+pub(super) struct ProductHttpJob {
+    pub(super) stream: TcpStream,
 }
 
-fn product_http_worker_loop(
+pub(super) fn product_http_worker_loop(
     _index: usize,
     receiver: Arc<Mutex<Receiver<ProductHttpJob>>>,
     app: Arc<AppState>,
@@ -109,7 +114,7 @@ fn product_http_worker_loop(
     }
 }
 
-fn write_http_rejected(mut stream: TcpStream) -> io::Result<()> {
+pub(super) fn write_http_rejected(mut stream: TcpStream) -> io::Result<()> {
     let response = HttpResponse::json(
         503,
         json!({"error": "daed HTTP worker queue is full; retry later"}),
@@ -117,7 +122,7 @@ fn write_http_rejected(mut stream: TcpStream) -> io::Result<()> {
     write_http_response(&mut stream, &response, false)
 }
 
-fn handle_stream(mut stream: TcpStream, app: &AppState) -> io::Result<()> {
+pub(super) fn handle_stream(mut stream: TcpStream, app: &AppState) -> io::Result<()> {
     stream.set_read_timeout(Some(Duration::from_secs(30)))?;
     let request = match read_http_request(&mut stream) {
         Ok(request) => request,

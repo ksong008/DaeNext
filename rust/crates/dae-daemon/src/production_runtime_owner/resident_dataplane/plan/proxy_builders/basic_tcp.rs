@@ -1,4 +1,5 @@
-fn build_socks5_proxy_plan(
+use super::*;
+pub(crate) fn build_socks5_proxy_plan(
     config: &Config,
     group_name: String,
     node_tag: String,
@@ -46,7 +47,7 @@ fn build_socks5_proxy_plan(
     })
 }
 
-fn build_http_proxy_plan(
+pub(crate) fn build_http_proxy_plan(
     config: &Config,
     group_name: String,
     node_tag: String,

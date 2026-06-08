@@ -1,3 +1,4 @@
+use super::*;
 pub fn run_with_args(args: impl IntoIterator<Item = impl Into<String>>) -> LoaderOutput {
     let args = args.into_iter().map(Into::into).collect::<Vec<_>>();
     match args.first().map(String::as_str) {
@@ -19,7 +20,7 @@ pub fn run_with_args(args: impl IntoIterator<Item = impl Into<String>>) -> Loade
     }
 }
 
-fn run_cgroup_monitor_command(args: &[String]) -> LoaderOutput {
+pub(super) fn run_cgroup_monitor_command(args: &[String]) -> LoaderOutput {
     match args.first().map(String::as_str) {
         Some("contract") if args.len() == 1 => run_cgroup_monitor_contract(),
         Some("attach-pin") => match parse_cgroup_monitor_attach_pin_options(&args[1..]) {
@@ -33,7 +34,7 @@ fn run_cgroup_monitor_command(args: &[String]) -> LoaderOutput {
     }
 }
 
-fn run_connectivity_map_command(args: &[String]) -> LoaderOutput {
+pub(super) fn run_connectivity_map_command(args: &[String]) -> LoaderOutput {
     match args.first().map(String::as_str) {
         Some("update") => match parse_connectivity_map_update_options(&args[1..]) {
             Ok(options) => run_connectivity_map_update(options),
@@ -49,7 +50,7 @@ fn run_connectivity_map_command(args: &[String]) -> LoaderOutput {
     }
 }
 
-fn run_domain_routing_map_command(args: &[String]) -> LoaderOutput {
+pub(super) fn run_domain_routing_map_command(args: &[String]) -> LoaderOutput {
     match args.first().map(String::as_str) {
         Some("apply") if args.len() == 1 => LoaderOutput::usage(
             "domain-routing-map apply requires the dae-aya-bpf-loader stdio entrypoint",
@@ -67,7 +68,7 @@ fn run_domain_routing_map_command(args: &[String]) -> LoaderOutput {
     }
 }
 
-fn run_routing_map_command(args: &[String]) -> LoaderOutput {
+pub(super) fn run_routing_map_command(args: &[String]) -> LoaderOutput {
     match args.first().map(String::as_str) {
         Some("apply") if args.len() == 1 => LoaderOutput::usage(
             "routing-map apply requires the dae-aya-bpf-loader stdio entrypoint",
@@ -79,7 +80,7 @@ fn run_routing_map_command(args: &[String]) -> LoaderOutput {
     }
 }
 
-fn run_tc_attach_command(args: &[String]) -> LoaderOutput {
+pub(super) fn run_tc_attach_command(args: &[String]) -> LoaderOutput {
     match args.first().map(String::as_str) {
         Some("contract") if args.len() == 1 => run_tc_attach_contract(),
         Some("attach-pin") => match parse_tc_attach_pin_options(&args[1..]) {
@@ -93,7 +94,7 @@ fn run_tc_attach_command(args: &[String]) -> LoaderOutput {
     }
 }
 
-fn run_tproxy_listener_command(args: &[String]) -> LoaderOutput {
+pub(super) fn run_tproxy_listener_command(args: &[String]) -> LoaderOutput {
     match args.first().map(String::as_str) {
         Some("contract") if args.len() == 1 => run_tproxy_listener_contract(),
         Some("open-handoff") => match parse_tproxy_listener_open_handoff_options(&args[1..]) {
@@ -122,7 +123,7 @@ pub fn run_bpf_loader_command(args: &[String]) -> LoaderOutput {
     }
 }
 
-fn run_map_stats_command(args: &[String]) -> LoaderOutput {
+pub(super) fn run_map_stats_command(args: &[String]) -> LoaderOutput {
     match args.first().map(String::as_str) {
         Some("count") => match parse_map_stats_count_options(&args[1..]) {
             Ok(requests) => run_map_stats_count(requests),
@@ -135,7 +136,7 @@ fn run_map_stats_command(args: &[String]) -> LoaderOutput {
     }
 }
 
-fn run_trace_loader_command(args: &[String]) -> LoaderOutput {
+pub(super) fn run_trace_loader_command(args: &[String]) -> LoaderOutput {
     match args.first().map(String::as_str) {
         Some("contract") if args.len() == 1 => run_trace_loader_contract(),
         Some("load-pin") => match parse_trace_load_pin_options(&args[1..]) {

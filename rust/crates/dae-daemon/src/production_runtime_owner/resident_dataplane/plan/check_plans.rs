@@ -1,4 +1,5 @@
-fn group_check_tolerance_ms(config: &Config, group: &Group) -> i64 {
+use super::*;
+pub(super) fn group_check_tolerance_ms(config: &Config, group: &Group) -> i64 {
     let nanos = if group.check_tolerance.as_nanos() != 0 {
         group.check_tolerance.as_nanos()
     } else {
@@ -7,7 +8,7 @@ fn group_check_tolerance_ms(config: &Config, group: &Group) -> i64 {
     duration_nanos_to_millis(nanos)
 }
 
-fn group_check_interval(config: &Config, group: &Group) -> Duration {
+pub(super) fn group_check_interval(config: &Config, group: &Group) -> Duration {
     let nanos = if group.check_interval.as_nanos() != 0 {
         group.check_interval.as_nanos()
     } else {
@@ -16,14 +17,17 @@ fn group_check_interval(config: &Config, group: &Group) -> Duration {
     duration_nanos_to_duration(nanos)
 }
 
-fn duration_nanos_to_duration(nanos: i64) -> Duration {
+pub(super) fn duration_nanos_to_duration(nanos: i64) -> Duration {
     if nanos <= 0 {
         return Duration::ZERO;
     }
     Duration::from_nanos(nanos as u64)
 }
 
-fn group_tcp_check_plan(config: &Config, group: &Group) -> Result<ResidentTcpCheckPlan, String> {
+pub(super) fn group_tcp_check_plan(
+    config: &Config,
+    group: &Group,
+) -> Result<ResidentTcpCheckPlan, String> {
     let urls = group
         .tcp_check_url
         .as_ref()
@@ -81,7 +85,10 @@ fn group_tcp_check_plan(config: &Config, group: &Group) -> Result<ResidentTcpChe
     })
 }
 
-fn group_udp_check_plan(config: &Config, group: &Group) -> Result<ResidentUdpCheckPlan, String> {
+pub(super) fn group_udp_check_plan(
+    config: &Config,
+    group: &Group,
+) -> Result<ResidentUdpCheckPlan, String> {
     let values = group
         .udp_check_dns
         .as_ref()
@@ -112,7 +119,7 @@ fn group_udp_check_plan(config: &Config, group: &Group) -> Result<ResidentUdpChe
     })
 }
 
-fn split_check_host_port(raw: &str) -> Result<(String, u16), String> {
+pub(super) fn split_check_host_port(raw: &str) -> Result<(String, u16), String> {
     let raw = raw.trim();
     if raw.is_empty() {
         return Err("empty host:port".to_owned());
@@ -135,12 +142,12 @@ fn split_check_host_port(raw: &str) -> Result<(String, u16), String> {
     Ok((host.to_owned(), parse_check_port(port)?))
 }
 
-fn parse_check_port(raw: &str) -> Result<u16, String> {
+pub(super) fn parse_check_port(raw: &str) -> Result<u16, String> {
     raw.parse::<u16>()
         .map_err(|err| format!("invalid port {raw}: {err}"))
 }
 
-fn tcp_check_target(host: &str, port: u16, explicit_addresses: &[String]) -> String {
+pub(super) fn tcp_check_target(host: &str, port: u16, explicit_addresses: &[String]) -> String {
     for raw in explicit_addresses {
         let raw = raw.trim();
         if raw.parse::<Ipv4Addr>().is_ok() {
@@ -150,7 +157,7 @@ fn tcp_check_target(host: &str, port: u16, explicit_addresses: &[String]) -> Str
     format!("{host}:{port}")
 }
 
-fn explicit_or_resolved_ipv4(
+pub(super) fn explicit_or_resolved_ipv4(
     host: &str,
     port: u16,
     explicit_addresses: &[String],
@@ -178,14 +185,14 @@ fn explicit_or_resolved_ipv4(
         .ok_or_else(|| format!("resolve {authority}: no IPv4 address"))
 }
 
-fn duration_nanos_to_millis(nanos: i64) -> i64 {
+pub(super) fn duration_nanos_to_millis(nanos: i64) -> i64 {
     if nanos <= 0 {
         return 0;
     }
     (nanos + 999_999) / 1_000_000
 }
 
-fn resident_selector_network_type(network: &str) -> Result<NetworkType, String> {
+pub(super) fn resident_selector_network_type(network: &str) -> Result<NetworkType, String> {
     match network {
         "tcp4" => Ok(NetworkType::TCP4),
         "udp4" => Ok(NetworkType::DNS_UDP4),

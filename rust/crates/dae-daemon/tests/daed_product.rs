@@ -18,9 +18,21 @@ use dae_outbound::{
 };
 use serde_json::Value;
 
-include!("daed_product/helpers.rs");
-include!("daed_product/matrix.rs");
-include!("daed_product/contract_cli.rs");
-include!("daed_product/api_runtime.rs");
-include!("daed_product/export_reset.rs");
-include!("daed_product/support.rs");
+#[path = "daed_product/helpers.rs"]
+mod helpers;
+use self::helpers::*;
+#[path = "daed_product/matrix.rs"]
+mod matrix;
+use self::matrix::*;
+#[path = "daed_product/contract_cli.rs"]
+mod contract_cli;
+use self::contract_cli::*;
+#[path = "daed_product/api_runtime.rs"]
+mod api_runtime;
+use self::api_runtime::*;
+#[path = "daed_product/export_reset.rs"]
+mod export_reset;
+use self::export_reset::*;
+#[path = "daed_product/support.rs"]
+mod support;
+use self::support::*;

@@ -1,4 +1,5 @@
-fn list_subscriptions(state: &Path, request: &HttpRequest) -> HttpResponse {
+use super::*;
+pub(crate) fn list_subscriptions(state: &Path, request: &HttpRequest) -> HttpResponse {
     let expand_nodes = request
         .query
         .get("expand")
@@ -10,7 +11,7 @@ fn list_subscriptions(state: &Path, request: &HttpRequest) -> HttpResponse {
     }
 }
 
-fn list_subscriptions_value(state: &Path, expand_nodes: bool) -> io::Result<Value> {
+pub(crate) fn list_subscriptions_value(state: &Path, expand_nodes: bool) -> io::Result<Value> {
     let conn = open_state_connection(state)?;
     let mut stmt = conn
         .prepare("SELECT id, updated_at, link, cron_exp, cron_enable, status, info, tag FROM subscriptions ORDER BY id")
@@ -34,7 +35,11 @@ fn list_subscriptions_value(state: &Path, expand_nodes: bool) -> io::Result<Valu
     Ok(json!({"items": items}))
 }
 
-fn create_subscription(state: &Path, config_dir: &Path, request: &HttpRequest) -> HttpResponse {
+pub(crate) fn create_subscription(
+    state: &Path,
+    config_dir: &Path,
+    request: &HttpRequest,
+) -> HttpResponse {
     let body = match json_body(request) {
         Ok(body) => body,
         Err(err) => return HttpResponse::json(400, json!({"error": err})),
@@ -82,7 +87,7 @@ fn create_subscription(state: &Path, config_dir: &Path, request: &HttpRequest) -
     )
 }
 
-fn get_subscription(state: &Path, id: i64) -> HttpResponse {
+pub(crate) fn get_subscription(state: &Path, id: i64) -> HttpResponse {
     match get_subscription_value(state, id) {
         Ok(Some(value)) => HttpResponse::json(200, value),
         Ok(None) => HttpResponse::json(404, json!({"error": "subscription not found"})),
@@ -90,7 +95,7 @@ fn get_subscription(state: &Path, id: i64) -> HttpResponse {
     }
 }
 
-fn get_subscription_value(state: &Path, id: i64) -> io::Result<Option<Value>> {
+pub(crate) fn get_subscription_value(state: &Path, id: i64) -> io::Result<Option<Value>> {
     let conn = open_state_connection(state)?;
     conn.query_row(
         "SELECT id, updated_at, link, cron_exp, cron_enable, status, info, tag FROM subscriptions WHERE id = ?1",
@@ -101,7 +106,7 @@ fn get_subscription_value(state: &Path, id: i64) -> io::Result<Option<Value>> {
     .map_err(sqlite_io_error)
 }
 
-fn update_subscription(state: &Path, request: &HttpRequest, id: i64) -> HttpResponse {
+pub(crate) fn update_subscription(state: &Path, request: &HttpRequest, id: i64) -> HttpResponse {
     let body = match json_body(request) {
         Ok(body) => body,
         Err(err) => return HttpResponse::json(400, json!({"error": err})),
@@ -141,7 +146,7 @@ fn update_subscription(state: &Path, request: &HttpRequest, id: i64) -> HttpResp
     get_subscription(state, id)
 }
 
-fn refresh_subscription(
+pub(crate) fn refresh_subscription(
     state: &Path,
     config_dir: &Path,
     runtime: &ProductRuntimeManager,
@@ -189,7 +194,7 @@ fn refresh_subscription(
     }
 }
 
-fn reload_runtime_after_subscription_refresh(
+pub(crate) fn reload_runtime_after_subscription_refresh(
     state: &Path,
     config_dir: &Path,
     runtime: &ProductRuntimeManager,
@@ -245,7 +250,7 @@ fn reload_runtime_after_subscription_refresh(
     }
 }
 
-fn delete_subscriptions(state: &Path, request: &HttpRequest) -> HttpResponse {
+pub(crate) fn delete_subscriptions(state: &Path, request: &HttpRequest) -> HttpResponse {
     let body = json_body(request).unwrap_or_else(|_| json!({}));
     let ids = integer_array(&body, "ids");
     let mut removed = 0_usize;
@@ -257,14 +262,14 @@ fn delete_subscriptions(state: &Path, request: &HttpRequest) -> HttpResponse {
     HttpResponse::json(200, json!({"removed": removed}))
 }
 
-fn delete_subscription_by_id(state: &Path, id: i64) -> HttpResponse {
+pub(crate) fn delete_subscription_by_id(state: &Path, id: i64) -> HttpResponse {
     match delete_subscription(state, id) {
         Ok(removed) => HttpResponse::json(200, json!({"removed": removed})),
         Err(err) => HttpResponse::json(500, json!({"error": err.to_string()})),
     }
 }
 
-fn delete_subscription(state: &Path, id: i64) -> io::Result<usize> {
+pub(crate) fn delete_subscription(state: &Path, id: i64) -> io::Result<usize> {
     let conn = open_state_connection(state)?;
     conn.execute(
         "DELETE FROM group_subscriptions WHERE subscription_id = ?1",
@@ -277,7 +282,7 @@ fn delete_subscription(state: &Path, id: i64) -> io::Result<usize> {
         .map_err(sqlite_io_error)
 }
 
-fn subscription_row_value(row: &rusqlite::Row<'_>) -> rusqlite::Result<Value> {
+pub(crate) fn subscription_row_value(row: &rusqlite::Row<'_>) -> rusqlite::Result<Value> {
     Ok(json!({
         "id": row.get::<_, i64>(0)?,
         "updatedAt": row.get::<_, String>(1)?,
@@ -290,7 +295,10 @@ fn subscription_row_value(row: &rusqlite::Row<'_>) -> rusqlite::Result<Value> {
     }))
 }
 
-fn count_nodes_for_subscription(conn: &Connection, subscription_id: i64) -> io::Result<i64> {
+pub(crate) fn count_nodes_for_subscription(
+    conn: &Connection,
+    subscription_id: i64,
+) -> io::Result<i64> {
     conn.query_row(
         "SELECT COUNT(*) FROM nodes WHERE subscription_id = ?1",
         params![subscription_id],

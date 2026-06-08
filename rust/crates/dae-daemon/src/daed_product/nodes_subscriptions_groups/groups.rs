@@ -1,11 +1,12 @@
-fn list_groups(state: &Path) -> HttpResponse {
+use super::*;
+pub(crate) fn list_groups(state: &Path) -> HttpResponse {
     match list_groups_value(state) {
         Ok(value) => HttpResponse::json(200, value),
         Err(err) => HttpResponse::json(500, json!({"error": err.to_string()})),
     }
 }
 
-fn list_groups_value(state: &Path) -> io::Result<Value> {
+pub(crate) fn list_groups_value(state: &Path) -> io::Result<Value> {
     let conn = open_state_connection(state)?;
     let mut stmt = conn
         .prepare("SELECT id FROM groups ORDER BY id")
@@ -26,7 +27,7 @@ fn list_groups_value(state: &Path) -> io::Result<Value> {
     Ok(json!({"items": items}))
 }
 
-fn create_group(state: &Path, request: &HttpRequest) -> HttpResponse {
+pub(crate) fn create_group(state: &Path, request: &HttpRequest) -> HttpResponse {
     let body = match json_body(request) {
         Ok(body) => body,
         Err(err) => return HttpResponse::json(400, json!({"error": err})),
@@ -65,7 +66,7 @@ fn create_group(state: &Path, request: &HttpRequest) -> HttpResponse {
     get_group(state, id).with_status(201)
 }
 
-fn get_group(state: &Path, id: i64) -> HttpResponse {
+pub(crate) fn get_group(state: &Path, id: i64) -> HttpResponse {
     match get_group_value(state, id) {
         Ok(Some(value)) => HttpResponse::json(200, value),
         Ok(None) => HttpResponse::json(404, json!({"error": "group not found"})),
@@ -73,12 +74,12 @@ fn get_group(state: &Path, id: i64) -> HttpResponse {
     }
 }
 
-fn get_group_value(state: &Path, id: i64) -> io::Result<Option<Value>> {
+pub(crate) fn get_group_value(state: &Path, id: i64) -> io::Result<Option<Value>> {
     let conn = open_state_connection(state)?;
     get_group_value_with_conn(&conn, id)
 }
 
-fn get_group_value_with_conn(conn: &Connection, id: i64) -> io::Result<Option<Value>> {
+pub(crate) fn get_group_value_with_conn(conn: &Connection, id: i64) -> io::Result<Option<Value>> {
     let Some((group_id, name, policy, version)) = conn
         .query_row(
             "SELECT id, name, policy, version FROM groups WHERE id = ?1",
@@ -111,7 +112,7 @@ fn get_group_value_with_conn(conn: &Connection, id: i64) -> io::Result<Option<Va
     })))
 }
 
-fn update_group(state: &Path, request: &HttpRequest, id: i64) -> HttpResponse {
+pub(crate) fn update_group(state: &Path, request: &HttpRequest, id: i64) -> HttpResponse {
     let body = match json_body(request) {
         Ok(body) => body,
         Err(err) => return HttpResponse::json(400, json!({"error": err})),
@@ -144,7 +145,7 @@ fn update_group(state: &Path, request: &HttpRequest, id: i64) -> HttpResponse {
     get_group(state, id)
 }
 
-fn delete_group(state: &Path, id: i64) -> HttpResponse {
+pub(crate) fn delete_group(state: &Path, id: i64) -> HttpResponse {
     let conn = match open_state_connection(state) {
         Ok(conn) => conn,
         Err(err) => return HttpResponse::json(500, json!({"error": err.to_string()})),
@@ -170,7 +171,12 @@ fn delete_group(state: &Path, id: i64) -> HttpResponse {
     }
 }
 
-fn update_group_nodes(state: &Path, request: &HttpRequest, id: i64, add: bool) -> HttpResponse {
+pub(crate) fn update_group_nodes(
+    state: &Path,
+    request: &HttpRequest,
+    id: i64,
+    add: bool,
+) -> HttpResponse {
     let body = json_body(request).unwrap_or_else(|_| json!({}));
     let ids = integer_array(&body, "nodeIds");
     let conn = match open_state_connection(state) {
@@ -187,7 +193,7 @@ fn update_group_nodes(state: &Path, request: &HttpRequest, id: i64, add: bool) -
     get_group(state, id)
 }
 
-fn update_group_subscriptions(
+pub(crate) fn update_group_subscriptions(
     state: &Path,
     request: &HttpRequest,
     id: i64,
@@ -210,7 +216,7 @@ fn update_group_subscriptions(
     get_group(state, id)
 }
 
-fn group_nodes_value(conn: &Connection, group_id: i64) -> io::Result<Vec<Value>> {
+pub(crate) fn group_nodes_value(conn: &Connection, group_id: i64) -> io::Result<Vec<Value>> {
     let mut stmt = conn
         .prepare(
             "SELECT n.id, n.link, n.name, n.address, n.protocol, n.tag, n.subscription_id
@@ -230,7 +236,10 @@ fn group_nodes_value(conn: &Connection, group_id: i64) -> io::Result<Vec<Value>>
     Ok(items)
 }
 
-fn group_subscriptions_value(conn: &Connection, group_id: i64) -> io::Result<Vec<Value>> {
+pub(crate) fn group_subscriptions_value(
+    conn: &Connection,
+    group_id: i64,
+) -> io::Result<Vec<Value>> {
     let mut stmt = conn
         .prepare(
             "SELECT s.id, s.updated_at, s.link, s.cron_exp, s.cron_enable, s.status, s.info, s.tag, gs.name_filter_regex
@@ -277,7 +286,7 @@ fn group_subscriptions_value(conn: &Connection, group_id: i64) -> io::Result<Vec
     Ok(out)
 }
 
-fn nodes_for_subscription_filtered_value(
+pub(crate) fn nodes_for_subscription_filtered_value(
     conn: &Connection,
     subscription_id: i64,
     name_filter_regex: Option<&str>,
@@ -301,7 +310,7 @@ fn nodes_for_subscription_filtered_value(
     Ok(items)
 }
 
-fn compile_name_filter(name_filter_regex: Option<&str>) -> io::Result<Option<Regex>> {
+pub(crate) fn compile_name_filter(name_filter_regex: Option<&str>) -> io::Result<Option<Regex>> {
     let Some(raw) = name_filter_regex
         .map(str::trim)
         .filter(|value| !value.is_empty())
@@ -313,7 +322,7 @@ fn compile_name_filter(name_filter_regex: Option<&str>) -> io::Result<Option<Reg
         .map_err(|err| io::Error::new(io::ErrorKind::InvalidInput, err.to_string()))
 }
 
-fn node_matches_name_filter(node: &Value, filter: Option<&Regex>) -> bool {
+pub(crate) fn node_matches_name_filter(node: &Value, filter: Option<&Regex>) -> bool {
     let Some(filter) = filter else {
         return true;
     };
@@ -323,7 +332,10 @@ fn node_matches_name_filter(node: &Value, filter: Option<&Regex>) -> bool {
         .unwrap_or(false)
 }
 
-fn group_policy_params_value(conn: &Connection, group_id: i64) -> io::Result<Vec<Value>> {
+pub(crate) fn group_policy_params_value(
+    conn: &Connection,
+    group_id: i64,
+) -> io::Result<Vec<Value>> {
     let mut stmt = conn
         .prepare("SELECT key, value FROM group_policy_params WHERE group_id = ?1 ORDER BY id")
         .map_err(sqlite_io_error)?;
@@ -342,7 +354,7 @@ fn group_policy_params_value(conn: &Connection, group_id: i64) -> io::Result<Vec
     Ok(items)
 }
 
-fn replace_group_policy_params(
+pub(crate) fn replace_group_policy_params(
     conn: &Connection,
     group_id: i64,
     params_value: Option<&Value>,
@@ -375,7 +387,7 @@ fn replace_group_policy_params(
     Ok(())
 }
 
-fn apply_group_node_ids(
+pub(crate) fn apply_group_node_ids(
     conn: &Connection,
     group_id: i64,
     ids: &[i64],
@@ -398,7 +410,7 @@ fn apply_group_node_ids(
     Ok(())
 }
 
-fn apply_group_subscription_ids(
+pub(crate) fn apply_group_subscription_ids(
     conn: &Connection,
     group_id: i64,
     ids: &[i64],

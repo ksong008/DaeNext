@@ -1,4 +1,5 @@
-fn build_trojan_proxy_plan(
+use super::*;
+pub(crate) fn build_trojan_proxy_plan(
     config: &Config,
     group_name: String,
     node_tag: String,
@@ -94,7 +95,7 @@ fn build_trojan_proxy_plan(
     })
 }
 
-fn parse_trojan_go_inner_shadowsocks(
+pub(crate) fn parse_trojan_go_inner_shadowsocks(
     encryption: &str,
     node_tag: &str,
 ) -> Result<Option<(String, String)>, String> {

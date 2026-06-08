@@ -1,3 +1,4 @@
+use super::*;
 pub fn source_shape_registry_contract() -> SourceShapeRegistryContract {
     SourceShapeRegistryContract {
         schema: "outbound-source-shape-registry",

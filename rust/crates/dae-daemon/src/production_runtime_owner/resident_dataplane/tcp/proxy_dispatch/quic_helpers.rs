@@ -1,4 +1,5 @@
-async fn relay_tcp_over_quic_stream_async(
+use super::*;
+pub(crate) async fn relay_tcp_over_quic_stream_async(
     inbound: &mut TokioTcpStream,
     send: &mut quinn::SendStream,
     recv: &mut quinn::RecvStream,
@@ -75,7 +76,7 @@ async fn relay_tcp_over_quic_stream_async(
     Ok(stats)
 }
 
-pub(super) fn open_marked_quic_endpoint(mark: u32) -> Result<quinn::Endpoint, String> {
+pub(crate) fn open_marked_quic_endpoint(mark: u32) -> Result<quinn::Endpoint, String> {
     let socket = UdpSocket::bind(SocketAddr::new(IpAddr::V4(Ipv4Addr::UNSPECIFIED), 0))
         .map_err(|err| format!("bind QUIC UDP socket: {err}"))?;
     if mark != 0 {
@@ -88,7 +89,7 @@ pub(super) fn open_marked_quic_endpoint(mark: u32) -> Result<quinn::Endpoint, St
         .map_err(|err| format!("create QUIC endpoint: {err}"))
 }
 
-pub(super) fn resolve_proxy_udp_addr(proxy: &ResidentProxyPlan) -> Result<SocketAddr, String> {
+pub(crate) fn resolve_proxy_udp_addr(proxy: &ResidentProxyPlan) -> Result<SocketAddr, String> {
     let target = format!("{}:{}", proxy.server_host, proxy.server_port);
     target
         .to_socket_addrs()
@@ -97,7 +98,7 @@ pub(super) fn resolve_proxy_udp_addr(proxy: &ResidentProxyPlan) -> Result<Socket
         .ok_or_else(|| format!("resolve QUIC endpoint {target}: no address"))
 }
 
-pub(super) fn resolve_hysteria2_quic_remote(
+pub(crate) fn resolve_hysteria2_quic_remote(
     proxy: &ResidentProxyPlan,
     port_hop_ports: &[u16],
 ) -> Result<SocketAddr, String> {
@@ -114,7 +115,7 @@ pub(super) fn resolve_hysteria2_quic_remote(
         .ok_or_else(|| format!("resolve Hysteria2 QUIC endpoint {target}: no address"))
 }
 
-pub(super) fn set_socket_mark(fd: i32, mark: u32) -> std::io::Result<()> {
+pub(crate) fn set_socket_mark(fd: i32, mark: u32) -> std::io::Result<()> {
     let mark = mark as libc::c_int;
     let status = unsafe {
         libc::setsockopt(

@@ -1,4 +1,5 @@
-fn route_request(app: &AppState, request: &HttpRequest) -> HttpResponse {
+use super::*;
+pub(super) fn route_request(app: &AppState, request: &HttpRequest) -> HttpResponse {
     if request.method == "OPTIONS" {
         return HttpResponse::empty(204);
     }
@@ -18,7 +19,11 @@ fn route_request(app: &AppState, request: &HttpRequest) -> HttpResponse {
     serve_static_file(&app.web_root, request)
 }
 
-fn handle_api_request(app: &AppState, request: &HttpRequest, api_path: &str) -> HttpResponse {
+pub(super) fn handle_api_request(
+    app: &AppState,
+    request: &HttpRequest,
+    api_path: &str,
+) -> HttpResponse {
     match (request.method.as_str(), api_path) {
         ("GET", "/health") => handle_health(request),
         ("GET", "/auth/status") => api_auth_status(app),
@@ -86,18 +91,18 @@ fn handle_api_request(app: &AppState, request: &HttpRequest, api_path: &str) -> 
     }
 }
 
-fn handle_health(_request: &HttpRequest) -> HttpResponse {
+pub(super) fn handle_health(_request: &HttpRequest) -> HttpResponse {
     HttpResponse::json(200, json!({"healthCheck": 1}))
 }
 
-fn api_auth_status(app: &AppState) -> HttpResponse {
+pub(super) fn api_auth_status(app: &AppState) -> HttpResponse {
     match user_count(&app.state) {
         Ok(count) => HttpResponse::json(200, json!({"numberUsers": count})),
         Err(err) => HttpResponse::json(500, json!({"error": err.to_string()})),
     }
 }
 
-fn api_create_user(app: &AppState, request: &HttpRequest) -> HttpResponse {
+pub(super) fn api_create_user(app: &AppState, request: &HttpRequest) -> HttpResponse {
     let body = match json_body(request) {
         Ok(body) => body,
         Err(err) => return HttpResponse::json(400, json!({"error": err})),
@@ -116,7 +121,7 @@ fn api_create_user(app: &AppState, request: &HttpRequest) -> HttpResponse {
     }
 }
 
-fn api_issue_token(app: &AppState, request: &HttpRequest) -> HttpResponse {
+pub(super) fn api_issue_token(app: &AppState, request: &HttpRequest) -> HttpResponse {
     let body = match json_body(request) {
         Ok(body) => body,
         Err(err) => return HttpResponse::json(400, json!({"error": err})),
@@ -135,7 +140,11 @@ fn api_issue_token(app: &AppState, request: &HttpRequest) -> HttpResponse {
     }
 }
 
-fn api_patch_user(app: &AppState, request: &HttpRequest, mut user: UserRecord) -> HttpResponse {
+pub(super) fn api_patch_user(
+    app: &AppState,
+    request: &HttpRequest,
+    mut user: UserRecord,
+) -> HttpResponse {
     let body = match json_body(request) {
         Ok(body) => body,
         Err(err) => return HttpResponse::json(400, json!({"error": err})),
@@ -203,7 +212,7 @@ fn api_patch_user(app: &AppState, request: &HttpRequest, mut user: UserRecord) -
     HttpResponse::json(200, user_resource(&user))
 }
 
-fn api_update_password(
+pub(super) fn api_update_password(
     app: &AppState,
     request: &HttpRequest,
     mut user: UserRecord,
@@ -251,13 +260,17 @@ fn api_update_password(
     }
 }
 
-fn api_get_storage(request: &HttpRequest, user: UserRecord) -> HttpResponse {
+pub(super) fn api_get_storage(request: &HttpRequest, user: UserRecord) -> HttpResponse {
     let paths = request.query.get("path").cloned().unwrap_or_default();
     let values = query_json_storage(&user.json_storage, &paths);
     HttpResponse::json(200, json!({"values": values}))
 }
 
-fn api_set_storage(app: &AppState, request: &HttpRequest, mut user: UserRecord) -> HttpResponse {
+pub(super) fn api_set_storage(
+    app: &AppState,
+    request: &HttpRequest,
+    mut user: UserRecord,
+) -> HttpResponse {
     let body = match json_body(request) {
         Ok(body) => body,
         Err(err) => return HttpResponse::json(400, json!({"error": err})),
@@ -277,7 +290,11 @@ fn api_set_storage(app: &AppState, request: &HttpRequest, mut user: UserRecord) 
     HttpResponse::json(200, json!({"updated": updated}))
 }
 
-fn api_delete_storage(app: &AppState, request: &HttpRequest, mut user: UserRecord) -> HttpResponse {
+pub(super) fn api_delete_storage(
+    app: &AppState,
+    request: &HttpRequest,
+    mut user: UserRecord,
+) -> HttpResponse {
     let body = match json_body(request) {
         Ok(body) => body,
         Err(err) => return HttpResponse::json(400, json!({"error": err})),
@@ -293,7 +310,7 @@ fn api_delete_storage(app: &AppState, request: &HttpRequest, mut user: UserRecor
     HttpResponse::json(200, json!({"removed": removed}))
 }
 
-fn api_default_resources(
+pub(super) fn api_default_resources(
     app: &AppState,
     request: &HttpRequest,
     mut user: UserRecord,
@@ -336,7 +353,11 @@ fn api_default_resources(
     }
 }
 
-fn api_section_resource(app: &AppState, request: &HttpRequest, api_path: &str) -> HttpResponse {
+pub(super) fn api_section_resource(
+    app: &AppState,
+    request: &HttpRequest,
+    api_path: &str,
+) -> HttpResponse {
     if matches!(
         api_path,
         "/configs/parsed" | "/dns/parsed" | "/routings/parsed"
@@ -381,7 +402,7 @@ fn api_section_resource(app: &AppState, request: &HttpRequest, api_path: &str) -
     }
 }
 
-fn api_nodes(app: &AppState, request: &HttpRequest, api_path: &str) -> HttpResponse {
+pub(super) fn api_nodes(app: &AppState, request: &HttpRequest, api_path: &str) -> HttpResponse {
     if api_path == "/nodes" {
         return match request.method.as_str() {
             "GET" => list_nodes_for_request(&app.state, request),
@@ -404,7 +425,11 @@ fn api_nodes(app: &AppState, request: &HttpRequest, api_path: &str) -> HttpRespo
     }
 }
 
-fn api_subscriptions(app: &AppState, request: &HttpRequest, api_path: &str) -> HttpResponse {
+pub(super) fn api_subscriptions(
+    app: &AppState,
+    request: &HttpRequest,
+    api_path: &str,
+) -> HttpResponse {
     if api_path == "/subscriptions" {
         return match request.method.as_str() {
             "GET" => list_subscriptions(&app.state, request),
@@ -441,7 +466,7 @@ fn api_subscriptions(app: &AppState, request: &HttpRequest, api_path: &str) -> H
     }
 }
 
-fn api_groups(app: &AppState, request: &HttpRequest, api_path: &str) -> HttpResponse {
+pub(super) fn api_groups(app: &AppState, request: &HttpRequest, api_path: &str) -> HttpResponse {
     if api_path == "/groups" {
         return match request.method.as_str() {
             "GET" => list_groups(&app.state),
@@ -479,14 +504,14 @@ fn api_groups(app: &AppState, request: &HttpRequest, api_path: &str) -> HttpResp
     }
 }
 
-fn api_general_state(app: &AppState) -> HttpResponse {
+pub(super) fn api_general_state(app: &AppState) -> HttpResponse {
     match general_state_report(&app.state, &app.config_dir, &app.runtime) {
         Ok(report) => HttpResponse::json(200, report),
         Err(err) => HttpResponse::json(500, json!({"error": err.to_string()})),
     }
 }
 
-fn api_general_cache_stats(app: &AppState) -> HttpResponse {
+pub(super) fn api_general_cache_stats(app: &AppState) -> HttpResponse {
     let conn = match open_state_connection(&app.state) {
         Ok(conn) => conn,
         Err(err) => return HttpResponse::json(500, json!({"error": err.to_string()})),
@@ -502,7 +527,7 @@ fn api_general_cache_stats(app: &AppState) -> HttpResponse {
     )
 }
 
-fn api_general_interfaces(request: &HttpRequest) -> HttpResponse {
+pub(super) fn api_general_interfaces(request: &HttpRequest) -> HttpResponse {
     let up = query_bool(request, "up");
     let only_global_scope = query_bool(request, "onlyGlobalScope").unwrap_or(false);
     match list_system_interfaces(up, only_global_scope) {
@@ -511,6 +536,6 @@ fn api_general_interfaces(request: &HttpRequest) -> HttpResponse {
     }
 }
 
-fn api_runtime_overview(app: &AppState, request: &HttpRequest) -> HttpResponse {
+pub(super) fn api_runtime_overview(app: &AppState, request: &HttpRequest) -> HttpResponse {
     HttpResponse::json(200, runtime_overview_report(app, request))
 }

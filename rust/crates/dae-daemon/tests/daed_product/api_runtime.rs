@@ -1,5 +1,6 @@
+use super::*;
 #[test]
-fn daed_run_serves_minimal_api_and_static_webui() {
+pub(super) fn daed_run_serves_minimal_api_and_static_webui() {
     let temp = temp_dir("run-api");
     let web = temp.join("web");
     fs::create_dir_all(&web).unwrap();
@@ -70,7 +71,7 @@ fn daed_run_serves_minimal_api_and_static_webui() {
 }
 
 #[test]
-fn daed_run_serves_c10_resource_runtime_log_latency_and_bundle_surface() {
+pub(super) fn daed_run_serves_c10_resource_runtime_log_latency_and_bundle_surface() {
     let temp = temp_dir("run-c10-api");
     let web = temp.join("web");
     fs::create_dir_all(&web).unwrap();

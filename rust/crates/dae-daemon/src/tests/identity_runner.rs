@@ -1,5 +1,6 @@
+use super::*;
 #[test]
-fn daemon_identity_is_opt_in_and_not_default() {
+pub(super) fn daemon_identity_is_opt_in_and_not_default() {
     let report = daemon_identity("test-version");
     assert_eq!(report["name"].as_str().unwrap(), "dae-daemon-optin");
     assert_eq!(report["crate"].as_str().unwrap(), "dae-daemon");
@@ -25,7 +26,7 @@ fn daemon_identity_is_opt_in_and_not_default() {
 }
 
 #[test]
-fn identity_preflight_keeps_benchmark_closed() {
+pub(super) fn identity_preflight_keeps_benchmark_closed() {
     let report = identity_preflight_report("test-version");
     assert!(report["rust_daemon_identity_scaffolded"].as_bool().unwrap());
     assert!(
@@ -47,7 +48,7 @@ fn identity_preflight_keeps_benchmark_closed() {
 }
 
 #[test]
-fn daemon_runner_identity_command_outputs_json() {
+pub(super) fn daemon_runner_identity_command_outputs_json() {
     let output = run_with_args_and_version(["identity"], "test-version");
     assert_eq!(output.exit_code, 0, "{}", output.stderr);
     assert_eq!(output.stderr, "");
@@ -57,7 +58,7 @@ fn daemon_runner_identity_command_outputs_json() {
 }
 
 #[test]
-fn daemon_runner_identity_preflight_command_outputs_json() {
+pub(super) fn daemon_runner_identity_preflight_command_outputs_json() {
     let output = run_with_args_and_version(["identity-preflight"], "test-version");
     assert_eq!(output.exit_code, 0, "{}", output.stderr);
     assert_eq!(output.stderr, "");
@@ -67,7 +68,7 @@ fn daemon_runner_identity_preflight_command_outputs_json() {
 }
 
 #[test]
-fn daemon_runner_bpf_loader_contract_outputs_json() {
+pub(super) fn daemon_runner_bpf_loader_contract_outputs_json() {
     let output = run_with_args_and_version(["bpf-loader", "contract"], "test-version");
     assert_eq!(output.exit_code, 0, "{}", output.stderr);
     assert_eq!(output.stderr, "");
@@ -90,7 +91,7 @@ fn daemon_runner_bpf_loader_contract_outputs_json() {
 }
 
 #[test]
-fn daemon_runner_rejects_retired_migration_command_aliases() {
+pub(super) fn daemon_runner_rejects_retired_migration_command_aliases() {
     let output = run_with_args_and_version(["runtime-identity-preflight"], "test-version");
     assert_eq!(output.exit_code, 2);
     assert!(

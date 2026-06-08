@@ -1,5 +1,6 @@
+use super::*;
 #[cfg(feature = "native-ebpf")]
-fn run_trace_load_pin(options: TraceLoaderLoadPinOptions) -> LoaderOutput {
+pub(crate) fn run_trace_load_pin(options: TraceLoaderLoadPinOptions) -> LoaderOutput {
     use dae_ebpf_support::{AyaTraceLoaderOptions, load_pin_aya_trace_object};
 
     let report = match load_pin_aya_trace_object(AyaTraceLoaderOptions {
@@ -42,12 +43,14 @@ fn run_trace_load_pin(options: TraceLoaderLoadPinOptions) -> LoaderOutput {
 }
 
 #[cfg(not(feature = "native-ebpf"))]
-fn run_trace_load_pin(_options: TraceLoaderLoadPinOptions) -> LoaderOutput {
+pub(crate) fn run_trace_load_pin(_options: TraceLoaderLoadPinOptions) -> LoaderOutput {
     LoaderOutput::error(dae_ebpf_support::trace_core_sideload_gate_report().disabled_reason)
 }
 
 #[cfg(feature = "native-ebpf")]
-fn run_trace_attach_ringbuf_smoke(options: TraceLoaderAttachRingbufSmokeOptions) -> LoaderOutput {
+pub(crate) fn run_trace_attach_ringbuf_smoke(
+    options: TraceLoaderAttachRingbufSmokeOptions,
+) -> LoaderOutput {
     use dae_ebpf_support::{
         AyaTraceAttachRingbufSmokeOptions, AyaTraceAttachSmokeTrigger,
         attach_ringbuf_smoke_aya_trace_object,
@@ -97,6 +100,8 @@ fn run_trace_attach_ringbuf_smoke(options: TraceLoaderAttachRingbufSmokeOptions)
 }
 
 #[cfg(not(feature = "native-ebpf"))]
-fn run_trace_attach_ringbuf_smoke(_options: TraceLoaderAttachRingbufSmokeOptions) -> LoaderOutput {
+pub(crate) fn run_trace_attach_ringbuf_smoke(
+    _options: TraceLoaderAttachRingbufSmokeOptions,
+) -> LoaderOutput {
     LoaderOutput::error(dae_ebpf_support::trace_core_sideload_gate_report().disabled_reason)
 }

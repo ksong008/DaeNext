@@ -1,4 +1,5 @@
-static SOURCE_SHAPE_REGISTRY_ROWS: &[SourceShapeRegistryRow] = &[
+use super::*;
+pub(super) static SOURCE_SHAPE_REGISTRY_ROWS: &[SourceShapeRegistryRow] = &[
     admitted_row(
         "baseline-aead-cipher-endpoint",
         "shadowsocks",

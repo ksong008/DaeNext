@@ -1,12 +1,13 @@
+use super::*;
 #[derive(Debug)]
-struct Ss2022ServerResponse {
-    server_salt_len: usize,
-    response_header_type: u8,
-    request_salt_echo_validated: bool,
-    payload: Vec<u8>,
+pub(super) struct Ss2022ServerResponse {
+    pub(super) server_salt_len: usize,
+    pub(super) response_header_type: u8,
+    pub(super) request_salt_echo_validated: bool,
+    pub(super) payload: Vec<u8>,
 }
 
-fn read_server_stream<S>(
+pub(super) fn read_server_stream<S>(
     stream: &mut S,
     conf: &CipherConf2022,
     psk: &[u8],
@@ -46,7 +47,7 @@ where
     })
 }
 
-fn read_encrypted_exact<S>(
+pub(super) fn read_encrypted_exact<S>(
     stream: &mut S,
     codec: &mut Ss2022StreamCodec,
     plaintext_len: usize,
@@ -61,7 +62,7 @@ where
     codec.decrypt_next(&encrypted)
 }
 
-fn encode_server_response_with_psk(
+pub(super) fn encode_server_response_with_psk(
     conf: &CipherConf2022,
     psk: &[u8],
     server_salt: &[u8],

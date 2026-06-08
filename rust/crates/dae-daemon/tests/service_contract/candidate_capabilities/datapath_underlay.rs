@@ -1,4 +1,5 @@
-fn assert_datapath_and_outbound_underlay_contract(report: &Value) {
+use super::*;
+pub(crate) fn assert_datapath_and_outbound_underlay_contract(report: &Value) {
     assert!(report["datapath_core_contract_ready"].as_bool().unwrap());
     assert!(
         report["datapath_core_runtime_state_ready"]

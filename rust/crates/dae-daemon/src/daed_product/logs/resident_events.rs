@@ -1,4 +1,5 @@
-fn append_resident_event_product_log(
+use super::*;
+pub(crate) fn append_resident_event_product_log(
     config_dir: &Path,
     state: &Path,
     event: &Value,
@@ -17,7 +18,7 @@ fn append_resident_event_product_log(
     )
 }
 
-fn resident_event_product_log_level(event_name: &str, event: &Value) -> &'static str {
+pub(crate) fn resident_event_product_log_level(event_name: &str, event: &Value) -> &'static str {
     if event_name.contains("failed") || event_name.contains("error") {
         return "warn";
     }
@@ -34,7 +35,7 @@ fn resident_event_product_log_level(event_name: &str, event: &Value) -> &'static
     "debug"
 }
 
-fn resident_event_has_route_log_context(event: &Value) -> bool {
+pub(crate) fn resident_event_has_route_log_context(event: &Value) -> bool {
     [
         "network",
         "outbound",
@@ -46,7 +47,7 @@ fn resident_event_has_route_log_context(event: &Value) -> bool {
     .any(|key| event.get(key).is_some_and(|value| !value.is_null()))
 }
 
-fn resident_event_is_flow_diagnostic(event_name: &str) -> bool {
+pub(crate) fn resident_event_is_flow_diagnostic(event_name: &str) -> bool {
     matches!(
         event_name,
         "tcp_connection_finished"
@@ -60,7 +61,7 @@ fn resident_event_is_flow_diagnostic(event_name: &str) -> bool {
     )
 }
 
-fn resident_event_product_log_message(event_name: &str, event: &Value) -> String {
+pub(crate) fn resident_event_product_log_message(event_name: &str, event: &Value) -> String {
     if resident_event_is_flow_diagnostic(event_name)
         && let Some(message) = resident_flow_event_product_log_message(event_name, event)
     {
@@ -69,7 +70,10 @@ fn resident_event_product_log_message(event_name: &str, event: &Value) -> String
     format!("resident dataplane {}", event_name.replace('_', " "))
 }
 
-fn resident_event_product_log_fields(event_name: &str, event: &Value) -> BTreeMap<String, String> {
+pub(crate) fn resident_event_product_log_fields(
+    event_name: &str,
+    event: &Value,
+) -> BTreeMap<String, String> {
     let mut fields = BTreeMap::new();
     if resident_event_is_flow_diagnostic(event_name) {
         append_resident_flow_event_product_log_fields(&mut fields, event);
@@ -87,7 +91,10 @@ fn resident_event_product_log_fields(event_name: &str, event: &Value) -> BTreeMa
     fields
 }
 
-fn resident_flow_event_product_log_message(event_name: &str, event: &Value) -> Option<String> {
+pub(crate) fn resident_flow_event_product_log_message(
+    event_name: &str,
+    event: &Value,
+) -> Option<String> {
     let peer = resident_event_field_str(event, "peer").unwrap_or("unknown-peer");
     let target = resident_event_first_field_str(
         event,
@@ -110,7 +117,7 @@ fn resident_flow_event_product_log_message(event_name: &str, event: &Value) -> O
     Some(format!("{peer} <-> {target}{suffix}"))
 }
 
-fn append_resident_flow_event_product_log_fields(
+pub(crate) fn append_resident_flow_event_product_log_fields(
     fields: &mut BTreeMap<String, String>,
     event: &Value,
 ) {
@@ -151,7 +158,7 @@ fn append_resident_flow_event_product_log_fields(
     append_resident_execution_descriptor_fields(fields, event);
 }
 
-fn append_resident_execution_descriptor_fields(
+pub(crate) fn append_resident_execution_descriptor_fields(
     fields: &mut BTreeMap<String, String>,
     event: &Value,
 ) {
@@ -178,7 +185,10 @@ fn append_resident_execution_descriptor_fields(
     }
 }
 
-fn append_resident_flow_network_field(fields: &mut BTreeMap<String, String>, event: &Value) {
+pub(crate) fn append_resident_flow_network_field(
+    fields: &mut BTreeMap<String, String>,
+    event: &Value,
+) {
     if let Some(network) = resident_event_field_value(event, "network") {
         fields.insert("network".to_owned(), network);
         return;
@@ -193,7 +203,7 @@ fn append_resident_flow_network_field(fields: &mut BTreeMap<String, String>, eve
     }
 }
 
-fn append_resident_event_first_field_if_present(
+pub(crate) fn append_resident_event_first_field_if_present(
     fields: &mut BTreeMap<String, String>,
     event: &Value,
     output_key: &str,
@@ -208,7 +218,7 @@ fn append_resident_event_first_field_if_present(
     fields.insert(output_key.to_owned(), value);
 }
 
-fn append_resident_event_field_if_present(
+pub(crate) fn append_resident_event_field_if_present(
     fields: &mut BTreeMap<String, String>,
     event: &Value,
     key: &str,
@@ -225,17 +235,20 @@ fn append_resident_event_field_if_present(
     }
 }
 
-fn resident_event_field_value(event: &Value, key: &str) -> Option<String> {
+pub(crate) fn resident_event_field_value(event: &Value, key: &str) -> Option<String> {
     let value = event.get(key)?;
     (!value.is_null()).then(|| product_log_field_value(value))
 }
 
-fn resident_event_first_field_str<'a>(event: &'a Value, keys: &[&str]) -> Option<&'a str> {
+pub(crate) fn resident_event_first_field_str<'a>(
+    event: &'a Value,
+    keys: &[&str],
+) -> Option<&'a str> {
     keys.iter()
         .find_map(|key| resident_event_field_str(event, key))
 }
 
-fn resident_event_field_str<'a>(event: &'a Value, key: &str) -> Option<&'a str> {
+pub(crate) fn resident_event_field_str<'a>(event: &'a Value, key: &str) -> Option<&'a str> {
     event
         .get(key)
         .and_then(Value::as_str)
@@ -243,7 +256,7 @@ fn resident_event_field_str<'a>(event: &'a Value, key: &str) -> Option<&'a str> 
         .filter(|value| !value.is_empty())
 }
 
-fn product_log_field_value(value: &Value) -> String {
+pub(crate) fn product_log_field_value(value: &Value) -> String {
     match value {
         Value::String(value) => value.to_owned(),
         Value::Number(_) | Value::Bool(_) | Value::Null => value.to_string(),

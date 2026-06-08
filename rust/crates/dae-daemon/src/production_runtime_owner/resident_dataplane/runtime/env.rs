@@ -1,4 +1,5 @@
-fn resident_tcp_flow_stack_bytes() -> usize {
+use super::*;
+pub(super) fn resident_tcp_flow_stack_bytes() -> usize {
     bounded_env_usize(
         RESIDENT_TCP_FLOW_STACK_BYTES_ENV,
         RESIDENT_TCP_FLOW_STACK_BYTES_DEFAULT,
@@ -7,7 +8,7 @@ fn resident_tcp_flow_stack_bytes() -> usize {
     )
 }
 
-fn resident_udp_packet_workers() -> usize {
+pub(super) fn resident_udp_packet_workers() -> usize {
     bounded_env_usize(
         RESIDENT_UDP_PACKET_WORKERS_ENV,
         RESIDENT_UDP_PACKET_WORKERS_DEFAULT,
@@ -16,7 +17,7 @@ fn resident_udp_packet_workers() -> usize {
     )
 }
 
-fn resident_udp_packet_stack_bytes() -> usize {
+pub(super) fn resident_udp_packet_stack_bytes() -> usize {
     bounded_env_usize(
         RESIDENT_UDP_PACKET_STACK_BYTES_ENV,
         RESIDENT_UDP_PACKET_STACK_BYTES_DEFAULT,
@@ -25,7 +26,7 @@ fn resident_udp_packet_stack_bytes() -> usize {
     )
 }
 
-fn bounded_env_usize(name: &str, default: usize, min: usize, max: usize) -> usize {
+pub(super) fn bounded_env_usize(name: &str, default: usize, min: usize, max: usize) -> usize {
     std::env::var(name)
         .ok()
         .and_then(|value| value.trim().parse::<usize>().ok())

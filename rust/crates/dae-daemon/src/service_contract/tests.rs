@@ -1,6 +1,6 @@
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use super::super::*;
     use dae_config::{Global, Routing};
     use std::sync::{
         Arc,

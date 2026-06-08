@@ -1,4 +1,21 @@
-fn report_value(
+use super::*;
+#[path = "report_value/context.rs"]
+mod context;
+pub(super) use self::context::*;
+#[path = "report_value/base.rs"]
+mod base;
+pub(super) use self::base::*;
+#[path = "report_value/entry_runtime.rs"]
+mod entry_runtime;
+pub(super) use self::entry_runtime::*;
+#[path = "report_value/owner_gates.rs"]
+mod owner_gates;
+pub(super) use self::owner_gates::*;
+#[path = "report_value/branch_default.rs"]
+mod branch_default;
+pub(super) use self::branch_default::*;
+
+pub(super) fn report_value(
     options: &ProductChainRecertificationOptions,
     artifact_dir: &Path,
     manifest_file: &Path,
@@ -476,293 +493,98 @@ fn report_value(
     }
     .to_json();
     let expected_product_chain_branches = expected_product_chain_branches_json();
-    let mut report = json!({
-        "name": "product-chain-recertification",
-        "evidence_class": "read-only-default-path-and-product-chain-recertification",
-        "execute": executed,
-        "read_only": true,
-        "artifact_dir": path_string(artifact_dir),
-        "manifest_file": path_string(manifest_file),
-        "admission_input": {
-            "production_dataplane_admitted": admission.production_dataplane_admitted,
-            "reload_runtime_parity_admitted": admission.reload_runtime_parity_admitted,
-            "matched_go_rust_default_daemon_benchmark_recorded": admission.matched_benchmark_recorded,
-            "bpf_go_fallback_retired": admission.bpf_go_fallback_retired,
-            "true_rust_default_daemon_admitted": admission.true_rust_default_daemon_admitted,
-        },
-        "paths": {
-            "dae_repo": path_string(&options.dae_repo),
-            "dae_wing_repo": path_string(&options.dae_wing_repo),
-            "daed_repo": path_string(&options.daed_repo),
-            "outbound_repo": path_string(&options.outbound_repo),
-            "quic_go_repo": path_string(&options.quic_go_repo),
-            "service_file": path_string(&options.service_file),
-            "go_mod_file": path_string(&options.go_mod_file),
-        },
-        "product_chain_topology": topology,
-        "service": service,
-        "go_mod": go_mod,
-        "runtime_control_api_source_contract": runtime_control_api,
-        "default_product_package_scan": default_product_package_scan,
-        "sibling_repos": repos,
-        "dirty_sibling_repos": dirty_repos,
-        "missing_sibling_repos": missing_repos,
-        "unavailable_sibling_repos": unavailable_repos,
-        "product_chain_recertification_recorded": executed,
-        "service_contract_preserved": service_contract_passed,
-        "outbound_quic_go_dependency_boundary_preserved": dependency_boundary_preserved,
-        "runtime_control_api_source_contract_preserved": runtime_control_api_source_contract_preserved,
-        "sibling_repos_present": sibling_repos_present,
-        "sibling_repo_status_available": sibling_repo_status_available,
-        "clean_product_chain_baseline": clean_product_chain_baseline,
-        "runtime_control_api_clean_baseline": runtime_control_api_clean_baseline,
-        "daed_wing_runtime_control_api_regression_recorded": daed_wing_runtime_control_api_regression_recorded,
-        "product_chain_recertification_clean": recertification_clean,
-        "default_path_mutation_requested": default_path_mutation_requested,
-        "production_run_command_replaced": false,
-        "go_default_path_preserved": true,
-        "default_path_mutation_allowed": default_path_mutation_allowed,
-        "default_switch_allowed": default_path_mutation_allowed,
-        "product_chain_switch_allowed": product_chain_switch_allowed,
-        "remaining_blockers": remaining_blockers,
-        "source": [
-            "DAEX_RUST_REBUILD_PLAN_2026-05-16.md:true-rust-default-daemon-admission",
-            "DAENEW_RUST_REBUILD_MEMO_2026-05-16.md:12",
-            "DAENEW_RUST_REBUILD_MEMO_2026-05-16.md:15.5",
-            "DAENEW_RUST_REBUILD_MEMO_2026-05-16.md:26.3",
-            "DAENEW_RUST_REBUILD_MEMO_2026-05-16.md:install/dae.service"
-        ],
+    let mut report = product_chain_base_report(ProductChainBaseReportFields {
+        options,
+        artifact_dir,
+        manifest_file,
+        admission,
+        executed,
+        topology: &topology,
+        service: &service,
+        go_mod: &go_mod,
+        runtime_control_api: &runtime_control_api,
+        default_product_package_scan: &default_product_package_scan,
+        repos: &repos,
+        dirty_repos: &dirty_repos,
+        missing_repos: &missing_repos,
+        unavailable_repos: &unavailable_repos,
+        service_contract_passed,
+        dependency_boundary_preserved,
+        runtime_control_api_source_contract_preserved,
+        sibling_repos_present,
+        sibling_repo_status_available,
+        clean_product_chain_baseline,
+        runtime_control_api_clean_baseline: &runtime_control_api_clean_baseline,
+        daed_wing_runtime_control_api_regression_recorded,
+        recertification_clean,
+        default_path_mutation_requested,
+        default_path_mutation_allowed,
+        product_chain_switch_allowed,
+        remaining_blockers: &remaining_blockers,
     });
-    if let Value::Object(report) = &mut report {
-        report.insert(
-            "native_owned_entry_gates".to_owned(),
-            native_owned_entry_gates.clone(),
-        );
-        report.insert(
-            "resident_default_daemon_switch_ready".to_owned(),
-            json!(resident_default_daemon_switch_ready),
-        );
-        report.insert(
-            "resident_default_daemon_switch_gate".to_owned(),
-            resident_default_daemon_switch_gate.clone(),
-        );
-        report.insert(
-            "resident_runtime_platform_ready".to_owned(),
-            json!(resident_runtime_platform_ready),
-        );
-        report.insert(
-            "resident_runtime_platform_gate".to_owned(),
-            resident_runtime_platform_gate.clone(),
-        );
-        report.insert(
-            "resident_default_daemon_service_contract".to_owned(),
-            resident_default_daemon_service_contract,
-        );
-        report.insert(
-            "production_run_command_replacement_plan".to_owned(),
-            production_run_command_replacement_plan,
-        );
-        report.insert(
-            "c0_product_chain_topology_lock".to_owned(),
-            native_owned_entry_gates["c0_product_chain_topology_lock"].clone(),
-        );
-        report.insert(
-            "c1_default_bundle_boundary".to_owned(),
-            native_owned_entry_gates["c1_default_bundle_boundary"].clone(),
-        );
-        report.insert(
-            "c2_default_runtime_selector".to_owned(),
-            native_owned_entry_gates["c2_default_runtime_selector"].clone(),
-        );
-        report.insert(
-            "c3_daed_service_contract".to_owned(),
-            native_owned_entry_gates["c3_daed_service_contract"].clone(),
-        );
-        report.insert(
-            "product_chain_topology_locked".to_owned(),
-            json!(product_chain_topology_locked),
-        );
-        report.insert(
-            "default_bundle_boundary_clean".to_owned(),
-            json!(default_bundle_boundary_clean),
-        );
-        report.insert(
-            "default_runtime_selector_rust_owned".to_owned(),
-            json!(default_runtime_selector_rust_owned),
-        );
-        report.insert(
-            "explicit_go_rollback_only".to_owned(),
-            json!(explicit_go_rollback_only),
-        );
-        report.insert(
-            "runtime_selector_matrix_recorded".to_owned(),
-            json!(runtime_selector_matrix_recorded),
-        );
-        report.insert(
-            "daed_service_contract_ready".to_owned(),
-            json!(daed_service_contract_ready),
-        );
-        report.insert(
-            "c0_c3_entry_gates_clean".to_owned(),
-            json!(c0_c3_entry_gates_clean),
-        );
-        report.insert(
-            "c4_resident_runtime_platform".to_owned(),
-            resident_runtime_platform_gate.clone(),
-        );
-        report.insert(
-            "c5_control_plane_owner".to_owned(),
-            control_plane_owner_gate.clone(),
-        );
-        report.insert("c6_datapath_core".to_owned(), datapath_core_gate.clone());
-        report.insert(
-            "c7_outbound_fingerprint_underlay".to_owned(),
-            outbound_fingerprint_underlay_gate.clone(),
-        );
-        report.insert(
-            "c8_outbound_production_matrix".to_owned(),
-            outbound_production_matrix_gate.clone(),
-        );
-        report.insert(
-            "c9_release_default_switch".to_owned(),
-            release_default_switch_gate.clone(),
-        );
-        report.insert(
-            "c10_go_free_product_chain".to_owned(),
-            go_free_product_chain_gate.clone(),
-        );
-        report.insert(
-            "control_plane_owner_ready".to_owned(),
-            json!(control_plane_owner_ready),
-        );
-        report.insert(
-            "control_plane_owner_gate".to_owned(),
-            control_plane_owner_gate.clone(),
-        );
-        report.insert(
-            "go_control_plane_fallback_retired_candidate".to_owned(),
-            json!(go_control_plane_fallback_retired_candidate),
-        );
-        report.insert(
-            "control_plane_owner_default_switch_admission_ready".to_owned(),
-            json!(control_plane_owner_default_switch_admission_ready),
-        );
-        report.insert("datapath_core_ready".to_owned(), json!(datapath_core_ready));
-        report.insert("datapath_core_gate".to_owned(), datapath_core_gate.clone());
-        report.insert(
-            "go_datapath_core_fallback_retired_candidate".to_owned(),
-            json!(go_datapath_core_fallback_retired_candidate),
-        );
-        report.insert(
-            "datapath_core_default_switch_admission_ready".to_owned(),
-            json!(datapath_core_default_switch_admission_ready),
-        );
-        report.insert(
-            "outbound_fingerprint_underlay_ready".to_owned(),
-            json!(outbound_fingerprint_underlay_ready),
-        );
-        report.insert(
-            "outbound_fingerprint_underlay_gate".to_owned(),
-            outbound_fingerprint_underlay_gate.clone(),
-        );
-        report.insert(
-            "go_fingerprint_underlay_fallback_retired_candidate".to_owned(),
-            json!(go_fingerprint_underlay_fallback_retired_candidate),
-        );
-        report.insert(
-            "outbound_fingerprint_underlay_default_switch_admission_ready".to_owned(),
-            json!(outbound_fingerprint_underlay_default_switch_admission_ready),
-        );
-        report.insert(
-            "outbound_production_matrix_ready".to_owned(),
-            json!(outbound_production_matrix_ready),
-        );
-        report.insert(
-            "outbound_production_matrix_gate".to_owned(),
-            outbound_production_matrix_gate.clone(),
-        );
-        report.insert(
-            "go_outbound_fallback_retired_candidate".to_owned(),
-            json!(go_outbound_fallback_retired_candidate),
-        );
-        report.insert(
-            "outbound_production_matrix_default_switch_admission_ready".to_owned(),
-            json!(outbound_production_matrix_default_switch_admission_ready),
-        );
-        report.insert(
-            "release_default_switch_ready".to_owned(),
-            json!(release_default_switch_ready),
-        );
-        report.insert(
-            "release_default_switch_admission_ready".to_owned(),
-            json!(release_default_switch_admission_ready),
-        );
-        report.insert(
-            "release_default_switch_gate".to_owned(),
-            release_default_switch_gate.clone(),
-        );
-        report.insert(
-            "go_free_product_chain_ready".to_owned(),
-            json!(go_free_product_chain_ready),
-        );
-        report.insert(
-            "go_free_product_chain_admission_ready".to_owned(),
-            json!(go_free_product_chain_admission_ready),
-        );
-        report.insert(
-            "go_free_product_chain_gate".to_owned(),
-            go_free_product_chain_gate.clone(),
-        );
-        report.insert(
-            "resident_runtime_resource_gate_ready".to_owned(),
-            json!(resident_runtime_resource_gate_ready),
-        );
-        report.insert(
-            "resident_runtime_resource_gate_passed".to_owned(),
-            json!(resident_runtime_resource_gate_passed),
-        );
-        report.insert(
-            "branch_mismatched_sibling_repos".to_owned(),
-            json!(branch_mismatched_repos),
-        );
-        report.insert(
-            "expected_product_chain_branches".to_owned(),
-            expected_product_chain_branches,
-        );
-        report.insert(
-            "product_chain_branch_contract_preserved".to_owned(),
-            json!(product_chain_branch_contract_preserved),
-        );
-        report.insert(
-            "product_chain_structural_baseline_clean".to_owned(),
-            json!(product_chain_structural_baseline_clean),
-        );
-        report.insert(
-            "runtime_control_api_source_baseline_recorded".to_owned(),
-            json!(runtime_control_api_source_baseline_recorded),
-        );
-        report.insert(
-            "runtime_control_api_final_admission_recorded".to_owned(),
-            json!(runtime_control_api_final_admission_recorded),
-        );
-        report.insert(
-            "daed_wing_runtime_control_api_default_switch_regression_recorded".to_owned(),
-            json!(runtime_control_api_final_admission_recorded),
-        );
-        report.insert(
-            "product_chain_default_switch_admission_clean".to_owned(),
-            json!(default_switch_admission_clean),
-        );
-        report.insert(
-            "go_fallback_required".to_owned(),
-            json!(go_fallback_required),
-        );
-        report.insert("go_fallback_retired".to_owned(), json!(go_fallback_retired));
-        report.insert(
-            "go_fallback_retirement_scope".to_owned(),
-            json!(go_fallback_retirement_scope),
-        );
-        report.insert("typed_report".to_owned(), typed_report);
-    }
+    insert_product_chain_entry_runtime_fields(
+        &mut report,
+        ProductChainEntryRuntimeReportFields {
+            native_owned_entry_gates: &native_owned_entry_gates,
+            resident_default_daemon_switch_ready,
+            resident_default_daemon_switch_gate: &resident_default_daemon_switch_gate,
+            resident_runtime_platform_ready,
+            resident_runtime_platform_gate: &resident_runtime_platform_gate,
+            resident_default_daemon_service_contract: &resident_default_daemon_service_contract,
+            production_run_command_replacement_plan: &production_run_command_replacement_plan,
+            product_chain_topology_locked,
+            default_bundle_boundary_clean,
+            default_runtime_selector_rust_owned,
+            explicit_go_rollback_only,
+            runtime_selector_matrix_recorded,
+            daed_service_contract_ready,
+            c0_c3_entry_gates_clean,
+        },
+    );
+    insert_product_chain_owner_gate_fields(
+        &mut report,
+        ProductChainOwnerGateReportFields {
+            control_plane_owner_ready,
+            control_plane_owner_gate: &control_plane_owner_gate,
+            go_control_plane_fallback_retired_candidate,
+            control_plane_owner_default_switch_admission_ready,
+            datapath_core_ready,
+            datapath_core_gate: &datapath_core_gate,
+            go_datapath_core_fallback_retired_candidate,
+            datapath_core_default_switch_admission_ready,
+            outbound_fingerprint_underlay_ready,
+            outbound_fingerprint_underlay_gate: &outbound_fingerprint_underlay_gate,
+            go_fingerprint_underlay_fallback_retired_candidate,
+            outbound_fingerprint_underlay_default_switch_admission_ready,
+            outbound_production_matrix_ready,
+            outbound_production_matrix_gate: &outbound_production_matrix_gate,
+            go_outbound_fallback_retired_candidate,
+            outbound_production_matrix_default_switch_admission_ready,
+            release_default_switch_ready,
+            release_default_switch_admission_ready,
+            release_default_switch_gate: &release_default_switch_gate,
+            go_free_product_chain_ready,
+            go_free_product_chain_admission_ready,
+            go_free_product_chain_gate: &go_free_product_chain_gate,
+            resident_runtime_resource_gate_ready,
+            resident_runtime_resource_gate_passed,
+        },
+    );
+    insert_product_chain_branch_default_fields(
+        &mut report,
+        ProductChainBranchDefaultReportFields {
+            branch_mismatched_repos: &branch_mismatched_repos,
+            expected_product_chain_branches: &expected_product_chain_branches,
+            product_chain_branch_contract_preserved,
+            product_chain_structural_baseline_clean,
+            runtime_control_api_source_baseline_recorded,
+            runtime_control_api_final_admission_recorded,
+            default_switch_admission_clean,
+            go_fallback_required,
+            go_fallback_retired,
+            go_fallback_retirement_scope,
+            typed_report: &typed_report,
+        },
+    );
     report
 }

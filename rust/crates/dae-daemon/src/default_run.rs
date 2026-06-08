@@ -15,9 +15,17 @@ use crate::{
     service_contract::{RESIDENT_DATAPLANE_ENV, resident_dataplane_default_switch_ready_from_env},
 };
 
-include!("default_run/options.rs");
-include!("default_run/run_report.rs");
-include!("default_run/safety_paths.rs");
-include!("default_run/live_matrix.rs");
-include!("default_run/admission.rs");
-include!("default_run/tests.rs");
+mod options;
+pub use self::options::*;
+mod run_report;
+pub use self::run_report::*;
+mod safety_paths;
+use self::safety_paths::*;
+mod live_matrix;
+use self::live_matrix::*;
+mod admission;
+pub use self::admission::*;
+#[cfg(test)]
+mod tests;
+#[cfg(test)]
+use self::tests::*;

@@ -1,5 +1,6 @@
+use super::*;
 #[cfg(feature = "native-ebpf")]
-fn run_load_pin(options: BpfLoaderLoadPinOptions) -> LoaderOutput {
+pub(super) fn run_load_pin(options: BpfLoaderLoadPinOptions) -> LoaderOutput {
     use dae_ebpf_support::{
         AyaUserspaceLoaderOptions, DaeParamInput, build_dae_param, load_aya_userspace_object,
         pin_aya_loaded_object_for_go_adoption,
@@ -92,7 +93,7 @@ fn run_load_pin(options: BpfLoaderLoadPinOptions) -> LoaderOutput {
 }
 
 #[cfg(feature = "native-ebpf")]
-fn write_embedded_native_aya_object() -> Result<(PathBuf, impl FnOnce()), String> {
+pub(super) fn write_embedded_native_aya_object() -> Result<(PathBuf, impl FnOnce()), String> {
     let path = std::env::temp_dir().join(format!(
         "dae-native-bpf-{}-{}.o",
         std::process::id(),
@@ -111,6 +112,6 @@ fn write_embedded_native_aya_object() -> Result<(PathBuf, impl FnOnce()), String
 }
 
 #[cfg(not(feature = "native-ebpf"))]
-fn run_load_pin(_options: BpfLoaderLoadPinOptions) -> LoaderOutput {
+pub(super) fn run_load_pin(_options: BpfLoaderLoadPinOptions) -> LoaderOutput {
     LoaderOutput::error("bpf-loader load-pin requires dae-aya-bpf-loader feature native-ebpf")
 }

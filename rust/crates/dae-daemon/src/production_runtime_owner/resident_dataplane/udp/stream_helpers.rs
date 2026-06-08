@@ -1,4 +1,5 @@
-fn open_plain_proxy_tcp_stream(
+use super::*;
+pub(super) fn open_plain_proxy_tcp_stream(
     proxy: &ResidentProxyPlan,
     label: &str,
 ) -> Result<TcpStream, String> {
@@ -21,11 +22,13 @@ fn open_plain_proxy_tcp_stream(
     Ok(stream)
 }
 
-fn proxy_server_authority(proxy: &ResidentProxyPlan) -> String {
+pub(super) fn proxy_server_authority(proxy: &ResidentProxyPlan) -> String {
     format!("{}:{}", proxy.server_host, proxy.server_port)
 }
 
-fn resolve_proxy_udp_socket_addr(proxy: &ResidentProxyPlan) -> Result<SocketAddr, String> {
+pub(super) fn resolve_proxy_udp_socket_addr(
+    proxy: &ResidentProxyPlan,
+) -> Result<SocketAddr, String> {
     proxy_server_authority(proxy)
         .to_socket_addrs()
         .map_err(|err| format!("resolve UDP proxy {}: {err}", proxy_server_authority(proxy)))?
@@ -38,7 +41,7 @@ fn resolve_proxy_udp_socket_addr(proxy: &ResidentProxyPlan) -> Result<SocketAddr
         })
 }
 
-fn exchange_udp_datagram_with_proxy(
+pub(super) fn exchange_udp_datagram_with_proxy(
     proxy: &ResidentProxyPlan,
     request: &[u8],
     label: &str,
@@ -47,7 +50,7 @@ fn exchange_udp_datagram_with_proxy(
     exchange_udp_datagram_to_addr(proxy, remote, request, label)
 }
 
-fn exchange_udp_datagram_to_addr(
+pub(super) fn exchange_udp_datagram_to_addr(
     proxy: &ResidentProxyPlan,
     remote: SocketAddr,
     request: &[u8],
@@ -79,7 +82,10 @@ fn exchange_udp_datagram_to_addr(
     Ok(response)
 }
 
-fn socks5_udp_relay_addr(proxy: &ResidentProxyPlan, bind: &str) -> Result<SocketAddr, String> {
+pub(super) fn socks5_udp_relay_addr(
+    proxy: &ResidentProxyPlan,
+    bind: &str,
+) -> Result<SocketAddr, String> {
     let parsed =
         Socks5Address::parse(bind).map_err(|err| format!("parse SOCKS5 UDP bind: {err}"))?;
     let port = parsed.port();
@@ -99,7 +105,7 @@ fn socks5_udp_relay_addr(proxy: &ResidentProxyPlan, bind: &str) -> Result<Socket
         .ok_or_else(|| format!("resolve SOCKS5 UDP relay {authority}: no address"))
 }
 
-fn write_tls_plain_all(
+pub(super) fn write_tls_plain_all(
     client: &mut VlessTlsClient,
     payload: &[u8],
     label: &str,
@@ -108,7 +114,7 @@ fn write_tls_plain_all(
     flush_tls_writes_for_udp(client)
 }
 
-fn read_tls_plain_until<T, F>(
+pub(super) fn read_tls_plain_until<T, F>(
     client: &mut VlessTlsClient,
     label: &str,
     mut decode: F,
@@ -148,7 +154,7 @@ where
     }
 }
 
-fn wait_anytls_udp_synack(client: &mut VlessTlsClient) -> Result<(), String> {
+pub(super) fn wait_anytls_udp_synack(client: &mut VlessTlsClient) -> Result<(), String> {
     loop {
         let frame = read_anytls_frame_blocking(client)?;
         if frame.cmd == anytls_contract::CMD_SYNACK && frame.sid == 1 && frame.data.is_empty() {
@@ -178,7 +184,7 @@ fn wait_anytls_udp_synack(client: &mut VlessTlsClient) -> Result<(), String> {
     }
 }
 
-fn read_anytls_udp_payload(client: &mut VlessTlsClient) -> Result<Vec<u8>, String> {
+pub(super) fn read_anytls_udp_payload(client: &mut VlessTlsClient) -> Result<Vec<u8>, String> {
     loop {
         let frame = read_anytls_frame_blocking(client)?;
         if frame.cmd == anytls_contract::CMD_PSH && frame.sid == 1 {
@@ -210,7 +216,9 @@ fn read_anytls_udp_payload(client: &mut VlessTlsClient) -> Result<Vec<u8>, Strin
     }
 }
 
-fn read_anytls_frame_blocking(client: &mut VlessTlsClient) -> Result<AnyTlsRuntimeFrame, String> {
+pub(super) fn read_anytls_frame_blocking(
+    client: &mut VlessTlsClient,
+) -> Result<AnyTlsRuntimeFrame, String> {
     let mut header = [0_u8; anytls_contract::HEADER_OVERHEAD_SIZE];
     read_tls_plain_exact(client, &mut header, "read AnyTLS UDP frame header")?;
     let len = u16::from_be_bytes([header[5], header[6]]) as usize;
@@ -223,13 +231,13 @@ fn read_anytls_frame_blocking(client: &mut VlessTlsClient) -> Result<AnyTlsRunti
     })
 }
 
-struct AnyTlsRuntimeFrame {
-    cmd: u8,
-    sid: u32,
-    data: Vec<u8>,
+pub(super) struct AnyTlsRuntimeFrame {
+    pub(super) cmd: u8,
+    pub(super) sid: u32,
+    pub(super) data: Vec<u8>,
 }
 
-fn read_tls_plain_exact(
+pub(super) fn read_tls_plain_exact(
     client: &mut VlessTlsClient,
     mut out: &mut [u8],
     label: &str,

@@ -21,12 +21,21 @@ use crate::{
     pinned_reuse_maps, trace_core_sideload_gate_report,
 };
 
-include!("aya_loader/types.rs");
-include!("aya_loader/load_object.rs");
-include!("aya_loader/trace.rs");
-include!("aya_loader/tc_attach.rs");
-include!("aya_loader/cgroup.rs");
-include!("aya_loader/netns.rs");
-include!("aya_loader/lpm_pinning.rs");
-include!("aya_loader/report.rs");
-include!("aya_loader/common_helpers.rs");
+mod types;
+pub use self::types::*;
+mod load_object;
+pub use self::load_object::*;
+mod trace;
+pub use self::trace::*;
+mod tc_attach;
+pub use self::tc_attach::*;
+mod cgroup;
+pub use self::cgroup::*;
+mod netns;
+use self::netns::*;
+mod lpm_pinning;
+pub use self::lpm_pinning::*;
+mod report;
+pub use self::report::*;
+mod common_helpers;
+use self::common_helpers::*;

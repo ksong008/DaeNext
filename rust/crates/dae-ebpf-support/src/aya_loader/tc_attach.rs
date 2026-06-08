@@ -1,3 +1,4 @@
+use super::*;
 pub fn load_attach_detach_aya_sched_classifier(
     loaded: &mut AyaUserspaceLoadedObject,
     spec: &TcNativeAttachSpec,
@@ -56,7 +57,7 @@ pub fn attach_pin_aya_sched_classifier(
     Ok(report)
 }
 
-fn load_attach_detach_aya_sched_classifier_in_current_netns(
+pub(super) fn load_attach_detach_aya_sched_classifier_in_current_netns(
     loaded: &mut AyaUserspaceLoadedObject,
     spec: &TcNativeAttachSpec,
     backend: AttachBackend,
@@ -81,7 +82,7 @@ fn load_attach_detach_aya_sched_classifier_in_current_netns(
     )
 }
 
-fn load_attach_aya_sched_classifier_in_current_netns(
+pub(super) fn load_attach_aya_sched_classifier_in_current_netns(
     loaded: &mut AyaUserspaceLoadedObject,
     spec: &TcNativeAttachSpec,
     backend: AttachBackend,
@@ -269,7 +270,7 @@ fn load_attach_aya_sched_classifier_in_current_netns(
     ))
 }
 
-fn attach_pin_aya_sched_classifier_in_current_netns(
+pub(super) fn attach_pin_aya_sched_classifier_in_current_netns(
     options: &PinnedTcAttachOptions<'_>,
 ) -> Result<PinnedTcAttachReport, String> {
     let spec = options.spec;
@@ -385,17 +386,17 @@ fn attach_pin_aya_sched_classifier_in_current_netns(
     })
 }
 
-struct PinnedClassifierAttachResult {
-    backend: AttachBackend,
-    link_id: SchedClassifierLinkId,
-    fallback_used: bool,
-    fallback_error: Option<String>,
-    tcx_query_revision: Option<u64>,
-    tcx_program_order: Vec<AyaTcxProgramOrderEntry>,
-    tcx_order_verified: bool,
+pub(super) struct PinnedClassifierAttachResult {
+    pub(super) backend: AttachBackend,
+    pub(super) link_id: SchedClassifierLinkId,
+    pub(super) fallback_used: bool,
+    pub(super) fallback_error: Option<String>,
+    pub(super) tcx_query_revision: Option<u64>,
+    pub(super) tcx_program_order: Vec<AyaTcxProgramOrderEntry>,
+    pub(super) tcx_order_verified: bool,
 }
 
-fn attach_pinned_classifier_once(
+pub(super) fn attach_pinned_classifier_once(
     classifier: &mut SchedClassifier,
     spec: &TcNativeAttachSpec,
     attach_type: TcAttachType,
@@ -446,7 +447,7 @@ fn attach_pinned_classifier_once(
     })
 }
 
-fn attach_loaded_aya_sched_classifier(
+pub(super) fn attach_loaded_aya_sched_classifier(
     classifier: &mut SchedClassifier,
     spec: &TcNativeAttachSpec,
     attach_type: TcAttachType,
@@ -476,7 +477,7 @@ fn attach_loaded_aya_sched_classifier(
         })
 }
 
-fn query_tcx_program_order(
+pub(super) fn query_tcx_program_order(
     iface: &str,
     attach_type: TcAttachType,
 ) -> Result<(u64, Vec<AyaTcxProgramOrderEntry>), String> {
@@ -493,7 +494,7 @@ fn query_tcx_program_order(
     Ok((revision, order))
 }
 
-fn verify_tcx_program_order(
+pub(super) fn verify_tcx_program_order(
     program_id: Option<u32>,
     expected_order: TcxAttachOrder,
     program_order: &[AyaTcxProgramOrderEntry],

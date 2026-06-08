@@ -1,4 +1,5 @@
-fn assert_source_stream_packet_and_transport_contract(report: &Value) {
+use super::*;
+pub(crate) fn assert_source_stream_packet_and_transport_contract(report: &Value) {
     assert!(
         report["source_shape_registry_contract_ready"]
             .as_bool()

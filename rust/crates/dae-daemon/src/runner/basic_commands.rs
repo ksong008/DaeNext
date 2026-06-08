@@ -1,4 +1,5 @@
-fn run_validate_command(args: &[String]) -> DaemonOutput {
+use super::*;
+pub(super) fn run_validate_command(args: &[String]) -> DaemonOutput {
     let mut config: Option<PathBuf> = None;
     let mut iter = args.iter();
     while let Some(arg) = iter.next() {
@@ -24,7 +25,7 @@ fn run_validate_command(args: &[String]) -> DaemonOutput {
     }
 }
 
-fn run_reload_command(args: &[String]) -> DaemonOutput {
+pub(super) fn run_reload_command(args: &[String]) -> DaemonOutput {
     let mut options = ReloadOptions::default();
     let mut iter = args.iter();
     while let Some(arg) = iter.next() {

@@ -66,7 +66,17 @@ use topology::{
     write_param_image,
 };
 
-include!("production_runtime_owner/root/options.rs");
-include!("production_runtime_owner/root/owner_report.rs");
-include!("production_runtime_owner/root/execute_smoke.rs");
-include!("production_runtime_owner/root/tests.rs");
+#[path = "production_runtime_owner/root/options.rs"]
+mod options;
+pub use self::options::*;
+#[path = "production_runtime_owner/root/owner_report.rs"]
+mod owner_report;
+pub use self::owner_report::*;
+#[path = "production_runtime_owner/root/execute_smoke.rs"]
+mod execute_smoke;
+use self::execute_smoke::*;
+#[path = "production_runtime_owner/root/tests.rs"]
+#[cfg(test)]
+mod tests;
+#[cfg(test)]
+use self::tests::*;

@@ -1,4 +1,5 @@
-fn insert_control_plane_contract_defaults(report: &mut Value) {
+use super::*;
+pub(super) fn insert_control_plane_contract_defaults(report: &mut Value) {
     insert_control_plane_contract_success(
         report,
         false, // command_passed
@@ -20,7 +21,7 @@ fn insert_control_plane_contract_defaults(report: &mut Value) {
 }
 
 #[allow(clippy::too_many_arguments)]
-fn insert_control_plane_contract_success(
+pub(super) fn insert_control_plane_contract_success(
     report: &mut Value,
     command_passed: bool,
     control_plane_owner_contract_ready: bool,

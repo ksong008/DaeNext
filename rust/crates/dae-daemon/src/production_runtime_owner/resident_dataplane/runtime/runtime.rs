@@ -1,16 +1,18 @@
+use super::*;
 #[derive(Debug)]
-pub(super) struct ResidentDataplaneRuntime {
-    stop: Arc<AtomicBool>,
-    handles: Vec<JoinHandle<()>>,
-    event_file: PathBuf,
-    reload_generation: u64,
-    metrics: Arc<ResidentDataplaneMetrics>,
-    groups: Vec<Arc<plan::ResidentProxyGroupPlan>>,
-    manual_probe_plans: BTreeMap<String, Result<plan::ResidentProxyProbePlan, String>>,
+pub(crate) struct ResidentDataplaneRuntime {
+    pub(in crate::production_runtime_owner) stop: Arc<AtomicBool>,
+    pub(in crate::production_runtime_owner) handles: Vec<JoinHandle<()>>,
+    pub(in crate::production_runtime_owner) event_file: PathBuf,
+    pub(in crate::production_runtime_owner) reload_generation: u64,
+    pub(in crate::production_runtime_owner) metrics: Arc<ResidentDataplaneMetrics>,
+    pub(in crate::production_runtime_owner) groups: Vec<Arc<plan::ResidentProxyGroupPlan>>,
+    pub(in crate::production_runtime_owner) manual_probe_plans:
+        BTreeMap<String, Result<plan::ResidentProxyProbePlan, String>>,
 }
 
 impl ResidentDataplaneRuntime {
-    pub(super) fn metrics_snapshot(&self) -> Value {
+    pub(in crate::production_runtime_owner) fn metrics_snapshot(&self) -> Value {
         let mut snapshot = self.metrics.snapshot();
         snapshot["reloadGeneration"] = json!(self.reload_generation);
         snapshot["packetSessionManager"] = json!({
@@ -21,7 +23,7 @@ impl ResidentDataplaneRuntime {
         snapshot
     }
 
-    pub(super) fn node_latency_snapshots(&self) -> Vec<Value> {
+    pub(in crate::production_runtime_owner) fn node_latency_snapshots(&self) -> Vec<Value> {
         let reload_generation = self.reload_generation;
         preferred_latency_snapshots(
             self.groups
@@ -31,7 +33,10 @@ impl ResidentDataplaneRuntime {
         )
     }
 
-    pub(super) fn probe_node_latencies(&self, links: &[String]) -> Vec<Value> {
+    pub(in crate::production_runtime_owner) fn probe_node_latencies(
+        &self,
+        links: &[String],
+    ) -> Vec<Value> {
         if links.is_empty() {
             return Vec::new();
         }
@@ -91,7 +96,7 @@ impl ResidentDataplaneRuntime {
         preferred_latency_snapshots(snapshots)
     }
 
-    pub(super) fn shutdown(&mut self, steps: &mut Vec<Value>) {
+    pub(in crate::production_runtime_owner) fn shutdown(&mut self, steps: &mut Vec<Value>) {
         self.stop.store(true, Ordering::Relaxed);
         let mut joined = 0_usize;
         let mut panicked = 0_usize;

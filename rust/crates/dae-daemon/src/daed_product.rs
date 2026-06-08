@@ -323,7 +323,8 @@ fn c10_final_admission() -> Value {
     })
 }
 
-include!("daed_product/runtime_manager.rs");
+mod runtime_manager;
+use self::runtime_manager::*;
 
 #[derive(Clone, Debug)]
 struct UserRecord {
@@ -382,22 +383,43 @@ impl HttpResponse {
     }
 }
 
-include!("daed_product/cli_commands.rs");
-include!("daed_product/service_metadata.rs");
-include!("daed_product/state_schema.rs");
-include!("daed_product/http_server.rs");
-include!("daed_product/api_routes.rs");
-include!("daed_product/runtime_overview.rs");
-include!("daed_product/runtime_api.rs");
-include!("daed_product/resources.rs");
-include!("daed_product/nodes_subscriptions_groups.rs");
-include!("daed_product/runtime_materialization.rs");
-include!("daed_product/logs.rs");
-include!("daed_product/latency.rs");
-include!("daed_product/bundle.rs");
-include!("daed_product/package.rs");
-include!("daed_product/process_metrics.rs");
-include!("daed_product/common_helpers.rs");
-include!("daed_product/auth_storage.rs");
-include!("daed_product/http_io.rs");
-include!("daed_product/tests.rs");
+mod cli_commands;
+pub use self::cli_commands::*;
+mod service_metadata;
+use self::service_metadata::*;
+mod state_schema;
+use self::state_schema::*;
+mod http_server;
+use self::http_server::*;
+mod api_routes;
+use self::api_routes::*;
+mod runtime_overview;
+use self::runtime_overview::*;
+mod runtime_api;
+use self::runtime_api::*;
+mod resources;
+use self::resources::*;
+mod nodes_subscriptions_groups;
+use self::nodes_subscriptions_groups::*;
+mod runtime_materialization;
+use self::runtime_materialization::*;
+mod logs;
+use self::logs::*;
+mod latency;
+use self::latency::*;
+mod bundle;
+use self::bundle::*;
+mod package;
+use self::package::*;
+mod process_metrics;
+use self::process_metrics::*;
+mod common_helpers;
+use self::common_helpers::*;
+mod auth_storage;
+use self::auth_storage::*;
+mod http_io;
+use self::http_io::*;
+#[cfg(test)]
+mod tests;
+#[cfg(test)]
+use self::tests::*;

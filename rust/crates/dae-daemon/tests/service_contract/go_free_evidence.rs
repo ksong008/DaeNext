@@ -1,5 +1,6 @@
+use super::*;
 #[test]
-fn candidate_admits_c10_go_free_contract_only_with_final_live_evidence() {
+pub(super) fn candidate_admits_c10_go_free_contract_only_with_final_live_evidence() {
     let root = std::env::temp_dir().join(format!(
         "dae-daemon-c10-go-free-evidence-test-{}",
         std::process::id()

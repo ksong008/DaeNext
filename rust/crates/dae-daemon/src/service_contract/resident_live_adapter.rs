@@ -1,4 +1,7 @@
-fn insert_resident_live_adapter_matrix_service_contract_capabilities(report: &mut Value) {
+use super::*;
+pub(super) fn insert_resident_live_adapter_matrix_service_contract_capabilities(
+    report: &mut Value,
+) {
     let matrix = crate::production_runtime_owner::resident_live_adapter_matrix_contract();
     let live_evidence = crate::production_runtime_owner::resident_live_matrix_evidence_from_env();
     let entries = matrix

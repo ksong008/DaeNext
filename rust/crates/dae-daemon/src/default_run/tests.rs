@@ -1,6 +1,8 @@
 #[cfg(test)]
 mod stage7_gate_tests {
-    use super::*;
+    use serde_json::json;
+
+    use super::super::*;
 
     #[test]
     fn stage7_release_gate_blocks_product_chain_switch_without_live_matrix() {

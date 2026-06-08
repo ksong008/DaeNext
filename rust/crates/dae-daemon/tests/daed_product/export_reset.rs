@@ -1,5 +1,6 @@
+use super::*;
 #[test]
-fn daed_export_commands_report_c10_package_surface() {
+pub(super) fn daed_export_commands_report_c10_package_surface() {
     for command in ["openapi", "flatdesc", "outline"] {
         let output = Command::new(binary())
             .args(["export", command])
@@ -86,7 +87,7 @@ fn daed_export_commands_report_c10_package_surface() {
 }
 
 #[test]
-fn daed_resetpass_updates_daed_db_users_without_wing_db() {
+pub(super) fn daed_resetpass_updates_daed_db_users_without_wing_db() {
     let temp = temp_dir("resetpass");
     let web = temp.join("web");
     fs::create_dir_all(&web).unwrap();

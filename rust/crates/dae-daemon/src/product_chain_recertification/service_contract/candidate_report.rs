@@ -1,4 +1,5 @@
-pub(super) fn candidate_service_contract_report(
+use super::*;
+pub(crate) fn candidate_service_contract_report(
     requested: bool,
     binary_source: Option<&Path>,
 ) -> Value {

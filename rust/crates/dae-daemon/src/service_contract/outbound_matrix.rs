@@ -1,4 +1,5 @@
-fn insert_outbound_production_matrix_service_contract_capabilities(report: &mut Value) {
+use super::*;
+pub(super) fn insert_outbound_production_matrix_service_contract_capabilities(report: &mut Value) {
     let matrix = dae_outbound::outbound_production_matrix_contract();
     let source_registry = dae_outbound::source_shape_registry_contract();
     let stream_wrapper = dae_outbound::stream_wrapper_capability_contract();

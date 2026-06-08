@@ -1,4 +1,5 @@
-pub(super) fn service_contract_json(path: &Path) -> Value {
+use super::*;
+pub(crate) fn service_contract_json(path: &Path) -> Value {
     let Ok(text) = fs::read_to_string(path) else {
         return json!({
             "status": "fail",
@@ -59,7 +60,7 @@ pub(super) fn service_contract_json(path: &Path) -> Value {
     })
 }
 
-pub(super) fn candidate_validate_report(
+pub(crate) fn candidate_validate_report(
     requested: bool,
     binary_source: Option<&Path>,
     staged_config_source: Option<&Path>,

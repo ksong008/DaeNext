@@ -1,4 +1,5 @@
-fn general_state_report(
+use super::*;
+pub(super) fn general_state_report(
     state: &Path,
     config_dir: &Path,
     runtime: &ProductRuntimeManager,
@@ -38,24 +39,24 @@ fn general_state_report(
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-struct RuntimeSectionState {
-    id: i64,
-    version: i64,
+pub(super) struct RuntimeSectionState {
+    pub(super) id: i64,
+    pub(super) version: i64,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
-struct RunningRuntimeState {
-    config_id: Option<i64>,
-    config_version: i64,
-    dns_id: Option<i64>,
-    dns_version: i64,
-    routing_id: Option<i64>,
-    routing_version: i64,
-    group_version_sum: i64,
-    group_ids: String,
+pub(super) struct RunningRuntimeState {
+    pub(super) config_id: Option<i64>,
+    pub(super) config_version: i64,
+    pub(super) dns_id: Option<i64>,
+    pub(super) dns_version: i64,
+    pub(super) routing_id: Option<i64>,
+    pub(super) routing_version: i64,
+    pub(super) group_version_sum: i64,
+    pub(super) group_ids: String,
 }
 
-fn runtime_modified(conn: &Connection, running: bool) -> io::Result<bool> {
+pub(super) fn runtime_modified(conn: &Connection, running: bool) -> io::Result<bool> {
     if !running {
         return Ok(false);
     }
@@ -82,7 +83,7 @@ fn runtime_modified(conn: &Connection, running: bool) -> io::Result<bool> {
         || running_state.group_ids != group_ids_text(conn)?)
 }
 
-fn selected_section_state(
+pub(super) fn selected_section_state(
     conn: &Connection,
     kind: SectionKind,
 ) -> io::Result<Option<RuntimeSectionState>> {
@@ -100,7 +101,7 @@ fn selected_section_state(
     .map_err(sqlite_io_error)
 }
 
-fn running_runtime_state(conn: &Connection) -> io::Result<Option<RunningRuntimeState>> {
+pub(super) fn running_runtime_state(conn: &Connection) -> io::Result<Option<RunningRuntimeState>> {
     conn.query_row(
         "SELECT running_config_id, running_config_version,
                 running_dns_id, running_dns_version,
@@ -128,12 +129,12 @@ fn running_runtime_state(conn: &Connection) -> io::Result<Option<RunningRuntimeS
     .map_err(sqlite_io_error)
 }
 
-fn build_runtime_config_from_content(content: &str) -> Result<Config, String> {
+pub(super) fn build_runtime_config_from_content(content: &str) -> Result<Config, String> {
     let sections = parse_config(content).map_err(|err| err.to_string())?;
     build_config(&sections).map_err(|err| err.to_string())
 }
 
-fn mark_system_stopped(state: &Path) -> io::Result<()> {
+pub(super) fn mark_system_stopped(state: &Path) -> io::Result<()> {
     ensure_state_schema(state)?;
     let conn = open_state_connection(state)?;
     let updated = conn
@@ -151,12 +152,16 @@ fn mark_system_stopped(state: &Path) -> io::Result<()> {
     Ok(())
 }
 
-fn mark_runtime_process_stopped(state: &Path) -> io::Result<()> {
+pub(super) fn mark_runtime_process_stopped(state: &Path) -> io::Result<()> {
     ensure_state_schema(state)?;
     set_metadata(state, "runtime_running", "false")
 }
 
-fn materialize_runtime(state: &Path, config_dir: Option<&Path>, dry: bool) -> io::Result<Value> {
+pub(super) fn materialize_runtime(
+    state: &Path,
+    config_dir: Option<&Path>,
+    dry: bool,
+) -> io::Result<Value> {
     ensure_state_schema(state)?;
     let conn = open_state_connection(state)?;
     let config = selected_section_raw(&conn, SectionKind::Config)?;
@@ -236,7 +241,7 @@ fn materialize_runtime(state: &Path, config_dir: Option<&Path>, dry: bool) -> io
     Ok(Value::Object(report))
 }
 
-fn render_generated_config(
+pub(super) fn render_generated_config(
     generated_at: &str,
     config: Option<&(i64, String, String, i64)>,
     dns: Option<&(i64, String, String, i64)>,
@@ -273,7 +278,7 @@ fn render_generated_config(
     Ok(out)
 }
 
-fn render_node_section(nodes: &Value) -> String {
+pub(super) fn render_node_section(nodes: &Value) -> String {
     let mut out = String::from("node {\n");
     for node in nodes["items"].as_array().into_iter().flatten() {
         let Some(link) = node.get("link").and_then(Value::as_str) else {
@@ -293,7 +298,7 @@ fn render_node_section(nodes: &Value) -> String {
     out
 }
 
-fn render_group_section(groups: &Value) -> io::Result<String> {
+pub(super) fn render_group_section(groups: &Value) -> io::Result<String> {
     let mut out = String::from("group {\n");
     for group in groups["items"].as_array().into_iter().flatten() {
         let Some(name) = group.get("name").and_then(Value::as_str) else {
@@ -324,7 +329,7 @@ fn render_group_section(groups: &Value) -> io::Result<String> {
     Ok(out)
 }
 
-fn render_group_policy(group: &Value) -> String {
+pub(super) fn render_group_policy(group: &Value) -> String {
     let policy = group
         .get("policy")
         .and_then(Value::as_str)
@@ -368,7 +373,7 @@ fn render_group_policy(group: &Value) -> String {
     .to_config_string(true, true, false)
 }
 
-fn runtime_group_node_tags(group: &Value) -> Vec<String> {
+pub(super) fn runtime_group_node_tags(group: &Value) -> Vec<String> {
     let mut tags = Vec::<String>::new();
     for node in group["nodes"].as_array().into_iter().flatten() {
         push_unique(&mut tags, runtime_node_tag(node));
@@ -385,7 +390,7 @@ fn runtime_group_node_tags(group: &Value) -> Vec<String> {
     tags
 }
 
-fn runtime_node_tag(node: &Value) -> String {
+pub(super) fn runtime_node_tag(node: &Value) -> String {
     node.get("runtimeTag")
         .and_then(Value::as_str)
         .filter(|value| !value.trim().is_empty())
@@ -406,13 +411,13 @@ fn runtime_node_tag(node: &Value) -> String {
         })
 }
 
-fn push_unique(values: &mut Vec<String>, value: String) {
+pub(super) fn push_unique(values: &mut Vec<String>, value: String) {
     if !values.iter().any(|seen| seen == &value) {
         values.push(value);
     }
 }
 
-fn dae_key_literal(value: &str) -> String {
+pub(super) fn dae_key_literal(value: &str) -> String {
     if value
         .chars()
         .all(|ch| ch.is_ascii_alphanumeric() || ch == '_' || ch == '-')
@@ -428,7 +433,7 @@ fn dae_key_literal(value: &str) -> String {
     }
 }
 
-fn dae_string_literal(value: &str) -> String {
+pub(super) fn dae_string_literal(value: &str) -> String {
     let mut out = String::from("'");
     for ch in value.chars() {
         match ch {
@@ -441,7 +446,7 @@ fn dae_string_literal(value: &str) -> String {
     out
 }
 
-fn selected_section_raw(
+pub(super) fn selected_section_raw(
     conn: &Connection,
     kind: SectionKind,
 ) -> io::Result<Option<(i64, String, String, i64)>> {
@@ -481,7 +486,7 @@ fn selected_section_raw(
     .map_err(sqlite_io_error)
 }
 
-fn selected_id(conn: &Connection, kind: SectionKind) -> io::Result<Option<i64>> {
+pub(super) fn selected_id(conn: &Connection, kind: SectionKind) -> io::Result<Option<i64>> {
     let sql = format!(
         "SELECT id FROM {} WHERE selected = 1 ORDER BY id LIMIT 1",
         kind.table()
@@ -491,14 +496,14 @@ fn selected_id(conn: &Connection, kind: SectionKind) -> io::Result<Option<i64>> 
         .map_err(sqlite_io_error)
 }
 
-fn group_version_sum(conn: &Connection) -> io::Result<i64> {
+pub(super) fn group_version_sum(conn: &Connection) -> io::Result<i64> {
     conn.query_row("SELECT COALESCE(SUM(version), 0) FROM groups", [], |row| {
         row.get(0)
     })
     .map_err(sqlite_io_error)
 }
 
-fn group_ids_text(conn: &Connection) -> io::Result<String> {
+pub(super) fn group_ids_text(conn: &Connection) -> io::Result<String> {
     let mut stmt = conn
         .prepare("SELECT id FROM groups ORDER BY id")
         .map_err(sqlite_io_error)?;
@@ -512,7 +517,7 @@ fn group_ids_text(conn: &Connection) -> io::Result<String> {
     Ok(ids.join(","))
 }
 
-fn get_metadata(state: &Path, key: &str) -> io::Result<Option<String>> {
+pub(super) fn get_metadata(state: &Path, key: &str) -> io::Result<Option<String>> {
     ensure_state_schema(state)?;
     let conn = open_state_connection(state)?;
     conn.query_row(
@@ -524,7 +529,7 @@ fn get_metadata(state: &Path, key: &str) -> io::Result<Option<String>> {
     .map_err(sqlite_io_error)
 }
 
-fn set_metadata(state: &Path, key: &str, value: &str) -> io::Result<()> {
+pub(super) fn set_metadata(state: &Path, key: &str, value: &str) -> io::Result<()> {
     ensure_state_schema(state)?;
     let conn = open_state_connection(state)?;
     conn.execute(

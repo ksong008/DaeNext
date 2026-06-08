@@ -1,3 +1,4 @@
+use super::*;
 pub fn encode_client_initial(
     cipher: &str,
     password: &str,

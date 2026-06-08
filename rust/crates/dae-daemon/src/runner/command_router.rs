@@ -1,3 +1,4 @@
+use super::*;
 pub fn run_with_args_and_version(
     args: impl IntoIterator<Item = impl Into<String>>,
     version: &str,

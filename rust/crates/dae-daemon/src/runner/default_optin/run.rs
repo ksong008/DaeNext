@@ -1,4 +1,5 @@
-fn run_default_optin_command(args: &[String], version: &str) -> DaemonOutput {
+use super::*;
+pub(crate) fn run_default_optin_command(args: &[String], version: &str) -> DaemonOutput {
     let DefaultOptinParsedArgs {
         root,
         root_explicit,

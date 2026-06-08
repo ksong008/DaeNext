@@ -1,4 +1,5 @@
-fn assert_resident_dataplane_enabled_contract() {
+use super::*;
+pub(crate) fn assert_resident_dataplane_enabled_contract() {
     let enabled_output = Command::new(binary())
         .arg("service-contract")
         .env("DAE_RUST_RESIDENT_DATAPLANE", "1")
@@ -36,4 +37,5 @@ fn assert_resident_dataplane_enabled_contract() {
         enabled_report["reload_start_failure_attempts_previous_runtime_restore"]
             .as_bool()
             .unwrap()
-    );}
+    );
+}

@@ -1,5 +1,6 @@
+use super::*;
 #[test]
-fn outbound_connectivity_state_dedupes_without_losing_dryrun_semantics() {
+pub(super) fn outbound_connectivity_state_dedupes_without_losing_dryrun_semantics() {
     let mut state = OutboundConnectivityState::default();
     let tcp4 = ConnectivityKey {
         outbound: 2,
@@ -77,7 +78,7 @@ fn outbound_connectivity_state_dedupes_without_losing_dryrun_semantics() {
 }
 
 #[test]
-fn outbound_connectivity_owner_replays_state_when_map_id_changes() {
+pub(super) fn outbound_connectivity_owner_replays_state_when_map_id_changes() {
     let tcp4 = ConnectivityKey {
         outbound: 2,
         l4proto: 6,
@@ -137,7 +138,7 @@ fn outbound_connectivity_owner_replays_state_when_map_id_changes() {
 }
 
 #[test]
-fn outbound_connectivity_owner_writes_before_committing_state() {
+pub(super) fn outbound_connectivity_owner_writes_before_committing_state() {
     let tcp4 = ConnectivityKey {
         outbound: 2,
         l4proto: 6,
@@ -213,7 +214,7 @@ fn outbound_connectivity_owner_writes_before_committing_state() {
 }
 
 #[test]
-fn outbound_connectivity_owner_does_not_commit_when_map_apply_fails() {
+pub(super) fn outbound_connectivity_owner_does_not_commit_when_map_apply_fails() {
     let tcp4 = ConnectivityKey {
         outbound: 2,
         l4proto: 6,
@@ -231,7 +232,7 @@ fn outbound_connectivity_owner_does_not_commit_when_map_apply_fails() {
 }
 
 #[test]
-fn outbound_connectivity_owner_dryrun_reject_does_not_install_map() {
+pub(super) fn outbound_connectivity_owner_dryrun_reject_does_not_install_map() {
     let tcp4 = ConnectivityKey {
         outbound: 2,
         l4proto: 6,

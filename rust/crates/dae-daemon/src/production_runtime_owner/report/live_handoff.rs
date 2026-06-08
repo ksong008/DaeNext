@@ -1,4 +1,5 @@
-pub(super) fn live_handoff_json(handoff: &LiveLoadedTproxyListenSocketMap) -> Value {
+use super::*;
+pub(crate) fn live_handoff_json(handoff: &LiveLoadedTproxyListenSocketMap) -> Value {
     json!({
         "status": "pass",
         "map": {
@@ -19,7 +20,7 @@ pub(super) fn live_handoff_json(handoff: &LiveLoadedTproxyListenSocketMap) -> Va
     })
 }
 
-fn socket_options_json(options: &TproxySocketOptions) -> Value {
+pub(crate) fn socket_options_json(options: &TproxySocketOptions) -> Value {
     json!({
         "ip_transparent": options.ip_transparent,
         "so_reuseaddr": options.so_reuseaddr,
@@ -29,7 +30,7 @@ fn socket_options_json(options: &TproxySocketOptions) -> Value {
     })
 }
 
-pub(super) fn socket_options_verified(
+pub(crate) fn socket_options_verified(
     tcp: &TproxySocketOptions,
     udp: &TproxySocketOptions,
 ) -> bool {

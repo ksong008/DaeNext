@@ -1,17 +1,18 @@
-fn current_runtime_log_level(state: &Path) -> io::Result<String> {
+use super::*;
+pub(crate) fn current_runtime_log_level(state: &Path) -> io::Result<String> {
     let level = get_metadata(state, "runtime_log_level")?
         .and_then(|level| normalize_runtime_log_level(&level))
         .unwrap_or_else(|| "info".to_owned());
     Ok(level)
 }
 
-fn set_runtime_log_level_from_config(state: &Path, config: &Config) -> io::Result<()> {
+pub(crate) fn set_runtime_log_level_from_config(state: &Path, config: &Config) -> io::Result<()> {
     let level =
         normalize_runtime_log_level(&config.global.log_level).unwrap_or_else(|| "info".to_owned());
     set_metadata(state, "runtime_log_level", &level)
 }
 
-fn log_level_enabled(entry_level: &str, runtime_level: &str) -> bool {
+pub(crate) fn log_level_enabled(entry_level: &str, runtime_level: &str) -> bool {
     let Some(entry_rank) = log_level_rank(entry_level) else {
         return false;
     };
@@ -19,7 +20,7 @@ fn log_level_enabled(entry_level: &str, runtime_level: &str) -> bool {
     entry_rank <= runtime_rank
 }
 
-fn log_level_rank(level: &str) -> Option<u8> {
+pub(crate) fn log_level_rank(level: &str) -> Option<u8> {
     match level {
         "panic" => Some(0),
         "fatal" => Some(1),
@@ -32,7 +33,7 @@ fn log_level_rank(level: &str) -> Option<u8> {
     }
 }
 
-fn normalize_log_max_entries(value: i64) -> i64 {
+pub(crate) fn normalize_log_max_entries(value: i64) -> i64 {
     if value == 0 {
         DEFAULT_LOG_MAX_ENTRIES
     } else {
@@ -40,7 +41,7 @@ fn normalize_log_max_entries(value: i64) -> i64 {
     }
 }
 
-fn normalize_log_max_bytes(value: i64) -> i64 {
+pub(crate) fn normalize_log_max_bytes(value: i64) -> i64 {
     if value == 0 {
         DEFAULT_LOG_MAX_BYTES
     } else {
@@ -48,7 +49,7 @@ fn normalize_log_max_bytes(value: i64) -> i64 {
     }
 }
 
-fn normalize_log_level_filter(level: Option<&str>) -> io::Result<Option<String>> {
+pub(crate) fn normalize_log_level_filter(level: Option<&str>) -> io::Result<Option<String>> {
     let Some(level) = level else {
         return Ok(None);
     };
@@ -64,7 +65,7 @@ fn normalize_log_level_filter(level: Option<&str>) -> io::Result<Option<String>>
     })
 }
 
-fn normalize_log_level_name(level: &str) -> Option<String> {
+pub(crate) fn normalize_log_level_name(level: &str) -> Option<String> {
     let level = level.trim().to_ascii_lowercase();
     match level.as_str() {
         "panic" | "fatal" | "error" | "warn" | "info" | "debug" | "trace" => Some(level),
@@ -73,7 +74,7 @@ fn normalize_log_level_name(level: &str) -> Option<String> {
     }
 }
 
-fn sse_response_events(events: &[(&str, Value)], retry_ms: Option<u64>) -> HttpResponse {
+pub(crate) fn sse_response_events(events: &[(&str, Value)], retry_ms: Option<u64>) -> HttpResponse {
     let mut body = String::new();
     if let Some(retry_ms) = retry_ms {
         body.push_str(&format!("retry: {retry_ms}\n\n"));
@@ -91,14 +92,18 @@ fn sse_response_events(events: &[(&str, Value)], retry_ms: Option<u64>) -> HttpR
     response
 }
 
-fn write_sse_stream_headers(stream: &mut TcpStream) -> io::Result<()> {
+pub(crate) fn write_sse_stream_headers(stream: &mut TcpStream) -> io::Result<()> {
     write!(
         stream,
         "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nCache-Control: no-cache\r\nConnection: keep-alive\r\nX-Accel-Buffering: no\r\nAccess-Control-Allow-Origin: *\r\nAccess-Control-Allow-Headers: Authorization, Content-Type\r\nAccess-Control-Allow-Methods: GET, POST, PUT, PATCH, DELETE, OPTIONS, HEAD\r\n\r\n"
     )
 }
 
-fn write_sse_stream_event(stream: &mut TcpStream, event: &str, payload: &Value) -> io::Result<()> {
+pub(crate) fn write_sse_stream_event(
+    stream: &mut TcpStream,
+    event: &str,
+    payload: &Value,
+) -> io::Result<()> {
     let data = serde_json::to_string(payload)
         .map_err(|err| io::Error::new(io::ErrorKind::InvalidData, err))?;
     writeln!(stream, "event: {event}")?;

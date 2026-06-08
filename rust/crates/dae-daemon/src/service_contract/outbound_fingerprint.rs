@@ -1,4 +1,7 @@
-fn insert_outbound_fingerprint_underlay_service_contract_capabilities(report: &mut Value) {
+use super::*;
+pub(super) fn insert_outbound_fingerprint_underlay_service_contract_capabilities(
+    report: &mut Value,
+) {
     let security_underlay_capability = dae_outbound::security_underlay_capability_contract();
     let security_underlay_rows = security_underlay_capability
         .rows
