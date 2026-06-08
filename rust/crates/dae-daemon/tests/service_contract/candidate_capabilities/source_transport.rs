@@ -89,7 +89,7 @@ pub(crate) fn assert_source_stream_packet_and_transport_contract(report: &Value)
             .unwrap()
     );
     assert!(
-        !report["expanded_source_matrix_typed_report"]
+        report["expanded_source_matrix_typed_report"]
             ["excluded_stream_wrapper_source_matrix_release_gate_ready"]
             .as_bool()
             .unwrap()

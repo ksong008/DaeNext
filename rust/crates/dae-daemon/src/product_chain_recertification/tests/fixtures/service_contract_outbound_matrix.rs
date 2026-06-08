@@ -105,7 +105,7 @@ pub(crate) fn insert_outbound_matrix_and_source_contract(
             "release_gate_ready": false,
             "c10_ready": false,
             "scoped_release_gate_ready": true,
-            "excluded_stream_wrapper_source_matrix_release_gate_ready": false,
+            "excluded_stream_wrapper_source_matrix_release_gate_ready": true,
             "stage_report_schema": false,
         }),
     );
