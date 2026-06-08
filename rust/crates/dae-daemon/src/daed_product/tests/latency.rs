@@ -1,0 +1,190 @@
+use super::*;
+    use dae_config::DynamicFunctionValue;
+    use dae_config::Item;
+
+    fn test_config_with_node(node_name: &str, link: &str, group_name: &str) -> String {
+        format!(
+            r#"
+global {{}}
+node {{
+    {node_name}: '{link}'
+}}
+group {{
+    {group_name} {{
+        filter: name({node_name})
+        policy: random
+    }}
+}}
+routing {{
+    fallback: direct
+}}
+dns {{}}
+"#
+        )
+    }
+
+    fn node_link_from_config(content: &str, node_name: &str) -> String {
+        let sections = parse_config(content).unwrap();
+        sections
+            .iter()
+            .find(|section| section.name == "node")
+            .and_then(|section| {
+                section.items.iter().find_map(|item| {
+                    let Item::Param(param) = item else {
+                        return None;
+                    };
+                    (param.key == node_name).then(|| param.val.clone())
+                })
+            })
+            .unwrap_or_else(|| panic!("node {node_name} not found in test config"))
+    }
+
+    fn config_node_value(id: i64, node_name: &str, link: &str) -> Value {
+        let content = test_config_with_node(node_name, link, "egress");
+        build_runtime_config_from_content(&content).unwrap();
+        let link = node_link_from_config(&content, node_name);
+        let parsed = parse_node_link(&link, Some(node_name));
+        json!({
+            "id": id,
+            "link": link,
+            "name": parsed.name,
+            "address": parsed.address,
+            "protocol": parsed.protocol,
+            "tag": node_name
+        })
+    }
+
+    fn insert_config_node(
+        conn: &Connection,
+        id: i64,
+        node_name: &str,
+        link: &str,
+        subscription_id: Option<i64>,
+    ) {
+        let content = test_config_with_node(node_name, link, "egress");
+        build_runtime_config_from_content(&content).unwrap();
+        let link = node_link_from_config(&content, node_name);
+        let parsed = parse_node_link(&link, Some(node_name));
+        conn.execute(
+            "INSERT INTO nodes(id, link, name, address, protocol, tag, subscription_id)
+             VALUES(?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+            params![
+                id,
+                link,
+                parsed.name,
+                parsed.address,
+                parsed.protocol,
+                node_name,
+                subscription_id
+            ],
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn runtime_latency_snapshots_map_to_node_ids_by_link() {
+        let nodes = vec![
+            (
+                11,
+                "socks://127.0.0.1:1080#one".to_owned(),
+                "127.0.0.1:1080".to_owned(),
+            ),
+            (
+                12,
+                "socks://127.0.0.1:1081#two".to_owned(),
+                "127.0.0.1:1081".to_owned(),
+            ),
+        ];
+        let snapshots = vec![
+            json!({
+                "name": "one",
+                "linkHash": runtime_link_hash("socks://127.0.0.1:1080#one"),
+                "linkIdentity": {
+                    "schemaVersion": 1,
+                    "displayName": "one",
+                    "linkHash": runtime_link_hash("socks://127.0.0.1:1080#one"),
+                    "redactedSource": "socks:<redacted>#one",
+                },
+                "latencyMs": 37,
+                "alive": true,
+                "checkedAtUnix": 42,
+                "message": "37ms",
+            }),
+            json!({
+                "name": "two",
+                "linkHash": runtime_link_hash("socks://127.0.0.1:1081#two"),
+                "linkIdentity": {
+                    "schemaVersion": 1,
+                    "displayName": "two",
+                    "linkHash": runtime_link_hash("socks://127.0.0.1:1081#two"),
+                    "redactedSource": "socks:<redacted>#two",
+                },
+                "latencyMs": null,
+                "alive": false,
+                "checkedAtUnix": 0,
+                "message": "no latency result",
+            }),
+        ];
+        assert!(
+            snapshots
+                .iter()
+                .all(|snapshot| snapshot.get("link").is_none())
+        );
+        let (results, tested_ids) = runtime_node_latency_results_for_nodes(&nodes, &snapshots);
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].node_id, 11);
+        assert_eq!(results[0].latency_ms, Some(37));
+        assert!(results[0].alive);
+        assert_eq!(results[0].message, None);
+        assert_eq!(results[0].tested_at, iso8601_utc(42));
+        assert!(tested_ids.contains(&11));
+        assert!(!tested_ids.contains(&12));
+    }
+
+    #[test]
+    fn runtime_latency_failure_snapshot_is_tested_with_message() {
+        let nodes = vec![(
+            21,
+            "socks://127.0.0.1:1080#one".to_owned(),
+            "127.0.0.1:1080".to_owned(),
+        )];
+        let snapshots = vec![json!({
+            "name": "one",
+            "linkHash": runtime_link_hash("socks://127.0.0.1:1080#one"),
+            "linkIdentity": {
+                "schemaVersion": 1,
+                "displayName": "one",
+                "linkHash": runtime_link_hash("socks://127.0.0.1:1080#one"),
+                "redactedSource": "socks:<redacted>#one",
+            },
+            "latencyMs": null,
+            "alive": false,
+            "checkedAtUnix": 84,
+            "message": "connect failed",
+        })];
+        assert!(snapshots[0].get("link").is_none());
+        let (results, tested_ids) = runtime_node_latency_results_for_nodes(&nodes, &snapshots);
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].node_id, 21);
+        assert_eq!(results[0].latency_ms, None);
+        assert!(!results[0].alive);
+        assert_eq!(results[0].message.as_deref(), Some("connect failed"));
+        assert_eq!(results[0].tested_at, iso8601_utc(84));
+        assert!(tested_ids.contains(&21));
+    }
+
+    #[test]
+    fn fake_runtime_latency_snapshot_redacts_raw_link() {
+        let raw_link = "http://user:secret@127.0.0.1:1/node?token=secret#demo";
+        let snapshot = fake_runtime_tcp_latency_snapshot(raw_link);
+        assert!(snapshot.get("link").is_none(), "{snapshot}");
+        assert_eq!(snapshot["name"], "demo");
+        assert_eq!(snapshot["displayName"], "demo");
+        assert_eq!(snapshot["linkHash"], runtime_link_hash(raw_link));
+        assert_eq!(
+            snapshot["linkIdentity"]["redactedSource"],
+            "http:<redacted>#demo"
+        );
+        assert!(!snapshot.to_string().contains("user:secret"));
+        assert!(!snapshot.to_string().contains("token=secret"));
+    }

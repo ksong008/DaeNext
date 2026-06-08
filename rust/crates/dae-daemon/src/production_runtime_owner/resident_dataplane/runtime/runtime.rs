@@ -1,0 +1,112 @@
+#[derive(Debug)]
+pub(super) struct ResidentDataplaneRuntime {
+    stop: Arc<AtomicBool>,
+    handles: Vec<JoinHandle<()>>,
+    event_file: PathBuf,
+    reload_generation: u64,
+    metrics: Arc<ResidentDataplaneMetrics>,
+    groups: Vec<Arc<plan::ResidentProxyGroupPlan>>,
+    manual_probe_plans: BTreeMap<String, Result<plan::ResidentProxyProbePlan, String>>,
+}
+
+impl ResidentDataplaneRuntime {
+    pub(super) fn metrics_snapshot(&self) -> Value {
+        let mut snapshot = self.metrics.snapshot();
+        snapshot["reloadGeneration"] = json!(self.reload_generation);
+        snapshot["packetSessionManager"] = json!({
+            "schemaVersion": 1,
+            "manager": "bounded-resident-packet-session",
+            "reloadGeneration": self.reload_generation,
+        });
+        snapshot
+    }
+
+    pub(super) fn node_latency_snapshots(&self) -> Vec<Value> {
+        let reload_generation = self.reload_generation;
+        preferred_latency_snapshots(
+            self.groups
+                .iter()
+                .flat_map(|group| group.latency_snapshots())
+                .map(|snapshot| resident_latency_snapshot_json(snapshot, reload_generation)),
+        )
+    }
+
+    pub(super) fn probe_node_latencies(&self, links: &[String]) -> Vec<Value> {
+        if links.is_empty() {
+            return Vec::new();
+        }
+        let requested = links
+            .iter()
+            .filter(|link| !link.is_empty())
+            .cloned()
+            .collect::<HashSet<_>>();
+        if requested.is_empty() {
+            return Vec::new();
+        }
+
+        let checked_at = unix_now_secs();
+        let mut snapshots = Vec::new();
+        let mut tasks = Vec::new();
+        for link in requested {
+            match self.manual_probe_plans.get(&link) {
+                Some(Ok(candidate)) => tasks.push(candidate.clone()),
+                Some(Err(err)) => snapshots.push(manual_probe_unavailable_snapshot(
+                    &link,
+                    "native outbound probe not admitted for this node",
+                    err,
+                    checked_at,
+                    self.reload_generation,
+                )),
+                None => snapshots.push(manual_probe_unavailable_snapshot(
+                    &link,
+                    "node is not present in the current runtime config",
+                    "materialize/reload runtime before testing this node",
+                    checked_at,
+                    self.reload_generation,
+                )),
+            }
+        }
+
+        for chunk in tasks.chunks(RESIDENT_MANUAL_LATENCY_PROBE_CONCURRENCY) {
+            let reload_generation = self.reload_generation;
+            let mut chunk_snapshots = thread::scope(|scope| {
+                let mut handles = Vec::new();
+                for candidate in chunk.iter().cloned() {
+                    let groups = &self.groups;
+                    handles.push(scope.spawn(move || {
+                        probe_resident_candidate_tcp_latency_snapshot(
+                            groups,
+                            candidate,
+                            reload_generation,
+                        )
+                    }));
+                }
+                handles
+                    .into_iter()
+                    .filter_map(|handle| handle.join().ok())
+                    .collect::<Vec<_>>()
+            });
+            snapshots.append(&mut chunk_snapshots);
+        }
+        preferred_latency_snapshots(snapshots)
+    }
+
+    pub(super) fn shutdown(&mut self, steps: &mut Vec<Value>) {
+        self.stop.store(true, Ordering::Relaxed);
+        let mut joined = 0_usize;
+        let mut panicked = 0_usize;
+        for handle in self.handles.drain(..) {
+            match handle.join() {
+                Ok(()) => joined += 1,
+                Err(_) => panicked += 1,
+            }
+        }
+        steps.push(json!({
+            "name": "stop-resident-tcp-udp-dataplane-workers",
+            "status": if panicked == 0 { "pass" } else { "fail" },
+            "joined_worker_threads": joined,
+            "panicked_worker_threads": panicked,
+            "event_file": path_string(&self.event_file),
+        }));
+    }
+}

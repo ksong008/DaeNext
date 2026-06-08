@@ -1,0 +1,337 @@
+const CAPABILITY_REASON_TAXONOMY: [&str; 9] = [
+    "missing-security-underlay",
+    "missing-stream-wrapper",
+    "missing-packet-semantics",
+    "missing-chain-executor",
+    "missing-reload-lifecycle",
+    "missing-live-evidence",
+    "missing-benchmark-evidence",
+    "unsupported-source-policy",
+    "materialization-mismatch",
+];
+
+const SCOPED_EXPANDED_SOURCE_MATRIX_EVIDENCE: ScopedExpandedSourceMatrixEvidence =
+    ScopedExpandedSourceMatrixEvidence {
+        schema: "scoped-expanded-source-evidence",
+        schema_version: 1,
+        scope_id: "excluded-stream-wrapper-scope",
+        source_scope: "remaining-expanded-source-closure-rows",
+        excluded_stream_wrappers: &["xhttp"],
+        opened_rows: &[
+            "secure-endpoint-capability",
+            "nested-chain-shape",
+            "plugin-wrapper-layer",
+            "legacy-layer-shape",
+            "stream-wrapper-meek",
+            "secure-websocket-framed-endpoint",
+            "secure-httpupgrade-framed-endpoint",
+            "verified-quic-security-underlay",
+            "quic-port-hopping-surface",
+            "inner-encryption-stream-wrapper",
+            "obfs-tls-plugin-wrapper",
+            "tls-websocket-plugin-wrapper",
+            "aead-2022-plugin-wrapper",
+            "proxy-transport-mode",
+        ],
+        source_formats: &[
+            "https-proxy-uri",
+            "chain-expression",
+            "shadowsocks-uri",
+            "legacy-vmess-uri",
+            "vless-uri",
+            "vmess-wss-uri",
+            "vmess-httpupgrade-uri",
+            "tuic-uri",
+            "hysteria2-port-hopping-uri",
+            "trojan-go-uri",
+            "shadowsocks-sip003-simple-obfs-tls-uri",
+            "shadowsocks-sip003-v2ray-plugin-uri",
+            "shadowsocks-2022-sip003-simple-obfs-http-uri",
+            "http-proxy-transport-uri",
+        ],
+        candidate_sha256: "multi-batch:3ea6efd5022e5079de4ffc654482dbeae6194a052ff0e6b7cce7c3f513b384a5+12a1622fdff29d95e954ba80a865c01fbb17dcacb345eb7468dae0ac818bab0b+3e33e9d1d620ce21d9f76976855297d7a42d9c82a26ab4adba78370ff9b83817",
+        evidence_host: "remote-38",
+        upstream_host: "jp",
+        evidence_root: "remote-38:/tmp/daex-non-xhttp-capability-3ea6efd5;/opt/daex-batch1-38/artifacts;/opt/daex-batch2-38/artifacts",
+        summary_artifact: "remote-38:/tmp/daex-non-xhttp-capability-3ea6efd5/non-xhttp-capability-live-summary.json;/opt/daex-batch1-38/artifacts/batch1-live-evidence.json;/opt/daex-batch2-38/artifacts/batch2-live-evidence.json",
+        rollback_artifact: "remote-38:/tmp/daex-non-xhttp-capability-3ea6efd5/rollback-cleanup.sh;/opt/daex-batch1-38/artifacts/rollback-cleanup.sh;/opt/daex-batch2-38/artifacts/rollback-cleanup.sh",
+        row_count: 14,
+        pass_count: 14,
+        all_pass: true,
+        large_page_all_pass: true,
+        proxy_evidence_all_pass: true,
+        benchmark_evidence_ready: true,
+        benchmark_evidence_kind: "large-page-threshold-and-body-hash",
+        rollback_artifact_ready: true,
+        rollback_artifact_executed: true,
+        cleanup_evidence_ready: true,
+        raw_links_retained: false,
+        raw_bodies_retained: false,
+        raw_state_retained: false,
+        release_gate_ready: true,
+    };
+
+const ADMITTED_STATE: ShapeStateLedger = ShapeStateLedger {
+    source_shape: "source-supported",
+    parser: "covered",
+    resident_graph: "admitted",
+    live: "requires-expanded-live-evidence",
+    default_switch: "not-ready",
+    go_free: "not-ready",
+};
+
+const BLOCKED_STATE: ShapeStateLedger = ShapeStateLedger {
+    source_shape: "source-supported",
+    parser: "covered",
+    resident_graph: "blocked",
+    live: "blocked",
+    default_switch: "blocked",
+    go_free: "blocked",
+};
+
+const NOT_SOURCE_SUPPORTED_STATE: ShapeStateLedger = ShapeStateLedger {
+    source_shape: "not-source-supported",
+    parser: "rejected",
+    resident_graph: "blocked",
+    live: "blocked",
+    default_switch: "blocked",
+    go_free: "blocked",
+};
+
+const ADMITTED_EXECUTOR_PROOF: ComponentExecutorProof = ComponentExecutorProof {
+    underlay_factory: "proved",
+    stream_wrapper_factory: "proved",
+    packet_semantics_factory: "proved",
+    chain_executor: "single-graph-proved",
+    probe_executor: "proved",
+    reload_lifecycle: "proved",
+    proof_state: "runtime-executable",
+};
+
+const CHAIN_EXECUTOR_PROOF: ComponentExecutorProof = ComponentExecutorProof {
+    underlay_factory: "proved",
+    stream_wrapper_factory: "proved",
+    packet_semantics_factory: "proved",
+    chain_executor: "parent-connect-proved",
+    probe_executor: "proved",
+    reload_lifecycle: "proved",
+    proof_state: "runtime-executable",
+};
+
+const BLOCKED_EXECUTOR_PROOF: ComponentExecutorProof = ComponentExecutorProof {
+    underlay_factory: "pending",
+    stream_wrapper_factory: "pending",
+    packet_semantics_factory: "pending",
+    chain_executor: "pending",
+    probe_executor: "pending",
+    reload_lifecycle: "pending",
+    proof_state: "descriptor-only-fail-closed",
+};
+
+const ADMITTED_RUNTIME_SELECTION: RuntimeSelectionLedger = RuntimeSelectionLedger {
+    selected_runtime_scope: "current-selected-resident-graph",
+    unselected_source_scope: "expanded-source-ledger",
+    fixed_policy_preserved: true,
+    masks_expanded_source_coverage: false,
+};
+
+const BLOCKED_RUNTIME_SELECTION: RuntimeSelectionLedger = RuntimeSelectionLedger {
+    selected_runtime_scope: "not-selected",
+    unselected_source_scope: "expanded-source-ledger",
+    fixed_policy_preserved: true,
+    masks_expanded_source_coverage: false,
+};
+
+const BASE_CAPABILITY: CapabilityLedger = CapabilityLedger {
+    graph_composition: "single-graph-admitted",
+    security_underlay: "baseline-admitted",
+    stream_wrapper: "baseline-admitted",
+    packet_semantics: "baseline-admitted",
+    plugin_wrapper: "none",
+    legacy_layer: "none",
+    quic_option: "baseline-admitted",
+    secure_endpoint: "plain-or-native-underlay",
+};
+
+const PLUGIN_WRAPPER_CAPABILITY: CapabilityLedger = CapabilityLedger {
+    graph_composition: "single-graph-admitted",
+    security_underlay: "baseline-admitted",
+    stream_wrapper: "resident-simple-obfs-http",
+    packet_semantics: "tcp-stream-wrapper",
+    plugin_wrapper: "resident-simple-obfs-http",
+    legacy_layer: "none",
+    quic_option: "baseline-admitted",
+    secure_endpoint: "plain-or-native-underlay",
+};
+
+const INNER_ENCRYPTION_STREAM_CAPABILITY: CapabilityLedger = CapabilityLedger {
+    graph_composition: "single-graph-admitted",
+    security_underlay: "baseline-admitted",
+    stream_wrapper: "websocket",
+    packet_semantics: "inner-encryption-stream",
+    plugin_wrapper: "none",
+    legacy_layer: "none",
+    quic_option: "baseline-admitted",
+    secure_endpoint: "plain-or-native-underlay",
+};
+
+const PLUGIN_WRAPPER_STREAM_CAPABILITY: CapabilityLedger = CapabilityLedger {
+    graph_composition: "single-graph-admitted",
+    security_underlay: "aead-or-aead-2022",
+    stream_wrapper: "resident-plugin-wrapper",
+    packet_semantics: "tcp-stream-wrapper",
+    plugin_wrapper: "resident-plugin-wrapper",
+    legacy_layer: "none",
+    quic_option: "baseline-admitted",
+    secure_endpoint: "plain-or-native-underlay",
+};
+
+const PROXY_TRANSPORT_CAPABILITY: CapabilityLedger = CapabilityLedger {
+    graph_composition: "single-graph-admitted",
+    security_underlay: "plain-or-standard-tls",
+    stream_wrapper: "http-proxy-transport",
+    packet_semantics: "tcp-stream",
+    plugin_wrapper: "none",
+    legacy_layer: "none",
+    quic_option: "baseline-admitted",
+    secure_endpoint: "plain-or-native-underlay",
+};
+
+const SECURE_FRAME_STREAM_CAPABILITY: CapabilityLedger = CapabilityLedger {
+    graph_composition: "single-graph-admitted",
+    security_underlay: "standard-tls",
+    stream_wrapper: "secure-frame-stream",
+    packet_semantics: "udp-over-stream-or-datagram",
+    plugin_wrapper: "none",
+    legacy_layer: "none",
+    quic_option: "baseline-admitted",
+    secure_endpoint: "standard-tls-underlay",
+};
+
+const VERIFIED_QUIC_CAPABILITY: CapabilityLedger = CapabilityLedger {
+    graph_composition: "single-graph-admitted",
+    security_underlay: "verified-quic-tls",
+    stream_wrapper: "quic-stream",
+    packet_semantics: "quic-datagram-or-stream",
+    plugin_wrapper: "none",
+    legacy_layer: "none",
+    quic_option: "verified-quic-admitted",
+    secure_endpoint: "plain-or-native-underlay",
+};
+
+const QUIC_PORT_HOPPING_CAPABILITY: CapabilityLedger = CapabilityLedger {
+    graph_composition: "single-graph-admitted",
+    security_underlay: "quic-tls",
+    stream_wrapper: "quic-port-hopping",
+    packet_semantics: "quic-datagram-or-stream",
+    plugin_wrapper: "none",
+    legacy_layer: "none",
+    quic_option: "port-hopping-admitted",
+    secure_endpoint: "plain-or-native-underlay",
+};
+
+const CHAIN_CAPABILITY: CapabilityLedger = CapabilityLedger {
+    graph_composition: "parent-connect-chain-admitted",
+    security_underlay: "baseline-admitted",
+    stream_wrapper: "baseline-admitted",
+    packet_semantics: "tcp-resident-chain",
+    plugin_wrapper: "none",
+    legacy_layer: "none",
+    quic_option: "baseline-admitted",
+    secure_endpoint: "plain-or-native-underlay",
+};
+
+const LEGACY_IMPORT_CAPABILITY: CapabilityLedger = CapabilityLedger {
+    graph_composition: "single-graph-admitted",
+    security_underlay: "baseline-admitted",
+    stream_wrapper: "baseline-admitted",
+    packet_semantics: "baseline-admitted",
+    plugin_wrapper: "none",
+    legacy_layer: "legacy-import-normalizer",
+    quic_option: "baseline-admitted",
+    secure_endpoint: "plain-or-native-underlay",
+};
+
+const NOT_SUPPORTED_CAPABILITY: CapabilityLedger = CapabilityLedger {
+    graph_composition: "rejected",
+    security_underlay: "rejected",
+    stream_wrapper: "rejected",
+    packet_semantics: "rejected",
+    plugin_wrapper: "rejected",
+    legacy_layer: "rejected",
+    quic_option: "rejected",
+    secure_endpoint: "rejected",
+};
+
+const DEFERRED_CAPABILITY: CapabilityLedger = CapabilityLedger {
+    graph_composition: "single-graph-blocked",
+    security_underlay: "pending-or-policy-blocked",
+    stream_wrapper: "pending-or-policy-blocked",
+    packet_semantics: "pending-or-policy-blocked",
+    plugin_wrapper: "pending-or-policy-blocked",
+    legacy_layer: "pending-or-policy-blocked",
+    quic_option: "pending-or-policy-blocked",
+    secure_endpoint: "pending-or-policy-blocked",
+};
+
+const PENDING_LIVE_LEDGER: ExpandedLiveMatrixLedger = ExpandedLiveMatrixLedger {
+    ledger_state: "pending-live-host-evidence",
+    live_host_required: true,
+    rollback_artifact_required: true,
+    large_page_evidence_required: true,
+    blocked_rows_reduce_pass_threshold: false,
+};
+
+const SCOPED_READY_LIVE_LEDGER: ExpandedLiveMatrixLedger = ExpandedLiveMatrixLedger {
+    ledger_state: "scoped-live-host-evidence-ready",
+    live_host_required: true,
+    rollback_artifact_required: true,
+    large_page_evidence_required: true,
+    blocked_rows_reduce_pass_threshold: false,
+};
+
+const REJECTED_LIVE_LEDGER: ExpandedLiveMatrixLedger = ExpandedLiveMatrixLedger {
+    ledger_state: "not-source-supported",
+    live_host_required: false,
+    rollback_artifact_required: false,
+    large_page_evidence_required: false,
+    blocked_rows_reduce_pass_threshold: false,
+};
+
+const BLOCKED_LIVE_LEDGER: ExpandedLiveMatrixLedger = ExpandedLiveMatrixLedger {
+    ledger_state: "explicit-fail-closed",
+    live_host_required: true,
+    rollback_artifact_required: true,
+    large_page_evidence_required: true,
+    blocked_rows_reduce_pass_threshold: false,
+};
+
+const BASE_RELEASE_GATE: ReleaseGateReconciliation = ReleaseGateReconciliation {
+    current_baseline_agrees: true,
+    expanded_source_agrees: false,
+    service_contract_agrees: false,
+    product_chain_agrees: false,
+    c9_switch_ready: false,
+    c10_final_ready: false,
+    rollback_artifact_ready: false,
+};
+
+const SCOPED_READY_RELEASE_GATE: ReleaseGateReconciliation = ReleaseGateReconciliation {
+    current_baseline_agrees: true,
+    expanded_source_agrees: true,
+    service_contract_agrees: true,
+    product_chain_agrees: false,
+    c9_switch_ready: false,
+    c10_final_ready: false,
+    rollback_artifact_ready: true,
+};
+
+const REJECTED_RELEASE_GATE: ReleaseGateReconciliation = ReleaseGateReconciliation {
+    current_baseline_agrees: true,
+    expanded_source_agrees: true,
+    service_contract_agrees: true,
+    product_chain_agrees: false,
+    c9_switch_ready: false,
+    c10_final_ready: false,
+    rollback_artifact_ready: false,
+};
