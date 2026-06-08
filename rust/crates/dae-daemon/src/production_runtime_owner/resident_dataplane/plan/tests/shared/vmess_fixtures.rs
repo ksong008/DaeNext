@@ -42,7 +42,7 @@ pub(crate) fn vmess_fixture_url_with_sni(
 
 pub(crate) fn vmess_legacy_fixture_url() -> String {
     let decoded = format!(
-        "{}:{}@{}:{}?alterId=0&obfs=tcp",
+        "{}:{}@{}:{}",
         "auto",
         fixture_client_id(),
         fixture_host(FixtureEndpoint::Primary),

@@ -377,7 +377,7 @@ pub(super) fn daed_run_serves_c10_resource_runtime_log_latency_and_bundle_surfac
     let logs = http_request(port, "GET", "/api/logs?level=all", None, Some(&token));
     assert!(logs.contains("\"items\""), "{logs}");
     assert!(
-        logs.contains("runtime reload applied") || logs.contains("subscription"),
+        logs.contains("\"id\":1") && logs.contains("\"message\":\"[Reload] Finished\""),
         "{logs}"
     );
     let events = http_request_until(

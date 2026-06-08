@@ -36,17 +36,29 @@ pub(crate) fn vless_fixture_url(
 }
 
 pub(crate) fn vless_vision_fixture_url(fingerprint: &str) -> String {
-    vless_fixture_url(
-        "",
-        &fixture_host(FixtureEndpoint::Primary),
-        fixture_authority_port(),
-        "tcp",
-        "",
-        "",
-        &fixture_host(FixtureEndpoint::Authority),
-        "xtls-rprx-vision",
-        fingerprint,
-    )
+    VLESSLink {
+        ps: String::new(),
+        add: fixture_host(FixtureEndpoint::Primary),
+        port: fixture_authority_port().to_string(),
+        id: fixture_client_id(),
+        net: "tcp".to_owned(),
+        r#type: "none".to_owned(),
+        host: String::new(),
+        sni: fixture_host(FixtureEndpoint::Authority),
+        path: String::new(),
+        xhttp_mode: String::new(),
+        xhttp_extra: String::new(),
+        tls: "tls".to_owned(),
+        flow: "xtls-rprx-vision".to_owned(),
+        alpn: "h2,http/1.1".to_owned(),
+        allow_insecure: false,
+        fingerprint: fingerprint.to_owned(),
+        public_key: String::new(),
+        short_id: String::new(),
+        spider_x: String::new(),
+        protocol: "vless".to_owned(),
+    }
+    .export_url()
 }
 
 pub(crate) fn vless_vision_without_flow_fixture_url(fingerprint: &str) -> String {
