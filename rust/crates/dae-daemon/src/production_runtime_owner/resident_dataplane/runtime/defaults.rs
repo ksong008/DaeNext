@@ -13,7 +13,6 @@ pub(crate) const RESIDENT_UDP_PACKET_WORKERS_ENV: &str = "DAE_RESIDENT_UDP_PACKE
 pub(crate) const RESIDENT_UDP_PACKET_WORKERS_DEFAULT: usize = 64;
 pub(crate) const RESIDENT_UDP_PACKET_WORKERS_MIN: usize = 1;
 pub(crate) const RESIDENT_UDP_PACKET_WORKERS_MAX: usize = 1024;
-pub(crate) const RESIDENT_UDP_PACKET_WORKER_DRAIN_TIMEOUT: Duration = Duration::from_secs(2);
 pub(crate) const RESIDENT_UDP_PACKET_STACK_BYTES_ENV: &str = "DAE_RESIDENT_UDP_PACKET_STACK_BYTES";
 pub(crate) const RESIDENT_UDP_PACKET_STACK_BYTES_DEFAULT: usize = 256 * 1024;
 pub(crate) const RESIDENT_UDP_PACKET_STACK_BYTES_MIN: usize = 128 * 1024;
@@ -55,7 +54,6 @@ pub(crate) fn resident_runtime_defaults_contract() -> Value {
                 "max": RESIDENT_UDP_PACKET_STACK_BYTES_MAX,
             },
             "model": "bounded resident packet session manager keyed by graph id, outbound, peer, original destination, and packet semantics",
-            "reloadDrainTimeoutMs": RESIDENT_UDP_PACKET_WORKER_DRAIN_TIMEOUT.as_millis(),
         },
     })
 }
