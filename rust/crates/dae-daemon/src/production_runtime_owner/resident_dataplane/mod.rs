@@ -42,7 +42,6 @@ mod direct;
 mod dns;
 mod events;
 mod execution;
-mod io;
 mod plan;
 mod tcp;
 mod udp;

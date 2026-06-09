@@ -1,11 +1,8 @@
 use std::collections::{BTreeMap, VecDeque};
 use std::future::poll_fn;
-use std::io::{ErrorKind, Read, Write};
+use std::io::ErrorKind;
 use std::mem::size_of;
-use std::net::{
-    IpAddr, Ipv4Addr, Shutdown, SocketAddr, SocketAddrV4, TcpListener, TcpStream, ToSocketAddrs,
-    UdpSocket,
-};
+use std::net::{IpAddr, Ipv4Addr, SocketAddr, SocketAddrV4, TcpListener, UdpSocket};
 use std::os::fd::AsRawFd;
 use std::path::PathBuf;
 use std::pin::Pin;
@@ -15,7 +12,6 @@ use std::sync::{
     atomic::{AtomicBool, Ordering},
 };
 use std::task::{Context, Poll};
-use std::thread;
 use std::time::{Duration, Instant};
 
 use bytes::Bytes;
@@ -71,21 +67,18 @@ use rustls::{ClientConfig, RootCertStore, pki_types::ServerName};
 use serde_json::{Value, json};
 
 use super::client::{
-    AsyncResidentTlsClient, AsyncVlessTlsClient, TlsDriveOutcome, VlessTlsClient,
-    async_resident_tls_underlay_name, async_tls_underlay_name, drive_tls_io_record_aware,
-    open_async_resident_tls_client, open_async_vless_tls_client,
+    AsyncResidentTlsClient, AsyncVlessTlsClient, async_resident_tls_underlay_name,
+    async_tls_underlay_name, open_async_resident_tls_client, open_async_vless_tls_client,
 };
 use super::direct::{
-    DirectTcpConnection, DirectTcpRelayStats, open_direct_tcp_connection,
-    open_direct_tcp_connection_async, relay_tcp_direct_async,
+    DirectTcpConnection, DirectTcpRelayStats, open_direct_tcp_connection_async,
+    relay_tcp_direct_async,
 };
 use super::events::append_event;
 use super::execution::{append_runtime_execution_descriptor, tcp_execution_descriptor};
-use super::io::write_all_nonblocking;
 use super::plan::{ResidentProxyGroupPlan, ResidentProxyPlan, ResidentProxyProtocolPlan};
 use super::vision::{
-    VisionInnerTlsState, VisionUnpadder, VisionUplinkMode, drain_vision_uplink,
-    drain_vision_uplink_async,
+    VisionInnerTlsState, VisionUnpadder, VisionUplinkMode, drain_vision_uplink_async,
 };
 use super::{
     RESIDENT_CONNECT_TIMEOUT, RESIDENT_IDLE_SLEEP, RESIDENT_TCP_ACCEPT_SLEEP,

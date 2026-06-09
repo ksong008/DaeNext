@@ -31,16 +31,6 @@ impl RelayError {
     }
 }
 
-pub(crate) fn can_recover_vision_raw_direct_after_tls_error(
-    vision_enabled: bool,
-    response_header_stripped: bool,
-    vision: Option<&VisionUnpadder>,
-) -> bool {
-    vision_enabled
-        && response_header_stripped
-        && vision.is_some_and(|vision| vision.direct_command_seen)
-}
-
 #[derive(Default)]
 pub(crate) struct VlessResponseStripper {
     pub(in crate::production_runtime_owner::resident_dataplane::tcp) header: Vec<u8>,

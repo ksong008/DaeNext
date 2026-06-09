@@ -89,15 +89,6 @@ pub(crate) fn open_marked_quic_endpoint(mark: u32) -> Result<quinn::Endpoint, St
         .map_err(|err| format!("create QUIC endpoint: {err}"))
 }
 
-pub(crate) fn resolve_proxy_udp_addr(proxy: &ResidentProxyPlan) -> Result<SocketAddr, String> {
-    let target = format!("{}:{}", proxy.server_host, proxy.server_port);
-    target
-        .to_socket_addrs()
-        .map_err(|err| format!("resolve QUIC endpoint {target}: {err}"))?
-        .next()
-        .ok_or_else(|| format!("resolve QUIC endpoint {target}: no address"))
-}
-
 pub(crate) async fn resolve_proxy_udp_addr_async(
     proxy: &ResidentProxyPlan,
 ) -> Result<SocketAddr, String> {
@@ -107,23 +98,6 @@ pub(crate) async fn resolve_proxy_udp_addr_async(
         .map_err(|err| format!("resolve QUIC endpoint {target}: {err}"))?
         .next()
         .ok_or_else(|| format!("resolve QUIC endpoint {target}: no address"))
-}
-
-pub(crate) fn resolve_hysteria2_quic_remote(
-    proxy: &ResidentProxyPlan,
-    port_hop_ports: &[u16],
-) -> Result<SocketAddr, String> {
-    let selected_port = if port_hop_ports.is_empty() {
-        proxy.server_port
-    } else {
-        port_hop_ports[fastrand::usize(..port_hop_ports.len())]
-    };
-    let target = format!("{}:{selected_port}", proxy.server_host);
-    target
-        .to_socket_addrs()
-        .map_err(|err| format!("resolve Hysteria2 QUIC endpoint {target}: {err}"))?
-        .next()
-        .ok_or_else(|| format!("resolve Hysteria2 QUIC endpoint {target}: no address"))
 }
 
 pub(crate) async fn resolve_hysteria2_quic_remote_async(

@@ -1,30 +1,9 @@
 use super::*;
-pub(crate) struct VlessTlsClient {
-    pub(super) engine: VlessTlsEngine,
-}
-
 pub(crate) struct AsyncVlessTlsClient {
     pub(super) engine: AsyncVlessTlsEngine,
 }
 
 pub(crate) type AsyncResidentTlsClient = AsyncVlessTlsClient;
-
-pub(crate) enum VlessTlsEngine {
-    Rustls {
-        tcp: ResidentTcpStream,
-        conn: ClientConnection,
-        tls_records: TlsRecordReader,
-    },
-    RealityRustls {
-        tcp: ResidentTcpStream,
-        conn: ClientConnection,
-        tls_records: TlsRecordReader,
-    },
-    Boring {
-        tls: SslStream<TcpStream>,
-        pending_plaintext: Vec<u8>,
-    },
-}
 
 pub(crate) enum AsyncVlessTlsEngine {
     Rustls {
@@ -64,11 +43,6 @@ impl ResidentTlsProvider {
     }
 }
 
-pub(crate) enum TlsDriveOutcome {
-    Progressed(bool),
-    DecryptErrorRawRecord { record: Vec<u8>, error: String },
-}
-
 #[derive(Clone, Debug, Eq, PartialEq, Ord, PartialOrd)]
 pub(crate) struct ResidentTlsClientConfigKey {
     pub(super) flow: String,
@@ -102,10 +76,3 @@ pub(crate) static RUSTLS_CLIENT_CONFIG_CACHE: OnceLock<
 pub(crate) static BORING_CONNECTOR_CACHE: OnceLock<
     Mutex<BTreeMap<ResidentTlsClientConfigKey, Arc<SslConnector>>>,
 > = OnceLock::new();
-
-#[derive(Default)]
-pub(crate) struct TlsRecordReader {
-    pub(super) header: Vec<u8>,
-    pub(super) body: Vec<u8>,
-    pub(super) body_len: Option<usize>,
-}
