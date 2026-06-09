@@ -67,39 +67,21 @@ pub(crate) async fn open_async_resident_tls_client(
 pub(crate) async fn open_proxy_tcp_stream_async(
     proxy: ResidentProxyPlan,
 ) -> Result<TokioTcpStream, String> {
-    let stream = task::spawn_blocking(move || {
-        let target = resolve_proxy_addr(&proxy)?;
-        let protocol = proxy.protocol.clone();
-        let connected = magic_tcp_connect(
-            target,
-            &TcpDirectDialOptions {
-                mark: proxy.mark,
-                mptcp: proxy.mptcp,
-                timeout: RESIDENT_CONNECT_TIMEOUT,
-            },
-        )
+    let protocol = proxy.protocol.clone();
+    let target = format!("{}:{}", proxy.server_host, proxy.server_port);
+    let connected = open_direct_tcp_connection_async(target.clone(), proxy.mark, proxy.mptcp)
+        .await
         .map_err(|err| format!("connect {protocol} server {target}: {err}"))?;
-        connected
-            .stream
-            .set_read_timeout(None)
-            .map_err(|err| format!("clear {protocol} TCP read timeout: {err}"))?;
-        connected
-            .stream
-            .set_write_timeout(None)
-            .map_err(|err| format!("clear {protocol} TCP write timeout: {err}"))?;
-        connected
-            .stream
-            .set_nonblocking(true)
-            .map_err(|err| format!("set {protocol} TCP nonblocking: {err}"))?;
-        connected
-            .stream
-            .set_nodelay(true)
-            .map_err(|err| format!("set {protocol} TCP_NODELAY: {err}"))?;
-        Ok::<TcpStream, String>(connected.stream)
-    })
-    .await
-    .map_err(|err| format!("join proxy TCP connect task: {err}"))??;
-    TokioTcpStream::from_std(stream).map_err(|err| format!("adopt async proxy TCP stream: {err}"))
+    connected
+        .stream
+        .set_read_timeout(None)
+        .map_err(|err| format!("clear {protocol} TCP read timeout: {err}"))?;
+    connected
+        .stream
+        .set_write_timeout(None)
+        .map_err(|err| format!("clear {protocol} TCP write timeout: {err}"))?;
+    TokioTcpStream::from_std(connected.stream)
+        .map_err(|err| format!("adopt async proxy TCP stream: {err}"))
 }
 
 pub(crate) async fn open_async_rustls_resident_tls_client(
