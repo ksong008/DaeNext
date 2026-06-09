@@ -1,9 +1,11 @@
 use std::collections::BTreeMap;
-use std::net::{IpAddr, Ipv4Addr, SocketAddr, SocketAddrV4, ToSocketAddrs};
+use std::net::{IpAddr, Ipv4Addr, SocketAddr, SocketAddrV4};
 use std::os::fd::AsRawFd;
+use std::sync::Arc;
 
 use dae_config::{Config, DynamicFunctionValue};
 use dae_dns::DnsPacketView;
+use tokio::sync::OnceCell;
 use tokio::time;
 
 use super::RESIDENT_UDP_RESPONSE_TIMEOUT;
@@ -38,8 +40,46 @@ enum ResidentDnsRequestAction {
 #[derive(Clone, Debug)]
 struct ResidentDnsUpstream {
     tag: String,
-    target: SocketAddrV4,
+    target: ResidentDnsUpstreamTarget,
     scheme: ResidentDnsUpstreamScheme,
+}
+
+#[derive(Clone, Debug)]
+struct ResidentDnsUpstreamTarget {
+    authority: String,
+    literal_addr: Option<SocketAddrV4>,
+    resolved_addr: Arc<OnceCell<SocketAddrV4>>,
+}
+
+impl ResidentDnsUpstreamTarget {
+    async fn resolve(&self) -> Result<SocketAddrV4, String> {
+        if let Some(addr) = self.literal_addr {
+            return Ok(addr);
+        }
+        self.resolved_addr
+            .get_or_try_init(|| async { resolve_dns_upstream_async(&self.authority).await })
+            .await
+            .copied()
+    }
+}
+
+impl PartialEq for ResidentDnsUpstreamTarget {
+    fn eq(&self, other: &Self) -> bool {
+        self.authority == other.authority && self.literal_addr == other.literal_addr
+    }
+}
+
+impl Eq for ResidentDnsUpstreamTarget {}
+
+async fn resolve_dns_upstream_async(authority: &str) -> Result<SocketAddrV4, String> {
+    tokio::net::lookup_host(authority)
+        .await
+        .map_err(|err| format!("resolve DNS upstream {authority}: {err}"))?
+        .find_map(|addr| match addr {
+            SocketAddr::V4(addr) => Some(addr),
+            SocketAddr::V6(_) => None,
+        })
+        .ok_or_else(|| format!("DNS upstream {authority} returned no IPv4 address"))
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -98,12 +138,13 @@ pub(super) async fn handle_resident_dns_udp_async(
             match upstream.scheme {
                 ResidentDnsUpstreamScheme::Udp | ResidentDnsUpstreamScheme::TcpUdp => {}
             }
-            forward_dns_udp_async(upstream.target, payload, plan.mark)
+            let target = upstream.target.resolve().await?;
+            forward_dns_udp_async(target, payload, plan.mark)
                 .await
                 .map_err(|err| {
                     format!(
                         "forward DNS to upstream {} {}: {err}",
-                        upstream.tag, upstream.target
+                        upstream.tag, upstream.target.authority
                     )
                 })
         }
@@ -179,7 +220,7 @@ fn parse_dns_upstream(tag: &str, link: &str) -> Result<ResidentDnsUpstream, Stri
         }
     };
     let authority = rest.split('/').next().unwrap_or(rest);
-    let target = resolve_dns_upstream_authority(authority)?;
+    let target = parse_dns_upstream_authority(authority)?;
     Ok(ResidentDnsUpstream {
         tag: tag.to_owned(),
         target,
@@ -187,27 +228,28 @@ fn parse_dns_upstream(tag: &str, link: &str) -> Result<ResidentDnsUpstream, Stri
     })
 }
 
-fn resolve_dns_upstream_authority(authority: &str) -> Result<SocketAddrV4, String> {
+fn parse_dns_upstream_authority(authority: &str) -> Result<ResidentDnsUpstreamTarget, String> {
     let authority = authority.trim();
     if authority.is_empty() {
         return Err("DNS upstream authority is empty".to_owned());
     }
-    let with_port = if authority.rsplit_once(':').is_some() {
+    let authority = if authority.rsplit_once(':').is_some() {
         authority.to_owned()
     } else {
         format!("{authority}:53")
     };
-    if let Ok(SocketAddr::V4(addr)) = with_port.parse::<SocketAddr>() {
-        return Ok(addr);
-    }
-    with_port
-        .to_socket_addrs()
-        .map_err(|err| format!("resolve DNS upstream {with_port}: {err}"))?
-        .find_map(|addr| match addr {
-            SocketAddr::V4(addr) => Some(addr),
-            SocketAddr::V6(_) => None,
-        })
-        .ok_or_else(|| format!("DNS upstream {with_port} returned no IPv4 address"))
+    let literal_addr = match authority.parse::<SocketAddr>() {
+        Ok(SocketAddr::V4(addr)) => Some(addr),
+        Ok(SocketAddr::V6(_)) => {
+            return Err(format!("DNS upstream {authority} returned no IPv4 address"));
+        }
+        Err(_) => None,
+    };
+    Ok(ResidentDnsUpstreamTarget {
+        authority,
+        literal_addr,
+        resolved_addr: Arc::new(OnceCell::new()),
+    })
 }
 
 async fn forward_dns_udp_async(
@@ -288,8 +330,6 @@ fn unquote_config_value(value: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use std::net::Ipv4Addr;
-
     use dae_config::Config;
 
     use super::*;
@@ -312,11 +352,11 @@ mod tests {
         routing {}
         dns {
           upstream {
-            google: 'udp://8.8.8.8:53'
+            primary: 'udp://resolver.example.invalid:53'
           }
           routing {
             request {
-              fallback: google
+              fallback: primary
             }
           }
         }
@@ -325,11 +365,9 @@ mod tests {
         let plan = build_resident_dns_plan(&config).unwrap();
         match plan.request_fallback {
             ResidentDnsRequestAction::Upstream(upstream) => {
-                assert_eq!(upstream.tag, "google");
-                assert_eq!(
-                    upstream.target,
-                    SocketAddrV4::new(Ipv4Addr::new(8, 8, 8, 8), 53)
-                );
+                assert_eq!(upstream.tag, "primary");
+                assert_eq!(upstream.target.authority, "resolver.example.invalid:53");
+                assert_eq!(upstream.target.literal_addr, None);
             }
             _ => panic!("expected upstream fallback"),
         }
@@ -344,12 +382,12 @@ mod tests {
         routing {}
         dns {
           upstream {
-            google: 'udp://8.8.8.8:53'
+            primary: 'udp://resolver.example.invalid:53'
           }
           routing {
             request {
-              qtype(1) -> google
-              fallback: google
+              qtype(1) -> primary
+              fallback: primary
             }
           }
         }

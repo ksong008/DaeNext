@@ -1,4 +1,5 @@
 use super::*;
+use tokio::sync::OnceCell;
 #[derive(Clone, Debug)]
 pub(crate) struct ResidentProxyCandidatePlan {
     pub(in crate::production_runtime_owner::resident_dataplane) match_index: usize,
@@ -31,10 +32,81 @@ pub(crate) struct ResidentTcpCheckPlan {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct ResidentUdpCheckPlan {
-    pub(in crate::production_runtime_owner::resident_dataplane) target: SocketAddrV4,
+    pub(in crate::production_runtime_owner::resident_dataplane) target: ResidentUdpCheckTarget,
     pub(in crate::production_runtime_owner::resident_dataplane) host: String,
     pub(in crate::production_runtime_owner::resident_dataplane) lookup_host: String,
 }
+
+#[derive(Clone, Debug)]
+pub(crate) struct ResidentUdpCheckTarget {
+    authority: String,
+    literal_addr: Option<SocketAddrV4>,
+    resolved_addr: Arc<OnceCell<SocketAddrV4>>,
+}
+
+impl ResidentUdpCheckTarget {
+    pub(in crate::production_runtime_owner::resident_dataplane) fn new(
+        authority: String,
+        literal_addr: Option<SocketAddrV4>,
+    ) -> Self {
+        Self {
+            authority,
+            literal_addr,
+            resolved_addr: Arc::new(OnceCell::new()),
+        }
+    }
+
+    pub(in crate::production_runtime_owner::resident_dataplane) fn literal(
+        addr: SocketAddrV4,
+    ) -> Self {
+        Self::new(addr.to_string(), Some(addr))
+    }
+
+    pub(in crate::production_runtime_owner::resident_dataplane) fn authority(&self) -> &str {
+        &self.authority
+    }
+
+    #[cfg(test)]
+    pub(in crate::production_runtime_owner::resident_dataplane) fn literal_addr(
+        &self,
+    ) -> Option<SocketAddrV4> {
+        self.literal_addr
+    }
+
+    pub(in crate::production_runtime_owner::resident_dataplane) async fn resolve(
+        &self,
+    ) -> Result<SocketAddrV4, String> {
+        if let Some(addr) = self.literal_addr {
+            return Ok(addr);
+        }
+        self.resolved_addr
+            .get_or_try_init(|| async {
+                tokio::net::lookup_host(self.authority.as_str())
+                    .await
+                    .map_err(|err| format!("resolve UDP health check {}: {err}", self.authority))?
+                    .find_map(|addr| match addr {
+                        SocketAddr::V4(addr) => Some(addr),
+                        SocketAddr::V6(_) => None,
+                    })
+                    .ok_or_else(|| {
+                        format!(
+                            "resolve UDP health check {}: no IPv4 address",
+                            self.authority
+                        )
+                    })
+            })
+            .await
+            .copied()
+    }
+}
+
+impl PartialEq for ResidentUdpCheckTarget {
+    fn eq(&self, other: &Self) -> bool {
+        self.authority == other.authority && self.literal_addr == other.literal_addr
+    }
+}
+
+impl Eq for ResidentUdpCheckTarget {}
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct ResidentProxyLatencySnapshot {
@@ -401,7 +473,10 @@ impl ResidentProxyGroupPlan {
                 method: "HEAD".to_owned(),
             },
             udp_check: ResidentUdpCheckPlan {
-                target: SocketAddrV4::new(Ipv4Addr::new(8, 8, 8, 8), 53),
+                target: ResidentUdpCheckTarget::literal(SocketAddrV4::new(
+                    Ipv4Addr::new(8, 8, 8, 8),
+                    53,
+                )),
                 host: "dns.google".to_owned(),
                 lookup_host: "connectivitycheck.gstatic.com.".to_owned(),
             },

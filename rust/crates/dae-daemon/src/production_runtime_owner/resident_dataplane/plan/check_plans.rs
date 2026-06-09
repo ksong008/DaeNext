@@ -106,7 +106,7 @@ pub(super) fn group_udp_check_plan(
         )
     })?;
     let explicit_addresses = if values.len() > 1 { &values[1..] } else { &[] };
-    let target = explicit_or_resolved_ipv4(&host, port, explicit_addresses).map_err(|err| {
+    let target = udp_check_target(&host, port, explicit_addresses).map_err(|err| {
         format!(
             "resident dataplane group {} udp_check_dns {raw}: {err}",
             group.name
@@ -157,32 +157,25 @@ pub(super) fn tcp_check_target(host: &str, port: u16, explicit_addresses: &[Stri
     format!("{host}:{port}")
 }
 
-pub(super) fn explicit_or_resolved_ipv4(
+pub(super) fn udp_check_target(
     host: &str,
     port: u16,
     explicit_addresses: &[String],
-) -> Result<SocketAddrV4, String> {
+) -> Result<ResidentUdpCheckTarget, String> {
     for raw in explicit_addresses {
         let raw = raw.trim();
         if raw.is_empty() {
             continue;
         }
         if let Ok(ip) = raw.parse::<Ipv4Addr>() {
-            return Ok(SocketAddrV4::new(ip, port));
+            return Ok(ResidentUdpCheckTarget::literal(SocketAddrV4::new(ip, port)));
         }
     }
     if let Ok(ip) = host.parse::<Ipv4Addr>() {
-        return Ok(SocketAddrV4::new(ip, port));
+        return Ok(ResidentUdpCheckTarget::literal(SocketAddrV4::new(ip, port)));
     }
     let authority = format!("{host}:{port}");
-    authority
-        .to_socket_addrs()
-        .map_err(|err| format!("resolve {authority}: {err}"))?
-        .find_map(|addr| match addr {
-            SocketAddr::V4(addr) => Some(addr),
-            SocketAddr::V6(_) => None,
-        })
-        .ok_or_else(|| format!("resolve {authority}: no IPv4 address"))
+    Ok(ResidentUdpCheckTarget::new(authority, None))
 }
 
 pub(super) fn duration_nanos_to_millis(nanos: i64) -> i64 {
