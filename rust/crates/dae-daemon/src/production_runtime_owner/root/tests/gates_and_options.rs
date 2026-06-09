@@ -367,6 +367,15 @@ pub(super) fn production_runtime_active_dns_requires_active_udp() {
 const CONFIGURED_ACTIVE_DNS_TEST_PORT: u16 = 8053;
 
 #[test]
+pub(super) fn production_runtime_active_udp_loopback_target_cidr_is_address_family_aware() {
+    assert_eq!(
+        active_udp_loopback_target_cidr("127.0.0.1").unwrap(),
+        "127.0.0.1/32"
+    );
+    assert_eq!(active_udp_loopback_target_cidr("::1").unwrap(), "::1/128");
+}
+
+#[test]
 pub(super) fn production_runtime_active_dns_requires_nonzero_target_port() {
     let root = std::env::temp_dir().join(format!(
         "dae-daemon-production-runtime-active-dns-zero-port-{}",

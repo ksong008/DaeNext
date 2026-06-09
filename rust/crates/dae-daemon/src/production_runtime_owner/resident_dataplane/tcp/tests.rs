@@ -1,5 +1,6 @@
 use super::*;
 use serde_json::json;
+use std::net::SocketAddrV4;
 
 const FLOW_DIAL_TARGET: &str = "flow-dial-target";
 const FLOW_OUTBOUND: &str = "flow-outbound";
@@ -211,7 +212,7 @@ fn proxy_failure_event_carries_relay_diagnostics() {
 
     let event = proxy_tcp_failed_event(
         SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::new(192, 0, 2, 10), 43100)),
-        SocketAddrV4::new(Ipv4Addr::new(198, 51, 100, 20), 443),
+        SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::new(198, 51, 100, 20), 443)),
         &selection,
         &sniff,
         "boringssl",
@@ -255,8 +256,8 @@ fn proxy_failure_event_carries_relay_diagnostics() {
 #[test]
 fn resident_tcp_selection_allows_builtin_direct_without_proxy_plan() {
     let router = tcp_router_for_test(fallback_matcher("user:2", 0), TcpDialMode::DomainPlusPlus);
-    let peer = SocketAddrV4::new(Ipv4Addr::new(192, 0, 2, 10), 43100);
-    let dst = SocketAddrV4::new(Ipv4Addr::new(198, 51, 100, 20), 443);
+    let peer = SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::new(192, 0, 2, 10), 43100));
+    let dst = SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::new(198, 51, 100, 20), 443));
     let selection = router
         .select_from_routing_result(
             peer,
@@ -286,8 +287,8 @@ fn resident_tcp_selection_reroutes_control_plane_result_to_direct() {
         fallback_matcher("direct", 0x77),
         TcpDialMode::DomainPlusPlus,
     );
-    let peer = SocketAddrV4::new(Ipv4Addr::new(192, 0, 2, 10), 43100);
-    let dst = SocketAddrV4::new(Ipv4Addr::new(203, 0, 113, 99), 443);
+    let peer = SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::new(192, 0, 2, 10), 43100));
+    let dst = SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::new(203, 0, 113, 99), 443));
     let selection = router
         .select_from_routing_result(
             peer,
@@ -315,8 +316,8 @@ fn resident_tcp_selection_reroutes_control_plane_result_to_direct() {
 #[test]
 fn resident_tcp_selection_returns_block_without_proxy_plan() {
     let router = tcp_router_for_test(fallback_matcher("user:2", 0), TcpDialMode::Ip);
-    let peer = SocketAddrV4::new(Ipv4Addr::new(192, 0, 2, 10), 43100);
-    let dst = SocketAddrV4::new(Ipv4Addr::new(198, 51, 100, 20), 443);
+    let peer = SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::new(192, 0, 2, 10), 43100));
+    let dst = SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::new(198, 51, 100, 20), 443));
     let selection = router
         .select_from_routing_result(
             peer,
@@ -338,8 +339,8 @@ fn resident_tcp_selection_returns_block_without_proxy_plan() {
 #[test]
 fn resident_tcp_selection_still_rejects_missing_user_proxy_plan() {
     let router = tcp_router_for_test(fallback_matcher("user:2", 0), TcpDialMode::Ip);
-    let peer = SocketAddrV4::new(Ipv4Addr::new(192, 0, 2, 10), 43100);
-    let dst = SocketAddrV4::new(Ipv4Addr::new(198, 51, 100, 20), 443);
+    let peer = SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::new(192, 0, 2, 10), 43100));
+    let dst = SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::new(198, 51, 100, 20), 443));
     let err = router
         .select_from_routing_result(
             peer,
@@ -361,8 +362,8 @@ fn resident_tcp_selection_keeps_ip_target_when_domain_plus_plus_has_no_sniffed_d
         fallback_matcher("direct", 0x77),
         TcpDialMode::DomainPlusPlus,
     );
-    let peer = SocketAddrV4::new(Ipv4Addr::new(192, 0, 2, 10), 43100);
-    let dst = SocketAddrV4::new(Ipv4Addr::new(91, 108, 56, 177), 443);
+    let peer = SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::new(192, 0, 2, 10), 43100));
+    let dst = SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::new(91, 108, 56, 177), 443));
     let selection = router
         .select_from_routing_result(
             peer,

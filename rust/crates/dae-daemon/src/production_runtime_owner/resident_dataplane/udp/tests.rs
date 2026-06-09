@@ -1,6 +1,6 @@
 #[cfg(test)]
 mod tests {
-    use std::net::{Ipv4Addr, SocketAddrV4};
+    use std::net::{Ipv4Addr, Ipv6Addr, SocketAddr, SocketAddrV4};
 
     use super::super::super::plan::{ResidentProxyPlan, ResidentProxyProtocolPlan};
     use super::super::*;
@@ -9,7 +9,7 @@ mod tests {
     fn resident_vless_udp_response_parser_handles_vision_payload() {
         let key = [1_u8; 16];
         let frame = xudp_frame(
-            SocketAddrV4::new(Ipv4Addr::new(8, 8, 8, 8), 53),
+            SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::new(8, 8, 8, 8), 53)),
             &[0x12, 0x34],
         )
         .unwrap();
@@ -27,6 +27,21 @@ mod tests {
     }
 
     #[test]
+    fn resident_vless_xudp_frame_encodes_ipv6_destination() {
+        let target = SocketAddr::new(Ipv6Addr::LOCALHOST.into(), 853);
+        let frame = xudp_frame(target, &[0xaa]).unwrap();
+        let metadata_len = u16::from_be_bytes([frame[0], frame[1]]) as usize;
+        let metadata = &frame[2..2 + metadata_len];
+        assert_eq!(metadata[0..2], [0, 0]);
+        assert_eq!(metadata[2], XUDP_COMMAND_NEW);
+        assert_eq!(metadata[3], XUDP_OPTION_DATA);
+        assert_eq!(metadata[4], XUDP_NETWORK_UDP);
+        assert_eq!(u16::from_be_bytes([metadata[5], metadata[6]]), 853);
+        assert_eq!(metadata[7], 3);
+        assert_eq!(&metadata[8..24], &Ipv6Addr::LOCALHOST.octets());
+    }
+
+    #[test]
     fn resident_vless_vision_udp_request_uses_xudp_mux_target() {
         let mut proxy =
             test_udp_proxy(ResidentProxyProtocolPlan::VlessVisionTcpTls { key: [9_u8; 16] });
@@ -35,7 +50,7 @@ mod tests {
         proxy.tls = "tls".to_owned();
         let request = build_vless_udp_request(
             &proxy,
-            SocketAddrV4::new(Ipv4Addr::UNSPECIFIED, 53),
+            SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::UNSPECIFIED, 53)),
             &[0xde, 0xad],
         )
         .unwrap();
@@ -55,7 +70,7 @@ mod tests {
             transport_path: String::new(),
         });
         proxy.protocol = "http-proxy".to_owned();
-        let original_dst = SocketAddrV4::new(Ipv4Addr::UNSPECIFIED, 53);
+        let original_dst = SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::UNSPECIFIED, 53));
         let mut executor = UdpSessionExecutor::new_proxy_packet(&proxy);
         let dns = ResidentDnsPlan::asis(proxy.mark);
         let err = executor
@@ -347,8 +362,10 @@ mod tests {
             username: String::new(),
             password: String::new(),
         });
-        let executor =
-            UdpSessionExecutor::new(&proxy, SocketAddrV4::new(Ipv4Addr::UNSPECIFIED, 53));
+        let executor = UdpSessionExecutor::new(
+            &proxy,
+            SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::UNSPECIFIED, 53)),
+        );
         assert_eq!(udp_executor_shape(&executor), UdpExecutorShape::Dns);
     }
 
