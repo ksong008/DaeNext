@@ -10,6 +10,7 @@ pub(crate) fn resident_udp_loop(
     metrics: Arc<ResidentDataplaneMetrics>,
     active_sessions: Arc<AtomicUsize>,
     session_limit: usize,
+    session_queue_depth: usize,
 ) {
     run_resident_udp_session_manager(
         socket,
@@ -21,5 +22,6 @@ pub(crate) fn resident_udp_loop(
         metrics,
         active_sessions,
         session_limit,
+        session_queue_depth,
     );
 }

@@ -49,6 +49,7 @@ pub(super) fn run_resident_udp_session_manager(
     metrics: Arc<ResidentDataplaneMetrics>,
     active_sessions: Arc<AtomicUsize>,
     session_limit: usize,
+    session_queue_depth: usize,
 ) {
     let runtime = match tokio::runtime::Builder::new_current_thread()
         .enable_io()
@@ -75,6 +76,7 @@ pub(super) fn run_resident_udp_session_manager(
         metrics,
         active_sessions,
         session_limit.max(1),
+        session_queue_depth.max(1),
     ));
 }
 
@@ -88,6 +90,7 @@ async fn run_resident_udp_session_manager_async(
     metrics: Arc<ResidentDataplaneMetrics>,
     active_sessions: Arc<AtomicUsize>,
     session_limit: usize,
+    session_queue_depth: usize,
 ) {
     if let Err(err) = socket.set_nonblocking(true) {
         append_event(
@@ -123,7 +126,7 @@ async fn run_resident_udp_session_manager_async(
                 "manager": "resident-udp-session-manager",
                 "runtime": "tokio-current-thread",
                 "sessionLimit": session_limit,
-                "perSessionQueueDepth": session_limit,
+                "perSessionQueueDepth": session_queue_depth,
                 "keyFields": ["graphId", "outbound", "peer", "originalDestination", "packetSemantics"],
             },
         }),
@@ -152,6 +155,7 @@ async fn run_resident_udp_session_manager_async(
                         &mut sessions,
                         &cleanup_tx,
                         session_limit,
+                        session_queue_depth,
                     ),
                     Err(err) => {
                         if !stop.load(Ordering::Relaxed) {
@@ -206,6 +210,7 @@ fn handle_manager_packet(
     sessions: &mut HashMap<UdpSessionKey, UdpSessionEntry>,
     cleanup_tx: &mpsc::Sender<UdpSessionKey>,
     session_limit: usize,
+    session_queue_depth: usize,
 ) {
     let Some(original_dst) = packet.original_dst else {
         append_event(
@@ -247,7 +252,7 @@ fn handle_manager_packet(
             );
             return;
         }
-        let (sender, receiver) = mpsc::channel::<ManagedUdpPacket>(session_limit);
+        let (sender, receiver) = mpsc::channel::<ManagedUdpPacket>(session_queue_depth);
         let context = UdpSessionActorContext {
             dns: Arc::clone(dns),
             event_file: event_file.clone(),
@@ -277,6 +282,7 @@ fn handle_manager_packet(
                 "reason": "resident UDP session queue full",
                 "error": err.to_string(),
                 "session_limit": session_limit,
+                "session_queue_depth": session_queue_depth,
                 "packetSession": key.to_value(),
             }),
         );
