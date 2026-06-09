@@ -6,14 +6,26 @@ pub(super) fn setup_runtime_topology(
     super::super::topology::setup_production_topology(executed_steps, options)
 }
 
+fn env_var_with_legacy(
+    primary: &'static str,
+    legacy: &'static str,
+) -> Option<(&'static str, String)> {
+    env::var(primary)
+        .map(|value| (primary, value))
+        .or_else(|_| env::var(legacy).map(|value| (legacy, value)))
+        .ok()
+}
+
 pub(super) fn resolve_source_object(artifact_dir: &Path) -> Result<PathBuf, String> {
-    if let Ok(path) = env::var(DEFAULT_SOURCE_OBJECT_ENV) {
+    if let Some((env_name, path)) =
+        env_var_with_legacy(DEFAULT_SOURCE_OBJECT_ENV, DEFAULT_SOURCE_OBJECT_LEGACY_ENV)
+    {
         let path = PathBuf::from(path);
         if path.is_file() {
             return Ok(path);
         }
         return Err(format!(
-            "{DEFAULT_SOURCE_OBJECT_ENV} points to a missing source object: {}",
+            "{env_name} points to a missing source object: {}",
             path_string(&path)
         ));
     }
@@ -52,13 +64,15 @@ pub(super) fn resolve_native_object(artifact_dir: &Path) -> Result<Option<PathBu
     if !resident_native_ebpf_enabled() {
         return Ok(None);
     }
-    if let Ok(path) = env::var(DEFAULT_NATIVE_OBJECT_ENV) {
+    if let Some((env_name, path)) =
+        env_var_with_legacy(DEFAULT_NATIVE_OBJECT_ENV, DEFAULT_NATIVE_OBJECT_LEGACY_ENV)
+    {
         let path = PathBuf::from(path);
         if path.is_file() {
             return Ok(Some(path));
         }
         return Err(format!(
-            "{DEFAULT_NATIVE_OBJECT_ENV} points to a missing native object: {}",
+            "{env_name} points to a missing native object: {}",
             path_string(&path)
         ));
     }
@@ -85,7 +99,8 @@ pub(super) fn resolve_native_object(_artifact_dir: &Path) -> Result<Option<PathB
 
 #[cfg(feature = "native-ebpf")]
 pub(super) fn resident_native_ebpf_enabled() -> bool {
-    env::var(DEFAULT_NATIVE_EBPF_ENV)
+    env_var_with_legacy(DEFAULT_NATIVE_EBPF_ENV, DEFAULT_NATIVE_EBPF_LEGACY_ENV)
+        .map(|(_, value)| value)
         .map(|value| {
             !matches!(
                 value.as_str(),
@@ -109,12 +124,15 @@ pub(super) fn resident_dataplane_enabled() -> bool {
 
 #[cfg(feature = "native-ebpf")]
 pub(super) fn resolve_native_backend() -> Result<AttachBackend, String> {
-    let Ok(raw) = env::var(DEFAULT_NATIVE_BACKEND_ENV) else {
+    let Some((env_name, raw)) = env_var_with_legacy(
+        DEFAULT_NATIVE_BACKEND_ENV,
+        DEFAULT_NATIVE_BACKEND_LEGACY_ENV,
+    ) else {
         return Ok(default_native_backend());
     };
     parse_native_backend(&raw).ok_or_else(|| {
         format!(
-            "{DEFAULT_NATIVE_BACKEND_ENV} must be one of auto, tcx, tc-netlink, tc_netlink, tc-command-fallback, tc_command_fallback; got {raw}"
+            "{env_name} must be one of auto, tcx, tc-netlink, tc_netlink, tc-command-fallback, tc_command_fallback; got {raw}"
         )
     })
 }
