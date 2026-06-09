@@ -1,10 +1,6 @@
-use std::collections::VecDeque;
-use std::io::{ErrorKind, Read, Write};
-use std::net::TcpStream;
-
 use dae_outbound::shared_transport::{
-    DEFAULT_WS_KEY, HttpUpgradeOptions, WS_MASK_KEY, http_upgrade_request, read_http_head,
-    validate_http_status, websocket_client_binary_frame, websocket_handshake_request,
+    DEFAULT_WS_KEY, HttpUpgradeOptions, WS_MASK_KEY, http_upgrade_request, validate_http_status,
+    websocket_client_binary_frame, websocket_handshake_request,
 };
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use tokio::time;
@@ -38,19 +34,6 @@ pub(super) async fn httpupgrade_handshake_over_resident_tls_async(
     validate_http_status(&response, 101).map_err(|err| format!("validate HTTP Upgrade: {err}"))
 }
 
-pub(super) fn websocket_handshake_over_plain_stream(
-    stream: &mut TcpStream,
-    options: &HttpUpgradeOptions,
-) -> Result<(), String> {
-    let request = websocket_handshake_request(options, DEFAULT_WS_KEY);
-    stream
-        .write_all(&request)
-        .map_err(|err| format!("write websocket handshake: {err}"))?;
-    let response =
-        read_http_head(stream).map_err(|err| format!("read websocket handshake: {err}"))?;
-    validate_http_status(&response, 101).map_err(|err| format!("validate websocket upgrade: {err}"))
-}
-
 pub(super) async fn websocket_handshake_over_async_stream<S>(
     stream: &mut S,
     options: &HttpUpgradeOptions,
@@ -67,19 +50,6 @@ where
     validate_http_status(&response, 101).map_err(|err| format!("validate websocket upgrade: {err}"))
 }
 
-pub(super) fn httpupgrade_handshake_over_plain_stream(
-    stream: &mut TcpStream,
-    options: &HttpUpgradeOptions,
-) -> Result<(), String> {
-    let request = http_upgrade_request(options);
-    stream
-        .write_all(&request)
-        .map_err(|err| format!("write HTTP Upgrade handshake: {err}"))?;
-    let response =
-        read_http_head(stream).map_err(|err| format!("read HTTP Upgrade handshake: {err}"))?;
-    validate_http_status(&response, 101).map_err(|err| format!("validate HTTP Upgrade: {err}"))
-}
-
 pub(super) async fn httpupgrade_handshake_over_async_stream<S>(
     stream: &mut S,
     options: &HttpUpgradeOptions,
@@ -94,18 +64,6 @@ where
         .map_err(|err| format!("write HTTP Upgrade handshake: {err}"))?;
     let response = read_http_head_from_async_stream(stream, "read HTTP Upgrade handshake").await?;
     validate_http_status(&response, 101).map_err(|err| format!("validate HTTP Upgrade: {err}"))
-}
-
-pub(super) fn write_websocket_binary_frame_to_stream(
-    stream: &mut TcpStream,
-    payload: &[u8],
-    label: &str,
-) -> Result<(), String> {
-    let frame = websocket_client_binary_frame(payload, WS_MASK_KEY)
-        .map_err(|err| format!("{label}: {err}"))?;
-    stream
-        .write_all(&frame)
-        .map_err(|err| format!("{label}: {err}"))
 }
 
 pub(super) async fn write_websocket_binary_frame_to_async_stream<S>(
@@ -254,49 +212,5 @@ impl WebSocketBinaryFrameDecoder {
 
     pub(crate) fn is_closed(&self) -> bool {
         self.closed
-    }
-}
-
-pub(super) struct WebSocketPayloadReader<'a> {
-    stream: &'a mut TcpStream,
-    decoder: WebSocketBinaryFrameDecoder,
-    pending: VecDeque<u8>,
-    buffer: [u8; 16 * 1024],
-}
-
-impl<'a> WebSocketPayloadReader<'a> {
-    pub(super) fn new(stream: &'a mut TcpStream) -> Self {
-        Self {
-            stream,
-            decoder: WebSocketBinaryFrameDecoder::default(),
-            pending: VecDeque::new(),
-            buffer: [0_u8; 16 * 1024],
-        }
-    }
-}
-
-impl Read for WebSocketPayloadReader<'_> {
-    fn read(&mut self, out: &mut [u8]) -> std::io::Result<usize> {
-        while self.pending.is_empty() {
-            if self.decoder.is_closed() {
-                return Ok(0);
-            }
-            let read = self.stream.read(&mut self.buffer)?;
-            if read == 0 {
-                return Ok(0);
-            }
-            let frames = self
-                .decoder
-                .push(&self.buffer[..read])
-                .map_err(|err| std::io::Error::new(ErrorKind::InvalidData, err))?;
-            for frame in frames {
-                self.pending.extend(frame);
-            }
-        }
-        let len = out.len().min(self.pending.len());
-        for byte in &mut out[..len] {
-            *byte = self.pending.pop_front().unwrap_or_default();
-        }
-        Ok(len)
     }
 }

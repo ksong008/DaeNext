@@ -1,4 +1,3 @@
-use super::super::vision::VisionUnpadState;
 use super::*;
 use serde_json::json;
 
@@ -9,6 +8,34 @@ const FLOW_DIALER: &str = "flow-dialer";
 const FLOW_PROCESS: &str = "flow-process";
 const FLOW_MAC: &str = "flow-mac";
 const FLOW_SNIFFED_DOMAIN: &str = "flow-sniffed-domain";
+
+struct TestAsyncRead {
+    bytes: Vec<u8>,
+    offset: usize,
+}
+
+impl TestAsyncRead {
+    fn new(bytes: Vec<u8>) -> Self {
+        Self { bytes, offset: 0 }
+    }
+}
+
+impl AsyncRead for TestAsyncRead {
+    fn poll_read(
+        mut self: Pin<&mut Self>,
+        _cx: &mut Context<'_>,
+        buf: &mut ReadBuf<'_>,
+    ) -> Poll<std::io::Result<()>> {
+        if self.offset >= self.bytes.len() {
+            return Poll::Ready(Ok(()));
+        }
+        let remaining = &self.bytes[self.offset..];
+        let len = remaining.len().min(buf.remaining());
+        buf.put_slice(&remaining[..len]);
+        self.offset += len;
+        Poll::Ready(Ok(()))
+    }
+}
 
 #[test]
 fn resident_upload_relay_treats_peer_close_as_graceful_end() {
@@ -61,21 +88,14 @@ fn simple_obfs_http_status_accepts_ok_or_switching_protocols() {
     assert!(validate_simple_obfs_http_response_status(b"HTTP/1.1 404 Not Found\r\n\r\n").is_err());
 }
 
-#[test]
-fn simple_obfs_tls_app_data_reader_unwraps_followup_frames() {
-    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
-    let addr = listener.local_addr().unwrap();
-    let handle = thread::spawn(move || {
-        let (mut stream, _) = listener.accept().unwrap();
-        let frame = simple_obfs_tls_application_data_frame(b"tail").unwrap();
-        stream.write_all(&frame).unwrap();
-    });
-    let mut stream = TcpStream::connect(addr).unwrap();
-    let mut reader = SimpleObfsTlsAppDataReader::new(b"head".to_vec(), &mut stream);
+#[tokio::test(flavor = "current_thread")]
+async fn simple_obfs_tls_app_data_reader_unwraps_followup_frames() {
+    let frame = simple_obfs_tls_application_data_frame(b"tail").unwrap();
+    let mut stream = TestAsyncRead::new(frame);
+    let mut reader = AsyncSimpleObfsTlsAppDataReader::new(b"head".to_vec(), &mut stream);
     let mut out = [0_u8; 8];
-    reader.read_exact(&mut out).unwrap();
+    reader.read_exact(&mut out).await.unwrap();
     assert_eq!(&out, b"headtail");
-    handle.join().unwrap();
 }
 
 #[test]
@@ -231,76 +251,6 @@ fn proxy_failure_event_carries_relay_diagnostics() {
     assert_eq!(event["group_policy"], FLOW_POLICY);
     assert_eq!(event["node_tag"], FLOW_DIALER);
     assert_eq!(event["sniffed_domain"], FLOW_SNIFFED_DOMAIN);
-}
-
-#[test]
-fn resident_vision_raw_direct_recovery_requires_explicit_direct_command() {
-    let key = [7_u8; 16];
-    let mut unpadder = VisionUnpadder::new(key);
-    assert!(!can_recover_vision_raw_direct_after_tls_error(
-        true,
-        true,
-        Some(&unpadder)
-    ));
-
-    let mut uuid_sent = false;
-    let end_block = super::super::vision::vision_padding_block(
-        b"tail",
-        super::super::VISION_COMMAND_END,
-        key,
-        &mut uuid_sent,
-        false,
-    );
-    let mut ended = VisionUnpadder::new(key);
-    assert_eq!(ended.consume(&end_block).unwrap(), b"tail");
-    assert!(matches!(ended.state, VisionUnpadState::Raw));
-    assert!(!can_recover_vision_raw_direct_after_tls_error(
-        true,
-        true,
-        Some(&ended)
-    ));
-
-    let mut uuid_sent = false;
-    let block = super::super::vision::vision_padding_block(
-        b"hello",
-        super::super::VISION_COMMAND_CONTINUE,
-        key,
-        &mut uuid_sent,
-        false,
-    );
-    assert_eq!(unpadder.consume(&block).unwrap(), b"hello");
-    assert!(!can_recover_vision_raw_direct_after_tls_error(
-        true,
-        true,
-        Some(&unpadder)
-    ));
-
-    let mut uuid_sent = false;
-    let direct_block = super::super::vision::vision_padding_block(
-        b"raw",
-        super::super::VISION_COMMAND_DIRECT,
-        key,
-        &mut uuid_sent,
-        false,
-    );
-    let mut direct = VisionUnpadder::new(key);
-    assert_eq!(direct.consume(&direct_block).unwrap(), b"raw");
-    assert!(direct.direct_command_seen);
-    assert!(can_recover_vision_raw_direct_after_tls_error(
-        true,
-        true,
-        Some(&direct)
-    ));
-    assert!(!can_recover_vision_raw_direct_after_tls_error(
-        false,
-        true,
-        Some(&direct)
-    ));
-    assert!(!can_recover_vision_raw_direct_after_tls_error(
-        true,
-        false,
-        Some(&direct)
-    ));
 }
 
 #[test]
