@@ -6,6 +6,7 @@ pub(super) const BPF_MAP_TYPE_ARRAY_OF_MAPS: u32 = 12;
 pub(super) const BPF_F_NO_PREALLOC: u32 = 1;
 pub(super) const LPM_ARRAY_MAP_NAME: &str = "lpm_array_map";
 pub(super) const UNUSED_LPM_TYPE_NAME: &str = "unused_lpm_type";
+pub const DEFAULT_ALLOWED_UNSUPPORTED_MAP_NAMES: &[&str] = &[LPM_ARRAY_MAP_NAME];
 pub const TRACE_CORE_SIDELOAD_ENABLED: bool = false;
 
 unsafe impl aya::Pod for BpfDaeParam {}
@@ -16,6 +17,7 @@ pub struct AyaUserspaceLoaderOptions<'a> {
     pub param: Option<BpfDaeParam>,
     pub map_pin_path: Option<&'a Path>,
     pub allow_unsupported_maps: bool,
+    pub allowed_unsupported_map_names: &'a [&'a str],
     pub max_entries_overrides: &'a [(&'a str, u32)],
     pub prepin_lpm_array_map: bool,
 }
@@ -27,6 +29,7 @@ impl<'a> AyaUserspaceLoaderOptions<'a> {
             param: None,
             map_pin_path: None,
             allow_unsupported_maps: true,
+            allowed_unsupported_map_names: DEFAULT_ALLOWED_UNSUPPORTED_MAP_NAMES,
             max_entries_overrides: &[],
             prepin_lpm_array_map: false,
         }
@@ -48,17 +51,41 @@ pub struct AyaUserspaceLoadReport {
     pub param_global_set: bool,
     pub map_pin_path: Option<PathBuf>,
     pub allow_unsupported_maps: bool,
+    pub allowed_unsupported_map_names: Vec<String>,
     pub loaded_map_names: Vec<String>,
+    pub loaded_map_specs: Vec<AyaLoadedMapSpec>,
     pub loaded_program_names: Vec<String>,
     pub max_entries_overrides: Vec<(String, u32)>,
     pub map_in_map_pins: Vec<AyaMapInMapPinReport>,
     pub missing_catalog_maps: Vec<&'static str>,
+    pub map_spec_mismatches: Vec<AyaMapSpecMismatch>,
+    pub unsupported_map_names: Vec<String>,
+    pub unexpected_unsupported_map_names: Vec<String>,
     pub pinned_reuse_maps_present: Vec<String>,
     pub listen_socket_map_present: bool,
     pub loader_backend: LoaderBackend,
     pub default_attach_backend: AttachBackend,
     pub c_ebpf_object_fallback_required: bool,
     pub command_fallback_required: bool,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct AyaLoadedMapSpec {
+    pub name: String,
+    pub map_type: String,
+    pub key_size: u32,
+    pub value_size: u32,
+    pub max_entries: u32,
+    pub flags: u32,
+    pub unsupported: bool,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct AyaMapSpecMismatch {
+    pub name: String,
+    pub field: &'static str,
+    pub expected: String,
+    pub actual: String,
 }
 
 pub struct AyaUserspaceLoadedObject {

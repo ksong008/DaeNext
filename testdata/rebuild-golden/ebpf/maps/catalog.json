@@ -51,7 +51,7 @@
       "key_size": 4,
       "max_entries": 1032,
       "name": "lpm_array_map",
-      "pinning": "PinNone",
+      "pinning": "PinByName",
       "type": "ArrayOfMaps",
       "value_size": 4
     },

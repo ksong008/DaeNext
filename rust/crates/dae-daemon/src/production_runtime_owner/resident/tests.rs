@@ -127,6 +127,50 @@ mod tests {
         ));
     }
 
+    #[test]
+    fn startup_evidence_carries_reusable_map_capacity_and_cgroup_contracts() {
+        let report = json!({
+            "status": "pass",
+            "resident_reusable_maps": [{
+                "name": "routing_tuples_map",
+                "status": "pass",
+                "id": 7,
+                "source": "native-runtime",
+                "capacity": {
+                    "id": 7,
+                    "entries": 1,
+                    "maxEntries": 131072,
+                    "usageRatio": 0.00001,
+                    "nearCapacity": false
+                }
+            }],
+            "resident_cgroup_attach": {
+                "pname": {
+                    "source": "current_comm",
+                    "coreEnabled": false,
+                    "currentTaskArgvEnabled": false
+                },
+                "linkLifecycle": {
+                    "status": "owned-by-aya-runtime",
+                    "releaseBoundary": "resident-runtime-reset"
+                }
+            },
+            "executed_steps": [],
+            "resident_lan_routing": []
+        });
+        let evidence = startup_evidence_from_report(&report);
+        assert_eq!(
+            evidence["mapCapacity"][0]["name"],
+            json!("routing_tuples_map")
+        );
+        assert_eq!(evidence["cgroupPname"]["source"], json!("current_comm"));
+        assert_eq!(evidence["cgroupPname"]["coreEnabled"], json!(false));
+        assert_eq!(
+            evidence["cgroupLinkLifecycle"]["releaseBoundary"],
+            json!("resident-runtime-reset")
+        );
+    }
+
     #[cfg(feature = "native-ebpf")]
     #[test]
     fn resident_native_backend_defaults_to_auto() {

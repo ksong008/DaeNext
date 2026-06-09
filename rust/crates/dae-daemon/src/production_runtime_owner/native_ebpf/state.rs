@@ -37,6 +37,18 @@ impl NativeEbpfRuntimeState {
         }
     }
 
+    pub(in crate::production_runtime_owner) fn pin_root(&self) -> Option<&Path> {
+        #[cfg(feature = "native-ebpf")]
+        {
+            self.pin_root.as_deref()
+        }
+        #[cfg(not(feature = "native-ebpf"))]
+        {
+            let _ = self;
+            None
+        }
+    }
+
     pub(in crate::production_runtime_owner) fn reset(&mut self) {
         #[cfg(feature = "native-ebpf")]
         {

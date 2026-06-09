@@ -35,6 +35,7 @@ pub fn load_aya_userspace_object(
         .maps()
         .map(|(name, _)| name.to_owned())
         .collect::<Vec<_>>();
+    let loaded_map_specs = loaded_map_specs(&ebpf)?;
     let loaded_program_names = ebpf
         .programs()
         .map(|(name, _)| name.to_owned())
@@ -44,12 +45,100 @@ pub fn load_aya_userspace_object(
         options.param.is_some(),
         options.map_pin_path,
         options.allow_unsupported_maps,
+        options.allowed_unsupported_map_names,
         loaded_map_names,
+        loaded_map_specs,
         loaded_program_names,
         options.max_entries_overrides,
         map_in_map_pins,
     );
+    if !report.unexpected_unsupported_map_names.is_empty() {
+        return Err(format!(
+            "aya userspace object contains unexpected unsupported maps: {}",
+            report.unexpected_unsupported_map_names.join(",")
+        ));
+    }
+    if !report.map_spec_mismatches.is_empty() {
+        let summary = report
+            .map_spec_mismatches
+            .iter()
+            .map(|mismatch| {
+                format!(
+                    "{}.{} expected {} got {}",
+                    mismatch.name, mismatch.field, mismatch.expected, mismatch.actual
+                )
+            })
+            .collect::<Vec<_>>()
+            .join("; ");
+        return Err(format!("aya userspace object map spec mismatch: {summary}"));
+    }
     Ok(AyaUserspaceLoadedObject { ebpf, report })
+}
+
+fn loaded_map_specs(ebpf: &aya::Ebpf) -> Result<Vec<AyaLoadedMapSpec>, String> {
+    ebpf.maps()
+        .map(|(name, map)| loaded_map_spec(name, map))
+        .collect()
+}
+
+fn loaded_map_spec(name: &str, map: &Map) -> Result<AyaLoadedMapSpec, String> {
+    let (data, unsupported) = map_data_and_support(map);
+    let info = data
+        .info()
+        .map_err(|err| format!("inspect loaded aya map {name}: {err:?}"))?;
+    let map_type = info
+        .map_type()
+        .map(map_type_name)
+        .unwrap_or_else(|_| "Unknown".to_owned());
+    Ok(AyaLoadedMapSpec {
+        name: name.to_owned(),
+        map_type,
+        key_size: info.key_size(),
+        value_size: info.value_size(),
+        max_entries: info.max_entries(),
+        flags: info.map_flags(),
+        unsupported,
+    })
+}
+
+fn map_data_and_support(map: &Map) -> (&MapData, bool) {
+    match map {
+        Map::Array(data)
+        | Map::BloomFilter(data)
+        | Map::CpuMap(data)
+        | Map::DevMap(data)
+        | Map::DevMapHash(data)
+        | Map::HashMap(data)
+        | Map::LpmTrie(data)
+        | Map::LruHashMap(data)
+        | Map::PerCpuArray(data)
+        | Map::PerCpuHashMap(data)
+        | Map::PerCpuLruHashMap(data)
+        | Map::PerfEventArray(data)
+        | Map::ProgramArray(data)
+        | Map::Queue(data)
+        | Map::RingBuf(data)
+        | Map::SockHash(data)
+        | Map::SockMap(data)
+        | Map::Stack(data)
+        | Map::StackTraceMap(data)
+        | Map::XskMap(data) => (data, false),
+        Map::Unsupported(data) => (data, true),
+    }
+}
+
+fn map_type_name(map_type: MapType) -> String {
+    match map_type {
+        MapType::Hash => "Hash",
+        MapType::Array => "Array",
+        MapType::LruHash => "LRUHash",
+        MapType::LpmTrie => "LPMTrie",
+        MapType::ArrayOfMaps => "ArrayOfMaps",
+        MapType::SockMap => "SockMap",
+        MapType::SockHash => "SockHash",
+        other => return format!("{other:?}"),
+    }
+    .to_owned()
 }
 
 pub fn pin_aya_loaded_object_for_go_adoption(

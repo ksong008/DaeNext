@@ -8,12 +8,26 @@ pub(super) fn aya_userspace_load_report_records_catalog_and_fallback_boundaries(
         .iter()
         .map(|spec| spec.name.to_owned())
         .collect::<Vec<_>>();
+    let loaded_map_specs = map_catalog()
+        .iter()
+        .map(|spec| AyaLoadedMapSpec {
+            name: spec.name.to_owned(),
+            map_type: spec.map_type.to_owned(),
+            key_size: spec.key_size,
+            value_size: spec.value_size,
+            max_entries: spec.max_entries,
+            flags: spec.flags,
+            unsupported: false,
+        })
+        .collect::<Vec<_>>();
     let report = aya_userspace_load_report(
         &object,
         true,
         Some(&pin_path),
         true,
+        DEFAULT_ALLOWED_UNSUPPORTED_MAP_NAMES,
         loaded_maps,
+        loaded_map_specs,
         vec![
             "tc/dae0peer_ingress".to_owned(),
             "tc/dae0_ingress".to_owned(),
@@ -26,16 +40,19 @@ pub(super) fn aya_userspace_load_report_records_catalog_and_fallback_boundaries(
     assert!(report.param_global_set);
     assert_eq!(report.map_pin_path, Some(pin_path));
     assert!(report.allow_unsupported_maps);
+    assert_eq!(
+        report.allowed_unsupported_map_names,
+        vec!["lpm_array_map".to_owned()]
+    );
     assert!(report.missing_catalog_maps.is_empty());
+    assert!(report.map_spec_mismatches.is_empty());
+    assert!(report.unexpected_unsupported_map_names.is_empty());
     assert_eq!(report.pinned_reuse_maps_present, pinned_reuse_maps());
     assert!(report.listen_socket_map_present);
     assert_eq!(report.loader_backend, LoaderBackend::AyaUserspace);
-    assert_eq!(
-        report.default_attach_backend,
-        AttachBackend::TcCommandFallback
-    );
-    assert!(report.c_ebpf_object_fallback_required);
-    assert!(report.command_fallback_required);
+    assert_eq!(report.default_attach_backend, AttachBackend::Auto);
+    assert!(!report.c_ebpf_object_fallback_required);
+    assert!(!report.command_fallback_required);
     assert_eq!(
         report.loaded_program_names,
         vec!["tc/dae0_ingress", "tc/dae0peer_ingress"]
@@ -73,6 +90,7 @@ pub(super) fn aya_userspace_real_object_load_smoke_is_env_gated() {
         param: Some(param),
         map_pin_path: Some(&pin_root),
         allow_unsupported_maps: true,
+        allowed_unsupported_map_names: DEFAULT_ALLOWED_UNSUPPORTED_MAP_NAMES,
         max_entries_overrides: &[],
         prepin_lpm_array_map: true,
     });
@@ -89,10 +107,7 @@ pub(super) fn aya_userspace_real_object_load_smoke_is_env_gated() {
                 loaded.report.map_in_map_pins[0].outer_map_name,
                 "lpm_array_map"
             );
-            assert_eq!(
-                loaded.report.default_attach_backend,
-                AttachBackend::TcCommandFallback
-            );
+            assert_eq!(loaded.report.default_attach_backend, AttachBackend::Auto);
         }
         Err(err) => {
             panic!("aya userspace real object load smoke failed: {err}");
@@ -208,6 +223,7 @@ pub(super) fn aya_tc_netns_attach_detach_smoke_is_env_gated() {
         param: Some(param),
         map_pin_path: Some(&pin_root),
         allow_unsupported_maps: true,
+        allowed_unsupported_map_names: DEFAULT_ALLOWED_UNSUPPORTED_MAP_NAMES,
         max_entries_overrides: &[],
         prepin_lpm_array_map: true,
     })
@@ -295,6 +311,7 @@ pub(super) fn run_aya_host_veth_attach_detach_smoke(
             param: Some(param),
             map_pin_path: Some(&pin_root),
             allow_unsupported_maps: true,
+            allowed_unsupported_map_names: DEFAULT_ALLOWED_UNSUPPORTED_MAP_NAMES,
             max_entries_overrides: &[],
             prepin_lpm_array_map: true,
         })?;

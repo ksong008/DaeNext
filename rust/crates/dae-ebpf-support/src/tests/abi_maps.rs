@@ -103,10 +103,10 @@ pub(super) fn ebpf_runtime_contracts_keep_abi_maps_and_loader_boundaries_explici
     assert_eq!(abi.tproxy_mark, TPROXY_MARK);
 
     let loader = loader_contract();
-    assert_eq!(loader.default_object_loader, LoaderBackend::TcCommandObject);
+    assert_eq!(loader.default_object_loader, LoaderBackend::AyaUserspace);
     assert_eq!(loader.runtime_map_backend, LoaderBackend::RustSyscallMaps);
-    assert!(loader.aya_userspace_loader_planned);
-    assert!(loader.c_ebpf_object_fallback_required);
+    assert!(!loader.aya_userspace_loader_planned);
+    assert!(!loader.c_ebpf_object_fallback_required);
     assert!(!loader.go_fallback_preserved);
     assert!(loader.go_bpf_loader_fallback_retired);
     assert!(loader.param_rewrite_required_before_attach);
@@ -126,6 +126,15 @@ pub(super) fn ebpf_runtime_contracts_keep_abi_maps_and_loader_boundaries_explici
         assert!(entry.reusable_pin);
         assert!(entry.spec.pinned_by_name());
     }
+    let lpm_array = maps
+        .iter()
+        .find(|entry| entry.spec.name == "lpm_array_map")
+        .unwrap();
+    assert_eq!(lpm_array.role, RuntimeMapRole::InnerMapCatalog);
+    assert!(!lpm_array.reusable_pin);
+    assert!(lpm_array.spec.pinned_by_name());
+    assert_eq!(MAP_USAGE_WARNING_RATIO, 0.70);
+    assert_eq!(MAP_USAGE_PRESSURE_RATIO, 0.90);
 }
 
 #[test]
@@ -184,7 +193,7 @@ pub(super) fn report_only_backend_capability_keeps_default_command_fallback() {
     );
     assert_eq!(
         report.loader_contract.default_object_loader.as_str(),
-        "tc_command_object"
+        "aya_userspace"
     );
     assert_eq!(
         report.loader_contract.runtime_map_backend.as_str(),

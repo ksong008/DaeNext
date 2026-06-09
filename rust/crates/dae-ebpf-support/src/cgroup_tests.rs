@@ -190,6 +190,7 @@ fn run_aya_cgroup_attach_detach_smoke(
         param: Some(param),
         map_pin_path: Some(pin_root),
         allow_unsupported_maps: true,
+        allowed_unsupported_map_names: DEFAULT_ALLOWED_UNSUPPORTED_MAP_NAMES,
         max_entries_overrides: &[],
         prepin_lpm_array_map: true,
     })?;

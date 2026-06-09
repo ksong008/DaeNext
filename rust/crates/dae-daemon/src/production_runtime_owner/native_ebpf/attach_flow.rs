@@ -37,7 +37,14 @@ impl NativeEbpfRuntimeState {
                     "backend": actual_backend.as_str(),
                     "native_attach": report,
                     "fallback_required": true,
+                    "fallback_required_legacy": true,
+                    "actual_fallback_required": fallback_used,
                     "fallback_used": fallback_used,
+                    "native_attach_required": true,
+                    "native_attach_admitted": true,
+                    "native_attach_attempted": true,
+                    "native_attach_succeeded": true,
+                    "rollback_available": true,
                 }));
                 Some(true)
             }
@@ -50,7 +57,14 @@ impl NativeEbpfRuntimeState {
                     "requested_backend": requested_backend.as_str(),
                     "stderr": err,
                     "fallback_required": true,
-                    "fallback_used": true,
+                    "fallback_required_legacy": true,
+                    "actual_fallback_required": false,
+                    "fallback_used": false,
+                    "native_attach_required": true,
+                    "native_attach_admitted": true,
+                    "native_attach_attempted": true,
+                    "native_attach_succeeded": false,
+                    "rollback_available": true,
                 }));
                 Some(false)
             }
@@ -93,7 +107,14 @@ impl NativeEbpfRuntimeState {
                     "backend": actual_backend.as_str(),
                     "native_attach": report,
                     "fallback_required": true,
+                    "fallback_required_legacy": true,
+                    "actual_fallback_required": fallback_used,
                     "fallback_used": fallback_used,
+                    "native_attach_required": true,
+                    "native_attach_admitted": true,
+                    "native_attach_attempted": true,
+                    "native_attach_succeeded": true,
+                    "rollback_available": true,
                 }));
                 Some(NativeAttachOutcome {
                     ok: true,
@@ -111,12 +132,19 @@ impl NativeEbpfRuntimeState {
                     "backend": backend.as_str(),
                     "stderr": err,
                     "fallback_required": true,
-                    "fallback_used": true,
+                    "fallback_required_legacy": true,
+                    "actual_fallback_required": false,
+                    "fallback_used": false,
+                    "native_attach_required": true,
+                    "native_attach_admitted": true,
+                    "native_attach_attempted": true,
+                    "native_attach_succeeded": false,
+                    "rollback_available": true,
                 }));
                 Some(NativeAttachOutcome {
                     ok: false,
                     backend,
-                    fallback_used: true,
+                    fallback_used: false,
                 })
             }
         }
@@ -158,7 +186,14 @@ impl NativeEbpfRuntimeState {
                     "backend": actual_backend.as_str(),
                     "native_attach": report,
                     "fallback_required": true,
+                    "fallback_required_legacy": true,
+                    "actual_fallback_required": fallback_used,
                     "fallback_used": fallback_used,
+                    "native_attach_required": true,
+                    "native_attach_admitted": true,
+                    "native_attach_attempted": true,
+                    "native_attach_succeeded": true,
+                    "rollback_available": true,
                 }));
                 Some(NativeAttachOutcome {
                     ok: true,
@@ -176,12 +211,19 @@ impl NativeEbpfRuntimeState {
                     "backend": backend.as_str(),
                     "stderr": err,
                     "fallback_required": true,
-                    "fallback_used": true,
+                    "fallback_required_legacy": true,
+                    "actual_fallback_required": false,
+                    "fallback_used": false,
+                    "native_attach_required": true,
+                    "native_attach_admitted": true,
+                    "native_attach_attempted": true,
+                    "native_attach_succeeded": false,
+                    "rollback_available": true,
                 }));
                 Some(NativeAttachOutcome {
                     ok: false,
                     backend,
-                    fallback_used: true,
+                    fallback_used: false,
                 })
             }
         }
@@ -213,7 +255,14 @@ impl NativeEbpfRuntimeState {
                     "backend": "aya",
                     "programs": reports,
                     "fallback_required": true,
+                    "fallback_required_legacy": true,
+                    "actual_fallback_required": false,
                     "fallback_used": false,
+                    "native_attach_required": true,
+                    "native_attach_admitted": true,
+                    "native_attach_attempted": true,
+                    "native_attach_succeeded": true,
+                    "rollback_available": true,
                 }));
                 Some(true)
             }
@@ -225,7 +274,14 @@ impl NativeEbpfRuntimeState {
                     "backend": "aya",
                     "stderr": err,
                     "fallback_required": true,
-                    "fallback_used": true,
+                    "fallback_required_legacy": true,
+                    "actual_fallback_required": false,
+                    "fallback_used": false,
+                    "native_attach_required": true,
+                    "native_attach_admitted": true,
+                    "native_attach_attempted": true,
+                    "native_attach_succeeded": false,
+                    "rollback_available": true,
                 }));
                 Some(false)
             }
