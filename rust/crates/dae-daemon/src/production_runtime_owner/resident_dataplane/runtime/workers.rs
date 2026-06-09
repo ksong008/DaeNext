@@ -148,6 +148,7 @@ pub(crate) fn start_resident_dataplane_workers(
     let event_lock = Arc::new(Mutex::new(()));
     let tcp_flow_stack_bytes = resident_tcp_flow_stack_bytes();
     let udp_session_limit = resident_udp_session_limit();
+    let udp_session_queue_depth = resident_udp_session_queue_depth();
     let udp_sessions_active = Arc::new(AtomicUsize::new(0));
     let mut handles = Vec::new();
     {
@@ -187,6 +188,7 @@ pub(crate) fn start_resident_dataplane_workers(
                 metrics,
                 active_sessions,
                 udp_session_limit,
+                udp_session_queue_depth,
             )
         }));
     }
@@ -221,6 +223,8 @@ pub(crate) fn start_resident_dataplane_workers(
         "tcp_flow_stack_bytes_env": RESIDENT_TCP_FLOW_STACK_BYTES_ENV,
         "udp_session_limit": udp_session_limit,
         "udp_session_limit_env": RESIDENT_UDP_SESSION_LIMIT_ENV,
+        "udp_session_queue_depth": udp_session_queue_depth,
+        "udp_session_queue_depth_env": RESIDENT_UDP_SESSION_QUEUE_DEPTH_ENV,
         "event_file": path_string(&event_file),
         "reload_generation": reload_generation,
         "routing_tuple_map_id": routing_tuple_map_id,

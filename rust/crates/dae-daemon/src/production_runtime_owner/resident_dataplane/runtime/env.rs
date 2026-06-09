@@ -19,6 +19,23 @@ pub(super) fn resident_udp_session_limit() -> usize {
     )
 }
 
+pub(super) fn resident_udp_session_queue_depth() -> usize {
+    bounded_env_usize(
+        RESIDENT_UDP_SESSION_QUEUE_DEPTH_ENV,
+        RESIDENT_UDP_SESSION_QUEUE_DEPTH_DEFAULT,
+        RESIDENT_UDP_SESSION_QUEUE_DEPTH_MIN,
+        RESIDENT_UDP_SESSION_QUEUE_DEPTH_MAX,
+    )
+}
+
+fn bounded_env_usize(name: &str, default: usize, min: usize, max: usize) -> usize {
+    std::env::var(name)
+        .ok()
+        .and_then(|value| value.trim().parse::<usize>().ok())
+        .unwrap_or(default)
+        .clamp(min, max)
+}
+
 pub(super) fn bounded_env_usize_with_legacy(
     name: &str,
     legacy_name: &str,

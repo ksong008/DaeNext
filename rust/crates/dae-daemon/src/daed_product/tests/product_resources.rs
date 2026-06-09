@@ -84,6 +84,7 @@ pub(crate) fn product_package_reports_runtime_memory_defaults() {
     let unit = systemd_unit_text();
     assert!(unit.contains("Environment=\"HTTP_QUEUE=256\""));
     assert!(unit.contains("Environment=\"RESIDENT_UDP_SESSION_LIMIT=64\""));
+    assert!(unit.contains("Environment=\"RESIDENT_UDP_SESSION_QUEUE_DEPTH=16\""));
     assert!(unit.contains("HTTP_WORKERS unset uses available_parallelism"));
     assert!(!unit.contains("Environment=\"DAE"));
     assert!(!unit.contains("Environment=\"DAED"));
