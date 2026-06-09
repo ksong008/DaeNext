@@ -2,7 +2,7 @@ use super::*;
 #[derive(Debug)]
 pub(super) struct UdpExchangeResult {
     pub(super) payload: Vec<u8>,
-    pub(super) legacy_execution: &'static str,
+    pub(super) execution_label: &'static str,
     pub(super) tls_underlay: Option<&'static str>,
     pub(super) quic_underlay: Option<&'static str>,
     pub(super) session_executor: Option<&'static str>,
@@ -10,10 +10,10 @@ pub(super) struct UdpExchangeResult {
 }
 
 impl UdpExchangeResult {
-    pub(super) fn new(payload: Vec<u8>, legacy_execution: &'static str) -> Self {
+    pub(super) fn new(payload: Vec<u8>, execution_label: &'static str) -> Self {
         Self {
             payload,
-            legacy_execution,
+            execution_label,
             tls_underlay: None,
             quic_underlay: None,
             session_executor: None,
@@ -47,7 +47,7 @@ impl UdpExchangeResult {
         protocol_framing: &str,
         graph_id: &str,
     ) {
-        let mut descriptor = udp_execution_descriptor(self.legacy_execution)
+        let mut descriptor = udp_execution_descriptor(self.execution_label)
             .with_protocol_framing(protocol_framing)
             .with_session_ownership("manager-owned")
             .with_graph_id(graph_id);

@@ -66,10 +66,9 @@ pub(crate) async fn resident_tcp_accept_loop_async(
             "event": "tcp_worker_started",
             "proxy_count": router.proxy_count(),
             "dial_mode": router.dial_mode_name(),
-            "legacy_flow_stack_bytes": flow_stack_bytes,
+            "flowStackBytes": flow_stack_bytes,
     });
     append_tcp_execution_fields(&mut event, "async-accept-direct");
-    event["legacyProxyExecution"] = json!("async-proxy-tls");
     event["proxyExecutionDescriptor"] = tcp_execution_descriptor("async-proxy-tls").to_value();
     append_event(&event_file, &event_lock, event);
     while !stop.load(Ordering::Relaxed) {
