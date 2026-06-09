@@ -52,6 +52,36 @@ fn vmess_aead_tcp_session_empty_initial_payload_writes_header_only() {
 }
 
 #[test]
+fn vmess_aead_udp_over_tcp_session_start_uses_udp_command() {
+    let uuid = "7c12c745-63a5-433d-9e60-022e469b5bd4";
+    let target = "vmess-udp-target.example:53";
+    let payload = b"vmess-aead-udp-session-ping";
+    let (proxy, handle) = spawn_vmess_aead_udp_over_tcp_echo_server(uuid.to_owned());
+    let mut stream = TcpStream::connect(&proxy).unwrap();
+    let session = vmess::aead_udp_over_tcp_client_session_start(uuid, target, payload).unwrap();
+
+    stream.write_all(&session.first_write).unwrap();
+    let mut response =
+        vmess::aead_tcp_response_reader_from_stream(&mut stream, &session.request).unwrap();
+    let echoed = response.read_chunk_from_stream(&mut stream).unwrap();
+    let accepted = handle.join().unwrap();
+
+    assert_eq!(
+        session.request.command,
+        crate::vmess::VMessNetwork::Udp.byte()
+    );
+    assert_eq!(session.request.target, target);
+    assert_eq!(session.request.payload, payload);
+    assert_eq!(
+        accepted.request.command,
+        crate::vmess::VMessNetwork::Udp.byte()
+    );
+    assert_eq!(accepted.request.target, target);
+    assert_eq!(accepted.request.payload, payload);
+    assert_eq!(echoed, payload);
+}
+
+#[test]
 fn stage66_vmess_aead_udp_over_tcp_dataplane_echoes_payload() {
     let uuid = "7c12c745-63a5-433d-9e60-022e469b5bd4";
     let target = "1.2.3.4:53";

@@ -17,7 +17,8 @@ pub(crate) fn resident_group_health_check_loop(
             "candidate_count": group.candidate_count(),
             "admitted_candidate_count": group.admitted_candidate_count(),
             "check_interval": format!("{interval:?}"),
-            "probe": "proxy-tcp-and-dns-udp-check",
+            "probe": "proxy-tcp-and-tokio-dns-udp-check",
+            "udp_probe_executor": "tokio-proxy-packet-dns-probe",
             "tcp_check_target": candidates.first().map(|candidate| candidate.tcp_check.target.clone()),
             "udp_check_target": candidates.first().map(|candidate| candidate.udp_check.target.to_string()),
         }),
@@ -38,6 +39,10 @@ pub(crate) fn run_resident_group_health_checks(
     group: &plan::ResidentProxyGroupPlan,
     candidates: &[plan::ResidentProxyProbePlan],
 ) {
+    let udp_probe_runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_io()
+        .enable_time()
+        .build();
     for candidate in candidates {
         let checked_at = unix_now_secs();
         let latency_ms = probe_resident_candidate_tcp_endpoint(candidate).ok();
@@ -48,7 +53,11 @@ pub(crate) fn run_resident_group_health_checks(
             checked_at,
         );
         let udp_checked_at = unix_now_secs();
-        let udp_latency_ms = probe_resident_candidate_udp_endpoint(candidate).ok();
+        let udp_latency_ms = udp_probe_runtime
+            .as_ref()
+            .map_err(|err| format!("start Tokio DNS UDP probe runtime: {err}"))
+            .and_then(|runtime| probe_resident_candidate_udp_endpoint(candidate, runtime))
+            .ok();
         let _ = group.record_check_result(
             &candidate.node_tag,
             NetworkType::DNS_UDP4,
@@ -275,13 +284,14 @@ pub(crate) fn probe_resident_candidate_tcp_endpoint(
 
 pub(crate) fn probe_resident_candidate_udp_endpoint(
     candidate: &plan::ResidentProxyProbePlan,
+    runtime: &tokio::runtime::Runtime,
 ) -> Result<i64, String> {
     let started = Instant::now();
-    probe_resident_proxy_dns_udp(
+    runtime.block_on(probe_resident_proxy_dns_udp_async(
         &candidate.proxy,
         candidate.udp_check.target,
         &candidate.udp_check.lookup_host,
-    )?;
+    ))?;
     Ok(elapsed_millis(started.elapsed()))
 }
 

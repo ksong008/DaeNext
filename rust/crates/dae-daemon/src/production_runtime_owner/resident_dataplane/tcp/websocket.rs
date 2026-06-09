@@ -6,6 +6,7 @@ use dae_outbound::shared_transport::{
     DEFAULT_WS_KEY, HttpUpgradeOptions, WS_MASK_KEY, http_upgrade_request, read_http_head,
     validate_http_status, websocket_client_binary_frame, websocket_handshake_request,
 };
+use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use tokio::time;
 
 use super::super::RESIDENT_CONNECT_TIMEOUT;
@@ -50,6 +51,22 @@ pub(super) fn websocket_handshake_over_plain_stream(
     validate_http_status(&response, 101).map_err(|err| format!("validate websocket upgrade: {err}"))
 }
 
+pub(super) async fn websocket_handshake_over_async_stream<S>(
+    stream: &mut S,
+    options: &HttpUpgradeOptions,
+) -> Result<(), String>
+where
+    S: AsyncRead + AsyncWrite + Unpin,
+{
+    let request = websocket_handshake_request(options, DEFAULT_WS_KEY);
+    stream
+        .write_all(&request)
+        .await
+        .map_err(|err| format!("write websocket handshake: {err}"))?;
+    let response = read_http_head_from_async_stream(stream, "read websocket handshake").await?;
+    validate_http_status(&response, 101).map_err(|err| format!("validate websocket upgrade: {err}"))
+}
+
 pub(super) fn httpupgrade_handshake_over_plain_stream(
     stream: &mut TcpStream,
     options: &HttpUpgradeOptions,
@@ -63,6 +80,22 @@ pub(super) fn httpupgrade_handshake_over_plain_stream(
     validate_http_status(&response, 101).map_err(|err| format!("validate HTTP Upgrade: {err}"))
 }
 
+pub(super) async fn httpupgrade_handshake_over_async_stream<S>(
+    stream: &mut S,
+    options: &HttpUpgradeOptions,
+) -> Result<(), String>
+where
+    S: AsyncRead + AsyncWrite + Unpin,
+{
+    let request = http_upgrade_request(options);
+    stream
+        .write_all(&request)
+        .await
+        .map_err(|err| format!("write HTTP Upgrade handshake: {err}"))?;
+    let response = read_http_head_from_async_stream(stream, "read HTTP Upgrade handshake").await?;
+    validate_http_status(&response, 101).map_err(|err| format!("validate HTTP Upgrade: {err}"))
+}
+
 pub(super) fn write_websocket_binary_frame_to_stream(
     stream: &mut TcpStream,
     payload: &[u8],
@@ -72,6 +105,22 @@ pub(super) fn write_websocket_binary_frame_to_stream(
         .map_err(|err| format!("{label}: {err}"))?;
     stream
         .write_all(&frame)
+        .map_err(|err| format!("{label}: {err}"))
+}
+
+pub(super) async fn write_websocket_binary_frame_to_async_stream<S>(
+    stream: &mut S,
+    payload: &[u8],
+    label: &str,
+) -> Result<(), String>
+where
+    S: AsyncWrite + Unpin,
+{
+    let frame = websocket_client_binary_frame(payload, WS_MASK_KEY)
+        .map_err(|err| format!("{label}: {err}"))?;
+    stream
+        .write_all(&frame)
+        .await
         .map_err(|err| format!("{label}: {err}"))
 }
 
@@ -99,6 +148,30 @@ async fn read_http_head_over_resident_tls_async(
     }
 }
 
+async fn read_http_head_from_async_stream<S>(stream: &mut S, label: &str) -> Result<Vec<u8>, String>
+where
+    S: AsyncRead + Unpin,
+{
+    let mut response = Vec::new();
+    let mut buf = [0_u8; 512];
+    loop {
+        let read = time::timeout(RESIDENT_CONNECT_TIMEOUT, stream.read(&mut buf))
+            .await
+            .map_err(|_| format!("{label}: timeout"))?
+            .map_err(|err| format!("{label}: {err}"))?;
+        if read == 0 {
+            return Err(format!("{label}: early eof"));
+        }
+        response.extend_from_slice(&buf[..read]);
+        if response.windows(4).any(|window| window == b"\r\n\r\n") {
+            return Ok(response);
+        }
+        if response.len() > 16 * 1024 {
+            return Err(format!("{label}: response head too large"));
+        }
+    }
+}
+
 pub(super) async fn write_websocket_binary_frame_over_resident_tls_async(
     client: &mut AsyncVlessTlsClient,
     payload: &[u8],
@@ -110,13 +183,13 @@ pub(super) async fn write_websocket_binary_frame_over_resident_tls_async(
 }
 
 #[derive(Default)]
-pub(super) struct WebSocketBinaryFrameDecoder {
+pub(crate) struct WebSocketBinaryFrameDecoder {
     pending: Vec<u8>,
     closed: bool,
 }
 
 impl WebSocketBinaryFrameDecoder {
-    pub(super) fn push(&mut self, input: &[u8]) -> Result<Vec<Vec<u8>>, String> {
+    pub(crate) fn push(&mut self, input: &[u8]) -> Result<Vec<Vec<u8>>, String> {
         if self.closed {
             return Ok(Vec::new());
         }
@@ -179,7 +252,7 @@ impl WebSocketBinaryFrameDecoder {
         Ok(frames)
     }
 
-    pub(super) fn is_closed(&self) -> bool {
+    pub(crate) fn is_closed(&self) -> bool {
         self.closed
     }
 }

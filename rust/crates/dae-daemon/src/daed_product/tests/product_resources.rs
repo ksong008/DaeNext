@@ -70,7 +70,7 @@ pub(crate) fn product_package_reports_runtime_memory_defaults() {
         defaults["residentDataplane"]["tcpFlow"]["stackBytes"]["env"]
             .as_str()
             .unwrap(),
-        "DAE_RESIDENT_TCP_FLOW_STACK_BYTES"
+        "RESIDENT_TCP_FLOW_STACK_BYTES"
     );
 
     let manifest = product_package_manifest();
@@ -82,9 +82,18 @@ pub(crate) fn product_package_reports_runtime_memory_defaults() {
     );
 
     let unit = systemd_unit_text();
-    assert!(unit.contains("Environment=\"DAED_HTTP_QUEUE=256\""));
-    assert!(unit.contains("Environment=\"DAE_RESIDENT_UDP_PACKET_WORKERS=64\""));
-    assert!(unit.contains("DAED_HTTP_WORKERS unset uses available_parallelism"));
+    assert!(unit.contains("Environment=\"HTTP_QUEUE=256\""));
+    assert!(unit.contains("Environment=\"RESIDENT_UDP_SESSION_LIMIT=64\""));
+    assert!(unit.contains("HTTP_WORKERS unset uses available_parallelism"));
+    assert!(!unit.contains("Environment=\"DAE"));
+    assert!(!unit.contains("Environment=\"DAED"));
+
+    let defaults_text = defaults.to_string();
+    assert!(!defaults_text.contains("\"legacyEnv\""));
+    assert!(!defaults_text.contains("legacyPacketStackBytes"));
+    assert!(!defaults_text.contains("RESIDENT_UDP_PACKET_STACK_BYTES"));
+    assert!(!defaults_text.contains("DAE_"));
+    assert!(!defaults_text.contains("DAED_"));
 }
 
 #[test]

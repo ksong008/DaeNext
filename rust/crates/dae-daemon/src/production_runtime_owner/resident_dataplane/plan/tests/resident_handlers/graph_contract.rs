@@ -47,7 +47,7 @@ pub(super) fn assert_common_resident_graph_contracts(proxies: &[ResidentProxyPla
         );
         assert_eq!(
             graph["runtimeComponents"]["packetSessionManager"]["manager"],
-            "bounded-resident-packet-session"
+            "resident-udp-session-manager"
         );
         assert_eq!(
             graph["runtimeComponents"]["probeExecutor"]["executor"],

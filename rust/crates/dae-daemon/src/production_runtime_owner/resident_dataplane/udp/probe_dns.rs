@@ -6,6 +6,7 @@ pub(crate) fn probe_resident_proxy_udp(
 ) -> serde_json::Value {
     let started = Instant::now();
     let handler = resident_udp_handler_name(&proxy.handler);
+    let packet_semantics = udp_packet_semantics_for_destination(&proxy.handler, original_dst);
     match exchange_proxy_udp(proxy, original_dst, payload) {
         Ok(response) => {
             let payload_match = response.payload == payload;
@@ -19,7 +20,7 @@ pub(crate) fn probe_resident_proxy_udp(
                 "payload_match": payload_match,
                 "elapsed_ms": started.elapsed().as_millis(),
                 "graphId": proxy.graph_id,
-                "packetSession": udp_packet_session_value(proxy, "probe", &original_dst.to_string(), handler),
+                "packetSession": udp_packet_session_value(proxy, "probe", &original_dst.to_string(), handler, packet_semantics),
             });
             response.append_execution_fields(&mut report, handler, &proxy.graph_id);
             if let Some(tls_underlay) = response.tls_underlay {
@@ -47,7 +48,7 @@ pub(crate) fn probe_resident_proxy_udp(
                 "elapsed_ms": started.elapsed().as_millis(),
                 "error": err,
                 "graphId": proxy.graph_id,
-                "packetSession": udp_packet_session_value(proxy, "probe", &original_dst.to_string(), handler),
+                "packetSession": udp_packet_session_value(proxy, "probe", &original_dst.to_string(), handler, packet_semantics),
             })
         }
         Err(err) => json!({
@@ -60,20 +61,23 @@ pub(crate) fn probe_resident_proxy_udp(
             "payload_match": false,
             "elapsed_ms": started.elapsed().as_millis(),
             "graphId": proxy.graph_id,
-            "packetSession": udp_packet_session_value(proxy, "probe", &original_dst.to_string(), handler),
+            "packetSession": udp_packet_session_value(proxy, "probe", &original_dst.to_string(), handler, packet_semantics),
             "error": err,
         }),
     }
 }
 
-pub(crate) fn probe_resident_proxy_dns_udp(
+pub(crate) async fn probe_resident_proxy_dns_udp_async(
     proxy: &ResidentProxyPlan,
     original_dst: SocketAddrV4,
     lookup_host: &str,
 ) -> Result<(), String> {
     let id = fastrand::u16(0..=u16::MAX);
     let query = build_dns_a_query(id, lookup_host)?;
-    let response = exchange_proxy_udp(proxy, original_dst, &query)?;
+    let mut executor = UdpSessionExecutor::new_proxy_packet(proxy);
+    let dns = ResidentDnsPlan::asis(proxy.mark);
+    let (_, response) = executor.execute(&dns, proxy, original_dst, &query).await?;
+    executor.shutdown().await;
     dns_a_response_has_answer(id, &response.payload)
 }
 

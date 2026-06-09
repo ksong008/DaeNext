@@ -1,11 +1,13 @@
 use std::collections::BTreeMap;
-use std::net::{SocketAddr, SocketAddrV4, ToSocketAddrs};
+use std::net::{IpAddr, Ipv4Addr, SocketAddr, SocketAddrV4, ToSocketAddrs};
+use std::os::fd::AsRawFd;
 
 use dae_config::{Config, DynamicFunctionValue};
-use dae_datapath::{UdpDirectPacketConn, UdpDirectSocketOptions};
 use dae_dns::DnsPacketView;
+use tokio::time;
 
 use super::RESIDENT_UDP_RESPONSE_TIMEOUT;
+use super::tcp::set_socket_mark;
 
 const DNS_RCODE_REFUSED: u16 = 5;
 const DNS_RESPONSE_FLAGS_REFUSED: u16 = 0x8180 | DNS_RCODE_REFUSED;
@@ -74,7 +76,7 @@ pub(super) fn build_resident_dns_plan(config: &Config) -> Result<ResidentDnsPlan
     })
 }
 
-pub(super) fn handle_resident_dns_udp(
+pub(super) async fn handle_resident_dns_udp_async(
     plan: &ResidentDnsPlan,
     original_dst: SocketAddrV4,
     payload: &[u8],
@@ -88,19 +90,22 @@ pub(super) fn handle_resident_dns_udp(
         return Err("DNS request has no question".to_owned());
     }
     match &plan.request_fallback {
-        ResidentDnsRequestAction::AsIs => forward_dns_udp(original_dst, payload, plan.mark)
+        ResidentDnsRequestAction::AsIs => forward_dns_udp_async(original_dst, payload, plan.mark)
+            .await
             .map_err(|err| format!("forward DNS asis to {original_dst}: {err}")),
         ResidentDnsRequestAction::Reject => build_reject_response(payload, &request),
         ResidentDnsRequestAction::Upstream(upstream) => {
             match upstream.scheme {
                 ResidentDnsUpstreamScheme::Udp | ResidentDnsUpstreamScheme::TcpUdp => {}
             }
-            forward_dns_udp(upstream.target, payload, plan.mark).map_err(|err| {
-                format!(
-                    "forward DNS to upstream {} {}: {err}",
-                    upstream.tag, upstream.target
-                )
-            })
+            forward_dns_udp_async(upstream.target, payload, plan.mark)
+                .await
+                .map_err(|err| {
+                    format!(
+                        "forward DNS to upstream {} {}: {err}",
+                        upstream.tag, upstream.target
+                    )
+                })
         }
     }
 }
@@ -205,17 +210,36 @@ fn resolve_dns_upstream_authority(authority: &str) -> Result<SocketAddrV4, Strin
         .ok_or_else(|| format!("DNS upstream {with_port} returned no IPv4 address"))
 }
 
-fn forward_dns_udp(target: SocketAddrV4, payload: &[u8], mark: u32) -> Result<Vec<u8>, String> {
-    let conn = UdpDirectPacketConn::connect(
-        target,
-        &UdpDirectSocketOptions {
-            mark,
-            timeout: RESIDENT_UDP_RESPONSE_TIMEOUT,
-        },
+async fn forward_dns_udp_async(
+    target: SocketAddrV4,
+    payload: &[u8],
+    mark: u32,
+) -> Result<Vec<u8>, String> {
+    let socket = std::net::UdpSocket::bind(SocketAddr::new(IpAddr::V4(Ipv4Addr::UNSPECIFIED), 0))
+        .map_err(|err| format!("bind DNS UDP socket: {err}"))?;
+    if mark != 0 {
+        set_socket_mark(socket.as_raw_fd(), mark)
+            .map_err(|err| format!("set DNS UDP SO_MARK {mark}: {err}"))?;
+    }
+    socket
+        .set_nonblocking(true)
+        .map_err(|err| format!("set DNS UDP nonblocking: {err}"))?;
+    let socket = tokio::net::UdpSocket::from_std(socket)
+        .map_err(|err| format!("adopt async DNS UDP socket: {err}"))?;
+    socket
+        .send_to(payload, target)
+        .await
+        .map_err(|err| format!("send DNS UDP packet: {err}"))?;
+    let mut response = vec![0_u8; DNS_RESPONSE_READ_LIMIT];
+    let (read, _) = time::timeout(
+        RESIDENT_UDP_RESPONSE_TIMEOUT,
+        socket.recv_from(&mut response),
     )
-    .map_err(|err| format!("open DNS UDP socket: {err}"))?;
-    conn.exchange(payload, DNS_RESPONSE_READ_LIMIT)
-        .map_err(|err| format!("exchange DNS UDP packet: {err}"))
+    .await
+    .map_err(|_| "receive DNS UDP response timeout".to_owned())?
+    .map_err(|err| format!("receive DNS UDP response: {err}"))?;
+    response.truncate(read);
+    Ok(response)
 }
 
 fn build_reject_response(request: &[u8], view: &DnsPacketView<'_>) -> Result<Vec<u8>, String> {

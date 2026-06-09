@@ -22,6 +22,10 @@ use dae_outbound::{
         Ss2022UdpCodec, decode_udp_packet as decode_shadowsocks_udp_packet, encode_udp_packet,
         ss2022_udp_unix_timestamp_now,
     },
+    shared_transport::{
+        DEFAULT_WS_KEY, HttpUpgradeOptions, WS_MASK_KEY, http_upgrade_request,
+        validate_http_status, websocket_client_binary_frame, websocket_handshake_request,
+    },
     socks5::{Socks5Address, udp_associate_control_over_stream, udp_packet},
     trojan::{decode_udp_packet as decode_trojan_udp_packet, packet as trojan_packet},
     tuic::{authenticate_tuic_connection, build_tuic_runtime_client_config},
@@ -33,28 +37,42 @@ use tokio::runtime;
 use tokio::time;
 
 use super::super::PRODUCTION_NETNS;
-use super::super::udp_io::{UdpOriginalDstPacket, recv_udp_with_original_dst};
+use super::super::udp_io::{UdpOriginalDstPacket, try_recv_udp_with_original_dst};
 use super::client::{
-    VlessTlsClient, drive_tls_io_blocking, open_vless_tls_client, tls_underlay_name,
+    AsyncResidentTlsClient, VlessTlsClient, async_resident_tls_underlay_name,
+    drive_tls_io_blocking, open_async_resident_tls_client, open_proxy_tcp_stream_async,
+    open_vless_tls_client, tls_underlay_name,
 };
 use super::direct::open_direct_tcp_connection;
-use super::dns::{ResidentDnsPlan, handle_resident_dns_udp};
+use super::dns::{ResidentDnsPlan, handle_resident_dns_udp_async};
 use super::events::append_event;
 use super::execution::{append_runtime_execution_descriptor, udp_execution_descriptor};
 use super::plan::{ResidentProxyGroupPlan, ResidentProxyPlan, ResidentProxyProtocolPlan};
 use super::tcp::{
-    open_marked_quic_endpoint, resolve_hysteria2_quic_remote, resolve_proxy_udp_addr,
+    AsyncWebSocketPayloadReader, AsyncWebSocketPayloadState, collect_vmess_grpc_decrypted,
+    decode_vmess_grpc_response_stream_async, open_grpc_h2_stream, open_marked_quic_endpoint,
+    pop_grpc_hunk_payload, resolve_hysteria2_quic_remote, resolve_hysteria2_quic_remote_async,
+    resolve_proxy_udp_addr, resolve_proxy_udp_addr_async, send_grpc_hunk, send_h2_data,
     set_socket_mark,
 };
 use super::vision::{VisionUnpadState, VisionUnpadder, vision_padding_block};
 use super::{
     RESIDENT_CONNECT_TIMEOUT, RESIDENT_IDLE_SLEEP, RESIDENT_UDP_RESPONSE_TIMEOUT,
-    ResidentDataplaneMetrics, VISION_COMMAND_CONTINUE, VLESS_RESPONSE_VERSION, XTLS_RPRX_VISION,
-    XUDP_COMMAND_NEW, XUDP_MUX_TARGET, XUDP_NETWORK_UDP, XUDP_OPTION_DATA,
+    RESIDENT_UDP_SESSION_IDLE_TIMEOUT, ResidentDataplaneMetrics, VISION_COMMAND_CONTINUE,
+    VLESS_RESPONSE_VERSION, XTLS_RPRX_VISION, XUDP_COMMAND_NEW, XUDP_MUX_TARGET, XUDP_NETWORK_UDP,
+    XUDP_OPTION_DATA,
 };
 
 mod worker;
 pub(super) use self::worker::*;
+mod manager;
+use self::manager::*;
+mod session_actor;
+use self::session_actor::*;
+mod session_executor;
+use self::session_executor::*;
+mod vmess_session;
+use self::vmess_session::*;
 mod packet_handler;
 use self::packet_handler::*;
 mod dispatch;
