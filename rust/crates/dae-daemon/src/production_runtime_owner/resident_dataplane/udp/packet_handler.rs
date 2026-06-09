@@ -5,6 +5,8 @@ pub(super) struct UdpExchangeResult {
     pub(super) legacy_execution: &'static str,
     pub(super) tls_underlay: Option<&'static str>,
     pub(super) quic_underlay: Option<&'static str>,
+    pub(super) session_executor: Option<&'static str>,
+    pub(super) underlay_reuse: Option<&'static str>,
 }
 
 impl UdpExchangeResult {
@@ -14,6 +16,8 @@ impl UdpExchangeResult {
             legacy_execution,
             tls_underlay: None,
             quic_underlay: None,
+            session_executor: None,
+            underlay_reuse: None,
         }
     }
 
@@ -27,6 +31,16 @@ impl UdpExchangeResult {
         self
     }
 
+    pub(super) fn with_session_executor(mut self, session_executor: &'static str) -> Self {
+        self.session_executor = Some(session_executor);
+        self
+    }
+
+    pub(super) fn with_underlay_reuse(mut self, underlay_reuse: &'static str) -> Self {
+        self.underlay_reuse = Some(underlay_reuse);
+        self
+    }
+
     pub(super) fn append_execution_fields(
         &self,
         value: &mut serde_json::Value,
@@ -35,6 +49,7 @@ impl UdpExchangeResult {
     ) {
         let mut descriptor = udp_execution_descriptor(self.legacy_execution)
             .with_protocol_framing(protocol_framing)
+            .with_session_ownership("manager-owned")
             .with_graph_id(graph_id);
         if let Some(tls_underlay) = self.tls_underlay {
             descriptor = descriptor.with_security_underlay(tls_underlay);
@@ -44,57 +59,61 @@ impl UdpExchangeResult {
         }
         append_runtime_execution_descriptor(value, descriptor);
     }
+
+    pub(super) fn append_session_fields(&self, value: &mut serde_json::Value) {
+        if let Some(session_executor) = self.session_executor {
+            value["sessionExecutor"] = json!(session_executor);
+        }
+        if let Some(underlay_reuse) = self.underlay_reuse {
+            value["underlayReuse"] = json!(underlay_reuse);
+        }
+    }
 }
 
-pub(super) fn handle_udp_packet(
-    proxy_group: Arc<ResidentProxyGroupPlan>,
-    dns: Arc<ResidentDnsPlan>,
+pub(super) fn append_udp_proxy_selection_failed(
+    event_file: &PathBuf,
+    event_lock: &Arc<Mutex<()>>,
+    peer: SocketAddrV4,
+    original_dst: SocketAddrV4,
+    err: String,
+    proxy_group: &ResidentProxyGroupPlan,
+) {
+    append_event(
+        event_file,
+        event_lock,
+        json!({
+            "event": "udp_exchange_failed",
+            "peer": peer.to_string(),
+            "original_dst": original_dst.to_string(),
+            "error": err,
+            "proxy_group": proxy_group.group_name,
+            "group_policy": proxy_group.group_policy_name(),
+            "network": "udp4",
+            "outbound": proxy_group.group_name,
+            "policy": proxy_group.group_policy_name(),
+        }),
+    );
+}
+
+pub(super) fn record_udp_exchange_result(
+    proxy: ResidentProxyPlan,
     packet: UdpOriginalDstPacket,
     original_dst: SocketAddrV4,
     event_file: PathBuf,
     event_lock: Arc<Mutex<()>>,
     metrics: Arc<ResidentDataplaneMetrics>,
+    exchange: Result<(&'static str, UdpExchangeResult), String>,
 ) {
     let request_len = packet.payload.len();
     let peer = packet.peer;
     metrics.add_upload(request_len);
-    let proxy = match proxy_group.select_proxy_for_udp() {
-        Ok(proxy) => proxy,
-        Err(err) => {
-            append_event(
-                &event_file,
-                &event_lock,
-                json!({
-                    "event": "udp_exchange_failed",
-                    "peer": peer.to_string(),
-                    "original_dst": original_dst.to_string(),
-                    "error": err,
-                    "proxy_group": proxy_group.group_name,
-                    "group_policy": proxy_group.group_policy_name(),
-                    "network": "udp4",
-                    "outbound": proxy_group.group_name,
-                    "policy": proxy_group.group_policy_name(),
-                }),
-            );
-            return;
-        }
-    };
-    let exchange = if original_dst.port() == 53 {
-        handle_resident_dns_udp(&dns, original_dst, &packet.payload).map(|response| {
-            (
-                "udp_dns_packet_finished",
-                UdpExchangeResult::new(response, "resident-dns-udp"),
-            )
-        })
-    } else {
-        exchange_proxy_udp(&proxy, original_dst, &packet.payload)
-            .map(|response| ("udp_packet_finished", response))
-    };
     match exchange {
         Ok((event, response)) => match send_udp_reply(original_dst, peer, &response.payload) {
             Ok(()) => {
                 metrics.add_download(response.payload.len());
                 let handler = resident_udp_handler_name(&proxy.handler);
+                let packet_semantics =
+                    udp_packet_semantics_for_destination(&proxy.handler, original_dst);
                 let mut event_json = json!({
                     "event": event,
                     "peer": peer.to_string(),
@@ -113,7 +132,7 @@ pub(super) fn handle_udp_packet(
                     "protocol": proxy.protocol,
                     "handler": handler,
                     "graphId": proxy.graph_id,
-                    "packetSession": udp_packet_session_value(&proxy, &peer.to_string(), &original_dst.to_string(), handler),
+                    "packetSession": udp_packet_session_value(&proxy, &peer.to_string(), &original_dst.to_string(), handler, packet_semantics),
                 });
                 response.append_execution_fields(&mut event_json, handler, &proxy.graph_id);
                 if let Some(tls_underlay) = response.tls_underlay {
@@ -122,6 +141,7 @@ pub(super) fn handle_udp_packet(
                 if let Some(quic_underlay) = response.quic_underlay {
                     event_json["quic_underlay"] = json!(quic_underlay);
                 }
+                response.append_session_fields(&mut event_json);
                 append_event(&event_file, &event_lock, event_json)
             }
             Err(err) => append_event(
@@ -132,6 +152,8 @@ pub(super) fn handle_udp_packet(
         },
         Err(err) => {
             let handler = resident_udp_handler_name(&proxy.handler);
+            let packet_semantics =
+                udp_packet_semantics_for_destination(&proxy.handler, original_dst);
             append_event(
                 &event_file,
                 &event_lock,
@@ -151,9 +173,64 @@ pub(super) fn handle_udp_packet(
                     "dialer": proxy.node_tag,
                     "ip": original_dst.to_string(),
                     "graphId": proxy.graph_id,
-                    "packetSession": udp_packet_session_value(&proxy, &peer.to_string(), &original_dst.to_string(), handler),
+                    "packetSession": udp_packet_session_value(&proxy, &peer.to_string(), &original_dst.to_string(), handler, packet_semantics),
                 }),
             )
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn udp_exchange_result_uses_structured_session_execution_fields() {
+        let mut event = json!({
+            "packetSession": {
+                "schemaVersion": 1,
+                "manager": "resident-udp-session-manager",
+                "packetSemantics": "dns",
+            },
+        });
+        let result = UdpExchangeResult::new(Vec::new(), "resident-dns-udp")
+            .with_session_executor("tokio-dns-datagram")
+            .with_underlay_reuse("not-required-independent-datagram");
+        result.append_execution_fields(&mut event, "resident-dns", "resident-graph:test");
+        result.append_session_fields(&mut event);
+
+        assert_eq!(event["packetSession"]["schemaVersion"], 1);
+        assert_eq!(
+            event["packetSession"]["manager"],
+            "resident-udp-session-manager"
+        );
+        assert_eq!(event["packetSession"]["packetSemantics"], "dns");
+        assert_eq!(event["executionDescriptor"]["schemaVersion"], 1);
+        assert!(
+            event["executionDescriptor"]["executor"]
+                .as_str()
+                .is_some_and(|value| !value.is_empty())
+        );
+        assert!(
+            event["executionDescriptor"]["capability"]
+                .as_str()
+                .is_some_and(|value| !value.is_empty())
+        );
+        assert_eq!(event["executionDescriptor"]["network"], "udp");
+        assert_eq!(event["executionDescriptor"]["packetSemantics"], "dns");
+        assert_eq!(
+            event["executionDescriptor"]["sessionOwnership"],
+            "manager-owned"
+        );
+        assert_eq!(
+            event["executionDescriptor"]["protocolFraming"],
+            "resident-dns"
+        );
+        assert_eq!(
+            event["executionDescriptor"]["graphId"],
+            "resident-graph:test"
+        );
+        assert_eq!(event["sessionExecutor"], "tokio-dns-datagram");
+        assert_eq!(event["underlayReuse"], "not-required-independent-datagram");
     }
 }

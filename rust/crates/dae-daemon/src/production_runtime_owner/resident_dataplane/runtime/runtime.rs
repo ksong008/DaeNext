@@ -7,7 +7,7 @@ pub(crate) struct ResidentDataplaneRuntime {
     pub(in crate::production_runtime_owner) event_lock: Arc<Mutex<()>>,
     pub(in crate::production_runtime_owner) reload_generation: u64,
     pub(in crate::production_runtime_owner) metrics: Arc<ResidentDataplaneMetrics>,
-    pub(in crate::production_runtime_owner) udp_packet_workers_active: Arc<AtomicUsize>,
+    pub(in crate::production_runtime_owner) udp_sessions_active: Arc<AtomicUsize>,
     pub(in crate::production_runtime_owner) groups: Vec<Arc<plan::ResidentProxyGroupPlan>>,
     pub(in crate::production_runtime_owner) manual_probe_plans:
         BTreeMap<String, Result<plan::ResidentProxyProbePlan, String>>,
@@ -19,7 +19,7 @@ impl ResidentDataplaneRuntime {
         snapshot["reloadGeneration"] = json!(self.reload_generation);
         snapshot["packetSessionManager"] = json!({
             "schemaVersion": 1,
-            "manager": "bounded-resident-packet-session",
+            "manager": "resident-udp-session-manager",
             "reloadGeneration": self.reload_generation,
         });
         snapshot
@@ -124,13 +124,13 @@ impl ResidentDataplaneRuntime {
                 Err(_) => panicked += 1,
             }
         }
-        let udp_packet_workers_active = self.udp_packet_workers_active.load(Ordering::Relaxed);
+        let udp_sessions_active = self.udp_sessions_active.load(Ordering::Relaxed);
         steps.push(json!({
-            "name": "stop-resident-tcp-udp-dataplane-workers",
+            "name": "stop-resident-dataplane-runtime",
             "status": if panicked == 0 { "pass" } else { "fail" },
             "joined_worker_threads": joined,
             "panicked_worker_threads": panicked,
-            "udp_packet_workers_active_at_shutdown": udp_packet_workers_active,
+            "udp_sessions_active_at_shutdown": udp_sessions_active,
             "event_file": path_string(&self.event_file),
         }));
     }

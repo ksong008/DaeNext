@@ -8,12 +8,11 @@ pub(crate) async fn relay_tcp_over_vmess_grpc_h2(
     mut stats: DirectTcpRelayStats,
     metrics: &ResidentDataplaneMetrics,
 ) -> Result<DirectTcpRelayStats, String> {
-    let encrypted_queue = Arc::new(VmessGrpcEncryptedQueue::default());
-    let (decrypted_tx, decrypted_rx) = mpsc::channel();
+    let (mut encrypted_writer, encrypted_reader) = tokio::io::duplex(64 * 1024);
+    let (decrypted_tx, mut decrypted_rx) = tokio::sync::mpsc::channel(16);
     let request = session.request.clone();
-    let decoder_queue = VmessGrpcEncryptedReader::new(Arc::clone(&encrypted_queue));
-    let decoder = thread::spawn(move || {
-        decode_vmess_grpc_response_stream(decoder_queue, request, decrypted_tx)
+    let decoder = tokio::spawn(async move {
+        decode_vmess_grpc_response_stream_async(encrypted_reader, request, decrypted_tx).await
     });
     let mut upload_codec = session.upload;
     let mut inbound_closed = false;
@@ -60,11 +59,14 @@ pub(crate) async fn relay_tcp_over_vmess_grpc_h2(
                         response_buf.extend_from_slice(&bytes);
                         while let Some(payload) = pop_grpc_hunk_payload(&mut response_buf)? {
                             if !payload.is_empty() {
-                                encrypted_queue.push(&payload);
+                                encrypted_writer
+                                    .write_all(&payload)
+                                    .await
+                                    .map_err(|err| format!("write VMess gRPC encrypted response to decoder: {err}"))?;
                             }
                         }
                         let (plain_chunks, disconnected) = collect_vmess_grpc_decrypted(
-                            &decrypted_rx,
+                            &mut decrypted_rx,
                             &mut decode_error,
                         );
                         decoder_disconnected = disconnected;
@@ -80,12 +82,12 @@ pub(crate) async fn relay_tcp_over_vmess_grpc_h2(
                     Some(Err(err)) => return Err(format!("read VMess gRPC HTTP/2 response data: {err}")),
                     None => {
                         response_closed = true;
-                        encrypted_queue.close();
+                        let _ = encrypted_writer.shutdown().await;
                         if !response_buf.is_empty() {
                             return Err("VMess gRPC response stream ended with partial hunk".to_owned());
                         }
                         let (plain_chunks, disconnected) = collect_vmess_grpc_decrypted(
-                            &decrypted_rx,
+                            &mut decrypted_rx,
                             &mut decode_error,
                         );
                         decoder_disconnected = disconnected;
@@ -102,7 +104,7 @@ pub(crate) async fn relay_tcp_over_vmess_grpc_h2(
             }
             _ = time::sleep(RESIDENT_IDLE_SLEEP) => {
                 let (plain_chunks, disconnected) = collect_vmess_grpc_decrypted(
-                    &decrypted_rx,
+                    &mut decrypted_rx,
                     &mut decode_error,
                 );
                 decoder_disconnected = disconnected;
@@ -123,18 +125,18 @@ pub(crate) async fn relay_tcp_over_vmess_grpc_h2(
         }
 
         if let Some(err) = decode_error.take() {
-            encrypted_queue.close();
-            let _ = decoder.join();
+            let _ = encrypted_writer.shutdown().await;
+            decoder.abort();
             return Err(err);
         }
         if inbound_closed && response_closed && decoder_disconnected {
             break;
         }
     }
-    encrypted_queue.close();
+    let _ = encrypted_writer.shutdown().await;
     let decoder_result = decoder
-        .join()
-        .map_err(|_| "join VMess gRPC response decoder failed".to_owned())?;
+        .await
+        .map_err(|err| format!("join VMess gRPC response decoder failed: {err}"))?;
     if let Err(err) = decoder_result {
         return Err(err);
     }
@@ -142,7 +144,7 @@ pub(crate) async fn relay_tcp_over_vmess_grpc_h2(
 }
 
 pub(crate) fn collect_vmess_grpc_decrypted(
-    decrypted_rx: &mpsc::Receiver<Result<Vec<u8>, String>>,
+    decrypted_rx: &mut tokio::sync::mpsc::Receiver<Result<Vec<u8>, String>>,
     decode_error: &mut Option<String>,
 ) -> (Vec<Vec<u8>>, bool) {
     let mut chunks = Vec::new();
@@ -155,8 +157,8 @@ pub(crate) fn collect_vmess_grpc_decrypted(
                 *decode_error = Some(err);
                 return (chunks, false);
             }
-            Err(mpsc::TryRecvError::Empty) => return (chunks, false),
-            Err(mpsc::TryRecvError::Disconnected) => return (chunks, true),
+            Err(tokio::sync::mpsc::error::TryRecvError::Empty) => return (chunks, false),
+            Err(tokio::sync::mpsc::error::TryRecvError::Disconnected) => return (chunks, true),
         }
     }
 }
@@ -180,28 +182,34 @@ pub(crate) async fn write_vmess_grpc_decrypted(
     Ok(())
 }
 
-pub(crate) fn decode_vmess_grpc_response_stream(
-    mut reader: VmessGrpcEncryptedReader,
+pub(crate) async fn decode_vmess_grpc_response_stream_async<R>(
+    mut reader: R,
     request: dae_outbound::vmess::VMessAeadTcpRequest,
-    decrypted_tx: mpsc::Sender<Result<Vec<u8>, String>>,
-) -> Result<(), String> {
-    let mut response = match aead_tcp_response_reader_from_stream(&mut reader, &request) {
+    decrypted_tx: tokio::sync::mpsc::Sender<Result<Vec<u8>, String>>,
+) -> Result<(), String>
+where
+    R: AsyncRead + Unpin,
+{
+    let mut response = match aead_tcp_response_reader_from_async_stream(&mut reader, &request).await
+    {
         Ok(response) => response,
         Err(err) => {
             let message = err.to_string();
             if is_vmess_grpc_graceful_decode_close(&message) {
                 return Ok(());
             }
-            let _ = decrypted_tx.send(Err(format!(
-                "read VMess gRPC AEAD response header: {message}"
-            )));
+            let _ = decrypted_tx
+                .send(Err(format!(
+                    "read VMess gRPC AEAD response header: {message}"
+                )))
+                .await;
             return Ok(());
         }
     };
     loop {
-        match response.read_chunk_from_stream(&mut reader) {
+        match response.read_chunk_from_async_stream(&mut reader).await {
             Ok(plain) => {
-                if decrypted_tx.send(Ok(plain)).is_err() {
+                if decrypted_tx.send(Ok(plain)).await.is_err() {
                     return Ok(());
                 }
             }
@@ -210,8 +218,9 @@ pub(crate) fn decode_vmess_grpc_response_stream(
                 if is_vmess_grpc_graceful_decode_close(&message) {
                     return Ok(());
                 }
-                let _ =
-                    decrypted_tx.send(Err(format!("read VMess gRPC response chunk: {message}")));
+                let _ = decrypted_tx
+                    .send(Err(format!("read VMess gRPC response chunk: {message}")))
+                    .await;
                 return Ok(());
             }
         }
@@ -224,67 +233,4 @@ pub(crate) fn is_vmess_grpc_graceful_decode_close(message: &str) -> bool {
         || message.contains("Connection reset")
         || message.contains("connection reset")
         || message.contains("timed out")
-}
-
-#[derive(Default)]
-pub(crate) struct VmessGrpcEncryptedQueue {
-    pub(super) inner: Mutex<VmessGrpcEncryptedQueueInner>,
-    pub(super) ready: Condvar,
-}
-
-#[derive(Default)]
-pub(crate) struct VmessGrpcEncryptedQueueInner {
-    pub(super) bytes: VecDeque<u8>,
-    pub(super) closed: bool,
-}
-
-impl VmessGrpcEncryptedQueue {
-    pub(super) fn push(&self, payload: &[u8]) {
-        if payload.is_empty() {
-            return;
-        }
-        let mut inner = self.inner.lock().expect("VMess gRPC queue poisoned");
-        inner.bytes.extend(payload);
-        self.ready.notify_all();
-    }
-
-    pub(super) fn close(&self) {
-        let mut inner = self.inner.lock().expect("VMess gRPC queue poisoned");
-        inner.closed = true;
-        self.ready.notify_all();
-    }
-}
-
-pub(crate) struct VmessGrpcEncryptedReader {
-    pub(super) queue: Arc<VmessGrpcEncryptedQueue>,
-}
-
-impl VmessGrpcEncryptedReader {
-    pub(super) fn new(queue: Arc<VmessGrpcEncryptedQueue>) -> Self {
-        Self { queue }
-    }
-}
-
-impl Read for VmessGrpcEncryptedReader {
-    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
-        let mut inner = self
-            .queue
-            .inner
-            .lock()
-            .map_err(|_| std::io::Error::other("VMess gRPC encrypted queue lock poisoned"))?;
-        while inner.bytes.is_empty() && !inner.closed {
-            inner =
-                self.queue.ready.wait(inner).map_err(|_| {
-                    std::io::Error::other("VMess gRPC encrypted queue wait poisoned")
-                })?;
-        }
-        if inner.bytes.is_empty() && inner.closed {
-            return Ok(0);
-        }
-        let read = buf.len().min(inner.bytes.len());
-        for slot in &mut buf[..read] {
-            *slot = inner.bytes.pop_front().expect("queue length checked");
-        }
-        Ok(read)
-    }
 }

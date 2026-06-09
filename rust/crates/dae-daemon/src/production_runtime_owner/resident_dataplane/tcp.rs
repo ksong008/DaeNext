@@ -10,9 +10,8 @@ use std::os::fd::AsRawFd;
 use std::path::PathBuf;
 use std::slice;
 use std::sync::{
-    Arc, Condvar, Mutex, OnceLock,
+    Arc, Mutex, OnceLock,
     atomic::{AtomicBool, Ordering},
-    mpsc,
 };
 use std::thread;
 use std::time::{Duration, Instant};
@@ -93,7 +92,7 @@ use super::{
     XTLS_RPRX_VISION,
 };
 use super::{ResidentDataplaneMetrics, ResidentTcpConnectionGuard};
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::io::{AsyncRead, AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener as TokioTcpListener, TcpStream as TokioTcpStream};
 use tokio::runtime;
 use tokio::time;
@@ -102,15 +101,17 @@ mod shadowsocks_stream;
 mod websocket;
 
 use shadowsocks_stream::{
-    AsyncV2rayPluginMuxPayloadState, AsyncWebSocketPayloadReader, AsyncWebSocketPayloadState,
-    read_shadowsocks_aead_chunk_from_v2ray_plugin_mux,
+    AsyncV2rayPluginMuxPayloadState, read_shadowsocks_aead_chunk_from_v2ray_plugin_mux,
     read_shadowsocks_aead_chunk_from_websocket_tls,
 };
+pub(crate) use shadowsocks_stream::{AsyncWebSocketPayloadReader, AsyncWebSocketPayloadState};
 use websocket::{
-    WebSocketBinaryFrameDecoder, WebSocketPayloadReader, httpupgrade_handshake_over_plain_stream,
-    httpupgrade_handshake_over_resident_tls_async, websocket_handshake_over_plain_stream,
+    WebSocketBinaryFrameDecoder, WebSocketPayloadReader, httpupgrade_handshake_over_async_stream,
+    httpupgrade_handshake_over_plain_stream, httpupgrade_handshake_over_resident_tls_async,
+    websocket_handshake_over_async_stream, websocket_handshake_over_plain_stream,
     websocket_handshake_over_resident_tls_async,
-    write_websocket_binary_frame_over_resident_tls_async, write_websocket_binary_frame_to_stream,
+    write_websocket_binary_frame_over_resident_tls_async,
+    write_websocket_binary_frame_to_async_stream, write_websocket_binary_frame_to_stream,
 };
 
 mod router;
@@ -126,9 +127,14 @@ pub(super) use self::proxy_dispatch::*;
 mod plain_handlers;
 use self::plain_handlers::*;
 mod vmess_handlers;
+pub(crate) use self::vmess_handlers::open_grpc_h2_stream;
 use self::vmess_handlers::*;
 mod transport_helpers;
 use self::transport_helpers::*;
+pub(crate) use self::transport_helpers::{
+    collect_vmess_grpc_decrypted, decode_vmess_grpc_response_stream_async, pop_grpc_hunk_payload,
+    send_grpc_hunk, send_h2_data,
+};
 mod stream_helpers;
 use self::stream_helpers::*;
 mod shadowsocks_relay;

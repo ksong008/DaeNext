@@ -275,7 +275,7 @@ impl ResidentExecutableGraphDescriptor {
         json!({
             "schemaVersion": 1,
             "status": "admitted",
-            "manager": "bounded-resident-packet-session",
+            "manager": "resident-udp-session-manager",
             "graphId": self.graph_id,
             "packetSemantics": self.packet_semantics,
             "keyFields": [
@@ -285,7 +285,7 @@ impl ResidentExecutableGraphDescriptor {
                 "originalDestination",
                 "packetSemantics"
             ],
-            "limitSource": "resident-udp-packet-worker-limit",
+            "limitSource": "resident-udp-session-limit",
             "transientExchangeCompatible": true,
         })
     }

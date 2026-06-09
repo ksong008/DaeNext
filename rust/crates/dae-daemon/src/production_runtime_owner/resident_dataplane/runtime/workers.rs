@@ -147,9 +147,8 @@ pub(crate) fn start_resident_dataplane_workers(
     };
     let event_lock = Arc::new(Mutex::new(()));
     let tcp_flow_stack_bytes = resident_tcp_flow_stack_bytes();
-    let udp_packet_workers = resident_udp_packet_workers();
-    let udp_packet_stack_bytes = resident_udp_packet_stack_bytes();
-    let udp_packet_workers_active = Arc::new(AtomicUsize::new(0));
+    let udp_session_limit = resident_udp_session_limit();
+    let udp_sessions_active = Arc::new(AtomicUsize::new(0));
     let mut handles = Vec::new();
     {
         let stop = Arc::clone(&stop);
@@ -176,7 +175,7 @@ pub(crate) fn start_resident_dataplane_workers(
         let event_file = event_file.clone();
         let event_lock = Arc::clone(&event_lock);
         let metrics = Arc::clone(&metrics);
-        let active_workers = Arc::clone(&udp_packet_workers_active);
+        let active_sessions = Arc::clone(&udp_sessions_active);
         handles.push(thread::spawn(move || {
             resident_udp_loop(
                 udp_socket,
@@ -186,9 +185,8 @@ pub(crate) fn start_resident_dataplane_workers(
                 event_file,
                 event_lock,
                 metrics,
-                active_workers,
-                udp_packet_workers,
-                udp_packet_stack_bytes,
+                active_sessions,
+                udp_session_limit,
             )
         }));
     }
@@ -218,13 +216,11 @@ pub(crate) fn start_resident_dataplane_workers(
         "status": "pass",
         "enabled": true,
         "tcp_worker_started": true,
-        "udp_worker_started": true,
+        "udp_session_manager_started": true,
         "tcp_flow_stack_bytes": tcp_flow_stack_bytes,
         "tcp_flow_stack_bytes_env": RESIDENT_TCP_FLOW_STACK_BYTES_ENV,
-        "udp_packet_workers": udp_packet_workers,
-        "udp_packet_workers_env": RESIDENT_UDP_PACKET_WORKERS_ENV,
-        "udp_packet_stack_bytes": udp_packet_stack_bytes,
-        "udp_packet_stack_bytes_env": RESIDENT_UDP_PACKET_STACK_BYTES_ENV,
+        "udp_session_limit": udp_session_limit,
+        "udp_session_limit_env": RESIDENT_UDP_SESSION_LIMIT_ENV,
         "event_file": path_string(&event_file),
         "reload_generation": reload_generation,
         "routing_tuple_map_id": routing_tuple_map_id,
@@ -275,7 +271,7 @@ pub(crate) fn start_resident_dataplane_workers(
             event_lock,
             reload_generation,
             metrics,
-            udp_packet_workers_active,
+            udp_sessions_active,
             groups: runtime_groups,
             manual_probe_plans,
         }),

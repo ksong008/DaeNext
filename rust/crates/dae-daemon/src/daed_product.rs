@@ -68,9 +68,12 @@ const LOG_STREAM_HEARTBEAT_INTERVAL: Duration = Duration::from_secs(15);
 const LOG_STREAM_RETRY_MS: u64 = 3_000;
 const PRODUCT_LOG_DIR: &str = "logs";
 const PRODUCT_LOG_FILE: &str = "current.jsonl";
-const PRODUCT_HTTP_WORKERS_ENV: &str = "DAED_HTTP_WORKERS";
-const PRODUCT_HTTP_QUEUE_ENV: &str = "DAED_HTTP_QUEUE";
-const PRODUCT_HTTP_WORKER_STACK_BYTES_ENV: &str = "DAED_HTTP_WORKER_STACK_BYTES";
+const PRODUCT_HTTP_WORKERS_ENV: &str = "HTTP_WORKERS";
+const PRODUCT_HTTP_WORKERS_LEGACY_ENV: &str = "DAED_HTTP_WORKERS";
+const PRODUCT_HTTP_QUEUE_ENV: &str = "HTTP_QUEUE";
+const PRODUCT_HTTP_QUEUE_LEGACY_ENV: &str = "DAED_HTTP_QUEUE";
+const PRODUCT_HTTP_WORKER_STACK_BYTES_ENV: &str = "HTTP_WORKER_STACK_BYTES";
+const PRODUCT_HTTP_WORKER_STACK_BYTES_LEGACY_ENV: &str = "DAED_HTTP_WORKER_STACK_BYTES";
 const PRODUCT_HTTP_WORKER_DEFAULT_MIN: usize = 4;
 const PRODUCT_HTTP_WORKER_DEFAULT_MAX: usize = 16;
 const PRODUCT_HTTP_WORKER_MIN: usize = 1;
@@ -222,20 +225,23 @@ impl ProductHttpWorkerConfig {
                 PRODUCT_HTTP_WORKER_DEFAULT_MAX,
             );
         Self {
-            worker_count: env_usize(
+            worker_count: env_usize_with_legacy(
                 PRODUCT_HTTP_WORKERS_ENV,
+                PRODUCT_HTTP_WORKERS_LEGACY_ENV,
                 default_workers,
                 PRODUCT_HTTP_WORKER_MIN,
                 PRODUCT_HTTP_WORKER_MAX,
             ),
-            queue_capacity: env_usize(
+            queue_capacity: env_usize_with_legacy(
                 PRODUCT_HTTP_QUEUE_ENV,
+                PRODUCT_HTTP_QUEUE_LEGACY_ENV,
                 PRODUCT_HTTP_QUEUE_DEFAULT,
                 PRODUCT_HTTP_QUEUE_MIN,
                 PRODUCT_HTTP_QUEUE_MAX,
             ),
-            worker_stack_bytes: env_usize(
+            worker_stack_bytes: env_usize_with_legacy(
                 PRODUCT_HTTP_WORKER_STACK_BYTES_ENV,
+                PRODUCT_HTTP_WORKER_STACK_BYTES_LEGACY_ENV,
                 PRODUCT_HTTP_WORKER_STACK_BYTES_DEFAULT,
                 PRODUCT_HTTP_WORKER_STACK_BYTES_MIN,
                 PRODUCT_HTTP_WORKER_STACK_BYTES_MAX,
@@ -244,8 +250,15 @@ impl ProductHttpWorkerConfig {
     }
 }
 
-fn env_usize(name: &str, default: usize, min: usize, max: usize) -> usize {
+fn env_usize_with_legacy(
+    name: &str,
+    legacy_name: &str,
+    default: usize,
+    min: usize,
+    max: usize,
+) -> usize {
     std::env::var(name)
+        .or_else(|_| std::env::var(legacy_name))
         .ok()
         .and_then(|value| value.trim().parse::<usize>().ok())
         .unwrap_or(default)

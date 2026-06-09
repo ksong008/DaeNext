@@ -11,6 +11,7 @@ pub(super) struct RuntimeExecutionDescriptor {
     stream_wrapper: Option<String>,
     protocol_framing: Option<String>,
     transport_underlay: Option<String>,
+    session_ownership: Option<String>,
     graph_id: Option<String>,
 }
 
@@ -26,6 +27,7 @@ impl RuntimeExecutionDescriptor {
             stream_wrapper: None,
             protocol_framing: None,
             transport_underlay: None,
+            session_ownership: None,
             graph_id: None,
         }
     }
@@ -57,6 +59,11 @@ impl RuntimeExecutionDescriptor {
         self
     }
 
+    pub(super) fn with_session_ownership(mut self, session_ownership: &str) -> Self {
+        self.session_ownership = Some(session_ownership.to_owned());
+        self
+    }
+
     pub(super) fn with_graph_id(mut self, graph_id: &str) -> Self {
         if !graph_id.is_empty() {
             self.graph_id = Some(graph_id.to_owned());
@@ -84,6 +91,9 @@ impl RuntimeExecutionDescriptor {
         }
         if let Some(transport_underlay) = &self.transport_underlay {
             descriptor.insert("transportUnderlay".to_owned(), json!(transport_underlay));
+        }
+        if let Some(session_ownership) = &self.session_ownership {
+            descriptor.insert("sessionOwnership".to_owned(), json!(session_ownership));
         }
         if let Some(graph_id) = &self.graph_id {
             descriptor.insert("graphId".to_owned(), json!(graph_id));

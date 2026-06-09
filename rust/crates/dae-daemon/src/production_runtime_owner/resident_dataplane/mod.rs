@@ -30,7 +30,7 @@ pub(crate) use self::events::{
 use self::events::{append_event, path_string};
 use self::plan::build_resident_dataplane_plan;
 use self::tcp::{ResidentTcpRouter, probe_resident_proxy_tcp, resident_tcp_accept_loop};
-use self::udp::{probe_resident_proxy_dns_udp, probe_resident_proxy_udp, resident_udp_loop};
+use self::udp::{probe_resident_proxy_dns_udp_async, probe_resident_proxy_udp, resident_udp_loop};
 use super::resident_routing::build_resident_userspace_routing_matcher;
 
 mod adapter_matrix;

@@ -24,14 +24,14 @@ pub use dataplane::{
     aead_tcp_exchange_over_websocket_stream, aead_tcp_exchange_over_wss_tls_stream,
     aead_tcp_exchange_over_xhttp_h3_loopback, aead_tcp_exchange_over_xhttp_http2_stream,
     aead_tcp_response_packet, aead_tcp_response_reader_from_async_stream,
-    aead_tcp_response_reader_from_stream, aead_udp_over_tcp_exchange_over_stream,
-    read_aead_mux_request_from_stream, read_aead_packet_addr_udp_request_from_stream,
-    read_aead_tcp_request_from_grpc_http2_stream, read_aead_tcp_request_from_grpc_hunk_stream,
-    read_aead_tcp_request_from_httpupgrade_stream, read_aead_tcp_request_from_meek_polling_stream,
-    read_aead_tcp_request_from_stream, read_aead_tcp_request_from_websocket_stream,
-    read_aead_tcp_request_from_xhttp_http2_stream, read_aead_udp_over_tcp_request_from_stream,
-    read_http_transport_request_head_from_stream, vmess_cmd_key_from_uuid,
-    write_aead_grpc_http2_hunk_response, write_aead_xhttp_http2_response,
+    aead_tcp_response_reader_from_stream, aead_udp_over_tcp_client_session_start,
+    aead_udp_over_tcp_exchange_over_stream, read_aead_mux_request_from_stream,
+    read_aead_packet_addr_udp_request_from_stream, read_aead_tcp_request_from_grpc_http2_stream,
+    read_aead_tcp_request_from_grpc_hunk_stream, read_aead_tcp_request_from_httpupgrade_stream,
+    read_aead_tcp_request_from_meek_polling_stream, read_aead_tcp_request_from_stream,
+    read_aead_tcp_request_from_websocket_stream, read_aead_tcp_request_from_xhttp_http2_stream,
+    read_aead_udp_over_tcp_request_from_stream, read_http_transport_request_head_from_stream,
+    vmess_cmd_key_from_uuid, write_aead_grpc_http2_hunk_response, write_aead_xhttp_http2_response,
 };
 pub use link::VMessLink;
 pub use metadata::{

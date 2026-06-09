@@ -20,6 +20,18 @@ pub(super) fn open_plain_proxy_tcp_stream(proxy: &ResidentProxyPlan) -> Result<T
     Ok(connection.stream)
 }
 
+pub(super) async fn open_plain_proxy_tcp_stream_async(
+    proxy: &ResidentProxyPlan,
+) -> Result<TokioTcpStream, String> {
+    if let Some(parent) = proxy.chain_parent.as_deref() {
+        return open_plain_proxy_tcp_stream_through_parent_async(proxy, parent).await;
+    }
+    let target = format!("{}:{}", proxy.server_host, proxy.server_port);
+    let connection = open_direct_tcp_connection_async(target, proxy.mark, proxy.mptcp).await?;
+    TokioTcpStream::from_std(connection.stream)
+        .map_err(|err| format!("adopt async proxy TCP stream: {err}"))
+}
+
 pub(super) fn open_plain_proxy_tcp_stream_through_parent(
     proxy: &ResidentProxyPlan,
     parent: &ResidentProxyPlan,
@@ -70,6 +82,44 @@ pub(super) fn open_plain_proxy_tcp_stream_through_parent(
     stream
         .set_write_timeout(Some(RESIDENT_CONNECT_TIMEOUT))
         .map_err(|err| format!("set chained child TCP write timeout: {err}"))?;
+    Ok(stream)
+}
+
+pub(super) async fn open_plain_proxy_tcp_stream_through_parent_async(
+    proxy: &ResidentProxyPlan,
+    parent: &ResidentProxyPlan,
+) -> Result<TokioTcpStream, String> {
+    let parent_target = format!("{}:{}", parent.server_host, parent.server_port);
+    let connection =
+        open_direct_tcp_connection_async(parent_target, parent.mark, parent.mptcp).await?;
+    let mut stream = TokioTcpStream::from_std(connection.stream)
+        .map_err(|err| format!("adopt async parent proxy TCP stream: {err}"))?;
+    let child_target = format!("{}:{}", proxy.server_host, proxy.server_port);
+    match &parent.handler {
+        ResidentProxyProtocolPlan::Socks5Tcp { username, password } => {
+            socks5_connect_async(&mut stream, &child_target, username, password).await?;
+        }
+        ResidentProxyProtocolPlan::HttpProxyTcp {
+            username, password, ..
+        } if parent.tls == "none" => {
+            http_proxy_connect_plain_async(
+                &mut stream,
+                &child_target,
+                username,
+                password,
+                false,
+                "",
+                "",
+            )
+            .await?;
+        }
+        _ => {
+            return Err(format!(
+                "resident chain parent {} is not backed by a plain parent CONNECT executor",
+                parent.protocol
+            ));
+        }
+    }
     Ok(stream)
 }
 
@@ -298,6 +348,67 @@ pub(super) fn socks5_connect(
     Ok(())
 }
 
+pub(super) async fn socks5_connect_async(
+    stream: &mut TokioTcpStream,
+    target: &str,
+    username: &str,
+    password: &str,
+) -> Result<(), String> {
+    time::timeout(RESIDENT_CONNECT_TIMEOUT, async {
+        stream
+            .write_all(&handshake::greeting(username, password))
+            .await
+            .map_err(|err| format!("write SOCKS5 greeting: {err}"))?;
+        let mut method_selection = [0_u8; 2];
+        stream
+            .read_exact(&mut method_selection)
+            .await
+            .map_err(|err| format!("read SOCKS5 method selection: {err}"))?;
+        let method = handshake::parse_method_selection(&method_selection)
+            .map_err(|err| format!("parse SOCKS5 method selection: {err}"))?;
+        if method == handshake::AUTH_PASSWORD {
+            let auth = handshake::username_password_auth(username, password)
+                .map_err(|err| format!("build SOCKS5 auth: {err}"))?;
+            stream
+                .write_all(&auth)
+                .await
+                .map_err(|err| format!("write SOCKS5 auth: {err}"))?;
+            let mut auth_reply = [0_u8; 2];
+            stream
+                .read_exact(&mut auth_reply)
+                .await
+                .map_err(|err| format!("read SOCKS5 auth reply: {err}"))?;
+            if auth_reply[0] != handshake::PASSWORD_AUTH_VERSION || auth_reply[1] != 0 {
+                return Err(format!("SOCKS5 auth rejected: {:02x?}", auth_reply));
+            }
+        }
+        let target =
+            Socks5Address::parse(target).map_err(|err| format!("parse SOCKS5 target: {err}"))?;
+        let request = handshake::request(handshake::Socks5Command::Connect, &target)
+            .map_err(|err| format!("build SOCKS5 CONNECT: {err}"))?;
+        stream
+            .write_all(&request)
+            .await
+            .map_err(|err| format!("write SOCKS5 CONNECT: {err}"))?;
+        let mut reply_head = [0_u8; 3];
+        stream
+            .read_exact(&mut reply_head)
+            .await
+            .map_err(|err| format!("read SOCKS5 CONNECT reply: {err}"))?;
+        let mut reply = reply_head.to_vec();
+        reply.extend(
+            read_socks5_address_bytes_async(stream)
+                .await
+                .map_err(|err| err.to_string())?,
+        );
+        handshake::parse_server_reply(&reply)
+            .map_err(|err| format!("parse SOCKS5 CONNECT reply: {err}"))?;
+        Ok(())
+    })
+    .await
+    .map_err(|_| "SOCKS5 CONNECT timeout".to_owned())?
+}
+
 pub(super) fn http_proxy_connect(
     stream: &mut TcpStream,
     target: &str,
@@ -342,6 +453,56 @@ pub(super) fn http_proxy_connect(
     Ok(())
 }
 
+pub(super) async fn http_proxy_connect_plain_async(
+    stream: &mut TokioTcpStream,
+    target: &str,
+    username: &str,
+    password: &str,
+    transport: bool,
+    transport_host: &str,
+    transport_path: &str,
+) -> Result<(), String> {
+    time::timeout(RESIDENT_CONNECT_TIMEOUT, async {
+        let mut options = HttpConnectOptions::connect(target);
+        options.username = username.to_owned();
+        options.password = password.to_owned();
+        options.transport.enabled = transport;
+        options.host_override = transport_host.to_owned();
+        options.transport.path = transport_path.to_owned();
+        let request = http_request::connect_request(&options);
+        stream
+            .write_all(&request)
+            .await
+            .map_err(|err| format!("write HTTP CONNECT request: {err}"))?;
+        let mut response = Vec::new();
+        let mut buf = [0_u8; 512];
+        loop {
+            let read = stream
+                .read(&mut buf)
+                .await
+                .map_err(|err| format!("read HTTP CONNECT response: {err}"))?;
+            if read == 0 {
+                break;
+            }
+            response.extend_from_slice(&buf[..read]);
+            if response.windows(4).any(|window| window == b"\r\n\r\n") {
+                break;
+            }
+            if response.len() > 8192 {
+                return Err("HTTP CONNECT response too large".to_owned());
+            }
+        }
+        let status = http_request::parse_connect_response(&response)
+            .map_err(|err| format!("parse HTTP CONNECT response: {err}"))?;
+        if status != 200 {
+            return Err(format!("HTTP CONNECT status: {status}"));
+        }
+        Ok(())
+    })
+    .await
+    .map_err(|_| "HTTP CONNECT timeout".to_owned())?
+}
+
 pub(super) fn read_socks5_address_bytes(stream: &mut TcpStream) -> std::io::Result<Vec<u8>> {
     let mut atyp = [0_u8; 1];
     stream.read_exact(&mut atyp)?;
@@ -363,6 +524,36 @@ pub(super) fn read_socks5_address_bytes(stream: &mut TcpStream) -> std::io::Resu
         4 => {
             let mut rest = [0_u8; 18];
             stream.read_exact(&mut rest)?;
+            out.extend_from_slice(&rest);
+        }
+        _ => {}
+    }
+    Ok(out)
+}
+
+pub(super) async fn read_socks5_address_bytes_async(
+    stream: &mut TokioTcpStream,
+) -> std::io::Result<Vec<u8>> {
+    let mut atyp = [0_u8; 1];
+    stream.read_exact(&mut atyp).await?;
+    let mut out = atyp.to_vec();
+    match atyp[0] {
+        1 => {
+            let mut rest = [0_u8; 6];
+            stream.read_exact(&mut rest).await?;
+            out.extend_from_slice(&rest);
+        }
+        3 => {
+            let mut len = [0_u8; 1];
+            stream.read_exact(&mut len).await?;
+            out.extend_from_slice(&len);
+            let mut rest = vec![0_u8; len[0] as usize + 2];
+            stream.read_exact(&mut rest).await?;
+            out.extend_from_slice(&rest);
+        }
+        4 => {
+            let mut rest = [0_u8; 18];
+            stream.read_exact(&mut rest).await?;
             out.extend_from_slice(&rest);
         }
         _ => {}

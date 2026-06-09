@@ -1,11 +1,11 @@
 use super::*;
 mod grpc_common;
-pub(super) use self::grpc_common::*;
+pub(crate) use self::grpc_common::*;
 mod xhttp_h2;
 pub(super) use self::xhttp_h2::*;
 mod grpc_relay;
 pub(super) use self::grpc_relay::*;
 mod vmess_grpc;
-pub(super) use self::vmess_grpc::*;
+pub(crate) use self::vmess_grpc::*;
 mod resident_tls_plain;
 pub(super) use self::resident_tls_plain::*;

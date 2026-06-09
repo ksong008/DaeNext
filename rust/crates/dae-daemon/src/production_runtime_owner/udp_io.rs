@@ -34,6 +34,13 @@ pub(super) fn recv_udp_with_original_dst(
     }
 }
 
+pub(super) fn try_recv_udp_with_original_dst(
+    socket: &UdpSocket,
+    expected_len: usize,
+) -> Result<UdpOriginalDstPacket, String> {
+    recvmsg_udp_original_dst(socket, expected_len)
+}
+
 fn recvmsg_udp_original_dst(
     socket: &UdpSocket,
     expected_len: usize,
