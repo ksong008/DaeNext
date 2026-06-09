@@ -1,4 +1,4 @@
-use std::io::{ErrorKind, Read};
+use std::io::{self, ErrorKind, Read};
 use std::net::{Shutdown, SocketAddr, SocketAddrV4, TcpStream, ToSocketAddrs};
 use std::sync::{
     Arc,
@@ -7,9 +7,12 @@ use std::sync::{
 use std::thread;
 use std::time::{Duration, Instant};
 
-use dae_datapath::{TcpDirectDialOptions, TcpDirectDialReport, magic_tcp_connect};
+use dae_datapath::{
+    TcpDirectDialOptions, TcpDirectDialReport, magic_tcp_connect, tcp_direct_connect_finish,
+    tcp_direct_connect_start,
+};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
-use tokio::net::TcpStream as TokioTcpStream;
+use tokio::net::{TcpStream as TokioTcpStream, lookup_host};
 use tokio::time;
 
 use super::io::write_all_nonblocking;
@@ -66,9 +69,59 @@ pub(super) async fn open_direct_tcp_connection_async(
     mark: u32,
     mptcp: bool,
 ) -> Result<DirectTcpConnection, String> {
-    tokio::task::spawn_blocking(move || open_direct_tcp_connection(&dial_target, mark, mptcp))
+    let target = resolve_direct_tcp_target_async(&dial_target).await?;
+    let opts = TcpDirectDialOptions {
+        mark,
+        mptcp,
+        timeout: RESIDENT_CONNECT_TIMEOUT,
+    };
+    let connected = if mptcp {
+        match connect_direct_tcp_attempt_async(target, &opts, true).await {
+            Ok(mut connected) => {
+                connected.report.mptcp_connect_fallback_used = false;
+                Ok(connected)
+            }
+            Err(first_err) => match connect_direct_tcp_attempt_async(target, &opts, false).await {
+                Ok(mut connected) => {
+                    connected.report.mptcp_socket_attempted = true;
+                    connected.report.mptcp_connect_fallback_used = true;
+                    Ok(connected)
+                }
+                Err(_) => Err(first_err),
+            },
+        }
+    } else {
+        connect_direct_tcp_attempt_async(target, &opts, false).await
+    }
+    .map_err(|err| format!("connect direct TCP {target}: {err}"))?;
+    connected
+        .stream
+        .set_nonblocking(true)
+        .map_err(|err| format!("set direct TCP nonblocking: {err}"))?;
+    connected
+        .stream
+        .set_nodelay(true)
+        .map_err(|err| format!("set direct TCP_NODELAY: {err}"))?;
+    Ok(DirectTcpConnection {
+        stream: connected.stream,
+        report: connected.report,
+        target,
+    })
+}
+
+async fn connect_direct_tcp_attempt_async(
+    target: SocketAddrV4,
+    opts: &TcpDirectDialOptions,
+    use_mptcp: bool,
+) -> io::Result<dae_datapath::TcpDirectConnection> {
+    let attempt = tcp_direct_connect_start(target, opts, use_mptcp)?;
+    let (stream, state) = attempt.into_parts();
+    let stream = TokioTcpStream::from_std(stream)?;
+    time::timeout(opts.timeout, stream.writable())
         .await
-        .map_err(|err| format!("join direct TCP connect task: {err}"))?
+        .map_err(|_| io::Error::new(ErrorKind::TimedOut, "direct TCP connect timeout"))??;
+    let stream = stream.into_std()?;
+    tcp_direct_connect_finish(stream, state)
 }
 
 fn resolve_direct_tcp_target(dial_target: &str) -> Result<SocketAddrV4, String> {
@@ -77,6 +130,20 @@ fn resolve_direct_tcp_target(dial_target: &str) -> Result<SocketAddrV4, String> 
     }
     dial_target
         .to_socket_addrs()
+        .map_err(|err| format!("resolve direct TCP target {dial_target}: {err}"))?
+        .find_map(|addr| match addr {
+            SocketAddr::V4(addr) => Some(addr),
+            SocketAddr::V6(_) => None,
+        })
+        .ok_or_else(|| format!("resolve direct TCP target {dial_target} returned no IPv4 address"))
+}
+
+async fn resolve_direct_tcp_target_async(dial_target: &str) -> Result<SocketAddrV4, String> {
+    if let Ok(SocketAddr::V4(addr)) = dial_target.parse::<SocketAddr>() {
+        return Ok(addr);
+    }
+    lookup_host(dial_target)
+        .await
         .map_err(|err| format!("resolve direct TCP target {dial_target}: {err}"))?
         .find_map(|addr| match addr {
             SocketAddr::V4(addr) => Some(addr),
@@ -300,6 +367,26 @@ mod tests {
     fn resident_direct_target_accepts_ipv4_socket_addr() {
         let target = resolve_direct_tcp_target("127.0.0.1:443").unwrap();
         assert_eq!(target, SocketAddrV4::new("127.0.0.1".parse().unwrap(), 443));
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn resident_direct_async_dial_completes_magic_connect_report() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = match listener.local_addr().unwrap() {
+            SocketAddr::V4(addr) => addr,
+            SocketAddr::V6(addr) => panic!("test listener unexpectedly bound IPv6 address {addr}"),
+        };
+        let connection = open_direct_tcp_connection_async(addr.to_string(), 0, false)
+            .await
+            .unwrap();
+
+        assert_eq!(connection.target, addr);
+        assert_eq!(connection.report.requested_mark, 0);
+        assert!(!connection.report.requested_mptcp);
+        assert!(connection.report.so_mark_applied);
+        assert_eq!(connection.report.peer_addr, addr.to_string());
+        drop(connection);
+        let _ = listener.accept().unwrap();
     }
 
     #[test]

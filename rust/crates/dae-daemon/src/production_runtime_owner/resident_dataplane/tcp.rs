@@ -41,10 +41,9 @@ use dae_outbound::{
     shadowsocks::{
         AeadStreamCodec, ShadowsocksMetadata, ShadowsocksRStreamDecoder, ShadowsocksRStreamEncoder,
         Sip003SimpleObfsHttpOptions, Sip003SimpleObfsTlsOptions, cipher_spec,
-        read_encrypted_chunk_from_async_stream, read_encrypted_chunk_from_stream,
-        shadowsocksr_http_simple_origin_request, simple_obfs_http_request_with_body,
-        simple_obfs_tls_client_hello_with_body, ss2022_tcp_client_stream_encoder,
-        ss2022_tcp_server_stream_decoder, ss2022_tcp_server_stream_decoder_async,
+        read_encrypted_chunk_from_async_stream, shadowsocksr_http_simple_origin_request,
+        simple_obfs_http_request_with_body, simple_obfs_tls_client_hello_with_body,
+        ss2022_tcp_client_stream_encoder, ss2022_tcp_server_stream_decoder_async,
         ss2022_tcp_unix_timestamp_now,
     },
     shared_transport::mux::{
@@ -63,7 +62,7 @@ use dae_outbound::{
     vless::packet,
     vmess::{
         VMessAeadTcpClientSessionStart, VMessMetadata, aead_tcp_client_session_start,
-        aead_tcp_response_reader_from_async_stream, aead_tcp_response_reader_from_stream,
+        aead_tcp_response_reader_from_async_stream,
     },
 };
 use dae_routing::{Query, RoutingMatcher};
@@ -74,12 +73,11 @@ use serde_json::{Value, json};
 use super::client::{
     AsyncResidentTlsClient, AsyncVlessTlsClient, TlsDriveOutcome, VlessTlsClient,
     async_resident_tls_underlay_name, async_tls_underlay_name, drive_tls_io_record_aware,
-    open_async_resident_tls_client, open_async_vless_tls_client, open_vless_tls_client,
-    tls_underlay_name,
+    open_async_resident_tls_client, open_async_vless_tls_client,
 };
 use super::direct::{
     DirectTcpConnection, DirectTcpRelayStats, open_direct_tcp_connection,
-    open_direct_tcp_connection_async, relay_tcp_direct, relay_tcp_direct_async,
+    open_direct_tcp_connection_async, relay_tcp_direct_async,
 };
 use super::events::append_event;
 use super::execution::{append_runtime_execution_descriptor, tcp_execution_descriptor};
@@ -109,12 +107,11 @@ use shadowsocks_stream::{
 };
 pub(crate) use shadowsocks_stream::{AsyncWebSocketPayloadReader, AsyncWebSocketPayloadState};
 use websocket::{
-    WebSocketBinaryFrameDecoder, WebSocketPayloadReader, httpupgrade_handshake_over_async_stream,
-    httpupgrade_handshake_over_plain_stream, httpupgrade_handshake_over_resident_tls_async,
-    websocket_handshake_over_async_stream, websocket_handshake_over_plain_stream,
+    WebSocketBinaryFrameDecoder, httpupgrade_handshake_over_async_stream,
+    httpupgrade_handshake_over_resident_tls_async, websocket_handshake_over_async_stream,
     websocket_handshake_over_resident_tls_async,
     write_websocket_binary_frame_over_resident_tls_async,
-    write_websocket_binary_frame_to_async_stream, write_websocket_binary_frame_to_stream,
+    write_websocket_binary_frame_to_async_stream,
 };
 
 mod router;

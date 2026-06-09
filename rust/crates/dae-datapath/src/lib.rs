@@ -31,9 +31,10 @@ pub use dial::{magic_network, magic_network_bytes, magic_network_len, write_magi
 pub use packet_sniffer::{PACKET_SNIFFER_POOL_MAX_ENTRIES, PACKET_SNIFFER_TTL_MS};
 pub use route::{RouteLoopResult, RouteRule, route_loop};
 pub use tcp_direct::{
-    TcpDirectConnection, TcpDirectDialOptions, TcpDirectDialReport, TcpLoopbackListenerReport,
-    bind_loopback_tcp_listener, bind_loopback_tcp_listener_on_port, magic_tcp_connect,
-    mptcp_socket_supported,
+    TcpDirectConnectAttempt, TcpDirectConnectState, TcpDirectConnection, TcpDirectDialOptions,
+    TcpDirectDialReport, TcpLoopbackListenerReport, bind_loopback_tcp_listener,
+    bind_loopback_tcp_listener_on_port, magic_tcp_connect, mptcp_socket_supported,
+    tcp_direct_connect_finish, tcp_direct_connect_start,
 };
 pub use tcp_route_dial::{
     ChooseDialTargetDecision, OUTBOUND_BLOCK, OUTBOUND_CONTROL_PLANE_ROUTING, OUTBOUND_DIRECT,
