@@ -69,26 +69,29 @@ where
 }
 
 #[derive(Default)]
-pub(super) struct AsyncWebSocketPayloadState {
+pub(crate) struct AsyncWebSocketPayloadState {
     decoder: WebSocketBinaryFrameDecoder,
     pending: VecDeque<u8>,
 }
 
-pub(super) struct AsyncWebSocketPayloadReader<'a, 'b> {
-    client: &'a mut AsyncResidentTlsClient,
+pub(crate) struct AsyncWebSocketPayloadReader<'a, 'b, R> {
+    client: &'a mut R,
     state: &'b mut AsyncWebSocketPayloadState,
 }
 
-impl<'a, 'b> AsyncWebSocketPayloadReader<'a, 'b> {
-    pub(super) fn new(
-        client: &'a mut AsyncResidentTlsClient,
-        state: &'b mut AsyncWebSocketPayloadState,
-    ) -> Self {
+impl<'a, 'b, R> AsyncWebSocketPayloadReader<'a, 'b, R>
+where
+    R: AsyncRead + Unpin,
+{
+    pub(crate) fn new(client: &'a mut R, state: &'b mut AsyncWebSocketPayloadState) -> Self {
         Self { client, state }
     }
 }
 
-impl AsyncRead for AsyncWebSocketPayloadReader<'_, '_> {
+impl<R> AsyncRead for AsyncWebSocketPayloadReader<'_, '_, R>
+where
+    R: AsyncRead + Unpin,
+{
     fn poll_read(
         mut self: Pin<&mut Self>,
         cx: &mut Context<'_>,

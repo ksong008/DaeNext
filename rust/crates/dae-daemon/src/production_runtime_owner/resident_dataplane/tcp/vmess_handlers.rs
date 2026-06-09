@@ -64,6 +64,56 @@ pub(super) fn handle_vmess_proxy_tcp_connection(
 }
 
 #[allow(clippy::too_many_arguments)]
+pub(super) async fn handle_vmess_proxy_tcp_connection_async(
+    inbound: &mut TokioTcpStream,
+    peer: SocketAddr,
+    original_dst: SocketAddrV4,
+    selection: TcpProxySelection,
+    stop: Arc<AtomicBool>,
+    sniff: &TcpSniffReport,
+    metrics: &ResidentDataplaneMetrics,
+    id: &str,
+) -> Result<Value, String> {
+    let mut proxy = open_plain_proxy_tcp_stream_async(&selection.proxy).await?;
+    let session = aead_tcp_client_session_start(id, &selection.route.dial_target, &sniff.payload)
+        .map_err(|err| format!("build VMess AEAD TCP session: {err}"))?;
+    proxy
+        .write_all(&session.first_write)
+        .await
+        .map_err(|err| format!("write VMess AEAD TCP initial request: {err}"))?;
+    let mut initial_stats = DirectTcpRelayStats::default();
+    if !sniff.payload.is_empty() {
+        initial_stats.client_to_direct += sniff.payload.len();
+        metrics.add_upload(sniff.payload.len());
+    }
+
+    relay_tcp_over_vmess_aead_async(inbound, &mut proxy, stop, session, initial_stats, metrics)
+        .await
+        .map(|stats| {
+            generic_proxy_tcp_finished_event(
+                peer,
+                original_dst,
+                &selection,
+                sniff,
+                "vmess",
+                &stats,
+                "aead-tcp-relay",
+            )
+        })
+        .or_else(|err| {
+            Ok::<Value, String>(generic_proxy_tcp_failed_event(
+                peer,
+                original_dst,
+                &selection,
+                sniff,
+                "vmess",
+                &err,
+                "aead-tcp-relay",
+            ))
+        })
+}
+
+#[allow(clippy::too_many_arguments)]
 pub(super) fn handle_vmess_websocket_proxy_tcp_connection(
     inbound: &mut TcpStream,
     peer: SocketAddr,
@@ -137,6 +187,72 @@ pub(super) fn handle_vmess_websocket_proxy_tcp_connection(
 }
 
 #[allow(clippy::too_many_arguments)]
+pub(super) async fn handle_vmess_websocket_proxy_tcp_connection_async(
+    inbound: &mut TokioTcpStream,
+    peer: SocketAddr,
+    original_dst: SocketAddrV4,
+    selection: TcpProxySelection,
+    stop: Arc<AtomicBool>,
+    sniff: &TcpSniffReport,
+    metrics: &ResidentDataplaneMetrics,
+    id: &str,
+) -> Result<Value, String> {
+    let mut proxy = open_plain_proxy_tcp_stream_async(&selection.proxy).await?;
+    let options =
+        HttpUpgradeOptions::new(&selection.proxy.stream_host, &selection.proxy.stream_path);
+    websocket_handshake_over_async_stream(&mut proxy, &options).await?;
+    let session = aead_tcp_client_session_start(id, &selection.route.dial_target, &sniff.payload)
+        .map_err(|err| format!("build VMess WebSocket AEAD TCP session: {err}"))?;
+    write_websocket_binary_frame_to_async_stream(
+        &mut proxy,
+        &session.first_write,
+        "write VMess websocket request",
+    )
+    .await?;
+    let mut initial_stats = DirectTcpRelayStats::default();
+    if !sniff.payload.is_empty() {
+        initial_stats.client_to_direct += sniff.payload.len();
+        metrics.add_upload(sniff.payload.len());
+    }
+
+    relay_tcp_over_vmess_websocket_aead_async(
+        inbound,
+        &mut proxy,
+        stop,
+        session,
+        initial_stats,
+        metrics,
+    )
+    .await
+    .map(|stats| {
+        let mut event = generic_proxy_tcp_finished_event(
+            peer,
+            original_dst,
+            &selection,
+            sniff,
+            "vmess",
+            &stats,
+            "wrapped-websocket-aead",
+        );
+        event["stream_wrapper"] = json!("websocket");
+        event
+    })
+    .or_else(|err| {
+        let mut event = generic_proxy_tcp_failed_event(
+            peer,
+            original_dst,
+            &selection,
+            sniff,
+            "vmess",
+            &err,
+            "wrapped-websocket-aead",
+        );
+        event["stream_wrapper"] = json!("websocket");
+        Ok::<Value, String>(event)
+    })
+}
+
+#[allow(clippy::too_many_arguments)]
 pub(super) fn handle_vmess_httpupgrade_proxy_tcp_connection(
     inbound: &mut TcpStream,
     peer: SocketAddr,
@@ -197,6 +313,63 @@ pub(super) fn handle_vmess_httpupgrade_proxy_tcp_connection(
                 peer,
                 original_dst,
                 selection,
+                sniff,
+                "vmess",
+                &err,
+                "wrapped-httpupgrade-aead",
+            );
+            event["stream_wrapper"] = json!("httpupgrade");
+            Ok::<Value, String>(event)
+        })
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(super) async fn handle_vmess_httpupgrade_proxy_tcp_connection_async(
+    inbound: &mut TokioTcpStream,
+    peer: SocketAddr,
+    original_dst: SocketAddrV4,
+    selection: TcpProxySelection,
+    stop: Arc<AtomicBool>,
+    sniff: &TcpSniffReport,
+    metrics: &ResidentDataplaneMetrics,
+    id: &str,
+) -> Result<Value, String> {
+    let mut proxy = open_plain_proxy_tcp_stream_async(&selection.proxy).await?;
+    let options =
+        HttpUpgradeOptions::new(&selection.proxy.stream_host, &selection.proxy.stream_path);
+    httpupgrade_handshake_over_async_stream(&mut proxy, &options).await?;
+    let session = aead_tcp_client_session_start(id, &selection.route.dial_target, &sniff.payload)
+        .map_err(|err| format!("build VMess HTTP Upgrade AEAD TCP session: {err}"))?;
+    proxy
+        .write_all(&session.first_write)
+        .await
+        .map_err(|err| format!("write VMess HTTP Upgrade request: {err}"))?;
+    let mut initial_stats = DirectTcpRelayStats::default();
+    if !sniff.payload.is_empty() {
+        initial_stats.client_to_direct += sniff.payload.len();
+        metrics.add_upload(sniff.payload.len());
+    }
+
+    relay_tcp_over_vmess_aead_async(inbound, &mut proxy, stop, session, initial_stats, metrics)
+        .await
+        .map(|stats| {
+            let mut event = generic_proxy_tcp_finished_event(
+                peer,
+                original_dst,
+                &selection,
+                sniff,
+                "vmess",
+                &stats,
+                "wrapped-httpupgrade-aead",
+            );
+            event["stream_wrapper"] = json!("httpupgrade");
+            event
+        })
+        .or_else(|err| {
+            let mut event = generic_proxy_tcp_failed_event(
+                peer,
+                original_dst,
+                &selection,
                 sniff,
                 "vmess",
                 &err,
@@ -442,7 +615,7 @@ pub(super) async fn handle_vmess_grpc_proxy_tcp_connection_async(
         })
 }
 
-pub(super) async fn open_grpc_h2_stream(
+pub(crate) async fn open_grpc_h2_stream(
     client: AsyncResidentTlsClient,
     proxy: &ResidentProxyPlan,
     first_payload: &[u8],

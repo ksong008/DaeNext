@@ -219,6 +219,57 @@ pub(crate) async fn handle_resident_proxy_tcp_connection_async(
     metrics: Arc<ResidentDataplaneMetrics>,
 ) -> Result<Value, String> {
     if let ResidentProxyProtocolPlan::VmessAeadTcp { id } = &selection.proxy.handler
+        && selection.proxy.net == "tcp"
+        && selection.proxy.tls == "none"
+    {
+        let id = id.clone();
+        return handle_vmess_proxy_tcp_connection_async(
+            &mut inbound,
+            peer,
+            original_dst,
+            selection,
+            stop,
+            &sniff,
+            &metrics,
+            &id,
+        )
+        .await;
+    }
+    if let ResidentProxyProtocolPlan::VmessAeadTcp { id } = &selection.proxy.handler
+        && selection.proxy.net == "websocket"
+        && selection.proxy.tls != "tls"
+    {
+        let id = id.clone();
+        return handle_vmess_websocket_proxy_tcp_connection_async(
+            &mut inbound,
+            peer,
+            original_dst,
+            selection,
+            stop,
+            &sniff,
+            &metrics,
+            &id,
+        )
+        .await;
+    }
+    if let ResidentProxyProtocolPlan::VmessAeadTcp { id } = &selection.proxy.handler
+        && selection.proxy.net == "httpupgrade"
+        && selection.proxy.tls != "tls"
+    {
+        let id = id.clone();
+        return handle_vmess_httpupgrade_proxy_tcp_connection_async(
+            &mut inbound,
+            peer,
+            original_dst,
+            selection,
+            stop,
+            &sniff,
+            &metrics,
+            &id,
+        )
+        .await;
+    }
+    if let ResidentProxyProtocolPlan::VmessAeadTcp { id } = &selection.proxy.handler
         && selection.proxy.net == "grpc"
     {
         let id = id.clone();
@@ -265,6 +316,52 @@ pub(crate) async fn handle_resident_proxy_tcp_connection_async(
             &sniff,
             &metrics,
             &id,
+        )
+        .await;
+    }
+    if let ResidentProxyProtocolPlan::Socks5Tcp { username, password } = &selection.proxy.handler {
+        let username = username.clone();
+        let password = password.clone();
+        return handle_socks5_proxy_tcp_connection_async(
+            &mut inbound,
+            peer,
+            original_dst,
+            selection,
+            stop,
+            &sniff,
+            &metrics,
+            &username,
+            &password,
+        )
+        .await;
+    }
+    if let ResidentProxyProtocolPlan::HttpProxyTcp {
+        username,
+        password,
+        transport,
+        transport_host,
+        transport_path,
+    } = &selection.proxy.handler
+        && selection.proxy.tls == "none"
+    {
+        let username = username.clone();
+        let password = password.clone();
+        let transport = *transport;
+        let transport_host = transport_host.clone();
+        let transport_path = transport_path.clone();
+        return handle_http_proxy_tcp_connection_async(
+            &mut inbound,
+            peer,
+            original_dst,
+            selection,
+            stop,
+            &sniff,
+            &metrics,
+            &username,
+            &password,
+            transport,
+            &transport_host,
+            &transport_path,
         )
         .await;
     }
