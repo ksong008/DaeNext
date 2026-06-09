@@ -32,8 +32,9 @@ use sha3::{
 };
 
 use crate::allocator::{
-    AllocatorReclaimReason, allocator_live_heap_bytes, allocator_profile, allocator_reclaim,
-    allocator_reclaim_snapshot_json, allocator_stats_json,
+    AllocatorReclaimReason, allocator_derived_stats_json_from, allocator_live_heap_bytes,
+    allocator_profile, allocator_reclaim, allocator_reclaim_snapshot_json,
+    allocator_stats_json_from, allocator_stats_snapshot,
 };
 use crate::config_validate::{load_config_file, validate_config_file};
 use crate::production_runtime_owner::{
@@ -93,7 +94,32 @@ const PRODUCT_MALLOC_ARENA_MAX_ENV: &str = "MALLOC_ARENA_MAX";
 const PRODUCT_MALLOC_ARENA_MAX_DEFAULT: &str = "2";
 const PRODUCT_JEMALLOC_CONF_ENV: &str = "MALLOC_CONF";
 const PRODUCT_JEMALLOC_CONF_DEFAULT: &str =
-    "background_thread:true,dirty_decay_ms:1000,muzzy_decay_ms:1000,narenas:2";
+    "background_thread:true,dirty_decay_ms:1000,muzzy_decay_ms:1000,narenas:4";
+const ALLOCATOR_IDLE_RECLAIM_ENABLED_ENV: &str = "ALLOCATOR_IDLE_RECLAIM_ENABLED";
+const ALLOCATOR_IDLE_RECLAIM_ENABLED_DEFAULT: bool = true;
+const ALLOCATOR_IDLE_RECLAIM_SAMPLE_INTERVAL_SECONDS_ENV: &str =
+    "ALLOCATOR_IDLE_RECLAIM_SAMPLE_INTERVAL_SECONDS";
+const ALLOCATOR_IDLE_RECLAIM_SAMPLE_INTERVAL_SECONDS_DEFAULT: u64 = 60;
+const ALLOCATOR_IDLE_RECLAIM_SAMPLE_INTERVAL_SECONDS_MIN: u64 = 10;
+const ALLOCATOR_IDLE_RECLAIM_SAMPLE_INTERVAL_SECONDS_MAX: u64 = 300;
+const ALLOCATOR_IDLE_RECLAIM_MIN_INTERVAL_SECONDS_ENV: &str =
+    "ALLOCATOR_IDLE_RECLAIM_MIN_INTERVAL_SECONDS";
+const ALLOCATOR_IDLE_RECLAIM_MIN_INTERVAL_SECONDS_DEFAULT: u64 = 300;
+const ALLOCATOR_IDLE_RECLAIM_MIN_INTERVAL_SECONDS_MIN: u64 = 60;
+const ALLOCATOR_IDLE_RECLAIM_MIN_INTERVAL_SECONDS_MAX: u64 = 3_600;
+const ALLOCATOR_IDLE_RECLAIM_LOW_TRAFFIC_SECONDS_ENV: &str =
+    "ALLOCATOR_IDLE_RECLAIM_LOW_TRAFFIC_SECONDS";
+const ALLOCATOR_IDLE_RECLAIM_LOW_TRAFFIC_SECONDS_DEFAULT: u64 = 300;
+const ALLOCATOR_IDLE_RECLAIM_LOW_TRAFFIC_SECONDS_MIN: u64 = 60;
+const ALLOCATOR_IDLE_RECLAIM_LOW_TRAFFIC_SECONDS_MAX: u64 = 3_600;
+const ALLOCATOR_IDLE_RECLAIM_PRESSURE_BYTES_ENV: &str = "ALLOCATOR_IDLE_RECLAIM_PRESSURE_BYTES";
+const ALLOCATOR_IDLE_RECLAIM_PRESSURE_BYTES_DEFAULT: u64 = 32 * 1024 * 1024;
+const ALLOCATOR_IDLE_RECLAIM_PRESSURE_BYTES_MIN: u64 = 4 * 1024 * 1024;
+const ALLOCATOR_IDLE_RECLAIM_PRESSURE_BYTES_MAX: u64 = 1024 * 1024 * 1024;
+const ALLOCATOR_IDLE_RECLAIM_MAX_TRAFFIC_RATE_BYTES_PER_SECOND_ENV: &str =
+    "ALLOCATOR_IDLE_RECLAIM_MAX_TRAFFIC_RATE_BYTES_PER_SECOND";
+const ALLOCATOR_IDLE_RECLAIM_MAX_TRAFFIC_RATE_BYTES_PER_SECOND_DEFAULT: u64 = 32 * 1024;
+const ALLOCATOR_IDLE_RECLAIM_MAX_TRAFFIC_RATE_BYTES_PER_SECOND_MAX: u64 = 16 * 1024 * 1024;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DaedProductOutput {
@@ -281,14 +307,29 @@ fn product_runtime_defaults() -> Value {
             "jemallocPolicy": {
                 "env": PRODUCT_JEMALLOC_CONF_ENV,
                 "default": PRODUCT_JEMALLOC_CONF_DEFAULT,
-                "scope": "jemalloc builds; keeps background purging and bounded arenas explicit",
+                "scope": "jemalloc builds; balances throughput and RSS with background purging and bounded arenas",
             },
             "reclaim": {
                 "startupControlBuilt": true,
-                "reloadOldOwnerClosed": true,
-                "reloadScopedResourcesFlushed": true,
-                "idleAfterReload": true,
+                "reloadCompleted": true,
                 "stopRuntime": true,
+                "hotPathPeriodicPurge": false,
+                "idleMemoryPressure": {
+                    "enabledEnv": ALLOCATOR_IDLE_RECLAIM_ENABLED_ENV,
+                    "enabledDefault": ALLOCATOR_IDLE_RECLAIM_ENABLED_DEFAULT,
+                    "idleDetection": "traffic-rate-only",
+                    "sessionCountGate": false,
+                    "sampleIntervalSecondsEnv": ALLOCATOR_IDLE_RECLAIM_SAMPLE_INTERVAL_SECONDS_ENV,
+                    "sampleIntervalSecondsDefault": ALLOCATOR_IDLE_RECLAIM_SAMPLE_INTERVAL_SECONDS_DEFAULT,
+                    "minIntervalSecondsEnv": ALLOCATOR_IDLE_RECLAIM_MIN_INTERVAL_SECONDS_ENV,
+                    "minIntervalSecondsDefault": ALLOCATOR_IDLE_RECLAIM_MIN_INTERVAL_SECONDS_DEFAULT,
+                    "lowTrafficSecondsEnv": ALLOCATOR_IDLE_RECLAIM_LOW_TRAFFIC_SECONDS_ENV,
+                    "lowTrafficSecondsDefault": ALLOCATOR_IDLE_RECLAIM_LOW_TRAFFIC_SECONDS_DEFAULT,
+                    "pressureBytesEnv": ALLOCATOR_IDLE_RECLAIM_PRESSURE_BYTES_ENV,
+                    "pressureBytesDefault": ALLOCATOR_IDLE_RECLAIM_PRESSURE_BYTES_DEFAULT.to_string(),
+                    "maxTrafficRateBytesPerSecondEnv": ALLOCATOR_IDLE_RECLAIM_MAX_TRAFFIC_RATE_BYTES_PER_SECOND_ENV,
+                    "maxTrafficRateBytesPerSecondDefault": ALLOCATOR_IDLE_RECLAIM_MAX_TRAFFIC_RATE_BYTES_PER_SECOND_DEFAULT.to_string(),
+                },
             },
         },
         "http": {

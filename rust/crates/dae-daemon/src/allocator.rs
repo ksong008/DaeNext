@@ -31,6 +31,7 @@ pub enum AllocatorReclaimReason {
     StartupControlBuilt,
     ReloadCompleted,
     StopRuntime,
+    IdleMemoryPressure,
 }
 
 impl AllocatorReclaimReason {
@@ -39,7 +40,61 @@ impl AllocatorReclaimReason {
             Self::StartupControlBuilt => "startup_control_built",
             Self::ReloadCompleted => "reload_completed",
             Self::StopRuntime => "stop_runtime",
+            Self::IdleMemoryPressure => "idle_memory_pressure",
         }
+    }
+}
+
+#[derive(Clone, Copy, Debug)]
+pub struct AllocatorStatsSnapshot {
+    pub allocated: u64,
+    pub active: u64,
+    pub metadata: u64,
+    pub resident: u64,
+    pub mapped: u64,
+    pub retained: u64,
+}
+
+impl AllocatorStatsSnapshot {
+    pub fn active_minus_allocated(self) -> u64 {
+        self.active.saturating_sub(self.allocated)
+    }
+
+    pub fn resident_minus_active(self) -> u64 {
+        self.resident.saturating_sub(self.active)
+    }
+
+    pub fn rss_anon_minus_allocated(self, anonymous_rss_bytes: u64) -> u64 {
+        anonymous_rss_bytes.saturating_sub(self.allocated)
+    }
+
+    pub fn idle_reclaim_pressure_bytes(self) -> u64 {
+        self.resident_minus_active().max(self.retained)
+    }
+
+    fn from_bytes(stats: BTreeMap<&'static str, u64>) -> Option<Self> {
+        Some(Self {
+            allocated: *stats.get("allocated")?,
+            active: *stats.get("active")?,
+            metadata: *stats.get("metadata")?,
+            resident: *stats.get("resident")?,
+            mapped: *stats.get("mapped")?,
+            retained: *stats.get("retained")?,
+        })
+    }
+
+    fn bytes_json(self) -> BTreeMap<&'static str, Value> {
+        [
+            ("allocated", self.allocated),
+            ("active", self.active),
+            ("metadata", self.metadata),
+            ("resident", self.resident),
+            ("mapped", self.mapped),
+            ("retained", self.retained),
+        ]
+        .into_iter()
+        .map(|(key, value)| (key, json!(value.to_string())))
+        .collect()
     }
 }
 
@@ -54,6 +109,7 @@ struct LastAllocatorReclaim {
 static STARTUP_CONTROL_BUILT_RECLAIMS: AtomicU64 = AtomicU64::new(0);
 static RELOAD_COMPLETED_RECLAIMS: AtomicU64 = AtomicU64::new(0);
 static STOP_RUNTIME_RECLAIMS: AtomicU64 = AtomicU64::new(0);
+static IDLE_MEMORY_PRESSURE_RECLAIMS: AtomicU64 = AtomicU64::new(0);
 static TOTAL_RECLAIMS: AtomicU64 = AtomicU64::new(0);
 static LAST_RECLAIM: OnceLock<Mutex<Option<LastAllocatorReclaim>>> = OnceLock::new();
 
@@ -68,18 +124,52 @@ pub fn allocator_profile() -> &'static str {
 }
 
 pub fn allocator_live_heap_bytes() -> Option<u64> {
-    allocator_stats_bytes().and_then(|stats| stats.get("allocated").copied())
+    allocator_stats_snapshot().map(|stats| stats.allocated)
 }
 
 pub fn allocator_stats_json() -> Value {
-    match allocator_stats_bytes() {
+    let snapshot = allocator_stats_snapshot();
+    allocator_stats_json_from(snapshot.as_ref())
+}
+
+pub fn allocator_stats_json_from(snapshot: Option<&AllocatorStatsSnapshot>) -> Value {
+    match snapshot {
         Some(stats) => json!({
             "available": true,
             "profile": allocator_profile(),
-            "bytes": stats
-                .into_iter()
-                .map(|(key, value)| (key.to_owned(), json!(value.to_string())))
-                .collect::<BTreeMap<_, _>>(),
+            "bytes": stats.bytes_json(),
+        }),
+        None => json!({
+            "available": false,
+            "profile": allocator_profile(),
+        }),
+    }
+}
+
+pub fn allocator_stats_snapshot() -> Option<AllocatorStatsSnapshot> {
+    allocator_stats_bytes().and_then(AllocatorStatsSnapshot::from_bytes)
+}
+
+pub fn allocator_derived_stats_json(anonymous_rss_bytes: u64) -> Value {
+    let snapshot = allocator_stats_snapshot();
+    allocator_derived_stats_json_from(snapshot.as_ref(), anonymous_rss_bytes)
+}
+
+pub fn allocator_derived_stats_json_from(
+    snapshot: Option<&AllocatorStatsSnapshot>,
+    anonymous_rss_bytes: u64,
+) -> Value {
+    match snapshot {
+        Some(stats) => json!({
+            "available": true,
+            "profile": allocator_profile(),
+            "bytes": {
+                "activeMinusAllocated": stats.active_minus_allocated().to_string(),
+                "residentMinusActive": stats.resident_minus_active().to_string(),
+                "retained": stats.retained.to_string(),
+                "rssAnonMinusAllocated": stats.rss_anon_minus_allocated(anonymous_rss_bytes).to_string(),
+                "idleReclaimPressure": stats.idle_reclaim_pressure_bytes().to_string(),
+            },
         }),
         None => json!({
             "available": false,
@@ -118,6 +208,7 @@ pub fn allocator_reclaim_snapshot_json() -> Value {
             "startup_control_built": STARTUP_CONTROL_BUILT_RECLAIMS.load(Ordering::Relaxed),
             "reload_completed": RELOAD_COMPLETED_RECLAIMS.load(Ordering::Relaxed),
             "stop_runtime": STOP_RUNTIME_RECLAIMS.load(Ordering::Relaxed),
+            "idle_memory_pressure": IDLE_MEMORY_PRESSURE_RECLAIMS.load(Ordering::Relaxed),
         },
         "last": last.as_ref().map(last_allocator_reclaim_json),
     })
@@ -133,6 +224,9 @@ fn increment_reason_counter(reason: AllocatorReclaimReason) {
         }
         AllocatorReclaimReason::StopRuntime => {
             STOP_RUNTIME_RECLAIMS.fetch_add(1, Ordering::Relaxed);
+        }
+        AllocatorReclaimReason::IdleMemoryPressure => {
+            IDLE_MEMORY_PRESSURE_RECLAIMS.fetch_add(1, Ordering::Relaxed);
         }
     };
 }

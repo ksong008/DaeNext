@@ -297,6 +297,30 @@ pub(super) fn package_runtime_environment_defaults() -> Vec<(&'static str, Strin
             PRODUCT_JEMALLOC_CONF_DEFAULT.to_owned(),
         ),
         (
+            ALLOCATOR_IDLE_RECLAIM_ENABLED_ENV,
+            ALLOCATOR_IDLE_RECLAIM_ENABLED_DEFAULT.to_string(),
+        ),
+        (
+            ALLOCATOR_IDLE_RECLAIM_SAMPLE_INTERVAL_SECONDS_ENV,
+            ALLOCATOR_IDLE_RECLAIM_SAMPLE_INTERVAL_SECONDS_DEFAULT.to_string(),
+        ),
+        (
+            ALLOCATOR_IDLE_RECLAIM_MIN_INTERVAL_SECONDS_ENV,
+            ALLOCATOR_IDLE_RECLAIM_MIN_INTERVAL_SECONDS_DEFAULT.to_string(),
+        ),
+        (
+            ALLOCATOR_IDLE_RECLAIM_LOW_TRAFFIC_SECONDS_ENV,
+            ALLOCATOR_IDLE_RECLAIM_LOW_TRAFFIC_SECONDS_DEFAULT.to_string(),
+        ),
+        (
+            ALLOCATOR_IDLE_RECLAIM_PRESSURE_BYTES_ENV,
+            ALLOCATOR_IDLE_RECLAIM_PRESSURE_BYTES_DEFAULT.to_string(),
+        ),
+        (
+            ALLOCATOR_IDLE_RECLAIM_MAX_TRAFFIC_RATE_BYTES_PER_SECOND_ENV,
+            ALLOCATOR_IDLE_RECLAIM_MAX_TRAFFIC_RATE_BYTES_PER_SECOND_DEFAULT.to_string(),
+        ),
+        (
             PRODUCT_HTTP_QUEUE_ENV,
             PRODUCT_HTTP_QUEUE_DEFAULT.to_string(),
         ),

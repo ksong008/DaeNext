@@ -172,10 +172,17 @@ pub(crate) fn runtime_overview_reports_process_metrics_and_stream_retry_delta() 
         );
         assert_eq!(overview["heapMetricSource"], json!("allocator-stats"));
         assert_eq!(overview["allocatorStats"]["available"], json!(true));
+        assert_eq!(overview["allocatorDerived"]["available"], json!(true));
+        assert!(
+            overview["allocatorDerived"]["bytes"]["residentMinusActive"]
+                .as_str()
+                .is_some()
+        );
     } else {
         assert_eq!(overview["heapLiveBytes"], Value::Null);
         assert_eq!(overview["heapMetricSource"], json!("unavailable"));
         assert_eq!(overview["allocatorStats"]["available"], json!(false));
+        assert_eq!(overview["allocatorDerived"]["available"], json!(false));
     }
     assert_eq!(overview["heapCompatBytes"], overview["heapAllocBytes"]);
     assert_eq!(
@@ -189,6 +196,14 @@ pub(crate) fn runtime_overview_reports_process_metrics_and_stream_retry_delta() 
     assert_eq!(overview["allocatorProfile"], json!(allocator_profile()));
     assert!(overview["allocatorReclaim"]["total"].as_u64().is_some());
     assert_eq!(
+        overview["allocatorIdleReclaim"]["policy"]["idleDetection"],
+        json!("traffic-rate-only")
+    );
+    assert_eq!(
+        overview["allocatorIdleReclaim"]["policy"]["sessionCountGate"],
+        json!(false)
+    );
+    assert_eq!(
         overview["resourcePools"]["udpEndpoint"]["defaultMaxEntries"],
         json!(DEFAULT_UDP_ENDPOINT_POOL_MAX_ENTRIES)
     );
@@ -201,7 +216,9 @@ pub(crate) fn runtime_overview_reports_process_metrics_and_stream_retry_delta() 
     assert!(delta["heapAllocBytes"].as_str().is_some());
     assert!(delta["goroutines"].as_u64().is_some());
     assert!(delta.get("allocatorStats").is_none());
+    assert!(delta.get("allocatorDerived").is_none());
     assert!(delta.get("allocatorReclaim").is_none());
+    assert!(delta.get("allocatorIdleReclaim").is_none());
     assert!(delta.get("resourcePools").is_none());
     assert!(delta.get("runtime").is_none());
 

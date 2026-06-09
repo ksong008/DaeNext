@@ -64,6 +64,15 @@ impl ResidentProductionRuntime {
         })
     }
 
+    pub fn resident_dataplane_metrics_snapshot(&self) -> Option<Value> {
+        if self.cleaned {
+            return None;
+        }
+        self.dataplane
+            .as_ref()
+            .map(ResidentDataplaneRuntime::metrics_snapshot)
+    }
+
     pub fn snapshot_node_latencies(&self) -> Vec<Value> {
         self.dataplane
             .as_ref()

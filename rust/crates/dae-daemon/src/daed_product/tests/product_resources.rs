@@ -235,6 +235,28 @@ pub(crate) fn product_package_reports_runtime_memory_defaults() {
         defaults["allocator"]["profile"].as_str().unwrap(),
         allocator_profile()
     );
+    assert!(
+        defaults["allocator"]["jemallocPolicy"]["default"]
+            .as_str()
+            .unwrap()
+            .contains("narenas:4")
+    );
+    assert_eq!(
+        defaults["allocator"]["reclaim"]["reloadCompleted"],
+        json!(true)
+    );
+    assert_eq!(
+        defaults["allocator"]["reclaim"]["hotPathPeriodicPurge"],
+        json!(false)
+    );
+    assert_eq!(
+        defaults["allocator"]["reclaim"]["idleMemoryPressure"]["idleDetection"],
+        json!("traffic-rate-only")
+    );
+    assert_eq!(
+        defaults["allocator"]["reclaim"]["idleMemoryPressure"]["sessionCountGate"],
+        json!(false)
+    );
     assert_eq!(
         defaults["http"]["queue"]["env"].as_str().unwrap(),
         PRODUCT_HTTP_QUEUE_ENV
@@ -255,6 +277,16 @@ pub(crate) fn product_package_reports_runtime_memory_defaults() {
     );
 
     let unit = systemd_unit_text();
+    assert!(unit.contains("Environment=\"MALLOC_CONF=background_thread:true,dirty_decay_ms:1000,muzzy_decay_ms:1000,narenas:4\""));
+    assert!(unit.contains("Environment=\"ALLOCATOR_IDLE_RECLAIM_ENABLED=true\""));
+    assert!(unit.contains("Environment=\"ALLOCATOR_IDLE_RECLAIM_SAMPLE_INTERVAL_SECONDS=60\""));
+    assert!(unit.contains("Environment=\"ALLOCATOR_IDLE_RECLAIM_MIN_INTERVAL_SECONDS=300\""));
+    assert!(unit.contains("Environment=\"ALLOCATOR_IDLE_RECLAIM_LOW_TRAFFIC_SECONDS=300\""));
+    assert!(unit.contains(
+        "Environment=\"ALLOCATOR_IDLE_RECLAIM_MAX_TRAFFIC_RATE_BYTES_PER_SECOND=32768\""
+    ));
+    assert!(!unit.contains("ALLOCATOR_IDLE_RECLAIM_REQUIRE_UDP_IDLE"));
+    assert!(!unit.contains("ALLOCATOR_IDLE_RECLAIM_REQUIRE_TCP_IDLE"));
     assert!(unit.contains("Environment=\"HTTP_QUEUE=256\""));
     assert!(unit.contains("Environment=\"RESIDENT_UDP_SESSION_LIMIT=64\""));
     assert!(unit.contains("Environment=\"RESIDENT_UDP_SESSION_QUEUE_DEPTH=16\""));
