@@ -48,6 +48,26 @@ pub struct TcpDirectConnection {
     pub report: TcpDirectDialReport,
 }
 
+#[derive(Debug)]
+pub struct TcpDirectConnectAttempt {
+    stream: TcpStream,
+    state: TcpDirectConnectState,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct TcpDirectConnectState {
+    pub target: SocketAddrV4,
+    pub opts: TcpDirectDialOptions,
+    pub mptcp_socket_created: bool,
+    pub mptcp_connect_fallback_used: bool,
+}
+
+impl TcpDirectConnectAttempt {
+    pub fn into_parts(self) -> (TcpStream, TcpDirectConnectState) {
+        (self.stream, self.state)
+    }
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct TcpLoopbackListenerReport {
     pub requested_mptcp: bool,
@@ -114,6 +134,39 @@ pub fn mptcp_socket_supported() -> bool {
     open_socket(IPPROTO_MPTCP).is_ok()
 }
 
+pub fn tcp_direct_connect_start(
+    target: SocketAddrV4,
+    opts: &TcpDirectDialOptions,
+    use_mptcp: bool,
+) -> io::Result<TcpDirectConnectAttempt> {
+    let (fd, mptcp_socket_created, _) = open_tcp_socket_with_flags(use_mptcp, libc::SOCK_NONBLOCK)?;
+    if opts.mark != 0 {
+        set_so_mark(fd.as_raw_fd(), opts.mark)?;
+    }
+    connect_ipv4_nonblocking(fd.as_raw_fd(), target)?;
+    let stream = unsafe { TcpStream::from_raw_fd(fd.into_raw_fd()) };
+    Ok(TcpDirectConnectAttempt {
+        stream,
+        state: TcpDirectConnectState {
+            target,
+            opts: opts.clone(),
+            mptcp_socket_created,
+            mptcp_connect_fallback_used: false,
+        },
+    })
+}
+
+pub fn tcp_direct_connect_finish(
+    stream: TcpStream,
+    state: TcpDirectConnectState,
+) -> io::Result<TcpDirectConnection> {
+    let so_error = get_socket_error(stream.as_raw_fd())?;
+    if so_error != 0 {
+        return Err(io::Error::from_raw_os_error(so_error));
+    }
+    finish_tcp_direct_connection(stream, state)
+}
+
 fn connect_with_protocol(
     target: SocketAddrV4,
     opts: &TcpDirectDialOptions,
@@ -139,39 +192,46 @@ fn connect_with_protocol(
         .unwrap_or_default();
     Ok(TcpDirectConnection {
         stream,
-        report: TcpDirectDialReport {
-            requested_mark: opts.mark,
-            requested_mptcp: opts.mptcp,
-            mptcp_socket_attempted: opts.mptcp,
+        report: tcp_direct_dial_report(
+            target,
+            opts,
             mptcp_socket_created,
-            mptcp_connect_fallback_used: fallback_used,
+            fallback_used,
             socket_protocol,
             so_mark,
-            so_mark_applied: opts.mark == 0 || so_mark == opts.mark,
-            mptcp_info_available: mptcp_info.available,
-            mptcp_fallen_back: mptcp_info.fallen_back,
-            mptcp_protocol_observed: socket_protocol == IPPROTO_MPTCP,
+            mptcp_info,
             peer_addr,
             local_addr,
-        },
+        ),
     })
 }
 
 fn open_tcp_socket(requested_mptcp: bool) -> io::Result<(OwnedFd, bool, bool)> {
+    open_tcp_socket_with_flags(requested_mptcp, 0)
+}
+
+fn open_tcp_socket_with_flags(
+    requested_mptcp: bool,
+    socket_flags: libc::c_int,
+) -> io::Result<(OwnedFd, bool, bool)> {
     if requested_mptcp {
-        match open_socket(IPPROTO_MPTCP) {
+        match open_socket_with_flags(IPPROTO_MPTCP, socket_flags) {
             Ok(fd) => return Ok((fd, true, false)),
             Err(_) => {}
         }
     }
-    open_socket(libc::IPPROTO_TCP).map(|fd| (fd, false, requested_mptcp))
+    open_socket_with_flags(libc::IPPROTO_TCP, socket_flags).map(|fd| (fd, false, requested_mptcp))
 }
 
 fn open_socket(protocol: libc::c_int) -> io::Result<OwnedFd> {
+    open_socket_with_flags(protocol, 0)
+}
+
+fn open_socket_with_flags(protocol: libc::c_int, socket_flags: libc::c_int) -> io::Result<OwnedFd> {
     let fd = unsafe {
         libc::socket(
             libc::AF_INET,
-            libc::SOCK_STREAM | libc::SOCK_CLOEXEC,
+            libc::SOCK_STREAM | libc::SOCK_CLOEXEC | socket_flags,
             protocol,
         )
     };
@@ -225,6 +285,38 @@ fn connect_ipv4(fd: i32, target: SocketAddrV4) -> io::Result<()> {
     Ok(())
 }
 
+fn connect_ipv4_nonblocking(fd: i32, target: SocketAddrV4) -> io::Result<()> {
+    let addr = libc::sockaddr_in {
+        sin_family: libc::AF_INET as libc::sa_family_t,
+        sin_port: target.port().to_be(),
+        sin_addr: libc::in_addr {
+            s_addr: u32::from_ne_bytes(target.ip().octets()),
+        },
+        sin_zero: [0; 8],
+    };
+    let status = unsafe {
+        libc::connect(
+            fd,
+            (&addr as *const libc::sockaddr_in).cast::<libc::sockaddr>(),
+            size_of::<libc::sockaddr_in>() as libc::socklen_t,
+        )
+    };
+    if status == 0 {
+        return Ok(());
+    }
+    let err = io::Error::last_os_error();
+    if matches!(
+        err.raw_os_error(),
+        Some(code)
+            if code == libc::EINPROGRESS
+                || code == libc::EWOULDBLOCK
+                || code == libc::EALREADY
+    ) {
+        return Ok(());
+    }
+    Err(err)
+}
+
 fn set_reuse_addr(fd: i32) -> io::Result<()> {
     set_i32_opt(fd, libc::SOL_SOCKET, libc::SO_REUSEADDR, 1)
 }
@@ -239,6 +331,10 @@ fn get_so_mark(fd: i32) -> io::Result<u32> {
 
 fn get_socket_protocol(fd: i32) -> io::Result<i32> {
     get_i32_opt(fd, libc::SOL_SOCKET, libc::SO_PROTOCOL)
+}
+
+fn get_socket_error(fd: i32) -> io::Result<i32> {
+    get_i32_opt(fd, libc::SOL_SOCKET, libc::SO_ERROR)
 }
 
 fn set_timeouts(fd: i32, timeout: Duration) -> io::Result<()> {
@@ -298,6 +394,65 @@ fn get_i32_opt(fd: i32, level: i32, option: i32) -> io::Result<i32> {
         return Err(io::Error::last_os_error());
     }
     Ok(value)
+}
+
+fn finish_tcp_direct_connection(
+    stream: TcpStream,
+    state: TcpDirectConnectState,
+) -> io::Result<TcpDirectConnection> {
+    let socket_protocol = get_socket_protocol(stream.as_raw_fd()).unwrap_or(0);
+    let so_mark = get_so_mark(stream.as_raw_fd()).unwrap_or(0);
+    let mptcp_info = read_mptcp_info_status(stream.as_raw_fd());
+    let peer_addr = stream
+        .peer_addr()
+        .unwrap_or(SocketAddr::V4(state.target))
+        .to_string();
+    let local_addr = stream
+        .local_addr()
+        .map(|addr| addr.to_string())
+        .unwrap_or_default();
+    Ok(TcpDirectConnection {
+        stream,
+        report: tcp_direct_dial_report(
+            state.target,
+            &state.opts,
+            state.mptcp_socket_created,
+            state.mptcp_connect_fallback_used,
+            socket_protocol,
+            so_mark,
+            mptcp_info,
+            peer_addr,
+            local_addr,
+        ),
+    })
+}
+
+fn tcp_direct_dial_report(
+    _target: SocketAddrV4,
+    opts: &TcpDirectDialOptions,
+    mptcp_socket_created: bool,
+    mptcp_connect_fallback_used: bool,
+    socket_protocol: i32,
+    so_mark: u32,
+    mptcp_info: MptcpInfoStatus,
+    peer_addr: String,
+    local_addr: String,
+) -> TcpDirectDialReport {
+    TcpDirectDialReport {
+        requested_mark: opts.mark,
+        requested_mptcp: opts.mptcp,
+        mptcp_socket_attempted: opts.mptcp,
+        mptcp_socket_created,
+        mptcp_connect_fallback_used,
+        socket_protocol,
+        so_mark,
+        so_mark_applied: opts.mark == 0 || so_mark == opts.mark,
+        mptcp_info_available: mptcp_info.available,
+        mptcp_fallen_back: mptcp_info.fallen_back,
+        mptcp_protocol_observed: socket_protocol == IPPROTO_MPTCP,
+        peer_addr,
+        local_addr,
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
