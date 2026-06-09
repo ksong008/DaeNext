@@ -29,9 +29,7 @@ static GLOBAL_ALLOCATOR: tikv_jemallocator::Jemalloc = tikv_jemallocator::Jemall
 #[derive(Clone, Copy, Debug)]
 pub enum AllocatorReclaimReason {
     StartupControlBuilt,
-    ReloadOldOwnerClosed,
-    ReloadScopedResourcesFlushed,
-    IdleAfterReload,
+    ReloadCompleted,
     StopRuntime,
 }
 
@@ -39,9 +37,7 @@ impl AllocatorReclaimReason {
     fn as_str(self) -> &'static str {
         match self {
             Self::StartupControlBuilt => "startup_control_built",
-            Self::ReloadOldOwnerClosed => "reload_old_owner_closed",
-            Self::ReloadScopedResourcesFlushed => "reload_scoped_resources_flushed",
-            Self::IdleAfterReload => "idle_after_reload",
+            Self::ReloadCompleted => "reload_completed",
             Self::StopRuntime => "stop_runtime",
         }
     }
@@ -56,9 +52,7 @@ struct LastAllocatorReclaim {
 }
 
 static STARTUP_CONTROL_BUILT_RECLAIMS: AtomicU64 = AtomicU64::new(0);
-static RELOAD_OLD_OWNER_CLOSED_RECLAIMS: AtomicU64 = AtomicU64::new(0);
-static RELOAD_SCOPED_RESOURCES_FLUSHED_RECLAIMS: AtomicU64 = AtomicU64::new(0);
-static IDLE_AFTER_RELOAD_RECLAIMS: AtomicU64 = AtomicU64::new(0);
+static RELOAD_COMPLETED_RECLAIMS: AtomicU64 = AtomicU64::new(0);
 static STOP_RUNTIME_RECLAIMS: AtomicU64 = AtomicU64::new(0);
 static TOTAL_RECLAIMS: AtomicU64 = AtomicU64::new(0);
 static LAST_RECLAIM: OnceLock<Mutex<Option<LastAllocatorReclaim>>> = OnceLock::new();
@@ -122,9 +116,7 @@ pub fn allocator_reclaim_snapshot_json() -> Value {
         "total": TOTAL_RECLAIMS.load(Ordering::Relaxed),
         "reasons": {
             "startup_control_built": STARTUP_CONTROL_BUILT_RECLAIMS.load(Ordering::Relaxed),
-            "reload_old_owner_closed": RELOAD_OLD_OWNER_CLOSED_RECLAIMS.load(Ordering::Relaxed),
-            "reload_scoped_resources_flushed": RELOAD_SCOPED_RESOURCES_FLUSHED_RECLAIMS.load(Ordering::Relaxed),
-            "idle_after_reload": IDLE_AFTER_RELOAD_RECLAIMS.load(Ordering::Relaxed),
+            "reload_completed": RELOAD_COMPLETED_RECLAIMS.load(Ordering::Relaxed),
             "stop_runtime": STOP_RUNTIME_RECLAIMS.load(Ordering::Relaxed),
         },
         "last": last.as_ref().map(last_allocator_reclaim_json),
@@ -136,14 +128,8 @@ fn increment_reason_counter(reason: AllocatorReclaimReason) {
         AllocatorReclaimReason::StartupControlBuilt => {
             STARTUP_CONTROL_BUILT_RECLAIMS.fetch_add(1, Ordering::Relaxed);
         }
-        AllocatorReclaimReason::ReloadOldOwnerClosed => {
-            RELOAD_OLD_OWNER_CLOSED_RECLAIMS.fetch_add(1, Ordering::Relaxed);
-        }
-        AllocatorReclaimReason::ReloadScopedResourcesFlushed => {
-            RELOAD_SCOPED_RESOURCES_FLUSHED_RECLAIMS.fetch_add(1, Ordering::Relaxed);
-        }
-        AllocatorReclaimReason::IdleAfterReload => {
-            IDLE_AFTER_RELOAD_RECLAIMS.fetch_add(1, Ordering::Relaxed);
+        AllocatorReclaimReason::ReloadCompleted => {
+            RELOAD_COMPLETED_RECLAIMS.fetch_add(1, Ordering::Relaxed);
         }
         AllocatorReclaimReason::StopRuntime => {
             STOP_RUNTIME_RECLAIMS.fetch_add(1, Ordering::Relaxed);
