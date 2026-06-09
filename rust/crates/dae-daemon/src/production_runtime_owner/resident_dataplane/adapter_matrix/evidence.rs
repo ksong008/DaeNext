@@ -1,6 +1,6 @@
 use super::*;
 pub(crate) fn resident_live_matrix_evidence_from_env() -> ResidentLiveMatrixEvidence {
-    let Ok(source) = std::env::var(RESIDENT_LIVE_MATRIX_EVIDENCE_ENV) else {
+    let Some((env, source)) = resident_live_matrix_evidence_env_value() else {
         return ResidentLiveMatrixEvidence::missing();
     };
     let source = source.trim().to_owned();
@@ -11,6 +11,7 @@ pub(crate) fn resident_live_matrix_evidence_from_env() -> ResidentLiveMatrixEvid
         Ok(text) => text,
         Err(err) => {
             return ResidentLiveMatrixEvidence::invalid(
+                env,
                 source,
                 format!("read remote live matrix evidence: {err}"),
             );
@@ -20,15 +21,27 @@ pub(crate) fn resident_live_matrix_evidence_from_env() -> ResidentLiveMatrixEvid
         Ok(root) => root,
         Err(err) => {
             return ResidentLiveMatrixEvidence::invalid(
+                env,
                 source,
                 format!("parse remote live matrix evidence: {err}"),
             );
         }
     };
-    resident_live_matrix_evidence_from_value(Some(source), &root)
+    resident_live_matrix_evidence_from_value(env, Some(source), &root)
+}
+
+fn resident_live_matrix_evidence_env_value() -> Option<(&'static str, String)> {
+    std::env::var(RESIDENT_LIVE_MATRIX_EVIDENCE_ENV)
+        .map(|value| (RESIDENT_LIVE_MATRIX_EVIDENCE_ENV, value))
+        .or_else(|_| {
+            std::env::var(RESIDENT_LIVE_MATRIX_EVIDENCE_LEGACY_ENV)
+                .map(|value| (RESIDENT_LIVE_MATRIX_EVIDENCE_LEGACY_ENV, value))
+        })
+        .ok()
 }
 
 pub(crate) fn resident_live_matrix_evidence_from_value(
+    env: &'static str,
     source: Option<String>,
     root: &Value,
 ) -> ResidentLiveMatrixEvidence {
@@ -41,7 +54,7 @@ pub(crate) fn resident_live_matrix_evidence_from_value(
     let all_pass = root["allPass"].as_bool().unwrap_or(false);
     let Some(rows) = root["rows"].as_array() else {
         return ResidentLiveMatrixEvidence {
-            env: RESIDENT_LIVE_MATRIX_EVIDENCE_ENV,
+            env,
             source,
             schema,
             schema_version,
@@ -88,7 +101,7 @@ pub(crate) fn resident_live_matrix_evidence_from_value(
         ))
     };
     ResidentLiveMatrixEvidence {
-        env: RESIDENT_LIVE_MATRIX_EVIDENCE_ENV,
+        env,
         source,
         schema,
         schema_version,

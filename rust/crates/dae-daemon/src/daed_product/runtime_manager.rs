@@ -59,7 +59,8 @@ impl ProductRuntimeLifecycleLogMode {
     }
 }
 
-pub(super) const PRODUCT_RUNTIME_FAKE_START_ENV: &str = "DAED_PRODUCT_RUNTIME_FAKE_START";
+pub(super) const PRODUCT_RUNTIME_FAKE_START_ENV: &str = "PRODUCT_RUNTIME_FAKE_START";
+pub(super) const PRODUCT_RUNTIME_FAKE_START_LEGACY_ENV: &str = "DAED_PRODUCT_RUNTIME_FAKE_START";
 const POST_RELOAD_IDLE_RECLAIM_DELAY: Duration = Duration::from_millis(250);
 
 impl ProductRuntimeManager {
@@ -320,6 +321,7 @@ pub(super) fn start_product_runtime_instance(
 
 pub(super) fn product_runtime_fake_start_enabled() -> bool {
     std::env::var(PRODUCT_RUNTIME_FAKE_START_ENV)
+        .or_else(|_| std::env::var(PRODUCT_RUNTIME_FAKE_START_LEGACY_ENV))
         .map(|value| {
             matches!(
                 value.as_str(),
