@@ -1,5 +1,7 @@
 use super::*;
-pub(super) fn resident_udp_handler_name(handler: &ResidentProxyProtocolPlan) -> &'static str {
+pub(in crate::production_runtime_owner::resident_dataplane) fn resident_udp_handler_name(
+    handler: &ResidentProxyProtocolPlan,
+) -> &'static str {
     match handler {
         ResidentProxyProtocolPlan::VlessVisionTcpTls { .. } => "vless-vision-tcp-tls",
         ResidentProxyProtocolPlan::VlessMuxTcpTls { .. } => "vless-mux-tcp-tls",

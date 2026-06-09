@@ -50,7 +50,7 @@ pub(super) fn run_resident_udp_session_manager(
     active_sessions: Arc<AtomicUsize>,
     session_limit: usize,
 ) {
-    let runtime = match runtime::Builder::new_current_thread()
+    let runtime = match tokio::runtime::Builder::new_current_thread()
         .enable_io()
         .enable_time()
         .build()

@@ -7,6 +7,10 @@ pub(crate) fn resident_live_adapter_udp_probe(
 ) -> Value {
     let started = std::time::Instant::now();
     let node_shapes = plan::resident_node_link_shapes(config);
+    let probe_runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_io()
+        .enable_time()
+        .build();
     let rows = resident_live_adapter_matrix_entries()
         .iter()
         .map(|entry| {
@@ -24,7 +28,23 @@ pub(crate) fn resident_live_adapter_udp_probe(
                     node.link.clone(),
                 ) {
                     Ok(proxy) => {
-                        let mut probe = probe_resident_proxy_udp(&proxy, target, payload);
+                        let mut probe = match &probe_runtime {
+                            Ok(runtime) => {
+                                runtime.block_on(probe_resident_proxy_udp_async(&proxy, target, payload))
+                            }
+                            Err(err) => json!({
+                                "status": "fail",
+                                "ok": false,
+                                "protocol_closed": false,
+                                "handler": resident_udp_handler_name(&proxy.handler),
+                                "request_len": payload.len(),
+                                "response_len": 0,
+                                "payload_match": false,
+                                "elapsed_ms": started.elapsed().as_millis(),
+                                "graphId": proxy.graph_id,
+                                "error": format!("start Tokio UDP live adapter probe runtime: {err}"),
+                            }),
+                        };
                         probe["formal_matrix_handler"] = json!(entry.formal_matrix_handler);
                         probe["node_tag"] = json!(node.tag);
                         probe["udp_live_adapter"] = json!(entry.udp_live_adapter);

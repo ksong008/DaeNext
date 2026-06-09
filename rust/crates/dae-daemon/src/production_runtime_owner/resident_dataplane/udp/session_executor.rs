@@ -150,7 +150,7 @@ impl UdpSessionExecutor {
                 "Trojan inner-encryption UDP requires inner-encrypted packet semantics before resident UDP can admit this shape",
             ),
             ResidentProxyProtocolPlan::HttpProxyTcp { .. } => {
-                Self::fail_closed("HTTP CONNECT has no resident UDP relay semantics")
+                Self::fail_closed("HTTP CONNECT has no UDP relay semantics in resident dataplane")
             }
         }
     }
@@ -220,7 +220,9 @@ impl UdpSessionExecutor {
                 .await
                 .map(|response| ("udp_packet_finished", response)),
             Self::FailClosed { reason } => Err(format!(
-                "unsupported_udp_handler: {reason}; fail-closed without fallback execution"
+                "unsupported_udp_handler: {reason}; handler={}; protocol={}; fail-closed without fallback execution",
+                resident_udp_handler_name(&proxy.handler),
+                proxy.protocol,
             )),
         }
     }

@@ -1,5 +1,5 @@
 use super::*;
-pub(crate) fn probe_resident_proxy_udp(
+pub(crate) async fn probe_resident_proxy_udp_async(
     proxy: &ResidentProxyPlan,
     original_dst: SocketAddrV4,
     payload: &[u8],
@@ -7,7 +7,14 @@ pub(crate) fn probe_resident_proxy_udp(
     let started = Instant::now();
     let handler = resident_udp_handler_name(&proxy.handler);
     let packet_semantics = udp_packet_semantics_for_destination(&proxy.handler, original_dst);
-    match exchange_proxy_udp(proxy, original_dst, payload) {
+    let mut executor = UdpSessionExecutor::new_proxy_packet(proxy);
+    let dns = ResidentDnsPlan::asis(proxy.mark);
+    let exchange = executor
+        .execute(&dns, proxy, original_dst, payload)
+        .await
+        .map(|(_, response)| response);
+    executor.shutdown().await;
+    match exchange {
         Ok(response) => {
             let payload_match = response.payload == payload;
             let mut report = json!({

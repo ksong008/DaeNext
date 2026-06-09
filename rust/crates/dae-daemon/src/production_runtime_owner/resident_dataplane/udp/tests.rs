@@ -45,8 +45,8 @@ mod tests {
         assert!(request.windows(2).any(|window| window == [0xde, 0xad]));
     }
 
-    #[test]
-    fn resident_udp_dispatch_fails_closed_for_protocol_closed_handler() {
+    #[tokio::test(flavor = "current_thread")]
+    async fn resident_udp_executor_fails_closed_for_protocol_closed_handler() {
         let mut proxy = test_udp_proxy(ResidentProxyProtocolPlan::HttpProxyTcp {
             username: String::new(),
             password: String::new(),
@@ -55,12 +55,14 @@ mod tests {
             transport_path: String::new(),
         });
         proxy.protocol = "http-proxy".to_owned();
-        let err = exchange_proxy_udp(
-            &proxy,
-            SocketAddrV4::new(Ipv4Addr::UNSPECIFIED, 53),
-            &[0xde, 0xad],
-        )
-        .unwrap_err();
+        let original_dst = SocketAddrV4::new(Ipv4Addr::UNSPECIFIED, 53);
+        let mut executor = UdpSessionExecutor::new_proxy_packet(&proxy);
+        let dns = ResidentDnsPlan::asis(proxy.mark);
+        let err = executor
+            .execute(&dns, &proxy, original_dst, &[0xde, 0xad])
+            .await
+            .unwrap_err();
+        executor.shutdown().await;
         assert!(err.contains("unsupported_udp_handler"));
         assert!(err.contains("no UDP relay semantics"));
         assert!(err.contains("without fallback execution"));
