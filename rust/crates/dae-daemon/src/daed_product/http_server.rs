@@ -7,6 +7,7 @@ pub(super) fn serve_forever(
     let listen_started_at = Instant::now();
     let listener = TcpListener::bind(listen)?;
     let app = Arc::new(app);
+    spawn_allocator_idle_reclaim_monitor(&app);
     let config = ProductHttpWorkerConfig::from_env();
     app.http_metrics.configure(config);
     let (sender, receiver) = mpsc::sync_channel(config.queue_capacity);

@@ -9,7 +9,8 @@ pub(crate) fn runtime_overview_report(app: &AppState, request: &HttpRequest) -> 
         .clamp(1, 1_000);
     let traffic = resident_runtime_traffic_stats(&runtime, window_sec, max_points);
     let process = current_process_metrics();
-    let allocator_live_heap = allocator_live_heap_bytes();
+    let allocator_stats = allocator_stats_snapshot();
+    let allocator_live_heap = allocator_stats.map(|stats| stats.allocated);
     json!({
         "updatedAt": now_text(),
         "uploadRate": traffic.upload_rate.to_string(),
@@ -35,8 +36,13 @@ pub(crate) fn runtime_overview_report(app: &AppState, request: &HttpRequest) -> 
         "heapAllocBytes": process.heap_alloc_bytes_compat().to_string(),
         "heapAllocBytesSource": "compat-alias-rss-anon-not-live-heap",
         "allocatorProfile": allocator_profile(),
-        "allocatorStats": allocator_stats_json(),
+        "allocatorStats": allocator_stats_json_from(allocator_stats.as_ref()),
+        "allocatorDerived": allocator_derived_stats_json_from(
+            allocator_stats.as_ref(),
+            process.anonymous_rss_bytes
+        ),
         "allocatorReclaim": allocator_reclaim_snapshot_json(),
+        "allocatorIdleReclaim": allocator_idle_reclaim_snapshot_json(),
         "resourcePools": resource_pool_policy_json(),
         "goroutines": process.thread_count,
         "productHttp": app.http_metrics.snapshot(),

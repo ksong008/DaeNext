@@ -215,6 +215,18 @@ impl ProductRuntimeManager {
         }
     }
 
+    pub(super) fn resident_dataplane_metrics_snapshot(&self) -> Option<Value> {
+        let Ok(inner) = self.inner.lock() else {
+            return None;
+        };
+        match inner.runtime.as_ref() {
+            Some(ProductRuntimeInstance::Resident(runtime)) => {
+                runtime.resident_dataplane_metrics_snapshot()
+            }
+            Some(ProductRuntimeInstance::Fake(_)) | None => None,
+        }
+    }
+
     pub(super) fn probe_node_latencies(&self, links: &[String]) -> Vec<Value> {
         let Ok(inner) = self.inner.lock() else {
             return Vec::new();
