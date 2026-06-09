@@ -3,6 +3,9 @@ use std::mem::size_of;
 use std::os::fd::{AsRawFd, RawFd};
 use std::os::fd::{FromRawFd, OwnedFd};
 
+pub const MAP_USAGE_WARNING_RATIO: f64 = 0.70;
+pub const MAP_USAGE_PRESSURE_RATIO: f64 = 0.90;
+
 const BPF_MAP_UPDATE_ELEM: libc::c_uint = 2;
 const BPF_MAP_LOOKUP_ELEM: libc::c_uint = 1;
 const BPF_MAP_DELETE_ELEM: libc::c_uint = 3;
@@ -11,6 +14,11 @@ const BPF_MAP_GET_NEXT_KEY: libc::c_uint = 4;
 const BPF_MAP_GET_FD_BY_ID: libc::c_uint = 14;
 const BPF_OBJ_GET_INFO_BY_FD: libc::c_uint = 15;
 const BPF_ANY: u64 = 0;
+const BPF_MAP_TYPE_HASH: u32 = 1;
+const BPF_MAP_TYPE_LRU_HASH: u32 = 9;
+const BPF_MAP_TYPE_LPM_TRIE: u32 = 11;
+const BPF_MAP_TYPE_HASH_OF_MAPS: u32 = 13;
+const BPF_MAP_TYPE_SOCKHASH: u32 = 18;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct RuntimeMapInfo {
@@ -21,6 +29,50 @@ pub struct RuntimeMapInfo {
     pub value_size: u32,
     pub max_entries: u32,
     pub flags: u32,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct RuntimeMapCapacity {
+    pub info: RuntimeMapInfo,
+    pub entries: u64,
+    pub usage_ratio: f64,
+    pub pressure_applicable: bool,
+    pub warning: bool,
+    pub pressure: bool,
+    pub near_capacity: bool,
+}
+
+impl RuntimeMapCapacity {
+    fn new(info: RuntimeMapInfo, entries: u64) -> Self {
+        let usage_ratio = if info.max_entries == 0 {
+            0.0
+        } else {
+            entries as f64 / info.max_entries as f64
+        };
+        let pressure_applicable = map_type_has_occupancy_pressure(info.map_type);
+        let warning = pressure_applicable && usage_ratio >= MAP_USAGE_WARNING_RATIO;
+        let pressure = pressure_applicable && usage_ratio >= MAP_USAGE_PRESSURE_RATIO;
+        Self {
+            info,
+            entries,
+            usage_ratio,
+            pressure_applicable,
+            warning,
+            pressure,
+            near_capacity: warning,
+        }
+    }
+}
+
+fn map_type_has_occupancy_pressure(map_type: u32) -> bool {
+    matches!(
+        map_type,
+        BPF_MAP_TYPE_HASH
+            | BPF_MAP_TYPE_LRU_HASH
+            | BPF_MAP_TYPE_LPM_TRIE
+            | BPF_MAP_TYPE_HASH_OF_MAPS
+            | BPF_MAP_TYPE_SOCKHASH
+    )
 }
 
 pub fn map_ids() -> io::Result<Vec<u32>> {
@@ -175,12 +227,27 @@ pub fn count_map_entries_by_id(id: u32) -> io::Result<u64> {
 
 pub fn count_map_entries_by_fd(map_fd: RawFd) -> io::Result<u64> {
     let info = map_info(map_fd)?;
-    if info.key_size == 0 {
+    count_map_entries_by_fd_with_key_size(map_fd, info.key_size)
+}
+
+pub fn map_capacity_by_id(id: u32) -> io::Result<RuntimeMapCapacity> {
+    let fd = open_map_fd(id)?;
+    map_capacity_by_fd(fd.as_raw_fd())
+}
+
+pub fn map_capacity_by_fd(map_fd: RawFd) -> io::Result<RuntimeMapCapacity> {
+    let info = map_info(map_fd)?;
+    let entries = count_map_entries_by_fd_with_key_size(map_fd, info.key_size)?;
+    Ok(RuntimeMapCapacity::new(info, entries))
+}
+
+fn count_map_entries_by_fd_with_key_size(map_fd: RawFd, key_size: u32) -> io::Result<u64> {
+    if key_size == 0 {
         return Ok(0);
     }
 
-    let mut current_key = vec![0_u8; info.key_size as usize];
-    let mut next_key = vec![0_u8; info.key_size as usize];
+    let mut current_key = vec![0_u8; key_size as usize];
+    let mut next_key = vec![0_u8; key_size as usize];
     let mut has_previous_key = false;
     let mut count = 0_u64;
 

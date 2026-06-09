@@ -3,35 +3,193 @@ pub(super) fn discover_routing_tuple_map(
     native_runtime: &NativeEbpfRuntimeState,
     handoff: &LiveLoadedTproxyListenSocketMap,
 ) -> Result<RoutingTupleMapDiscovery, String> {
-    if let Some(id) = native_runtime.loaded_map_id(ROUTING_TUPLES_MAP_NAME) {
-        return Ok(RoutingTupleMapDiscovery {
+    discover_reusable_map(native_runtime, handoff, ROUTING_TUPLES_MAP_NAME)
+}
+
+pub(super) fn discover_reusable_map(
+    native_runtime: &NativeEbpfRuntimeState,
+    handoff: &LiveLoadedTproxyListenSocketMap,
+    name: &'static str,
+) -> Result<ReusableMapDiscovery, String> {
+    if let Some(id) = native_runtime.loaded_map_id(name) {
+        return Ok(ReusableMapDiscovery {
+            name,
             id: Some(id),
             source: "native-runtime",
             candidate_map_ids: Vec::new(),
         });
     }
-    let id = loaded_map_id_by_name(&handoff.new_map_ids, ROUTING_TUPLES_MAP_NAME)?;
+    let id = loaded_map_id_by_name(&handoff.new_map_ids, name)?;
     if let Some(id) = id {
-        return Ok(RoutingTupleMapDiscovery {
+        return Ok(ReusableMapDiscovery {
+            name,
             id: Some(id),
             source: "loaded-map-handoff",
             candidate_map_ids: handoff.new_map_ids.clone(),
         });
     }
     let current_map_ids =
-        map_ids().map_err(|err| format!("resident routing tuple map snapshot failed: {err}"))?;
-    if let Some(id) = latest_loaded_map_id_by_name(&current_map_ids, ROUTING_TUPLES_MAP_NAME)? {
-        return Ok(RoutingTupleMapDiscovery {
+        map_ids().map_err(|err| format!("resident reusable map snapshot failed: {err}"))?;
+    if let Some(id) = latest_loaded_map_id_by_name(&current_map_ids, name)? {
+        return Ok(ReusableMapDiscovery {
+            name,
             id: Some(id),
             source: "runtime-map-snapshot",
             candidate_map_ids: vec![id],
         });
     }
-    Ok(RoutingTupleMapDiscovery {
+    Ok(ReusableMapDiscovery {
+        name,
         id: None,
         source: "missing",
         candidate_map_ids: handoff.new_map_ids.clone(),
     })
+}
+
+pub(super) fn resident_reusable_maps_evidence(
+    native_runtime: &NativeEbpfRuntimeState,
+    handoff: Option<&LiveLoadedTproxyListenSocketMap>,
+) -> Vec<Value> {
+    let Some(handoff) = handoff else {
+        return RESIDENT_REUSABLE_MAP_NAMES
+            .iter()
+            .map(|name| {
+                json!({
+                    "name": name,
+                    "status": "skipped",
+                    "source": "missing",
+                    "reason": "resident tproxy listener handoff is unavailable",
+                    "pinning": catalog_pinning(name),
+                })
+            })
+            .collect();
+    };
+
+    RESIDENT_REUSABLE_MAP_NAMES
+        .iter()
+        .copied()
+        .map(
+            |name| match discover_reusable_map(native_runtime, handoff, name) {
+                Ok(discovery) => reusable_map_discovery_json(native_runtime, &discovery),
+                Err(err) => json!({
+                    "name": name,
+                    "status": "fail",
+                    "source": "discovery-error",
+                    "pinning": catalog_pinning(name),
+                    "error": err,
+                }),
+            },
+        )
+        .collect()
+}
+
+pub(super) fn reusable_map_discovery_json(
+    native_runtime: &NativeEbpfRuntimeState,
+    discovery: &ReusableMapDiscovery,
+) -> Value {
+    let pin_path = catalog_pin_path(native_runtime, discovery.name);
+    let pin_path_status =
+        reusable_map_pin_path_status(discovery.name, discovery.id, pin_path.as_ref());
+    let mut value = json!({
+        "name": discovery.name,
+        "status": if discovery.id.is_some() { "pass" } else { "missing" },
+        "id": discovery.id,
+        "source": discovery.source,
+        "generation": "resident-start",
+        "reuseState": reusable_map_reuse_state(discovery.source, discovery.id),
+        "pinning": catalog_pinning(discovery.name),
+        "pinPath": pin_path,
+        "pinPathStatus": pin_path_status,
+        "candidateMapIds": discovery.candidate_map_ids,
+    });
+    if let Some(id) = discovery.id {
+        let capacity = match map_capacity_by_id(id) {
+            Ok(capacity) => runtime_map_capacity_json(&capacity, discovery.source),
+            Err(err) => json!({
+                "status": "fail",
+                "source": discovery.source,
+                "id": id,
+                "error": err.to_string(),
+            }),
+        };
+        if let Value::Object(map) = &mut value {
+            map.insert("capacity".to_owned(), capacity);
+        }
+    }
+    value
+}
+
+pub(super) fn runtime_map_capacity_json(capacity: &RuntimeMapCapacity, source: &str) -> Value {
+    json!({
+        "status": "pass",
+        "source": source,
+        "id": capacity.info.id,
+        "name": capacity.info.name,
+        "mapType": capacity.info.map_type,
+        "keySize": capacity.info.key_size,
+        "valueSize": capacity.info.value_size,
+        "maxEntries": capacity.info.max_entries,
+        "entries": capacity.entries,
+        "usageRatio": capacity.usage_ratio,
+        "pressureApplicable": capacity.pressure_applicable,
+        "warning": capacity.warning,
+        "pressure": capacity.pressure,
+        "nearCapacity": capacity.near_capacity,
+        "flags": capacity.info.flags,
+        "pinning": catalog_pinning(&capacity.info.name),
+    })
+}
+
+fn reusable_map_reuse_state(source: &str, id: Option<u32>) -> &'static str {
+    match (source, id) {
+        (_, None) => "missing",
+        ("runtime-map-snapshot", Some(_)) => "recovered-existing",
+        ("loaded-map-handoff", Some(_)) | ("native-runtime", Some(_)) => "current-load",
+        _ => "unknown",
+    }
+}
+
+fn reusable_map_pin_path_status(
+    name: &str,
+    id: Option<u32>,
+    pin_path: Option<&String>,
+) -> &'static str {
+    if !catalog_pinned_by_name(name) {
+        return "not-pinned";
+    }
+    if id.is_none() {
+        return "missing";
+    }
+    if pin_path.is_some() {
+        "known"
+    } else {
+        "not-observable-from-runtime-snapshot"
+    }
+}
+
+fn catalog_pinning(name: &str) -> Value {
+    map_catalog()
+        .iter()
+        .find(|spec| kernel_visible_map_name_matches(name, spec.name))
+        .map(|spec| json!(spec.pinning))
+        .unwrap_or(Value::Null)
+}
+
+fn catalog_pinned_by_name(name: &str) -> bool {
+    map_catalog()
+        .iter()
+        .find(|spec| kernel_visible_map_name_matches(name, spec.name))
+        .map(|spec| spec.pinned_by_name())
+        .unwrap_or(false)
+}
+
+fn catalog_pin_path(native_runtime: &NativeEbpfRuntimeState, name: &str) -> Option<String> {
+    if !catalog_pinned_by_name(name) {
+        return None;
+    }
+    native_runtime
+        .pin_root()
+        .map(|root| path_string(&root.join(name)))
 }
 
 pub(super) fn loaded_map_id_by_name(
@@ -157,6 +315,18 @@ pub(super) fn startup_evidence_from_report(start_report: &Value) -> Value {
         },
         "bindings": bindings,
         "routingMatchSets": startup_routing_match_sets(start_report),
+        "mapCapacity": start_report
+            .get("resident_reusable_maps")
+            .cloned()
+            .unwrap_or_else(|| json!([])),
+        "cgroupPname": start_report
+            .pointer("/resident_cgroup_attach/pname")
+            .cloned()
+            .unwrap_or(Value::Null),
+        "cgroupLinkLifecycle": start_report
+            .pointer("/resident_cgroup_attach/linkLifecycle")
+            .cloned()
+            .unwrap_or(Value::Null),
     })
 }
 

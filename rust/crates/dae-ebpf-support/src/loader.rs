@@ -24,10 +24,10 @@ pub struct LoaderContract {
 
 pub const fn loader_contract() -> LoaderContract {
     LoaderContract {
-        default_object_loader: LoaderBackend::TcCommandObject,
+        default_object_loader: LoaderBackend::AyaUserspace,
         runtime_map_backend: LoaderBackend::RustSyscallMaps,
-        aya_userspace_loader_planned: true,
-        c_ebpf_object_fallback_required: true,
+        aya_userspace_loader_planned: false,
+        c_ebpf_object_fallback_required: false,
         go_fallback_preserved: false,
         go_bpf_loader_fallback_retired: true,
         param_rewrite_required_before_attach: true,

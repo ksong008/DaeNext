@@ -6,7 +6,8 @@ use std::path::{Path, PathBuf};
 
 use dae_config::Config;
 use dae_ebpf_support::{
-    AttachBackend, LiveLoadedTproxyListenSocketMap, map_ids, map_info,
+    AttachBackend, LiveLoadedTproxyListenSocketMap, RuntimeMapCapacity, dae_cgroup_attach_matrix,
+    map_capacity_by_id, map_catalog, map_ids, map_info,
     open_live_loaded_tproxy_listen_socket_map_in_netns, open_map_fd,
 };
 use serde_json::{Value, json};

@@ -58,13 +58,15 @@ pub use attach::{
 };
 #[cfg(feature = "aya-loader")]
 pub use aya_loader::{
-    AyaCgroupAttachDetachReport, AyaGoAdoptionPinReport, AyaPinnedObject, AyaTcAttachDetachReport,
-    AyaTcxProgramOrderEntry, AyaTraceAttachRingbufSmokeOptions, AyaTraceAttachRingbufSmokeReport,
+    AyaCgroupAttachDetachReport, AyaGoAdoptionPinReport, AyaLoadedMapSpec, AyaMapSpecMismatch,
+    AyaPinnedObject, AyaTcAttachDetachReport, AyaTcxProgramOrderEntry,
+    AyaTraceAttachRingbufSmokeOptions, AyaTraceAttachRingbufSmokeReport,
     AyaTraceAttachSmokeTrigger, AyaTraceConfig, AyaTraceLoadPinReport, AyaTraceLoaderOptions,
     AyaUserspaceLoadReport, AyaUserspaceLoadedObject, AyaUserspaceLoaderOptions,
-    PinnedTcAttachOptions, PinnedTcAttachReport, TRACE_CORE_SIDELOAD_ENABLED,
-    attach_pin_aya_sched_classifier, attach_ringbuf_smoke_aya_trace_object,
-    aya_userspace_load_report, load_attach_aya_cgroup_program, load_attach_aya_sched_classifier,
+    DEFAULT_ALLOWED_UNSUPPORTED_MAP_NAMES, PinnedTcAttachOptions, PinnedTcAttachReport,
+    TRACE_CORE_SIDELOAD_ENABLED, attach_pin_aya_sched_classifier,
+    attach_ringbuf_smoke_aya_trace_object, aya_userspace_load_report,
+    load_attach_aya_cgroup_program, load_attach_aya_sched_classifier,
     load_attach_detach_aya_cgroup_program, load_attach_detach_aya_sched_classifier,
     load_aya_userspace_object, load_pin_aya_trace_object, pin_aya_loaded_object_for_go_adoption,
 };
@@ -137,8 +139,9 @@ pub use routing_maps::{
     apply_routing_maps_with_lpm_build_by_id,
 };
 pub use runtime_maps::{
-    RuntimeMapInfo, count_map_entries_by_fd, count_map_entries_by_id, delete_map_elem_bytes,
-    lookup_map_elem_bytes, map_ids, map_info, open_map_fd, update_map_elem_bytes,
+    MAP_USAGE_PRESSURE_RATIO, MAP_USAGE_WARNING_RATIO, RuntimeMapCapacity, RuntimeMapInfo,
+    count_map_entries_by_fd, count_map_entries_by_id, delete_map_elem_bytes, lookup_map_elem_bytes,
+    map_capacity_by_fd, map_capacity_by_id, map_ids, map_info, open_map_fd, update_map_elem_bytes,
 };
 pub use sockmap::{
     ListenSocketMapFdSmoke, LiveLoadedTproxyListenSocketMap, LoadedListenSocketMapFdSmoke,

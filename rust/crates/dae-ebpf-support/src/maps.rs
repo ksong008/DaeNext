@@ -132,7 +132,7 @@ const MAP_CATALOG: [MapSpec; 13] = [
         value_size: 4,
         max_entries: 1032,
         flags: 0,
-        pinning: "PinNone",
+        pinning: "PinByName",
     },
     MapSpec {
         name: "outbound_connectivity_map",

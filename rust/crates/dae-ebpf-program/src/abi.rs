@@ -225,3 +225,8 @@ pub fn param_dae0peer_mac() -> [u8; 6] {
         ]
     }
 }
+
+#[inline(always)]
+pub fn param_has_bpf_get_current_task() -> u8 {
+    unsafe { core::ptr::addr_of!(PARAM.has_bpf_get_current_task).read_volatile() }
+}

@@ -7,7 +7,7 @@ use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
 use std::os::unix::ffi::OsStrExt;
 use std::path::{Path, PathBuf};
 
-use aya::maps::RingBuf;
+use aya::maps::{Map, MapData, MapType, RingBuf};
 use aya::programs::{
     CgroupAttachMode, CgroupSock, CgroupSockAddr, LinkOrder, Program, SchedClassifier,
     TcAttachType,

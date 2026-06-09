@@ -2,10 +2,11 @@ use core::{ffi::c_void, ptr};
 
 use aya_ebpf::bindings::{bpf_sock, bpf_sock_addr};
 
-use crate::abi::{BpfPidPname, TASK_COMM_LEN};
+use crate::abi::{self, BpfPidPname, TASK_COMM_LEN};
 use crate::{helpers, maps};
 
 const BPF_ANY: u64 = 0;
+const CGROUP_PNAME_CORE_ENABLED: bool = false;
 
 pub fn allow() -> i32 {
     1
@@ -23,14 +24,7 @@ unsafe fn update_map_elem_by_cookie(ctx: *mut c_void) {
         return;
     }
 
-    let mut val = BpfPidPname::zeroed();
-    val.pid = (unsafe { helpers::bpf_get_current_pid_tgid() } >> 32) as u32;
-    let _ = unsafe {
-        helpers::bpf_get_current_comm(
-            val.pname.as_mut_ptr().cast::<c_void>(),
-            TASK_COMM_LEN as u32,
-        )
-    };
+    let val = unsafe { get_pid_pname() };
 
     let val_ptr = ptr::addr_of!(val).cast::<c_void>();
     let _ =
@@ -43,6 +37,22 @@ unsafe fn update_map_elem_by_cookie(ctx: *mut c_void) {
             BPF_ANY,
         )
     };
+}
+
+#[inline(always)]
+unsafe fn get_pid_pname() -> BpfPidPname {
+    let mut val = BpfPidPname::zeroed();
+    val.pid = (unsafe { helpers::bpf_get_current_pid_tgid() } >> 32) as u32;
+    if CGROUP_PNAME_CORE_ENABLED && abi::param_has_bpf_get_current_task() != 0 {
+        // CO-RE/current task argv extraction is intentionally disabled for now.
+    }
+    let _ = unsafe {
+        helpers::bpf_get_current_comm(
+            val.pname.as_mut_ptr().cast::<c_void>(),
+            TASK_COMM_LEN as u32,
+        )
+    };
+    val
 }
 
 #[inline(always)]

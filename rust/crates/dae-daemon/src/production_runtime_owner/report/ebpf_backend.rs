@@ -53,7 +53,7 @@ pub(super) fn ebpf_backend_capability_json(
             "tcx_optional": true,
             "tc_netlink_optional": true,
             "command_fallback_used": report.attach_plan.command_fallback_used,
-            "command_fallback_required": true,
+            "command_fallback_required": report.attach_plan.command_fallback_used,
             "go_netlink_parity_fields_required": [
                 "netns",
                 "iface",
