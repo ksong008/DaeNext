@@ -110,7 +110,7 @@ pub(super) fn default_daemon_live_matrix_json(
             resident_dataplane_default_switch_required,
             resident_dataplane_default_switch_ready,
             "resident userspace dataplane must be explicitly enabled before the Rust default daemon owns redirected TCP/UDP payloads",
-            "set DAE_RUST_RESIDENT_DATAPLANE=1 only after the resident dataplane worker path is expected to own the default daemon traffic",
+            "set RESIDENT_DATAPLANE=1 only after the resident dataplane worker path is expected to own the default daemon traffic",
         ),
     ];
     let matrix_complete = rows
@@ -226,7 +226,7 @@ pub(super) fn release_product_chain_live_gate_json(
             "area": "resident-userspace-dataplane-default-switch",
             "status": if resident_dataplane_default_switch_ready { "pass" } else { "fail" },
             "recorded": resident_dataplane_default_switch_ready,
-            "required_evidence": "DAE_RUST_RESIDENT_DATAPLANE=1 is present before default path mutation",
+            "required_evidence": format!("{RESIDENT_DATAPLANE_ENV}=1 is present before default path mutation"),
             "blocker": if resident_dataplane_default_switch_ready { "" } else { "resident userspace dataplane is not enabled" },
         }),
         json!({

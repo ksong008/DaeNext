@@ -149,7 +149,7 @@ pub(crate) fn assert_live_release_and_default_switch_contract(report: &Value) {
     );
     assert_eq!(
         report["resident_dataplane_env"].as_str().unwrap(),
-        "DAE_RUST_RESIDENT_DATAPLANE"
+        "RESIDENT_DATAPLANE"
     );
     assert!(!report["resident_dataplane_env_enabled"].as_bool().unwrap());
     assert!(
@@ -171,6 +171,6 @@ pub(crate) fn assert_live_release_and_default_switch_contract(report: &Value) {
         report["default_path_switch_blocker"]
             .as_str()
             .unwrap()
-            .contains("DAE_RUST_RESIDENT_DATAPLANE=1")
+            .contains("RESIDENT_DATAPLANE=1")
     );
 }

@@ -97,6 +97,7 @@ pub(super) fn resident_native_ebpf_enabled() -> bool {
 
 pub(super) fn resident_dataplane_enabled() -> bool {
     env::var(DEFAULT_RESIDENT_DATAPLANE_ENV)
+        .or_else(|_| env::var(DEFAULT_RESIDENT_DATAPLANE_LEGACY_ENV))
         .map(|value| {
             matches!(
                 value.as_str(),

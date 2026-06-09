@@ -304,7 +304,8 @@ pub(super) fn start_product_runtime_instance(
     if !dataplane_enabled || dataplane_status != "pass" {
         runtime.cleanup();
         return Err(format!(
-            "resident production runtime started without admitted userspace dataplane; set DAE_RUST_RESIDENT_DATAPLANE=1 and require resident_dataplane.status=pass before Rust daed can be the C10 default product path"
+            "resident production runtime started without admitted userspace dataplane; set {}=1 and require resident_dataplane.status=pass before Rust daed can be the C10 default product path",
+            crate::service_contract::RESIDENT_DATAPLANE_ENV
         ));
     }
     let report = json!({

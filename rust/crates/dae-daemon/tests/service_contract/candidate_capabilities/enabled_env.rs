@@ -2,7 +2,7 @@ use super::*;
 pub(crate) fn assert_resident_dataplane_enabled_contract() {
     let enabled_output = Command::new(binary())
         .arg("service-contract")
-        .env("DAE_RUST_RESIDENT_DATAPLANE", "1")
+        .env("RESIDENT_DATAPLANE", "1")
         .output()
         .unwrap();
     assert!(enabled_output.status.success());
