@@ -1,4 +1,4 @@
-use std::net::{Ipv4Addr, SocketAddr, SocketAddrV4, ToSocketAddrs};
+use std::net::{IpAddr, SocketAddr, ToSocketAddrs};
 use std::path::Path;
 
 use super::*;
@@ -59,12 +59,12 @@ fn configured_active_dns_target_from_udp_check_dns(
         return Ok(None);
     };
     let first = match parse_udp_check_entry(raw, CONFIGURED_DNS_CHECK_DEFAULT_PORT) {
-        Some(UdpCheckEntry::Ipv4(addr)) => return Ok(Some(active_dns_target_from_addr(addr))),
+        Some(UdpCheckEntry::Ip(addr)) => return Ok(Some(active_dns_target_from_addr(addr))),
         Some(UdpCheckEntry::Domain { host, port }) => (host, port),
         None => return Ok(None),
     };
     for explicit in entries.iter().skip(first_index + 1) {
-        if let Some(UdpCheckEntry::Ipv4(addr)) = parse_udp_check_entry(explicit, first.1) {
+        if let Some(UdpCheckEntry::Ip(addr)) = parse_udp_check_entry(explicit, first.1) {
             return Ok(Some(active_dns_target_from_addr(addr)));
         }
     }
@@ -85,24 +85,21 @@ fn configured_active_dns_entries(values: &[String]) -> Vec<String> {
 }
 
 enum UdpCheckEntry {
-    Ipv4(SocketAddrV4),
+    Ip(SocketAddr),
     Domain { host: String, port: u16 },
 }
 
 fn parse_udp_check_entry(raw: &str, default_port: u16) -> Option<UdpCheckEntry> {
     let raw = raw.trim();
-    if let Some(ip) = ipv4_literal(raw) {
-        return Some(UdpCheckEntry::Ipv4(SocketAddrV4::new(ip, default_port)));
+    if let Some(ip) = ip_literal(raw) {
+        return Some(UdpCheckEntry::Ip(SocketAddr::new(ip, default_port)));
     }
     if let Ok(addr) = raw.parse::<SocketAddr>() {
-        return match addr {
-            SocketAddr::V4(addr) => Some(UdpCheckEntry::Ipv4(addr)),
-            SocketAddr::V6(_) => None,
-        };
+        return Some(UdpCheckEntry::Ip(addr));
     }
     let (host, port) = split_optional_host_port(raw, default_port)?;
-    if let Some(ip) = ipv4_literal(host) {
-        return Some(UdpCheckEntry::Ipv4(SocketAddrV4::new(ip, port)));
+    if let Some(ip) = ip_literal(host) {
+        return Some(UdpCheckEntry::Ip(SocketAddr::new(ip, port)));
     }
     Some(UdpCheckEntry::Domain {
         host: host.to_owned(),
@@ -110,7 +107,7 @@ fn parse_udp_check_entry(raw: &str, default_port: u16) -> Option<UdpCheckEntry> 
     })
 }
 
-fn active_dns_target_from_addr(addr: SocketAddrV4) -> ConfiguredActiveDnsTarget {
+fn active_dns_target_from_addr(addr: SocketAddr) -> ConfiguredActiveDnsTarget {
     ConfiguredActiveDnsTarget {
         target_ip: addr.ip().to_string(),
         target_port: addr.port(),
@@ -125,17 +122,19 @@ fn resolve_domain_active_dns_target(
     authority
         .to_socket_addrs()
         .map_err(|err| format!("resolve global.udp_check_dns {authority}: {err}"))?
-        .find_map(|addr| match addr {
-            SocketAddr::V4(addr) => Some(active_dns_target_from_addr(addr)),
-            SocketAddr::V6(_) => None,
-        })
-        .ok_or_else(|| format!("resolve global.udp_check_dns {authority}: no IPv4 address"))
+        .next()
+        .map(active_dns_target_from_addr)
+        .ok_or_else(|| format!("resolve global.udp_check_dns {authority}: no IP address"))
 }
 
 fn split_optional_host_port(raw: &str, default_port: u16) -> Option<(&str, u16)> {
     if let Some(rest) = raw.strip_prefix('[') {
         let (host, after_host) = rest.split_once(']')?;
-        let port = after_host.strip_prefix(':')?.parse::<u16>().ok()?;
+        let port = match after_host.strip_prefix(':') {
+            Some(port) => port.parse::<u16>().ok()?,
+            None if after_host.is_empty() => default_port,
+            None => return None,
+        };
         return Some((host, port));
     }
     if raw.matches(':').count() > 1 {
@@ -149,12 +148,14 @@ fn split_optional_host_port(raw: &str, default_port: u16) -> Option<(&str, u16)>
     }
 }
 
-fn ipv4_literal(raw: &str) -> Option<Ipv4Addr> {
-    raw.trim().parse::<Ipv4Addr>().ok()
+fn ip_literal(raw: &str) -> Option<IpAddr> {
+    raw.trim().parse::<IpAddr>().ok()
 }
 
 #[cfg(test)]
 mod tests {
+    use std::net::{Ipv4Addr, Ipv6Addr};
+
     use super::*;
 
     const CONFIGURED_DNS_CHECK_PORT: u16 = 8053;
@@ -177,6 +178,22 @@ mod tests {
 
     fn configured_dns_address_with_port() -> String {
         format!("{}:{}", configured_dns_address(), CONFIGURED_DNS_CHECK_PORT)
+    }
+
+    fn configured_dns_ipv6_address() -> Ipv6Addr {
+        Ipv6Addr::LOCALHOST
+    }
+
+    fn configured_dns_ipv6_address_string() -> String {
+        configured_dns_ipv6_address().to_string()
+    }
+
+    fn configured_dns_ipv6_address_with_port() -> String {
+        format!(
+            "[{}]:{}",
+            configured_dns_ipv6_address(),
+            CONFIGURED_DNS_CHECK_PORT
+        )
     }
 
     #[test]
@@ -267,6 +284,60 @@ mod tests {
             ConfiguredActiveDnsTarget {
                 target_ip: configured_dns_address_string(),
                 target_port: CONFIGURED_DNS_CHECK_DEFAULT_PORT,
+            }
+        );
+    }
+
+    #[test]
+    fn configured_active_dns_target_uses_udp_check_ipv6_host() {
+        let target = configured_active_dns_target_from_global(
+            &[configured_dns_ipv6_address_with_port()],
+            false,
+        )
+        .unwrap()
+        .unwrap();
+        assert_eq!(
+            target,
+            ConfiguredActiveDnsTarget {
+                target_ip: configured_dns_ipv6_address_string(),
+                target_port: CONFIGURED_DNS_CHECK_PORT,
+            }
+        );
+    }
+
+    #[test]
+    fn configured_active_dns_target_uses_bare_udp_check_ipv6_setting() {
+        let target = configured_active_dns_target_from_global(
+            &[configured_dns_ipv6_address_string()],
+            false,
+        )
+        .unwrap()
+        .unwrap();
+        assert_eq!(
+            target,
+            ConfiguredActiveDnsTarget {
+                target_ip: configured_dns_ipv6_address_string(),
+                target_port: CONFIGURED_DNS_CHECK_DEFAULT_PORT,
+            }
+        );
+    }
+
+    #[test]
+    fn configured_active_dns_target_prefers_explicit_ipv6_address() {
+        let target = configured_active_dns_target_from_global(
+            &[
+                configured_dns_domain_with_port(),
+                configured_dns_ipv6_address_string(),
+            ],
+            false,
+        )
+        .unwrap()
+        .unwrap();
+        assert_eq!(
+            target,
+            ConfiguredActiveDnsTarget {
+                target_ip: configured_dns_ipv6_address_string(),
+                target_port: CONFIGURED_DNS_CHECK_PORT,
             }
         );
     }
