@@ -3,7 +3,7 @@ use super::*;
 #[cfg(test)]
 pub(super) fn build_vless_udp_request(
     proxy: &ResidentProxyPlan,
-    original_dst: SocketAddrV4,
+    original_dst: SocketAddr,
     payload: &[u8],
 ) -> Result<Vec<u8>, String> {
     let key = proxy.vless_key()?;
@@ -32,18 +32,30 @@ pub(super) fn build_vless_udp_request(
     Ok(request)
 }
 
-pub(super) fn xudp_frame(original_dst: SocketAddrV4, payload: &[u8]) -> Result<Vec<u8>, String> {
+pub(super) fn xudp_frame(original_dst: SocketAddr, payload: &[u8]) -> Result<Vec<u8>, String> {
     if payload.len() > u16::MAX as usize {
         return Err(format!("XUDP payload too large: {} bytes", payload.len()));
     }
-    let mut metadata = Vec::with_capacity(2 + 3 + 2 + 1 + 4);
+    let addr_len = match original_dst {
+        SocketAddr::V4(_) => 4,
+        SocketAddr::V6(_) => 16,
+    };
+    let mut metadata = Vec::with_capacity(2 + 3 + 2 + 1 + addr_len);
     metadata.extend_from_slice(&0_u16.to_be_bytes());
     metadata.push(XUDP_COMMAND_NEW);
     metadata.push(XUDP_OPTION_DATA);
     metadata.push(XUDP_NETWORK_UDP);
     metadata.extend_from_slice(&original_dst.port().to_be_bytes());
-    metadata.push(1);
-    metadata.extend_from_slice(&original_dst.ip().octets());
+    match original_dst {
+        SocketAddr::V4(addr) => {
+            metadata.push(1);
+            metadata.extend_from_slice(&addr.ip().octets());
+        }
+        SocketAddr::V6(addr) => {
+            metadata.push(3);
+            metadata.extend_from_slice(&addr.ip().octets());
+        }
+    }
     if metadata.len() > u16::MAX as usize {
         return Err(format!("XUDP metadata too large: {} bytes", metadata.len()));
     }

@@ -2,6 +2,7 @@ use super::*;
 pub(crate) const BPF_L4_TCP: u8 = 6;
 pub(crate) const ROUTING_L4_TCP: u8 = 1;
 pub(crate) const ROUTING_IP_VERSION_4: u8 = 1;
+pub(crate) const ROUTING_IP_VERSION_6: u8 = 2;
 pub(crate) const TCP_SNIFF_BUFFER_LIMIT: usize = 64 * 1024;
 pub(crate) const ANYTLS_LOCAL_CLOSE_DRAIN_TIMEOUT: Duration = Duration::from_millis(500);
 
@@ -62,8 +63,8 @@ impl ResidentTcpRouter {
 
     pub(in crate::production_runtime_owner::resident_dataplane) fn select(
         &self,
-        peer: SocketAddrV4,
-        original_dst: SocketAddrV4,
+        peer: SocketAddr,
+        original_dst: SocketAddr,
         sniffed_domain: &str,
     ) -> Result<TcpSelection, String> {
         let initial = self.lookup_routing_result(peer, original_dst)?;
@@ -72,12 +73,12 @@ impl ResidentTcpRouter {
 
     pub(in crate::production_runtime_owner::resident_dataplane) fn select_from_routing_result(
         &self,
-        peer: SocketAddrV4,
-        original_dst: SocketAddrV4,
+        peer: SocketAddr,
+        original_dst: SocketAddr,
         sniffed_domain: &str,
         initial: BpfRoutingResult,
     ) -> Result<TcpSelection, String> {
-        let destination = SocketAddr::V4(original_dst);
+        let destination = original_dst;
         let first_choose = choose_dial_target(
             self.dial_mode,
             initial.outbound,
@@ -94,11 +95,11 @@ impl ResidentTcpRouter {
             let outcome = self
                 .routing_matcher
                 .match_query_detail(&Query {
-                    source: Some(IpAddr::V4(*peer.ip())),
-                    dest: IpAddr::V4(*original_dst.ip()),
+                    source: Some(peer.ip()),
+                    dest: original_dst.ip(),
                     source_port: Some(peer.port()),
                     dest_port: original_dst.port(),
-                    ip_version: Some(ROUTING_IP_VERSION_4),
+                    ip_version: Some(routing_ip_version(original_dst.ip())),
                     l4proto: Some(ROUTING_L4_TCP),
                     domain: sniffed_domain.to_owned(),
                     process_name: process_name(&initial.pname),
@@ -158,12 +159,12 @@ impl ResidentTcpRouter {
 
     pub(in crate::production_runtime_owner::resident_dataplane) fn lookup_routing_result(
         &self,
-        peer: SocketAddrV4,
-        original_dst: SocketAddrV4,
+        peer: SocketAddr,
+        original_dst: SocketAddr,
     ) -> Result<BpfRoutingResult, String> {
         let key = BpfTuplesKey {
-            sip: ipv4_mapped_ip_bytes(*peer.ip()),
-            dip: ipv4_mapped_ip_bytes(*original_dst.ip()),
+            sip: ip_addr_bytes(peer.ip()),
+            dip: ip_addr_bytes(original_dst.ip()),
             sport: peer.port().to_be(),
             dport: original_dst.port().to_be(),
             l4proto: BPF_L4_TCP,
@@ -185,6 +186,13 @@ impl ResidentTcpRouter {
             },
         )?;
         Ok(result)
+    }
+}
+
+fn routing_ip_version(addr: IpAddr) -> u8 {
+    match addr {
+        IpAddr::V4(_) => ROUTING_IP_VERSION_4,
+        IpAddr::V6(_) => ROUTING_IP_VERSION_6,
     }
 }
 

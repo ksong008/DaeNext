@@ -1,4 +1,4 @@
-use std::net::{SocketAddrV4, UdpSocket};
+use std::net::{SocketAddr, UdpSocket};
 
 use dae_datapath::{
     ACTIVE_UDP_DEFAULT_TARGET_IP, ACTIVE_UDP_DEFAULT_TARGET_PORT, active_udp_endpoint_contract,
@@ -15,22 +15,30 @@ pub(in crate::production_runtime_owner) const DEFAULT_ACTIVE_UDP_TARGET_PORT: u1
 
 pub(super) fn active_udp_target_addr(
     options: &ProductionRuntimeOwnerOptions,
-) -> Result<SocketAddrV4, String> {
+) -> Result<SocketAddr, String> {
     let ip = options.active_udp_target_ip.parse().map_err(|err| {
         format!(
             "invalid active UDP target ip {}: {err}",
             options.active_udp_target_ip
         )
     })?;
-    Ok(SocketAddrV4::new(ip, options.active_udp_target_port))
+    Ok(SocketAddr::new(ip, options.active_udp_target_port))
 }
 
 pub(super) fn active_udp_endpoint_model_json(options: &ProductionRuntimeOwnerOptions) -> Value {
     let contract = active_udp_endpoint_contract();
+    let target = active_udp_target_addr(options)
+        .map(|addr| addr.to_string())
+        .unwrap_or_else(|_| {
+            format!(
+                "{}:{}",
+                options.active_udp_target_ip, options.active_udp_target_port
+            )
+        });
     json!({
         "status": "model-only",
         "key_model": contract.key_model,
-        "target": format!("{}:{}", options.active_udp_target_ip, options.active_udp_target_port),
+        "target": target,
         "nat_timeout_ms": contract.nat_timeout_ms,
         "dns_nat_timeout_ms": contract.dns_nat_timeout_ms,
         "max_retry": contract.max_retry,

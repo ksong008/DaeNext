@@ -2,7 +2,7 @@ use super::*;
 pub(crate) fn meek_options_from_proxy(
     selection: &TcpProxySelection,
     peer: SocketAddr,
-    original_dst: SocketAddrV4,
+    original_dst: SocketAddr,
 ) -> MeekRoundTripOptions {
     MeekRoundTripOptions {
         url: format!(

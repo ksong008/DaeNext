@@ -16,7 +16,7 @@ pub(super) struct UdpSessionKey {
 }
 
 impl UdpSessionKey {
-    fn new(proxy: &ResidentProxyPlan, peer: SocketAddrV4, original_dst: SocketAddrV4) -> Self {
+    fn new(proxy: &ResidentProxyPlan, peer: SocketAddr, original_dst: SocketAddr) -> Self {
         Self {
             graph_id: proxy.graph_id.clone(),
             outbound: proxy.group_name.clone(),
@@ -326,16 +326,16 @@ mod tests {
         let proxy = test_udp_proxy(ResidentProxyProtocolPlan::VlessVisionTcpTls { key: [1; 16] });
         let key = UdpSessionKey::new(
             &proxy,
-            SocketAddrV4::new(Ipv4Addr::new(192, 0, 2, 10), 53000),
-            SocketAddrV4::new(Ipv4Addr::new(8, 8, 8, 8), 53),
+            SocketAddr::new(Ipv4Addr::new(192, 0, 2, 10).into(), 53000),
+            SocketAddr::new(Ipv4Addr::new(8, 8, 8, 8).into(), 53),
         );
         assert_eq!(key.packet_semantics, "dns");
     }
 
     #[test]
     fn udp_session_key_separates_packet_semantics() {
-        let peer = SocketAddrV4::new(Ipv4Addr::new(192, 0, 2, 10), 53000);
-        let original_dst = SocketAddrV4::new(Ipv4Addr::new(8, 8, 8, 8), 443);
+        let peer = SocketAddr::new(Ipv4Addr::new(192, 0, 2, 10).into(), 53000);
+        let original_dst = SocketAddr::new(Ipv4Addr::new(8, 8, 8, 8).into(), 443);
         let vless = test_udp_proxy(ResidentProxyProtocolPlan::VlessVisionTcpTls { key: [1; 16] });
         let socks = test_udp_proxy(ResidentProxyProtocolPlan::Socks5Tcp {
             username: String::new(),

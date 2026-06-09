@@ -1,5 +1,5 @@
 use std::io;
-use std::net::{SocketAddr, SocketAddrV4, UdpSocket};
+use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr, UdpSocket};
 use std::os::fd::AsRawFd;
 use std::time::Duration;
 
@@ -30,23 +30,27 @@ pub struct UdpDirectSocketReport {
 #[derive(Debug)]
 pub struct UdpDirectPacketConn {
     socket: UdpSocket,
-    target: SocketAddrV4,
+    target: SocketAddr,
     report: UdpDirectSocketReport,
 }
 
 impl UdpDirectPacketConn {
     pub fn connect(
-        target: SocketAddrV4,
+        target: SocketAddr,
         opts: &UdpDirectSocketOptions,
     ) -> io::Result<UdpDirectPacketConn> {
-        let socket = UdpSocket::bind(("0.0.0.0", 0))?;
+        let bind = match target {
+            SocketAddr::V4(_) => SocketAddr::new(IpAddr::V4(Ipv4Addr::UNSPECIFIED), 0),
+            SocketAddr::V6(_) => SocketAddr::new(IpAddr::V6(Ipv6Addr::UNSPECIFIED), 0),
+        };
+        let socket = UdpSocket::bind(bind)?;
         socket.set_read_timeout(Some(opts.timeout))?;
         socket.set_write_timeout(Some(opts.timeout))?;
         if opts.mark != 0 {
             set_so_mark(socket.as_raw_fd(), opts.mark)?;
         }
         let so_mark = get_so_mark(socket.as_raw_fd()).unwrap_or(0);
-        let peer_addr = SocketAddr::V4(target).to_string();
+        let peer_addr = target.to_string();
         let local_addr = socket
             .local_addr()
             .map(|addr| addr.to_string())
@@ -70,7 +74,7 @@ impl UdpDirectPacketConn {
         Ok(response)
     }
 
-    pub fn write_to(&self, payload: &[u8], target: SocketAddrV4) -> io::Result<usize> {
+    pub fn write_to(&self, payload: &[u8], target: SocketAddr) -> io::Result<usize> {
         self.socket.send_to(payload, target)
     }
 
@@ -81,7 +85,7 @@ impl UdpDirectPacketConn {
         Ok((response, peer))
     }
 
-    pub fn target(&self) -> SocketAddrV4 {
+    pub fn target(&self) -> SocketAddr {
         self.target
     }
 

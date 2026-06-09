@@ -4,7 +4,7 @@ use super::*;
 pub(crate) async fn handle_shadowsocks_simple_obfs_http_proxy_tcp_connection_async(
     inbound: &mut TokioTcpStream,
     peer: SocketAddr,
-    original_dst: SocketAddrV4,
+    original_dst: SocketAddr,
     selection: TcpProxySelection,
     stop: Arc<AtomicBool>,
     sniff: &TcpSniffReport,
@@ -77,7 +77,7 @@ pub(crate) async fn handle_shadowsocks_simple_obfs_http_proxy_tcp_connection_asy
 pub(crate) async fn handle_shadowsocks_simple_obfs_tls_proxy_tcp_connection_async(
     inbound: &mut TokioTcpStream,
     peer: SocketAddr,
-    original_dst: SocketAddrV4,
+    original_dst: SocketAddr,
     selection: TcpProxySelection,
     stop: Arc<AtomicBool>,
     sniff: &TcpSniffReport,
@@ -148,7 +148,7 @@ pub(crate) async fn handle_shadowsocks_simple_obfs_tls_proxy_tcp_connection_asyn
 pub(crate) async fn handle_shadowsocks_2022_simple_obfs_http_proxy_tcp_connection_async(
     inbound: &mut TokioTcpStream,
     peer: SocketAddr,
-    original_dst: SocketAddrV4,
+    original_dst: SocketAddr,
     selection: TcpProxySelection,
     stop: Arc<AtomicBool>,
     sniff: &TcpSniffReport,

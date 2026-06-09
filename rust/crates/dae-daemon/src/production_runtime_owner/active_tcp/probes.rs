@@ -1,5 +1,5 @@
 use std::io::{Read, Write};
-use std::net::{SocketAddr, SocketAddrV4, TcpListener, TcpStream};
+use std::net::{IpAddr, SocketAddr, TcpListener, TcpStream};
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -12,26 +12,32 @@ use serde_json::{Value, json};
 
 use super::super::ProductionRuntimeOwnerOptions;
 use super::super::command::{CommandSpec, run_observation_command};
-use super::{
-    CLIENT_NETNS, DEFAULT_ACTIVE_TCP_TARGET_IP, DEFAULT_ACTIVE_TCP_TARGET_PORT, RELAY_TCP_PAYLOAD,
-    RELAY_TCP_RESPONSE, TCP_PAYLOAD, TCP_RESPONSE,
-};
+use super::{CLIENT_NETNS, RELAY_TCP_PAYLOAD, RELAY_TCP_RESPONSE, TCP_PAYLOAD, TCP_RESPONSE};
 
 pub(in crate::production_runtime_owner) fn run_active_tcp_probe(
     listener: TcpListener,
     options: &ProductionRuntimeOwnerOptions,
 ) -> (Value, Value, bool, bool) {
-    let target = format!(
-        "{}:{}",
-        options.active_tcp_target_ip, options.active_tcp_target_port
-    );
+    let target = match active_tcp_target_addr(options) {
+        Ok(target) => target,
+        Err(err) => {
+            return (
+                json!({"status": "fail", "error": err}),
+                Value::Null,
+                false,
+                false,
+            );
+        }
+    };
+    let target_string = target.to_string();
     let accept_handle = thread::spawn(move || tcp_accept_probe(listener));
     thread::sleep(Duration::from_millis(100));
-    let client = run_client_probe(&target);
+    let client = run_client_probe(target);
     let accept = accept_handle
         .join()
         .unwrap_or_else(|_| json!({"status": "fail", "error": "accept thread panicked"}));
-    let original_destination_observed = accept["local_addr"].as_str() == Some(target.as_str());
+    let original_destination_observed =
+        accept["local_addr"].as_str() == Some(target_string.as_str());
     let tcp_reply_path_succeeded = client["stdout"]
         .as_str()
         .is_some_and(|stdout| stdout.contains("active-tcp-tproxy-ack"));
@@ -76,6 +82,8 @@ fn tcp_accept_probe_inner(listener: TcpListener) -> Result<Value, String> {
     let local = stream
         .local_addr()
         .map_err(|err| format!("local_addr: {err}"))?;
+    let local = normalize_socket_addr(local);
+    let peer = normalize_socket_addr(peer);
     let mut buf = [0_u8; 64];
     let n = stream
         .read(&mut buf)
@@ -98,18 +106,13 @@ fn tcp_accept_probe_inner(listener: TcpListener) -> Result<Value, String> {
     }))
 }
 
-fn run_client_probe(target: &str) -> Value {
+fn run_client_probe(target: SocketAddr) -> Value {
+    let target_ip = target.ip().to_string();
+    let target_port = target.port();
     let script = format!(
         "import socket,sys\ns=socket.create_connection(({target_ip:?},{target_port}),3)\ns.settimeout(3)\ns.sendall(b\"active-tcp-tproxy-ping\")\ndata=s.recv(64)\nprint(data.decode('ascii','replace'))\ns.close()\nsys.exit(0 if data == b\"active-tcp-tproxy-ack\" else 2)\n",
-        target_ip = target
-            .split(':')
-            .next()
-            .unwrap_or(DEFAULT_ACTIVE_TCP_TARGET_IP),
-        target_port = target
-            .split(':')
-            .nth(1)
-            .and_then(|port| port.parse::<u16>().ok())
-            .unwrap_or(DEFAULT_ACTIVE_TCP_TARGET_PORT),
+        target_ip = target_ip,
+        target_port = target_port,
     );
     run_observation_command(CommandSpec::new(
         "ip",
@@ -122,10 +125,23 @@ pub(in crate::production_runtime_owner) fn run_active_tcp_relay_probe(
     listener: TcpListener,
     options: &ProductionRuntimeOwnerOptions,
 ) -> (Value, Value, Value, Value, Value, bool, bool, bool, bool) {
-    let target = format!(
-        "{}:{}",
-        options.active_tcp_target_ip, options.active_tcp_target_port
-    );
+    let target = match active_tcp_target_addr(options) {
+        Ok(target) => target,
+        Err(err) => {
+            return (
+                json!({"status": "fail", "error": err}),
+                Value::Null,
+                Value::Null,
+                Value::Null,
+                Value::Null,
+                false,
+                false,
+                false,
+                false,
+            );
+        }
+    };
+    let target_string = target.to_string();
     let iterations = options.active_tcp_benchmark_iters;
     let (upstream_listener, upstream_listener_report) = match bind_loopback_tcp_listener(
         options.active_tcp_mptcp && options.active_tcp_upstream_mptcp,
@@ -146,20 +162,7 @@ pub(in crate::production_runtime_owner) fn run_active_tcp_relay_probe(
         }
     };
     let upstream_addr = match upstream_listener.local_addr() {
-        Ok(SocketAddr::V4(addr)) => addr,
-        Ok(addr) => {
-            return (
-                json!({"status": "fail", "error": format!("unexpected upstream address family: {addr}")}),
-                upstream_listener_json(&upstream_listener_report),
-                Value::Null,
-                Value::Null,
-                Value::Null,
-                false,
-                false,
-                false,
-                false,
-            );
-        }
+        Ok(addr) => normalize_socket_addr(addr),
         Err(err) => {
             return (
                 json!({"status": "fail", "error": format!("failed to read upstream address: {err}")}),
@@ -183,7 +186,7 @@ pub(in crate::production_runtime_owner) fn run_active_tcp_relay_probe(
             RELAY_TCP_RESPONSE,
         )
     });
-    let relay_target = target.clone();
+    let relay_target = target_string.clone();
     let mark = options.active_tcp_so_mark;
     let mptcp = options.active_tcp_mptcp;
     let accept_handle = thread::spawn(move || {
@@ -198,7 +201,7 @@ pub(in crate::production_runtime_owner) fn run_active_tcp_relay_probe(
     });
     thread::sleep(Duration::from_millis(100));
     let started = Instant::now();
-    let client = run_client_relay_probe(&target, iterations);
+    let client = run_client_relay_probe(target, iterations);
     let accept = accept_handle
         .join()
         .unwrap_or_else(|_| json!({"status": "fail", "error": "relay accept thread panicked"}));
@@ -207,7 +210,7 @@ pub(in crate::production_runtime_owner) fn run_active_tcp_relay_probe(
         .unwrap_or_else(|_| json!({"status": "fail", "error": "upstream thread panicked"}));
     let elapsed = started.elapsed();
     let original_destination_observed =
-        accept["first_local_addr"].as_str() == Some(target.as_str());
+        accept["first_local_addr"].as_str() == Some(target_string.as_str());
     let outbound_relay_succeeded = accept["status"].as_str() == Some("pass")
         && upstream["status"].as_str() == Some("pass")
         && client["status"].as_str() == Some("pass")
@@ -255,7 +258,7 @@ pub(in crate::production_runtime_owner) fn run_active_tcp_relay_probe(
 
 fn tcp_relay_accept_probe(
     listener: TcpListener,
-    upstream_addr: SocketAddrV4,
+    upstream_addr: SocketAddr,
     target: &str,
     mark: u32,
     mptcp: bool,
@@ -280,10 +283,14 @@ fn tcp_relay_accept_probe(
         };
         let _ = inbound.set_read_timeout(Some(Duration::from_secs(2)));
         let _ = inbound.set_write_timeout(Some(Duration::from_secs(2)));
-        let local_addr = inbound.local_addr().map(|addr| addr.to_string()).ok();
+        let local_addr = inbound
+            .local_addr()
+            .map(normalize_socket_addr)
+            .map(|addr| addr.to_string())
+            .ok();
         if first_local_addr.is_none() {
             first_local_addr = local_addr.clone();
-            first_peer_addr = Some(peer.to_string());
+            first_peer_addr = Some(normalize_socket_addr(peer).to_string());
         }
         let mut payload = vec![0_u8; RELAY_TCP_PAYLOAD.len()];
         if let Err(err) = inbound.read_exact(&mut payload) {
@@ -414,18 +421,13 @@ fn upstream_echo_probe(
     })
 }
 
-fn run_client_relay_probe(target: &str, iterations: u32) -> Value {
+fn run_client_relay_probe(target: SocketAddr, iterations: u32) -> Value {
+    let target_ip = target.ip().to_string();
+    let target_port = target.port();
     let script = format!(
         "import socket,sys\nok=0\nfor i in range({iterations}):\n    s=socket.create_connection(({target_ip:?},{target_port}),3)\n    s.settimeout(3)\n    s.sendall(b\"active-tcp-relay-ping\")\n    data=s.recv(64)\n    s.close()\n    if data != b\"active-tcp-relay-ack\":\n        print(data.decode('ascii','replace'))\n        sys.exit(2)\n    ok += 1\nprint(f\"active-tcp-relay-ack-count={{ok}}\")\nsys.exit(0)\n",
-        target_ip = target
-            .split(':')
-            .next()
-            .unwrap_or(DEFAULT_ACTIVE_TCP_TARGET_IP),
-        target_port = target
-            .split(':')
-            .nth(1)
-            .and_then(|port| port.parse::<u16>().ok())
-            .unwrap_or(DEFAULT_ACTIVE_TCP_TARGET_PORT),
+        target_ip = target_ip,
+        target_port = target_port,
     );
     run_observation_command(CommandSpec::new(
         "ip",
@@ -459,6 +461,30 @@ fn upstream_listener_json(report: &TcpLoopbackListenerReport) -> Value {
         "socket_protocol": report.socket_protocol,
         "local_addr": report.local_addr,
     })
+}
+
+fn active_tcp_target_addr(options: &ProductionRuntimeOwnerOptions) -> Result<SocketAddr, String> {
+    let ip = options
+        .active_tcp_target_ip
+        .parse::<IpAddr>()
+        .map_err(|err| {
+            format!(
+                "invalid active TCP target ip {}: {err}",
+                options.active_tcp_target_ip
+            )
+        })?;
+    Ok(SocketAddr::new(ip, options.active_tcp_target_port))
+}
+
+fn normalize_socket_addr(addr: SocketAddr) -> SocketAddr {
+    match addr {
+        SocketAddr::V6(v6) => v6
+            .ip()
+            .to_ipv4_mapped()
+            .map(|ip| SocketAddr::new(IpAddr::V4(ip), v6.port()))
+            .unwrap_or(SocketAddr::V6(v6)),
+        SocketAddr::V4(_) => addr,
+    }
 }
 
 fn tcp_direct_dial_report_json(report: &TcpDirectDialReport) -> Value {

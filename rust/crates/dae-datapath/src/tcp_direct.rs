@@ -1,6 +1,6 @@
 use std::io;
 use std::mem::{MaybeUninit, size_of};
-use std::net::{Ipv4Addr, SocketAddr, SocketAddrV4, TcpListener, TcpStream};
+use std::net::{Ipv4Addr, SocketAddr, TcpListener, TcpStream};
 use std::os::fd::{AsRawFd, FromRawFd, IntoRawFd, OwnedFd};
 use std::time::Duration;
 
@@ -56,7 +56,7 @@ pub struct TcpDirectConnectAttempt {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct TcpDirectConnectState {
-    pub target: SocketAddrV4,
+    pub target: SocketAddr,
     pub opts: TcpDirectDialOptions,
     pub mptcp_socket_created: bool,
     pub mptcp_connect_fallback_used: bool,
@@ -87,7 +87,8 @@ pub fn bind_loopback_tcp_listener_on_port(
     requested_mptcp: bool,
     port: u16,
 ) -> io::Result<(TcpListener, TcpLoopbackListenerReport)> {
-    let (fd, mptcp_socket_created, fallback_used) = open_tcp_socket(requested_mptcp)?;
+    let (fd, mptcp_socket_created, fallback_used) =
+        open_tcp_socket(libc::AF_INET, requested_mptcp)?;
     set_reuse_addr(fd.as_raw_fd())?;
     bind_loopback_port(fd.as_raw_fd(), port)?;
     let listen_status = unsafe { libc::listen(fd.as_raw_fd(), 128) };
@@ -110,7 +111,7 @@ pub fn bind_loopback_tcp_listener_on_port(
 }
 
 pub fn magic_tcp_connect(
-    target: SocketAddrV4,
+    target: SocketAddr,
     opts: &TcpDirectDialOptions,
 ) -> io::Result<TcpDirectConnection> {
     match connect_with_protocol(target, opts, opts.mptcp) {
@@ -135,15 +136,17 @@ pub fn mptcp_socket_supported() -> bool {
 }
 
 pub fn tcp_direct_connect_start(
-    target: SocketAddrV4,
+    target: SocketAddr,
     opts: &TcpDirectDialOptions,
     use_mptcp: bool,
 ) -> io::Result<TcpDirectConnectAttempt> {
-    let (fd, mptcp_socket_created, _) = open_tcp_socket_with_flags(use_mptcp, libc::SOCK_NONBLOCK)?;
+    let family = socket_family(target);
+    let (fd, mptcp_socket_created, _) =
+        open_tcp_socket_with_flags(family, use_mptcp, libc::SOCK_NONBLOCK)?;
     if opts.mark != 0 {
         set_so_mark(fd.as_raw_fd(), opts.mark)?;
     }
-    connect_ipv4_nonblocking(fd.as_raw_fd(), target)?;
+    connect_nonblocking(fd.as_raw_fd(), target)?;
     let stream = unsafe { TcpStream::from_raw_fd(fd.into_raw_fd()) };
     Ok(TcpDirectConnectAttempt {
         stream,
@@ -168,24 +171,22 @@ pub fn tcp_direct_connect_finish(
 }
 
 fn connect_with_protocol(
-    target: SocketAddrV4,
+    target: SocketAddr,
     opts: &TcpDirectDialOptions,
     use_mptcp: bool,
 ) -> io::Result<TcpDirectConnection> {
-    let (fd, mptcp_socket_created, fallback_used) = open_tcp_socket(use_mptcp)?;
+    let (fd, mptcp_socket_created, fallback_used) =
+        open_tcp_socket(socket_family(target), use_mptcp)?;
     set_timeouts(fd.as_raw_fd(), opts.timeout)?;
     if opts.mark != 0 {
         set_so_mark(fd.as_raw_fd(), opts.mark)?;
     }
-    connect_ipv4(fd.as_raw_fd(), target)?;
+    connect_socket_addr(fd.as_raw_fd(), target)?;
     let socket_protocol = get_socket_protocol(fd.as_raw_fd()).unwrap_or(0);
     let so_mark = get_so_mark(fd.as_raw_fd()).unwrap_or(0);
     let mptcp_info = read_mptcp_info_status(fd.as_raw_fd());
     let stream = unsafe { TcpStream::from_raw_fd(fd.into_raw_fd()) };
-    let peer_addr = stream
-        .peer_addr()
-        .unwrap_or(SocketAddr::V4(target))
-        .to_string();
+    let peer_addr = stream.peer_addr().unwrap_or(target).to_string();
     let local_addr = stream
         .local_addr()
         .map(|addr| addr.to_string())
@@ -206,31 +207,40 @@ fn connect_with_protocol(
     })
 }
 
-fn open_tcp_socket(requested_mptcp: bool) -> io::Result<(OwnedFd, bool, bool)> {
-    open_tcp_socket_with_flags(requested_mptcp, 0)
+fn open_tcp_socket(
+    family: libc::c_int,
+    requested_mptcp: bool,
+) -> io::Result<(OwnedFd, bool, bool)> {
+    open_tcp_socket_with_flags(family, requested_mptcp, 0)
 }
 
 fn open_tcp_socket_with_flags(
+    family: libc::c_int,
     requested_mptcp: bool,
     socket_flags: libc::c_int,
 ) -> io::Result<(OwnedFd, bool, bool)> {
     if requested_mptcp {
-        match open_socket_with_flags(IPPROTO_MPTCP, socket_flags) {
+        match open_socket_with_flags(family, IPPROTO_MPTCP, socket_flags) {
             Ok(fd) => return Ok((fd, true, false)),
             Err(_) => {}
         }
     }
-    open_socket_with_flags(libc::IPPROTO_TCP, socket_flags).map(|fd| (fd, false, requested_mptcp))
+    open_socket_with_flags(family, libc::IPPROTO_TCP, socket_flags)
+        .map(|fd| (fd, false, requested_mptcp))
 }
 
 fn open_socket(protocol: libc::c_int) -> io::Result<OwnedFd> {
-    open_socket_with_flags(protocol, 0)
+    open_socket_with_flags(libc::AF_INET, protocol, 0)
 }
 
-fn open_socket_with_flags(protocol: libc::c_int, socket_flags: libc::c_int) -> io::Result<OwnedFd> {
+fn open_socket_with_flags(
+    family: libc::c_int,
+    protocol: libc::c_int,
+    socket_flags: libc::c_int,
+) -> io::Result<OwnedFd> {
     let fd = unsafe {
         libc::socket(
-            libc::AF_INET,
+            family,
             libc::SOCK_STREAM | libc::SOCK_CLOEXEC | socket_flags,
             protocol,
         )
@@ -263,20 +273,13 @@ fn bind_loopback_port(fd: i32, port: u16) -> io::Result<()> {
     Ok(())
 }
 
-fn connect_ipv4(fd: i32, target: SocketAddrV4) -> io::Result<()> {
-    let addr = libc::sockaddr_in {
-        sin_family: libc::AF_INET as libc::sa_family_t,
-        sin_port: target.port().to_be(),
-        sin_addr: libc::in_addr {
-            s_addr: u32::from_ne_bytes(target.ip().octets()),
-        },
-        sin_zero: [0; 8],
-    };
+fn connect_socket_addr(fd: i32, target: SocketAddr) -> io::Result<()> {
+    let (storage, len) = sockaddr_from_socket_addr(target);
     let status = unsafe {
         libc::connect(
             fd,
-            (&addr as *const libc::sockaddr_in).cast::<libc::sockaddr>(),
-            size_of::<libc::sockaddr_in>() as libc::socklen_t,
+            (&storage as *const libc::sockaddr_storage).cast::<libc::sockaddr>(),
+            len,
         )
     };
     if status < 0 {
@@ -285,20 +288,13 @@ fn connect_ipv4(fd: i32, target: SocketAddrV4) -> io::Result<()> {
     Ok(())
 }
 
-fn connect_ipv4_nonblocking(fd: i32, target: SocketAddrV4) -> io::Result<()> {
-    let addr = libc::sockaddr_in {
-        sin_family: libc::AF_INET as libc::sa_family_t,
-        sin_port: target.port().to_be(),
-        sin_addr: libc::in_addr {
-            s_addr: u32::from_ne_bytes(target.ip().octets()),
-        },
-        sin_zero: [0; 8],
-    };
+fn connect_nonblocking(fd: i32, target: SocketAddr) -> io::Result<()> {
+    let (storage, len) = sockaddr_from_socket_addr(target);
     let status = unsafe {
         libc::connect(
             fd,
-            (&addr as *const libc::sockaddr_in).cast::<libc::sockaddr>(),
-            size_of::<libc::sockaddr_in>() as libc::socklen_t,
+            (&storage as *const libc::sockaddr_storage).cast::<libc::sockaddr>(),
+            len,
         )
     };
     if status == 0 {
@@ -315,6 +311,48 @@ fn connect_ipv4_nonblocking(fd: i32, target: SocketAddrV4) -> io::Result<()> {
         return Ok(());
     }
     Err(err)
+}
+
+fn socket_family(addr: SocketAddr) -> libc::c_int {
+    match addr {
+        SocketAddr::V4(_) => libc::AF_INET,
+        SocketAddr::V6(_) => libc::AF_INET6,
+    }
+}
+
+fn sockaddr_from_socket_addr(addr: SocketAddr) -> (libc::sockaddr_storage, libc::socklen_t) {
+    let mut storage: libc::sockaddr_storage = unsafe { std::mem::zeroed() };
+    match addr {
+        SocketAddr::V4(addr) => {
+            let raw = libc::sockaddr_in {
+                sin_family: libc::AF_INET as libc::sa_family_t,
+                sin_port: addr.port().to_be(),
+                sin_addr: libc::in_addr {
+                    s_addr: u32::from_ne_bytes(addr.ip().octets()),
+                },
+                sin_zero: [0; 8],
+            };
+            unsafe {
+                std::ptr::write((&mut storage as *mut libc::sockaddr_storage).cast(), raw);
+            }
+            (storage, size_of::<libc::sockaddr_in>() as libc::socklen_t)
+        }
+        SocketAddr::V6(addr) => {
+            let raw = libc::sockaddr_in6 {
+                sin6_family: libc::AF_INET6 as libc::sa_family_t,
+                sin6_port: addr.port().to_be(),
+                sin6_flowinfo: addr.flowinfo(),
+                sin6_addr: libc::in6_addr {
+                    s6_addr: addr.ip().octets(),
+                },
+                sin6_scope_id: addr.scope_id(),
+            };
+            unsafe {
+                std::ptr::write((&mut storage as *mut libc::sockaddr_storage).cast(), raw);
+            }
+            (storage, size_of::<libc::sockaddr_in6>() as libc::socklen_t)
+        }
+    }
 }
 
 fn set_reuse_addr(fd: i32) -> io::Result<()> {
@@ -403,10 +441,7 @@ fn finish_tcp_direct_connection(
     let socket_protocol = get_socket_protocol(stream.as_raw_fd()).unwrap_or(0);
     let so_mark = get_so_mark(stream.as_raw_fd()).unwrap_or(0);
     let mptcp_info = read_mptcp_info_status(stream.as_raw_fd());
-    let peer_addr = stream
-        .peer_addr()
-        .unwrap_or(SocketAddr::V4(state.target))
-        .to_string();
+    let peer_addr = stream.peer_addr().unwrap_or(state.target).to_string();
     let local_addr = stream
         .local_addr()
         .map(|addr| addr.to_string())
@@ -428,7 +463,7 @@ fn finish_tcp_direct_connection(
 }
 
 fn tcp_direct_dial_report(
-    _target: SocketAddrV4,
+    _target: SocketAddr,
     opts: &TcpDirectDialOptions,
     mptcp_socket_created: bool,
     mptcp_connect_fallback_used: bool,

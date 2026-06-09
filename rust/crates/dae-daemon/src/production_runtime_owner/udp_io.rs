@@ -1,4 +1,4 @@
-use std::net::{SocketAddrV4, UdpSocket};
+use std::net::{Ipv6Addr, SocketAddr, SocketAddrV4, SocketAddrV6, UdpSocket};
 use std::os::fd::AsRawFd;
 use std::thread;
 use std::time::{Duration, Instant};
@@ -8,8 +8,8 @@ use serde_json::{Value, json};
 
 pub(super) struct UdpOriginalDstPacket {
     pub(super) payload: Vec<u8>,
-    pub(super) peer: SocketAddrV4,
-    pub(super) original_dst: Option<SocketAddrV4>,
+    pub(super) peer: SocketAddr,
+    pub(super) original_dst: Option<SocketAddr>,
 }
 
 pub(super) fn recv_udp_with_original_dst(
@@ -46,17 +46,18 @@ fn recvmsg_udp_original_dst(
     expected_len: usize,
 ) -> Result<UdpOriginalDstPacket, String> {
     const IP_ORIGDSTADDR: libc::c_int = 20;
+    const IPV6_ORIGDSTADDR: libc::c_int = 74;
     let fd = socket.as_raw_fd();
     let mut data = vec![0_u8; expected_len.max(2048)];
-    let mut control = [0_u8; 128];
-    let mut peer: libc::sockaddr_in = unsafe { std::mem::zeroed() };
+    let mut control = [0_u8; 256];
+    let mut peer: libc::sockaddr_storage = unsafe { std::mem::zeroed() };
     let mut iov = libc::iovec {
         iov_base: data.as_mut_ptr().cast::<libc::c_void>(),
         iov_len: data.len(),
     };
     let mut msg: libc::msghdr = unsafe { std::mem::zeroed() };
-    msg.msg_name = (&mut peer as *mut libc::sockaddr_in).cast::<libc::c_void>();
-    msg.msg_namelen = std::mem::size_of::<libc::sockaddr_in>() as libc::socklen_t;
+    msg.msg_name = (&mut peer as *mut libc::sockaddr_storage).cast::<libc::c_void>();
+    msg.msg_namelen = std::mem::size_of::<libc::sockaddr_storage>() as libc::socklen_t;
     msg.msg_iov = &mut iov;
     msg.msg_iovlen = 1;
     msg.msg_control = control.as_mut_ptr().cast::<libc::c_void>();
@@ -66,14 +67,20 @@ fn recvmsg_udp_original_dst(
         return Err(std::io::Error::last_os_error().to_string());
     }
     data.truncate(read as usize);
-    let peer = sockaddr_in_to_v4(peer);
+    let peer = sockaddr_storage_to_addr(&peer)
+        .ok_or_else(|| "receive UDP packet from unsupported address family".to_owned())?;
     let mut original_dst = None;
     unsafe {
         let mut cmsg = libc::CMSG_FIRSTHDR(&msg);
         while !cmsg.is_null() {
             if (*cmsg).cmsg_level == libc::SOL_IP && (*cmsg).cmsg_type == IP_ORIGDSTADDR {
                 let addr = *(libc::CMSG_DATA(cmsg).cast::<libc::sockaddr_in>());
-                original_dst = Some(sockaddr_in_to_v4(addr));
+                original_dst = Some(SocketAddr::V4(sockaddr_in_to_v4(addr)));
+                break;
+            }
+            if (*cmsg).cmsg_level == libc::SOL_IPV6 && (*cmsg).cmsg_type == IPV6_ORIGDSTADDR {
+                let addr = *(libc::CMSG_DATA(cmsg).cast::<libc::sockaddr_in6>());
+                original_dst = Some(sockaddr_in6_to_addr(addr));
                 break;
             }
             cmsg = libc::CMSG_NXTHDR(&msg, cmsg);
@@ -93,10 +100,44 @@ fn sockaddr_in_to_v4(addr: libc::sockaddr_in) -> SocketAddrV4 {
     )
 }
 
-pub(super) fn udp_direct_report_json(
-    report: &UdpDirectSocketReport,
-    target: SocketAddrV4,
-) -> Value {
+fn sockaddr_in6_to_addr(addr: libc::sockaddr_in6) -> SocketAddr {
+    let ip = Ipv6Addr::from(addr.sin6_addr.s6_addr);
+    let port = u16::from_be(addr.sin6_port);
+    if let Some(v4) = ip.to_ipv4_mapped() {
+        SocketAddr::V4(SocketAddrV4::new(v4, port))
+    } else {
+        SocketAddr::V6(SocketAddrV6::new(
+            ip,
+            port,
+            addr.sin6_flowinfo,
+            addr.sin6_scope_id,
+        ))
+    }
+}
+
+fn sockaddr_storage_to_addr(storage: &libc::sockaddr_storage) -> Option<SocketAddr> {
+    match storage.ss_family as libc::c_int {
+        libc::AF_INET => {
+            let addr = unsafe {
+                std::ptr::read(
+                    (storage as *const libc::sockaddr_storage).cast::<libc::sockaddr_in>(),
+                )
+            };
+            Some(SocketAddr::V4(sockaddr_in_to_v4(addr)))
+        }
+        libc::AF_INET6 => {
+            let addr = unsafe {
+                std::ptr::read(
+                    (storage as *const libc::sockaddr_storage).cast::<libc::sockaddr_in6>(),
+                )
+            };
+            Some(sockaddr_in6_to_addr(addr))
+        }
+        _ => None,
+    }
+}
+
+pub(super) fn udp_direct_report_json(report: &UdpDirectSocketReport, target: SocketAddr) -> Value {
     json!({
         "requested_mark": report.requested_mark,
         "so_mark": report.so_mark,

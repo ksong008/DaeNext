@@ -141,30 +141,17 @@ pub(crate) async fn handle_tcp_connection_async_or_handoff(
     stop: Arc<AtomicBool>,
     metrics: Arc<ResidentDataplaneMetrics>,
 ) -> Result<Option<Value>, String> {
-    let peer_v4 = match peer {
-        SocketAddr::V4(addr) => addr,
-        SocketAddr::V6(addr) => {
-            return Err(format!(
-                "resident TCP dataplane currently supports IPv4 TCP peers only: {addr}"
-            ));
-        }
-    };
     let original_dst = match inbound
         .local_addr()
         .map_err(|err| format!("read original TCP destination: {err}"))?
     {
-        SocketAddr::V4(addr) => addr,
-        SocketAddr::V6(addr) => {
-            return Err(format!(
-                "resident TCP dataplane currently supports IPv4 original destinations only: {addr}"
-            ));
-        }
+        addr @ (SocketAddr::V4(_) | SocketAddr::V6(_)) => addr,
     };
     inbound
         .set_nodelay(true)
         .map_err(|err| format!("set inbound TCP_NODELAY: {err}"))?;
     let sniff = sniff_initial_tcp_payload_async(&mut inbound, router.sniffing_timeout).await?;
-    let selection = router.select(peer_v4, original_dst, &sniff.domain)?;
+    let selection = router.select(peer, original_dst, &sniff.domain)?;
     match selection {
         TcpSelection::Direct(selection) => {
             let _tcp_guard = ResidentTcpConnectionGuard::new(Arc::clone(&metrics));

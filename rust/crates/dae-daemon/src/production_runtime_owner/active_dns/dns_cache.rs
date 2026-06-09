@@ -1,4 +1,4 @@
-use std::net::{SocketAddrV4, UdpSocket};
+use std::net::{SocketAddr, UdpSocket};
 use std::time::{Duration, Instant};
 
 use dae_control::{DomainRoutingOwnerSnapshot, DomainRoutingTracker, DomainRoutingView};
@@ -19,8 +19,8 @@ use crate::production_runtime_owner::udp_io::{recv_udp_with_original_dst, udp_di
 
 pub(super) fn dns_tproxy_cache_probe(
     socket: UdpSocket,
-    expected_original_dst: SocketAddrV4,
-    upstream_addr: SocketAddrV4,
+    expected_original_dst: SocketAddr,
+    upstream_addr: SocketAddr,
     mark: u32,
     mptcp: bool,
     expected_qname: &str,

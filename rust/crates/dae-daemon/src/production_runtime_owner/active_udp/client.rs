@@ -1,21 +1,23 @@
+use std::net::SocketAddr;
+
 use serde_json::Value;
 
-use super::model::{DEFAULT_ACTIVE_UDP_TARGET_IP, DEFAULT_ACTIVE_UDP_TARGET_PORT};
 use crate::production_runtime_owner::active_tcp::CLIENT_NETNS;
 use crate::production_runtime_owner::command::{CommandSpec, run_observation_command};
 
-pub(super) fn run_client_active_udp_probe(target: &str, iterations: u32) -> Value {
+pub(super) fn run_client_active_udp_probe(target: SocketAddr, iterations: u32) -> Value {
+    let target_ip = target.ip().to_string();
+    let target_port = target.port();
+    let socket_family = if target.is_ipv6() {
+        "AF_INET6"
+    } else {
+        "AF_INET"
+    };
     let script = format!(
-        "import socket,sys\nok=0\nlast=None\ns=socket.socket(socket.AF_INET, socket.SOCK_DGRAM)\ns.settimeout(3)\nfor i in range({iterations}):\n    s.sendto(b\"active-udp-tproxy-ping\", ({target_ip:?},{target_port}))\n    data,addr=s.recvfrom(128)\n    last=addr\n    if data != b\"active-udp-tproxy-ack\" or addr != ({target_ip:?},{target_port}):\n        print(f\"bad reply data={{data!r}} addr={{addr!r}}\")\n        sys.exit(2)\n    ok += 1\ns.close()\nprint(f\"active-udp-ack-count={{ok}} last-peer={{last[0]}}:{{last[1]}}\")\nsys.exit(0)\n",
-        target_ip = target
-            .split(':')
-            .next()
-            .unwrap_or(DEFAULT_ACTIVE_UDP_TARGET_IP),
-        target_port = target
-            .split(':')
-            .nth(1)
-            .and_then(|port| port.parse::<u16>().ok())
-            .unwrap_or(DEFAULT_ACTIVE_UDP_TARGET_PORT),
+        "import socket,sys\nok=0\nlast=None\ntarget=({target_ip:?},{target_port})\ns=socket.socket(socket.{socket_family}, socket.SOCK_DGRAM)\ns.settimeout(3)\nfor i in range({iterations}):\n    s.sendto(b\"active-udp-tproxy-ping\", target)\n    data,addr=s.recvfrom(128)\n    last=addr\n    if data != b\"active-udp-tproxy-ack\" or addr[:2] != target:\n        print(f\"bad reply data={{data!r}} addr={{addr!r}}\")\n        sys.exit(2)\n    ok += 1\ns.close()\nprint(f\"active-udp-ack-count={{ok}} last-peer={{last[0]}}:{{last[1]}}\")\nsys.exit(0)\n",
+        target_ip = target_ip,
+        target_port = target_port,
+        socket_family = socket_family,
     );
     run_observation_command(CommandSpec::new(
         "ip",

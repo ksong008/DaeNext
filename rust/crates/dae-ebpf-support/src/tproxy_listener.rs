@@ -1,13 +1,16 @@
 use std::fs::File;
 use std::io;
 use std::mem::size_of;
-use std::net::{Ipv4Addr, SocketAddrV4, TcpListener, UdpSocket};
+use std::net::{Ipv4Addr, Ipv6Addr, SocketAddr, TcpListener, UdpSocket};
 use std::os::fd::{AsRawFd, FromRawFd, IntoRawFd, OwnedFd};
 use std::path::PathBuf;
+
+const IPV6_TRANSPARENT: libc::c_int = 75;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct TproxySocketOptions {
     pub ip_transparent: bool,
+    pub ipv6_transparent: bool,
     pub so_reuseaddr: bool,
     pub ip_recvorigdstaddr: bool,
     pub ipv6_recvorigdstaddr: bool,
@@ -23,17 +26,13 @@ pub struct TproxyListenerSet {
 }
 
 pub fn open_tproxy_listener_set(port: u16) -> io::Result<TproxyListenerSet> {
-    let tcp_fd = open_socket(libc::SOCK_STREAM)?;
-    apply_tproxy_control(tcp_fd.as_raw_fd())?;
-    bind_ipv4_any(tcp_fd.as_raw_fd(), port)?;
+    let tcp_fd = open_tproxy_bound_socket(libc::SOCK_STREAM, port)?;
     let listen_status = unsafe { libc::listen(tcp_fd.as_raw_fd(), 128) };
     if listen_status < 0 {
         return Err(io::Error::last_os_error());
     }
 
-    let udp_fd = open_socket(libc::SOCK_DGRAM)?;
-    apply_tproxy_control(udp_fd.as_raw_fd())?;
-    bind_ipv4_any(udp_fd.as_raw_fd(), port)?;
+    let udp_fd = open_tproxy_bound_socket(libc::SOCK_DGRAM, port)?;
 
     let tcp_options = read_options(tcp_fd.as_raw_fd())?;
     let udp_options = read_options(udp_fd.as_raw_fd())?;
@@ -70,7 +69,7 @@ pub fn open_tproxy_listener_set_in_netns(
 
 pub fn open_transparent_udp_socket_bound_in_netns(
     netns_name: &str,
-    addr: SocketAddrV4,
+    addr: SocketAddr,
 ) -> io::Result<UdpSocket> {
     let current = File::open("/proc/self/ns/net")?;
     let target = open_named_netns(netns_name)?;
@@ -88,10 +87,10 @@ pub fn open_transparent_udp_socket_bound_in_netns(
     }
 }
 
-pub fn open_transparent_udp_socket_bound(addr: SocketAddrV4) -> io::Result<UdpSocket> {
-    let udp_fd = open_socket(libc::SOCK_DGRAM)?;
+pub fn open_transparent_udp_socket_bound(addr: SocketAddr) -> io::Result<UdpSocket> {
+    let udp_fd = open_socket(socket_family(addr), libc::SOCK_DGRAM)?;
     apply_tproxy_control(udp_fd.as_raw_fd())?;
-    bind_ipv4(udp_fd.as_raw_fd(), *addr.ip(), addr.port())?;
+    bind_socket_addr(udp_fd.as_raw_fd(), addr)?;
     Ok(unsafe { UdpSocket::from_raw_fd(udp_fd.into_raw_fd()) })
 }
 
@@ -142,23 +141,62 @@ fn set_netns(fd: i32) -> io::Result<()> {
     Ok(())
 }
 
-fn open_socket(socket_type: libc::c_int) -> io::Result<OwnedFd> {
-    let fd = unsafe { libc::socket(libc::AF_INET, socket_type | libc::SOCK_CLOEXEC, 0) };
+fn open_socket(family: libc::c_int, socket_type: libc::c_int) -> io::Result<OwnedFd> {
+    let fd = unsafe { libc::socket(family, socket_type | libc::SOCK_CLOEXEC, 0) };
     if fd < 0 {
         return Err(io::Error::last_os_error());
     }
     Ok(unsafe { OwnedFd::from_raw_fd(fd) })
 }
 
+fn open_tproxy_bound_socket(socket_type: libc::c_int, port: u16) -> io::Result<OwnedFd> {
+    match open_dual_stack_tproxy_bound_socket(socket_type, port) {
+        Ok(fd) => Ok(fd),
+        Err(ipv6_err) => open_ipv4_tproxy_bound_socket(socket_type, port).map_err(|ipv4_err| {
+            io::Error::new(
+                ipv4_err.kind(),
+                format!(
+                    "open dual-stack IPv6 tproxy socket: {ipv6_err}; open IPv4 tproxy socket: {ipv4_err}"
+                ),
+            )
+        }),
+    }
+}
+
+fn open_dual_stack_tproxy_bound_socket(socket_type: libc::c_int, port: u16) -> io::Result<OwnedFd> {
+    let fd = open_socket(libc::AF_INET6, socket_type)?;
+    set_dual_stack(fd.as_raw_fd())?;
+    apply_tproxy_control(fd.as_raw_fd())?;
+    bind_ipv6_any(fd.as_raw_fd(), port)?;
+    Ok(fd)
+}
+
+fn open_ipv4_tproxy_bound_socket(socket_type: libc::c_int, port: u16) -> io::Result<OwnedFd> {
+    let fd = open_socket(libc::AF_INET, socket_type)?;
+    apply_tproxy_control(fd.as_raw_fd())?;
+    bind_ipv4_any(fd.as_raw_fd(), port)?;
+    Ok(fd)
+}
+
 fn apply_tproxy_control(fd: i32) -> io::Result<()> {
-    set_opt(fd, libc::IPPROTO_IP, libc::IP_TRANSPARENT, 1)?;
     set_opt(fd, libc::SOL_SOCKET, libc::SO_REUSEADDR, 1)?;
+    let ipv4_transparent = set_opt(fd, libc::IPPROTO_IP, libc::IP_TRANSPARENT, 1);
+    let ipv6_transparent = set_opt(fd, libc::SOL_IPV6, IPV6_TRANSPARENT, 1);
+    if ipv4_transparent.is_err() && ipv6_transparent.is_err() {
+        return Err(ipv4_transparent
+            .err()
+            .unwrap_or_else(io::Error::last_os_error));
+    }
     let ipv4 = set_opt(fd, libc::SOL_IP, libc::IP_RECVORIGDSTADDR, 1);
     let ipv6 = set_opt(fd, libc::SOL_IPV6, libc::IPV6_RECVORIGDSTADDR, 1);
     if ipv4.is_err() && ipv6.is_err() {
         return Err(ipv4.err().unwrap_or_else(io::Error::last_os_error));
     }
     Ok(())
+}
+
+fn set_dual_stack(fd: i32) -> io::Result<()> {
+    set_opt(fd, libc::IPPROTO_IPV6, libc::IPV6_V6ONLY, 0)
 }
 
 fn bind_ipv4_any(fd: i32, port: u16) -> io::Result<()> {
@@ -187,14 +225,57 @@ fn bind_ipv4(fd: i32, ip: Ipv4Addr, port: u16) -> io::Result<()> {
     Ok(())
 }
 
+fn bind_ipv6(fd: i32, ip: Ipv6Addr, port: u16) -> io::Result<()> {
+    let addr = libc::sockaddr_in6 {
+        sin6_family: libc::AF_INET6 as libc::sa_family_t,
+        sin6_port: port.to_be(),
+        sin6_flowinfo: 0,
+        sin6_addr: libc::in6_addr {
+            s6_addr: ip.octets(),
+        },
+        sin6_scope_id: 0,
+    };
+    let status = unsafe {
+        libc::bind(
+            fd,
+            (&addr as *const libc::sockaddr_in6).cast::<libc::sockaddr>(),
+            size_of::<libc::sockaddr_in6>() as libc::socklen_t,
+        )
+    };
+    if status < 0 {
+        return Err(io::Error::last_os_error());
+    }
+    Ok(())
+}
+
+fn bind_ipv6_any(fd: i32, port: u16) -> io::Result<()> {
+    bind_ipv6(fd, Ipv6Addr::UNSPECIFIED, port)
+}
+
+fn bind_socket_addr(fd: i32, addr: SocketAddr) -> io::Result<()> {
+    match addr {
+        SocketAddr::V4(addr) => bind_ipv4(fd, *addr.ip(), addr.port()),
+        SocketAddr::V6(addr) => bind_ipv6(fd, *addr.ip(), addr.port()),
+    }
+}
+
+fn socket_family(addr: SocketAddr) -> libc::c_int {
+    match addr {
+        SocketAddr::V4(_) => libc::AF_INET,
+        SocketAddr::V6(_) => libc::AF_INET6,
+    }
+}
+
 fn read_options(fd: i32) -> io::Result<TproxySocketOptions> {
-    let ip_transparent = get_opt(fd, libc::IPPROTO_IP, libc::IP_TRANSPARENT)? != 0;
+    let ip_transparent = get_opt(fd, libc::IPPROTO_IP, libc::IP_TRANSPARENT).unwrap_or(0) != 0;
+    let ipv6_transparent = get_opt(fd, libc::SOL_IPV6, IPV6_TRANSPARENT).unwrap_or(0) != 0;
     let so_reuseaddr = get_opt(fd, libc::SOL_SOCKET, libc::SO_REUSEADDR)? != 0;
-    let ip_recvorigdstaddr = get_opt(fd, libc::SOL_IP, libc::IP_RECVORIGDSTADDR)? != 0;
+    let ip_recvorigdstaddr = get_opt(fd, libc::SOL_IP, libc::IP_RECVORIGDSTADDR).unwrap_or(0) != 0;
     let ipv6_recvorigdstaddr =
         get_opt(fd, libc::SOL_IPV6, libc::IPV6_RECVORIGDSTADDR).unwrap_or(0) != 0;
     Ok(TproxySocketOptions {
         ip_transparent,
+        ipv6_transparent,
         so_reuseaddr,
         ip_recvorigdstaddr,
         ipv6_recvorigdstaddr,

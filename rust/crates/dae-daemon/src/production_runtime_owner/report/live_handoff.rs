@@ -23,6 +23,7 @@ pub(crate) fn live_handoff_json(handoff: &LiveLoadedTproxyListenSocketMap) -> Va
 pub(crate) fn socket_options_json(options: &TproxySocketOptions) -> Value {
     json!({
         "ip_transparent": options.ip_transparent,
+        "ipv6_transparent": options.ipv6_transparent,
         "so_reuseaddr": options.so_reuseaddr,
         "ip_recvorigdstaddr": options.ip_recvorigdstaddr,
         "ipv6_recvorigdstaddr": options.ipv6_recvorigdstaddr,
@@ -34,10 +35,10 @@ pub(crate) fn socket_options_verified(
     tcp: &TproxySocketOptions,
     udp: &TproxySocketOptions,
 ) -> bool {
-    tcp.ip_transparent
+    (tcp.ip_transparent || tcp.ipv6_transparent)
         && tcp.so_reuseaddr
         && tcp.original_dst_capture_ready
-        && udp.ip_transparent
+        && (udp.ip_transparent || udp.ipv6_transparent)
         && udp.so_reuseaddr
         && udp.original_dst_capture_ready
 }

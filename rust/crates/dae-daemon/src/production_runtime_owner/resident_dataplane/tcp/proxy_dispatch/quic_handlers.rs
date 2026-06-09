@@ -3,7 +3,7 @@ use super::*;
 pub(crate) async fn handle_quic_tcp_connection_async(
     inbound: &mut TokioTcpStream,
     peer: SocketAddr,
-    original_dst: SocketAddrV4,
+    original_dst: SocketAddr,
     selection: TcpProxySelection,
     stop: Arc<AtomicBool>,
     sniff: &TcpSniffReport,
@@ -93,7 +93,7 @@ pub(crate) async fn handle_quic_tcp_connection_async(
 pub(crate) async fn handle_hysteria2_quic_tcp_connection_async(
     inbound: &mut TokioTcpStream,
     peer: SocketAddr,
-    original_dst: SocketAddrV4,
+    original_dst: SocketAddr,
     selection: TcpProxySelection,
     stop: Arc<AtomicBool>,
     sniff: &TcpSniffReport,
@@ -245,7 +245,7 @@ pub(crate) async fn handle_hysteria2_quic_tcp_connection_async(
 pub(crate) async fn handle_tuic_quic_tcp_connection_async(
     inbound: &mut TokioTcpStream,
     peer: SocketAddr,
-    original_dst: SocketAddrV4,
+    original_dst: SocketAddr,
     selection: TcpProxySelection,
     stop: Arc<AtomicBool>,
     sniff: &TcpSniffReport,
@@ -343,7 +343,7 @@ pub(crate) async fn handle_tuic_quic_tcp_connection_async(
 pub(crate) async fn handle_juicity_quic_tcp_connection_async(
     inbound: &mut TokioTcpStream,
     peer: SocketAddr,
-    original_dst: SocketAddrV4,
+    original_dst: SocketAddr,
     selection: TcpProxySelection,
     stop: Arc<AtomicBool>,
     sniff: &TcpSniffReport,

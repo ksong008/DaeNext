@@ -58,7 +58,7 @@ pub(super) fn udp_packet_session_value(
 
 pub(super) fn udp_packet_semantics_for_destination(
     handler: &ResidentProxyProtocolPlan,
-    original_dst: SocketAddrV4,
+    original_dst: SocketAddr,
 ) -> &'static str {
     if original_dst.port() == 53 {
         "dns"

@@ -1,7 +1,7 @@
 use super::*;
 pub(super) fn send_udp_reply(
-    original_dst: SocketAddrV4,
-    peer: SocketAddrV4,
+    original_dst: SocketAddr,
+    peer: SocketAddr,
     payload: &[u8],
 ) -> Result<(), String> {
     let reply = open_transparent_udp_socket_bound_in_netns(PRODUCTION_NETNS, original_dst)

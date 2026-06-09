@@ -187,7 +187,8 @@ pub(crate) fn insert_evidence_sections(
             "active_tcp_lan_host_iface": if context.options.execute_active_tcp { "dae50lan0" } else { "" },
             "active_tcp_lan_client_iface": if context.options.execute_active_tcp { "dae50cli0" } else { "" },
             "active_udp_loopback_target": if context.options.execute_active_udp {
-                format!("{}/32", context.options.active_udp_target_ip)
+                active_udp_loopback_target_cidr(&context.options.active_udp_target_ip)
+                    .unwrap_or_else(|_| context.options.active_udp_target_ip.clone())
             } else {
                 String::new()
             },

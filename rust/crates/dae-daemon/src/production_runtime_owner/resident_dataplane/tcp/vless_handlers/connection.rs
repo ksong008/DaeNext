@@ -2,7 +2,7 @@ use super::*;
 pub(crate) async fn handle_proxy_tcp_connection_async(
     inbound: &mut TokioTcpStream,
     peer: SocketAddr,
-    original_dst: SocketAddrV4,
+    original_dst: SocketAddr,
     selection: TcpProxySelection,
     stop: Arc<AtomicBool>,
     sniff: &TcpSniffReport,
@@ -138,7 +138,7 @@ pub(crate) async fn handle_proxy_tcp_connection_async(
 pub(crate) async fn handle_vless_mux_tcp_connection_async(
     inbound: &mut TokioTcpStream,
     peer: SocketAddr,
-    original_dst: SocketAddrV4,
+    original_dst: SocketAddr,
     selection: TcpProxySelection,
     stop: Arc<AtomicBool>,
     sniff: &TcpSniffReport,
@@ -193,7 +193,7 @@ pub(crate) async fn handle_vless_mux_tcp_connection_async(
         })
 }
 
-fn resident_mux_stream_id(original_dst: SocketAddrV4) -> [u8; 2] {
+fn resident_mux_stream_id(original_dst: SocketAddr) -> [u8; 2] {
     original_dst.port().to_be_bytes()
 }
 
@@ -386,7 +386,7 @@ impl AsyncMuxFrameBuffer {
 pub(crate) async fn handle_vless_websocket_tcp_connection_async(
     inbound: &mut TokioTcpStream,
     peer: SocketAddr,
-    original_dst: SocketAddrV4,
+    original_dst: SocketAddr,
     selection: TcpProxySelection,
     stop: Arc<AtomicBool>,
     sniff: &TcpSniffReport,
@@ -456,7 +456,7 @@ pub(crate) async fn handle_vless_websocket_tcp_connection_async(
 pub(crate) async fn handle_vless_httpupgrade_tcp_connection_async(
     inbound: &mut TokioTcpStream,
     peer: SocketAddr,
-    original_dst: SocketAddrV4,
+    original_dst: SocketAddr,
     selection: TcpProxySelection,
     stop: Arc<AtomicBool>,
     sniff: &TcpSniffReport,
@@ -522,7 +522,7 @@ pub(crate) async fn handle_vless_httpupgrade_tcp_connection_async(
 pub(crate) async fn handle_vless_meek_tcp_connection_async(
     inbound: &mut TokioTcpStream,
     peer: SocketAddr,
-    original_dst: SocketAddrV4,
+    original_dst: SocketAddr,
     selection: TcpProxySelection,
     stop: Arc<AtomicBool>,
     sniff: &TcpSniffReport,
