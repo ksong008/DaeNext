@@ -43,6 +43,47 @@ pub(crate) fn handle_socks5_proxy_tcp_connection(
             ))
         })
 }
+
+#[allow(clippy::too_many_arguments)]
+pub(crate) async fn handle_socks5_proxy_tcp_connection_async(
+    inbound: &mut TokioTcpStream,
+    peer: SocketAddr,
+    original_dst: SocketAddrV4,
+    selection: TcpProxySelection,
+    stop: Arc<AtomicBool>,
+    sniff: &TcpSniffReport,
+    metrics: &ResidentDataplaneMetrics,
+    username: &str,
+    password: &str,
+) -> Result<Value, String> {
+    let mut proxy = open_plain_proxy_tcp_stream_async(&selection.proxy).await?;
+    socks5_connect_async(&mut proxy, &selection.route.dial_target, username, password).await?;
+    relay_tcp_direct_async(inbound, &mut proxy, stop, &sniff.payload, metrics)
+        .await
+        .map(|stats| {
+            generic_proxy_tcp_finished_event(
+                peer,
+                original_dst,
+                &selection,
+                sniff,
+                "socks5",
+                &stats,
+                "plain-tcp-relay",
+            )
+        })
+        .or_else(|err| {
+            Ok::<Value, String>(generic_proxy_tcp_failed_event(
+                peer,
+                original_dst,
+                &selection,
+                sniff,
+                "socks5",
+                &err,
+                "plain-tcp-relay",
+            ))
+        })
+}
+
 pub(crate) fn handle_http_proxy_tcp_connection(
     inbound: &mut TcpStream,
     peer: SocketAddr,
@@ -97,6 +138,59 @@ pub(crate) fn handle_http_proxy_tcp_connection(
             ))
         })
 }
+
+#[allow(clippy::too_many_arguments)]
+pub(crate) async fn handle_http_proxy_tcp_connection_async(
+    inbound: &mut TokioTcpStream,
+    peer: SocketAddr,
+    original_dst: SocketAddrV4,
+    selection: TcpProxySelection,
+    stop: Arc<AtomicBool>,
+    sniff: &TcpSniffReport,
+    metrics: &ResidentDataplaneMetrics,
+    username: &str,
+    password: &str,
+    transport: bool,
+    transport_host: &str,
+    transport_path: &str,
+) -> Result<Value, String> {
+    let mut proxy = open_plain_proxy_tcp_stream_async(&selection.proxy).await?;
+    http_proxy_connect_plain_async(
+        &mut proxy,
+        &selection.route.dial_target,
+        username,
+        password,
+        transport,
+        transport_host,
+        transport_path,
+    )
+    .await?;
+    relay_tcp_direct_async(inbound, &mut proxy, stop, &sniff.payload, metrics)
+        .await
+        .map(|stats| {
+            generic_proxy_tcp_finished_event(
+                peer,
+                original_dst,
+                &selection,
+                sniff,
+                "http-proxy",
+                &stats,
+                "plain-tcp-relay",
+            )
+        })
+        .or_else(|err| {
+            Ok::<Value, String>(generic_proxy_tcp_failed_event(
+                peer,
+                original_dst,
+                &selection,
+                sniff,
+                "http-proxy",
+                &err,
+                "plain-tcp-relay",
+            ))
+        })
+}
+
 pub(crate) async fn handle_https_proxy_tcp_connection_async(
     inbound: &mut TokioTcpStream,
     peer: SocketAddr,

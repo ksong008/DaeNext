@@ -108,7 +108,7 @@ pub(crate) async fn handle_hysteria2_quic_tcp_connection_async(
         build_hysteria2_pinned_client_config(pin_sha256.to_owned())
             .map_err(|err| format!("build Hysteria2 QUIC client config: {err}"))?,
     );
-    let remote = resolve_hysteria2_quic_remote(&selection.proxy, port_hop_ports)?;
+    let remote = resolve_hysteria2_quic_remote_async(&selection.proxy, port_hop_ports).await?;
     let port_hopping = !port_hop_ports.is_empty();
     let connection = endpoint
         .connect(remote, &selection.proxy.server_name)
@@ -260,7 +260,7 @@ pub(crate) async fn handle_tuic_quic_tcp_connection_async(
         build_tuic_runtime_client_config(alpn, allow_insecure)
             .map_err(|err| format!("build TUIC QUIC client config: {err}"))?,
     );
-    let remote = resolve_proxy_udp_addr(&selection.proxy)?;
+    let remote = resolve_proxy_udp_addr_async(&selection.proxy).await?;
     let connection = endpoint
         .connect(remote, &selection.proxy.server_name)
         .map_err(|err| format!("connect TUIC QUIC endpoint: {err}"))?
@@ -358,7 +358,7 @@ pub(crate) async fn handle_juicity_quic_tcp_connection_async(
         build_juicity_runtime_client_config(allow_insecure, pinned_certchain_sha256)
             .map_err(|err| format!("build Juicity QUIC client config: {err}"))?,
     );
-    let remote = resolve_proxy_udp_addr(&selection.proxy)?;
+    let remote = resolve_proxy_udp_addr_async(&selection.proxy).await?;
     let connection = endpoint
         .connect(remote, &selection.proxy.server_name)
         .map_err(|err| format!("connect Juicity QUIC endpoint: {err}"))?
