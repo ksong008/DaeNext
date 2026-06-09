@@ -138,10 +138,17 @@ pub(crate) fn restore_runtime_from_state(
             BTreeMap::new(),
         );
     }
+    let reclaim_reason = if log_mode.is_startup() {
+        AllocatorReclaimReason::StartupControlBuilt
+    } else {
+        AllocatorReclaimReason::ReloadCompleted
+    };
+    let final_reclaim = allocator_reclaim(reclaim_reason);
     Ok(json!({
         "restored": true,
         "runtime": outcome.report,
         "materialized": applied,
+        "allocatorReclaim": final_reclaim,
     }))
 }
 

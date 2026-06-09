@@ -225,21 +225,20 @@ pub(crate) fn runtime_overview_reports_process_metrics_and_stream_retry_delta() 
 }
 
 #[test]
-pub(crate) fn runtime_reclaim_report_includes_post_reload_idle_reclaim() {
-    let mut report = json!({});
-    append_runtime_reclaim_report(
-        &mut report,
-        Some(json!({"reason": "reload_old_owner_closed"})),
-        json!({"reason": "startup_control_built"}),
-        Some(json!({"reason": "reload_scoped_resources_flushed"})),
-        Some(json!({"reason": "idle_after_reload"})),
-    );
+pub(crate) fn runtime_reclaim_tracks_single_completed_reload_reason() {
+    let before = allocator_reclaim_snapshot_json();
+    let before_total = before["total"].as_u64().unwrap_or(0);
+    let before_reload_completed = before["reasons"]["reload_completed"].as_u64().unwrap_or(0);
 
-    assert_eq!(
-        report["allocatorReclaim"]["idleAfterReload"]["reason"],
-        json!("idle_after_reload")
+    let reclaim = allocator_reclaim(AllocatorReclaimReason::ReloadCompleted);
+    let after = allocator_reclaim_snapshot_json();
+
+    assert_eq!(reclaim["reason"], json!("reload_completed"));
+    assert_eq!(reclaim["profile"], json!(allocator_profile()));
+    assert!(after["total"].as_u64().unwrap_or(0) >= before_total + 1);
+    assert!(
+        after["reasons"]["reload_completed"].as_u64().unwrap_or(0) >= before_reload_completed + 1
     );
-    assert_eq!(report["allocatorProfile"], json!(allocator_profile()));
 }
 
 #[test]
