@@ -1,10 +1,12 @@
 use super::*;
-pub(crate) fn handle_shadowsocks_simple_obfs_http_proxy_tcp_connection(
-    inbound: &mut TcpStream,
+
+#[allow(clippy::too_many_arguments)]
+pub(crate) async fn handle_shadowsocks_simple_obfs_http_proxy_tcp_connection_async(
+    inbound: &mut TokioTcpStream,
     peer: SocketAddr,
     original_dst: SocketAddrV4,
-    selection: &TcpProxySelection,
-    stop: &AtomicBool,
+    selection: TcpProxySelection,
+    stop: Arc<AtomicBool>,
     sniff: &TcpSniffReport,
     metrics: &ResidentDataplaneMetrics,
     cipher: &str,
@@ -13,23 +15,8 @@ pub(crate) fn handle_shadowsocks_simple_obfs_http_proxy_tcp_connection(
     host: &str,
     path: &str,
 ) -> Result<Value, String> {
-    let mut proxy = open_plain_proxy_tcp_stream(&selection.proxy)?;
-    proxy
-        .set_nonblocking(false)
-        .map_err(|err| format!("set Shadowsocks simple-obfs proxy blocking: {err}"))?;
-    proxy
-        .set_read_timeout(Some(RESIDENT_TCP_IDLE_TIMEOUT))
-        .map_err(|err| format!("set Shadowsocks simple-obfs proxy read timeout: {err}"))?;
-    proxy
-        .set_write_timeout(Some(RESIDENT_TCP_IDLE_TIMEOUT))
-        .map_err(|err| format!("set Shadowsocks simple-obfs proxy write timeout: {err}"))?;
-    inbound
-        .set_read_timeout(Some(RESIDENT_TCP_IDLE_TIMEOUT))
-        .map_err(|err| format!("set Shadowsocks simple-obfs inbound read timeout: {err}"))?;
-    inbound
-        .set_write_timeout(Some(RESIDENT_TCP_IDLE_TIMEOUT))
-        .map_err(|err| format!("set Shadowsocks simple-obfs inbound write timeout: {err}"))?;
-    let stats = relay_tcp_over_shadowsocks_simple_obfs_http(
+    let mut proxy = open_plain_proxy_tcp_stream_async(&selection.proxy).await?;
+    let stats = relay_tcp_over_shadowsocks_simple_obfs_http_async(
         inbound,
         &mut proxy,
         stop,
@@ -41,13 +28,14 @@ pub(crate) fn handle_shadowsocks_simple_obfs_http_proxy_tcp_connection(
         metrics,
         host,
         path,
-    );
+    )
+    .await;
     stats
         .map(|stats| {
             let mut event = generic_proxy_tcp_finished_event(
                 peer,
                 original_dst,
-                selection,
+                &selection,
                 sniff,
                 "shadowsocks",
                 &stats,
@@ -67,7 +55,7 @@ pub(crate) fn handle_shadowsocks_simple_obfs_http_proxy_tcp_connection(
             let mut event = generic_proxy_tcp_failed_event(
                 peer,
                 original_dst,
-                selection,
+                &selection,
                 sniff,
                 "shadowsocks",
                 &err,
@@ -86,12 +74,12 @@ pub(crate) fn handle_shadowsocks_simple_obfs_http_proxy_tcp_connection(
 }
 
 #[allow(clippy::too_many_arguments)]
-pub(crate) fn handle_shadowsocks_simple_obfs_tls_proxy_tcp_connection(
-    inbound: &mut TcpStream,
+pub(crate) async fn handle_shadowsocks_simple_obfs_tls_proxy_tcp_connection_async(
+    inbound: &mut TokioTcpStream,
     peer: SocketAddr,
     original_dst: SocketAddrV4,
-    selection: &TcpProxySelection,
-    stop: &AtomicBool,
+    selection: TcpProxySelection,
+    stop: Arc<AtomicBool>,
     sniff: &TcpSniffReport,
     metrics: &ResidentDataplaneMetrics,
     cipher: &str,
@@ -99,23 +87,8 @@ pub(crate) fn handle_shadowsocks_simple_obfs_tls_proxy_tcp_connection(
     salt_len: usize,
     host: &str,
 ) -> Result<Value, String> {
-    let mut proxy = open_plain_proxy_tcp_stream(&selection.proxy)?;
-    proxy
-        .set_nonblocking(false)
-        .map_err(|err| format!("set Shadowsocks simple-obfs TLS proxy blocking: {err}"))?;
-    proxy
-        .set_read_timeout(Some(RESIDENT_TCP_IDLE_TIMEOUT))
-        .map_err(|err| format!("set Shadowsocks simple-obfs TLS proxy read timeout: {err}"))?;
-    proxy
-        .set_write_timeout(Some(RESIDENT_TCP_IDLE_TIMEOUT))
-        .map_err(|err| format!("set Shadowsocks simple-obfs TLS proxy write timeout: {err}"))?;
-    inbound
-        .set_read_timeout(Some(RESIDENT_TCP_IDLE_TIMEOUT))
-        .map_err(|err| format!("set Shadowsocks simple-obfs TLS inbound read timeout: {err}"))?;
-    inbound
-        .set_write_timeout(Some(RESIDENT_TCP_IDLE_TIMEOUT))
-        .map_err(|err| format!("set Shadowsocks simple-obfs TLS inbound write timeout: {err}"))?;
-    let stats = relay_tcp_over_shadowsocks_simple_obfs_tls(
+    let mut proxy = open_plain_proxy_tcp_stream_async(&selection.proxy).await?;
+    let stats = relay_tcp_over_shadowsocks_simple_obfs_tls_async(
         inbound,
         &mut proxy,
         stop,
@@ -126,13 +99,14 @@ pub(crate) fn handle_shadowsocks_simple_obfs_tls_proxy_tcp_connection(
         &sniff.payload,
         metrics,
         host,
-    );
+    )
+    .await;
     stats
         .map(|stats| {
             let mut event = generic_proxy_tcp_finished_event(
                 peer,
                 original_dst,
-                selection,
+                &selection,
                 sniff,
                 "shadowsocks",
                 &stats,
@@ -152,7 +126,7 @@ pub(crate) fn handle_shadowsocks_simple_obfs_tls_proxy_tcp_connection(
             let mut event = generic_proxy_tcp_failed_event(
                 peer,
                 original_dst,
-                selection,
+                &selection,
                 sniff,
                 "shadowsocks",
                 &err,
@@ -171,12 +145,12 @@ pub(crate) fn handle_shadowsocks_simple_obfs_tls_proxy_tcp_connection(
 }
 
 #[allow(clippy::too_many_arguments)]
-pub(crate) fn handle_shadowsocks_2022_simple_obfs_http_proxy_tcp_connection(
-    inbound: &mut TcpStream,
+pub(crate) async fn handle_shadowsocks_2022_simple_obfs_http_proxy_tcp_connection_async(
+    inbound: &mut TokioTcpStream,
     peer: SocketAddr,
     original_dst: SocketAddrV4,
-    selection: &TcpProxySelection,
-    stop: &AtomicBool,
+    selection: TcpProxySelection,
+    stop: Arc<AtomicBool>,
     sniff: &TcpSniffReport,
     metrics: &ResidentDataplaneMetrics,
     cipher: &str,
@@ -185,23 +159,8 @@ pub(crate) fn handle_shadowsocks_2022_simple_obfs_http_proxy_tcp_connection(
     host: &str,
     path: &str,
 ) -> Result<Value, String> {
-    let mut proxy = open_plain_proxy_tcp_stream(&selection.proxy)?;
-    proxy
-        .set_nonblocking(false)
-        .map_err(|err| format!("set Shadowsocks 2022 simple-obfs proxy blocking: {err}"))?;
-    proxy
-        .set_read_timeout(Some(RESIDENT_TCP_IDLE_TIMEOUT))
-        .map_err(|err| format!("set Shadowsocks 2022 simple-obfs proxy read timeout: {err}"))?;
-    proxy
-        .set_write_timeout(Some(RESIDENT_TCP_IDLE_TIMEOUT))
-        .map_err(|err| format!("set Shadowsocks 2022 simple-obfs proxy write timeout: {err}"))?;
-    inbound
-        .set_read_timeout(Some(RESIDENT_TCP_IDLE_TIMEOUT))
-        .map_err(|err| format!("set Shadowsocks 2022 simple-obfs inbound read timeout: {err}"))?;
-    inbound
-        .set_write_timeout(Some(RESIDENT_TCP_IDLE_TIMEOUT))
-        .map_err(|err| format!("set Shadowsocks 2022 simple-obfs inbound write timeout: {err}"))?;
-    let stats = relay_tcp_over_shadowsocks_2022_simple_obfs_http(
+    let mut proxy = open_plain_proxy_tcp_stream_async(&selection.proxy).await?;
+    let stats = relay_tcp_over_shadowsocks_2022_simple_obfs_http_async(
         inbound,
         &mut proxy,
         stop,
@@ -213,13 +172,14 @@ pub(crate) fn handle_shadowsocks_2022_simple_obfs_http_proxy_tcp_connection(
         metrics,
         host,
         path,
-    );
+    )
+    .await;
     stats
         .map(|stats| {
             let mut event = generic_proxy_tcp_finished_event(
                 peer,
                 original_dst,
-                selection,
+                &selection,
                 sniff,
                 "shadowsocks",
                 &stats,
@@ -239,7 +199,7 @@ pub(crate) fn handle_shadowsocks_2022_simple_obfs_http_proxy_tcp_connection(
             let mut event = generic_proxy_tcp_failed_event(
                 peer,
                 original_dst,
-                selection,
+                &selection,
                 sniff,
                 "shadowsocks",
                 &err,

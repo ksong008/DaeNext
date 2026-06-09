@@ -8,11 +8,13 @@ use std::net::{
 };
 use std::os::fd::AsRawFd;
 use std::path::PathBuf;
+use std::pin::Pin;
 use std::slice;
 use std::sync::{
     Arc, Mutex, OnceLock,
     atomic::{AtomicBool, Ordering},
 };
+use std::task::{Context, Poll};
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -39,9 +41,10 @@ use dae_outbound::{
     shadowsocks::{
         AeadStreamCodec, ShadowsocksMetadata, ShadowsocksRStreamDecoder, ShadowsocksRStreamEncoder,
         Sip003SimpleObfsHttpOptions, Sip003SimpleObfsTlsOptions, cipher_spec,
-        read_encrypted_chunk_from_stream, shadowsocksr_http_simple_origin_request,
-        simple_obfs_http_request_with_body, simple_obfs_tls_client_hello_with_body,
-        ss2022_tcp_client_stream_encoder, ss2022_tcp_server_stream_decoder,
+        read_encrypted_chunk_from_async_stream, read_encrypted_chunk_from_stream,
+        shadowsocksr_http_simple_origin_request, simple_obfs_http_request_with_body,
+        simple_obfs_tls_client_hello_with_body, ss2022_tcp_client_stream_encoder,
+        ss2022_tcp_server_stream_decoder, ss2022_tcp_server_stream_decoder_async,
         ss2022_tcp_unix_timestamp_now,
     },
     shared_transport::mux::{
@@ -92,7 +95,7 @@ use super::{
     XTLS_RPRX_VISION,
 };
 use super::{ResidentDataplaneMetrics, ResidentTcpConnectionGuard};
-use tokio::io::{AsyncRead, AsyncReadExt, AsyncWriteExt};
+use tokio::io::{AsyncRead, AsyncReadExt, AsyncWriteExt, ReadBuf};
 use tokio::net::{TcpListener as TokioTcpListener, TcpStream as TokioTcpStream};
 use tokio::runtime;
 use tokio::time;

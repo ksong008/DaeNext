@@ -1,48 +1,4 @@
 use super::*;
-#[allow(clippy::too_many_arguments)]
-pub(crate) fn handle_socks5_proxy_tcp_connection(
-    inbound: &mut TcpStream,
-    peer: SocketAddr,
-    original_dst: SocketAddrV4,
-    selection: &TcpProxySelection,
-    stop: &AtomicBool,
-    sniff: &TcpSniffReport,
-    metrics: &ResidentDataplaneMetrics,
-    username: &str,
-    password: &str,
-) -> Result<Value, String> {
-    let mut proxy = open_plain_proxy_tcp_stream(&selection.proxy)?;
-    socks5_connect(&mut proxy, &selection.route.dial_target, username, password)?;
-    proxy
-        .set_nonblocking(true)
-        .map_err(|err| format!("set SOCKS5 proxy TCP nonblocking: {err}"))?;
-    inbound
-        .set_nonblocking(true)
-        .map_err(|err| format!("set inbound TCP nonblocking after SOCKS5 handshake: {err}"))?;
-    relay_tcp_direct(inbound, &mut proxy, stop, &sniff.payload, metrics)
-        .map(|stats| {
-            generic_proxy_tcp_finished_event(
-                peer,
-                original_dst,
-                selection,
-                sniff,
-                "socks5",
-                &stats,
-                "plain-tcp-relay",
-            )
-        })
-        .or_else(|err| {
-            Ok::<Value, String>(generic_proxy_tcp_failed_event(
-                peer,
-                original_dst,
-                selection,
-                sniff,
-                "socks5",
-                &err,
-                "plain-tcp-relay",
-            ))
-        })
-}
 
 #[allow(clippy::too_many_arguments)]
 pub(crate) async fn handle_socks5_proxy_tcp_connection_async(
@@ -78,61 +34,6 @@ pub(crate) async fn handle_socks5_proxy_tcp_connection_async(
                 &selection,
                 sniff,
                 "socks5",
-                &err,
-                "plain-tcp-relay",
-            ))
-        })
-}
-
-pub(crate) fn handle_http_proxy_tcp_connection(
-    inbound: &mut TcpStream,
-    peer: SocketAddr,
-    original_dst: SocketAddrV4,
-    selection: &TcpProxySelection,
-    stop: &AtomicBool,
-    sniff: &TcpSniffReport,
-    metrics: &ResidentDataplaneMetrics,
-    username: &str,
-    password: &str,
-    transport: bool,
-    transport_host: &str,
-    transport_path: &str,
-) -> Result<Value, String> {
-    let mut proxy = open_plain_proxy_tcp_stream(&selection.proxy)?;
-    http_proxy_connect(
-        &mut proxy,
-        &selection.route.dial_target,
-        username,
-        password,
-        transport,
-        transport_host,
-        transport_path,
-    )?;
-    proxy
-        .set_nonblocking(true)
-        .map_err(|err| format!("set HTTP proxy TCP nonblocking: {err}"))?;
-    inbound
-        .set_nonblocking(true)
-        .map_err(|err| format!("set inbound TCP nonblocking after HTTP proxy CONNECT: {err}"))?;
-    relay_tcp_direct(inbound, &mut proxy, stop, &sniff.payload, metrics)
-        .map(|stats| {
-            generic_proxy_tcp_finished_event(
-                peer,
-                original_dst,
-                selection,
-                sniff,
-                "http-proxy",
-                &stats,
-                "plain-tcp-relay",
-            )
-        })
-        .or_else(|err| {
-            Ok::<Value, String>(generic_proxy_tcp_failed_event(
-                peer,
-                original_dst,
-                selection,
-                sniff,
-                "http-proxy",
                 &err,
                 "plain-tcp-relay",
             ))

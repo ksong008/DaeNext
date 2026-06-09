@@ -285,15 +285,6 @@ pub(super) fn tcp_execution_descriptor(label: &str) -> RuntimeExecutionDescripto
         .with_stream_wrapper("websocket")
         .with_security_underlay("standard-tls")
         .with_transport_underlay("tcp"),
-        "per-connection-thread-transitional" | "per-connection-thread-legacy" => {
-            RuntimeExecutionDescriptor::new(
-                label,
-                "thread-per-connection",
-                "stream-transport",
-                "tcp",
-            )
-            .with_transport_underlay("tcp")
-        }
         _ => RuntimeExecutionDescriptor::new(label, "runtime-event", "runtime-evidence", "tcp"),
     }
 }

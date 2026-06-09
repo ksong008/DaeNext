@@ -62,6 +62,22 @@ where
     codec.decrypt_next(&encrypted)
 }
 
+pub(super) async fn read_encrypted_exact_async<S>(
+    stream: &mut S,
+    codec: &mut Ss2022StreamCodec,
+    plaintext_len: usize,
+) -> Result<Vec<u8>, OutboundError>
+where
+    S: AsyncRead + Unpin,
+{
+    let mut encrypted = vec![0_u8; plaintext_len + codec.tag_len];
+    stream
+        .read_exact(&mut encrypted)
+        .await
+        .map_err(|err| OutboundError::BadShadowsocks(err.to_string()))?;
+    codec.decrypt_next(&encrypted)
+}
+
 pub(super) fn encode_server_response_with_psk(
     conf: &CipherConf2022,
     psk: &[u8],

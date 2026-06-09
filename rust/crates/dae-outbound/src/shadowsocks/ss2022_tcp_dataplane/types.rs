@@ -93,4 +93,16 @@ impl Ss2022TcpServerStreamDecoder {
         let chunk_len = u16::from_be_bytes([len_plain[0], len_plain[1]]) as usize;
         read_encrypted_exact(stream, &mut self.codec, chunk_len)
     }
+
+    pub async fn read_next_chunk_async<S>(
+        &mut self,
+        stream: &mut S,
+    ) -> Result<Vec<u8>, OutboundError>
+    where
+        S: AsyncRead + Unpin,
+    {
+        let len_plain = read_encrypted_exact_async(stream, &mut self.codec, 2).await?;
+        let chunk_len = u16::from_be_bytes([len_plain[0], len_plain[1]]) as usize;
+        read_encrypted_exact_async(stream, &mut self.codec, chunk_len).await
+    }
 }

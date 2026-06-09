@@ -1,12 +1,12 @@
 use super::*;
 
 #[allow(clippy::too_many_arguments)]
-pub(crate) fn handle_shadowsocksr_http_simple_proxy_tcp_connection(
-    inbound: &mut TcpStream,
+pub(crate) async fn handle_shadowsocksr_http_simple_proxy_tcp_connection_async(
+    inbound: &mut TokioTcpStream,
     peer: SocketAddr,
     original_dst: SocketAddrV4,
-    selection: &TcpProxySelection,
-    stop: &AtomicBool,
+    selection: TcpProxySelection,
+    stop: Arc<AtomicBool>,
     sniff: &TcpSniffReport,
     metrics: &ResidentDataplaneMetrics,
     cipher: &str,
@@ -14,7 +14,7 @@ pub(crate) fn handle_shadowsocksr_http_simple_proxy_tcp_connection(
     obfs_host: &str,
     obfs_port: u16,
 ) -> Result<Value, String> {
-    let mut proxy = open_plain_proxy_tcp_stream(&selection.proxy)?;
+    let mut proxy = open_plain_proxy_tcp_stream_async(&selection.proxy).await?;
     let mut client_iv = [0_u8; 16];
     fastrand::fill(&mut client_iv);
     let (request, mut encoder) = shadowsocksr_http_simple_origin_request(
@@ -26,19 +26,22 @@ pub(crate) fn handle_shadowsocksr_http_simple_proxy_tcp_connection(
         obfs_port,
         client_iv,
     )
-    .map_err(|err| format!("build ShadowsocksR legacy stream request: {err}"))?;
+    .map_err(|err| format!("build ShadowsocksR stream request: {err}"))?;
     proxy
         .write_all(&request)
-        .map_err(|err| format!("write ShadowsocksR legacy stream request: {err}"))?;
+        .await
+        .map_err(|err| format!("write ShadowsocksR stream request: {err}"))?;
     proxy
         .flush()
-        .map_err(|err| format!("flush ShadowsocksR legacy stream request: {err}"))?;
+        .await
+        .map_err(|err| format!("flush ShadowsocksR stream request: {err}"))?;
     metrics.add_upload(sniff.payload.len());
 
-    let (response_head, leftover) = read_http_head_and_leftover_from_stream(&mut proxy)
-        .map_err(|err| format!("read ShadowsocksR legacy obfs response: {err}"))?;
+    let (response_head, leftover) = read_http_head_and_leftover_from_async_stream(&mut proxy)
+        .await
+        .map_err(|err| format!("read ShadowsocksR obfs response: {err}"))?;
     validate_simple_obfs_http_response_status(&response_head)
-        .map_err(|err| format!("validate ShadowsocksR legacy obfs response: {err}"))?;
+        .map_err(|err| format!("validate ShadowsocksR obfs response: {err}"))?;
     let mut decoder = ShadowsocksRStreamDecoder::new(cipher, password)
         .map_err(|err| format!("create ShadowsocksR stream decoder: {err}"))?;
     if !leftover.is_empty() {
@@ -48,18 +51,13 @@ pub(crate) fn handle_shadowsocksr_http_simple_proxy_tcp_connection(
         if !decoded.is_empty() {
             inbound
                 .write_all(&decoded)
+                .await
                 .map_err(|err| format!("write ShadowsocksR initial response to client: {err}"))?;
             metrics.add_download(decoded.len());
         }
     }
 
-    proxy
-        .set_nonblocking(true)
-        .map_err(|err| format!("set ShadowsocksR proxy TCP nonblocking: {err}"))?;
-    inbound.set_nonblocking(true).map_err(|err| {
-        format!("set inbound TCP nonblocking after ShadowsocksR handshake: {err}")
-    })?;
-    relay_tcp_shadowsocksr_stream(
+    relay_tcp_shadowsocksr_stream_async(
         inbound,
         &mut proxy,
         stop,
@@ -67,35 +65,36 @@ pub(crate) fn handle_shadowsocksr_http_simple_proxy_tcp_connection(
         &mut encoder,
         &mut decoder,
     )
+    .await
     .map(|mut stats| {
         stats.client_to_direct += sniff.payload.len();
         generic_proxy_tcp_finished_event(
             peer,
             original_dst,
-            selection,
+            &selection,
             sniff,
             "shadowsocksr",
             &stats,
-            "legacy-stream-relay",
+            "plain-tcp-relay",
         )
     })
     .or_else(|err| {
         Ok::<Value, String>(generic_proxy_tcp_failed_event(
             peer,
             original_dst,
-            selection,
+            &selection,
             sniff,
             "shadowsocksr",
             &err,
-            "legacy-stream-relay",
+            "plain-tcp-relay",
         ))
     })
 }
 
-fn relay_tcp_shadowsocksr_stream(
-    inbound: &mut TcpStream,
-    proxy: &mut TcpStream,
-    stop: &AtomicBool,
+async fn relay_tcp_shadowsocksr_stream_async(
+    inbound: &mut TokioTcpStream,
+    proxy: &mut TokioTcpStream,
+    stop: Arc<AtomicBool>,
     metrics: &ResidentDataplaneMetrics,
     encoder: &mut ShadowsocksRStreamEncoder,
     decoder: &mut ShadowsocksRStreamDecoder,
@@ -108,94 +107,81 @@ fn relay_tcp_shadowsocksr_stream(
     let mut proxy_buf = [0_u8; 16 * 1024];
 
     while !stop.load(Ordering::Relaxed) {
-        let mut progressed = false;
-        if !inbound_closed && !proxy_closed {
-            match inbound.read(&mut inbound_buf) {
-                Ok(0) => {
-                    inbound_closed = true;
-                    let _ = proxy.shutdown(Shutdown::Write);
-                    progressed = true;
-                }
-                Ok(read) => {
-                    let encoded = encoder
-                        .encode(&inbound_buf[..read])
-                        .map_err(|err| format!("encode ShadowsocksR upload payload: {err}"))?;
-                    write_all_nonblocking(
-                        proxy,
-                        &encoded,
-                        stop,
-                        "write ShadowsocksR upload payload",
-                    )?;
-                    stats.client_to_direct += read;
-                    metrics.add_upload(read);
-                    progressed = true;
-                }
-                Err(err)
-                    if matches!(
-                        err.kind(),
-                        ErrorKind::WouldBlock | ErrorKind::TimedOut | ErrorKind::Interrupted
-                    ) => {}
-                Err(err) => return Err(format!("read inbound TCP for ShadowsocksR relay: {err}")),
-            }
-        }
-
-        if !proxy_closed {
-            match proxy.read(&mut proxy_buf) {
-                Ok(0) => {
-                    proxy_closed = true;
-                    let _ = inbound.shutdown(Shutdown::Write);
-                    progressed = true;
-                }
-                Ok(read) => {
-                    let decoded = decoder
-                        .decode(&proxy_buf[..read])
-                        .map_err(|err| format!("decode ShadowsocksR download payload: {err}"))?;
-                    if !decoded.is_empty() {
-                        match write_all_nonblocking(
-                            inbound,
-                            &decoded,
-                            stop,
-                            "write ShadowsocksR download payload to client",
-                        ) {
-                            Ok(()) => {}
-                            Err(err) if graceful_stream_close_message(&err) => break,
-                            Err(err) => return Err(err),
-                        }
-                        stats.direct_to_client += decoded.len();
-                        metrics.add_download(decoded.len());
+        tokio::select! {
+            inbound_read = inbound.read(&mut inbound_buf), if !inbound_closed && !proxy_closed => {
+                match inbound_read {
+                    Ok(0) => {
+                        inbound_closed = true;
+                        let _ = proxy.shutdown().await;
+                        last_activity = Instant::now();
                     }
-                    progressed = true;
+                    Ok(read) => {
+                        let encoded = encoder
+                            .encode(&inbound_buf[..read])
+                            .map_err(|err| format!("encode ShadowsocksR upload payload: {err}"))?;
+                        proxy
+                            .write_all(&encoded)
+                            .await
+                            .map_err(|err| format!("write ShadowsocksR upload payload: {err}"))?;
+                        stats.client_to_direct += read;
+                        metrics.add_upload(read);
+                        last_activity = Instant::now();
+                    }
+                    Err(err) if is_graceful_stream_close_error(&err) => {
+                        inbound_closed = true;
+                        let _ = proxy.shutdown().await;
+                        last_activity = Instant::now();
+                    }
+                    Err(err) => return Err(format!("read inbound TCP for ShadowsocksR relay: {err}")),
                 }
-                Err(err)
-                    if matches!(
-                        err.kind(),
-                        ErrorKind::WouldBlock | ErrorKind::TimedOut | ErrorKind::Interrupted
-                    ) => {}
-                Err(err) => return Err(format!("read ShadowsocksR proxy TCP: {err}")),
+            }
+            proxy_read = proxy.read(&mut proxy_buf), if !proxy_closed => {
+                match proxy_read {
+                    Ok(0) => {
+                        proxy_closed = true;
+                        let _ = inbound.shutdown().await;
+                        last_activity = Instant::now();
+                    }
+                    Ok(read) => {
+                        let decoded = decoder
+                            .decode(&proxy_buf[..read])
+                            .map_err(|err| format!("decode ShadowsocksR download payload: {err}"))?;
+                        if !decoded.is_empty() {
+                            match inbound.write_all(&decoded).await {
+                                Ok(()) => {}
+                                Err(err) if is_graceful_stream_close_error(&err) => break,
+                                Err(err) => {
+                                    return Err(format!(
+                                        "write ShadowsocksR download payload to client: {err}"
+                                    ));
+                                }
+                            }
+                            stats.direct_to_client += decoded.len();
+                            metrics.add_download(decoded.len());
+                        }
+                        last_activity = Instant::now();
+                    }
+                    Err(err) if is_graceful_stream_close_error(&err) => {
+                        proxy_closed = true;
+                        let _ = inbound.shutdown().await;
+                        last_activity = Instant::now();
+                    }
+                    Err(err) => return Err(format!("read ShadowsocksR proxy TCP: {err}")),
+                }
+            }
+            _ = time::sleep(Duration::from_millis(100)) => {
+                if proxy_closed || (inbound_closed && proxy_closed) {
+                    break;
+                }
+                if last_activity.elapsed() > RESIDENT_TCP_IDLE_TIMEOUT {
+                    return Err("resident ShadowsocksR relay idle timeout".to_owned());
+                }
             }
         }
 
         if proxy_closed || (inbound_closed && proxy_closed) {
             break;
         }
-        if progressed {
-            last_activity = Instant::now();
-        } else if last_activity.elapsed() > RESIDENT_TCP_IDLE_TIMEOUT {
-            return Err("resident ShadowsocksR relay idle timeout".to_owned());
-        } else {
-            thread::sleep(RESIDENT_IDLE_SLEEP);
-        }
     }
     Ok(stats)
-}
-
-fn graceful_stream_close_message(message: &str) -> bool {
-    message.contains("Broken pipe")
-        || message.contains("Connection reset")
-        || message.contains("Connection aborted")
-        || message.contains("Not connected")
-        || message.contains("broken pipe")
-        || message.contains("connection reset")
-        || message.contains("connection aborted")
-        || message.contains("not connected")
 }
