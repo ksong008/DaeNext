@@ -356,7 +356,7 @@ pub(super) fn docker_entrypoint_text() -> String {
 set -eu
 # {PRODUCT_HTTP_WORKERS_ENV} unset uses available_parallelism * 2 clamped to {PRODUCT_HTTP_WORKER_DEFAULT_MIN}..{PRODUCT_HTTP_WORKER_DEFAULT_MAX}.
 {}/usr/bin/daed validate -c /etc/daed/ >/dev/null
-exec /usr/bin/daed run -c /etc/daed --listen "${{DAED_LISTEN:-0.0.0.0:2023}}" "$@"
+exec /usr/bin/daed run -c /etc/daed --listen "${{{PRODUCT_LISTEN_ENV}:-${{{PRODUCT_LISTEN_LEGACY_ENV}:-0.0.0.0:2023}}}}" "$@"
 "#,
         docker_runtime_environment_exports()
     )

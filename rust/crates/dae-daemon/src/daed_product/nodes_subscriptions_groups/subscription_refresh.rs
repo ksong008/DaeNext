@@ -372,7 +372,7 @@ pub(crate) fn fetch_http_url(url: &url::Url, tls: bool) -> io::Result<String> {
     let request = format!(
         "GET {path} HTTP/1.1\r\nHost: {host}\r\nUser-Agent: daed-rust-native/0.1\r\nAccept: text/plain, application/octet-stream, */*\r\nConnection: close\r\n\r\n"
     );
-    let stream = connect_tcp(host, port, Duration::from_secs(10))?;
+    let stream = connect_tcp_endpoint(host, port, Duration::from_secs(10))?;
     stream.set_read_timeout(Some(Duration::from_secs(20)))?;
     stream.set_write_timeout(Some(Duration::from_secs(20)))?;
     let response = if tls {
@@ -471,20 +471,4 @@ pub(crate) fn decode_chunked_body(body: &[u8]) -> io::Result<Vec<u8>> {
         index += size + 2;
     }
     Ok(out)
-}
-
-pub(crate) fn connect_tcp(host: &str, port: u16, timeout: Duration) -> io::Result<TcpStream> {
-    let mut last_err = None;
-    for addr in (host, port).to_socket_addrs()? {
-        match TcpStream::connect_timeout(&addr, timeout) {
-            Ok(stream) => return Ok(stream),
-            Err(err) => last_err = Some(err),
-        }
-    }
-    Err(last_err.unwrap_or_else(|| {
-        io::Error::new(
-            io::ErrorKind::AddrNotAvailable,
-            "no socket address resolved",
-        )
-    }))
 }

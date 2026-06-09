@@ -143,11 +143,10 @@ pub(crate) fn fake_runtime_tcp_connect(link: &str) -> Result<(), String> {
     let port = url
         .port_or_known_default()
         .ok_or_else(|| "node link does not contain a port".to_owned())?;
-    let addrs = (host, port)
-        .to_socket_addrs()
-        .map_err(|err| format!("resolve node endpoint: {err}"))?;
     let mut last_error = None;
-    for addr in addrs {
+    for addr in resolve_tcp_addrs(host, port, Duration::from_millis(500))
+        .map_err(|err| format!("resolve node endpoint: {err}"))?
+    {
         match TcpStream::connect_timeout(&addr, Duration::from_millis(500)) {
             Ok(_) => return Ok(()),
             Err(err) => last_error = Some(err),
