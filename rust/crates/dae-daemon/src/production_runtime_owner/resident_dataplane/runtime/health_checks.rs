@@ -21,7 +21,7 @@ pub(crate) fn resident_group_health_check_loop(
             "tcp_probe_executor": "tokio-proxy-tcp-probe",
             "udp_probe_executor": "tokio-proxy-packet-dns-probe",
             "tcp_check_target": candidates.first().map(|candidate| candidate.tcp_check.target.clone()),
-            "udp_check_target": candidates.first().map(|candidate| candidate.udp_check.target.to_string()),
+            "udp_check_target": candidates.first().map(|candidate| candidate.udp_check.target.authority().to_owned()),
         }),
     );
     let runtime = match tokio::runtime::Builder::new_current_thread()
@@ -314,12 +314,9 @@ pub(crate) async fn probe_resident_candidate_udp_endpoint_async(
     candidate: &plan::ResidentProxyProbePlan,
 ) -> Result<i64, String> {
     let started = Instant::now();
-    probe_resident_proxy_dns_udp_async(
-        &candidate.proxy,
-        candidate.udp_check.target,
-        &candidate.udp_check.lookup_host,
-    )
-    .await?;
+    let target = candidate.udp_check.target.resolve().await?;
+    probe_resident_proxy_dns_udp_async(&candidate.proxy, target, &candidate.udp_check.lookup_host)
+        .await?;
     Ok(elapsed_millis(started.elapsed()))
 }
 

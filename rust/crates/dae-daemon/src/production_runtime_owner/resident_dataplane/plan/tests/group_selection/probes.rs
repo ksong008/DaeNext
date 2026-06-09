@@ -195,8 +195,12 @@ pub(super) fn resident_dataplane_group_udp_check_uses_group_override_ipv4() {
     let plan = build_resident_dataplane_plan(&config).unwrap();
     let probes = plan.default_proxy_group().unwrap().probe_candidates();
     assert_eq!(
-        probes[0].udp_check.target,
-        SocketAddrV4::new(group_dns_target, group_dns_port)
+        probes[0].udp_check.target.literal_addr(),
+        Some(SocketAddrV4::new(group_dns_target, group_dns_port))
+    );
+    assert_eq!(
+        probes[0].udp_check.target.authority(),
+        SocketAddrV4::new(group_dns_target, group_dns_port).to_string()
     );
     assert_eq!(probes[0].udp_check.host, group_dns_host);
     assert_eq!(
