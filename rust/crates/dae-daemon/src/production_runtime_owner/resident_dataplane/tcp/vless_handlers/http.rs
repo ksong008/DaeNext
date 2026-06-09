@@ -365,6 +365,137 @@ pub(crate) async fn handle_resident_proxy_tcp_connection_async(
         )
         .await;
     }
+    if let ResidentProxyProtocolPlan::ShadowsocksAeadTcp {
+        cipher,
+        password,
+        salt_len,
+    } = &selection.proxy.handler
+    {
+        let cipher = cipher.clone();
+        let password = password.clone();
+        let salt_len = *salt_len;
+        return handle_shadowsocks_proxy_tcp_connection_async(
+            &mut inbound,
+            peer,
+            original_dst,
+            selection,
+            stop,
+            &sniff,
+            &metrics,
+            &cipher,
+            &password,
+            salt_len,
+        )
+        .await;
+    }
+    if let ResidentProxyProtocolPlan::Shadowsocks2022Tcp {
+        cipher,
+        password,
+        salt_len,
+        ..
+    } = &selection.proxy.handler
+    {
+        let cipher = cipher.clone();
+        let password = password.clone();
+        let salt_len = *salt_len;
+        return handle_shadowsocks_2022_proxy_tcp_connection_async(
+            &mut inbound,
+            peer,
+            original_dst,
+            selection,
+            stop,
+            &sniff,
+            &metrics,
+            &cipher,
+            &password,
+            salt_len,
+        )
+        .await;
+    }
+    if let ResidentProxyProtocolPlan::ShadowsocksSimpleObfsHttpTcp {
+        cipher,
+        password,
+        salt_len,
+        host,
+        path,
+    } = &selection.proxy.handler
+    {
+        let cipher = cipher.clone();
+        let password = password.clone();
+        let salt_len = *salt_len;
+        let host = host.clone();
+        let path = path.clone();
+        return handle_shadowsocks_simple_obfs_http_proxy_tcp_connection_async(
+            &mut inbound,
+            peer,
+            original_dst,
+            selection,
+            stop,
+            &sniff,
+            &metrics,
+            &cipher,
+            &password,
+            salt_len,
+            &host,
+            &path,
+        )
+        .await;
+    }
+    if let ResidentProxyProtocolPlan::ShadowsocksSimpleObfsTlsTcp {
+        cipher,
+        password,
+        salt_len,
+        host,
+    } = &selection.proxy.handler
+    {
+        let cipher = cipher.clone();
+        let password = password.clone();
+        let salt_len = *salt_len;
+        let host = host.clone();
+        return handle_shadowsocks_simple_obfs_tls_proxy_tcp_connection_async(
+            &mut inbound,
+            peer,
+            original_dst,
+            selection,
+            stop,
+            &sniff,
+            &metrics,
+            &cipher,
+            &password,
+            salt_len,
+            &host,
+        )
+        .await;
+    }
+    if let ResidentProxyProtocolPlan::Shadowsocks2022SimpleObfsHttpTcp {
+        cipher,
+        password,
+        salt_len,
+        host,
+        path,
+    } = &selection.proxy.handler
+    {
+        let cipher = cipher.clone();
+        let password = password.clone();
+        let salt_len = *salt_len;
+        let host = host.clone();
+        let path = path.clone();
+        return handle_shadowsocks_2022_simple_obfs_http_proxy_tcp_connection_async(
+            &mut inbound,
+            peer,
+            original_dst,
+            selection,
+            stop,
+            &sniff,
+            &metrics,
+            &cipher,
+            &password,
+            salt_len,
+            &host,
+            &path,
+        )
+        .await;
+    }
     if let ResidentProxyProtocolPlan::HttpProxyTcp {
         username,
         password,
@@ -424,23 +555,34 @@ pub(crate) async fn handle_resident_proxy_tcp_connection_async(
         )
         .await;
     }
-    let mut inbound = inbound
-        .into_std()
-        .map_err(|err| format!("convert async inbound TCP to std for resident proxy: {err}"))?;
-    tokio::task::spawn_blocking(move || {
-        inbound
-            .set_nonblocking(false)
-            .map_err(|err| format!("set resident proxy inbound blocking: {err}"))?;
-        handle_resident_proxy_tcp_connection(
+    if let ResidentProxyProtocolPlan::ShadowsocksRHttpSimpleTcp {
+        cipher,
+        password,
+        obfs_host,
+        obfs_port,
+    } = &selection.proxy.handler
+    {
+        let cipher = cipher.clone();
+        let password = password.clone();
+        let obfs_host = obfs_host.clone();
+        let obfs_port = *obfs_port;
+        return handle_shadowsocksr_http_simple_proxy_tcp_connection_async(
             &mut inbound,
             peer,
             original_dst,
             selection,
-            &stop,
+            stop,
             &sniff,
             &metrics,
+            &cipher,
+            &password,
+            &obfs_host,
+            obfs_port,
         )
-    })
-    .await
-    .map_err(|err| format!("join resident proxy task: {err}"))?
+        .await;
+    }
+    Err(format!(
+        "resident async TCP dispatcher has no handler for protocol {} net {} tls {}",
+        selection.proxy.protocol, selection.proxy.net, selection.proxy.tls
+    ))
 }

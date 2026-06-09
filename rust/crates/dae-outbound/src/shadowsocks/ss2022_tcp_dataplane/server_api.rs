@@ -49,6 +49,57 @@ where
     ))
 }
 
+pub async fn server_stream_decoder_async<S>(
+    stream: &mut S,
+    cipher: &str,
+    password: &str,
+    request_salt: &[u8],
+) -> Result<(Ss2022TcpServerStreamDecoder, Ss2022TcpServerStreamStart), OutboundError>
+where
+    S: AsyncRead + Unpin,
+{
+    let conf = require_cipher_conf(cipher)?;
+    validate_salt_len("request", request_salt, conf.salt_len)?;
+    let psk_list = parse_psk_list(password, conf.key_len)?;
+    let upsk = psk_list.last().ok_or_else(|| {
+        OutboundError::BadShadowsocks("SS2022 PSK list cannot be empty".to_owned())
+    })?;
+
+    let mut server_salt = vec![0_u8; conf.salt_len];
+    stream
+        .read_exact(&mut server_salt)
+        .await
+        .map_err(|err| OutboundError::BadShadowsocks(err.to_string()))?;
+    let mut codec = Ss2022StreamCodec::new(&conf, upsk, &server_salt)?;
+    let header_len = 1 + 8 + conf.salt_len + 2;
+    let header = read_encrypted_exact_async(stream, &mut codec, header_len).await?;
+    let response_header_type = header[0];
+    if response_header_type != HEADER_TYPE_SERVER_STREAM {
+        return Err(OutboundError::BadShadowsocks(format!(
+            "SS2022 unexpected server header type: {response_header_type}"
+        )));
+    }
+    let salt_start = 1 + 8;
+    let salt_end = salt_start + conf.salt_len;
+    let echoed_salt = &header[salt_start..salt_end];
+    let payload_len = u16::from_be_bytes([header[salt_end], header[salt_end + 1]]) as usize;
+    if payload_len == 0 {
+        return Err(OutboundError::BadShadowsocks(
+            "SS2022 server payload length cannot be zero".to_owned(),
+        ));
+    }
+    let payload = read_encrypted_exact_async(stream, &mut codec, payload_len).await?;
+    Ok((
+        Ss2022TcpServerStreamDecoder { codec },
+        Ss2022TcpServerStreamStart {
+            server_salt_len: server_salt.len(),
+            response_header_type,
+            request_salt_echo_validated: echoed_salt == request_salt,
+            payload,
+        },
+    ))
+}
+
 pub fn read_client_request_from_stream<S>(
     stream: &mut S,
     cipher: &str,

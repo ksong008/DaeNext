@@ -10,6 +10,7 @@ use chacha20poly1305::ChaCha20Poly1305;
 
 use crate::error::OutboundError;
 use crate::socks5::Socks5Address;
+use tokio::io::{AsyncRead, AsyncReadExt};
 
 use super::ss2022::{
     CipherConf2022, HEADER_TYPE_CLIENT_STREAM, HEADER_TYPE_SERVER_STREAM, MAX_PADDING_LENGTH,

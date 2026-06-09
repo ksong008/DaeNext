@@ -148,6 +148,35 @@ pub(super) fn read_http_head_and_leftover_from_stream(
     Err("incomplete http response header".to_owned())
 }
 
+pub(super) async fn read_http_head_and_leftover_from_async_stream<S>(
+    stream: &mut S,
+) -> Result<(Vec<u8>, Vec<u8>), String>
+where
+    S: AsyncRead + Unpin,
+{
+    let mut response = Vec::new();
+    let mut buf = [0_u8; 256];
+    loop {
+        let n = stream
+            .read(&mut buf)
+            .await
+            .map_err(|err| format!("read http head: {err}"))?;
+        if n == 0 {
+            break;
+        }
+        response.extend_from_slice(&buf[..n]);
+        if let Some(index) = response.windows(4).position(|window| window == b"\r\n\r\n") {
+            let leftover = response[index + 4..].to_vec();
+            response.truncate(index + 4);
+            return Ok((response, leftover));
+        }
+        if response.len() > 8192 {
+            return Err("http response header too large".to_owned());
+        }
+    }
+    Err("incomplete http response header".to_owned())
+}
+
 pub(super) fn validate_simple_obfs_http_response_status(
     response_head: &[u8],
 ) -> Result<(), String> {
@@ -174,6 +203,31 @@ pub(super) fn read_simple_obfs_tls_response_payload_from_stream(
     let mut payload = vec![0_u8; payload_len];
     stream
         .read_exact(&mut payload)
+        .map_err(|err| format!("read simple-obfs TLS response payload: {err}"))?;
+    Ok(payload)
+}
+
+pub(super) async fn read_simple_obfs_tls_response_payload_from_async_stream<S>(
+    stream: &mut S,
+) -> Result<Vec<u8>, String>
+where
+    S: AsyncRead + Unpin,
+{
+    let mut discard = vec![0_u8; 105];
+    stream
+        .read_exact(&mut discard)
+        .await
+        .map_err(|err| format!("read simple-obfs TLS response prefix: {err}"))?;
+    let mut len = [0_u8; 2];
+    stream
+        .read_exact(&mut len)
+        .await
+        .map_err(|err| format!("read simple-obfs TLS response payload length: {err}"))?;
+    let payload_len = u16::from_be_bytes(len) as usize;
+    let mut payload = vec![0_u8; payload_len];
+    stream
+        .read_exact(&mut payload)
+        .await
         .map_err(|err| format!("read simple-obfs TLS response payload: {err}"))?;
     Ok(payload)
 }
@@ -227,6 +281,42 @@ impl Read for PrefixTcpReader<'_> {
             return Ok(written);
         }
         self.stream.read(buf)
+    }
+}
+
+pub(super) struct AsyncPrefixTcpReader<'a, S> {
+    pub(super) prefix: VecDeque<u8>,
+    pub(super) stream: &'a mut S,
+}
+
+impl<'a, S> AsyncPrefixTcpReader<'a, S> {
+    pub(super) fn new(prefix: Vec<u8>, stream: &'a mut S) -> Self {
+        Self {
+            prefix: VecDeque::from(prefix),
+            stream,
+        }
+    }
+}
+
+impl<S> AsyncRead for AsyncPrefixTcpReader<'_, S>
+where
+    S: AsyncRead + Unpin,
+{
+    fn poll_read(
+        mut self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+        buf: &mut ReadBuf<'_>,
+    ) -> Poll<std::io::Result<()>> {
+        while buf.remaining() > 0 {
+            let Some(byte) = self.prefix.pop_front() else {
+                break;
+            };
+            buf.put_slice(&[byte]);
+        }
+        if buf.remaining() == 0 || !self.prefix.is_empty() {
+            return Poll::Ready(Ok(()));
+        }
+        Pin::new(&mut *self.stream).poll_read(cx, buf)
     }
 }
 
@@ -298,6 +388,146 @@ impl Read for SimpleObfsTlsAppDataReader<'_> {
             self.fill_frame()?;
         }
         Ok(written)
+    }
+}
+
+pub(super) struct AsyncSimpleObfsTlsAppDataReader<'a, S> {
+    pub(super) prefix: VecDeque<u8>,
+    pub(super) frame: VecDeque<u8>,
+    pub(super) state: AsyncSimpleObfsTlsReadState,
+    pub(super) stream: &'a mut S,
+}
+
+pub(super) enum AsyncSimpleObfsTlsReadState {
+    Header { buf: [u8; 5], filled: usize },
+    Payload { buf: Vec<u8>, filled: usize },
+}
+
+impl Default for AsyncSimpleObfsTlsReadState {
+    fn default() -> Self {
+        Self::Header {
+            buf: [0_u8; 5],
+            filled: 0,
+        }
+    }
+}
+
+impl<'a, S> AsyncSimpleObfsTlsAppDataReader<'a, S> {
+    pub(super) fn new(prefix: Vec<u8>, stream: &'a mut S) -> Self {
+        Self {
+            prefix: VecDeque::from(prefix),
+            frame: VecDeque::new(),
+            state: AsyncSimpleObfsTlsReadState::default(),
+            stream,
+        }
+    }
+}
+
+impl<S> AsyncRead for AsyncSimpleObfsTlsAppDataReader<'_, S>
+where
+    S: AsyncRead + Unpin,
+{
+    fn poll_read(
+        mut self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+        out: &mut ReadBuf<'_>,
+    ) -> Poll<std::io::Result<()>> {
+        loop {
+            while out.remaining() > 0 {
+                if let Some(byte) = self.prefix.pop_front() {
+                    out.put_slice(&[byte]);
+                    continue;
+                }
+                if let Some(byte) = self.frame.pop_front() {
+                    out.put_slice(&[byte]);
+                    continue;
+                }
+                break;
+            }
+            if out.filled().len() > 0 || out.remaining() == 0 {
+                return Poll::Ready(Ok(()));
+            }
+
+            let state = std::mem::take(&mut self.state);
+            match state {
+                AsyncSimpleObfsTlsReadState::Header {
+                    mut buf,
+                    mut filled,
+                } => {
+                    while filled < buf.len() {
+                        let before = filled;
+                        let mut read_buf = ReadBuf::new(&mut buf[filled..]);
+                        match Pin::new(&mut *self.stream).poll_read(cx, &mut read_buf) {
+                            Poll::Ready(Ok(())) => {
+                                let read = read_buf.filled().len();
+                                if read == 0 {
+                                    if before == 0 {
+                                        return Poll::Ready(Ok(()));
+                                    }
+                                    return Poll::Ready(Err(std::io::Error::new(
+                                        ErrorKind::UnexpectedEof,
+                                        "simple-obfs TLS application data header eof",
+                                    )));
+                                }
+                                filled += read;
+                            }
+                            Poll::Ready(Err(err)) => return Poll::Ready(Err(err)),
+                            Poll::Pending => {
+                                self.state = AsyncSimpleObfsTlsReadState::Header { buf, filled };
+                                return Poll::Pending;
+                            }
+                        }
+                    }
+                    if buf[..3] != [0x17, 0x03, 0x03] {
+                        return Poll::Ready(Err(std::io::Error::new(
+                            ErrorKind::InvalidData,
+                            format!(
+                                "simple-obfs TLS application data header mismatch: {:02x?}",
+                                &buf[..3]
+                            ),
+                        )));
+                    }
+                    let len = u16::from_be_bytes([buf[3], buf[4]]) as usize;
+                    if len > 16 * 1024 {
+                        return Poll::Ready(Err(std::io::Error::new(
+                            ErrorKind::InvalidData,
+                            format!("simple-obfs TLS application data too large: {len}"),
+                        )));
+                    }
+                    self.state = AsyncSimpleObfsTlsReadState::Payload {
+                        buf: vec![0_u8; len],
+                        filled: 0,
+                    };
+                }
+                AsyncSimpleObfsTlsReadState::Payload {
+                    mut buf,
+                    mut filled,
+                } => {
+                    while filled < buf.len() {
+                        let mut read_buf = ReadBuf::new(&mut buf[filled..]);
+                        match Pin::new(&mut *self.stream).poll_read(cx, &mut read_buf) {
+                            Poll::Ready(Ok(())) => {
+                                let read = read_buf.filled().len();
+                                if read == 0 {
+                                    return Poll::Ready(Err(std::io::Error::new(
+                                        ErrorKind::UnexpectedEof,
+                                        "simple-obfs TLS application data payload eof",
+                                    )));
+                                }
+                                filled += read;
+                            }
+                            Poll::Ready(Err(err)) => return Poll::Ready(Err(err)),
+                            Poll::Pending => {
+                                self.state = AsyncSimpleObfsTlsReadState::Payload { buf, filled };
+                                return Poll::Pending;
+                            }
+                        }
+                    }
+                    self.frame = VecDeque::from(buf);
+                    self.state = AsyncSimpleObfsTlsReadState::default();
+                }
+            }
+        }
     }
 }
 
