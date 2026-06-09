@@ -4,8 +4,9 @@ mod tests {
     use serde_json::{Value, json};
 
     use super::{
-        resident_live_adapter_entry_missing, resident_live_adapter_entry_remote_live_matrix_ready,
-        resident_live_adapter_matrix_entries, resident_live_matrix_evidence_from_value,
+        RESIDENT_LIVE_MATRIX_EVIDENCE_ENV, resident_live_adapter_entry_missing,
+        resident_live_adapter_entry_remote_live_matrix_ready, resident_live_adapter_matrix_entries,
+        resident_live_matrix_evidence_from_value,
     };
 
     #[test]
@@ -15,6 +16,7 @@ mod tests {
             .map(|entry| live_row(entry.formal_matrix_handler))
             .collect::<Vec<_>>();
         let evidence = resident_live_matrix_evidence_from_value(
+            RESIDENT_LIVE_MATRIX_EVIDENCE_ENV,
             Some("/tmp/current-live-summary.json".to_owned()),
             &json!({
                 "schema": "daex-current-live-resident-matrix",
@@ -48,6 +50,7 @@ mod tests {
             .collect::<Vec<_>>();
         rows[0]["proxyEvidence"]["www.youtube.com"] = json!(false);
         let evidence = resident_live_matrix_evidence_from_value(
+            RESIDENT_LIVE_MATRIX_EVIDENCE_ENV,
             Some("/tmp/current-live-summary.json".to_owned()),
             &json!({
                 "schema": "daex-current-live-resident-matrix",

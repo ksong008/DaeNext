@@ -1,5 +1,7 @@
 use super::*;
-pub(crate) const RESIDENT_LIVE_MATRIX_EVIDENCE_ENV: &str = "DAE_RESIDENT_LIVE_MATRIX_EVIDENCE";
+pub(crate) const RESIDENT_LIVE_MATRIX_EVIDENCE_ENV: &str = "RESIDENT_LIVE_MATRIX_EVIDENCE";
+pub(crate) const RESIDENT_LIVE_MATRIX_EVIDENCE_LEGACY_ENV: &str =
+    "DAE_RESIDENT_LIVE_MATRIX_EVIDENCE";
 
 pub(crate) const REMOTE_LIVE_MATRIX_MISSING: &str =
     "remote live matrix evidence not recorded by live-evidence-ledger";
@@ -74,9 +76,9 @@ impl ResidentLiveMatrixEvidence {
         }
     }
 
-    pub(super) fn invalid(source: String, error: impl Into<String>) -> Self {
+    pub(super) fn invalid(env: &'static str, source: String, error: impl Into<String>) -> Self {
         Self {
-            env: RESIDENT_LIVE_MATRIX_EVIDENCE_ENV,
+            env,
             source: Some(source),
             schema: None,
             schema_version: None,

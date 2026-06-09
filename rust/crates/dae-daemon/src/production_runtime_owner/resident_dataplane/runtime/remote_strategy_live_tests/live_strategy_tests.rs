@@ -14,6 +14,9 @@ mod remote_strategy_live_tests {
 
     use super::*;
 
+    const REMOTE_STRATEGY_LIVE_ENV: &str = "REMOTE_STRATEGY_LIVE";
+    const REMOTE_STRATEGY_LIVE_LEGACY_ENV: &str = "DAE_REMOTE_STRATEGY_LIVE";
+
     struct LiveHttpProxy {
         port: u16,
         delay_ms: Arc<AtomicU64>,
@@ -27,7 +30,7 @@ mod remote_strategy_live_tests {
 
     #[test]
     fn remote_resident_group_strategy_matrix_uses_live_proxy_health_checks() {
-        if std::env::var("DAE_REMOTE_STRATEGY_LIVE").as_deref() != Ok("1") {
+        if !remote_strategy_live_enabled() {
             return;
         }
 
@@ -137,6 +140,13 @@ mod remote_strategy_live_tests {
         node_b.set_delay_ms(20);
         run_resident_group_health_checks(group, &probes);
         assert_eq!(group.select_proxy_for_tcp().unwrap().node_tag, "node_b");
+    }
+
+    fn remote_strategy_live_enabled() -> bool {
+        std::env::var(REMOTE_STRATEGY_LIVE_ENV)
+            .or_else(|_| std::env::var(REMOTE_STRATEGY_LIVE_LEGACY_ENV))
+            .as_deref()
+            == Ok("1")
     }
 
     fn assert_strategy_selects(
