@@ -444,6 +444,8 @@ impl ResidentProxyGroupPlan {
     pub(in crate::production_runtime_owner::resident_dataplane) fn fixed_single_for_test(
         proxy: ResidentProxyPlan,
     ) -> Self {
+        let udp_check_addr =
+            SocketAddrV4::new(Ipv4Addr::LOCALHOST, dae_dns::ACTIVE_DNS_DEFAULT_TARGET_PORT);
         Self {
             group_name: proxy.group_name.clone(),
             group_policy: ResidentGroupPolicyPlan::Fixed { index: 0 },
@@ -473,11 +475,8 @@ impl ResidentProxyGroupPlan {
                 method: "HEAD".to_owned(),
             },
             udp_check: ResidentUdpCheckPlan {
-                target: ResidentUdpCheckTarget::literal(SocketAddrV4::new(
-                    Ipv4Addr::new(8, 8, 8, 8),
-                    53,
-                )),
-                host: "dns.google".to_owned(),
+                target: ResidentUdpCheckTarget::literal(udp_check_addr),
+                host: "localhost".to_owned(),
                 lookup_host: "connectivitycheck.gstatic.com.".to_owned(),
             },
         }

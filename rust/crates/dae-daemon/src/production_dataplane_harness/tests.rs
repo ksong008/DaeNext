@@ -1,6 +1,10 @@
 #[cfg(test)]
 mod tests {
+    use std::net::Ipv4Addr;
+
     use super::super::*;
+
+    const CONFIGURED_ACTIVE_DNS_HARNESS_PORT: u16 = 8053;
 
     #[test]
     fn production_dataplane_report_is_read_only_by_default() {
@@ -73,6 +77,8 @@ mod tests {
         let options = ProductionDataplaneHarnessOptions {
             ack_root_gate: true,
             benchmark_iters: 7,
+            active_dns_target_ip: Ipv4Addr::LOCALHOST.to_string(),
+            active_dns_target_port: CONFIGURED_ACTIVE_DNS_HARNESS_PORT,
             ..ProductionDataplaneHarnessOptions::default()
         };
         let specs = dataplane_admission_specs();
@@ -102,5 +108,10 @@ mod tests {
         assert!(dns.execute_active_udp);
         assert!(dns.execute_active_dns);
         assert_eq!(dns.active_dns_benchmark_iters, 7);
+        assert_eq!(dns.active_dns_target_ip, Ipv4Addr::LOCALHOST.to_string());
+        assert_eq!(
+            dns.active_dns_target_port,
+            CONFIGURED_ACTIVE_DNS_HARNESS_PORT
+        );
     }
 }

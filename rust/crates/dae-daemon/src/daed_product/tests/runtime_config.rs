@@ -130,6 +130,11 @@ fn generated_runtime_config_parses_selected_global_dns_and_routing_sections() {
         ]
     });
     let nodes = json!({"items": [node]});
+    const LOCAL_DNS_BIND_PORT: u16 = 8053;
+    const LOCAL_DNS_UPSTREAM_PORT: u16 = 8054;
+    let dns_section = format!(
+        "dns {{\n    bind: '127.0.0.1:{LOCAL_DNS_BIND_PORT}'\n    upstream {{\n        primary: 'udp://127.0.0.1:{LOCAL_DNS_UPSTREAM_PORT}'\n    }}\n}}\n"
+    );
     let content = render_generated_config(
             "test",
             Some(&(
@@ -142,8 +147,7 @@ fn generated_runtime_config_parses_selected_global_dns_and_routing_sections() {
             Some(&(
                 1,
                 "dns".to_owned(),
-                "dns {\n    bind: '127.0.0.1:5353'\n    upstream {\n        primary: 'udp://127.0.0.1:5300'\n    }\n}\n"
-                    .to_owned(),
+                dns_section,
                 1,
             )),
             Some(&(
@@ -168,10 +172,10 @@ fn generated_runtime_config_parses_selected_global_dns_and_routing_sections() {
         config.global.wan_interface.as_deref(),
         Some(&["if_test1".to_owned()][..])
     );
-    assert_eq!(config.dns.bind, "127.0.0.1:5353");
+    assert_eq!(config.dns.bind, format!("127.0.0.1:{LOCAL_DNS_BIND_PORT}"));
     assert_eq!(
         config.dns.upstream.as_slice(),
-        ["primary:udp://127.0.0.1:5300"]
+        [format!("primary:udp://127.0.0.1:{LOCAL_DNS_UPSTREAM_PORT}")]
     );
     assert_eq!(config.routing.rules.len(), 1);
     match &config.routing.fallback {

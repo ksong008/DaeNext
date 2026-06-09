@@ -5,6 +5,8 @@ mod log;
 pub(super) use self::log::*;
 mod blockers;
 pub(super) use self::blockers::*;
+mod active_dns_settings;
+use self::active_dns_settings::*;
 
 pub fn run_default_optin_report(options: &RunOptions, version: &str) -> Result<Value, String> {
     let DefaultRunWorkspace {
@@ -28,10 +30,37 @@ pub fn run_default_optin_report(options: &RunOptions, version: &str) -> Result<V
     } else {
         json!({"skipped": true})
     };
+    let mut production_runtime_owner_options = options.production_runtime_owner.clone();
+    let owner_active_dns_ready = options.production_runtime_owner.execute
+        && options.production_runtime_owner.ack_root_gate
+        && options.production_runtime_owner.execute_active_tcp
+        && options.production_runtime_owner.execute_active_udp
+        && options.production_runtime_owner.execute_active_dns;
+    let harness_active_dns_ready = options.production_dataplane_harness.execute
+        && options.production_dataplane_harness.ack_root_gate;
+    let resolve_active_dns_domain = owner_active_dns_ready || harness_active_dns_ready;
+    apply_configured_active_dns_target(
+        &mut production_runtime_owner_options,
+        &run_config_file,
+        resolve_active_dns_domain,
+    )?;
+    let mut production_dataplane_harness_options = options.production_dataplane_harness.clone();
+    if production_dataplane_harness_options
+        .active_dns_target_ip
+        .trim()
+        .is_empty()
+    {
+        production_dataplane_harness_options.active_dns_target_ip =
+            production_runtime_owner_options
+                .active_dns_target_ip
+                .clone();
+        production_dataplane_harness_options.active_dns_target_port =
+            production_runtime_owner_options.active_dns_target_port;
+    }
     let production_runtime_owner =
-        production_runtime_owner_report(&options.root, &options.production_runtime_owner)?;
+        production_runtime_owner_report(&options.root, &production_runtime_owner_options)?;
     let production_dataplane =
-        production_dataplane_harness_report(&options.root, &options.production_dataplane_harness)?;
+        production_dataplane_harness_report(&options.root, &production_dataplane_harness_options)?;
     let matched_benchmark = matched_default_benchmark_report(
         &options.root,
         &run_config_file,

@@ -71,7 +71,11 @@ pub(super) fn daemon_runner_run_command_requires_ack_for_production_dataplane_sm
     ));
     let config = root.join("config").join("run.dae");
     std::fs::create_dir_all(config.parent().unwrap()).unwrap();
-    std::fs::write(&config, "global {\n  log_level: info\n}\n").unwrap();
+    std::fs::write(
+        &config,
+        "global {\n  log_level: info\n}\n\nrouting {\n  pname(NetworkManager) -> direct\n}\n",
+    )
+    .unwrap();
     let output = run_with_args_and_version(
         [
             "run".to_owned(),
@@ -97,7 +101,11 @@ pub(super) fn daemon_runner_run_command_requires_ack_for_production_runtime_owne
     ));
     let config = root.join("config").join("run.dae");
     std::fs::create_dir_all(config.parent().unwrap()).unwrap();
-    std::fs::write(&config, "global {\n  log_level: info\n}\n").unwrap();
+    std::fs::write(
+        &config,
+        "global {\n  log_level: info\n}\n\nrouting {\n  pname(NetworkManager) -> direct\n}\n",
+    )
+    .unwrap();
     let output = run_with_args_and_version(
         [
             "run".to_owned(),
@@ -214,7 +222,11 @@ pub(super) fn daemon_runner_run_command_rejects_active_dns_without_active_udp() 
     ));
     let config = root.join("config").join("run.dae");
     std::fs::create_dir_all(config.parent().unwrap()).unwrap();
-    std::fs::write(&config, "global {\n  log_level: info\n}\n").unwrap();
+    std::fs::write(
+        &config,
+        "global {\n  log_level: info\n}\n\nrouting {\n  pname(NetworkManager) -> direct\n}\n",
+    )
+    .unwrap();
     let output = run_with_args_and_version(
         [
             "run".to_owned(),
@@ -235,6 +247,46 @@ pub(super) fn daemon_runner_run_command_rejects_active_dns_without_active_udp() 
         output
             .stderr
             .contains("--execute-production-runtime-active-udp")
+    );
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[test]
+pub(super) fn daemon_runner_run_command_rejects_active_dns_without_configured_target() {
+    let root = std::env::temp_dir().join(format!(
+        "dae-daemon-run-active-dns-no-target-{}",
+        std::process::id()
+    ));
+    let config = root.join("config").join("run.dae");
+    std::fs::create_dir_all(config.parent().unwrap()).unwrap();
+    std::fs::write(
+        &config,
+        "global {\n  log_level: info\n  udp_check_dns: ''\n}\n\nrouting {\n  pname(NetworkManager) -> direct\n}\n",
+    )
+    .unwrap();
+    let output = run_with_args_and_version(
+        [
+            "run".to_owned(),
+            "--config".to_owned(),
+            config.display().to_string(),
+            "--root".to_owned(),
+            root.display().to_string(),
+            "--execute-production-runtime-owner".to_owned(),
+            "--execute-production-runtime-active-tcp".to_owned(),
+            "--execute-production-runtime-active-udp".to_owned(),
+            "--execute-production-runtime-active-dns".to_owned(),
+            "--ack-root-gate".to_owned(),
+            "--exit-after-ready".to_owned(),
+        ],
+        "test-version",
+    );
+    assert_eq!(output.exit_code, 1);
+    assert!(
+        output
+            .stderr
+            .contains("global.udp_check_dns or --production-runtime-active-dns-target-ip"),
+        "{}",
+        output.stderr
     );
     let _ = std::fs::remove_dir_all(root);
 }

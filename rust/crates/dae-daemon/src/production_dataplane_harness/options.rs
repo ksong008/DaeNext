@@ -3,6 +3,8 @@ pub struct ProductionDataplaneHarnessOptions {
     pub execute: bool,
     pub ack_root_gate: bool,
     pub benchmark_iters: u32,
+    pub active_dns_target_ip: String,
+    pub active_dns_target_port: u16,
 }
 
 impl Default for ProductionDataplaneHarnessOptions {
@@ -11,6 +13,8 @@ impl Default for ProductionDataplaneHarnessOptions {
             execute: false,
             ack_root_gate: false,
             benchmark_iters: 5,
+            active_dns_target_ip: String::new(),
+            active_dns_target_port: dae_dns::ACTIVE_DNS_DEFAULT_TARGET_PORT,
         }
     }
 }

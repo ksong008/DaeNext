@@ -327,9 +327,9 @@ fn fd_identity(fd: i32) -> Value {
 }
 
 fn dns_cache_migration_guard() -> Value {
-    let old_dns_config = "bind=tcp+udp://127.0.0.1:53;upstream=udp://1.1.1.1:53";
+    let old_dns_config = "bind=tcp+udp://127.0.0.1:53;upstream=udp://127.0.0.1:10530";
     let equal_new_dns_config = old_dns_config;
-    let changed_new_dns_config = "bind=tcp+udp://127.0.0.1:53;upstream=udp://9.9.9.9:53";
+    let changed_new_dns_config = "bind=tcp+udp://127.0.0.1:53;upstream=udp://127.0.0.1:10531";
     let snapshot = json!({
         "entries": [
             {

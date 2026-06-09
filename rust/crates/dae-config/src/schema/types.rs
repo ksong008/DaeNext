@@ -56,7 +56,7 @@ impl Default for Global {
             log_level: "info".to_owned(),
             tcp_check_url: split_csv("http://cp.cloudflare.com,1.1.1.1,2606:4700:4700::1111"),
             tcp_check_http_method: "HEAD".to_owned(),
-            udp_check_dns: split_csv("dns.google:53,8.8.8.8,2001:4860:4860::8888"),
+            udp_check_dns: split_csv("dns.google:53"),
             check_interval: parse_default_duration("30s"),
             check_tolerance: parse_default_duration("0"),
             udp_endpoint_pool_size: 4096,

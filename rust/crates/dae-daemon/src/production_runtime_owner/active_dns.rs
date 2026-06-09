@@ -9,8 +9,8 @@ mod model;
 mod probes;
 
 pub(super) use model::{
-    DEFAULT_ACTIVE_DNS_QNAME, DEFAULT_ACTIVE_DNS_TARGET_IP, DEFAULT_ACTIVE_DNS_TARGET_PORT,
-    DEFAULT_ACTIVE_DNS_UPSTREAM_IP, DEFAULT_ACTIVE_DNS_UPSTREAM_PORT,
+    DEFAULT_ACTIVE_DNS_QNAME, DEFAULT_ACTIVE_DNS_TARGET_PORT, DEFAULT_ACTIVE_DNS_UPSTREAM_IP,
+    DEFAULT_ACTIVE_DNS_UPSTREAM_PORT,
 };
 pub(super) use probes::run_active_dns_probe;
 
@@ -62,10 +62,10 @@ pub(super) fn push_active_dns_preflight_checks(
     }
     push_check(
         checks,
-        "active-dns-target-port-is-udp53",
-        options.active_dns_target_port == 53,
+        "active-dns-target-port-valid",
+        options.active_dns_target_port != 0,
         json!({"target_port": options.active_dns_target_port}),
-        "active DNS target port must be UDP/53",
+        "active DNS target port must be non-zero",
     );
     push_check(
         checks,

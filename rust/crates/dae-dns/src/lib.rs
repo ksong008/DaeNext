@@ -11,10 +11,10 @@ pub mod routing;
 pub mod upstream;
 
 pub use active::{
-    ACTIVE_DNS_DEFAULT_QNAME, ACTIVE_DNS_DEFAULT_TARGET_IP, ACTIVE_DNS_DEFAULT_TARGET_PORT,
-    ACTIVE_DNS_DEFAULT_UPSTREAM_IP, ACTIVE_DNS_DEFAULT_UPSTREAM_PORT, ACTIVE_DNS_QCLASS_IN,
-    ACTIVE_DNS_QTYPE_A, ActiveDnsCacheContract, active_dns_cache_contract,
-    active_dns_packet_question_matches, active_dns_question_matches, build_active_dns_a_response,
+    ACTIVE_DNS_DEFAULT_QNAME, ACTIVE_DNS_DEFAULT_TARGET_PORT, ACTIVE_DNS_DEFAULT_UPSTREAM_IP,
+    ACTIVE_DNS_DEFAULT_UPSTREAM_PORT, ACTIVE_DNS_QCLASS_IN, ACTIVE_DNS_QTYPE_A,
+    ActiveDnsCacheContract, active_dns_cache_contract, active_dns_packet_question_matches,
+    active_dns_question_matches, build_active_dns_a_response,
 };
 pub use cache::{DnsCacheEntry, DnsCacheStats, DnsCacheStore, effective_deadline_from_ttl};
 pub use cache_key::{

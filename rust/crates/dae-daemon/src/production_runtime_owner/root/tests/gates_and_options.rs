@@ -364,18 +364,35 @@ pub(super) fn production_runtime_active_dns_requires_active_udp() {
     assert!(err.contains("--execute-production-runtime-active-udp"));
 }
 
+const CONFIGURED_ACTIVE_DNS_TEST_PORT: u16 = 8053;
+
 #[test]
-pub(super) fn production_runtime_active_dns_requires_udp53_target() {
+pub(super) fn production_runtime_active_dns_requires_nonzero_target_port() {
     let root = std::env::temp_dir().join(format!(
-        "dae-daemon-production-runtime-active-dns-non53-{}",
+        "dae-daemon-production-runtime-active-dns-zero-port-{}",
         std::process::id()
     ));
     let options = ProductionRuntimeOwnerOptions {
-        active_dns_target_port: 5353,
+        active_dns_target_port: 0,
         ..ProductionRuntimeOwnerOptions::default()
     };
     let err = production_runtime_owner_report(&root, &options).unwrap_err();
-    assert!(err.contains("UDP/53"));
+    assert!(err.contains("target port must be non-zero"));
+}
+
+#[test]
+pub(super) fn production_runtime_active_dns_accepts_configured_target_port() {
+    let options = ProductionRuntimeOwnerOptions {
+        execute: true,
+        ack_root_gate: true,
+        execute_active_tcp: true,
+        execute_active_udp: true,
+        execute_active_dns: true,
+        active_dns_target_ip: std::net::Ipv4Addr::LOCALHOST.to_string(),
+        active_dns_target_port: CONFIGURED_ACTIVE_DNS_TEST_PORT,
+        ..ProductionRuntimeOwnerOptions::default()
+    };
+    validate_options(&options).unwrap();
 }
 
 #[test]

@@ -154,14 +154,14 @@ pub(in crate::production_runtime_owner) fn run_active_dns_probe(
             "iterations": iterations,
             "elapsed_ns": elapsed.as_nanos(),
             "ns_per_query": elapsed.as_nanos() as f64 / iterations as f64,
-            "scope": "daemon-owned active DNS UDP/53 tproxy plus upstream miss, restored cache hits, domain routing owner, and sendPkt-style reply benchmark",
+            "scope": "daemon-owned active DNS configured-target tproxy plus upstream miss, restored cache hits, domain routing owner, and sendPkt-style reply benchmark",
             "go_matched_default_daemon_baseline_recorded": false,
         })
     } else {
         json!({
             "status": "fail",
             "iterations": iterations,
-            "reason": "daemon-owned active DNS UDP/53 smoke failed",
+            "reason": "daemon-owned active DNS configured-target smoke failed",
         })
     };
     ActiveDnsEvidence {

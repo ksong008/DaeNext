@@ -81,7 +81,7 @@ impl Default for ProductionRuntimeOwnerOptions {
             active_udp_target_port: DEFAULT_ACTIVE_UDP_TARGET_PORT,
             active_udp_benchmark_iters: 5,
             execute_active_dns: false,
-            active_dns_target_ip: DEFAULT_ACTIVE_DNS_TARGET_IP.to_owned(),
+            active_dns_target_ip: String::new(),
             active_dns_target_port: DEFAULT_ACTIVE_DNS_TARGET_PORT,
             active_dns_upstream_ip: DEFAULT_ACTIVE_DNS_UPSTREAM_IP.to_owned(),
             active_dns_upstream_port: DEFAULT_ACTIVE_DNS_UPSTREAM_PORT,

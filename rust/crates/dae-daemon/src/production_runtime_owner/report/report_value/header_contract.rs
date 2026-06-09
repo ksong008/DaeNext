@@ -92,7 +92,7 @@ pub(crate) fn insert_header_and_contract(
                 "upstream_port": context.options.active_dns_upstream_port,
                 "qname": context.options.active_dns_qname,
                 "benchmark_iters": context.options.active_dns_benchmark_iters,
-                "scope": "active DNS UDP/53 tproxy path with upstream miss, restored cache hit, domain routing owner migration, SO_MARK, and sendPkt-style transparent reply",
+                "scope": "active DNS configured-target tproxy path with upstream miss, restored cache hit, domain routing owner migration, SO_MARK, and sendPkt-style transparent reply",
             },
             "reload_runtime": {
                 "enabled": context.options.execute_reload_runtime_parity,

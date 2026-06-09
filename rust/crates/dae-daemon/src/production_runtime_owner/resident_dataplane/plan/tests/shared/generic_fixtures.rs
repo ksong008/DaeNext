@@ -51,11 +51,11 @@ pub(crate) fn fixture_secret() -> String {
 }
 
 pub(crate) fn fixture_pin_sha256() -> String {
-    [1_u16, 2, 3]
-        .into_iter()
-        .map(|offset| format!("{:02X}", 160 + offset))
-        .collect::<Vec<_>>()
-        .join("-")
+    // Resident Hysteria2 live admission verifies raw certificate SHA256 as
+    // normalized hex, not the base64 pin shape some clients display.
+    (0_u8..32)
+        .map(|offset| format!("{:02x}", 0xa0_u8.wrapping_add(offset)))
+        .collect::<String>()
 }
 
 pub(crate) fn socks5_fixture_url(host: &str, port: u16) -> String {

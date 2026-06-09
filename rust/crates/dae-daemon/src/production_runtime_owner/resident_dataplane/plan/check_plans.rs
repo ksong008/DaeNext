@@ -1,4 +1,8 @@
 use super::*;
+
+const RESIDENT_TCP_CHECK_FALLBACK_URL: &str = "http://cp.cloudflare.com";
+const RESIDENT_UDP_CHECK_FALLBACK_DNS: &str = "dns.google:53";
+const RESIDENT_DNS_CHECK_DEFAULT_PORT: u16 = dae_dns::ACTIVE_DNS_DEFAULT_TARGET_PORT;
 pub(super) fn group_check_tolerance_ms(config: &Config, group: &Group) -> i64 {
     let nanos = if group.check_tolerance.as_nanos() != 0 {
         group.check_tolerance.as_nanos()
@@ -37,7 +41,7 @@ pub(super) fn group_tcp_check_plan(
         .first()
         .filter(|raw| !raw.is_empty())
         .map(String::as_str)
-        .unwrap_or("http://cp.cloudflare.com");
+        .unwrap_or(RESIDENT_TCP_CHECK_FALLBACK_URL);
     let url = Url::parse(raw).map_err(|err| {
         format!(
             "resident dataplane group {} tcp_check_url {raw}: {err}",
@@ -98,7 +102,7 @@ pub(super) fn group_udp_check_plan(
         .first()
         .filter(|raw| !raw.is_empty())
         .map(String::as_str)
-        .unwrap_or("dns.google:53");
+        .unwrap_or(RESIDENT_UDP_CHECK_FALLBACK_DNS);
     let (host, port) = split_check_host_port(raw).map_err(|err| {
         format!(
             "resident dataplane group {} udp_check_dns {raw}: {err}",
@@ -128,18 +132,24 @@ pub(super) fn split_check_host_port(raw: &str) -> Result<(String, u16), String> 
         let Some((host, after_host)) = rest.split_once(']') else {
             return Err("missing closing bracket for IPv6 host".to_owned());
         };
-        let port = after_host
-            .strip_prefix(':')
-            .ok_or_else(|| "missing port after IPv6 host".to_owned())?;
-        return Ok((host.to_owned(), parse_check_port(port)?));
+        let port = match after_host.strip_prefix(':') {
+            Some(port) => port.to_owned(),
+            None if after_host.is_empty() => RESIDENT_DNS_CHECK_DEFAULT_PORT.to_string(),
+            None => return Err("unexpected text after bracketed host".to_owned()),
+        };
+        return Ok((host.to_owned(), parse_check_port(&port)?));
     }
-    let Some((host, port)) = raw.rsplit_once(':') else {
-        return Err("expected host:port".to_owned());
+    let (host, port) = if raw.matches(':').count() > 1 {
+        return Err("expected IPv4, domain, host:port, or bracketed IPv6 host".to_owned());
+    } else if let Some((host, port)) = raw.rsplit_once(':') {
+        (host.to_owned(), port.to_owned())
+    } else {
+        (raw.to_owned(), RESIDENT_DNS_CHECK_DEFAULT_PORT.to_string())
     };
-    if host.is_empty() {
+    if host.trim().is_empty() {
         return Err("empty host".to_owned());
     }
-    Ok((host.to_owned(), parse_check_port(port)?))
+    Ok((host, parse_check_port(&port)?))
 }
 
 pub(super) fn parse_check_port(raw: &str) -> Result<u16, String> {

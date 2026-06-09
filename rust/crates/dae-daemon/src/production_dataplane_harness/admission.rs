@@ -108,6 +108,8 @@ pub(super) fn owner_options_for_admission(
             owner_options.execute_active_tcp = true;
             owner_options.execute_active_udp = true;
             owner_options.execute_active_dns = true;
+            owner_options.active_dns_target_ip = options.active_dns_target_ip.clone();
+            owner_options.active_dns_target_port = options.active_dns_target_port;
         }
         _ => {}
     }

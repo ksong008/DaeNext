@@ -208,3 +208,73 @@ pub(super) fn resident_dataplane_group_udp_check_uses_group_override_ipv4() {
         "connectivitycheck.gstatic.com."
     );
 }
+
+#[test]
+pub(super) fn resident_dataplane_group_udp_check_accepts_single_ip_default_port() {
+    let node_a = socks5_endpoint_fixture_url(FixtureEndpoint::Primary);
+    let check_ip = Ipv4Addr::LOCALHOST;
+    let config_text = r#"
+        global {
+        lan_interface: daerust0
+        udp_check_dns: '__CHECK_IP__'
+        }
+        node {
+        node_a: '__NODE_A__'
+        }
+        group {
+        proxy {
+            filter: name(node_a)
+            policy: min
+        }
+        }
+        routing {
+        l4proto(udp) -> proxy
+        fallback: direct
+        }
+        "#
+    .replace("__CHECK_IP__", &check_ip.to_string())
+    .replace("__NODE_A__", &node_a);
+    let config = parse_config(&config_text);
+    let plan = build_resident_dataplane_plan(&config).unwrap();
+    let probes = plan.default_proxy_group().unwrap().probe_candidates();
+    assert_eq!(
+        probes[0].udp_check.target.literal_addr(),
+        Some(SocketAddrV4::new(check_ip, 53))
+    );
+}
+
+#[test]
+pub(super) fn resident_dataplane_group_udp_check_accepts_single_domain_default_port() {
+    let node_a = socks5_endpoint_fixture_url(FixtureEndpoint::Primary);
+    let check_host = fixture_host(FixtureEndpoint::Authority);
+    let config_text = r#"
+        global {
+        lan_interface: daerust0
+        udp_check_dns: '__CHECK_HOST__'
+        }
+        node {
+        node_a: '__NODE_A__'
+        }
+        group {
+        proxy {
+            filter: name(node_a)
+            policy: min
+        }
+        }
+        routing {
+        l4proto(udp) -> proxy
+        fallback: direct
+        }
+        "#
+    .replace("__CHECK_HOST__", &check_host)
+    .replace("__NODE_A__", &node_a);
+    let config = parse_config(&config_text);
+    let plan = build_resident_dataplane_plan(&config).unwrap();
+    let probes = plan.default_proxy_group().unwrap().probe_candidates();
+    assert_eq!(probes[0].udp_check.host, check_host);
+    assert_eq!(
+        probes[0].udp_check.target.authority(),
+        format!("{check_host}:53")
+    );
+    assert_eq!(probes[0].udp_check.target.literal_addr(), None);
+}
