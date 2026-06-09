@@ -6,15 +6,11 @@ use dae_ebpf_support::{BpfDomainRouting, DomainRoutingMapEntry, apply_domain_rou
 
 mod types;
 pub use self::types::*;
-mod snapshot;
-use self::snapshot::*;
-mod dns_event;
-use self::dns_event::*;
-mod tracker;
-use self::tracker::*;
-mod owner;
-use self::owner::*;
 mod bitmaps;
+mod dns_event;
+mod owner;
+mod snapshot;
+mod tracker;
 use self::bitmaps::*;
 mod map_apply;
 use self::map_apply::*;

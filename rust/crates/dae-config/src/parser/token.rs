@@ -1,4 +1,3 @@
-use super::*;
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(super) enum TokenKind {
     Literal(String),

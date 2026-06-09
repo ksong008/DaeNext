@@ -22,7 +22,6 @@ const AES_BLOCK_LEN: usize = 16;
 mod types;
 pub use self::types::*;
 mod codec;
-use self::codec::*;
 mod public_api;
 pub use self::public_api::*;
 mod separate_header;

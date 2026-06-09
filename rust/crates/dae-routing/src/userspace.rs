@@ -15,11 +15,9 @@ const IP_VERSION_6: u8 = 2;
 
 mod model;
 pub use self::model::*;
-mod matcher;
-use self::matcher::*;
-mod match_set;
-use self::match_set::*;
 mod fixture;
+mod match_set;
+mod matcher;
 use self::fixture::*;
 #[cfg(test)]
 mod tests;
