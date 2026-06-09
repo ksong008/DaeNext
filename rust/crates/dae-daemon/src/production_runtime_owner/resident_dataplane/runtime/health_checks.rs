@@ -17,13 +17,29 @@ pub(crate) fn resident_group_health_check_loop(
             "candidate_count": group.candidate_count(),
             "admitted_candidate_count": group.admitted_candidate_count(),
             "check_interval": format!("{interval:?}"),
-            "probe": "proxy-tcp-and-tokio-dns-udp-check",
+            "probe": "tokio-proxy-tcp-and-dns-udp-check",
+            "tcp_probe_executor": "tokio-proxy-tcp-probe",
             "udp_probe_executor": "tokio-proxy-packet-dns-probe",
             "tcp_check_target": candidates.first().map(|candidate| candidate.tcp_check.target.clone()),
             "udp_check_target": candidates.first().map(|candidate| candidate.udp_check.target.to_string()),
         }),
     );
-    run_resident_group_health_checks(&group, &candidates);
+    let runtime = match tokio::runtime::Builder::new_current_thread()
+        .enable_io()
+        .enable_time()
+        .build()
+    {
+        Ok(runtime) => runtime,
+        Err(err) => {
+            append_event(
+                &event_file,
+                &event_lock,
+                json!({"event": "resident_health_checker_runtime_failed", "error": err.to_string()}),
+            );
+            return;
+        }
+    };
+    runtime.block_on(run_resident_group_health_checks_async(&group, &candidates));
     loop {
         if interval.is_zero() || sleep_until_stopped(&stop, interval) {
             return;
@@ -31,21 +47,19 @@ pub(crate) fn resident_group_health_check_loop(
         if stop.load(Ordering::Relaxed) {
             return;
         }
-        run_resident_group_health_checks(&group, &candidates);
+        runtime.block_on(run_resident_group_health_checks_async(&group, &candidates));
     }
 }
 
-pub(crate) fn run_resident_group_health_checks(
+pub(crate) async fn run_resident_group_health_checks_async(
     group: &plan::ResidentProxyGroupPlan,
     candidates: &[plan::ResidentProxyProbePlan],
 ) {
-    let udp_probe_runtime = tokio::runtime::Builder::new_current_thread()
-        .enable_io()
-        .enable_time()
-        .build();
     for candidate in candidates {
         let checked_at = unix_now_secs();
-        let latency_ms = probe_resident_candidate_tcp_endpoint(candidate).ok();
+        let latency_ms = probe_resident_candidate_tcp_endpoint_async(candidate)
+            .await
+            .ok();
         let _ = group.record_check_result(
             &candidate.node_tag,
             NetworkType::TCP4,
@@ -53,10 +67,8 @@ pub(crate) fn run_resident_group_health_checks(
             checked_at,
         );
         let udp_checked_at = unix_now_secs();
-        let udp_latency_ms = udp_probe_runtime
-            .as_ref()
-            .map_err(|err| format!("start Tokio DNS UDP probe runtime: {err}"))
-            .and_then(|runtime| probe_resident_candidate_udp_endpoint(candidate, runtime))
+        let udp_latency_ms = probe_resident_candidate_udp_endpoint_async(candidate)
+            .await
             .ok();
         let _ = group.record_check_result(
             &candidate.node_tag,
@@ -67,13 +79,28 @@ pub(crate) fn run_resident_group_health_checks(
     }
 }
 
-pub(crate) fn probe_resident_candidate_tcp_latency_snapshot(
-    groups: &[Arc<plan::ResidentProxyGroupPlan>],
+#[cfg(test)]
+pub(crate) fn run_resident_group_health_checks(
+    group: &plan::ResidentProxyGroupPlan,
+    candidates: &[plan::ResidentProxyProbePlan],
+) {
+    let Ok(runtime) = tokio::runtime::Builder::new_current_thread()
+        .enable_io()
+        .enable_time()
+        .build()
+    else {
+        return;
+    };
+    runtime.block_on(run_resident_group_health_checks_async(group, candidates));
+}
+
+pub(crate) async fn probe_resident_candidate_tcp_latency_snapshot(
+    groups: Vec<Arc<plan::ResidentProxyGroupPlan>>,
     candidate: plan::ResidentProxyProbePlan,
     reload_generation: u64,
 ) -> Value {
     let checked_at = unix_now_secs();
-    let probe = probe_resident_candidate_tcp_endpoint(&candidate);
+    let probe = probe_resident_candidate_tcp_endpoint_async(&candidate).await;
     let latency_ms = probe.as_ref().ok().copied();
     let link = candidate.link.clone();
     for group in groups {
@@ -266,11 +293,11 @@ pub(crate) fn hex_encode(bytes: &[u8]) -> String {
     out
 }
 
-pub(crate) fn probe_resident_candidate_tcp_endpoint(
+pub(crate) async fn probe_resident_candidate_tcp_endpoint_async(
     candidate: &plan::ResidentProxyProbePlan,
 ) -> Result<i64, String> {
     let started = Instant::now();
-    probe_resident_proxy_tcp(
+    probe_resident_proxy_tcp_async(
         &candidate.proxy,
         &candidate.tcp_check.scheme,
         &candidate.tcp_check.target,
@@ -278,20 +305,21 @@ pub(crate) fn probe_resident_candidate_tcp_endpoint(
         &candidate.tcp_check.path,
         &candidate.tcp_check.method,
         Duration::from_secs(4),
-    )?;
+    )
+    .await?;
     Ok(elapsed_millis(started.elapsed()))
 }
 
-pub(crate) fn probe_resident_candidate_udp_endpoint(
+pub(crate) async fn probe_resident_candidate_udp_endpoint_async(
     candidate: &plan::ResidentProxyProbePlan,
-    runtime: &tokio::runtime::Runtime,
 ) -> Result<i64, String> {
     let started = Instant::now();
-    runtime.block_on(probe_resident_proxy_dns_udp_async(
+    probe_resident_proxy_dns_udp_async(
         &candidate.proxy,
         candidate.udp_check.target,
         &candidate.udp_check.lookup_host,
-    ))?;
+    )
+    .await?;
     Ok(elapsed_millis(started.elapsed()))
 }
 

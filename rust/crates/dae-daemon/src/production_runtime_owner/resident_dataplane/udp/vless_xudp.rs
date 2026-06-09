@@ -1,9 +1,6 @@
 use super::*;
-pub(super) fn flush_tls_writes_for_udp(client: &mut VlessTlsClient) -> Result<(), String> {
-    let stop = AtomicBool::new(false);
-    super::super::client::flush_tls_writes(client, &stop)
-}
 
+#[cfg(test)]
 pub(super) fn build_vless_udp_request(
     proxy: &ResidentProxyPlan,
     original_dst: SocketAddrV4,

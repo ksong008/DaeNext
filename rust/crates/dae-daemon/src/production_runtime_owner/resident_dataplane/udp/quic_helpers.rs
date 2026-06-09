@@ -1,23 +1,4 @@
 use super::*;
-pub(super) fn run_quic_udp_exchange<F>(label: &str, future: F) -> Result<UdpExchangeResult, String>
-where
-    F: std::future::Future<Output = Result<UdpExchangeResult, String>>,
-{
-    let runtime = runtime::Builder::new_current_thread()
-        .enable_io()
-        .enable_time()
-        .build()
-        .map_err(|err| format!("build {label} runtime: {err}"))?;
-    runtime.block_on(async {
-        time::timeout(
-            RESIDENT_CONNECT_TIMEOUT + RESIDENT_UDP_RESPONSE_TIMEOUT,
-            future,
-        )
-        .await
-        .map_err(|_| format!("{label} timeout"))?
-    })
-}
-
 #[allow(dead_code)]
 pub(super) struct Hysteria2UdpMessage {
     pub(super) session_id: u32,
@@ -199,6 +180,38 @@ pub(super) fn build_juicity_stream_packet_request(
     out.extend_from_slice(&metadata);
     out.extend_from_slice(frame);
     Ok(out)
+}
+
+pub(super) async fn read_juicity_stream_packet_response(
+    recv: &mut quinn::RecvStream,
+) -> Result<Vec<u8>, String> {
+    let mut response = Vec::new();
+    let mut buf = [0_u8; 4096];
+    loop {
+        if let Ok(frame) = decode_stream_packet_frame(&response) {
+            return Ok(frame.encoded);
+        }
+        if response.len() > 64 * 1024 {
+            return Err(format!(
+                "Juicity UDP stream response too large: {} bytes",
+                response.len()
+            ));
+        }
+        match recv
+            .read(&mut buf)
+            .await
+            .map_err(|err| format!("read Juicity UDP stream response: {err}"))?
+        {
+            Some(0) => {}
+            Some(read) => response.extend_from_slice(&buf[..read]),
+            None => {
+                return Err(
+                    "Juicity UDP stream closed before a complete packet frame was decoded"
+                        .to_owned(),
+                );
+            }
+        }
+    }
 }
 
 pub(super) fn append_quic_varint(out: &mut Vec<u8>, value: u64) -> Result<(), String> {

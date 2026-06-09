@@ -67,7 +67,7 @@ use dae_outbound::{
 };
 use dae_routing::{Query, RoutingMatcher};
 use dae_sniffing::{SniffingError, sniff_tcp};
-use rustls::{ClientConfig, ClientConnection, RootCertStore, pki_types::ServerName};
+use rustls::{ClientConfig, RootCertStore, pki_types::ServerName};
 use serde_json::{Value, json};
 
 use super::client::{

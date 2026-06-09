@@ -15,41 +15,6 @@ pub(super) fn send_udp_reply(
     Ok(())
 }
 
-pub(super) fn read_vless_udp_response(
-    client: &mut VlessTlsClient,
-    flow: &str,
-    user_uuid: [u8; 16],
-) -> Result<Vec<u8>, String> {
-    let started = Instant::now();
-    let mut plaintext = Vec::new();
-    let mut buf = [0_u8; 2048];
-    loop {
-        if let Some(payload) = parse_vless_udp_response(&plaintext, flow, user_uuid)? {
-            return Ok(payload);
-        }
-        if started.elapsed() > RESIDENT_UDP_RESPONSE_TIMEOUT {
-            return Err("VLESS UDP response timeout".to_owned());
-        }
-        let _ = drive_tls_io_blocking(client);
-        loop {
-            match client.read_plain(&mut buf) {
-                Ok(0) => break,
-                Ok(read) => plaintext.extend_from_slice(&buf[..read]),
-                Err(err)
-                    if matches!(
-                        err.kind(),
-                        ErrorKind::WouldBlock | ErrorKind::TimedOut | ErrorKind::Interrupted
-                    ) =>
-                {
-                    break;
-                }
-                Err(err) => return Err(format!("read VLESS UDP plaintext: {err}")),
-            }
-        }
-        thread::sleep(RESIDENT_IDLE_SLEEP);
-    }
-}
-
 pub(super) fn parse_vless_udp_response(
     input: &[u8],
     flow: &str,

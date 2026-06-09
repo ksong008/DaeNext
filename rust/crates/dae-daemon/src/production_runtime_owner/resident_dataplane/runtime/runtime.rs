@@ -90,24 +90,50 @@ impl ResidentDataplaneRuntime {
             }
         }
 
+        let runtime = match tokio::runtime::Builder::new_current_thread()
+            .enable_io()
+            .enable_time()
+            .build()
+        {
+            Ok(runtime) => runtime,
+            Err(err) => {
+                let detail = format!("start Tokio manual latency probe runtime: {err}");
+                snapshots.extend(tasks.into_iter().map(|candidate| {
+                    manual_probe_unavailable_snapshot(
+                        &candidate.link,
+                        "native outbound probe runtime unavailable",
+                        &detail,
+                        checked_at,
+                        self.reload_generation,
+                    )
+                }));
+                return preferred_latency_snapshots(snapshots);
+            }
+        };
+
         for chunk in tasks.chunks(RESIDENT_MANUAL_LATENCY_PROBE_CONCURRENCY) {
             let reload_generation = self.reload_generation;
-            let mut chunk_snapshots = thread::scope(|scope| {
+            let groups = self.groups.clone();
+            let mut chunk_snapshots = runtime.block_on(async {
                 let mut handles = Vec::new();
                 for candidate in chunk.iter().cloned() {
-                    let groups = &self.groups;
-                    handles.push(scope.spawn(move || {
+                    let groups = groups.clone();
+                    handles.push(tokio::spawn(async move {
                         probe_resident_candidate_tcp_latency_snapshot(
                             groups,
                             candidate,
                             reload_generation,
                         )
+                        .await
                     }));
                 }
-                handles
-                    .into_iter()
-                    .filter_map(|handle| handle.join().ok())
-                    .collect::<Vec<_>>()
+                let mut values = Vec::new();
+                for handle in handles {
+                    if let Ok(value) = handle.await {
+                        values.push(value);
+                    }
+                }
+                values
             });
             snapshots.append(&mut chunk_snapshots);
         }

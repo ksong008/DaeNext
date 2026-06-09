@@ -1,5 +1,5 @@
 use super::*;
-pub(crate) fn probe_resident_proxy_tcp(
+pub(crate) async fn probe_resident_proxy_tcp_async(
     proxy: &ResidentProxyPlan,
     scheme: &str,
     target: &str,
@@ -8,25 +8,20 @@ pub(crate) fn probe_resident_proxy_tcp(
     method: &str,
     timeout: Duration,
 ) -> Result<(), String> {
-    let listener = TcpListener::bind(SocketAddrV4::new(Ipv4Addr::LOCALHOST, 0))
+    let listener = TokioTcpListener::bind(SocketAddrV4::new(Ipv4Addr::LOCALHOST, 0))
+        .await
         .map_err(|err| format!("bind resident TCP probe loopback listener: {err}"))?;
     let listen_addr = listener
         .local_addr()
         .map_err(|err| format!("read resident TCP probe listener address: {err}"))?;
-    let mut client = TcpStream::connect(listen_addr)
+    let client = time::timeout(timeout, TokioTcpStream::connect(listen_addr))
+        .await
+        .map_err(|_| "connect resident TCP probe loopback client: timeout".to_owned())?
         .map_err(|err| format!("connect resident TCP probe loopback client: {err}"))?;
-    client
-        .set_read_timeout(Some(timeout))
-        .map_err(|err| format!("set resident TCP probe read timeout: {err}"))?;
-    client
-        .set_write_timeout(Some(timeout))
-        .map_err(|err| format!("set resident TCP probe write timeout: {err}"))?;
-    let (accepted, peer) = listener
-        .accept()
+    let (accepted, peer) = time::timeout(timeout, listener.accept())
+        .await
+        .map_err(|_| "accept resident TCP probe loopback stream: timeout".to_owned())?
         .map_err(|err| format!("accept resident TCP probe loopback stream: {err}"))?;
-    accepted
-        .set_nonblocking(true)
-        .map_err(|err| format!("set resident TCP probe inbound nonblocking: {err}"))?;
 
     let selection = TcpProxySelection {
         route: TcpRouteSelection {
@@ -60,90 +55,89 @@ pub(crate) fn probe_resident_proxy_tcp(
     let handler_stop = Arc::clone(&stop);
     let handler_metrics = Arc::clone(&metrics);
     let original_dst = SocketAddrV4::new(Ipv4Addr::LOCALHOST, 0);
-    let handle = thread::Builder::new()
-        .name("dae-resident-tcp-probe".to_owned())
-        .spawn(move || {
-            let runtime = runtime::Builder::new_current_thread()
-                .enable_io()
-                .enable_time()
-                .build()
-                .map_err(|err| format!("build resident TCP probe runtime: {err}"))?;
-            runtime.block_on(async move {
-                let mut inbound = TokioTcpStream::from_std(accepted)
-                    .map_err(|err| format!("adopt resident TCP probe inbound stream: {err}"))?;
-                if matches!(
-                    selection.proxy.handler,
-                    ResidentProxyProtocolPlan::VlessVisionTcpTls { .. }
-                        | ResidentProxyProtocolPlan::VlessMuxTcpTls { .. }
-                ) {
-                    handle_proxy_tcp_connection_async(
-                        &mut inbound,
-                        peer,
-                        original_dst,
-                        selection,
-                        handler_stop,
-                        &sniff,
-                        &handler_metrics,
-                    )
-                    .await
-                } else if matches!(
-                    selection.proxy.handler,
-                    ResidentProxyProtocolPlan::TrojanTcpTls { .. }
-                        | ResidentProxyProtocolPlan::TrojanInnerShadowsocksTcpTls { .. }
-                        | ResidentProxyProtocolPlan::AnyTlsTcpTls { .. }
-                ) {
-                    handle_frame_tls_tcp_connection_async(
-                        &mut inbound,
-                        peer,
-                        original_dst,
-                        selection,
-                        handler_stop,
-                        &sniff,
-                        &handler_metrics,
-                    )
-                    .await
-                } else if matches!(
-                    selection.proxy.handler,
-                    ResidentProxyProtocolPlan::Hysteria2QuicTcp { .. }
-                        | ResidentProxyProtocolPlan::TuicQuicTcp { .. }
-                        | ResidentProxyProtocolPlan::JuicityQuicTcp { .. }
-                ) {
-                    handle_quic_tcp_connection_async(
-                        &mut inbound,
-                        peer,
-                        original_dst,
-                        selection,
-                        handler_stop,
-                        &sniff,
-                        &handler_metrics,
-                    )
-                    .await
-                } else {
-                    handle_resident_proxy_tcp_connection_async(
-                        inbound,
-                        peer,
-                        original_dst,
-                        selection,
-                        handler_stop,
-                        sniff,
-                        handler_metrics,
-                    )
-                    .await
-                }
-            })
-        })
-        .map_err(|err| format!("spawn resident TCP probe handler: {err}"))?;
+    let mut handle = tokio::spawn(async move {
+        let mut inbound = accepted;
+        if matches!(
+            selection.proxy.handler,
+            ResidentProxyProtocolPlan::VlessVisionTcpTls { .. }
+                | ResidentProxyProtocolPlan::VlessMuxTcpTls { .. }
+        ) {
+            handle_proxy_tcp_connection_async(
+                &mut inbound,
+                peer,
+                original_dst,
+                selection,
+                handler_stop,
+                &sniff,
+                &handler_metrics,
+            )
+            .await
+        } else if matches!(
+            selection.proxy.handler,
+            ResidentProxyProtocolPlan::TrojanTcpTls { .. }
+                | ResidentProxyProtocolPlan::TrojanInnerShadowsocksTcpTls { .. }
+                | ResidentProxyProtocolPlan::AnyTlsTcpTls { .. }
+        ) {
+            handle_frame_tls_tcp_connection_async(
+                &mut inbound,
+                peer,
+                original_dst,
+                selection,
+                handler_stop,
+                &sniff,
+                &handler_metrics,
+            )
+            .await
+        } else if matches!(
+            selection.proxy.handler,
+            ResidentProxyProtocolPlan::Hysteria2QuicTcp { .. }
+                | ResidentProxyProtocolPlan::TuicQuicTcp { .. }
+                | ResidentProxyProtocolPlan::JuicityQuicTcp { .. }
+        ) {
+            handle_quic_tcp_connection_async(
+                &mut inbound,
+                peer,
+                original_dst,
+                selection,
+                handler_stop,
+                &sniff,
+                &handler_metrics,
+            )
+            .await
+        } else {
+            handle_resident_proxy_tcp_connection_async(
+                inbound,
+                peer,
+                original_dst,
+                selection,
+                handler_stop,
+                sniff,
+                handler_metrics,
+            )
+            .await
+        }
+    });
 
     let response_result = match scheme {
-        "http" => read_resident_tcp_probe_response(&mut client, path),
-        "https" => read_resident_tcp_probe_https_response(&mut client, host, path, method),
+        "http" => {
+            let mut client = client;
+            let result = read_resident_tcp_probe_response_async(&mut client, path, timeout).await;
+            let _ = client.shutdown().await;
+            result
+        }
+        "https" => {
+            read_resident_tcp_probe_https_response_async(client, host, path, method, timeout).await
+        }
         other => Err(format!("resident TCP probe unsupported scheme: {other}")),
     };
     stop.store(true, Ordering::Relaxed);
-    let _ = client.shutdown(Shutdown::Both);
-    let handler_result = handle
-        .join()
-        .map_err(|_| "join resident TCP probe handler: panicked".to_owned())?;
+    let handler_result = match time::timeout(timeout, &mut handle).await {
+        Ok(joined) => joined.map_err(|err| format!("join resident TCP probe handler: {err}"))?,
+        Err(_) => {
+            handle.abort();
+            Err("join resident TCP probe handler: timeout".to_owned())
+        }
+    };
     match response_result {
         Ok(()) => Ok(()),
         Err(response_err) => match handler_result {
@@ -165,24 +159,31 @@ pub(crate) fn resident_tcp_probe_http_request(method: &str, path: &str, host: &s
     .into_bytes()
 }
 
-pub(crate) fn read_resident_tcp_probe_https_response(
-    stream: &mut TcpStream,
+pub(crate) async fn read_resident_tcp_probe_https_response_async(
+    stream: TokioTcpStream,
     host: &str,
     path: &str,
     method: &str,
+    timeout: Duration,
 ) -> Result<(), String> {
     let config = resident_tcp_probe_tls_config();
     let server_name = ServerName::try_from(host.to_owned())
         .map_err(|err| format!("resident TCP probe invalid HTTPS server name {host}: {err}"))?;
-    let conn = ClientConnection::new(config, server_name)
+    let connector = tokio_rustls::TlsConnector::from(config);
+    let mut tls = time::timeout(timeout, connector.connect(server_name, stream))
+        .await
+        .map_err(|_| "resident TCP probe HTTPS handshake timeout".to_owned())?
         .map_err(|err| format!("resident TCP probe create HTTPS client: {err}"))?;
-    let mut tls = rustls::StreamOwned::new(conn, stream);
     let request = resident_tcp_probe_http_request(method, path, host);
-    tls.write_all(&request)
+    time::timeout(timeout, tls.write_all(&request))
+        .await
+        .map_err(|_| "write resident HTTPS probe request: timeout".to_owned())?
         .map_err(|err| format!("write resident HTTPS probe request: {err}"))?;
-    tls.flush()
+    time::timeout(timeout, tls.flush())
+        .await
+        .map_err(|_| "flush resident HTTPS probe request: timeout".to_owned())?
         .map_err(|err| format!("flush resident HTTPS probe request: {err}"))?;
-    read_resident_tcp_probe_response(&mut tls, path)
+    read_resident_tcp_probe_response_async(&mut tls, path, timeout).await
 }
 
 pub(crate) fn resident_tcp_probe_tls_config() -> Arc<ClientConfig> {
@@ -198,15 +199,17 @@ pub(crate) fn resident_tcp_probe_tls_config() -> Arc<ClientConfig> {
     }))
 }
 
-pub(crate) fn read_resident_tcp_probe_response(
-    stream: &mut impl Read,
+pub(crate) async fn read_resident_tcp_probe_response_async(
+    stream: &mut (impl AsyncRead + Unpin),
     path: &str,
+    timeout: Duration,
 ) -> Result<(), String> {
     let mut response = Vec::new();
     let mut buf = [0_u8; 256];
     while response.len() < 8192 {
-        let read = stream
-            .read(&mut buf)
+        let read = time::timeout(timeout, stream.read(&mut buf))
+            .await
+            .map_err(|_| "read resident TCP probe response: timeout".to_owned())?
             .map_err(|err| format!("read resident TCP probe response: {err}"))?;
         if read == 0 {
             break;
