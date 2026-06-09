@@ -1,5 +1,5 @@
 use std::collections::BTreeMap;
-use std::net::{IpAddr, Ipv4Addr, SocketAddr, SocketAddrV4};
+use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
 use std::os::fd::AsRawFd;
 use std::sync::Arc;
 
@@ -47,12 +47,12 @@ struct ResidentDnsUpstream {
 #[derive(Clone, Debug)]
 struct ResidentDnsUpstreamTarget {
     authority: String,
-    literal_addr: Option<SocketAddrV4>,
-    resolved_addr: Arc<OnceCell<SocketAddrV4>>,
+    literal_addr: Option<SocketAddr>,
+    resolved_addr: Arc<OnceCell<SocketAddr>>,
 }
 
 impl ResidentDnsUpstreamTarget {
-    async fn resolve(&self) -> Result<SocketAddrV4, String> {
+    async fn resolve(&self) -> Result<SocketAddr, String> {
         if let Some(addr) = self.literal_addr {
             return Ok(addr);
         }
@@ -71,15 +71,12 @@ impl PartialEq for ResidentDnsUpstreamTarget {
 
 impl Eq for ResidentDnsUpstreamTarget {}
 
-async fn resolve_dns_upstream_async(authority: &str) -> Result<SocketAddrV4, String> {
+async fn resolve_dns_upstream_async(authority: &str) -> Result<SocketAddr, String> {
     tokio::net::lookup_host(authority)
         .await
         .map_err(|err| format!("resolve DNS upstream {authority}: {err}"))?
-        .find_map(|addr| match addr {
-            SocketAddr::V4(addr) => Some(addr),
-            SocketAddr::V6(_) => None,
-        })
-        .ok_or_else(|| format!("DNS upstream {authority} returned no IPv4 address"))
+        .next()
+        .ok_or_else(|| format!("DNS upstream {authority} returned no IP address"))
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -118,7 +115,7 @@ pub(super) fn build_resident_dns_plan(config: &Config) -> Result<ResidentDnsPlan
 
 pub(super) async fn handle_resident_dns_udp_async(
     plan: &ResidentDnsPlan,
-    original_dst: SocketAddrV4,
+    original_dst: SocketAddr,
     payload: &[u8],
 ) -> Result<Vec<u8>, String> {
     let request =
@@ -233,18 +230,7 @@ fn parse_dns_upstream_authority(authority: &str) -> Result<ResidentDnsUpstreamTa
     if authority.is_empty() {
         return Err("DNS upstream authority is empty".to_owned());
     }
-    let authority = if authority.rsplit_once(':').is_some() {
-        authority.to_owned()
-    } else {
-        format!("{authority}:53")
-    };
-    let literal_addr = match authority.parse::<SocketAddr>() {
-        Ok(SocketAddr::V4(addr)) => Some(addr),
-        Ok(SocketAddr::V6(_)) => {
-            return Err(format!("DNS upstream {authority} returned no IPv4 address"));
-        }
-        Err(_) => None,
-    };
+    let (authority, literal_addr) = dns_upstream_authority_with_default_port(authority)?;
     Ok(ResidentDnsUpstreamTarget {
         authority,
         literal_addr,
@@ -252,13 +238,61 @@ fn parse_dns_upstream_authority(authority: &str) -> Result<ResidentDnsUpstreamTa
     })
 }
 
+fn dns_upstream_authority_with_default_port(
+    authority: &str,
+) -> Result<(String, Option<SocketAddr>), String> {
+    if let Ok(addr) = authority.parse::<SocketAddr>() {
+        return Ok((addr.to_string(), Some(addr)));
+    }
+    if let Ok(ip) = authority.parse::<IpAddr>() {
+        let addr = SocketAddr::new(ip, 53);
+        return Ok((addr.to_string(), Some(addr)));
+    }
+    if let Some(rest) = authority.strip_prefix('[') {
+        let Some((host, tail)) = rest.split_once(']') else {
+            return Err(format!(
+                "DNS upstream {authority} has malformed IPv6 authority"
+            ));
+        };
+        let port = match tail.strip_prefix(':') {
+            Some(port) => port
+                .parse::<u16>()
+                .map_err(|err| format!("DNS upstream {authority} has invalid port: {err}"))?,
+            None if tail.is_empty() => 53,
+            None => {
+                return Err(format!(
+                    "DNS upstream {authority} has unexpected text after bracketed host"
+                ));
+            }
+        };
+        if let Ok(ip) = host.parse::<IpAddr>() {
+            let addr = SocketAddr::new(ip, port);
+            return Ok((addr.to_string(), Some(addr)));
+        }
+        return Ok((format!("[{host}]:{port}"), None));
+    }
+    if authority.matches(':').count() > 1 {
+        return Err(format!(
+            "DNS upstream {authority} is an IPv6 literal and must be bracketed when a port is supplied"
+        ));
+    }
+    if authority.rsplit_once(':').is_some() {
+        return Ok((authority.to_owned(), None));
+    }
+    Ok((format!("{authority}:53"), None))
+}
+
 async fn forward_dns_udp_async(
-    target: SocketAddrV4,
+    target: SocketAddr,
     payload: &[u8],
     mark: u32,
 ) -> Result<Vec<u8>, String> {
-    let socket = std::net::UdpSocket::bind(SocketAddr::new(IpAddr::V4(Ipv4Addr::UNSPECIFIED), 0))
-        .map_err(|err| format!("bind DNS UDP socket: {err}"))?;
+    let bind = match target {
+        SocketAddr::V4(_) => SocketAddr::new(IpAddr::V4(Ipv4Addr::UNSPECIFIED), 0),
+        SocketAddr::V6(_) => SocketAddr::new(IpAddr::V6(Ipv6Addr::UNSPECIFIED), 0),
+    };
+    let socket =
+        std::net::UdpSocket::bind(bind).map_err(|err| format!("bind DNS UDP socket: {err}"))?;
     if mark != 0 {
         set_socket_mark(socket.as_raw_fd(), mark)
             .map_err(|err| format!("set DNS UDP SO_MARK {mark}: {err}"))?;

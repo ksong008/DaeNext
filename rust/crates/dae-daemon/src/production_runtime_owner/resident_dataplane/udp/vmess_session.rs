@@ -60,7 +60,7 @@ impl VmessAeadUdpOverTcpSession {
     pub(super) async fn exchange(
         &mut self,
         proxy: &ResidentProxyPlan,
-        original_dst: SocketAddrV4,
+        original_dst: SocketAddr,
         payload: &[u8],
     ) -> Result<UdpExchangeResult, String> {
         let result = if self.underlay.is_some() {
@@ -77,7 +77,7 @@ impl VmessAeadUdpOverTcpSession {
     async fn exchange_first(
         &mut self,
         proxy: &ResidentProxyPlan,
-        original_dst: SocketAddrV4,
+        original_dst: SocketAddr,
         payload: &[u8],
     ) -> Result<UdpExchangeResult, String> {
         let start = vmess::aead_udp_over_tcp_client_session_start(

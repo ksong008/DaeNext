@@ -41,8 +41,9 @@ use active_tcp::{
 };
 use active_udp::{
     ActiveUdpEvidence, DEFAULT_ACTIVE_UDP_TARGET_IP, DEFAULT_ACTIVE_UDP_TARGET_PORT,
-    active_udp_loopback_target_present, add_active_udp_loopback_target,
-    delete_active_udp_loopback_target, push_active_udp_preflight_checks, run_active_udp_probe,
+    active_udp_loopback_target_cidr, active_udp_loopback_target_present,
+    add_active_udp_loopback_target, delete_active_udp_loopback_target,
+    push_active_udp_preflight_checks, run_active_udp_probe,
 };
 use command::{
     bpf_dae_snapshot, ensure_safe_run_root, path_string, runtime_resource_leftovers,

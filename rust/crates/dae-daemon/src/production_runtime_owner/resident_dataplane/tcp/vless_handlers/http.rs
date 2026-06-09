@@ -20,7 +20,7 @@ pub(crate) fn http_content_length(head: &[u8]) -> Result<usize, String> {
 pub(crate) async fn handle_vless_grpc_tcp_connection_async(
     inbound: &mut TokioTcpStream,
     peer: SocketAddr,
-    original_dst: SocketAddrV4,
+    original_dst: SocketAddr,
     selection: TcpProxySelection,
     stop: Arc<AtomicBool>,
     sniff: &TcpSniffReport,
@@ -106,7 +106,7 @@ pub(crate) async fn handle_vless_grpc_tcp_connection_async(
 pub(crate) async fn handle_vless_xhttp_h2_tcp_connection_async(
     inbound: &mut TokioTcpStream,
     peer: SocketAddr,
-    original_dst: SocketAddrV4,
+    original_dst: SocketAddr,
     selection: TcpProxySelection,
     stop: Arc<AtomicBool>,
     sniff: &TcpSniffReport,
@@ -212,7 +212,7 @@ pub(crate) async fn handle_vless_xhttp_h2_tcp_connection_async(
 pub(crate) async fn handle_resident_proxy_tcp_connection_async(
     mut inbound: TokioTcpStream,
     peer: SocketAddr,
-    original_dst: SocketAddrV4,
+    original_dst: SocketAddr,
     selection: TcpProxySelection,
     stop: Arc<AtomicBool>,
     sniff: TcpSniffReport,

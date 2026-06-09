@@ -2,7 +2,7 @@ use super::*;
 pub(super) async fn handle_direct_tcp_connection_async(
     inbound: &mut TokioTcpStream,
     peer: SocketAddr,
-    original_dst: SocketAddrV4,
+    original_dst: SocketAddr,
     selection: TcpDirectSelection,
     stop: Arc<AtomicBool>,
     sniff: &TcpSniffReport,
@@ -37,10 +37,10 @@ pub(super) async fn handle_direct_tcp_connection_async(
 
 pub(super) fn direct_tcp_finished_event(
     peer: SocketAddr,
-    original_dst: SocketAddrV4,
+    original_dst: SocketAddr,
     selection: &TcpDirectSelection,
     sniff: &TcpSniffReport,
-    direct_target: SocketAddrV4,
+    direct_target: SocketAddr,
     direct_report: &TcpDirectDialReport,
     stats: &DirectTcpRelayStats,
     execution: &'static str,
@@ -83,7 +83,17 @@ pub(super) fn append_tcp_route_log_fields(
     policy: &str,
     dialer: &str,
 ) {
-    event["network"] = json!("tcp4");
+    let network = event["original_dst"]
+        .as_str()
+        .map(|addr| {
+            if addr.starts_with('[') {
+                "tcp6"
+            } else {
+                "tcp4"
+            }
+        })
+        .unwrap_or("tcp");
+    event["network"] = json!(network);
     event["outbound"] = json!(outbound);
     event["policy"] = json!(policy);
     event["dialer"] = json!(dialer);
@@ -199,6 +209,15 @@ pub(super) fn ipv4_mapped_ip_bytes(addr: Ipv4Addr) -> BpfIpBytes {
     out[11] = 0xff;
     out[12..16].copy_from_slice(&addr.octets());
     BpfIpBytes { u6_addr8: out }
+}
+
+pub(super) fn ip_addr_bytes(addr: IpAddr) -> BpfIpBytes {
+    match addr {
+        IpAddr::V4(addr) => ipv4_mapped_ip_bytes(addr),
+        IpAddr::V6(addr) => BpfIpBytes {
+            u6_addr8: addr.octets(),
+        },
+    }
 }
 
 pub(super) fn bytes_of<T>(value: &T) -> &[u8] {

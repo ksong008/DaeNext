@@ -49,7 +49,7 @@ pub(in crate::production_runtime_owner) fn run_active_udp_probe(
     });
     thread::sleep(Duration::from_millis(100));
     let started = Instant::now();
-    let client = run_client_active_udp_probe(&target.to_string(), iterations);
+    let client = run_client_active_udp_probe(target, iterations);
     let accept = accept_handle.join().unwrap_or_else(
         |_| json!({"status": "fail", "error": "active UDP tproxy thread panicked"}),
     );

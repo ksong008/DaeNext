@@ -1,7 +1,7 @@
 use super::*;
 pub(crate) fn resident_live_adapter_udp_probe(
     config: &Config,
-    target: SocketAddrV4,
+    target: std::net::SocketAddr,
     payload: &[u8],
     config_path: Option<&Path>,
 ) -> Value {

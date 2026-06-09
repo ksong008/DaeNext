@@ -429,10 +429,11 @@ pub(super) fn execute_owner_smoke(
     if options.execute_active_udp
         && active_udp_loopback_target_present(&options.active_udp_target_ip)
     {
-        evidence.leftovers_after_cleanup.push(format!(
-            "loopback-target:{}/32",
-            options.active_udp_target_ip
-        ));
+        let target = active_udp_loopback_target_cidr(&options.active_udp_target_ip)
+            .unwrap_or_else(|_| options.active_udp_target_ip.clone());
+        evidence
+            .leftovers_after_cleanup
+            .push(format!("loopback-target:{target}"));
     }
     evidence.sys_fs_bpf_dae_mutated = before_pin_snapshot != after_pin_snapshot;
     evidence.owner_smoke_passed = ok

@@ -40,14 +40,14 @@ pub(crate) struct ResidentUdpCheckPlan {
 #[derive(Clone, Debug)]
 pub(crate) struct ResidentUdpCheckTarget {
     authority: String,
-    literal_addr: Option<SocketAddrV4>,
-    resolved_addr: Arc<OnceCell<SocketAddrV4>>,
+    literal_addr: Option<SocketAddr>,
+    resolved_addr: Arc<OnceCell<SocketAddr>>,
 }
 
 impl ResidentUdpCheckTarget {
     pub(in crate::production_runtime_owner::resident_dataplane) fn new(
         authority: String,
-        literal_addr: Option<SocketAddrV4>,
+        literal_addr: Option<SocketAddr>,
     ) -> Self {
         Self {
             authority,
@@ -57,7 +57,7 @@ impl ResidentUdpCheckTarget {
     }
 
     pub(in crate::production_runtime_owner::resident_dataplane) fn literal(
-        addr: SocketAddrV4,
+        addr: SocketAddr,
     ) -> Self {
         Self::new(addr.to_string(), Some(addr))
     }
@@ -69,13 +69,13 @@ impl ResidentUdpCheckTarget {
     #[cfg(test)]
     pub(in crate::production_runtime_owner::resident_dataplane) fn literal_addr(
         &self,
-    ) -> Option<SocketAddrV4> {
+    ) -> Option<SocketAddr> {
         self.literal_addr
     }
 
     pub(in crate::production_runtime_owner::resident_dataplane) async fn resolve(
         &self,
-    ) -> Result<SocketAddrV4, String> {
+    ) -> Result<SocketAddr, String> {
         if let Some(addr) = self.literal_addr {
             return Ok(addr);
         }
@@ -84,15 +84,9 @@ impl ResidentUdpCheckTarget {
                 tokio::net::lookup_host(self.authority.as_str())
                     .await
                     .map_err(|err| format!("resolve UDP health check {}: {err}", self.authority))?
-                    .find_map(|addr| match addr {
-                        SocketAddr::V4(addr) => Some(addr),
-                        SocketAddr::V6(_) => None,
-                    })
+                    .next()
                     .ok_or_else(|| {
-                        format!(
-                            "resolve UDP health check {}: no IPv4 address",
-                            self.authority
-                        )
+                        format!("resolve UDP health check {}: no IP address", self.authority)
                     })
             })
             .await
@@ -444,8 +438,10 @@ impl ResidentProxyGroupPlan {
     pub(in crate::production_runtime_owner::resident_dataplane) fn fixed_single_for_test(
         proxy: ResidentProxyPlan,
     ) -> Self {
-        let udp_check_addr =
-            SocketAddrV4::new(Ipv4Addr::LOCALHOST, dae_dns::ACTIVE_DNS_DEFAULT_TARGET_PORT);
+        let udp_check_addr = SocketAddr::new(
+            IpAddr::V4(std::net::Ipv4Addr::LOCALHOST),
+            dae_dns::ACTIVE_DNS_DEFAULT_TARGET_PORT,
+        );
         Self {
             group_name: proxy.group_name.clone(),
             group_policy: ResidentGroupPolicyPlan::Fixed { index: 0 },

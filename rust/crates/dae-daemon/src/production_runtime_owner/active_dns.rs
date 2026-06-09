@@ -1,7 +1,9 @@
+use std::net::{IpAddr, SocketAddr, UdpSocket};
+
 use serde_json::{Value, json};
 
 use super::ProductionRuntimeOwnerOptions;
-use super::command::{command_exists, push_check, tproxy_port_available};
+use super::command::{command_exists, push_check};
 
 mod client;
 mod dns_cache;
@@ -62,6 +64,20 @@ pub(super) fn push_active_dns_preflight_checks(
     }
     push_check(
         checks,
+        "active-dns-target-ip-valid",
+        options.active_dns_target_ip.parse::<IpAddr>().is_ok(),
+        json!({"target_ip": options.active_dns_target_ip}),
+        "active DNS target IP must be a valid IPv4 or IPv6 address",
+    );
+    push_check(
+        checks,
+        "active-dns-upstream-ip-valid",
+        options.active_dns_upstream_ip.parse::<IpAddr>().is_ok(),
+        json!({"upstream_ip": options.active_dns_upstream_ip}),
+        "active DNS upstream IP must be a valid IPv4 or IPv6 address",
+    );
+    push_check(
+        checks,
         "active-dns-target-port-valid",
         options.active_dns_target_port != 0,
         json!({"target_port": options.active_dns_target_port}),
@@ -77,9 +93,9 @@ pub(super) fn push_active_dns_preflight_checks(
     push_check(
         checks,
         "active-dns-upstream-port-free",
-        tproxy_port_available(options.active_dns_upstream_port),
+        active_dns_upstream_udp_port_available(options),
         json!({
-            "upstream": format!("{}:{}", options.active_dns_upstream_ip, options.active_dns_upstream_port),
+            "upstream": active_dns_socket_display(&options.active_dns_upstream_ip, options.active_dns_upstream_port),
         }),
         "active DNS local upstream port is already in use",
     );
@@ -90,4 +106,17 @@ pub(super) fn push_active_dns_preflight_checks(
         json!({"benchmark_iters": options.active_dns_benchmark_iters}),
         "active DNS benchmark iterations must be non-zero",
     );
+}
+
+fn active_dns_upstream_udp_port_available(options: &ProductionRuntimeOwnerOptions) -> bool {
+    let Ok(ip) = options.active_dns_upstream_ip.parse::<IpAddr>() else {
+        return false;
+    };
+    UdpSocket::bind(SocketAddr::new(ip, options.active_dns_upstream_port)).is_ok()
+}
+
+fn active_dns_socket_display(ip: &str, port: u16) -> String {
+    ip.parse::<IpAddr>()
+        .map(|ip| SocketAddr::new(ip, port).to_string())
+        .unwrap_or_else(|_| format!("{ip}:{port}"))
 }

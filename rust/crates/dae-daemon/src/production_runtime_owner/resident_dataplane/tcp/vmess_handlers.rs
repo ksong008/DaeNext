@@ -4,7 +4,7 @@ use super::*;
 pub(super) async fn handle_vmess_proxy_tcp_connection_async(
     inbound: &mut TokioTcpStream,
     peer: SocketAddr,
-    original_dst: SocketAddrV4,
+    original_dst: SocketAddr,
     selection: TcpProxySelection,
     stop: Arc<AtomicBool>,
     sniff: &TcpSniffReport,
@@ -54,7 +54,7 @@ pub(super) async fn handle_vmess_proxy_tcp_connection_async(
 pub(super) async fn handle_vmess_websocket_proxy_tcp_connection_async(
     inbound: &mut TokioTcpStream,
     peer: SocketAddr,
-    original_dst: SocketAddrV4,
+    original_dst: SocketAddr,
     selection: TcpProxySelection,
     stop: Arc<AtomicBool>,
     sniff: &TcpSniffReport,
@@ -120,7 +120,7 @@ pub(super) async fn handle_vmess_websocket_proxy_tcp_connection_async(
 pub(super) async fn handle_vmess_httpupgrade_proxy_tcp_connection_async(
     inbound: &mut TokioTcpStream,
     peer: SocketAddr,
-    original_dst: SocketAddrV4,
+    original_dst: SocketAddr,
     selection: TcpProxySelection,
     stop: Arc<AtomicBool>,
     sniff: &TcpSniffReport,
@@ -177,7 +177,7 @@ pub(super) async fn handle_vmess_httpupgrade_proxy_tcp_connection_async(
 pub(super) async fn handle_vmess_websocket_tls_proxy_tcp_connection_async(
     inbound: &mut TokioTcpStream,
     peer: SocketAddr,
-    original_dst: SocketAddrV4,
+    original_dst: SocketAddr,
     selection: TcpProxySelection,
     stop: Arc<AtomicBool>,
     sniff: &TcpSniffReport,
@@ -260,7 +260,7 @@ pub(super) async fn handle_vmess_websocket_tls_proxy_tcp_connection_async(
 pub(super) async fn handle_vmess_httpupgrade_tls_proxy_tcp_connection_async(
     inbound: &mut TokioTcpStream,
     peer: SocketAddr,
-    original_dst: SocketAddrV4,
+    original_dst: SocketAddr,
     selection: TcpProxySelection,
     stop: Arc<AtomicBool>,
     sniff: &TcpSniffReport,
@@ -333,7 +333,7 @@ pub(super) async fn handle_vmess_httpupgrade_tls_proxy_tcp_connection_async(
 pub(super) async fn handle_vmess_grpc_proxy_tcp_connection_async(
     inbound: &mut TokioTcpStream,
     peer: SocketAddr,
-    original_dst: SocketAddrV4,
+    original_dst: SocketAddr,
     selection: TcpProxySelection,
     stop: Arc<AtomicBool>,
     sniff: &TcpSniffReport,

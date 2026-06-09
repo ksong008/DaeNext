@@ -1,3 +1,4 @@
+use std::net::IpAddr;
 use std::process::Command;
 
 use serde_json::{Value, json};
@@ -69,6 +70,13 @@ pub(super) fn push_active_udp_preflight_checks(
     );
     push_check(
         checks,
+        "active-udp-target-ip-valid",
+        active_udp_loopback_target_cidr(&options.active_udp_target_ip).is_ok(),
+        json!({"target_ip": options.active_udp_target_ip}),
+        "active UDP target IP must be a valid IPv4 or IPv6 address",
+    );
+    push_check(
+        checks,
         "active-udp-target-loopback-address-free",
         !active_udp_loopback_target_present(&options.active_udp_target_ip),
         json!({"target_ip": options.active_udp_target_ip}),
@@ -80,6 +88,21 @@ pub(super) fn add_active_udp_loopback_target(
     steps: &mut Vec<Value>,
     options: &ProductionRuntimeOwnerOptions,
 ) -> bool {
+    let cidr = match active_udp_loopback_target_cidr(&options.active_udp_target_ip) {
+        Ok(cidr) => cidr,
+        Err(err) => {
+            steps.push(json!({
+                "name": "add-active-udp-target-loopback-address",
+                "status": "fail",
+                "program": "ip",
+                "args": [],
+                "exit_code": Value::Null,
+                "stdout": "",
+                "stderr": err,
+            }));
+            return false;
+        }
+    };
     run_step(
         steps,
         "add-active-udp-target-loopback-address",
@@ -88,7 +111,7 @@ pub(super) fn add_active_udp_loopback_target(
             [
                 "addr".to_owned(),
                 "add".to_owned(),
-                format!("{}/32", options.active_udp_target_ip),
+                cidr,
                 "dev".to_owned(),
                 "lo".to_owned(),
             ],
@@ -100,6 +123,21 @@ pub(super) fn delete_active_udp_loopback_target(
     steps: &mut Vec<Value>,
     options: &ProductionRuntimeOwnerOptions,
 ) {
+    let cidr = match active_udp_loopback_target_cidr(&options.active_udp_target_ip) {
+        Ok(cidr) => cidr,
+        Err(err) => {
+            steps.push(json!({
+                "name": "delete-active-udp-target-loopback-address",
+                "status": "fail",
+                "program": "ip",
+                "args": [],
+                "exit_code": Value::Null,
+                "stdout": "",
+                "stderr": err,
+            }));
+            return;
+        }
+    };
     let _ = run_step(
         steps,
         "delete-active-udp-target-loopback-address",
@@ -108,7 +146,7 @@ pub(super) fn delete_active_udp_loopback_target(
             [
                 "addr".to_owned(),
                 "del".to_owned(),
-                format!("{}/32", options.active_udp_target_ip),
+                cidr,
                 "dev".to_owned(),
                 "lo".to_owned(),
             ],
@@ -117,12 +155,22 @@ pub(super) fn delete_active_udp_loopback_target(
 }
 
 pub(super) fn active_udp_loopback_target_present(target_ip: &str) -> bool {
+    let Ok(cidr) = active_udp_loopback_target_cidr(target_ip) else {
+        return false;
+    };
     Command::new("ip")
         .args(["-o", "addr", "show", "dev", "lo"])
         .output()
         .map(|output| {
-            output.status.success()
-                && String::from_utf8_lossy(&output.stdout).contains(&format!("{target_ip}/32"))
+            output.status.success() && String::from_utf8_lossy(&output.stdout).contains(&cidr)
         })
         .unwrap_or(false)
+}
+
+pub(super) fn active_udp_loopback_target_cidr(target_ip: &str) -> Result<String, String> {
+    let ip = target_ip
+        .parse::<IpAddr>()
+        .map_err(|err| format!("invalid active UDP target ip {target_ip}: {err}"))?;
+    let prefix = if ip.is_ipv4() { 32 } else { 128 };
+    Ok(format!("{ip}/{prefix}"))
 }

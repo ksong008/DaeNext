@@ -73,11 +73,12 @@ impl UdpExchangeResult {
 pub(super) fn append_udp_proxy_selection_failed(
     event_file: &PathBuf,
     event_lock: &Arc<Mutex<()>>,
-    peer: SocketAddrV4,
-    original_dst: SocketAddrV4,
+    peer: SocketAddr,
+    original_dst: SocketAddr,
     err: String,
     proxy_group: &ResidentProxyGroupPlan,
 ) {
+    let network = udp_network_name(original_dst);
     append_event(
         event_file,
         event_lock,
@@ -88,7 +89,7 @@ pub(super) fn append_udp_proxy_selection_failed(
             "error": err,
             "proxy_group": proxy_group.group_name,
             "group_policy": proxy_group.group_policy_name(),
-            "network": "udp4",
+            "network": network,
             "outbound": proxy_group.group_name,
             "policy": proxy_group.group_policy_name(),
         }),
@@ -98,7 +99,7 @@ pub(super) fn append_udp_proxy_selection_failed(
 pub(super) fn record_udp_exchange_result(
     proxy: ResidentProxyPlan,
     packet: UdpOriginalDstPacket,
-    original_dst: SocketAddrV4,
+    original_dst: SocketAddr,
     event_file: PathBuf,
     event_lock: Arc<Mutex<()>>,
     metrics: Arc<ResidentDataplaneMetrics>,
@@ -114,6 +115,7 @@ pub(super) fn record_udp_exchange_result(
                 let handler = resident_udp_handler_name(&proxy.handler);
                 let packet_semantics =
                     udp_packet_semantics_for_destination(&proxy.handler, original_dst);
+                let network = udp_network_name(original_dst);
                 let mut event_json = json!({
                     "event": event,
                     "peer": peer.to_string(),
@@ -123,7 +125,7 @@ pub(super) fn record_udp_exchange_result(
                     "proxy_group": proxy.group_name,
                     "group_policy": proxy.group_policy,
                     "node_tag": proxy.node_tag,
-                    "network": "udp4",
+                    "network": network,
                     "outbound": proxy.group_name,
                     "policy": proxy.group_policy,
                     "dialer": proxy.node_tag,
@@ -154,6 +156,7 @@ pub(super) fn record_udp_exchange_result(
             let handler = resident_udp_handler_name(&proxy.handler);
             let packet_semantics =
                 udp_packet_semantics_for_destination(&proxy.handler, original_dst);
+            let network = udp_network_name(original_dst);
             append_event(
                 &event_file,
                 &event_lock,
@@ -167,7 +170,7 @@ pub(super) fn record_udp_exchange_result(
                     "proxy_group": proxy.group_name,
                     "group_policy": proxy.group_policy,
                     "node_tag": proxy.node_tag,
-                    "network": "udp4",
+                    "network": network,
                     "outbound": proxy.group_name,
                     "policy": proxy.group_policy,
                     "dialer": proxy.node_tag,
@@ -178,6 +181,10 @@ pub(super) fn record_udp_exchange_result(
             )
         }
     }
+}
+
+fn udp_network_name(addr: SocketAddr) -> &'static str {
+    if addr.is_ipv6() { "udp6" } else { "udp4" }
 }
 
 #[cfg(test)]

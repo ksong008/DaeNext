@@ -29,7 +29,7 @@ pub(super) fn append_proxy_tcp_execution_fields(
 
 pub(super) fn proxy_tcp_finished_event(
     peer: SocketAddr,
-    original_dst: SocketAddrV4,
+    original_dst: SocketAddr,
     selection: &TcpProxySelection,
     sniff: &TcpSniffReport,
     tls_underlay: &'static str,
@@ -52,7 +52,7 @@ pub(super) fn proxy_tcp_finished_event(
 
 pub(super) fn proxy_tcp_failed_event(
     peer: SocketAddr,
-    original_dst: SocketAddrV4,
+    original_dst: SocketAddr,
     selection: &TcpProxySelection,
     sniff: &TcpSniffReport,
     tls_underlay: &'static str,
@@ -76,7 +76,7 @@ pub(super) fn proxy_tcp_failed_event(
 
 pub(super) fn generic_proxy_tcp_finished_event(
     peer: SocketAddr,
-    original_dst: SocketAddrV4,
+    original_dst: SocketAddr,
     selection: &TcpProxySelection,
     sniff: &TcpSniffReport,
     handler: &'static str,
@@ -98,7 +98,7 @@ pub(super) fn generic_proxy_tcp_finished_event(
 
 pub(super) fn generic_proxy_tcp_failed_event(
     peer: SocketAddr,
-    original_dst: SocketAddrV4,
+    original_dst: SocketAddr,
     selection: &TcpProxySelection,
     sniff: &TcpSniffReport,
     handler: &'static str,
@@ -121,7 +121,7 @@ pub(super) fn generic_proxy_tcp_failed_event(
 pub(super) fn proxy_tcp_base_event(
     event_name: &str,
     peer: SocketAddr,
-    original_dst: SocketAddrV4,
+    original_dst: SocketAddr,
     selection: &TcpProxySelection,
     sniff: &TcpSniffReport,
 ) -> Value {

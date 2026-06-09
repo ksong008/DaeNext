@@ -64,7 +64,7 @@ pub(crate) fn parse_resident_adapter_matrix_args(args: &[String]) -> Result<Path
 
 pub(crate) fn parse_resident_adapter_udp_live_args(
     args: &[String],
-) -> Result<(PathBuf, SocketAddrV4, String), String> {
+) -> Result<(PathBuf, SocketAddr, String), String> {
     let mut config = None;
     let mut target = None;
     let mut payload = "daex-resident-udp-live".to_owned();
@@ -87,8 +87,10 @@ pub(crate) fn parse_resident_adapter_udp_live_args(
                         "resident-adapter-udp-live requires a value after --target".to_owned()
                     );
                 };
-                target = Some(value.parse::<SocketAddrV4>().map_err(|err| {
-                    format!("resident-adapter-udp-live target must be IPv4 host:port: {err}")
+                target = Some(value.parse::<SocketAddr>().map_err(|err| {
+                    format!(
+                        "resident-adapter-udp-live target must be host:port or [ipv6]:port: {err}"
+                    )
                 })?);
             }
             "--payload" => {

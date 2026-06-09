@@ -139,6 +139,9 @@ pub(super) fn split_check_host_port(raw: &str) -> Result<(String, u16), String> 
         };
         return Ok((host.to_owned(), parse_check_port(&port)?));
     }
+    if raw.parse::<IpAddr>().is_ok() {
+        return Ok((raw.to_owned(), RESIDENT_DNS_CHECK_DEFAULT_PORT));
+    }
     let (host, port) = if raw.matches(':').count() > 1 {
         return Err("expected IPv4, domain, host:port, or bracketed IPv6 host".to_owned());
     } else if let Some((host, port)) = raw.rsplit_once(':') {
@@ -160,11 +163,11 @@ pub(super) fn parse_check_port(raw: &str) -> Result<u16, String> {
 pub(super) fn tcp_check_target(host: &str, port: u16, explicit_addresses: &[String]) -> String {
     for raw in explicit_addresses {
         let raw = raw.trim();
-        if raw.parse::<Ipv4Addr>().is_ok() {
-            return format!("{raw}:{port}");
+        if let Ok(ip) = raw.parse::<IpAddr>() {
+            return SocketAddr::new(ip, port).to_string();
         }
     }
-    format!("{host}:{port}")
+    authority_from_host_port(host, port)
 }
 
 pub(super) fn udp_check_target(
@@ -177,15 +180,23 @@ pub(super) fn udp_check_target(
         if raw.is_empty() {
             continue;
         }
-        if let Ok(ip) = raw.parse::<Ipv4Addr>() {
-            return Ok(ResidentUdpCheckTarget::literal(SocketAddrV4::new(ip, port)));
+        if let Ok(ip) = raw.parse::<IpAddr>() {
+            return Ok(ResidentUdpCheckTarget::literal(SocketAddr::new(ip, port)));
         }
     }
-    if let Ok(ip) = host.parse::<Ipv4Addr>() {
-        return Ok(ResidentUdpCheckTarget::literal(SocketAddrV4::new(ip, port)));
+    if let Ok(ip) = host.parse::<IpAddr>() {
+        return Ok(ResidentUdpCheckTarget::literal(SocketAddr::new(ip, port)));
     }
-    let authority = format!("{host}:{port}");
+    let authority = authority_from_host_port(host, port);
     Ok(ResidentUdpCheckTarget::new(authority, None))
+}
+
+fn authority_from_host_port(host: &str, port: u16) -> String {
+    if host.parse::<std::net::Ipv6Addr>().is_ok() {
+        format!("[{host}]:{port}")
+    } else {
+        format!("{host}:{port}")
+    }
 }
 
 pub(super) fn duration_nanos_to_millis(nanos: i64) -> i64 {
@@ -198,7 +209,9 @@ pub(super) fn duration_nanos_to_millis(nanos: i64) -> i64 {
 pub(super) fn resident_selector_network_type(network: &str) -> Result<NetworkType, String> {
     match network {
         "tcp4" => Ok(NetworkType::TCP4),
+        "tcp6" => Ok(NetworkType::TCP6),
         "udp4" => Ok(NetworkType::DNS_UDP4),
+        "udp6" => Ok(NetworkType::DNS_UDP6),
         other => Err(format!("unsupported resident selector network: {other}")),
     }
 }

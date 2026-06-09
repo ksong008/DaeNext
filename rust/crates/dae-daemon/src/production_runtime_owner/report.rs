@@ -20,7 +20,7 @@ use super::native_ebpf::{native_backend_opt_in_decision_json, native_backend_run
 use super::udp_dns_datapath_contract::udp_dns_datapath_contract_json;
 use super::{
     ExecutionEvidence, FILTER_PREF, PRODUCTION_HOST_IFACE, PRODUCTION_NETNS, PRODUCTION_PEER_IFACE,
-    ProductionRuntimeOwnerOptions,
+    ProductionRuntimeOwnerOptions, active_udp_loopback_target_cidr,
 };
 
 mod typed_report;

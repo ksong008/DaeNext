@@ -2,7 +2,7 @@ use std::collections::{BTreeMap, VecDeque};
 use std::future::poll_fn;
 use std::io::ErrorKind;
 use std::mem::size_of;
-use std::net::{IpAddr, Ipv4Addr, SocketAddr, SocketAddrV4, TcpListener, UdpSocket};
+use std::net::{IpAddr, Ipv4Addr, SocketAddr, TcpListener, UdpSocket};
 use std::os::fd::AsRawFd;
 use std::path::PathBuf;
 use std::pin::Pin;

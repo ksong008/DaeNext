@@ -1,5 +1,5 @@
 use std::io::{self, ErrorKind};
-use std::net::{SocketAddr, SocketAddrV4, TcpStream};
+use std::net::{SocketAddr, TcpStream};
 use std::sync::{
     Arc,
     atomic::{AtomicBool, Ordering},
@@ -19,7 +19,7 @@ use super::{RESIDENT_CONNECT_TIMEOUT, RESIDENT_TCP_IDLE_TIMEOUT, ResidentDatapla
 pub(super) struct DirectTcpConnection {
     pub(super) stream: TcpStream,
     pub(super) report: TcpDirectDialReport,
-    pub(super) target: SocketAddrV4,
+    pub(super) target: SocketAddr,
 }
 
 #[derive(Default, Debug, Eq, PartialEq)]
@@ -74,7 +74,7 @@ pub(super) async fn open_direct_tcp_connection_async(
 }
 
 async fn connect_direct_tcp_attempt_async(
-    target: SocketAddrV4,
+    target: SocketAddr,
     opts: &TcpDirectDialOptions,
     use_mptcp: bool,
 ) -> io::Result<dae_datapath::TcpDirectConnection> {
@@ -88,18 +88,15 @@ async fn connect_direct_tcp_attempt_async(
     tcp_direct_connect_finish(stream, state)
 }
 
-async fn resolve_direct_tcp_target_async(dial_target: &str) -> Result<SocketAddrV4, String> {
-    if let Ok(SocketAddr::V4(addr)) = dial_target.parse::<SocketAddr>() {
+async fn resolve_direct_tcp_target_async(dial_target: &str) -> Result<SocketAddr, String> {
+    if let Ok(addr) = dial_target.parse::<SocketAddr>() {
         return Ok(addr);
     }
     lookup_host(dial_target)
         .await
         .map_err(|err| format!("resolve direct TCP target {dial_target}: {err}"))?
-        .find_map(|addr| match addr {
-            SocketAddr::V4(addr) => Some(addr),
-            SocketAddr::V6(_) => None,
-        })
-        .ok_or_else(|| format!("resolve direct TCP target {dial_target} returned no IPv4 address"))
+        .next()
+        .ok_or_else(|| format!("resolve direct TCP target {dial_target} returned no IP address"))
 }
 
 pub(super) async fn relay_tcp_direct_async(
@@ -201,7 +198,7 @@ mod tests {
             .await
             .unwrap();
 
-        assert_eq!(connection.target, addr);
+        assert_eq!(connection.target, SocketAddr::V4(addr));
         assert_eq!(connection.report.requested_mark, 0);
         assert!(!connection.report.requested_mptcp);
         assert!(connection.report.so_mark_applied);

@@ -71,8 +71,7 @@ pub(in crate::production_runtime_owner) fn run_active_dns_probe(
     });
     thread::sleep(Duration::from_millis(100));
     let started = Instant::now();
-    let client =
-        run_client_active_dns_probe(&target.to_string(), &options.active_dns_qname, iterations);
+    let client = run_client_active_dns_probe(target, &options.active_dns_qname, iterations);
     let accept = accept_handle.join().unwrap_or_else(
         |_| json!({"status": "fail", "error": "active DNS tproxy thread panicked"}),
     );

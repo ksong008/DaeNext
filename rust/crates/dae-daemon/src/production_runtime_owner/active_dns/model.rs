@@ -1,4 +1,4 @@
-use std::net::{SocketAddrV4, UdpSocket};
+use std::net::{SocketAddr, UdpSocket};
 
 use dae_dns::{
     ACTIVE_DNS_DEFAULT_QNAME, ACTIVE_DNS_DEFAULT_TARGET_PORT, ACTIVE_DNS_DEFAULT_UPSTREAM_IP,
@@ -22,37 +22,53 @@ pub(in crate::production_runtime_owner) const DEFAULT_ACTIVE_DNS_QNAME: &str =
 
 pub(super) fn active_dns_target_addr(
     options: &ProductionRuntimeOwnerOptions,
-) -> Result<SocketAddrV4, String> {
+) -> Result<SocketAddr, String> {
     let ip = options.active_dns_target_ip.parse().map_err(|err| {
         format!(
             "invalid active DNS target ip {}: {err}",
             options.active_dns_target_ip
         )
     })?;
-    Ok(SocketAddrV4::new(ip, options.active_dns_target_port))
+    Ok(SocketAddr::new(ip, options.active_dns_target_port))
 }
 
 pub(super) fn active_dns_upstream_addr(
     options: &ProductionRuntimeOwnerOptions,
-) -> Result<SocketAddrV4, String> {
+) -> Result<SocketAddr, String> {
     let ip = options.active_dns_upstream_ip.parse().map_err(|err| {
         format!(
             "invalid active DNS upstream ip {}: {err}",
             options.active_dns_upstream_ip
         )
     })?;
-    Ok(SocketAddrV4::new(ip, options.active_dns_upstream_port))
+    Ok(SocketAddr::new(ip, options.active_dns_upstream_port))
 }
 
 pub(super) fn active_dns_cache_model_json(options: &ProductionRuntimeOwnerOptions) -> Value {
     let contract = active_dns_cache_contract();
+    let dns_target = active_dns_target_addr(options)
+        .map(|addr| addr.to_string())
+        .unwrap_or_else(|_| {
+            format!(
+                "{}:{}",
+                options.active_dns_target_ip, options.active_dns_target_port
+            )
+        });
+    let dns_upstream = active_dns_upstream_addr(options)
+        .map(|addr| addr.to_string())
+        .unwrap_or_else(|_| {
+            format!(
+                "{}:{}",
+                options.active_dns_upstream_ip, options.active_dns_upstream_port
+            )
+        });
     json!({
         "status": "model-only",
         "qname": options.active_dns_qname,
         "qtype": contract.qtype,
         "qclass": contract.qclass,
-        "dns_target": format!("{}:{}", options.active_dns_target_ip, options.active_dns_target_port),
-        "dns_upstream": format!("{}:{}", options.active_dns_upstream_ip, options.active_dns_upstream_port),
+        "dns_target": dns_target,
+        "dns_upstream": dns_upstream,
         "dns_nat_timeout_ms": dae_datapath::DNS_NAT_TIMEOUT_MS,
         "cache_max_entries": contract.cache_max_entries,
         "cache_key_includes_qclass": contract.cache_key_includes_qclass,

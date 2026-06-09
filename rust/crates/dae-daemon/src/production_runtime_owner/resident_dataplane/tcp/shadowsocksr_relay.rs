@@ -4,7 +4,7 @@ use super::*;
 pub(crate) async fn handle_shadowsocksr_http_simple_proxy_tcp_connection_async(
     inbound: &mut TokioTcpStream,
     peer: SocketAddr,
-    original_dst: SocketAddrV4,
+    original_dst: SocketAddr,
     selection: TcpProxySelection,
     stop: Arc<AtomicBool>,
     sniff: &TcpSniffReport,

@@ -5,7 +5,7 @@ use super::*;
 
 pub(super) struct ManagedUdpPacket {
     pub(super) packet: UdpOriginalDstPacket,
-    pub(super) original_dst: SocketAddrV4,
+    pub(super) original_dst: SocketAddr,
     pub(super) proxy: ResidentProxyPlan,
 }
 

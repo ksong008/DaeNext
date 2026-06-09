@@ -1,4 +1,4 @@
-use std::net::{SocketAddrV4, UdpSocket};
+use std::net::{SocketAddr, UdpSocket};
 use std::time::{Duration, Instant};
 
 use dae_datapath::{UdpDirectPacketConn, UdpDirectSocketOptions, magic_network_bytes};
@@ -12,7 +12,7 @@ use crate::production_runtime_owner::udp_io::{recv_udp_with_original_dst, udp_di
 
 pub(super) fn udp_tproxy_endpoint_probe(
     socket: UdpSocket,
-    expected_original_dst: SocketAddrV4,
+    expected_original_dst: SocketAddr,
     mark: u32,
     mptcp: bool,
     iterations: u32,

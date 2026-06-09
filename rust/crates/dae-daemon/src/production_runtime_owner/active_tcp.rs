@@ -1,3 +1,5 @@
+use std::net::IpAddr;
+
 use dae_datapath::{
     ACTIVE_TCP_CLIENT_NETNS, ACTIVE_TCP_DEFAULT_CLIENT_IP, ACTIVE_TCP_DEFAULT_MPTCP,
     ACTIVE_TCP_DEFAULT_SO_MARK, ACTIVE_TCP_DEFAULT_TARGET_IP, ACTIVE_TCP_DEFAULT_TARGET_PORT,
@@ -81,6 +83,13 @@ pub(super) fn push_active_tcp_preflight_checks(
             "required host tool is missing for active TCP owner smoke",
         );
     }
+    push_check(
+        checks,
+        "active-tcp-target-ip-valid",
+        options.active_tcp_target_ip.parse::<IpAddr>().is_ok(),
+        json!({"target_ip": options.active_tcp_target_ip}),
+        "active TCP target IP must be a valid IPv4 or IPv6 address",
+    );
     push_check(
         checks,
         "active-tcp-target-port-valid",

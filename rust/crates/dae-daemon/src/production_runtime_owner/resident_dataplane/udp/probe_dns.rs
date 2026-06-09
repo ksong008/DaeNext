@@ -1,7 +1,7 @@
 use super::*;
 pub(crate) async fn probe_resident_proxy_udp_async(
     proxy: &ResidentProxyPlan,
-    original_dst: SocketAddrV4,
+    original_dst: SocketAddr,
     payload: &[u8],
 ) -> serde_json::Value {
     let started = Instant::now();
@@ -76,7 +76,7 @@ pub(crate) async fn probe_resident_proxy_udp_async(
 
 pub(crate) async fn probe_resident_proxy_dns_udp_async(
     proxy: &ResidentProxyPlan,
-    original_dst: SocketAddrV4,
+    original_dst: SocketAddr,
     lookup_host: &str,
 ) -> Result<(), String> {
     let id = fastrand::u16(0..=u16::MAX);

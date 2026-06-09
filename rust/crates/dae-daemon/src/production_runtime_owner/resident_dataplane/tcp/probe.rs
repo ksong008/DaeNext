@@ -8,9 +8,7 @@ pub(crate) async fn probe_resident_proxy_tcp_async(
     method: &str,
     timeout: Duration,
 ) -> Result<(), String> {
-    let listener = TokioTcpListener::bind(SocketAddrV4::new(Ipv4Addr::LOCALHOST, 0))
-        .await
-        .map_err(|err| format!("bind resident TCP probe loopback listener: {err}"))?;
+    let listener = bind_resident_tcp_probe_loopback_listener(timeout).await?;
     let listen_addr = listener
         .local_addr()
         .map_err(|err| format!("read resident TCP probe listener address: {err}"))?;
@@ -54,7 +52,7 @@ pub(crate) async fn probe_resident_proxy_tcp_async(
     let metrics = Arc::new(ResidentDataplaneMetrics::default());
     let handler_stop = Arc::clone(&stop);
     let handler_metrics = Arc::clone(&metrics);
-    let original_dst = SocketAddrV4::new(Ipv4Addr::LOCALHOST, 0);
+    let original_dst = listen_addr;
     let mut handle = tokio::spawn(async move {
         let mut inbound = accepted;
         if matches!(
@@ -148,6 +146,32 @@ pub(crate) async fn probe_resident_proxy_tcp_async(
             Err(handler_err) => Err(format!("{response_err}; handler_error={handler_err}")),
         },
     }
+}
+
+async fn bind_resident_tcp_probe_loopback_listener(
+    timeout: Duration,
+) -> Result<TokioTcpListener, String> {
+    let ipv6_addr = SocketAddr::new(IpAddr::V6(std::net::Ipv6Addr::LOCALHOST), 0);
+    match time::timeout(timeout, TokioTcpListener::bind(ipv6_addr)).await {
+        Ok(Ok(listener)) => return Ok(listener),
+        Ok(Err(ipv6_err)) => {
+            let ipv4_addr = SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0);
+            return time::timeout(timeout, TokioTcpListener::bind(ipv4_addr))
+                .await
+                .map_err(|_| "bind resident TCP probe IPv4 loopback listener: timeout".to_owned())?
+                .map_err(|ipv4_err| {
+                    format!(
+                        "bind resident TCP probe loopback listener: ipv6={ipv6_err}; ipv4={ipv4_err}"
+                    )
+                });
+        }
+        Err(_) => {}
+    }
+    let ipv4_addr = SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0);
+    time::timeout(timeout, TokioTcpListener::bind(ipv4_addr))
+        .await
+        .map_err(|_| "bind resident TCP probe loopback listener: timeout".to_owned())?
+        .map_err(|err| format!("bind resident TCP probe IPv4 loopback listener: {err}"))
 }
 
 pub(crate) fn resident_tcp_probe_http_request(method: &str, path: &str, host: &str) -> Vec<u8> {

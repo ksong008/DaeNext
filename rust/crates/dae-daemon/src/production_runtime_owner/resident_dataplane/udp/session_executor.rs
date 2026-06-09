@@ -18,7 +18,7 @@ pub(super) enum UdpSessionExecutor {
 }
 
 impl UdpSessionExecutor {
-    pub(super) fn new(proxy: &ResidentProxyPlan, original_dst: SocketAddrV4) -> Self {
+    pub(super) fn new(proxy: &ResidentProxyPlan, original_dst: SocketAddr) -> Self {
         if original_dst.port() == 53 {
             return Self::Dns;
         }
@@ -165,7 +165,7 @@ impl UdpSessionExecutor {
         &mut self,
         dns: &ResidentDnsPlan,
         proxy: &ResidentProxyPlan,
-        original_dst: SocketAddrV4,
+        original_dst: SocketAddr,
         payload: &[u8],
     ) -> Result<(&'static str, UdpExchangeResult), String> {
         match self {
@@ -265,7 +265,7 @@ impl ShadowsocksAeadDatagramSession {
     async fn exchange(
         &mut self,
         proxy: &ResidentProxyPlan,
-        original_dst: SocketAddrV4,
+        original_dst: SocketAddr,
         payload: &[u8],
     ) -> Result<UdpExchangeResult, String> {
         let mut salt = vec![0_u8; self.salt_len];
@@ -309,7 +309,7 @@ impl Shadowsocks2022DatagramSession {
     async fn exchange(
         &mut self,
         proxy: &ResidentProxyPlan,
-        original_dst: SocketAddrV4,
+        original_dst: SocketAddr,
         payload: &[u8],
     ) -> Result<UdpExchangeResult, String> {
         if self.codec.is_none() {
@@ -370,7 +370,7 @@ impl Socks5UdpAssociateSession {
     async fn exchange(
         &mut self,
         proxy: &ResidentProxyPlan,
-        original_dst: SocketAddrV4,
+        original_dst: SocketAddr,
         payload: &[u8],
     ) -> Result<UdpExchangeResult, String> {
         self.ensure_open(proxy).await?;
@@ -442,7 +442,7 @@ impl VlessXudpStreamSession {
     async fn exchange(
         &mut self,
         proxy: &ResidentProxyPlan,
-        original_dst: SocketAddrV4,
+        original_dst: SocketAddr,
         payload: &[u8],
     ) -> Result<UdpExchangeResult, String> {
         if proxy.flow != XTLS_RPRX_VISION {
@@ -600,7 +600,7 @@ impl TrojanUdpStreamSession {
     async fn exchange(
         &mut self,
         proxy: &ResidentProxyPlan,
-        original_dst: SocketAddrV4,
+        original_dst: SocketAddr,
         payload: &[u8],
     ) -> Result<UdpExchangeResult, String> {
         if self.client.is_none() {
@@ -668,7 +668,7 @@ impl AnyTlsPacketStreamSession {
     async fn exchange(
         &mut self,
         proxy: &ResidentProxyPlan,
-        original_dst: SocketAddrV4,
+        original_dst: SocketAddr,
         payload: &[u8],
     ) -> Result<UdpExchangeResult, String> {
         if self.client.is_none() {
@@ -777,7 +777,7 @@ impl Hysteria2QuicDatagramSession {
     async fn exchange(
         &mut self,
         proxy: &ResidentProxyPlan,
-        original_dst: SocketAddrV4,
+        original_dst: SocketAddr,
         payload: &[u8],
     ) -> Result<UdpExchangeResult, String> {
         self.ensure_open(proxy).await?;
@@ -874,7 +874,7 @@ impl TuicQuicDatagramSession {
     async fn exchange(
         &mut self,
         proxy: &ResidentProxyPlan,
-        original_dst: SocketAddrV4,
+        original_dst: SocketAddr,
         payload: &[u8],
     ) -> Result<UdpExchangeResult, String> {
         self.ensure_open(proxy).await?;
@@ -963,7 +963,7 @@ impl JuicityQuicStreamPacketSession {
     async fn exchange(
         &mut self,
         proxy: &ResidentProxyPlan,
-        original_dst: SocketAddrV4,
+        original_dst: SocketAddr,
         payload: &[u8],
     ) -> Result<UdpExchangeResult, String> {
         self.ensure_open(proxy).await?;
