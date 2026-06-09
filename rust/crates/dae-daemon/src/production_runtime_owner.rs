@@ -27,9 +27,9 @@ mod udp_dns_datapath_contract;
 mod udp_io;
 
 use active_dns::{
-    ActiveDnsEvidence, DEFAULT_ACTIVE_DNS_QNAME, DEFAULT_ACTIVE_DNS_TARGET_IP,
-    DEFAULT_ACTIVE_DNS_TARGET_PORT, DEFAULT_ACTIVE_DNS_UPSTREAM_IP,
-    DEFAULT_ACTIVE_DNS_UPSTREAM_PORT, push_active_dns_preflight_checks, run_active_dns_probe,
+    ActiveDnsEvidence, DEFAULT_ACTIVE_DNS_QNAME, DEFAULT_ACTIVE_DNS_TARGET_PORT,
+    DEFAULT_ACTIVE_DNS_UPSTREAM_IP, DEFAULT_ACTIVE_DNS_UPSTREAM_PORT,
+    push_active_dns_preflight_checks, run_active_dns_probe,
 };
 use active_tcp::{
     ActiveTcpEvidence, DEFAULT_ACTIVE_TCP_CLIENT_IP, DEFAULT_ACTIVE_TCP_MPTCP,

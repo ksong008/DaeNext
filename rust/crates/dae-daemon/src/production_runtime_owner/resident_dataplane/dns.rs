@@ -344,15 +344,18 @@ mod tests {
         dae_config::schema::build_config(&sections).unwrap()
     }
 
+    fn local_dns_upstream_authority() -> &'static str {
+        "localhost:53"
+    }
+
     #[test]
     fn resident_dns_plan_admits_fallback_upstream_udp() {
-        let config = parse_config(
-            r#"
+        let input = r#"
         global { so_mark_from_dae: 1234 }
         routing {}
         dns {
           upstream {
-            primary: 'udp://resolver.example.invalid:53'
+            primary: 'udp://LOCAL_DNS_UPSTREAM'
           }
           routing {
             request {
@@ -360,13 +363,14 @@ mod tests {
             }
           }
         }
-        "#,
-        );
+        "#
+        .replace("LOCAL_DNS_UPSTREAM", local_dns_upstream_authority());
+        let config = parse_config(&input);
         let plan = build_resident_dns_plan(&config).unwrap();
         match plan.request_fallback {
             ResidentDnsRequestAction::Upstream(upstream) => {
                 assert_eq!(upstream.tag, "primary");
-                assert_eq!(upstream.target.authority, "resolver.example.invalid:53");
+                assert_eq!(upstream.target.authority, local_dns_upstream_authority());
                 assert_eq!(upstream.target.literal_addr, None);
             }
             _ => panic!("expected upstream fallback"),
@@ -376,13 +380,12 @@ mod tests {
 
     #[test]
     fn resident_dns_plan_rejects_complex_request_rules_until_controller_parity() {
-        let config = parse_config(
-            r#"
+        let input = r#"
         global {}
         routing {}
         dns {
           upstream {
-            primary: 'udp://resolver.example.invalid:53'
+            primary: 'udp://LOCAL_DNS_UPSTREAM'
           }
           routing {
             request {
@@ -391,8 +394,9 @@ mod tests {
             }
           }
         }
-        "#,
-        );
+        "#
+        .replace("LOCAL_DNS_UPSTREAM", local_dns_upstream_authority());
+        let config = parse_config(&input);
         let err = build_resident_dns_plan(&config).unwrap_err();
         assert!(err.contains("fallback-only request routing"));
     }

@@ -107,10 +107,10 @@ global {
   so_mark_from_dae:"7"
   lan_interface:"enp1s0"
   wan_interface:"auto,enp1s0"
-  tcp_check_url:"http://cp.cloudflare.com,1.1.1.1"
-  udp_check_dns:"dns.google.com:53,8.8.8.8"
+  tcp_check_url:"http://localhost,127.0.0.1"
+  udp_check_dns:"localhost:53"
   dial_mode:"domain++"
-  fallback_resolver:"8.8.8.8:53"
+  fallback_resolver:"127.0.0.1:53"
   auto_config_kernel_parameter:"true"
   bandwidth_max_tx:"200 mbps"
 }
@@ -123,10 +123,10 @@ global {
     assert_eq!(parsed["wanInterface"], json!(["auto", "enp1s0"]));
     assert_eq!(
         parsed["tcpCheckUrl"],
-        json!(["http://cp.cloudflare.com", "1.1.1.1"])
+        json!(["http://localhost", "127.0.0.1"])
     );
     assert_eq!(parsed["dialMode"], json!("domain++"));
-    assert_eq!(parsed["fallbackResolver"], json!("8.8.8.8:53"));
+    assert_eq!(parsed["fallbackResolver"], json!("127.0.0.1:53"));
     assert_eq!(parsed["autoConfigKernelParameter"], json!(true));
     assert_eq!(parsed["bandwidthMaxTx"], json!("200 mbps"));
 
@@ -152,15 +152,15 @@ pub(crate) fn parsed_global_request_renders_dae_global_text_for_webui_fields() {
         "sniffingTimeout": "250ms",
         "lanInterface": ["br-lan"],
         "wanInterface": ["auto", "eth0"],
-        "udpCheckDns": ["dns.google:53", "8.8.8.8"],
-        "tcpCheckUrl": ["http://cp.cloudflare.com/generate_204", "1.1.1.1"],
+        "udpCheckDns": ["localhost:8053", "127.0.0.1"],
+        "tcpCheckUrl": ["http://localhost/generate_204", "127.0.0.1"],
         "dialMode": "domain++",
         "tcpCheckHttpMethod": "GET",
         "disableWaitingNetwork": true,
         "autoConfigKernelParameter": true,
         "tlsImplementation": "tls",
         "utlsImitate": "chrome_auto",
-        "fallbackResolver": "8.8.8.8:53",
+        "fallbackResolver": "127.0.0.1:53",
         "mptcp": true,
         "enableLocalTcpFastRedirect": true,
         "bandwidthMaxTx": "200 mbps",
@@ -179,9 +179,9 @@ pub(crate) fn parsed_global_request_renders_dae_global_text_for_webui_fields() {
     assert_eq!(config.global.tcp_check_http_method, "GET");
     assert_eq!(
         config.global.tcp_check_url[0],
-        "http://cp.cloudflare.com/generate_204"
+        "http://localhost/generate_204"
     );
-    assert_eq!(config.global.tcp_check_url[1], "1.1.1.1");
+    assert_eq!(config.global.tcp_check_url[1], "127.0.0.1");
     assert_eq!(config.global.tproxy_port, 12345);
     assert!(!config.global.tproxy_port_protect);
     assert!(config.global.disable_waiting_network);
@@ -198,11 +198,11 @@ pub(crate) fn parsed_global_request_renders_dae_global_text_for_webui_fields() {
 
 #[test]
 fn materialized_global_text_converts_legacy_json_storage() {
-    let raw = r#"{"tcpCheckHttpMethod":"GET","tcpCheckUrl":["http://check.example","203.0.113.1"],"wanInterface":["auto"],"tproxyPort":12345}"#;
+    let raw = r#"{"tcpCheckHttpMethod":"GET","tcpCheckUrl":["http://localhost","127.0.0.1"],"wanInterface":["auto"],"tproxyPort":12345}"#;
     let rendered = display_global_config_text(raw);
     assert!(rendered.starts_with("global {\n"));
     assert!(rendered.contains("tcp_check_http_method:'GET'"));
-    assert!(rendered.contains("tcp_check_url:'http://check.example,203.0.113.1'"));
+    assert!(rendered.contains("tcp_check_url:'http://localhost,127.0.0.1'"));
     assert!(!rendered.contains("allow_insecure:'false'"));
 }
 

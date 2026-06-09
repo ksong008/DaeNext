@@ -76,12 +76,12 @@ pub(super) fn default_daemon_live_matrix_json(
             "run with active UDP tproxy options and benchmark iterations",
         ),
         live_matrix_row_json(
-            "active-dns-udp53",
+            "active-dns-configured-target",
             production_runtime_active_dns_executed,
             production_runtime_active_dns_passed
                 && active_dns_admitted
                 && active_dns_benchmark_recorded,
-            "DNS UDP/53 path must pass with upstream/cache/domain-routing evidence and benchmark record",
+            "active DNS path must pass with configured target, upstream/cache/domain-routing evidence, and benchmark record",
             "run with active DNS target/upstream options and benchmark iterations",
         ),
         live_matrix_row_json(

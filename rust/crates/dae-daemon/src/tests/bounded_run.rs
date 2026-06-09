@@ -167,6 +167,8 @@ pub(super) fn daemon_runner_run_command_outputs_json() {
         "global {\n  log_level: info\n}\n\nrouting {\n  pname(NetworkManager) -> direct\n}\n",
     )
     .unwrap();
+    let active_dns_target_ip = std::net::Ipv4Addr::LOCALHOST.to_string();
+    let active_dns_target_port = 8053_u16;
     let output = run_with_args_and_version(
         [
             "run".to_owned(),
@@ -186,8 +188,8 @@ pub(super) fn daemon_runner_run_command_outputs_json() {
             "--production-runtime-active-udp-target-ip=198.18.63.1".to_owned(),
             "--production-runtime-active-udp-target-port=19093".to_owned(),
             "--production-runtime-active-udp-benchmark-iters=11".to_owned(),
-            "--production-runtime-active-dns-target-ip=9.9.9.9".to_owned(),
-            "--production-runtime-active-dns-target-port=53".to_owned(),
+            format!("--production-runtime-active-dns-target-ip={active_dns_target_ip}"),
+            format!("--production-runtime-active-dns-target-port={active_dns_target_port}"),
             "--production-runtime-active-dns-upstream-ip=127.0.0.1".to_owned(),
             "--production-runtime-active-dns-upstream-port=11530".to_owned(),
             "--production-runtime-active-dns-qname=runner.example.".to_owned(),
@@ -279,7 +281,13 @@ pub(super) fn daemon_runner_run_command_outputs_json() {
         json["production_runtime_owner"]["contract"]["active_dns"]["target_ip"]
             .as_str()
             .unwrap(),
-        "9.9.9.9"
+        active_dns_target_ip
+    );
+    assert_eq!(
+        json["production_runtime_owner"]["contract"]["active_dns"]["target_port"]
+            .as_u64()
+            .unwrap(),
+        u64::from(active_dns_target_port)
     );
     assert_eq!(
         json["production_runtime_owner"]["contract"]["active_dns"]["upstream_port"]
@@ -366,6 +374,57 @@ pub(super) fn daemon_runner_run_command_outputs_json() {
         !json["matched_default_benchmark"]["execute_benchmark"]
             .as_bool()
             .unwrap()
+    );
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[test]
+pub(super) fn daemon_runner_run_command_derives_active_dns_target_from_config() {
+    let root = std::env::temp_dir().join(format!(
+        "dae-daemon-run-active-dns-settings-test-{}",
+        std::process::id()
+    ));
+    let config = root.join("config").join("run.dae");
+    std::fs::create_dir_all(config.parent().unwrap()).unwrap();
+    let configured_dns_host = "localhost";
+    let configured_dns_address = std::net::Ipv4Addr::LOCALHOST;
+    let configured_dns_port = 8053_u16;
+    let udp_check_dns =
+        format!("{configured_dns_host}:{configured_dns_port},{configured_dns_address}");
+    std::fs::write(
+        &config,
+        format!(
+            "global {{\n  log_level: info\n  udp_check_dns: '{udp_check_dns}'\n}}\n\nrouting {{\n  pname(NetworkManager) -> direct\n}}\n"
+        ),
+    )
+    .unwrap();
+    let output = run_with_args_and_version(
+        [
+            "run".to_owned(),
+            "--config".to_owned(),
+            config.display().to_string(),
+            "--root".to_owned(),
+            root.display().to_string(),
+            "--disable-timestamp".to_owned(),
+            "--disable-sudo".to_owned(),
+            "--exit-after-ready".to_owned(),
+        ],
+        "test-version",
+    );
+    assert_eq!(output.exit_code, 0, "{}", output.stderr);
+    assert_eq!(output.stderr, "");
+    let json: Value = serde_json::from_str(&output.stdout).unwrap();
+    assert_eq!(
+        json["production_runtime_owner"]["contract"]["active_dns"]["target_ip"]
+            .as_str()
+            .unwrap(),
+        configured_dns_address.to_string()
+    );
+    assert_eq!(
+        json["production_runtime_owner"]["contract"]["active_dns"]["target_port"]
+            .as_u64()
+            .unwrap(),
+        u64::from(configured_dns_port)
     );
     let _ = std::fs::remove_dir_all(root);
 }

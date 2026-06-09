@@ -117,6 +117,12 @@ pub(super) fn validate_options(options: &ProductionRuntimeOwnerOptions) -> Resul
                 .to_owned(),
         );
     }
+    if options.execute_active_dns && options.active_dns_target_ip.trim().is_empty() {
+        return Err(
+            "production runtime active DNS target IP must come from global.udp_check_dns or --production-runtime-active-dns-target-ip"
+                .to_owned(),
+        );
+    }
     if options.execute_reload_runtime_parity && !options.execute_active_tcp {
         return Err(
             "production reload/runtime parity requires --execute-production-runtime-active-tcp"
@@ -139,8 +145,8 @@ pub(super) fn validate_options(options: &ProductionRuntimeOwnerOptions) -> Resul
             "production runtime active UDP benchmark iterations must be non-zero".to_owned(),
         );
     }
-    if options.active_dns_target_port != 53 {
-        return Err("production runtime active DNS target port must be UDP/53".to_owned());
+    if options.active_dns_target_port == 0 {
+        return Err("production runtime active DNS target port must be non-zero".to_owned());
     }
     if options.active_dns_upstream_port == 0 {
         return Err("production runtime active DNS upstream port must be non-zero".to_owned());

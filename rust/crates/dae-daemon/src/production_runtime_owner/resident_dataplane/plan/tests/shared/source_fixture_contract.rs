@@ -89,7 +89,17 @@ pub(crate) fn assert_common_source_import_round_trips(link: &str) {
             assert_eq!(HttpProxyLink::parse(link).unwrap().export_url(), link);
         }
         "ss" => {
-            assert_eq!(ShadowsocksLink::parse(link).unwrap().export_url(), link);
+            let parsed = ShadowsocksLink::parse(link).unwrap();
+            assert_eq!(parsed.export_url(), link);
+            if parsed.cipher.starts_with("2022-blake3-") && !parsed.plugin.name.is_empty() {
+                let userinfo = source_link_userinfo(link).unwrap_or_else(|| {
+                    panic!("Shadowsocks 2022 plugin source missing userinfo: {link}")
+                });
+                assert!(
+                    !userinfo.contains('%'),
+                    "Shadowsocks 2022 plugin live source must not use percent-encoded hand-written userinfo: {link}"
+                );
+            }
         }
         "ssr" => {
             let parsed = ShadowsocksRLink::parse(link).unwrap();
@@ -114,7 +124,21 @@ pub(crate) fn assert_common_source_import_round_trips(link: &str) {
             assert_eq!(VLESSLink::parse(link).unwrap().export_url(), link);
         }
         "hysteria2" | "hy2" => {
-            assert_eq!(Hysteria2Link::parse(link).unwrap().export_url(), link);
+            let parsed = Hysteria2Link::parse(link).unwrap();
+            assert_eq!(parsed.export_url(), link);
+            if !parsed.pin_sha256.is_empty() {
+                let normalized =
+                    dae_outbound::hysteria2::link::normalize_pin_sha256(&parsed.pin_sha256);
+                assert_eq!(
+                    normalized.len(),
+                    64,
+                    "resident Hysteria2 live source pinSHA256 must be raw cert SHA256 hex-shaped: {link}"
+                );
+                assert!(
+                    normalized.chars().all(|ch| ch.is_ascii_hexdigit()),
+                    "resident Hysteria2 live source pinSHA256 must normalize to hex: {link}"
+                );
+            }
         }
         "tuic" => {
             assert_eq!(TuicLink::parse(link).unwrap().export_url(), link);

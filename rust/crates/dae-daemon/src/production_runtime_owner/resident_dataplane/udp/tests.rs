@@ -115,24 +115,25 @@ mod tests {
 
     #[test]
     fn resident_udp_quic_wire_helpers_roundtrip() {
-        let target = "udp-target:5353";
+        const CONFIGURED_UDP_TARGET_PORT: u16 = 8053;
+        let target = format!("udp-target:{CONFIGURED_UDP_TARGET_PORT}");
         let payload = b"resident-udp-live-matrix";
 
-        let hy2 = build_hysteria2_udp_message(0x1122_3344, 0x5566, target, payload).unwrap();
+        let hy2 = build_hysteria2_udp_message(0x1122_3344, 0x5566, &target, payload).unwrap();
         let parsed_hy2 = parse_hysteria2_udp_message(&hy2).unwrap();
         assert_eq!(parsed_hy2.session_id, 0x1122_3344);
         assert_eq!(parsed_hy2.packet_id, 0x5566);
         assert_eq!(parsed_hy2.payload, payload);
 
-        let tuic = build_tuic_packet_frame(7, 9, target, payload).unwrap();
+        let tuic = build_tuic_packet_frame(7, 9, &target, payload).unwrap();
         let parsed_tuic = parse_tuic_packet_frame(&tuic).unwrap();
         assert_eq!(parsed_tuic.assoc_id, 7);
         assert_eq!(parsed_tuic.packet_id, 9);
         assert_eq!(parsed_tuic.payload, payload);
 
-        let juicity_frame = seal_stream_packet_frame(target, payload).unwrap();
+        let juicity_frame = seal_stream_packet_frame(&target, payload).unwrap();
         let juicity_request =
-            build_juicity_stream_packet_request(target, &juicity_frame.encoded).unwrap();
+            build_juicity_stream_packet_request(&target, &juicity_frame.encoded).unwrap();
         assert_eq!(juicity_request[0], 3);
         let (initial_address, initial_metadata_len) =
             Socks5Address::decode(&juicity_request[1..]).unwrap();

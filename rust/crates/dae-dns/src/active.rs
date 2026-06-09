@@ -5,11 +5,10 @@ use crate::cache_key::DnsCacheKey;
 use crate::error::DnsError;
 use crate::message::{DnsPacketQuestionView, DnsQuestion};
 
-pub const ACTIVE_DNS_DEFAULT_TARGET_IP: &str = "8.8.8.8";
 pub const ACTIVE_DNS_DEFAULT_TARGET_PORT: u16 = 53;
 pub const ACTIVE_DNS_DEFAULT_UPSTREAM_IP: &str = "127.0.0.1";
 pub const ACTIVE_DNS_DEFAULT_UPSTREAM_PORT: u16 = 10530;
-pub const ACTIVE_DNS_DEFAULT_QNAME: &str = "stage54.example.";
+pub const ACTIVE_DNS_DEFAULT_QNAME: &str = "connectivity-check.invalid.";
 pub const ACTIVE_DNS_QTYPE_A: u16 = 1;
 pub const ACTIVE_DNS_QCLASS_IN: u16 = 1;
 
@@ -116,7 +115,7 @@ mod tests {
     use std::net::Ipv4Addr;
 
     #[test]
-    fn active_dns_cache_contract_preserves_udp53_and_cache_semantics() {
+    fn active_dns_cache_contract_preserves_default_port_and_cache_semantics() {
         let contract = active_dns_cache_contract();
         assert_eq!(ACTIVE_DNS_DEFAULT_TARGET_PORT, 53);
         assert_eq!(contract.qtype, ACTIVE_DNS_QTYPE_A);

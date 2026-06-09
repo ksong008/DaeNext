@@ -1,9 +1,9 @@
 use std::net::{SocketAddrV4, UdpSocket};
 
 use dae_dns::{
-    ACTIVE_DNS_DEFAULT_QNAME, ACTIVE_DNS_DEFAULT_TARGET_IP, ACTIVE_DNS_DEFAULT_TARGET_PORT,
-    ACTIVE_DNS_DEFAULT_UPSTREAM_IP, ACTIVE_DNS_DEFAULT_UPSTREAM_PORT, DnsPacketView,
-    active_dns_cache_contract, active_dns_packet_question_matches, build_active_dns_a_response,
+    ACTIVE_DNS_DEFAULT_QNAME, ACTIVE_DNS_DEFAULT_TARGET_PORT, ACTIVE_DNS_DEFAULT_UPSTREAM_IP,
+    ACTIVE_DNS_DEFAULT_UPSTREAM_PORT, DnsPacketView, active_dns_cache_contract,
+    active_dns_packet_question_matches, build_active_dns_a_response,
     validate_dns_packet_response_for_request,
 };
 use serde_json::{Value, json};
@@ -11,8 +11,6 @@ use serde_json::{Value, json};
 use super::{RESPONSE_IP, RESPONSE_IP_TEXT, RESPONSE_TTL};
 use crate::production_runtime_owner::ProductionRuntimeOwnerOptions;
 
-pub(in crate::production_runtime_owner) const DEFAULT_ACTIVE_DNS_TARGET_IP: &str =
-    ACTIVE_DNS_DEFAULT_TARGET_IP;
 pub(in crate::production_runtime_owner) const DEFAULT_ACTIVE_DNS_TARGET_PORT: u16 =
     ACTIVE_DNS_DEFAULT_TARGET_PORT;
 pub(in crate::production_runtime_owner) const DEFAULT_ACTIVE_DNS_UPSTREAM_IP: &str =
