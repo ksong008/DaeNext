@@ -4,6 +4,11 @@ use std::sync::{Mutex, OnceLock};
 
 use serde_json::{Value, json};
 
+#[cfg(not(any(feature = "allocator-mimalloc", feature = "allocator-jemalloc")))]
+const ALLOCATOR_SYSTEM_TRIM_ENV: &str = "ALLOCATOR_SYSTEM_TRIM";
+#[cfg(not(any(feature = "allocator-mimalloc", feature = "allocator-jemalloc")))]
+const ALLOCATOR_SYSTEM_TRIM_LEGACY_ENV: &str = "DAED_ALLOCATOR_SYSTEM_TRIM";
+
 #[cfg(all(feature = "allocator-mimalloc", feature = "allocator-jemalloc"))]
 compile_error!("allocator-mimalloc and allocator-jemalloc are mutually exclusive");
 
@@ -216,7 +221,9 @@ fn allocator_reclaim_impl() -> (&'static str, Value) {
             "skipped",
             json!({
                 "operation": "system_allocator_noop",
-                "reason": "system allocator trim is disabled; set DAED_ALLOCATOR_SYSTEM_TRIM=1 for an explicit diagnostic trim",
+                "reason": format!(
+                    "system allocator trim is disabled; set {ALLOCATOR_SYSTEM_TRIM_ENV}=1 for an explicit diagnostic trim"
+                ),
             }),
         );
     }
@@ -225,7 +232,8 @@ fn allocator_reclaim_impl() -> (&'static str, Value) {
 
 #[cfg(not(any(feature = "allocator-mimalloc", feature = "allocator-jemalloc")))]
 fn system_allocator_trim_enabled() -> bool {
-    std::env::var("DAED_ALLOCATOR_SYSTEM_TRIM")
+    std::env::var(ALLOCATOR_SYSTEM_TRIM_ENV)
+        .or_else(|_| std::env::var(ALLOCATOR_SYSTEM_TRIM_LEGACY_ENV))
         .map(|value| {
             matches!(
                 value.as_str(),

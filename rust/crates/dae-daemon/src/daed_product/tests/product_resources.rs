@@ -87,6 +87,8 @@ pub(crate) fn product_package_reports_runtime_memory_defaults() {
     assert!(unit.contains("HTTP_WORKERS unset uses available_parallelism"));
     assert!(!unit.contains("Environment=\"DAE"));
     assert!(!unit.contains("Environment=\"DAED"));
+    let entrypoint = docker_entrypoint_text();
+    assert!(entrypoint.contains("${PRODUCT_LISTEN:-${DAED_LISTEN:-0.0.0.0:2023}}"));
 
     let defaults_text = defaults.to_string();
     assert!(!defaults_text.contains("\"legacyEnv\""));

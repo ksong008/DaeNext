@@ -1,7 +1,7 @@
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet, VecDeque};
 use std::fs;
 use std::io::{self, BufRead, Read, Seek, SeekFrom, Write};
-use std::net::{SocketAddrV4, TcpListener, TcpStream, ToSocketAddrs};
+use std::net::{SocketAddr, SocketAddrV4, TcpListener, TcpStream};
 use std::path::{Component, Path, PathBuf};
 use std::process::Command;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -46,6 +46,10 @@ use crate::production_runtime_owner::{
 const DEFAULT_CONFIG_DIR: &str = "/etc/daed";
 const DEFAULT_LISTEN: &str = "0.0.0.0:2023";
 const DEFAULT_WEB_ROOT: &str = "/usr/share/daed/web";
+const PRODUCT_LISTEN_ENV: &str = "PRODUCT_LISTEN";
+const PRODUCT_LISTEN_LEGACY_ENV: &str = "DAED_LISTEN";
+const PRODUCT_WEB_ROOT_ENV: &str = "PRODUCT_WEB_ROOT";
+const PRODUCT_WEB_ROOT_LEGACY_ENV: &str = "DAED_WEB_ROOT";
 const PRIMARY_STATE_STORE: &str = crate::service_contract::DAED_PRIMARY_STATE_STORE;
 const PROTECTED_ROLLBACK_STATE_STORE: &str =
     crate::service_contract::DAED_PROTECTED_ROLLBACK_STATE_STORE;
@@ -414,6 +418,8 @@ mod resources;
 use self::resources::*;
 mod nodes_subscriptions_groups;
 use self::nodes_subscriptions_groups::*;
+mod product_net;
+use self::product_net::*;
 mod runtime_materialization;
 use self::runtime_materialization::*;
 mod logs;

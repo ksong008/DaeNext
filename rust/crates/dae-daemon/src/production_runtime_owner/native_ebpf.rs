@@ -27,13 +27,10 @@ use super::{FILTER_PREF, PRODUCTION_HOST_IFACE, PRODUCTION_NETNS, PRODUCTION_PEE
 
 mod types;
 pub(in crate::production_runtime_owner) use self::types::*;
-mod state;
-use self::state::*;
-mod attach_flow;
-use self::attach_flow::*;
 mod attach_backend;
-use self::attach_backend::*;
+mod attach_flow;
 mod map_cleanup;
+mod state;
 use self::map_cleanup::*;
 mod param_backend;
 pub(super) use self::param_backend::*;

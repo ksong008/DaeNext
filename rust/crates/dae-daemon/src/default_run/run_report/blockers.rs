@@ -1,4 +1,3 @@
-use super::*;
 pub(crate) struct DefaultRunRemainingBlockerFields {
     pub(super) matched_benchmark_recorded: bool,
     pub(super) resident_dataplane_default_switch_ready: bool,

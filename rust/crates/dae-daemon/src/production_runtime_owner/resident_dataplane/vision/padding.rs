@@ -1,4 +1,3 @@
-use super::*;
 pub(crate) fn vision_padding_block(
     payload: &[u8],
     command: u8,

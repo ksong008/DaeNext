@@ -289,7 +289,8 @@ pub(crate) fn parse_run_args(args: &[String]) -> Result<RunOptions, String> {
     let mut config_dir = PathBuf::from(DEFAULT_CONFIG_DIR);
     let mut listen = DEFAULT_LISTEN.to_owned();
     let mut state: Option<PathBuf> = None;
-    let mut web_root = std::env::var_os("DAED_WEB_ROOT")
+    let mut web_root = std::env::var_os(PRODUCT_WEB_ROOT_ENV)
+        .or_else(|| std::env::var_os(PRODUCT_WEB_ROOT_LEGACY_ENV))
         .map(PathBuf::from)
         .unwrap_or_else(|| PathBuf::from(DEFAULT_WEB_ROOT));
     let mut api_only = false;
