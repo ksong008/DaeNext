@@ -183,7 +183,9 @@ pub(crate) fn insert_go_free_product_chain_service_contract_capabilities(report:
 }
 
 pub(crate) fn resident_dataplane_default_switch_ready_from_env() -> bool {
-    let value = env::var(RESIDENT_DATAPLANE_ENV).ok();
+    let value = env::var(RESIDENT_DATAPLANE_ENV)
+        .or_else(|_| env::var(RESIDENT_DATAPLANE_LEGACY_ENV))
+        .ok();
     resident_dataplane_default_switch_value_enabled(value.as_deref())
 }
 

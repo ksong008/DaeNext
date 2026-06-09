@@ -12,7 +12,8 @@ pub(super) const DEFAULT_NATIVE_OBJECT_ENV: &str = "DAE_RUST_NATIVE_BPF_OBJECT";
 pub(super) const DEFAULT_NATIVE_EBPF_ENV: &str = "DAE_RUST_NATIVE_EBPF";
 #[cfg(feature = "native-ebpf")]
 pub(super) const DEFAULT_NATIVE_BACKEND_ENV: &str = "DAE_RUST_NATIVE_EBPF_BACKEND";
-pub(super) const DEFAULT_RESIDENT_DATAPLANE_ENV: &str = "DAE_RUST_RESIDENT_DATAPLANE";
+pub(super) const DEFAULT_RESIDENT_DATAPLANE_ENV: &str = "RESIDENT_DATAPLANE";
+pub(super) const DEFAULT_RESIDENT_DATAPLANE_LEGACY_ENV: &str = "DAE_RUST_RESIDENT_DATAPLANE";
 pub(super) const ROUTING_TUPLES_MAP_NAME: &str = "routing_tuples_map";
 
 #[derive(Clone, Debug, Eq, PartialEq)]

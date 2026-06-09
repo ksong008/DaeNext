@@ -350,7 +350,7 @@ pub(super) fn start_with_options(
                     "enabled": false,
                     "reason": "resident Rust userspace protocol dataplane is disabled by default; current production goal is native Aya/eBPF loader and attach parity while Go userspace outbound remains authoritative",
                     "opt_in_env": DEFAULT_RESIDENT_DATAPLANE_ENV,
-                    "scope": "loader-only admission boundary; set DAE_RUST_RESIDENT_DATAPLANE=1 only for explicit Rust protocol dataplane experiments",
+                    "scope": format!("loader-only admission boundary; set {DEFAULT_RESIDENT_DATAPLANE_ENV}=1 only for explicit Rust protocol dataplane experiments"),
                 })
             } else {
                 match live_handoff.as_ref() {
