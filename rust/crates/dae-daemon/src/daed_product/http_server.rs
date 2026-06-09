@@ -142,7 +142,7 @@ pub(super) fn handle_stream(mut stream: TcpStream, app: &AppState) -> io::Result
     {
         let Some(_user) = authenticate_request(app, &request) else {
             let response = HttpResponse::json(401, json!({"error": "authentication required"}));
-            return write_http_response(&mut stream, &response, head_only);
+            return write_http_response_for_request(&mut stream, &request, &response, head_only);
         };
         if request.path == "/api/events/logs" {
             return stream_log_events(&mut stream, app, &request);
@@ -150,5 +150,5 @@ pub(super) fn handle_stream(mut stream: TcpStream, app: &AppState) -> io::Result
         return stream_runtime_events(&mut stream, app, &request);
     }
     let response = route_request(app, &request);
-    write_http_response(&mut stream, &response, head_only)
+    write_http_response_for_request(&mut stream, &request, &response, head_only)
 }

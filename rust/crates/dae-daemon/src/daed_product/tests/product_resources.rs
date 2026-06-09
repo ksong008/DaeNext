@@ -1,5 +1,6 @@
 use super::super::super::*;
 use super::*;
+use base64::Engine;
 #[test]
 pub(crate) fn storage_paths_match_first_batch_contract() {
     let mut storage = "{}".to_owned();
@@ -22,6 +23,178 @@ pub(crate) fn jwt_roundtrip_uses_user_secret() {
     let user = verify_token(&state, &token).unwrap().unwrap();
     assert_eq!(user.username, "admin");
     fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+pub(crate) fn token_auth_prefers_bearer_header_over_event_query_token() {
+    let dir = std::env::temp_dir().join(format!("daed-product-test-{}", fastrand::u64(..)));
+    let state = dir.join("daed.db");
+    let token = create_user(&state, "admin", "abc123").unwrap();
+    let app = product_test_app(&dir, &state);
+    let request = token_request(
+        "GET",
+        "/api/events/runtime",
+        Some(&token),
+        Some("not-a-token"),
+    );
+
+    let user = authenticate_request(&app, &request).unwrap();
+    assert_eq!(user.username, "admin");
+    fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+pub(crate) fn token_query_auth_is_limited_to_event_streams() {
+    let dir = std::env::temp_dir().join(format!("daed-product-test-{}", fastrand::u64(..)));
+    let state = dir.join("daed.db");
+    let token = create_user(&state, "admin", "abc123").unwrap();
+    let app = product_test_app(&dir, &state);
+
+    for path in ["/api/events/runtime", "/api/events/logs"] {
+        let request = token_request("GET", path, None, Some(&token));
+        assert!(
+            authenticate_request(&app, &request).is_some(),
+            "query token should authenticate {path}"
+        );
+    }
+
+    let request = token_request("GET", "/api/runtime/overview", None, Some(&token));
+    assert!(authenticate_request(&app, &request).is_none());
+    fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+pub(crate) fn token_verifier_rejects_expired_wrong_alg_and_bad_signature() {
+    let dir = std::env::temp_dir().join(format!("daed-product-test-{}", fastrand::u64(..)));
+    let state = dir.join("daed.db");
+    let token = create_user(&state, "admin", "abc123").unwrap();
+    let user = load_user_by_username(&state, "admin").unwrap().unwrap();
+
+    let expired = signed_test_token(
+        &user,
+        "HS256",
+        json!({"role": "admin", "sub": "admin", "exp": unix_now().saturating_sub(1)}),
+    );
+    assert!(verify_token(&state, &expired).unwrap().is_none());
+
+    let wrong_alg = signed_test_token(
+        &user,
+        "HS512",
+        json!({"role": "admin", "sub": "admin", "exp": unix_now() + 300}),
+    );
+    assert!(verify_token(&state, &wrong_alg).unwrap().is_none());
+
+    let bad_signature = format!("{token}x");
+    assert!(verify_token(&state, &bad_signature).unwrap().is_none());
+    fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+pub(crate) fn password_update_rotates_secret_and_invalidates_old_token() {
+    let dir = std::env::temp_dir().join(format!("daed-product-test-{}", fastrand::u64(..)));
+    let state = dir.join("daed.db");
+    let old_token = create_user(&state, "admin", "abc123").unwrap();
+    let app = product_test_app(&dir, &state);
+    let mut headers = HashMap::new();
+    headers.insert("authorization".to_owned(), format!("Bearer {old_token}"));
+    let request = HttpRequest {
+        method: "POST".to_owned(),
+        path: "/api/user/me/password".to_owned(),
+        query: HashMap::new(),
+        headers,
+        body: br#"{"currentPassword":"abc123","newPassword":"def456"}"#.to_vec(),
+    };
+
+    let response = route_request(&app, &request);
+    assert_eq!(
+        response.status,
+        200,
+        "{}",
+        String::from_utf8_lossy(&response.body)
+    );
+    let body: Value = serde_json::from_slice(&response.body).unwrap();
+    let new_token = body["token"].as_str().unwrap();
+    assert!(verify_token(&state, &old_token).unwrap().is_none());
+    assert_eq!(
+        verify_token(&state, new_token).unwrap().unwrap().username,
+        "admin"
+    );
+    fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+pub(crate) fn cors_origin_policy_allows_only_local_origins() {
+    assert_eq!(
+        allowed_cors_origin_value("http://localhost:5173"),
+        Some("http://localhost:5173")
+    );
+    assert_eq!(
+        allowed_cors_origin_value("http://127.0.0.1:2023"),
+        Some("http://127.0.0.1:2023")
+    );
+    assert_eq!(
+        allowed_cors_origin_value("http://[::1]:2023"),
+        Some("http://[::1]:2023")
+    );
+    assert!(allowed_cors_origin_value("https://example.com").is_none());
+    assert!(allowed_cors_origin_value("http://localhost:2023\r\nX-Test: 1").is_none());
+}
+
+#[test]
+pub(crate) fn resetpass_recovery_password_uses_account_password_policy() {
+    for _ in 0..16 {
+        let password = random_recovery_password().unwrap();
+        assert_eq!(password.len(), 12);
+        assert!(password.chars().any(char::is_alphabetic), "{password}");
+        assert!(password.chars().any(|ch| ch.is_ascii_digit()), "{password}");
+        assert!(
+            password.chars().all(|ch| ch.is_ascii_alphanumeric()),
+            "{password}"
+        );
+    }
+}
+
+fn product_test_app(dir: &Path, state: &Path) -> AppState {
+    AppState {
+        config_dir: dir.to_owned(),
+        state: state.to_owned(),
+        web_root: dir.to_owned(),
+        api_only: true,
+        runtime: Arc::new(ProductRuntimeManager::new()),
+        http_metrics: Arc::new(ProductHttpMetrics::default()),
+    }
+}
+
+fn token_request(
+    method: &str,
+    path: &str,
+    bearer_token: Option<&str>,
+    query_token: Option<&str>,
+) -> HttpRequest {
+    let mut headers = HashMap::new();
+    if let Some(token) = bearer_token {
+        headers.insert("authorization".to_owned(), format!("Bearer {token}"));
+    }
+    let mut query = HashMap::new();
+    if let Some(token) = query_token {
+        query.insert("access_token".to_owned(), vec![token.to_owned()]);
+    }
+    HttpRequest {
+        method: method.to_owned(),
+        path: path.to_owned(),
+        query,
+        headers,
+        body: Vec::new(),
+    }
+}
+
+fn signed_test_token(user: &UserRecord, alg: &str, payload: Value) -> String {
+    let header = json!({"alg": alg, "typ": "JWT"}).to_string();
+    let encoded_header = URL_SAFE_NO_PAD.encode(header.as_bytes());
+    let encoded_payload = URL_SAFE_NO_PAD.encode(payload.to_string().as_bytes());
+    let signing_input = format!("{encoded_header}.{encoded_payload}");
+    let signature = hmac_sha256(user.jwt_secret.as_bytes(), signing_input.as_bytes());
+    format!("{signing_input}.{}", URL_SAFE_NO_PAD.encode(signature))
 }
 
 #[test]

@@ -92,11 +92,16 @@ pub(crate) fn sse_response_events(events: &[(&str, Value)], retry_ms: Option<u64
     response
 }
 
-pub(crate) fn write_sse_stream_headers(stream: &mut TcpStream) -> io::Result<()> {
+pub(crate) fn write_sse_stream_headers(
+    stream: &mut TcpStream,
+    request: &HttpRequest,
+) -> io::Result<()> {
     write!(
         stream,
-        "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nCache-Control: no-cache\r\nConnection: keep-alive\r\nX-Accel-Buffering: no\r\nAccess-Control-Allow-Origin: *\r\nAccess-Control-Allow-Headers: Authorization, Content-Type\r\nAccess-Control-Allow-Methods: GET, POST, PUT, PATCH, DELETE, OPTIONS, HEAD\r\n\r\n"
-    )
+        "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nCache-Control: no-cache\r\nConnection: keep-alive\r\nX-Accel-Buffering: no\r\n",
+    )?;
+    write_cors_headers(stream, request)?;
+    write!(stream, "\r\n")
 }
 
 pub(crate) fn write_sse_stream_event(

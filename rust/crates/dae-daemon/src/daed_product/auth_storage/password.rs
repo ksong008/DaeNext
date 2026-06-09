@@ -24,6 +24,28 @@ pub(crate) fn validate_password_strength(password: &str) -> Result<(), String> {
 
 pub(crate) fn random_secret_hex() -> io::Result<String> {
     let mut bytes = [0_u8; 32];
-    fs::File::open("/dev/urandom")?.read_exact(&mut bytes)?;
+    fill_random_bytes(&mut bytes)?;
     Ok(hex_encode(&bytes))
+}
+
+pub(crate) fn fill_random_bytes(bytes: &mut [u8]) -> io::Result<()> {
+    fs::File::open("/dev/urandom")?.read_exact(bytes)
+}
+
+pub(crate) fn secure_random_index(rng: &mut fs::File, upper: usize) -> io::Result<usize> {
+    if upper == 0 || upper > 256 {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "secure random index upper bound must be in 1..=256",
+        ));
+    }
+    let rejection_floor = 256 - (256 % upper);
+    let mut byte = [0_u8; 1];
+    loop {
+        rng.read_exact(&mut byte)?;
+        let value = byte[0] as usize;
+        if value < rejection_floor {
+            return Ok(value % upper);
+        }
+    }
 }
