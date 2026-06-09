@@ -2,7 +2,6 @@ use serde_json::{Map, Value, json};
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(super) struct RuntimeExecutionDescriptor {
-    legacy_label: String,
     executor: String,
     capability: String,
     network: String,
@@ -16,9 +15,8 @@ pub(super) struct RuntimeExecutionDescriptor {
 }
 
 impl RuntimeExecutionDescriptor {
-    fn new(legacy_label: &str, executor: &str, capability: &str, network: &str) -> Self {
+    fn new(_label: &str, executor: &str, capability: &str, network: &str) -> Self {
         Self {
-            legacy_label: legacy_label.to_owned(),
             executor: executor.to_owned(),
             capability: capability.to_owned(),
             network: network.to_owned(),
@@ -106,7 +104,6 @@ pub(super) fn append_runtime_execution_descriptor(
     event: &mut Value,
     descriptor: RuntimeExecutionDescriptor,
 ) {
-    event["legacyExecution"] = json!(descriptor.legacy_label);
     event["executionDescriptor"] = descriptor.to_value();
 }
 

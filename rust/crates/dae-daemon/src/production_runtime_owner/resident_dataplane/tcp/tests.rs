@@ -221,7 +221,6 @@ fn proxy_failure_event_carries_relay_diagnostics() {
 
     assert_eq!(event["event"], "tcp_connection_failed");
     assert_eq!(event["tls_underlay"], "boringssl");
-    assert_eq!(event["legacyExecution"], "async-proxy-tls");
     assert!(event.get("execution").is_none());
     assert_eq!(event["executionDescriptor"]["schemaVersion"], 1);
     assert_eq!(event["executionDescriptor"]["executor"], "tcp-relay");
