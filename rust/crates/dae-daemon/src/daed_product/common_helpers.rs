@@ -58,7 +58,7 @@ pub(super) fn reset_all_user_passwords(state: &Path) -> io::Result<Value> {
     let mut users = Vec::new();
     for row in rows {
         let (id, username) = row.map_err(sqlite_io_error)?;
-        let password = random_recovery_password();
+        let password = random_recovery_password()?;
         let secret = random_secret_hex()?;
         let password_hash = hash_password(secret.as_bytes(), &password);
         conn.execute(
@@ -80,18 +80,22 @@ pub(super) fn reset_all_user_passwords(state: &Path) -> io::Result<Value> {
     }))
 }
 
-pub(super) fn random_recovery_password() -> String {
+pub(super) fn random_recovery_password() -> io::Result<String> {
     const LETTERS: &[u8] = b"abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ";
     const DIGITS: &[u8] = b"0123456789";
     const ALL: &[u8] = b"abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
+    let mut rng = fs::File::open("/dev/urandom")?;
     let mut out = Vec::with_capacity(12);
-    out.push(LETTERS[fastrand::usize(..LETTERS.len())]);
-    out.push(DIGITS[fastrand::usize(..DIGITS.len())]);
+    out.push(LETTERS[secure_random_index(&mut rng, LETTERS.len())?]);
+    out.push(DIGITS[secure_random_index(&mut rng, DIGITS.len())?]);
     for _ in 2..12 {
-        out.push(ALL[fastrand::usize(..ALL.len())]);
+        out.push(ALL[secure_random_index(&mut rng, ALL.len())?]);
     }
-    fastrand::shuffle(&mut out);
-    String::from_utf8(out).unwrap_or_else(|_| "a1fallback".to_owned())
+    for i in (1..out.len()).rev() {
+        let j = secure_random_index(&mut rng, i + 1)?;
+        out.swap(i, j);
+    }
+    String::from_utf8(out).map_err(|err| io::Error::new(io::ErrorKind::InvalidData, err))
 }
 
 pub(super) fn user_count(state: &Path) -> io::Result<i64> {

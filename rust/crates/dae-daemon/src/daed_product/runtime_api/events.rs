@@ -21,7 +21,7 @@ pub(in crate::daed_product) fn stream_runtime_events(
     app: &AppState,
     request: &HttpRequest,
 ) -> io::Result<()> {
-    write_sse_stream_headers(stream)?;
+    write_sse_stream_headers(stream, request)?;
     write!(stream, "retry: {LOG_STREAM_RETRY_MS}\n\n")?;
     let first = runtime_overview_report(app, request);
     let mut last_reload_count = first
@@ -71,7 +71,7 @@ pub(in crate::daed_product) fn stream_log_events(
         Ok(level) => level,
         Err(err) => {
             let response = HttpResponse::json(400, json!({"error": err}));
-            return write_http_response(stream, &response, false);
+            return write_http_response_for_request(stream, request, &response, false);
         }
     };
     let query = request
@@ -80,7 +80,7 @@ pub(in crate::daed_product) fn stream_log_events(
         .and_then(|values| values.first())
         .map(|value| value.trim().to_ascii_lowercase())
         .filter(|value| !value.is_empty());
-    write_sse_stream_headers(stream)?;
+    write_sse_stream_headers(stream, request)?;
     write!(stream, "retry: {LOG_STREAM_RETRY_MS}\n\n")?;
     stream.flush()?;
 

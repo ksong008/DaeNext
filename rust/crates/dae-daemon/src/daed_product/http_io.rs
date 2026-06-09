@@ -140,15 +140,57 @@ pub(super) fn write_http_response(
     response: &HttpResponse,
     head_only: bool,
 ) -> io::Result<()> {
+    write_http_response_with_origin(stream, None, response, head_only)
+}
+
+pub(super) fn write_http_response_for_request(
+    stream: &mut TcpStream,
+    request: &HttpRequest,
+    response: &HttpResponse,
+    head_only: bool,
+) -> io::Result<()> {
+    write_http_response_with_origin(
+        stream,
+        request.headers.get("origin").map(String::as_str),
+        response,
+        head_only,
+    )
+}
+
+pub(in crate::daed_product) fn write_cors_headers(
+    stream: &mut TcpStream,
+    request: &HttpRequest,
+) -> io::Result<()> {
+    if let Some(origin) = allowed_cors_origin(request) {
+        write!(
+            stream,
+            "Access-Control-Allow-Origin: {origin}\r\nVary: Origin\r\nAccess-Control-Allow-Headers: Authorization, Content-Type\r\nAccess-Control-Allow-Methods: GET, POST, PUT, PATCH, DELETE, OPTIONS, HEAD\r\nAccess-Control-Max-Age: 300\r\n",
+        )?;
+    }
+    Ok(())
+}
+
+fn write_http_response_with_origin(
+    stream: &mut TcpStream,
+    origin: Option<&str>,
+    response: &HttpResponse,
+    head_only: bool,
+) -> io::Result<()> {
     let reason = status_reason(response.status);
     write!(
         stream,
-        "HTTP/1.1 {} {}\r\nContent-Type: {}\r\nContent-Length: {}\r\nConnection: close\r\nAccess-Control-Allow-Origin: *\r\nAccess-Control-Allow-Headers: Authorization, Content-Type\r\nAccess-Control-Allow-Methods: GET, POST, PUT, PATCH, DELETE, OPTIONS, HEAD\r\n",
+        "HTTP/1.1 {} {}\r\nContent-Type: {}\r\nContent-Length: {}\r\nConnection: close\r\n",
         response.status,
         reason,
         response.content_type,
         if head_only { 0 } else { response.body.len() }
     )?;
+    if let Some(origin) = origin.and_then(allowed_cors_origin_value) {
+        write!(
+            stream,
+            "Access-Control-Allow-Origin: {origin}\r\nVary: Origin\r\nAccess-Control-Allow-Headers: Authorization, Content-Type\r\nAccess-Control-Allow-Methods: GET, POST, PUT, PATCH, DELETE, OPTIONS, HEAD\r\nAccess-Control-Max-Age: 300\r\n",
+        )?;
+    }
     for (key, value) in &response.extra_headers {
         write!(stream, "{key}: {value}\r\n")?;
     }
@@ -157,6 +199,72 @@ pub(super) fn write_http_response(
         stream.write_all(&response.body)?;
     }
     stream.flush()
+}
+
+pub(in crate::daed_product) fn allowed_cors_origin(request: &HttpRequest) -> Option<&str> {
+    request
+        .headers
+        .get("origin")
+        .and_then(|origin| allowed_cors_origin_value(origin))
+}
+
+pub(in crate::daed_product) fn allowed_cors_origin_value(origin: &str) -> Option<&str> {
+    let origin = origin.trim();
+    if origin.is_empty() || origin.bytes().any(|byte| byte == b'\r' || byte == b'\n') {
+        return None;
+    }
+    let parsed = url::Url::parse(origin).ok()?;
+    if !matches!(parsed.scheme(), "http" | "https") {
+        return None;
+    }
+    let host = parsed.host_str()?.trim_matches(['[', ']']);
+    if is_local_origin_host(host) {
+        Some(origin)
+    } else {
+        None
+    }
+}
+
+fn is_local_origin_host(host: &str) -> bool {
+    if host.eq_ignore_ascii_case("localhost") {
+        return true;
+    }
+    let Ok(ip) = host.parse::<std::net::IpAddr>() else {
+        return false;
+    };
+    ip.is_loopback() || local_interface_ips().iter().any(|local| *local == ip)
+}
+
+fn local_interface_ips() -> Vec<std::net::IpAddr> {
+    let mut addrs = Vec::new();
+    let mut ifaddrs: *mut libc::ifaddrs = std::ptr::null_mut();
+    if unsafe { libc::getifaddrs(&mut ifaddrs) } != 0 {
+        return addrs;
+    }
+    let mut cursor = ifaddrs;
+    while !cursor.is_null() {
+        let addr = unsafe { (*cursor).ifa_addr };
+        if !addr.is_null() {
+            match unsafe { (*addr).sa_family as i32 } {
+                libc::AF_INET => {
+                    let sockaddr = unsafe { *(addr.cast::<libc::sockaddr_in>()) };
+                    addrs.push(std::net::IpAddr::V4(std::net::Ipv4Addr::from(
+                        sockaddr.sin_addr.s_addr.to_ne_bytes(),
+                    )));
+                }
+                libc::AF_INET6 => {
+                    let sockaddr = unsafe { *(addr.cast::<libc::sockaddr_in6>()) };
+                    addrs.push(std::net::IpAddr::V6(std::net::Ipv6Addr::from(
+                        sockaddr.sin6_addr.s6_addr,
+                    )));
+                }
+                _ => {}
+            }
+        }
+        cursor = unsafe { (*cursor).ifa_next };
+    }
+    unsafe { libc::freeifaddrs(ifaddrs) };
+    addrs
 }
 
 pub(super) fn split_path_query(raw: &str) -> (String, HashMap<String, Vec<String>>) {
