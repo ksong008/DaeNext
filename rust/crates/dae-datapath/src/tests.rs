@@ -1,7 +1,7 @@
 use base64::Engine;
 use serde_json::Value;
 use std::io::{Read, Write};
-use std::net::{Ipv4Addr, SocketAddr, SocketAddrV4, UdpSocket};
+use std::net::{Ipv4Addr, Ipv6Addr, SocketAddr, SocketAddrV4, TcpListener, UdpSocket};
 use std::thread;
 use std::time::Duration;
 
@@ -237,7 +237,7 @@ fn tcp_direct_connect_records_socket_contract() {
     });
 
     let mut conn = magic_tcp_connect(
-        SocketAddrV4::new(Ipv4Addr::LOCALHOST, port),
+        SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::LOCALHOST, port)),
         &TcpDirectDialOptions {
             mark: 0,
             mptcp: false,
@@ -275,6 +275,76 @@ fn udp_direct_packet_conn_records_socket_contract() {
     });
 
     let conn = UdpDirectPacketConn::connect(
+        SocketAddr::V4(upstream_addr),
+        &UdpDirectSocketOptions {
+            mark: 0,
+            timeout: Duration::from_secs(2),
+        },
+    )
+    .unwrap();
+    let written = conn
+        .write_to(b"stage53-udp-smoke", SocketAddr::V4(upstream_addr))
+        .unwrap();
+    assert_eq!(written, b"stage53-udp-smoke".len());
+    let (ack, peer) = conn.read_from(b"stage53-udp-ack".len()).unwrap();
+    assert_eq!(ack, b"stage53-udp-ack");
+    assert_eq!(peer, SocketAddr::V4(upstream_addr));
+    assert_eq!(conn.report().requested_mark, 0);
+    assert!(conn.report().so_mark_applied);
+    assert_eq!(conn.report().peer_addr, upstream_addr.to_string());
+    handle.join().unwrap();
+}
+
+#[test]
+fn tcp_direct_connect_supports_ipv6_loopback_when_available() {
+    let listener = match TcpListener::bind((Ipv6Addr::LOCALHOST, 0)) {
+        Ok(listener) => listener,
+        Err(_) => return,
+    };
+    let port = listener.local_addr().unwrap().port();
+    let handle = thread::spawn(move || {
+        let (mut conn, _) = listener.accept().unwrap();
+        let mut buf = [0_u8; 16];
+        conn.read_exact(&mut buf).unwrap();
+        assert_eq!(&buf, b"stage51-ipv6-tcp");
+        conn.write_all(b"stage51-ipv6-ok").unwrap();
+    });
+
+    let mut conn = magic_tcp_connect(
+        SocketAddr::new(Ipv6Addr::LOCALHOST.into(), port),
+        &TcpDirectDialOptions {
+            mark: 0,
+            mptcp: false,
+            timeout: Duration::from_secs(2),
+        },
+    )
+    .unwrap();
+    conn.stream.write_all(b"stage51-ipv6-tcp").unwrap();
+    let mut ack = [0_u8; 15];
+    conn.stream.read_exact(&mut ack).unwrap();
+    assert_eq!(&ack, b"stage51-ipv6-ok");
+    assert_eq!(conn.report.peer_addr, format!("[::1]:{port}"));
+    handle.join().unwrap();
+}
+
+#[test]
+fn udp_direct_packet_conn_supports_ipv6_loopback_when_available() {
+    let upstream = match UdpSocket::bind((Ipv6Addr::LOCALHOST, 0)) {
+        Ok(socket) => socket,
+        Err(_) => return,
+    };
+    upstream
+        .set_read_timeout(Some(Duration::from_secs(2)))
+        .unwrap();
+    let upstream_addr = upstream.local_addr().unwrap();
+    let handle = thread::spawn(move || {
+        let mut buf = [0_u8; 64];
+        let (read, peer) = upstream.recv_from(&mut buf).unwrap();
+        assert_eq!(&buf[..read], b"stage53-ipv6-udp");
+        upstream.send_to(b"stage53-ipv6-ok", peer).unwrap();
+    });
+
+    let conn = UdpDirectPacketConn::connect(
         upstream_addr,
         &UdpDirectSocketOptions {
             mark: 0,
@@ -282,13 +352,11 @@ fn udp_direct_packet_conn_records_socket_contract() {
         },
     )
     .unwrap();
-    let written = conn.write_to(b"stage53-udp-smoke", upstream_addr).unwrap();
-    assert_eq!(written, b"stage53-udp-smoke".len());
-    let (ack, peer) = conn.read_from(b"stage53-udp-ack".len()).unwrap();
-    assert_eq!(ack, b"stage53-udp-ack");
-    assert_eq!(peer, SocketAddr::V4(upstream_addr));
-    assert_eq!(conn.report().requested_mark, 0);
-    assert!(conn.report().so_mark_applied);
+    let written = conn.write_to(b"stage53-ipv6-udp", upstream_addr).unwrap();
+    assert_eq!(written, b"stage53-ipv6-udp".len());
+    let (ack, peer) = conn.read_from(b"stage53-ipv6-ok".len()).unwrap();
+    assert_eq!(ack, b"stage53-ipv6-ok");
+    assert_eq!(peer, upstream_addr);
     assert_eq!(conn.report().peer_addr, upstream_addr.to_string());
     handle.join().unwrap();
 }

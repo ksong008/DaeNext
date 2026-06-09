@@ -17,5 +17,5 @@ pub(crate) use dae_outbound::{
     vless::VLESSLink,
     vmess::VMessLink,
 };
-pub(crate) use std::net::{Ipv4Addr, SocketAddrV4};
+pub(crate) use std::net::{Ipv4Addr, Ipv6Addr, SocketAddrV4};
 pub(crate) use url::Url;
