@@ -21,10 +21,10 @@ use rustls::{
 };
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, ReadBuf};
 use tokio::net::TcpStream as TokioTcpStream;
-use tokio::task;
 use tokio::time;
 
 use super::XTLS_RPRX_VISION;
+use super::direct::open_direct_tcp_connection_async;
 use super::plan::{ResidentProxyPlan, ResidentRealityUnderlayPlan, ResidentUtlsFingerprintPlan};
 use super::{
     RESIDENT_CONNECT_TIMEOUT, RESIDENT_IDLE_SLEEP, TLS_RECORD_HEADER_LEN,
