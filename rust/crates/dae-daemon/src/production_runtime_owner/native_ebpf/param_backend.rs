@@ -2,32 +2,33 @@ use super::*;
 pub(crate) fn prepare_native_param_object(
     options: &ProductionRuntimeOwnerOptions,
     fallback_param_object: &Path,
-    native_param_object: &Path,
     dae0_ifindex: u32,
     dae0peer_mac: [u8; 6],
     dae_netns_id: u32,
-) -> (PathBuf, Value) {
+) -> NativeParamObjectPreparation {
     if !options.native_ebpf_opt_in {
-        return (
-            fallback_param_object.to_path_buf(),
-            json!({
+        return NativeParamObjectPreparation {
+            selected_param_object: fallback_param_object.to_path_buf(),
+            report: json!({
                 "status": "skipped",
                 "reason": "native eBPF opt-in is disabled",
                 "selected_param_object": path_string(fallback_param_object),
                 "fallback_param_object": path_string(fallback_param_object),
             }),
-        );
+            load_input: None,
+        };
     }
-    let Some(native_object) = options.native_ebpf_object.as_ref() else {
-        return (
-            fallback_param_object.to_path_buf(),
-            json!({
+    let Some(source) = native_object_source(options) else {
+        return NativeParamObjectPreparation {
+            selected_param_object: fallback_param_object.to_path_buf(),
+            report: json!({
                 "status": "skipped",
                 "reason": "native eBPF object is not configured; native attach may fail closed before tc command fallback",
                 "selected_param_object": path_string(fallback_param_object),
                 "fallback_param_object": path_string(fallback_param_object),
             }),
-        );
+            load_input: None,
+        };
     };
     let param = build_dae_param(DaeParamInput {
         tproxy_port: options.tproxy_port,
@@ -37,45 +38,43 @@ pub(crate) fn prepare_native_param_object(
         dae0peer_mac,
         has_bpf_get_current_task: true,
     });
-    match write_param_aware_object(native_object, native_param_object, param) {
-        Ok(report) => (
-            native_param_object.to_path_buf(),
-            json!({
-                "status": "pass",
-                "path": path_string(native_param_object),
-                "source_object": path_string(native_object),
-                "fallback_param_object": path_string(fallback_param_object),
-                "rewritten_param_matches": report.rewritten_param_matches,
-                "previous_param_was_zero": report.previous_param_was_zero,
-                "source_len": report.source_len,
-                "output_len": report.output_len,
-                "param": {
-                    "tproxy_port": param.tproxy_port,
-                    "control_plane_pid": param.control_plane_pid,
-                    "dae0_ifindex": param.dae0_ifindex,
-                    "dae_netns_id": param.dae_netns_id,
-                    "dae0peer_mac": mac_string(param.dae0peer_mac),
-                    "has_bpf_get_current_task": param.has_bpf_get_current_task,
-                },
-                "location": {
-                    "symbol": report.location.symbol,
-                    "section": report.location.section,
-                    "symbol_size": report.location.symbol_size,
-                    "file_offset": report.location.file_offset,
-                },
-            }),
-        ),
-        Err(err) => (
-            native_param_object.to_path_buf(),
-            json!({
-                "status": "fail",
-                "path": path_string(native_param_object),
-                "source_object": path_string(native_object),
-                "fallback_param_object": path_string(fallback_param_object),
-                "error": err.to_string(),
-            }),
-        ),
+    let selected_param_object = PathBuf::from(NATIVE_PARAM_OBJECT_IDENTITY);
+    let source_identity = source.identity();
+    NativeParamObjectPreparation {
+        selected_param_object: selected_param_object.clone(),
+        report: json!({
+            "status": "pass",
+            "path": path_string(&selected_param_object),
+            "source_object": path_string(&source_identity),
+            "source_kind": source.kind(),
+            "fallback_param_object": path_string(fallback_param_object),
+            "rewritten_param_matches": true,
+            "previous_param_was_zero": Value::Null,
+            "materialized_object": false,
+            "param_delivery": "aya-set-global",
+            "param_global_set": true,
+            "param": {
+                "tproxy_port": param.tproxy_port,
+                "control_plane_pid": param.control_plane_pid,
+                "dae0_ifindex": param.dae0_ifindex,
+                "dae_netns_id": param.dae_netns_id,
+                "dae0peer_mac": mac_string(param.dae0peer_mac),
+                "has_bpf_get_current_task": param.has_bpf_get_current_task,
+            },
+            "location": Value::Null,
+        }),
+        load_input: Some(NativeEbpfLoadInput { source, param }),
     }
+}
+
+fn native_object_source(options: &ProductionRuntimeOwnerOptions) -> Option<NativeEbpfObjectSource> {
+    if options.native_ebpf_embedded_object {
+        return Some(NativeEbpfObjectSource::Embedded);
+    }
+    options
+        .native_ebpf_object
+        .as_ref()
+        .map(|path| NativeEbpfObjectSource::File(path.clone()))
 }
 
 pub(crate) fn native_backend_runtime_decision(

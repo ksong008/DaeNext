@@ -80,6 +80,41 @@ pub(in crate::production_runtime_owner) struct NativeAttachOutcome {
     pub fallback_used: bool,
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(in crate::production_runtime_owner) enum NativeEbpfObjectSource {
+    Embedded,
+    File(PathBuf),
+}
+
+impl NativeEbpfObjectSource {
+    pub(in crate::production_runtime_owner) fn identity(&self) -> PathBuf {
+        match self {
+            Self::Embedded => PathBuf::from(EMBEDDED_NATIVE_OBJECT_IDENTITY),
+            Self::File(path) => path.clone(),
+        }
+    }
+
+    pub(in crate::production_runtime_owner) const fn kind(&self) -> &'static str {
+        match self {
+            Self::Embedded => "embedded",
+            Self::File(_) => "file",
+        }
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(in crate::production_runtime_owner) struct NativeEbpfLoadInput {
+    pub source: NativeEbpfObjectSource,
+    pub param: BpfDaeParam,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub(in crate::production_runtime_owner) struct NativeParamObjectPreparation {
+    pub selected_param_object: PathBuf,
+    pub report: Value,
+    pub load_input: Option<NativeEbpfLoadInput>,
+}
+
 #[derive(Default)]
 pub(in crate::production_runtime_owner) struct NativeEbpfRuntimeState {
     pub(super) peer_attached: bool,
@@ -92,6 +127,8 @@ pub(in crate::production_runtime_owner) struct NativeEbpfRuntimeState {
     pub(super) loaded_map_ids: BTreeMap<String, u32>,
     #[cfg(feature = "native-ebpf")]
     pub(super) pin_root: Option<PathBuf>,
+    #[cfg(feature = "native-ebpf")]
+    pub(super) load_input: Option<NativeEbpfLoadInput>,
 }
 
 impl std::fmt::Debug for NativeEbpfRuntimeState {
@@ -106,7 +143,8 @@ impl std::fmt::Debug for NativeEbpfRuntimeState {
         debug
             .field("loaded", &self.loaded.is_some())
             .field("loaded_map_ids", &self.loaded_map_ids)
-            .field("pin_root", &self.pin_root);
+            .field("pin_root", &self.pin_root)
+            .field("load_input", &self.load_input);
         debug.finish()
     }
 }

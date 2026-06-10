@@ -1,6 +1,7 @@
 use std::env;
 use std::fs;
 use std::os::fd::AsRawFd;
+#[cfg(not(feature = "native-ebpf"))]
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 
@@ -15,7 +16,11 @@ use serde_json::{Value, json};
 use super::command::{
     bpf_dae_snapshot, path_string, runtime_resource_leftovers, wait_for_loaded_map_cleanup,
 };
-use super::native_ebpf::{NativeEbpfRuntimeState, prepare_native_param_object};
+#[cfg(feature = "native-ebpf")]
+use super::native_ebpf::EMBEDDED_NATIVE_OBJECT_IDENTITY;
+use super::native_ebpf::{
+    NativeEbpfRuntimeState, NativeParamObjectPreparation, prepare_native_param_object,
+};
 use super::netns_link::resolve_netns_link_mode_from_env;
 use super::report::{live_handoff_json, socket_options_verified};
 use super::resident_dataplane::{ResidentDataplaneRuntime, start_resident_dataplane_workers};

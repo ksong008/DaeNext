@@ -105,6 +105,7 @@ pub(crate) fn insert_header_and_contract(
                 "opt_in": context.options.native_ebpf_opt_in,
                 "requested_backend": context.options.native_ebpf_backend.as_str(),
                 "completed_a3_admission": context.options.native_ebpf_completed_a3_admission,
+                "embedded_object": context.options.native_ebpf_embedded_object,
                 "native_object": context.options.native_ebpf_object.as_ref().map(|path| path_string(path)),
                 "fallback_object": path_string(&context.options.source_object),
                 "fallback_object_preserved": true,

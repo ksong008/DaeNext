@@ -72,19 +72,18 @@ pub(super) fn execute_owner_smoke(
         && evidence.param_image["rewritten_param_matches"]
             .as_bool()
             .unwrap_or(false);
-    let native_param_object = param_object.with_file_name("bpf_bpfel.native-param.o");
     let native_param_object = match (ok, dae0_ifindex, dae0peer_mac) {
         (true, Some(dae0_ifindex), Some(dae0peer_mac)) => {
-            let (path, image) = native_ebpf::prepare_native_param_object(
+            let preparation = native_ebpf::prepare_native_param_object(
                 options,
                 param_object,
-                &native_param_object,
                 dae0_ifindex,
                 dae0peer_mac,
                 dae_netns_id,
             );
-            evidence.native_param_image = image;
-            path
+            evidence.native_param_image = preparation.report;
+            native_runtime.set_load_input(preparation.load_input);
+            preparation.selected_param_object
         }
         _ => {
             evidence.native_param_image = json!({

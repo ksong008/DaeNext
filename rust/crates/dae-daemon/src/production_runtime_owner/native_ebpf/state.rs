@@ -49,11 +49,26 @@ impl NativeEbpfRuntimeState {
         }
     }
 
+    pub(in crate::production_runtime_owner) fn set_load_input(
+        &mut self,
+        input: Option<NativeEbpfLoadInput>,
+    ) {
+        #[cfg(feature = "native-ebpf")]
+        {
+            self.load_input = input;
+        }
+        #[cfg(not(feature = "native-ebpf"))]
+        {
+            let _ = input;
+        }
+    }
+
     pub(in crate::production_runtime_owner) fn reset(&mut self) {
         #[cfg(feature = "native-ebpf")]
         {
             self.loaded.take();
             self.loaded_map_ids.clear();
+            self.load_input.take();
             if let Some(pin_root) = self.pin_root.take() {
                 let _ = std::fs::remove_dir_all(pin_root);
             }

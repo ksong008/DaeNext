@@ -37,6 +37,33 @@ impl<'a> AyaUserspaceLoaderOptions<'a> {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
+pub struct AyaUserspaceBytesLoaderOptions<'a> {
+    pub object_label: &'a str,
+    pub object_data: &'a [u8],
+    pub param: Option<BpfDaeParam>,
+    pub map_pin_path: Option<&'a Path>,
+    pub allow_unsupported_maps: bool,
+    pub allowed_unsupported_map_names: &'a [&'a str],
+    pub max_entries_overrides: &'a [(&'a str, u32)],
+    pub prepin_lpm_array_map: bool,
+}
+
+impl<'a> AyaUserspaceBytesLoaderOptions<'a> {
+    pub fn new(object_label: &'a str, object_data: &'a [u8]) -> Self {
+        Self {
+            object_label,
+            object_data,
+            param: None,
+            map_pin_path: None,
+            allow_unsupported_maps: true,
+            allowed_unsupported_map_names: DEFAULT_ALLOWED_UNSUPPORTED_MAP_NAMES,
+            max_entries_overrides: &[],
+            prepin_lpm_array_map: false,
+        }
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct AyaMapInMapPinReport {
     pub outer_map_name: &'static str,
     pub inner_template_name: &'static str,

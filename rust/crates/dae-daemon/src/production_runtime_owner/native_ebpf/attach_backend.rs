@@ -197,18 +197,51 @@ impl NativeEbpfRuntimeState {
                 .map_err(|err| format!("native eBPF pin root create failed: {err}"))?;
             let before_map_ids = dae_ebpf_support::map_ids()
                 .map_err(|err| format!("native eBPF before-load map snapshot failed: {err}"))?;
-            let loaded = dae_ebpf_support::load_aya_userspace_object(
-                dae_ebpf_support::AyaUserspaceLoaderOptions {
-                    object: param_object,
-                    param: None,
-                    map_pin_path: Some(&pin_root),
-                    allow_unsupported_maps: true,
-                    allowed_unsupported_map_names:
-                        dae_ebpf_support::DEFAULT_ALLOWED_UNSUPPORTED_MAP_NAMES,
-                    max_entries_overrides: &[],
-                    prepin_lpm_array_map: true,
+            let loaded = match self.load_input.clone() {
+                Some(input) => match input.source {
+                    NativeEbpfObjectSource::Embedded => {
+                        dae_ebpf_support::load_aya_userspace_object_bytes(
+                            dae_ebpf_support::AyaUserspaceBytesLoaderOptions {
+                                object_label: EMBEDDED_NATIVE_OBJECT_IDENTITY,
+                                object_data: EMBEDDED_NATIVE_OBJECT,
+                                param: Some(input.param),
+                                map_pin_path: Some(&pin_root),
+                                allow_unsupported_maps: true,
+                                allowed_unsupported_map_names:
+                                    dae_ebpf_support::DEFAULT_ALLOWED_UNSUPPORTED_MAP_NAMES,
+                                max_entries_overrides: &[],
+                                prepin_lpm_array_map: true,
+                            },
+                        )
+                    }
+                    NativeEbpfObjectSource::File(path) => {
+                        dae_ebpf_support::load_aya_userspace_object(
+                            dae_ebpf_support::AyaUserspaceLoaderOptions {
+                                object: &path,
+                                param: Some(input.param),
+                                map_pin_path: Some(&pin_root),
+                                allow_unsupported_maps: true,
+                                allowed_unsupported_map_names:
+                                    dae_ebpf_support::DEFAULT_ALLOWED_UNSUPPORTED_MAP_NAMES,
+                                max_entries_overrides: &[],
+                                prepin_lpm_array_map: true,
+                            },
+                        )
+                    }
                 },
-            )?;
+                None => dae_ebpf_support::load_aya_userspace_object(
+                    dae_ebpf_support::AyaUserspaceLoaderOptions {
+                        object: param_object,
+                        param: None,
+                        map_pin_path: Some(&pin_root),
+                        allow_unsupported_maps: true,
+                        allowed_unsupported_map_names:
+                            dae_ebpf_support::DEFAULT_ALLOWED_UNSUPPORTED_MAP_NAMES,
+                        max_entries_overrides: &[],
+                        prepin_lpm_array_map: true,
+                    },
+                ),
+            }?;
             self.loaded_map_ids = collect_loaded_map_ids(&before_map_ids)?;
             self.pin_root = Some(pin_root);
             self.loaded = Some(loaded);

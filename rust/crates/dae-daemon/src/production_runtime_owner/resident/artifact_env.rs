@@ -60,7 +60,7 @@ pub(super) fn resolve_source_object(artifact_dir: &Path) -> Result<PathBuf, Stri
 }
 
 #[cfg(feature = "native-ebpf")]
-pub(super) fn resolve_native_object(artifact_dir: &Path) -> Result<Option<PathBuf>, String> {
+pub(super) fn resolve_native_object() -> Result<Option<PathBuf>, String> {
     if !resident_native_ebpf_enabled() {
         return Ok(None);
     }
@@ -76,24 +76,11 @@ pub(super) fn resolve_native_object(artifact_dir: &Path) -> Result<Option<PathBu
             path_string(&path)
         ));
     }
-    let embedded = artifact_dir.join("bpf_bpfel.native-embedded.o");
-    fs::write(&embedded, EMBEDDED_NATIVE_OBJECT).map_err(|err| {
-        format!(
-            "failed to write embedded resident native object {}: {err}",
-            path_string(&embedded)
-        )
-    })?;
-    fs::set_permissions(&embedded, fs::Permissions::from_mode(0o644)).map_err(|err| {
-        format!(
-            "failed to chmod embedded resident native object {}: {err}",
-            path_string(&embedded)
-        )
-    })?;
-    Ok(Some(embedded))
+    Ok(None)
 }
 
 #[cfg(not(feature = "native-ebpf"))]
-pub(super) fn resolve_native_object(_artifact_dir: &Path) -> Result<Option<PathBuf>, String> {
+pub(super) fn resolve_native_object() -> Result<Option<PathBuf>, String> {
     Ok(None)
 }
 
@@ -108,6 +95,11 @@ pub(super) fn resident_native_ebpf_enabled() -> bool {
             )
         })
         .unwrap_or(true)
+}
+
+#[cfg(not(feature = "native-ebpf"))]
+pub(super) fn resident_native_ebpf_enabled() -> bool {
+    false
 }
 
 pub(super) fn resident_dataplane_enabled() -> bool {

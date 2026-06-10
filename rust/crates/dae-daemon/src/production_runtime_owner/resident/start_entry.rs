@@ -2,10 +2,7 @@ use super::*;
 pub fn start_resident_production_runtime(
     config: &Config,
 ) -> Result<ResidentProductionRuntime, String> {
-    let artifact_dir = PathBuf::from(format!(
-        "/tmp/dae-daemon-resident-runtime-{}",
-        std::process::id()
-    ));
+    let artifact_dir = resident_runtime_artifact_dir(std::process::id());
     cleanup_stale_resident_runtime_artifacts(&artifact_dir);
     if artifact_dir.exists() {
         fs::remove_dir_all(&artifact_dir).map_err(|err| {
@@ -22,12 +19,20 @@ pub fn start_resident_production_runtime(
         )
     })?;
 
-    let native_object = resolve_native_object(&artifact_dir)?;
-    let source_object = match native_object.as_ref() {
-        Some(path) => path.clone(),
-        None => resolve_source_object(&artifact_dir)?,
+    let native_ebpf_opt_in = resident_native_ebpf_enabled();
+    let native_object = resolve_native_object()?;
+    let source_object = if native_ebpf_opt_in {
+        match native_object.as_ref() {
+            Some(path) => path.clone(),
+            #[cfg(feature = "native-ebpf")]
+            None => PathBuf::from(EMBEDDED_NATIVE_OBJECT_IDENTITY),
+            #[cfg(not(feature = "native-ebpf"))]
+            None => resolve_source_object(&artifact_dir)?,
+        }
+    } else {
+        resolve_source_object(&artifact_dir)?
     };
-    let native_ebpf_opt_in = native_object.is_some();
+    let native_ebpf_embedded_object = native_ebpf_opt_in && native_object.is_none();
     let native_ebpf_backend = resolve_native_backend()?;
     let netns_link_mode = resolve_netns_link_mode_from_env()?;
     let options = ProductionRuntimeOwnerOptions {
@@ -42,6 +47,7 @@ pub fn start_resident_production_runtime(
         native_ebpf_opt_in,
         native_ebpf_backend,
         native_ebpf_completed_a3_admission: native_ebpf_opt_in,
+        native_ebpf_embedded_object,
         native_ebpf_object: native_object,
         ..ProductionRuntimeOwnerOptions::default()
     };
@@ -61,27 +67,61 @@ pub fn start_resident_production_runtime(
     )
 }
 
+fn resident_runtime_artifact_dir(pid: u32) -> PathBuf {
+    PathBuf::from("/run/daed/runtime").join(pid.to_string())
+}
+
 fn cleanup_stale_resident_runtime_artifacts(current_artifact_dir: &Path) {
-    let Ok(entries) = fs::read_dir("/tmp") else {
+    let _ = fs::create_dir_all("/run/daed/runtime");
+    cleanup_runtime_artifact_root(Path::new("/run/daed"), "resident-runtime-", None);
+    cleanup_runtime_artifact_root(
+        Path::new("/run/daed/runtime"),
+        "",
+        Some(current_artifact_dir),
+    );
+}
+
+fn cleanup_runtime_artifact_root(root: &Path, prefix: &str, current_artifact_dir: Option<&Path>) {
+    let Ok(entries) = fs::read_dir(root) else {
         return;
     };
     for entry in entries.flatten() {
-        let path = entry.path();
-        if path == current_artifact_dir {
-            continue;
-        }
-        let Some(name) = path.file_name().and_then(|name| name.to_str()) else {
-            continue;
-        };
-        let Some(pid) = name
-            .strip_prefix("dae-daemon-resident-runtime-")
-            .and_then(|pid| pid.parse::<u32>().ok())
-        else {
-            continue;
-        };
-        if Path::new(&format!("/proc/{pid}")).exists() {
-            continue;
-        }
-        let _ = fs::remove_dir_all(path);
+        cleanup_runtime_artifact_entry(entry.path(), prefix, current_artifact_dir);
+    }
+}
+
+fn cleanup_runtime_artifact_entry(
+    path: PathBuf,
+    prefix: &str,
+    current_artifact_dir: Option<&Path>,
+) {
+    if Some(path.as_path()) == current_artifact_dir {
+        return;
+    }
+    let Some(name) = path.file_name().and_then(|name| name.to_str()) else {
+        return;
+    };
+    let Some(pid_text) = name.strip_prefix(prefix) else {
+        return;
+    };
+    let Ok(pid) = pid_text.parse::<u32>() else {
+        return;
+    };
+    if Path::new(&format!("/proc/{pid}")).exists() {
+        return;
+    }
+    let _ = fs::remove_dir_all(path);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn resident_runtime_artifact_dir_uses_run_daed() {
+        assert_eq!(
+            resident_runtime_artifact_dir(42),
+            PathBuf::from("/run/daed/runtime/42")
+        );
     }
 }

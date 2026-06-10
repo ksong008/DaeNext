@@ -6,9 +6,9 @@ use std::collections::BTreeMap;
 #[cfg(feature = "native-ebpf")]
 use dae_datapath::{ACTIVE_TCP_LAN_FILTER_PREF, ACTIVE_TCP_LAN_HOST_IFACE};
 use dae_ebpf_support::{
-    AttachBackend, DaeParamInput, NativeBackendAdmissionEvidence, NativeBackendOptInDecision,
-    NativeBackendOptInRequest, TcAttachLayer, build_dae_param, native_backend_admission_report,
-    native_backend_opt_in_decision, write_param_aware_object,
+    AttachBackend, BpfDaeParam, DaeParamInput, NativeBackendAdmissionEvidence,
+    NativeBackendOptInDecision, NativeBackendOptInRequest, TcAttachLayer, build_dae_param,
+    native_backend_admission_report, native_backend_opt_in_decision,
 };
 #[cfg(feature = "native-ebpf")]
 use dae_ebpf_support::{
@@ -24,6 +24,12 @@ use super::ProductionRuntimeOwnerOptions;
 use super::command::{mac_string, path_string};
 #[cfg(feature = "native-ebpf")]
 use super::{FILTER_PREF, PRODUCTION_HOST_IFACE, PRODUCTION_NETNS, PRODUCTION_PEER_IFACE};
+
+pub(super) const EMBEDDED_NATIVE_OBJECT_IDENTITY: &str = "memory:native-ebpf-object";
+pub(super) const NATIVE_PARAM_OBJECT_IDENTITY: &str = "memory:native-ebpf-param";
+#[cfg(feature = "native-ebpf")]
+pub(super) const EMBEDDED_NATIVE_OBJECT: &[u8] =
+    include_bytes!(concat!(env!("OUT_DIR"), "/dae-native-bpf_bpfel.o"));
 
 mod types;
 pub(in crate::production_runtime_owner) use self::types::*;

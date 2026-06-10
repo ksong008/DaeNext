@@ -23,8 +23,12 @@ pub(crate) fn preflight_checks(options: &ProductionRuntimeOwnerOptions) -> Vec<V
     push_check(
         &mut checks,
         "source-object-present",
-        !options.execute || options.source_object.exists(),
-        json!({"path": path_string(&options.source_object)}),
+        !options.execute || options.native_ebpf_embedded_object || options.source_object.exists(),
+        json!({
+            "path": path_string(&options.source_object),
+            "native_ebpf_opt_in": options.native_ebpf_opt_in,
+            "native_embedded_object": options.native_ebpf_embedded_object,
+        }),
         "production runtime owner source eBPF object is missing",
     );
     push_check(
@@ -35,6 +39,7 @@ pub(crate) fn preflight_checks(options: &ProductionRuntimeOwnerOptions) -> Vec<V
             "opt_in": options.native_ebpf_opt_in,
             "requested_backend": options.native_ebpf_backend.as_str(),
             "completed_a3_admission": options.native_ebpf_completed_a3_admission,
+            "embedded_object": options.native_ebpf_embedded_object,
             "native_loader_compiled": cfg!(feature = "native-ebpf"),
             "default_enable_allowed": false,
             "tc_command_fallback_required": true,
@@ -60,6 +65,7 @@ pub(crate) fn preflight_checks(options: &ProductionRuntimeOwnerOptions) -> Vec<V
         json!({
             "opt_in": options.native_ebpf_opt_in,
             "path": options.native_ebpf_object.as_ref().map(|path| path_string(path)),
+            "embedded_object": options.native_ebpf_embedded_object,
             "fallback_object": path_string(&options.source_object),
             "required_when_configured": true,
         }),
