@@ -93,7 +93,7 @@ fn outbound_production_matrix_gate_accepts_complete_candidate_contract() {
         0
     );
     assert!(
-        !gate["excluded_stream_wrapper_source_matrix_typed_report"]["c10_ready"]
+        gate["excluded_stream_wrapper_source_matrix_typed_report"]["c10_ready"]
             .as_bool()
             .unwrap()
     );
@@ -104,7 +104,7 @@ fn outbound_production_matrix_gate_accepts_complete_candidate_contract() {
         "pass"
     );
     assert!(
-        !gate["scoped_expanded_source_matrix_typed_report"]["c10_ready"]
+        gate["scoped_expanded_source_matrix_typed_report"]["c10_ready"]
             .as_bool()
             .unwrap()
     );

@@ -68,7 +68,7 @@ pub(super) fn insert_outbound_production_matrix_service_contract_capabilities(re
         && !scoped_source_evidence.raw_bodies_retained
         && !scoped_source_evidence.raw_state_retained;
     let scoped_expanded_source_matrix_release_gate_ready = scoped_expanded_source_matrix_complete;
-    let scoped_expanded_source_matrix_c10_ready = false;
+    let scoped_expanded_source_matrix_c10_ready = scoped_expanded_source_matrix_complete;
     let excluded_stream_wrapper_source_matrix_typed_report =
         excluded_stream_wrapper_source_matrix_typed_report(
             source_registry.rows,

@@ -179,7 +179,7 @@ pub(super) fn excluded_stream_wrapper_source_matrix_typed_report(
         "open": true,
         "complete": complete,
         "release_gate_ready": complete,
-        "c10_ready": false,
+        "c10_ready": complete,
         "source_scope": "source-supported-rows-excluding-stream-wrapper",
         "excluded_stream_wrappers": excluded_stream_wrappers,
         "excluded_shape_ids": excluded_shape_ids,
