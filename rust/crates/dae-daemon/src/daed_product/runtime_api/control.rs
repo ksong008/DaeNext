@@ -159,7 +159,9 @@ pub(in crate::daed_product) fn api_runtime_reload(
             response.insert("runtimeStarted".to_owned(), json!(true));
             response.insert("runtime".to_owned(), runtime);
             response.insert("allocatorReclaim".to_owned(), reload_reclaim);
-            HttpResponse::json(200, Value::Object(response))
+            let response = HttpResponse::json(200, Value::Object(response));
+            let _ = allocator_reclaim(AllocatorReclaimReason::ReloadCompleted);
+            response
         }
         Err(err) => {
             let _ = app.runtime.stop();
