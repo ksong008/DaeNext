@@ -126,7 +126,13 @@ pub(crate) fn spawn_allocator_idle_reclaim_monitor(app: &Arc<AppState>) {
             loop {
                 let policy = AllocatorIdleReclaimPolicy::from_env();
                 thread::sleep(policy.sample_interval);
-                allocator_idle_reclaim_tick(&app, policy);
+                if std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    allocator_idle_reclaim_tick(&app, policy);
+                }))
+                .is_err()
+                {
+                    record_idle_reclaim_tick_panic();
+                }
             }
         });
 }
@@ -256,7 +262,9 @@ fn idle_reclaim_wait_remaining(now: Instant, min_interval: Duration) -> Option<D
         ALLOCATOR_IDLE_RECLAIM_STATE.get_or_init(|| Mutex::new(default_idle_reclaim_state()));
     let state = state_lock.lock().ok()?;
     let last_attempt = state.last_attempt?;
-    let elapsed = now.duration_since(last_attempt);
+    let elapsed = now
+        .checked_duration_since(last_attempt)
+        .unwrap_or(Duration::ZERO);
     (elapsed < min_interval).then_some(min_interval - elapsed)
 }
 
@@ -294,11 +302,11 @@ fn idle_reclaim_traffic_rate_from_samples(
     {
         return None;
     }
-    let elapsed = now.duration_since(previous.observed_at).as_secs_f64();
+    let window = now.checked_duration_since(previous.observed_at)?;
+    let elapsed = window.as_secs_f64();
     if elapsed <= 0.0 {
         return None;
     }
-    let window = now.duration_since(previous.observed_at);
     let bytes = observation
         .upload_total_counter
         .saturating_sub(previous.upload_total_counter)
@@ -344,11 +352,31 @@ fn idle_reclaim_low_traffic_window_from_since(
     traffic_rate: AllocatorIdleTrafficRate,
     required: Duration,
 ) -> AllocatorLowTrafficWindow {
-    let low_since = low_traffic_since.get_or_insert(traffic_rate.window_started_at);
-    let elapsed = now.duration_since(*low_since);
+    let window_start = traffic_rate.window_started_at.min(now);
+    let low_since = low_traffic_since.get_or_insert(window_start);
+    if now.checked_duration_since(*low_since).is_none() {
+        *low_since = window_start;
+    }
+    let elapsed = now
+        .checked_duration_since(*low_since)
+        .unwrap_or(Duration::ZERO);
     AllocatorLowTrafficWindow {
         elapsed,
         ready: elapsed >= required,
+    }
+}
+
+fn record_idle_reclaim_tick_panic() {
+    if let Ok(mut state) = ALLOCATOR_IDLE_RECLAIM_STATE
+        .get_or_init(|| Mutex::new(default_idle_reclaim_state()))
+        .lock()
+    {
+        state.low_traffic_since = None;
+        state.last_report = json!({
+            "status": "skipped",
+            "reason": "monitor_tick_panicked",
+            "lowTrafficWindowReset": true,
+        });
     }
 }
 
@@ -447,6 +475,27 @@ mod tests {
     }
 
     #[test]
+    fn idle_reclaim_traffic_rate_warms_up_after_clock_order_reset() {
+        let previous_at = Instant::now();
+        let previous = AllocatorIdleTrafficSample {
+            upload_total_counter: 1_000_000,
+            download_total_counter: 2_000_000,
+            observed_at: previous_at + Duration::from_secs(10),
+        };
+        let observation = AllocatorIdleObservation {
+            active_tcp: 0,
+            active_udp: 0,
+            upload_total_counter: 1_000_100,
+            download_total_counter: 2_000_200,
+        };
+
+        assert_eq!(
+            idle_reclaim_traffic_rate_from_samples(previous, previous_at, observation),
+            None
+        );
+    }
+
+    #[test]
     fn low_traffic_window_requires_configured_duration() {
         let started_at = Instant::now();
         let rate = AllocatorIdleTrafficRate {
@@ -473,5 +522,27 @@ mod tests {
         assert!(!warming.ready);
         assert_eq!(ready.elapsed, Duration::from_secs(300));
         assert!(ready.ready);
+    }
+
+    #[test]
+    fn low_traffic_window_resets_future_since_without_panicking() {
+        let now = Instant::now();
+        let rate = AllocatorIdleTrafficRate {
+            bytes_per_second: 0,
+            window: Duration::from_secs(60),
+            window_started_at: now - Duration::from_secs(60),
+        };
+        let mut low_since = Some(now + Duration::from_secs(30));
+
+        let warming = idle_reclaim_low_traffic_window_from_since(
+            &mut low_since,
+            now,
+            rate,
+            Duration::from_secs(300),
+        );
+
+        assert_eq!(low_since, Some(rate.window_started_at));
+        assert_eq!(warming.elapsed, Duration::from_secs(60));
+        assert!(!warming.ready);
     }
 }
