@@ -152,9 +152,20 @@ pub(crate) fn restore_runtime_from_state(
     } else {
         AllocatorReclaimReason::ReloadCompleted
     };
+    if !log_mode.returns_detailed_report() {
+        drop(outcome.report);
+        drop(applied);
+        let final_reclaim = allocator_reclaim(reclaim_reason);
+        return Ok(json!({
+            "restored": true,
+            "detailedReport": false,
+            "allocatorReclaim": final_reclaim,
+        }));
+    }
     let final_reclaim = allocator_reclaim(reclaim_reason);
     Ok(json!({
         "restored": true,
+        "detailedReport": true,
         "runtime": outcome.report,
         "materialized": applied,
         "allocatorReclaim": final_reclaim,
