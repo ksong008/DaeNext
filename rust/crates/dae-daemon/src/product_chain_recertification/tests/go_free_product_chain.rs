@@ -1,6 +1,54 @@
 use super::*;
 
 #[test]
+fn default_product_package_scan_accepts_rust_native_release_path() {
+    let root = package_scan_fixture_root("rust-native-release");
+    let options = write_default_package_scan_fixture(&root, false);
+    let scan = go_free_product_chain::default_product_package_scan_json(&options);
+
+    assert_eq!(scan["status"].as_str().unwrap(), "pass");
+    assert!(scan["default_product_package_go_free"].as_bool().unwrap());
+    assert!(
+        scan["go_product_shell_retired_from_default_package"]
+            .as_bool()
+            .unwrap()
+    );
+    assert!(
+        !scan["workflows"]["release"]["source_archive_uses_wing_vendor"]
+            .as_bool()
+            .unwrap()
+    );
+    assert!(scan["blockers"].as_array().unwrap().is_empty());
+}
+
+#[test]
+fn default_product_package_scan_rejects_release_source_go_vendor() {
+    let root = package_scan_fixture_root("go-vendor-release");
+    let options = write_default_package_scan_fixture(&root, true);
+    let scan = go_free_product_chain::default_product_package_scan_json(&options);
+
+    assert_eq!(scan["status"].as_str().unwrap(), "blocked");
+    assert!(!scan["default_product_package_go_free"].as_bool().unwrap());
+    assert!(
+        !scan["go_product_shell_retired_from_default_package"]
+            .as_bool()
+            .unwrap()
+    );
+    assert!(
+        scan["workflows"]["release"]["source_archive_uses_wing_vendor"]
+            .as_bool()
+            .unwrap()
+    );
+    assert!(
+        scan["blockers"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|blocker| { blocker.as_str().unwrap().contains("vendors Go modules") })
+    );
+}
+
+#[test]
 fn go_free_product_chain_gate_blocks_current_candidate_until_go_paths_retire() {
     let mut candidate_service_contract = candidate_service_contract_value(true);
     candidate_service_contract["executed"] = json!(true);
@@ -130,4 +178,106 @@ fn go_free_product_chain_gate_accepts_complete_final_contract_fixture() {
     assert!(gate["expanded_source_matrix_c10_ready"].as_bool().unwrap());
     assert!(gate["source_matrix_c10_ready"].as_bool().unwrap());
     assert!(gate["blockers"].as_array().unwrap().is_empty());
+}
+
+fn package_scan_fixture_root(name: &str) -> PathBuf {
+    std::env::temp_dir().join(format!(
+        "dae-daemon-package-scan-{name}-{}",
+        std::process::id()
+    ))
+}
+
+fn write_default_package_scan_fixture(
+    root: &Path,
+    release_source_go_vendor: bool,
+) -> ProductChainRecertificationOptions {
+    let daed = root.join("daed");
+    write_fixture_file(
+        &daed.join("Makefile"),
+        r#"
+daed: daed-rust-native
+
+daed-rust-native:
+	cargo build $(RUST_DAED_BUILD_ARGS)
+
+daed-go-rollback:
+	$(MAKE) OUTPUT=../$(OUTPUT) bundle
+"#,
+    );
+    write_fixture_file(
+        &daed.join("Dockerfile"),
+        r#"
+FROM rust:1-bookworm AS build-daed
+RUN DAED_SKIP_WEB_BUILD=1 make APPNAME=daed OUTPUT=/build/daed daed-rust-native
+FROM debian:bookworm-slim
+RUN mkdir -p /usr/share/daed/web
+COPY install/docker-entrypoint.sh /usr/local/bin/daed-docker-entrypoint
+"#,
+    );
+    write_fixture_file(
+        &daed.join("publish.Dockerfile"),
+        r#"
+FROM rust:1-bookworm AS build
+RUN DAED_SKIP_WEB_BUILD=1 make APPNAME=daed OUTPUT=/build/daed daed-rust-native
+FROM debian:bookworm-slim
+RUN mkdir -p /usr/share/daed/web
+COPY install/docker-entrypoint.sh /usr/local/bin/daed-docker-entrypoint
+"#,
+    );
+    write_fixture_file(
+        &daed.join(".github/workflows/daed2.0.yml"),
+        r#"
+steps:
+  - name: Build Rust native daed
+    env:
+      DAED_SKIP_WEB_BUILD: 1
+    run: make
+"#,
+    );
+    write_fixture_file(
+        &daed.join(".github/workflows/test-linux-amd64v3.yml"),
+        r#"
+steps:
+  - name: Build Rust native daed
+    env:
+      DAED_SKIP_WEB_BUILD: 1
+    run: make
+"#,
+    );
+    let release_vendor_step = if release_source_go_vendor {
+        r#"
+  - name: Download wing vendor
+    run: |
+      go mod download -modcacherw
+    working-directory: wing
+"#
+    } else {
+        r#"
+  - name: Verify Rust native source archive inputs
+    run: |
+      git submodule update --init --recursive
+      test -f Makefile
+"#
+    };
+    write_fixture_file(
+        &daed.join(".github/workflows/release-please.yml"),
+        &format!(
+            r#"
+env:
+  RUSTFLAGS: -C target-cpu=x86-64
+steps:
+{release_vendor_step}
+  - name: make
+    run: |
+      export DAED_SKIP_WEB_BUILD=1
+      make
+      fpm ./web=/usr/share/daed/web
+"#
+        ),
+    );
+
+    ProductChainRecertificationOptions {
+        daed_repo: daed,
+        ..ProductChainRecertificationOptions::default()
+    }
 }

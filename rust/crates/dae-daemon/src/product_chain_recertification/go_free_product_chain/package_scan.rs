@@ -78,6 +78,7 @@ pub(crate) fn default_product_package_scan_json(
         && !publish_docker_default_uses_wing_bundle
         && integration_default_rust_native
         && release_default_rust_native
+        && !release_source_archive_uses_wing_vendor
         && linux_test_default_rust_native
         && !default_build_uses_go_bpf_generator;
     let default_product_package_go_free =
@@ -104,6 +105,11 @@ pub(crate) fn default_product_package_scan_json(
     if !release_default_rust_native {
         blockers
             .push("C10 release workflow default build/package path is not Rust native".to_owned());
+    }
+    if release_source_archive_uses_wing_vendor {
+        blockers.push(
+            "C10 release source archive still vendors Go modules from the default path".to_owned(),
+        );
     }
     if !linux_test_default_rust_native {
         blockers.push("C10 linux test workflow default build path is not Rust native".to_owned());
