@@ -2,6 +2,66 @@ use super::*;
 pub fn load_aya_userspace_object(
     options: AyaUserspaceLoaderOptions<'_>,
 ) -> Result<AyaUserspaceLoadedObject, String> {
+    load_aya_userspace_object_from_source(
+        AyaUserspaceLoadSource::File(options.object),
+        LoadCommonOptions {
+            param: options.param,
+            map_pin_path: options.map_pin_path,
+            allow_unsupported_maps: options.allow_unsupported_maps,
+            allowed_unsupported_map_names: options.allowed_unsupported_map_names,
+            max_entries_overrides: options.max_entries_overrides,
+            prepin_lpm_array_map: options.prepin_lpm_array_map,
+        },
+    )
+}
+
+pub fn load_aya_userspace_object_bytes(
+    options: AyaUserspaceBytesLoaderOptions<'_>,
+) -> Result<AyaUserspaceLoadedObject, String> {
+    load_aya_userspace_object_from_source(
+        AyaUserspaceLoadSource::Bytes {
+            label: options.object_label,
+            data: options.object_data,
+        },
+        LoadCommonOptions {
+            param: options.param,
+            map_pin_path: options.map_pin_path,
+            allow_unsupported_maps: options.allow_unsupported_maps,
+            allowed_unsupported_map_names: options.allowed_unsupported_map_names,
+            max_entries_overrides: options.max_entries_overrides,
+            prepin_lpm_array_map: options.prepin_lpm_array_map,
+        },
+    )
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum AyaUserspaceLoadSource<'a> {
+    File(&'a Path),
+    Bytes { label: &'a str, data: &'a [u8] },
+}
+
+impl AyaUserspaceLoadSource<'_> {
+    fn report_identity(self) -> PathBuf {
+        match self {
+            Self::File(path) => path.to_owned(),
+            Self::Bytes { label, .. } => PathBuf::from(label),
+        }
+    }
+}
+
+struct LoadCommonOptions<'a> {
+    param: Option<BpfDaeParam>,
+    map_pin_path: Option<&'a Path>,
+    allow_unsupported_maps: bool,
+    allowed_unsupported_map_names: &'a [&'a str],
+    max_entries_overrides: &'a [(&'a str, u32)],
+    prepin_lpm_array_map: bool,
+}
+
+fn load_aya_userspace_object_from_source(
+    source: AyaUserspaceLoadSource<'_>,
+    options: LoadCommonOptions<'_>,
+) -> Result<AyaUserspaceLoadedObject, String> {
     let map_in_map_pins = if options.prepin_lpm_array_map {
         let map_pin_path = options
             .map_pin_path
@@ -28,9 +88,11 @@ pub fn load_aya_userspace_object(
         loader.set_max_entries(map_name, *max_entries);
     }
 
-    let ebpf = loader
-        .load_file(options.object)
-        .map_err(|err| format!("aya userspace object load failed: {err:?}"))?;
+    let ebpf = match source {
+        AyaUserspaceLoadSource::File(path) => loader.load_file(path),
+        AyaUserspaceLoadSource::Bytes { data, .. } => load_aligned_bytes(&mut loader, data),
+    }
+    .map_err(|err| format!("aya userspace object load failed: {err:?}"))?;
     let loaded_map_names = ebpf
         .maps()
         .map(|(name, _)| name.to_owned())
@@ -40,8 +102,9 @@ pub fn load_aya_userspace_object(
         .programs()
         .map(|(name, _)| name.to_owned())
         .collect::<Vec<_>>();
+    let object_identity = source.report_identity();
     let report = aya_userspace_load_report(
-        options.object,
+        &object_identity,
         options.param.is_some(),
         options.map_pin_path,
         options.allow_unsupported_maps,
@@ -73,6 +136,19 @@ pub fn load_aya_userspace_object(
         return Err(format!("aya userspace object map spec mismatch: {summary}"));
     }
     Ok(AyaUserspaceLoadedObject { ebpf, report })
+}
+
+fn load_aligned_bytes(
+    loader: &mut aya::EbpfLoader,
+    data: &[u8],
+) -> Result<aya::Ebpf, aya::EbpfError> {
+    let words = data.len().div_ceil(std::mem::size_of::<u64>());
+    let mut aligned = vec![0_u64; words];
+    // SAFETY: the backing allocation is alive for this call and has at least data.len() bytes.
+    let aligned_bytes =
+        unsafe { std::slice::from_raw_parts_mut(aligned.as_mut_ptr().cast::<u8>(), data.len()) };
+    aligned_bytes.copy_from_slice(data);
+    loader.load(aligned_bytes)
 }
 
 fn loaded_map_specs(ebpf: &aya::Ebpf) -> Result<Vec<AyaLoadedMapSpec>, String> {

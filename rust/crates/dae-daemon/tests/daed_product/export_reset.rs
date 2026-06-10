@@ -76,6 +76,7 @@ pub(super) fn daed_export_commands_report_c10_package_surface() {
         String::from_utf8_lossy(&systemd.stdout).contains("ExecStartPre=/usr/bin/daed validate")
     );
     assert!(String::from_utf8_lossy(&systemd.stdout).contains("ExecStart=/usr/bin/daed run"));
+    assert!(String::from_utf8_lossy(&systemd.stdout).contains("RuntimeDirectory=daed"));
 
     let docker = Command::new(binary())
         .args(["export", "docker-entrypoint"])

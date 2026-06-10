@@ -19,7 +19,7 @@ Environment:
   CONFIG_FILE=/etc/dae/config.dae
   EXPECTED_SHA256=sha256-or-empty
   SUMMARY_FILE=/tmp/dae-daex-production-semantic-probe-<time>.json
-  EVENT_FILE=/tmp/dae-daemon-resident-runtime-*/resident-production-dataplane-events.jsonl
+  EVENT_FILE=/run/daed/runtime/*/resident-production-dataplane-events.jsonl
   UDP_PROXY_HOST=8.8.8.8
   UDP_PROXY_PORT=19090
   UDP_EVENT_WAIT_SECONDS=25
@@ -209,7 +209,7 @@ def latest_event_file():
     if event_file_env:
         return event_file_env
     candidates = glob.glob(
-        "/tmp/dae-daemon-resident-runtime-*/resident-production-dataplane-events.jsonl"
+        "/run/daed/runtime/*/resident-production-dataplane-events.jsonl"
     )
     if not candidates:
         return ""

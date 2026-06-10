@@ -27,7 +27,6 @@ pub(super) fn start_with_options(
     let mut executed_steps = Vec::new();
     let mut cleanup_steps = Vec::new();
     let param_object = artifact_dir.join("bpf_bpfel.param.o");
-    let native_param_object = artifact_dir.join("bpf_bpfel.native-param.o");
     let mut live_handoff = None;
     let mut dataplane = None;
     let mut native_runtime = NativeEbpfRuntimeState::new();
@@ -77,27 +76,29 @@ pub(super) fn start_with_options(
                     .as_bool()
                     .unwrap_or(false);
         }
-        let (selected_native_param_object, native_param_image) = match (dae0_ifindex, dae0peer_mac)
-        {
+        let native_preparation = match (dae0_ifindex, dae0peer_mac) {
             (Some(dae0_ifindex), Some(dae0peer_mac)) => prepare_native_param_object(
                 &options,
                 &param_object,
-                &native_param_object,
                 dae0_ifindex,
                 dae0peer_mac,
                 dae_netns_id,
             ),
-            _ => (
-                param_object.clone(),
-                json!({
+            _ => NativeParamObjectPreparation {
+                selected_param_object: param_object.clone(),
+                report: json!({
                     "status": "skipped",
-                    "path": path_string(&native_param_object),
+                    "path": path_string(&param_object),
                     "reason": "topology runtime PARAM values were not available",
                     "selected_param_object": path_string(&param_object),
                     "fallback_param_object": path_string(&param_object),
                 }),
-            ),
+                load_input: None,
+            },
         };
+        let selected_native_param_object = native_preparation.selected_param_object.clone();
+        let native_param_image = native_preparation.report;
+        native_runtime.set_load_input(native_preparation.load_input);
         if options.native_ebpf_opt_in {
             ok &= native_param_image["status"].as_str() == Some("pass")
                 && native_param_image["rewritten_param_matches"]
@@ -487,6 +488,9 @@ pub(super) fn start_with_options(
             "cleanup_file": path_string(&cleanup_file),
             "source_object": path_string(&options.source_object),
             "native_object": options.native_ebpf_object.as_ref().map(|path| path_string(path)),
+            "native_object_identity": path_string(&options.source_object),
+            "native_object_embedded": options.native_ebpf_embedded_object,
+            "native_object_materialized": !options.native_ebpf_embedded_object && options.native_ebpf_object.is_some(),
             "param_object": path_string(&param_object),
             "native_param_object": path_string(&selected_native_param_object),
             "tproxy_port": options.tproxy_port,

@@ -62,13 +62,14 @@ pub use aya_loader::{
     AyaPinnedObject, AyaTcAttachDetachReport, AyaTcxProgramOrderEntry,
     AyaTraceAttachRingbufSmokeOptions, AyaTraceAttachRingbufSmokeReport,
     AyaTraceAttachSmokeTrigger, AyaTraceConfig, AyaTraceLoadPinReport, AyaTraceLoaderOptions,
-    AyaUserspaceLoadReport, AyaUserspaceLoadedObject, AyaUserspaceLoaderOptions,
-    DEFAULT_ALLOWED_UNSUPPORTED_MAP_NAMES, PinnedTcAttachOptions, PinnedTcAttachReport,
-    TRACE_CORE_SIDELOAD_ENABLED, attach_pin_aya_sched_classifier,
+    AyaUserspaceBytesLoaderOptions, AyaUserspaceLoadReport, AyaUserspaceLoadedObject,
+    AyaUserspaceLoaderOptions, DEFAULT_ALLOWED_UNSUPPORTED_MAP_NAMES, PinnedTcAttachOptions,
+    PinnedTcAttachReport, TRACE_CORE_SIDELOAD_ENABLED, attach_pin_aya_sched_classifier,
     attach_ringbuf_smoke_aya_trace_object, aya_userspace_load_report,
     load_attach_aya_cgroup_program, load_attach_aya_sched_classifier,
     load_attach_detach_aya_cgroup_program, load_attach_detach_aya_sched_classifier,
-    load_aya_userspace_object, load_pin_aya_trace_object, pin_aya_loaded_object_for_go_adoption,
+    load_aya_userspace_object, load_aya_userspace_object_bytes, load_pin_aya_trace_object,
+    pin_aya_loaded_object_for_go_adoption,
 };
 pub use capability::{EbpfBackendCapabilityReport, report_only_ebpf_backend_capability};
 pub use cgroup::{

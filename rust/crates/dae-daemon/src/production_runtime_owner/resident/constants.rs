@@ -1,10 +1,6 @@
-use super::*;
 #[cfg(not(feature = "native-ebpf"))]
 pub(super) const EMBEDDED_SOURCE_OBJECT: &[u8] =
     include_bytes!("../../../../../../control/bpf_bpfel.o");
-#[cfg(feature = "native-ebpf")]
-pub(super) const EMBEDDED_NATIVE_OBJECT: &[u8] =
-    include_bytes!(concat!(env!("OUT_DIR"), "/dae-native-bpf_bpfel.o"));
 pub(super) const DEFAULT_SOURCE_OBJECT_ENV: &str = "RESIDENT_BPF_OBJECT";
 pub(super) const DEFAULT_SOURCE_OBJECT_LEGACY_ENV: &str = "DAE_RUST_BPF_OBJECT";
 #[cfg(feature = "native-ebpf")]

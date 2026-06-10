@@ -249,15 +249,10 @@ pub(super) fn production_runtime_owner_native_param_object_keeps_fallback_withou
         ..ProductionRuntimeOwnerOptions::default()
     };
     let fallback = std::env::temp_dir().join("dae-native-fallback-param.o");
-    let native = std::env::temp_dir().join("dae-native-param.o");
-    let (selected, report) = native_ebpf::prepare_native_param_object(
-        &options,
-        &fallback,
-        &native,
-        7,
-        [1, 2, 3, 4, 5, 6],
-        49,
-    );
+    let preparation =
+        native_ebpf::prepare_native_param_object(&options, &fallback, 7, [1, 2, 3, 4, 5, 6], 49);
+    let selected = preparation.selected_param_object;
+    let report = preparation.report;
     assert_eq!(selected, fallback);
     assert_eq!(report["status"].as_str().unwrap(), "skipped");
     assert!(
@@ -269,6 +264,38 @@ pub(super) fn production_runtime_owner_native_param_object_keeps_fallback_withou
     assert_eq!(
         report["fallback_param_object"].as_str().unwrap(),
         selected.display().to_string()
+    );
+}
+
+#[test]
+pub(super) fn production_runtime_owner_native_param_object_uses_memory_identity_for_embedded() {
+    let options = ProductionRuntimeOwnerOptions {
+        native_ebpf_opt_in: true,
+        native_ebpf_embedded_object: true,
+        ..ProductionRuntimeOwnerOptions::default()
+    };
+    let fallback = std::env::temp_dir().join("dae-native-fallback-param.o");
+    let preparation =
+        native_ebpf::prepare_native_param_object(&options, &fallback, 7, [1, 2, 3, 4, 5, 6], 49);
+
+    assert_eq!(
+        preparation.selected_param_object,
+        PathBuf::from(native_ebpf::NATIVE_PARAM_OBJECT_IDENTITY)
+    );
+    assert_eq!(preparation.report["status"].as_str().unwrap(), "pass");
+    assert_eq!(
+        preparation.report["source_kind"].as_str().unwrap(),
+        "embedded"
+    );
+    assert!(!preparation.report["materialized_object"].as_bool().unwrap());
+    assert_eq!(
+        preparation.report["param_delivery"].as_str().unwrap(),
+        "aya-set-global"
+    );
+    let load_input = preparation.load_input.unwrap();
+    assert_eq!(
+        load_input.source.identity(),
+        PathBuf::from(native_ebpf::EMBEDDED_NATIVE_OBJECT_IDENTITY)
     );
 }
 
