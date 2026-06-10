@@ -36,7 +36,7 @@ pub(crate) fn assert_resident_and_control_plane_contract(report: &Value) {
             .unwrap()
     );
     assert!(
-        report["resident_dataplane_default_switch_required"]
+        !report["resident_dataplane_default_switch_required"]
             .as_bool()
             .unwrap()
     );

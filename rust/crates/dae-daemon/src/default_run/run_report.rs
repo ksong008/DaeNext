@@ -164,7 +164,7 @@ pub fn run_default_optin_report(options: &RunOptions, version: &str) -> Result<V
     let bpf_go_fallback_retired = production_runtime_owner["go_bpf_fallback_retired"]
         .as_bool()
         .unwrap_or(false);
-    let resident_dataplane_default_switch_required = true;
+    let resident_dataplane_default_switch_required = false;
     let resident_dataplane_default_switch_ready =
         resident_dataplane_default_switch_ready_from_env();
     let true_rust_default_daemon_admitted = production_dataplane_admitted
@@ -415,14 +415,15 @@ pub fn run_default_optin_report(options: &RunOptions, version: &str) -> Result<V
     report["production_runtime_owner"] = production_runtime_owner;
     report["resident_dataplane_default_switch_gate"] = json!({
         "required": resident_dataplane_default_switch_required,
-        "env": RESIDENT_DATAPLANE_ENV,
-        "env_enabled": resident_dataplane_default_switch_ready,
+        "default_source": "rust-native-product-default",
+        "override_env": RESIDENT_DATAPLANE_ENV,
+        "enabled": resident_dataplane_default_switch_ready,
         "ready": resident_dataplane_default_switch_ready,
         "blocker": if resident_dataplane_default_switch_ready {
             Value::Null
         } else {
             json!(format!(
-                "{RESIDENT_DATAPLANE_ENV}=1 is required before true Rust default daemon admission"
+                "{RESIDENT_DATAPLANE_ENV} explicitly disables true Rust default daemon admission"
             ))
         },
         "source": [

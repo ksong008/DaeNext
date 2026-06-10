@@ -100,7 +100,7 @@ pub(super) fn resident_default_daemon_switch_gate_json(
         }
         if !resident_dataplane_default_switch_ready {
             blockers.push(
-                "resident userspace dataplane default switch env is not enabled by service-contract",
+                "resident userspace dataplane product default is disabled by service-contract",
             );
         }
         if !reload_failure_rollback_supported {

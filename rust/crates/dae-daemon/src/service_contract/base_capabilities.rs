@@ -18,7 +18,7 @@ pub fn service_contract_capabilities(version: &str) -> Value {
         Value::Null
     } else {
         json!(format!(
-            "{RESIDENT_DATAPLANE_ENV}=1 is required before the resident default daemon can own redirected TCP/UDP payloads"
+            "{RESIDENT_DATAPLANE_ENV} explicitly disables the resident default daemon userspace dataplane"
         ))
     };
     let mut report = json!({
@@ -73,14 +73,16 @@ pub fn service_contract_capabilities(version: &str) -> Value {
             "done": (RELOAD_DONE as char).to_string(),
             "error": (RELOAD_ERROR as char).to_string(),
         },
-        "resident_dataplane_default_switch_required": true,
+        "resident_dataplane_default_switch_required": false,
+        "resident_dataplane_default_source": "rust-native-product-default",
         "resident_dataplane_env": RESIDENT_DATAPLANE_ENV,
+        "resident_dataplane_env_required": false,
         "resident_dataplane_env_enabled": resident_dataplane_default_switch_ready,
         "resident_dataplane_default_switch_ready": resident_dataplane_default_switch_ready,
         "resident_production_dataplane_ready": resident_dataplane_default_switch_ready,
         "resident_default_daemon_switch_ready": resident_dataplane_default_switch_ready,
         "default_path_switch_blocker": default_path_switch_blocker,
-        "boundary": "resident run starts and owns production topology, PARAM-aware tc/eBPF attach, and tproxy listener/sockmap handoff; resident userspace dataplane must be explicitly enabled before default switch; product-chain switch still requires clean admission evidence and explicit host mutation authorization",
+        "boundary": "resident run starts and owns production topology, PARAM-aware tc/eBPF attach, and tproxy listener/sockmap handoff; resident userspace dataplane is enabled by the Rust-native product default and can be explicitly disabled for rollback; product-chain switch still requires clean admission evidence and explicit host mutation authorization",
     });
     insert_control_plane_service_contract_capabilities(
         &mut report,
