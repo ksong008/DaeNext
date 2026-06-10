@@ -18,7 +18,7 @@ pub(crate) const RESIDENT_UDP_SESSION_LIMIT_DEFAULT: usize = 64;
 pub(crate) const RESIDENT_UDP_SESSION_LIMIT_MIN: usize = 1;
 pub(crate) const RESIDENT_UDP_SESSION_LIMIT_MAX: usize = 1024;
 pub(crate) const RESIDENT_UDP_SESSION_QUEUE_DEPTH_ENV: &str = "RESIDENT_UDP_SESSION_QUEUE_DEPTH";
-pub(crate) const RESIDENT_UDP_SESSION_QUEUE_DEPTH_DEFAULT: usize = 16;
+pub(crate) const RESIDENT_UDP_SESSION_QUEUE_DEPTH_DEFAULT: usize = 128;
 pub(crate) const RESIDENT_UDP_SESSION_QUEUE_DEPTH_MIN: usize = 1;
 pub(crate) const RESIDENT_UDP_SESSION_QUEUE_DEPTH_MAX: usize = 256;
 pub(crate) const RESIDENT_MANUAL_LATENCY_PROBE_CONCURRENCY: usize = 8;
@@ -61,21 +61,4 @@ pub(crate) fn resident_runtime_defaults_contract() -> Value {
             "model": "resident UDP session manager keyed by graph id, outbound, peer, original destination, and packet semantics",
         },
     })
-}
-
-pub(crate) fn resident_runtime_environment_defaults() -> Vec<(&'static str, usize)> {
-    vec![
-        (
-            RESIDENT_TCP_FLOW_STACK_BYTES_ENV,
-            RESIDENT_TCP_FLOW_STACK_BYTES_DEFAULT,
-        ),
-        (
-            RESIDENT_UDP_SESSION_LIMIT_ENV,
-            RESIDENT_UDP_SESSION_LIMIT_DEFAULT,
-        ),
-        (
-            RESIDENT_UDP_SESSION_QUEUE_DEPTH_ENV,
-            RESIDENT_UDP_SESSION_QUEUE_DEPTH_DEFAULT,
-        ),
-    ]
 }

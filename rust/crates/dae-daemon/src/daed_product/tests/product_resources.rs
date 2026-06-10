@@ -267,6 +267,10 @@ pub(crate) fn product_package_reports_runtime_memory_defaults() {
             .unwrap(),
         "RESIDENT_TCP_FLOW_STACK_BYTES"
     );
+    assert_eq!(
+        defaults["residentDataplane"]["udpSessions"]["queueDepth"]["default"],
+        json!(128)
+    );
 
     let manifest = product_package_manifest();
     assert_eq!(
@@ -277,22 +281,15 @@ pub(crate) fn product_package_reports_runtime_memory_defaults() {
     );
 
     let unit = systemd_unit_text();
-    assert!(unit.contains("Environment=\"MALLOC_CONF=background_thread:true,dirty_decay_ms:1000,muzzy_decay_ms:1000,narenas:4\""));
-    assert!(unit.contains("Environment=\"ALLOCATOR_IDLE_RECLAIM_ENABLED=true\""));
-    assert!(unit.contains("Environment=\"ALLOCATOR_IDLE_RECLAIM_SAMPLE_INTERVAL_SECONDS=60\""));
-    assert!(unit.contains("Environment=\"ALLOCATOR_IDLE_RECLAIM_MIN_INTERVAL_SECONDS=300\""));
-    assert!(unit.contains("Environment=\"ALLOCATOR_IDLE_RECLAIM_LOW_TRAFFIC_SECONDS=300\""));
-    assert!(unit.contains(
-        "Environment=\"ALLOCATOR_IDLE_RECLAIM_MAX_TRAFFIC_RATE_BYTES_PER_SECOND=32768\""
-    ));
+    assert!(unit.contains("Description=daed is a integration solution of dae, API and UI."));
+    assert!(unit.contains("ExecStart=/usr/bin/daed run -c /etc/daed/"));
+    assert!(unit.contains("Restart=on-abnormal"));
+    assert!(!unit.contains("Environment="));
+    assert!(!unit.contains("MALLOC_CONF"));
+    assert!(!unit.contains("ALLOCATOR_IDLE_RECLAIM"));
+    assert!(!unit.contains("RESIDENT_UDP_SESSION_QUEUE_DEPTH"));
     assert!(!unit.contains("ALLOCATOR_IDLE_RECLAIM_REQUIRE_UDP_IDLE"));
     assert!(!unit.contains("ALLOCATOR_IDLE_RECLAIM_REQUIRE_TCP_IDLE"));
-    assert!(unit.contains("Environment=\"HTTP_QUEUE=256\""));
-    assert!(unit.contains("Environment=\"RESIDENT_UDP_SESSION_LIMIT=64\""));
-    assert!(unit.contains("Environment=\"RESIDENT_UDP_SESSION_QUEUE_DEPTH=16\""));
-    assert!(unit.contains("HTTP_WORKERS unset uses available_parallelism"));
-    assert!(!unit.contains("Environment=\"DAE"));
-    assert!(!unit.contains("Environment=\"DAED"));
     let entrypoint = docker_entrypoint_text();
     assert!(entrypoint.contains("${PRODUCT_LISTEN:-${DAED_LISTEN:-0.0.0.0:2023}}"));
 

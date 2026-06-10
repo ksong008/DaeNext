@@ -151,26 +151,21 @@ pub(crate) fn assert_live_release_and_default_switch_contract(report: &Value) {
         report["resident_dataplane_env"].as_str().unwrap(),
         "RESIDENT_DATAPLANE"
     );
-    assert!(!report["resident_dataplane_env_enabled"].as_bool().unwrap());
+    assert!(!report["resident_dataplane_env_required"].as_bool().unwrap());
     assert!(
-        !report["resident_dataplane_default_switch_ready"]
+        report["resident_dataplane_default_switch_ready"]
             .as_bool()
             .unwrap()
     );
     assert!(
-        !report["resident_production_dataplane_ready"]
+        report["resident_production_dataplane_ready"]
             .as_bool()
             .unwrap()
     );
     assert!(
-        !report["resident_default_daemon_switch_ready"]
+        report["resident_default_daemon_switch_ready"]
             .as_bool()
             .unwrap()
     );
-    assert!(
-        report["default_path_switch_blocker"]
-            .as_str()
-            .unwrap()
-            .contains("RESIDENT_DATAPLANE=1")
-    );
+    assert!(report["default_path_switch_blocker"].is_null());
 }

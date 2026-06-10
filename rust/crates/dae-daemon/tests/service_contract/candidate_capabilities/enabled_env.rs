@@ -1,5 +1,23 @@
 use super::*;
 pub(crate) fn assert_resident_dataplane_enabled_contract() {
+    let default_output = Command::new(binary())
+        .arg("service-contract")
+        .output()
+        .unwrap();
+    assert!(default_output.status.success());
+    let default_report: Value = serde_json::from_slice(&default_output.stdout).unwrap();
+    assert!(
+        default_report["resident_dataplane_default_switch_ready"]
+            .as_bool()
+            .unwrap()
+    );
+    assert!(
+        !default_report["resident_dataplane_env_required"]
+            .as_bool()
+            .unwrap()
+    );
+    assert!(default_report["default_path_switch_blocker"].is_null());
+
     let enabled_output = Command::new(binary())
         .arg("service-contract")
         .env("RESIDENT_DATAPLANE", "1")
@@ -37,5 +55,24 @@ pub(crate) fn assert_resident_dataplane_enabled_contract() {
         enabled_report["reload_start_failure_attempts_previous_runtime_restore"]
             .as_bool()
             .unwrap()
+    );
+
+    let disabled_output = Command::new(binary())
+        .arg("service-contract")
+        .env("RESIDENT_DATAPLANE", "0")
+        .output()
+        .unwrap();
+    assert!(disabled_output.status.success());
+    let disabled_report: Value = serde_json::from_slice(&disabled_output.stdout).unwrap();
+    assert!(
+        !disabled_report["resident_dataplane_default_switch_ready"]
+            .as_bool()
+            .unwrap()
+    );
+    assert!(
+        disabled_report["default_path_switch_blocker"]
+            .as_str()
+            .unwrap()
+            .contains("explicitly disables")
     );
 }

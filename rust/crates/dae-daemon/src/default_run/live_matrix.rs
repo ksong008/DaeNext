@@ -25,7 +25,7 @@ pub(super) fn default_daemon_live_matrix_json(
     matched_default_benchmark_executed: bool,
     matched_default_benchmark_recorded: bool,
     bpf_go_fallback_retired: bool,
-    resident_dataplane_default_switch_required: bool,
+    _resident_dataplane_default_switch_required: bool,
     resident_dataplane_default_switch_ready: bool,
 ) -> Value {
     let rows = vec![
@@ -107,10 +107,10 @@ pub(super) fn default_daemon_live_matrix_json(
         ),
         live_matrix_row_json(
             "resident-userspace-dataplane-default-switch",
-            resident_dataplane_default_switch_required,
+            true,
             resident_dataplane_default_switch_ready,
-            "resident userspace dataplane must be explicitly enabled before the Rust default daemon owns redirected TCP/UDP payloads",
-            "set RESIDENT_DATAPLANE=1 only after the resident dataplane worker path is expected to own the default daemon traffic",
+            "resident userspace dataplane is enabled by Rust-native product default before the Rust default daemon owns redirected TCP/UDP payloads",
+            "ensure no explicit resident dataplane disabling override is present",
         ),
     ];
     let matrix_complete = rows
@@ -266,7 +266,7 @@ pub(super) fn release_product_chain_live_gate_json(
         blockers.push("matched Go/Rust default daemon benchmark is not recorded");
     }
     if !resident_dataplane_default_switch_ready {
-        blockers.push("resident userspace dataplane default switch env is not enabled");
+        blockers.push("resident userspace dataplane product default is disabled by override");
     }
     if !product_chain_recertification_clean {
         blockers.push("product-chain recertification is not clean");
@@ -303,8 +303,9 @@ pub(super) fn release_product_chain_live_gate_json(
         "reload_runtime_parity_admitted": reload_runtime_parity_admitted,
         "matched_go_rust_default_daemon_benchmark_recorded": matched_benchmark_recorded,
         "bpf_go_fallback_retired": bpf_go_fallback_retired,
-        "resident_dataplane_default_switch_required": true,
-        "resident_dataplane_env": RESIDENT_DATAPLANE_ENV,
+        "resident_dataplane_default_switch_required": false,
+        "resident_dataplane_default_source": "rust-native-product-default",
+        "resident_dataplane_override_env": RESIDENT_DATAPLANE_ENV,
         "resident_dataplane_default_switch_ready": resident_dataplane_default_switch_ready,
         "true_rust_default_daemon_admitted": true_rust_default_daemon_admitted,
         "default_daemon_live_matrix_complete": default_daemon_live_matrix_complete,

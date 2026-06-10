@@ -86,15 +86,15 @@ mod tests {
     }
 
     #[test]
-    fn resident_dataplane_default_switch_requires_explicit_enable_value() {
-        for value in ["1", "true", "TRUE", "on", "ON", "yes", "YES"] {
+    fn resident_dataplane_default_switch_defaults_on_and_allows_disable_values() {
+        for value in ["", "1", "true", "TRUE", "on", "ON", "yes", "YES"] {
             assert!(resident_dataplane_default_switch_value_enabled(Some(value)));
         }
-        for value in ["", "0", "false", "FALSE", "off", "OFF", "no", "NO"] {
+        for value in ["0", "false", "FALSE", "off", "OFF", "no", "NO"] {
             assert!(!resident_dataplane_default_switch_value_enabled(Some(
                 value
             )));
         }
-        assert!(!resident_dataplane_default_switch_value_enabled(None));
+        assert!(resident_dataplane_default_switch_value_enabled(None));
     }
 }

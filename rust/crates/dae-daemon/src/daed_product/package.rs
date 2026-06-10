@@ -286,103 +286,38 @@ pub(super) fn webui_route_patterns() -> Vec<(&'static str, &'static str)> {
     ]
 }
 
-pub(super) fn package_runtime_environment_defaults() -> Vec<(&'static str, String)> {
-    let mut defaults = vec![
-        (
-            PRODUCT_MALLOC_ARENA_MAX_ENV,
-            PRODUCT_MALLOC_ARENA_MAX_DEFAULT.to_owned(),
-        ),
-        (
-            PRODUCT_JEMALLOC_CONF_ENV,
-            PRODUCT_JEMALLOC_CONF_DEFAULT.to_owned(),
-        ),
-        (
-            ALLOCATOR_IDLE_RECLAIM_ENABLED_ENV,
-            ALLOCATOR_IDLE_RECLAIM_ENABLED_DEFAULT.to_string(),
-        ),
-        (
-            ALLOCATOR_IDLE_RECLAIM_SAMPLE_INTERVAL_SECONDS_ENV,
-            ALLOCATOR_IDLE_RECLAIM_SAMPLE_INTERVAL_SECONDS_DEFAULT.to_string(),
-        ),
-        (
-            ALLOCATOR_IDLE_RECLAIM_MIN_INTERVAL_SECONDS_ENV,
-            ALLOCATOR_IDLE_RECLAIM_MIN_INTERVAL_SECONDS_DEFAULT.to_string(),
-        ),
-        (
-            ALLOCATOR_IDLE_RECLAIM_LOW_TRAFFIC_SECONDS_ENV,
-            ALLOCATOR_IDLE_RECLAIM_LOW_TRAFFIC_SECONDS_DEFAULT.to_string(),
-        ),
-        (
-            ALLOCATOR_IDLE_RECLAIM_PRESSURE_BYTES_ENV,
-            ALLOCATOR_IDLE_RECLAIM_PRESSURE_BYTES_DEFAULT.to_string(),
-        ),
-        (
-            ALLOCATOR_IDLE_RECLAIM_MAX_TRAFFIC_RATE_BYTES_PER_SECOND_ENV,
-            ALLOCATOR_IDLE_RECLAIM_MAX_TRAFFIC_RATE_BYTES_PER_SECOND_DEFAULT.to_string(),
-        ),
-        (
-            PRODUCT_HTTP_QUEUE_ENV,
-            PRODUCT_HTTP_QUEUE_DEFAULT.to_string(),
-        ),
-        (
-            PRODUCT_HTTP_WORKER_STACK_BYTES_ENV,
-            PRODUCT_HTTP_WORKER_STACK_BYTES_DEFAULT.to_string(),
-        ),
-    ];
-    defaults.extend(
-        resident_runtime_environment_defaults()
-            .into_iter()
-            .map(|(name, value)| (name, value.to_string())),
-    );
-    defaults
-}
-
-pub(super) fn systemd_runtime_environment_lines() -> String {
-    package_runtime_environment_defaults()
-        .into_iter()
-        .map(|(name, value)| format!("Environment=\"{name}={value}\"\n"))
-        .collect::<String>()
-}
-
-pub(super) fn docker_runtime_environment_exports() -> String {
-    package_runtime_environment_defaults()
-        .into_iter()
-        .map(|(name, value)| format!("export {name}=\"${{{name}:-{value}}}\"\n"))
-        .collect::<String>()
-}
-
 pub(super) fn systemd_unit_text() -> String {
-    format!(
-        r#"[Unit]
-Description=daed Rust native service
-After=network-online.target
+    r#"[Unit]
+Description=daed is a integration solution of dae, API and UI.
+Documentation=https://github.com/daeuniverse/daed
+After=network-online.target docker.service systemd-sysctl.service
 Wants=network-online.target
+Conflicts=dae.service
 
 [Service]
 Type=simple
-# {PRODUCT_HTTP_WORKERS_ENV} unset uses available_parallelism * 2 clamped to {PRODUCT_HTTP_WORKER_DEFAULT_MIN}..{PRODUCT_HTTP_WORKER_DEFAULT_MAX}.
+User=root
+LimitNPROC=512
+LimitNOFILE=1048576
 ExecStartPre=/usr/bin/daed validate -c /etc/daed/
-{}ExecStart=/usr/bin/daed run -c /etc/daed/
+ExecStart=/usr/bin/daed run -c /etc/daed/
 ExecReload=/bin/kill -HUP $MAINPID
-Restart=on-failure
-RestartSec=3s
+Restart=on-abnormal
 
 [Install]
 WantedBy=multi-user.target
-"#,
-        systemd_runtime_environment_lines()
-    )
+"#
+    .to_owned()
 }
 
 pub(super) fn docker_entrypoint_text() -> String {
     format!(
         r#"#!/bin/sh
 set -eu
-# {PRODUCT_HTTP_WORKERS_ENV} unset uses available_parallelism * 2 clamped to {PRODUCT_HTTP_WORKER_DEFAULT_MIN}..{PRODUCT_HTTP_WORKER_DEFAULT_MAX}.
-{}/usr/bin/daed validate -c /etc/daed/ >/dev/null
+# Runtime defaults are owned by the binary; user-provided environment remains optional.
+/usr/bin/daed validate -c /etc/daed/ >/dev/null
 exec /usr/bin/daed run -c /etc/daed --listen "${{{PRODUCT_LISTEN_ENV}:-${{{PRODUCT_LISTEN_LEGACY_ENV}:-0.0.0.0:2023}}}}" "$@"
-"#,
-        docker_runtime_environment_exports()
+"#
     )
 }
 

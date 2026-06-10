@@ -114,12 +114,12 @@ pub(super) fn resident_dataplane_enabled() -> bool {
     env::var(DEFAULT_RESIDENT_DATAPLANE_ENV)
         .or_else(|_| env::var(DEFAULT_RESIDENT_DATAPLANE_LEGACY_ENV))
         .map(|value| {
-            matches!(
+            !matches!(
                 value.as_str(),
-                "1" | "true" | "TRUE" | "on" | "ON" | "yes" | "YES"
+                "0" | "false" | "FALSE" | "off" | "OFF" | "no" | "NO"
             )
         })
-        .unwrap_or(false)
+        .unwrap_or(true)
 }
 
 #[cfg(feature = "native-ebpf")]

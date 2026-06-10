@@ -190,8 +190,8 @@ pub(crate) fn resident_dataplane_default_switch_ready_from_env() -> bool {
 }
 
 pub(crate) fn resident_dataplane_default_switch_value_enabled(value: Option<&str>) -> bool {
-    matches!(
+    !matches!(
         value,
-        Some("1" | "true" | "TRUE" | "on" | "ON" | "yes" | "YES")
+        Some("0" | "false" | "FALSE" | "off" | "OFF" | "no" | "NO")
     )
 }
