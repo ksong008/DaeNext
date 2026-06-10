@@ -90,7 +90,10 @@ fn load_aya_userspace_object_from_source(
 
     let ebpf = match source {
         AyaUserspaceLoadSource::File(path) => loader.load_file(path),
-        AyaUserspaceLoadSource::Bytes { data, .. } => load_aligned_bytes(&mut loader, data),
+        AyaUserspaceLoadSource::Bytes { data, .. } => {
+            let owned = data.to_vec();
+            loader.load(&owned)
+        }
     }
     .map_err(|err| format!("aya userspace object load failed: {err:?}"))?;
     let loaded_map_names = ebpf
@@ -136,19 +139,6 @@ fn load_aya_userspace_object_from_source(
         return Err(format!("aya userspace object map spec mismatch: {summary}"));
     }
     Ok(AyaUserspaceLoadedObject { ebpf, report })
-}
-
-fn load_aligned_bytes(
-    loader: &mut aya::EbpfLoader,
-    data: &[u8],
-) -> Result<aya::Ebpf, aya::EbpfError> {
-    let words = data.len().div_ceil(std::mem::size_of::<u64>());
-    let mut aligned = vec![0_u64; words];
-    // SAFETY: the backing allocation is alive for this call and has at least data.len() bytes.
-    let aligned_bytes =
-        unsafe { std::slice::from_raw_parts_mut(aligned.as_mut_ptr().cast::<u8>(), data.len()) };
-    aligned_bytes.copy_from_slice(data);
-    loader.load(aligned_bytes)
 }
 
 fn loaded_map_specs(ebpf: &aya::Ebpf) -> Result<Vec<AyaLoadedMapSpec>, String> {
