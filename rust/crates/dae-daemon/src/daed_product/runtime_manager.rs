@@ -57,6 +57,10 @@ impl ProductRuntimeLifecycleLogMode {
     pub(super) fn is_startup(self) -> bool {
         matches!(self, Self::StartupRestore)
     }
+
+    pub(super) fn returns_detailed_report(self) -> bool {
+        matches!(self, Self::ReloadSubscriptionRefresh)
+    }
 }
 
 pub(super) const PRODUCT_RUNTIME_FAKE_START_ENV: &str = "PRODUCT_RUNTIME_FAKE_START";
