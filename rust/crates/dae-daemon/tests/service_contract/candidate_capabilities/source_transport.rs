@@ -39,7 +39,7 @@ pub(crate) fn assert_source_stream_packet_and_transport_contract(report: &Value)
             .unwrap()
     );
     assert!(
-        !report["excluded_stream_wrapper_source_matrix_c10_ready"]
+        report["excluded_stream_wrapper_source_matrix_c10_ready"]
             .as_bool()
             .unwrap()
     );
@@ -54,7 +54,7 @@ pub(crate) fn assert_source_stream_packet_and_transport_contract(report: &Value)
             .unwrap()
     );
     assert!(
-        !report["scoped_expanded_source_matrix_c10_ready"]
+        report["scoped_expanded_source_matrix_c10_ready"]
             .as_bool()
             .unwrap()
     );
@@ -249,7 +249,7 @@ pub(crate) fn assert_source_stream_packet_and_transport_contract(report: &Value)
             .unwrap()
     );
     assert!(
-        !report["excluded_stream_wrapper_source_matrix_typed_report"]["c10_ready"]
+        report["excluded_stream_wrapper_source_matrix_typed_report"]["c10_ready"]
             .as_bool()
             .unwrap()
     );
@@ -309,7 +309,7 @@ pub(crate) fn assert_source_stream_packet_and_transport_contract(report: &Value)
             .unwrap()
     );
     assert!(
-        !report["scoped_expanded_source_matrix_typed_report"]["c10_ready"]
+        report["scoped_expanded_source_matrix_typed_report"]["c10_ready"]
             .as_bool()
             .unwrap()
     );

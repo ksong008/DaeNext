@@ -40,17 +40,28 @@ fn go_free_product_chain_gate_blocks_current_candidate_until_go_paths_retire() {
             .unwrap()
     );
     assert!(!gate["expanded_source_matrix_c10_ready"].as_bool().unwrap());
+    assert!(
+        gate["excluded_stream_wrapper_source_matrix_c10_ready"]
+            .as_bool()
+            .unwrap()
+    );
+    assert!(
+        gate["scoped_expanded_source_matrix_c10_ready"]
+            .as_bool()
+            .unwrap()
+    );
+    assert!(gate["source_matrix_c10_ready"].as_bool().unwrap());
     assert!(gate["blockers"].as_array().unwrap().iter().any(|blocker| {
         blocker
             .as_str()
             .unwrap()
             .contains("Go product shell is not retired")
     }));
-    assert!(gate["blockers"].as_array().unwrap().iter().any(|blocker| {
+    assert!(!gate["blockers"].as_array().unwrap().iter().any(|blocker| {
         blocker
             .as_str()
             .unwrap()
-            .contains("expanded source matrix is not ready")
+            .contains("scoped source matrix is not ready")
     }));
 }
 
@@ -117,5 +128,6 @@ fn go_free_product_chain_gate_accepts_complete_final_contract_fixture() {
     );
     assert!(gate["go_free_product_chain_ready"].as_bool().unwrap());
     assert!(gate["expanded_source_matrix_c10_ready"].as_bool().unwrap());
+    assert!(gate["source_matrix_c10_ready"].as_bool().unwrap());
     assert!(gate["blockers"].as_array().unwrap().is_empty());
 }

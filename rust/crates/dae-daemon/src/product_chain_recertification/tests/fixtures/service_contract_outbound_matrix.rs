@@ -35,8 +35,6 @@ pub(crate) fn insert_outbound_matrix_and_source_contract(
         "expanded_source_matrix_complete",
         "expanded_source_matrix_release_gate_ready",
         "expanded_source_matrix_c10_ready",
-        "excluded_stream_wrapper_source_matrix_c10_ready",
-        "scoped_expanded_source_matrix_c10_ready",
     ] {
         report.insert(key.to_owned(), json!(false));
     }
@@ -121,7 +119,7 @@ pub(crate) fn insert_outbound_matrix_and_source_contract(
             "open": true,
             "complete": true,
             "release_gate_ready": true,
-            "c10_ready": false,
+            "c10_ready": true,
             "source_scope": "source-supported-rows-excluding-stream-wrapper",
             "excluded_stream_wrappers": ["xhttp"],
             "excluded_shape_ids": ["stream-wrapper-xhttp"],
@@ -208,7 +206,7 @@ pub(crate) fn insert_outbound_matrix_and_source_contract(
             "raw_bodies_retained": false,
             "raw_state_retained": false,
             "release_gate_ready": true,
-            "c10_ready": false,
+            "c10_ready": true,
             "stage_report_schema": false,
         }),
     );

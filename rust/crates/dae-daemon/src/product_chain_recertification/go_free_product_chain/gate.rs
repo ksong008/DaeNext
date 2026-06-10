@@ -90,6 +90,17 @@ pub(crate) fn go_free_product_chain_gate_json(
         candidate_service_contract["expanded_source_matrix_c10_ready"]
             .as_bool()
             .unwrap_or(false);
+    let excluded_stream_wrapper_source_matrix_c10_ready =
+        candidate_service_contract["excluded_stream_wrapper_source_matrix_c10_ready"]
+            .as_bool()
+            .unwrap_or(false);
+    let scoped_expanded_source_matrix_c10_ready =
+        candidate_service_contract["scoped_expanded_source_matrix_c10_ready"]
+            .as_bool()
+            .unwrap_or(false);
+    let source_matrix_c10_ready = expanded_source_matrix_c10_ready
+        || (excluded_stream_wrapper_source_matrix_c10_ready
+            && scoped_expanded_source_matrix_c10_ready);
     let default_product_package_scan_ready =
         default_product_package_scan["default_product_package_go_free"]
             .as_bool()
@@ -119,7 +130,7 @@ pub(crate) fn go_free_product_chain_gate_json(
         && live_host_contract_ready
         && rollback_model_ready
         && typed_report_ready
-        && expanded_source_matrix_c10_ready
+        && source_matrix_c10_ready
         && default_product_package_scan_ready;
     let go_free_product_chain_ready =
         go_free_product_chain_admission_ready && candidate_go_free_ready;
@@ -193,9 +204,8 @@ pub(crate) fn go_free_product_chain_gate_json(
     if !candidate_go_free_ready {
         blockers.push("C10 candidate does not declare go-free product-chain readiness".to_owned());
     }
-    if !expanded_source_matrix_c10_ready {
-        blockers
-            .push("C10 expanded source matrix is not ready for final go-free release".to_owned());
+    if !source_matrix_c10_ready {
+        blockers.push("C10 scoped source matrix is not ready for final go-free release".to_owned());
     }
     blockers.extend(
         default_product_package_scan["blockers"]
@@ -304,6 +314,18 @@ pub(crate) fn go_free_product_chain_gate_json(
     report.insert(
         "expanded_source_matrix_c10_ready".to_owned(),
         json!(expanded_source_matrix_c10_ready),
+    );
+    report.insert(
+        "excluded_stream_wrapper_source_matrix_c10_ready".to_owned(),
+        json!(excluded_stream_wrapper_source_matrix_c10_ready),
+    );
+    report.insert(
+        "scoped_expanded_source_matrix_c10_ready".to_owned(),
+        json!(scoped_expanded_source_matrix_c10_ready),
+    );
+    report.insert(
+        "source_matrix_c10_ready".to_owned(),
+        json!(source_matrix_c10_ready),
     );
     report.insert(
         "expanded_source_matrix_typed_report".to_owned(),
