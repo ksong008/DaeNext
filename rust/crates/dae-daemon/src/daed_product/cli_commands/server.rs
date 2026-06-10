@@ -21,19 +21,25 @@ pub(crate) fn run_product_server_command(args: &[String], _version: &str) -> Dae
         return DaedProductOutput::error(format!("install signal control failed: {err}"));
     }
     if should_restore_runtime_on_start(&options.state).unwrap_or(false) {
-        if let Err(err) = restore_runtime_from_state(
+        match restore_runtime_from_state(
             &runtime,
             &options.state,
             Some(&options.config_dir),
             ProductRuntimeLifecycleLogMode::StartupRestore,
         ) {
-            let _ = append_lifecycle_log_for_config(
-                &options.config_dir,
-                &options.state,
-                "error",
-                &format!("[Startup] runtime restore failed: {err}"),
-            );
-            return DaedProductOutput::error(format!("startup runtime restore failed: {err}"));
+            Ok(report) => {
+                drop(report);
+                let _ = allocator_reclaim(AllocatorReclaimReason::StartupControlBuilt);
+            }
+            Err(err) => {
+                let _ = append_lifecycle_log_for_config(
+                    &options.config_dir,
+                    &options.state,
+                    "error",
+                    &format!("[Startup] runtime restore failed: {err}"),
+                );
+                return DaedProductOutput::error(format!("startup runtime restore failed: {err}"));
+            }
         }
     }
     start_subscription_scheduler(options.state.clone(), options.config_dir.clone());
@@ -205,10 +211,20 @@ pub(crate) fn install_product_signal_thread(
                         ProductRuntimeLifecycleLogMode::ReloadSignal,
                     );
                     match result {
-                        Ok(_) => {
+                        Ok(report) => {
+                            drop(report);
+                            let post_drop_reclaim =
+                                allocator_reclaim(AllocatorReclaimReason::ReloadCompleted);
                             let mut fields = BTreeMap::new();
                             fields.insert("source".to_owned(), "signal".to_owned());
                             fields.insert("applied".to_owned(), "true".to_owned());
+                            fields.insert(
+                                "allocatorReclaim".to_owned(),
+                                post_drop_reclaim["status"]
+                                    .as_str()
+                                    .unwrap_or("unknown")
+                                    .to_owned(),
+                            );
                             fields.insert(
                                 "elapsed".to_owned(),
                                 format!("{:?}", reload_started_at.elapsed()),
