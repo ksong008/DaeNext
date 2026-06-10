@@ -12,7 +12,11 @@ default = ["native-ebpf", "allocator-jemalloc"]
 native-ebpf = ["dae-aya-bpf-loader/native-ebpf", "dae-ebpf-support/aya-loader"]
 allocator-system = []
 allocator-mimalloc = ["dep:mimalloc", "dep:libmimalloc-sys"]
-allocator-jemalloc = ["dep:tikv-jemallocator", "dep:tikv-jemalloc-ctl"]
+allocator-jemalloc = [
+    "dep:tikv-jemallocator",
+    "dep:tikv-jemalloc-ctl",
+    "dep:tikv-jemalloc-sys",
+]
 
 [dependencies]
 dae-aya-bpf-loader.workspace = true
@@ -51,5 +55,6 @@ tokio-boring.workspace = true
 tokio-rustls.workspace = true
 tikv-jemallocator = { workspace = true, optional = true }
 tikv-jemalloc-ctl = { workspace = true, optional = true }
+tikv-jemalloc-sys = { workspace = true, optional = true }
 url.workspace = true
 webpki-roots.workspace = true

@@ -90,5 +90,6 @@ tokio-rustls = "0.26"
 tls-parser = "0.12.2"
 tikv-jemallocator = { version = "0.7", default-features = false, features = ["background_threads_runtime_support", "stats"] }
 tikv-jemalloc-ctl = { version = "0.7", default-features = false, features = ["stats"] }
+tikv-jemalloc-sys = { version = "0.7", default-features = false }
 url = "2"
 webpki-roots = "1"
