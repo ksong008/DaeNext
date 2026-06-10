@@ -252,13 +252,6 @@ fn allocator_reclaim_impl() -> (&'static str, Value) {
 fn allocator_reclaim_impl() -> (&'static str, Value) {
     use tikv_jemalloc_ctl::{arenas, epoch, raw};
 
-    let tcache_flush = match unsafe { raw::write::<()>(b"thread.tcache.flush\0", ()) } {
-        Ok(()) => json!({"status": "pass"}),
-        Err(err) => json!({
-            "status": "fail",
-            "error": err.to_string(),
-        }),
-    };
     let narenas = match arenas::narenas::read() {
         Ok(value) => value,
         Err(err) => {
@@ -266,7 +259,6 @@ fn allocator_reclaim_impl() -> (&'static str, Value) {
                 "fail",
                 json!({
                     "operation": "jemalloc_arena_purge",
-                    "threadTcacheFlush": tcache_flush,
                     "error": err.to_string(),
                 }),
             );
@@ -295,7 +287,6 @@ fn allocator_reclaim_impl() -> (&'static str, Value) {
         status,
         json!({
             "operation": "jemalloc_arena_purge",
-            "threadTcacheFlush": tcache_flush,
             "arenasAttempted": attempted,
             "failures": failures,
             "epochAfter": epoch_after,
