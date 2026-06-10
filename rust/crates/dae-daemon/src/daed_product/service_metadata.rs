@@ -243,6 +243,7 @@ pub(super) fn daed_service_contract(version: &str) -> Value {
 }
 
 pub(super) fn daed_package_info(version: &str) -> Value {
+    let c10_evidence = crate::c10_go_free_evidence::c10_go_free_product_chain_evidence_from_env();
     json!({
         "name": "daed",
         "version": version,
@@ -298,14 +299,29 @@ pub(super) fn daed_package_info(version: &str) -> Value {
             "docker_entrypoint": "/usr/bin/daed run -c /etc/daed --listen 0.0.0.0:2023",
             "package_manifest": "daed export package-manifest",
             "admission_report": "daed export admission-report",
-            "default_package_switch_live_applied": false,
-            "rollback_validation_applied_on_live_host": false,
-            "release_default_switch_admission": false,
-            "production_package_admission": false,
-            "go_daewing_default_path_removed": false
+            "default_package_switch_live_applied": c10_evidence
+                .report["liveDefaultSwitchApplied"]
+                .as_bool()
+                .unwrap_or(false),
+            "rollback_validation_applied_on_live_host": c10_evidence
+                .report["rollbackValidationAppliedOnLiveHost"]
+                .as_bool()
+                .unwrap_or(false),
+            "release_default_switch_admission": c10_evidence
+                .report["releaseDefaultSwitchAdmission"]
+                .as_bool()
+                .unwrap_or(false),
+            "production_package_admission": c10_evidence
+                .report["productionPackageAdmission"]
+                .as_bool()
+                .unwrap_or(false),
+            "go_daewing_default_path_removed": c10_evidence
+                .report["goDaewingDefaultPathRemoved"]
+                .as_bool()
+                .unwrap_or(false)
         },
-        "final_gate_evidence": c10_final_gate_evidence(),
-        "full_go_free_product_chain_ready": false,
-        "remaining_admission": c10_final_blockers()
+        "final_gate_evidence": c10_evidence.report,
+        "full_go_free_product_chain_ready": c10_evidence.ready,
+        "remaining_admission": c10_evidence.blockers
     })
 }
