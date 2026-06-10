@@ -34,7 +34,7 @@ pub(in crate::daed_product) fn api_runtime_reload(
         }
     };
     let content = match preview.get("content").and_then(Value::as_str) {
-        Some(content) => content,
+        Some(content) => content.to_owned(),
         None => {
             let mut fields = BTreeMap::new();
             fields.insert("source".to_owned(), "api".to_owned());
@@ -56,7 +56,7 @@ pub(in crate::daed_product) fn api_runtime_reload(
             );
         }
     };
-    let config = match build_runtime_config_from_content(content) {
+    let config = match build_runtime_config_from_content(&content) {
         Ok(config) => config,
         Err(err) => {
             let mut fields = BTreeMap::new();
@@ -95,6 +95,8 @@ pub(in crate::daed_product) fn api_runtime_reload(
         response.insert("runtimeStarted".to_owned(), json!(false));
         return HttpResponse::json(200, Value::Object(response));
     }
+    drop(content);
+    drop(preview);
     if let Err(err) = set_runtime_log_level_from_config(&app.state, &config) {
         let mut fields = BTreeMap::new();
         fields.insert("source".to_owned(), "api".to_owned());
