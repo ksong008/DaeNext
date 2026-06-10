@@ -9,6 +9,8 @@ pub(super) const UNUSED_LPM_TYPE_NAME: &str = "unused_lpm_type";
 pub const DEFAULT_ALLOWED_UNSUPPORTED_MAP_NAMES: &[&str] = &[LPM_ARRAY_MAP_NAME];
 pub const TRACE_CORE_SIDELOAD_ENABLED: bool = false;
 
+// SAFETY: BpfDaeParam is #[repr(C)], Copy, contains only integer/byte-array fields,
+// and its explicit padding byte is initialized by build_dae_param before Aya global use.
 unsafe impl aya::Pod for BpfDaeParam {}
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -129,6 +131,8 @@ pub struct AyaTraceConfig {
     pub pad: u8,
 }
 
+// SAFETY: AyaTraceConfig is #[repr(C)], Copy, contains only integer fields,
+// and all trace loader constructors initialize the explicit padding byte.
 unsafe impl aya::Pod for AyaTraceConfig {}
 
 #[derive(Clone, Debug, Eq, PartialEq)]

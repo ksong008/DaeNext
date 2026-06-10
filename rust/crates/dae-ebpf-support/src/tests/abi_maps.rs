@@ -55,6 +55,17 @@ pub(super) fn bpf_abi_layout_matches_golden_fixture() {
     assert_layout::<BpfUdpConnState>(&fixture, "bpfUdpConnState", 24, 8);
 }
 
+#[cfg(feature = "aya-loader")]
+#[test]
+pub(super) fn aya_trace_config_layout_matches_ebpf_tracing_config() {
+    assert_eq!(size_of::<AyaTraceConfig>(), 6);
+    assert_eq!(align_of::<AyaTraceConfig>(), 2);
+    assert_eq!(offset_of!(AyaTraceConfig, port), 0);
+    assert_eq!(offset_of!(AyaTraceConfig, l4_proto), 2);
+    assert_eq!(offset_of!(AyaTraceConfig, ip_version), 4);
+    assert_eq!(offset_of!(AyaTraceConfig, pad), 5);
+}
+
 #[test]
 pub(super) fn map_catalog_matches_golden_fixture() {
     let fixture = load("ebpf/maps/catalog.json");
