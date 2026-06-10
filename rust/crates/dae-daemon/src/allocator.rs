@@ -252,6 +252,7 @@ fn allocator_reclaim_impl() -> (&'static str, Value) {
 fn allocator_reclaim_impl() -> (&'static str, Value) {
     use tikv_jemalloc_ctl::{arenas, epoch, raw};
 
+    let epoch_before = epoch::advance().ok();
     let narenas = match arenas::narenas::read() {
         Ok(value) => value,
         Err(err) => {
@@ -265,15 +266,33 @@ fn allocator_reclaim_impl() -> (&'static str, Value) {
         }
     };
     let mut failures = Vec::new();
+    let mut skipped = 0_u64;
     let mut attempted = 0_u64;
     for arena in 0..narenas {
+        let initialized_key = format!("arena.{arena}.initialized\0");
+        match unsafe { raw::read::<bool>(initialized_key.as_bytes()) } {
+            Ok(true) => {}
+            Ok(false) => {
+                skipped += 1;
+                continue;
+            }
+            Err(err) => {
+                failures.push(json!({
+                    "arena": arena,
+                    "stage": "read_initialized",
+                    "error": err.to_string(),
+                }));
+                continue;
+            }
+        }
+
         attempted += 1;
         let key = format!("arena.{arena}.purge\0");
-        let result = unsafe { raw::write::<()>(key.as_bytes(), ()) };
-        if let Err(err) = result {
+        if let Err(err) = jemalloc_void_mallctl(key.as_bytes()) {
             failures.push(json!({
                 "arena": arena,
-                "error": err.to_string(),
+                "stage": "purge",
+                "error": err,
             }));
         }
     }
@@ -287,11 +306,45 @@ fn allocator_reclaim_impl() -> (&'static str, Value) {
         status,
         json!({
             "operation": "jemalloc_arena_purge",
+            "arenasObserved": narenas,
             "arenasAttempted": attempted,
+            "arenasSkipped": skipped,
             "failures": failures,
+            "epochBefore": epoch_before,
             "epochAfter": epoch_after,
         }),
     )
+}
+
+#[cfg(feature = "allocator-jemalloc")]
+fn jemalloc_void_mallctl(name: &[u8]) -> Result<(), String> {
+    use std::os::raw::c_char;
+    use std::ptr;
+
+    if !name.ends_with(&[0]) {
+        return Err("mallctl name must be null-terminated".to_owned());
+    }
+
+    let rc = unsafe {
+        tikv_jemalloc_sys::mallctl(
+            name.as_ptr().cast::<c_char>(),
+            ptr::null_mut(),
+            ptr::null_mut(),
+            ptr::null_mut(),
+            0,
+        )
+    };
+    if rc == 0 {
+        Ok(())
+    } else {
+        Err(jemalloc_mallctl_error(rc))
+    }
+}
+
+#[cfg(feature = "allocator-jemalloc")]
+fn jemalloc_mallctl_error(rc: i32) -> String {
+    let err = std::io::Error::from_raw_os_error(rc);
+    format!("mallctl returned {rc}: {err}")
 }
 
 #[cfg(not(any(feature = "allocator-mimalloc", feature = "allocator-jemalloc")))]

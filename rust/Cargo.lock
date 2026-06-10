@@ -638,6 +638,7 @@ dependencies = [
  "sha2",
  "sha3",
  "tikv-jemalloc-ctl",
+ "tikv-jemalloc-sys",
  "tikv-jemallocator",
  "tls-parser",
  "tokio",
