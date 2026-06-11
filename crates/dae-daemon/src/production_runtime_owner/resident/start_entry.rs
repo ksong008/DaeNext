@@ -55,7 +55,7 @@ pub fn start_resident_production_runtime(
     let start_file = artifact_dir.join("resident-production-runtime-start.json");
     let cleanup_file = artifact_dir.join("resident-production-runtime-cleanup.json");
     let lan_ifaces = configured_lan_ifaces(config);
-    let wan_ifaces = configured_wan_ifaces(config);
+    let wan_ifaces = configured_wan_ifaces(config)?;
     start_with_options(
         options,
         artifact_dir,
