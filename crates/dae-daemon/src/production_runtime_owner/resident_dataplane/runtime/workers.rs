@@ -98,9 +98,17 @@ pub(crate) fn start_resident_dataplane_workers(
         }
     };
 
-    let stop = Arc::new(AtomicBool::new(false));
     let reload_generation = RESIDENT_RELOAD_GENERATION.fetch_add(1, Ordering::Relaxed);
     let metrics = Arc::new(ResidentDataplaneMetrics::default());
+    let udp_sessions_active = Arc::new(AtomicUsize::new(0));
+    let event_lock = Arc::new(Mutex::new(()));
+    let mut owner = ResidentRuntimeOwner::new(
+        event_file.clone(),
+        Arc::clone(&event_lock),
+        reload_generation,
+        Arc::clone(&metrics),
+        Arc::clone(&udp_sessions_active),
+    );
     let proxy = Arc::new(default_proxy);
     let proxy_group = Arc::new(default_group);
     let manual_probe_plans = plan::build_resident_manual_probe_plans(config);
@@ -145,61 +153,70 @@ pub(crate) fn start_resident_dataplane_workers(
             );
         }
     };
-    let event_lock = Arc::new(Mutex::new(()));
     let tcp_flow_stack_bytes = resident_tcp_flow_stack_bytes();
     let udp_session_limit = resident_udp_session_limit();
     let udp_session_queue_depth = resident_udp_session_queue_depth();
-    let udp_sessions_active = Arc::new(AtomicUsize::new(0));
-    let mut handles = Vec::new();
     {
-        let stop = Arc::clone(&stop);
+        let stop = owner.stop_handle();
         let tcp_router = Arc::clone(&tcp_router);
-        let event_file = event_file.clone();
-        let event_lock = Arc::clone(&event_lock);
-        let metrics = Arc::clone(&metrics);
-        handles.push(thread::spawn(move || {
-            resident_tcp_accept_loop(
-                tcp_listener,
-                tcp_router,
-                stop,
-                event_file,
-                event_lock,
-                metrics,
-                tcp_flow_stack_bytes,
-            )
-        }));
+        let event_file = owner.event_file();
+        let event_lock = owner.event_lock();
+        let metrics = owner.metrics();
+        owner.register_thread(
+            "tcp-accept-loop",
+            "tcp-accept",
+            thread::spawn(move || {
+                resident_tcp_accept_loop(
+                    tcp_listener,
+                    tcp_router,
+                    stop,
+                    event_file,
+                    event_lock,
+                    metrics,
+                    tcp_flow_stack_bytes,
+                )
+            }),
+        );
     }
     {
-        let stop = Arc::clone(&stop);
+        let stop = owner.stop_handle();
         let proxy_group = Arc::clone(&proxy_group);
         let dns = Arc::clone(&dns);
-        let event_file = event_file.clone();
-        let event_lock = Arc::clone(&event_lock);
-        let metrics = Arc::clone(&metrics);
-        let active_sessions = Arc::clone(&udp_sessions_active);
-        handles.push(thread::spawn(move || {
-            resident_udp_loop(
-                udp_socket,
-                proxy_group,
-                dns,
-                stop,
-                event_file,
-                event_lock,
-                metrics,
-                active_sessions,
-                udp_session_limit,
-                udp_session_queue_depth,
-            )
-        }));
+        let event_file = owner.event_file();
+        let event_lock = owner.event_lock();
+        let metrics = owner.metrics();
+        let active_sessions = owner.udp_sessions_active();
+        owner.register_thread(
+            "udp-session-manager",
+            "udp-session-manager",
+            thread::spawn(move || {
+                resident_udp_loop(
+                    udp_socket,
+                    proxy_group,
+                    dns,
+                    stop,
+                    event_file,
+                    event_lock,
+                    metrics,
+                    active_sessions,
+                    udp_session_limit,
+                    udp_session_queue_depth,
+                )
+            }),
+        );
     }
     for health_group in &health_groups {
-        let stop = Arc::clone(&stop);
+        let stop = owner.stop_handle();
         let health_group = Arc::clone(health_group);
-        let event_file = event_file.clone();
-        let event_lock = Arc::clone(&event_lock);
-        handles.push(thread::spawn(move || {
-            resident_group_health_check_loop(health_group, stop, event_file, event_lock)
-        }));
+        let event_file = owner.event_file();
+        let event_lock = owner.event_lock();
+        owner.register_thread(
+            "health-check-loop",
+            "health-check",
+            thread::spawn(move || {
+                resident_group_health_check_loop(health_group, stop, event_file, event_lock)
+            }),
+        );
     }
 
     let default_proxy_utls = proxy.utls_fingerprint.as_ref().map(|fingerprint| {
@@ -227,6 +244,7 @@ pub(crate) fn start_resident_dataplane_workers(
         "udp_session_queue_depth_env": RESIDENT_UDP_SESSION_QUEUE_DEPTH_ENV,
         "event_file": path_string(&event_file),
         "reload_generation": reload_generation,
+        "runtime_owner": owner.task_registry_value(),
         "routing_tuple_map_id": routing_tuple_map_id,
         "tcp_dial_mode": tcp_router.dial_mode_name(),
         "tcp_sniffing_timeout": format!("{:?}", tcp_router.sniffing_timeout()),
@@ -269,13 +287,7 @@ pub(crate) fn start_resident_dataplane_workers(
     (
         start,
         Some(ResidentDataplaneRuntime {
-            stop,
-            handles,
-            event_file,
-            event_lock,
-            reload_generation,
-            metrics,
-            udp_sessions_active,
+            owner,
             groups: runtime_groups,
             manual_probe_plans,
         }),

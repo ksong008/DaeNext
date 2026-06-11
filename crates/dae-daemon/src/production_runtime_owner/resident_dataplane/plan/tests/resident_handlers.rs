@@ -275,7 +275,7 @@ pub(super) fn resident_protocol_executor_contract_covers_all_plan_variants() {
             auth: fixture_secret(),
         },
         ResidentProxyProtocolPlan::VmessAeadTcp {
-            id: "01234567-89ab-cdef-0123-456789abcdef".to_owned(),
+            id: fixture_client_id(),
         },
         ResidentProxyProtocolPlan::Hysteria2QuicTcp {
             auth: fixture_secret(),
@@ -284,13 +284,13 @@ pub(super) fn resident_protocol_executor_contract_covers_all_plan_variants() {
             port_hop_ports: vec![fixture_port(1)],
         },
         ResidentProxyProtocolPlan::TuicQuicTcp {
-            uuid: "01234567-89ab-cdef-0123-456789abcdef".to_owned(),
+            uuid: fixture_client_id(),
             password: fixture_secret(),
             alpn: vec!["h3".to_owned()],
             allow_insecure: false,
         },
         ResidentProxyProtocolPlan::JuicityQuicTcp {
-            uuid: "01234567-89ab-cdef-0123-456789abcdef".to_owned(),
+            uuid: fixture_client_id(),
             password: fixture_secret(),
             allow_insecure: false,
             pinned_certchain_sha256: "sha256:fixture".to_owned(),
