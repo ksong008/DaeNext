@@ -610,7 +610,6 @@ dependencies = [
  "boring",
  "bytes",
  "dae-aya-bpf-loader",
- "dae-build-support",
  "dae-config",
  "dae-control",
  "dae-core-types",
