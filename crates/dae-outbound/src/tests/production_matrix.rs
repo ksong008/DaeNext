@@ -12,6 +12,7 @@ fn outbound_production_matrix_contract_covers_current_native_handlers() {
     assert!(contract.reload_behavior_ready);
     assert!(contract.live_smoke_ready);
     assert!(contract.native_executor_matrix_ready);
+    assert!(contract.source_registry_backed_ready);
 
     let handlers: Vec<_> = contract.entries.iter().map(|entry| entry.handler).collect();
     for expected in [
@@ -42,5 +43,41 @@ fn outbound_production_matrix_contract_covers_current_native_handlers() {
         assert!(entry.live_smoke, "{}", entry.handler);
         assert!(entry.native_executor_ready, "{}", entry.handler);
         assert!(!entry.evidence.is_empty(), "{}", entry.handler);
+        assert!(!entry.source_shape_ids.is_empty(), "{}", entry.handler);
+    }
+}
+
+#[test]
+fn outbound_production_matrix_ready_entries_are_backed_by_source_shapes() {
+    let entries = production_matrix_entries();
+    let rows = source_shape_registry_rows();
+    assert!(production_matrix_entries_are_source_registry_backed(
+        entries, rows
+    ));
+
+    for entry in entries {
+        for shape_id in entry.source_shape_ids {
+            let row = rows
+                .iter()
+                .find(|row| row.shape_id == *shape_id)
+                .unwrap_or_else(|| {
+                    panic!(
+                        "{} references missing source-shape row {shape_id}",
+                        entry.handler
+                    )
+                });
+            assert_eq!(row.source_support, "source-supported", "{shape_id}");
+            assert_eq!(row.resident_status, "admitted-baseline", "{shape_id}");
+            assert_eq!(row.blocker_id, None, "{shape_id}");
+            assert_eq!(
+                row.executor_proof.proof_state, "runtime-executable",
+                "{shape_id}"
+            );
+            assert!(row.typed_capability_contract().is_some(), "{shape_id}");
+            assert!(
+                row.security_underlay_policy_contract().is_some(),
+                "{shape_id}"
+            );
+        }
     }
 }

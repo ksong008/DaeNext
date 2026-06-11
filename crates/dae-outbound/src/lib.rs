@@ -62,6 +62,7 @@ pub use policy::SelectionPolicy;
 pub use production_matrix::{
     OutboundProductionMatrixContract, OutboundProductionMatrixEntry,
     outbound_production_matrix_contract, production_matrix_entries,
+    production_matrix_entries_are_source_registry_backed,
 };
 pub use security_underlay_capability::{
     SecurityUnderlayCapabilityContract, SecurityUnderlayCapabilityRow,
@@ -72,11 +73,13 @@ pub use shadowsocks::{
 };
 pub use socks5::{AddressKind, ServerReply, Socks5Address, Socks5Command, Socks5UdpDatagram};
 pub use source_shape_registry::{
-    CapabilityLedger, ComponentExecutorProof, ExpandedLiveMatrixLedger,
-    ProductionReadinessReconciliation, RuntimeSelectionLedger, ScopedExpandedSourceMatrixEvidence,
-    ShapeStateLedger, SourceShapeRegistryContract, SourceShapeRegistryRow,
-    capability_reason_taxonomy, official_common_fixture_requirements,
-    official_common_source_shape_ids, source_shape_registry_contract, source_shape_registry_rows,
+    CapabilityLedger, ComponentExecutorProof, ExecutorKind, ExpandedLiveMatrixLedger,
+    PacketSemantics, ProductionReadinessReconciliation, ProtocolFraming, RuntimeSelectionLedger,
+    ScopedExpandedSourceMatrixEvidence, SecurityUnderlay, SecurityUnderlayPolicyContract,
+    ShapeStateLedger, SourceShapeRegistryContract, SourceShapeRegistryRow, SourceShapeState,
+    StreamWrapper, TypedCapabilityContract, capability_reason_taxonomy,
+    official_common_fixture_requirements, official_common_source_shape_ids,
+    source_shape_registry_contract, source_shape_registry_rows,
 };
 pub use stream_wrapper_capability::{
     StreamWrapperCapabilityContract, StreamWrapperCapabilityRow,

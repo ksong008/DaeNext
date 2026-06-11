@@ -139,6 +139,134 @@ pub(crate) enum ResidentProxyProtocolPlan {
     },
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[cfg_attr(not(test), allow(dead_code))]
+pub(in crate::production_runtime_owner::resident_dataplane) struct ResidentProtocolExecutorContract
+{
+    pub(in crate::production_runtime_owner::resident_dataplane) tcp_executor: &'static str,
+    pub(in crate::production_runtime_owner::resident_dataplane) udp_executor: &'static str,
+    pub(in crate::production_runtime_owner::resident_dataplane) packet_semantics: &'static str,
+    pub(in crate::production_runtime_owner::resident_dataplane) udp_policy_closed: bool,
+}
+
+impl ResidentProxyProtocolPlan {
+    #[cfg_attr(not(test), allow(dead_code))]
+    pub(in crate::production_runtime_owner::resident_dataplane) fn executor_contract(
+        &self,
+    ) -> ResidentProtocolExecutorContract {
+        match self {
+            Self::VlessVisionTcpTls { .. } => ResidentProtocolExecutorContract {
+                tcp_executor: "resident-vless-vision-tcp",
+                udp_executor: "resident-vless-xudp",
+                packet_semantics: "xudp",
+                udp_policy_closed: false,
+            },
+            Self::VlessMuxTcpTls { .. } => ResidentProtocolExecutorContract {
+                tcp_executor: "resident-vless-mux-tcp",
+                udp_executor: "policy-closed",
+                packet_semantics: "multiplexed-stream",
+                udp_policy_closed: true,
+            },
+            Self::Socks5Tcp { .. } => ResidentProtocolExecutorContract {
+                tcp_executor: "resident-socks5-connect",
+                udp_executor: "resident-socks5-udp-associate",
+                packet_semantics: "udp-associate",
+                udp_policy_closed: false,
+            },
+            Self::HttpProxyTcp { .. } => ResidentProtocolExecutorContract {
+                tcp_executor: "resident-http-connect",
+                udp_executor: "protocol-closed",
+                packet_semantics: "protocol-closed",
+                udp_policy_closed: true,
+            },
+            Self::ShadowsocksAeadTcp { .. } => ResidentProtocolExecutorContract {
+                tcp_executor: "resident-shadowsocks-aead-stream",
+                udp_executor: "resident-shadowsocks-aead-datagram",
+                packet_semantics: "datagram-aead",
+                udp_policy_closed: false,
+            },
+            Self::Shadowsocks2022Tcp { .. } => ResidentProtocolExecutorContract {
+                tcp_executor: "resident-shadowsocks-2022-stream",
+                udp_executor: "resident-shadowsocks-2022-datagram",
+                packet_semantics: "datagram-aead-2022",
+                udp_policy_closed: false,
+            },
+            Self::ShadowsocksSimpleObfsHttpTcp { .. } => ResidentProtocolExecutorContract {
+                tcp_executor: "resident-shadowsocks-simple-obfs-http-stream",
+                udp_executor: "plugin-udp-policy-closed",
+                packet_semantics: "tcp-stream-wrapper",
+                udp_policy_closed: true,
+            },
+            Self::ShadowsocksSimpleObfsTlsTcp { .. } => ResidentProtocolExecutorContract {
+                tcp_executor: "resident-shadowsocks-simple-obfs-tls-stream",
+                udp_executor: "plugin-udp-policy-closed",
+                packet_semantics: "tcp-stream-wrapper",
+                udp_policy_closed: true,
+            },
+            Self::ShadowsocksV2rayPluginTlsWsTcp { .. } => ResidentProtocolExecutorContract {
+                tcp_executor: "resident-shadowsocks-v2ray-plugin-tls-websocket-stream",
+                udp_executor: "plugin-udp-policy-closed",
+                packet_semantics: "tcp-stream-wrapper",
+                udp_policy_closed: true,
+            },
+            Self::Shadowsocks2022SimpleObfsHttpTcp { .. } => ResidentProtocolExecutorContract {
+                tcp_executor: "resident-shadowsocks-2022-simple-obfs-http-stream",
+                udp_executor: "plugin-udp-policy-closed",
+                packet_semantics: "tcp-stream-wrapper",
+                udp_policy_closed: true,
+            },
+            Self::ShadowsocksRHttpSimpleTcp { .. } => ResidentProtocolExecutorContract {
+                tcp_executor: "resident-shadowsocksr-http-simple-stream",
+                udp_executor: "legacy-udp-policy-closed",
+                packet_semantics: "tcp-stream-wrapper",
+                udp_policy_closed: true,
+            },
+            Self::TrojanTcpTls { .. } => ResidentProtocolExecutorContract {
+                tcp_executor: "resident-trojan-tls-stream",
+                udp_executor: "resident-trojan-udp-over-tcp",
+                packet_semantics: "udp-over-stream-or-datagram",
+                udp_policy_closed: false,
+            },
+            Self::TrojanInnerShadowsocksTcpTls { .. } => ResidentProtocolExecutorContract {
+                tcp_executor: "resident-trojan-inner-shadowsocks-stream",
+                udp_executor: "inner-encryption-udp-policy-closed",
+                packet_semantics: "tcp-stream-wrapper",
+                udp_policy_closed: true,
+            },
+            Self::AnyTlsTcpTls { .. } => ResidentProtocolExecutorContract {
+                tcp_executor: "resident-anytls-frame-stream",
+                udp_executor: "resident-anytls-packet-stream",
+                packet_semantics: "udp-over-stream-or-datagram",
+                udp_policy_closed: false,
+            },
+            Self::VmessAeadTcp { .. } => ResidentProtocolExecutorContract {
+                tcp_executor: "resident-vmess-aead-stream",
+                udp_executor: "resident-vmess-udp-over-tcp",
+                packet_semantics: "udp-over-stream-or-datagram",
+                udp_policy_closed: false,
+            },
+            Self::Hysteria2QuicTcp { .. } => ResidentProtocolExecutorContract {
+                tcp_executor: "resident-hysteria2-quic-stream",
+                udp_executor: "resident-hysteria2-quic-datagram",
+                packet_semantics: "quic-datagram-or-stream",
+                udp_policy_closed: false,
+            },
+            Self::TuicQuicTcp { .. } => ResidentProtocolExecutorContract {
+                tcp_executor: "resident-tuic-quic-stream",
+                udp_executor: "resident-tuic-quic-packet",
+                packet_semantics: "quic-datagram-or-stream",
+                udp_policy_closed: false,
+            },
+            Self::JuicityQuicTcp { .. } => ResidentProtocolExecutorContract {
+                tcp_executor: "resident-juicity-quic-stream",
+                udp_executor: "resident-juicity-quic-stream-packet",
+                packet_semantics: "quic-datagram-or-stream",
+                udp_policy_closed: false,
+            },
+        }
+    }
+}
+
 #[derive(Clone, Debug)]
 pub(crate) struct ResidentProxyPlan {
     pub(in crate::production_runtime_owner::resident_dataplane) graph_id: String,

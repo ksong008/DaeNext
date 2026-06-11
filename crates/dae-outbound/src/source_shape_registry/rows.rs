@@ -185,7 +185,7 @@ pub(super) static SOURCE_SHAPE_REGISTRY_ROWS: &[SourceShapeRegistryRow] = &[
         "vmess",
         &["vmess"],
         "aead",
-        "baseline-admitted",
+        "none",
         "udp-over-stream-or-datagram",
         "registry:legacy-layer-shape",
     ),

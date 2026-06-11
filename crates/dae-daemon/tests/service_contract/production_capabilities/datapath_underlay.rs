@@ -179,6 +179,11 @@ pub(crate) fn assert_datapath_and_outbound_underlay_contract(report: &Value) {
             .as_bool()
             .unwrap()
     );
+    assert!(
+        report["outbound_production_matrix_source_registry_backed_ready"]
+            .as_bool()
+            .unwrap()
+    );
     assert_eq!(
         report["outbound_production_matrix_report_schema"]
             .as_str()
@@ -191,6 +196,15 @@ pub(crate) fn assert_datapath_and_outbound_underlay_contract(report: &Value) {
             .unwrap()
             .len()
             >= 10
+    );
+    assert!(
+        report["outbound_production_matrix_entries"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|entry| entry["source_shape_ids"]
+                .as_array()
+                .is_some_and(|ids| !ids.is_empty()))
     );
     assert!(
         report["outbound_native_executor_production_ready"]

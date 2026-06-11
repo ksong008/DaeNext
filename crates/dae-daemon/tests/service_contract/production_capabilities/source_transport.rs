@@ -72,6 +72,18 @@ pub(crate) fn assert_source_stream_packet_and_transport_contract(report: &Value)
             >= 20
     );
     assert!(
+        report["source_shape_registry_rows"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|row| row["typedCapabilityContract"]["schemaVersion"]
+                .as_u64()
+                .is_some_and(|version| version == 1)
+                && row["securityUnderlayPolicy"]["schemaVersion"]
+                    .as_u64()
+                    .is_some_and(|version| version == 1))
+    );
+    assert!(
         report["expanded_source_matrix_status_counts"]["blocked"]
             .as_u64()
             .unwrap_or(0)

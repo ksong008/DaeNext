@@ -2,6 +2,8 @@ use serde_json::{Value, json};
 
 mod types;
 pub use self::types::*;
+mod typed_contract;
+pub use self::typed_contract::*;
 mod api;
 pub use self::api::*;
 mod ledger_constants;
