@@ -1,14 +1,6 @@
 name: Rust CI
 
 on:
-  push:
-    branches:
-      - main
-      - dae-daex-align
-  pull_request:
-    branches:
-      - main
-      - dae-daex-align
   workflow_dispatch:
 
 env:
