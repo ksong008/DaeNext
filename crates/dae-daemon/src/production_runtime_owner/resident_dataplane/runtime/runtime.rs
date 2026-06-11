@@ -1,13 +1,7 @@
 use super::*;
 #[derive(Debug)]
 pub(crate) struct ResidentDataplaneRuntime {
-    pub(in crate::production_runtime_owner) stop: Arc<AtomicBool>,
-    pub(in crate::production_runtime_owner) handles: Vec<JoinHandle<()>>,
-    pub(in crate::production_runtime_owner) event_file: PathBuf,
-    pub(in crate::production_runtime_owner) event_lock: Arc<Mutex<()>>,
-    pub(in crate::production_runtime_owner) reload_generation: u64,
-    pub(in crate::production_runtime_owner) metrics: Arc<ResidentDataplaneMetrics>,
-    pub(in crate::production_runtime_owner) udp_sessions_active: Arc<AtomicUsize>,
+    pub(in crate::production_runtime_owner) owner: ResidentRuntimeOwner,
     pub(in crate::production_runtime_owner) groups: Vec<Arc<plan::ResidentProxyGroupPlan>>,
     pub(in crate::production_runtime_owner) manual_probe_plans:
         BTreeMap<String, Result<plan::ResidentProxyProbePlan, String>>,
@@ -15,34 +9,19 @@ pub(crate) struct ResidentDataplaneRuntime {
 
 impl ResidentDataplaneRuntime {
     pub(in crate::production_runtime_owner) fn metrics_snapshot(&self) -> Value {
-        let mut snapshot = self.metrics.snapshot();
-        snapshot["reloadGeneration"] = json!(self.reload_generation);
-        snapshot["packetSessionManager"] = json!({
-            "schemaVersion": 1,
-            "manager": "resident-udp-session-manager",
-            "reloadGeneration": self.reload_generation,
-        });
-        snapshot
+        self.owner.metrics_snapshot()
     }
 
     pub(in crate::production_runtime_owner) fn prune_event_log(&self) -> std::io::Result<()> {
-        let _guard = self
-            .event_lock
-            .lock()
-            .map_err(|_| std::io::Error::other("resident event log lock poisoned"))?;
-        prune_resident_event_log_file(&self.event_file)
+        self.owner.prune_event_log()
     }
 
     pub(in crate::production_runtime_owner) fn clear_event_log(&self) -> std::io::Result<()> {
-        let _guard = self
-            .event_lock
-            .lock()
-            .map_err(|_| std::io::Error::other("resident event log lock poisoned"))?;
-        clear_resident_event_log_file(&self.event_file)
+        self.owner.clear_event_log()
     }
 
     pub(in crate::production_runtime_owner) fn node_latency_snapshots(&self) -> Vec<Value> {
-        let reload_generation = self.reload_generation;
+        let reload_generation = self.owner.reload_generation();
         preferred_latency_snapshots(
             self.groups
                 .iter()
@@ -55,109 +34,11 @@ impl ResidentDataplaneRuntime {
         &self,
         links: &[String],
     ) -> Vec<Value> {
-        if links.is_empty() {
-            return Vec::new();
-        }
-        let requested = links
-            .iter()
-            .filter(|link| !link.is_empty())
-            .cloned()
-            .collect::<HashSet<_>>();
-        if requested.is_empty() {
-            return Vec::new();
-        }
-
-        let checked_at = unix_now_secs();
-        let mut snapshots = Vec::new();
-        let mut tasks = Vec::new();
-        for link in requested {
-            match self.manual_probe_plans.get(&link) {
-                Some(Ok(candidate)) => tasks.push(candidate.clone()),
-                Some(Err(err)) => snapshots.push(manual_probe_unavailable_snapshot(
-                    &link,
-                    "native outbound probe not admitted for this node",
-                    err,
-                    checked_at,
-                    self.reload_generation,
-                )),
-                None => snapshots.push(manual_probe_unavailable_snapshot(
-                    &link,
-                    "node is not present in the current runtime config",
-                    "materialize/reload runtime before testing this node",
-                    checked_at,
-                    self.reload_generation,
-                )),
-            }
-        }
-
-        let runtime = match tokio::runtime::Builder::new_current_thread()
-            .enable_io()
-            .enable_time()
-            .build()
-        {
-            Ok(runtime) => runtime,
-            Err(err) => {
-                let detail = format!("start Tokio manual latency probe runtime: {err}");
-                snapshots.extend(tasks.into_iter().map(|candidate| {
-                    manual_probe_unavailable_snapshot(
-                        &candidate.link,
-                        "native outbound probe runtime unavailable",
-                        &detail,
-                        checked_at,
-                        self.reload_generation,
-                    )
-                }));
-                return preferred_latency_snapshots(snapshots);
-            }
-        };
-
-        for chunk in tasks.chunks(RESIDENT_MANUAL_LATENCY_PROBE_CONCURRENCY) {
-            let reload_generation = self.reload_generation;
-            let groups = self.groups.clone();
-            let mut chunk_snapshots = runtime.block_on(async {
-                let mut handles = Vec::new();
-                for candidate in chunk.iter().cloned() {
-                    let groups = groups.clone();
-                    handles.push(tokio::spawn(async move {
-                        probe_resident_candidate_tcp_latency_snapshot(
-                            groups,
-                            candidate,
-                            reload_generation,
-                        )
-                        .await
-                    }));
-                }
-                let mut values = Vec::new();
-                for handle in handles {
-                    if let Ok(value) = handle.await {
-                        values.push(value);
-                    }
-                }
-                values
-            });
-            snapshots.append(&mut chunk_snapshots);
-        }
-        preferred_latency_snapshots(snapshots)
+        self.owner
+            .probe_node_latencies(&self.groups, &self.manual_probe_plans, links)
     }
 
     pub(in crate::production_runtime_owner) fn shutdown(&mut self, steps: &mut Vec<Value>) {
-        self.stop.store(true, Ordering::Relaxed);
-        let mut joined = 0_usize;
-        let mut panicked = 0_usize;
-        for handle in self.handles.drain(..) {
-            match handle.join() {
-                Ok(()) => joined += 1,
-                Err(_) => panicked += 1,
-            }
-        }
-        let udp_sessions_active = self.udp_sessions_active.load(Ordering::Relaxed);
-        steps.push(json!({
-            "name": "stop-resident-dataplane-runtime",
-            "status": if panicked == 0 { "pass" } else { "fail" },
-            "joined_worker_threads": joined,
-            "panicked_worker_threads": panicked,
-            "udp_sessions_active_at_shutdown": udp_sessions_active,
-            "event_file": path_string(&self.event_file),
-        }));
+        steps.push(self.owner.shutdown());
     }
 }
