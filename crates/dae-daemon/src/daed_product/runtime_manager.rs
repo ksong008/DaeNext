@@ -13,6 +13,7 @@ pub(super) struct ProductRuntimeState {
     pub(super) last_report: Option<Value>,
     pub(super) reload_count: u64,
     pub(super) stop_count: u64,
+    pub(super) traffic_carry: RuntimeTrafficCarry,
 }
 
 #[derive(Debug)]
@@ -30,6 +31,47 @@ pub(super) struct FakeProductRuntime {
 impl FakeProductRuntime {
     pub(super) fn probe_node_latencies(&self, links: &[String]) -> Vec<Value> {
         fake_runtime_probe_node_latencies(links)
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(super) struct RuntimeTrafficCarry {
+    pub(super) upload_total: u64,
+    pub(super) download_total: u64,
+}
+
+impl RuntimeTrafficCarry {
+    pub(super) fn absorb_runtime(self, runtime: &ProductRuntimeInstance) -> Self {
+        let Some(metrics) = runtime_traffic_metrics_snapshot(runtime) else {
+            return self;
+        };
+        self.absorb_metrics(&metrics)
+    }
+
+    pub(super) fn absorb_metrics(self, metrics: &Value) -> Self {
+        Self {
+            upload_total: self
+                .upload_total
+                .saturating_add(runtime_traffic_metric_u64(metrics, "uploadTotal")),
+            download_total: self
+                .download_total
+                .saturating_add(runtime_traffic_metric_u64(metrics, "downloadTotal")),
+        }
+    }
+
+    pub(super) fn apply_to_runtime_summary(self, summary: &mut Value) {
+        let Some(metrics) = summary.pointer_mut("/residentDataplane/metrics") else {
+            return;
+        };
+        self.apply_to_metrics(metrics);
+    }
+
+    pub(super) fn apply_to_metrics(self, metrics: &mut Value) {
+        if self.upload_total == 0 && self.download_total == 0 {
+            return;
+        }
+        apply_runtime_traffic_metric_carry(metrics, "uploadTotal", self.upload_total);
+        apply_runtime_traffic_metric_carry(metrics, "downloadTotal", self.download_total);
     }
 }
 
@@ -84,6 +126,9 @@ impl ProductRuntimeManager {
             .map_err(|_| "product runtime manager lock poisoned".to_owned())?;
         let previous_runtime = inner.runtime.take();
         let previous_config = inner.config.clone();
+        if let Some(runtime) = previous_runtime.as_ref() {
+            inner.traffic_carry = inner.traffic_carry.absorb_runtime(runtime);
+        }
         drop(previous_runtime);
 
         match start_product_runtime_instance(&config, source) {
@@ -142,6 +187,7 @@ impl ProductRuntimeManager {
         inner.runtime.take();
         let reclaim = was_running.then(|| allocator_reclaim(AllocatorReclaimReason::StopRuntime));
         inner.config = None;
+        inner.traffic_carry = RuntimeTrafficCarry::default();
         inner.stop_count += 1;
         inner.last_transition_at = Some(now_text());
         inner.last_report = None;
@@ -168,6 +214,7 @@ impl ProductRuntimeManager {
         match inner.runtime.as_ref() {
             Some(ProductRuntimeInstance::Resident(runtime)) => {
                 let mut summary = runtime.product_state_summary();
+                inner.traffic_carry.apply_to_runtime_summary(&mut summary);
                 if let Value::Object(map) = &mut summary {
                     map.insert(
                         "lastTransitionAt".to_owned(),
@@ -224,9 +271,12 @@ impl ProductRuntimeManager {
             return None;
         };
         match inner.runtime.as_ref() {
-            Some(ProductRuntimeInstance::Resident(runtime)) => {
-                runtime.resident_dataplane_metrics_snapshot()
-            }
+            Some(ProductRuntimeInstance::Resident(runtime)) => runtime
+                .resident_dataplane_metrics_snapshot()
+                .map(|mut metrics| {
+                    inner.traffic_carry.apply_to_metrics(&mut metrics);
+                    metrics
+                }),
             Some(ProductRuntimeInstance::Fake(_)) | None => None,
         }
     }
@@ -273,6 +323,31 @@ impl ProductRuntimeManager {
         }
         Ok(())
     }
+}
+
+fn runtime_traffic_metrics_snapshot(runtime: &ProductRuntimeInstance) -> Option<Value> {
+    match runtime {
+        ProductRuntimeInstance::Resident(runtime) => runtime.resident_dataplane_metrics_snapshot(),
+        ProductRuntimeInstance::Fake(_) => None,
+    }
+}
+
+fn apply_runtime_traffic_metric_carry(metrics: &mut Value, key: &str, carry: u64) {
+    if carry == 0 {
+        return;
+    }
+    metrics[key] = json!(runtime_traffic_metric_u64(metrics, key).saturating_add(carry));
+}
+
+fn runtime_traffic_metric_u64(metrics: &Value, key: &str) -> u64 {
+    metrics
+        .get(key)
+        .and_then(|value| {
+            value
+                .as_u64()
+                .or_else(|| value.as_str().and_then(|value| value.parse::<u64>().ok()))
+        })
+        .unwrap_or(0)
 }
 
 pub(super) fn start_product_runtime_instance(

@@ -438,6 +438,45 @@ fn materialized_global_text_converts_legacy_json_storage() {
 }
 
 #[test]
+fn runtime_traffic_carry_preserves_totals_when_live_metrics_reset() {
+    let carry = RuntimeTrafficCarry::default().absorb_metrics(&json!({
+        "uploadTotal": 500,
+        "downloadTotal": "700",
+    }));
+    let mut summary = json!({
+        "residentDataplane": {
+            "metrics": {
+                "uploadTotal": 25,
+                "downloadTotal": "50",
+                "activeTcpConnections": 3,
+                "activeUdpSessions": 2,
+            }
+        }
+    });
+
+    carry.apply_to_runtime_summary(&mut summary);
+
+    let metrics = &summary["residentDataplane"]["metrics"];
+    assert_eq!(metrics["uploadTotal"], json!(525));
+    assert_eq!(metrics["downloadTotal"], json!(750));
+    assert_eq!(metrics["activeTcpConnections"], json!(3));
+    assert_eq!(metrics["activeUdpSessions"], json!(2));
+}
+
+#[test]
+fn runtime_traffic_carry_zero_leaves_live_metrics_unchanged() {
+    let mut metrics = json!({
+        "uploadTotal": 25,
+        "downloadTotal": 50,
+    });
+
+    RuntimeTrafficCarry::default().apply_to_metrics(&mut metrics);
+
+    assert_eq!(metrics["uploadTotal"], json!(25));
+    assert_eq!(metrics["downloadTotal"], json!(50));
+}
+
+#[test]
 fn runtime_traffic_stats_read_resident_event_bytes() {
     let dir = std::env::temp_dir().join(format!("daed-product-test-{}", fastrand::u64(..)));
     fs::create_dir_all(&dir).unwrap();

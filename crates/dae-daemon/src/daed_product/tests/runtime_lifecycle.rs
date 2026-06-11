@@ -42,6 +42,25 @@ pub(crate) fn runtime_reload_dry_preview_writes_unified_reload_logs() {
 }
 
 #[test]
+pub(crate) fn runtime_stop_clears_reload_traffic_carry() {
+    let manager = ProductRuntimeManager::new();
+    {
+        let mut inner = manager.inner.lock().unwrap();
+        inner.traffic_carry = RuntimeTrafficCarry {
+            upload_total: 100,
+            download_total: 200,
+        };
+    }
+
+    manager.stop().unwrap();
+
+    assert_eq!(
+        manager.inner.lock().unwrap().traffic_carry,
+        RuntimeTrafficCarry::default()
+    );
+}
+
+#[test]
 pub(crate) fn startup_runtime_evidence_logs_report_interfaces_generically() {
     let dir = std::env::temp_dir().join(format!("daed-product-test-{}", fastrand::u64(..)));
     let state = dir.join("daed.db");
