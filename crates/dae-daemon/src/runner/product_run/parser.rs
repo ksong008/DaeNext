@@ -1,0 +1,35 @@
+use super::*;
+mod base_run_args;
+mod state;
+pub(super) use self::base_run_args::*;
+mod runtime_owner_args;
+pub(super) use self::runtime_owner_args::*;
+mod active_dataplane_args;
+pub(super) use self::active_dataplane_args::*;
+mod benchmark_args;
+pub(super) use self::benchmark_args::*;
+
+pub(crate) fn parse_product_run_args(
+    args: &[String],
+) -> Result<ProductRunParsedArgs, DaemonOutput> {
+    let mut parsed = ProductRunParsedArgs::default();
+    let mut iter = args.iter();
+    while let Some(arg) = iter.next() {
+        if parse_base_run_arg(arg, &mut iter, &mut parsed)? {
+            continue;
+        }
+        if parse_runtime_owner_arg(arg, &mut iter, &mut parsed)? {
+            continue;
+        }
+        if parse_active_dataplane_arg(arg, &mut iter, &mut parsed)? {
+            continue;
+        }
+        if parse_benchmark_arg(arg, &mut iter, &mut parsed)? {
+            continue;
+        }
+        return Err(DaemonOutput::usage(format!(
+            "unsupported run argument: {arg}"
+        )));
+    }
+    Ok(parsed)
+}

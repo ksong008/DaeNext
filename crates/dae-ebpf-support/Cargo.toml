@@ -1,0 +1,18 @@
+[package]
+name = "dae-ebpf-support"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[features]
+default = []
+aya-loader = ["dep:aya"]
+
+[dependencies]
+aya = { workspace = true, optional = true }
+libc.workspace = true
+
+[dev-dependencies]
+dae-golden.workspace = true
+serde_json.workspace = true

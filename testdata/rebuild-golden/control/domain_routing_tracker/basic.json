@@ -1,0 +1,134 @@
+{
+  "name": "fixture-domain-routing-owner-tracker",
+  "owner_commit_rule": "kernel map update/delete succeeds before tracker memory state is applied",
+  "source": [
+    "control/domain_routing_tracker.go",
+    "control/domain_routing_tracker_test.go"
+  ],
+  "steps": [
+    {
+      "ips": [
+        {
+          "ip": "192.0.2.1",
+          "merged": [
+            3
+          ],
+          "owners": [
+            "q=a.example|type=A|class=IN"
+          ],
+          "present": true
+        },
+        {
+          "ip": "2001:db8::1",
+          "merged": [
+            3
+          ],
+          "owners": [
+            "q=a.example|type=A|class=IN"
+          ],
+          "present": true
+        }
+      ],
+      "owners": [
+        "q=a.example|type=A|class=IN"
+      ],
+      "step": "after_owner_a"
+    },
+    {
+      "ips": [
+        {
+          "ip": "192.0.2.1",
+          "merged": [
+            7
+          ],
+          "owners": [
+            "q=a.example|type=A|class=IN",
+            "q=b.example|type=A|class=IN"
+          ],
+          "present": true
+        },
+        {
+          "ip": "198.51.100.7",
+          "merged": [
+            4
+          ],
+          "owners": [
+            "q=b.example|type=A|class=IN"
+          ],
+          "present": true
+        },
+        {
+          "ip": "2001:db8::1",
+          "merged": [
+            3
+          ],
+          "owners": [
+            "q=a.example|type=A|class=IN"
+          ],
+          "present": true
+        }
+      ],
+      "owners": [
+        "q=a.example|type=A|class=IN",
+        "q=b.example|type=A|class=IN"
+      ],
+      "step": "after_owner_b"
+    },
+    {
+      "ips": [
+        {
+          "ip": "192.0.2.1",
+          "merged": [
+            4
+          ],
+          "owners": [
+            "q=b.example|type=A|class=IN"
+          ],
+          "present": true
+        },
+        {
+          "ip": "198.51.100.7",
+          "merged": [
+            4
+          ],
+          "owners": [
+            "q=b.example|type=A|class=IN"
+          ],
+          "present": true
+        }
+      ],
+      "owners": [
+        "q=b.example|type=A|class=IN"
+      ],
+      "step": "after_remove_owner_a"
+    },
+    {
+      "ips": [
+        {
+          "ip": "198.51.100.7",
+          "merged": [
+            16
+          ],
+          "owners": [
+            "q=b.example|type=A|class=IN"
+          ],
+          "present": true
+        },
+        {
+          "ip": "2001:db8::2",
+          "merged": [
+            16
+          ],
+          "owners": [
+            "q=b.example|type=A|class=IN"
+          ],
+          "present": true
+        }
+      ],
+      "owners": [
+        "q=b.example|type=A|class=IN"
+      ],
+      "step": "after_replace_owner_b"
+    }
+  ]
+}

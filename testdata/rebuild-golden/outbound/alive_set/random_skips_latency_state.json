@@ -1,0 +1,9 @@
+{
+  "after_dead_index": 0,
+  "dialer_to_latency_allocated": false,
+  "initial_alive_count": 2,
+  "latency_offset_allocated": false,
+  "name": "outbound-alive-set-random-skips-latency-state",
+  "policy": "random",
+  "want_remaining_selected_index": 1
+}

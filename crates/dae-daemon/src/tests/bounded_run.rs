@@ -1,0 +1,337 @@
+use super::*;
+#[test]
+pub(super) fn run_report_executes_bounded_lifecycle_and_smokes() {
+    let root =
+        std::env::temp_dir().join(format!("dae-daemon-run-report-test-{}", std::process::id()));
+    let config = root.join("config").join("run.dae");
+    std::fs::create_dir_all(config.parent().unwrap()).unwrap();
+    std::fs::write(
+        &config,
+        "global {\n  log_level: info\n}\n\nrouting {\n  pname(NetworkManager) -> direct\n}\n",
+    )
+    .unwrap();
+    let mut options = RunOptions::under_root(&root, &config);
+    options.disable_timestamp = true;
+    options.disable_sudo = true;
+
+    let report = run_product_run_report(&options, "test-version").unwrap();
+    assert_eq!(report["name"].as_str().unwrap(), "daed-run");
+    assert!(report["run_command_supported"].as_bool().unwrap());
+    assert!(report["run_entrypoint_executed"].as_bool().unwrap());
+    assert!(report["rust_native_runtime_owned"].as_bool().unwrap());
+    assert!(report["config_loaded"].as_bool().unwrap());
+    assert!(report["pid_file_written"].as_bool().unwrap());
+    assert!(
+        report["progress_file_reload_done_written"]
+            .as_bool()
+            .unwrap()
+    );
+    assert!(report["sdnotify_ready_recorded"].as_bool().unwrap());
+    assert!(report["listener_smoke_passed"].as_bool().unwrap());
+    assert!(
+        report["listener"]["tcp_udp_loopback_listener_smoke_passed"]
+            .as_bool()
+            .unwrap()
+    );
+    assert!(
+        report["reload_owner_handoff_smoke_passed"]
+            .as_bool()
+            .unwrap()
+    );
+    assert!(
+        report["reload_owner_handoff"]["listener_reuse_sequence_smoke_passed"]
+            .as_bool()
+            .unwrap()
+    );
+    assert!(
+        !report["production_dataplane_harness_executed"]
+            .as_bool()
+            .unwrap()
+    );
+    assert!(
+        !report["production_runtime_owner_executed"]
+            .as_bool()
+            .unwrap()
+    );
+    assert!(
+        !report["production_reload_runtime_parity_executed"]
+            .as_bool()
+            .unwrap()
+    );
+    assert!(!report["reload_runtime_parity_admitted"].as_bool().unwrap());
+    assert!(!report["production_runtime_owner_passed"].as_bool().unwrap());
+    assert!(
+        !report["production_dataplane_harness_passed"]
+            .as_bool()
+            .unwrap()
+    );
+    assert_eq!(
+        report["production_dataplane_admission_scope"]
+            .as_str()
+            .unwrap(),
+        "not-executed"
+    );
+    assert!(
+        !report["production_runtime_owner"]["ebpf_attached_during_owner_smoke"]
+            .as_bool()
+            .unwrap()
+    );
+    assert!(!report["final_native_admission_allowed"].as_bool().unwrap());
+    assert_eq!(
+        report["production_runtime_live_matrix"]["schema"]
+            .as_str()
+            .unwrap(),
+        "rust-native-production-runtime-live-matrix"
+    );
+    assert!(
+        !report["production_runtime_live_matrix"]["matrix_complete"]
+            .as_bool()
+            .unwrap()
+    );
+    assert!(
+        !report["production_runtime_live_matrix"]["final_native_admission_allowed_by_this_matrix"]
+            .as_bool()
+            .unwrap()
+    );
+    assert!(
+        report["production_runtime_live_matrix"]["remaining_rows"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|row| row.as_str().unwrap() == "production-runtime-owner")
+    );
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[test]
+pub(super) fn daemon_runner_run_command_outputs_json() {
+    let root =
+        std::env::temp_dir().join(format!("dae-daemon-run-runner-test-{}", std::process::id()));
+    let config = root.join("config").join("run.dae");
+    std::fs::create_dir_all(config.parent().unwrap()).unwrap();
+    std::fs::write(
+        &config,
+        "global {\n  log_level: info\n}\n\nrouting {\n  pname(NetworkManager) -> direct\n}\n",
+    )
+    .unwrap();
+    let active_dns_target_ip = std::net::Ipv4Addr::LOCALHOST.to_string();
+    let active_dns_target_port = 8053_u16;
+    let output = run_with_args_and_version(
+        [
+            "run".to_owned(),
+            "--config".to_owned(),
+            config.display().to_string(),
+            "--root".to_owned(),
+            root.display().to_string(),
+            "--disable-timestamp".to_owned(),
+            "--disable-sudo".to_owned(),
+            "--production-runtime-tproxy-port=23456".to_owned(),
+            "--production-runtime-dae-netns-id=123".to_owned(),
+            "--production-runtime-active-tcp-target-ip=198.18.60.1".to_owned(),
+            "--production-runtime-active-tcp-client-ip=10.220.60.2".to_owned(),
+            "--production-runtime-active-tcp-target-port=19090".to_owned(),
+            "--production-runtime-active-tcp-so-mark=4321".to_owned(),
+            "--production-runtime-active-tcp-no-mptcp".to_owned(),
+            "--production-runtime-active-udp-target-ip=198.18.63.1".to_owned(),
+            "--production-runtime-active-udp-target-port=19093".to_owned(),
+            "--production-runtime-active-udp-benchmark-iters=11".to_owned(),
+            format!("--production-runtime-active-dns-target-ip={active_dns_target_ip}"),
+            format!("--production-runtime-active-dns-target-port={active_dns_target_port}"),
+            "--production-runtime-active-dns-upstream-ip=127.0.0.1".to_owned(),
+            "--production-runtime-active-dns-upstream-port=11530".to_owned(),
+            "--production-runtime-active-dns-qname=runner.fixture.invalid.".to_owned(),
+            "--production-runtime-active-dns-benchmark-iters=13".to_owned(),
+            "--dataplane-benchmark-iters=7".to_owned(),
+            "--exit-after-ready".to_owned(),
+        ],
+        "test-version",
+    );
+    assert_eq!(output.exit_code, 0, "{}", output.stderr);
+    assert_eq!(output.stderr, "");
+    let json: Value = serde_json::from_str(&output.stdout).unwrap();
+    assert!(json["run_command_supported"].as_bool().unwrap());
+    assert!(json["listener_smoke_passed"].as_bool().unwrap());
+    assert!(json["reload_owner_handoff_smoke_passed"].as_bool().unwrap());
+    assert_eq!(
+        json["production_runtime_owner"]["contract"]["tproxy_port"]
+            .as_u64()
+            .unwrap(),
+        23456
+    );
+    assert_eq!(
+        json["production_runtime_owner"]["contract"]["dae_netns_id"]
+            .as_u64()
+            .unwrap(),
+        123
+    );
+    assert_eq!(
+        json["production_runtime_owner"]["contract"]["active_tcp"]["target_ip"]
+            .as_str()
+            .unwrap(),
+        "198.18.60.1"
+    );
+    assert_eq!(
+        json["production_runtime_owner"]["contract"]["active_tcp"]["client_ip"]
+            .as_str()
+            .unwrap(),
+        "10.220.60.2"
+    );
+    assert_eq!(
+        json["production_runtime_owner"]["contract"]["active_tcp"]["target_port"]
+            .as_u64()
+            .unwrap(),
+        19090
+    );
+    assert_eq!(
+        json["production_runtime_owner"]["contract"]["active_tcp"]["so_mark"]
+            .as_u64()
+            .unwrap(),
+        4321
+    );
+    assert!(
+        !json["production_runtime_owner"]["contract"]["active_tcp"]["mptcp"]
+            .as_bool()
+            .unwrap()
+    );
+    assert!(
+        !json["production_runtime_active_tcp_executed"]
+            .as_bool()
+            .unwrap()
+    );
+    assert_eq!(
+        json["production_runtime_owner"]["contract"]["active_udp"]["target_ip"]
+            .as_str()
+            .unwrap(),
+        "198.18.63.1"
+    );
+    assert_eq!(
+        json["production_runtime_owner"]["contract"]["active_udp"]["target_port"]
+            .as_u64()
+            .unwrap(),
+        19093
+    );
+    assert_eq!(
+        json["production_runtime_owner"]["contract"]["active_udp"]["benchmark_iters"]
+            .as_u64()
+            .unwrap(),
+        11
+    );
+    assert_eq!(
+        json["production_runtime_owner"]["contract"]["active_dns"]["target_ip"]
+            .as_str()
+            .unwrap(),
+        active_dns_target_ip
+    );
+    assert_eq!(
+        json["production_runtime_owner"]["contract"]["active_dns"]["target_port"]
+            .as_u64()
+            .unwrap(),
+        u64::from(active_dns_target_port)
+    );
+    assert_eq!(
+        json["production_runtime_owner"]["contract"]["active_dns"]["upstream_port"]
+            .as_u64()
+            .unwrap(),
+        11530
+    );
+    assert_eq!(
+        json["production_runtime_owner"]["contract"]["active_dns"]["qname"]
+            .as_str()
+            .unwrap(),
+        "runner.fixture.invalid."
+    );
+    assert_eq!(
+        json["production_runtime_owner"]["contract"]["active_dns"]["benchmark_iters"]
+            .as_u64()
+            .unwrap(),
+        13
+    );
+    assert!(
+        !json["production_runtime_active_udp_executed"]
+            .as_bool()
+            .unwrap()
+    );
+    assert!(
+        !json["production_runtime_active_dns_executed"]
+            .as_bool()
+            .unwrap()
+    );
+    assert!(
+        !json["production_runtime_owner"]["contract"]["native_ebpf"]["native_backend_requested"]
+            .as_bool()
+            .unwrap()
+    );
+    assert!(
+        !json["production_runtime_owner"]["contract"]["native_ebpf"]["embedded_object"]
+            .as_bool()
+            .unwrap()
+    );
+    assert!(
+        !json["production_runtime_owner"]["final_native_admission_allowed"]
+            .as_bool()
+            .unwrap()
+    );
+    assert_eq!(
+        json["production_dataplane_harness"]["benchmark_iters"]
+            .as_u64()
+            .unwrap(),
+        7
+    );
+    assert!(
+        !json["production_dataplane_harness_executed"]
+            .as_bool()
+            .unwrap()
+    );
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[test]
+pub(super) fn daemon_runner_run_command_derives_active_dns_target_from_config() {
+    let root = std::env::temp_dir().join(format!(
+        "dae-daemon-run-active-dns-settings-test-{}",
+        std::process::id()
+    ));
+    let config = root.join("config").join("run.dae");
+    std::fs::create_dir_all(config.parent().unwrap()).unwrap();
+    let configured_dns_host = "localhost";
+    let configured_dns_address = std::net::Ipv4Addr::LOCALHOST;
+    let configured_dns_port = 8053_u16;
+    let udp_check_dns =
+        format!("{configured_dns_host}:{configured_dns_port},{configured_dns_address}");
+    std::fs::write(
+        &config,
+        format!(
+            "global {{\n  log_level: info\n  udp_check_dns: '{udp_check_dns}'\n}}\n\nrouting {{\n  pname(NetworkManager) -> direct\n}}\n"
+        ),
+    )
+    .unwrap();
+    let output = run_with_args_and_version(
+        [
+            "run".to_owned(),
+            "--config".to_owned(),
+            config.display().to_string(),
+            "--root".to_owned(),
+            root.display().to_string(),
+            "--disable-timestamp".to_owned(),
+            "--disable-sudo".to_owned(),
+            "--exit-after-ready".to_owned(),
+        ],
+        "test-version",
+    );
+    assert_eq!(output.exit_code, 0, "{}", output.stderr);
+    assert_eq!(output.stderr, "");
+    let json: Value = serde_json::from_str(&output.stdout).unwrap();
+    assert_eq!(
+        json["production_runtime_owner"]["contract"]["active_dns"]["target_ip"]
+            .as_str()
+            .unwrap(),
+        configured_dns_address.to_string()
+    );
+    assert_eq!(
+        json["production_runtime_owner"]["contract"]["active_dns"]["target_port"]
+            .as_u64()
+            .unwrap(),
+        u64::from(configured_dns_port)
+    );
+    let _ = std::fs::remove_dir_all(root);
+}

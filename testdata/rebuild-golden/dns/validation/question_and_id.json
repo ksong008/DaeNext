@@ -1,0 +1,79 @@
+{
+  "cases": [
+    {
+      "name": "matching-question",
+      "ok": true,
+      "questions": [
+        {
+          "qclass": 1,
+          "qname": "example.com.",
+          "qtype": 1
+        }
+      ],
+      "require_id": true,
+      "response_id": 4369
+    },
+    {
+      "error": "dns response missing question",
+      "name": "missing-question",
+      "ok": false,
+      "questions": [],
+      "require_id": true,
+      "response_id": 4369
+    },
+    {
+      "error": "dns response question mismatch at index 0: got other.example. A class=1 want example.com. A class=1",
+      "name": "mismatched-question",
+      "ok": false,
+      "questions": [
+        {
+          "qclass": 1,
+          "qname": "other.example.",
+          "qtype": 1
+        }
+      ],
+      "require_id": true,
+      "response_id": 4369
+    },
+    {
+      "error": "dns response id mismatch: got 8738 want 4369",
+      "name": "mismatched-id-required",
+      "ok": false,
+      "questions": [
+        {
+          "qclass": 1,
+          "qname": "example.com.",
+          "qtype": 1
+        }
+      ],
+      "require_id": true,
+      "response_id": 8738
+    },
+    {
+      "name": "mismatched-id-not-required",
+      "ok": true,
+      "questions": [
+        {
+          "qclass": 1,
+          "qname": "example.com.",
+          "qtype": 1
+        }
+      ],
+      "require_id": false,
+      "response_id": 8738
+    }
+  ],
+  "name": "dns-validation-question-and-id",
+  "notes": "DNS response validation checks response bit, optional ID equality and exact question qname/qtype/qclass.",
+  "request": {
+    "id": 4369,
+    "qclass": 1,
+    "qname": "example.com.",
+    "qtype": 1
+  },
+  "source": [
+    "control/dns_control.go:validateDnsResponseForRequest",
+    "control/dns_control.go:formatDnsQuestion",
+    "golden fixture evidence"
+  ]
+}

@@ -1,0 +1,26 @@
+[package]
+name = "dae-bench"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+base64.workspace = true
+dae-cli.workspace = true
+dae-config.workspace = true
+dae-control.workspace = true
+dae-core-types.workspace = true
+dae-daemon.workspace = true
+dae-datapath.workspace = true
+dae-dns.workspace = true
+dae-ebpf-support.workspace = true
+dae-engine.workspace = true
+dae-geodata.workspace = true
+dae-golden.workspace = true
+dae-outbound.workspace = true
+dae-routing.workspace = true
+dae-sniffing.workspace = true
+dae-sysdump.workspace = true
+dae-trace.workspace = true
+serde_json.workspace = true

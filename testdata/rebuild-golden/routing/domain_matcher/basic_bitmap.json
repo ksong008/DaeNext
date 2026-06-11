@@ -1,0 +1,175 @@
+{
+  "bit_length": 96,
+  "name": "routing-domain-matcher-basic-bitmap",
+  "notes": "Bitmap words are the parity surface; bit index equals routing match-set index.",
+  "queries": [
+    {
+      "bitmap": [
+        1,
+        0,
+        0
+      ],
+      "bitmap_reused": [
+        0,
+        0,
+        0
+      ],
+      "domain": "example.com",
+      "reuse_same_bits": true
+    },
+    {
+      "bitmap": [
+        1,
+        0,
+        0
+      ],
+      "bitmap_reused": [
+        0,
+        0,
+        0
+      ],
+      "domain": "www.example.com",
+      "reuse_same_bits": true
+    },
+    {
+      "bitmap": [
+        1,
+        0,
+        0
+      ],
+      "bitmap_reused": [
+        0,
+        0,
+        0
+      ],
+      "domain": "child.example.com",
+      "reuse_same_bits": true
+    },
+    {
+      "bitmap": [
+        3,
+        0,
+        0
+      ],
+      "bitmap_reused": [
+        0,
+        0,
+        0
+      ],
+      "domain": "a.child.example.com",
+      "reuse_same_bits": true
+    },
+    {
+      "bitmap": [
+        2147483648,
+        0,
+        0
+      ],
+      "bitmap_reused": [
+        0,
+        0,
+        0
+      ],
+      "domain": "static.cdn.invalid",
+      "reuse_same_bits": true
+    },
+    {
+      "bitmap": [
+        0,
+        1,
+        0
+      ],
+      "bitmap_reused": [
+        0,
+        0,
+        0
+      ],
+      "domain": "exact.example.org.",
+      "reuse_same_bits": true
+    },
+    {
+      "bitmap": [
+        0,
+        2147483648,
+        0
+      ],
+      "bitmap_reused": [
+        0,
+        0,
+        0
+      ],
+      "domain": "api12.example.net",
+      "reuse_same_bits": true
+    },
+    {
+      "bitmap": [
+        0,
+        2147483648,
+        0
+      ],
+      "bitmap_reused": [
+        0,
+        0,
+        0
+      ],
+      "domain": "API12.EXAMPLE.NET",
+      "reuse_same_bits": true
+    },
+    {
+      "bitmap": [
+        0,
+        0,
+        0
+      ],
+      "bitmap_reused": [
+        0,
+        0,
+        0
+      ],
+      "domain": "invalid.test",
+      "reuse_same_bits": true
+    }
+  ],
+  "sets": [
+    {
+      "bit": 0,
+      "key": "suffix",
+      "patterns": [
+        "example.com"
+      ]
+    },
+    {
+      "bit": 1,
+      "key": "suffix",
+      "patterns": [
+        ".child.example.com"
+      ]
+    },
+    {
+      "bit": 31,
+      "key": "keyword",
+      "patterns": [
+        "cdn"
+      ]
+    },
+    {
+      "bit": 32,
+      "key": "full",
+      "patterns": [
+        "exact.example.org"
+      ]
+    },
+    {
+      "bit": 63,
+      "key": "regex",
+      "patterns": [
+        "^api[0-9]+\\.example\\.net$"
+      ]
+    }
+  ],
+  "source": [
+    "component/routing/domain_matcher.go",
+    "component/routing/domain_matcher/ahocorasick_slimtrie.go",
+    "component/routing/domain_matcher/bruteforce.go"
+  ]
+}

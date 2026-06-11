@@ -1,0 +1,195 @@
+{
+  "deferred_protocol_scope": [
+    "vless",
+    "hysteria2",
+    "tuic",
+    "juicity",
+    "anytls",
+    "transport-combos"
+  ],
+  "header_contract": {
+    "metadata_domain_type": 2,
+    "network_mux": 3,
+    "network_tcp": 1,
+    "network_udp": 2,
+    "option_chunk_length_masking": 4,
+    "option_chunk_stream": 1,
+    "option_global_padding": 8,
+    "packet_addr_udp_domain_contract": true,
+    "security_auto_cipher": 3,
+    "version": 1
+  },
+  "link_parser": [
+    {
+      "add": "fixture.invalid",
+      "aid": "0",
+      "allowInsecure": false,
+      "export": "vmess://eyJwcyI6Impzb24tYWVhZCIsImFkZCI6ImZpeHR1cmUuaW52YWxpZCIsInBvcnQiOiI0NDMiLCJpZCI6IjdjMTJjNzQ1LTYzYTUtNDMzZC05ZTYwLTAyMmU0NjliNWJkNCIsImFpZCI6IjAiLCJuZXQiOiJ3cyIsInR5cGUiOiJub25lIiwiaG9zdCI6ImZyb250LmZpeHR1cmUuaW52YWxpZCIsInNuaSI6InNuaS5maXh0dXJlLmludmFsaWQiLCJwYXRoIjoiL3dzIiwidGxzIjoidGxzIiwiYWxsb3dJbnNlY3VyZSI6ZmFsc2UsIkZpbmdlcnByaW50IjoiIiwidiI6IjIiLCJwcm90b2NvbCI6InZtZXNzIn0",
+      "host": "front.fixture.invalid",
+      "id": "7c12c745-63a5-433d-9e60-022e469b5bd4",
+      "input": "vmess://eyJwcyI6Impzb24tYWVhZCIsImFkZCI6ImZpeHR1cmUuaW52YWxpZCIsInBvcnQiOiI0NDMiLCJpZCI6IjdjMTJjNzQ1LTYzYTUtNDMzZC05ZTYwLTAyMmU0NjliNWJkNCIsImFpZCI6IjAiLCJuZXQiOiJ3cyIsInR5cGUiOiJub25lIiwiaG9zdCI6ImZyb250LmZpeHR1cmUuaW52YWxpZCIsInNuaSI6InNuaS5maXh0dXJlLmludmFsaWQiLCJwYXRoIjoiL3dzIiwidGxzIjoidGxzIiwiYWxsb3dJbnNlY3VyZSI6ZmFsc2UsIkZpbmdlcnByaW50IjoiIiwidiI6IjIiLCJwcm90b2NvbCI6InZtZXNzIn0",
+      "name": "json-aead-ws-tls",
+      "net": "ws",
+      "path": "/ws",
+      "port": "443",
+      "property_address": "fixture.invalid:443",
+      "property_link": "vmess://eyJwcyI6Impzb24tYWVhZCIsImFkZCI6ImZpeHR1cmUuaW52YWxpZCIsInBvcnQiOiI0NDMiLCJpZCI6IjdjMTJjNzQ1LTYzYTUtNDMzZC05ZTYwLTAyMmU0NjliNWJkNCIsImFpZCI6IjAiLCJuZXQiOiJ3cyIsInR5cGUiOiJub25lIiwiaG9zdCI6ImZyb250LmZpeHR1cmUuaW52YWxpZCIsInNuaSI6InNuaS5maXh0dXJlLmludmFsaWQiLCJwYXRoIjoiL3dzIiwidGxzIjoidGxzIiwiYWxsb3dJbnNlY3VyZSI6ZmFsc2UsIkZpbmdlcnByaW50IjoiIiwidiI6IjIiLCJwcm90b2NvbCI6InZtZXNzIn0",
+      "property_name": "json-aead",
+      "property_protocol": "vmess",
+      "protocol": "vmess",
+      "ps": "json-aead",
+      "sni": "sni.fixture.invalid",
+      "tls": "tls",
+      "type": "none"
+    },
+    {
+      "add": "legacy.fixture.invalid",
+      "aid": "0",
+      "allowInsecure": false,
+      "export": "vmess://eyJwcyI6ImxlZ2FjeSIsImFkZCI6ImxlZ2FjeS5maXh0dXJlLmludmFsaWQiLCJwb3J0IjoiODQ0MyIsImlkIjoiN2MxMmM3NDUtNjNhNS00MzNkLTllNjAtMDIyZTQ2OWI1YmQ0IiwiYWlkIjoiMCIsIm5ldCI6IndzIiwidHlwZSI6IiIsImhvc3QiOiJsZWdhY3ktZnJvbnQuZml4dHVyZS5pbnZhbGlkIiwic25pIjoibGVnYWN5LXNuaS5maXh0dXJlLmludmFsaWQiLCJwYXRoIjoiL2xlZ2FjeSIsInRscyI6InRscyIsImFsbG93SW5zZWN1cmUiOmZhbHNlLCJGaW5nZXJwcmludCI6IiIsInYiOiIyIiwicHJvdG9jb2wiOiJ2bWVzcyJ9",
+      "host": "legacy-front.fixture.invalid",
+      "id": "7c12c745-63a5-433d-9e60-022e469b5bd4",
+      "input": "vmess://YXV0bzo3YzEyYzc0NS02M2E1LTQzM2QtOWU2MC0wMjJlNDY5YjViZDRAbGVnYWN5LmZpeHR1cmUuaW52YWxpZDo4NDQz?remarks=legacy&obfs=websocket&path=/legacy&obfsParam=%7B%22host%22%3A%22legacy-front.fixture.invalid%22%7D&tls=1&peer=legacy-sni.fixture.invalid",
+      "name": "legacy-websocket-tls",
+      "net": "ws",
+      "path": "/legacy",
+      "port": "8443",
+      "property_address": "legacy.fixture.invalid:8443",
+      "property_link": "vmess://eyJwcyI6ImxlZ2FjeSIsImFkZCI6ImxlZ2FjeS5maXh0dXJlLmludmFsaWQiLCJwb3J0IjoiODQ0MyIsImlkIjoiN2MxMmM3NDUtNjNhNS00MzNkLTllNjAtMDIyZTQ2OWI1YmQ0IiwiYWlkIjoiMCIsIm5ldCI6IndzIiwidHlwZSI6IiIsImhvc3QiOiJsZWdhY3ktZnJvbnQuZml4dHVyZS5pbnZhbGlkIiwic25pIjoibGVnYWN5LXNuaS5maXh0dXJlLmludmFsaWQiLCJwYXRoIjoiL2xlZ2FjeSIsInRscyI6InRscyIsImFsbG93SW5zZWN1cmUiOmZhbHNlLCJGaW5nZXJwcmludCI6IiIsInYiOiIyIiwicHJvdG9jb2wiOiJ2bWVzcyJ9",
+      "property_name": "legacy",
+      "property_protocol": "vmess",
+      "protocol": "vmess",
+      "ps": "legacy",
+      "sni": "legacy-sni.fixture.invalid",
+      "tls": "tls",
+      "type": ""
+    },
+    {
+      "add": "fixture.invalid",
+      "aid": "0",
+      "allowInsecure": false,
+      "export": "vmess://eyJwcyI6Imhvc3QtcGF0aCIsImFkZCI6ImZpeHR1cmUuaW52YWxpZCIsInBvcnQiOiI0NDMiLCJpZCI6IjdjMTJjNzQ1LTYzYTUtNDMzZC05ZTYwLTAyMmU0NjliNWJkNCIsImFpZCI6IjAiLCJuZXQiOiJ0Y3AiLCJ0eXBlIjoibm9uZSIsImhvc3QiOiIiLCJzbmkiOiIiLCJwYXRoIjoiL21vdmVkLXBhdGgiLCJ0bHMiOiJub25lIiwiYWxsb3dJbnNlY3VyZSI6ZmFsc2UsIkZpbmdlcnByaW50IjoiIiwidiI6IjIiLCJwcm90b2NvbCI6InZtZXNzIn0",
+      "host": "",
+      "id": "7c12c745-63a5-433d-9e60-022e469b5bd4",
+      "input": "vmess://eyJwcyI6Imhvc3QtcGF0aCIsImFkZCI6ImZpeHR1cmUuaW52YWxpZCIsInBvcnQiOiI0NDMiLCJpZCI6IjdjMTJjNzQ1LTYzYTUtNDMzZC05ZTYwLTAyMmU0NjliNWJkNCIsImFpZCI6IjAiLCJuZXQiOiJ0Y3AiLCJ0eXBlIjoibm9uZSIsImhvc3QiOiIvbW92ZWQtcGF0aCIsInNuaSI6IiIsInBhdGgiOiIiLCJ0bHMiOiJub25lIiwiYWxsb3dJbnNlY3VyZSI6ZmFsc2UsIkZpbmdlcnByaW50IjoiIiwidiI6IjIiLCJwcm90b2NvbCI6InZtZXNzIn0",
+      "name": "host-leading-slash-moves-to-path",
+      "net": "tcp",
+      "path": "/moved-path",
+      "port": "443",
+      "property_address": "fixture.invalid:443",
+      "property_link": "vmess://eyJwcyI6Imhvc3QtcGF0aCIsImFkZCI6ImZpeHR1cmUuaW52YWxpZCIsInBvcnQiOiI0NDMiLCJpZCI6IjdjMTJjNzQ1LTYzYTUtNDMzZC05ZTYwLTAyMmU0NjliNWJkNCIsImFpZCI6IjAiLCJuZXQiOiJ0Y3AiLCJ0eXBlIjoibm9uZSIsImhvc3QiOiIiLCJzbmkiOiIiLCJwYXRoIjoiL21vdmVkLXBhdGgiLCJ0bHMiOiJub25lIiwiYWxsb3dJbnNlY3VyZSI6ZmFsc2UsIkZpbmdlcnByaW50IjoiIiwidiI6IjIiLCJwcm90b2NvbCI6InZtZXNzIn0",
+      "property_name": "host-path",
+      "property_protocol": "vmess",
+      "protocol": "vmess",
+      "ps": "host-path",
+      "sni": "",
+      "tls": "none",
+      "type": "none"
+    },
+    {
+      "add": "grpc.fixture.invalid",
+      "aid": "0",
+      "allowInsecure": false,
+      "export": "vmess://eyJwcyI6ImdycGMiLCJhZGQiOiJncnBjLmZpeHR1cmUuaW52YWxpZCIsInBvcnQiOiI0NDMiLCJpZCI6IjdjMTJjNzQ1LTYzYTUtNDMzZC05ZTYwLTAyMmU0NjliNWJkNCIsImFpZCI6IjAiLCJuZXQiOiJncnBjIiwidHlwZSI6IiIsImhvc3QiOiJncnBjLWhvc3QuZml4dHVyZS5pbnZhbGlkIiwic25pIjoiZ3JwYy1zbmkuZml4dHVyZS5pbnZhbGlkIiwicGF0aCI6Ikd1blNlcnZpY2UiLCJ0bHMiOiJ0bHMiLCJhbGxvd0luc2VjdXJlIjpmYWxzZSwiRmluZ2VycHJpbnQiOiIiLCJ2IjoiMiIsInByb3RvY29sIjoidm1lc3MifQ=",
+      "host": "grpc-host.fixture.invalid",
+      "id": "7c12c745-63a5-433d-9e60-022e469b5bd4",
+      "input": "vmess://eyJwcyI6ImdycGMiLCJhZGQiOiJncnBjLmZpeHR1cmUuaW52YWxpZCIsInBvcnQiOiI0NDMiLCJpZCI6IjdjMTJjNzQ1LTYzYTUtNDMzZC05ZTYwLTAyMmU0NjliNWJkNCIsImFpZCI6IjAiLCJuZXQiOiJncnBjIiwidHlwZSI6IiIsImhvc3QiOiJncnBjLWhvc3QuZml4dHVyZS5pbnZhbGlkIiwic25pIjoiZ3JwYy1zbmkuZml4dHVyZS5pbnZhbGlkIiwicGF0aCI6Ikd1blNlcnZpY2UiLCJ0bHMiOiJ0bHMiLCJhbGxvd0luc2VjdXJlIjpmYWxzZSwiRmluZ2VycHJpbnQiOiIiLCJ2IjoiMiIsInByb3RvY29sIjoidm1lc3MifQ=",
+      "name": "grpc-transport-contract",
+      "net": "grpc",
+      "path": "GunService",
+      "port": "443",
+      "property_address": "grpc.fixture.invalid:443",
+      "property_link": "vmess://eyJwcyI6ImdycGMiLCJhZGQiOiJncnBjLmZpeHR1cmUuaW52YWxpZCIsInBvcnQiOiI0NDMiLCJpZCI6IjdjMTJjNzQ1LTYzYTUtNDMzZC05ZTYwLTAyMmU0NjliNWJkNCIsImFpZCI6IjAiLCJuZXQiOiJncnBjIiwidHlwZSI6IiIsImhvc3QiOiJncnBjLWhvc3QuZml4dHVyZS5pbnZhbGlkIiwic25pIjoiZ3JwYy1zbmkuZml4dHVyZS5pbnZhbGlkIiwicGF0aCI6Ikd1blNlcnZpY2UiLCJ0bHMiOiJ0bHMiLCJhbGxvd0luc2VjdXJlIjpmYWxzZSwiRmluZ2VycHJpbnQiOiIiLCJ2IjoiMiIsInByb3RvY29sIjoidm1lc3MifQ=",
+      "property_name": "grpc",
+      "property_protocol": "vmess",
+      "protocol": "vmess",
+      "ps": "grpc",
+      "sni": "grpc-sni.fixture.invalid",
+      "tls": "tls",
+      "type": ""
+    }
+  ],
+  "live_smoke_required": [
+    "local parser smoke for VMess AEAD JSON",
+    "local parser smoke for legacy VMess",
+    "local VMess metadata/header contract smoke"
+  ],
+  "metadata": [
+    {
+      "addr_hex": "0f666978747572652e696e76616c6964",
+      "addr_len": 16,
+      "hostname": "fixture.invalid",
+      "input": "fixture.invalid:443",
+      "name": "domain-tcp",
+      "network": "tcp",
+      "network_byte": 1,
+      "packed_len": 16,
+      "port": 443,
+      "type": 2
+    },
+    {
+      "addr_hex": "0f666978747572652e696e76616c6964",
+      "addr_len": 16,
+      "hostname": "fixture.invalid",
+      "input": "fixture.invalid:443",
+      "name": "domain-udp",
+      "network": "udp",
+      "network_byte": 2,
+      "packed_len": 16,
+      "port": 443,
+      "type": 2
+    },
+    {
+      "addr_hex": "01020304",
+      "addr_len": 4,
+      "hostname": "1.2.3.4",
+      "input": "1.2.3.4:53",
+      "name": "ipv4-udp",
+      "network": "udp",
+      "network_byte": 2,
+      "packed_len": 4,
+      "port": 53,
+      "type": 1
+    },
+    {
+      "addr_hex": "20010db8000000000000000000000001",
+      "addr_len": 16,
+      "hostname": "2001:db8::1",
+      "input": "[2001:db8::1]:8443",
+      "name": "ipv6-tcp",
+      "network": "tcp",
+      "network_byte": 1,
+      "packed_len": 16,
+      "port": 8443,
+      "type": 3
+    }
+  ],
+  "name": "vmess-rust-native",
+  "protocol_scope": [
+    "vmess"
+  ],
+  "rust_adapter_mode": "rust-native",
+  "transport_contract": {
+    "grpc_default_service_name": "GunService",
+    "http_h2_httpupgrade_meek_xhttp": "deferred-to-shared-transport",
+    "shared_transport_deferred_to_item": 113,
+    "vmess_reality_must_error": true,
+    "ws_tls_uses_wss": true
+  },
+  "unsupported": {
+    "non_aead_alter_id_error": {
+      "error_contains": "we only support AEAD encryption",
+      "input": "vmess://eyJwcyI6ImJhZC1haWQiLCJhZGQiOiJmaXh0dXJlLmludmFsaWQiLCJwb3J0IjoiNDQzIiwiaWQiOiI3YzEyYzc0NS02M2E1LTQzM2QtOWU2MC0wMjJlNDY5YjViZDQiLCJhaWQiOiIxIiwibmV0IjoidGNwIiwidHlwZSI6Im5vbmUiLCJob3N0IjoiIiwic25pIjoiIiwicGF0aCI6IiIsInRscyI6Im5vbmUiLCJhbGxvd0luc2VjdXJlIjpmYWxzZSwiRmluZ2VycHJpbnQiOiIiLCJ2IjoiMiIsInByb3RvY29sIjoidm1lc3MifQ=",
+      "ok": false
+    },
+    "reality_error": "only VLESS supports reality"
+  },
+  "uuid": {
+    "canonical": "7c12c745-63a5-433d-9e60-022e469b5bd4",
+    "long_input": "0123456789abcdef0123456789abcdef-extra",
+    "long_uuid5": "070579e7-349e-57ae-969c-fae20795fde0",
+    "short_input": "short-id",
+    "short_uuid5": "bcd643ce-d9c8-50bb-b026-89d256010162",
+    "uuid5_when_len_lt_32_or_gt_36": true
+  }
+}

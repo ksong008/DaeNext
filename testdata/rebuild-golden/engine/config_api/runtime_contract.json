@@ -1,0 +1,69 @@
+{
+  "export_outline": {
+    "contains_global": true,
+    "contains_routing": true,
+    "sha256": "eb7eb03feb599807f659873f7d55de3dd1f9514edd54318681a81ebe828cb0dd",
+    "trailing_newline": true,
+    "version": "unknown"
+  },
+  "helper_commands": {
+    "export_outline": [
+      "dae-cli-runtime",
+      "export",
+      "outline"
+    ],
+    "parse_config": [
+      "dae-cli-runtime",
+      "config",
+      "parse-api",
+      "--global",
+      "\u003cglobal-section\u003e",
+      "--dns",
+      "\u003cdns-section\u003e",
+      "--routing",
+      "\u003crouting-section\u003e"
+    ],
+    "read_config_file": [
+      "dae-cli-runtime",
+      "validate",
+      "-c",
+      "\u003cconfig.dae\u003e"
+    ]
+  },
+  "name": "engine-config-runtime-contract",
+  "notes": "Rust-native records the config helper gate for parse, validate, and export surfaces.",
+  "runtime": {
+    "enable_env": "DAE_RUST_CONFIG_OPTIN",
+    "helper_binary": "dae-cli-runtime",
+    "helper_env": "DAE_RUST_CONFIG_HELPER",
+    "helper_timeout": "10s",
+    "version_env": "DAE_CLI_VERSION"
+  },
+  "parse_config": {
+    "global_input": "global {\n    log_level: debug\n    udp_endpoint_pool_size: 8192\n}",
+    "log_level": "debug",
+    "necessary_outbounds": [
+      "direct",
+      "proxy"
+    ],
+    "routing_input": "routing {\n    domain(suffix: example.com) -\u003e must_proxy\n    fallback: must_direct\n}",
+    "udp_pool_size": 8192
+  },
+  "read_config_file": {
+    "fallback": "direct",
+    "group_count": 0,
+    "include_count": 1,
+    "log_level": "info",
+    "node_count": 0,
+    "routing_rules": 0,
+    "valid_no_stdout": true
+  },
+  "source": [
+    "engine/helpers.go",
+    "cmd/validate.go",
+    "cmd/export.go",
+    "crates/dae-cli/src/bin/dae-cli-runtime.rs",
+    "crates/dae-cli/src/runner.rs",
+    "runtime contract fixture"
+  ]
+}

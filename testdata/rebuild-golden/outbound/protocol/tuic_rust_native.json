@@ -1,0 +1,168 @@
+{
+  "allow_insecure_aliases": [
+    {
+      "allowInsecure": true,
+      "export": "tuic://7c12c745-63a5-433d-9e60-022e469b5bd4:pass@fixture.invalid:443?allow_insecure=1&sni=fixture.invalid#alias",
+      "input": "tuic://7c12c745-63a5-433d-9e60-022e469b5bd4:pass@fixture.invalid:443?allowInsecure=1#alias",
+      "name": "allowInsecure"
+    },
+    {
+      "allowInsecure": true,
+      "export": "tuic://7c12c745-63a5-433d-9e60-022e469b5bd4:pass@fixture.invalid:443?allow_insecure=1&sni=fixture.invalid#alias",
+      "input": "tuic://7c12c745-63a5-433d-9e60-022e469b5bd4:pass@fixture.invalid:443?allow_insecure=true#alias",
+      "name": "allow_insecure"
+    },
+    {
+      "allowInsecure": true,
+      "export": "tuic://7c12c745-63a5-433d-9e60-022e469b5bd4:pass@fixture.invalid:443?allow_insecure=1&sni=fixture.invalid#alias",
+      "input": "tuic://7c12c745-63a5-433d-9e60-022e469b5bd4:pass@fixture.invalid:443?allowinsecure=true#alias",
+      "name": "allowinsecure"
+    },
+    {
+      "allowInsecure": true,
+      "export": "tuic://7c12c745-63a5-433d-9e60-022e469b5bd4:pass@fixture.invalid:443?allow_insecure=1&sni=fixture.invalid#alias",
+      "input": "tuic://7c12c745-63a5-433d-9e60-022e469b5bd4:pass@fixture.invalid:443?skipVerify=1#alias",
+      "name": "skipVerify"
+    }
+  ],
+  "deferred_protocol_scope": [
+    "juicity",
+    "anytls",
+    "transport-combos"
+  ],
+  "link_parser": [
+    {
+      "allowInsecure": false,
+      "alpn": [
+        "h3",
+        "h2"
+      ],
+      "congestion_control": "bbr",
+      "disable_sni": false,
+      "export": "tuic://7c12c745-63a5-433d-9e60-022e469b5bd4:pass@fixture.invalid:443?alpn=h3%2Ch2&congestion_control=bbr&sni=fixture.invalid&udp_relay_mode=quic#basic",
+      "input": "tuic://7c12c745-63a5-433d-9e60-022e469b5bd4:pass@fixture.invalid:443?congestion_control=bbr&alpn=h3,h2&udp_relay_mode=quic#basic",
+      "name": "basic-quic-flag",
+      "password": "pass",
+      "port": 443,
+      "property_address": "fixture.invalid:443",
+      "property_link": "tuic://7c12c745-63a5-433d-9e60-022e469b5bd4:pass@fixture.invalid:443?alpn=h3%2Ch2&congestion_control=bbr&sni=fixture.invalid&udp_relay_mode=quic#basic",
+      "property_name": "basic",
+      "property_protocol": "tuic",
+      "protocol": "tuic",
+      "server": "fixture.invalid",
+      "sni": "fixture.invalid",
+      "udp_relay_mode": "quic",
+      "user": "7c12c745-63a5-433d-9e60-022e469b5bd4"
+    },
+    {
+      "allowInsecure": true,
+      "alpn": null,
+      "congestion_control": "",
+      "disable_sni": false,
+      "export": "tuic://7c12c745-63a5-433d-9e60-022e469b5bd4:pass@fixture.invalid:8443?allow_insecure=1&sni=peer.fixture.invalid#peer",
+      "input": "tuic://7c12c745-63a5-433d-9e60-022e469b5bd4:pass@fixture.invalid:8443?sni=sni.fixture.invalid&peer=peer.fixture.invalid&allowInsecure=true#peer",
+      "name": "peer-overrides-sni",
+      "password": "pass",
+      "port": 8443,
+      "property_address": "fixture.invalid:8443",
+      "property_link": "tuic://7c12c745-63a5-433d-9e60-022e469b5bd4:pass@fixture.invalid:8443?allow_insecure=1&sni=peer.fixture.invalid#peer",
+      "property_name": "peer",
+      "property_protocol": "tuic",
+      "protocol": "tuic",
+      "server": "fixture.invalid",
+      "sni": "peer.fixture.invalid",
+      "udp_relay_mode": "",
+      "user": "7c12c745-63a5-433d-9e60-022e469b5bd4"
+    },
+    {
+      "allowInsecure": true,
+      "alpn": null,
+      "congestion_control": "",
+      "disable_sni": true,
+      "export": "tuic://7c12c745-63a5-433d-9e60-022e469b5bd4:pass@fixture.invalid:443?allow_insecure=1&disable_sni=1#no-sni",
+      "input": "tuic://7c12c745-63a5-433d-9e60-022e469b5bd4:pass@fixture.invalid:443?disable_sni=true&sni=sni.fixture.invalid#no-sni",
+      "name": "disable-sni-forces-insecure",
+      "password": "pass",
+      "port": 443,
+      "property_address": "fixture.invalid:443",
+      "property_link": "tuic://7c12c745-63a5-433d-9e60-022e469b5bd4:pass@fixture.invalid:443?allow_insecure=1&disable_sni=1#no-sni",
+      "property_name": "no-sni",
+      "property_protocol": "tuic",
+      "protocol": "tuic",
+      "server": "fixture.invalid",
+      "sni": "",
+      "udp_relay_mode": "",
+      "user": "7c12c745-63a5-433d-9e60-022e469b5bd4"
+    }
+  ],
+  "live_smoke_required": [
+    "local parser smoke for TUIC",
+    "local UUID validation smoke",
+    "local QUIC/underlay contract smoke"
+  ],
+  "name": "tuic-rust-native",
+  "protocol_scope": [
+    "tuic"
+  ],
+  "quic_contract": {
+    "congestion_default_or_unknown_uses": "bbr",
+    "enable_datagrams": true,
+    "handshake_idle_timeout_seconds": 8,
+    "initial_connection_receive_window": 33554432,
+    "initial_stream_receive_window": 2097152,
+    "keepalive_seconds": 3,
+    "max_connection_receive_window": 67108864,
+    "max_stream_receive_window": 33554432,
+    "max_udp_relay_packet_size": 1400,
+    "tls_min_version": 772
+  },
+  "rust_adapter_mode": "rust-native",
+  "udp_relay_mode": {
+    "adapter_sets_flag": true,
+    "flag_value": 1,
+    "common_native_value": 1,
+    "common_quic_numeric_value": 0,
+    "protocol_effective_mode": "native",
+    "query_value": "quic",
+    "quic_mode_fixme_deferred": true
+  },
+  "underlay_contract": {
+    "tcp_request": {
+      "input_b64": "AAN0Y3AAAATSAQ==",
+      "input_mark": 1234,
+      "input_mptcp": true,
+      "input_network": "tcp",
+      "same_encoded_value": false,
+      "underlay_b64": "AAN1ZHAAAATSAA==",
+      "underlay_mark": 1234,
+      "underlay_mptcp": false,
+      "underlay_network": "udp"
+    },
+    "tcp_underlay_drops_mptcp": true,
+    "tcp_underlay_preserves_mark": true,
+    "tcp_underlay_uses_udp": true,
+    "true_quic_data_plane_deferred": 113,
+    "udp_request": {
+      "input_b64": "AAN1ZHAAAATSAQ==",
+      "input_mark": 1234,
+      "input_mptcp": true,
+      "input_network": "udp",
+      "same_encoded_value": true,
+      "underlay_b64": "AAN1ZHAAAATSAQ==",
+      "underlay_mark": 1234,
+      "underlay_mptcp": true,
+      "underlay_network": "udp"
+    },
+    "udp_underlay_uses_original": true
+  },
+  "uuid_contract": {
+    "invalid": "not-a-uuid",
+    "invalid_error": {
+      "error": "parse UUID: invalid UUID length: 10",
+      "error_contains": "parse UUID:",
+      "ok": false
+    },
+    "parser_accepts": "URL parser preserves user; protocol.NewDialer rejects non-UUID user",
+    "valid": "7c12c745-63a5-433d-9e60-022e469b5bd4"
+  }
+}

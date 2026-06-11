@@ -1,0 +1,13 @@
+{
+  "dead_index": 3,
+  "dead_selected_count": 0,
+  "dialer_count": 5,
+  "distribution_stable": false,
+  "name": "outbound-group-random-alive",
+  "policy": "random",
+  "random_from_alive_nodes": true,
+  "requires_alive_state": true,
+  "requires_latency_state": false,
+  "selection_attempts": 100,
+  "want_total": 100
+}

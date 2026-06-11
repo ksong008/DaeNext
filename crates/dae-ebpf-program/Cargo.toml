@@ -1,0 +1,17 @@
+[package]
+name = "dae-ebpf-program"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[lib]
+crate-type = ["cdylib"]
+
+[features]
+default = ["tproxy-program"]
+tproxy-program = []
+trace-program = []
+
+[dependencies]
+aya-ebpf.workspace = true

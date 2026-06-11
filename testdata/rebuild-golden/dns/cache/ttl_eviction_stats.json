@@ -1,0 +1,81 @@
+{
+  "cases": [
+    {
+      "answer_ttls": [
+        300,
+        60
+      ],
+      "client_lookup_after_30": true,
+      "client_lookup_after_61": false,
+      "effective_deadline": 1700000060,
+      "name": "min-answer-ttl",
+      "original_deadline": 1700000060
+    },
+    {
+      "effective_deadline": 1700000010,
+      "fixed_domain_ttl": 10,
+      "host": "example.com",
+      "name": "fixed-domain-ttl",
+      "original_deadline": 1700000060,
+      "upstream_ttl": 60
+    },
+    {
+      "client_lookup_after_now": false,
+      "effective_deadline": 1700000000,
+      "fixed_domain_ttl": 0,
+      "host": "example.com",
+      "internal_lookup_after_now": true,
+      "map_entry_kept": true,
+      "name": "fixed-domain-ttl-zero",
+      "original_deadline": 1700000060,
+      "upstream_ttl": 60
+    },
+    {
+      "effective_deadline": 1700086400,
+      "explicit_deadline": 1700086400,
+      "fixed_domain_ttl": 0,
+      "host": "upstream.example",
+      "name": "explicit-deadline-ignores-fixed-ttl",
+      "original_deadline": 1700086400
+    }
+  ],
+  "eviction": {
+    "capacity": 3,
+    "deadlines": [
+      1700000010,
+      1700000020,
+      1700000030
+    ],
+    "existing": [
+      "oldest.example.",
+      "middle.example.",
+      "newest.example."
+    ],
+    "expired_removed": 0,
+    "insert": "inserted.example.",
+    "removed": [
+      "oldest.example."
+    ],
+    "size_after": 3
+  },
+  "max_entries": 4096,
+  "name": "dns-cache-ttl-eviction-stats",
+  "notes": "fixed_domain_ttl affects client deadline only; original deadline is kept for internal routing lookup.",
+  "now_unix": 1700000000,
+  "source": [
+    "control/dns_control.go:NormalizeAndCacheDnsResp_",
+    "control/dns_control.go:LookupDnsRespCache",
+    "control/dns_control.go:evictDnsCacheEntriesLocked",
+    "control/dns_control_test.go:TestNormalizeAndCacheDnsRespUsesQuestionClassInCacheKey",
+    "golden fixture evidence",
+    "golden fixture evidence"
+  ],
+  "stats_no_mutation": {
+    "cache_stats_live": 2,
+    "expired_and_original_expired_count": 1,
+    "expired_client_original_live_count": 1,
+    "live_entry_count": 1,
+    "map_size_after_cache_stats": 3,
+    "remove_callback_called": 0
+  }
+}

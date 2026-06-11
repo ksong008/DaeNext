@@ -1,0 +1,32 @@
+{
+  "name": "shared-transport-foundation-loopback",
+  "payload_ascii": "shared-transport-ping",
+  "httpupgrade": {
+    "host": "upgrade.fixture.invalid",
+    "path": "/upgrade",
+    "success_status": 101,
+    "true_dataplane": true
+  },
+  "websocket": {
+    "host": "ws.fixture.invalid",
+    "path": "/ws",
+    "client_key": "dGhlIHNhbXBsZSBub25jZQ==",
+    "accept_sample": "s3pPLMBiTxaQ9kYGzzhZRbK+xOo=",
+    "opcode": 2,
+    "true_dataplane": true
+  },
+  "simpleobfs_http": {
+    "host": "obfs.fixture.invalid",
+    "path": "/",
+    "user_agent": "curl/7.64.1",
+    "true_dataplane": true
+  },
+  "still_deferred": [
+    "TLS/uTLS/REALITY handshake mutation",
+    "xHTTP H2/H3 pool and stream lifecycle",
+    "gRPC global cache isolation and stream lifecycle",
+    "Meek polling RoundTripper lifecycle",
+    "Mux true multiplexing",
+    "QUIC/H3 shared harness"
+  ]
+}

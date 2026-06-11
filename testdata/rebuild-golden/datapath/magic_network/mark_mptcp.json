@@ -1,0 +1,47 @@
+{
+  "cases": [
+    {
+      "encoded_b64": "dGNw",
+      "is_plain": true,
+      "length": 3,
+      "mark": 0,
+      "mptcp": false,
+      "name": "plain_tcp",
+      "network": "tcp"
+    },
+    {
+      "encoded_b64": "AAN0Y3AIAAAAAA==",
+      "is_plain": false,
+      "length": 10,
+      "mark": 134217728,
+      "mptcp": false,
+      "name": "tcp_mark",
+      "network": "tcp"
+    },
+    {
+      "encoded_b64": "AAN0Y3AAAAAAAQ==",
+      "is_plain": false,
+      "length": 10,
+      "mark": 0,
+      "mptcp": true,
+      "name": "tcp_mptcp",
+      "network": "tcp"
+    },
+    {
+      "encoded_b64": "AAN1ZHAAEjRWAQ==",
+      "is_plain": false,
+      "length": 10,
+      "mark": 1193046,
+      "mptcp": true,
+      "name": "udp_mark_mptcp",
+      "network": "udp"
+    }
+  ],
+  "name": "fixture-active-dial-magic-network",
+  "rule": "active TCP/UDP dial must pass common.MagicNetwork(network, mark, mptcp), not the plain network string when mark or mptcp is set",
+  "source": [
+    "common/utils.go",
+    "control/tcp.go",
+    "control/udp.go"
+  ]
+}
