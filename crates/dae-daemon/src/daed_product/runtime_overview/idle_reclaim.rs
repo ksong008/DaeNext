@@ -317,10 +317,20 @@ fn idle_reclaim_wait_remaining(now: Instant, min_interval: Duration) -> Option<D
         ALLOCATOR_IDLE_RECLAIM_STATE.get_or_init(|| Mutex::new(default_idle_reclaim_state()));
     let state = state_lock.lock().ok()?;
     let last_attempt = state.last_attempt?;
+    idle_reclaim_wait_remaining_since(now, last_attempt, min_interval)
+}
+
+fn idle_reclaim_wait_remaining_since(
+    now: Instant,
+    last_attempt: Instant,
+    min_interval: Duration,
+) -> Option<Duration> {
     let elapsed = now
         .checked_duration_since(last_attempt)
         .unwrap_or(Duration::ZERO);
-    (elapsed < min_interval).then_some(min_interval - elapsed)
+    min_interval
+        .checked_sub(elapsed)
+        .filter(|remaining| !remaining.is_zero())
 }
 
 fn record_idle_reclaim_attempt(now: Instant) {
@@ -574,6 +584,29 @@ mod tests {
         assert_eq!(
             idle_reclaim_traffic_rate_from_samples(previous, previous_at, observation),
             None
+        );
+    }
+
+    #[test]
+    fn idle_reclaim_wait_remaining_is_saturating() {
+        let now = Instant::now();
+        let min_interval = Duration::from_secs(300);
+
+        assert_eq!(
+            idle_reclaim_wait_remaining_since(now, now - Duration::from_secs(120), min_interval,),
+            Some(Duration::from_secs(180))
+        );
+        assert_eq!(
+            idle_reclaim_wait_remaining_since(now, now - Duration::from_secs(300), min_interval,),
+            None
+        );
+        assert_eq!(
+            idle_reclaim_wait_remaining_since(now, now - Duration::from_secs(360), min_interval,),
+            None
+        );
+        assert_eq!(
+            idle_reclaim_wait_remaining_since(now, now + Duration::from_secs(30), min_interval,),
+            Some(min_interval)
         );
     }
 
