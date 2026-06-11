@@ -37,6 +37,14 @@ pub(crate) fn vless_fixture_url(
 }
 
 pub(crate) fn vless_vision_fixture_url(fingerprint: &str) -> String {
+    vless_vision_fixture_url_with_allow_insecure(fingerprint, false)
+}
+
+pub(crate) fn vless_vision_insecure_fixture_url(fingerprint: &str) -> String {
+    vless_vision_fixture_url_with_allow_insecure(fingerprint, true)
+}
+
+fn vless_vision_fixture_url_with_allow_insecure(fingerprint: &str, allow_insecure: bool) -> String {
     VLESSLink {
         ps: String::new(),
         add: fixture_host(FixtureEndpoint::Primary),
@@ -52,7 +60,7 @@ pub(crate) fn vless_vision_fixture_url(fingerprint: &str) -> String {
         tls: "tls".to_owned(),
         flow: "xtls-rprx-vision".to_owned(),
         alpn: "h2,http/1.1".to_owned(),
-        allow_insecure: false,
+        allow_insecure,
         fingerprint: fingerprint.to_owned(),
         public_key: String::new(),
         short_id: String::new(),
@@ -84,6 +92,14 @@ pub(crate) fn vless_vision_empty_fingerprint_fixture_url() -> String {
 }
 
 pub(crate) fn vless_reality_fixture_url() -> String {
+    vless_reality_fixture_url_with_allow_insecure(false)
+}
+
+pub(crate) fn vless_reality_insecure_fixture_url() -> String {
+    vless_reality_fixture_url_with_allow_insecure(true)
+}
+
+fn vless_reality_fixture_url_with_allow_insecure(allow_insecure: bool) -> String {
     let public_key = base64::engine::general_purpose::URL_SAFE_NO_PAD
         .encode([FixtureEndpoint::Authority.slot() as u8; 32]);
     let short_id = [FixtureEndpoint::Primary.slot() as u8; 4]
@@ -106,7 +122,7 @@ pub(crate) fn vless_reality_fixture_url() -> String {
         tls: "reality".to_owned(),
         flow: "xtls-rprx-vision".to_owned(),
         alpn: "h2,http/1.1".to_owned(),
-        allow_insecure: false,
+        allow_insecure,
         fingerprint: String::new(),
         public_key,
         short_id,

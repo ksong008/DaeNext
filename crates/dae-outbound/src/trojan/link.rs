@@ -94,6 +94,7 @@ impl TrojanLink {
     pub fn transport_kind(&self) -> TrojanTransportType {
         match self.transport_type.as_str() {
             "" => TrojanTransportType::None,
+            value if value.eq_ignore_ascii_case("tcp") => TrojanTransportType::None,
             "ws" => TrojanTransportType::Ws,
             "grpc" => TrojanTransportType::Grpc,
             "httpupgrade" => TrojanTransportType::HttpUpgrade,

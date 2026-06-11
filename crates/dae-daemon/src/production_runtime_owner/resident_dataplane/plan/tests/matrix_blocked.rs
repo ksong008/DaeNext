@@ -81,11 +81,39 @@ pub(super) fn resident_dataplane_plan_keeps_deferred_unsupported_shapes_blocked(
             true,
         ),
         (
+            "trojan_insecure",
+            trojan_insecure_fixture_url("trojan-insecure", &primary_host, fixture_port(1)),
+            "insecure-tls",
+            "rustls",
+            true,
+        ),
+        (
+            "trojan_type_tcp",
+            trojan_tcp_type_fixture_url("trojan-tcp", &primary_host, fixture_port(1)),
+            "standard-tls",
+            "rustls",
+            false,
+        ),
+        (
+            "vless_insecure",
+            vless_vision_insecure_fixture_url(""),
+            "insecure-tls",
+            "rustls",
+            true,
+        ),
+        (
             "vless_reality",
             vless_reality_fixture_url(),
             "reality",
             "rustls-reality",
             false,
+        ),
+        (
+            "vless_reality_insecure",
+            vless_reality_insecure_fixture_url(),
+            "reality",
+            "rustls-reality",
+            true,
         ),
     ];
     for (tag, link, security_underlay, provider, allow_insecure) in admitted_secure_underlays {
@@ -100,6 +128,19 @@ pub(super) fn resident_dataplane_plan_keeps_deferred_unsupported_shapes_blocked(
         assert_eq!(graph["securityUnderlay"], security_underlay, "{tag}");
         assert_eq!(
             graph["runtimeComponents"]["underlayFactory"]["provider"], provider,
+            "{tag}"
+        );
+        assert_eq!(
+            graph["runtimeComponents"]["underlayFactory"]["verificationPolicy"],
+            if allow_insecure {
+                "explicit-insecure"
+            } else {
+                "system-roots"
+            },
+            "{tag}"
+        );
+        assert_eq!(
+            graph["runtimeComponents"]["underlayFactory"]["allowInsecure"], allow_insecure,
             "{tag}"
         );
         assert_eq!(proxy.allow_insecure, allow_insecure, "{tag}");
@@ -275,6 +316,49 @@ pub(super) fn resident_dataplane_plan_keeps_deferred_unsupported_shapes_blocked(
         juicity_without_verification
             .contains("requires Juicity allow_insecure or pinned_certchain_sha256")
     );
+}
+
+#[test]
+pub(super) fn resident_dataplane_plan_propagates_global_allow_insecure_to_tls_handlers() {
+    let config = parse_config(
+        r#"
+        global {
+        lan_interface: daerust0
+        allow_insecure: true
+        so_mark_from_dae: 1234
+        mptcp: false
+        }
+        routing {
+        fallback: direct
+        }
+        "#,
+    );
+    let primary_host = fixture_host(FixtureEndpoint::Primary);
+    let links = [
+        (
+            "trojan_global_insecure",
+            trojan_fixture_url("trojan-global-insecure", &primary_host, fixture_port(1)),
+        ),
+        ("vless_global_insecure", vless_vision_fixture_url("")),
+    ];
+
+    for (tag, link) in links {
+        let proxy =
+            build_resident_proxy_plan_for_node(&config, "proxy".to_owned(), tag.to_owned(), link)
+                .unwrap();
+        let graph = proxy.executable_graph_value();
+        assert!(proxy.allow_insecure, "{tag}");
+        assert_eq!(graph["securityUnderlay"], "insecure-tls", "{tag}");
+        assert_eq!(
+            graph["runtimeComponents"]["underlayFactory"]["allowInsecure"], true,
+            "{tag}"
+        );
+        assert_eq!(
+            graph["runtimeComponents"]["underlayFactory"]["verificationPolicy"],
+            "explicit-insecure",
+            "{tag}"
+        );
+    }
 }
 
 #[test]
