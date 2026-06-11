@@ -43,6 +43,11 @@ jobs:
         with:
           components: rustfmt
 
+      - name: Install native eBPF toolchain
+        run: |
+          rustup toolchain install nightly --profile minimal --component rust-src
+          cargo install bpf-linker --version 0.10.3 --locked
+
       - name: Cache cargo
         uses: Swatinem/rust-cache@v2
 

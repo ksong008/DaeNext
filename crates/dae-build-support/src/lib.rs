@@ -6,6 +6,7 @@ pub mod native_ebpf_build {
     const RUST_NATIVE_BPF_OBJECT_ENV: &str = "DAE_RUST_NATIVE_BPF_OBJECT";
     const RUST_NATIVE_BPF_PACKAGE: &str = "dae-ebpf-program";
     const RUST_NATIVE_BPF_OUTPUT: &str = "libdae_ebpf_program.so";
+    const REQUIRED_BTF_SECTIONS: [&[u8]; 2] = [b".BTF\0", b".BTF.ext\0"];
 
     pub fn build_for_crate(crate_name: &str) {
         println!("cargo:rerun-if-changed=../dae-ebpf-program/Cargo.toml");
@@ -29,6 +30,7 @@ pub mod native_ebpf_build {
         } else {
             build_rust_native_aya_object(repo_root, &out_dir, &output);
         }
+        validate_native_aya_object(&output);
     }
 
     fn repo_root_from_manifest<'a>(manifest_dir: &'a Path, crate_name: &str) -> &'a Path {
@@ -118,5 +120,55 @@ pub mod native_ebpf_build {
                 output.display()
             )
         });
+    }
+
+    fn validate_native_aya_object(object: &Path) {
+        let bytes = std::fs::read(object).unwrap_or_else(|err| {
+            panic!(
+                "failed to read native eBPF object for BTF validation {}: {err}",
+                object.display()
+            )
+        });
+        let missing = REQUIRED_BTF_SECTIONS
+            .iter()
+            .filter_map(|section| {
+                (!contains_bytes(&bytes, section))
+                    .then(|| String::from_utf8_lossy(trim_section_name(section)).into_owned())
+            })
+            .collect::<Vec<_>>();
+        if !missing.is_empty() {
+            panic!(
+                "native eBPF object is missing required BTF section(s) {}: {}; rebuild the bpfel object with bpf-linker --btf",
+                missing.join(", "),
+                object.display()
+            );
+        }
+    }
+
+    fn contains_bytes(haystack: &[u8], needle: &[u8]) -> bool {
+        !needle.is_empty()
+            && haystack
+                .windows(needle.len())
+                .any(|window| window == needle)
+    }
+
+    fn trim_section_name(section: &[u8]) -> &[u8] {
+        let mut end = section.len();
+        while end > 0 && section[end - 1] == 0 {
+            end -= 1;
+        }
+        &section[..end]
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::contains_bytes;
+
+        #[test]
+        fn contains_bytes_matches_exact_subslice() {
+            assert!(contains_bytes(b"elf\0.BTF\0.BTF.ext\0", b".BTF\0"));
+            assert!(contains_bytes(b"elf\0.BTF\0.BTF.ext\0", b".BTF.ext\0"));
+            assert!(!contains_bytes(b"elf\0.text\0", b".BTF\0"));
+        }
     }
 }

@@ -43,15 +43,18 @@ fn emit_product_build_identity() {
 }
 
 fn enabled_feature_summary() -> String {
-    [
+    let mut features = [
         ("native-ebpf", "CARGO_FEATURE_NATIVE_EBPF"),
         ("jemalloc", "CARGO_FEATURE_ALLOCATOR_JEMALLOC"),
         ("system-allocator", "CARGO_FEATURE_ALLOCATOR_SYSTEM"),
     ]
     .into_iter()
     .filter_map(|(name, env_name)| std::env::var_os(env_name).map(|_| name))
-    .collect::<Vec<_>>()
-    .join(",")
+    .collect::<Vec<_>>();
+    if features.contains(&"native-ebpf") {
+        features.push("bpf-btf");
+    }
+    features.join(",")
 }
 
 fn git_output(repo_root: &std::path::Path, args: &[&str]) -> Option<String> {
