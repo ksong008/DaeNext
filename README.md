@@ -38,3 +38,13 @@ Run the service contract tests:
 ```bash
 cargo test -p dae-daemon --test service_contract
 ```
+
+Build the DaeNext release binary:
+
+```bash
+cargo build --release -p dae-cli --bin dae
+```
+
+`DaeNext` releases publish the `dae` Rust workspace artifact. The `daed`
+product binary is released from the `DaedNext` repository, which consumes this
+workspace as its Rust core.

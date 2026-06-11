@@ -1,0 +1,57 @@
+name: Rust CI
+
+on:
+  push:
+    branches:
+      - main
+      - dae-daex-align
+  pull_request:
+    branches:
+      - main
+      - dae-daex-align
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  ci:
+    name: workspace
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+
+      - name: Install native dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y clang llvm libelf-dev pkg-config
+
+      - name: Format
+        run: cargo fmt --all -- --check
+
+      - name: Repository text policy
+        run: scripts/check_no_emoji.sh
+
+      - name: Check workspace
+        run: cargo check --workspace --all-targets
+
+      - name: Test workspace libraries
+        run: cargo test --workspace --lib
+
+      - name: Test service contracts
+        run: cargo test -p dae-daemon --test service_contract
+
+      - name: Build dae
+        run: |
+          DAE_VERSION="dae rust-native ci ${GITHUB_SHA::12}" \
+            cargo build --release -p dae-cli --bin dae
+          ./target/release/dae export outline >/tmp/dae-config-outline.json
