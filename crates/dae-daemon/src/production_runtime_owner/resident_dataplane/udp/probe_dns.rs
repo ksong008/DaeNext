@@ -27,7 +27,7 @@ pub(crate) async fn probe_resident_proxy_udp_async(
                 "payload_match": payload_match,
                 "elapsed_ms": started.elapsed().as_millis(),
                 "graphId": proxy.graph_id,
-                "packetSession": udp_packet_session_value(proxy, "probe", &original_dst.to_string(), handler, packet_semantics),
+                "packetSession": udp_probe_packet_session_value(proxy, original_dst, handler, packet_semantics),
             });
             response.append_execution_fields(&mut report, handler, &proxy.graph_id);
             if let Some(tls_underlay) = response.tls_underlay {
@@ -55,7 +55,7 @@ pub(crate) async fn probe_resident_proxy_udp_async(
                 "elapsed_ms": started.elapsed().as_millis(),
                 "error": err,
                 "graphId": proxy.graph_id,
-                "packetSession": udp_packet_session_value(proxy, "probe", &original_dst.to_string(), handler, packet_semantics),
+                "packetSession": udp_probe_packet_session_value(proxy, original_dst, handler, packet_semantics),
             })
         }
         Err(err) => json!({
@@ -68,7 +68,7 @@ pub(crate) async fn probe_resident_proxy_udp_async(
             "payload_match": false,
             "elapsed_ms": started.elapsed().as_millis(),
             "graphId": proxy.graph_id,
-            "packetSession": udp_packet_session_value(proxy, "probe", &original_dst.to_string(), handler, packet_semantics),
+            "packetSession": udp_probe_packet_session_value(proxy, original_dst, handler, packet_semantics),
             "error": err,
         }),
     }

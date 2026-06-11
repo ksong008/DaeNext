@@ -6,39 +6,6 @@ use tokio::sync::mpsc;
 
 use super::*;
 
-#[derive(Clone, Debug, Eq, Hash, PartialEq)]
-pub(super) struct UdpSessionKey {
-    graph_id: String,
-    outbound: String,
-    peer: String,
-    original_destination: String,
-    packet_semantics: String,
-}
-
-impl UdpSessionKey {
-    fn new(proxy: &ResidentProxyPlan, peer: SocketAddr, original_dst: SocketAddr) -> Self {
-        Self {
-            graph_id: proxy.graph_id.clone(),
-            outbound: proxy.group_name.clone(),
-            peer: peer.to_string(),
-            original_destination: original_dst.to_string(),
-            packet_semantics: udp_packet_semantics_for_destination(&proxy.handler, original_dst)
-                .to_owned(),
-        }
-    }
-
-    pub(super) fn to_value(&self) -> serde_json::Value {
-        json!({
-            "schemaVersion": 1,
-            "graphId": self.graph_id,
-            "outbound": self.outbound,
-            "peer": self.peer,
-            "originalDestination": self.original_destination,
-            "packetSemantics": self.packet_semantics,
-        })
-    }
-}
-
 pub(super) fn run_resident_udp_session_manager(
     socket: UdpSocket,
     proxy_group: Arc<ResidentProxyGroupPlan>,
@@ -127,7 +94,13 @@ async fn run_resident_udp_session_manager_async(
                 "runtime": "tokio-current-thread",
                 "sessionLimit": session_limit,
                 "perSessionQueueDepth": session_queue_depth,
-                "keyFields": ["graphId", "outbound", "peer", "originalDestination", "packetSemantics"],
+                "keyFields": [
+                    "graphIdentityHash",
+                    "outbound",
+                    "peerSocketAddr",
+                    "originalDestinationSocketAddr",
+                    "packetSemantics",
+                ],
             },
         }),
     );
@@ -326,12 +299,13 @@ mod tests {
     #[test]
     fn udp_session_key_uses_dns_semantics_for_local_dns_destination() {
         let proxy = test_udp_proxy(ResidentProxyProtocolPlan::VlessVisionTcpTls { key: [1; 16] });
-        let key = UdpSessionKey::new(
-            &proxy,
-            SocketAddr::new(Ipv4Addr::new(192, 0, 2, 10).into(), 53000),
-            SocketAddr::new(Ipv4Addr::new(8, 8, 8, 8).into(), 53),
-        );
-        assert_eq!(key.packet_semantics, "dns");
+        let peer = SocketAddr::new(Ipv4Addr::LOCALHOST.into(), 53000);
+        let dns_dst = SocketAddr::new(Ipv4Addr::LOCALHOST.into(), 53);
+        let key = UdpSessionKey::new(&proxy, peer, dns_dst);
+        let value = key.to_value();
+
+        assert_eq!(value["packetSemantics"], UdpPacketSemantics::Dns.as_str());
+        assert_eq!(value["originalDestination"], dns_dst.to_string());
     }
 
     #[test]
@@ -346,6 +320,40 @@ mod tests {
         assert_ne!(
             UdpSessionKey::new(&vless, peer, original_dst),
             UdpSessionKey::new(&socks, peer, original_dst)
+        );
+    }
+
+    #[test]
+    fn udp_session_key_emits_display_and_redacted_identity() {
+        let peer = SocketAddr::new(Ipv4Addr::new(192, 0, 2, 10).into(), 53000);
+        let original_dst = SocketAddr::new(Ipv4Addr::new(192, 0, 2, 53).into(), 443);
+        let proxy = test_udp_proxy(ResidentProxyProtocolPlan::VlessVisionTcpTls { key: [1; 16] });
+        let key = UdpSessionKey::new(&proxy, peer, original_dst);
+        let value = key.to_value();
+
+        assert_eq!(value["schemaVersion"], 1);
+        assert_eq!(value["manager"], "resident-udp-session-manager");
+        assert_eq!(value["graphId"], "resident-graph:redacted");
+        assert_eq!(value["graphLinkHash"], "sha256:redacted");
+        assert_eq!(value["redactedLinkSource"], "source:<redacted>");
+        assert_eq!(value["peer"], peer.to_string());
+        assert_eq!(value["originalDestination"], original_dst.to_string());
+        assert_eq!(value["sourceDisplay"], peer.to_string());
+        assert_eq!(value["destinationDisplay"], original_dst.to_string());
+        assert_eq!(value["packetSemantics"], "xudp");
+        assert!(
+            value["graphIdentityHash"]
+                .as_str()
+                .is_some_and(|hash| hash.starts_with("sha256:") && hash.len() > "sha256:".len())
+        );
+        assert!(
+            value["sessionHash"]
+                .as_str()
+                .is_some_and(|hash| hash.starts_with("sha256:") && hash.len() > "sha256:".len())
+        );
+        assert_eq!(
+            value["sessionIdentity"]["sessionHash"],
+            value["sessionHash"]
         );
     }
 

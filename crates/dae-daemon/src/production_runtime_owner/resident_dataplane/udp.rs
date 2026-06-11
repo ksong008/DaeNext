@@ -58,6 +58,8 @@ use super::{
 
 mod worker;
 pub(super) use self::worker::*;
+mod session_key;
+use self::session_key::*;
 mod manager;
 use self::manager::*;
 mod session_actor;

@@ -134,7 +134,7 @@ pub(super) fn record_udp_exchange_result(
                     "protocol": proxy.protocol,
                     "handler": handler,
                     "graphId": proxy.graph_id,
-                    "packetSession": udp_packet_session_value(&proxy, &peer.to_string(), &original_dst.to_string(), handler, packet_semantics),
+                    "packetSession": udp_packet_session_value(&proxy, peer, original_dst, handler, packet_semantics),
                 });
                 response.append_execution_fields(&mut event_json, handler, &proxy.graph_id);
                 if let Some(tls_underlay) = response.tls_underlay {
@@ -176,7 +176,7 @@ pub(super) fn record_udp_exchange_result(
                     "dialer": proxy.node_tag,
                     "ip": original_dst.to_string(),
                     "graphId": proxy.graph_id,
-                    "packetSession": udp_packet_session_value(&proxy, &peer.to_string(), &original_dst.to_string(), handler, packet_semantics),
+                    "packetSession": udp_packet_session_value(&proxy, peer, original_dst, handler, packet_semantics),
                 }),
             )
         }
