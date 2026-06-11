@@ -45,6 +45,21 @@ pub struct Global {
     pub bandwidth_max_tx: String,
     pub bandwidth_max_rx: String,
     pub udphop_interval: ConfigDuration,
+    pub resident_udp_session_limit: Option<u64>,
+    pub resident_udp_session_queue_depth: Option<u64>,
+    pub resident_tcp_flow_stack_bytes: Option<u64>,
+    pub resident_event_queue_depth: Option<u64>,
+    pub resident_manual_probe_concurrency: Option<u64>,
+    pub resident_health_check_concurrency: Option<u64>,
+    pub http_queue: Option<u64>,
+    pub http_workers: Option<u64>,
+    pub http_worker_stack_bytes: Option<u64>,
+    pub allocator_idle_reclaim_enabled: Option<bool>,
+    pub allocator_idle_reclaim_sample_interval: Option<ConfigDuration>,
+    pub allocator_idle_reclaim_min_interval: Option<ConfigDuration>,
+    pub allocator_idle_reclaim_low_traffic_duration: Option<ConfigDuration>,
+    pub allocator_idle_reclaim_pressure_threshold_bytes: Option<u64>,
+    pub allocator_idle_reclaim_max_traffic_rate_bytes_per_second: Option<u64>,
 }
 
 impl Default for Global {
@@ -80,6 +95,21 @@ impl Default for Global {
             bandwidth_max_tx: "0".to_owned(),
             bandwidth_max_rx: "0".to_owned(),
             udphop_interval: parse_default_duration("30s"),
+            resident_udp_session_limit: None,
+            resident_udp_session_queue_depth: None,
+            resident_tcp_flow_stack_bytes: None,
+            resident_event_queue_depth: None,
+            resident_manual_probe_concurrency: None,
+            resident_health_check_concurrency: None,
+            http_queue: None,
+            http_workers: None,
+            http_worker_stack_bytes: None,
+            allocator_idle_reclaim_enabled: None,
+            allocator_idle_reclaim_sample_interval: None,
+            allocator_idle_reclaim_min_interval: None,
+            allocator_idle_reclaim_low_traffic_duration: None,
+            allocator_idle_reclaim_pressure_threshold_bytes: None,
+            allocator_idle_reclaim_max_traffic_rate_bytes_per_second: None,
         }
     }
 }

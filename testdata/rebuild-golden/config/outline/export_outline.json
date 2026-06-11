@@ -1,6 +1,4 @@
 {
-  "name": "config-outline-export-outline",
-  "notes": "Stable projection of config.ExportOutlineJson(\"test\") for Rust outline/FlatDesc parity.",
   "outline": {
     "leaves": [
       "[]*config_parser.Function",
@@ -81,7 +79,7 @@
           },
           {
             "defaultValue": "0",
-            "desc": "Group will switch node only when new_latency \u003c= old_latency - tolerance.",
+            "desc": "Group will switch node only when new_latency <= old_latency - tolerance.",
             "mapping": "check_tolerance",
             "name": "CheckTolerance",
             "type": "time.Duration"
@@ -222,6 +220,96 @@
             "mapping": "udphop_interval",
             "name": "UDPHopInterval",
             "type": "time.Duration"
+          },
+          {
+            "desc": "Optional resident UDP session ceiling. Leave empty to use the product default or compatibility environment override.",
+            "mapping": "resident_udp_session_limit",
+            "name": "ResidentUdpSessionLimit",
+            "type": "uint64"
+          },
+          {
+            "desc": "Optional bounded queue depth per resident UDP session.",
+            "mapping": "resident_udp_session_queue_depth",
+            "name": "ResidentUdpSessionQueueDepth",
+            "type": "uint64"
+          },
+          {
+            "desc": "Optional stack size for resident TCP flow worker threads.",
+            "mapping": "resident_tcp_flow_stack_bytes",
+            "name": "ResidentTcpFlowStackBytes",
+            "type": "uint64"
+          },
+          {
+            "desc": "Optional resident event writer queue depth.",
+            "mapping": "resident_event_queue_depth",
+            "name": "ResidentEventQueueDepth",
+            "type": "uint64"
+          },
+          {
+            "desc": "Optional maximum parallel manual latency probes per batch.",
+            "mapping": "resident_manual_probe_concurrency",
+            "name": "ResidentManualProbeConcurrency",
+            "type": "uint64"
+          },
+          {
+            "desc": "Optional maximum parallel health-check candidates per group.",
+            "mapping": "resident_health_check_concurrency",
+            "name": "ResidentHealthCheckConcurrency",
+            "type": "uint64"
+          },
+          {
+            "desc": "Optional product HTTP worker queue capacity.",
+            "mapping": "http_queue",
+            "name": "HttpQueue",
+            "type": "uint64"
+          },
+          {
+            "desc": "Optional product HTTP worker count.",
+            "mapping": "http_workers",
+            "name": "HttpWorkers",
+            "type": "uint64"
+          },
+          {
+            "desc": "Optional product HTTP worker stack size.",
+            "mapping": "http_worker_stack_bytes",
+            "name": "HttpWorkerStackBytes",
+            "type": "uint64"
+          },
+          {
+            "desc": "Optional traffic-idle allocator reclaim toggle.",
+            "mapping": "allocator_idle_reclaim_enabled",
+            "name": "AllocatorIdleReclaimEnabled",
+            "type": "bool"
+          },
+          {
+            "desc": "Optional allocator idle monitor sample interval.",
+            "mapping": "allocator_idle_reclaim_sample_interval",
+            "name": "AllocatorIdleReclaimSampleInterval",
+            "type": "time.Duration"
+          },
+          {
+            "desc": "Optional minimum interval between allocator idle reclaim attempts.",
+            "mapping": "allocator_idle_reclaim_min_interval",
+            "name": "AllocatorIdleReclaimMinInterval",
+            "type": "time.Duration"
+          },
+          {
+            "desc": "Optional low-traffic duration required before allocator idle reclaim.",
+            "mapping": "allocator_idle_reclaim_low_traffic_duration",
+            "name": "AllocatorIdleReclaimLowTrafficDuration",
+            "type": "time.Duration"
+          },
+          {
+            "desc": "Optional idle allocator pressure threshold in bytes.",
+            "mapping": "allocator_idle_reclaim_pressure_threshold_bytes",
+            "name": "AllocatorIdleReclaimPressureThresholdBytes",
+            "type": "uint64"
+          },
+          {
+            "desc": "Optional maximum realtime traffic rate that still counts as idle.",
+            "mapping": "allocator_idle_reclaim_max_traffic_rate_bytes_per_second",
+            "name": "AllocatorIdleReclaimMaxTrafficRateBytesPerSecond",
+            "type": "uint64"
           }
         ],
         "type": "config.Global"
@@ -409,10 +497,5 @@
       }
     ],
     "version": "test"
-  },
-  "source": [
-    "config/outline.go",
-    "config/desc.go",
-    "config/config.go"
-  ]
+  }
 }

@@ -25,7 +25,12 @@ pub(crate) const RESIDENT_EVENT_QUEUE_DEPTH_ENV: &str = "RESIDENT_EVENT_QUEUE_DE
 pub(crate) const RESIDENT_EVENT_QUEUE_DEPTH_DEFAULT: usize = 4096;
 pub(crate) const RESIDENT_EVENT_QUEUE_DEPTH_MIN: usize = 64;
 pub(crate) const RESIDENT_EVENT_QUEUE_DEPTH_MAX: usize = 65_536;
-pub(crate) const RESIDENT_MANUAL_LATENCY_PROBE_CONCURRENCY: usize = 8;
+pub(crate) const RESIDENT_MANUAL_LATENCY_PROBE_CONCURRENCY_DEFAULT: usize = 8;
+pub(crate) const RESIDENT_MANUAL_LATENCY_PROBE_CONCURRENCY_MIN: usize = 1;
+pub(crate) const RESIDENT_MANUAL_LATENCY_PROBE_CONCURRENCY_MAX: usize = 128;
+pub(crate) const RESIDENT_HEALTH_CHECK_CONCURRENCY_DEFAULT: usize = 1;
+pub(crate) const RESIDENT_HEALTH_CHECK_CONCURRENCY_MIN: usize = 1;
+pub(crate) const RESIDENT_HEALTH_CHECK_CONCURRENCY_MAX: usize = 128;
 pub(crate) const XTLS_RPRX_VISION: &str = "xtls-rprx-vision";
 pub(crate) const VISION_COMMAND_CONTINUE: u8 = 0;
 pub(crate) const VISION_COMMAND_END: u8 = 1;
@@ -42,6 +47,7 @@ pub(crate) fn resident_runtime_defaults_contract() -> Value {
     json!({
         "tcpFlow": {
             "stackBytes": {
+                "configKey": "resident_tcp_flow_stack_bytes",
                 "env": RESIDENT_TCP_FLOW_STACK_BYTES_ENV,
                 "default": RESIDENT_TCP_FLOW_STACK_BYTES_DEFAULT,
                 "min": RESIDENT_TCP_FLOW_STACK_BYTES_MIN,
@@ -50,12 +56,14 @@ pub(crate) fn resident_runtime_defaults_contract() -> Value {
         },
         "udpSessions": {
             "limit": {
+                "configKey": "resident_udp_session_limit",
                 "env": RESIDENT_UDP_SESSION_LIMIT_ENV,
                 "default": RESIDENT_UDP_SESSION_LIMIT_DEFAULT,
                 "min": RESIDENT_UDP_SESSION_LIMIT_MIN,
                 "max": RESIDENT_UDP_SESSION_LIMIT_MAX,
             },
             "queueDepth": {
+                "configKey": "resident_udp_session_queue_depth",
                 "env": RESIDENT_UDP_SESSION_QUEUE_DEPTH_ENV,
                 "default": RESIDENT_UDP_SESSION_QUEUE_DEPTH_DEFAULT,
                 "min": RESIDENT_UDP_SESSION_QUEUE_DEPTH_MIN,
@@ -66,12 +74,29 @@ pub(crate) fn resident_runtime_defaults_contract() -> Value {
         },
         "eventWriter": {
             "queueDepth": {
+                "configKey": "resident_event_queue_depth",
                 "env": RESIDENT_EVENT_QUEUE_DEPTH_ENV,
                 "default": RESIDENT_EVENT_QUEUE_DEPTH_DEFAULT,
                 "min": RESIDENT_EVENT_QUEUE_DEPTH_MIN,
                 "max": RESIDENT_EVENT_QUEUE_DEPTH_MAX,
             },
             "model": "bounded channel with a single JSONL writer; packet and debug events use nonblocking enqueue while lifecycle and error events are preserved",
+        },
+        "manualProbe": {
+            "concurrency": {
+                "configKey": "resident_manual_probe_concurrency",
+                "default": RESIDENT_MANUAL_LATENCY_PROBE_CONCURRENCY_DEFAULT,
+                "min": RESIDENT_MANUAL_LATENCY_PROBE_CONCURRENCY_MIN,
+                "max": RESIDENT_MANUAL_LATENCY_PROBE_CONCURRENCY_MAX,
+            },
+        },
+        "healthCheck": {
+            "concurrency": {
+                "configKey": "resident_health_check_concurrency",
+                "default": RESIDENT_HEALTH_CHECK_CONCURRENCY_DEFAULT,
+                "min": RESIDENT_HEALTH_CHECK_CONCURRENCY_MIN,
+                "max": RESIDENT_HEALTH_CHECK_CONCURRENCY_MAX,
+            },
         },
     })
 }
