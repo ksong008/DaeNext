@@ -58,8 +58,8 @@ pub(super) fn insert_datapath_core_service_contract_capabilities(report: &mut Va
     let datapath_core_typed_report_ready = datapath_core_contract_ready;
     let no_external_userspace_datapath_dependency_contract_ready = datapath_core_contract_ready;
     let native_tproxy_contract_ready_after_datapath_core = datapath_core_contract_ready;
-    let native_datapath_core_final_native_contract_ready = datapath_core_contract_ready;
-    let native_datapath_core_final_native_candidate = datapath_core_contract_ready;
+    let native_datapath_core_production_contract_ready = datapath_core_contract_ready;
+    let native_datapath_core_production_ready = datapath_core_contract_ready;
 
     if let Value::Object(report) = report {
         report.insert(
@@ -208,12 +208,20 @@ pub(super) fn insert_datapath_core_service_contract_capabilities(report: &mut Va
             json!(native_tproxy_contract_ready_after_datapath_core),
         );
         report.insert(
-            "native_datapath_core_final_native_contract_ready".to_owned(),
-            json!(native_datapath_core_final_native_contract_ready),
+            "native_datapath_core_production_contract_ready".to_owned(),
+            json!(native_datapath_core_production_contract_ready),
         );
         report.insert(
-            "native_datapath_core_final_native_candidate".to_owned(),
-            json!(native_datapath_core_final_native_candidate),
+            "native_datapath_core_production_ready".to_owned(),
+            json!(native_datapath_core_production_ready),
+        );
+        report.insert(
+            "native_datapath_core_production_contract_ready".to_owned(),
+            json!(native_datapath_core_production_contract_ready),
+        );
+        report.insert(
+            "native_datapath_core_production_candidate".to_owned(),
+            json!(native_datapath_core_production_ready),
         );
     }
 }

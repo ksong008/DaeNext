@@ -52,7 +52,7 @@ pub(crate) fn resident_live_adapter_config_assessment(
         "currentConfigPresentRows": full_matrix_present_rows,
         "currentConfigAdmittedRows": full_matrix_admitted_rows,
         "formalHandlerRows": resident_live_adapter_matrix_entries().len(),
-        "releaseGateMayUseAsSourceMatrix": false,
+        "productionReadinessMayUseAsSourceMatrix": false,
         "finalStateMayUseAsExpandedSourceMatrix": false,
     });
     let mut report = json!({
@@ -92,7 +92,7 @@ pub(crate) fn resident_live_adapter_config_assessment(
     report["full_matrix_open"] = json!(true);
     report["full_matrix_scope"] = json!(matrix_scope);
     report["full_matrix_is_expanded_source_matrix"] = json!(false);
-    report["full_matrix_release_gate_source_ready"] = json!(false);
+    report["full_matrix_production_source_ready"] = json!(false);
     report["full_matrix_expanded_source_final_state_ready"] = json!(false);
     report["full_matrix_row_count"] = json!(full_matrix_rows.len());
     report["full_matrix_present_row_count"] = json!(full_matrix_present_rows);
@@ -111,7 +111,7 @@ pub(crate) fn resident_live_adapter_config_assessment(
     report["source_shape_registry_contract"] = source_shape_registry.to_value();
     report["expanded_source_matrix_row_count"] = json!(expanded_source_matrix_rows.len());
     report["expanded_source_matrix_status_counts"] = expanded_source_matrix_status_counts;
-    report["expanded_source_matrix_release_gate_ready"] = json!(false);
+    report["expanded_source_matrix_production_ready"] = json!(false);
     report["expanded_source_matrix_final_state_ready"] = json!(false);
     report["source_matrix_completion_blocker"] = json!(
         "expanded source matrix has fail-closed rows and requires live host, benchmark, and restore evidence"

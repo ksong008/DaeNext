@@ -4,7 +4,7 @@ use std::time::Instant;
 use dae_cli::{export_outline_json, validate_config_file};
 
 fn main() {
-    let iters = std::env::var("DAE_STAGE10_BENCH_ITERS")
+    let iters = std::env::var("CLI_BENCH_ITERS")
         .ok()
         .and_then(|value| value.parse::<usize>().ok())
         .unwrap_or(10_000);

@@ -6,8 +6,8 @@ struct DeepAreaSurface {
     name: &'static str,
     primary_crates: &'static [&'static str],
     accepted_native_assets: &'static [&'static str],
-    final_native_admission_blockers: &'static [&'static str],
-    final_native_readiness_conditions: &'static [&'static str],
+    production_admission_blockers: &'static [&'static str],
+    production_readiness_conditions: &'static [&'static str],
 }
 
 const DEEP_AREA_SURFACES: &[DeepAreaSurface] = &[
@@ -22,11 +22,11 @@ const DEEP_AREA_SURFACES: &[DeepAreaSurface] = &[
             "sniffed_initial_payload_preservation",
             "active_tcp_relay_smoke_contract",
         ],
-        final_native_admission_blockers: &[
+        production_admission_blockers: &[
             "resident_tcp_not_validated_for_every_outbound_protocol",
-            "throughput_latency_and_reload_under_traffic_not_release_gated",
+            "throughput_latency_and_reload_under_traffic_not_production_validated",
         ],
-        final_native_readiness_conditions: &[
+        production_readiness_conditions: &[
             "all_non_reserved_outbound_protocols_have_live_tcp_parity",
             "sniff_and_domain_plus_plus_reroute_pass_under_resident_daemon",
             "reload_abort_and_restore_keep_existing_tcp_flows_correct",
@@ -43,11 +43,11 @@ const DEEP_AREA_SURFACES: &[DeepAreaSurface] = &[
             "udp_dns_datapath_contract",
             "dns_cache_hot_path_integration_boundary",
         ],
-        final_native_admission_blockers: &[
+        production_admission_blockers: &[
             "udp_endpoint_task_pool_not_product_runtime_owned_for_all_flows",
             "non_dns_udp_protocol_relay_not_live_validated_for_all_outbounds",
         ],
-        final_native_readiness_conditions: &[
+        production_readiness_conditions: &[
             "udp_dns_and_non_dns_paths_pass_original_destination_parity",
             "packet_replay_and_sendpkt_reply_match_native_under_reload",
             "quic_udp_sessions_keep_domain_routing_and_sniff_semantics",
@@ -65,11 +65,11 @@ const DEEP_AREA_SURFACES: &[DeepAreaSurface] = &[
             "socks_http_anytls_hysteria2_tuic_juicity_native_assets",
             "shared_tls_ws_h2_grpc_quic_h3_mux_transport_assets",
         ],
-        final_native_admission_blockers: &[
+        production_admission_blockers: &[
             "native_outbound_dependency_evidence_missing",
             "live_node_matrix_not_completed_for_every_protocol_transport_pair",
         ],
-        final_native_readiness_conditions: &[
+        production_readiness_conditions: &[
             "each_protocol_has_native_benchmark_and_fixture_evidence",
             "each_protocol_transport_pair_passes_live_or_loopback_admission",
             "group_min_random_fixed_policy_and_connectivity_map_events_are_rust_owned",
@@ -94,11 +94,11 @@ const DEEP_AREA_SURFACES: &[DeepAreaSurface] = &[
             "listen_socket_sockmap_contract",
             "typed_host_ops_and_netns_link_policy",
         ],
-        final_native_admission_blockers: &[
+        production_admission_blockers: &[
             "native_backend_requires_release_admission",
             "native_ebpf_program_final_evaluation_not_this_gate",
         ],
-        final_native_readiness_conditions: &[
+        production_readiness_conditions: &[
             "non_native_bpf_loader_absence_evidence_required",
             "tcx_tc_netlink_backend_has_root_gated_host_write_parity",
             "netkit_veth_and_same_iface_lan_wan_modes_pass_cleanup_checks",
@@ -106,8 +106,8 @@ const DEEP_AREA_SURFACES: &[DeepAreaSurface] = &[
     },
 ];
 
-const FINAL_NATIVE_ADMISSION_BLOCKERS: &[&str] = &[
-    "native_daemon_admission_requires_final_native_gate",
+const PRODUCTION_ADMISSION_BLOCKERS: &[&str] = &[
+    "native_daemon_admission_requires_production_admission_gate",
     "native_runtime_or_outbound_dependency_evidence_missing",
     "full_live_protocol_matrix_not_completed_in_resident_daemon",
     "long_running_soak_reload_and_failure_recovery_not_recorded_for_all_deep_area_surfaces",
@@ -129,11 +129,11 @@ pub(super) fn datapath_outbound_ebpf_deep_area_summary_json() -> Value {
             .iter()
             .map(deep_area_surface_json)
             .collect::<Vec<_>>(),
-        "final_native_admission_blockers": FINAL_NATIVE_ADMISSION_BLOCKERS,
-        "final_native_admission_allowed": false,
+        "production_admission_blockers": PRODUCTION_ADMISSION_BLOCKERS,
+        "production_admission_allowed": false,
         "final_state_admission_allowed": false,
         "current_report_schema": true,
-        "final_native_readiness_claimed": false,
+        "production_readiness_claimed": false,
         "native_bpf_loader_required": false,
         "native_bpf_loader_product_ready": false,
         "aya_loader_direction_preserved": true,
@@ -154,10 +154,10 @@ fn deep_area_surface_json(surface: &DeepAreaSurface) -> Value {
         "primary_crates": surface.primary_crates,
         "accepted_native_assets": surface.accepted_native_assets,
         "accepted_into_deep_area": true,
-        "final_native_admission_allowed": false,
-        "final_native_readiness_claimed": false,
-        "final_native_admission_blockers": surface.final_native_admission_blockers,
-        "final_native_readiness_conditions": surface.final_native_readiness_conditions,
+        "production_admission_allowed": false,
+        "production_readiness_claimed": false,
+        "production_admission_blockers": surface.production_admission_blockers,
+        "production_readiness_conditions": surface.production_readiness_conditions,
     })
 }
 
@@ -166,7 +166,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn deep_area_summary_closes_fixed_queue_without_opening_final_native_admission() {
+    fn deep_area_summary_closes_fixed_queue_without_opening_production_admission() {
         let summary = datapath_outbound_ebpf_deep_area_summary_json();
         assert_eq!(
             summary["schema"].as_str().unwrap(),
@@ -177,8 +177,8 @@ mod tests {
             summary["surface_count"].as_u64().unwrap(),
             DEEP_AREA_SURFACES.len() as u64
         );
-        assert!(!summary["final_native_admission_allowed"].as_bool().unwrap());
-        assert!(!summary["final_native_readiness_claimed"].as_bool().unwrap());
+        assert!(!summary["production_admission_allowed"].as_bool().unwrap());
+        assert!(!summary["production_readiness_claimed"].as_bool().unwrap());
         assert!(!summary["native_bpf_loader_required"].as_bool().unwrap());
         assert!(
             !summary["native_bpf_loader_product_ready"]

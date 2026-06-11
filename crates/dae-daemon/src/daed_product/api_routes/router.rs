@@ -88,7 +88,7 @@ pub(super) fn handle_api_request(
                 }
                 _ => HttpResponse::json(
                     404,
-                    json!({"error": "not implemented in final native local product surface"}),
+                    json!({"error": "not implemented in production local product surface"}),
                 ),
             }
         }

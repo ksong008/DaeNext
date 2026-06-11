@@ -9,7 +9,7 @@ use dae_engine::{
 };
 
 fn main() {
-    let iters = std::env::var("DAE_STAGE6_BENCH_ITERS")
+    let iters = std::env::var("ENGINE_BENCH_ITERS")
         .ok()
         .and_then(|value| value.parse::<usize>().ok())
         .unwrap_or(100_000);
@@ -17,7 +17,7 @@ fn main() {
     bench_runtime_overview(iters);
     bench_parse_config_api(iters);
 
-    let cleanup_iters = std::env::var("DAE_STAGE6_CLEANUP_BENCH_ITERS")
+    let cleanup_iters = std::env::var("ENGINE_CLEANUP_BENCH_ITERS")
         .ok()
         .and_then(|value| value.parse::<usize>().ok())
         .unwrap_or(1_000);

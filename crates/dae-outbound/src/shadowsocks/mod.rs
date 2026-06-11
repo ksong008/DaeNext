@@ -3,15 +3,15 @@ pub mod cipher;
 pub mod contract;
 pub mod link;
 pub mod metadata;
-pub mod sip003_dataplane;
-pub mod sip003_tls_dataplane;
-pub mod sip003_v2ray_plugin_dataplane;
+mod sip003_dataplane;
+mod sip003_tls_dataplane;
+mod sip003_v2ray_plugin_dataplane;
 pub mod ss2022;
-pub mod ss2022_tcp_dataplane;
-pub mod ss2022_udp_dataplane;
-pub mod ssr_dataplane;
+mod ss2022_tcp_dataplane;
+mod ss2022_udp_dataplane;
+mod ssr_dataplane;
 pub mod ssr_link;
-pub mod ssr_stream;
+mod ssr_stream;
 
 pub use aead::{
     AeadCipherSpec, AeadStreamCodec, AeadTcpSalts, ShadowsocksAeadTcpExchangeReport,

@@ -65,14 +65,14 @@ pub(super) const fn runtime_owner(
     path: &'static str,
     surface: RuntimeOwnerSurface,
     ownership: RuntimeOwnership,
-    final_native_product_path: bool,
+    production_state_product_path: bool,
     local_runtime_allowed: bool,
 ) -> RuntimeOwnershipContract {
     RuntimeOwnershipContract {
         path,
         surface,
         ownership,
-        final_native_product_path,
+        production_state_product_path,
         local_runtime_allowed,
     }
 }

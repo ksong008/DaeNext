@@ -46,9 +46,9 @@ fn bench_datapath_outbound_ebpf_summary(iters: u64, warmup: u64) -> Result<Measu
         || {
             let summary = datapath_outbound_ebpf_deep_area_summary_json();
             let surfaces = summary["surfaces"].as_array().expect("deep area surfaces");
-            let blockers = summary["final_native_admission_blockers"]
+            let blockers = summary["production_admission_blockers"]
                 .as_array()
-                .expect("deep area final native admission blockers");
+                .expect("deep area production admission blockers");
             black_box(surfaces.len() as u64 ^ ((blockers.len() as u64) << 8))
         },
         iters,

@@ -6,8 +6,8 @@ pub(super) fn product_openapi_skeleton() -> Value {
             "title": "daed Rust native product API",
             "version": crate::version::version_from_env(),
         },
-        "x-runtime-surface": "final-native",
-        "x-runtime-state": "final-native-state",
+        "x-runtime-surface": "native-product",
+        "x-runtime-state": "runtime-state",
         "paths": {
             "/api/health": {"get": {"summary": "health"}},
             "/api/auth/status": {"get": {"summary": "setup/auth status"}},
@@ -36,16 +36,18 @@ pub(super) fn product_openapi_skeleton() -> Value {
 pub(super) fn product_flatdesc() -> Value {
     json!({
         "schemaVersion": 1,
-        "productSurface": "final-native",
-        "runtimeState": "final-native-state",
+        "productSurface": "native-product",
+        "runtimeState": "runtime-state",
         "stateStore": PRIMARY_STATE_STORE,
         "legacyImportStore": LEGACY_IMPORT_STATE_STORE,
         "resources": ["configs", "dns", "routings", "nodes", "subscriptions", "groups"],
         "runtime": ["materialize-parseable-generated-config", "resident-runtime-reload", "resident-runtime-stop", "live-manager-state"],
         "logs": ["log-list", "log-settings", "sse-snapshot"],
         "package": ["validate-command", "systemd-unit-surface", "docker-entrypoint-surface", "package-manifest", "admission-report", "webui-route-audit", "openapi", "flatdesc", "outline"],
-        "finalAdmission": final_native_admission(),
-        "fullFinalNativeStateReady": false,
+        "productionAdmission": production_admission(),
+        "runtimeStateReady": false,
+        "finalAdmission": production_admission(),
+        "fullRuntimeStateReady": false,
     })
 }
 
@@ -57,7 +59,7 @@ pub(super) fn product_outline() -> Value {
             "state": PRIMARY_STATE_STORE,
             "webRoot": DEFAULT_WEB_ROOT,
         },
-        "runtimeState": "final-native-state",
+        "runtimeState": "runtime-state",
         "localProductSurface": {
             "webApi": true,
             "validateCommand": true,
@@ -73,8 +75,9 @@ pub(super) fn product_outline() -> Value {
             "packageManifest": true,
             "webuiRouteAudit": true,
         },
-        "finalAdmission": final_native_admission(),
-        "remainingAdmission": final_native_blockers()
+        "productionAdmission": production_admission(),
+        "remainingAdmission": runtime_state_blockers(),
+        "finalAdmission": production_admission()
     })
 }
 
@@ -82,8 +85,8 @@ pub(super) fn product_package_manifest() -> Value {
     json!({
         "schemaVersion": 1,
         "name": "daed",
-        "productSurface": "final-native",
-        "workPackage": "final-native-state",
+        "productSurface": "native-product",
+        "workPackage": "runtime-state",
         "binary": {
             "path": "/usr/bin/daed",
             "source": "crates/dae-daemon/src/bin/daed.rs",
@@ -124,13 +127,14 @@ pub(super) fn product_package_manifest() -> Value {
             "localPackageAdmissionReady": true,
             "liveHostReplacementApplied": false,
             "finalStateValidationAppliedOnLiveHost": false,
-            "finalNativeProductPackageReady": false,
+            "productPackageReady": false,
             "nativeProductShellReady": false,
             "nativeOutboundDependencyReady": false,
             "userlandNativeAbiReady": false,
-            "fullFinalNativeStateReady": false,
-            "evidence": final_native_gate_evidence(),
-            "remainingAdmission": final_native_blockers(),
+            "runtimeStateReady": false,
+            "fullRuntimeStateReady": false,
+            "evidence": runtime_state_gate_evidence(),
+            "remainingAdmission": runtime_state_blockers(),
         }
     })
 }
@@ -139,8 +143,8 @@ pub(super) fn product_admission_report() -> Value {
     let route_audit = webui_route_audit_report();
     json!({
         "schemaVersion": 1,
-        "productSurface": "final-native",
-        "workPackage": "final-native-state",
+        "productSurface": "native-product",
+        "workPackage": "runtime-state",
         "status": "blocked",
         "runtimeDefaults": product_runtime_defaults(),
         "localEvidence": {
@@ -175,13 +179,13 @@ pub(super) fn product_admission_report() -> Value {
         "liveEvidence": {
             "liveHostReplacementApplied": false,
             "finalStateValidationApplied": false,
-            "finalNativeProductPackageReady": false,
+            "productPackageReady": false,
             "nativeProductShellReady": false,
             "nativeOutboundDependencyReady": false,
             "userlandNativeAbiReady": false,
-            "evidence": final_native_gate_evidence(),
+            "evidence": runtime_state_gate_evidence(),
         },
-        "remainingBlockers": final_native_blockers()
+        "remainingBlockers": runtime_state_blockers()
     })
 }
 
@@ -192,7 +196,7 @@ pub(super) fn webui_route_audit_report() -> Value {
         .collect::<Vec<_>>();
     json!({
         "schemaVersion": 1,
-        "workPackage": "final-native-state",
+        "workPackage": "runtime-state",
         "source": "daed/apps/web/src/apis",
         "rustServer": "crates/dae-daemon/src/daed_product.rs",
         "pass": true,
@@ -290,7 +294,7 @@ pub(super) fn webui_route_patterns() -> Vec<(&'static str, &'static str)> {
 pub(super) fn systemd_unit_text() -> String {
     r#"[Unit]
 Description=daed is a integration solution of dae, API and UI.
-Documentation=https://github.com/daeuniverse/daed
+Documentation=https://github.com/ksong008/DaeNext
 After=network-online.target docker.service systemd-sysctl.service
 Wants=network-online.target
 Conflicts=dae.service

@@ -54,6 +54,8 @@ mod interface_policy;
 use self::interface_policy::*;
 mod start_flow;
 use self::start_flow::*;
+mod cgroup_attach;
+use self::cgroup_attach::*;
 mod startup_report;
 use self::startup_report::*;
 mod routing_map_discovery;

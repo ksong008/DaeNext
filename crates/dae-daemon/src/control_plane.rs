@@ -149,7 +149,7 @@ fn control_plane_owner_report_value(paths: &ControlPlaneOwnerPaths) -> Value {
         "benchmark_executable_now": false,
         "native_daemon_benchmark_recorded": false,
         "true_rust_native_daemon_admitted": false,
-        "final_native_admission_allowed": false,
+        "production_admission_allowed": false,
         "final_state_admission_allowed": false
     })
 }

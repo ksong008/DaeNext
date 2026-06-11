@@ -92,11 +92,19 @@ pub(super) fn insert_outbound_fingerprint_underlay_service_contract_capabilities
             json!(contract_ready),
         );
         report.insert(
-            "native_fingerprint_underlay_final_native_contract_ready".to_owned(),
+            "native_fingerprint_underlay_production_contract_ready".to_owned(),
             json!(contract_ready),
         );
         report.insert(
-            "native_fingerprint_underlay_final_native_candidate".to_owned(),
+            "native_fingerprint_underlay_production_ready".to_owned(),
+            json!(contract_ready),
+        );
+        report.insert(
+            "native_fingerprint_underlay_production_contract_ready".to_owned(),
+            json!(contract_ready),
+        );
+        report.insert(
+            "native_fingerprint_underlay_production_candidate".to_owned(),
             json!(contract_ready),
         );
         report.insert(
@@ -112,8 +120,12 @@ pub(super) fn insert_outbound_fingerprint_underlay_service_contract_capabilities
             json!(security_underlay_capability.expanded_security_underlay_complete),
         );
         report.insert(
-            "security_underlay_release_gate_ready".to_owned(),
-            json!(security_underlay_capability.release_gate_ready),
+            "security_underlay_production_ready".to_owned(),
+            json!(security_underlay_capability.production_ready),
+        );
+        report.insert(
+            "security_underlay_production_ready".to_owned(),
+            json!(security_underlay_capability.production_ready),
         );
         report.insert(
             "security_underlay_capability_report_schema".to_owned(),
@@ -134,7 +146,8 @@ pub(super) fn insert_outbound_fingerprint_underlay_service_contract_capabilities
                 "status": if security_underlay_capability.common_security_underlay_ready { "pass" } else { "blocked" },
                 "common_security_underlay_ready": security_underlay_capability.common_security_underlay_ready,
                 "expanded_security_underlay_complete": security_underlay_capability.expanded_security_underlay_complete,
-                "release_gate_ready": security_underlay_capability.release_gate_ready,
+                "production_ready": security_underlay_capability.production_ready,
+                "production_ready": security_underlay_capability.production_ready,
                 "standard_tls_underlay_contract_ready": standard_tls_underlay_contract_ready,
                 "fingerprint_aware_tls_underlay_contract_ready": fingerprint_aware_tls_underlay_contract_ready,
                 "no_silent_fingerprint_rustls_downgrade_ready": no_silent_fingerprint_rustls_downgrade_ready,

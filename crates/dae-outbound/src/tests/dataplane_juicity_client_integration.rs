@@ -69,6 +69,6 @@ fn case_juicity_client_integration_candidate_runs_all_local_slices() {
     assert!(outcome.juicity_client_capability_matrix_admitted);
     assert!(!outcome.juicity_true_quic_h3_dataplane_admitted);
     assert!(!outcome.outbound_true_dataplane_admitted);
-    assert!(!outcome.final_native_admission_allowed);
+    assert!(!outcome.production_admission_allowed);
     assert!(!outcome.final_state_admission_allowed);
 }

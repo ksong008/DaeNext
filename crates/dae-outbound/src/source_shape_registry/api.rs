@@ -8,7 +8,7 @@ pub fn source_shape_registry_contract() -> SourceShapeRegistryContract {
         expanded_source_matrix_open: true,
         expanded_source_matrix_complete: false,
         scoped_expanded_source_matrix_evidence: SCOPED_EXPANDED_SOURCE_MATRIX_EVIDENCE,
-        release_gate_may_use_current_config_matrix_as_source_matrix: false,
+        production_readiness_may_use_current_config_matrix_as_source_matrix: false,
     }
 }
 

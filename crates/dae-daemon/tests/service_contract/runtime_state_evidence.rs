@@ -1,23 +1,23 @@
 use super::*;
 #[test]
-pub(super) fn candidate_admits_final_native_native_state_only_with_final_live_evidence() {
+pub(super) fn runtime_state_admits_only_with_live_evidence() {
     let root = std::env::temp_dir().join(format!(
-        "dae-daemon-final-native-evidence-test-{}",
+        "dae-daemon-runtime-state-evidence-test-{}",
         std::process::id()
     ));
     fs::create_dir_all(&root).unwrap();
-    let evidence_path = root.join("final-native-evidence.json");
+    let evidence_path = root.join("runtime-state-evidence.json");
     fs::write(
         &evidence_path,
         serde_json::to_vec_pretty(&json!({
-            "schema": "final-native-state-evidence",
+            "schema": "runtime-state-evidence",
             "schemaVersion": 1,
             "status": "pass",
             "evidenceDate": "2026-06-06",
             "liveHost": "external-live-validation-path",
             "protocolMatrixLiveEvidenceRecorded": true,
             "nativeBenchmarkEvidenceRecorded": true,
-            "finalNativeProductPackageReady": true,
+            "productPackageReady": true,
             "nativeProductShellReady": true,
             "nativeOrchestrationReady": true,
             "nativeControlRuntimeApiServiceReleaseReady": true,
@@ -33,8 +33,8 @@ pub(super) fn candidate_admits_final_native_native_state_only_with_final_live_ev
             "finalStateValidationAppliedOnLiveHost": true,
             "finalStateCleanHostState": true,
             "artifacts": {
-                "finalStateSummary": "/tmp/final-native/final-state.json",
-                "liveHostSummary": "/tmp/final-native/summary.json"
+                "finalStateSummary": "/tmp/runtime-state/state.json",
+                "liveHostSummary": "/tmp/runtime-state/summary.json"
             },
             "checks": {
                 "ipRuleDefaultOnly": true,
@@ -48,28 +48,21 @@ pub(super) fn candidate_admits_final_native_native_state_only_with_final_live_ev
 
     let output = Command::new(binary())
         .arg("service-contract")
-        .env("FINAL_NATIVE_STATE_EVIDENCE", &evidence_path)
+        .env("RUNTIME_STATE_EVIDENCE", &evidence_path)
         .output()
         .unwrap();
     assert!(output.status.success());
     let report: Value = serde_json::from_slice(&output.stdout).unwrap();
-    assert!(report["final_native_state_ready"].as_bool().unwrap());
-    assert!(
-        report["final_native_live_host_contract_ready"]
-            .as_bool()
-            .unwrap()
-    );
-    assert!(
-        report["final_native_final_state_artifact_ready"]
-            .as_bool()
-            .unwrap()
-    );
+    assert!(report["runtime_state_ready"].as_bool().unwrap());
+    assert!(report["live_host_contract_ready"].as_bool().unwrap());
+    assert!(report["state_artifact_ready"].as_bool().unwrap());
     assert_eq!(
-        report["final_native_state_typed_report"]["status"]
+        report["runtime_state_typed_report"]["status"]
             .as_str()
             .unwrap(),
         "pass"
     );
+    assert_eq!(report["runtime_state_ready"], report["runtime_state_ready"]);
 
     let blocked = Command::new(binary())
         .arg("service-contract")
@@ -77,13 +70,9 @@ pub(super) fn candidate_admits_final_native_native_state_only_with_final_live_ev
         .unwrap();
     assert!(blocked.status.success());
     let blocked_report: Value = serde_json::from_slice(&blocked.stdout).unwrap();
+    assert!(!blocked_report["runtime_state_ready"].as_bool().unwrap());
     assert!(
-        !blocked_report["final_native_state_ready"]
-            .as_bool()
-            .unwrap()
-    );
-    assert!(
-        !blocked_report["final_native_live_host_contract_ready"]
+        !blocked_report["live_host_contract_ready"]
             .as_bool()
             .unwrap()
     );

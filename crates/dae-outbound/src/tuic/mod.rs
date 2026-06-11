@@ -1,10 +1,10 @@
 pub mod contract;
-pub mod dataplane;
+mod dataplane;
 pub mod link;
-pub mod quic_loopback;
-pub mod runtime;
+mod quic_loopback;
+mod runtime;
 mod tls;
-pub mod underlay;
+mod underlay;
 mod wire;
 
 pub use dataplane::{
@@ -26,3 +26,4 @@ pub use runtime::{
     TuicAuthReport, authenticate_tuic_connection, build_tuic_runtime_client_config,
     write_tuic_connect_request,
 };
+pub use underlay::{TuicUnderlayAdmissionContract, admission_contract};

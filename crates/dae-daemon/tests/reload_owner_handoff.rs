@@ -44,7 +44,7 @@ fn reload_owner_handoff_smoke_is_environment_aware() {
             .as_bool()
             .unwrap()
     );
-    assert!(!report["final_native_admission_allowed"].as_bool().unwrap());
+    assert!(!report["production_admission_allowed"].as_bool().unwrap());
     let _ = std::fs::remove_dir_all(root);
 }
 

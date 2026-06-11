@@ -47,7 +47,7 @@ pub(super) fn resident_full_matrix_config_rows(
                 missing.is_empty(),
             );
             let native_ready = generated_solver["nativeReady"].clone();
-            let final_native_ready = generated_solver["finalNativeReady"].clone();
+            let production_ready = generated_solver["productionReady"].clone();
             json!({
                 "handler": entry.handler,
                 "formal_matrix_handler": entry.formal_matrix_handler,
@@ -72,7 +72,7 @@ pub(super) fn resident_full_matrix_config_rows(
                 "fingerprint_behavior": entry.fingerprint_behavior,
                 "generated_solver": generated_solver,
                 "native_ready": native_ready,
-                "final_native_ready": final_native_ready,
+                "production_ready": production_ready,
                 "missing": missing,
                 "candidates": candidate_reports,
             })
@@ -176,7 +176,7 @@ pub(super) fn resident_expanded_source_matrix_row(
         "runtimeSelectionLedger": row.runtime_selection.to_value(),
         "capabilityLedger": row.capability.to_value(),
         "expandedLiveMatrixLedger": row.expanded_live_matrix.to_value(),
-        "releaseGateReconciliation": row.release_gate.to_value(),
+        "productionReadinessReconciliation": row.production_readiness.to_value(),
         "candidates": candidate_reports,
         "sourceRegistryRow": (*row).to_value(),
     })
@@ -348,7 +348,7 @@ pub(super) fn resident_matrix_solver_value(
     let benchmark_ready = false;
     let live_ready = executable_graph_ready && remote_live_matrix && remote_live_matrix_complete;
     let native_ready = live_ready && benchmark_ready;
-    let final_native_ready = native_ready && entry.native_executor_ready;
+    let production_ready = native_ready && entry.native_executor_ready;
     let blockers = resident_matrix_solver_blockers(
         parser_covered,
         normalized_graph_ready,
@@ -371,7 +371,7 @@ pub(super) fn resident_matrix_solver_value(
         "benchmarkReady": benchmark_ready,
         "liveReady": live_ready,
         "nativeReady": native_ready,
-        "finalNativeReady": final_native_ready,
+        "productionReady": production_ready,
         "blockers": blockers,
     })
 }

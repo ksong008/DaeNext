@@ -6,7 +6,7 @@ pub(super) fn assert_native_owner_and_deep_area(report: &serde_json::Value) {
         "daemon-runtime-native-owner"
     );
     assert!(
-        !report["daemon_runtime_native_owner"]["final_native_admission_allowed"]
+        !report["daemon_runtime_native_owner"]["production_admission_allowed"]
             .as_bool()
             .unwrap()
     );
@@ -59,7 +59,7 @@ pub(super) fn assert_native_owner_and_deep_area(report: &serde_json::Value) {
             .unwrap()
     );
     assert!(
-        !report["datapath_outbound_ebpf_deep_area"]["final_native_admission_allowed"]
+        !report["datapath_outbound_ebpf_deep_area"]["production_admission_allowed"]
             .as_bool()
             .unwrap()
     );

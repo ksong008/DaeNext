@@ -4,9 +4,11 @@ members = [
     "crates/dae-config",
     "crates/dae-config-util",
     "crates/dae-daemon",
+    "crates/dae-product",
     "crates/dae-control",
     "crates/dae-core-types",
     "crates/dae-bench",
+    "crates/dae-build-support",
     "crates/dae-aya-bpf-loader",
     "crates/dae-datapath",
     "crates/dae-dns",
@@ -32,7 +34,7 @@ tokio-rustls = { git = "https://github.com/Watfaq/tokio-rustls.git", branch = "w
 version = "0.1.0"
 edition = "2024"
 license = "AGPL-3.0-only"
-repository = "https://github.com/daeuniverse/dae"
+repository = "https://github.com/ksong008/DaeNext"
 
 [workspace.dependencies]
 aes = "0.8"
@@ -45,6 +47,7 @@ boring = "5.1"
 bytes = "1"
 chacha20poly1305 = "0.10"
 dae-cli = { path = "crates/dae-cli" }
+dae-build-support = { path = "crates/dae-build-support" }
 dae-config-util = { path = "crates/dae-config-util" }
 dae-config = { path = "crates/dae-config" }
 dae-daemon = { path = "crates/dae-daemon", default-features = false }
@@ -59,6 +62,7 @@ dae-geodata = { path = "crates/dae-geodata" }
 dae-golden = { path = "crates/dae-golden" }
 dae-netutil = { path = "crates/dae-netutil" }
 dae-outbound = { path = "crates/dae-outbound" }
+dae-product = { path = "crates/dae-product" }
 dae-routing = { path = "crates/dae-routing" }
 dae-sniffing = { path = "crates/dae-sniffing" }
 dae-sysdump = { path = "crates/dae-sysdump" }

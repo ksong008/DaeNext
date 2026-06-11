@@ -60,7 +60,7 @@ fn case_hysteria2_true_quic_dataplane_smoke_admits_hysteria2_only() {
     assert!(!outcome.quic_h3_family_true_dataplane_admitted);
     assert!(!outcome.outbound_true_dataplane_admitted);
     assert!(!outcome.native_daemon_benchmark_recorded);
-    assert!(!outcome.final_native_admission_allowed);
+    assert!(!outcome.production_admission_allowed);
     assert!(!outcome.host_mutation_allowed);
     assert!(!outcome.final_state_admission_allowed);
     assert!(!outcome.true_rust_native_daemon_admitted);

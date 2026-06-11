@@ -1,8 +1,8 @@
 pub mod contract;
-pub mod dataplane;
+mod dataplane;
 pub mod link;
-pub mod session_reuse_dataplane;
-pub mod udp_packet_dataplane;
+mod session_reuse_dataplane;
+mod udp_packet_dataplane;
 
 pub use dataplane::{
     AnyTlsFrame, AnyTlsSessionFrameExchangeReport, decode_frame, read_frame_from_stream,

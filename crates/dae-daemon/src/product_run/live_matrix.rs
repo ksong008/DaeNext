@@ -110,7 +110,7 @@ pub(super) fn production_runtime_live_matrix_json(
         "schema": "rust-native-production-runtime-live-matrix",
         "formal_surface": "rust-native-production-runtime-live-matrix",
         "matrix_complete": matrix_complete,
-        "final_native_admission_allowed_by_this_matrix": matrix_complete,
+        "production_admission_allowed_by_this_matrix": matrix_complete,
         "host_write_performed": false,
         "host_mutation_performed": false,
         "rows": rows,

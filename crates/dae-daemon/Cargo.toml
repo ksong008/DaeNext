@@ -29,6 +29,7 @@ dae-engine.workspace = true
 dae-geodata.workspace = true
 dae-netutil.workspace = true
 dae-outbound.workspace = true
+dae-product.workspace = true
 dae-routing.workspace = true
 dae-sniffing.workspace = true
 boring.workspace = true
@@ -54,3 +55,6 @@ tikv-jemalloc-ctl = { workspace = true, optional = true }
 tikv-jemalloc-sys = { workspace = true, optional = true }
 url.workspace = true
 webpki-roots.workspace = true
+
+[build-dependencies]
+dae-build-support.workspace = true

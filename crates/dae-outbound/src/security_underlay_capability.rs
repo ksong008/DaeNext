@@ -7,7 +7,7 @@ pub struct SecurityUnderlayCapabilityContract {
     pub rows: &'static [SecurityUnderlayCapabilityRow],
     pub common_security_underlay_ready: bool,
     pub expanded_security_underlay_complete: bool,
-    pub release_gate_ready: bool,
+    pub production_ready: bool,
 }
 
 impl SecurityUnderlayCapabilityContract {
@@ -17,7 +17,7 @@ impl SecurityUnderlayCapabilityContract {
             "schemaVersion": self.schema_version,
             "commonSecurityUnderlayReady": self.common_security_underlay_ready,
             "expandedSecurityUnderlayComplete": self.expanded_security_underlay_complete,
-            "releaseGateReady": self.release_gate_ready,
+            "productionReady": self.production_ready,
             "rowCount": self.rows.len(),
             "rows": self.rows.iter().map(|row| row.to_value()).collect::<Vec<_>>(),
         })
@@ -66,7 +66,7 @@ pub fn security_underlay_capability_contract() -> SecurityUnderlayCapabilityCont
         rows: security_underlay_capability_rows(),
         common_security_underlay_ready: true,
         expanded_security_underlay_complete: true,
-        release_gate_ready: true,
+        production_ready: true,
     }
 }
 

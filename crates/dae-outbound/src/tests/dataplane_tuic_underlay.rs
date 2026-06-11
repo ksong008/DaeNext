@@ -2,7 +2,7 @@ use super::*;
 
 #[test]
 fn case_tuic_underlay_admission_contract_preserves_mark_and_drops_tcp_mptcp() {
-    let contract = tuic::underlay::admission_contract(1234, true);
+    let contract = tuic::admission_contract(1234, true);
 
     assert_eq!(contract.tcp_request.input_network, "tcp");
     assert_eq!(contract.tcp_request.underlay_network, "udp");

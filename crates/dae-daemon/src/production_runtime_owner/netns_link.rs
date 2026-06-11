@@ -2,7 +2,8 @@ use serde_json::{Value, json};
 
 use super::command::{CommandSpec, run_step};
 
-const NETNS_LINK_ENV: &str = "DAE_NETNS_LINK";
+const NETNS_LINK_ENV: &str = "NETNS_LINK";
+const NETNS_LINK_LEGACY_ENV: &str = "DAE_NETNS_LINK";
 const NETNS_LINK_AUTO_POLICY: &str = "netkit_l2_scrub_none_then_compat_netkit_l2_then_veth";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -34,13 +35,14 @@ pub fn parse_netns_link_mode(raw: &str) -> Result<NetnsLinkMode, String> {
         "veth" => Ok(NetnsLinkMode::Veth),
         "netkit" => Ok(NetnsLinkMode::Netkit),
         _ => Err(format!(
-            "invalid {NETNS_LINK_ENV}={raw:?}, want auto, netkit, or veth"
+            "invalid netns link mode {raw:?}, want auto, netkit, or veth"
         )),
     }
 }
 
 pub(super) fn resolve_netns_link_mode_from_env() -> Result<NetnsLinkMode, String> {
     std::env::var(NETNS_LINK_ENV)
+        .or_else(|_| std::env::var(NETNS_LINK_LEGACY_ENV))
         .map(|raw| parse_netns_link_mode(&raw))
         .unwrap_or(Ok(NetnsLinkMode::Auto))
 }

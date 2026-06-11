@@ -115,11 +115,6 @@ pub fn allocator_live_heap_bytes() -> Option<u64> {
     allocator_stats_snapshot().map(|stats| stats.allocated)
 }
 
-pub fn allocator_stats_json() -> Value {
-    let snapshot = allocator_stats_snapshot();
-    allocator_stats_json_from(snapshot.as_ref())
-}
-
 pub fn allocator_stats_json_from(snapshot: Option<&AllocatorStatsSnapshot>) -> Value {
     match snapshot {
         Some(stats) => json!({
@@ -136,11 +131,6 @@ pub fn allocator_stats_json_from(snapshot: Option<&AllocatorStatsSnapshot>) -> V
 
 pub fn allocator_stats_snapshot() -> Option<AllocatorStatsSnapshot> {
     allocator_stats_bytes().and_then(AllocatorStatsSnapshot::from_bytes)
-}
-
-pub fn allocator_derived_stats_json(anonymous_rss_bytes: u64) -> Value {
-    let snapshot = allocator_stats_snapshot();
-    allocator_derived_stats_json_from(snapshot.as_ref(), anonymous_rss_bytes)
 }
 
 pub fn allocator_derived_stats_json_from(

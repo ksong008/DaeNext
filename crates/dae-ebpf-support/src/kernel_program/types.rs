@@ -52,14 +52,14 @@ pub struct KernelProgramFeasibilityReport {
     pub rust_trace_kprobe_covered: usize,
     pub rust_tproxy_runtime_admitted: bool,
     pub trace_rust_native_admitted: bool,
-    pub final_native_admission_allowed: bool,
-    pub formal_kernel_program_parity_stage_required: bool,
+    pub production_admission_allowed: bool,
+    pub kernel_program_parity_required_before_production: bool,
     pub external_ebpf_tproxy_object_required: bool,
     pub external_ebpf_trace_object_required: bool,
     pub tc_command_backend_required: bool,
     pub native_userspace_control_plane_ready: bool,
-    pub native_bpf_loader_ready_by_this_stage: bool,
-    pub external_bpf_dependency_absent_by_this_stage: bool,
+    pub native_bpf_loader_production_ready: bool,
+    pub external_bpf_dependency_absent_before_production: bool,
     pub param_model: &'static str,
     pub tproxy_coverage: Vec<KernelProgramCoverageLine>,
     pub trace_coverage: Vec<KernelProgramCoverageLine>,
@@ -175,7 +175,7 @@ impl KernelProgramParityEvidence {
 pub struct KernelProgramParityAdmissionReport {
     pub schema: &'static str,
     pub admitted: bool,
-    pub final_native_admission_allowed: bool,
+    pub production_admission_allowed: bool,
     pub external_ebpf_tproxy_object_absent: bool,
     pub external_ebpf_trace_object_absent: bool,
     pub external_bpf_dependency_absent: bool,
@@ -217,7 +217,7 @@ pub struct TraceDiagnosticGateReport {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum KernelProgramFinalNativeBlocker {
+pub enum KernelProgramProductionBlocker {
     KernelProgramParityMissing,
     TproxyDataplaneAdmissionMissing,
     TraceCoreSideloadDisabled,
@@ -226,7 +226,7 @@ pub enum KernelProgramFinalNativeBlocker {
     FinalStateCertificationMissing,
 }
 
-impl KernelProgramFinalNativeBlocker {
+impl KernelProgramProductionBlocker {
     pub const fn as_str(self) -> &'static str {
         match self {
             Self::KernelProgramParityMissing => "kernel_program_parity_missing",
@@ -240,12 +240,12 @@ impl KernelProgramFinalNativeBlocker {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct KernelProgramFinalNativeEvidence {
+pub struct KernelProgramProductionEvidence {
     pub explicit_user_approval: bool,
     pub final_state_certified: bool,
 }
 
-impl KernelProgramFinalNativeEvidence {
+impl KernelProgramProductionEvidence {
     pub const fn read_only() -> Self {
         Self {
             explicit_user_approval: false,
@@ -262,10 +262,10 @@ impl KernelProgramFinalNativeEvidence {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub struct KernelProgramFinalNativeGateReport {
+pub struct KernelProgramProductionGateReport {
     pub schema: &'static str,
     pub admitted: bool,
-    pub final_native_admission_allowed: bool,
+    pub production_admission_allowed: bool,
     pub external_ebpf_tproxy_object_absent: bool,
     pub external_ebpf_trace_object_absent: bool,
     pub external_bpf_dependency_absent: bool,
@@ -275,10 +275,10 @@ pub struct KernelProgramFinalNativeGateReport {
     pub external_ebpf_trace_object_required: bool,
     pub external_trace_dependency_required: bool,
     pub native_userspace_control_plane_ready: bool,
-    pub final_native_scope: &'static str,
+    pub production_scope: &'static str,
     pub explicit_user_approval_recorded: bool,
     pub final_state_certified: bool,
-    pub blockers: Vec<KernelProgramFinalNativeBlocker>,
+    pub blockers: Vec<KernelProgramProductionBlocker>,
     pub missing_parity_checks: Vec<KernelProgramParityCheck>,
     pub trace_restore_gate: &'static str,
 }

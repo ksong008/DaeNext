@@ -1,15 +1,15 @@
 pub mod contract;
-pub mod dataplane;
-pub mod grpc_dataplane;
-pub mod grpc_http2_dataplane;
-pub mod httpupgrade_tls_dataplane;
-pub mod inner_shadowsocks_dataplane;
+mod dataplane;
+mod grpc_dataplane;
+mod grpc_http2_dataplane;
+mod httpupgrade_tls_dataplane;
+mod inner_shadowsocks_dataplane;
 pub mod link;
 pub mod metadata;
 pub mod packet;
-pub mod tls_dataplane;
-pub mod websocket_tls_dataplane;
-pub mod wss_inner_shadowsocks_dataplane;
+mod tls_dataplane;
+mod websocket_tls_dataplane;
+mod wss_inner_shadowsocks_dataplane;
 
 pub use dataplane::{
     TrojanRequestHeader, TrojanTcpExchangeReport, TrojanTcpRequest, TrojanUdpOverTcpExchangeReport,

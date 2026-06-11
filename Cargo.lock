@@ -503,6 +503,7 @@ dependencies = [
 name = "dae-aya-bpf-loader"
 version = "0.1.0"
 dependencies = [
+ "dae-build-support",
  "dae-control",
  "dae-ebpf-support",
  "fastrand",
@@ -533,6 +534,10 @@ dependencies = [
  "dae-trace",
  "serde_json",
 ]
+
+[[package]]
+name = "dae-build-support"
+version = "0.1.0"
 
 [[package]]
 name = "dae-cli"
@@ -605,6 +610,7 @@ dependencies = [
  "boring",
  "bytes",
  "dae-aya-bpf-loader",
+ "dae-build-support",
  "dae-config",
  "dae-control",
  "dae-core-types",
@@ -615,6 +621,7 @@ dependencies = [
  "dae-geodata",
  "dae-netutil",
  "dae-outbound",
+ "dae-product",
  "dae-routing",
  "dae-sniffing",
  "fastrand",
@@ -740,6 +747,13 @@ dependencies = [
  "tokio",
  "url",
  "webpki-roots",
+]
+
+[[package]]
+name = "dae-product"
+version = "0.1.0"
+dependencies = [
+ "serde_json",
 ]
 
 [[package]]

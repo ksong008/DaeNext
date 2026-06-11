@@ -4,7 +4,7 @@ use std::time::Instant;
 use dae_trace::{SkbTraceTracker, TraceEventRecord, parse_ringbuf_size_bytes};
 
 fn main() {
-    let iters = std::env::var("DAE_STAGE8_BENCH_ITERS")
+    let iters = std::env::var("TRACE_BENCH_ITERS")
         .ok()
         .and_then(|value| value.parse::<u64>().ok())
         .unwrap_or(1_000_000);

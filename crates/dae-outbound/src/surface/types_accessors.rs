@@ -62,7 +62,7 @@ pub struct RuntimeOwnershipContract {
     pub path: &'static str,
     pub surface: RuntimeOwnerSurface,
     pub ownership: RuntimeOwnership,
-    pub final_native_product_path: bool,
+    pub production_state_product_path: bool,
     pub local_runtime_allowed: bool,
 }
 

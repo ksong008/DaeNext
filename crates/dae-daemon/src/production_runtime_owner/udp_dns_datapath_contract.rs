@@ -87,8 +87,10 @@ pub(super) fn udp_dns_datapath_contract_json() -> Value {
             "requires_active_udp_evidence": true,
             "requires_active_dns_evidence": true,
             "requires_udp_dns_benchmarks": true,
-            "final_native_evidence_required_until_admitted": true,
-            "final_native_admission_allowed_by_this_contract": false
+            "runtime_state_evidence_required_until_admitted": true,
+            "production_evidence_required_until_admitted": true,
+            "production_admission_allowed_by_this_contract": false,
+            "production_admission_allowed_by_this_contract": false
         }
     })
 }
@@ -143,7 +145,7 @@ mod tests {
                 .unwrap()
         );
         assert!(
-            contract["runtime_admission"]["final_native_evidence_required_until_admitted"]
+            contract["runtime_admission"]["production_evidence_required_until_admitted"]
                 .as_bool()
                 .unwrap()
         );

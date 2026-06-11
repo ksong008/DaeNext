@@ -9,10 +9,10 @@ use std::{fs, io};
 use dae_core_types::reload::{RELOAD_DONE, RELOAD_ERROR};
 use serde_json::{Value, json};
 
-#[path = "service_contract/candidate_capabilities.rs"]
-mod candidate_capabilities;
-use self::candidate_capabilities::*;
-#[path = "service_contract/final_native_evidence.rs"]
-mod final_native_evidence;
+#[path = "service_contract/production_capabilities.rs"]
+mod production_capabilities;
+use self::production_capabilities::*;
 #[path = "service_contract/resident_service.rs"]
 mod resident_service;
+#[path = "service_contract/runtime_state_evidence.rs"]
+mod runtime_state_evidence;

@@ -50,7 +50,7 @@ pub(super) fn assert_runtime_defaults(report: &serde_json::Value) {
             .unwrap()
     );
     assert!(
-        !report["generic_udp_dns_final_native_admission_allowed"]
+        !report["generic_udp_dns_production_admission_allowed"]
             .as_bool()
             .unwrap()
     );

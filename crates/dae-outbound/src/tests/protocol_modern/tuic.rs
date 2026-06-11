@@ -120,8 +120,8 @@ pub(super) fn tuic_rust_native_matches_nativelden_fixture() {
         udp_relay["protocol_effective_mode"].as_str().unwrap()
     );
     assert_eq!(
-        crate::tuic::contract::UDP_RELAY_MODE_QUIC_FIXME_DEFERRED,
-        udp_relay["quic_mode_fixme_deferred"].as_bool().unwrap()
+        crate::tuic::contract::UDP_RELAY_MODE_QUIC_DEFERRED,
+        udp_relay["quic_mode_deferred"].as_bool().unwrap()
     );
 
     let underlay = &fixture["underlay_contract"];

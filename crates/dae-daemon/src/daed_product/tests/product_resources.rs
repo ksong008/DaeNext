@@ -197,7 +197,7 @@ fn signed_test_token(user: &UserRecord, alg: &str, payload: Value) -> String {
 }
 
 #[test]
-pub(crate) fn service_contract_declares_daed_db_with_final_native_blocked() {
+pub(crate) fn service_contract_declares_daed_db_with_production_blocked() {
     let report = daed_service_contract("test");
     assert_eq!(
         report["primary_state_store"].as_str().unwrap(),
@@ -213,13 +213,13 @@ pub(crate) fn service_contract_declares_daed_db_with_final_native_blocked() {
             .unwrap()
     );
     assert!(
-        !report["final_native_live_host_contract_ready"]
+        !report["production_live_host_contract_ready"]
             .as_bool()
             .unwrap()
     );
-    assert!(!report["final_native_state_ready"].as_bool().unwrap());
+    assert!(!report["runtime_state_ready"].as_bool().unwrap());
     assert!(
-        !report["final_native_state_remaining_work"]
+        !report["runtime_state_remaining_work"]
             .as_array()
             .unwrap()
             .is_empty()

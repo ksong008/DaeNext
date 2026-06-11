@@ -1,11 +1,11 @@
 pub mod contract;
-pub mod dataplane;
+mod dataplane;
 pub mod link;
 pub mod port_hopping;
-pub mod quic_loopback;
-pub mod runtime;
+mod quic_loopback;
+mod runtime;
 mod tls;
-pub mod underlay;
+mod underlay;
 mod wire;
 
 pub use dataplane::{

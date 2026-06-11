@@ -1,6 +1,6 @@
 pub(crate) struct ProductRunRemainingBlockerFields {
     pub(super) resident_dataplane_admission_ready: bool,
-    pub(super) final_native_daemon_admitted: bool,
+    pub(super) production_daemon_admitted: bool,
     pub(super) production_dataplane_admitted: bool,
     pub(super) production_dataplane_harness_passed: bool,
     pub(super) reload_runtime_parity_passed: bool,
@@ -17,7 +17,7 @@ pub(crate) fn product_run_remaining_blockers(
         remaining_blockers
             .push("resident userspace dataplane is disabled by configuration override");
     }
-    if fields.final_native_daemon_admitted {
+    if fields.production_daemon_admitted {
         return remaining_blockers;
     }
     if fields.production_dataplane_admitted && !fields.reload_runtime_parity_passed {

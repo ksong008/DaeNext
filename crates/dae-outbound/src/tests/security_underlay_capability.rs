@@ -8,7 +8,7 @@ fn security_underlay_capability_admits_common_underlays_only() {
     assert_eq!(contract.schema_version, 1);
     assert!(contract.common_security_underlay_ready);
     assert!(contract.expanded_security_underlay_complete);
-    assert!(contract.release_gate_ready);
+    assert!(contract.production_ready);
 
     for expected in [
         "standard-tls-common-underlay",

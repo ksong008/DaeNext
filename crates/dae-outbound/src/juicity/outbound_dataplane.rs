@@ -98,7 +98,7 @@ pub struct JuicityOutboundDataplaneReport {
     pub quic_h3_family_true_dataplane_admitted: bool,
     pub outbound_true_dataplane_admitted: bool,
     pub native_daemon_benchmark_recorded: bool,
-    pub final_native_admission_allowed: bool,
+    pub production_admission_allowed: bool,
     pub final_state_admission_allowed: bool,
 }
 
@@ -247,7 +247,7 @@ pub fn run_outbound_dataplane_smoke(
         quic_h3_family_true_dataplane_admitted: false,
         outbound_true_dataplane_admitted: false,
         native_daemon_benchmark_recorded: false,
-        final_native_admission_allowed: false,
+        production_admission_allowed: false,
         final_state_admission_allowed: false,
     })
 }

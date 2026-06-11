@@ -1,6 +1,6 @@
 use super::*;
 #[test]
-pub(super) fn daemon_identity_is_final_native_product() {
+pub(super) fn daemon_identity_is_production_product() {
     let report = daemon_identity("test-version");
     assert_eq!(report["name"].as_str().unwrap(), "daed");
     assert_eq!(report["crate"].as_str().unwrap(), "dae-daemon");
@@ -18,11 +18,11 @@ pub(super) fn daemon_identity_is_final_native_product() {
             .unwrap()
     );
     assert!(report["rust_run_entrypoint_exists"].as_bool().unwrap());
-    assert!(report["final_native_admission_allowed"].as_bool().unwrap());
+    assert!(report["production_admission_allowed"].as_bool().unwrap());
 }
 
 #[test]
-pub(super) fn identity_preflight_reports_final_native_identity_ready() {
+pub(super) fn identity_preflight_reports_production_identity_ready() {
     let report = identity_preflight_report("test-version");
     assert!(report["rust_daemon_identity_scaffolded"].as_bool().unwrap());
     assert!(
@@ -55,7 +55,7 @@ pub(super) fn daemon_runner_identity_preflight_command_outputs_json() {
     assert_eq!(output.stderr, "");
     let json: Value = serde_json::from_str(&output.stdout).unwrap();
     assert!(json["rust_daemon_identity_scaffolded"].as_bool().unwrap());
-    assert!(json["final_native_admission_allowed"].as_bool().unwrap());
+    assert!(json["production_admission_allowed"].as_bool().unwrap());
 }
 
 #[test]

@@ -183,7 +183,7 @@ pub(super) fn insert_resident_live_adapter_matrix_service_contract_capabilities(
             json!({
                 "scope": "live resident default adapter from selected node link into TCP/UDP tproxy workers",
                 "formal_matrix_dependency": "dae-outbound production matrix remains parser/dataplane/underlay evidence; this resident matrix records which handlers are actually wired into the live default adapter",
-                "final_native_admission_policy": "final-native admission cannot treat the formal outbound matrix as sufficient while this matrix is not pass",
+                "production_admission_policy": "production admission cannot treat the formal outbound matrix as sufficient while this matrix is not pass",
                 "validation_boundary": "external-client-through-resident-proxy",
             }),
         );

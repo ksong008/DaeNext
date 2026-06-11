@@ -111,7 +111,7 @@ pub struct JuicityClientIntegrationReport {
     pub juicity_client_capability_matrix_admitted: bool,
     pub juicity_true_quic_h3_dataplane_admitted: bool,
     pub outbound_true_dataplane_admitted: bool,
-    pub final_native_admission_allowed: bool,
+    pub production_admission_allowed: bool,
     pub final_state_admission_allowed: bool,
 }
 
@@ -290,7 +290,7 @@ fn build_client_integration_report(
         juicity_client_capability_matrix_admitted: capability_matrix_admitted,
         juicity_true_quic_h3_dataplane_admitted: false,
         outbound_true_dataplane_admitted: false,
-        final_native_admission_allowed: false,
+        production_admission_allowed: false,
         final_state_admission_allowed: false,
     })
 }

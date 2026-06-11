@@ -388,7 +388,7 @@ pub(super) fn assert_current_config_matrix_scope_contract(report: &Value) {
             .unwrap()
     );
     assert!(
-        !report["full_matrix_release_gate_source_ready"]
+        !report["full_matrix_production_source_ready"]
             .as_bool()
             .unwrap()
     );
@@ -422,7 +422,7 @@ pub(super) fn assert_current_config_matrix_scope_contract(report: &Value) {
     assert!(contract["expandedSourceMatrixOpen"].as_bool().unwrap());
     assert!(!contract["expandedSourceMatrixComplete"].as_bool().unwrap());
     assert!(
-        !contract["releaseGateMayUseAsSourceMatrix"]
+        !contract["productionReadinessMayUseAsSourceMatrix"]
             .as_bool()
             .unwrap()
     );

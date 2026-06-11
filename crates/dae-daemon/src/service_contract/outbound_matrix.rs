@@ -53,10 +53,10 @@ pub(super) fn insert_outbound_production_matrix_service_contract_capabilities(re
         .collect::<Vec<_>>();
     let contract_ready = matrix.matrix_ready;
     let expanded_source_matrix_complete = source_registry.expanded_source_matrix_complete;
-    let expanded_source_matrix_release_gate_ready = expanded_source_matrix_complete;
+    let expanded_source_matrix_production_ready = expanded_source_matrix_complete;
     let expanded_source_matrix_final_state_ready = expanded_source_matrix_complete;
     let scoped_source_evidence = source_registry.scoped_expanded_source_matrix_evidence;
-    let scoped_expanded_source_matrix_complete = scoped_source_evidence.release_gate_ready
+    let scoped_expanded_source_matrix_complete = scoped_source_evidence.production_ready
         && scoped_source_evidence.all_pass
         && scoped_source_evidence.large_page_all_pass
         && scoped_source_evidence.proxy_evidence_all_pass
@@ -65,20 +65,20 @@ pub(super) fn insert_outbound_production_matrix_service_contract_capabilities(re
         && !scoped_source_evidence.raw_links_retained
         && !scoped_source_evidence.raw_bodies_retained
         && !scoped_source_evidence.raw_state_retained;
-    let scoped_expanded_source_matrix_release_gate_ready = scoped_expanded_source_matrix_complete;
+    let scoped_expanded_source_matrix_production_ready = scoped_expanded_source_matrix_complete;
     let scoped_expanded_source_matrix_final_state_ready = scoped_expanded_source_matrix_complete;
     let excluded_stream_wrapper_source_matrix_typed_report =
         excluded_stream_wrapper_source_matrix_typed_report(
             source_registry.rows,
             &["xhttp"],
-            scoped_expanded_source_matrix_release_gate_ready,
+            scoped_expanded_source_matrix_production_ready,
         );
     let excluded_stream_wrapper_source_matrix_complete =
         excluded_stream_wrapper_source_matrix_typed_report["complete"]
             .as_bool()
             .unwrap_or(false);
-    let excluded_stream_wrapper_source_matrix_release_gate_ready =
-        excluded_stream_wrapper_source_matrix_typed_report["release_gate_ready"]
+    let excluded_stream_wrapper_source_matrix_production_ready =
+        excluded_stream_wrapper_source_matrix_typed_report["production_ready"]
             .as_bool()
             .unwrap_or(false);
     let excluded_stream_wrapper_source_matrix_final_state_ready =
@@ -129,6 +129,10 @@ pub(super) fn insert_outbound_production_matrix_service_contract_capabilities(re
         );
         report.insert(
             "outbound_production_matrix_typed_report_ready".to_owned(),
+            json!(contract_ready),
+        );
+        report.insert(
+            "outbound_native_executor_production_ready".to_owned(),
             json!(contract_ready),
         );
         report.insert(
@@ -196,8 +200,12 @@ pub(super) fn insert_outbound_production_matrix_service_contract_capabilities(re
             json!(true),
         );
         report.insert(
-            "expanded_source_matrix_release_gate_ready".to_owned(),
-            json!(expanded_source_matrix_release_gate_ready),
+            "expanded_source_matrix_production_ready".to_owned(),
+            json!(expanded_source_matrix_production_ready),
+        );
+        report.insert(
+            "expanded_source_matrix_production_ready".to_owned(),
+            json!(expanded_source_matrix_production_ready),
         );
         report.insert(
             "expanded_source_matrix_final_state_ready".to_owned(),
@@ -216,8 +224,12 @@ pub(super) fn insert_outbound_production_matrix_service_contract_capabilities(re
             json!(excluded_stream_wrapper_source_matrix_complete),
         );
         report.insert(
-            "excluded_stream_wrapper_source_matrix_release_gate_ready".to_owned(),
-            json!(excluded_stream_wrapper_source_matrix_release_gate_ready),
+            "excluded_stream_wrapper_source_matrix_production_ready".to_owned(),
+            json!(excluded_stream_wrapper_source_matrix_production_ready),
+        );
+        report.insert(
+            "excluded_stream_wrapper_source_matrix_production_ready".to_owned(),
+            json!(excluded_stream_wrapper_source_matrix_production_ready),
         );
         report.insert(
             "excluded_stream_wrapper_source_matrix_final_state_ready".to_owned(),
@@ -242,8 +254,12 @@ pub(super) fn insert_outbound_production_matrix_service_contract_capabilities(re
             json!(scoped_expanded_source_matrix_complete),
         );
         report.insert(
-            "scoped_expanded_source_matrix_release_gate_ready".to_owned(),
-            json!(scoped_expanded_source_matrix_release_gate_ready),
+            "scoped_expanded_source_matrix_production_ready".to_owned(),
+            json!(scoped_expanded_source_matrix_production_ready),
+        );
+        report.insert(
+            "scoped_expanded_source_matrix_production_ready".to_owned(),
+            json!(scoped_expanded_source_matrix_production_ready),
         );
         report.insert(
             "scoped_expanded_source_matrix_final_state_ready".to_owned(),
@@ -281,7 +297,8 @@ pub(super) fn insert_outbound_production_matrix_service_contract_capabilities(re
                 "raw_links_retained": scoped_source_evidence.raw_links_retained,
                 "raw_bodies_retained": scoped_source_evidence.raw_bodies_retained,
                 "raw_state_retained": scoped_source_evidence.raw_state_retained,
-                "release_gate_ready": scoped_expanded_source_matrix_release_gate_ready,
+                "production_ready": scoped_expanded_source_matrix_production_ready,
+                "production_ready": scoped_expanded_source_matrix_production_ready,
                 "final_state_ready": scoped_expanded_source_matrix_final_state_ready,
                 "current_report_schema": true,
             }),
@@ -294,10 +311,13 @@ pub(super) fn insert_outbound_production_matrix_service_contract_capabilities(re
                 "source_shape_registry_open": source_registry.source_shape_registry_open,
                 "expanded_source_matrix_open": source_registry.expanded_source_matrix_open,
                 "expanded_source_matrix_complete": expanded_source_matrix_complete,
-                "release_gate_ready": expanded_source_matrix_release_gate_ready,
+                "production_ready": expanded_source_matrix_production_ready,
+                "production_ready": expanded_source_matrix_production_ready,
                 "final_state_ready": expanded_source_matrix_final_state_ready,
-                "scoped_release_gate_ready": scoped_expanded_source_matrix_release_gate_ready,
-                "excluded_stream_wrapper_source_matrix_release_gate_ready": excluded_stream_wrapper_source_matrix_release_gate_ready,
+                "scoped_production_ready": scoped_expanded_source_matrix_production_ready,
+                "scoped_production_ready": scoped_expanded_source_matrix_production_ready,
+                "excluded_stream_wrapper_source_matrix_production_ready": excluded_stream_wrapper_source_matrix_production_ready,
+                "excluded_stream_wrapper_source_matrix_production_ready": excluded_stream_wrapper_source_matrix_production_ready,
                 "blocked_rows_visible": true,
                 "status_counts": source_shape_registry_status_counts(source_registry.rows),
                 "current_report_schema": true,

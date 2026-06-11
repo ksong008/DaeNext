@@ -3,7 +3,7 @@ mod native_live_matrix_tests {
     use super::super::*;
 
     #[test]
-    fn native_live_matrix_records_resident_dataplane_final_native_admission_row() {
+    fn native_live_matrix_records_resident_dataplane_production_admission_row() {
         let matrix = production_runtime_live_matrix_json(
             true, true, true, true, true, true, true, true, true, true, true, true, true, true,
             true, true, true, true, true, true, true, true, false,

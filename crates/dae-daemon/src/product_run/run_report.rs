@@ -185,7 +185,7 @@ pub fn run_product_run_report(options: &RunOptions, version: &str) -> Result<Val
     let production_runtime_live_matrix_complete = production_runtime_live_matrix["matrix_complete"]
         .as_bool()
         .unwrap_or(false);
-    let final_native_daemon_admitted = production_runtime_live_matrix_complete
+    let production_daemon_admitted = production_runtime_live_matrix_complete
         && production_dataplane_admitted
         && reload_runtime_parity_admitted
         && resident_dataplane_admission_ready;
@@ -211,7 +211,7 @@ pub fn run_product_run_report(options: &RunOptions, version: &str) -> Result<Val
         production_dataplane_admitted,
         production_dataplane_harness_executed,
         production_dataplane_harness_passed,
-        final_native_daemon_admitted,
+        production_daemon_admitted,
     })?;
 
     let mut report = json!({
@@ -335,10 +335,10 @@ pub fn run_product_run_report(options: &RunOptions, version: &str) -> Result<Val
     report["production_runtime_live_matrix"] = production_runtime_live_matrix;
     report["production_runtime_live_matrix_complete"] =
         json!(production_runtime_live_matrix_complete);
-    report["final_native_daemon_admitted"] = json!(final_native_daemon_admitted);
-    report["final_native_admission_allowed"] = json!(final_native_daemon_admitted);
-    report["host_mutation_allowed"] = json!(final_native_daemon_admitted);
-    report["production_dataplane_admission_scope"] = json!(if final_native_daemon_admitted {
+    report["production_daemon_admitted"] = json!(production_daemon_admitted);
+    report["production_admission_allowed"] = json!(production_daemon_admitted);
+    report["host_mutation_allowed"] = json!(production_daemon_admitted);
+    report["production_dataplane_admission_scope"] = json!(if production_daemon_admitted {
         "daemon-owned-production-runtime-active-tcp-udp-dns-reload-admitted"
     } else if production_runtime_owner_passed {
         if production_dataplane_admitted && reload_runtime_parity_passed {
@@ -369,7 +369,7 @@ pub fn run_product_run_report(options: &RunOptions, version: &str) -> Result<Val
     });
     let remaining_blockers = product_run_remaining_blockers(ProductRunRemainingBlockerFields {
         resident_dataplane_admission_ready,
-        final_native_daemon_admitted,
+        production_daemon_admitted,
         production_dataplane_admitted,
         production_dataplane_harness_passed,
         reload_runtime_parity_passed,

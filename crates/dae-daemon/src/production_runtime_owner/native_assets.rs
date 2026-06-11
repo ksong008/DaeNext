@@ -7,7 +7,7 @@ struct RuntimeNativeGroup {
     name: &'static str,
     primary_crates: &'static [&'static str],
     accepted_native_assets: &'static [&'static str],
-    final_native_admission_blockers: &'static [&'static str],
+    production_admission_blockers: &'static [&'static str],
 }
 
 const RUNTIME_NATIVE_GROUPS: &[RuntimeNativeGroup] = &[
@@ -21,7 +21,7 @@ const RUNTIME_NATIVE_GROUPS: &[RuntimeNativeGroup] = &[
             "domain_routing_owner_tracker",
             "reload_clear_restore_owner_model",
         ],
-        final_native_admission_blockers: &[
+        production_admission_blockers: &[
             "compatibility_dialer_group_alive_event_source_still_visible",
             "runtime_map_fd_lifetime_not_yet_owned_by_product_daemon",
         ],
@@ -37,7 +37,7 @@ const RUNTIME_NATIVE_GROUPS: &[RuntimeNativeGroup] = &[
             "rule_order_fallback_last_parity",
             "geosite_geoip_reference_boundary",
         ],
-        final_native_admission_blockers: &[
+        production_admission_blockers: &[
             "production_config_to_routing_map_input_chain_not_fully_rust_owned",
             "kernel_map_write_lifetime_remains_deep_area_boundary",
         ],
@@ -53,7 +53,7 @@ const RUNTIME_NATIVE_GROUPS: &[RuntimeNativeGroup] = &[
             "dns_response_cache_plan_packet_view",
             "dns_cache_key_owner_semantics",
         ],
-        final_native_admission_blockers: &[
+        production_admission_blockers: &[
             "compatibility_dns_controller_forwarder_still_visible",
             "domain_routing_map_runtime_owner_not_product_runtime_owned",
         ],
@@ -71,7 +71,7 @@ const RUNTIME_NATIVE_GROUPS: &[RuntimeNativeGroup] = &[
             "domain_matcher_bitmap_reuse",
             "userspace_routing_matcher_bitmap_reuse",
         ],
-        final_native_admission_blockers: &[
+        production_admission_blockers: &[
             "dial_mode_sniff_runtime_entry_not_product_runtime_owned",
             "sniffed_first_payload_relay_not_validated_in_resident_daemon",
         ],
@@ -93,8 +93,8 @@ const RUNTIME_NATIVE_GROUPS: &[RuntimeNativeGroup] = &[
             "outbound_protocol_stack_native_assets",
             "ebpf_backend_host_ops_native_assets",
         ],
-        final_native_admission_blockers: &[
-            "final_native_gate_not_opened_by_report",
+        production_admission_blockers: &[
+            "production_admission_gate_not_opened_by_report",
             "native_runtime_or_outbound_dependency_evidence_missing",
             "full_live_protocol_matrix_not_completed_in_resident_daemon",
         ],
@@ -106,7 +106,7 @@ const RUNTIME_OWNER_BLOCKERS: &[&str] = &[
     "native_reload_loop_evidence_missing",
     "control_api_runtime_overview_native_owner_evidence_missing",
     "fd_link_map_lifetime_owner_evidence_missing",
-    "deep_area_recorded_but_final_native_admission_requires_release_gate",
+    "deep_area_recorded_but_production_admission_requires_production_readiness",
     "native_runtime_or_outbound_dependency_evidence_missing",
 ];
 
@@ -125,7 +125,7 @@ pub(super) fn daemon_runtime_native_owner_summary_json() -> Value {
             .map(runtime_native_group_json)
             .collect::<Vec<_>>(),
         "runtime_owner_blockers": RUNTIME_OWNER_BLOCKERS,
-        "final_native_admission_allowed": false,
+        "production_admission_allowed": false,
         "final_state_admission_allowed": false,
         "current_report_schema": true,
         "helper_bridge_allowed": false,
@@ -133,7 +133,7 @@ pub(super) fn daemon_runtime_native_owner_summary_json() -> Value {
         "ffi_or_dlopen_target_architecture": false,
         "outbound_protocol_rewrite_claimed": false,
         "datapath_deep_area_recorded": true,
-        "aya_tcx_final_native_admission_claimed": false,
+        "aya_tcx_production_admission_claimed": false,
         "native_bpf_loader_product_ready_or_required_by_this_report": false,
         "native_runtime_path_preserved_until_runtime_owner_admission": true,
         "next_queue": "fixed-queue-complete-release-gates",
@@ -148,9 +148,9 @@ fn runtime_native_group_json(group: &RuntimeNativeGroup) -> Value {
         "primary_crates": group.primary_crates,
         "accepted_native_assets": group.accepted_native_assets,
         "accepted_into_daemon_runtime_owner": true,
-        "final_native_admission_allowed": false,
-        "final_native_readiness_claimed_by_this_group": false,
-        "final_native_admission_blockers": group.final_native_admission_blockers,
+        "production_admission_allowed": false,
+        "production_readiness_claimed_by_this_group": false,
+        "production_admission_blockers": group.production_admission_blockers,
     })
 }
 
@@ -159,7 +159,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn summary_keeps_final_native_admission_boundaries_closed() {
+    fn summary_keeps_production_admission_boundaries_closed() {
         let summary = daemon_runtime_native_owner_summary_json();
         assert_eq!(
             summary["schema"].as_str().unwrap(),
@@ -170,7 +170,7 @@ mod tests {
             RUNTIME_NATIVE_GROUPS.len() as u64
         );
         assert!(
-            !summary["final_native_admission_allowed"].as_bool().unwrap(),
+            !summary["production_admission_allowed"].as_bool().unwrap(),
             "native owner report must not open the production daemon switch"
         );
         assert!(

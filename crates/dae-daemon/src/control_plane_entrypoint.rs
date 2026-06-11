@@ -76,10 +76,11 @@ pub fn control_plane_entrypoint_admission_report(root: &Path) -> Result<Value, S
         "reload_scoped_flush_after_current_swap_recorded",
         "isolated_control_plane_entrypoint_paths_validated",
         "native_runtime_path_preserved",
-        "final_native_evidence_required",
+        "runtime_state_evidence_required",
     ] {
         report[key] = json!(true);
     }
+    report["production_evidence_required"] = json!(true);
     for key in [
         "production_run_command_owned",
         "production_pid_progress_paths_mutated",
@@ -89,7 +90,7 @@ pub fn control_plane_entrypoint_admission_report(root: &Path) -> Result<Value, S
         "benchmark_executable_now",
         "native_daemon_benchmark_recorded",
         "true_rust_native_daemon_admitted",
-        "final_native_admission_allowed",
+        "production_admission_allowed",
         "host_mutation_allowed",
         "final_state_admission_allowed",
     ] {

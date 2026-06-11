@@ -24,7 +24,7 @@ pub(super) fn assert_typed_report_defaults(report: &serde_json::Value) {
             .unwrap()
     );
     assert!(
-        !report["typed_report"]["daemon_runtime_native_owner_final_native_admission_allowed"]
+        !report["typed_report"]["daemon_runtime_native_owner_production_admission_allowed"]
             .as_bool()
             .unwrap()
     );
@@ -40,7 +40,7 @@ pub(super) fn assert_typed_report_defaults(report: &serde_json::Value) {
             .unwrap()
     );
     assert!(
-        !report["typed_report"]["datapath_outbound_ebpf_deep_area_final_native_admission_allowed"]
+        !report["typed_report"]["datapath_outbound_ebpf_deep_area_production_admission_allowed"]
             .as_bool()
             .unwrap()
     );

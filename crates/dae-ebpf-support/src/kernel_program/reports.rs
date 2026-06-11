@@ -12,7 +12,7 @@ pub fn kernel_program_parity_admission_report(
     KernelProgramParityAdmissionReport {
         schema: "kernel-program-parity-admission",
         admitted,
-        final_native_admission_allowed: false,
+        production_admission_allowed: false,
         external_ebpf_tproxy_object_absent: evidence.external_ebpf_object_absent,
         external_ebpf_trace_object_absent: evidence.external_ebpf_object_absent,
         external_bpf_dependency_absent: true,
@@ -68,34 +68,34 @@ pub fn trace_diagnostic_gate_report(
     }
 }
 
-pub fn kernel_program_final_native_gate_report(
+pub fn kernel_program_production_admission_gate_report(
     tproxy_admission: &TproxyDataplaneAdmissionReport,
     trace_diagnostic: &TraceDiagnosticGateReport,
-    evidence: KernelProgramFinalNativeEvidence,
-) -> KernelProgramFinalNativeGateReport {
+    evidence: KernelProgramProductionEvidence,
+) -> KernelProgramProductionGateReport {
     let mut blockers = Vec::new();
     if !tproxy_admission.admitted {
-        blockers.push(KernelProgramFinalNativeBlocker::TproxyDataplaneAdmissionMissing);
+        blockers.push(KernelProgramProductionBlocker::TproxyDataplaneAdmissionMissing);
     }
     if tproxy_admission
         .missing_checks
         .contains(&KernelProgramParityCheck::RemoteHostWriteAdmission)
     {
-        blockers.push(KernelProgramFinalNativeBlocker::RemoteHostWriteAdmissionMissing);
+        blockers.push(KernelProgramProductionBlocker::RemoteHostWriteAdmissionMissing);
     }
     if !evidence.explicit_user_approval {
-        blockers.push(KernelProgramFinalNativeBlocker::ExplicitUserApprovalMissing);
+        blockers.push(KernelProgramProductionBlocker::ExplicitUserApprovalMissing);
     }
     if !evidence.final_state_certified {
-        blockers.push(KernelProgramFinalNativeBlocker::FinalStateCertificationMissing);
+        blockers.push(KernelProgramProductionBlocker::FinalStateCertificationMissing);
     }
 
     let admitted = blockers.is_empty();
     let trace_restore_allowed = admitted && trace_diagnostic.native_trace_restore_allowed;
-    KernelProgramFinalNativeGateReport {
-        schema: "kernel-program-final-native-gate",
+    KernelProgramProductionGateReport {
+        schema: "kernel-program-production-gate",
         admitted,
-        final_native_admission_allowed: admitted,
+        production_admission_allowed: admitted,
         external_ebpf_tproxy_object_absent: true,
         external_ebpf_trace_object_absent: true,
         external_bpf_dependency_absent: true,
@@ -105,7 +105,7 @@ pub fn kernel_program_final_native_gate_report(
         external_ebpf_trace_object_required: false,
         external_trace_dependency_required: trace_diagnostic.external_trace_dependency_required,
         native_userspace_control_plane_ready: true,
-        final_native_scope: "kernel-facing-tproxy-rust-aya; trace diagnostic excluded from production runtime; outbound protocol boundary ready",
+        production_scope: "kernel-facing-tproxy-rust-aya; trace diagnostic excluded from production runtime; outbound protocol boundary ready",
         explicit_user_approval_recorded: evidence.explicit_user_approval,
         final_state_certified: evidence.final_state_certified,
         blockers,

@@ -9,7 +9,7 @@ use dae_sniffing::sniff_tcp;
 use serde_json::Value;
 
 fn main() {
-    let iters = std::env::var("DAE_STAGE3_BENCH_ITERS")
+    let iters = std::env::var("ROUTING_BENCH_ITERS")
         .ok()
         .and_then(|value| value.parse::<u64>().ok())
         .unwrap_or(100_000);

@@ -382,7 +382,7 @@ const TRANSPORT_OPTION_CAPABILITY_ROWS: [TransportOptionCapabilityRow; 4] = [
         "quic-datagram-or-stream",
     ),
     admitted_transport_option_row(
-        "secure-proxy-endpoint",
+        "secure-endpoint-option",
         "secure-endpoint",
         "resident-secure-endpoint-executor",
         "standard-or-fingerprint-aware-tls",
