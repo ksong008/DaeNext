@@ -18,6 +18,10 @@ use super::command::{CommandSpec, path_string, run_observation_command};
 use super::native_ebpf::native_backend_runtime_decision_for_options;
 use super::{PRODUCTION_HOST_IFACE, PRODUCTION_NETNS, PRODUCTION_PEER_IFACE};
 
+#[path = "reload_runtime/plan_diff.rs"]
+mod plan_diff;
+use self::plan_diff::*;
+
 #[derive(Default)]
 pub(super) struct ReloadRuntimeEvidence {
     pub(super) enabled: bool,
@@ -31,12 +35,17 @@ pub(super) struct ReloadRuntimeEvidence {
     pub(super) runtime_overview_parity_verified: bool,
     pub(super) reload_scoped_resources_flushed: bool,
     pub(super) invalid_config_restore_verified: bool,
+    pub(super) reload_diff_verified: bool,
+    pub(super) compatible_state_reuse_verified: bool,
     pub(super) listener_reuse: Value,
     pub(super) bpf_owner_transfer: Value,
     pub(super) dns_cache_migration: Value,
     pub(super) bounded_close: Value,
     pub(super) runtime_overview: Value,
     pub(super) restore: Value,
+    pub(super) plan_identity: Value,
+    pub(super) reload_diff: Value,
+    pub(super) state_reuse: Value,
     pub(super) post_reload_active_tcp_accept: Value,
     pub(super) post_reload_active_tcp_client_traffic: Value,
     pub(super) post_reload_active_tcp_original_destination_observed: bool,
@@ -104,6 +113,15 @@ pub(super) fn run_reload_runtime_parity_probe(
             .as_bool()
             .unwrap_or(false);
 
+    let before_plan = reference_reload_plan_snapshot();
+    let changed_plan = changed_node_reload_plan_snapshot();
+    evidence.plan_identity = reload_plan_identity_value(&before_plan);
+    evidence.reload_diff = reload_diff_contract_value(&before_plan, &changed_plan);
+    evidence.reload_diff_verified = evidence.reload_diff["status"].as_str() == Some("pass");
+    evidence.state_reuse = reload_state_reuse_value(&evidence.reload_diff);
+    evidence.compatible_state_reuse_verified =
+        evidence.state_reuse["status"].as_str() == Some("pass");
+
     if let Some(listener) = post_reload_tcp_listener {
         let (accept, client_traffic, original_destination_observed, reply_path_succeeded) =
             run_active_tcp_probe(listener, options);
@@ -163,6 +181,8 @@ pub(super) fn run_reload_runtime_parity_probe(
         && evidence.runtime_overview_parity_verified
         && evidence.reload_scoped_resources_flushed
         && evidence.invalid_config_restore_verified
+        && evidence.reload_diff_verified
+        && evidence.compatible_state_reuse_verified
         && evidence.post_reload_active_tcp_passed;
     evidence
 }
@@ -524,5 +544,48 @@ mod tests {
             report["post_reload_active_tcp_required"].as_bool(),
             Some(true)
         );
+    }
+
+    #[test]
+    fn reload_diff_keeps_equal_plan_fully_reusable() {
+        let before = reference_reload_plan_snapshot();
+        let diff = reload_diff_value(&before, &before);
+
+        assert_eq!(diff["configCompatible"].as_bool(), Some(true));
+        assert_eq!(diff["dnsCompatible"].as_bool(), Some(true));
+        assert_eq!(diff["routingCompatible"].as_bool(), Some(true));
+        assert_eq!(
+            diff["unchangedGroupCount"].as_u64(),
+            Some(before.groups.len() as u64)
+        );
+        assert_eq!(
+            diff["unchangedNodeCount"].as_u64(),
+            Some(before.nodes.len() as u64)
+        );
+        assert_eq!(
+            diff["unchangedProxyGraphCount"].as_u64(),
+            Some(before.proxy_graph.len() as u64)
+        );
+        assert_eq!(diff["changedNodeCount"].as_u64(), Some(0));
+        assert_eq!(diff["changedProxyGraphCount"].as_u64(), Some(0));
+    }
+
+    #[test]
+    fn reload_diff_rebuilds_only_changed_node_graph() {
+        let before = reference_reload_plan_snapshot();
+        let changed = changed_node_reload_plan_snapshot();
+        let contract = reload_diff_contract_value(&before, &changed);
+        let reuse = reload_state_reuse_value(&contract);
+        let diff = &contract["singleNodeChange"];
+
+        assert_eq!(contract["status"].as_str(), Some("pass"));
+        assert_eq!(diff["unchangedGroupCount"].as_u64(), Some(1));
+        assert_eq!(diff["changedNodeCount"].as_u64(), Some(1));
+        assert_eq!(diff["changedProxyGraphCount"].as_u64(), Some(1));
+        assert_eq!(diff["addedNodeCount"].as_u64(), Some(0));
+        assert_eq!(diff["removedNodeCount"].as_u64(), Some(0));
+        assert_eq!(reuse["status"].as_str(), Some("pass"));
+        assert_eq!(reuse["dnsCacheReuse"].as_str(), Some("compatible"));
+        assert_eq!(reuse["routingMapUpdate"].as_str(), Some("diff"));
     }
 }
