@@ -9,6 +9,7 @@ mod abi_maps;
 mod aya_smoke;
 mod connectivity_routing;
 mod helpers;
+mod map_diff;
 mod param;
 mod tc_attach;
 use self::helpers::*;
