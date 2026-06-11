@@ -17,24 +17,47 @@ pub(in crate::daed_product) fn render_generated_config(
         .unwrap_or_else(|| "global {}\n".to_owned());
     out.push_str(&config_text);
     out.push_str("\n\n# selected dns\n");
-    out.push_str(
+    out.push_str(&render_dns_section(
         dns.map(|(_, _, raw, _)| raw.as_str())
-            .filter(|raw| !raw.trim().is_empty())
-            .unwrap_or("dns {}\n"),
-    );
+            .filter(|raw| !raw.trim().is_empty()),
+    ));
     out.push_str("\n\n# selected routing\n");
-    out.push_str(
+    out.push_str(&render_routing_section(
         routing
             .map(|(_, _, raw, _)| raw.as_str())
-            .filter(|raw| !raw.trim().is_empty())
-            .unwrap_or("routing {}\n"),
-    );
+            .filter(|raw| !raw.trim().is_empty()),
+    ));
     out.push_str("\n\n# local product nodes\n");
     out.push_str(&render_node_section(nodes));
     out.push_str("\n\n# local product groups\n");
     out.push_str(&render_group_section(groups)?);
     out.push('\n');
     Ok(out)
+}
+
+pub(in crate::daed_product) fn render_dns_section(raw: Option<&str>) -> String {
+    render_named_section(raw, "dns")
+}
+
+pub(in crate::daed_product) fn render_routing_section(raw: Option<&str>) -> String {
+    render_named_section(raw, "routing")
+}
+
+fn render_named_section(raw: Option<&str>, name: &str) -> String {
+    let Some(raw) = raw else {
+        return format!("{name} {{}}\n");
+    };
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        return format!("{name} {{}}\n");
+    }
+    if parse_config(trimmed)
+        .map(|sections| sections.iter().any(|section| section.name == name))
+        .unwrap_or(false)
+    {
+        return raw.to_owned();
+    }
+    format!("{name} {{\n{trimmed}\n}}\n")
 }
 
 pub(in crate::daed_product) fn render_node_section(nodes: &Value) -> String {
