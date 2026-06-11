@@ -7,6 +7,8 @@ use std::time::Instant;
 use serde_json::json;
 
 mod cases;
+#[cfg(test)]
+mod coverage;
 
 #[global_allocator]
 static GLOBAL: CountingAllocator = CountingAllocator;

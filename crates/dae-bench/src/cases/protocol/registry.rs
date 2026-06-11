@@ -32,6 +32,11 @@ pub(crate) fn cases() -> Vec<BenchCase> {
             run: bench_vless_request_header,
         },
         BenchCase {
+            id: "protocol/vless_xudp_first_write",
+            default_iters: 100_000,
+            run: bench_vless_xudp_first_write,
+        },
+        BenchCase {
             id: "protocol/vmess_parse_link",
             default_iters: 10_000,
             run: bench_vmess_parse_link,
@@ -45,6 +50,11 @@ pub(crate) fn cases() -> Vec<BenchCase> {
             id: "protocol/vmess_uuid5_compatibility",
             default_iters: 100_000,
             run: bench_vmess_uuid5_compatibility,
+        },
+        BenchCase {
+            id: "protocol/vmess_packet_addr_payload",
+            default_iters: 100_000,
+            run: bench_vmess_packet_addr_payload,
         },
         BenchCase {
             id: "protocol/shadowsocks_parse_link",
