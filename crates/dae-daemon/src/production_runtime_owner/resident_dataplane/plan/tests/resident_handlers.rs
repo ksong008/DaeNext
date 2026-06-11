@@ -202,3 +202,114 @@ pub(super) fn resident_dataplane_plan_admits_quic_handlers() {
     let proxies = assert_quic_handlers(&config);
     assert_common_resident_graph_contracts(&proxies);
 }
+
+#[test]
+pub(super) fn resident_protocol_executor_contract_covers_all_plan_variants() {
+    let variants = [
+        ResidentProxyProtocolPlan::VlessVisionTcpTls { key: [1; 16] },
+        ResidentProxyProtocolPlan::VlessMuxTcpTls { key: [2; 16] },
+        ResidentProxyProtocolPlan::Socks5Tcp {
+            username: fixture_secret(),
+            password: fixture_secret(),
+        },
+        ResidentProxyProtocolPlan::HttpProxyTcp {
+            username: fixture_secret(),
+            password: fixture_secret(),
+            transport: false,
+            transport_host: String::new(),
+            transport_path: String::new(),
+        },
+        ResidentProxyProtocolPlan::ShadowsocksAeadTcp {
+            cipher: "aes-128-gcm".to_owned(),
+            password: fixture_secret(),
+            salt_len: 16,
+        },
+        ResidentProxyProtocolPlan::Shadowsocks2022Tcp {
+            cipher: "2022-blake3-aes-128-gcm".to_owned(),
+            password: fixture_secret(),
+            salt_len: 16,
+            packet_nonce_len: 16,
+        },
+        ResidentProxyProtocolPlan::ShadowsocksSimpleObfsHttpTcp {
+            cipher: "aes-128-gcm".to_owned(),
+            password: fixture_secret(),
+            salt_len: 16,
+            host: fixture_host(FixtureEndpoint::Primary),
+            path: "/obfs".to_owned(),
+        },
+        ResidentProxyProtocolPlan::ShadowsocksSimpleObfsTlsTcp {
+            cipher: "aes-128-gcm".to_owned(),
+            password: fixture_secret(),
+            salt_len: 16,
+            host: fixture_host(FixtureEndpoint::Primary),
+        },
+        ResidentProxyProtocolPlan::ShadowsocksV2rayPluginTlsWsTcp {
+            cipher: "aes-128-gcm".to_owned(),
+            password: fixture_secret(),
+            salt_len: 16,
+            host: fixture_host(FixtureEndpoint::Primary),
+            path: "/plugin".to_owned(),
+        },
+        ResidentProxyProtocolPlan::Shadowsocks2022SimpleObfsHttpTcp {
+            cipher: "2022-blake3-aes-128-gcm".to_owned(),
+            password: fixture_secret(),
+            salt_len: 16,
+            host: fixture_host(FixtureEndpoint::Primary),
+            path: "/obfs".to_owned(),
+        },
+        ResidentProxyProtocolPlan::ShadowsocksRHttpSimpleTcp {
+            cipher: "aes-128-cfb".to_owned(),
+            password: fixture_secret(),
+            obfs_host: fixture_host(FixtureEndpoint::Primary),
+            obfs_port: fixture_port(1),
+        },
+        ResidentProxyProtocolPlan::TrojanTcpTls {
+            password: fixture_secret(),
+        },
+        ResidentProxyProtocolPlan::TrojanInnerShadowsocksTcpTls {
+            password: fixture_secret(),
+            inner_cipher: "aes-128-gcm".to_owned(),
+            inner_password: fixture_secret(),
+        },
+        ResidentProxyProtocolPlan::AnyTlsTcpTls {
+            auth: fixture_secret(),
+        },
+        ResidentProxyProtocolPlan::VmessAeadTcp {
+            id: "01234567-89ab-cdef-0123-456789abcdef".to_owned(),
+        },
+        ResidentProxyProtocolPlan::Hysteria2QuicTcp {
+            auth: fixture_secret(),
+            pin_sha256: "sha256:fixture".to_owned(),
+            max_rx: 0,
+            port_hop_ports: vec![fixture_port(1)],
+        },
+        ResidentProxyProtocolPlan::TuicQuicTcp {
+            uuid: "01234567-89ab-cdef-0123-456789abcdef".to_owned(),
+            password: fixture_secret(),
+            alpn: vec!["h3".to_owned()],
+            allow_insecure: false,
+        },
+        ResidentProxyProtocolPlan::JuicityQuicTcp {
+            uuid: "01234567-89ab-cdef-0123-456789abcdef".to_owned(),
+            password: fixture_secret(),
+            allow_insecure: false,
+            pinned_certchain_sha256: "sha256:fixture".to_owned(),
+        },
+    ];
+
+    for variant in variants {
+        let contract = variant.executor_contract();
+        assert!(!contract.tcp_executor.is_empty());
+        assert!(!contract.udp_executor.is_empty());
+        assert!(!contract.packet_semantics.is_empty());
+        assert!(!contract.tcp_executor.contains("fallback"));
+        assert!(!contract.udp_executor.contains("fallback"));
+        if contract.udp_policy_closed {
+            assert!(
+                contract.udp_executor.contains("closed"),
+                "{} must explain its UDP policy closure",
+                contract.udp_executor
+            );
+        }
+    }
+}

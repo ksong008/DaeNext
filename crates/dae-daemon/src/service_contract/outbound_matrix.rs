@@ -13,6 +13,7 @@ pub(super) fn insert_outbound_production_matrix_service_contract_capabilities(re
         .map(|entry| {
             json!({
                 "handler": entry.handler,
+                "source_shape_ids": entry.source_shape_ids,
                 "parser_export_metadata": entry.parser_export_metadata,
                 "tcp_dataplane": entry.tcp_dataplane,
                 "udp_dataplane": entry.udp_dataplane,
@@ -128,6 +129,10 @@ pub(super) fn insert_outbound_production_matrix_service_contract_capabilities(re
             json!(matrix.native_executor_matrix_ready),
         );
         report.insert(
+            "outbound_production_matrix_source_registry_backed_ready".to_owned(),
+            json!(matrix.source_registry_backed_ready),
+        );
+        report.insert(
             "outbound_production_matrix_typed_report_ready".to_owned(),
             json!(contract_ready),
         );
@@ -160,6 +165,7 @@ pub(super) fn insert_outbound_production_matrix_service_contract_capabilities(re
                 "reload_behavior_matrix_ready": matrix.reload_behavior_ready,
                 "live_smoke_matrix_ready": matrix.live_smoke_ready,
                 "outbound_native_executor_matrix_ready": matrix.native_executor_matrix_ready,
+                "source_registry_backed_ready": matrix.source_registry_backed_ready,
                 "current_report_schema": true,
             }),
         );

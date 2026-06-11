@@ -280,6 +280,101 @@ fn source_shape_registry_admitted_rows_are_runtime_executable_and_evidence_gated
 }
 
 #[test]
+fn source_shape_registry_rows_have_typed_capability_contracts() {
+    for row in source_shape_registry_rows() {
+        let typed = row
+            .typed_capability_contract()
+            .unwrap_or_else(|| panic!("{} has no typed capability contract", row.shape_id));
+        assert_eq!(
+            typed.protocol_framing.as_report_str(),
+            row.protocol_family,
+            "{}",
+            row.shape_id
+        );
+        assert_eq!(
+            typed.security_underlay.as_report_str(),
+            row.security_underlay,
+            "{}",
+            row.shape_id
+        );
+        assert_eq!(
+            typed.stream_wrapper.as_report_str(),
+            row.stream_wrapper,
+            "{}",
+            row.shape_id
+        );
+        assert_eq!(
+            typed.packet_semantics.as_report_str(),
+            row.packet_semantics,
+            "{}",
+            row.shape_id
+        );
+        assert_eq!(typed.schema_version, 1, "{}", row.shape_id);
+        assert!(
+            !typed.executor.as_report_str().is_empty(),
+            "{}",
+            row.shape_id
+        );
+        match row.resident_status {
+            "admitted-baseline" => {
+                assert_eq!(
+                    typed.source_shape_state,
+                    SourceShapeState::Admitted,
+                    "{}",
+                    row.shape_id
+                )
+            }
+            "blocked" => {
+                assert_eq!(
+                    typed.source_shape_state,
+                    SourceShapeState::Blocked,
+                    "{}",
+                    row.shape_id
+                );
+                assert_eq!(
+                    typed.executor,
+                    ExecutorKind::PolicyClosed,
+                    "{}",
+                    row.shape_id
+                );
+            }
+            "not-source-supported" => assert_eq!(
+                typed.source_shape_state,
+                SourceShapeState::NotSourceSupported,
+                "{}",
+                row.shape_id
+            ),
+            other => panic!("{} has unexpected resident status {other}", row.shape_id),
+        }
+    }
+}
+
+#[test]
+fn source_shape_registry_rows_have_explicit_security_underlay_policy() {
+    for row in source_shape_registry_rows() {
+        let policy = row
+            .security_underlay_policy_contract()
+            .unwrap_or_else(|| panic!("{} has no security underlay policy", row.shape_id));
+        assert_eq!(policy.schema_version, 1, "{}", row.shape_id);
+        assert_eq!(policy.blocked_reason, row.blocker_id, "{}", row.shape_id);
+        assert!(!policy.pin_requirement.is_empty(), "{}", row.shape_id);
+
+        if row.security_underlay == "insecure-tls" {
+            assert!(policy.allow_insecure_support, "{}", row.shape_id);
+        }
+        if row.security_underlay.contains("reality") {
+            assert!(policy.reality_support, "{}", row.shape_id);
+        }
+        if row.security_underlay.contains("fingerprint") || row.security_underlay == "full-utls" {
+            assert!(policy.fingerprint_utls_support, "{}", row.shape_id);
+        }
+        if row.security_underlay == "tls-fragment" {
+            assert!(policy.tls_fragment_support, "{}", row.shape_id);
+        }
+    }
+}
+
+#[test]
 fn source_shape_registry_records_scoped_production_readiness_evidence() {
     let evidence = source_shape_registry_contract().scoped_expanded_source_matrix_evidence;
 
