@@ -127,7 +127,7 @@ pub(crate) fn spawn_async_tcp_flow(
             Err(err) => append_event(
                 &event_file,
                 &event_lock,
-                json!({"event": "tcp_connection_failed", "peer": peer.to_string(), "error": err}),
+                json!({"event": "tcp_connection_failed", "peer": resident_socket_addr_display(peer), "error": err}),
             ),
         }
     });
@@ -172,8 +172,8 @@ pub(crate) async fn handle_tcp_connection_async_or_handoff(
             let mut event = json!({
                 "event": "tcp_connection_blocked",
                 "outbound_kind": "block",
-                "peer": peer.to_string(),
-                "original_dst": original_dst.to_string(),
+                "peer": resident_socket_addr_display(peer),
+                "original_dst": resident_socket_addr_display(original_dst),
                 "dial_target": &selection.route.dial_target,
                 "dial_ip": selection.route.dial_ip,
                 "initial_outbound": selection.route.initial_outbound,

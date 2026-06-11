@@ -84,8 +84,8 @@ pub(super) fn append_udp_proxy_selection_failed(
         event_lock,
         json!({
             "event": "udp_exchange_failed",
-            "peer": peer.to_string(),
-            "original_dst": original_dst.to_string(),
+            "peer": resident_socket_addr_display(peer),
+            "original_dst": resident_socket_addr_display(original_dst),
             "error": err,
             "proxy_group": proxy_group.group_name,
             "group_policy": proxy_group.group_policy_name(),
@@ -118,8 +118,8 @@ pub(super) fn record_udp_exchange_result(
                 let network = udp_network_name(original_dst);
                 let mut event_json = json!({
                     "event": event,
-                    "peer": peer.to_string(),
-                    "original_dst": original_dst.to_string(),
+                    "peer": resident_socket_addr_display(peer),
+                    "original_dst": resident_socket_addr_display(original_dst),
                     "request_len": request_len,
                     "response_len": response.payload.len(),
                     "proxy_group": proxy.group_name,
@@ -130,7 +130,7 @@ pub(super) fn record_udp_exchange_result(
                     "policy": proxy.group_policy,
                     "dialer": proxy.node_tag,
                     "sniffed": "",
-                    "ip": original_dst.to_string(),
+                    "ip": resident_socket_addr_display(original_dst),
                     "protocol": proxy.protocol,
                     "handler": handler,
                     "graphId": proxy.graph_id,
@@ -149,7 +149,7 @@ pub(super) fn record_udp_exchange_result(
             Err(err) => append_event(
                 &event_file,
                 &event_lock,
-                json!({"event": "udp_reply_failed", "peer": peer.to_string(), "original_dst": original_dst.to_string(), "error": err}),
+                json!({"event": "udp_reply_failed", "peer": resident_socket_addr_display(peer), "original_dst": resident_socket_addr_display(original_dst), "error": err}),
             ),
         },
         Err(err) => {
@@ -162,8 +162,8 @@ pub(super) fn record_udp_exchange_result(
                 &event_lock,
                 json!({
                     "event": "udp_exchange_failed",
-                    "peer": peer.to_string(),
-                    "original_dst": original_dst.to_string(),
+                    "peer": resident_socket_addr_display(peer),
+                    "original_dst": resident_socket_addr_display(original_dst),
                     "error": err,
                     "protocol": proxy.protocol,
                     "handler": handler,
@@ -174,7 +174,7 @@ pub(super) fn record_udp_exchange_result(
                     "outbound": proxy.group_name,
                     "policy": proxy.group_policy,
                     "dialer": proxy.node_tag,
-                    "ip": original_dst.to_string(),
+                    "ip": resident_socket_addr_display(original_dst),
                     "graphId": proxy.graph_id,
                     "packetSession": udp_packet_session_value(&proxy, peer, original_dst, handler, packet_semantics),
                 }),
@@ -184,7 +184,7 @@ pub(super) fn record_udp_exchange_result(
 }
 
 fn udp_network_name(addr: SocketAddr) -> &'static str {
-    if addr.is_ipv6() { "udp6" } else { "udp4" }
+    resident_udp_network_name(addr)
 }
 
 #[cfg(test)]

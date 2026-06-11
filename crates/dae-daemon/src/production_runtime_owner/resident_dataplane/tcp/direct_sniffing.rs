@@ -48,8 +48,8 @@ pub(super) fn direct_tcp_finished_event(
     let mut event = json!({
         "event": "tcp_connection_finished",
         "outbound_kind": "direct",
-        "peer": peer.to_string(),
-        "original_dst": original_dst.to_string(),
+        "peer": resident_socket_addr_display(peer),
+        "original_dst": resident_socket_addr_display(original_dst),
         "dial_target": &selection.route.dial_target,
         "dial_ip": selection.route.dial_ip,
         "initial_outbound": selection.route.initial_outbound,
@@ -59,7 +59,7 @@ pub(super) fn direct_tcp_finished_event(
         "userspace_route_must": selection.route.userspace_route_must,
         "sniffed_domain": &sniff.domain,
         "sniff_error": &sniff.error,
-        "direct_target": direct_target.to_string(),
+        "direct_target": resident_socket_addr_display(direct_target),
         "direct_peer_addr": &direct_report.peer_addr,
         "direct_local_addr": &direct_report.local_addr,
         "direct_so_mark": direct_report.so_mark,
@@ -86,11 +86,13 @@ pub(super) fn append_tcp_route_log_fields(
     let network = event["original_dst"]
         .as_str()
         .map(|addr| {
-            if addr.starts_with('[') {
-                "tcp6"
-            } else {
-                "tcp4"
-            }
+            addr.parse::<SocketAddr>()
+                .map(resident_tcp_network_name)
+                .unwrap_or(if addr.starts_with('[') {
+                    "tcp6"
+                } else {
+                    "tcp4"
+                })
         })
         .unwrap_or("tcp");
     event["network"] = json!(network);
@@ -98,7 +100,12 @@ pub(super) fn append_tcp_route_log_fields(
     event["policy"] = json!(policy);
     event["dialer"] = json!(dialer);
     event["sniffed"] = event["sniffed_domain"].clone();
-    event["ip"] = event["original_dst"].clone();
+    event["ip"] = event["original_dst"]
+        .as_str()
+        .and_then(|addr| addr.parse::<SocketAddr>().ok())
+        .map(resident_socket_addr_display)
+        .map(Value::String)
+        .unwrap_or_else(|| event["original_dst"].clone());
     event["pid"] = json!(route.log_metadata.pid);
     event["dscp"] = json!(route.log_metadata.dscp);
     event["pname"] = json!(&route.log_metadata.pname);

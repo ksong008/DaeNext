@@ -37,6 +37,7 @@ use super::resident_routing::build_resident_userspace_routing_matcher;
 mod adapter_matrix;
 mod client;
 mod direct;
+mod display;
 mod dns;
 mod events;
 mod execution;
@@ -58,6 +59,7 @@ mod metrics;
 pub(super) use self::metrics::*;
 #[path = "runtime/workers.rs"]
 mod workers;
+use self::display::*;
 pub(super) use self::workers::*;
 #[path = "runtime/resources.rs"]
 mod resources;
