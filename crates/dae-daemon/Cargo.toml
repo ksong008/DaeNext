@@ -55,6 +55,3 @@ tikv-jemalloc-ctl = { workspace = true, optional = true }
 tikv-jemalloc-sys = { workspace = true, optional = true }
 url.workspace = true
 webpki-roots.workspace = true
-
-[build-dependencies]
-dae-build-support.workspace = true

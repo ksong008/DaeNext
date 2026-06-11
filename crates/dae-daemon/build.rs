@@ -1,6 +1,5 @@
 fn main() {
     emit_product_build_identity();
-    dae_build_support::native_ebpf_build::build_for_crate("dae-daemon");
 }
 
 fn emit_product_build_identity() {

@@ -27,9 +27,6 @@ use super::{FILTER_PREF, PRODUCTION_HOST_IFACE, PRODUCTION_NETNS, PRODUCTION_PEE
 
 pub(super) const EMBEDDED_NATIVE_OBJECT_IDENTITY: &str = "memory:native-ebpf-object";
 pub(super) const NATIVE_PARAM_OBJECT_IDENTITY: &str = "memory:native-ebpf-param";
-#[cfg(feature = "native-ebpf")]
-pub(super) const EMBEDDED_NATIVE_OBJECT: &[u8] =
-    include_bytes!(concat!(env!("OUT_DIR"), "/dae-native-bpf_bpfel.o"));
 
 mod types;
 pub(in crate::production_runtime_owner) use self::types::*;

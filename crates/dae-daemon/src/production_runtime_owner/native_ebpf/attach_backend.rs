@@ -203,7 +203,7 @@ impl NativeEbpfRuntimeState {
                         dae_ebpf_support::load_aya_userspace_object_bytes(
                             dae_ebpf_support::AyaUserspaceBytesLoaderOptions {
                                 object_label: EMBEDDED_NATIVE_OBJECT_IDENTITY,
-                                object_data: EMBEDDED_NATIVE_OBJECT,
+                                object_data: dae_aya_bpf_loader::embedded_native_aya_object(),
                                 param: Some(input.param),
                                 map_pin_path: Some(&pin_root),
                                 allow_unsupported_maps: true,
