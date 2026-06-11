@@ -1,0 +1,115 @@
+name: Release DaeNext
+
+on:
+  push:
+    tags:
+      - "v*"
+      - "dae-v*"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Release tag to use when the workflow is started manually"
+        required: true
+        type: string
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  release:
+    name: dae linux x86_64
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Resolve release identity
+        id: release
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ "${GITHUB_EVENT_NAME}" == "workflow_dispatch" ]]; then
+            tag="${{ inputs.tag }}"
+          else
+            tag="${GITHUB_REF_NAME}"
+          fi
+          commit="$(git rev-parse --short=12 HEAD)"
+          echo "tag=${tag}" >>"${GITHUB_OUTPUT}"
+          echo "commit=${commit}" >>"${GITHUB_OUTPUT}"
+          echo "version=dae rust-native ${tag} core=${commit}" >>"${GITHUB_OUTPUT}"
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+
+      - name: Install native dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y clang llvm libelf-dev pkg-config
+
+      - name: Format
+        run: cargo fmt --all -- --check
+
+      - name: Repository text policy
+        run: scripts/check_no_emoji.sh
+
+      - name: Check workspace
+        run: cargo check --workspace --all-targets
+
+      - name: Test workspace libraries
+        run: cargo test --workspace --lib
+
+      - name: Test service contracts
+        run: cargo test -p dae-daemon --test service_contract
+
+      - name: Build dae release binary
+        run: |
+          DAE_VERSION="${{ steps.release.outputs.version }}" \
+            cargo build --release -p dae-cli --bin dae
+          ./target/release/dae export outline >dae-config-outline.json
+
+      - name: Package release artifacts
+        shell: bash
+        run: |
+          set -euo pipefail
+          artifact_root="DaeNext-${{ steps.release.outputs.tag }}-x86_64-unknown-linux-gnu"
+          mkdir -p "dist/${artifact_root}"
+          cp target/release/dae "dist/${artifact_root}/dae"
+          cp dae-config-outline.json "dist/${artifact_root}/dae-config-outline.json"
+          {
+            echo "name=DaeNext"
+            echo "artifact=dae"
+            echo "tag=${{ steps.release.outputs.tag }}"
+            echo "commit=${{ steps.release.outputs.commit }}"
+            echo "target=x86_64-unknown-linux-gnu"
+            echo "source_repo=${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}"
+            echo "rustc=$(rustc --version)"
+            echo "cargo=$(cargo --version)"
+          } >"dist/${artifact_root}/BUILDINFO"
+          tar -C dist -czf "${artifact_root}.tar.gz" "${artifact_root}"
+          git archive --format=tar.gz \
+            --prefix="DaeNext-${{ steps.release.outputs.tag }}-source/" \
+            -o "DaeNext-${{ steps.release.outputs.tag }}-source.tar.gz" \
+            HEAD
+          sha256sum "${artifact_root}.tar.gz" \
+            "DaeNext-${{ steps.release.outputs.tag }}-source.tar.gz" \
+            >"DaeNext-${{ steps.release.outputs.tag }}-checksums.txt"
+
+      - name: Publish GitHub release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.release.outputs.tag }}
+          name: DaeNext ${{ steps.release.outputs.tag }}
+          generate_release_notes: true
+          files: |
+            DaeNext-${{ steps.release.outputs.tag }}-x86_64-unknown-linux-gnu.tar.gz
+            DaeNext-${{ steps.release.outputs.tag }}-source.tar.gz
+            DaeNext-${{ steps.release.outputs.tag }}-checksums.txt
