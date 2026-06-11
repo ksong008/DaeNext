@@ -184,6 +184,118 @@ fn generated_runtime_config_parses_selected_global_dns_and_routing_sections() {
 }
 
 #[test]
+fn generated_runtime_config_accepts_dns_body_resources() {
+    let source_config = test_config_with_node(
+        "resource_node",
+        "http://127.0.0.1:9/node-under-test#resource-node",
+        "egress",
+    );
+    let parsed_source = build_runtime_config_from_content(&source_config).unwrap();
+    let node = config_node_value(
+        1,
+        "resource_node",
+        "http://127.0.0.1:9/node-under-test#resource-node",
+    );
+    let groups = json!({
+        "items": [
+            {
+                "name": parsed_source.group[0].name.clone(),
+                "policy": "random",
+                "nodes": [node.clone()],
+                "subscriptions": []
+            }
+        ]
+    });
+    let nodes = json!({"items": [node]});
+    let content = render_generated_config(
+        "test",
+        Some(&(1, "global".to_owned(), "global {}\n".to_owned(), 1)),
+        Some(&(
+            1,
+            "dns".to_owned(),
+            "upstream {\n    primary: 'udp://resolver.test:53'\n}\nrouting {\n    request {\n        fallback: primary\n    }\n}\n"
+                .to_owned(),
+            1,
+        )),
+        Some(&(
+            1,
+            "routing".to_owned(),
+            "routing { fallback: egress }\n".to_owned(),
+            1,
+        )),
+        &groups,
+        &nodes,
+    )
+    .unwrap();
+
+    assert!(content.contains("# selected dns\ndns {\n"));
+    let config = build_runtime_config_from_content(&content).unwrap();
+    assert_eq!(config.dns.upstream, ["primary:udp://resolver.test:53"]);
+}
+
+#[test]
+fn generated_runtime_config_preserves_complete_dns_sections() {
+    let raw = "dns {\n    bind: '127.0.0.1:8053'\n}\n";
+    assert_eq!(render_dns_section(Some(raw)), raw);
+    assert_eq!(render_dns_section(None), "dns {}\n");
+}
+
+#[test]
+fn generated_runtime_config_accepts_routing_body_resources() {
+    let source_config = test_config_with_node(
+        "resource_node",
+        "http://127.0.0.1:9/node-under-test#resource-node",
+        "egress",
+    );
+    let parsed_source = build_runtime_config_from_content(&source_config).unwrap();
+    let node = config_node_value(
+        1,
+        "resource_node",
+        "http://127.0.0.1:9/node-under-test#resource-node",
+    );
+    let groups = json!({
+        "items": [
+            {
+                "name": parsed_source.group[0].name.clone(),
+                "policy": "random",
+                "nodes": [node.clone()],
+                "subscriptions": []
+            }
+        ]
+    });
+    let nodes = json!({"items": [node]});
+    let content = render_generated_config(
+        "test",
+        Some(&(1, "global".to_owned(), "global {}\n".to_owned(), 1)),
+        Some(&(1, "dns".to_owned(), "dns {}\n".to_owned(), 1)),
+        Some(&(
+            1,
+            "routing".to_owned(),
+            "domain(suffix:example.test) -> egress\nfallback: egress\n".to_owned(),
+            1,
+        )),
+        &groups,
+        &nodes,
+    )
+    .unwrap();
+
+    assert!(content.contains("# selected routing\nrouting {\n"));
+    let config = build_runtime_config_from_content(&content).unwrap();
+    assert_eq!(config.routing.rules.len(), 1);
+    match &config.routing.fallback {
+        DynamicFunctionValue::String(value) => assert_eq!(value, "egress"),
+        other => panic!("unexpected routing fallback: {other:?}"),
+    }
+}
+
+#[test]
+fn generated_runtime_config_preserves_complete_routing_sections() {
+    let raw = "routing {\n    fallback: proxy\n}\n";
+    assert_eq!(render_routing_section(Some(raw)), raw);
+    assert_eq!(render_routing_section(None), "routing {}\n");
+}
+
+#[test]
 fn generated_runtime_config_rejects_empty_group_filters() {
     let source_config = test_config_with_node(
         "resource_node",
