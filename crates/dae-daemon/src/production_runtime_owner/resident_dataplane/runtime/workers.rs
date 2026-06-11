@@ -156,6 +156,7 @@ pub(crate) fn start_resident_dataplane_workers(
     let tcp_flow_stack_bytes = resident_tcp_flow_stack_bytes();
     let udp_session_limit = resident_udp_session_limit();
     let udp_session_queue_depth = resident_udp_session_queue_depth();
+    let event_queue_depth = resident_event_queue_depth();
     {
         let stop = owner.stop_handle();
         let tcp_router = Arc::clone(&tcp_router);
@@ -242,6 +243,8 @@ pub(crate) fn start_resident_dataplane_workers(
         "udp_session_limit_env": RESIDENT_UDP_SESSION_LIMIT_ENV,
         "udp_session_queue_depth": udp_session_queue_depth,
         "udp_session_queue_depth_env": RESIDENT_UDP_SESSION_QUEUE_DEPTH_ENV,
+        "event_queue_depth": event_queue_depth,
+        "event_queue_depth_env": RESIDENT_EVENT_QUEUE_DEPTH_ENV,
         "event_file": path_string(&event_file),
         "reload_generation": reload_generation,
         "runtime_owner": owner.task_registry_value(),

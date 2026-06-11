@@ -21,6 +21,10 @@ pub(crate) const RESIDENT_UDP_SESSION_QUEUE_DEPTH_ENV: &str = "RESIDENT_UDP_SESS
 pub(crate) const RESIDENT_UDP_SESSION_QUEUE_DEPTH_DEFAULT: usize = 128;
 pub(crate) const RESIDENT_UDP_SESSION_QUEUE_DEPTH_MIN: usize = 1;
 pub(crate) const RESIDENT_UDP_SESSION_QUEUE_DEPTH_MAX: usize = 256;
+pub(crate) const RESIDENT_EVENT_QUEUE_DEPTH_ENV: &str = "RESIDENT_EVENT_QUEUE_DEPTH";
+pub(crate) const RESIDENT_EVENT_QUEUE_DEPTH_DEFAULT: usize = 4096;
+pub(crate) const RESIDENT_EVENT_QUEUE_DEPTH_MIN: usize = 64;
+pub(crate) const RESIDENT_EVENT_QUEUE_DEPTH_MAX: usize = 65_536;
 pub(crate) const RESIDENT_MANUAL_LATENCY_PROBE_CONCURRENCY: usize = 8;
 pub(crate) const XTLS_RPRX_VISION: &str = "xtls-rprx-vision";
 pub(crate) const VISION_COMMAND_CONTINUE: u8 = 0;
@@ -59,6 +63,15 @@ pub(crate) fn resident_runtime_defaults_contract() -> Value {
             },
             "idleTimeoutSeconds": RESIDENT_UDP_SESSION_IDLE_TIMEOUT.as_secs(),
             "model": "resident UDP session manager keyed by graph id, outbound, peer, original destination, and packet semantics",
+        },
+        "eventWriter": {
+            "queueDepth": {
+                "env": RESIDENT_EVENT_QUEUE_DEPTH_ENV,
+                "default": RESIDENT_EVENT_QUEUE_DEPTH_DEFAULT,
+                "min": RESIDENT_EVENT_QUEUE_DEPTH_MIN,
+                "max": RESIDENT_EVENT_QUEUE_DEPTH_MAX,
+            },
+            "model": "bounded channel with a single JSONL writer; packet and debug events use nonblocking enqueue while lifecycle and error events are preserved",
         },
     })
 }

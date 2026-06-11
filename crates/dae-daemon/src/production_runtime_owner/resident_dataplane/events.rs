@@ -5,7 +5,16 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use serde_json::{Value, json};
+use serde_json::Value;
+#[cfg(test)]
+use serde_json::json;
+
+mod model;
+mod writer;
+mod writer_metrics;
+
+use self::model::{ResidentEvent, ResidentEventLifecycleClass, ResidentEventPersistOutcome};
+pub(crate) use self::writer::ResidentEventWriterRuntime;
 
 pub(crate) type ResidentEventLogSink = Arc<dyn Fn(&Value) + Send + Sync + 'static>;
 pub(crate) type ResidentEventLogPolicy =
@@ -52,7 +61,7 @@ pub(crate) fn set_event_log_policy(policy: Option<ResidentEventLogPolicy>) {
     }
 }
 
-pub(crate) fn clear_resident_event_log_file(path: &Path) -> io::Result<()> {
+fn clear_resident_event_log_file_direct(path: &Path) -> io::Result<()> {
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent)?;
     }
@@ -61,43 +70,13 @@ pub(crate) fn clear_resident_event_log_file(path: &Path) -> io::Result<()> {
     Ok(())
 }
 
-pub(super) fn append_event(path: &Path, lock: &Mutex<()>, mut value: Value) {
-    let decision = event_log_decision(&value);
-    {
-        let Ok(_guard) = lock.lock() else {
-            return;
-        };
-        if let Value::Object(map) = &mut value {
-            map.entry("timestampUnix".to_owned())
-                .or_insert_with(|| json!(current_unix()));
-            if let Some(level) = decision.level.as_deref() {
-                map.entry("residentLogLevel".to_owned())
-                    .or_insert_with(|| json!(level));
-            }
-        }
-        if decision.persist {
-            if let Some(parent) = path.parent() {
-                let _ = fs::create_dir_all(parent);
-            }
-            if let Ok(mut file) = OpenOptions::new().create(true).append(true).open(path) {
-                let _ = writeln!(file, "{value}");
-            }
-            let count = EVENT_LOG_APPEND_COUNT.fetch_add(1, Ordering::Relaxed) + 1;
-            let should_prune_by_count = count % RESIDENT_EVENT_LOG_PRUNE_INTERVAL == 0;
-            let should_prune_by_size = fs::metadata(path)
-                .map(|metadata| metadata.len() > decision.max_bytes)
-                .unwrap_or(false);
-            if should_prune_by_count || should_prune_by_size {
-                let _ = prune_resident_event_log_file(path);
-            }
-        }
+pub(super) fn append_event(path: &Path, lock: &Mutex<()>, value: Value) {
+    let event = ResidentEvent::new(value);
+    if let Some(writer) = writer::active_resident_event_writer_for_path(path) {
+        writer.submit(event);
+        return;
     }
-
-    if decision.persist
-        && let Some(sink) = event_log_sink()
-    {
-        sink(&value);
-    }
+    let _ = persist_resident_event_direct(path, lock, event);
 }
 
 pub(super) fn path_string(path: &Path) -> String {
@@ -137,9 +116,55 @@ fn normalize_event_log_decision(
     decision
 }
 
-pub(crate) fn prune_resident_event_log_file(path: &Path) -> io::Result<()> {
+fn prune_resident_event_log_file_direct(path: &Path) -> io::Result<()> {
     let decision = normalize_event_log_decision(event_log_decision(&Value::Null));
     prune_resident_event_log_file_with_limits(path, decision.max_entries, decision.max_bytes)
+}
+
+fn persist_resident_event_direct(
+    path: &Path,
+    lock: &Mutex<()>,
+    event: ResidentEvent,
+) -> io::Result<ResidentEventPersistOutcome> {
+    let persist = event.should_persist();
+    if !persist {
+        return Ok(ResidentEventPersistOutcome {
+            persisted: false,
+            pruned: false,
+        });
+    }
+    let max_bytes = event.max_bytes();
+    let max_entries = event.max_entries();
+    let value = event.into_serializable_value();
+    let mut pruned = false;
+    {
+        let _guard = lock
+            .lock()
+            .map_err(|_| io::Error::other("resident event log lock poisoned"))?;
+        if let Some(parent) = path.parent() {
+            fs::create_dir_all(parent)?;
+        }
+        let mut file = OpenOptions::new().create(true).append(true).open(path)?;
+        writeln!(file, "{value}")?;
+        let count = EVENT_LOG_APPEND_COUNT.fetch_add(1, Ordering::Relaxed) + 1;
+        let should_prune_by_count = count % RESIDENT_EVENT_LOG_PRUNE_INTERVAL == 0;
+        let should_prune_by_size = fs::metadata(path)
+            .map(|metadata| metadata.len() > max_bytes)
+            .unwrap_or(false);
+        if should_prune_by_count || should_prune_by_size {
+            prune_resident_event_log_file_with_limits(path, max_entries, max_bytes)?;
+            pruned = true;
+        }
+    }
+
+    if let Some(sink) = event_log_sink() {
+        sink(&value);
+    }
+
+    Ok(ResidentEventPersistOutcome {
+        persisted: true,
+        pruned,
+    })
 }
 
 fn prune_resident_event_log_file_with_limits(
@@ -174,7 +199,7 @@ fn resident_event_line_allowed_by_policy(line: &str) -> bool {
     let Ok(value) = serde_json::from_str::<Value>(line) else {
         return false;
     };
-    event_log_decision(&value).persist
+    ResidentEvent::new(value).should_persist()
 }
 
 fn read_tail_bytes(path: &Path, max_bytes: u64) -> io::Result<String> {
@@ -199,8 +224,18 @@ fn read_tail_bytes(path: &Path, max_bytes: u64) -> io::Result<String> {
 mod tests {
     use super::*;
 
+    static EVENT_TEST_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+
+    fn event_test_guard() -> std::sync::MutexGuard<'static, ()> {
+        EVENT_TEST_LOCK
+            .get_or_init(|| Mutex::new(()))
+            .lock()
+            .unwrap()
+    }
+
     #[test]
     fn resident_event_log_policy_filters_and_prunes_file() {
+        let _guard = event_test_guard();
         let dir = std::env::temp_dir().join(format!(
             "resident-event-log-test-{}-{}",
             std::process::id(),
@@ -221,7 +256,7 @@ mod tests {
         append_event(&path, &lock, json!({"event": "drop", "value": 2}));
         append_event(&path, &lock, json!({"event": "keep", "value": 3}));
         append_event(&path, &lock, json!({"event": "keep", "value": 4}));
-        prune_resident_event_log_file(&path).unwrap();
+        prune_resident_event_log_file_direct(&path).unwrap();
 
         let lines = fs::read_to_string(&path).unwrap();
         assert!(!lines.contains("\"value\":1"));
@@ -230,10 +265,96 @@ mod tests {
         assert!(lines.contains("\"value\":4"));
         assert!(lines.contains("\"residentLogLevel\":\"info\""));
 
-        clear_resident_event_log_file(&path).unwrap();
+        clear_resident_event_log_file_direct(&path).unwrap();
         assert_eq!(fs::read_to_string(&path).unwrap(), "");
 
         set_event_log_policy(None);
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn resident_events_preserve_lossless_events_when_policy_filters() {
+        let _guard = event_test_guard();
+        let dir = std::env::temp_dir().join(format!(
+            "resident-event-lossless-test-{}-{}",
+            std::process::id(),
+            current_unix()
+        ));
+        fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("events.jsonl");
+        let lock = Mutex::new(());
+        set_event_log_sink(None);
+        set_event_log_policy(Some(Arc::new(|_| ResidentEventLogDecision {
+            persist: false,
+            level: Some("debug".to_owned()),
+            max_entries: 100,
+            max_bytes: 4096,
+        })));
+
+        append_event(&path, &lock, json!({"event": "tcp_connection_finished"}));
+        append_event(
+            &path,
+            &lock,
+            json!({"event": "tcp_connection_failed", "error": "sample"}),
+        );
+
+        let lines = fs::read_to_string(&path).unwrap();
+        assert!(!lines.contains("tcp_connection_finished"));
+        assert!(lines.contains("tcp_connection_failed"));
+        assert!(lines.contains("\"lifecycleClass\":\"error\""));
+        assert!(lines.contains("\"severity\":\"error\""));
+        assert!(lines.contains("\"priority\":90"));
+        assert!(lines.contains("\"residentLogLevel\":\"debug\""));
+
+        set_event_log_policy(None);
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn resident_events_bounded_writer_records_metrics_and_flushes_jsonl() {
+        let _guard = event_test_guard();
+        let dir = std::env::temp_dir().join(format!(
+            "resident-event-writer-test-{}-{}",
+            std::process::id(),
+            current_unix()
+        ));
+        fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("events.jsonl");
+        let fallback_lock = Mutex::new(());
+        set_event_log_sink(None);
+        set_event_log_policy(None);
+        let mut writer =
+            ResidentEventWriterRuntime::start(path.clone(), Arc::new(Mutex::new(())), 64);
+
+        append_event(
+            &path,
+            &fallback_lock,
+            json!({"event": "tcp_worker_started"}),
+        );
+        append_event(
+            &path,
+            &fallback_lock,
+            json!({"event": "tcp_connection_failed", "error": "sample"}),
+        );
+        let packet_event = ResidentEvent::new(json!({"event": "udp_packet_finished"}));
+        assert_eq!(packet_event.class(), ResidentEventLifecycleClass::Packet);
+        writer.prune().unwrap();
+        let metrics = writer.metrics_snapshot();
+        assert_eq!(metrics["owner"], "resident-event-writer");
+        assert_eq!(metrics["queueCapacity"], 64);
+        assert_eq!(metrics["persistedCount"], 2);
+        assert_eq!(metrics["droppedCount"], 0);
+        assert_eq!(metrics["lastWriteError"], Value::Null);
+        let shutdown = writer.shutdown();
+        assert_eq!(shutdown["status"], "pass");
+
+        let lines = fs::read_to_string(&path).unwrap();
+        assert!(lines.contains("tcp_worker_started"));
+        assert!(lines.contains("tcp_connection_failed"));
+        assert!(lines.contains("\"eventSchemaVersion\":1"));
+        assert!(lines.contains("\"lifecycleClass\":\"startup\""));
+        assert!(lines.contains("\"lifecycleClass\":\"error\""));
+
         fs::remove_dir_all(dir).unwrap();
     }
 }
