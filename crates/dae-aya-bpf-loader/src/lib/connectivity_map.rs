@@ -12,7 +12,12 @@ pub(super) fn run_connectivity_map_update(options: ConnectivityMapUpdateOptions)
     };
     let plan = match dae_ebpf_support::update_connectivity_map_by_id(options.map_id, event) {
         Ok(plan) => plan,
-        Err(err) => return LoaderOutput::error(format!("connectivity map update failed: {err}")),
+        Err(err) => {
+            return LoaderOutput::error(dae_ebpf_support::format_bpf_io_error(
+                "connectivity map update",
+                &err,
+            ));
+        }
     };
     LoaderOutput::ok(format!(
         "{}\n",

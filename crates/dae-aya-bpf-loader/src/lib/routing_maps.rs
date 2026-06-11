@@ -24,7 +24,10 @@ pub fn run_routing_map_apply_json(input: &str) -> LoaderOutput {
                 "lpm_maps_created": report.lpm_maps_created,
             })
         )),
-        Err(err) => LoaderOutput::error(format!("routing map apply failed: {err}")),
+        Err(err) => LoaderOutput::error(dae_ebpf_support::format_bpf_io_error(
+            "routing map apply",
+            &err,
+        )),
     }
 }
 
@@ -49,7 +52,10 @@ pub fn run_domain_routing_map_apply_json(input: &str) -> LoaderOutput {
                 "entries_deleted": report.entries_deleted,
             })
         )),
-        Err(err) => LoaderOutput::error(format!("domain routing map apply failed: {err}")),
+        Err(err) => LoaderOutput::error(dae_ebpf_support::format_bpf_io_error(
+            "domain routing map apply",
+            &err,
+        )),
     }
 }
 

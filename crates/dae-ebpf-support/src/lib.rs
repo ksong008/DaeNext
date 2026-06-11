@@ -3,6 +3,7 @@ pub mod admission;
 pub mod attach;
 #[cfg(feature = "aya-loader")]
 pub mod aya_loader;
+pub mod bpf_error;
 pub mod capability;
 pub mod cgroup;
 pub mod connectivity;
@@ -11,6 +12,7 @@ pub mod kernel_program;
 pub mod kernel_program_packet;
 pub mod kernel_program_trace;
 pub mod loader;
+pub mod map_diff;
 pub mod maps;
 pub mod param;
 pub mod param_loader;
@@ -71,6 +73,7 @@ pub use aya_loader::{
     load_aya_userspace_object, load_aya_userspace_object_bytes, load_pin_aya_trace_object,
     pin_aya_loaded_object_for_native_runtime,
 };
+pub use bpf_error::{BpfErrorClass, classify_bpf_io_error, format_bpf_io_error};
 pub use capability::{EbpfBackendCapabilityReport, report_only_ebpf_backend_capability};
 pub use cgroup::{
     DaeCgroupAttachLine, DaeCgroupAttachRole, DaeCgroupProgramKind, PinnedCgroupAttachOptions,
@@ -114,6 +117,7 @@ pub use kernel_program_trace::{
 pub use loader::{
     LoaderBackend, LoaderContract, PinnedMapAction, loader_contract, pinned_map_action,
 };
+pub use map_diff::{RuntimeMapUpdateDiffReport, apply_runtime_map_update_diff};
 pub use maps::{
     MapSpec, RuntimeMapContract, RuntimeMapRole, map_catalog, pinned_reuse_maps,
     runtime_map_contract,
@@ -132,7 +136,7 @@ pub use param_object::{
 pub use routing_maps::{
     BpfLpmKey, DomainRoutingMapApplyReport, DomainRoutingMapEntry, LpmArrayMapEntry,
     LpmMapBuildSpec, LpmMapEntry, RoutingMapApplyReport, RoutingMapEntry,
-    apply_domain_routing_map_by_id, apply_routing_maps_by_id,
+    apply_domain_routing_map_by_id, apply_domain_routing_map_diff_by_id, apply_routing_maps_by_id,
     apply_routing_maps_with_lpm_build_by_id,
 };
 pub use runtime_decision::{

@@ -3,7 +3,8 @@ use std::mem::size_of;
 use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
 
 use crate::{
-    BpfDomainRouting, BpfMatchSet, delete_map_elem_bytes, open_map_fd, update_map_elem_bytes,
+    BpfDomainRouting, BpfMatchSet, RuntimeMapUpdateDiffReport, apply_runtime_map_update_diff,
+    delete_map_elem_bytes, open_map_fd, update_map_elem_bytes,
 };
 
 const BPF_MAP_CREATE: libc::c_uint = 0;
@@ -162,7 +163,30 @@ pub fn apply_domain_routing_map_by_id(
     })
 }
 
+pub fn apply_domain_routing_map_diff_by_id(
+    map_id: u32,
+    current: &[DomainRoutingMapEntry],
+    desired: &[DomainRoutingMapEntry],
+) -> io::Result<RuntimeMapUpdateDiffReport> {
+    let map = open_map_fd(map_id)?;
+    apply_runtime_map_update_diff(
+        current.iter().map(|entry| (entry.key, entry.value)),
+        desired.iter().map(|entry| (entry.key, entry.value)),
+        |key, value| update_map_elem_bytes(map.as_raw_fd(), plain_bytes(key), plain_bytes(value)),
+        |key| {
+            if let Err(err) = delete_map_elem_bytes(map.as_raw_fd(), plain_bytes(key)) {
+                if err.raw_os_error() != Some(libc::ENOENT) {
+                    return Err(err);
+                }
+            }
+            Ok(())
+        },
+    )
+}
+
 fn plain_bytes<T>(value: &T) -> &[u8] {
+    // SAFETY: The caller only passes repr(C)/plain-old-data keys or values used by
+    // the kernel BPF ABI. The returned slice is tied to the input reference.
     unsafe {
         std::slice::from_raw_parts((value as *const T).cast::<u8>(), std::mem::size_of::<T>())
     }
@@ -207,6 +231,8 @@ fn create_lpm_trie_map(spec: &LpmMapBuildSpec) -> io::Result<OwnedFd> {
         ..BpfMapCreateAttr::default()
     };
     attr.map_name[..12].copy_from_slice(b"dae_lpm_rust");
+    // SAFETY: The attr pointer references a fully initialized BPF_MAP_CREATE
+    // payload for the duration of the syscall.
     let fd = unsafe {
         libc::syscall(
             libc::SYS_bpf,
@@ -218,6 +244,7 @@ fn create_lpm_trie_map(spec: &LpmMapBuildSpec) -> io::Result<OwnedFd> {
     if fd < 0 {
         return Err(io::Error::last_os_error());
     }
+    // SAFETY: A successful BPF_MAP_CREATE returns a new owned file descriptor.
     Ok(unsafe { OwnedFd::from_raw_fd(fd as i32) })
 }
 

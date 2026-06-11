@@ -83,6 +83,8 @@ pub fn map_ids() -> io::Result<Vec<u32>> {
             start_id,
             ..BpfIdAttr::default()
         };
+        // SAFETY: The attr pointer references a valid BPF_MAP_GET_NEXT_ID payload
+        // for the duration of the syscall.
         let status = unsafe {
             libc::syscall(
                 libc::SYS_bpf,
@@ -109,6 +111,8 @@ pub fn open_map_fd(id: u32) -> io::Result<OwnedFd> {
         start_id: id,
         ..BpfIdAttr::default()
     };
+    // SAFETY: The attr pointer references a valid BPF_MAP_GET_FD_BY_ID payload
+    // for the duration of the syscall.
     let fd = unsafe {
         libc::syscall(
             libc::SYS_bpf,
@@ -120,6 +124,7 @@ pub fn open_map_fd(id: u32) -> io::Result<OwnedFd> {
     if fd < 0 {
         return Err(io::Error::last_os_error());
     }
+    // SAFETY: A successful BPF_MAP_GET_FD_BY_ID returns a new owned file descriptor.
     Ok(unsafe { OwnedFd::from_raw_fd(fd as i32) })
 }
 
@@ -130,6 +135,8 @@ pub fn map_info(fd: i32) -> io::Result<RuntimeMapInfo> {
         info_len: size_of::<BpfMapInfo>() as u32,
         info: (&mut info as *mut BpfMapInfo) as u64,
     };
+    // SAFETY: The attr pointer and info buffer are valid for the syscall and
+    // info_len matches the BpfMapInfo layout expected by this userspace wrapper.
     let status = unsafe {
         libc::syscall(
             libc::SYS_bpf,
@@ -165,6 +172,8 @@ pub fn update_map_elem_bytes(map_fd: RawFd, key: &[u8], value: &[u8]) -> io::Res
         flags: BPF_ANY,
         ..BpfMapUpdateElemAttr::default()
     };
+    // SAFETY: The key and value slices remain alive for the syscall and the
+    // kernel reads exactly the map key/value sizes from their pointers.
     let status = unsafe {
         libc::syscall(
             libc::SYS_bpf,
@@ -185,6 +194,8 @@ pub fn delete_map_elem_bytes(map_fd: RawFd, key: &[u8]) -> io::Result<()> {
         key: key.as_ptr() as u64,
         ..BpfMapDeleteElemAttr::default()
     };
+    // SAFETY: The key slice remains alive for the syscall and points to the map
+    // key bytes expected by the target map.
     let status = unsafe {
         libc::syscall(
             libc::SYS_bpf,
@@ -206,6 +217,8 @@ pub fn lookup_map_elem_bytes(map_fd: RawFd, key: &[u8], value: &mut [u8]) -> io:
         value: value.as_mut_ptr() as u64,
         ..BpfMapLookupElemAttr::default()
     };
+    // SAFETY: The key and mutable value slices remain alive for the syscall and
+    // the kernel writes into the provided value buffer.
     let status = unsafe {
         libc::syscall(
             libc::SYS_bpf,
@@ -263,6 +276,8 @@ fn count_map_entries_by_fd_with_key_size(map_fd: RawFd, key_size: u32) -> io::Re
             next_key: next_key.as_mut_ptr() as u64,
             ..BpfMapGetNextKeyAttr::default()
         };
+        // SAFETY: current_key/next_key buffers are sized to the map key size and
+        // remain valid for the duration of BPF_MAP_GET_NEXT_KEY.
         let status = unsafe {
             libc::syscall(
                 libc::SYS_bpf,
