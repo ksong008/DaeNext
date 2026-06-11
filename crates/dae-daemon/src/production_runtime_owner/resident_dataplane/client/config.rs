@@ -114,20 +114,28 @@ pub(super) fn rustls_vless_client_config(
     } else {
         ClientConfig::builder()
     };
-    let mut config = if proxy.allow_insecure {
-        builder
-            .dangerous()
-            .with_custom_certificate_verifier(ResidentInsecureCertVerifier::new())
-            .with_no_client_auth()
-    } else if let Some(reality) = &proxy.reality {
-        let mut roots = RootCertStore::empty();
-        roots.extend(webpki_roots::TLS_SERVER_ROOTS.iter().cloned());
+    let mut config = if let Some(reality) = &proxy.reality {
         let reality_config = RealityConfig::new(reality.public_key, reality.short_id.clone())
             .map_err(|err| format!("create VLESS Reality config: {err}"))?
             .with_client_version(REALITY_COMPAT_CLIENT_VERSION);
+        if proxy.allow_insecure {
+            builder
+                .dangerous()
+                .with_custom_certificate_verifier(ResidentInsecureCertVerifier::new())
+                .with_reality(reality_config)
+                .with_no_client_auth()
+        } else {
+            let mut roots = RootCertStore::empty();
+            roots.extend(webpki_roots::TLS_SERVER_ROOTS.iter().cloned());
+            builder
+                .with_root_certificates(roots)
+                .with_reality(reality_config)
+                .with_no_client_auth()
+        }
+    } else if proxy.allow_insecure {
         builder
-            .with_root_certificates(roots)
-            .with_reality(reality_config)
+            .dangerous()
+            .with_custom_certificate_verifier(ResidentInsecureCertVerifier::new())
             .with_no_client_auth()
     } else {
         let mut roots = RootCertStore::empty();

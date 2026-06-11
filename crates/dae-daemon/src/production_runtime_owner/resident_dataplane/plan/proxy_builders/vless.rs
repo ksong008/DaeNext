@@ -52,12 +52,7 @@ pub(crate) fn build_vless_proxy_plan(
             vless.tls
         ));
     }
-    if vless.allow_insecure || config.global.allow_insecure {
-        return Err(
-            "resident dataplane vless TLS handler does not admit allow_insecure; resident shape remains fail-closed for this config"
-                .to_owned(),
-        );
-    }
+    let requested_allow_insecure = vless.allow_insecure || config.global.allow_insecure;
     if net == "xhttp" {
         let mode = ir::normalize_xhttp_mode(&vless.xhttp_mode, "https", &vless.tls, false);
         if !mode.ok {
@@ -103,6 +98,7 @@ pub(crate) fn build_vless_proxy_plan(
     };
     let reality = resident_reality_underlay_plan(&vless)
         .map_err(|err| format!("validate VLESS Reality for {node_tag}: {err}"))?;
+    let allow_insecure = requested_allow_insecure;
     let tls_fragment = if reality.is_some() {
         None
     } else {
@@ -172,7 +168,7 @@ pub(crate) fn build_vless_proxy_plan(
         stream_host,
         stream_path,
         tls: vless.tls,
-        allow_insecure: false,
+        allow_insecure,
         tls_fragment,
         utls_fingerprint,
         reality,

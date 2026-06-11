@@ -12,7 +12,8 @@ pub(crate) fn build_trojan_proxy_plan(
     let httpupgrade =
         parsed.protocol == "trojan-go" && transport_kind == TrojanTransportType::HttpUpgrade;
     let grpc = parsed.protocol == "trojan-go" && transport_kind == TrojanTransportType::Grpc;
-    let plain = parsed.protocol == "trojan" && transport_kind == TrojanTransportType::None;
+    let plain = transport_kind == TrojanTransportType::None
+        && (parsed.protocol == "trojan" || parsed.transport_type.eq_ignore_ascii_case("tcp"));
     if !plain && !websocket && !httpupgrade && !grpc {
         return Err(format!(
             "resident dataplane generic TLS/TCP handler admits only plain trojan, trojan-go websocket, trojan-go httpupgrade, and trojan-go grpc endpoints for node {node_tag}; transport={} protocol={}",
@@ -25,12 +26,7 @@ pub(crate) fn build_trojan_proxy_plan(
             "resident dataplane trojan inner Shadowsocks layer admits WebSocket transport only for node {node_tag}; resident shape remains fail-closed for this config"
         ));
     }
-    if parsed.allow_insecure || config.global.allow_insecure {
-        return Err(
-            "resident dataplane generic TLS/TCP handler does not admit allow_insecure; resident shape remains fail-closed for this config"
-                .to_owned(),
-        );
-    }
+    let allow_insecure = parsed.allow_insecure || config.global.allow_insecure;
     let utls_fingerprint = resident_utls_fingerprint_plan(config, None)?;
     let net = if websocket {
         "websocket"
@@ -76,7 +72,7 @@ pub(crate) fn build_trojan_proxy_plan(
         stream_host,
         stream_path,
         tls: "tls".to_owned(),
-        allow_insecure: false,
+        allow_insecure,
         tls_fragment: resident_tls_fragment_plan(config)?,
         utls_fingerprint,
         reality: None,

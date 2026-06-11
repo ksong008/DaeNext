@@ -17,6 +17,34 @@ pub(crate) fn trojan_fixture_url(_ps: &str, add: &str, port: u16) -> String {
     .export_url()
 }
 
+pub(crate) fn trojan_insecure_fixture_url(_ps: &str, add: &str, port: u16) -> String {
+    TrojanLink {
+        name: String::new(),
+        server: add.to_owned(),
+        port,
+        password: fixture_secret(),
+        sni: fixture_host(FixtureEndpoint::Authority),
+        transport_type: String::new(),
+        encryption: String::new(),
+        host: String::new(),
+        path: String::new(),
+        service_name: String::new(),
+        allow_insecure: true,
+        protocol: "trojan".to_owned(),
+    }
+    .export_url()
+}
+
+pub(crate) fn trojan_tcp_type_fixture_url(_ps: &str, add: &str, port: u16) -> String {
+    format!(
+        "trojan://{}@{}:{}?security=tls&sni={}&alpn=h3,h2,http/1.1&type=tcp",
+        fixture_secret(),
+        add,
+        port,
+        fixture_host(FixtureEndpoint::Authority)
+    )
+}
+
 pub(crate) fn trojan_websocket_fixture_url(_ps: &str, add: &str, port: u16) -> String {
     TrojanLink {
         name: String::new(),

@@ -171,6 +171,21 @@ fn shadowsocks_rust_native_matches_nativelden_fixture() {
 }
 
 #[test]
+fn trojan_type_tcp_is_plain_transport() {
+    let parsed = crate::trojan::TrojanLink::parse(
+        "trojan://credential@node.fixture.invalid:443?security=tls&sni=authority.fixture.invalid&alpn=h3,h2,http/1.1&type=tcp",
+    )
+    .unwrap();
+
+    assert_eq!(parsed.transport_type, "tcp");
+    assert_eq!(
+        parsed.transport_kind(),
+        crate::trojan::TrojanTransportType::None
+    );
+    assert!(!parsed.allow_insecure);
+}
+
+#[test]
 fn trojan_rust_native_matches_nativelden_fixture() {
     let fixture = fixture("outbound/protocol/trojan_rust_native.json");
 
