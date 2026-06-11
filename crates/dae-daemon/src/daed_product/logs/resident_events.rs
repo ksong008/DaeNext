@@ -1,3 +1,5 @@
+use std::net::{IpAddr, SocketAddr};
+
 use super::*;
 pub(crate) fn append_resident_event_product_log(
     config_dir: &Path,
@@ -82,7 +84,7 @@ pub(crate) fn resident_event_product_log_fields(
     fields.insert("event".to_owned(), event_name.to_owned());
     if let Some(object) = event.as_object() {
         for (key, value) in object {
-            if key == "event" {
+            if key == "event" || resident_product_log_field_hidden(key) {
                 continue;
             }
             fields.insert(key.to_owned(), product_log_field_value(value));
@@ -95,8 +97,9 @@ pub(crate) fn resident_flow_event_product_log_message(
     event_name: &str,
     event: &Value,
 ) -> Option<String> {
-    let peer = resident_event_field_str(event, "peer").unwrap_or("unknown-peer");
-    let target = resident_event_first_field_str(
+    let peer = resident_event_socket_field_value(event, "peer")
+        .unwrap_or_else(|| "unknown-peer".to_owned());
+    let target = resident_event_first_socket_field_value(
         event,
         &[
             "dial_target",
@@ -105,7 +108,7 @@ pub(crate) fn resident_flow_event_product_log_message(
             "direct_peer_addr",
         ],
     )
-    .unwrap_or("unknown-target");
+    .unwrap_or_else(|| "unknown-target".to_owned());
     let suffix = if event_name.contains("failed")
         || event_name.contains("error")
         || event_name.ends_with("_skipped")
@@ -146,7 +149,7 @@ pub(crate) fn append_resident_flow_event_product_log_fields(
         "sniffed",
         &["sniffed", "sniffed_domain"],
     );
-    append_resident_event_first_field_if_present(
+    append_resident_event_first_socket_field_if_present(
         fields,
         event,
         "ip",
@@ -173,7 +176,6 @@ pub(crate) fn append_resident_execution_descriptor_fields(
         "streamWrapper",
         "protocolFraming",
         "transportUnderlay",
-        "graphId",
     ] {
         let Some(value) = descriptor.get(key) else {
             continue;
@@ -189,6 +191,25 @@ pub(crate) fn append_resident_flow_network_field(
     fields: &mut BTreeMap<String, String>,
     event: &Value,
 ) {
+    let event_transport = resident_event_field_str(event, "event").and_then(|event_name| {
+        if event_name.starts_with("tcp_") {
+            Some("tcp")
+        } else if event_name.starts_with("udp_") {
+            Some("udp")
+        } else {
+            None
+        }
+    });
+    if let Some(network) = event_transport.and_then(|transport| {
+        resident_event_first_socket_addr(
+            event,
+            &["ip", "original_dst", "direct_target", "direct_peer_addr"],
+        )
+        .map(|addr| resident_socket_network_name(transport, addr))
+    }) {
+        fields.insert("network".to_owned(), network);
+        return;
+    }
     if let Some(network) = resident_event_field_value(event, "network") {
         fields.insert("network".to_owned(), network);
         return;
@@ -218,6 +239,18 @@ pub(crate) fn append_resident_event_first_field_if_present(
     fields.insert(output_key.to_owned(), value);
 }
 
+pub(crate) fn append_resident_event_first_socket_field_if_present(
+    fields: &mut BTreeMap<String, String>,
+    event: &Value,
+    output_key: &str,
+    input_keys: &[&str],
+) {
+    let Some(value) = resident_event_first_socket_field_value(event, input_keys) else {
+        return;
+    };
+    fields.insert(output_key.to_owned(), value);
+}
+
 pub(crate) fn append_resident_event_field_if_present(
     fields: &mut BTreeMap<String, String>,
     event: &Value,
@@ -240,12 +273,50 @@ pub(crate) fn resident_event_field_value(event: &Value, key: &str) -> Option<Str
     (!value.is_null()).then(|| product_log_field_value(value))
 }
 
-pub(crate) fn resident_event_first_field_str<'a>(
-    event: &'a Value,
+pub(crate) fn resident_event_first_socket_field_value(
+    event: &Value,
     keys: &[&str],
-) -> Option<&'a str> {
+) -> Option<String> {
     keys.iter()
-        .find_map(|key| resident_event_field_str(event, key))
+        .find_map(|key| resident_event_socket_field_value(event, key))
+}
+
+pub(crate) fn resident_event_socket_field_value(event: &Value, key: &str) -> Option<String> {
+    resident_event_field_value(event, key).map(|value| resident_socket_field_display(&value))
+}
+
+pub(crate) fn resident_event_first_socket_addr(event: &Value, keys: &[&str]) -> Option<SocketAddr> {
+    keys.iter().find_map(|key| {
+        resident_event_field_str(event, key).and_then(|value| value.parse::<SocketAddr>().ok())
+    })
+}
+
+pub(crate) fn resident_socket_field_display(value: &str) -> String {
+    value
+        .parse::<SocketAddr>()
+        .map(resident_socket_addr_display)
+        .unwrap_or_else(|_| value.to_owned())
+}
+
+pub(crate) fn resident_socket_addr_display(addr: SocketAddr) -> String {
+    match addr {
+        SocketAddr::V6(addr) => addr
+            .ip()
+            .to_ipv4_mapped()
+            .map(|ip| SocketAddr::new(IpAddr::V4(ip), addr.port()))
+            .unwrap_or(SocketAddr::V6(addr))
+            .to_string(),
+        SocketAddr::V4(_) => addr.to_string(),
+    }
+}
+
+pub(crate) fn resident_socket_network_name(transport: &str, addr: SocketAddr) -> String {
+    let suffix = if resident_socket_addr_display(addr).starts_with('[') {
+        "6"
+    } else {
+        "4"
+    };
+    format!("{transport}{suffix}")
 }
 
 pub(crate) fn resident_event_field_str<'a>(event: &'a Value, key: &str) -> Option<&'a str> {
@@ -258,8 +329,34 @@ pub(crate) fn resident_event_field_str<'a>(event: &'a Value, key: &str) -> Optio
 
 pub(crate) fn product_log_field_value(value: &Value) -> String {
     match value {
-        Value::String(value) => value.to_owned(),
+        Value::String(value) => resident_socket_field_display(value),
         Value::Number(_) | Value::Bool(_) | Value::Null => value.to_string(),
-        Value::Array(_) | Value::Object(_) => value.to_string(),
+        Value::Array(_) | Value::Object(_) => {
+            sanitize_resident_product_log_value(value).to_string()
+        }
     }
+}
+
+pub(crate) fn sanitize_resident_product_log_value(value: &Value) -> Value {
+    match value {
+        Value::Array(values) => Value::Array(
+            values
+                .iter()
+                .map(sanitize_resident_product_log_value)
+                .collect(),
+        ),
+        Value::Object(object) => Value::Object(
+            object
+                .iter()
+                .filter(|(key, _)| !resident_product_log_field_hidden(key))
+                .map(|(key, value)| (key.clone(), sanitize_resident_product_log_value(value)))
+                .collect(),
+        ),
+        Value::String(value) => Value::String(resident_socket_field_display(value)),
+        _ => value.clone(),
+    }
+}
+
+pub(crate) fn resident_product_log_field_hidden(key: &str) -> bool {
+    matches!(key, "graphId" | "graphIdentityHash" | "graphLinkHash")
 }

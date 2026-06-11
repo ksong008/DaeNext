@@ -128,8 +128,8 @@ pub(super) fn proxy_tcp_base_event(
     let mut event = json!({
         "event": event_name,
         "outbound_kind": "proxy",
-        "peer": peer.to_string(),
-        "original_dst": original_dst.to_string(),
+        "peer": resident_socket_addr_display(peer),
+        "original_dst": resident_socket_addr_display(original_dst),
         "dial_target": &selection.route.dial_target,
         "dial_ip": selection.route.dial_ip,
         "initial_outbound": selection.route.initial_outbound,

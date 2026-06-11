@@ -189,7 +189,7 @@ fn handle_manager_packet(
         append_event(
             event_file,
             event_lock,
-            json!({"event": "udp_packet_skipped", "reason": "missing original destination", "peer": packet.peer.to_string()}),
+            json!({"event": "udp_packet_skipped", "reason": "missing original destination", "peer": resident_socket_addr_display(packet.peer)}),
         );
         return;
     };
@@ -216,8 +216,8 @@ fn handle_manager_packet(
                 json!({
                     "event": "udp_packet_dropped",
                     "reason": "resident UDP session limit reached",
-                    "peer": packet.peer.to_string(),
-                    "original_dst": original_dst.to_string(),
+                    "peer": resident_socket_addr_display(packet.peer),
+                    "original_dst": resident_socket_addr_display(original_dst),
                     "active_sessions": sessions.len(),
                     "session_limit": session_limit,
                     "packetSession": key.to_value(),
@@ -292,7 +292,7 @@ fn is_udp_would_block(err: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use std::net::Ipv4Addr;
+    use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 
     use super::*;
 
@@ -325,8 +325,12 @@ mod tests {
 
     #[test]
     fn udp_session_key_emits_display_and_redacted_identity() {
-        let peer = SocketAddr::new(Ipv4Addr::new(192, 0, 2, 10).into(), 53000);
-        let original_dst = SocketAddr::new(Ipv4Addr::new(192, 0, 2, 53).into(), 443);
+        let peer_ip = Ipv4Addr::new(192, 0, 2, 10);
+        let original_dst_ip = Ipv4Addr::new(192, 0, 2, 53);
+        let peer = ipv4_mapped_socket_addr(peer_ip, 53000);
+        let original_dst = ipv4_mapped_socket_addr(original_dst_ip, 443);
+        let peer_display = ipv4_socket_display(peer_ip, 53000);
+        let original_dst_display = ipv4_socket_display(original_dst_ip, 443);
         let proxy = test_udp_proxy(ResidentProxyProtocolPlan::VlessVisionTcpTls { key: [1; 16] });
         let key = UdpSessionKey::new(&proxy, peer, original_dst);
         let value = key.to_value();
@@ -336,10 +340,10 @@ mod tests {
         assert_eq!(value["graphId"], "resident-graph:redacted");
         assert_eq!(value["graphLinkHash"], "sha256:redacted");
         assert_eq!(value["redactedLinkSource"], "source:<redacted>");
-        assert_eq!(value["peer"], peer.to_string());
-        assert_eq!(value["originalDestination"], original_dst.to_string());
-        assert_eq!(value["sourceDisplay"], peer.to_string());
-        assert_eq!(value["destinationDisplay"], original_dst.to_string());
+        assert_eq!(value["peer"], peer_display);
+        assert_eq!(value["originalDestination"], original_dst_display);
+        assert_eq!(value["sourceDisplay"], peer_display);
+        assert_eq!(value["destinationDisplay"], original_dst_display);
         assert_eq!(value["packetSemantics"], "xudp");
         assert!(
             value["graphIdentityHash"]
@@ -362,6 +366,18 @@ mod tests {
         assert!(is_udp_would_block("operation would block: WouldBlock"));
         assert!(is_udp_would_block("Resource temporarily unavailable"));
         assert!(!is_udp_would_block("permission denied"));
+    }
+
+    fn ipv4_mapped_socket_addr(addr: Ipv4Addr, port: u16) -> SocketAddr {
+        let mut octets = [0_u8; 16];
+        octets[10] = 0xff;
+        octets[11] = 0xff;
+        octets[12..16].copy_from_slice(&addr.octets());
+        SocketAddr::new(IpAddr::V6(Ipv6Addr::from(octets)), port)
+    }
+
+    fn ipv4_socket_display(addr: Ipv4Addr, port: u16) -> String {
+        SocketAddr::new(IpAddr::V4(addr), port).to_string()
     }
 
     fn test_udp_proxy(handler: ResidentProxyProtocolPlan) -> ResidentProxyPlan {

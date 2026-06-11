@@ -80,8 +80,8 @@ impl UdpSessionKey {
                 graph_link_hash: self.graph_link_hash.clone(),
                 redacted_link_source: self.redacted_link_source.clone(),
                 outbound: self.outbound.clone(),
-                source_display: self.peer.to_string(),
-                destination_display: self.original_destination.to_string(),
+                source_display: resident_socket_addr_display(self.peer),
+                destination_display: resident_socket_addr_display(self.original_destination),
                 peer: Some(self.peer),
                 original_destination: self.original_destination,
                 packet_semantics: self.packet_semantics,
@@ -149,8 +149,8 @@ impl UdpPacketSessionIdentity {
             graph_link_hash: proxy.graph_link_hash.clone(),
             redacted_link_source: proxy.redacted_link_source.clone(),
             outbound: outbound.clone(),
-            source_display: peer.to_string(),
-            destination_display: original_dst.to_string(),
+            source_display: resident_socket_addr_display(peer),
+            destination_display: resident_socket_addr_display(original_dst),
             peer: Some(peer),
             original_destination: original_dst,
             packet_semantics,
@@ -179,7 +179,7 @@ impl UdpPacketSessionIdentity {
             redacted_link_source: proxy.redacted_link_source.clone(),
             outbound: outbound.clone(),
             source_display,
-            destination_display: original_dst.to_string(),
+            destination_display: resident_socket_addr_display(original_dst),
             peer: None,
             original_destination: original_dst,
             packet_semantics,
@@ -199,7 +199,7 @@ pub(super) fn packet_session_value(
 ) -> Value {
     let peer = identity
         .peer
-        .map(|peer| peer.to_string())
+        .map(resident_socket_addr_display)
         .unwrap_or_else(|| identity.source_display.clone());
     let packet_semantics = identity.packet_semantics.as_str();
     let mut value = json!({
@@ -211,7 +211,7 @@ pub(super) fn packet_session_value(
         "redactedLinkSource": &identity.redacted_link_source,
         "outbound": &identity.outbound,
         "peer": peer,
-        "originalDestination": identity.original_destination.to_string(),
+        "originalDestination": resident_socket_addr_display(identity.original_destination),
         "sourceDisplay": &identity.source_display,
         "destinationDisplay": &identity.destination_display,
         "packetSemantics": packet_semantics,
