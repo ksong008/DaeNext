@@ -1,0 +1,18 @@
+{
+  "annotations_add_latency_ms": [
+    0,
+    50
+  ],
+  "latency_offset_entries": 1,
+  "name": "outbound-alive-set-latency-offset-sparse",
+  "offset_affects_sorting_only": true,
+  "policy": "min",
+  "raw_latency_ms": [
+    100,
+    100
+  ],
+  "raw_latency_must_not_be_mutated": true,
+  "want_index": 0,
+  "want_sorting_latency_ms": 100,
+  "zero_offset_stored": false
+}

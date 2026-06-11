@@ -1,0 +1,37 @@
+{
+  "cache_before_refresh": {
+    "now": 100,
+    "refresh_after": 700,
+    "resolve_calls": 1,
+    "same_pointer": true
+  },
+  "dedupe_concurrent_refresh": {
+    "callers": 2,
+    "resolve_calls": 1,
+    "same_pointer": true
+  },
+  "name": "dns-upstream-resolver-refresh",
+  "notes": "UpstreamResolver reuses cached pointer before refresh, refreshes after interval, keeps stale on failure, and deduplicates concurrent refresh.",
+  "refresh_after_interval": {
+    "callback_calls": 2,
+    "first_ip": "1.1.1.1",
+    "resolve_calls": 2,
+    "same_pointer": false,
+    "second_ip": "1.1.1.2"
+  },
+  "source": [
+    "component/dns/upstream.go:UpstreamResolver.GetUpstream",
+    "component/dns/upstream_test.go",
+    "component/dns/upstream_stats.go",
+    "golden fixture evidence"
+  ],
+  "stale_on_failure": {
+    "first_ip": "1.1.1.1",
+    "refresh_failure_delta": 1,
+    "refresh_success_delta": 1,
+    "resolve_calls": 2,
+    "retry_deadline": 250,
+    "same_pointer": true,
+    "stale_reuse_delta": 1
+  }
+}

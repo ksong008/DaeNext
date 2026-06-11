@@ -1,0 +1,59 @@
+{
+  "cases": [
+    {
+      "alive": [
+        true,
+        true,
+        true,
+        true
+      ],
+      "dead_fast_ignored": false,
+      "latency_ms": [
+        200,
+        100,
+        300,
+        150
+      ],
+      "name": "selects-fastest-alive-dialer",
+      "want_index": 1,
+      "want_latency_ms": 100
+    },
+    {
+      "alive": [
+        false,
+        true,
+        true,
+        true
+      ],
+      "dead_fast_ignored": true,
+      "latency_ms": [
+        50,
+        300,
+        120,
+        250
+      ],
+      "name": "ignores-faster-dead-dialer",
+      "want_index": 2,
+      "want_latency_ms": 120
+    },
+    {
+      "alive": [
+        true,
+        false,
+        true,
+        true
+      ],
+      "latency_ms": [
+        400,
+        220,
+        180,
+        190
+      ],
+      "name": "handles-alive-state-transitions",
+      "want_index": 2,
+      "want_latency_ms": 180
+    }
+  ],
+  "name": "outbound-group-min-last-latency",
+  "policy": "min"
+}

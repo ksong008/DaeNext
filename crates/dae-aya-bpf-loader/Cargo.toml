@@ -1,0 +1,17 @@
+[package]
+name = "dae-aya-bpf-loader"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[features]
+default = []
+native-ebpf = ["dae-ebpf-support/aya-loader"]
+
+[dependencies]
+dae-control.workspace = true
+dae-ebpf-support.workspace = true
+fastrand.workspace = true
+libc.workspace = true
+serde_json.workspace = true

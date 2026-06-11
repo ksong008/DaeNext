@@ -1,0 +1,100 @@
+{
+  "cases": [
+    {
+      "cidrs": [
+        "203.0.113.0/24",
+        "2001:db8::/32"
+      ],
+      "code": "cn",
+      "country_code": "CN",
+      "decode_ok": true,
+      "fallback_ok": false,
+      "kind": "geoip",
+      "name": "geoip-hit-equalfold-cn",
+      "ok": true
+    },
+    {
+      "cidrs": [
+        "198.51.100.0/24"
+      ],
+      "code": "US",
+      "country_code": "US",
+      "decode_ok": true,
+      "fallback_ok": false,
+      "kind": "geoip",
+      "name": "geoip-hit-us",
+      "ok": true
+    },
+    {
+      "code": "ZZ",
+      "decode_error": "code not found",
+      "decode_ok": false,
+      "error": "country code ZZ not found in \u003cgeodata-file\u003e",
+      "fallback_ok": false,
+      "kind": "geoip",
+      "name": "geoip-miss-zz",
+      "ok": false
+    },
+    {
+      "code": "cn",
+      "country_code": "CN",
+      "decode_ok": true,
+      "domains": [
+        {
+          "type": "Full",
+          "value": "full.example.cn"
+        },
+        {
+          "type": "RootDomain",
+          "value": "suffix.example.cn"
+        },
+        {
+          "type": "Plain",
+          "value": "keyword-cn"
+        },
+        {
+          "type": "Regex",
+          "value": "^api[0-9]+\\.example\\.cn$"
+        }
+      ],
+      "fallback_ok": false,
+      "kind": "geosite",
+      "name": "geosite-hit-equalfold-cn",
+      "ok": true
+    },
+    {
+      "code": "ZZ",
+      "decode_error": "code not found",
+      "decode_ok": false,
+      "error": "code ZZ not found in \u003cgeodata-file\u003e",
+      "fallback_ok": false,
+      "kind": "geosite",
+      "name": "geosite-miss-zz",
+      "ok": false
+    },
+    {
+      "cidrs": [
+        "203.0.113.0/24",
+        "2001:db8::/32"
+      ],
+      "code": "CN",
+      "country_code": "CN",
+      "decode_error": "invalid geodata file",
+      "decode_ok": false,
+      "fallback_ok": true,
+      "kind": "geoip",
+      "name": "geoip-corrupt-prefix-fallback-cn",
+      "ok": true
+    }
+  ],
+  "corrupt_geoip_prefix_hex": "10010a240a02434e12080a04cb007100101812140a1020010db800000000000000000000000010200a0e0a02555312080a04c63364001018",
+  "geoip_hex": "0a240a02434e12080a04cb007100101812140a1020010db800000000000000000000000010200a0e0a02555312080a04c63364001018",
+  "geosite_hex": "0a5c0a02434e12130803120f66756c6c2e6578616d706c652e636e1215080212117375666669782e6578616d706c652e636e120c120a6b6579776f72642d636e121c080112185e6170695b302d395d2b5c2e6578616d706c655c2e636e240a140a025553120e0802120a6578616d706c652e7573",
+  "name": "geodata-streaming-basic",
+  "notes": "Small protobuf dat files for streaming hit/miss and corrupt-prefix fallback parity.",
+  "source": [
+    "pkg/geodata/decode.go",
+    "pkg/geodata/geodata.go",
+    "pkg/geodata/common.pb.go"
+  ]
+}

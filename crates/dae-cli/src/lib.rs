@@ -1,0 +1,23 @@
+pub(crate) mod active_datapath_runner;
+pub mod completion;
+pub mod error;
+pub mod export;
+pub(crate) mod outbound_runner;
+pub mod progress;
+pub mod runner;
+pub mod surface;
+pub(crate) mod userspace_runner;
+pub mod validate;
+
+#[cfg(test)]
+mod tests;
+
+pub use completion::get_completion;
+pub use error::CliError;
+pub use export::export_outline_json;
+pub use progress::{
+    ABORT_FILE, PID_FILE_PATH, ReloadProgress, SIGNAL_PROGRESS_FILE_PATH, parse_progress_content,
+};
+pub use runner::{RunnerOutput, run_with_args, run_with_args_and_version};
+pub use surface::{CliSurface, CommandSpec, cli_surface};
+pub use validate::{validate_config_file, validate_config_text};

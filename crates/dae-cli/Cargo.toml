@@ -1,0 +1,27 @@
+[package]
+name = "dae-cli"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+blake3.workspace = true
+dae-config.workspace = true
+dae-daemon.workspace = true
+dae-control.workspace = true
+dae-core-types.workspace = true
+dae-datapath.workspace = true
+dae-dns.workspace = true
+dae-ebpf-support.workspace = true
+dae-engine.workspace = true
+dae-netutil.workspace = true
+dae-outbound.workspace = true
+dae-routing.workspace = true
+dae-sniffing.workspace = true
+libc.workspace = true
+rustls.workspace = true
+serde_json.workspace = true
+
+[dev-dependencies]
+dae-golden.workspace = true

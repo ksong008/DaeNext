@@ -1,0 +1,30 @@
+{
+  "caps": {
+    "max_events_per_skb": 64,
+    "max_symbols_per_skb": 64,
+    "max_tracked_skbs": 4096
+  },
+  "name": "trace-skb-tracker-bounded",
+  "per_skb_cap": {
+    "expected_newest_payload": 73,
+    "expected_oldest_payload": 10,
+    "input_events": 74,
+    "newest_retained_payload": 73,
+    "oldest_retained_payload": 10,
+    "retained_events": 64,
+    "retained_symbols": 64,
+    "slice_is_bounded": true
+  },
+  "source": [
+    "trace/tracker.go",
+    "trace/trace.go"
+  ],
+  "tracked_skb_eviction": {
+    "input_skbs": 4097,
+    "newest_present": true,
+    "newest_retained": true,
+    "oldest_evicted": true,
+    "oldest_present": false,
+    "retained_skbs": 4096
+  }
+}

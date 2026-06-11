@@ -1,0 +1,35 @@
+{
+  "last_latency_snapshot": {
+    "alive": true,
+    "alloc_collection": false,
+    "checked_at_zero": true,
+    "latency_ms": 0,
+    "ok": false
+  },
+  "must_get_alive": {
+    "alloc_collection": false,
+    "default_alive": true,
+    "missing_is_alive": true,
+    "network_type": {
+      "collection": "tcp4",
+      "ipversion": "4",
+      "is_dns": false,
+      "l4proto": "tcp"
+    }
+  },
+  "must_get_latencies10": {
+    "alloc_collection": true,
+    "capacity": 10
+  },
+  "name": "outbound-dialer-lazy-state",
+  "new_dialer": {
+    "alive_sets": 0,
+    "collections_allocated": 0,
+    "probe_http_client_nil": true,
+    "probe_http_transport_nil": true
+  },
+  "probe_http_client": {
+    "first_use_creates": true,
+    "second_use_reuses": true
+  }
+}

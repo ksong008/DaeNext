@@ -1,0 +1,313 @@
+{
+  "cases": [
+    {
+      "config": {
+        "global": {
+          "tproxy_port": 12345,
+          "tproxy_port_protect": true,
+          "so_mark_from_dae": 0,
+          "log_level": "debug",
+          "tcp_check_url": [
+            "http://cp.cloudflare.com",
+            "1.1.1.1",
+            "2606:4700:4700::1111"
+          ],
+          "tcp_check_http_method": "POST",
+          "udp_check_dns": [
+            "dns.google:53",
+            "8.8.8.8",
+            "2001:4860:4860::8888"
+          ],
+          "check_interval": "30s",
+          "check_tolerance": "0s",
+          "udp_endpoint_pool_size": 4096,
+          "lan_interface": null,
+          "wan_interface": null,
+          "allow_insecure": false,
+          "dial_mode": "domain",
+          "disable_waiting_network": false,
+          "enable_local_tcp_fast_redirect": false,
+          "auto_config_kernel_parameter": false,
+          "auto_config_firewall_rule": false,
+          "sniffing_timeout": "100ms",
+          "tls_implementation": "tls",
+          "utls_imitate": "chrome_auto",
+          "tls_fragment": false,
+          "tls_fragment_length": "50-100",
+          "tls_fragment_interval": "10-20",
+          "pprof_port": 0,
+          "mptcp": false,
+          "fallback_resolver": "8.8.8.8:53",
+          "bandwidth_max_tx": "0",
+          "bandwidth_max_rx": "0",
+          "udphop_interval": "30s"
+        },
+        "subscription": [],
+        "node": [
+          "nested:socks5://nested"
+        ],
+        "group": [],
+        "routing": {
+          "rules": [
+            {
+              "and_functions": [
+                {
+                  "name": "domain",
+                  "not": false,
+                  "params": [
+                    {
+                      "key": "",
+                      "val": "child.example"
+                    }
+                  ]
+                }
+              ],
+              "outbound": {
+                "name": "child",
+                "not": false,
+                "params": []
+              }
+            },
+            {
+              "and_functions": [
+                {
+                  "name": "domain",
+                  "not": false,
+                  "params": [
+                    {
+                      "key": "",
+                      "val": "nested.example"
+                    }
+                  ]
+                }
+              ],
+              "outbound": {
+                "name": "nested",
+                "not": false,
+                "params": []
+              }
+            }
+          ],
+          "fallback": {
+            "kind": "string",
+            "string": "nested"
+          }
+        },
+        "dns": {
+          "ipversion_prefer": 0,
+          "fixed_domain_ttl": [],
+          "upstream": [],
+          "routing": {
+            "request": {
+              "rules": [],
+              "fallback": {
+                "kind": "string",
+                "string": "asis"
+              }
+            },
+            "response": {
+              "rules": [],
+              "fallback": {
+                "kind": "string",
+                "string": "accept"
+              }
+            }
+          },
+          "bind": ""
+        }
+      },
+      "config_ok": true,
+      "entries": [
+        "config.d/child.dae",
+        "entry.dae",
+        "nested.dae"
+      ],
+      "entry": "$ROOT/entry.dae",
+      "expect": [
+        "config.d/* keeps config.d/child.dae and filters ignored.txt plus dir.dae directory",
+        "missing glob returns nil without error",
+        "nested.dae from child include is resolved against top entry dir",
+        "child/nested section items are appended after parent items"
+      ],
+      "name": "success-relative-top-entry-dir-glob-filter-child-append",
+      "ok": true,
+      "sections": [
+        {
+          "name": "global",
+          "items": [
+            {
+              "item_type": "Param",
+              "value_kind": "Param",
+              "param": {
+                "key": "log_level",
+                "val": "info"
+              }
+            },
+            {
+              "item_type": "Param",
+              "value_kind": "Param",
+              "param": {
+                "key": "log_level",
+                "val": "debug"
+              }
+            },
+            {
+              "item_type": "Param",
+              "value_kind": "Param",
+              "param": {
+                "key": "tcp_check_http_method",
+                "val": "POST"
+              }
+            }
+          ]
+        },
+        {
+          "name": "include",
+          "items": [
+            {
+              "item_type": "Param",
+              "value_kind": "Param",
+              "param": {
+                "key": "",
+                "val": "config.d/*"
+              }
+            },
+            {
+              "item_type": "Param",
+              "value_kind": "Param",
+              "param": {
+                "key": "",
+                "val": "missing/*.dae"
+              }
+            },
+            {
+              "item_type": "Param",
+              "value_kind": "Param",
+              "param": {
+                "key": "",
+                "val": "nested.dae"
+              }
+            }
+          ]
+        },
+        {
+          "name": "node",
+          "items": [
+            {
+              "item_type": "Param",
+              "value_kind": "Param",
+              "param": {
+                "key": "nested",
+                "val": "socks5://nested"
+              }
+            }
+          ]
+        },
+        {
+          "name": "routing",
+          "items": [
+            {
+              "item_type": "Param",
+              "value_kind": "Param",
+              "param": {
+                "key": "fallback",
+                "val": "parent"
+              }
+            },
+            {
+              "item_type": "RoutingRule",
+              "value_kind": "RoutingRule",
+              "routing_rule": {
+                "and_functions": [
+                  {
+                    "name": "domain",
+                    "not": false,
+                    "params": [
+                      {
+                        "key": "",
+                        "val": "child.example"
+                      }
+                    ]
+                  }
+                ],
+                "outbound": {
+                  "name": "child",
+                  "not": false,
+                  "params": []
+                }
+              }
+            },
+            {
+              "item_type": "RoutingRule",
+              "value_kind": "RoutingRule",
+              "routing_rule": {
+                "and_functions": [
+                  {
+                    "name": "domain",
+                    "not": false,
+                    "params": [
+                      {
+                        "key": "",
+                        "val": "nested.example"
+                      }
+                    ]
+                  }
+                ],
+                "outbound": {
+                  "name": "nested",
+                  "not": false,
+                  "params": []
+                }
+              }
+            },
+            {
+              "item_type": "Param",
+              "value_kind": "Param",
+              "param": {
+                "key": "fallback",
+                "val": "nested"
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "entry": "$ROOT/entry.dae",
+      "error": "circular include is not allowed: $ROOT/entry.dae -\u003e $ROOT/config.d/child.dae -\u003e ... -\u003e $ROOT/entry.dae",
+      "name": "duplicate-include-reuses-circular-error",
+      "ok": false
+    },
+    {
+      "entry": "$ROOT/root/entry.dae",
+      "error": "failed in checking path of config file $ROOT/outside.dae: file is out of scope: ..",
+      "name": "path-escape-rejected",
+      "ok": false
+    },
+    {
+      "entry": "$ROOT/entry.dae",
+      "error": "permissions 0644 for '$ROOT/config.d/open.dae' are too open; requires the file is NOT writable by the same group and NOT accessible by others; suggest 0640 or 0600",
+      "name": "too-open-permission-rejected",
+      "ok": false
+    },
+    {
+      "entry": "$ROOT/entry.conf",
+      "error": "invalid config filename $ROOT/entry.conf: must has suffix .dae",
+      "name": "bad-entry-suffix-rejected",
+      "ok": false
+    },
+    {
+      "entry": "$ROOT/entry.dae",
+      "error": "unsupported include grammar in $ROOT/entry.dae: type: Param\n\tsection: child\n\t",
+      "name": "unsupported-include-grammar",
+      "ok": false
+    }
+  ],
+  "name": "config-include-merger",
+  "notes": "Config include merger golden uses real temp files and normalizes temp paths to $ROOT in error text.",
+  "source": [
+    "config/config_merger.go",
+    "common/utils.go:EnsureFileInSubDir",
+    "config/config.go"
+  ]
+}

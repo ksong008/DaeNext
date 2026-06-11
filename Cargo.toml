@@ -1,0 +1,91 @@
+[workspace]
+members = [
+    "crates/dae-cli",
+    "crates/dae-config",
+    "crates/dae-config-util",
+    "crates/dae-daemon",
+    "crates/dae-control",
+    "crates/dae-core-types",
+    "crates/dae-bench",
+    "crates/dae-aya-bpf-loader",
+    "crates/dae-datapath",
+    "crates/dae-dns",
+    "crates/dae-ebpf-program",
+    "crates/dae-ebpf-support",
+    "crates/dae-engine",
+    "crates/dae-geodata",
+    "crates/dae-golden",
+    "crates/dae-netutil",
+    "crates/dae-outbound",
+    "crates/dae-routing",
+    "crates/dae-sysdump",
+    "crates/dae-sniffing",
+    "crates/dae-trace",
+]
+resolver = "3"
+
+[patch.crates-io]
+rustls = { git = "https://github.com/Watfaq/rustls.git", branch = "watfaq/0.23.40" }
+tokio-rustls = { git = "https://github.com/Watfaq/tokio-rustls.git", branch = "watfaq/0.26.4" }
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+license = "AGPL-3.0-only"
+repository = "https://github.com/daeuniverse/dae"
+
+[workspace.dependencies]
+aes = "0.8"
+aes-gcm = "0.10"
+aya = { version = "0.13.1", default-features = false }
+aya-ebpf = { version = "0.1.1", default-features = false }
+base64 = "0.22"
+blake3 = { version = "1", default-features = false, features = ["std", "pure"] }
+boring = "5.1"
+bytes = "1"
+chacha20poly1305 = "0.10"
+dae-cli = { path = "crates/dae-cli" }
+dae-config-util = { path = "crates/dae-config-util" }
+dae-config = { path = "crates/dae-config" }
+dae-daemon = { path = "crates/dae-daemon", default-features = false }
+dae-aya-bpf-loader = { path = "crates/dae-aya-bpf-loader" }
+dae-control = { path = "crates/dae-control" }
+dae-core-types = { path = "crates/dae-core-types" }
+dae-datapath = { path = "crates/dae-datapath" }
+dae-dns = { path = "crates/dae-dns" }
+dae-ebpf-support = { path = "crates/dae-ebpf-support" }
+dae-engine = { path = "crates/dae-engine" }
+dae-geodata = { path = "crates/dae-geodata" }
+dae-golden = { path = "crates/dae-golden" }
+dae-netutil = { path = "crates/dae-netutil" }
+dae-outbound = { path = "crates/dae-outbound" }
+dae-routing = { path = "crates/dae-routing" }
+dae-sniffing = { path = "crates/dae-sniffing" }
+dae-sysdump = { path = "crates/dae-sysdump" }
+dae-trace = { path = "crates/dae-trace" }
+h3 = "0.0.8"
+h3-quinn = "0.0.10"
+h2 = "0.4"
+http = "1"
+fastrand = "2"
+hkdf = "0.12"
+libc = "0.2"
+md-5 = "0.10"
+quinn = { version = "0.11.9", default-features = false, features = ["runtime-tokio", "rustls-aws-lc-rs"] }
+regex = "1"
+rcgen = { version = "0.13", default-features = false, features = ["crypto", "pem", "aws_lc_rs"] }
+rustls = "0.23"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+sha1 = "0.10"
+sha2 = "0.10"
+sha3 = "0.10"
+tokio = { version = "1.52.3", default-features = false, features = ["rt", "net", "time", "io-util", "sync", "macros"] }
+tokio-boring = "5.0"
+tokio-rustls = "0.26"
+tls-parser = "0.12.2"
+tikv-jemallocator = { version = "0.7", default-features = false, features = ["background_threads_runtime_support", "stats"] }
+tikv-jemalloc-ctl = { version = "0.7", default-features = false, features = ["stats"] }
+tikv-jemalloc-sys = { version = "0.7", default-features = false }
+url = "2"
+webpki-roots = "1"

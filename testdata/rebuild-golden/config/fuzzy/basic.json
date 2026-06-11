@@ -1,0 +1,224 @@
+{
+  "cases": [
+    {
+      "inputs": [
+        "true",
+        "t",
+        "1",
+        "y",
+        "yes",
+        "on",
+        "TRUE",
+        "On"
+      ],
+      "name": "bool-true-aliases",
+      "target": "bool",
+      "want": true
+    },
+    {
+      "inputs": [
+        "false",
+        "f",
+        "0",
+        "n",
+        "no",
+        "off",
+        "FALSE",
+        "Off"
+      ],
+      "name": "bool-false-aliases",
+      "target": "bool",
+      "want": false
+    },
+    {
+      "inputs": [
+        "",
+        "maybe",
+        "enabled"
+      ],
+      "name": "bool-invalid",
+      "target": "bool",
+      "want_ok": false
+    },
+    {
+      "inputs": [
+        {
+          "value": "16",
+          "want": 16
+        },
+        {
+          "value": "0x10",
+          "want": 16
+        },
+        {
+          "value": "010",
+          "want": 8
+        }
+      ],
+      "name": "int-base-zero",
+      "target": "int",
+      "want_ok": true
+    },
+    {
+      "inputs": [
+        {
+          "ok": true,
+          "value": "65535",
+          "want": 65535
+        },
+        {
+          "ok": false,
+          "value": "65536"
+        }
+      ],
+      "name": "uint16-limit",
+      "target": "uint16"
+    },
+    {
+      "inputs": [
+        {
+          "ok": true,
+          "value": "30s",
+          "want": "30s"
+        },
+        {
+          "ok": true,
+          "value": "1m30s",
+          "want": "1m30s"
+        },
+        {
+          "ok": true,
+          "value": "-1.5s",
+          "want": "-1.5s"
+        },
+        {
+          "ok": true,
+          "value": "1.5h",
+          "want": "1h30m0s"
+        },
+        {
+          "ok": true,
+          "value": "1500ms",
+          "want": "1.5s"
+        },
+        {
+          "ok": true,
+          "value": "500us",
+          "want": "500µs"
+        },
+        {
+          "ok": false,
+          "value": "30"
+        }
+      ],
+      "name": "duration",
+      "target": "time.Duration"
+    },
+    {
+      "inputs": [
+        {
+          "value": "unchanged",
+          "want": "unchanged"
+        },
+        {
+          "value": "",
+          "want": ""
+        }
+      ],
+      "name": "string",
+      "target": "string",
+      "want_ok": true
+    },
+    {
+      "inputs": [
+        {
+          "ok": true,
+          "value": "",
+          "want": {
+            "empty": true,
+            "url": null
+          }
+        },
+        {
+          "ok": true,
+          "value": "https://example.com/path",
+          "want": {
+            "empty": false,
+            "url": "https://example.com/path"
+          }
+        },
+        {
+          "ok": true,
+          "value": "/relative/path",
+          "want": {
+            "empty": false,
+            "url": "/relative/path"
+          }
+        },
+        {
+          "ok": true,
+          "value": "example.com/path",
+          "want": {
+            "empty": false,
+            "url": "example.com/path"
+          }
+        },
+        {
+          "ok": false,
+          "value": "%zz"
+        }
+      ],
+      "name": "url-or-empty",
+      "target": "common.UrlOrEmpty"
+    },
+    {
+      "inputs": [
+        {
+          "ok": true,
+          "value": "a,b,c",
+          "want": [
+            "a",
+            "b",
+            "c"
+          ]
+        },
+        {
+          "ok": true,
+          "value": "",
+          "want": [
+            ""
+          ]
+        }
+      ],
+      "name": "string-slice",
+      "target": "[]string"
+    },
+    {
+      "inputs": [
+        {
+          "ok": true,
+          "value": "5s",
+          "want": [
+            "5s"
+          ]
+        },
+        {
+          "ok": true,
+          "value": "1.5s",
+          "want": [
+            "1.5s"
+          ]
+        },
+        {
+          "ok": false,
+          "value": "5s,10s"
+        }
+      ],
+      "name": "duration-slice-single",
+      "target": "[]time.Duration"
+    }
+  ],
+  "name": "fuzzy-decode-basic",
+  "notes": "Rust config utilities must keep fuzzy-decode compatibility for defaults, overlays, and config parsing.",
+  "source": "common/utils.go:FuzzyDecode"
+}

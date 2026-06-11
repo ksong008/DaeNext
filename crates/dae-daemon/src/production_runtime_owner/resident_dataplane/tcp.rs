@@ -1,0 +1,146 @@
+use std::collections::{BTreeMap, VecDeque};
+use std::future::poll_fn;
+use std::io::ErrorKind;
+use std::mem::size_of;
+use std::net::{IpAddr, Ipv4Addr, SocketAddr, TcpListener, UdpSocket};
+use std::os::fd::AsRawFd;
+use std::path::PathBuf;
+use std::pin::Pin;
+use std::slice;
+use std::sync::{
+    Arc, Mutex, OnceLock,
+    atomic::{AtomicBool, Ordering},
+};
+use std::task::{Context, Poll};
+use std::time::{Duration, Instant};
+
+use bytes::Bytes;
+use dae_core_types::OutboundIndex;
+use dae_datapath::{
+    OUTBOUND_BLOCK, OUTBOUND_CONTROL_PLANE_ROUTING, OUTBOUND_DIRECT, TcpDialMode,
+    TcpDirectDialReport, choose_dial_target,
+};
+use dae_ebpf_support::{
+    BpfIpBytes, BpfRoutingResult, BpfTuplesKey, lookup_map_elem_bytes, open_map_fd,
+};
+use dae_outbound::{
+    anytls::{AnyTlsFrame, contract as anytls_contract, link as anytls_link},
+    http_proxy::{HttpConnectOptions, request as http_request},
+    hysteria2::{
+        authenticate_hysteria2_connection, build_hysteria2_pinned_client_config,
+        read_hysteria2_tcp_response, write_hysteria2_tcp_request,
+    },
+    juicity::{
+        authenticate_juicity_connection, build_juicity_runtime_client_config,
+        write_juicity_tcp_request,
+    },
+    shadowsocks::{
+        AeadStreamCodec, ShadowsocksMetadata, ShadowsocksRStreamDecoder, ShadowsocksRStreamEncoder,
+        Sip003SimpleObfsHttpOptions, Sip003SimpleObfsTlsOptions, cipher_spec,
+        read_encrypted_chunk_from_async_stream, shadowsocksr_http_simple_origin_request,
+        simple_obfs_http_request_with_body, simple_obfs_tls_client_hello_with_body,
+        ss2022_tcp_client_stream_encoder, ss2022_tcp_server_stream_decoder_async,
+        ss2022_tcp_unix_timestamp_now,
+    },
+    shared_transport::mux::{
+        MuxFrameOptions, OPTION_DATA, SESSION_STATUS_END, SESSION_STATUS_KEEP,
+        SESSION_STATUS_KEEPALIVE,
+    },
+    shared_transport::{
+        HttpUpgradeOptions, MeekRoundTripOptions, grpc_hunk_frame, grpc_hunk_payload, ir,
+        meek_http_request, mux_data_frame, mux_end_frame, mux_new_frame, validate_http_status,
+    },
+    socks5::{Socks5Address, handshake},
+    trojan::packet as trojan_packet,
+    tuic::{
+        authenticate_tuic_connection, build_tuic_runtime_client_config, write_tuic_connect_request,
+    },
+    vless::packet,
+    vmess::{
+        VMessAeadTcpClientSessionStart, VMessMetadata, aead_tcp_client_session_start,
+        aead_tcp_response_reader_from_async_stream,
+    },
+};
+use dae_routing::{Query, RoutingMatcher};
+use dae_sniffing::{SniffingError, sniff_tcp};
+use rustls::{ClientConfig, RootCertStore, pki_types::ServerName};
+use serde_json::{Value, json};
+
+use super::client::{
+    AsyncResidentTlsClient, AsyncVlessTlsClient, async_resident_tls_underlay_name,
+    async_tls_underlay_name, open_async_resident_tls_client, open_async_vless_tls_client,
+};
+use super::direct::{
+    DirectTcpConnection, DirectTcpRelayStats, open_direct_tcp_connection_async,
+    relay_tcp_direct_async,
+};
+use super::events::append_event;
+use super::execution::{append_runtime_execution_descriptor, tcp_execution_descriptor};
+use super::plan::{ResidentProxyGroupPlan, ResidentProxyPlan, ResidentProxyProtocolPlan};
+use super::vision::{
+    VisionInnerTlsState, VisionUnpadder, VisionUplinkMode, drain_vision_uplink_async,
+};
+use super::{
+    RESIDENT_CONNECT_TIMEOUT, RESIDENT_IDLE_SLEEP, RESIDENT_TCP_ACCEPT_SLEEP,
+    RESIDENT_TCP_IDLE_TIMEOUT, TLS_RECORD_MAX_PAYLOAD_LEN, VLESS_RESPONSE_VERSION,
+    XTLS_RPRX_VISION,
+};
+use super::{ResidentDataplaneMetrics, ResidentTcpConnectionGuard};
+use tokio::io::{AsyncRead, AsyncReadExt, AsyncWriteExt, ReadBuf};
+use tokio::net::{TcpListener as TokioTcpListener, TcpStream as TokioTcpStream};
+use tokio::runtime;
+use tokio::time;
+
+mod shadowsocks_stream;
+mod websocket;
+
+use shadowsocks_stream::{
+    AsyncV2rayPluginMuxPayloadState, read_shadowsocks_aead_chunk_from_v2ray_plugin_mux,
+    read_shadowsocks_aead_chunk_from_websocket_tls,
+};
+pub(crate) use shadowsocks_stream::{AsyncWebSocketPayloadReader, AsyncWebSocketPayloadState};
+use websocket::{
+    WebSocketBinaryFrameDecoder, httpupgrade_handshake_over_async_stream,
+    httpupgrade_handshake_over_resident_tls_async, websocket_handshake_over_async_stream,
+    websocket_handshake_over_resident_tls_async,
+    write_websocket_binary_frame_over_resident_tls_async,
+    write_websocket_binary_frame_to_async_stream,
+};
+
+mod router;
+pub(super) use self::router::*;
+mod probe;
+pub(super) use self::probe::*;
+mod accept_loop;
+pub(super) use self::accept_loop::*;
+mod vless_handlers;
+use self::vless_handlers::*;
+mod proxy_dispatch;
+pub(super) use self::proxy_dispatch::*;
+mod plain_handlers;
+use self::plain_handlers::*;
+mod vmess_handlers;
+pub(crate) use self::vmess_handlers::open_grpc_h2_stream;
+use self::vmess_handlers::*;
+mod transport_helpers;
+use self::transport_helpers::*;
+pub(crate) use self::transport_helpers::{
+    collect_vmess_grpc_decrypted, decode_vmess_grpc_response_stream_async, pop_grpc_hunk_payload,
+    send_grpc_hunk, send_h2_data,
+};
+mod stream_helpers;
+use self::stream_helpers::*;
+mod shadowsocks_relay;
+use self::shadowsocks_relay::*;
+mod shadowsocksr_relay;
+use self::shadowsocksr_relay::*;
+mod vmess_relay;
+use self::vmess_relay::*;
+mod event_builders;
+use self::event_builders::*;
+mod direct_sniffing;
+use self::direct_sniffing::*;
+mod vless_relay;
+use self::vless_relay::*;
+#[cfg(test)]
+mod tests;

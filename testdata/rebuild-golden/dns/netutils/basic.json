@@ -1,0 +1,38 @@
+{
+  "name": "dns-netutils-basic",
+  "notes": "TCP DNS reads length-prefixed full response; UDP uses PacketConn WriteTo/ReadFrom and retries timeout.",
+  "source": [
+    "common/netutils/dns.go:ResolveNetip",
+    "common/netutils/dns_test.go",
+    "control/dns.go:doUDPForwardDNS",
+    "golden fixture evidence"
+  ],
+  "tcp_full_read_one_byte_chunks": {
+    "answers": [
+      "1.2.3.4"
+    ],
+    "chunk_bytes": 1,
+    "dns": "1.1.1.1:53",
+    "host": "example.com",
+    "network": "tcp",
+    "qtype": 1
+  },
+  "udp_packet_conn_semantics": {
+    "answers": [
+      "5.6.7.8"
+    ],
+    "dns": "1.1.1.1:53",
+    "host": "example.com",
+    "network": "udp",
+    "qtype": 1,
+    "stream_read": false,
+    "stream_write": false,
+    "write_to": "1.1.1.1:53"
+  },
+  "udp_retry_counter": {
+    "first_read_timeout": true,
+    "retry_counter_delta": 1,
+    "second_read_ok": true,
+    "write_count": 2
+  }
+}

@@ -1,0 +1,14 @@
+{
+  "error": "dns request routing cannot use \"asis\" for synthetic resolver lookup; configure an explicit upstream instead",
+  "host": "target.example",
+  "ipv4": "",
+  "ipv6": "",
+  "name": "dns-resolve-ip46-asis-original-target-guard",
+  "notes": "Synthetic DNS lookup must not use original traffic target when DNS request fallback is asis.",
+  "request_fallback": "asis",
+  "source": [
+    "control/dns_control.go:ResolveIp46",
+    "control/dns_control.go:handleWithResponseWriter_",
+    "golden fixture evidence"
+  ]
+}

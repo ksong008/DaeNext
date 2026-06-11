@@ -1,0 +1,118 @@
+{
+  "dns": {
+    "cache_key": "fixture.invalid.|1|1",
+    "fixture": "dns/cache_key/basic.json",
+    "must_rules_dns_exception": true,
+    "qclass": 1,
+    "qname": "Fixture.Invalid",
+    "qtype": 1
+  },
+  "helper_commands": {
+    "dns_cache_key": [
+      "dae-cli-runtime",
+      "userspace",
+      "dns-cache-key",
+      "--qname",
+      "\u003cqname\u003e",
+      "--qtype",
+      "\u003cqtype\u003e",
+      "--qclass",
+      "\u003cqclass\u003e"
+    ],
+    "magic_network": [
+      "dae-cli-runtime",
+      "userspace",
+      "magic-network",
+      "--network",
+      "tcp",
+      "--mark",
+      "1234",
+      "--mptcp",
+      "true"
+    ],
+    "outbound_select": [
+      "dae-cli-runtime",
+      "userspace",
+      "outbound-select",
+      "--policy",
+      "min",
+      "--network",
+      "tcp4"
+    ],
+    "route_match": [
+      "dae-cli-runtime",
+      "userspace",
+      "route-match",
+      "--domain",
+      "\u003cdomain\u003e",
+      "--dest",
+      "\u003cip\u003e",
+      "--port",
+      "\u003cport\u003e"
+    ],
+    "sniff_tcp": [
+      "dae-cli-runtime",
+      "userspace",
+      "sniff-tcp",
+      "--kind",
+      "http"
+    ]
+  },
+  "magic_network": {
+    "abi_preserved": true,
+    "encoded_b64": "AAN0Y3AAAATSAQ==",
+    "is_plain": false,
+    "mark": 1234,
+    "mptcp": true,
+    "network": "tcp"
+  },
+  "name": "engine-userspace-runtime-contract",
+  "notes": "Rust-native records userspace runtime helper entry points for routing, DNS, outbound group selection, sniffing, and MagicNetwork.",
+  "runtime": {
+    "enable_env": "DAE_RUST_USERSPACE_OPTIN",
+    "helper_binary": "dae-cli-runtime",
+    "helper_env": "DAE_RUST_USERSPACE_HELPER",
+    "helper_timeout": "10s"
+  },
+  "outbound_group": {
+    "alive": [
+      true,
+      true,
+      true,
+      true
+    ],
+    "fixture": "outbound/group/min_last_latency.json",
+    "latencies_ms": [
+      200,
+      100,
+      300,
+      150
+    ],
+    "network": "tcp4",
+    "policy": "min",
+    "reserved_block_index": 1,
+    "reserved_direct_index": 0,
+    "selected_index": 1,
+    "selected_latency_ms": 100,
+    "user_group_start_index": 2
+  },
+  "routing": {
+    "dest": "100.64.0.42",
+    "dest_port": 443,
+    "domain": "fixture.invalid",
+    "domain_bitmap_index_lock": true,
+    "fixture": "routing/userspace/basic_matcher.json",
+    "lpm_index_lock": true,
+    "must_rules_preserved": true,
+    "shared_match_set_order": true,
+    "want_outbound": "direct"
+  },
+  "sniffing": {
+    "fixture": "sniffing/basic.json",
+    "http_host_normalized": "fixture.invalid",
+    "tcp_relay_reader_kept": true,
+    "udp_quic_can_reroute": true,
+    "udp_quic_target_stays_ip": true
+  },
+  "runtime_source": "rust-native-userspace-runner"
+}

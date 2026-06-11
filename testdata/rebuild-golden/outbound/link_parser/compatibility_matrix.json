@@ -1,0 +1,47 @@
+{
+  "cases": [
+    {
+      "adapter_mode": "native-boundary",
+      "link": "direct://",
+      "name": "direct",
+      "ok": true,
+      "scheme": "direct"
+    },
+    {
+      "adapter_mode": "native-boundary",
+      "link": "block://",
+      "name": "block",
+      "ok": true,
+      "scheme": "block"
+    },
+    {
+      "adapter_mode": "rust-native",
+      "link": "ss://2022-blake3-aes-128-gcm:MTIzNDU2Nzg5MDEyMzQ1Ng==@fixture.invalid:443#node",
+      "name": "ss2022",
+      "ok": true,
+      "parent_dialer_non_nil": true,
+      "protocol": "shadowsocks-2022",
+      "scheme": "ss"
+    },
+    {
+      "adapter_mode": "rust-native",
+      "chain_len": 2,
+      "link": "socks5://127.0.0.1:1080 -> ss://2022-blake3-aes-128-gcm:MTIzNDU2Nzg5MDEyMzQ1Ng==@fixture.invalid:443#node",
+      "name": "chain",
+      "ok": true,
+      "schemes": [
+        "socks5",
+        "ss"
+      ]
+    },
+    {
+      "error": "missing scheme",
+      "link": "not-a-link",
+      "name": "bad-link",
+      "ok": false
+    }
+  ],
+  "chain_separator": "->",
+  "name": "outbound-link-parser-compatibility-matrix",
+  "notes": "Rust-native recorded compatibility and bridge/stub boundaries; Rust-native moves socks5 and Shadowsocks/SS2022 to rust-native while other protocol rewrites remain deferred."
+}

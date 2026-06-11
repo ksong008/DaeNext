@@ -1,0 +1,11 @@
+{
+  "absolute_rel_rejected": true,
+  "dotdot_rel_rejected": true,
+  "missing_source_error": "lstat \u003csource\u003e/missing: no such file or directory",
+  "name": "sysdump-archive-reject-escape",
+  "source": [
+    "cmd/sysdump.go"
+  ],
+  "unsafe_path_error_prefix": "unsafe sysdump archive path",
+  "walk_error_is_hard_error": true
+}

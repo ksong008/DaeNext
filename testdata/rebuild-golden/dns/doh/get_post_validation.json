@@ -1,0 +1,65 @@
+{
+  "get_max_encoded_query_bytes": 1024,
+  "get_small_payload": {
+    "accept": "application/dns-message",
+    "content_type": "",
+    "dns_query": "AABWeA",
+    "host": "dns.example.com",
+    "hostname": "dns.example.com",
+    "input_hex": "12345678",
+    "method": "GET",
+    "path": "/dns-query",
+    "target": "1.1.1.1:443",
+    "url": "https://1.1.1.1:443/dns-query?dns=AABWeA",
+    "zero_id_hex": "00005678"
+  },
+  "media_type": "application/dns-message",
+  "name": "dns-doh-get-post-validation",
+  "notes": "DoH request payload zeroes DNS ID; small payload uses GET query, large payload uses POST body.",
+  "post_large_payload": {
+    "accept": "application/dns-message",
+    "body_len": 1026,
+    "content_type": "application/dns-message",
+    "input_len": 1026,
+    "method": "POST",
+    "query_has_dns": false,
+    "zero_id_prefix": "0000abab"
+  },
+  "source": [
+    "control/dns.go:buildDoHRequest",
+    "control/dns.go:validateDoHResponse",
+    "control/dns_http_test.go",
+    "golden fixture evidence"
+  ],
+  "validation": [
+    {
+      "content_type": "application/dns-message",
+      "error": "doh server returned status 502 Bad Gateway",
+      "name": "bad-status",
+      "ok": false,
+      "status": "502 Bad Gateway",
+      "status_failure_delta": 1
+    },
+    {
+      "content_type": "text/html; charset=utf-8",
+      "content_type_failure_delta": 1,
+      "error": "unexpected doh content-type \"text/html; charset=utf-8\"",
+      "name": "bad-content-type",
+      "ok": false,
+      "status": "200 OK"
+    },
+    {
+      "content_type": "application/dns-message; charset=binary",
+      "name": "content-type-with-params",
+      "ok": true,
+      "status": "200 OK"
+    },
+    {
+      "content_type_hex": "7f",
+      "error_contains": "invalid doh content-type",
+      "name": "invalid-content-type-byte",
+      "ok": false,
+      "status": "200 OK"
+    }
+  ]
+}

@@ -1,0 +1,201 @@
+{
+  "commands": [
+    {
+      "flags": [],
+      "hidden": true,
+      "name": "completion",
+      "short": "Output shell completion code for the specified shell (bash, zsh or fish)",
+      "use": "completion [bash|zsh|fish]",
+      "valid_args": [
+        "bash",
+        "zsh",
+        "fish"
+      ]
+    },
+    {
+      "children": [
+        {
+          "flags": [],
+          "hidden": false,
+          "name": "outline",
+          "short": "To export config structure.",
+          "use": "outline",
+          "valid_args": null
+        }
+      ],
+      "flags": [],
+      "hidden": false,
+      "name": "export",
+      "short": "To export some information for UI developers.",
+      "use": "export",
+      "valid_args": null
+    },
+    {
+      "flags": [],
+      "hidden": false,
+      "name": "honk",
+      "short": "Let dae call for you.",
+      "use": "honk",
+      "valid_args": null
+    },
+    {
+      "flags": [
+        "abort"
+      ],
+      "hidden": false,
+      "name": "reload",
+      "short": "To reload config file without interrupt connections.",
+      "use": "reload [pid]",
+      "valid_args": null
+    },
+    {
+      "flags": [
+        "config",
+        "disable-pidfile",
+        "disable-sudo",
+        "disable-timestamp",
+        "logfile",
+        "logfile-maxbackups",
+        "logfile-maxsize"
+      ],
+      "hidden": false,
+      "name": "run",
+      "short": "To run dae in the foreground.",
+      "use": "run",
+      "valid_args": null
+    },
+    {
+      "flags": [
+        "abort"
+      ],
+      "hidden": false,
+      "name": "suspend",
+      "short": "To suspend dae. This command puts dae into no-load state. Recover it by 'dae reload'.",
+      "use": "suspend [pid]",
+      "valid_args": null
+    },
+    {
+      "flags": [],
+      "hidden": false,
+      "name": "sysdump",
+      "short": "To dump up system network config",
+      "use": "sysdump",
+      "valid_args": null
+    },
+    {
+      "flags": [
+        "config"
+      ],
+      "hidden": false,
+      "name": "validate",
+      "short": "To validate dae config.",
+      "use": "validate",
+      "valid_args": null
+    }
+  ],
+  "completion_cases": [
+    {
+      "mentions_dae": true,
+      "non_empty": true,
+      "ok": true,
+      "shell": "bash"
+    },
+    {
+      "mentions_dae": true,
+      "non_empty": true,
+      "ok": true,
+      "shell": "zsh"
+    },
+    {
+      "mentions_dae": true,
+      "non_empty": true,
+      "ok": true,
+      "shell": "fish"
+    },
+    {
+      "error": "unsupported shell type (must be bash, zsh or fish): powershell",
+      "ok": false,
+      "shell": "powershell"
+    }
+  ],
+  "export": {
+    "outline_command": "export outline",
+    "outline_function": "config.ExportOutlineJson",
+    "outline_summary": {
+      "contains_global": true,
+      "contains_routing": true,
+      "leaf_count": 12,
+      "required": [
+        "global",
+        "routing"
+      ],
+      "section_count": 6,
+      "sections": [
+        "global",
+        "subscription",
+        "node",
+        "group",
+        "routing",
+        "dns"
+      ],
+      "sha256": "eb7eb03feb599807f659873f7d55de3dd1f9514edd54318681a81ebe828cb0dd",
+      "version": "unknown"
+    },
+    "stdout_trailing_newline": true
+  },
+  "name": "cli-surface-basic",
+  "notes": "Rust CLI must preserve command names, visible flags, progress bytes, file paths, validate/export/completion surfaces, and reload/suspend abort path.",
+  "paths": {
+    "abort_file": "/var/run/dae.abort",
+    "pid_file": "/var/run/dae.pid",
+    "signal_progress_file": "/var/run/dae.progress"
+  },
+  "reload_progress": {
+    "done": "2",
+    "error": "3",
+    "processing": "1",
+    "send": "0"
+  },
+  "root": {
+    "completion_default_cmd_disabled": true,
+    "short": "dae is a high-performance transparent proxy solution.",
+    "use": "dae [flags] [command [argument ...]]",
+    "version_contains_agpl": true,
+    "version_line_count": 4
+  },
+  "source": [
+    "cmd/cmd.go",
+    "cmd/run.go",
+    "cmd/reload.go",
+    "cmd/suspend.go",
+    "cmd/validate.go",
+    "cmd/export.go",
+    "cmd/completion.go",
+    "engine/helpers.go",
+    "install/dae.service",
+    "common/consts/reload.go"
+  ],
+  "validate": {
+    "cases": [
+      {
+        "exit_on_error": 1,
+        "include_count": 1,
+        "name": "minimal-valid",
+        "ok": true,
+        "stdout_on_ok": ""
+      },
+      {
+        "error_contains": "no viable alternative at input",
+        "exit_on_error": 1,
+        "name": "syntax-error",
+        "ok": false,
+        "stdout_on_ok": ""
+      }
+    ],
+    "does_not_start_runtime": true,
+    "read_config_function": "engine.ReadConfigFile",
+    "requires_config_message": "Argument \"--config\" or \"-c\" is required but not provided.",
+    "systemd_exec_start_pre": "/usr/bin/dae validate -c /etc/dae/config.dae",
+    "systemd_uses_validate": true
+  }
+}

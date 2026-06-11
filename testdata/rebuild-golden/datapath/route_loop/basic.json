@@ -1,0 +1,91 @@
+{
+  "cases": [
+    {
+      "expected": {
+        "fallback": true,
+        "mark": 0,
+        "must": false,
+        "outbound": 0
+      },
+      "name": "fallback_only",
+      "rules": [
+        {
+          "index": 0,
+          "mark": 0,
+          "matched": true,
+          "must": false,
+          "outbound": 0,
+          "type": "Fallback"
+        }
+      ]
+    },
+    {
+      "expected": {
+        "fallback": false,
+        "mark": 0,
+        "must": true,
+        "outbound": 252
+      },
+      "name": "must_rule_preserves_must",
+      "rules": [
+        {
+          "index": 0,
+          "mark": 0,
+          "matched": true,
+          "must": true,
+          "outbound": 252,
+          "type": "DomainSet"
+        },
+        {
+          "index": 1,
+          "mark": 0,
+          "matched": true,
+          "must": false,
+          "outbound": 0,
+          "type": "Fallback"
+        }
+      ]
+    },
+    {
+      "expected": {
+        "fallback": false,
+        "mark": 134217728,
+        "must": false,
+        "outbound": 8
+      },
+      "name": "first_matching_user_rule_wins",
+      "rules": [
+        {
+          "index": 0,
+          "mark": 4660,
+          "matched": false,
+          "must": false,
+          "outbound": 7,
+          "type": "IpSet"
+        },
+        {
+          "index": 1,
+          "mark": 134217728,
+          "matched": true,
+          "must": false,
+          "outbound": 8,
+          "type": "Port"
+        },
+        {
+          "index": 2,
+          "mark": 0,
+          "matched": true,
+          "must": false,
+          "outbound": 1,
+          "type": "Fallback"
+        }
+      ]
+    }
+  ],
+  "name": "fixture-route-loop-model",
+  "source": [
+    "control/kern/tproxy.c",
+    "control/routing_matcher_builder.go",
+    "common/consts/ebpf.go"
+  ]
+}

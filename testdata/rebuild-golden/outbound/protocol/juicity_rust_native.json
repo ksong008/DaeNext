@@ -1,0 +1,214 @@
+{
+  "allow_insecure_aliases": [
+    {
+      "allowInsecure": true,
+      "export": "juicity://7c12c745-63a5-433d-9e60-022e469b5bd4:pass@fixture.invalid:443?allow_insecure=1&sni=fixture.invalid#alias",
+      "input": "juicity://7c12c745-63a5-433d-9e60-022e469b5bd4:pass@fixture.invalid:443?allowInsecure=1#alias",
+      "name": "allowInsecure"
+    },
+    {
+      "allowInsecure": true,
+      "export": "juicity://7c12c745-63a5-433d-9e60-022e469b5bd4:pass@fixture.invalid:443?allow_insecure=1&sni=fixture.invalid#alias",
+      "input": "juicity://7c12c745-63a5-433d-9e60-022e469b5bd4:pass@fixture.invalid:443?allow_insecure=true#alias",
+      "name": "allow_insecure"
+    },
+    {
+      "allowInsecure": true,
+      "export": "juicity://7c12c745-63a5-433d-9e60-022e469b5bd4:pass@fixture.invalid:443?allow_insecure=1&sni=fixture.invalid#alias",
+      "input": "juicity://7c12c745-63a5-433d-9e60-022e469b5bd4:pass@fixture.invalid:443?allowinsecure=true#alias",
+      "name": "allowinsecure"
+    },
+    {
+      "allowInsecure": true,
+      "export": "juicity://7c12c745-63a5-433d-9e60-022e469b5bd4:pass@fixture.invalid:443?allow_insecure=1&sni=fixture.invalid#alias",
+      "input": "juicity://7c12c745-63a5-433d-9e60-022e469b5bd4:pass@fixture.invalid:443?skipVerify=1#alias",
+      "name": "skipVerify"
+    }
+  ],
+  "deferred_protocol_scope": [
+    "anytls",
+    "transport-combos"
+  ],
+  "link_parser": [
+    {
+      "allowInsecure": false,
+      "congestion_control": "bbr",
+      "export": "juicity://7c12c745-63a5-433d-9e60-022e469b5bd4:pass@fixture.invalid:443?congestion_control=bbr&pinned_certchain_sha256=-__--u_uq80BI0VniavN7_v__vrv7qvNASNFZ4mrze8%3D&sni=fixture.invalid#basic",
+      "input": "juicity://7c12c745-63a5-433d-9e60-022e469b5bd4:pass@fixture.invalid:443?congestion_control=bbr&pinned_certchain_sha256=-__--u_uq80BI0VniavN7_v__vrv7qvNASNFZ4mrze8%3D#basic",
+      "name": "basic-urlbase64-pin",
+      "password": "pass",
+      "pin_forces_insecure_verify": true,
+      "pinned_certchain_decoded": {
+        "decoded_hex": "fbfffefaefeeabcd0123456789abcdeffbfffefaefeeabcd0123456789abcdef",
+        "format": "url-base64",
+        "ok": true
+      },
+      "pinned_certchain_sha256": "-__--u_uq80BI0VniavN7_v__vrv7qvNASNFZ4mrze8=",
+      "port": 443,
+      "property_address": "fixture.invalid:443",
+      "property_link": "juicity://7c12c745-63a5-433d-9e60-022e469b5bd4:pass@fixture.invalid:443?congestion_control=bbr&pinned_certchain_sha256=-__--u_uq80BI0VniavN7_v__vrv7qvNASNFZ4mrze8%3D&sni=fixture.invalid#basic",
+      "property_name": "basic",
+      "property_protocol": "juicity",
+      "protocol": "juicity",
+      "server": "fixture.invalid",
+      "sni": "fixture.invalid",
+      "user": "7c12c745-63a5-433d-9e60-022e469b5bd4"
+    },
+    {
+      "allowInsecure": true,
+      "congestion_control": "",
+      "export": "juicity://7c12c745-63a5-433d-9e60-022e469b5bd4:pass@fixture.invalid:8443?allow_insecure=1&sni=peer.fixture.invalid#peer",
+      "input": "juicity://7c12c745-63a5-433d-9e60-022e469b5bd4:pass@fixture.invalid:8443?sni=sni.fixture.invalid&peer=peer.fixture.invalid&allowInsecure=true#peer",
+      "name": "peer-overrides-sni",
+      "password": "pass",
+      "pin_forces_insecure_verify": false,
+      "pinned_certchain_decoded": {
+        "decoded_hex": "",
+        "format": "",
+        "ok": true
+      },
+      "pinned_certchain_sha256": "",
+      "port": 8443,
+      "property_address": "fixture.invalid:8443",
+      "property_link": "juicity://7c12c745-63a5-433d-9e60-022e469b5bd4:pass@fixture.invalid:8443?allow_insecure=1&sni=peer.fixture.invalid#peer",
+      "property_name": "peer",
+      "property_protocol": "juicity",
+      "protocol": "juicity",
+      "server": "fixture.invalid",
+      "sni": "peer.fixture.invalid",
+      "user": "7c12c745-63a5-433d-9e60-022e469b5bd4"
+    },
+    {
+      "allowInsecure": false,
+      "congestion_control": "",
+      "export": "juicity://7c12c745-63a5-433d-9e60-022e469b5bd4:pass@fixture.invalid:443?pinned_certchain_sha256=ababababababababababababababababababababababababababababababababab&sni=pin.fixture.invalid#hex-pin",
+      "input": "juicity://7c12c745-63a5-433d-9e60-022e469b5bd4:pass@fixture.invalid:443?sni=pin.fixture.invalid&pinned_certchain_sha256=ababababababababababababababababababababababababababababababababab#hex-pin",
+      "name": "hex-pin",
+      "password": "pass",
+      "pin_forces_insecure_verify": true,
+      "pinned_certchain_decoded": {
+        "decoded_hex": "ababababababababababababababababababababababababababababababababab",
+        "format": "hex",
+        "ok": true
+      },
+      "pinned_certchain_sha256": "ababababababababababababababababababababababababababababababababab",
+      "port": 443,
+      "property_address": "fixture.invalid:443",
+      "property_link": "juicity://7c12c745-63a5-433d-9e60-022e469b5bd4:pass@fixture.invalid:443?pinned_certchain_sha256=ababababababababababababababababababababababababababababababababab&sni=pin.fixture.invalid#hex-pin",
+      "property_name": "hex-pin",
+      "property_protocol": "juicity",
+      "protocol": "juicity",
+      "server": "fixture.invalid",
+      "sni": "pin.fixture.invalid",
+      "user": "7c12c745-63a5-433d-9e60-022e469b5bd4"
+    }
+  ],
+  "live_smoke_required": [
+    "local parser smoke for Juicity",
+    "local UUID validation smoke",
+    "local pinned certchain decode smoke",
+    "local QUIC/underlay contract smoke"
+  ],
+  "name": "juicity-rust-native",
+  "pinned_certchain_sha256": [
+    {
+      "decoded_hex": "fbfffefaefeeabcd0123456789abcdeffbfffefaefeeabcd0123456789abcdef",
+      "format": "url-base64",
+      "input": "-__--u_uq80BI0VniavN7_v__vrv7qvNASNFZ4mrze8=",
+      "name": "url-base64",
+      "ok": true
+    },
+    {
+      "decoded_hex": "fbfffefaefeeabcd0123456789abcdeffbfffefaefeeabcd0123456789abcdef",
+      "format": "std-base64",
+      "input": "+//++u/uq80BI0VniavN7/v//vrv7qvNASNFZ4mrze8=",
+      "name": "std-base64",
+      "ok": true
+    },
+    {
+      "decoded_hex": "ababababababababababababababababababababababababababababababababab",
+      "format": "hex",
+      "input": "ababababababababababababababababababababababababababababababababab",
+      "name": "hex-decode-non-multiple-of-4",
+      "ok": true
+    },
+    {
+      "decoded_hex": "7db7df7de7da79f79e69b71dd35db7e39ebbf3d69b71d79f7db7df7de7da79f79e69b71dd35db7e39ebbf3d69b71d79f",
+      "format": "url-base64",
+      "input": "fbfffefaefeeabcd0123456789abcdeffbfffefaefeeabcd0123456789abcdef",
+      "name": "sha256-hex-looking-string-decodes-as-url-base64-first",
+      "ok": true
+    },
+    {
+      "error_contains": "failed to decode PinnedCertchainSha256",
+      "input": "bad-pin",
+      "name": "bad",
+      "ok": false
+    }
+  ],
+  "protocol_scope": [
+    "juicity"
+  ],
+  "quic_contract": {
+    "alpn": [
+      "h3"
+    ],
+    "congestion_default_or_unknown_uses": "bbr",
+    "enable_datagrams": false,
+    "handshake_idle_timeout_seconds": 8,
+    "initial_connection_receive_window": 33554432,
+    "initial_stream_receive_window": 2097152,
+    "keepalive_seconds": 5,
+    "max_connection_receive_window": 67108864,
+    "max_open_incoming_streams": 100,
+    "max_stream_receive_window": 33554432,
+    "quic_max_open_incoming_streams": 110,
+    "reserved_streams_capability": 5,
+    "tls_min_version": 772,
+    "underlay_auth_channel_capacity": 64
+  },
+  "rust_adapter_mode": "rust-native",
+  "underlay_contract": {
+    "tcp_request": {
+      "input_b64": "AAN0Y3AAAATSAQ==",
+      "input_mark": 1234,
+      "input_mptcp": true,
+      "input_network": "tcp",
+      "same_encoded_value": false,
+      "underlay_b64": "AAN1ZHAAAATSAA==",
+      "underlay_mark": 1234,
+      "underlay_mptcp": false,
+      "underlay_network": "udp"
+    },
+    "tcp_underlay_drops_mptcp": true,
+    "tcp_underlay_preserves_mark": true,
+    "tcp_underlay_uses_udp": true,
+    "transport_packet_conn_cipher_info": "juicity reused info",
+    "transport_packet_conn_uses_auth": true,
+    "true_quic_data_plane_deferred": 113,
+    "udp_nonzero_port_packet_conn": "stream_packet_conn",
+    "udp_port_zero_packet_conn": "transport_packet_conn",
+    "udp_request": {
+      "input_b64": "AAN1ZHAAAATSAQ==",
+      "input_mark": 1234,
+      "input_mptcp": true,
+      "input_network": "udp",
+      "same_encoded_value": true,
+      "underlay_b64": "AAN1ZHAAAATSAQ==",
+      "underlay_mark": 1234,
+      "underlay_mptcp": true,
+      "underlay_network": "udp"
+    },
+    "udp_underlay_uses_original": true
+  },
+  "uuid_contract": {
+    "invalid": "not-a-uuid",
+    "invalid_error": {
+      "error": "parse UUID: invalid UUID length: 10",
+      "error_contains": "parse UUID:",
+      "ok": false
+    },
+    "parser_accepts": "URL parser preserves user; protocol.NewDialer rejects non-UUID user",
+    "valid": "7c12c745-63a5-433d-9e60-022e469b5bd4"
+  }
+}

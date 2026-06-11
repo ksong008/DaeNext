@@ -1,0 +1,12 @@
+[package]
+name = "dae-geodata"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+serde_json.workspace = true
+
+[dev-dependencies]
+dae-golden.workspace = true

@@ -1,0 +1,304 @@
+{
+  "link_header_lengths": {
+    "ethernet": 14,
+    "none": 0
+  },
+  "match_type_order": [
+    {
+      "name": "DomainSet",
+      "value": 0
+    },
+    {
+      "name": "IpSet",
+      "value": 1
+    },
+    {
+      "name": "SourceIpSet",
+      "value": 2
+    },
+    {
+      "name": "Port",
+      "value": 3
+    },
+    {
+      "name": "SourcePort",
+      "value": 4
+    },
+    {
+      "name": "L4Proto",
+      "value": 5
+    },
+    {
+      "name": "IpVersion",
+      "value": 6
+    },
+    {
+      "name": "Mac",
+      "value": 7
+    },
+    {
+      "name": "ProcessName",
+      "value": 8
+    },
+    {
+      "name": "Dscp",
+      "value": 9
+    },
+    {
+      "name": "Fallback",
+      "value": 10
+    },
+    {
+      "name": "MustRules",
+      "value": 11
+    },
+    {
+      "name": "Upstream",
+      "value": 12
+    },
+    {
+      "name": "QType",
+      "value": 13
+    }
+  ],
+  "max_match_set_len": {
+    "bitmap_words": 32,
+    "value": 1024
+  },
+  "name": "fixture-bpf-abi-layout",
+  "source": [
+    "control/bpf_bpfel.go",
+    "control/kern/tproxy.c",
+    "common/consts/ebpf.go"
+  ],
+  "structs": [
+    {
+      "align": 4,
+      "name": "bpfDaeParam",
+      "offsets": [
+        {
+          "field": "control_plane_pid",
+          "offset": 4
+        },
+        {
+          "field": "dae0_ifindex",
+          "offset": 8
+        },
+        {
+          "field": "dae0peer_mac",
+          "offset": 16
+        },
+        {
+          "field": "dae_netns_id",
+          "offset": 12
+        },
+        {
+          "field": "has_bpf_get_current_task",
+          "offset": 22
+        },
+        {
+          "field": "padding",
+          "offset": 23
+        },
+        {
+          "field": "tproxy_port",
+          "offset": 0
+        }
+      ],
+      "size": 24
+    },
+    {
+      "align": 4,
+      "name": "bpfDomainRouting",
+      "offsets": [
+        {
+          "field": "bitmap",
+          "offset": 0
+        }
+      ],
+      "size": 128
+    },
+    {
+      "align": 4,
+      "name": "bpfMatchSet",
+      "offsets": [
+        {
+          "field": "mark",
+          "offset": 20
+        },
+        {
+          "field": "must",
+          "offset": 19
+        },
+        {
+          "field": "not",
+          "offset": 16
+        },
+        {
+          "field": "outbound",
+          "offset": 18
+        },
+        {
+          "field": "type",
+          "offset": 17
+        },
+        {
+          "field": "value",
+          "offset": 0
+        }
+      ],
+      "size": 24
+    },
+    {
+      "align": 1,
+      "name": "bpfOutboundConnectivityQuery",
+      "offsets": [
+        {
+          "field": "ipversion",
+          "offset": 2
+        },
+        {
+          "field": "l4proto",
+          "offset": 1
+        },
+        {
+          "field": "outbound",
+          "offset": 0
+        }
+      ],
+      "size": 3
+    },
+    {
+      "align": 4,
+      "name": "bpfPidPname",
+      "offsets": [
+        {
+          "field": "pid",
+          "offset": 0
+        },
+        {
+          "field": "pname",
+          "offset": 4
+        }
+      ],
+      "size": 20
+    },
+    {
+      "align": 4,
+      "name": "bpfRedirectEntry",
+      "offsets": [
+        {
+          "field": "dmac",
+          "offset": 10
+        },
+        {
+          "field": "from_wan",
+          "offset": 16
+        },
+        {
+          "field": "ifindex",
+          "offset": 0
+        },
+        {
+          "field": "smac",
+          "offset": 4
+        }
+      ],
+      "size": 20
+    },
+    {
+      "align": 1,
+      "name": "bpfRedirectTuple",
+      "offsets": [
+        {
+          "field": "dip",
+          "offset": 16
+        },
+        {
+          "field": "sip",
+          "offset": 0
+        }
+      ],
+      "size": 32
+    },
+    {
+      "align": 4,
+      "name": "bpfRoutingResult",
+      "offsets": [
+        {
+          "field": "dscp",
+          "offset": 32
+        },
+        {
+          "field": "mac",
+          "offset": 5
+        },
+        {
+          "field": "mark",
+          "offset": 0
+        },
+        {
+          "field": "must",
+          "offset": 4
+        },
+        {
+          "field": "outbound",
+          "offset": 11
+        },
+        {
+          "field": "pid",
+          "offset": 28
+        },
+        {
+          "field": "pname",
+          "offset": 12
+        }
+      ],
+      "size": 36
+    },
+    {
+      "align": 2,
+      "name": "bpfTuplesKey",
+      "offsets": [
+        {
+          "field": "dip",
+          "offset": 16
+        },
+        {
+          "field": "dport",
+          "offset": 34
+        },
+        {
+          "field": "l4proto",
+          "offset": 36
+        },
+        {
+          "field": "sip",
+          "offset": 0
+        },
+        {
+          "field": "sport",
+          "offset": 32
+        }
+      ],
+      "size": 40
+    },
+    {
+      "align": 8,
+      "name": "bpfUdpConnState",
+      "offsets": [
+        {
+          "field": "is_wan_ingress_direction",
+          "offset": 0
+        },
+        {
+          "field": "timer",
+          "offset": 8
+        }
+      ],
+      "size": 24
+    }
+  ],
+  "task_comm_len": 16,
+  "tproxy_mark": 134217728
+}

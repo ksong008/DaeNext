@@ -1,0 +1,47 @@
+{
+  "name": "engine-runtime-overview-basic",
+  "no_control_plane": {
+    "active_connections": 0,
+    "dns_cache_expired_removal_total": 102,
+    "dns_cache_hit_total": 101,
+    "dns_doh_content_type_failure_total": 106,
+    "dns_doh_status_failure_total": 105,
+    "dns_truncated_tcp_fallback_total": 104,
+    "dns_udp_retry_total": 103,
+    "dns_upstream_refresh_failure_total": 108,
+    "dns_upstream_refresh_stale_reuse_total": 109,
+    "dns_upstream_refresh_success_total": 107,
+    "download_rate": 20,
+    "download_total": 40,
+    "goroutines": 70,
+    "heap_alloc_bytes": 60,
+    "packet_sniffer_sessions": 77,
+    "rss_bytes": 50,
+    "samples": [
+      {
+        "download_rate": 22,
+        "timestamp_unix": 1700000300,
+        "upload_rate": 11
+      }
+    ],
+    "udp_sessions": 0,
+    "udp_task_drop_total": 88,
+    "udp_task_queues": 99,
+    "updated_at_unix": 1700000300,
+    "upload_rate": 10,
+    "upload_total": 30
+  },
+  "notes": "RuntimeOverview must tolerate missing control plane, retain DNS observability fields and samples, and prefer Engine scoped UDP task pool telemetry.",
+  "scoped_udp_task_pool": {
+    "packet_sniffer_kept": 77,
+    "snapshot_drop_input": 88,
+    "snapshot_queue_input": 99,
+    "udp_task_drop_total": 0,
+    "udp_task_queues": 1
+  },
+  "source": [
+    "engine/runtime.go",
+    "engine/runtime_test.go",
+    "control/runtime_stats.go"
+  ]
+}

@@ -1,0 +1,75 @@
+{
+  "macs": [
+    {
+      "input": "00:11:22:aa:BB:cc",
+      "name": "valid",
+      "ok": true,
+      "want_hex": "001122aabbcc"
+    },
+    {
+      "error": "invalid mac: 00:11:22:aa:bb",
+      "input": "00:11:22:aa:bb",
+      "name": "too-few-fields",
+      "ok": false
+    },
+    {
+      "error": "parse mac 0:11:22:aa:bb:cc: encoding/hex: odd length hex string",
+      "input": "0:11:22:aa:bb:cc",
+      "name": "one-digit-field",
+      "ok": false
+    }
+  ],
+  "name": "config-parse-basic",
+  "notes": "Rust config utilities must keep ParseMac and ParsePortRange compatibility for config/routing parsing.",
+  "port_ranges": [
+    {
+      "input": "80",
+      "name": "single",
+      "ok": true,
+      "want": [
+        80,
+        80
+      ]
+    },
+    {
+      "input": "100-200",
+      "name": "range",
+      "ok": true,
+      "want": [
+        100,
+        200
+      ]
+    },
+    {
+      "error": "bad port range: ",
+      "input": "",
+      "name": "empty",
+      "ok": false
+    },
+    {
+      "error": "bad port range: -1",
+      "input": "-1",
+      "name": "empty-start",
+      "ok": false
+    },
+    {
+      "error": "bad port range: 1-",
+      "input": "1-",
+      "name": "empty-end",
+      "ok": false
+    },
+    {
+      "error": "port 65536 exceeds uint16 range",
+      "input": "65536",
+      "name": "too-large",
+      "ok": false
+    },
+    {
+      "error": "strconv.Atoi: parsing \"abc\": invalid syntax",
+      "input": "abc",
+      "name": "invalid-decimal",
+      "ok": false
+    }
+  ],
+  "source": "common/utils.go:ParseMac,ParsePortRange"
+}
