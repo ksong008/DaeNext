@@ -12,7 +12,7 @@ pub(super) fn daed_export_commands_report_product_package_surface() {
             String::from_utf8_lossy(&output.stderr)
         );
         let value: Value = serde_json::from_slice(&output.stdout).unwrap();
-        assert!(value.to_string().contains("final-native-state"));
+        assert!(value.to_string().contains("runtime-state"));
     }
     for command in ["package-manifest", "admission-report", "webui-route-audit"] {
         let output = Command::new(binary())
@@ -25,7 +25,7 @@ pub(super) fn daed_export_commands_report_product_package_surface() {
             String::from_utf8_lossy(&output.stderr)
         );
         let value: Value = serde_json::from_slice(&output.stdout).unwrap();
-        assert!(value.to_string().contains("final-native-state"));
+        assert!(value.to_string().contains("runtime-state"));
     }
     let route_audit = Command::new(binary())
         .args(["export", "webui-route-audit"])
@@ -44,7 +44,7 @@ pub(super) fn daed_export_commands_report_product_package_surface() {
         "validate"
     );
     assert!(
-        !manifest["admission"]["fullFinalNativeStateReady"]
+        !manifest["admission"]["runtimeStateReady"]
             .as_bool()
             .unwrap()
     );

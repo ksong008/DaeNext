@@ -106,7 +106,7 @@ pub fn listener_ebpf_preflight_report(root: &Path) -> Result<Value, String> {
         "temporary_ebpf_attach_smoke_passed",
         "benchmark_executable_now",
         "true_rust_native_daemon_admitted",
-        "final_native_admission_allowed",
+        "production_admission_allowed",
         "host_mutation_allowed",
         "final_state_admission_allowed",
     ] {

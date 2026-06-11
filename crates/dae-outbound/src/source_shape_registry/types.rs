@@ -8,7 +8,7 @@ pub struct SourceShapeRegistryContract {
     pub expanded_source_matrix_open: bool,
     pub expanded_source_matrix_complete: bool,
     pub scoped_expanded_source_matrix_evidence: ScopedExpandedSourceMatrixEvidence,
-    pub release_gate_may_use_current_config_matrix_as_source_matrix: bool,
+    pub production_readiness_may_use_current_config_matrix_as_source_matrix: bool,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -27,7 +27,7 @@ impl SourceShapeRegistryContract {
             "expandedSourceMatrixOpen": self.expanded_source_matrix_open,
             "expandedSourceMatrixComplete": self.expanded_source_matrix_complete,
             "scopedExpandedSourceMatrixEvidence": self.scoped_expanded_source_matrix_evidence.to_value(),
-            "releaseGateMayUseCurrentConfigMatrixAsSourceMatrix": self.release_gate_may_use_current_config_matrix_as_source_matrix,
+            "productionReadinessMayUseCurrentConfigMatrixAsSourceMatrix": self.production_readiness_may_use_current_config_matrix_as_source_matrix,
             "rowCount": self.rows.len(),
             "rows": self.rows.iter().map(|row| row.to_value()).collect::<Vec<_>>(),
         })
@@ -60,7 +60,7 @@ pub struct ScopedExpandedSourceMatrixEvidence {
     pub raw_links_retained: bool,
     pub raw_bodies_retained: bool,
     pub raw_state_retained: bool,
-    pub release_gate_ready: bool,
+    pub production_ready: bool,
 }
 
 impl ScopedExpandedSourceMatrixEvidence {
@@ -90,7 +90,7 @@ impl ScopedExpandedSourceMatrixEvidence {
             "rawLinksRetained": self.raw_links_retained,
             "rawBodiesRetained": self.raw_bodies_retained,
             "rawStateRetained": self.raw_state_retained,
-            "releaseGateReady": self.release_gate_ready,
+            "productionReady": self.production_ready,
         })
     }
 }
@@ -118,7 +118,7 @@ pub struct SourceShapeRegistryRow {
     pub runtime_selection: RuntimeSelectionLedger,
     pub capability: CapabilityLedger,
     pub expanded_live_matrix: ExpandedLiveMatrixLedger,
-    pub release_gate: ReleaseGateReconciliation,
+    pub production_readiness: ProductionReadinessReconciliation,
 }
 
 impl SourceShapeRegistryRow {
@@ -145,7 +145,7 @@ impl SourceShapeRegistryRow {
             "runtimeSelectionLedger": self.runtime_selection.to_value(),
             "capabilityLedger": self.capability.to_value(),
             "expandedLiveMatrixLedger": self.expanded_live_matrix.to_value(),
-            "releaseGateReconciliation": self.release_gate.to_value(),
+            "productionReadinessReconciliation": self.production_readiness.to_value(),
         })
     }
 }
@@ -156,8 +156,8 @@ pub struct ShapeStateLedger {
     pub parser: &'static str,
     pub resident_graph: &'static str,
     pub live: &'static str,
-    pub final_native_admission: &'static str,
-    pub final_native: &'static str,
+    pub production_admission: &'static str,
+    pub production_state: &'static str,
 }
 
 impl ShapeStateLedger {
@@ -167,8 +167,8 @@ impl ShapeStateLedger {
             "parser": self.parser,
             "residentGraph": self.resident_graph,
             "live": self.live,
-            "finalNativeAdmission": self.final_native_admission,
-            "finalNative": self.final_native,
+            "productionAdmission": self.production_admission,
+            "productionState": self.production_state,
         })
     }
 }
@@ -266,7 +266,7 @@ impl ExpandedLiveMatrixLedger {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct ReleaseGateReconciliation {
+pub struct ProductionReadinessReconciliation {
     pub current_baseline_agrees: bool,
     pub expanded_source_agrees: bool,
     pub service_contract_agrees: bool,
@@ -275,7 +275,7 @@ pub struct ReleaseGateReconciliation {
     pub cleanup_evidence_ready: bool,
 }
 
-impl ReleaseGateReconciliation {
+impl ProductionReadinessReconciliation {
     pub fn to_value(self) -> Value {
         json!({
             "currentBaselineAgrees": self.current_baseline_agrees,

@@ -18,7 +18,7 @@ pub(super) fn lifecycle_smoke_uses_isolated_paths() {
     );
     assert!(!report["production_paths_mutated"].as_bool().unwrap());
     assert!(!report["benchmark_executable_now"].as_bool().unwrap());
-    assert!(!report["final_native_admission_allowed"].as_bool().unwrap());
+    assert!(!report["production_admission_allowed"].as_bool().unwrap());
     let _ = std::fs::remove_dir_all(root);
 }
 
@@ -87,7 +87,7 @@ pub(super) fn control_plane_owner_preflight_uses_isolated_paths() {
     );
     assert!(!report["production_listener_bound"].as_bool().unwrap());
     assert!(!report["ebpf_attached"].as_bool().unwrap());
-    assert!(!report["final_native_admission_allowed"].as_bool().unwrap());
+    assert!(!report["production_admission_allowed"].as_bool().unwrap());
     assert_eq!(report["reload_core"]["flip"].as_u64().unwrap(), 1);
     let _ = std::fs::remove_dir_all(root);
 }
@@ -154,7 +154,7 @@ pub(super) fn signal_control_plane_smoke_uses_isolated_paths() {
     );
     assert!(!report["production_listener_bound"].as_bool().unwrap());
     assert!(!report["ebpf_attached"].as_bool().unwrap());
-    assert!(!report["final_native_admission_allowed"].as_bool().unwrap());
+    assert!(!report["production_admission_allowed"].as_bool().unwrap());
     let _ = std::fs::remove_dir_all(root);
 }
 
@@ -219,7 +219,7 @@ pub(super) fn run_entrypoint_preflight_composes_prior_smokes() {
     assert!(report["rust_run_command_owned"].as_bool().unwrap());
     assert!(report["production_run_command_owned"].as_bool().unwrap());
     assert!(report["rust_run_entrypoint_exists"].as_bool().unwrap());
-    assert!(!report["final_native_admission_allowed"].as_bool().unwrap());
+    assert!(!report["production_admission_allowed"].as_bool().unwrap());
     let _ = std::fs::remove_dir_all(root);
 }
 
@@ -278,7 +278,7 @@ pub(super) fn product_run_identity_admits_runtime_identity_only() {
             .unwrap()
     );
     assert!(!report["benchmark_executable_now"].as_bool().unwrap());
-    assert!(!report["final_native_admission_allowed"].as_bool().unwrap());
+    assert!(!report["production_admission_allowed"].as_bool().unwrap());
     let _ = std::fs::remove_dir_all(root);
 }
 
@@ -340,7 +340,7 @@ pub(super) fn control_plane_entrypoint_admits_runtime_contract_only() {
     assert!(!report["production_listener_bound"].as_bool().unwrap());
     assert!(!report["ebpf_attached"].as_bool().unwrap());
     assert!(!report["benchmark_executable_now"].as_bool().unwrap());
-    assert!(!report["final_native_admission_allowed"].as_bool().unwrap());
+    assert!(!report["production_admission_allowed"].as_bool().unwrap());
     let _ = std::fs::remove_dir_all(root);
 }
 

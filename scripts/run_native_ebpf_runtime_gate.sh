@@ -22,8 +22,8 @@ native_object="${NATIVE_OBJECT:-/tmp/dae-native-bpf_bpfel.o}"
 rust_native_object="${RUST_NATIVE_OBJECT:-target/bpfel-unknown-none/release/libdae_ebpf_program.so}"
 cargo_log="${CARGO_LOG:-/tmp/dae-native-ebpf-runtime-gate-${run_id}.log}"
 cgroup_log="${CGROUP_LOG:-/tmp/dae-native-ebpf-cgroup-gate-${run_id}.log}"
-backend="${DAE_NATIVE_EBPF_BACKEND:-auto}"
-netns_link="${DAE_NETNS_LINK:-auto}"
+backend="${NATIVE_EBPF_BACKEND:-${DAE_NATIVE_EBPF_BACKEND:-auto}}"
+netns_link="${NETNS_LINK:-${DAE_NETNS_LINK:-auto}}"
 runtime_timeout="${RUNTIME_TIMEOUT:-180s}"
 
 case "$run_root" in

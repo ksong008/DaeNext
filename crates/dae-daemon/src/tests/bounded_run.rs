@@ -76,7 +76,7 @@ pub(super) fn run_report_executes_bounded_lifecycle_and_smokes() {
             .as_bool()
             .unwrap()
     );
-    assert!(!report["final_native_admission_allowed"].as_bool().unwrap());
+    assert!(!report["production_admission_allowed"].as_bool().unwrap());
     assert_eq!(
         report["production_runtime_live_matrix"]["schema"]
             .as_str()
@@ -89,7 +89,7 @@ pub(super) fn run_report_executes_bounded_lifecycle_and_smokes() {
             .unwrap()
     );
     assert!(
-        !report["production_runtime_live_matrix"]["final_native_admission_allowed_by_this_matrix"]
+        !report["production_runtime_live_matrix"]["production_admission_allowed_by_this_matrix"]
             .as_bool()
             .unwrap()
     );
@@ -267,7 +267,7 @@ pub(super) fn daemon_runner_run_command_outputs_json() {
             .unwrap()
     );
     assert!(
-        !json["production_runtime_owner"]["final_native_admission_allowed"]
+        !json["production_runtime_owner"]["production_admission_allowed"]
             .as_bool()
             .unwrap()
     );

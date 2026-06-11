@@ -1,6 +1,6 @@
 use super::*;
 #[test]
-pub(super) fn daed_product_contract_reports_final_native_state_paths() {
+pub(super) fn daed_product_contract_reports_runtime_state_paths() {
     let output = Command::new(binary())
         .args(["service-contract", "--json"])
         .output()
@@ -84,37 +84,29 @@ pub(super) fn daed_product_contract_reports_final_native_state_paths() {
             .unwrap()
     );
     assert!(
-        report["final_native_state_typed_report"]["rust_product_binary_contract_ready"]
+        report["runtime_state_typed_report"]["rust_product_binary_contract_ready"]
             .as_bool()
             .unwrap()
     );
     assert_eq!(
-        report["final_native_state_typed_report"]["status"]
+        report["runtime_state_typed_report"]["status"]
             .as_str()
             .unwrap(),
         "blocked"
     );
+    assert!(!report["live_host_contract_ready"].as_bool().unwrap());
+    assert!(!report["state_artifact_ready"].as_bool().unwrap());
     assert!(
-        !report["final_native_live_host_contract_ready"]
-            .as_bool()
-            .unwrap()
-    );
-    assert!(
-        !report["final_native_final_state_artifact_ready"]
-            .as_bool()
-            .unwrap()
-    );
-    assert!(
-        report["final_native_state_typed_report"]["blockers"]
+        report["runtime_state_typed_report"]["blockers"]
             .as_array()
             .unwrap()
             .iter()
             .any(|blocker| blocker
                 .as_str()
                 .unwrap()
-                .contains("final-state artifact validation is not recorded"))
+                .contains("state artifact validation is not recorded"))
     );
-    assert!(!report["final_native_state_ready"].as_bool().unwrap());
+    assert!(!report["runtime_state_ready"].as_bool().unwrap());
 
     let package = Command::new(binary())
         .args(["package-info", "--json"])
@@ -147,7 +139,7 @@ pub(super) fn daed_product_contract_reports_final_native_state_paths() {
             .unwrap()
     );
     assert!(
-        !package["package_surface"]["final_native_product_package_ready"]
+        !package["package_surface"]["product_package_ready"]
             .as_bool()
             .unwrap()
     );
@@ -156,14 +148,14 @@ pub(super) fn daed_product_contract_reports_final_native_state_paths() {
             .as_bool()
             .unwrap()
     );
-    assert!(!package["full_final_native_state_ready"].as_bool().unwrap());
+    assert!(!package["runtime_state_ready"].as_bool().unwrap());
     assert!(!package["webui"]["leptos_considered"].as_bool().unwrap());
 }
 
 #[test]
 pub(super) fn daed_version_command_supports_package_smoke_test() {
     let output = Command::new(binary())
-        .env("DAE_DAEMON_VERSION", "final-native-smoke")
+        .env("DAE_DAEMON_VERSION", "runtime-state-smoke")
         .arg("--version")
         .output()
         .unwrap();
@@ -174,7 +166,7 @@ pub(super) fn daed_version_command_supports_package_smoke_test() {
     );
     assert_eq!(
         String::from_utf8_lossy(&output.stdout),
-        "final-native-smoke\n"
+        "runtime-state-smoke\n"
     );
 }
 

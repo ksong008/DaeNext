@@ -178,7 +178,7 @@ pub(super) fn excluded_stream_wrapper_source_matrix_typed_report(
         "status": if complete { "pass" } else { "blocked" },
         "open": true,
         "complete": complete,
-        "release_gate_ready": complete,
+        "production_ready": complete,
         "final_state_ready": complete,
         "source_scope": "source-supported-rows-excluding-stream-wrapper",
         "excluded_stream_wrappers": excluded_stream_wrappers,

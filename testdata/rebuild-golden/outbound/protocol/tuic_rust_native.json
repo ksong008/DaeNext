@@ -124,7 +124,7 @@
     "common_quic_numeric_value": 0,
     "protocol_effective_mode": "native",
     "query_value": "quic",
-    "quic_mode_fixme_deferred": true
+    "quic_mode_deferred": true
   },
   "underlay_contract": {
     "tcp_request": {

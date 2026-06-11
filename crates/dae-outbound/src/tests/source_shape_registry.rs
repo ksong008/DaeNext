@@ -9,12 +9,12 @@ fn source_shape_registry_separates_open_registry_from_complete_matrix() {
     assert!(contract.source_shape_registry_open);
     assert!(contract.expanded_source_matrix_open);
     assert!(!contract.expanded_source_matrix_complete);
-    assert!(!contract.release_gate_may_use_current_config_matrix_as_source_matrix);
+    assert!(!contract.production_readiness_may_use_current_config_matrix_as_source_matrix);
     assert!(contract.rows.len() >= 20);
     assert!(
         contract
             .scoped_expanded_source_matrix_evidence
-            .release_gate_ready
+            .production_ready
     );
     assert_eq!(
         contract
@@ -150,9 +150,18 @@ fn source_shape_registry_marks_expanded_rows_with_scoped_live_evidence() {
             row.expanded_live_matrix.ledger_state, "scoped-live-host-evidence-ready",
             "{expected}"
         );
-        assert!(row.release_gate.expanded_source_agrees, "{expected}");
-        assert!(row.release_gate.service_contract_agrees, "{expected}");
-        assert!(row.release_gate.cleanup_evidence_ready, "{expected}");
+        assert!(
+            row.production_readiness.expanded_source_agrees,
+            "{expected}"
+        );
+        assert!(
+            row.production_readiness.service_contract_agrees,
+            "{expected}"
+        );
+        assert!(
+            row.production_readiness.cleanup_evidence_ready,
+            "{expected}"
+        );
     }
 }
 
@@ -228,10 +237,26 @@ fn source_shape_registry_admitted_rows_are_runtime_executable_and_evidence_gated
                 "{}",
                 row.shape_id
             );
-            assert!(row.release_gate.expanded_source_agrees, "{}", row.shape_id);
-            assert!(row.release_gate.service_contract_agrees, "{}", row.shape_id);
-            assert!(row.release_gate.cleanup_evidence_ready, "{}", row.shape_id);
-            assert!(!row.release_gate.final_state_ready, "{}", row.shape_id);
+            assert!(
+                row.production_readiness.expanded_source_agrees,
+                "{}",
+                row.shape_id
+            );
+            assert!(
+                row.production_readiness.service_contract_agrees,
+                "{}",
+                row.shape_id
+            );
+            assert!(
+                row.production_readiness.cleanup_evidence_ready,
+                "{}",
+                row.shape_id
+            );
+            assert!(
+                !row.production_readiness.final_state_ready,
+                "{}",
+                row.shape_id
+            );
         } else {
             assert_eq!(
                 row.expanded_live_matrix.ledger_state, "pending-live-host-evidence",
@@ -255,7 +280,7 @@ fn source_shape_registry_admitted_rows_are_runtime_executable_and_evidence_gated
 }
 
 #[test]
-fn source_shape_registry_records_scoped_release_gate_evidence() {
+fn source_shape_registry_records_scoped_production_readiness_evidence() {
     let evidence = source_shape_registry_contract().scoped_expanded_source_matrix_evidence;
 
     assert_eq!(evidence.schema, "scoped-expanded-source-evidence");
@@ -284,7 +309,7 @@ fn source_shape_registry_records_scoped_release_gate_evidence() {
     assert!(!evidence.raw_links_retained);
     assert!(!evidence.raw_bodies_retained);
     assert!(!evidence.raw_state_retained);
-    assert!(evidence.release_gate_ready);
+    assert!(evidence.production_ready);
     for expected in [
         "secure-endpoint-capability",
         "nested-chain-shape",

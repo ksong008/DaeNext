@@ -156,7 +156,7 @@ pub(super) fn base_report(
         "reload_runtime_parity_admitted",
         "native_daemon_benchmark_recorded",
         "true_rust_native_daemon_admitted",
-        "final_native_admission_allowed",
+        "production_admission_allowed",
         "host_mutation_allowed",
         "final_state_admission_allowed",
     ] {
@@ -173,6 +173,7 @@ pub(super) fn base_report(
         }),
     );
     report.insert("native_runtime_path_preserved".to_owned(), json!(true));
-    report.insert("final_native_evidence_required".to_owned(), json!(true));
+    report.insert("runtime_state_evidence_required".to_owned(), json!(true));
+    report.insert("production_evidence_required".to_owned(), json!(true));
     Value::Object(report)
 }

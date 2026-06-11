@@ -71,12 +71,12 @@ pub(super) fn production_runtime_owner_report_admits_generic_udp_dns_with_eviden
             .unwrap()
     );
     assert!(
-        !report["generic_udp_dns_final_native_admission_allowed"]
+        !report["generic_udp_dns_production_admission_allowed"]
             .as_bool()
             .unwrap()
     );
     assert!(
-        !report["final_native_admission_allowed"].as_bool().unwrap(),
+        !report["production_admission_allowed"].as_bool().unwrap(),
         "UDP/DNS admission alone must not open production daemon switching"
     );
 }

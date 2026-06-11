@@ -30,7 +30,7 @@ pub(super) const fn admitted_row(
         runtime_selection: ADMITTED_RUNTIME_SELECTION,
         capability: BASE_CAPABILITY,
         expanded_live_matrix: PENDING_LIVE_LEDGER,
-        release_gate: BASE_RELEASE_GATE,
+        production_readiness: BASE_PRODUCTION_READINESS,
     }
 }
 
@@ -66,7 +66,7 @@ pub(super) const fn blocked_row(
         runtime_selection: BLOCKED_RUNTIME_SELECTION,
         capability: DEFERRED_CAPABILITY,
         expanded_live_matrix: BLOCKED_LIVE_LEDGER,
-        release_gate: REJECTED_RELEASE_GATE,
+        production_readiness: REJECTED_PRODUCTION_READINESS,
     }
 }
 
@@ -101,7 +101,7 @@ pub(super) const fn scoped_evidence_admitted_row(
         runtime_selection: ADMITTED_RUNTIME_SELECTION,
         capability: BASE_CAPABILITY,
         expanded_live_matrix: SCOPED_READY_LIVE_LEDGER,
-        release_gate: SCOPED_READY_RELEASE_GATE,
+        production_readiness: SCOPED_READY_PRODUCTION_READINESS,
     }
 }
 
@@ -137,7 +137,7 @@ pub(super) const fn scoped_evidence_capability_admitted_row(
         runtime_selection: ADMITTED_RUNTIME_SELECTION,
         capability,
         expanded_live_matrix: SCOPED_READY_LIVE_LEDGER,
-        release_gate: SCOPED_READY_RELEASE_GATE,
+        production_readiness: SCOPED_READY_PRODUCTION_READINESS,
     }
 }
 
@@ -172,7 +172,7 @@ pub(super) const fn scoped_evidence_plugin_wrapper_admitted_row(
         runtime_selection: ADMITTED_RUNTIME_SELECTION,
         capability: PLUGIN_WRAPPER_CAPABILITY,
         expanded_live_matrix: SCOPED_READY_LIVE_LEDGER,
-        release_gate: SCOPED_READY_RELEASE_GATE,
+        production_readiness: SCOPED_READY_PRODUCTION_READINESS,
     }
 }
 
@@ -207,7 +207,7 @@ pub(super) const fn scoped_evidence_chain_admitted_row(
         runtime_selection: ADMITTED_RUNTIME_SELECTION,
         capability: CHAIN_CAPABILITY,
         expanded_live_matrix: SCOPED_READY_LIVE_LEDGER,
-        release_gate: SCOPED_READY_RELEASE_GATE,
+        production_readiness: SCOPED_READY_PRODUCTION_READINESS,
     }
 }
 
@@ -242,7 +242,7 @@ pub(super) const fn scoped_evidence_legacy_import_admitted_row(
         runtime_selection: ADMITTED_RUNTIME_SELECTION,
         capability: LEGACY_IMPORT_CAPABILITY,
         expanded_live_matrix: SCOPED_READY_LIVE_LEDGER,
-        release_gate: SCOPED_READY_RELEASE_GATE,
+        production_readiness: SCOPED_READY_PRODUCTION_READINESS,
     }
 }
 
@@ -278,6 +278,6 @@ pub(super) const fn not_supported_row(
         runtime_selection: BLOCKED_RUNTIME_SELECTION,
         capability: NOT_SUPPORTED_CAPABILITY,
         expanded_live_matrix: REJECTED_LIVE_LEDGER,
-        release_gate: REJECTED_RELEASE_GATE,
+        production_readiness: REJECTED_PRODUCTION_READINESS,
     }
 }

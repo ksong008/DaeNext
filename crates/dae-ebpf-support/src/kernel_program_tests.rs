@@ -12,14 +12,14 @@ fn kernel_program_feasibility_reports_native_production_candidate() {
     assert_eq!(report.rust_trace_kprobe_covered, 0);
     assert!(report.rust_tproxy_runtime_admitted);
     assert!(!report.trace_rust_native_admitted);
-    assert!(!report.final_native_admission_allowed);
-    assert!(report.formal_kernel_program_parity_stage_required);
+    assert!(!report.production_admission_allowed);
+    assert!(report.kernel_program_parity_required_before_production);
     assert!(!report.external_ebpf_tproxy_object_required);
     assert!(!report.external_ebpf_trace_object_required);
     assert!(report.tc_command_backend_required);
     assert!(report.native_userspace_control_plane_ready);
-    assert!(report.native_bpf_loader_ready_by_this_stage);
-    assert!(report.external_bpf_dependency_absent_by_this_stage);
+    assert!(report.native_bpf_loader_production_ready);
+    assert!(report.external_bpf_dependency_absent_before_production);
 }
 
 #[test]
@@ -82,7 +82,7 @@ fn kernel_program_parity_admission_blocks_external_dependency_release_after_feas
     let report = kernel_program_parity_admission_report(evidence);
     assert_eq!(report.schema, "kernel-program-parity-admission");
     assert!(!report.admitted);
-    assert!(!report.final_native_admission_allowed);
+    assert!(!report.production_admission_allowed);
     assert!(report.external_ebpf_tproxy_object_absent);
     assert!(report.external_ebpf_trace_object_absent);
     assert!(report.external_bpf_dependency_absent);
@@ -175,7 +175,7 @@ fn kernel_program_parity_admission_can_record_complete_evidence_without_opening_
         kernel_program_parity_admission_report(KernelProgramParityEvidence::complete_for_tests());
     assert!(report.admitted);
     assert!(report.missing_checks.is_empty());
-    assert!(!report.final_native_admission_allowed);
+    assert!(!report.production_admission_allowed);
     assert!(report.external_ebpf_tproxy_object_absent);
     assert!(report.external_ebpf_trace_object_absent);
     assert!(report.external_bpf_dependency_absent);
@@ -236,20 +236,20 @@ fn trace_diagnostic_gate_is_excluded_from_tproxy_production_candidate() {
 }
 
 #[test]
-fn kernel_program_final_native_gate_blocks_current_incomplete_state() {
+fn kernel_program_production_admission_gate_blocks_current_incomplete_state() {
     let feasibility = kernel_program_feasibility_report();
     let evidence = KernelProgramParityEvidence::from_feasibility(&feasibility);
     let tproxy = tproxy_dataplane_admission_report(evidence);
     let trace_diagnostic = trace_diagnostic_gate_report(&trace_core_sideload_gate_report());
-    let gate = kernel_program_final_native_gate_report(
+    let gate = kernel_program_production_admission_gate_report(
         &tproxy,
         &trace_diagnostic,
-        KernelProgramFinalNativeEvidence::read_only(),
+        KernelProgramProductionEvidence::read_only(),
     );
 
-    assert_eq!(gate.schema, "kernel-program-final-native-gate");
+    assert_eq!(gate.schema, "kernel-program-production-gate");
     assert!(!gate.admitted);
-    assert!(!gate.final_native_admission_allowed);
+    assert!(!gate.production_admission_allowed);
     assert!(gate.external_ebpf_tproxy_object_absent);
     assert!(gate.external_ebpf_trace_object_absent);
     assert!(gate.external_bpf_dependency_absent);
@@ -260,7 +260,7 @@ fn kernel_program_final_native_gate_blocks_current_incomplete_state() {
     assert!(gate.tc_command_backend_required);
     assert!(gate.native_userspace_control_plane_ready);
     assert_eq!(
-        gate.final_native_scope,
+        gate.production_scope,
         "kernel-facing-tproxy-rust-aya; trace diagnostic excluded from production runtime; outbound protocol boundary ready"
     );
     assert!(!gate.explicit_user_approval_recorded);
@@ -268,30 +268,30 @@ fn kernel_program_final_native_gate_blocks_current_incomplete_state() {
     assert!(
         !gate
             .blockers
-            .contains(&KernelProgramFinalNativeBlocker::KernelProgramParityMissing)
+            .contains(&KernelProgramProductionBlocker::KernelProgramParityMissing)
     );
     assert!(
         !gate
             .blockers
-            .contains(&KernelProgramFinalNativeBlocker::TproxyDataplaneAdmissionMissing)
+            .contains(&KernelProgramProductionBlocker::TproxyDataplaneAdmissionMissing)
     );
     assert!(
         !gate
             .blockers
-            .contains(&KernelProgramFinalNativeBlocker::TraceCoreSideloadDisabled)
+            .contains(&KernelProgramProductionBlocker::TraceCoreSideloadDisabled)
     );
     assert!(
         !gate
             .blockers
-            .contains(&KernelProgramFinalNativeBlocker::RemoteHostWriteAdmissionMissing)
+            .contains(&KernelProgramProductionBlocker::RemoteHostWriteAdmissionMissing)
     );
     assert!(
         gate.blockers
-            .contains(&KernelProgramFinalNativeBlocker::ExplicitUserApprovalMissing)
+            .contains(&KernelProgramProductionBlocker::ExplicitUserApprovalMissing)
     );
     assert!(
         gate.blockers
-            .contains(&KernelProgramFinalNativeBlocker::FinalStateCertificationMissing)
+            .contains(&KernelProgramProductionBlocker::FinalStateCertificationMissing)
     );
     assert!(
         !gate
@@ -306,18 +306,18 @@ fn kernel_program_final_native_gate_blocks_current_incomplete_state() {
 }
 
 #[test]
-fn kernel_program_final_native_gate_can_admit_only_after_full_evidence() {
+fn kernel_program_production_admission_gate_can_admit_only_after_full_evidence() {
     let tproxy =
         tproxy_dataplane_admission_report(KernelProgramParityEvidence::complete_for_tests());
     let trace_diagnostic = trace_diagnostic_gate_report(&trace_core_sideload_gate_report());
-    let gate = kernel_program_final_native_gate_report(
+    let gate = kernel_program_production_admission_gate_report(
         &tproxy,
         &trace_diagnostic,
-        KernelProgramFinalNativeEvidence::completed_for_tests(),
+        KernelProgramProductionEvidence::completed_for_tests(),
     );
 
     assert!(gate.admitted);
-    assert!(gate.final_native_admission_allowed);
+    assert!(gate.production_admission_allowed);
     assert!(gate.external_ebpf_tproxy_object_absent);
     assert!(gate.external_ebpf_trace_object_absent);
     assert!(gate.external_bpf_dependency_absent);

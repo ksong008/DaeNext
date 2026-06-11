@@ -147,10 +147,11 @@ pub fn product_run_identity_admission_report(
         "isolated_pid_progress_paths_validated",
         "run_entrypoint_wrapper_reused",
         "native_runtime_path_preserved",
-        "final_native_evidence_required",
+        "runtime_state_evidence_required",
     ] {
         report[key] = json!(true);
     }
+    report["production_evidence_required"] = json!(true);
     for key in [
         "production_run_command_owned",
         "production_pid_progress_paths_mutated",
@@ -161,12 +162,13 @@ pub fn product_run_identity_admission_report(
         "benchmark_executable_now",
         "native_daemon_benchmark_recorded",
         "true_rust_native_daemon_admitted",
-        "final_native_admission_allowed",
+        "production_admission_allowed",
         "host_mutation_allowed",
         "final_state_admission_allowed",
     ] {
         report[key] = json!(false);
     }
+    report["production_admission_allowed"] = json!(false);
     let manifest = serde_json::to_vec_pretty(&report)
         .map_err(|err| format!("failed to encode product-run-identity manifest: {err}"))?;
     fs::write(&manifest_file, manifest)

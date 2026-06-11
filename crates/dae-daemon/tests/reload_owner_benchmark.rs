@@ -24,7 +24,7 @@ fn reload_owner_benchmark_records_bounded_metrics() {
             .as_bool()
             .unwrap()
     );
-    assert!(!report["final_native_admission_allowed"].as_bool().unwrap());
+    assert!(!report["production_admission_allowed"].as_bool().unwrap());
     let _ = std::fs::remove_dir_all(root);
 }
 

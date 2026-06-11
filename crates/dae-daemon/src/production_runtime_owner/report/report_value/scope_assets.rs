@@ -4,11 +4,11 @@ pub(crate) fn insert_scope_and_assets(
     context: &ReportValueContext,
 ) {
     report.insert(
-        "final_native_daemon_admitted".to_owned(),
+        "production_daemon_admitted".to_owned(),
         json!(context.facts.production_dataplane_admitted && context.facts.reload_runtime_passed),
     );
     report.insert(
-        "final_native_admission_allowed".to_owned(),
+        "production_admission_allowed".to_owned(),
         json!(context.facts.production_dataplane_admitted && context.facts.reload_runtime_passed),
     );
     report.insert(

@@ -1,6 +1,5 @@
 use std::io::ErrorKind;
-use std::net::{IpAddr, Ipv4Addr, SocketAddr, UdpSocket};
-use std::os::fd::AsRawFd;
+use std::net::{SocketAddr, UdpSocket};
 use std::path::PathBuf;
 use std::sync::{
     Arc, Mutex,

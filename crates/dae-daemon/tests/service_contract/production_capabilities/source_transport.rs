@@ -14,7 +14,7 @@ pub(crate) fn assert_source_stream_packet_and_transport_contract(report: &Value)
             .unwrap()
     );
     assert!(
-        !report["expanded_source_matrix_release_gate_ready"]
+        !report["expanded_source_matrix_production_ready"]
             .as_bool()
             .unwrap()
     );
@@ -34,7 +34,7 @@ pub(crate) fn assert_source_stream_packet_and_transport_contract(report: &Value)
             .unwrap()
     );
     assert!(
-        report["excluded_stream_wrapper_source_matrix_release_gate_ready"]
+        report["excluded_stream_wrapper_source_matrix_production_ready"]
             .as_bool()
             .unwrap()
     );
@@ -49,7 +49,7 @@ pub(crate) fn assert_source_stream_packet_and_transport_contract(report: &Value)
             .unwrap()
     );
     assert!(
-        report["scoped_expanded_source_matrix_release_gate_ready"]
+        report["scoped_expanded_source_matrix_production_ready"]
             .as_bool()
             .unwrap()
     );
@@ -84,13 +84,13 @@ pub(crate) fn assert_source_stream_packet_and_transport_contract(report: &Value)
         "blocked"
     );
     assert!(
-        report["expanded_source_matrix_typed_report"]["scoped_release_gate_ready"]
+        report["expanded_source_matrix_typed_report"]["scoped_production_ready"]
             .as_bool()
             .unwrap()
     );
     assert!(
         report["expanded_source_matrix_typed_report"]
-            ["excluded_stream_wrapper_source_matrix_release_gate_ready"]
+            ["excluded_stream_wrapper_source_matrix_production_ready"]
             .as_bool()
             .unwrap()
     );

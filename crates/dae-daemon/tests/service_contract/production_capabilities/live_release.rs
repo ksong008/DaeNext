@@ -1,5 +1,5 @@
 use super::*;
-pub(crate) fn assert_live_release_and_final_native_contract(report: &Value) {
+pub(crate) fn assert_live_release_and_runtime_state_contract(report: &Value) {
     assert!(
         report["resident_live_adapter_matrix_contract_ready"]
             .as_bool()
@@ -67,12 +67,12 @@ pub(crate) fn assert_live_release_and_final_native_contract(report: &Value) {
         "blocked"
     );
     assert!(
-        report["release_native_admission_contract_ready"]
+        report["production_admission_contract_ready"]
             .as_bool()
             .unwrap()
     );
     assert!(
-        report["release_default_artifact_path_ready"]
+        report["production_default_artifact_path_ready"]
             .as_bool()
             .unwrap()
     );
@@ -87,7 +87,7 @@ pub(crate) fn assert_live_release_and_final_native_contract(report: &Value) {
             .unwrap()
     );
     assert!(
-        report["release_native_live_evidence_contract_ready"]
+        report["runtime_state_live_evidence_contract_ready"]
             .as_bool()
             .unwrap()
     );
@@ -103,27 +103,15 @@ pub(crate) fn assert_live_release_and_final_native_contract(report: &Value) {
             .unwrap()
     );
     assert!(!report["native_product_shell_ready"].as_bool().unwrap());
-    assert!(
-        !report["release_native_final_state_claim"]
-            .as_bool()
-            .unwrap()
-    );
+    assert!(!report["production_runtime_state_claim"].as_bool().unwrap());
     assert_eq!(
-        report["release_native_admission_report_schema"]
+        report["production_admission_report_schema"]
             .as_str()
             .unwrap(),
-        "release-native-admission"
+        "production-admission"
     );
-    assert!(
-        report["final_native_state_contract_ready"]
-            .as_bool()
-            .unwrap()
-    );
-    assert!(
-        !report["final_native_product_package_ready"]
-            .as_bool()
-            .unwrap()
-    );
+    assert!(report["runtime_state_contract_ready"].as_bool().unwrap());
+    assert!(!report["product_package_ready"].as_bool().unwrap());
     assert!(!report["native_product_shell_ready"].as_bool().unwrap());
     assert!(
         !report["native_outbound_dependency_ready"]
@@ -135,11 +123,12 @@ pub(crate) fn assert_live_release_and_final_native_contract(report: &Value) {
             .as_bool()
             .unwrap()
     );
-    assert!(!report["final_native_state_ready"].as_bool().unwrap());
+    assert!(!report["runtime_state_ready"].as_bool().unwrap());
     assert_eq!(
-        report["final_native_state_report_schema"].as_str().unwrap(),
-        "final-native-state"
+        report["runtime_state_report_schema"].as_str().unwrap(),
+        "runtime-state"
     );
+    assert_eq!(report["runtime_state_ready"], report["runtime_state_ready"]);
     assert_eq!(
         report["resident_dataplane_env"].as_str().unwrap(),
         "RESIDENT_DATAPLANE"

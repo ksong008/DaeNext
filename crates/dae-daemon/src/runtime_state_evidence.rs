@@ -2,15 +2,15 @@ use std::fs;
 
 use serde_json::{Value, json};
 
-pub(crate) const FINAL_NATIVE_STATE_EVIDENCE_ENV: &str = "FINAL_NATIVE_STATE_EVIDENCE";
+pub(crate) const RUNTIME_STATE_EVIDENCE_ENV: &str = "RUNTIME_STATE_EVIDENCE";
 
-const FINAL_NATIVE_EVIDENCE_SCHEMA: &str = "final-native-state-evidence";
+const RUNTIME_STATE_EVIDENCE_SCHEMA: &str = "runtime-state-evidence";
 
 #[derive(Debug, Clone)]
-pub(crate) struct FinalNativeStateEvidence {
+pub(crate) struct RuntimeStateEvidence {
     pub(crate) report: Value,
     pub(crate) blockers: Vec<String>,
-    pub(crate) final_native_product_package_ready: bool,
+    pub(crate) product_package_ready: bool,
     pub(crate) native_product_shell_ready: bool,
     pub(crate) native_orchestration_ready: bool,
     pub(crate) native_control_runtime_api_service_release_ready: bool,
@@ -25,11 +25,11 @@ pub(crate) struct FinalNativeStateEvidence {
     pub(crate) ready: bool,
 }
 
-impl FinalNativeStateEvidence {
+impl RuntimeStateEvidence {
     pub(crate) fn fail_closed(source: Option<String>, blockers: Vec<String>) -> Self {
         Self {
             report: json!({
-                "schema": FINAL_NATIVE_EVIDENCE_SCHEMA,
+                "schema": RUNTIME_STATE_EVIDENCE_SCHEMA,
                 "schemaVersion": 1,
                 "status": "blocked",
                 "source": source,
@@ -37,7 +37,7 @@ impl FinalNativeStateEvidence {
                 "blockers": blockers,
             }),
             blockers,
-            final_native_product_package_ready: false,
+            product_package_ready: false,
             native_product_shell_ready: false,
             native_orchestration_ready: false,
             native_control_runtime_api_service_release_ready: false,
@@ -54,74 +54,77 @@ impl FinalNativeStateEvidence {
     }
 }
 
-pub(crate) fn final_native_state_evidence_from_env() -> FinalNativeStateEvidence {
-    let Ok(source) = std::env::var(FINAL_NATIVE_STATE_EVIDENCE_ENV) else {
-        return FinalNativeStateEvidence::fail_closed(None, final_native_fail_closed_blockers());
+pub(crate) fn runtime_state_evidence_from_env() -> RuntimeStateEvidence {
+    let source = match std::env::var(RUNTIME_STATE_EVIDENCE_ENV) {
+        Ok(source) => source,
+        Err(_) => {
+            return RuntimeStateEvidence::fail_closed(None, runtime_state_fail_closed_blockers());
+        }
     };
     match fs::read_to_string(&source) {
         Ok(raw) => match serde_json::from_str::<Value>(&raw) {
-            Ok(value) => final_native_state_evidence_from_value(Some(source), value),
-            Err(err) => FinalNativeStateEvidence::fail_closed(
+            Ok(value) => runtime_state_evidence_from_value(Some(source), value),
+            Err(err) => RuntimeStateEvidence::fail_closed(
                 Some(source),
-                vec![format!("parse final native evidence ledger: {err}")],
+                vec![format!("parse runtime state evidence ledger: {err}")],
             ),
         },
-        Err(err) => FinalNativeStateEvidence::fail_closed(
+        Err(err) => RuntimeStateEvidence::fail_closed(
             Some(source),
-            vec![format!("read final native evidence ledger: {err}")],
+            vec![format!("read runtime state evidence ledger: {err}")],
         ),
     }
 }
 
-pub(crate) fn final_native_fail_closed_blockers() -> Vec<String> {
+pub(crate) fn runtime_state_fail_closed_blockers() -> Vec<String> {
     [
         "generated protocol matrix live evidence is not recorded",
         "native benchmark evidence is not recorded",
-        "final native product package evidence is not recorded",
+        "product package evidence is not recorded",
         "native product shell evidence is not recorded",
         "native orchestration evidence is not recorded",
         "native control/runtime/API/service/release evidence is not recorded",
         "native outbound dependency evidence is not recorded",
         "userland native ABI evidence is not recorded",
-        "final live host evidence is not recorded",
-        "final-state artifact validation is not recorded",
+        "live host evidence is not recorded",
+        "state artifact validation is not recorded",
     ]
     .into_iter()
     .map(str::to_owned)
     .collect()
 }
 
-pub(crate) fn final_native_state_evidence_from_value(
+pub(crate) fn runtime_state_evidence_from_value(
     source: Option<String>,
     mut value: Value,
-) -> FinalNativeStateEvidence {
+) -> RuntimeStateEvidence {
     let mut blockers = Vec::new();
 
-    require_str(
+    require_schema(
         &value,
         "schema",
-        FINAL_NATIVE_EVIDENCE_SCHEMA,
-        "final native evidence schema is invalid",
+        RUNTIME_STATE_EVIDENCE_SCHEMA,
+        "runtime state evidence schema is invalid",
         &mut blockers,
     );
     require_u64(
         &value,
         "schemaVersion",
         1,
-        "final native evidence schemaVersion is invalid",
+        "runtime state evidence schemaVersion is invalid",
         &mut blockers,
     );
     require_str(
         &value,
         "status",
         "pass",
-        "final native evidence status is not pass",
+        "runtime state evidence status is not pass",
         &mut blockers,
     );
     require_nonempty_str(
         &value,
         "liveHost",
-        "final native live host is not recorded",
+        "runtime state live host is not recorded",
         &mut blockers,
     );
 
@@ -137,10 +140,10 @@ pub(crate) fn final_native_state_evidence_from_value(
         "native benchmark evidence is not recorded",
         &mut blockers,
     );
-    let final_native_product_package_ready = require_bool(
+    let product_package_ready = require_bool(
         &value,
-        "finalNativeProductPackageReady",
-        "final native product package evidence is not recorded",
+        "productPackageReady",
+        "product package evidence is not recorded",
         &mut blockers,
     );
     let native_product_shell_ready = require_bool(
@@ -194,13 +197,13 @@ pub(crate) fn final_native_state_evidence_from_value(
     let live_host_replacement_applied = require_bool(
         &value,
         "liveHostReplacementApplied",
-        "final live host replacement evidence is not recorded",
+        "live host replacement evidence is not recorded",
         &mut blockers,
     );
     let live_host_runtime_validated = require_bool(
         &value,
         "liveHostRuntimeValidated",
-        "final live host runtime validation is not recorded",
+        "live host runtime validation is not recorded",
         &mut blockers,
     );
     let final_state_artifact_materialized = require_bool(
@@ -224,7 +227,7 @@ pub(crate) fn final_native_state_evidence_from_value(
     let final_state_clean_host_state = require_bool(
         &value,
         "finalStateCleanHostState",
-        "final clean-host state is not recorded",
+        "clean-host state is not recorded",
         &mut blockers,
     );
 
@@ -233,7 +236,7 @@ pub(crate) fn final_native_state_evidence_from_value(
         .and_then(Value::as_str)
         .is_none()
     {
-        blockers.push("final-state summary artifact path is not recorded".to_owned());
+        blockers.push("state summary artifact path is not recorded".to_owned());
     }
     if value
         .pointer("/artifacts/liveHostSummary")
@@ -247,21 +250,21 @@ pub(crate) fn final_native_state_evidence_from_value(
         .and_then(Value::as_bool)
         != Some(true)
     {
-        blockers.push("final ip rule state is not recorded".to_owned());
+        blockers.push("ip rule state is not recorded".to_owned());
     }
     if value
         .pointer("/checks/noDaedProcess")
         .and_then(Value::as_bool)
         != Some(true)
     {
-        blockers.push("final daed process state is not recorded".to_owned());
+        blockers.push("daed process state is not recorded".to_owned());
     }
     if value
         .pointer("/checks/noNativeLinksOrNetns")
         .and_then(Value::as_bool)
         != Some(true)
     {
-        blockers.push("final native link/netns state is not recorded".to_owned());
+        blockers.push("native link/netns state is not recorded".to_owned());
     }
 
     let live_host_contract_ready = live_host_replacement_applied && live_host_runtime_validated;
@@ -273,7 +276,7 @@ pub(crate) fn final_native_state_evidence_from_value(
     let ready = blockers.is_empty()
         && protocol_matrix_live_evidence_recorded
         && native_benchmark_evidence_recorded
-        && final_native_product_package_ready
+        && product_package_ready
         && native_product_shell_ready
         && native_orchestration_ready
         && native_control_runtime_api_service_release_ready
@@ -289,7 +292,11 @@ pub(crate) fn final_native_state_evidence_from_value(
         object.insert("ready".to_owned(), json!(ready));
         object.insert(
             "validatedBy".to_owned(),
-            json!("dae-daemon::final_native_evidence"),
+            json!("dae-daemon::runtime_state_evidence"),
+        );
+        object.insert(
+            "normalizedSchema".to_owned(),
+            json!(RUNTIME_STATE_EVIDENCE_SCHEMA),
         );
         object.insert(
             "source".to_owned(),
@@ -297,24 +304,24 @@ pub(crate) fn final_native_state_evidence_from_value(
         );
         object.insert("blockers".to_owned(), json!(blockers.clone()));
         object.insert(
-            "finalNativeBooleans".to_owned(),
+            "runtimeStateBooleans".to_owned(),
             json!({
-                "finalNativeProductPackageReady": final_native_product_package_ready,
+                "productPackageReady": product_package_ready,
                 "nativeProductShellReady": native_product_shell_ready,
                 "nativeOrchestrationReady": native_orchestration_ready,
                 "nativeControlRuntimeApiServiceReleaseReady": native_control_runtime_api_service_release_ready,
                 "nativeOutboundDependencyReady": native_outbound_dependency_ready,
                 "userlandNativeAbiReady": userland_native_abi_ready,
                 "liveHostContractReady": live_host_contract_ready,
-                "finalStateArtifactReady": final_state_artifact_ready,
+                "stateArtifactReady": final_state_artifact_ready,
             }),
         );
     }
 
-    FinalNativeStateEvidence {
+    RuntimeStateEvidence {
         report: value,
         blockers,
-        final_native_product_package_ready,
+        product_package_ready,
         native_product_shell_ready,
         native_orchestration_ready,
         native_control_runtime_api_service_release_ready,
@@ -336,6 +343,19 @@ fn require_bool(value: &Value, key: &str, blocker: &str, blockers: &mut Vec<Stri
     } else {
         blockers.push(blocker.to_owned());
         false
+    }
+}
+
+fn require_schema(
+    value: &Value,
+    key: &str,
+    expected: &str,
+    blocker: &str,
+    blockers: &mut Vec<String>,
+) {
+    let schema = value.get(key).and_then(Value::as_str);
+    if schema != Some(expected) {
+        blockers.push(blocker.to_owned());
     }
 }
 
@@ -372,22 +392,22 @@ mod tests {
     use super::*;
 
     #[test]
-    fn final_native_evidence_accepts_complete_final_fixture() {
-        let evidence = final_native_state_evidence_from_value(None, complete_fixture());
+    fn runtime_state_evidence_accepts_complete_fixture() {
+        let evidence = runtime_state_evidence_from_value(None, complete_fixture());
 
         assert!(evidence.ready);
         assert!(evidence.blockers.is_empty());
-        assert!(evidence.final_native_product_package_ready);
+        assert!(evidence.product_package_ready);
         assert!(evidence.live_host_contract_ready);
         assert!(evidence.final_state_artifact_ready);
         assert_eq!(evidence.report["ready"].as_bool(), Some(true));
     }
 
     #[test]
-    fn final_native_evidence_rejects_missing_final_state_validation() {
+    fn runtime_state_evidence_rejects_missing_state_validation() {
         let mut fixture = complete_fixture();
         fixture["finalStateValidationAppliedOnLiveHost"] = json!(false);
-        let evidence = final_native_state_evidence_from_value(None, fixture);
+        let evidence = runtime_state_evidence_from_value(None, fixture);
 
         assert!(!evidence.ready);
         assert!(!evidence.final_state_artifact_ready);
@@ -398,14 +418,14 @@ mod tests {
 
     fn complete_fixture() -> Value {
         json!({
-            "schema": FINAL_NATIVE_EVIDENCE_SCHEMA,
+            "schema": RUNTIME_STATE_EVIDENCE_SCHEMA,
             "schemaVersion": 1,
             "status": "pass",
             "evidenceDate": "2026-06-06",
             "liveHost": "external-live-validation-path",
             "protocolMatrixLiveEvidenceRecorded": true,
             "nativeBenchmarkEvidenceRecorded": true,
-            "finalNativeProductPackageReady": true,
+            "productPackageReady": true,
             "nativeProductShellReady": true,
             "nativeOrchestrationReady": true,
             "nativeControlRuntimeApiServiceReleaseReady": true,
@@ -421,8 +441,8 @@ mod tests {
             "finalStateValidationAppliedOnLiveHost": true,
             "finalStateCleanHostState": true,
             "artifacts": {
-                "finalStateSummary": "/tmp/final-native/final-state.json",
-                "liveHostSummary": "/tmp/final-native/summary.json"
+                "finalStateSummary": "/tmp/runtime-state/state.json",
+                "liveHostSummary": "/tmp/runtime-state/summary.json"
             },
             "checks": {
                 "ipRuleDefaultOnly": true,

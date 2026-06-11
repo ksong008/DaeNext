@@ -21,7 +21,7 @@ pub(crate) fn insert_summary_flags(report: &mut Map<String, Value>, context: &Re
         json!(context.facts.generic_udp_dns_datapath_admitted),
     );
     report.insert(
-        "generic_udp_dns_final_native_admission_allowed".to_owned(),
+        "generic_udp_dns_production_admission_allowed".to_owned(),
         json!(false),
     );
     report.insert(

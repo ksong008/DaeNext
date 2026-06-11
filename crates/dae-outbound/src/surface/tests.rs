@@ -82,7 +82,7 @@ mod tests {
     fn product_runtime_ownership_does_not_allow_local_runtime_creation() {
         let product_entries: Vec<_> = runtime_ownership_contract()
             .iter()
-            .filter(|item| item.final_native_product_path)
+            .filter(|item| item.production_state_product_path)
             .collect();
         assert!(!product_entries.is_empty());
 
@@ -103,7 +103,7 @@ mod tests {
         for item in local_runtime_entries {
             assert_eq!(item.surface, RuntimeOwnerSurface::LoopbackTestSupport);
             assert!(item.local_runtime_allowed);
-            assert!(!item.final_native_product_path);
+            assert!(!item.production_state_product_path);
         }
     }
 
@@ -140,7 +140,7 @@ mod tests {
             .unwrap();
         assert_eq!(h3_admission.surface, RuntimeOwnerSurface::AdmissionHelper);
         assert_eq!(h3_admission.ownership, RuntimeOwnership::DependencyOnly);
-        assert!(!h3_admission.final_native_product_path);
+        assert!(!h3_admission.production_state_product_path);
         assert!(!h3_admission.local_runtime_allowed);
     }
 }

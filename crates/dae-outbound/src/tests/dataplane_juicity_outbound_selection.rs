@@ -69,6 +69,6 @@ fn case_juicity_outbound_dataplane_selects_alive_group_and_runs_client_smoke() {
     assert!(outcome.juicity_true_quic_h3_dataplane_admitted);
     assert!(!outcome.quic_h3_family_true_dataplane_admitted);
     assert!(!outcome.outbound_true_dataplane_admitted);
-    assert!(!outcome.final_native_admission_allowed);
+    assert!(!outcome.production_admission_allowed);
     assert!(!outcome.final_state_admission_allowed);
 }

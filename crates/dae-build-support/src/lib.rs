@@ -67,7 +67,6 @@ pub mod native_ebpf_build {
     }
 
     fn build_rust_native_aya_object(repo_root: &Path, out_dir: &Path, output: &Path) {
-        let workspace_root = repo_root;
         let cargo = env::var("DAE_RUST_NATIVE_BPF_CARGO").ok();
         let toolchain =
             env::var("DAE_RUST_NATIVE_BPF_TOOLCHAIN").unwrap_or_else(|_| "nightly".to_owned());
@@ -81,7 +80,7 @@ pub mod native_ebpf_build {
             }
         };
         let status = command
-            .current_dir(workspace_root)
+            .current_dir(repo_root)
             .env("CARGO_TARGET_DIR", &target_dir)
             .env_remove("CARGO")
             .env_remove("CARGO_ENCODED_RUSTFLAGS")
@@ -92,7 +91,7 @@ pub mod native_ebpf_build {
             .arg("-Z")
             .arg("build-std=core")
             .arg("--manifest-path")
-            .arg(workspace_root.join("Cargo.toml"))
+            .arg(repo_root.join("Cargo.toml"))
             .arg("-p")
             .arg(RUST_NATIVE_BPF_PACKAGE)
             .arg("--target")

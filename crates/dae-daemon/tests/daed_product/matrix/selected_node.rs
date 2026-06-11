@@ -119,7 +119,7 @@ routing {
         false
     );
     assert_eq!(
-        live_row["generated_solver"]["finalNativeReady"]
+        live_row["generated_solver"]["productionReady"]
             .as_bool()
             .unwrap(),
         false

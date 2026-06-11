@@ -42,7 +42,7 @@ pub(super) fn run_tuic_contract() -> RunnerOutput {
                 "protocol_effective_mode": tuic::contract::UDP_RELAY_MODE_PROTOCOL_EFFECTIVE_MODE,
                 "common_quic_numeric_value": tuic::contract::UDP_RELAY_MODE_COMMON_QUIC_NUMERIC_VALUE,
                 "common_native_value": tuic::contract::UDP_RELAY_MODE_COMMON_NATIVE_VALUE,
-                "quic_mode_fixme_deferred": tuic::contract::UDP_RELAY_MODE_QUIC_FIXME_DEFERRED,
+                "quic_mode_deferred": tuic::contract::UDP_RELAY_MODE_QUIC_DEFERRED,
             },
             "underlay_contract": {
                 "tcp_underlay_uses_udp": tuic::contract::TCP_UNDERLAY_USES_UDP,

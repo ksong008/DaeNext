@@ -319,6 +319,8 @@ fn is_udp_would_block(err: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
+    use std::net::Ipv4Addr;
+
     use super::*;
 
     #[test]

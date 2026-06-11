@@ -67,7 +67,7 @@ pub fn lifecycle_smoke_report(root: &Path) -> Result<Value, String> {
         "benchmark_executable_now": false,
         "native_daemon_benchmark_recorded": false,
         "true_rust_native_daemon_admitted": false,
-        "final_native_admission_allowed": false,
+        "production_admission_allowed": false,
         "final_state_admission_allowed": false
     }))
 }

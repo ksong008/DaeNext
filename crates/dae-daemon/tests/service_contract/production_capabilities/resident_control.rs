@@ -152,7 +152,7 @@ pub(crate) fn assert_resident_and_control_plane_contract(report: &Value) {
             .unwrap()
     );
     assert!(
-        report["control_plane_native_dependency_candidate"]
+        report["control_plane_native_dependency_production_ready"]
             .as_bool()
             .unwrap()
     );

@@ -7,7 +7,7 @@ use dae_dns::{
 };
 
 fn main() {
-    let iters = std::env::var("DAE_STAGE4_BENCH_ITERS")
+    let iters = std::env::var("DNS_BENCH_ITERS")
         .ok()
         .and_then(|value| value.parse::<u64>().ok())
         .unwrap_or(100_000);

@@ -131,9 +131,9 @@ pub(super) fn apply_state_schema(conn: &Connection) -> io::Result<()> {
             WHERE group_id IS NULL
                OR group_id NOT IN (SELECT id FROM groups);
         INSERT OR IGNORE INTO daed_schema_migrations(id, applied_at)
-            VALUES('final-native-daed-product-schema', datetime('now'));
+            VALUES('production-daed-product-schema', datetime('now'));
         INSERT OR IGNORE INTO daed_schema_migrations(id, applied_at)
-            VALUES('final-native-local-product-surface', datetime('now'));
+            VALUES('production-local-product-surface', datetime('now'));
         INSERT OR IGNORE INTO log_settings(id, max_entries, max_bytes)
             VALUES(1, 10000, 52428800);
         INSERT OR IGNORE INTO daed_product_metadata(key, value)

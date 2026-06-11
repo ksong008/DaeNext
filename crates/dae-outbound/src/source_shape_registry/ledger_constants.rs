@@ -87,7 +87,7 @@ pub(super) const SCOPED_EXPANDED_SOURCE_MATRIX_EVIDENCE: ScopedExpandedSourceMat
         raw_links_retained: false,
         raw_bodies_retained: false,
         raw_state_retained: false,
-        release_gate_ready: true,
+        production_ready: true,
     };
 
 pub(super) const ADMITTED_STATE: ShapeStateLedger = ShapeStateLedger {
@@ -95,8 +95,8 @@ pub(super) const ADMITTED_STATE: ShapeStateLedger = ShapeStateLedger {
     parser: "covered",
     resident_graph: "admitted",
     live: "requires-expanded-live-evidence",
-    final_native_admission: "not-ready",
-    final_native: "not-ready",
+    production_admission: "not-ready",
+    production_state: "not-ready",
 };
 
 pub(super) const BLOCKED_STATE: ShapeStateLedger = ShapeStateLedger {
@@ -104,8 +104,8 @@ pub(super) const BLOCKED_STATE: ShapeStateLedger = ShapeStateLedger {
     parser: "covered",
     resident_graph: "blocked",
     live: "blocked",
-    final_native_admission: "blocked",
-    final_native: "blocked",
+    production_admission: "blocked",
+    production_state: "blocked",
 };
 
 pub(super) const NOT_SOURCE_SUPPORTED_STATE: ShapeStateLedger = ShapeStateLedger {
@@ -113,8 +113,8 @@ pub(super) const NOT_SOURCE_SUPPORTED_STATE: ShapeStateLedger = ShapeStateLedger
     parser: "rejected",
     resident_graph: "blocked",
     live: "blocked",
-    final_native_admission: "blocked",
-    final_native: "blocked",
+    production_admission: "blocked",
+    production_state: "blocked",
 };
 
 pub(super) const ADMITTED_EXECUTOR_PROOF: ComponentExecutorProof = ComponentExecutorProof {
@@ -402,29 +402,32 @@ pub(super) const BLOCKED_LIVE_LEDGER: ExpandedLiveMatrixLedger = ExpandedLiveMat
     blocked_rows_reduce_pass_threshold: false,
 };
 
-pub(super) const BASE_RELEASE_GATE: ReleaseGateReconciliation = ReleaseGateReconciliation {
-    current_baseline_agrees: true,
-    expanded_source_agrees: false,
-    service_contract_agrees: false,
-    product_switch_ready: false,
-    final_state_ready: false,
-    cleanup_evidence_ready: false,
-};
+pub(super) const BASE_PRODUCTION_READINESS: ProductionReadinessReconciliation =
+    ProductionReadinessReconciliation {
+        current_baseline_agrees: true,
+        expanded_source_agrees: false,
+        service_contract_agrees: false,
+        product_switch_ready: false,
+        final_state_ready: false,
+        cleanup_evidence_ready: false,
+    };
 
-pub(super) const SCOPED_READY_RELEASE_GATE: ReleaseGateReconciliation = ReleaseGateReconciliation {
-    current_baseline_agrees: true,
-    expanded_source_agrees: true,
-    service_contract_agrees: true,
-    product_switch_ready: false,
-    final_state_ready: false,
-    cleanup_evidence_ready: true,
-};
+pub(super) const SCOPED_READY_PRODUCTION_READINESS: ProductionReadinessReconciliation =
+    ProductionReadinessReconciliation {
+        current_baseline_agrees: true,
+        expanded_source_agrees: true,
+        service_contract_agrees: true,
+        product_switch_ready: false,
+        final_state_ready: false,
+        cleanup_evidence_ready: true,
+    };
 
-pub(super) const REJECTED_RELEASE_GATE: ReleaseGateReconciliation = ReleaseGateReconciliation {
-    current_baseline_agrees: true,
-    expanded_source_agrees: true,
-    service_contract_agrees: true,
-    product_switch_ready: false,
-    final_state_ready: false,
-    cleanup_evidence_ready: false,
-};
+pub(super) const REJECTED_PRODUCTION_READINESS: ProductionReadinessReconciliation =
+    ProductionReadinessReconciliation {
+        current_baseline_agrees: true,
+        expanded_source_agrees: true,
+        service_contract_agrees: true,
+        product_switch_ready: false,
+        final_state_ready: false,
+        cleanup_evidence_ready: false,
+    };

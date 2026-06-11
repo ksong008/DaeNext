@@ -3,7 +3,7 @@ use std::time::Instant;
 use dae_control::{DomainRoutingOwnerSnapshot, DomainRoutingTracker};
 
 fn main() {
-    let iters = std::env::var("DAE_STAGE7_BENCH_ITERS")
+    let iters = std::env::var("CONTROL_BENCH_ITERS")
         .ok()
         .and_then(|value| value.parse::<u64>().ok())
         .unwrap_or(100_000);

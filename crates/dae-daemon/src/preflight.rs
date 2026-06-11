@@ -18,7 +18,7 @@ pub fn identity_preflight_report(version: &str) -> Value {
         "rust_daemon_lifecycle_smoke_passed": true,
         "benchmark_executable_now": true,
         "true_rust_native_daemon_admitted": true,
-        "final_native_admission_allowed": true,
+        "production_admission_allowed": true,
         "host_mutation_allowed": true,
         "final_state_admission_allowed": true,
         "identity_scope": [

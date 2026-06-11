@@ -58,12 +58,12 @@ pub(crate) fn assert_datapath_and_outbound_underlay_contract(report: &Value) {
             .unwrap()
     );
     assert!(
-        report["native_datapath_core_final_native_contract_ready"]
+        report["native_datapath_core_production_contract_ready"]
             .as_bool()
             .unwrap()
     );
     assert!(
-        report["native_datapath_core_final_native_candidate"]
+        report["native_datapath_core_production_ready"]
             .as_bool()
             .unwrap()
     );
@@ -111,7 +111,7 @@ pub(crate) fn assert_datapath_and_outbound_underlay_contract(report: &Value) {
         "outbound-fingerprint-underlay"
     );
     assert!(
-        report["native_fingerprint_underlay_final_native_candidate"]
+        report["native_fingerprint_underlay_production_ready"]
             .as_bool()
             .unwrap()
     );
@@ -127,7 +127,7 @@ pub(crate) fn assert_datapath_and_outbound_underlay_contract(report: &Value) {
             .unwrap()
     );
     assert!(
-        report["security_underlay_release_gate_ready"]
+        report["security_underlay_production_ready"]
             .as_bool()
             .unwrap()
     );
@@ -193,7 +193,7 @@ pub(crate) fn assert_datapath_and_outbound_underlay_contract(report: &Value) {
             >= 10
     );
     assert!(
-        report["outbound_native_executor_candidate"]
+        report["outbound_native_executor_production_ready"]
             .as_bool()
             .unwrap()
     );

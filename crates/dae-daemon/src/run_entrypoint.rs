@@ -86,7 +86,7 @@ pub fn run_entrypoint_preflight_report(root: &Path) -> Result<Value, String> {
         "rust_control_plane_entrypoint_admitted": true,
         "benchmark_executable_now": false,
         "true_rust_native_daemon_admitted": false,
-        "final_native_admission_allowed": false,
+        "production_admission_allowed": false,
         "final_state_admission_allowed": false
     });
     let manifest = serde_json::to_vec_pretty(&report)

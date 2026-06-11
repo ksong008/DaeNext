@@ -94,16 +94,23 @@ pub fn service_contract_capabilities(version: &str) -> Value {
     insert_outbound_fingerprint_underlay_service_contract_capabilities(&mut report);
     insert_outbound_production_matrix_service_contract_capabilities(&mut report);
     insert_resident_live_adapter_matrix_service_contract_capabilities(&mut report);
-    insert_final_native_state_contract_capabilities(&mut report);
+    insert_runtime_state_contract_capabilities(&mut report);
     report
 }
 
-fn insert_final_native_state_contract_capabilities(report: &mut Value) {
-    let final_native_evidence =
-        crate::final_native_evidence::final_native_state_evidence_from_env();
+fn insert_runtime_state_contract_capabilities(report: &mut Value) {
+    let runtime_state_evidence = crate::runtime_state_evidence::runtime_state_evidence_from_env();
     if let Value::Object(report) = report {
         report.insert(
+            "production_admission_contract_ready".to_owned(),
+            json!(true),
+        );
+        report.insert(
             "release_native_admission_contract_ready".to_owned(),
+            json!(true),
+        );
+        report.insert(
+            "production_default_artifact_path_ready".to_owned(),
             json!(true),
         );
         report.insert(
@@ -119,6 +126,10 @@ fn insert_final_native_state_contract_capabilities(report: &mut Value) {
             json!(true),
         );
         report.insert(
+            "runtime_state_live_evidence_contract_ready".to_owned(),
+            json!(true),
+        );
+        report.insert(
             "release_native_live_evidence_contract_ready".to_owned(),
             json!(true),
         );
@@ -129,113 +140,168 @@ fn insert_final_native_state_contract_capabilities(report: &mut Value) {
             json!(true),
         );
         report.insert(
+            "production_runtime_state_claim".to_owned(),
+            json!(runtime_state_evidence.ready),
+        );
+        report.insert(
             "release_native_final_state_claim".to_owned(),
-            json!(final_native_evidence.ready),
+            json!(runtime_state_evidence.ready),
+        );
+        report.insert(
+            "production_admission_report_schema".to_owned(),
+            json!("production-admission"),
         );
         report.insert(
             "release_native_admission_report_schema".to_owned(),
-            json!("release-native-admission"),
+            json!("production-admission"),
         );
-        report.insert("final_native_state_contract_ready".to_owned(), json!(true));
+        report.insert("runtime_state_contract_ready".to_owned(), json!(true));
+        report.insert("runtime_state_contract_ready".to_owned(), json!(true));
         report.insert(
-            "final_native_state_report_schema".to_owned(),
-            json!("final-native-state"),
+            "runtime_state_report_schema".to_owned(),
+            json!("runtime-state"),
         );
         report.insert(
-            "final_native_product_package_ready".to_owned(),
-            json!(final_native_evidence.final_native_product_package_ready),
+            "runtime_state_report_schema".to_owned(),
+            json!("runtime-state"),
+        );
+        report.insert(
+            "product_package_ready".to_owned(),
+            json!(runtime_state_evidence.product_package_ready),
+        );
+        report.insert(
+            "production_product_package_ready".to_owned(),
+            json!(runtime_state_evidence.product_package_ready),
         );
         report.insert(
             "native_product_shell_ready".to_owned(),
-            json!(final_native_evidence.native_product_shell_ready),
+            json!(runtime_state_evidence.native_product_shell_ready),
         );
         report.insert(
             "native_orchestration_ready".to_owned(),
-            json!(final_native_evidence.native_orchestration_ready),
+            json!(runtime_state_evidence.native_orchestration_ready),
         );
         report.insert(
             "native_control_runtime_api_service_release_ready".to_owned(),
-            json!(final_native_evidence.native_control_runtime_api_service_release_ready),
+            json!(runtime_state_evidence.native_control_runtime_api_service_release_ready),
         );
         report.insert(
             "native_outbound_dependency_ready".to_owned(),
-            json!(final_native_evidence.native_outbound_dependency_ready),
+            json!(runtime_state_evidence.native_outbound_dependency_ready),
         );
         report.insert(
             "userland_native_abi_ready".to_owned(),
-            json!(final_native_evidence.userland_native_abi_ready),
+            json!(runtime_state_evidence.userland_native_abi_ready),
         );
         report.insert(
             "rust_product_binary_contract_ready".to_owned(),
-            json!(final_native_evidence.rust_product_binary_contract_ready),
+            json!(runtime_state_evidence.rust_product_binary_contract_ready),
         );
         report.insert(
             "rust_product_lifecycle_contract_ready".to_owned(),
-            json!(final_native_evidence.rust_product_lifecycle_contract_ready),
+            json!(runtime_state_evidence.rust_product_lifecycle_contract_ready),
         );
         report.insert(
             "rust_product_web_api_package_release_contract_ready".to_owned(),
-            json!(final_native_evidence.rust_product_web_api_package_release_contract_ready),
+            json!(runtime_state_evidence.rust_product_web_api_package_release_contract_ready),
         );
         report.insert(
-            "final_native_live_host_contract_ready".to_owned(),
-            json!(final_native_evidence.live_host_contract_ready),
+            "live_host_contract_ready".to_owned(),
+            json!(runtime_state_evidence.live_host_contract_ready),
         );
         report.insert(
-            "final_native_final_state_artifact_ready".to_owned(),
-            json!(final_native_evidence.final_state_artifact_ready),
+            "state_artifact_ready".to_owned(),
+            json!(runtime_state_evidence.final_state_artifact_ready),
         );
         report.insert(
-            "final_native_state_typed_report_ready".to_owned(),
-            json!(final_native_evidence.typed_report_ready),
+            "runtime_state_typed_report_ready".to_owned(),
+            json!(runtime_state_evidence.typed_report_ready),
         );
         report.insert(
-            "final_native_state_ready".to_owned(),
-            json!(final_native_evidence.ready),
+            "runtime_state_ready".to_owned(),
+            json!(runtime_state_evidence.ready),
         );
         report.insert(
-            "final_native_state_final_evidence".to_owned(),
-            final_native_evidence.report.clone(),
+            "runtime_state_evidence".to_owned(),
+            runtime_state_evidence.report.clone(),
         );
         report.insert(
-            "final_native_state_current_status".to_owned(),
-            json!(if final_native_evidence.ready {
-                "final native state evidence admitted"
+            "runtime_state_current_status".to_owned(),
+            json!(if runtime_state_evidence.ready {
+                "runtime state evidence admitted"
             } else {
-                "final native state blocked pending live matrix and artifact evidence"
+                "runtime state blocked pending live matrix and artifact evidence"
             }),
         );
         report.insert(
-            "final_native_state_remaining_work".to_owned(),
-            json!(final_native_evidence.blockers.clone()),
+            "runtime_state_remaining_work".to_owned(),
+            json!(runtime_state_evidence.blockers.clone()),
         );
         report.insert(
-            "final_native_state_typed_report".to_owned(),
+            "runtime_state_typed_report".to_owned(),
             json!({
-                "schema": "final-native-state-typed-report",
-                "status": if final_native_evidence.ready { "pass" } else { "blocked" },
-                "final_native_product_package_ready": final_native_evidence.final_native_product_package_ready,
-                "native_product_shell_ready": final_native_evidence.native_product_shell_ready,
-                "native_orchestration_ready": final_native_evidence.native_orchestration_ready,
-                "native_control_runtime_api_service_release_ready": final_native_evidence.native_control_runtime_api_service_release_ready,
-                "native_outbound_dependency_ready": final_native_evidence.native_outbound_dependency_ready,
-                "userland_native_abi_ready": final_native_evidence.userland_native_abi_ready,
-                "rust_product_binary_contract_ready": final_native_evidence.rust_product_binary_contract_ready,
-                "rust_product_lifecycle_contract_ready": final_native_evidence.rust_product_lifecycle_contract_ready,
-                "rust_product_web_api_package_release_contract_ready": final_native_evidence.rust_product_web_api_package_release_contract_ready,
-                "final_native_live_host_contract_ready": final_native_evidence.live_host_contract_ready,
-                "final_native_final_state_artifact_ready": final_native_evidence.final_state_artifact_ready,
-                "final_native_state_ready": final_native_evidence.ready,
-                "live_host_replacement_applied": final_native_evidence.report["liveHostReplacementApplied"].clone(),
-                "final_state_validation_applied_on_live_host": final_native_evidence.report["finalStateValidationAppliedOnLiveHost"].clone(),
-                "current_status": if final_native_evidence.ready {
-                    "final native state evidence admitted"
+                "schema": "runtime-state-typed-report",
+                "status": if runtime_state_evidence.ready { "pass" } else { "blocked" },
+                "product_package_ready": runtime_state_evidence.product_package_ready,
+                "native_product_shell_ready": runtime_state_evidence.native_product_shell_ready,
+                "native_orchestration_ready": runtime_state_evidence.native_orchestration_ready,
+                "native_control_runtime_api_service_release_ready": runtime_state_evidence.native_control_runtime_api_service_release_ready,
+                "native_outbound_dependency_ready": runtime_state_evidence.native_outbound_dependency_ready,
+                "userland_native_abi_ready": runtime_state_evidence.userland_native_abi_ready,
+                "rust_product_binary_contract_ready": runtime_state_evidence.rust_product_binary_contract_ready,
+                "rust_product_lifecycle_contract_ready": runtime_state_evidence.rust_product_lifecycle_contract_ready,
+                "rust_product_web_api_package_release_contract_ready": runtime_state_evidence.rust_product_web_api_package_release_contract_ready,
+                "live_host_contract_ready": runtime_state_evidence.live_host_contract_ready,
+                "state_artifact_ready": runtime_state_evidence.final_state_artifact_ready,
+                "runtime_state_ready": runtime_state_evidence.ready,
+                "live_host_replacement_applied": runtime_state_evidence.report["liveHostReplacementApplied"].clone(),
+                "final_state_validation_applied_on_live_host": runtime_state_evidence.report["finalStateValidationAppliedOnLiveHost"].clone(),
+                "current_status": if runtime_state_evidence.ready {
+                    "runtime state evidence admitted"
                 } else {
-                    "final native state blocked pending live matrix and artifact evidence"
+                    "runtime state blocked pending live matrix and artifact evidence"
                 },
-                "blockers": final_native_evidence.blockers.clone(),
-                "final_evidence": final_native_evidence.report.clone(),
+                "blockers": runtime_state_evidence.blockers.clone(),
+                "state_evidence": runtime_state_evidence.report.clone(),
             }),
+        );
+        report.insert(
+            "production_live_host_contract_ready".to_owned(),
+            json!(runtime_state_evidence.live_host_contract_ready),
+        );
+        report.insert(
+            "production_final_state_artifact_ready".to_owned(),
+            json!(runtime_state_evidence.final_state_artifact_ready),
+        );
+        report.insert(
+            "runtime_state_typed_report_ready".to_owned(),
+            json!(runtime_state_evidence.typed_report_ready),
+        );
+        report.insert(
+            "runtime_state_ready".to_owned(),
+            json!(runtime_state_evidence.ready),
+        );
+        report.insert(
+            "runtime_state_final_evidence".to_owned(),
+            runtime_state_evidence.report.clone(),
+        );
+        report.insert(
+            "runtime_state_current_status".to_owned(),
+            report
+                .get("runtime_state_current_status")
+                .cloned()
+                .unwrap_or(Value::Null),
+        );
+        report.insert(
+            "runtime_state_remaining_work".to_owned(),
+            json!(runtime_state_evidence.blockers.clone()),
+        );
+        report.insert(
+            "runtime_state_typed_report".to_owned(),
+            report
+                .get("runtime_state_typed_report")
+                .cloned()
+                .unwrap_or(Value::Null),
         );
     }
 }
@@ -320,6 +386,10 @@ pub(super) fn insert_control_plane_service_contract_capabilities(
         );
         report.insert(
             "control_plane_native_dependency_contract_ready".to_owned(),
+            json!(true),
+        );
+        report.insert(
+            "control_plane_native_dependency_production_ready".to_owned(),
             json!(true),
         );
         report.insert(

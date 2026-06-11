@@ -357,27 +357,28 @@ fn product_runtime_defaults() -> Value {
     })
 }
 
-fn final_native_blockers() -> Vec<String> {
-    crate::final_native_evidence::final_native_state_evidence_from_env().blockers
+fn runtime_state_blockers() -> Vec<String> {
+    crate::runtime_state_evidence::runtime_state_evidence_from_env().blockers
 }
 
-fn final_native_gate_evidence() -> Value {
-    crate::final_native_evidence::final_native_state_evidence_from_env().report
+fn runtime_state_gate_evidence() -> Value {
+    crate::runtime_state_evidence::runtime_state_evidence_from_env().report
 }
 
-fn final_native_admission() -> Value {
-    let evidence = crate::final_native_evidence::final_native_state_evidence_from_env();
+fn production_admission() -> Value {
+    let evidence = crate::runtime_state_evidence::runtime_state_evidence_from_env();
     json!({
         "liveHostReplacementApplied": evidence.report["liveHostReplacementApplied"].as_bool().unwrap_or(false),
         "finalStateValidationAppliedOnLiveHost": evidence.report["finalStateValidationAppliedOnLiveHost"].as_bool().unwrap_or(false),
-        "finalNativeProductPackageReady": evidence.final_native_product_package_ready,
+        "productPackageReady": evidence.product_package_ready,
         "nativeProductShellReady": evidence.native_product_shell_ready,
         "nativeOutboundDependencyReady": evidence.native_outbound_dependency_ready,
         "userlandNativeAbiReady": evidence.userland_native_abi_ready,
         "rustProductBinaryContractReady": evidence.rust_product_binary_contract_ready,
         "rustProductLifecycleContractReady": evidence.rust_product_lifecycle_contract_ready,
         "rustProductWebApiPackageReleaseContractReady": evidence.rust_product_web_api_package_release_contract_ready,
-        "fullFinalNativeStateReady": evidence.ready,
+        "runtimeStateReady": evidence.ready,
+        "fullRuntimeStateReady": evidence.ready,
         "evidence": evidence.report,
         "blockers": evidence.blockers,
     })
