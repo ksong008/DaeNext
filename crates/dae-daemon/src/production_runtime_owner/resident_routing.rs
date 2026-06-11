@@ -1,6 +1,6 @@
-use std::os::fd::AsRawFd;
+use std::{os::fd::AsRawFd, path::PathBuf};
 
-use dae_config::Config;
+use dae_config::{Config, Function, RoutingRule};
 use dae_ebpf_support::{RuntimeMapInfo, map_ids, map_info, open_map_fd, update_map_elem_bytes};
 use dae_routing::RoutingMatcher;
 use serde_json::{Value, json};
@@ -60,6 +60,66 @@ const CONNECTIVITY_L4_UDP: u8 = 17;
 const CONNECTIVITY_L4_UDP_LEGACY: u8 = 22;
 const CONNECTIVITY_IP_VERSION_4: u8 = 4;
 const CONNECTIVITY_IP_VERSION_6: u8 = 6;
+
+pub(super) fn expand_resident_dns_request_qname_rules(
+    rules: &[RoutingRule],
+) -> Result<Vec<RoutingRule>, String> {
+    let resolver = geodata::GeodataResolver::new(Vec::<PathBuf>::new());
+    let mut geodata_report = geodata::GeodataResolutionReport::default();
+    let mut rules = rules.to_vec();
+    for rule in &mut rules {
+        for function in &mut rule.and_functions {
+            if function.name != "qname" {
+                continue;
+            }
+            expand_resident_dns_qname_function(function, &resolver, &mut geodata_report)?;
+        }
+    }
+    Ok(rules)
+}
+
+fn expand_resident_dns_qname_function(
+    function: &mut Function,
+    resolver: &geodata::GeodataResolver,
+    geodata_report: &mut geodata::GeodataResolutionReport,
+) -> Result<(), String> {
+    let mut expanded = Vec::new();
+    for param in &function.params {
+        match param.key.as_str() {
+            "geosite" => {
+                expanded.extend(geodata::load_geosite_params(
+                    resolver,
+                    "geosite",
+                    &param.val,
+                    geodata_report,
+                )?);
+            }
+            "ext" => {
+                let (filename, code) = param.val.split_once(':').ok_or_else(|| {
+                    format!(
+                        "dns.routing.request qname ext parameter must be file:code, got {}",
+                        param.val
+                    )
+                })?;
+                expanded.extend(geodata::load_geosite_params(
+                    resolver,
+                    filename,
+                    code,
+                    geodata_report,
+                )?);
+            }
+            "geoip" => {
+                return Err(
+                    "dns.routing.request qname cannot use geoip parameters; use geosite or ext geosite data"
+                        .to_owned(),
+                );
+            }
+            _ => expanded.push(param.clone()),
+        }
+    }
+    function.params = expanded;
+    Ok(())
+}
 
 pub(super) fn update_new_resident_routing_map(
     before_map_ids: &[u32],
