@@ -38,56 +38,65 @@ pub(in crate::production_runtime_owner::resident_dataplane) fn resident_udp_hand
 
 pub(super) fn udp_packet_session_value(
     proxy: &ResidentProxyPlan,
-    peer: &str,
-    original_dst: &str,
+    peer: SocketAddr,
+    original_dst: SocketAddr,
     handler: &str,
-    packet_semantics: &str,
+    packet_semantics: UdpPacketSemantics,
 ) -> serde_json::Value {
-    json!({
-        "schemaVersion": 1,
-        "manager": "resident-udp-session-manager",
-        "graphId": proxy.graph_id,
-        "outbound": proxy.group_name,
-        "peer": peer,
-        "originalDestination": original_dst,
-        "packetSemantics": packet_semantics,
-        "handler": handler,
-        "limitSource": "resident-udp-session-limit",
-    })
+    packet_session_value(
+        UdpPacketSessionIdentity::from_socket(proxy, peer, original_dst, packet_semantics),
+        Some(handler),
+    )
+}
+
+pub(super) fn udp_probe_packet_session_value(
+    proxy: &ResidentProxyPlan,
+    original_dst: SocketAddr,
+    handler: &str,
+    packet_semantics: UdpPacketSemantics,
+) -> serde_json::Value {
+    packet_session_value(
+        UdpPacketSessionIdentity::probe(proxy, original_dst, packet_semantics),
+        Some(handler),
+    )
 }
 
 pub(super) fn udp_packet_semantics_for_destination(
     handler: &ResidentProxyProtocolPlan,
     original_dst: SocketAddr,
-) -> &'static str {
+) -> UdpPacketSemantics {
     if original_dst.port() == 53 {
-        "dns"
+        UdpPacketSemantics::Dns
     } else {
         udp_packet_semantics(handler)
     }
 }
 
-pub(super) fn udp_packet_semantics(handler: &ResidentProxyProtocolPlan) -> &'static str {
+pub(super) fn udp_packet_semantics(handler: &ResidentProxyProtocolPlan) -> UdpPacketSemantics {
     match handler {
-        ResidentProxyProtocolPlan::VlessVisionTcpTls { .. } => "xudp",
-        ResidentProxyProtocolPlan::VlessMuxTcpTls { .. } => "multiplexed-stream",
-        ResidentProxyProtocolPlan::Socks5Tcp { .. } => "udp-associate",
-        ResidentProxyProtocolPlan::HttpProxyTcp { .. } => "protocol-closed",
-        ResidentProxyProtocolPlan::ShadowsocksAeadTcp { .. } => "datagram-aead",
-        ResidentProxyProtocolPlan::Shadowsocks2022Tcp { .. } => "datagram-aead-2022",
+        ResidentProxyProtocolPlan::VlessVisionTcpTls { .. } => UdpPacketSemantics::Xudp,
+        ResidentProxyProtocolPlan::VlessMuxTcpTls { .. } => UdpPacketSemantics::MultiplexedStream,
+        ResidentProxyProtocolPlan::Socks5Tcp { .. } => UdpPacketSemantics::UdpAssociate,
+        ResidentProxyProtocolPlan::HttpProxyTcp { .. } => UdpPacketSemantics::ProtocolClosed,
+        ResidentProxyProtocolPlan::ShadowsocksAeadTcp { .. } => UdpPacketSemantics::DatagramAead,
+        ResidentProxyProtocolPlan::Shadowsocks2022Tcp { .. } => {
+            UdpPacketSemantics::DatagramAead2022
+        }
         ResidentProxyProtocolPlan::ShadowsocksSimpleObfsHttpTcp { .. }
         | ResidentProxyProtocolPlan::ShadowsocksSimpleObfsTlsTcp { .. }
         | ResidentProxyProtocolPlan::ShadowsocksV2rayPluginTlsWsTcp { .. }
         | ResidentProxyProtocolPlan::Shadowsocks2022SimpleObfsHttpTcp { .. } => {
-            "plugin-udp-policy-closed"
+            UdpPacketSemantics::PluginUdpPolicyClosed
         }
-        ResidentProxyProtocolPlan::ShadowsocksRHttpSimpleTcp { .. } => "legacy-udp-fail-closed",
+        ResidentProxyProtocolPlan::ShadowsocksRHttpSimpleTcp { .. } => {
+            UdpPacketSemantics::LegacyUdpFailClosed
+        }
         ResidentProxyProtocolPlan::TrojanTcpTls { .. }
         | ResidentProxyProtocolPlan::TrojanInnerShadowsocksTcpTls { .. }
         | ResidentProxyProtocolPlan::AnyTlsTcpTls { .. }
-        | ResidentProxyProtocolPlan::VmessAeadTcp { .. } => "udp-over-stream",
-        ResidentProxyProtocolPlan::Hysteria2QuicTcp { .. } => "quic-datagram",
-        ResidentProxyProtocolPlan::TuicQuicTcp { .. } => "quic-packet",
-        ResidentProxyProtocolPlan::JuicityQuicTcp { .. } => "quic-stream-packet",
+        | ResidentProxyProtocolPlan::VmessAeadTcp { .. } => UdpPacketSemantics::UdpOverStream,
+        ResidentProxyProtocolPlan::Hysteria2QuicTcp { .. } => UdpPacketSemantics::QuicDatagram,
+        ResidentProxyProtocolPlan::TuicQuicTcp { .. } => UdpPacketSemantics::QuicPacket,
+        ResidentProxyProtocolPlan::JuicityQuicTcp { .. } => UdpPacketSemantics::QuicStreamPacket,
     }
 }
