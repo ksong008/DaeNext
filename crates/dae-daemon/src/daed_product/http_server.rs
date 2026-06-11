@@ -8,7 +8,8 @@ pub(super) fn serve_forever(
     let listener = TcpListener::bind(listen)?;
     let app = Arc::new(app);
     spawn_allocator_idle_reclaim_monitor(&app);
-    let config = ProductHttpWorkerConfig::from_env();
+    let runtime_config = app.runtime.current_config();
+    let config = ProductHttpWorkerConfig::from_config(runtime_config.as_ref());
     app.http_metrics.configure(config);
     let (sender, receiver) = mpsc::sync_channel(config.queue_capacity);
     let receiver = Arc::new(Mutex::new(receiver));
@@ -33,12 +34,23 @@ pub(super) fn serve_forever(
         };
         handles.push(handle);
     }
+    let mut http_fields = BTreeMap::new();
+    http_fields.insert("workers".to_owned(), config.worker_count.to_string());
+    http_fields.insert(
+        "queueCapacity".to_owned(),
+        config.queue_capacity.to_string(),
+    );
+    http_fields.insert(
+        "workerStackBytes".to_owned(),
+        config.worker_stack_bytes.to_string(),
+    );
+    http_fields.insert("sources".to_owned(), config.sources_json().to_string());
     let _ = append_startup_step_completed_for_config(
         &app.config_dir,
         &app.state,
         "product.http-listener",
         listen_started_at,
-        BTreeMap::new(),
+        http_fields,
     );
     let mut fields = BTreeMap::new();
     fields.insert(

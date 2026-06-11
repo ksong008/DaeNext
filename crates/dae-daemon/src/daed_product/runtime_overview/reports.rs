@@ -42,7 +42,7 @@ pub(crate) fn runtime_overview_report(app: &AppState, request: &HttpRequest) -> 
             process.anonymous_rss_bytes
         ),
         "allocatorReclaim": allocator_reclaim_snapshot_json(),
-        "allocatorIdleReclaim": allocator_idle_reclaim_snapshot_json(),
+        "allocatorIdleReclaim": allocator_idle_reclaim_snapshot_json(app),
         "resourcePools": resource_pool_policy_json(),
         "goroutines": process.thread_count,
         "productHttp": app.http_metrics.snapshot(),

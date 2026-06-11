@@ -231,6 +231,13 @@ impl ProductRuntimeManager {
         }
     }
 
+    pub(super) fn current_config(&self) -> Option<Config> {
+        self.inner
+            .lock()
+            .ok()
+            .and_then(|inner| inner.config.clone())
+    }
+
     pub(super) fn probe_node_latencies(&self, links: &[String]) -> Vec<Value> {
         let Ok(inner) = self.inner.lock() else {
             return Vec::new();

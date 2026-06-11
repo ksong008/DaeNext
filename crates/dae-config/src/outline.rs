@@ -130,7 +130,22 @@ fn global_outline() -> Value {
             leaf("FallbackResolver", "fallback_resolver", "string", Some("8.8.8.8:53"), None, false, false),
             leaf("BandwidthMaxTx", "bandwidth_max_tx", "string", Some("0"), None, false, false),
             leaf("BandwidthMaxRx", "bandwidth_max_rx", "string", Some("0"), None, false, false),
-            leaf("UDPHopInterval", "udphop_interval", "time.Duration", Some("30s"), None, false, false)
+            leaf("UDPHopInterval", "udphop_interval", "time.Duration", Some("30s"), None, false, false),
+            leaf("ResidentUdpSessionLimit", "resident_udp_session_limit", "uint64", None, Some("Optional resident UDP session ceiling. Leave empty to use the product default or compatibility environment override."), false, false),
+            leaf("ResidentUdpSessionQueueDepth", "resident_udp_session_queue_depth", "uint64", None, Some("Optional bounded queue depth per resident UDP session."), false, false),
+            leaf("ResidentTcpFlowStackBytes", "resident_tcp_flow_stack_bytes", "uint64", None, Some("Optional stack size for resident TCP flow worker threads."), false, false),
+            leaf("ResidentEventQueueDepth", "resident_event_queue_depth", "uint64", None, Some("Optional resident event writer queue depth."), false, false),
+            leaf("ResidentManualProbeConcurrency", "resident_manual_probe_concurrency", "uint64", None, Some("Optional maximum parallel manual latency probes per batch."), false, false),
+            leaf("ResidentHealthCheckConcurrency", "resident_health_check_concurrency", "uint64", None, Some("Optional maximum parallel health-check candidates per group."), false, false),
+            leaf("HttpQueue", "http_queue", "uint64", None, Some("Optional product HTTP worker queue capacity."), false, false),
+            leaf("HttpWorkers", "http_workers", "uint64", None, Some("Optional product HTTP worker count."), false, false),
+            leaf("HttpWorkerStackBytes", "http_worker_stack_bytes", "uint64", None, Some("Optional product HTTP worker stack size."), false, false),
+            leaf("AllocatorIdleReclaimEnabled", "allocator_idle_reclaim_enabled", "bool", None, Some("Optional traffic-idle allocator reclaim toggle."), false, false),
+            leaf("AllocatorIdleReclaimSampleInterval", "allocator_idle_reclaim_sample_interval", "time.Duration", None, Some("Optional allocator idle monitor sample interval."), false, false),
+            leaf("AllocatorIdleReclaimMinInterval", "allocator_idle_reclaim_min_interval", "time.Duration", None, Some("Optional minimum interval between allocator idle reclaim attempts."), false, false),
+            leaf("AllocatorIdleReclaimLowTrafficDuration", "allocator_idle_reclaim_low_traffic_duration", "time.Duration", None, Some("Optional low-traffic duration required before allocator idle reclaim."), false, false),
+            leaf("AllocatorIdleReclaimPressureThresholdBytes", "allocator_idle_reclaim_pressure_threshold_bytes", "uint64", None, Some("Optional idle allocator pressure threshold in bytes."), false, false),
+            leaf("AllocatorIdleReclaimMaxTrafficRateBytesPerSecond", "allocator_idle_reclaim_max_traffic_rate_bytes_per_second", "uint64", None, Some("Optional maximum realtime traffic rate that still counts as idle."), false, false)
         ]
     })
 }

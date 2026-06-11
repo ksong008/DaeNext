@@ -69,6 +69,52 @@ pub(crate) fn parse_global_owned(section: Section) -> Result<Global, String> {
             "udphop_interval" => {
                 global.udphop_interval = decode_value(&key, &val, "time.Duration")?
             }
+            "resident_udp_session_limit" => {
+                global.resident_udp_session_limit = Some(decode_value(&key, &val, "uint64")?)
+            }
+            "resident_udp_session_queue_depth" => {
+                global.resident_udp_session_queue_depth = Some(decode_value(&key, &val, "uint64")?)
+            }
+            "resident_tcp_flow_stack_bytes" => {
+                global.resident_tcp_flow_stack_bytes = Some(decode_value(&key, &val, "uint64")?)
+            }
+            "resident_event_queue_depth" => {
+                global.resident_event_queue_depth = Some(decode_value(&key, &val, "uint64")?)
+            }
+            "resident_manual_probe_concurrency" => {
+                global.resident_manual_probe_concurrency = Some(decode_value(&key, &val, "uint64")?)
+            }
+            "resident_health_check_concurrency" => {
+                global.resident_health_check_concurrency = Some(decode_value(&key, &val, "uint64")?)
+            }
+            "http_queue" => global.http_queue = Some(decode_value(&key, &val, "uint64")?),
+            "http_workers" => global.http_workers = Some(decode_value(&key, &val, "uint64")?),
+            "http_worker_stack_bytes" => {
+                global.http_worker_stack_bytes = Some(decode_value(&key, &val, "uint64")?)
+            }
+            "allocator_idle_reclaim_enabled" => {
+                global.allocator_idle_reclaim_enabled = Some(decode_value(&key, &val, "bool")?)
+            }
+            "allocator_idle_reclaim_sample_interval" => {
+                global.allocator_idle_reclaim_sample_interval =
+                    Some(decode_value(&key, &val, "time.Duration")?)
+            }
+            "allocator_idle_reclaim_min_interval" => {
+                global.allocator_idle_reclaim_min_interval =
+                    Some(decode_value(&key, &val, "time.Duration")?)
+            }
+            "allocator_idle_reclaim_low_traffic_duration" => {
+                global.allocator_idle_reclaim_low_traffic_duration =
+                    Some(decode_value(&key, &val, "time.Duration")?)
+            }
+            "allocator_idle_reclaim_pressure_threshold_bytes" => {
+                global.allocator_idle_reclaim_pressure_threshold_bytes =
+                    Some(decode_value(&key, &val, "uint64")?)
+            }
+            "allocator_idle_reclaim_max_traffic_rate_bytes_per_second" => {
+                global.allocator_idle_reclaim_max_traffic_rate_bytes_per_second =
+                    Some(decode_value(&key, &val, "uint64")?)
+            }
             key => return Err(format!("unexpected key: {key}")),
         }
     }

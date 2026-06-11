@@ -10,45 +10,90 @@ struct AllocatorIdleReclaimPolicy {
     low_traffic_duration: Duration,
     pressure_threshold_bytes: u64,
     max_traffic_rate_bytes_per_second: u64,
+    sources: AllocatorIdleReclaimPolicySources,
+}
+
+#[derive(Clone, Copy, Debug)]
+struct AllocatorIdleReclaimPolicySources {
+    enabled: &'static str,
+    sample_interval: &'static str,
+    min_interval: &'static str,
+    low_traffic_duration: &'static str,
+    pressure_threshold_bytes: &'static str,
+    max_traffic_rate_bytes_per_second: &'static str,
 }
 
 impl AllocatorIdleReclaimPolicy {
-    fn from_env() -> Self {
+    fn from_config(config: Option<&Config>) -> Self {
+        let global = config.map(|config| &config.global);
+        let (enabled, enabled_source) = effective_bool(
+            ALLOCATOR_IDLE_RECLAIM_ENABLED_ENV,
+            global.and_then(|global| global.allocator_idle_reclaim_enabled),
+            ALLOCATOR_IDLE_RECLAIM_ENABLED_DEFAULT,
+        );
+        let (sample_interval_seconds, sample_interval_source) = effective_u64(
+            ALLOCATOR_IDLE_RECLAIM_SAMPLE_INTERVAL_SECONDS_ENV,
+            global.and_then(|global| {
+                global
+                    .allocator_idle_reclaim_sample_interval
+                    .map(|duration| config_duration_seconds_from_nanos(duration.as_nanos()))
+            }),
+            ALLOCATOR_IDLE_RECLAIM_SAMPLE_INTERVAL_SECONDS_DEFAULT,
+            ALLOCATOR_IDLE_RECLAIM_SAMPLE_INTERVAL_SECONDS_MIN,
+            ALLOCATOR_IDLE_RECLAIM_SAMPLE_INTERVAL_SECONDS_MAX,
+        );
+        let (min_interval_seconds, min_interval_source) = effective_u64(
+            ALLOCATOR_IDLE_RECLAIM_MIN_INTERVAL_SECONDS_ENV,
+            global.and_then(|global| {
+                global
+                    .allocator_idle_reclaim_min_interval
+                    .map(|duration| config_duration_seconds_from_nanos(duration.as_nanos()))
+            }),
+            ALLOCATOR_IDLE_RECLAIM_MIN_INTERVAL_SECONDS_DEFAULT,
+            ALLOCATOR_IDLE_RECLAIM_MIN_INTERVAL_SECONDS_MIN,
+            ALLOCATOR_IDLE_RECLAIM_MIN_INTERVAL_SECONDS_MAX,
+        );
+        let (low_traffic_seconds, low_traffic_source) = effective_u64(
+            ALLOCATOR_IDLE_RECLAIM_LOW_TRAFFIC_SECONDS_ENV,
+            global.and_then(|global| {
+                global
+                    .allocator_idle_reclaim_low_traffic_duration
+                    .map(|duration| config_duration_seconds_from_nanos(duration.as_nanos()))
+            }),
+            ALLOCATOR_IDLE_RECLAIM_LOW_TRAFFIC_SECONDS_DEFAULT,
+            ALLOCATOR_IDLE_RECLAIM_LOW_TRAFFIC_SECONDS_MIN,
+            ALLOCATOR_IDLE_RECLAIM_LOW_TRAFFIC_SECONDS_MAX,
+        );
+        let (pressure_threshold_bytes, pressure_source) = effective_u64(
+            ALLOCATOR_IDLE_RECLAIM_PRESSURE_BYTES_ENV,
+            global.and_then(|global| global.allocator_idle_reclaim_pressure_threshold_bytes),
+            ALLOCATOR_IDLE_RECLAIM_PRESSURE_BYTES_DEFAULT,
+            ALLOCATOR_IDLE_RECLAIM_PRESSURE_BYTES_MIN,
+            ALLOCATOR_IDLE_RECLAIM_PRESSURE_BYTES_MAX,
+        );
+        let (max_traffic_rate_bytes_per_second, max_rate_source) = effective_u64(
+            ALLOCATOR_IDLE_RECLAIM_MAX_TRAFFIC_RATE_BYTES_PER_SECOND_ENV,
+            global
+                .and_then(|global| global.allocator_idle_reclaim_max_traffic_rate_bytes_per_second),
+            ALLOCATOR_IDLE_RECLAIM_MAX_TRAFFIC_RATE_BYTES_PER_SECOND_DEFAULT,
+            0,
+            ALLOCATOR_IDLE_RECLAIM_MAX_TRAFFIC_RATE_BYTES_PER_SECOND_MAX,
+        );
         Self {
-            enabled: env_bool(
-                ALLOCATOR_IDLE_RECLAIM_ENABLED_ENV,
-                ALLOCATOR_IDLE_RECLAIM_ENABLED_DEFAULT,
-            ),
-            sample_interval: Duration::from_secs(env_u64(
-                ALLOCATOR_IDLE_RECLAIM_SAMPLE_INTERVAL_SECONDS_ENV,
-                ALLOCATOR_IDLE_RECLAIM_SAMPLE_INTERVAL_SECONDS_DEFAULT,
-                ALLOCATOR_IDLE_RECLAIM_SAMPLE_INTERVAL_SECONDS_MIN,
-                ALLOCATOR_IDLE_RECLAIM_SAMPLE_INTERVAL_SECONDS_MAX,
-            )),
-            min_interval: Duration::from_secs(env_u64(
-                ALLOCATOR_IDLE_RECLAIM_MIN_INTERVAL_SECONDS_ENV,
-                ALLOCATOR_IDLE_RECLAIM_MIN_INTERVAL_SECONDS_DEFAULT,
-                ALLOCATOR_IDLE_RECLAIM_MIN_INTERVAL_SECONDS_MIN,
-                ALLOCATOR_IDLE_RECLAIM_MIN_INTERVAL_SECONDS_MAX,
-            )),
-            low_traffic_duration: Duration::from_secs(env_u64(
-                ALLOCATOR_IDLE_RECLAIM_LOW_TRAFFIC_SECONDS_ENV,
-                ALLOCATOR_IDLE_RECLAIM_LOW_TRAFFIC_SECONDS_DEFAULT,
-                ALLOCATOR_IDLE_RECLAIM_LOW_TRAFFIC_SECONDS_MIN,
-                ALLOCATOR_IDLE_RECLAIM_LOW_TRAFFIC_SECONDS_MAX,
-            )),
-            pressure_threshold_bytes: env_u64(
-                ALLOCATOR_IDLE_RECLAIM_PRESSURE_BYTES_ENV,
-                ALLOCATOR_IDLE_RECLAIM_PRESSURE_BYTES_DEFAULT,
-                ALLOCATOR_IDLE_RECLAIM_PRESSURE_BYTES_MIN,
-                ALLOCATOR_IDLE_RECLAIM_PRESSURE_BYTES_MAX,
-            ),
-            max_traffic_rate_bytes_per_second: env_u64(
-                ALLOCATOR_IDLE_RECLAIM_MAX_TRAFFIC_RATE_BYTES_PER_SECOND_ENV,
-                ALLOCATOR_IDLE_RECLAIM_MAX_TRAFFIC_RATE_BYTES_PER_SECOND_DEFAULT,
-                0,
-                ALLOCATOR_IDLE_RECLAIM_MAX_TRAFFIC_RATE_BYTES_PER_SECOND_MAX,
-            ),
+            enabled,
+            sample_interval: Duration::from_secs(sample_interval_seconds),
+            min_interval: Duration::from_secs(min_interval_seconds),
+            low_traffic_duration: Duration::from_secs(low_traffic_seconds),
+            pressure_threshold_bytes,
+            max_traffic_rate_bytes_per_second,
+            sources: AllocatorIdleReclaimPolicySources {
+                enabled: enabled_source,
+                sample_interval: sample_interval_source,
+                min_interval: min_interval_source,
+                low_traffic_duration: low_traffic_source,
+                pressure_threshold_bytes: pressure_source,
+                max_traffic_rate_bytes_per_second: max_rate_source,
+            },
         }
     }
 
@@ -62,6 +107,14 @@ impl AllocatorIdleReclaimPolicy {
             "pressureThresholdBytes": self.pressure_threshold_bytes.to_string(),
             "maxTrafficRateBytesPerSecond": self.max_traffic_rate_bytes_per_second.to_string(),
             "sessionCountGate": false,
+            "sources": {
+                "enabled": self.sources.enabled,
+                "sampleIntervalSeconds": self.sources.sample_interval,
+                "minIntervalSeconds": self.sources.min_interval,
+                "lowTrafficSeconds": self.sources.low_traffic_duration,
+                "pressureThresholdBytes": self.sources.pressure_threshold_bytes,
+                "maxTrafficRateBytesPerSecond": self.sources.max_traffic_rate_bytes_per_second,
+            },
         })
     }
 }
@@ -124,7 +177,8 @@ pub(crate) fn spawn_allocator_idle_reclaim_monitor(app: &Arc<AppState>) {
         .stack_size(ALLOCATOR_IDLE_RECLAIM_MONITOR_STACK_BYTES)
         .spawn(move || {
             loop {
-                let policy = AllocatorIdleReclaimPolicy::from_env();
+                let config = app.runtime.current_config();
+                let policy = AllocatorIdleReclaimPolicy::from_config(config.as_ref());
                 thread::sleep(policy.sample_interval);
                 if std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                     allocator_idle_reclaim_tick(&app, policy);
@@ -137,8 +191,9 @@ pub(crate) fn spawn_allocator_idle_reclaim_monitor(app: &Arc<AppState>) {
         });
 }
 
-pub(crate) fn allocator_idle_reclaim_snapshot_json() -> Value {
-    let policy = AllocatorIdleReclaimPolicy::from_env();
+pub(crate) fn allocator_idle_reclaim_snapshot_json(app: &AppState) -> Value {
+    let config = app.runtime.current_config();
+    let policy = AllocatorIdleReclaimPolicy::from_config(config.as_ref());
     let last_report = ALLOCATOR_IDLE_RECLAIM_STATE
         .get_or_init(|| Mutex::new(default_idle_reclaim_state()))
         .lock()
@@ -399,24 +454,51 @@ fn default_idle_reclaim_state() -> AllocatorIdleReclaimState {
     }
 }
 
-fn env_bool(name: &str, default: bool) -> bool {
-    std::env::var(name)
+fn effective_bool(name: &str, configured: Option<bool>, default: bool) -> (bool, &'static str) {
+    if let Some(value) = std::env::var(name)
         .ok()
-        .map(|value| {
-            matches!(
-                value.trim(),
-                "1" | "true" | "TRUE" | "on" | "ON" | "yes" | "YES"
-            )
-        })
-        .unwrap_or(default)
+        .and_then(|value| parse_env_bool(&value))
+    {
+        return (value, "env");
+    }
+    if let Some(value) = configured {
+        return (value, "config");
+    }
+    (default, "default")
 }
 
-fn env_u64(name: &str, default: u64, min: u64, max: u64) -> u64 {
-    std::env::var(name)
+fn effective_u64(
+    name: &str,
+    configured: Option<u64>,
+    default: u64,
+    min: u64,
+    max: u64,
+) -> (u64, &'static str) {
+    if let Some(value) = std::env::var(name)
         .ok()
         .and_then(|value| value.trim().parse::<u64>().ok())
-        .unwrap_or(default)
-        .clamp(min, max)
+    {
+        return (value.clamp(min, max), "env");
+    }
+    if let Some(value) = configured {
+        return (value.clamp(min, max), "config");
+    }
+    (default.clamp(min, max), "default")
+}
+
+fn parse_env_bool(value: &str) -> Option<bool> {
+    match value.trim() {
+        "1" | "true" | "TRUE" | "on" | "ON" | "yes" | "YES" => Some(true),
+        "0" | "false" | "FALSE" | "off" | "OFF" | "no" | "NO" => Some(false),
+        _ => None,
+    }
+}
+
+fn config_duration_seconds_from_nanos(nanos: i64) -> u64 {
+    if nanos <= 0 {
+        return 0;
+    }
+    ((nanos as u64).saturating_add(999_999_999)) / 1_000_000_000
 }
 
 #[cfg(test)]

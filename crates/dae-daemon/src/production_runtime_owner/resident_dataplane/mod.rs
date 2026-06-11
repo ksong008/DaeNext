@@ -59,6 +59,9 @@ pub(super) use self::metrics::*;
 #[path = "runtime/workers.rs"]
 mod workers;
 pub(super) use self::workers::*;
+#[path = "runtime/resources.rs"]
+mod resources;
+use self::resources::*;
 #[path = "runtime/health_checks.rs"]
 mod health_checks;
 pub(super) use self::health_checks::*;
@@ -68,7 +71,4 @@ pub(crate) use self::remote_strategy_live_tests::*;
 #[path = "runtime/matrix.rs"]
 mod matrix;
 use self::matrix::*;
-#[path = "runtime/env.rs"]
-mod env;
-use self::env::*;
 pub(super) use self::runtime_owner::*;

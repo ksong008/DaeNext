@@ -99,6 +99,7 @@ pub(crate) fn start_resident_dataplane_workers(
     };
 
     let reload_generation = RESIDENT_RELOAD_GENERATION.fetch_add(1, Ordering::Relaxed);
+    let resource_config = ResidentRuntimeResourceConfig::from_config(config);
     let metrics = Arc::new(ResidentDataplaneMetrics::default());
     let udp_sessions_active = Arc::new(AtomicUsize::new(0));
     let event_lock = Arc::new(Mutex::new(()));
@@ -108,6 +109,7 @@ pub(crate) fn start_resident_dataplane_workers(
         reload_generation,
         Arc::clone(&metrics),
         Arc::clone(&udp_sessions_active),
+        resource_config.clone(),
     );
     let proxy = Arc::new(default_proxy);
     let proxy_group = Arc::new(default_group);
@@ -153,10 +155,9 @@ pub(crate) fn start_resident_dataplane_workers(
             );
         }
     };
-    let tcp_flow_stack_bytes = resident_tcp_flow_stack_bytes();
-    let udp_session_limit = resident_udp_session_limit();
-    let udp_session_queue_depth = resident_udp_session_queue_depth();
-    let event_queue_depth = resident_event_queue_depth();
+    let tcp_flow_stack_bytes = resource_config.tcp_flow_stack_bytes.value();
+    let udp_session_limit = resource_config.udp_session_limit.value();
+    let udp_session_queue_depth = resource_config.udp_session_queue_depth.value();
     {
         let stop = owner.stop_handle();
         let tcp_router = Arc::clone(&tcp_router);
@@ -211,11 +212,18 @@ pub(crate) fn start_resident_dataplane_workers(
         let health_group = Arc::clone(health_group);
         let event_file = owner.event_file();
         let event_lock = owner.event_lock();
+        let health_check_concurrency = resource_config.health_check_concurrency.value();
         owner.register_thread(
             "health-check-loop",
             "health-check",
             thread::spawn(move || {
-                resident_group_health_check_loop(health_group, stop, event_file, event_lock)
+                resident_group_health_check_loop(
+                    health_group,
+                    stop,
+                    event_file,
+                    event_lock,
+                    health_check_concurrency,
+                )
             }),
         );
     }
@@ -232,31 +240,73 @@ pub(crate) fn start_resident_dataplane_workers(
             "alpn_policy": &fingerprint.alpn_policy,
         })
     });
-    let start = json!({
-        "status": "pass",
-        "enabled": true,
-        "tcp_worker_started": true,
-        "udp_session_manager_started": true,
-        "tcp_flow_stack_bytes": tcp_flow_stack_bytes,
-        "tcp_flow_stack_bytes_env": RESIDENT_TCP_FLOW_STACK_BYTES_ENV,
-        "udp_session_limit": udp_session_limit,
-        "udp_session_limit_env": RESIDENT_UDP_SESSION_LIMIT_ENV,
-        "udp_session_queue_depth": udp_session_queue_depth,
-        "udp_session_queue_depth_env": RESIDENT_UDP_SESSION_QUEUE_DEPTH_ENV,
-        "event_queue_depth": event_queue_depth,
-        "event_queue_depth_env": RESIDENT_EVENT_QUEUE_DEPTH_ENV,
-        "event_file": path_string(&event_file),
-        "reload_generation": reload_generation,
-        "runtime_owner": owner.task_registry_value(),
-        "routing_tuple_map_id": routing_tuple_map_id,
-        "tcp_dial_mode": tcp_router.dial_mode_name(),
-        "tcp_sniffing_timeout": format!("{:?}", tcp_router.sniffing_timeout()),
-        "proxy_count": tcp_router.proxy_count(),
-        "health_check_worker_count": health_groups.len(),
-        "manual_probe_plan_count": manual_probe_plan_count,
-        "manual_probe_unavailable_count": manual_probe_unavailable_count,
-        "default_group": {
-            "group": proxy_group.group_name,
+    let mut start_map = serde_json::Map::new();
+    start_map.insert("status".to_owned(), json!("pass"));
+    start_map.insert("enabled".to_owned(), json!(true));
+    start_map.insert("tcp_worker_started".to_owned(), json!(true));
+    start_map.insert("udp_session_manager_started".to_owned(), json!(true));
+    start_map.insert("resources".to_owned(), resource_config.json());
+    start_map.insert(
+        "tcp_flow_stack_bytes".to_owned(),
+        json!(tcp_flow_stack_bytes),
+    );
+    start_map.insert(
+        "tcp_flow_stack_bytes_env".to_owned(),
+        json!(RESIDENT_TCP_FLOW_STACK_BYTES_ENV),
+    );
+    start_map.insert("udp_session_limit".to_owned(), json!(udp_session_limit));
+    start_map.insert(
+        "udp_session_limit_env".to_owned(),
+        json!(RESIDENT_UDP_SESSION_LIMIT_ENV),
+    );
+    start_map.insert(
+        "udp_session_queue_depth".to_owned(),
+        json!(udp_session_queue_depth),
+    );
+    start_map.insert(
+        "udp_session_queue_depth_env".to_owned(),
+        json!(RESIDENT_UDP_SESSION_QUEUE_DEPTH_ENV),
+    );
+    start_map.insert(
+        "event_queue_depth".to_owned(),
+        json!(resource_config.event_queue_depth.value()),
+    );
+    start_map.insert(
+        "event_queue_depth_env".to_owned(),
+        json!(RESIDENT_EVENT_QUEUE_DEPTH_ENV),
+    );
+    start_map.insert("event_file".to_owned(), json!(path_string(&event_file)));
+    start_map.insert("reload_generation".to_owned(), json!(reload_generation));
+    start_map.insert("runtime_owner".to_owned(), owner.task_registry_value());
+    start_map.insert(
+        "routing_tuple_map_id".to_owned(),
+        json!(routing_tuple_map_id),
+    );
+    start_map.insert(
+        "tcp_dial_mode".to_owned(),
+        json!(tcp_router.dial_mode_name()),
+    );
+    start_map.insert(
+        "tcp_sniffing_timeout".to_owned(),
+        json!(format!("{:?}", tcp_router.sniffing_timeout())),
+    );
+    start_map.insert("proxy_count".to_owned(), json!(tcp_router.proxy_count()));
+    start_map.insert(
+        "health_check_worker_count".to_owned(),
+        json!(health_groups.len()),
+    );
+    start_map.insert(
+        "manual_probe_plan_count".to_owned(),
+        json!(manual_probe_plan_count),
+    );
+    start_map.insert(
+        "manual_probe_unavailable_count".to_owned(),
+        json!(manual_probe_unavailable_count),
+    );
+    start_map.insert(
+        "default_group".to_owned(),
+        json!({
+            "group": &proxy_group.group_name,
             "group_policy": proxy_group.group_policy_name(),
             "candidate_count": proxy_group.candidate_count(),
             "admitted_candidate_count": proxy_group.admitted_candidate_count(),
@@ -265,28 +315,35 @@ pub(crate) fn start_resident_dataplane_workers(
             "latency_state_wired": proxy_group.latency_state_wired(),
             "background_check_required": proxy_group.needs_background_checks(),
             "check_interval": format!("{:?}", proxy_group.check_interval()),
-        },
-        "default_proxy": {
-            "protocol": proxy.protocol,
-            "group": proxy.group_name,
-            "group_policy": proxy.group_policy,
-            "node_tag": proxy.node_tag,
-            "server_host": proxy.server_host,
+        }),
+    );
+    start_map.insert(
+        "default_proxy".to_owned(),
+        json!({
+            "protocol": &proxy.protocol,
+            "group": &proxy.group_name,
+            "group_policy": &proxy.group_policy,
+            "node_tag": &proxy.node_tag,
+            "server_host": &proxy.server_host,
             "server_port": proxy.server_port,
-            "server_name": proxy.server_name,
-            "transport": proxy.net,
+            "server_name": &proxy.server_name,
+            "transport": &proxy.net,
             "tls": proxy.tls,
-            "flow": proxy.flow,
-            "alpn": proxy.alpn,
+            "flow": &proxy.flow,
+            "alpn": &proxy.alpn,
             "allow_insecure": proxy.allow_insecure,
             "utls_fingerprint": default_proxy_utls,
             "mark": proxy.mark,
             "mptcp": proxy.mptcp,
             "executableGraph": proxy.executable_graph_value_for_reload_generation(reload_generation),
             "runtimeComponents": proxy.runtime_component_evidence_value_for_reload_generation(reload_generation),
-        },
-        "scope": "resident worker consumes live tproxy TCP/UDP sockets and relays through admitted Rust proxy handlers; unsupported protocols fail explicitly instead of faking proxy success",
-    });
+        }),
+    );
+    start_map.insert(
+        "scope".to_owned(),
+        json!("resident worker consumes live tproxy TCP/UDP sockets and relays through admitted Rust proxy handlers; unsupported protocols fail explicitly instead of faking proxy success"),
+    );
+    let start = Value::Object(start_map);
     (
         start,
         Some(ResidentDataplaneRuntime {

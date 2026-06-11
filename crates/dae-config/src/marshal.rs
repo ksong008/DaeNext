@@ -83,6 +83,69 @@ impl Marshaller {
         self.leaf("bandwidth_max_tx", &global.bandwidth_max_tx, 1);
         self.leaf("bandwidth_max_rx", &global.bandwidth_max_rx, 1);
         self.leaf("udphop_interval", global.udphop_interval, 1);
+        self.optional_leaf(
+            "resident_udp_session_limit",
+            global.resident_udp_session_limit,
+            1,
+        );
+        self.optional_leaf(
+            "resident_udp_session_queue_depth",
+            global.resident_udp_session_queue_depth,
+            1,
+        );
+        self.optional_leaf(
+            "resident_tcp_flow_stack_bytes",
+            global.resident_tcp_flow_stack_bytes,
+            1,
+        );
+        self.optional_leaf(
+            "resident_event_queue_depth",
+            global.resident_event_queue_depth,
+            1,
+        );
+        self.optional_leaf(
+            "resident_manual_probe_concurrency",
+            global.resident_manual_probe_concurrency,
+            1,
+        );
+        self.optional_leaf(
+            "resident_health_check_concurrency",
+            global.resident_health_check_concurrency,
+            1,
+        );
+        self.optional_leaf("http_queue", global.http_queue, 1);
+        self.optional_leaf("http_workers", global.http_workers, 1);
+        self.optional_leaf("http_worker_stack_bytes", global.http_worker_stack_bytes, 1);
+        self.optional_leaf(
+            "allocator_idle_reclaim_enabled",
+            global.allocator_idle_reclaim_enabled,
+            1,
+        );
+        self.optional_leaf(
+            "allocator_idle_reclaim_sample_interval",
+            global.allocator_idle_reclaim_sample_interval,
+            1,
+        );
+        self.optional_leaf(
+            "allocator_idle_reclaim_min_interval",
+            global.allocator_idle_reclaim_min_interval,
+            1,
+        );
+        self.optional_leaf(
+            "allocator_idle_reclaim_low_traffic_duration",
+            global.allocator_idle_reclaim_low_traffic_duration,
+            1,
+        );
+        self.optional_leaf(
+            "allocator_idle_reclaim_pressure_threshold_bytes",
+            global.allocator_idle_reclaim_pressure_threshold_bytes,
+            1,
+        );
+        self.optional_leaf(
+            "allocator_idle_reclaim_max_traffic_rate_bytes_per_second",
+            global.allocator_idle_reclaim_max_traffic_rate_bytes_per_second,
+            1,
+        );
         Ok(())
     }
 
@@ -171,6 +234,12 @@ impl Marshaller {
         self.out.push(':');
         self.out.push_str(&quote_string(&value.to_string()));
         self.out.push('\n');
+    }
+
+    fn optional_leaf(&mut self, key: &str, value: Option<impl ToString>, depth: usize) {
+        if let Some(value) = value {
+            self.leaf(key, value, depth);
+        }
     }
 
     fn string_slice_leaf(&mut self, key: &str, values: &[String], depth: usize) {

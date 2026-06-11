@@ -366,7 +366,22 @@ pub(crate) fn parsed_global_request_renders_dae_global_text_for_webui_fields() {
         "mptcp": true,
         "enableLocalTcpFastRedirect": true,
         "bandwidthMaxTx": "200 mbps",
-        "bandwidthMaxRx": "1 gbps"
+        "bandwidthMaxRx": "1 gbps",
+        "residentUdpSessionLimit": 128,
+        "residentUdpSessionQueueDepth": 64,
+        "residentTcpFlowStackBytes": 1048576,
+        "residentEventQueueDepth": 8192,
+        "residentManualProbeConcurrency": 12,
+        "residentHealthCheckConcurrency": 4,
+        "httpQueue": 512,
+        "httpWorkers": 6,
+        "httpWorkerStackBytes": 1048576,
+        "allocatorIdleReclaimEnabled": true,
+        "allocatorIdleReclaimSampleInterval": "2m",
+        "allocatorIdleReclaimMinInterval": "10m",
+        "allocatorIdleReclaimLowTrafficDuration": "5m",
+        "allocatorIdleReclaimPressureThresholdBytes": 67108864,
+        "allocatorIdleReclaimMaxTrafficRateBytesPerSecond": 65536
     });
     let rendered = render_global_config_text(&parsed_global);
     assert!(rendered.starts_with("global {\n"));
@@ -374,6 +389,10 @@ pub(crate) fn parsed_global_request_renders_dae_global_text_for_webui_fields() {
     assert!(rendered.contains("tproxy_port_protect:'false'"));
     assert!(rendered.contains("wan_interface:'auto,eth0'"));
     assert!(rendered.contains("enable_local_tcp_fast_redirect:'true'"));
+    assert!(rendered.contains("resident_udp_session_limit:'128'"));
+    assert!(rendered.contains("resident_health_check_concurrency:'4'"));
+    assert!(rendered.contains("http_queue:'512'"));
+    assert!(rendered.contains("allocator_idle_reclaim_sample_interval:'2m'"));
     assert!(!rendered.trim_start().starts_with('{'));
 
     let sections = parse_config(&format!("{rendered}\nrouting {{ fallback: direct }}\n")).unwrap();
@@ -388,6 +407,16 @@ pub(crate) fn parsed_global_request_renders_dae_global_text_for_webui_fields() {
     assert!(!config.global.tproxy_port_protect);
     assert!(config.global.disable_waiting_network);
     assert!(config.global.enable_local_tcp_fast_redirect);
+    assert_eq!(config.global.resident_udp_session_limit, Some(128));
+    assert_eq!(config.global.resident_health_check_concurrency, Some(4));
+    assert_eq!(config.global.http_queue, Some(512));
+    assert_eq!(
+        config
+            .global
+            .allocator_idle_reclaim_sample_interval
+            .map(|duration| duration.to_string()),
+        Some("2m0s".to_owned())
+    );
 
     let body = json!({
         "global": "global { tcp_check_http_method:'HEAD' }",

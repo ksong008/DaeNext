@@ -83,6 +83,74 @@ fn project_global(global: &Global) -> Value {
     })
 }
 
+#[test]
+fn global_resource_limits_are_optional_and_parse_when_configured() {
+    let sections = parse_config(
+        r#"
+global {
+  resident_udp_session_limit: "128"
+  resident_udp_session_queue_depth: "64"
+  resident_tcp_flow_stack_bytes: "1048576"
+  resident_event_queue_depth: "8192"
+  resident_manual_probe_concurrency: "16"
+  resident_health_check_concurrency: "4"
+  http_queue: "512"
+  http_workers: "6"
+  http_worker_stack_bytes: "1048576"
+  allocator_idle_reclaim_enabled: "true"
+  allocator_idle_reclaim_sample_interval: "2m"
+  allocator_idle_reclaim_min_interval: "10m"
+  allocator_idle_reclaim_low_traffic_duration: "5m"
+  allocator_idle_reclaim_pressure_threshold_bytes: "67108864"
+  allocator_idle_reclaim_max_traffic_rate_bytes_per_second: "65536"
+}
+routing {
+  fallback: direct
+}
+"#,
+    )
+    .unwrap();
+    let config = build_config(&sections).unwrap();
+    let global = config.global;
+
+    assert_eq!(global.resident_udp_session_limit, Some(128));
+    assert_eq!(global.resident_udp_session_queue_depth, Some(64));
+    assert_eq!(global.resident_tcp_flow_stack_bytes, Some(1_048_576));
+    assert_eq!(global.resident_event_queue_depth, Some(8192));
+    assert_eq!(global.resident_manual_probe_concurrency, Some(16));
+    assert_eq!(global.resident_health_check_concurrency, Some(4));
+    assert_eq!(global.http_queue, Some(512));
+    assert_eq!(global.http_workers, Some(6));
+    assert_eq!(global.http_worker_stack_bytes, Some(1_048_576));
+    assert_eq!(global.allocator_idle_reclaim_enabled, Some(true));
+    assert_eq!(
+        global
+            .allocator_idle_reclaim_sample_interval
+            .map(|duration| duration.to_string()),
+        Some("2m0s".to_owned())
+    );
+    assert_eq!(
+        global
+            .allocator_idle_reclaim_min_interval
+            .map(|duration| duration.to_string()),
+        Some("10m0s".to_owned())
+    );
+    assert_eq!(
+        global
+            .allocator_idle_reclaim_low_traffic_duration
+            .map(|duration| duration.to_string()),
+        Some("5m0s".to_owned())
+    );
+    assert_eq!(
+        global.allocator_idle_reclaim_pressure_threshold_bytes,
+        Some(67_108_864)
+    );
+    assert_eq!(
+        global.allocator_idle_reclaim_max_traffic_rate_bytes_per_second,
+        Some(65_536)
+    );
+}
+
 fn project_group(group: &Group) -> Value {
     json!({
         "name": group.name,

@@ -4,9 +4,11 @@ pub(crate) fn resident_group_health_check_loop(
     stop: Arc<AtomicBool>,
     event_file: PathBuf,
     event_lock: Arc<Mutex<()>>,
+    concurrency: usize,
 ) {
     let interval = group.check_interval();
     let candidates = group.probe_candidates();
+    let concurrency = concurrency.max(1);
     append_event(
         &event_file,
         &event_lock,
@@ -17,6 +19,7 @@ pub(crate) fn resident_group_health_check_loop(
             "candidate_count": group.candidate_count(),
             "admitted_candidate_count": group.admitted_candidate_count(),
             "check_interval": format!("{interval:?}"),
+            "concurrency": concurrency,
             "probe": "tokio-proxy-tcp-and-dns-udp-check",
             "tcp_probe_executor": "tokio-proxy-tcp-probe",
             "udp_probe_executor": "tokio-proxy-packet-dns-probe",
@@ -39,7 +42,11 @@ pub(crate) fn resident_group_health_check_loop(
             return;
         }
     };
-    runtime.block_on(run_resident_group_health_checks_async(&group, &candidates));
+    runtime.block_on(run_resident_group_health_checks_concurrent_async(
+        Arc::clone(&group),
+        &candidates,
+        concurrency,
+    ));
     loop {
         if interval.is_zero() || sleep_until_stopped(&stop, interval) {
             return;
@@ -47,7 +54,34 @@ pub(crate) fn resident_group_health_check_loop(
         if stop.load(Ordering::Relaxed) {
             return;
         }
-        runtime.block_on(run_resident_group_health_checks_async(&group, &candidates));
+        runtime.block_on(run_resident_group_health_checks_concurrent_async(
+            Arc::clone(&group),
+            &candidates,
+            concurrency,
+        ));
+    }
+}
+
+async fn run_resident_group_health_checks_concurrent_async(
+    group: Arc<plan::ResidentProxyGroupPlan>,
+    candidates: &[plan::ResidentProxyProbePlan],
+    concurrency: usize,
+) {
+    if concurrency <= 1 {
+        run_resident_group_health_checks_async(&group, candidates).await;
+        return;
+    }
+    for chunk in candidates.chunks(concurrency.max(1)) {
+        let mut handles = Vec::new();
+        for candidate in chunk.iter().cloned() {
+            let group = Arc::clone(&group);
+            handles.push(tokio::spawn(async move {
+                run_resident_candidate_health_check_async(&group, &candidate).await;
+            }));
+        }
+        for handle in handles {
+            let _ = handle.await;
+        }
     }
 }
 
@@ -56,27 +90,34 @@ pub(crate) async fn run_resident_group_health_checks_async(
     candidates: &[plan::ResidentProxyProbePlan],
 ) {
     for candidate in candidates {
-        let checked_at = unix_now_secs();
-        let latency_ms = probe_resident_candidate_tcp_endpoint_async(candidate)
-            .await
-            .ok();
-        let _ = group.record_check_result(
-            &candidate.node_tag,
-            NetworkType::TCP4,
-            latency_ms,
-            checked_at,
-        );
-        let udp_checked_at = unix_now_secs();
-        let udp_latency_ms = probe_resident_candidate_udp_endpoint_async(candidate)
-            .await
-            .ok();
-        let _ = group.record_check_result(
-            &candidate.node_tag,
-            NetworkType::DNS_UDP4,
-            udp_latency_ms,
-            udp_checked_at,
-        );
+        run_resident_candidate_health_check_async(group, candidate).await;
     }
+}
+
+async fn run_resident_candidate_health_check_async(
+    group: &plan::ResidentProxyGroupPlan,
+    candidate: &plan::ResidentProxyProbePlan,
+) {
+    let checked_at = unix_now_secs();
+    let latency_ms = probe_resident_candidate_tcp_endpoint_async(candidate)
+        .await
+        .ok();
+    let _ = group.record_check_result(
+        &candidate.node_tag,
+        NetworkType::TCP4,
+        latency_ms,
+        checked_at,
+    );
+    let udp_checked_at = unix_now_secs();
+    let udp_latency_ms = probe_resident_candidate_udp_endpoint_async(candidate)
+        .await
+        .ok();
+    let _ = group.record_check_result(
+        &candidate.node_tag,
+        NetworkType::DNS_UDP4,
+        udp_latency_ms,
+        udp_checked_at,
+    );
 }
 
 #[cfg(test)]

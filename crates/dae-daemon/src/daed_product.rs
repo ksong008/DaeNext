@@ -241,10 +241,14 @@ struct ProductHttpWorkerConfig {
     worker_count: usize,
     queue_capacity: usize,
     worker_stack_bytes: usize,
+    worker_count_source: &'static str,
+    queue_capacity_source: &'static str,
+    worker_stack_bytes_source: &'static str,
 }
 
 impl ProductHttpWorkerConfig {
-    fn from_env() -> Self {
+    fn from_config(config: Option<&Config>) -> Self {
+        let global = config.map(|config| &config.global);
         let default_workers = thread::available_parallelism()
             .map(|parallelism| parallelism.get().saturating_mul(2))
             .unwrap_or(PRODUCT_HTTP_WORKER_DEFAULT_MIN)
@@ -252,45 +256,73 @@ impl ProductHttpWorkerConfig {
                 PRODUCT_HTTP_WORKER_DEFAULT_MIN,
                 PRODUCT_HTTP_WORKER_DEFAULT_MAX,
             );
+        let (worker_count, worker_count_source) = effective_product_usize_with_legacy(
+            PRODUCT_HTTP_WORKERS_ENV,
+            PRODUCT_HTTP_WORKERS_LEGACY_ENV,
+            global.and_then(|global| global.http_workers),
+            default_workers,
+            PRODUCT_HTTP_WORKER_MIN,
+            PRODUCT_HTTP_WORKER_MAX,
+        );
+        let (queue_capacity, queue_capacity_source) = effective_product_usize_with_legacy(
+            PRODUCT_HTTP_QUEUE_ENV,
+            PRODUCT_HTTP_QUEUE_LEGACY_ENV,
+            global.and_then(|global| global.http_queue),
+            PRODUCT_HTTP_QUEUE_DEFAULT,
+            PRODUCT_HTTP_QUEUE_MIN,
+            PRODUCT_HTTP_QUEUE_MAX,
+        );
+        let (worker_stack_bytes, worker_stack_bytes_source) = effective_product_usize_with_legacy(
+            PRODUCT_HTTP_WORKER_STACK_BYTES_ENV,
+            PRODUCT_HTTP_WORKER_STACK_BYTES_LEGACY_ENV,
+            global.and_then(|global| global.http_worker_stack_bytes),
+            PRODUCT_HTTP_WORKER_STACK_BYTES_DEFAULT,
+            PRODUCT_HTTP_WORKER_STACK_BYTES_MIN,
+            PRODUCT_HTTP_WORKER_STACK_BYTES_MAX,
+        );
         Self {
-            worker_count: env_usize_with_legacy(
-                PRODUCT_HTTP_WORKERS_ENV,
-                PRODUCT_HTTP_WORKERS_LEGACY_ENV,
-                default_workers,
-                PRODUCT_HTTP_WORKER_MIN,
-                PRODUCT_HTTP_WORKER_MAX,
-            ),
-            queue_capacity: env_usize_with_legacy(
-                PRODUCT_HTTP_QUEUE_ENV,
-                PRODUCT_HTTP_QUEUE_LEGACY_ENV,
-                PRODUCT_HTTP_QUEUE_DEFAULT,
-                PRODUCT_HTTP_QUEUE_MIN,
-                PRODUCT_HTTP_QUEUE_MAX,
-            ),
-            worker_stack_bytes: env_usize_with_legacy(
-                PRODUCT_HTTP_WORKER_STACK_BYTES_ENV,
-                PRODUCT_HTTP_WORKER_STACK_BYTES_LEGACY_ENV,
-                PRODUCT_HTTP_WORKER_STACK_BYTES_DEFAULT,
-                PRODUCT_HTTP_WORKER_STACK_BYTES_MIN,
-                PRODUCT_HTTP_WORKER_STACK_BYTES_MAX,
-            ),
+            worker_count,
+            queue_capacity,
+            worker_stack_bytes,
+            worker_count_source,
+            queue_capacity_source,
+            worker_stack_bytes_source,
         }
+    }
+
+    fn sources_json(self) -> Value {
+        json!({
+            "workers": self.worker_count_source,
+            "queue": self.queue_capacity_source,
+            "workerStackBytes": self.worker_stack_bytes_source,
+        })
     }
 }
 
-fn env_usize_with_legacy(
+fn effective_product_usize_with_legacy(
     name: &str,
     legacy_name: &str,
+    configured: Option<u64>,
     default: usize,
     min: usize,
     max: usize,
-) -> usize {
-    std::env::var(name)
-        .or_else(|_| std::env::var(legacy_name))
+) -> (usize, &'static str) {
+    if let Some(value) = std::env::var(name)
         .ok()
         .and_then(|value| value.trim().parse::<usize>().ok())
-        .unwrap_or(default)
-        .clamp(min, max)
+    {
+        return (value.clamp(min, max), "env");
+    }
+    if let Some(value) = std::env::var(legacy_name)
+        .ok()
+        .and_then(|value| value.trim().parse::<usize>().ok())
+    {
+        return (value.clamp(min, max), "compatibility-env");
+    }
+    if let Some(value) = configured {
+        return ((value as usize).clamp(min, max), "config");
+    }
+    (default.clamp(min, max), "default")
 }
 
 fn product_runtime_defaults() -> Value {
@@ -313,18 +345,24 @@ fn product_runtime_defaults() -> Value {
                 "stopRuntime": true,
                 "hotPathPeriodicPurge": false,
                 "idleMemoryPressure": {
+                    "enabledConfigKey": "allocator_idle_reclaim_enabled",
                     "enabledEnv": ALLOCATOR_IDLE_RECLAIM_ENABLED_ENV,
                     "enabledDefault": ALLOCATOR_IDLE_RECLAIM_ENABLED_DEFAULT,
                     "idleDetection": "traffic-rate-only",
                     "sessionCountGate": false,
+                    "sampleIntervalConfigKey": "allocator_idle_reclaim_sample_interval",
                     "sampleIntervalSecondsEnv": ALLOCATOR_IDLE_RECLAIM_SAMPLE_INTERVAL_SECONDS_ENV,
                     "sampleIntervalSecondsDefault": ALLOCATOR_IDLE_RECLAIM_SAMPLE_INTERVAL_SECONDS_DEFAULT,
+                    "minIntervalConfigKey": "allocator_idle_reclaim_min_interval",
                     "minIntervalSecondsEnv": ALLOCATOR_IDLE_RECLAIM_MIN_INTERVAL_SECONDS_ENV,
                     "minIntervalSecondsDefault": ALLOCATOR_IDLE_RECLAIM_MIN_INTERVAL_SECONDS_DEFAULT,
+                    "lowTrafficConfigKey": "allocator_idle_reclaim_low_traffic_duration",
                     "lowTrafficSecondsEnv": ALLOCATOR_IDLE_RECLAIM_LOW_TRAFFIC_SECONDS_ENV,
                     "lowTrafficSecondsDefault": ALLOCATOR_IDLE_RECLAIM_LOW_TRAFFIC_SECONDS_DEFAULT,
+                    "pressureBytesConfigKey": "allocator_idle_reclaim_pressure_threshold_bytes",
                     "pressureBytesEnv": ALLOCATOR_IDLE_RECLAIM_PRESSURE_BYTES_ENV,
                     "pressureBytesDefault": ALLOCATOR_IDLE_RECLAIM_PRESSURE_BYTES_DEFAULT.to_string(),
+                    "maxTrafficRateBytesPerSecondConfigKey": "allocator_idle_reclaim_max_traffic_rate_bytes_per_second",
                     "maxTrafficRateBytesPerSecondEnv": ALLOCATOR_IDLE_RECLAIM_MAX_TRAFFIC_RATE_BYTES_PER_SECOND_ENV,
                     "maxTrafficRateBytesPerSecondDefault": ALLOCATOR_IDLE_RECLAIM_MAX_TRAFFIC_RATE_BYTES_PER_SECOND_DEFAULT.to_string(),
                 },
@@ -332,6 +370,7 @@ fn product_runtime_defaults() -> Value {
         },
         "http": {
             "workers": {
+                "configKey": "http_workers",
                 "env": PRODUCT_HTTP_WORKERS_ENV,
                 "defaultPolicy": format!(
                     "available_parallelism * 2 clamped to {}..{}",
@@ -341,12 +380,14 @@ fn product_runtime_defaults() -> Value {
                 "max": PRODUCT_HTTP_WORKER_MAX,
             },
             "queue": {
+                "configKey": "http_queue",
                 "env": PRODUCT_HTTP_QUEUE_ENV,
                 "default": PRODUCT_HTTP_QUEUE_DEFAULT,
                 "min": PRODUCT_HTTP_QUEUE_MIN,
                 "max": PRODUCT_HTTP_QUEUE_MAX,
             },
             "workerStackBytes": {
+                "configKey": "http_worker_stack_bytes",
                 "env": PRODUCT_HTTP_WORKER_STACK_BYTES_ENV,
                 "default": PRODUCT_HTTP_WORKER_STACK_BYTES_DEFAULT,
                 "min": PRODUCT_HTTP_WORKER_STACK_BYTES_MIN,

@@ -1,6 +1,6 @@
 use super::*;
 pub(crate) fn default_global_value() -> Value {
-    json!({
+    let mut value = json!({
         "logLevel": "",
         "tproxyPort": 0,
         "allowInsecure": false,
@@ -31,7 +31,33 @@ pub(crate) fn default_global_value() -> Value {
         "bandwidthMaxTx": "",
         "bandwidthMaxRx": "",
         "udphopInterval": "",
-    })
+    });
+    if let Some(map) = value.as_object_mut() {
+        for key in [
+            "residentUdpSessionLimit",
+            "residentUdpSessionQueueDepth",
+            "residentTcpFlowStackBytes",
+            "residentEventQueueDepth",
+            "residentManualProbeConcurrency",
+            "residentHealthCheckConcurrency",
+            "httpQueue",
+            "httpWorkers",
+            "httpWorkerStackBytes",
+            "allocatorIdleReclaimPressureThresholdBytes",
+            "allocatorIdleReclaimMaxTrafficRateBytesPerSecond",
+        ] {
+            map.insert(key.to_owned(), json!(0));
+        }
+        map.insert("allocatorIdleReclaimEnabled".to_owned(), json!(false));
+        for key in [
+            "allocatorIdleReclaimSampleInterval",
+            "allocatorIdleReclaimMinInterval",
+            "allocatorIdleReclaimLowTrafficDuration",
+        ] {
+            map.insert(key.to_owned(), json!(""));
+        }
+    }
+    value
 }
 
 pub(crate) fn merge_global_json_value(target: &mut Value, source: &Value) {
@@ -196,6 +222,144 @@ pub(crate) fn merge_global_json_value(target: &mut Value, source: &Value) {
         "udphopInterval",
         json_string(source, &["udphopInterval", "udphop_interval"]),
     );
+    set_global_u64(
+        target,
+        "residentUdpSessionLimit",
+        json_u64(
+            source,
+            &["residentUdpSessionLimit", "resident_udp_session_limit"],
+        ),
+    );
+    set_global_u64(
+        target,
+        "residentUdpSessionQueueDepth",
+        json_u64(
+            source,
+            &[
+                "residentUdpSessionQueueDepth",
+                "resident_udp_session_queue_depth",
+            ],
+        ),
+    );
+    set_global_u64(
+        target,
+        "residentTcpFlowStackBytes",
+        json_u64(
+            source,
+            &["residentTcpFlowStackBytes", "resident_tcp_flow_stack_bytes"],
+        ),
+    );
+    set_global_u64(
+        target,
+        "residentEventQueueDepth",
+        json_u64(
+            source,
+            &["residentEventQueueDepth", "resident_event_queue_depth"],
+        ),
+    );
+    set_global_u64(
+        target,
+        "residentManualProbeConcurrency",
+        json_u64(
+            source,
+            &[
+                "residentManualProbeConcurrency",
+                "resident_manual_probe_concurrency",
+            ],
+        ),
+    );
+    set_global_u64(
+        target,
+        "residentHealthCheckConcurrency",
+        json_u64(
+            source,
+            &[
+                "residentHealthCheckConcurrency",
+                "resident_health_check_concurrency",
+            ],
+        ),
+    );
+    set_global_u64(
+        target,
+        "httpQueue",
+        json_u64(source, &["httpQueue", "http_queue"]),
+    );
+    set_global_u64(
+        target,
+        "httpWorkers",
+        json_u64(source, &["httpWorkers", "http_workers"]),
+    );
+    set_global_u64(
+        target,
+        "httpWorkerStackBytes",
+        json_u64(source, &["httpWorkerStackBytes", "http_worker_stack_bytes"]),
+    );
+    set_global_bool(
+        target,
+        "allocatorIdleReclaimEnabled",
+        json_bool(
+            source,
+            &[
+                "allocatorIdleReclaimEnabled",
+                "allocator_idle_reclaim_enabled",
+            ],
+        ),
+    );
+    set_global_string(
+        target,
+        "allocatorIdleReclaimSampleInterval",
+        json_string(
+            source,
+            &[
+                "allocatorIdleReclaimSampleInterval",
+                "allocator_idle_reclaim_sample_interval",
+            ],
+        ),
+    );
+    set_global_string(
+        target,
+        "allocatorIdleReclaimMinInterval",
+        json_string(
+            source,
+            &[
+                "allocatorIdleReclaimMinInterval",
+                "allocator_idle_reclaim_min_interval",
+            ],
+        ),
+    );
+    set_global_string(
+        target,
+        "allocatorIdleReclaimLowTrafficDuration",
+        json_string(
+            source,
+            &[
+                "allocatorIdleReclaimLowTrafficDuration",
+                "allocator_idle_reclaim_low_traffic_duration",
+            ],
+        ),
+    );
+    set_global_u64(
+        target,
+        "allocatorIdleReclaimPressureThresholdBytes",
+        json_u64(
+            source,
+            &[
+                "allocatorIdleReclaimPressureThresholdBytes",
+                "allocator_idle_reclaim_pressure_threshold_bytes",
+            ],
+        ),
+    );
+    set_global_u64(
+        target,
+        "allocatorIdleReclaimMaxTrafficRateBytesPerSecond",
+        json_u64(
+            source,
+            &[
+                "allocatorIdleReclaimMaxTrafficRateBytesPerSecond",
+                "allocator_idle_reclaim_max_traffic_rate_bytes_per_second",
+            ],
+        ),
+    );
 }
 
 pub(crate) fn merge_global_directives(target: &mut Value, directives: &HashMap<String, String>) {
@@ -340,5 +504,82 @@ pub(crate) fn merge_global_directives(target: &mut Value, directives: &HashMap<S
         target,
         "udphopInterval",
         directive_string(directives, "udphop_interval"),
+    );
+    set_global_u64(
+        target,
+        "residentUdpSessionLimit",
+        directive_u64(directives, "resident_udp_session_limit"),
+    );
+    set_global_u64(
+        target,
+        "residentUdpSessionQueueDepth",
+        directive_u64(directives, "resident_udp_session_queue_depth"),
+    );
+    set_global_u64(
+        target,
+        "residentTcpFlowStackBytes",
+        directive_u64(directives, "resident_tcp_flow_stack_bytes"),
+    );
+    set_global_u64(
+        target,
+        "residentEventQueueDepth",
+        directive_u64(directives, "resident_event_queue_depth"),
+    );
+    set_global_u64(
+        target,
+        "residentManualProbeConcurrency",
+        directive_u64(directives, "resident_manual_probe_concurrency"),
+    );
+    set_global_u64(
+        target,
+        "residentHealthCheckConcurrency",
+        directive_u64(directives, "resident_health_check_concurrency"),
+    );
+    set_global_u64(target, "httpQueue", directive_u64(directives, "http_queue"));
+    set_global_u64(
+        target,
+        "httpWorkers",
+        directive_u64(directives, "http_workers"),
+    );
+    set_global_u64(
+        target,
+        "httpWorkerStackBytes",
+        directive_u64(directives, "http_worker_stack_bytes"),
+    );
+    set_global_bool(
+        target,
+        "allocatorIdleReclaimEnabled",
+        directive_bool(directives, "allocator_idle_reclaim_enabled"),
+    );
+    set_global_string(
+        target,
+        "allocatorIdleReclaimSampleInterval",
+        directive_string(directives, "allocator_idle_reclaim_sample_interval"),
+    );
+    set_global_string(
+        target,
+        "allocatorIdleReclaimMinInterval",
+        directive_string(directives, "allocator_idle_reclaim_min_interval"),
+    );
+    set_global_string(
+        target,
+        "allocatorIdleReclaimLowTrafficDuration",
+        directive_string(directives, "allocator_idle_reclaim_low_traffic_duration"),
+    );
+    set_global_u64(
+        target,
+        "allocatorIdleReclaimPressureThresholdBytes",
+        directive_u64(
+            directives,
+            "allocator_idle_reclaim_pressure_threshold_bytes",
+        ),
+    );
+    set_global_u64(
+        target,
+        "allocatorIdleReclaimMaxTrafficRateBytesPerSecond",
+        directive_u64(
+            directives,
+            "allocator_idle_reclaim_max_traffic_rate_bytes_per_second",
+        ),
     );
 }

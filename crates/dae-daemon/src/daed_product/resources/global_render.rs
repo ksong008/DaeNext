@@ -272,6 +272,153 @@ pub(crate) fn render_global_config_text(source: &Value) -> String {
         "udphop_interval",
         &["udphopInterval", "udphop_interval"],
     );
+    push_global_u64_field(
+        &mut lines,
+        &normalized,
+        source,
+        "residentUdpSessionLimit",
+        "resident_udp_session_limit",
+        &["residentUdpSessionLimit", "resident_udp_session_limit"],
+    );
+    push_global_u64_field(
+        &mut lines,
+        &normalized,
+        source,
+        "residentUdpSessionQueueDepth",
+        "resident_udp_session_queue_depth",
+        &[
+            "residentUdpSessionQueueDepth",
+            "resident_udp_session_queue_depth",
+        ],
+    );
+    push_global_u64_field(
+        &mut lines,
+        &normalized,
+        source,
+        "residentTcpFlowStackBytes",
+        "resident_tcp_flow_stack_bytes",
+        &["residentTcpFlowStackBytes", "resident_tcp_flow_stack_bytes"],
+    );
+    push_global_u64_field(
+        &mut lines,
+        &normalized,
+        source,
+        "residentEventQueueDepth",
+        "resident_event_queue_depth",
+        &["residentEventQueueDepth", "resident_event_queue_depth"],
+    );
+    push_global_u64_field(
+        &mut lines,
+        &normalized,
+        source,
+        "residentManualProbeConcurrency",
+        "resident_manual_probe_concurrency",
+        &[
+            "residentManualProbeConcurrency",
+            "resident_manual_probe_concurrency",
+        ],
+    );
+    push_global_u64_field(
+        &mut lines,
+        &normalized,
+        source,
+        "residentHealthCheckConcurrency",
+        "resident_health_check_concurrency",
+        &[
+            "residentHealthCheckConcurrency",
+            "resident_health_check_concurrency",
+        ],
+    );
+    push_global_u64_field(
+        &mut lines,
+        &normalized,
+        source,
+        "httpQueue",
+        "http_queue",
+        &["httpQueue", "http_queue"],
+    );
+    push_global_u64_field(
+        &mut lines,
+        &normalized,
+        source,
+        "httpWorkers",
+        "http_workers",
+        &["httpWorkers", "http_workers"],
+    );
+    push_global_u64_field(
+        &mut lines,
+        &normalized,
+        source,
+        "httpWorkerStackBytes",
+        "http_worker_stack_bytes",
+        &["httpWorkerStackBytes", "http_worker_stack_bytes"],
+    );
+    push_global_bool_field(
+        &mut lines,
+        &normalized,
+        source,
+        "allocatorIdleReclaimEnabled",
+        "allocator_idle_reclaim_enabled",
+        &[
+            "allocatorIdleReclaimEnabled",
+            "allocator_idle_reclaim_enabled",
+        ],
+    );
+    push_global_string_field(
+        &mut lines,
+        &normalized,
+        source,
+        "allocatorIdleReclaimSampleInterval",
+        "allocator_idle_reclaim_sample_interval",
+        &[
+            "allocatorIdleReclaimSampleInterval",
+            "allocator_idle_reclaim_sample_interval",
+        ],
+    );
+    push_global_string_field(
+        &mut lines,
+        &normalized,
+        source,
+        "allocatorIdleReclaimMinInterval",
+        "allocator_idle_reclaim_min_interval",
+        &[
+            "allocatorIdleReclaimMinInterval",
+            "allocator_idle_reclaim_min_interval",
+        ],
+    );
+    push_global_string_field(
+        &mut lines,
+        &normalized,
+        source,
+        "allocatorIdleReclaimLowTrafficDuration",
+        "allocator_idle_reclaim_low_traffic_duration",
+        &[
+            "allocatorIdleReclaimLowTrafficDuration",
+            "allocator_idle_reclaim_low_traffic_duration",
+        ],
+    );
+    push_global_u64_field(
+        &mut lines,
+        &normalized,
+        source,
+        "allocatorIdleReclaimPressureThresholdBytes",
+        "allocator_idle_reclaim_pressure_threshold_bytes",
+        &[
+            "allocatorIdleReclaimPressureThresholdBytes",
+            "allocator_idle_reclaim_pressure_threshold_bytes",
+        ],
+    );
+    push_global_u64_field(
+        &mut lines,
+        &normalized,
+        source,
+        "allocatorIdleReclaimMaxTrafficRateBytesPerSecond",
+        "allocator_idle_reclaim_max_traffic_rate_bytes_per_second",
+        &[
+            "allocatorIdleReclaimMaxTrafficRateBytesPerSecond",
+            "allocator_idle_reclaim_max_traffic_rate_bytes_per_second",
+        ],
+    );
 
     if lines.is_empty() {
         return "global {}\n".to_owned();

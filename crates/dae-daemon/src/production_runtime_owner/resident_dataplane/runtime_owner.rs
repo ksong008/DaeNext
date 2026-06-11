@@ -8,6 +8,7 @@ pub(crate) struct ResidentRuntimeOwner {
     reload_generation: u64,
     metrics: Arc<ResidentDataplaneMetrics>,
     udp_sessions_active: Arc<AtomicUsize>,
+    resource_config: ResidentRuntimeResourceConfig,
     event_writer: ResidentEventWriterRuntime,
     manual_probe_runtime: Mutex<Option<tokio::runtime::Runtime>>,
     manual_probe_runtime_error: Option<String>,
@@ -26,6 +27,7 @@ impl std::fmt::Debug for ResidentRuntimeOwner {
             .field("task_count", &self.tasks.len())
             .field("event_file", &self.event_file)
             .field("reload_generation", &self.reload_generation)
+            .field("resource_config", &self.resource_config.json())
             .field(
                 "manual_probe_runtime_available",
                 &self.manual_probe_runtime_error.is_none(),
@@ -42,11 +44,12 @@ impl ResidentRuntimeOwner {
         reload_generation: u64,
         metrics: Arc<ResidentDataplaneMetrics>,
         udp_sessions_active: Arc<AtomicUsize>,
+        resource_config: ResidentRuntimeResourceConfig,
     ) -> Self {
         let event_writer = ResidentEventWriterRuntime::start(
             event_file.clone(),
             Arc::clone(&event_lock),
-            resident_event_queue_depth(),
+            resource_config.event_queue_depth.value(),
         );
         let (manual_probe_runtime, manual_probe_runtime_error) =
             match tokio::runtime::Builder::new_current_thread()
@@ -68,6 +71,7 @@ impl ResidentRuntimeOwner {
             reload_generation,
             metrics,
             udp_sessions_active,
+            resource_config,
             event_writer,
             manual_probe_runtime: Mutex::new(manual_probe_runtime),
             manual_probe_runtime_error,
@@ -114,6 +118,7 @@ impl ResidentRuntimeOwner {
             "reloadGeneration": self.reload_generation,
             "taskCount": self.tasks.len(),
             "runtimeHandle": self.manual_probe_runtime_value(),
+            "resources": self.resource_config.json(),
             "eventWriter": self.event_writer.metrics_snapshot(),
             "tasks": self.tasks.iter().map(|task| {
                 json!({
@@ -134,6 +139,7 @@ impl ResidentRuntimeOwner {
             "manager": "resident-udp-session-manager",
             "reloadGeneration": self.reload_generation,
         });
+        snapshot["resources"] = self.resource_config.json();
         snapshot["eventWriter"] = self.event_writer.metrics_snapshot();
         snapshot
     }
@@ -216,7 +222,8 @@ impl ResidentRuntimeOwner {
             return preferred_latency_snapshots(snapshots);
         };
 
-        for chunk in tasks.chunks(RESIDENT_MANUAL_LATENCY_PROBE_CONCURRENCY) {
+        let concurrency = self.resource_config.manual_probe_concurrency.value();
+        for chunk in tasks.chunks(concurrency) {
             let groups = groups.to_vec();
             let mut chunk_snapshots = runtime.block_on(async {
                 let mut handles = Vec::new();
@@ -351,12 +358,21 @@ mod tests {
         metrics.tcp_opened();
         metrics.udp_opened();
         let udp_sessions_active = Arc::new(AtomicUsize::new(1));
+        let config = Config {
+            global: dae_config::Global::default(),
+            subscription: Vec::new(),
+            node: Vec::new(),
+            group: Vec::new(),
+            routing: dae_config::Routing::default(),
+            dns: dae_config::Dns::default(),
+        };
         let mut owner = ResidentRuntimeOwner::new(
             PathBuf::from("/tmp/resident-runtime-owner-test.jsonl"),
             Arc::new(Mutex::new(())),
             9,
             metrics,
             Arc::clone(&udp_sessions_active),
+            ResidentRuntimeResourceConfig::from_config(&config),
         );
         owner.register_thread(
             "test-worker",
