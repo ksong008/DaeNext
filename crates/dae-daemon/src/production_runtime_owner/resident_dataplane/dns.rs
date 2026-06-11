@@ -3,11 +3,13 @@ use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
 use std::os::fd::AsRawFd;
 use std::sync::Arc;
 
-use dae_config::{Config, DynamicFunctionValue};
-use dae_dns::DnsPacketView;
+use dae_config::{Config, DynamicFunctionValue, Function, Param, RoutingRule};
+use dae_dns::{DnsPacketView, DnsRequestOutboundIndex, RequestMatcher};
+use serde_json::{Value, json};
 use tokio::sync::OnceCell;
 use tokio::time;
 
+use super::super::resident_routing::expand_resident_dns_request_qname_rules;
 use super::RESIDENT_UDP_RESPONSE_TIMEOUT;
 use super::tcp::set_socket_mark;
 
@@ -17,6 +19,8 @@ const DNS_RESPONSE_READ_LIMIT: usize = 4096;
 
 #[derive(Clone, Debug)]
 pub(super) struct ResidentDnsPlan {
+    request_matcher: Option<RequestMatcher>,
+    request_actions: Vec<ResidentDnsRequestAction>,
     request_default_action: ResidentDnsRequestAction,
     mark: u32,
 }
@@ -24,6 +28,8 @@ pub(super) struct ResidentDnsPlan {
 impl ResidentDnsPlan {
     pub(super) const fn asis(mark: u32) -> Self {
         Self {
+            request_matcher: None,
+            request_actions: Vec::new(),
             request_default_action: ResidentDnsRequestAction::AsIs,
             mark,
         }
@@ -42,6 +48,13 @@ struct ResidentDnsUpstream {
     tag: String,
     target: ResidentDnsUpstreamTarget,
     scheme: ResidentDnsUpstreamScheme,
+}
+
+#[derive(Clone, Debug)]
+struct ResidentDnsUpstreams {
+    by_tag: BTreeMap<String, ResidentDnsUpstream>,
+    tag_to_index: BTreeMap<String, u8>,
+    request_actions: Vec<ResidentDnsRequestAction>,
 }
 
 #[derive(Clone, Debug)]
@@ -86,12 +99,6 @@ enum ResidentDnsUpstreamScheme {
 }
 
 pub(super) fn build_resident_dns_plan(config: &Config) -> Result<ResidentDnsPlan, String> {
-    if !config.dns.routing.request.rules.is_empty() {
-        return Err(
-            "resident DNS controller currently admits default-only request routing; resident DNS shape remains fail-closed for configs with dns.routing.request rules"
-                .to_owned(),
-        );
-    }
     if !config.dns.routing.response.rules.is_empty() {
         return Err(
             "resident DNS controller currently admits accept-only response routing; resident DNS shape remains fail-closed for configs with dns.routing.response rules"
@@ -106,8 +113,11 @@ pub(super) fn build_resident_dns_plan(config: &Config) -> Result<ResidentDnsPlan
     }
     let upstreams = parse_dns_upstreams(config)?;
     let request_default_action =
-        parse_request_default_action(&config.dns.routing.request.fallback, &upstreams)?;
+        parse_request_default_action(&config.dns.routing.request.fallback, &upstreams.by_tag)?;
+    let request_matcher = build_request_matcher(config, &upstreams)?;
     Ok(ResidentDnsPlan {
+        request_matcher,
+        request_actions: upstreams.request_actions,
         request_default_action,
         mark: config.global.so_mark_from_dae,
     })
@@ -126,12 +136,13 @@ pub(super) async fn handle_resident_dns_udp_async(
     if request.question_count() == 0 {
         return Err("DNS request has no question".to_owned());
     }
-    match &plan.request_default_action {
+    let action = select_request_action(plan, &request)?;
+    match action {
         ResidentDnsRequestAction::AsIs => forward_dns_udp_async(original_dst, payload, plan.mark)
             .await
             .map_err(|err| format!("forward DNS asis to {original_dst}: {err}")),
         ResidentDnsRequestAction::Reject => build_reject_response(payload, &request),
-        ResidentDnsRequestAction::Upstream(upstream) => {
+        ResidentDnsRequestAction::Upstream(ref upstream) => {
             match upstream.scheme {
                 ResidentDnsUpstreamScheme::Udp | ResidentDnsUpstreamScheme::TcpUdp => {}
             }
@@ -148,38 +159,427 @@ pub(super) async fn handle_resident_dns_udp_async(
     }
 }
 
-fn parse_dns_upstreams(config: &Config) -> Result<BTreeMap<String, ResidentDnsUpstream>, String> {
-    let mut upstreams = BTreeMap::new();
-    for raw in &config.dns.upstream {
+fn parse_dns_upstreams(config: &Config) -> Result<ResidentDnsUpstreams, String> {
+    let mut by_tag = BTreeMap::new();
+    let mut tag_to_index = BTreeMap::new();
+    let mut request_actions = Vec::new();
+    for (index, raw) in config.dns.upstream.iter().enumerate() {
+        if index >= DnsRequestOutboundIndex::REJECT.value() as usize {
+            return Err("too many DNS upstreams for resident request routing".to_owned());
+        }
         let (tag, link) = split_keyable_link(raw);
         let Some(tag) = tag else {
             return Err(format!("bad DNS upstream format: {raw:?} has no tag"));
         };
-        if upstreams.contains_key(&tag) {
+        if by_tag.contains_key(&tag) {
             return Err(format!("duplicated DNS upstream tag {tag:?}"));
         }
         let upstream = parse_dns_upstream(&tag, &link)?;
-        upstreams.insert(tag, upstream);
+        tag_to_index.insert(tag.clone(), index as u8);
+        request_actions.push(ResidentDnsRequestAction::Upstream(upstream.clone()));
+        by_tag.insert(tag, upstream);
     }
-    Ok(upstreams)
+    Ok(ResidentDnsUpstreams {
+        by_tag,
+        tag_to_index,
+        request_actions,
+    })
 }
 
 fn parse_request_default_action(
     default_action: &DynamicFunctionValue,
     upstreams: &BTreeMap<String, ResidentDnsUpstream>,
 ) -> Result<ResidentDnsRequestAction, String> {
-    let name = dynamic_function_name(default_action)?.unwrap_or("asis");
-    match name {
+    let Some(function) = dynamic_to_optional_single_function(default_action)? else {
+        return Ok(ResidentDnsRequestAction::AsIs);
+    };
+    parse_request_action_function(&function, upstreams, "dns.routing.request default action")
+}
+
+fn build_request_matcher(
+    config: &Config,
+    upstreams: &ResidentDnsUpstreams,
+) -> Result<Option<RequestMatcher>, String> {
+    if config.dns.routing.request.rules.is_empty() {
+        return Ok(None);
+    }
+
+    let rules = expand_resident_dns_request_qname_rules(&config.dns.routing.request.rules)
+        .map_err(|err| format!("expand dns.routing.request geodata: {err}"))?;
+    let mut domain_sets = Vec::new();
+    let mut matches = Vec::new();
+    for (index, rule) in rules.iter().enumerate() {
+        compile_request_rule(&mut domain_sets, &mut matches, rule, upstreams).map_err(|err| {
+            format!(
+                "dns.routing.request rule {index} failed: {err}; rule={}",
+                rule.to_config_string(false, false, true)
+            )
+        })?;
+    }
+    let fallback = request_index_for_dynamic(
+        &config.dns.routing.request.fallback,
+        upstreams,
+        "dns.routing.request fallback",
+    )?;
+    matches.push(json!({
+        "type": "fallback",
+        "upstream": request_index_fixture_value(fallback),
+    }));
+    let matcher = RequestMatcher::from_fixture_value(&json!({
+        "domain_sets": domain_sets,
+        "matches": matches,
+    }))
+    .map_err(|err| format!("build resident DNS request matcher: {err}"))?;
+    Ok(Some(matcher))
+}
+
+fn compile_request_rule(
+    domain_sets: &mut Vec<Value>,
+    matches: &mut Vec<Value>,
+    rule: &RoutingRule,
+    upstreams: &ResidentDnsUpstreams,
+) -> Result<(), String> {
+    if rule.and_functions.is_empty() {
+        return Err("request rule has no functions".to_owned());
+    }
+    let rule_upstream =
+        request_index_for_function(&rule.outbound, upstreams, "dns.routing.request rule action")?;
+    for (function_index, function) in rule.and_functions.iter().enumerate() {
+        let grouped = grouped_params(&function.params);
+        if grouped.is_empty() {
+            return Err(format!("function {} has no params", function.name));
+        }
+        for (group_index, (key, values)) in grouped.iter().enumerate() {
+            if values.is_empty() {
+                return Err(format!("function {} has empty param group", function.name));
+            }
+            let upstream = if group_index == grouped.len() - 1 {
+                if function_index == rule.and_functions.len() - 1 {
+                    rule_upstream
+                } else {
+                    DnsRequestOutboundIndex::LOGICAL_AND
+                }
+            } else {
+                DnsRequestOutboundIndex::LOGICAL_OR
+            };
+            match function.name.as_str() {
+                "qname" => {
+                    add_request_qname_match(domain_sets, matches, function, key, values, upstream)?
+                }
+                "qtype" => add_request_qtype_matches(matches, function, values, upstream)?,
+                other => {
+                    return Err(format!(
+                        "unsupported dns.routing.request function: {other}; resident DNS request routing admits qname and qtype only"
+                    ));
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+fn add_request_qname_match(
+    domain_sets: &mut Vec<Value>,
+    matches: &mut Vec<Value>,
+    function: &Function,
+    key: &str,
+    values: &[String],
+    upstream: DnsRequestOutboundIndex,
+) -> Result<(), String> {
+    if !matches!(key, "full" | "keyword" | "suffix" | "regex") {
+        return Err(format!("qname has unsupported domain key: {key}"));
+    }
+    let bit = matches.len();
+    domain_sets.push(json!({
+        "bit": bit,
+        "key": key,
+        "patterns": values,
+    }));
+    matches.push(json!({
+        "type": "domain_set",
+        "not": function.not,
+        "upstream": request_index_fixture_value(upstream),
+    }));
+    Ok(())
+}
+
+fn add_request_qtype_matches(
+    matches: &mut Vec<Value>,
+    function: &Function,
+    values: &[String],
+    upstream: DnsRequestOutboundIndex,
+) -> Result<(), String> {
+    for (index, value) in values.iter().enumerate() {
+        let item_upstream = if index == values.len() - 1 {
+            upstream
+        } else {
+            DnsRequestOutboundIndex::LOGICAL_OR
+        };
+        matches.push(json!({
+            "type": "qtype",
+            "value": parse_dns_qtype(value)?,
+            "not": function.not,
+            "upstream": request_index_fixture_value(item_upstream),
+        }));
+    }
+    Ok(())
+}
+
+fn select_request_action(
+    plan: &ResidentDnsPlan,
+    request: &DnsPacketView<'_>,
+) -> Result<ResidentDnsRequestAction, String> {
+    let Some(matcher) = &plan.request_matcher else {
+        return Ok(plan.request_default_action.clone());
+    };
+    let question = request
+        .questions()
+        .next()
+        .ok_or_else(|| "DNS request has no question".to_owned())?;
+    let qname = question
+        .qname_to_canonical_string()
+        .map_err(|err| format!("read DNS request qname: {err}"))?;
+    let outbound = matcher
+        .match_request(&qname, question.qtype())
+        .map_err(|err| format!("match dns.routing.request: {err}"))?;
+    request_action_from_index(plan, outbound)
+}
+
+fn request_action_from_index(
+    plan: &ResidentDnsPlan,
+    outbound: DnsRequestOutboundIndex,
+) -> Result<ResidentDnsRequestAction, String> {
+    if outbound == DnsRequestOutboundIndex::ASIS {
+        return Ok(ResidentDnsRequestAction::AsIs);
+    }
+    if outbound == DnsRequestOutboundIndex::REJECT {
+        return Ok(ResidentDnsRequestAction::Reject);
+    }
+    if outbound == DnsRequestOutboundIndex::LOGICAL_OR
+        || outbound == DnsRequestOutboundIndex::LOGICAL_AND
+    {
+        return Err(format!(
+            "dns.routing.request returned internal logical outbound {outbound}"
+        ));
+    }
+    plan.request_actions
+        .get(outbound.value() as usize)
+        .cloned()
+        .ok_or_else(|| {
+            format!(
+                "dns.routing.request selected unknown upstream index {}",
+                outbound.value()
+            )
+        })
+}
+
+fn request_index_for_dynamic(
+    value: &DynamicFunctionValue,
+    upstreams: &ResidentDnsUpstreams,
+    context: &str,
+) -> Result<DnsRequestOutboundIndex, String> {
+    let Some(function) = dynamic_to_optional_single_function(value)? else {
+        return Ok(DnsRequestOutboundIndex::ASIS);
+    };
+    request_index_for_function(&function, upstreams, context)
+}
+
+fn request_index_for_function(
+    function: &Function,
+    upstreams: &ResidentDnsUpstreams,
+    context: &str,
+) -> Result<DnsRequestOutboundIndex, String> {
+    if !function.params.is_empty() {
+        return Err(format!("{context} does not admit action parameters"));
+    }
+    match function.name.as_str() {
+        "asis" => Ok(DnsRequestOutboundIndex::ASIS),
+        "reject" => Ok(DnsRequestOutboundIndex::REJECT),
+        tag => upstreams
+            .tag_to_index
+            .get(tag)
+            .copied()
+            .map(DnsRequestOutboundIndex)
+            .ok_or_else(|| format!("{context} references unknown upstream {tag:?}")),
+    }
+}
+
+fn parse_request_action_function(
+    function: &Function,
+    upstreams: &BTreeMap<String, ResidentDnsUpstream>,
+    context: &str,
+) -> Result<ResidentDnsRequestAction, String> {
+    if !function.params.is_empty() {
+        return Err(format!("{context} does not admit action parameters"));
+    }
+    match function.name.as_str() {
         "asis" => Ok(ResidentDnsRequestAction::AsIs),
         "reject" => Ok(ResidentDnsRequestAction::Reject),
         tag => upstreams
             .get(tag)
             .cloned()
             .map(ResidentDnsRequestAction::Upstream)
-            .ok_or_else(|| {
-                format!("dns.routing.request default action references unknown upstream {tag:?}")
-            }),
+            .ok_or_else(|| format!("{context} references unknown upstream {tag:?}")),
     }
+}
+
+fn dynamic_to_optional_single_function(
+    value: &DynamicFunctionValue,
+) -> Result<Option<Function>, String> {
+    match value {
+        DynamicFunctionValue::Nil => Ok(None),
+        DynamicFunctionValue::String(name) => Ok(Some(Function {
+            name: name.clone(),
+            not: false,
+            params: Vec::new(),
+        })),
+        DynamicFunctionValue::Function(function) => Ok(Some(function.clone())),
+        DynamicFunctionValue::FunctionList(functions) if functions.len() == 1 => {
+            Ok(Some(functions[0].clone()))
+        }
+        DynamicFunctionValue::FunctionList(_) => {
+            Err("default action function list is not admitted".to_owned())
+        }
+    }
+}
+
+fn request_index_fixture_value(index: DnsRequestOutboundIndex) -> String {
+    match index {
+        DnsRequestOutboundIndex::REJECT => "reject".to_owned(),
+        DnsRequestOutboundIndex::ASIS => "asis".to_owned(),
+        DnsRequestOutboundIndex::LOGICAL_OR => "logical_or".to_owned(),
+        DnsRequestOutboundIndex::LOGICAL_AND => "logical_and".to_owned(),
+        other => format!("upstream:{}", other.value()),
+    }
+}
+
+fn grouped_params(params: &[Param]) -> Vec<(String, Vec<String>)> {
+    let mut groups: BTreeMap<String, Vec<String>> = BTreeMap::new();
+    let mut order = Vec::new();
+    for param in params {
+        if !groups.contains_key(&param.key) {
+            order.push(param.key.clone());
+        }
+        groups
+            .entry(param.key.clone())
+            .or_default()
+            .push(param.val.clone());
+    }
+    order
+        .into_iter()
+        .map(|key| {
+            let values = groups.remove(&key).unwrap_or_default();
+            (key, values)
+        })
+        .collect()
+}
+
+fn parse_dns_qtype(value: &str) -> Result<u16, String> {
+    let value = value.trim();
+    if let Some(hex) = value
+        .strip_prefix("0x")
+        .or_else(|| value.strip_prefix("0X"))
+    {
+        return u16::from_str_radix(hex, 16)
+            .map_err(|err| format!("invalid DNS qtype {value}: {err}"));
+    }
+    if let Ok(parsed) = value.parse::<u16>() {
+        return Ok(parsed);
+    }
+    dns_qtype_name(value).ok_or_else(|| format!("unknown DNS qtype: {value}"))
+}
+
+fn dns_qtype_name(value: &str) -> Option<u16> {
+    Some(match value.to_ascii_uppercase().as_str() {
+        "A" => 1,
+        "NS" => 2,
+        "MD" => 3,
+        "MF" => 4,
+        "CNAME" => 5,
+        "SOA" => 6,
+        "MB" => 7,
+        "MG" => 8,
+        "MR" => 9,
+        "NULL" => 10,
+        "WKS" => 11,
+        "PTR" => 12,
+        "HINFO" => 13,
+        "MINFO" => 14,
+        "MX" => 15,
+        "TXT" => 16,
+        "RP" => 17,
+        "AFSDB" => 18,
+        "X25" => 19,
+        "ISDN" => 20,
+        "RT" => 21,
+        "NSAP" => 22,
+        "NSAPPTR" | "NSAP-PTR" => 23,
+        "SIG" => 24,
+        "KEY" => 25,
+        "PX" => 26,
+        "GPOS" => 27,
+        "AAAA" => 28,
+        "LOC" => 29,
+        "NXT" => 30,
+        "EID" => 31,
+        "NIMLOC" => 32,
+        "SRV" => 33,
+        "ATMA" => 34,
+        "NAPTR" => 35,
+        "KX" => 36,
+        "CERT" => 37,
+        "DNAME" => 39,
+        "OPT" => 41,
+        "APL" => 42,
+        "DS" => 43,
+        "SSHFP" => 44,
+        "IPSECKEY" => 45,
+        "RRSIG" => 46,
+        "NSEC" => 47,
+        "DNSKEY" => 48,
+        "DHCID" => 49,
+        "NSEC3" => 50,
+        "NSEC3PARAM" => 51,
+        "TLSA" => 52,
+        "SMIMEA" => 53,
+        "HIP" => 55,
+        "NINFO" => 56,
+        "RKEY" => 57,
+        "TALINK" => 58,
+        "CDS" => 59,
+        "CDNSKEY" => 60,
+        "OPENPGPKEY" => 61,
+        "CSYNC" => 62,
+        "ZONEMD" => 63,
+        "SVCB" => 64,
+        "HTTPS" => 65,
+        "SPF" => 99,
+        "UINFO" => 100,
+        "UID" => 101,
+        "GID" => 102,
+        "UNSPEC" => 103,
+        "NID" => 104,
+        "L32" => 105,
+        "L64" => 106,
+        "LP" => 107,
+        "EUI48" => 108,
+        "EUI64" => 109,
+        "TKEY" => 249,
+        "TSIG" => 250,
+        "IXFR" => 251,
+        "AXFR" => 252,
+        "MAILB" => 253,
+        "MAILA" => 254,
+        "ANY" => 255,
+        "URI" => 256,
+        "CAA" => 257,
+        "AVC" => 258,
+        "DOA" => 259,
+        "AMTRELAY" => 260,
+        "TA" => 32768,
+        "DLV" => 32769,
+        _ => return None,
+    })
 }
 
 fn response_default_action_is_accept(default_action: &DynamicFunctionValue) -> bool {
@@ -412,8 +812,54 @@ mod tests {
         assert_eq!(plan.mark, 1234);
     }
 
+    fn query_with_qtype(qtype: u16) -> Vec<u8> {
+        let mut query = QUERY.to_vec();
+        let offset = query.len() - 4;
+        query[offset..offset + 2].copy_from_slice(&qtype.to_be_bytes());
+        query
+    }
+
     #[test]
-    fn resident_dns_plan_rejects_complex_request_rules_until_controller_parity() {
+    fn resident_dns_plan_admits_request_qname_and_qtype_rules() {
+        let input = r#"
+        global {}
+        routing {}
+        dns {
+          upstream {
+            primary: 'udp://LOCAL_DNS_UPSTREAM'
+            secondary: 'udp://127.0.0.1:53'
+          }
+          routing {
+            request {
+              qname(suffix: example.com) && qtype(a, aaaa) -> primary
+              qtype(https) -> reject
+              fallback: secondary
+            }
+          }
+        }
+        "#
+        .replace("LOCAL_DNS_UPSTREAM", local_dns_upstream_authority());
+        let config = parse_config(&input);
+        let plan = build_resident_dns_plan(&config).unwrap();
+
+        let view = DnsPacketView::parse(QUERY).unwrap();
+        match select_request_action(&plan, &view).unwrap() {
+            ResidentDnsRequestAction::Upstream(upstream) => {
+                assert_eq!(upstream.tag, "primary");
+            }
+            other => panic!("expected primary upstream action, got {other:?}"),
+        }
+
+        let https_query = query_with_qtype(65);
+        let view = DnsPacketView::parse(&https_query).unwrap();
+        assert!(matches!(
+            select_request_action(&plan, &view).unwrap(),
+            ResidentDnsRequestAction::Reject
+        ));
+    }
+
+    #[test]
+    fn resident_dns_plan_rejects_unsupported_request_function() {
         let input = r#"
         global {}
         routing {}
@@ -423,7 +869,7 @@ mod tests {
           }
           routing {
             request {
-              qtype(1) -> primary
+              ip(geoip:private) -> primary
               fallback: primary
             }
           }
@@ -432,7 +878,30 @@ mod tests {
         .replace("LOCAL_DNS_UPSTREAM", local_dns_upstream_authority());
         let config = parse_config(&input);
         let err = build_resident_dns_plan(&config).unwrap_err();
-        assert!(err.contains("default-only request routing"));
+        assert!(err.contains("unsupported dns.routing.request function: ip"));
+    }
+
+    #[test]
+    fn resident_dns_plan_rejects_unknown_qtype_name() {
+        let input = r#"
+        global {}
+        routing {}
+        dns {
+          upstream {
+            primary: 'udp://LOCAL_DNS_UPSTREAM'
+          }
+          routing {
+            request {
+              qtype(not_a_type) -> primary
+              fallback: primary
+            }
+          }
+        }
+        "#
+        .replace("LOCAL_DNS_UPSTREAM", local_dns_upstream_authority());
+        let config = parse_config(&input);
+        let err = build_resident_dns_plan(&config).unwrap_err();
+        assert!(err.contains("unknown DNS qtype: not_a_type"));
     }
 
     #[test]
