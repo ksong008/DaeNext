@@ -8,6 +8,7 @@ pub(crate) struct ResidentRuntimeOwner {
     reload_generation: u64,
     metrics: Arc<ResidentDataplaneMetrics>,
     udp_sessions_active: Arc<AtomicUsize>,
+    event_writer: ResidentEventWriterRuntime,
     manual_probe_runtime: Mutex<Option<tokio::runtime::Runtime>>,
     manual_probe_runtime_error: Option<String>,
 }
@@ -29,6 +30,7 @@ impl std::fmt::Debug for ResidentRuntimeOwner {
                 "manual_probe_runtime_available",
                 &self.manual_probe_runtime_error.is_none(),
             )
+            .field("event_writer", &self.event_writer.metrics_snapshot())
             .finish_non_exhaustive()
     }
 }
@@ -41,6 +43,11 @@ impl ResidentRuntimeOwner {
         metrics: Arc<ResidentDataplaneMetrics>,
         udp_sessions_active: Arc<AtomicUsize>,
     ) -> Self {
+        let event_writer = ResidentEventWriterRuntime::start(
+            event_file.clone(),
+            Arc::clone(&event_lock),
+            resident_event_queue_depth(),
+        );
         let (manual_probe_runtime, manual_probe_runtime_error) =
             match tokio::runtime::Builder::new_current_thread()
                 .enable_io()
@@ -61,6 +68,7 @@ impl ResidentRuntimeOwner {
             reload_generation,
             metrics,
             udp_sessions_active,
+            event_writer,
             manual_probe_runtime: Mutex::new(manual_probe_runtime),
             manual_probe_runtime_error,
         }
@@ -106,6 +114,7 @@ impl ResidentRuntimeOwner {
             "reloadGeneration": self.reload_generation,
             "taskCount": self.tasks.len(),
             "runtimeHandle": self.manual_probe_runtime_value(),
+            "eventWriter": self.event_writer.metrics_snapshot(),
             "tasks": self.tasks.iter().map(|task| {
                 json!({
                     "name": task.name,
@@ -125,6 +134,7 @@ impl ResidentRuntimeOwner {
             "manager": "resident-udp-session-manager",
             "reloadGeneration": self.reload_generation,
         });
+        snapshot["eventWriter"] = self.event_writer.metrics_snapshot();
         snapshot
     }
 
@@ -235,19 +245,11 @@ impl ResidentRuntimeOwner {
     }
 
     pub(crate) fn prune_event_log(&self) -> std::io::Result<()> {
-        let _guard = self
-            .event_lock
-            .lock()
-            .map_err(|_| std::io::Error::other("resident event log lock poisoned"))?;
-        prune_resident_event_log_file(&self.event_file)
+        self.event_writer.prune()
     }
 
     pub(crate) fn clear_event_log(&self) -> std::io::Result<()> {
-        let _guard = self
-            .event_lock
-            .lock()
-            .map_err(|_| std::io::Error::other("resident event log lock poisoned"))?;
-        clear_resident_event_log_file(&self.event_file)
+        self.event_writer.clear()
     }
 
     pub(crate) fn shutdown(&mut self) -> Value {
@@ -288,10 +290,11 @@ impl ResidentRuntimeOwner {
             Ok(runtime) => runtime.take().is_some(),
             Err(poisoned) => poisoned.into_inner().take().is_some(),
         };
+        let event_writer = self.event_writer.shutdown();
         let shutdown_elapsed_ns = started.elapsed().as_nanos().min(u128::from(u64::MAX)) as u64;
         json!({
             "name": "stop-resident-dataplane-runtime",
-            "status": if task_count_panicked == 0 { "pass" } else { "fail" },
+            "status": if task_count_panicked == 0 && event_writer["status"].as_str() == Some("pass") { "pass" } else { "fail" },
             "owner": "resident-runtime-owner",
             "reload_generation": self.reload_generation,
             "reloadGeneration": self.reload_generation,
@@ -308,6 +311,7 @@ impl ResidentRuntimeOwner {
             "runtime_handle_owner": "resident-runtime-owner",
             "manual_probe_runtime_available": self.manual_probe_runtime_error.is_none(),
             "manual_probe_runtime_stopped": manual_probe_runtime_stopped,
+            "event_writer": event_writer,
             "shutdown_elapsed_ns": shutdown_elapsed_ns,
             "event_file": path_string(&self.event_file),
             "tasks": task_results,
@@ -321,6 +325,7 @@ impl ResidentRuntimeOwner {
             "reloadGeneration": self.reload_generation,
             "taskCount": self.tasks.len(),
             "runtimeHandle": self.manual_probe_runtime_value(),
+            "eventWriter": self.event_writer.metrics_snapshot(),
         })
     }
 

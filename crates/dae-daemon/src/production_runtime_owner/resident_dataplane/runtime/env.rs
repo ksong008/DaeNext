@@ -28,6 +28,15 @@ pub(super) fn resident_udp_session_queue_depth() -> usize {
     )
 }
 
+pub(super) fn resident_event_queue_depth() -> usize {
+    bounded_env_usize(
+        RESIDENT_EVENT_QUEUE_DEPTH_ENV,
+        RESIDENT_EVENT_QUEUE_DEPTH_DEFAULT,
+        RESIDENT_EVENT_QUEUE_DEPTH_MIN,
+        RESIDENT_EVENT_QUEUE_DEPTH_MAX,
+    )
+}
+
 fn bounded_env_usize(name: &str, default: usize, min: usize, max: usize) -> usize {
     std::env::var(name)
         .ok()
