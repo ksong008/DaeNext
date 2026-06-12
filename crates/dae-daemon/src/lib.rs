@@ -49,8 +49,9 @@ pub use production_dataplane_harness::{
     ProductionDataplaneHarnessOptions, production_dataplane_harness_report,
 };
 pub use production_runtime_owner::{
-    ProductionRuntimeOwnerOptions, daemon_runtime_native_owner_summary_json,
-    datapath_outbound_ebpf_deep_area_summary_json, production_runtime_owner_report,
+    ProductionRuntimeOwnerOptions, ResidentTcpSelectionBenchmarkFixture,
+    daemon_runtime_native_owner_summary_json, datapath_outbound_ebpf_deep_area_summary_json,
+    production_runtime_owner_report, resident_tcp_selection_benchmark_fixture,
 };
 pub use reload_owner_benchmark::{
     default_reload_owner_benchmark_root, reload_owner_benchmark_report,

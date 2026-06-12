@@ -61,6 +61,9 @@ pub(crate) use resident_dataplane::{
     resident_live_adapter_udp_probe, resident_live_matrix_evidence_from_env,
     resident_runtime_defaults_contract,
 };
+pub use resident_dataplane::{
+    ResidentTcpSelectionBenchmarkFixture, resident_tcp_selection_benchmark_fixture,
+};
 use topology::{
     attach_host_program, attach_peer_program, cleanup_production_topology, preflight_checks,
     read_topology_values, setup_production_topology, show_host_program, show_peer_program,
