@@ -74,11 +74,6 @@ pub(crate) fn build_vless_proxy_plan(
                 alpn_result.error_contains
             ));
         }
-        if alpn_result.use_h3 {
-            return Err(format!(
-                "resident dataplane vless xHTTP transport admits HTTP/2 packet-up only, got h3 for node {node_tag}; resident shape remains fail-closed for this config"
-            ));
-        }
         if !resident_xhttp_extra_is_empty(&vless.xhttp_extra) {
             return Err(format!(
                 "resident dataplane vless xHTTP transport admits default extra settings only for node {node_tag}; resident shape remains fail-closed for this config"

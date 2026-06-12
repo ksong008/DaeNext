@@ -494,6 +494,43 @@ pub(super) fn resident_dataplane_plan_admits_vless_xhttp_h2_packet_up() {
 }
 
 #[test]
+pub(super) fn resident_dataplane_plan_admits_vless_xhttp_h3_packet_up() {
+    let config = parse_config(
+        r#"
+        global {
+        lan_interface: daerust0
+        allow_insecure: false
+        so_mark_from_dae: 1234
+        mptcp: false
+        }
+        routing {
+        fallback: direct
+        }
+        "#,
+    );
+    let proxy = build_resident_proxy_plan_for_node(
+        &config,
+        "proxy".to_owned(),
+        "standard_import".to_owned(),
+        vless_xhttp_parser_fixture_url("packet-up", "h3", ""),
+    )
+    .unwrap();
+
+    assert_eq!(proxy.protocol, "vless");
+    assert_eq!(proxy.net, "xhttp");
+    assert_eq!(proxy.alpn, vec!["h3".to_owned()]);
+    assert_eq!(proxy.stream_host, fixture_host(FixtureEndpoint::Authority));
+    assert_eq!(proxy.stream_path, "/resource/?ed=2048");
+    let graph = proxy.executable_graph_value();
+    assert_eq!(graph["streamWrapper"], "xhttp");
+    assert_eq!(graph["packetSemantics"], "udp-over-stream");
+    assert_eq!(
+        graph["runtimeComponents"]["streamWrapperFactory"]["provider"],
+        "resident-xhttp-h3-packet-up"
+    );
+}
+
+#[test]
 pub(super) fn resident_dataplane_plan_rejects_unimplemented_vless_xhttp_shapes() {
     let config = parse_config(
         r#"
@@ -509,11 +546,6 @@ pub(super) fn resident_dataplane_plan_rejects_unimplemented_vless_xhttp_shapes()
         "#,
     );
     for (tag, link, expected) in [
-        (
-            "xhttp_h3",
-            vless_xhttp_parser_fixture_url("packet-up", "h3", ""),
-            "admits HTTP/2 packet-up only",
-        ),
         (
             "xhttp_stream_up",
             vless_xhttp_parser_fixture_url("stream-up", "h2", ""),

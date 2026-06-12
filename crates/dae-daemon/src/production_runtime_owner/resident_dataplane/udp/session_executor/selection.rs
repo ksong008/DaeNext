@@ -40,6 +40,11 @@ impl UdpSessionExecutor {
             ResidentProxyProtocolPlan::VlessVisionTcpTls { .. } => {
                 if matches!(proxy.net.as_str(), "" | "tcp") && proxy.flow == XTLS_RPRX_VISION {
                     Self::VlessVision(VlessXudpStreamSession::default())
+                } else if proxy.net == "xhttp"
+                    && proxy.flow.is_empty()
+                    && resident_xhttp_uses_h3(proxy)
+                {
+                    Self::VlessXhttpH3(VlessXhttpH3UdpSession::default())
                 } else if proxy.net == "xhttp" && proxy.flow.is_empty() {
                     Self::VlessXhttpH2(VlessXhttpH2UdpSession::default())
                 } else {

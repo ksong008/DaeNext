@@ -292,6 +292,13 @@ mod tests {
             UdpExecutorShape::VlessXhttpH2
         );
 
+        vless_xhttp.alpn = vec!["h3".to_owned()];
+        let executor = UdpSessionExecutor::new_proxy_packet(&vless_xhttp);
+        assert_eq!(
+            udp_executor_shape(&executor),
+            UdpExecutorShape::VlessXhttpH3
+        );
+
         let fail_closed = [
             ResidentProxyProtocolPlan::VlessMuxTcpTls { key: [0; 16] },
             ResidentProxyProtocolPlan::ShadowsocksSimpleObfsHttpTcp {
@@ -474,6 +481,7 @@ mod tests {
         Socks5,
         VlessVision,
         VlessXhttpH2,
+        VlessXhttpH3,
         Trojan,
         VmessAead,
         AnyTls,
@@ -491,6 +499,7 @@ mod tests {
             UdpSessionExecutor::Socks5(_) => UdpExecutorShape::Socks5,
             UdpSessionExecutor::VlessVision(_) => UdpExecutorShape::VlessVision,
             UdpSessionExecutor::VlessXhttpH2(_) => UdpExecutorShape::VlessXhttpH2,
+            UdpSessionExecutor::VlessXhttpH3(_) => UdpExecutorShape::VlessXhttpH3,
             UdpSessionExecutor::Trojan(_) => UdpExecutorShape::Trojan,
             UdpSessionExecutor::VmessAead(_) => UdpExecutorShape::VmessAead,
             UdpSessionExecutor::AnyTls(_) => UdpExecutorShape::AnyTls,

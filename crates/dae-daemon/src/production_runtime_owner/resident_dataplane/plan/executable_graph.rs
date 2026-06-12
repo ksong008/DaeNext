@@ -206,6 +206,9 @@ impl ResidentExecutableGraphDescriptor {
             "grpc" => ("admitted", "resident-grpc-h2-stream", Value::Null),
             "meek" => ("admitted", "resident-meek-polling", Value::Null),
             "mux" => ("admitted", "resident-shared-mux-stream", Value::Null),
+            "xhttp" if self.alpn.len() == 1 && self.alpn[0].eq_ignore_ascii_case("h3") => {
+                ("admitted", "resident-xhttp-h3-packet-up", Value::Null)
+            }
             "xhttp" => ("admitted", "resident-xhttp-h2-packet-up", Value::Null),
             "simple-obfs-http" => ("admitted", "resident-simple-obfs-http", Value::Null),
             "simple-obfs-tls" => ("admitted", "resident-simple-obfs-tls", Value::Null),
@@ -366,6 +369,11 @@ fn graph_packet_semantics(proxy: &ResidentProxyPlan) -> String {
     match proxy.handler {
         ResidentProxyProtocolPlan::Socks5Tcp { .. } => "udp-associate".to_owned(),
         ResidentProxyProtocolPlan::HttpProxyTcp { .. } => "protocol-closed".to_owned(),
+        ResidentProxyProtocolPlan::VlessVisionTcpTls { .. }
+            if proxy.net == "xhttp" && proxy.flow.is_empty() =>
+        {
+            "udp-over-stream".to_owned()
+        }
         ResidentProxyProtocolPlan::VlessVisionTcpTls { .. } => "xudp".to_owned(),
         ResidentProxyProtocolPlan::VlessMuxTcpTls { .. } => "multiplexed-stream".to_owned(),
         ResidentProxyProtocolPlan::ShadowsocksAeadTcp { .. } => "datagram-aead".to_owned(),

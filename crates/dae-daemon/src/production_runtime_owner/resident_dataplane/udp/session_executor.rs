@@ -13,6 +13,7 @@ pub(super) enum UdpSessionExecutor {
     Socks5(Socks5UdpAssociateSession),
     VlessVision(VlessXudpStreamSession),
     VlessXhttpH2(VlessXhttpH2UdpSession),
+    VlessXhttpH3(VlessXhttpH3UdpSession),
     Trojan(TrojanUdpStreamSession),
     VmessAead(VmessAeadUdpOverTcpSession),
     AnyTls(AnyTlsPacketStreamSession),
@@ -571,6 +572,419 @@ impl VlessXhttpH2UdpSession {
             .with_underlay_reuse("tls-h2-session-reused")
             .with_tls_underlay(self.tls_underlay.unwrap_or("standard-tls"))
     }
+}
+
+#[derive(Default)]
+pub(super) struct VlessXhttpH3UdpSession {
+    endpoint: Option<quinn::Endpoint>,
+    connection: Option<quinn::Connection>,
+    h3_client: Option<h3::client::SendRequest<h3_quinn::OpenStreams, Bytes>>,
+    h3_recv: Option<h3::client::RequestStream<h3_quinn::BidiStream<Bytes>, Bytes>>,
+    h3_driver_task: Option<tokio::task::JoinHandle<()>>,
+    session_id: Option<String>,
+    seq: u64,
+    response_header_seen: bool,
+    response_plaintext: Vec<u8>,
+}
+
+impl VlessXhttpH3UdpSession {
+    async fn exchange(
+        &mut self,
+        proxy: &ResidentProxyPlan,
+        original_dst: SocketAddr,
+        payload: &[u8],
+    ) -> Result<UdpExchangeResult, String> {
+        if !proxy.flow.is_empty() {
+            return Err(
+                "VLESS xHTTP H3 UDP uses the standard VLESS UDP-over-stream command; flow must be empty"
+                    .to_owned(),
+            );
+        }
+        self.ensure_open(proxy).await?;
+        let key = proxy.vless_key()?;
+        let request = if self.seq == 0 {
+            packet::first_write_bytes(
+                &key,
+                &proxy.flow,
+                "udp",
+                &original_dst.to_string(),
+                false,
+                payload,
+            )
+            .map_err(|err| format!("build VLESS xHTTP H3 UDP first packet: {err}"))?
+        } else {
+            vless_udp_length_frame(payload)?
+        };
+        self.send_packet(proxy, Bytes::from(request)).await?;
+        if let Some(response) = self.poll_response().await? {
+            Ok(response)
+        } else {
+            Ok(self.pending_response_result())
+        }
+    }
+
+    async fn ensure_open(&mut self, proxy: &ResidentProxyPlan) -> Result<(), String> {
+        if self.h3_client.is_some() && self.h3_recv.is_some() && self.session_id.is_some() {
+            return Ok(());
+        }
+        let mut endpoint = open_marked_quic_endpoint(proxy.mark)?;
+        endpoint.set_default_client_config(build_xhttp_h3_client_config(proxy.allow_insecure)?);
+        let remote = resolve_proxy_udp_addr_async(proxy).await?;
+        let connection = endpoint
+            .connect(remote, &proxy.server_name)
+            .map_err(|err| format!("connect xHTTP H3 QUIC endpoint: {err}"))?
+            .await
+            .map_err(|err| format!("await xHTTP H3 QUIC connect: {err}"))?;
+        let h3_connection = h3_quinn::Connection::new(connection.clone());
+        let (mut driver, h3_client) = h3::client::new(h3_connection)
+            .await
+            .map_err(|err| format!("create xHTTP H3 client: {err:?}"))?;
+        let h3_driver_task = tokio::spawn(async move {
+            let _ = poll_fn(|cx| driver.poll_close(cx)).await;
+        });
+        let session_id = new_xhttp_session_id();
+        let mut h3_recv = open_xhttp_h3_download_stream(proxy, h3_client.clone(), &session_id)
+            .await
+            .inspect_err(|_| h3_driver_task.abort())?;
+        let response = h3_recv
+            .recv_response()
+            .await
+            .map_err(|err| format!("read xHTTP H3 download response: {err:?}"))?;
+        if !response.status().is_success() {
+            h3_driver_task.abort();
+            connection.close(0_u32.into(), b"resident xhttp h3 download status failed");
+            endpoint.wait_idle().await;
+            return Err(format!(
+                "xHTTP H3 download response status {}",
+                response.status()
+            ));
+        }
+        self.endpoint = Some(endpoint);
+        self.connection = Some(connection);
+        self.h3_client = Some(h3_client);
+        self.h3_recv = Some(h3_recv);
+        self.h3_driver_task = Some(h3_driver_task);
+        self.session_id = Some(session_id);
+        self.seq = 0;
+        self.response_header_seen = false;
+        self.response_plaintext.clear();
+        Ok(())
+    }
+
+    async fn send_packet(
+        &mut self,
+        proxy: &ResidentProxyPlan,
+        payload: Bytes,
+    ) -> Result<(), String> {
+        let session_id = self
+            .session_id
+            .as_deref()
+            .ok_or_else(|| "VLESS xHTTP H3 UDP session id is not initialized".to_owned())?;
+        let client = self
+            .h3_client
+            .as_mut()
+            .ok_or_else(|| "VLESS xHTTP H3 client is not initialized".to_owned())?;
+        send_xhttp_h3_packet_up_request(client, proxy, session_id, self.seq, payload).await?;
+        self.seq = self.seq.saturating_add(1);
+        Ok(())
+    }
+
+    async fn poll_response(&mut self) -> Result<Option<UdpExchangeResult>, String> {
+        if let Some(payload) = self.try_pop_response_payload()? {
+            return Ok(Some(self.response_result(payload)));
+        }
+        let data = {
+            let recv = match self.h3_recv.as_mut() {
+                Some(recv) => recv,
+                None => return Ok(None),
+            };
+            let data_future = recv.recv_data();
+            tokio::pin!(data_future);
+            poll_fn(|cx| match data_future.as_mut().poll(cx) {
+                Poll::Ready(value) => Poll::Ready(Some(value)),
+                Poll::Pending => Poll::Ready(None),
+            })
+            .await
+        };
+        match data {
+            Some(Ok(Some(mut chunk))) => {
+                let remaining = chunk.remaining();
+                let bytes = chunk.copy_to_bytes(remaining);
+                self.response_plaintext.extend_from_slice(&bytes);
+                self.try_pop_response_payload()
+                    .map(|payload| payload.map(|payload| self.response_result(payload)))
+            }
+            Some(Ok(None)) => Err("VLESS xHTTP H3 download stream closed".to_owned()),
+            Some(Err(err)) => Err(format!("read VLESS xHTTP H3 download data: {err:?}")),
+            None => Ok(None),
+        }
+    }
+
+    async fn shutdown(&mut self) {
+        self.h3_client = None;
+        self.h3_recv = None;
+        if let Some(task) = self.h3_driver_task.take() {
+            task.abort();
+        }
+        if let Some(connection) = self.connection.take() {
+            connection.close(0_u32.into(), b"resident xhttp h3 udp session done");
+        }
+        if let Some(endpoint) = self.endpoint.take() {
+            endpoint.wait_idle().await;
+        }
+        self.session_id = None;
+    }
+
+    fn try_pop_response_payload(&mut self) -> Result<Option<Vec<u8>>, String> {
+        try_pop_vless_udp_over_stream_response(
+            &mut self.response_header_seen,
+            &mut self.response_plaintext,
+            "VLESS xHTTP H3 UDP",
+        )
+    }
+
+    fn response_result(&self, payload: Vec<u8>) -> UdpExchangeResult {
+        UdpExchangeResult::new(payload, "quic-udp-stream-packet")
+            .with_session_executor("tokio-xhttp-h3-packet-up")
+            .with_underlay_reuse("quic-h3-session-reused")
+            .with_quic_underlay("quinn-h3")
+    }
+
+    fn pending_response_result(&self) -> UdpExchangeResult {
+        UdpExchangeResult::pending_response("quic-udp-stream-packet")
+            .with_session_executor("tokio-xhttp-h3-packet-up")
+            .with_underlay_reuse("quic-h3-session-reused")
+            .with_quic_underlay("quinn-h3")
+    }
+}
+
+async fn open_xhttp_h3_download_stream(
+    proxy: &ResidentProxyPlan,
+    mut client: h3::client::SendRequest<h3_quinn::OpenStreams, Bytes>,
+    session_id: &str,
+) -> Result<h3::client::RequestStream<h3_quinn::BidiStream<Bytes>, Bytes>, String> {
+    let request = xhttp_h3_request(
+        http::Method::GET,
+        proxy,
+        &xhttp_session_path_suffix(session_id, None),
+        false,
+    )?;
+    let mut stream = time::timeout(RESIDENT_CONNECT_TIMEOUT, client.send_request(request))
+        .await
+        .map_err(|_| "xHTTP H3 download request timeout".to_owned())?
+        .map_err(|err| format!("send xHTTP H3 download request: {err:?}"))?;
+    time::timeout(RESIDENT_CONNECT_TIMEOUT, stream.finish())
+        .await
+        .map_err(|_| "finish xHTTP H3 download request timeout".to_owned())?
+        .map_err(|err| format!("finish xHTTP H3 download request: {err:?}"))?;
+    Ok(stream)
+}
+
+async fn send_xhttp_h3_packet_up_request(
+    client: &mut h3::client::SendRequest<h3_quinn::OpenStreams, Bytes>,
+    proxy: &ResidentProxyPlan,
+    session_id: &str,
+    seq: u64,
+    payload: Bytes,
+) -> Result<(), String> {
+    let request = xhttp_h3_request(
+        http::Method::POST,
+        proxy,
+        &xhttp_session_path_suffix(session_id, Some(seq)),
+        true,
+    )?;
+    let mut stream = time::timeout(RESIDENT_CONNECT_TIMEOUT, client.send_request(request))
+        .await
+        .map_err(|_| "xHTTP H3 packet-up request timeout".to_owned())?
+        .map_err(|err| format!("send xHTTP H3 packet-up request: {err:?}"))?;
+    time::timeout(RESIDENT_CONNECT_TIMEOUT, stream.send_data(payload))
+        .await
+        .map_err(|_| "send xHTTP H3 packet-up body timeout".to_owned())?
+        .map_err(|err| format!("send xHTTP H3 packet-up body: {err:?}"))?;
+    time::timeout(RESIDENT_CONNECT_TIMEOUT, stream.finish())
+        .await
+        .map_err(|_| "finish xHTTP H3 packet-up body timeout".to_owned())?
+        .map_err(|err| format!("finish xHTTP H3 packet-up body: {err:?}"))?;
+    let response = time::timeout(RESIDENT_CONNECT_TIMEOUT, stream.recv_response())
+        .await
+        .map_err(|_| "xHTTP H3 packet-up response timeout".to_owned())?
+        .map_err(|err| format!("recv xHTTP H3 packet-up response: {err:?}"))?;
+    if !response.status().is_success() {
+        return Err(format!(
+            "xHTTP H3 packet-up response status {}",
+            response.status()
+        ));
+    }
+    drain_xhttp_h3_response_body(stream).await
+}
+
+async fn drain_xhttp_h3_response_body(
+    mut stream: h3::client::RequestStream<h3_quinn::BidiStream<Bytes>, Bytes>,
+) -> Result<(), String> {
+    loop {
+        let chunk = time::timeout(RESIDENT_CONNECT_TIMEOUT, stream.recv_data())
+            .await
+            .map_err(|_| "xHTTP H3 packet-up response body timeout".to_owned())?
+            .map_err(|err| format!("read xHTTP H3 packet-up response body: {err:?}"))?;
+        if chunk.is_none() {
+            return Ok(());
+        }
+    }
+}
+
+fn xhttp_h3_request(
+    method: http::Method,
+    proxy: &ResidentProxyPlan,
+    path_suffix: &str,
+    has_body: bool,
+) -> Result<http::Request<()>, String> {
+    let uri = xhttp_uri(proxy, path_suffix);
+    let referer = xhttp_padding_referer(&xhttp_uri(proxy, ""));
+    let mut builder = http::Request::builder()
+        .method(method)
+        .uri(uri)
+        .header(http::header::USER_AGENT, "Mozilla/5.0")
+        .header(http::header::ACCEPT, "*/*")
+        .header(http::header::ACCEPT_LANGUAGE, "en-US,en;q=0.9")
+        .header(http::header::CACHE_CONTROL, "no-cache")
+        .header("pragma", "no-cache")
+        .header(http::header::REFERER, referer);
+    if has_body {
+        builder = builder.header(http::header::CONTENT_TYPE, "application/grpc");
+    }
+    builder
+        .body(())
+        .map_err(|err| format!("build xHTTP H3 request: {err}"))
+}
+
+fn build_xhttp_h3_client_config(allow_insecure: bool) -> Result<quinn::ClientConfig, String> {
+    let mut crypto = if allow_insecure {
+        rustls::ClientConfig::builder_with_protocol_versions(&[&rustls::version::TLS13])
+            .dangerous()
+            .with_custom_certificate_verifier(AcceptAnyXhttpH3Verifier::new())
+            .with_no_client_auth()
+    } else {
+        let mut roots = RootCertStore::empty();
+        roots.extend(webpki_roots::TLS_SERVER_ROOTS.iter().cloned());
+        rustls::ClientConfig::builder_with_protocol_versions(&[&rustls::version::TLS13])
+            .with_root_certificates(roots)
+            .with_no_client_auth()
+    };
+    crypto.alpn_protocols = vec![b"h3".to_vec()];
+    let mut config = quinn::ClientConfig::new(Arc::new(
+        QuicClientConfig::try_from(crypto)
+            .map_err(|err| format!("xHTTP H3 client QUIC TLS config: {err}"))?,
+    ));
+    config.transport_config(Arc::new(xhttp_h3_transport_config()?));
+    Ok(config)
+}
+
+fn xhttp_h3_transport_config() -> Result<quinn::TransportConfig, String> {
+    let mut transport = quinn::TransportConfig::default();
+    transport.keep_alive_interval(Some(Duration::from_secs(
+        dae_outbound::shared_transport::XHTTP_H3_KEEPALIVE_SECS,
+    )));
+    transport.max_idle_timeout(Some(
+        Duration::from_secs(dae_outbound::shared_transport::XHTTP_H3_HANDSHAKE_IDLE_TIMEOUT_SECS)
+            .try_into()
+            .map_err(|err| format!("xHTTP H3 idle timeout config: {err}"))?,
+    ));
+    transport.datagram_receive_buffer_size(None);
+    transport.datagram_send_buffer_size(0);
+    Ok(transport)
+}
+
+#[derive(Debug)]
+struct AcceptAnyXhttpH3Verifier {
+    provider: Arc<rustls::crypto::CryptoProvider>,
+}
+
+impl AcceptAnyXhttpH3Verifier {
+    fn new() -> Arc<Self> {
+        Arc::new(Self {
+            provider: Arc::new(rustls::crypto::aws_lc_rs::default_provider()),
+        })
+    }
+}
+
+impl ServerCertVerifier for AcceptAnyXhttpH3Verifier {
+    fn verify_server_cert(
+        &self,
+        _end_entity: &CertificateDer<'_>,
+        _intermediates: &[CertificateDer<'_>],
+        _server_name: &ServerName<'_>,
+        _ocsp: &[u8],
+        _now: UnixTime,
+    ) -> Result<ServerCertVerified, rustls::Error> {
+        Ok(ServerCertVerified::assertion())
+    }
+
+    fn verify_tls12_signature(
+        &self,
+        message: &[u8],
+        cert: &CertificateDer<'_>,
+        dss: &DigitallySignedStruct,
+    ) -> Result<HandshakeSignatureValid, rustls::Error> {
+        rustls::crypto::verify_tls12_signature(
+            message,
+            cert,
+            dss,
+            &self.provider.signature_verification_algorithms,
+        )
+    }
+
+    fn verify_tls13_signature(
+        &self,
+        message: &[u8],
+        cert: &CertificateDer<'_>,
+        dss: &DigitallySignedStruct,
+    ) -> Result<HandshakeSignatureValid, rustls::Error> {
+        rustls::crypto::verify_tls13_signature(
+            message,
+            cert,
+            dss,
+            &self.provider.signature_verification_algorithms,
+        )
+    }
+
+    fn supported_verify_schemes(&self) -> Vec<SignatureScheme> {
+        self.provider
+            .signature_verification_algorithms
+            .supported_schemes()
+    }
+}
+
+fn try_pop_vless_udp_over_stream_response(
+    response_header_seen: &mut bool,
+    response_plaintext: &mut Vec<u8>,
+    context: &str,
+) -> Result<Option<Vec<u8>>, String> {
+    if !*response_header_seen {
+        if response_plaintext.len() < 2 {
+            return Ok(None);
+        }
+        if response_plaintext[0] != VLESS_RESPONSE_VERSION {
+            return Err(format!(
+                "unexpected {context} response version: {}",
+                response_plaintext[0]
+            ));
+        }
+        let header_len = 2 + response_plaintext[1] as usize;
+        if response_plaintext.len() < header_len {
+            return Ok(None);
+        }
+        response_plaintext.drain(..header_len);
+        *response_header_seen = true;
+    }
+    if response_plaintext.len() < 2 {
+        return Ok(None);
+    }
+    let payload_len = u16::from_be_bytes([response_plaintext[0], response_plaintext[1]]) as usize;
+    if response_plaintext.len() < 2 + payload_len {
+        return Ok(None);
+    }
+    response_plaintext.drain(..2);
+    Ok(Some(response_plaintext.drain(..payload_len).collect()))
 }
 
 pub(super) fn vless_udp_length_frame(payload: &[u8]) -> Result<Vec<u8>, String> {
