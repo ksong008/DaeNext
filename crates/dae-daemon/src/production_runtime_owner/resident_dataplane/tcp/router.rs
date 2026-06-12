@@ -10,6 +10,7 @@ pub(crate) struct ResidentTcpRouter {
     pub(in crate::production_runtime_owner::resident_dataplane) proxies:
         BTreeMap<u8, ResidentProxyGroupPlan>,
     pub(in crate::production_runtime_owner::resident_dataplane) routing_tuple_map_id: u32,
+    routing_tuple_map_fd: OwnedFd,
     pub(in crate::production_runtime_owner::resident_dataplane) routing_matcher: RoutingMatcher,
     pub(in crate::production_runtime_owner::resident_dataplane) dial_mode: TcpDialMode,
     pub(in crate::production_runtime_owner::resident_dataplane) sniffing_timeout: Duration,
@@ -34,15 +35,68 @@ impl ResidentTcpRouter {
             "resident TCP router needs routing_tuples_map id for compatible per-flow outbound selection"
                 .to_owned()
         })?;
+        let routing_tuple_map_fd = open_map_fd(routing_tuple_map_id).map_err(|err| {
+            format!("open routing_tuples_map id {routing_tuple_map_id} for resident TCP: {err}")
+        })?;
+        Self::from_open_routing_tuple_map(
+            proxies,
+            routing_tuple_map_id,
+            routing_tuple_map_fd,
+            routing_matcher,
+            dial_mode,
+            sniffing_timeout,
+            so_mark_from_dae,
+            mptcp,
+        )
+    }
+
+    fn from_open_routing_tuple_map(
+        proxies: BTreeMap<u8, ResidentProxyGroupPlan>,
+        routing_tuple_map_id: u32,
+        routing_tuple_map_fd: OwnedFd,
+        routing_matcher: RoutingMatcher,
+        dial_mode: TcpDialMode,
+        sniffing_timeout: Duration,
+        so_mark_from_dae: u32,
+        mptcp: bool,
+    ) -> Result<Self, String> {
+        if proxies.is_empty() {
+            return Err("resident TCP router needs at least one proxy outbound".to_owned());
+        }
         Ok(Self {
             proxies,
             routing_tuple_map_id,
+            routing_tuple_map_fd,
             routing_matcher,
             dial_mode,
             sniffing_timeout,
             so_mark_from_dae,
             mptcp,
         })
+    }
+
+    #[cfg(test)]
+    pub(in crate::production_runtime_owner::resident_dataplane) fn new_for_test(
+        proxies: BTreeMap<u8, ResidentProxyGroupPlan>,
+        routing_matcher: RoutingMatcher,
+        dial_mode: TcpDialMode,
+        sniffing_timeout: Duration,
+        so_mark_from_dae: u32,
+        mptcp: bool,
+    ) -> Result<Self, String> {
+        let routing_tuple_map_fd: OwnedFd = std::fs::File::open("/dev/null")
+            .map_err(|err| format!("open /dev/null for resident TCP router test fd: {err}"))?
+            .into();
+        Self::from_open_routing_tuple_map(
+            proxies,
+            1,
+            routing_tuple_map_fd,
+            routing_matcher,
+            dial_mode,
+            sniffing_timeout,
+            so_mark_from_dae,
+            mptcp,
+        )
     }
 
     pub(in crate::production_runtime_owner::resident_dataplane) fn proxy_count(&self) -> usize {
@@ -173,21 +227,18 @@ impl ResidentTcpRouter {
             l4proto: BPF_L4_TCP,
             padding: [0; 3],
         };
-        let fd = open_map_fd(self.routing_tuple_map_id).map_err(|err| {
+        let mut result = BpfRoutingResult::default();
+        lookup_map_elem_bytes(
+            self.routing_tuple_map_fd.as_raw_fd(),
+            bytes_of(&key),
+            bytes_of_mut(&mut result),
+        )
+        .map_err(|err| {
             format!(
-                "open routing_tuples_map id {} for resident TCP: {err}",
-                self.routing_tuple_map_id
+                "lookup routing_tuples_map id {} for {} -> {} tcp: {err}",
+                self.routing_tuple_map_id, peer, original_dst
             )
         })?;
-        let mut result = BpfRoutingResult::default();
-        lookup_map_elem_bytes(fd.as_raw_fd(), bytes_of(&key), bytes_of_mut(&mut result)).map_err(
-            |err| {
-                format!(
-                    "lookup routing_tuples_map for {} -> {} tcp: {err}",
-                    peer, original_dst
-                )
-            },
-        )?;
         Ok(result)
     }
 }

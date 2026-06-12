@@ -3,7 +3,7 @@ use std::future::poll_fn;
 use std::io::ErrorKind;
 use std::mem::size_of;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr, TcpListener, UdpSocket};
-use std::os::fd::AsRawFd;
+use std::os::fd::{AsRawFd, OwnedFd};
 use std::path::PathBuf;
 use std::pin::Pin;
 use std::slice;
@@ -126,7 +126,7 @@ use self::vmess_handlers::*;
 mod transport_helpers;
 use self::transport_helpers::*;
 pub(crate) use self::transport_helpers::{
-    collect_vmess_grpc_decrypted, decode_vmess_grpc_response_stream_async, pop_grpc_hunk_payload,
+    GrpcHunkReadBuffer, collect_vmess_grpc_decrypted, decode_vmess_grpc_response_stream_async,
     send_grpc_hunk, send_h2_data,
 };
 mod stream_helpers;

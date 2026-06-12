@@ -404,9 +404,8 @@ fn tcp_router_for_test(
         OutboundIndex::USER_DEFINED_MIN.value(),
         ResidentProxyGroupPlan::fixed_single_for_test(dummy_proxy_plan()),
     );
-    ResidentTcpRouter::new(
+    ResidentTcpRouter::new_for_test(
         proxies,
-        Some(1),
         routing_matcher,
         dial_mode,
         Duration::from_millis(100),

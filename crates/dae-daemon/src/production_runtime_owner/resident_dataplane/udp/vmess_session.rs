@@ -245,7 +245,7 @@ async fn open_vmess_underlay(
                 encrypted_writer: None,
                 decrypted_rx: None,
                 decoder: None,
-                response_buf: Vec::new(),
+                response_buf: GrpcHunkReadBuffer::default(),
                 pending_plain: VecDeque::new(),
                 decode_error: None,
                 tls_underlay,
@@ -291,7 +291,7 @@ enum VmessAeadUdpUnderlay {
         encrypted_writer: Option<tokio::io::DuplexStream>,
         decrypted_rx: Option<tokio::sync::mpsc::Receiver<Result<Vec<u8>, String>>>,
         decoder: Option<tokio::task::JoinHandle<Result<(), String>>>,
-        response_buf: Vec<u8>,
+        response_buf: GrpcHunkReadBuffer,
         pending_plain: VecDeque<Vec<u8>>,
         decode_error: Option<String>,
         tls_underlay: &'static str,
@@ -610,7 +610,7 @@ async fn read_vmess_grpc_payload(underlay: &mut VmessAeadUdpUnderlay) -> Result<
                     .release_capacity(bytes.len())
                     .map_err(|err| format!("release VMess gRPC response capacity: {err}"))?;
                 response_buf.extend_from_slice(&bytes);
-                while let Some(payload) = pop_grpc_hunk_payload(response_buf)? {
+                while let Some(payload) = response_buf.pop_payload()? {
                     if !payload.is_empty() {
                         let writer = encrypted_writer.as_mut().ok_or_else(|| {
                             "VMess gRPC encrypted response writer is not initialized".to_owned()

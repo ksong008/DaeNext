@@ -56,19 +56,66 @@ pub(crate) async fn send_h2_data_with_context(
         .map_err(|err| format!("send {context} data: {err}"))
 }
 
-pub(crate) fn pop_grpc_hunk_payload(buffer: &mut Vec<u8>) -> Result<Option<Vec<u8>>, String> {
-    if buffer.len() < 5 {
-        return Ok(None);
+#[derive(Default)]
+pub(crate) struct GrpcHunkReadBuffer {
+    bytes: Vec<u8>,
+    offset: usize,
+}
+
+impl GrpcHunkReadBuffer {
+    pub(crate) fn extend_from_slice(&mut self, data: &[u8]) {
+        self.compact_if_worthwhile();
+        self.bytes.extend_from_slice(data);
     }
-    if buffer[0] != 0 {
-        return Err("compressed gRPC hunk is not admitted by resident relay".to_owned());
+
+    pub(crate) fn is_empty(&self) -> bool {
+        self.as_slice().is_empty()
     }
-    let len = u32::from_be_bytes([buffer[1], buffer[2], buffer[3], buffer[4]]) as usize;
-    if buffer.len() < 5 + len {
-        return Ok(None);
+
+    pub(crate) fn pop_payload(&mut self) -> Result<Option<Vec<u8>>, String> {
+        let buffer = self.as_slice();
+        if buffer.len() < 5 {
+            return Ok(None);
+        }
+        if buffer[0] != 0 {
+            return Err("compressed gRPC hunk is not admitted by resident relay".to_owned());
+        }
+        let len = u32::from_be_bytes([buffer[1], buffer[2], buffer[3], buffer[4]]) as usize;
+        if buffer.len() < 5 + len {
+            return Ok(None);
+        }
+        let payload = grpc_hunk_payload(&buffer[5..5 + len])
+            .map_err(|err| format!("decode gRPC Hunk protobuf payload: {err}"))?;
+        self.consume(5 + len);
+        Ok(Some(payload))
     }
-    let payload = grpc_hunk_payload(&buffer[5..5 + len])
-        .map_err(|err| format!("decode gRPC Hunk protobuf payload: {err}"))?;
-    buffer.drain(..5 + len);
-    Ok(Some(payload))
+
+    fn as_slice(&self) -> &[u8] {
+        &self.bytes[self.offset..]
+    }
+
+    fn consume(&mut self, len: usize) {
+        self.offset += len;
+        if self.offset >= self.bytes.len() {
+            self.bytes.clear();
+            self.offset = 0;
+        } else {
+            self.compact_if_worthwhile();
+        }
+    }
+
+    fn compact_if_worthwhile(&mut self) {
+        if self.offset == 0 {
+            return;
+        }
+        if self.offset >= self.bytes.len() {
+            self.bytes.clear();
+            self.offset = 0;
+            return;
+        }
+        if self.offset >= 8192 && self.offset * 2 >= self.bytes.len() {
+            self.bytes.drain(..self.offset);
+            self.offset = 0;
+        }
+    }
 }

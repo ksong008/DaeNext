@@ -20,7 +20,7 @@ pub(crate) async fn relay_tcp_over_vmess_grpc_h2(
     let mut decoder_disconnected = false;
     let mut last_activity = Instant::now();
     let mut inbound_buf = [0_u8; 16 * 1024];
-    let mut response_buf = Vec::new();
+    let mut response_buf = GrpcHunkReadBuffer::default();
     let mut decode_error = None;
 
     while !stop.load(Ordering::Relaxed) {
@@ -57,7 +57,7 @@ pub(crate) async fn relay_tcp_over_vmess_grpc_h2(
                             .release_capacity(bytes.len())
                             .map_err(|err| format!("release VMess gRPC HTTP/2 response capacity: {err}"))?;
                         response_buf.extend_from_slice(&bytes);
-                        while let Some(payload) = pop_grpc_hunk_payload(&mut response_buf)? {
+                        while let Some(payload) = response_buf.pop_payload()? {
                             if !payload.is_empty() {
                                 encrypted_writer
                                     .write_all(&payload)
