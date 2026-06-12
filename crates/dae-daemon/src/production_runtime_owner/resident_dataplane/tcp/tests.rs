@@ -177,6 +177,8 @@ fn resident_websocket_decoder_treats_close_frame_as_eof() {
 #[test]
 fn proxy_failure_event_carries_relay_diagnostics() {
     let selection = TcpProxySelection {
+        mark: 0x55,
+        mptcp: false,
         route: TcpRouteSelection {
             initial_outbound: 7,
             final_outbound: 7,
@@ -192,7 +194,7 @@ fn proxy_failure_event_carries_relay_diagnostics() {
                 mac: FLOW_MAC.to_owned(),
             },
         },
-        proxy: dummy_proxy_plan(),
+        proxy: Arc::new(dummy_proxy_plan()),
     };
     let sniff = TcpSniffReport {
         payload: Vec::new(),

@@ -9,7 +9,9 @@ pub(crate) async fn handle_trojan_websocket_tls_tcp_connection_async(
     metrics: &ResidentDataplaneMetrics,
     password: &str,
 ) -> Result<Value, String> {
-    let mut client = open_async_resident_tls_client(&selection.proxy).await?;
+    let mut client =
+        open_async_resident_tls_client_with_flow(&selection.proxy, selection.mark, selection.mptcp)
+            .await?;
     let tls_underlay = async_resident_tls_underlay_name(&client);
     let options =
         HttpUpgradeOptions::new(&selection.proxy.stream_host, &selection.proxy.stream_path);
@@ -91,7 +93,9 @@ pub(crate) async fn handle_trojan_websocket_inner_shadowsocks_tls_tcp_connection
     inner_cipher: &str,
     inner_password: &str,
 ) -> Result<Value, String> {
-    let mut client = open_async_resident_tls_client(&selection.proxy).await?;
+    let mut client =
+        open_async_resident_tls_client_with_flow(&selection.proxy, selection.mark, selection.mptcp)
+            .await?;
     let tls_underlay = async_resident_tls_underlay_name(&client);
     let options =
         HttpUpgradeOptions::new(&selection.proxy.stream_host, &selection.proxy.stream_path);
@@ -166,7 +170,9 @@ pub(crate) async fn handle_trojan_httpupgrade_tls_tcp_connection_async(
     metrics: &ResidentDataplaneMetrics,
     password: &str,
 ) -> Result<Value, String> {
-    let mut client = open_async_resident_tls_client(&selection.proxy).await?;
+    let mut client =
+        open_async_resident_tls_client_with_flow(&selection.proxy, selection.mark, selection.mptcp)
+            .await?;
     let tls_underlay = async_resident_tls_underlay_name(&client);
     let options =
         HttpUpgradeOptions::new(&selection.proxy.stream_host, &selection.proxy.stream_path);
@@ -245,7 +251,9 @@ pub(crate) async fn handle_trojan_grpc_tls_tcp_connection_async(
     metrics: &ResidentDataplaneMetrics,
     password: &str,
 ) -> Result<Value, String> {
-    let client = open_async_resident_tls_client(&selection.proxy).await?;
+    let client =
+        open_async_resident_tls_client_with_flow(&selection.proxy, selection.mark, selection.mptcp)
+            .await?;
     let tls_underlay = async_resident_tls_underlay_name(&client);
     let request = trojan_packet::tcp_request_header(
         password,
@@ -330,7 +338,9 @@ pub(crate) async fn handle_trojan_tls_tcp_connection_async(
     metrics: &ResidentDataplaneMetrics,
     password: &str,
 ) -> Result<Value, String> {
-    let mut client = open_async_resident_tls_client(&selection.proxy).await?;
+    let mut client =
+        open_async_resident_tls_client_with_flow(&selection.proxy, selection.mark, selection.mptcp)
+            .await?;
     let tls_underlay = async_resident_tls_underlay_name(&client);
     let request = trojan_packet::tcp_request_header(
         password,

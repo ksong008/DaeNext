@@ -144,7 +144,7 @@ async fn open_vmess_underlay(
 ) -> Result<VmessAeadUdpUnderlay, String> {
     match wrapper {
         VmessAeadUdpWrapperKind::PlainTcp => {
-            let mut stream = open_proxy_tcp_stream_async(proxy.clone()).await?;
+            let mut stream = open_proxy_tcp_stream_async(proxy).await?;
             write_vmess_stream_bytes(
                 &mut stream,
                 first_write,
@@ -154,7 +154,7 @@ async fn open_vmess_underlay(
             Ok(VmessAeadUdpUnderlay::PlainTcp { stream })
         }
         VmessAeadUdpWrapperKind::WebSocketPlain => {
-            let mut stream = open_proxy_tcp_stream_async(proxy.clone()).await?;
+            let mut stream = open_proxy_tcp_stream_async(proxy).await?;
             websocket_handshake_async(
                 &mut stream,
                 &proxy.stream_host,
@@ -196,7 +196,7 @@ async fn open_vmess_underlay(
             })
         }
         VmessAeadUdpWrapperKind::HttpUpgradePlain => {
-            let mut stream = open_proxy_tcp_stream_async(proxy.clone()).await?;
+            let mut stream = open_proxy_tcp_stream_async(proxy).await?;
             httpupgrade_handshake_async(
                 &mut stream,
                 &proxy.stream_host,

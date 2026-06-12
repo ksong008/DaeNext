@@ -292,8 +292,9 @@ impl ResidentProxyGroupPlan {
 
     pub(in crate::production_runtime_owner::resident_dataplane) fn select_proxy_for_tcp(
         &self,
-    ) -> Result<ResidentProxyPlan, String> {
-        self.select_proxy_for_network("tcp4")
+    ) -> Result<Arc<ResidentProxyPlan>, String> {
+        self.select_candidate("tcp4")
+            .map(|candidate| Arc::clone(&candidate.proxy))
     }
 
     pub(in crate::production_runtime_owner::resident_dataplane) fn select_proxy_for_udp(
@@ -301,14 +302,6 @@ impl ResidentProxyGroupPlan {
     ) -> Result<Arc<ResidentProxyPlan>, String> {
         self.select_candidate("udp4")
             .map(|candidate| Arc::clone(&candidate.proxy))
-    }
-
-    pub(in crate::production_runtime_owner::resident_dataplane) fn select_proxy_for_network(
-        &self,
-        network: &str,
-    ) -> Result<ResidentProxyPlan, String> {
-        self.select_candidate(network)
-            .map(|candidate| candidate.proxy.as_ref().clone())
     }
 
     pub(in crate::production_runtime_owner::resident_dataplane) fn snapshot_candidate(

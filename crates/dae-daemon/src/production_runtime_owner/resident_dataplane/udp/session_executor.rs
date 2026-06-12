@@ -193,7 +193,7 @@ impl Socks5UdpAssociateSession {
         let ResidentProxyProtocolPlan::Socks5Tcp { username, password } = &proxy.handler else {
             return Err("SOCKS5 UDP associate executor received a non-SOCKS handler".to_owned());
         };
-        let mut control = open_proxy_tcp_stream_async(proxy.clone()).await?;
+        let mut control = open_proxy_tcp_stream_async(proxy).await?;
         let bind =
             socks5_udp_associate_control_async(&mut control, "0.0.0.0:0", username, password)
                 .await?;

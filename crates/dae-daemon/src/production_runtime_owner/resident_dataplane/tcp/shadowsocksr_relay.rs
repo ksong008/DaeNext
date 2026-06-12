@@ -14,7 +14,7 @@ pub(crate) async fn handle_shadowsocksr_http_simple_proxy_tcp_connection_async(
     obfs_host: &str,
     obfs_port: u16,
 ) -> Result<Value, String> {
-    let mut proxy = open_plain_proxy_tcp_stream_async(&selection.proxy).await?;
+    let mut proxy = open_plain_proxy_tcp_stream_async(&selection).await?;
     let mut client_iv = [0_u8; 16];
     fastrand::fill(&mut client_iv);
     let (request, mut encoder) = shadowsocksr_http_simple_origin_request(

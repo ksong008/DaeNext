@@ -10,7 +10,9 @@ pub(crate) async fn handle_anytls_tls_tcp_connection_async(
     metrics: &ResidentDataplaneMetrics,
     auth: &str,
 ) -> Result<Value, String> {
-    let mut client = open_async_resident_tls_client(&selection.proxy).await?;
+    let mut client =
+        open_async_resident_tls_client_with_flow(&selection.proxy, selection.mark, selection.mptcp)
+            .await?;
     let tls_underlay = async_resident_tls_underlay_name(&client);
     let sid = 1_u32;
     client

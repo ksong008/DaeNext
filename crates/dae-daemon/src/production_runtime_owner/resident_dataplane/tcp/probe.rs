@@ -22,6 +22,8 @@ pub(crate) async fn probe_resident_proxy_tcp_async(
         .map_err(|err| format!("accept resident TCP probe loopback stream: {err}"))?;
 
     let selection = TcpProxySelection {
+        mark: proxy.mark,
+        mptcp: proxy.mptcp,
         route: TcpRouteSelection {
             initial_outbound: 0,
             final_outbound: 0,
@@ -37,7 +39,7 @@ pub(crate) async fn probe_resident_proxy_tcp_async(
                 mac: String::new(),
             },
         },
-        proxy: proxy.clone(),
+        proxy: Arc::new(proxy.clone()),
     };
     let sniff = TcpSniffReport {
         payload: if scheme == "https" {
@@ -56,7 +58,7 @@ pub(crate) async fn probe_resident_proxy_tcp_async(
     let mut handle = tokio::spawn(async move {
         let mut inbound = accepted;
         if matches!(
-            selection.proxy.handler,
+            &selection.proxy.handler,
             ResidentProxyProtocolPlan::VlessVisionTcpTls { .. }
                 | ResidentProxyProtocolPlan::VlessMuxTcpTls { .. }
         ) {
@@ -71,7 +73,7 @@ pub(crate) async fn probe_resident_proxy_tcp_async(
             )
             .await
         } else if matches!(
-            selection.proxy.handler,
+            &selection.proxy.handler,
             ResidentProxyProtocolPlan::TrojanTcpTls { .. }
                 | ResidentProxyProtocolPlan::TrojanInnerShadowsocksTcpTls { .. }
                 | ResidentProxyProtocolPlan::AnyTlsTcpTls { .. }
@@ -87,7 +89,7 @@ pub(crate) async fn probe_resident_proxy_tcp_async(
             )
             .await
         } else if matches!(
-            selection.proxy.handler,
+            &selection.proxy.handler,
             ResidentProxyProtocolPlan::Hysteria2QuicTcp { .. }
                 | ResidentProxyProtocolPlan::TuicQuicTcp { .. }
                 | ResidentProxyProtocolPlan::JuicityQuicTcp { .. }

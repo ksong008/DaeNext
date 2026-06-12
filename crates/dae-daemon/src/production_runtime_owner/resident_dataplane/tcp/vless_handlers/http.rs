@@ -26,7 +26,9 @@ pub(crate) async fn handle_vless_grpc_tcp_connection_async(
     sniff: &TcpSniffReport,
     metrics: &ResidentDataplaneMetrics,
 ) -> Result<Value, String> {
-    let client = open_async_vless_tls_client(&selection.proxy).await?;
+    let client =
+        open_async_vless_tls_client_with_flow(&selection.proxy, selection.mark, selection.mptcp)
+            .await?;
     let tls_underlay = async_tls_underlay_name(&client);
     let key = selection.proxy.vless_key()?;
     let request = packet::first_write_bytes(
@@ -112,7 +114,9 @@ pub(crate) async fn handle_vless_xhttp_h2_tcp_connection_async(
     sniff: &TcpSniffReport,
     metrics: &ResidentDataplaneMetrics,
 ) -> Result<Value, String> {
-    let client = open_async_vless_tls_client(&selection.proxy).await?;
+    let client =
+        open_async_vless_tls_client_with_flow(&selection.proxy, selection.mark, selection.mptcp)
+            .await?;
     let tls_underlay = async_tls_underlay_name(&client);
     let key = selection.proxy.vless_key()?;
     let session_id = new_xhttp_session_id();
