@@ -13,13 +13,16 @@ mod types;
 #[cfg(test)]
 mod tests;
 
+pub(super) use geodata::GeodataResolver as ResidentGeodataStore;
 use geodata::geodata_report_json;
 use maps::{
     ensure_map_contract, map_json, open_all_maps, open_optional_latest_map,
     open_optional_unique_map, open_unique_map, update_lpm_array_map,
     update_outbound_connectivity_map,
 };
-use plan::{build_routing_plan, domain_set_json, userspace_matcher_typed_sets};
+use plan::{
+    build_routing_plan_with_geodata_resolver, domain_set_json, userspace_matcher_typed_sets,
+};
 use types::MatchSetBytes;
 
 const ROUTING_MAP_NAME: &str = "routing_map";
@@ -61,10 +64,18 @@ const CONNECTIVITY_L4_UDP_LEGACY: u8 = 22;
 const CONNECTIVITY_IP_VERSION_4: u8 = 4;
 const CONNECTIVITY_IP_VERSION_6: u8 = 6;
 
+#[allow(dead_code)]
 pub(super) fn expand_resident_dns_request_qname_rules(
     rules: &[RoutingRule],
 ) -> Result<Vec<RoutingRule>, String> {
     let resolver = geodata::GeodataResolver::new(Vec::<PathBuf>::new());
+    expand_resident_dns_request_qname_rules_with_resolver(rules, &resolver)
+}
+
+pub(super) fn expand_resident_dns_request_qname_rules_with_resolver(
+    rules: &[RoutingRule],
+    resolver: &ResidentGeodataStore,
+) -> Result<Vec<RoutingRule>, String> {
     let mut geodata_report = geodata::GeodataResolutionReport::default();
     let mut rules = rules.to_vec();
     for rule in &mut rules {
@@ -124,6 +135,7 @@ fn expand_resident_dns_qname_function(
 pub(super) fn update_new_resident_routing_map(
     before_map_ids: &[u32],
     config: &Config,
+    geodata: &ResidentGeodataStore,
 ) -> Result<(Value, u32), String> {
     let current = map_ids().map_err(|err| err.to_string())?;
     let new_map_ids = current
@@ -146,6 +158,7 @@ pub(super) fn update_new_resident_routing_map(
             .as_ref()
             .map(|(fd, info)| (fd.as_raw_fd(), info)),
         config,
+        geodata,
         "new_attached_map",
         new_map_ids,
     )
@@ -156,6 +169,7 @@ pub(super) fn update_existing_resident_routing_map(
     routing_map_id: u32,
     lpm_array_map_id: Option<u32>,
     config: &Config,
+    geodata: &ResidentGeodataStore,
 ) -> Result<(Value, u32), String> {
     let routing_fd = open_map_fd(routing_map_id).map_err(|err| err.to_string())?;
     let routing_info = map_info(routing_fd.as_raw_fd()).map_err(|err| err.to_string())?;
@@ -173,6 +187,7 @@ pub(super) fn update_existing_resident_routing_map(
         lpm.as_ref().map(|(fd, info)| (fd.as_raw_fd(), info)),
         None,
         config,
+        geodata,
         "existing_loaded_map",
         Vec::new(),
     )
@@ -203,12 +218,21 @@ pub(super) fn seed_resident_outbound_connectivity_maps(config: &Config) -> Resul
     }))
 }
 
+#[allow(dead_code)]
 pub(super) fn build_resident_userspace_routing_matcher(
     config: &Config,
 ) -> Result<RoutingMatcher, String> {
-    let plan = build_routing_plan(config)?;
+    let geodata = ResidentGeodataStore::new(Vec::<PathBuf>::new());
+    build_resident_userspace_routing_matcher_with_geodata(config, &geodata)
+}
+
+pub(super) fn build_resident_userspace_routing_matcher_with_geodata(
+    config: &Config,
+    geodata: &ResidentGeodataStore,
+) -> Result<RoutingMatcher, String> {
+    let plan = build_routing_plan_with_geodata_resolver(config, geodata)?;
     let (domain_sets, lpm_sets, matches) = userspace_matcher_typed_sets(&plan)?;
-    RoutingMatcher::from_typed_sets(domain_sets, lpm_sets, matches)
+    RoutingMatcher::from_shared_typed_sets(domain_sets, lpm_sets, matches)
         .map_err(|err| format!("build resident userspace routing matcher: {err}"))
 }
 
@@ -218,6 +242,7 @@ fn update_resident_routing_map_fd(
     lpm_array: Option<(i32, &RuntimeMapInfo)>,
     connectivity: Option<(i32, &RuntimeMapInfo)>,
     config: &Config,
+    geodata: &ResidentGeodataStore,
     source: &str,
     new_map_ids: Vec<u32>,
 ) -> Result<(Value, u32), String> {
@@ -227,7 +252,7 @@ fn update_resident_routing_map_fd(
         ROUTING_MAP_KEY_SIZE,
         ROUTING_MAP_VALUE_SIZE,
     )?;
-    let plan = build_routing_plan(config)?;
+    let plan = build_routing_plan_with_geodata_resolver(config, geodata)?;
     if !plan.lpm_sets.is_empty() {
         let (lpm_fd, lpm_info) = lpm_array.ok_or_else(|| {
             "resident routing needs lpm_array_map but it was not found".to_owned()

@@ -1,6 +1,10 @@
 use super::super::geodata::geodata_report_json;
-use super::super::plan::build_routing_plan_with_asset_dirs;
+use super::super::plan::{
+    build_routing_plan_with_asset_dirs, build_routing_plan_with_geodata_resolver,
+};
+use super::super::{ResidentGeodataStore, build_resident_userspace_routing_matcher_with_geodata};
 use super::*;
+use dae_routing::DomainKey;
 #[test]
 pub(super) fn resident_routing_plan_compiles_geoip_from_asset() {
     let root = test_asset_root("geoip");
@@ -108,17 +112,31 @@ routing {
     assert_eq!(plan.geodata_report.lookups[0].output_count, 2);
     assert_eq!(plan.domain_sets.len(), 2);
     assert!(plan.domain_sets.iter().any(|set| {
-        set.key == "suffix" && set.values == vec!["suffix.fixture.invalid.test".to_owned()]
+        domain_set_matches(set, DomainKey::Suffix, &["suffix.fixture.invalid.test"])
     }));
     assert!(plan.domain_sets.iter().any(|set| {
-        set.key == "regex" && set.values == vec![r"^api[0-9]+\.example\.test$".to_owned()]
+        domain_set_matches(set, DomainKey::Regex, &[r"^api[0-9]+\.example\.test$"])
     }));
-    assert!(
-        !plan
-            .domain_sets
+    assert!(!plan.domain_sets.iter().any(|set| {
+        set.values
+            .patterns()
             .iter()
-            .any(|set| set.values.iter().any(|value| value == "keyword-test"))
-    );
+            .any(|value| value == "keyword-test")
+    }));
+}
+
+fn domain_set_matches(
+    set: &super::super::types::ResidentDomainSet,
+    key: DomainKey,
+    values: &[&str],
+) -> bool {
+    set.values.key() == key
+        && set
+            .values
+            .patterns()
+            .iter()
+            .map(String::as_str)
+            .eq(values.iter().copied())
 }
 
 #[test]
@@ -173,6 +191,93 @@ routing {
     assert!(report["raw_file_bytes_read"].as_u64().unwrap() > 0);
     assert!(report["decoded_entry_bytes_sum"].as_u64().unwrap() > 0);
     assert!(report["expanded_string_bytes_sum"].as_u64().unwrap() > 0);
+}
+
+#[test]
+pub(super) fn resident_routing_geosite_shared_sets_are_generic_across_consumers() {
+    let root = test_asset_root("shared-geosite-generic");
+    write_asset(
+        &root,
+        "test-geosite.dat",
+        geosite_list(&[geosite_entry(
+            "streaming",
+            &[(2, "media.example.test", &[][..])],
+        )]),
+    );
+    let sections = parse_config(
+        r#"
+global {
+    lan_interface: daerust0
+}
+group {
+    proxy {
+        policy: fixed(0)
+    }
+}
+routing {
+    domain(ext:'test-geosite:streaming') -> proxy
+    fallback: direct
+}
+"#,
+    )
+    .unwrap();
+    let config = build_config(&sections).unwrap();
+    let geodata = ResidentGeodataStore::new([root]);
+
+    let plan = build_routing_plan_with_geodata_resolver(&config, &geodata).unwrap();
+    assert_eq!(plan.domain_sets.len(), 1);
+    assert_eq!(geodata.shared_domain_set_count(), 1);
+
+    let matcher = build_resident_userspace_routing_matcher_with_geodata(&config, &geodata).unwrap();
+    assert_eq!(geodata.shared_domain_set_count(), 1);
+    assert_eq!(
+        matcher
+            .match_query(&dae_routing::Query::tcp(
+                "203.0.113.1".parse().unwrap(),
+                443,
+                "www.media.example.test",
+            ))
+            .unwrap(),
+        OutboundIndex(2),
+    );
+}
+
+#[test]
+pub(super) fn resident_routing_geoip_shared_prefix_sets_are_generic() {
+    let root = test_asset_root("shared-geoip-generic");
+    write_asset(
+        &root,
+        "test-geoip.dat",
+        geoip_list(&[geoip_entry(
+            "streaming",
+            &[(&[203, 0, 113, 0][..], 24)],
+            false,
+        )]),
+    );
+    let sections = parse_config(
+        r#"
+global {
+    lan_interface: daerust0
+}
+group {
+    proxy {
+        policy: fixed(0)
+    }
+}
+routing {
+    dip(ext:'test-geoip:streaming') -> proxy
+    ip(ext:'test-geoip:streaming') -> direct
+    fallback: direct
+}
+"#,
+    )
+    .unwrap();
+    let config = build_config(&sections).unwrap();
+    let geodata = ResidentGeodataStore::new([root]);
+    let plan = build_routing_plan_with_geodata_resolver(&config, &geodata).unwrap();
+
+    assert_eq!(plan.lpm_sets.len(), 2);
+    assert_eq!(geodata.shared_prefix_set_count(), 1);
 }
 
 #[test]

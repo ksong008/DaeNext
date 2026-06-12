@@ -9,8 +9,8 @@ use dae_config::{Config, DynamicFunctionValue, Function, Param, RoutingRule};
 use dae_core_types::OutboundIndex;
 use dae_ebpf_support::MAX_MATCH_SET_LEN;
 use dae_routing::{
-    DomainKey, IpPrefix as RoutingIpPrefix, RoutingDomainSet, RoutingLpmSet, RoutingMatchKind,
-    RoutingMatchSet,
+    DomainKey, IpPrefix as RoutingIpPrefix, RoutingMatchKind, RoutingMatchSet,
+    RoutingSharedDomainSet, RoutingSharedLpmSet, SharedIpPrefixSet,
 };
 use serde_json::{Value, json};
 

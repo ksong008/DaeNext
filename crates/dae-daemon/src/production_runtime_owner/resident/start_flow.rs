@@ -36,6 +36,7 @@ pub(super) fn start_with_options(
     let mut start_report_for_runtime = Value::Null;
     let (interface_attach_options, resident_interface_backend_policy) =
         resident_interface_attach_options(&options, &lan_ifaces, &wan_ifaces);
+    let geodata = ResidentGeodataStore::new(Vec::<PathBuf>::new());
 
     let result = (|| {
         let mut ok = true;
@@ -239,10 +240,11 @@ pub(super) fn start_with_options(
                                     routing_map_id,
                                     native_runtime.loaded_map_id("lpm_array_map"),
                                     config,
+                                    &geodata,
                                 )
                             })
                     } else {
-                        update_new_resident_routing_map(&before_lan_map_ids, config)
+                        update_new_resident_routing_map(&before_lan_map_ids, config, &geodata)
                     };
                     match routing_update {
                         Ok((value, id)) => {
@@ -325,6 +327,7 @@ pub(super) fn start_with_options(
                                 config,
                                 &artifact_dir,
                                 discovery.id,
+                                &geodata,
                             );
                             if let Value::Object(map) = &mut value {
                                 map.insert(

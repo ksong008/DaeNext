@@ -1,5 +1,6 @@
 use std::collections::BTreeMap;
 use std::net::{IpAddr, SocketAddr};
+use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -32,6 +33,7 @@ use dae_outbound::{
 use serde_json::Value;
 use url::Url;
 
+use super::super::resident_routing::ResidentGeodataStore;
 use super::{
     XTLS_RPRX_VISION,
     dns::{ResidentDnsPlan, build_resident_dns_plan},

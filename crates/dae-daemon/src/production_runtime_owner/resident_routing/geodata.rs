@@ -10,7 +10,11 @@ use dae_geodata::{
     DomainType, decode_entry_bytes, load_geoip_bytes, load_geoip_entry_bytes, load_geosite_bytes,
     load_geosite_entry_bytes,
 };
+use dae_routing::{DomainKey, SharedDomainSet};
 use serde_json::{Value, json};
+use sha2::{Digest, Sha256};
+
+use super::types::{IpPrefix, SharedResidentIpPrefixSet};
 
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub(super) struct GeodataResolutionReport {
@@ -35,10 +39,12 @@ pub(super) struct GeodataLookup {
 }
 
 #[derive(Debug)]
-pub(super) struct GeodataResolver {
+pub(in crate::production_runtime_owner) struct GeodataResolver {
     asset_dirs: Vec<PathBuf>,
     asset_cache: Mutex<BTreeMap<String, CachedGeodataAsset>>,
     decoded_entry_cache: Mutex<BTreeMap<DecodedEntryCacheKey, CachedDecodedEntry>>,
+    shared_domain_sets: Mutex<BTreeMap<SharedSetCacheKey, SharedDomainSet>>,
+    shared_prefix_sets: Mutex<BTreeMap<SharedSetCacheKey, SharedResidentIpPrefixSet>>,
 }
 
 #[derive(Clone, Debug)]
@@ -70,6 +76,14 @@ struct CachedDecodedEntry {
 struct DecodedEntry {
     data: Arc<Vec<u8>>,
     cache_hit: bool,
+}
+
+#[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd)]
+struct SharedSetCacheKey {
+    kind: &'static str,
+    key: String,
+    len: usize,
+    digest: [u8; 32],
 }
 
 pub(super) fn load_geoip_params(
@@ -204,7 +218,9 @@ fn split_geosite_code_attr(code: &str) -> (String, Option<String>) {
 }
 
 impl GeodataResolver {
-    pub(super) fn new(asset_dirs: impl IntoIterator<Item = impl Into<PathBuf>>) -> Self {
+    pub(in crate::production_runtime_owner) fn new(
+        asset_dirs: impl IntoIterator<Item = impl Into<PathBuf>>,
+    ) -> Self {
         let mut dirs = Vec::new();
         if let Ok(dir) = env::var("DAE_LOCATION_ASSET")
             && !dir.is_empty()
@@ -233,7 +249,73 @@ impl GeodataResolver {
             asset_dirs: dirs,
             asset_cache: Mutex::new(BTreeMap::new()),
             decoded_entry_cache: Mutex::new(BTreeMap::new()),
+            shared_domain_sets: Mutex::new(BTreeMap::new()),
+            shared_prefix_sets: Mutex::new(BTreeMap::new()),
         }
+    }
+
+    pub(in crate::production_runtime_owner) fn shared_domain_set(
+        &self,
+        key: &str,
+        values: &[String],
+    ) -> Result<SharedDomainSet, String> {
+        let key = DomainKey::try_from(key)
+            .map_err(|err| format!("resident shared domain set key: {err}"))?;
+        let cache_key = shared_string_set_key("domain", domain_key_name(key), values);
+        if let Some(cached) = self
+            .shared_domain_sets
+            .lock()
+            .map_err(|_| "geodata shared domain set cache lock poisoned".to_owned())?
+            .get(&cache_key)
+            .cloned()
+        {
+            return Ok(cached);
+        }
+        let shared = SharedDomainSet::new(values.iter().cloned(), key)
+            .map_err(|err| format!("build shared resident domain set: {err}"))?;
+        self.shared_domain_sets
+            .lock()
+            .map_err(|_| "geodata shared domain set cache lock poisoned".to_owned())?
+            .insert(cache_key, shared.clone());
+        Ok(shared)
+    }
+
+    pub(super) fn shared_prefix_set(
+        &self,
+        prefixes: Vec<IpPrefix>,
+    ) -> Result<SharedResidentIpPrefixSet, String> {
+        let cache_key = shared_prefix_set_key(&prefixes);
+        if let Some(cached) = self
+            .shared_prefix_sets
+            .lock()
+            .map_err(|_| "geodata shared prefix set cache lock poisoned".to_owned())?
+            .get(&cache_key)
+            .cloned()
+        {
+            return Ok(cached);
+        }
+        let shared = Arc::from(prefixes);
+        self.shared_prefix_sets
+            .lock()
+            .map_err(|_| "geodata shared prefix set cache lock poisoned".to_owned())?
+            .insert(cache_key, Arc::clone(&shared));
+        Ok(shared)
+    }
+
+    #[cfg(test)]
+    pub(in crate::production_runtime_owner) fn shared_domain_set_count(&self) -> usize {
+        self.shared_domain_sets
+            .lock()
+            .expect("shared domain set cache lock")
+            .len()
+    }
+
+    #[cfg(test)]
+    pub(in crate::production_runtime_owner) fn shared_prefix_set_count(&self) -> usize {
+        self.shared_prefix_sets
+            .lock()
+            .expect("shared prefix set cache lock")
+            .len()
     }
 
     fn read_asset(&self, filename: &str) -> Result<GeodataAsset, String> {
@@ -330,6 +412,44 @@ impl GeodataResolver {
             data: cached.data,
             cache_hit: false,
         }))
+    }
+}
+
+fn domain_key_name(key: DomainKey) -> &'static str {
+    match key {
+        DomainKey::Full => "full",
+        DomainKey::Keyword => "keyword",
+        DomainKey::Suffix => "suffix",
+        DomainKey::Regex => "regex",
+    }
+}
+
+fn shared_string_set_key(kind: &'static str, key: &str, values: &[String]) -> SharedSetCacheKey {
+    let mut hash = Sha256::new();
+    for value in values {
+        hash.update((value.len() as u64).to_le_bytes());
+        hash.update(value.as_bytes());
+    }
+    SharedSetCacheKey {
+        kind,
+        key: key.to_owned(),
+        len: values.len(),
+        digest: hash.finalize().into(),
+    }
+}
+
+fn shared_prefix_set_key(prefixes: &[IpPrefix]) -> SharedSetCacheKey {
+    let mut hash = Sha256::new();
+    for prefix in prefixes {
+        hash.update(prefix.addr.to_string().as_bytes());
+        hash.update([0]);
+        hash.update([prefix.bits]);
+    }
+    SharedSetCacheKey {
+        kind: "prefix",
+        key: String::new(),
+        len: prefixes.len(),
+        digest: hash.finalize().into(),
     }
 }
 

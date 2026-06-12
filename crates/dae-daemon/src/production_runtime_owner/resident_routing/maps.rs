@@ -10,7 +10,7 @@ use dae_core_types::OutboundIndex;
 use dae_ebpf_support::{RuntimeMapInfo, map_info, open_map_fd, update_map_elem_bytes};
 use serde_json::{Value, json};
 
-use super::types::{IpPrefix, OutboundConnectivityEntry};
+use super::types::{IpPrefix, OutboundConnectivityEntry, SharedResidentIpPrefixSet};
 use super::{
     BPF_F_NO_PREALLOC, BPF_MAP_CREATE, BPF_MAP_TYPE_LPM_TRIE, CONNECTIVITY_IP_VERSION_4,
     CONNECTIVITY_IP_VERSION_6, CONNECTIVITY_L4_TCP, CONNECTIVITY_L4_UDP,
@@ -20,7 +20,7 @@ use super::{
 
 pub(super) fn update_lpm_array_map(
     lpm_array_fd: i32,
-    lpm_sets: &[Vec<IpPrefix>],
+    lpm_sets: &[SharedResidentIpPrefixSet],
 ) -> Result<(), String> {
     for (index, prefixes) in lpm_sets.iter().enumerate() {
         let inner = create_lpm_map(prefixes)?;
