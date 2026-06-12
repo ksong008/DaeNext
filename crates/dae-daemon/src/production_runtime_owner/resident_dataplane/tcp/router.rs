@@ -149,10 +149,13 @@ impl ResidentTcpRouter {
                         OutboundIndex(final_outbound)
                     ));
                 };
-                let mut proxy = proxy_group.select_proxy_for_tcp()?;
-                proxy.mark = route.final_mark;
-                proxy.mptcp = self.mptcp;
-                Ok(TcpSelection::Proxy(TcpProxySelection { route, proxy }))
+                let proxy = proxy_group.select_proxy_for_tcp()?;
+                Ok(TcpSelection::Proxy(TcpProxySelection {
+                    mark: route.final_mark,
+                    mptcp: self.mptcp,
+                    route,
+                    proxy,
+                }))
             }
         }
     }
@@ -232,7 +235,9 @@ impl TcpRoutingLogMetadata {
 #[derive(Debug)]
 pub(crate) struct TcpProxySelection {
     pub(in crate::production_runtime_owner::resident_dataplane) route: TcpRouteSelection,
-    pub(in crate::production_runtime_owner::resident_dataplane) proxy: ResidentProxyPlan,
+    pub(in crate::production_runtime_owner::resident_dataplane) proxy: Arc<ResidentProxyPlan>,
+    pub(in crate::production_runtime_owner::resident_dataplane) mark: u32,
+    pub(in crate::production_runtime_owner::resident_dataplane) mptcp: bool,
 }
 
 #[derive(Debug)]

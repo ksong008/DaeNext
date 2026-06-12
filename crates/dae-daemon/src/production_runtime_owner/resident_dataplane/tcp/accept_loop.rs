@@ -191,7 +191,7 @@ pub(crate) async fn handle_tcp_connection_async_or_handoff(
         TcpSelection::Proxy(selection) => {
             let _tcp_guard = ResidentTcpConnectionGuard::new(Arc::clone(&metrics));
             let result = if matches!(
-                selection.proxy.handler,
+                &selection.proxy.handler,
                 ResidentProxyProtocolPlan::VlessVisionTcpTls { .. }
                     | ResidentProxyProtocolPlan::VlessMuxTcpTls { .. }
             ) {
@@ -206,7 +206,7 @@ pub(crate) async fn handle_tcp_connection_async_or_handoff(
                 )
                 .await
             } else if matches!(
-                selection.proxy.handler,
+                &selection.proxy.handler,
                 ResidentProxyProtocolPlan::TrojanTcpTls { .. }
                     | ResidentProxyProtocolPlan::TrojanInnerShadowsocksTcpTls { .. }
                     | ResidentProxyProtocolPlan::AnyTlsTcpTls { .. }
@@ -222,7 +222,7 @@ pub(crate) async fn handle_tcp_connection_async_or_handoff(
                 )
                 .await
             } else if matches!(
-                selection.proxy.handler,
+                &selection.proxy.handler,
                 ResidentProxyProtocolPlan::Hysteria2QuicTcp { .. }
                     | ResidentProxyProtocolPlan::TuicQuicTcp { .. }
                     | ResidentProxyProtocolPlan::JuicityQuicTcp { .. }

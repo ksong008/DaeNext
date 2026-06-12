@@ -15,7 +15,7 @@ pub(crate) async fn handle_shadowsocks_simple_obfs_http_proxy_tcp_connection_asy
     host: &str,
     path: &str,
 ) -> Result<Value, String> {
-    let mut proxy = open_plain_proxy_tcp_stream_async(&selection.proxy).await?;
+    let mut proxy = open_plain_proxy_tcp_stream_async(&selection).await?;
     let stats = relay_tcp_over_shadowsocks_simple_obfs_http_async(
         inbound,
         &mut proxy,
@@ -87,7 +87,7 @@ pub(crate) async fn handle_shadowsocks_simple_obfs_tls_proxy_tcp_connection_asyn
     salt_len: usize,
     host: &str,
 ) -> Result<Value, String> {
-    let mut proxy = open_plain_proxy_tcp_stream_async(&selection.proxy).await?;
+    let mut proxy = open_plain_proxy_tcp_stream_async(&selection).await?;
     let stats = relay_tcp_over_shadowsocks_simple_obfs_tls_async(
         inbound,
         &mut proxy,
@@ -159,7 +159,7 @@ pub(crate) async fn handle_shadowsocks_2022_simple_obfs_http_proxy_tcp_connectio
     host: &str,
     path: &str,
 ) -> Result<Value, String> {
-    let mut proxy = open_plain_proxy_tcp_stream_async(&selection.proxy).await?;
+    let mut proxy = open_plain_proxy_tcp_stream_async(&selection).await?;
     let stats = relay_tcp_over_shadowsocks_2022_simple_obfs_http_async(
         inbound,
         &mut proxy,

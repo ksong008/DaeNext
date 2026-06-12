@@ -1,14 +1,25 @@
 use super::*;
-pub(crate) async fn open_async_vless_tls_client(
+
+pub(crate) async fn open_async_vless_tls_client_with_flow(
     proxy: &ResidentProxyPlan,
+    mark: u32,
+    mptcp: bool,
 ) -> Result<AsyncVlessTlsClient, String> {
-    open_async_resident_tls_client(proxy).await
+    open_async_resident_tls_client_with_flow(proxy, mark, mptcp).await
 }
 
 pub(crate) async fn open_async_resident_tls_client(
     proxy: &ResidentProxyPlan,
 ) -> Result<AsyncResidentTlsClient, String> {
-    let tcp = open_proxy_tcp_stream_async(proxy.clone()).await?;
+    open_async_resident_tls_client_with_flow(proxy, proxy.mark, proxy.mptcp).await
+}
+
+pub(crate) async fn open_async_resident_tls_client_with_flow(
+    proxy: &ResidentProxyPlan,
+    mark: u32,
+    mptcp: bool,
+) -> Result<AsyncResidentTlsClient, String> {
+    let tcp = open_proxy_tcp_stream_async_with_flow(proxy, mark, mptcp).await?;
     match ResidentTlsProvider::from_proxy(proxy)? {
         ResidentTlsProvider::FingerprintAwareBoring => {
             open_async_boring_resident_tls_client(proxy, tcp).await
@@ -23,11 +34,19 @@ pub(crate) async fn open_async_resident_tls_client(
 }
 
 pub(crate) async fn open_proxy_tcp_stream_async(
-    proxy: ResidentProxyPlan,
+    proxy: &ResidentProxyPlan,
 ) -> Result<TokioTcpStream, String> {
-    let protocol = proxy.protocol.clone();
+    open_proxy_tcp_stream_async_with_flow(proxy, proxy.mark, proxy.mptcp).await
+}
+
+pub(crate) async fn open_proxy_tcp_stream_async_with_flow(
+    proxy: &ResidentProxyPlan,
+    mark: u32,
+    mptcp: bool,
+) -> Result<TokioTcpStream, String> {
+    let protocol = &proxy.protocol;
     let target = format!("{}:{}", proxy.server_host, proxy.server_port);
-    let connected = open_direct_tcp_connection_async(target.clone(), proxy.mark, proxy.mptcp)
+    let connected = open_direct_tcp_connection_async(target.clone(), mark, mptcp)
         .await
         .map_err(|err| format!("connect {protocol} server {target}: {err}"))?;
     connected

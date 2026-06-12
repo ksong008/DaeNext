@@ -9,7 +9,7 @@ pub(crate) async fn handle_proxy_tcp_connection_async(
     metrics: &ResidentDataplaneMetrics,
 ) -> Result<Value, String> {
     if matches!(
-        selection.proxy.handler,
+        &selection.proxy.handler,
         ResidentProxyProtocolPlan::VlessMuxTcpTls { .. }
     ) {
         return handle_vless_mux_tcp_connection_async(
@@ -83,7 +83,9 @@ pub(crate) async fn handle_proxy_tcp_connection_async(
         )
         .await;
     }
-    let mut client = open_async_vless_tls_client(&selection.proxy).await?;
+    let mut client =
+        open_async_vless_tls_client_with_flow(&selection.proxy, selection.mark, selection.mptcp)
+            .await?;
     let tls_underlay = async_tls_underlay_name(&client);
     let key = selection.proxy.vless_key()?;
     let request = packet::first_write_bytes(
@@ -144,7 +146,9 @@ pub(crate) async fn handle_vless_mux_tcp_connection_async(
     sniff: &TcpSniffReport,
     metrics: &ResidentDataplaneMetrics,
 ) -> Result<Value, String> {
-    let mut client = open_async_vless_tls_client(&selection.proxy).await?;
+    let mut client =
+        open_async_vless_tls_client_with_flow(&selection.proxy, selection.mark, selection.mptcp)
+            .await?;
     let tls_underlay = async_tls_underlay_name(&client);
     let key = selection.proxy.vless_key()?;
     let header = packet::request_header(&key, "", "tcp", "0.0.0.0:0", true, &[])
@@ -392,7 +396,9 @@ pub(crate) async fn handle_vless_websocket_tcp_connection_async(
     sniff: &TcpSniffReport,
     metrics: &ResidentDataplaneMetrics,
 ) -> Result<Value, String> {
-    let mut client = open_async_vless_tls_client(&selection.proxy).await?;
+    let mut client =
+        open_async_vless_tls_client_with_flow(&selection.proxy, selection.mark, selection.mptcp)
+            .await?;
     let tls_underlay = async_tls_underlay_name(&client);
     let key = selection.proxy.vless_key()?;
     let options =
@@ -462,7 +468,9 @@ pub(crate) async fn handle_vless_httpupgrade_tcp_connection_async(
     sniff: &TcpSniffReport,
     metrics: &ResidentDataplaneMetrics,
 ) -> Result<Value, String> {
-    let mut client = open_async_vless_tls_client(&selection.proxy).await?;
+    let mut client =
+        open_async_vless_tls_client_with_flow(&selection.proxy, selection.mark, selection.mptcp)
+            .await?;
     let tls_underlay = async_tls_underlay_name(&client);
     let key = selection.proxy.vless_key()?;
     let options =

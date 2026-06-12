@@ -8,12 +8,10 @@ pub struct ResidentTcpSelectionBenchmarkFixture {
 
 impl ResidentTcpSelectionBenchmarkFixture {
     pub fn run_once(&self) -> u64 {
-        let mut proxy = self
+        let proxy = self
             .group
             .select_proxy_for_tcp()
             .expect("resident TCP benchmark proxy selection");
-        proxy.mark = self.mark;
-        proxy.mptcp = self.mptcp;
         let chain_checksum = proxy
             .chain_parent
             .as_ref()
@@ -36,8 +34,8 @@ impl ResidentTcpSelectionBenchmarkFixture {
             ^ ((proxy.stream_path.len() as u64) << 14)
             ^ ((proxy.tls.len() as u64) << 15)
             ^ ((proxy.allow_insecure as u64) << 16)
-            ^ ((proxy.mark as u64) << 17)
-            ^ ((proxy.mptcp as u64) << 18)
+            ^ ((self.mark as u64) << 17)
+            ^ ((self.mptcp as u64) << 18)
             ^ chain_checksum
     }
 }

@@ -1,12 +1,14 @@
 use super::*;
 pub(super) async fn open_plain_proxy_tcp_stream_async(
-    proxy: &ResidentProxyPlan,
+    selection: &TcpProxySelection,
 ) -> Result<TokioTcpStream, String> {
+    let proxy = selection.proxy.as_ref();
     if let Some(parent) = proxy.chain_parent.as_deref() {
         return open_plain_proxy_tcp_stream_through_parent_async(proxy, parent).await;
     }
     let target = format!("{}:{}", proxy.server_host, proxy.server_port);
-    let connection = open_direct_tcp_connection_async(target, proxy.mark, proxy.mptcp).await?;
+    let connection =
+        open_direct_tcp_connection_async(target, selection.mark, selection.mptcp).await?;
     TokioTcpStream::from_std(connection.stream)
         .map_err(|err| format!("adopt async proxy TCP stream: {err}"))
 }

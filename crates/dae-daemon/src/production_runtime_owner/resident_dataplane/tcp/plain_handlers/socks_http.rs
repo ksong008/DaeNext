@@ -12,7 +12,7 @@ pub(crate) async fn handle_socks5_proxy_tcp_connection_async(
     username: &str,
     password: &str,
 ) -> Result<Value, String> {
-    let mut proxy = open_plain_proxy_tcp_stream_async(&selection.proxy).await?;
+    let mut proxy = open_plain_proxy_tcp_stream_async(&selection).await?;
     socks5_connect_async(&mut proxy, &selection.route.dial_target, username, password).await?;
     relay_tcp_direct_async(inbound, &mut proxy, stop, &sniff.payload, metrics)
         .await
@@ -55,7 +55,7 @@ pub(crate) async fn handle_http_proxy_tcp_connection_async(
     transport_host: &str,
     transport_path: &str,
 ) -> Result<Value, String> {
-    let mut proxy = open_plain_proxy_tcp_stream_async(&selection.proxy).await?;
+    let mut proxy = open_plain_proxy_tcp_stream_async(&selection).await?;
     http_proxy_connect_plain_async(
         &mut proxy,
         &selection.route.dial_target,
@@ -106,7 +106,9 @@ pub(crate) async fn handle_https_proxy_tcp_connection_async(
     transport_host: &str,
     transport_path: &str,
 ) -> Result<Value, String> {
-    let mut proxy = open_async_resident_tls_client(&selection.proxy).await?;
+    let mut proxy =
+        open_async_resident_tls_client_with_flow(&selection.proxy, selection.mark, selection.mptcp)
+            .await?;
     let tls_underlay = async_resident_tls_underlay_name(&proxy);
     http_proxy_connect_async(
         &mut proxy,
