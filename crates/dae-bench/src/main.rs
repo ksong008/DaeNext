@@ -1,5 +1,6 @@
 use std::alloc::{GlobalAlloc, Layout, System};
-use std::fs;
+use std::fs::{self, File};
+use std::io::{self, BufWriter, Write};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::time::Instant;
@@ -149,11 +150,43 @@ fn main() {
 
 fn run() -> Result<(), String> {
     let options = parse_args()?;
-    let mut lines = Vec::new();
+    if let Some(path) = options.output.as_ref()
+        && let Some(parent) = path.parent()
+    {
+        fs::create_dir_all(parent)
+            .map_err(|err| format!("create output dir {} failed: {err}", parent.display()))?;
+    }
+    let matched = if let Some(path) = options.output.as_ref() {
+        let file = File::create(path)
+            .map_err(|err| format!("write rust bench output {} failed: {err}", path.display()))?;
+        let mut writer = BufWriter::new(file);
+        let matched = write_benchmark_rows(&options, &mut writer)?;
+        writer
+            .flush()
+            .map_err(|err| format!("flush rust bench output {} failed: {err}", path.display()))?;
+        matched
+    } else {
+        let stdout = io::stdout();
+        let mut writer = BufWriter::new(stdout.lock());
+        let matched = write_benchmark_rows(&options, &mut writer)?;
+        writer
+            .flush()
+            .map_err(|err| format!("flush rust bench stdout failed: {err}"))?;
+        matched
+    };
+    if matched == 0 {
+        return Err(format!("no benchmark case matched {}", options.case_filter));
+    }
+    Ok(())
+}
+
+fn write_benchmark_rows<W: Write>(options: &Options, writer: &mut W) -> Result<usize, String> {
+    let mut matched = 0_usize;
     for case in bench_cases() {
         if options.case_filter != "all" && options.case_filter != case.id {
             continue;
         }
+        matched += 1;
         let iters = if options.iters == 0 {
             case.default_iters
         } else {
@@ -167,24 +200,14 @@ fn run() -> Result<(), String> {
                 iters,
                 measurement,
             );
-            lines.push(row.to_json().to_string());
+            serde_json::to_writer(&mut *writer, &row.to_json())
+                .map_err(|err| format!("serialize benchmark row {} failed: {err}", case.id))?;
+            writer
+                .write_all(b"\n")
+                .map_err(|err| format!("write benchmark row {} failed: {err}", case.id))?;
         }
     }
-    if lines.is_empty() {
-        return Err(format!("no benchmark case matched {}", options.case_filter));
-    }
-    let output = lines.join("\n") + "\n";
-    if let Some(path) = options.output {
-        if let Some(parent) = path.parent() {
-            fs::create_dir_all(parent)
-                .map_err(|err| format!("create output dir {} failed: {err}", parent.display()))?;
-        }
-        fs::write(&path, output)
-            .map_err(|err| format!("write rust bench output {} failed: {err}", path.display()))?;
-    } else {
-        print!("{output}");
-    }
-    Ok(())
+    Ok(matched)
 }
 
 fn parse_args() -> Result<Options, String> {
