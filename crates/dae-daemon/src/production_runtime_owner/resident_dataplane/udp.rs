@@ -7,7 +7,7 @@ use std::sync::{
 };
 use std::time::{Duration, Instant};
 
-use bytes::{Buf, Bytes};
+use bytes::Bytes;
 use dae_ebpf_support::open_transparent_udp_socket_bound_in_netns;
 use dae_outbound::{
     anytls::{contract as anytls_contract, link as anytls_link},
@@ -47,23 +47,20 @@ use super::execution::{append_runtime_execution_descriptor, udp_execution_descri
 use super::plan::{ResidentProxyGroupPlan, ResidentProxyPlan, ResidentProxyProtocolPlan};
 use super::tcp::{
     AsyncWebSocketPayloadReader, AsyncWebSocketPayloadState, GrpcHunkReadBuffer,
-    collect_vmess_grpc_decrypted, decode_vmess_grpc_response_stream_async, new_xhttp_session_id,
-    open_grpc_h2_stream, open_marked_quic_endpoint, open_xhttp_h2_packet_up_session,
-    resolve_hysteria2_quic_remote_async, resolve_proxy_udp_addr_async, send_grpc_hunk,
-    send_h2_data, send_xhttp_h2_packet_up_request, set_socket_mark, xhttp_padding_referer,
-    xhttp_session_path_suffix, xhttp_uri,
+    XhttpDownloadClient, XhttpPacketUpParts, XhttpUploadClient, close_xhttp_download_client,
+    close_xhttp_upload_client, collect_vmess_grpc_decrypted,
+    decode_vmess_grpc_response_stream_async, open_grpc_h2_stream, open_marked_quic_endpoint,
+    open_xhttp_packet_up_parts, poll_xhttp_download_data, resolve_hysteria2_quic_remote_async,
+    resolve_proxy_udp_addr_async, send_grpc_hunk, send_h2_data, send_xhttp_packet_up_request,
+    set_socket_mark,
 };
 use super::vision::{VisionUnpadder, vision_padding_block};
 use super::{
-    RESIDENT_CONNECT_TIMEOUT, RESIDENT_IDLE_SLEEP, RESIDENT_UDP_RESPONSE_TIMEOUT,
-    RESIDENT_UDP_SESSION_IDLE_TIMEOUT, ResidentDataplaneMetrics, VISION_COMMAND_CONTINUE,
-    VLESS_RESPONSE_VERSION, XTLS_RPRX_VISION, XUDP_COMMAND_KEEP, XUDP_COMMAND_NEW, XUDP_MUX_TARGET,
-    XUDP_NETWORK_UDP, XUDP_OPTION_DATA, resident_socket_addr_display, resident_udp_network_name,
+    RESIDENT_IDLE_SLEEP, RESIDENT_UDP_RESPONSE_TIMEOUT, RESIDENT_UDP_SESSION_IDLE_TIMEOUT,
+    ResidentDataplaneMetrics, VISION_COMMAND_CONTINUE, VLESS_RESPONSE_VERSION, XTLS_RPRX_VISION,
+    XUDP_COMMAND_KEEP, XUDP_COMMAND_NEW, XUDP_MUX_TARGET, XUDP_NETWORK_UDP, XUDP_OPTION_DATA,
+    resident_socket_addr_display, resident_udp_network_name,
 };
-use quinn::crypto::rustls::QuicClientConfig;
-use rustls::client::danger::{HandshakeSignatureValid, ServerCertVerified, ServerCertVerifier};
-use rustls::pki_types::{CertificateDer, ServerName, UnixTime};
-use rustls::{DigitallySignedStruct, RootCertStore, SignatureScheme};
 
 mod worker;
 pub(super) use self::worker::*;

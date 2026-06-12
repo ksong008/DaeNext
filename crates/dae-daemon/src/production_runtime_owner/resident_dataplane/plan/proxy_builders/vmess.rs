@@ -123,6 +123,7 @@ pub(crate) fn build_vmess_proxy_plan(
         net,
         stream_host,
         stream_path,
+        xhttp_download: None,
         tls: tls.to_owned(),
         allow_insecure: false,
         tls_fragment: if tls == "tls" {

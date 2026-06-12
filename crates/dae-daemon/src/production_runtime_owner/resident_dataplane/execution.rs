@@ -216,6 +216,15 @@ pub(super) fn tcp_execution_descriptor(label: &str) -> RuntimeExecutionDescripto
         .with_stream_wrapper("xhttp")
         .with_transport_underlay("tcp")
         .with_route_action("proxy"),
+        TcpExecutionLabel::AsyncProxyXhttpH3Tls => RuntimeExecutionDescriptor::new(
+            label,
+            "wrapped-stream-relay",
+            "stream-transport",
+            "tcp",
+        )
+        .with_stream_wrapper("xhttp")
+        .with_transport_underlay("quinn-h3")
+        .with_route_action("proxy"),
         TcpExecutionLabel::AsyncProxyFrameTls => {
             RuntimeExecutionDescriptor::new(label, "frame-stream-relay", "stream-transport", "tcp")
                 .with_stream_wrapper("frame-stream")

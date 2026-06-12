@@ -63,6 +63,16 @@ impl ResidentTlsClientConfigKey {
                 .map(ResidentRealityConfigKey::from_plan),
         }
     }
+
+    pub(super) fn from_xhttp_endpoint(endpoint: &ResidentXhttpEndpointPlan) -> Self {
+        Self {
+            flow: String::new(),
+            alpn: endpoint.alpn.clone(),
+            allow_insecure: endpoint.allow_insecure,
+            utls_fingerprint: None,
+            reality: None,
+        }
+    }
 }
 
 impl ResidentTlsFingerprintConfigKey {
@@ -151,6 +161,43 @@ pub(super) fn rustls_vless_client_config(
     let mut cache = cache
         .lock()
         .map_err(|_| "VLESS rustls client config cache lock poisoned".to_owned())?;
+    Ok(cache.insert_or_get(key, config))
+}
+
+pub(super) fn rustls_xhttp_endpoint_client_config(
+    endpoint: &ResidentXhttpEndpointPlan,
+) -> Result<Arc<ClientConfig>, String> {
+    let key = ResidentTlsClientConfigKey::from_xhttp_endpoint(endpoint);
+    let cache =
+        RUSTLS_CLIENT_CONFIG_CACHE.get_or_init(|| Mutex::new(ResidentTlsConfigCache::default()));
+    {
+        let mut cache = cache
+            .lock()
+            .map_err(|_| "xHTTP rustls client config cache lock poisoned".to_owned())?;
+        if let Some(config) = cache.get(&key) {
+            return Ok(config);
+        }
+    }
+    let builder = ClientConfig::builder();
+    let mut config = if endpoint.allow_insecure {
+        builder
+            .dangerous()
+            .with_custom_certificate_verifier(ResidentInsecureCertVerifier::new())
+            .with_no_client_auth()
+    } else {
+        let mut roots = RootCertStore::empty();
+        roots.extend(webpki_roots::TLS_SERVER_ROOTS.iter().cloned());
+        builder.with_root_certificates(roots).with_no_client_auth()
+    };
+    config.alpn_protocols = endpoint
+        .alpn
+        .iter()
+        .map(|value| value.as_bytes().to_vec())
+        .collect();
+    let config = Arc::new(config);
+    let mut cache = cache
+        .lock()
+        .map_err(|_| "xHTTP rustls client config cache lock poisoned".to_owned())?;
     Ok(cache.insert_or_get(key, config))
 }
 

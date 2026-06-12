@@ -70,6 +70,7 @@ use super::client::{
     AsyncResidentTlsClient, AsyncVlessTlsClient, async_resident_tls_underlay_name,
     async_tls_underlay_name, open_async_resident_tls_client,
     open_async_resident_tls_client_with_flow, open_async_vless_tls_client_with_flow,
+    open_async_xhttp_endpoint_tls_client,
 };
 use super::direct::{
     DirectTcpConnection, DirectTcpRelayStats, open_direct_tcp_connection_async,
@@ -77,7 +78,9 @@ use super::direct::{
 };
 use super::events::append_event;
 use super::execution::{append_runtime_execution_descriptor, tcp_execution_descriptor};
-use super::plan::{ResidentProxyGroupPlan, ResidentProxyPlan, ResidentProxyProtocolPlan};
+use super::plan::{
+    ResidentProxyGroupPlan, ResidentProxyPlan, ResidentProxyProtocolPlan, ResidentXhttpEndpointPlan,
+};
 use super::vision::{
     VisionInnerTlsState, VisionUnpadder, VisionUplinkMode, drain_vision_uplink_async,
 };
@@ -126,9 +129,10 @@ use self::vmess_handlers::*;
 mod transport_helpers;
 use self::transport_helpers::*;
 pub(crate) use self::transport_helpers::{
-    GrpcHunkReadBuffer, collect_vmess_grpc_decrypted, decode_vmess_grpc_response_stream_async,
-    new_xhttp_session_id, open_xhttp_h2_packet_up_session, send_grpc_hunk, send_h2_data,
-    send_xhttp_h2_packet_up_request, xhttp_padding_referer, xhttp_session_path_suffix, xhttp_uri,
+    GrpcHunkReadBuffer, XhttpDownloadClient, XhttpPacketUpParts, XhttpUploadClient,
+    close_xhttp_download_client, close_xhttp_upload_client, collect_vmess_grpc_decrypted,
+    decode_vmess_grpc_response_stream_async, open_xhttp_packet_up_parts, poll_xhttp_download_data,
+    relay_tcp_over_xhttp_packet_up, send_grpc_hunk, send_h2_data, send_xhttp_packet_up_request,
 };
 mod stream_helpers;
 use self::stream_helpers::*;

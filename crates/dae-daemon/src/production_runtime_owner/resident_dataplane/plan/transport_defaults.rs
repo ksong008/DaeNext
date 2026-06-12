@@ -43,15 +43,6 @@ pub(super) fn resident_xhttp_stream_path(path: &str) -> String {
     }
 }
 
-pub(super) fn resident_xhttp_extra_is_empty(extra: &str) -> bool {
-    let extra = extra.trim();
-    if extra.is_empty() {
-        return true;
-    }
-    serde_json::from_str::<Value>(extra)
-        .is_ok_and(|value| value.as_object().is_some_and(|object| object.is_empty()))
-}
-
 pub(super) fn resident_grpc_service_name(service_name: &str) -> String {
     if service_name.is_empty() {
         "GunService".to_owned()

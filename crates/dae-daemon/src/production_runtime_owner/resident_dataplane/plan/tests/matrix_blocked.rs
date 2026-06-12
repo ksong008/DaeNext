@@ -531,6 +531,43 @@ pub(super) fn resident_dataplane_plan_admits_vless_xhttp_h3_packet_up() {
 }
 
 #[test]
+pub(super) fn resident_dataplane_plan_admits_vless_xhttp_download_settings() {
+    let config = parse_config(
+        r#"
+        global {
+        lan_interface: daerust0
+        allow_insecure: false
+        so_mark_from_dae: 1234
+        mptcp: false
+        }
+        routing {
+        fallback: direct
+        }
+        "#,
+    );
+    let proxy = build_resident_proxy_plan_for_node(
+        &config,
+        "proxy".to_owned(),
+        "standard_import".to_owned(),
+        vless_xhttp_parser_fixture_url(
+            "packet-up",
+            "h2",
+            r#"{"downloadSettings":{"address":"download.transport.invalid","port":18444,"network":"xhttp","security":"tls","tlsSettings":{"serverName":"download.sni.invalid","alpn":["h3"],"allowInsecure":true},"xhttpSettings":{"host":"download.host.invalid","path":"/down?ed=4096","mode":"packet-up"}}}"#,
+        ),
+    )
+    .unwrap();
+
+    let download = proxy.xhttp_download.as_ref().unwrap();
+    assert_eq!(download.server_host, "download.transport.invalid");
+    assert_eq!(download.server_port, 18444);
+    assert_eq!(download.server_name, "download.sni.invalid");
+    assert_eq!(download.alpn, vec!["h3".to_owned()]);
+    assert_eq!(download.stream_host, "download.host.invalid");
+    assert_eq!(download.stream_path, "/down/?ed=4096");
+    assert!(download.allow_insecure);
+}
+
+#[test]
 pub(super) fn resident_dataplane_plan_rejects_unimplemented_vless_xhttp_shapes() {
     let config = parse_config(
         r#"
@@ -554,7 +591,12 @@ pub(super) fn resident_dataplane_plan_rejects_unimplemented_vless_xhttp_shapes()
         (
             "xhttp_extra",
             vless_xhttp_parser_fixture_url("packet-up", "h2", r#"{"xmux":{"maxConnections":2}}"#),
-            "admits default extra settings only",
+            "unsupported fields",
+        ),
+        (
+            "xhttp_http1_only",
+            vless_xhttp_parser_fixture_url("packet-up", "http/1.1", ""),
+            "admits h2 or h3 ALPN only",
         ),
     ] {
         let err =

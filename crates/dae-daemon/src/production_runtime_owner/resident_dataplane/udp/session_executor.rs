@@ -1,4 +1,4 @@
-use std::future::{Future, poll_fn};
+use std::future::poll_fn;
 use std::pin::Pin;
 use std::task::Poll;
 
@@ -399,14 +399,13 @@ impl VlessXudpStreamSession {
 
 #[derive(Default)]
 pub(super) struct VlessXhttpH2UdpSession {
-    h2_sender: Option<h2::client::SendRequest<Bytes>>,
-    h2_recv: Option<h2::RecvStream>,
-    connection_task: Option<tokio::task::JoinHandle<()>>,
+    upload: Option<XhttpUploadClient>,
+    download: Option<XhttpDownloadClient>,
     session_id: Option<String>,
     seq: u64,
     response_header_seen: bool,
     response_plaintext: Vec<u8>,
-    tls_underlay: Option<&'static str>,
+    upload_underlay: Option<&'static str>,
 }
 
 impl VlessXhttpH2UdpSession {
@@ -437,7 +436,7 @@ impl VlessXhttpH2UdpSession {
         } else {
             vless_udp_length_frame(payload)?
         };
-        self.send_packet(proxy, Bytes::from(request)).await?;
+        self.send_packet(Bytes::from(request)).await?;
         if let Some(response) = self.poll_response().await? {
             Ok(response)
         } else {
@@ -446,38 +445,36 @@ impl VlessXhttpH2UdpSession {
     }
 
     async fn ensure_open(&mut self, proxy: &ResidentProxyPlan) -> Result<(), String> {
-        if self.h2_sender.is_some() && self.h2_recv.is_some() && self.session_id.is_some() {
+        if self.upload.is_some() && self.download.is_some() && self.session_id.is_some() {
             return Ok(());
         }
-        let client = open_async_resident_tls_client(proxy).await?;
-        self.tls_underlay = Some(async_resident_tls_underlay_name(&client));
-        let session_id = new_xhttp_session_id();
-        let (h2_sender, h2_recv, connection_task) =
-            open_xhttp_h2_packet_up_session(client, proxy, &session_id).await?;
-        self.h2_sender = Some(h2_sender);
-        self.h2_recv = Some(h2_recv);
-        self.connection_task = Some(connection_task);
+        let XhttpPacketUpParts {
+            session_id,
+            upload,
+            download,
+            upload_underlay,
+            ..
+        } = open_xhttp_packet_up_parts(proxy, proxy.mark, proxy.mptcp).await?;
+        self.upload = Some(upload);
+        self.download = Some(download);
         self.session_id = Some(session_id);
+        self.upload_underlay = Some(upload_underlay);
         self.seq = 0;
         self.response_header_seen = false;
         self.response_plaintext.clear();
         Ok(())
     }
 
-    async fn send_packet(
-        &mut self,
-        proxy: &ResidentProxyPlan,
-        payload: Bytes,
-    ) -> Result<(), String> {
+    async fn send_packet(&mut self, payload: Bytes) -> Result<(), String> {
         let session_id = self
             .session_id
             .as_deref()
             .ok_or_else(|| "VLESS xHTTP UDP session id is not initialized".to_owned())?;
-        let sender = self
-            .h2_sender
+        let upload = self
+            .upload
             .as_mut()
-            .ok_or_else(|| "VLESS xHTTP UDP HTTP/2 sender is not initialized".to_owned())?;
-        send_xhttp_h2_packet_up_request(sender, proxy, session_id, self.seq, payload).await?;
+            .ok_or_else(|| "VLESS xHTTP UDP upload client is not initialized".to_owned())?;
+        send_xhttp_packet_up_request(upload, session_id, self.seq, payload).await?;
         self.seq = self.seq.saturating_add(1);
         Ok(())
     }
@@ -486,46 +483,26 @@ impl VlessXhttpH2UdpSession {
         if let Some(payload) = self.try_pop_response_payload()? {
             return Ok(Some(self.response_result(payload)));
         }
-        let data = {
-            let recv = match self.h2_recv.as_mut() {
-                Some(recv) => recv,
-                None => return Ok(None),
-            };
-            let data_future = recv.data();
-            tokio::pin!(data_future);
-            poll_fn(|cx| match data_future.as_mut().poll(cx) {
-                Poll::Ready(value) => Poll::Ready(Some(value)),
-                Poll::Pending => Poll::Ready(None),
-            })
-            .await
+        let Some(download) = self.download.as_mut() else {
+            return Ok(None);
         };
-        match data {
-            Some(Some(Ok(bytes))) => {
-                if let Some(recv) = self.h2_recv.as_mut() {
-                    recv.flow_control()
-                        .release_capacity(bytes.len())
-                        .map_err(|err| {
-                            format!("release VLESS xHTTP UDP HTTP/2 download capacity: {err}")
-                        })?;
-                }
+        match poll_xhttp_download_data(download).await? {
+            Some(bytes) => {
                 self.response_plaintext.extend_from_slice(&bytes);
                 self.try_pop_response_payload()
                     .map(|payload| payload.map(|payload| self.response_result(payload)))
             }
-            Some(Some(Err(err))) => {
-                Err(format!("read VLESS xHTTP UDP HTTP/2 download data: {err}"))
-            }
-            Some(None) => Err("VLESS xHTTP UDP HTTP/2 download stream closed".to_owned()),
             None => Ok(None),
         }
     }
 
     async fn shutdown(&mut self) {
-        if let Some(task) = self.connection_task.take() {
-            task.abort();
+        if let Some(download) = self.download.take() {
+            close_xhttp_download_client(download).await;
         }
-        self.h2_sender = None;
-        self.h2_recv = None;
+        if let Some(upload) = self.upload.take() {
+            close_xhttp_upload_client(upload).await;
+        }
         self.session_id = None;
     }
 
@@ -563,24 +540,21 @@ impl VlessXhttpH2UdpSession {
         UdpExchangeResult::new(payload, "tls-udp-over-tcp")
             .with_session_executor("tokio-xhttp-h2-packet-up")
             .with_underlay_reuse("tls-h2-session-reused")
-            .with_tls_underlay(self.tls_underlay.unwrap_or("standard-tls"))
+            .with_tls_underlay(self.upload_underlay.unwrap_or("standard-tls"))
     }
 
     fn pending_response_result(&self) -> UdpExchangeResult {
         UdpExchangeResult::pending_response("tls-udp-over-tcp")
             .with_session_executor("tokio-xhttp-h2-packet-up")
             .with_underlay_reuse("tls-h2-session-reused")
-            .with_tls_underlay(self.tls_underlay.unwrap_or("standard-tls"))
+            .with_tls_underlay(self.upload_underlay.unwrap_or("standard-tls"))
     }
 }
 
 #[derive(Default)]
 pub(super) struct VlessXhttpH3UdpSession {
-    endpoint: Option<quinn::Endpoint>,
-    connection: Option<quinn::Connection>,
-    h3_client: Option<h3::client::SendRequest<h3_quinn::OpenStreams, Bytes>>,
-    h3_recv: Option<h3::client::RequestStream<h3_quinn::BidiStream<Bytes>, Bytes>>,
-    h3_driver_task: Option<tokio::task::JoinHandle<()>>,
+    upload: Option<XhttpUploadClient>,
+    download: Option<XhttpDownloadClient>,
     session_id: Option<String>,
     seq: u64,
     response_header_seen: bool,
@@ -615,7 +589,7 @@ impl VlessXhttpH3UdpSession {
         } else {
             vless_udp_length_frame(payload)?
         };
-        self.send_packet(proxy, Bytes::from(request)).await?;
+        self.send_packet(Bytes::from(request)).await?;
         if let Some(response) = self.poll_response().await? {
             Ok(response)
         } else {
@@ -624,46 +598,17 @@ impl VlessXhttpH3UdpSession {
     }
 
     async fn ensure_open(&mut self, proxy: &ResidentProxyPlan) -> Result<(), String> {
-        if self.h3_client.is_some() && self.h3_recv.is_some() && self.session_id.is_some() {
+        if self.upload.is_some() && self.download.is_some() && self.session_id.is_some() {
             return Ok(());
         }
-        let mut endpoint = open_marked_quic_endpoint(proxy.mark)?;
-        endpoint.set_default_client_config(build_xhttp_h3_client_config(proxy.allow_insecure)?);
-        let remote = resolve_proxy_udp_addr_async(proxy).await?;
-        let connection = endpoint
-            .connect(remote, &proxy.server_name)
-            .map_err(|err| format!("connect xHTTP H3 QUIC endpoint: {err}"))?
-            .await
-            .map_err(|err| format!("await xHTTP H3 QUIC connect: {err}"))?;
-        let h3_connection = h3_quinn::Connection::new(connection.clone());
-        let (mut driver, h3_client) = h3::client::new(h3_connection)
-            .await
-            .map_err(|err| format!("create xHTTP H3 client: {err:?}"))?;
-        let h3_driver_task = tokio::spawn(async move {
-            let _ = poll_fn(|cx| driver.poll_close(cx)).await;
-        });
-        let session_id = new_xhttp_session_id();
-        let mut h3_recv = open_xhttp_h3_download_stream(proxy, h3_client.clone(), &session_id)
-            .await
-            .inspect_err(|_| h3_driver_task.abort())?;
-        let response = h3_recv
-            .recv_response()
-            .await
-            .map_err(|err| format!("read xHTTP H3 download response: {err:?}"))?;
-        if !response.status().is_success() {
-            h3_driver_task.abort();
-            connection.close(0_u32.into(), b"resident xhttp h3 download status failed");
-            endpoint.wait_idle().await;
-            return Err(format!(
-                "xHTTP H3 download response status {}",
-                response.status()
-            ));
-        }
-        self.endpoint = Some(endpoint);
-        self.connection = Some(connection);
-        self.h3_client = Some(h3_client);
-        self.h3_recv = Some(h3_recv);
-        self.h3_driver_task = Some(h3_driver_task);
+        let XhttpPacketUpParts {
+            session_id,
+            upload,
+            download,
+            ..
+        } = open_xhttp_packet_up_parts(proxy, proxy.mark, proxy.mptcp).await?;
+        self.upload = Some(upload);
+        self.download = Some(download);
         self.session_id = Some(session_id);
         self.seq = 0;
         self.response_header_seen = false;
@@ -671,20 +616,16 @@ impl VlessXhttpH3UdpSession {
         Ok(())
     }
 
-    async fn send_packet(
-        &mut self,
-        proxy: &ResidentProxyPlan,
-        payload: Bytes,
-    ) -> Result<(), String> {
+    async fn send_packet(&mut self, payload: Bytes) -> Result<(), String> {
         let session_id = self
             .session_id
             .as_deref()
             .ok_or_else(|| "VLESS xHTTP H3 UDP session id is not initialized".to_owned())?;
-        let client = self
-            .h3_client
+        let upload = self
+            .upload
             .as_mut()
-            .ok_or_else(|| "VLESS xHTTP H3 client is not initialized".to_owned())?;
-        send_xhttp_h3_packet_up_request(client, proxy, session_id, self.seq, payload).await?;
+            .ok_or_else(|| "VLESS xHTTP H3 upload client is not initialized".to_owned())?;
+        send_xhttp_packet_up_request(upload, session_id, self.seq, payload).await?;
         self.seq = self.seq.saturating_add(1);
         Ok(())
     }
@@ -693,44 +634,25 @@ impl VlessXhttpH3UdpSession {
         if let Some(payload) = self.try_pop_response_payload()? {
             return Ok(Some(self.response_result(payload)));
         }
-        let data = {
-            let recv = match self.h3_recv.as_mut() {
-                Some(recv) => recv,
-                None => return Ok(None),
-            };
-            let data_future = recv.recv_data();
-            tokio::pin!(data_future);
-            poll_fn(|cx| match data_future.as_mut().poll(cx) {
-                Poll::Ready(value) => Poll::Ready(Some(value)),
-                Poll::Pending => Poll::Ready(None),
-            })
-            .await
+        let Some(download) = self.download.as_mut() else {
+            return Ok(None);
         };
-        match data {
-            Some(Ok(Some(mut chunk))) => {
-                let remaining = chunk.remaining();
-                let bytes = chunk.copy_to_bytes(remaining);
+        match poll_xhttp_download_data(download).await? {
+            Some(bytes) => {
                 self.response_plaintext.extend_from_slice(&bytes);
                 self.try_pop_response_payload()
                     .map(|payload| payload.map(|payload| self.response_result(payload)))
             }
-            Some(Ok(None)) => Err("VLESS xHTTP H3 download stream closed".to_owned()),
-            Some(Err(err)) => Err(format!("read VLESS xHTTP H3 download data: {err:?}")),
             None => Ok(None),
         }
     }
 
     async fn shutdown(&mut self) {
-        self.h3_client = None;
-        self.h3_recv = None;
-        if let Some(task) = self.h3_driver_task.take() {
-            task.abort();
+        if let Some(download) = self.download.take() {
+            close_xhttp_download_client(download).await;
         }
-        if let Some(connection) = self.connection.take() {
-            connection.close(0_u32.into(), b"resident xhttp h3 udp session done");
-        }
-        if let Some(endpoint) = self.endpoint.take() {
-            endpoint.wait_idle().await;
+        if let Some(upload) = self.upload.take() {
+            close_xhttp_upload_client(upload).await;
         }
         self.session_id = None;
     }
@@ -755,202 +677,6 @@ impl VlessXhttpH3UdpSession {
             .with_session_executor("tokio-xhttp-h3-packet-up")
             .with_underlay_reuse("quic-h3-session-reused")
             .with_quic_underlay("quinn-h3")
-    }
-}
-
-async fn open_xhttp_h3_download_stream(
-    proxy: &ResidentProxyPlan,
-    mut client: h3::client::SendRequest<h3_quinn::OpenStreams, Bytes>,
-    session_id: &str,
-) -> Result<h3::client::RequestStream<h3_quinn::BidiStream<Bytes>, Bytes>, String> {
-    let request = xhttp_h3_request(
-        http::Method::GET,
-        proxy,
-        &xhttp_session_path_suffix(session_id, None),
-        false,
-    )?;
-    let mut stream = time::timeout(RESIDENT_CONNECT_TIMEOUT, client.send_request(request))
-        .await
-        .map_err(|_| "xHTTP H3 download request timeout".to_owned())?
-        .map_err(|err| format!("send xHTTP H3 download request: {err:?}"))?;
-    time::timeout(RESIDENT_CONNECT_TIMEOUT, stream.finish())
-        .await
-        .map_err(|_| "finish xHTTP H3 download request timeout".to_owned())?
-        .map_err(|err| format!("finish xHTTP H3 download request: {err:?}"))?;
-    Ok(stream)
-}
-
-async fn send_xhttp_h3_packet_up_request(
-    client: &mut h3::client::SendRequest<h3_quinn::OpenStreams, Bytes>,
-    proxy: &ResidentProxyPlan,
-    session_id: &str,
-    seq: u64,
-    payload: Bytes,
-) -> Result<(), String> {
-    let request = xhttp_h3_request(
-        http::Method::POST,
-        proxy,
-        &xhttp_session_path_suffix(session_id, Some(seq)),
-        true,
-    )?;
-    let mut stream = time::timeout(RESIDENT_CONNECT_TIMEOUT, client.send_request(request))
-        .await
-        .map_err(|_| "xHTTP H3 packet-up request timeout".to_owned())?
-        .map_err(|err| format!("send xHTTP H3 packet-up request: {err:?}"))?;
-    time::timeout(RESIDENT_CONNECT_TIMEOUT, stream.send_data(payload))
-        .await
-        .map_err(|_| "send xHTTP H3 packet-up body timeout".to_owned())?
-        .map_err(|err| format!("send xHTTP H3 packet-up body: {err:?}"))?;
-    time::timeout(RESIDENT_CONNECT_TIMEOUT, stream.finish())
-        .await
-        .map_err(|_| "finish xHTTP H3 packet-up body timeout".to_owned())?
-        .map_err(|err| format!("finish xHTTP H3 packet-up body: {err:?}"))?;
-    let response = time::timeout(RESIDENT_CONNECT_TIMEOUT, stream.recv_response())
-        .await
-        .map_err(|_| "xHTTP H3 packet-up response timeout".to_owned())?
-        .map_err(|err| format!("recv xHTTP H3 packet-up response: {err:?}"))?;
-    if !response.status().is_success() {
-        return Err(format!(
-            "xHTTP H3 packet-up response status {}",
-            response.status()
-        ));
-    }
-    drain_xhttp_h3_response_body(stream).await
-}
-
-async fn drain_xhttp_h3_response_body(
-    mut stream: h3::client::RequestStream<h3_quinn::BidiStream<Bytes>, Bytes>,
-) -> Result<(), String> {
-    loop {
-        let chunk = time::timeout(RESIDENT_CONNECT_TIMEOUT, stream.recv_data())
-            .await
-            .map_err(|_| "xHTTP H3 packet-up response body timeout".to_owned())?
-            .map_err(|err| format!("read xHTTP H3 packet-up response body: {err:?}"))?;
-        if chunk.is_none() {
-            return Ok(());
-        }
-    }
-}
-
-fn xhttp_h3_request(
-    method: http::Method,
-    proxy: &ResidentProxyPlan,
-    path_suffix: &str,
-    has_body: bool,
-) -> Result<http::Request<()>, String> {
-    let uri = xhttp_uri(proxy, path_suffix);
-    let referer = xhttp_padding_referer(&xhttp_uri(proxy, ""));
-    let mut builder = http::Request::builder()
-        .method(method)
-        .uri(uri)
-        .header(http::header::USER_AGENT, "Mozilla/5.0")
-        .header(http::header::ACCEPT, "*/*")
-        .header(http::header::ACCEPT_LANGUAGE, "en-US,en;q=0.9")
-        .header(http::header::CACHE_CONTROL, "no-cache")
-        .header("pragma", "no-cache")
-        .header(http::header::REFERER, referer);
-    if has_body {
-        builder = builder.header(http::header::CONTENT_TYPE, "application/grpc");
-    }
-    builder
-        .body(())
-        .map_err(|err| format!("build xHTTP H3 request: {err}"))
-}
-
-fn build_xhttp_h3_client_config(allow_insecure: bool) -> Result<quinn::ClientConfig, String> {
-    let mut crypto = if allow_insecure {
-        rustls::ClientConfig::builder_with_protocol_versions(&[&rustls::version::TLS13])
-            .dangerous()
-            .with_custom_certificate_verifier(AcceptAnyXhttpH3Verifier::new())
-            .with_no_client_auth()
-    } else {
-        let mut roots = RootCertStore::empty();
-        roots.extend(webpki_roots::TLS_SERVER_ROOTS.iter().cloned());
-        rustls::ClientConfig::builder_with_protocol_versions(&[&rustls::version::TLS13])
-            .with_root_certificates(roots)
-            .with_no_client_auth()
-    };
-    crypto.alpn_protocols = vec![b"h3".to_vec()];
-    let mut config = quinn::ClientConfig::new(Arc::new(
-        QuicClientConfig::try_from(crypto)
-            .map_err(|err| format!("xHTTP H3 client QUIC TLS config: {err}"))?,
-    ));
-    config.transport_config(Arc::new(xhttp_h3_transport_config()?));
-    Ok(config)
-}
-
-fn xhttp_h3_transport_config() -> Result<quinn::TransportConfig, String> {
-    let mut transport = quinn::TransportConfig::default();
-    transport.keep_alive_interval(Some(Duration::from_secs(
-        dae_outbound::shared_transport::XHTTP_H3_KEEPALIVE_SECS,
-    )));
-    transport.max_idle_timeout(Some(
-        Duration::from_secs(dae_outbound::shared_transport::XHTTP_H3_HANDSHAKE_IDLE_TIMEOUT_SECS)
-            .try_into()
-            .map_err(|err| format!("xHTTP H3 idle timeout config: {err}"))?,
-    ));
-    transport.datagram_receive_buffer_size(None);
-    transport.datagram_send_buffer_size(0);
-    Ok(transport)
-}
-
-#[derive(Debug)]
-struct AcceptAnyXhttpH3Verifier {
-    provider: Arc<rustls::crypto::CryptoProvider>,
-}
-
-impl AcceptAnyXhttpH3Verifier {
-    fn new() -> Arc<Self> {
-        Arc::new(Self {
-            provider: Arc::new(rustls::crypto::aws_lc_rs::default_provider()),
-        })
-    }
-}
-
-impl ServerCertVerifier for AcceptAnyXhttpH3Verifier {
-    fn verify_server_cert(
-        &self,
-        _end_entity: &CertificateDer<'_>,
-        _intermediates: &[CertificateDer<'_>],
-        _server_name: &ServerName<'_>,
-        _ocsp: &[u8],
-        _now: UnixTime,
-    ) -> Result<ServerCertVerified, rustls::Error> {
-        Ok(ServerCertVerified::assertion())
-    }
-
-    fn verify_tls12_signature(
-        &self,
-        message: &[u8],
-        cert: &CertificateDer<'_>,
-        dss: &DigitallySignedStruct,
-    ) -> Result<HandshakeSignatureValid, rustls::Error> {
-        rustls::crypto::verify_tls12_signature(
-            message,
-            cert,
-            dss,
-            &self.provider.signature_verification_algorithms,
-        )
-    }
-
-    fn verify_tls13_signature(
-        &self,
-        message: &[u8],
-        cert: &CertificateDer<'_>,
-        dss: &DigitallySignedStruct,
-    ) -> Result<HandshakeSignatureValid, rustls::Error> {
-        rustls::crypto::verify_tls13_signature(
-            message,
-            cert,
-            dss,
-            &self.provider.signature_verification_algorithms,
-        )
-    }
-
-    fn supported_verify_schemes(&self) -> Vec<SignatureScheme> {
-        self.provider
-            .signature_verification_algorithms
-            .supported_schemes()
     }
 }
 

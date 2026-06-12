@@ -114,14 +114,20 @@ pub(crate) async fn handle_vless_xhttp_h2_tcp_connection_async(
     sniff: &TcpSniffReport,
     metrics: &ResidentDataplaneMetrics,
 ) -> Result<Value, String> {
-    let client =
-        open_async_vless_tls_client_with_flow(&selection.proxy, selection.mark, selection.mptcp)
-            .await?;
-    let tls_underlay = async_tls_underlay_name(&client);
     let key = selection.proxy.vless_key()?;
-    let session_id = new_xhttp_session_id();
-    let (mut h2_send, mut h2_recv, connection_task) =
-        open_xhttp_h2_packet_up_session(client, &selection.proxy, &session_id).await?;
+    let XhttpPacketUpParts {
+        session_id,
+        mut upload,
+        mut download,
+        upload_underlay,
+        download_separate,
+    } = open_xhttp_packet_up_parts(&selection.proxy, selection.mark, selection.mptcp).await?;
+    let executor_label =
+        if selection.proxy.alpn.len() == 1 && selection.proxy.alpn[0].eq_ignore_ascii_case("h3") {
+            "async-proxy-xhttp-h3-tls"
+        } else {
+            "async-proxy-xhttp-h2-tls"
+        };
     let request = packet::first_write_bytes(
         &key,
         &selection.proxy.flow,
@@ -139,20 +145,12 @@ pub(crate) async fn handle_vless_xhttp_h2_tcp_connection_async(
     }
     let result = async {
         let mut seq = 0_u64;
-        send_xhttp_h2_packet_up_request(
-            &mut h2_send,
-            &selection.proxy,
-            &session_id,
-            seq,
-            Bytes::from(request),
-        )
-        .await?;
+        send_xhttp_packet_up_request(&mut upload, &session_id, seq, Bytes::from(request)).await?;
         seq = seq.saturating_add(1);
-        relay_tcp_over_xhttp_h2_packet_up(
+        relay_tcp_over_xhttp_packet_up(
             inbound,
-            &mut h2_send,
-            &mut h2_recv,
-            &selection.proxy,
+            &mut upload,
+            &mut download,
             &session_id,
             seq,
             stop,
@@ -162,7 +160,8 @@ pub(crate) async fn handle_vless_xhttp_h2_tcp_connection_async(
         .await
     }
     .await;
-    connection_task.abort();
+    close_xhttp_download_client(download).await;
+    close_xhttp_upload_client(upload).await;
 
     result
         .map(|stats| {
@@ -173,17 +172,22 @@ pub(crate) async fn handle_vless_xhttp_h2_tcp_connection_async(
                 sniff,
                 "vless",
                 &stats,
-                "async-proxy-xhttp-h2-tls",
+                executor_label,
             );
-            event["tls_underlay"] = json!(tls_underlay);
+            event["tls_underlay"] = json!(upload_underlay);
             event["stream_wrapper"] = json!("xhttp");
             event["xhttp_mode"] = json!("packet-up");
-            event["xhttp_alpn"] = json!("h2");
+            event["xhttp_alpn"] = json!(if executor_label == "async-proxy-xhttp-h3-tls" {
+                "h3"
+            } else {
+                "h2"
+            });
+            event["xhttp_download_separate"] = json!(download_separate);
             append_proxy_tcp_execution_fields(
                 &mut event,
-                "async-proxy-xhttp-h2-tls",
+                executor_label,
                 "vless",
-                Some(tls_underlay),
+                Some(upload_underlay),
                 None,
             );
             event
@@ -196,17 +200,22 @@ pub(crate) async fn handle_vless_xhttp_h2_tcp_connection_async(
                 sniff,
                 "vless",
                 &err,
-                "async-proxy-xhttp-h2-tls",
+                executor_label,
             );
-            event["tls_underlay"] = json!(tls_underlay);
+            event["tls_underlay"] = json!(upload_underlay);
             event["stream_wrapper"] = json!("xhttp");
             event["xhttp_mode"] = json!("packet-up");
-            event["xhttp_alpn"] = json!("h2");
+            event["xhttp_alpn"] = json!(if executor_label == "async-proxy-xhttp-h3-tls" {
+                "h3"
+            } else {
+                "h2"
+            });
+            event["xhttp_download_separate"] = json!(download_separate);
             append_proxy_tcp_execution_fields(
                 &mut event,
-                "async-proxy-xhttp-h2-tls",
+                executor_label,
                 "vless",
-                Some(tls_underlay),
+                Some(upload_underlay),
                 None,
             );
             Ok::<Value, String>(event)

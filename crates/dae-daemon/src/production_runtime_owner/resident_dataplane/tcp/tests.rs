@@ -447,6 +447,7 @@ fn dummy_proxy_plan() -> ResidentProxyPlan {
         net: "tcp".to_owned(),
         stream_host: String::new(),
         stream_path: String::new(),
+        xhttp_download: None,
         tls: "tls".to_owned(),
         allow_insecure: false,
         tls_fragment: None,
