@@ -1,4 +1,5 @@
 use std::borrow::Cow;
+use std::sync::Arc;
 
 use regex::Regex;
 
@@ -35,10 +36,66 @@ pub struct DomainMatcher {
 #[derive(Clone, Debug)]
 struct DomainSet {
     bit_index: usize,
-    key: DomainKey,
-    patterns: Vec<String>,
-    regex: Vec<Regex>,
+    data: SharedDomainSet,
 }
+
+#[derive(Clone, Debug)]
+pub struct SharedDomainSet {
+    inner: Arc<SharedDomainSetInner>,
+}
+
+#[derive(Debug)]
+struct SharedDomainSetInner {
+    key: DomainKey,
+    patterns: Arc<[String]>,
+    regex: Arc<[Regex]>,
+}
+
+impl SharedDomainSet {
+    pub fn new(
+        patterns: impl IntoIterator<Item = impl Into<String>>,
+        key: DomainKey,
+    ) -> Result<Self, RoutingError> {
+        let raw_patterns: Vec<String> = patterns.into_iter().map(Into::into).collect();
+        let regex = if key == DomainKey::Regex {
+            raw_patterns
+                .iter()
+                .map(|pattern| {
+                    Regex::new(pattern).map_err(|_| RoutingError::InvalidRegex(pattern.clone()))
+                })
+                .collect::<Result<Vec<_>, _>>()?
+        } else {
+            Vec::new()
+        };
+        Ok(Self {
+            inner: Arc::new(SharedDomainSetInner {
+                key,
+                patterns: Arc::from(normalize_patterns(raw_patterns, key)),
+                regex: Arc::from(regex),
+            }),
+        })
+    }
+
+    pub fn key(&self) -> DomainKey {
+        self.inner.key
+    }
+
+    pub fn patterns(&self) -> &[String] {
+        &self.inner.patterns
+    }
+
+    pub fn ptr_eq(&self, other: &Self) -> bool {
+        Arc::ptr_eq(&self.inner, &other.inner)
+    }
+}
+
+impl PartialEq for SharedDomainSet {
+    fn eq(&self, other: &Self) -> bool {
+        self.key() == other.key() && self.patterns() == other.patterns()
+    }
+}
+
+impl Eq for SharedDomainSet {}
 
 impl DomainMatcher {
     pub fn new(bit_length: usize) -> Self {
@@ -54,25 +111,12 @@ impl DomainMatcher {
         patterns: impl IntoIterator<Item = impl Into<String>>,
         key: DomainKey,
     ) -> Result<(), RoutingError> {
-        let raw_patterns: Vec<String> = patterns.into_iter().map(Into::into).collect();
-        let regex = if key == DomainKey::Regex {
-            raw_patterns
-                .iter()
-                .map(|pattern| {
-                    Regex::new(pattern).map_err(|_| RoutingError::InvalidRegex(pattern.clone()))
-                })
-                .collect::<Result<Vec<_>, _>>()?
-        } else {
-            Vec::new()
-        };
-        let patterns = normalize_patterns(raw_patterns, key);
-        self.sets.push(DomainSet {
-            bit_index,
-            key,
-            patterns,
-            regex,
-        });
+        self.add_shared_set(bit_index, SharedDomainSet::new(patterns, key)?);
         Ok(())
+    }
+
+    pub fn add_shared_set(&mut self, bit_index: usize, data: SharedDomainSet) {
+        self.sets.push(DomainSet { bit_index, data });
     }
 
     pub fn match_domain_bitmap(&self, domain: &str) -> Vec<u32> {
@@ -129,17 +173,28 @@ impl DomainMatcher {
 
 impl DomainSet {
     fn matches(&self, domain: &str) -> bool {
-        match self.key {
+        match self.data.key() {
             DomainKey::Full => self
-                .patterns
+                .data
+                .patterns()
                 .iter()
                 .any(|pattern| domain.eq_ignore_ascii_case(pattern.trim_end_matches('.'))),
-            DomainKey::Keyword => self.patterns.iter().any(|pattern| domain.contains(pattern)),
+            DomainKey::Keyword => self
+                .data
+                .patterns()
+                .iter()
+                .any(|pattern| domain.contains(pattern)),
             DomainKey::Suffix => self
-                .patterns
+                .data
+                .patterns()
                 .iter()
                 .any(|pattern| suffix_matches(domain, pattern)),
-            DomainKey::Regex => self.regex.iter().any(|regex| regex.is_match(domain)),
+            DomainKey::Regex => self
+                .data
+                .inner
+                .regex
+                .iter()
+                .any(|regex| regex.is_match(domain)),
         }
     }
 }

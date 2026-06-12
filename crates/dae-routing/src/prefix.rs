@@ -1,5 +1,6 @@
 use std::net::{IpAddr, Ipv6Addr};
 use std::str::FromStr;
+use std::sync::Arc;
 
 use crate::RoutingError;
 
@@ -7,6 +8,31 @@ use crate::RoutingError;
 pub struct IpPrefix {
     addr: IpAddr,
     bits: u8,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct SharedIpPrefixSet {
+    prefixes: Arc<[IpPrefix]>,
+}
+
+impl SharedIpPrefixSet {
+    pub fn new(prefixes: impl IntoIterator<Item = IpPrefix>) -> Self {
+        Self {
+            prefixes: Arc::from(prefixes.into_iter().collect::<Vec<_>>()),
+        }
+    }
+
+    pub fn as_slice(&self) -> &[IpPrefix] {
+        &self.prefixes
+    }
+
+    pub fn iter(&self) -> std::slice::Iter<'_, IpPrefix> {
+        self.as_slice().iter()
+    }
+
+    pub fn ptr_eq(&self, other: &Self) -> bool {
+        Arc::ptr_eq(&self.prefixes, &other.prefixes)
+    }
 }
 
 impl IpPrefix {

@@ -83,7 +83,7 @@ impl MatchSet {
         index: usize,
         query: &Query,
         domain_bitmap: &[u32],
-        lpm_sets: &BTreeMap<u32, Vec<IpPrefix>>,
+        lpm_sets: &BTreeMap<u32, SharedIpPrefixSet>,
     ) -> bool {
         match self.match_type {
             MatchType::DomainSet => bitmap_has(domain_bitmap, index),

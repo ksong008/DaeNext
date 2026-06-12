@@ -1,6 +1,6 @@
 use std::net::IpAddr;
 
-use dae_routing::{DomainKey, DomainMatcher, IpPrefix};
+use dae_routing::{DomainKey, DomainMatcher, IpPrefix, SharedDomainSet};
 use serde_json::Value;
 
 use crate::error::DnsError;
@@ -72,6 +72,27 @@ pub struct RequestMatcher {
 }
 
 #[derive(Clone, Debug)]
+pub struct DnsDomainSet {
+    pub bit: usize,
+    pub patterns: SharedDomainSet,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct DnsRequestMatchSpec {
+    pub kind: DnsRequestMatchKind,
+    pub value: u16,
+    pub not: bool,
+    pub upstream: DnsRequestOutboundIndex,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum DnsRequestMatchKind {
+    DomainSet,
+    QType,
+    Fallback,
+}
+
+#[derive(Clone, Debug)]
 struct RequestMatchSet {
     match_type: DnsMatchType,
     value: u16,
@@ -104,6 +125,43 @@ enum DnsMatchType {
 }
 
 impl RequestMatcher {
+    pub fn from_shared_typed_sets(
+        domain_sets: Vec<DnsDomainSet>,
+        matches: Vec<DnsRequestMatchSpec>,
+    ) -> Result<Self, DnsError> {
+        if matches
+            .last()
+            .map(|set| set.kind != DnsRequestMatchKind::Fallback)
+            .unwrap_or(true)
+        {
+            return Err(DnsError::Resolve(
+                "fallback rule MUST be the last".to_owned(),
+            ));
+        }
+        let max_domain_bit = domain_sets.iter().map(|set| set.bit + 1).max().unwrap_or(0);
+        let mut domain_matcher = DomainMatcher::new(max_domain_bit.max(matches.len()).max(1));
+        for set in domain_sets {
+            domain_matcher.add_shared_set(set.bit, set.patterns);
+        }
+        let matches = matches
+            .into_iter()
+            .map(|set| RequestMatchSet {
+                match_type: match set.kind {
+                    DnsRequestMatchKind::DomainSet => DnsMatchType::DomainSet,
+                    DnsRequestMatchKind::QType => DnsMatchType::QType,
+                    DnsRequestMatchKind::Fallback => DnsMatchType::Fallback,
+                },
+                value: set.value,
+                not: set.not,
+                upstream: set.upstream,
+            })
+            .collect();
+        Ok(Self {
+            domain_matcher,
+            matches,
+        })
+    }
+
     pub fn from_fixture_value(value: &Value) -> Result<Self, DnsError> {
         let matches = required_array(value, "matches")?
             .iter()
