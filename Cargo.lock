@@ -664,6 +664,7 @@ dependencies = [
  "base64",
  "dae-golden",
  "dae-routing",
+ "hashbrown 0.15.5",
  "serde_json",
  "url",
 ]
