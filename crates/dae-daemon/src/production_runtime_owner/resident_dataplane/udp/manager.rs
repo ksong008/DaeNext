@@ -403,6 +403,7 @@ mod tests {
             net: "tcp".to_owned(),
             stream_host: String::new(),
             stream_path: String::new(),
+            xhttp_download: None,
             tls: String::new(),
             allow_insecure: false,
             tls_fragment: None,

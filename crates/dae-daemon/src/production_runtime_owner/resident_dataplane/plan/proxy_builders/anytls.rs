@@ -33,6 +33,7 @@ pub(crate) fn build_anytls_proxy_plan(
         net: "tcp".to_owned(),
         stream_host: String::new(),
         stream_path: String::new(),
+        xhttp_download: None,
         tls: "tls".to_owned(),
         allow_insecure,
         tls_fragment: resident_tls_fragment_plan(config)?,

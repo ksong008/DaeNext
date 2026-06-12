@@ -34,6 +34,19 @@ pub(crate) struct ResidentRealityUnderlayPlan {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct ResidentXhttpEndpointPlan {
+    pub(in crate::production_runtime_owner::resident_dataplane) server_host: String,
+    pub(in crate::production_runtime_owner::resident_dataplane) server_port: u16,
+    pub(in crate::production_runtime_owner::resident_dataplane) server_name: String,
+    pub(in crate::production_runtime_owner::resident_dataplane) alpn: Vec<String>,
+    pub(in crate::production_runtime_owner::resident_dataplane) stream_host: String,
+    pub(in crate::production_runtime_owner::resident_dataplane) stream_path: String,
+    pub(in crate::production_runtime_owner::resident_dataplane) allow_insecure: bool,
+    pub(in crate::production_runtime_owner::resident_dataplane) tls_fragment:
+        Option<TlsFragmentOptions>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) enum GroupNodeSelection {
     Selected(Vec<SelectedGroupNode>),
     NoCandidate {
@@ -284,6 +297,8 @@ pub(crate) struct ResidentProxyPlan {
     pub(in crate::production_runtime_owner::resident_dataplane) net: String,
     pub(in crate::production_runtime_owner::resident_dataplane) stream_host: String,
     pub(in crate::production_runtime_owner::resident_dataplane) stream_path: String,
+    pub(in crate::production_runtime_owner::resident_dataplane) xhttp_download:
+        Option<ResidentXhttpEndpointPlan>,
     pub(in crate::production_runtime_owner::resident_dataplane) tls: String,
     pub(in crate::production_runtime_owner::resident_dataplane) allow_insecure: bool,
     pub(in crate::production_runtime_owner::resident_dataplane) tls_fragment:
@@ -315,6 +330,9 @@ impl ResidentProxyPlan {
         compact_string(&mut self.net);
         compact_string(&mut self.stream_host);
         compact_string(&mut self.stream_path);
+        if let Some(download) = &mut self.xhttp_download {
+            download.compact_allocations();
+        }
         compact_string(&mut self.tls);
         if let Some(fingerprint) = &mut self.utls_fingerprint {
             fingerprint.compact_allocations();
@@ -371,6 +389,35 @@ impl ResidentProxyPlan {
                 self.protocol, self.node_tag
             )),
         }
+    }
+}
+
+impl ResidentXhttpEndpointPlan {
+    pub(in crate::production_runtime_owner::resident_dataplane) fn from_proxy(
+        proxy: &ResidentProxyPlan,
+    ) -> Self {
+        Self {
+            server_host: proxy.server_host.clone(),
+            server_port: proxy.server_port,
+            server_name: proxy.server_name.clone(),
+            alpn: proxy.alpn.clone(),
+            stream_host: proxy.stream_host.clone(),
+            stream_path: proxy.stream_path.clone(),
+            allow_insecure: proxy.allow_insecure,
+            tls_fragment: proxy.tls_fragment.clone(),
+        }
+    }
+
+    pub(in crate::production_runtime_owner::resident_dataplane) fn uses_h3(&self) -> bool {
+        self.alpn.len() == 1 && self.alpn[0].trim().eq_ignore_ascii_case("h3")
+    }
+
+    fn compact_allocations(&mut self) {
+        compact_string(&mut self.server_host);
+        compact_string(&mut self.server_name);
+        compact_string_vec(&mut self.alpn);
+        compact_string(&mut self.stream_host);
+        compact_string(&mut self.stream_path);
     }
 }
 

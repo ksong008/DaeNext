@@ -71,6 +71,7 @@ pub(crate) fn build_trojan_proxy_plan(
         net,
         stream_host,
         stream_path,
+        xhttp_download: None,
         tls: "tls".to_owned(),
         allow_insecure,
         tls_fragment: resident_tls_fragment_plan(config)?,
