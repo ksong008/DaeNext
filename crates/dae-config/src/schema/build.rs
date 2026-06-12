@@ -96,12 +96,27 @@ pub fn build_config(sections: &[Section]) -> Result<Config, ConfigError> {
 }
 
 pub fn build_config_owned(sections: Vec<Section>) -> Result<Config, ConfigError> {
-    let mut name_to_section: HashMap<String, Section> = HashMap::new();
+    let mut global_section = None;
+    let mut subscription_section = None;
+    let mut node_section = None;
+    let mut group_section = None;
+    let mut routing_section = None;
+    let mut dns_section = None;
+    let mut unknown_section = None;
     for section in sections {
-        name_to_section.insert(section.name.clone(), section);
+        match section.name.as_str() {
+            "global" => global_section = Some(section),
+            "subscription" => subscription_section = Some(section),
+            "node" => node_section = Some(section),
+            "group" => group_section = Some(section),
+            "routing" => routing_section = Some(section),
+            "dns" => dns_section = Some(section),
+            "include" => {}
+            name => unknown_section = Some(name.to_owned()),
+        }
     }
 
-    let global = match name_to_section.remove("global") {
+    let global = match global_section {
         Some(section) => parse_global_owned(section)
             .map_err(|err| ConfigError::Build(format!("failed to parse \"global\": {err}")))?,
         None => {
@@ -111,26 +126,26 @@ pub fn build_config_owned(sections: Vec<Section>) -> Result<Config, ConfigError>
         }
     };
 
-    let subscription = match name_to_section.remove("subscription") {
+    let subscription = match subscription_section {
         Some(section) => parse_string_section_owned(section).map_err(|err| {
             ConfigError::Build(format!("failed to parse \"subscription\": {err}"))
         })?,
         None => Vec::new(),
     };
 
-    let node = match name_to_section.remove("node") {
+    let node = match node_section {
         Some(section) => parse_string_section_owned(section)
             .map_err(|err| ConfigError::Build(format!("failed to parse \"node\": {err}")))?,
         None => Vec::new(),
     };
 
-    let group = match name_to_section.remove("group") {
+    let group = match group_section {
         Some(section) => parse_group_section_owned(section)
             .map_err(|err| ConfigError::Build(format!("failed to parse \"group\": {err}")))?,
         None => Vec::new(),
     };
 
-    let routing = match name_to_section.remove("routing") {
+    let routing = match routing_section {
         Some(section) => parse_routing_owned(section)
             .map_err(|err| ConfigError::Build(format!("failed to parse \"routing\": {err}")))?,
         None => {
@@ -140,14 +155,13 @@ pub fn build_config_owned(sections: Vec<Section>) -> Result<Config, ConfigError>
         }
     };
 
-    let dns = match name_to_section.remove("dns") {
+    let dns = match dns_section {
         Some(section) => parse_dns_owned(section)
             .map_err(|err| ConfigError::Build(format!("failed to parse \"dns\": {err}")))?,
         None => Dns::default(),
     };
 
-    name_to_section.remove("include");
-    if let Some(name) = name_to_section.keys().next() {
+    if let Some(name) = unknown_section {
         return Err(ConfigError::Build(format!("unknown section: {name}")));
     }
 
