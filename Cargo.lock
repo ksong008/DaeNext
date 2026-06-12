@@ -625,6 +625,8 @@ dependencies = [
  "dae-sniffing",
  "fastrand",
  "h2",
+ "h3",
+ "h3-quinn",
  "http",
  "libc",
  "quinn",

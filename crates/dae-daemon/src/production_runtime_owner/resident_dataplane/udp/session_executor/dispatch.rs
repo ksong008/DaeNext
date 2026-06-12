@@ -39,6 +39,10 @@ impl UdpSessionExecutor {
                 .exchange(proxy, original_dst, payload)
                 .await
                 .map(|response| ("udp_packet_finished", response)),
+            Self::VlessXhttpH3(session) => session
+                .exchange(proxy, original_dst, payload)
+                .await
+                .map(|response| ("udp_packet_finished", response)),
             Self::Trojan(session) => session
                 .exchange(proxy, original_dst, payload)
                 .await
@@ -81,6 +85,7 @@ impl UdpSessionExecutor {
             Self::AnyTls(session) => session.shutdown().await,
             Self::VlessVision(session) => session.shutdown().await,
             Self::VlessXhttpH2(session) => session.shutdown().await,
+            Self::VlessXhttpH3(session) => session.shutdown().await,
             Self::Dns
             | Self::ShadowsocksAead(_)
             | Self::Shadowsocks2022(_)
@@ -98,6 +103,10 @@ impl UdpSessionExecutor {
                 .await
                 .map(|response| response.map(|response| ("udp_packet_finished", response))),
             Self::VlessXhttpH2(session) => session
+                .poll_response()
+                .await
+                .map(|response| response.map(|response| ("udp_packet_finished", response))),
+            Self::VlessXhttpH3(session) => session
                 .poll_response()
                 .await
                 .map(|response| response.map(|response| ("udp_packet_finished", response))),

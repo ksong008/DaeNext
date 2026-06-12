@@ -128,7 +128,7 @@ use self::transport_helpers::*;
 pub(crate) use self::transport_helpers::{
     GrpcHunkReadBuffer, collect_vmess_grpc_decrypted, decode_vmess_grpc_response_stream_async,
     new_xhttp_session_id, open_xhttp_h2_packet_up_session, send_grpc_hunk, send_h2_data,
-    send_xhttp_h2_packet_up_request,
+    send_xhttp_h2_packet_up_request, xhttp_padding_referer, xhttp_session_path_suffix, xhttp_uri,
 };
 mod stream_helpers;
 use self::stream_helpers::*;

@@ -2,7 +2,7 @@ use super::*;
 #[test]
 pub(super) fn resident_dataplane_plan_keeps_fixed_from_building_unselected_candidate() {
     let node_a = socks5_endpoint_fixture_url(FixtureEndpoint::Primary);
-    let unsupported = vless_xhttp_parser_fixture_url("packet-up", "h3", "");
+    let unsupported = vless_xhttp_parser_fixture_url("stream-up", "h2", "");
     let config_text = r#"
         global {
         lan_interface: daerust0
@@ -37,7 +37,7 @@ pub(super) fn resident_dataplane_plan_keeps_fixed_from_building_unselected_candi
 
 #[test]
 pub(super) fn resident_dataplane_plan_does_not_fallback_unresolved_name_filter_to_static_ss_node() {
-    let candidate = vless_xhttp_parser_fixture_url("packet-up", "h3", "");
+    let candidate = vless_xhttp_parser_fixture_url("stream-up", "h2", "");
     let shadowsocks_2022 = ShadowsocksLink {
         name: String::new(),
         server: fixture_host(FixtureEndpoint::Primary),
