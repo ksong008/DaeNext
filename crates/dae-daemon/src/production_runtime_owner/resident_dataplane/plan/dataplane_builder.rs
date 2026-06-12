@@ -179,7 +179,7 @@ pub(crate) fn resident_proxy_plans(
                 link_hash: link_hash(&link),
                 redacted_link_source: redacted_link_source(&link),
                 link,
-                proxy,
+                proxy: Arc::new(proxy),
             });
         }
         if candidates.is_empty() {
