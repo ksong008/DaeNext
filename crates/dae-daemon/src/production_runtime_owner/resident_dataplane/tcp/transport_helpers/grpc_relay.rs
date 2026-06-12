@@ -12,7 +12,7 @@ pub(crate) async fn relay_tcp_over_grpc_h2(
     let mut response_closed = false;
     let mut last_activity = Instant::now();
     let mut inbound_buf = [0_u8; 16 * 1024];
-    let mut response_buf = Vec::new();
+    let mut response_buf = GrpcHunkReadBuffer::default();
     let mut vless_response_stripper =
         strip_vless_response_header.then(VlessResponseStripper::default);
 
@@ -46,7 +46,7 @@ pub(crate) async fn relay_tcp_over_grpc_h2(
                             .release_capacity(bytes.len())
                             .map_err(|err| format!("release gRPC HTTP/2 response capacity: {err}"))?;
                         response_buf.extend_from_slice(&bytes);
-                        while let Some(payload) = pop_grpc_hunk_payload(&mut response_buf)? {
+                        while let Some(payload) = response_buf.pop_payload()? {
                             let payload = if let Some(stripper) = vless_response_stripper.as_mut() {
                                 stripper.consume(&payload)?
                             } else {

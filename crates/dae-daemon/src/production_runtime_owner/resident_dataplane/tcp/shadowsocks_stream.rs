@@ -1,4 +1,3 @@
-use std::collections::VecDeque;
 use std::io::ErrorKind;
 use std::pin::Pin;
 use std::task::{Context, Poll};
@@ -71,7 +70,7 @@ where
 #[derive(Default)]
 pub(crate) struct AsyncWebSocketPayloadState {
     decoder: WebSocketBinaryFrameDecoder,
-    pending: VecDeque<u8>,
+    pending: CursorByteBuffer,
 }
 
 pub(crate) struct AsyncWebSocketPayloadReader<'a, 'b, R> {
@@ -116,7 +115,7 @@ where
                         .push(read)
                         .map_err(std::io::Error::other)?;
                     for frame in frames {
-                        self.state.pending.extend(frame);
+                        self.state.pending.extend_from_slice(&frame);
                     }
                     if drain_async_websocket_payload(self.state, out) || out.remaining() == 0 {
                         return Poll::Ready(Ok(()));
@@ -132,8 +131,8 @@ where
 #[derive(Default)]
 pub(super) struct AsyncV2rayPluginMuxPayloadState {
     ws_decoder: WebSocketBinaryFrameDecoder,
-    mux_bytes: VecDeque<u8>,
-    pending_payload: VecDeque<u8>,
+    mux_bytes: CursorByteBuffer,
+    pending_payload: CursorByteBuffer,
     closed: bool,
 }
 
@@ -196,7 +195,7 @@ impl AsyncRead for AsyncV2rayPluginMuxPayloadReader<'_, '_> {
                         .push(read)
                         .map_err(std::io::Error::other)?;
                     for frame in frames {
-                        self.state.mux_bytes.extend(frame);
+                        self.state.mux_bytes.extend_from_slice(&frame);
                     }
                     continue;
                 }
@@ -211,30 +210,14 @@ fn drain_async_websocket_payload(
     state: &mut AsyncWebSocketPayloadState,
     out: &mut ReadBuf<'_>,
 ) -> bool {
-    let mut copied = false;
-    while out.remaining() > 0 {
-        let Some(byte) = state.pending.pop_front() else {
-            break;
-        };
-        out.put_slice(&[byte]);
-        copied = true;
-    }
-    copied
+    state.pending.drain_to_read_buf(out)
 }
 
 fn drain_v2ray_plugin_mux_payload(
     state: &mut AsyncV2rayPluginMuxPayloadState,
     out: &mut ReadBuf<'_>,
 ) -> std::io::Result<bool> {
-    let mut copied = false;
-    while out.remaining() > 0 {
-        let Some(byte) = state.pending_payload.pop_front() else {
-            break;
-        };
-        out.put_slice(&[byte]);
-        copied = true;
-    }
-    Ok(copied)
+    Ok(state.pending_payload.drain_to_read_buf(out))
 }
 
 fn parse_pending_v2ray_plugin_mux_frames(
@@ -243,30 +226,29 @@ fn parse_pending_v2ray_plugin_mux_frames(
 ) -> std::io::Result<bool> {
     let mut progressed = false;
     loop {
-        if state.mux_bytes.len() < 2 {
+        let mux_bytes = state.mux_bytes.as_slice();
+        if mux_bytes.len() < 2 {
             break;
         }
-        let metadata_len = u16::from_be_bytes([state.mux_bytes[0], state.mux_bytes[1]]) as usize;
+        let metadata_len = u16::from_be_bytes([mux_bytes[0], mux_bytes[1]]) as usize;
         if !(4..=512).contains(&metadata_len) {
             return Err(std::io::Error::new(
                 ErrorKind::InvalidData,
                 "invalid v2ray-plugin mux metadata length",
             ));
         }
-        if state.mux_bytes.len() < 2 + metadata_len {
+        if mux_bytes.len() < 2 + metadata_len {
             break;
         }
 
-        let status = state.mux_bytes[4];
-        let option = state.mux_bytes[5];
+        let status = mux_bytes[4];
+        let option = mux_bytes[5];
         let payload_len = if option == OPTION_DATA {
-            if state.mux_bytes.len() < 2 + metadata_len + 2 {
+            if mux_bytes.len() < 2 + metadata_len + 2 {
                 break;
             }
-            u16::from_be_bytes([
-                state.mux_bytes[2 + metadata_len],
-                state.mux_bytes[2 + metadata_len + 1],
-            ]) as usize
+            u16::from_be_bytes([mux_bytes[2 + metadata_len], mux_bytes[2 + metadata_len + 1]])
+                as usize
         } else {
             0
         };
@@ -277,21 +259,11 @@ fn parse_pending_v2ray_plugin_mux_frames(
             } else {
                 0
             };
-        if state.mux_bytes.len() < total_len {
+        if mux_bytes.len() < total_len {
             break;
         }
 
-        let mut frame = Vec::with_capacity(total_len);
-        for _ in 0..total_len {
-            frame.push(
-                state
-                    .mux_bytes
-                    .pop_front()
-                    .expect("mux frame length checked"),
-            );
-        }
-
-        let metadata = &frame[2..2 + metadata_len];
+        let metadata = &mux_bytes[2..2 + metadata_len];
         let frame_id = [metadata[0], metadata[1]];
         if frame_id != mux_id {
             return Err(std::io::Error::new(
@@ -300,10 +272,12 @@ fn parse_pending_v2ray_plugin_mux_frames(
             ));
         }
         if status == SESSION_STATUS_KEEPALIVE {
+            state.mux_bytes.consume(total_len);
             progressed = true;
             continue;
         }
         if status == SESSION_STATUS_END {
+            state.mux_bytes.consume(total_len);
             state.closed = true;
             progressed = true;
             break;
@@ -315,12 +289,63 @@ fn parse_pending_v2ray_plugin_mux_frames(
             ));
         }
         let payload_start = 2 + metadata_len + 2;
-        state.pending_payload.extend(
-            frame[payload_start..payload_start + payload_len]
-                .iter()
-                .copied(),
-        );
+        state
+            .pending_payload
+            .extend_from_slice(&mux_bytes[payload_start..payload_start + payload_len]);
+        state.mux_bytes.consume(total_len);
         progressed = true;
     }
     Ok(progressed)
+}
+
+#[derive(Default)]
+struct CursorByteBuffer {
+    bytes: Vec<u8>,
+    offset: usize,
+}
+
+impl CursorByteBuffer {
+    fn as_slice(&self) -> &[u8] {
+        &self.bytes[self.offset..]
+    }
+
+    fn extend_from_slice(&mut self, data: &[u8]) {
+        self.compact_if_worthwhile();
+        self.bytes.extend_from_slice(data);
+    }
+
+    fn consume(&mut self, len: usize) {
+        self.offset += len;
+        if self.offset >= self.bytes.len() {
+            self.bytes.clear();
+            self.offset = 0;
+        } else {
+            self.compact_if_worthwhile();
+        }
+    }
+
+    fn drain_to_read_buf(&mut self, out: &mut ReadBuf<'_>) -> bool {
+        let copy_len = self.as_slice().len().min(out.remaining());
+        if copy_len == 0 {
+            return false;
+        }
+        out.put_slice(&self.as_slice()[..copy_len]);
+        self.consume(copy_len);
+        true
+    }
+
+    fn compact_if_worthwhile(&mut self) {
+        if self.offset == 0 {
+            return;
+        }
+        if self.offset >= self.bytes.len() {
+            self.bytes.clear();
+            self.offset = 0;
+            return;
+        }
+        if self.offset >= 8192 && self.offset * 2 >= self.bytes.len() {
+            self.bytes.drain(..self.offset);
+            self.offset = 0;
+        }
+    }
 }

@@ -107,6 +107,11 @@ async fn run_resident_udp_session_manager_async(
 
     let mut sessions: HashMap<UdpSessionKey, UdpSessionEntry> = HashMap::new();
     let (cleanup_tx, mut cleanup_rx) = mpsc::channel::<UdpSessionKey>(session_limit);
+    let payload_pool = UdpPayloadPool::new(
+        session_limit
+            .saturating_mul(session_queue_depth)
+            .clamp(16, 1024),
+    );
 
     while !stop.load(Ordering::Relaxed) {
         tokio::select! {
@@ -115,7 +120,7 @@ async fn run_resident_udp_session_manager_async(
                     let _ = (&mut entry.handle).await;
                 }
             }
-            packet = recv_udp_with_original_dst_async(&socket) => {
+            packet = recv_udp_with_original_dst_async(&socket, &payload_pool) => {
                 match packet {
                     Ok(packet) => handle_manager_packet(
                         packet,
@@ -264,21 +269,22 @@ fn handle_manager_packet(
 
 async fn recv_udp_with_original_dst_async(
     socket: &AsyncFd<UdpSocket>,
+    payload_pool: &UdpPayloadPool,
 ) -> Result<UdpOriginalDstPacket, String> {
     loop {
         let mut guard = socket
             .readable()
             .await
             .map_err(|err| format!("await UDP socket readiness: {err}"))?;
-        match guard.try_io(
-            |inner| match try_recv_udp_with_original_dst(inner.get_ref(), 2048) {
+        match guard.try_io(|inner| {
+            match try_recv_udp_with_original_dst_from_pool(inner.get_ref(), 2048, payload_pool) {
                 Ok(packet) => Ok(packet),
                 Err(err) if is_udp_would_block(&err) => {
                     Err(io::Error::from(io::ErrorKind::WouldBlock))
                 }
                 Err(err) => Err(io::Error::other(err)),
-            },
-        ) {
+            }
+        }) {
             Ok(Ok(packet)) => return Ok(packet),
             Ok(Err(err)) => return Err(err.to_string()),
             Err(_) => continue,

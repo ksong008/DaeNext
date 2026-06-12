@@ -34,7 +34,9 @@ use serde_json::json;
 use tokio::time;
 
 use super::super::PRODUCTION_NETNS;
-use super::super::udp_io::{UdpOriginalDstPacket, try_recv_udp_with_original_dst};
+use super::super::udp_io::{
+    UdpOriginalDstPacket, UdpPayloadPool, try_recv_udp_with_original_dst_from_pool,
+};
 use super::client::{
     AsyncResidentTlsClient, async_resident_tls_underlay_name, open_async_resident_tls_client,
     open_proxy_tcp_stream_async,
@@ -44,9 +46,9 @@ use super::events::append_event;
 use super::execution::{append_runtime_execution_descriptor, udp_execution_descriptor};
 use super::plan::{ResidentProxyGroupPlan, ResidentProxyPlan, ResidentProxyProtocolPlan};
 use super::tcp::{
-    AsyncWebSocketPayloadReader, AsyncWebSocketPayloadState, collect_vmess_grpc_decrypted,
-    decode_vmess_grpc_response_stream_async, open_grpc_h2_stream, open_marked_quic_endpoint,
-    pop_grpc_hunk_payload, resolve_hysteria2_quic_remote_async, resolve_proxy_udp_addr_async,
+    AsyncWebSocketPayloadReader, AsyncWebSocketPayloadState, GrpcHunkReadBuffer,
+    collect_vmess_grpc_decrypted, decode_vmess_grpc_response_stream_async, open_grpc_h2_stream,
+    open_marked_quic_endpoint, resolve_hysteria2_quic_remote_async, resolve_proxy_udp_addr_async,
     send_grpc_hunk, send_h2_data, set_socket_mark,
 };
 use super::vision::{VisionUnpadState, VisionUnpadder, vision_padding_block};
