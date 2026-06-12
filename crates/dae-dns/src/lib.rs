@@ -43,6 +43,7 @@ pub use netutils::{
 };
 pub use resolve::guard_synthetic_asis_lookup;
 pub use routing::{
-    DnsRequestOutboundIndex, DnsResponseOutboundIndex, RequestMatcher, ResponseMatcher,
+    DnsDomainSet, DnsRequestMatchKind, DnsRequestMatchSpec, DnsRequestOutboundIndex,
+    DnsResponseOutboundIndex, RequestMatcher, ResponseMatcher,
 };
 pub use upstream::{Upstream, UpstreamResolver, UpstreamResolverStats};

@@ -5,10 +5,34 @@ impl RoutingMatcher {
         lpm_sets: Vec<RoutingLpmSet>,
         matches: Vec<RoutingMatchSet>,
     ) -> Result<Self, RoutingError> {
+        let domain_sets = domain_sets
+            .into_iter()
+            .map(|set| {
+                SharedDomainSet::new(set.patterns, set.key).map(|patterns| RoutingSharedDomainSet {
+                    bit: set.bit,
+                    patterns,
+                })
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        let lpm_sets = lpm_sets
+            .into_iter()
+            .map(|set| RoutingSharedLpmSet {
+                index: set.index,
+                prefixes: SharedIpPrefixSet::new(set.prefixes),
+            })
+            .collect::<Vec<_>>();
+        Self::from_shared_typed_sets(domain_sets, lpm_sets, matches)
+    }
+
+    pub fn from_shared_typed_sets(
+        domain_sets: Vec<RoutingSharedDomainSet>,
+        lpm_sets: Vec<RoutingSharedLpmSet>,
+        matches: Vec<RoutingMatchSet>,
+    ) -> Result<Self, RoutingError> {
         let max_domain_bit = domain_sets.iter().map(|set| set.bit + 1).max().unwrap_or(0);
         let mut domain_matcher = DomainMatcher::new(max_domain_bit.max(matches.len()).max(1));
         for set in domain_sets {
-            domain_matcher.add_set(set.bit, set.patterns, set.key)?;
+            domain_matcher.add_shared_set(set.bit, set.patterns);
         }
         let lpm_sets = lpm_sets
             .into_iter()

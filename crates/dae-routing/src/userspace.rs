@@ -5,8 +5,8 @@ use dae_core_types::OutboundIndex;
 use serde_json::Value;
 
 use crate::RoutingError;
-use crate::domain::{DomainKey, DomainMatcher};
-use crate::prefix::IpPrefix;
+use crate::domain::{DomainKey, DomainMatcher, SharedDomainSet};
+use crate::prefix::{IpPrefix, SharedIpPrefixSet};
 
 const L4_TCP: u8 = 1;
 const L4_UDP: u8 = 2;

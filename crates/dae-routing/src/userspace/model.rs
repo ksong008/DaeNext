@@ -89,7 +89,7 @@ pub struct MatchOutcome {
 
 #[derive(Clone, Debug)]
 pub struct RoutingMatcher {
-    pub(super) lpm_sets: BTreeMap<u32, Vec<IpPrefix>>,
+    pub(super) lpm_sets: BTreeMap<u32, SharedIpPrefixSet>,
     pub(super) domain_matcher: DomainMatcher,
     pub(super) matches: Vec<MatchSet>,
 }
@@ -102,9 +102,21 @@ pub struct RoutingDomainSet {
 }
 
 #[derive(Clone, Debug)]
+pub struct RoutingSharedDomainSet {
+    pub bit: usize,
+    pub patterns: SharedDomainSet,
+}
+
+#[derive(Clone, Debug)]
 pub struct RoutingLpmSet {
     pub index: u32,
     pub prefixes: Vec<IpPrefix>,
+}
+
+#[derive(Clone, Debug)]
+pub struct RoutingSharedLpmSet {
+    pub index: u32,
+    pub prefixes: SharedIpPrefixSet,
 }
 
 #[derive(Clone, Debug)]
