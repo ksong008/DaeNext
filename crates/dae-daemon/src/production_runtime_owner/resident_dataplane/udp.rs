@@ -51,11 +51,11 @@ use super::tcp::{
     open_marked_quic_endpoint, resolve_hysteria2_quic_remote_async, resolve_proxy_udp_addr_async,
     send_grpc_hunk, send_h2_data, set_socket_mark,
 };
-use super::vision::{VisionUnpadState, VisionUnpadder, vision_padding_block};
+use super::vision::{VisionUnpadder, vision_padding_block};
 use super::{
     RESIDENT_IDLE_SLEEP, RESIDENT_UDP_RESPONSE_TIMEOUT, RESIDENT_UDP_SESSION_IDLE_TIMEOUT,
     ResidentDataplaneMetrics, VISION_COMMAND_CONTINUE, VLESS_RESPONSE_VERSION, XTLS_RPRX_VISION,
-    XUDP_COMMAND_NEW, XUDP_MUX_TARGET, XUDP_NETWORK_UDP, XUDP_OPTION_DATA,
+    XUDP_COMMAND_KEEP, XUDP_COMMAND_NEW, XUDP_MUX_TARGET, XUDP_NETWORK_UDP, XUDP_OPTION_DATA,
     resident_socket_addr_display, resident_udp_network_name,
 };
 

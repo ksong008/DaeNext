@@ -8,7 +8,7 @@ mod tests {
     #[test]
     fn resident_vless_udp_response_parser_handles_vision_payload() {
         let key = [1_u8; 16];
-        let frame = xudp_frame(
+        let frame = xudp_new_frame(
             SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::new(8, 8, 8, 8), 53)),
             &[0x12, 0x34],
         )
@@ -29,7 +29,7 @@ mod tests {
     #[test]
     fn resident_vless_xudp_frame_encodes_ipv6_destination() {
         let target = SocketAddr::new(Ipv6Addr::LOCALHOST.into(), 853);
-        let frame = xudp_frame(target, &[0xaa]).unwrap();
+        let frame = xudp_new_frame(target, &[0xaa]).unwrap();
         let metadata_len = u16::from_be_bytes([frame[0], frame[1]]) as usize;
         let metadata = &frame[2..2 + metadata_len];
         assert_eq!(metadata[0..2], [0, 0]);
@@ -39,6 +39,38 @@ mod tests {
         assert_eq!(u16::from_be_bytes([metadata[5], metadata[6]]), 853);
         assert_eq!(metadata[7], 3);
         assert_eq!(&metadata[8..24], &Ipv6Addr::LOCALHOST.octets());
+    }
+
+    #[test]
+    fn resident_vless_xudp_keep_frame_omits_destination() {
+        let frame = xudp_keep_frame(&[0xde, 0xad]).unwrap();
+        let metadata_len = u16::from_be_bytes([frame[0], frame[1]]) as usize;
+        let metadata = &frame[2..2 + metadata_len];
+        assert_eq!(metadata, [0, 0, XUDP_COMMAND_KEEP, XUDP_OPTION_DATA]);
+        let payload_len_offset = 2 + metadata_len;
+        assert_eq!(
+            u16::from_be_bytes([frame[payload_len_offset], frame[payload_len_offset + 1]]),
+            2
+        );
+        assert_eq!(&frame[payload_len_offset + 2..], &[0xde, 0xad]);
+    }
+
+    #[test]
+    fn resident_vless_xudp_response_frame_reports_consumed_len() {
+        let first = xudp_keep_frame(&[0x01, 0x02]).unwrap();
+        let second = xudp_keep_frame(&[0x03]).unwrap();
+        let mut stream = first.clone();
+        stream.extend_from_slice(&second);
+
+        let (payload, consumed) = parse_xudp_response_frame(&stream).unwrap().unwrap();
+        assert_eq!(payload, [0x01, 0x02]);
+        assert_eq!(consumed, first.len());
+
+        let (payload, consumed) = parse_xudp_response_frame(&stream[consumed..])
+            .unwrap()
+            .unwrap();
+        assert_eq!(payload, [0x03]);
+        assert_eq!(consumed, second.len());
     }
 
     #[test]

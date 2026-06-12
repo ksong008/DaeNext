@@ -213,6 +213,9 @@ pub(super) struct VlessXudpStreamSession {
     uuid_sent: bool,
     response_header_seen: bool,
     tls_underlay: Option<&'static str>,
+    response_unpadder: Option<VisionUnpadder>,
+    response_plaintext: Vec<u8>,
+    response_xudp_payload: Vec<u8>,
 }
 
 impl VlessXudpStreamSession {
@@ -236,8 +239,8 @@ impl VlessXudpStreamSession {
                 key
             }
         };
-        let frame = xudp_frame(original_dst, payload)?;
         if self.client.is_none() {
+            let frame = xudp_new_frame(original_dst, payload)?;
             let mut client = open_async_resident_tls_client(proxy).await?;
             self.tls_underlay = Some(async_resident_tls_underlay_name(&client));
             let mut request =
@@ -258,6 +261,7 @@ impl VlessXudpStreamSession {
             .await?;
             self.client = Some(client);
         } else {
+            let frame = xudp_keep_frame(payload)?;
             let block = vision_padding_block(
                 &frame,
                 VISION_COMMAND_CONTINUE,
@@ -270,22 +274,105 @@ impl VlessXudpStreamSession {
                 .as_mut()
                 .ok_or_else(|| "VLESS XUDP client is not initialized".to_owned())?;
             write_async_tls_plain_all(client, &block, "write VLESS XUDP session packet").await?;
+            if let Some(response) = self.poll_response().await? {
+                return Ok(response);
+            }
+            return Ok(self.pending_response_result());
         }
+        if let Some(response) = self.poll_response().await? {
+            Ok(response)
+        } else {
+            Ok(self.pending_response_result())
+        }
+    }
+
+    async fn poll_response(&mut self) -> Result<Option<UdpExchangeResult>, String> {
+        if self.client.is_none() {
+            return Ok(None);
+        }
+        if let Some(payload) = self.try_pop_response_payload()? {
+            return Ok(Some(self.response_result(payload)));
+        }
+        let mut buf = [0_u8; 2048];
         let client = self
             .client
             .as_mut()
             .ok_or_else(|| "VLESS XUDP client is not initialized".to_owned())?;
-        let payload = if self.response_header_seen {
-            read_vless_xudp_session_response(client, key).await?
-        } else {
-            let payload = read_vless_udp_response_async(client, &proxy.flow, key).await?;
-            self.response_header_seen = true;
-            payload
+        match time::timeout(RESIDENT_IDLE_SLEEP, client.read_plain(&mut buf)).await {
+            Ok(Ok(0)) => Ok(None),
+            Ok(Ok(read)) => {
+                self.response_plaintext.extend_from_slice(&buf[..read]);
+                self.try_pop_response_payload()
+                    .map(|payload| payload.map(|payload| self.response_result(payload)))
+            }
+            Ok(Err(err))
+                if matches!(
+                    err.kind(),
+                    ErrorKind::WouldBlock | ErrorKind::TimedOut | ErrorKind::Interrupted
+                ) =>
+            {
+                Ok(None)
+            }
+            Ok(Err(err)) => Err(format!("read VLESS XUDP session plaintext: {err}")),
+            Err(_) => Ok(None),
+        }
+    }
+
+    fn try_pop_response_payload(&mut self) -> Result<Option<Vec<u8>>, String> {
+        let key = match self.key {
+            Some(key) => key,
+            None => return Ok(None),
         };
-        Ok(UdpExchangeResult::new(payload, "vless-xudp")
+        loop {
+            if let Some((payload, consumed)) =
+                parse_xudp_response_frame(&self.response_xudp_payload)?
+            {
+                self.response_xudp_payload.drain(..consumed);
+                return Ok(Some(payload));
+            }
+            if !self.response_header_seen {
+                if self.response_plaintext.len() < 2 {
+                    return Ok(None);
+                }
+                if self.response_plaintext[0] != VLESS_RESPONSE_VERSION {
+                    return Err(format!(
+                        "unexpected VLESS response version: {}",
+                        self.response_plaintext[0]
+                    ));
+                }
+                let header_len = 2 + self.response_plaintext[1] as usize;
+                if self.response_plaintext.len() < header_len {
+                    return Ok(None);
+                }
+                self.response_plaintext.drain(..header_len);
+                self.response_header_seen = true;
+                self.response_unpadder = Some(VisionUnpadder::new(key));
+                continue;
+            }
+            if self.response_plaintext.is_empty() {
+                return Ok(None);
+            }
+            let unpadder = self
+                .response_unpadder
+                .get_or_insert_with(|| VisionUnpadder::new(key));
+            let payload = unpadder.consume(&self.response_plaintext)?;
+            self.response_plaintext.clear();
+            self.response_xudp_payload.extend(payload);
+        }
+    }
+
+    fn response_result(&self, payload: Vec<u8>) -> UdpExchangeResult {
+        UdpExchangeResult::new(payload, "vless-xudp")
             .with_tls_underlay(self.tls_underlay.unwrap_or("standard-tls"))
             .with_session_executor("tokio-stream-session")
-            .with_underlay_reuse("tls-stream-reused"))
+            .with_underlay_reuse("tls-stream-reused")
+    }
+
+    fn pending_response_result(&self) -> UdpExchangeResult {
+        UdpExchangeResult::pending_response("vless-xudp")
+            .with_tls_underlay(self.tls_underlay.unwrap_or("standard-tls"))
+            .with_session_executor("tokio-stream-session")
+            .with_underlay_reuse("tls-stream-reused")
     }
 
     async fn shutdown(&mut self) {
@@ -293,67 +380,6 @@ impl VlessXudpStreamSession {
             client.shutdown().await;
         }
         self.client.take();
-    }
-}
-
-async fn read_vless_xudp_session_response(
-    client: &mut AsyncResidentTlsClient,
-    user_uuid: [u8; 16],
-) -> Result<Vec<u8>, String> {
-    let started = Instant::now();
-    let mut plaintext = Vec::new();
-    let mut buf = [0_u8; 2048];
-    loop {
-        let mut unpadder = VisionUnpadder::new(user_uuid);
-        let payload = unpadder.consume(&plaintext)?;
-        if !payload.is_empty() || matches!(unpadder.state, VisionUnpadState::Raw) {
-            if let Some(packet) = parse_xudp_response_payload(&payload)? {
-                return Ok(packet);
-            }
-        }
-        if started.elapsed() > RESIDENT_UDP_RESPONSE_TIMEOUT {
-            return Err("VLESS XUDP session response timeout".to_owned());
-        }
-        match time::timeout(RESIDENT_IDLE_SLEEP, client.read_plain(&mut buf)).await {
-            Ok(Ok(0)) => {}
-            Ok(Ok(read)) => plaintext.extend_from_slice(&buf[..read]),
-            Ok(Err(err))
-                if matches!(
-                    err.kind(),
-                    ErrorKind::WouldBlock | ErrorKind::TimedOut | ErrorKind::Interrupted
-                ) => {}
-            Ok(Err(err)) => return Err(format!("read VLESS XUDP session plaintext: {err}")),
-            Err(_) => {}
-        }
-    }
-}
-
-async fn read_vless_udp_response_async(
-    client: &mut AsyncResidentTlsClient,
-    flow: &str,
-    user_uuid: [u8; 16],
-) -> Result<Vec<u8>, String> {
-    let started = Instant::now();
-    let mut plaintext = Vec::new();
-    let mut buf = [0_u8; 2048];
-    loop {
-        if let Some(payload) = parse_vless_udp_response(&plaintext, flow, user_uuid)? {
-            return Ok(payload);
-        }
-        if started.elapsed() > RESIDENT_UDP_RESPONSE_TIMEOUT {
-            return Err("VLESS UDP response timeout".to_owned());
-        }
-        match time::timeout(RESIDENT_IDLE_SLEEP, client.read_plain(&mut buf)).await {
-            Ok(Ok(0)) => {}
-            Ok(Ok(read)) => plaintext.extend_from_slice(&buf[..read]),
-            Ok(Err(err))
-                if matches!(
-                    err.kind(),
-                    ErrorKind::WouldBlock | ErrorKind::TimedOut | ErrorKind::Interrupted
-                ) => {}
-            Ok(Err(err)) => return Err(format!("read VLESS UDP plaintext: {err}")),
-            Err(_) => {}
-        }
     }
 }
 

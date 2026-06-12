@@ -96,6 +96,14 @@ impl UdpSessionKey {
             None,
         )
     }
+
+    pub(super) fn peer(&self) -> SocketAddr {
+        self.peer
+    }
+
+    pub(super) fn original_destination(&self) -> SocketAddr {
+        self.original_destination
+    }
 }
 
 impl PartialEq for UdpSessionKey {

@@ -39,6 +39,7 @@ pub(crate) const TLS_RECORD_HEADER_LEN: usize = 5;
 pub(crate) const TLS_RECORD_MAX_PAYLOAD_LEN: usize = 16 * 1024 + 2048;
 pub(crate) const XUDP_MUX_TARGET: &str = "v1.mux.cool:666";
 pub(crate) const XUDP_COMMAND_NEW: u8 = 1;
+pub(crate) const XUDP_COMMAND_KEEP: u8 = 2;
 pub(crate) const XUDP_OPTION_DATA: u8 = 1;
 pub(crate) const XUDP_NETWORK_UDP: u8 = 2;
 pub(crate) static RESIDENT_RELOAD_GENERATION: AtomicU64 = AtomicU64::new(1);

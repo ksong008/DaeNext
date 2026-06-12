@@ -54,47 +54,71 @@ async fn run_udp_session_actor(
     );
 
     let mut packets = 0_u64;
-    let mut stop_reason = "queue-closed";
+    let mut stop_reason = "queue-closed".to_owned();
     let mut executor: Option<UdpSessionExecutor> = None;
+    let mut session_proxy: Option<Arc<ResidentProxyPlan>> = None;
+    let idle_timer = time::sleep(RESIDENT_UDP_SESSION_IDLE_TIMEOUT);
+    tokio::pin!(idle_timer);
     loop {
-        let managed = match time::timeout(RESIDENT_UDP_SESSION_IDLE_TIMEOUT, receiver.recv()).await
-        {
-            Ok(Some(managed)) => managed,
-            Ok(None) => break,
-            Err(_) => {
-                stop_reason = "idle-timeout";
-                break;
-            }
-        };
-        packets += 1;
-        if executor.is_none() {
-            executor = Some(UdpSessionExecutor::new(
-                &managed.proxy,
-                managed.original_dst,
-            ));
-        }
-        let exchange = match executor.as_mut() {
-            Some(executor) => {
-                executor
-                    .execute(
-                        &context.dns,
+        tokio::select! {
+            maybe_managed = receiver.recv() => {
+                let managed = match maybe_managed {
+                    Some(managed) => managed,
+                    None => break,
+                };
+                idle_timer
+                    .as_mut()
+                    .reset(time::Instant::now() + RESIDENT_UDP_SESSION_IDLE_TIMEOUT);
+                packets += 1;
+                if executor.is_none() {
+                    executor = Some(UdpSessionExecutor::new(
                         &managed.proxy,
                         managed.original_dst,
-                        &managed.packet.payload,
-                    )
-                    .await
+                    ));
+                    session_proxy = Some(Arc::clone(&managed.proxy));
+                }
+                let exchange = match executor.as_mut() {
+                    Some(executor) => {
+                        executor
+                            .execute(
+                                &context.dns,
+                                &managed.proxy,
+                                managed.original_dst,
+                                &managed.packet.payload,
+                            )
+                            .await
+                    }
+                    None => Err("UDP session executor was not initialized".to_owned()),
+                };
+                record_udp_exchange_result(
+                    &managed.proxy,
+                    managed.packet,
+                    managed.original_dst,
+                    context.event_file.clone(),
+                    Arc::clone(&context.event_lock),
+                    Arc::clone(&context.metrics),
+                    exchange,
+                );
+                if let (Some(executor), Some(proxy)) = (executor.as_mut(), session_proxy.as_ref()) {
+                    if let Err(err) = drain_udp_session_responses(&key, &context, executor, proxy).await {
+                        stop_reason = err;
+                        break;
+                    }
+                }
             }
-            None => Err("UDP session executor was not initialized".to_owned()),
-        };
-        record_udp_exchange_result(
-            &managed.proxy,
-            managed.packet,
-            managed.original_dst,
-            context.event_file.clone(),
-            Arc::clone(&context.event_lock),
-            Arc::clone(&context.metrics),
-            exchange,
-        );
+            _ = time::sleep(RESIDENT_IDLE_SLEEP), if executor.is_some() => {
+                if let (Some(executor), Some(proxy)) = (executor.as_mut(), session_proxy.as_ref()) {
+                    if let Err(err) = drain_udp_session_responses(&key, &context, executor, proxy).await {
+                        stop_reason = err;
+                        break;
+                    }
+                }
+            }
+            _ = &mut idle_timer => {
+                stop_reason = "idle-timeout".to_owned();
+                break;
+            }
+        }
     }
 
     if let Some(mut executor) = executor {
@@ -111,6 +135,42 @@ async fn run_udp_session_actor(
         }),
     );
     let _ = cleanup_tx.send(key).await;
+}
+
+async fn drain_udp_session_responses(
+    key: &UdpSessionKey,
+    context: &UdpSessionActorContext,
+    executor: &mut UdpSessionExecutor,
+    proxy: &Arc<ResidentProxyPlan>,
+) -> Result<(), String> {
+    for _ in 0..16 {
+        let exchange = match executor.poll_response().await {
+            Ok(Some(exchange)) => exchange,
+            Ok(None) => return Ok(()),
+            Err(err) => {
+                record_udp_session_response_result(
+                    proxy,
+                    key.peer(),
+                    key.original_destination(),
+                    context.event_file.clone(),
+                    Arc::clone(&context.event_lock),
+                    Arc::clone(&context.metrics),
+                    Err(err.clone()),
+                );
+                return Err(format!("upstream-read-failed: {err}"));
+            }
+        };
+        record_udp_session_response_result(
+            proxy,
+            key.peer(),
+            key.original_destination(),
+            context.event_file.clone(),
+            Arc::clone(&context.event_lock),
+            Arc::clone(&context.metrics),
+            Ok(exchange),
+        );
+    }
+    Ok(())
 }
 
 struct UdpManagedSessionGuard {
