@@ -50,13 +50,13 @@ pub(in crate::production_runtime_owner) struct GeodataResolver {
 #[derive(Clone, Debug)]
 struct CachedGeodataAsset {
     path: PathBuf,
-    data: Arc<Vec<u8>>,
+    data: Arc<[u8]>,
 }
 
 #[derive(Clone, Debug)]
 struct GeodataAsset {
     path: PathBuf,
-    data: Arc<Vec<u8>>,
+    data: Arc<[u8]>,
     cache_hit: bool,
 }
 
@@ -69,12 +69,12 @@ struct DecodedEntryCacheKey {
 
 #[derive(Clone, Debug)]
 struct CachedDecodedEntry {
-    data: Arc<Vec<u8>>,
+    data: Arc<[u8]>,
 }
 
 #[derive(Clone, Debug)]
 struct DecodedEntry {
-    data: Arc<Vec<u8>>,
+    data: Arc<[u8]>,
     cache_hit: bool,
 }
 
@@ -96,8 +96,8 @@ pub(super) fn load_geoip_params(
     let asset = resolver.read_asset(&filename)?;
     let decoded = resolver.decoded_entry("geoip", &filename, code, &asset)?;
     let loaded = match decoded.as_ref() {
-        Some(entry) => load_geoip_entry_bytes(entry.data.as_slice()),
-        None => load_geoip_bytes(asset.data.as_slice(), code),
+        Some(entry) => load_geoip_entry_bytes(entry.data.as_ref()),
+        None => load_geoip_bytes(asset.data.as_ref(), code),
     }
     .map_err(|err| {
         format!(
@@ -148,8 +148,8 @@ pub(super) fn load_geosite_params(
     let asset = resolver.read_asset(&filename)?;
     let decoded = resolver.decoded_entry("geosite", &filename, &code, &asset)?;
     let loaded = match decoded.as_ref() {
-        Some(entry) => load_geosite_entry_bytes(entry.data.as_slice()),
-        None => load_geosite_bytes(asset.data.as_slice(), &code),
+        Some(entry) => load_geosite_entry_bytes(entry.data.as_ref()),
+        None => load_geosite_bytes(asset.data.as_ref(), &code),
     }
     .map_err(|err| {
         format!(
@@ -257,11 +257,11 @@ impl GeodataResolver {
     pub(in crate::production_runtime_owner) fn shared_domain_set(
         &self,
         key: &str,
-        values: &[String],
+        values: Vec<String>,
     ) -> Result<SharedDomainSet, String> {
         let key = DomainKey::try_from(key)
             .map_err(|err| format!("resident shared domain set key: {err}"))?;
-        let cache_key = shared_string_set_key("domain", domain_key_name(key), values);
+        let cache_key = shared_string_set_key("domain", domain_key_name(key), &values);
         if let Some(cached) = self
             .shared_domain_sets
             .lock()
@@ -271,7 +271,7 @@ impl GeodataResolver {
         {
             return Ok(cached);
         }
-        let shared = SharedDomainSet::new(values.iter().cloned(), key)
+        let shared = SharedDomainSet::from_vec(values, key)
             .map_err(|err| format!("build shared resident domain set: {err}"))?;
         self.shared_domain_sets
             .lock()
@@ -356,7 +356,7 @@ impl GeodataResolver {
 
     fn read_uncached_asset(&self, cache_key: &str, path: &Path) -> Result<GeodataAsset, String> {
         let data = fs::read(path)
-            .map(Arc::new)
+            .map(Arc::<[u8]>::from)
             .map_err(|err| format!("read geodata asset {}: {err}", path.display()))?;
         let cached = CachedGeodataAsset {
             path: path.to_path_buf(),
@@ -398,11 +398,11 @@ impl GeodataResolver {
             }));
         }
 
-        let Ok(entry) = decode_entry_bytes(asset.data.as_slice(), code) else {
+        let Ok(entry) = decode_entry_bytes(asset.data.as_ref(), code) else {
             return Ok(None);
         };
         let cached = CachedDecodedEntry {
-            data: Arc::new(entry),
+            data: Arc::<[u8]>::from(entry),
         };
         self.decoded_entry_cache
             .lock()

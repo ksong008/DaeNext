@@ -12,8 +12,9 @@ pub(super) fn compile_rule(
         if grouped.is_empty() {
             return Err(format!("function {} has no params", function.name));
         }
-        for (group_index, (key, values)) in grouped.iter().enumerate() {
-            let outbound = if group_index == grouped.len() - 1 {
+        let group_count = grouped.len();
+        for (group_index, (key, values)) in grouped.into_iter().enumerate() {
+            let outbound = if group_index == group_count - 1 {
                 if function_index == rule.and_functions.len() - 1 {
                     outbound.clone()
                 } else {
@@ -22,7 +23,7 @@ pub(super) fn compile_rule(
             } else {
                 logical_outbound(OutboundIndex::LOGICAL_OR)
             };
-            add_function_match_sets(plan, resolver, &function, key, values, outbound)?;
+            add_function_match_sets(plan, resolver, &function, &key, values, outbound)?;
         }
     }
     Ok(())
@@ -33,7 +34,7 @@ pub(super) fn add_function_match_sets(
     resolver: &GeodataResolver,
     function: &Function,
     param_key: &str,
-    values: &[String],
+    values: Vec<String>,
     outbound: OutboundSpec,
 ) -> Result<(), String> {
     match function.name.as_str() {
@@ -63,7 +64,7 @@ pub(super) fn add_function_match_sets(
                     .iter()
                     .map(|value| parse_mac_prefix(value))
                     .collect::<Result<Vec<_>, _>>()?,
-                _ => parse_ip_prefix_group(param_key, values)?,
+                _ => parse_ip_prefix_group(param_key, &values)?,
             };
             let prefixes = resolver.shared_prefix_set(prefixes)?;
             plan.lpm_sets.push(prefixes);
@@ -104,7 +105,7 @@ pub(super) fn add_function_match_sets(
         }
         "l4proto" => {
             let mut raw = [0_u8; 16];
-            raw[0] = parse_l4_proto(values)?;
+            raw[0] = parse_l4_proto(&values)?;
             plan.matches.push(match_set(
                 raw,
                 function.not,
@@ -116,7 +117,7 @@ pub(super) fn add_function_match_sets(
         }
         "ipversion" => {
             let mut raw = [0_u8; 16];
-            raw[0] = parse_ip_version(values)?;
+            raw[0] = parse_ip_version(&values)?;
             plan.matches.push(match_set(
                 raw,
                 function.not,

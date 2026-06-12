@@ -56,7 +56,10 @@ impl SharedDomainSet {
         patterns: impl IntoIterator<Item = impl Into<String>>,
         key: DomainKey,
     ) -> Result<Self, RoutingError> {
-        let raw_patterns: Vec<String> = patterns.into_iter().map(Into::into).collect();
+        Self::from_vec(patterns.into_iter().map(Into::into).collect(), key)
+    }
+
+    pub fn from_vec(raw_patterns: Vec<String>, key: DomainKey) -> Result<Self, RoutingError> {
         let regex = if key == DomainKey::Regex {
             raw_patterns
                 .iter()

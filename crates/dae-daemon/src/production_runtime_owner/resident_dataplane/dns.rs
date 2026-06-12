@@ -262,11 +262,12 @@ fn compile_request_rule(
         if grouped.is_empty() {
             return Err(format!("function {} has no params", function.name));
         }
-        for (group_index, (key, values)) in grouped.iter().enumerate() {
+        let group_count = grouped.len();
+        for (group_index, (key, values)) in grouped.into_iter().enumerate() {
             if values.is_empty() {
                 return Err(format!("function {} has empty param group", function.name));
             }
-            let upstream = if group_index == grouped.len() - 1 {
+            let upstream = if group_index == group_count - 1 {
                 if function_index == rule.and_functions.len() - 1 {
                     rule_upstream
                 } else {
@@ -281,11 +282,11 @@ fn compile_request_rule(
                     matches,
                     geodata,
                     function,
-                    key,
+                    &key,
                     values,
                     upstream,
                 )?,
-                "qtype" => add_request_qtype_matches(matches, function, values, upstream)?,
+                "qtype" => add_request_qtype_matches(matches, function, &values, upstream)?,
                 other => {
                     return Err(format!(
                         "unsupported dns.routing.request function: {other}; resident DNS request routing admits qname and qtype only"
@@ -303,17 +304,16 @@ fn add_request_qname_match(
     geodata: &ResidentGeodataStore,
     function: &Function,
     key: &str,
-    values: &[String],
+    mut values: Vec<String>,
     upstream: DnsRequestOutboundIndex,
 ) -> Result<(), String> {
     if !matches!(key, "full" | "keyword" | "suffix" | "regex") {
         return Err(format!("qname has unsupported domain key: {key}"));
     }
     let bit = matches.len();
-    let mut values = values.to_vec();
     values.sort();
     values.dedup();
-    let patterns = geodata.shared_domain_set(key, &values)?;
+    let patterns = geodata.shared_domain_set(key, values)?;
     domain_sets.push(DnsDomainSet { bit, patterns });
     matches.push(DnsRequestMatchSpec {
         kind: DnsRequestMatchKind::DomainSet,
