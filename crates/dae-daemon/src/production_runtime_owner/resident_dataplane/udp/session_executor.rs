@@ -1,4 +1,8 @@
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use std::future::poll_fn;
+use std::pin::Pin;
+use std::task::Poll;
+
+use tokio::io::{AsyncRead, AsyncReadExt, AsyncWriteExt, ReadBuf};
 
 use super::*;
 
@@ -298,14 +302,23 @@ impl VlessXudpStreamSession {
             .client
             .as_mut()
             .ok_or_else(|| "VLESS XUDP client is not initialized".to_owned())?;
-        match time::timeout(RESIDENT_IDLE_SLEEP, client.read_plain(&mut buf)).await {
-            Ok(Ok(0)) => Ok(None),
-            Ok(Ok(read)) => {
+        let mut read_buf = ReadBuf::new(&mut buf);
+        let read = poll_fn(
+            |cx| match Pin::new(&mut *client).poll_read(cx, &mut read_buf) {
+                Poll::Ready(Ok(())) => Poll::Ready(Ok(Some(read_buf.filled().len()))),
+                Poll::Ready(Err(err)) => Poll::Ready(Err(err)),
+                Poll::Pending => Poll::Ready(Ok(None)),
+            },
+        )
+        .await;
+        match read {
+            Ok(Some(0)) | Ok(None) => Ok(None),
+            Ok(Some(read)) => {
                 self.response_plaintext.extend_from_slice(&buf[..read]);
                 self.try_pop_response_payload()
                     .map(|payload| payload.map(|payload| self.response_result(payload)))
             }
-            Ok(Err(err))
+            Err(err)
                 if matches!(
                     err.kind(),
                     ErrorKind::WouldBlock | ErrorKind::TimedOut | ErrorKind::Interrupted
@@ -313,8 +326,7 @@ impl VlessXudpStreamSession {
             {
                 Ok(None)
             }
-            Ok(Err(err)) => Err(format!("read VLESS XUDP session plaintext: {err}")),
-            Err(_) => Ok(None),
+            Err(err) => Err(format!("read VLESS XUDP session plaintext: {err}")),
         }
     }
 
