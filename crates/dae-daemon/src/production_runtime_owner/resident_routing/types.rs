@@ -1,5 +1,7 @@
 use std::net::IpAddr;
+use std::sync::Arc;
 
+use dae_routing::SharedDomainSet;
 use serde_json::Value;
 
 use super::geodata::GeodataResolutionReport;
@@ -7,11 +9,13 @@ use super::geodata::GeodataResolutionReport;
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(super) struct ResidentRoutingPlan {
     pub(super) matches: Vec<MatchSetBytes>,
-    pub(super) lpm_sets: Vec<Vec<IpPrefix>>,
+    pub(super) lpm_sets: Vec<SharedResidentIpPrefixSet>,
     pub(super) domain_sets: Vec<ResidentDomainSet>,
     pub(super) geodata_report: GeodataResolutionReport,
     pub(super) skipped_rules: Vec<Value>,
 }
+
+pub(super) type SharedResidentIpPrefixSet = Arc<[IpPrefix]>;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(super) struct MatchSetBytes {
@@ -39,8 +43,7 @@ pub(super) struct IpPrefix {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(super) struct ResidentDomainSet {
     pub(super) rule_index: usize,
-    pub(super) key: String,
-    pub(super) values: Vec<String>,
+    pub(super) values: SharedDomainSet,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

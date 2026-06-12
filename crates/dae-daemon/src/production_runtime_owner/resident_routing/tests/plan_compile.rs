@@ -2,6 +2,7 @@ use super::super::OUTBOUND_CONNECTIVITY_MAP_NAME;
 use super::super::maps::{resident_user_outbound_ids, runtime_map_name_matches};
 use super::super::plan::build_routing_plan;
 use super::*;
+use dae_routing::DomainKey;
 #[test]
 pub(super) fn resident_routing_plan_compiles_lan_proxy_rules() {
     let sections = parse_config(
@@ -74,16 +75,17 @@ routing {
 
     assert_eq!(plan.domain_sets.len(), 2);
     assert!(plan.domain_sets.iter().any(|set| {
-        set.key == "suffix"
-            && set.values
-                == vec![
-                    "fixture.invalid".to_owned(),
-                    "org.fixture.invalid".to_owned(),
-                ]
+        domain_set_matches(
+            set,
+            DomainKey::Suffix,
+            &["fixture.invalid", "org.fixture.invalid"],
+        )
     }));
-    assert!(plan.domain_sets.iter().any(|set| {
-        set.key == "full" && set.values == vec!["exact.fixture.invalid".to_owned()]
-    }));
+    assert!(
+        plan.domain_sets
+            .iter()
+            .any(|set| { domain_set_matches(set, DomainKey::Full, &["exact.fixture.invalid"]) })
+    );
     assert_eq!(
         plan.matches
             .iter()
@@ -91,6 +93,20 @@ routing {
             .count(),
         plan.domain_sets.len()
     );
+}
+
+fn domain_set_matches(
+    set: &super::super::types::ResidentDomainSet,
+    key: DomainKey,
+    values: &[&str],
+) -> bool {
+    set.values.key() == key
+        && set
+            .values
+            .patterns()
+            .iter()
+            .map(String::as_str)
+            .eq(values.iter().copied())
 }
 
 #[test]

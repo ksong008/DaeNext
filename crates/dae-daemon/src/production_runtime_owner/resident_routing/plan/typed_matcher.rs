@@ -2,19 +2,28 @@ use super::*;
 pub(crate) fn domain_set_json(set: &ResidentDomainSet) -> Value {
     json!({
         "rule_index": set.rule_index,
-        "key": &set.key,
-        "value_count": set.values.len(),
-        "sample_values": set.values.iter().take(8).collect::<Vec<_>>(),
-        "values_truncated": set.values.len() > 8,
+        "key": domain_key_name(set.values.key()),
+        "value_count": set.values.patterns().len(),
+        "sample_values": set.values.patterns().iter().take(8).collect::<Vec<_>>(),
+        "values_truncated": set.values.patterns().len() > 8,
     })
+}
+
+fn domain_key_name(key: DomainKey) -> &'static str {
+    match key {
+        DomainKey::Full => "full",
+        DomainKey::Keyword => "keyword",
+        DomainKey::Suffix => "suffix",
+        DomainKey::Regex => "regex",
+    }
 }
 
 pub(crate) fn userspace_matcher_typed_sets(
     plan: &ResidentRoutingPlan,
 ) -> Result<
     (
-        Vec<RoutingDomainSet>,
-        Vec<RoutingLpmSet>,
+        Vec<RoutingSharedDomainSet>,
+        Vec<RoutingSharedLpmSet>,
         Vec<RoutingMatchSet>,
     ),
     String,
@@ -23,11 +32,8 @@ pub(crate) fn userspace_matcher_typed_sets(
         .domain_sets
         .iter()
         .map(|set| {
-            let key = DomainKey::try_from(set.key.as_str())
-                .map_err(|err| format!("domain set {} key: {err}", set.rule_index))?;
-            Ok(RoutingDomainSet {
+            Ok(RoutingSharedDomainSet {
                 bit: set.rule_index,
-                key,
                 patterns: set.values.clone(),
             })
         })
@@ -44,9 +50,9 @@ pub(crate) fn userspace_matcher_typed_sets(
                         .map_err(|err| format!("lpm set {index}: {err}"))
                 })
                 .collect::<Result<Vec<_>, String>>()?;
-            Ok(RoutingLpmSet {
+            Ok(RoutingSharedLpmSet {
                 index: index as u32,
-                prefixes,
+                prefixes: SharedIpPrefixSet::new(prefixes),
             })
         })
         .collect::<Result<Vec<_>, String>>()?;

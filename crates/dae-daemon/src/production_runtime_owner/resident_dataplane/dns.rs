@@ -4,12 +4,16 @@ use std::os::fd::AsRawFd;
 use std::sync::Arc;
 
 use dae_config::{Config, DynamicFunctionValue, Function, Param, RoutingRule};
-use dae_dns::{DnsPacketView, DnsRequestOutboundIndex, RequestMatcher};
-use serde_json::{Value, json};
+use dae_dns::{
+    DnsDomainSet, DnsPacketView, DnsRequestMatchKind, DnsRequestMatchSpec, DnsRequestOutboundIndex,
+    RequestMatcher,
+};
 use tokio::sync::OnceCell;
 use tokio::time;
 
-use super::super::resident_routing::expand_resident_dns_request_qname_rules;
+use super::super::resident_routing::{
+    ResidentGeodataStore, expand_resident_dns_request_qname_rules_with_resolver,
+};
 use super::RESIDENT_UDP_RESPONSE_TIMEOUT;
 use super::tcp::set_socket_mark;
 
@@ -98,7 +102,10 @@ enum ResidentDnsUpstreamScheme {
     TcpUdp,
 }
 
-pub(super) fn build_resident_dns_plan(config: &Config) -> Result<ResidentDnsPlan, String> {
+pub(super) fn build_resident_dns_plan(
+    config: &Config,
+    geodata: &ResidentGeodataStore,
+) -> Result<ResidentDnsPlan, String> {
     if !config.dns.routing.response.rules.is_empty() {
         return Err(
             "resident DNS controller currently admits accept-only response routing; resident DNS shape remains fail-closed for configs with dns.routing.response rules"
@@ -114,7 +121,7 @@ pub(super) fn build_resident_dns_plan(config: &Config) -> Result<ResidentDnsPlan
     let upstreams = parse_dns_upstreams(config)?;
     let request_default_action =
         parse_request_default_action(&config.dns.routing.request.fallback, &upstreams.by_tag)?;
-    let request_matcher = build_request_matcher(config, &upstreams)?;
+    let request_matcher = build_request_matcher(config, &upstreams, geodata)?;
     Ok(ResidentDnsPlan {
         request_matcher,
         request_actions: upstreams.request_actions,
@@ -199,45 +206,51 @@ fn parse_request_default_action(
 fn build_request_matcher(
     config: &Config,
     upstreams: &ResidentDnsUpstreams,
+    geodata: &ResidentGeodataStore,
 ) -> Result<Option<RequestMatcher>, String> {
     if config.dns.routing.request.rules.is_empty() {
         return Ok(None);
     }
 
-    let rules = expand_resident_dns_request_qname_rules(&config.dns.routing.request.rules)
-        .map_err(|err| format!("expand dns.routing.request geodata: {err}"))?;
+    let rules = expand_resident_dns_request_qname_rules_with_resolver(
+        &config.dns.routing.request.rules,
+        geodata,
+    )
+    .map_err(|err| format!("expand dns.routing.request geodata: {err}"))?;
     let mut domain_sets = Vec::new();
     let mut matches = Vec::new();
     for (index, rule) in rules.iter().enumerate() {
-        compile_request_rule(&mut domain_sets, &mut matches, rule, upstreams).map_err(|err| {
-            format!(
-                "dns.routing.request rule {index} failed: {err}; rule={}",
-                rule.to_config_string(false, false, true)
-            )
-        })?;
+        compile_request_rule(&mut domain_sets, &mut matches, rule, upstreams, geodata).map_err(
+            |err| {
+                format!(
+                    "dns.routing.request rule {index} failed: {err}; rule={}",
+                    rule.to_config_string(false, false, true)
+                )
+            },
+        )?;
     }
     let fallback = request_index_for_dynamic(
         &config.dns.routing.request.fallback,
         upstreams,
         "dns.routing.request fallback",
     )?;
-    matches.push(json!({
-        "type": "fallback",
-        "upstream": request_index_fixture_value(fallback),
-    }));
-    let matcher = RequestMatcher::from_fixture_value(&json!({
-        "domain_sets": domain_sets,
-        "matches": matches,
-    }))
-    .map_err(|err| format!("build resident DNS request matcher: {err}"))?;
+    matches.push(DnsRequestMatchSpec {
+        kind: DnsRequestMatchKind::Fallback,
+        value: 0,
+        not: false,
+        upstream: fallback,
+    });
+    let matcher = RequestMatcher::from_shared_typed_sets(domain_sets, matches)
+        .map_err(|err| format!("build resident DNS request matcher: {err}"))?;
     Ok(Some(matcher))
 }
 
 fn compile_request_rule(
-    domain_sets: &mut Vec<Value>,
-    matches: &mut Vec<Value>,
+    domain_sets: &mut Vec<DnsDomainSet>,
+    matches: &mut Vec<DnsRequestMatchSpec>,
     rule: &RoutingRule,
     upstreams: &ResidentDnsUpstreams,
+    geodata: &ResidentGeodataStore,
 ) -> Result<(), String> {
     if rule.and_functions.is_empty() {
         return Err("request rule has no functions".to_owned());
@@ -263,9 +276,15 @@ fn compile_request_rule(
                 DnsRequestOutboundIndex::LOGICAL_OR
             };
             match function.name.as_str() {
-                "qname" => {
-                    add_request_qname_match(domain_sets, matches, function, key, values, upstream)?
-                }
+                "qname" => add_request_qname_match(
+                    domain_sets,
+                    matches,
+                    geodata,
+                    function,
+                    key,
+                    values,
+                    upstream,
+                )?,
                 "qtype" => add_request_qtype_matches(matches, function, values, upstream)?,
                 other => {
                     return Err(format!(
@@ -279,8 +298,9 @@ fn compile_request_rule(
 }
 
 fn add_request_qname_match(
-    domain_sets: &mut Vec<Value>,
-    matches: &mut Vec<Value>,
+    domain_sets: &mut Vec<DnsDomainSet>,
+    matches: &mut Vec<DnsRequestMatchSpec>,
+    geodata: &ResidentGeodataStore,
     function: &Function,
     key: &str,
     values: &[String],
@@ -290,21 +310,22 @@ fn add_request_qname_match(
         return Err(format!("qname has unsupported domain key: {key}"));
     }
     let bit = matches.len();
-    domain_sets.push(json!({
-        "bit": bit,
-        "key": key,
-        "patterns": values,
-    }));
-    matches.push(json!({
-        "type": "domain_set",
-        "not": function.not,
-        "upstream": request_index_fixture_value(upstream),
-    }));
+    let mut values = values.to_vec();
+    values.sort();
+    values.dedup();
+    let patterns = geodata.shared_domain_set(key, &values)?;
+    domain_sets.push(DnsDomainSet { bit, patterns });
+    matches.push(DnsRequestMatchSpec {
+        kind: DnsRequestMatchKind::DomainSet,
+        value: 0,
+        not: function.not,
+        upstream,
+    });
     Ok(())
 }
 
 fn add_request_qtype_matches(
-    matches: &mut Vec<Value>,
+    matches: &mut Vec<DnsRequestMatchSpec>,
     function: &Function,
     values: &[String],
     upstream: DnsRequestOutboundIndex,
@@ -315,12 +336,12 @@ fn add_request_qtype_matches(
         } else {
             DnsRequestOutboundIndex::LOGICAL_OR
         };
-        matches.push(json!({
-            "type": "qtype",
-            "value": parse_dns_qtype(value)?,
-            "not": function.not,
-            "upstream": request_index_fixture_value(item_upstream),
-        }));
+        matches.push(DnsRequestMatchSpec {
+            kind: DnsRequestMatchKind::QType,
+            value: parse_dns_qtype(value)?,
+            not: function.not,
+            upstream: item_upstream,
+        });
     }
     Ok(())
 }
@@ -440,16 +461,6 @@ fn dynamic_to_optional_single_function(
         DynamicFunctionValue::FunctionList(_) => {
             Err("default action function list is not admitted".to_owned())
         }
-    }
-}
-
-fn request_index_fixture_value(index: DnsRequestOutboundIndex) -> String {
-    match index {
-        DnsRequestOutboundIndex::REJECT => "reject".to_owned(),
-        DnsRequestOutboundIndex::ASIS => "asis".to_owned(),
-        DnsRequestOutboundIndex::LOGICAL_OR => "logical_or".to_owned(),
-        DnsRequestOutboundIndex::LOGICAL_AND => "logical_and".to_owned(),
-        other => format!("upstream:{}", other.value()),
     }
 }
 
@@ -767,11 +778,15 @@ mod tests {
     use dae_config::Config;
 
     use super::*;
+    use std::fs;
+    use std::path::{Path, PathBuf};
+    use std::sync::atomic::{AtomicUsize, Ordering};
 
     const QUERY: &[u8] = &[
         0x12, 0x34, 0x01, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x07, b'e', b'x',
         b'a', b'm', b'p', b'l', b'e', 0x03, b'c', b'o', b'm', 0x00, 0x00, 0x01, 0x00, 0x01,
     ];
+    static TEST_ASSET_COUNTER: AtomicUsize = AtomicUsize::new(0);
 
     fn parse_config(input: &str) -> Config {
         let sections = dae_config::parser::parse_config(input).unwrap();
@@ -780,6 +795,24 @@ mod tests {
 
     fn local_dns_upstream_authority() -> &'static str {
         "localhost:53"
+    }
+
+    fn test_geodata() -> ResidentGeodataStore {
+        ResidentGeodataStore::new(Vec::<std::path::PathBuf>::new())
+    }
+
+    fn test_asset_root(name: &str) -> PathBuf {
+        let sequence = TEST_ASSET_COUNTER.fetch_add(1, Ordering::Relaxed);
+        let root = std::env::temp_dir().join(format!(
+            "dae-resident-dns-{name}-{}-{sequence}",
+            std::process::id()
+        ));
+        fs::create_dir_all(&root).unwrap();
+        root
+    }
+
+    fn write_asset(root: &Path, filename: &str, data: Vec<u8>) {
+        fs::write(root.join(filename), data).unwrap();
     }
 
     #[test]
@@ -800,7 +833,8 @@ mod tests {
         "#
         .replace("LOCAL_DNS_UPSTREAM", local_dns_upstream_authority());
         let config = parse_config(&input);
-        let plan = build_resident_dns_plan(&config).unwrap();
+        let geodata = test_geodata();
+        let plan = build_resident_dns_plan(&config, &geodata).unwrap();
         match plan.request_default_action {
             ResidentDnsRequestAction::Upstream(upstream) => {
                 assert_eq!(upstream.tag, "primary");
@@ -840,7 +874,8 @@ mod tests {
         "#
         .replace("LOCAL_DNS_UPSTREAM", local_dns_upstream_authority());
         let config = parse_config(&input);
-        let plan = build_resident_dns_plan(&config).unwrap();
+        let geodata = test_geodata();
+        let plan = build_resident_dns_plan(&config, &geodata).unwrap();
 
         let view = DnsPacketView::parse(QUERY).unwrap();
         match select_request_action(&plan, &view).unwrap() {
@@ -856,6 +891,46 @@ mod tests {
             select_request_action(&plan, &view).unwrap(),
             ResidentDnsRequestAction::Reject
         ));
+    }
+
+    #[test]
+    fn resident_dns_qname_geosite_uses_shared_domain_store_for_any_code() {
+        let root = test_asset_root("shared-geosite");
+        write_asset(
+            &root,
+            "test-geosite.dat",
+            geosite_list(&[geosite_entry("streaming", &[(2, "example.com", &[][..])])]),
+        );
+        let input = r#"
+        global {}
+        routing {}
+        dns {
+          upstream {
+            primary: 'udp://LOCAL_DNS_UPSTREAM'
+            secondary: 'udp://127.0.0.1:53'
+          }
+          routing {
+            request {
+              qname(ext:'test-geosite:streaming') -> primary
+              fallback: secondary
+            }
+          }
+        }
+        "#
+        .replace("LOCAL_DNS_UPSTREAM", local_dns_upstream_authority());
+        let config = parse_config(&input);
+        let geodata = ResidentGeodataStore::new([root]);
+
+        let plan = build_resident_dns_plan(&config, &geodata).unwrap();
+        assert_eq!(geodata.shared_domain_set_count(), 1);
+        let view = DnsPacketView::parse(QUERY).unwrap();
+        match select_request_action(&plan, &view).unwrap() {
+            ResidentDnsRequestAction::Upstream(upstream) => assert_eq!(upstream.tag, "primary"),
+            other => panic!("expected primary upstream action, got {other:?}"),
+        }
+
+        let _second = build_resident_dns_plan(&config, &geodata).unwrap();
+        assert_eq!(geodata.shared_domain_set_count(), 1);
     }
 
     #[test]
@@ -877,7 +952,8 @@ mod tests {
         "#
         .replace("LOCAL_DNS_UPSTREAM", local_dns_upstream_authority());
         let config = parse_config(&input);
-        let err = build_resident_dns_plan(&config).unwrap_err();
+        let geodata = test_geodata();
+        let err = build_resident_dns_plan(&config, &geodata).unwrap_err();
         assert!(err.contains("unsupported dns.routing.request function: ip"));
     }
 
@@ -900,7 +976,8 @@ mod tests {
         "#
         .replace("LOCAL_DNS_UPSTREAM", local_dns_upstream_authority());
         let config = parse_config(&input);
-        let err = build_resident_dns_plan(&config).unwrap_err();
+        let geodata = test_geodata();
+        let err = build_resident_dns_plan(&config, &geodata).unwrap_err();
         assert!(err.contains("unknown DNS qtype: not_a_type"));
     }
 
@@ -914,5 +991,57 @@ mod tests {
             DNS_RCODE_REFUSED
         );
         assert_eq!(&response[12..], &QUERY[12..]);
+    }
+
+    fn geosite_list(entries: &[Vec<u8>]) -> Vec<u8> {
+        let mut out = Vec::new();
+        for entry in entries {
+            push_field_bytes(&mut out, 1, entry);
+        }
+        out
+    }
+
+    fn geosite_entry(code: &str, domains: &[(u64, &str, &[&str])]) -> Vec<u8> {
+        let mut out = Vec::new();
+        push_field_string(&mut out, 1, code);
+        for (domain_type, value, attrs) in domains {
+            push_field_bytes(&mut out, 2, &domain_entry(*domain_type, value, attrs));
+        }
+        out
+    }
+
+    fn domain_entry(domain_type: u64, value: &str, attrs: &[&str]) -> Vec<u8> {
+        let mut out = Vec::new();
+        push_field_varint(&mut out, 1, domain_type);
+        push_field_string(&mut out, 2, value);
+        for attr in attrs {
+            let mut attribute = Vec::new();
+            push_field_string(&mut attribute, 1, attr);
+            push_field_bytes(&mut out, 3, &attribute);
+        }
+        out
+    }
+
+    fn push_field_string(out: &mut Vec<u8>, field: u64, value: &str) {
+        push_field_bytes(out, field, value.as_bytes());
+    }
+
+    fn push_field_bytes(out: &mut Vec<u8>, field: u64, value: &[u8]) {
+        push_varint(out, (field << 3) | 2);
+        push_varint(out, value.len() as u64);
+        out.extend_from_slice(value);
+    }
+
+    fn push_field_varint(out: &mut Vec<u8>, field: u64, value: u64) {
+        push_varint(out, field << 3);
+        push_varint(out, value);
+    }
+
+    fn push_varint(out: &mut Vec<u8>, mut value: u64) {
+        while value >= 0x80 {
+            out.push((value as u8) | 0x80);
+            value >>= 7;
+        }
+        out.push(value as u8);
     }
 }

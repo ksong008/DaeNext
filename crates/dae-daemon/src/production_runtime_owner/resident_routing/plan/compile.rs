@@ -2,6 +2,7 @@ use super::*;
 pub(super) fn compile_rule(
     plan: &mut ResidentRoutingPlan,
     groups: &BTreeMap<String, u8>,
+    resolver: &GeodataResolver,
     rule: &RoutingRule,
 ) -> Result<(), String> {
     let outbound = parse_outbound(&rule.outbound, groups)?;
@@ -21,7 +22,7 @@ pub(super) fn compile_rule(
             } else {
                 logical_outbound(OutboundIndex::LOGICAL_OR)
             };
-            add_function_match_sets(plan, &function, key, values, outbound)?;
+            add_function_match_sets(plan, resolver, &function, key, values, outbound)?;
         }
     }
     Ok(())
@@ -29,6 +30,7 @@ pub(super) fn compile_rule(
 
 pub(super) fn add_function_match_sets(
     plan: &mut ResidentRoutingPlan,
+    resolver: &GeodataResolver,
     function: &Function,
     param_key: &str,
     values: &[String],
@@ -42,11 +44,9 @@ pub(super) fn add_function_match_sets(
                 ));
             }
             let rule_index = plan.matches.len();
-            plan.domain_sets.push(ResidentDomainSet {
-                rule_index,
-                key: param_key.to_owned(),
-                values: values.to_vec(),
-            });
+            let values = resolver.shared_domain_set(param_key, values)?;
+            plan.domain_sets
+                .push(ResidentDomainSet { rule_index, values });
             plan.matches.push(match_set(
                 [0; 16],
                 function.not,
@@ -65,6 +65,7 @@ pub(super) fn add_function_match_sets(
                     .collect::<Result<Vec<_>, _>>()?,
                 _ => parse_ip_prefix_group(param_key, values)?,
             };
+            let prefixes = resolver.shared_prefix_set(prefixes)?;
             plan.lpm_sets.push(prefixes);
             let mut raw = [0_u8; 16];
             raw[..4].copy_from_slice(&lpm_index.to_le_bytes());

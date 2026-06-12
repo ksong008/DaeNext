@@ -4,10 +4,11 @@ pub(crate) fn start_resident_dataplane_workers(
     config: &Config,
     artifact_dir: &Path,
     routing_tuple_map_id: Option<u32>,
+    geodata: &ResidentGeodataStore,
 ) -> (Value, Option<ResidentDataplaneRuntime>) {
     let event_file = artifact_dir.join("resident-production-dataplane-events.jsonl");
     let _ = fs::remove_file(&event_file);
-    let plan = match build_resident_dataplane_plan(config) {
+    let plan = match build_resident_dataplane_plan_with_geodata(config, geodata) {
         Ok(plan) => plan,
         Err(err) => {
             return (
@@ -54,20 +55,21 @@ pub(crate) fn start_resident_dataplane_workers(
             None,
         );
     };
-    let routing_matcher = match build_resident_userspace_routing_matcher(config) {
-        Ok(matcher) => matcher,
-        Err(err) => {
-            return (
-                json!({
-                    "status": "fail",
-                    "enabled": true,
-                    "error": err,
-                    "event_file": path_string(&event_file),
-                }),
-                None,
-            );
-        }
-    };
+    let routing_matcher =
+        match build_resident_userspace_routing_matcher_with_geodata(config, geodata) {
+            Ok(matcher) => matcher,
+            Err(err) => {
+                return (
+                    json!({
+                        "status": "fail",
+                        "enabled": true,
+                        "error": err,
+                        "event_file": path_string(&event_file),
+                    }),
+                    None,
+                );
+            }
+        };
 
     let tcp_listener = match handoff.listeners.tcp_listener.try_clone() {
         Ok(listener) => listener,

@@ -30,6 +30,14 @@ impl ResidentDataplanePlan {
 pub(crate) fn build_resident_dataplane_plan(
     config: &Config,
 ) -> Result<ResidentDataplanePlan, String> {
+    let geodata = ResidentGeodataStore::new(Vec::<PathBuf>::new());
+    build_resident_dataplane_plan_with_geodata(config, &geodata)
+}
+
+pub(crate) fn build_resident_dataplane_plan_with_geodata(
+    config: &Config,
+    geodata: &ResidentGeodataStore,
+) -> Result<ResidentDataplanePlan, String> {
     let node_links = tagged_node_links(config);
     let (proxies, default_outbound) = resident_proxy_plans(config, &node_links)?;
     if default_outbound
@@ -51,7 +59,7 @@ pub(crate) fn build_resident_dataplane_plan(
     };
     let tcp_dial_mode = parse_tcp_dial_mode(config)?;
     let sniffing_timeout = tcp_sniffing_timeout(config, tcp_dial_mode);
-    let dns = build_resident_dns_plan(config)?;
+    let dns = build_resident_dns_plan(config, geodata)?;
     Ok(ResidentDataplanePlan {
         enabled: true,
         unsupported_reason: None,
