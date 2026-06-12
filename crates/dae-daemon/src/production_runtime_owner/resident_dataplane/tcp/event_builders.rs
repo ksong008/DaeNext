@@ -125,25 +125,73 @@ pub(super) fn proxy_tcp_base_event(
     selection: &TcpProxySelection,
     sniff: &TcpSniffReport,
 ) -> Value {
-    let mut event = json!({
-        "event": event_name,
-        "outbound_kind": "proxy",
-        "peer": resident_socket_addr_display(peer),
-        "original_dst": resident_socket_addr_display(original_dst),
-        "dial_target": &selection.route.dial_target,
-        "dial_ip": selection.route.dial_ip,
-        "initial_outbound": selection.route.initial_outbound,
-        "final_outbound": selection.route.final_outbound,
-        "final_mark": selection.route.final_mark,
-        "userspace_route_executed": selection.route.userspace_route_executed,
-        "userspace_route_must": selection.route.userspace_route_must,
-        "sniffed_domain": &sniff.domain,
-        "sniff_error": &sniff.error,
-        "proxy_group": &selection.proxy.group_name,
-        "group_policy": &selection.proxy.group_policy,
-        "node_tag": &selection.proxy.node_tag,
-        "graphId": &selection.proxy.graph_id,
-    });
+    let mut map = serde_json::Map::with_capacity(18);
+    map.insert("event".to_owned(), Value::String(event_name.to_owned()));
+    map.insert(
+        "outbound_kind".to_owned(),
+        Value::String("proxy".to_owned()),
+    );
+    map.insert(
+        "peer".to_owned(),
+        Value::String(resident_socket_addr_display(peer)),
+    );
+    map.insert(
+        "original_dst".to_owned(),
+        Value::String(resident_socket_addr_display(original_dst)),
+    );
+    map.insert(
+        "dial_target".to_owned(),
+        Value::String(selection.route.dial_target.clone()),
+    );
+    map.insert("dial_ip".to_owned(), Value::Bool(selection.route.dial_ip));
+    map.insert(
+        "initial_outbound".to_owned(),
+        Value::from(selection.route.initial_outbound),
+    );
+    map.insert(
+        "final_outbound".to_owned(),
+        Value::from(selection.route.final_outbound),
+    );
+    map.insert(
+        "final_mark".to_owned(),
+        Value::from(selection.route.final_mark),
+    );
+    map.insert(
+        "userspace_route_executed".to_owned(),
+        Value::Bool(selection.route.userspace_route_executed),
+    );
+    map.insert(
+        "userspace_route_must".to_owned(),
+        Value::Bool(selection.route.userspace_route_must),
+    );
+    map.insert(
+        "sniffed_domain".to_owned(),
+        Value::String(sniff.domain.clone()),
+    );
+    map.insert(
+        "sniff_error".to_owned(),
+        sniff
+            .error
+            .as_ref()
+            .map_or(Value::Null, |err| Value::String(err.clone())),
+    );
+    map.insert(
+        "proxy_group".to_owned(),
+        Value::String(selection.proxy.group_name.clone()),
+    );
+    map.insert(
+        "group_policy".to_owned(),
+        Value::String(selection.proxy.group_policy.clone()),
+    );
+    map.insert(
+        "node_tag".to_owned(),
+        Value::String(selection.proxy.node_tag.clone()),
+    );
+    map.insert(
+        "graphId".to_owned(),
+        Value::String(selection.proxy.graph_id.clone()),
+    );
+    let mut event = Value::Object(map);
     append_tcp_route_log_fields(
         &mut event,
         &selection.route,
@@ -155,21 +203,55 @@ pub(super) fn proxy_tcp_base_event(
 }
 
 pub(super) fn append_proxy_relay_stats(event: &mut Value, stats: &RelayStats) {
-    event["bytes_client_to_proxy"] = json!(stats.client_to_proxy);
-    event["bytes_proxy_to_client"] = json!(stats.proxy_to_client);
-    event["response_header_stripped"] = json!(stats.response_header_stripped);
-    event["vision_unpadding_blocks"] = json!(stats.vision_unpadding_blocks);
-    event["vision_direct_command_seen"] = json!(stats.vision_direct_command_seen);
-    event["vision_raw_direct_recovered"] = json!(stats.vision_raw_direct_recovered);
-    event["vision_downlink_direct_active"] = json!(stats.vision_downlink_direct_active);
+    if let Some(map) = event.as_object_mut() {
+        map.insert(
+            "bytes_client_to_proxy".to_owned(),
+            Value::from(stats.client_to_proxy),
+        );
+        map.insert(
+            "bytes_proxy_to_client".to_owned(),
+            Value::from(stats.proxy_to_client),
+        );
+        map.insert(
+            "response_header_stripped".to_owned(),
+            Value::Bool(stats.response_header_stripped),
+        );
+        map.insert(
+            "vision_unpadding_blocks".to_owned(),
+            Value::from(stats.vision_unpadding_blocks),
+        );
+        map.insert(
+            "vision_direct_command_seen".to_owned(),
+            Value::Bool(stats.vision_direct_command_seen),
+        );
+        map.insert(
+            "vision_raw_direct_recovered".to_owned(),
+            Value::Bool(stats.vision_raw_direct_recovered),
+        );
+        map.insert(
+            "vision_downlink_direct_active".to_owned(),
+            Value::Bool(stats.vision_downlink_direct_active),
+        );
+    }
 }
 
 pub(super) fn append_generic_proxy_relay_stats(event: &mut Value, stats: &DirectTcpRelayStats) {
-    event["bytes_client_to_proxy"] = json!(stats.client_to_direct);
-    event["bytes_proxy_to_client"] = json!(stats.direct_to_client);
-    event["response_header_stripped"] = json!(false);
-    event["vision_unpadding_blocks"] = json!(0);
-    event["vision_direct_command_seen"] = json!(false);
-    event["vision_raw_direct_recovered"] = json!(false);
-    event["vision_downlink_direct_active"] = json!(false);
+    if let Some(map) = event.as_object_mut() {
+        map.insert(
+            "bytes_client_to_proxy".to_owned(),
+            Value::from(stats.client_to_direct),
+        );
+        map.insert(
+            "bytes_proxy_to_client".to_owned(),
+            Value::from(stats.direct_to_client),
+        );
+        map.insert("response_header_stripped".to_owned(), Value::Bool(false));
+        map.insert("vision_unpadding_blocks".to_owned(), Value::from(0));
+        map.insert("vision_direct_command_seen".to_owned(), Value::Bool(false));
+        map.insert("vision_raw_direct_recovered".to_owned(), Value::Bool(false));
+        map.insert(
+            "vision_downlink_direct_active".to_owned(),
+            Value::Bool(false),
+        );
+    }
 }
