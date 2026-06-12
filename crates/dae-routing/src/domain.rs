@@ -1,9 +1,12 @@
 use std::borrow::Cow;
+use std::collections::HashSet;
 use std::sync::Arc;
 
-use regex::Regex;
+use regex::{Regex, RegexSet};
 
 use crate::RoutingError;
+
+const DOMAIN_SET_INDEX_MIN_PATTERNS: usize = 32;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum DomainKey {
@@ -49,6 +52,20 @@ struct SharedDomainSetInner {
     key: DomainKey,
     patterns: Arc<[String]>,
     regex: Arc<[Regex]>,
+    index: Option<SharedDomainSetIndex>,
+}
+
+#[derive(Debug)]
+enum SharedDomainSetIndex {
+    Full(HashSet<String>),
+    Suffix(SuffixDomainSetIndex),
+    Regex(RegexSet),
+}
+
+#[derive(Debug)]
+struct SuffixDomainSetIndex {
+    exact_or_subdomain: HashSet<String>,
+    subdomain_only: HashSet<String>,
 }
 
 impl SharedDomainSet {
@@ -60,21 +77,19 @@ impl SharedDomainSet {
     }
 
     pub fn from_vec(raw_patterns: Vec<String>, key: DomainKey) -> Result<Self, RoutingError> {
+        let patterns = normalize_patterns(raw_patterns, key);
         let regex = if key == DomainKey::Regex {
-            raw_patterns
-                .iter()
-                .map(|pattern| {
-                    Regex::new(pattern).map_err(|_| RoutingError::InvalidRegex(pattern.clone()))
-                })
-                .collect::<Result<Vec<_>, _>>()?
+            regex_vec(&patterns)?
         } else {
             Vec::new()
         };
+        let index = SharedDomainSetIndex::new(key, &patterns)?;
         Ok(Self {
             inner: Arc::new(SharedDomainSetInner {
                 key,
-                patterns: Arc::from(normalize_patterns(raw_patterns, key)),
+                patterns: Arc::from(patterns),
                 regex: Arc::from(regex),
+                index,
             }),
         })
     }
@@ -89,6 +104,18 @@ impl SharedDomainSet {
 
     pub fn ptr_eq(&self, other: &Self) -> bool {
         Arc::ptr_eq(&self.inner, &other.inner)
+    }
+
+    fn matches(&self, domain: &str) -> bool {
+        if let Some(index) = self.inner.index.as_ref() {
+            return index.matches(domain);
+        }
+        linear_domain_set_matches(
+            self.key(),
+            domain,
+            self.patterns(),
+            self.inner.regex.as_ref(),
+        )
     }
 }
 
@@ -176,29 +203,105 @@ impl DomainMatcher {
 
 impl DomainSet {
     fn matches(&self, domain: &str) -> bool {
-        match self.data.key() {
-            DomainKey::Full => self
-                .data
-                .patterns()
-                .iter()
-                .any(|pattern| domain.eq_ignore_ascii_case(pattern.trim_end_matches('.'))),
-            DomainKey::Keyword => self
-                .data
-                .patterns()
-                .iter()
-                .any(|pattern| domain.contains(pattern)),
-            DomainKey::Suffix => self
-                .data
-                .patterns()
-                .iter()
-                .any(|pattern| suffix_matches(domain, pattern)),
-            DomainKey::Regex => self
-                .data
-                .inner
-                .regex
-                .iter()
-                .any(|regex| regex.is_match(domain)),
+        self.data.matches(domain)
+    }
+}
+
+impl SharedDomainSetIndex {
+    fn new(key: DomainKey, patterns: &[String]) -> Result<Option<Self>, RoutingError> {
+        if patterns.len() < DOMAIN_SET_INDEX_MIN_PATTERNS {
+            return Ok(None);
         }
+        match key {
+            DomainKey::Full => Ok(Some(Self::Full(
+                patterns
+                    .iter()
+                    .map(|pattern| pattern.trim_end_matches('.').to_ascii_lowercase())
+                    .collect(),
+            ))),
+            DomainKey::Keyword => Ok(None),
+            DomainKey::Suffix => Ok(Some(Self::Suffix(SuffixDomainSetIndex::new(patterns)))),
+            DomainKey::Regex => Ok(Some(Self::Regex(regex_set(patterns)?))),
+        }
+    }
+
+    fn matches(&self, domain: &str) -> bool {
+        match self {
+            Self::Full(index) => index.contains(domain),
+            Self::Suffix(index) => index.matches(domain),
+            Self::Regex(regex) => regex.is_match(domain),
+        }
+    }
+}
+
+impl SuffixDomainSetIndex {
+    fn new(patterns: &[String]) -> Self {
+        let mut exact_or_subdomain = HashSet::with_capacity(patterns.len());
+        let mut subdomain_only = HashSet::new();
+        for pattern in patterns {
+            if let Some(stripped) = pattern.strip_prefix('.') {
+                subdomain_only.insert(stripped.to_owned());
+            } else {
+                exact_or_subdomain.insert(pattern.to_owned());
+            }
+        }
+        Self {
+            exact_or_subdomain,
+            subdomain_only,
+        }
+    }
+
+    fn matches(&self, domain: &str) -> bool {
+        let mut candidate = domain;
+        let mut parent_suffix = false;
+        loop {
+            if self.exact_or_subdomain.contains(candidate)
+                || (parent_suffix && self.subdomain_only.contains(candidate))
+            {
+                return true;
+            }
+            let Some((_, next)) = candidate.split_once('.') else {
+                return false;
+            };
+            candidate = next;
+            parent_suffix = true;
+        }
+    }
+}
+
+fn regex_set(patterns: &[String]) -> Result<RegexSet, RoutingError> {
+    RegexSet::new(patterns).map_err(|_| {
+        patterns
+            .iter()
+            .find(|pattern| Regex::new(pattern).is_err())
+            .cloned()
+            .map(RoutingError::InvalidRegex)
+            .unwrap_or_else(|| RoutingError::InvalidFixture("invalid regex set".to_owned()))
+    })
+}
+
+fn regex_vec(patterns: &[String]) -> Result<Vec<Regex>, RoutingError> {
+    patterns
+        .iter()
+        .map(|pattern| Regex::new(pattern).map_err(|_| RoutingError::InvalidRegex(pattern.clone())))
+        .collect()
+}
+
+fn linear_domain_set_matches(
+    key: DomainKey,
+    domain: &str,
+    patterns: &[String],
+    regex: &[Regex],
+) -> bool {
+    match key {
+        DomainKey::Full => patterns
+            .iter()
+            .any(|pattern| domain.eq_ignore_ascii_case(pattern.trim_end_matches('.'))),
+        DomainKey::Keyword => patterns.iter().any(|pattern| domain.contains(pattern)),
+        DomainKey::Suffix => patterns
+            .iter()
+            .any(|pattern| suffix_matches(domain, pattern)),
+        DomainKey::Regex => regex.iter().any(|regex| regex.is_match(domain)),
     }
 }
 
@@ -293,6 +396,26 @@ mod tests {
             .fill_domain_bitmap("example.com", &mut too_short)
             .unwrap_err();
         assert!(err.to_string().contains("domain bitmap buffer too short"));
+    }
+
+    #[test]
+    fn domain_set_indexes_preserve_full_and_suffix_semantics() {
+        let full = SharedDomainSet::new(["Example.COM."], DomainKey::Full).unwrap();
+        let mut matcher = DomainMatcher::new(1);
+        matcher.add_shared_set(0, full.clone());
+        assert_eq!(matcher.match_domain_bitmap("EXAMPLE.COM."), vec![1]);
+
+        assert!(full.matches("example.com"));
+        assert!(!full.matches("www.example.com"));
+
+        let suffix = SharedDomainSet::new(["example.com"], DomainKey::Suffix).unwrap();
+        assert!(suffix.matches("example.com"));
+        assert!(suffix.matches("www.example.com"));
+
+        let subdomain_only =
+            SharedDomainSet::new([".child.example.com"], DomainKey::Suffix).unwrap();
+        assert!(!subdomain_only.matches("child.example.com"));
+        assert!(subdomain_only.matches("www.child.example.com"));
     }
 
     fn u32_array(value: &serde_json::Value) -> Vec<u32> {
