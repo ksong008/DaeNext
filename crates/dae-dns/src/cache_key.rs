@@ -1,6 +1,7 @@
 use std::fmt;
+use std::hash::{Hash, Hasher};
 
-#[derive(Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+#[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd)]
 pub struct DnsCacheKey {
     pub qname: String,
     pub qtype: u16,
@@ -30,10 +31,93 @@ impl DnsCacheKey {
     }
 }
 
+impl Hash for DnsCacheKey {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        hash_dns_cache_key_parts(&self.qname, self.qtype, self.qclass, state);
+    }
+}
+
+impl Hash for DnsCacheKeyView<'_> {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        hash_dns_cache_key_parts(self.qname, self.qtype, self.qclass, state);
+    }
+}
+
 impl fmt::Display for DnsCacheKey {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "{}|{}|{}", self.qname, self.qtype, self.qclass)
     }
+}
+
+pub(crate) fn hash_dns_cache_key_parts<H: Hasher>(
+    qname: &str,
+    qtype: u16,
+    qclass: u16,
+    state: &mut H,
+) {
+    hash_canonical_name_into(qname, state);
+    qtype.hash(state);
+    qclass.hash(state);
+}
+
+pub(crate) fn hash_dns_cache_key_wire_parts<H: Hasher>(
+    qname_wire: &[u8],
+    qtype: u16,
+    qclass: u16,
+    state: &mut H,
+) {
+    hash_canonical_wire_name_into(qname_wire, state);
+    qtype.hash(state);
+    qclass.hash(state);
+}
+
+fn hash_canonical_name_into<H: Hasher>(name: &str, state: &mut H) {
+    let trimmed = name.trim();
+    let without_trailing_dot = trimmed.strip_suffix('.').unwrap_or(trimmed);
+    if without_trailing_dot.is_empty() {
+        state.write_u8(b'.');
+    } else {
+        for byte in without_trailing_dot.bytes() {
+            state.write_u8(byte.to_ascii_lowercase());
+        }
+        state.write_u8(b'.');
+    }
+    state.write_u8(0);
+}
+
+fn hash_canonical_wire_name_into<H: Hasher>(wire: &[u8], state: &mut H) {
+    let mut offset = 0;
+    let mut wrote_label = false;
+    let mut wrote_terminal = false;
+    loop {
+        let Some(&len) = wire.get(offset) else {
+            break;
+        };
+        offset += 1;
+        if len == 0 || len & 0xc0 != 0 || len > 63 {
+            state.write_u8(b'.');
+            wrote_terminal = true;
+            break;
+        }
+        let end = offset + len as usize;
+        if end > wire.len() {
+            state.write_u8(b'.');
+            wrote_terminal = true;
+            break;
+        }
+        if wrote_label {
+            state.write_u8(b'.');
+        }
+        for byte in &wire[offset..end] {
+            state.write_u8(byte.to_ascii_lowercase());
+        }
+        wrote_label = true;
+        offset = end;
+    }
+    if !wrote_label && !wrote_terminal {
+        state.write_u8(b'.');
+    }
+    state.write_u8(0);
 }
 
 pub fn canonical_name(name: &str) -> String {

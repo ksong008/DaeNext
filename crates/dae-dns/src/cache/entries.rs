@@ -1,9 +1,10 @@
-use std::collections::HashMap;
+use std::hash::{Hash, Hasher};
 
 use crate::cache::DnsCacheEntry;
-use crate::cache_key::{DnsCacheKey, DnsCacheKeyView};
+use crate::cache_key::{DnsCacheKey, DnsCacheKeyView, hash_dns_cache_key_wire_parts};
 use crate::error::DnsError;
 use crate::message::DnsPacketQuestionView;
+use hashbrown::{Equivalent, HashMap};
 
 const DNS_CACHE_SMALL_BACKEND_MAX_ENTRIES: usize = 16;
 
@@ -50,10 +51,7 @@ impl DnsCacheEntries {
             Self::Small(entries) => entries
                 .iter()
                 .find_map(|(candidate, entry)| candidate.matches_view(key).then_some(entry)),
-            Self::Map(entries) => {
-                let owned = DnsCacheKey::new(key.qname, key.qtype, key.qclass);
-                entries.get(&owned)
-            }
+            Self::Map(entries) => entries.get(&key),
         }
     }
 
@@ -70,10 +68,7 @@ impl DnsCacheEntries {
                 }
                 Ok(None)
             }
-            Self::Map(entries) => {
-                let owned = packet_question_cache_key(question)?;
-                Ok(entries.get(&owned))
-            }
+            Self::Map(entries) => Ok(entries.get(&DnsPacketQuestionCacheKey(question))),
         }
     }
 
@@ -119,10 +114,7 @@ impl DnsCacheEntries {
                     .position(|(candidate, _)| candidate.matches_view(key))?;
                 Some(entries.swap_remove(index).1)
             }
-            Self::Map(entries) => {
-                let owned = DnsCacheKey::new(key.qname, key.qtype, key.qclass);
-                entries.remove(&owned)
-            }
+            Self::Map(entries) => entries.remove(&key),
         }
     }
 
@@ -141,10 +133,7 @@ impl DnsCacheEntries {
                 }
                 Ok(None)
             }
-            Self::Map(entries) => {
-                let owned = packet_question_cache_key(question)?;
-                Ok(entries.remove(&owned))
-            }
+            Self::Map(entries) => Ok(entries.remove(&DnsPacketQuestionCacheKey(question))),
         }
     }
 
@@ -180,17 +169,9 @@ impl DnsCacheEntries {
                 before - entries.len()
             }
             Self::Map(entries) => {
-                let expired: Vec<DnsCacheKey> = entries
-                    .iter()
-                    .filter_map(|(key, entry)| {
-                        (entry.cache_expires_at() <= now_unix).then_some(key.clone())
-                    })
-                    .collect();
-                let removed = expired.len();
-                for key in expired {
-                    entries.remove(&key);
-                }
-                removed
+                let before = entries.len();
+                entries.retain(|_, entry| entry.cache_expires_at() > now_unix);
+                before - entries.len()
             }
         }
     }
@@ -232,12 +213,22 @@ fn packet_question_matches_key(
     question.qname_canonical_eq_ignore_ascii_case(&key.qname)
 }
 
-fn packet_question_cache_key(
-    question: &DnsPacketQuestionView<'_>,
-) -> Result<DnsCacheKey, DnsError> {
-    Ok(DnsCacheKey {
-        qname: question.qname_to_canonical_string()?,
-        qtype: question.qtype(),
-        qclass: question.qclass(),
-    })
+impl Equivalent<DnsCacheKey> for DnsCacheKeyView<'_> {
+    fn equivalent(&self, key: &DnsCacheKey) -> bool {
+        key.matches_view(*self)
+    }
+}
+
+struct DnsPacketQuestionCacheKey<'a>(&'a DnsPacketQuestionView<'a>);
+
+impl Hash for DnsPacketQuestionCacheKey<'_> {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        hash_dns_cache_key_wire_parts(self.0.qname_wire(), self.0.qtype(), self.0.qclass(), state);
+    }
+}
+
+impl Equivalent<DnsCacheKey> for DnsPacketQuestionCacheKey<'_> {
+    fn equivalent(&self, key: &DnsCacheKey) -> bool {
+        packet_question_matches_key(self.0, key).unwrap_or(false)
+    }
 }
