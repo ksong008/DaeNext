@@ -68,7 +68,7 @@ impl UdpSessionKey {
             outbound: proxy.group_name.clone(),
             peer,
             original_destination: original_dst,
-            packet_semantics: udp_packet_semantics_for_destination(&proxy.handler, original_dst),
+            packet_semantics: udp_packet_semantics_for_destination(proxy, original_dst),
         }
     }
 

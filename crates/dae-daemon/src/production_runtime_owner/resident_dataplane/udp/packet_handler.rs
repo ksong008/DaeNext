@@ -183,8 +183,7 @@ fn record_udp_session_exchange_result(
                 metrics.add_download(response.payload.len());
             }
             let handler = resident_udp_handler_name(&proxy.handler);
-            let packet_semantics =
-                udp_packet_semantics_for_destination(&proxy.handler, original_dst);
+            let packet_semantics = udp_packet_semantics_for_destination(proxy, original_dst);
             let network = udp_network_name(original_dst);
             let mut event_json = udp_exchange_base_event(
                 event,
@@ -219,8 +218,7 @@ fn record_udp_session_exchange_result(
         }
         Err(err) => {
             let handler = resident_udp_handler_name(&proxy.handler);
-            let packet_semantics =
-                udp_packet_semantics_for_destination(&proxy.handler, original_dst);
+            let packet_semantics = udp_packet_semantics_for_destination(proxy, original_dst);
             let network = udp_network_name(original_dst);
             let mut event_json = udp_exchange_base_event(
                 "udp_exchange_failed",

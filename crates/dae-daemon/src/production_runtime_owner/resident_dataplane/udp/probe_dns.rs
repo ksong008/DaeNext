@@ -6,13 +6,18 @@ pub(crate) async fn probe_resident_proxy_udp_async(
 ) -> serde_json::Value {
     let started = Instant::now();
     let handler = resident_udp_handler_name(&proxy.handler);
-    let packet_semantics = udp_packet_semantics_for_destination(&proxy.handler, original_dst);
+    let packet_semantics = udp_packet_semantics_for_destination(proxy, original_dst);
     let mut executor = UdpSessionExecutor::new_proxy_packet(proxy);
     let dns = ResidentDnsPlan::asis(proxy.mark);
-    let exchange = executor
+    let mut exchange = executor
         .execute(&dns, proxy, original_dst, payload)
         .await
         .map(|(_, response)| response);
+    if let Ok(response) = &exchange
+        && !response.reply_forwarded
+    {
+        exchange = wait_for_udp_probe_response(&mut executor).await;
+    }
     executor.shutdown().await;
     match exchange {
         Ok(response) => {
@@ -71,6 +76,21 @@ pub(crate) async fn probe_resident_proxy_udp_async(
             "packetSession": udp_probe_packet_session_value(proxy, original_dst, handler, packet_semantics),
             "error": err,
         }),
+    }
+}
+
+async fn wait_for_udp_probe_response(
+    executor: &mut UdpSessionExecutor,
+) -> Result<UdpExchangeResult, String> {
+    let started = Instant::now();
+    loop {
+        if let Some((_, response)) = executor.poll_response().await? {
+            return Ok(response);
+        }
+        if started.elapsed() >= RESIDENT_UDP_RESPONSE_TIMEOUT {
+            return Err("receive UDP probe response timeout".to_owned());
+        }
+        time::sleep(RESIDENT_IDLE_SLEEP).await;
     }
 }
 

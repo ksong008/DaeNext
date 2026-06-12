@@ -280,6 +280,18 @@ mod tests {
             assert_eq!(udp_executor_shape(&executor), expected);
         }
 
+        let mut vless_xhttp =
+            test_udp_proxy(ResidentProxyProtocolPlan::VlessVisionTcpTls { key: [0; 16] });
+        vless_xhttp.protocol = "vless".to_owned();
+        vless_xhttp.net = "xhttp".to_owned();
+        vless_xhttp.tls = "tls".to_owned();
+        vless_xhttp.flow = String::new();
+        let executor = UdpSessionExecutor::new_proxy_packet(&vless_xhttp);
+        assert_eq!(
+            udp_executor_shape(&executor),
+            UdpExecutorShape::VlessXhttpH2
+        );
+
         let fail_closed = [
             ResidentProxyProtocolPlan::VlessMuxTcpTls { key: [0; 16] },
             ResidentProxyProtocolPlan::ShadowsocksSimpleObfsHttpTcp {
@@ -370,7 +382,6 @@ mod tests {
             ("httpupgrade", ""),
             ("grpc", ""),
             ("meek", ""),
-            ("xhttp", ""),
         ];
         for (net, flow) in unsupported_vless_udp {
             let mut proxy =
@@ -399,6 +410,35 @@ mod tests {
             SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::UNSPECIFIED, 53)),
         );
         assert_eq!(udp_executor_shape(&executor), UdpExecutorShape::Dns);
+    }
+
+    #[test]
+    fn resident_vless_xhttp_udp_uses_standard_udp_over_stream_semantics() {
+        let mut proxy =
+            test_udp_proxy(ResidentProxyProtocolPlan::VlessVisionTcpTls { key: [0; 16] });
+        proxy.protocol = "vless".to_owned();
+        proxy.net = "xhttp".to_owned();
+        proxy.tls = "tls".to_owned();
+        proxy.flow = String::new();
+
+        let target = SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::new(1, 2, 3, 4), 443));
+        assert_eq!(
+            udp_packet_semantics_for_destination(&proxy, target),
+            UdpPacketSemantics::UdpOverStream
+        );
+        assert_eq!(
+            udp_packet_semantics_for_destination(
+                &proxy,
+                SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::new(8, 8, 8, 8), 53))
+            ),
+            UdpPacketSemantics::Dns
+        );
+    }
+
+    #[test]
+    fn resident_vless_standard_udp_frame_prefixes_payload_length() {
+        let frame = vless_udp_length_frame(&[0xde, 0xad, 0xbe, 0xef]).unwrap();
+        assert_eq!(frame, [0, 4, 0xde, 0xad, 0xbe, 0xef]);
     }
 
     #[test]
@@ -433,6 +473,7 @@ mod tests {
         Shadowsocks2022,
         Socks5,
         VlessVision,
+        VlessXhttpH2,
         Trojan,
         VmessAead,
         AnyTls,
@@ -449,6 +490,7 @@ mod tests {
             UdpSessionExecutor::Shadowsocks2022(_) => UdpExecutorShape::Shadowsocks2022,
             UdpSessionExecutor::Socks5(_) => UdpExecutorShape::Socks5,
             UdpSessionExecutor::VlessVision(_) => UdpExecutorShape::VlessVision,
+            UdpSessionExecutor::VlessXhttpH2(_) => UdpExecutorShape::VlessXhttpH2,
             UdpSessionExecutor::Trojan(_) => UdpExecutorShape::Trojan,
             UdpSessionExecutor::VmessAead(_) => UdpExecutorShape::VmessAead,
             UdpSessionExecutor::AnyTls(_) => UdpExecutorShape::AnyTls,
