@@ -66,7 +66,7 @@ pub(crate) fn build_chained_proxy_plan(
     child.graph_id = graph.graph_id;
     child.graph_link_hash = graph.link_hash;
     child.redacted_link_source = graph.redacted_link_source;
-    child.chain_parent = Some(Box::new(parent));
+    child.chain_parent = Some(Arc::new(parent));
     Ok(child)
 }
 

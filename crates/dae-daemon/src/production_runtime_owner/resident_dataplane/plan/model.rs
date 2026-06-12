@@ -294,7 +294,7 @@ pub(crate) struct ResidentProxyPlan {
         Option<ResidentRealityUnderlayPlan>,
     pub(in crate::production_runtime_owner::resident_dataplane) handler: ResidentProxyProtocolPlan,
     pub(in crate::production_runtime_owner::resident_dataplane) chain_parent:
-        Option<Box<ResidentProxyPlan>>,
+        Option<Arc<ResidentProxyPlan>>,
     pub(in crate::production_runtime_owner::resident_dataplane) mark: u32,
     pub(in crate::production_runtime_owner::resident_dataplane) mptcp: bool,
 }
