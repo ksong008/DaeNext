@@ -47,9 +47,10 @@ use super::execution::{append_runtime_execution_descriptor, udp_execution_descri
 use super::plan::{ResidentProxyGroupPlan, ResidentProxyPlan, ResidentProxyProtocolPlan};
 use super::tcp::{
     AsyncWebSocketPayloadReader, AsyncWebSocketPayloadState, GrpcHunkReadBuffer,
-    collect_vmess_grpc_decrypted, decode_vmess_grpc_response_stream_async, open_grpc_h2_stream,
-    open_marked_quic_endpoint, resolve_hysteria2_quic_remote_async, resolve_proxy_udp_addr_async,
-    send_grpc_hunk, send_h2_data, set_socket_mark,
+    collect_vmess_grpc_decrypted, decode_vmess_grpc_response_stream_async, new_xhttp_session_id,
+    open_grpc_h2_stream, open_marked_quic_endpoint, open_xhttp_h2_packet_up_session,
+    resolve_hysteria2_quic_remote_async, resolve_proxy_udp_addr_async, send_grpc_hunk,
+    send_h2_data, send_xhttp_h2_packet_up_request, set_socket_mark,
 };
 use super::vision::{VisionUnpadder, vision_padding_block};
 use super::{

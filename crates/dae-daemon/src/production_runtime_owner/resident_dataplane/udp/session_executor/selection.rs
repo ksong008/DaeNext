@@ -40,10 +40,8 @@ impl UdpSessionExecutor {
             ResidentProxyProtocolPlan::VlessVisionTcpTls { .. } => {
                 if matches!(proxy.net.as_str(), "" | "tcp") && proxy.flow == XTLS_RPRX_VISION {
                     Self::VlessVision(VlessXudpStreamSession::default())
-                } else if proxy.net == "xhttp" {
-                    Self::fail_closed(
-                        "VLESS xHTTP UDP remains excluded from the non-xHTTP resident UDP closure",
-                    )
+                } else if proxy.net == "xhttp" && proxy.flow.is_empty() {
+                    Self::VlessXhttpH2(VlessXhttpH2UdpSession::default())
                 } else {
                     Self::fail_closed(
                         "VLESS wrapped-stream UDP requires a matching packet-over-wrapper executor for this transport and flow combination",

@@ -62,19 +62,25 @@ pub(super) fn udp_probe_packet_session_value(
 }
 
 pub(super) fn udp_packet_semantics_for_destination(
-    handler: &ResidentProxyProtocolPlan,
+    proxy: &ResidentProxyPlan,
     original_dst: SocketAddr,
 ) -> UdpPacketSemantics {
     if original_dst.port() == 53 {
         UdpPacketSemantics::Dns
     } else {
-        udp_packet_semantics(handler)
+        udp_packet_semantics(proxy)
     }
 }
 
-pub(super) fn udp_packet_semantics(handler: &ResidentProxyProtocolPlan) -> UdpPacketSemantics {
-    match handler {
-        ResidentProxyProtocolPlan::VlessVisionTcpTls { .. } => UdpPacketSemantics::Xudp,
+pub(super) fn udp_packet_semantics(proxy: &ResidentProxyPlan) -> UdpPacketSemantics {
+    match &proxy.handler {
+        ResidentProxyProtocolPlan::VlessVisionTcpTls { .. } => {
+            if proxy.net == "xhttp" && proxy.flow.is_empty() {
+                UdpPacketSemantics::UdpOverStream
+            } else {
+                UdpPacketSemantics::Xudp
+            }
+        }
         ResidentProxyProtocolPlan::VlessMuxTcpTls { .. } => UdpPacketSemantics::MultiplexedStream,
         ResidentProxyProtocolPlan::Socks5Tcp { .. } => UdpPacketSemantics::UdpAssociate,
         ResidentProxyProtocolPlan::HttpProxyTcp { .. } => UdpPacketSemantics::ProtocolClosed,

@@ -1,4 +1,4 @@
-use std::future::poll_fn;
+use std::future::{Future, poll_fn};
 use std::pin::Pin;
 use std::task::Poll;
 
@@ -12,6 +12,7 @@ pub(super) enum UdpSessionExecutor {
     Shadowsocks2022(Shadowsocks2022DatagramSession),
     Socks5(Socks5UdpAssociateSession),
     VlessVision(VlessXudpStreamSession),
+    VlessXhttpH2(VlessXhttpH2UdpSession),
     Trojan(TrojanUdpStreamSession),
     VmessAead(VmessAeadUdpOverTcpSession),
     AnyTls(AnyTlsPacketStreamSession),
@@ -393,6 +394,196 @@ impl VlessXudpStreamSession {
         }
         self.client.take();
     }
+}
+
+#[derive(Default)]
+pub(super) struct VlessXhttpH2UdpSession {
+    h2_sender: Option<h2::client::SendRequest<Bytes>>,
+    h2_recv: Option<h2::RecvStream>,
+    connection_task: Option<tokio::task::JoinHandle<()>>,
+    session_id: Option<String>,
+    seq: u64,
+    response_header_seen: bool,
+    response_plaintext: Vec<u8>,
+    tls_underlay: Option<&'static str>,
+}
+
+impl VlessXhttpH2UdpSession {
+    async fn exchange(
+        &mut self,
+        proxy: &ResidentProxyPlan,
+        original_dst: SocketAddr,
+        payload: &[u8],
+    ) -> Result<UdpExchangeResult, String> {
+        if !proxy.flow.is_empty() {
+            return Err(
+                "VLESS xHTTP UDP uses the standard VLESS UDP-over-stream command; flow must be empty"
+                    .to_owned(),
+            );
+        }
+        self.ensure_open(proxy).await?;
+        let key = proxy.vless_key()?;
+        let request = if self.seq == 0 {
+            packet::first_write_bytes(
+                &key,
+                &proxy.flow,
+                "udp",
+                &original_dst.to_string(),
+                false,
+                payload,
+            )
+            .map_err(|err| format!("build VLESS xHTTP UDP first packet: {err}"))?
+        } else {
+            vless_udp_length_frame(payload)?
+        };
+        self.send_packet(proxy, Bytes::from(request)).await?;
+        if let Some(response) = self.poll_response().await? {
+            Ok(response)
+        } else {
+            Ok(self.pending_response_result())
+        }
+    }
+
+    async fn ensure_open(&mut self, proxy: &ResidentProxyPlan) -> Result<(), String> {
+        if self.h2_sender.is_some() && self.h2_recv.is_some() && self.session_id.is_some() {
+            return Ok(());
+        }
+        let client = open_async_resident_tls_client(proxy).await?;
+        self.tls_underlay = Some(async_resident_tls_underlay_name(&client));
+        let session_id = new_xhttp_session_id();
+        let (h2_sender, h2_recv, connection_task) =
+            open_xhttp_h2_packet_up_session(client, proxy, &session_id).await?;
+        self.h2_sender = Some(h2_sender);
+        self.h2_recv = Some(h2_recv);
+        self.connection_task = Some(connection_task);
+        self.session_id = Some(session_id);
+        self.seq = 0;
+        self.response_header_seen = false;
+        self.response_plaintext.clear();
+        Ok(())
+    }
+
+    async fn send_packet(
+        &mut self,
+        proxy: &ResidentProxyPlan,
+        payload: Bytes,
+    ) -> Result<(), String> {
+        let session_id = self
+            .session_id
+            .as_deref()
+            .ok_or_else(|| "VLESS xHTTP UDP session id is not initialized".to_owned())?;
+        let sender = self
+            .h2_sender
+            .as_mut()
+            .ok_or_else(|| "VLESS xHTTP UDP HTTP/2 sender is not initialized".to_owned())?;
+        send_xhttp_h2_packet_up_request(sender, proxy, session_id, self.seq, payload).await?;
+        self.seq = self.seq.saturating_add(1);
+        Ok(())
+    }
+
+    async fn poll_response(&mut self) -> Result<Option<UdpExchangeResult>, String> {
+        if let Some(payload) = self.try_pop_response_payload()? {
+            return Ok(Some(self.response_result(payload)));
+        }
+        let data = {
+            let recv = match self.h2_recv.as_mut() {
+                Some(recv) => recv,
+                None => return Ok(None),
+            };
+            let data_future = recv.data();
+            tokio::pin!(data_future);
+            poll_fn(|cx| match data_future.as_mut().poll(cx) {
+                Poll::Ready(value) => Poll::Ready(Some(value)),
+                Poll::Pending => Poll::Ready(None),
+            })
+            .await
+        };
+        match data {
+            Some(Some(Ok(bytes))) => {
+                if let Some(recv) = self.h2_recv.as_mut() {
+                    recv.flow_control()
+                        .release_capacity(bytes.len())
+                        .map_err(|err| {
+                            format!("release VLESS xHTTP UDP HTTP/2 download capacity: {err}")
+                        })?;
+                }
+                self.response_plaintext.extend_from_slice(&bytes);
+                self.try_pop_response_payload()
+                    .map(|payload| payload.map(|payload| self.response_result(payload)))
+            }
+            Some(Some(Err(err))) => {
+                Err(format!("read VLESS xHTTP UDP HTTP/2 download data: {err}"))
+            }
+            Some(None) => Err("VLESS xHTTP UDP HTTP/2 download stream closed".to_owned()),
+            None => Ok(None),
+        }
+    }
+
+    async fn shutdown(&mut self) {
+        if let Some(task) = self.connection_task.take() {
+            task.abort();
+        }
+        self.h2_sender = None;
+        self.h2_recv = None;
+        self.session_id = None;
+    }
+
+    fn try_pop_response_payload(&mut self) -> Result<Option<Vec<u8>>, String> {
+        if !self.response_header_seen {
+            if self.response_plaintext.len() < 2 {
+                return Ok(None);
+            }
+            if self.response_plaintext[0] != VLESS_RESPONSE_VERSION {
+                return Err(format!(
+                    "unexpected VLESS xHTTP UDP response version: {}",
+                    self.response_plaintext[0]
+                ));
+            }
+            let header_len = 2 + self.response_plaintext[1] as usize;
+            if self.response_plaintext.len() < header_len {
+                return Ok(None);
+            }
+            self.response_plaintext.drain(..header_len);
+            self.response_header_seen = true;
+        }
+        if self.response_plaintext.len() < 2 {
+            return Ok(None);
+        }
+        let payload_len =
+            u16::from_be_bytes([self.response_plaintext[0], self.response_plaintext[1]]) as usize;
+        if self.response_plaintext.len() < 2 + payload_len {
+            return Ok(None);
+        }
+        self.response_plaintext.drain(..2);
+        Ok(Some(self.response_plaintext.drain(..payload_len).collect()))
+    }
+
+    fn response_result(&self, payload: Vec<u8>) -> UdpExchangeResult {
+        UdpExchangeResult::new(payload, "tls-udp-over-tcp")
+            .with_session_executor("tokio-xhttp-h2-packet-up")
+            .with_underlay_reuse("tls-h2-session-reused")
+            .with_tls_underlay(self.tls_underlay.unwrap_or("standard-tls"))
+    }
+
+    fn pending_response_result(&self) -> UdpExchangeResult {
+        UdpExchangeResult::pending_response("tls-udp-over-tcp")
+            .with_session_executor("tokio-xhttp-h2-packet-up")
+            .with_underlay_reuse("tls-h2-session-reused")
+            .with_tls_underlay(self.tls_underlay.unwrap_or("standard-tls"))
+    }
+}
+
+pub(super) fn vless_udp_length_frame(payload: &[u8]) -> Result<Vec<u8>, String> {
+    if payload.len() > u16::MAX as usize {
+        return Err(format!(
+            "VLESS UDP payload too large: {} bytes",
+            payload.len()
+        ));
+    }
+    let mut out = Vec::with_capacity(2 + payload.len());
+    out.extend_from_slice(&(payload.len() as u16).to_be_bytes());
+    out.extend_from_slice(payload);
+    Ok(out)
 }
 
 pub(super) struct TrojanUdpStreamSession {
