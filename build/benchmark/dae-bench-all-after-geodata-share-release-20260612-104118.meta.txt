@@ -1,0 +1,8 @@
+timestamp_start=2026-06-12T10:41:18+08:00
+head=e080e011
+bench_output=build/benchmark/dae-bench-all-after-geodata-share-release-20260612-104118.jsonl
+command=cargo run --release -p dae-bench -- --case all --iters auto --output /root/project/DaeNext/build/benchmark/dae-bench-all-after-geodata-share-release-20260612-104118.jsonl
+    Finished `release` profile [optimized] target(s) in 0.08s
+     Running `target/release/dae-bench --case all --iters auto --output /root/project/DaeNext/build/benchmark/dae-bench-all-after-geodata-share-release-20260612-104118.jsonl`
+timestamp_end=2026-06-12T10:41:34+08:00
+exit_code=0
