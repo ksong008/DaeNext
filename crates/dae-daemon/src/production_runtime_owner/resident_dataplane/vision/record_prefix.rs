@@ -43,8 +43,14 @@ pub(crate) fn pop_complete_tls_record(
     let Some((record_type, record_len)) = peek_complete_tls_record(pending)? else {
         return Ok(None);
     };
-    let record = pending.drain(..record_len).collect::<Vec<_>>();
+    let record = take_vec_prefix(pending, record_len);
     Ok(Some((record_type, record)))
+}
+
+pub(crate) fn take_vec_prefix(pending: &mut Vec<u8>, len: usize) -> Vec<u8> {
+    debug_assert!(len <= pending.len());
+    let tail = pending.split_off(len);
+    std::mem::replace(pending, tail)
 }
 
 pub(crate) fn peek_complete_tls_record(pending: &[u8]) -> Result<Option<(u8, usize)>, String> {

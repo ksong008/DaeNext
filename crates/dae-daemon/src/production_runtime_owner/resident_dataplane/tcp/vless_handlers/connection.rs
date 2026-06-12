@@ -337,43 +337,49 @@ impl AsyncMuxFrameBuffer {
         self.pending.extend(bytes.iter().copied());
         let mut event = AsyncMuxFrameEvent::default();
         loop {
-            let pending = self.pending.iter().copied().collect::<Vec<_>>();
-            if pending.len() < 2 {
-                break;
-            }
-            let metadata_len = u16::from_be_bytes([pending[0], pending[1]]) as usize;
-            if !(4..=512).contains(&metadata_len) {
-                return Err("invalid VLESS mux metadata length".to_owned());
-            }
-            let metadata_end = 2 + metadata_len;
-            if pending.len() < metadata_end {
-                break;
-            }
-            let metadata = &pending[2..metadata_end];
-            let frame_id = [metadata[0], metadata[1]];
-            if frame_id != expected_id {
-                return Err("VLESS mux frame id mismatch".to_owned());
-            }
-            let status = metadata[2];
-            let option = metadata[3];
-            if status == SESSION_STATUS_KEEPALIVE {
-                self.pending.drain(..metadata_end);
-                continue;
-            }
-            let mut frame_end = metadata_end;
-            let payload = if option == OPTION_DATA {
-                if pending.len() < metadata_end + 2 {
+            let Some((frame_end, status, option, payload)) = ({
+                let pending = self.pending.make_contiguous();
+                if pending.len() < 2 {
+                    break;
+                };
+                let metadata_len = u16::from_be_bytes([pending[0], pending[1]]) as usize;
+                if !(4..=512).contains(&metadata_len) {
+                    return Err("invalid VLESS mux metadata length".to_owned());
+                }
+                let metadata_end = 2 + metadata_len;
+                if pending.len() < metadata_end {
                     break;
                 }
-                let payload_len =
-                    u16::from_be_bytes([pending[metadata_end], pending[metadata_end + 1]]) as usize;
-                frame_end += 2 + payload_len;
-                if pending.len() < frame_end {
-                    break;
+                let metadata = &pending[2..metadata_end];
+                let frame_id = [metadata[0], metadata[1]];
+                if frame_id != expected_id {
+                    return Err("VLESS mux frame id mismatch".to_owned());
                 }
-                pending[metadata_end + 2..frame_end].to_vec()
-            } else {
-                Vec::new()
+                let status = metadata[2];
+                let option = metadata[3];
+                if status == SESSION_STATUS_KEEPALIVE {
+                    Some((metadata_end, status, option, Vec::new()))
+                } else {
+                    let mut frame_end = metadata_end;
+                    let payload = if option == OPTION_DATA {
+                        if pending.len() < metadata_end + 2 {
+                            break;
+                        }
+                        let payload_len =
+                            u16::from_be_bytes([pending[metadata_end], pending[metadata_end + 1]])
+                                as usize;
+                        frame_end += 2 + payload_len;
+                        if pending.len() < frame_end {
+                            break;
+                        }
+                        pending[metadata_end + 2..frame_end].to_vec()
+                    } else {
+                        Vec::new()
+                    };
+                    Some((frame_end, status, option, payload))
+                }
+            }) else {
+                break;
             };
             self.pending.drain(..frame_end);
             if status == SESSION_STATUS_END {

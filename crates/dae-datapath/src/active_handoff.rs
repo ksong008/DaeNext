@@ -47,7 +47,7 @@ pub enum ActiveHandoffDecision {
         key: ActiveHandoffKey,
         sniffed_domain: Option<String>,
         sniff_used: bool,
-        plan: RouteDialTcpPlan,
+        plan: Box<RouteDialTcpPlan>,
         requires_outbound_adapter: bool,
     },
     Udp {
@@ -85,7 +85,7 @@ impl ActiveHandoffState {
             key: input.key,
             sniffed_domain: input.sniffed_domain.clone(),
             sniff_used: input.sniffed_domain.is_some(),
-            plan,
+            plan: Box::new(plan),
             requires_outbound_adapter: true,
         };
         self.decisions.insert(input.key, decision.clone());

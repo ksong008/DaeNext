@@ -12,15 +12,21 @@ where
         pending.clear();
         return Ok(());
     }
+    let mut consumed_total = 0_usize;
     loop {
         let consumed = {
-            match parse_tls_plaintext(pending.as_slice()) {
+            match parse_tls_plaintext(&pending[consumed_total..]) {
                 Ok((remaining, record)) => {
-                    let consumed = pending.len() - remaining.len();
+                    let consumed = pending[consumed_total..].len() - remaining.len();
                     observe(&record);
                     consumed
                 }
-                Err(tls_parser::nom::Err::Incomplete(_)) => return Ok(()),
+                Err(tls_parser::nom::Err::Incomplete(_)) => {
+                    if consumed_total > 0 {
+                        pending.drain(..consumed_total);
+                    }
+                    return Ok(());
+                }
                 Err(_) => {
                     pending.clear();
                     return Ok(());
@@ -28,8 +34,11 @@ where
             }
         };
         if consumed == 0 {
+            if consumed_total > 0 {
+                pending.drain(..consumed_total);
+            }
             return Ok(());
         }
-        pending.drain(..consumed);
+        consumed_total = consumed_total.saturating_add(consumed);
     }
 }
