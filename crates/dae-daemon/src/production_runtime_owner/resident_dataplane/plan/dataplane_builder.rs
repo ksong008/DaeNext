@@ -90,6 +90,7 @@ pub(crate) fn build_resident_manual_probe_plan(
     let group_name = "__manual_native_probe".to_owned();
     let mut proxy = build_proxy_plan(config, group_name.clone(), node_tag.clone(), link.clone())?;
     proxy.group_policy = "manual_probe".to_owned();
+    proxy.compact_allocations();
     let group = Group {
         name: group_name,
         filter: Vec::new(),
@@ -181,6 +182,7 @@ pub(crate) fn resident_proxy_plans(
             let mut proxy =
                 build_proxy_plan(config, group.name.clone(), node.tag.clone(), node.link)?;
             proxy.group_policy = group_policy.as_str().to_owned();
+            proxy.compact_allocations();
             candidates.push(ResidentProxyCandidatePlan {
                 match_index: node.match_index,
                 annotation_add_latency_ms: node.annotation_add_latency_ms,

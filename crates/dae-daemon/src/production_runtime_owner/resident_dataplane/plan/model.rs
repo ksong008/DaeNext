@@ -300,6 +300,31 @@ pub(crate) struct ResidentProxyPlan {
 }
 
 impl ResidentProxyPlan {
+    pub(in crate::production_runtime_owner::resident_dataplane) fn compact_allocations(&mut self) {
+        compact_string(&mut self.graph_id);
+        compact_string(&mut self.graph_link_hash);
+        compact_string(&mut self.redacted_link_source);
+        compact_string(&mut self.protocol);
+        compact_string(&mut self.group_name);
+        compact_string(&mut self.group_policy);
+        compact_string(&mut self.node_tag);
+        compact_string(&mut self.server_host);
+        compact_string(&mut self.server_name);
+        compact_string_vec(&mut self.alpn);
+        compact_string(&mut self.flow);
+        compact_string(&mut self.net);
+        compact_string(&mut self.stream_host);
+        compact_string(&mut self.stream_path);
+        compact_string(&mut self.tls);
+        if let Some(fingerprint) = &mut self.utls_fingerprint {
+            fingerprint.compact_allocations();
+        }
+        if let Some(reality) = &mut self.reality {
+            reality.compact_allocations();
+        }
+        self.handler.compact_allocations();
+    }
+
     pub(in crate::production_runtime_owner::resident_dataplane) fn executable_graph_descriptor(
         &self,
     ) -> ResidentExecutableGraphDescriptor {
@@ -347,4 +372,154 @@ impl ResidentProxyPlan {
             )),
         }
     }
+}
+
+impl ResidentUtlsFingerprintPlan {
+    fn compact_allocations(&mut self) {
+        compact_string(&mut self.requested);
+        compact_string(&mut self.name);
+        compact_string(&mut self.canonical);
+        compact_string(&mut self.family);
+        compact_string(&mut self.client);
+        compact_string(&mut self.alpn_policy);
+    }
+}
+
+impl ResidentRealityUnderlayPlan {
+    fn compact_allocations(&mut self) {
+        self.short_id.shrink_to_fit();
+        compact_string(&mut self.spider_x);
+    }
+}
+
+impl ResidentProxyProtocolPlan {
+    fn compact_allocations(&mut self) {
+        match self {
+            Self::VlessVisionTcpTls { .. } | Self::VlessMuxTcpTls { .. } => {}
+            Self::Socks5Tcp { username, password } => {
+                compact_string(username);
+                compact_string(password);
+            }
+            Self::HttpProxyTcp {
+                username,
+                password,
+                transport_host,
+                transport_path,
+                ..
+            } => {
+                compact_string(username);
+                compact_string(password);
+                compact_string(transport_host);
+                compact_string(transport_path);
+            }
+            Self::ShadowsocksAeadTcp {
+                cipher, password, ..
+            }
+            | Self::Shadowsocks2022Tcp {
+                cipher, password, ..
+            } => {
+                compact_string(cipher);
+                compact_string(password);
+            }
+            Self::ShadowsocksSimpleObfsHttpTcp {
+                cipher,
+                password,
+                host,
+                path,
+                ..
+            }
+            | Self::ShadowsocksV2rayPluginTlsWsTcp {
+                cipher,
+                password,
+                host,
+                path,
+                ..
+            }
+            | Self::Shadowsocks2022SimpleObfsHttpTcp {
+                cipher,
+                password,
+                host,
+                path,
+                ..
+            } => {
+                compact_string(cipher);
+                compact_string(password);
+                compact_string(host);
+                compact_string(path);
+            }
+            Self::ShadowsocksSimpleObfsTlsTcp {
+                cipher,
+                password,
+                host,
+                ..
+            } => {
+                compact_string(cipher);
+                compact_string(password);
+                compact_string(host);
+            }
+            Self::ShadowsocksRHttpSimpleTcp {
+                cipher,
+                password,
+                obfs_host,
+                ..
+            } => {
+                compact_string(cipher);
+                compact_string(password);
+                compact_string(obfs_host);
+            }
+            Self::TrojanTcpTls { password }
+            | Self::AnyTlsTcpTls { auth: password }
+            | Self::VmessAeadTcp { id: password } => compact_string(password),
+            Self::TrojanInnerShadowsocksTcpTls {
+                password,
+                inner_cipher,
+                inner_password,
+            } => {
+                compact_string(password);
+                compact_string(inner_cipher);
+                compact_string(inner_password);
+            }
+            Self::Hysteria2QuicTcp {
+                auth,
+                pin_sha256,
+                port_hop_ports,
+                ..
+            } => {
+                compact_string(auth);
+                compact_string(pin_sha256);
+                port_hop_ports.shrink_to_fit();
+            }
+            Self::TuicQuicTcp {
+                uuid,
+                password,
+                alpn,
+                ..
+            } => {
+                compact_string(uuid);
+                compact_string(password);
+                compact_string_vec(alpn);
+            }
+            Self::JuicityQuicTcp {
+                uuid,
+                password,
+                pinned_certchain_sha256,
+                ..
+            } => {
+                compact_string(uuid);
+                compact_string(password);
+                compact_string(pinned_certchain_sha256);
+            }
+        }
+    }
+}
+
+fn compact_string(value: &mut String) {
+    value.shrink_to_fit();
+}
+
+fn compact_string_vec(values: &mut Vec<String>) {
+    for value in values.iter_mut() {
+        compact_string(value);
+    }
+    values.shrink_to_fit();
 }

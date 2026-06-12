@@ -5,13 +5,14 @@ pub(super) fn boring_vless_connector(
     proxy: &ResidentProxyPlan,
 ) -> Result<Arc<SslConnector>, String> {
     let key = ResidentTlsClientConfigKey::from_proxy(proxy);
-    let cache = BORING_CONNECTOR_CACHE.get_or_init(|| Mutex::new(BTreeMap::new()));
+    let cache =
+        BORING_CONNECTOR_CACHE.get_or_init(|| Mutex::new(ResidentTlsConfigCache::default()));
     {
-        let cache = cache
+        let mut cache = cache
             .lock()
             .map_err(|_| "VLESS BoringSSL connector cache lock poisoned".to_owned())?;
         if let Some(connector) = cache.get(&key) {
-            return Ok(Arc::clone(connector));
+            return Ok(connector);
         }
     }
     let mut builder = SslConnector::builder(SslMethod::tls())
@@ -43,9 +44,7 @@ pub(super) fn boring_vless_connector(
     let mut cache = cache
         .lock()
         .map_err(|_| "VLESS BoringSSL connector cache lock poisoned".to_owned())?;
-    Ok(Arc::clone(
-        cache.entry(key).or_insert_with(|| Arc::clone(&connector)),
-    ))
+    Ok(cache.insert_or_get(key, connector))
 }
 
 impl ResidentTlsClientConfigKey {
@@ -94,13 +93,14 @@ pub(super) fn rustls_vless_client_config(
     proxy: &ResidentProxyPlan,
 ) -> Result<Arc<ClientConfig>, String> {
     let key = ResidentTlsClientConfigKey::from_proxy(proxy);
-    let cache = RUSTLS_CLIENT_CONFIG_CACHE.get_or_init(|| Mutex::new(BTreeMap::new()));
+    let cache =
+        RUSTLS_CLIENT_CONFIG_CACHE.get_or_init(|| Mutex::new(ResidentTlsConfigCache::default()));
     {
-        let cache = cache
+        let mut cache = cache
             .lock()
             .map_err(|_| "VLESS rustls client config cache lock poisoned".to_owned())?;
         if let Some(config) = cache.get(&key) {
-            return Ok(Arc::clone(config));
+            return Ok(config);
         }
     }
     let builder = if proxy.reality.is_some() {
@@ -151,9 +151,7 @@ pub(super) fn rustls_vless_client_config(
     let mut cache = cache
         .lock()
         .map_err(|_| "VLESS rustls client config cache lock poisoned".to_owned())?;
-    Ok(Arc::clone(
-        cache.entry(key).or_insert_with(|| Arc::clone(&config)),
-    ))
+    Ok(cache.insert_or_get(key, config))
 }
 
 #[derive(Debug)]
