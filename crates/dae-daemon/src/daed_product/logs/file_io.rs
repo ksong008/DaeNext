@@ -1,4 +1,6 @@
 use super::*;
+use std::borrow::Cow;
+
 #[derive(Debug)]
 pub(crate) struct ProductLogEntry {
     pub(super) id: u64,
@@ -31,22 +33,35 @@ pub(crate) fn clear_log_file_preserving_startup_reload_logs(config_dir: &Path) -
     let _guard = lock
         .lock()
         .map_err(|_| io::Error::other("product log file lock poisoned"))?;
-    let data = match fs::read_to_string(&log_file) {
-        Ok(data) => data,
-        Err(err) if err.kind() == io::ErrorKind::NotFound => String::new(),
-        Err(err) => return Err(err),
-    };
-    let mut retained = data
-        .lines()
-        .filter(|line| startup_reload_lifecycle_log_line(line))
-        .map(str::to_owned)
-        .collect::<Vec<_>>()
-        .join("\n");
-    if !retained.is_empty() {
-        retained.push('\n');
+    let tmp_path = log_file.with_extension("jsonl.clear.tmp");
+    {
+        let output = fs::File::create(&tmp_path)?;
+        let mut writer = BufWriter::new(output);
+        match fs::File::open(&log_file) {
+            Ok(input) => {
+                let mut reader = io::BufReader::new(input);
+                let mut line = String::new();
+                loop {
+                    line.clear();
+                    let read = reader.read_line(&mut line)?;
+                    if read == 0 {
+                        break;
+                    }
+                    if startup_reload_lifecycle_log_line(&line) {
+                        writer.write_all(line.as_bytes())?;
+                        if !line.ends_with('\n') {
+                            writer.write_all(b"\n")?;
+                        }
+                    }
+                }
+            }
+            Err(err) if err.kind() == io::ErrorKind::NotFound => {}
+            Err(err) => return Err(err),
+        }
+        writer.flush()?;
     }
-    fs::write(&log_file, retained)?;
-    set_log_file_permissions(&log_file)?;
+    set_log_file_permissions(&tmp_path)?;
+    fs::rename(tmp_path, &log_file)?;
     reset_log_id_cache_to_last(&log_file)
 }
 
@@ -142,40 +157,66 @@ pub(crate) fn trim_log_string(value: &str, max_len: usize) -> String {
 }
 
 pub(crate) fn parse_log_entry_line(line: &str) -> Option<ProductLogEntry> {
-    let value = serde_json::from_str::<Value>(line).ok()?;
-    let id = value.get("id").and_then(|value| {
-        value
-            .as_u64()
-            .or_else(|| value.as_i64().and_then(|value| u64::try_from(value).ok()))
-    })?;
-    let ts = value.get("ts")?.as_str()?.to_owned();
-    let level = normalize_log_level_name(value.get("level")?.as_str()?)?;
-    let message = value.get("message")?.as_str()?.to_owned();
-    let fields = value
-        .get("fields")
-        .and_then(Value::as_object)
-        .map(|fields| {
-            fields
-                .iter()
-                .map(|(key, value)| {
-                    (
-                        key.to_owned(),
-                        value
-                            .as_str()
-                            .map(str::to_owned)
-                            .unwrap_or_else(|| value.to_string()),
-                    )
-                })
-                .collect::<BTreeMap<_, _>>()
-        })
-        .unwrap_or_default();
+    let raw = serde_json::from_str::<ProductLogEntryRaw<'_>>(line).ok()?;
+    let id = raw.id.into_u64()?;
+    let level = normalize_log_level_name(raw.level)?;
+    let fields = raw
+        .fields
+        .into_iter()
+        .map(|(key, value)| (key.into_owned(), value.into_owned()))
+        .collect();
     Some(ProductLogEntry {
         id,
-        ts,
+        ts: raw.ts.to_owned(),
         level,
-        message,
+        message: raw.message.to_owned(),
         fields,
     })
+}
+
+#[derive(serde::Deserialize)]
+struct ProductLogEntryRaw<'a> {
+    id: ProductLogIdRaw,
+    #[serde(borrow)]
+    ts: &'a str,
+    #[serde(borrow)]
+    level: &'a str,
+    #[serde(borrow)]
+    message: &'a str,
+    #[serde(default, borrow)]
+    fields: BTreeMap<Cow<'a, str>, ProductLogFieldRaw<'a>>,
+}
+
+#[derive(serde::Deserialize)]
+#[serde(untagged)]
+enum ProductLogIdRaw {
+    Unsigned(u64),
+    Signed(i64),
+}
+
+impl ProductLogIdRaw {
+    fn into_u64(self) -> Option<u64> {
+        match self {
+            Self::Unsigned(value) => Some(value),
+            Self::Signed(value) => u64::try_from(value).ok(),
+        }
+    }
+}
+
+#[derive(serde::Deserialize)]
+#[serde(untagged)]
+enum ProductLogFieldRaw<'a> {
+    String(#[serde(borrow)] &'a str),
+    Other(Value),
+}
+
+impl ProductLogFieldRaw<'_> {
+    fn into_owned(self) -> String {
+        match self {
+            Self::String(value) => value.to_owned(),
+            Self::Other(value) => value.to_string(),
+        }
+    }
 }
 
 pub(crate) fn startup_reload_lifecycle_log_kind(message: &str) -> Option<&'static str> {
@@ -312,19 +353,53 @@ pub(crate) fn reset_log_id_cache_to_last(path: &Path) -> io::Result<()> {
     set_log_id_cache(path, read_last_log_id(path)?)
 }
 
-pub(crate) fn scan_log_entries_after_id(
-    config_dir: &Path,
-    after_id: u64,
-) -> io::Result<(Vec<ProductLogEntry>, u64)> {
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct ProductLogScanState {
+    pub(crate) offset: u64,
+    pub(crate) max_seen_id: u64,
+}
+
+pub(crate) fn log_file_size(config_dir: &Path) -> io::Result<u64> {
     let log_file = product_log_file(config_dir);
-    let file = match fs::File::open(&log_file) {
+    match fs::metadata(log_file) {
+        Ok(metadata) => Ok(metadata.len()),
+        Err(err) if err.kind() == io::ErrorKind::NotFound => Ok(0),
+        Err(err) => Err(err),
+    }
+}
+
+pub(crate) fn scan_log_entries_from_offset(
+    config_dir: &Path,
+    offset: u64,
+    after_id: u64,
+    mut on_entry: impl FnMut(ProductLogEntry) -> io::Result<()>,
+) -> io::Result<ProductLogScanState> {
+    let log_file = product_log_file(config_dir);
+    let mut file = match fs::File::open(&log_file) {
         Ok(file) => file,
-        Err(err) if err.kind() == io::ErrorKind::NotFound => return Ok((Vec::new(), after_id)),
+        Err(err) if err.kind() == io::ErrorKind::NotFound => {
+            return Ok(ProductLogScanState {
+                offset: 0,
+                max_seen_id: after_id,
+            });
+        }
         Err(err) => return Err(err),
     };
+    let len = file.metadata()?.len();
+    let mut next_offset = offset.min(len);
+    if next_offset > 0 {
+        file.seek(SeekFrom::Start(next_offset))?;
+    }
+    let mut reader = io::BufReader::new(file);
     let mut max_seen_id = after_id;
-    let mut entries = Vec::new();
-    for line in io::BufReader::new(file).lines().map_while(Result::ok) {
+    let mut line = String::new();
+    loop {
+        line.clear();
+        let read = reader.read_line(&mut line)?;
+        if read == 0 {
+            break;
+        }
+        next_offset = next_offset.saturating_add(read as u64);
         let Some(entry) = parse_log_entry_line(&line) else {
             continue;
         };
@@ -332,10 +407,13 @@ pub(crate) fn scan_log_entries_after_id(
             max_seen_id = entry.id;
         }
         if entry.id > after_id {
-            entries.push(entry);
+            on_entry(entry)?;
         }
     }
-    Ok((entries, max_seen_id))
+    Ok(ProductLogScanState {
+        offset: next_offset,
+        max_seen_id,
+    })
 }
 
 pub(crate) fn count_log_file_entries(config_dir: &Path) -> io::Result<i64> {

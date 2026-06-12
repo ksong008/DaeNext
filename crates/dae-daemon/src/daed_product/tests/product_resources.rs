@@ -524,9 +524,13 @@ fn runtime_traffic_stats_event_file_cache_reads_new_tail() {
 
     let first = resident_runtime_traffic_stats(&runtime, 60, 10);
     assert_eq!(first.upload_total, 100);
+    let event_file_key = path_string(&event_file);
     let offset_after_first = RUNTIME_TRAFFIC_EVENT_FILE_CACHE
         .get_or_init(|| Mutex::new(RuntimeTrafficEventFileCache::default()))
         .lock()
+        .unwrap()
+        .entries
+        .get(&event_file_key)
         .unwrap()
         .offset;
     let second = resident_runtime_traffic_stats(&runtime, 60, 10);
@@ -535,6 +539,9 @@ fn runtime_traffic_stats_event_file_cache_reads_new_tail() {
         RUNTIME_TRAFFIC_EVENT_FILE_CACHE
             .get_or_init(|| Mutex::new(RuntimeTrafficEventFileCache::default()))
             .lock()
+            .unwrap()
+            .entries
+            .get(&event_file_key)
             .unwrap()
             .offset,
         offset_after_first
