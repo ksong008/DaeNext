@@ -9,7 +9,7 @@ pub(crate) fn build_proxy_plan(
         return build_chained_proxy_plan(config, group_name, node_tag, link);
     }
     let scheme = link_scheme(&link).unwrap_or_default();
-    match scheme.as_str() {
+    let mut plan = match scheme.as_str() {
         "vless" => build_vless_proxy_plan(config, group_name, node_tag, link),
         "socks" | "socks5" => build_socks5_proxy_plan(config, group_name, node_tag, link),
         "http" | "https" => build_http_proxy_plan(config, group_name, node_tag, link),
@@ -24,7 +24,9 @@ pub(crate) fn build_proxy_plan(
         _ => Err(format!(
             "resident dataplane selected unsupported {scheme} node {node_tag}; no resident executor is admitted for this node shape; shape remains fail-closed for this config",
         )),
-    }
+    }?;
+    plan.compact_allocations();
+    Ok(plan)
 }
 
 pub(crate) fn build_chained_proxy_plan(
@@ -67,6 +69,7 @@ pub(crate) fn build_chained_proxy_plan(
     child.graph_link_hash = graph.link_hash;
     child.redacted_link_source = graph.redacted_link_source;
     child.chain_parent = Some(Arc::new(parent));
+    child.compact_allocations();
     Ok(child)
 }
 

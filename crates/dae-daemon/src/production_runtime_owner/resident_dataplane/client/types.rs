@@ -71,8 +71,87 @@ pub(crate) struct ResidentRealityConfigKey {
 }
 
 pub(crate) static RUSTLS_CLIENT_CONFIG_CACHE: OnceLock<
-    Mutex<BTreeMap<ResidentTlsClientConfigKey, Arc<ClientConfig>>>,
+    Mutex<ResidentTlsConfigCache<ClientConfig>>,
 > = OnceLock::new();
-pub(crate) static BORING_CONNECTOR_CACHE: OnceLock<
-    Mutex<BTreeMap<ResidentTlsClientConfigKey, Arc<SslConnector>>>,
-> = OnceLock::new();
+pub(crate) static BORING_CONNECTOR_CACHE: OnceLock<Mutex<ResidentTlsConfigCache<SslConnector>>> =
+    OnceLock::new();
+
+const RESIDENT_TLS_CONFIG_CACHE_MAX_ENTRIES: usize = 64;
+
+#[derive(Debug)]
+pub(crate) struct ResidentTlsConfigCache<T> {
+    entries: BTreeMap<ResidentTlsClientConfigKey, ResidentTlsConfigCacheEntry<T>>,
+    next_generation: u64,
+}
+
+#[derive(Debug)]
+struct ResidentTlsConfigCacheEntry<T> {
+    value: Arc<T>,
+    generation: u64,
+}
+
+impl<T> Default for ResidentTlsConfigCache<T> {
+    fn default() -> Self {
+        Self {
+            entries: BTreeMap::new(),
+            next_generation: 0,
+        }
+    }
+}
+
+impl<T> ResidentTlsConfigCache<T> {
+    pub(super) fn get(&mut self, key: &ResidentTlsClientConfigKey) -> Option<Arc<T>> {
+        let generation = self.touch_generation();
+        let entry = self.entries.get_mut(key)?;
+        entry.generation = generation;
+        Some(Arc::clone(&entry.value))
+    }
+
+    pub(super) fn insert_or_get(
+        &mut self,
+        key: ResidentTlsClientConfigKey,
+        value: Arc<T>,
+    ) -> Arc<T> {
+        let generation = self.touch_generation();
+        let result = if let Some(entry) = self.entries.get_mut(&key) {
+            entry.generation = generation;
+            Arc::clone(&entry.value)
+        } else {
+            self.entries.insert(
+                key.clone(),
+                ResidentTlsConfigCacheEntry {
+                    value: Arc::clone(&value),
+                    generation,
+                },
+            );
+            value
+        };
+        self.prune_except(&key);
+        result
+    }
+
+    fn touch_generation(&mut self) -> u64 {
+        self.next_generation = self.next_generation.saturating_add(1);
+        self.next_generation
+    }
+
+    fn prune_except(&mut self, keep: &ResidentTlsClientConfigKey) {
+        if self.entries.len() <= RESIDENT_TLS_CONFIG_CACHE_MAX_ENTRIES {
+            return;
+        }
+        let mut removable = self
+            .entries
+            .iter()
+            .filter(|(key, _)| *key != keep)
+            .map(|(key, entry)| (entry.generation, key.clone()))
+            .collect::<Vec<_>>();
+        removable.sort_by_key(|(generation, _)| *generation);
+        let remove_count = self
+            .entries
+            .len()
+            .saturating_sub(RESIDENT_TLS_CONFIG_CACHE_MAX_ENTRIES);
+        for (_, key) in removable.into_iter().take(remove_count) {
+            self.entries.remove(&key);
+        }
+    }
+}
