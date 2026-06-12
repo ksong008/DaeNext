@@ -1,0 +1,15 @@
+timestamp_start=2026-06-12T10:48:12+08:00
+head=05820df9
+bench_output=build/benchmark/dae-bench-all-after-geodata-bytes-arc-release-20260612-104812.jsonl
+command=cargo run --release -p dae-bench -- --case all --iters auto --output /root/project/DaeNext/build/benchmark/dae-bench-all-after-geodata-bytes-arc-release-20260612-104812.jsonl
+   Compiling dae-routing v0.1.0 (/root/project/DaeNext/crates/dae-routing)
+   Compiling dae-control v0.1.0 (/root/project/DaeNext/crates/dae-control)
+   Compiling dae-dns v0.1.0 (/root/project/DaeNext/crates/dae-dns)
+   Compiling dae-aya-bpf-loader v0.1.0 (/root/project/DaeNext/crates/dae-aya-bpf-loader)
+   Compiling dae-daemon v0.1.0 (/root/project/DaeNext/crates/dae-daemon)
+   Compiling dae-cli v0.1.0 (/root/project/DaeNext/crates/dae-cli)
+   Compiling dae-bench v0.1.0 (/root/project/DaeNext/crates/dae-bench)
+    Finished `release` profile [optimized] target(s) in 19.78s
+     Running `target/release/dae-bench --case all --iters auto --output /root/project/DaeNext/build/benchmark/dae-bench-all-after-geodata-bytes-arc-release-20260612-104812.jsonl`
+timestamp_end=2026-06-12T10:48:47+08:00
+exit_code=0
