@@ -2,6 +2,7 @@ use std::hint::black_box;
 
 use dae_daemon::{
     daemon_runtime_native_owner_summary_json, datapath_outbound_ebpf_deep_area_summary_json,
+    resident_tcp_selection_benchmark_fixture,
 };
 
 use crate::{BenchCase, Measurement, measure};
@@ -17,6 +18,11 @@ pub(crate) fn cases() -> Vec<BenchCase> {
             id: "daemon/datapath_outbound_ebpf_summary",
             default_iters: 100_000,
             run: bench_datapath_outbound_ebpf_summary,
+        },
+        BenchCase {
+            id: "daemon/resident_tcp_proxy_selection",
+            default_iters: 100_000,
+            run: bench_resident_tcp_proxy_selection,
         },
     ]
 }
@@ -54,4 +60,9 @@ fn bench_datapath_outbound_ebpf_summary(iters: u64, warmup: u64) -> Result<Measu
         iters,
         warmup,
     ))
+}
+
+fn bench_resident_tcp_proxy_selection(iters: u64, warmup: u64) -> Result<Measurement, String> {
+    let fixture = resident_tcp_selection_benchmark_fixture()?;
+    Ok(measure(|| black_box(fixture.run_once()), iters, warmup))
 }

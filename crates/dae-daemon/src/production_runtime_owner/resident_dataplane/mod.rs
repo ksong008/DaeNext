@@ -42,11 +42,15 @@ mod dns;
 mod events;
 mod execution;
 mod execution_types;
+mod memory_bench;
 mod plan;
 mod runtime_owner;
 mod tcp;
 mod udp;
 mod vision;
+pub use self::memory_bench::{
+    ResidentTcpSelectionBenchmarkFixture, resident_tcp_selection_benchmark_fixture,
+};
 
 #[path = "runtime/defaults.rs"]
 mod defaults;
