@@ -6,7 +6,7 @@ use super::*;
 pub(super) struct ManagedUdpPacket {
     pub(super) packet: UdpOriginalDstPacket,
     pub(super) original_dst: SocketAddr,
-    pub(super) proxy: ResidentProxyPlan,
+    pub(super) proxy: Arc<ResidentProxyPlan>,
 }
 
 pub(super) struct UdpSessionEntry {
@@ -87,7 +87,7 @@ async fn run_udp_session_actor(
             None => Err("UDP session executor was not initialized".to_owned()),
         };
         record_udp_exchange_result(
-            managed.proxy,
+            &managed.proxy,
             managed.packet,
             managed.original_dst,
             context.event_file.clone(),

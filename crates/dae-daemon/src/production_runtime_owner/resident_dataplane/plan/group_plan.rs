@@ -7,7 +7,7 @@ pub(crate) struct ResidentProxyCandidatePlan {
     pub(in crate::production_runtime_owner::resident_dataplane) link: String,
     pub(in crate::production_runtime_owner::resident_dataplane) link_hash: String,
     pub(in crate::production_runtime_owner::resident_dataplane) redacted_link_source: String,
-    pub(in crate::production_runtime_owner::resident_dataplane) proxy: ResidentProxyPlan,
+    pub(in crate::production_runtime_owner::resident_dataplane) proxy: Arc<ResidentProxyPlan>,
 }
 
 #[derive(Clone, Debug)]
@@ -229,7 +229,7 @@ impl ResidentProxyGroupPlan {
         &self,
     ) -> Option<ResidentProxyPlan> {
         self.snapshot_candidate()
-            .map(|candidate| candidate.proxy.clone())
+            .map(|candidate| candidate.proxy.as_ref().clone())
     }
 
     pub(in crate::production_runtime_owner::resident_dataplane) fn needs_background_checks(
@@ -256,7 +256,7 @@ impl ResidentProxyGroupPlan {
                 redacted_link_source: candidate.redacted_link_source.clone(),
                 tcp_check: self.tcp_check.clone(),
                 udp_check: self.udp_check.clone(),
-                proxy: candidate.proxy.clone(),
+                proxy: candidate.proxy.as_ref().clone(),
             })
             .collect()
     }
@@ -298,8 +298,9 @@ impl ResidentProxyGroupPlan {
 
     pub(in crate::production_runtime_owner::resident_dataplane) fn select_proxy_for_udp(
         &self,
-    ) -> Result<ResidentProxyPlan, String> {
-        self.select_proxy_for_network("udp4")
+    ) -> Result<Arc<ResidentProxyPlan>, String> {
+        self.select_candidate("udp4")
+            .map(|candidate| Arc::clone(&candidate.proxy))
     }
 
     pub(in crate::production_runtime_owner::resident_dataplane) fn select_proxy_for_network(
@@ -307,7 +308,7 @@ impl ResidentProxyGroupPlan {
         network: &str,
     ) -> Result<ResidentProxyPlan, String> {
         self.select_candidate(network)
-            .map(|candidate| candidate.proxy.clone())
+            .map(|candidate| candidate.proxy.as_ref().clone())
     }
 
     pub(in crate::production_runtime_owner::resident_dataplane) fn snapshot_candidate(
@@ -452,7 +453,7 @@ impl ResidentProxyGroupPlan {
                 link: proxy.node_tag.clone(),
                 link_hash: link_hash(&proxy.node_tag),
                 redacted_link_source: redacted_link_source(&proxy.node_tag),
-                proxy,
+                proxy: Arc::new(proxy),
             }],
             selector: Arc::new(Mutex::new(DialerGroup::new(
                 "test",
