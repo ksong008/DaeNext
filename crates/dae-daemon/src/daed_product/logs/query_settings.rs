@@ -23,7 +23,7 @@ pub(crate) fn list_logs_value(
         Err(err) if err.kind() == io::ErrorKind::NotFound => return Ok(json!({"items": []})),
         Err(err) => return Err(err),
     };
-    let mut items = Vec::new();
+    let mut items = VecDeque::new();
     let mut reader = io::BufReader::new(file);
     let mut line = String::new();
     loop {
@@ -42,11 +42,11 @@ pub(crate) fn list_logs_value(
             continue;
         }
         if items.len() == limit {
-            items.remove(0);
+            items.pop_front();
         }
-        items.push(log_entry_value(entry));
+        items.push_back(log_entry_value(entry));
     }
-    Ok(json!({"items": items}))
+    Ok(json!({"items": items.into_iter().collect::<Vec<_>>()}))
 }
 
 pub(crate) fn log_settings_value(state: &Path) -> io::Result<Value> {

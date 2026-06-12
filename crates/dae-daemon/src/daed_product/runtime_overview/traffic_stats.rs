@@ -1,4 +1,8 @@
 use super::*;
+use serde::de::{IgnoredAny, MapAccess, SeqAccess, Visitor};
+use serde::{Deserialize, Deserializer};
+use std::borrow::Cow;
+use std::fmt;
 #[derive(Debug, Default)]
 pub(crate) struct RuntimeTrafficStats {
     pub(in crate::daed_product) upload_total: u64,
@@ -91,22 +95,22 @@ pub(crate) fn resident_event_file_traffic_stats(
             break;
         }
         cache.offset = cache.offset.saturating_add(read as u64);
-        let Ok(event) = serde_json::from_str::<Value>(&line) else {
+        let Ok(event) = serde_json::from_str::<RuntimeTrafficEvent>(&line) else {
             continue;
         };
-        let (upload, download) = event_traffic_bytes(&event);
+        let (upload, download) = event.traffic_bytes();
         cache.upload_total = cache.upload_total.saturating_add(upload);
         cache.download_total = cache.download_total.saturating_add(download);
-        let Some(timestamp) = event["timestampUnix"].as_u64() else {
+        let Some(timestamp) = event.timestamp_unix else {
             continue;
         };
         let entry = cache.seconds.entry(timestamp).or_default();
         entry.upload = entry.upload.saturating_add(upload);
         entry.download = entry.download.saturating_add(download);
-        if is_tcp_connection_event(&event) {
+        if event.is_tcp_connection_event() {
             entry.active_connections = entry.active_connections.saturating_add(1);
         }
-        if is_udp_session_event(&event) {
+        if event.is_udp_session_event() {
             entry.udp_sessions = entry.udp_sessions.saturating_add(1);
         }
     }
@@ -255,14 +259,263 @@ pub(crate) fn live_runtime_traffic_rate_samples(
     (upload_rate, download_rate, samples)
 }
 
-pub(crate) fn event_traffic_bytes(event: &Value) -> (u64, u64) {
-    let upload = event_u64(event, "bytes_client_to_proxy")
-        .saturating_add(event_u64(event, "bytes_client_to_direct"))
-        .saturating_add(event_u64(event, "request_len"));
-    let download = event_u64(event, "bytes_proxy_to_client")
-        .saturating_add(event_u64(event, "bytes_direct_to_client"))
-        .saturating_add(event_u64(event, "response_len"));
-    (upload, download)
+#[derive(Debug, Deserialize)]
+struct RuntimeTrafficEvent<'a> {
+    #[serde(borrow, default, deserialize_with = "optional_cow_str")]
+    event: Option<Cow<'a, str>>,
+    #[serde(rename = "timestampUnix", default, deserialize_with = "optional_u64")]
+    timestamp_unix: Option<u64>,
+    #[serde(default, deserialize_with = "traffic_u64")]
+    bytes_client_to_proxy: u64,
+    #[serde(default, deserialize_with = "traffic_u64")]
+    bytes_client_to_direct: u64,
+    #[serde(default, deserialize_with = "traffic_u64")]
+    request_len: u64,
+    #[serde(default, deserialize_with = "traffic_u64")]
+    bytes_proxy_to_client: u64,
+    #[serde(default, deserialize_with = "traffic_u64")]
+    bytes_direct_to_client: u64,
+    #[serde(default, deserialize_with = "traffic_u64")]
+    response_len: u64,
+}
+
+impl RuntimeTrafficEvent<'_> {
+    fn traffic_bytes(&self) -> (u64, u64) {
+        let upload = self
+            .bytes_client_to_proxy
+            .saturating_add(self.bytes_client_to_direct)
+            .saturating_add(self.request_len);
+        let download = self
+            .bytes_proxy_to_client
+            .saturating_add(self.bytes_direct_to_client)
+            .saturating_add(self.response_len);
+        (upload, download)
+    }
+
+    fn is_tcp_connection_event(&self) -> bool {
+        matches!(
+            self.event.as_deref(),
+            Some("tcp_connection_finished" | "tcp_connection_failed")
+        )
+    }
+
+    fn is_udp_session_event(&self) -> bool {
+        matches!(
+            self.event.as_deref(),
+            Some("udp_packet_finished" | "udp_dns_packet_finished")
+        )
+    }
+}
+
+fn optional_cow_str<'de, D>(deserializer: D) -> Result<Option<Cow<'de, str>>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    deserializer.deserialize_any(OptionalCowStrVisitor)
+}
+
+struct OptionalCowStrVisitor;
+
+impl<'de> Visitor<'de> for OptionalCowStrVisitor {
+    type Value = Option<Cow<'de, str>>;
+
+    fn expecting(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str("a string or null")
+    }
+
+    fn visit_borrowed_str<E>(self, value: &'de str) -> Result<Self::Value, E> {
+        Ok(Some(Cow::Borrowed(value)))
+    }
+
+    fn visit_str<E>(self, value: &str) -> Result<Self::Value, E> {
+        Ok(Some(Cow::Owned(value.to_owned())))
+    }
+
+    fn visit_string<E>(self, value: String) -> Result<Self::Value, E> {
+        Ok(Some(Cow::Owned(value)))
+    }
+
+    fn visit_none<E>(self) -> Result<Self::Value, E> {
+        Ok(None)
+    }
+
+    fn visit_unit<E>(self) -> Result<Self::Value, E> {
+        Ok(None)
+    }
+
+    fn visit_bool<E>(self, _value: bool) -> Result<Self::Value, E> {
+        Ok(None)
+    }
+
+    fn visit_i64<E>(self, _value: i64) -> Result<Self::Value, E> {
+        Ok(None)
+    }
+
+    fn visit_u64<E>(self, _value: u64) -> Result<Self::Value, E> {
+        Ok(None)
+    }
+
+    fn visit_f64<E>(self, _value: f64) -> Result<Self::Value, E> {
+        Ok(None)
+    }
+
+    fn visit_seq<A>(self, mut seq: A) -> Result<Self::Value, A::Error>
+    where
+        A: SeqAccess<'de>,
+    {
+        while seq.next_element::<IgnoredAny>()?.is_some() {}
+        Ok(None)
+    }
+
+    fn visit_map<A>(self, mut map: A) -> Result<Self::Value, A::Error>
+    where
+        A: MapAccess<'de>,
+    {
+        while map.next_entry::<IgnoredAny, IgnoredAny>()?.is_some() {}
+        Ok(None)
+    }
+}
+
+fn optional_u64<'de, D>(deserializer: D) -> Result<Option<u64>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    deserializer.deserialize_any(OptionalU64Visitor)
+}
+
+struct OptionalU64Visitor;
+
+impl<'de> Visitor<'de> for OptionalU64Visitor {
+    type Value = Option<u64>;
+
+    fn expecting(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str("an unsigned integer, decimal string, or null")
+    }
+
+    fn visit_u64<E>(self, value: u64) -> Result<Self::Value, E> {
+        Ok(Some(value))
+    }
+
+    fn visit_i64<E>(self, value: i64) -> Result<Self::Value, E> {
+        Ok(u64::try_from(value).ok())
+    }
+
+    fn visit_f64<E>(self, _value: f64) -> Result<Self::Value, E> {
+        Ok(None)
+    }
+
+    fn visit_str<E>(self, value: &str) -> Result<Self::Value, E>
+    where
+        E: serde::de::Error,
+    {
+        Ok(value.parse::<u64>().ok())
+    }
+
+    fn visit_string<E>(self, value: String) -> Result<Self::Value, E>
+    where
+        E: serde::de::Error,
+    {
+        self.visit_str(&value)
+    }
+
+    fn visit_none<E>(self) -> Result<Self::Value, E> {
+        Ok(None)
+    }
+
+    fn visit_unit<E>(self) -> Result<Self::Value, E> {
+        Ok(None)
+    }
+
+    fn visit_bool<E>(self, _value: bool) -> Result<Self::Value, E> {
+        Ok(None)
+    }
+
+    fn visit_seq<A>(self, mut seq: A) -> Result<Self::Value, A::Error>
+    where
+        A: SeqAccess<'de>,
+    {
+        while seq.next_element::<IgnoredAny>()?.is_some() {}
+        Ok(None)
+    }
+
+    fn visit_map<A>(self, mut map: A) -> Result<Self::Value, A::Error>
+    where
+        A: MapAccess<'de>,
+    {
+        while map.next_entry::<IgnoredAny, IgnoredAny>()?.is_some() {}
+        Ok(None)
+    }
+}
+
+fn traffic_u64<'de, D>(deserializer: D) -> Result<u64, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    deserializer.deserialize_any(TrafficU64Visitor)
+}
+
+struct TrafficU64Visitor;
+
+impl<'de> Visitor<'de> for TrafficU64Visitor {
+    type Value = u64;
+
+    fn expecting(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str("an unsigned integer or decimal string")
+    }
+
+    fn visit_u64<E>(self, value: u64) -> Result<Self::Value, E> {
+        Ok(value)
+    }
+
+    fn visit_i64<E>(self, value: i64) -> Result<Self::Value, E> {
+        Ok(u64::try_from(value).unwrap_or(0))
+    }
+
+    fn visit_f64<E>(self, _value: f64) -> Result<Self::Value, E> {
+        Ok(0)
+    }
+
+    fn visit_str<E>(self, value: &str) -> Result<Self::Value, E>
+    where
+        E: serde::de::Error,
+    {
+        Ok(value.parse::<u64>().unwrap_or(0))
+    }
+
+    fn visit_string<E>(self, value: String) -> Result<Self::Value, E>
+    where
+        E: serde::de::Error,
+    {
+        self.visit_str(&value)
+    }
+
+    fn visit_none<E>(self) -> Result<Self::Value, E> {
+        Ok(0)
+    }
+
+    fn visit_unit<E>(self) -> Result<Self::Value, E> {
+        Ok(0)
+    }
+
+    fn visit_bool<E>(self, _value: bool) -> Result<Self::Value, E> {
+        Ok(0)
+    }
+
+    fn visit_seq<A>(self, mut seq: A) -> Result<Self::Value, A::Error>
+    where
+        A: SeqAccess<'de>,
+    {
+        while seq.next_element::<IgnoredAny>()?.is_some() {}
+        Ok(0)
+    }
+
+    fn visit_map<A>(self, mut map: A) -> Result<Self::Value, A::Error>
+    where
+        A: MapAccess<'de>,
+    {
+        while map.next_entry::<IgnoredAny, IgnoredAny>()?.is_some() {}
+        Ok(0)
+    }
 }
 
 pub(crate) fn event_u64(event: &Value, key: &str) -> u64 {
@@ -274,18 +527,4 @@ pub(crate) fn event_u64(event: &Value, key: &str) -> u64 {
                 .or_else(|| value.as_str().and_then(|value| value.parse::<u64>().ok()))
         })
         .unwrap_or(0)
-}
-
-pub(crate) fn is_tcp_connection_event(event: &Value) -> bool {
-    matches!(
-        event.get("event").and_then(Value::as_str),
-        Some("tcp_connection_finished" | "tcp_connection_failed")
-    )
-}
-
-pub(crate) fn is_udp_session_event(event: &Value) -> bool {
-    matches!(
-        event.get("event").and_then(Value::as_str),
-        Some("udp_packet_finished" | "udp_dns_packet_finished")
-    )
 }

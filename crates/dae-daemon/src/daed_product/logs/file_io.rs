@@ -244,7 +244,13 @@ pub(crate) fn read_last_log_id(path: &Path) -> io::Result<u64> {
         Err(err) if err.kind() == io::ErrorKind::NotFound => return Ok(0),
         Err(err) => return Err(err),
     };
-    for line in data.lines().rev() {
+    for line in data.split(|byte| *byte == b'\n').rev() {
+        if line.is_empty() {
+            continue;
+        }
+        let Ok(line) = std::str::from_utf8(line) else {
+            continue;
+        };
         if let Some(entry) = parse_log_entry_line(line) {
             return Ok(entry.id);
         }
@@ -348,11 +354,11 @@ pub(crate) fn count_log_file_entries(config_dir: &Path) -> io::Result<i64> {
     Ok(count)
 }
 
-pub(crate) fn read_tail_bytes(path: &Path, max_bytes: u64) -> io::Result<String> {
+pub(crate) fn read_tail_bytes(path: &Path, max_bytes: u64) -> io::Result<Vec<u8>> {
     let mut file = fs::File::open(path)?;
     let size = file.metadata()?.len();
     if size == 0 {
-        return Ok(String::new());
+        return Ok(Vec::new());
     }
     let offset = size.saturating_sub(max_bytes);
     file.seek(SeekFrom::Start(offset))?;
@@ -363,7 +369,7 @@ pub(crate) fn read_tail_bytes(path: &Path, max_bytes: u64) -> io::Result<String>
     {
         data = data.split_off(newline + 1);
     }
-    Ok(String::from_utf8_lossy(&data).into_owned())
+    Ok(data)
 }
 
 pub(crate) fn prune_log_file(config_dir: &Path, conn: &Connection) -> io::Result<()> {
@@ -410,20 +416,32 @@ pub(crate) fn prune_log_file_with_settings(
     if data.is_empty() {
         return Ok(());
     }
-    let mut lines = data
-        .trim_end_matches('\n')
-        .lines()
-        .map(str::to_owned)
-        .collect::<Vec<_>>();
-    if lines.len() > max_entries {
-        lines = lines.split_off(lines.len() - max_entries);
-    }
-    let mut pruned = lines.join("\n");
-    if !pruned.is_empty() {
-        pruned.push('\n');
-    }
     let tmp_path = path.with_extension("jsonl.tmp");
-    fs::write(&tmp_path, pruned)?;
+    write_pruned_log_tail(&tmp_path, &data, max_entries)?;
     set_log_file_permissions(&tmp_path)?;
     fs::rename(tmp_path, path)
+}
+
+fn write_pruned_log_tail(path: &Path, data: &[u8], max_entries: usize) -> io::Result<()> {
+    let mut ranges = Vec::new();
+    let mut start = 0_usize;
+    while start < data.len() {
+        let end = data[start..]
+            .iter()
+            .position(|byte| *byte == b'\n')
+            .map(|offset| start + offset)
+            .unwrap_or(data.len());
+        if end > start {
+            ranges.push((start, end));
+        }
+        start = end.saturating_add(1);
+    }
+    let keep_from = ranges.len().saturating_sub(max_entries);
+    let file = fs::File::create(path)?;
+    let mut writer = BufWriter::new(file);
+    for (start, end) in ranges.into_iter().skip(keep_from) {
+        writer.write_all(&data[start..end])?;
+        writer.write_all(b"\n")?;
+    }
+    writer.flush()
 }
