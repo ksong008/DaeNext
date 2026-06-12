@@ -31,11 +31,18 @@ pub(crate) struct RuntimeTrafficSecond {
 
 #[derive(Debug, Default)]
 pub(crate) struct RuntimeTrafficEventFileCache {
+    pub(in crate::daed_product) entries: BTreeMap<String, RuntimeTrafficEventFileState>,
+    next_generation: u64,
+}
+
+#[derive(Debug, Default)]
+pub(crate) struct RuntimeTrafficEventFileState {
     pub(in crate::daed_product) path: String,
     pub(in crate::daed_product) offset: u64,
     pub(in crate::daed_product) upload_total: u64,
     pub(in crate::daed_product) download_total: u64,
     pub(in crate::daed_product) seconds: BTreeMap<u64, RuntimeTrafficSecond>,
+    generation: u64,
 }
 
 pub(crate) static LAST_RUNTIME_TRAFFIC_TOTAL_SAMPLE: OnceLock<
@@ -45,6 +52,8 @@ pub(crate) static RUNTIME_TRAFFIC_RATE_SAMPLES: OnceLock<Mutex<VecDeque<(u64, u6
     OnceLock::new();
 pub(crate) static RUNTIME_TRAFFIC_EVENT_FILE_CACHE: OnceLock<Mutex<RuntimeTrafficEventFileCache>> =
     OnceLock::new();
+
+const RUNTIME_TRAFFIC_EVENT_FILE_CACHE_MAX_PATHS: usize = 8;
 
 pub(crate) fn resident_runtime_traffic_stats(
     runtime: &Value,
@@ -69,24 +78,106 @@ pub(crate) fn resident_event_file_traffic_stats(
     window_sec: u64,
     max_points: usize,
 ) -> io::Result<RuntimeTrafficStats> {
-    let mut file = fs::File::open(event_file)?;
-    let len = file.metadata()?.len();
+    let len = fs::metadata(event_file)?.len();
     let cache_lock = RUNTIME_TRAFFIC_EVENT_FILE_CACHE
         .get_or_init(|| Mutex::new(RuntimeTrafficEventFileCache::default()));
-    let mut cache = cache_lock.lock().map_err(|_| {
-        io::Error::new(
-            io::ErrorKind::Other,
-            "runtime traffic event file cache lock poisoned",
-        )
-    })?;
-    if cache.path != event_file || len < cache.offset {
-        *cache = RuntimeTrafficEventFileCache {
+    let (read_start, read_end) =
+        reserve_runtime_traffic_event_file_range(cache_lock, event_file, len)?;
+    let delta = match read_runtime_traffic_event_delta(event_file, read_start, read_end) {
+        Ok(delta) => delta,
+        Err(err) => {
+            restore_runtime_traffic_event_file_range(cache_lock, event_file, read_start, read_end)?;
+            return Err(err);
+        }
+    };
+    let (mut stats, sample_tuples) =
+        merge_runtime_traffic_event_delta_and_snapshot(cache_lock, event_file, delta, window_sec)?;
+    let mut sample_values = sample_tuples
+        .into_iter()
+        .map(|(timestamp, upload, download)| {
+            json!({
+                "timestamp": iso8601_utc(timestamp),
+                "uploadRate": upload.to_string(),
+                "downloadRate": download.to_string(),
+            })
+        })
+        .collect::<Vec<_>>();
+    if sample_values.len() > max_points {
+        sample_values = sample_values.split_off(sample_values.len() - max_points);
+    }
+    stats.samples = sample_values;
+    Ok(stats)
+}
+
+fn reserve_runtime_traffic_event_file_range(
+    cache_lock: &Mutex<RuntimeTrafficEventFileCache>,
+    event_file: &str,
+    len: u64,
+) -> io::Result<(u64, u64)> {
+    let mut cache = cache_lock
+        .lock()
+        .map_err(runtime_traffic_cache_lock_error)?;
+    let generation = cache.touch_generation();
+    let state = cache.state_mut(event_file);
+    if state.path.is_empty() {
+        state.path = event_file.to_owned();
+    }
+    if len < state.offset {
+        *state = RuntimeTrafficEventFileState {
             path: event_file.to_owned(),
-            ..RuntimeTrafficEventFileCache::default()
+            ..RuntimeTrafficEventFileState::default()
         };
     }
-    file.seek(SeekFrom::Start(cache.offset))?;
-    let mut reader = io::BufReader::new(file);
+    state.generation = generation;
+    let read_start = state.offset;
+    state.offset = len;
+    cache.prune_except(event_file);
+    Ok((read_start, len))
+}
+
+fn restore_runtime_traffic_event_file_range(
+    cache_lock: &Mutex<RuntimeTrafficEventFileCache>,
+    event_file: &str,
+    read_start: u64,
+    read_end: u64,
+) -> io::Result<()> {
+    let mut cache = cache_lock
+        .lock()
+        .map_err(runtime_traffic_cache_lock_error)?;
+    if let Some(state) = cache.entries.get_mut(event_file)
+        && state.offset == read_end
+    {
+        state.offset = read_start;
+    }
+    Ok(())
+}
+
+#[derive(Debug, Default)]
+struct RuntimeTrafficEventDelta {
+    end_offset: u64,
+    upload_total: u64,
+    download_total: u64,
+    seconds: BTreeMap<u64, RuntimeTrafficSecond>,
+}
+
+fn read_runtime_traffic_event_delta(
+    event_file: &str,
+    start: u64,
+    end: u64,
+) -> io::Result<RuntimeTrafficEventDelta> {
+    if start >= end {
+        return Ok(RuntimeTrafficEventDelta {
+            end_offset: end,
+            ..RuntimeTrafficEventDelta::default()
+        });
+    }
+    let mut file = fs::File::open(event_file)?;
+    file.seek(SeekFrom::Start(start))?;
+    let mut reader = io::BufReader::new(file.take(end - start));
+    let mut delta = RuntimeTrafficEventDelta {
+        end_offset: start,
+        ..RuntimeTrafficEventDelta::default()
+    };
     let mut line = String::new();
     loop {
         line.clear();
@@ -94,17 +185,17 @@ pub(crate) fn resident_event_file_traffic_stats(
         if read == 0 {
             break;
         }
-        cache.offset = cache.offset.saturating_add(read as u64);
+        delta.end_offset = delta.end_offset.saturating_add(read as u64);
         let Ok(event) = serde_json::from_str::<RuntimeTrafficEvent>(&line) else {
             continue;
         };
         let (upload, download) = event.traffic_bytes();
-        cache.upload_total = cache.upload_total.saturating_add(upload);
-        cache.download_total = cache.download_total.saturating_add(download);
+        delta.upload_total = delta.upload_total.saturating_add(upload);
+        delta.download_total = delta.download_total.saturating_add(download);
         let Some(timestamp) = event.timestamp_unix else {
             continue;
         };
-        let entry = cache.seconds.entry(timestamp).or_default();
+        let entry = delta.seconds.entry(timestamp).or_default();
         entry.upload = entry.upload.saturating_add(upload);
         entry.download = entry.download.saturating_add(download);
         if event.is_tcp_connection_event() {
@@ -114,28 +205,61 @@ pub(crate) fn resident_event_file_traffic_stats(
             entry.udp_sessions = entry.udp_sessions.saturating_add(1);
         }
     }
+    Ok(delta)
+}
+
+fn merge_runtime_traffic_event_delta_and_snapshot(
+    cache_lock: &Mutex<RuntimeTrafficEventFileCache>,
+    event_file: &str,
+    delta: RuntimeTrafficEventDelta,
+    window_sec: u64,
+) -> io::Result<(RuntimeTrafficStats, Vec<(u64, u64, u64)>)> {
+    let mut cache = cache_lock
+        .lock()
+        .map_err(runtime_traffic_cache_lock_error)?;
+    let generation = cache.touch_generation();
+    let state = cache.state_mut(event_file);
+    if state.path.is_empty() {
+        *state = RuntimeTrafficEventFileState {
+            path: event_file.to_owned(),
+            ..RuntimeTrafficEventFileState::default()
+        };
+    }
+    state.generation = generation;
+    if delta.end_offset > state.offset {
+        state.offset = delta.end_offset;
+    }
+    state.upload_total = state.upload_total.saturating_add(delta.upload_total);
+    state.download_total = state.download_total.saturating_add(delta.download_total);
+    for (timestamp, second) in delta.seconds {
+        let entry = state.seconds.entry(timestamp).or_default();
+        entry.upload = entry.upload.saturating_add(second.upload);
+        entry.download = entry.download.saturating_add(second.download);
+        entry.active_connections = entry
+            .active_connections
+            .saturating_add(second.active_connections);
+        entry.udp_sessions = entry.udp_sessions.saturating_add(second.udp_sessions);
+    }
     let now = unix_now();
     let max_retained_window = 3_600_u64;
     let retain_start = now.saturating_sub(max_retained_window);
-    let old_keys = cache
+    if state
         .seconds
-        .keys()
-        .copied()
-        .take_while(|timestamp| *timestamp < retain_start)
-        .collect::<Vec<_>>();
-    for timestamp in old_keys {
-        cache.seconds.remove(&timestamp);
+        .first_key_value()
+        .is_some_and(|(timestamp, _)| *timestamp < retain_start)
+    {
+        state.seconds = state.seconds.split_off(&retain_start);
     }
 
     let window_start = now.saturating_sub(window_sec);
     let rate_window_start = now.saturating_sub(5);
     let mut stats = RuntimeTrafficStats {
-        upload_total: cache.upload_total,
-        download_total: cache.download_total,
+        upload_total: state.upload_total,
+        download_total: state.download_total,
         ..RuntimeTrafficStats::default()
     };
-    let mut sample_values = Vec::new();
-    for (timestamp, second) in cache.seconds.range(window_start..) {
+    let mut sample_tuples = Vec::new();
+    for (timestamp, second) in state.seconds.range(window_start..) {
         stats.active_connections = stats
             .active_connections
             .saturating_add(second.active_connections);
@@ -144,19 +268,55 @@ pub(crate) fn resident_event_file_traffic_stats(
             stats.upload_rate = stats.upload_rate.saturating_add(second.upload);
             stats.download_rate = stats.download_rate.saturating_add(second.download);
         }
-        sample_values.push(json!({
-            "timestamp": iso8601_utc(*timestamp),
-            "uploadRate": second.upload.to_string(),
-            "downloadRate": second.download.to_string(),
-        }));
+        sample_tuples.push((*timestamp, second.upload, second.download));
     }
     stats.upload_rate /= 5;
     stats.download_rate /= 5;
-    if sample_values.len() > max_points {
-        sample_values = sample_values.split_off(sample_values.len() - max_points);
+    cache.prune_except(event_file);
+    Ok((stats, sample_tuples))
+}
+
+impl RuntimeTrafficEventFileCache {
+    fn touch_generation(&mut self) -> u64 {
+        self.next_generation = self.next_generation.saturating_add(1);
+        self.next_generation
     }
-    stats.samples = sample_values;
-    Ok(stats)
+
+    fn state_mut(&mut self, event_file: &str) -> &mut RuntimeTrafficEventFileState {
+        self.entries
+            .entry(event_file.to_owned())
+            .or_insert_with(|| RuntimeTrafficEventFileState {
+                path: event_file.to_owned(),
+                ..RuntimeTrafficEventFileState::default()
+            })
+    }
+
+    fn prune_except(&mut self, keep: &str) {
+        if self.entries.len() <= RUNTIME_TRAFFIC_EVENT_FILE_CACHE_MAX_PATHS {
+            return;
+        }
+        let mut removable = self
+            .entries
+            .iter()
+            .filter(|(path, _)| path.as_str() != keep)
+            .map(|(path, state)| (state.generation, path.clone()))
+            .collect::<Vec<_>>();
+        removable.sort_by_key(|(generation, _)| *generation);
+        let remove_count = self
+            .entries
+            .len()
+            .saturating_sub(RUNTIME_TRAFFIC_EVENT_FILE_CACHE_MAX_PATHS);
+        for (_, path) in removable.into_iter().take(remove_count) {
+            self.entries.remove(&path);
+        }
+    }
+}
+
+fn runtime_traffic_cache_lock_error<T>(_err: std::sync::PoisonError<T>) -> io::Error {
+    io::Error::new(
+        io::ErrorKind::Other,
+        "runtime traffic event file cache lock poisoned",
+    )
 }
 
 pub(crate) fn resident_live_runtime_traffic_stats(
