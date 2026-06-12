@@ -1,4 +1,5 @@
 use super::*;
+use serde_json::Value;
 #[derive(Debug)]
 pub(super) struct UdpExchangeResult {
     pub(super) payload: Vec<u8>,
@@ -116,26 +117,23 @@ pub(super) fn record_udp_exchange_result(
                 let packet_semantics =
                     udp_packet_semantics_for_destination(&proxy.handler, original_dst);
                 let network = udp_network_name(original_dst);
-                let mut event_json = json!({
-                    "event": event,
-                    "peer": resident_socket_addr_display(peer),
-                    "original_dst": resident_socket_addr_display(original_dst),
-                    "request_len": request_len,
-                    "response_len": response.payload.len(),
-                    "proxy_group": &proxy.group_name,
-                    "group_policy": &proxy.group_policy,
-                    "node_tag": &proxy.node_tag,
-                    "network": network,
-                    "outbound": &proxy.group_name,
-                    "policy": &proxy.group_policy,
-                    "dialer": &proxy.node_tag,
-                    "sniffed": "",
-                    "ip": resident_socket_addr_display(original_dst),
-                    "protocol": &proxy.protocol,
-                    "handler": handler,
-                    "graphId": &proxy.graph_id,
-                    "packetSession": udp_packet_session_value(proxy, peer, original_dst, handler, packet_semantics),
-                });
+                let mut event_json = udp_exchange_base_event(
+                    event,
+                    proxy,
+                    peer,
+                    original_dst,
+                    handler,
+                    packet_semantics,
+                    network,
+                    true,
+                );
+                if let Some(map) = event_json.as_object_mut() {
+                    map.insert("request_len".to_owned(), Value::from(request_len));
+                    map.insert(
+                        "response_len".to_owned(),
+                        Value::from(response.payload.len()),
+                    );
+                }
                 response.append_execution_fields(&mut event_json, handler, &proxy.graph_id);
                 if let Some(tls_underlay) = response.tls_underlay {
                     event_json["tls_underlay"] = json!(tls_underlay);
@@ -157,34 +155,82 @@ pub(super) fn record_udp_exchange_result(
             let packet_semantics =
                 udp_packet_semantics_for_destination(&proxy.handler, original_dst);
             let network = udp_network_name(original_dst);
-            append_event(
-                &event_file,
-                &event_lock,
-                json!({
-                    "event": "udp_exchange_failed",
-                    "peer": resident_socket_addr_display(peer),
-                    "original_dst": resident_socket_addr_display(original_dst),
-                    "error": err,
-                    "protocol": &proxy.protocol,
-                    "handler": handler,
-                    "proxy_group": &proxy.group_name,
-                    "group_policy": &proxy.group_policy,
-                    "node_tag": &proxy.node_tag,
-                    "network": network,
-                    "outbound": &proxy.group_name,
-                    "policy": &proxy.group_policy,
-                    "dialer": &proxy.node_tag,
-                    "ip": resident_socket_addr_display(original_dst),
-                    "graphId": &proxy.graph_id,
-                    "packetSession": udp_packet_session_value(proxy, peer, original_dst, handler, packet_semantics),
-                }),
-            )
+            let mut event_json = udp_exchange_base_event(
+                "udp_exchange_failed",
+                proxy,
+                peer,
+                original_dst,
+                handler,
+                packet_semantics,
+                network,
+                false,
+            );
+            if let Some(map) = event_json.as_object_mut() {
+                map.insert("error".to_owned(), Value::String(err));
+            }
+            append_event(&event_file, &event_lock, event_json)
         }
     }
 }
 
 fn udp_network_name(addr: SocketAddr) -> &'static str {
     resident_udp_network_name(addr)
+}
+
+fn udp_exchange_base_event(
+    event: &str,
+    proxy: &ResidentProxyPlan,
+    peer: SocketAddr,
+    original_dst: SocketAddr,
+    handler: &'static str,
+    packet_semantics: UdpPacketSemantics,
+    network: &'static str,
+    include_sniffed: bool,
+) -> Value {
+    let mut map = serde_json::Map::with_capacity(18);
+    map.insert("event".to_owned(), Value::String(event.to_owned()));
+    map.insert(
+        "peer".to_owned(),
+        Value::String(resident_socket_addr_display(peer)),
+    );
+    map.insert(
+        "original_dst".to_owned(),
+        Value::String(resident_socket_addr_display(original_dst)),
+    );
+    map.insert(
+        "proxy_group".to_owned(),
+        Value::String(proxy.group_name.clone()),
+    );
+    map.insert(
+        "group_policy".to_owned(),
+        Value::String(proxy.group_policy.clone()),
+    );
+    map.insert("node_tag".to_owned(), Value::String(proxy.node_tag.clone()));
+    map.insert("network".to_owned(), Value::String(network.to_owned()));
+    map.insert(
+        "outbound".to_owned(),
+        Value::String(proxy.group_name.clone()),
+    );
+    map.insert(
+        "policy".to_owned(),
+        Value::String(proxy.group_policy.clone()),
+    );
+    map.insert("dialer".to_owned(), Value::String(proxy.node_tag.clone()));
+    if include_sniffed {
+        map.insert("sniffed".to_owned(), Value::String(String::new()));
+    }
+    map.insert(
+        "ip".to_owned(),
+        Value::String(resident_socket_addr_display(original_dst)),
+    );
+    map.insert("protocol".to_owned(), Value::String(proxy.protocol.clone()));
+    map.insert("handler".to_owned(), Value::String(handler.to_owned()));
+    map.insert("graphId".to_owned(), Value::String(proxy.graph_id.clone()));
+    map.insert(
+        "packetSession".to_owned(),
+        udp_packet_session_value(proxy, peer, original_dst, handler, packet_semantics),
+    );
+    Value::Object(map)
 }
 
 #[cfg(test)]
