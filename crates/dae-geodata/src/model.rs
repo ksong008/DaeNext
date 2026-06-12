@@ -238,7 +238,10 @@ mod tests {
     use super::*;
     use std::io::Cursor;
 
-    use crate::{country_code_view, decode_entry_reader, decode_entry_view_bytes, decode_hex};
+    use crate::{
+        country_code_view, decode_entry_range, decode_entry_reader, decode_entry_view_bytes,
+        decode_hex,
+    };
 
     #[test]
     fn streaming_geodata_matches_golden_fixture() {
@@ -261,14 +264,17 @@ mod tests {
 
             let decode = decode_entry_bytes(data, code);
             let decode_view = decode_entry_view_bytes(data, code);
+            let decode_range = decode_entry_range(data, code);
             assert_eq!(
                 decode.is_ok(),
                 case["decode_ok"].as_bool().unwrap(),
                 "{name}"
             );
             assert_eq!(decode_view.is_ok(), decode.is_ok(), "{name}");
-            if let (Ok(owned), Ok(view)) = (&decode, decode_view) {
+            assert_eq!(decode_range.is_ok(), decode.is_ok(), "{name}");
+            if let (Ok(owned), Ok(view), Ok(range)) = (&decode, decode_view, decode_range) {
                 assert_eq!(view, owned.as_slice(), "{name}");
+                assert_eq!(&data[range], view, "{name}");
                 assert_eq!(
                     country_code_view(view).unwrap(),
                     case["country_code"].as_str().unwrap_or(""),

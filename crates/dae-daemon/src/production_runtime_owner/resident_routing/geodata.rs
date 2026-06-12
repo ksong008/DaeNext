@@ -1,13 +1,14 @@
 use std::{
     collections::BTreeMap,
     env, fs,
+    ops::Range,
     path::{Path, PathBuf},
     sync::{Arc, Mutex},
 };
 
 use dae_config::Param;
 use dae_geodata::{
-    DomainType, decode_entry_bytes, load_geoip_bytes, load_geoip_entry_bytes, load_geosite_bytes,
+    DomainType, decode_entry_range, load_geoip_bytes, load_geoip_entry_bytes, load_geosite_bytes,
     load_geosite_entry_bytes,
 };
 use dae_routing::{DomainKey, SharedDomainSet};
@@ -69,13 +70,21 @@ struct DecodedEntryCacheKey {
 
 #[derive(Clone, Debug)]
 struct CachedDecodedEntry {
-    data: Arc<[u8]>,
+    asset: Arc<[u8]>,
+    range: Range<usize>,
 }
 
 #[derive(Clone, Debug)]
 struct DecodedEntry {
-    data: Arc<[u8]>,
+    asset: Arc<[u8]>,
+    range: Range<usize>,
     cache_hit: bool,
+}
+
+impl DecodedEntry {
+    fn as_slice(&self) -> &[u8] {
+        &self.asset[self.range.clone()]
+    }
 }
 
 #[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd)]
@@ -96,7 +105,7 @@ pub(super) fn load_geoip_params(
     let asset = resolver.read_asset(&filename)?;
     let decoded = resolver.decoded_entry("geoip", &filename, code, &asset)?;
     let loaded = match decoded.as_ref() {
-        Some(entry) => load_geoip_entry_bytes(entry.data.as_ref()),
+        Some(entry) => load_geoip_entry_bytes(entry.as_slice()),
         None => load_geoip_bytes(asset.data.as_ref(), code),
     }
     .map_err(|err| {
@@ -148,7 +157,7 @@ pub(super) fn load_geosite_params(
     let asset = resolver.read_asset(&filename)?;
     let decoded = resolver.decoded_entry("geosite", &filename, &code, &asset)?;
     let loaded = match decoded.as_ref() {
-        Some(entry) => load_geosite_entry_bytes(entry.data.as_ref()),
+        Some(entry) => load_geosite_entry_bytes(entry.as_slice()),
         None => load_geosite_bytes(asset.data.as_ref(), &code),
     }
     .map_err(|err| {
@@ -393,23 +402,26 @@ impl GeodataResolver {
             .cloned()
         {
             return Ok(Some(DecodedEntry {
-                data: cached.data,
+                asset: cached.asset,
+                range: cached.range,
                 cache_hit: true,
             }));
         }
 
-        let Ok(entry) = decode_entry_bytes(asset.data.as_ref(), code) else {
+        let Ok(range) = decode_entry_range(asset.data.as_ref(), code) else {
             return Ok(None);
         };
         let cached = CachedDecodedEntry {
-            data: Arc::<[u8]>::from(entry),
+            asset: Arc::clone(&asset.data),
+            range,
         };
         self.decoded_entry_cache
             .lock()
             .map_err(|_| "geodata decoded-entry cache lock poisoned".to_owned())?
             .insert(key, cached.clone());
         Ok(Some(DecodedEntry {
-            data: cached.data,
+            asset: cached.asset,
+            range: cached.range,
             cache_hit: false,
         }))
     }

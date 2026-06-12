@@ -1,4 +1,4 @@
-use std::io::Read;
+use std::{io::Read, ops::Range};
 
 use crate::GeoDataError;
 
@@ -20,6 +20,12 @@ pub fn decode_entry_view_bytes<'a>(data: &'a [u8], code: &str) -> Result<&'a [u8
     }
 
     Err(GeoDataError::CodeNotFound)
+}
+
+pub fn decode_entry_range(data: &[u8], code: &str) -> Result<Range<usize>, GeoDataError> {
+    let entry = decode_entry_view_bytes(data, code)?;
+    let start = entry.as_ptr() as usize - data.as_ptr() as usize;
+    Ok(start..start + entry.len())
 }
 
 pub fn decode_entry_reader(mut reader: impl Read, code: &str) -> Result<Vec<u8>, GeoDataError> {
