@@ -1,3 +1,5 @@
+#[cfg(test)]
+use super::super::vision::VisionUnpadState;
 use super::*;
 pub(super) fn send_udp_reply(
     original_dst: SocketAddr,
@@ -15,6 +17,7 @@ pub(super) fn send_udp_reply(
     Ok(())
 }
 
+#[cfg(test)]
 pub(super) fn parse_vless_udp_response(
     input: &[u8],
     flow: &str,
@@ -53,7 +56,12 @@ pub(super) fn parse_vless_udp_response(
     ))
 }
 
+#[cfg(test)]
 pub(super) fn parse_xudp_response_payload(input: &[u8]) -> Result<Option<Vec<u8>>, String> {
+    Ok(parse_xudp_response_frame(input)?.map(|(payload, _)| payload))
+}
+
+pub(super) fn parse_xudp_response_frame(input: &[u8]) -> Result<Option<(Vec<u8>, usize)>, String> {
     if input.len() < 2 {
         return Ok(None);
     }
@@ -68,7 +76,8 @@ pub(super) fn parse_xudp_response_payload(input: &[u8]) -> Result<Option<Vec<u8>
     if input.len() < payload_offset + payload_len {
         return Ok(None);
     }
-    Ok(Some(
+    Ok(Some((
         input[payload_offset..payload_offset + payload_len].to_vec(),
-    ))
+        payload_offset + payload_len,
+    )))
 }

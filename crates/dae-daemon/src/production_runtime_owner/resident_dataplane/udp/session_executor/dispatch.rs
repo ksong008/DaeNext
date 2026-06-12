@@ -83,4 +83,26 @@ impl UdpSessionExecutor {
             | Self::FailClosed { .. } => {}
         }
     }
+
+    pub(in crate::production_runtime_owner::resident_dataplane::udp) async fn poll_response(
+        &mut self,
+    ) -> Result<Option<(&'static str, UdpExchangeResult)>, String> {
+        match self {
+            Self::VlessVision(session) => session
+                .poll_response()
+                .await
+                .map(|response| response.map(|response| ("udp_packet_finished", response))),
+            Self::Dns
+            | Self::ShadowsocksAead(_)
+            | Self::Shadowsocks2022(_)
+            | Self::Socks5(_)
+            | Self::Trojan(_)
+            | Self::VmessAead(_)
+            | Self::AnyTls(_)
+            | Self::Hysteria2(_)
+            | Self::Tuic(_)
+            | Self::Juicity(_)
+            | Self::FailClosed { .. } => Ok(None),
+        }
+    }
 }
