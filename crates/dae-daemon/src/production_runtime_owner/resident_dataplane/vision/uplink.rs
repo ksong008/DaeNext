@@ -62,7 +62,7 @@ pub(crate) async fn drain_vision_uplink_async(
             Some(command) => command,
             None => return Ok(()),
         };
-        let record = pending.drain(..record_len).collect::<Vec<_>>();
+        let record = take_vec_prefix(pending, record_len);
         tls_state.observe_client_payload(&record)?;
         let block = vision_padding_block(&record, command, user_uuid, uuid_sent, true);
         client
