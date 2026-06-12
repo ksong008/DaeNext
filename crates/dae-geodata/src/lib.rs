@@ -10,6 +10,6 @@ pub use model::{
     load_geosite_bytes, load_geosite_entry_bytes,
 };
 pub use wire::{
-    country_code_eq_ignore_ascii_case, country_code_view, decode_entry_bytes, decode_entry_reader,
-    decode_entry_view_bytes, entries_from_list,
+    country_code_eq_ignore_ascii_case, country_code_view, decode_entry_bytes, decode_entry_range,
+    decode_entry_reader, decode_entry_view_bytes, entries_from_list,
 };
