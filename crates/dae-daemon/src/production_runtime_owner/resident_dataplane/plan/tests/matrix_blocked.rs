@@ -656,7 +656,12 @@ pub(super) fn resident_dataplane_plan_admits_vless_xhttp_stream_modes_and_xmux()
     )
     .unwrap();
     assert_eq!(stream_up.xhttp_mode, ResidentXhttpMode::StreamUp);
-    assert!(stream_up.xhttp_xmux.is_none());
+    let default_xmux = stream_up.xhttp_xmux.as_ref().unwrap();
+    assert_eq!(default_xmux.max_concurrency, Some((1, 1)));
+    assert_eq!(default_xmux.max_connections, None);
+    assert_eq!(default_xmux.c_max_reuse_times, None);
+    assert_eq!(default_xmux.h_max_request_times, Some((600, 900)));
+    assert_eq!(default_xmux.h_max_reusable_secs, Some((1800, 3000)));
 
     let stream_one = build_resident_proxy_plan_for_node(
         &config,
@@ -674,17 +679,30 @@ pub(super) fn resident_dataplane_plan_admits_vless_xhttp_stream_modes_and_xmux()
         vless_xhttp_parser_fixture_url(
             "packet-up",
             "h2",
-            r#"{"xmux":{"maxConcurrency":{"from":0,"to":8},"maxConnections":2,"cMaxReuseTimes":"3-9","hMaxRequestTimes":"4","hMaxReusableSecs":{"from":5,"to":10},"hKeepAlivePeriod":15}}"#,
+            r#"{"xmux":{"maxConcurrency":{"from":8,"to":0},"cMaxReuseTimes":"9-3","hMaxRequestTimes":"4","hMaxReusableSecs":{"from":5,"to":10},"hKeepAlivePeriod":15}}"#,
         ),
     )
     .unwrap();
     let xmux = xmux.xhttp_xmux.as_ref().unwrap();
     assert_eq!(xmux.max_concurrency, Some((0, 8)));
-    assert_eq!(xmux.max_connections, Some((2, 2)));
+    assert_eq!(xmux.max_connections, None);
     assert_eq!(xmux.c_max_reuse_times, Some((3, 9)));
     assert_eq!(xmux.h_max_request_times, Some((4, 4)));
     assert_eq!(xmux.h_max_reusable_secs, Some((5, 10)));
     assert_eq!(xmux.h_keep_alive_period, 15);
+
+    let err = build_resident_proxy_plan_for_node(
+        &config,
+        "proxy".to_owned(),
+        "xhttp_xmux_conflict".to_owned(),
+        vless_xhttp_parser_fixture_url(
+            "packet-up",
+            "h2",
+            r#"{"xmux":{"maxConcurrency":8,"maxConnections":2}}"#,
+        ),
+    )
+    .unwrap_err();
+    assert!(err.contains("maxConnections together with maxConcurrency"));
 }
 
 #[test]

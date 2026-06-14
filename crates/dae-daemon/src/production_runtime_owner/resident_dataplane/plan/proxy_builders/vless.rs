@@ -155,6 +155,16 @@ pub(crate) fn build_vless_proxy_plan(
     } else {
         ResidentProxyProtocolPlan::VlessVisionTcpTls { key }
     };
+    let xhttp_xmux = if net == "xhttp" {
+        Some(
+            xhttp_extra
+                .xmux
+                .unwrap_or_else(ResidentXhttpXmuxPlan::official_default)
+                .official_normalized(),
+        )
+    } else {
+        None
+    };
     Ok(ResidentProxyPlan {
         graph_id: graph.graph_id,
         graph_link_hash: graph.link_hash,
@@ -173,7 +183,7 @@ pub(crate) fn build_vless_proxy_plan(
         stream_path,
         xhttp_download: xhttp_extra.download,
         xhttp_mode,
-        xhttp_xmux: xhttp_extra.xmux,
+        xhttp_xmux,
         tls: vless.tls,
         allow_insecure,
         tls_fragment,
@@ -469,7 +479,12 @@ fn resident_xhttp_download_xmux_plan(
             "resident dataplane vless xHTTP downloadSettings.xhttpSettings must not contain xmux in both xmux and extra.xmux for node {node_tag}"
         ));
     }
-    Ok(direct.or(nested))
+    Ok(Some(
+        direct
+            .or(nested)
+            .unwrap_or_else(ResidentXhttpXmuxPlan::official_default)
+            .official_normalized(),
+    ))
 }
 
 fn resident_xhttp_nested_extra_xmux_plan(
@@ -631,7 +646,7 @@ fn resident_xhttp_xmux_plan(
         &format!("resident dataplane vless xHTTP {field}"),
         node_tag,
     )?;
-    Ok(Some(ResidentXhttpXmuxPlan {
+    let plan = ResidentXhttpXmuxPlan {
         max_concurrency: optional_xhttp_range(
             object.get("maxConcurrency"),
             &format!("{field}.maxConcurrency"),
@@ -663,14 +678,17 @@ fn resident_xhttp_xmux_plan(
             node_tag,
         )?
         .unwrap_or(0),
-    }))
+    }
+    .official_normalized();
+    plan.validate_official(field, node_tag)?;
+    Ok(Some(plan))
 }
 
 fn optional_xhttp_range(
     value: Option<&Value>,
     field: &str,
     node_tag: &str,
-) -> Result<Option<(u32, u32)>, String> {
+) -> Result<Option<(i32, i32)>, String> {
     let Some(value) = value else {
         return Ok(None);
     };
@@ -679,12 +697,12 @@ fn optional_xhttp_range(
     }
     let range = match value {
         Value::Number(number) => {
-            let value = number.as_u64().ok_or_else(|| {
+            let value = number.as_i64().ok_or_else(|| {
                 format!(
-                    "resident dataplane vless xHTTP {field} must be a non-negative integer for node {node_tag}"
+                    "resident dataplane vless xHTTP {field} must be an integer for node {node_tag}"
                 )
             })?;
-            let value = u32::try_from(value).map_err(|_| {
+            let value = i32::try_from(value).map_err(|_| {
                 format!(
                     "resident dataplane vless xHTTP {field} is too large for node {node_tag}: {value}"
                 )
@@ -700,8 +718,8 @@ fn optional_xhttp_range(
                 node_tag,
             )?;
             let from =
-                optional_u32(object.get("from"), &format!("{field}.from"), node_tag)?.unwrap_or(0);
-            let to = optional_u32(object.get("to"), &format!("{field}.to"), node_tag)?.unwrap_or(0);
+                optional_i32(object.get("from"), &format!("{field}.from"), node_tag)?.unwrap_or(0);
+            let to = optional_i32(object.get("to"), &format!("{field}.to"), node_tag)?.unwrap_or(0);
             (from, to)
         }
         _ => {
@@ -710,16 +728,14 @@ fn optional_xhttp_range(
             ));
         }
     };
-    if range.0 > range.1 {
-        return Err(format!(
-            "resident dataplane vless xHTTP {field} range must satisfy from <= to for node {node_tag}; got {}..{}",
-            range.0, range.1
-        ));
-    }
-    Ok(Some(range))
+    Ok(Some(if range.0 <= range.1 {
+        range
+    } else {
+        (range.1, range.0)
+    }))
 }
 
-fn parse_xhttp_range_string(raw: &str, field: &str, node_tag: &str) -> Result<(u32, u32), String> {
+fn parse_xhttp_range_string(raw: &str, field: &str, node_tag: &str) -> Result<(i32, i32), String> {
     let raw = raw.trim();
     if raw.is_empty() {
         return Err(format!(
@@ -728,32 +744,32 @@ fn parse_xhttp_range_string(raw: &str, field: &str, node_tag: &str) -> Result<(u
     }
     if let Some((from, to)) = raw.split_once('-') {
         return Ok((
-            parse_xhttp_u32_str(from.trim(), &format!("{field}.from"), node_tag)?,
-            parse_xhttp_u32_str(to.trim(), &format!("{field}.to"), node_tag)?,
+            parse_xhttp_i32_str(from.trim(), &format!("{field}.from"), node_tag)?,
+            parse_xhttp_i32_str(to.trim(), &format!("{field}.to"), node_tag)?,
         ));
     }
-    let value = parse_xhttp_u32_str(raw, field, node_tag)?;
+    let value = parse_xhttp_i32_str(raw, field, node_tag)?;
     Ok((value, value))
 }
 
-fn optional_u32(value: Option<&Value>, field: &str, node_tag: &str) -> Result<Option<u32>, String> {
+fn optional_i32(value: Option<&Value>, field: &str, node_tag: &str) -> Result<Option<i32>, String> {
     match value {
         None | Some(Value::Null) => Ok(None),
         Some(Value::Number(number)) => {
-            let value = number.as_u64().ok_or_else(|| {
+            let value = number.as_i64().ok_or_else(|| {
                 format!(
-                    "resident dataplane vless xHTTP {field} must be a non-negative integer for node {node_tag}"
+                    "resident dataplane vless xHTTP {field} must be an integer for node {node_tag}"
                 )
             })?;
-            u32::try_from(value).map(Some).map_err(|_| {
+            i32::try_from(value).map(Some).map_err(|_| {
                 format!(
                     "resident dataplane vless xHTTP {field} is too large for node {node_tag}: {value}"
                 )
             })
         }
-        Some(Value::String(raw)) => parse_xhttp_u32_str(raw, field, node_tag).map(Some),
+        Some(Value::String(raw)) => parse_xhttp_i32_str(raw, field, node_tag).map(Some),
         Some(_) => Err(format!(
-            "resident dataplane vless xHTTP {field} must be a non-negative integer for node {node_tag}"
+            "resident dataplane vless xHTTP {field} must be an integer for node {node_tag}"
         )),
     }
 }
@@ -777,10 +793,10 @@ fn optional_i64(value: Option<&Value>, field: &str, node_tag: &str) -> Result<Op
     }
 }
 
-fn parse_xhttp_u32_str(raw: &str, field: &str, node_tag: &str) -> Result<u32, String> {
-    raw.trim().parse::<u32>().map_err(|err| {
+fn parse_xhttp_i32_str(raw: &str, field: &str, node_tag: &str) -> Result<i32, String> {
+    raw.trim().parse::<i32>().map_err(|err| {
         format!(
-            "resident dataplane vless xHTTP {field} must be a non-negative integer for node {node_tag}: {err}"
+            "resident dataplane vless xHTTP {field} must be an integer for node {node_tag}: {err}"
         )
     })
 }
