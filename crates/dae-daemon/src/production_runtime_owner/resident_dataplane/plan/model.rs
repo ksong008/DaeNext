@@ -48,7 +48,7 @@ pub(crate) struct ResidentXhttpEndpointPlan {
         Option<TlsFragmentOptions>,
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub(in crate::production_runtime_owner::resident_dataplane) enum ResidentXhttpMode {
     PacketUp,
     StreamUp,
@@ -65,17 +65,78 @@ impl ResidentXhttpMode {
     }
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, Hash, PartialEq)]
 pub(in crate::production_runtime_owner::resident_dataplane) struct ResidentXhttpXmuxPlan {
-    pub(in crate::production_runtime_owner::resident_dataplane) max_concurrency: Option<(u32, u32)>,
-    pub(in crate::production_runtime_owner::resident_dataplane) max_connections: Option<(u32, u32)>,
+    pub(in crate::production_runtime_owner::resident_dataplane) max_concurrency: Option<(i32, i32)>,
+    pub(in crate::production_runtime_owner::resident_dataplane) max_connections: Option<(i32, i32)>,
     pub(in crate::production_runtime_owner::resident_dataplane) c_max_reuse_times:
-        Option<(u32, u32)>,
+        Option<(i32, i32)>,
     pub(in crate::production_runtime_owner::resident_dataplane) h_max_request_times:
-        Option<(u32, u32)>,
+        Option<(i32, i32)>,
     pub(in crate::production_runtime_owner::resident_dataplane) h_max_reusable_secs:
-        Option<(u32, u32)>,
+        Option<(i32, i32)>,
     pub(in crate::production_runtime_owner::resident_dataplane) h_keep_alive_period: i64,
+}
+
+impl ResidentXhttpXmuxPlan {
+    pub(in crate::production_runtime_owner::resident_dataplane) fn official_default() -> Self {
+        Self {
+            max_concurrency: Some((1, 1)),
+            max_connections: None,
+            c_max_reuse_times: None,
+            h_max_request_times: Some((600, 900)),
+            h_max_reusable_secs: Some((1800, 3000)),
+            h_keep_alive_period: 0,
+        }
+    }
+
+    pub(in crate::production_runtime_owner::resident_dataplane) fn is_empty(&self) -> bool {
+        self.max_concurrency.is_none()
+            && self.max_connections.is_none()
+            && self.c_max_reuse_times.is_none()
+            && self.h_max_request_times.is_none()
+            && self.h_max_reusable_secs.is_none()
+            && self.h_keep_alive_period == 0
+    }
+
+    pub(in crate::production_runtime_owner::resident_dataplane) fn official_normalized(
+        self,
+    ) -> Self {
+        if self.is_empty() {
+            Self::official_default()
+        } else {
+            self
+        }
+    }
+
+    pub(in crate::production_runtime_owner::resident_dataplane) fn validate_official(
+        &self,
+        field: &str,
+        node_tag: &str,
+    ) -> Result<(), String> {
+        if self.range_to(self.max_connections) > 0 && self.range_to(self.max_concurrency) > 0 {
+            return Err(format!(
+                "resident dataplane vless xHTTP {field} rejects maxConnections together with maxConcurrency for node {node_tag}"
+            ));
+        }
+        Ok(())
+    }
+
+    pub(in crate::production_runtime_owner::resident_dataplane) fn sample_range(
+        range: Option<(i32, i32)>,
+    ) -> i32 {
+        let Some((from, to)) = range else {
+            return 0;
+        };
+        if from == to {
+            return from;
+        }
+        fastrand::i32(from..=to)
+    }
+
+    fn range_to(&self, range: Option<(i32, i32)>) -> i32 {
+        range.map_or(0, |(_, to)| to)
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
