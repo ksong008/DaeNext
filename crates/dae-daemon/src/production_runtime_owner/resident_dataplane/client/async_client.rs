@@ -5,23 +5,40 @@ impl AsyncVlessTlsClient {
         payload: &[u8],
         label: &str,
     ) -> Result<(), String> {
+        self.write_plain_all_buffered(payload, label).await?;
+        self.flush_plain(label).await
+    }
+
+    pub(in crate::production_runtime_owner::resident_dataplane) async fn write_plain_all_buffered(
+        &mut self,
+        payload: &[u8],
+        label: &str,
+    ) -> Result<(), String> {
         match &mut self.engine {
-            AsyncVlessTlsEngine::Rustls { tls } | AsyncVlessTlsEngine::RealityRustls { tls } => {
-                tls.write_all(payload)
-                    .await
-                    .map_err(|err| format!("{label}: {err}"))?;
-                tls.flush()
-                    .await
-                    .map_err(|err| format!("flush {label}: {err}"))
-            }
-            AsyncVlessTlsEngine::Boring { tls } => {
-                tls.write_all(payload)
-                    .await
-                    .map_err(|err| format!("{label}: {err}"))?;
-                tls.flush()
-                    .await
-                    .map_err(|err| format!("flush {label}: {err}"))
-            }
+            AsyncVlessTlsEngine::Rustls { tls } | AsyncVlessTlsEngine::RealityRustls { tls } => tls
+                .write_all(payload)
+                .await
+                .map_err(|err| format!("{label}: {err}")),
+            AsyncVlessTlsEngine::Boring { tls } => tls
+                .write_all(payload)
+                .await
+                .map_err(|err| format!("{label}: {err}")),
+        }
+    }
+
+    pub(in crate::production_runtime_owner::resident_dataplane) async fn flush_plain(
+        &mut self,
+        label: &str,
+    ) -> Result<(), String> {
+        match &mut self.engine {
+            AsyncVlessTlsEngine::Rustls { tls } | AsyncVlessTlsEngine::RealityRustls { tls } => tls
+                .flush()
+                .await
+                .map_err(|err| format!("flush {label}: {err}")),
+            AsyncVlessTlsEngine::Boring { tls } => tls
+                .flush()
+                .await
+                .map_err(|err| format!("flush {label}: {err}")),
         }
     }
 
