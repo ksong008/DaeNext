@@ -178,11 +178,52 @@ fn trojan_type_tcp_is_plain_transport() {
     .unwrap();
 
     assert_eq!(parsed.transport_type, "tcp");
+    assert_eq!(parsed.alpn, "h3,h2,http/1.1");
     assert_eq!(
         parsed.transport_kind(),
         crate::trojan::TrojanTransportType::None
     );
     assert!(!parsed.allow_insecure);
+}
+
+#[test]
+fn trojan_udp_packet_prefix_decoder_preserves_stream_boundaries() {
+    let first = crate::trojan::packet::udp_packet("1.2.3.4:443", b"one").unwrap();
+    let second = crate::trojan::packet::udp_packet("example.com:53", b"two").unwrap();
+    let mut stream = first.clone();
+    stream.extend_from_slice(&second);
+
+    let (decoded_first, first_len) = crate::trojan::decode_udp_packet_prefix(&stream)
+        .unwrap()
+        .unwrap();
+    assert_eq!(first_len, first.len());
+    assert_eq!(decoded_first.target, "1.2.3.4:443");
+    assert_eq!(decoded_first.payload, b"one");
+
+    let (decoded_second, second_len) =
+        crate::trojan::decode_udp_packet_prefix(&stream[first_len..])
+            .unwrap()
+            .unwrap();
+    assert_eq!(second_len, second.len());
+    assert_eq!(decoded_second.target, "example.com:53");
+    assert_eq!(decoded_second.payload, b"two");
+
+    assert!(
+        crate::trojan::decode_udp_packet_prefix(&stream[..first.len() - 1])
+            .unwrap()
+            .is_none()
+    );
+    assert!(crate::trojan::decode_udp_packet(&stream).is_err());
+}
+
+#[test]
+fn trojan_udp_packet_rejects_payloads_larger_than_protocol_length_field() {
+    let payload = vec![0_u8; u16::MAX as usize + 1];
+    let err = crate::trojan::packet::udp_packet("1.2.3.4:443", &payload).unwrap_err();
+    assert!(
+        err.to_string().contains("trojan UDP payload too large"),
+        "{err}"
+    );
 }
 
 #[test]

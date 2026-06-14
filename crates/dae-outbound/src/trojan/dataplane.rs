@@ -204,11 +204,35 @@ where
 }
 
 pub fn decode_udp_packet(input: &[u8]) -> Result<TrojanUdpPacket, OutboundError> {
-    let (address, consumed) = Socks5Address::decode(input)?;
-    if input.len() < consumed + 4 {
+    let Some((packet, consumed)) = decode_udp_packet_prefix(input)? else {
         return Err(OutboundError::BadTrojan(
-            "trojan UDP packet length/CRLF missing".to_owned(),
+            "trojan UDP packet incomplete".to_owned(),
         ));
+    };
+    if consumed != input.len() {
+        return Err(OutboundError::BadTrojan(format!(
+            "trojan UDP packet length mismatch: got {}, want {}",
+            input.len(),
+            consumed
+        )));
+    }
+    Ok(packet)
+}
+
+pub fn decode_udp_packet_prefix(
+    input: &[u8],
+) -> Result<Option<(TrojanUdpPacket, usize)>, OutboundError> {
+    let Some(address_len) = socks5_address_prefix_len(input)? else {
+        return Ok(None);
+    };
+    if input.len() < address_len + 4 {
+        return Ok(None);
+    }
+    let (address, consumed) = Socks5Address::decode(input)?;
+    if consumed != address_len {
+        return Err(OutboundError::BadTrojan(format!(
+            "trojan UDP address length mismatch: got {consumed}, want {address_len}"
+        )));
     }
     let payload_len = u16::from_be_bytes([input[consumed], input[consumed + 1]]) as usize;
     if input[consumed + 2..consumed + 4] != *CRLF {
@@ -218,19 +242,44 @@ pub fn decode_udp_packet(input: &[u8]) -> Result<TrojanUdpPacket, OutboundError>
     }
     let payload_start = consumed + 4;
     let packet_len = payload_start + payload_len;
-    if input.len() != packet_len {
-        return Err(OutboundError::BadTrojan(format!(
-            "trojan UDP packet length mismatch: got {}, want {}",
-            input.len(),
-            packet_len
-        )));
+    if input.len() < packet_len {
+        return Ok(None);
     }
-    Ok(TrojanUdpPacket {
-        target: address.authority(),
-        payload: input[payload_start..packet_len].to_vec(),
-        payload_len,
+    Ok(Some((
+        TrojanUdpPacket {
+            target: address.authority(),
+            payload: input[payload_start..packet_len].to_vec(),
+            payload_len,
+            packet_len,
+        },
         packet_len,
-    })
+    )))
+}
+
+fn socks5_address_prefix_len(input: &[u8]) -> Result<Option<usize>, OutboundError> {
+    let Some((&atyp, rest)) = input.split_first() else {
+        return Ok(None);
+    };
+    match atyp {
+        1 => {
+            let len = 1 + 4 + 2;
+            Ok((input.len() >= len).then_some(len))
+        }
+        3 => {
+            let Some((&domain_len, _)) = rest.split_first() else {
+                return Ok(None);
+            };
+            let len = 1 + 1 + domain_len as usize + 2;
+            Ok((input.len() >= len).then_some(len))
+        }
+        4 => {
+            let len = 1 + 16 + 2;
+            Ok((input.len() >= len).then_some(len))
+        }
+        value => Err(OutboundError::BadTrojan(format!(
+            "bad trojan address type: {value}"
+        ))),
+    }
 }
 
 pub fn read_udp_packet_from_stream<S>(stream: &mut S) -> Result<TrojanUdpPacket, OutboundError>

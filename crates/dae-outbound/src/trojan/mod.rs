@@ -13,7 +13,7 @@ mod wss_inner_shadowsocks_dataplane;
 
 pub use dataplane::{
     TrojanRequestHeader, TrojanTcpExchangeReport, TrojanTcpRequest, TrojanUdpOverTcpExchangeReport,
-    TrojanUdpPacket, decode_udp_packet, read_request_header_from_stream,
+    TrojanUdpPacket, decode_udp_packet, decode_udp_packet_prefix, read_request_header_from_stream,
     read_tcp_request_from_stream, read_udp_packet_from_stream, tcp_exchange_over_stream,
     udp_over_tcp_exchange_over_stream,
 };

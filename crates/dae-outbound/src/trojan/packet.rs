@@ -29,6 +29,12 @@ pub fn tcp_request_header(
 }
 
 pub fn udp_packet(target: &str, payload: &[u8]) -> Result<Vec<u8>, OutboundError> {
+    if payload.len() > u16::MAX as usize {
+        return Err(OutboundError::BadTrojan(format!(
+            "trojan UDP payload too large: {} bytes",
+            payload.len()
+        )));
+    }
     let metadata = TrojanMetadata::parse("udp", target)?;
     let metadata_bytes = metadata.encode()?;
     let mut out = Vec::with_capacity(metadata_bytes.len() + 4 + payload.len());

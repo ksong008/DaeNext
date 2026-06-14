@@ -18,6 +18,7 @@ pub struct TrojanLink {
     pub port: u16,
     pub password: String,
     pub sni: String,
+    pub alpn: String,
     pub transport_type: String,
     pub encryption: String,
     pub host: String,
@@ -66,6 +67,7 @@ impl TrojanLink {
             port,
             password: percent_decode(url.username())?,
             sni,
+            alpn: query_value(&query, "alpn").unwrap_or_default(),
             transport_type: String::new(),
             encryption: String::new(),
             host: String::new(),
@@ -120,6 +122,7 @@ impl TrojanLink {
         if !self.sni.is_empty() {
             query.push(("sni".to_owned(), self.sni.clone()));
         }
+        push_if_non_empty(&mut query, "alpn", &self.alpn);
         if self.protocol == "trojan-go" {
             push_if_non_empty(&mut query, "host", &self.host);
             push_if_non_empty(&mut query, "encryption", &self.encryption);
