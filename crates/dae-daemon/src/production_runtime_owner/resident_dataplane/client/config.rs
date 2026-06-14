@@ -22,7 +22,7 @@ pub(super) fn boring_vless_connector(
     } else {
         SslVerifyMode::PEER
     });
-    builder.set_read_ahead(false);
+    builder.set_read_ahead(boring_read_ahead_enabled(proxy));
     if proxy.flow == XTLS_RPRX_VISION {
         builder
             .set_min_proto_version(Some(SslVersion::TLS1_3))
@@ -323,4 +323,66 @@ pub(super) fn boring_alpn_wire(proxy: &ResidentProxyPlan) -> Result<Vec<u8>, Str
         out.extend_from_slice(bytes);
     }
     Ok(out)
+}
+
+pub(super) fn boring_read_ahead_enabled(proxy: &ResidentProxyPlan) -> bool {
+    proxy.flow != XTLS_RPRX_VISION
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::production_runtime_owner::resident_dataplane::plan::{
+        ResidentProxyProtocolPlan, ResidentXhttpMode,
+    };
+
+    #[test]
+    fn boring_read_ahead_stays_disabled_for_vless_vision() {
+        let mut proxy =
+            test_proxy_plan(ResidentProxyProtocolPlan::VlessVisionTcpTls { key: [0; 16] });
+        proxy.flow = XTLS_RPRX_VISION.to_owned();
+
+        assert!(!boring_read_ahead_enabled(&proxy));
+    }
+
+    #[test]
+    fn boring_read_ahead_is_enabled_for_trojan_plain_tls() {
+        let proxy = test_proxy_plan(ResidentProxyProtocolPlan::TrojanTcpTls {
+            password: "secret".to_owned(),
+        });
+
+        assert!(boring_read_ahead_enabled(&proxy));
+    }
+
+    fn test_proxy_plan(handler: ResidentProxyProtocolPlan) -> ResidentProxyPlan {
+        ResidentProxyPlan {
+            graph_id: "resident-graph:test".to_owned(),
+            graph_link_hash: "sha256:test".to_owned(),
+            redacted_link_source: "source:<redacted>".to_owned(),
+            protocol: "trojan".to_owned(),
+            group_name: "proxy".to_owned(),
+            group_policy: "fixed".to_owned(),
+            node_tag: "test".to_owned(),
+            server_host: "127.0.0.1".to_owned(),
+            server_port: 443,
+            server_name: "example.com".to_owned(),
+            alpn: Vec::new(),
+            flow: String::new(),
+            net: "tcp".to_owned(),
+            stream_host: String::new(),
+            stream_path: String::new(),
+            xhttp_download: None,
+            xhttp_mode: ResidentXhttpMode::PacketUp,
+            xhttp_xmux: None,
+            tls: "tls".to_owned(),
+            allow_insecure: false,
+            tls_fragment: None,
+            utls_fingerprint: None,
+            reality: None,
+            handler,
+            chain_parent: None,
+            mark: 0,
+            mptcp: false,
+        }
+    }
 }
