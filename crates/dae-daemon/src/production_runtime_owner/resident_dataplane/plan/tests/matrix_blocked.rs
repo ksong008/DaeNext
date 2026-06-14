@@ -443,7 +443,7 @@ pub(super) fn resident_dataplane_plan_builds_proxy_by_outbound_index() {
 }
 
 #[test]
-pub(super) fn resident_dataplane_plan_rejects_vless_without_vision_flow() {
+pub(super) fn resident_dataplane_plan_admits_vless_plain_tcp_tls_without_vision_flow() {
     let source = vless_vision_without_flow_fixture_url("");
     let config_source = r#"
         global {
@@ -468,9 +468,19 @@ pub(super) fn resident_dataplane_plan_rejects_vless_without_vision_flow() {
         "#
     .replace("__SOURCE__", &source);
     let config = parse_config(&config_source);
-    let err = build_resident_dataplane_plan(&config).unwrap_err();
-    assert!(err.contains("admits tcp flow=xtls-rprx-vision"));
-    assert!(err.contains("resident shape remains fail-closed"));
+    let plan = build_resident_dataplane_plan(&config).unwrap();
+    let proxy = plan
+        .default_proxy_group()
+        .unwrap()
+        .select_proxy_for_tcp()
+        .unwrap();
+    assert_eq!(proxy.protocol, "vless");
+    assert_eq!(proxy.net, "tcp");
+    assert_eq!(proxy.flow, "");
+    assert!(matches!(
+        proxy.handler,
+        ResidentProxyProtocolPlan::VlessVisionTcpTls { .. }
+    ));
 }
 
 #[test]
