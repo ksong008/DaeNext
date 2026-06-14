@@ -634,7 +634,61 @@ pub(super) fn resident_dataplane_plan_admits_vless_xhttp_download_settings() {
 }
 
 #[test]
-pub(super) fn resident_dataplane_plan_rejects_unimplemented_vless_xhttp_shapes() {
+pub(super) fn resident_dataplane_plan_admits_vless_xhttp_stream_modes_and_xmux() {
+    let config = parse_config(
+        r#"
+        global {
+        lan_interface: daerust0
+        allow_insecure: false
+        so_mark_from_dae: 1234
+        mptcp: false
+        }
+        routing {
+        fallback: direct
+        }
+        "#,
+    );
+    let stream_up = build_resident_proxy_plan_for_node(
+        &config,
+        "proxy".to_owned(),
+        "xhttp_stream_up".to_owned(),
+        vless_xhttp_parser_fixture_url("stream-up", "h2", ""),
+    )
+    .unwrap();
+    assert_eq!(stream_up.xhttp_mode, ResidentXhttpMode::StreamUp);
+    assert!(stream_up.xhttp_xmux.is_none());
+
+    let stream_one = build_resident_proxy_plan_for_node(
+        &config,
+        "proxy".to_owned(),
+        "xhttp_stream_one".to_owned(),
+        vless_xhttp_parser_fixture_url("stream-one", "h2", ""),
+    )
+    .unwrap();
+    assert_eq!(stream_one.xhttp_mode, ResidentXhttpMode::StreamOne);
+
+    let xmux = build_resident_proxy_plan_for_node(
+        &config,
+        "proxy".to_owned(),
+        "xhttp_xmux".to_owned(),
+        vless_xhttp_parser_fixture_url(
+            "packet-up",
+            "h2",
+            r#"{"xmux":{"maxConcurrency":{"from":0,"to":8},"maxConnections":2,"cMaxReuseTimes":"3-9","hMaxRequestTimes":"4","hMaxReusableSecs":{"from":5,"to":10},"hKeepAlivePeriod":15}}"#,
+        ),
+    )
+    .unwrap();
+    let xmux = xmux.xhttp_xmux.as_ref().unwrap();
+    assert_eq!(xmux.max_concurrency, Some((0, 8)));
+    assert_eq!(xmux.max_connections, Some((2, 2)));
+    assert_eq!(xmux.c_max_reuse_times, Some((3, 9)));
+    assert_eq!(xmux.h_max_request_times, Some((4, 4)));
+    assert_eq!(xmux.h_max_reusable_secs, Some((5, 10)));
+    assert_eq!(xmux.h_keep_alive_period, 15);
+}
+
+#[test]
+pub(super) fn resident_dataplane_plan_rejects_remaining_unimplemented_vless_xhttp_shapes() {
     let config = parse_config(
         r#"
         global {
@@ -650,13 +704,12 @@ pub(super) fn resident_dataplane_plan_rejects_unimplemented_vless_xhttp_shapes()
     );
     for (tag, link, expected) in [
         (
-            "xhttp_stream_up",
-            vless_xhttp_parser_fixture_url("stream-up", "h2", ""),
-            "admits packet-up mode only",
-        ),
-        (
             "xhttp_extra",
-            vless_xhttp_parser_fixture_url("packet-up", "h2", r#"{"xmux":{"maxConnections":2}}"#),
+            vless_xhttp_parser_fixture_url(
+                "packet-up",
+                "h2",
+                r#"{"xPaddingBytes":{"from":100,"to":200}}"#,
+            ),
             "unsupported fields",
         ),
         (

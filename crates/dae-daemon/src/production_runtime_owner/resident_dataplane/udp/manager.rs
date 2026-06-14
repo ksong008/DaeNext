@@ -404,6 +404,8 @@ mod tests {
             stream_host: String::new(),
             stream_path: String::new(),
             xhttp_download: None,
+            xhttp_mode: ResidentXhttpMode::PacketUp,
+            xhttp_xmux: None,
             tls: String::new(),
             allow_insecure: false,
             tls_fragment: None,
