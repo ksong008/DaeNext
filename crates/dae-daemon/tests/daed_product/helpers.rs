@@ -308,6 +308,7 @@ pub(super) fn trojan_fixture_url(_ps: &str, add: &str, port: u16) -> String {
         port,
         password: fixture_secret(),
         sni: fixture_host(FixtureEndpoint::Authority),
+        alpn: String::new(),
         transport_type: String::new(),
         encryption: String::new(),
         host: String::new(),
