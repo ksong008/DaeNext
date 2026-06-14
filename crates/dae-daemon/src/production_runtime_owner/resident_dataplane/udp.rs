@@ -25,7 +25,7 @@ use dae_outbound::{
         validate_http_status, websocket_client_binary_frame, websocket_handshake_request,
     },
     socks5::{Socks5Address, udp_packet},
-    trojan::{decode_udp_packet as decode_trojan_udp_packet, packet as trojan_packet},
+    trojan::packet as trojan_packet,
     tuic::{authenticate_tuic_connection, build_tuic_runtime_client_config},
     vless::packet,
     vmess,
