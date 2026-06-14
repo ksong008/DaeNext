@@ -18,6 +18,8 @@ pub(crate) async fn relay_tcp_over_vless_tls_async(
     let mut uplink_uuid_sent = false;
     let mut vision_first_uplink_block = true;
     let mut pending_vision_uplink = Vec::<u8>::new();
+    let mut pending_plain_uplink_flush_bytes = 0_usize;
+    let mut pending_plain_uplink_flush_deadline = None;
     let mut inbound_closed = false;
     let mut last_activity = Instant::now();
     let mut inbound_buf = [0_u8; 16 * 1024];
@@ -53,6 +55,15 @@ pub(crate) async fn relay_tcp_over_vless_tls_async(
             inbound_read = inbound.read(&mut inbound_buf), if !inbound_closed => {
                 match inbound_read {
                     Ok(0) => {
+                        if !vision_enabled {
+                            flush_pending_tls_plain(
+                                client,
+                                &mut pending_plain_uplink_flush_bytes,
+                                &mut pending_plain_uplink_flush_deadline,
+                            )
+                            .await
+                            .map_err(|err| RelayError::new(err, &stats))?;
+                        }
                         inbound_closed = true;
                         client.shutdown().await;
                         last_activity = Instant::now();
@@ -83,15 +94,38 @@ pub(crate) async fn relay_tcp_over_vless_tls_async(
                             .map_err(|err| RelayError::new(err, &stats))?;
                         } else {
                             client
-                                .write_plain_all(&inbound_buf[..read], "write client payload to proxy TLS")
+                                .write_plain_all_buffered(&inbound_buf[..read], "write client payload to proxy TLS")
                                 .await
                                 .map_err(|err| RelayError::new(err, &stats))?;
+                            note_pending_tls_plain_flush(
+                                &mut pending_plain_uplink_flush_bytes,
+                                &mut pending_plain_uplink_flush_deadline,
+                                read,
+                            );
+                            if pending_plain_uplink_flush_bytes >= TLS_PLAIN_RELAY_FLUSH_BYTES {
+                                flush_pending_tls_plain(
+                                    client,
+                                    &mut pending_plain_uplink_flush_bytes,
+                                    &mut pending_plain_uplink_flush_deadline,
+                                )
+                                .await
+                                .map_err(|err| RelayError::new(err, &stats))?;
+                            }
                         }
                         stats.client_to_proxy += read;
                         metrics.add_upload(read);
                         last_activity = Instant::now();
                     }
                     Err(err) if is_graceful_stream_close_error(&err) => {
+                        if !vision_enabled {
+                            flush_pending_tls_plain(
+                                client,
+                                &mut pending_plain_uplink_flush_bytes,
+                                &mut pending_plain_uplink_flush_deadline,
+                            )
+                            .await
+                            .map_err(|err| RelayError::new(err, &stats))?;
+                        }
                         inbound_closed = true;
                         client.shutdown().await;
                         last_activity = Instant::now();
@@ -174,6 +208,16 @@ pub(crate) async fn relay_tcp_over_vless_tls_async(
                     }
                 }
             }
+            _ = time::sleep_until(tls_plain_flush_deadline(pending_plain_uplink_flush_deadline)), if !vision_enabled && pending_plain_uplink_flush_deadline.is_some() => {
+                flush_pending_tls_plain(
+                    client,
+                    &mut pending_plain_uplink_flush_bytes,
+                    &mut pending_plain_uplink_flush_deadline,
+                )
+                    .await
+                    .map_err(|err| RelayError::new(err, &stats))?;
+                last_activity = Instant::now();
+            }
             _ = time::sleep(Duration::from_millis(100)) => {
                 if inbound_closed && !downlink_direct {
                     break;
@@ -185,4 +229,16 @@ pub(crate) async fn relay_tcp_over_vless_tls_async(
         }
     }
     Ok(stats)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn vless_plain_tls_relay_reuses_coalesced_flush_policy() {
+        assert!(TLS_PLAIN_RELAY_FLUSH_BYTES >= 64 * 1024);
+        assert!(TLS_PLAIN_RELAY_FLUSH_DELAY <= Duration::from_millis(5));
+        assert_ne!(XTLS_RPRX_VISION, "");
+    }
 }
