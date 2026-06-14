@@ -53,29 +53,6 @@ pub(crate) fn build_vless_proxy_plan(
         ));
     }
     let requested_allow_insecure = vless.allow_insecure || config.global.allow_insecure;
-    if net == "xhttp" {
-        let mode = ir::normalize_xhttp_mode(&vless.xhttp_mode, "https", &vless.tls, false);
-        if !mode.ok {
-            return Err(format!(
-                "resident dataplane vless xHTTP transport rejected mode for node {node_tag}: {}",
-                mode.error_contains
-            ));
-        }
-        if mode.normalized != "packet-up" {
-            return Err(format!(
-                "resident dataplane vless xHTTP transport admits packet-up mode only, got {} for node {node_tag}; resident shape remains fail-closed for this config",
-                mode.normalized
-            ));
-        }
-        let alpn_result = ir::validate_xhttp_alpn(&vless.tls, &vless.alpn);
-        if !alpn_result.ok {
-            return Err(format!(
-                "resident dataplane vless xHTTP transport rejected ALPN for node {node_tag}: {}",
-                alpn_result.error_contains
-            ));
-        }
-        validate_resident_xhttp_primary_alpn(&vless.alpn, &vless.tls, &node_tag)?;
-    }
     let meek_options = if net == "meek" {
         Some(
             MeekRoundTripOptions::from_https_url(&vless.path, Vec::new()).map_err(|err| {
@@ -113,15 +90,41 @@ pub(crate) fn build_vless_proxy_plan(
     } else {
         vless.sni.clone()
     };
-    let xhttp_download = if net == "xhttp" {
-        resident_xhttp_download_plan(
+    let xhttp_extra = if net == "xhttp" {
+        resident_xhttp_extra_plan(
             &vless.xhttp_extra,
             &server_name,
             config.global.allow_insecure,
             &node_tag,
         )?
     } else {
-        None
+        ResidentXhttpExtraPlan::default()
+    };
+    let xhttp_mode = if net == "xhttp" {
+        let mode = ir::normalize_xhttp_mode(
+            &vless.xhttp_mode,
+            "https",
+            &vless.tls,
+            xhttp_extra.download.is_some(),
+        );
+        if !mode.ok {
+            return Err(format!(
+                "resident dataplane vless xHTTP transport rejected mode for node {node_tag}: {}",
+                mode.error_contains
+            ));
+        }
+        let mode = resident_xhttp_mode_from_normalized(&mode.normalized, &node_tag)?;
+        let alpn_result = ir::validate_xhttp_alpn(&vless.tls, &vless.alpn);
+        if !alpn_result.ok {
+            return Err(format!(
+                "resident dataplane vless xHTTP transport rejected ALPN for node {node_tag}: {}",
+                alpn_result.error_contains
+            ));
+        }
+        validate_resident_xhttp_primary_alpn(&vless.alpn, &vless.tls, &node_tag)?;
+        mode
+    } else {
+        ResidentXhttpMode::PacketUp
     };
     let alpn = if matches!(net.as_str(), "grpc" | "xhttp") && vless.alpn.is_empty() {
         vec!["h2".to_owned()]
@@ -168,7 +171,9 @@ pub(crate) fn build_vless_proxy_plan(
         net,
         stream_host,
         stream_path,
-        xhttp_download,
+        xhttp_download: xhttp_extra.download,
+        xhttp_mode,
+        xhttp_xmux: xhttp_extra.xmux,
         tls: vless.tls,
         allow_insecure,
         tls_fragment,
@@ -202,15 +207,35 @@ fn resident_reality_underlay_plan(
     }))
 }
 
-fn resident_xhttp_download_plan(
+#[derive(Default)]
+struct ResidentXhttpExtraPlan {
+    download: Option<ResidentXhttpEndpointPlan>,
+    xmux: Option<ResidentXhttpXmuxPlan>,
+}
+
+fn resident_xhttp_mode_from_normalized(
+    mode: &str,
+    node_tag: &str,
+) -> Result<ResidentXhttpMode, String> {
+    match mode {
+        "packet-up" => Ok(ResidentXhttpMode::PacketUp),
+        "stream-up" => Ok(ResidentXhttpMode::StreamUp),
+        "stream-one" => Ok(ResidentXhttpMode::StreamOne),
+        other => Err(format!(
+            "resident dataplane vless xHTTP transport normalized to unsupported mode {other} for node {node_tag}"
+        )),
+    }
+}
+
+fn resident_xhttp_extra_plan(
     extra: &str,
     primary_server_name: &str,
     global_allow_insecure: bool,
     node_tag: &str,
-) -> Result<Option<ResidentXhttpEndpointPlan>, String> {
+) -> Result<ResidentXhttpExtraPlan, String> {
     let extra = extra.trim();
     if extra.is_empty() {
-        return Ok(None);
+        return Ok(ResidentXhttpExtraPlan::default());
     }
     let value = serde_json::from_str::<Value>(extra).map_err(|err| {
         format!("resident dataplane vless xHTTP extra must be JSON for node {node_tag}: {err}")
@@ -219,16 +244,20 @@ fn resident_xhttp_download_plan(
         format!("resident dataplane vless xHTTP extra must be a JSON object for node {node_tag}")
     })?;
     if object.is_empty() {
-        return Ok(None);
+        return Ok(ResidentXhttpExtraPlan::default());
     }
     reject_unknown_object_fields(
         object,
-        &["downloadSettings"],
+        &["downloadSettings", "xmux"],
         "resident dataplane vless xHTTP extra",
         node_tag,
     )?;
+    let xmux = resident_xhttp_xmux_plan(object.get("xmux"), "extra.xmux", node_tag)?;
     let Some(download) = object.get("downloadSettings") else {
-        return Ok(None);
+        return Ok(ResidentXhttpExtraPlan {
+            download: None,
+            xmux,
+        });
     };
     let download = download.as_object().ok_or_else(|| {
         format!(
@@ -292,16 +321,21 @@ fn resident_xhttp_download_plan(
         node_tag,
     )?;
     let xhttp_settings = resident_xhttp_download_transport_settings(download, node_tag)?;
-    Ok(Some(ResidentXhttpEndpointPlan {
-        server_host,
-        server_port,
-        server_name,
-        alpn,
-        stream_host: xhttp_settings.host,
-        stream_path: xhttp_settings.path,
-        allow_insecure,
-        tls_fragment: None,
-    }))
+    Ok(ResidentXhttpExtraPlan {
+        download: Some(ResidentXhttpEndpointPlan {
+            server_host,
+            server_port,
+            server_name,
+            alpn,
+            stream_host: xhttp_settings.host,
+            stream_path: xhttp_settings.path,
+            mode: ResidentXhttpMode::PacketUp,
+            xmux: xhttp_settings.xmux,
+            allow_insecure,
+            tls_fragment: None,
+        }),
+        xmux,
+    })
 }
 
 fn resident_xhttp_download_tls_settings(
@@ -358,6 +392,7 @@ fn resident_xhttp_download_tls_settings(
 struct ResidentXhttpTransportSettings {
     host: String,
     path: String,
+    xmux: Option<ResidentXhttpXmuxPlan>,
 }
 
 fn resident_xhttp_download_transport_settings(
@@ -383,7 +418,7 @@ fn resident_xhttp_download_transport_settings(
     })?;
     reject_unknown_object_fields(
         settings,
-        &["host", "path", "mode", "extra"],
+        &["host", "path", "mode", "extra", "xmux"],
         "resident dataplane vless xHTTP downloadSettings.xhttpSettings",
         node_tag,
     )?;
@@ -397,41 +432,87 @@ fn resident_xhttp_download_transport_settings(
                 mode_result.error_contains
             ));
         }
-        if mode_result.normalized != "packet-up" && mode_result.normalized != "auto" {
+        if !matches!(
+            mode_result.normalized.as_str(),
+            "packet-up" | "stream-up" | "stream-one"
+        ) {
             return Err(format!(
-                "resident dataplane vless xHTTP downloadSettings admits packet-up-compatible mode only for node {node_tag}; got {}",
+                "resident dataplane vless xHTTP downloadSettings admits official xHTTP modes only for node {node_tag}; got {}",
                 mode_result.normalized
             ));
         }
     }
-    if let Some(extra) = settings.get("extra") {
-        reject_non_empty_xhttp_nested_extra(extra, node_tag)?;
-    }
+    let xmux = resident_xhttp_download_xmux_plan(settings, node_tag)?;
     let host =
         optional_string(settings.get("host"), "xhttpSettings.host", node_tag)?.unwrap_or_default();
     let path = optional_string(settings.get("path"), "xhttpSettings.path", node_tag)?
         .map(|value| resident_xhttp_stream_path(&value))
         .unwrap_or_else(|| resident_xhttp_stream_path(""));
-    Ok(ResidentXhttpTransportSettings { host, path })
+    Ok(ResidentXhttpTransportSettings { host, path, xmux })
 }
 
-fn reject_non_empty_xhttp_nested_extra(extra: &Value, node_tag: &str) -> Result<(), String> {
-    let object = extra.as_object().ok_or_else(|| {
-        format!(
-            "resident dataplane vless xHTTP downloadSettings.xhttpSettings.extra must be a JSON object for node {node_tag}"
-        )
-    })?;
-    if object.is_empty() {
-        return Ok(());
-    }
-    if object.contains_key("xmux") {
+fn resident_xhttp_download_xmux_plan(
+    settings: &serde_json::Map<String, Value>,
+    node_tag: &str,
+) -> Result<Option<ResidentXhttpXmuxPlan>, String> {
+    let direct = resident_xhttp_xmux_plan(
+        settings.get("xmux"),
+        "downloadSettings.xhttpSettings.xmux",
+        node_tag,
+    )?;
+    let nested = match settings.get("extra") {
+        Some(extra) => resident_xhttp_nested_extra_xmux_plan(extra, node_tag)?,
+        None => None,
+    };
+    if direct.is_some() && nested.is_some() {
         return Err(format!(
-            "resident dataplane vless xHTTP downloadSettings.xhttpSettings.extra xmux is not implemented for node {node_tag}; resident shape remains fail-closed for this config"
+            "resident dataplane vless xHTTP downloadSettings.xhttpSettings must not contain xmux in both xmux and extra.xmux for node {node_tag}"
         ));
     }
-    Err(format!(
-        "resident dataplane vless xHTTP downloadSettings.xhttpSettings.extra admits default settings only for node {node_tag}; resident shape remains fail-closed for this config"
-    ))
+    Ok(direct.or(nested))
+}
+
+fn resident_xhttp_nested_extra_xmux_plan(
+    extra: &Value,
+    node_tag: &str,
+) -> Result<Option<ResidentXhttpXmuxPlan>, String> {
+    let parsed;
+    let object = match extra {
+        Value::Null => return Ok(None),
+        Value::String(raw) if raw.trim().is_empty() => return Ok(None),
+        Value::String(raw) => {
+            parsed = serde_json::from_str::<Value>(raw).map_err(|err| {
+                format!(
+                    "resident dataplane vless xHTTP downloadSettings.xhttpSettings.extra must be JSON for node {node_tag}: {err}"
+                )
+            })?;
+            parsed.as_object().ok_or_else(|| {
+                format!(
+                    "resident dataplane vless xHTTP downloadSettings.xhttpSettings.extra must be a JSON object for node {node_tag}"
+                )
+            })?
+        }
+        Value::Object(object) => object,
+        _ => {
+            return Err(format!(
+                "resident dataplane vless xHTTP downloadSettings.xhttpSettings.extra must be a JSON object or JSON string for node {node_tag}"
+            ));
+        }
+    };
+    if object.is_empty() {
+        return Ok(None);
+    }
+    reject_unknown_object_fields(
+        object,
+        &["xmux"],
+        "resident dataplane vless xHTTP downloadSettings.xhttpSettings.extra",
+        node_tag,
+    )?;
+    resident_xhttp_xmux_plan(
+        object.get("xmux"),
+        "downloadSettings.xhttpSettings.extra.xmux",
+        node_tag,
+    )
 }
 
 fn reject_unknown_object_fields(
@@ -519,6 +600,189 @@ fn optional_bool(
             "resident dataplane vless xHTTP {field} must be a boolean for node {node_tag}"
         )),
     }
+}
+
+fn resident_xhttp_xmux_plan(
+    value: Option<&Value>,
+    field: &str,
+    node_tag: &str,
+) -> Result<Option<ResidentXhttpXmuxPlan>, String> {
+    let Some(value) = value else {
+        return Ok(None);
+    };
+    let Value::Object(object) = value else {
+        if value.is_null() {
+            return Ok(None);
+        }
+        return Err(format!(
+            "resident dataplane vless xHTTP {field} must be a JSON object for node {node_tag}"
+        ));
+    };
+    reject_unknown_object_fields(
+        object,
+        &[
+            "maxConcurrency",
+            "maxConnections",
+            "cMaxReuseTimes",
+            "hMaxRequestTimes",
+            "hMaxReusableSecs",
+            "hKeepAlivePeriod",
+        ],
+        &format!("resident dataplane vless xHTTP {field}"),
+        node_tag,
+    )?;
+    Ok(Some(ResidentXhttpXmuxPlan {
+        max_concurrency: optional_xhttp_range(
+            object.get("maxConcurrency"),
+            &format!("{field}.maxConcurrency"),
+            node_tag,
+        )?,
+        max_connections: optional_xhttp_range(
+            object.get("maxConnections"),
+            &format!("{field}.maxConnections"),
+            node_tag,
+        )?,
+        c_max_reuse_times: optional_xhttp_range(
+            object.get("cMaxReuseTimes"),
+            &format!("{field}.cMaxReuseTimes"),
+            node_tag,
+        )?,
+        h_max_request_times: optional_xhttp_range(
+            object.get("hMaxRequestTimes"),
+            &format!("{field}.hMaxRequestTimes"),
+            node_tag,
+        )?,
+        h_max_reusable_secs: optional_xhttp_range(
+            object.get("hMaxReusableSecs"),
+            &format!("{field}.hMaxReusableSecs"),
+            node_tag,
+        )?,
+        h_keep_alive_period: optional_i64(
+            object.get("hKeepAlivePeriod"),
+            &format!("{field}.hKeepAlivePeriod"),
+            node_tag,
+        )?
+        .unwrap_or(0),
+    }))
+}
+
+fn optional_xhttp_range(
+    value: Option<&Value>,
+    field: &str,
+    node_tag: &str,
+) -> Result<Option<(u32, u32)>, String> {
+    let Some(value) = value else {
+        return Ok(None);
+    };
+    if value.is_null() {
+        return Ok(None);
+    }
+    let range = match value {
+        Value::Number(number) => {
+            let value = number.as_u64().ok_or_else(|| {
+                format!(
+                    "resident dataplane vless xHTTP {field} must be a non-negative integer for node {node_tag}"
+                )
+            })?;
+            let value = u32::try_from(value).map_err(|_| {
+                format!(
+                    "resident dataplane vless xHTTP {field} is too large for node {node_tag}: {value}"
+                )
+            })?;
+            (value, value)
+        }
+        Value::String(raw) => parse_xhttp_range_string(raw, field, node_tag)?,
+        Value::Object(object) => {
+            reject_unknown_object_fields(
+                object,
+                &["from", "to"],
+                &format!("resident dataplane vless xHTTP {field}"),
+                node_tag,
+            )?;
+            let from =
+                optional_u32(object.get("from"), &format!("{field}.from"), node_tag)?.unwrap_or(0);
+            let to = optional_u32(object.get("to"), &format!("{field}.to"), node_tag)?.unwrap_or(0);
+            (from, to)
+        }
+        _ => {
+            return Err(format!(
+                "resident dataplane vless xHTTP {field} must be an integer, string range, or {{from,to}} object for node {node_tag}"
+            ));
+        }
+    };
+    if range.0 > range.1 {
+        return Err(format!(
+            "resident dataplane vless xHTTP {field} range must satisfy from <= to for node {node_tag}; got {}..{}",
+            range.0, range.1
+        ));
+    }
+    Ok(Some(range))
+}
+
+fn parse_xhttp_range_string(raw: &str, field: &str, node_tag: &str) -> Result<(u32, u32), String> {
+    let raw = raw.trim();
+    if raw.is_empty() {
+        return Err(format!(
+            "resident dataplane vless xHTTP {field} string range must not be empty for node {node_tag}"
+        ));
+    }
+    if let Some((from, to)) = raw.split_once('-') {
+        return Ok((
+            parse_xhttp_u32_str(from.trim(), &format!("{field}.from"), node_tag)?,
+            parse_xhttp_u32_str(to.trim(), &format!("{field}.to"), node_tag)?,
+        ));
+    }
+    let value = parse_xhttp_u32_str(raw, field, node_tag)?;
+    Ok((value, value))
+}
+
+fn optional_u32(value: Option<&Value>, field: &str, node_tag: &str) -> Result<Option<u32>, String> {
+    match value {
+        None | Some(Value::Null) => Ok(None),
+        Some(Value::Number(number)) => {
+            let value = number.as_u64().ok_or_else(|| {
+                format!(
+                    "resident dataplane vless xHTTP {field} must be a non-negative integer for node {node_tag}"
+                )
+            })?;
+            u32::try_from(value).map(Some).map_err(|_| {
+                format!(
+                    "resident dataplane vless xHTTP {field} is too large for node {node_tag}: {value}"
+                )
+            })
+        }
+        Some(Value::String(raw)) => parse_xhttp_u32_str(raw, field, node_tag).map(Some),
+        Some(_) => Err(format!(
+            "resident dataplane vless xHTTP {field} must be a non-negative integer for node {node_tag}"
+        )),
+    }
+}
+
+fn optional_i64(value: Option<&Value>, field: &str, node_tag: &str) -> Result<Option<i64>, String> {
+    match value {
+        None | Some(Value::Null) => Ok(None),
+        Some(Value::Number(number)) => number.as_i64().map(Some).ok_or_else(|| {
+            format!(
+                "resident dataplane vless xHTTP {field} must be an integer for node {node_tag}"
+            )
+        }),
+        Some(Value::String(raw)) => raw.trim().parse::<i64>().map(Some).map_err(|err| {
+            format!(
+                "resident dataplane vless xHTTP {field} must be an integer for node {node_tag}: {err}"
+            )
+        }),
+        Some(_) => Err(format!(
+            "resident dataplane vless xHTTP {field} must be an integer for node {node_tag}"
+        )),
+    }
+}
+
+fn parse_xhttp_u32_str(raw: &str, field: &str, node_tag: &str) -> Result<u32, String> {
+    raw.trim().parse::<u32>().map_err(|err| {
+        format!(
+            "resident dataplane vless xHTTP {field} must be a non-negative integer for node {node_tag}: {err}"
+        )
+    })
 }
 
 fn optional_alpn(

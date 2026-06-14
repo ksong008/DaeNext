@@ -399,7 +399,8 @@ impl VlessXudpStreamSession {
 
 #[derive(Default)]
 pub(super) struct VlessXhttpH2UdpSession {
-    upload: Option<XhttpUploadClient>,
+    packet_upload: Option<XhttpUploadClient>,
+    stream_upload: Option<XhttpStreamUploadClient>,
     download: Option<XhttpDownloadClient>,
     session_id: Option<String>,
     seq: u64,
@@ -407,6 +408,7 @@ pub(super) struct VlessXhttpH2UdpSession {
     response_plaintext: Vec<u8>,
     upload_underlay: Option<&'static str>,
     upload_http_version: Option<ResidentXhttpHttpVersion>,
+    xhttp_mode: Option<ResidentXhttpMode>,
 }
 
 impl VlessXhttpH2UdpSession {
@@ -422,7 +424,6 @@ impl VlessXhttpH2UdpSession {
                     .to_owned(),
             );
         }
-        self.ensure_open(proxy).await?;
         let key = proxy.vless_key()?;
         let request = if self.seq == 0 {
             packet::first_write_bytes(
@@ -437,7 +438,12 @@ impl VlessXhttpH2UdpSession {
         } else {
             vless_udp_length_frame(payload)?
         };
-        self.send_packet(Bytes::from(request)).await?;
+        let request = Bytes::from(request);
+        if self.is_open() {
+            self.send_packet(request).await?;
+        } else {
+            self.open_with_initial_packet(proxy, request).await?;
+        }
         if let Some(response) = self.poll_response().await? {
             Ok(response)
         } else {
@@ -445,39 +451,74 @@ impl VlessXhttpH2UdpSession {
         }
     }
 
-    async fn ensure_open(&mut self, proxy: &ResidentProxyPlan) -> Result<(), String> {
-        if self.upload.is_some() && self.download.is_some() && self.session_id.is_some() {
-            return Ok(());
+    fn is_open(&self) -> bool {
+        self.download.is_some() && (self.packet_upload.is_some() || self.stream_upload.is_some())
+    }
+
+    async fn open_with_initial_packet(
+        &mut self,
+        proxy: &ResidentProxyPlan,
+        initial_packet: Bytes,
+    ) -> Result<(), String> {
+        match proxy.xhttp_mode {
+            ResidentXhttpMode::PacketUp => {
+                let XhttpPacketUpParts {
+                    session_id,
+                    upload,
+                    download,
+                    upload_underlay,
+                    upload_http_version,
+                    ..
+                } = open_xhttp_packet_up_parts(proxy, proxy.mark, proxy.mptcp).await?;
+                self.packet_upload = Some(upload);
+                self.download = Some(download);
+                self.session_id = Some(session_id);
+                self.upload_underlay = Some(upload_underlay);
+                self.upload_http_version = Some(upload_http_version);
+                self.xhttp_mode = Some(ResidentXhttpMode::PacketUp);
+                self.reset_response_state();
+                self.send_packet(initial_packet).await
+            }
+            ResidentXhttpMode::StreamUp | ResidentXhttpMode::StreamOne => {
+                let XhttpStreamParts {
+                    session_id,
+                    upload,
+                    download,
+                    upload_underlay,
+                    upload_http_version,
+                    ..
+                } = open_xhttp_stream_parts(proxy, proxy.mark, proxy.mptcp, initial_packet).await?;
+                self.stream_upload = Some(upload);
+                self.download = Some(download);
+                self.session_id = session_id;
+                self.upload_underlay = Some(upload_underlay);
+                self.upload_http_version = Some(upload_http_version);
+                self.xhttp_mode = Some(proxy.xhttp_mode);
+                self.reset_response_state();
+                self.seq = 1;
+                Ok(())
+            }
         }
-        let XhttpPacketUpParts {
-            session_id,
-            upload,
-            download,
-            upload_underlay,
-            upload_http_version,
-            ..
-        } = open_xhttp_packet_up_parts(proxy, proxy.mark, proxy.mptcp).await?;
-        self.upload = Some(upload);
-        self.download = Some(download);
-        self.session_id = Some(session_id);
-        self.upload_underlay = Some(upload_underlay);
-        self.upload_http_version = Some(upload_http_version);
+    }
+
+    fn reset_response_state(&mut self) {
         self.seq = 0;
         self.response_header_seen = false;
         self.response_plaintext.clear();
-        Ok(())
     }
 
     async fn send_packet(&mut self, payload: Bytes) -> Result<(), String> {
-        let session_id = self
-            .session_id
-            .as_deref()
-            .ok_or_else(|| "VLESS xHTTP UDP session id is not initialized".to_owned())?;
-        let upload = self
-            .upload
-            .as_mut()
-            .ok_or_else(|| "VLESS xHTTP UDP upload client is not initialized".to_owned())?;
-        send_xhttp_packet_up_request(upload, session_id, self.seq, payload).await?;
+        if let Some(upload) = self.packet_upload.as_mut() {
+            let session_id = self
+                .session_id
+                .as_deref()
+                .ok_or_else(|| "VLESS xHTTP UDP session id is not initialized".to_owned())?;
+            send_xhttp_packet_up_request(upload, session_id, self.seq, payload).await?;
+        } else if let Some(upload) = self.stream_upload.as_mut() {
+            send_xhttp_stream_data(upload, payload, false).await?;
+        } else {
+            return Err("VLESS xHTTP UDP upload client is not initialized".to_owned());
+        }
         self.seq = self.seq.saturating_add(1);
         Ok(())
     }
@@ -503,8 +544,11 @@ impl VlessXhttpH2UdpSession {
         if let Some(download) = self.download.take() {
             close_xhttp_download_client(download).await;
         }
-        if let Some(upload) = self.upload.take() {
+        if let Some(upload) = self.packet_upload.take() {
             close_xhttp_upload_client(upload).await;
+        }
+        if let Some(upload) = self.stream_upload.take() {
+            close_xhttp_stream_upload_client(upload).await;
         }
         self.session_id = None;
     }
@@ -540,17 +584,31 @@ impl VlessXhttpH2UdpSession {
     }
 
     fn response_result(&self, payload: Vec<u8>) -> UdpExchangeResult {
-        UdpExchangeResult::new(payload, "tls-udp-over-tcp")
-            .with_session_executor(self.session_executor_label())
-            .with_underlay_reuse(self.underlay_reuse_label())
-            .with_tls_underlay(self.upload_underlay.unwrap_or("standard-tls"))
+        if self.upload_http_version() == ResidentXhttpHttpVersion::H3 {
+            UdpExchangeResult::new(payload, "quic-udp-stream-packet")
+                .with_session_executor(self.session_executor_label())
+                .with_underlay_reuse(self.underlay_reuse_label())
+                .with_quic_underlay("quinn-h3")
+        } else {
+            UdpExchangeResult::new(payload, "tls-udp-over-tcp")
+                .with_session_executor(self.session_executor_label())
+                .with_underlay_reuse(self.underlay_reuse_label())
+                .with_tls_underlay(self.upload_underlay.unwrap_or("standard-tls"))
+        }
     }
 
     fn pending_response_result(&self) -> UdpExchangeResult {
-        UdpExchangeResult::pending_response("tls-udp-over-tcp")
-            .with_session_executor(self.session_executor_label())
-            .with_underlay_reuse(self.underlay_reuse_label())
-            .with_tls_underlay(self.upload_underlay.unwrap_or("standard-tls"))
+        if self.upload_http_version() == ResidentXhttpHttpVersion::H3 {
+            UdpExchangeResult::pending_response("quic-udp-stream-packet")
+                .with_session_executor(self.session_executor_label())
+                .with_underlay_reuse(self.underlay_reuse_label())
+                .with_quic_underlay("quinn-h3")
+        } else {
+            UdpExchangeResult::pending_response("tls-udp-over-tcp")
+                .with_session_executor(self.session_executor_label())
+                .with_underlay_reuse(self.underlay_reuse_label())
+                .with_tls_underlay(self.upload_underlay.unwrap_or("standard-tls"))
+        }
     }
 
     fn upload_http_version(&self) -> ResidentXhttpHttpVersion {
@@ -559,32 +617,67 @@ impl VlessXhttpH2UdpSession {
     }
 
     fn session_executor_label(&self) -> &'static str {
-        match self.upload_http_version() {
-            ResidentXhttpHttpVersion::H1 => "tokio-xhttp-h1-packet-up",
-            ResidentXhttpHttpVersion::H2 => "tokio-xhttp-h2-packet-up",
-            ResidentXhttpHttpVersion::H3 => "tokio-xhttp-h3-packet-up",
+        match (self.upload_http_version(), self.xhttp_mode()) {
+            (ResidentXhttpHttpVersion::H1, ResidentXhttpMode::PacketUp) => {
+                "tokio-xhttp-h1-packet-up"
+            }
+            (ResidentXhttpHttpVersion::H1, ResidentXhttpMode::StreamUp) => {
+                "tokio-xhttp-h1-stream-up"
+            }
+            (ResidentXhttpHttpVersion::H1, ResidentXhttpMode::StreamOne) => {
+                "tokio-xhttp-h1-stream-one"
+            }
+            (ResidentXhttpHttpVersion::H2, ResidentXhttpMode::PacketUp) => {
+                "tokio-xhttp-h2-packet-up"
+            }
+            (ResidentXhttpHttpVersion::H2, ResidentXhttpMode::StreamUp) => {
+                "tokio-xhttp-h2-stream-up"
+            }
+            (ResidentXhttpHttpVersion::H2, ResidentXhttpMode::StreamOne) => {
+                "tokio-xhttp-h2-stream-one"
+            }
+            (ResidentXhttpHttpVersion::H3, ResidentXhttpMode::PacketUp) => {
+                "tokio-xhttp-h3-packet-up"
+            }
+            (ResidentXhttpHttpVersion::H3, ResidentXhttpMode::StreamUp) => {
+                "tokio-xhttp-h3-stream-up"
+            }
+            (ResidentXhttpHttpVersion::H3, ResidentXhttpMode::StreamOne) => {
+                "tokio-xhttp-h3-stream-one"
+            }
         }
     }
 
+    fn xhttp_mode(&self) -> ResidentXhttpMode {
+        self.xhttp_mode.unwrap_or(ResidentXhttpMode::PacketUp)
+    }
+
     fn underlay_reuse_label(&self) -> &'static str {
-        match self.upload_http_version() {
-            ResidentXhttpHttpVersion::H1 => {
+        match (self.upload_http_version(), self.xhttp_mode()) {
+            (ResidentXhttpHttpVersion::H1, ResidentXhttpMode::PacketUp) => {
                 "tls-h1-download-stream-with-fresh-packet-up-connections"
             }
-            ResidentXhttpHttpVersion::H2 => "tls-h2-session-reused",
-            ResidentXhttpHttpVersion::H3 => "quic-h3-session-reused",
+            (ResidentXhttpHttpVersion::H1, ResidentXhttpMode::StreamUp)
+            | (ResidentXhttpHttpVersion::H1, ResidentXhttpMode::StreamOne) => {
+                "tls-h1-stream-reused"
+            }
+            (ResidentXhttpHttpVersion::H2, ResidentXhttpMode::PacketUp) => "tls-h2-session-reused",
+            (ResidentXhttpHttpVersion::H2, ResidentXhttpMode::StreamUp)
+            | (ResidentXhttpHttpVersion::H2, ResidentXhttpMode::StreamOne) => {
+                "tls-h2-stream-reused"
+            }
+            (ResidentXhttpHttpVersion::H3, ResidentXhttpMode::PacketUp) => "quic-h3-session-reused",
+            (ResidentXhttpHttpVersion::H3, ResidentXhttpMode::StreamUp)
+            | (ResidentXhttpHttpVersion::H3, ResidentXhttpMode::StreamOne) => {
+                "quic-h3-stream-reused"
+            }
         }
     }
 }
 
 #[derive(Default)]
 pub(super) struct VlessXhttpH3UdpSession {
-    upload: Option<XhttpUploadClient>,
-    download: Option<XhttpDownloadClient>,
-    session_id: Option<String>,
-    seq: u64,
-    response_header_seen: bool,
-    response_plaintext: Vec<u8>,
+    inner: VlessXhttpH2UdpSession,
 }
 
 impl VlessXhttpH3UdpSession {
@@ -594,149 +687,16 @@ impl VlessXhttpH3UdpSession {
         original_dst: SocketAddr,
         payload: &[u8],
     ) -> Result<UdpExchangeResult, String> {
-        if !proxy.flow.is_empty() {
-            return Err(
-                "VLESS xHTTP H3 UDP uses the standard VLESS UDP-over-stream command; flow must be empty"
-                    .to_owned(),
-            );
-        }
-        self.ensure_open(proxy).await?;
-        let key = proxy.vless_key()?;
-        let request = if self.seq == 0 {
-            packet::first_write_bytes(
-                &key,
-                &proxy.flow,
-                "udp",
-                &original_dst.to_string(),
-                false,
-                payload,
-            )
-            .map_err(|err| format!("build VLESS xHTTP H3 UDP first packet: {err}"))?
-        } else {
-            vless_udp_length_frame(payload)?
-        };
-        self.send_packet(Bytes::from(request)).await?;
-        if let Some(response) = self.poll_response().await? {
-            Ok(response)
-        } else {
-            Ok(self.pending_response_result())
-        }
-    }
-
-    async fn ensure_open(&mut self, proxy: &ResidentProxyPlan) -> Result<(), String> {
-        if self.upload.is_some() && self.download.is_some() && self.session_id.is_some() {
-            return Ok(());
-        }
-        let XhttpPacketUpParts {
-            session_id,
-            upload,
-            download,
-            ..
-        } = open_xhttp_packet_up_parts(proxy, proxy.mark, proxy.mptcp).await?;
-        self.upload = Some(upload);
-        self.download = Some(download);
-        self.session_id = Some(session_id);
-        self.seq = 0;
-        self.response_header_seen = false;
-        self.response_plaintext.clear();
-        Ok(())
-    }
-
-    async fn send_packet(&mut self, payload: Bytes) -> Result<(), String> {
-        let session_id = self
-            .session_id
-            .as_deref()
-            .ok_or_else(|| "VLESS xHTTP H3 UDP session id is not initialized".to_owned())?;
-        let upload = self
-            .upload
-            .as_mut()
-            .ok_or_else(|| "VLESS xHTTP H3 upload client is not initialized".to_owned())?;
-        send_xhttp_packet_up_request(upload, session_id, self.seq, payload).await?;
-        self.seq = self.seq.saturating_add(1);
-        Ok(())
+        self.inner.exchange(proxy, original_dst, payload).await
     }
 
     async fn poll_response(&mut self) -> Result<Option<UdpExchangeResult>, String> {
-        if let Some(payload) = self.try_pop_response_payload()? {
-            return Ok(Some(self.response_result(payload)));
-        }
-        let Some(download) = self.download.as_mut() else {
-            return Ok(None);
-        };
-        match poll_xhttp_download_data(download).await? {
-            Some(bytes) => {
-                self.response_plaintext.extend_from_slice(&bytes);
-                self.try_pop_response_payload()
-                    .map(|payload| payload.map(|payload| self.response_result(payload)))
-            }
-            None => Ok(None),
-        }
+        self.inner.poll_response().await
     }
 
     async fn shutdown(&mut self) {
-        if let Some(download) = self.download.take() {
-            close_xhttp_download_client(download).await;
-        }
-        if let Some(upload) = self.upload.take() {
-            close_xhttp_upload_client(upload).await;
-        }
-        self.session_id = None;
+        self.inner.shutdown().await;
     }
-
-    fn try_pop_response_payload(&mut self) -> Result<Option<Vec<u8>>, String> {
-        try_pop_vless_udp_over_stream_response(
-            &mut self.response_header_seen,
-            &mut self.response_plaintext,
-            "VLESS xHTTP H3 UDP",
-        )
-    }
-
-    fn response_result(&self, payload: Vec<u8>) -> UdpExchangeResult {
-        UdpExchangeResult::new(payload, "quic-udp-stream-packet")
-            .with_session_executor("tokio-xhttp-h3-packet-up")
-            .with_underlay_reuse("quic-h3-session-reused")
-            .with_quic_underlay("quinn-h3")
-    }
-
-    fn pending_response_result(&self) -> UdpExchangeResult {
-        UdpExchangeResult::pending_response("quic-udp-stream-packet")
-            .with_session_executor("tokio-xhttp-h3-packet-up")
-            .with_underlay_reuse("quic-h3-session-reused")
-            .with_quic_underlay("quinn-h3")
-    }
-}
-
-fn try_pop_vless_udp_over_stream_response(
-    response_header_seen: &mut bool,
-    response_plaintext: &mut Vec<u8>,
-    context: &str,
-) -> Result<Option<Vec<u8>>, String> {
-    if !*response_header_seen {
-        if response_plaintext.len() < 2 {
-            return Ok(None);
-        }
-        if response_plaintext[0] != VLESS_RESPONSE_VERSION {
-            return Err(format!(
-                "unexpected {context} response version: {}",
-                response_plaintext[0]
-            ));
-        }
-        let header_len = 2 + response_plaintext[1] as usize;
-        if response_plaintext.len() < header_len {
-            return Ok(None);
-        }
-        response_plaintext.drain(..header_len);
-        *response_header_seen = true;
-    }
-    if response_plaintext.len() < 2 {
-        return Ok(None);
-    }
-    let payload_len = u16::from_be_bytes([response_plaintext[0], response_plaintext[1]]) as usize;
-    if response_plaintext.len() < 2 + payload_len {
-        return Ok(None);
-    }
-    response_plaintext.drain(..2);
-    Ok(Some(response_plaintext.drain(..payload_len).collect()))
 }
 
 pub(super) fn vless_udp_length_frame(payload: &[u8]) -> Result<Vec<u8>, String> {

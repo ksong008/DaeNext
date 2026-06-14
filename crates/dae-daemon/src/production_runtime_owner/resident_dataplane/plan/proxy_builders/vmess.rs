@@ -124,6 +124,8 @@ pub(crate) fn build_vmess_proxy_plan(
         stream_host,
         stream_path,
         xhttp_download: None,
+        xhttp_mode: ResidentXhttpMode::PacketUp,
+        xhttp_xmux: None,
         tls: tls.to_owned(),
         allow_insecure: false,
         tls_fragment: if tls == "tls" {

@@ -41,9 +41,41 @@ pub(crate) struct ResidentXhttpEndpointPlan {
     pub(in crate::production_runtime_owner::resident_dataplane) alpn: Vec<String>,
     pub(in crate::production_runtime_owner::resident_dataplane) stream_host: String,
     pub(in crate::production_runtime_owner::resident_dataplane) stream_path: String,
+    pub(in crate::production_runtime_owner::resident_dataplane) mode: ResidentXhttpMode,
+    pub(in crate::production_runtime_owner::resident_dataplane) xmux: Option<ResidentXhttpXmuxPlan>,
     pub(in crate::production_runtime_owner::resident_dataplane) allow_insecure: bool,
     pub(in crate::production_runtime_owner::resident_dataplane) tls_fragment:
         Option<TlsFragmentOptions>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(in crate::production_runtime_owner::resident_dataplane) enum ResidentXhttpMode {
+    PacketUp,
+    StreamUp,
+    StreamOne,
+}
+
+impl ResidentXhttpMode {
+    pub(in crate::production_runtime_owner::resident_dataplane) fn as_str(self) -> &'static str {
+        match self {
+            Self::PacketUp => "packet-up",
+            Self::StreamUp => "stream-up",
+            Self::StreamOne => "stream-one",
+        }
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(in crate::production_runtime_owner::resident_dataplane) struct ResidentXhttpXmuxPlan {
+    pub(in crate::production_runtime_owner::resident_dataplane) max_concurrency: Option<(u32, u32)>,
+    pub(in crate::production_runtime_owner::resident_dataplane) max_connections: Option<(u32, u32)>,
+    pub(in crate::production_runtime_owner::resident_dataplane) c_max_reuse_times:
+        Option<(u32, u32)>,
+    pub(in crate::production_runtime_owner::resident_dataplane) h_max_request_times:
+        Option<(u32, u32)>,
+    pub(in crate::production_runtime_owner::resident_dataplane) h_max_reusable_secs:
+        Option<(u32, u32)>,
+    pub(in crate::production_runtime_owner::resident_dataplane) h_keep_alive_period: i64,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -76,13 +108,26 @@ impl ResidentXhttpHttpVersion {
         }
     }
 
-    pub(in crate::production_runtime_owner::resident_dataplane) fn packet_up_provider(
+    pub(in crate::production_runtime_owner::resident_dataplane) fn provider_for_mode(
         self,
+        mode: ResidentXhttpMode,
     ) -> &'static str {
         match self {
-            Self::H1 => "resident-xhttp-h1-packet-up",
-            Self::H2 => "resident-xhttp-h2-packet-up",
-            Self::H3 => "resident-xhttp-h3-packet-up",
+            Self::H1 => match mode {
+                ResidentXhttpMode::PacketUp => "resident-xhttp-h1-packet-up",
+                ResidentXhttpMode::StreamUp => "resident-xhttp-h1-stream-up",
+                ResidentXhttpMode::StreamOne => "resident-xhttp-h1-stream-one",
+            },
+            Self::H2 => match mode {
+                ResidentXhttpMode::PacketUp => "resident-xhttp-h2-packet-up",
+                ResidentXhttpMode::StreamUp => "resident-xhttp-h2-stream-up",
+                ResidentXhttpMode::StreamOne => "resident-xhttp-h2-stream-one",
+            },
+            Self::H3 => match mode {
+                ResidentXhttpMode::PacketUp => "resident-xhttp-h3-packet-up",
+                ResidentXhttpMode::StreamUp => "resident-xhttp-h3-stream-up",
+                ResidentXhttpMode::StreamOne => "resident-xhttp-h3-stream-one",
+            },
         }
     }
 }
@@ -340,6 +385,9 @@ pub(crate) struct ResidentProxyPlan {
     pub(in crate::production_runtime_owner::resident_dataplane) stream_path: String,
     pub(in crate::production_runtime_owner::resident_dataplane) xhttp_download:
         Option<ResidentXhttpEndpointPlan>,
+    pub(in crate::production_runtime_owner::resident_dataplane) xhttp_mode: ResidentXhttpMode,
+    pub(in crate::production_runtime_owner::resident_dataplane) xhttp_xmux:
+        Option<ResidentXhttpXmuxPlan>,
     pub(in crate::production_runtime_owner::resident_dataplane) tls: String,
     pub(in crate::production_runtime_owner::resident_dataplane) allow_insecure: bool,
     pub(in crate::production_runtime_owner::resident_dataplane) tls_fragment:
@@ -444,6 +492,8 @@ impl ResidentXhttpEndpointPlan {
             alpn: proxy.alpn.clone(),
             stream_host: proxy.stream_host.clone(),
             stream_path: proxy.stream_path.clone(),
+            mode: proxy.xhttp_mode,
+            xmux: proxy.xhttp_xmux.clone(),
             allow_insecure: proxy.allow_insecure,
             tls_fragment: proxy.tls_fragment.clone(),
         }

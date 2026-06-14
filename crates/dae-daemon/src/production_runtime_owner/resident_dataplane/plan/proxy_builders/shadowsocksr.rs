@@ -48,6 +48,8 @@ pub(crate) fn build_shadowsocksr_proxy_plan(
         stream_host: obfs_host.clone(),
         stream_path: String::new(),
         xhttp_download: None,
+        xhttp_mode: ResidentXhttpMode::PacketUp,
+        xhttp_xmux: None,
         tls: "legacy-cipher".to_owned(),
         allow_insecure: false,
         tls_fragment: None,

@@ -3,7 +3,7 @@ use serde_json::{Value, json};
 use super::super::{link_hash, redacted_link_source};
 use super::{
     ResidentProxyPlan, ResidentProxyProtocolPlan, ResidentUtlsFingerprintPlan,
-    ResidentXhttpHttpVersion,
+    ResidentXhttpHttpVersion, ResidentXhttpMode,
 };
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -21,6 +21,7 @@ pub(in crate::production_runtime_owner::resident_dataplane) struct ResidentExecu
     stream_host_hash: Option<String>,
     stream_path: String,
     packet_semantics: String,
+    xhttp_mode: ResidentXhttpMode,
     flow: String,
     alpn: Vec<String>,
     allow_insecure: bool,
@@ -49,6 +50,7 @@ impl ResidentExecutableGraphDescriptor {
             },
             stream_path: proxy.stream_path.clone(),
             packet_semantics: graph_packet_semantics(proxy),
+            xhttp_mode: proxy.xhttp_mode,
             flow: proxy.flow.clone(),
             alpn: proxy.alpn.clone(),
             allow_insecure: proxy.allow_insecure,
@@ -211,7 +213,7 @@ impl ResidentExecutableGraphDescriptor {
             "mux" => ("admitted", "resident-shared-mux-stream", Value::Null),
             "xhttp" => (
                 "admitted",
-                self.xhttp_http_version().packet_up_provider(),
+                self.xhttp_http_version().provider_for_mode(self.xhttp_mode),
                 Value::Null,
             ),
             "simple-obfs-http" => ("admitted", "resident-simple-obfs-http", Value::Null),
@@ -238,6 +240,11 @@ impl ResidentExecutableGraphDescriptor {
                 "path": self.stream_path,
             },
             "protocolFraming": self.protocol_framing,
+            "xhttpMode": if self.stream_wrapper == "xhttp" {
+                json!(self.xhttp_mode.as_str())
+            } else {
+                Value::Null
+            },
             "unsupportedReason": unsupported_reason,
         })
     }
