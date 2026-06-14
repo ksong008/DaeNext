@@ -74,7 +74,7 @@ pub(crate) fn build_vless_proxy_plan(
                 alpn_result.error_contains
             ));
         }
-        validate_resident_xhttp_primary_alpn(&vless.alpn, &node_tag)?;
+        validate_resident_xhttp_primary_alpn(&vless.alpn, &vless.tls, &node_tag)?;
     }
     let meek_options = if net == "meek" {
         Some(
@@ -548,33 +548,46 @@ fn optional_alpn(
 }
 
 fn validate_resident_xhttp_endpoint_alpn(alpn: &[String], node_tag: &str) -> Result<(), String> {
-    if alpn.is_empty() {
-        return Ok(());
-    }
-    if alpn.len() == 1 && (alpn[0].eq_ignore_ascii_case("h2") || alpn[0].eq_ignore_ascii_case("h3"))
-    {
+    if resident_xhttp_tls_alpn_supported(alpn) {
         return Ok(());
     }
     Err(format!(
-        "resident dataplane vless xHTTP endpoint currently admits a single h2 or h3 ALPN for node {node_tag}; got {}",
+        "resident dataplane vless xHTTP endpoint admits empty, single http/1.1, h2-compatible, or single h3 ALPN for node {node_tag}; got {}",
         alpn.join(",")
     ))
 }
 
-fn validate_resident_xhttp_primary_alpn(raw_alpn: &str, node_tag: &str) -> Result<(), String> {
+fn validate_resident_xhttp_primary_alpn(
+    raw_alpn: &str,
+    security: &str,
+    node_tag: &str,
+) -> Result<(), String> {
     let alpn = if raw_alpn.trim().is_empty() {
-        vec!["h2".to_owned()]
+        Vec::new()
     } else {
         split_alpn(raw_alpn)
     };
-    if alpn.len() == 1 && alpn[0].eq_ignore_ascii_case("h3") {
-        return Ok(());
+    let http_version = ResidentXhttpHttpVersion::from_tls_alpn(&alpn);
+    if security.eq_ignore_ascii_case("reality") && http_version == ResidentXhttpHttpVersion::H1 {
+        return Err(format!(
+            "resident dataplane vless xHTTP Reality follows official HTTP/2 selection and does not admit single http/1.1 ALPN for node {node_tag}; got {}",
+            alpn.join(",")
+        ));
     }
-    if alpn.iter().any(|value| value.eq_ignore_ascii_case("h2")) {
+    if resident_xhttp_tls_alpn_supported(&alpn) {
         return Ok(());
     }
     Err(format!(
-        "resident dataplane vless xHTTP transport currently admits h2 or h3 ALPN only for node {node_tag}; got {}",
+        "resident dataplane vless xHTTP transport admits empty, single http/1.1, h2-compatible, or single h3 ALPN for node {node_tag}; got {}",
         alpn.join(",")
     ))
+}
+
+fn resident_xhttp_tls_alpn_supported(alpn: &[String]) -> bool {
+    match ResidentXhttpHttpVersion::from_tls_alpn(alpn) {
+        ResidentXhttpHttpVersion::H1 | ResidentXhttpHttpVersion::H3 => true,
+        ResidentXhttpHttpVersion::H2 => {
+            alpn.is_empty() || alpn.iter().any(|value| value.eq_ignore_ascii_case("h2"))
+        }
+    }
 }

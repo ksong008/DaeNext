@@ -406,6 +406,7 @@ pub(super) struct VlessXhttpH2UdpSession {
     response_header_seen: bool,
     response_plaintext: Vec<u8>,
     upload_underlay: Option<&'static str>,
+    upload_http_version: Option<ResidentXhttpHttpVersion>,
 }
 
 impl VlessXhttpH2UdpSession {
@@ -453,12 +454,14 @@ impl VlessXhttpH2UdpSession {
             upload,
             download,
             upload_underlay,
+            upload_http_version,
             ..
         } = open_xhttp_packet_up_parts(proxy, proxy.mark, proxy.mptcp).await?;
         self.upload = Some(upload);
         self.download = Some(download);
         self.session_id = Some(session_id);
         self.upload_underlay = Some(upload_underlay);
+        self.upload_http_version = Some(upload_http_version);
         self.seq = 0;
         self.response_header_seen = false;
         self.response_plaintext.clear();
@@ -538,16 +541,39 @@ impl VlessXhttpH2UdpSession {
 
     fn response_result(&self, payload: Vec<u8>) -> UdpExchangeResult {
         UdpExchangeResult::new(payload, "tls-udp-over-tcp")
-            .with_session_executor("tokio-xhttp-h2-packet-up")
-            .with_underlay_reuse("tls-h2-session-reused")
+            .with_session_executor(self.session_executor_label())
+            .with_underlay_reuse(self.underlay_reuse_label())
             .with_tls_underlay(self.upload_underlay.unwrap_or("standard-tls"))
     }
 
     fn pending_response_result(&self) -> UdpExchangeResult {
         UdpExchangeResult::pending_response("tls-udp-over-tcp")
-            .with_session_executor("tokio-xhttp-h2-packet-up")
-            .with_underlay_reuse("tls-h2-session-reused")
+            .with_session_executor(self.session_executor_label())
+            .with_underlay_reuse(self.underlay_reuse_label())
             .with_tls_underlay(self.upload_underlay.unwrap_or("standard-tls"))
+    }
+
+    fn upload_http_version(&self) -> ResidentXhttpHttpVersion {
+        self.upload_http_version
+            .unwrap_or(ResidentXhttpHttpVersion::H2)
+    }
+
+    fn session_executor_label(&self) -> &'static str {
+        match self.upload_http_version() {
+            ResidentXhttpHttpVersion::H1 => "tokio-xhttp-h1-packet-up",
+            ResidentXhttpHttpVersion::H2 => "tokio-xhttp-h2-packet-up",
+            ResidentXhttpHttpVersion::H3 => "tokio-xhttp-h3-packet-up",
+        }
+    }
+
+    fn underlay_reuse_label(&self) -> &'static str {
+        match self.upload_http_version() {
+            ResidentXhttpHttpVersion::H1 => {
+                "tls-h1-download-stream-with-fresh-packet-up-connections"
+            }
+            ResidentXhttpHttpVersion::H2 => "tls-h2-session-reused",
+            ResidentXhttpHttpVersion::H3 => "quic-h3-session-reused",
+        }
     }
 }
 

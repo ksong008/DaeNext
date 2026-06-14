@@ -44,7 +44,9 @@ use super::client::{
 use super::dns::{ResidentDnsPlan, handle_resident_dns_udp_async};
 use super::events::append_event;
 use super::execution::{append_runtime_execution_descriptor, udp_execution_descriptor};
-use super::plan::{ResidentProxyGroupPlan, ResidentProxyPlan, ResidentProxyProtocolPlan};
+use super::plan::{
+    ResidentProxyGroupPlan, ResidentProxyPlan, ResidentProxyProtocolPlan, ResidentXhttpHttpVersion,
+};
 use super::tcp::{
     AsyncWebSocketPayloadReader, AsyncWebSocketPayloadState, GrpcHunkReadBuffer,
     XhttpDownloadClient, XhttpPacketUpParts, XhttpUploadClient, close_xhttp_download_client,
@@ -93,5 +95,13 @@ use self::reply::*;
 mod tests;
 
 fn resident_xhttp_uses_h3(proxy: &ResidentProxyPlan) -> bool {
-    proxy.net == "xhttp" && proxy.alpn.len() == 1 && proxy.alpn[0].trim().eq_ignore_ascii_case("h3")
+    resident_xhttp_primary_http_version(proxy) == ResidentXhttpHttpVersion::H3
+}
+
+fn resident_xhttp_primary_http_version(proxy: &ResidentProxyPlan) -> ResidentXhttpHttpVersion {
+    if proxy.net != "xhttp" || proxy.tls == "reality" {
+        ResidentXhttpHttpVersion::H2
+    } else {
+        ResidentXhttpHttpVersion::from_tls_alpn(&proxy.alpn)
+    }
 }

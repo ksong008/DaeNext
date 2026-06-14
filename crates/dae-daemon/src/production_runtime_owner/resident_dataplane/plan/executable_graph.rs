@@ -1,7 +1,10 @@
 use serde_json::{Value, json};
 
 use super::super::{link_hash, redacted_link_source};
-use super::{ResidentProxyPlan, ResidentProxyProtocolPlan, ResidentUtlsFingerprintPlan};
+use super::{
+    ResidentProxyPlan, ResidentProxyProtocolPlan, ResidentUtlsFingerprintPlan,
+    ResidentXhttpHttpVersion,
+};
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(in crate::production_runtime_owner::resident_dataplane) struct ResidentExecutableGraphDescriptor
@@ -206,10 +209,11 @@ impl ResidentExecutableGraphDescriptor {
             "grpc" => ("admitted", "resident-grpc-h2-stream", Value::Null),
             "meek" => ("admitted", "resident-meek-polling", Value::Null),
             "mux" => ("admitted", "resident-shared-mux-stream", Value::Null),
-            "xhttp" if self.alpn.len() == 1 && self.alpn[0].eq_ignore_ascii_case("h3") => {
-                ("admitted", "resident-xhttp-h3-packet-up", Value::Null)
-            }
-            "xhttp" => ("admitted", "resident-xhttp-h2-packet-up", Value::Null),
+            "xhttp" => (
+                "admitted",
+                self.xhttp_http_version().packet_up_provider(),
+                Value::Null,
+            ),
             "simple-obfs-http" => ("admitted", "resident-simple-obfs-http", Value::Null),
             "simple-obfs-tls" => ("admitted", "resident-simple-obfs-tls", Value::Null),
             "legacy-obfs" => ("admitted", "resident-legacy-obfs-http-simple", Value::Null),
@@ -236,6 +240,14 @@ impl ResidentExecutableGraphDescriptor {
             "protocolFraming": self.protocol_framing,
             "unsupportedReason": unsupported_reason,
         })
+    }
+
+    fn xhttp_http_version(&self) -> ResidentXhttpHttpVersion {
+        if self.security_underlay == "reality" {
+            ResidentXhttpHttpVersion::H2
+        } else {
+            ResidentXhttpHttpVersion::from_tls_alpn(&self.alpn)
+        }
     }
 
     fn chain_executor_value(&self) -> Value {

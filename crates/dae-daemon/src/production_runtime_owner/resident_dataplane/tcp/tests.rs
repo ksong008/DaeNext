@@ -149,6 +149,39 @@ fn xhttp_h2_request_uses_default_referer_padding() {
 }
 
 #[test]
+fn xhttp_h1_request_uses_official_packet_up_shape() {
+    let mut proxy = dummy_proxy_plan();
+    proxy.net = "xhttp".to_owned();
+    proxy.server_name = "tls.name.invalid".to_owned();
+    proxy.stream_host = "edge.transport.invalid".to_owned();
+    proxy.stream_path = "/resource?ed=2048".to_owned();
+    let payload = Bytes::from_static(b"hello");
+
+    let request = xhttp_h1_request_bytes(
+        http::Method::POST,
+        &proxy,
+        &xhttp_session_path_suffix("session-id", Some(7)),
+        Some(&payload),
+    );
+    let request = String::from_utf8(request).unwrap();
+
+    assert!(request.starts_with("POST /resource/session-id/7?ed=2048 HTTP/1.1\r\n"));
+    assert!(request.contains("Host: edge.transport.invalid\r\n"));
+    assert!(request.contains("Content-Type: application/grpc\r\n"));
+    assert!(request.contains("Content-Length: 5\r\n"));
+    assert!(request.contains("Connection: close\r\n"));
+    assert!(request.ends_with("\r\n\r\nhello"));
+    let referer = request
+        .lines()
+        .find_map(|line| line.strip_prefix("Referer: "))
+        .unwrap();
+    assert!(referer.starts_with("https://edge.transport.invalid/resource/?x_padding="));
+    let padding = referer.split_once("x_padding=").unwrap().1;
+    assert_eq!(padding.len(), 128);
+    assert!(padding.bytes().all(|byte| byte == b'X'));
+}
+
+#[test]
 fn resident_vless_response_stripper_handles_split_header() {
     let mut stripper = VlessResponseStripper::default();
     assert!(stripper.consume(&[0]).unwrap().is_empty());

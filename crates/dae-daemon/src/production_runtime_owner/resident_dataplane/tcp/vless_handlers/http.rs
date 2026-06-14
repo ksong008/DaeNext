@@ -120,14 +120,15 @@ pub(crate) async fn handle_vless_xhttp_h2_tcp_connection_async(
         mut upload,
         mut download,
         upload_underlay,
+        upload_http_version,
         download_separate,
     } = open_xhttp_packet_up_parts(&selection.proxy, selection.mark, selection.mptcp).await?;
-    let executor_label =
-        if selection.proxy.alpn.len() == 1 && selection.proxy.alpn[0].eq_ignore_ascii_case("h3") {
-            "async-proxy-xhttp-h3-tls"
-        } else {
-            "async-proxy-xhttp-h2-tls"
-        };
+    let executor_label = match upload_http_version {
+        ResidentXhttpHttpVersion::H1 => "async-proxy-xhttp-h1-tls",
+        ResidentXhttpHttpVersion::H2 => "async-proxy-xhttp-h2-tls",
+        ResidentXhttpHttpVersion::H3 => "async-proxy-xhttp-h3-tls",
+    };
+    let xhttp_alpn = upload_http_version.alpn_label();
     let request = packet::first_write_bytes(
         &key,
         &selection.proxy.flow,
@@ -177,11 +178,7 @@ pub(crate) async fn handle_vless_xhttp_h2_tcp_connection_async(
             event["tls_underlay"] = json!(upload_underlay);
             event["stream_wrapper"] = json!("xhttp");
             event["xhttp_mode"] = json!("packet-up");
-            event["xhttp_alpn"] = json!(if executor_label == "async-proxy-xhttp-h3-tls" {
-                "h3"
-            } else {
-                "h2"
-            });
+            event["xhttp_alpn"] = json!(xhttp_alpn);
             event["xhttp_download_separate"] = json!(download_separate);
             append_proxy_tcp_execution_fields(
                 &mut event,
@@ -205,11 +202,7 @@ pub(crate) async fn handle_vless_xhttp_h2_tcp_connection_async(
             event["tls_underlay"] = json!(upload_underlay);
             event["stream_wrapper"] = json!("xhttp");
             event["xhttp_mode"] = json!("packet-up");
-            event["xhttp_alpn"] = json!(if executor_label == "async-proxy-xhttp-h3-tls" {
-                "h3"
-            } else {
-                "h2"
-            });
+            event["xhttp_alpn"] = json!(xhttp_alpn);
             event["xhttp_download_separate"] = json!(download_separate);
             append_proxy_tcp_execution_fields(
                 &mut event,
