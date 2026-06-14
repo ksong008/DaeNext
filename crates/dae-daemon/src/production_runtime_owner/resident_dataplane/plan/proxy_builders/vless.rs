@@ -409,11 +409,6 @@ fn resident_xhttp_download_transport_settings(
     download: &serde_json::Map<String, Value>,
     node_tag: &str,
 ) -> Result<ResidentXhttpTransportSettings, String> {
-    if download.contains_key("xhttpSettings") && download.contains_key("splithttpSettings") {
-        return Err(format!(
-            "resident dataplane vless xHTTP downloadSettings must not contain both xhttpSettings and splithttpSettings for node {node_tag}"
-        ));
-    }
     let settings = optional_object(
         download
             .get("xhttpSettings")
@@ -737,19 +732,34 @@ fn optional_xhttp_range(
 
 fn parse_xhttp_range_string(raw: &str, field: &str, node_tag: &str) -> Result<(i32, i32), String> {
     let raw = raw.trim();
+    if let Ok(value) = raw.parse::<i32>() {
+        return Ok((value, value));
+    }
     if raw.is_empty() {
-        return Err(format!(
-            "resident dataplane vless xHTTP {field} string range must not be empty for node {node_tag}"
-        ));
+        return Ok((0, 0));
     }
-    if let Some((from, to)) = raw.split_once('-') {
-        return Ok((
-            parse_xhttp_i32_str(from.trim(), &format!("{field}.from"), node_tag)?,
-            parse_xhttp_i32_str(to.trim(), &format!("{field}.to"), node_tag)?,
-        ));
-    }
-    let value = parse_xhttp_i32_str(raw, field, node_tag)?;
-    Ok((value, value))
+    let (from, to) = if raw.starts_with('-') {
+        let split_at = raw
+            .match_indices('-')
+            .nth(1)
+            .map(|(index, _)| index)
+            .ok_or_else(|| {
+                format!(
+                    "resident dataplane vless xHTTP {field} must be an integer range for node {node_tag}"
+                )
+            })?;
+        (&raw[..split_at], &raw[split_at + 1..])
+    } else {
+        raw.split_once('-').ok_or_else(|| {
+            format!(
+                "resident dataplane vless xHTTP {field} must be an integer range for node {node_tag}"
+            )
+        })?
+    };
+    Ok((
+        parse_xhttp_i32_str(from.trim(), &format!("{field}.from"), node_tag)?,
+        parse_xhttp_i32_str(to.trim(), &format!("{field}.to"), node_tag)?,
+    ))
 }
 
 fn optional_i32(value: Option<&Value>, field: &str, node_tag: &str) -> Result<Option<i32>, String> {

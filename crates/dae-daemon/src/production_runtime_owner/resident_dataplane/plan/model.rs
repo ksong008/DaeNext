@@ -90,19 +90,19 @@ impl ResidentXhttpXmuxPlan {
         }
     }
 
-    pub(in crate::production_runtime_owner::resident_dataplane) fn is_empty(&self) -> bool {
-        self.max_concurrency.is_none()
-            && self.max_connections.is_none()
-            && self.c_max_reuse_times.is_none()
-            && self.h_max_request_times.is_none()
-            && self.h_max_reusable_secs.is_none()
+    fn is_official_zero_value(&self) -> bool {
+        Self::range_is_zero_or_none(self.max_concurrency)
+            && Self::range_is_zero_or_none(self.max_connections)
+            && Self::range_is_zero_or_none(self.c_max_reuse_times)
+            && Self::range_is_zero_or_none(self.h_max_request_times)
+            && Self::range_is_zero_or_none(self.h_max_reusable_secs)
             && self.h_keep_alive_period == 0
     }
 
     pub(in crate::production_runtime_owner::resident_dataplane) fn official_normalized(
         self,
     ) -> Self {
-        if self.is_empty() {
+        if self.is_official_zero_value() {
             Self::official_default()
         } else {
             self
@@ -136,6 +136,10 @@ impl ResidentXhttpXmuxPlan {
 
     fn range_to(&self, range: Option<(i32, i32)>) -> i32 {
         range.map_or(0, |(_, to)| to)
+    }
+
+    fn range_is_zero_or_none(range: Option<(i32, i32)>) -> bool {
+        matches!(range, None | Some((0, 0)))
     }
 }
 

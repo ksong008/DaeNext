@@ -631,6 +631,21 @@ pub(super) fn resident_dataplane_plan_admits_vless_xhttp_download_settings() {
     let download = proxy.xhttp_download.as_ref().unwrap();
     assert_eq!(download.alpn, vec!["http/1.1".to_owned()]);
     assert!(!download.allow_insecure);
+
+    let proxy = build_resident_proxy_plan_for_node(
+        &config,
+        "proxy".to_owned(),
+        "standard_import".to_owned(),
+        vless_xhttp_parser_fixture_url(
+            "packet-up",
+            "h2",
+            r#"{"downloadSettings":{"address":"download.transport.invalid","port":18444,"network":"xhttp","security":"tls","xhttpSettings":{"host":"download.xhttp.invalid","path":"/xhttp?ed=4096"},"splithttpSettings":{"host":"download.splithttp.invalid","path":"/splithttp?ed=4096"}}}"#,
+        ),
+    )
+    .unwrap();
+    let download = proxy.xhttp_download.as_ref().unwrap();
+    assert_eq!(download.stream_host, "download.xhttp.invalid");
+    assert_eq!(download.stream_path, "/xhttp/?ed=4096");
 }
 
 #[test]
@@ -691,6 +706,36 @@ pub(super) fn resident_dataplane_plan_admits_vless_xhttp_stream_modes_and_xmux()
     assert_eq!(xmux.h_max_reusable_secs, Some((5, 10)));
     assert_eq!(xmux.h_keep_alive_period, 15);
 
+    let zero_xmux = build_resident_proxy_plan_for_node(
+        &config,
+        "proxy".to_owned(),
+        "xhttp_xmux_zero".to_owned(),
+        vless_xhttp_parser_fixture_url("packet-up", "h2", r#"{"xmux":{"maxConnections":0}}"#),
+    )
+    .unwrap();
+    let zero_xmux = zero_xmux.xhttp_xmux.as_ref().unwrap();
+    assert_eq!(zero_xmux.max_concurrency, Some((1, 1)));
+    assert_eq!(zero_xmux.max_connections, None);
+    assert_eq!(zero_xmux.h_max_request_times, Some((600, 900)));
+    assert_eq!(zero_xmux.h_max_reusable_secs, Some((1800, 3000)));
+
+    let signed_xmux = build_resident_proxy_plan_for_node(
+        &config,
+        "proxy".to_owned(),
+        "xhttp_xmux_signed".to_owned(),
+        vless_xhttp_parser_fixture_url(
+            "packet-up",
+            "h2",
+            r#"{"xmux":{"maxConcurrency":"-1","cMaxReuseTimes":"","hMaxRequestTimes":"-5--3","hMaxReusableSecs":"9-3"}}"#,
+        ),
+    )
+    .unwrap();
+    let signed_xmux = signed_xmux.xhttp_xmux.as_ref().unwrap();
+    assert_eq!(signed_xmux.max_concurrency, Some((-1, -1)));
+    assert_eq!(signed_xmux.c_max_reuse_times, Some((0, 0)));
+    assert_eq!(signed_xmux.h_max_request_times, Some((-5, -3)));
+    assert_eq!(signed_xmux.h_max_reusable_secs, Some((3, 9)));
+
     let err = build_resident_proxy_plan_for_node(
         &config,
         "proxy".to_owned(),
@@ -729,6 +774,15 @@ pub(super) fn resident_dataplane_plan_rejects_remaining_unimplemented_vless_xhtt
                 r#"{"xPaddingBytes":{"from":100,"to":200}}"#,
             ),
             "unsupported fields",
+        ),
+        (
+            "xhttp_stream_one_download",
+            vless_xhttp_parser_fixture_url(
+                "stream-one",
+                "h2",
+                r#"{"downloadSettings":{"address":"download.transport.invalid","port":18444,"network":"xhttp","security":"tls","xhttpSettings":{"host":"download.host.invalid","path":"/down?ed=4096"}}}"#,
+            ),
+            "stream-one cannot use downloadSettings",
         ),
         (
             "xhttp_unsupported_alpn",
