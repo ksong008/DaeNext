@@ -51,43 +51,6 @@ pub(super) async fn write_async_tls_plain_all(
     .map_err(|_| format!("{label} timeout"))?
 }
 
-pub(super) async fn read_async_tls_plain_until<T, F>(
-    client: &mut AsyncResidentTlsClient,
-    label: &str,
-    mut decode: F,
-) -> Result<T, String>
-where
-    F: FnMut(&[u8]) -> Result<T, dae_outbound::OutboundError>,
-{
-    let started = Instant::now();
-    let mut plaintext = Vec::new();
-    let mut buf = [0_u8; 4096];
-    let mut last_decode_error = "no data decoded yet".to_owned();
-    loop {
-        if started.elapsed() > RESIDENT_UDP_RESPONSE_TIMEOUT {
-            return Err(format!(
-                "{label}: timeout{}",
-                format!(" after decode error: {last_decode_error}")
-            ));
-        }
-        match decode(&plaintext) {
-            Ok(value) => return Ok(value),
-            Err(err) => last_decode_error = err.to_string(),
-        }
-        match time::timeout(RESIDENT_IDLE_SLEEP, client.read_plain(&mut buf)).await {
-            Ok(Ok(0)) => {}
-            Ok(Ok(read)) => plaintext.extend_from_slice(&buf[..read]),
-            Ok(Err(err))
-                if matches!(
-                    err.kind(),
-                    ErrorKind::WouldBlock | ErrorKind::TimedOut | ErrorKind::Interrupted
-                ) => {}
-            Ok(Err(err)) => return Err(format!("{label}: {err}")),
-            Err(_) => {}
-        }
-    }
-}
-
 pub(super) async fn wait_anytls_udp_synack_async(
     client: &mut AsyncResidentTlsClient,
 ) -> Result<(), String> {

@@ -110,11 +110,14 @@ impl UdpSessionExecutor {
                 .poll_response()
                 .await
                 .map(|response| response.map(|response| ("udp_packet_finished", response))),
+            Self::Trojan(session) => session
+                .poll_response()
+                .await
+                .map(|response| response.map(|response| ("udp_packet_finished", response))),
             Self::Dns
             | Self::ShadowsocksAead(_)
             | Self::Shadowsocks2022(_)
             | Self::Socks5(_)
-            | Self::Trojan(_)
             | Self::VmessAead(_)
             | Self::AnyTls(_)
             | Self::Hysteria2(_)
