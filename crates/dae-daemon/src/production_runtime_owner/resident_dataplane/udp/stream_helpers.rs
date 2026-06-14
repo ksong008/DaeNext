@@ -83,40 +83,6 @@ pub(super) async fn wait_anytls_udp_synack_async(
     }
 }
 
-pub(super) async fn read_anytls_udp_payload_async(
-    client: &mut AsyncResidentTlsClient,
-) -> Result<Vec<u8>, String> {
-    loop {
-        let frame = read_anytls_frame_async(client).await?;
-        if frame.cmd == anytls_contract::CMD_PSH && frame.sid == 1 {
-            let packet = dae_outbound::anytls::decode_packet_next_write(&frame.data)
-                .map_err(|err| format!("decode AnyTLS UDP response packet: {err}"))?;
-            return Ok(packet.payload);
-        }
-        if frame.cmd == anytls_contract::CMD_ALERT {
-            return Err(format!(
-                "AnyTLS UDP alert frame: {} bytes",
-                frame.data.len()
-            ));
-        }
-        if matches!(
-            frame.cmd,
-            anytls_contract::CMD_WASTE
-                | anytls_contract::CMD_SERVER_SETTINGS
-                | anytls_contract::CMD_UPDATE_PADDING
-                | anytls_contract::CMD_HEART_RESPONSE
-        ) {
-            continue;
-        }
-        return Err(format!(
-            "unexpected AnyTLS UDP response frame: cmd={} sid={} len={}",
-            frame.cmd,
-            frame.sid,
-            frame.data.len()
-        ));
-    }
-}
-
 pub(super) async fn read_anytls_frame_async(
     client: &mut AsyncResidentTlsClient,
 ) -> Result<AnyTlsRuntimeFrame, String> {

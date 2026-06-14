@@ -1,6 +1,9 @@
 use std::collections::VecDeque;
+use std::future::poll_fn;
+use std::pin::Pin;
+use std::task::Poll;
 
-use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
+use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, ReadBuf};
 
 use super::*;
 
@@ -19,7 +22,9 @@ pub(super) struct VmessAeadUdpOverTcpSession {
     wrapper: VmessAeadUdpWrapperKind,
     underlay: Option<VmessAeadUdpUnderlay>,
     upload: Option<vmess::VMessAeadTcpUploadCodec>,
+    request: Option<vmess::VMessAeadTcpRequest>,
     response: Option<vmess::VMessAeadTcpResponseReader>,
+    response_plaintext: Vec<u8>,
 }
 
 impl VmessAeadUdpOverTcpSession {
@@ -53,7 +58,9 @@ impl VmessAeadUdpOverTcpSession {
             wrapper,
             underlay: None,
             upload: None,
+            request: None,
             response: None,
+            response_plaintext: Vec::new(),
         }
     }
 
@@ -91,14 +98,20 @@ impl VmessAeadUdpOverTcpSession {
             start_vmess_grpc_decoder(&mut underlay, start.request.clone())?;
             read_vmess_grpc_payload(&mut underlay).await?
         } else {
-            let mut response = read_vmess_response_header(&mut underlay, &start.request).await?;
-            let echoed = read_vmess_wrapped_chunk(&mut underlay, &mut response).await?;
-            self.response = Some(response);
-            echoed
+            self.response = None;
+            self.response_plaintext.clear();
+            self.request = Some(start.request);
+            self.upload = Some(start.upload);
+            self.underlay = Some(underlay);
+            if let Some(response) = self.poll_response().await? {
+                return Ok(response);
+            }
+            return Ok(self.pending_response_result());
         };
         let (session_executor, underlay_reuse, tls_underlay) = underlay.evidence_fields();
         self.underlay = Some(underlay);
         self.upload = Some(start.upload);
+        self.request = Some(start.request);
         Ok(vmess_udp_session_result(
             echoed,
             session_executor,
@@ -114,26 +127,97 @@ impl VmessAeadUdpOverTcpSession {
             .ok_or_else(|| "VMess AEAD UDP-over-TCP upload codec is not initialized".to_owned())?
             .seal_chunk(payload)
             .map_err(|err| format!("seal VMess AEAD UDP-over-TCP session packet: {err}"))?;
-        let underlay = self
-            .underlay
-            .as_mut()
-            .ok_or_else(|| "VMess AEAD UDP-over-TCP underlay is not initialized".to_owned())?;
-        write_vmess_wrapped_bytes(underlay, &chunk).await?;
-        let echoed = if underlay.is_grpc() {
+        let is_grpc = {
+            let underlay = self
+                .underlay
+                .as_mut()
+                .ok_or_else(|| "VMess AEAD UDP-over-TCP underlay is not initialized".to_owned())?;
+            write_vmess_wrapped_bytes(underlay, &chunk).await?;
+            underlay.is_grpc()
+        };
+        let echoed = if is_grpc {
+            let underlay = self
+                .underlay
+                .as_mut()
+                .ok_or_else(|| "VMess AEAD UDP-over-TCP underlay is not initialized".to_owned())?;
             read_vmess_grpc_payload(underlay).await?
         } else {
-            let response = self.response.as_mut().ok_or_else(|| {
-                "VMess AEAD UDP-over-TCP response reader is not initialized".to_owned()
-            })?;
-            read_vmess_wrapped_chunk(underlay, response).await?
+            if let Some(response) = self.poll_response().await? {
+                return Ok(response);
+            }
+            return Ok(self.pending_response_result());
         };
-        let (session_executor, underlay_reuse, tls_underlay) = underlay.evidence_fields();
+        let (session_executor, underlay_reuse, tls_underlay) = self
+            .underlay
+            .as_ref()
+            .ok_or_else(|| "VMess AEAD UDP-over-TCP underlay is not initialized".to_owned())?
+            .evidence_fields();
         Ok(vmess_udp_session_result(
             echoed,
             session_executor,
             underlay_reuse,
             tls_underlay,
         ))
+    }
+
+    pub(super) async fn poll_response(&mut self) -> Result<Option<UdpExchangeResult>, String> {
+        if let Some(payload) = self.try_pop_response_payload()? {
+            return Ok(Some(self.response_result(payload)));
+        }
+        let Some(underlay) = self.underlay.as_mut() else {
+            return Ok(None);
+        };
+        if underlay.is_grpc() {
+            return Ok(None);
+        }
+        let mut buf = [0_u8; 8192];
+        let Some(read) = poll_vmess_underlay_plaintext(underlay, &mut buf).await? else {
+            return Ok(None);
+        };
+        if read == 0 {
+            return Ok(None);
+        }
+        self.response_plaintext.extend_from_slice(&buf[..read]);
+        self.try_pop_response_payload()
+            .map(|payload| payload.map(|payload| self.response_result(payload)))
+    }
+
+    fn try_pop_response_payload(&mut self) -> Result<Option<Vec<u8>>, String> {
+        if self.response.is_none() {
+            let Some(request) = self.request.as_ref() else {
+                return Ok(None);
+            };
+            match vmess::aead_tcp_response_reader_from_buffer(&mut self.response_plaintext, request)
+                .map_err(|err| format!("read VMess wrapped UDP response header: {err}"))?
+            {
+                Some(response) => self.response = Some(response),
+                None => return Ok(None),
+            }
+        }
+        let response = self.response.as_mut().ok_or_else(|| {
+            "VMess AEAD UDP-over-TCP response reader is not initialized".to_owned()
+        })?;
+        response
+            .try_read_chunk_from_buffer(&mut self.response_plaintext)
+            .map_err(|err| format!("read VMess wrapped UDP session packet: {err}"))
+    }
+
+    fn response_result(&self, payload: Vec<u8>) -> UdpExchangeResult {
+        let (session_executor, underlay_reuse, tls_underlay) = self
+            .underlay
+            .as_ref()
+            .map(VmessAeadUdpUnderlay::evidence_fields)
+            .unwrap_or(("tokio-stream-session", "stream-reused", None));
+        vmess_udp_session_result(payload, session_executor, underlay_reuse, tls_underlay)
+    }
+
+    fn pending_response_result(&self) -> UdpExchangeResult {
+        let (session_executor, underlay_reuse, tls_underlay) = self
+            .underlay
+            .as_ref()
+            .map(VmessAeadUdpUnderlay::evidence_fields)
+            .unwrap_or(("tokio-stream-session", "stream-reused", None));
+        vmess_udp_pending_session_result(session_executor, underlay_reuse, tls_underlay)
     }
 }
 
@@ -257,11 +341,50 @@ async fn open_vmess_underlay(
 impl VmessAeadUdpOverTcpSession {
     pub(super) async fn shutdown(&mut self) {
         self.upload = None;
+        self.request = None;
         self.response = None;
+        self.response_plaintext.clear();
         if let Some(mut underlay) = self.underlay.take() {
             underlay.shutdown().await;
         }
     }
+}
+
+async fn poll_vmess_underlay_plaintext(
+    underlay: &mut VmessAeadUdpUnderlay,
+    out: &mut [u8],
+) -> Result<Option<usize>, String> {
+    let mut read_buf = ReadBuf::new(out);
+    poll_fn(|cx| {
+        let poll_result = match underlay {
+            VmessAeadUdpUnderlay::PlainTcp { stream }
+            | VmessAeadUdpUnderlay::HttpUpgradePlain { stream } => {
+                Pin::new(stream).poll_read(cx, &mut read_buf)
+            }
+            VmessAeadUdpUnderlay::HttpUpgradeTls { client, .. } => {
+                Pin::new(client).poll_read(cx, &mut read_buf)
+            }
+            VmessAeadUdpUnderlay::WebSocketPlain { stream, state } => {
+                let mut reader = AsyncWebSocketPayloadReader::new(stream, state);
+                Pin::new(&mut reader).poll_read(cx, &mut read_buf)
+            }
+            VmessAeadUdpUnderlay::WebSocketTls { client, state, .. } => {
+                let mut reader = AsyncWebSocketPayloadReader::new(client, state);
+                Pin::new(&mut reader).poll_read(cx, &mut read_buf)
+            }
+            VmessAeadUdpUnderlay::GrpcTls { .. } => {
+                return Poll::Ready(Err(
+                    "VMess gRPC UDP responses use the hunk decoder".to_owned()
+                ));
+            }
+        };
+        match poll_result {
+            Poll::Ready(Ok(())) => Poll::Ready(Ok(Some(read_buf.filled().len()))),
+            Poll::Ready(Err(err)) => Poll::Ready(Err(format!("read VMess UDP underlay: {err}"))),
+            Poll::Pending => Poll::Ready(Ok(None)),
+        }
+    })
+    .await
 }
 
 enum VmessAeadUdpUnderlay {
@@ -363,72 +486,6 @@ impl VmessAeadUdpUnderlay {
             }
         }
     }
-}
-
-async fn read_vmess_response_header(
-    underlay: &mut VmessAeadUdpUnderlay,
-    request: &vmess::VMessAeadTcpRequest,
-) -> Result<vmess::VMessAeadTcpResponseReader, String> {
-    time::timeout(RESIDENT_UDP_RESPONSE_TIMEOUT, async {
-        match underlay {
-            VmessAeadUdpUnderlay::PlainTcp { stream }
-            | VmessAeadUdpUnderlay::HttpUpgradePlain { stream } => {
-                vmess::aead_tcp_response_reader_from_async_stream(stream, request).await
-            }
-            VmessAeadUdpUnderlay::HttpUpgradeTls { client, .. } => {
-                vmess::aead_tcp_response_reader_from_async_stream(client, request).await
-            }
-            VmessAeadUdpUnderlay::WebSocketPlain { stream, state } => {
-                let mut reader = AsyncWebSocketPayloadReader::new(stream, state);
-                vmess::aead_tcp_response_reader_from_async_stream(&mut reader, request).await
-            }
-            VmessAeadUdpUnderlay::WebSocketTls { client, state, .. } => {
-                let mut reader = AsyncWebSocketPayloadReader::new(client, state);
-                vmess::aead_tcp_response_reader_from_async_stream(&mut reader, request).await
-            }
-            VmessAeadUdpUnderlay::GrpcTls { .. } => {
-                Err(dae_outbound::error::OutboundError::BadVmess(
-                    "VMess gRPC uses hunk decoder for response headers".to_owned(),
-                ))
-            }
-        }
-    })
-    .await
-    .map_err(|_| "read VMess wrapped UDP response header timeout".to_owned())?
-    .map_err(|err| format!("read VMess wrapped UDP response header: {err}"))
-}
-
-async fn read_vmess_wrapped_chunk(
-    underlay: &mut VmessAeadUdpUnderlay,
-    response: &mut vmess::VMessAeadTcpResponseReader,
-) -> Result<Vec<u8>, String> {
-    time::timeout(RESIDENT_UDP_RESPONSE_TIMEOUT, async {
-        match underlay {
-            VmessAeadUdpUnderlay::PlainTcp { stream }
-            | VmessAeadUdpUnderlay::HttpUpgradePlain { stream } => {
-                response.read_chunk_from_async_stream(stream).await
-            }
-            VmessAeadUdpUnderlay::HttpUpgradeTls { client, .. } => {
-                response.read_chunk_from_async_stream(client).await
-            }
-            VmessAeadUdpUnderlay::WebSocketPlain { stream, state } => {
-                let mut reader = AsyncWebSocketPayloadReader::new(stream, state);
-                response.read_chunk_from_async_stream(&mut reader).await
-            }
-            VmessAeadUdpUnderlay::WebSocketTls { client, state, .. } => {
-                let mut reader = AsyncWebSocketPayloadReader::new(client, state);
-                response.read_chunk_from_async_stream(&mut reader).await
-            }
-            VmessAeadUdpUnderlay::GrpcTls { .. } => {
-                Err(dae_outbound::error::OutboundError::BadVmess(
-                    "VMess gRPC response chunks use hunk decoder".to_owned(),
-                ))
-            }
-        }
-    })
-    .await
-    .map_err(|_| "read VMess wrapped UDP session packet timeout".to_owned())?
-    .map_err(|err| format!("read VMess wrapped UDP session packet: {err}"))
 }
 
 async fn write_vmess_wrapped_bytes(
@@ -668,6 +725,20 @@ fn vmess_udp_session_result(
     tls_underlay: Option<&'static str>,
 ) -> UdpExchangeResult {
     let mut result = UdpExchangeResult::new(payload, "aead-udp-over-tcp")
+        .with_session_executor(session_executor)
+        .with_underlay_reuse(underlay_reuse);
+    if let Some(tls_underlay) = tls_underlay {
+        result = result.with_tls_underlay(tls_underlay);
+    }
+    result
+}
+
+fn vmess_udp_pending_session_result(
+    session_executor: &'static str,
+    underlay_reuse: &'static str,
+    tls_underlay: Option<&'static str>,
+) -> UdpExchangeResult {
+    let mut result = UdpExchangeResult::pending_response("aead-udp-over-tcp")
         .with_session_executor(session_executor)
         .with_underlay_reuse(underlay_reuse);
     if let Some(tls_underlay) = tls_underlay {

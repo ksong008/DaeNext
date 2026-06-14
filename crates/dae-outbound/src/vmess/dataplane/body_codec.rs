@@ -7,6 +7,11 @@ pub(super) struct BodyCodec {
     pub(super) size: ChunkSizeMask,
 }
 
+pub(super) struct PendingOpenChunk {
+    size: usize,
+    padding_len: usize,
+}
+
 impl BodyCodec {
     pub(super) fn new(key: [u8; 16], iv: [u8; 16], options: u8) -> Result<Self, OutboundError> {
         let cipher = Aes128Gcm::new_from_slice(&key)
@@ -105,6 +110,45 @@ impl BodyCodec {
             )
             .map_err(|err| OutboundError::BadVmess(err.to_string()))?;
         Ok((payload, 2 + size))
+    }
+
+    pub(super) fn try_open_chunk_from_buffer(
+        &mut self,
+        input: &mut Vec<u8>,
+        pending: &mut Option<PendingOpenChunk>,
+    ) -> Result<Option<Vec<u8>>, OutboundError> {
+        if pending.is_none() {
+            if input.len() < 2 {
+                return Ok(None);
+            }
+            let size_buf = [input[0], input[1]];
+            let padding_len = self.size.next_padding_len() as usize;
+            let size = self.size.decode_size(size_buf) as usize;
+            if size < padding_len + 16 {
+                return Err(OutboundError::BadVmess(format!(
+                    "bad VMess chunk size {size} with padding {padding_len}"
+                )));
+            }
+            input.drain(..2);
+            *pending = Some(PendingOpenChunk { size, padding_len });
+        }
+        let pending_chunk = pending
+            .as_ref()
+            .ok_or_else(|| OutboundError::BadVmess("missing pending VMess chunk".to_owned()))?;
+        if input.len() < pending_chunk.size {
+            return Ok(None);
+        }
+        let chunk: Vec<u8> = input.drain(..pending_chunk.size).collect();
+        let encrypted_len = pending_chunk.size - pending_chunk.padding_len;
+        let payload = self
+            .cipher
+            .decrypt(
+                Nonce::from_slice(&self.nonce.next()),
+                &chunk[..encrypted_len],
+            )
+            .map_err(|err| OutboundError::BadVmess(err.to_string()))?;
+        *pending = None;
+        Ok(Some(payload))
     }
 }
 
