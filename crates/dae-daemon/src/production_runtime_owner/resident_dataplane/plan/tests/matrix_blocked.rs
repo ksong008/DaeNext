@@ -146,6 +146,22 @@ pub(super) fn resident_dataplane_plan_keeps_deferred_unsupported_shapes_blocked(
         assert_eq!(proxy.allow_insecure, allow_insecure, "{tag}");
     }
 
+    let trojan_type_tcp = build_resident_proxy_plan_for_node(
+        &config,
+        "proxy".to_owned(),
+        "trojan_type_tcp_alpn".to_owned(),
+        trojan_tcp_type_fixture_url("trojan-tcp", &primary_host, fixture_port(1)),
+    )
+    .unwrap();
+    assert_eq!(
+        trojan_type_tcp.alpn,
+        vec!["h3".to_owned(), "h2".to_owned(), "http/1.1".to_owned()]
+    );
+    assert_eq!(
+        trojan_type_tcp.executable_graph_value()["runtimeComponents"]["underlayFactory"]["alpn"],
+        serde_json::json!(["h3", "h2", "http/1.1"])
+    );
+
     let mux_proxy = build_resident_proxy_plan_for_node(
         &config,
         "proxy".to_owned(),
