@@ -4,6 +4,9 @@ use quinn::crypto::rustls::QuicClientConfig;
 use rustls::client::danger::{HandshakeSignatureValid, ServerCertVerified, ServerCertVerifier};
 use rustls::pki_types::{CertificateDer, ServerName, UnixTime};
 use rustls::{DigitallySignedStruct, RootCertStore, SignatureScheme};
+use std::collections::HashMap;
+use std::future::Future;
+use std::sync::atomic::AtomicI32;
 use tokio::io::AsyncWrite;
 
 pub(crate) trait ResidentXhttpEndpointView {
@@ -66,13 +69,23 @@ pub(crate) enum XhttpUploadClient {
         mptcp: bool,
     },
     H2 {
+        proxy: Box<ResidentProxyPlan>,
         endpoint: ResidentXhttpEndpointPlan,
+        mark: u32,
+        mptcp: bool,
         sender: h2::client::SendRequest<Bytes>,
-        connection_task: tokio::task::JoinHandle<()>,
+        connection_task: Option<tokio::task::JoinHandle<()>>,
+        xmux_lease: Option<XhttpXmuxClientLease>,
+        xmux_request: Option<XhttpXmuxRequestHandle>,
     },
     H3 {
+        proxy: Box<ResidentProxyPlan>,
         endpoint: ResidentXhttpEndpointPlan,
-        connection: XhttpH3Connection,
+        mark: u32,
+        client: h3::client::SendRequest<h3_quinn::OpenStreams, Bytes>,
+        connection: Option<XhttpH3Connection>,
+        xmux_lease: Option<XhttpXmuxClientLease>,
+        xmux_request: Option<XhttpXmuxRequestHandle>,
     },
 }
 
@@ -84,15 +97,18 @@ pub(crate) enum XhttpStreamUploadClient {
         send_stream: h2::SendStream<Bytes>,
         upload_response_task: Option<tokio::task::JoinHandle<()>>,
         connection_task: Option<tokio::task::JoinHandle<()>>,
+        xmux_lease: Option<XhttpXmuxClientLease>,
     },
     H3 {
         stream: h3::client::RequestStream<h3_quinn::BidiStream<Bytes>, Bytes>,
-        connection: XhttpH3Connection,
+        connection: Option<XhttpH3Connection>,
+        xmux_lease: Option<XhttpXmuxClientLease>,
     },
     H3Shared {
         stream:
             Arc<tokio::sync::Mutex<h3::client::RequestStream<h3_quinn::BidiStream<Bytes>, Bytes>>>,
-        connection: XhttpH3Connection,
+        connection: Option<XhttpH3Connection>,
+        xmux_lease: Option<XhttpXmuxClientLease>,
     },
 }
 
@@ -114,10 +130,12 @@ pub(crate) enum XhttpDownloadClient {
         recv: h2::RecvStream,
         _keepalive_sender: Option<h2::client::SendRequest<Bytes>>,
         connection_task: Option<tokio::task::JoinHandle<()>>,
+        xmux_lease: Option<XhttpXmuxClientLease>,
     },
     H3 {
         recv: h3::client::RequestStream<h3_quinn::BidiStream<Bytes>, Bytes>,
         connection: Option<XhttpH3Connection>,
+        xmux_lease: Option<XhttpXmuxClientLease>,
     },
     H3Shared {
         stream:
@@ -136,6 +154,535 @@ pub(crate) struct XhttpH1DownloadBody {
     reader: XhttpH1BodyReader,
     buffer: VecDeque<u8>,
     state: XhttpH1BodyState,
+}
+
+#[derive(Clone, Debug, Eq, Hash, PartialEq)]
+struct XhttpXmuxKey {
+    origin: String,
+    server_host: String,
+    server_port: u16,
+    server_name: String,
+    alpn: Vec<String>,
+    stream_host: String,
+    stream_path: String,
+    mode: ResidentXhttpMode,
+    allow_insecure: bool,
+    tls_fragment: Option<(usize, usize, u64, u64)>,
+    xmux: ResidentXhttpXmuxPlan,
+    mark: u32,
+    mptcp: bool,
+}
+
+struct XhttpXmuxUsage {
+    open_usage: AtomicI32,
+    left_requests: AtomicI32,
+    unreusable_at: Option<Instant>,
+}
+
+#[derive(Clone)]
+pub(crate) struct XhttpXmuxClientLease {
+    usage: Arc<XhttpXmuxUsage>,
+}
+
+#[derive(Clone)]
+pub(crate) struct XhttpXmuxRequestHandle {
+    usage: Arc<XhttpXmuxUsage>,
+}
+
+struct XhttpXmuxH2ClientEntry {
+    sender: h2::client::SendRequest<Bytes>,
+    connection_task: tokio::task::JoinHandle<()>,
+    usage: Arc<XhttpXmuxUsage>,
+    left_usage: i32,
+}
+
+struct XhttpXmuxH2Manager {
+    config: ResidentXhttpXmuxPlan,
+    concurrency: i32,
+    connections: i32,
+    clients: Vec<XhttpXmuxH2ClientEntry>,
+}
+
+struct XhttpXmuxH2SelectedClient {
+    sender: h2::client::SendRequest<Bytes>,
+    lease: XhttpXmuxClientLease,
+}
+
+struct XhttpXmuxH3ClientEntry {
+    client: h3::client::SendRequest<h3_quinn::OpenStreams, Bytes>,
+    connection: XhttpH3Connection,
+    usage: Arc<XhttpXmuxUsage>,
+    left_usage: i32,
+}
+
+struct XhttpXmuxH3Manager {
+    config: ResidentXhttpXmuxPlan,
+    concurrency: i32,
+    connections: i32,
+    clients: Vec<XhttpXmuxH3ClientEntry>,
+}
+
+struct XhttpXmuxH3SelectedClient {
+    client: h3::client::SendRequest<h3_quinn::OpenStreams, Bytes>,
+    lease: XhttpXmuxClientLease,
+}
+
+static XHTTP_XMUX_H2_MANAGERS: OnceLock<
+    Mutex<HashMap<XhttpXmuxKey, Arc<tokio::sync::Mutex<XhttpXmuxH2Manager>>>>,
+> = OnceLock::new();
+static XHTTP_XMUX_H3_MANAGERS: OnceLock<
+    Mutex<HashMap<XhttpXmuxKey, Arc<tokio::sync::Mutex<XhttpXmuxH3Manager>>>>,
+> = OnceLock::new();
+
+impl XhttpXmuxKey {
+    fn primary(
+        proxy: &ResidentProxyPlan,
+        endpoint: &ResidentXhttpEndpointPlan,
+        xmux: &ResidentXhttpXmuxPlan,
+        mark: u32,
+        mptcp: bool,
+    ) -> Self {
+        let fingerprint = proxy
+            .utls_fingerprint
+            .as_ref()
+            .map(|fingerprint| fingerprint.canonical.as_str())
+            .unwrap_or_default();
+        Self::new(
+            format!(
+                "primary:{}:{}:{}:{}",
+                proxy.graph_link_hash,
+                proxy.tls,
+                fingerprint,
+                proxy.reality.is_some()
+            ),
+            endpoint,
+            xmux,
+            mark,
+            mptcp,
+        )
+    }
+
+    fn endpoint(
+        endpoint: &ResidentXhttpEndpointPlan,
+        xmux: &ResidentXhttpXmuxPlan,
+        mark: u32,
+        mptcp: bool,
+    ) -> Self {
+        Self::new("endpoint".to_owned(), endpoint, xmux, mark, mptcp)
+    }
+
+    fn new(
+        origin: String,
+        endpoint: &ResidentXhttpEndpointPlan,
+        xmux: &ResidentXhttpXmuxPlan,
+        mark: u32,
+        mptcp: bool,
+    ) -> Self {
+        Self {
+            origin,
+            server_host: endpoint.server_host.clone(),
+            server_port: endpoint.server_port,
+            server_name: endpoint.server_name.clone(),
+            alpn: endpoint.alpn.clone(),
+            stream_host: endpoint.stream_host.clone(),
+            stream_path: endpoint.stream_path.clone(),
+            mode: endpoint.mode,
+            allow_insecure: endpoint.allow_insecure,
+            tls_fragment: endpoint.tls_fragment.as_ref().map(|fragment| {
+                (
+                    fragment.min_length,
+                    fragment.max_length,
+                    fragment.min_interval_ms,
+                    fragment.max_interval_ms,
+                )
+            }),
+            xmux: xmux.clone().official_normalized(),
+            mark,
+            mptcp,
+        }
+    }
+}
+
+impl XhttpXmuxClientLease {
+    fn open(usage: Arc<XhttpXmuxUsage>) -> Self {
+        usage.open_usage.fetch_add(1, Ordering::AcqRel);
+        Self { usage }
+    }
+
+    fn request_handle(&self) -> XhttpXmuxRequestHandle {
+        XhttpXmuxRequestHandle {
+            usage: Arc::clone(&self.usage),
+        }
+    }
+
+    fn note_request(&self) -> i32 {
+        self.usage.left_requests.fetch_sub(1, Ordering::AcqRel) - 1
+    }
+}
+
+impl XhttpXmuxRequestHandle {
+    fn use_for_packet_up_post(&self) -> bool {
+        let left = self.usage.left_requests.fetch_sub(1, Ordering::AcqRel) - 1;
+        left > 0
+            && !self
+                .usage
+                .unreusable_at
+                .is_some_and(|deadline| Instant::now() > deadline)
+    }
+}
+
+impl Drop for XhttpXmuxClientLease {
+    fn drop(&mut self) {
+        self.usage.open_usage.fetch_sub(1, Ordering::AcqRel);
+    }
+}
+
+impl XhttpXmuxH2Manager {
+    fn new(config: ResidentXhttpXmuxPlan) -> Self {
+        let config = config.official_normalized();
+        Self {
+            concurrency: ResidentXhttpXmuxPlan::sample_range(config.max_concurrency),
+            connections: ResidentXhttpXmuxPlan::sample_range(config.max_connections),
+            config,
+            clients: Vec::new(),
+        }
+    }
+
+    async fn select<F, Fut>(&mut self, new_sender: F) -> Result<XhttpXmuxH2SelectedClient, String>
+    where
+        F: FnOnce() -> Fut,
+        Fut: Future<Output = Result<XhttpH2EndpointSender, String>>,
+    {
+        self.prune();
+
+        if self.reusable_len() == 0 {
+            return self.new_client(new_sender).await;
+        }
+
+        if self.connections > 0 && self.reusable_len() < self.connections as usize {
+            return self.new_client(new_sender).await;
+        }
+
+        let candidates = self
+            .clients
+            .iter()
+            .enumerate()
+            .filter_map(|(index, client)| {
+                if self.client_reusable(client)
+                    && (self.concurrency <= 0
+                        || client.usage.open_usage.load(Ordering::Acquire) < self.concurrency)
+                {
+                    Some(index)
+                } else {
+                    None
+                }
+            })
+            .collect::<Vec<_>>();
+
+        if candidates.is_empty() {
+            return self.new_client(new_sender).await;
+        }
+
+        let index = candidates[fastrand::usize(..candidates.len())];
+        let client = &mut self.clients[index];
+        if client.left_usage > 0 {
+            client.left_usage -= 1;
+        }
+        Ok(XhttpXmuxH2SelectedClient {
+            sender: client.sender.clone(),
+            lease: XhttpXmuxClientLease::open(Arc::clone(&client.usage)),
+        })
+    }
+
+    async fn new_client<F, Fut>(
+        &mut self,
+        new_sender: F,
+    ) -> Result<XhttpXmuxH2SelectedClient, String>
+    where
+        F: FnOnce() -> Fut,
+        Fut: Future<Output = Result<XhttpH2EndpointSender, String>>,
+    {
+        let sender = new_sender().await?;
+        let mut left_usage = -1;
+        let sampled_left_usage = ResidentXhttpXmuxPlan::sample_range(self.config.c_max_reuse_times);
+        if sampled_left_usage > 0 {
+            left_usage = sampled_left_usage - 1;
+        }
+        let mut left_requests = i32::MAX;
+        let sampled_left_requests =
+            ResidentXhttpXmuxPlan::sample_range(self.config.h_max_request_times);
+        if sampled_left_requests > 0 {
+            left_requests = sampled_left_requests;
+        }
+        let sampled_reusable_secs =
+            ResidentXhttpXmuxPlan::sample_range(self.config.h_max_reusable_secs);
+        let unreusable_at = if sampled_reusable_secs > 0 {
+            Some(Instant::now() + Duration::from_secs(sampled_reusable_secs as u64))
+        } else {
+            None
+        };
+        let usage = Arc::new(XhttpXmuxUsage {
+            open_usage: AtomicI32::new(0),
+            left_requests: AtomicI32::new(left_requests),
+            unreusable_at,
+        });
+        self.clients.push(XhttpXmuxH2ClientEntry {
+            sender: sender.sender.clone(),
+            connection_task: sender
+                .connection_task
+                .expect("new xmux H2 clients must own their connection task"),
+            usage: Arc::clone(&usage),
+            left_usage,
+        });
+        Ok(XhttpXmuxH2SelectedClient {
+            sender: sender.sender,
+            lease: XhttpXmuxClientLease::open(usage),
+        })
+    }
+
+    fn prune(&mut self) {
+        let now = Instant::now();
+        let mut index = 0;
+        while index < self.clients.len() {
+            let should_retire = {
+                let client = &self.clients[index];
+                client.connection_task.is_finished()
+                    || client.left_usage == 0
+                    || client.usage.left_requests.load(Ordering::Acquire) <= 0
+                    || client
+                        .usage
+                        .unreusable_at
+                        .is_some_and(|deadline| now > deadline)
+            };
+            if should_retire {
+                let client = self.clients.swap_remove(index);
+                if client.usage.open_usage.load(Ordering::Acquire) <= 0 {
+                    client.connection_task.abort();
+                }
+            } else {
+                index += 1;
+            }
+        }
+    }
+
+    fn reusable_len(&self) -> usize {
+        self.clients
+            .iter()
+            .filter(|client| self.client_reusable(client))
+            .count()
+    }
+
+    fn client_reusable(&self, client: &XhttpXmuxH2ClientEntry) -> bool {
+        !client.connection_task.is_finished()
+            && client.left_usage != 0
+            && client.usage.left_requests.load(Ordering::Acquire) > 0
+            && !client
+                .usage
+                .unreusable_at
+                .is_some_and(|deadline| Instant::now() > deadline)
+    }
+}
+
+impl XhttpXmuxH3Manager {
+    fn new(config: ResidentXhttpXmuxPlan) -> Self {
+        let config = config.official_normalized();
+        Self {
+            concurrency: ResidentXhttpXmuxPlan::sample_range(config.max_concurrency),
+            connections: ResidentXhttpXmuxPlan::sample_range(config.max_connections),
+            config,
+            clients: Vec::new(),
+        }
+    }
+
+    async fn select<F, Fut>(&mut self, new_client: F) -> Result<XhttpXmuxH3SelectedClient, String>
+    where
+        F: FnOnce() -> Fut,
+        Fut: Future<Output = Result<XhttpH3EndpointClient, String>>,
+    {
+        self.prune();
+
+        if self.reusable_len() == 0 {
+            return self.new_client(new_client).await;
+        }
+
+        if self.connections > 0 && self.reusable_len() < self.connections as usize {
+            return self.new_client(new_client).await;
+        }
+
+        let candidates = self
+            .clients
+            .iter()
+            .enumerate()
+            .filter_map(|(index, client)| {
+                if self.client_reusable(client)
+                    && (self.concurrency <= 0
+                        || client.usage.open_usage.load(Ordering::Acquire) < self.concurrency)
+                {
+                    Some(index)
+                } else {
+                    None
+                }
+            })
+            .collect::<Vec<_>>();
+
+        if candidates.is_empty() {
+            return self.new_client(new_client).await;
+        }
+
+        let index = candidates[fastrand::usize(..candidates.len())];
+        let client = &mut self.clients[index];
+        if client.left_usage > 0 {
+            client.left_usage -= 1;
+        }
+        Ok(XhttpXmuxH3SelectedClient {
+            client: client.client.clone(),
+            lease: XhttpXmuxClientLease::open(Arc::clone(&client.usage)),
+        })
+    }
+
+    async fn new_client<F, Fut>(
+        &mut self,
+        new_client: F,
+    ) -> Result<XhttpXmuxH3SelectedClient, String>
+    where
+        F: FnOnce() -> Fut,
+        Fut: Future<Output = Result<XhttpH3EndpointClient, String>>,
+    {
+        let client = new_client().await?;
+        let mut left_usage = -1;
+        let sampled_left_usage = ResidentXhttpXmuxPlan::sample_range(self.config.c_max_reuse_times);
+        if sampled_left_usage > 0 {
+            left_usage = sampled_left_usage - 1;
+        }
+        let mut left_requests = i32::MAX;
+        let sampled_left_requests =
+            ResidentXhttpXmuxPlan::sample_range(self.config.h_max_request_times);
+        if sampled_left_requests > 0 {
+            left_requests = sampled_left_requests;
+        }
+        let sampled_reusable_secs =
+            ResidentXhttpXmuxPlan::sample_range(self.config.h_max_reusable_secs);
+        let unreusable_at = if sampled_reusable_secs > 0 {
+            Some(Instant::now() + Duration::from_secs(sampled_reusable_secs as u64))
+        } else {
+            None
+        };
+        let usage = Arc::new(XhttpXmuxUsage {
+            open_usage: AtomicI32::new(0),
+            left_requests: AtomicI32::new(left_requests),
+            unreusable_at,
+        });
+        self.clients.push(XhttpXmuxH3ClientEntry {
+            client: client.client.clone(),
+            connection: client
+                .connection
+                .expect("new xmux H3 clients must own their connection"),
+            usage: Arc::clone(&usage),
+            left_usage,
+        });
+        Ok(XhttpXmuxH3SelectedClient {
+            client: client.client,
+            lease: XhttpXmuxClientLease::open(usage),
+        })
+    }
+
+    fn prune(&mut self) {
+        let now = Instant::now();
+        let mut index = 0;
+        while index < self.clients.len() {
+            let should_retire = {
+                let client = &self.clients[index];
+                client.connection.driver_task.is_finished()
+                    || client.left_usage == 0
+                    || client.usage.left_requests.load(Ordering::Acquire) <= 0
+                    || client
+                        .usage
+                        .unreusable_at
+                        .is_some_and(|deadline| now > deadline)
+            };
+            if should_retire {
+                let client = self.clients.swap_remove(index);
+                if client.usage.open_usage.load(Ordering::Acquire) <= 0 {
+                    client
+                        .connection
+                        .connection
+                        .close(0_u32.into(), b"resident xhttp h3 xmux retire");
+                    client.connection.driver_task.abort();
+                }
+            } else {
+                index += 1;
+            }
+        }
+    }
+
+    fn reusable_len(&self) -> usize {
+        self.clients
+            .iter()
+            .filter(|client| self.client_reusable(client))
+            .count()
+    }
+
+    fn client_reusable(&self, client: &XhttpXmuxH3ClientEntry) -> bool {
+        !client.connection.driver_task.is_finished()
+            && client.left_usage != 0
+            && client.usage.left_requests.load(Ordering::Acquire) > 0
+            && !client
+                .usage
+                .unreusable_at
+                .is_some_and(|deadline| Instant::now() > deadline)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn xmux_usage(left_requests: i32, unreusable_at: Option<Instant>) -> Arc<XhttpXmuxUsage> {
+        Arc::new(XhttpXmuxUsage {
+            open_usage: AtomicI32::new(0),
+            left_requests: AtomicI32::new(left_requests),
+            unreusable_at,
+        })
+    }
+
+    #[test]
+    fn xhttp_xmux_packet_up_uses_official_left_request_switch_boundary() {
+        let handle = XhttpXmuxRequestHandle {
+            usage: xmux_usage(2, None),
+        };
+
+        assert!(handle.use_for_packet_up_post());
+        assert_eq!(handle.usage.left_requests.load(Ordering::Acquire), 1);
+        assert!(!handle.use_for_packet_up_post());
+        assert_eq!(handle.usage.left_requests.load(Ordering::Acquire), 0);
+    }
+
+    #[test]
+    fn xhttp_xmux_packet_up_switches_when_client_is_past_reusable_deadline() {
+        let handle = XhttpXmuxRequestHandle {
+            usage: xmux_usage(10, Some(Instant::now() - Duration::from_secs(1))),
+        };
+
+        assert!(!handle.use_for_packet_up_post());
+        assert_eq!(handle.usage.left_requests.load(Ordering::Acquire), 9);
+    }
+
+    #[test]
+    fn xhttp_xmux_request_handle_does_not_extend_open_usage_lease() {
+        let usage = xmux_usage(4, None);
+        assert_eq!(usage.open_usage.load(Ordering::Acquire), 0);
+
+        let handle = {
+            let lease = XhttpXmuxClientLease::open(Arc::clone(&usage));
+            assert_eq!(usage.open_usage.load(Ordering::Acquire), 1);
+            let handle = lease.request_handle();
+            assert!(handle.use_for_packet_up_post());
+            handle
+        };
+
+        assert_eq!(usage.open_usage.load(Ordering::Acquire), 0);
+        assert_eq!(handle.usage.left_requests.load(Ordering::Acquire), 3);
+    }
 }
 
 pub(crate) enum XhttpH1BodyReader {
@@ -203,6 +750,7 @@ pub(crate) async fn open_xhttp_packet_up_parts(
                 &mut download_sender.sender,
                 &download_endpoint,
                 &session_id,
+                download_sender.xmux_lease.as_ref(),
             )
             .await?;
             Ok(XhttpPacketUpParts {
@@ -216,7 +764,8 @@ pub(crate) async fn open_xhttp_packet_up_parts(
                 download: XhttpDownloadClient::H2 {
                     recv,
                     _keepalive_sender: Some(download_sender.sender),
-                    connection_task: Some(download_sender.connection_task),
+                    connection_task: download_sender.connection_task,
+                    xmux_lease: download_sender.xmux_lease,
                 },
                 upload_underlay: xhttp_primary_tls_underlay_name(proxy),
                 upload_http_version,
@@ -224,11 +773,12 @@ pub(crate) async fn open_xhttp_packet_up_parts(
             })
         }
         (ResidentXhttpHttpVersion::H1, ResidentXhttpHttpVersion::H3) => {
-            let download_connection = open_xhttp_h3_connection(&download_endpoint, mark).await?;
+            let download_client = open_xhttp_h3_endpoint_client(&download_endpoint, mark).await?;
             let recv = open_xhttp_h3_download_stream(
                 &download_endpoint,
-                download_connection.client.clone(),
+                download_client.client.clone(),
                 &session_id,
+                download_client.xmux_lease.as_ref(),
             )
             .await?;
             Ok(XhttpPacketUpParts {
@@ -241,7 +791,8 @@ pub(crate) async fn open_xhttp_packet_up_parts(
                 },
                 download: XhttpDownloadClient::H3 {
                     recv,
-                    connection: Some(download_connection),
+                    connection: download_client.connection,
+                    xmux_lease: download_client.xmux_lease,
                 },
                 upload_underlay: xhttp_primary_tls_underlay_name(proxy),
                 upload_http_version,
@@ -249,9 +800,9 @@ pub(crate) async fn open_xhttp_packet_up_parts(
             })
         }
         (ResidentXhttpHttpVersion::H2, ResidentXhttpHttpVersion::H1) => {
-            let client = open_async_vless_tls_client_with_flow(proxy, mark, mptcp).await?;
-            let upload_underlay = async_tls_underlay_name(&client);
-            let (sender, connection_task) = open_xhttp_h2_sender(client).await?;
+            let upload_underlay = xhttp_primary_tls_underlay_name(proxy);
+            let upload_sender =
+                open_xhttp_h2_proxy_sender(proxy, &upload_endpoint, mark, mptcp).await?;
             let recv = open_xhttp_h1_download_stream(
                 proxy,
                 &download_endpoint,
@@ -264,9 +815,17 @@ pub(crate) async fn open_xhttp_packet_up_parts(
             Ok(XhttpPacketUpParts {
                 session_id,
                 upload: XhttpUploadClient::H2 {
+                    proxy: Box::new(proxy.clone()),
                     endpoint: upload_endpoint,
-                    sender,
-                    connection_task,
+                    mark,
+                    mptcp,
+                    sender: upload_sender.sender,
+                    connection_task: upload_sender.connection_task,
+                    xmux_request: upload_sender
+                        .xmux_lease
+                        .as_ref()
+                        .map(XhttpXmuxClientLease::request_handle),
+                    xmux_lease: upload_sender.xmux_lease,
                 },
                 download: XhttpDownloadClient::H1 { body: recv },
                 upload_underlay,
@@ -275,22 +834,36 @@ pub(crate) async fn open_xhttp_packet_up_parts(
             })
         }
         (ResidentXhttpHttpVersion::H2, ResidentXhttpHttpVersion::H2) if !download_separate => {
-            let client = open_async_vless_tls_client_with_flow(proxy, mark, mptcp).await?;
-            let upload_underlay = async_tls_underlay_name(&client);
-            let (mut sender, connection_task) = open_xhttp_h2_sender(client).await?;
-            let recv =
-                open_xhttp_h2_download_stream(&mut sender, &upload_endpoint, &session_id).await?;
+            let upload_underlay = xhttp_primary_tls_underlay_name(proxy);
+            let mut upload_sender =
+                open_xhttp_h2_proxy_sender(proxy, &upload_endpoint, mark, mptcp).await?;
+            let recv = open_xhttp_h2_download_stream(
+                &mut upload_sender.sender,
+                &upload_endpoint,
+                &session_id,
+                upload_sender.xmux_lease.as_ref(),
+            )
+            .await?;
             Ok(XhttpPacketUpParts {
                 session_id,
                 upload: XhttpUploadClient::H2 {
+                    proxy: Box::new(proxy.clone()),
                     endpoint: upload_endpoint,
-                    sender,
-                    connection_task,
+                    mark,
+                    mptcp,
+                    sender: upload_sender.sender,
+                    connection_task: upload_sender.connection_task,
+                    xmux_request: upload_sender
+                        .xmux_lease
+                        .as_ref()
+                        .map(XhttpXmuxClientLease::request_handle),
+                    xmux_lease: upload_sender.xmux_lease,
                 },
                 download: XhttpDownloadClient::H2 {
                     recv,
                     _keepalive_sender: None,
                     connection_task: None,
+                    xmux_lease: None,
                 },
                 upload_underlay,
                 upload_http_version,
@@ -298,28 +871,38 @@ pub(crate) async fn open_xhttp_packet_up_parts(
             })
         }
         (ResidentXhttpHttpVersion::H2, ResidentXhttpHttpVersion::H2) => {
-            let client = open_async_vless_tls_client_with_flow(proxy, mark, mptcp).await?;
-            let upload_underlay = async_tls_underlay_name(&client);
-            let (sender, connection_task) = open_xhttp_h2_sender(client).await?;
+            let upload_underlay = xhttp_primary_tls_underlay_name(proxy);
+            let upload_sender =
+                open_xhttp_h2_proxy_sender(proxy, &upload_endpoint, mark, mptcp).await?;
             let mut download_sender =
                 open_xhttp_h2_endpoint_sender(&download_endpoint, mark, mptcp).await?;
             let recv = open_xhttp_h2_download_stream(
                 &mut download_sender.sender,
                 &download_endpoint,
                 &session_id,
+                download_sender.xmux_lease.as_ref(),
             )
             .await?;
             Ok(XhttpPacketUpParts {
                 session_id,
                 upload: XhttpUploadClient::H2 {
+                    proxy: Box::new(proxy.clone()),
                     endpoint: upload_endpoint,
-                    sender,
-                    connection_task,
+                    mark,
+                    mptcp,
+                    sender: upload_sender.sender,
+                    connection_task: upload_sender.connection_task,
+                    xmux_request: upload_sender
+                        .xmux_lease
+                        .as_ref()
+                        .map(XhttpXmuxClientLease::request_handle),
+                    xmux_lease: upload_sender.xmux_lease,
                 },
                 download: XhttpDownloadClient::H2 {
                     recv,
                     _keepalive_sender: Some(download_sender.sender),
-                    connection_task: Some(download_sender.connection_task),
+                    connection_task: download_sender.connection_task,
+                    xmux_lease: download_sender.xmux_lease,
                 },
                 upload_underlay,
                 upload_http_version,
@@ -327,26 +910,36 @@ pub(crate) async fn open_xhttp_packet_up_parts(
             })
         }
         (ResidentXhttpHttpVersion::H2, ResidentXhttpHttpVersion::H3) => {
-            let client = open_async_vless_tls_client_with_flow(proxy, mark, mptcp).await?;
-            let upload_underlay = async_tls_underlay_name(&client);
-            let (sender, connection_task) = open_xhttp_h2_sender(client).await?;
-            let download_connection = open_xhttp_h3_connection(&download_endpoint, mark).await?;
+            let upload_underlay = xhttp_primary_tls_underlay_name(proxy);
+            let upload_sender =
+                open_xhttp_h2_proxy_sender(proxy, &upload_endpoint, mark, mptcp).await?;
+            let download_client = open_xhttp_h3_endpoint_client(&download_endpoint, mark).await?;
             let recv = open_xhttp_h3_download_stream(
                 &download_endpoint,
-                download_connection.client.clone(),
+                download_client.client.clone(),
                 &session_id,
+                download_client.xmux_lease.as_ref(),
             )
             .await?;
             Ok(XhttpPacketUpParts {
                 session_id,
                 upload: XhttpUploadClient::H2 {
+                    proxy: Box::new(proxy.clone()),
                     endpoint: upload_endpoint,
-                    sender,
-                    connection_task,
+                    mark,
+                    mptcp,
+                    sender: upload_sender.sender,
+                    connection_task: upload_sender.connection_task,
+                    xmux_request: upload_sender
+                        .xmux_lease
+                        .as_ref()
+                        .map(XhttpXmuxClientLease::request_handle),
+                    xmux_lease: upload_sender.xmux_lease,
                 },
                 download: XhttpDownloadClient::H3 {
                     recv,
-                    connection: Some(download_connection),
+                    connection: download_client.connection,
+                    xmux_lease: download_client.xmux_lease,
                 },
                 upload_underlay,
                 upload_http_version,
@@ -355,7 +948,7 @@ pub(crate) async fn open_xhttp_packet_up_parts(
         }
         (ResidentXhttpHttpVersion::H3, ResidentXhttpHttpVersion::H1) => {
             let upload_underlay = "quinn-h3";
-            let upload_connection = open_xhttp_h3_connection(&upload_endpoint, mark).await?;
+            let upload_client = open_xhttp_h3_proxy_client(proxy, &upload_endpoint, mark).await?;
             let recv = open_xhttp_h1_download_stream(
                 proxy,
                 &download_endpoint,
@@ -368,8 +961,16 @@ pub(crate) async fn open_xhttp_packet_up_parts(
             Ok(XhttpPacketUpParts {
                 session_id,
                 upload: XhttpUploadClient::H3 {
+                    proxy: Box::new(proxy.clone()),
                     endpoint: upload_endpoint,
-                    connection: upload_connection,
+                    mark,
+                    client: upload_client.client,
+                    connection: upload_client.connection,
+                    xmux_request: upload_client
+                        .xmux_lease
+                        .as_ref()
+                        .map(XhttpXmuxClientLease::request_handle),
+                    xmux_lease: upload_client.xmux_lease,
                 },
                 download: XhttpDownloadClient::H1 { body: recv },
                 upload_underlay,
@@ -379,25 +980,35 @@ pub(crate) async fn open_xhttp_packet_up_parts(
         }
         (ResidentXhttpHttpVersion::H3, ResidentXhttpHttpVersion::H2) => {
             let upload_underlay = "quinn-h3";
-            let upload_connection = open_xhttp_h3_connection(&upload_endpoint, mark).await?;
+            let upload_client = open_xhttp_h3_proxy_client(proxy, &upload_endpoint, mark).await?;
             let mut download_sender =
                 open_xhttp_h2_endpoint_sender(&download_endpoint, mark, mptcp).await?;
             let recv = open_xhttp_h2_download_stream(
                 &mut download_sender.sender,
                 &download_endpoint,
                 &session_id,
+                download_sender.xmux_lease.as_ref(),
             )
             .await?;
             Ok(XhttpPacketUpParts {
                 session_id,
                 upload: XhttpUploadClient::H3 {
+                    proxy: Box::new(proxy.clone()),
                     endpoint: upload_endpoint,
-                    connection: upload_connection,
+                    mark,
+                    client: upload_client.client,
+                    connection: upload_client.connection,
+                    xmux_request: upload_client
+                        .xmux_lease
+                        .as_ref()
+                        .map(XhttpXmuxClientLease::request_handle),
+                    xmux_lease: upload_client.xmux_lease,
                 },
                 download: XhttpDownloadClient::H2 {
                     recv,
                     _keepalive_sender: Some(download_sender.sender),
-                    connection_task: Some(download_sender.connection_task),
+                    connection_task: download_sender.connection_task,
+                    xmux_lease: download_sender.xmux_lease,
                 },
                 upload_underlay,
                 upload_http_version,
@@ -406,22 +1017,32 @@ pub(crate) async fn open_xhttp_packet_up_parts(
         }
         (ResidentXhttpHttpVersion::H3, ResidentXhttpHttpVersion::H3) if !download_separate => {
             let upload_underlay = "quinn-h3";
-            let upload_connection = open_xhttp_h3_connection(&upload_endpoint, mark).await?;
+            let upload_client = open_xhttp_h3_proxy_client(proxy, &upload_endpoint, mark).await?;
             let recv = open_xhttp_h3_download_stream(
                 &upload_endpoint,
-                upload_connection.client.clone(),
+                upload_client.client.clone(),
                 &session_id,
+                upload_client.xmux_lease.as_ref(),
             )
             .await?;
             Ok(XhttpPacketUpParts {
                 session_id,
                 upload: XhttpUploadClient::H3 {
+                    proxy: Box::new(proxy.clone()),
                     endpoint: upload_endpoint,
-                    connection: upload_connection,
+                    mark,
+                    client: upload_client.client,
+                    connection: upload_client.connection,
+                    xmux_request: upload_client
+                        .xmux_lease
+                        .as_ref()
+                        .map(XhttpXmuxClientLease::request_handle),
+                    xmux_lease: upload_client.xmux_lease,
                 },
                 download: XhttpDownloadClient::H3 {
                     recv,
                     connection: None,
+                    xmux_lease: None,
                 },
                 upload_underlay,
                 upload_http_version,
@@ -430,23 +1051,33 @@ pub(crate) async fn open_xhttp_packet_up_parts(
         }
         (ResidentXhttpHttpVersion::H3, ResidentXhttpHttpVersion::H3) => {
             let upload_underlay = "quinn-h3";
-            let upload_connection = open_xhttp_h3_connection(&upload_endpoint, mark).await?;
-            let download_connection = open_xhttp_h3_connection(&download_endpoint, mark).await?;
+            let upload_client = open_xhttp_h3_proxy_client(proxy, &upload_endpoint, mark).await?;
+            let download_client = open_xhttp_h3_endpoint_client(&download_endpoint, mark).await?;
             let recv = open_xhttp_h3_download_stream(
                 &download_endpoint,
-                download_connection.client.clone(),
+                download_client.client.clone(),
                 &session_id,
+                download_client.xmux_lease.as_ref(),
             )
             .await?;
             Ok(XhttpPacketUpParts {
                 session_id,
                 upload: XhttpUploadClient::H3 {
+                    proxy: Box::new(proxy.clone()),
                     endpoint: upload_endpoint,
-                    connection: upload_connection,
+                    mark,
+                    client: upload_client.client,
+                    connection: upload_client.connection,
+                    xmux_request: upload_client
+                        .xmux_lease
+                        .as_ref()
+                        .map(XhttpXmuxClientLease::request_handle),
+                    xmux_lease: upload_client.xmux_lease,
                 },
                 download: XhttpDownloadClient::H3 {
                     recv,
-                    connection: Some(download_connection),
+                    connection: download_client.connection,
+                    xmux_lease: download_client.xmux_lease,
                 },
                 upload_underlay,
                 upload_http_version,
@@ -519,13 +1150,17 @@ async fn open_xhttp_stream_one_parts(
             })
         }
         ResidentXhttpHttpVersion::H2 => {
-            let client = open_async_vless_tls_client_with_flow(proxy, mark, mptcp).await?;
-            let upload_underlay = async_tls_underlay_name(&client);
-            let (mut sender, connection_task) = open_xhttp_h2_sender(client).await?;
+            let upload_underlay = xhttp_primary_tls_underlay_name(proxy);
+            let mut endpoint_sender =
+                open_xhttp_h2_proxy_sender(proxy, &endpoint, mark, mptcp).await?;
+            note_xhttp_xmux_request(endpoint_sender.xmux_lease.as_ref());
             let request = xhttp_h2_request(http::Method::POST, &endpoint, "", true)?;
-            let (response, mut send_stream) = sender
+            let (response, mut send_stream) = endpoint_sender
+                .sender
                 .send_request(request, false)
-                .map_err(|err| format!("send xHTTP HTTP/2 stream-one request headers: {err}"))?;
+                .map_err(|err| {
+                format!("send xHTTP HTTP/2 stream-one request headers: {err}")
+            })?;
             send_h2_data_with_context(
                 &mut send_stream,
                 initial_payload,
@@ -549,11 +1184,13 @@ async fn open_xhttp_stream_one_parts(
                     send_stream,
                     upload_response_task: None,
                     connection_task: None,
+                    xmux_lease: endpoint_sender.xmux_lease,
                 },
                 download: XhttpDownloadClient::H2 {
                     recv: response.into_body(),
-                    _keepalive_sender: Some(sender),
-                    connection_task: Some(connection_task),
+                    _keepalive_sender: Some(endpoint_sender.sender),
+                    connection_task: endpoint_sender.connection_task,
+                    xmux_lease: None,
                 },
                 upload_underlay,
                 upload_http_version,
@@ -561,11 +1198,12 @@ async fn open_xhttp_stream_one_parts(
             })
         }
         ResidentXhttpHttpVersion::H3 => {
-            let mut connection = open_xhttp_h3_connection(&endpoint, mark).await?;
+            let mut endpoint_client = open_xhttp_h3_proxy_client(proxy, &endpoint, mark).await?;
+            note_xhttp_xmux_request(endpoint_client.xmux_lease.as_ref());
             let request = xhttp_h3_request(http::Method::POST, &endpoint, "", true)?;
             let mut stream = time::timeout(
                 RESIDENT_CONNECT_TIMEOUT,
-                connection.client.send_request(request),
+                endpoint_client.client.send_request(request),
             )
             .await
             .map_err(|_| "xHTTP H3 stream-one request timeout".to_owned())?
@@ -589,7 +1227,8 @@ async fn open_xhttp_stream_one_parts(
                 session_id: None,
                 upload: XhttpStreamUploadClient::H3Shared {
                     stream: Arc::clone(&shared),
-                    connection,
+                    connection: endpoint_client.connection,
+                    xmux_lease: endpoint_client.xmux_lease,
                 },
                 download: XhttpDownloadClient::H3Shared { stream: shared },
                 upload_underlay: "quinn-h3",
@@ -618,6 +1257,62 @@ async fn open_xhttp_stream_up_parts(
     } else {
         upload_endpoint.http_version()
     };
+    if !download_separate
+        && upload_http_version == ResidentXhttpHttpVersion::H2
+        && download_endpoint.http_version() == ResidentXhttpHttpVersion::H2
+    {
+        let upload_underlay = xhttp_primary_tls_underlay_name(proxy);
+        let mut endpoint_sender =
+            open_xhttp_h2_proxy_sender(proxy, &upload_endpoint, mark, mptcp).await?;
+        let recv = open_xhttp_h2_download_stream(
+            &mut endpoint_sender.sender,
+            &upload_endpoint,
+            &session_id,
+            endpoint_sender.xmux_lease.as_ref(),
+        )
+        .await?;
+        let mut upload_sender = endpoint_sender.sender.clone();
+        note_xhttp_xmux_request(endpoint_sender.xmux_lease.as_ref());
+        let request = xhttp_h2_request(
+            http::Method::POST,
+            &upload_endpoint,
+            &xhttp_session_path_suffix(&session_id, None),
+            true,
+        )?;
+        let (response, mut send_stream) = upload_sender
+            .send_request(request, false)
+            .map_err(|err| format!("send xHTTP HTTP/2 stream-up request headers: {err}"))?;
+        send_h2_data_with_context(
+            &mut send_stream,
+            initial_payload,
+            false,
+            "xHTTP HTTP/2 stream-up",
+        )
+        .await?;
+        let upload_response_task = tokio::spawn(async move {
+            if let Ok(Ok(response)) = time::timeout(RESIDENT_CONNECT_TIMEOUT, response).await {
+                let _ = drain_xhttp_h2_response_body(response.into_body()).await;
+            }
+        });
+        return Ok(XhttpStreamParts {
+            session_id: Some(session_id),
+            upload: XhttpStreamUploadClient::H2 {
+                send_stream,
+                upload_response_task: Some(upload_response_task),
+                connection_task: None,
+                xmux_lease: endpoint_sender.xmux_lease,
+            },
+            download: XhttpDownloadClient::H2 {
+                recv,
+                _keepalive_sender: Some(endpoint_sender.sender),
+                connection_task: endpoint_sender.connection_task,
+                xmux_lease: None,
+            },
+            upload_underlay,
+            upload_http_version,
+            download_separate,
+        });
+    }
     let download = open_xhttp_download_client(
         proxy,
         &download_endpoint,
@@ -672,30 +1367,39 @@ async fn open_xhttp_download_client(
             let mut endpoint_sender = if separate_endpoint {
                 open_xhttp_h2_endpoint_sender(endpoint, mark, mptcp).await?
             } else {
-                let client = open_async_vless_tls_client_with_flow(proxy, mark, mptcp).await?;
-                let (sender, connection_task) = open_xhttp_h2_sender(client).await?;
-                XhttpH2EndpointSender {
-                    sender,
-                    connection_task,
-                }
+                open_xhttp_h2_proxy_sender(proxy, endpoint, mark, mptcp).await?
             };
-            let recv =
-                open_xhttp_h2_download_stream(&mut endpoint_sender.sender, endpoint, session_id)
-                    .await?;
+            let recv = open_xhttp_h2_download_stream(
+                &mut endpoint_sender.sender,
+                endpoint,
+                session_id,
+                endpoint_sender.xmux_lease.as_ref(),
+            )
+            .await?;
             Ok(XhttpDownloadClient::H2 {
                 recv,
                 _keepalive_sender: Some(endpoint_sender.sender),
-                connection_task: Some(endpoint_sender.connection_task),
+                connection_task: endpoint_sender.connection_task,
+                xmux_lease: endpoint_sender.xmux_lease,
             })
         }
         ResidentXhttpHttpVersion::H3 => {
-            let connection = open_xhttp_h3_connection(endpoint, mark).await?;
-            let recv =
-                open_xhttp_h3_download_stream(endpoint, connection.client.clone(), session_id)
-                    .await?;
+            let endpoint_client = if separate_endpoint {
+                open_xhttp_h3_endpoint_client(endpoint, mark).await?
+            } else {
+                open_xhttp_h3_proxy_client(proxy, endpoint, mark).await?
+            };
+            let recv = open_xhttp_h3_download_stream(
+                endpoint,
+                endpoint_client.client.clone(),
+                session_id,
+                endpoint_client.xmux_lease.as_ref(),
+            )
+            .await?;
             Ok(XhttpDownloadClient::H3 {
                 recv,
-                connection: Some(connection),
+                connection: endpoint_client.connection,
+                xmux_lease: endpoint_client.xmux_lease,
             })
         }
     }
@@ -725,18 +1429,21 @@ async fn open_xhttp_stream_upload_client(
             ))
         }
         ResidentXhttpHttpVersion::H2 => {
-            let client = open_async_vless_tls_client_with_flow(proxy, mark, mptcp).await?;
-            let upload_underlay = async_tls_underlay_name(&client);
-            let (mut sender, connection_task) = open_xhttp_h2_sender(client).await?;
+            let upload_underlay = xhttp_primary_tls_underlay_name(proxy);
+            let mut endpoint_sender =
+                open_xhttp_h2_proxy_sender(proxy, endpoint, mark, mptcp).await?;
+            note_xhttp_xmux_request(endpoint_sender.xmux_lease.as_ref());
             let request = xhttp_h2_request(
                 http::Method::POST,
                 endpoint,
                 &xhttp_session_path_suffix(session_id, None),
                 true,
             )?;
-            let (response, mut send_stream) = sender
-                .send_request(request, false)
-                .map_err(|err| format!("send xHTTP HTTP/2 stream-up request headers: {err}"))?;
+            let (response, mut send_stream) =
+                endpoint_sender
+                    .sender
+                    .send_request(request, false)
+                    .map_err(|err| format!("send xHTTP HTTP/2 stream-up request headers: {err}"))?;
             send_h2_data_with_context(
                 &mut send_stream,
                 initial_payload,
@@ -753,13 +1460,15 @@ async fn open_xhttp_stream_upload_client(
                 XhttpStreamUploadClient::H2 {
                     send_stream,
                     upload_response_task: Some(upload_response_task),
-                    connection_task: Some(connection_task),
+                    connection_task: endpoint_sender.connection_task,
+                    xmux_lease: endpoint_sender.xmux_lease,
                 },
                 upload_underlay,
             ))
         }
         ResidentXhttpHttpVersion::H3 => {
-            let mut connection = open_xhttp_h3_connection(endpoint, mark).await?;
+            let mut endpoint_client = open_xhttp_h3_proxy_client(proxy, endpoint, mark).await?;
+            note_xhttp_xmux_request(endpoint_client.xmux_lease.as_ref());
             let request = xhttp_h3_request(
                 http::Method::POST,
                 endpoint,
@@ -768,7 +1477,7 @@ async fn open_xhttp_stream_upload_client(
             )?;
             let mut stream = time::timeout(
                 RESIDENT_CONNECT_TIMEOUT,
-                connection.client.send_request(request),
+                endpoint_client.client.send_request(request),
             )
             .await
             .map_err(|_| "xHTTP H3 stream-up request timeout".to_owned())?
@@ -778,7 +1487,11 @@ async fn open_xhttp_stream_upload_client(
                 .map_err(|_| "send xHTTP H3 stream-up body timeout".to_owned())?
                 .map_err(|err| format!("send xHTTP H3 stream-up body: {err:?}"))?;
             Ok((
-                XhttpStreamUploadClient::H3 { stream, connection },
+                XhttpStreamUploadClient::H3 {
+                    stream,
+                    connection: endpoint_client.connection,
+                    xmux_lease: endpoint_client.xmux_lease,
+                },
                 "quinn-h3",
             ))
         }
@@ -787,7 +1500,47 @@ async fn open_xhttp_stream_upload_client(
 
 struct XhttpH2EndpointSender {
     sender: h2::client::SendRequest<Bytes>,
-    connection_task: tokio::task::JoinHandle<()>,
+    connection_task: Option<tokio::task::JoinHandle<()>>,
+    xmux_lease: Option<XhttpXmuxClientLease>,
+}
+
+struct XhttpH3EndpointClient {
+    client: h3::client::SendRequest<h3_quinn::OpenStreams, Bytes>,
+    connection: Option<XhttpH3Connection>,
+    xmux_lease: Option<XhttpXmuxClientLease>,
+}
+
+async fn open_xhttp_h2_proxy_sender(
+    proxy: &ResidentProxyPlan,
+    endpoint: &ResidentXhttpEndpointPlan,
+    mark: u32,
+    mptcp: bool,
+) -> Result<XhttpH2EndpointSender, String> {
+    let Some(xmux) = &proxy.xhttp_xmux else {
+        let client = open_async_vless_tls_client_with_flow(proxy, mark, mptcp).await?;
+        let (sender, connection_task) = open_xhttp_h2_sender(client).await?;
+        return Ok(XhttpH2EndpointSender {
+            sender,
+            connection_task: Some(connection_task),
+            xmux_lease: None,
+        });
+    };
+    let key = XhttpXmuxKey::primary(proxy, endpoint, xmux, mark, mptcp);
+    let selected = select_xhttp_h2_xmux_client(key, xmux.clone(), || async {
+        let client = open_async_vless_tls_client_with_flow(proxy, mark, mptcp).await?;
+        let (sender, connection_task) = open_xhttp_h2_sender(client).await?;
+        Ok(XhttpH2EndpointSender {
+            sender,
+            connection_task: Some(connection_task),
+            xmux_lease: None,
+        })
+    })
+    .await?;
+    Ok(XhttpH2EndpointSender {
+        sender: selected.sender,
+        connection_task: None,
+        xmux_lease: Some(selected.lease),
+    })
 }
 
 async fn open_xhttp_h2_endpoint_sender(
@@ -795,12 +1548,136 @@ async fn open_xhttp_h2_endpoint_sender(
     mark: u32,
     mptcp: bool,
 ) -> Result<XhttpH2EndpointSender, String> {
-    let client = open_async_xhttp_endpoint_tls_client(endpoint, mark, mptcp).await?;
-    let (sender, connection_task) = open_xhttp_h2_sender(client).await?;
-    Ok(XhttpH2EndpointSender {
-        sender,
-        connection_task,
+    let Some(xmux) = &endpoint.xmux else {
+        let client = open_async_xhttp_endpoint_tls_client(endpoint, mark, mptcp).await?;
+        let (sender, connection_task) = open_xhttp_h2_sender(client).await?;
+        return Ok(XhttpH2EndpointSender {
+            sender,
+            connection_task: Some(connection_task),
+            xmux_lease: None,
+        });
+    };
+    let key = XhttpXmuxKey::endpoint(endpoint, xmux, mark, mptcp);
+    let selected = select_xhttp_h2_xmux_client(key, xmux.clone(), || async {
+        let client = open_async_xhttp_endpoint_tls_client(endpoint, mark, mptcp).await?;
+        let (sender, connection_task) = open_xhttp_h2_sender(client).await?;
+        Ok(XhttpH2EndpointSender {
+            sender,
+            connection_task: Some(connection_task),
+            xmux_lease: None,
+        })
     })
+    .await?;
+    Ok(XhttpH2EndpointSender {
+        sender: selected.sender,
+        connection_task: None,
+        xmux_lease: Some(selected.lease),
+    })
+}
+
+async fn select_xhttp_h2_xmux_client<F, Fut>(
+    key: XhttpXmuxKey,
+    xmux: ResidentXhttpXmuxPlan,
+    new_sender: F,
+) -> Result<XhttpXmuxH2SelectedClient, String>
+where
+    F: FnOnce() -> Fut,
+    Fut: Future<Output = Result<XhttpH2EndpointSender, String>>,
+{
+    let manager =
+        {
+            let mut managers = XHTTP_XMUX_H2_MANAGERS
+                .get_or_init(|| Mutex::new(HashMap::new()))
+                .lock()
+                .map_err(|_| "resident xHTTP H2 xmux manager lock poisoned".to_owned())?;
+            Arc::clone(managers.entry(key).or_insert_with(|| {
+                Arc::new(tokio::sync::Mutex::new(XhttpXmuxH2Manager::new(xmux)))
+            }))
+        };
+    let mut manager = manager.lock().await;
+    manager.select(new_sender).await
+}
+
+async fn open_xhttp_h3_proxy_client(
+    proxy: &ResidentProxyPlan,
+    endpoint: &ResidentXhttpEndpointPlan,
+    mark: u32,
+) -> Result<XhttpH3EndpointClient, String> {
+    let Some(xmux) = &proxy.xhttp_xmux else {
+        let connection = open_xhttp_h3_connection(endpoint, mark).await?;
+        return Ok(XhttpH3EndpointClient {
+            client: connection.client.clone(),
+            connection: Some(connection),
+            xmux_lease: None,
+        });
+    };
+    let key = XhttpXmuxKey::primary(proxy, endpoint, xmux, mark, false);
+    let selected = select_xhttp_h3_xmux_client(key, xmux.clone(), || async {
+        let connection = open_xhttp_h3_connection(endpoint, mark).await?;
+        Ok(XhttpH3EndpointClient {
+            client: connection.client.clone(),
+            connection: Some(connection),
+            xmux_lease: None,
+        })
+    })
+    .await?;
+    Ok(XhttpH3EndpointClient {
+        client: selected.client,
+        connection: None,
+        xmux_lease: Some(selected.lease),
+    })
+}
+
+async fn open_xhttp_h3_endpoint_client(
+    endpoint: &ResidentXhttpEndpointPlan,
+    mark: u32,
+) -> Result<XhttpH3EndpointClient, String> {
+    let Some(xmux) = &endpoint.xmux else {
+        let connection = open_xhttp_h3_connection(endpoint, mark).await?;
+        return Ok(XhttpH3EndpointClient {
+            client: connection.client.clone(),
+            connection: Some(connection),
+            xmux_lease: None,
+        });
+    };
+    let key = XhttpXmuxKey::endpoint(endpoint, xmux, mark, false);
+    let selected = select_xhttp_h3_xmux_client(key, xmux.clone(), || async {
+        let connection = open_xhttp_h3_connection(endpoint, mark).await?;
+        Ok(XhttpH3EndpointClient {
+            client: connection.client.clone(),
+            connection: Some(connection),
+            xmux_lease: None,
+        })
+    })
+    .await?;
+    Ok(XhttpH3EndpointClient {
+        client: selected.client,
+        connection: None,
+        xmux_lease: Some(selected.lease),
+    })
+}
+
+async fn select_xhttp_h3_xmux_client<F, Fut>(
+    key: XhttpXmuxKey,
+    xmux: ResidentXhttpXmuxPlan,
+    new_client: F,
+) -> Result<XhttpXmuxH3SelectedClient, String>
+where
+    F: FnOnce() -> Fut,
+    Fut: Future<Output = Result<XhttpH3EndpointClient, String>>,
+{
+    let manager =
+        {
+            let mut managers = XHTTP_XMUX_H3_MANAGERS
+                .get_or_init(|| Mutex::new(HashMap::new()))
+                .lock()
+                .map_err(|_| "resident xHTTP H3 xmux manager lock poisoned".to_owned())?;
+            Arc::clone(managers.entry(key).or_insert_with(|| {
+                Arc::new(tokio::sync::Mutex::new(XhttpXmuxH3Manager::new(xmux)))
+            }))
+        };
+    let mut manager = manager.lock().await;
+    manager.select(new_client).await
 }
 
 async fn open_xhttp_h2_sender(
@@ -993,7 +1870,9 @@ async fn open_xhttp_h2_download_stream(
     sender: &mut h2::client::SendRequest<Bytes>,
     endpoint: &ResidentXhttpEndpointPlan,
     session_id: &str,
+    xmux_lease: Option<&XhttpXmuxClientLease>,
 ) -> Result<h2::RecvStream, String> {
+    note_xhttp_xmux_request(xmux_lease);
     let request = xhttp_h2_request(
         http::Method::GET,
         endpoint,
@@ -1016,7 +1895,7 @@ async fn open_xhttp_h2_download_stream(
     Ok(response.into_body())
 }
 
-pub(crate) async fn send_xhttp_h2_packet_up_request(
+async fn send_xhttp_h2_packet_up_request(
     sender: &mut h2::client::SendRequest<Bytes>,
     endpoint: &impl ResidentXhttpEndpointView,
     session_id: &str,
@@ -1046,6 +1925,74 @@ pub(crate) async fn send_xhttp_h2_packet_up_request(
     drain_xhttp_h2_response_body(response.into_body()).await
 }
 
+fn note_xhttp_xmux_request(xmux_lease: Option<&XhttpXmuxClientLease>) {
+    if let Some(lease) = xmux_lease {
+        let _ = lease.note_request();
+    }
+}
+
+async fn refresh_xhttp_h2_packet_up_client_if_needed(
+    proxy: &ResidentProxyPlan,
+    endpoint: &ResidentXhttpEndpointPlan,
+    mark: u32,
+    mptcp: bool,
+    sender: &mut h2::client::SendRequest<Bytes>,
+    connection_task: &mut Option<tokio::task::JoinHandle<()>>,
+    xmux_request: &mut Option<XhttpXmuxRequestHandle>,
+) -> Result<(), String> {
+    let Some(request) = xmux_request.as_ref() else {
+        return Ok(());
+    };
+    if request.use_for_packet_up_post() {
+        return Ok(());
+    }
+
+    if let Some(task) = connection_task.take() {
+        task.abort();
+    }
+    let replacement = open_xhttp_h2_proxy_sender(proxy, endpoint, mark, mptcp).await?;
+    *sender = replacement.sender;
+    *connection_task = replacement.connection_task;
+    *xmux_request = replacement
+        .xmux_lease
+        .as_ref()
+        .map(XhttpXmuxClientLease::request_handle);
+    drop(replacement.xmux_lease);
+    Ok(())
+}
+
+async fn refresh_xhttp_h3_packet_up_client_if_needed(
+    proxy: &ResidentProxyPlan,
+    endpoint: &ResidentXhttpEndpointPlan,
+    mark: u32,
+    client: &mut h3::client::SendRequest<h3_quinn::OpenStreams, Bytes>,
+    connection: &mut Option<XhttpH3Connection>,
+    xmux_request: &mut Option<XhttpXmuxRequestHandle>,
+) -> Result<(), String> {
+    let Some(request) = xmux_request.as_ref() else {
+        return Ok(());
+    };
+    if request.use_for_packet_up_post() {
+        return Ok(());
+    }
+
+    let replacement = open_xhttp_h3_proxy_client(proxy, endpoint, mark).await?;
+    *client = replacement.client;
+    if let Some(new_connection) = replacement.connection {
+        if let Some(old_connection) = connection.replace(new_connection) {
+            old_connection
+                .close(b"resident xhttp h3 packet-up client replaced")
+                .await;
+        }
+    }
+    *xmux_request = replacement
+        .xmux_lease
+        .as_ref()
+        .map(XhttpXmuxClientLease::request_handle);
+    drop(replacement.xmux_lease);
+    Ok(())
+}
+
 pub(crate) async fn send_xhttp_packet_up_request(
     upload: &mut XhttpUploadClient,
     session_id: &str,
@@ -1065,20 +2012,46 @@ pub(crate) async fn send_xhttp_packet_up_request(
             .await
         }
         XhttpUploadClient::H2 {
-            endpoint, sender, ..
-        } => send_xhttp_h2_packet_up_request(sender, endpoint, session_id, seq, payload).await,
-        XhttpUploadClient::H3 {
+            proxy,
             endpoint,
-            connection,
+            mark,
+            mptcp,
+            sender,
+            connection_task,
+            xmux_request,
+            ..
         } => {
-            send_xhttp_h3_packet_up_request(
-                &mut connection.client,
+            refresh_xhttp_h2_packet_up_client_if_needed(
+                proxy,
                 endpoint,
-                session_id,
-                seq,
-                payload,
+                *mark,
+                *mptcp,
+                sender,
+                connection_task,
+                xmux_request,
             )
-            .await
+            .await?;
+            send_xhttp_h2_packet_up_request(sender, endpoint, session_id, seq, payload).await
+        }
+        XhttpUploadClient::H3 {
+            proxy,
+            endpoint,
+            mark,
+            client,
+            connection,
+            xmux_request,
+            ..
+        } => {
+            refresh_xhttp_h3_packet_up_client_if_needed(
+                proxy,
+                endpoint,
+                *mark,
+                client,
+                connection,
+                xmux_request,
+            )
+            .await?;
+            send_xhttp_h3_packet_up_request(client, endpoint, session_id, seq, payload).await
         }
     }
 }
@@ -1205,12 +2178,24 @@ pub(crate) async fn close_xhttp_upload_client(upload: XhttpUploadClient) {
     match upload {
         XhttpUploadClient::H1 { .. } => {}
         XhttpUploadClient::H2 {
-            connection_task, ..
+            connection_task,
+            xmux_lease,
+            ..
         } => {
-            connection_task.abort();
+            if let Some(task) = connection_task {
+                task.abort();
+            }
+            drop(xmux_lease);
         }
-        XhttpUploadClient::H3 { connection, .. } => {
-            connection.close(b"resident xhttp upload done").await;
+        XhttpUploadClient::H3 {
+            connection,
+            xmux_lease,
+            ..
+        } => {
+            if let Some(connection) = connection {
+                connection.close(b"resident xhttp upload done").await;
+            }
+            drop(xmux_lease);
         }
     }
 }
@@ -1221,16 +2206,24 @@ pub(crate) async fn close_xhttp_download_client(download: XhttpDownloadClient) {
             body.shutdown().await;
         }
         XhttpDownloadClient::H2 {
-            connection_task, ..
+            connection_task,
+            xmux_lease,
+            ..
         } => {
             if let Some(task) = connection_task {
                 task.abort();
             }
+            drop(xmux_lease);
         }
-        XhttpDownloadClient::H3 { connection, .. } => {
+        XhttpDownloadClient::H3 {
+            connection,
+            xmux_lease,
+            ..
+        } => {
             if let Some(connection) = connection {
                 connection.close(b"resident xhttp download done").await;
             }
+            drop(xmux_lease);
         }
         XhttpDownloadClient::H3Shared { .. } => {}
     }
@@ -1468,6 +2461,7 @@ pub(crate) async fn close_xhttp_stream_upload_client(mut upload: XhttpStreamUplo
         XhttpStreamUploadClient::H2 {
             upload_response_task,
             connection_task,
+            xmux_lease,
             ..
         } => {
             if let Some(task) = upload_response_task.take() {
@@ -1476,20 +2470,35 @@ pub(crate) async fn close_xhttp_stream_upload_client(mut upload: XhttpStreamUplo
             if let Some(task) = connection_task.take() {
                 task.abort();
             }
+            drop(xmux_lease.take());
         }
-        XhttpStreamUploadClient::H3 { connection, .. } => {
-            connection
-                .connection
-                .close(0_u32.into(), b"resident xhttp stream upload done");
-            connection.driver_task.abort();
-            connection.endpoint.wait_idle().await;
+        XhttpStreamUploadClient::H3 {
+            connection,
+            xmux_lease,
+            ..
+        } => {
+            if let Some(connection) = connection.take() {
+                connection
+                    .connection
+                    .close(0_u32.into(), b"resident xhttp stream upload done");
+                connection.driver_task.abort();
+                connection.endpoint.wait_idle().await;
+            }
+            drop(xmux_lease.take());
         }
-        XhttpStreamUploadClient::H3Shared { connection, .. } => {
-            connection
-                .connection
-                .close(0_u32.into(), b"resident xhttp stream-one done");
-            connection.driver_task.abort();
-            connection.endpoint.wait_idle().await;
+        XhttpStreamUploadClient::H3Shared {
+            connection,
+            xmux_lease,
+            ..
+        } => {
+            if let Some(connection) = connection.take() {
+                connection
+                    .connection
+                    .close(0_u32.into(), b"resident xhttp stream-one done");
+                connection.driver_task.abort();
+                connection.endpoint.wait_idle().await;
+            }
+            drop(xmux_lease.take());
         }
     }
 }
@@ -1974,7 +2983,9 @@ pub(crate) async fn open_xhttp_h3_download_stream(
     endpoint: &impl ResidentXhttpEndpointView,
     mut client: h3::client::SendRequest<h3_quinn::OpenStreams, Bytes>,
     session_id: &str,
+    xmux_lease: Option<&XhttpXmuxClientLease>,
 ) -> Result<h3::client::RequestStream<h3_quinn::BidiStream<Bytes>, Bytes>, String> {
+    note_xhttp_xmux_request(xmux_lease);
     let request = xhttp_h3_request(
         http::Method::GET,
         endpoint,
