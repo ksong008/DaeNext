@@ -98,6 +98,15 @@ impl UdpSessionExecutor {
         &mut self,
     ) -> Result<Option<(&'static str, UdpExchangeResult)>, String> {
         match self {
+            Self::ShadowsocksAead(session) => session
+                .poll_response()
+                .map(|response| response.map(|response| ("udp_packet_finished", response))),
+            Self::Shadowsocks2022(session) => session
+                .poll_response()
+                .map(|response| response.map(|response| ("udp_packet_finished", response))),
+            Self::Socks5(session) => session
+                .poll_response()
+                .map(|response| response.map(|response| ("udp_packet_finished", response))),
             Self::VlessVision(session) => session
                 .poll_response()
                 .await
@@ -114,16 +123,23 @@ impl UdpSessionExecutor {
                 .poll_response()
                 .await
                 .map(|response| response.map(|response| ("udp_packet_finished", response))),
-            Self::Dns
-            | Self::ShadowsocksAead(_)
-            | Self::Shadowsocks2022(_)
-            | Self::Socks5(_)
-            | Self::VmessAead(_)
-            | Self::AnyTls(_)
-            | Self::Hysteria2(_)
-            | Self::Tuic(_)
-            | Self::Juicity(_)
-            | Self::FailClosed { .. } => Ok(None),
+            Self::Hysteria2(session) => session
+                .poll_response()
+                .await
+                .map(|response| response.map(|response| ("udp_packet_finished", response))),
+            Self::Tuic(session) => session
+                .poll_response()
+                .await
+                .map(|response| response.map(|response| ("udp_packet_finished", response))),
+            Self::AnyTls(session) => session
+                .poll_response()
+                .await
+                .map(|response| response.map(|response| ("udp_packet_finished", response))),
+            Self::VmessAead(session) => session
+                .poll_response()
+                .await
+                .map(|response| response.map(|response| ("udp_packet_finished", response))),
+            Self::Dns | Self::Juicity(_) | Self::FailClosed { .. } => Ok(None),
         }
     }
 }

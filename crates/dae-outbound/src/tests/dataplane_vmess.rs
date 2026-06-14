@@ -81,6 +81,45 @@ fn vmess_aead_udp_over_tcp_session_start_uses_udp_command() {
 }
 
 #[test]
+fn vmess_aead_response_reader_from_buffer_waits_for_complete_header_and_chunk() {
+    let uuid = "7c12c745-63a5-433d-9e60-022e469b5bd4";
+    let target = "vmess-buffer-target.fixture.invalid:53";
+    let payload = b"vmess-aead-buffered-response";
+    let session = vmess::aead_udp_over_tcp_client_session_start(uuid, target, payload).unwrap();
+    let response = vmess::aead_tcp_response_packet(&session.request, payload).unwrap();
+
+    let mut input = Vec::new();
+    input.extend_from_slice(&response[..17]);
+    assert!(
+        vmess::aead_tcp_response_reader_from_buffer(&mut input, &session.request)
+            .unwrap()
+            .is_none()
+    );
+    assert_eq!(input.len(), 17);
+
+    input.extend_from_slice(&response[17..38]);
+    let mut reader = vmess::aead_tcp_response_reader_from_buffer(&mut input, &session.request)
+        .unwrap()
+        .expect("complete VMess response header should initialize the reader");
+    assert_eq!(reader.response_header_len, 38);
+    assert!(input.is_empty());
+
+    input.extend_from_slice(&response[38..40]);
+    assert_eq!(reader.try_read_chunk_from_buffer(&mut input).unwrap(), None);
+    assert!(input.is_empty());
+
+    input.extend_from_slice(&response[40..response.len() - 1]);
+    assert_eq!(reader.try_read_chunk_from_buffer(&mut input).unwrap(), None);
+
+    input.push(*response.last().unwrap());
+    assert_eq!(
+        reader.try_read_chunk_from_buffer(&mut input).unwrap(),
+        Some(payload.to_vec())
+    );
+    assert!(input.is_empty());
+}
+
+#[test]
 fn case_vmess_aead_udp_over_tcp_dataplane_echoes_payload() {
     let uuid = "7c12c745-63a5-433d-9e60-022e469b5bd4";
     let target = "1.2.3.4:53";

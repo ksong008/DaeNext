@@ -10,12 +10,12 @@ pub(super) struct DatagramRelay {
 }
 
 impl DatagramRelay {
-    pub(super) async fn exchange(
+    pub(super) async fn send(
         &mut self,
         proxy: &ResidentProxyPlan,
         request: &[u8],
         label: &str,
-    ) -> Result<Vec<u8>, String> {
+    ) -> Result<(), String> {
         self.ensure_open(proxy).await?;
         let remote = self
             .remote
@@ -28,16 +28,31 @@ impl DatagramRelay {
             .send_to(request, remote)
             .await
             .map_err(|err| format!("send {label} UDP datagram: {err}"))?;
+        Ok(())
+    }
+
+    pub(super) fn poll_response(&self, label: &str) -> Result<Option<Vec<u8>>, String> {
+        let Some(socket) = self.socket.as_ref() else {
+            return Ok(None);
+        };
         let mut response = vec![0_u8; 64 * 1024];
-        let (read, _) = time::timeout(
-            RESIDENT_UDP_RESPONSE_TIMEOUT,
-            socket.recv_from(&mut response),
-        )
-        .await
-        .map_err(|_| format!("receive {label} UDP datagram timeout"))?
-        .map_err(|err| format!("receive {label} UDP datagram: {err}"))?;
-        response.truncate(read);
-        Ok(response)
+        match socket.try_recv_from(&mut response) {
+            Ok((read, _)) => {
+                response.truncate(read);
+                Ok(Some(response))
+            }
+            Err(err)
+                if matches!(
+                    err.kind(),
+                    std::io::ErrorKind::WouldBlock
+                        | std::io::ErrorKind::Interrupted
+                        | std::io::ErrorKind::TimedOut
+                ) =>
+            {
+                Ok(None)
+            }
+            Err(err) => Err(format!("receive {label} UDP datagram: {err}")),
+        }
     }
 
     async fn ensure_open(&mut self, proxy: &ResidentProxyPlan) -> Result<(), String> {

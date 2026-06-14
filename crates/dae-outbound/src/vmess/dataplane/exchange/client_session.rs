@@ -98,6 +98,14 @@ impl VMessAeadTcpResponseReader {
             .await
             .map(|(payload, _)| payload)
     }
+
+    pub fn try_read_chunk_from_buffer(
+        &mut self,
+        input: &mut Vec<u8>,
+    ) -> Result<Option<Vec<u8>>, OutboundError> {
+        self.codec
+            .try_open_chunk_from_buffer(input, &mut self.pending_chunk)
+    }
 }
 
 pub fn aead_tcp_response_reader_from_stream<S>(
@@ -116,6 +124,7 @@ where
     Ok(VMessAeadTcpResponseReader {
         response_header_len,
         codec,
+        pending_chunk: None,
     })
 }
 
@@ -135,5 +144,13 @@ where
     Ok(VMessAeadTcpResponseReader {
         response_header_len,
         codec,
+        pending_chunk: None,
     })
+}
+
+pub fn aead_tcp_response_reader_from_buffer(
+    input: &mut Vec<u8>,
+    request: &VMessAeadTcpRequest,
+) -> Result<Option<VMessAeadTcpResponseReader>, OutboundError> {
+    try_aead_tcp_response_reader_from_buffer(input, request)
 }

@@ -305,6 +305,7 @@ pub struct VMessAeadTcpUploadCodec {
 pub struct VMessAeadTcpResponseReader {
     pub response_header_len: usize,
     pub(super) codec: BodyCodec,
+    pub(super) pending_chunk: Option<PendingOpenChunk>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]

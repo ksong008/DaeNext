@@ -61,12 +61,30 @@ impl ShadowsocksAeadDatagramSession {
             payload,
         )
         .map_err(|err| format!("encode Shadowsocks UDP packet: {err}"))?;
-        let response = self.relay.exchange(proxy, &request, "Shadowsocks").await?;
+        self.relay.send(proxy, &request, "Shadowsocks").await?;
+        if let Some(response) = self.poll_response()? {
+            return Ok(response);
+        }
+        Ok(self.pending_response_result())
+    }
+
+    fn poll_response(&mut self) -> Result<Option<UdpExchangeResult>, String> {
+        let Some(response) = self.relay.poll_response("Shadowsocks")? else {
+            return Ok(None);
+        };
         let decoded = decode_shadowsocks_udp_packet(&self.cipher, &self.password, &response)
             .map_err(|err| format!("decode Shadowsocks UDP packet: {err}"))?;
-        Ok(UdpExchangeResult::new(decoded.payload, "udp-datagram-aead")
+        Ok(Some(
+            UdpExchangeResult::new(decoded.payload, "udp-datagram-aead")
+                .with_session_executor("tokio-datagram-relay")
+                .with_underlay_reuse("udp-socket-reused"),
+        ))
+    }
+
+    fn pending_response_result(&self) -> UdpExchangeResult {
+        UdpExchangeResult::pending_response("udp-datagram-aead")
             .with_session_executor("tokio-datagram-relay")
-            .with_underlay_reuse("udp-socket-reused"))
+            .with_underlay_reuse("udp-socket-reused")
     }
 }
 
@@ -123,22 +141,37 @@ impl Shadowsocks2022DatagramSession {
                 },
             )
             .map_err(|err| format!("encode Shadowsocks 2022 UDP packet: {err}"))?;
-        let response = self
-            .relay
-            .exchange(proxy, &request.wire, "Shadowsocks 2022")
+        self.relay
+            .send(proxy, &request.wire, "Shadowsocks 2022")
             .await?;
+        if let Some(response) = self.poll_response()? {
+            return Ok(response);
+        }
+        Ok(self.pending_response_result())
+    }
+
+    fn poll_response(&mut self) -> Result<Option<UdpExchangeResult>, String> {
+        let Some(response) = self.relay.poll_response("Shadowsocks 2022")? else {
+            return Ok(None);
+        };
+        let codec = self
+            .codec
+            .as_mut()
+            .ok_or_else(|| "Shadowsocks 2022 UDP codec is not initialized".to_owned())?;
         let decoded = codec
             .decode_server_packet(&response, ss2022_udp_unix_timestamp_now())
             .map_err(|err| format!("decode Shadowsocks 2022 UDP packet: {err}"))?;
-        Ok(UdpExchangeResult::new(
-            decoded.payload,
-            "udp-datagram-aead-2022",
-        ))
-        .map(|response| {
-            response
+        Ok(Some(
+            UdpExchangeResult::new(decoded.payload, "udp-datagram-aead-2022")
                 .with_session_executor("tokio-datagram-relay")
-                .with_underlay_reuse("udp-socket-and-codec-session-reused")
-        })
+                .with_underlay_reuse("udp-socket-and-codec-session-reused"),
+        ))
+    }
+
+    fn pending_response_result(&self) -> UdpExchangeResult {
+        UdpExchangeResult::pending_response("udp-datagram-aead-2022")
+            .with_session_executor("tokio-datagram-relay")
+            .with_underlay_reuse("udp-socket-and-codec-session-reused")
     }
 }
 
@@ -170,26 +203,44 @@ impl Socks5UdpAssociateSession {
             .send_to(&request, relay_addr)
             .await
             .map_err(|err| format!("send SOCKS5 UDP datagram: {err}"))?;
+        if let Some(response) = self.poll_response()? {
+            return Ok(response);
+        }
+        Ok(self.pending_response_result())
+    }
+
+    fn poll_response(&mut self) -> Result<Option<UdpExchangeResult>, String> {
+        let relay = match self.relay.as_ref() {
+            Some(relay) => relay,
+            None => return Ok(None),
+        };
         let mut response = vec![0_u8; 64 * 1024];
-        let (read, _) = time::timeout(
-            RESIDENT_UDP_RESPONSE_TIMEOUT,
-            relay.recv_from(&mut response),
-        )
-        .await
-        .map_err(|_| "receive SOCKS5 UDP datagram timeout".to_owned())?
-        .map_err(|err| format!("receive SOCKS5 UDP datagram: {err}"))?;
+        let (read, _) = match relay.try_recv_from(&mut response) {
+            Ok(read) => read,
+            Err(err)
+                if matches!(
+                    err.kind(),
+                    ErrorKind::WouldBlock | ErrorKind::Interrupted | ErrorKind::TimedOut
+                ) =>
+            {
+                return Ok(None);
+            }
+            Err(err) => return Err(format!("receive SOCKS5 UDP datagram: {err}")),
+        };
         response.truncate(read);
         let decoded = udp_packet::unwrap(&response)
             .map_err(|err| format!("unwrap SOCKS5 UDP packet: {err}"))?;
-        Ok(UdpExchangeResult::new(
-            decoded.payload,
-            "socks5-udp-associate",
-        ))
-        .map(|response| {
-            response
+        Ok(Some(
+            UdpExchangeResult::new(decoded.payload, "socks5-udp-associate")
                 .with_session_executor("tokio-socks5-udp-associate")
-                .with_underlay_reuse("tcp-control-and-udp-relay-reused")
-        })
+                .with_underlay_reuse("tcp-control-and-udp-relay-reused"),
+        ))
+    }
+
+    fn pending_response_result(&self) -> UdpExchangeResult {
+        UdpExchangeResult::pending_response("socks5-udp-associate")
+            .with_session_executor("tokio-socks5-udp-associate")
+            .with_underlay_reuse("tcp-control-and-udp-relay-reused")
     }
 
     async fn ensure_open(&mut self, proxy: &ResidentProxyPlan) -> Result<(), String> {
@@ -874,11 +925,138 @@ mod trojan_udp_stream_tests {
     }
 }
 
+#[cfg(test)]
+mod datagram_udp_pending_tests {
+    use super::*;
+
+    #[test]
+    fn shadowsocks_datagram_pending_result_does_not_forward_empty_reply() {
+        let session = ShadowsocksAeadDatagramSession::new(
+            "aes-128-gcm".to_owned(),
+            "password".to_owned(),
+            16,
+        );
+        let pending = session.pending_response_result();
+        assert!(!pending.reply_forwarded);
+        assert!(pending.payload.is_empty());
+        assert_eq!(pending.execution_label, "udp-datagram-aead");
+        assert_eq!(pending.session_executor, Some("tokio-datagram-relay"));
+        assert_eq!(pending.underlay_reuse, Some("udp-socket-reused"));
+    }
+
+    #[test]
+    fn shadowsocks_2022_datagram_pending_result_does_not_forward_empty_reply() {
+        let session = Shadowsocks2022DatagramSession::new(
+            "2022-blake3-aes-128-gcm".to_owned(),
+            "password".to_owned(),
+            16,
+        );
+        let pending = session.pending_response_result();
+        assert!(!pending.reply_forwarded);
+        assert!(pending.payload.is_empty());
+        assert_eq!(pending.execution_label, "udp-datagram-aead-2022");
+        assert_eq!(pending.session_executor, Some("tokio-datagram-relay"));
+        assert_eq!(
+            pending.underlay_reuse,
+            Some("udp-socket-and-codec-session-reused")
+        );
+    }
+
+    #[test]
+    fn socks5_datagram_pending_result_does_not_forward_empty_reply() {
+        let session = Socks5UdpAssociateSession::default();
+        let pending = session.pending_response_result();
+        assert!(!pending.reply_forwarded);
+        assert!(pending.payload.is_empty());
+        assert_eq!(pending.execution_label, "socks5-udp-associate");
+        assert_eq!(pending.session_executor, Some("tokio-socks5-udp-associate"));
+        assert_eq!(
+            pending.underlay_reuse,
+            Some("tcp-control-and-udp-relay-reused")
+        );
+    }
+
+    #[test]
+    fn quic_datagram_pending_results_do_not_forward_empty_reply() {
+        let hysteria2 =
+            Hysteria2QuicDatagramSession::new("auth".to_owned(), String::new(), 0, Vec::new())
+                .pending_response_result();
+        assert!(!hysteria2.reply_forwarded);
+        assert!(hysteria2.payload.is_empty());
+        assert_eq!(hysteria2.execution_label, "quic-udp-datagram");
+        assert_eq!(hysteria2.quic_underlay, Some("quinn-h3"));
+        assert_eq!(
+            hysteria2.underlay_reuse,
+            Some("quic-endpoint-and-connection-reused")
+        );
+
+        let tuic = TuicQuicDatagramSession::new(
+            "uuid".to_owned(),
+            "password".to_owned(),
+            Vec::new(),
+            true,
+        )
+        .pending_response_result();
+        assert!(!tuic.reply_forwarded);
+        assert!(tuic.payload.is_empty());
+        assert_eq!(tuic.execution_label, "quic-udp-datagram");
+        assert_eq!(tuic.quic_underlay, Some("quinn"));
+        assert_eq!(
+            tuic.underlay_reuse,
+            Some("quic-endpoint-and-connection-reused")
+        );
+    }
+}
+
+#[cfg(test)]
+mod anytls_udp_stream_tests {
+    use super::*;
+
+    #[test]
+    fn anytls_udp_stream_pending_result_does_not_forward_empty_reply() {
+        let session = AnyTlsPacketStreamSession::new("auth".to_owned());
+        let pending = session.pending_response_result();
+        assert!(!pending.reply_forwarded);
+        assert!(pending.payload.is_empty());
+        assert_eq!(pending.execution_label, "frame-tls-udp-packet-stream");
+        assert_eq!(pending.session_executor, Some("tokio-stream-session"));
+        assert_eq!(pending.underlay_reuse, Some("tls-frame-stream-reused"));
+    }
+
+    #[test]
+    fn anytls_udp_stream_pops_concatenated_response_frames() {
+        let first = anytls_link::frame(
+            anytls_contract::CMD_PSH,
+            1,
+            &anytls_link::packet_next_write(b"one"),
+        );
+        let second = anytls_link::frame(
+            anytls_contract::CMD_PSH,
+            1,
+            &anytls_link::packet_next_write(b"two"),
+        );
+        let mut session = AnyTlsPacketStreamSession::new("auth".to_owned());
+        session.response_plaintext.extend_from_slice(&first);
+        session.response_plaintext.extend_from_slice(&second);
+
+        assert_eq!(
+            session.try_pop_response_payload().unwrap(),
+            Some(b"one".to_vec())
+        );
+        assert_eq!(
+            session.try_pop_response_payload().unwrap(),
+            Some(b"two".to_vec())
+        );
+        assert_eq!(session.try_pop_response_payload().unwrap(), None);
+    }
+}
+
 pub(super) struct AnyTlsPacketStreamSession {
     auth: String,
     client: Option<AsyncResidentTlsClient>,
     opened: bool,
     tls_underlay: Option<&'static str>,
+    response_plaintext: Vec<u8>,
 }
 
 impl AnyTlsPacketStreamSession {
@@ -888,6 +1066,7 @@ impl AnyTlsPacketStreamSession {
             client: None,
             opened: false,
             tls_underlay: None,
+            response_plaintext: Vec::new(),
         }
     }
 
@@ -954,13 +1133,99 @@ impl AnyTlsPacketStreamSession {
             wait_anytls_udp_synack_async(client).await?;
             self.opened = true;
         }
-        let response = read_anytls_udp_payload_async(client).await?;
-        Ok(
-            UdpExchangeResult::new(response, "frame-tls-udp-packet-stream")
-                .with_tls_underlay(self.tls_underlay.unwrap_or("standard-tls"))
-                .with_session_executor("tokio-stream-session")
-                .with_underlay_reuse("tls-frame-stream-reused"),
+        if let Some(response) = self.poll_response().await? {
+            return Ok(response);
+        }
+        Ok(self.pending_response_result())
+    }
+
+    async fn poll_response(&mut self) -> Result<Option<UdpExchangeResult>, String> {
+        if let Some(payload) = self.try_pop_response_payload()? {
+            return Ok(Some(self.response_result(payload)));
+        }
+        let Some(client) = self.client.as_mut() else {
+            return Ok(None);
+        };
+        let mut buf = [0_u8; 2048];
+        let mut read_buf = ReadBuf::new(&mut buf);
+        let read = poll_fn(
+            |cx| match Pin::new(&mut *client).poll_read(cx, &mut read_buf) {
+                Poll::Ready(Ok(())) => Poll::Ready(Ok(Some(read_buf.filled().len()))),
+                Poll::Ready(Err(err)) => Poll::Ready(Err(err)),
+                Poll::Pending => Poll::Ready(Ok(None)),
+            },
         )
+        .await;
+        match read {
+            Ok(Some(0)) | Ok(None) => Ok(None),
+            Ok(Some(read)) => {
+                self.response_plaintext.extend_from_slice(&buf[..read]);
+                self.try_pop_response_payload()
+                    .map(|payload| payload.map(|payload| self.response_result(payload)))
+            }
+            Err(err)
+                if matches!(
+                    err.kind(),
+                    ErrorKind::WouldBlock | ErrorKind::TimedOut | ErrorKind::Interrupted
+                ) =>
+            {
+                Ok(None)
+            }
+            Err(err) => Err(format!("read AnyTLS UDP packet stream plaintext: {err}")),
+        }
+    }
+
+    fn try_pop_response_payload(&mut self) -> Result<Option<Vec<u8>>, String> {
+        loop {
+            if self.response_plaintext.len() < anytls_contract::HEADER_OVERHEAD_SIZE {
+                return Ok(None);
+            }
+            let header = &self.response_plaintext[..anytls_contract::HEADER_OVERHEAD_SIZE];
+            let cmd = header[0];
+            let sid = u32::from_be_bytes([header[1], header[2], header[3], header[4]]);
+            let len = u16::from_be_bytes([header[5], header[6]]) as usize;
+            let frame_len = anytls_contract::HEADER_OVERHEAD_SIZE + len;
+            if self.response_plaintext.len() < frame_len {
+                return Ok(None);
+            }
+            let data =
+                self.response_plaintext[anytls_contract::HEADER_OVERHEAD_SIZE..frame_len].to_vec();
+            self.response_plaintext.drain(..frame_len);
+            if cmd == anytls_contract::CMD_PSH && sid == 1 {
+                let packet = dae_outbound::anytls::decode_packet_next_write(&data)
+                    .map_err(|err| format!("decode AnyTLS UDP response packet: {err}"))?;
+                return Ok(Some(packet.payload));
+            }
+            if cmd == anytls_contract::CMD_ALERT {
+                return Err(format!("AnyTLS UDP alert frame: {len} bytes"));
+            }
+            if matches!(
+                cmd,
+                anytls_contract::CMD_WASTE
+                    | anytls_contract::CMD_SERVER_SETTINGS
+                    | anytls_contract::CMD_UPDATE_PADDING
+                    | anytls_contract::CMD_HEART_RESPONSE
+            ) {
+                continue;
+            }
+            return Err(format!(
+                "unexpected AnyTLS UDP response frame: cmd={cmd} sid={sid} len={len}"
+            ));
+        }
+    }
+
+    fn response_result(&self, payload: Vec<u8>) -> UdpExchangeResult {
+        UdpExchangeResult::new(payload, "frame-tls-udp-packet-stream")
+            .with_tls_underlay(self.tls_underlay.unwrap_or("standard-tls"))
+            .with_session_executor("tokio-stream-session")
+            .with_underlay_reuse("tls-frame-stream-reused")
+    }
+
+    fn pending_response_result(&self) -> UdpExchangeResult {
+        UdpExchangeResult::pending_response("frame-tls-udp-packet-stream")
+            .with_tls_underlay(self.tls_underlay.unwrap_or("standard-tls"))
+            .with_session_executor("tokio-stream-session")
+            .with_underlay_reuse("tls-frame-stream-reused")
     }
 
     async fn shutdown(&mut self) {
@@ -974,6 +1239,7 @@ impl AnyTlsPacketStreamSession {
             client.shutdown().await;
         }
         self.client.take();
+        self.response_plaintext.clear();
     }
 }
 
@@ -1021,15 +1287,42 @@ impl Hysteria2QuicDatagramSession {
         connection
             .send_datagram(Bytes::from(request))
             .map_err(|err| format!("send Hysteria2 UDP datagram: {err}"))?;
-        let response = time::timeout(RESIDENT_UDP_RESPONSE_TIMEOUT, connection.read_datagram())
-            .await
-            .map_err(|_| "read Hysteria2 UDP datagram timeout".to_owned())?
-            .map_err(|err| format!("read Hysteria2 UDP datagram: {err}"))?;
+        if let Some(response) = self.poll_response().await? {
+            return Ok(response);
+        }
+        Ok(self.pending_response_result())
+    }
+
+    async fn poll_response(&mut self) -> Result<Option<UdpExchangeResult>, String> {
+        let connection = match self.connection.as_ref() {
+            Some(connection) => connection,
+            None => return Ok(None),
+        };
+        let read = connection.read_datagram();
+        tokio::pin!(read);
+        let response = poll_fn(|cx| match read.as_mut().poll(cx) {
+            Poll::Ready(response) => Poll::Ready(Some(response)),
+            Poll::Pending => Poll::Ready(None),
+        })
+        .await;
+        let Some(response) = response else {
+            return Ok(None);
+        };
+        let response = response.map_err(|err| format!("read Hysteria2 UDP datagram: {err}"))?;
         let parsed = parse_hysteria2_udp_message(&response)?;
-        Ok(UdpExchangeResult::new(parsed.payload, "quic-udp-datagram")
+        Ok(Some(
+            UdpExchangeResult::new(parsed.payload, "quic-udp-datagram")
+                .with_quic_underlay("quinn-h3")
+                .with_session_executor("tokio-quic-datagram-session")
+                .with_underlay_reuse("quic-endpoint-and-connection-reused"),
+        ))
+    }
+
+    fn pending_response_result(&self) -> UdpExchangeResult {
+        UdpExchangeResult::pending_response("quic-udp-datagram")
             .with_quic_underlay("quinn-h3")
             .with_session_executor("tokio-quic-datagram-session")
-            .with_underlay_reuse("quic-endpoint-and-connection-reused"))
+            .with_underlay_reuse("quic-endpoint-and-connection-reused")
     }
 
     async fn ensure_open(&mut self, proxy: &ResidentProxyPlan) -> Result<(), String> {
@@ -1114,15 +1407,42 @@ impl TuicQuicDatagramSession {
         connection
             .send_datagram(Bytes::from(request))
             .map_err(|err| format!("send TUIC UDP datagram: {err}"))?;
-        let response = time::timeout(RESIDENT_UDP_RESPONSE_TIMEOUT, connection.read_datagram())
-            .await
-            .map_err(|_| "read TUIC UDP datagram timeout".to_owned())?
-            .map_err(|err| format!("read TUIC UDP datagram: {err}"))?;
+        if let Some(response) = self.poll_response().await? {
+            return Ok(response);
+        }
+        Ok(self.pending_response_result())
+    }
+
+    async fn poll_response(&mut self) -> Result<Option<UdpExchangeResult>, String> {
+        let connection = match self.connection.as_ref() {
+            Some(connection) => connection,
+            None => return Ok(None),
+        };
+        let read = connection.read_datagram();
+        tokio::pin!(read);
+        let response = poll_fn(|cx| match read.as_mut().poll(cx) {
+            Poll::Ready(response) => Poll::Ready(Some(response)),
+            Poll::Pending => Poll::Ready(None),
+        })
+        .await;
+        let Some(response) = response else {
+            return Ok(None);
+        };
+        let response = response.map_err(|err| format!("read TUIC UDP datagram: {err}"))?;
         let parsed = parse_tuic_packet_frame(&response)?;
-        Ok(UdpExchangeResult::new(parsed.payload, "quic-udp-datagram")
+        Ok(Some(
+            UdpExchangeResult::new(parsed.payload, "quic-udp-datagram")
+                .with_quic_underlay("quinn")
+                .with_session_executor("tokio-quic-datagram-session")
+                .with_underlay_reuse("quic-endpoint-and-connection-reused"),
+        ))
+    }
+
+    fn pending_response_result(&self) -> UdpExchangeResult {
+        UdpExchangeResult::pending_response("quic-udp-datagram")
             .with_quic_underlay("quinn")
             .with_session_executor("tokio-quic-datagram-session")
-            .with_underlay_reuse("quic-endpoint-and-connection-reused"))
+            .with_underlay_reuse("quic-endpoint-and-connection-reused")
     }
 
     async fn ensure_open(&mut self, proxy: &ResidentProxyPlan) -> Result<(), String> {
