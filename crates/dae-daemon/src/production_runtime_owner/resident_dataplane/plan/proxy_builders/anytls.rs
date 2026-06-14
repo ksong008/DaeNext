@@ -34,6 +34,8 @@ pub(crate) fn build_anytls_proxy_plan(
         stream_host: String::new(),
         stream_path: String::new(),
         xhttp_download: None,
+        xhttp_mode: ResidentXhttpMode::PacketUp,
+        xhttp_xmux: None,
         tls: "tls".to_owned(),
         allow_insecure,
         tls_fragment: resident_tls_fragment_plan(config)?,

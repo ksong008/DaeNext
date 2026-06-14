@@ -115,20 +115,6 @@ pub(crate) async fn handle_vless_xhttp_h2_tcp_connection_async(
     metrics: &ResidentDataplaneMetrics,
 ) -> Result<Value, String> {
     let key = selection.proxy.vless_key()?;
-    let XhttpPacketUpParts {
-        session_id,
-        mut upload,
-        mut download,
-        upload_underlay,
-        upload_http_version,
-        download_separate,
-    } = open_xhttp_packet_up_parts(&selection.proxy, selection.mark, selection.mptcp).await?;
-    let executor_label = match upload_http_version {
-        ResidentXhttpHttpVersion::H1 => "async-proxy-xhttp-h1-tls",
-        ResidentXhttpHttpVersion::H2 => "async-proxy-xhttp-h2-tls",
-        ResidentXhttpHttpVersion::H3 => "async-proxy-xhttp-h3-tls",
-    };
-    let xhttp_alpn = upload_http_version.alpn_label();
     let request = packet::first_write_bytes(
         &key,
         &selection.proxy.flow,
@@ -144,25 +130,85 @@ pub(crate) async fn handle_vless_xhttp_h2_tcp_connection_async(
     if !sniff.payload.is_empty() {
         metrics.add_upload(sniff.payload.len());
     }
-    let result = async {
-        let mut seq = 0_u64;
-        send_xhttp_packet_up_request(&mut upload, &session_id, seq, Bytes::from(request)).await?;
-        seq = seq.saturating_add(1);
-        relay_tcp_over_xhttp_packet_up(
-            inbound,
-            &mut upload,
-            &mut download,
-            &session_id,
-            seq,
-            stop,
-            initial_stats,
-            metrics,
-        )
-        .await
-    }
-    .await;
-    close_xhttp_download_client(download).await;
-    close_xhttp_upload_client(upload).await;
+    let xhttp_mode = selection.proxy.xhttp_mode;
+    let (result, upload_underlay, upload_http_version, download_separate) = match xhttp_mode {
+        ResidentXhttpMode::PacketUp => {
+            let XhttpPacketUpParts {
+                session_id,
+                mut upload,
+                mut download,
+                upload_underlay,
+                upload_http_version,
+                download_separate,
+            } = open_xhttp_packet_up_parts(&selection.proxy, selection.mark, selection.mptcp)
+                .await?;
+            let result = async {
+                let mut seq = 0_u64;
+                send_xhttp_packet_up_request(&mut upload, &session_id, seq, Bytes::from(request))
+                    .await?;
+                seq = seq.saturating_add(1);
+                relay_tcp_over_xhttp_packet_up(
+                    inbound,
+                    &mut upload,
+                    &mut download,
+                    &session_id,
+                    seq,
+                    stop,
+                    initial_stats,
+                    metrics,
+                )
+                .await
+            }
+            .await;
+            close_xhttp_download_client(download).await;
+            close_xhttp_upload_client(upload).await;
+            (
+                result,
+                upload_underlay,
+                upload_http_version,
+                download_separate,
+            )
+        }
+        ResidentXhttpMode::StreamUp | ResidentXhttpMode::StreamOne => {
+            let XhttpStreamParts {
+                session_id: _,
+                mut upload,
+                mut download,
+                upload_underlay,
+                upload_http_version,
+                download_separate,
+            } = open_xhttp_stream_parts(
+                &selection.proxy,
+                selection.mark,
+                selection.mptcp,
+                Bytes::from(request),
+            )
+            .await?;
+            let result = relay_tcp_over_xhttp_stream(
+                inbound,
+                &mut upload,
+                &mut download,
+                stop,
+                initial_stats,
+                metrics,
+            )
+            .await;
+            close_xhttp_download_client(download).await;
+            close_xhttp_stream_upload_client(upload).await;
+            (
+                result,
+                upload_underlay,
+                upload_http_version,
+                download_separate,
+            )
+        }
+    };
+    let executor_label = match upload_http_version {
+        ResidentXhttpHttpVersion::H1 => "async-proxy-xhttp-h1-tls",
+        ResidentXhttpHttpVersion::H2 => "async-proxy-xhttp-h2-tls",
+        ResidentXhttpHttpVersion::H3 => "async-proxy-xhttp-h3-tls",
+    };
+    let xhttp_alpn = upload_http_version.alpn_label();
 
     result
         .map(|stats| {
@@ -177,7 +223,7 @@ pub(crate) async fn handle_vless_xhttp_h2_tcp_connection_async(
             );
             event["tls_underlay"] = json!(upload_underlay);
             event["stream_wrapper"] = json!("xhttp");
-            event["xhttp_mode"] = json!("packet-up");
+            event["xhttp_mode"] = json!(xhttp_mode.as_str());
             event["xhttp_alpn"] = json!(xhttp_alpn);
             event["xhttp_download_separate"] = json!(download_separate);
             append_proxy_tcp_execution_fields(
@@ -201,7 +247,7 @@ pub(crate) async fn handle_vless_xhttp_h2_tcp_connection_async(
             );
             event["tls_underlay"] = json!(upload_underlay);
             event["stream_wrapper"] = json!("xhttp");
-            event["xhttp_mode"] = json!("packet-up");
+            event["xhttp_mode"] = json!(xhttp_mode.as_str());
             event["xhttp_alpn"] = json!(xhttp_alpn);
             event["xhttp_download_separate"] = json!(download_separate);
             append_proxy_tcp_execution_fields(

@@ -80,7 +80,7 @@ use super::events::append_event;
 use super::execution::{append_runtime_execution_descriptor, tcp_execution_descriptor};
 use super::plan::{
     ResidentProxyGroupPlan, ResidentProxyPlan, ResidentProxyProtocolPlan,
-    ResidentXhttpEndpointPlan, ResidentXhttpHttpVersion,
+    ResidentXhttpEndpointPlan, ResidentXhttpHttpVersion, ResidentXhttpMode,
 };
 use super::vision::{
     VisionInnerTlsState, VisionUnpadder, VisionUplinkMode, drain_vision_uplink_async,
@@ -130,10 +130,12 @@ use self::vmess_handlers::*;
 mod transport_helpers;
 use self::transport_helpers::*;
 pub(crate) use self::transport_helpers::{
-    GrpcHunkReadBuffer, XhttpDownloadClient, XhttpPacketUpParts, XhttpUploadClient,
-    close_xhttp_download_client, close_xhttp_upload_client, collect_vmess_grpc_decrypted,
-    decode_vmess_grpc_response_stream_async, open_xhttp_packet_up_parts, poll_xhttp_download_data,
-    relay_tcp_over_xhttp_packet_up, send_grpc_hunk, send_h2_data, send_xhttp_packet_up_request,
+    GrpcHunkReadBuffer, XhttpDownloadClient, XhttpPacketUpParts, XhttpStreamParts,
+    XhttpStreamUploadClient, XhttpUploadClient, close_xhttp_download_client,
+    close_xhttp_stream_upload_client, close_xhttp_upload_client, collect_vmess_grpc_decrypted,
+    decode_vmess_grpc_response_stream_async, open_xhttp_packet_up_parts, open_xhttp_stream_parts,
+    poll_xhttp_download_data, relay_tcp_over_xhttp_packet_up, relay_tcp_over_xhttp_stream,
+    send_grpc_hunk, send_h2_data, send_xhttp_packet_up_request, send_xhttp_stream_data,
 };
 mod stream_helpers;
 use self::stream_helpers::*;

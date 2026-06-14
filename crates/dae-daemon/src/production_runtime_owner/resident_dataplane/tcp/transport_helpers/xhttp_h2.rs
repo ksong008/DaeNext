@@ -4,6 +4,7 @@ use quinn::crypto::rustls::QuicClientConfig;
 use rustls::client::danger::{HandshakeSignatureValid, ServerCertVerified, ServerCertVerifier};
 use rustls::pki_types::{CertificateDer, ServerName, UnixTime};
 use rustls::{DigitallySignedStruct, RootCertStore, SignatureScheme};
+use tokio::io::AsyncWrite;
 
 pub(crate) trait ResidentXhttpEndpointView {
     fn server_name(&self) -> &str;
@@ -48,6 +49,15 @@ pub(crate) struct XhttpPacketUpParts {
     pub(crate) download_separate: bool,
 }
 
+pub(crate) struct XhttpStreamParts {
+    pub(crate) session_id: Option<String>,
+    pub(crate) upload: XhttpStreamUploadClient,
+    pub(crate) download: XhttpDownloadClient,
+    pub(crate) upload_underlay: &'static str,
+    pub(crate) upload_http_version: ResidentXhttpHttpVersion,
+    pub(crate) download_separate: bool,
+}
+
 pub(crate) enum XhttpUploadClient {
     H1 {
         proxy: Box<ResidentProxyPlan>,
@@ -66,6 +76,36 @@ pub(crate) enum XhttpUploadClient {
     },
 }
 
+pub(crate) enum XhttpStreamUploadClient {
+    H1 {
+        writer: XhttpH1ChunkedWriter,
+    },
+    H2 {
+        send_stream: h2::SendStream<Bytes>,
+        upload_response_task: Option<tokio::task::JoinHandle<()>>,
+        connection_task: Option<tokio::task::JoinHandle<()>>,
+    },
+    H3 {
+        stream: h3::client::RequestStream<h3_quinn::BidiStream<Bytes>, Bytes>,
+        connection: XhttpH3Connection,
+    },
+    H3Shared {
+        stream:
+            Arc<tokio::sync::Mutex<h3::client::RequestStream<h3_quinn::BidiStream<Bytes>, Bytes>>>,
+        connection: XhttpH3Connection,
+    },
+}
+
+pub(crate) struct XhttpH1ChunkedWriter {
+    writer: XhttpH1ChunkedWriterInner,
+    finished: bool,
+}
+
+enum XhttpH1ChunkedWriterInner {
+    Client(AsyncResidentTlsClient),
+    WriteHalf(tokio::io::WriteHalf<AsyncResidentTlsClient>),
+}
+
 pub(crate) enum XhttpDownloadClient {
     H1 {
         body: XhttpH1DownloadBody,
@@ -79,6 +119,10 @@ pub(crate) enum XhttpDownloadClient {
         recv: h3::client::RequestStream<h3_quinn::BidiStream<Bytes>, Bytes>,
         connection: Option<XhttpH3Connection>,
     },
+    H3Shared {
+        stream:
+            Arc<tokio::sync::Mutex<h3::client::RequestStream<h3_quinn::BidiStream<Bytes>, Bytes>>>,
+    },
 }
 
 pub(crate) struct XhttpH3Connection {
@@ -89,9 +133,14 @@ pub(crate) struct XhttpH3Connection {
 }
 
 pub(crate) struct XhttpH1DownloadBody {
-    client: AsyncResidentTlsClient,
+    reader: XhttpH1BodyReader,
     buffer: VecDeque<u8>,
     state: XhttpH1BodyState,
+}
+
+pub(crate) enum XhttpH1BodyReader {
+    Client(AsyncResidentTlsClient),
+    ReadHalf(tokio::io::ReadHalf<AsyncResidentTlsClient>),
 }
 
 #[derive(Debug)]
@@ -407,6 +456,335 @@ pub(crate) async fn open_xhttp_packet_up_parts(
     }
 }
 
+pub(crate) async fn open_xhttp_stream_parts(
+    proxy: &ResidentProxyPlan,
+    mark: u32,
+    mptcp: bool,
+    initial_payload: Bytes,
+) -> Result<XhttpStreamParts, String> {
+    match proxy.xhttp_mode {
+        ResidentXhttpMode::PacketUp => {
+            Err("xHTTP stream parts cannot be opened for packet-up mode".to_owned())
+        }
+        ResidentXhttpMode::StreamOne => {
+            open_xhttp_stream_one_parts(proxy, mark, mptcp, initial_payload).await
+        }
+        ResidentXhttpMode::StreamUp => {
+            open_xhttp_stream_up_parts(proxy, mark, mptcp, initial_payload).await
+        }
+    }
+}
+
+async fn open_xhttp_stream_one_parts(
+    proxy: &ResidentProxyPlan,
+    mark: u32,
+    mptcp: bool,
+    initial_payload: Bytes,
+) -> Result<XhttpStreamParts, String> {
+    let endpoint = ResidentXhttpEndpointPlan::from_proxy(proxy);
+    let upload_http_version = if proxy.tls == "reality" {
+        ResidentXhttpHttpVersion::H2
+    } else {
+        endpoint.http_version()
+    };
+    match upload_http_version {
+        ResidentXhttpHttpVersion::H1 => {
+            let mut client = open_async_vless_tls_client_with_flow(proxy, mark, mptcp).await?;
+            let upload_underlay = async_tls_underlay_name(&client);
+            write_xhttp_h1_chunked_request_head(&mut client, &endpoint, "", "stream-one").await?;
+            write_xhttp_h1_chunk(&mut client, &initial_payload, false, "stream-one").await?;
+            let (mut reader, writer) = tokio::io::split(client);
+            let response = read_xhttp_h1_response_head(&mut reader, "stream-one").await?;
+            if !(200..300).contains(&response.status) {
+                return Err(format!(
+                    "xHTTP HTTP/1.1 stream-one response status {}",
+                    response.status
+                ));
+            }
+            Ok(XhttpStreamParts {
+                session_id: None,
+                upload: XhttpStreamUploadClient::H1 {
+                    writer: XhttpH1ChunkedWriter::from_write_half(writer),
+                },
+                download: XhttpDownloadClient::H1 {
+                    body: XhttpH1DownloadBody::new_with_read_half(
+                        reader,
+                        response.headers,
+                        response.body_prefix,
+                    ),
+                },
+                upload_underlay,
+                upload_http_version,
+                download_separate: false,
+            })
+        }
+        ResidentXhttpHttpVersion::H2 => {
+            let client = open_async_vless_tls_client_with_flow(proxy, mark, mptcp).await?;
+            let upload_underlay = async_tls_underlay_name(&client);
+            let (mut sender, connection_task) = open_xhttp_h2_sender(client).await?;
+            let request = xhttp_h2_request(http::Method::POST, &endpoint, "", true)?;
+            let (response, mut send_stream) = sender
+                .send_request(request, false)
+                .map_err(|err| format!("send xHTTP HTTP/2 stream-one request headers: {err}"))?;
+            send_h2_data_with_context(
+                &mut send_stream,
+                initial_payload,
+                false,
+                "xHTTP HTTP/2 stream-one",
+            )
+            .await?;
+            let response = time::timeout(RESIDENT_CONNECT_TIMEOUT, response)
+                .await
+                .map_err(|_| "xHTTP HTTP/2 stream-one response headers timeout".to_owned())?
+                .map_err(|err| format!("read xHTTP HTTP/2 stream-one response headers: {err}"))?;
+            if !response.status().is_success() {
+                return Err(format!(
+                    "xHTTP HTTP/2 stream-one response status {}",
+                    response.status()
+                ));
+            }
+            Ok(XhttpStreamParts {
+                session_id: None,
+                upload: XhttpStreamUploadClient::H2 {
+                    send_stream,
+                    upload_response_task: None,
+                    connection_task: None,
+                },
+                download: XhttpDownloadClient::H2 {
+                    recv: response.into_body(),
+                    _keepalive_sender: Some(sender),
+                    connection_task: Some(connection_task),
+                },
+                upload_underlay,
+                upload_http_version,
+                download_separate: false,
+            })
+        }
+        ResidentXhttpHttpVersion::H3 => {
+            let mut connection = open_xhttp_h3_connection(&endpoint, mark).await?;
+            let request = xhttp_h3_request(http::Method::POST, &endpoint, "", true)?;
+            let mut stream = time::timeout(
+                RESIDENT_CONNECT_TIMEOUT,
+                connection.client.send_request(request),
+            )
+            .await
+            .map_err(|_| "xHTTP H3 stream-one request timeout".to_owned())?
+            .map_err(|err| format!("send xHTTP H3 stream-one request: {err:?}"))?;
+            time::timeout(RESIDENT_CONNECT_TIMEOUT, stream.send_data(initial_payload))
+                .await
+                .map_err(|_| "send xHTTP H3 stream-one body timeout".to_owned())?
+                .map_err(|err| format!("send xHTTP H3 stream-one body: {err:?}"))?;
+            let response = time::timeout(RESIDENT_CONNECT_TIMEOUT, stream.recv_response())
+                .await
+                .map_err(|_| "xHTTP H3 stream-one response timeout".to_owned())?
+                .map_err(|err| format!("recv xHTTP H3 stream-one response: {err:?}"))?;
+            if !response.status().is_success() {
+                return Err(format!(
+                    "xHTTP H3 stream-one response status {}",
+                    response.status()
+                ));
+            }
+            let shared = Arc::new(tokio::sync::Mutex::new(stream));
+            Ok(XhttpStreamParts {
+                session_id: None,
+                upload: XhttpStreamUploadClient::H3Shared {
+                    stream: Arc::clone(&shared),
+                    connection,
+                },
+                download: XhttpDownloadClient::H3Shared { stream: shared },
+                upload_underlay: "quinn-h3",
+                upload_http_version,
+                download_separate: false,
+            })
+        }
+    }
+}
+
+async fn open_xhttp_stream_up_parts(
+    proxy: &ResidentProxyPlan,
+    mark: u32,
+    mptcp: bool,
+    initial_payload: Bytes,
+) -> Result<XhttpStreamParts, String> {
+    let session_id = new_xhttp_session_id();
+    let upload_endpoint = ResidentXhttpEndpointPlan::from_proxy(proxy);
+    let download_endpoint = proxy
+        .xhttp_download
+        .clone()
+        .unwrap_or_else(|| upload_endpoint.clone());
+    let download_separate = proxy.xhttp_download.is_some();
+    let upload_http_version = if proxy.tls == "reality" {
+        ResidentXhttpHttpVersion::H2
+    } else {
+        upload_endpoint.http_version()
+    };
+    let download = open_xhttp_download_client(
+        proxy,
+        &download_endpoint,
+        mark,
+        mptcp,
+        &session_id,
+        download_separate,
+    )
+    .await?;
+    let (upload, upload_underlay) = open_xhttp_stream_upload_client(
+        proxy,
+        &upload_endpoint,
+        upload_http_version,
+        mark,
+        mptcp,
+        &session_id,
+        initial_payload,
+    )
+    .await?;
+    Ok(XhttpStreamParts {
+        session_id: Some(session_id),
+        upload,
+        download,
+        upload_underlay,
+        upload_http_version,
+        download_separate,
+    })
+}
+
+async fn open_xhttp_download_client(
+    proxy: &ResidentProxyPlan,
+    endpoint: &ResidentXhttpEndpointPlan,
+    mark: u32,
+    mptcp: bool,
+    session_id: &str,
+    separate_endpoint: bool,
+) -> Result<XhttpDownloadClient, String> {
+    match endpoint.http_version() {
+        ResidentXhttpHttpVersion::H1 => {
+            let body = open_xhttp_h1_download_stream(
+                proxy,
+                endpoint,
+                mark,
+                mptcp,
+                session_id,
+                separate_endpoint,
+            )
+            .await?;
+            Ok(XhttpDownloadClient::H1 { body })
+        }
+        ResidentXhttpHttpVersion::H2 => {
+            let mut endpoint_sender = if separate_endpoint {
+                open_xhttp_h2_endpoint_sender(endpoint, mark, mptcp).await?
+            } else {
+                let client = open_async_vless_tls_client_with_flow(proxy, mark, mptcp).await?;
+                let (sender, connection_task) = open_xhttp_h2_sender(client).await?;
+                XhttpH2EndpointSender {
+                    sender,
+                    connection_task,
+                }
+            };
+            let recv =
+                open_xhttp_h2_download_stream(&mut endpoint_sender.sender, endpoint, session_id)
+                    .await?;
+            Ok(XhttpDownloadClient::H2 {
+                recv,
+                _keepalive_sender: Some(endpoint_sender.sender),
+                connection_task: Some(endpoint_sender.connection_task),
+            })
+        }
+        ResidentXhttpHttpVersion::H3 => {
+            let connection = open_xhttp_h3_connection(endpoint, mark).await?;
+            let recv =
+                open_xhttp_h3_download_stream(endpoint, connection.client.clone(), session_id)
+                    .await?;
+            Ok(XhttpDownloadClient::H3 {
+                recv,
+                connection: Some(connection),
+            })
+        }
+    }
+}
+
+async fn open_xhttp_stream_upload_client(
+    proxy: &ResidentProxyPlan,
+    endpoint: &ResidentXhttpEndpointPlan,
+    upload_http_version: ResidentXhttpHttpVersion,
+    mark: u32,
+    mptcp: bool,
+    session_id: &str,
+    initial_payload: Bytes,
+) -> Result<(XhttpStreamUploadClient, &'static str), String> {
+    match upload_http_version {
+        ResidentXhttpHttpVersion::H1 => {
+            let mut client = open_async_vless_tls_client_with_flow(proxy, mark, mptcp).await?;
+            let upload_underlay = async_tls_underlay_name(&client);
+            write_xhttp_h1_chunked_request_head(&mut client, endpoint, session_id, "stream-up")
+                .await?;
+            write_xhttp_h1_chunk(&mut client, &initial_payload, false, "stream-up").await?;
+            Ok((
+                XhttpStreamUploadClient::H1 {
+                    writer: XhttpH1ChunkedWriter::from_client(client),
+                },
+                upload_underlay,
+            ))
+        }
+        ResidentXhttpHttpVersion::H2 => {
+            let client = open_async_vless_tls_client_with_flow(proxy, mark, mptcp).await?;
+            let upload_underlay = async_tls_underlay_name(&client);
+            let (mut sender, connection_task) = open_xhttp_h2_sender(client).await?;
+            let request = xhttp_h2_request(
+                http::Method::POST,
+                endpoint,
+                &xhttp_session_path_suffix(session_id, None),
+                true,
+            )?;
+            let (response, mut send_stream) = sender
+                .send_request(request, false)
+                .map_err(|err| format!("send xHTTP HTTP/2 stream-up request headers: {err}"))?;
+            send_h2_data_with_context(
+                &mut send_stream,
+                initial_payload,
+                false,
+                "xHTTP HTTP/2 stream-up",
+            )
+            .await?;
+            let upload_response_task = tokio::spawn(async move {
+                if let Ok(Ok(response)) = time::timeout(RESIDENT_CONNECT_TIMEOUT, response).await {
+                    let _ = drain_xhttp_h2_response_body(response.into_body()).await;
+                }
+            });
+            Ok((
+                XhttpStreamUploadClient::H2 {
+                    send_stream,
+                    upload_response_task: Some(upload_response_task),
+                    connection_task: Some(connection_task),
+                },
+                upload_underlay,
+            ))
+        }
+        ResidentXhttpHttpVersion::H3 => {
+            let mut connection = open_xhttp_h3_connection(endpoint, mark).await?;
+            let request = xhttp_h3_request(
+                http::Method::POST,
+                endpoint,
+                &xhttp_session_path_suffix(session_id, None),
+                true,
+            )?;
+            let mut stream = time::timeout(
+                RESIDENT_CONNECT_TIMEOUT,
+                connection.client.send_request(request),
+            )
+            .await
+            .map_err(|_| "xHTTP H3 stream-up request timeout".to_owned())?
+            .map_err(|err| format!("send xHTTP H3 stream-up request: {err:?}"))?;
+            time::timeout(RESIDENT_CONNECT_TIMEOUT, stream.send_data(initial_payload))
+                .await
+                .map_err(|_| "send xHTTP H3 stream-up body timeout".to_owned())?
+                .map_err(|err| format!("send xHTTP H3 stream-up body: {err:?}"))?;
+            Ok((
+                XhttpStreamUploadClient::H3 { stream, connection },
+                "quinn-h3",
+            ))
+        }
+    }
+}
+
 struct XhttpH2EndpointSender {
     sender: h2::client::SendRequest<Bytes>,
     connection_task: tokio::task::JoinHandle<()>,
@@ -539,10 +917,13 @@ struct XhttpH1ResponseHead {
     body_prefix: Vec<u8>,
 }
 
-async fn read_xhttp_h1_response_head(
-    client: &mut AsyncResidentTlsClient,
+async fn read_xhttp_h1_response_head<T>(
+    client: &mut T,
     context: &str,
-) -> Result<XhttpH1ResponseHead, String> {
+) -> Result<XhttpH1ResponseHead, String>
+where
+    T: AsyncRead + Unpin,
+{
     const MAX_HEAD_BYTES: usize = 64 * 1024;
     let mut received = Vec::with_capacity(1024);
     let mut buf = [0_u8; 1024];
@@ -757,6 +1138,13 @@ pub(crate) async fn poll_xhttp_download_data(
                 None => Ok(None),
             }
         }
+        XhttpDownloadClient::H3Shared { stream } => {
+            match poll_xhttp_h3_shared_once(stream).await? {
+                Some(Some(bytes)) => Ok(Some(bytes)),
+                Some(None) => Err("xHTTP H3 stream-one download stream closed".to_owned()),
+                None => Ok(None),
+            }
+        }
     }
 }
 
@@ -783,7 +1171,34 @@ pub(crate) async fn read_xhttp_download_data(
             Ok(None) => Ok(None),
             Err(err) => Err(format!("read xHTTP H3 download data: {err:?}")),
         },
+        XhttpDownloadClient::H3Shared { stream } => loop {
+            match poll_xhttp_h3_shared_once(stream).await? {
+                Some(Some(bytes)) => return Ok(Some(bytes)),
+                Some(None) => return Ok(None),
+                None => time::sleep(RESIDENT_IDLE_SLEEP).await,
+            }
+        },
     }
+}
+
+async fn poll_xhttp_h3_shared_once(
+    stream: &Arc<tokio::sync::Mutex<h3::client::RequestStream<h3_quinn::BidiStream<Bytes>, Bytes>>>,
+) -> Result<Option<Option<Bytes>>, String> {
+    let Ok(mut stream) = stream.try_lock() else {
+        return Ok(None);
+    };
+    poll_fn(|cx| match stream.poll_recv_data(cx) {
+        Poll::Ready(Ok(Some(mut chunk))) => {
+            let remaining = chunk.remaining();
+            Poll::Ready(Ok(Some(Some(chunk.copy_to_bytes(remaining)))))
+        }
+        Poll::Ready(Ok(None)) => Poll::Ready(Ok(Some(None))),
+        Poll::Ready(Err(err)) => {
+            Poll::Ready(Err(format!("read xHTTP H3 stream-one data: {err:?}")))
+        }
+        Poll::Pending => Poll::Ready(Ok(None)),
+    })
+    .await
 }
 
 pub(crate) async fn close_xhttp_upload_client(upload: XhttpUploadClient) {
@@ -803,7 +1218,7 @@ pub(crate) async fn close_xhttp_upload_client(upload: XhttpUploadClient) {
 pub(crate) async fn close_xhttp_download_client(download: XhttpDownloadClient) {
     match download {
         XhttpDownloadClient::H1 { mut body } => {
-            let _ = body.client.shutdown().await;
+            body.shutdown().await;
         }
         XhttpDownloadClient::H2 {
             connection_task, ..
@@ -817,6 +1232,7 @@ pub(crate) async fn close_xhttp_download_client(download: XhttpDownloadClient) {
                 connection.close(b"resident xhttp download done").await;
             }
         }
+        XhttpDownloadClient::H3Shared { .. } => {}
     }
 }
 
@@ -875,6 +1291,207 @@ pub(crate) fn xhttp_h1_request_bytes(
         bytes.extend_from_slice(body);
     }
     bytes
+}
+
+async fn write_xhttp_h1_chunked_request_head<W>(
+    writer: &mut W,
+    endpoint: &impl ResidentXhttpEndpointView,
+    path_suffix: &str,
+    context: &str,
+) -> Result<(), String>
+where
+    W: AsyncWrite + Unpin,
+{
+    let path_and_query = xhttp_path_and_query(endpoint, path_suffix);
+    let referer = xhttp_padding_referer(&xhttp_uri(endpoint, ""));
+    let request = format!(
+        "POST {path_and_query} HTTP/1.1\r\n\
+         Host: {}\r\n\
+         User-Agent: Mozilla/5.0\r\n\
+         Accept: */*\r\n\
+         Accept-Language: en-US,en;q=0.9\r\n\
+         Cache-Control: no-cache\r\n\
+         Pragma: no-cache\r\n\
+         Referer: {referer}\r\n\
+         Connection: close\r\n\
+         Content-Type: application/grpc\r\n\
+         Transfer-Encoding: chunked\r\n\
+         \r\n",
+        xhttp_authority(endpoint)
+    );
+    time::timeout(
+        RESIDENT_CONNECT_TIMEOUT,
+        writer.write_all(request.as_bytes()),
+    )
+    .await
+    .map_err(|_| format!("xHTTP HTTP/1.1 {context} request headers timeout"))?
+    .map_err(|err| format!("write xHTTP HTTP/1.1 {context} request headers: {err}"))?;
+    time::timeout(RESIDENT_CONNECT_TIMEOUT, writer.flush())
+        .await
+        .map_err(|_| format!("flush xHTTP HTTP/1.1 {context} request headers timeout"))?
+        .map_err(|err| format!("flush xHTTP HTTP/1.1 {context} request headers: {err}"))
+}
+
+async fn write_xhttp_h1_chunk<W>(
+    writer: &mut W,
+    payload: &Bytes,
+    end_stream: bool,
+    context: &str,
+) -> Result<(), String>
+where
+    W: AsyncWrite + Unpin,
+{
+    if !payload.is_empty() {
+        let prefix = format!("{:x}\r\n", payload.len());
+        time::timeout(
+            RESIDENT_CONNECT_TIMEOUT,
+            writer.write_all(prefix.as_bytes()),
+        )
+        .await
+        .map_err(|_| format!("xHTTP HTTP/1.1 {context} chunk prefix timeout"))?
+        .map_err(|err| format!("write xHTTP HTTP/1.1 {context} chunk prefix: {err}"))?;
+        time::timeout(RESIDENT_CONNECT_TIMEOUT, writer.write_all(payload))
+            .await
+            .map_err(|_| format!("xHTTP HTTP/1.1 {context} chunk body timeout"))?
+            .map_err(|err| format!("write xHTTP HTTP/1.1 {context} chunk body: {err}"))?;
+        time::timeout(RESIDENT_CONNECT_TIMEOUT, writer.write_all(b"\r\n"))
+            .await
+            .map_err(|_| format!("xHTTP HTTP/1.1 {context} chunk suffix timeout"))?
+            .map_err(|err| format!("write xHTTP HTTP/1.1 {context} chunk suffix: {err}"))?;
+    }
+    if end_stream {
+        time::timeout(RESIDENT_CONNECT_TIMEOUT, writer.write_all(b"0\r\n\r\n"))
+            .await
+            .map_err(|_| format!("xHTTP HTTP/1.1 {context} final chunk timeout"))?
+            .map_err(|err| format!("write xHTTP HTTP/1.1 {context} final chunk: {err}"))?;
+    }
+    time::timeout(RESIDENT_CONNECT_TIMEOUT, writer.flush())
+        .await
+        .map_err(|_| format!("flush xHTTP HTTP/1.1 {context} chunk timeout"))?
+        .map_err(|err| format!("flush xHTTP HTTP/1.1 {context} chunk: {err}"))
+}
+
+impl XhttpH1ChunkedWriter {
+    fn from_client(client: AsyncResidentTlsClient) -> Self {
+        Self {
+            writer: XhttpH1ChunkedWriterInner::Client(client),
+            finished: false,
+        }
+    }
+
+    fn from_write_half(writer: tokio::io::WriteHalf<AsyncResidentTlsClient>) -> Self {
+        Self {
+            writer: XhttpH1ChunkedWriterInner::WriteHalf(writer),
+            finished: false,
+        }
+    }
+
+    async fn write_chunk(&mut self, payload: Bytes, end_stream: bool) -> Result<(), String> {
+        if self.finished {
+            return Ok(());
+        }
+        match &mut self.writer {
+            XhttpH1ChunkedWriterInner::Client(client) => {
+                write_xhttp_h1_chunk(client, &payload, end_stream, "stream").await?;
+            }
+            XhttpH1ChunkedWriterInner::WriteHalf(writer) => {
+                write_xhttp_h1_chunk(writer, &payload, end_stream, "stream").await?;
+            }
+        }
+        self.finished = end_stream;
+        Ok(())
+    }
+
+    async fn shutdown(&mut self) {
+        if let XhttpH1ChunkedWriterInner::Client(client) = &mut self.writer {
+            let _ = client.shutdown().await;
+        }
+    }
+}
+
+pub(crate) async fn send_xhttp_stream_data(
+    upload: &mut XhttpStreamUploadClient,
+    payload: Bytes,
+    end_stream: bool,
+) -> Result<(), String> {
+    match upload {
+        XhttpStreamUploadClient::H1 { writer } => writer.write_chunk(payload, end_stream).await,
+        XhttpStreamUploadClient::H2 { send_stream, .. } => {
+            send_h2_data_with_context(
+                send_stream,
+                payload,
+                end_stream,
+                "xHTTP HTTP/2 stream upload",
+            )
+            .await
+        }
+        XhttpStreamUploadClient::H3 { stream, .. } => {
+            if !payload.is_empty() {
+                time::timeout(RESIDENT_CONNECT_TIMEOUT, stream.send_data(payload))
+                    .await
+                    .map_err(|_| "send xHTTP H3 stream body timeout".to_owned())?
+                    .map_err(|err| format!("send xHTTP H3 stream body: {err:?}"))?;
+            }
+            if end_stream {
+                time::timeout(RESIDENT_CONNECT_TIMEOUT, stream.finish())
+                    .await
+                    .map_err(|_| "finish xHTTP H3 stream body timeout".to_owned())?
+                    .map_err(|err| format!("finish xHTTP H3 stream body: {err:?}"))?;
+            }
+            Ok(())
+        }
+        XhttpStreamUploadClient::H3Shared { stream, .. } => {
+            let mut stream = stream.lock().await;
+            if !payload.is_empty() {
+                time::timeout(RESIDENT_CONNECT_TIMEOUT, stream.send_data(payload))
+                    .await
+                    .map_err(|_| "send xHTTP H3 stream-one body timeout".to_owned())?
+                    .map_err(|err| format!("send xHTTP H3 stream-one body: {err:?}"))?;
+            }
+            if end_stream {
+                time::timeout(RESIDENT_CONNECT_TIMEOUT, stream.finish())
+                    .await
+                    .map_err(|_| "finish xHTTP H3 stream-one body timeout".to_owned())?
+                    .map_err(|err| format!("finish xHTTP H3 stream-one body: {err:?}"))?;
+            }
+            Ok(())
+        }
+    }
+}
+
+pub(crate) async fn close_xhttp_stream_upload_client(mut upload: XhttpStreamUploadClient) {
+    match &mut upload {
+        XhttpStreamUploadClient::H1 { writer } => {
+            let _ = writer.write_chunk(Bytes::new(), true).await;
+            writer.shutdown().await;
+        }
+        XhttpStreamUploadClient::H2 {
+            upload_response_task,
+            connection_task,
+            ..
+        } => {
+            if let Some(task) = upload_response_task.take() {
+                task.abort();
+            }
+            if let Some(task) = connection_task.take() {
+                task.abort();
+            }
+        }
+        XhttpStreamUploadClient::H3 { connection, .. } => {
+            connection
+                .connection
+                .close(0_u32.into(), b"resident xhttp stream upload done");
+            connection.driver_task.abort();
+            connection.endpoint.wait_idle().await;
+        }
+        XhttpStreamUploadClient::H3Shared { connection, .. } => {
+            connection
+                .connection
+                .close(0_u32.into(), b"resident xhttp stream-one done");
+            connection.driver_task.abort();
+            connection.endpoint.wait_idle().await;
+        }
+    }
 }
 
 pub(crate) fn xhttp_uri(endpoint: &impl ResidentXhttpEndpointView, path_suffix: &str) -> String {
@@ -937,6 +1554,22 @@ impl XhttpH1DownloadBody {
         headers: Vec<(String, String)>,
         body_prefix: Vec<u8>,
     ) -> Self {
+        Self::new_with_reader(XhttpH1BodyReader::Client(client), headers, body_prefix)
+    }
+
+    fn new_with_read_half(
+        reader: tokio::io::ReadHalf<AsyncResidentTlsClient>,
+        headers: Vec<(String, String)>,
+        body_prefix: Vec<u8>,
+    ) -> Self {
+        Self::new_with_reader(XhttpH1BodyReader::ReadHalf(reader), headers, body_prefix)
+    }
+
+    fn new_with_reader(
+        reader: XhttpH1BodyReader,
+        headers: Vec<(String, String)>,
+        body_prefix: Vec<u8>,
+    ) -> Self {
         let chunked = headers.iter().any(|(name, value)| {
             name.eq_ignore_ascii_case("transfer-encoding")
                 && value
@@ -944,7 +1577,7 @@ impl XhttpH1DownloadBody {
                     .any(|encoding| encoding.trim().eq_ignore_ascii_case("chunked"))
         });
         Self {
-            client,
+            reader,
             buffer: VecDeque::from(body_prefix),
             state: if chunked {
                 XhttpH1BodyState::ChunkSize
@@ -956,6 +1589,12 @@ impl XhttpH1DownloadBody {
 
     async fn read_next(&mut self) -> Result<Option<Bytes>, String> {
         poll_fn(|cx| self.poll_next(cx)).await
+    }
+
+    async fn shutdown(&mut self) {
+        if let XhttpH1BodyReader::Client(client) = &mut self.reader {
+            let _ = client.shutdown().await;
+        }
     }
 
     fn poll_next(&mut self, cx: &mut Context<'_>) -> Poll<Result<Option<Bytes>, String>> {
@@ -1072,7 +1711,11 @@ impl XhttpH1DownloadBody {
     fn poll_fill(&mut self, cx: &mut Context<'_>) -> Poll<Result<usize, String>> {
         let mut scratch = [0_u8; 8192];
         let mut read_buf = ReadBuf::new(&mut scratch);
-        match Pin::new(&mut self.client).poll_read(cx, &mut read_buf) {
+        let poll = match &mut self.reader {
+            XhttpH1BodyReader::Client(client) => Pin::new(client).poll_read(cx, &mut read_buf),
+            XhttpH1BodyReader::ReadHalf(reader) => Pin::new(reader).poll_read(cx, &mut read_buf),
+        };
+        match poll {
             Poll::Ready(Ok(())) => {
                 let filled = read_buf.filled();
                 let len = filled.len();
@@ -1197,6 +1840,83 @@ pub(crate) async fn relay_tcp_over_xhttp_packet_up(
                 }
                 if last_activity.elapsed() > RESIDENT_TCP_IDLE_TIMEOUT {
                     return Err("resident xHTTP relay idle timeout".to_owned());
+                }
+            }
+        }
+    }
+    Ok(stats)
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(crate) async fn relay_tcp_over_xhttp_stream(
+    inbound: &mut TokioTcpStream,
+    upload: &mut XhttpStreamUploadClient,
+    download: &mut XhttpDownloadClient,
+    stop: Arc<AtomicBool>,
+    mut stats: DirectTcpRelayStats,
+    metrics: &ResidentDataplaneMetrics,
+) -> Result<DirectTcpRelayStats, String> {
+    let mut inbound_closed = false;
+    let mut response_closed = false;
+    let mut last_activity = Instant::now();
+    let mut inbound_buf = [0_u8; 16 * 1024];
+    let mut response_stripper = VlessResponseStripper::default();
+
+    while !stop.load(Ordering::Relaxed) {
+        tokio::select! {
+            read = inbound.read(&mut inbound_buf), if !inbound_closed => {
+                match read {
+                    Ok(0) => {
+                        send_xhttp_stream_data(upload, Bytes::new(), true).await?;
+                        inbound_closed = true;
+                        last_activity = Instant::now();
+                    }
+                    Ok(read) => {
+                        send_xhttp_stream_data(
+                            upload,
+                            Bytes::copy_from_slice(&inbound_buf[..read]),
+                            false,
+                        )
+                        .await?;
+                        stats.client_to_direct += read;
+                        metrics.add_upload(read);
+                        last_activity = Instant::now();
+                    }
+                    Err(err) if is_graceful_stream_close_error(&err) => {
+                        send_xhttp_stream_data(upload, Bytes::new(), true).await?;
+                        inbound_closed = true;
+                        last_activity = Instant::now();
+                    }
+                    Err(err) => return Err(format!("read inbound TCP for xHTTP stream relay: {err}")),
+                }
+            }
+            data = read_xhttp_download_data(download), if !response_closed => {
+                match data? {
+                    Some(bytes) => {
+                        let payload = response_stripper.consume(&bytes)?;
+                        if !payload.is_empty() {
+                            inbound
+                                .write_all(&payload)
+                                .await
+                                .map_err(|err| format!("write xHTTP stream response to inbound: {err}"))?;
+                            stats.direct_to_client += payload.len();
+                            metrics.add_download(payload.len());
+                        }
+                        last_activity = Instant::now();
+                    }
+                    None => {
+                        response_closed = true;
+                        let _ = inbound.shutdown().await;
+                        last_activity = Instant::now();
+                    }
+                }
+            }
+            _ = time::sleep(RESIDENT_IDLE_SLEEP) => {
+                if response_closed || (inbound_closed && response_closed) {
+                    break;
+                }
+                if last_activity.elapsed() > RESIDENT_TCP_IDLE_TIMEOUT {
+                    return Err("resident xHTTP stream relay idle timeout".to_owned());
                 }
             }
         }
