@@ -198,6 +198,9 @@ pub fn normalize_xhttp_mode_ref(
         return xhttp_mode_ref_ok("stream-up");
     }
     if mode.eq_ignore_ascii_case("stream-one") {
+        if has_download_settings {
+            return xhttp_mode_ref_err("stream-one cannot use downloadSettings");
+        }
         if scheme == "https" {
             return xhttp_mode_ref_ok("stream-one");
         }

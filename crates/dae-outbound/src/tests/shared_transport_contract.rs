@@ -275,6 +275,13 @@ fn shared_transport_rust_native_matches_nativelden_fixture() {
         assert_eq!(got.ok, case["ok"].as_bool().unwrap());
         assert_eq!(got.error_contains, case["error_contains"].as_str().unwrap());
     }
+    let stream_one_download =
+        crate::shared_transport::ir::normalize_xhttp_mode("stream-one", "https", "tls", true);
+    assert!(!stream_one_download.ok);
+    assert_eq!(
+        stream_one_download.error_contains,
+        "stream-one cannot use downloadSettings"
+    );
     for case in xhttp["alpn_cases"].as_array().unwrap() {
         let got = crate::shared_transport::ir::validate_xhttp_alpn(
             case["security"].as_str().unwrap(),
