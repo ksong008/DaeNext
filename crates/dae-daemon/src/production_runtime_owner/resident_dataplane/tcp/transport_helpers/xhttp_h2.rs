@@ -44,10 +44,17 @@ pub(crate) struct XhttpPacketUpParts {
     pub(crate) upload: XhttpUploadClient,
     pub(crate) download: XhttpDownloadClient,
     pub(crate) upload_underlay: &'static str,
+    pub(crate) upload_http_version: ResidentXhttpHttpVersion,
     pub(crate) download_separate: bool,
 }
 
 pub(crate) enum XhttpUploadClient {
+    H1 {
+        proxy: Box<ResidentProxyPlan>,
+        endpoint: ResidentXhttpEndpointPlan,
+        mark: u32,
+        mptcp: bool,
+    },
     H2 {
         endpoint: ResidentXhttpEndpointPlan,
         sender: h2::client::SendRequest<Bytes>,
@@ -60,6 +67,9 @@ pub(crate) enum XhttpUploadClient {
 }
 
 pub(crate) enum XhttpDownloadClient {
+    H1 {
+        body: XhttpH1DownloadBody,
+    },
     H2 {
         recv: h2::RecvStream,
         _keepalive_sender: Option<h2::client::SendRequest<Bytes>>,
@@ -78,6 +88,22 @@ pub(crate) struct XhttpH3Connection {
     driver_task: tokio::task::JoinHandle<()>,
 }
 
+pub(crate) struct XhttpH1DownloadBody {
+    client: AsyncResidentTlsClient,
+    buffer: VecDeque<u8>,
+    state: XhttpH1BodyState,
+}
+
+#[derive(Debug)]
+enum XhttpH1BodyState {
+    ChunkSize,
+    ChunkData(usize),
+    ChunkCrlf,
+    Trailer,
+    Identity,
+    Done,
+}
+
 pub(crate) async fn open_xhttp_packet_up_parts(
     proxy: &ResidentProxyPlan,
     mark: u32,
@@ -90,8 +116,116 @@ pub(crate) async fn open_xhttp_packet_up_parts(
         .clone()
         .unwrap_or_else(|| upload_endpoint.clone());
     let download_separate = proxy.xhttp_download.is_some();
-    match (upload_endpoint.uses_h3(), download_endpoint.uses_h3()) {
-        (false, false) if !download_separate => {
+    let upload_http_version = if proxy.tls == "reality" {
+        ResidentXhttpHttpVersion::H2
+    } else {
+        upload_endpoint.http_version()
+    };
+    let download_http_version = download_endpoint.http_version();
+    match (upload_http_version, download_http_version) {
+        (ResidentXhttpHttpVersion::H1, ResidentXhttpHttpVersion::H1) => {
+            let recv = open_xhttp_h1_download_stream(
+                proxy,
+                &download_endpoint,
+                mark,
+                mptcp,
+                &session_id,
+                download_separate,
+            )
+            .await?;
+            Ok(XhttpPacketUpParts {
+                session_id,
+                upload: XhttpUploadClient::H1 {
+                    proxy: Box::new(proxy.clone()),
+                    endpoint: upload_endpoint,
+                    mark,
+                    mptcp,
+                },
+                download: XhttpDownloadClient::H1 { body: recv },
+                upload_underlay: xhttp_primary_tls_underlay_name(proxy),
+                upload_http_version,
+                download_separate,
+            })
+        }
+        (ResidentXhttpHttpVersion::H1, ResidentXhttpHttpVersion::H2) => {
+            let mut download_sender =
+                open_xhttp_h2_endpoint_sender(&download_endpoint, mark, mptcp).await?;
+            let recv = open_xhttp_h2_download_stream(
+                &mut download_sender.sender,
+                &download_endpoint,
+                &session_id,
+            )
+            .await?;
+            Ok(XhttpPacketUpParts {
+                session_id,
+                upload: XhttpUploadClient::H1 {
+                    proxy: Box::new(proxy.clone()),
+                    endpoint: upload_endpoint,
+                    mark,
+                    mptcp,
+                },
+                download: XhttpDownloadClient::H2 {
+                    recv,
+                    _keepalive_sender: Some(download_sender.sender),
+                    connection_task: Some(download_sender.connection_task),
+                },
+                upload_underlay: xhttp_primary_tls_underlay_name(proxy),
+                upload_http_version,
+                download_separate,
+            })
+        }
+        (ResidentXhttpHttpVersion::H1, ResidentXhttpHttpVersion::H3) => {
+            let download_connection = open_xhttp_h3_connection(&download_endpoint, mark).await?;
+            let recv = open_xhttp_h3_download_stream(
+                &download_endpoint,
+                download_connection.client.clone(),
+                &session_id,
+            )
+            .await?;
+            Ok(XhttpPacketUpParts {
+                session_id,
+                upload: XhttpUploadClient::H1 {
+                    proxy: Box::new(proxy.clone()),
+                    endpoint: upload_endpoint,
+                    mark,
+                    mptcp,
+                },
+                download: XhttpDownloadClient::H3 {
+                    recv,
+                    connection: Some(download_connection),
+                },
+                upload_underlay: xhttp_primary_tls_underlay_name(proxy),
+                upload_http_version,
+                download_separate,
+            })
+        }
+        (ResidentXhttpHttpVersion::H2, ResidentXhttpHttpVersion::H1) => {
+            let client = open_async_vless_tls_client_with_flow(proxy, mark, mptcp).await?;
+            let upload_underlay = async_tls_underlay_name(&client);
+            let (sender, connection_task) = open_xhttp_h2_sender(client).await?;
+            let recv = open_xhttp_h1_download_stream(
+                proxy,
+                &download_endpoint,
+                mark,
+                mptcp,
+                &session_id,
+                true,
+            )
+            .await?;
+            Ok(XhttpPacketUpParts {
+                session_id,
+                upload: XhttpUploadClient::H2 {
+                    endpoint: upload_endpoint,
+                    sender,
+                    connection_task,
+                },
+                download: XhttpDownloadClient::H1 { body: recv },
+                upload_underlay,
+                upload_http_version,
+                download_separate,
+            })
+        }
+        (ResidentXhttpHttpVersion::H2, ResidentXhttpHttpVersion::H2) if !download_separate => {
             let client = open_async_vless_tls_client_with_flow(proxy, mark, mptcp).await?;
             let upload_underlay = async_tls_underlay_name(&client);
             let (mut sender, connection_task) = open_xhttp_h2_sender(client).await?;
@@ -110,19 +244,18 @@ pub(crate) async fn open_xhttp_packet_up_parts(
                     connection_task: None,
                 },
                 upload_underlay,
+                upload_http_version,
                 download_separate,
             })
         }
-        (false, false) => {
+        (ResidentXhttpHttpVersion::H2, ResidentXhttpHttpVersion::H2) => {
             let client = open_async_vless_tls_client_with_flow(proxy, mark, mptcp).await?;
             let upload_underlay = async_tls_underlay_name(&client);
             let (sender, connection_task) = open_xhttp_h2_sender(client).await?;
-            let download_client =
-                open_async_xhttp_endpoint_tls_client(&download_endpoint, mark, mptcp).await?;
-            let (mut download_sender, download_connection_task) =
-                open_xhttp_h2_sender(download_client).await?;
+            let mut download_sender =
+                open_xhttp_h2_endpoint_sender(&download_endpoint, mark, mptcp).await?;
             let recv = open_xhttp_h2_download_stream(
-                &mut download_sender,
+                &mut download_sender.sender,
                 &download_endpoint,
                 &session_id,
             )
@@ -136,14 +269,15 @@ pub(crate) async fn open_xhttp_packet_up_parts(
                 },
                 download: XhttpDownloadClient::H2 {
                     recv,
-                    _keepalive_sender: Some(download_sender),
-                    connection_task: Some(download_connection_task),
+                    _keepalive_sender: Some(download_sender.sender),
+                    connection_task: Some(download_sender.connection_task),
                 },
                 upload_underlay,
+                upload_http_version,
                 download_separate,
             })
         }
-        (false, true) => {
+        (ResidentXhttpHttpVersion::H2, ResidentXhttpHttpVersion::H3) => {
             let client = open_async_vless_tls_client_with_flow(proxy, mark, mptcp).await?;
             let upload_underlay = async_tls_underlay_name(&client);
             let (sender, connection_task) = open_xhttp_h2_sender(client).await?;
@@ -166,18 +300,41 @@ pub(crate) async fn open_xhttp_packet_up_parts(
                     connection: Some(download_connection),
                 },
                 upload_underlay,
+                upload_http_version,
                 download_separate,
             })
         }
-        (true, false) => {
+        (ResidentXhttpHttpVersion::H3, ResidentXhttpHttpVersion::H1) => {
             let upload_underlay = "quinn-h3";
             let upload_connection = open_xhttp_h3_connection(&upload_endpoint, mark).await?;
-            let download_client =
-                open_async_xhttp_endpoint_tls_client(&download_endpoint, mark, mptcp).await?;
-            let (mut download_sender, download_connection_task) =
-                open_xhttp_h2_sender(download_client).await?;
+            let recv = open_xhttp_h1_download_stream(
+                proxy,
+                &download_endpoint,
+                mark,
+                mptcp,
+                &session_id,
+                true,
+            )
+            .await?;
+            Ok(XhttpPacketUpParts {
+                session_id,
+                upload: XhttpUploadClient::H3 {
+                    endpoint: upload_endpoint,
+                    connection: upload_connection,
+                },
+                download: XhttpDownloadClient::H1 { body: recv },
+                upload_underlay,
+                upload_http_version,
+                download_separate,
+            })
+        }
+        (ResidentXhttpHttpVersion::H3, ResidentXhttpHttpVersion::H2) => {
+            let upload_underlay = "quinn-h3";
+            let upload_connection = open_xhttp_h3_connection(&upload_endpoint, mark).await?;
+            let mut download_sender =
+                open_xhttp_h2_endpoint_sender(&download_endpoint, mark, mptcp).await?;
             let recv = open_xhttp_h2_download_stream(
-                &mut download_sender,
+                &mut download_sender.sender,
                 &download_endpoint,
                 &session_id,
             )
@@ -190,14 +347,15 @@ pub(crate) async fn open_xhttp_packet_up_parts(
                 },
                 download: XhttpDownloadClient::H2 {
                     recv,
-                    _keepalive_sender: Some(download_sender),
-                    connection_task: Some(download_connection_task),
+                    _keepalive_sender: Some(download_sender.sender),
+                    connection_task: Some(download_sender.connection_task),
                 },
                 upload_underlay,
+                upload_http_version,
                 download_separate,
             })
         }
-        (true, true) if !download_separate => {
+        (ResidentXhttpHttpVersion::H3, ResidentXhttpHttpVersion::H3) if !download_separate => {
             let upload_underlay = "quinn-h3";
             let upload_connection = open_xhttp_h3_connection(&upload_endpoint, mark).await?;
             let recv = open_xhttp_h3_download_stream(
@@ -217,10 +375,11 @@ pub(crate) async fn open_xhttp_packet_up_parts(
                     connection: None,
                 },
                 upload_underlay,
+                upload_http_version,
                 download_separate,
             })
         }
-        (true, true) => {
+        (ResidentXhttpHttpVersion::H3, ResidentXhttpHttpVersion::H3) => {
             let upload_underlay = "quinn-h3";
             let upload_connection = open_xhttp_h3_connection(&upload_endpoint, mark).await?;
             let download_connection = open_xhttp_h3_connection(&download_endpoint, mark).await?;
@@ -241,10 +400,29 @@ pub(crate) async fn open_xhttp_packet_up_parts(
                     connection: Some(download_connection),
                 },
                 upload_underlay,
+                upload_http_version,
                 download_separate,
             })
         }
     }
+}
+
+struct XhttpH2EndpointSender {
+    sender: h2::client::SendRequest<Bytes>,
+    connection_task: tokio::task::JoinHandle<()>,
+}
+
+async fn open_xhttp_h2_endpoint_sender(
+    endpoint: &ResidentXhttpEndpointPlan,
+    mark: u32,
+    mptcp: bool,
+) -> Result<XhttpH2EndpointSender, String> {
+    let client = open_async_xhttp_endpoint_tls_client(endpoint, mark, mptcp).await?;
+    let (sender, connection_task) = open_xhttp_h2_sender(client).await?;
+    Ok(XhttpH2EndpointSender {
+        sender,
+        connection_task,
+    })
 }
 
 async fn open_xhttp_h2_sender(
@@ -259,6 +437,175 @@ async fn open_xhttp_h2_sender(
         let _ = connection.await;
     });
     Ok((sender, connection_task))
+}
+
+fn xhttp_primary_tls_underlay_name(proxy: &ResidentProxyPlan) -> &'static str {
+    if proxy.tls == "reality" {
+        "reality"
+    } else if proxy.utls_fingerprint.is_some() {
+        "boringssl"
+    } else {
+        "rustls"
+    }
+}
+
+async fn open_xhttp_h1_download_stream(
+    proxy: &ResidentProxyPlan,
+    endpoint: &ResidentXhttpEndpointPlan,
+    mark: u32,
+    mptcp: bool,
+    session_id: &str,
+    separate_endpoint: bool,
+) -> Result<XhttpH1DownloadBody, String> {
+    let client = if separate_endpoint {
+        open_async_xhttp_endpoint_tls_client(endpoint, mark, mptcp).await?
+    } else {
+        open_async_vless_tls_client_with_flow(proxy, mark, mptcp).await?
+    };
+    open_xhttp_h1_download_stream_with_client(client, endpoint, session_id).await
+}
+
+async fn open_xhttp_h1_download_stream_with_client(
+    mut client: AsyncResidentTlsClient,
+    endpoint: &ResidentXhttpEndpointPlan,
+    session_id: &str,
+) -> Result<XhttpH1DownloadBody, String> {
+    let request = xhttp_h1_request_bytes(
+        http::Method::GET,
+        endpoint,
+        &xhttp_session_path_suffix(session_id, None),
+        None,
+    );
+    time::timeout(RESIDENT_CONNECT_TIMEOUT, client.write_all(&request))
+        .await
+        .map_err(|_| "xHTTP HTTP/1.1 download request timeout".to_owned())?
+        .map_err(|err| format!("write xHTTP HTTP/1.1 download request: {err}"))?;
+    time::timeout(RESIDENT_CONNECT_TIMEOUT, client.flush())
+        .await
+        .map_err(|_| "flush xHTTP HTTP/1.1 download request timeout".to_owned())?
+        .map_err(|err| format!("flush xHTTP HTTP/1.1 download request: {err}"))?;
+    let response = read_xhttp_h1_response_head(&mut client, "download").await?;
+    if !(200..300).contains(&response.status) {
+        return Err(format!(
+            "xHTTP HTTP/1.1 download response status {}",
+            response.status
+        ));
+    }
+    Ok(XhttpH1DownloadBody::new(
+        client,
+        response.headers,
+        response.body_prefix,
+    ))
+}
+
+async fn send_xhttp_h1_packet_up_request(
+    proxy: &ResidentProxyPlan,
+    endpoint: &ResidentXhttpEndpointPlan,
+    mark: u32,
+    mptcp: bool,
+    session_id: &str,
+    seq: u64,
+    payload: Bytes,
+) -> Result<(), String> {
+    let mut client = open_async_vless_tls_client_with_flow(proxy, mark, mptcp).await?;
+    let request = xhttp_h1_request_bytes(
+        http::Method::POST,
+        endpoint,
+        &xhttp_session_path_suffix(session_id, Some(seq)),
+        Some(&payload),
+    );
+    time::timeout(RESIDENT_CONNECT_TIMEOUT, client.write_all(&request))
+        .await
+        .map_err(|_| "xHTTP HTTP/1.1 packet-up request timeout".to_owned())?
+        .map_err(|err| format!("write xHTTP HTTP/1.1 packet-up request: {err}"))?;
+    time::timeout(RESIDENT_CONNECT_TIMEOUT, client.flush())
+        .await
+        .map_err(|_| "flush xHTTP HTTP/1.1 packet-up request timeout".to_owned())?
+        .map_err(|err| format!("flush xHTTP HTTP/1.1 packet-up request: {err}"))?;
+    let response = read_xhttp_h1_response_head(&mut client, "packet-up").await?;
+    if !(200..300).contains(&response.status) {
+        return Err(format!(
+            "xHTTP HTTP/1.1 packet-up response status {}",
+            response.status
+        ));
+    }
+    let _ = client.shutdown().await;
+    Ok(())
+}
+
+struct XhttpH1ResponseHead {
+    status: u16,
+    headers: Vec<(String, String)>,
+    body_prefix: Vec<u8>,
+}
+
+async fn read_xhttp_h1_response_head(
+    client: &mut AsyncResidentTlsClient,
+    context: &str,
+) -> Result<XhttpH1ResponseHead, String> {
+    const MAX_HEAD_BYTES: usize = 64 * 1024;
+    let mut received = Vec::with_capacity(1024);
+    let mut buf = [0_u8; 1024];
+    loop {
+        if let Some(end) = find_header_end(&received) {
+            let body_prefix = received.split_off(end + 4);
+            let head = &received[..end];
+            return parse_xhttp_h1_response_head(head, body_prefix, context);
+        }
+        if received.len() >= MAX_HEAD_BYTES {
+            return Err(format!(
+                "xHTTP HTTP/1.1 {context} response headers exceed {MAX_HEAD_BYTES} bytes"
+            ));
+        }
+        let read = time::timeout(RESIDENT_CONNECT_TIMEOUT, client.read(&mut buf))
+            .await
+            .map_err(|_| format!("xHTTP HTTP/1.1 {context} response headers timeout"))?
+            .map_err(|err| format!("read xHTTP HTTP/1.1 {context} response headers: {err}"))?;
+        if read == 0 {
+            return Err(format!(
+                "xHTTP HTTP/1.1 {context} response closed before headers"
+            ));
+        }
+        received.extend_from_slice(&buf[..read]);
+    }
+}
+
+fn parse_xhttp_h1_response_head(
+    head: &[u8],
+    body_prefix: Vec<u8>,
+    context: &str,
+) -> Result<XhttpH1ResponseHead, String> {
+    let text = std::str::from_utf8(head)
+        .map_err(|err| format!("xHTTP HTTP/1.1 {context} response headers utf8: {err}"))?;
+    let mut lines = text.split("\r\n");
+    let status_line = lines
+        .next()
+        .ok_or_else(|| format!("xHTTP HTTP/1.1 {context} response missing status line"))?;
+    let mut status_parts = status_line.splitn(3, ' ');
+    let version = status_parts.next().unwrap_or_default();
+    if !version.starts_with("HTTP/1.") {
+        return Err(format!(
+            "xHTTP HTTP/1.1 {context} response has unsupported version {version}"
+        ));
+    }
+    let status = status_parts
+        .next()
+        .ok_or_else(|| format!("xHTTP HTTP/1.1 {context} response missing status code"))?
+        .parse::<u16>()
+        .map_err(|err| format!("parse xHTTP HTTP/1.1 {context} response status: {err}"))?;
+    let headers = lines
+        .filter_map(|line| line.split_once(':'))
+        .map(|(name, value)| (name.trim().to_ascii_lowercase(), value.trim().to_owned()))
+        .collect::<Vec<_>>();
+    Ok(XhttpH1ResponseHead {
+        status,
+        headers,
+        body_prefix,
+    })
+}
+
+fn find_header_end(buf: &[u8]) -> Option<usize> {
+    buf.windows(4).position(|window| window == b"\r\n\r\n")
 }
 
 async fn open_xhttp_h2_download_stream(
@@ -325,6 +672,17 @@ pub(crate) async fn send_xhttp_packet_up_request(
     payload: Bytes,
 ) -> Result<(), String> {
     match upload {
+        XhttpUploadClient::H1 {
+            proxy,
+            endpoint,
+            mark,
+            mptcp,
+        } => {
+            send_xhttp_h1_packet_up_request(
+                proxy, endpoint, *mark, *mptcp, session_id, seq, payload,
+            )
+            .await
+        }
         XhttpUploadClient::H2 {
             endpoint, sender, ..
         } => send_xhttp_h2_packet_up_request(sender, endpoint, session_id, seq, payload).await,
@@ -348,6 +706,17 @@ pub(crate) async fn poll_xhttp_download_data(
     download: &mut XhttpDownloadClient,
 ) -> Result<Option<Bytes>, String> {
     match download {
+        XhttpDownloadClient::H1 { body } => {
+            let data = poll_fn(|cx| match body.poll_next(cx) {
+                Poll::Ready(value) => Poll::Ready(Some(value)),
+                Poll::Pending => Poll::Ready(None),
+            })
+            .await;
+            match data {
+                Some(value) => value,
+                None => Ok(None),
+            }
+        }
         XhttpDownloadClient::H2 { recv, .. } => {
             let data = {
                 let data_future = recv.data();
@@ -395,6 +764,7 @@ pub(crate) async fn read_xhttp_download_data(
     download: &mut XhttpDownloadClient,
 ) -> Result<Option<Bytes>, String> {
     match download {
+        XhttpDownloadClient::H1 { body } => body.read_next().await,
         XhttpDownloadClient::H2 { recv, .. } => match recv.data().await {
             Some(Ok(bytes)) => {
                 recv.flow_control()
@@ -418,6 +788,7 @@ pub(crate) async fn read_xhttp_download_data(
 
 pub(crate) async fn close_xhttp_upload_client(upload: XhttpUploadClient) {
     match upload {
+        XhttpUploadClient::H1 { .. } => {}
         XhttpUploadClient::H2 {
             connection_task, ..
         } => {
@@ -431,6 +802,9 @@ pub(crate) async fn close_xhttp_upload_client(upload: XhttpUploadClient) {
 
 pub(crate) async fn close_xhttp_download_client(download: XhttpDownloadClient) {
     match download {
+        XhttpDownloadClient::H1 { mut body } => {
+            let _ = body.client.shutdown().await;
+        }
         XhttpDownloadClient::H2 {
             connection_task, ..
         } => {
@@ -471,16 +845,52 @@ pub(crate) fn xhttp_h2_request(
         .map_err(|err| format!("build xHTTP HTTP/2 request: {err}"))
 }
 
+pub(crate) fn xhttp_h1_request_bytes(
+    method: http::Method,
+    endpoint: &impl ResidentXhttpEndpointView,
+    path_suffix: &str,
+    body: Option<&Bytes>,
+) -> Vec<u8> {
+    let path_and_query = xhttp_path_and_query(endpoint, path_suffix);
+    let referer = xhttp_padding_referer(&xhttp_uri(endpoint, ""));
+    let mut request = format!(
+        "{method} {path_and_query} HTTP/1.1\r\n\
+         Host: {}\r\n\
+         User-Agent: Mozilla/5.0\r\n\
+         Accept: */*\r\n\
+         Accept-Language: en-US,en;q=0.9\r\n\
+         Cache-Control: no-cache\r\n\
+         Pragma: no-cache\r\n\
+         Referer: {referer}\r\n\
+         Connection: close\r\n",
+        xhttp_authority(endpoint)
+    );
+    if let Some(body) = body {
+        request.push_str("Content-Type: application/grpc\r\n");
+        request.push_str(&format!("Content-Length: {}\r\n", body.len()));
+    }
+    request.push_str("\r\n");
+    let mut bytes = request.into_bytes();
+    if let Some(body) = body {
+        bytes.extend_from_slice(body);
+    }
+    bytes
+}
+
 pub(crate) fn xhttp_uri(endpoint: &impl ResidentXhttpEndpointView, path_suffix: &str) -> String {
+    let path_and_query = xhttp_path_and_query(endpoint, path_suffix);
+    format!("https://{}{}", xhttp_authority(endpoint), path_and_query)
+}
+
+fn xhttp_path_and_query(endpoint: &impl ResidentXhttpEndpointView, path_suffix: &str) -> String {
     let normalized = ir::normalize_xhttp_path_and_query(endpoint.stream_path());
     let mut path = normalized.path;
     path.push_str(path_suffix);
-    let mut uri = format!("https://{}{}", xhttp_authority(endpoint), path);
     if !normalized.query.is_empty() {
-        uri.push('?');
-        uri.push_str(&normalized.query);
+        path.push('?');
+        path.push_str(&normalized.query);
     }
-    uri
+    path
 }
 
 pub(crate) fn xhttp_padding_referer(base_uri: &str) -> String {
@@ -519,6 +929,184 @@ pub(crate) fn new_xhttp_session_id() -> String {
         ((value >> 48) & 0xffff) as u16,
         value & 0xffff_ffff_ffff
     )
+}
+
+impl XhttpH1DownloadBody {
+    fn new(
+        client: AsyncResidentTlsClient,
+        headers: Vec<(String, String)>,
+        body_prefix: Vec<u8>,
+    ) -> Self {
+        let chunked = headers.iter().any(|(name, value)| {
+            name.eq_ignore_ascii_case("transfer-encoding")
+                && value
+                    .split(',')
+                    .any(|encoding| encoding.trim().eq_ignore_ascii_case("chunked"))
+        });
+        Self {
+            client,
+            buffer: VecDeque::from(body_prefix),
+            state: if chunked {
+                XhttpH1BodyState::ChunkSize
+            } else {
+                XhttpH1BodyState::Identity
+            },
+        }
+    }
+
+    async fn read_next(&mut self) -> Result<Option<Bytes>, String> {
+        poll_fn(|cx| self.poll_next(cx)).await
+    }
+
+    fn poll_next(&mut self, cx: &mut Context<'_>) -> Poll<Result<Option<Bytes>, String>> {
+        loop {
+            match self.state {
+                XhttpH1BodyState::ChunkSize => {
+                    let Some(line) = self.pop_line()? else {
+                        match self.poll_fill(cx) {
+                            Poll::Ready(Ok(0)) => {
+                                return Poll::Ready(Err(
+                                    "xHTTP HTTP/1.1 download closed before chunk size".to_owned(),
+                                ));
+                            }
+                            Poll::Ready(Ok(_)) => continue,
+                            Poll::Ready(Err(err)) => return Poll::Ready(Err(err)),
+                            Poll::Pending => return Poll::Pending,
+                        }
+                    };
+                    let size_text = line.split_once(';').map_or(line.as_str(), |(size, _)| size);
+                    let size = usize::from_str_radix(size_text.trim(), 16)
+                        .map_err(|err| format!("parse xHTTP HTTP/1.1 chunk size: {err}"))?;
+                    self.state = if size == 0 {
+                        XhttpH1BodyState::Trailer
+                    } else {
+                        XhttpH1BodyState::ChunkData(size)
+                    };
+                }
+                XhttpH1BodyState::ChunkData(remaining) => {
+                    if remaining == 0 {
+                        self.state = XhttpH1BodyState::ChunkCrlf;
+                        continue;
+                    }
+                    if self.buffer.is_empty() {
+                        match self.poll_fill(cx) {
+                            Poll::Ready(Ok(0)) => {
+                                return Poll::Ready(Err(
+                                    "xHTTP HTTP/1.1 download closed inside chunk data".to_owned(),
+                                ));
+                            }
+                            Poll::Ready(Ok(_)) => continue,
+                            Poll::Ready(Err(err)) => return Poll::Ready(Err(err)),
+                            Poll::Pending => return Poll::Pending,
+                        }
+                    }
+                    let take = remaining.min(self.buffer.len());
+                    let bytes = self.drain_bytes(take);
+                    self.state = XhttpH1BodyState::ChunkData(remaining - take);
+                    if remaining == take {
+                        self.state = XhttpH1BodyState::ChunkCrlf;
+                    }
+                    return Poll::Ready(Ok(Some(Bytes::from(bytes))));
+                }
+                XhttpH1BodyState::ChunkCrlf => {
+                    if self.buffer.len() < 2 {
+                        match self.poll_fill(cx) {
+                            Poll::Ready(Ok(0)) => {
+                                return Poll::Ready(Err(
+                                    "xHTTP HTTP/1.1 download closed before chunk CRLF".to_owned(),
+                                ));
+                            }
+                            Poll::Ready(Ok(_)) => continue,
+                            Poll::Ready(Err(err)) => return Poll::Ready(Err(err)),
+                            Poll::Pending => return Poll::Pending,
+                        }
+                    }
+                    let cr = self.buffer.pop_front();
+                    let lf = self.buffer.pop_front();
+                    if cr != Some(b'\r') || lf != Some(b'\n') {
+                        return Poll::Ready(Err(
+                            "xHTTP HTTP/1.1 chunk data missing terminating CRLF".to_owned(),
+                        ));
+                    }
+                    self.state = XhttpH1BodyState::ChunkSize;
+                }
+                XhttpH1BodyState::Trailer => {
+                    let Some(line) = self.pop_line()? else {
+                        match self.poll_fill(cx) {
+                            Poll::Ready(Ok(0)) => {
+                                return Poll::Ready(Err(
+                                    "xHTTP HTTP/1.1 download closed before chunk trailer"
+                                        .to_owned(),
+                                ));
+                            }
+                            Poll::Ready(Ok(_)) => continue,
+                            Poll::Ready(Err(err)) => return Poll::Ready(Err(err)),
+                            Poll::Pending => return Poll::Pending,
+                        }
+                    };
+                    if line.is_empty() {
+                        self.state = XhttpH1BodyState::Done;
+                        return Poll::Ready(Ok(None));
+                    }
+                }
+                XhttpH1BodyState::Identity => {
+                    if !self.buffer.is_empty() {
+                        let bytes = self.drain_bytes(self.buffer.len());
+                        return Poll::Ready(Ok(Some(Bytes::from(bytes))));
+                    }
+                    match self.poll_fill(cx) {
+                        Poll::Ready(Ok(0)) => {
+                            self.state = XhttpH1BodyState::Done;
+                            return Poll::Ready(Ok(None));
+                        }
+                        Poll::Ready(Ok(_)) => continue,
+                        Poll::Ready(Err(err)) => return Poll::Ready(Err(err)),
+                        Poll::Pending => return Poll::Pending,
+                    }
+                }
+                XhttpH1BodyState::Done => return Poll::Ready(Ok(None)),
+            }
+        }
+    }
+
+    fn poll_fill(&mut self, cx: &mut Context<'_>) -> Poll<Result<usize, String>> {
+        let mut scratch = [0_u8; 8192];
+        let mut read_buf = ReadBuf::new(&mut scratch);
+        match Pin::new(&mut self.client).poll_read(cx, &mut read_buf) {
+            Poll::Ready(Ok(())) => {
+                let filled = read_buf.filled();
+                let len = filled.len();
+                self.buffer.extend(filled);
+                Poll::Ready(Ok(len))
+            }
+            Poll::Ready(Err(err)) => {
+                Poll::Ready(Err(format!("read xHTTP HTTP/1.1 download body: {err}")))
+            }
+            Poll::Pending => Poll::Pending,
+        }
+    }
+
+    fn pop_line(&mut self) -> Result<Option<String>, String> {
+        let Some(index) = self.find_crlf() else {
+            return Ok(None);
+        };
+        let line = self.drain_bytes(index);
+        self.buffer.drain(..2);
+        String::from_utf8(line)
+            .map(Some)
+            .map_err(|err| format!("xHTTP HTTP/1.1 chunk line utf8: {err}"))
+    }
+
+    fn find_crlf(&self) -> Option<usize> {
+        self.buffer
+            .iter()
+            .zip(self.buffer.iter().skip(1))
+            .position(|(left, right)| *left == b'\r' && *right == b'\n')
+    }
+
+    fn drain_bytes(&mut self, len: usize) -> Vec<u8> {
+        self.buffer.drain(..len).collect()
+    }
 }
 
 pub(crate) async fn drain_xhttp_h2_response_body(mut body: h2::RecvStream) -> Result<(), String> {

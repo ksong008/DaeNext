@@ -491,6 +491,57 @@ pub(super) fn resident_dataplane_plan_admits_vless_xhttp_h2_packet_up() {
         graph["runtimeComponents"]["streamWrapperFactory"]["provider"],
         "resident-xhttp-h2-packet-up"
     );
+
+    let proxy = build_resident_proxy_plan_for_node(
+        &config,
+        "proxy".to_owned(),
+        "standard_import".to_owned(),
+        vless_xhttp_parser_fixture_url("packet-up", "h2,http/1.1", ""),
+    )
+    .unwrap();
+    let graph = proxy.executable_graph_value();
+    assert_eq!(proxy.alpn, vec!["h2".to_owned(), "http/1.1".to_owned()]);
+    assert_eq!(
+        graph["runtimeComponents"]["streamWrapperFactory"]["provider"],
+        "resident-xhttp-h2-packet-up"
+    );
+}
+
+#[test]
+pub(super) fn resident_dataplane_plan_admits_vless_xhttp_h1_packet_up() {
+    let config = parse_config(
+        r#"
+        global {
+        lan_interface: daerust0
+        allow_insecure: false
+        so_mark_from_dae: 1234
+        mptcp: false
+        }
+        routing {
+        fallback: direct
+        }
+        "#,
+    );
+    let proxy = build_resident_proxy_plan_for_node(
+        &config,
+        "proxy".to_owned(),
+        "standard_import".to_owned(),
+        vless_xhttp_parser_fixture_url("packet-up", "http/1.1", ""),
+    )
+    .unwrap();
+
+    assert_eq!(proxy.protocol, "vless");
+    assert_eq!(proxy.net, "xhttp");
+    assert_eq!(proxy.alpn, vec!["http/1.1".to_owned()]);
+    assert_eq!(proxy.stream_host, fixture_host(FixtureEndpoint::Authority));
+    assert_eq!(proxy.stream_path, "/resource/?ed=2048");
+    let graph = proxy.executable_graph_value();
+    assert_eq!(graph["streamWrapper"], "xhttp");
+    assert_eq!(graph["packetSemantics"], "udp-over-stream");
+    assert_eq!(
+        graph["runtimeComponents"]["streamWrapperFactory"]["provider"],
+        "resident-xhttp-h1-packet-up"
+    );
 }
 
 #[test]
@@ -565,6 +616,21 @@ pub(super) fn resident_dataplane_plan_admits_vless_xhttp_download_settings() {
     assert_eq!(download.stream_host, "download.host.invalid");
     assert_eq!(download.stream_path, "/down/?ed=4096");
     assert!(download.allow_insecure);
+
+    let proxy = build_resident_proxy_plan_for_node(
+        &config,
+        "proxy".to_owned(),
+        "standard_import".to_owned(),
+        vless_xhttp_parser_fixture_url(
+            "packet-up",
+            "h2",
+            r#"{"downloadSettings":{"address":"download.transport.invalid","port":18444,"network":"xhttp","security":"tls","tlsSettings":{"serverName":"download.sni.invalid","alpn":["http/1.1"],"allowInsecure":false},"xhttpSettings":{"host":"download.host.invalid","path":"/down?ed=4096","mode":"packet-up"}}}"#,
+        ),
+    )
+    .unwrap();
+    let download = proxy.xhttp_download.as_ref().unwrap();
+    assert_eq!(download.alpn, vec!["http/1.1".to_owned()]);
+    assert!(!download.allow_insecure);
 }
 
 #[test]
@@ -594,9 +660,9 @@ pub(super) fn resident_dataplane_plan_rejects_unimplemented_vless_xhttp_shapes()
             "unsupported fields",
         ),
         (
-            "xhttp_http1_only",
-            vless_xhttp_parser_fixture_url("packet-up", "http/1.1", ""),
-            "admits h2 or h3 ALPN only",
+            "xhttp_unsupported_alpn",
+            vless_xhttp_parser_fixture_url("packet-up", "spdy/3.1", ""),
+            "rejected ALPN",
         ),
     ] {
         let err =

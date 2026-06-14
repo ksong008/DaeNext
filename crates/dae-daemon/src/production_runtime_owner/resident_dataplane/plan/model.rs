@@ -46,6 +46,47 @@ pub(crate) struct ResidentXhttpEndpointPlan {
         Option<TlsFragmentOptions>,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(in crate::production_runtime_owner::resident_dataplane) enum ResidentXhttpHttpVersion {
+    H1,
+    H2,
+    H3,
+}
+
+impl ResidentXhttpHttpVersion {
+    pub(in crate::production_runtime_owner::resident_dataplane) fn from_tls_alpn(
+        alpn: &[String],
+    ) -> Self {
+        if alpn.len() == 1 && alpn[0].trim().eq_ignore_ascii_case("http/1.1") {
+            Self::H1
+        } else if alpn.len() == 1 && alpn[0].trim().eq_ignore_ascii_case("h3") {
+            Self::H3
+        } else {
+            Self::H2
+        }
+    }
+
+    pub(in crate::production_runtime_owner::resident_dataplane) fn alpn_label(
+        self,
+    ) -> &'static str {
+        match self {
+            Self::H1 => "http/1.1",
+            Self::H2 => "h2",
+            Self::H3 => "h3",
+        }
+    }
+
+    pub(in crate::production_runtime_owner::resident_dataplane) fn packet_up_provider(
+        self,
+    ) -> &'static str {
+        match self {
+            Self::H1 => "resident-xhttp-h1-packet-up",
+            Self::H2 => "resident-xhttp-h2-packet-up",
+            Self::H3 => "resident-xhttp-h3-packet-up",
+        }
+    }
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) enum GroupNodeSelection {
     Selected(Vec<SelectedGroupNode>),
@@ -408,8 +449,10 @@ impl ResidentXhttpEndpointPlan {
         }
     }
 
-    pub(in crate::production_runtime_owner::resident_dataplane) fn uses_h3(&self) -> bool {
-        self.alpn.len() == 1 && self.alpn[0].trim().eq_ignore_ascii_case("h3")
+    pub(in crate::production_runtime_owner::resident_dataplane) fn http_version(
+        &self,
+    ) -> ResidentXhttpHttpVersion {
+        ResidentXhttpHttpVersion::from_tls_alpn(&self.alpn)
     }
 
     fn compact_allocations(&mut self) {
