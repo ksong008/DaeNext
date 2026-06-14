@@ -28,6 +28,7 @@ pub(crate) fn build_trojan_proxy_plan(
     }
     let allow_insecure = parsed.allow_insecure || config.global.allow_insecure;
     let utls_fingerprint = resident_utls_fingerprint_plan(config, None)?;
+    let parsed_alpn = split_alpn(&parsed.alpn);
     let net = if websocket {
         "websocket"
     } else if httpupgrade {
@@ -62,10 +63,10 @@ pub(crate) fn build_trojan_proxy_plan(
         server_host: parsed.server,
         server_port: parsed.port,
         server_name: parsed.sni,
-        alpn: if grpc {
+        alpn: if grpc && parsed_alpn.is_empty() {
             vec!["h2".to_owned()]
         } else {
-            Vec::new()
+            parsed_alpn
         },
         flow: String::new(),
         net,
