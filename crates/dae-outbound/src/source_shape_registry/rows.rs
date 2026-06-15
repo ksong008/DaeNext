@@ -81,6 +81,8 @@ pub(super) static SOURCE_SHAPE_REGISTRY_ROWS: &[SourceShapeRegistryRow] = &[
         "udp-over-stream-or-datagram",
         "registry:baseline-frame-stream-endpoint",
     ),
+    // Protocol-closed: plain HTTP proxy import maps to CONNECT/TCP only;
+    // UDP requires a protocol with explicit datagram semantics.
     admitted_row(
         "baseline-connect-endpoint",
         "http-proxy",
@@ -198,6 +200,8 @@ pub(super) static SOURCE_SHAPE_REGISTRY_ROWS: &[SourceShapeRegistryRow] = &[
         "quic-datagram-or-stream",
         "registry:quic-option-surface",
     ),
+    // Protocol-closed: HTTPS proxy endpoints still expose CONNECT/TCP
+    // semantics; TLS changes the underlay, not UDP support.
     scoped_evidence_admitted_row(
         "secure-endpoint-capability",
         "proxy-endpoint",
@@ -297,6 +301,8 @@ pub(super) static SOURCE_SHAPE_REGISTRY_ROWS: &[SourceShapeRegistryRow] = &[
         "registry:aead-2022-plugin-wrapper",
         PLUGIN_WRAPPER_STREAM_CAPABILITY,
     ),
+    // Protocol-closed: proxy transport mode covers HTTP/HTTPS CONNECT
+    // stream behavior and does not imply CONNECT-UDP/MASQUE support.
     scoped_evidence_capability_admitted_row(
         "proxy-transport-mode",
         "http-proxy",
@@ -307,6 +313,8 @@ pub(super) static SOURCE_SHAPE_REGISTRY_ROWS: &[SourceShapeRegistryRow] = &[
         "registry:proxy-transport-mode",
         PROXY_TRANSPORT_CAPABILITY,
     ),
+    // Protocol-closed: insecure TLS alters certificate verification for
+    // HTTPS CONNECT, but UDP remains outside the admitted proxy semantics.
     scoped_evidence_capability_admitted_row(
         "insecure-secure-endpoint-underlay",
         "proxy-endpoint",
@@ -317,6 +325,8 @@ pub(super) static SOURCE_SHAPE_REGISTRY_ROWS: &[SourceShapeRegistryRow] = &[
         "registry:insecure-secure-endpoint-underlay",
         INSECURE_SECURITY_UNDERLAY_CAPABILITY,
     ),
+    // Protocol-closed: fingerprint-aware TLS alters the HTTPS CONNECT
+    // underlay only; it does not add a UDP packet executor.
     scoped_evidence_capability_admitted_row(
         "fingerprint-secure-endpoint-underlay",
         "proxy-endpoint",
