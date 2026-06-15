@@ -21,9 +21,9 @@ pub(crate) fn build_vless_proxy_plan(
     }
     match net.as_str() {
         "tcp" if vless.mux && vless.flow.is_empty() => {}
-        "tcp" if !matches!(vless.flow.as_str(), "" | XTLS_RPRX_VISION) => {
+        "tcp" if !(vless.flow.is_empty() || is_xtls_rprx_vision_flow(&vless.flow)) => {
             return Err(format!(
-                "resident dataplane vless native tcp admits empty flow or flow={XTLS_RPRX_VISION}, got '{}' for node {node_tag}; resident shape remains fail-closed for this config",
+                "resident dataplane vless native tcp admits empty flow or official Vision flows, got '{}' for node {node_tag}; resident shape remains fail-closed for this config",
                 vless.flow
             ));
         }

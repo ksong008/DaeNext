@@ -38,7 +38,8 @@ impl UdpSessionExecutor {
                 Self::Socks5(Socks5UdpAssociateSession::default())
             }
             ResidentProxyProtocolPlan::VlessVisionTcpTls { .. } => {
-                if matches!(proxy.net.as_str(), "" | "tcp") && proxy.flow == XTLS_RPRX_VISION {
+                if matches!(proxy.net.as_str(), "" | "tcp") && is_xtls_rprx_vision_flow(&proxy.flow)
+                {
                     Self::VlessVision(VlessXudpStreamSession::default())
                 } else if proxy.net == "xhttp"
                     && proxy.flow.is_empty()
@@ -66,6 +67,9 @@ impl UdpSessionExecutor {
                 match (proxy.net.as_str(), proxy.tls.as_str()) {
                     ("" | "tcp", "" | "none") => {
                         Self::VmessAead(VmessAeadUdpOverTcpSession::plain(id.clone()))
+                    }
+                    ("" | "tcp", "tls") => {
+                        Self::VmessAead(VmessAeadUdpOverTcpSession::tls(id.clone()))
                     }
                     ("websocket", "" | "none") => {
                         Self::VmessAead(VmessAeadUdpOverTcpSession::websocket_plain(id.clone()))

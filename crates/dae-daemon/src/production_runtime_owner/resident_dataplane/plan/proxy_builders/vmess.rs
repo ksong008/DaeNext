@@ -28,9 +28,9 @@ pub(crate) fn build_vmess_proxy_plan(
             ));
         }
     }
-    if net == "tcp" && !parsed.tls.is_empty() && parsed.tls != "none" {
+    if net == "tcp" && !matches!(parsed.tls.as_str(), "" | "none" | "tls") {
         return Err(format!(
-            "resident dataplane generic AEAD TCP handler admits only plain VMess TCP endpoints for node {node_tag}; got tls={}",
+            "resident dataplane generic AEAD TCP handler admits plain or TLS VMess TCP endpoints for node {node_tag}; got tls={}",
             parsed.tls
         ));
     }
@@ -56,12 +56,6 @@ pub(crate) fn build_vmess_proxy_plan(
             }
         ));
     }
-    if parsed.allow_insecure || config.global.allow_insecure {
-        return Err(
-            "resident dataplane generic AEAD TCP handler does not admit allow_insecure; resident shape remains fail-closed for this config"
-                .to_owned(),
-        );
-    }
     let server_port = parsed.port.parse::<u16>().map_err(|err| {
         format!(
             "invalid VMess port {} for node {node_tag}: {err}",
@@ -80,7 +74,8 @@ pub(crate) fn build_vmess_proxy_plan(
     } else {
         String::new()
     };
-    let tls = if net == "grpc"
+    let tls = if (net == "tcp" && parsed.tls == "tls")
+        || net == "grpc"
         || (matches!(net.as_str(), "websocket" | "httpupgrade") && parsed.tls == "tls")
     {
         "tls"
@@ -106,6 +101,7 @@ pub(crate) fn build_vmess_proxy_plan(
     } else {
         None
     };
+    let allow_insecure = tls == "tls" && (parsed.allow_insecure || config.global.allow_insecure);
     let graph = resident_graph_identity(&link);
     Ok(ResidentProxyPlan {
         graph_id: graph.graph_id,
@@ -127,7 +123,7 @@ pub(crate) fn build_vmess_proxy_plan(
         xhttp_mode: ResidentXhttpMode::PacketUp,
         xhttp_xmux: None,
         tls: tls.to_owned(),
-        allow_insecure: false,
+        allow_insecure,
         tls_fragment: if tls == "tls" {
             resident_tls_fragment_plan(config)?
         } else {

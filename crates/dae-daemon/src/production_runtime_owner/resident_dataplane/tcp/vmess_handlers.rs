@@ -51,6 +51,79 @@ pub(super) async fn handle_vmess_proxy_tcp_connection_async(
 }
 
 #[allow(clippy::too_many_arguments)]
+pub(super) async fn handle_vmess_tls_proxy_tcp_connection_async(
+    inbound: &mut TokioTcpStream,
+    peer: SocketAddr,
+    original_dst: SocketAddr,
+    selection: TcpProxySelection,
+    stop: Arc<AtomicBool>,
+    sniff: &TcpSniffReport,
+    metrics: &ResidentDataplaneMetrics,
+    id: &str,
+) -> Result<Value, String> {
+    let mut client =
+        open_async_resident_tls_client_with_flow(&selection.proxy, selection.mark, selection.mptcp)
+            .await?;
+    let tls_underlay = async_resident_tls_underlay_name(&client);
+    let session = aead_tcp_client_session_start(id, &selection.route.dial_target, &sniff.payload)
+        .map_err(|err| format!("build VMess TLS AEAD TCP session: {err}"))?;
+    client
+        .write_plain_all(
+            &session.first_write,
+            "write VMess TLS AEAD TCP initial request",
+        )
+        .await?;
+    let mut initial_stats = DirectTcpRelayStats::default();
+    if !sniff.payload.is_empty() {
+        initial_stats.client_to_direct += sniff.payload.len();
+        metrics.add_upload(sniff.payload.len());
+    }
+
+    relay_tcp_over_vmess_tls_aead_async(inbound, &mut client, stop, session, initial_stats, metrics)
+        .await
+        .map(|stats| {
+            let mut event = generic_proxy_tcp_finished_event(
+                peer,
+                original_dst,
+                &selection,
+                sniff,
+                "vmess",
+                &stats,
+                "aead-tls-tcp-relay",
+            );
+            event["tls_underlay"] = json!(tls_underlay);
+            append_proxy_tcp_execution_fields(
+                &mut event,
+                "aead-tls-tcp-relay",
+                "vmess",
+                Some(tls_underlay),
+                None,
+            );
+            event
+        })
+        .or_else(|err| {
+            let mut event = generic_proxy_tcp_failed_event(
+                peer,
+                original_dst,
+                &selection,
+                sniff,
+                "vmess",
+                &err,
+                "aead-tls-tcp-relay",
+            );
+            event["tls_underlay"] = json!(tls_underlay);
+            append_proxy_tcp_execution_fields(
+                &mut event,
+                "aead-tls-tcp-relay",
+                "vmess",
+                Some(tls_underlay),
+                None,
+            );
+            Ok::<Value, String>(event)
+        })
+}
+
+#[allow(clippy::too_many_arguments)]
 pub(super) async fn handle_vmess_websocket_proxy_tcp_connection_async(
     inbound: &mut TokioTcpStream,
     peer: SocketAddr,

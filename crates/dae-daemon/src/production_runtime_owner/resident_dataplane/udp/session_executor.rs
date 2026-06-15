@@ -282,9 +282,9 @@ impl VlessXudpStreamSession {
         original_dst: SocketAddr,
         payload: &[u8],
     ) -> Result<UdpExchangeResult, String> {
-        if proxy.flow != XTLS_RPRX_VISION {
+        if !is_xtls_rprx_vision_flow(&proxy.flow) {
             return Err(
-                "VLESS UDP session executor currently admits Vision XUDP only; non-Vision UDP remains fail-closed"
+                "VLESS Vision XUDP stream executor requires an official Vision flow; other admitted VLESS UDP shapes use their own executor"
                     .to_owned(),
             );
         }

@@ -288,6 +288,23 @@ pub(crate) async fn handle_resident_proxy_tcp_connection_async(
         .await;
     }
     if let ResidentProxyProtocolPlan::VmessAeadTcp { id } = &selection.proxy.handler
+        && selection.proxy.net == "tcp"
+        && selection.proxy.tls == "tls"
+    {
+        let id = id.clone();
+        return handle_vmess_tls_proxy_tcp_connection_async(
+            &mut inbound,
+            peer,
+            original_dst,
+            selection,
+            stop,
+            &sniff,
+            &metrics,
+            &id,
+        )
+        .await;
+    }
+    if let ResidentProxyProtocolPlan::VmessAeadTcp { id } = &selection.proxy.handler
         && selection.proxy.net == "websocket"
         && selection.proxy.tls != "tls"
     {

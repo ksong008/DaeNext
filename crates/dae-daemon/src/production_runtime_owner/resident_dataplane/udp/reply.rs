@@ -33,7 +33,7 @@ pub(super) fn parse_vless_udp_response(
     if input.len() < header_len {
         return Ok(None);
     }
-    if flow == XTLS_RPRX_VISION {
+    if is_xtls_rprx_vision_flow(flow) {
         if input.len() == header_len {
             return Ok(None);
         }

@@ -27,6 +27,7 @@ use dae_outbound::{
     socks5::{Socks5Address, udp_packet},
     trojan::packet as trojan_packet,
     tuic::{authenticate_tuic_connection, build_tuic_runtime_client_config},
+    vless::contract::is_xtls_rprx_vision_flow,
     vless::packet,
     vmess,
 };

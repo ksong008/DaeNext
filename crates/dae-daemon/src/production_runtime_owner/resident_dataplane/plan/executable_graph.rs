@@ -25,6 +25,7 @@ pub(in crate::production_runtime_owner::resident_dataplane) struct ResidentExecu
     flow: String,
     alpn: Vec<String>,
     allow_insecure: bool,
+    verification_policy: String,
     utls_fingerprint: Option<ResidentUtlsFingerprintPlan>,
     chain_parent_count: usize,
     mark: u32,
@@ -54,6 +55,7 @@ impl ResidentExecutableGraphDescriptor {
             flow: proxy.flow.clone(),
             alpn: proxy.alpn.clone(),
             allow_insecure: proxy.allow_insecure,
+            verification_policy: graph_verification_policy(proxy),
             utls_fingerprint: proxy.utls_fingerprint.clone(),
             chain_parent_count: usize::from(proxy.chain_parent.is_some()),
             mark: proxy.mark,
@@ -191,7 +193,7 @@ impl ResidentExecutableGraphDescriptor {
             "provider": provider,
             "transportUnderlay": self.transport_underlay,
             "securityUnderlay": self.security_underlay,
-            "verificationPolicy": if self.allow_insecure { "explicit-insecure" } else { "system-roots" },
+            "verificationPolicy": self.verification_policy,
             "allowInsecure": self.allow_insecure,
             "alpn": self.alpn,
             "flow": self.flow,
@@ -364,6 +366,20 @@ fn graph_security_underlay(proxy: &ResidentProxyPlan) -> String {
             "tls" => "standard-tls".to_owned(),
             other => other.to_owned(),
         }
+    }
+}
+
+fn graph_verification_policy(proxy: &ResidentProxyPlan) -> String {
+    match &proxy.handler {
+        ResidentProxyProtocolPlan::JuicityQuicTcp { allow_insecure, .. } if *allow_insecure => {
+            "explicit-insecure".to_owned()
+        }
+        ResidentProxyProtocolPlan::JuicityQuicTcp {
+            pinned_certchain_sha256,
+            ..
+        } if !pinned_certchain_sha256.is_empty() => "pinned-certchain-sha256".to_owned(),
+        _ if proxy.allow_insecure => "explicit-insecure".to_owned(),
+        _ => "system-roots".to_owned(),
     }
 }
 

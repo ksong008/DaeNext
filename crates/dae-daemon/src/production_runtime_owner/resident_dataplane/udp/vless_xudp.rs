@@ -7,7 +7,7 @@ pub(super) fn build_vless_udp_request(
     payload: &[u8],
 ) -> Result<Vec<u8>, String> {
     let key = proxy.vless_key()?;
-    if proxy.flow != XTLS_RPRX_VISION {
+    if !is_xtls_rprx_vision_flow(&proxy.flow) {
         return packet::first_write_bytes(
             &key,
             &proxy.flow,
