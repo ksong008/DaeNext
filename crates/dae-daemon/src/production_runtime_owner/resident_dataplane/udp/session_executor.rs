@@ -1,3 +1,4 @@
+use std::collections::BTreeMap;
 use std::future::poll_fn;
 use std::pin::Pin;
 use std::task::Poll;
@@ -1006,6 +1007,30 @@ mod datagram_udp_pending_tests {
             Some("quic-endpoint-and-connection-reused")
         );
     }
+
+    #[test]
+    fn quic_udp_fragment_buffer_reassembles_fragments_by_packet_id() {
+        let mut buffer = QuicUdpFragmentBuffer::default();
+        assert!(
+            buffer
+                .push(7, 1, 3, b"middle-".to_vec(), "Hysteria2")
+                .unwrap()
+                .is_none()
+        );
+        assert!(
+            buffer
+                .push(7, 2, 3, b"tail".to_vec(), "Hysteria2")
+                .unwrap()
+                .is_none()
+        );
+        assert_eq!(
+            buffer
+                .push(7, 0, 3, b"head-".to_vec(), "Hysteria2")
+                .unwrap()
+                .unwrap(),
+            b"head-middle-tail"
+        );
+    }
 }
 
 #[cfg(test)]
@@ -1251,6 +1276,85 @@ pub(super) struct Hysteria2QuicDatagramSession {
     endpoint: Option<quinn::Endpoint>,
     connection: Option<quinn::Connection>,
     session_id: u32,
+    fragments: QuicUdpFragmentBuffer,
+}
+
+#[derive(Default)]
+struct QuicUdpFragmentBuffer {
+    pending: BTreeMap<u16, PendingQuicUdpFragments>,
+}
+
+struct PendingQuicUdpFragments {
+    total: u8,
+    parts: BTreeMap<u8, Vec<u8>>,
+}
+
+impl QuicUdpFragmentBuffer {
+    fn push(
+        &mut self,
+        packet_id: u16,
+        frag_id: u8,
+        frag_count: u8,
+        payload: Vec<u8>,
+        label: &str,
+    ) -> Result<Option<Vec<u8>>, String> {
+        if frag_count == 0 || frag_id >= frag_count {
+            return Err(format!(
+                "invalid {label} UDP fragment fields: frag_id={frag_id} frag_count={frag_count}"
+            ));
+        }
+        if frag_count == 1 {
+            return Ok(Some(payload));
+        }
+        if !self.pending.contains_key(&packet_id) && self.pending.len() >= 64 {
+            return Err(format!("{label} UDP fragment buffer is full"));
+        }
+        if let Some(entry) = self.pending.get(&packet_id)
+            && entry.total != frag_count
+        {
+            let previous = entry.total;
+            self.pending.remove(&packet_id);
+            return Err(format!(
+                "{label} UDP fragment count changed for packet {packet_id}: {previous} -> {frag_count}"
+            ));
+        }
+        let complete = {
+            let entry = self
+                .pending
+                .entry(packet_id)
+                .or_insert_with(|| PendingQuicUdpFragments {
+                    total: frag_count,
+                    parts: BTreeMap::new(),
+                });
+            entry.parts.insert(frag_id, payload);
+            entry.parts.len() == frag_count as usize
+        };
+        if !complete {
+            return Ok(None);
+        }
+        let entry = self
+            .pending
+            .remove(&packet_id)
+            .ok_or_else(|| format!("{label} UDP fragment packet disappeared"))?;
+        let mut out = Vec::new();
+        for id in 0..entry.total {
+            let part = entry.parts.get(&id).ok_or_else(|| {
+                format!("{label} UDP fragment packet {packet_id} missing fragment {id}")
+            })?;
+            if out.len() + part.len() > u16::MAX as usize {
+                return Err(format!(
+                    "{label} UDP reassembled payload too large: {} bytes",
+                    out.len() + part.len()
+                ));
+            }
+            out.extend_from_slice(part);
+        }
+        Ok(Some(out))
+    }
+
+    fn clear(&mut self) {
+        self.pending.clear();
+    }
 }
 
 impl Hysteria2QuicDatagramSession {
@@ -1263,6 +1367,7 @@ impl Hysteria2QuicDatagramSession {
             endpoint: None,
             connection: None,
             session_id: fastrand::u32(1..=u32::MAX),
+            fragments: QuicUdpFragmentBuffer::default(),
         }
     }
 
@@ -1310,8 +1415,18 @@ impl Hysteria2QuicDatagramSession {
         };
         let response = response.map_err(|err| format!("read Hysteria2 UDP datagram: {err}"))?;
         let parsed = parse_hysteria2_udp_message(&response)?;
+        let Some(payload) = self.fragments.push(
+            parsed.packet_id,
+            parsed.frag_id,
+            parsed.frag_count,
+            parsed.payload,
+            "Hysteria2",
+        )?
+        else {
+            return Ok(None);
+        };
         Ok(Some(
-            UdpExchangeResult::new(parsed.payload, "quic-udp-datagram")
+            UdpExchangeResult::new(payload, "quic-udp-datagram")
                 .with_quic_underlay("quinn-h3")
                 .with_session_executor("tokio-quic-datagram-session")
                 .with_underlay_reuse("quic-endpoint-and-connection-reused"),
@@ -1364,6 +1479,7 @@ impl Hysteria2QuicDatagramSession {
         if let Some(endpoint) = self.endpoint.take() {
             endpoint.wait_idle().await;
         }
+        self.fragments.clear();
     }
 }
 
@@ -1375,6 +1491,7 @@ pub(super) struct TuicQuicDatagramSession {
     endpoint: Option<quinn::Endpoint>,
     connection: Option<quinn::Connection>,
     assoc_id: u16,
+    fragments: QuicUdpFragmentBuffer,
 }
 
 impl TuicQuicDatagramSession {
@@ -1387,6 +1504,7 @@ impl TuicQuicDatagramSession {
             endpoint: None,
             connection: None,
             assoc_id: fastrand::u16(1..=u16::MAX),
+            fragments: QuicUdpFragmentBuffer::default(),
         }
     }
 
@@ -1430,8 +1548,18 @@ impl TuicQuicDatagramSession {
         };
         let response = response.map_err(|err| format!("read TUIC UDP datagram: {err}"))?;
         let parsed = parse_tuic_packet_frame(&response)?;
+        let Some(payload) = self.fragments.push(
+            parsed.packet_id,
+            parsed.frag_id,
+            parsed.frag_total,
+            parsed.payload,
+            "TUIC",
+        )?
+        else {
+            return Ok(None);
+        };
         Ok(Some(
-            UdpExchangeResult::new(parsed.payload, "quic-udp-datagram")
+            UdpExchangeResult::new(payload, "quic-udp-datagram")
                 .with_quic_underlay("quinn")
                 .with_session_executor("tokio-quic-datagram-session")
                 .with_underlay_reuse("quic-endpoint-and-connection-reused"),
@@ -1475,6 +1603,7 @@ impl TuicQuicDatagramSession {
         if let Some(endpoint) = self.endpoint.take() {
             endpoint.wait_idle().await;
         }
+        self.fragments.clear();
     }
 }
 

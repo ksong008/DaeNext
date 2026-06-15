@@ -3,6 +3,8 @@ use super::*;
 pub(super) struct Hysteria2UdpMessage {
     pub(super) session_id: u32,
     pub(super) packet_id: u16,
+    pub(super) frag_id: u8,
+    pub(super) frag_count: u8,
     pub(super) payload: Vec<u8>,
 }
 
@@ -40,9 +42,9 @@ pub(super) fn parse_hysteria2_udp_message(input: &[u8]) -> Result<Hysteria2UdpMe
     let (addr_len, mut offset) = read_quic_varint(input, 8)?;
     let addr_len =
         usize::try_from(addr_len).map_err(|_| "Hysteria2 UDP address too large".to_owned())?;
-    if frag_id != 0 || frag_count != 1 {
+    if frag_count == 0 || frag_id >= frag_count {
         return Err(format!(
-            "fragmented Hysteria2 UDP response is unsupported: frag_id={frag_id} frag_count={frag_count}"
+            "invalid Hysteria2 UDP fragment fields: frag_id={frag_id} frag_count={frag_count}"
         ));
     }
     if addr_len == 0 || input.len() <= offset + addr_len {
@@ -52,6 +54,8 @@ pub(super) fn parse_hysteria2_udp_message(input: &[u8]) -> Result<Hysteria2UdpMe
     Ok(Hysteria2UdpMessage {
         session_id,
         packet_id,
+        frag_id,
+        frag_count,
         payload: input[offset..].to_vec(),
     })
 }
@@ -60,6 +64,8 @@ pub(super) fn parse_hysteria2_udp_message(input: &[u8]) -> Result<Hysteria2UdpMe
 pub(super) struct TuicPacketFrame {
     pub(super) assoc_id: u16,
     pub(super) packet_id: u16,
+    pub(super) frag_total: u8,
+    pub(super) frag_id: u8,
     pub(super) payload: Vec<u8>,
 }
 
@@ -101,9 +107,9 @@ pub(super) fn parse_tuic_packet_frame(input: &[u8]) -> Result<TuicPacketFrame, S
     let frag_total = input[6];
     let frag_id = input[7];
     let size = u16::from_be_bytes([input[8], input[9]]) as usize;
-    if frag_total != 1 || frag_id != 0 {
+    if frag_total == 0 || frag_id >= frag_total {
         return Err(format!(
-            "fragmented TUIC UDP response is unsupported: frag_total={frag_total} frag_id={frag_id}"
+            "invalid TUIC UDP fragment fields: frag_total={frag_total} frag_id={frag_id}"
         ));
     }
     let offset = read_tuic_address(input, 10)?;
@@ -114,6 +120,8 @@ pub(super) fn parse_tuic_packet_frame(input: &[u8]) -> Result<TuicPacketFrame, S
     Ok(TuicPacketFrame {
         assoc_id,
         packet_id,
+        frag_total,
+        frag_id,
         payload: input[offset..payload_end].to_vec(),
     })
 }
