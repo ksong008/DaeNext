@@ -46,6 +46,8 @@ pub(crate) struct ResidentXhttpEndpointPlan {
     pub(in crate::production_runtime_owner::resident_dataplane) allow_insecure: bool,
     pub(in crate::production_runtime_owner::resident_dataplane) tls_fragment:
         Option<TlsFragmentOptions>,
+    pub(in crate::production_runtime_owner::resident_dataplane) reality:
+        Option<ResidentRealityUnderlayPlan>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
@@ -567,6 +569,7 @@ impl ResidentXhttpEndpointPlan {
             xmux: proxy.xhttp_xmux.clone(),
             allow_insecure: proxy.allow_insecure,
             tls_fragment: proxy.tls_fragment.clone(),
+            reality: proxy.reality.clone(),
         }
     }
 
@@ -582,6 +585,9 @@ impl ResidentXhttpEndpointPlan {
         compact_string_vec(&mut self.alpn);
         compact_string(&mut self.stream_host);
         compact_string(&mut self.stream_path);
+        if let Some(reality) = &mut self.reality {
+            reality.compact_allocations();
+        }
     }
 }
 
