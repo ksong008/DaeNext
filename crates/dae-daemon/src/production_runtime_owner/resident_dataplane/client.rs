@@ -15,7 +15,6 @@ use tokio::net::TcpStream as TokioTcpStream;
 use tokio::time;
 
 use super::RESIDENT_CONNECT_TIMEOUT;
-use super::XTLS_RPRX_VISION;
 use super::direct::open_direct_tcp_connection_async;
 use super::plan::{
     ResidentProxyPlan, ResidentRealityUnderlayPlan, ResidentUtlsFingerprintPlan,
