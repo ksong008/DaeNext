@@ -37,26 +37,37 @@ pub(crate) fn build_chained_proxy_plan(
 ) -> Result<ResidentProxyPlan, String> {
     let parsed =
         parse_link_chain(&link).map_err(|err| format!("parse chained node {node_tag}: {err}"))?;
-    if parsed.nodes.len() != 2 {
+    if parsed.nodes.len() < 2 {
         return Err(format!(
-            "resident dataplane nested chain executor admits two-node chains only for node {node_tag}; got {} node(s)",
+            "resident dataplane nested chain executor requires at least two nodes for node {node_tag}; got {} node(s)",
             parsed.nodes.len()
         ));
     }
-    let parent_node = parsed.nodes[0].clone();
-    let child_node = parsed.nodes[1].clone();
-    let parent = build_proxy_plan(
-        config,
-        group_name.clone(),
-        format!("{node_tag}:parent"),
-        parent_node.raw,
-    )?;
+    let child_node = parsed.nodes.last().cloned().ok_or_else(|| {
+        format!("resident dataplane nested chain parser returned no child for node {node_tag}")
+    })?;
     let mut child = build_proxy_plan(config, group_name, node_tag.clone(), child_node.raw)?;
-    if !resident_chain_parent_supported(&parent) {
-        return Err(format!(
-            "resident dataplane nested chain executor admits plain SOCKS5/HTTP CONNECT parent only for node {node_tag}; got {}",
-            parent.protocol
-        ));
+    let mut parent_chain: Option<Arc<ResidentProxyPlan>> = None;
+    for (index, parent_node) in parsed.nodes[..parsed.nodes.len() - 1]
+        .iter()
+        .enumerate()
+        .rev()
+    {
+        let mut parent = build_proxy_plan(
+            config,
+            child.group_name.clone(),
+            format!("{node_tag}:parent{index}"),
+            parent_node.raw.clone(),
+        )?;
+        parent.chain_parent = parent_chain;
+        parent.compact_allocations();
+        if !resident_chain_parent_supported(&parent) {
+            return Err(format!(
+                "resident dataplane nested chain executor admits plain SOCKS5/HTTP CONNECT parent only for node {node_tag}; parent {index} got {}",
+                parent.protocol
+            ));
+        }
+        parent_chain = Some(Arc::new(parent));
     }
     if !resident_chain_child_supported(&child) {
         return Err(format!(
@@ -68,7 +79,7 @@ pub(crate) fn build_chained_proxy_plan(
     child.graph_id = graph.graph_id;
     child.graph_link_hash = graph.link_hash;
     child.redacted_link_source = graph.redacted_link_source;
-    child.chain_parent = Some(Arc::new(parent));
+    child.chain_parent = parent_chain;
     child.compact_allocations();
     Ok(child)
 }
@@ -90,7 +101,8 @@ pub(crate) fn resident_chain_child_supported(child: &ResidentProxyPlan) -> bool 
         | ResidentProxyProtocolPlan::ShadowsocksSimpleObfsHttpTcp { .. }
         | ResidentProxyProtocolPlan::ShadowsocksSimpleObfsTlsTcp { .. }
         | ResidentProxyProtocolPlan::ShadowsocksV2rayPluginTlsWsTcp { .. }
-        | ResidentProxyProtocolPlan::Shadowsocks2022SimpleObfsHttpTcp { .. } => true,
+        | ResidentProxyProtocolPlan::Shadowsocks2022SimpleObfsHttpTcp { .. }
+        | ResidentProxyProtocolPlan::ShadowsocksRHttpSimpleTcp { .. } => true,
         ResidentProxyProtocolPlan::VmessAeadTcp { .. } => {
             matches!(child.net.as_str(), "tcp" | "websocket" | "httpupgrade") && child.tls == "none"
         }

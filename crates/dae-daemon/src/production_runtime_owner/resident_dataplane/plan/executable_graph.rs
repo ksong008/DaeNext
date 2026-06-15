@@ -57,7 +57,7 @@ impl ResidentExecutableGraphDescriptor {
             allow_insecure: proxy.allow_insecure,
             verification_policy: graph_verification_policy(proxy),
             utls_fingerprint: proxy.utls_fingerprint.clone(),
-            chain_parent_count: usize::from(proxy.chain_parent.is_some()),
+            chain_parent_count: chain_parent_count(proxy),
             mark: proxy.mark,
             mptcp: proxy.mptcp,
         }
@@ -344,6 +344,16 @@ pub(super) fn resident_graph_identity(link: &str) -> ResidentGraphIdentity {
         redacted_link_source: redacted_link_source(link),
         link_hash,
     }
+}
+
+fn chain_parent_count(proxy: &ResidentProxyPlan) -> usize {
+    let mut count = 0;
+    let mut current = proxy.chain_parent.as_deref();
+    while let Some(parent) = current {
+        count += 1;
+        current = parent.chain_parent.as_deref();
+    }
+    count
 }
 
 fn graph_transport_underlay(proxy: &ResidentProxyPlan) -> String {
