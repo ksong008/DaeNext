@@ -89,38 +89,14 @@ fn source_shape_registry_link_schemes_are_common_import_carriers() {
 }
 
 #[test]
-fn source_shape_registry_keeps_only_extended_xhttp_shape_fail_closed_with_stable_reason_ids() {
-    let taxonomy = capability_reason_taxonomy();
+fn source_shape_registry_has_no_runtime_blocked_rows_after_extended_xhttp_admission() {
     let rows = source_shape_registry_rows();
     let blocked = rows
         .iter()
         .filter(|row| row.resident_status == "blocked")
         .collect::<Vec<_>>();
-    let blocked_shape_ids = blocked.iter().map(|row| row.shape_id).collect::<Vec<_>>();
 
-    assert_eq!(blocked_shape_ids, vec!["xhttp-extended-settings-wrapper"]);
-    for row in blocked {
-        assert_eq!(
-            row.stream_wrapper, "xhttp",
-            "{} is non-xHTTP but still blocked",
-            row.shape_id
-        );
-        let blocker = row
-            .blocker_id
-            .unwrap_or_else(|| panic!("missing blocker for {}", row.shape_id));
-        assert!(
-            taxonomy.contains(&blocker),
-            "unexpected blocker {blocker} on {}",
-            row.shape_id
-        );
-        assert_eq!(row.state_ledger.resident_graph, "blocked");
-        assert_eq!(
-            row.executor_proof.proof_state,
-            "descriptor-only-fail-closed"
-        );
-        assert_eq!(row.runtime_selection.selected_runtime_scope, "not-selected");
-        assert!(!row.evidence_requirements.is_empty(), "{}", row.shape_id);
-    }
+    assert!(blocked.is_empty(), "blocked rows remain: {blocked:#?}");
 }
 
 #[test]
@@ -138,6 +114,7 @@ fn source_shape_registry_marks_expanded_rows_with_scoped_live_evidence() {
         "passthrough-udp-transport",
         "legacy-cipher-protocol-shape",
         "xhttp-h3-wrapper",
+        "xhttp-extended-settings-wrapper",
     ] {
         let row = rows
             .iter()

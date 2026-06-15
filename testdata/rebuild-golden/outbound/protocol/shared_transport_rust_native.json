@@ -308,11 +308,6 @@
       "uplink_data": "body"
     },
     "true_data_plane_deferred": true,
-    "unsupported_extra_fields": [
-      "noSSEHeader",
-      "scMaxBufferedPosts",
-      "downloadSettings.xhttpSettings.mode",
-      "downloadSettings.xhttpSettings.extra except xmux"
-    ]
+    "unsupported_extra_fields": []
   }
 }

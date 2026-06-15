@@ -34,6 +34,7 @@ pub(super) const fn admitted_row(
     }
 }
 
+#[allow(dead_code)]
 pub(super) const fn blocked_row(
     shape_id: &'static str,
     protocol_family: &'static str,
