@@ -5,6 +5,8 @@ mod tests {
     use super::super::super::plan::{ResidentProxyPlan, ResidentProxyProtocolPlan};
     use super::super::*;
 
+    const XTLS_RPRX_VISION: &str = "xtls-rprx-vision";
+
     #[test]
     fn resident_vless_udp_response_parser_handles_vision_payload() {
         let key = [1_u8; 16];

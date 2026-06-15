@@ -365,6 +365,8 @@ mod tests {
         ResidentProxyProtocolPlan, ResidentXhttpMode,
     };
 
+    const XTLS_RPRX_VISION: &str = "xtls-rprx-vision";
+
     #[test]
     fn boring_read_ahead_stays_disabled_for_vless_vision() {
         let mut proxy =

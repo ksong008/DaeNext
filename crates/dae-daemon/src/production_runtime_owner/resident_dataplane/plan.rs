@@ -35,7 +35,6 @@ use url::Url;
 
 use super::super::resident_routing::ResidentGeodataStore;
 use super::{
-    XTLS_RPRX_VISION,
     dns::{ResidentDnsPlan, build_resident_dns_plan},
     link_hash, redacted_link_source,
 };

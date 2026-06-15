@@ -1,5 +1,7 @@
 use super::*;
 
+const XTLS_RPRX_VISION: &str = "xtls-rprx-vision";
+
 fn fingerprint_config(global_tls_fields: &str, source: String) -> Config {
     let config_source = r#"
         global {

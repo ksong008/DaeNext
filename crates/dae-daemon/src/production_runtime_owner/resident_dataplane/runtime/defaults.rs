@@ -31,7 +31,6 @@ pub(crate) const RESIDENT_MANUAL_LATENCY_PROBE_CONCURRENCY_MAX: usize = 128;
 pub(crate) const RESIDENT_HEALTH_CHECK_CONCURRENCY_DEFAULT: usize = 1;
 pub(crate) const RESIDENT_HEALTH_CHECK_CONCURRENCY_MIN: usize = 1;
 pub(crate) const RESIDENT_HEALTH_CHECK_CONCURRENCY_MAX: usize = 128;
-pub(crate) const XTLS_RPRX_VISION: &str = "xtls-rprx-vision";
 pub(crate) const VISION_COMMAND_CONTINUE: u8 = 0;
 pub(crate) const VISION_COMMAND_END: u8 = 1;
 pub(crate) const VISION_COMMAND_DIRECT: u8 = 2;
