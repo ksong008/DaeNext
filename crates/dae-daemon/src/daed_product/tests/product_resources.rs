@@ -461,6 +461,10 @@ fn runtime_traffic_carry_preserves_totals_when_live_metrics_reset() {
     assert_eq!(metrics["downloadTotal"], json!(750));
     assert_eq!(metrics["activeTcpConnections"], json!(3));
     assert_eq!(metrics["activeUdpSessions"], json!(2));
+
+    let stats = resident_runtime_traffic_stats(&summary, 60, 10);
+    assert_eq!(stats.upload_total, 525);
+    assert_eq!(stats.download_total, 750);
 }
 
 #[test]
@@ -477,7 +481,7 @@ fn runtime_traffic_carry_zero_leaves_live_metrics_unchanged() {
 }
 
 #[test]
-fn runtime_traffic_stats_read_resident_event_bytes() {
+fn runtime_traffic_stats_ignore_legacy_event_file_without_live_metrics() {
     let dir = std::env::temp_dir().join(format!("daed-product-test-{}", fastrand::u64(..)));
     fs::create_dir_all(&dir).unwrap();
     let event_file = dir.join("events.jsonl");
@@ -495,71 +499,11 @@ fn runtime_traffic_stats_read_resident_event_bytes() {
         }
     });
     let stats = resident_runtime_traffic_stats(&runtime, 60, 10);
-    assert_eq!(stats.upload_total, 130);
-    assert_eq!(stats.download_total, 240);
-    assert_eq!(stats.active_connections, 1);
-    assert_eq!(stats.udp_sessions, 1);
-    assert_eq!(stats.samples.len(), 1);
-    fs::remove_dir_all(dir).unwrap();
-}
-
-#[test]
-fn runtime_traffic_stats_event_file_cache_reads_new_tail() {
-    let dir = std::env::temp_dir().join(format!("daed-product-test-{}", fastrand::u64(..)));
-    fs::create_dir_all(&dir).unwrap();
-    let event_file = dir.join("events.jsonl");
-    let now = unix_now();
-    fs::write(
-            &event_file,
-            format!(
-                "{{\"event\":\"tcp_connection_finished\",\"timestampUnix\":{now},\"bytes_client_to_proxy\":100,\"bytes_proxy_to_client\":200}}\n"
-            ),
-        )
-        .unwrap();
-    let runtime = json!({
-        "residentDataplane": {
-            "event_file": path_string(&event_file)
-        }
-    });
-
-    let first = resident_runtime_traffic_stats(&runtime, 60, 10);
-    assert_eq!(first.upload_total, 100);
-    let event_file_key = path_string(&event_file);
-    let offset_after_first = RUNTIME_TRAFFIC_EVENT_FILE_CACHE
-        .get_or_init(|| Mutex::new(RuntimeTrafficEventFileCache::default()))
-        .lock()
-        .unwrap()
-        .entries
-        .get(&event_file_key)
-        .unwrap()
-        .offset;
-    let second = resident_runtime_traffic_stats(&runtime, 60, 10);
-    assert_eq!(second.upload_total, 100);
-    assert_eq!(
-        RUNTIME_TRAFFIC_EVENT_FILE_CACHE
-            .get_or_init(|| Mutex::new(RuntimeTrafficEventFileCache::default()))
-            .lock()
-            .unwrap()
-            .entries
-            .get(&event_file_key)
-            .unwrap()
-            .offset,
-        offset_after_first
-    );
-
-    let mut file = fs::OpenOptions::new()
-        .append(true)
-        .open(&event_file)
-        .unwrap();
-    writeln!(
-            file,
-            "{{\"event\":\"udp_packet_finished\",\"timestampUnix\":{now},\"request_len\":30,\"response_len\":40}}"
-        )
-        .unwrap();
-    let third = resident_runtime_traffic_stats(&runtime, 60, 10);
-    assert_eq!(third.upload_total, 130);
-    assert_eq!(third.download_total, 240);
-    assert_eq!(third.udp_sessions, 1);
+    assert_eq!(stats.upload_total, 0);
+    assert_eq!(stats.download_total, 0);
+    assert_eq!(stats.active_connections, 0);
+    assert_eq!(stats.udp_sessions, 0);
+    assert!(stats.samples.is_empty());
     fs::remove_dir_all(dir).unwrap();
 }
 
