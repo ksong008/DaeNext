@@ -10,7 +10,8 @@ use dae_config::Config;
 use dae_core_types::OutboundIndex;
 use dae_ebpf_support::{
     RuntimeMapInfo, RuntimeMapSnapshot, delete_map_elem_bytes, lookup_map_elem_bytes,
-    map_keys_by_fd, open_map_fd, runtime_map_name_matches, update_map_elem_bytes,
+    map_keys_by_fd, open_map_fd, runtime_map_name_matches as support_runtime_map_name_matches,
+    update_map_elem_bytes,
 };
 use serde_json::{Value, json};
 
@@ -250,6 +251,10 @@ pub(super) fn open_all_maps(
         .into_iter()
         .map(open_map_info)
         .collect()
+}
+
+pub(super) fn runtime_map_name_matches(actual: &str, expected: &str) -> bool {
+    support_runtime_map_name_matches(actual, expected)
 }
 
 fn open_map_info(info: &RuntimeMapInfo) -> Result<(OwnedFd, RuntimeMapInfo), String> {
