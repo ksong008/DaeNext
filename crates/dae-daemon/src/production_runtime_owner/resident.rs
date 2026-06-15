@@ -1,13 +1,12 @@
 use std::env;
 use std::fs;
-use std::os::fd::AsRawFd;
 use std::path::{Path, PathBuf};
 
 use dae_config::Config;
 use dae_ebpf_support::{
-    AttachBackend, LiveLoadedTproxyListenSocketMap, RuntimeMapCapacity, dae_cgroup_attach_matrix,
-    map_capacity_by_id, map_catalog, map_ids, map_info,
-    open_live_loaded_tproxy_listen_socket_map_in_netns, open_map_fd,
+    AttachBackend, LiveLoadedTproxyListenSocketMap, RuntimeMapCapacity, RuntimeMapSnapshot,
+    dae_cgroup_attach_matrix, map_capacity_by_id, map_capacity_fast_by_id, map_catalog, map_ids,
+    open_live_loaded_tproxy_listen_socket_map_in_netns, runtime_map_name_matches,
 };
 use serde_json::{Value, json};
 

@@ -19,7 +19,9 @@ pub(super) fn discover_reusable_map(
             candidate_map_ids: Vec::new(),
         });
     }
-    let id = loaded_map_id_by_name(&handoff.new_map_ids, name)?;
+    let handoff_snapshot = RuntimeMapSnapshot::from_ids(&handoff.new_map_ids)
+        .map_err(|err| format!("resident reusable handoff map snapshot failed: {err}"))?;
+    let id = loaded_map_id_by_name_in_snapshot(&handoff_snapshot, &handoff.new_map_ids, name);
     if let Some(id) = id {
         return Ok(ReusableMapDiscovery {
             name,
@@ -28,9 +30,9 @@ pub(super) fn discover_reusable_map(
             candidate_map_ids: handoff.new_map_ids.clone(),
         });
     }
-    let current_map_ids =
-        map_ids().map_err(|err| format!("resident reusable map snapshot failed: {err}"))?;
-    if let Some(id) = latest_loaded_map_id_by_name(&current_map_ids, name)? {
+    let current_snapshot = RuntimeMapSnapshot::collect()
+        .map_err(|err| format!("resident reusable map snapshot failed: {err}"))?;
+    if let Some(id) = latest_loaded_map_id_by_name_in_snapshot(&current_snapshot, name) {
         return Ok(ReusableMapDiscovery {
             name,
             id: Some(id),
@@ -103,7 +105,12 @@ pub(super) fn reusable_map_discovery_json(
         "candidateMapIds": discovery.candidate_map_ids,
     });
     if let Some(id) = discovery.id {
-        let capacity = match map_capacity_by_id(id) {
+        let capacity_result = if exact_reusable_map_capacity_enabled() {
+            map_capacity_by_id(id)
+        } else {
+            map_capacity_fast_by_id(id)
+        };
+        let capacity = match capacity_result {
             Ok(capacity) => runtime_map_capacity_json(&capacity, discovery.source),
             Err(err) => json!({
                 "status": "fail",
@@ -130,6 +137,8 @@ pub(super) fn runtime_map_capacity_json(capacity: &RuntimeMapCapacity, source: &
         "valueSize": capacity.info.value_size,
         "maxEntries": capacity.info.max_entries,
         "entries": capacity.entries,
+        "entriesExact": capacity.entries_exact,
+        "entryCountMode": if capacity.entries_exact { "exact" } else { "fast" },
         "usageRatio": capacity.usage_ratio,
         "pressureApplicable": capacity.pressure_applicable,
         "warning": capacity.warning,
@@ -192,80 +201,32 @@ fn catalog_pin_path(native_runtime: &NativeEbpfRuntimeState, name: &str) -> Opti
         .map(|root| path_string(&root.join(name)))
 }
 
-pub(super) fn loaded_map_id_by_name(
-    candidate_map_ids: &[u32],
-    name: &str,
-) -> Result<Option<u32>, String> {
-    for id in candidate_map_ids {
-        let fd = match open_map_fd(*id) {
-            Ok(fd) => fd,
-            Err(err) if is_transient_missing_map_id(&err) => continue,
-            Err(err) => {
-                return Err(format!(
-                    "open loaded BPF map id {id} while finding {name}: {err}"
-                ));
-            }
-        };
-        let info = match map_info(fd.as_raw_fd()) {
-            Ok(info) => info,
-            Err(err) if is_transient_missing_map_id(&err) => continue,
-            Err(err) => {
-                return Err(format!(
-                    "inspect loaded BPF map id {id} while finding {name}: {err}"
-                ));
-            }
-        };
-        if kernel_visible_map_name_matches(&info.name, name) {
-            return Ok(Some(info.id));
-        }
-    }
-    Ok(None)
+fn exact_reusable_map_capacity_enabled() -> bool {
+    std::env::var("RESIDENT_BPF_EXACT_MAP_CAPACITY")
+        .or_else(|_| std::env::var("DAE_RUST_RESIDENT_BPF_EXACT_MAP_CAPACITY"))
+        .is_ok_and(|value| matches!(value.as_str(), "1" | "true" | "yes" | "on"))
 }
 
-pub(super) fn latest_loaded_map_id_by_name(
+fn loaded_map_id_by_name_in_snapshot(
+    snapshot: &RuntimeMapSnapshot,
     candidate_map_ids: &[u32],
     name: &str,
-) -> Result<Option<u32>, String> {
-    let mut selected = None;
-    for id in candidate_map_ids {
-        let fd = match open_map_fd(*id) {
-            Ok(fd) => fd,
-            Err(err) if is_transient_missing_map_id(&err) => continue,
-            Err(err) => {
-                return Err(format!(
-                    "open loaded BPF map id {id} while finding latest {name}: {err}"
-                ));
-            }
-        };
-        let info = match map_info(fd.as_raw_fd()) {
-            Ok(info) => info,
-            Err(err) if is_transient_missing_map_id(&err) => continue,
-            Err(err) => {
-                return Err(format!(
-                    "inspect loaded BPF map id {id} while finding latest {name}: {err}"
-                ));
-            }
-        };
-        if kernel_visible_map_name_matches(&info.name, name)
-            && selected.is_none_or(|selected_id| info.id > selected_id)
-        {
-            selected = Some(info.id);
-        }
-    }
-    Ok(selected)
+) -> Option<u32> {
+    snapshot
+        .all_by_name_in_ids(candidate_map_ids, name)
+        .first()
+        .map(|info| info.id)
+}
+
+fn latest_loaded_map_id_by_name_in_snapshot(
+    snapshot: &RuntimeMapSnapshot,
+    name: &str,
+) -> Option<u32> {
+    snapshot.latest_by_name(name).map(|info| info.id)
 }
 
 pub(super) fn kernel_visible_map_name_matches(actual: &str, expected: &str) -> bool {
-    actual == expected || actual == truncated_bpf_name(expected)
-}
-
-pub(super) fn truncated_bpf_name(name: &str) -> String {
-    const BPF_OBJ_NAME_MAX_VISIBLE_LEN: usize = 15;
-    name.chars().take(BPF_OBJ_NAME_MAX_VISIBLE_LEN).collect()
-}
-
-pub(super) fn is_transient_missing_map_id(err: &std::io::Error) -> bool {
-    err.kind() == std::io::ErrorKind::NotFound
+    runtime_map_name_matches(actual, expected)
 }
 
 pub(super) fn startup_evidence_from_report(start_report: &Value) -> Value {

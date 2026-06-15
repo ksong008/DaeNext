@@ -35,6 +35,7 @@ pub struct RuntimeMapInfo {
 pub struct RuntimeMapCapacity {
     pub info: RuntimeMapInfo,
     pub entries: u64,
+    pub entries_exact: bool,
     pub usage_ratio: f64,
     pub pressure_applicable: bool,
     pub warning: bool,
@@ -43,18 +44,21 @@ pub struct RuntimeMapCapacity {
 }
 
 impl RuntimeMapCapacity {
-    fn new(info: RuntimeMapInfo, entries: u64) -> Self {
-        let usage_ratio = if info.max_entries == 0 {
+    fn new(info: RuntimeMapInfo, entries: u64, entries_exact: bool) -> Self {
+        let usage_ratio = if info.max_entries == 0 || !entries_exact {
             0.0
         } else {
             entries as f64 / info.max_entries as f64
         };
         let pressure_applicable = map_type_has_occupancy_pressure(info.map_type);
-        let warning = pressure_applicable && usage_ratio >= MAP_USAGE_WARNING_RATIO;
-        let pressure = pressure_applicable && usage_ratio >= MAP_USAGE_PRESSURE_RATIO;
+        let warning =
+            pressure_applicable && entries_exact && usage_ratio >= MAP_USAGE_WARNING_RATIO;
+        let pressure =
+            pressure_applicable && entries_exact && usage_ratio >= MAP_USAGE_PRESSURE_RATIO;
         Self {
             info,
             entries,
+            entries_exact,
             usage_ratio,
             pressure_applicable,
             warning,
@@ -63,6 +67,84 @@ impl RuntimeMapCapacity {
         }
     }
 }
+
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct RuntimeMapSnapshot {
+    maps: Vec<RuntimeMapInfo>,
+}
+
+impl RuntimeMapSnapshot {
+    pub fn collect() -> io::Result<Self> {
+        let ids = map_ids()?;
+        Self::from_ids(&ids)
+    }
+
+    pub fn from_ids(ids: &[u32]) -> io::Result<Self> {
+        let mut maps = Vec::with_capacity(ids.len());
+        for id in ids {
+            let Some(info) = map_info_by_id_if_alive(*id)? else {
+                continue;
+            };
+            maps.push(info);
+        }
+        Ok(Self { maps })
+    }
+
+    pub fn maps(&self) -> &[RuntimeMapInfo] {
+        &self.maps
+    }
+
+    pub fn ids(&self) -> Vec<u32> {
+        self.maps.iter().map(|info| info.id).collect()
+    }
+
+    pub fn by_id(&self, id: u32) -> Option<&RuntimeMapInfo> {
+        self.maps.iter().find(|info| info.id == id)
+    }
+
+    pub fn all_by_name<'a>(&'a self, name: &str) -> Vec<&'a RuntimeMapInfo> {
+        self.maps
+            .iter()
+            .filter(|info| runtime_map_name_matches(&info.name, name))
+            .collect()
+    }
+
+    pub fn all_by_name_in_ids<'a>(&'a self, ids: &[u32], name: &str) -> Vec<&'a RuntimeMapInfo> {
+        self.maps
+            .iter()
+            .filter(|info| ids.contains(&info.id) && runtime_map_name_matches(&info.name, name))
+            .collect()
+    }
+
+    pub fn latest_by_name(&self, name: &str) -> Option<&RuntimeMapInfo> {
+        self.all_by_name(name)
+            .into_iter()
+            .max_by_key(|info| info.id)
+    }
+
+    pub fn latest_by_name_in_ids(&self, ids: &[u32], name: &str) -> Option<&RuntimeMapInfo> {
+        self.all_by_name_in_ids(ids, name)
+            .into_iter()
+            .max_by_key(|info| info.id)
+    }
+}
+
+pub fn runtime_map_name_matches(actual: &str, expected: &str) -> bool {
+    actual == expected || actual.as_bytes() == truncated_bpf_name_bytes(expected)
+}
+
+pub fn truncated_bpf_name(name: &str) -> &str {
+    let bytes = name.as_bytes();
+    let len = bytes.len().min(BPF_OBJ_NAME_MAX_VISIBLE_LEN);
+    std::str::from_utf8(&bytes[..len]).unwrap_or(name)
+}
+
+fn truncated_bpf_name_bytes(name: &str) -> &[u8] {
+    let bytes = name.as_bytes();
+    &bytes[..bytes.len().min(BPF_OBJ_NAME_MAX_VISIBLE_LEN)]
+}
+
+const BPF_OBJ_NAME_MAX_VISIBLE_LEN: usize = 15;
 
 fn map_type_has_occupancy_pressure(map_type: u32) -> bool {
     matches!(
@@ -126,6 +208,23 @@ pub fn open_map_fd(id: u32) -> io::Result<OwnedFd> {
     }
     // SAFETY: A successful BPF_MAP_GET_FD_BY_ID returns a new owned file descriptor.
     Ok(unsafe { OwnedFd::from_raw_fd(fd as i32) })
+}
+
+fn map_info_by_id_if_alive(id: u32) -> io::Result<Option<RuntimeMapInfo>> {
+    let fd = match open_map_fd(id) {
+        Ok(fd) => fd,
+        Err(err) if is_transient_missing_map_id(&err) => return Ok(None),
+        Err(err) => return Err(err),
+    };
+    match map_info(fd.as_raw_fd()) {
+        Ok(info) => Ok(Some(info)),
+        Err(err) if is_transient_missing_map_id(&err) => Ok(None),
+        Err(err) => Err(err),
+    }
+}
+
+fn is_transient_missing_map_id(err: &io::Error) -> bool {
+    err.kind() == io::ErrorKind::NotFound || err.raw_os_error() == Some(libc::ENOENT)
 }
 
 pub fn map_info(fd: i32) -> io::Result<RuntimeMapInfo> {
@@ -251,7 +350,22 @@ pub fn map_capacity_by_id(id: u32) -> io::Result<RuntimeMapCapacity> {
 pub fn map_capacity_by_fd(map_fd: RawFd) -> io::Result<RuntimeMapCapacity> {
     let info = map_info(map_fd)?;
     let entries = count_map_entries_by_fd_with_key_size(map_fd, info.key_size)?;
-    Ok(RuntimeMapCapacity::new(info, entries))
+    Ok(RuntimeMapCapacity::new(info, entries, true))
+}
+
+pub fn map_capacity_fast_by_id(id: u32) -> io::Result<RuntimeMapCapacity> {
+    let fd = open_map_fd(id)?;
+    map_capacity_fast_by_fd(fd.as_raw_fd())
+}
+
+pub fn map_capacity_fast_by_fd(map_fd: RawFd) -> io::Result<RuntimeMapCapacity> {
+    let info = map_info(map_fd)?;
+    let entries = if map_type_has_occupancy_pressure(info.map_type) {
+        0
+    } else {
+        u64::from(info.max_entries)
+    };
+    Ok(RuntimeMapCapacity::new(info, entries, false))
 }
 
 fn count_map_entries_by_fd_with_key_size(map_fd: RawFd, key_size: u32) -> io::Result<u64> {
