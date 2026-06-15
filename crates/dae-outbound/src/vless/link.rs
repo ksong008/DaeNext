@@ -3,7 +3,7 @@ use url::Url;
 
 use crate::error::OutboundError;
 
-use super::contract::XTLS_RPRX_VISION;
+use super::contract::is_xtls_rprx_vision_flow;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct VLESSLink {
@@ -89,11 +89,12 @@ impl VLESSLink {
 
     pub fn validate_flow_client(&self, is_client: bool) -> Result<(), OutboundError> {
         match self.flow.as_str() {
-            XTLS_RPRX_VISION if !is_client => Err(OutboundError::BadVless(format!(
+            "" => Ok(()),
+            flow if is_xtls_rprx_vision_flow(flow) && is_client => Ok(()),
+            flow if is_xtls_rprx_vision_flow(flow) => Err(OutboundError::BadVless(format!(
                 "unsupported server mode xtls flow type: {}",
                 self.flow
             ))),
-            XTLS_RPRX_VISION | "" => Ok(()),
             flow => Err(OutboundError::BadVless(format!(
                 "unsupported xtls flow type: {flow}"
             ))),

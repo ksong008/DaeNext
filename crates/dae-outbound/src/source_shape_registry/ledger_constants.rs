@@ -43,6 +43,7 @@ pub(super) const SCOPED_EXPANDED_SOURCE_MATRIX_EVIDENCE: ScopedExpandedSourceMat
             "mux-transport-wrapper",
             "passthrough-udp-transport",
             "legacy-cipher-protocol-shape",
+            "xhttp-h3-wrapper",
         ],
         source_formats: &[
             "https-proxy-uri",
@@ -76,8 +77,8 @@ pub(super) const SCOPED_EXPANDED_SOURCE_MATRIX_EVIDENCE: ScopedExpandedSourceMat
         evidence_root: "capability-live-evidence-set",
         summary_artifact: "capability-live-summary.json",
         cleanup_artifact: "capability-live-cleanup.sh",
-        row_count: 24,
-        pass_count: 24,
+        row_count: 25,
+        pass_count: 25,
         all_pass: true,
         large_page_all_pass: true,
         proxy_evidence_all_pass: true,

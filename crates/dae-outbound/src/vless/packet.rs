@@ -1,7 +1,7 @@
 use crate::error::OutboundError;
 use crate::vmess::{VMessMetadata, VMessNetwork};
 
-use super::contract::XTLS_RPRX_VISION;
+use super::contract::is_xtls_rprx_vision_flow;
 
 pub fn request_header(
     key: &[u8; 16],
@@ -44,7 +44,7 @@ pub fn first_write_bytes(
     mux: bool,
     payload: &[u8],
 ) -> Result<Vec<u8>, OutboundError> {
-    if network == "udp" && flow != XTLS_RPRX_VISION {
+    if network == "udp" && !is_xtls_rprx_vision_flow(flow) {
         let mut len_payload = Vec::with_capacity(2);
         len_payload.extend_from_slice(&(payload.len() as u16).to_be_bytes());
         let mut out = request_header(key, flow, network, target, mux, &len_payload)?;

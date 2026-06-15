@@ -279,7 +279,7 @@
     },
     "unsupported_flow_error": {
       "error_contains": "unsupported xtls flow type",
-      "input_flow": "xtls-rprx-vision-udp443",
+      "input_flow": "xtls-rprx-vision-future",
       "ok": false
     }
   }

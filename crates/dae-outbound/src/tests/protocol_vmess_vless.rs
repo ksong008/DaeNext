@@ -230,6 +230,19 @@ fn vless_rust_native_matches_nativelden_fixture() {
                     .unwrap()
             )
     );
+    let udp443 = crate::vless::VLESSLink {
+        flow: crate::vless::contract::XTLS_RPRX_VISION_UDP443.to_owned(),
+        ..crate::vless::VLESSLink::parse(fixture["link_parser"][0]["input"].as_str().unwrap())
+            .unwrap()
+    };
+    udp443.validate_flow_client(true).unwrap();
+    assert!(
+        udp443
+            .validate_flow_client(false)
+            .unwrap_err()
+            .to_string()
+            .contains("unsupported server mode xtls flow type")
+    );
     let bad_tcp = crate::vless::VLESSLink::parse(
         unsupported["tcp_bad_header_type_error"]["input"]
             .as_str()

@@ -4,7 +4,7 @@ use std::time::Duration;
 use quinn::crypto::rustls::QuicClientConfig;
 use rustls::client::danger::{HandshakeSignatureValid, ServerCertVerified, ServerCertVerifier};
 use rustls::pki_types::{CertificateDer, ServerName, UnixTime};
-use rustls::{DigitallySignedStruct, SignatureScheme};
+use rustls::{DigitallySignedStruct, RootCertStore, SignatureScheme};
 use tokio::io::AsyncWriteExt;
 
 use crate::error::OutboundError;
@@ -78,7 +78,7 @@ impl ServerCertVerifier for JuicityServerCertVerifier {
             return Ok(ServerCertVerified::assertion());
         }
         Err(rustls::Error::General(
-            "juicity runtime verifier requires allow_insecure or pinned_certchain_sha256"
+            "juicity custom verifier requires allow_insecure or pinned_certchain_sha256; system-root verification uses the standard WebPKI verifier"
                 .to_owned(),
         ))
     }
@@ -122,17 +122,19 @@ pub fn build_juicity_runtime_client_config(
     allow_insecure: bool,
     pinned_certchain_sha256: &str,
 ) -> Result<quinn::ClientConfig, OutboundError> {
-    if !allow_insecure && pinned_certchain_sha256.is_empty() {
-        return Err(bad_runtime(
-            "Juicity runtime requires allow_insecure or pinned_certchain_sha256",
-        ));
-    }
-    let verifier = JuicityServerCertVerifier::new(allow_insecure, pinned_certchain_sha256);
-    let mut crypto =
+    let mut crypto = if allow_insecure || !pinned_certchain_sha256.is_empty() {
+        let verifier = JuicityServerCertVerifier::new(allow_insecure, pinned_certchain_sha256);
         rustls::ClientConfig::builder_with_protocol_versions(&[&rustls::version::TLS13])
             .dangerous()
             .with_custom_certificate_verifier(verifier)
-            .with_no_client_auth();
+            .with_no_client_auth()
+    } else {
+        let mut roots = RootCertStore::empty();
+        roots.extend(webpki_roots::TLS_SERVER_ROOTS.iter().cloned());
+        rustls::ClientConfig::builder_with_protocol_versions(&[&rustls::version::TLS13])
+            .with_root_certificates(roots)
+            .with_no_client_auth()
+    };
     crypto.alpn_protocols = vec![DEFAULT_H3_ALPN.as_bytes().to_vec()];
     let mut config = quinn::ClientConfig::new(Arc::new(
         QuicClientConfig::try_from(crypto)

@@ -397,14 +397,13 @@ pub(super) static SOURCE_SHAPE_REGISTRY_ROWS: &[SourceShapeRegistryRow] = &[
         "registry:legacy-cipher-protocol-shape",
         LEGACY_STREAM_CAPABILITY,
     ),
-    blocked_row(
+    scoped_evidence_admitted_row(
         "xhttp-h3-wrapper",
         "multi-protocol",
         &["vless"],
         "standard-or-fingerprint-aware-tls",
         "xhttp",
         "tcp-stream-h3-packet-up",
-        "missing-stream-wrapper",
         "registry:xhttp-h3-wrapper",
     ),
     blocked_row(
@@ -417,6 +416,8 @@ pub(super) static SOURCE_SHAPE_REGISTRY_ROWS: &[SourceShapeRegistryRow] = &[
         "missing-stream-wrapper",
         "registry:xhttp-extended-settings-wrapper",
     ),
+    // Policy-closed: these rows require non-Rust-native ABI/runtime/executor
+    // ownership and must not silently fall back inside the Rust-native matrix.
     not_supported_row(
         "non-native-abi-outbound-shape",
         "non-rust-native",
