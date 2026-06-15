@@ -339,7 +339,7 @@ pub fn count_map_entries_by_id(id: u32) -> io::Result<u64> {
 
 pub fn count_map_entries_by_fd(map_fd: RawFd) -> io::Result<u64> {
     let info = map_info(map_fd)?;
-    count_map_entries_by_fd_with_key_size(map_fd, info.key_size)
+    Ok(map_keys_by_fd(map_fd, info.key_size)?.len() as u64)
 }
 
 pub fn map_capacity_by_id(id: u32) -> io::Result<RuntimeMapCapacity> {
@@ -369,14 +369,18 @@ pub fn map_capacity_fast_by_fd(map_fd: RawFd) -> io::Result<RuntimeMapCapacity> 
 }
 
 fn count_map_entries_by_fd_with_key_size(map_fd: RawFd, key_size: u32) -> io::Result<u64> {
+    Ok(map_keys_by_fd(map_fd, key_size)?.len() as u64)
+}
+
+pub fn map_keys_by_fd(map_fd: RawFd, key_size: u32) -> io::Result<Vec<Vec<u8>>> {
     if key_size == 0 {
-        return Ok(0);
+        return Ok(Vec::new());
     }
 
     let mut current_key = vec![0_u8; key_size as usize];
     let mut next_key = vec![0_u8; key_size as usize];
     let mut has_previous_key = false;
-    let mut count = 0_u64;
+    let mut keys = Vec::new();
 
     loop {
         let key_ptr = if has_previous_key {
@@ -407,12 +411,12 @@ fn count_map_entries_by_fd_with_key_size(map_fd: RawFd, key_size: u32) -> io::Re
             }
             return Err(err);
         }
-        count += 1;
+        keys.push(next_key.clone());
         current_key.copy_from_slice(&next_key);
         has_previous_key = true;
     }
 
-    Ok(count)
+    Ok(keys)
 }
 
 #[repr(C)]
