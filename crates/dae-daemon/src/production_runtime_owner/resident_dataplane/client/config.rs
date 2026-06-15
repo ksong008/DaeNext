@@ -70,7 +70,10 @@ impl ResidentTlsClientConfigKey {
             alpn: endpoint.alpn.clone(),
             allow_insecure: endpoint.allow_insecure,
             utls_fingerprint: None,
-            reality: None,
+            reality: endpoint
+                .reality
+                .as_ref()
+                .map(ResidentRealityConfigKey::from_plan),
         }
     }
 }
@@ -178,8 +181,34 @@ pub(super) fn rustls_xhttp_endpoint_client_config(
             return Ok(config);
         }
     }
-    let builder = ClientConfig::builder();
-    let mut config = if endpoint.allow_insecure {
+    let builder = if endpoint.reality.is_some() {
+        let mut provider = rustls::crypto::aws_lc_rs::default_provider();
+        provider.kx_groups = vec![rustls::crypto::aws_lc_rs::kx_group::X25519];
+        ClientConfig::builder_with_provider(Arc::new(provider))
+            .with_protocol_versions(&[&rustls::version::TLS13])
+            .map_err(|err| format!("create xHTTP Reality rustls provider: {err}"))?
+    } else {
+        ClientConfig::builder()
+    };
+    let mut config = if let Some(reality) = &endpoint.reality {
+        let reality_config = RealityConfig::new(reality.public_key, reality.short_id.clone())
+            .map_err(|err| format!("create xHTTP Reality config: {err}"))?
+            .with_client_version(REALITY_COMPAT_CLIENT_VERSION);
+        if endpoint.allow_insecure {
+            builder
+                .dangerous()
+                .with_custom_certificate_verifier(ResidentInsecureCertVerifier::new())
+                .with_reality(reality_config)
+                .with_no_client_auth()
+        } else {
+            let mut roots = RootCertStore::empty();
+            roots.extend(webpki_roots::TLS_SERVER_ROOTS.iter().cloned());
+            builder
+                .with_root_certificates(roots)
+                .with_reality(reality_config)
+                .with_no_client_auth()
+        }
+    } else if endpoint.allow_insecure {
         builder
             .dangerous()
             .with_custom_certificate_verifier(ResidentInsecureCertVerifier::new())

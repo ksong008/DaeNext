@@ -826,6 +826,78 @@ pub(super) fn resident_dataplane_plan_admits_vless_xhttp_download_settings() {
 }
 
 #[test]
+pub(super) fn resident_dataplane_plan_admits_vless_xhttp_reality_download_settings() {
+    let config = parse_config(
+        r#"
+        global {
+        lan_interface: daerust0
+        allow_insecure: false
+        so_mark_from_dae: 1234
+        mptcp: false
+        }
+        routing {
+        fallback: direct
+        }
+        "#,
+    );
+    let primary_public_key = base64::engine::general_purpose::URL_SAFE_NO_PAD
+        .encode([FixtureEndpoint::Primary.slot() as u8; 32]);
+    let download_public_key = base64::engine::general_purpose::URL_SAFE_NO_PAD
+        .encode([FixtureEndpoint::Secondary.slot() as u8; 32]);
+    let link = VLESSLink {
+        ps: String::new(),
+        add: fixture_host(FixtureEndpoint::Primary),
+        port: fixture_authority_port().to_string(),
+        id: fixture_client_id(),
+        net: "xhttp".to_owned(),
+        r#type: "none".to_owned(),
+        host: fixture_host(FixtureEndpoint::Authority),
+        sni: fixture_host(FixtureEndpoint::Authority),
+        path: "/resource?ed=2048".to_owned(),
+        xhttp_mode: "packet-up".to_owned(),
+        xhttp_extra: format!(
+            r#"{{"downloadSettings":{{"address":"download.transport.invalid","port":18444,"network":"xhttp","security":"reality","realitySettings":{{"serverName":"download.sni.invalid","alpn":["h2"],"allowInsecure":true,"publicKey":"{download_public_key}","shortId":"01020304","spiderX":"/download"}},"xhttpSettings":{{"host":"download.host.invalid","path":"/down?ed=4096","mode":"packet-up"}}}}}}"#
+        ),
+        tls: "reality".to_owned(),
+        flow: String::new(),
+        alpn: "h2".to_owned(),
+        allow_insecure: false,
+        fingerprint: String::new(),
+        public_key: primary_public_key,
+        short_id: "05060708".to_owned(),
+        spider_x: "/primary".to_owned(),
+        mux: false,
+        protocol: "vless".to_owned(),
+    }
+    .export_url();
+
+    let proxy = build_resident_proxy_plan_for_node(
+        &config,
+        "proxy".to_owned(),
+        "xhttp_reality_download".to_owned(),
+        link,
+    )
+    .unwrap();
+
+    assert_eq!(proxy.tls, "reality");
+    assert!(proxy.reality.is_some());
+    let download = proxy.xhttp_download.as_ref().unwrap();
+    assert_eq!(download.server_host, "download.transport.invalid");
+    assert_eq!(download.server_name, "download.sni.invalid");
+    assert_eq!(download.alpn, vec!["h2".to_owned()]);
+    assert_eq!(download.stream_host, "download.host.invalid");
+    assert_eq!(download.stream_path, "/down/?ed=4096");
+    assert!(download.allow_insecure);
+    let reality = download.reality.as_ref().unwrap();
+    assert_eq!(
+        reality.public_key,
+        [FixtureEndpoint::Secondary.slot() as u8; 32]
+    );
+    assert_eq!(reality.short_id, vec![1, 2, 3, 4]);
+    assert_eq!(reality.spider_x, "/download");
+}
+
+#[test]
 pub(super) fn resident_dataplane_plan_admits_vless_xhttp_stream_modes_and_xmux() {
     let config = parse_config(
         r#"

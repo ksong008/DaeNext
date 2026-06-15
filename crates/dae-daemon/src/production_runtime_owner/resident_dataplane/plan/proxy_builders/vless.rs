@@ -100,6 +100,7 @@ pub(crate) fn build_vless_proxy_plan(
         resident_xhttp_extra_plan(
             &vless.xhttp_extra,
             &server_name,
+            reality.as_ref(),
             config.global.allow_insecure,
             &node_tag,
         )?
@@ -246,6 +247,7 @@ fn resident_xhttp_mode_from_normalized(
 fn resident_xhttp_extra_plan(
     extra: &str,
     primary_server_name: &str,
+    primary_reality: Option<&ResidentRealityUnderlayPlan>,
     global_allow_insecure: bool,
     node_tag: &str,
 ) -> Result<ResidentXhttpExtraPlan, String> {
@@ -288,6 +290,7 @@ fn resident_xhttp_extra_plan(
             "network",
             "security",
             "tlsSettings",
+            "realitySettings",
             "xhttpSettings",
             "splithttpSettings",
         ],
@@ -319,23 +322,40 @@ fn resident_xhttp_extra_plan(
     )?
     .unwrap_or_default()
     .to_ascii_lowercase();
-    if security != "tls" {
-        return Err(format!(
-            "resident dataplane vless xHTTP downloadSettings currently admits security=tls only for node {node_tag}; got {security}"
-        ));
-    }
-    let tls_settings = optional_object(
-        download.get("tlsSettings"),
-        "downloadSettings.tlsSettings",
-        node_tag,
-    )?;
-    let (server_name, alpn, allow_insecure) = resident_xhttp_download_tls_settings(
-        tls_settings,
-        &server_host,
-        primary_server_name,
-        global_allow_insecure,
-        node_tag,
-    )?;
+    let (server_name, alpn, allow_insecure, reality) = match security.as_str() {
+        "tls" => {
+            let tls_settings = optional_object(
+                download.get("tlsSettings"),
+                "downloadSettings.tlsSettings",
+                node_tag,
+            )?;
+            let (server_name, alpn, allow_insecure) = resident_xhttp_download_tls_settings(
+                tls_settings,
+                &server_host,
+                primary_server_name,
+                global_allow_insecure,
+                node_tag,
+            )?;
+            (server_name, alpn, allow_insecure, None)
+        }
+        "reality" => resident_xhttp_download_reality_settings(
+            optional_object(
+                download.get("realitySettings"),
+                "downloadSettings.realitySettings",
+                node_tag,
+            )?,
+            &server_host,
+            primary_server_name,
+            primary_reality,
+            global_allow_insecure,
+            node_tag,
+        )?,
+        other => {
+            return Err(format!(
+                "resident dataplane vless xHTTP downloadSettings admits security=tls or security=reality for node {node_tag}; got {other}"
+            ));
+        }
+    };
     let xhttp_settings = resident_xhttp_download_transport_settings(download, node_tag)?;
     Ok(ResidentXhttpExtraPlan {
         download: Some(ResidentXhttpEndpointPlan {
@@ -349,6 +369,7 @@ fn resident_xhttp_extra_plan(
             xmux: xhttp_settings.xmux,
             allow_insecure,
             tls_fragment: None,
+            reality,
         }),
         xmux,
     })
@@ -402,6 +423,132 @@ fn resident_xhttp_download_tls_settings(
         )?
         .unwrap_or(false);
     Ok((server_name, alpn, allow_insecure))
+}
+
+fn resident_xhttp_download_reality_settings(
+    reality_settings: Option<&serde_json::Map<String, Value>>,
+    server_host: &str,
+    primary_server_name: &str,
+    primary_reality: Option<&ResidentRealityUnderlayPlan>,
+    global_allow_insecure: bool,
+    node_tag: &str,
+) -> Result<
+    (
+        String,
+        Vec<String>,
+        bool,
+        Option<ResidentRealityUnderlayPlan>,
+    ),
+    String,
+> {
+    let Some(reality_settings) = reality_settings else {
+        let Some(primary_reality) = primary_reality else {
+            return Err(format!(
+                "resident dataplane vless xHTTP downloadSettings.security=reality requires realitySettings when the primary xHTTP underlay is not Reality for node {node_tag}"
+            ));
+        };
+        return Ok((
+            if primary_server_name.is_empty() {
+                server_host.to_owned()
+            } else {
+                primary_server_name.to_owned()
+            },
+            vec!["h2".to_owned()],
+            global_allow_insecure,
+            Some(primary_reality.clone()),
+        ));
+    };
+    reject_unknown_object_fields(
+        reality_settings,
+        &[
+            "allowInsecure",
+            "serverName",
+            "alpn",
+            "publicKey",
+            "shortId",
+            "spiderX",
+        ],
+        "resident dataplane vless xHTTP downloadSettings.realitySettings",
+        node_tag,
+    )?;
+    let server_name = optional_string(
+        reality_settings.get("serverName"),
+        "realitySettings.serverName",
+        node_tag,
+    )?
+    .filter(|value| !value.is_empty())
+    .unwrap_or_else(|| {
+        if primary_server_name.is_empty() {
+            server_host.to_owned()
+        } else {
+            primary_server_name.to_owned()
+        }
+    });
+    let alpn = optional_alpn(
+        reality_settings.get("alpn"),
+        "realitySettings.alpn",
+        node_tag,
+    )?
+    .unwrap_or_else(|| vec!["h2".to_owned()]);
+    validate_resident_xhttp_endpoint_alpn(&alpn, node_tag)?;
+    if ResidentXhttpHttpVersion::from_tls_alpn(&alpn) == ResidentXhttpHttpVersion::H1 {
+        return Err(format!(
+            "resident dataplane vless xHTTP downloadSettings.security=reality follows official HTTP/2 selection and does not admit single http/1.1 ALPN for node {node_tag}; got {}",
+            alpn.join(",")
+        ));
+    }
+    let allow_insecure = global_allow_insecure
+        || optional_bool(
+            reality_settings.get("allowInsecure"),
+            "realitySettings.allowInsecure",
+            node_tag,
+        )?
+        .unwrap_or(false);
+    let public_key = optional_string(
+        reality_settings.get("publicKey"),
+        "realitySettings.publicKey",
+        node_tag,
+    )?
+    .filter(|value| !value.is_empty())
+    .map(|value| {
+        ir::reality_pbk_decode(&value)
+            .map_err(|err| err.to_string())?
+            .try_into()
+            .map_err(|_| "Reality publicKey must decode to 32 bytes".to_owned())
+    })
+    .transpose()?
+    .or_else(|| primary_reality.map(|reality| reality.public_key))
+    .ok_or_else(|| {
+        format!(
+            "resident dataplane vless xHTTP downloadSettings.security=reality requires realitySettings.publicKey for node {node_tag}"
+        )
+    })?;
+    let short_id = optional_string(
+        reality_settings.get("shortId"),
+        "realitySettings.shortId",
+        node_tag,
+    )?
+    .map(|value| ir::reality_short_id_decode(&value).map_err(|err| err.to_string()))
+    .transpose()?
+    .or_else(|| primary_reality.map(|reality| reality.short_id.clone()))
+    .unwrap_or_default();
+    let spider_x = optional_string(
+        reality_settings.get("spiderX"),
+        "realitySettings.spiderX",
+        node_tag,
+    )?
+    .or_else(|| primary_reality.map(|reality| reality.spider_x.clone()))
+    .unwrap_or_else(|| "/".to_owned());
+    Ok((
+        server_name,
+        alpn,
+        allow_insecure,
+        Some(ResidentRealityUnderlayPlan {
+            public_key,
+            short_id,
+            spider_x,
+        }),
+    ))
 }
 
 #[derive(Debug)]
