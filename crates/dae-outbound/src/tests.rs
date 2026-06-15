@@ -30,6 +30,7 @@ mod dataplane_juicity_live_certchain;
 mod dataplane_juicity_outbound_selection;
 mod dataplane_juicity_packet_conn;
 mod dataplane_juicity_packet_state;
+mod dataplane_juicity_runtime;
 mod dataplane_juicity_stream_packet_conn;
 mod dataplane_shadowsocks_2022_tcp_multi_psk;
 mod dataplane_shadowsocks_2022_tcp_single_psk;

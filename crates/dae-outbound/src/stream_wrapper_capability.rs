@@ -74,7 +74,7 @@ pub fn stream_wrapper_capability_rows() -> &'static [StreamWrapperCapabilityRow]
     &STREAM_WRAPPER_CAPABILITY_ROWS
 }
 
-const STREAM_WRAPPER_CAPABILITY_ROWS: [StreamWrapperCapabilityRow; 6] = [
+const STREAM_WRAPPER_CAPABILITY_ROWS: [StreamWrapperCapabilityRow; 7] = [
     StreamWrapperCapabilityRow {
         wrapper_id: "websocket-wss-first-row",
         wrapper: "websocket-or-wss",
@@ -153,6 +153,20 @@ const STREAM_WRAPPER_CAPABILITY_ROWS: [StreamWrapperCapabilityRow; 6] = [
         provider: "resident-xhttp-h2-packet-up",
         security_underlay: "standard-or-fingerprint-aware-tls",
         packet_semantics: "tcp-stream-h2-packet-up",
+        cache_lifecycle: "per-session",
+        cancellation: "session-close",
+        reload_cleanup: "drop-on-graph-diff-or-runtime-stop",
+        blocker_id: None,
+        evidence_requirements: &["large-page-live", "benchmark", "cleanup"],
+    },
+    StreamWrapperCapabilityRow {
+        wrapper_id: "xhttp-h3-wrapper",
+        wrapper: "xhttp",
+        status: "resident-live-final",
+        source_admission: "admitted",
+        provider: "resident-xhttp-h3-packet-up",
+        security_underlay: "standard-or-fingerprint-aware-tls",
+        packet_semantics: "tcp-stream-h3-packet-up",
         cache_lifecycle: "per-session",
         cancellation: "session-close",
         reload_cleanup: "drop-on-graph-diff-or-runtime-stop",

@@ -89,7 +89,7 @@ fn source_shape_registry_link_schemes_are_common_import_carriers() {
 }
 
 #[test]
-fn source_shape_registry_keeps_only_xhttp_shapes_fail_closed_with_stable_reason_ids() {
+fn source_shape_registry_keeps_only_extended_xhttp_shape_fail_closed_with_stable_reason_ids() {
     let taxonomy = capability_reason_taxonomy();
     let rows = source_shape_registry_rows();
     let blocked = rows
@@ -98,9 +98,7 @@ fn source_shape_registry_keeps_only_xhttp_shapes_fail_closed_with_stable_reason_
         .collect::<Vec<_>>();
     let blocked_shape_ids = blocked.iter().map(|row| row.shape_id).collect::<Vec<_>>();
 
-    for expected in ["xhttp-h3-wrapper", "xhttp-extended-settings-wrapper"] {
-        assert!(blocked_shape_ids.contains(&expected), "{expected}");
-    }
+    assert_eq!(blocked_shape_ids, vec!["xhttp-extended-settings-wrapper"]);
     for row in blocked {
         assert_eq!(
             row.stream_wrapper, "xhttp",
@@ -139,6 +137,7 @@ fn source_shape_registry_marks_expanded_rows_with_scoped_live_evidence() {
         "mux-transport-wrapper",
         "passthrough-udp-transport",
         "legacy-cipher-protocol-shape",
+        "xhttp-h3-wrapper",
     ] {
         let row = rows
             .iter()
@@ -390,8 +389,8 @@ fn source_shape_registry_records_scoped_production_readiness_evidence() {
         "external-client-through-resident-proxy"
     );
     assert_eq!(evidence.upstream_boundary, "external-proxy-server-path");
-    assert_eq!(evidence.row_count, 24);
-    assert_eq!(evidence.pass_count, 24);
+    assert_eq!(evidence.row_count, 25);
+    assert_eq!(evidence.pass_count, 25);
     assert!(evidence.all_pass);
     assert!(evidence.large_page_all_pass);
     assert!(evidence.proxy_evidence_all_pass);
