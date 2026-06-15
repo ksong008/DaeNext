@@ -300,6 +300,8 @@ fn is_udp_would_block(err: &str) -> bool {
 mod tests {
     use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 
+    use crate::production_runtime_owner::resident_dataplane::plan::ResidentXhttpSettingsPlan;
+
     use super::*;
 
     #[test]
@@ -405,6 +407,7 @@ mod tests {
             stream_path: String::new(),
             xhttp_download: None,
             xhttp_mode: ResidentXhttpMode::PacketUp,
+            xhttp_settings: ResidentXhttpSettingsPlan::official_default(),
             xhttp_xmux: None,
             tls: String::new(),
             allow_insecure: false,

@@ -362,7 +362,7 @@ pub(super) fn boring_read_ahead_enabled(proxy: &ResidentProxyPlan) -> bool {
 mod tests {
     use super::*;
     use crate::production_runtime_owner::resident_dataplane::plan::{
-        ResidentProxyProtocolPlan, ResidentXhttpMode,
+        ResidentProxyProtocolPlan, ResidentXhttpMode, ResidentXhttpSettingsPlan,
     };
 
     const XTLS_RPRX_VISION: &str = "xtls-rprx-vision";
@@ -404,6 +404,7 @@ mod tests {
             stream_path: String::new(),
             xhttp_download: None,
             xhttp_mode: ResidentXhttpMode::PacketUp,
+            xhttp_settings: ResidentXhttpSettingsPlan::official_default(),
             xhttp_xmux: None,
             tls: "tls".to_owned(),
             allow_insecure: false,

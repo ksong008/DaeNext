@@ -144,7 +144,7 @@ fn xhttp_h2_request_uses_default_referer_padding() {
         .unwrap();
     assert!(referer.starts_with("https://edge.transport.invalid/resource/?x_padding="));
     let padding = referer.split_once("x_padding=").unwrap().1;
-    assert_eq!(padding.len(), 128);
+    assert!((100..=1000).contains(&padding.len()));
     assert!(padding.bytes().all(|byte| byte == b'X'));
 }
 
@@ -167,17 +167,20 @@ fn xhttp_h1_request_uses_official_packet_up_shape() {
 
     assert!(request.starts_with("POST /resource/session-id/7?ed=2048 HTTP/1.1\r\n"));
     assert!(request.contains("Host: edge.transport.invalid\r\n"));
-    assert!(request.contains("Content-Type: application/grpc\r\n"));
+    assert!(request.contains("content-type: application/grpc\r\n"));
     assert!(request.contains("Content-Length: 5\r\n"));
     assert!(request.contains("Connection: close\r\n"));
     assert!(request.ends_with("\r\n\r\nhello"));
     let referer = request
         .lines()
-        .find_map(|line| line.strip_prefix("Referer: "))
+        .find_map(|line| {
+            line.strip_prefix("Referer: ")
+                .or_else(|| line.strip_prefix("referer: "))
+        })
         .unwrap();
     assert!(referer.starts_with("https://edge.transport.invalid/resource/?x_padding="));
     let padding = referer.split_once("x_padding=").unwrap().1;
-    assert_eq!(padding.len(), 128);
+    assert!((100..=1000).contains(&padding.len()));
     assert!(padding.bytes().all(|byte| byte == b'X'));
 }
 
@@ -482,6 +485,7 @@ fn dummy_proxy_plan() -> ResidentProxyPlan {
         stream_path: String::new(),
         xhttp_download: None,
         xhttp_mode: ResidentXhttpMode::PacketUp,
+        xhttp_settings: ResidentXhttpSettingsPlan::official_default(),
         xhttp_xmux: None,
         tls: "tls".to_owned(),
         allow_insecure: false,
