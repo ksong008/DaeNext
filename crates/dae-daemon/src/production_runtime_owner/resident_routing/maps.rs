@@ -1,4 +1,5 @@
 use std::{
+    collections::BTreeSet,
     io,
     mem::size_of,
     net::IpAddr,
@@ -8,8 +9,8 @@ use std::{
 use dae_config::Config;
 use dae_core_types::OutboundIndex;
 use dae_ebpf_support::{
-    RuntimeMapInfo, RuntimeMapSnapshot, open_map_fd, runtime_map_name_matches,
-    update_map_elem_bytes,
+    RuntimeMapInfo, RuntimeMapSnapshot, delete_map_elem_bytes, lookup_map_elem_bytes,
+    map_keys_by_fd, open_map_fd, runtime_map_name_matches, update_map_elem_bytes,
 };
 use serde_json::{Value, json};
 
@@ -40,25 +41,74 @@ pub(super) fn update_outbound_connectivity_map(
 ) -> Result<Value, String> {
     let outbound_ids = resident_user_outbound_ids(config);
     let entries = resident_outbound_connectivity_entries(config);
+    let desired_keys = entries
+        .iter()
+        .map(|entry| [entry.outbound, entry.l4proto, entry.ipversion])
+        .collect::<BTreeSet<_>>();
+    let mut desired = Vec::new();
     let mut written = Vec::new();
+    let mut skipped = Vec::new();
     let alive = 1_u32.to_ne_bytes();
     for entry in entries {
         let key = [entry.outbound, entry.l4proto, entry.ipversion];
-        update_map_elem_bytes(connectivity_fd, &key, &alive).map_err(|err| err.to_string())?;
-        written.push(json!({
+        let item = json!({
             "outbound": entry.outbound,
             "l4proto": entry.l4proto,
             "ipversion": entry.ipversion,
             "alive": true,
+        });
+        desired.push(item.clone());
+        if connectivity_value_is_alive(connectivity_fd, &key)? {
+            skipped.push(item);
+            continue;
+        }
+        update_map_elem_bytes(connectivity_fd, &key, &alive).map_err(|err| err.to_string())?;
+        written.push(item);
+    }
+    let mut deleted = Vec::new();
+    for key in map_keys_by_fd(connectivity_fd, super::OUTBOUND_CONNECTIVITY_KEY_SIZE)
+        .map_err(|err| err.to_string())?
+    {
+        let [outbound, l4proto, ipversion] = key.as_slice() else {
+            continue;
+        };
+        let key = [*outbound, *l4proto, *ipversion];
+        if desired_keys.contains(&key) {
+            continue;
+        }
+        if let Err(err) = delete_map_elem_bytes(connectivity_fd, &key) {
+            if err.raw_os_error() != Some(libc::ENOENT) {
+                return Err(err.to_string());
+            }
+        }
+        deleted.push(json!({
+            "outbound": key[0],
+            "l4proto": key[1],
+            "ipversion": key[2],
         }));
     }
     Ok(json!({
         "status": "pass",
         "outbound_count": outbound_ids.len(),
-        "entry_count": written.len(),
+        "entry_count": desired.len(),
+        "written_count": written.len(),
+        "skipped_count": skipped.len(),
+        "deleted_count": deleted.len(),
+        "desired_entries": desired,
         "entries": written,
+        "skipped_entries": skipped,
+        "deleted_entries": deleted,
         "scope": "resident runtime seeds user-defined outbound connectivity because compatibility control-plane alive callbacks are not running in the Rust resident production daemon",
     }))
+}
+
+fn connectivity_value_is_alive(connectivity_fd: i32, key: &[u8; 3]) -> Result<bool, String> {
+    let mut value = [0_u8; 4];
+    match lookup_map_elem_bytes(connectivity_fd, key, &mut value) {
+        Ok(()) => Ok(u32::from_ne_bytes(value) == 1),
+        Err(err) if err.raw_os_error() == Some(libc::ENOENT) => Ok(false),
+        Err(err) => Err(err.to_string()),
+    }
 }
 
 pub(super) fn resident_user_outbound_ids(config: &Config) -> Vec<u8> {
