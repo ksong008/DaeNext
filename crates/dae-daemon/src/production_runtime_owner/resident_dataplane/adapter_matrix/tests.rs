@@ -70,6 +70,28 @@ mod tests {
         assert!(!resident_live_adapter_entry_missing(first, &evidence).is_empty());
     }
 
+    #[test]
+    fn hysteria2_matrix_records_port_hopping_as_admitted_not_fail_closed() {
+        let entry = resident_live_adapter_matrix_entries()
+            .iter()
+            .find(|entry| entry.formal_matrix_handler == "hysteria2")
+            .expect("missing hysteria2 matrix row");
+
+        assert!(entry.fingerprint_behavior.contains("port hopping"));
+        assert!(entry.fingerprint_behavior.contains("admitted"));
+        assert!(
+            !entry
+                .fingerprint_behavior
+                .contains("port hopping remains fail-closed")
+        );
+        assert!(
+            entry
+                .evidence
+                .iter()
+                .any(|item| item.contains("port-hopping pinned Hysteria2"))
+        );
+    }
+
     fn live_row(row: &str) -> Value {
         json!({
             "row": row,

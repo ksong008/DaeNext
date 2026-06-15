@@ -299,6 +299,15 @@ mod tests {
             UdpExecutorShape::VlessXhttpH3
         );
 
+        let mut vless_udp443 =
+            test_udp_proxy(ResidentProxyProtocolPlan::VlessVisionTcpTls { key: [0; 16] });
+        vless_udp443.protocol = "vless".to_owned();
+        vless_udp443.net = "tcp".to_owned();
+        vless_udp443.tls = "tls".to_owned();
+        vless_udp443.flow = "xtls-rprx-vision-udp443".to_owned();
+        let executor = UdpSessionExecutor::new_proxy_packet(&vless_udp443);
+        assert_eq!(udp_executor_shape(&executor), UdpExecutorShape::VlessVision);
+
         let fail_closed = [
             ResidentProxyProtocolPlan::VlessMuxTcpTls { key: [0; 16] },
             ResidentProxyProtocolPlan::ShadowsocksSimpleObfsHttpTcp {
@@ -357,6 +366,7 @@ mod tests {
             ("", ""),
             ("tcp", ""),
             ("tcp", "none"),
+            ("tcp", "tls"),
             ("websocket", ""),
             ("websocket", "none"),
             ("websocket", "tls"),

@@ -272,8 +272,14 @@ pub(super) fn resident_dataplane_plan_keeps_deferred_unsupported_shapes_blocked(
             "tls",
         ),
     )
-    .unwrap_err();
-    assert!(vmess_tls.contains("admits only plain VMess TCP endpoints"));
+    .unwrap();
+    assert_eq!(vmess_tls.protocol, "vmess");
+    assert_eq!(vmess_tls.net, "tcp");
+    assert_eq!(vmess_tls.tls, "tls");
+    assert_eq!(
+        vmess_tls.executable_graph_value()["runtimeComponents"]["underlayFactory"]["verificationPolicy"],
+        "system-roots"
+    );
 
     let hy2_no_pin = build_resident_proxy_plan_for_node(
         &config,
@@ -321,16 +327,51 @@ pub(super) fn resident_dataplane_plan_keeps_deferred_unsupported_shapes_blocked(
     .unwrap();
     assert!(!tuic_verified.allow_insecure);
 
-    let juicity_without_verification = build_resident_proxy_plan_for_node(
+    let juicity_system_roots = build_resident_proxy_plan_for_node(
         &config,
         "proxy".to_owned(),
-        "juicity_without_verification".to_owned(),
+        "juicity_system_roots".to_owned(),
         juicity_fixture_url("juicity", &primary_host, fixture_port(9), false),
     )
-    .unwrap_err();
-    assert!(
-        juicity_without_verification
-            .contains("requires Juicity allow_insecure or pinned_certchain_sha256")
+    .unwrap();
+    assert_eq!(juicity_system_roots.protocol, "juicity");
+    assert!(!juicity_system_roots.allow_insecure);
+    assert!(matches!(
+        juicity_system_roots.handler,
+        ResidentProxyProtocolPlan::JuicityQuicTcp {
+            allow_insecure: false,
+            ref pinned_certchain_sha256,
+            ..
+        } if pinned_certchain_sha256.is_empty()
+    ));
+    assert_eq!(
+        juicity_system_roots.executable_graph_value()["runtimeComponents"]["underlayFactory"]["verificationPolicy"],
+        "system-roots"
+    );
+
+    let juicity_pinned = JuicityLink {
+        name: String::new(),
+        user: fixture_client_id(),
+        password: fixture_secret(),
+        server: primary_host.clone(),
+        port: fixture_port(10),
+        sni: fixture_host(FixtureEndpoint::Authority),
+        allow_insecure: false,
+        congestion_control: String::new(),
+        pinned_certchain_sha256: fixture_pin_sha256(),
+        protocol: "juicity".to_owned(),
+    }
+    .export_url();
+    let juicity_pinned = build_resident_proxy_plan_for_node(
+        &config,
+        "proxy".to_owned(),
+        "juicity_pinned".to_owned(),
+        juicity_pinned,
+    )
+    .unwrap();
+    assert_eq!(
+        juicity_pinned.executable_graph_value()["runtimeComponents"]["underlayFactory"]["verificationPolicy"],
+        "pinned-certchain-sha256"
     );
 }
 
@@ -356,6 +397,18 @@ pub(super) fn resident_dataplane_plan_propagates_global_allow_insecure_to_tls_ha
             trojan_fixture_url("trojan-global-insecure", &primary_host, fixture_port(1)),
         ),
         ("vless_global_insecure", vless_vision_fixture_url("")),
+        (
+            "vmess_tls_global_insecure",
+            vmess_fixture_url(
+                "vmess-tls",
+                &primary_host,
+                fixture_port(3),
+                "tcp",
+                "",
+                "",
+                "tls",
+            ),
+        ),
     ];
 
     for (tag, link) in links {
@@ -477,6 +530,56 @@ pub(super) fn resident_dataplane_plan_admits_vless_plain_tcp_tls_without_vision_
     assert_eq!(proxy.protocol, "vless");
     assert_eq!(proxy.net, "tcp");
     assert_eq!(proxy.flow, "");
+    assert!(matches!(
+        proxy.handler,
+        ResidentProxyProtocolPlan::VlessVisionTcpTls { .. }
+    ));
+}
+
+#[test]
+pub(super) fn resident_dataplane_plan_admits_vless_vision_udp443_flow() {
+    let source = vless_fixture_url(
+        "",
+        &fixture_host(FixtureEndpoint::Primary),
+        fixture_authority_port(),
+        "tcp",
+        "",
+        "",
+        &fixture_host(FixtureEndpoint::Authority),
+        "xtls-rprx-vision-udp443",
+        "",
+    );
+    let config_source = r#"
+        global {
+        lan_interface: daerust0
+        allow_insecure: false
+        so_mark_from_dae: 1234
+        mptcp: false
+        }
+        node {
+        vless_live: '__SOURCE__'
+        }
+        group {
+        proxy {
+            filter: name(vless_live)
+            policy: fixed(0)
+        }
+        }
+        routing {
+        fallback: proxy
+        }
+        "#
+    .replace("__SOURCE__", &source);
+    let config = parse_config(&config_source);
+    let plan = build_resident_dataplane_plan(&config).unwrap();
+    let proxy = plan
+        .default_proxy_group()
+        .unwrap()
+        .select_proxy_for_tcp()
+        .unwrap();
+    assert_eq!(proxy.protocol, "vless");
+    assert_eq!(proxy.net, "tcp");
+    assert_eq!(proxy.flow, "xtls-rprx-vision-udp443");
     assert!(matches!(
         proxy.handler,
         ResidentProxyProtocolPlan::VlessVisionTcpTls { .. }
