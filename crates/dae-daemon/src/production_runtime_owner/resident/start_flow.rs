@@ -239,6 +239,7 @@ pub(super) fn start_with_options(
                                 update_existing_resident_routing_map(
                                     routing_map_id,
                                     native_runtime.loaded_map_id("lpm_array_map"),
+                                    native_runtime.loaded_map_id("outbound_connectivity_map"),
                                     config,
                                     &geodata,
                                 )
@@ -380,7 +381,16 @@ pub(super) fn start_with_options(
         }
         let host_attach_show = show_host_program(&mut executed_steps);
         let resident_outbound_connectivity = if ok {
-            match seed_resident_outbound_connectivity_maps(config) {
+            let connectivity_candidate_map_ids = map_ids()
+                .map(|ids| {
+                    ids.into_iter()
+                        .filter(|id| !before_map_ids.contains(id))
+                        .collect::<Vec<_>>()
+                })
+                .map_err(|err| err.to_string());
+            match connectivity_candidate_map_ids
+                .and_then(|ids| seed_resident_outbound_connectivity_maps(config, &ids))
+            {
                 Ok(value) => value,
                 Err(err) => {
                     ok = false;

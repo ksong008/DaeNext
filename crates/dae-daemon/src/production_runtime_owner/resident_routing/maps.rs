@@ -7,7 +7,10 @@ use std::{
 
 use dae_config::Config;
 use dae_core_types::OutboundIndex;
-use dae_ebpf_support::{RuntimeMapInfo, map_info, open_map_fd, update_map_elem_bytes};
+use dae_ebpf_support::{
+    RuntimeMapInfo, RuntimeMapSnapshot, open_map_fd, runtime_map_name_matches,
+    update_map_elem_bytes,
+};
 use serde_json::{Value, json};
 
 use super::types::{IpPrefix, OutboundConnectivityEntry, SharedResidentIpPrefixSet};
@@ -144,111 +147,65 @@ pub(super) fn ensure_map_contract(
 }
 
 pub(super) fn open_unique_map(
+    snapshot: &RuntimeMapSnapshot,
     ids: &[u32],
     name: &str,
 ) -> Result<(OwnedFd, RuntimeMapInfo), String> {
-    let mut candidates = Vec::new();
-    for id in ids {
-        let Some((fd, info)) = open_map_info_if_alive(*id)? else {
-            continue;
-        };
-        if runtime_map_name_matches(&info.name, name) {
-            candidates.push((fd, info));
-        }
-    }
+    let candidates = snapshot.all_by_name_in_ids(ids, name);
     if candidates.len() != 1 {
         return Err(format!(
             "expected exactly one resident map {name}, found {}",
             candidates.len()
         ));
     }
-    Ok(candidates.remove(0))
+    open_map_info(&candidates[0])
 }
 
 pub(super) fn open_optional_unique_map(
+    snapshot: &RuntimeMapSnapshot,
     ids: &[u32],
     name: &str,
 ) -> Result<Option<(OwnedFd, RuntimeMapInfo)>, String> {
-    let mut candidates = Vec::new();
-    for id in ids {
-        let Some((fd, info)) = open_map_info_if_alive(*id)? else {
-            continue;
-        };
-        if runtime_map_name_matches(&info.name, name) {
-            candidates.push((fd, info));
-        }
-    }
+    let candidates = snapshot.all_by_name_in_ids(ids, name);
     if candidates.len() > 1 {
         return Err(format!(
             "expected at most one resident map {name}, found {}",
             candidates.len()
         ));
     }
-    Ok(candidates.pop())
+    candidates
+        .first()
+        .map(|info| open_map_info(info))
+        .transpose()
 }
 
-pub(super) fn open_optional_latest_map(
+pub(super) fn open_latest_map_in_ids(
+    snapshot: &RuntimeMapSnapshot,
     ids: &[u32],
     name: &str,
 ) -> Result<Option<(OwnedFd, RuntimeMapInfo)>, String> {
-    let mut selected = None;
-    for id in ids {
-        let Some((fd, info)) = open_map_info_if_alive(*id)? else {
-            continue;
-        };
-        if !runtime_map_name_matches(&info.name, name) {
-            continue;
-        }
-        if selected
-            .as_ref()
-            .is_none_or(|(_, selected_info): &(OwnedFd, RuntimeMapInfo)| info.id > selected_info.id)
-        {
-            selected = Some((fd, info));
-        }
-    }
-    Ok(selected)
+    snapshot
+        .latest_by_name_in_ids(ids, name)
+        .map(open_map_info)
+        .transpose()
 }
 
 pub(super) fn open_all_maps(
+    snapshot: &RuntimeMapSnapshot,
     ids: &[u32],
     name: &str,
 ) -> Result<Vec<(OwnedFd, RuntimeMapInfo)>, String> {
-    let mut maps = Vec::new();
-    for id in ids {
-        let Some((fd, info)) = open_map_info_if_alive(*id)? else {
-            continue;
-        };
-        if runtime_map_name_matches(&info.name, name) {
-            maps.push((fd, info));
-        }
-    }
-    Ok(maps)
-}
-
-pub(super) fn runtime_map_name_matches(actual: &str, expected: &str) -> bool {
-    actual == expected || actual == kernel_map_name(expected)
-}
-
-fn kernel_map_name(name: &str) -> String {
-    name.as_bytes()
-        .iter()
-        .take(15)
-        .map(|byte| *byte as char)
+    snapshot
+        .all_by_name_in_ids(ids, name)
+        .into_iter()
+        .map(open_map_info)
         .collect()
 }
 
-fn open_map_info_if_alive(id: u32) -> Result<Option<(OwnedFd, RuntimeMapInfo)>, String> {
-    let fd = match open_map_fd(id) {
-        Ok(fd) => fd,
-        Err(err) if err.kind() == io::ErrorKind::NotFound => return Ok(None),
-        Err(err) => return Err(err.to_string()),
-    };
-    let info = match map_info(fd.as_raw_fd()) {
-        Ok(info) => info,
-        Err(err) if err.kind() == io::ErrorKind::NotFound => return Ok(None),
-        Err(err) => return Err(err.to_string()),
-    };
-    Ok(Some((fd, info)))
+fn open_map_info(info: &RuntimeMapInfo) -> Result<(OwnedFd, RuntimeMapInfo), String> {
+    open_map_fd(info.id)
+        .map(|fd| (fd, info.clone()))
+        .map_err(|err| err.to_string())
 }
 
 pub(super) fn map_json(info: &RuntimeMapInfo) -> Value {

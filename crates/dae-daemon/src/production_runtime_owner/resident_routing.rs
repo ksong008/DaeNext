@@ -1,7 +1,9 @@
 use std::{os::fd::AsRawFd, path::PathBuf};
 
 use dae_config::{Config, Function, RoutingRule};
-use dae_ebpf_support::{RuntimeMapInfo, map_ids, map_info, open_map_fd, update_map_elem_bytes};
+use dae_ebpf_support::{
+    RuntimeMapInfo, RuntimeMapSnapshot, map_info, open_map_fd, update_map_elem_bytes,
+};
 use dae_routing::RoutingMatcher;
 use serde_json::{Value, json};
 
@@ -16,9 +18,8 @@ mod tests;
 pub(super) use geodata::GeodataResolver as ResidentGeodataStore;
 use geodata::geodata_report_json;
 use maps::{
-    ensure_map_contract, map_json, open_all_maps, open_optional_latest_map,
-    open_optional_unique_map, open_unique_map, update_lpm_array_map,
-    update_outbound_connectivity_map,
+    ensure_map_contract, map_json, open_all_maps, open_latest_map_in_ids, open_optional_unique_map,
+    open_unique_map, update_lpm_array_map, update_outbound_connectivity_map,
 };
 use plan::{
     build_routing_plan_with_geodata_resolver, domain_set_json, userspace_matcher_typed_sets,
@@ -137,19 +138,17 @@ pub(super) fn update_new_resident_routing_map(
     config: &Config,
     geodata: &ResidentGeodataStore,
 ) -> Result<(Value, u32), String> {
-    let current = map_ids().map_err(|err| err.to_string())?;
-    let new_map_ids = current
+    let snapshot = RuntimeMapSnapshot::collect().map_err(|err| err.to_string())?;
+    let new_map_ids = snapshot
+        .maps()
         .iter()
-        .copied()
+        .map(|info| info.id)
         .filter(|id| !before_map_ids.contains(id))
         .collect::<Vec<_>>();
-    let (routing_fd, routing_info) = open_unique_map(&new_map_ids, ROUTING_MAP_NAME)?;
-    let lpm = open_optional_unique_map(&new_map_ids, LPM_ARRAY_MAP_NAME)?;
-    let connectivity = match open_optional_unique_map(&new_map_ids, OUTBOUND_CONNECTIVITY_MAP_NAME)?
-    {
-        Some(map) => Some(map),
-        None => open_optional_latest_map(&current, OUTBOUND_CONNECTIVITY_MAP_NAME)?,
-    };
+    let (routing_fd, routing_info) = open_unique_map(&snapshot, &new_map_ids, ROUTING_MAP_NAME)?;
+    let lpm = open_optional_unique_map(&snapshot, &new_map_ids, LPM_ARRAY_MAP_NAME)?;
+    let connectivity =
+        open_latest_map_in_ids(&snapshot, &new_map_ids, OUTBOUND_CONNECTIVITY_MAP_NAME)?;
     update_resident_routing_map_fd(
         routing_fd.as_raw_fd(),
         routing_info,
@@ -168,6 +167,7 @@ pub(super) fn update_new_resident_routing_map(
 pub(super) fn update_existing_resident_routing_map(
     routing_map_id: u32,
     lpm_array_map_id: Option<u32>,
+    connectivity_map_id: Option<u32>,
     config: &Config,
     geodata: &ResidentGeodataStore,
 ) -> Result<(Value, u32), String> {
@@ -181,11 +181,21 @@ pub(super) fn update_existing_resident_routing_map(
         }
         None => None,
     };
+    let connectivity = match connectivity_map_id {
+        Some(id) => {
+            let fd = open_map_fd(id).map_err(|err| err.to_string())?;
+            let info = map_info(fd.as_raw_fd()).map_err(|err| err.to_string())?;
+            Some((fd, info))
+        }
+        None => None,
+    };
     update_resident_routing_map_fd(
         routing_fd.as_raw_fd(),
         routing_info,
         lpm.as_ref().map(|(fd, info)| (fd.as_raw_fd(), info)),
-        None,
+        connectivity
+            .as_ref()
+            .map(|(fd, info)| (fd.as_raw_fd(), info)),
         config,
         geodata,
         "existing_loaded_map",
@@ -193,9 +203,13 @@ pub(super) fn update_existing_resident_routing_map(
     )
 }
 
-pub(super) fn seed_resident_outbound_connectivity_maps(config: &Config) -> Result<Value, String> {
-    let current = map_ids().map_err(|err| err.to_string())?;
-    let maps = open_all_maps(&current, OUTBOUND_CONNECTIVITY_MAP_NAME)?;
+pub(super) fn seed_resident_outbound_connectivity_maps(
+    config: &Config,
+    candidate_map_ids: &[u32],
+) -> Result<Value, String> {
+    let snapshot =
+        RuntimeMapSnapshot::from_ids(candidate_map_ids).map_err(|err| err.to_string())?;
+    let maps = open_all_maps(&snapshot, candidate_map_ids, OUTBOUND_CONNECTIVITY_MAP_NAME)?;
     let mut updates = Vec::new();
     for (fd, info) in maps {
         ensure_map_contract(
@@ -214,7 +228,8 @@ pub(super) fn seed_resident_outbound_connectivity_maps(config: &Config) -> Resul
         "status": "pass",
         "map_count": updates.len(),
         "maps": updates,
-        "scope": "seed all currently loaded resident outbound connectivity maps after peer, LAN, and host attach",
+        "candidate_map_ids": candidate_map_ids,
+        "scope": "seed resident outbound connectivity maps owned by the current runtime after peer, LAN, and host attach",
     }))
 }
 
