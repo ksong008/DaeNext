@@ -40,10 +40,16 @@ pub(crate) fn build_vless_proxy_plan(
             ));
         }
     }
-    if !matches!(vless.tls.as_str(), "tls" | "reality") {
+    if !matches!(vless.tls.as_str(), "none" | "tls" | "reality") {
         return Err(format!(
-            "resident dataplane vless handler currently supports security=tls or security=reality only, got {} for node {node_tag}",
+            "resident dataplane vless handler currently supports security=none, security=tls, or security=reality only, got {} for node {node_tag}",
             vless.tls
+        ));
+    }
+    if vless.tls == "none" && (net != "tcp" || vless.mux || !vless.flow.is_empty()) {
+        return Err(format!(
+            "resident dataplane vless security=none currently admits native tcp empty-flow endpoints only for node {node_tag}; got net={net}, mux={}, flow='{}'",
+            vless.mux, vless.flow
         ));
     }
     if vless.mux && vless.tls != "tls" {
@@ -67,15 +73,15 @@ pub(crate) fn build_vless_proxy_plan(
     let reality = resident_reality_underlay_plan(&vless)
         .map_err(|err| format!("validate VLESS Reality for {node_tag}: {err}"))?;
     let allow_insecure = requested_allow_insecure;
-    let tls_fragment = if reality.is_some() {
-        None
-    } else {
+    let tls_fragment = if vless.tls == "tls" {
         resident_tls_fragment_plan(config)?
-    };
-    let utls_fingerprint = if reality.is_some() {
-        None
     } else {
+        None
+    };
+    let utls_fingerprint = if vless.tls == "tls" {
         resident_utls_fingerprint_plan(config, Some(&vless.fingerprint))?
+    } else {
+        None
     };
     let server_port = vless.port.parse::<u16>().map_err(|err| {
         format!(

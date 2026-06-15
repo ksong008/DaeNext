@@ -537,6 +537,54 @@ pub(super) fn resident_dataplane_plan_admits_vless_plain_tcp_tls_without_vision_
 }
 
 #[test]
+pub(super) fn resident_dataplane_plan_admits_vless_plain_tcp_without_tls() {
+    let source = vless_plain_tcp_none_fixture_url();
+    let config_source = r#"
+        global {
+        lan_interface: daerust0
+        allow_insecure: false
+        so_mark_from_dae: 1234
+        mptcp: false
+        }
+        node {
+        vless_live: '__SOURCE__'
+        }
+        group {
+        proxy {
+            filter: name(vless_live)
+            policy: fixed(0)
+        }
+        }
+        routing {
+        l4proto(tcp) && dport(443) -> proxy
+        fallback: direct
+        }
+        "#
+    .replace("__SOURCE__", &source);
+    let config = parse_config(&config_source);
+    let plan = build_resident_dataplane_plan(&config).unwrap();
+    let proxy = plan
+        .default_proxy_group()
+        .unwrap()
+        .select_proxy_for_tcp()
+        .unwrap();
+    assert_eq!(proxy.protocol, "vless");
+    assert_eq!(proxy.net, "tcp");
+    assert_eq!(proxy.tls, "none");
+    assert_eq!(proxy.flow, "");
+    assert!(matches!(
+        proxy.handler,
+        ResidentProxyProtocolPlan::VlessVisionTcpTls { .. }
+    ));
+    let graph = proxy.executable_graph_value();
+    assert_eq!(graph["securityUnderlay"], "none");
+    assert_eq!(
+        graph["runtimeComponents"]["underlayFactory"]["verificationPolicy"],
+        "none"
+    );
+}
+
+#[test]
 pub(super) fn resident_dataplane_plan_admits_vless_vision_udp443_flow() {
     let source = vless_fixture_url(
         "",
