@@ -30,7 +30,7 @@ use super::resident_lan::{
     lan_start_plan_json, show_resident_lan_program,
 };
 use super::resident_routing::{
-    ResidentGeodataStore, seed_resident_outbound_connectivity_maps,
+    ResidentGeodataStore, ResidentRoutingApplyCache, seed_resident_outbound_connectivity_maps,
     update_existing_resident_routing_map, update_new_resident_routing_map,
 };
 use super::topology::{
