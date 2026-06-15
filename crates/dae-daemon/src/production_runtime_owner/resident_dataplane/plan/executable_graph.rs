@@ -3,7 +3,7 @@ use serde_json::{Value, json};
 use super::super::{link_hash, redacted_link_source};
 use super::{
     ResidentProxyPlan, ResidentProxyProtocolPlan, ResidentUtlsFingerprintPlan,
-    ResidentXhttpHttpVersion, ResidentXhttpMode,
+    ResidentXhttpHttpVersion, ResidentXhttpMode, ResidentXhttpSettingsPlan,
 };
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -22,6 +22,9 @@ pub(in crate::production_runtime_owner::resident_dataplane) struct ResidentExecu
     stream_path: String,
     packet_semantics: String,
     xhttp_mode: ResidentXhttpMode,
+    xhttp_settings: ResidentXhttpSettingsPlan,
+    xhttp_download_mode: Option<ResidentXhttpMode>,
+    xhttp_download_settings: Option<ResidentXhttpSettingsPlan>,
     flow: String,
     alpn: Vec<String>,
     allow_insecure: bool,
@@ -52,6 +55,12 @@ impl ResidentExecutableGraphDescriptor {
             stream_path: proxy.stream_path.clone(),
             packet_semantics: graph_packet_semantics(proxy),
             xhttp_mode: proxy.xhttp_mode,
+            xhttp_settings: proxy.xhttp_settings.clone(),
+            xhttp_download_mode: proxy.xhttp_download.as_ref().map(|download| download.mode),
+            xhttp_download_settings: proxy
+                .xhttp_download
+                .as_ref()
+                .map(|download| download.settings.clone()),
             flow: proxy.flow.clone(),
             alpn: proxy.alpn.clone(),
             allow_insecure: proxy.allow_insecure,
@@ -247,6 +256,22 @@ impl ResidentExecutableGraphDescriptor {
             } else {
                 Value::Null
             },
+            "xhttpExtendedSettings": if self.stream_wrapper == "xhttp" {
+                json!({
+                    "primary": xhttp_settings_evidence_value(&self.xhttp_settings),
+                    "download": self.xhttp_download_settings.as_ref().map(|settings| {
+                        json!({
+                            "mode": self
+                                .xhttp_download_mode
+                                .map(ResidentXhttpMode::as_str)
+                                .unwrap_or("packet-up"),
+                            "settings": xhttp_settings_evidence_value(settings),
+                        })
+                    }),
+                })
+            } else {
+                Value::Null
+            },
             "unsupportedReason": unsupported_reason,
         })
     }
@@ -327,6 +352,55 @@ impl ResidentExecutableGraphDescriptor {
             "unsupportedReason": Value::Null,
         })
     }
+}
+
+fn xhttp_settings_evidence_value(settings: &ResidentXhttpSettingsPlan) -> Value {
+    json!({
+        "headers": {
+            "names": settings.headers.keys().cloned().collect::<Vec<_>>(),
+            "valuesRedacted": true,
+        },
+        "xPadding": {
+            "bytes": settings.x_padding_bytes,
+            "effectiveBytes": settings.normalized_x_padding_bytes(),
+            "obfsMode": settings.x_padding_obfs_mode,
+            "key": &settings.x_padding_key,
+            "header": &settings.x_padding_header,
+            "placement": settings.x_padding_placement.as_str(),
+            "method": settings.x_padding_method.as_str(),
+        },
+        "uplink": {
+            "httpMethod": &settings.uplink_http_method,
+            "dataPlacement": settings.uplink_data_placement.as_str(),
+            "dataKey": settings.normalized_uplink_data_key(),
+            "chunkSize": settings.uplink_chunk_size,
+            "effectiveChunkSize": settings.normalized_uplink_chunk_size(),
+        },
+        "metadata": {
+            "sessionIDPlacement": settings.session_id_placement.as_str(),
+            "sessionIDKey": settings.normalized_session_key(),
+            "sessionIDTableLength": settings.session_id_table.len(),
+            "sessionIDLength": settings.session_id_length,
+            "seqPlacement": settings.seq_placement.as_str(),
+            "seqKey": settings.normalized_seq_key(),
+        },
+        "headersPolicy": {
+            "noGRPCHeader": settings.no_grpc_header,
+            "noSSEHeader": settings.no_sse_header,
+            "serverMaxHeaderBytes": settings.server_max_header_bytes,
+            "effectiveServerMaxHeaderBytes": settings.normalized_server_max_header_bytes(),
+        },
+        "streamOne": {
+            "scMaxEachPostBytes": settings.sc_max_each_post_bytes,
+            "effectiveScMaxEachPostBytes": settings.normalized_sc_max_each_post_bytes(),
+            "scMinPostsIntervalMs": settings.sc_min_posts_interval_ms,
+            "effectiveScMinPostsIntervalMs": settings.normalized_sc_min_posts_interval_ms(),
+            "scMaxBufferedPosts": settings.sc_max_buffered_posts,
+            "effectiveScMaxBufferedPosts": settings.normalized_sc_max_buffered_posts(),
+            "scStreamUpServerSecs": settings.sc_stream_up_server_secs,
+            "effectiveScStreamUpServerSecs": settings.normalized_sc_stream_up_server_secs(),
+        },
+    })
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]

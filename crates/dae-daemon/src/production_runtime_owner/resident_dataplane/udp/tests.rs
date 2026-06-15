@@ -2,7 +2,9 @@
 mod tests {
     use std::net::{Ipv4Addr, Ipv6Addr, SocketAddr, SocketAddrV4};
 
-    use super::super::super::plan::{ResidentProxyPlan, ResidentProxyProtocolPlan};
+    use super::super::super::plan::{
+        ResidentProxyPlan, ResidentProxyProtocolPlan, ResidentXhttpSettingsPlan,
+    };
     use super::super::*;
 
     const XTLS_RPRX_VISION: &str = "xtls-rprx-vision";
@@ -545,6 +547,7 @@ mod tests {
             stream_path: String::new(),
             xhttp_download: None,
             xhttp_mode: ResidentXhttpMode::PacketUp,
+            xhttp_settings: ResidentXhttpSettingsPlan::official_default(),
             xhttp_xmux: None,
             tls: String::new(),
             allow_insecure: false,

@@ -1036,7 +1036,161 @@ pub(super) fn resident_dataplane_plan_admits_vless_xhttp_stream_modes_and_xmux()
 }
 
 #[test]
-pub(super) fn resident_dataplane_plan_rejects_remaining_unimplemented_vless_xhttp_shapes() {
+pub(super) fn resident_dataplane_plan_admits_vless_xhttp_extended_settings_surface() {
+    let config = parse_config(
+        r#"
+        global {
+        lan_interface: daerust0
+        allow_insecure: false
+        so_mark_from_dae: 1234
+        mptcp: false
+        }
+        routing {
+        fallback: direct
+        }
+        "#,
+    );
+    let proxy = build_resident_proxy_plan_for_node(
+        &config,
+        "proxy".to_owned(),
+        "xhttp_extended".to_owned(),
+        vless_xhttp_parser_fixture_url(
+            "packet-up",
+            "h2",
+            r#"{"headers":{"X-Test":"alpha"},"xPaddingBytes":"100-200","xPaddingObfsMode":true,"xPaddingKey":"pad","xPaddingHeader":"X-Pad","xPaddingPlacement":"header","xPaddingMethod":"tokenish","uplinkHTTPMethod":"POST","sessionIDPlacement":"header","sessionIDKey":"X-Sid","sessionIDTable":"Base62","sessionIDLength":"6","seqPlacement":"query","seqKey":"seq","uplinkDataPlacement":"header","uplinkDataKey":"X-Body","uplinkChunkSize":"128-256","noGRPCHeader":true,"noSSEHeader":true,"scMaxEachPostBytes":"4096","scMinPostsIntervalMs":"40-50","scMaxBufferedPosts":7,"scStreamUpServerSecs":"30-40","serverMaxHeaderBytes":16384,"xmux":{"maxConnections":2}}"#,
+        ),
+    )
+    .unwrap();
+
+    assert_eq!(proxy.xhttp_mode, ResidentXhttpMode::PacketUp);
+    assert_eq!(
+        proxy
+            .xhttp_settings
+            .headers
+            .get("X-Test")
+            .map(String::as_str),
+        Some("alpha")
+    );
+    assert_eq!(proxy.xhttp_settings.x_padding_bytes, Some((100, 200)));
+    assert!(proxy.xhttp_settings.x_padding_obfs_mode);
+    assert_eq!(proxy.xhttp_settings.x_padding_key, "pad");
+    assert_eq!(proxy.xhttp_settings.x_padding_header, "X-Pad");
+    assert_eq!(
+        proxy.xhttp_settings.x_padding_placement,
+        ResidentXhttpPaddingPlacement::Header
+    );
+    assert_eq!(
+        proxy.xhttp_settings.x_padding_method,
+        ResidentXhttpPaddingMethod::Tokenish
+    );
+    assert_eq!(proxy.xhttp_settings.uplink_http_method, "POST");
+    assert_eq!(
+        proxy.xhttp_settings.session_id_placement,
+        ResidentXhttpMetaPlacement::Header
+    );
+    assert_eq!(proxy.xhttp_settings.session_id_key, "X-Sid");
+    assert_eq!(
+        proxy.xhttp_settings.session_id_table,
+        "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz"
+    );
+    assert_eq!(proxy.xhttp_settings.session_id_length, Some((6, 6)));
+    assert_eq!(
+        proxy.xhttp_settings.seq_placement,
+        ResidentXhttpMetaPlacement::Query
+    );
+    assert_eq!(proxy.xhttp_settings.seq_key, "seq");
+    assert_eq!(
+        proxy.xhttp_settings.uplink_data_placement,
+        ResidentXhttpUplinkDataPlacement::Header
+    );
+    assert_eq!(proxy.xhttp_settings.uplink_data_key, "X-Body");
+    assert_eq!(proxy.xhttp_settings.uplink_chunk_size, Some((128, 256)));
+    assert!(proxy.xhttp_settings.no_grpc_header);
+    assert!(proxy.xhttp_settings.no_sse_header);
+    assert_eq!(
+        proxy.xhttp_settings.sc_max_each_post_bytes,
+        Some((4096, 4096))
+    );
+    assert_eq!(
+        proxy.xhttp_settings.sc_min_posts_interval_ms,
+        Some((40, 50))
+    );
+    assert_eq!(proxy.xhttp_settings.sc_max_buffered_posts, 7);
+    assert_eq!(
+        proxy.xhttp_settings.sc_stream_up_server_secs,
+        Some((30, 40))
+    );
+    assert_eq!(proxy.xhttp_settings.server_max_header_bytes, 16384);
+    assert_eq!(
+        proxy.xhttp_xmux.as_ref().unwrap().max_connections,
+        Some((2, 2))
+    );
+
+    let graph = proxy.executable_graph_value();
+    let evidence =
+        &graph["runtimeComponents"]["streamWrapperFactory"]["xhttpExtendedSettings"]["primary"];
+    assert_eq!(evidence["headers"]["names"], serde_json::json!(["X-Test"]));
+    assert_eq!(evidence["xPadding"]["placement"], "header");
+    assert_eq!(evidence["uplink"]["dataPlacement"], "header");
+    assert_eq!(evidence["metadata"]["sessionIDPlacement"], "header");
+    assert_eq!(evidence["headersPolicy"]["noSSEHeader"], true);
+    assert_eq!(evidence["streamOne"]["effectiveScMaxBufferedPosts"], 7);
+}
+
+#[test]
+pub(super) fn resident_dataplane_plan_admits_vless_xhttp_download_mode_and_nested_extra_surface() {
+    let config = parse_config(
+        r#"
+        global {
+        lan_interface: daerust0
+        allow_insecure: false
+        so_mark_from_dae: 1234
+        mptcp: false
+        }
+        routing {
+        fallback: direct
+        }
+        "#,
+    );
+    let proxy = build_resident_proxy_plan_for_node(
+        &config,
+        "proxy".to_owned(),
+        "xhttp_download_extended".to_owned(),
+        vless_xhttp_parser_fixture_url(
+            "packet-up",
+            "h2",
+            r#"{"downloadSettings":{"address":"download.transport.invalid","port":18444,"network":"xhttp","security":"tls","tlsSettings":{"serverName":"download.sni.invalid","alpn":["h2"]},"xhttpSettings":{"host":"download.host.invalid","path":"/down?ed=4096","mode":"stream-up","extra":{"headers":{"X-Down":"beta"},"xPaddingBytes":"101","noSSEHeader":true,"xmux":{"maxConnections":3}}}}}"#,
+        ),
+    )
+    .unwrap();
+
+    let download = proxy.xhttp_download.as_ref().unwrap();
+    assert_eq!(download.mode, ResidentXhttpMode::StreamUp);
+    assert_eq!(download.stream_host, "download.host.invalid");
+    assert_eq!(download.stream_path, "/down/?ed=4096");
+    assert_eq!(
+        download.settings.headers.get("X-Down").map(String::as_str),
+        Some("beta")
+    );
+    assert_eq!(download.settings.x_padding_bytes, Some((101, 101)));
+    assert!(download.settings.no_sse_header);
+    assert_eq!(
+        download.xmux.as_ref().unwrap().max_connections,
+        Some((3, 3))
+    );
+
+    let graph = proxy.executable_graph_value();
+    let download_evidence =
+        &graph["runtimeComponents"]["streamWrapperFactory"]["xhttpExtendedSettings"]["download"];
+    assert_eq!(download_evidence["mode"], "stream-up");
+    assert_eq!(
+        download_evidence["settings"]["headers"]["names"],
+        serde_json::json!(["X-Down"])
+    );
+}
+
+#[test]
+pub(super) fn resident_dataplane_plan_rejects_remaining_invalid_vless_xhttp_shapes() {
     let config = parse_config(
         r#"
         global {
@@ -1052,12 +1206,8 @@ pub(super) fn resident_dataplane_plan_rejects_remaining_unimplemented_vless_xhtt
     );
     for (tag, link, expected) in [
         (
-            "xhttp_extra",
-            vless_xhttp_parser_fixture_url(
-                "packet-up",
-                "h2",
-                r#"{"xPaddingBytes":{"from":100,"to":200}}"#,
-            ),
+            "xhttp_unknown_extra",
+            vless_xhttp_parser_fixture_url("packet-up", "h2", r#"{"definitelyNotOfficial":true}"#),
             "unsupported fields",
         ),
         (
