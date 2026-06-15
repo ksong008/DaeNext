@@ -378,6 +378,7 @@ fn graph_verification_policy(proxy: &ResidentProxyPlan) -> String {
             pinned_certchain_sha256,
             ..
         } if !pinned_certchain_sha256.is_empty() => "pinned-certchain-sha256".to_owned(),
+        _ if matches!(proxy.tls.as_str(), "" | "none") => "none".to_owned(),
         _ if proxy.allow_insecure => "explicit-insecure".to_owned(),
         _ => "system-roots".to_owned(),
     }

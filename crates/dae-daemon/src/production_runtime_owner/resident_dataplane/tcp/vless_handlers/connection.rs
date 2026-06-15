@@ -83,6 +83,18 @@ pub(crate) async fn handle_proxy_tcp_connection_async(
         )
         .await;
     }
+    if matches!(selection.proxy.tls.as_str(), "" | "none") {
+        return handle_vless_plain_tcp_connection_async(
+            inbound,
+            peer,
+            original_dst,
+            selection,
+            stop,
+            sniff,
+            metrics,
+        )
+        .await;
+    }
     let mut client =
         open_async_vless_tls_client_with_flow(&selection.proxy, selection.mark, selection.mptcp)
             .await?;
@@ -134,6 +146,149 @@ pub(crate) async fn handle_proxy_tcp_connection_async(
         );
         Ok::<Value, String>(event)
     })
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(crate) async fn handle_vless_plain_tcp_connection_async(
+    inbound: &mut TokioTcpStream,
+    peer: SocketAddr,
+    original_dst: SocketAddr,
+    selection: TcpProxySelection,
+    stop: Arc<AtomicBool>,
+    sniff: &TcpSniffReport,
+    metrics: &ResidentDataplaneMetrics,
+) -> Result<Value, String> {
+    let mut client =
+        open_proxy_tcp_stream_async_with_flow(&selection.proxy, selection.mark, selection.mptcp)
+            .await?;
+    let key = selection.proxy.vless_key()?;
+    let request = packet::first_write_bytes(
+        &key,
+        &selection.proxy.flow,
+        "tcp",
+        &selection.route.dial_target,
+        false,
+        &[],
+    )
+    .map_err(|err| format!("build VLESS plain TCP request: {err}"))?;
+    client
+        .write_all(&request)
+        .await
+        .map_err(|err| format!("write VLESS plain TCP request: {err}"))?;
+    relay_tcp_over_vless_plain_async(inbound, &mut client, stop, &sniff.payload, metrics)
+        .await
+        .map(|stats| {
+            proxy_tcp_finished_event(
+                peer,
+                original_dst,
+                &selection,
+                sniff,
+                "none",
+                &stats,
+                "async-proxy-plain",
+            )
+        })
+        .or_else(|err| {
+            let event = proxy_tcp_failed_event(
+                peer,
+                original_dst,
+                &selection,
+                sniff,
+                "none",
+                &err,
+                "async-proxy-plain",
+            );
+            Ok::<Value, String>(event)
+        })
+}
+
+pub(crate) async fn relay_tcp_over_vless_plain_async(
+    inbound: &mut TokioTcpStream,
+    proxy: &mut TokioTcpStream,
+    stop: Arc<AtomicBool>,
+    initial_payload: &[u8],
+    metrics: &ResidentDataplaneMetrics,
+) -> Result<RelayStats, RelayError> {
+    let mut stats = RelayStats::default();
+    let mut stripper = VlessResponseStripper::default();
+    let mut inbound_closed = false;
+    let mut last_activity = Instant::now();
+    let mut inbound_buf = [0_u8; 16 * 1024];
+    let mut proxy_buf = [0_u8; 16 * 1024];
+
+    if !initial_payload.is_empty() {
+        proxy.write_all(initial_payload).await.map_err(|err| {
+            RelayError::new(
+                format!("write sniffed client payload to VLESS plain TCP: {err}"),
+                &stats,
+            )
+        })?;
+        stats.client_to_proxy += initial_payload.len();
+        metrics.add_upload(initial_payload.len());
+    }
+
+    while !stop.load(Ordering::Relaxed) {
+        tokio::select! {
+            inbound_read = inbound.read(&mut inbound_buf), if !inbound_closed => {
+                match inbound_read {
+                    Ok(0) => {
+                        inbound_closed = true;
+                        let _ = proxy.shutdown().await;
+                        last_activity = Instant::now();
+                    }
+                    Ok(read) => {
+                        proxy
+                            .write_all(&inbound_buf[..read])
+                            .await
+                            .map_err(|err| RelayError::new(format!("write client payload to VLESS plain TCP: {err}"), &stats))?;
+                        stats.client_to_proxy += read;
+                        metrics.add_upload(read);
+                        last_activity = Instant::now();
+                    }
+                    Err(err) if is_graceful_stream_close_error(&err) => {
+                        inbound_closed = true;
+                        let _ = proxy.shutdown().await;
+                        last_activity = Instant::now();
+                    }
+                    Err(err) => {
+                        return Err(RelayError::new(format!("read inbound TCP: {err}"), &stats));
+                    }
+                }
+            }
+            proxy_read = proxy.read(&mut proxy_buf) => {
+                match proxy_read {
+                    Ok(0) => break,
+                    Ok(read) => {
+                        let payload = stripper
+                            .consume(&proxy_buf[..read])
+                            .map_err(|err| RelayError::new(err, &stats))?;
+                        stats.response_header_stripped = stripper.done;
+                        if !payload.is_empty() {
+                            inbound
+                                .write_all(&payload)
+                                .await
+                                .map_err(|err| RelayError::new(format!("write VLESS plain TCP payload to client: {err}"), &stats))?;
+                            stats.proxy_to_client += payload.len();
+                            metrics.add_download(payload.len());
+                        }
+                        last_activity = Instant::now();
+                    }
+                    Err(err) => {
+                        return Err(RelayError::new(format!("read VLESS plain TCP: {err}"), &stats));
+                    }
+                }
+            }
+            _ = time::sleep(Duration::from_millis(100)) => {
+                if inbound_closed {
+                    break;
+                }
+                if last_activity.elapsed() > RESIDENT_TCP_IDLE_TIMEOUT {
+                    return Err(RelayError::new("resident TCP relay idle timeout", &stats));
+                }
+            }
+        }
+    }
+    Ok(stats)
 }
 
 #[allow(clippy::too_many_arguments)]
