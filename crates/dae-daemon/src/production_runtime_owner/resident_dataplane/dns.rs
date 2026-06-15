@@ -6,13 +6,17 @@ use std::sync::Arc;
 use dae_config::{Config, DynamicFunctionValue, Function, Param, RoutingRule};
 use dae_dns::{
     DnsDomainSet, DnsPacketView, DnsRequestMatchKind, DnsRequestMatchSpec, DnsRequestOutboundIndex,
-    RequestMatcher,
+    DnsResponseMatchKind, DnsResponseMatchSpec, DnsResponseOutboundIndex, RequestMatcher,
+    ResponseMatcher,
 };
+use dae_routing::IpPrefix;
 use tokio::sync::OnceCell;
 use tokio::time;
 
 use super::super::resident_routing::{
     ResidentGeodataStore, expand_resident_dns_request_qname_rules_with_resolver,
+    expand_resident_dns_response_ip_params_with_resolver,
+    expand_resident_dns_response_qname_rules_with_resolver,
 };
 use super::RESIDENT_UDP_RESPONSE_TIMEOUT;
 use super::tcp::set_socket_mark;
@@ -20,12 +24,16 @@ use super::tcp::set_socket_mark;
 const DNS_RCODE_REFUSED: u16 = 5;
 const DNS_RESPONSE_FLAGS_REFUSED: u16 = 0x8180 | DNS_RCODE_REFUSED;
 const DNS_RESPONSE_READ_LIMIT: usize = 4096;
+const DNS_RESPONSE_REROUTE_LIMIT: usize = 4;
 
 #[derive(Clone, Debug)]
 pub(super) struct ResidentDnsPlan {
     request_matcher: Option<RequestMatcher>,
     request_actions: Vec<ResidentDnsRequestAction>,
     request_default_action: ResidentDnsRequestAction,
+    response_matcher: Option<ResponseMatcher>,
+    response_actions: Vec<ResidentDnsResponseAction>,
+    response_default_action: ResidentDnsResponseAction,
     mark: u32,
 }
 
@@ -35,6 +43,9 @@ impl ResidentDnsPlan {
             request_matcher: None,
             request_actions: Vec::new(),
             request_default_action: ResidentDnsRequestAction::AsIs,
+            response_matcher: None,
+            response_actions: Vec::new(),
+            response_default_action: ResidentDnsResponseAction::Accept,
             mark,
         }
     }
@@ -47,8 +58,16 @@ enum ResidentDnsRequestAction {
     Upstream(ResidentDnsUpstream),
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Eq, PartialEq)]
+enum ResidentDnsResponseAction {
+    Accept,
+    Reject,
+    Upstream(ResidentDnsUpstream),
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
 struct ResidentDnsUpstream {
+    index: u8,
     tag: String,
     target: ResidentDnsUpstreamTarget,
     scheme: ResidentDnsUpstreamScheme,
@@ -59,6 +78,7 @@ struct ResidentDnsUpstreams {
     by_tag: BTreeMap<String, ResidentDnsUpstream>,
     tag_to_index: BTreeMap<String, u8>,
     request_actions: Vec<ResidentDnsRequestAction>,
+    response_actions: Vec<ResidentDnsResponseAction>,
 }
 
 #[derive(Clone, Debug)]
@@ -106,26 +126,20 @@ pub(super) fn build_resident_dns_plan(
     config: &Config,
     geodata: &ResidentGeodataStore,
 ) -> Result<ResidentDnsPlan, String> {
-    if !config.dns.routing.response.rules.is_empty() {
-        return Err(
-            "resident DNS controller currently admits accept-only response routing; resident DNS shape remains fail-closed for configs with dns.routing.response rules"
-                .to_owned(),
-        );
-    }
-    if !response_default_action_is_accept(&config.dns.routing.response.fallback) {
-        return Err(
-            "resident DNS controller currently admits dns.routing.response default action accept only"
-                .to_owned(),
-        );
-    }
     let upstreams = parse_dns_upstreams(config)?;
     let request_default_action =
         parse_request_default_action(&config.dns.routing.request.fallback, &upstreams.by_tag)?;
     let request_matcher = build_request_matcher(config, &upstreams, geodata)?;
+    let response_default_action =
+        parse_response_default_action(&config.dns.routing.response.fallback, &upstreams.by_tag)?;
+    let response_matcher = build_response_matcher(config, &upstreams, geodata)?;
     Ok(ResidentDnsPlan {
         request_matcher,
         request_actions: upstreams.request_actions,
         request_default_action,
+        response_matcher,
+        response_actions: upstreams.response_actions,
+        response_default_action,
         mark: config.global.so_mark_from_dae,
     })
 }
@@ -145,16 +159,62 @@ pub(super) async fn handle_resident_dns_udp_async(
     }
     let action = select_request_action(plan, &request)?;
     match action {
-        ResidentDnsRequestAction::AsIs => forward_dns_udp_async(original_dst, payload, plan.mark)
-            .await
-            .map_err(|err| format!("forward DNS asis to {original_dst}: {err}")),
+        ResidentDnsRequestAction::AsIs => {
+            let response = forward_dns_udp_async(original_dst, payload, plan.mark)
+                .await
+                .map_err(|err| format!("forward DNS asis to {original_dst}: {err}"))?;
+            let response_action = select_response_action_for_upstream(
+                plan,
+                &request,
+                &response,
+                DnsRequestOutboundIndex::ASIS,
+            )?;
+            match response_action {
+                ResidentDnsResponseAction::Accept => Ok(response),
+                ResidentDnsResponseAction::Reject => build_reject_response(payload, &request),
+                ResidentDnsResponseAction::Upstream(upstream) => {
+                    resolve_dns_response_routing(plan, payload, &request, upstream).await
+                }
+            }
+        }
         ResidentDnsRequestAction::Reject => build_reject_response(payload, &request),
         ResidentDnsRequestAction::Upstream(ref upstream) => {
-            match upstream.scheme {
-                ResidentDnsUpstreamScheme::Udp | ResidentDnsUpstreamScheme::TcpUdp => {}
+            resolve_dns_response_routing(plan, payload, &request, upstream.clone()).await
+        }
+    }
+}
+
+async fn resolve_dns_response_routing(
+    plan: &ResidentDnsPlan,
+    request_payload: &[u8],
+    request: &DnsPacketView<'_>,
+    mut upstream: ResidentDnsUpstream,
+) -> Result<Vec<u8>, String> {
+    for _ in 0..DNS_RESPONSE_REROUTE_LIMIT {
+        let response = forward_dns_to_upstream_async(&upstream, request_payload, plan.mark).await?;
+        let response_action = select_response_action(plan, request, &response, &upstream)?;
+        match response_action {
+            ResidentDnsResponseAction::Accept => return Ok(response),
+            ResidentDnsResponseAction::Reject => {
+                return build_reject_response(request_payload, request);
             }
+            ResidentDnsResponseAction::Upstream(next) => upstream = next,
+        }
+    }
+    Err(format!(
+        "dns.routing.response exceeded reroute limit of {DNS_RESPONSE_REROUTE_LIMIT}"
+    ))
+}
+
+async fn forward_dns_to_upstream_async(
+    upstream: &ResidentDnsUpstream,
+    payload: &[u8],
+    mark: u32,
+) -> Result<Vec<u8>, String> {
+    match upstream.scheme {
+        ResidentDnsUpstreamScheme::Udp | ResidentDnsUpstreamScheme::TcpUdp => {
             let target = upstream.target.resolve().await?;
-            forward_dns_udp_async(target, payload, plan.mark)
+            forward_dns_udp_async(target, payload, mark)
                 .await
                 .map_err(|err| {
                     format!(
@@ -170,6 +230,7 @@ fn parse_dns_upstreams(config: &Config) -> Result<ResidentDnsUpstreams, String> 
     let mut by_tag = BTreeMap::new();
     let mut tag_to_index = BTreeMap::new();
     let mut request_actions = Vec::new();
+    let mut response_actions = Vec::new();
     for (index, raw) in config.dns.upstream.iter().enumerate() {
         if index >= DnsRequestOutboundIndex::REJECT.value() as usize {
             return Err("too many DNS upstreams for resident request routing".to_owned());
@@ -181,15 +242,17 @@ fn parse_dns_upstreams(config: &Config) -> Result<ResidentDnsUpstreams, String> 
         if by_tag.contains_key(&tag) {
             return Err(format!("duplicated DNS upstream tag {tag:?}"));
         }
-        let upstream = parse_dns_upstream(&tag, &link)?;
+        let upstream = parse_dns_upstream(index as u8, &tag, &link)?;
         tag_to_index.insert(tag.clone(), index as u8);
         request_actions.push(ResidentDnsRequestAction::Upstream(upstream.clone()));
+        response_actions.push(ResidentDnsResponseAction::Upstream(upstream.clone()));
         by_tag.insert(tag, upstream);
     }
     Ok(ResidentDnsUpstreams {
         by_tag,
         tag_to_index,
         request_actions,
+        response_actions,
     })
 }
 
@@ -242,6 +305,65 @@ fn build_request_matcher(
     });
     let matcher = RequestMatcher::from_shared_typed_sets(domain_sets, matches)
         .map_err(|err| format!("build resident DNS request matcher: {err}"))?;
+    Ok(Some(matcher))
+}
+
+fn parse_response_default_action(
+    default_action: &DynamicFunctionValue,
+    upstreams: &BTreeMap<String, ResidentDnsUpstream>,
+) -> Result<ResidentDnsResponseAction, String> {
+    let Some(function) = dynamic_to_optional_single_function(default_action)? else {
+        return Ok(ResidentDnsResponseAction::Accept);
+    };
+    parse_response_action_function(&function, upstreams, "dns.routing.response default action")
+}
+
+fn build_response_matcher(
+    config: &Config,
+    upstreams: &ResidentDnsUpstreams,
+    geodata: &ResidentGeodataStore,
+) -> Result<Option<ResponseMatcher>, String> {
+    if config.dns.routing.response.rules.is_empty() {
+        return Ok(None);
+    }
+
+    let rules = expand_resident_dns_response_qname_rules_with_resolver(
+        &config.dns.routing.response.rules,
+        geodata,
+    )
+    .map_err(|err| format!("expand dns.routing.response geodata: {err}"))?;
+    let mut domain_sets = Vec::new();
+    let mut lpm_sets = Vec::new();
+    let mut matches = Vec::new();
+    for (index, rule) in rules.iter().enumerate() {
+        compile_response_rule(
+            &mut domain_sets,
+            &mut lpm_sets,
+            &mut matches,
+            rule,
+            upstreams,
+            geodata,
+        )
+        .map_err(|err| {
+            format!(
+                "dns.routing.response rule {index} failed: {err}; rule={}",
+                rule.to_config_string(false, false, true)
+            )
+        })?;
+    }
+    let fallback = response_index_for_dynamic(
+        &config.dns.routing.response.fallback,
+        upstreams,
+        "dns.routing.response fallback",
+    )?;
+    matches.push(DnsResponseMatchSpec {
+        kind: DnsResponseMatchKind::Fallback,
+        value: 0,
+        not: false,
+        upstream: fallback,
+    });
+    let matcher = ResponseMatcher::from_shared_typed_sets(domain_sets, lpm_sets, matches)
+        .map_err(|err| format!("build resident DNS response matcher: {err}"))?;
     Ok(Some(matcher))
 }
 
@@ -298,6 +420,69 @@ fn compile_request_rule(
     Ok(())
 }
 
+fn compile_response_rule(
+    domain_sets: &mut Vec<DnsDomainSet>,
+    lpm_sets: &mut Vec<Vec<IpPrefix>>,
+    matches: &mut Vec<DnsResponseMatchSpec>,
+    rule: &RoutingRule,
+    upstreams: &ResidentDnsUpstreams,
+    geodata: &ResidentGeodataStore,
+) -> Result<(), String> {
+    if rule.and_functions.is_empty() {
+        return Err("response rule has no functions".to_owned());
+    }
+    let rule_upstream = response_index_for_function(
+        &rule.outbound,
+        upstreams,
+        "dns.routing.response rule action",
+    )?;
+    for (function_index, function) in rule.and_functions.iter().enumerate() {
+        let grouped = grouped_params(&function.params);
+        if grouped.is_empty() {
+            return Err(format!("function {} has no params", function.name));
+        }
+        let group_count = grouped.len();
+        for (group_index, (key, values)) in grouped.into_iter().enumerate() {
+            if values.is_empty() {
+                return Err(format!("function {} has empty param group", function.name));
+            }
+            let upstream = if group_index == group_count - 1 {
+                if function_index == rule.and_functions.len() - 1 {
+                    rule_upstream
+                } else {
+                    DnsResponseOutboundIndex::LOGICAL_AND
+                }
+            } else {
+                DnsResponseOutboundIndex::LOGICAL_OR
+            };
+            match function.name.as_str() {
+                "qname" => add_response_qname_match(
+                    domain_sets,
+                    matches,
+                    geodata,
+                    function,
+                    &key,
+                    values,
+                    upstream,
+                )?,
+                "qtype" => add_response_qtype_matches(matches, function, &values, upstream)?,
+                "upstream" => {
+                    add_response_upstream_matches(matches, upstreams, function, &values, upstream)?
+                }
+                "ip" => add_response_ip_match(
+                    lpm_sets, matches, geodata, function, &key, values, upstream,
+                )?,
+                other => {
+                    return Err(format!(
+                        "unsupported dns.routing.response function: {other}; resident DNS response routing admits qname, qtype, upstream, and ip"
+                    ));
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
 fn add_request_qname_match(
     domain_sets: &mut Vec<DnsDomainSet>,
     matches: &mut Vec<DnsRequestMatchSpec>,
@@ -346,6 +531,135 @@ fn add_request_qtype_matches(
     Ok(())
 }
 
+fn add_response_qname_match(
+    domain_sets: &mut Vec<DnsDomainSet>,
+    matches: &mut Vec<DnsResponseMatchSpec>,
+    geodata: &ResidentGeodataStore,
+    function: &Function,
+    key: &str,
+    mut values: Vec<String>,
+    upstream: DnsResponseOutboundIndex,
+) -> Result<(), String> {
+    if !matches!(key, "full" | "keyword" | "suffix" | "regex") {
+        return Err(format!("qname has unsupported domain key: {key}"));
+    }
+    let bit = matches.len();
+    values.sort();
+    values.dedup();
+    let patterns = geodata.shared_domain_set(key, values)?;
+    domain_sets.push(DnsDomainSet { bit, patterns });
+    matches.push(DnsResponseMatchSpec {
+        kind: DnsResponseMatchKind::DomainSet,
+        value: 0,
+        not: function.not,
+        upstream,
+    });
+    Ok(())
+}
+
+fn add_response_qtype_matches(
+    matches: &mut Vec<DnsResponseMatchSpec>,
+    function: &Function,
+    values: &[String],
+    upstream: DnsResponseOutboundIndex,
+) -> Result<(), String> {
+    for (index, value) in values.iter().enumerate() {
+        let item_upstream = if index == values.len() - 1 {
+            upstream
+        } else {
+            DnsResponseOutboundIndex::LOGICAL_OR
+        };
+        matches.push(DnsResponseMatchSpec {
+            kind: DnsResponseMatchKind::QType,
+            value: parse_dns_qtype(value)?,
+            not: function.not,
+            upstream: item_upstream,
+        });
+    }
+    Ok(())
+}
+
+fn add_response_upstream_matches(
+    matches: &mut Vec<DnsResponseMatchSpec>,
+    upstreams: &ResidentDnsUpstreams,
+    function: &Function,
+    values: &[String],
+    upstream: DnsResponseOutboundIndex,
+) -> Result<(), String> {
+    for (index, value) in values.iter().enumerate() {
+        let item_upstream = if index == values.len() - 1 {
+            upstream
+        } else {
+            DnsResponseOutboundIndex::LOGICAL_OR
+        };
+        let value = match value.as_str() {
+            "asis" => DnsRequestOutboundIndex::ASIS.value() as u16,
+            tag => upstreams
+                .tag_to_index
+                .get(tag)
+                .copied()
+                .map(u16::from)
+                .ok_or_else(|| {
+                    format!("dns.routing.response upstream references unknown upstream {tag:?}")
+                })?,
+        };
+        matches.push(DnsResponseMatchSpec {
+            kind: DnsResponseMatchKind::Upstream,
+            value,
+            not: function.not,
+            upstream: item_upstream,
+        });
+    }
+    Ok(())
+}
+
+fn add_response_ip_match(
+    lpm_sets: &mut Vec<Vec<IpPrefix>>,
+    matches: &mut Vec<DnsResponseMatchSpec>,
+    geodata: &ResidentGeodataStore,
+    function: &Function,
+    key: &str,
+    values: Vec<String>,
+    upstream: DnsResponseOutboundIndex,
+) -> Result<(), String> {
+    if !matches!(key, "" | "geoip" | "ext") {
+        return Err(format!("ip has unsupported key: {key}"));
+    }
+    let params = values
+        .into_iter()
+        .map(|val| Param {
+            key: key.to_owned(),
+            val,
+            ..Param::default()
+        })
+        .collect::<Vec<_>>();
+    let expanded = expand_resident_dns_response_ip_params_with_resolver(&params, geodata)?;
+    let mut prefixes = Vec::with_capacity(expanded.len());
+    for param in expanded {
+        prefixes.push(parse_response_ip_prefix(&param.val)?);
+    }
+    let index = lpm_sets.len();
+    lpm_sets.push(prefixes);
+    matches.push(DnsResponseMatchSpec {
+        kind: DnsResponseMatchKind::IpSet,
+        value: index as u16,
+        not: function.not,
+        upstream,
+    });
+    Ok(())
+}
+
+fn parse_response_ip_prefix(value: &str) -> Result<IpPrefix, String> {
+    if value.contains('/') {
+        return IpPrefix::parse(value).map_err(|err| err.to_string());
+    }
+    let ip = value
+        .parse::<IpAddr>()
+        .map_err(|err| format!("parse DNS response ip matcher {value:?}: {err}"))?;
+    let bits = if ip.is_ipv4() { 32 } else { 128 };
+    IpPrefix::new(ip, bits).map_err(|err| err.to_string())
+}
+
 fn select_request_action(
     plan: &ResidentDnsPlan,
     request: &DnsPacketView<'_>,
@@ -364,6 +678,54 @@ fn select_request_action(
         .match_request(&qname, question.qtype())
         .map_err(|err| format!("match dns.routing.request: {err}"))?;
     request_action_from_index(plan, outbound)
+}
+
+fn select_response_action(
+    plan: &ResidentDnsPlan,
+    request: &DnsPacketView<'_>,
+    response_payload: &[u8],
+    upstream: &ResidentDnsUpstream,
+) -> Result<ResidentDnsResponseAction, String> {
+    select_response_action_for_upstream(
+        plan,
+        request,
+        response_payload,
+        DnsRequestOutboundIndex(upstream.index),
+    )
+}
+
+fn select_response_action_for_upstream(
+    plan: &ResidentDnsPlan,
+    request: &DnsPacketView<'_>,
+    response_payload: &[u8],
+    upstream: DnsRequestOutboundIndex,
+) -> Result<ResidentDnsResponseAction, String> {
+    let Some(matcher) = &plan.response_matcher else {
+        return Ok(plan.response_default_action.clone());
+    };
+    let response = DnsPacketView::parse(response_payload)
+        .map_err(|err| format!("parse DNS response: {err}"))?;
+    if !response.response() {
+        return Err("DNS response expected but DNS request received".to_owned());
+    }
+    let question = request
+        .questions()
+        .next()
+        .ok_or_else(|| "DNS request has no question".to_owned())?;
+    let qname = question
+        .qname_to_canonical_string()
+        .map_err(|err| format!("read DNS response routing qname: {err}"))?;
+    let mut ips = Vec::new();
+    for answer in response.answers() {
+        let answer = answer.map_err(|err| format!("read DNS response answer: {err}"))?;
+        if let Some(ip) = answer.ip() {
+            ips.push(ip);
+        }
+    }
+    let outbound = matcher
+        .match_response(&qname, question.qtype(), &ips, upstream)
+        .map_err(|err| format!("match dns.routing.response: {err}"))?;
+    response_action_from_index(plan, outbound)
 }
 
 fn request_action_from_index(
@@ -425,6 +787,37 @@ fn request_index_for_function(
     }
 }
 
+fn response_index_for_dynamic(
+    value: &DynamicFunctionValue,
+    upstreams: &ResidentDnsUpstreams,
+    context: &str,
+) -> Result<DnsResponseOutboundIndex, String> {
+    let Some(function) = dynamic_to_optional_single_function(value)? else {
+        return Ok(DnsResponseOutboundIndex::ACCEPT);
+    };
+    response_index_for_function(&function, upstreams, context)
+}
+
+fn response_index_for_function(
+    function: &Function,
+    upstreams: &ResidentDnsUpstreams,
+    context: &str,
+) -> Result<DnsResponseOutboundIndex, String> {
+    if !function.params.is_empty() {
+        return Err(format!("{context} does not admit action parameters"));
+    }
+    match function.name.as_str() {
+        "accept" => Ok(DnsResponseOutboundIndex::ACCEPT),
+        "reject" => Ok(DnsResponseOutboundIndex::REJECT),
+        tag => upstreams
+            .tag_to_index
+            .get(tag)
+            .copied()
+            .map(DnsResponseOutboundIndex)
+            .ok_or_else(|| format!("{context} references unknown upstream {tag:?}")),
+    }
+}
+
 fn parse_request_action_function(
     function: &Function,
     upstreams: &BTreeMap<String, ResidentDnsUpstream>,
@@ -442,6 +835,53 @@ fn parse_request_action_function(
             .map(ResidentDnsRequestAction::Upstream)
             .ok_or_else(|| format!("{context} references unknown upstream {tag:?}")),
     }
+}
+
+fn parse_response_action_function(
+    function: &Function,
+    upstreams: &BTreeMap<String, ResidentDnsUpstream>,
+    context: &str,
+) -> Result<ResidentDnsResponseAction, String> {
+    if !function.params.is_empty() {
+        return Err(format!("{context} does not admit action parameters"));
+    }
+    match function.name.as_str() {
+        "accept" => Ok(ResidentDnsResponseAction::Accept),
+        "reject" => Ok(ResidentDnsResponseAction::Reject),
+        tag => upstreams
+            .get(tag)
+            .cloned()
+            .map(ResidentDnsResponseAction::Upstream)
+            .ok_or_else(|| format!("{context} references unknown upstream {tag:?}")),
+    }
+}
+
+fn response_action_from_index(
+    plan: &ResidentDnsPlan,
+    outbound: DnsResponseOutboundIndex,
+) -> Result<ResidentDnsResponseAction, String> {
+    if outbound == DnsResponseOutboundIndex::ACCEPT {
+        return Ok(ResidentDnsResponseAction::Accept);
+    }
+    if outbound == DnsResponseOutboundIndex::REJECT {
+        return Ok(ResidentDnsResponseAction::Reject);
+    }
+    if outbound == DnsResponseOutboundIndex::LOGICAL_OR
+        || outbound == DnsResponseOutboundIndex::LOGICAL_AND
+    {
+        return Err(format!(
+            "dns.routing.response returned internal logical outbound {outbound}"
+        ));
+    }
+    plan.response_actions
+        .get(outbound.value() as usize)
+        .cloned()
+        .ok_or_else(|| {
+            format!(
+                "dns.routing.response selected unknown upstream index {}",
+                outbound.value()
+            )
+        })
 }
 
 fn dynamic_to_optional_single_function(
@@ -593,28 +1033,7 @@ fn dns_qtype_name(value: &str) -> Option<u16> {
     })
 }
 
-fn response_default_action_is_accept(default_action: &DynamicFunctionValue) -> bool {
-    matches!(
-        dynamic_function_name(default_action),
-        Ok(None) | Ok(Some("accept"))
-    )
-}
-
-fn dynamic_function_name(value: &DynamicFunctionValue) -> Result<Option<&str>, String> {
-    match value {
-        DynamicFunctionValue::Nil => Ok(None),
-        DynamicFunctionValue::String(name) => Ok(Some(name.as_str())),
-        DynamicFunctionValue::Function(function) => Ok(Some(function.name.as_str())),
-        DynamicFunctionValue::FunctionList(functions) if functions.len() == 1 => {
-            Ok(Some(functions[0].name.as_str()))
-        }
-        DynamicFunctionValue::FunctionList(_) => {
-            Err("default action function list is not admitted".to_owned())
-        }
-    }
-}
-
-fn parse_dns_upstream(tag: &str, link: &str) -> Result<ResidentDnsUpstream, String> {
+fn parse_dns_upstream(index: u8, tag: &str, link: &str) -> Result<ResidentDnsUpstream, String> {
     let (scheme, rest) = link
         .split_once("://")
         .ok_or_else(|| format!("DNS upstream {tag} has no scheme: {link}"))?;
@@ -630,6 +1049,7 @@ fn parse_dns_upstream(tag: &str, link: &str) -> Result<ResidentDnsUpstream, Stri
     let authority = rest.split('/').next().unwrap_or(rest);
     let target = parse_dns_upstream_authority(authority)?;
     Ok(ResidentDnsUpstream {
+        index,
         tag: tag.to_owned(),
         target,
         scheme,
@@ -853,6 +1273,24 @@ mod tests {
         query
     }
 
+    fn a_response(address: [u8; 4]) -> Vec<u8> {
+        let mut response = Vec::new();
+        response.extend_from_slice(&[0x12, 0x34]);
+        response.extend_from_slice(&0x8180_u16.to_be_bytes());
+        response.extend_from_slice(&1_u16.to_be_bytes());
+        response.extend_from_slice(&1_u16.to_be_bytes());
+        response.extend_from_slice(&0_u16.to_be_bytes());
+        response.extend_from_slice(&0_u16.to_be_bytes());
+        response.extend_from_slice(&QUERY[12..]);
+        response.extend_from_slice(&0xc00c_u16.to_be_bytes());
+        response.extend_from_slice(&1_u16.to_be_bytes());
+        response.extend_from_slice(&1_u16.to_be_bytes());
+        response.extend_from_slice(&60_u32.to_be_bytes());
+        response.extend_from_slice(&4_u16.to_be_bytes());
+        response.extend_from_slice(&address);
+        response
+    }
+
     #[test]
     fn resident_dns_plan_admits_request_qname_and_qtype_rules() {
         let input = r#"
@@ -890,6 +1328,86 @@ mod tests {
         assert!(matches!(
             select_request_action(&plan, &view).unwrap(),
             ResidentDnsRequestAction::Reject
+        ));
+    }
+
+    #[test]
+    fn resident_dns_plan_admits_response_qname_qtype_upstream_and_ip_rules() {
+        let input = r#"
+        global {}
+        routing {}
+        dns {
+          upstream {
+            primary: 'udp://LOCAL_DNS_UPSTREAM'
+            secondary: 'udp://127.0.0.1:53'
+          }
+          routing {
+            request {
+              fallback: primary
+            }
+            response {
+              qname(suffix: example.com) && qtype(a) && upstream(primary) && ip(203.0.113.0/24) -> secondary
+              fallback: accept
+            }
+          }
+        }
+        "#
+        .replace("LOCAL_DNS_UPSTREAM", local_dns_upstream_authority());
+        let config = parse_config(&input);
+        let geodata = test_geodata();
+        let plan = build_resident_dns_plan(&config, &geodata).unwrap();
+        let request = DnsPacketView::parse(QUERY).unwrap();
+        let primary = match select_request_action(&plan, &request).unwrap() {
+            ResidentDnsRequestAction::Upstream(upstream) => upstream,
+            other => panic!("expected primary upstream action, got {other:?}"),
+        };
+
+        match select_response_action(&plan, &request, &a_response([203, 0, 113, 42]), &primary)
+            .unwrap()
+        {
+            ResidentDnsResponseAction::Upstream(upstream) => {
+                assert_eq!(upstream.tag, "secondary");
+            }
+            other => panic!("expected response reroute to secondary, got {other:?}"),
+        }
+
+        assert!(matches!(
+            select_response_action(&plan, &request, &a_response([198, 51, 100, 42]), &primary)
+                .unwrap(),
+            ResidentDnsResponseAction::Accept
+        ));
+    }
+
+    #[test]
+    fn resident_dns_plan_admits_response_fallback_reject() {
+        let input = r#"
+        global {}
+        routing {}
+        dns {
+          upstream {
+            primary: 'udp://LOCAL_DNS_UPSTREAM'
+          }
+          routing {
+            response {
+              fallback: reject
+            }
+          }
+        }
+        "#
+        .replace("LOCAL_DNS_UPSTREAM", local_dns_upstream_authority());
+        let config = parse_config(&input);
+        let geodata = test_geodata();
+        let plan = build_resident_dns_plan(&config, &geodata).unwrap();
+        let request = DnsPacketView::parse(QUERY).unwrap();
+        assert!(matches!(
+            select_response_action_for_upstream(
+                &plan,
+                &request,
+                &a_response([203, 0, 113, 42]),
+                DnsRequestOutboundIndex::ASIS,
+            )
+            .unwrap(),
+            ResidentDnsResponseAction::Reject
         ));
     }
 
