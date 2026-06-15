@@ -659,24 +659,32 @@ impl ResidentProxyProtocolPlan {
             },
             Self::ShadowsocksSimpleObfsTlsTcp { .. } => ResidentProtocolExecutorContract {
                 tcp_executor: "resident-shadowsocks-simple-obfs-tls-stream",
+                // Policy-closed by the plugin contract: simple-obfs TLS is a
+                // TCP stream wrapper here, not a resident UDP packet relay.
                 udp_executor: "plugin-udp-policy-closed",
                 packet_semantics: "tcp-stream-wrapper",
                 udp_policy_closed: true,
             },
             Self::ShadowsocksV2rayPluginTlsWsTcp { .. } => ResidentProtocolExecutorContract {
                 tcp_executor: "resident-shadowsocks-v2ray-plugin-tls-websocket-stream",
+                // Policy-closed by the plugin contract: v2ray-plugin over TLS
+                // WebSocket is admitted as a TCP stream wrapper only.
                 udp_executor: "plugin-udp-policy-closed",
                 packet_semantics: "tcp-stream-wrapper",
                 udp_policy_closed: true,
             },
             Self::Shadowsocks2022SimpleObfsHttpTcp { .. } => ResidentProtocolExecutorContract {
                 tcp_executor: "resident-shadowsocks-2022-simple-obfs-http-stream",
+                // Policy-closed by the plugin contract: AEAD-2022 simple-obfs
+                // HTTP does not provide a resident UDP packet executor.
                 udp_executor: "plugin-udp-policy-closed",
                 packet_semantics: "tcp-stream-wrapper",
                 udp_policy_closed: true,
             },
             Self::ShadowsocksRHttpSimpleTcp { .. } => ResidentProtocolExecutorContract {
                 tcp_executor: "resident-shadowsocksr-http-simple-stream",
+                // Policy-closed for this legacy row: SSR UDP needs a separate
+                // legacy packet executor before resident UDP can admit it.
                 udp_executor: "legacy-udp-policy-closed",
                 packet_semantics: "tcp-stream-wrapper",
                 udp_policy_closed: true,
@@ -689,6 +697,8 @@ impl ResidentProxyProtocolPlan {
             },
             Self::TrojanInnerShadowsocksTcpTls { .. } => ResidentProtocolExecutorContract {
                 tcp_executor: "resident-trojan-inner-shadowsocks-stream",
+                // Policy-closed: Trojan inner Shadowsocks wraps the TCP stream;
+                // UDP needs explicit inner-encrypted packet semantics.
                 udp_executor: "inner-encryption-udp-policy-closed",
                 packet_semantics: "tcp-stream-wrapper",
                 udp_policy_closed: true,
