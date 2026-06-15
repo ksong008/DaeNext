@@ -35,6 +35,37 @@ pub(super) fn assert_vmess_vless_handlers(config: &Config) -> Vec<ResidentProxyP
         ResidentProxyProtocolPlan::VmessAeadTcp { .. }
     ));
 
+    let vmess_tls = build_resident_proxy_plan_for_node(
+        &config,
+        "proxy".to_owned(),
+        "vmess_tls_live".to_owned(),
+        vmess_fixture_url_with_sni(
+            &primary_host,
+            fixture_port(2),
+            "tcp",
+            "",
+            "",
+            "tls",
+            &authority_host,
+        ),
+    )
+    .unwrap();
+    assert_eq!(vmess_tls.protocol, "vmess");
+    assert_eq!(vmess_tls.net, "tcp");
+    assert_eq!(vmess_tls.server_name, authority_host);
+    assert_eq!(vmess_tls.tls, "tls");
+    assert!(matches!(
+        vmess_tls.handler,
+        ResidentProxyProtocolPlan::VmessAeadTcp { .. }
+    ));
+    let vmess_tls_graph = vmess_tls.executable_graph_value();
+    assert_eq!(vmess_tls_graph["streamWrapper"], "none");
+    assert_eq!(vmess_tls_graph["securityUnderlay"], "standard-tls");
+    assert_eq!(
+        vmess_tls_graph["runtimeComponents"]["underlayFactory"]["provider"],
+        "rustls"
+    );
+
     let vmess_websocket = build_resident_proxy_plan_for_node(
         &config,
         "proxy".to_owned(),
@@ -341,6 +372,7 @@ pub(super) fn assert_vmess_vless_handlers(config: &Config) -> Vec<ResidentProxyP
     vec![
         anytls,
         vmess,
+        vmess_tls,
         vmess_websocket,
         vmess_httpupgrade,
         vless_websocket,
