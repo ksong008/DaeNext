@@ -50,13 +50,33 @@ pub(crate) fn runtime_stop_clears_reload_traffic_carry() {
             upload_total: 100,
             download_total: 200,
         };
+        inner.runtime_started_at = Some("2026-06-15T01:00:00.000Z".to_owned());
     }
 
     manager.stop().unwrap();
 
+    let inner = manager.inner.lock().unwrap();
+    assert_eq!(inner.traffic_carry, RuntimeTrafficCarry::default());
+    assert_eq!(inner.runtime_started_at, None);
+}
+
+#[test]
+pub(crate) fn runtime_started_at_survives_reload_but_resets_for_new_start() {
+    let initial_started_at = "2026-06-15T01:00:00.000Z".to_owned();
+    let reload_transition_at = "2026-06-15T02:00:00.000Z".to_owned();
+    let restart_transition_at = "2026-06-15T03:00:00.000Z".to_owned();
+
     assert_eq!(
-        manager.inner.lock().unwrap().traffic_carry,
-        RuntimeTrafficCarry::default()
+        runtime_started_at_after_success(
+            true,
+            Some(initial_started_at.clone()),
+            reload_transition_at
+        ),
+        initial_started_at
+    );
+    assert_eq!(
+        runtime_started_at_after_success(false, None, restart_transition_at.clone()),
+        restart_transition_at
     );
 }
 
